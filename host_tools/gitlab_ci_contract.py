@@ -442,7 +442,15 @@ EXPECTED_SCRIPT_CALLS: dict[str, tuple[ShellCall, ...]] = {
         _call("mkdir", "-p", "ci-artifacts"),
         _call("bash", "scripts/verify-dual-target-structure.sh", "2>&1"),
         _call("tee", "ci-artifacts/kernel-budgets.log"),
-        _call("make", "ci-check", "2>&1"),
+        _call(
+            "make", "ci-check", "2>&1",
+            env={
+                "AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES": "0",
+                "HOST_CC": "cc",
+                "HOSTCC": "cc",
+                "CC": "cc",
+            },
+        ),
         _call("tee", "-a", "ci-artifacts/kernel-budgets.log"),
         _attest_call("kernel-budgets"),
     ),
@@ -468,6 +476,7 @@ EXPECTED_SCRIPT_CALLS: dict[str, tuple[ShellCall, ...]] = {
             env={
                 "REQUIRE_FULL_SUITE": "1",
                 "AGENT_TEST_CALIBRATE": "0",
+                "AGENT_TEST_DURATION_PROFILE": "none",
                 "AGENT_TEST_TIMING_FILE": "ci-artifacts/agent-suite-timings.log",
                 "AGENT_TEST_GUEST_LOG_FILE": "ci-artifacts/agent-suite-guest.log",
                 "TOOLPREFIX": "riscv64-linux-gnu-",

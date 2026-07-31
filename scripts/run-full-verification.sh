@@ -9,6 +9,16 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"
+HOST_CC="${HOST_CC:-${HOSTCC:-${CC:-cc}}}"
+HOSTCC="${HOST_CC}"
+CC="${HOST_CC}"
+export HOST_CC HOSTCC CC
+
+if [[ "${AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES:-0}" != "0" ]]; then
+	echo "[full-verify] unsanitized host probes are forbidden" >&2
+	exit 2
+fi
+export AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES=0
 
 source "${ROOT_DIR}/scripts/evidence-wiring.sh"
 evidence_initialize
@@ -412,7 +422,8 @@ else
 fi
 
 if evidence_enabled; then
-	"${PYTHON_BIN}" "${ROOT_DIR}/scripts/capture-final-evidence.py" write-summary \
+	"${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/trusted-python-entry.py" \
+		"scripts/capture-final-evidence.py" write-summary \
 		--stage "${FINAL_EVIDENCE_STAGE}" \
 		--steps "${EVIDENCE_STEPS_FILE}" \
 		--commit "$(git -C "${ROOT_DIR}" rev-parse HEAD)" \

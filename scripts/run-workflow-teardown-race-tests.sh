@@ -68,6 +68,8 @@ USER_EXTRA_CFLAGS="-Werror -Wframe-larger-than=${MAX_USER_FRAME_BYTES} -Wstack-u
 
 TMPDIR_WORKFLOW_TEARDOWN="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_WORKFLOW_TEARDOWN}"' EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_WORKFLOW_TEARDOWN}"
 mkdir -p "${LOG_DIR}"
 SETUP_LOG="${LOG_DIR}/setup.log"
 : >"${SETUP_LOG}"
@@ -83,10 +85,11 @@ run_logged "${SETUP_LOG}" make -C user \
 
 USER_BIN="${TMPDIR_WORKFLOW_TEARDOWN}/user-target/bin/${INIT_PROC}"
 test -f "${USER_BIN}"
-run_logged "${SETUP_LOG}" "${HOSTCC}" nfs/fs.c \
-	nfs/host_image_snapshot.c \
-	-o "${TMPDIR_WORKFLOW_TEARDOWN}/mkfs"
-run_logged "${SETUP_LOG}" "${TMPDIR_WORKFLOW_TEARDOWN}/mkfs" \
+run_logged "${SETUP_LOG}" host_probe_compile \
+	"${TMPDIR_WORKFLOW_TEARDOWN}/mkfs" \
+	nfs/fs.c nfs/host_image_snapshot.c
+run_logged "${SETUP_LOG}" host_probe_run \
+	"${TMPDIR_WORKFLOW_TEARDOWN}/mkfs" \
 	"${TMPDIR_WORKFLOW_TEARDOWN}/master.img" "${USER_BIN}"
 
 # The guest fills the per-workflow boundary in each round, then runs for one
@@ -152,3 +155,4 @@ for ((run = 1; run <= STABILITY_RUNS; run++)); do
 done
 
 echo "[workflow-teardown] ${STABILITY_RUNS} stable runs passed"
+host_probe_report "workflow-teardown mkfs"

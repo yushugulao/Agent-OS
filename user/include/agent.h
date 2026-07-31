@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include "../../agent_lifecycle_abi.h"
+#include "../../agent_resource_abi.h"
 #include "../../agent_tool_abi.h"
 #define AGENT_TYPE_NONE  0
 #define AGENT_TYPE_AGENT 1
@@ -743,6 +744,7 @@ int agent_workflow_close(uint64 scope_id);
 int agent_workflow_lifecycle_info(
 	struct agent_workflow_lifecycle_info *info,
 	const struct agent_workflow_lifecycle_key *expected);
+int agent_resource_snapshot(struct agent_resource_snapshot *snapshot);
 int agent_scope_delegate_fd(int fd);
 int agent_worker_create(const char *image, uint64 capabilities);
 int agent_info(struct agent_info *info);

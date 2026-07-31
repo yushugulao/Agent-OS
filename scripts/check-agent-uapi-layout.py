@@ -15,10 +15,16 @@ class LayoutError(RuntimeError):
     pass
 
 
-def run(command, context):
+def run(command, context, cwd=None):
     try:
         result = subprocess.run(
-            command, text=True, capture_output=True, check=False
+            command,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            cwd=cwd,
         )
     except OSError as error:
         raise LayoutError(f"{context} failed: {error}") from error
@@ -30,6 +36,13 @@ def run(command, context):
 
 def compile_probe(root, build_dir, cc, view, include_dir):
     output = build_dir / f"agent-uapi-{view}.o"
+    try:
+        output_arg = output.relative_to(root).as_posix()
+        include_arg = include_dir.relative_to(root).as_posix()
+    except ValueError as error:
+        raise LayoutError(
+            "Agent UAPI build paths must stay below the source root"
+        ) from error
     command = [
         cc,
         "-std=gnu11",
@@ -44,18 +57,28 @@ def compile_probe(root, build_dir, cc, view, include_dir):
         "-mabi=lp64",
         "-mcmodel=medany",
         "-mno-relax",
-        f"-I{include_dir}",
+        f"-I{include_arg}",
         "-c",
-        str(root / "scripts" / "probes" / "agent-uapi-layout.c"),
+        "scripts/probes/agent-uapi-layout.c",
         "-o",
-        str(output),
+        output_arg,
     ]
-    run(command, f"{view} Agent UAPI probe compile")
+    run(command, f"{view} Agent UAPI probe compile", cwd=root)
     return output
 
 
-def symbols(nm, obj):
-    output = run([nm, "-S", "--defined-only", str(obj)], f"nm {obj.name}")
+def symbols(nm, obj, root):
+    try:
+        obj_arg = obj.relative_to(root).as_posix()
+    except ValueError as error:
+        raise LayoutError(
+            "Agent UAPI object must stay below the source root"
+        ) from error
+    output = run(
+        [nm, "-S", "--defined-only", obj_arg],
+        f"nm {obj.name}",
+        cwd=root,
+    )
     found = {}
     pattern = re.compile(
         r"^[0-9A-Fa-f]+\s+([0-9A-Fa-f]+)\s+[A-Za-z]\s+(\S+)$"
@@ -325,8 +348,8 @@ def main():
     user_obj = compile_probe(
         root, build_dir, args.cc, "user", root / "user" / "include"
     )
-    kernel = symbols(args.nm, kernel_obj)
-    user = symbols(args.nm, user_obj)
+    kernel = symbols(args.nm, kernel_obj, root)
+    user = symbols(args.nm, user_obj, root)
     compare(kernel, user)
     golden = load_golden((root / args.golden).resolve())
     compare_golden(kernel, golden)

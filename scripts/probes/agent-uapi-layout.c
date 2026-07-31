@@ -20,6 +20,12 @@ ABI_OFFSET(struct agent_workflow_lifecycle_info, context_lane_depth,
 	   lifecycle_info);
 ABI_OFFSET(struct agent_workflow_lifecycle_info, metadata_txn_owned,
 	   lifecycle_info);
+ABI_OFFSET(struct agent_workflow_lifecycle_info, resource_account_valid,
+	   lifecycle_info);
+ABI_OFFSET(struct agent_workflow_lifecycle_info, resource_account_slot,
+	   lifecycle_info);
+ABI_OFFSET(struct agent_workflow_lifecycle_info, resource_account_generation,
+	   lifecycle_info);
 ABI_RECORD(struct agent_op, op, version, payload);
 ABI_RECORD(struct agent_result, result, version, result);
 ABI_RECORD(struct agent_request, request, version, payload);

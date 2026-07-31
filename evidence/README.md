@@ -3,12 +3,50 @@
 `evidence/releases/` 保存与一个已提交 Git `HEAD` 绑定的最终验收包。`results/latest/`
 仍是可覆盖的本地预览，不能替代发布证据。
 
+正式竞赛评价包也统一发布到 `evidence/releases/evaluation-<run-id>/`，复用本目录唯一的
+append-only `INDEX.md`，不再建立第二套 release 根或索引。评价包验证器允许当前 HEAD 是
+唯一证据提交 E 的文档后代：它从历史定位唯一引入该包的 E，仍要求 E 的唯一父提交为 C、
+C..E 只新增该包普通文件并精确追加 INDEX。后续 D 只允许修改 `README.md`、`docs/**`
+和 `evidence/README.md`，INDEX 必须与 E 完全一致；其他代码后代、INDEX 变化或包字节改写
+都会失败。传统
+`capture-final-evidence.py` 包继续保持原有“当前 HEAD 就是 E”的严格合同。
+
 终审 17 项问题与证据等级口径见
 [docs/agentos/final-hardening-matrix.md](../docs/agentos/final-hardening-matrix.md)。代码提交 C 本身
 不得预置声称由 C 生成的发布包；实际发布状态以 append-only `releases/INDEX.md` 和各包内
 manifest 为准。通过 C→E committed delivery 合同及完整离线复验的本地包可以独立达到 E3，
 不依赖远程 Runner；没有可用
 Runner 时，包内必须保持 `remote_ci.status=not-attached`，这只阻塞 E4，不得把本地验证写成 E4。
+
+## 评价包存储合同
+
+评价包的 raw 工件按 micro boot、scenario boot 控制面和 scenario boot/target 封装为独立的
+确定性 `gzip+USTAR` 分片；formal 与 development 包使用相同机制，不使用 Git LFS。manifest
+同时绑定每片的 stored path/SHA256/bytes、压缩协议、成员数与 raw/stored 总量，并为每个成员
+绑定 logical path/raw SHA256/bytes。写入器固定词典序、canonical gzip header、
+`mtime/uid/gid=0`、USTAR 普通文件元数据和 `0644` mode；stored SHA256 固定实际提交的
+压缩字节，logical SHA256 固定解压后的成员内容。
+
+验证时归档始终是不可信输入，只能在权限收紧的私有临时目录逐成员物化。绝对路径、`..`、
+重复成员、拼接 gzip member、symlink/hardlink、设备、目录等非规范类型，以及超过深度、
+成员数、单成员、总展开量或压缩比预算的输入均 fail closed。验证器检查 canonical gzip
+header、USTAR 语义、stored archive hash 和逐成员 logical hash，再重放完整验收合同；它不要求
+当前 zlib 重新压缩后逐字节复现原 DEFLATE 数据流，因而不同合规压缩器不会制造伪失败。
+scenario raw 只接受 plan/report raw-source receipt 明确绑定的 canonical inventory，未知或临时文件
+不能自动升级成 generic evidence。最终 committed delivery 另从 Git tree/blob 实测并限制为最多
+1000 个 tracked 普通文件、单 blob 64 MiB、总 blob bytes 256 MiB，不信任 manifest/worktree
+报告的尺寸。
+
+formal 评价包携带版本化 `measurement-source-receipt.json` 和策略清单覆盖的源码快照，
+并在 portable 复验时重放微基准、任务六源码合同和评价控制面清单；committed verifier
+再要求 receipt、快照和源码提交 C 中相应 Git blob 一致。formal run id 固定为
+`formal-<C 的完整 40 位提交号>`，challenge 和执行顺序由 C 确定性派生；同一输出根保留
+失败目录且拒绝覆盖。本地机制不冒充可信远端 Runner，也不声称能证明其他 clone 从未
+执行或丢弃一次尝试。题面必做的 Task 4 性能门由 suite 的
+`competition_claims.task4` 显式绑定到 `file_query_path_index`：它必须有完整有效数据，
+claim 可以诚实地是 `supported` 或 `not_supported`，但 `unavailable`、`failed` 或缺失状态
+不能发布为 formal 证据。`file_query_table_ablation` 只作机制消融，不能替代这项逐路径对照。
+证据完整性与“结果支持优势”是两个独立判断。
 
 ## 信任边界
 
@@ -64,7 +102,7 @@ artifact 永久不可变或对已控制 Runner 的防护；未绑定的本地包
 代码冻结、提交且工作区干净后执行：
 
 ```bash
-python3 scripts/capture-final-evidence.py collect \
+python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py collect \
   --output "evidence/releases/$(date -u +%Y%m%d)-$(git rev-parse --short=12 HEAD)"
 ```
 
@@ -73,30 +111,39 @@ python3 scripts/capture-final-evidence.py collect \
 上限同时写入 manifest 和 command CSV，离线复验要求两处一致。
 
 提交 `814021ab9dac` 曾用三轮串行完整套件得到 `310.491647311s` 中位基线和
-`327.10s` 上限；原始 timing、确定性压缩 runner/Guest 日志、环境、源码/合同指纹和逐文件
-哈希保存在 `evidence/calibrations/814021ab9dac/`。这只是该历史提交的校准记录，不适用于当前
-候选。当前 `ci/kernel-budgets.json` 明确保持 `provisional_requires_full_suite`，必须在固定 runner
-上针对同一冻结提交重新完成至少三轮 18-case 校准后才能解除时长门。任何校准都不是 release
-bundle，也不能冒充最终 E3；更换 case 集合、提交、硬件、虚拟化层或 QEMU 后必须重新校准。
+`327.10s` 上限，但该 schema-2 包没有逐执行 attestation，只保留为历史记录，不适用于当前
+候选。当前 `ci/kernel-budgets.json` 明确保持 `provisional_requires_full_suite`。解除时长门必须由
+`scripts/agent_test_calibration.py collect` 在固定 runner、同一 clean detached 冻结提交上严格执行
+三轮完整 18-case，并让 timing 从 commit/tree、随机 nonce、可执行文件身份、镜像/Guest 日志哈希、
+真实 monotonic 区间和退出结果绑定的 attestations 重建。校准包只标记为未签名本地 E3 复现证据，
+不是 release bundle，更不是 GitLab CI 或 E4 attestation；它证明包内字节可重放和来源绑定，不能
+证明掌控本机 checkout、工具与输出的操作者诚实。production collector 没有公式/fixture 通道，
+测试 fixture 也不得进入正式证据。采集会逐 blob 核对 clean detached worktree，并严格匹配独立的
+`local-e3-msys2-xpack-qemu11-v1` 工具与主机 profile；更换 case、提交、硬件、虚拟化层、QEMU
+或工具链可执行文件后必须重新校准。Ubuntu/QEMU 10.2.1 GitLab job 只交付另一 profile 的完整
+18-case 语义与原始日志，不适用本地 wall-time 阈值。
 
 离线验证文件集合、引用和 SHA256：
 
 ```bash
-python3 scripts/capture-final-evidence.py verify evidence/releases/<bundle>
+python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py \
+  verify evidence/releases/<bundle>
 ```
 
 上式验证独立包的字节、引用和语义，但尚不能证明它已经按 C→E 规则提交。提交 E 并保持
 工作区干净后，还必须验证 Git 图、树对象和精确 diff allowlist：
 
 ```bash
-python3 host_tools/evidence_delivery_contract.py verify-committed \
+python3 -I -S scripts/trusted-python-entry.py \
+  host_tools/evidence_delivery_contract.py verify-committed \
   --bundle evidence/releases/<bundle> --repo-root .
 ```
 
 远程 CI 完成后，现场抓取并绑定到一个新目录，不改写本地原包，也不保存 token：
 
 ```bash
-python3 scripts/capture-final-evidence.py bind-remote-ci \
+python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py \
+  bind-remote-ci \
   --bundle evidence/releases/<local-bundle> \
   --output evidence/releases/<combined-bundle> \
   --gitlab-url https://gitlab.example \

@@ -2,6 +2,174 @@
 #define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
+#define TASK6_ARTIFACT_MAX 256
+#define TASK6_SHA256_TEXT 65
+#define TASK6_FNV_OFFSET 1469598103934665603ULL
+#define TASK6_FNV_PRIME 1099511628211ULL
+
+struct task6_artifact_action {
+	char challenge[24];
+	char protocol[40];
+	char input_name[64];
+	char input_kind[32];
+	char input_sha256[TASK6_SHA256_TEXT];
+	char input_bytes_text[24];
+	char input_source[48];
+	char input_hex[TASK6_ARTIFACT_MAX * 2 + 1];
+	char derive_input[64];
+	char output_name[64];
+	char operation[48];
+	char stage[48];
+	char output_sha256[TASK6_SHA256_TEXT];
+	char output_bytes_text[24];
+	char derive_input_sha256[TASK6_SHA256_TEXT];
+};
+
+static struct task6_artifact_action task6_action;
+static char task6_input_bytes[TASK6_ARTIFACT_MAX];
+static char task6_output_bytes[TASK6_ARTIFACT_MAX];
+static char task6_name_a[64];
+static char task6_name_b[64];
+static char task6_receipt_line[768];
+
+static unsigned long long task6_hash_bytes(const char *buf, int n)
+{
+	unsigned long long hash = TASK6_FNV_OFFSET;
+
+	for (int i = 0; i < n; i++) {
+		hash ^= (unsigned char)buf[i];
+		hash *= TASK6_FNV_PRIME;
+	}
+	return hash;
+}
+
+static int task6_hex_digit(char c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	return -1;
+}
+
+static int task6_parse_uint(const char *text, unsigned long long *value)
+{
+	unsigned long long result = 0;
+
+	if (!text || !text[0] || !value) return 0;
+	for (int i = 0; text[i]; i++) {
+		unsigned digit = (unsigned)(text[i] - '0');
+
+		if (digit > 9 || result > (~0ULL - digit) / 10) return 0;
+		result = result * 10 + digit;
+	}
+	*value = result;
+	return 1;
+}
+
+static int task6_is_sha256(const char *text)
+{
+	if (!text || strlen(text) != 64) return 0;
+	for (int i = 0; i < 64; i++) {
+		if (!((text[i] >= '0' && text[i] <= '9') ||
+		      (text[i] >= 'a' && text[i] <= 'f')))
+			return 0;
+	}
+	return 1;
+}
+
+static int task6_bytes_equal(const char *left, const char *right, int n)
+{
+	if (!left || !right || n < 0) return 0;
+	for (int i = 0; i < n; i++) {
+		if (left[i] != right[i]) return 0;
+	}
+	return 1;
+}
+
+static int task6_decode_input(int *byte_count)
+{
+	int hex_len = strlen(task6_action.input_hex);
+
+	if (!byte_count || (hex_len & 1) != 0 ||
+	    hex_len / 2 <= 0 || hex_len / 2 >= TASK6_ARTIFACT_MAX)
+		return 0;
+	for (int i = 0; i < hex_len / 2; i++) {
+		int high = task6_hex_digit(task6_action.input_hex[i * 2]);
+		int low = task6_hex_digit(task6_action.input_hex[i * 2 + 1]);
+
+		if (high < 0 || low < 0) return 0;
+		task6_input_bytes[i] = (char)((high << 4) | low);
+		if (task6_input_bytes[i] == 0) return 0;
+	}
+	*byte_count = hex_len / 2;
+	task6_input_bytes[*byte_count] = 0;
+	return 1;
+}
+
+static int task6_parse_row(const char *buf, int n, int *offset,
+			   char *name, int name_cap,
+			   unsigned long long *count)
+{
+	int out = 0;
+	unsigned long long value = 0;
+
+	if (!buf || !offset || !name || name_cap < 2 || !count) return 0;
+	while (*offset < n && buf[*offset] != ',') {
+		char c = buf[(*offset)++];
+
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		      (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+		      c == '.' || c == ':') || out + 1 >= name_cap)
+			return 0;
+		name[out++] = c;
+	}
+	if (out == 0 || *offset >= n || buf[(*offset)++] != ',') return 0;
+	name[out] = 0;
+	if (*offset >= n || buf[*offset] < '0' || buf[*offset] > '9') return 0;
+	while (*offset < n && buf[*offset] != '\n') {
+		unsigned digit = (unsigned)(buf[(*offset)++] - '0');
+
+		if (digit > 9 || value > (~0ULL - digit) / 10) return 0;
+		value = value * 10 + digit;
+	}
+	if (*offset >= n || buf[(*offset)++] != '\n' || value == 0) return 0;
+	*count = value;
+	return 1;
+}
+
+static int task6_normalize_counts(int input_bytes)
+{
+	static const char header[] = "sample,count\n";
+	unsigned long long count_a;
+	unsigned long long count_b;
+	unsigned long long total;
+	unsigned long long ppm_a;
+	int offset = sizeof(header) - 1;
+
+	if (input_bytes <= offset ||
+	    !task6_bytes_equal(task6_input_bytes, header, sizeof(header) - 1) ||
+	    !task6_parse_row(task6_input_bytes, input_bytes, &offset,
+			     task6_name_a, sizeof(task6_name_a), &count_a) ||
+	    !task6_parse_row(task6_input_bytes, input_bytes, &offset,
+			     task6_name_b, sizeof(task6_name_b), &count_b) ||
+	    offset != input_bytes || count_a > ~0ULL - count_b)
+		return -1;
+	total = count_a + count_b;
+	if (count_a > ~0ULL / 1000000ULL) return -1;
+	ppm_a = count_a * 1000000ULL / total;
+	rp_copy_text(task6_output_bytes, sizeof(task6_output_bytes),
+		     "sample,normalized_ppm\n");
+	rp_append_text(task6_output_bytes, sizeof(task6_output_bytes), task6_name_a);
+	rp_append_text(task6_output_bytes, sizeof(task6_output_bytes), ",");
+	rp_append_uint_text(task6_output_bytes, sizeof(task6_output_bytes), ppm_a);
+	rp_append_text(task6_output_bytes, sizeof(task6_output_bytes), "\n");
+	rp_append_text(task6_output_bytes, sizeof(task6_output_bytes), task6_name_b);
+	rp_append_text(task6_output_bytes, sizeof(task6_output_bytes), ",");
+	rp_append_uint_text(task6_output_bytes, sizeof(task6_output_bytes),
+			    1000000ULL - ppm_a);
+	rp_append_text(task6_output_bytes, sizeof(task6_output_bytes), "\n");
+	return strlen(task6_output_bytes);
+}
+
 static int fastq_profile(int *reads, int *bases, int *diffs)
 {
 	char *buf = rp_state_buf;
@@ -51,35 +219,162 @@ static int fastq_profile(int *reads, int *bases, int *diffs)
 	return 1;
 }
 
-static int append_artifact_input_action(void)
+static int apply_task6_artifact_actions(void)
 {
-	char file[64];
+	char line[320];
+	unsigned long long declared_input_bytes;
+	unsigned long long declared_output_bytes;
+	unsigned long long input_fnv64;
+	unsigned long long output_fnv64;
+	int input_bytes;
+	int output_bytes;
+
+	memset(&task6_action, 0, sizeof(task6_action));
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "challenge=",
+			task6_action.challenge, sizeof(task6_action.challenge)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_input",
+			"provenance_protocol=", task6_action.protocol,
+			sizeof(task6_action.protocol)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_input", "file=",
+			task6_action.input_name, sizeof(task6_action.input_name)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_input", "artifact_kind=",
+			task6_action.input_kind, sizeof(task6_action.input_kind)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_input", "sha256=",
+			task6_action.input_sha256, sizeof(task6_action.input_sha256)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_input", "bytes=",
+			task6_action.input_bytes_text,
+			sizeof(task6_action.input_bytes_text)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_input", "source=",
+			task6_action.input_source, sizeof(task6_action.input_source)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_input", "content_hex=",
+			task6_action.input_hex, sizeof(task6_action.input_hex)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_derive", "input=",
+			task6_action.derive_input, sizeof(task6_action.derive_input)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_derive", "output=",
+			task6_action.output_name, sizeof(task6_action.output_name)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_derive", "operation=",
+			task6_action.operation, sizeof(task6_action.operation)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_derive", "stage=",
+			task6_action.stage, sizeof(task6_action.stage)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_derive", "sha256=",
+			task6_action.output_sha256, sizeof(task6_action.output_sha256)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_derive", "bytes=",
+			task6_action.output_bytes_text,
+			sizeof(task6_action.output_bytes_text)) ||
+	    !rp_host_seed_copy_value_for_kind("kind=artifact_derive", "input_sha256=",
+			task6_action.derive_input_sha256,
+			sizeof(task6_action.derive_input_sha256)))
+		return 0;
+	if (strcmp(task6_action.protocol, "task6_artifact_bytes_v1") != 0 ||
+	    strcmp(task6_action.input_name, task6_action.derive_input) != 0 ||
+	    strcmp(task6_action.operation, "normalize_ppm") != 0 ||
+	    strcmp(task6_action.input_sha256,
+		   task6_action.derive_input_sha256) != 0 ||
+	    !task6_is_sha256(task6_action.input_sha256) ||
+	    !task6_is_sha256(task6_action.output_sha256) ||
+	    strcmp(task6_action.input_sha256, task6_action.output_sha256) == 0 ||
+	    !task6_parse_uint(task6_action.input_bytes_text,
+			     &declared_input_bytes) ||
+	    !task6_parse_uint(task6_action.output_bytes_text,
+			     &declared_output_bytes) ||
+	    !task6_decode_input(&input_bytes) ||
+	    declared_input_bytes != (unsigned long long)input_bytes)
+		return 0;
+	output_bytes = task6_normalize_counts(input_bytes);
+	if (output_bytes <= 0 ||
+	    declared_output_bytes != (unsigned long long)output_bytes)
+		return 0;
+	if (!rp_write_file("rp_task6_raw", task6_input_bytes) ||
+	    !rp_write_file("rp_task6_norm", task6_output_bytes))
+		return 0;
+	input_fnv64 = task6_hash_bytes(task6_input_bytes, input_bytes);
+	output_fnv64 = task6_hash_bytes(task6_output_bytes, output_bytes);
+
+	rp_copy_text(line, sizeof(line), "host_artifact_input=");
+	rp_append_text(line, sizeof(line), task6_action.input_name);
+	rp_append_text(line, sizeof(line), ";kind=");
+	rp_append_text(line, sizeof(line), task6_action.input_kind);
+	rp_append_text(line, sizeof(line), ";sha256=");
+	rp_append_text(line, sizeof(line), task6_action.input_sha256);
+	rp_append_text(line, sizeof(line), ";bytes=");
+	rp_append_uint_text(line, sizeof(line), input_bytes);
+	rp_append_text(line, sizeof(line), ";source=");
+	rp_append_text(line, sizeof(line), task6_action.input_source);
+	if (!rp_append_file("rp_artifact", line) ||
+	    !rp_append_file("rp_input", line))
+		return 0;
+
+	rp_copy_text(line, sizeof(line), "host_artifact_derive=");
+	rp_append_text(line, sizeof(line), task6_action.derive_input);
+	rp_append_text(line, sizeof(line), ";output=");
+	rp_append_text(line, sizeof(line), task6_action.output_name);
+	rp_append_text(line, sizeof(line), ";operation=");
+	rp_append_text(line, sizeof(line), task6_action.operation);
+	rp_append_text(line, sizeof(line), ";stage=");
+	rp_append_text(line, sizeof(line), task6_action.stage);
+	rp_append_text(line, sizeof(line), ";sha256=");
+	rp_append_text(line, sizeof(line), task6_action.output_sha256);
+	if (!rp_append_file("rp_artifact", line)) return 0;
+
+	rp_copy_text(task6_receipt_line, sizeof(task6_receipt_line),
+		     "task6_artifact_receipt=task6_artifact_bytes_v1;challenge=");
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       task6_action.challenge);
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       ";input_storage=rp_task6_raw;input_bytes=");
+	rp_append_uint_text(task6_receipt_line, sizeof(task6_receipt_line), input_bytes);
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       ";input_fnv64=");
+	rp_append_uint_text(task6_receipt_line, sizeof(task6_receipt_line), input_fnv64);
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       ";input_sha256=");
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       task6_action.input_sha256);
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       ";output_storage=rp_task6_norm;output_bytes=");
+	rp_append_uint_text(task6_receipt_line, sizeof(task6_receipt_line), output_bytes);
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       ";output_fnv64=");
+	rp_append_uint_text(task6_receipt_line, sizeof(task6_receipt_line), output_fnv64);
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       ";output_sha256=");
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       task6_action.output_sha256);
+	rp_append_text(task6_receipt_line, sizeof(task6_receipt_line),
+		       ";operation=normalize_ppm");
+	return rp_append_file("rp_artifact", task6_receipt_line);
+}
+
+static int append_legacy_artifact_input_action(void)
+{
+	char input[64];
 	char kind[32];
-	char sha[64];
+	char input_sha[65];
 	char bytes[32];
 	char source[48];
-	char line[240];
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "file=", file, sizeof(file))) {
-		rp_copy_text(file, sizeof(file), "reads_R1.fastq");
-	}
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "artifact_kind=", kind, sizeof(kind))) {
+	char line[320];
+
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "file=",
+			input, sizeof(input)))
+		rp_copy_text(input, sizeof(input), "reads_R1.fastq");
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "artifact_kind=",
+			kind, sizeof(kind)))
 		rp_copy_text(kind, sizeof(kind), "fastq");
-	}
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "sha256=", sha, sizeof(sha))) {
-		rp_copy_text(sha, sizeof(sha), "sha-host-input");
-	}
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "bytes=", bytes, sizeof(bytes))) {
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "sha256=",
+			input_sha, sizeof(input_sha)))
+		rp_copy_text(input_sha, sizeof(input_sha), "sha-host-input");
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "bytes=",
+			bytes, sizeof(bytes)))
 		rp_copy_text(bytes, sizeof(bytes), "2048");
-	}
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "source=", source, sizeof(source))) {
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "source=",
+			source, sizeof(source)))
 		rp_copy_text(source, sizeof(source), "upload");
-	}
 	rp_copy_text(line, sizeof(line), "host_artifact_input=");
-	rp_append_text(line, sizeof(line), file);
+	rp_append_text(line, sizeof(line), input);
 	rp_append_text(line, sizeof(line), ";kind=");
 	rp_append_text(line, sizeof(line), kind);
 	rp_append_text(line, sizeof(line), ";sha256=");
-	rp_append_text(line, sizeof(line), sha);
+	rp_append_text(line, sizeof(line), input_sha);
 	rp_append_text(line, sizeof(line), ";bytes=");
 	rp_append_text(line, sizeof(line), bytes);
 	rp_append_text(line, sizeof(line), ";source=");
@@ -88,29 +383,30 @@ static int append_artifact_input_action(void)
 	       rp_append_file("rp_input", line);
 }
 
-static int append_artifact_derive_action(void)
+static int append_legacy_artifact_derive_action(void)
 {
 	char input[64];
 	char output[64];
+	char output_sha[65];
 	char operation[48];
 	char stage[48];
-	char sha[64];
-	char line[240];
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "input=", input, sizeof(input))) {
+	char line[320];
+
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "input=",
+			input, sizeof(input)))
 		rp_copy_text(input, sizeof(input), "reads_R1.fastq");
-	}
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "output=", output, sizeof(output))) {
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "output=",
+			output, sizeof(output)))
 		rp_copy_text(output, sizeof(output), "clean_reads.fastq");
-	}
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "operation=", operation, sizeof(operation))) {
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "operation=",
+			operation, sizeof(operation)))
 		rp_copy_text(operation, sizeof(operation), "trim");
-	}
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "stage=", stage, sizeof(stage))) {
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "stage=",
+			stage, sizeof(stage)))
 		rp_copy_text(stage, sizeof(stage), "clean");
-	}
-	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "sha256=", sha, sizeof(sha))) {
-		rp_copy_text(sha, sizeof(sha), "sha-host-derived");
-	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "sha256=",
+			output_sha, sizeof(output_sha)))
+		rp_copy_text(output_sha, sizeof(output_sha), "sha-host-derived");
 	rp_copy_text(line, sizeof(line), "host_artifact_derive=");
 	rp_append_text(line, sizeof(line), input);
 	rp_append_text(line, sizeof(line), ";output=");
@@ -120,7 +416,7 @@ static int append_artifact_derive_action(void)
 	rp_append_text(line, sizeof(line), ";stage=");
 	rp_append_text(line, sizeof(line), stage);
 	rp_append_text(line, sizeof(line), ";sha256=");
-	rp_append_text(line, sizeof(line), sha);
+	rp_append_text(line, sizeof(line), output_sha);
 	return rp_append_file("rp_artifact", line);
 }
 
@@ -480,9 +776,17 @@ int main(void)
 		return 1;
 	}
 	if (rp_host_seed_has_artifact_action()) {
+		char provenance_protocol[40];
+		int has_input = rp_host_seed_has("kind=artifact_input");
+		int has_derive = rp_host_seed_has("kind=artifact_derive");
+		int task6 = has_input && rp_host_seed_copy_value_for_kind(
+			"kind=artifact_input", "provenance_protocol=",
+			provenance_protocol, sizeof(provenance_protocol));
+
 		if (!rp_append_file("rp_artifact", "host_artifact_actions=applied")) return 1;
-		if (rp_host_seed_has("kind=artifact_input") && !append_artifact_input_action()) return 1;
-		if (rp_host_seed_has("kind=artifact_derive") && !append_artifact_derive_action()) return 1;
+		if (task6 && (!has_derive || !apply_task6_artifact_actions())) return 1;
+		if (!task6 && has_input && !append_legacy_artifact_input_action()) return 1;
+		if (!task6 && has_derive && !append_legacy_artifact_derive_action()) return 1;
 		if (rp_host_seed_has("kind=artifact_log") && !append_artifact_log_action()) return 1;
 		if (rp_host_seed_has("kind=artifact_chart") && !append_artifact_chart_action()) return 1;
 		if (!rp_append_file("rp_tool", "tool=artifact_ops.host_artifact_actions")) return 1;

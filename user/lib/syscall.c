@@ -345,6 +345,12 @@ int agent_workflow_lifecycle_info(
 		       expected_generation);
 }
 
+int agent_resource_snapshot(struct agent_resource_snapshot *snapshot)
+{
+	return syscall(SYS_agent_resource_snapshot, snapshot,
+		       sizeof(*snapshot));
+}
+
 int agent_scope_delegate_fd(int fd)
 {
 	return syscall(SYS_agent_scope_delegate_fd, fd);

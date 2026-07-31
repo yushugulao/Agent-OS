@@ -25,6 +25,7 @@ TOP_LEVEL_KEYS = {
     "host_state_files",
     "reader_optional_state_files",
     "archive_optional_state_files",
+    "opaque_guest_state_files",
 }
 TARGET_KEYS = {"source_roots"}
 SUPPORTED_STATE_FILE_CALLS = {
@@ -189,6 +190,7 @@ class ResearchStateManifest:
     host_state_files: tuple[str, ...]
     reader_optional_state_files: tuple[str, ...]
     archive_optional_state_files: tuple[str, ...]
+    opaque_guest_state_files: tuple[str, ...]
 
 
 def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -247,8 +249,8 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
     if not isinstance(raw, dict):
         raise StateManifestError("state manifest root must be an object")
     _require_exact_keys(raw, TOP_LEVEL_KEYS, "state manifest")
-    if raw["schema_version"] != 2:
-        raise StateManifestError("state manifest schema_version must be 2")
+    if raw["schema_version"] != 3:
+        raise StateManifestError("state manifest schema_version must be 3")
 
     raw_targets = raw["targets"]
     if not isinstance(raw_targets, dict):
@@ -290,6 +292,9 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
     archive_optional_files = _require_state_names(
         raw["archive_optional_state_files"], "archive_optional_state_files"
     )
+    opaque_guest_files = _require_state_names(
+        raw["opaque_guest_state_files"], "opaque_guest_state_files"
+    )
     inventories = (
         ("host", set(host_files)),
         ("reader optional", set(reader_optional_files)),
@@ -303,9 +308,15 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
                     f"{left_label} and {right_label} state inventories overlap: "
                     + ", ".join(overlap)
                 )
+    opaque_host_overlap = sorted(set(opaque_guest_files) & set(host_files))
+    if opaque_host_overlap:
+        raise StateManifestError(
+            "opaque Guest and Host state inventories overlap: "
+            + ", ".join(opaque_host_overlap)
+        )
     return ResearchStateManifest(
         source_roots, calls, host_files, reader_optional_files,
-        archive_optional_files,
+        archive_optional_files, opaque_guest_files,
     )
 
 
@@ -501,6 +512,12 @@ def validate_repository_state_contract(root: Path) -> dict[str, object]:
             "AgentOS state inventory dropped plain target names: "
             + ", ".join(sorted(plain - agentos))
         )
+    unknown_opaque = sorted(set(manifest.opaque_guest_state_files) - (plain | agentos))
+    if unknown_opaque:
+        raise StateManifestError(
+            "opaque Guest state files are absent from target inventories: "
+            + ", ".join(unknown_opaque)
+        )
     for target, names in (("plain", plain), ("agentos", agentos)):
         short_name_map(
             names,
@@ -535,6 +552,7 @@ def validate_repository_state_contract(root: Path) -> dict[str, object]:
         "plain_archive_state_names": len(plain_archive),
         "agentos_archive_state_names": len(agentos_archive),
         "archive_optional_state_files": len(manifest.archive_optional_state_files),
+        "opaque_guest_state_files": len(manifest.opaque_guest_state_files),
         "status": "ready",
     }
 

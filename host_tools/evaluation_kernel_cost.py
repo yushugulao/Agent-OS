@@ -8,6 +8,34 @@ commands, build log, configuration, artifact paths, and artifact hashes.
 
 from __future__ import annotations
 
+import sys as _entry_sys
+
+
+def _isolate_direct_entry_imports() -> None:
+    """Use only interpreter-owned paths for top-level import resolution."""
+
+    if __name__ != "__main__":
+        return
+    prefixes = {
+        value.replace("\\", "/").rstrip("/").casefold()
+        for value in (
+            _entry_sys.base_prefix, _entry_sys.base_exec_prefix,
+            _entry_sys.prefix, _entry_sys.exec_prefix,
+        )
+        if value
+    }
+    _entry_sys.path[:] = [
+        value for value in _entry_sys.path
+        if value and any(
+            (normalized := value.replace("\\", "/").rstrip("/").casefold())
+            == prefix or normalized.startswith(f"{prefix}/")
+            for prefix in prefixes
+        )
+    ]
+
+
+_isolate_direct_entry_imports()
+
 import argparse
 import base64
 import hashlib
@@ -15,6 +43,7 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -24,10 +53,67 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Sequence
 
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = str(
+        Path(tempfile.gettempdir()) / f"agentos-pycache-{os.urandom(16).hex()}"
+    )
+    if not __package__:
+        import types as _entry_types
+
+        _entry_package = _entry_types.ModuleType("host_tools")
+        _entry_package.__path__ = [str(Path(__file__).resolve().parent)]
+        _entry_package.__package__ = "host_tools"
+        sys.modules["host_tools"] = _entry_package
+        __package__ = "host_tools"
+        sys.path.append(_entry_package.__path__[0])
+
 try:
+    from .evidence_delivery_contract import (
+        DeliveryContractError,
+        controlled_git_environment,
+        tracked_worktree_identity,
+    )
+    from .evidence_toolchain_attestation import (
+        EVALUATION_ARTIFACT_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_ROOTS,
+        EVALUATION_CACHE_OUTPUT_ROOTS,
+        ToolAttestationError,
+        verify_evaluation_source_tree,
+    )
     from .strict_json import strict_json_loads
+    from .safe_host_paths import (
+        absolute_lexical_path,
+        atomic_write_bytes,
+        path_is_link,
+        reject_link_components as reject_host_link_components,
+        require_regular_file,
+        require_safe_directory,
+    )
 except ImportError:
+    from evidence_delivery_contract import (
+        DeliveryContractError,
+        controlled_git_environment,
+        tracked_worktree_identity,
+    )
+    from evidence_toolchain_attestation import (
+        EVALUATION_ARTIFACT_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_ROOTS,
+        EVALUATION_CACHE_OUTPUT_ROOTS,
+        ToolAttestationError,
+        verify_evaluation_source_tree,
+    )
     from strict_json import strict_json_loads
+    from safe_host_paths import (
+        absolute_lexical_path,
+        atomic_write_bytes,
+        path_is_link,
+        reject_link_components as reject_host_link_components,
+        require_regular_file,
+        require_safe_directory,
+    )
 
 
 SCHEMA_VERSION = 1
@@ -36,7 +122,7 @@ ENVIRONMENT_KIND = "agentos-evaluation-environment"
 BUILD_KIND = "agentos-kernel-build-manifest"
 REPORT_KIND = "agentos-kernel-cost-report"
 FRAGMENT_KIND = "agentos-evaluation-benchmark-fragment"
-TRUSTED_BUILD_SCHEMA_VERSION = 1
+TRUSTED_BUILD_SCHEMA_VERSION = 2
 TRUSTED_BUILD_CONFIG_KIND = "agentos-trusted-kernel-build-config"
 TRUSTED_BUILD_LOG_KIND = "agentos-trusted-kernel-build-log"
 TRUSTED_BUILD_TIMEOUT_SECONDS = 900
@@ -46,13 +132,29 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 UINT_RE = re.compile(r"(?:0|[1-9][0-9]{0,19})\Z")
 HEX_RE = re.compile(r"(?:0|[0-9a-fA-F][0-9a-fA-F]{0,15})\Z")
+STRUCT_PROC_LINE_RE = re.compile(
+    r"^\[kernel-budget\] struct proc: actual=(?P<value>[0-9]+) bytes "
+    r"baseline=[0-9]+ bytes limit=(?P<limit>[0-9]+) bytes$"
+)
+USER_STACK_LINE_RE = re.compile(
+    r"^user stack call-path budget: apps=[0-9]+ max=(?P<value>[0-9]+) "
+    r"\([^\r\n]+\) budget=(?P<limit>[0-9]+) stack=[0-9]+ reserve=[0-9]+$"
+)
 METRIC_IDS = ("elf_file_bytes", "text_bytes", "data_bytes", "bss_bytes")
+GUARDRAIL_IDS = ("struct_proc_bytes", "user_stack_call_path_bytes")
+GUARDRAIL_SOURCES = {
+    "struct_proc_bytes": "check-kernel-budgets",
+    "user_stack_call_path_bytes": "check-user-stack-usage",
+}
 COMMAND_ENVIRONMENT = {"LANG": "C", "LC_ALL": "C"}
 MAX_JSON_BYTES = 1024 * 1024
 
-CONFIG_FIELDS = {"schema_version", "kind", "targets", "metrics", "tool", "limits"}
+CONFIG_FIELDS = {
+    "schema_version", "kind", "targets", "metrics", "guardrails", "tool", "limits",
+}
 CONFIG_TARGET_FIELDS = {"id", "role", "label", "required_relative_path"}
 CONFIG_METRIC_FIELDS = {"id", "label", "unit", "direction", "source", "task"}
+CONFIG_GUARDRAIL_FIELDS = {"id", "label", "unit", "direction", "source", "task"}
 CONFIG_TOOL_FIELDS = {"output_format", "version_arguments", "measurement_arguments"}
 CONFIG_LIMIT_FIELDS = {"timeout_seconds", "max_output_bytes"}
 ENVIRONMENT_FIELDS = {
@@ -70,6 +172,7 @@ BUILD_FIELDS = {
     "run_id",
     "source_commit",
     "environment_sha256",
+    "toolchain_sha256",
     "build_config",
     "build_log",
     "targets",
@@ -82,6 +185,7 @@ REPORT_FIELDS = {
     "binding",
     "tool",
     "targets",
+    "guardrails",
     "content_sha256",
 }
 BINDING_FIELDS = {
@@ -105,6 +209,9 @@ SOURCE_FIELDS = {
 }
 ELF_FIELDS = {"class", "endianness", "machine", "type", "header_size"}
 METRIC_FIELDS = {"id", "status", "value", "reason"}
+GUARDRAIL_FIELDS = {
+    "id", "status", "value", "limit", "source", "source_command_sha256",
+}
 TRUSTED_BUILD_CONFIG_FIELDS = {
     "schema_version",
     "kind",
@@ -112,20 +219,28 @@ TRUSTED_BUILD_CONFIG_FIELDS = {
     "source_commit",
     "kernel_cost_config",
     "make_tool",
+    "toolchain",
     "command_policy",
     "environment",
     "environment_sha256",
     "targets",
+    "guardrail_commands",
 }
 TRUSTED_BUILD_CONFIG_RECEIPT_FIELDS = {"path", "sha256"}
 TRUSTED_BUILD_MAKE_FIELDS = {"path", "sha256", "version_argv", "version"}
+TRUSTED_BUILD_TOOLCHAIN_FIELDS = {"prefix", "identity_sha256", "tools"}
+TRUSTED_BUILD_TOOL_FIELDS = {
+    "name", "path", "resolved_path", "sha256", "version_argv", "version",
+}
+TRUSTED_BUILD_TOOL_NAMES = ("gcc", "ld", "objcopy", "objdump", "nm", "size")
 TRUSTED_BUILD_POLICY_FIELDS = {"timeout_seconds", "max_output_bytes"}
 TRUSTED_BUILD_TARGET_FIELDS = {
     "id", "role", "path", "clean_argv", "build_argv",
 }
+TRUSTED_BUILD_GUARDRAIL_FIELDS = {"id", "target_id", "phase", "argv"}
 TRUSTED_BUILD_LOG_FIELDS = {
     "schema_version", "kind", "run_id", "source_commit",
-    "environment_sha256", "commands",
+    "environment_sha256", "toolchain_sha256", "commands",
 }
 TRUSTED_BUILD_COMMAND_FIELDS = {
     "sequence", "target_id", "phase", "cwd", "argv",
@@ -133,7 +248,7 @@ TRUSTED_BUILD_COMMAND_FIELDS = {
     "stdout_base64", "stdout_sha256", "stderr_base64", "stderr_sha256",
 }
 TRUSTED_ENVIRONMENT_REQUIRED = {
-    "LANG", "LC_ALL", "PYTHONHASHSEED", "SOURCE_DATE_EPOCH", "TZ",
+    "LANG", "LC_ALL", "PYTHONHASHSEED", "SOURCE_DATE_EPOCH", "TOOLPREFIX", "TZ",
 }
 TRUSTED_ENVIRONMENT_OPTIONAL = {
     "PATH", "SystemRoot", "COMSPEC", "PATHEXT", "HOME", "TMP", "TEMP",
@@ -142,6 +257,28 @@ TRUSTED_ENVIRONMENT_OPTIONAL = {
 
 class KernelCostError(ValueError):
     """Raised when kernel cost evidence is incomplete or inconsistent."""
+
+
+def _safe_directory(path: Path, label: str) -> Path:
+    try:
+        return require_safe_directory(path)
+    except (OSError, ValueError) as error:
+        raise KernelCostError(f"{label} is not a safe directory: {path}") from error
+
+
+def _safe_regular_file(path: Path, label: str) -> Path:
+    try:
+        return require_regular_file(path)
+    except (OSError, ValueError) as error:
+        raise KernelCostError(f"{label} is not a safe regular file: {path}") from error
+
+
+def _resolved_safe_directory(path: Path, label: str) -> Path:
+    return _safe_directory(absolute_lexical_path(path), label).resolve(strict=True)
+
+
+def _resolved_safe_file(path: Path, label: str) -> Path:
+    return _safe_regular_file(absolute_lexical_path(path), label).resolve(strict=True)
 
 
 @dataclass(frozen=True)
@@ -227,9 +364,11 @@ def _file_sha(path: Path) -> str:
 
 
 def _read_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
-    if _is_link(path) or not path.is_file():
-        raise KernelCostError(f"{label} is not a regular file: {path}")
-    raw = path.read_bytes()
+    try:
+        path = require_regular_file(path, maximum_bytes=MAX_JSON_BYTES)
+        raw = path.read_bytes()
+    except (OSError, ValueError) as error:
+        raise KernelCostError(f"{label} is not a safe regular file: {path}") from error
     if len(raw) > MAX_JSON_BYTES:
         raise KernelCostError(f"{label} exceeds 1 MiB")
     try:
@@ -254,8 +393,12 @@ def _safe_relative(value: Any, label: str) -> str:
 
 def _relative_to(root: Path, path: Path, label: str) -> str:
     try:
-        relative = path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError as error:
+        safe_root = require_safe_directory(root)
+        safe_path = reject_host_link_components(path)
+        relative = safe_path.resolve(strict=False).relative_to(
+            safe_root.resolve(strict=True)
+        ).as_posix()
+    except (OSError, ValueError) as error:
         raise KernelCostError(f"{label} escapes the evidence root: {path}") from error
     return _safe_relative(relative, label)
 
@@ -264,23 +407,13 @@ def _root_path(root: Path, relative: str) -> Path:
     return root / Path(*PurePosixPath(relative).parts)
 
 
-def _is_link(path: Path) -> bool:
-    if path.is_symlink():
-        return True
-    isjunction = getattr(os.path, "isjunction", None)
-    return bool(isjunction and isjunction(path))
-
-
 def _reject_link_components(root: Path, path: Path, label: str) -> None:
     try:
-        relative = path.absolute().relative_to(root.absolute())
-    except ValueError as error:
-        raise KernelCostError(f"{label} escapes its root: {path}") from error
-    current = root.absolute()
-    for part in relative.parts:
-        current /= part
-        if current.exists() and _is_link(current):
-            raise KernelCostError(f"{label} is link-backed: {current}")
+        safe_root = require_safe_directory(root)
+        safe_path = reject_host_link_components(path)
+        safe_path.resolve(strict=False).relative_to(safe_root.resolve(strict=True))
+    except (OSError, ValueError) as error:
+        raise KernelCostError(f"{label} escapes or is link-backed: {path}") from error
 
 
 def _receipt(root: Path, path: Path, label: str) -> dict[str, str]:
@@ -351,6 +484,26 @@ def load_config(path: Path) -> tuple[dict[str, Any], bytes]:
         if metric["source"] != source:
             raise KernelCostError(f"{expected_id} must use {source}")
 
+    guardrails = _array(root["guardrails"], "config.guardrails")
+    if len(guardrails) != len(GUARDRAIL_IDS):
+        raise KernelCostError("config must define two kernel guardrails")
+    for index, (raw_guardrail, expected_id) in enumerate(
+        zip(guardrails, GUARDRAIL_IDS)
+    ):
+        label = f"config.guardrails[{index}]"
+        guardrail = _object(raw_guardrail, label)
+        _expect_keys(guardrail, CONFIG_GUARDRAIL_FIELDS, label)
+        if guardrail["id"] != expected_id:
+            raise KernelCostError("config guardrail order is not canonical")
+        _string(guardrail["label"], f"{label}.label")
+        if (
+            guardrail["unit"] != "bytes"
+            or guardrail["direction"] != "lower_is_better"
+            or guardrail["task"] != "task6"
+            or guardrail["source"] != GUARDRAIL_SOURCES[expected_id]
+        ):
+            raise KernelCostError(f"{expected_id} guardrail metadata is invalid")
+
     tool = _object(root["tool"], "config.tool")
     _expect_keys(tool, CONFIG_TOOL_FIELDS, "config.tool")
     if (
@@ -403,6 +556,7 @@ def load_build_manifest(
     if COMMIT_RE.fullmatch(_string(value["source_commit"], "build commit")) is None:
         raise KernelCostError("build commit is invalid")
     _sha(value["environment_sha256"], "build environment SHA-256")
+    _sha(value["toolchain_sha256"], "build toolchain SHA-256")
     for field in ("build_config", "build_log"):
         receipt = _object(value[field], f"build.{field}")
         _expect_keys(receipt, FILE_RECEIPT_FIELDS, f"build.{field}")
@@ -643,6 +797,31 @@ def _trusted_text(value: Any, label: str, maximum: int = 4096) -> str:
     return text
 
 
+def _trusted_absolute_path(value: Any, label: str) -> str:
+    """Accept canonical POSIX or drive-qualified Windows absolute paths."""
+
+    text = _trusted_text(value, label)
+    if text.startswith("/"):
+        path = PurePosixPath(text)
+        if (
+            not path.is_absolute()
+            or path.as_posix() != text
+            or any(part in {"", ".", ".."} for part in path.parts[1:])
+        ):
+            raise KernelCostError(f"{label} is not a canonical absolute path")
+        return text
+    match = re.fullmatch(r"([A-Za-z]):([\\/])(.+)", text)
+    if match is None:
+        raise KernelCostError(f"{label} is not an absolute POSIX/Windows path")
+    separator = match.group(2)
+    tail = match.group(3)
+    other_separator = "/" if separator == "\\" else "\\"
+    parts = tail.split(separator)
+    if other_separator in tail or any(part in {"", ".", ".."} for part in parts):
+        raise KernelCostError(f"{label} is not a canonical absolute path")
+    return text
+
+
 def _trusted_argv(value: Any, label: str) -> list[str]:
     argv = _array(value, label)
     if not argv or len(argv) > 16:
@@ -665,6 +844,66 @@ def _trusted_stream(command: dict[str, Any], stream: str, maximum: int, label: s
     if _sha(command[f"{stream}_sha256"], f"{label}.{stream}_sha256") != _bytes_sha(raw):
         raise KernelCostError(f"{label}.{stream} SHA-256 differs from its bytes")
     return raw
+
+
+def _guardrail_from_command(
+    command: dict[str, Any], guardrail_id: str, label: str
+) -> dict[str, Any]:
+    """Re-derive one guardrail from the canonical checker's captured stdout."""
+
+    stdout = _trusted_stream(
+        command, "stdout", TRUSTED_BUILD_MAX_OUTPUT_BYTES, label
+    )
+    try:
+        lines = stdout.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise KernelCostError(f"{label}.stdout is not UTF-8") from error
+    pattern = (
+        STRUCT_PROC_LINE_RE
+        if guardrail_id == "struct_proc_bytes"
+        else USER_STACK_LINE_RE
+    )
+    matches = [match for line in lines if (match := pattern.fullmatch(line))]
+    if len(matches) != 1:
+        raise KernelCostError(
+            f"{label} must contain exactly one canonical {guardrail_id} line"
+        )
+    value = int(matches[0].group("value"), 10)
+    limit = int(matches[0].group("limit"), 10)
+    if value <= 0 or limit <= 0 or value > limit:
+        raise KernelCostError(f"{label} contains an invalid {guardrail_id} budget")
+    return {
+        "id": guardrail_id,
+        "status": "measured",
+        "value": value,
+        "limit": limit,
+        "source": GUARDRAIL_SOURCES[guardrail_id],
+        "source_command_sha256": _bytes_sha(_canonical_json(command)),
+    }
+
+
+def derive_guardrails(
+    trusted_config: dict[str, Any], trusted_log: dict[str, Any]
+) -> list[dict[str, Any]]:
+    commands = {
+        (command.get("target_id"), command.get("phase")): command
+        for command in _array(trusted_log.get("commands"), "trusted build log commands")
+        if isinstance(command, dict)
+    }
+    result: list[dict[str, Any]] = []
+    for index, specification in enumerate(trusted_config["guardrail_commands"]):
+        key = (specification["target_id"], specification["phase"])
+        command = commands.get(key)
+        if command is None:
+            raise KernelCostError(f"trusted build log lacks guardrail command {key!r}")
+        result.append(
+            _guardrail_from_command(
+                command,
+                specification["id"],
+                f"trusted guardrail command[{index}]",
+            )
+        )
+    return result
 
 
 def validate_trusted_build_config(
@@ -705,7 +944,7 @@ def validate_trusted_build_config(
 
     make_tool = _object(root["make_tool"], "trusted build config make tool")
     _expect_keys(make_tool, TRUSTED_BUILD_MAKE_FIELDS, "trusted build config make tool")
-    make_path = _trusted_text(make_tool["path"], "trusted build make path")
+    make_path = _trusted_absolute_path(make_tool["path"], "trusted build make path")
     _sha(make_tool["sha256"], "trusted build make SHA-256")
     make_version_argv = _trusted_argv(
         make_tool["version_argv"], "trusted build make version argv"
@@ -715,6 +954,39 @@ def validate_trusted_build_config(
     make_version = _trusted_text(make_tool["version"], "trusted build make version", 512)
     if any(ord(character) < 32 for character in make_version):
         raise KernelCostError("trusted build make version is not printable")
+
+    toolchain = _object(root["toolchain"], "trusted build toolchain")
+    _expect_keys(toolchain, TRUSTED_BUILD_TOOLCHAIN_FIELDS, "trusted build toolchain")
+    prefix = _trusted_absolute_path(toolchain["prefix"], "trusted build tool prefix")
+    tools = _array(toolchain["tools"], "trusted build toolchain tools")
+    if len(tools) != len(TRUSTED_BUILD_TOOL_NAMES):
+        raise KernelCostError(
+            f"trusted build toolchain must contain {len(TRUSTED_BUILD_TOOL_NAMES)} tools"
+        )
+    for index, (raw_tool, expected_name) in enumerate(
+        zip(tools, TRUSTED_BUILD_TOOL_NAMES)
+    ):
+        label = f"trusted build toolchain tools[{index}]"
+        item = _object(raw_tool, label)
+        _expect_keys(item, TRUSTED_BUILD_TOOL_FIELDS, label)
+        if item["name"] != expected_name:
+            raise KernelCostError("trusted build tool order/name is not fixed")
+        tool_path = _trusted_absolute_path(item["path"], f"{label}.path")
+        _trusted_absolute_path(item["resolved_path"], f"{label}.resolved_path")
+        if tool_path not in {prefix + expected_name, prefix + expected_name + ".exe"}:
+            raise KernelCostError(f"{label}.path is not derived from TOOLPREFIX")
+        _sha(item["sha256"], f"{label}.sha256")
+        if _trusted_argv(item["version_argv"], f"{label}.version_argv") != [
+            tool_path,
+            "--version",
+        ]:
+            raise KernelCostError(f"{label}.version command is not fixed")
+        version = _trusted_text(item["version"], f"{label}.version", 512)
+        if any(ord(character) < 32 for character in version):
+            raise KernelCostError(f"{label}.version is not printable")
+    identity = _bytes_sha(_canonical_json({"prefix": prefix, "tools": tools}))
+    if _sha(toolchain["identity_sha256"], "trusted toolchain identity") != identity:
+        raise KernelCostError("trusted toolchain identity SHA-256 differs")
 
     policy = _object(root["command_policy"], "trusted build command policy")
     _expect_keys(policy, TRUSTED_BUILD_POLICY_FIELDS, "trusted build command policy")
@@ -741,6 +1013,7 @@ def validate_trusted_build_config(
         or environment["LC_ALL"] != "C"
         or environment["PYTHONHASHSEED"] != "0"
         or environment["TZ"] != "UTC"
+        or environment["TOOLPREFIX"] != prefix
         or not environment["SOURCE_DATE_EPOCH"].isdigit()
     ):
         raise KernelCostError("trusted build deterministic environment is invalid")
@@ -770,20 +1043,59 @@ def validate_trusted_build_config(
         ):
             raise KernelCostError(f"{label} identity/order/path is not fixed")
         expected_clean = (
-            [make_path, "-C", "baseline_ucore", "clean"]
+            [make_path, "-C", "baseline_ucore", f"TOOLPREFIX={prefix}", "clean"]
             if expected_role == "baseline"
-            else [make_path, "clean"]
+            else [make_path, f"TOOLPREFIX={prefix}", "clean"]
         )
         expected_build = (
-            [make_path, "-C", "baseline_ucore", "build/kernel"]
+            [
+                make_path,
+                "-C",
+                "baseline_ucore",
+                f"TOOLPREFIX={prefix}",
+                "build/kernel",
+            ]
             if expected_role == "baseline"
-            else [make_path, "build/kernel"]
+            else [make_path, f"TOOLPREFIX={prefix}", "build/kernel"]
         )
         if (
             _trusted_argv(target["clean_argv"], f"{label}.clean_argv") != expected_clean
             or _trusted_argv(target["build_argv"], f"{label}.build_argv") != expected_build
         ):
             raise KernelCostError(f"{label} clean/build command is not fixed")
+
+    guardrail_commands = _array(
+        root["guardrail_commands"], "trusted build guardrail commands"
+    )
+    if len(guardrail_commands) != len(GUARDRAIL_IDS):
+        raise KernelCostError("trusted build config must contain two guardrail commands")
+    expected_guardrails = (
+        (
+            "struct_proc_bytes",
+            "kernel_budget",
+            [make_path, f"TOOLPREFIX={prefix}", "kernel-budget-check"],
+        ),
+        (
+            "user_stack_call_path_bytes",
+            "user_stack",
+            [make_path, f"TOOLPREFIX={prefix}", "user-stack-check"],
+        ),
+    )
+    treatment_id = configured_targets[1]["id"]
+    for index, (raw_guardrail, expected) in enumerate(
+        zip(guardrail_commands, expected_guardrails)
+    ):
+        label = f"trusted build guardrail commands[{index}]"
+        guardrail = _object(raw_guardrail, label)
+        _expect_keys(guardrail, TRUSTED_BUILD_GUARDRAIL_FIELDS, label)
+        guardrail_id, phase, argv = expected
+        if (
+            guardrail["id"] != guardrail_id
+            or guardrail["target_id"] != treatment_id
+            or guardrail["phase"] != phase
+            or _trusted_argv(guardrail["argv"], f"{label}.argv") != argv
+        ):
+            raise KernelCostError(f"{label} identity/target/phase/argv is not fixed")
     return root
 
 
@@ -792,7 +1104,7 @@ def validate_trusted_build_log(
     trusted_config: dict[str, Any],
     build_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate the exact five-command transcript and all embedded byte receipts."""
+    """Validate the fixed build/check transcript and all embedded byte receipts."""
 
     root = _object(value, "trusted build log")
     _expect_keys(root, TRUSTED_BUILD_LOG_FIELDS, "trusted build log")
@@ -801,14 +1113,24 @@ def validate_trusted_build_log(
         or root["kind"] != TRUSTED_BUILD_LOG_KIND
     ):
         raise KernelCostError("unsupported trusted build log")
-    for field in ("run_id", "source_commit", "environment_sha256"):
+    for field in (
+        "run_id",
+        "source_commit",
+        "environment_sha256",
+    ):
         if root[field] != trusted_config[field]:
             raise KernelCostError(f"trusted build log {field} differs from config")
+    if root["toolchain_sha256"] != trusted_config["toolchain"]["identity_sha256"]:
+        raise KernelCostError("trusted build log toolchain identity differs from config")
 
     make_tool = trusted_config["make_tool"]
     expected_commands: list[tuple[str, str, list[str]]] = [
         ("builder", "make_version", list(make_tool["version_argv"])),
     ]
+    for tool in trusted_config["toolchain"]["tools"]:
+        expected_commands.append(
+            ("toolchain", f"{tool['name']}_version", list(tool["version_argv"]))
+        )
     for target in trusted_config["targets"]:
         expected_commands.extend(
             [
@@ -816,9 +1138,19 @@ def validate_trusted_build_log(
                 (target["id"], "build", list(target["build_argv"])),
             ]
         )
+    for guardrail in trusted_config["guardrail_commands"]:
+        expected_commands.append(
+            (
+                guardrail["target_id"],
+                guardrail["phase"],
+                list(guardrail["argv"]),
+            )
+        )
     commands = _array(root["commands"], "trusted build log commands")
-    if len(commands) != len(expected_commands) or len(commands) != 5:
-        raise KernelCostError("trusted build log must contain exactly five commands")
+    if len(commands) != len(expected_commands):
+        raise KernelCostError(
+            f"trusted build log must contain exactly {len(expected_commands)} commands"
+        )
     for sequence, (raw_command, expected) in enumerate(zip(commands, expected_commands)):
         target_id, phase, argv = expected
         label = f"trusted build log commands[{sequence}]"
@@ -849,11 +1181,26 @@ def validate_trusted_build_log(
         _trusted_stream(command, "stderr", TRUSTED_BUILD_MAX_OUTPUT_BYTES, label)
         if phase == "make_version" and _version(stdout) != make_tool["version"]:
             raise KernelCostError("trusted build make version output differs from config")
+        if target_id == "toolchain":
+            tool_name = phase.removesuffix("_version")
+            tool = next(
+                item
+                for item in trusted_config["toolchain"]["tools"]
+                if item["name"] == tool_name
+            )
+            if _version(stdout) != tool["version"]:
+                raise KernelCostError(
+                    f"trusted build {tool_name} version output differs from config"
+                )
+
+    derive_guardrails(trusted_config, root)
 
     if build_manifest is not None:
         if (
             build_manifest["run_id"] != trusted_config["run_id"]
             or build_manifest["source_commit"] != trusted_config["source_commit"]
+            or build_manifest["toolchain_sha256"]
+            != trusted_config["toolchain"]["identity_sha256"]
         ):
             raise KernelCostError("trusted build manifest identity differs from config")
         build_commands = {
@@ -888,6 +1235,7 @@ def validate_trusted_build_environment(
     expected_names = {
         "build_environment_sha256", "builder", "git", "make", "make_path",
         "make_sha256", "platform", "python", "source_date_epoch",
+        "toolchain_identity_sha256", "toolchain_prefix",
     }
     if set(facts) != expected_names:
         raise KernelCostError("trusted build environment fact set is invalid")
@@ -899,6 +1247,8 @@ def validate_trusted_build_environment(
         "make_path": make_tool["path"],
         "make_sha256": make_tool["sha256"],
         "source_date_epoch": trusted_config["environment"]["SOURCE_DATE_EPOCH"],
+        "toolchain_identity_sha256": trusted_config["toolchain"]["identity_sha256"],
+        "toolchain_prefix": trusted_config["toolchain"]["prefix"],
     }
     if any(facts.get(name) != value for name, value in expected.items()):
         raise KernelCostError("trusted build environment/Make identity differs")
@@ -940,8 +1290,10 @@ def _repository_state(root: Path) -> tuple[str, bool]:
     environment = os.environ.copy()
     environment.update(COMMAND_ENVIRONMENT)
     commands = (
-        ["git", "-C", str(root), "rev-parse", "--verify", "HEAD^{commit}"],
-        ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
+        ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+         "-C", str(root), "rev-parse", "--verify", "HEAD^{commit}"],
+        ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+         "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
     )
     outputs: list[str] = []
     for command in commands:
@@ -963,7 +1315,52 @@ def _repository_state(root: Path) -> tuple[str, bool]:
     head = outputs[0].strip()
     if COMMIT_RE.fullmatch(head) is None:
         raise KernelCostError("repository HEAD is invalid")
-    return head, outputs[1] == ""
+    try:
+        tracked_clean, _tracked_digest = tracked_worktree_identity("git", root)
+    except DeliveryContractError as error:
+        raise KernelCostError(
+            f"tracked source identity is unsafe: {error}"
+        ) from error
+    return head, outputs[1] == "" and tracked_clean
+
+
+def _production_source_gate(
+    root: Path,
+    source_commit: str,
+    evidence_root: Path | None,
+    stage: str,
+) -> None:
+    git_name = shutil.which("git")
+    if git_name is None:
+        raise KernelCostError("Git executable is unavailable")
+    git = _resolved_safe_file(Path(git_name), "Git executable")
+    roots = [*EVALUATION_BUILD_OUTPUT_ROOTS, *EVALUATION_CACHE_OUTPUT_ROOTS]
+    if evidence_root is not None:
+        evidence = _resolved_safe_directory(evidence_root, "evidence root")
+        try:
+            relative = evidence.relative_to(root)
+        except ValueError:
+            pass
+        else:
+            portable = PurePosixPath(*relative.parts).as_posix()
+            if portable and portable != ".":
+                roots.append(portable)
+    try:
+        verify_evaluation_source_tree(
+            git,
+            root,
+            root,
+            source_commit,
+            controlled_git_environment(),
+            allowed_output_roots=roots,
+            allowed_output_files=(
+                *EVALUATION_BUILD_OUTPUT_FILES,
+                *EVALUATION_ARTIFACT_OUTPUT_FILES,
+            ),
+            stage=stage,
+        )
+    except (OSError, ToolAttestationError) as error:
+        raise KernelCostError(f"kernel cost source gate failed {stage}: {error}") from error
 
 
 def _metric(metric_id: str, status: str, value: int | None, reason: str | None) -> dict[str, Any]:
@@ -1004,13 +1401,15 @@ def collect_report(
 ) -> dict[str, Any]:
     """Collect evidence from prebuilt files bound by strict external manifests."""
 
-    root = repository_root.resolve()
-    receipt_root = root if evidence_root is None else evidence_root.resolve()
-    if _is_link(evidence_root or repository_root) or not receipt_root.is_dir():
-        raise KernelCostError("evidence root must be an existing non-link directory")
-    config_path = config_path.resolve()
-    environment_manifest_path = environment_manifest_path.resolve()
-    build_manifest_path = build_manifest_path.resolve()
+    root = _resolved_safe_directory(repository_root, "repository root")
+    receipt_root = root if evidence_root is None else _resolved_safe_directory(
+        evidence_root, "evidence root"
+    )
+    config_path = _resolved_safe_file(config_path, "kernel cost config")
+    environment_manifest_path = _resolved_safe_file(
+        environment_manifest_path, "environment manifest"
+    )
+    build_manifest_path = _resolved_safe_file(build_manifest_path, "build manifest")
     config, config_raw = load_config(config_path)
     environment, environment_raw = load_environment(environment_manifest_path)
     build, build_raw = load_build_manifest(build_manifest_path, config)
@@ -1024,6 +1423,14 @@ def collect_report(
     head, clean = repository_reader(root)
     if head != environment["source_commit"] or clean is not True:
         raise KernelCostError("formal kernel cost collection requires the bound clean HEAD")
+    production_gate = repository_reader is _repository_state
+    if production_gate:
+        _production_source_gate(
+            root,
+            environment["source_commit"],
+            receipt_root,
+            "before collection",
+        )
 
     config_receipt = _receipt(receipt_root, config_path, "kernel cost config")
     environment_receipt = _receipt(
@@ -1036,7 +1443,7 @@ def collect_report(
         raise KernelCostError("environment manifest changed while being read")
     if build_receipt["sha256"] != _bytes_sha(build_raw):
         raise KernelCostError("build manifest changed while being read")
-    _verify_trusted_build_sidecars(
+    trusted_config, trusted_log = _verify_trusted_build_sidecars(
         evidence_root=receipt_root,
         kernel_cost_config=config,
         kernel_cost_config_raw=config_raw,
@@ -1048,10 +1455,12 @@ def collect_report(
     resolved_tool: Path | None = None
     if not size_tool.is_absolute():
         raise KernelCostError("--size-tool must be an explicit absolute path")
+    try:
+        size_tool = reject_host_link_components(size_tool)
+    except (OSError, ValueError) as error:
+        raise KernelCostError("size tool is link-backed") from error
     if size_tool.exists():
-        resolved_tool = size_tool.resolve()
-        if not resolved_tool.is_file():
-            raise KernelCostError("size tool is not a regular file")
+        resolved_tool = _resolved_safe_file(size_tool, "size tool")
         tool_sha = _file_sha(resolved_tool)
         argv = [str(resolved_tool), *config["tool"]["version_arguments"]]
         execution = runner(argv, limits["timeout_seconds"], limits["max_output_bytes"])
@@ -1195,12 +1604,20 @@ def collect_report(
         },
         "tool": tool,
         "targets": targets,
+        "guardrails": derive_guardrails(trusted_config, trusted_log),
         "content_sha256": "",
     }
     report["content_sha256"] = _bytes_sha(
         _canonical_json({key: value for key, value in report.items() if key != "content_sha256"})
     )
     validate_report(report, config)
+    if production_gate:
+        _production_source_gate(
+            root,
+            environment["source_commit"],
+            receipt_root,
+            "after collection",
+        )
     return report
 
 
@@ -1367,6 +1784,31 @@ def validate_report(report: Any, config: dict[str, Any]) -> dict[str, Any]:
         if target["status"] != expected_status:
             raise KernelCostError(f"{label}.status is not metric-derived")
 
+    guardrails = _array(root["guardrails"], "report.guardrails")
+    if len(guardrails) != len(GUARDRAIL_IDS):
+        raise KernelCostError("report guardrail count is invalid")
+    for index, (raw_guardrail, configured, expected_id) in enumerate(
+        zip(guardrails, config["guardrails"], GUARDRAIL_IDS)
+    ):
+        label = f"report.guardrails[{index}]"
+        guardrail = _object(raw_guardrail, label)
+        _expect_keys(guardrail, GUARDRAIL_FIELDS, label)
+        if (
+            guardrail["id"] != expected_id
+            or configured["id"] != expected_id
+            or guardrail["source"] != GUARDRAIL_SOURCES[expected_id]
+            or guardrail["status"] != "measured"
+        ):
+            raise KernelCostError(f"{label} identity/source/status is invalid")
+        value = _integer(guardrail["value"], f"{label}.value", 1)
+        limit = _integer(guardrail["limit"], f"{label}.limit", 1)
+        if value > limit:
+            raise KernelCostError(f"{label}.value exceeds its trusted limit")
+        _sha(
+            guardrail["source_command_sha256"],
+            f"{label}.source_command_sha256",
+        )
+
     content_sha = _sha(root["content_sha256"], "report.content_sha256")
     expected = _bytes_sha(
         _canonical_json({key: value for key, value in root.items() if key != "content_sha256"})
@@ -1376,6 +1818,44 @@ def validate_report(report: Any, config: dict[str, Any]) -> dict[str, Any]:
     return root
 
 
+def _verify_guardrail_binding(
+    report: dict[str, Any],
+    trusted_config: dict[str, Any],
+    trusted_log: dict[str, Any],
+) -> None:
+    expected = derive_guardrails(trusted_config, trusted_log)
+    if report["guardrails"] != expected:
+        raise KernelCostError(
+            "report guardrails differ from canonical checker output"
+        )
+
+
+def require_complete(report: dict[str, Any]) -> None:
+    """Fail closed unless every formal kernel-cost measurement is present."""
+
+    incomplete = [
+        f"{target['id']}/{metric['id']}"
+        for target in report["targets"]
+        for metric in target["metrics"]
+        if metric["status"] != "measured"
+    ]
+    incomplete.extend(
+        guardrail["id"]
+        for guardrail in report["guardrails"]
+        if guardrail["status"] != "measured"
+    )
+    if any(target["status"] != "measured" for target in report["targets"]):
+        incomplete.extend(
+            f"{target['id']}/target"
+            for target in report["targets"]
+            if target["status"] != "measured"
+        )
+    if incomplete:
+        raise KernelCostError(
+            "formal kernel-cost evidence is incomplete: " + ", ".join(incomplete)
+        )
+
+
 def verify_portable(
     report_path: Path,
     config_path: Path,
@@ -1383,13 +1863,15 @@ def verify_portable(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Verify a relocated evidence package without requiring ELF files or tools."""
 
-    root = evidence_root.resolve()
+    root = _resolved_safe_directory(evidence_root, "evidence root")
+    config_path = _resolved_safe_file(config_path, "kernel cost config")
+    report_path = _resolved_safe_file(report_path, "kernel cost report")
     config, config_raw = load_config(config_path)
     report, _ = _read_json(report_path, "kernel cost report")
     validate_report(report, config)
     binding = report["binding"]
     config_receipt_path = _verify_receipt(root, binding["config"], "bound config")
-    if config_receipt_path.resolve() != config_path.resolve() or _bytes_sha(config_raw) != binding["config"]["sha256"]:
+    if config_receipt_path != config_path or _bytes_sha(config_raw) != binding["config"]["sha256"]:
         raise KernelCostError("supplied config differs from the report binding")
     environment_path = _verify_receipt(
         root, binding["environment_manifest"], "bound environment manifest"
@@ -1406,13 +1888,14 @@ def verify_portable(
         or build["environment_sha256"] != binding["environment_sha256"]
     ):
         raise KernelCostError("report, environment, and build bindings differ")
-    _verify_trusted_build_sidecars(
+    trusted_config, trusted_log = _verify_trusted_build_sidecars(
         evidence_root=root,
         kernel_cost_config=config,
         kernel_cost_config_raw=config_raw,
         environment_manifest=environment,
         build_manifest=build,
     )
+    _verify_guardrail_binding(report, trusted_config, trusted_log)
     for target, manifest_target in zip(report["targets"], build["targets"]):
         if (
             target["id"] != manifest_target["id"]
@@ -1435,20 +1918,29 @@ def verify_local(
 ) -> dict[str, Any]:
     """Add clean-HEAD, artifact, ELF, tool-hash, and command replay checks."""
 
+    repository_root = _resolved_safe_directory(repository_root, "repository root")
     report, _environment, _build = verify_portable(
         report_path, config_path, evidence_root
     )
     config, _ = load_config(config_path)
-    head, clean = repository_reader(repository_root.resolve())
+    head, clean = repository_reader(repository_root)
     if head != report["binding"]["source_commit"] or clean is not True:
         raise KernelCostError("local repository is not the bound clean HEAD")
+    production_gate = repository_reader is _repository_state
+    if production_gate:
+        _production_source_gate(
+            repository_root,
+            report["binding"]["source_commit"],
+            evidence_root,
+            "before local replay",
+        )
     for target in report["targets"]:
-        path = _root_path(repository_root.resolve(), target["source"]["path"])
+        path = _root_path(repository_root, target["source"]["path"])
         if target["source"]["status"] == "unavailable":
             if path.exists():
                 raise KernelCostError(f"previously unavailable target now exists: {path}")
             continue
-        _reject_link_components(repository_root.resolve(), path, f"local target {target['id']}")
+        _reject_link_components(repository_root, path, f"local target {target['id']}")
         if not path.is_file() or _file_sha(path) != target["source"]["observed_sha256"]:
             raise KernelCostError(f"local target changed: {target['id']}")
         if target["source"]["status"] == "verified":
@@ -1456,14 +1948,14 @@ def verify_local(
                 raise KernelCostError(f"local ELF identity changed: {target['id']}")
 
     if report["tool"]["status"] == "available":
-        resolved_tool = size_tool.resolve()
-        if not resolved_tool.is_file() or _file_sha(resolved_tool) != report["tool"]["sha256"]:
+        resolved_tool = _resolved_safe_file(size_tool, "local size tool")
+        if _file_sha(resolved_tool) != report["tool"]["sha256"]:
             raise KernelCostError("local size tool differs from the report")
         limits = config["limits"]
         for target in report["targets"]:
             if target["status"] != "measured":
                 continue
-            source = _root_path(repository_root.resolve(), target["source"]["path"])
+            source = _root_path(repository_root, target["source"]["path"])
             argv = [str(resolved_tool), *config["tool"]["measurement_arguments"], str(source)]
             execution = runner(argv, limits["timeout_seconds"], limits["max_output_bytes"])
             if execution.returncode != 0 or execution.error is not None:
@@ -1472,6 +1964,13 @@ def verify_local(
             recorded = {metric["id"]: metric["value"] for metric in target["metrics"]}
             if any(current[metric_id] != recorded[metric_id] for metric_id in METRIC_IDS[1:]):
                 raise KernelCostError(f"local size replay differs: {target['id']}")
+    if production_gate:
+        _production_source_gate(
+            repository_root,
+            report["binding"]["source_commit"],
+            evidence_root,
+            "after local replay",
+        )
     return report
 
 
@@ -1609,7 +2108,9 @@ def build_dashboard_fragment(
             }
         )
     report_relative = _relative_to(
-        evidence_root.resolve(), report_path.resolve(), "kernel cost report"
+        _safe_directory(evidence_root, "evidence root"),
+        _safe_regular_file(report_path, "kernel cost report"),
+        "kernel cost report",
     )
     benchmark_statuses = {benchmark["status"] for benchmark in benchmarks}
     if "failed" in benchmark_statuses:
@@ -1632,6 +2133,18 @@ def build_dashboard_fragment(
             {"id": item["id"], "label": item["label"], "role": item["role"]}
             for item in config["targets"]
         ],
+        "guardrails": [
+            {
+                **guardrail,
+                "label": configured["label"],
+                "unit": configured["unit"],
+                "direction": configured["direction"],
+                "task": configured["task"],
+            }
+            for guardrail, configured in zip(
+                report["guardrails"], config["guardrails"]
+            )
+        ],
         "benchmarks": benchmarks,
         "evidence": [
             {
@@ -1649,6 +2162,7 @@ def build_dashboard_fragment(
             "unit_of_observation": "one build-manifest-bound kernel ELF per target",
             "limitations": [
                 "Artifact size is a system cost, not evidence of CPU performance.",
+                "struct proc and worst user stack are AgentOS guardrails, not baseline deltas, because baseline_ucore has no matching canonical checker contract.",
                 "A single deterministic build does not establish cross-toolchain behavior.",
             ],
         },
@@ -1659,21 +2173,20 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     data = json.dumps(
         value, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False
     ) + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if path.read_text(encoding="utf-8") == data:
+    path = absolute_lexical_path(path)
+    try:
+        reject_host_link_components(path)
+    except (OSError, ValueError) as error:
+        raise KernelCostError(f"evidence output is link-backed: {path}") from error
+    if path.exists() or path_is_link(path):
+        existing = _safe_regular_file(path, "evidence output")
+        if existing.read_text(encoding="utf-8") == data:
             return
         raise KernelCostError(f"refusing to replace evidence output: {path}")
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(data)
-        os.replace(temporary, path)
-    finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+        atomic_write_bytes(path, data.encode("utf-8"), replace=False)
+    except (OSError, ValueError) as error:
+        raise KernelCostError(f"cannot safely publish evidence output: {path}") from error
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1720,6 +2233,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 evidence_root=args.evidence_root,
             )
             _atomic_json(args.output, report)
+            _production_source_gate(
+                _resolved_safe_directory(args.repository_root, "repository root"),
+                report["binding"]["source_commit"],
+                args.evidence_root,
+                "after report publication",
+            )
             print(f"kernel cost report: {args.output.resolve()}")
         elif args.command == "verify":
             report, _, _ = verify_portable(

@@ -4,11 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMPDIR_RETRY="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_RETRY}"' EXIT
+source "${ROOT}/scripts/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_RETRY}"
 
-"${CC:-cc}" -std=c11 -Wall -Werror \
-	"${ROOT}/scripts/probes/durable-dirty-retry.c" \
-	-o "${TMPDIR_RETRY}/durable-dirty-retry"
-"${TMPDIR_RETRY}/durable-dirty-retry" >"${TMPDIR_RETRY}/output.log"
+host_probe_compile "${TMPDIR_RETRY}/durable-dirty-retry" \
+	-std=c11 -Wall -Werror \
+	"${ROOT}/scripts/probes/durable-dirty-retry.c"
+host_probe_run "${TMPDIR_RETRY}/durable-dirty-retry" \
+	>"${TMPDIR_RETRY}/output.log"
 
 for marker in \
 	"durable_dirty_retry: store_provider=1" \
@@ -21,3 +24,4 @@ for marker in \
 	grep -Fxq "${marker}" "${TMPDIR_RETRY}/output.log"
 done
 cat "${TMPDIR_RETRY}/output.log"
+host_probe_report "durable-dirty-retry"

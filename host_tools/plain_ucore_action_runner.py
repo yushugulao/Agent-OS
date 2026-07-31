@@ -15,13 +15,19 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Iterable
 
 if __package__:
+    from .evidence_delivery_contract import (
+        DeliveryContractError,
+        controlled_git_environment,
+        tracked_worktree_identity,
+    )
     from .plain_ucore_fs_extract import extract_state_files
     from .research_state_manifest import (
         GUEST_STATE_RECEIPT_SCHEMA,
@@ -34,9 +40,16 @@ if __package__:
         ensure_safe_directory,
         path_is_link as _is_link_component,
         reject_link_components,
+        require_regular_file,
+        require_safe_directory,
         require_private_directory,
     )
 else:
+    from evidence_delivery_contract import (
+        DeliveryContractError,
+        controlled_git_environment,
+        tracked_worktree_identity,
+    )
     from plain_ucore_fs_extract import extract_state_files
     from research_state_manifest import (
         GUEST_STATE_RECEIPT_SCHEMA,
@@ -49,6 +62,8 @@ else:
         ensure_safe_directory,
         path_is_link as _is_link_component,
         reject_link_components,
+        require_regular_file,
+        require_safe_directory,
         require_private_directory,
     )
 
@@ -71,6 +86,23 @@ WSL_TIMEOUT_KILL_AFTER_SECONDS = 5
 WSL_HOST_DEADLINE_MARGIN_SECONDS = 10
 WSL_QUIESCENCE_VERIFY_TIMEOUT_SECONDS = 8
 WSL_CLEANUP_UNVERIFIED_EXIT_CODE = 125
+CONTROLLED_SHELL_PATH = (
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
+CONTROLLED_SHELL_VARIABLES = (
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "MAKE_TOOL",
+    "PATH",
+    "QEMU",
+    "SHELL",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "TOOLPREFIX",
+    "TZ",
+)
 SOURCE_COMMIT_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 GUEST_FAILURE_RULES = (
     (
@@ -159,7 +191,7 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
     finally:
         if fd >= 0:
             os.close(fd)
-        if temporary.is_file() and not temporary.is_symlink():
+        if temporary.is_file() and not _is_link_component(temporary):
             temporary.unlink()
 
 
@@ -176,7 +208,9 @@ def archive_runtime_artifacts(repo_dir: Path, run_dir: Path) -> dict[str, object
     }
     archived: dict[str, object] = {}
     for name, source in sources.items():
-        if not source.is_file() or source.is_symlink():
+        try:
+            source = require_regular_file(source, nonempty=True)
+        except (OSError, ValueError) as error:
             raise ValueError(f"runtime artifact is unavailable or link-backed: {source}")
         destination = artifact_dir / name
         fd, temporary_name = tempfile.mkstemp(
@@ -209,7 +243,11 @@ def archive_runtime_artifacts(repo_dir: Path, run_dir: Path) -> dict[str, object
 def capture_source_identity(repo_dir: Path) -> dict[str, object]:
     """Capture HEAD, tracked cleanliness, and an exact tracked-state digest."""
 
-    repo_dir = repo_dir.resolve()
+    repo_dir = require_safe_directory(_absolute_lexical_path(repo_dir)).resolve(strict=True)
+    git_name = shutil.which("git")
+    if git_name is None:
+        raise ValueError("source identity probe requires Git")
+    git = require_regular_file(Path(git_name)).resolve(strict=True)
     common_kwargs: dict[str, object] = {
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
@@ -218,15 +256,19 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
         "errors": "strict",
         "timeout": 5,
         "check": False,
+        "env": controlled_git_environment(),
     }
     try:
         head = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "--verify", "HEAD^{commit}"],
+            [str(git), "-c", "core.fsmonitor=false", "-c",
+             "core.untrackedCache=false", "-C", str(repo_dir), "rev-parse",
+             "--verify", "HEAD^{commit}"],
             **common_kwargs,
         )
         status = subprocess.run(
             [
-                "git",
+                str(git),
+                "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
                 "-C",
                 str(repo_dir),
                 "status",
@@ -238,7 +280,8 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
         )
         tracked_diff = subprocess.run(
             [
-                "git",
+                str(git),
+                "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
                 "-C",
                 str(repo_dir),
                 "diff",
@@ -262,12 +305,24 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
     if tracked_diff.returncode != 0:
         diagnostic = (tracked_diff.stderr or "").strip()
         raise ValueError(f"tracked source diff is unavailable: {diagnostic}")
+    try:
+        tracked_clean, exact_tracked_digest = tracked_worktree_identity(
+            str(git), repo_dir
+        )
+    except DeliveryContractError as error:
+        raise ValueError(f"tracked source identity is unsafe: {error}") from error
     tracked_fingerprint = hashlib.sha256(
-        (status.stdout + "\0" + tracked_diff.stdout).encode("utf-8")
+        (
+            status.stdout
+            + "\0"
+            + tracked_diff.stdout
+            + "\0"
+            + exact_tracked_digest
+        ).encode("utf-8")
     ).hexdigest()
     return {
         "source_commit": commit,
-        "source_tree_clean": status.stdout == "",
+        "source_tree_clean": status.stdout == "" and tracked_clean,
         "source_tracked_sha256": tracked_fingerprint,
     }
 
@@ -283,12 +338,49 @@ def verify_source_identity(
     return current
 
 
+def _normalize_git_common_dir(repo_dir: Path, reported: str) -> Path:
+    """Translate Git's common-dir result into the active Host namespace."""
+
+    if not reported or "\0" in reported or "\r" in reported or "\n" in reported:
+        raise ValueError("Git common directory is malformed")
+    candidate = Path(reported)
+    if candidate.is_absolute():
+        return candidate
+    if PureWindowsPath(reported).is_absolute():
+        # A worktree created by Windows Git stores an absolute Windows gitdir.
+        # Native MSYS2 Git preserves that spelling even though Python operates
+        # in the POSIX namespace.  Convert it as data through cygpath; never
+        # concatenate a drive path beneath the worktree.
+        converted = subprocess.run(
+            ["cygpath", "-u", reported],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            timeout=5,
+            check=False,
+        )
+        lines = converted.stdout.splitlines()
+        if converted.returncode != 0 or len(lines) != 1 or not lines[0]:
+            raise ValueError("Windows Git common directory cannot be converted")
+        candidate = Path(lines[0])
+        if not candidate.is_absolute():
+            raise ValueError("converted Git common directory is not absolute")
+        return candidate
+    return repo_dir / candidate
+
+
 def _run_lock_path(repo_dir: Path) -> Path:
-    repo_dir = repo_dir.resolve()
+    repo_dir = require_safe_directory(_absolute_lexical_path(repo_dir)).resolve(strict=True)
     lock_dir: Path | None = None
     try:
+        git_name = shutil.which("git")
+        if git_name is None:
+            raise ValueError("repository lock requires Git")
+        git = require_regular_file(Path(git_name)).resolve(strict=True)
         result = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "--git-common-dir"],
+            [str(git), "-C", str(repo_dir), "rev-parse", "--git-common-dir"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -296,21 +388,21 @@ def _run_lock_path(repo_dir: Path) -> Path:
             errors="strict",
             timeout=5,
             check=False,
+            env=controlled_git_environment(),
         )
         lines = result.stdout.splitlines()
         if result.returncode == 0 and len(lines) == 1 and lines[0]:
-            candidate = Path(lines[0])
-            if not candidate.is_absolute():
-                candidate = repo_dir / candidate
-            candidate = candidate.resolve()
-            if candidate.is_dir() and not candidate.is_symlink():
-                lock_dir = candidate
-    except (OSError, subprocess.SubprocessError, UnicodeError):
+            candidate = _normalize_git_common_dir(repo_dir, lines[0])
+            candidate = require_safe_directory(candidate).resolve(strict=True)
+            lock_dir = candidate
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
         pass
     if lock_dir is None:
         marker = repo_dir / ".git"
-        if marker.is_dir() and not marker.is_symlink():
-            lock_dir = marker.resolve()
+        try:
+            lock_dir = require_safe_directory(marker).resolve(strict=True)
+        except (OSError, ValueError):
+            lock_dir = None
     if lock_dir is None:
         identity = hashlib.sha256(str(repo_dir).encode("utf-8")).hexdigest()[:16]
         lock_dir = Path(tempfile.gettempdir()) / "agentos-repo-locks" / identity
@@ -352,7 +444,9 @@ def exclusive_repo_run_lock(repo_dir: Path):
     """Fail closed instead of letting concurrent clean/build/run phases collide."""
 
     lock_path = _run_lock_path(repo_dir)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_safe_directory(lock_path.parent)
+    if _is_link_component(lock_path):
+        raise ValueError(f"repository run lock is link-backed: {lock_path}")
     with lock_path.open("a+b") as handle:
         try:
             _try_lock_file(handle)
@@ -641,19 +735,24 @@ def action_kind(path: str) -> str:
 
 
 def clean_copy_state(src: Path, dst: Path) -> None:
-    if src.is_symlink() or not src.is_dir():
+    try:
+        src = require_safe_directory(src)
+    except (OSError, ValueError) as error:
         raise ValueError("Guest state source is missing or unsafe")
-    if dst.is_symlink():
-        raise ValueError("Guest state destination is unsafe")
+    dst = reject_link_components(dst)
     if dst.exists():
-        if not dst.is_dir():
+        try:
+            require_safe_directory(dst)
+        except (OSError, ValueError) as error:
             raise ValueError("Guest state destination is unsafe")
         shutil.rmtree(dst)
-    dst.mkdir(parents=True, exist_ok=True)
+    dst = ensure_safe_directory(dst)
     for item in sorted(src.iterdir()):
         if not item.name.startswith("rp_"):
             continue
-        if item.is_symlink() or not item.is_file():
+        try:
+            item = require_regular_file(item)
+        except (OSError, ValueError) as error:
             raise ValueError(f"Guest state source is unsafe: {item.name}")
         shutil.copy2(item, dst / item.name)
 
@@ -743,35 +842,23 @@ def action_plan_line(record: dict[str, object]) -> str:
 
 
 def write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    atomic_write_text(path, text)
 
 
 def write_json(path: Path, data: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def prepare_reader_e2e_log_dir(path: Path) -> Path:
-    expanded = path.expanduser()
-    if expanded.is_symlink():
-        raise ValueError(f"Reader E2E log directory cannot be a symlink: {expanded}")
-    destination = expanded.resolve()
-    if destination.exists() and not destination.is_dir():
-        raise ValueError(f"Reader E2E log path is not a directory: {destination}")
-    destination.mkdir(parents=True, exist_ok=True)
+    destination = ensure_safe_directory(_absolute_lexical_path(path))
     if any(destination.iterdir()):
         raise ValueError(f"Reader E2E log directory must start empty: {destination}")
     return destination
 
 
 def persist_reader_e2e_logs(run_root: Path, destination: Path) -> dict[str, object]:
-    source_root = run_root.resolve()
-    if destination.is_symlink():
-        raise ValueError(f"Reader E2E log directory cannot be a symlink: {destination}")
-    target_root = destination.resolve()
-    if not target_root.is_dir():
-        raise ValueError(f"Reader E2E log directory is unavailable: {target_root}")
+    source_root = require_safe_directory(run_root).resolve(strict=True)
+    target_root = require_safe_directory(destination).resolve(strict=True)
     try:
         target_root.relative_to(source_root)
     except ValueError:
@@ -780,11 +867,11 @@ def persist_reader_e2e_logs(run_root: Path, destination: Path) -> dict[str, obje
         raise ValueError("Reader E2E log directory cannot be inside the temporary run tree")
 
     runs: list[dict[str, object]] = []
-    if source_root.is_dir() and not source_root.is_symlink():
+    if source_root.is_dir():
         for run_dir in sorted(source_root.iterdir(), key=lambda item: item.name):
             if not run_dir.name.startswith("run-") or not run_dir.is_dir():
                 continue
-            if run_dir.is_symlink():
+            if _is_link_component(run_dir):
                 raise ValueError(f"Reader E2E run directory cannot be a symlink: {run_dir}")
             copied: list[str] = []
             missing: list[str] = []
@@ -793,10 +880,12 @@ def persist_reader_e2e_logs(run_root: Path, destination: Path) -> dict[str, obje
                 if not source.exists():
                     missing.append(filename)
                     continue
-                if source.is_symlink() or not source.is_file():
+                try:
+                    source = require_regular_file(source)
+                except (OSError, ValueError) as error:
                     raise ValueError(f"Reader E2E log is not a regular file: {source}")
                 target = target_root / run_dir.name / filename
-                target.parent.mkdir(parents=True, exist_ok=True)
+                ensure_safe_directory(target.parent)
                 partial = target.with_name(f".{target.name}.partial-{os.getpid()}")
                 try:
                     shutil.copy2(source, partial)
@@ -837,7 +926,7 @@ def validate_reader_e2e_logs(
     runs = manifest.get("runs")
     if not isinstance(runs, list) or not runs:
         raise ValueError("Reader E2E produced no persistent run logs")
-    destination = destination.resolve()
+    destination = require_safe_directory(destination).resolve(strict=True)
     for record in runs:
         if not isinstance(record, dict):
             raise ValueError("Reader E2E log manifest contains an invalid run")
@@ -852,7 +941,9 @@ def validate_reader_e2e_logs(
             raise ValueError(f"Reader E2E run logs are incomplete: {run_name}")
         for filename in required:
             path = destination / run_name / filename
-            if path.is_symlink() or not path.is_file():
+            try:
+                require_regular_file(path)
+            except (OSError, ValueError) as error:
                 raise ValueError(f"Reader E2E persistent log is missing: {path}")
 
 
@@ -865,15 +956,18 @@ def write_fs_aligned_seed(path: Path, seed_text: str) -> None:
 
 
 def pad_file_for_ucore_fs(path: Path) -> None:
+    path = require_regular_file(path)
     data = path.read_bytes()
     remainder = len(data) % UCORE_FS_BLOCK_SIZE
     if remainder:
-        path.write_bytes(data + b"\0" * (UCORE_FS_BLOCK_SIZE - remainder))
+        atomic_write_bytes(path, data + b"\0" * (UCORE_FS_BLOCK_SIZE - remainder))
 
 
 def pad_state_files_for_ucore_fs(state_dir: Path) -> None:
+    state_dir = require_safe_directory(state_dir)
     for item in sorted(state_dir.iterdir()):
-        if item.is_file() and item.name.startswith("rp_"):
+        if item.name.startswith("rp_"):
+            require_regular_file(item)
             pad_file_for_ucore_fs(item)
 
 
@@ -907,7 +1001,7 @@ def prepare_action_state(actions: list[dict[str, object]], state_dir: Path, run_
 
 
 def windows_path_to_wsl(path: Path) -> str:
-    text = str(path.resolve())
+    text = str(reject_link_components(path).resolve(strict=False))
     if len(text) >= 3 and text[1:3] == ":\\":
         drive = text[0].lower()
         rest = text[3:].replace("\\", "/")
@@ -928,10 +1022,12 @@ def toolprefix_arg() -> str:
 
 
 def bash_path(path: Path, base: Path | None = None) -> str:
-    resolved = path.resolve()
+    resolved = reject_link_components(path).resolve(strict=False)
     if base is not None:
         try:
-            rel = resolved.relative_to(base.resolve())
+            rel = resolved.relative_to(
+                reject_link_components(base).resolve(strict=False)
+            )
             return "./" + rel.as_posix()
         except ValueError:
             pass
@@ -1028,16 +1124,87 @@ printf 'AGENTOS_WSL_CLEANUP initial=%s remaining=%s\\n' \
 """
 
 
+def _controlled_shell_environment() -> dict[str, str]:
+    """Build the only environment visible to a seeded scenario shell."""
+
+    posix_temporary = os.environ.get("AGENTOS_WSL_TMPDIR", "/tmp")
+    native_temporary = (
+        os.environ.get("TEMP", os.environ.get("TMP", posix_temporary))
+        if sys.platform == "cygwin"
+        else posix_temporary
+    )
+    environment = {
+        "HOME": os.environ.get("AGENTOS_WSL_HOME", "/tmp"),
+        "LANG": os.environ.get("AGENTOS_WSL_LANG", "C"),
+        "LC_ALL": os.environ.get("AGENTOS_WSL_LC_ALL", "C"),
+        "MAKE_TOOL": os.environ.get("AGENTOS_WSL_MAKE", "make"),
+        "PATH": os.environ.get("AGENTOS_WSL_PATH", CONTROLLED_SHELL_PATH),
+        "QEMU": os.environ.get("QEMU", "qemu-system-riscv64"),
+        "SHELL": os.environ.get("AGENTOS_WSL_BASH", "bash"),
+        "TEMP": native_temporary,
+        "TMP": native_temporary,
+        "TMPDIR": posix_temporary,
+        "TOOLPREFIX": os.environ.get("TOOLPREFIX", "riscv64-linux-gnu-"),
+        "TZ": os.environ.get("AGENTOS_WSL_TZ", "UTC"),
+    }
+    if tuple(environment) != CONTROLLED_SHELL_VARIABLES:
+        raise ValueError("controlled shell environment order changed")
+    for name, value in environment.items():
+        if "\x00" in value or "\r" in value or "\n" in value:
+            raise ValueError(f"controlled shell environment is invalid: {name}")
+    if not environment["HOME"].startswith("/"):
+        raise ValueError("controlled shell HOME must be an absolute POSIX path")
+    if not environment["TMPDIR"].startswith("/"):
+        raise ValueError("controlled shell TMPDIR must be an absolute POSIX path")
+    if not environment["TEMP"] or not environment["TMP"]:
+        raise ValueError("controlled shell native temporary directory is unavailable")
+    if sys.platform == "cygwin" and not (
+        environment["TEMP"].startswith("/")
+        or PureWindowsPath(environment["TEMP"]).is_absolute()
+    ):
+        raise ValueError("MSYS2 TEMP must be absolute in one active namespace")
+    if environment["TEMP"] != environment["TMP"]:
+        raise ValueError("controlled shell TEMP and TMP must identify one directory")
+    if not environment["PATH"] or any(
+        not component.startswith("/")
+        for component in environment["PATH"].split(":")
+    ):
+        raise ValueError("controlled shell PATH must contain absolute POSIX paths")
+    return environment
+
+
+def _controlled_shell_command(script: str) -> list[str]:
+    environment = _controlled_shell_environment()
+    env_executable = os.environ.get("AGENTOS_WSL_ENV", "env")
+    bash_executable = environment["SHELL"]
+    if any(character in env_executable for character in "\x00\r\n"):
+        raise ValueError("controlled shell env executable is invalid")
+    return [
+        env_executable,
+        "-i",
+        *(f"{name}={environment[name]}" for name in CONTROLLED_SHELL_VARIABLES),
+        bash_executable,
+        "--noprofile",
+        "--norc",
+        "-c",
+        script,
+    ]
+
+
 def _wsl_verification_command(command: list[str], script: str) -> list[str]:
     if command and command[0].lower().endswith("wsl.exe"):
         try:
             separator = command.index("--")
         except ValueError as error:
             raise ValueError("tagged WSL command has no argument separator") from error
-        return [*command[: separator + 1], "bash", "-lc", script]
-    if command and Path(command[0]).name in {"bash", "bash.exe"}:
-        return [command[0], "-lc", script]
-    raise ValueError("tagged WSL command has an unsupported launcher")
+        prefix = command[: separator + 1]
+        controlled = command[separator + 1 :]
+    else:
+        prefix = []
+        controlled = command
+    if not controlled or controlled != _controlled_shell_command(controlled[-1]):
+        raise ValueError("tagged WSL command is not a controlled non-login shell")
+    return [*prefix, *_controlled_shell_command(script)]
 
 
 def verify_wsl_command_quiesced(command: list[str]) -> dict[str, object]:
@@ -1162,7 +1329,9 @@ def run_command(command: list[str], log_path: Path, timeout_seconds: int, append
     if not host_process_quiesced:
         text += "[runner] Host launcher process did not quiesce\n"
     if append:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_safe_directory(log_path.parent)
+        if _is_link_component(log_path):
+            raise ValueError(f"command log is link-backed: {log_path}")
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(text)
     else:
@@ -1320,7 +1489,9 @@ def run_observed_command(
     idle_notice_seconds: int = 20,
     marker_grace_seconds: int = 2,
 ) -> dict[str, object]:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_safe_directory(log_path.parent)
+    if _is_link_component(log_path):
+        raise ValueError(f"command log is link-backed: {log_path}")
     mode = "a" if append else "w"
     output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
     popen_kwargs: dict[str, object] = {
@@ -1586,15 +1757,26 @@ def make_wsl_command(
     identity = command_identity or secrets.token_hex(16)
     if re.fullmatch(r"[0-9a-f]{32}", identity) is None:
         raise ValueError("WSL command identity must be 128-bit lowercase hex")
-    bash_executable = os.environ.get("AGENTOS_WSL_BASH", "bash")
+    environment = _controlled_shell_environment()
+    env_executable = os.environ.get("AGENTOS_WSL_ENV", "env")
+    bash_executable = environment["SHELL"]
     timeout_executable = os.environ.get("AGENTOS_WSL_TIMEOUT", "timeout")
     launcher_executable = os.environ.get(
-        "AGENTOS_WSL_LAUNCHER", "wsl.exe" if os.name == "nt" else "bash"
+        "AGENTOS_WSL_LAUNCHER", "wsl.exe" if os.name == "nt" else env_executable
     )
-    bash_command = "bash" if bash_executable == "bash" else shell_quote(bash_executable)
-    timeout_command = (
-        "timeout" if timeout_executable == "timeout" else shell_quote(timeout_executable)
+    if any(
+        character in executable
+        for executable in (env_executable, timeout_executable, launcher_executable)
+        for character in "\x00\r\n"
+    ):
+        raise ValueError("controlled shell executable is invalid")
+    clean_assignments = " ".join(
+        shell_quote(f"{name}={environment[name]}")
+        for name in CONTROLLED_SHELL_VARIABLES
     )
+    clean_exec = f"{shell_quote(env_executable)} -i {clean_assignments}"
+    bash_command = shell_quote(bash_executable)
+    timeout_command = shell_quote(timeout_executable)
     if timeout_seconds is not None:
         reserved = (
             WSL_TIMEOUT_KILL_AFTER_SECONDS + WSL_HOST_DEADLINE_MARGIN_SECONDS
@@ -1606,19 +1788,21 @@ def make_wsl_command(
             )
         inner_timeout = timeout_seconds - reserved
         command_text = (
-            f"exec env {WSL_COMMAND_ID_ENV}={identity} "
+            f"exec {clean_exec} {WSL_COMMAND_ID_ENV}={identity} "
             f"{timeout_command} --signal=TERM "
             f"--kill-after={WSL_TIMEOUT_KILL_AFTER_SECONDS}s "
-            f"{inner_timeout}s {bash_command} -lc {shell_quote(command_text)}"
+            f"{inner_timeout}s {bash_command} --noprofile --norc -c "
+            f"{shell_quote(command_text)}"
         )
     else:
         command_text = (
-            f"exec env {WSL_COMMAND_ID_ENV}={identity} "
-            f"{bash_command} -lc {shell_quote(command_text)}"
+            f"exec {clean_exec} {WSL_COMMAND_ID_ENV}={identity} "
+            f"{bash_command} --noprofile --norc -c {shell_quote(command_text)}"
         )
+    controlled_command = _controlled_shell_command(command_text)
     if os.name == "nt":
-        return [launcher_executable, "-d", wsl_distro, "--", bash_executable, "-lc", command_text]
-    return [launcher_executable, "-lc", command_text]
+        return [launcher_executable, "-d", wsl_distro, "--", *controlled_command]
+    return controlled_command
 
 
 def c_string_literal(text: str) -> str:
@@ -1740,8 +1924,15 @@ def compact_seed_text(text: str) -> str:
         "host_workflow_retry": {"workflow_id", "run_id", "stage", "retry_reason", "next_attempt", "decision"},
         "host_workflow_artifact": {"workflow_id", "run_id", "artifact", "artifact_kind", "sha256", "bytes"},
         "host_workflow_report": {"workflow_id", "run_id", "report", "format", "sections", "status"},
-        "artifact_input": {"run_id", "file", "artifact_kind", "sha256", "bytes", "source"},
-        "artifact_derive": {"run_id", "input", "output", "operation", "stage", "sha256"},
+        "artifact_input": {
+            "run_id", "challenge", "provenance_protocol", "file",
+            "artifact_kind", "sha256",
+            "bytes", "source", "content_hex",
+        },
+        "artifact_derive": {
+            "run_id", "input", "output", "operation", "stage", "sha256",
+            "bytes", "input_sha256",
+        },
         "artifact_log": {"run_id", "stage", "log", "level", "message"},
         "artifact_chart": {"run_id", "chart", "chart_type", "data_file", "points"},
         "artifact_package": {"run_id", "package", "manifest", "files", "status"},
@@ -1891,53 +2082,54 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
 def revoke_published_receipt(
     state_dir: Path, host_run_result_path: Path | None = None
 ) -> None:
-    if state_dir.is_symlink() or not state_dir.is_dir():
+    try:
+        state_dir = require_safe_directory(state_dir)
+    except (OSError, ValueError) as error:
         raise ValueError("Guest state destination is missing or unsafe")
     state_root = state_dir.resolve(strict=True)
     legacy_run_result = state_dir / "rp_host_run_result"
-    if legacy_run_result.is_symlink() or (
+    if _is_link_component(legacy_run_result) or (
         legacy_run_result.exists() and not legacy_run_result.is_file()
     ):
         raise ValueError("Guest state receipt is unsafe")
     if host_run_result_path is not None:
         if host_run_result_path.name in ("", ".", ".."):
             raise ValueError("Host run result sidecar is unsafe")
-        if host_run_result_path.parent.is_symlink() or (
-            host_run_result_path.parent.exists()
-            and not host_run_result_path.parent.is_dir()
-        ):
+        try:
+            sidecar_parent = require_safe_directory(host_run_result_path.parent)
+        except (OSError, ValueError) as error:
             raise ValueError("Host run result sidecar parent is unsafe")
-        sidecar_candidate = (
-            host_run_result_path.parent.resolve(strict=False)
-            / host_run_result_path.name
-        )
+        sidecar_candidate = sidecar_parent / host_run_result_path.name
         try:
             sidecar_candidate.relative_to(state_root)
         except ValueError:
             pass
         else:
             raise ValueError("Host run result sidecar must be outside Guest state")
-        if host_run_result_path.is_symlink() or (
+        if _is_link_component(host_run_result_path) or (
             host_run_result_path.exists() and not host_run_result_path.is_file()
         ):
             raise ValueError("Host run result sidecar is unsafe")
 
     if legacy_run_result.is_file():
+        require_regular_file(legacy_run_result)
         legacy_run_result.unlink()
     if host_run_result_path is not None and host_run_result_path.is_file():
+        require_regular_file(host_run_result_path)
         host_run_result_path.unlink()
 
 
 def publish_next_state(
     next_state: Path, state_dir: Path, host_run_result_path: Path | None = None
 ) -> None:
-    if next_state.is_symlink() or not next_state.is_dir():
+    try:
+        next_state = require_safe_directory(next_state)
+    except (OSError, ValueError) as error:
         raise ValueError("Guest state source is missing or unsafe")
     next_root = next_state.resolve(strict=True)
-    if state_dir.is_symlink():
-        raise ValueError("Guest state destination is unsafe")
-    state_dir.mkdir(parents=True, exist_ok=True)
-    if not state_dir.is_dir():
+    try:
+        state_dir = ensure_safe_directory(state_dir)
+    except (OSError, ValueError) as error:
         raise ValueError("Guest state destination is unsafe")
     state_root = state_dir.resolve(strict=True)
     try:
@@ -1957,7 +2149,9 @@ def publish_next_state(
     for item in sorted(state_dir.iterdir()):
         if not item.name.startswith("rp_"):
             continue
-        if item.is_symlink() or not item.is_file():
+        try:
+            require_regular_file(item)
+        except (OSError, ValueError) as error:
             raise ValueError(f"Guest state destination is unsafe: {item.name}")
         existing[item.name] = item
 
@@ -1967,12 +2161,11 @@ def publish_next_state(
     if host_run_result_path is not None:
         if host_run_result_path.name in ("", ".", ".."):
             raise ValueError("Host run result sidecar is unsafe")
-        if host_run_result_path.parent.is_symlink():
+        try:
+            sidecar_parent = ensure_safe_directory(host_run_result_path.parent)
+        except (OSError, ValueError) as error:
             raise ValueError("Host run result sidecar parent is unsafe")
-        host_run_result_path.parent.mkdir(parents=True, exist_ok=True)
-        if not host_run_result_path.parent.is_dir():
-            raise ValueError("Host run result sidecar parent is unsafe")
-        sidecar_parent = host_run_result_path.parent.resolve(strict=True)
+        sidecar_parent = sidecar_parent.resolve(strict=True)
         sidecar_candidate = sidecar_parent / host_run_result_path.name
         try:
             sidecar_candidate.relative_to(state_root)
@@ -1986,7 +2179,7 @@ def publish_next_state(
             pass
         else:
             raise ValueError("Host run result sidecar must be outside Guest state source")
-        if host_run_result_path.is_symlink() or (
+        if _is_link_component(host_run_result_path) or (
             host_run_result_path.exists() and not host_run_result_path.is_file()
         ):
             raise ValueError("Host run result sidecar is unsafe")
@@ -1999,7 +2192,9 @@ def publish_next_state(
     for item in sorted(next_state.iterdir()):
         if not item.name.startswith("rp_"):
             continue
-        if item.is_symlink() or not item.is_file():
+        try:
+            require_regular_file(item)
+        except (OSError, ValueError) as error:
             raise ValueError(f"Guest state source is unsafe: {item.name}")
         if item.name == "rp_host_run_result":
             continue
@@ -2009,7 +2204,7 @@ def publish_next_state(
             )
         sources[item.name] = item
     if host_run_result_path is not None and (
-        receipt_source.is_symlink() or not receipt_source.is_file()
+        _is_link_component(receipt_source) or not receipt_source.is_file()
     ):
         raise ValueError("Host run result source is missing or unsafe")
 
@@ -2038,7 +2233,7 @@ def publish_next_state(
         for name, destination in existing.items():
             if name == "rp_host_run_result":
                 continue
-            if destination.is_symlink() or not destination.is_file():
+            if _is_link_component(destination) or not destination.is_file():
                 raise ValueError(f"Guest state destination is unsafe: {name}")
             fd, backup_name = tempfile.mkstemp(
                 prefix=f".{name}.", suffix=".bak", dir=state_root
@@ -2048,14 +2243,14 @@ def publish_next_state(
             try:
                 replace_path(destination, backup)
             except Exception:
-                if backup.is_file() and not backup.is_symlink():
+                if backup.is_file() and not _is_link_component(backup):
                     backup.unlink()
                 raise
             backups[name] = backup
 
         for name, temporary in staged.items():
             destination = state_dir / name
-            if destination.is_symlink() or destination.exists():
+            if _is_link_component(destination) or destination.exists():
                 raise ValueError(f"Guest state destination is unsafe: {name}")
             replace_path(temporary, destination)
             installed.add(name)
@@ -2070,7 +2265,7 @@ def publish_next_state(
         for name in installed:
             destination = state_dir / name
             try:
-                if destination.is_symlink() or not destination.is_file():
+                if _is_link_component(destination) or not destination.is_file():
                     raise ValueError(f"unsafe installed state: {name}")
                 destination.unlink()
             except (OSError, ValueError) as error:
@@ -2078,24 +2273,24 @@ def publish_next_state(
         for name, backup in backups.items():
             destination = state_dir / name
             try:
-                if not backup.is_file() or backup.is_symlink():
+                if not backup.is_file() or _is_link_component(backup):
                     raise ValueError(f"unsafe backup state: {name}")
-                if destination.exists() or destination.is_symlink():
+                if destination.exists() or _is_link_component(destination):
                     raise ValueError(f"occupied restore destination: {name}")
                 replace_path(backup, destination)
             except (OSError, ValueError) as error:
                 rollback_errors.append(f"restore {name}: {error}")
         for temporary in staged.values():
-            if temporary.is_file() and not temporary.is_symlink():
+            if temporary.is_file() and not _is_link_component(temporary):
                 temporary.unlink()
         if (
             receipt_temporary is not None
             and receipt_temporary.is_file()
-            and not receipt_temporary.is_symlink()
+            and not _is_link_component(receipt_temporary)
         ):
             receipt_temporary.unlink()
         if host_run_result_path is not None and (
-            host_run_result_path.is_file() and not host_run_result_path.is_symlink()
+            host_run_result_path.is_file() and not _is_link_component(host_run_result_path)
         ):
             host_run_result_path.unlink()
         if rollback_errors:
@@ -2106,7 +2301,7 @@ def publish_next_state(
         raise
     for backup in backups.values():
         try:
-            if backup.is_file() and not backup.is_symlink():
+            if backup.is_file() and not _is_link_component(backup):
                 backup.unlink()
         except OSError:
             pass
@@ -2122,14 +2317,14 @@ def _run_seeded_ucore_locked(
     pass_marker: str = "rp_orch: passed",
     target_identity: str = "plain",
 ) -> dict[str, object]:
-    repo_dir = repo_dir.resolve()
+    repo_dir = require_safe_directory(_absolute_lexical_path(repo_dir)).resolve(strict=True)
     deadline_contract = seeded_ucore_deadline_contract(timeout_seconds)
     phase_timeout_seconds = int(deadline_contract["phase_timeout_seconds"])
     run_dir = require_private_directory(run_dir)
     build_log_path = run_dir / "ucore-build.log"
     log_path = run_dir / "ucore-run.log"
     next_state = run_dir / "state-next"
-    if next_state.exists() or next_state.is_symlink():
+    if next_state.exists() or _is_link_component(next_state):
         reject_link_components(next_state)
         if not next_state.is_dir():
             raise ValueError("Guest action state directory is unsafe")
@@ -2368,8 +2563,8 @@ def run_seeded_ucore(
     pass_marker: str = "rp_orch: passed",
     target_identity: str = "plain",
 ) -> dict[str, object]:
-    repo_dir = repo_dir.resolve()
-    if run_dir.exists() or run_dir.is_symlink():
+    repo_dir = require_safe_directory(_absolute_lexical_path(repo_dir)).resolve(strict=True)
+    if run_dir.exists() or _is_link_component(run_dir):
         run_dir = require_private_directory(run_dir)
     else:
         run_dir = create_private_directory(run_dir)
@@ -2407,7 +2602,7 @@ def run_seeded_ucore(
             "status": "failed",
         }
         next_state = run_dir / "state-next"
-        if next_state.exists() or next_state.is_symlink():
+        if next_state.exists() or _is_link_component(next_state):
             reject_link_components(next_state)
             if not next_state.is_dir():
                 raise ValueError("Guest action state directory is unsafe")

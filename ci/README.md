@@ -96,41 +96,92 @@ immutable lifecycle id and generation.
 The current candidate's full-suite duration gate is
 `provisional_requires_full_suite`. It intentionally carries no source
 fingerprint, baseline, limit, or calibration samples and therefore fails closed
-before a normal full-suite QEMU run. Frozen commit `814021ab9dac` produced three
-serial clean-detached 18-case samples of 327.098196563, 310.491647311, and
-279.293840369 seconds on the pinned runner; its median 310.491647311 seconds and
-limit 327.10 seconds are historical baselines for that source commit only.
-Their timing files, deterministic compressed Guest/runner logs, environment,
-validation, and hashes are stored under `evidence/calibrations/814021ab9dac/`.
-The older `31d4ddf53695` calibration is likewise historical evidence for its
-own source commit. Neither calibration is a threshold for the current candidate.
+before a normal full-suite QEMU run. The older `814021ab9dac` and
+`31d4ddf53695` packages are historical schema-2 artifacts only. They predate
+per-execution attestation and are not admissible as a threshold for this or any
+new candidate.
 
-A calibrated policy also carries `source_fingerprint_sha256`. The checker
-recomputes a length-framed SHA-256 over the expected cases, canonical
-toolchain, runner profile/tag, root build contract, production kernel inputs,
+A production calibration is collected only by
+`scripts/agent_test_calibration.py collect`. The harness requires a real Git
+commit in a clean detached worktree, proves `HEAD` and the commit tree, and
+compares every tracked worktree byte directly with its commit blob. Git clean
+filters, ignored/untracked source, repository-redirection variables,
+Windows-equivalent path collisions, unsafe Windows path spellings, symlinks,
+and junctions cannot substitute different execution bytes. Every round starts
+from an empty extra-file inventory after cleanup and ends with only the exact
+generated-output roots admitted. Native POSIX collection also checks the committed
+executable bit; MSYS2 uses the raw-byte contract because its POSIX mode bits are
+emulated. The harness binds that tree plus the complete source fingerprint into
+a predeclared schema-3 plan. It then runs exactly three complete, serialized
+18-case rounds.
+The campaign, rounds, and all 57 prelude/case executions receive distinct
+256-bit random nonces.
+
+Every execution is published by `agent_test_runner.py` as an exclusive-create
+schema-2 attestation. It binds the runner and executable path/hash/version,
+exact invocation and QEMU argv, kernel and pre/post filesystem-image hashes,
+the exact Guest log section, exit/marker result, and monotonic start, finish,
+and elapsed values. Calibration mode forbids the runner's independent timing
+file. After a complete round, the harness reconstructs all 18 timing rows only
+from the validated attestations; package verification repeats that derivation,
+checks continuous session and round bounds, and rejects missing, duplicated,
+overlapping, reordered, or reused executions.
+
+The manifest and every package member are content-addressed. The duration limit
+is derived rather than chosen manually: the greater of the largest sample and
+105% of the median, rounded upward to one millisecond. Samples more than 10%
+above the median still reject calibration. Synthetic fixtures remain valid for
+static mutation and relocation tests but are never admissible calibration
+evidence. A production package is explicitly `local_e3_unsigned`; it is never
+described as GitLab CI, signed, or E4 evidence. Content addressing proves
+internal replay and provenance, not the honesty of a local operator who
+controls the checkout, tools, and output files.
+
+The checker
+recomputes a length-framed SHA-256 over the expected cases, canonical CI
+toolchain, remote runner profile/tag, the independent versioned local E3
+profile, root build contract, production kernel inputs,
 Agent user programs, NFS image inputs, and the Agent runner's direct scripts.
 Generated images/build output, `os/initproc.S`, documentation, release evidence,
 and `ci/kernel-budgets.json` itself are excluded. Any relevant byte or contract
 change invalidates the duration policy before QEMU; provisional configuration
-must omit the fingerprint, baseline, maximum, and calibration samples.
+must omit every calibrated field, including the commit and manifest binding.
 
-The GitLab duration job is both serialized with a resource group and bound to
-that calibrated runner tag. It also pins QEMU and OpenSBI. A runner hardware,
-virtualization, QEMU, or case-set change must first return the status to
-provisional, remove the stale thresholds/samples, and collect at least three
-new full-suite samples. During that process,
-`REQUIRE_FULL_SUITE=1`, `AGENT_TEST_CALIBRATE=1`, and an explicit
-`AGENT_TEST_TIMING_FILE` preserve all completed per-case rows without treating
-an old threshold as authoritative. Regular CI sets calibration mode to zero;
-the runner invokes `--check agent-test-policy` before QEMU and refuses a
-provisional configuration. Targeted `AGENT_TEST_CASE` development runs remain
-available and do not claim the full-suite duration gate.
+The local threshold applies only to
+`local-e3-msys2-xpack-qemu11-v1`. The configured CPU, MSYS2 runtime, xPack
+GCC/ld/objcopy/objdump/as, host C compiler, QEMU, Python, Bash, Make, and Git
+versions must match; their
+resolved files are hashed before and after execution. The collector feeds those
+same absolute QEMU, Python, Bash, Make, Git, and toolchain-prefix paths into
+every child and locks the search path. The child environment is rebuilt from a
+minimal OS/runtime allowlist, so ambient Bash, Make, Python, GCC, test-profile,
+or logging variables cannot alter the calibrated build. A hardware, runtime, executable, or
+case-set change first returns the status to provisional. Collection runs from
+outside the source worktree, for example:
+
+```sh
+QEMU=/opt/qemu/qemu-system-riscv64.exe \
+TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf- \
+python3 scripts/agent_test_calibration.py collect \
+  --root . --source-commit "$(git rev-parse HEAD)" \
+  --output /var/tmp/agentos-calibration-"$(git rev-parse --short=12 HEAD)"
+```
+
+GitLab uses Ubuntu 26.04, `riscv64-linux-gnu`, and QEMU 10.2.1, which is a
+different ordinary runner profile. It explicitly sets
+`AGENT_TEST_DURATION_PROFILE=none`: all 18 cases, semantic checks, Guest logs,
+and the exact timing-row inventory remain mandatory, but the local wall-time
+limit is not applied. Its log must contain the machine-checkable
+`duration-profile` receipt. A GitLab success therefore cannot calibrate or
+validate the local E3 threshold. Targeted `AGENT_TEST_CASE` development runs
+likewise do not claim it.
 
 The duration checker rejects the summary-only `--agent-test-seconds` and
-`--agent-test-start-ns` inputs. It accepts only
+`--agent-test-start-ns` inputs. A normal gate accepts only
 `--agent-test-timing-file`, whose positive finite rows must exactly match all
-18 expected cases in order; a targeted, missing, duplicated, or reordered set
-cannot satisfy the duration gate.
+18 expected cases in order. For calibration, that file is accepted only after
+the schema-3 verifier has independently reconstructed the same bytes and totals
+from the per-execution attestations.
 
 Repository maintainers should protect `.gitlab-ci.yml`, `Makefile`,
 `ci/kernel-budgets.json`, and `scripts/check-*` with `CODEOWNERS` plus a GitLab

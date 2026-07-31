@@ -186,13 +186,14 @@ agent_metadata_query_execute_locked(
 	     i = use_index ? agent_metadata_catalog_index_seek(
 				     generation, index, 0, i, 0, 0) : i + 1) {
 		agent_metadata_txn_work_charge(1);
+		r->scanned_records++;
 		if (agent_metadata_catalog_borrow(generation, i, &view) <= 0)
 			continue;
 		if (!agent_object_scope_visible(scope, view.scope_id)) {
 			view.meta = 0;
 			continue;
 		}
-		r->scanned_records++;
+		r->candidate_records++;
 		if (agent_metadata_query_matches(scope, view.scope_id, &key,
 					       view.meta)) {
 			r->total_hits++;
@@ -208,7 +209,6 @@ agent_metadata_query_execute_locked(
 		view.meta = 0;
 	}
 	r->used_index = use_index;
-	r->candidate_records = r->scanned_records;
 	r->index_rebuild_records = rebuild_records;
 	r->query_ticks = agent_file_state_now() - start;
 	r->plan_reason = reason;

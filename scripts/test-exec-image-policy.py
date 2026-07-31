@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -16,6 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from host_tools import plain_ucore_fs_extract as fs_extract  # noqa: E402
+from host_probe_toolchain import (  # noqa: E402
+    host_compiler,
+    probe_environment,
+    probe_mode,
+    required_sanitizer_flags,
+)
 
 
 @dataclass(frozen=True)
@@ -497,16 +502,18 @@ int main(void)
 """
 
 
-def compile_and_run_probe(directory: Path) -> list[tuple[int, int]]:
+def compile_and_run_probe(directory: Path) -> tuple[list[tuple[int, int]], str]:
     source = directory / "exec-image-policy-probe.c"
     output = directory / (
         "exec-image-policy-probe.exe" if os.name == "nt" else "exec-image-policy-probe"
     )
     source.write_text(c_probe_source(), encoding="utf-8")
-    compiler = shlex.split(os.environ.get("HOST_CC", "cc"))
+    compiler = host_compiler()
+    sanitizer_flags = required_sanitizer_flags(compiler, directory)
     compile_result = subprocess.run(
         compiler
         + [
+            *sanitizer_flags,
             "-std=gnu11",
             "-Wall",
             "-Wextra",
@@ -532,6 +539,7 @@ def compile_and_run_probe(directory: Path) -> list[tuple[int, int]]:
     run_result = subprocess.run(
         [str(output)],
         cwd=ROOT,
+        env=probe_environment(sanitizer_flags),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -553,7 +561,7 @@ def compile_and_run_probe(directory: Path) -> list[tuple[int, int]]:
         raise SystemExit(
             f"C classifier returned {len(rows)} rows for {len(CASES)} cases"
         )
-    return rows
+    return rows, probe_mode(sanitizer_flags)
 
 
 def python_result(case: ShapeCase) -> tuple[int, int]:
@@ -585,7 +593,7 @@ def main() -> int:
     if len(names) != len(set(names)):
         raise SystemExit("duplicate executable-shape case name")
     with tempfile.TemporaryDirectory(prefix="agentos-exec-image-") as directory:
-        c_rows = compile_and_run_probe(Path(directory))
+        c_rows, sanitizer_mode = compile_and_run_probe(Path(directory))
 
     for case, c_result in zip(CASES, c_rows):
         expected = (case.expected_class, int(case.expected_class != INVALID))
@@ -608,7 +616,7 @@ def main() -> int:
 
     print(
         "[exec-image-policy] C/Python classifier matrix passed: "
-        f"{len(CASES)} cases"
+        f"{len(CASES)} cases; mode={sanitizer_mode}"
     )
     return 0
 

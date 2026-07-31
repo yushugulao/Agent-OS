@@ -46,7 +46,8 @@ static size_t probe_strnlen(const char *text, size_t limit);
 #include "../../user/lib/stdio.c"
 
 _Static_assert(sizeof(int) == 4, "printf probe requires 32-bit int");
-_Static_assert(sizeof(long) == 8, "printf probe requires LP64 long");
+_Static_assert(sizeof(long) == 4 || sizeof(long) == 8,
+	       "printf probe requires a 32-bit or 64-bit long");
 _Static_assert(sizeof(long long) == 8, "printf probe requires 64-bit long long");
 
 static char captured[2048];
@@ -84,7 +85,7 @@ static ssize_t probe_write(int fd, const void *data, size_t size)
 	return accepted;
 }
 
-static int probe_mutex_create(void) { return 1; }
+static int __attribute__((unused)) probe_mutex_create(void) { return 1; }
 static int probe_mutex_lock(int mutex) { return mutex == 1 ? 0 : -1; }
 static int probe_mutex_unlock(int mutex) { return mutex == 1 ? 0 : -1; }
 
@@ -131,6 +132,7 @@ static void reset(void)
 int main(void)
 {
 	reset();
+#if __SIZEOF_LONG__ == 8
 	user_printf("%d|%u|%x|%ld|%lu|%lx|%lld|%llu|%llx|%p|%s|%%",
 		    (-2147483647 - 1), ~0U, ~0U,
 		    (-9223372036854775807L - 1L), ~0UL, ~0UL,
@@ -142,6 +144,18 @@ int main(void)
 		  "18446744073709551615|ffffffffffffffff|"
 		  "0x0000000000000123|ok|%"))
 		return 1;
+#else
+	user_printf("%d|%u|%x|%ld|%lu|%lx|%lld|%llu|%llx|%p|%s|%%",
+		    (-2147483647 - 1), ~0U, ~0U,
+		    (-2147483647L - 1L), ~0UL, ~0UL,
+		    (-9223372036854775807LL - 1LL), ~0ULL, ~0ULL,
+		    (uint64)0x123, "ok");
+	if (!same("-2147483648|4294967295|ffffffff|"
+		  "-2147483648|4294967295|ffffffff|"
+		  "-9223372036854775808|18446744073709551615|"
+		  "ffffffffffffffff|0x0000000000000123|ok|%"))
+		return 1;
+#endif
 
 	reset();
 	user_printf("%u|%llu|%d|%x|%s", 17U, 4294967296ULL, -3,

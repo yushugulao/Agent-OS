@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "targets": {
     "plain": {
       "source_roots": [
@@ -48,5 +48,9 @@
   "archive_optional_state_files": [
     "rp_input_fastq",
     "rp_object_records"
+  ],
+  "opaque_guest_state_files": [
+    "rp_task6_norm",
+    "rp_task6_raw"
   ]
 }

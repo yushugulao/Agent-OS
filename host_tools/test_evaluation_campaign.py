@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -15,10 +16,100 @@ from unittest import mock
 
 import evaluation_campaign as campaign
 import evaluation_contract as contract
+import evaluation_platform as platform_probe
+import agenteval_measurement_source_contract as measurement_source
 import plain_ucore_action_runner as action_runner
+import scenario_timing_source_contract as scenario_timing_source
 
 
 COMMIT = "a" * 40
+
+
+def _measurement_receipt(root: Path) -> dict[str, object]:
+    records = []
+    for index, relative in enumerate(measurement_source._receipt_source_paths(), 1):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if relative == measurement_source.EVALUATION_SUITE_SOURCE_PATH:
+            raw = path.read_bytes()
+        elif relative in {
+            "host_tools/evaluation_scenario.py",
+            "host_tools/check_seeded_action_state.py",
+        }:
+            raw = f"# {path.name}{os.linesep}".encode("utf-8")
+        else:
+            raw = f"timing-source-{index}:{relative}\n".encode("utf-8")
+        path.write_bytes(raw)
+        records.append({
+            "bytes": len(raw),
+            "path": relative,
+            "sha256": campaign._sha256(path),
+        })
+    return {
+        "contract_versions": {
+            "functional": measurement_source.FUNCTIONAL_CONTRACT_VERSION,
+            "functional_compile": (
+                measurement_source.FUNCTIONAL_COMPILE_CONTRACT_VERSION
+            ),
+            "micro": measurement_source.CONTRACT_VERSION,
+            "policy": measurement_source.POLICY_INVENTORY_SCHEMA,
+            "scenario": scenario_timing_source.CONTRACT_VERSION,
+        },
+        "formal_boot_count": measurement_source.FORMAL_BOOT_COUNT,
+        "policy_inventory": measurement_source.measurement_source_policy_inventory(),
+        "schema": measurement_source.RECEIPT_SCHEMA,
+        "source_commit": COMMIT,
+        "sources": records,
+        "stop_rule": measurement_source.STOP_RULE,
+    }
+
+
+def _test_hardware() -> dict[str, object]:
+    try:
+        return platform_probe._probe_proc_hardware_identity()
+    except platform_probe.PlatformPreflightError:
+        # Native Windows is not a formal execution domain, but these unit
+        # fixtures still need a canonical proof before their execution call is
+        # replaced by mocks.
+        return {
+            "cpu_model": "Unit Test CPU",
+            "logical_cpu_count": 4,
+            "memory_total_bytes": 8 * 1024 * 1024 * 1024,
+            "source": platform_probe.HARDWARE_SOURCE,
+        }
+
+
+def _platform_proof(root: Path) -> dict[str, object]:
+    tools: dict[str, dict[str, str]] = {}
+    directory = root / "platform-tools"
+    directory.mkdir(parents=True, exist_ok=True)
+    for label in platform_probe.TOOL_LABELS:
+        argv0 = "cc" if label == "host_cc" else label
+        path = directory / argv0
+        path.write_bytes(f"platform:{label}\n".encode("ascii"))
+        path.chmod(0o755)
+        tools[label] = {
+            "argv0": argv0,
+            "path": str(path.resolve()),
+            "sha256": campaign._sha256(path),
+            "version": f"{label} 1",
+        }
+    return {
+        "distribution": None,
+        "domain": "native-linux",
+        "entry_domain": "native-linux",
+        "hardware": _test_hardware(),
+        "kind": platform_probe.KIND,
+        "launcher": dict(tools["bash"]),
+        "repository": {
+            "execution_path": str(root.resolve()),
+            "host_path": str(root.resolve()),
+        },
+        "schema_version": platform_probe.SCHEMA_VERSION,
+        "status": "ready",
+        "toolprefix": "/opt/riscv/bin/riscv64-linux-gnu-",
+        "tools": tools,
+    }
 
 
 def _scenario_environment() -> dict[str, object]:
@@ -30,6 +121,18 @@ def _scenario_environment() -> dict[str, object]:
             "version": f"{argv0} 1",
         }
 
+    tools = {
+        "bash": tool("bash", "7"),
+        "compiler": tool("riscv64-linux-gnu-gcc", "8"),
+        "env": tool("env", "b"),
+        "host_cc": tool("cc", "1"),
+        "linker": tool("riscv64-linux-gnu-ld", "c"),
+        "make": tool("make", "9"),
+        "objcopy": tool("riscv64-linux-gnu-objcopy", "d"),
+        "objdump": tool("riscv64-linux-gnu-objdump", "e"),
+        "qemu": tool("qemu-system-riscv64", "a"),
+        "timeout": tool("timeout", "f"),
+    }
     if os.name == "nt":
         launcher = {
             "argv0": "wsl.exe",
@@ -37,26 +140,25 @@ def _scenario_environment() -> dict[str, object]:
             "sha256": "6" * 64,
             "version": "wsl.exe 1",
         }
-        domain = "wsl"
-        launcher_argv = ["wsl.exe", "-d", "Ubuntu", "--", "bash", "-lc"]
+        domain = "wsl-clean-shell"
+        launcher_argv = [
+            launcher["path"],
+            "-d",
+            "Ubuntu",
+            "--",
+            tools["env"]["path"],
+            "-i",
+        ]
     else:
-        launcher = tool("bash", "6")
-        domain = "native-login-shell"
-        launcher_argv = ["bash", "-lc"]
+        launcher = dict(tools["env"])
+        domain = "native-clean-shell"
+        launcher_argv = [tools["env"]["path"], "-i"]
     return {
+        "clean_environment": campaign._scenario_clean_environment(tools),
         "domain": domain,
         "launcher": launcher,
         "launcher_argv": launcher_argv,
-        "tools": {
-            "bash": tool("bash", "7"),
-            "compiler": tool("riscv64-linux-gnu-gcc", "8"),
-            "linker": tool("riscv64-linux-gnu-ld", "c"),
-            "make": tool("make", "9"),
-            "objcopy": tool("riscv64-linux-gnu-objcopy", "d"),
-            "objdump": tool("riscv64-linux-gnu-objdump", "e"),
-            "qemu": tool("qemu-system-riscv64", "a"),
-            "timeout": tool("timeout", "f"),
-        },
+        "tools": tools,
     }
 
 
@@ -66,6 +168,7 @@ def _create(
     boots: int = 7,
     clean: bool = True,
     artifact_root: str = "results/evaluation/runs/run-1",
+    run_id: str = "run-1",
 ) -> Path:
     manifest = root / artifact_root / "campaign.json"
     suite = root / "ci" / "evaluation-suite.json"
@@ -83,8 +186,20 @@ def _create(
             "version": f"{name} 1",
         }
 
+    platform_proof = _platform_proof(root)
+    measurement_receipt = _measurement_receipt(root)
     with (
         mock.patch.object(campaign, "repository_identity", return_value=(COMMIT, clean)),
+        mock.patch.object(
+            campaign,
+            "build_measurement_source_receipt",
+            return_value=measurement_receipt,
+        ),
+        mock.patch.object(
+            campaign,
+            "require_formal_execution_domain",
+            return_value=platform_proof,
+        ),
         mock.patch.object(
             campaign,
             "probe_executable",
@@ -94,7 +209,7 @@ def _create(
         campaign.create_campaign(
             repo=root,
             output=manifest,
-            run_id="run-1",
+            run_id=run_id,
             requested_boots=boots,
             toolprefix="riscv64-linux-gnu-",
             qemu="qemu-system-riscv64",
@@ -126,7 +241,7 @@ def _guest_log(challenge: str) -> str:
                         cache = "warm"
                     work = load * load if experiment == "file_query" else load
                     lines.append(
-                        "agenteval_ucore: sample schema=1 "
+                        "agenteval_ucore: sample schema=2 "
                         f"experiment={experiment} load={load} pair={pair} "
                         f"variant={variant} order={order} cache={cache} "
                         f"operations={load} work_units={work} duration_us=10 "
@@ -137,7 +252,316 @@ def _guest_log(challenge: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+class CampaignSourceGateIntegrationTests(unittest.TestCase):
+    def _repo(self, base: Path) -> tuple[Path, str]:
+        root = base / "repo"
+        (root / "os").mkdir(parents=True)
+        (root / "user" / "src").mkdir(parents=True)
+        (root / "Makefile").write_text("all:\n\t@true\n", encoding="ascii")
+        (root / "os" / "kernel.c").write_text("int kernel;\n", encoding="ascii")
+        (root / "user" / "src" / "app.c").write_text("int app;\n", encoding="ascii")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "campaign@example.invalid"],
+            cwd=root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Campaign Test"], cwd=root, check=True
+        )
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=root, check=True)
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        return root, commit
+
+    def test_campaign_gate_rejects_info_exclude_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, commit = self._repo(Path(temporary))
+            (root / ".git" / "info" / "exclude").write_text(
+                "os/hidden.c\nuser/src/hidden.c\n", encoding="ascii"
+            )
+            for relative in ("os/hidden.c", "user/src/hidden.c"):
+                hidden = root / relative
+                hidden.write_text("int hidden;\n", encoding="ascii")
+                self.assertEqual(
+                    subprocess.check_output(
+                        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                        cwd=root,
+                    ),
+                    b"",
+                )
+                with self.assertRaisesRegex(campaign.CampaignError, "source gate"):
+                    campaign._evaluation_source_gate(
+                        root,
+                        commit,
+                        "results/evaluation/runs/formal-fixture",
+                        "before boot",
+                    )
+                hidden.unlink()
+
+    def test_campaign_prepare_removes_preseeded_dependency_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, commit = self._repo(Path(temporary))
+            poison = root / "build" / "os" / "kernel.d"
+            poison.parent.mkdir(parents=True)
+            poison.write_text("$(error poisoned)\n", encoding="ascii")
+            campaign._prepare_evaluation_build_tree(
+                root,
+                commit,
+                "results/evaluation/runs/formal-fixture",
+                "micro boot-01",
+            )
+            self.assertFalse((root / "build").exists())
+
+    def test_artifact_root_cannot_authorize_a_source_namespace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, commit = self._repo(Path(temporary))
+            (root / ".git" / "info" / "exclude").write_text(
+                "os/hidden.c\n", encoding="ascii"
+            )
+            (root / "os" / "hidden.c").write_text("int hidden;\n", encoding="ascii")
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "source gate"
+            ):
+                campaign._evaluation_source_gate(
+                    root,
+                    commit,
+                    "os/runs/formal-fixture",
+                    "before boot",
+                )
+
+
 class CampaignTests(unittest.TestCase):
+    def setUp(self) -> None:
+        source_gate = mock.patch.object(campaign, "_evaluation_source_gate")
+        prepare = mock.patch.object(campaign, "_prepare_evaluation_build_tree")
+        source_gate.start()
+        prepare.start()
+        self.addCleanup(prepare.stop)
+        self.addCleanup(source_gate.stop)
+        if os.name == "nt" or sys.platform == "cygwin":
+            patcher = mock.patch.object(
+                platform_probe,
+                "_probe_proc_hardware_identity",
+                return_value=_test_hardware(),
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_formal_campaigns_reject_optional_stopping_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(campaign.CampaignError, "fixed 7-boot"):
+                _create(root, boots=8)
+
+            micro = _create(root)
+            output = root / "results" / "evaluation" / "scenario-8.json"
+            with self.assertRaisesRegex(campaign.CampaignError, "fixed 7-boot"):
+                campaign.create_scenario_campaign(
+                    repo=root,
+                    micro_manifest=micro,
+                    output=output,
+                    requested_boots=8,
+                    timeout_seconds=600,
+                    wsl_distro="Ubuntu",
+                )
+
+    def test_repository_identity_rejects_hidden_index_flags(self) -> None:
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+
+                def run_git(*arguments: str) -> None:
+                    subprocess.run(
+                        ["git", *arguments],
+                        cwd=root,
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+
+                run_git("init", "-q")
+                run_git("config", "user.email", "campaign@example.invalid")
+                run_git("config", "user.name", "Campaign Test")
+                source = root / "source.c"
+                source.write_text("int value = 1;\n", encoding="ascii")
+                run_git("add", "source.c")
+                run_git("commit", "-q", "-m", "source")
+                run_git("update-index", flag, "source.c")
+                source.write_text("int value = 2;\n", encoding="ascii")
+
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "hidden or nonstandard"
+                ):
+                    campaign.repository_identity(root)
+
+    def test_measurement_source_receipt_is_strict_and_hash_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _create(root)
+            value = json.loads(manifest.read_text(encoding="utf-8"))
+            receipt = value["measurement_source_receipt"]
+            self.assertEqual(receipt["source_commit"], COMMIT)
+            self.assertEqual(
+                receipt["stop_rule"], measurement_source.STOP_RULE
+            )
+
+            forged = json.loads(json.dumps(value))
+            forged["measurement_source_receipt"]["unexpected"] = True
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "measurement source receipt"
+            ):
+                campaign.validate_campaign(forged)
+
+            source = root / receipt["sources"][0]["path"]
+            source.write_bytes(source.read_bytes() + b"changed")
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "measurement timing sources changed"
+            ):
+                campaign._require_measurement_receipt(
+                    root, COMMIT, receipt, "before boot"
+                )
+
+    def test_platform_hardware_proof_is_strict_and_campaign_hash_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _create(root)
+            original = json.loads(manifest.read_text(encoding="utf-8"))
+            campaign.validate_campaign(original)
+            hardware = original["platform"]["hardware"]
+            self.assertEqual(
+                set(hardware),
+                {
+                    "cpu_model", "logical_cpu_count", "memory_total_bytes",
+                    "source",
+                },
+            )
+            self.assertEqual(hardware["source"], platform_probe.HARDWARE_SOURCE)
+
+            original_hash = campaign._sha256(manifest)
+            changed = json.loads(json.dumps(original))
+            changed["platform"]["hardware"]["cpu_model"] += " changed"
+            changed_path = root / "changed-campaign.json"
+            changed_path.write_text(
+                json.dumps(changed, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            self.assertNotEqual(original_hash, campaign._sha256(changed_path))
+
+            mutations = []
+            missing = json.loads(json.dumps(original))
+            del missing["platform"]["hardware"]
+            mutations.append(missing)
+            dynamic = json.loads(json.dumps(original))
+            dynamic["platform"]["hardware"]["cpu_mhz"] = 4200
+            mutations.append(dynamic)
+            malformed = json.loads(json.dumps(original))
+            malformed["platform"]["hardware"]["memory_total_bytes"] = "8 GiB"
+            mutations.append(malformed)
+            legacy = json.loads(json.dumps(original))
+            legacy["platform"]["schema_version"] = 1
+            mutations.append(legacy)
+            for value in mutations:
+                with self.subTest(value=value["platform"]), self.assertRaises(
+                    campaign.CampaignError
+                ):
+                    campaign.validate_campaign(value)
+
+    def test_hardware_change_before_boot_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _create(root)
+            value = json.loads(manifest.read_text(encoding="utf-8"))
+            expected = value["platform"]["hardware"]
+            changed_count = (
+                expected["logical_cpu_count"] + 1
+                if expected["logical_cpu_count"] < platform_probe.MAX_LOGICAL_CPU_COUNT
+                else expected["logical_cpu_count"] - 1
+            )
+            changed = {**expected, "logical_cpu_count": changed_count}
+            with (
+                mock.patch.object(
+                    platform_probe,
+                    "_probe_proc_hardware_identity",
+                    return_value=changed,
+                ),
+                self.assertRaisesRegex(
+                    campaign.CampaignError, "hardware binding changed"
+                ),
+            ):
+                campaign._verify_native_execution_binding(
+                    root, value, value["boots"][0]
+                )
+
+    def test_scenario_binds_and_revalidates_micro_platform_hardware(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            micro_path = _create(root)
+            micro = json.loads(micro_path.read_text(encoding="utf-8"))
+            for name in ("evaluation_scenario.py", "check_seeded_action_state.py"):
+                source = root / "host_tools" / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"# {name}\n", encoding="utf-8")
+            output = micro_path.parent / "scenario" / "scenario-plan.json"
+            with (
+                mock.patch.object(
+                    campaign, "repository_identity", return_value=(COMMIT, True)
+                ),
+                mock.patch.object(
+                    campaign,
+                    "_probe_scenario_environment",
+                    return_value=_scenario_environment(),
+                ),
+            ):
+                value = campaign.create_scenario_campaign(
+                    repo=root,
+                    micro_manifest=micro_path,
+                    output=output,
+                    requested_boots=7,
+                    timeout_seconds=600,
+                    wsl_distro="Ubuntu",
+                )
+            self.assertEqual(value["schema_version"], campaign.SCENARIO_SCHEMA_VERSION)
+            self.assertEqual(value["platform"], micro["platform"])
+            self.assertEqual(
+                value["measurement_source_receipt"],
+                micro["measurement_source_receipt"],
+            )
+            self.assertEqual(
+                value["run"]["platform_sha256"],
+                campaign._canonical_sha256(micro["platform"]),
+            )
+
+            expected = value["platform"]["hardware"]
+            changed_count = (
+                expected["logical_cpu_count"] + 1
+                if expected["logical_cpu_count"] < platform_probe.MAX_LOGICAL_CPU_COUNT
+                else expected["logical_cpu_count"] - 1
+            )
+            changed = {**expected, "logical_cpu_count": changed_count}
+            with (
+                mock.patch.object(
+                    platform_probe,
+                    "_probe_proc_hardware_identity",
+                    return_value=changed,
+                ),
+                self.assertRaisesRegex(
+                    campaign.CampaignError, "hardware binding changed"
+                ),
+            ):
+                campaign._verify_scenario_execution_binding(
+                    root, value, value["boots"][0]
+                )
+
+            tampered = json.loads(json.dumps(value))
+            tampered["platform"]["hardware"]["logical_cpu_count"] = changed_count
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "platform proof differs from its hash"
+            ):
+                campaign.validate_scenario_campaign(tampered)
+
     def test_portable_absolute_paths_and_process_path_are_host_independent(self) -> None:
         for valid in (
             "/usr/bin/python3",
@@ -171,10 +595,37 @@ class CampaignTests(unittest.TestCase):
                 [{"path": "/usr/bin/python3"}, {"path": "C:\\Qemu\\qemu.exe"}]
             )
 
+    def test_host_cc_resolution_rejects_a_path_shadow(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            trusted = root / "trusted"
+            attacker = root / "attacker"
+            trusted.mkdir()
+            attacker.mkdir()
+            trusted_cc = trusted / "cc"
+            attacker_cc = attacker / "cc"
+            for path, content in (
+                (trusted_cc, b"trusted\n"),
+                (attacker_cc, b"attacker\n"),
+            ):
+                path.write_bytes(content)
+                path.chmod(0o755)
+            identity = {"argv0": "cc", "path": str(trusted_cc)}
+            campaign._verify_bound_host_cc_resolution(
+                identity, str(trusted)
+            )
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "differs from the attested"
+            ):
+                campaign._verify_bound_host_cc_resolution(
+                    identity, os.pathsep.join((str(attacker), str(trusted)))
+                )
+
     def test_campaign_schema_accepts_foreign_posix_execution_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest = _create(Path(temporary))
             value = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(value["run"]["execution_domain"], "native-linux")
             paths = {
                 "bash": "/opt/tools/bash",
                 "compiler": "/opt/riscv/bin/riscv64-linux-gnu-gcc",
@@ -228,14 +679,15 @@ class CampaignTests(unittest.TestCase):
             protocol = value["protocol"]
             protocol["python_bin"] = "/opt/host/python3"
             protocol["git_bin"] = "/opt/host/git"
-            protocol["execution_environment"]["domain"] = "native-login-shell"
-            protocol["execution_environment"]["launcher"] = {
-                "argv0": "bash",
-                "path": "/usr/bin/bash",
-                "sha256": "6" * 64,
-                "version": "bash 1",
-            }
-            protocol["execution_environment"]["launcher_argv"] = ["bash", "-lc"]
+            execution_environment = protocol["execution_environment"]
+            execution_environment["domain"] = "native-clean-shell"
+            execution_environment["launcher"] = dict(
+                execution_environment["tools"]["env"]
+            )
+            execution_environment["launcher_argv"] = [
+                execution_environment["tools"]["env"]["path"],
+                "-i",
+            ]
             value["run"]["scenario_environment_sha256"] = campaign._canonical_sha256(
                 protocol["execution_environment"]
             )
@@ -253,6 +705,139 @@ class CampaignTests(unittest.TestCase):
                 )
             campaign.validate_scenario_campaign(value)
 
+    def test_scenario_probe_uses_an_empty_non_login_shell(self) -> None:
+        paths = [
+            "/usr/bin/bash",
+            "/opt/riscv/bin/riscv64-linux-gnu-gcc",
+            "/usr/bin/env",
+            "/usr/bin/cc",
+            "/opt/riscv/bin/riscv64-linux-gnu-ld",
+            "/usr/bin/make",
+            "/opt/riscv/bin/riscv64-linux-gnu-objcopy",
+            "/opt/riscv/bin/riscv64-linux-gnu-objdump",
+            "/usr/bin/qemu-system-riscv64",
+            "/usr/bin/timeout",
+        ]
+        outputs = [
+            "\n".join(
+                (
+                    f"__AGENTEVAL_PATH__{path}",
+                    "__AGENTEVAL_SHA256__" + f"{number:x}" * 64,
+                    f"__AGENTEVAL_VERSION__tool-{number}",
+                )
+            )
+            for number, path in enumerate(paths, 1)
+        ]
+        current_directory = Path.cwd()
+        with (
+            mock.patch.object(campaign.os, "name", "posix"),
+            mock.patch.object(campaign, "_run", side_effect=outputs) as run,
+        ):
+            environment = campaign._probe_scenario_environment(
+                current_directory,
+                wsl_distro="Ubuntu",
+                toolprefix="/opt/riscv/bin/riscv64-linux-gnu-",
+                qemu="qemu-system-riscv64",
+            )
+        self.assertEqual(environment["domain"], "native-clean-shell")
+        self.assertEqual(environment["launcher_argv"], ["/usr/bin/env", "-i"])
+        for call in run.call_args_list:
+            command = call.args[0]
+            self.assertEqual(command[0:2], ["/usr/bin/env", "-i"])
+            self.assertEqual(
+                command[2:7],
+                [
+                    "HOME=/tmp",
+                    f"PATH={campaign.SCENARIO_CLEAN_PATH}",
+                    "LANG=C",
+                    "LC_ALL=C",
+                    "TZ=UTC",
+                ],
+            )
+            self.assertEqual(
+                command[7:11],
+                ["/bin/bash", "--noprofile", "--norc", "-c"],
+            )
+            self.assertNotIn("-l", command)
+            self.assertNotIn("-lc", command)
+
+    def test_scenario_environment_injection_mutations_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            micro = _create(root)
+            for name in ("evaluation_scenario.py", "check_seeded_action_state.py"):
+                source = root / "host_tools" / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"# {name}\n", encoding="utf-8")
+            with (
+                mock.patch.object(
+                    campaign, "repository_identity", return_value=(COMMIT, True)
+                ),
+                mock.patch.object(
+                    campaign,
+                    "_probe_scenario_environment",
+                    return_value=_scenario_environment(),
+                ),
+            ):
+                original = campaign.create_scenario_campaign(
+                    repo=root,
+                    micro_manifest=micro,
+                    output=micro.parent / "scenario" / "scenario-plan.json",
+                    requested_boots=7,
+                    timeout_seconds=600,
+                    wsl_distro="Ubuntu",
+                )
+
+            injected_flags = json.loads(json.dumps(original))
+            injected_flags["protocol"]["execution_environment"][
+                "clean_environment"
+            ]["MAKEFLAGS"] = "-j99 --eval=malicious"
+            injected_flags["run"]["scenario_environment_sha256"] = (
+                campaign._canonical_sha256(
+                    injected_flags["protocol"]["execution_environment"]
+                )
+            )
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "clean environment"
+            ):
+                campaign.validate_scenario_campaign(injected_flags)
+
+            login_shell = json.loads(json.dumps(original))
+            login_shell["protocol"]["execution_environment"]["launcher_argv"] += [
+                "/usr/bin/bash",
+                "-lc",
+            ]
+            login_shell["run"]["scenario_environment_sha256"] = (
+                campaign._canonical_sha256(
+                    login_shell["protocol"]["execution_environment"]
+                )
+            )
+            with self.assertRaisesRegex(campaign.CampaignError, "launcher"):
+                campaign.validate_scenario_campaign(login_shell)
+
+            inherited_process_flag = json.loads(json.dumps(original))
+            inherited_process_flag["boots"][0]["command_environment"][
+                "MAKEFLAGS"
+            ] = "-j99"
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "process environment differs"
+            ):
+                campaign.validate_scenario_campaign(inherited_process_flag)
+
+            changed_host_cc = json.loads(json.dumps(original))
+            changed_host_cc["protocol"]["execution_environment"][
+                "clean_environment"
+            ]["CC"] = "/usr/bin/clang"
+            changed_host_cc["run"]["scenario_environment_sha256"] = (
+                campaign._canonical_sha256(
+                    changed_host_cc["protocol"]["execution_environment"]
+                )
+            )
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "clean environment differs"
+            ):
+                campaign.validate_scenario_campaign(changed_host_cc)
+
     def test_command_timeout_fails_closed_with_diagnostics(self) -> None:
         error = subprocess.TimeoutExpired(
             ["probe-tool", "--version"], 3, output=b"partial output\n"
@@ -263,10 +848,23 @@ class CampaignTests(unittest.TestCase):
             ):
                 campaign._run(["probe-tool", "--version"], Path.cwd(), timeout_seconds=3)
 
+    def test_scenario_pair_deadline_covers_both_targets_and_all_phases(self) -> None:
+        deadline = campaign.scenario_pair_deadline_contract(600)
+        self.assertEqual(deadline["contract"], "paired-scenario-deadline-v1")
+        self.assertEqual(deadline["target_count"], 2)
+        self.assertEqual(deadline["target_deadline"]["phases"], ["clean", "build", "guest"])
+        self.assertEqual(deadline["target_deadline"]["phase_timeout_seconds"], 630)
+        self.assertEqual(deadline["target_deadline"]["server_deadline_seconds"], 1900)
+        self.assertEqual(deadline["coordination_allowance_seconds"], 60)
+        self.assertEqual(deadline["pair_deadline_seconds"], 3860)
+        for invalid in (True, 59, 3601):
+            with self.assertRaisesRegex(campaign.CampaignError, "between 60 and 3600"):
+                campaign.scenario_pair_deadline_contract(invalid)
+
     def test_create_requires_seven_clean_boots_and_unique_challenges(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            with self.assertRaisesRegex(campaign.CampaignError, "at least 7"):
+            with self.assertRaisesRegex(campaign.CampaignError, "fixed 7-boot"):
                 _create(root, boots=6)
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -279,9 +877,23 @@ class CampaignTests(unittest.TestCase):
             manifest = _create(root)
             value = json.loads(manifest.read_text(encoding="utf-8"))
             challenges = [boot["challenge"] for boot in value["boots"]]
+            repeated_manifest = _create(
+                root,
+                artifact_root="results/evaluation/runs/run-2",
+                run_id="run-2",
+            )
+            repeated = json.loads(repeated_manifest.read_text(encoding="utf-8"))
+            self.assertEqual(
+                challenges,
+                [boot["challenge"] for boot in repeated["boots"]],
+            )
+            self.assertNotEqual(
+                campaign._derive_micro_challenge(COMMIT, 1),
+                campaign._derive_micro_challenge("b" * 40, 1),
+            )
             self.assertEqual(
                 set(value["environment"]),
-                {"bash", "compiler", "git", "linker", "make", "objcopy", "objdump", "python", "qemu"},
+                {"bash", "compiler", "git", "host_cc", "linker", "make", "objcopy", "objdump", "python", "qemu"},
             )
             self.assertEqual(len(challenges), len(set(challenges)))
             self.assertNotIn("0" * 16, challenges)
@@ -300,6 +912,11 @@ class CampaignTests(unittest.TestCase):
                     boot["command_environment"]["MAKE_TOOL"],
                     value["environment"]["make"]["path"],
                 )
+                for name in ("CC", "HOSTCC", "HOST_CC"):
+                    self.assertEqual(
+                        boot["command_environment"][name],
+                        value["environment"]["host_cc"]["path"],
+                    )
                 self.assertIn(
                     Path(value["environment"]["git"]["path"]).parent.resolve(),
                     [
@@ -402,7 +1019,7 @@ class CampaignTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 campaign.CampaignError, "manifest parent differs"
             ):
-                campaign.record_scenario_boot(
+                campaign._record_scenario_boot_result(
                     repo=root,
                     manifest_path=relocated_scenario,
                     boot_id="boot-01",
@@ -425,7 +1042,7 @@ class CampaignTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     campaign.CampaignError, "manifest parent differs"
                 ):
-                    campaign.record_boot(
+                    campaign._record_boot_result(
                         repo=root,
                         manifest_path=relocated,
                         boot_id="boot-01",
@@ -495,7 +1112,7 @@ class CampaignTests(unittest.TestCase):
             value = json.loads(manifest.read_text(encoding="utf-8"))
             boot = value["boots"][0]
             (root / "build").mkdir()
-            (root / "nfs").mkdir()
+            (root / "nfs").mkdir(exist_ok=True)
             (root / "build/kernel").write_bytes(b"kernel")
             (root / "nfs/fs.img").write_bytes(
                 b"input:" + boot["challenge"].encode("ascii")
@@ -620,7 +1237,7 @@ class CampaignTests(unittest.TestCase):
             manifest = _create(root)
             boot = json.loads(manifest.read_text(encoding="utf-8"))["boots"][0]
             (root / "build").mkdir()
-            (root / "nfs").mkdir()
+            (root / "nfs").mkdir(exist_ok=True)
             (root / "build/kernel").write_bytes(b"kernel")
             (root / "nfs/fs.img").write_bytes(b"input")
             (root / "nfs/fs-copy.img").write_bytes(b"final")
@@ -765,7 +1382,7 @@ class CampaignTests(unittest.TestCase):
 
             @contextmanager
             def competing_record(_repo: Path):
-                campaign.record_boot(
+                campaign._record_boot_result(
                     repo=root,
                     manifest_path=manifest,
                     boot_id=boot["boot_id"],
@@ -816,6 +1433,26 @@ class CampaignTests(unittest.TestCase):
                     ):
                         with campaign.exclusive_evaluation_campaign_lock(root):
                             self.fail("a second campaign acquired the named lock")
+
+    def test_scenario_coordination_lock_is_distinct_and_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo_lock = root / ".per-target-repo.lock"
+            with mock.patch.object(
+                action_runner, "_run_lock_path", return_value=repo_lock
+            ):
+                scenario_lock = campaign._scenario_coordination_lock_path(root)
+                self.assertNotEqual(scenario_lock, repo_lock)
+                self.assertNotEqual(scenario_lock, campaign._campaign_lock_path(root))
+                self.assertEqual(
+                    scenario_lock.name, ".agentos-evaluation-scenario.lock"
+                )
+                with campaign.exclusive_scenario_coordination_lock(root):
+                    with self.assertRaisesRegex(
+                        campaign.ScenarioBusy, "another scenario collector"
+                    ):
+                        with campaign.exclusive_scenario_coordination_lock(root):
+                            self.fail("a second collector acquired the scenario lock")
 
     def test_campaign_command_starts_only_after_named_lock_is_held(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -898,6 +1535,9 @@ class CampaignTests(unittest.TestCase):
                 campaign.verify_campaign_lock_lease(repo=root, token=token)
 
         bash = shutil.which("bash")
+        if sys.platform == "cygwin":
+            runtime_bash = Path(sys.executable).resolve().parent / "bash.exe"
+            bash = str(runtime_bash) if runtime_bash.is_file() else None
         if os.name == "nt":
             git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
             bash = str(git_bash) if git_bash.is_file() else None
@@ -908,6 +1548,8 @@ class CampaignTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 env={
                     key: value
@@ -927,7 +1569,7 @@ class CampaignTests(unittest.TestCase):
             input_image = root / "nfs" / "fs.img"
             final_image = root / "nfs" / "fs-copy.img"
             kernel.parent.mkdir(parents=True)
-            input_image.parent.mkdir(parents=True)
+            input_image.parent.mkdir(parents=True, exist_ok=True)
             kernel.write_bytes(b"kernel")
             input_image.write_bytes(b"input image")
             final_image.write_bytes(b"final image")
@@ -944,7 +1586,7 @@ class CampaignTests(unittest.TestCase):
                     guest.parent.mkdir(parents=True)
                     guest.write_text(_guest_log(boot["challenge"]), encoding="utf-8")
                     runner.write_text("runner completed\n", encoding="utf-8")
-                    campaign.record_boot(
+                    campaign._record_boot_result(
                         repo=root,
                         manifest_path=manifest,
                         boot_id=boot["boot_id"],
@@ -960,6 +1602,12 @@ class CampaignTests(unittest.TestCase):
             run_plan = manifest.parent / "run-plan.json"
             plan = campaign.export_run_plan(manifest, run_plan)
             self.assertEqual(plan["kind"], "agentos-evaluation-run-plan")
+            self.assertEqual(plan["schema_version"], 2)
+            self.assertEqual(plan["stop_rule"], measurement_source.STOP_RULE)
+            self.assertEqual(
+                plan["measurement_source_receipt"],
+                value["measurement_source_receipt"],
+            )
             self.assertEqual(len(plan["logs"]), 7)
             self.assertEqual(plan["logs"][0]["path"], "boot-01/guest.log")
             self.assertEqual(plan["logs"][0]["status"], "supported")
@@ -979,7 +1627,10 @@ class CampaignTests(unittest.TestCase):
                 suite = root / "ci" / "evaluation-suite.json"
                 original_suite = suite.read_text(encoding="utf-8")
                 suite.write_text('{"schema_version":2}\n', encoding="utf-8")
-                with self.assertRaisesRegex(campaign.CampaignError, "suite changed"):
+                with self.assertRaisesRegex(
+                    campaign.CampaignError,
+                    "suite changed|measurement timing sources changed",
+                ):
                     campaign.check_campaign(root, manifest, require_collected=True)
                 suite.write_text(original_suite, encoding="utf-8")
                 archived_kernel = root / value["boots"][0]["kernel_path"]
@@ -1007,7 +1658,7 @@ class CampaignTests(unittest.TestCase):
             input_image = root / "nfs" / "fs.img"
             final_image = root / "nfs" / "fs-copy.img"
             kernel.parent.mkdir(parents=True)
-            input_image.parent.mkdir(parents=True)
+            input_image.parent.mkdir(parents=True, exist_ok=True)
             kernel.write_bytes(b"kernel")
             input_image.write_bytes(b"input image")
             final_image.write_bytes(b"final image")
@@ -1015,7 +1666,7 @@ class CampaignTests(unittest.TestCase):
                 campaign, "repository_identity", return_value=(COMMIT, True)
             ):
                 with self.assertRaisesRegex(campaign.CampaignError, "challenge"):
-                    campaign.record_boot(
+                    campaign._record_boot_result(
                         repo=root,
                         manifest_path=manifest,
                         boot_id=boot["boot_id"],
@@ -1031,7 +1682,7 @@ class CampaignTests(unittest.TestCase):
             with mock.patch.object(
                 campaign, "repository_identity", return_value=(COMMIT, True)
             ):
-                campaign.record_boot(
+                campaign._record_boot_result(
                     repo=root,
                     manifest_path=manifest,
                     boot_id=boot["boot_id"],
@@ -1113,6 +1764,13 @@ class CampaignTests(unittest.TestCase):
             self.assertEqual(len(challenges), len(set(challenges)))
             self.assertTrue(all(campaign.SCENARIO_CHALLENGE_RE.fullmatch(item) for item in challenges))
             self.assertEqual(
+                challenges,
+                [
+                    campaign._derive_scenario_challenge(COMMIT, number)
+                    for number in range(1, 8)
+                ],
+            )
+            self.assertEqual(
                 [boot["target_order"] for boot in scenario["boots"]],
                 ["plain-agentos", "agentos-plain", "plain-agentos", "agentos-plain", "plain-agentos", "agentos-plain", "plain-agentos"],
             )
@@ -1121,6 +1779,11 @@ class CampaignTests(unittest.TestCase):
                 scenario["boots"][0]["command_environment"]["QEMU"],
                 "/usr/bin/qemu-system-riscv64",
             )
+            for name in ("CC", "HOSTCC", "HOST_CC"):
+                self.assertEqual(
+                    scenario["boots"][0]["command_environment"][name],
+                    "/usr/bin/cc",
+                )
             self.assertTrue(Path(scenario["boots"][0]["command_argv"][0]).is_absolute())
             with mock.patch.object(
                 campaign, "repository_identity", return_value=(COMMIT, True)
@@ -1142,7 +1805,7 @@ class CampaignTests(unittest.TestCase):
                         ),
                         encoding="utf-8",
                     )
-                    campaign.record_scenario_boot(
+                    campaign._record_scenario_boot_result(
                         repo=root,
                         manifest_path=scenario_plan,
                         boot_id=boot["boot_id"],
@@ -1151,21 +1814,25 @@ class CampaignTests(unittest.TestCase):
                         host_summary=summary,
                     )
             report = scenario_plan.parent / "report.json"
-            report.write_text(
-                json.dumps(
-                    {
-                        "status": "inconclusive",
-                        "source_commit": COMMIT,
-                        "run_id": "run-1",
-                        "summary": {
-                            "independent_boots": 7,
-                            "unique_challenges": 7,
-                            "target_order_balanced": True,
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
+            report_payload = {
+                "status": "unknown",
+                "source_commit": COMMIT,
+                "run_id": "run-1",
+                "summary": {
+                    "independent_boots": 7,
+                    "unique_challenges": 7,
+                    "target_order_balanced": True,
+                },
+            }
+            report.write_text(json.dumps(report_payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "did not produce a bound report"
+            ):
+                campaign.record_scenario_report(
+                    repo=root, manifest_path=scenario_plan, report_path=report
+                )
+            report_payload["status"] = "regressed"
+            report.write_text(json.dumps(report_payload), encoding="utf-8")
             campaign.record_scenario_report(
                 repo=root, manifest_path=scenario_plan, report_path=report
             )
@@ -1200,13 +1867,24 @@ class CampaignTests(unittest.TestCase):
             Path(__file__).resolve().parents[1] / "scripts" / "run-evaluation-suite.sh"
         ).read_text(encoding="utf-8")
         campaign_source = Path(campaign.__file__).read_text(encoding="utf-8")
-        self.assertIn("EVALUATION_BOOTS:-7", script)
+        self.assertIn("FORMAL_MICRO_BOOTS=7", script)
+        self.assertIn("EVALUATION_BOOTS:-${FORMAL_MICRO_BOOTS}", script)
         self.assertIn("EVALUATION_INCLUDE_SCENARIO:-1", script)
-        self.assertIn("EVALUATION_SCENARIO_BOOTS:-7", script)
+        self.assertIn("FORMAL_SCENARIO_BOOTS=7", script)
+        self.assertIn(
+            "EVALUATION_SCENARIO_BOOTS:-${FORMAL_SCENARIO_BOOTS}", script
+        )
+        self.assertIn('formal_id="formal-${commit}"', script)
+        self.assertIn(
+            "formal EVALUATION_RUN_ID must equal ${formal_id}", script
+        )
+        self.assertIn("write_measurement_source_receipt \"${commit}\"", script)
+        self.assertIn("verify_measurement_source_receipt", script)
         self.assertIn('"AGENT_TEST_CASE": "agenteval_ucore"', campaign_source)
         self.assertIn('"AGENT_EVAL_CHALLENGE_HEX": challenge', campaign_source)
         self.assertIn("get-boot-field", script)
         self.assertIn("run-boot", script)
+        self.assertNotIn('subparsers.add_parser("record")', campaign_source)
         self.assertIn("EVALUATION_MICRO_TIMEOUT:-900", script)
         self.assertIn("with-campaign-lock", script)
         self.assertIn("__run_locked", script)
@@ -1215,13 +1893,15 @@ class CampaignTests(unittest.TestCase):
         self.assertIn("exclusive_evaluation_campaign_lock", campaign_source)
         self.assertIn("CREATE_NEW_PROCESS_GROUP", campaign_source)
         self.assertIn("start_new_session", campaign_source)
-        self.assertIn("micro boot exceeded", campaign_source)
+        self.assertIn('deadline_label: str = "micro boot"', campaign_source)
+        self.assertIn("scenario_pair_deadline_contract", campaign_source)
         self.assertIn('"${CONTRACT_TOOL}" build', script)
         self.assertIn('"${CONTRACT_TOOL}" verify', script)
         self.assertIn('input_image=repo / "nfs/fs.img"', campaign_source)
         self.assertIn('final_image=repo / "nfs/fs-copy.img"', campaign_source)
         self.assertIn("create-scenario", script)
         self.assertIn("run-scenario-boot", script)
+        self.assertNotIn('subparsers.add_parser("record-scenario")', campaign_source)
         self.assertIn("check-scenario", script)
         self.assertNotIn('"QEMU=${QEMU}"', script)
         self.assertIn("scenario report differs from a raw-source replay", script)
@@ -1240,6 +1920,100 @@ class CampaignTests(unittest.TestCase):
         self.assertIn('--make-tool "${make_python_path}"', script)
         self.assertIn('--size-tool "${size_python_path}"', script)
         self.assertNotIn("|| true", script)
+
+    def test_scenario_coordination_allows_child_target_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            micro = _create(root)
+            for name in ("evaluation_scenario.py", "check_seeded_action_state.py"):
+                source = root / "host_tools" / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"# {name}\n", encoding="utf-8")
+            scenario_path = micro.parent / "scenario" / "scenario-plan.json"
+            execution_environment = _scenario_environment()
+            with (
+                mock.patch.object(
+                    campaign, "repository_identity", return_value=(COMMIT, True)
+                ),
+                mock.patch.object(
+                    campaign,
+                    "_probe_scenario_environment",
+                    return_value=execution_environment,
+                ),
+            ):
+                scenario = campaign.create_scenario_campaign(
+                    repo=root,
+                    micro_manifest=micro,
+                    output=scenario_path,
+                    requested_boots=7,
+                    timeout_seconds=600,
+                    wsl_distro="Ubuntu",
+                )
+            boot = scenario["boots"][0]
+            repo_lock = root / ".per-target-repo.lock"
+            child_lock_acquired: list[bool] = []
+
+            def run_scenario(**kwargs: object) -> int:
+                self.assertEqual(
+                    campaign._scenario_coordination_lock_path(root).name,
+                    ".agentos-evaluation-scenario.lock",
+                )
+                with action_runner.exclusive_repo_run_lock(root):
+                    child_lock_acquired.append(True)
+                    with self.assertRaises(action_runner.RepoRunBusy):
+                        with action_runner.exclusive_repo_run_lock(root):
+                            self.fail("a concurrent target runner acquired the repo lock")
+                    runner_log = kwargs["runner_log"]
+                    self.assertIsInstance(runner_log, Path)
+                    runner_log.write_text(
+                        "scenario child completed\n", encoding="utf-8"
+                    )
+                    host_summary = root / str(boot["host_summary"])
+                    host_summary.write_text(
+                        json.dumps(
+                            {
+                                "status": "ready",
+                                "challenge": boot["challenge"],
+                                "target_order": boot["target_order"],
+                                "plain": {"status": "ready"},
+                                "agentos": {"status": "ready"},
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                return 0
+
+            with (
+                mock.patch.object(
+                    action_runner, "_run_lock_path", return_value=repo_lock
+                ),
+                mock.patch.object(
+                    campaign, "_run_micro_process", side_effect=run_scenario
+                ),
+                mock.patch.object(
+                    campaign,
+                    "_probe_scenario_environment",
+                    return_value=execution_environment,
+                ),
+                mock.patch.object(
+                    campaign, "repository_identity", return_value=(COMMIT, True)
+                ),
+            ):
+                self.assertEqual(
+                    campaign.execute_and_record_scenario_boot(
+                        repo=root,
+                        manifest_path=scenario_path,
+                        boot_id="boot-01",
+                    ),
+                    0,
+                )
+
+            self.assertEqual(child_lock_acquired, [True])
+            recorded = json.loads(scenario_path.read_text(encoding="utf-8"))[
+                "boots"
+            ][0]
+            self.assertEqual(recorded["status"], "passed")
 
     def test_scenario_boot_rechecks_source_after_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1269,11 +2043,14 @@ class CampaignTests(unittest.TestCase):
                     wsl_distro="Ubuntu",
                 )
 
+            observed_timeouts: list[int | None] = []
+
             class FakeProcess:
                 returncode = 0
 
                 @staticmethod
                 def communicate(timeout: int | None = None) -> tuple[str, None]:
+                    observed_timeouts.append(timeout)
                     return "scenario completed\n", None
 
             with (
@@ -1302,6 +2079,89 @@ class CampaignTests(unittest.TestCase):
                     )
             planned = json.loads(scenario_path.read_text(encoding="utf-8"))["boots"][0]
             self.assertEqual(planned["status"], "planned")
+            self.assertEqual(observed_timeouts, [3860])
+
+    def test_scenario_pair_timeout_uses_derived_hard_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            micro = _create(root)
+            for name in ("evaluation_scenario.py", "check_seeded_action_state.py"):
+                source = root / "host_tools" / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"# {name}\n", encoding="utf-8")
+            scenario_path = micro.parent / "scenario" / "scenario-plan.json"
+            with (
+                mock.patch.object(
+                    campaign, "repository_identity", return_value=(COMMIT, True)
+                ),
+                mock.patch.object(
+                    campaign,
+                    "_probe_scenario_environment",
+                    return_value=_scenario_environment(),
+                ),
+            ):
+                scenario = campaign.create_scenario_campaign(
+                    repo=root,
+                    micro_manifest=micro,
+                    output=scenario_path,
+                    requested_boots=7,
+                    timeout_seconds=600,
+                    wsl_distro="Ubuntu",
+                )
+
+            class TimedOutProcess:
+                returncode = -9
+                stdout = None
+                communicate_calls = 0
+
+                def communicate(
+                    process: "TimedOutProcess", timeout: int | None = None
+                ) -> tuple[str, None]:
+                    process.communicate_calls += 1
+                    if process.communicate_calls == 1:
+                        self.assertEqual(timeout, 3860)
+                        raise subprocess.TimeoutExpired(
+                            scenario["boots"][0]["command_argv"],
+                            timeout,
+                            output=b"partial scenario output\n",
+                        )
+                    self.assertEqual(timeout, 5)
+                    return "partial scenario output\n", None
+
+            with (
+                mock.patch.object(
+                    action_runner,
+                    "_run_lock_path",
+                    return_value=root / ".evaluation-test.lock",
+                ),
+                mock.patch.object(
+                    campaign.subprocess, "Popen", return_value=TimedOutProcess()
+                ),
+                mock.patch.object(campaign, "_terminate_micro_process") as terminate,
+                mock.patch.object(
+                    campaign,
+                    "_probe_scenario_environment",
+                    return_value=_scenario_environment(),
+                ),
+                mock.patch.object(
+                    campaign, "repository_identity", return_value=(COMMIT, True)
+                ),
+            ):
+                rc = campaign.execute_and_record_scenario_boot(
+                    repo=root,
+                    manifest_path=scenario_path,
+                    boot_id="boot-01",
+                )
+
+            self.assertEqual(rc, 124)
+            terminate.assert_called_once()
+            runner_log = root / scenario["boots"][0]["runner_log"]
+            retained = runner_log.read_text(encoding="utf-8")
+            self.assertIn("partial scenario output", retained)
+            self.assertIn("scenario pair exceeded 3860s total deadline", retained)
+            recorded = json.loads(scenario_path.read_text(encoding="utf-8"))["boots"][0]
+            self.assertEqual(recorded["status"], "failed")
+            self.assertEqual(recorded["exit_code"], 124)
 
 
 if __name__ == "__main__":

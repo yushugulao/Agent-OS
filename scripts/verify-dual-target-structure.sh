@@ -110,6 +110,7 @@ rp_revdash.c
 rp_reviewboard.c
 rp_runbooks.c
 rp_service_surface.c
+rp_seed_orch.c
 rp_stdesign.c
 rp_studyproto.c
 rp_sysreview.c
@@ -229,6 +230,7 @@ require_path "scripts/run-thread-resource-tests.sh" "thread resource runner is m
 require_path "scripts/run-workflow-teardown-race-tests.sh" "workflow teardown race runner is missing"
 require_path "scripts/evidence-wiring.sh" "final evidence runner wiring is missing"
 require_path "scripts/capture-final-evidence.py" "final evidence collector is missing"
+require_path "host_tools/evidence_toolchain_attestation.py" "final evidence tool attestation module is missing"
 require_path "host_tools/test_capture_final_evidence.py" "final evidence selftest is missing"
 require_path "host_tools/evidence_delivery_contract.py" "final evidence delivery contract is missing"
 require_path "host_tools/test_evidence_delivery_contract.py" "final evidence delivery mutations are missing"

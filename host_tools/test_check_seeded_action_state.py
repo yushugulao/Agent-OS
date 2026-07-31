@@ -21,12 +21,29 @@ class SeededActionStateTests(unittest.TestCase):
         self.assertEqual(values.run_id, "RUN-123")
         self.assertEqual(actions[0]["payload"]["run_id"], "RUN-123-rerun")
         self.assertEqual(actions[12]["payload"]["workflow_id"], "wf-host-123")
-        self.assertEqual(actions[8]["payload"]["sha256"], "sha-derived-123")
+        input_data, derived_data = checker.task6_artifact_payloads(challenge)
+        self.assertEqual(actions[7]["payload"]["content_hex"], input_data.hex())
+        self.assertEqual(actions[7]["payload"]["sha256"], values.input_sha256)
+        self.assertEqual(actions[8]["payload"]["sha256"], values.derived_sha256)
+        self.assertEqual(actions[8]["payload"]["bytes"], str(len(derived_data)))
+        self.assertRegex(values.input_sha256, r"[0-9a-f]{64}")
+        self.assertRegex(values.derived_sha256, r"[0-9a-f]{64}")
         self.assertEqual(actions[14]["payload"]["cache_key"], "cache:RUN-123:profile")
         with self.assertRaises(ValueError):
             checker.derive_challenge("ch-123")
         with self.assertRaises(ValueError):
             checker.derive_challenge("ch-00000000012a")
+
+    def test_task6_payload_bytes_change_with_the_host_challenge(self) -> None:
+        first = checker.task6_artifact_payloads("ch-000000000001")
+        second = checker.task6_artifact_payloads("ch-000000000002")
+
+        self.assertNotEqual(first[0], second[0])
+        self.assertNotEqual(first[1], second[1])
+        self.assertNotEqual(
+            checker.derive_challenge("ch-000000000001").input_sha256,
+            checker.derive_challenge("ch-000000000002").input_sha256,
+        )
 
     def test_challenge_receipt_and_run_summary_are_bound(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,6 +167,10 @@ class SeededActionStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             state = run_dir / "state-extracted"
+            values = checker.derive_challenge(checker.DEFAULT_CHALLENGE)
+            input_data, derived_data = checker.task6_artifact_payloads(
+                checker.DEFAULT_CHALLENGE
+            )
             write(
                 state / "rp_host_action_seed",
                 "\n".join(f"kind={kind}" for kind in checker.seeded_action_kinds())
@@ -196,15 +217,22 @@ class SeededActionStateTests(unittest.TestCase):
             write(
                 state / "rp_artifact_manifest",
                 "host_manifest_rerun=RUN-999-rerun;parent=RUN-999;status=ready\n"
-                "host_artifact_manifest_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize;stage=analyze;sha256=sha-derived-999\n"
+                f"host_artifact_manifest_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize_ppm;stage=analyze;sha256={values.derived_sha256}\n"
                 "host_manifest_workbench_task=draft\n"
-                "host_workflow_artifact_action=align.bam;kind=alignment;sha256=sha-host-artifact;bytes=4096\n",
+                f"host_workflow_artifact_action=normalized-counts.csv;kind=counts_csv;sha256={values.derived_sha256};bytes={values.derived_bytes}\n",
             )
             write(
                 state / "rp_artifact",
-                "host_artifact_input=reads_R1.fastq;kind=fastq;sha256=sha-input-999;bytes=2048;source=upload\n"
-                "host_artifact_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize;stage=analyze;sha256=sha-derived-999\n",
+                f"host_artifact_input=raw-counts.csv;kind=counts_csv;sha256={values.input_sha256};bytes={values.input_bytes};source=host_challenge\n"
+                f"host_artifact_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize_ppm;stage=analyze;sha256={values.derived_sha256}\n"
+                f"task6_artifact_receipt={checker.TASK6_ARTIFACT_RECEIPT_SCHEMA};challenge={checker.DEFAULT_CHALLENGE};"
+                f"input_storage={checker.TASK6_ARTIFACT_INPUT_STORAGE};input_bytes={values.input_bytes};"
+                f"input_fnv64={values.input_fnv64};input_sha256={values.input_sha256};"
+                f"output_storage={checker.TASK6_ARTIFACT_OUTPUT_STORAGE};output_bytes={values.derived_bytes};"
+                f"output_fnv64={values.derived_fnv64};output_sha256={values.derived_sha256};operation=normalize_ppm\n",
             )
+            (state / checker.TASK6_ARTIFACT_INPUT_STORAGE).write_bytes(input_data)
+            (state / checker.TASK6_ARTIFACT_OUTPUT_STORAGE).write_bytes(derived_data)
             write(state / "rp_stage_log", "host_artifact_log=align.log;stage=align;level=warn;message=quality_gate_retry\n")
             write(state / "rp_chart_data", "host_artifact_chart=qc-chart.json;type=line;data_file=normalized-counts.csv;points=12\n")
             write(state / "rp_package", "host_artifact_package=artifact-bundle.zip;manifest=artifact-manifest.json;files=5;status=ready\n")
@@ -280,6 +308,47 @@ class SeededActionStateTests(unittest.TestCase):
             self.assertTrue(any("rp_input missing host_action_rerun_parent=RUN-999" in item for item in failures))
             self.assertTrue(any("rp_artifact_manifest missing host_manifest_rerun" in item for item in failures))
             self.assertTrue(any("missing rp_artifact" in item for item in failures))
+
+    def test_task6_artifact_validation_rejects_changed_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            input_data, output_data = checker.task6_artifact_payloads(
+                checker.DEFAULT_CHALLENGE
+            )
+            rows = input_data.splitlines(keepends=True)
+            name, count = rows[1].rstrip(b"\n").rsplit(b",", 1)
+            rows[1] = name + b"," + str(int(count) + 1).encode("ascii") + b"\n"
+            (state / checker.TASK6_ARTIFACT_INPUT_STORAGE).write_bytes(
+                b"".join(rows)
+            )
+            (state / checker.TASK6_ARTIFACT_OUTPUT_STORAGE).write_bytes(output_data)
+
+            failures = checker.validate_task6_artifact_bytes("plain", state)
+
+            self.assertTrue(any("Host challenge workload" in item for item in failures))
+
+    def test_task6_artifact_validation_uses_bytes_not_claimed_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            input_data, output_data = checker.task6_artifact_payloads(
+                checker.DEFAULT_CHALLENGE
+            )
+            rows = output_data.splitlines(keepends=True)
+            name, value = rows[1].rstrip(b"\n").rsplit(b",", 1)
+            rows[1] = name + b"," + str(int(value) + 1).encode("ascii") + b"\n"
+            forged = b"".join(rows)
+            (state / checker.TASK6_ARTIFACT_INPUT_STORAGE).write_bytes(input_data)
+            (state / checker.TASK6_ARTIFACT_OUTPUT_STORAGE).write_bytes(forged)
+            # A caller can recompute labels for forged bytes; validation still
+            # anchors the accepted output to the registered transformation.
+            self.assertNotEqual(
+                checker.task6_fnv64(forged),
+                checker.derive_challenge(checker.DEFAULT_CHALLENGE).derived_fnv64,
+            )
+
+            failures = checker.validate_task6_artifact_bytes("agentos", state)
+
+            self.assertTrue(any("Host challenge workload" in item for item in failures))
 
 
 if __name__ == "__main__":

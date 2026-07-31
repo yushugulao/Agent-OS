@@ -9,6 +9,39 @@ belongs to ``evaluation_contract.py``.
 
 from __future__ import annotations
 
+import sys as _entry_sys
+
+
+def _isolate_direct_entry_imports() -> None:
+    """Use only interpreter-owned paths for top-level import resolution."""
+
+    if __name__ != "__main__":
+        return
+    prefixes = {
+        value.replace("\\", "/").rstrip("/").casefold()
+        for value in (
+            _entry_sys.base_prefix,
+            _entry_sys.base_exec_prefix,
+            _entry_sys.prefix,
+            _entry_sys.exec_prefix,
+        )
+        if value
+    }
+    _entry_sys.path[:] = [
+        value
+        for value in _entry_sys.path
+        if value
+        and any(
+            (normalized := value.replace("\\", "/").rstrip("/").casefold())
+            == prefix
+            or normalized.startswith(f"{prefix}/")
+            for prefix in prefixes
+        )
+    ]
+
+
+_isolate_direct_entry_imports()
+
 import argparse
 import hashlib
 import json
@@ -19,28 +52,140 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Iterable
 
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = str(
+        Path(tempfile.gettempdir()) / f"agentos-pycache-{os.urandom(16).hex()}"
+    )
+    if not __package__:
+        import types as _entry_types
+
+        _entry_package = _entry_types.ModuleType("host_tools")
+        _entry_package.__path__ = [str(Path(__file__).resolve().parent)]
+        _entry_package.__package__ = "host_tools"
+        sys.modules["host_tools"] = _entry_package
+        __package__ = "host_tools"
+        sys.path.append(_entry_package.__path__[0])
+
+try:
+    from .evidence_delivery_contract import (
+        DeliveryContractError,
+        controlled_git_environment,
+        tracked_worktree_identity,
+    )
+except ImportError:
+    from evidence_delivery_contract import (
+        DeliveryContractError,
+        controlled_git_environment,
+        tracked_worktree_identity,
+    )
+
+try:
+    from .evidence_toolchain_attestation import (
+        EVALUATION_ARTIFACT_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_ROOTS,
+        EVALUATION_CACHE_OUTPUT_ROOTS,
+        ToolAttestationError,
+        purge_evaluation_generated_outputs,
+        verify_evaluation_source_tree,
+    )
+except ImportError:
+    from evidence_toolchain_attestation import (
+        EVALUATION_ARTIFACT_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_ROOTS,
+        EVALUATION_CACHE_OUTPUT_ROOTS,
+        ToolAttestationError,
+        purge_evaluation_generated_outputs,
+        verify_evaluation_source_tree,
+    )
+
+try:
+    from .safe_host_paths import (
+        absolute_lexical_path,
+        atomic_write_bytes,
+        ensure_safe_directory,
+        path_is_link,
+        reject_link_components,
+        require_regular_file,
+        require_safe_directory,
+    )
+except ImportError:
+    from safe_host_paths import (
+        absolute_lexical_path,
+        atomic_write_bytes,
+        ensure_safe_directory,
+        path_is_link,
+        reject_link_components,
+        require_regular_file,
+        require_safe_directory,
+    )
+
+try:
+    from .agenteval_measurement_source_contract import (
+        FORMAL_BOOT_COUNT,
+        STOP_RULE as MEASUREMENT_STOP_RULE,
+        build_measurement_source_receipt,
+        validate_measurement_source_receipt_shape,
+        verify_measurement_source_files,
+    )
+except ImportError:
+    from agenteval_measurement_source_contract import (
+        FORMAL_BOOT_COUNT,
+        STOP_RULE as MEASUREMENT_STOP_RULE,
+        build_measurement_source_receipt,
+        validate_measurement_source_receipt_shape,
+        verify_measurement_source_files,
+    )
+
 
 KIND = "agentos-evaluation-campaign"
 SCENARIO_KIND = "agentos-evaluation-scenario-campaign"
-SCHEMA_VERSION = 1
-MINIMUM_BOOTS = 7
+SCHEMA_VERSION = 3
+SCENARIO_SCHEMA_VERSION = 4
+MINIMUM_BOOTS = FORMAL_BOOT_COUNT
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 BOOT_ID_RE = re.compile(r"^boot-[0-9]{2,4}$")
 SAMPLE_RE = re.compile(
-    r"^agenteval_ucore: sample schema=1 experiment=[a-z_]+ load=[0-9]+ "
+    r"^agenteval_ucore: sample schema=2 experiment=[a-z_]+ load=[0-9]+ "
     r"pair=([1-7]) variant=[a-z]+ order=(AB|BA) .* status=measured$"
 )
 CHALLENGE_RE = re.compile(r"^[0-9a-f]{16}$")
 SCENARIO_CHALLENGE_RE = re.compile(r"^ch-[0-9]{12}$")
 CAMPAIGN_LOCK_TOKEN_ENV = "AGENTOS_EVALUATION_CAMPAIGN_TOKEN"
 CAMPAIGN_LOCK_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
+SCENARIO_TARGET_COUNT = 2
+SCENARIO_COORDINATION_ALLOWANCE_SECONDS = 60
+SCENARIO_CLEAN_HOME = "/tmp"
+SCENARIO_CLEAN_PATH = (
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
+SCENARIO_CLEAN_ENVIRONMENT_KEYS = (
+    "CC",
+    "HOME",
+    "HOSTCC",
+    "HOST_CC",
+    "LANG",
+    "LC_ALL",
+    "MAKE_TOOL",
+    "PATH",
+    "QEMU",
+    "SHELL",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "TOOLPREFIX",
+    "TZ",
+)
 
 
 class CampaignError(ValueError):
@@ -49,6 +194,58 @@ class CampaignError(ValueError):
 
 class CampaignBusy(CampaignError):
     """Raised when another formal evaluation owns the campaign lock."""
+
+
+class ScenarioBusy(CampaignError):
+    """Raised when another collector owns the scenario manifest lock."""
+
+
+def _derive_micro_challenge(
+    source_commit: str, boot_number: int, occupied: set[str] | None = None
+) -> str:
+    """Derive one parity-balanced challenge from the public source identity."""
+
+    if COMMIT_RE.fullmatch(source_commit) is None or boot_number < 1:
+        raise CampaignError("micro challenge identity is invalid")
+    occupied = occupied or set()
+    counter = 0
+    while True:
+        material = (
+            f"agentos-evaluation-micro-challenge-v1\0{source_commit}\0"
+            f"{boot_number}\0{counter}"
+        ).encode("ascii")
+        numeric = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+        numeric = (numeric & ~1) | (boot_number & 1)
+        if numeric == 0:
+            numeric = 2
+        challenge = f"{numeric:016x}"
+        if challenge not in occupied:
+            return challenge
+        counter += 1
+
+
+def _derive_scenario_challenge(
+    source_commit: str, boot_number: int, occupied: set[str] | None = None
+) -> str:
+    """Derive one canonical scenario challenge from the public source identity."""
+
+    if COMMIT_RE.fullmatch(source_commit) is None or boot_number < 1:
+        raise CampaignError("scenario challenge identity is invalid")
+    occupied = occupied or set()
+    counter = 0
+    while True:
+        material = (
+            f"agentos-evaluation-scenario-challenge-v1\0{source_commit}\0"
+            f"{boot_number}\0{counter}"
+        ).encode("ascii")
+        numeric = (
+            int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+            % (10**12 - 1)
+        ) + 1
+        challenge = f"ch-{numeric:012d}"
+        if challenge not in occupied:
+            return challenge
+        counter += 1
 
 
 def _utc_now() -> str:
@@ -64,7 +261,13 @@ def _command_output(error: subprocess.SubprocessError) -> str:
     return str(output).replace("\x00", "").strip()[-4000:]
 
 
-def _run(argv: list[str], cwd: Path, *, timeout_seconds: int = 30) -> str:
+def _run(
+    argv: list[str],
+    cwd: Path,
+    *,
+    timeout_seconds: int = 30,
+    environment: dict[str, str] | None = None,
+) -> str:
     try:
         result = subprocess.run(
             argv,
@@ -76,6 +279,7 @@ def _run(argv: list[str], cwd: Path, *, timeout_seconds: int = 30) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=timeout_seconds,
+            env=environment,
         )
     except subprocess.TimeoutExpired as error:
         raise CampaignError(
@@ -101,37 +305,81 @@ def _sha256(path: Path) -> str:
 
 
 def _require_regular_file(path: Path, label: str, *, nonempty: bool = True) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise CampaignError(f"{label} is not a regular file: {path}")
-    if nonempty and path.stat().st_size == 0:
-        raise CampaignError(f"{label} is empty: {path}")
+    try:
+        require_regular_file(path, nonempty=nonempty)
+    except (OSError, ValueError) as error:
+        raise CampaignError(f"{label} is not a safe regular file: {path}") from error
+
+
+def _require_safe_directory(path: Path, label: str) -> Path:
+    try:
+        return require_safe_directory(path)
+    except (OSError, ValueError) as error:
+        raise CampaignError(f"{label} is not a safe directory: {path}") from error
+
+
+def _ensure_safe_directory(path: Path, label: str) -> Path:
+    try:
+        return ensure_safe_directory(path)
+    except (OSError, ValueError) as error:
+        raise CampaignError(f"{label} is not a safe directory: {path}") from error
+
+
+def _reject_link_components(path: Path, label: str) -> Path:
+    try:
+        return reject_link_components(path)
+    except (OSError, ValueError) as error:
+        raise CampaignError(f"{label} is link-backed: {path}") from error
+
+
+def _resolved_safe_directory(path: Path, label: str) -> Path:
+    return _require_safe_directory(absolute_lexical_path(path), label).resolve(strict=True)
+
+
+def _resolved_safe_file(path: Path, label: str, *, nonempty: bool = True) -> Path:
+    _require_regular_file(absolute_lexical_path(path), label, nonempty=nonempty)
+    return absolute_lexical_path(path).resolve(strict=True)
+
+
+def _safe_output_path(path: Path, label: str) -> Path:
+    absolute = absolute_lexical_path(path)
+    _reject_link_components(absolute, label)
+    _ensure_safe_directory(absolute.parent, f"{label} parent")
+    if path_is_link(absolute):
+        raise CampaignError(f"{label} is link-backed: {absolute}")
+    return absolute
+
+
+def _resolved_link_free_path(path: Path, label: str) -> Path:
+    return _reject_link_components(
+        absolute_lexical_path(path), label
+    ).resolve(strict=False)
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.parent.is_symlink():
-        raise CampaignError(f"manifest parent must not be a symlink: {path.parent}")
-    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     try:
-        temporary.write_text(
-            json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-            newline="\n",
+        atomic_write_bytes(
+            path,
+            (
+                json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True)
+                + "\n"
+            ).encode("utf-8"),
         )
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    except (OSError, ValueError) as error:
+        raise CampaignError(f"manifest output is unsafe: {path}") from error
 
 
 def _atomic_copy(source: Path, destination: Path, label: str) -> None:
     _require_regular_file(source, label)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.parent.is_symlink() or destination.is_symlink():
-        raise CampaignError(f"{label} archive path must not be a symlink: {destination}")
+    parent = _ensure_safe_directory(destination.parent, f"{label} archive parent")
+    if path_is_link(destination):
+        raise CampaignError(f"{label} archive path must not be link-backed: {destination}")
     temporary = destination.with_name(f".{destination.name}.tmp.{os.getpid()}")
     try:
         shutil.copyfile(source, temporary)
+        _reject_link_components(parent, f"{label} archive parent")
+        if path_is_link(destination):
+            raise CampaignError(f"{label} archive path became link-backed: {destination}")
         os.replace(temporary, destination)
     except OSError as error:
         raise CampaignError(f"failed to archive {label}: {error}") from error
@@ -145,7 +393,7 @@ def _campaign_lock_path(repo: Path) -> Path:
 
     from plain_ucore_action_runner import _run_lock_path
 
-    return _run_lock_path(repo.resolve()).with_name(
+    return _run_lock_path(_require_safe_directory(repo, "repository")).with_name(
         ".agentos-evaluation-campaign.lock"
     )
 
@@ -156,6 +404,16 @@ def _campaign_lease_path(repo: Path) -> Path:
     )
 
 
+def _scenario_coordination_lock_path(repo: Path) -> Path:
+    """Keep manifest coordination distinct from destructive target locks."""
+
+    from plain_ucore_action_runner import _run_lock_path
+
+    return _run_lock_path(_require_safe_directory(repo, "repository")).with_name(
+        ".agentos-evaluation-scenario.lock"
+    )
+
+
 @contextmanager
 def exclusive_evaluation_campaign_lock(repo: Path):
     """Fail closed when a complete formal campaign is already in progress."""
@@ -163,13 +421,38 @@ def exclusive_evaluation_campaign_lock(repo: Path):
     from plain_ucore_action_runner import _try_lock_file, _unlock_file
 
     lock_path = _campaign_lock_path(repo)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_safe_directory(lock_path.parent, "campaign lock parent")
+    if path_is_link(lock_path):
+        raise CampaignError(f"campaign lock is link-backed: {lock_path}")
     with lock_path.open("a+b") as handle:
         try:
             _try_lock_file(handle)
         except OSError as error:
             raise CampaignBusy(
                 f"another formal evaluation campaign is running: {repo.resolve()}"
+            ) from error
+        try:
+            yield
+        finally:
+            _unlock_file(handle)
+
+
+@contextmanager
+def exclusive_scenario_coordination_lock(repo: Path):
+    """Serialize scenario state without holding a lock needed by its child."""
+
+    from plain_ucore_action_runner import _try_lock_file, _unlock_file
+
+    lock_path = _scenario_coordination_lock_path(repo)
+    _ensure_safe_directory(lock_path.parent, "scenario lock parent")
+    if path_is_link(lock_path):
+        raise CampaignError(f"scenario lock is link-backed: {lock_path}")
+    with lock_path.open("a+b") as handle:
+        try:
+            _try_lock_file(handle)
+        except OSError as error:
+            raise ScenarioBusy(
+                f"another scenario collector is running: {repo.resolve()}"
             ) from error
         try:
             yield
@@ -187,7 +470,8 @@ def execute_under_campaign_lock(*, repo: Path, command: list[str]) -> int:
     with exclusive_evaluation_campaign_lock(repo):
         token = secrets.token_hex(32)
         lease_path = _campaign_lease_path(repo)
-        if lease_path.exists() or lease_path.is_symlink():
+        _reject_link_components(lease_path.parent, "campaign lease parent")
+        if lease_path.exists() or path_is_link(lease_path):
             raise CampaignError(
                 f"stale or unsafe campaign lease must be removed: {lease_path}"
             )
@@ -231,8 +515,7 @@ def verify_campaign_lock_lease(*, repo: Path, token: str) -> None:
     if CAMPAIGN_LOCK_TOKEN_RE.fullmatch(token) is None:
         raise CampaignError("campaign lock token is missing or malformed")
     lease_path = _campaign_lease_path(repo)
-    if lease_path.is_symlink() or not lease_path.is_file():
-        raise CampaignError("campaign lock lease is missing or unsafe")
+    _require_regular_file(lease_path, "campaign lock lease")
     try:
         supplied = lease_path.read_text(encoding="ascii")
     except (OSError, UnicodeError) as error:
@@ -246,8 +529,7 @@ def verify_campaign_lock_lease(*, repo: Path, token: str) -> None:
         pass
     else:
         raise CampaignError("campaign lock lease exists without a held lock")
-    if lease_path.is_symlink() or not lease_path.is_file():
-        raise CampaignError("campaign lock lease disappeared during verification")
+    _require_regular_file(lease_path, "campaign lock lease after verification")
     try:
         final_value = lease_path.read_text(encoding="ascii")
     except (OSError, UnicodeError) as error:
@@ -294,8 +576,12 @@ def _expect_keys(value: dict[str, Any], keys: Iterable[str], label: str) -> None
 
 
 def _repo_relative(repo: Path, path: Path) -> str:
+    repository = _require_safe_directory(repo, "repository")
+    candidate = _reject_link_components(path, "repository path")
     try:
-        relative = path.resolve().relative_to(repo.resolve())
+        relative = candidate.resolve(strict=False).relative_to(
+            repository.resolve(strict=True)
+        )
     except ValueError as error:
         raise CampaignError(f"path escapes repository: {path}") from error
     if not relative.parts:
@@ -374,16 +660,46 @@ def _require_manifest_artifact_root(
 
 
 def repository_identity(repo: Path) -> tuple[str, bool]:
-    root_text = _run(["git", "rev-parse", "--show-toplevel"], repo).strip()
-    if Path(root_text).resolve() != repo.resolve():
+    repo = _require_safe_directory(repo, "repository")
+    git_name = shutil.which("git")
+    if git_name is None:
+        raise CampaignError("Git executable is unavailable")
+    git = _resolved_safe_file(Path(git_name), "Git executable")
+    environment = controlled_git_environment()
+    root_text = _run(
+        [str(git), "-c", "core.fsmonitor=false", "-c",
+         "core.untrackedCache=false", "rev-parse", "--show-toplevel"],
+        repo,
+        environment=environment,
+    ).strip()
+    observed = _require_safe_directory(Path(root_text), "Git repository root")
+    try:
+        same_repository = os.path.samefile(observed, repo)
+    except OSError:
+        same_repository = False
+    if not same_repository:
         raise CampaignError(f"repository root differs from --repo: {root_text}")
-    commit = _run(["git", "rev-parse", "HEAD"], repo).strip()
+    commit = _run(
+        [str(git), "-c", "core.fsmonitor=false", "-c",
+         "core.untrackedCache=false", "rev-parse", "HEAD"],
+        repo, environment=environment
+    ).strip()
     if not COMMIT_RE.fullmatch(commit):
         raise CampaignError(f"invalid Git commit identity: {commit!r}")
+    try:
+        tracked_clean, _tracked_digest = tracked_worktree_identity(
+            str(git), repo
+        )
+    except DeliveryContractError as error:
+        raise CampaignError(f"tracked source identity is unsafe: {error}") from error
     status = _run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"], repo
+        [str(git), "-c", "core.fsmonitor=false", "-c",
+         "core.untrackedCache=false", "status", "--porcelain=v1",
+         "--untracked-files=all"],
+        repo,
+        environment=environment,
     )
-    return commit, status == ""
+    return commit, status == "" and tracked_clean
 
 
 def _require_repository_identity(repo: Path, expected_commit: str, stage: str) -> None:
@@ -395,19 +711,117 @@ def _require_repository_identity(repo: Path, expected_commit: str, stage: str) -
         )
 
 
+def _evaluation_output_roots(artifact_root: object) -> tuple[str, ...]:
+    root = _artifact_root(artifact_root)
+    return (
+        *EVALUATION_BUILD_OUTPUT_ROOTS,
+        *EVALUATION_CACHE_OUTPUT_ROOTS,
+        root.as_posix(),
+    )
+
+
+def _evaluation_output_files(artifact_root: object) -> tuple[str, ...]:
+    _artifact_root(artifact_root)
+    return (*EVALUATION_BUILD_OUTPUT_FILES, *EVALUATION_ARTIFACT_OUTPUT_FILES)
+
+
+def _evaluation_source_gate(
+    repo: Path, expected_commit: str, artifact_root: object, stage: str
+) -> None:
+    git_name = shutil.which("git")
+    if git_name is None:
+        raise CampaignError("Git executable is unavailable")
+    git = _resolved_safe_file(Path(git_name), "Git executable")
+    try:
+        verify_evaluation_source_tree(
+            git,
+            repo,
+            repo,
+            expected_commit,
+            controlled_git_environment(),
+            allowed_output_roots=_evaluation_output_roots(artifact_root),
+            allowed_output_files=_evaluation_output_files(artifact_root),
+            stage=stage,
+        )
+    except (OSError, ToolAttestationError) as error:
+        raise CampaignError(f"evaluation source gate failed {stage}: {error}") from error
+
+
+def _prepare_evaluation_build_tree(
+    repo: Path, expected_commit: str, artifact_root: object, stage: str
+) -> None:
+    _evaluation_source_gate(repo, expected_commit, artifact_root, f"before {stage} purge")
+    git_name = shutil.which("git")
+    if git_name is None:
+        raise CampaignError("Git executable is unavailable")
+    git = _resolved_safe_file(Path(git_name), "Git executable")
+    purge_roots = (*EVALUATION_BUILD_OUTPUT_ROOTS, *EVALUATION_CACHE_OUTPUT_ROOTS)
+    try:
+        purge_evaluation_generated_outputs(
+            git,
+            repo,
+            repo,
+            expected_commit,
+            controlled_git_environment(),
+            output_roots=purge_roots,
+            output_files=EVALUATION_BUILD_OUTPUT_FILES,
+        )
+    except (OSError, ToolAttestationError) as error:
+        raise CampaignError(f"evaluation build purge failed {stage}: {error}") from error
+    _evaluation_source_gate(repo, expected_commit, artifact_root, f"after {stage} purge")
+
+
+def _build_measurement_receipt(repo: Path, commit: str) -> dict[str, Any]:
+    try:
+        return build_measurement_source_receipt(repo, source_commit=commit)
+    except (OSError, UnicodeError, ValueError) as error:
+        raise CampaignError(f"measurement timing source contract failed: {error}") from error
+
+
+def _require_measurement_receipt(
+    repo: Path, commit: str, receipt: object, stage: str
+) -> None:
+    try:
+        verify_measurement_source_files(
+            receipt, repo, expected_commit=commit
+        )
+    except (OSError, UnicodeError, ValueError) as error:
+        raise CampaignError(
+            f"measurement timing sources changed {stage}: {error}"
+        ) from error
+
+
 class _SourceIntegrityMonitor:
     """Check source identity at the two timing-external boot boundaries."""
 
-    def __init__(self, repo: Path, expected_commit: str) -> None:
+    def __init__(
+        self, repo: Path, expected_commit: str, measurement_receipt: object,
+        artifact_root: object,
+    ) -> None:
         self.repo = repo
         self.expected_commit = expected_commit
+        self.measurement_receipt = measurement_receipt
+        self.artifact_root = artifact_root
     def __enter__(self) -> "_SourceIntegrityMonitor":
         _require_repository_identity(self.repo, self.expected_commit, "before boot")
+        _evaluation_source_gate(
+            self.repo, self.expected_commit, self.artifact_root, "before boot"
+        )
+        _require_measurement_receipt(
+            self.repo, self.expected_commit, self.measurement_receipt,
+            "before boot",
+        )
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if exc is None:
-            _require_repository_identity(self.repo, self.expected_commit, "after boot")
+        _require_repository_identity(self.repo, self.expected_commit, "after boot")
+        _evaluation_source_gate(
+            self.repo, self.expected_commit, self.artifact_root, "after boot"
+        )
+        _require_measurement_receipt(
+            self.repo, self.expected_commit, self.measurement_receipt,
+            "after boot",
+        )
 
 
 def _trusted_process_path(tools: Iterable[dict[str, str]]) -> str:
@@ -427,6 +841,37 @@ def _trusted_process_path(tools: Iterable[dict[str, str]]) -> str:
     return (":" if flavor == "posix" else ";").join(directories)
 
 
+def _verify_bound_host_cc_resolution(
+    host_cc: dict[str, str], process_path: str
+) -> None:
+    """Require an unqualified ``cc`` lookup to reach the attested compiler."""
+
+    if host_cc.get("argv0") != "cc":
+        raise CampaignError("Host C compiler identity must use the canonical cc name")
+    separator = ":" if process_path.startswith("/") else ";"
+    invocation: Path | None = None
+    for directory in process_path.split(separator):
+        for executable in ("cc", "cc.exe"):
+            candidate = Path(directory) / executable
+            if candidate.exists():
+                invocation = candidate
+                break
+        if invocation is not None:
+            break
+    if invocation is None:
+        raise CampaignError("bound Host C compiler is unavailable through PATH")
+    try:
+        observed = invocation.resolve(strict=True)
+        expected = Path(host_cc["path"]).resolve(strict=True)
+        same = os.path.samefile(observed, expected)
+    except (KeyError, OSError, RuntimeError) as error:
+        raise CampaignError("bound Host C compiler identity cannot be resolved") from error
+    if not same:
+        raise CampaignError(
+            "unqualified cc differs from the attested Host C compiler"
+        )
+
+
 def _micro_boot_environment(
     environment: dict[str, dict[str, str]], challenge: str, guest_log: str
 ) -> dict[str, str]:
@@ -436,7 +881,10 @@ def _micro_boot_environment(
         "AGENT_EVAL_CHALLENGE_HEX": challenge,
         "AGENT_TEST_CASE": "agenteval_ucore",
         "AGENT_TEST_GUEST_LOG_FILE": guest_log,
+        "CC": environment["host_cc"]["path"],
         "CHAPTER": "agent_eval",
+        "HOSTCC": environment["host_cc"]["path"],
+        "HOST_CC": environment["host_cc"]["path"],
         "LANG": "C",
         "LC_ALL": "C",
         "MAKE_TOOL": environment["make"]["path"],
@@ -448,9 +896,48 @@ def _micro_boot_environment(
     }
 
 
+def _verify_platform_execution_binding(
+    repo: Path, platform_proof: dict[str, Any]
+) -> None:
+    """Revalidate the public platform proof in the current execution domain."""
+
+    if platform_proof["repository"]["execution_path"] != str(repo.resolve()):
+        raise CampaignError("platform repository differs before boot")
+    try:
+        from evaluation_platform import (
+            PlatformPreflightError,
+            _verify_bound_msys2_preflight,
+            _verify_hardware_identity,
+        )
+    except ImportError:  # pragma: no cover
+        from .evaluation_platform import (  # type: ignore[no-redef]
+            PlatformPreflightError,
+            _verify_bound_msys2_preflight,
+            _verify_hardware_identity,
+        )
+    if platform_proof["domain"] == "native-msys2":
+        try:
+            _verify_bound_msys2_preflight(platform_proof, repo=repo)
+        except PlatformPreflightError as error:
+            raise CampaignError(f"MSYS2 platform binding changed before boot: {error}") from error
+    else:
+        try:
+            _verify_hardware_identity(platform_proof.get("hardware"))
+        except PlatformPreflightError as error:
+            raise CampaignError(
+                f"platform hardware binding changed before boot: {error}"
+            ) from error
+        for label, tool in platform_proof["tools"].items():
+            executable = Path(tool["path"])
+            _require_regular_file(executable, f"platform executable {label}")
+            if _sha256(executable) != tool["sha256"]:
+                raise CampaignError(f"platform executable changed before boot: {label}")
+
+
 def _verify_native_execution_binding(
     repo: Path, campaign: dict[str, Any], boot: dict[str, Any]
 ) -> None:
+    _verify_platform_execution_binding(repo, campaign["platform"])
     for label, tool in campaign["environment"].items():
         executable = Path(tool["path"])
         if not executable.is_absolute():
@@ -460,17 +947,24 @@ def _verify_native_execution_binding(
             raise CampaignError(f"environment executable changed before boot: {label}")
     if boot["command_argv"][0] != campaign["environment"]["bash"]["path"]:
         raise CampaignError("micro command does not use the preflighted bash executable")
-    expected_script = str((repo / "scripts" / "run-agent-tests.sh").resolve())
+    expected_script = str(
+        _resolved_link_free_path(
+            repo / "scripts" / "run-agent-tests.sh", "micro runner script"
+        )
+    )
     if boot["command_argv"][1] != expected_script:
         raise CampaignError("micro runner script differs from the committed source")
+    _verify_bound_host_cc_resolution(
+        campaign["environment"]["host_cc"],
+        boot["command_environment"]["PATH"],
+    )
 
 
 def probe_executable(name: str, version_args: list[str], repo: Path) -> dict[str, str]:
     path = shutil.which(name)
     if path is None:
         raise CampaignError(f"required executable is unavailable: {name}")
-    resolved = Path(path).resolve()
-    _require_regular_file(resolved, f"executable {name}")
+    resolved = _resolved_safe_file(Path(path), f"executable {name}")
     output = _run([str(resolved), *version_args], repo)
     first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
     if not first_line:
@@ -481,6 +975,60 @@ def probe_executable(name: str, version_args: list[str], repo: Path) -> dict[str
         "sha256": _sha256(resolved),
         "version": first_line,
     }
+
+
+def require_formal_execution_domain(
+    repo: Path,
+    *,
+    toolprefix: str,
+    qemu: str,
+    python_bin: str,
+    shell_bin: str,
+) -> dict[str, Any]:
+    """Reject native Windows and incomplete POSIX domains before planning."""
+
+    try:
+        from evaluation_platform import (
+            PlatformPreflightError,
+            probe_native_collection_domain,
+        )
+    except ImportError:  # pragma: no cover - package import is used by callers.
+        from .evaluation_platform import (  # type: ignore[no-redef]
+            PlatformPreflightError,
+            probe_native_collection_domain,
+        )
+    try:
+        preflight = probe_native_collection_domain(
+            repo=repo,
+            toolprefix=toolprefix,
+            qemu=qemu,
+            python_bin=python_bin,
+            shell_bin=shell_bin,
+        )
+    except PlatformPreflightError as error:
+        raise CampaignError(f"formal execution-domain preflight failed: {error}") from error
+    marker = os.environ.get("AGENTOS_EVALUATION_EXECUTION_DOMAIN", "")
+    execution_domain = str(preflight.get("domain", ""))
+    if marker.startswith("windows-wsl:"):
+        distribution = marker.removeprefix("windows-wsl:")
+        try:
+            kernel_release = Path("/proc/sys/kernel/osrelease").read_text(
+                encoding="ascii", errors="strict"
+            )
+        except (OSError, UnicodeError) as error:
+            raise CampaignError("WSL execution-domain kernel identity is unavailable") from error
+        if (
+            re.fullmatch(r"[A-Za-z0-9._-]{1,64}", distribution) is None
+            or os.environ.get("EVALUATION_WSL_DISTRO") != distribution
+            or "microsoft" not in kernel_release.casefold()
+        ):
+            raise CampaignError("WSL execution-domain marker is not kernel-bound")
+        execution_domain = marker
+    if preflight.get("domain") not in {"native-linux", "native-msys2"}:
+        raise CampaignError("formal execution-domain identity is invalid")
+    proof = dict(preflight)
+    proof["entry_domain"] = execution_domain
+    return proof
 
 
 def create_campaign(
@@ -495,20 +1043,30 @@ def create_campaign(
     shell_bin: str,
     require_clean: bool = True,
 ) -> dict[str, Any]:
-    repo = repo.resolve()
-    output = output.resolve()
+    repo = _resolved_safe_directory(repo, "repository")
+    output = _safe_output_path(output, "campaign manifest")
     if not RUN_ID_RE.fullmatch(run_id):
         raise CampaignError(f"invalid run id: {run_id!r}")
-    if requested_boots < MINIMUM_BOOTS:
+    if type(requested_boots) is not int or requested_boots != FORMAL_BOOT_COUNT:
         raise CampaignError(
-            f"formal evaluation requires at least {MINIMUM_BOOTS} boots"
+            f"formal evaluation requires the fixed {FORMAL_BOOT_COUNT}-boot stopping rule"
         )
     if output.exists():
         raise CampaignError(f"campaign manifest already exists: {output}")
+    platform_proof = require_formal_execution_domain(
+        repo,
+        toolprefix=toolprefix,
+        qemu=qemu,
+        python_bin=python_bin,
+        shell_bin=shell_bin,
+    )
     manifest_rel = _repo_relative(repo, output)
+    run_dir_rel = str(Path(manifest_rel).parent.as_posix())
     commit, clean = repository_identity(repo)
     if require_clean and not clean:
         raise CampaignError("formal evaluation requires a clean committed worktree")
+    _evaluation_source_gate(repo, commit, run_dir_rel, "before campaign creation")
+    measurement_receipt = _build_measurement_receipt(repo, commit)
     suite_path = repo / "ci" / "evaluation-suite.json"
     _require_regular_file(suite_path, "evaluation suite")
 
@@ -517,6 +1075,7 @@ def create_campaign(
         "bash": probe_executable(shell_bin, ["--version"], repo),
         "compiler": probe_executable(compiler, ["--version"], repo),
         "git": probe_executable("git", ["--version"], repo),
+        "host_cc": dict(platform_proof["tools"]["host_cc"]),
         "linker": probe_executable(f"{toolprefix}ld", ["--version"], repo),
         "make": probe_executable("make", ["--version"], repo),
         "objcopy": probe_executable(f"{toolprefix}objcopy", ["--version"], repo),
@@ -524,27 +1083,26 @@ def create_campaign(
         "python": probe_executable(python_bin, ["--version"], repo),
         "qemu": probe_executable(qemu, ["--version"], repo),
     }
+    _verify_bound_host_cc_resolution(
+        environment["host_cc"], _trusted_process_path(environment.values())
+    )
 
-    run_dir_rel = str(Path(manifest_rel).parent.as_posix())
     boots: list[dict[str, Any]] = []
     challenges: set[str] = set()
     for number in range(1, requested_boots + 1):
         boot_id = f"boot-{number:02d}"
-        challenge = secrets.token_hex(8)
-        expected_parity = number & 1
-        while (
-            challenge == "0" * 16
-            or challenge in challenges
-            or (int(challenge, 16) & 1) != expected_parity
-        ):
-            challenge = secrets.token_hex(8)
+        challenge = _derive_micro_challenge(commit, number, challenges)
         challenges.add(challenge)
         raw_dir = f"{run_dir_rel}/raw/{boot_id}"
         guest_log = f"{raw_dir}/guest.log"
         runner_log = f"{raw_dir}/runner.log"
         command = [
             environment["bash"]["path"],
-            str((repo / "scripts" / "run-agent-tests.sh").resolve()),
+            str(
+                _resolved_link_free_path(
+                    repo / "scripts" / "run-agent-tests.sh", "micro runner script"
+                )
+            ),
             f"AGENT_EVAL_CHALLENGE_HEX={challenge}",
             f"AGENT_TEST_GUEST_LOG_FILE={guest_log}",
         ]
@@ -578,6 +1136,8 @@ def create_campaign(
         "boots": boots,
         "environment": environment,
         "kind": KIND,
+        "measurement_source_receipt": measurement_receipt,
+        "platform": platform_proof,
         "phase": "collecting",
         "protocol": {
             "fresh_filesystem_per_boot": True,
@@ -594,6 +1154,7 @@ def create_campaign(
             "clean_worktree": clean,
             "commit": commit,
             "completed_at_utc": None,
+            "execution_domain": platform_proof["entry_domain"],
             "id": run_id,
             "started_at_utc": _utc_now(),
         },
@@ -637,7 +1198,7 @@ def _read_sample_orders(path: Path, expected_challenge: str) -> tuple[int, list[
     return count, sorted(orders)
 
 
-def record_boot(
+def _record_boot_result(
     *,
     repo: Path,
     manifest_path: Path,
@@ -649,8 +1210,8 @@ def record_boot(
     input_image: Path,
     final_image: Path,
 ) -> dict[str, Any]:
-    repo = repo.resolve()
-    manifest_path = manifest_path.resolve()
+    repo = _resolved_safe_directory(repo, "repository")
+    manifest_path = _resolved_safe_file(manifest_path, "campaign manifest")
     campaign = _strict_json(manifest_path)
     validate_campaign(campaign)
     _require_manifest_artifact_root(repo, manifest_path, campaign["run"]["artifact_root"])
@@ -665,10 +1226,20 @@ def record_boot(
     if boot["status"] != "planned":
         raise CampaignError(f"boot was already recorded: {boot_id}")
     _require_repository_identity(repo, campaign["run"]["commit"], "before archival")
+    _evaluation_source_gate(
+        repo,
+        campaign["run"]["commit"],
+        campaign["run"]["artifact_root"],
+        "before archival",
+    )
 
-    expected_guest = (repo / boot["guest_log"]).resolve()
-    expected_runner = (repo / boot["runner_log"]).resolve()
-    if guest_log.resolve() != expected_guest or runner_log.resolve() != expected_runner:
+    guest_log = _resolved_safe_file(guest_log, "guest log", nonempty=False)
+    runner_log = _resolved_safe_file(runner_log, "runner log")
+    expected_guest = _resolved_safe_file(
+        repo / boot["guest_log"], "planned guest log", nonempty=False
+    )
+    expected_runner = _resolved_safe_file(repo / boot["runner_log"], "planned runner log")
+    if guest_log != expected_guest or runner_log != expected_runner:
         raise CampaignError("recorded log paths differ from the planned command")
     if (
         _repo_relative(repo, kernel) != "build/kernel"
@@ -698,6 +1269,12 @@ def record_boot(
         boot["sample_count"] = sample_count
         _require_repository_identity(
             repo, campaign["run"]["commit"], "after artifact archival"
+        )
+        _evaluation_source_gate(
+            repo,
+            campaign["run"]["commit"],
+            campaign["run"]["artifact_root"],
+            "after artifact archival",
         )
         boot["status"] = "passed"
     else:
@@ -729,6 +1306,39 @@ def _terminate_micro_process(proc: subprocess.Popen[str]) -> None:
     terminate_process(proc)
 
 
+def scenario_pair_deadline_contract(runner_timeout_seconds: int) -> dict[str, Any]:
+    """Derive the hard paired-scenario deadline from the target phase contract."""
+
+    from plain_ucore_action_runner import seeded_ucore_deadline_contract
+
+    if (
+        type(runner_timeout_seconds) is not int
+        or not 60 <= runner_timeout_seconds <= 3600
+    ):
+        raise CampaignError(
+            "scenario runner timeout must be between 60 and 3600 seconds"
+        )
+    try:
+        target = seeded_ucore_deadline_contract(runner_timeout_seconds)
+    except ValueError as error:
+        raise CampaignError(f"invalid scenario runner timeout: {error}") from error
+    target_deadline = target.get("server_deadline_seconds")
+    if type(target_deadline) is not int or target_deadline <= 0:
+        raise CampaignError("seeded target deadline contract is invalid")
+    pair_deadline = (
+        SCENARIO_TARGET_COUNT * target_deadline
+        + SCENARIO_COORDINATION_ALLOWANCE_SECONDS
+    )
+    return {
+        "contract": "paired-scenario-deadline-v1",
+        "runner_timeout_seconds": runner_timeout_seconds,
+        "target_count": SCENARIO_TARGET_COUNT,
+        "target_deadline": target,
+        "coordination_allowance_seconds": SCENARIO_COORDINATION_ALLOWANCE_SECONDS,
+        "pair_deadline_seconds": pair_deadline,
+    }
+
+
 def _run_micro_process(
     *,
     command: list[str],
@@ -736,9 +1346,18 @@ def _run_micro_process(
     repo: Path,
     runner_log: Path,
     timeout_seconds: int,
+    maximum_timeout_seconds: int = 3600,
+    deadline_label: str = "micro boot",
 ) -> int:
-    if type(timeout_seconds) is not int or not 60 <= timeout_seconds <= 3600:
-        raise CampaignError("micro boot timeout must be between 60 and 3600 seconds")
+    if (
+        type(timeout_seconds) is not int
+        or type(maximum_timeout_seconds) is not int
+        or not 60 <= timeout_seconds <= maximum_timeout_seconds
+    ):
+        raise CampaignError(
+            f"{deadline_label} timeout must be between 60 and "
+            f"{maximum_timeout_seconds} seconds"
+        )
 
     proc = subprocess.Popen(
         command,
@@ -774,7 +1393,10 @@ def _run_micro_process(
             output = partial
     output = _output_text(output).replace("\x00", "")
     if timed_out:
-        output += f"\n[evaluation] micro boot exceeded {timeout_seconds}s total deadline\n"
+        output += (
+            f"\n[evaluation] {deadline_label} exceeded "
+            f"{timeout_seconds}s total deadline\n"
+        )
     runner_log.write_text(output, encoding="utf-8", newline="\n")
     if output:
         sys.stdout.write(output)
@@ -793,8 +1415,8 @@ def execute_and_record_boot(
 
     from plain_ucore_action_runner import exclusive_repo_run_lock
 
-    repo = repo.resolve()
-    manifest_path = manifest_path.resolve()
+    repo = _resolved_safe_directory(repo, "repository")
+    manifest_path = _resolved_safe_file(manifest_path, "campaign manifest")
     if type(timeout_seconds) is not int or not 60 <= timeout_seconds <= 3600:
         raise CampaignError("micro boot timeout must be between 60 and 3600 seconds")
     with exclusive_repo_run_lock(repo):
@@ -811,15 +1433,26 @@ def execute_and_record_boot(
         if len(matching) != 1 or matching[0]["status"] != "planned":
             raise CampaignError(f"boot is not uniquely planned and pending: {boot_id}")
         boot = matching[0]
+        _prepare_evaluation_build_tree(
+            repo,
+            campaign["run"]["commit"],
+            campaign["run"]["artifact_root"],
+            f"micro {boot_id}",
+        )
         guest_log = repo / boot["guest_log"]
         runner_log = repo / boot["runner_log"]
-        if guest_log.is_symlink() or runner_log.is_symlink():
-            raise CampaignError("planned boot log is link-backed")
-        runner_log.parent.mkdir(parents=True, exist_ok=True)
-        guest_log.parent.mkdir(parents=True, exist_ok=True)
-        guest_log.write_bytes(b"")
+        runner_log = _safe_output_path(runner_log, "planned runner log")
+        guest_log = _safe_output_path(guest_log, "planned guest log")
         try:
-            with _SourceIntegrityMonitor(repo, campaign["run"]["commit"]):
+            atomic_write_bytes(guest_log, b"")
+        except (OSError, ValueError) as error:
+            raise CampaignError("planned guest log is unsafe") from error
+        try:
+            with _SourceIntegrityMonitor(
+                repo, campaign["run"]["commit"],
+                campaign["measurement_source_receipt"],
+                campaign["run"]["artifact_root"],
+            ):
                 _verify_native_execution_binding(repo, campaign, boot)
                 exit_code = _run_micro_process(
                     command=boot["command_argv"],
@@ -834,7 +1467,7 @@ def execute_and_record_boot(
             runner_log.write_text(message, encoding="utf-8", newline="\n")
             print(message, end="", file=sys.stderr)
         _verify_native_execution_binding(repo, campaign, boot)
-        record_boot(
+        _record_boot_result(
             repo=repo,
             manifest_path=manifest_path,
             boot_id=boot_id,
@@ -914,8 +1547,12 @@ def export_run_plan(manifest_path: Path, output: Path) -> dict[str, Any]:
         "environment_sha256": environment_sha256,
         "kind": "agentos-evaluation-run-plan",
         "logs": logs,
+        "measurement_source_receipt": json.loads(json.dumps(
+            campaign["measurement_source_receipt"]
+        )),
         "run_id": campaign["run"]["id"],
-        "schema_version": 1,
+        "schema_version": 2,
+        "stop_rule": MEASUREMENT_STOP_RULE,
         "suite_sha256": campaign["protocol"]["suite_sha256"],
     }
     if output.exists():
@@ -927,10 +1564,123 @@ def export_run_plan(manifest_path: Path, output: Path) -> dict[str, Any]:
     return plan
 
 
+def _validate_platform_proof(proof: object, execution_domain: str) -> None:
+    try:
+        from evaluation_platform import (
+            SCHEMA_VERSION as PLATFORM_SCHEMA_VERSION,
+            KIND as PLATFORM_KIND,
+            MSYS_TOOL_LABELS,
+            TOOL_LABELS,
+            PlatformPreflightError,
+            _validate_hardware_identity,
+        )
+    except ImportError:  # pragma: no cover
+        from .evaluation_platform import (  # type: ignore[no-redef]
+            SCHEMA_VERSION as PLATFORM_SCHEMA_VERSION,
+            KIND as PLATFORM_KIND,
+            MSYS_TOOL_LABELS,
+            TOOL_LABELS,
+            PlatformPreflightError,
+            _validate_hardware_identity,
+        )
+    if not isinstance(proof, dict):
+        raise CampaignError("platform proof must be an object")
+    common = {
+        "distribution", "domain", "entry_domain", "hardware", "kind", "launcher",
+        "repository", "schema_version", "status", "toolprefix", "tools",
+    }
+    domain = proof.get("domain")
+    expected = common | (
+        {
+            "runtime", "temporary_directory", "uname",
+            "windows_temporary_directory",
+        }
+        if domain == "native-msys2"
+        else set()
+    )
+    if set(proof) != expected:
+        raise CampaignError("platform proof keys differ from its execution domain")
+    if (
+        proof.get("schema_version") != PLATFORM_SCHEMA_VERSION
+        or proof.get("kind") != PLATFORM_KIND
+        or proof.get("status") != "ready"
+        or domain not in {"native-linux", "native-msys2"}
+        or proof.get("entry_domain") != execution_domain
+        or not isinstance(proof.get("toolprefix"), str)
+        or not proof["toolprefix"]
+    ):
+        raise CampaignError("platform proof header is invalid")
+    try:
+        hardware = _validate_hardware_identity(proof.get("hardware"))
+    except PlatformPreflightError as error:
+        raise CampaignError(f"platform hardware proof is invalid: {error}") from error
+    if hardware != proof.get("hardware"):
+        raise CampaignError("platform hardware proof is not canonical")
+    repository = proof.get("repository")
+    if not isinstance(repository, dict):
+        raise CampaignError("platform repository proof is invalid")
+    _expect_keys(repository, ["execution_path", "host_path"], "platform repository")
+    if not all(
+        isinstance(repository[key], str)
+        and _is_portable_absolute_path(repository[key])
+        for key in repository
+    ):
+        raise CampaignError("platform repository path is invalid")
+    expected_labels = set(MSYS_TOOL_LABELS if domain == "native-msys2" else TOOL_LABELS)
+    tools = proof.get("tools")
+    if not isinstance(tools, dict) or set(tools) != expected_labels:
+        raise CampaignError("platform tool proof is incomplete")
+    for label, tool in tools.items():
+        if not isinstance(tool, dict):
+            raise CampaignError(f"platform tool proof is invalid: {label}")
+        _expect_keys(tool, ["argv0", "path", "sha256", "version"], f"platform tool {label}")
+        if (
+            not all(isinstance(tool[key], str) and tool[key] for key in tool)
+            or not _is_portable_absolute_path(tool["path"])
+            or re.fullmatch(r"[0-9a-f]{64}", tool["sha256"]) is None
+        ):
+            raise CampaignError(f"platform tool identity is invalid: {label}")
+    if tools["host_cc"]["argv0"] != "cc":
+        raise CampaignError("platform Host C compiler is not the canonical cc tool")
+    if proof.get("launcher") != tools["bash"]:
+        raise CampaignError("platform launcher is not the bound Bash")
+    if domain == "native-msys2":
+        runtime = proof.get("runtime")
+        if not isinstance(runtime, dict):
+            raise CampaignError("MSYS2 runtime proof is unavailable")
+        _expect_keys(runtime, ["path", "sha256", "version"], "MSYS2 runtime")
+        if (
+            not _is_portable_absolute_path(runtime.get("path"))
+            or re.fullmatch(r"[0-9a-f]{64}", str(runtime.get("sha256", ""))) is None
+            or not isinstance(runtime.get("version"), str)
+            or not runtime["version"]
+            or not _is_portable_absolute_path(proof.get("temporary_directory"))
+            or not isinstance(proof.get("windows_temporary_directory"), str)
+            or not PureWindowsPath(proof["windows_temporary_directory"]).is_absolute()
+        ):
+            raise CampaignError("MSYS2 runtime or temporary namespace proof is invalid")
+        uname = proof.get("uname")
+        expected_uname = {
+            "command", "machine", "release", "system", "version",
+            "windows_version",
+        }
+        if (
+            not isinstance(uname, dict)
+            or set(uname) != expected_uname
+            or any(not isinstance(value, str) or not value for value in uname.values())
+            or re.fullmatch(r"MSYS_NT-[0-9]+\.[0-9]+-[0-9]+", uname["system"])
+            is None
+        ):
+            raise CampaignError("MSYS2 uname proof is invalid")
+
+
 def validate_campaign(campaign: dict[str, Any]) -> None:
     _expect_keys(
         campaign,
-        ["boots", "environment", "kind", "phase", "protocol", "run", "schema_version"],
+        [
+            "boots", "environment", "kind", "measurement_source_receipt",
+            "phase", "platform", "protocol", "run", "schema_version",
+        ],
         "campaign",
     )
     if campaign["schema_version"] != SCHEMA_VERSION or campaign["kind"] != KIND:
@@ -945,12 +1695,18 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         run,
         [
             "artifact_root", "clean_worktree", "commit", "completed_at_utc", "id",
-            "started_at_utc",
+            "execution_domain", "started_at_utc",
         ],
         "run",
     )
     if not RUN_ID_RE.fullmatch(run["id"]) or not COMMIT_RE.fullmatch(run["commit"]):
         raise CampaignError("invalid run identity")
+    if not isinstance(run["execution_domain"], str) or (
+        run["execution_domain"] not in {"native-linux", "native-msys2"}
+        and re.fullmatch(r"windows-wsl:[A-Za-z0-9._-]{1,64}", run["execution_domain"])
+        is None
+    ):
+        raise CampaignError("invalid formal execution-domain identity")
     artifact_root = _artifact_root(run["artifact_root"])
     if artifact_root.name != run["id"]:
         raise CampaignError("artifact root is not bound to the run identity")
@@ -964,6 +1720,14 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         raise CampaignError("collected campaign lacks completion time")
     if campaign["phase"] == "collecting" and run["completed_at_utc"] is not None:
         raise CampaignError("collecting campaign already has a completion time")
+    try:
+        validate_measurement_source_receipt_shape(
+            campaign["measurement_source_receipt"],
+            expected_commit=run["commit"],
+        )
+    except ValueError as error:
+        raise CampaignError(f"invalid measurement source receipt: {error}") from error
+    _validate_platform_proof(campaign["platform"], run["execution_domain"])
 
     protocol = campaign["protocol"]
     if not isinstance(protocol, dict):
@@ -985,7 +1749,7 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
     requested = protocol["requested_boots"]
     if (
         type(requested) is not int
-        or requested < MINIMUM_BOOTS
+        or requested != FORMAL_BOOT_COUNT
         or protocol["minimum_boots"] != MINIMUM_BOOTS
         or protocol["fresh_filesystem_per_boot"] is not True
         or protocol["independent_unit"] != "fresh-qemu-boot"
@@ -1003,8 +1767,8 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
     _expect_keys(
         environment,
         [
-            "bash", "compiler", "git", "linker", "make", "objcopy", "objdump",
-            "python", "qemu",
+            "bash", "compiler", "git", "host_cc", "linker", "make", "objcopy",
+            "objdump", "python", "qemu",
         ],
         "environment",
     )
@@ -1020,6 +1784,11 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
             raise CampaignError(f"environment.{label} executable hash is invalid")
     compiler_path = environment["compiler"]["path"]
     absolute_prefix, executable_suffix = _absolute_toolprefix(compiler_path)
+    if (
+        environment["host_cc"].get("argv0") != "cc"
+        or environment["host_cc"] != campaign["platform"]["tools"]["host_cc"]
+    ):
+        raise CampaignError("Host C compiler is not bound to the platform proof")
     for label, suffix in (("linker", "ld"), ("objcopy", "objcopy"), ("objdump", "objdump")):
         if environment[label]["path"] != absolute_prefix + suffix + executable_suffix:
             raise CampaignError(f"environment.{label} does not share TOOLPREFIX")
@@ -1150,8 +1919,9 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
 
 
 def check_campaign(repo: Path, manifest_path: Path, *, require_collected: bool) -> dict[str, Any]:
-    repo = repo.resolve()
-    campaign = _strict_json(manifest_path.resolve())
+    repo = _resolved_safe_directory(repo, "repository")
+    manifest_path = _resolved_safe_file(manifest_path, "campaign manifest")
+    campaign = _strict_json(manifest_path)
     validate_campaign(campaign)
     _require_manifest_artifact_root(repo, manifest_path, campaign["run"]["artifact_root"])
     if require_collected and campaign["phase"] != "collected":
@@ -1159,6 +1929,16 @@ def check_campaign(repo: Path, manifest_path: Path, *, require_collected: bool) 
     commit, clean = repository_identity(repo)
     if commit != campaign["run"]["commit"] or not clean:
         raise CampaignError("current source tree differs from campaign identity")
+    _evaluation_source_gate(
+        repo,
+        campaign["run"]["commit"],
+        campaign["run"]["artifact_root"],
+        "during campaign check",
+    )
+    _require_measurement_receipt(
+        repo, campaign["run"]["commit"],
+        campaign["measurement_source_receipt"], "during campaign check",
+    )
     suite_path = repo / campaign["protocol"]["suite_path"]
     _require_regular_file(suite_path, "evaluation suite")
     if _sha256(suite_path) != campaign["protocol"]["suite_sha256"]:
@@ -1225,22 +2005,126 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _scenario_clean_environment(
+    tools: dict[str, dict[str, str]],
+    *,
+    posix_temporary: str = "/tmp",
+    native_temporary: str | None = None,
+) -> dict[str, str]:
+    compiler_prefix, _ = _absolute_toolprefix(tools["compiler"]["path"])
+    host_cc_path = tools["host_cc"]["path"]
+    if (
+        tools["host_cc"].get("argv0") != "cc"
+        or not host_cc_path.startswith("/")
+        or str(PurePosixPath(host_cc_path).parent)
+        not in SCENARIO_CLEAN_PATH.split(":")
+    ):
+        raise CampaignError(
+            "scenario Host C compiler is unavailable through the clean PATH"
+        )
+    native_msys = (
+        os.environ.get("AGENTOS_EVALUATION_EXECUTION_DOMAIN") == "native-msys2"
+    )
+    locale = "C.UTF-8" if native_msys else "C"
+    native_temporary = native_temporary or posix_temporary
+    if not posix_temporary.startswith("/") or not (
+        native_temporary.startswith("/")
+        or PureWindowsPath(native_temporary).is_absolute()
+    ):
+        raise CampaignError("scenario temporary namespace is invalid")
+    environment = {
+        "CC": host_cc_path,
+        "HOME": SCENARIO_CLEAN_HOME,
+        "HOSTCC": host_cc_path,
+        "HOST_CC": host_cc_path,
+        "LANG": locale,
+        "LC_ALL": locale,
+        "MAKE_TOOL": tools["make"]["path"],
+        "PATH": SCENARIO_CLEAN_PATH,
+        "QEMU": tools["qemu"]["path"],
+        "SHELL": tools["bash"]["path"],
+        "TEMP": native_temporary,
+        "TMP": native_temporary,
+        "TMPDIR": posix_temporary,
+        "TOOLPREFIX": compiler_prefix,
+        "TZ": "UTC",
+    }
+    if tuple(environment) != SCENARIO_CLEAN_ENVIRONMENT_KEYS:
+        raise CampaignError("scenario clean environment order changed")
+    return environment
+
+
+def _scenario_temporary_identity(platform: dict[str, Any]) -> tuple[str, str]:
+    if platform.get("domain") != "native-msys2":
+        return "/tmp", "/tmp"
+    posix_temporary = platform.get("temporary_directory")
+    native_temporary = platform.get("windows_temporary_directory")
+    if (
+        not isinstance(posix_temporary, str)
+        or not posix_temporary.startswith("/")
+        or not isinstance(native_temporary, str)
+        or not PureWindowsPath(native_temporary).is_absolute()
+    ):
+        raise CampaignError("MSYS2 scenario temporary identity is unavailable")
+    return posix_temporary, native_temporary
+
+
 def _probe_scenario_environment(
-    repo: Path, *, wsl_distro: str, toolprefix: str, qemu: str
+    repo: Path, *, wsl_distro: str, toolprefix: str, qemu: str,
+    posix_temporary: str = "/tmp", native_temporary: str | None = None,
 ) -> dict[str, Any]:
     if os.name == "nt":
-        launcher_argv = ["wsl.exe", "-d", wsl_distro, "--", "bash", "-lc"]
         launcher = probe_executable("wsl.exe", ["--version"], repo)
-        domain = "wsl"
+        domain_prefix = [launcher["path"], "-d", wsl_distro, "--"]
+        domain = "wsl-clean-shell"
+        bootstrap_path = SCENARIO_CLEAN_PATH
+        bootstrap_env = "/usr/bin/env"
+        bootstrap_bash = "/bin/bash"
     else:
-        launcher_argv = ["bash", "-lc"]
-        launcher = probe_executable("bash", ["--version"], repo)
-        domain = "native-login-shell"
+        launcher = None
+        domain_prefix = []
+        if os.environ.get("AGENTOS_EVALUATION_EXECUTION_DOMAIN") == "native-msys2":
+            domain = "native-msys2-clean-shell"
+            bootstrap_path = os.environ.get("PATH", "")
+            bootstrap_env = shutil.which("env") or ""
+            bootstrap_bash = os.environ.get("BASH_BIN", "")
+            if (
+                not bootstrap_path
+                or not bootstrap_env.startswith("/")
+                or not bootstrap_bash.startswith("/")
+            ):
+                raise CampaignError("native-msys2 scenario bootstrap is incomplete")
+        else:
+            domain = "native-clean-shell"
+            bootstrap_path = SCENARIO_CLEAN_PATH
+            bootstrap_env = "/usr/bin/env"
+            bootstrap_bash = "/bin/bash"
+
+    bootstrap_locale = "C.UTF-8" if domain == "native-msys2-clean-shell" else "C"
+    bootstrap_environment = [
+        f"HOME={SCENARIO_CLEAN_HOME}",
+        f"PATH={bootstrap_path}",
+        f"LANG={bootstrap_locale}",
+        f"LC_ALL={bootstrap_locale}",
+        "TZ=UTC",
+    ]
+    bootstrap_prefix = [
+        *domain_prefix,
+        bootstrap_env,
+        "-i",
+        *bootstrap_environment,
+        bootstrap_bash,
+        "--noprofile",
+        "--norc",
+        "-c",
+    ]
 
     tools: dict[str, dict[str, str]] = {}
     for label, argv0 in (
         ("bash", "bash"),
         ("compiler", f"{toolprefix}gcc"),
+        ("env", "env"),
+        ("host_cc", "cc"),
         ("linker", f"{toolprefix}ld"),
         ("make", "make"),
         ("objcopy", f"{toolprefix}objcopy"),
@@ -1261,7 +2145,7 @@ def _probe_scenario_environment(
             'printf "__AGENTEVAL_SHA256__%s\\n" "$sha"; '
             'printf "__AGENTEVAL_VERSION__%s\\n" "$version"'
         )
-        output = _run([*launcher_argv, script], repo)
+        output = _run([*bootstrap_prefix, script], repo)
         values: dict[str, str] = {}
         for line in output.splitlines():
             for key, prefix in (
@@ -1280,7 +2164,24 @@ def _probe_scenario_environment(
         ) or not values["version"]:
             raise CampaignError(f"scenario execution-domain probe is invalid: {label}")
         tools[label] = {"argv0": argv0, **values}
+    if launcher is None:
+        launcher = dict(tools["env"])
+        launcher_argv = [tools["env"]["path"], "-i"]
+    else:
+        launcher_argv = [
+            launcher["path"],
+            "-d",
+            wsl_distro,
+            "--",
+            tools["env"]["path"],
+            "-i",
+        ]
     return {
+        "clean_environment": _scenario_clean_environment(
+            tools,
+            posix_temporary=posix_temporary,
+            native_temporary=native_temporary,
+        ),
         "domain": domain,
         "launcher": launcher,
         "launcher_argv": launcher_argv,
@@ -1293,15 +2194,25 @@ def _scenario_boot_environment(
     execution_environment: dict[str, Any],
 ) -> dict[str, str]:
     tools = execution_environment["tools"]
-    compiler = tools["compiler"]["path"]
-    toolprefix, _ = _absolute_toolprefix(compiler)
+    clean = execution_environment["clean_environment"]
+    host_locale = "C.UTF-8" if execution_environment["domain"] == "native-msys2-clean-shell" else "C"
     return {
         "AGENTOS_WSL_BASH": tools["bash"]["path"],
+        "AGENTOS_WSL_ENV": tools["env"]["path"],
+        "AGENTOS_WSL_HOME": clean["HOME"],
+        "AGENTOS_WSL_LANG": clean["LANG"],
         "AGENTOS_WSL_LAUNCHER": execution_environment["launcher"]["path"],
+        "AGENTOS_WSL_LC_ALL": clean["LC_ALL"],
         "AGENTOS_WSL_MAKE": tools["make"]["path"],
+        "AGENTOS_WSL_PATH": clean["PATH"],
+        "AGENTOS_WSL_TMPDIR": clean["TMPDIR"],
         "AGENTOS_WSL_TIMEOUT": tools["timeout"]["path"],
-        "LANG": "C",
-        "LC_ALL": "C",
+        "AGENTOS_WSL_TZ": clean["TZ"],
+        "CC": clean["CC"],
+        "HOSTCC": clean["HOSTCC"],
+        "HOST_CC": clean["HOST_CC"],
+        "LANG": host_locale,
+        "LC_ALL": host_locale,
         "PATH": _trusted_process_path(
             [
                 micro_environment["python"],
@@ -1311,12 +2222,12 @@ def _scenario_boot_environment(
         ),
         "PYTHONHASHSEED": "0",
         "PYTHON_BIN": micro_environment["python"]["path"],
-        "QEMU": tools["qemu"]["path"],
-        "TOOLPREFIX": toolprefix,
-        "WSLENV": (
-            "QEMU:TOOLPREFIX:AGENTOS_WSL_BASH:AGENTOS_WSL_MAKE:"
-            "AGENTOS_WSL_TIMEOUT"
-        ),
+        "QEMU": clean["QEMU"],
+        "TEMP": clean["TEMP"],
+        "TMP": clean["TMP"],
+        "TMPDIR": clean["TMPDIR"],
+        "TOOLPREFIX": clean["TOOLPREFIX"],
+        "TZ": "UTC",
     }
 
 
@@ -1329,8 +2240,13 @@ def create_scenario_campaign(
     timeout_seconds: int,
     wsl_distro: str,
 ) -> dict[str, Any]:
-    repo = repo.resolve()
-    micro = _strict_json(micro_manifest.resolve())
+    if type(requested_boots) is not int or requested_boots != FORMAL_BOOT_COUNT:
+        raise CampaignError(
+            f"scenario evaluation requires the fixed {FORMAL_BOOT_COUNT}-boot stopping rule"
+        )
+    repo = _resolved_safe_directory(repo, "repository")
+    micro_manifest = _resolved_safe_file(micro_manifest, "micro campaign manifest")
+    micro = _strict_json(micro_manifest)
     validate_campaign(micro)
     _require_manifest_artifact_root(
         repo, micro_manifest, micro["run"]["artifact_root"]
@@ -1340,13 +2256,20 @@ def create_scenario_campaign(
     commit, clean = repository_identity(repo)
     if not clean or commit != micro["run"]["commit"]:
         raise CampaignError("scenario collection requires the same clean source commit")
-    if requested_boots < MINIMUM_BOOTS:
-        raise CampaignError(f"scenario evaluation requires at least {MINIMUM_BOOTS} boots")
-    if type(timeout_seconds) is not int or timeout_seconds < 60 or timeout_seconds > 3600:
-        raise CampaignError("scenario timeout must be between 60 and 3600 seconds")
+    _evaluation_source_gate(
+        repo,
+        commit,
+        micro["run"]["artifact_root"],
+        "before scenario campaign creation",
+    )
+    _require_measurement_receipt(
+        repo, commit, micro["measurement_source_receipt"],
+        "before scenario campaign creation",
+    )
+    scenario_pair_deadline_contract(timeout_seconds)
     if not isinstance(wsl_distro, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", wsl_distro):
         raise CampaignError("invalid WSL distribution name")
-    output = output.resolve()
+    output = _safe_output_path(output, "scenario campaign manifest")
     if output.exists():
         raise CampaignError(f"scenario campaign already exists: {output}")
     output_rel = _repo_relative(repo, output)
@@ -1363,11 +2286,16 @@ def create_scenario_campaign(
     driver_path = repo / "host_tools" / "check_seeded_action_state.py"
     _require_regular_file(collector_path, "scenario collector")
     _require_regular_file(driver_path, "scenario input driver")
+    posix_temporary, native_temporary = _scenario_temporary_identity(
+        micro["platform"]
+    )
     execution_environment = _probe_scenario_environment(
         repo,
         wsl_distro=wsl_distro,
         toolprefix=requested_toolprefix,
         qemu=micro["environment"]["qemu"]["argv0"],
+        posix_temporary=posix_temporary,
+        native_temporary=native_temporary,
     )
     toolprefix, _ = _absolute_toolprefix(
         execution_environment["tools"]["compiler"]["path"]
@@ -1376,9 +2304,9 @@ def create_scenario_campaign(
     boots = []
     for number in range(1, requested_boots + 1):
         boot_id = f"boot-{number:02d}"
-        challenge = f"ch-{secrets.randbelow(10**12 - 1) + 1:012d}"
-        while challenge in challenges:
-            challenge = f"ch-{secrets.randbelow(10**12 - 1) + 1:012d}"
+        challenge = _derive_scenario_challenge(
+            micro["run"]["commit"], number, challenges
+        )
         challenges.add(challenge)
         target_order = "plain-agentos" if number % 2 else "agentos-plain"
         work_dir = f"{run_dir_rel}/raw/{boot_id}"
@@ -1386,7 +2314,7 @@ def create_scenario_campaign(
         runner_log = f"{work_dir}/runner.log"
         command = [
             micro["environment"]["python"]["path"],
-            str(driver_path.resolve()),
+            str(_resolved_safe_file(driver_path, "scenario input driver")),
             "--work-dir",
             work_dir,
             "--timeout",
@@ -1422,7 +2350,11 @@ def create_scenario_campaign(
     value = {
         "boots": boots,
         "kind": SCENARIO_KIND,
+        "measurement_source_receipt": json.loads(json.dumps(
+            micro["measurement_source_receipt"]
+        )),
         "phase": "collecting",
+        "platform": json.loads(json.dumps(micro["platform"])),
         "protocol": {
             "collector_path": "host_tools/evaluation_scenario.py",
             "collector_sha256": _sha256(collector_path),
@@ -1449,9 +2381,10 @@ def create_scenario_campaign(
             "commit": micro["run"]["commit"],
             "environment_sha256": _environment_sha256(micro),
             "id": micro["run"]["id"],
+            "platform_sha256": _canonical_sha256(micro["platform"]),
             "scenario_environment_sha256": _canonical_sha256(execution_environment),
         },
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": SCENARIO_SCHEMA_VERSION,
     }
     validate_scenario_campaign(value)
     _atomic_json(output, value)
@@ -1459,8 +2392,18 @@ def create_scenario_campaign(
 
 
 def validate_scenario_campaign(value: dict[str, Any]) -> None:
-    _expect_keys(value, ["boots", "kind", "phase", "protocol", "report", "run", "schema_version"], "scenario campaign")
-    if value["schema_version"] != 1 or value["kind"] != SCENARIO_KIND:
+    _expect_keys(
+        value,
+        [
+            "boots", "kind", "measurement_source_receipt", "phase", "platform",
+            "protocol", "report", "run", "schema_version",
+        ],
+        "scenario campaign",
+    )
+    if (
+        value["schema_version"] != SCENARIO_SCHEMA_VERSION
+        or value["kind"] != SCENARIO_KIND
+    ):
         raise CampaignError("unsupported scenario campaign schema")
     if value["phase"] not in {"collecting", "collected"}:
         raise CampaignError("invalid scenario campaign phase")
@@ -1469,7 +2412,7 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
         run,
         [
             "artifact_root", "commit", "environment_sha256", "id",
-            "scenario_environment_sha256",
+            "platform_sha256", "scenario_environment_sha256",
         ],
         "scenario run",
     )
@@ -1478,10 +2421,30 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
     artifact_root = _artifact_root(run["artifact_root"])
     if artifact_root.name != run["id"]:
         raise CampaignError("scenario artifact root is not bound to the run identity")
-    if not re.fullmatch(r"[0-9a-f]{64}", run["environment_sha256"]) or not re.fullmatch(
-        r"[0-9a-f]{64}", run["scenario_environment_sha256"]
+    if any(
+        not isinstance(run[key], str)
+        or re.fullmatch(r"[0-9a-f]{64}", run[key]) is None
+        for key in (
+            "environment_sha256", "platform_sha256",
+            "scenario_environment_sha256",
+        )
     ):
         raise CampaignError("invalid scenario environment identity")
+    try:
+        validate_measurement_source_receipt_shape(
+            value["measurement_source_receipt"],
+            expected_commit=run["commit"],
+        )
+    except ValueError as error:
+        raise CampaignError(
+            f"invalid scenario measurement source receipt: {error}"
+        ) from error
+    platform = value["platform"]
+    if not isinstance(platform, dict):
+        raise CampaignError("scenario platform proof must be an object")
+    _validate_platform_proof(platform, str(platform.get("entry_domain", "")))
+    if run["platform_sha256"] != _canonical_sha256(platform):
+        raise CampaignError("scenario platform proof differs from its hash")
     protocol = value["protocol"]
     _expect_keys(
         protocol,
@@ -1493,10 +2456,13 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
         "scenario protocol",
     )
     requested = protocol["requested_boots"]
-    if type(requested) is not int or requested < MINIMUM_BOOTS or protocol["minimum_boots"] != MINIMUM_BOOTS:
+    if (
+        type(requested) is not int
+        or requested != FORMAL_BOOT_COUNT
+        or protocol["minimum_boots"] != MINIMUM_BOOTS
+    ):
         raise CampaignError("invalid scenario boot protocol")
-    if type(protocol["timeout_seconds"]) is not int or not 60 <= protocol["timeout_seconds"] <= 3600:
-        raise CampaignError("invalid scenario timeout")
+    scenario_pair_deadline_contract(protocol["timeout_seconds"])
     if (
         protocol["collector_path"] != "host_tools/evaluation_scenario.py"
         or protocol["input_driver_path"] != "host_tools/check_seeded_action_state.py"
@@ -1516,23 +2482,16 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
     execution_environment = protocol["execution_environment"]
     _expect_keys(
         execution_environment,
-        ["domain", "launcher", "launcher_argv", "tools"],
+        ["clean_environment", "domain", "launcher", "launcher_argv", "tools"],
         "scenario execution environment",
     )
-    expected_launcher = (
-        ["wsl.exe", "-d", protocol["wsl_distro"], "--", "bash", "-lc"]
-        if execution_environment["domain"] == "wsl"
-        else ["bash", "-lc"]
-    )
-    if execution_environment["domain"] not in {"wsl", "native-login-shell"} or execution_environment["launcher_argv"] != expected_launcher:
-        raise CampaignError("invalid scenario execution-domain launcher")
     for container, labels in (
         (execution_environment["launcher"], None),
         (
             execution_environment["tools"],
             {
-                "bash", "compiler", "linker", "make", "objcopy", "objdump",
-                "qemu", "timeout",
+                "bash", "compiler", "env", "host_cc", "linker", "make",
+                "objcopy", "objdump", "qemu", "timeout",
             },
         ),
     ):
@@ -1551,16 +2510,64 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
         if (
             not all(isinstance(tool[key], str) and tool[key] for key in tool)
             or not re.fullmatch(r"[0-9a-f]{64}", tool["sha256"])
+            or not _is_portable_absolute_path(tool["path"])
         ):
             raise CampaignError(f"invalid scenario tool identity: {label}")
+    tools = execution_environment["tools"]
+    clean_environment = execution_environment["clean_environment"]
+    if not isinstance(clean_environment, dict):
+        raise CampaignError("scenario clean environment must be an object")
+    _expect_keys(
+        clean_environment,
+        SCENARIO_CLEAN_ENVIRONMENT_KEYS,
+        "scenario clean environment",
+    )
+    if any(
+        not isinstance(value, str) or "\x00" in value or "\n" in value
+        for value in clean_environment.values()
+    ):
+        raise CampaignError("scenario clean environment contains an invalid value")
+    posix_temporary, native_temporary = _scenario_temporary_identity(platform)
+    if clean_environment != _scenario_clean_environment(
+        tools,
+        posix_temporary=posix_temporary,
+        native_temporary=native_temporary,
+    ):
+        raise CampaignError("scenario clean environment differs from bound tools")
+    domain = execution_environment["domain"]
+    launcher = execution_environment["launcher"]
+    if domain == "wsl-clean-shell":
+        expected_launcher = [
+            launcher["path"],
+            "-d",
+            protocol["wsl_distro"],
+            "--",
+            tools["env"]["path"],
+            "-i",
+        ]
+        launcher_valid = launcher["argv0"] == "wsl.exe"
+    elif domain in {"native-clean-shell", "native-msys2-clean-shell"}:
+        expected_launcher = [tools["env"]["path"], "-i"]
+        launcher_valid = launcher == tools["env"]
+    else:
+        expected_launcher = []
+        launcher_valid = False
     if (
-        execution_environment["tools"]["bash"]["argv0"] != "bash"
-        or execution_environment["tools"]["make"]["argv0"] != "make"
-        or execution_environment["tools"]["compiler"]["path"] != f"{protocol['toolprefix']}gcc"
-        or execution_environment["tools"]["linker"]["path"] != f"{protocol['toolprefix']}ld"
-        or execution_environment["tools"]["objcopy"]["path"] != f"{protocol['toolprefix']}objcopy"
-        or execution_environment["tools"]["objdump"]["path"] != f"{protocol['toolprefix']}objdump"
-        or execution_environment["tools"]["timeout"]["argv0"] != "timeout"
+        not launcher_valid
+        or execution_environment["launcher_argv"] != expected_launcher
+        or any(argument in {"-l", "-lc", "--login"} for argument in expected_launcher)
+    ):
+        raise CampaignError("invalid scenario execution-domain launcher")
+    if (
+        tools["bash"]["argv0"] != "bash"
+        or tools["env"]["argv0"] != "env"
+        or tools["host_cc"]["argv0"] != "cc"
+        or tools["make"]["argv0"] != "make"
+        or tools["compiler"]["path"] != f"{protocol['toolprefix']}gcc"
+        or tools["linker"]["path"] != f"{protocol['toolprefix']}ld"
+        or tools["objcopy"]["path"] != f"{protocol['toolprefix']}objcopy"
+        or tools["objdump"]["path"] != f"{protocol['toolprefix']}objdump"
+        or tools["timeout"]["argv0"] != "timeout"
         or run["scenario_environment_sha256"] != _canonical_sha256(execution_environment)
     ):
         raise CampaignError("scenario execution environment is not bound to the protocol")
@@ -1676,8 +2683,9 @@ def get_scenario_metadata(path: Path, field: str) -> str:
     raise CampaignError("scenario metadata field is not exportable")
 
 
-def record_scenario_boot(*, repo: Path, manifest_path: Path, boot_id: str, exit_code: int, runner_log: Path, host_summary: Path) -> None:
-    repo = repo.resolve()
+def _record_scenario_boot_result(*, repo: Path, manifest_path: Path, boot_id: str, exit_code: int, runner_log: Path, host_summary: Path) -> None:
+    repo = _resolved_safe_directory(repo, "repository")
+    manifest_path = _resolved_safe_file(manifest_path, "scenario campaign manifest")
     value = _strict_json(manifest_path)
     validate_scenario_campaign(value)
     _require_manifest_artifact_root(
@@ -1690,6 +2698,12 @@ def record_scenario_boot(*, repo: Path, manifest_path: Path, boot_id: str, exit_
         raise CampaignError("scenario boot is not pending")
     boot = matching[0]
     _require_repository_identity(repo, value["run"]["commit"], "before scenario archival")
+    _evaluation_source_gate(
+        repo,
+        value["run"]["commit"],
+        value["run"]["artifact_root"],
+        "before scenario archival",
+    )
     if _repo_relative(repo, runner_log) != boot["runner_log"] or _repo_relative(repo, host_summary) != boot["host_summary"]:
         raise CampaignError("scenario evidence paths differ from the plan")
     _require_regular_file(runner_log, "scenario runner log")
@@ -1708,6 +2722,12 @@ def record_scenario_boot(*, repo: Path, manifest_path: Path, boot_id: str, exit_
         _require_repository_identity(
             repo, value["run"]["commit"], "after scenario archival"
         )
+        _evaluation_source_gate(
+            repo,
+            value["run"]["commit"],
+            value["run"]["artifact_root"],
+            "after scenario archival",
+        )
         boot["status"] = "passed"
     else:
         if host_summary.exists():
@@ -1721,6 +2741,7 @@ def record_scenario_boot(*, repo: Path, manifest_path: Path, boot_id: str, exit_
 def _verify_scenario_execution_binding(
     repo: Path, value: dict[str, Any], boot: dict[str, Any]
 ) -> None:
+    _verify_platform_execution_binding(repo, value["platform"])
     protocol = value["protocol"]
     python_path = Path(protocol["python_bin"])
     _require_regular_file(python_path, "scenario Python executable")
@@ -1730,14 +2751,23 @@ def _verify_scenario_execution_binding(
     _require_regular_file(git_path, "scenario Git executable")
     if _sha256(git_path) != protocol["git_sha256"]:
         raise CampaignError("scenario Git executable changed before boot")
-    expected_driver = str((repo / protocol["input_driver_path"]).resolve())
+    expected_driver = str(
+        _resolved_safe_file(
+            repo / protocol["input_driver_path"], "scenario input driver"
+        )
+    )
     if boot["command_argv"][:2] != [str(python_path), expected_driver]:
         raise CampaignError("scenario command does not use preflighted absolute inputs")
+    posix_temporary, native_temporary = _scenario_temporary_identity(
+        value["platform"]
+    )
     observed = _probe_scenario_environment(
         repo,
         wsl_distro=protocol["wsl_distro"],
         toolprefix=protocol["execution_environment"]["tools"]["compiler"]["argv0"][:-3],
         qemu=protocol["execution_environment"]["tools"]["qemu"]["argv0"],
+        posix_temporary=posix_temporary,
+        native_temporary=native_temporary,
     )
     if observed != protocol["execution_environment"]:
         raise CampaignError("scenario execution environment changed before boot")
@@ -1748,11 +2778,9 @@ def execute_and_record_scenario_boot(
 ) -> int:
     """Execute one scenario boot from its precommitted absolute command."""
 
-    from plain_ucore_action_runner import exclusive_repo_run_lock
-
-    repo = repo.resolve()
-    manifest_path = manifest_path.resolve()
-    with exclusive_repo_run_lock(repo):
+    repo = _resolved_safe_directory(repo, "repository")
+    manifest_path = _resolved_safe_file(manifest_path, "scenario campaign manifest")
+    with exclusive_scenario_coordination_lock(repo):
         value = _strict_json(manifest_path)
         validate_scenario_campaign(value)
         _require_manifest_artifact_root(
@@ -1764,13 +2792,28 @@ def execute_and_record_scenario_boot(
         if len(matching) != 1 or matching[0]["status"] != "planned":
             raise CampaignError("scenario boot is not uniquely planned and pending")
         boot = matching[0]
+        _prepare_evaluation_build_tree(
+            repo,
+            value["run"]["commit"],
+            value["run"]["artifact_root"],
+            f"scenario {boot_id}",
+        )
         runner_log = repo / boot["runner_log"]
         host_summary = repo / boot["host_summary"]
-        if runner_log.is_symlink() or host_summary.is_symlink():
-            raise CampaignError("scenario evidence path is link-backed")
-        runner_log.parent.mkdir(parents=True, exist_ok=True)
-        timeout_seconds = min(3600, value["protocol"]["timeout_seconds"] * 2 + 60)
-        with _SourceIntegrityMonitor(repo, value["run"]["commit"]):
+        runner_log = _safe_output_path(runner_log, "scenario runner log")
+        host_summary = _safe_output_path(host_summary, "scenario Host summary")
+        deadline = scenario_pair_deadline_contract(
+            value["protocol"]["timeout_seconds"]
+        )
+        timeout_seconds = deadline["pair_deadline_seconds"]
+        maximum_timeout_seconds = scenario_pair_deadline_contract(3600)[
+            "pair_deadline_seconds"
+        ]
+        with _SourceIntegrityMonitor(
+            repo, value["run"]["commit"],
+            value["measurement_source_receipt"],
+            value["run"]["artifact_root"],
+        ):
             _verify_scenario_execution_binding(repo, value, boot)
             try:
                 exit_code = _run_micro_process(
@@ -1779,6 +2822,8 @@ def execute_and_record_scenario_boot(
                     repo=repo,
                     runner_log=runner_log,
                     timeout_seconds=timeout_seconds,
+                    maximum_timeout_seconds=maximum_timeout_seconds,
+                    deadline_label="scenario pair",
                 )
             except OSError as error:
                 exit_code = 127
@@ -1788,7 +2833,7 @@ def execute_and_record_scenario_boot(
                     newline="\n",
                 )
         _verify_scenario_execution_binding(repo, value, boot)
-        record_scenario_boot(
+        _record_scenario_boot_result(
             repo=repo,
             manifest_path=manifest_path,
             boot_id=boot_id,
@@ -1800,7 +2845,9 @@ def execute_and_record_scenario_boot(
 
 
 def record_scenario_report(*, repo: Path, manifest_path: Path, report_path: Path) -> None:
-    repo = repo.resolve()
+    repo = _resolved_safe_directory(repo, "repository")
+    manifest_path = _resolved_safe_file(manifest_path, "scenario campaign manifest")
+    report_path = _resolved_safe_file(report_path, "scenario report")
     value = _strict_json(manifest_path)
     validate_scenario_campaign(value)
     _require_manifest_artifact_root(
@@ -1812,7 +2859,7 @@ def record_scenario_report(*, repo: Path, manifest_path: Path, report_path: Path
     if _repo_relative(repo, report_path) != expected_path:
         raise CampaignError("scenario report path differs from the plan")
     report = _strict_json(report_path)
-    if report.get("status") not in {"supported", "inconclusive"} or report.get("source_commit") != value["run"]["commit"] or report.get("run_id") != value["run"]["id"]:
+    if report.get("status") not in {"supported", "regressed", "inconclusive"} or report.get("source_commit") != value["run"]["commit"] or report.get("run_id") != value["run"]["id"]:
         raise CampaignError("scenario collector did not produce a bound report")
     summary = report.get("summary")
     if not isinstance(summary, dict) or summary.get("independent_boots") != len(value["boots"]) or summary.get("unique_challenges") != len(value["boots"]) or summary.get("target_order_balanced") is not True:
@@ -1836,7 +2883,8 @@ def seal_scenario_campaign(path: Path) -> None:
 def check_scenario_campaign(
     repo: Path, path: Path, micro_manifest: Path | None = None
 ) -> dict[str, Any]:
-    repo = repo.resolve()
+    repo = _resolved_safe_directory(repo, "repository")
+    path = _resolved_safe_file(path, "scenario campaign manifest")
     value = _strict_json(path)
     validate_scenario_campaign(value)
     _require_manifest_artifact_root(
@@ -1853,11 +2901,21 @@ def check_scenario_campaign(
             or value["run"]["id"] != micro["run"]["id"]
             or value["run"]["artifact_root"] != micro["run"]["artifact_root"]
             or value["run"]["environment_sha256"] != _environment_sha256(micro)
+            or value["platform"] != micro["platform"]
+            or value["run"]["platform_sha256"]
+            != _canonical_sha256(micro["platform"])
+            or value["measurement_source_receipt"]
+            != micro["measurement_source_receipt"]
         ):
             raise CampaignError("scenario campaign differs from the micro campaign")
     commit, clean = repository_identity(repo)
     if commit != value["run"]["commit"] or not clean:
         raise CampaignError("source tree differs from the scenario campaign")
+    _require_measurement_receipt(
+        repo, commit, value["measurement_source_receipt"],
+        "during scenario campaign check",
+    )
+    _verify_platform_execution_binding(repo, value["platform"])
     for path_key, hash_key in (
         ("collector_path", "collector_sha256"),
         ("input_driver_path", "input_driver_sha256"),
@@ -1866,11 +2924,16 @@ def check_scenario_campaign(
         _require_regular_file(source, f"scenario {path_key}")
         if _sha256(source) != value["protocol"][hash_key]:
             raise CampaignError(f"scenario input contract changed: {source}")
+    posix_temporary, native_temporary = _scenario_temporary_identity(
+        value["platform"]
+    )
     observed_environment = _probe_scenario_environment(
         repo,
         wsl_distro=value["protocol"]["wsl_distro"],
         toolprefix=value["protocol"]["execution_environment"]["tools"]["compiler"]["argv0"][:-3],
         qemu=value["protocol"]["execution_environment"]["tools"]["qemu"]["argv0"],
+        posix_temporary=posix_temporary,
+        native_temporary=native_temporary,
     )
     if observed_environment != value["protocol"]["execution_environment"]:
         raise CampaignError("scenario execution environment changed after planning")
@@ -1908,17 +2971,6 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--qemu", required=True)
     create.add_argument("--python-bin", required=True)
     create.add_argument("--shell-bin", default="bash")
-
-    record = subparsers.add_parser("record")
-    record.add_argument("--repo", type=Path, required=True)
-    record.add_argument("--manifest", type=Path, required=True)
-    record.add_argument("--boot-id", required=True)
-    record.add_argument("--exit-code", type=int, required=True)
-    record.add_argument("--guest-log", type=Path, required=True)
-    record.add_argument("--runner-log", type=Path, required=True)
-    record.add_argument("--kernel", type=Path, required=True)
-    record.add_argument("--input-image", type=Path, required=True)
-    record.add_argument("--final-image", type=Path, required=True)
 
     run_boot = subparsers.add_parser("run-boot")
     run_boot.add_argument("--repo", type=Path, required=True)
@@ -1981,14 +3033,6 @@ def _parser() -> argparse.ArgumentParser:
         "--field", choices=("boots", "run_id", "commit"), required=True
     )
 
-    scenario_record = subparsers.add_parser("record-scenario")
-    scenario_record.add_argument("--repo", type=Path, required=True)
-    scenario_record.add_argument("--manifest", type=Path, required=True)
-    scenario_record.add_argument("--boot-id", required=True)
-    scenario_record.add_argument("--exit-code", type=int, required=True)
-    scenario_record.add_argument("--runner-log", type=Path, required=True)
-    scenario_record.add_argument("--host-summary", type=Path, required=True)
-
     scenario_run = subparsers.add_parser("run-scenario-boot")
     scenario_run.add_argument("--repo", type=Path, required=True)
     scenario_run.add_argument("--manifest", type=Path, required=True)
@@ -2022,18 +3066,6 @@ def main(argv: list[str] | None = None) -> int:
                 qemu=args.qemu,
                 python_bin=args.python_bin,
                 shell_bin=args.shell_bin,
-            )
-        elif args.command == "record":
-            record_boot(
-                repo=args.repo,
-                manifest_path=args.manifest,
-                boot_id=args.boot_id,
-                exit_code=args.exit_code,
-                guest_log=args.guest_log,
-                runner_log=args.runner_log,
-                kernel=args.kernel,
-                input_image=args.input_image,
-                final_image=args.final_image,
             )
         elif args.command == "run-boot":
             return execute_and_record_boot(
@@ -2071,15 +3103,6 @@ def main(argv: list[str] | None = None) -> int:
             print(get_scenario_boot_field(args.manifest, args.boot_id, args.field))
         elif args.command == "get-scenario-metadata":
             print(get_scenario_metadata(args.manifest, args.field))
-        elif args.command == "record-scenario":
-            record_scenario_boot(
-                repo=args.repo,
-                manifest_path=args.manifest,
-                boot_id=args.boot_id,
-                exit_code=args.exit_code,
-                runner_log=args.runner_log,
-                host_summary=args.host_summary,
-            )
         elif args.command == "run-scenario-boot":
             return execute_and_record_scenario_boot(
                 repo=args.repo,

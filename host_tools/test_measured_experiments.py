@@ -30,7 +30,7 @@ from measured_experiments import (
 
 MARKER = (
     "agentbench_ucore: file_query_benchmark schema=2 unit=us load=143 "
-    "traversal_ops=64 traversal_records=143 traversal_duration_us=36 "
+    "traversal_ops=64 traversal_records=512 traversal_duration_us=36 "
     "cold_index_ops=1 cold_index_records=6 cold_index_duration_us=2 "
     "cold_rebuild_records=512 cold_rebuild_included=1 "
     "warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 "
@@ -210,6 +210,56 @@ def main() -> int:
             "receipt field warm_index_duration_us provenance",
         )
 
+        provenance_swaps = (
+            (
+                "load",
+                "\treceipt.load =\n"
+                "\t\tbench_scratch.file_query_result.candidate_records;",
+                "\treceipt.load =\n"
+                "\t\tbench_scratch.file_query_result.scanned_records;",
+            ),
+            (
+                "traversal_records",
+                "\treceipt.traversal_records =\n"
+                "\t\tbench_scratch.file_query_result.scanned_records;",
+                "\treceipt.traversal_records =\n"
+                "\t\tbench_scratch.file_query_result.candidate_records;",
+            ),
+            (
+                "cold_index_records",
+                "\treceipt.cold_index_records =\n"
+                "\t\tbench_scratch.file_query_result.scanned_records;",
+                "\treceipt.cold_index_records =\n"
+                "\t\tbench_scratch.file_query_result.candidate_records;",
+            ),
+            (
+                "warm_index_records",
+                "\treceipt.warm_index_records =\n"
+                "\t\tbench_scratch.file_query_result.scanned_records;",
+                "\treceipt.warm_index_records =\n"
+                "\t\tbench_scratch.file_query_result.candidate_records;",
+            ),
+            (
+                "warm_index_candidates",
+                "\treceipt.warm_index_candidates =\n"
+                "\t\tbench_scratch.file_query_result.candidate_records;",
+                "\treceipt.warm_index_candidates =\n"
+                "\t\tbench_scratch.file_query_result.scanned_records;",
+            ),
+        )
+        for field, original, swapped in provenance_swaps:
+            swapped_source = root / f"agentbench-swapped-{field}.c"
+            swapped_source.write_text(
+                mutate_function(
+                    source_text, "measure_file_query_paths", original, swapped
+                ),
+                encoding="utf-8",
+            )
+            expect_rejected(
+                lambda path=swapped_source: validate_benchmark_source(path),
+                f"receipt field {field} provenance",
+            )
+
         floored_clock = root / "agentbench-floored-clock.c"
         floored_clock.write_text(
             mutate_function(
@@ -279,11 +329,11 @@ def main() -> int:
                 source_text,
                 "measure_file_query_paths",
                 "\treceipt.load =\n"
-                "\t\tbench_scratch.file_query_result.scanned_records;",
+                "\t\tbench_scratch.file_query_result.candidate_records;",
                 "\tmemset(&bench_scratch.file_query_result, 0,\n"
                 "\t       sizeof(bench_scratch.file_query_result));\n"
                 "\treceipt.load =\n"
-                "\t\tbench_scratch.file_query_result.scanned_records;",
+                "\t\tbench_scratch.file_query_result.candidate_records;",
             ),
             encoding="utf-8",
         )
@@ -357,6 +407,11 @@ def main() -> int:
             "cold_index",
             "warm_index",
         }, value
+        traversal = next(
+            row for row in value["rows"] if row["path"] == "traversal"
+        )
+        assert traversal["load"] == 143, traversal
+        assert traversal["primary_value"] == 512, traversal
         cold = next(row for row in value["rows"] if row["path"] == "cold_index")
         assert cold["duration_unit"] == "us", cold
         assert cold["duration_value"] == 2, cold
@@ -413,6 +468,35 @@ def main() -> int:
             row for row in zero_value["rows"] if row["path"] == "cold_index"
         )
         assert zero_cold["duration_value"] == 0, zero_cold
+
+        excessive_load = root / "excessive-load.log"
+        excessive_load.write_text(
+            MARKER.replace("load=143", "load=513")
+            + "\nagentbench_ucore: parent passed\n",
+            encoding="utf-8",
+        )
+        expect_rejected(
+            lambda: extract_file_query_measurements(
+                excessive_load, "excessive-load.log", command, commit,
+                "run-excessive-load"
+            ),
+            "load exceeds traversal work",
+        )
+
+        excessive_index = root / "excessive-index.log"
+        excessive_index.write_text(
+            MARKER.replace("cold_index_records=6", "cold_index_records=513")
+            .replace("warm_index_records=6", "warm_index_records=513")
+            + "\nagentbench_ucore: parent passed\n",
+            encoding="utf-8",
+        )
+        expect_rejected(
+            lambda: extract_file_query_measurements(
+                excessive_index, "excessive-index.log", command, commit,
+                "run-excessive-index"
+            ),
+            "cold index work exceeds traversal work",
+        )
 
         no_pass = root / "no-pass.log"
         no_pass.write_text(MARKER + "\n", encoding="utf-8")

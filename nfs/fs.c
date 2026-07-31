@@ -1,5 +1,9 @@
 #include <assert.h>
+#ifdef _WIN32
+#include "elf_compat.h"
+#else
 #include <elf.h>
+#endif
 #include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
@@ -11,6 +15,7 @@
 
 #include "fs.h"
 #include "host_image_snapshot.h"
+#include "host_windows_compat.h"
 #include "../agent_metadata_disk_abi.h"
 #include "../user/include/exec_policy_manifest.h"
 #include "../exec_image_policy.h"
@@ -383,7 +388,7 @@ int main(int argc, char *argv[])
 	}
 	assert((BSIZE % sizeof(struct dinode)) == 0);
 	validate_exec_policy();
-	fsfd = open(argv[1], O_RDWR | O_CREAT | O_TRUNC, 0666);
+	fsfd = open(argv[1], O_RDWR | O_CREAT | O_TRUNC | O_BINARY, 0666);
 	if (fsfd < 0) {
 		perror(argv[1]);
 		exit(1);
@@ -1106,7 +1111,7 @@ void iappend(uint inum, void *xp, int n)
 		}
 		n1 = min(n, (fbn + 1) * BSIZE - off);
 		rsect(x, buf);
-		bcopy(p, buf + off - (fbn * BSIZE), n1);
+		bcopy(p, buf + (off - (fbn * BSIZE)), n1);
 		wsect(x, buf);
 		n -= n1;
 		off += n1;

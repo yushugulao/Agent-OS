@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -52,12 +53,17 @@ from dual_state_evidence_contract import (
 from reference_catalog_contract import expected_reference_identities
 from research_state_manifest import load_manifest, target_state_names
 from remote_ci_test_fixture import JOB_SPECS, build_remote_job_payloads
+from evidence_toolchain_attestation import (
+    decode_external_output, resolve_bash_executable, resolve_executable,
+)
 REPO = Path(__file__).resolve().parents[1]
 COLLECTOR = REPO / "scripts" / "capture-final-evidence.py"
 CI_MECHANISM = REPO / "scripts" / "run-ci-mechanism.sh"
 MEASUREMENT_MODULE = REPO / "host_tools" / "measured_experiments.py"
+FULL_VERIFICATION_METRICS = REPO / "host_tools" / "full_verification_metrics.py"
 BENCHMARK_SOURCE_CONTRACT = REPO / "host_tools" / "benchmark_source_contract.py"
 DELIVERY_CONTRACT = REPO / "host_tools" / "evidence_delivery_contract.py"
+GIT_HISTORY_CONTRACT = REPO / "host_tools" / "git_history_contract.py"
 STRICT_JSON = REPO / "host_tools" / "strict_json.py"
 SEMANTIC_REGISTRY = REPO / "host_tools" / "evidence_semantic_registry.py"
 SEMANTIC_COMMON = REPO / "host_tools" / "evidence_semantic_common.py"
@@ -148,8 +154,13 @@ PROFILE_ARTIFACTS = {
 }
 def run(argv: list[str], cwd: Path, check: bool = True,
         env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(argv, cwd=cwd, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, check=False, env=env)
+    completed = subprocess.run(argv, cwd=cwd, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, check=False, env=env)
+    result = subprocess.CompletedProcess(
+        completed.args, completed.returncode,
+        decode_external_output(completed.stdout),
+        decode_external_output(completed.stderr),
+    )
     if check and result.returncode:
         raise AssertionError(f"command failed: {argv}\n{result.stdout}\n{result.stderr}")
     return result
@@ -892,6 +903,20 @@ combined("fs-allocator-fault", [("fs-allocator:fixture:prepare",
 def fixture_collector(root: Path) -> Path:
     candidate = root / "scripts" / COLLECTOR.name
     return candidate if candidate.is_file() else COLLECTOR
+
+
+def collector_command(root: Path, *arguments: str) -> list[str]:
+    launcher = root / "scripts" / "trusted-python-entry.py"
+    if not launcher.is_file():
+        launcher = REPO / "scripts" / "trusted-python-entry.py"
+    return [
+        sys.executable,
+        "-I",
+        "-S",
+        str(launcher),
+        "scripts/capture-final-evidence.py",
+        *arguments,
+    ]
 def populate_summary_stage(stage: Path) -> Path:
     incoming, runtime = stage / "incoming", stage / "runtime"
     incoming.mkdir(parents=True)
@@ -919,7 +944,8 @@ def populate_summary_stage(stage: Path) -> Path:
     steps.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return steps
 def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = False,
-                      bad_stack: bool = False, bad_timing: bool = False) -> dict[str, Path]:
+                      bad_stack: bool = False, bad_timing: bool = False,
+                      non_utf8_version: bool = False) -> dict[str, Path]:
     run(["git", "init", "-q"], root)
     run(["git", "config", "user.email", "evidence@example.invalid"], root)
     run(["git", "config", "user.name", "Evidence Test"], root)
@@ -927,13 +953,48 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
     shutil.copyfile(REPO / ".gitlab-ci.yml", root / ".gitlab-ci.yml")
     (root / "scripts").mkdir()
     shutil.copyfile(COLLECTOR, root / "scripts" / COLLECTOR.name)
+    shutil.copyfile(
+        REPO / "scripts" / "trusted-python-entry.py",
+        root / "scripts" / "trusted-python-entry.py",
+    )
+    shutil.copyfile(
+        REPO / "scripts" / "trusted-python-child.py",
+        root / "scripts" / "trusted-python-child.py",
+    )
     (root / "host_tools").mkdir()
     shutil.copyfile(MEASUREMENT_MODULE, root / "host_tools" / MEASUREMENT_MODULE.name)
+    shutil.copyfile(
+        FULL_VERIFICATION_METRICS,
+        root / "host_tools" / FULL_VERIFICATION_METRICS.name,
+    )
     shutil.copyfile(
         BENCHMARK_SOURCE_CONTRACT,
         root / "host_tools" / BENCHMARK_SOURCE_CONTRACT.name,
     )
     shutil.copyfile(DELIVERY_CONTRACT, root / "host_tools" / DELIVERY_CONTRACT.name)
+    shutil.copyfile(
+        GIT_HISTORY_CONTRACT, root / "host_tools" / GIT_HISTORY_CONTRACT.name
+    )
+    shutil.copyfile(
+        REPO / "host_tools" / "safe_host_paths.py",
+        root / "host_tools" / "safe_host_paths.py",
+    )
+    shutil.copyfile(
+        REPO / "host_tools" / "evidence_toolchain_attestation.py",
+        root / "host_tools" / "evidence_toolchain_attestation.py",
+    )
+    shutil.copyfile(
+        REPO / "host_tools" / "evaluation_source_gate.py",
+        root / "host_tools" / "evaluation_source_gate.py",
+    )
+    shutil.copyfile(
+        REPO / "host_tools" / "formal_python_runtime.py",
+        root / "host_tools" / "formal_python_runtime.py",
+    )
+    shutil.copyfile(
+        REPO / "host_tools" / "full_verification_metrics.py",
+        root / "host_tools" / "full_verification_metrics.py",
+    )
     shutil.copyfile(STRICT_JSON, root / "host_tools" / STRICT_JSON.name)
     for module in (
         SEMANTIC_REGISTRY, SEMANTIC_COMMON, SEMANTIC_PROFILES,
@@ -1001,7 +1062,9 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
         shutil.copyfile(contract, root / "ci" / contract.name)
     (root / "ci" / "kernel-budgets.json").write_text(json.dumps(config) + "\n", encoding="utf-8")
     tools = root / "tools"
-    version_tool = "#!/usr/bin/env bash\necho 'fixture tool 1.0'\n"
+    version_tool = ("#!/usr/bin/env bash\nprintf '\\322fixture tool 1.0\\n'\n"
+                    if non_utf8_version else
+                    "#!/usr/bin/env bash\necho 'fixture tool 1.0'\n")
     compiler = tools / "riscv64-linux-gnu-gcc"
     qemu = tools / "qemu-system-riscv64"
     host_cc = tools / "cc"
@@ -1065,7 +1128,7 @@ mainflow_artifacts="$(PYTHONPATH=host_tools python3 -c \
   'from dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS; print("\t".join(DUAL_STATE_RAW_ARTIFACTS))')"
 printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nreader-e2e\t3\t4\treader-e2e.log\treader-e2e-log-manifest.json\treader-e2e-run-fixture-ucore-build.log\treader-e2e-run-fixture-ucore-run.log\treader-e2e-run-fixture-ucore-run-summary.json\nhost-platform-alignment\t4\t5\nagent-suite\t5\t6\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t6\t7\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\tdual-reader-compare.json\thost-platform-alignment.json\t%s\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t7\t8\tproc-reap.log\nsyscall-fairness\t8\t9\tsyscall-fairness.log\nfile-resource\t9\t10\tfile-resource.log\nthread-resource\t10\t11\tthread-resource.log\nphysical-resource\t11\t12\tphysical-resource.log\nmetadata-recovery\t12\t13\tmetadata-recovery.log\nobserve-recovery\t13\t14\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t14\t15\tvirtio-disk.log\nworkflow-teardown-race\t15\t16\tworkflow-teardown-race.log\nfs-enospc\t16\t17\tfs-enospc.log\nfs-allocator-fault\t17\t18\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' \
   "${mainflow_artifacts}" >"${runtime}/steps.tsv"
-python3 scripts/capture-final-evidence.py write-summary \
+python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py write-summary \
   --stage "${FINAL_EVIDENCE_STAGE}" --steps "${runtime}/steps.tsv" \
   --commit "$(git rev-parse HEAD)" --agent-grace 2s --mechanism-grace 5s --workflow-runs 3
 echo 'kernel stack budget: user=1 interrupt=1 margin=1 required=4095 limit=4096'
@@ -1112,11 +1175,12 @@ echo '[full-verify] all checks passed'
     return {"make": make, "compiler_prefix": tools / "riscv64-linux-gnu-",
             "qemu": qemu, "host_cc": host_cc, "sentinel": root / "slow-sentinel"}
 def collect_args(repo: Path, output: Path, tools: dict[str, Path]) -> list[str]:
-    return [sys.executable, str(fixture_collector(repo)), "collect", "--repo-root", str(repo),
+    return [*collector_command(repo, "collect"), "--repo-root", str(repo),
             "--output", str(output), "--toolprefix", str(tools["compiler_prefix"]),
             "--qemu", str(tools["qemu"]), "--make", str(tools["make"]),
             "--host-cc", str(tools["host_cc"]), "--python", sys.executable,
-            "--bash", shutil.which("bash") or "bash", "--command-timeout", "30"]
+            "--bash", str(resolve_bash_executable("bash", resolve_executable("git"))),
+            "--command-timeout", "30"]
 def start_gitlab_fixture(commit: str, pipeline_sha: str | None = None,
                          missing_trace: bool = False, redirect_artifact_url: str | None = None,
                          job_payloads: dict[int, tuple[bytes, bytes]] | None = None
@@ -1186,6 +1250,27 @@ def start_redirect_sink(payload: bytes) -> tuple[ThreadingHTTPServer, threading.
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     return server, thread, f"http://127.0.0.1:{server.server_address[1]}/artifact.zip", observed
 class FinalEvidenceTests(unittest.TestCase):
+    def test_bash_resolution_selects_an_executable_gnu_bash(self) -> None:
+        bash = resolve_bash_executable("bash", resolve_executable("git"))
+        result = run(
+            [str(bash), "--noprofile", "--norc", "-c",
+             "printf '%s\\n' \"${BASH_VERSION-}\""],
+            REPO, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout.strip(), r"^[0-9]+\.[0-9]+")
+
+    def test_external_output_decode_preserves_status_and_diagnostics(self) -> None:
+        result = run(
+            [sys.executable, "-c",
+             "import os,sys; os.write(1,b'out\\xd2\\n'); "
+             "os.write(2,b'err\\xff\\n'); sys.exit(17)"],
+            REPO, check=False,
+        )
+        self.assertEqual(result.returncode, 17)
+        self.assertEqual(result.stdout, "out\ufffd\n")
+        self.assertEqual(result.stderr, "err\ufffd\n")
+
     def test_state_archive_is_bounded_deterministic_and_link_safe(self) -> None:
         def write_state(root: Path, image: str, payloads: dict[str, bytes]) -> None:
             root.mkdir()
@@ -1223,6 +1308,10 @@ class FinalEvidenceTests(unittest.TestCase):
             try:
                 os.symlink(victim, predictable)
             except OSError:
+                predictable = None
+            if predictable is not None and not predictable.is_symlink():
+                # Native MSYS may emulate os.symlink() by copying the target.
+                predictable.unlink(missing_ok=True)
                 predictable = None
             dual_state_archive.pack_state(second, second_archive)
             self.assertEqual(victim.read_text(encoding="utf-8"), "unchanged\n")
@@ -1360,7 +1449,7 @@ class FinalEvidenceTests(unittest.TestCase):
 
     def assert_verify_rejected(self, bundle: Path, cwd: Path, message: str) -> None:
         rewrite_checksums(bundle)
-        result = run([sys.executable, str(fixture_collector(cwd)), "verify", str(bundle)], cwd,
+        result = run(collector_command(cwd, "verify", str(bundle)), cwd,
                      check=False)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(message, result.stderr)
@@ -1508,7 +1597,7 @@ class FinalEvidenceTests(unittest.TestCase):
             steps = populate_summary_stage(stage)
             incoming = stage / "incoming"
             commit = "a" * 40
-            run([sys.executable, str(COLLECTOR), "write-summary", "--stage", str(stage),
+            run([*collector_command(REPO, "write-summary"), "--stage", str(stage),
                  "--steps", str(steps), "--commit", commit], REPO)
             summary = json.loads((incoming / "verification-summary.json").read_text())
             self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (6, 5))
@@ -1537,7 +1626,7 @@ class FinalEvidenceTests(unittest.TestCase):
                 bad = base / label
                 cases.append((bad, populate_summary_stage(bad), options, "settings contract"))
             for bad, bad_steps, options, message in cases:
-                result = run([sys.executable, str(COLLECTOR), "write-summary", "--stage", str(bad),
+                result = run([*collector_command(REPO, "write-summary"), "--stage", str(bad),
                               "--steps", str(bad_steps), "--commit", commit, *options], REPO,
                              check=False)
                 self.assertNotEqual(result.returncode, 0)
@@ -1548,6 +1637,8 @@ class FinalEvidenceTests(unittest.TestCase):
     def test_wiring_and_full_modes_are_fail_closed_and_equivalent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
+            sed = shutil.which("sed")
+            self.assertIsNotNone(sed, "GNU sed is required by the POSIX wiring fixture")
             stage = base / "stage"
             (stage / "incoming").mkdir(parents=True)
             runner = base / "runner.sh"
@@ -1562,7 +1653,7 @@ printf 'runner passed\n'
             script = f"""
 set -euo pipefail
 source {shlex.quote(str(wiring))}
-eval "$(sed -n '/^run_resource_regression() {{$/,/^}}$/p' {shlex.quote(str(full))})"
+eval "$({shlex.quote(str(sed))} -n '/^run_resource_regression() {{$/,/^}}$/p' {shlex.quote(str(full))})"
 TOOLPREFIX=x QEMU=x PYTHON_BIN={shlex.quote(sys.executable)} CASE_TIMEOUT=1s
 IDLE_NOTICE_SECONDS=1 MECHANISM_MARKER_GRACE_SECONDS=5s
 unset FINAL_EVIDENCE_STAGE
@@ -1633,12 +1724,16 @@ printf '===== guest:boot2 =====\nboot2 marker\n===== end-guest:boot2 =====\n' >>
             timing = base / "timings"
             fake_python = base / "fake-python"
             executable(fake_python, """#!/usr/bin/env bash
+arguments="$*"
+while [[ ${1:-} == -I || ${1:-} == -S || ${1:-} == -B || ${1:-} == -u ]]; do
+    shift
+done
 case "$1" in
 scripts/test-sync-owner-wiring.py|scripts/test-wait-atomic-wiring.py|scripts/check-wait-queue-contract.py)
     exit 0
     ;;
 esac
-printf '%s\n' "$*" >"${POLICY_MARKER}"
+printf '%s\n' "${arguments}" >"${POLICY_MARKER}"
 exit 23
 """)
             executable(base / "make", """#!/usr/bin/env bash
@@ -1654,6 +1749,7 @@ exit 91
                 "AGENT_TEST_TIMING_FILE": str(timing),
                 "AGENT_TEST_CALIBRATE": "0",
                 "REQUIRE_FULL_SUITE": "1",
+                "MAKE_TOOL": str(base / "make"),
             })
             for name in ("AGENT_TEST_CASE", "FINAL_EVIDENCE_STAGE"):
                 env.pop(name, None)
@@ -1679,10 +1775,63 @@ exit 91
                                "REQUIRE_FULL_SUITE": "1"}
             calibration = run(["bash", "scripts/run-agent-tests.sh"], REPO,
                               check=False, env=calibration_env)
-            self.assertEqual(calibration.returncode, 91,
+            self.assertEqual(calibration.returncode, 1,
                              calibration.stdout + calibration.stderr)
+            self.assertIn(
+                "calibration requires AGENT_TEST_CALIBRATION_PLAN",
+                calibration.stderr,
+            )
             self.assertFalse(policy_marker.exists())
-            self.assertTrue(make_marker.exists())
+            self.assertFalse(make_marker.exists())
+    @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
+    def test_non_utf8_tool_version_is_preserved_as_diagnostic_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            repo = base / "repo"
+            repo.mkdir()
+            tools = init_fixture_repo(repo, non_utf8_version=True)
+            output = base / "release"
+
+            result = run(collect_args(repo, output, tools), repo, check=False)
+
+            failed_log = output.with_name(output.name + ".failed") / "logs/full-verify.log"
+            detail = (failed_log.read_text(encoding="utf-8", errors="replace")
+                      if failed_log.is_file() else "")
+            self.assertEqual(result.returncode, 0,
+                             result.stdout + result.stderr + detail)
+            version = (output / "environment/versions/qemu.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(version, "\ufffdfixture tool 1.0\n")
+            self.assertEqual(json.loads((output / "manifest.json").read_text(
+                encoding="utf-8"))["status"], "ready")
+
+    @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
+    def test_repository_filters_cannot_pollute_detached_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            repo = base / "repo"
+            repo.mkdir()
+            tools = init_fixture_repo(repo)
+            (repo / ".gitattributes").write_text(
+                "filter-target.txt filter=hostile\n", encoding="ascii"
+            )
+            (repo / "filter-target.txt").write_bytes(b"committed bytes\n")
+            run(["git", "add", ".gitattributes", "filter-target.txt"], repo)
+            run(["git", "commit", "-q", "-m", "filter fixture"], repo)
+            sentinel = base / "filter-ran"
+            hostile = f"sh -c 'printf filtered >{shlex.quote(str(sentinel))}; cat'"
+            run(["git", "config", "filter.hostile.clean", hostile], repo)
+            run(["git", "config", "filter.hostile.smudge", hostile], repo)
+            run(["git", "config", "filter.hostile.required", "true"], repo)
+            output = base / "release"
+
+            result = run(collect_args(repo, output, tools), repo, check=False)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(sentinel.exists())
+            self.assertTrue((output / "manifest.json").is_file())
+
     @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
     def test_collect_verify_and_tamper_detection(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1694,7 +1843,8 @@ exit 91
             poisoned = dict(os.environ)
             poisoned.update({"BASH_ENV": "secret-bash-env", "DEEPSEEK_API_KEY": "secret-key",
                              "GIT_DIR": "secret-git-dir", "MAKEFLAGS": "secret-makeflags",
-                             "MAKEFILES": "secret-makefiles", "LD_PRELOAD": "secret-preload",
+                             "MAKEFILES": "secret-makefiles",
+                             "LD_LIBRARY_PATH": "secret-library-path",
                              "PYTHONPATH": "secret-pythonpath"})
             run(collect_args(repo, output, tools), repo, env=poisoned)
             manifest = json.loads((output / "manifest.json").read_text())
@@ -1706,7 +1856,7 @@ exit 91
             self.assertNotIn("CI artifact", json.dumps(manifest))
             observed_env = (output / "logs/raw/reader-e2e.log").read_text()
             for secret in ("BASH_ENV", "DEEPSEEK_API_KEY", "GIT_DIR", "MAKEFLAGS", "MAKEFILES",
-                           "LD_PRELOAD", "PYTHONPATH", "secret-"):
+                           "LD_LIBRARY_PATH", "PYTHONPATH", "secret-"):
                 self.assertNotIn(secret, observed_env)
                 self.assertNotIn(secret, json.dumps(manifest["command"]["environment"]))
             with (output / "metrics" / "measurements.csv").open(newline="") as handle:
@@ -1738,7 +1888,7 @@ exit 91
             self.assertIn(timing_hash, svg)
             self.assertEqual(manifest["metrics"]["chart_sha256"], __import__("hashlib").sha256(svg.encode()).hexdigest())
             self.assertIn(manifest["metrics"]["source_measurements_sha256"], svg)
-            verified = run([sys.executable, str(fixture_collector(repo)), "verify", str(output)], repo)
+            verified = run(collector_command(repo, "verify", str(output)), repo)
             self.assertEqual((json.loads(verified.stdout)["status"],
                               json.loads(verified.stdout)["remote_ci"]), ("ready", "not-attached"))
             alignment_name = "host-platform-alignment.json"
@@ -2248,7 +2398,7 @@ procreap_ucore: parent passed
             reader_path = output / "logs/raw/reader-e2e.log"
             reader_original = reader_path.read_bytes()
             reader_path.write_text("tampered\n")
-            rejected = run([sys.executable, str(fixture_collector(repo)), "verify", str(output)], repo,
+            rejected = run(collector_command(repo, "verify", str(output)), repo,
                            check=False)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("checksum mismatch", rejected.stderr)
@@ -2283,7 +2433,7 @@ procreap_ucore: parent passed
             server, thread, gitlab_url = start_gitlab_fixture(
                 commit, redirect_artifact_url=redirect_url, job_payloads=job_payloads)
             try:
-                run([sys.executable, str(fixture_collector(repo)), "bind-remote-ci", "--bundle", str(local),
+                run([*collector_command(repo, "bind-remote-ci"), "--bundle", str(local),
                      "--output", str(combined), "--gitlab-url", gitlab_url,
                      "--project-id", "39809", "--pipeline-id", "701",
                      "--token-file", str(token_path)], repo)
@@ -2309,7 +2459,7 @@ procreap_ucore: parent passed
             self.assertNotIn("fixture-token", "".join(
                 path.read_text(encoding="utf-8", errors="ignore")
                 for path in combined.rglob("*") if path.is_file()))
-            verified = json.loads(run([sys.executable, str(fixture_collector(repo)), "verify", str(combined)],
+            verified = json.loads(run(collector_command(repo, "verify", str(combined)),
                                       repo).stdout)
             self.assertEqual((verified["status"], verified["remote_ci"]),
                              ("ready", "provenance-attached"))
@@ -2334,7 +2484,7 @@ procreap_ucore: parent passed
                 server, thread, gitlab_url = start_gitlab_fixture(
                     commit, job_payloads=job_payloads, **options)
                 try:
-                    result = run([sys.executable, str(fixture_collector(repo)), "bind-remote-ci",
+                    result = run([*collector_command(repo, "bind-remote-ci"),
                                   "--bundle", str(local), "--output", str(rejected_output),
                                   "--gitlab-url", gitlab_url, "--project-id", "39809",
                                   "--pipeline-id", "701", "--token-file", str(token_path)],
@@ -2353,7 +2503,7 @@ procreap_ucore: parent passed
             forged_output = base / "self-consistent-fake"
             try:
                 forged_result = run(
-                    [sys.executable, str(fixture_collector(repo)), "bind-remote-ci",
+                    [*collector_command(repo, "bind-remote-ci"),
                      "--bundle", str(local), "--output", str(forged_output),
                      "--gitlab-url", gitlab_url, "--project-id", "39809",
                      "--pipeline-id", "701", "--token-file", str(token_path)],
@@ -2367,6 +2517,90 @@ procreap_ucore: parent passed
             trace = combined / "remote-ci/jobs/kernel-budgets.trace.log"
             trace.write_text("forged trace\n")
             self.assert_verify_rejected(combined, repo, "manifest file hash differs")
+    @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
+    def test_capture_rejects_info_exclude_wildcard_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            for index, relative in enumerate(("os/hidden.c", "user/src/hidden.c"), 1):
+                repo = base / f"hidden-{index}"
+                repo.mkdir()
+                tools = init_fixture_repo(repo)
+                hidden = repo / relative
+                hidden.parent.mkdir(parents=True, exist_ok=True)
+                (repo / ".git" / "info" / "exclude").write_text(
+                    f"{relative}\n", encoding="ascii"
+                )
+                hidden.write_text("int hidden;\n", encoding="ascii")
+                self.assertEqual(
+                    run(
+                        [
+                            "git",
+                            "status",
+                            "--porcelain=v1",
+                            "--untracked-files=all",
+                        ],
+                        repo,
+                    ).stdout,
+                    "",
+                )
+                output = base / f"hidden-{index}-release"
+                result = run(collect_args(repo, output, tools), repo, check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("capture source gate failed", result.stderr)
+                self.assertFalse(output.exists())
+
+    @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
+    def test_capture_never_imports_ignored_stdlib_shadow_before_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            repo = base / "shadow"
+            repo.mkdir()
+            tools = init_fixture_repo(repo)
+            sentinel = base / "shadow-executed"
+            shadow = repo / "json.py"
+            shadow.write_text(
+                f"open({str(sentinel)!r}, 'w').write('executed')\n",
+                encoding="utf-8",
+            )
+            (repo / ".git" / "info" / "exclude").write_text(
+                "json.py\n", encoding="ascii"
+            )
+            self.assertEqual(
+                run(
+                    ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                    repo,
+                ).stdout,
+                "",
+            )
+            alias = base / "source-alias"
+            if sys.platform == "cygwin":
+                from test_safe_host_paths import _create_junction, _remove_junction
+
+                if not _create_junction(repo, alias):
+                    self.fail("native MSYS test could not create a detectable junction")
+            else:
+                try:
+                    alias.symlink_to(repo, target_is_directory=True)
+                except OSError as error:
+                    self.skipTest(f"directory aliases are unavailable: {error}")
+            if not alias.samefile(repo):
+                self.skipTest("directory alias does not resolve to the fixture repository")
+            output = base / "shadow-release"
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = str(alias)
+            result = run(
+                collect_args(repo, output, tools),
+                repo,
+                check=False,
+                env=environment,
+            )
+            if sys.platform == "cygwin":
+                _remove_junction(alias)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("capture source gate failed", result.stderr)
+            self.assertFalse(sentinel.exists())
+            self.assertFalse(output.exists())
+
     @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
     def test_dirty_and_failed_runs_never_publish_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2407,10 +2641,12 @@ procreap_ucore: parent passed
             concurrent_output = base / "concurrent-release"
             argv = collect_args(concurrent, concurrent_output, concurrent_tools)
             first = subprocess.Popen(argv, cwd=concurrent, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True)
+                                     stderr=subprocess.PIPE)
             time.sleep(0.4)
             second = run(argv, concurrent, check=False)
-            stdout, stderr = first.communicate(timeout=15)
+            stdout_raw, stderr_raw = first.communicate(timeout=300)
+            stdout = decode_external_output(stdout_raw)
+            stderr = decode_external_output(stderr_raw)
             self.assertEqual(first.returncode, 0, stdout + stderr)
             self.assertNotEqual(second.returncode, 0)
             self.assertIn("already running", second.stderr)
@@ -2420,12 +2656,12 @@ procreap_ucore: parent passed
             interrupt_output = base / "interrupt-release"
             process = subprocess.Popen(collect_args(interrupted, interrupt_output, interrupt_tools),
                                        cwd=interrupted, stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE, text=True)
+                                       stderr=subprocess.PIPE)
             time.sleep(0.4)
             process.send_signal(2)
-            process.communicate(timeout=10)
+            process.communicate(timeout=30)
             time.sleep(2.1)
-            self.assertEqual(process.returncode, 130)
+            self.assertIn(process.returncode, {130, -signal.SIGINT})
             self.assertFalse(interrupt_output.exists())
             self.assertFalse(interrupt_tools["sentinel"].exists())
     def test_public_contract_grace_ci_and_trackability(self) -> None:
@@ -2461,6 +2697,7 @@ procreap_ucore: parent passed
             (SEMANTIC_METADATA, 225), (SEMANTIC_REGISTRY, 225),
             (SEMANTIC_DUAL, 425), (DUAL_STATE_ARCHIVE, 250),
             (DUAL_STATE_CONTRACT, 450),
+            (FULL_VERIFICATION_METRICS, 450),
             (REPO / "host_tools" / "agent_observe_disk_acceptance.py", 150),
             (REPO / "host_tools" / "agent_observe_disk_contract.py", 400),
             (REPO / "host_tools" / "agent_observe_disk_evidence.py", 750),
@@ -2481,8 +2718,22 @@ procreap_ucore: parent passed
         for token in ("RAW_ARTIFACT_REGISTRY", "validate_artifact",
                       "validate_selected_artifacts", "validate_raw_artifacts"):
             self.assertIn(token, semantic_registry)
+        # Delivery now proves raw Git ancestry and hashes real tracked bytes;
+        # keep that security boundary bounded independently from the collector.
         self.assertLessEqual(
-            len(DELIVERY_CONTRACT.read_text(encoding="utf-8").splitlines()), 425
+            len(DELIVERY_CONTRACT.read_text(encoding="utf-8").splitlines()), 1000
+        )
+        self.assertLessEqual(
+            len(GIT_HISTORY_CONTRACT.read_text(encoding="utf-8").splitlines()), 275
+        )
+        self.assertIn("host_tools/git_history_contract.py", makefile)
+        self.assertLessEqual(
+            len(
+                (REPO / "host_tools" / "evidence_toolchain_attestation.py")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ),
+            400,
         )
         self.assertLessEqual(len(MEASUREMENT_MODULE.read_text(encoding="utf-8").splitlines()), 450)
         # The contract now performs token-level control-flow and def-use

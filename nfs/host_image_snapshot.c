@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "host_image_snapshot.h"
+#include "host_windows_compat.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -29,14 +30,84 @@ static void snapshot_fingerprint(const struct stat *st,
 	fingerprint->device = (uint64_t)st->st_dev;
 	fingerprint->inode = (uint64_t)st->st_ino;
 	fingerprint->size = (uint64_t)st->st_size;
+#ifdef _WIN32
+	fingerprint->mtime_seconds = (uint64_t)st->st_mtime;
+	fingerprint->ctime_seconds = (uint64_t)st->st_ctime;
+#else
 	fingerprint->mtime_seconds = (uint64_t)st->st_mtim.tv_sec;
 	fingerprint->ctime_seconds = (uint64_t)st->st_ctim.tv_sec;
+#endif
 	fingerprint->mode = (uint32_t)st->st_mode;
 	fingerprint->links = (uint32_t)st->st_nlink;
 	fingerprint->uid = (uint32_t)st->st_uid;
 	fingerprint->gid = (uint32_t)st->st_gid;
+#ifdef _WIN32
+	fingerprint->mtime_nanoseconds = 0;
+	fingerprint->ctime_nanoseconds = 0;
+#else
 	fingerprint->mtime_nanoseconds = (uint32_t)st->st_mtim.tv_nsec;
 	fingerprint->ctime_nanoseconds = (uint32_t)st->st_ctim.tv_nsec;
+#endif
+}
+
+#ifdef _WIN32
+static int snapshot_windows_handle_identity(
+	HANDLE handle, struct host_snapshot_fingerprint *fingerprint)
+{
+	BY_HANDLE_FILE_INFORMATION information;
+
+	if (!GetFileInformationByHandle(handle, &information)) {
+		errno = host_windows_errno(GetLastError());
+		return -1;
+	}
+	fingerprint->device = information.dwVolumeSerialNumber;
+	fingerprint->inode = ((uint64_t)information.nFileIndexHigh << 32) |
+			       information.nFileIndexLow;
+	return 0;
+}
+
+static int snapshot_windows_path_identity(
+	const char *path, struct host_snapshot_fingerprint *fingerprint)
+{
+	HANDLE handle = CreateFileA(
+		path, FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+		0);
+	int result;
+
+	if (handle == INVALID_HANDLE_VALUE) {
+		errno = host_windows_errno(GetLastError());
+		return -1;
+	}
+	result = snapshot_windows_handle_identity(handle, fingerprint);
+	if (!CloseHandle(handle) && result == 0) {
+		errno = EIO;
+		return -1;
+	}
+	return result;
+}
+#endif
+
+static int snapshot_fd_fingerprint(
+	int fd, const struct stat *st,
+	struct host_snapshot_fingerprint *fingerprint)
+{
+	snapshot_fingerprint(st, fingerprint);
+#ifdef _WIN32
+	{
+		intptr_t handle = _get_osfhandle(fd);
+
+		if (handle == -1) {
+			errno = EBADF;
+			return -1;
+		}
+		return snapshot_windows_handle_identity((HANDLE)handle, fingerprint);
+	}
+#else
+	(void)fd;
+	return 0;
+#endif
 }
 
 static int snapshot_fingerprint_same(
@@ -69,6 +140,12 @@ static enum host_snapshot_status snapshot_path_fingerprint(
 	if (!S_ISREG(st.st_mode))
 		return HOST_SNAPSHOT_NOT_REGULAR;
 	snapshot_fingerprint(&st, fingerprint);
+#ifdef _WIN32
+	if (snapshot_windows_path_identity(path, fingerprint) < 0) {
+		snapshot_set_error(host_error, errno);
+		return HOST_SNAPSHOT_OPEN_ERROR;
+	}
+#endif
 	return HOST_SNAPSHOT_OK;
 }
 
@@ -121,7 +198,7 @@ enum host_snapshot_status host_snapshot_read(
 	status = snapshot_path_fingerprint(path, &path_before, host_error);
 	if (status != HOST_SNAPSHOT_OK)
 		return status;
-	fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_BINARY);
 	if (fd < 0) {
 		int error = errno;
 
@@ -138,7 +215,11 @@ enum host_snapshot_status host_snapshot_read(
 		status = HOST_SNAPSHOT_NOT_REGULAR;
 		goto out;
 	}
-	snapshot_fingerprint(&st, &fd_before);
+	if (snapshot_fd_fingerprint(fd, &st, &fd_before) < 0) {
+		snapshot_set_error(host_error, errno);
+		status = HOST_SNAPSHOT_OPEN_ERROR;
+		goto out;
+	}
 	if (!snapshot_fingerprint_same(&path_before, &fd_before)) {
 		status = HOST_SNAPSHOT_CHANGED;
 		goto out;
@@ -173,7 +254,11 @@ enum host_snapshot_status host_snapshot_read(
 		status = HOST_SNAPSHOT_READ_ERROR;
 		goto out;
 	}
-	snapshot_fingerprint(&st, &fd_middle);
+	if (snapshot_fd_fingerprint(fd, &st, &fd_middle) < 0) {
+		snapshot_set_error(host_error, errno);
+		status = HOST_SNAPSHOT_READ_ERROR;
+		goto out;
+	}
 	status = snapshot_read_exact(fd, second, snapshot->size, host_error);
 	if (status != HOST_SNAPSHOT_OK)
 		goto out;
@@ -182,7 +267,11 @@ enum host_snapshot_status host_snapshot_read(
 		status = HOST_SNAPSHOT_READ_ERROR;
 		goto out;
 	}
-	snapshot_fingerprint(&st, &fd_after);
+	if (snapshot_fd_fingerprint(fd, &st, &fd_after) < 0) {
+		snapshot_set_error(host_error, errno);
+		status = HOST_SNAPSHOT_READ_ERROR;
+		goto out;
+	}
 	status = snapshot_path_fingerprint(path, &path_after, host_error);
 	if (status != HOST_SNAPSHOT_OK) {
 		if (status == HOST_SNAPSHOT_NOT_FOUND ||

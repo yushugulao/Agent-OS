@@ -1454,7 +1454,8 @@ static void run_agent_child(void)
 	      "file query plan");
 	check((qr->plan_reason & AGENT_FILE_QUERY_REASON_STAGE_INDEX) != 0,
 	      "file query reason");
-	check(qr->candidate_records == qr->scanned_records,
+	check(qr->candidate_records > 0 &&
+	      qr->candidate_records <= qr->scanned_records,
 	      "file query candidates");
 	check_user_query_cache(info, header, qr);
 	n = agent_file_prefetch_snapshot(final_prefetch_hints,

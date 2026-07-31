@@ -7,6 +7,10 @@
 
 #include "fs.h"
 
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
 #ifndef static_assert
 #define static_assert(a, b)                                                    \
 	do {                                                                   \
@@ -78,7 +82,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	assert((BSIZE % sizeof(struct dinode)) == 0);
-	fsfd = open(argv[1], O_RDWR | O_CREAT | O_TRUNC, 0666);
+	fsfd = open(argv[1], O_RDWR | O_CREAT | O_TRUNC | O_BINARY, 0666);
 	if (fsfd < 0) {
 		perror(argv[1]);
 		exit(1);
@@ -120,7 +124,7 @@ int main(int argc, char *argv[])
 		char *shortname = basename(argv[i]);
 		assert(index(shortname, '/') == 0);
 
-		if ((fd = open(argv[i], 0)) < 0) {
+		if ((fd = open(argv[i], O_RDONLY | O_BINARY)) < 0) {
 			perror(argv[i]);
 			exit(1);
 		}
@@ -317,7 +321,7 @@ void iappend(uint inum, void *xp, int n)
 		}
 		n1 = min(n, (fbn + 1) * BSIZE - off);
 		rsect(x, buf);
-		bcopy(p, buf + off - (fbn * BSIZE), n1);
+		bcopy(p, buf + (off - (fbn * BSIZE)), n1);
 		wsect(x, buf);
 		n -= n1;
 		off += n1;

@@ -2,6 +2,8 @@
 """Unit tests for the kernel budget checker."""
 
 import importlib.util
+import gzip
+import hashlib
 import io
 import json
 import copy
@@ -1231,6 +1233,11 @@ agent_metadata_txn_projection_require_idle();
                 "max_seconds",
                 "calibration_samples",
                 "source_fingerprint_sha256",
+                "calibration_source_commit",
+                "calibration_source_tree",
+                "calibration_manifest_file",
+                "calibration_manifest_sha256",
+                "calibration_profile_id",
             )
         )
         self.assertEqual(
@@ -1845,8 +1852,9 @@ agent_metadata_txn_projection_require_idle();
         self.assertEqual(actual, expected)
         self.assertRegex(makefile, r"(?m)^kernel-budget-selftest:.*printf-format-static-check$")
         self.assertNotRegex(makefile, r"(?m)^kernel-budget-selftest:.*\bprintf-format-check\b")
-        self.assertEqual(makefile.count("$(PYTHON_BIN) scripts/test-printf-format-contract.py"), 1)
-        self.assertIn("@CC=cc bash scripts/test-durable-dirty-retry.sh", makefile)
+        self.assertEqual(makefile.count("$(PYTHON_CMD) scripts/test-printf-format-contract.py"), 1)
+        self.assertIn("CC=$(call shell_quote,$(HOST_CC))", makefile)
+        self.assertIn("HOSTCC=$(call shell_quote,$(HOST_CC))", makefile)
 
     def test_stack_indirect_edge_inventory_matches_compiled_call_owners(self):
         expected = [
@@ -1939,12 +1947,22 @@ agent_metadata_txn_projection_require_idle();
         with config_path.open(encoding="utf-8") as stream:
             config = json.load(stream)
 
+        self.assertEqual(
+            kernel_budgets.calibrated_agent_test_limit((18.0, 18.0, 18.0)),
+            18.9,
+        )
+
         calibrated_fields = frozenset(
             (
                 "baseline_seconds",
                 "max_seconds",
                 "calibration_samples",
                 "source_fingerprint_sha256",
+                "calibration_source_commit",
+                "calibration_source_tree",
+                "calibration_manifest_file",
+                "calibration_manifest_sha256",
+                "calibration_profile_id",
             )
         )
         self.assertEqual(
@@ -1967,18 +1985,46 @@ agent_metadata_txn_projection_require_idle();
                     kernel_budgets.AGENT_TEST_CALIBRATION_READY
                 ),
                 "source_fingerprint_sha256": "0" * 64,
+                "calibration_source_commit": (
+                    "0123456789abcdef0123456789abcdef01234567"
+                ),
+                "calibration_source_tree": (
+                    "89abcdef0123456789abcdef0123456789abcdef"
+                ),
+                "calibration_manifest_file": (
+                    "evidence/calibrations/0123456789ab/manifest.json"
+                ),
+                "calibration_manifest_sha256": "f" * 64,
+                "calibration_profile_id": suite[
+                    "local_calibration_profile"
+                ]["profile_id"],
                 "calibration_samples": [
                     {
-                        "sample_id": "bounded-runner-final-01",
+                        "sample_id": "agent18-0123456789ab-01",
                         "total_seconds": 261.343281873,
+                        "timing_file": (
+                            "evidence/calibrations/0123456789ab/01.timing"
+                        ),
+                        "timing_file_sha256": "1" * 64,
+                        "attestation_digest_sha256": "4" * 64,
                     },
                     {
-                        "sample_id": "bounded-runner-final-02",
+                        "sample_id": "agent18-0123456789ab-02",
                         "total_seconds": 237.948978492,
+                        "timing_file": (
+                            "evidence/calibrations/0123456789ab/02.timing"
+                        ),
+                        "timing_file_sha256": "2" * 64,
+                        "attestation_digest_sha256": "5" * 64,
                     },
                     {
-                        "sample_id": "bounded-runner-final-03",
+                        "sample_id": "agent18-0123456789ab-03",
                         "total_seconds": 255.370930671,
+                        "timing_file": (
+                            "evidence/calibrations/0123456789ab/03.timing"
+                        ),
+                        "timing_file_sha256": "3" * 64,
+                        "attestation_digest_sha256": "6" * 64,
                     },
                 ],
             }
@@ -2004,7 +2050,7 @@ agent_metadata_txn_projection_require_idle();
         too_few["agent_test_suite"]["calibration_samples"].pop()
         with self.assertRaisesRegex(
             kernel_budgets.BudgetError,
-            "requires at least three samples",
+            "requires exactly three samples",
         ):
             kernel_budgets.validate_config(too_few)
 
@@ -2061,6 +2107,13 @@ agent_metadata_txn_projection_require_idle();
         ):
             kernel_budgets.validate_config(excessive_headroom)
 
+        noncanonical_limit = copy.deepcopy(config)
+        noncanonical_limit["agent_test_suite"]["max_seconds"] += 0.002
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "calibrated 5% headroom policy"
+        ):
+            kernel_budgets.validate_config(noncanonical_limit)
+
         malformed_fingerprint = copy.deepcopy(config)
         malformed_fingerprint["agent_test_suite"][
             "source_fingerprint_sha256"
@@ -2070,6 +2123,68 @@ agent_metadata_txn_projection_require_idle();
             "requires a lowercase SHA-256",
         ):
             kernel_budgets.validate_config(malformed_fingerprint)
+
+        malformed_timing_hash = copy.deepcopy(config)
+        malformed_timing_hash["agent_test_suite"]["calibration_samples"][0][
+            "timing_file_sha256"
+        ] = "A" * 64
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError,
+            "timing_file_sha256 requires a lowercase SHA-256",
+        ):
+            kernel_budgets.validate_config(malformed_timing_hash)
+
+        mismatched_timing_path = copy.deepcopy(config)
+        mismatched_timing_path["agent_test_suite"]["calibration_samples"][0][
+            "timing_file"
+        ] = "evidence/calibrations/0123456789ab/not-the-sample.timing"
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "timing_file must be"
+        ):
+            kernel_budgets.validate_config(mismatched_timing_path)
+
+        mismatched_manifest = copy.deepcopy(config)
+        mismatched_manifest["agent_test_suite"][
+            "calibration_manifest_file"
+        ] = "evidence/calibrations/ffffffffffff/manifest.json"
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "calibration_manifest_file must be"
+        ):
+            kernel_budgets.validate_config(mismatched_manifest)
+
+        malformed_commit = copy.deepcopy(config)
+        malformed_commit["agent_test_suite"][
+            "calibration_source_commit"
+        ] = "0123456789ab"
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "full lowercase Git"
+        ):
+            kernel_budgets.validate_config(malformed_commit)
+
+        malformed_tree = copy.deepcopy(config)
+        malformed_tree["agent_test_suite"]["calibration_source_tree"] = "A" * 40
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "calibration_source_tree"
+        ):
+            kernel_budgets.validate_config(malformed_tree)
+
+        malformed_attestation_digest = copy.deepcopy(config)
+        malformed_attestation_digest["agent_test_suite"][
+            "calibration_samples"
+        ][0]["attestation_digest_sha256"] = "A" * 64
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "attestation_digest_sha256"
+        ):
+            kernel_budgets.validate_config(malformed_attestation_digest)
+
+        formula_side_channel = copy.deepcopy(config)
+        formula_side_channel["agent_test_suite"]["calibration_samples"][0][
+            "manual_formula"
+        ] = "load * constant"
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "fields must be"
+        ):
+            kernel_budgets.validate_config(formula_side_channel)
 
         for stale_field in calibrated_fields:
             provisional = copy.deepcopy(config)
@@ -2084,6 +2199,37 @@ agent_metadata_txn_projection_require_idle();
                 "must not carry stale calibrated fields",
             ):
                 kernel_budgets.validate_config(provisional)
+
+    def test_legacy_schema_two_calibration_evidence_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            commit = "0123456789abcdef0123456789abcdef01234567"
+            package = root / "evidence" / "calibrations" / commit[:12]
+            package.mkdir(parents=True)
+            manifest = {
+                "schema": 2,
+                "purpose": "agent_test_suite_duration_calibration",
+                "review_boundary": "legacy synthetic fixture",
+            }
+            manifest_data = json.dumps(manifest, sort_keys=True).encode()
+            (package / "manifest.json").write_bytes(manifest_data)
+            config = {
+                "agent_test_suite": {
+                    "calibration_status": "calibrated_full_suite",
+                    "calibration_manifest_file": (
+                        f"evidence/calibrations/{commit[:12]}/manifest.json"
+                    ),
+                    "calibration_manifest_sha256": hashlib.sha256(
+                        manifest_data
+                    ).hexdigest(),
+                }
+            }
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "manifest fields mismatch"
+            ):
+                kernel_budgets.check_agent_test_calibration_evidence(
+                    root, config, 1
+                )
 
     def test_agent_duration_fingerprint_covers_sources_and_contract(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -2132,6 +2278,26 @@ agent_metadata_txn_projection_require_idle();
                     "cpu": "test cpu",
                     "virtualization": "test vm",
                     "qemu_version": "test qemu",
+                },
+                "local_calibration_profile": {
+                    "schema_version": 1,
+                    "profile_id": "fixture-local-e3-v1",
+                    "cpu": "test cpu",
+                    "runtime": "test runtime",
+                    "toolchain_prefix": "test-toolchain-",
+                    "tool_versions": {
+                        "qemu": "1",
+                        "toolchain_cc": "1",
+                        "toolchain_ld": "1",
+                        "toolchain_objcopy": "1",
+                        "toolchain_objdump": "1",
+                        "toolchain_as": "1",
+                        "host_cc": "1",
+                        "python": "1",
+                        "bash": "1",
+                        "make": "1",
+                        "git": "1",
+                    },
                 },
                 "calibration_status": (
                     kernel_budgets.AGENT_TEST_CALIBRATION_READY
@@ -2313,13 +2479,13 @@ agent_metadata_txn_projection_require_idle();
             if entry["name"] == "lifecycle"
         )
         source = SCRIPT.parent.parent / lifecycle["source_path"]
-        self.assertEqual(lifecycle["baseline_lines"], 334)
+        self.assertEqual(lifecycle["baseline_lines"], 340)
         self.assertEqual(lifecycle["max_lines"], 351)
         self.assertEqual(
             lifecycle["allowed_dependencies"],
             ["identity", "identity_lease", "metadata", "workflow_lifecycle"],
         )
-        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 334)
+        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 340)
         metadata = next(
             entry
             for entry in config["agent_modules"]["modules"]
@@ -2513,12 +2679,31 @@ agent_metadata_txn_projection_require_idle();
                     "max_seconds": 330.0,
                     "calibration_status": "calibrated_full_suite",
                     "runner_tag": "agentos-qemu-calibrated",
+                    "local_calibration_profile": {
+                        "profile_id": "test-local-profile"
+                    },
                 }
             }
             output = io.StringIO()
             with redirect_stdout(output):
                 kernel_budgets.check_agent_tests(args, config)
             self.assertIn("actual=300.75 seconds", output.getvalue())
+
+    def test_agent_timing_inventory_validates_without_duration_threshold(self):
+        with tempfile.TemporaryDirectory() as temp:
+            timings = Path(temp) / "timings"
+            timings.write_text("one 1.25\ntwo 2.5\n", encoding="utf-8")
+            args = SimpleNamespace(agent_test_timing_file=str(timings))
+            config = {
+                "agent_test_suite": {"expected_cases": ["one", "two"]}
+            }
+            output = io.StringIO()
+            with redirect_stdout(output):
+                kernel_budgets.check_agent_test_timing_inventory(args, config)
+            self.assertIn(
+                "cases=2 total=3.750 seconds threshold=not-applied",
+                output.getvalue(),
+            )
 
     def test_agent_suite_rejects_summary_only_duration_inputs(self):
         config = {
@@ -2608,6 +2793,26 @@ agent_metadata_txn_projection_require_idle();
                         "cpu": "test cpu",
                         "virtualization": "test vm",
                         "qemu_version": "test qemu",
+                    },
+                    "local_calibration_profile": {
+                        "schema_version": 1,
+                        "profile_id": "fixture-local-e3-v1",
+                        "cpu": "test cpu",
+                        "runtime": "test runtime",
+                        "toolchain_prefix": "test-toolchain-",
+                        "tool_versions": {
+                            "qemu": "1",
+                            "toolchain_cc": "1",
+                            "toolchain_ld": "1",
+                            "toolchain_objcopy": "1",
+                            "toolchain_objdump": "1",
+                            "toolchain_as": "1",
+                            "host_cc": "1",
+                            "python": "1",
+                            "bash": "1",
+                            "make": "1",
+                            "git": "1",
+                        },
                     },
                 }
             }

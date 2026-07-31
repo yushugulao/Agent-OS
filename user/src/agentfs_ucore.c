@@ -458,8 +458,11 @@ static void check_index_scan_gap(void)
 	check(scan.index_bucket == -1, "scan bucket");
 	check((scan.plan_reason & AGENT_FILE_QUERY_REASON_FORCED_SCAN) != 0,
 	      "scan reason");
-	check(scan.candidate_records == scan.scanned_records,
-	      "scan candidates");
+	check(scan.scanned_records == AGENT_FILE_META_MAX,
+	      "forced scan accounts every catalog slot");
+	check(scan.candidate_records > 0 &&
+	      scan.candidate_records < scan.scanned_records,
+	      "scan excludes empty and invisible slots from candidates");
 	fs_query.flags = AGENT_FILE_QUERY_USE_INDEX;
 	check(agent_file_query(&fs_query, &index) >= 1, "bulk index query");
 	check(index.plan == AGENT_FILE_QUERY_PLAN_STATUS_INDEX,
@@ -467,8 +470,12 @@ static void check_index_scan_gap(void)
 	check(index.index_bucket >= 0, "index bucket");
 	check((index.plan_reason & AGENT_FILE_QUERY_REASON_STATUS_INDEX) != 0,
 	      "index reason");
-	check(index.candidate_records == index.scanned_records,
-	      "index candidates");
+	check(index.candidate_records > 0 &&
+	      index.candidate_records <= index.scanned_records,
+	      "index candidates are visible live records");
+	check(index.scanned_records > 0 &&
+	      index.scanned_records < AGENT_FILE_META_MAX,
+	      "index dynamically accounts its bucket chain");
 	check(index.fs_generation >= scan.fs_generation,
 	      "index generation");
 	check(scan.total_hits == index.total_hits, "scan index hits");
@@ -483,6 +490,8 @@ static void check_index_scan_gap(void)
 	      "scan index first hit");
 	check(scan.scanned_records > index.scanned_records,
 	      "index scans fewer records");
+	check(scan.candidate_records > index.candidate_records,
+	      "index narrows visible candidates");
 	printf("agentfs_ucore: bulk_index scan=%d index=%d hits=%d\n",
 	       scan.scanned_records, index.scanned_records,
 	       index.total_hits);

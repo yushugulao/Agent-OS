@@ -7,6 +7,7 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-60s}"
@@ -36,6 +37,8 @@ cleanup() {
 	rm -rf "${TMPDIR_FSALLOC}"
 }
 trap cleanup EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_FSALLOC}"
 
 if [[ -n "${FS_ALLOCATOR_ARTIFACT_DIR:-}" &&
       "${FS_ALLOCATOR_ARTIFACT_DIR}" != /* ]]; then
@@ -207,9 +210,10 @@ build_case() {
 		--root "${EVIDENCE_ROOT}" --case "${tag}" \
 		--program "${user_target}/bin/fsallocfault_ucore" \
 		--build-argv-json "${build_argv_json}"
-	cc nfs/fs.c nfs/host_image_snapshot.c \
-		-o "${TMPDIR_FSALLOC}/${tag}-mkfs"
-	"${TMPDIR_FSALLOC}/${tag}-mkfs" "${TMPDIR_FSALLOC}/${tag}.img" \
+	host_probe_compile "${TMPDIR_FSALLOC}/${tag}-mkfs" \
+		nfs/fs.c nfs/host_image_snapshot.c
+	host_probe_run "${TMPDIR_FSALLOC}/${tag}-mkfs" \
+		"${TMPDIR_FSALLOC}/${tag}.img" \
 		"${user_target}/bin/fsallocfault_ucore"
 }
 
@@ -383,3 +387,4 @@ write_mutant_selection_diff "${mutation_selection}"
 	--archive "${EVIDENCE_ARCHIVE}"
 
 echo "[fs-allocator-fault] dynamic matrix, negative mutant, and raw evidence passed"
+host_probe_report "fs-allocator-fault mkfs"

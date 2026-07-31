@@ -256,6 +256,35 @@ out:
 	intr_restore(enabled);
 	return result;
 }
+
+uint resource_policy_snapshot_all(struct resource_policy_snapshot *snapshots,
+				  uint count)
+{
+	uint measured = 0;
+	int enabled;
+
+	if (snapshots == 0 || count < RESOURCE_KIND_COUNT)
+		return 0;
+	memset(snapshots, 0, sizeof(*snapshots) * count);
+	enabled = intr_save();
+	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
+		const struct resource_policy *policy = &resource_policies[kind];
+		struct resource_policy_snapshot *snapshot = &snapshots[kind];
+
+		if (!policy->configured)
+			continue;
+		snapshot->capacity = policy->capacity;
+		snapshot->used = policy->used;
+		snapshot->pending = policy->pending;
+		snapshot->ordinary_used = policy->ordinary_used;
+		snapshot->ordinary_pending = policy->ordinary_pending;
+		snapshot->reserved_used = policy->reserved_used;
+		snapshot->reserved_pending = policy->reserved_pending;
+		measured |= 1U << kind;
+	}
+	intr_restore(enabled);
+	return measured;
+}
 #ifdef PHYSICAL_PAGE_TEST_HOOKS
 int resource_policy_reserved_snapshot(enum resource_kind kind,
 				      uint64 *promised, uint64 *limit)

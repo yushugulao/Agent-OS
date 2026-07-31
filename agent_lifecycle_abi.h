@@ -1,7 +1,7 @@
 #ifndef AGENT_LIFECYCLE_ABI_H
 #define AGENT_LIFECYCLE_ABI_H
 
-#define AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION 1U
+#define AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION 2U
 
 #define AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT (1U << 0)
 
@@ -22,6 +22,10 @@ struct agent_workflow_lifecycle_info {
 	unsigned int context_lane_waiters;
 	unsigned int metadata_txn_owned;
 	unsigned int metadata_txn_waiters;
+	/* Self-only identity; no syscall accepts this as authority. */
+	unsigned int resource_account_valid;
+	unsigned int resource_account_slot;
+	unsigned long long resource_account_generation;
 };
 
 _Static_assert(sizeof(unsigned int) == 4,
@@ -45,7 +49,16 @@ _Static_assert(__builtin_offsetof(struct agent_workflow_lifecycle_info,
 _Static_assert(__builtin_offsetof(struct agent_workflow_lifecycle_info,
 				  metadata_txn_waiters) == 44,
 	       "workflow lifecycle metadata waiter ABI offset");
-_Static_assert(sizeof(struct agent_workflow_lifecycle_info) == 48,
+_Static_assert(__builtin_offsetof(struct agent_workflow_lifecycle_info,
+				  resource_account_valid) == 48,
+	       "workflow lifecycle resource account validity ABI offset");
+_Static_assert(__builtin_offsetof(struct agent_workflow_lifecycle_info,
+				  resource_account_slot) == 52,
+	       "workflow lifecycle resource account slot ABI offset");
+_Static_assert(__builtin_offsetof(struct agent_workflow_lifecycle_info,
+				  resource_account_generation) == 56,
+	       "workflow lifecycle resource account generation ABI offset");
+_Static_assert(sizeof(struct agent_workflow_lifecycle_info) == 64,
 	       "workflow lifecycle info ABI layout");
 
 #endif

@@ -18,6 +18,8 @@ _Static_assert(DEMO_PROVENANCE_MAX <= AGENT_PROVENANCE_MAX_EDGES,
 static int recovery_pid;
 static int investigator_pid;
 static int ready_fd = -1;
+static int start_fd = -1;
+static int progress_fd = -1;
 /* Snapshot formats are sequential; one scratch avoids duplicate eager copies. */
 static union {
 	struct agent_audit_record audit[DEMO_OBSERVE_PAGE_RECORDS];
@@ -203,8 +205,26 @@ static void created(const char *role)
 
 static void ready(char c)
 {
-	if (ready_fd >= 0)
+	char start;
+
+	if (ready_fd >= 0) {
 		check(write(ready_fd, &c, 1) == 1, "ready write");
+		check(close(ready_fd) == 0, "ready close");
+		ready_fd = -1;
+	}
+	check(start_fd >= 0, "start barrier descriptor");
+	check(read(start_fd, &start, 1) == 1 && start == 'G',
+	      "start barrier release");
+	check(close(start_fd) == 0, "start barrier close");
+	start_fd = -1;
+}
+
+static void report_progress(char stage)
+{
+	check(progress_fd >= 0, "progress descriptor");
+	check(write(progress_fd, &stage, 1) == 1, "progress receipt");
+	check(close(progress_fd) == 0, "progress close");
+	progress_fd = -1;
 }
 
 static void run_sentinel(void)
@@ -275,6 +295,7 @@ static void run_sentinel(void)
 	printf("agentos:event type=MESSAGE tick=%d from=sentinel to=investigator status=OK corr_id=MSG-%s-S-I prefetch_handoff=%s seq=%d\n",
 	       event_tick(), DEMO_RUN, hints[0].hit.stage,
 	       (int)res.sequence);
+	report_progress('S');
 	exit(0);
 }
 
@@ -421,6 +442,7 @@ static void run_investigator(void)
 	run_one(&op, &res, AGENT_STATUS_OK, "message recovery");
 	printf("agentos:event type=MESSAGE tick=%d from=investigator to=recovery status=OK corr_id=MSG-%s-I-R plan=%s seq=%d\n",
 	       event_tick(), DEMO_RUN, DEMO_PLAN, (int)res.sequence);
+	report_progress('I');
 	exit(0);
 }
 
@@ -532,11 +554,16 @@ static void inject_failure(void)
 	strcpy(meta.run_id, DEMO_RUN);
 	strcpy(meta.stage, "align");
 	strcpy(meta.kind, "log");
-	strcpy(meta.status, "failed");
-	strcpy(meta.summary, "memory limit exceeded at align stage");
+	strcpy(meta.status, "running");
+	strcpy(meta.summary, "align stage running before failure");
 	meta.dependency_mask = agent_dependency_label_bit("analyze") |
 			       agent_dependency_label_bit("report") |
 			       agent_dependency_label_bit("archive");
+	check(agent_file_meta_set(&meta) == 0, "stage failure transition");
+	meta.update_mask = AGENT_FILE_META_UPDATE_STATUS |
+			   AGENT_FILE_META_UPDATE_SUMMARY;
+	strcpy(meta.status, "failed");
+	strcpy(meta.summary, "memory limit exceeded at align stage");
 	check(agent_file_meta_set(&meta) == 0, "inject failure");
 	printf("agentos:event type=INCIDENT_CREATED tick=%d id=%s project=%s workflow=%s run_id=%s stage=align reason=memory_limit\n",
 	       event_tick(), DEMO_INCIDENT, DEMO_PROJECT, DEMO_WORKFLOW,
@@ -815,6 +842,10 @@ static void run_orchestrator(void)
 {
 	int sentinel_pid;
 	int ready_pipe[2];
+	int recovery_start[2];
+	int investigator_start[2];
+	int sentinel_start[2];
+	int progress_pipe[2];
 	int status = 0;
 	int ok = 0;
 	int ready_count = 0;
@@ -826,26 +857,55 @@ static void run_orchestrator(void)
 	check(agent_file_meta_init() == 0, "meta init");
 	seed_demo_metadata();
 	check(pipe(ready_pipe) == 0, "pipe");
+	check(pipe(recovery_start) == 0, "recovery start pipe");
+	check(pipe(investigator_start) == 0, "investigator start pipe");
+	check(pipe(sentinel_start) == 0, "sentinel start pipe");
+	check(pipe(progress_pipe) == 0, "progress pipe");
 	ready_fd = ready_pipe[1];
+	start_fd = recovery_start[0];
+	progress_fd = -1;
 	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
 	      "delegate recovery ready pipe");
+	check(agent_scope_delegate_fd(recovery_start[0]) == AGENT_STATUS_OK,
+	      "delegate recovery start pipe");
 	recovery_pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(recovery_pid >= 0, "create recovery");
 	if (recovery_pid == 0)
 		run_recovery();
+	start_fd = investigator_start[0];
+	progress_fd = progress_pipe[1];
 	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
 	      "delegate investigator ready pipe");
+	check(agent_scope_delegate_fd(investigator_start[0]) == AGENT_STATUS_OK,
+	      "delegate investigator start pipe");
+	check(agent_scope_delegate_fd(progress_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate investigator progress pipe");
 	investigator_pid = agent_create_role(AGENT_ROLE_INVESTIGATOR);
 	check(investigator_pid >= 0, "create investigator");
 	if (investigator_pid == 0)
 		run_investigator();
+	start_fd = sentinel_start[0];
 	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
 	      "delegate sentinel ready pipe");
+	check(agent_scope_delegate_fd(sentinel_start[0]) == AGENT_STATUS_OK,
+	      "delegate sentinel start pipe");
+	check(agent_scope_delegate_fd(progress_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate sentinel progress pipe");
 	sentinel_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(sentinel_pid >= 0, "create sentinel");
 	if (sentinel_pid == 0)
 		run_sentinel();
-	close(ready_pipe[1]);
+	check(close(ready_pipe[1]) == 0, "close ready send pipe");
+	ready_fd = -1;
+	check(close(recovery_start[0]) == 0,
+	      "close recovery start receive pipe");
+	check(close(investigator_start[0]) == 0,
+	      "close investigator start receive pipe");
+	check(close(sentinel_start[0]) == 0,
+	      "close sentinel start receive pipe");
+	start_fd = -1;
+	check(close(progress_pipe[1]) == 0, "close progress send pipe");
+	progress_fd = -1;
 	while (ready_count < 3) {
 		check(read(ready_pipe[0], &ch, 1) == 1, "ready read");
 		ready_count++;
@@ -859,6 +919,23 @@ static void run_orchestrator(void)
 				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
 	      "grant investigator recovery route");
 	inject_failure();
+	check(write(sentinel_start[1], "G", 1) == 1,
+	      "release sentinel start barrier");
+	check(close(sentinel_start[1]) == 0, "close sentinel start pipe");
+	check(read(progress_pipe[0], &ch, 1) == 1 && ch == 'S',
+	      "sentinel event queue receipt");
+	check(write(investigator_start[1], "G", 1) == 1,
+	      "release investigator start barrier");
+	check(close(investigator_start[1]) == 0,
+	      "close investigator start pipe");
+	check(read(progress_pipe[0], &ch, 1) == 1 && ch == 'I',
+	      "investigator message queue receipt");
+	check(write(recovery_start[1], "G", 1) == 1,
+	      "release recovery start barrier");
+	check(close(recovery_start[1]) == 0, "close recovery start pipe");
+	check(close(progress_pipe[0]) == 0, "close progress receive pipe");
+	check(close(ready_pipe[0]) == 0, "close ready receive pipe");
+	printf("labdemo_ucore: startup_barrier ready=3 event_queued=1 released=3\n");
 	while (wait(&status) > 0) {
 		check(status == 0, "child status");
 		ok++;

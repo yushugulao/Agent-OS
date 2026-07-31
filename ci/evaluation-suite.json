@@ -1,10 +1,27 @@
 {
   "experiments": [
     {
+      "baseline": {"cache": "warm-paths", "id": "path_walk", "label": "Traditional N-path traversal"},
+      "direction": "lower_is_better",
+      "id": "file_query_path_index",
+      "label": "Task 4 file-path query comparison",
+      "loads": [8, 24, 48, 96],
+      "operation_counts": [8, 6, 4, 4],
+      "claim_gate": {
+        "minimum_absolute_improvement_us": 5,
+        "minimum_baseline_duration_us": 20,
+        "minimum_relative_improvement_percent": 5
+      },
+      "selector": 17,
+      "task": "task4",
+      "treatment": {"cache": "ready-index", "id": "index", "label": "Ready metadata index"},
+      "unit": "us/query"
+    },
+    {
       "baseline": {"cache": "forced-scan", "id": "scan", "label": "Forced metadata scan"},
       "direction": "lower_is_better",
-      "id": "file_query",
-      "label": "Metadata file query",
+      "id": "file_query_table_ablation",
+      "label": "Metadata full-table index ablation",
       "loads": [24, 64, 96],
       "operation_counts": [16, 16, 16],
       "claim_gate": {
@@ -52,12 +69,33 @@
       "unit": "us"
     }
   ],
+  "execution_schedule": [
+    {"experiment": "file_query_path_index", "load": 8},
+    {"experiment": "file_query_path_index", "load": 24},
+    {"experiment": "file_query_table_ablation", "load": 24},
+    {"experiment": "file_query_path_index", "load": 48},
+    {"experiment": "file_query_table_ablation", "load": 64},
+    {"experiment": "file_query_path_index", "load": 96},
+    {"experiment": "file_query_table_ablation", "load": 96},
+    {"experiment": "tool_batch", "load": 24},
+    {"experiment": "tool_batch", "load": 64},
+    {"experiment": "tool_batch", "load": 96},
+    {"experiment": "context_access", "load": 24},
+    {"experiment": "context_access", "load": 64},
+    {"experiment": "context_access", "load": 96}
+  ],
   "claim_family": {
     "familywise_alpha": 0.05,
-    "hypotheses": ["file_query", "tool_batch", "context_access"],
-    "id": "agentos-mechanism-headlines-v1",
+    "hypotheses": ["file_query_path_index", "file_query_table_ablation", "tool_batch", "context_access"],
+    "id": "agentos-evaluation-headlines-v2",
     "load_gate": "intersection",
     "method": "bonferroni"
+  },
+  "competition_claims": {
+    "task4": {
+      "benchmark_id": "file_query_path_index",
+      "required_status": "supported"
+    }
   },
   "kind": "agentos-evaluation-suite",
   "pairing": {
@@ -67,6 +105,6 @@
     "minimum_inner_pairs": 7,
     "orders": ["AB", "BA"]
   },
-  "schema_version": 1,
-  "suite_id": "agentos-mechanism-evaluation-v1"
+  "schema_version": 2,
+  "suite_id": "agentos-evaluation-v2"
 }

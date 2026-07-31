@@ -472,7 +472,7 @@
         "name": "lifecycle",
         "source_path": "os/agent_lifecycle.c",
         "object_path": "build/os/agent_lifecycle.o",
-        "baseline_lines": 334,
+        "baseline_lines": 340,
         "max_lines": 351,
         "max_bss_bytes": 8,
         "allowed_global_prefixes": [
@@ -1097,6 +1097,23 @@
         "allowed_bridge_dependencies": []
       },
       {
+        "name": "resource_observer",
+        "source_path": "os/agent_resource.c",
+        "object_path": "build/os/agent_resource.o",
+        "baseline_lines": 73,
+        "max_lines": 77,
+        "max_bss_bytes": 0,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "sys_agent_resource_snapshot"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "resource_controller"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "resource_controller",
         "source_path": "os/resource_controller.c",
         "object_path": "build/os/resource_controller.o",
@@ -1332,7 +1349,8 @@
           "observe_audit_query",
           "observe_ledger",
           "observe_recovery",
-          "observe_timeline"
+          "observe_timeline",
+          "resource_observer"
         ]
       },
       {
@@ -1511,9 +1529,29 @@
     "calibration_status": "provisional_requires_full_suite",
     "runner_tag": "agentos-qemu-calibrated",
     "runner_profile": {
-      "cpu": "Intel Core Ultra 9 275HX",
-      "virtualization": "WSL2",
+      "cpu": "ordinary GitLab Runner; not a local timing authority",
+      "virtualization": "Ubuntu 26.04; QEMU TCG",
       "qemu_version": "10.2.1"
+    },
+    "local_calibration_profile": {
+      "schema_version": 1,
+      "profile_id": "local-e3-msys2-xpack-qemu11-v1",
+      "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+      "runtime": "MSYS2 3.6.10 on Windows build 26200; QEMU TCG",
+      "toolchain_prefix": "riscv-none-elf-",
+      "tool_versions": {
+        "qemu": "11.0.0 (v11.0.0-12122-ga4bb4b10c9)",
+        "toolchain_cc": "15.2.0",
+        "toolchain_ld": "2.45",
+        "toolchain_objcopy": "2.45",
+        "toolchain_objdump": "2.45",
+        "toolchain_as": "2.45",
+        "host_cc": "15.3.0",
+        "python": "3.12.13",
+        "bash": "5.3.15(1)-release",
+        "make": "4.4.1",
+        "git": "2.55.0"
+      }
     }
   },
   "kernel_stack": {

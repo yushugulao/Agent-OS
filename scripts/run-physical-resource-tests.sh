@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-120s}"
@@ -28,6 +29,8 @@ cleanup_physical_test() {
 	rm -rf "${TMPDIR_PHYSICAL}"
 }
 trap cleanup_physical_test EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_PHYSICAL}"
 
 policy_probe="scripts/probes/physical-page-policy.c"
 capacity_probe="scripts/probes/physical-page-capacity.c"
@@ -71,8 +74,9 @@ make -C user TOOLPREFIX="${TOOLPREFIX}" CHAPTER=physical_resource \
 	build_dir="${TMPDIR_PHYSICAL}/user-build" \
 	out_dir="${TMPDIR_PHYSICAL}/user-target" \
 	asm_dir="${TMPDIR_PHYSICAL}/user-asm"
-cc nfs/fs.c nfs/host_image_snapshot.c -o "${TMPDIR_PHYSICAL}/mkfs"
-"${TMPDIR_PHYSICAL}/mkfs" "${TMPDIR_PHYSICAL}/physical.img" \
+host_probe_compile "${TMPDIR_PHYSICAL}/mkfs" \
+	nfs/fs.c nfs/host_image_snapshot.c
+host_probe_run "${TMPDIR_PHYSICAL}/mkfs" "${TMPDIR_PHYSICAL}/physical.img" \
 	"${TMPDIR_PHYSICAL}/user-target/bin/physicalresource_ucore"
 PROD_BUILDDIR="${TMPDIR_PHYSICAL}/prod-build"
 make -B "${PROD_BUILDDIR}/os/syscall.o" \
@@ -136,3 +140,4 @@ fi
 	--log-file "${log_file}" --tag physical-resource \
 	--profile physical-resource
 echo "[physical-resource] all checks passed"
+host_probe_report "physical-resource mkfs"

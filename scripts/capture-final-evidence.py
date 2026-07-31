@@ -1,27 +1,80 @@
 #!/usr/bin/env python3
 """Build and verify a compact, commit-bound AgentOS acceptance evidence bundle."""
 from __future__ import annotations
-import argparse, csv, hashlib, html, json
+import sys as _entry_sys
+if __name__ == "__main__" and (not _entry_sys.flags.isolated or not _entry_sys.flags.no_site):
+    print("capture-final-evidence: formal entry requires python -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py", file=_entry_sys.stderr)
+    raise SystemExit(2)
+def _isolate_direct_entry_imports() -> None:
+    if __name__ != "__main__":
+        return
+    prefixes = {
+        value.replace("\\", "/").rstrip("/").casefold()
+        for value in (_entry_sys.base_prefix, _entry_sys.base_exec_prefix, _entry_sys.prefix, _entry_sys.exec_prefix)
+        if value
+    }
+    _entry_sys.path[:] = [
+        value for value in _entry_sys.path
+        if value and any(
+            (normalized := value.replace("\\", "/").rstrip("/").casefold())
+            == prefix or normalized.startswith(f"{prefix}/")
+            for prefix in prefixes
+        )
+    ]
+_isolate_direct_entry_imports()
+import argparse, csv, hashlib, json
 import math, os, platform, re, shutil
 import signal, subprocess, sys, tempfile, time
 from urllib import parse as urlparse
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = str(Path(tempfile.gettempdir()) / f"agentos-pycache-{os.urandom(16).hex()}")
 HOST_TOOLS = Path(__file__).resolve().parents[1] / "host_tools"
+if "host_tools" not in sys.modules:
+    import types as _entry_types
+    _entry_package = _entry_types.ModuleType("host_tools")
+    _entry_package.__path__ = [str(HOST_TOOLS)]
+    _entry_package.__package__ = "host_tools"
+    sys.modules["host_tools"] = _entry_package
 if str(HOST_TOOLS) not in sys.path:
-    sys.path.insert(0, str(HOST_TOOLS))
-from measured_experiments import (  # noqa: E402
+    sys.path.append(str(HOST_TOOLS))
+from host_tools.measured_experiments import (  # noqa: E402
     MeasurementError,
     capture_bundle_artifacts,
     verify_bundle_artifacts,
     verify_measurement_artifact_set,
 )
-from evidence_delivery_contract import (DeliveryContractError, make_manifest_binding,  # noqa: E402
-                                        publish_bundle_and_index, validate_delivery_field)
-from evidence_semantic_registry import validate_raw_artifacts  # noqa: E402
-from dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS  # noqa: E402
-from remote_ci_bundle import decode_gitlab_json, gitlab_fetch, verify_job_execution  # noqa: E402
-from strict_json import read_strict_json, strict_json_loads  # noqa: E402
+from host_tools.evidence_delivery_contract import (  # noqa: E402
+    DeliveryContractError, make_manifest_binding, publish_bundle_and_index,
+    validate_delivery_field,
+)
+from host_tools.evidence_semantic_registry import validate_raw_artifacts  # noqa: E402
+from host_tools.dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS  # noqa: E402
+from host_tools.remote_ci_bundle import (  # noqa: E402
+    decode_gitlab_json, gitlab_fetch, verify_job_execution,
+)
+from host_tools.strict_json import read_strict_json, strict_json_loads  # noqa: E402
+from host_tools.safe_host_paths import (  # noqa: E402
+    require_regular_file, require_safe_directory, walk_regular_files_no_links,
+)
+from host_tools.full_verification_metrics import (  # noqa: E402
+    FullVerificationEvidenceError as EvidenceError,
+    REQUIRED_EVIDENCE_METRICS, load_budget_config, parse_measurements,
+    write_agent_csv, write_chart, write_metrics_csv,
+)
+from host_tools.evidence_toolchain_attestation import (  # noqa: E402
+    EVALUATION_ARTIFACT_OUTPUT_FILES, EVALUATION_BUILD_OUTPUT_FILES,
+    EVALUATION_BUILD_OUTPUT_ROOTS, EVALUATION_CACHE_OUTPUT_ROOTS,
+    FormalPythonRuntimeError, ToolAttestationError,
+    capture_version, controlled_environment, decode_external_output,
+    create_isolated_detached_worktree, create_formal_python_runtime,
+    formal_execution_overrides, purge_evaluation_generated_outputs,
+    require_nested_tool_resolution, resolve_bash_executable, resolve_executable,
+    verify_evaluation_source_tree, validate_formal_evidence_binding,
+    verify_tool_attestations, verify_tracked_worktree_bytes,
+)
 SCHEMA_VERSION = 6
 FULL_VERIFY_PROFILE_VERSION = 5
 REMOTE_CI_SCHEMA_VERSION = 1
@@ -32,9 +85,6 @@ REMOTE_CI_TAGS = {"host": "agentos-host-calibrated", "qemu": "agentos-qemu-calib
 FULL_VERIFY_TIMEOUT_SECONDS = 5 * 60 * 60
 SUMMARY_NAME = "verification-summary.json"
 SUCCESS_MARKER = "[full-verify] all checks passed"
-KERNEL_BUDGET_END = "[kernel-budget] kernel checks passed"
-AGENT_BUDGET_START = "[kernel-budget] agent-modules checks begin"
-AGENT_BUDGET_END = "[kernel-budget] agent-modules checks passed"
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SUMMARY_FIELDS = {"schema_version", "full_verify_profile_version", "kind", "status", "commit", "completed_at_utc", "settings", "steps", "artifacts", "step_contract_sha256"}
@@ -66,37 +116,6 @@ STEP_CONTRACT = (
     ("fs-enospc", ("fs-enospc.log",), ()),
     ("fs-allocator-fault", ("fs-allocator-fault.log", "fs-allocator-evidence.tar"), ()),
 )
-BUDGET_LINE = re.compile(
-    r"^\[kernel-budget\] (?P<name>.+?): actual=(?P<actual>[0-9]+(?:\.[0-9]+)?)"
-    r"(?P<unit> lines| bytes| seconds) baseline=(?P<baseline>[0-9]+(?:\.[0-9]+)?)"
-    r"(?P=unit) limit=(?P<limit>[0-9]+(?:\.[0-9]+)?)(?P=unit)$"
-)
-STACK_LINE = re.compile(r"^kernel stack budget: .*required=(?P<required>[0-9]+) limit=(?P<limit>[0-9]+)$")
-BOOT_STACK_LINE = re.compile(r"^boot stack budget: .*required=(?P<required>[0-9]+) limit=(?P<limit>[0-9]+)$")
-AGENT_TIMING_LINE = re.compile(r"^(?P<case>[A-Za-z0-9_]+)[ \t]+(?P<seconds>[0-9]+\.[0-9]{9})$")
-METRIC_NAMES = {
-    "stripped kernel ELF": "stripped_kernel_elf_bytes",
-    "raw kernel image": "raw_kernel_image_bytes",
-    "kernel runtime text": "kernel_runtime_text_bytes",
-    "kernel runtime data": "kernel_runtime_data_bytes",
-    "kernel runtime bss": "kernel_runtime_bss_bytes",
-    "kernel runtime total": "kernel_runtime_total_bytes",
-    "struct proc": "struct_proc_bytes",
-}
-AGGREGATE_PREFIX = "Agent aggregate metadata_control_plane "
-AGGREGATE_METRICS = {
-    "source_lines": ("metadata_control_plane_source_lines", "lines"), "source_bytes": ("metadata_control_plane_source_bytes", "bytes"),
-    "loaded_text_bytes": ("metadata_control_plane_loaded_text_bytes", "bytes"), "bss_bytes": ("metadata_control_plane_bss_bytes", "bytes"),
-}
-REQUIRED_KERNEL_METRICS = {
-    "kernel_source_lines",
-    *METRIC_NAMES.values(),
-}
-REQUIRED_AGGREGATE_METRICS = {value[0] for value in AGGREGATE_METRICS.values()}
-REQUIRED_EVIDENCE_METRICS = REQUIRED_KERNEL_METRICS | REQUIRED_AGGREGATE_METRICS | {
-    "kernel_stack_required_bytes", "boot_stack_required_bytes", "agent_suite_total_seconds",
-}
-CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 REQUIRED_RAW_FILES = {
     "reader-e2e.log", "reader-e2e-log-manifest.json", "dual-plain-qemu.log",
     "dual-agentos-qemu.log", "dual-stage-timings.csv", "dual-state-compare.json",
@@ -124,8 +143,6 @@ CSV_SCHEMAS = {
                           "source_log_sha256"],
     "command_csv": ["command", "argv_json", "returncode", "elapsed_seconds", "timeout_seconds", "source_log", "source_log_sha256"],
 }
-class EvidenceError(RuntimeError):
-    pass
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 def valid_utc_timestamp(value: object) -> bool:
@@ -162,52 +179,66 @@ def atomic_json(path: Path, value: object) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-def resolve_executable(value: str) -> Path:
-    candidate = Path(value)
-    if candidate.is_absolute() or candidate.parent != Path("."):
-        result = candidate.absolute()
-    else:
-        found = shutil.which(value)
-        if found is None:
-            raise EvidenceError(f"required executable not found: {value}")
-        result = Path(found).absolute()
-    if not result.is_file():
-        raise EvidenceError(f"required executable is not a file: {result}")
-    return result
-def controlled_environment(root: Path, tool_directories: list[Path], extra: dict[str, str] | None = None) -> dict[str, str]:
-    home, temporary = root / "home", root / "tmp"
-    home.mkdir(parents=True, exist_ok=True)
-    temporary.mkdir(parents=True, exist_ok=True)
-    system_paths = CONTROLLED_PATH.split(":") if os.name == "posix" else [os.defpath]
-    search_paths = list(dict.fromkeys(str(path) for path in tool_directories)) + system_paths
-    environment = {
-        "PATH": os.pathsep.join(search_paths), "HOME": str(home), "TMPDIR": str(temporary),
-        "LC_ALL": "C", "LANG": "C", "TZ": "UTC", "PYTHONNOUSERSITE": "1",
-        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_TERMINAL_PROMPT": "0",
-    }
-    if os.name == "nt":
-        for name in ("SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"):
-            if name in os.environ:
-                environment[name] = os.environ[name]
-    if extra:
-        environment.update(extra)
-    return environment
 def git_output(git: Path, repo: Path, environment: dict[str, str], *args: str) -> str:
     result = subprocess.run(
-        [str(git), *args], cwd=repo, text=True, stdout=subprocess.PIPE,
+        [str(git), "-c", "core.fsmonitor=false", "-c",
+         "core.untrackedCache=false", *args], cwd=repo, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, check=False, env=environment,
     )
+    output = decode_external_output(result.stdout)
     if result.returncode:
-        raise EvidenceError(f"git {' '.join(args)} failed: {result.stdout.strip()}")
-    return result.stdout.strip()
+        raise EvidenceError(f"git {' '.join(args)} failed: {output.strip()}")
+    return output.strip()
 def require_clean_head(git: Path, repo: Path, environment: dict[str, str]) -> str:
-    if git_output(git, repo, environment, "status", "--porcelain", "--untracked-files=all"):
-        raise EvidenceError("repository worktree is dirty")
     commit = git_output(git, repo, environment, "rev-parse", "--verify", "HEAD^{commit}")
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise EvidenceError("HEAD is not a full commit")
+    staged = subprocess.run(
+        [str(git), "-c", "core.fsmonitor=false", "-c",
+         "core.untrackedCache=false", "diff-index", "--cached", "--quiet",
+         commit, "--"], cwd=repo, env=environment, check=False,
+    )
+    untracked = subprocess.run(
+        [str(git), "-c", "core.fsmonitor=false", "-c",
+         "core.untrackedCache=false", "ls-files", "--others",
+         "--exclude-standard", "-z"], cwd=repo, env=environment,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    if staged.returncode or untracked.returncode or untracked.stdout:
+        raise EvidenceError("repository worktree is dirty")
+    verify_tracked_worktree_bytes(git, repo, repo, commit, environment)
     return commit
+
+def verify_capture_source_tree(
+    git: Path,
+    repository: Path,
+    worktree: Path,
+    commit: str,
+    environment: dict[str, str],
+    stage: str,
+    *,
+    source_checkout: bool,
+    source_output_roots: tuple[str, ...] = (),
+) -> None:
+    roots = [*EVALUATION_BUILD_OUTPUT_ROOTS, *EVALUATION_CACHE_OUTPUT_ROOTS]
+    if source_checkout:
+        roots.extend(source_output_roots)
+    try:
+        verify_evaluation_source_tree(
+            git,
+            repository,
+            worktree,
+            commit,
+            environment,
+            allowed_output_roots=roots,
+            allowed_output_files=(
+                *EVALUATION_BUILD_OUTPUT_FILES,
+                *EVALUATION_ARTIFACT_OUTPUT_FILES,
+            ),
+            stage=stage,
+        )
+    except (OSError, ToolAttestationError) as error:
+        raise EvidenceError(f"capture source gate failed {stage}: {error}") from error
 def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     if os.name == "posix":
         pgid = process.pid
@@ -441,194 +472,6 @@ def write_summary(args: argparse.Namespace) -> int:
     atomic_json(incoming / SUMMARY_NAME, summary)
     print(f"[evidence] wrote {SUMMARY_NAME}")
     return 0
-def metric_key(name: str, unit: str) -> str | None:
-    if name.startswith("kernel source (") and unit == "lines":
-        return "kernel_source_lines"
-    return METRIC_NAMES.get(name)
-def load_budget_config(path: Path) -> dict[str, object]:
-    try:
-        value = read_strict_json(path)
-    except (OSError, UnicodeDecodeError, ValueError) as error:
-        raise EvidenceError(f"invalid kernel budget configuration: {error}") from error
-    if not isinstance(value, dict) or not isinstance(value.get("agent_test_suite"), dict):
-        raise EvidenceError("kernel budget configuration lacks Agent suite")
-    return value
-def parse_measurements(full_log: Path, timing_log: Path, config: dict[str, object]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    text = full_log.read_text(encoding="utf-8", errors="replace")
-    modules = config.get("agent_modules")
-    groups = modules.get("aggregate_budgets") if isinstance(modules, dict) else None
-    targets = [group for group in groups if isinstance(group, dict) and group.get("name") == "metadata_control_plane"] if isinstance(groups, list) else []
-    if len(targets) != 1: raise EvidenceError("budget configuration lacks unique metadata_control_plane aggregate")
-    aggregate_expected: dict[str, tuple[float, float, str]] = {}
-    for suffix, (key, unit) in AGGREGATE_METRICS.items():
-        values = (targets[0].get(f"baseline_{suffix}"), targets[0].get(f"max_{suffix}"))
-        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in values) or values[0] < 0 or values[1] <= 0:
-            raise EvidenceError("metadata_control_plane aggregate configuration is invalid")
-        aggregate_expected[key] = (float(values[0]), float(values[1]), unit)
-    metrics: dict[str, dict[str, object]] = {}
-    stack_match = boot_match = None
-    stack_line = boot_line = 0; kernel_state = agent_state = 0
-    for line_number, line in enumerate(text.splitlines(), 1):
-        stripped = line.strip(); match = BUDGET_LINE.fullmatch(stripped)
-        unit = match.group("unit").strip() if match else ""
-        key = metric_key(match.group("name"), unit) if match else None
-        if line == AGENT_BUDGET_START:
-            if kernel_state != 2 or agent_state != 0: raise EvidenceError("agent module budget block boundary is invalid")
-            agent_state = 1; continue
-        if line == AGENT_BUDGET_END:
-            if agent_state != 1: raise EvidenceError("agent module budget block boundary is invalid")
-            agent_state = 2; continue
-        name = match.group("name") if match else ""
-        if name.startswith(AGGREGATE_PREFIX):
-            if agent_state != 1: raise EvidenceError("metadata aggregate metric is outside its budget block")
-            spec = AGGREGATE_METRICS.get(name[len(AGGREGATE_PREFIX):])
-            if spec is None: raise EvidenceError("unexpected metadata aggregate metric")
-            key, expected_unit = spec
-            logged = (float(match.group("baseline")), float(match.group("limit")), unit)
-            if logged != aggregate_expected[key] or unit != expected_unit: raise EvidenceError("metadata aggregate log and configuration differ")
-            if key in metrics: raise EvidenceError(f"duplicate metadata aggregate metric: {key}")
-            metrics[key] = {"metric": key, "actual": float(match.group("actual")),
-                            "baseline": logged[0], "limit": logged[1], "unit": unit, "source_line": line_number}
-            continue
-        if key == "kernel_source_lines":
-            if kernel_state != 0: raise EvidenceError("full-verify log has multiple kernel budget blocks")
-            kernel_state = 1
-        if line == KERNEL_BUDGET_END:
-            if kernel_state != 1: raise EvidenceError("kernel budget block boundary is invalid")
-            kernel_state = 2; continue
-        if kernel_state != 1: continue
-        if match:
-            if key:
-                if key in metrics:
-                    raise EvidenceError(f"duplicate kernel metric in budget block: {key}")
-                metrics[key] = {
-                    "metric": key, "actual": float(match.group("actual")),
-                    "baseline": float(match.group("baseline")),
-                    "limit": float(match.group("limit")), "unit": unit,
-                    "source_line": line_number,
-                }
-        new_stack = STACK_LINE.fullmatch(stripped)
-        new_boot = BOOT_STACK_LINE.fullmatch(stripped)
-        if (new_stack and stack_match) or (new_boot and boot_match):
-            raise EvidenceError("duplicate stack metric in kernel budget block")
-        stack_match, boot_match = new_stack or stack_match, new_boot or boot_match
-        stack_line = line_number if new_stack else stack_line
-        boot_line = line_number if new_boot else boot_line
-    if kernel_state == 0: raise EvidenceError("full-verify log lacks kernel budget block")
-    if kernel_state == 1: raise EvidenceError("kernel budget block is unterminated")
-    if agent_state == 0: raise EvidenceError("full-verify log lacks agent module budget block")
-    if agent_state == 1: raise EvidenceError("agent module budget block is unterminated")
-    missing = (REQUIRED_KERNEL_METRICS | REQUIRED_AGGREGATE_METRICS) - set(metrics)
-    if stack_match is None: missing.add("kernel_stack_required_bytes")
-    if boot_match is None: missing.add("boot_stack_required_bytes")
-    if missing: raise EvidenceError(f"budget blocks lack required metrics: {sorted(missing)}")
-    kernel_stack = config.get("kernel_stack")
-    if not isinstance(kernel_stack, dict): raise EvidenceError("kernel stack budget configuration is invalid")
-    stack_capacity = int(stack_match.group("limit")); boot_capacity = int(boot_match.group("limit"))
-    if (stack_capacity != int(kernel_stack["stack_size_bytes"])
-            or boot_capacity != int(kernel_stack["boot_stack_size_bytes"])):
-        raise EvidenceError("stack capacity log and configuration differ")
-    metrics["kernel_stack_required_bytes"] = {
-        "metric": "kernel_stack_required_bytes", "actual": float(stack_match.group("required")),
-        "baseline": float(kernel_stack["baseline_required_bytes"]), "limit": float(kernel_stack["max_required_bytes"]),
-        "unit": "bytes", "source_line": stack_line}
-    metrics["boot_stack_required_bytes"] = {
-        "metric": "boot_stack_required_bytes", "actual": float(boot_match.group("required")),
-        "baseline": float(kernel_stack["baseline_boot_required_bytes"]), "limit": float(kernel_stack["max_boot_required_bytes"]),
-        "unit": "bytes", "source_line": boot_line}
-    cases: list[dict[str, object]] = []
-    for line_number, line in enumerate(timing_log.read_text(encoding="utf-8").splitlines(), 1):
-        match = AGENT_TIMING_LINE.fullmatch(line.strip())
-        if match is None or float(match.group("seconds")) <= 0:
-            raise EvidenceError(f"invalid Agent timing row {line_number}")
-        cases.append({"sequence": len(cases) + 1, "case": match.group("case"), "seconds": match.group("seconds"), "source_line": line_number})
-    if not cases: raise EvidenceError("Agent timing log is empty")
-    suite = config["agent_test_suite"]
-    expected_cases = suite.get("expected_cases")
-    actual_cases = [row["case"] for row in cases]
-    if (not isinstance(expected_cases, list) or not expected_cases
-            or actual_cases != expected_cases or len(actual_cases) != len(set(actual_cases))):
-        raise EvidenceError("Agent timing cases do not match the configured suite")
-    total = sum(float(row["seconds"]) for row in cases)
-    metrics["agent_suite_total_seconds"] = {
-        "metric": "agent_suite_total_seconds", "actual": total, "baseline": float(suite["baseline_seconds"]),
-        "limit": float(suite["max_seconds"]), "unit": "seconds", "source_line": 0}
-    rows = list(metrics.values())
-    for row in rows:
-        limit = float(row["limit"])
-        if limit <= 0 or float(row["actual"]) > limit:
-            raise EvidenceError(f"metric exceeds limit: {row['metric']}")
-        row["usage_ratio"] = float(row["actual"]) / limit
-    return rows, cases
-def write_metrics_csv(path: Path, rows: list[dict[str, object]], full_source: str,
-                      full_hash: str, timing_source: str, timing_hash: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["metric", "actual", "baseline", "limit", "unit", "usage_ratio",
-              "source_line", "source_log", "source_log_sha256"]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        for row in rows:
-            agent_total = row["metric"] == "agent_suite_total_seconds"
-            writer.writerow({**row,
-                             "source_log": timing_source if agent_total else full_source,
-                             "source_log_sha256": timing_hash if agent_total else full_hash})
-def write_agent_csv(path: Path, rows: list[dict[str, object]], source: str,
-                    source_hash: str) -> None:
-    fields = ["sequence", "case", "seconds", "source_line", "source_log", "source_log_sha256"]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({**row, "source_log": source, "source_log_sha256": source_hash})
-def write_chart(path: Path, rows: list[dict[str, object]], measurements_hash: str,
-                full_hash: str, timing_hash: str) -> None:
-    width, row_height, top = 980, 34, 54
-    height = top + row_height * len(rows) + 24
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-        f'viewBox="0 0 {width} {height}">',
-        '<rect width="100%" height="100%" fill="#ffffff"/>',
-        '<text x="20" y="28" font-family="sans-serif" font-size="18" fill="#111">'
-        'AgentOS acceptance budgets</text>',
-        f'<metadata>source_measurements_sha256={measurements_hash} full_verify_sha256={full_hash} '
-        f'agent_timing_sha256={timing_hash}</metadata>',
-    ]
-    for index, row in enumerate(rows):
-        y = top + index * row_height
-        usage = float(row["usage_ratio"])
-        baseline = float(row["baseline"]) / float(row["limit"])
-        bar_width = min(430, 430 * usage)
-        baseline_x = 330 + min(430, 430 * baseline)
-        label = html.escape(str(row["metric"]))
-        detail = html.escape(f"actual={row['actual']:.9g} baseline={row['baseline']:.9g} "
-                             f"limit={row['limit']:.9g} usage={usage:.2%}")
-        parts.extend([
-            f'<text x="20" y="{y + 16}" font-family="monospace" font-size="12">{label}</text>',
-            f'<rect x="330" y="{y + 3}" width="430" height="15" fill="#e5e7eb"/>',
-            f'<rect x="330" y="{y + 3}" width="{bar_width:.2f}" height="15" fill="#167d68"/>',
-            f'<line x1="{baseline_x:.2f}" y1="{y}" x2="{baseline_x:.2f}" y2="{y + 21}" '
-            'stroke="#b45309" stroke-width="2"/>',
-            f'<text x="775" y="{y + 16}" font-family="sans-serif" font-size="11">{detail}</text>',
-        ])
-    parts.append("</svg>")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(parts) + "\n", encoding="utf-8")
-def capture_version(label: str, executable: Path, directory: Path,
-                    environment: dict[str, str]) -> dict[str, object]:
-    result = subprocess.run(
-        [str(executable), "--version"], text=True, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, check=False, env=environment,
-    )
-    if result.returncode or not result.stdout.strip():
-        raise EvidenceError(f"cannot capture {label} version")
-    relative = f"environment/versions/{label}.txt"
-    path = directory / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(result.stdout, encoding="utf-8")
-    return {"label": label, "path": str(executable), "executable_sha256": sha256_file(executable),
-            "first_line": result.stdout.splitlines()[0], "log": relative,
-            "log_sha256": sha256_file(path)}
 def write_checksums(root: Path) -> None:
     checksum = root / "checksums.sha256"
     files = sorted(path for path in root.rglob("*") if path.is_file() and path != checksum)
@@ -664,12 +507,77 @@ def validate_dual_measurement_inventory(directory: Path, commit: str) -> None:
     except MeasurementError as error:
         raise EvidenceError(f"dual measurement evidence is invalid: {error}") from error
 def validate_fs_allocator_archive(path: Path) -> None:
-    result = subprocess.run([sys.executable, str(Path(__file__).with_name("fs-allocator-evidence.py")),
-                             "verify-archive", "--archive", str(path)],
-                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    result = subprocess.run([sys.executable, "-I", "-S", str(Path(__file__).with_name("trusted-python-entry.py")),
+                             "scripts/fs-allocator-evidence.py", "verify-archive", "--archive", str(path)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if result.returncode:
-        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        detail = (decode_external_output(result.stderr).strip()
+                  or decode_external_output(result.stdout).strip()
+                  or f"exit {result.returncode}")
         raise EvidenceError(f"filesystem allocator evidence is invalid: {detail}")
+
+def replay_raw_contract(
+    raw_dir: Path, summary_path: Path, expected_commit: str
+) -> dict[str, object]:
+    """Replay every semantic contract from this script's immutable source tree."""
+
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
+        raise EvidenceError("raw replay expected commit is invalid")
+    try:
+        summary = validate_summary(read_strict_json(summary_path))
+    except (OSError, UnicodeDecodeError, ValueError, KeyError) as error:
+        raise EvidenceError(f"raw replay summary is invalid: {error}") from error
+    if summary.get("commit") != expected_commit:
+        raise EvidenceError("raw replay summary commit differs")
+    try:
+        raw_dir = require_safe_directory(raw_dir)
+        summary_path = require_regular_file(
+            summary_path, nonempty=True, maximum_bytes=16 << 20
+        )
+        raw_files = walk_regular_files_no_links(
+            raw_dir,
+            max_files=512,
+            max_directories=1,
+            max_total_bytes=2 << 30,
+            max_depth=1,
+        )
+    except (OSError, ValueError) as error:
+        raise EvidenceError(f"raw replay input tree is unsafe: {error}") from error
+    actual = {path.relative_to(raw_dir).as_posix() for path in raw_files}
+    expected = {str(record["name"]) for record in summary["artifacts"]}
+    if summary_path.parent == raw_dir:
+        if summary_path.name != SUMMARY_NAME:
+            raise EvidenceError("raw replay colocated summary name is invalid")
+        expected.add(SUMMARY_NAME)
+    if actual != expected:
+        raise EvidenceError(
+            "raw replay inventory differs from its summary: "
+            f"missing={sorted(expected - actual)} extra={sorted(actual - expected)}"
+        )
+    for record in summary["artifacts"]:
+        path = raw_dir / str(record["name"])
+        try:
+            path = require_regular_file(path, nonempty=True, maximum_bytes=1 << 30)
+        except (OSError, ValueError) as error:
+            raise EvidenceError(
+                f"raw replay artifact is unsafe: {record['name']}"
+            ) from error
+        if (
+            path.stat().st_size != record["bytes"]
+            or sha256_file(path) != record["sha256"]
+        ):
+            raise EvidenceError(
+                f"raw replay artifact differs from summary: {record['name']}"
+            )
+    validate_reader_inventory(raw_dir, summary["steps"])
+    validate_dual_measurement_inventory(raw_dir, expected_commit)
+    validate_raw_artifacts(
+        raw_dir,
+        Path(__file__).resolve().parents[1],
+        summary_path.parent != raw_dir,
+    )
+    validate_fs_allocator_archive(raw_dir / "fs-allocator-evidence.tar")
+    return summary
 def acquire_output_lock(output: Path):
     if os.name != "posix":
         raise EvidenceError("ready evidence collection requires POSIX file locking")
@@ -832,7 +740,7 @@ def validate_authenticity(root: Path, manifest: dict[str, object], commit: str) 
     except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError("remote CI provenance JSON is invalid") from error
     return validate_remote_ci_provenance(proof, commit, root)
-def verify_bundle(root: Path) -> dict[str, object]:
+def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, object]:
     root = root.resolve()
     checksum = root / "checksums.sha256"
     if not checksum.is_file() or checksum.is_symlink():
@@ -918,21 +826,20 @@ def verify_bundle(root: Path) -> dict[str, object]:
     measurement_rows = csv_rows["measurements_csv"]
     metric_names = [row.get("metric") for row in measurement_rows]
     if len(metric_names) != len(REQUIRED_EVIDENCE_METRICS) or set(metric_names) != REQUIRED_EVIDENCE_METRICS: raise EvidenceError("critical metric inventory differs")
-    environment_path = require_file_ref(root, manifest.get("environment"),
-                                        "environment/environment.json")
-    configuration_path = require_file_ref(root, manifest.get("configuration"),
-                                          "configuration/kernel-budgets.json")
+    environment_path = require_file_ref(root, manifest.get("environment"), "environment/environment.json")
+    configuration_path = require_file_ref(root, manifest.get("configuration"), "configuration/kernel-budgets.json")
     try:
         environment_record = read_strict_json(environment_path)
     except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError("environment inventory is invalid") from error
-    tool_records = environment_record.get("tools") if isinstance(environment_record, dict) else None
-    if not isinstance(tool_records, list) or any(not isinstance(item, dict) for item in tool_records):
-        raise EvidenceError("environment tool inventory is invalid")
-    labels = [item.get("label") for item in tool_records]
-    if len(labels) != len(set(labels)) or set(labels) != TOOL_LABELS:
-        raise EvidenceError("environment tool labels are missing or duplicated")
-    tool_by_label = {item["label"]: item for item in tool_records}
+    try:
+        tool_by_label = validate_formal_evidence_binding(
+            environment_record, command["environment"], command["environment"].get("PYTHON_BIN"),
+            environment_record.get("python_path_resolution") if isinstance(environment_record, dict) else None,
+            contract_root or Path(__file__).resolve().parents[1], TOOL_LABELS)
+    except (OSError, FormalPythonRuntimeError) as error:
+        raise EvidenceError(f"formal execution environment is invalid: {error}") from error
+    tool_records = environment_record["tools"]
     if (not (compiler_path := str(tool_by_label["compiler"].get("path", ""))).endswith("gcc") or command["argv"] != [tool_by_label["make"].get("path"), "full-verify", f"TOOLPREFIX={compiler_path[:-3]}"]): raise EvidenceError("full-verify command argv is not canonical")
     version_logs = set()
     for record in tool_records:
@@ -1049,14 +956,30 @@ def collect(args: argparse.Namespace) -> int:
         "qemu": resolve_executable(args.qemu),
         "python": resolve_executable(args.python),
         "make": resolve_executable(args.make),
-        "bash": resolve_executable(args.bash),
+        "bash": resolve_bash_executable(args.bash, git),
         "host_cc": resolve_executable(args.host_cc),
     }
     environment_root = Path(tempfile.mkdtemp(prefix="agentos-evidence-env-"))
-    tool_directories = [path.parent for path in tools.values()]
+    tool_directories = [
+        tools[label].parent
+        for label in ("make", "git", "bash", "python", "host_cc", "compiler", "qemu")
+    ]
     base_environment = controlled_environment(environment_root, tool_directories)
+    require_nested_tool_resolution(tools, base_environment)
     try:
         commit = require_clean_head(git, repo, base_environment)
+        verify_capture_source_tree(
+            git,
+            repo,
+            repo,
+            commit,
+            base_environment,
+            "before detached checkout",
+            source_checkout=True,
+            source_output_roots=(
+                PurePosixPath(*output.relative_to(repo).parts).as_posix(),
+            ) if output.is_relative_to(repo) else (),
+        )
     except BaseException:
         shutil.rmtree(environment_root, ignore_errors=True)
         raise
@@ -1069,43 +992,80 @@ def collect(args: argparse.Namespace) -> int:
         shutil.rmtree(environment_root, ignore_errors=True)
         raise
     worktree: Path | None = None
+    checkout_root: Path | None = None
     failed = output.with_name(output.name + ".failed")
-    worktree_registered = False
     try:
-        worktree = Path(tempfile.mkdtemp(prefix="agentos-evidence-worktree-"))
+        versions = [
+            capture_version(label, path, stage, base_environment)
+            for label, path in tools.items()
+        ]
+        checkout_root = Path(tempfile.mkdtemp(prefix="agentos-evidence-checkout-"))
         if failed.exists():
             raise EvidenceError(f"failed evidence path already exists: {failed}")
-        worktree.rmdir()
-        git_output(git, repo, base_environment, "worktree", "add", "--detach",
-                   str(worktree), commit)
-        worktree_registered = True
-        detached = subprocess.run(
-            [str(git), "symbolic-ref", "-q", "HEAD"], cwd=worktree,
-            env=base_environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            check=False,
+        _isolated, worktree = create_isolated_detached_worktree(
+            git, repo, commit, checkout_root, base_environment
         )
-        if (detached.returncode != 1
-                or git_output(git, worktree, base_environment, "rev-parse", "HEAD") != commit
-                or git_output(git, worktree, base_environment, "status", "--porcelain",
-                              "--untracked-files=all")):
-            raise EvidenceError("execution worktree is not a clean detached commit")
+        verify_capture_source_tree(
+            git,
+            _isolated,
+            worktree,
+            commit,
+            base_environment,
+            "before full-verify purge",
+            source_checkout=False,
+        )
+        try:
+            purge_evaluation_generated_outputs(
+                git,
+                _isolated,
+                worktree,
+                commit,
+                base_environment,
+                output_roots=(
+                    *EVALUATION_BUILD_OUTPUT_ROOTS,
+                    *EVALUATION_CACHE_OUTPUT_ROOTS,
+                ),
+                output_files=EVALUATION_BUILD_OUTPUT_FILES,
+            )
+        except (OSError, ToolAttestationError) as error:
+            raise EvidenceError(f"capture build purge failed: {error}") from error
+        verify_capture_source_tree(
+            git,
+            _isolated,
+            worktree,
+            commit,
+            base_environment,
+            "after full-verify purge",
+            source_checkout=False,
+        )
+        python_runtime = create_formal_python_runtime(
+            root=environment_root, real_python=tools["python"], shell=tools["bash"],
+            git=git, repository=_isolated, worktree=worktree, commit=commit,
+            environment=base_environment)
         evidence_stage = stage / "runtime" / "evidence-stage"
         (evidence_stage / "incoming").mkdir(parents=True)
         full_log = stage / "logs" / "full-verify.log"
         command = [str(tools["make"]), "full-verify", f"TOOLPREFIX={effective_prefix}"]
-        selected_env = {
-            "FINAL_EVIDENCE_STAGE": str(evidence_stage),
-            "QEMU": str(tools["qemu"]),
-            "PYTHON_BIN": str(tools["python"]),
-            "CASE_TIMEOUT": args.case_timeout,
-            "IDLE_NOTICE_SECONDS": args.idle_notice,
-            "MARKER_GRACE_SECONDS": "2s",
-            "MECHANISM_MARKER_GRACE_SECONDS": "5s",
-        }
-        environment = controlled_environment(environment_root, tool_directories,
-                                             selected_env)
+        selected_env = formal_execution_overrides(
+            evidence_stage, tools, python_runtime.executable,
+            args.case_timeout, args.idle_notice)
+        environment = controlled_environment(environment_root, [python_runtime.directory, *tool_directories], selected_env)
+        python_path_resolution = python_runtime.path_resolution(environment)
+        verify_tool_attestations(tools, versions, stage, base_environment, "before execution")
+        python_runtime.verify("before execution")
         returncode, elapsed, timed_out = run_logged(
             command, worktree, environment, full_log, args.command_timeout
+        )
+        verify_tool_attestations(tools, versions, stage, base_environment, "during execution")
+        python_runtime.verify("after execution")
+        verify_capture_source_tree(
+            git,
+            _isolated,
+            worktree,
+            commit,
+            base_environment,
+            "after full-verify execution",
+            source_checkout=False,
         )
         if returncode != 0:
             raise EvidenceError(f"make full-verify failed with rc={returncode}")
@@ -1163,11 +1123,12 @@ def collect(args: argparse.Namespace) -> int:
         measurements_hash = sha256_file(measurements_path)
         chart_path = stage / "charts" / "budget-usage.svg"
         write_chart(chart_path, metrics, measurements_hash, full_hash, str(timing_hash))
-        versions = [capture_version(label, path, stage, base_environment)
-                    for label, path in tools.items()]
         environment_record = {
             "captured_at_utc": utc_now(), "platform": platform.platform(),
             "machine": platform.machine(), "python_runtime": sys.version,
+            "python_launch": python_runtime.record,
+            "python_path_resolution": python_path_resolution,
+            "execution_environment": environment,
             "tools": versions,
         }
         environment_path = stage / "environment" / "environment.json"
@@ -1216,21 +1177,18 @@ def collect(args: argparse.Namespace) -> int:
         }
         write_json(stage / "manifest.json", manifest)
         shutil.rmtree(stage / "runtime")
-        git_output(git, repo, base_environment, "worktree", "remove", "--force",
-                   str(worktree))
-        worktree_registered = False
         write_checksums(stage)
-        verify_bundle(stage)
+        verify_bundle(stage, worktree)
+        verify_tool_attestations(
+            tools, versions, stage, base_environment, "before publication"
+        )
+        python_runtime.verify("before publication")
         publish_bundle_and_index(
             repo, stage, output, commit, manifest["delivery"]["release"], git=git,
         )
         print(f"[evidence] bundle captured: {output}")
         return 0
     except BaseException as error:
-        if worktree_registered:
-            subprocess.run([str(git), "worktree", "remove", "--force", str(worktree)],
-                           cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           env=base_environment)
         if stage.exists():
             write_json(stage / "failure.json", {"schema_version": SCHEMA_VERSION,
                        "status": "failed", "failed_at_utc": utc_now(), "error": str(error)})
@@ -1244,8 +1202,8 @@ def collect(args: argparse.Namespace) -> int:
             raise
         raise EvidenceError(f"unexpected collection failure: {error}") from error
     finally:
-        if worktree is not None and worktree.exists():
-            shutil.rmtree(worktree, ignore_errors=True)
+        if checkout_root is not None and checkout_root.exists():
+            shutil.rmtree(checkout_root, ignore_errors=True)
         release_output_lock(output_lock)
         shutil.rmtree(environment_root, ignore_errors=True)
 def bind_remote_ci(args: argparse.Namespace) -> int:
@@ -1413,6 +1371,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     collect_parser.add_argument("--command-timeout", type=float, default=FULL_VERIFY_TIMEOUT_SECONDS)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("bundle")
+    raw_parser = commands.add_parser("replay-raw")
+    raw_parser.add_argument("--raw-dir", type=Path, required=True)
+    raw_parser.add_argument("--summary", type=Path, required=True)
+    raw_parser.add_argument("--expected-commit", required=True)
     remote_parser = commands.add_parser("bind-remote-ci")
     remote_parser.add_argument("--bundle", required=True)
     remote_parser.add_argument("--output", required=True)
@@ -1438,6 +1400,10 @@ def main(argv: list[str] | None = None) -> int:
             return write_summary(args)
         if args.operation == "bind-remote-ci":
             return bind_remote_ci(args)
+        if args.operation == "replay-raw":
+            replay_raw_contract(args.raw_dir, args.summary, args.expected_commit)
+            print("[evidence] raw semantic replay passed")
+            return 0
         print(json.dumps(verify_bundle(Path(args.bundle)), indent=2, sort_keys=True))
         return 0
     except KeyboardInterrupt:

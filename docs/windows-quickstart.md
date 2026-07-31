@@ -44,25 +44,101 @@ sudo apt install -y git build-essential make python3 qemu-system-misc \
 
 ## WSL 内检查
 
-进入 WSL 后，切到仓库目录，例如：
+进入 WSL 后，切到实际 clone 的仓库根目录，不要照抄某台开发机的绝对路径，例如：
 
 ```bash
-cd /mnt/e/计算机操作系统能力竞赛/project61-agentOS-happylegend-uCore
+cd /mnt/<盘符>/<你的目录>/<仓库名>
 make doctor
 ```
 
 `make doctor` 只做依赖检查，不构建内核，不启动 QEMU。它适合在运行前或换机器后先跑一遍。
 
-## 两条主运行命令
+竞赛评价另有更严格的执行域检查。在 Windows PowerShell 或 Git Bash 启动评价前运行：
 
-依赖检查通过后，推荐使用两条命令完成示例准备：
+```bash
+make evaluation-doctor EVALUATION_WSL_DISTRO=Ubuntu
+```
+
+它只检查指定发行版，不使用另一个默认 WSL 发行版代替；同时验证 `wslpath` 对当前仓库
+的真实映射、Python 3.10+、交叉工具链（含 `size`）、QEMU `virt` 和构建/摘要工具。
+通过后，正式评价的所有阶段都会整体进入该 WSL，禁止 Windows 原生 micro 与 WSL
+科研场景混跑。若发行版中的工具名不同，可设置 `EVALUATION_WSL_TOOLPREFIX` 和
+`EVALUATION_WSL_QEMU`。`wsl --version` 在旧 Windows 上不可用不会单独导致失败；指定
+发行版本身无法执行或工具不完整仍会 fail closed。
+
+## WSL 服务不可用时的 MSYS2 正式域
+
+若 WSL 服务本身持续返回 `Wsl/Service/E_ACCESSDENIED`，可以改用完整安装的 MSYS2，
+但不能直接换成 Git Bash、Cygwin、MINGW shell 或 Windows Python。MSYS2 shell 内需要
+提供自身的 `/usr/bin/python3`、Bash、Git、Make、env、timeout、readlink、sha256sum、
+uname、cygpath 和 Host objdump，并在同一 POSIX namespace 中暴露完整 RISC-V GCC/
+binutils、GNU size 与 QEMU。工具链前缀建议使用规范 POSIX 绝对值，例如：
+
+```bash
+export MSYSTEM=MSYS
+export TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf-
+export QEMU=/opt/qemu/qemu-system-riscv64.exe
+export PYTHON_BIN=/usr/bin/python3
+export BASH_BIN=/usr/bin/bash
+export TMPDIR=/tmp
+make evaluation-doctor
+```
+
+预检会把结果明确标为 `domain=native-msys2`，绑定 Windows build、uname、
+`msys-2.0.dll` 和所有工具哈希，并验证控制面程序确实使用该 runtime。仓库、工具和临时
+目录必须通过 cygpath 双向映射；中文路径会在受控域中固定使用 `C.UTF-8`。正式
+`run`、`verify`、`kernel-cost`、`dashboard`、`package` 随后全部由已绑定的绝对
+`env -i` 和 Bash 重新启动，不能把 MSYS2 micro 与 WSL 科研场景混用。campaign 清单的
+`run.execution_domain` 为 `native-msys2`，科研场景为
+`native-msys2-clean-shell`。任何 runtime/tool 哈希变化、伪造 re-entry marker 或继承
+`BASH_ENV`、`PYTHONPATH`、`MAKEFLAGS`、`GIT_*` 等变量都会 fail closed。
+
+同一 platform proof v2 还会从 MSYS2 的 `/proc/cpuinfo` 和 `/proc/meminfo` 记录稳定的
+CPU model、logical CPU count 与总内存，并在每个 Guest boot 前复验；动态 MHz 不作为
+身份。硬件字段包含在 campaign 哈希内，scenario plan schema v3 也绑定同一 proof 并在每轮
+pair 前后复验。公开证据不记录计算机名，uname 证明只保留
+Windows build、kernel release/version 与 machine。
+
+## 正式竞赛评价流程
+
+依赖检查通过后，在同一受控 POSIX 执行域中依次运行：
+
+```bash
+make evaluation-doctor
+make evaluation-smoke
+make evaluation-run
+make evaluation-verify
+make evaluation-kernel-cost
+make evaluation-full-verify
+make evaluation-dashboard
+make evaluation-package
+```
+
+formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`。challenge 和 AB/BA 顺序
+由 C 确定性派生，所以不同 clone 的计划一致；失败目录会保留且同一输出根拒绝覆盖。
+本地机制不能替代受保护远端 Runner，也不声称能证明其他 clone 从未丢弃尝试。首个 QEMU
+前生成的 run plan schema v2、scenario plan schema v3 和
+`measurement-source-receipt.json` 绑定计划、六份 Guest 测量源码及评价控制面策略清单；
+package 中的全部策略快照还要与 C 的 Git blob 一致。
+
+`evaluation-package` 接受有完整有效数据的 `file_query_path_index` 结论为 `supported` 或
+`not_supported`，但拒绝 `unavailable`、`failed` 和缺失数据；`file_query_table_ablation`
+只作 metadata 固定表消融，不能替代这项竞赛主对照。生成包不等于已有性能优势：
+只有真实 campaign、合同复验和 C→E 提交完成后，仓库才有可引用证据；后续 D 只能修改
+`README.md`、`docs/**` 与 `evidence/README.md`，不得改包或 INDEX。当前仓库尚未随本文
+预先声明任何未产生的正式结果。
+
+## 可选的旧版演示页面
+
+旧入口适合交互演示，不是上述 formal 评价和证据交付的替代品：
 
 ```bash
 make dual-platform-run TOOLPREFIX=<你的 RISC-V 工具链前缀>
 make reader
 ```
 
-第一条命令会运行普通 uCore 对照目标和 AgentOS-uCore 目标，提取状态文件，生成结果页面、CSV 和 SVG 图表。第二条命令会启动本地页面服务，并打印浏览器 URL。查看时优先打开：
+第一条命令运行普通 uCore 对照目标和 AgentOS-uCore 目标并生成预览材料；第二条命令启动
+本地页面服务。查看时可打开：
 
 - `http://127.0.0.1:8767/`
 - `http://127.0.0.1:8767/dual-results.html`

@@ -793,6 +793,7 @@ static int syscall_may_issue_block_io(int id, uint64 *args)
 	case SYS_agent_scope_delegate_fd:
 	case SYS_agent_workflow_close:
 	case SYS_agent_workflow_lifecycle_info:
+	case SYS_agent_resource_snapshot:
 	case SYS_agent_info:
 	case SYS_agent_sched_snapshot:
 	case SYS_agent_sched_config:
@@ -840,6 +841,7 @@ static uint syscall_kernel_work_class(int id)
 	switch (id) {
 	case SYS_kernel_work_last_preemptions:
 	case SYS_kernel_work_receipt_snapshot:
+	case SYS_agent_resource_snapshot:
 		return KERNEL_WORK_SYSCALL_OBSERVER;
 	default:
 		return KERNEL_WORK_SYSCALL_PUBLISH;
@@ -990,6 +992,9 @@ void syscall()
 	case SYS_agent_workflow_lifecycle_info:
 		ret = sys_agent_workflow_lifecycle_info(
 			args[0], args[1], args[2], args[3], args[4]);
+		break;
+	case SYS_agent_resource_snapshot:
+		ret = sys_agent_resource_snapshot(args[0], args[1]);
 		break;
 	case SYS_agent_info:
 		ret = sys_agent_info(args[0]);

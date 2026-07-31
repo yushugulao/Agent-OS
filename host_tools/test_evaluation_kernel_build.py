@@ -71,6 +71,44 @@ def _run(root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
+def _create_detectable_file_symlink(target: Path, link: Path) -> bool:
+    """Create a real link even when MSYS2 defaults to its deep-copy fallback."""
+
+    try:
+        os.symlink(target, link)
+    except (NotImplementedError, OSError):
+        return False
+    if link.is_symlink():
+        return True
+
+    # The default MSYS2 winsymlinks mode may report success after copying the
+    # target.  Such a regular file cannot exercise the anti-link contract.
+    # Retry in a child whose runtime is explicitly configured for MSYS links.
+    if sys.platform != "cygwin":
+        link.unlink(missing_ok=True)
+        return False
+    if not link.is_file():
+        raise AssertionError(f"symlink fallback created an unexpected path: {link}")
+    link.unlink()
+    environment = os.environ.copy()
+    environment["MSYS"] = "winsymlinks:sys"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, sys; os.symlink(sys.argv[1], sys.argv[2])",
+            str(target),
+            str(link),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        check=False,
+    )
+    return result.returncode == 0 and link.is_symlink()
+
+
 class FakeMake:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -79,6 +117,7 @@ class FakeMake:
         self.mutate_source = False
         self.leave_stale = False
         self.mutate_previous_artifact = False
+        self.mutate_toolchain = False
 
     def __call__(
         self,
@@ -92,7 +131,27 @@ class FakeMake:
         command = list(argv)
         self.calls.append((command, dict(environment)))
         if command[-1] == "--version":
-            return builder.CommandExecution(0, b"GNU Make 4.4 fixture\n", b"", 3)
+            name = Path(command[0]).name
+            version = (
+                "GNU Make 4.4 fixture"
+                if command[0] == str(Path(sys.executable).resolve())
+                else f"{name} fixture version"
+            )
+            return builder.CommandExecution(0, (version + "\n").encode(), b"", 3)
+        if command[-1] == "kernel-budget-check":
+            return builder.CommandExecution(
+                0,
+                b"[kernel-budget] struct proc: actual=26448 bytes baseline=26448 bytes limit=27233 bytes\n",
+                b"",
+                5,
+            )
+        if command[-1] == "user-stack-check":
+            return builder.CommandExecution(
+                0,
+                b"user stack call-path budget: apps=182 max=2944 (app:main) budget=3072 stack=4096 reserve=1024\n",
+                b"",
+                5,
+            )
         baseline = "-C" in command
         target_id = "baseline" if baseline else "agentos"
         phase = "clean" if command[-1] == "clean" else "build"
@@ -115,6 +174,10 @@ class FakeMake:
                 previous.write_bytes(_valid_elf(b"changed later"))
             if self.mutate_source:
                 (self.root / "Makefile").write_text("mutated\n", encoding="utf-8")
+            if self.mutate_toolchain:
+                Path(self.root / "tools" / "riscv64-unknown-elf-gcc").write_bytes(
+                    b"mutated-gcc"
+                )
         return builder.CommandExecution(
             0,
             f"{target_id} {phase}\n".encode(),
@@ -135,17 +198,33 @@ class Fixture:
         (self.root / "baseline_ucore" / "Makefile").write_text(
             "all:\n\t@true\n", encoding="utf-8"
         )
+        for relative in (
+            "ci/kernel-budgets.json",
+            "scripts/check-kernel-budgets.py",
+            "scripts/probes/struct-proc-size.c",
+            "scripts/check-user-stack-usage.py",
+            "user_stack_policy.h",
+            "user/Makefile",
+        ):
+            destination = self.root / Path(*relative.split("/"))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, destination)
         (self.root / ".gitignore").write_text(
             "/build/\n/baseline_ucore/build/\n/results/\n", encoding="utf-8"
         )
         _run(self.root, "init", "-q")
         _run(self.root, "config", "user.name", "Kernel Build Test")
         _run(self.root, "config", "user.email", "kernel-build@example.invalid")
+        self.output = self.root / "results" / "evaluation" / "kernel-run"
+        self.make_tool = Path(sys.executable)
+        tool_stem = self.root / "tools" / "riscv64-unknown-elf-"
+        tool_stem.parent.mkdir()
+        self.toolprefix = str(tool_stem.resolve())
+        for name in cost.TRUSTED_BUILD_TOOL_NAMES:
+            Path(self.toolprefix + name).write_bytes(f"fixture-{name}".encode())
         _run(self.root, "add", ".")
         _run(self.root, "commit", "-q", "-m", "fixture")
         self.commit = _run(self.root, "rev-parse", "HEAD").stdout.decode().strip()
-        self.output = self.root / "results" / "kernel-run"
-        self.make_tool = Path(sys.executable)
         self.runner = FakeMake(self.root)
 
     def close(self) -> None:
@@ -156,6 +235,7 @@ class Fixture:
             config_path=self.config,
             repository_root=self.root,
             make_tool=self.make_tool,
+            toolprefix=self.toolprefix,
             run_id="kernel-fixture-1",
             output_dir=self.output,
             runner=self.runner,
@@ -208,10 +288,19 @@ class TrustedKernelBuildTests(unittest.TestCase):
             environment,
         )
         self.assertEqual(build_config["environment_sha256"], build_log["environment_sha256"])
-        self.assertEqual(len(build_log["commands"]), 5)
+        self.assertEqual(
+            len(build_log["commands"]),
+            1 + len(cost.TRUSTED_BUILD_TOOL_NAMES) + 4 + len(cost.GUARDRAIL_IDS),
+        )
         self.assertTrue(all(item["returncode"] == 0 for item in build_log["commands"]))
         environments = [environment for _, environment in self.fixture.runner.calls]
         self.assertTrue(all(value == environments[0] for value in environments))
+        expected_prefix = (
+            Path(self.fixture.toolprefix).resolve().as_posix()
+            if os.name == "nt"
+            else str(Path(self.fixture.toolprefix).resolve())
+        )
+        self.assertEqual(environments[0]["TOOLPREFIX"], expected_prefix)
         status = _run(
             self.fixture.root, "status", "--porcelain=v1", "--untracked-files=all"
         ).stdout
@@ -221,25 +310,45 @@ class TrustedKernelBuildTests(unittest.TestCase):
         self.fixture.build()
         commands = [call[0] for call in self.fixture.runner.calls]
         make = str(self.fixture.make_tool.resolve())
+        prefix = (
+            Path(self.fixture.toolprefix).resolve().as_posix()
+            if os.name == "nt"
+            else str(Path(self.fixture.toolprefix).resolve())
+        )
+        tool_versions = [
+            [
+                (
+                    Path(self.fixture.toolprefix + name).resolve().as_posix()
+                    if os.name == "nt"
+                    else str(Path(self.fixture.toolprefix + name).resolve())
+                ),
+                "--version",
+            ]
+            for name in cost.TRUSTED_BUILD_TOOL_NAMES
+        ]
         self.assertEqual(
             commands,
             [
                 [make, "--version"],
-                [make, "-C", "baseline_ucore", "clean"],
-                [make, "-C", "baseline_ucore", "build/kernel"],
-                [make, "clean"],
-                [make, "build/kernel"],
+                *tool_versions,
+                [make, "-C", "baseline_ucore", f"TOOLPREFIX={prefix}", "clean"],
+                [make, "-C", "baseline_ucore", f"TOOLPREFIX={prefix}", "build/kernel"],
+                [make, f"TOOLPREFIX={prefix}", "clean"],
+                [make, f"TOOLPREFIX={prefix}", "build/kernel"],
+                [make, f"TOOLPREFIX={prefix}", "kernel-budget-check"],
+                [make, f"TOOLPREFIX={prefix}", "user-stack-check"],
             ],
         )
 
     def test_portable_receipts_can_be_rooted_at_the_evaluation_run(self) -> None:
-        evidence_root = self.fixture.root / "results" / "portable-run"
+        evidence_root = self.fixture.root / "results" / "evaluation" / "portable-run"
         evidence_root.mkdir(parents=True)
         output = evidence_root / "kernel-build"
         result = builder.build_evidence(
             config_path=self.fixture.config,
             repository_root=self.fixture.root,
             make_tool=self.fixture.make_tool,
+            toolprefix=self.fixture.toolprefix,
             run_id="kernel-fixture-1",
             output_dir=output,
             evidence_root=evidence_root,
@@ -263,6 +372,57 @@ class TrustedKernelBuildTests(unittest.TestCase):
             self.fixture.build()
         self.assertEqual(self.fixture.runner.calls, [])
         self.assertFalse(self.fixture.output.exists())
+
+    def test_info_exclude_cannot_hide_make_wildcard_source(self) -> None:
+        exclude = self.fixture.root / ".git" / "info" / "exclude"
+        exclude.write_text("os/hidden.c\nuser/src/hidden.c\n", encoding="ascii")
+        for relative in ("os/hidden.c", "user/src/hidden.c"):
+            hidden = self.fixture.root / relative
+            hidden.parent.mkdir(parents=True, exist_ok=True)
+            hidden.write_text("int hidden;\n", encoding="ascii")
+            self.assertEqual(
+                _run(
+                    self.fixture.root,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                ).stdout,
+                b"",
+            )
+            with self.assertRaisesRegex(builder.KernelBuildError, "source gate"):
+                self.fixture.build()
+            self.assertEqual(self.fixture.runner.calls, [])
+            hidden.unlink()
+
+    def test_hidden_index_flags_cannot_mask_tampered_build_input(self) -> None:
+        source = self.fixture.root / "Makefile"
+        original = source.read_bytes()
+        for enabled in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(flag=enabled):
+                _run(self.fixture.root, "update-index", enabled, "--", "Makefile")
+                source.write_bytes(original + b"# hidden tamper\n")
+                status = _run(
+                    self.fixture.root,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                ).stdout
+                self.assertEqual(status, b"")
+                with self.assertRaisesRegex(
+                    builder.KernelBuildError, "tracked source identity is unsafe"
+                ):
+                    self.fixture.build()
+                self.assertEqual(self.fixture.runner.calls, [])
+                self.assertFalse(self.fixture.output.exists())
+                source.write_bytes(original)
+                _run(
+                    self.fixture.root,
+                    "update-index",
+                    "--no-assume-unchanged",
+                    "--no-skip-worktree",
+                    "--",
+                    "Makefile",
+                )
 
     def test_nonzero_real_return_code_aborts_atomic_publication(self) -> None:
         self.fixture.runner.fail = ("baseline", "build")
@@ -292,12 +452,35 @@ class TrustedKernelBuildTests(unittest.TestCase):
             self.fixture.build()
         self.assertFalse(self.fixture.output.exists())
 
+    def test_toolchain_binary_mutation_during_build_is_fail_closed(self) -> None:
+        self.fixture.runner.mutate_toolchain = True
+        with self.assertRaisesRegex(builder.KernelBuildError, "toolchain gcc changed"):
+            self.fixture.build()
+        self.assertFalse(self.fixture.output.exists())
+
+    def test_toolprefix_must_be_absolute_and_complete(self) -> None:
+        with self.assertRaisesRegex(builder.KernelBuildError, "must be absolute"):
+            builder.build_evidence(
+                config_path=self.fixture.config,
+                repository_root=self.fixture.root,
+                make_tool=self.fixture.make_tool,
+                toolprefix="riscv64-unknown-elf-",
+                run_id="kernel-fixture-1",
+                output_dir=self.fixture.output,
+                runner=self.fixture.runner,
+            )
+        Path(self.fixture.toolprefix + "objdump").unlink()
+        with self.assertRaisesRegex(builder.KernelBuildError, "exactly one objdump"):
+            self.fixture.build()
+        self.assertEqual(self.fixture.runner.calls, [])
+
     def test_output_must_be_ignored_and_absent(self) -> None:
         with self.assertRaisesRegex(builder.KernelBuildError, "must be ignored"):
             builder.build_evidence(
                 config_path=self.fixture.config,
                 repository_root=self.fixture.root,
                 make_tool=self.fixture.make_tool,
+                toolprefix=self.fixture.toolprefix,
                 run_id="kernel-fixture-1",
                 output_dir=self.fixture.root / "published" / "run",
                 runner=self.fixture.runner,
@@ -320,15 +503,44 @@ class TrustedKernelBuildTests(unittest.TestCase):
 
     @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
     def test_link_backed_config_is_rejected(self) -> None:
-        real = self.fixture.root / "ci" / "real.json"
-        shutil.copyfile(self.fixture.config, real)
-        try:
+        with tempfile.TemporaryDirectory(
+            prefix="trusted-kernel-config-target-",
+            dir=self.fixture.root.parent,
+        ) as target_directory:
+            real = Path(target_directory) / "evaluation-kernel-cost.json"
+            shutil.copyfile(self.fixture.config, real)
             self.fixture.config.unlink()
-            os.symlink(real, self.fixture.config)
-        except OSError as error:
-            self.skipTest(f"cannot create symlink: {error}")
-        with self.assertRaisesRegex(builder.KernelBuildError, "link-backed"):
-            self.fixture.build()
+            if not _create_detectable_file_symlink(real, self.fixture.config):
+                self.skipTest("runtime cannot create a detectable file symlink")
+
+            # Keep the anti-link assertion independent of the clean-worktree
+            # assertion.  On hosts where Git records the mode change, commit
+            # the link; on Windows/MSYS core.symlinks=false already treats the
+            # byte-identical external target as clean.
+            relative = str(self.fixture.config.relative_to(self.fixture.root))
+            _run(self.fixture.root, "add", "--", relative)
+            staged = subprocess.run(
+                ["git", "-C", str(self.fixture.root), "diff", "--cached", "--quiet"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if staged.returncode == 1:
+                _run(self.fixture.root, "commit", "-q", "-m", "link-backed config")
+            elif staged.returncode != 0:
+                self.fail(f"cannot inspect staged link: {staged.stderr.decode()}")
+            status = _run(
+                self.fixture.root,
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ).stdout
+            self.assertEqual(status, b"")
+
+            with self.assertRaisesRegex(builder.KernelBuildError, "link-backed"):
+                self.fixture.build()
+            self.assertEqual(self.fixture.runner.calls, [])
 
 
 if __name__ == "__main__":

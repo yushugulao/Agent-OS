@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
@@ -26,6 +27,8 @@ cleanup() {
 	rm -rf "${TMPDIR_OBSERVE}"
 }
 trap cleanup EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_OBSERVE}"
 
 "${PYTHON_BIN}" scripts/test-observe-recovery-contract.py
 bash scripts/test-identity-lease-deferred.sh
@@ -36,8 +39,9 @@ make -C user TOOLPREFIX="${TOOLPREFIX}" CHAPTER=observe_recovery \
 	build_dir="${TMPDIR_OBSERVE}/user-build" \
 	out_dir="${TMPDIR_OBSERVE}/user-target" \
 	asm_dir="${TMPDIR_OBSERVE}/user-asm"
-cc -DAGENT_OBSERVE_PHASE_CONTROL_PROFILE \
-	nfs/fs.c nfs/host_image_snapshot.c -o "${TMPDIR_OBSERVE}/mkfs"
+host_probe_compile "${TMPDIR_OBSERVE}/mkfs" \
+	-DAGENT_OBSERVE_PHASE_CONTROL_PROFILE \
+	nfs/fs.c nfs/host_image_snapshot.c
 make -B "${TMPDIR_OBSERVE}/prod-build/os/agent_observe_store.o" \
 	"${TMPDIR_OBSERVE}/prod-build/os/agent_observe_recovery.o" \
 	"${TMPDIR_OBSERVE}/prod-build/os/agent_observe_timeline.o" \
@@ -68,7 +72,7 @@ make -B "${TMPDIR_OBSERVE}/kernel-build/kernel" \
 
 image="${TMPDIR_OBSERVE}/observe-reboot.img"
 kernel="${TMPDIR_OBSERVE}/kernel-build/kernel"
-"${TMPDIR_OBSERVE}/mkfs" "${image}" \
+host_probe_run "${TMPDIR_OBSERVE}/mkfs" "${image}" \
 	"${TMPDIR_OBSERVE}/user-target/bin/agentobsreboot_ucore"
 "${PYTHON_BIN}" host_tools/agent_observe_phase_control.py verify \
 	--image "${image}" --expect empty
@@ -184,3 +188,4 @@ grep -Fxq "agentobsreboot_ucore: parent passed" \
 	"${TMPDIR_OBSERVE}/boot3.log"
 
 echo "[observe-recovery] power-cut lease and three-boot durable evidence lifecycle passed"
+host_probe_report "observe-recovery mkfs"

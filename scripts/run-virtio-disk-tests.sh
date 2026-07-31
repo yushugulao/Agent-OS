@@ -14,6 +14,8 @@ IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20s}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"
 TMPDIR_VIRTIO="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_VIRTIO}"' EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_VIRTIO}"
 
 "${PYTHON_BIN}" scripts/test-virtio-disk-wiring.py
 "${PYTHON_BIN}" scripts/test-validate-virtio-disk-log.py
@@ -22,9 +24,9 @@ make -C user TOOLPREFIX="${TOOLPREFIX}" CHAPTER=virtio_disk \
     build_dir="${TMPDIR_VIRTIO}/user-build" \
     out_dir="${TMPDIR_VIRTIO}/user-target" \
     asm_dir="${TMPDIR_VIRTIO}/user-asm"
-"${HOSTCC}" nfs/fs.c nfs/host_image_snapshot.c \
-	-o "${TMPDIR_VIRTIO}/mkfs"
-"${TMPDIR_VIRTIO}/mkfs" "${TMPDIR_VIRTIO}/master.img" \
+host_probe_compile "${TMPDIR_VIRTIO}/mkfs" \
+	nfs/fs.c nfs/host_image_snapshot.c
+host_probe_run "${TMPDIR_VIRTIO}/mkfs" "${TMPDIR_VIRTIO}/master.img" \
     "${TMPDIR_VIRTIO}/user-target/bin/virtiodisk_ucore"
 make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
     INIT_PROC=virtiodisk_ucore VIRTIO_DISK_TEST=1
@@ -66,3 +68,4 @@ if [[ ${append_status} -ne 0 ]]; then
 fi
 "${PYTHON_BIN}" scripts/validate-virtio-disk-log.py --log-file "${log_file}"
 echo "[virtio-disk] fault matrix passed"
+host_probe_report "virtio-disk mkfs"

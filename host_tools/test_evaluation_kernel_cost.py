@@ -8,6 +8,7 @@ import base64
 import json
 import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,8 +69,25 @@ def _write_json(path: Path, value: object) -> bytes:
     return raw
 
 
+def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", "-C", str(root), *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+
 class Fixture:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        source_commit: str = COMMIT,
+        run_id: str = "kernel-cost-run-1",
+    ) -> None:
+        self.source_commit = source_commit
+        self.run_id = run_id
         self._temporary = tempfile.TemporaryDirectory(
             prefix="kernel-cost-", dir=Path(__file__).resolve().parent
         )
@@ -95,20 +113,47 @@ class Fixture:
         self.make.write_bytes(b"fixture-make-tool-v1")
         make_path = str(self.make.resolve())
         make_version = "GNU Make 4.4 fixture"
+        toolprefix = str((self.root / "tools" / "riscv64-linux-gnu-").resolve())
+        tool_versions = {
+            "gcc": "riscv64-linux-gnu-gcc fixture",
+            "ld": "GNU ld fixture",
+            "objcopy": "GNU objcopy fixture",
+            "objdump": "GNU objdump fixture",
+            "nm": "GNU nm fixture",
+            "size": "GNU size fixture",
+        }
+        toolchain_tools = []
+        for name in cost.TRUSTED_BUILD_TOOL_NAMES:
+            path = Path(toolprefix + name)
+            path.write_bytes(f"fixture-{name}-tool-v1".encode())
+            toolchain_tools.append(
+                {
+                    "name": name,
+                    "path": str(path),
+                    "resolved_path": str(path.resolve()),
+                    "sha256": cost._file_sha(path),
+                    "version_argv": [str(path), "--version"],
+                    "version": tool_versions[name],
+                }
+            )
+        toolchain_sha = cost._bytes_sha(
+            cost._canonical_json({"prefix": toolprefix, "tools": toolchain_tools})
+        )
         build_environment = {
             "LANG": "C",
             "LC_ALL": "C",
             "PATH": "/fixture/bin",
             "PYTHONHASHSEED": "0",
             "SOURCE_DATE_EPOCH": "1700000000",
+            "TOOLPREFIX": toolprefix,
             "TZ": "UTC",
         }
         build_environment_sha = cost._bytes_sha(cost._canonical_json(build_environment))
         self.trusted_config = {
             "schema_version": cost.TRUSTED_BUILD_SCHEMA_VERSION,
             "kind": cost.TRUSTED_BUILD_CONFIG_KIND,
-            "run_id": "kernel-cost-run-1",
-            "source_commit": COMMIT,
+            "run_id": run_id,
+            "source_commit": source_commit,
             "kernel_cost_config": {
                 "path": "ci/evaluation-kernel-cost.json",
                 "sha256": cost._file_sha(self.config),
@@ -118,6 +163,11 @@ class Fixture:
                 "sha256": cost._file_sha(self.make),
                 "version_argv": [make_path, "--version"],
                 "version": make_version,
+            },
+            "toolchain": {
+                "prefix": toolprefix,
+                "identity_sha256": toolchain_sha,
+                "tools": toolchain_tools,
             },
             "command_policy": {
                 "timeout_seconds": cost.TRUSTED_BUILD_TIMEOUT_SECONDS,
@@ -130,15 +180,42 @@ class Fixture:
                     "id": "baseline",
                     "role": "baseline",
                     "path": "baseline_ucore/build/kernel",
-                    "clean_argv": [make_path, "-C", "baseline_ucore", "clean"],
-                    "build_argv": [make_path, "-C", "baseline_ucore", "build/kernel"],
+                    "clean_argv": [
+                        make_path, "-C", "baseline_ucore",
+                        f"TOOLPREFIX={toolprefix}", "clean",
+                    ],
+                    "build_argv": [
+                        make_path, "-C", "baseline_ucore",
+                        f"TOOLPREFIX={toolprefix}", "build/kernel",
+                    ],
                 },
                 {
                     "id": "agentos",
                     "role": "treatment",
                     "path": "build/kernel",
-                    "clean_argv": [make_path, "clean"],
-                    "build_argv": [make_path, "build/kernel"],
+                    "clean_argv": [make_path, f"TOOLPREFIX={toolprefix}", "clean"],
+                    "build_argv": [
+                        make_path, f"TOOLPREFIX={toolprefix}", "build/kernel",
+                    ],
+                },
+            ],
+            "guardrail_commands": [
+                {
+                    "id": "struct_proc_bytes",
+                    "target_id": "agentos",
+                    "phase": "kernel_budget",
+                    "argv": [
+                        make_path, f"TOOLPREFIX={toolprefix}",
+                        "kernel-budget-check",
+                    ],
+                },
+                {
+                    "id": "user_stack_call_path_bytes",
+                    "target_id": "agentos",
+                    "phase": "user_stack",
+                    "argv": [
+                        make_path, f"TOOLPREFIX={toolprefix}", "user-stack-check",
+                    ],
                 },
             ],
         }
@@ -164,30 +241,57 @@ class Fixture:
                 "stderr_sha256": cost._bytes_sha(stderr),
             }
 
+        build_start = 1 + len(toolchain_tools)
+        guardrail_start = build_start + 4
         self.trusted_log = {
             "schema_version": cost.TRUSTED_BUILD_SCHEMA_VERSION,
             "kind": cost.TRUSTED_BUILD_LOG_KIND,
-            "run_id": "kernel-cost-run-1",
-            "source_commit": COMMIT,
+            "run_id": run_id,
+            "source_commit": source_commit,
             "environment_sha256": build_environment_sha,
+            "toolchain_sha256": toolchain_sha,
             "commands": [
                 command_record(0, "builder", "make_version", [make_path, "--version"], (make_version + "\n").encode()),
-                command_record(1, "baseline", "clean", [make_path, "-C", "baseline_ucore", "clean"], b"baseline clean\n"),
-                command_record(2, "baseline", "build", [make_path, "-C", "baseline_ucore", "build/kernel"], b"baseline build\n"),
-                command_record(3, "agentos", "clean", [make_path, "clean"], b"agentos clean\n"),
-                command_record(4, "agentos", "build", [make_path, "build/kernel"], b"agentos build\n"),
+                *[
+                    command_record(
+                        index + 1,
+                        "toolchain",
+                        f"{tool['name']}_version",
+                        tool["version_argv"],
+                        (tool["version"] + "\n").encode(),
+                    )
+                    for index, tool in enumerate(toolchain_tools)
+                ],
+                command_record(build_start, "baseline", "clean", [make_path, "-C", "baseline_ucore", f"TOOLPREFIX={toolprefix}", "clean"], b"baseline clean\n"),
+                command_record(build_start + 1, "baseline", "build", [make_path, "-C", "baseline_ucore", f"TOOLPREFIX={toolprefix}", "build/kernel"], b"baseline build\n"),
+                command_record(build_start + 2, "agentos", "clean", [make_path, f"TOOLPREFIX={toolprefix}", "clean"], b"agentos clean\n"),
+                command_record(build_start + 3, "agentos", "build", [make_path, f"TOOLPREFIX={toolprefix}", "build/kernel"], b"agentos build\n"),
+                command_record(
+                    guardrail_start,
+                    "agentos",
+                    "kernel_budget",
+                    [make_path, f"TOOLPREFIX={toolprefix}", "kernel-budget-check"],
+                    b"[kernel-budget] struct proc: actual=26448 bytes baseline=26448 bytes limit=27233 bytes\n",
+                ),
+                command_record(
+                    guardrail_start + 1,
+                    "agentos",
+                    "user_stack",
+                    [make_path, f"TOOLPREFIX={toolprefix}", "user-stack-check"],
+                    b"user stack call-path budget: apps=182 max=2944 (app:main) budget=3072 stack=4096 reserve=1024\n",
+                ),
             ],
         }
         _write_json(self.build_log, self.trusted_log)
         environment = {
             "schema_version": 1,
             "kind": cost.ENVIRONMENT_KIND,
-            "run_id": "kernel-cost-run-1",
-            "source_commit": COMMIT,
+            "run_id": run_id,
+            "source_commit": source_commit,
             "environment_id": "qemu-riscv64-fixture",
             "facts": [
                 {"name": "build_environment_sha256", "value": build_environment_sha},
-                {"name": "builder", "value": "evaluation_kernel_build.py/1"},
+                {"name": "builder", "value": f"evaluation_kernel_build.py/{cost.TRUSTED_BUILD_SCHEMA_VERSION}"},
                 {"name": "git", "value": "git version fixture"},
                 {"name": "make", "value": make_version},
                 {"name": "make_path", "value": make_path},
@@ -195,6 +299,8 @@ class Fixture:
                 {"name": "platform", "value": "fixture-platform"},
                 {"name": "python", "value": "3.fixture"},
                 {"name": "source_date_epoch", "value": "1700000000"},
+                {"name": "toolchain_identity_sha256", "value": toolchain_sha},
+                {"name": "toolchain_prefix", "value": toolprefix},
             ],
         }
         environment_raw = _write_json(self.environment, environment)
@@ -202,8 +308,9 @@ class Fixture:
             "schema_version": 1,
             "kind": cost.BUILD_KIND,
             "run_id": environment["run_id"],
-            "source_commit": COMMIT,
+            "source_commit": source_commit,
             "environment_sha256": cost._bytes_sha(environment_raw),
+            "toolchain_sha256": toolchain_sha,
             "build_config": {
                 "path": "ci/kernel-build-config.json",
                 "sha256": cost._file_sha(self.build_config),
@@ -217,13 +324,13 @@ class Fixture:
                     "id": "baseline",
                     "path": "baseline_ucore/build/kernel",
                     "sha256": cost._file_sha(self.baseline),
-                    "command_argv": [make_path, "-C", "baseline_ucore", "build/kernel"],
+                    "command_argv": [make_path, "-C", "baseline_ucore", f"TOOLPREFIX={toolprefix}", "build/kernel"],
                 },
                 {
                     "id": "agentos",
                     "path": "build/kernel",
                     "sha256": cost._file_sha(self.agentos),
-                    "command_argv": [make_path, "build/kernel"],
+                    "command_argv": [make_path, f"TOOLPREFIX={toolprefix}", "build/kernel"],
                 },
             ],
         }
@@ -257,7 +364,7 @@ class Fixture:
         self.save_report(report)
 
     def repository(self, _root: Path) -> tuple[str, bool]:
-        return COMMIT, True
+        return self.source_commit, True
 
     def runner(
         self, argv: cost.Sequence[str], timeout: int, maximum: int
@@ -396,6 +503,82 @@ class KernelCostTests(unittest.TestCase):
                 with self.assertRaisesRegex(cost.KernelCostError, "clean HEAD"):
                     self.fixture.collect(repository_reader=lambda _root, state=state: state)
 
+    def test_repository_state_rejects_hidden_index_flags(self) -> None:
+        source = self.fixture.root / "tracked-source.c"
+        source.write_bytes(b"int trusted_source;\n")
+        _git(self.fixture.root, "init", "-q")
+        _git(self.fixture.root, "config", "user.name", "Kernel Cost Test")
+        _git(
+            self.fixture.root,
+            "config",
+            "user.email",
+            "kernel-cost@example.invalid",
+        )
+        _git(self.fixture.root, "add", "--", source.name)
+        _git(self.fixture.root, "commit", "-q", "-m", "source identity fixture")
+        original = source.read_bytes()
+        for enabled in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(flag=enabled):
+                _git(self.fixture.root, "update-index", enabled, "--", source.name)
+                source.write_bytes(original + b"/* hidden tamper */\n")
+                status = _git(
+                    self.fixture.root,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=no",
+                ).stdout
+                self.assertEqual(status, b"")
+                with self.assertRaisesRegex(
+                    cost.KernelCostError, "tracked source identity is unsafe"
+                ):
+                    cost._repository_state(self.fixture.root)
+                source.write_bytes(original)
+                _git(
+                    self.fixture.root,
+                    "update-index",
+                    "--no-assume-unchanged",
+                    "--no-skip-worktree",
+                    "--",
+                    source.name,
+                )
+
+    def test_production_gate_rejects_info_exclude_sources(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="kernel-cost-source-gate-") as temporary:
+            root = Path(temporary)
+            (root / "os").mkdir()
+            (root / "user" / "src").mkdir(parents=True)
+            (root / "Makefile").write_text("all:\n\t@true\n", encoding="ascii")
+            (root / "os" / "kernel.c").write_text("int kernel;\n", encoding="ascii")
+            (root / "user" / "src" / "app.c").write_text(
+                "int app;\n", encoding="ascii"
+            )
+            _git(root, "init", "-q")
+            _git(root, "config", "user.name", "Kernel Cost Gate")
+            _git(root, "config", "user.email", "kernel-gate@example.invalid")
+            _git(root, "add", "-A")
+            _git(root, "commit", "-q", "-m", "fixture")
+            commit = _git(root, "rev-parse", "HEAD").stdout.decode().strip()
+            (root / ".git" / "info" / "exclude").write_text(
+                "os/hidden.c\nuser/src/hidden.c\n", encoding="ascii"
+            )
+            for relative in ("os/hidden.c", "user/src/hidden.c"):
+                hidden = root / relative
+                hidden.write_text("int hidden;\n", encoding="ascii")
+                self.assertEqual(
+                    _git(
+                        root,
+                        "status",
+                        "--porcelain=v1",
+                        "--untracked-files=all",
+                    ).stdout,
+                    b"",
+                )
+                with self.assertRaisesRegex(cost.KernelCostError, "source gate"):
+                    cost._production_source_gate(
+                        root, commit, None, "before collection"
+                    )
+                hidden.unlink()
+
     def test_build_target_swap_is_rejected_before_tools_run(self) -> None:
         self.fixture.build["targets"][0]["path"] = "build/kernel"
         self.fixture.build["targets"][1]["path"] = "baseline_ucore/build/kernel"
@@ -433,14 +616,15 @@ class KernelCostTests(unittest.TestCase):
 
     def test_portable_verify_rejects_command_and_returncode_tampering(self) -> None:
         report = self.fixture.collect()
-        self.fixture.trusted_log["commands"][2]["argv"][-1] = "forged-target"
+        build_index = 1 + len(cost.TRUSTED_BUILD_TOOL_NAMES) + 1
+        self.fixture.trusted_log["commands"][build_index]["argv"][-1] = "forged-target"
         self.fixture.rewrite_trusted_log()
         self.fixture.rebind_portable_report(copy.deepcopy(report))
         with self.assertRaisesRegex(cost.KernelCostError, "sequence/cwd/phase/target/argv"):
             cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
 
-        self.fixture.trusted_log["commands"][2]["argv"][-1] = "build/kernel"
-        self.fixture.trusted_log["commands"][3]["returncode"] = 23
+        self.fixture.trusted_log["commands"][build_index]["argv"][-1] = "build/kernel"
+        self.fixture.trusted_log["commands"][build_index + 1]["returncode"] = 23
         self.fixture.rewrite_trusted_log()
         self.fixture.rebind_portable_report(copy.deepcopy(report))
         with self.assertRaisesRegex(cost.KernelCostError, "not a successful command"):
@@ -476,6 +660,55 @@ class KernelCostTests(unittest.TestCase):
         self.fixture.rewrite_trusted_log()
         self.fixture.rebind_portable_report(copy.deepcopy(report))
         with self.assertRaisesRegex(cost.KernelCostError, "stdout SHA-256"):
+            cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
+
+    def test_portable_verify_rejects_toolchain_path_hash_and_version_mutation(self) -> None:
+        report = self.fixture.collect()
+        self.fixture.trusted_config["toolchain"]["tools"][0]["path"] = str(
+            (self.fixture.root / "tools" / "host-gcc").resolve()
+        )
+        self.fixture.rewrite_trusted_config()
+        self.fixture.rebind_portable_report(copy.deepcopy(report))
+        with self.assertRaisesRegex(cost.KernelCostError, "derived from TOOLPREFIX"):
+            cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
+
+        self.fixture.close()
+        self.fixture = Fixture()
+        report = self.fixture.collect()
+        self.fixture.trusted_config["toolchain"]["tools"][1]["sha256"] = "f" * 64
+        self.fixture.rewrite_trusted_config()
+        self.fixture.rebind_portable_report(copy.deepcopy(report))
+        with self.assertRaisesRegex(cost.KernelCostError, "identity SHA-256 differs"):
+            cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
+
+        self.fixture.close()
+        self.fixture = Fixture()
+        report = self.fixture.collect()
+        forged = b"forged cross linker\n"
+        command = self.fixture.trusted_log["commands"][3]
+        command["stdout_base64"] = base64.b64encode(forged).decode("ascii")
+        command["stdout_sha256"] = cost._bytes_sha(forged)
+        self.fixture.rewrite_trusted_log()
+        self.fixture.rebind_portable_report(copy.deepcopy(report))
+        with self.assertRaisesRegex(cost.KernelCostError, "version output differs"):
+            cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
+
+    def test_portable_verify_rejects_toolprefix_and_manifest_rebinding(self) -> None:
+        report = self.fixture.collect()
+        self.fixture.trusted_config["environment"]["TOOLPREFIX"] = str(
+            (self.fixture.root / "tools" / "host-").resolve()
+        )
+        self.fixture.rewrite_trusted_config()
+        self.fixture.rebind_portable_report(copy.deepcopy(report))
+        with self.assertRaisesRegex(cost.KernelCostError, "deterministic environment"):
+            cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
+
+        self.fixture.close()
+        self.fixture = Fixture()
+        report = self.fixture.collect()
+        self.fixture.build["toolchain_sha256"] = "0" * 64
+        self.fixture.rebind_portable_report(copy.deepcopy(report))
+        with self.assertRaisesRegex(cost.KernelCostError, "manifest identity differs"):
             cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
 
     def test_environment_rebinding_is_rejected_even_after_content_rehash(self) -> None:
@@ -575,37 +808,66 @@ class KernelCostTests(unittest.TestCase):
                 repository_reader=self.fixture.repository,
             )
 
-    def test_fragment_is_accepted_by_dashboard_contract(self) -> None:
-        from render_evaluation_dashboard import validate_summary
+    def test_guardrails_are_rederived_from_canonical_checker_output(self) -> None:
+        report = self.fixture.collect()
+        forged = copy.deepcopy(report)
+        forged["guardrails"][0]["value"] -= 1
+        forged["content_sha256"] = cost._bytes_sha(
+            cost._canonical_json(
+                {
+                    key: value
+                    for key, value in forged.items()
+                    if key != "content_sha256"
+                }
+            )
+        )
+        self.fixture.save_report(forged)
+        with self.assertRaisesRegex(
+            cost.KernelCostError, "differ from canonical checker output"
+        ):
+            cost.verify_portable(
+                self.fixture.report, self.fixture.config, self.fixture.root
+            )
 
+        changed = (
+            b"[kernel-budget] struct proc: actual=26447 bytes "
+            b"baseline=26448 bytes limit=27233 bytes\n"
+        )
+        command = self.fixture.trusted_log["commands"][-2]
+        command["stdout_base64"] = base64.b64encode(changed).decode("ascii")
+        command["stdout_sha256"] = cost._bytes_sha(changed)
+        self.fixture.rewrite_trusted_log()
+        self.fixture.rebind_portable_report(copy.deepcopy(report))
+        with self.assertRaisesRegex(
+            cost.KernelCostError, "differ from canonical checker output"
+        ):
+            cost.verify_portable(
+                self.fixture.report, self.fixture.config, self.fixture.root
+            )
+
+    def test_fragment_is_accepted_by_dashboard_contract(self) -> None:
         report = self.fixture.collect()
         self.fixture.save_report(report)
         fragment = cost.build_dashboard_fragment(
             self.fixture.report, self.fixture.config, self.fixture.root
         )
-        summary = {
-            "schema_version": 1,
-            "kind": "agentos-evaluation-summary",
-            "run": fragment["run"],
-            "targets": fragment["targets"],
-            "benchmarks": fragment["benchmarks"],
-            "scenarios": [],
-            "methodology": fragment["methodology"],
-            "evidence": [
-                *fragment["evidence"],
-                {
-                    "id": "run-plan",
-                    "label": "Kernel build manifest binding",
-                    "status": "verified",
-                    "kind": "evaluation-run-plan",
-                    "source": "evidence/kernel-build.json",
-                    "path": "evidence/kernel-build.json",
-                    "sha256": fragment["run"]["run_plan_sha256"],
-                },
-            ],
-            "claims": [],
-        }
-        self.assertIs(validate_summary(summary), summary)
+        # Kernel cost is a separately re-derived sidecar, not an evaluation
+        # summary.  The renderer compares this exact fragment with a fresh
+        # build_dashboard_fragment() result before displaying it; treating its
+        # intentionally smaller methodology as the headline summary contract
+        # would conflate artifact cost with performance inference.
+        self.assertEqual(
+            set(fragment),
+            {
+                "schema_version", "kind", "run", "targets", "benchmarks",
+                "guardrails", "evidence", "methodology",
+            },
+        )
+        self.assertEqual(fragment["schema_version"], 1)
+        self.assertEqual(fragment["kind"], cost.FRAGMENT_KIND)
+        self.assertEqual(fragment["run"]["commit"], COMMIT)
+        self.assertTrue(fragment["benchmarks"])
+        self.assertEqual(fragment["evidence"][0]["id"], "kernel-cost-report")
         self.assertIn(
             "not evidence of CPU performance",
             fragment["methodology"]["limitations"][0],

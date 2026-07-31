@@ -6,7 +6,7 @@ static int append_artifact_manifest_input(void)
 {
 	char file[64];
 	char kind[32];
-	char sha[64];
+	char sha[65];
 	char bytes[32];
 	char source[48];
 	char line[240];
@@ -44,7 +44,7 @@ static int append_artifact_manifest_derive(void)
 	char output[64];
 	char operation[48];
 	char stage[48];
-	char sha[64];
+	char sha[65];
 	char line[240];
 	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "input=", input, sizeof(input))) {
 		rp_copy_text(input, sizeof(input), "reads_R1.fastq");

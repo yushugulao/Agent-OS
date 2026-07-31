@@ -220,6 +220,12 @@ sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 	agent_metadata_proc_runtime_snapshot(p, &metadata);
 	info.metadata_txn_owned = metadata.metadata_txn_owned;
 	info.metadata_txn_waiters = metadata.metadata_txn_waiters;
+	if (resource_account_handle_valid(p->resource_account)) {
+		info.resource_account_valid = 1;
+		info.resource_account_slot = p->resource_account.slot;
+		info.resource_account_generation =
+			p->resource_account.generation;
+	}
 	intr_restore(enabled);
 	if (lifecycle_charged && workflow_lifecycle_key_valid(current) &&
 	    workflow_lifecycle_scope(current, &scope_id) == 0) {

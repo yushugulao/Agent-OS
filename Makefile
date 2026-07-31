@@ -1,5 +1,6 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
+unexport BASH_ENV ENV
 all: build
 
 K = os
@@ -27,8 +28,10 @@ OBJDUMP = $(TOOLPREFIX)objdump
 NM = $(TOOLPREFIX)nm
 SIZE = $(TOOLPREFIX)size
 PYTHON_BIN ?= python3
+BASH_BIN ?= bash
 override PY = $(PYTHON_BIN)
 HOST_CC ?= cc
+COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 GDB = $(TOOLPREFIX)gdb
 # Keep the variables above as raw tool identities.  Recipes and probes must
 # quote the complete executable after suffix expansion so prefixes and host
@@ -88,7 +91,7 @@ INIT_PROC ?= usershell
 
 $(BUILDDIR)/$(K)/initproc.o: $(K)/initproc.S .FORCE
 $(K)/initproc.S: scripts/initproc.py .FORCE
-	@$(PYTHON_CMD) scripts/initproc.py $(INIT_PROC)
+	@$(PYTHON_CMD) -I -S scripts/initproc.py $(INIT_PROC)
 
 CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
 CFLAGS += -MD
@@ -424,7 +427,7 @@ $(KSTACK_BUILD_CONFIG): .FORCE
 # empty target
 .FORCE:
 
-LDFLAGS = -z max-page-size=4096
+LDFLAGS = -m elf64lriscv -z max-page-size=4096
 
 $(AS_OBJS): $(BUILDDIR)/$K/%.o : $K/%.S
 	@mkdir -p $(@D)
@@ -436,14 +439,16 @@ $(C_OBJS): $(BUILDDIR)/$K/%.o : $K/%.c
 	$(CC_CMD) $(CFLAGS) -c $< -o $@
 
 $(C_OBJS) $(AS_OBJS): $(KSTACK_BUILD_CONFIG)
+ifneq ($(FUNCTIONAL_REVIEW_BUILD),1)
 -include $(HEADER_DEP)
+endif
 
 INIT_PROC ?= usershell
 
 build: $(BUILDDIR)/kernel
 
 $(BUILDDIR)/kernel: $(OBJS) os/kernel.ld scripts/check-kernel-stack-usage.py $(KSTACK_BUILD_CONFIG) Makefile
-	$(PYTHON_CMD) scripts/check-kernel-stack-usage.py \
+	$(PYTHON_CMD) -I -S scripts/check-kernel-stack-usage.py \
 		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
 		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
 		--boot-stack-size $(KSTACK_BOOT_SIZE_BYTES) \
@@ -457,7 +462,7 @@ $(BUILDDIR)/kernel: $(OBJS) os/kernel.ld scripts/check-kernel-stack-usage.py $(K
 	@echo 'Build kernel done'
 
 kernel-stack-check: build/kernel
-	@$(PYTHON_CMD) scripts/check-kernel-stack-usage.py \
+	@$(PYTHON_CMD) -I -S scripts/check-kernel-stack-usage.py \
 		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
 		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
 		--boot-stack-size $(KSTACK_BOOT_SIZE_BYTES) \
@@ -555,7 +560,7 @@ $(AGENT_CORE_BOUNDARY_PROBE): $(K)/agent_core.c $(wildcard $(K)/*.h) $(wildcard 
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -fno-inline -fkeep-static-functions -c $< -o $@
 
-agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_lifecycle_abi.h agent_tool_abi.h agent_metadata_disk_abi.h
+agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_lifecycle_abi.h agent_tool_abi.h agent_metadata_disk_abi.h agent_resource_abi.h
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-uapi-layout.py \
 		--root . --build-dir $(KERNEL_BUDGET_BUILDDIR)/ci \
 		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
@@ -606,7 +611,9 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-kernel-work-receipt.py \
 	scripts/test-agent-metadata-disk-format.py \
 	scripts/test-agent-observe-disk-format.py \
+	scripts/test-host-probe-toolchain.py \
 	scripts/test-agent-test-runner.py \
+	scripts/test-agent-test-calibration.py \
 	scripts/test-validate-kernel-test-log.py \
 	scripts/test-validate-metadata-crash-log.py \
 	scripts/test-metadata-boot-reprobe.py \
@@ -641,7 +648,10 @@ kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) scripts/check-agent-me
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-metadata-disk-format.py \
 		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
 		--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy)
-	@CC=cc bash scripts/test-durable-dirty-retry.sh
+	@CC=$(call shell_quote,$(HOST_CC)) \
+		HOST_CC=$(call shell_quote,$(HOST_CC)) \
+		HOSTCC=$(call shell_quote,$(HOST_CC)) \
+		bash scripts/test-durable-dirty-retry.sh
 
 agent-observe-disk-format-check: scripts/check-agent-observe-disk-format.py scripts/probes/agent-observe-disk-layout.c ci/agent-observe-disk-format.json
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-observe-disk-format.py \
@@ -680,12 +690,22 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_result_bundle_contract.py \
 	host_tools/test_chart_type_data_contract.py \
 	host_tools/test_chart_svg_layout_contract.py \
+	host_tools/test_evaluation_platform.py \
 	host_tools/test_evaluation_campaign.py \
+	host_tools/test_agenteval_measurement_source.py \
+	host_tools/test_functional_acceptance_source.py \
+	host_tools/test_scenario_timing_source.py \
 	host_tools/test_evaluation_contract.py \
+	host_tools/test_evaluation_kernel_build.py \
 	host_tools/test_evaluation_kernel_cost.py \
 	host_tools/test_evaluation_scenario.py \
 	host_tools/test_evaluation_dashboard.py \
+	host_tools/test_full_verification_payload.py \
 	host_tools/test_evaluation_bundle.py \
+	host_tools/test_compatibility_overhead.py \
+	host_tools/test_evidence_toolchain_attestation.py \
+	host_tools/test_formal_python_runtime.py \
+	host_tools/test_safe_host_paths.py \
 	host_tools/test_plain_ucore_reader.py
 
 host-contract-selftest: $(HOST_CONTRACT_TESTS)
@@ -693,14 +713,15 @@ host-contract-selftest: $(HOST_CONTRACT_TESTS)
 		$(PYTHON_CMD) "$$test"; \
 	done
 
-evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/result_bundle_publication.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py host_tools/remote_ci_archive.py host_tools/remote_ci_bundle.py host_tools/remote_ci_evidence.py host_tools/remote_ci_job_semantics.py host_tools/remote_ci_test_fixture.py host_tools/test_capture_final_evidence.py host_tools/test_evidence_delivery_contract.py
+evidence-capture-selftest: scripts/trusted-python-entry.py scripts/trusted-python-child.py host_tools/evaluation_source_gate.py host_tools/formal_python_runtime.py
+evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/result_bundle_publication.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py host_tools/remote_ci_archive.py host_tools/remote_ci_bundle.py host_tools/remote_ci_evidence.py host_tools/remote_ci_job_semantics.py host_tools/remote_ci_test_fixture.py host_tools/test_capture_final_evidence.py host_tools/test_evidence_delivery_contract.py
 	@$(PYTHON_CMD) host_tools/test_capture_final_evidence.py
 	@$(PYTHON_CMD) host_tools/test_evidence_delivery_contract.py
 
 ci-check: host-contract-selftest evidence-capture-selftest kernel-budget-selftest kernel-budget-check user-stack-check
 
 clean:
-	make -C $(U) clean
+	$(MAKE) -rR -C $(U) -f Makefile clean
 	rm -rf $(BUILDDIR) os/initproc.S
 	rm -f $(F)/*.img $(F)/fs
 
@@ -724,7 +745,7 @@ QEMUOPTS = \
     -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 $(F)/fs.img: user .FORCE
-	make -C $(F)
+	$(MAKE) -rR -C $(F) -f Makefile
 
 $(F)/fs-copy.img: $(F)/fs.img
 	@set -e; tmp="$@.$$$$.tmp"; \
@@ -769,12 +790,13 @@ gdbclient:
 CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]' || echo 8)
 
 user:
-	$(MAKE) -C user CHAPTER=$(CHAPTER) BASE=$(BASE) \
+	$(MAKE) -rR -C user -f Makefile CHAPTER=$(CHAPTER) BASE=$(BASE) \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+		COMPAT_BENCH_CHALLENGE_HEX=$(call shell_quote,$(COMPAT_BENCH_CHALLENGE_HEX)) \
 		USER_EXTRA_CFLAGS='$(USER_EXTRA_CFLAGS)'
 
 user-stack-check:
-	$(MAKE) -C user user-stack-check TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+	$(MAKE) -rR -C user -f Makefile user-stack-check TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN))
 
 test:
@@ -803,7 +825,7 @@ agentos-user:
 
 agentos-build:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
-	$(MAKE) -C user clean
+	$(MAKE) -rR -C user -f Makefile clean
 	$(MAKE) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=agent
 	$(MAKE) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=agent
 	$(MAKE) build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn INIT_PROC=agentfinal_ucore
@@ -850,14 +872,14 @@ agentos-platform-user:
 
 agentos-platform-build:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
-	$(MAKE) -C user clean
+	$(MAKE) -rR -C user -f Makefile clean
 	$(MAKE) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
 	$(MAKE) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
 	$(MAKE) build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn INIT_PROC=rp_agentos_orch
 
 agentos-platform-run:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
-	$(MAKE) -C user clean
+	$(MAKE) -rR -C user -f Makefile clean
 	$(MAKE) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
 	$(MAKE) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
 	$(MAKE) run TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) QEMU=$(call shell_quote,$(QEMU)) LOG=error INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos
@@ -875,25 +897,39 @@ full-verify:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-full-verification.sh
 
 # Host evaluation contracts join ci-check; QEMU campaigns do not add remote jobs.
+evaluation-doctor:
+	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh doctor
+
 evaluation-smoke:
 	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh smoke
 
+define evaluation_formal_exec
+	$(PYTHON_CMD) -I -S scripts/trusted-python-entry.py \
+		host_tools/evaluation_platform.py formal-exec --repo . \
+		--toolprefix $(call shell_quote,$(TOOLPREFIX)) \
+		--qemu $(call shell_quote,$(QEMU)) \
+		--python-bin $(call shell_quote,$(PYTHON_BIN)) \
+		--shell-bin $(call shell_quote,$(BASH_BIN)) \
+		--script-relative scripts/run-evaluation-suite.sh --mode $(1)
+endef
+
 evaluation-run:
-	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) QEMU=$(call shell_quote,$(QEMU)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) \
-		bash scripts/run-evaluation-suite.sh run
+	$(call evaluation_formal_exec,run)
 
 evaluation-verify:
-	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh verify
+	$(call evaluation_formal_exec,verify)
 
 evaluation-kernel-cost:
-	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) MAKE_TOOL=$(call shell_quote,$(MAKE)) \
-		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh kernel-cost
+	$(call evaluation_formal_exec,kernel-cost)
+
+evaluation-full-verify:
+	$(call evaluation_formal_exec,full-verify)
 
 evaluation-dashboard:
-	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh dashboard
+	$(call evaluation_formal_exec,dashboard)
 
 evaluation-package:
-	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh package
+	$(call evaluation_formal_exec,package)
 
 evaluation-package-development:
 	@test -n "$(EVALUATION_RUN_DIR)" -a -n "$(EVALUATION_BUNDLE_DIR)" || { \
@@ -903,7 +939,25 @@ evaluation-package-development:
 		"$(EVALUATION_RUN_DIR)" "$(EVALUATION_BUNDLE_DIR)" --development
 
 evaluation-package-verify:
-	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh verify-package
+	$(call evaluation_formal_exec,verify-package)
+
+compatibility-overhead-selftest:
+	$(PYTHON_CMD) host_tools/test_compatibility_overhead.py
+
+# The producer is sealed against the collected formal micro campaign. Its
+# per-metric compatibility-tax results remain separate from AgentOS scores.
+compatibility-overhead-run:
+	@test -n "$(COMPATIBILITY_WORK_DIR)" || { \
+		echo "COMPATIBILITY_WORK_DIR is required" >&2; exit 2; \
+	}
+	@test -n "$(COMPATIBILITY_MICRO_MANIFEST)" || { \
+		echo "COMPATIBILITY_MICRO_MANIFEST is required" >&2; exit 2; \
+	}
+	$(PYTHON_CMD) -I -S scripts/trusted-python-entry.py \
+		host_tools/compatibility_overhead.py run --repo . \
+		--work-dir "$(COMPATIBILITY_WORK_DIR)" \
+		--micro-manifest "$(COMPATIBILITY_MICRO_MANIFEST)" \
+		--timeout "$(or $(COMPATIBILITY_TIMEOUT),600)"
 
 agentos-clean:
 	$(MAKE) clean

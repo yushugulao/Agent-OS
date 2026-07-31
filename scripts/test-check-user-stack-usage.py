@@ -120,6 +120,34 @@ class UserStackUsageCheckerTests(unittest.TestCase):
         self.assertIn("max=480", result.stdout)
         self.assertIn("reserve=1024", result.stdout)
 
+    def test_accepts_compiler_marked_fully_inlined_node_without_double_charge(self):
+        path = self.usage / "src/app.ci"
+        graph = path.read_text(encoding="utf-8")
+        graph = graph.replace(
+            'edge: { sourcename: "main" targetname: "src/app.c:helper" }',
+            'node: { title: "src/app.c:inlined" '
+            'label: "inlined\\nsrc/app.c:4:1" shape : triangle }\n'
+            'edge: { sourcename: "main" targetname: "src/app.c:inlined" }\n'
+            'edge: { sourcename: "src/app.c:inlined" '
+            'targetname: "src/app.c:helper" }',
+        )
+        path.write_text(graph, encoding="utf-8")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("max=480", result.stdout)
+
+    def test_mutation_unbound_triangle_node_is_rejected(self):
+        path = self.usage / "src/app.ci"
+        graph = path.read_text(encoding="utf-8")
+        graph = graph.replace(
+            'edge: { sourcename: "main" targetname: "src/app.c:helper" }',
+            'node: { title: "other.c:inlined" '
+            'label: "inlined\\nother.c:4:1" shape : triangle }\n'
+            'edge: { sourcename: "main" targetname: "other.c:inlined" }',
+        )
+        path.write_text(graph, encoding="utf-8")
+        self.assert_rejected("invalid inlined callgraph node")
+
     def test_mutation_contract_drift_is_rejected(self):
         self.write_contract(argv=1008, call_path=3088)
         self.assert_rejected("user stack contract drift")

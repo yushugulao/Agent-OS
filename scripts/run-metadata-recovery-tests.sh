@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-120s}"
@@ -26,6 +27,8 @@ cleanup() {
 	rm -rf "${TMPDIR_META}"
 }
 trap cleanup EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_META}"
 
 "${PYTHON_BIN}" scripts/test-agent-metadata-disk-format.py
 "${PYTHON_BIN}" scripts/test-validate-metadata-crash-log.py
@@ -38,7 +41,7 @@ make -C user TOOLPREFIX="${TOOLPREFIX}" CHAPTER=metadata_recovery \
 	build_dir="${TMPDIR_META}/user-build" \
 	out_dir="${TMPDIR_META}/user-target" \
 	asm_dir="${TMPDIR_META}/user-asm"
-cc nfs/fs.c nfs/host_image_snapshot.c -o "${TMPDIR_META}/mkfs"
+host_probe_compile "${TMPDIR_META}/mkfs" nfs/fs.c nfs/host_image_snapshot.c
 
 build_kernel() {
 	local tag="$1" init_proc="$2"
@@ -96,7 +99,7 @@ run_guest() {
 make_image() {
 	local image="$1"
 
-	"${TMPDIR_META}/mkfs" "${image}" \
+	host_probe_run "${TMPDIR_META}/mkfs" "${image}" \
 		"${TMPDIR_META}/user-target/bin/agentmetacrash_ucore" \
 		"${TMPDIR_META}/user-target/bin/agentmetarecover_ucore" \
 		"${TMPDIR_META}/user-target/bin/agentmetaeio_ucore" \
@@ -455,3 +458,4 @@ require_line_once "agentmetaeio_ucore: transient_eio_repaired=1" \
 	"${TMPDIR_META}/agentmetaeio_ucore-eio.log"
 
 echo "[metadata-recovery] power-cut, bounded boot reprobe, over-burst terminal-peer recovery, and EIO recovery passed"
+host_probe_report "metadata-recovery mkfs"

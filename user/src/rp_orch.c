@@ -33,7 +33,7 @@ static const char *const PROGRAM_NAMES[] = {
 #define RP_WORKFLOW_HANDOFF_VERSION 1U
 #define RP_WORKFLOW_HANDOFF_PREFIX "--rp-workflow-timing-fd="
 #define RP_WORKFLOW_COMPLETION_PREFIX "--rp-workflow-completion-fd="
-#define RP_WORKFLOW_PHASE_ALL ((1ULL << 8) - 1)
+#define RP_WORKFLOW_PHASE_ALL ((1ULL << 5) - 1)
 
 struct rp_workflow_handoff {
 	uint magic;
@@ -114,7 +114,7 @@ static int read_workflow_handoff(int argc, char **argv,
 		}
 		received += n;
 	}
-	if (read(fd, &extra, 1) != 0) {
+	if (read(fd, &extra, 1) > 0) {
 		close(fd);
 		return 0;
 	}

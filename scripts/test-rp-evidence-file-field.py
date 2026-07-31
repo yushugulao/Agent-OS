@@ -3,11 +3,16 @@
 
 from __future__ import annotations
 
-import os
-import shlex
 import subprocess
 import tempfile
 from pathlib import Path
+
+from host_probe_toolchain import (
+    host_compiler,
+    probe_environment,
+    probe_mode,
+    required_sanitizer_flags,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,9 +20,10 @@ PROBE = ROOT / "scripts/probes/rp-evidence-file-field.c"
 
 
 def main() -> int:
-    compiler = shlex.split(os.environ.get("HOST_CC", "cc"))
+    compiler = host_compiler()
     with tempfile.TemporaryDirectory(prefix="agentos-evidence-field-") as directory:
         temporary = Path(directory)
+        sanitizer_flags = required_sanitizer_flags(compiler, temporary)
         binary = temporary / "rp-evidence-file-field"
         subprocess.run(
             compiler
@@ -28,8 +34,7 @@ def main() -> int:
                 "-Werror",
                 "-fno-builtin",
                 "-fstack-protector-strong",
-                "-fsanitize=address,undefined",
-                "-fno-sanitize-recover=all",
+                *sanitizer_flags,
                 "-I",
                 str(PROBE.parent / "rp-evidence-host"),
                 str(PROBE),
@@ -39,11 +44,17 @@ def main() -> int:
             cwd=ROOT,
             check=True,
         )
-        environment = dict(os.environ)
-        environment["ASAN_OPTIONS"] = "detect_leaks=0"
-        subprocess.run([str(binary)], cwd=temporary, env=environment, check=True)
+        subprocess.run(
+            [str(binary)],
+            cwd=temporary,
+            env=probe_environment(sanitizer_flags),
+            check=True,
+        )
 
-    print("[rp-evidence-field] streaming and malformed-input probes passed")
+    print(
+        "[rp-evidence-field] streaming and malformed-input probes passed; "
+        f"mode={probe_mode(sanitizer_flags)}"
+    )
     return 0
 
 

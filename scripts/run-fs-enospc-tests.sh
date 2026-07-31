@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-120s}"
@@ -139,6 +140,8 @@ assert_genesis_geometry "${FS_PERSIST_BLOCKS}" "${FS_PERSIST_INODES}" \
 TMPDIR_FS="$(mktemp -d)"
 SPONSOR_HOST="${TMPDIR_FS}/fixture/bin/pqsponsor"
 trap 'rm -rf "${TMPDIR_FS}"' EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_FS}"
 
 build_user() {
 	local tree="$1"
@@ -176,7 +179,8 @@ build_image() {
 		image_files+=("${sponsored_file}")
 	fi
 
-	cc -DNINODE="${inodes}" -DFSSIZE="${blocks}" \
+	host_probe_compile "${TMPDIR_FS}/${tag}-mkfs" \
+		-DNINODE="${inodes}" -DFSSIZE="${blocks}" \
 		-DFS_WORKFLOW_BLOCK_RESERVE="${workflow_blocks}" \
 		-DFS_SYSTEM_BLOCK_RESERVE="${system_blocks}" \
 		-DFS_WORKFLOW_INODE_RESERVE="${workflow_inodes}" \
@@ -185,9 +189,8 @@ build_image() {
 		-DFS_WORKFLOW_INODE_MIN_PER_SCOPE=1 \
 		-DFS_SYSTEM_BLOCK_MIN_RESERVE=1 \
 		-DFS_SYSTEM_INODE_MIN_RESERVE=1 \
-		-DFS_STORAGE_TINY_TEST_PROFILE=1 \
-		"${mkfs_sources[@]}" -o "${TMPDIR_FS}/${tag}-mkfs"
-	"${TMPDIR_FS}/${tag}-mkfs" "${TMPDIR_FS}/${tag}.img" \
+		-DFS_STORAGE_TINY_TEST_PROFILE=1 "${mkfs_sources[@]}"
+	host_probe_run "${TMPDIR_FS}/${tag}-mkfs" "${TMPDIR_FS}/${tag}.img" \
 		"${image_files[@]}"
 	if [[ -z "${tree}" ]]; then
 		"${PYTHON_BIN}" host_tools/agent_metadata_disk_format.py \
@@ -270,7 +273,8 @@ check_mkfs_capacity_contract() {
 	local binary="${TMPDIR_FS}/agent-user-target/bin/fsenospc_ucore"
 	local log="${TMPDIR_FS}/mkfs-capacity.log"
 
-	cc -DNINODE="${FS_AGENT_INODES}" -DFSSIZE="${FS_AGENT_BLOCKS}" \
+	host_probe_compile "${TMPDIR_FS}/unfunded-mkfs" \
+		-DNINODE="${FS_AGENT_INODES}" -DFSSIZE="${FS_AGENT_BLOCKS}" \
 		-DFS_WORKFLOW_BLOCK_RESERVE="${FS_AGENT_BLOCKS}" \
 		-DFS_SYSTEM_BLOCK_RESERVE="${FS_AGENT_BLOCKS}" \
 		-DFS_WORKFLOW_INODE_RESERVE="${FS_AGENT_INODES}" \
@@ -280,9 +284,8 @@ check_mkfs_capacity_contract() {
 		-DFS_SYSTEM_BLOCK_MIN_RESERVE=1 \
 		-DFS_SYSTEM_INODE_MIN_RESERVE=1 \
 		-DFS_STORAGE_TINY_TEST_PROFILE=1 \
-		nfs/fs.c nfs/host_image_snapshot.c \
-		-o "${TMPDIR_FS}/unfunded-mkfs"
-	if "${TMPDIR_FS}/unfunded-mkfs" \
+		nfs/fs.c nfs/host_image_snapshot.c
+	if host_probe_run "${TMPDIR_FS}/unfunded-mkfs" \
 		"${TMPDIR_FS}/unfunded.img" "${binary}" >"${log}" 2>&1; then
 		echo "[fs-enospc] mkfs accepted unfunded workflow guarantees" >&2
 		exit 1
@@ -294,7 +297,8 @@ check_mkfs_capacity_contract() {
 	fi
 	echo "[fs-enospc] mkfs capacity contract passed"
 
-	cc -DNINODE="${FS_INODES}" -DFSSIZE="${AGENT_META_GENESIS_BLOCKS}" \
+	host_probe_compile "${TMPDIR_FS}/undersized-genesis-mkfs" \
+		-DNINODE="${FS_INODES}" -DFSSIZE="${AGENT_META_GENESIS_BLOCKS}" \
 		-DFS_WORKFLOW_BLOCK_RESERVE=1 -DFS_SYSTEM_BLOCK_RESERVE=1 \
 		-DFS_WORKFLOW_INODE_RESERVE=1 -DFS_SYSTEM_INODE_RESERVE=1 \
 		-DFS_WORKFLOW_BLOCK_MIN_PER_SCOPE=1 \
@@ -302,9 +306,8 @@ check_mkfs_capacity_contract() {
 		-DFS_SYSTEM_BLOCK_MIN_RESERVE=1 \
 		-DFS_SYSTEM_INODE_MIN_RESERVE=1 \
 		-DFS_STORAGE_TINY_TEST_PROFILE=1 \
-		nfs/fs.c nfs/host_image_snapshot.c \
-		-o "${TMPDIR_FS}/undersized-genesis-mkfs"
-	if "${TMPDIR_FS}/undersized-genesis-mkfs" \
+		nfs/fs.c nfs/host_image_snapshot.c
+	if host_probe_run "${TMPDIR_FS}/undersized-genesis-mkfs" \
 		"${TMPDIR_FS}/undersized-genesis.img" >"${log}" 2>&1; then
 		echo "[fs-enospc] mkfs accepted undersized metadata genesis" >&2
 		exit 1
@@ -323,15 +326,15 @@ check_baseline_root_geometry() {
 	local files=()
 	local i path
 
-	cc baseline_ucore/nfs/fs.c -o "${mkfs}"
+	host_probe_compile "${mkfs}" baseline_ucore/nfs/fs.c
 	mkdir -p "${inputs}"
 	for ((i = 0; i < 64; i++)); do
 		path="${inputs}/r$(printf '%02d' "${i}")"
 		touch "${path}"
 		files+=("${path}")
 	done
-	"${mkfs}" "${TMPDIR_FS}/baseline-root-empty.img"
-	"${mkfs}" "${TMPDIR_FS}/baseline-root-aligned.img" "${files[@]}"
+	host_probe_run "${mkfs}" "${TMPDIR_FS}/baseline-root-empty.img"
+	host_probe_run "${mkfs}" "${TMPDIR_FS}/baseline-root-aligned.img" "${files[@]}"
 	"${PYTHON_BIN}" - "${TMPDIR_FS}/baseline-root-empty.img" \
 		"${TMPDIR_FS}/baseline-root-aligned.img" <<'PY'
 import struct
@@ -413,8 +416,9 @@ run_case() {
 }
 
 build_user "" agent
-cc host_tools/test_fs_storage_policy.c -o "${TMPDIR_FS}/storage-policy-test"
-"${TMPDIR_FS}/storage-policy-test"
+host_probe_compile "${TMPDIR_FS}/storage-policy-test" \
+	host_tools/test_fs_storage_policy.c
+host_probe_run "${TMPDIR_FS}/storage-policy-test"
 check_mkfs_capacity_contract
 check_baseline_root_geometry
 mkdir -p "$(dirname "${SPONSOR_HOST}")"
@@ -546,3 +550,4 @@ run_case principal-baseline-verify "${TMPDIR_FS}/principal-baseline-kernel" \
 	"fspquota_ucore: parent passed" persistent-verify
 
 echo "[fs-enospc] generic, persistent principal, and Agent quota cases passed"
+host_probe_report "fs-enospc mkfs and storage policy"

@@ -13,7 +13,6 @@ import argparse
 import hashlib
 import json
 import math
-import os
 import random
 import re
 import statistics
@@ -25,30 +24,74 @@ from typing import Any, Iterable, Sequence
 
 try:
     from .strict_json import strict_json_loads
+    from .safe_host_paths import (
+        atomic_write_bytes,
+        read_regular_file,
+        reject_link_components as reject_host_link_components,
+        require_regular_file,
+        require_safe_directory,
+        walk_directory_tree_no_links,
+    )
     from .check_seeded_action_state import (
         CHALLENGE_RECEIPT_NAME,
+        TASK6_ARTIFACT_INPUT_STORAGE,
+        TASK6_ARTIFACT_OUTPUT_STORAGE,
+        TASK6_ARTIFACT_RECEIPT_SCHEMA,
+        task6_fnv64,
         challenge_input_receipt,
         derive_challenge,
         seeded_actions,
+        task6_artifact_payloads,
     )
 except ImportError:  # Direct execution from host_tools/.
     from strict_json import strict_json_loads
+    from safe_host_paths import (
+        atomic_write_bytes,
+        read_regular_file,
+        reject_link_components as reject_host_link_components,
+        require_regular_file,
+        require_safe_directory,
+        walk_directory_tree_no_links,
+    )
     from check_seeded_action_state import (
         CHALLENGE_RECEIPT_NAME,
+        TASK6_ARTIFACT_INPUT_STORAGE,
+        TASK6_ARTIFACT_OUTPUT_STORAGE,
+        TASK6_ARTIFACT_RECEIPT_SCHEMA,
+        task6_fnv64,
         challenge_input_receipt,
         derive_challenge,
         seeded_actions,
+        task6_artifact_payloads,
     )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+REPORT_BINDING_DOMAIN = "scenario-report-v2"
 SCENARIO_ID = "research-platform-seeded"
 MIN_SUPPORTED_BOOTS = 7
 BOOTSTRAP_REPETITIONS = 2_000
 MIN_ABSOLUTE_IMPROVEMENT_MS = 10
 MIN_BASELINE_MAKESPAN_MS = 50
 MIN_RELATIVE_IMPROVEMENT_PERCENT = 5.0
-VALID_STATUSES = frozenset({"supported", "inconclusive", "failed"})
+SCENARIO_ALPHA = 0.05
+SCENARIO_DIRECTIONAL_ALPHA = SCENARIO_ALPHA / 2
+SCENARIO_INFERENCE = {
+    "method": "exact_directional_binomial_with_bonferroni",
+    "success_unit": "paired_boot",
+    "sample_policy": "full_n_including_non_wins",
+    "alpha": SCENARIO_ALPHA,
+    "multiplicity": "two_directions_within_task6_scenario",
+    "directional_hypothesis_count": 2,
+    "correction": "Bonferroni",
+    "per_direction_alpha": SCENARIO_DIRECTIONAL_ALPHA,
+}
+SCENARIO_INTERPRETATION = {
+    "design": "full-stack",
+    "causal_attribution": "non-single-mechanism",
+    "host_page_cache": "uncontrolled",
+}
+VALID_STATUSES = frozenset({"supported", "regressed", "inconclusive", "failed"})
 STATE_NAME_RE = re.compile(r"rp_[a-z0-9_]+\Z")
 PROGRAM_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -94,15 +137,141 @@ WORKFLOW_TIMING_KEYS = (
     "steady_elapsed_ms",
     "workflow_elapsed_ms",
 )
-AGENTOS_INIT_PHASE_MASK = (1 << 8) - 1
+AGENTOS_INIT_PHASE_MASK = (1 << 5) - 1
 PLAIN_COMPLETION_PHASE_MASK = 1
 AGENTOS_COMPLETION_PHASE_MASK = 3
 AGENTOS_ACCEPTANCE_FILE = "rp_agentos_acceptance"
+RESOURCE_STABILITY_FILE = "rp_resource_stability"
+RESOURCE_STABILITY_LOAD_WORKFLOWS = 4
+RESOURCE_STABILITY_TERMINAL_WORKFLOWS = 1
+RESOURCE_STABILITY_WORKFLOWS = (
+    RESOURCE_STABILITY_LOAD_WORKFLOWS + RESOURCE_STABILITY_TERMINAL_WORKFLOWS
+)
+RESOURCE_STABILITY_CHILD_ROUNDS = 12
+RESOURCE_STABILITY_MEMORY_PAGES = 128
+RESOURCE_STABILITY_FILE_OBJECTS = 12
+RESOURCE_STABILITY_METADATA_OPS = 3
+RESOURCE_STABILITY_MEASUREMENT_SCOPE = "post_workflow_acceptance"
+RESOURCE_STABILITY_LINE_MAX = 8191
+RESOURCE_STABILITY_REPORT_MAGIC = 0x52505354
+RESOURCE_STABILITY_REPORT_VERSION = 2
+RESOURCE_STABILITY_REPORT_SIZE = 224
+RESOURCE_STABILITY_FNV_OFFSET = 1469598103934665603
+RESOURCE_STABILITY_FNV_PRIME = 1099511628211
+RESOURCE_STABILITY_RESOURCE_KINDS = (
+    "process",
+    "thread",
+    "file_object",
+    "fs_block",
+    "fs_inode",
+    "buffer_cache",
+    "agent_state_page",
+    "physical_page",
+)
+RESOURCE_STABILITY_GROWTH_BOUNDS = {
+    "process": 0,
+    "thread": 0,
+    "file_object": 0,
+    "fs_block": 32,
+    "fs_inode": 0,
+    "buffer_cache": 16,
+    "agent_state_page": 0,
+    "physical_page": 0,
+}
+RESOURCE_STABILITY_INTERPRETATION = {
+    "timing_relationship": "excluded_from_task6_makespan",
+    "verified_claim": "bounded_same_boot_configured_global_counter_reclamation",
+    "causal_attribution": "resource_lifecycle_acceptance_not_performance_effect",
+    "global_resource_observation": "configured_kind_aggregate_counters_only",
+    "account_observation": "fresh_self_identity_only",
+    "rate_budget_observation": "not_measured",
+    "unmeasured_policy": "reported_as_not_measured_never_passed",
+    "global_leak_freedom": "not_claimed",
+}
+UINT64_MAX = (1 << 64) - 1
+UINT32_MAX = (1 << 32) - 1
+AGENTOS_CONTEXT_RECEIPT_MAX = 4
+AGENTOS_TIMELINE_RECEIPT_MAX = 4
+AGENTOS_PROVENANCE_RECEIPT_MAX = 4
 REQUIRED_AGENTOS_MODULES = (
     "context",
     "structured_tool",
     "metadata_query",
     "observation",
+)
+RESOURCE_STABILITY_RECORD_PREFIX_KEYS = (
+    "workflow_index",
+    "mode",
+    "challenge_nonce",
+    "lifecycle_id",
+    "lifecycle_generation",
+    "scope_id",
+    "io_owner",
+    "resource_account_slot",
+    "resource_account_reserved",
+    "resource_account_generation",
+    "initial_cache_resident",
+    "initial_leased",
+    "initial_debt",
+    "initial_waiters",
+    "initial_debt_waiters",
+    "initial_admission_waiters",
+    "initial_context_lane_depth",
+    "initial_context_lane_waiters",
+    "initial_metadata_owned",
+    "initial_metadata_waiters",
+    "initial_agent_calls",
+    "initial_context_records",
+    "final_cache_resident",
+    "final_leased",
+    "final_debt",
+    "final_waiters",
+    "final_debt_waiters",
+    "final_admission_waiters",
+    "final_context_lane_depth",
+    "final_context_lane_waiters",
+    "final_metadata_owned",
+    "final_metadata_waiters",
+    "final_agent_calls",
+    "final_context_records",
+    "initial_completion_sequence",
+    "final_completion_sequence",
+    "process_rounds",
+    "file_rounds",
+    "memory_rounds",
+    "metadata_rounds",
+    "report_guard",
+)
+RESOURCE_STABILITY_GLOBAL_FREE_KEYS = (
+    "ordinary_free_pages_before",
+    "ordinary_free_pages_after",
+    "reserved_free_pages_before",
+    "reserved_free_pages_after",
+    "stack_reserved_free_pages_before",
+    "stack_reserved_free_pages_after",
+)
+RESOURCE_STABILITY_GLOBAL_RESOURCE_KEYS = tuple(
+    f"{kind}_{field}"
+    for kind in RESOURCE_STABILITY_RESOURCE_KINDS
+    for field in (
+        "ordinary_used_before",
+        "ordinary_used_after",
+        "ordinary_pending_before",
+        "ordinary_pending_after",
+        "reserved_used_before",
+        "reserved_used_after",
+        "reserved_pending_before",
+        "reserved_pending_after",
+    )
+)
+RESOURCE_STABILITY_RECORD_KEYS = (
+    *RESOURCE_STABILITY_RECORD_PREFIX_KEYS,
+    *RESOURCE_STABILITY_GLOBAL_FREE_KEYS,
+    *RESOURCE_STABILITY_GLOBAL_RESOURCE_KEYS,
+    "per_workflow_bound_status",
+    "reaped",
+    "pipe_eof",
+    "status",
 )
 
 PLAIN_LEDGER_KEYS = (
@@ -200,43 +369,28 @@ def _binding_sha256(value: object, domain: str) -> str:
     return _sha256(domain.encode("ascii") + b"\0" + _canonical_json(value))
 
 
-def _is_link(path: Path) -> bool:
-    if path.is_symlink():
-        return True
-    isjunction = getattr(os.path, "isjunction", None)
-    return bool(isjunction and isjunction(path))
-
-
 def _reject_link_components(path: Path, label: str) -> None:
-    current = path.absolute()
-    while True:
-        if current.exists() and _is_link(current):
-            raise ScenarioEvidenceError(f"{label} has a link-backed path component: {current}")
-        if current.parent == current:
-            return
-        current = current.parent
+    try:
+        reject_host_link_components(path)
+    except (OSError, ValueError) as error:
+        raise ScenarioEvidenceError(
+            f"{label} has a link-backed path component: {path}"
+        ) from error
 
 
 def _require_directory(path: Path, label: str) -> Path:
-    _reject_link_components(path, label)
-    if _is_link(path) or not path.is_dir():
-        raise ScenarioEvidenceError(f"{label} is missing or link-backed: {path}")
-    return path
+    try:
+        return require_safe_directory(path)
+    except (OSError, ValueError) as error:
+        raise ScenarioEvidenceError(
+            f"{label} is missing or link-backed: {path}"
+        ) from error
 
 
 def _read_regular_file(path: Path, label: str, maximum_bytes: int | None = None) -> bytes:
-    _reject_link_components(path, label)
-    if _is_link(path) or not path.is_file():
-        raise ScenarioEvidenceError(f"{label} is missing or link-backed: {path}")
     try:
-        size = path.stat().st_size
-        if maximum_bytes is not None and size > maximum_bytes:
-            raise ScenarioEvidenceError(f"{label} exceeds the byte limit")
-        data = path.read_bytes()
-        if len(data) != size:
-            raise ScenarioEvidenceError(f"{label} changed while it was read")
-        return data
-    except OSError as error:
+        return read_regular_file(path, maximum_bytes=maximum_bytes)
+    except (OSError, ValueError) as error:
         raise ScenarioEvidenceError(f"cannot read {label}: {path}") from error
 
 
@@ -256,8 +410,11 @@ def _runtime_artifact_receipts(
         if record["path"] != expected_path:
             raise ScenarioEvidenceError(f"{target} {name} artifact path is invalid")
         path = target_dir / expected_path
-        _reject_link_components(path, f"{target} {name} artifact")
-        if _is_link(path) or not path.is_file():
+        try:
+            path = require_regular_file(
+                path, nonempty=True, maximum_bytes=MAX_RUNTIME_ARTIFACT_BYTES
+            )
+        except (OSError, ValueError) as error:
             raise ScenarioEvidenceError(f"{target} {name} artifact is unavailable")
         size = path.stat().st_size
         if size <= 0 or size > MAX_RUNTIME_ARTIFACT_BYTES or record["bytes"] != size:
@@ -365,10 +522,12 @@ def _parse_program_manifest(path: Path) -> tuple[tuple[str, ...], dict[str, str]
     return tuple(programs), roles
 
 
-def read_expected_programs() -> tuple[tuple[str, ...], dict[str, str]]:
+def read_expected_programs(
+    source_tree: Path | None = None,
+) -> tuple[tuple[str, ...], dict[str, str]]:
     """Read and cross-check the two target manifests used by this adapter."""
 
-    root = Path(__file__).resolve().parents[1]
+    root = source_tree or Path(__file__).resolve().parents[1]
     agentos = _parse_program_manifest(root / "user" / "include" / "rp_program_manifest.h")
     plain = _parse_program_manifest(
         root / "baseline_ucore" / "user" / "include" / "rp_program_manifest.h"
@@ -398,7 +557,10 @@ def _read_ascii_lines(
 def _canonical_uint(value: str, label: str) -> int:
     if CANONICAL_UINT_RE.fullmatch(value) is None:
         raise ScenarioEvidenceError(f"{label} is not a canonical integer")
-    return int(value)
+    parsed = int(value)
+    if parsed > UINT64_MAX:
+        raise ScenarioEvidenceError(f"{label} exceeds the Guest uint64 range")
+    return parsed
 
 
 def _parse_timing_ledger(
@@ -647,7 +809,9 @@ def _state_inventory(state_dir: Path) -> tuple[dict[str, object], dict[str, byte
 
     actual_names: list[str] = []
     for entry in state_dir.iterdir():
-        if _is_link(entry) or not entry.is_file():
+        try:
+            require_regular_file(entry)
+        except (OSError, ValueError):
             raise ScenarioEvidenceError(f"state inventory contains unsafe entry {entry.name}")
         actual_names.append(entry.name)
     expected_names = ["extract-summary.json", *files]
@@ -679,6 +843,100 @@ def _state_inventory(state_dir: Path) -> tuple[dict[str, object], dict[str, byte
     return receipt, contents
 
 
+def _sealed_target_inventory(
+    target_dir: Path, state_inventory: dict[str, object]
+) -> dict[str, object]:
+    """Bind every publishable target file and reject scratch/unknown paths."""
+    entries = state_inventory.get("files")
+    if not isinstance(entries, list):
+        raise ScenarioEvidenceError("state inventory cannot seed the sealed inventory")
+    state_names = {
+        str(entry["path"])
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
+    allowed = {
+        "actions.json",
+        CHALLENGE_RECEIPT_NAME,
+        "runner-summary.json",
+        "ucore-build.log",
+        "ucore-run.log",
+        "ucore-run-summary.json",
+        "artifacts/kernel",
+        "artifacts/image_input",
+        "artifacts/image_final",
+        "host-input/rp_host_action_seed",
+        "state-extracted/extract-summary.json",
+        *{f"state-extracted/{name}" for name in state_names},
+        *{f"state-next/{name}" for name in state_names},
+        "state-next/rp_host_run_result",
+    }
+    allowed_directories = {
+        "artifacts", "host-input", "state-extracted", "state-next"
+    }
+    target_dir = _require_directory(target_dir, "scenario target directory")
+    try:
+        directories, files = walk_directory_tree_no_links(
+            target_dir,
+            max_files=len(allowed),
+            max_directories=len(allowed_directories) + 1,
+            max_total_bytes=(3 * MAX_RUNTIME_ARTIFACT_BYTES) + MAX_LOG_BYTES,
+            max_depth=2,
+        )
+    except (OSError, ValueError) as error:
+        raise ScenarioEvidenceError("scenario target inventory is unsafe") from error
+    for directory in directories:
+        relative_base = directory.relative_to(target_dir).as_posix()
+        if relative_base != "." and relative_base not in allowed_directories:
+            raise ScenarioEvidenceError(
+                f"scenario target contains an unknown directory: {relative_base}"
+            )
+    actual: list[str] = []
+    for path in files:
+        relative = path.relative_to(target_dir).as_posix()
+        if relative not in allowed:
+            raise ScenarioEvidenceError(
+                f"scenario target contains an unknown or temporary file: {relative}"
+            )
+        actual.append(relative)
+    actual.sort()
+    records: list[dict[str, object]] = []
+    for relative in actual:
+        path = target_dir / relative
+        size = path.stat().st_size
+        maximum = (
+            MAX_RUNTIME_ARTIFACT_BYTES
+            if relative.startswith("artifacts/")
+            else MAX_LOG_BYTES
+            if relative in {"ucore-build.log", "ucore-run.log"}
+            else MAX_STATE_FILE_BYTES
+            if relative.startswith(("state-extracted/", "state-next/", "host-input/"))
+            else MAX_JSON_BYTES
+        )
+        if size > maximum:
+            raise ScenarioEvidenceError(
+                f"scenario sealed member exceeds its byte limit: {relative}"
+            )
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        records.append({
+            "path": relative,
+            "bytes": size,
+            "sha256": digest.hexdigest(),
+        })
+    body = {
+        "schema": "scenario-sealed-inventory-v1",
+        "files": records,
+        "file_count": len(records),
+    }
+    return {
+        **body,
+        "sha256": _binding_sha256(body, "scenario-sealed-inventory-v1"),
+    }
+
+
 def _state_lines(contents: dict[str, bytes], file_name: str) -> list[str]:
     data = contents.get(file_name)
     if data is None:
@@ -694,8 +952,304 @@ def _state_lines(contents: dict[str, bytes], file_name: str) -> list[str]:
     return lines
 
 
+def _agentos_challenge_oracle(challenge: str) -> dict[str, object]:
+    values = derive_challenge(challenge)
+    suffix = str(int(challenge[3:]))
+    request_id = 1_000_000_000_000 + int(suffix) * 4
+    return {
+        "workflow_id": values.workflow_id,
+        "workflow_run_id": values.run_id,
+        "rerun_id": values.rerun_id,
+        "input_sha256": values.input_sha256,
+        "derived_sha256": values.derived_sha256,
+        "kernel_run_id": f"r{suffix}",
+        "echo_payload": f"wf:{suffix}",
+        "request_id": request_id,
+        "followup_request_id": request_id + 1,
+        "target_physical": f"a{suffix}",
+        "target_summary": f"input-{values.input_sha256}",
+    }
+
+
+def _resource_stability_mix(hash_value: int, value: int) -> int:
+    """Mirror the Guest's fixed-width, little-endian report hash step."""
+
+    for _ in range(8):
+        hash_value ^= value & 0xFF
+        hash_value = (
+            hash_value * RESOURCE_STABILITY_FNV_PRIME
+        ) & UINT64_MAX
+        value >>= 8
+    return hash_value
+
+
+def _resource_stability_nonce(challenge: str, workflow_index: int, mode: str) -> int:
+    mode_value = {"load": 1, "terminal": 2}.get(mode)
+    if mode_value is None:
+        raise ScenarioEvidenceError("agentos resource stability mode is invalid")
+    request_id = _agentos_challenge_oracle(challenge)["request_id"]
+    if type(request_id) is not int:
+        raise ScenarioEvidenceError("agentos challenge request id is invalid")
+    hash_value = RESOURCE_STABILITY_FNV_OFFSET
+    for value in (
+        RESOURCE_STABILITY_REPORT_MAGIC,
+        RESOURCE_STABILITY_REPORT_VERSION,
+        request_id,
+        workflow_index,
+        mode_value,
+    ):
+        hash_value = _resource_stability_mix(hash_value, value)
+    return hash_value or 1
+
+
+def _resource_stability_report_guard(record: dict[str, object]) -> int:
+    mode_value = {"load": 1, "terminal": 2}.get(record.get("mode"))
+    if mode_value is None:
+        raise ScenarioEvidenceError("agentos resource stability mode is invalid")
+    hash_value = RESOURCE_STABILITY_FNV_OFFSET
+    values = (
+        RESOURCE_STABILITY_REPORT_MAGIC,
+        RESOURCE_STABILITY_REPORT_VERSION,
+        RESOURCE_STABILITY_REPORT_SIZE,
+        record.get("workflow_index"),
+        mode_value,
+        *(record.get(key) for key in RESOURCE_STABILITY_RECORD_PREFIX_KEYS[2:-1]),
+    )
+    for value in values:
+        if type(value) is not int or value < 0 or value > UINT64_MAX:
+            raise ScenarioEvidenceError(
+                "agentos resource stability report guard input is invalid"
+            )
+        hash_value = _resource_stability_mix(hash_value, value)
+    return hash_value
+
+
+def _resource_stability_plateau_or_reclamation(
+    workflows: Sequence[dict[str, object]], kind: str
+) -> bool:
+    def after_total(workflow: dict[str, object]) -> int:
+        ordinary = workflow[f"{kind}_ordinary_used_after"]
+        reserved = workflow[f"{kind}_reserved_used_after"]
+        if type(ordinary) is not int or type(reserved) is not int:
+            raise ScenarioEvidenceError(
+                "agentos resource stability sequence counter is invalid"
+            )
+        return ordinary + reserved
+
+    load_workflows = workflows[:RESOURCE_STABILITY_LOAD_WORKFLOWS]
+    if len(load_workflows) != RESOURCE_STABILITY_LOAD_WORKFLOWS:
+        return False
+    load_plateau = any(
+        after_total(current) <= after_total(prior)
+        for prior, current in zip(load_workflows, load_workflows[1:])
+    )
+    terminal_reclamation = (
+        len(workflows) == RESOURCE_STABILITY_WORKFLOWS
+        and after_total(workflows[-1]) < after_total(load_workflows[-1])
+    )
+    return load_plateau or terminal_reclamation
+
+
+def _validate_agentos_acceptance_semantics(
+    acceptance: object, challenge: str
+) -> None:
+    if not isinstance(acceptance, dict) or set(acceptance) != {
+        "schema",
+        "challenge_binding",
+        "required_modules",
+        "modules",
+    }:
+        raise ScenarioEvidenceError(
+            "agentos functional acceptance does not verify every required module"
+        )
+    binding = acceptance["challenge_binding"]
+    modules = acceptance["modules"]
+    if (
+        acceptance["schema"] != "agentos_task6_acceptance_v3"
+        or acceptance["required_modules"] != list(REQUIRED_AGENTOS_MODULES)
+        or not isinstance(binding, dict)
+        or not isinstance(modules, list)
+        or len(modules) != len(REQUIRED_AGENTOS_MODULES)
+    ):
+        raise ScenarioEvidenceError(
+            "agentos functional acceptance does not verify every required module"
+        )
+    oracle = _agentos_challenge_oracle(challenge)
+    if binding != {
+        "workflow_id": oracle["workflow_id"],
+        "workflow_run_id": oracle["workflow_run_id"],
+        "input_sha256": oracle["input_sha256"],
+        "derived_sha256": oracle["derived_sha256"],
+        "workflow_outputs": "verified",
+    }:
+        raise ScenarioEvidenceError(
+            "agentos functional acceptance header does not match the challenge oracle"
+        )
+
+    field_specs = (
+        (
+            "context",
+            {
+                "module", "operation", "status", "records", "latest_sequence",
+                "request_id", "tool_id", "record_sequence", "record_hash",
+                "payload", "result", "followup_sequence", "followup_record_hash",
+            },
+            {
+                "records", "latest_sequence", "request_id", "tool_id",
+                "record_sequence", "record_hash", "followup_sequence",
+                "followup_record_hash",
+            },
+        ),
+        (
+            "structured_tool",
+            {
+                "module", "operation", "status", "request_id", "tool_id",
+                "request_payload", "arg0", "arg1", "result_version",
+                "result_status", "result_tool_id", "result_request_id",
+                "result_payload", "result_value0", "result_value1",
+                "result_value2", "result_sequence",
+            },
+            {
+                "request_id", "tool_id", "arg0", "arg1", "result_version",
+                "result_status", "result_tool_id", "result_request_id",
+                "result_value0", "result_value1", "result_value2",
+                "result_sequence",
+            },
+        ),
+        (
+            "metadata_query",
+            {
+                "module", "operation", "status", "project", "workflow_id",
+                "workflow_run_id", "kernel_run_id", "input_sha256",
+                "derived_sha256", "stage", "returned", "used_index", "plan",
+                "target_fid", "target_physical", "target_stage", "target_kind",
+                "target_status", "target_summary",
+            },
+            {"returned", "used_index", "plan", "target_fid"},
+        ),
+        (
+            "observation",
+            {
+                "module", "operation", "status", "timeline_records",
+                "provenance_edges", "ledger_records", "ledger_hash", "edge_kind",
+                "edge_tool_id", "edge_status", "source_sequence", "target_sequence",
+                "source_record_hash", "target_record_hash", "request_id",
+                "workflow_id",
+            },
+            {
+                "timeline_records", "provenance_edges", "ledger_records",
+                "ledger_hash", "edge_kind", "edge_tool_id", "edge_status",
+                "source_sequence", "target_sequence", "source_record_hash",
+                "target_record_hash", "request_id",
+            },
+        ),
+    )
+    for module, (name, fields, numeric_fields) in zip(modules, field_specs):
+        if (
+            not isinstance(module, dict)
+            or set(module) != fields
+            or module.get("module") != name
+            or module.get("status") != "verified"
+        ):
+            raise ScenarioEvidenceError(
+                "agentos functional acceptance does not verify every required module"
+            )
+        for key in numeric_fields:
+            value = module[key]
+            if type(value) is not int or value < 0 or value > UINT64_MAX:
+                raise ScenarioEvidenceError(
+                    f"agentos {name} {key} is outside the Guest uint64 range"
+                )
+
+    context, tool, metadata, observation = modules
+    if (
+        context["operation"] != "context_snapshot"
+        or context["records"] < 2
+        or context["records"] > AGENTOS_CONTEXT_RECEIPT_MAX
+        or context["request_id"] != oracle["request_id"]
+        or context["tool_id"] != 1
+        or context["record_sequence"] < 1
+        or context["record_hash"] < 1
+        or context["payload"] != oracle["echo_payload"]
+        or context["result"] != oracle["echo_payload"]
+        or context["followup_sequence"] <= context["record_sequence"]
+        or context["followup_record_hash"] < 1
+        or context["latest_sequence"] < context["followup_sequence"]
+    ):
+        raise ScenarioEvidenceError(
+            "agentos context receipt does not match the challenge-derived echo record"
+        )
+    if (
+        tool["operation"] != "agent_run_echo"
+        or tool["request_id"] != oracle["request_id"]
+        or tool["tool_id"] != 1
+        or tool["request_payload"] != oracle["echo_payload"]
+        or tool["arg0"] != oracle["request_id"]
+        or tool["arg1"] != oracle["followup_request_id"]
+        or tool["result_version"] != 1
+        or tool["result_status"] != 0
+        or tool["result_tool_id"] != 1
+        or tool["result_request_id"] != oracle["request_id"]
+        or tool["result_payload"] != oracle["echo_payload"]
+        or tool["result_value0"] != len(str(oracle["echo_payload"]))
+        or tool["result_value1"] != oracle["request_id"]
+        or tool["result_value2"] != oracle["followup_request_id"]
+        or tool["result_sequence"] < 1
+    ):
+        raise ScenarioEvidenceError(
+            "agentos structured tool receipt does not prove echo semantics"
+        )
+    if context["record_sequence"] != tool["result_sequence"]:
+        raise ScenarioEvidenceError(
+            "agentos context receipt does not match the tool response"
+        )
+    if (
+        metadata["operation"] != "file_query_stage_index"
+        or metadata["project"] != "lab-gene-x"
+        or metadata["workflow_id"] != oracle["workflow_id"]
+        or metadata["workflow_run_id"] != oracle["workflow_run_id"]
+        or metadata["kernel_run_id"] != oracle["kernel_run_id"]
+        or metadata["input_sha256"] != oracle["input_sha256"]
+        or metadata["derived_sha256"] != oracle["derived_sha256"]
+        or metadata["stage"] != "align"
+        or metadata["returned"] != 1
+        or metadata["used_index"] != 1
+        or metadata["plan"] != 2
+        or metadata["target_fid"] != 101
+        or metadata["target_physical"] != oracle["target_physical"]
+        or metadata["target_stage"] != "align"
+        or metadata["target_kind"] != "artifact"
+        or metadata["target_status"] != "ok"
+        or metadata["target_summary"] != oracle["target_summary"]
+    ):
+        raise ScenarioEvidenceError(
+            "agentos metadata query receipt does not match the challenge-derived target hit"
+        )
+    if (
+        observation["operation"] != "timeline_provenance_ledger"
+        or observation["timeline_records"] < 1
+        or observation["timeline_records"] > AGENTOS_TIMELINE_RECEIPT_MAX
+        or observation["provenance_edges"] < 1
+        or observation["provenance_edges"] > AGENTOS_PROVENANCE_RECEIPT_MAX
+        or observation["ledger_records"] < 2
+        or observation["ledger_hash"] < 1
+        or observation["edge_kind"] != 1
+        or observation["edge_tool_id"] != 1
+        or observation["edge_status"] != 0
+        or observation["source_sequence"] != context["record_sequence"]
+        or observation["target_sequence"] != context["followup_sequence"]
+        or observation["source_record_hash"] != context["record_hash"]
+        or observation["target_record_hash"] != context["followup_record_hash"]
+        or observation["request_id"] != oracle["request_id"]
+        or observation["workflow_id"] != oracle["workflow_id"]
+    ):
+        raise ScenarioEvidenceError(
+            "agentos observation receipt lacks challenge-bound provenance"
+        )
+
+
 def _parse_agentos_acceptance(
-    contents: dict[str, bytes], target: str
+    contents: dict[str, bytes], target: str, challenge: str
 ) -> tuple[dict[str, object] | None, bytes | None]:
     data = contents.get(AGENTOS_ACCEPTANCE_FILE)
     if target == "plain":
@@ -710,11 +1264,27 @@ def _parse_agentos_acceptance(
             "agentos functional acceptance must contain every required module once"
         )
     header = _parse_record(lines[0], "agentos functional acceptance header")
-    if tuple(header) != ("schema", "module_count") or header != {
-        "schema": "agentos_task6_acceptance_v2",
+    oracle = _agentos_challenge_oracle(challenge)
+    if tuple(header) != (
+        "schema",
+        "module_count",
+        "workflow_id",
+        "workflow_run_id",
+        "input_sha256",
+        "derived_sha256",
+        "workflow_outputs",
+    ) or header != {
+        "schema": "agentos_task6_acceptance_v3",
         "module_count": str(len(REQUIRED_AGENTOS_MODULES)),
+        "workflow_id": oracle["workflow_id"],
+        "workflow_run_id": oracle["workflow_run_id"],
+        "input_sha256": oracle["input_sha256"],
+        "derived_sha256": oracle["derived_sha256"],
+        "workflow_outputs": "verified",
     }:
-        raise ScenarioEvidenceError("agentos functional acceptance header is invalid")
+        raise ScenarioEvidenceError(
+            "agentos functional acceptance header does not match the challenge oracle"
+        )
 
     specs = (
         (
@@ -791,7 +1361,11 @@ def _parse_agentos_acceptance(
                 "operation",
                 "status",
                 "project",
-                "run_id",
+                "workflow_id",
+                "workflow_run_id",
+                "kernel_run_id",
+                "input_sha256",
+                "derived_sha256",
                 "stage",
                 "returned",
                 "used_index",
@@ -801,6 +1375,7 @@ def _parse_agentos_acceptance(
                 "target_stage",
                 "target_kind",
                 "target_status",
+                "target_summary",
             ),
             ("returned", "used_index", "plan", "target_fid"),
         ),
@@ -822,6 +1397,8 @@ def _parse_agentos_acceptance(
                 "target_sequence",
                 "source_record_hash",
                 "target_record_hash",
+                "request_id",
+                "workflow_id",
             ),
             (
                 "timeline_records",
@@ -835,6 +1412,7 @@ def _parse_agentos_acceptance(
                 "target_sequence",
                 "source_record_hash",
                 "target_record_hash",
+                "request_id",
             ),
         ),
     )
@@ -867,82 +1445,572 @@ def _parse_agentos_acceptance(
             )
         modules.append(normalized)
 
-    context, tool, metadata, observation = modules
-    if (
-        context["records"] < 2
-        or context["request_id"] != 9001
-        or context["tool_id"] != 1
-        or context["record_sequence"] < 1
-        or context["record_hash"] < 1
-        or context["payload"] != "rp-agentos-orch"
-        or context["result"] != "rp-agentos-orch"
-        or context["followup_sequence"] <= context["record_sequence"]
-        or context["followup_record_hash"] < 1
-        or context["latest_sequence"] < context["followup_sequence"]
-    ):
-        raise ScenarioEvidenceError(
-            "agentos context receipt is not bound to the echo record"
-        )
-    if (
-        tool["request_id"] != 9001
-        or tool["tool_id"] != 1
-        or tool["request_payload"] != "rp-agentos-orch"
-        or tool["arg0"] != 9001
-        or tool["arg1"] != 9002
-        or tool["result_version"] != 1
-        or tool["result_status"] != 0
-        or tool["result_tool_id"] != 1
-        or tool["result_request_id"] != 9001
-        or tool["result_payload"] != "rp-agentos-orch"
-        or tool["result_value0"] != len("rp-agentos-orch")
-        or tool["result_value1"] != 9001
-        or tool["result_value2"] != 9002
-        or tool["result_sequence"] < 1
-    ):
-        raise ScenarioEvidenceError(
-            "agentos structured tool receipt does not prove echo semantics"
-        )
-    if context["record_sequence"] != tool["result_sequence"]:
-        raise ScenarioEvidenceError(
-            "agentos context receipt does not match the tool response"
-        )
-    if (
-        metadata["project"] != "lab-gene-x"
-        or metadata["run_id"] != "RUN-042"
-        or metadata["stage"] != "align"
-        or metadata["returned"] < 1
-        or metadata["used_index"] != 1
-        or metadata["plan"] != 2
-        or metadata["target_fid"] != 1
-        or metadata["target_physical"] != "r42align"
-        or metadata["target_stage"] != "align"
-        or metadata["target_kind"] != "artifact"
-        or metadata["target_status"] != "ok"
-    ):
-        raise ScenarioEvidenceError(
-            "agentos metadata query receipt is not bound to the target hit"
-        )
-    if (
-        observation["timeline_records"] < 1
-        or observation["provenance_edges"] < 1
-        or observation["ledger_records"] < 2
-        or observation["ledger_hash"] < 1
-        or observation["edge_kind"] != 1
-        or observation["edge_tool_id"] != 1
-        or observation["edge_status"] != 0
-        or observation["source_sequence"] != context["record_sequence"]
-        or observation["target_sequence"] != context["followup_sequence"]
-        or observation["source_record_hash"] != context["record_hash"]
-        or observation["target_record_hash"] != context["followup_record_hash"]
-    ):
-        raise ScenarioEvidenceError(
-            "agentos observation receipt lacks bound provenance"
-        )
-    return {
+    acceptance = {
         "schema": header["schema"],
+        "challenge_binding": {
+            "workflow_id": header["workflow_id"],
+            "workflow_run_id": header["workflow_run_id"],
+            "input_sha256": header["input_sha256"],
+            "derived_sha256": header["derived_sha256"],
+            "workflow_outputs": header["workflow_outputs"],
+        },
         "required_modules": list(REQUIRED_AGENTOS_MODULES),
         "modules": modules,
-    }, data
+    }
+    _validate_agentos_acceptance_semantics(acceptance, challenge)
+    return acceptance, data
+
+
+def _validate_resource_stability_semantics(
+    acceptance: object, challenge: str
+) -> None:
+    expected_header = {
+        "schema",
+        "measurement_scope",
+        "timed_makespan_included",
+        "claim_scope",
+        "configured_kind_coverage",
+        "account_coverage",
+        "rate_budget_coverage",
+        "global_leak_freedom",
+        "challenge_suffix",
+        "load_workflows",
+        "terminal_workflows",
+        "child_rounds_per_workflow",
+        "memory_pages_per_round",
+        "file_objects_per_round",
+        "metadata_ops_per_round",
+        "sequence_bound_status",
+        "status",
+        "global_policy",
+        "workflows",
+    }
+    if not isinstance(acceptance, dict) or set(acceptance) != expected_header:
+        raise ScenarioEvidenceError(
+            "agentos resource stability receipt has an invalid schema"
+        )
+    suffix = str(int(challenge[3:]))
+    if (
+        acceptance["schema"] != "agentos_resource_stability_v3"
+        or acceptance["measurement_scope"] != RESOURCE_STABILITY_MEASUREMENT_SCOPE
+        or acceptance["timed_makespan_included"] is not False
+        or acceptance["claim_scope"] != "configured_global_counter_reclamation"
+        or acceptance["configured_kind_coverage"] != "measured_mask_only"
+        or acceptance["account_coverage"] != "self_identity_only"
+        or acceptance["rate_budget_coverage"] != "not_measured"
+        or acceptance["global_leak_freedom"] != "not_claimed"
+        or acceptance["challenge_suffix"] != suffix
+        or acceptance["load_workflows"] != RESOURCE_STABILITY_LOAD_WORKFLOWS
+        or acceptance["terminal_workflows"]
+        != RESOURCE_STABILITY_TERMINAL_WORKFLOWS
+        or acceptance["child_rounds_per_workflow"]
+        != RESOURCE_STABILITY_CHILD_ROUNDS
+        or acceptance["memory_pages_per_round"]
+        != RESOURCE_STABILITY_MEMORY_PAGES
+        or acceptance["file_objects_per_round"]
+        != RESOURCE_STABILITY_FILE_OBJECTS
+        or acceptance["metadata_ops_per_round"]
+        != RESOURCE_STABILITY_METADATA_OPS
+        or acceptance["sequence_bound_status"] != "verified"
+        or not isinstance(acceptance["workflows"], list)
+        or len(acceptance["workflows"]) != RESOURCE_STABILITY_WORKFLOWS
+    ):
+        raise ScenarioEvidenceError(
+            "agentos resource stability receipt does not cover the registered workload"
+        )
+
+    policy = acceptance["global_policy"]
+    if not isinstance(policy, dict) or tuple(policy) != (
+        "measured_mask",
+        "measured_mask_semantics",
+        "snapshot_consistency",
+        "coverage",
+        "account_counter_coverage",
+        "rate_budget_coverage",
+        "free_pages_status",
+        "terminal_workflow_pair_bound",
+        "resources",
+    ):
+        raise ScenarioEvidenceError(
+            "agentos resource stability global policy has an invalid schema"
+        )
+    measured_mask = policy["measured_mask"]
+    if (
+        type(measured_mask) is not int
+        or measured_mask < 0
+        or measured_mask > (1 << len(RESOURCE_STABILITY_RESOURCE_KINDS)) - 1
+        or policy["measured_mask_semantics"]
+        != "configured_global_resource_kind_counters_only"
+        or policy["snapshot_consistency"] != "single_core_irq_coherent"
+        or policy["coverage"] != "configured_global_kind_counters"
+        or policy["account_counter_coverage"] != "not_measured"
+        or policy["rate_budget_coverage"] != "not_measured"
+        or policy["free_pages_status"] != "measured"
+        or policy["terminal_workflow_pair_bound"] != 0
+        or not isinstance(policy["resources"], list)
+        or len(policy["resources"]) != len(RESOURCE_STABILITY_RESOURCE_KINDS)
+    ):
+        raise ScenarioEvidenceError(
+            "agentos resource stability global policy is invalid"
+        )
+    for index, (kind, bound) in enumerate(RESOURCE_STABILITY_GROWTH_BOUNDS.items()):
+        resource = policy["resources"][index]
+        measured = (measured_mask & (1 << index)) != 0
+        if (
+            not isinstance(resource, dict)
+            or tuple(resource)
+            != (
+                "kind",
+                "status",
+                "capacity",
+                "per_workflow_growth_bound",
+                "terminal_growth_bound",
+            )
+            or resource["kind"] != kind
+            or resource["status"] != ("measured" if measured else "not_measured")
+            or resource["per_workflow_growth_bound"] != bound
+            or resource["terminal_growth_bound"] != bound
+            or type(resource["capacity"]) is not int
+            or (measured and resource["capacity"] <= 0)
+            or (not measured and resource["capacity"] != 0)
+        ):
+            raise ScenarioEvidenceError(
+                "agentos resource stability global policy resource is invalid"
+            )
+    fully_measured = measured_mask == (1 << len(RESOURCE_STABILITY_RESOURCE_KINDS)) - 1
+    expected_status = "verified" if fully_measured else "partial"
+    if acceptance["status"] != expected_status:
+        raise ScenarioEvidenceError(
+            "agentos resource stability cannot pass unmeasured resources"
+        )
+
+    lifecycle_keys: set[tuple[int, int]] = set()
+    scope_ids: set[int] = set()
+    io_owners: set[int] = set()
+    account_handles: set[tuple[int, int]] = set()
+    zero_fields = (
+        "initial_leased",
+        "initial_debt",
+        "initial_waiters",
+        "initial_debt_waiters",
+        "initial_admission_waiters",
+        "initial_context_lane_depth",
+        "initial_context_lane_waiters",
+        "initial_metadata_owned",
+        "initial_metadata_waiters",
+        "initial_agent_calls",
+        "initial_context_records",
+        "final_leased",
+        "final_debt",
+        "final_waiters",
+        "final_debt_waiters",
+        "final_admission_waiters",
+        "final_context_lane_depth",
+        "final_context_lane_waiters",
+        "final_metadata_owned",
+        "final_metadata_waiters",
+    )
+    for index, raw_record in enumerate(acceptance["workflows"]):
+        if (
+            not isinstance(raw_record, dict)
+            or tuple(raw_record) != RESOURCE_STABILITY_RECORD_KEYS
+        ):
+            raise ScenarioEvidenceError(
+                "agentos resource stability workflow record has an invalid schema"
+            )
+        record = raw_record
+        if any(
+            type(record[key]) is not int
+            or record[key] < 0
+            or record[key] > UINT64_MAX
+            for key in RESOURCE_STABILITY_RECORD_KEYS
+            if key not in {"mode", "per_workflow_bound_status", "status"}
+        ):
+            raise ScenarioEvidenceError(
+                "agentos resource stability workflow contains an invalid integer"
+            )
+        expected_mode = (
+            "load" if index < RESOURCE_STABILITY_LOAD_WORKFLOWS else "terminal"
+        )
+        expected_rounds = (
+            RESOURCE_STABILITY_CHILD_ROUNDS if expected_mode == "load" else 0
+        )
+        lifecycle_key = (record["lifecycle_id"], record["lifecycle_generation"])
+        account_handle = (
+            record["resource_account_slot"],
+            record["resource_account_generation"],
+        )
+        expected_nonce = _resource_stability_nonce(challenge, index, expected_mode)
+        if (
+            record["workflow_index"] != index
+            or record["mode"] != expected_mode
+            or record["status"] != "verified"
+            or record["challenge_nonce"] != expected_nonce
+            or record["report_guard"]
+            != _resource_stability_report_guard(record)
+            or record["lifecycle_id"] <= 0
+            or record["lifecycle_generation"] <= 0
+            or record["scope_id"] <= 0
+            or record["io_owner"] != (0x80000000 | record["scope_id"])
+            or record["resource_account_reserved"] != 0
+            or record["resource_account_generation"] <= 0
+            or any(record[field] != 0 for field in zero_fields)
+            or record["final_agent_calls"] != record["initial_agent_calls"]
+            or record["final_context_records"]
+            != record["initial_context_records"]
+            or record["process_rounds"] != expected_rounds
+            or record["file_rounds"] != expected_rounds
+            or record["memory_rounds"] != expected_rounds
+            or record["metadata_rounds"] != expected_rounds
+            or record["ordinary_free_pages_before"]
+            != record["ordinary_free_pages_after"]
+            or record["reserved_free_pages_before"]
+            != record["reserved_free_pages_after"]
+            or record["stack_reserved_free_pages_before"]
+            != record["stack_reserved_free_pages_after"]
+            or record["per_workflow_bound_status"]
+            != ("verified" if fully_measured else "not_measured")
+            or record["reaped"] != 1
+            or record["pipe_eof"] != 1
+            or (
+                expected_mode == "load"
+                and record["final_completion_sequence"]
+                <= record["initial_completion_sequence"]
+            )
+            or (
+                expected_mode == "terminal"
+                and record["final_completion_sequence"]
+                != record["initial_completion_sequence"]
+            )
+            or (
+                expected_mode == "terminal"
+                and record["final_cache_resident"]
+                != record["initial_cache_resident"]
+            )
+            or lifecycle_key in lifecycle_keys
+            or record["scope_id"] in scope_ids
+            or record["io_owner"] in io_owners
+            or account_handle in account_handles
+        ):
+            raise ScenarioEvidenceError(
+                "agentos resource stability workflow is not challenge-bound, fresh, and quiescent"
+            )
+        for resource_index, resource in enumerate(policy["resources"]):
+            kind = resource["kind"]
+            ordinary_before = record[f"{kind}_ordinary_used_before"]
+            ordinary_after = record[f"{kind}_ordinary_used_after"]
+            reserved_before = record[f"{kind}_reserved_used_before"]
+            reserved_after = record[f"{kind}_reserved_used_after"]
+            ordinary_pending_before = record[
+                f"{kind}_ordinary_pending_before"
+            ]
+            ordinary_pending_after = record[f"{kind}_ordinary_pending_after"]
+            reserved_pending_before = record[
+                f"{kind}_reserved_pending_before"
+            ]
+            reserved_pending_after = record[f"{kind}_reserved_pending_after"]
+            values = (
+                ordinary_before,
+                ordinary_after,
+                ordinary_pending_before,
+                ordinary_pending_after,
+                reserved_before,
+                reserved_after,
+                reserved_pending_before,
+                reserved_pending_after,
+            )
+            measured = (measured_mask & (1 << resource_index)) != 0
+            if not measured:
+                if any(values):
+                    raise ScenarioEvidenceError(
+                        "unmeasured global resource contains fabricated values"
+                    )
+                continue
+            capacity = resource["capacity"]
+            before = ordinary_before + reserved_before
+            after = ordinary_after + reserved_after
+            pending_before = ordinary_pending_before + reserved_pending_before
+            pending_after = ordinary_pending_after + reserved_pending_after
+            bound = resource["per_workflow_growth_bound"]
+            if (
+                before > capacity
+                or after > capacity
+                or pending_before > capacity - before
+                or pending_after > capacity - after
+                or any(
+                    (
+                        ordinary_pending_before,
+                        ordinary_pending_after,
+                        reserved_pending_before,
+                        reserved_pending_after,
+                    )
+                )
+                or (
+                    (expected_mode == "terminal" or bound == 0)
+                    and (
+                        ordinary_after != ordinary_before
+                        or reserved_after != reserved_before
+                    )
+                )
+                or (
+                    expected_mode == "load"
+                    and bound != 0
+                    and (
+                        ordinary_after < ordinary_before
+                        or reserved_after < reserved_before
+                        or ordinary_after
+                        - ordinary_before
+                        + reserved_after
+                        - reserved_before
+                        > bound
+                    )
+                )
+            ):
+                raise ScenarioEvidenceError(
+                    "agentos configured global resource delta exceeds its registered bound"
+                )
+        lifecycle_keys.add(lifecycle_key)
+        scope_ids.add(record["scope_id"])
+        io_owners.add(record["io_owner"])
+        account_handles.add(account_handle)
+
+    first = acceptance["workflows"][0]
+    terminal = acceptance["workflows"][-1]
+    if any(
+        first[f"{prefix}_before"] != terminal[f"{prefix}_after"]
+        for prefix in (
+            "ordinary_free_pages",
+            "reserved_free_pages",
+            "stack_reserved_free_pages",
+        )
+    ):
+        raise ScenarioEvidenceError(
+            "agentos resource stability free-page sequence does not recover"
+        )
+    for resource_index, resource in enumerate(policy["resources"]):
+        if (measured_mask & (1 << resource_index)) == 0:
+            continue
+        kind = resource["kind"]
+        bound = resource["terminal_growth_bound"]
+        ordinary_before = first[f"{kind}_ordinary_used_before"]
+        ordinary_after = terminal[f"{kind}_ordinary_used_after"]
+        reserved_before = first[f"{kind}_reserved_used_before"]
+        reserved_after = terminal[f"{kind}_reserved_used_after"]
+        if (
+            (bound == 0 and (
+                ordinary_after != ordinary_before
+                or reserved_after != reserved_before
+            ))
+            or (
+                bound != 0
+                and (
+                    ordinary_after < ordinary_before
+                    or reserved_after < reserved_before
+                    or ordinary_after
+                    - ordinary_before
+                    + reserved_after
+                    - reserved_before
+                    > bound
+                )
+            )
+        ):
+            raise ScenarioEvidenceError(
+                "agentos configured global resource terminal growth exceeds its registered bound"
+            )
+        if bound != 0 and not _resource_stability_plateau_or_reclamation(
+            acceptance["workflows"], kind
+        ):
+            raise ScenarioEvidenceError(
+                "agentos configured global resource sequence lacks plateau or reclamation"
+            )
+
+
+def _parse_resource_stability(
+    contents: dict[str, bytes], target: str, challenge: str
+) -> tuple[dict[str, object] | None, bytes | None]:
+    data = contents.get(RESOURCE_STABILITY_FILE)
+    if target == "plain":
+        if data is not None:
+            raise ScenarioEvidenceError(
+                "plain state must not impersonate AgentOS resource stability"
+            )
+        return None, None
+    lines = _state_lines(contents, RESOURCE_STABILITY_FILE)
+    if any(len(line) > RESOURCE_STABILITY_LINE_MAX for line in lines):
+        raise ScenarioEvidenceError(
+            "agentos resource stability receipt contains an overlong record"
+        )
+    if len(lines) != RESOURCE_STABILITY_WORKFLOWS + 2:
+        raise ScenarioEvidenceError(
+            "agentos resource stability receipt has an invalid workflow count"
+        )
+    header = _parse_record(lines[0], "agentos resource stability header")
+    header_keys = (
+        "schema",
+        "measurement_scope",
+        "timed_makespan_included",
+        "claim_scope",
+        "configured_kind_coverage",
+        "account_coverage",
+        "rate_budget_coverage",
+        "global_leak_freedom",
+        "challenge_suffix",
+        "load_workflows",
+        "terminal_workflows",
+        "child_rounds_per_workflow",
+        "memory_pages_per_round",
+        "file_objects_per_round",
+        "metadata_ops_per_round",
+        "sequence_bound_status",
+        "status",
+    )
+    if tuple(header) != header_keys:
+        raise ScenarioEvidenceError(
+            "agentos resource stability header has an invalid schema"
+        )
+    numeric_header_keys = (
+        "timed_makespan_included",
+        "load_workflows",
+        "terminal_workflows",
+        "child_rounds_per_workflow",
+        "memory_pages_per_round",
+        "file_objects_per_round",
+        "metadata_ops_per_round",
+    )
+    numeric_header = {
+        key: _canonical_uint(header[key], f"agentos resource stability {key}")
+        for key in numeric_header_keys
+    }
+    policy_record = _parse_record(lines[1], "agentos resource stability global policy")
+    policy_keys = (
+        "record",
+        "measured_mask",
+        "measured_mask_semantics",
+        "snapshot_consistency",
+        "coverage",
+        "account_counter_coverage",
+        "rate_budget_coverage",
+        "free_pages_status",
+        "terminal_workflow_pair_bound",
+        *(
+            key
+            for kind in RESOURCE_STABILITY_RESOURCE_KINDS
+            for key in (
+                f"{kind}_status",
+                f"{kind}_capacity",
+                f"{kind}_per_workflow_growth_bound",
+                f"{kind}_terminal_growth_bound",
+            )
+        ),
+    )
+    if tuple(policy_record) != policy_keys or policy_record["record"] != "global_policy":
+        raise ScenarioEvidenceError(
+            "agentos resource stability global policy has an invalid schema"
+        )
+    measured_mask = _canonical_uint(
+        policy_record["measured_mask"], "agentos resource measured mask"
+    )
+    terminal_workflow_pair_bound = _canonical_uint(
+        policy_record["terminal_workflow_pair_bound"],
+        "agentos resource terminal workflow pair bound",
+    )
+    policy_resources: list[dict[str, object]] = []
+    for kind in RESOURCE_STABILITY_RESOURCE_KINDS:
+        policy_resources.append(
+            {
+                "kind": kind,
+                "status": policy_record[f"{kind}_status"],
+                "capacity": _canonical_uint(
+                    policy_record[f"{kind}_capacity"],
+                    f"agentos {kind} capacity",
+                ),
+                "per_workflow_growth_bound": _canonical_uint(
+                    policy_record[f"{kind}_per_workflow_growth_bound"],
+                    f"agentos {kind} per-workflow growth bound",
+                ),
+                "terminal_growth_bound": _canonical_uint(
+                    policy_record[f"{kind}_terminal_growth_bound"],
+                    f"agentos {kind} terminal growth bound",
+                ),
+            }
+        )
+    uint64_fields = {
+        "challenge_nonce",
+        "lifecycle_generation",
+        "resource_account_generation",
+        "initial_agent_calls",
+        "initial_context_records",
+        "final_agent_calls",
+        "final_context_records",
+        "initial_completion_sequence",
+        "final_completion_sequence",
+        "report_guard",
+    }
+    workflows: list[dict[str, object]] = []
+    for line_number, line in enumerate(lines[2:], 3):
+        record = _parse_record(
+            line, f"agentos resource stability workflow line {line_number}"
+        )
+        if tuple(record) != RESOURCE_STABILITY_RECORD_KEYS:
+            raise ScenarioEvidenceError(
+                "agentos resource stability workflow record has an invalid schema"
+            )
+        normalized: dict[str, object] = {}
+        for key in RESOURCE_STABILITY_RECORD_KEYS:
+            if key in {"mode", "per_workflow_bound_status", "status"}:
+                normalized[key] = record[key]
+                continue
+            value = _canonical_uint(
+                record[key], f"agentos resource stability {key}"
+            )
+            if (
+                key not in uint64_fields
+                and key not in RESOURCE_STABILITY_GLOBAL_FREE_KEYS
+                and key not in RESOURCE_STABILITY_GLOBAL_RESOURCE_KEYS
+                and value > UINT32_MAX
+            ):
+                raise ScenarioEvidenceError(
+                    f"agentos resource stability {key} exceeds the Guest uint32 range"
+                )
+            normalized[key] = value
+        workflows.append(normalized)
+    acceptance = {
+        "schema": header["schema"],
+        "measurement_scope": header["measurement_scope"],
+        "timed_makespan_included": numeric_header["timed_makespan_included"] != 0,
+        "claim_scope": header["claim_scope"],
+        "configured_kind_coverage": header["configured_kind_coverage"],
+        "account_coverage": header["account_coverage"],
+        "rate_budget_coverage": header["rate_budget_coverage"],
+        "global_leak_freedom": header["global_leak_freedom"],
+        "challenge_suffix": header["challenge_suffix"],
+        "load_workflows": numeric_header["load_workflows"],
+        "terminal_workflows": numeric_header["terminal_workflows"],
+        "child_rounds_per_workflow": numeric_header[
+            "child_rounds_per_workflow"
+        ],
+        "memory_pages_per_round": numeric_header["memory_pages_per_round"],
+        "file_objects_per_round": numeric_header["file_objects_per_round"],
+        "metadata_ops_per_round": numeric_header["metadata_ops_per_round"],
+        "sequence_bound_status": header["sequence_bound_status"],
+        "status": header["status"],
+        "global_policy": {
+            "measured_mask": measured_mask,
+            "measured_mask_semantics": policy_record["measured_mask_semantics"],
+            "snapshot_consistency": policy_record["snapshot_consistency"],
+            "coverage": policy_record["coverage"],
+            "account_counter_coverage": policy_record[
+                "account_counter_coverage"
+            ],
+            "rate_budget_coverage": policy_record["rate_budget_coverage"],
+            "free_pages_status": policy_record["free_pages_status"],
+            "terminal_workflow_pair_bound": terminal_workflow_pair_bound,
+            "resources": policy_resources,
+        },
+        "workflows": workflows,
+    }
+    _validate_resource_stability_semantics(acceptance, challenge)
+    return acceptance, data
 
 
 def _unique_outcome_record(
@@ -977,12 +2045,159 @@ def _normalized_outcome(contents: dict[str, bytes]) -> tuple[dict[str, object], 
     return outcome, fingerprint
 
 
+def _task6_artifact_provenance(
+    contents: dict[str, bytes], challenge: str
+) -> dict[str, object]:
+    """Bind Guest-reported provenance to the extracted artifact bytes."""
+
+    values = derive_challenge(challenge)
+    expected_input, expected_output = task6_artifact_payloads(challenge)
+    input_data = contents.get(TASK6_ARTIFACT_INPUT_STORAGE)
+    output_data = contents.get(TASK6_ARTIFACT_OUTPUT_STORAGE)
+    if input_data is None or output_data is None:
+        raise ScenarioEvidenceError("Task6 artifact byte files are missing")
+    if input_data != expected_input:
+        raise ScenarioEvidenceError(
+            "Task6 input artifact bytes do not match the Host challenge workload"
+        )
+    if output_data != expected_output:
+        raise ScenarioEvidenceError(
+            "Task6 derived artifact bytes do not match the registered transformation"
+        )
+
+    guest = _unique_outcome_record(
+        contents,
+        "rp_artifact",
+        "task6_artifact_receipt",
+        (
+            "task6_artifact_receipt",
+            "challenge",
+            "input_storage",
+            "input_bytes",
+            "input_fnv64",
+            "input_sha256",
+            "output_storage",
+            "output_bytes",
+            "output_fnv64",
+            "output_sha256",
+            "operation",
+        ),
+    )
+    expected_guest = {
+        "task6_artifact_receipt": TASK6_ARTIFACT_RECEIPT_SCHEMA,
+        "challenge": challenge,
+        "input_storage": TASK6_ARTIFACT_INPUT_STORAGE,
+        "input_bytes": str(len(input_data)),
+        "input_fnv64": str(task6_fnv64(input_data)),
+        "input_sha256": hashlib.sha256(input_data).hexdigest(),
+        "output_storage": TASK6_ARTIFACT_OUTPUT_STORAGE,
+        "output_bytes": str(len(output_data)),
+        "output_fnv64": str(task6_fnv64(output_data)),
+        "output_sha256": hashlib.sha256(output_data).hexdigest(),
+        "operation": "normalize_ppm",
+    }
+    if guest != expected_guest:
+        raise ScenarioEvidenceError(
+            "Task6 Guest artifact receipt does not match the extracted bytes"
+        )
+    if (
+        expected_guest["input_sha256"] != values.input_sha256
+        or expected_guest["output_sha256"] != values.derived_sha256
+    ):
+        raise ScenarioEvidenceError(
+            "Task6 artifact bytes do not match the challenge-bound action hashes"
+        )
+    body: dict[str, object] = {
+        "schema": "task6-artifact-provenance-v1",
+        "challenge": challenge,
+        "operation": "normalize_ppm",
+        "input": {
+            "path": f"state-extracted/{TASK6_ARTIFACT_INPUT_STORAGE}",
+            "logical_name": "raw-counts.csv",
+            "bytes": len(input_data),
+            "sha256": values.input_sha256,
+            "fnv64": values.input_fnv64,
+        },
+        "output": {
+            "path": f"state-extracted/{TASK6_ARTIFACT_OUTPUT_STORAGE}",
+            "logical_name": "normalized-counts.csv",
+            "bytes": len(output_data),
+            "sha256": values.derived_sha256,
+            "fnv64": values.derived_fnv64,
+        },
+        "guest_receipt": guest,
+    }
+    return {
+        **body,
+        "sha256": _binding_sha256(body, "task6-artifact-provenance-v1"),
+    }
+
+
+def validate_task6_artifact_provenance(
+    value: object, challenge: str, corpus_path: Path
+) -> None:
+    """Replay a sealed Task6 receipt against an explicitly supplied C snapshot."""
+
+    try:
+        input_data, output_data = task6_artifact_payloads(
+            challenge, fixture_path=corpus_path
+        )
+    except ValueError as error:
+        raise ScenarioEvidenceError(
+            f"Task6 source-C workload corpus is invalid: {error}"
+        ) from error
+    input_sha = hashlib.sha256(input_data).hexdigest()
+    output_sha = hashlib.sha256(output_data).hexdigest()
+    guest = {
+        "task6_artifact_receipt": TASK6_ARTIFACT_RECEIPT_SCHEMA,
+        "challenge": challenge,
+        "input_storage": TASK6_ARTIFACT_INPUT_STORAGE,
+        "input_bytes": str(len(input_data)),
+        "input_fnv64": str(task6_fnv64(input_data)),
+        "input_sha256": input_sha,
+        "output_storage": TASK6_ARTIFACT_OUTPUT_STORAGE,
+        "output_bytes": str(len(output_data)),
+        "output_fnv64": str(task6_fnv64(output_data)),
+        "output_sha256": output_sha,
+        "operation": "normalize_ppm",
+    }
+    body: dict[str, object] = {
+        "schema": "task6-artifact-provenance-v1",
+        "challenge": challenge,
+        "operation": "normalize_ppm",
+        "input": {
+            "path": f"state-extracted/{TASK6_ARTIFACT_INPUT_STORAGE}",
+            "logical_name": "raw-counts.csv",
+            "bytes": len(input_data),
+            "sha256": input_sha,
+            "fnv64": task6_fnv64(input_data),
+        },
+        "output": {
+            "path": f"state-extracted/{TASK6_ARTIFACT_OUTPUT_STORAGE}",
+            "logical_name": "normalized-counts.csv",
+            "bytes": len(output_data),
+            "sha256": output_sha,
+            "fnv64": task6_fnv64(output_data),
+        },
+        "guest_receipt": guest,
+    }
+    expected = {
+        **body,
+        "sha256": _binding_sha256(body, "task6-artifact-provenance-v1"),
+    }
+    if value != expected:
+        raise ScenarioEvidenceError(
+            "Task6 artifact provenance differs from the source-C workload corpus"
+        )
+
+
 def _validate_challenge_outcome(
     contents: dict[str, bytes],
     outcome: dict[str, object],
     challenge: str,
-) -> tuple[dict[str, object], str]:
+) -> tuple[dict[str, object], str, dict[str, object]]:
     expected = derive_challenge(challenge)
+    artifact_provenance = _task6_artifact_provenance(contents, challenge)
     expected_rerun = {
         "host_action_rerun": f"usable-run:{expected.rerun_id}",
         "parent": expected.run_id,
@@ -1020,7 +2235,7 @@ def _validate_challenge_outcome(
     expected_artifact = {
         "host_artifact_derive": "raw-counts.csv",
         "output": "normalized-counts.csv",
-        "operation": "normalize",
+        "operation": "normalize_ppm",
         "stage": "analyze",
         "sha256": expected.derived_sha256,
     }
@@ -1033,11 +2248,11 @@ def _validate_challenge_outcome(
         ("host_artifact_input", "kind", "sha256", "bytes", "source"),
     )
     expected_input = {
-        "host_artifact_input": "reads_R1.fastq",
-        "kind": "fastq",
+        "host_artifact_input": "raw-counts.csv",
+        "kind": "counts_csv",
         "sha256": expected.input_sha256,
-        "bytes": "2048",
-        "source": "upload",
+        "bytes": str(expected.input_bytes),
+        "source": "host_challenge",
     }
     if artifact_input != expected_input:
         raise ScenarioEvidenceError("artifact input does not match the Host challenge")
@@ -1051,7 +2266,11 @@ def _validate_challenge_outcome(
         },
         "artifact_input": artifact_input,
     }
-    return bound, _binding_sha256(bound, "research-platform-outcome-v2")
+    return (
+        bound,
+        _binding_sha256(bound, "research-platform-outcome-v2"),
+        artifact_provenance,
+    )
 
 
 def _normalize_target_order(value: object) -> str:
@@ -1222,9 +2441,6 @@ def _collect_target(
     _require_directory(target_dir, f"{target} run directory")
     state_dir = _require_directory(target_dir / "state-extracted", f"{target} state directory")
     inventory, contents = _state_inventory(state_dir)
-    functional_acceptance, functional_acceptance_data = _parse_agentos_acceptance(
-        contents, target
-    )
     program_timings, ledger_data = _parse_timing_ledger(
         state_dir, target, expected_programs, expected_roles
     )
@@ -1239,11 +2455,20 @@ def _collect_target(
     )
     runtime_artifacts = _runtime_artifact_receipts(target_dir, target, summary)
     challenge, challenge_source = _read_challenge_input(target_dir, target, summary)
+    functional_acceptance, functional_acceptance_data = _parse_agentos_acceptance(
+        contents, target, challenge
+    )
+    resource_stability, resource_stability_data = _parse_resource_stability(
+        contents, target, challenge
+    )
+    sealed_inventory = _sealed_target_inventory(target_dir, inventory)
     if summary["extracted_state_files"] != inventory["file_count"]:
         raise ScenarioEvidenceError(f"{target} run summary state count differs from inventory")
     log_receipt, _ = _log_receipt(target_dir / "ucore-run.log", target)
     outcome, _ = _normalized_outcome(contents)
-    outcome, fingerprint = _validate_challenge_outcome(contents, outcome, challenge)
+    outcome, fingerprint, artifact_provenance = _validate_challenge_outcome(
+        contents, outcome, challenge
+    )
 
     if target == "agentos":
         assert functional_acceptance is not None
@@ -1274,6 +2499,36 @@ def _collect_target(
     else:
         functional_receipt = {"required": False, "status": "not_applicable"}
 
+    if target == "agentos":
+        assert resource_stability is not None
+        assert resource_stability_data is not None
+        stability_binding = {
+            "schema": "agentos-task6-resource-stability-binding-v1",
+            "challenge": challenge,
+            "challenge_source_sha256": challenge_source["sha256"],
+            "run_summary_sha256": _sha256(summary_data),
+            "state_inventory_sha256": inventory["sha256"],
+            "resource_receipt_sha256": _sha256(resource_stability_data),
+            "measurement_scope": RESOURCE_STABILITY_MEASUREMENT_SCOPE,
+        }
+        stability_receipt: dict[str, object] = {
+            "required": True,
+            "status": "verified",
+            "path": f"state-extracted/{RESOURCE_STABILITY_FILE}",
+            "bytes": len(resource_stability_data),
+            "sha256": _sha256(resource_stability_data),
+            "acceptance": resource_stability,
+            "binding": {
+                **stability_binding,
+                "sha256": _binding_sha256(
+                    stability_binding,
+                    "agentos-task6-resource-stability-binding-v1",
+                ),
+            },
+        }
+    else:
+        stability_receipt = {"required": False, "status": "not_applicable"}
+
     receipt = {
         "schema": "scenario-raw-source-receipt-v1",
         "state_inventory": inventory,
@@ -1300,7 +2555,10 @@ def _collect_target(
         },
         "runtime_artifacts": runtime_artifacts,
         "challenge_source": challenge_source,
+        "sealed_inventory": sealed_inventory,
+        "artifact_provenance": artifact_provenance,
         "functional_acceptance": functional_receipt,
+        "resource_stability": stability_receipt,
     }
     receipt["sha256"] = _binding_sha256(receipt, "scenario-raw-source-receipt-v1")
     return TargetMeasurement(
@@ -1463,10 +2721,76 @@ def _sign_test(improvements: Sequence[float | int]) -> dict[str, object]:
     }
 
 
+def _joint_mcid_sign_test(
+    improvements: Sequence[float | int],
+    relative_improvements: Sequence[float | None],
+) -> dict[str, object]:
+    """Return the exact full-n test for joint per-boot MCID exceedance."""
+    if len(improvements) != len(relative_improvements):
+        raise ScenarioEvidenceError("joint-MCID inputs must align one-for-one")
+    n = len(improvements)
+    wins = sum(
+        absolute > MIN_ABSOLUTE_IMPROVEMENT_MS
+        and relative is not None
+        and relative > MIN_RELATIVE_IMPROVEMENT_PERCENT
+        for absolute, relative in zip(improvements, relative_improvements)
+    )
+    exact = Fraction(
+        sum(math.comb(n, count) for count in range(wins, n + 1)),
+        1 << n,
+    )
+    return {
+        "alternative": "joint_absolute_and_relative_mcid_exceeded",
+        "absolute_mcid_ms": MIN_ABSOLUTE_IMPROVEMENT_MS,
+        "relative_mcid_percent": MIN_RELATIVE_IMPROVEMENT_PERCENT,
+        "success_rule": "both_strictly_greater_per_boot",
+        "non_win_policy": "ties_missing_or_not_exceeding_either_mcid",
+        "wins": wins,
+        "non_wins": n - wins,
+        "n": n,
+        "p_value": float(exact),
+        "numerator": exact.numerator,
+        "denominator": exact.denominator,
+    }
+
+
+def _reverse_joint_mcid_sign_test(
+    improvements: Sequence[float | int],
+    relative_improvements: Sequence[float | None],
+) -> dict[str, object]:
+    """Mirror the registered MCID test for material AgentOS regressions."""
+    if len(improvements) != len(relative_improvements):
+        raise ScenarioEvidenceError("reverse joint-MCID inputs must align one-for-one")
+    n = len(improvements)
+    losses = sum(
+        absolute < -MIN_ABSOLUTE_IMPROVEMENT_MS
+        and relative is not None
+        and relative < -MIN_RELATIVE_IMPROVEMENT_PERCENT
+        for absolute, relative in zip(improvements, relative_improvements)
+    )
+    exact = Fraction(
+        sum(math.comb(n, count) for count in range(losses, n + 1)),
+        1 << n,
+    )
+    return {
+        "alternative": "joint_absolute_and_relative_regression_mcid_exceeded",
+        "absolute_mcid_ms": MIN_ABSOLUTE_IMPROVEMENT_MS,
+        "relative_mcid_percent": MIN_RELATIVE_IMPROVEMENT_PERCENT,
+        "success_rule": "both_strictly_less_than_negative_thresholds_per_boot",
+        "non_loss_policy": "ties_missing_or_not_exceeding_either_reverse_mcid",
+        "losses": losses,
+        "non_losses": n - losses,
+        "n": n,
+        "p_value": float(exact),
+        "numerator": exact.numerator,
+        "denominator": exact.denominator,
+    }
+
+
 def _paired_improvement(samples: Sequence[dict[str, object]]) -> dict[str, object]:
     paired_samples: list[dict[str, object]] = []
     improvements: list[int] = []
-    relative_improvements: list[float] = []
+    relative_improvements: list[float | None] = []
     relative_available = True
     for sample in samples:
         plain_ms = sample["targets"]["plain"]["makespan_ms"]
@@ -1476,8 +2800,7 @@ def _paired_improvement(samples: Sequence[dict[str, object]]) -> dict[str, objec
         improvements.append(improvement_ms)
         if relative is None:
             relative_available = False
-        else:
-            relative_improvements.append(relative)
+        relative_improvements.append(relative)
         paired_samples.append(
             {
                 "sample_id": sample["sample_id"],
@@ -1497,9 +2820,12 @@ def _paired_improvement(samples: Sequence[dict[str, object]]) -> dict[str, objec
         improvements, f"{seed_sha256}:absolute"
     )
     if relative_available:
-        relative_median = _median(relative_improvements)
+        available_relatives = [
+            value for value in relative_improvements if value is not None
+        ]
+        relative_median = _median(available_relatives)
         relative_ci_low, relative_ci_high = _bootstrap_interval(
-            relative_improvements, f"{seed_sha256}:relative"
+            available_relatives, f"{seed_sha256}:relative"
         )
     else:
         relative_median = None
@@ -1509,6 +2835,9 @@ def _paired_improvement(samples: Sequence[dict[str, object]]) -> dict[str, objec
         "direction": "plain_minus_agentos_positive_is_better",
         "lower_is_better": True,
         "unit": "ms",
+        "paired_success_rate": 1.0,
+        "inference": dict(SCENARIO_INFERENCE),
+        "interpretation": dict(SCENARIO_INTERPRETATION),
         "claim_gate": {
             "minimum_absolute_improvement_ms": MIN_ABSOLUTE_IMPROVEMENT_MS,
             "minimum_baseline_makespan_ms": MIN_BASELINE_MAKESPAN_MS,
@@ -1522,11 +2851,18 @@ def _paired_improvement(samples: Sequence[dict[str, object]]) -> dict[str, objec
         "relative_ci_low": relative_ci_low,
         "relative_ci_high": relative_ci_high,
         "sign_test": _sign_test(improvements),
+        "mcid_sign_test": _joint_mcid_sign_test(
+            improvements, relative_improvements
+        ),
+        "regression_mcid_sign_test": _reverse_joint_mcid_sign_test(
+            improvements, relative_improvements
+        ),
         "bootstrap": {
             "method": "deterministic_percentile_median",
             "confidence": 0.95,
             "repetitions": BOOTSTRAP_REPETITIONS,
             "seed_sha256": seed_sha256,
+            "role": "descriptive_only",
         },
         "samples": paired_samples,
     }
@@ -1621,8 +2957,9 @@ def _functional_acceptance_summary(
             or receipt["bytes"] <= 0
             or not isinstance(receipt["sha256"], str)
             or not isinstance(acceptance, dict)
-            or set(acceptance) != {"schema", "required_modules", "modules"}
-            or acceptance["schema"] != "agentos_task6_acceptance_v2"
+            or set(acceptance)
+            != {"schema", "challenge_binding", "required_modules", "modules"}
+            or acceptance["schema"] != "agentos_task6_acceptance_v3"
             or acceptance["required_modules"] != list(REQUIRED_AGENTOS_MODULES)
             or not isinstance(acceptance["modules"], list)
             or any(
@@ -1635,6 +2972,7 @@ def _functional_acceptance_summary(
             raise ScenarioEvidenceError(
                 "agentos functional acceptance does not verify every required module"
             )
+        _validate_agentos_acceptance_semantics(acceptance, challenge)
         state_inventory = agentos_raw.get("state_inventory")
         if not isinstance(state_inventory, dict):
             raise ScenarioEvidenceError(
@@ -1697,11 +3035,308 @@ def _functional_acceptance_summary(
                 "raw_source_receipt_sha256": agentos_raw["sha256"],
             }
         )
+    receipt_hashes = [receipt["module_receipt_sha256"] for receipt in boot_receipts]
+    if len(receipt_hashes) != len(set(receipt_hashes)):
+        raise ScenarioEvidenceError(
+            "agentos functional acceptance replays a module receipt across boots"
+        )
     return {
         "status": "passed",
         "required_target": "agentos",
         "required_modules": list(REQUIRED_AGENTOS_MODULES),
         "verified_boots": len(samples),
+        "boot_receipts": boot_receipts,
+    }
+
+
+def _resource_stability_summary(
+    samples: Sequence[dict[str, object]],
+) -> dict[str, object]:
+    unavailable_observation = {
+        "coverage": "configured_global_kind_counters",
+        "measured_mask_semantics": "configured_global_resource_kind_counters_only",
+        "snapshot_consistency": "not_measured",
+        "account_counters": "not_measured",
+        "rate_budgets": "not_measured",
+        "free_pages": {
+            "status": "not_measured",
+            "exact_pair_recovery": None,
+            "exact_terminal_recovery": None,
+        },
+        "resources": [
+            {
+                "kind": kind,
+                "status": "not_measured",
+                "coverage": "configured_global_counter",
+                "per_workflow_growth_bound": RESOURCE_STABILITY_GROWTH_BOUNDS[kind],
+                "terminal_growth_bound": RESOURCE_STABILITY_GROWTH_BOUNDS[kind],
+                "max_observed_per_workflow_growth": None,
+                "terminal_observed_growth": None,
+                "plateau_or_reclamation": None,
+                "exact_terminal_recovery": None,
+            }
+            for kind in RESOURCE_STABILITY_RESOURCE_KINDS
+        ],
+    }
+    presence: list[bool] = []
+    for sample in samples:
+        try:
+            targets = sample["targets"]
+            presence.extend(
+                "resource_stability" in targets[target]["raw_source_receipt"]
+                for target in ("plain", "agentos")
+            )
+        except (KeyError, TypeError) as error:
+            raise ScenarioEvidenceError(
+                "scenario resource stability lacks bound target evidence"
+            ) from error
+    if presence and not any(presence):
+        return {
+            "status": "unavailable",
+            "required_target": "agentos",
+            "measurement_scope": RESOURCE_STABILITY_MEASUREMENT_SCOPE,
+            "verified_boots": 0,
+            "load_workflows_per_boot": RESOURCE_STABILITY_LOAD_WORKFLOWS,
+            "terminal_workflows_per_boot": RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
+            "child_rounds_per_load_workflow": RESOURCE_STABILITY_CHILD_ROUNDS,
+            "global_observation": unavailable_observation,
+            "interpretation": dict(RESOURCE_STABILITY_INTERPRETATION),
+            "boot_receipts": [],
+        }
+    if not presence or not all(presence):
+        raise ScenarioEvidenceError(
+            "scenario resource stability is only partially present"
+        )
+
+    boot_receipts: list[dict[str, object]] = []
+    acceptances: list[dict[str, object]] = []
+    for sample in samples:
+        try:
+            sample_id = sample["sample_id"]
+            challenge = sample["binding"]["challenge"]
+            targets = sample["targets"]
+            plain_raw = targets["plain"]["raw_source_receipt"]
+            agentos_raw = targets["agentos"]["raw_source_receipt"]
+        except (KeyError, TypeError) as error:
+            raise ScenarioEvidenceError(
+                "scenario resource stability lacks bound target evidence"
+            ) from error
+        if not isinstance(plain_raw, dict) or not isinstance(agentos_raw, dict):
+            raise ScenarioEvidenceError(
+                "scenario resource stability lacks bound target evidence"
+            )
+        if plain_raw.get("resource_stability") != {
+            "required": False,
+            "status": "not_applicable",
+        }:
+            raise ScenarioEvidenceError(
+                "plain target has an invalid resource stability marker"
+            )
+        for target_name, raw in (("plain", plain_raw), ("agentos", agentos_raw)):
+            if not isinstance(raw, dict) or not isinstance(raw.get("sha256"), str):
+                raise ScenarioEvidenceError(
+                    f"{target_name} resource stability lacks a raw source receipt"
+                )
+            unsigned_raw = dict(raw)
+            raw_sha = unsigned_raw.pop("sha256")
+            if raw_sha != _binding_sha256(
+                unsigned_raw, "scenario-raw-source-receipt-v1"
+            ):
+                raise ScenarioEvidenceError(
+                    f"{target_name} raw source receipt binding differs"
+                )
+            if sample["binding"]["source_receipts"].get(target_name) != raw_sha:
+                raise ScenarioEvidenceError(
+                    f"{target_name} source receipt is not bound to the sample"
+                )
+
+        receipt = agentos_raw.get("resource_stability")
+        if not isinstance(receipt, dict) or set(receipt) != {
+            "required",
+            "status",
+            "path",
+            "bytes",
+            "sha256",
+            "acceptance",
+            "binding",
+        }:
+            raise ScenarioEvidenceError(
+                "agentos resource stability receipt has an invalid schema"
+            )
+        acceptance = receipt["acceptance"]
+        binding = receipt["binding"]
+        if (
+            receipt["required"] is not True
+            or receipt["status"] != "verified"
+            or receipt["path"]
+            != f"state-extracted/{RESOURCE_STABILITY_FILE}"
+            or type(receipt["bytes"]) is not int
+            or receipt["bytes"] <= 0
+            or not isinstance(receipt["sha256"], str)
+        ):
+            raise ScenarioEvidenceError(
+                "agentos resource stability receipt is not verified"
+            )
+        _validate_resource_stability_semantics(acceptance, challenge)
+        acceptances.append(acceptance)
+        state_inventory = agentos_raw.get("state_inventory")
+        if not isinstance(state_inventory, dict):
+            raise ScenarioEvidenceError(
+                "agentos resource stability lacks a state inventory"
+            )
+        inventory_entries = state_inventory.get("files", [])
+        matching_entries = [
+            entry
+            for entry in inventory_entries
+            if isinstance(entry, dict) and entry.get("path") == RESOURCE_STABILITY_FILE
+        ]
+        if len(matching_entries) != 1 or matching_entries[0] != {
+            "path": RESOURCE_STABILITY_FILE,
+            "bytes": receipt["bytes"],
+            "sha256": receipt["sha256"],
+        }:
+            raise ScenarioEvidenceError(
+                "agentos resource stability differs from the state inventory"
+            )
+        if not isinstance(binding, dict) or set(binding) != {
+            "schema",
+            "challenge",
+            "challenge_source_sha256",
+            "run_summary_sha256",
+            "state_inventory_sha256",
+            "resource_receipt_sha256",
+            "measurement_scope",
+            "sha256",
+        }:
+            raise ScenarioEvidenceError(
+                "agentos resource stability binding has an invalid schema"
+            )
+        unsigned_binding = dict(binding)
+        binding_sha = unsigned_binding.pop("sha256")
+        if (
+            binding["schema"]
+            != "agentos-task6-resource-stability-binding-v1"
+            or binding["challenge"] != challenge
+            or binding["challenge_source_sha256"]
+            != agentos_raw["challenge_source"]["sha256"]
+            or binding["run_summary_sha256"]
+            != agentos_raw["run_summary"]["sha256"]
+            or binding["state_inventory_sha256"]
+            != agentos_raw["state_inventory"]["sha256"]
+            or binding["resource_receipt_sha256"] != receipt["sha256"]
+            or binding["measurement_scope"]
+            != RESOURCE_STABILITY_MEASUREMENT_SCOPE
+            or binding_sha
+            != _binding_sha256(
+                unsigned_binding,
+                "agentos-task6-resource-stability-binding-v1",
+            )
+        ):
+            raise ScenarioEvidenceError(
+                "agentos resource stability is not bound to challenge and raw evidence"
+            )
+        boot_receipts.append(
+            {
+                "sample_id": sample_id,
+                "challenge": challenge,
+                "resource_receipt_sha256": receipt["sha256"],
+                "binding_sha256": binding_sha,
+                "raw_source_receipt_sha256": agentos_raw["sha256"],
+            }
+        )
+    receipt_hashes = [
+        receipt["resource_receipt_sha256"] for receipt in boot_receipts
+    ]
+    if len(receipt_hashes) != len(set(receipt_hashes)):
+        raise ScenarioEvidenceError(
+            "agentos resource stability replays a receipt across boots"
+        )
+    resources: list[dict[str, object]] = []
+    for resource_index, kind in enumerate(RESOURCE_STABILITY_RESOURCE_KINDS):
+        measured = all(
+            acceptance["global_policy"]["measured_mask"]
+            & (1 << resource_index)
+            for acceptance in acceptances
+        )
+        growth = (
+            [
+                workflow[f"{kind}_ordinary_used_after"]
+                + workflow[f"{kind}_reserved_used_after"]
+                - workflow[f"{kind}_ordinary_used_before"]
+                - workflow[f"{kind}_reserved_used_before"]
+                for acceptance in acceptances
+                for workflow in acceptance["workflows"]
+            ]
+            if measured
+            else []
+        )
+        terminal_growth = (
+            [
+                acceptance["workflows"][-1][f"{kind}_ordinary_used_after"]
+                + acceptance["workflows"][-1][f"{kind}_reserved_used_after"]
+                - acceptance["workflows"][0][f"{kind}_ordinary_used_before"]
+                - acceptance["workflows"][0][f"{kind}_reserved_used_before"]
+                for acceptance in acceptances
+            ]
+            if measured
+            else []
+        )
+        plateau = (
+            all(
+                _resource_stability_plateau_or_reclamation(
+                    acceptance["workflows"], kind
+                )
+                for acceptance in acceptances
+            )
+            if measured and RESOURCE_STABILITY_GROWTH_BOUNDS[kind] != 0
+            else None
+        )
+        resources.append(
+            {
+                "kind": kind,
+                "status": "measured" if measured else "not_measured",
+                "coverage": "configured_global_counter",
+                "per_workflow_growth_bound": RESOURCE_STABILITY_GROWTH_BOUNDS[kind],
+                "terminal_growth_bound": RESOURCE_STABILITY_GROWTH_BOUNDS[kind],
+                "max_observed_per_workflow_growth": max(growth)
+                if growth
+                else None,
+                "terminal_observed_growth": max(terminal_growth)
+                if terminal_growth
+                else None,
+                "plateau_or_reclamation": plateau,
+                "exact_terminal_recovery": all(
+                    value == 0 for value in terminal_growth
+                )
+                if measured
+                else None,
+            }
+        )
+    passed = all(acceptance["status"] == "verified" for acceptance in acceptances)
+    return {
+        "status": "passed" if passed else "partial",
+        "required_target": "agentos",
+        "measurement_scope": RESOURCE_STABILITY_MEASUREMENT_SCOPE,
+        "verified_boots": sum(
+            acceptance["status"] == "verified" for acceptance in acceptances
+        ),
+        "load_workflows_per_boot": RESOURCE_STABILITY_LOAD_WORKFLOWS,
+        "terminal_workflows_per_boot": RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
+        "child_rounds_per_load_workflow": RESOURCE_STABILITY_CHILD_ROUNDS,
+        "global_observation": {
+            "coverage": "configured_global_kind_counters",
+            "measured_mask_semantics": "configured_global_resource_kind_counters_only",
+            "snapshot_consistency": "single_core_irq_coherent",
+            "account_counters": "not_measured",
+            "rate_budgets": "not_measured",
+            "free_pages": {
+                "status": "measured",
+                "exact_pair_recovery": True,
+                "exact_terminal_recovery": True,
+            },
+            "resources": resources,
+        },
+        "interpretation": dict(RESOURCE_STABILITY_INTERPRETATION),
         "boot_receipts": boot_receipts,
     }
 
@@ -1748,23 +3383,66 @@ def _summarize(samples: Sequence[dict[str, object]]) -> dict[str, object]:
         "target_order_balanced": abs(order_counts["AB"] - order_counts["BA"]) <= 1,
         "paired_improvement": _paired_improvement(samples),
         "functional_acceptance": _functional_acceptance_summary(samples),
+        "resource_stability": _resource_stability_summary(samples),
         "targets": targets,
     }
 
 
+def _classify_claim(summary: dict[str, object]) -> str:
+    """Apply the same preregistered eligibility and MCID gate in both directions."""
+    try:
+        paired = summary["paired_improvement"]
+        samples = paired["samples"]
+        improvements = [sample["improvement_ms"] for sample in samples]
+        relatives = [sample["relative_improvement_percent"] for sample in samples]
+        forward_test = _joint_mcid_sign_test(improvements, relatives)
+        reverse_test = _reverse_joint_mcid_sign_test(improvements, relatives)
+        if (
+            paired["mcid_sign_test"] != forward_test
+            or paired["regression_mcid_sign_test"] != reverse_test
+        ):
+            raise ScenarioEvidenceError(
+                "paired performance directional MCID statistics differ from samples"
+            )
+        if type(paired["n"]) is not int or paired["n"] != len(samples):
+            raise ScenarioEvidenceError(
+                "paired performance sample count differs from samples"
+            )
+        eligible = (
+            paired["n"] >= MIN_SUPPORTED_BOOTS
+            and summary["target_order_balanced"] is True
+            and summary["paired_success_rate"] == 1.0
+            and min(sample["plain_ms"] for sample in samples)
+            >= MIN_BASELINE_MAKESPAN_MS
+        )
+        if not eligible:
+            return "inconclusive"
+        forward_significant = Fraction(
+            forward_test["numerator"], forward_test["denominator"]
+        ) <= Fraction(1, 40)
+        reverse_significant = Fraction(
+            reverse_test["numerator"], reverse_test["denominator"]
+        ) <= Fraction(1, 40)
+        if forward_significant and reverse_significant:
+            raise ScenarioEvidenceError(
+                "forward and reverse joint-MCID conclusions cannot both be significant"
+            )
+        if forward_significant:
+            return "supported"
+        if reverse_significant:
+            return "regressed"
+        return "inconclusive"
+    except ScenarioEvidenceError:
+        raise
+    except (KeyError, TypeError, ValueError) as error:
+        raise ScenarioEvidenceError(
+            "paired performance summary is structurally invalid"
+        ) from error
+
+
 def _supports_claim(summary: dict[str, object]) -> bool:
-    paired = summary["paired_improvement"]
-    return (
-        paired["n"] >= MIN_SUPPORTED_BOOTS
-        and summary["target_order_balanced"] is True
-        and summary["paired_success_rate"] == 1.0
-        and paired["ci_low"] >= MIN_ABSOLUTE_IMPROVEMENT_MS
-        and paired["relative_ci_low"] is not None
-        and paired["relative_ci_low"] >= MIN_RELATIVE_IMPROVEMENT_PERCENT
-        and min(sample["plain_ms"] for sample in paired["samples"])
-        >= MIN_BASELINE_MAKESPAN_MS
-        and paired["sign_test"]["p_value"] <= 0.05
-    )
+    """Compatibility predicate for callers that only need the positive claim."""
+    return _classify_claim(summary) == "supported"
 
 
 def collect_scenario(
@@ -1823,10 +3501,9 @@ def collect_scenario(
                 raise ScenarioEvidenceError("program order differs between independent boots")
             samples.append(sample)
         summary = _summarize(samples)
-        supported = _supports_claim(summary)
-        status = "supported" if supported else "inconclusive"
+        status = _classify_claim(summary)
         report = {**base, "status": status, "samples": samples, "summary": summary}
-        report["report_sha256"] = _binding_sha256(report, "scenario-report-v1")
+        report["report_sha256"] = _binding_sha256(report, REPORT_BINDING_DOMAIN)
         return report
     except (OSError, ScenarioEvidenceError, ValueError) as error:
         report = {
@@ -1840,21 +3517,21 @@ def collect_scenario(
             },
             "errors": [str(error)],
         }
-        report["report_sha256"] = _binding_sha256(report, "scenario-report-v1")
+        report["report_sha256"] = _binding_sha256(report, REPORT_BINDING_DOMAIN)
         return report
 
 
 def _write_report(path: Path, report: dict[str, object]) -> None:
-    if _is_link(path):
-        raise ScenarioEvidenceError(f"output path is link-backed: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    os.replace(temporary, path)
+    try:
+        atomic_write_bytes(
+            path,
+            (
+                json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False)
+                + "\n"
+            ).encode("utf-8"),
+        )
+    except (OSError, ValueError) as error:
+        raise ScenarioEvidenceError(f"output path is link-backed: {path}") from error
 
 
 def main(argv: Sequence[str] | None = None) -> int:

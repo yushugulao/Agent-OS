@@ -353,3 +353,4 @@
 #define SYS_fs_allocator_fault_test 556
 #define SYS_agent_audit_receipt 557
 #define SYS_kernel_work_receipt_snapshot 558
+#define SYS_agent_resource_snapshot 559

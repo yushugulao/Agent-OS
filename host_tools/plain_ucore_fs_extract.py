@@ -9,6 +9,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 if __package__:
     from .research_state_manifest import load_manifest, repo_state_names, short_name_map
@@ -791,7 +792,46 @@ def root_entries(image: bytes, sb: Superblock) -> list[tuple[int, str]]:
 
 def discover_state_inventory(
     repo_dir: Path | None,
+    expected_state_names: Iterable[str] | None = None,
+    excluded_state_names: Iterable[str] = (),
 ) -> tuple[dict[str, str], set[str] | None]:
+    if repo_dir is not None and expected_state_names is not None:
+        raise ValueError(
+            "repo_dir and expected_state_names are mutually exclusive"
+        )
+    if expected_state_names is not None:
+        names = [validate_state_name(name) for name in expected_state_names]
+        excluded = {
+            validate_state_name(name) for name in excluded_state_names
+        }
+        if not names or len(names) != len(set(names)):
+            raise ValueError(
+                "expected state inventory must be non-empty and unique"
+            )
+        expected = set(names)
+        overlap = sorted(expected & excluded)
+        if overlap:
+            raise ValueError(
+                "expected state inventory contains excluded Host state: "
+                + ", ".join(overlap)
+            )
+        excluded_aliases = {name[:DIRSIZ] for name in excluded}
+        alias_overlap = sorted(
+            name for name in expected if name[:DIRSIZ] in excluded_aliases
+        )
+        if alias_overlap:
+            raise ValueError(
+                "expected state inventory collides with excluded Host aliases: "
+                + ", ".join(alias_overlap)
+            )
+        return (
+            short_name_map(expected, excluded_names=excluded, dir_size=DIRSIZ),
+            expected,
+        )
+    if tuple(excluded_state_names):
+        raise ValueError(
+            "excluded_state_names requires expected_state_names"
+        )
     if repo_dir is None:
         return {}, None
     root = Path(__file__).resolve().parents[1]
@@ -865,12 +905,18 @@ def extract_state_files(
     *,
     scope_id: int | None = None,
     require_single_scope: bool = False,
+    expected_state_names: Iterable[str] | None = None,
+    excluded_state_names: Iterable[str] = (),
 ) -> dict[str, object]:
     if scope_id is not None and require_single_scope:
         raise ValueError("scope_id and require_single_scope are mutually exclusive")
     image = image_path.read_bytes()
     sb = read_superblock(image)
-    name_map, allowed_state_names = discover_state_inventory(repo_dir)
+    name_map, allowed_state_names = discover_state_inventory(
+        repo_dir, expected_state_names, excluded_state_names
+    )
+    manifest = load_manifest(Path(__file__).resolve().parents[1])
+    opaque_state_names = set(manifest.opaque_guest_state_files)
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted: list[str] = []
     workflow_names: set[tuple[int, str]] = set()
@@ -906,11 +952,11 @@ def extract_state_files(
         else:
             entry_scope_id = VFS_SCOPE_SYSTEM
         data = read_file(image, inode)
-        if not looks_like_state_text(data):
-            skipped_binary += 1
-            continue
         validate_state_name(short_name)
         full_name = validate_state_name(name_map.get(short_name, short_name))
+        if not looks_like_state_text(data) and full_name not in opaque_state_names:
+            skipped_binary += 1
+            continue
         if allowed_state_names is not None and full_name not in allowed_state_names:
             raise ValueError(
                 "unmanifested state filename in guest image: "
@@ -978,7 +1024,9 @@ def extract_state_files(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Extract rp_* text state files from a plain uCore fs image.")
+    parser = argparse.ArgumentParser(
+        description="Extract registered rp_* state files from a plain uCore fs image."
+    )
     parser.add_argument("--image", type=Path, required=True, help="Path to nfs/fs-copy.img.")
     parser.add_argument("--out-dir", type=Path, required=True, help="Directory for extracted rp_* state files.")
     parser.add_argument("--repo-dir", type=Path, default=None, help="Repository root for restoring long rp_* names.")

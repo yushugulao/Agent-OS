@@ -9,6 +9,34 @@ manifest.
 
 from __future__ import annotations
 
+import sys as _entry_sys
+
+
+def _isolate_direct_entry_imports() -> None:
+    """Use only interpreter-owned paths for top-level import resolution."""
+
+    if __name__ != "__main__":
+        return
+    prefixes = {
+        value.replace("\\", "/").rstrip("/").casefold()
+        for value in (
+            _entry_sys.base_prefix, _entry_sys.base_exec_prefix,
+            _entry_sys.prefix, _entry_sys.exec_prefix,
+        )
+        if value
+    }
+    _entry_sys.path[:] = [
+        value for value in _entry_sys.path
+        if value and any(
+            (normalized := value.replace("\\", "/").rstrip("/").casefold())
+            == prefix or normalized.startswith(f"{prefix}/")
+            for prefix in prefixes
+        )
+    ]
+
+
+_isolate_direct_entry_imports()
+
 import argparse
 import base64
 import hashlib
@@ -25,10 +53,69 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = str(
+        Path(tempfile.gettempdir()) / f"agentos-pycache-{os.urandom(16).hex()}"
+    )
+    if not __package__:
+        import types as _entry_types
+
+        _entry_package = _entry_types.ModuleType("host_tools")
+        _entry_package.__path__ = [str(Path(__file__).resolve().parent)]
+        _entry_package.__package__ = "host_tools"
+        sys.modules["host_tools"] = _entry_package
+        __package__ = "host_tools"
+        sys.path.append(_entry_package.__path__[0])
+
 try:
     from . import evaluation_kernel_cost as cost
+    from .evidence_delivery_contract import (
+        DeliveryContractError,
+        controlled_git_environment,
+        tracked_worktree_identity,
+    )
+    from .evidence_toolchain_attestation import (
+        EVALUATION_ARTIFACT_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_ROOTS,
+        EVALUATION_CACHE_OUTPUT_ROOTS,
+        ToolAttestationError,
+        purge_evaluation_generated_outputs,
+        verify_evaluation_source_tree,
+    )
+    from .safe_host_paths import (
+        absolute_lexical_path,
+        ensure_safe_directory,
+        path_is_link,
+        reject_link_components,
+        require_regular_file,
+        require_safe_directory,
+    )
 except ImportError:
     import evaluation_kernel_cost as cost
+    from evidence_delivery_contract import (
+        DeliveryContractError,
+        controlled_git_environment,
+        tracked_worktree_identity,
+    )
+    from evidence_toolchain_attestation import (
+        EVALUATION_ARTIFACT_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_FILES,
+        EVALUATION_BUILD_OUTPUT_ROOTS,
+        EVALUATION_CACHE_OUTPUT_ROOTS,
+        ToolAttestationError,
+        purge_evaluation_generated_outputs,
+        verify_evaluation_source_tree,
+    )
+    from safe_host_paths import (
+        absolute_lexical_path,
+        ensure_safe_directory,
+        path_is_link,
+        reject_link_components,
+        require_regular_file,
+        require_safe_directory,
+    )
 
 
 BUILDER_VERSION = cost.TRUSTED_BUILD_SCHEMA_VERSION
@@ -65,6 +152,16 @@ class CommandExecution:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class ToolIdentity:
+    name: str
+    invocation_path: Path
+    path: Path
+    recorded_path: str
+    resolved_path: str
+    sha256: str
+
+
 CommandRunner = Callable[
     [Sequence[str], Path, Mapping[str, str], int, int], CommandExecution
 ]
@@ -95,39 +192,129 @@ def _file_sha(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _is_link(path: Path) -> bool:
-    if path.is_symlink():
-        return True
-    isjunction = getattr(os.path, "isjunction", None)
-    return bool(isjunction and isjunction(path))
-
-
 def _lexical_absolute(path: Path) -> Path:
-    return Path(os.path.abspath(os.fspath(path)))
+    return absolute_lexical_path(path)
 
 
 def _inside(root: Path, candidate: Path, label: str) -> tuple[Path, str]:
-    absolute = _lexical_absolute(candidate if candidate.is_absolute() else root / candidate)
+    lexical = _lexical_absolute(candidate if candidate.is_absolute() else root / candidate)
     try:
-        relative_path = absolute.relative_to(root)
-    except ValueError as error:
+        reject_link_components(lexical)
+    except (OSError, ValueError) as error:
+        raise KernelBuildError(f"{label} is link-backed: {candidate}") from error
+    try:
+        absolute = lexical.resolve(strict=False)
+        relative_path = absolute.relative_to(root.resolve(strict=True))
+    except (OSError, ValueError) as error:
         raise KernelBuildError(f"{label} escapes the repository: {candidate}") from error
     if not relative_path.parts:
         raise KernelBuildError(f"{label} cannot be the repository root")
     relative = PurePosixPath(*relative_path.parts).as_posix()
     if any(part in {"", ".", ".."} for part in PurePosixPath(relative).parts):
         raise KernelBuildError(f"{label} is not a canonical relative path")
-    current = root
-    for part in relative_path.parts:
-        current /= part
-        if current.exists() and _is_link(current):
-            raise KernelBuildError(f"{label} is link-backed: {current}")
     return absolute, relative
 
 
 def _regular_file(path: Path, label: str) -> None:
-    if _is_link(path) or not path.is_file():
-        raise KernelBuildError(f"{label} is not a regular non-link file: {path}")
+    try:
+        require_regular_file(path)
+    except (OSError, ValueError) as error:
+        raise KernelBuildError(
+            f"{label} is not a regular non-link file: {path}"
+        ) from error
+
+
+def _safe_directory(path: Path, label: str) -> Path:
+    try:
+        return require_safe_directory(path)
+    except (OSError, ValueError) as error:
+        raise KernelBuildError(f"{label} is not a safe directory: {path}") from error
+
+
+def _ensure_directory(path: Path, label: str) -> Path:
+    try:
+        return ensure_safe_directory(path)
+    except (OSError, ValueError) as error:
+        raise KernelBuildError(f"{label} is not a safe directory: {path}") from error
+
+
+def _recorded_absolute(path: Path) -> str:
+    resolved = path.resolve()
+    return resolved.as_posix() if os.name == "nt" else str(resolved)
+
+
+def _reject_external_link_components(path: Path, label: str) -> None:
+    try:
+        reject_link_components(path)
+    except (OSError, ValueError) as error:
+        raise KernelBuildError(f"{label} is link-backed: {path}") from error
+
+
+def _resolve_toolchain(toolprefix: str) -> tuple[str, list[ToolIdentity]]:
+    if not toolprefix or any(character in toolprefix for character in "\x00\r\n"):
+        raise KernelBuildError("toolprefix must be bounded single-line text")
+    raw_prefix = Path(toolprefix)
+    if not raw_prefix.is_absolute():
+        raise KernelBuildError("toolprefix must be absolute")
+    absolute_prefix = _lexical_absolute(raw_prefix)
+    prefix = absolute_prefix.as_posix() if os.name == "nt" else str(absolute_prefix)
+    identities: list[ToolIdentity] = []
+    for name in cost.TRUSTED_BUILD_TOOL_NAMES:
+        base = Path(str(absolute_prefix) + name)
+        candidates = [base]
+        if os.name == "nt":
+            candidates.append(Path(str(base) + ".exe"))
+        existing = [candidate for candidate in candidates if candidate.exists()]
+        if len(existing) != 1:
+            raise KernelBuildError(
+                f"toolprefix must resolve exactly one {name} executable"
+            )
+        candidate = existing[0]
+        _reject_external_link_components(candidate.parent, f"toolchain {name} parent")
+        _regular_file(candidate, f"toolchain {name} invocation")
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as error:
+            raise KernelBuildError(f"toolchain {name} cannot be resolved") from error
+        _regular_file(resolved, f"resolved toolchain {name}")
+        identities.append(
+            ToolIdentity(
+                name,
+                candidate,
+                resolved,
+                candidate.absolute().as_posix() if os.name == "nt" else str(candidate.absolute()),
+                _recorded_absolute(resolved),
+                _file_sha(resolved),
+            )
+        )
+    return prefix, identities
+
+
+def _require_tool_hashes(
+    make_tool: Path,
+    make_sha256: str,
+    toolchain: Sequence[ToolIdentity],
+) -> None:
+    _regular_file(make_tool, "make tool")
+    if _file_sha(make_tool) != make_sha256:
+        raise KernelBuildError("make tool changed during the kernel build")
+    for item in toolchain:
+        _regular_file(item.invocation_path, f"toolchain {item.name} invocation")
+        try:
+            current_target = item.invocation_path.resolve(strict=True)
+        except OSError as error:
+            raise KernelBuildError(
+                f"toolchain {item.name} invocation cannot be resolved"
+            ) from error
+        if current_target != item.path:
+            raise KernelBuildError(
+                f"toolchain {item.name} link target changed during the kernel build"
+            )
+        _regular_file(item.path, f"toolchain {item.name}")
+        if _file_sha(item.path) != item.sha256:
+            raise KernelBuildError(
+                f"toolchain {item.name} changed during the kernel build"
+            )
 
 
 def _git(root: Path, arguments: Sequence[str], maximum: int = 1024 * 1024) -> bytes:
@@ -135,7 +322,8 @@ def _git(root: Path, arguments: Sequence[str], maximum: int = 1024 * 1024) -> by
     environment.update({"LANG": "C", "LC_ALL": "C"})
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), *arguments],
+            ["git", "-c", "core.fsmonitor=false", "-c",
+             "core.untrackedCache=false", "-C", str(root), *arguments],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -155,7 +343,7 @@ def _git(root: Path, arguments: Sequence[str], maximum: int = 1024 * 1024) -> by
     return result.stdout
 
 
-def _repository_state(root: Path) -> tuple[str, str]:
+def _repository_state(root: Path) -> tuple[str, str, bool]:
     try:
         commit = _git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
             "ascii", errors="strict"
@@ -167,16 +355,78 @@ def _repository_state(root: Path) -> tuple[str, str]:
         raise KernelBuildError("repository state is not canonical text") from error
     if cost.COMMIT_RE.fullmatch(commit) is None:
         raise KernelBuildError("repository HEAD is not a canonical commit")
-    return commit, status
+    try:
+        tracked_clean, _tracked_digest = tracked_worktree_identity("git", root)
+    except DeliveryContractError as error:
+        raise KernelBuildError(
+            f"tracked source identity is unsafe: {error}"
+        ) from error
+    return commit, status, tracked_clean
 
 
 def _require_same_clean_head(root: Path, expected_commit: str | None = None) -> str:
-    commit, status = _repository_state(root)
-    if status:
+    commit, status, tracked_clean = _repository_state(root)
+    if status or not tracked_clean:
         raise KernelBuildError("repository must be clean, including untracked files")
     if expected_commit is not None and commit != expected_commit:
         raise KernelBuildError("repository HEAD changed during the kernel build")
     return commit
+
+
+def _source_gate(
+    root: Path, commit: str, evidence_root_relative: str, stage: str
+) -> None:
+    git_name = shutil.which("git")
+    if git_name is None:
+        raise KernelBuildError("Git executable is unavailable")
+    git = Path(git_name)
+    _regular_file(git, "Git executable")
+    git = git.resolve(strict=True)
+    roots = (
+        *EVALUATION_BUILD_OUTPUT_ROOTS,
+        *EVALUATION_CACHE_OUTPUT_ROOTS,
+        evidence_root_relative,
+    )
+    try:
+        verify_evaluation_source_tree(
+            git,
+            root,
+            root,
+            commit,
+            controlled_git_environment(),
+            allowed_output_roots=roots,
+            allowed_output_files=(
+                *EVALUATION_BUILD_OUTPUT_FILES,
+                *EVALUATION_ARTIFACT_OUTPUT_FILES,
+            ),
+            stage=stage,
+        )
+    except (OSError, ToolAttestationError) as error:
+        raise KernelBuildError(f"kernel build source gate failed {stage}: {error}") from error
+
+
+def _purge_build_outputs(root: Path, commit: str) -> None:
+    git_name = shutil.which("git")
+    if git_name is None:
+        raise KernelBuildError("Git executable is unavailable")
+    git = Path(git_name)
+    _regular_file(git, "Git executable")
+    git = git.resolve(strict=True)
+    try:
+        purge_evaluation_generated_outputs(
+            git,
+            root,
+            root,
+            commit,
+            controlled_git_environment(),
+            output_roots=(
+                *EVALUATION_BUILD_OUTPUT_ROOTS,
+                *EVALUATION_CACHE_OUTPUT_ROOTS,
+            ),
+            output_files=EVALUATION_BUILD_OUTPUT_FILES,
+        )
+    except (OSError, ToolAttestationError) as error:
+        raise KernelBuildError(f"kernel build output purge failed: {error}") from error
 
 
 def _require_tracked(root: Path, relative: str, label: str) -> None:
@@ -219,12 +469,13 @@ class _RepositoryLock(AbstractContextManager["_RepositoryLock"]):
             raise KernelBuildError("git lock path is not UTF-8") from error
         candidate = Path(value)
         self.path = _lexical_absolute(candidate if candidate.is_absolute() else root / candidate)
-        if self.path.exists() and _is_link(self.path):
-            raise KernelBuildError("kernel build lock is link-backed")
+        _reject_external_link_components(self.path, "kernel build lock")
         self.handle: Any = None
 
     def __enter__(self) -> "_RepositoryLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_directory(self.path.parent, "kernel build lock parent")
+        if path_is_link(self.path):
+            raise KernelBuildError("kernel build lock is link-backed")
         self.handle = self.path.open("a+b")
         self.handle.seek(0)
         if self.handle.read(1) == b"":
@@ -355,12 +606,13 @@ def _run_command(
         )
 
 
-def _fixed_environment(commit_epoch: str) -> dict[str, str]:
+def _fixed_environment(commit_epoch: str, toolprefix: str) -> dict[str, str]:
     environment: dict[str, str] = {
         "LANG": "C",
         "LC_ALL": "C",
         "PYTHONHASHSEED": "0",
         "SOURCE_DATE_EPOCH": commit_epoch,
+        "TOOLPREFIX": toolprefix,
         "TZ": "UTC",
     }
     # Only process-discovery and OS bootstrap variables are inherited.  Build
@@ -410,7 +662,9 @@ def _first_line(raw: bytes, label: str) -> str:
 
 
 def _write(path: Path, raw: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_directory(path.parent, "build evidence parent")
+    if path_is_link(path):
+        raise KernelBuildError(f"build evidence output is link-backed: {path}")
     with path.open("xb") as handle:
         handle.write(raw)
         handle.flush()
@@ -426,6 +680,7 @@ def build_evidence(
     config_path: Path,
     repository_root: Path,
     make_tool: Path,
+    toolprefix: str,
     run_id: str,
     output_dir: Path,
     evidence_root: Path | None = None,
@@ -435,16 +690,16 @@ def build_evidence(
 
     if cost.ID_RE.fullmatch(run_id) is None:
         raise KernelBuildError("run id is not a canonical identifier")
-    root = _lexical_absolute(repository_root)
-    if _is_link(root) or not root.is_dir():
-        raise KernelBuildError("repository root must be a regular non-link directory")
+    root = _safe_directory(
+        _lexical_absolute(repository_root), "repository root"
+    ).resolve(strict=True)
     config_absolute, config_relative = _inside(root, config_path, "kernel cost config")
     if config_relative != "ci/evaluation-kernel-cost.json":
         raise KernelBuildError("kernel cost config must use the fixed committed path")
     output_absolute, output_relative = _inside(root, output_dir, "output directory")
-    portable_root = root if evidence_root is None else _lexical_absolute(evidence_root)
-    if _is_link(portable_root) or not portable_root.is_dir():
-        raise KernelBuildError("evidence root must be an existing non-link directory")
+    portable_root = root if evidence_root is None else _safe_directory(
+        _lexical_absolute(evidence_root), "evidence root"
+    ).resolve(strict=True)
     try:
         portable_root.relative_to(root)
         portable_output_relative = output_absolute.relative_to(portable_root)
@@ -457,8 +712,14 @@ def build_evidence(
         raise KernelBuildError("output directory is not canonical within the evidence root")
     if output_absolute.exists():
         raise KernelBuildError("output directory already exists")
-    if output_absolute.parent.exists() and _is_link(output_absolute.parent):
-        raise KernelBuildError("output directory parent is link-backed")
+    if portable_root == root:
+        gate_root_path = output_absolute.relative_to(root)
+    else:
+        gate_root_path = portable_root.relative_to(root)
+    evidence_gate_root = PurePosixPath(*gate_root_path.parts).as_posix()
+    if not evidence_gate_root or evidence_gate_root == ".":
+        raise KernelBuildError("kernel build evidence root must be below the repository")
+    _reject_external_link_components(output_absolute.parent, "output directory parent")
     _regular_file(config_absolute, "kernel cost config")
     config, config_raw = cost.load_config(config_absolute)
     _require_ignored(root, output_relative)
@@ -467,31 +728,46 @@ def build_evidence(
     _regular_file(tool_lexical, "make tool")
     tool = tool_lexical.resolve()
     _regular_file(tool, "resolved make tool")
+    make_sha256 = _file_sha(tool)
+    recorded_toolprefix, toolchain_identities = _resolve_toolchain(toolprefix)
 
     by_role = {target["role"]: target for target in config["targets"]}
     for role, expected in EXPECTED_TARGETS.items():
         if by_role[role]["required_relative_path"] != expected["path"]:
             raise KernelBuildError(f"{role} target path is not the fixed trusted path")
     _require_tracked(root, config_relative, "kernel cost config")
-    for relative in ("Makefile", "baseline_ucore/Makefile"):
+    for relative in (
+        "Makefile",
+        "baseline_ucore/Makefile",
+        "ci/kernel-budgets.json",
+        "scripts/check-kernel-budgets.py",
+        "scripts/probes/struct-proc-size.c",
+        "scripts/check-user-stack-usage.py",
+        "user_stack_policy.h",
+        "user/Makefile",
+    ):
         path, canonical = _inside(root, Path(relative), f"{relative} build input")
         _regular_file(path, f"{relative} build input")
         _require_tracked(root, canonical, f"{relative} build input")
 
     with _RepositoryLock(root):
         commit = _require_same_clean_head(root)
+        _source_gate(root, commit, evidence_gate_root, "before trusted purge")
+        _purge_build_outputs(root, commit)
+        _source_gate(root, commit, evidence_gate_root, "after trusted purge")
         commit_epoch = _git(root, ["show", "-s", "--format=%ct", commit], 4096).decode(
             "ascii", errors="strict"
         ).strip()
         if not commit_epoch.isdigit():
             raise KernelBuildError("commit timestamp is invalid")
-        environment = _fixed_environment(commit_epoch)
+        _require_tool_hashes(tool, make_sha256, toolchain_identities)
+        environment = _fixed_environment(commit_epoch, recorded_toolprefix)
         environment_sha = _bytes_sha(cost._canonical_json(environment))
         commands: list[dict[str, Any]] = []
 
-        version_argv = [str(tool), "--version"]
+        make_version_argv = [str(tool), "--version"]
         version_execution = runner(
-            version_argv,
+            make_version_argv,
             root,
             environment,
             COMMAND_TIMEOUT_SECONDS,
@@ -499,17 +775,62 @@ def build_evidence(
         )
         commands.append(
             _command_record(
-                0, "builder", "make_version", ".", version_argv,
+                0, "builder", "make_version", ".", make_version_argv,
                 version_execution, environment_sha
             )
         )
         if version_execution.error is not None or version_execution.returncode != 0:
             raise KernelBuildError("make --version did not complete successfully")
         make_version = _first_line(version_execution.stdout, "make")
+        _require_tool_hashes(tool, make_sha256, toolchain_identities)
         _require_same_clean_head(root, commit)
 
-        target_receipts: list[dict[str, Any]] = []
+        toolchain_records: list[dict[str, Any]] = []
         sequence = 1
+        for identity in toolchain_identities:
+            version_argv = [identity.recorded_path, "--version"]
+            execution = runner(
+                version_argv,
+                root,
+                environment,
+                COMMAND_TIMEOUT_SECONDS,
+                MAX_COMMAND_OUTPUT_BYTES,
+            )
+            commands.append(
+                _command_record(
+                    sequence,
+                    "toolchain",
+                    f"{identity.name}_version",
+                    ".",
+                    version_argv,
+                    execution,
+                    environment_sha,
+                )
+            )
+            sequence += 1
+            if execution.error is not None or execution.returncode != 0:
+                raise KernelBuildError(
+                    f"toolchain {identity.name} --version did not complete successfully"
+                )
+            toolchain_records.append(
+                {
+                    "name": identity.name,
+                    "path": identity.recorded_path,
+                    "resolved_path": identity.resolved_path,
+                    "sha256": identity.sha256,
+                    "version_argv": version_argv,
+                    "version": _first_line(execution.stdout, identity.name),
+                }
+            )
+            _require_tool_hashes(tool, make_sha256, toolchain_identities)
+            _require_same_clean_head(root, commit)
+        toolchain_sha = _bytes_sha(
+            cost._canonical_json(
+                {"prefix": recorded_toolprefix, "tools": toolchain_records}
+            )
+        )
+
+        target_receipts: list[dict[str, Any]] = []
         for configured_target in config["targets"]:
             role = configured_target["role"]
             specification = EXPECTED_TARGETS[role]
@@ -529,6 +850,7 @@ def build_evidence(
                     command_cwd = root
                 else:
                     command_cwd = cwd
+                argv.append(f"TOOLPREFIX={recorded_toolprefix}")
                 argv.append(make_target)
                 execution = runner(
                     argv,
@@ -554,7 +876,14 @@ def build_evidence(
                         f"{target_id} {phase} failed with return code "
                         f"{execution.returncode!r} ({execution.error or 'no execution error'})"
                     )
+                _require_tool_hashes(tool, make_sha256, toolchain_identities)
                 _require_same_clean_head(root, commit)
+                _source_gate(
+                    root,
+                    commit,
+                    evidence_gate_root,
+                    f"after {target_id} {phase}",
+                )
                 if phase == "clean" and target_path.exists():
                     raise KernelBuildError(f"{target_id} clean left a stale kernel artifact")
             _regular_file(target_path, f"{target_id} kernel")
@@ -567,6 +896,65 @@ def build_evidence(
                     "command_argv": commands[-1]["argv"],
                 }
             )
+
+        treatment_id = by_role["treatment"]["id"]
+        guardrail_commands = [
+            {
+                "id": "struct_proc_bytes",
+                "target_id": treatment_id,
+                "phase": "kernel_budget",
+                "argv": [
+                    str(tool),
+                    f"TOOLPREFIX={recorded_toolprefix}",
+                    "kernel-budget-check",
+                ],
+            },
+            {
+                "id": "user_stack_call_path_bytes",
+                "target_id": treatment_id,
+                "phase": "user_stack",
+                "argv": [
+                    str(tool),
+                    f"TOOLPREFIX={recorded_toolprefix}",
+                    "user-stack-check",
+                ],
+            },
+        ]
+        for guardrail in guardrail_commands:
+            execution = runner(
+                guardrail["argv"],
+                root,
+                environment,
+                COMMAND_TIMEOUT_SECONDS,
+                MAX_COMMAND_OUTPUT_BYTES,
+            )
+            commands.append(
+                _command_record(
+                    sequence,
+                    guardrail["target_id"],
+                    guardrail["phase"],
+                    ".",
+                    guardrail["argv"],
+                    execution,
+                    environment_sha,
+                )
+            )
+            sequence += 1
+            if execution.error is not None or execution.returncode != 0:
+                raise KernelBuildError(
+                    f"{guardrail['id']} check failed with return code "
+                    f"{execution.returncode!r} "
+                    f"({execution.error or 'no execution error'})"
+                )
+            _require_tool_hashes(tool, make_sha256, toolchain_identities)
+            _require_same_clean_head(root, commit)
+            _source_gate(
+                root,
+                commit,
+                evidence_gate_root,
+                f"after {guardrail['id']}",
+            )
+
         _require_same_clean_head(root, commit)
         for target in target_receipts:
             final_path, _ = _inside(
@@ -589,10 +977,12 @@ def build_evidence(
             "git": git_version,
             "make": make_version,
             "make_path": str(tool),
-            "make_sha256": _file_sha(tool),
+            "make_sha256": make_sha256,
             "platform": platform.platform(),
             "python": platform.python_version(),
             "source_date_epoch": commit_epoch,
+            "toolchain_identity_sha256": toolchain_sha,
+            "toolchain_prefix": recorded_toolprefix,
         }
         environment_manifest = {
             "schema_version": 1,
@@ -616,9 +1006,14 @@ def build_evidence(
             },
             "make_tool": {
                 "path": str(tool),
-                "sha256": _file_sha(tool),
-                "version_argv": version_argv,
+                "sha256": make_sha256,
+                "version_argv": make_version_argv,
                 "version": make_version,
+            },
+            "toolchain": {
+                "prefix": recorded_toolprefix,
+                "identity_sha256": toolchain_sha,
+                "tools": toolchain_records,
             },
             "command_policy": {
                 "timeout_seconds": COMMAND_TIMEOUT_SECONDS,
@@ -632,18 +1027,28 @@ def build_evidence(
                     "role": target["role"],
                     "path": target["required_relative_path"],
                     "clean_argv": (
-                        [str(tool), "-C", "baseline_ucore", "clean"]
+                        [
+                            str(tool), "-C", "baseline_ucore",
+                            f"TOOLPREFIX={recorded_toolprefix}", "clean",
+                        ]
                         if target["role"] == "baseline"
-                        else [str(tool), "clean"]
+                        else [str(tool), f"TOOLPREFIX={recorded_toolprefix}", "clean"]
                     ),
                     "build_argv": (
-                        [str(tool), "-C", "baseline_ucore", "build/kernel"]
+                        [
+                            str(tool), "-C", "baseline_ucore",
+                            f"TOOLPREFIX={recorded_toolprefix}", "build/kernel",
+                        ]
                         if target["role"] == "baseline"
-                        else [str(tool), "build/kernel"]
+                        else [
+                            str(tool), f"TOOLPREFIX={recorded_toolprefix}",
+                            "build/kernel",
+                        ]
                     ),
                 }
                 for target in config["targets"]
             ],
+            "guardrail_commands": guardrail_commands,
         }
         build_config_raw = _canonical_json(build_config)
         build_log = {
@@ -652,6 +1057,7 @@ def build_evidence(
             "run_id": run_id,
             "source_commit": commit,
             "environment_sha256": environment_sha,
+            "toolchain_sha256": toolchain_sha,
             "commands": commands,
         }
         build_log_raw = _canonical_json(build_log)
@@ -665,6 +1071,7 @@ def build_evidence(
             "run_id": run_id,
             "source_commit": commit,
             "environment_sha256": _bytes_sha(environment_raw),
+            "toolchain_sha256": toolchain_sha,
             "build_config": _receipt(build_config_relative, build_config_raw),
             "build_log": _receipt(build_log_relative, build_log_raw),
             "targets": target_receipts,
@@ -679,9 +1086,7 @@ def build_evidence(
         cost.validate_trusted_build_log(build_log, build_config, manifest)
         cost.validate_trusted_build_environment(environment_manifest, build_config)
 
-        output_absolute.parent.mkdir(parents=True, exist_ok=True)
-        if _is_link(output_absolute.parent):
-            raise KernelBuildError("output directory parent became link-backed")
+        _ensure_directory(output_absolute.parent, "output directory parent")
         stage = Path(
             tempfile.mkdtemp(prefix=f".{output_absolute.name}.tmp-", dir=output_absolute.parent)
         )
@@ -697,11 +1102,14 @@ def build_evidence(
             shutil.rmtree(stage, ignore_errors=True)
             raise
 
+        _source_gate(root, commit, evidence_gate_root, "after evidence publication")
+
     return {
         "source_commit": commit,
         "output_dir": str(output_absolute),
         "environment_manifest": environment_relative,
         "build_manifest": f"{portable_output}/kernel-build.json",
+        "toolchain_sha256": toolchain_sha,
         "targets": target_receipts,
     }
 
@@ -715,6 +1123,11 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--config", required=True, type=Path)
     build.add_argument("--repository-root", required=True, type=Path)
     build.add_argument("--make-tool", required=True, type=Path)
+    build.add_argument(
+        "--toolprefix",
+        required=True,
+        help="absolute RISC-V prefix, for example /usr/bin/riscv64-linux-gnu-",
+    )
     build.add_argument("--run-id", required=True)
     build.add_argument("--output-dir", required=True, type=Path)
     build.add_argument("--evidence-root", type=Path)
@@ -728,6 +1141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config_path=args.config,
             repository_root=args.repository_root,
             make_tool=args.make_tool,
+            toolprefix=args.toolprefix,
             run_id=args.run_id,
             output_dir=args.output_dir,
             evidence_root=args.evidence_root,

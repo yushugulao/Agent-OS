@@ -331,25 +331,62 @@ make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
 实验分支把“采集、验证、展示”拆成独立入口，避免页面或旧结果反向成为性能证据：
 
 ```bash
+make evaluation-doctor
 make evaluation-smoke
 make evaluation-run EVALUATION_BOOTS=7 TOOLPREFIX=riscv64-linux-gnu-
 make evaluation-verify
 make evaluation-kernel-cost TOOLPREFIX=riscv64-linux-gnu-
+make evaluation-full-verify TOOLPREFIX=riscv64-linux-gnu-
 make evaluation-dashboard
 make evaluation-package
 make evaluation-package-development EVALUATION_RUN_DIR=<run-dir> EVALUATION_BUNDLE_DIR=<output-dir>
-make evaluation-package-verify EVALUATION_BUNDLE_DIR=evidence/evaluation-releases/<run-id>
+make evaluation-package-verify EVALUATION_BUNDLE_DIR=evidence/releases/evaluation-<run-id>
 ```
 
-`evaluation-run` 只允许在 clean commit 上运行，并分别预检微基准与科研场景实际执行域中的 QEMU、交叉工具链和 shell。关键工具以绝对路径、版本和 SHA256 写入清单，每个 boot 前后重新核验；campaign 还绑定创建时的仓库相对 artifact root，拒绝仅后缀相同的外部日志或镜像。默认正式评价包含 7 次独立的同内核微基准 boot，以及 7 轮 Plain/AgentOS 科研场景配对（共 14 次场景 QEMU 启动），所以耗时明显长于普通回归。微基准使用唯一非零 64-bit challenge；场景使用另一组唯一 `ch-<12 digits>` 输入，并跨 boot 交替 Plain→AgentOS 与 AgentOS→Plain。两套 challenge、顺序和规范命令都在第一次 QEMU 启动前写入 plan。整轮采集先取得 `git-common-dir` 下独立的 campaign 锁，不同 worktree 的正式评价因此串行；每个 build/QEMU/archive 阶段再取得现有 repo 锁，并在锁内复检计划状态、clean HEAD、工具身份，清空本轮日志以及归档 Guest/runner 日志、内核和运行前后文件系统镜像。这些 Host 复核位于 Guest 计时窗口之外。微基准单 boot 默认总期限为 900 秒，可用 `EVALUATION_MICRO_TIMEOUT=60..3600` 调整；超时会终止该 boot 的进程组、保留部分日志并把 manifest 标为失败。正式采集期间仍不得从不遵守这些锁的外部终端并发构建同一 worktree。任何 boot 失败都会保留当次材料并使采集失败，不会删除失败样本或补零。仅开发接线时可显式设置 `EVALUATION_INCLUDE_SCENARIO=0`；这种运行的任务六状态必须是未测量，不能用于正式结论。
+正式采集只接受一个完整 POSIX 执行域：原生 Linux、由 Windows Host 指定并验证的
+`EVALUATION_WSL_DISTRO`，或通过严格运行时证明的原生 MSYS2。Windows/WSL 入口会先在
+该发行版内用 `wslpath` 确认仓库映射，
+检查 Python 3.10+、RISC-V gcc/binutils/size、QEMU `virt`、Make、Bash、timeout、
+readlink 和 sha256sum，再把 `run`、`verify`、成本、Dashboard 与打包整体重新执行到
+同一个 WSL 域；不会再用 Windows 原生工具跑 micro、再用 WSL 跑科研场景。旧版 WSL
+没有 `wsl --version` 时不误判失败，但仍绑定 `wsl.exe` 文件 SHA256，并要求指定发行版
+完成全部动态探测。Windows 可用
+`EVALUATION_WSL_TOOLPREFIX` 和 `EVALUATION_WSL_QEMU` 指定发行版内的工具名。
 
-`evaluation-verify` 从原始日志重算 workload challenge、Task 1-5 动态功能回执、结果等价性、每 boot 聚合和跨 boot 配对统计；只有合同验证通过才产生 summary。三个机制 headline 作为同一预注册假设族，以 Bonferroni 将 `0.05` 的族错误率分配为每项 `0.05/3`，且每项必须让全部负载共同过门。`evaluation-dashboard` 不只检查 summary：它还读取每个 canonical evidence path，复核文件 SHA256、字节数和 marker 行摘要，并重放原始合同，生成确定性的 `dashboard-verification.json`；科研场景页展示最终 parent 验收在内的 cold-start、逐程序时间、四类功能模块和预注册关键 outcome。成本 sidecar 完整时另显示 ELF/text/data/BSS；缺一项则 fail closed。完整方法、赛题任务映射、统计门和不可外推边界见 [AgentOS 竞赛评价方法](docs/evaluation.md)。这组实验入口暂不改变既有远端 1 Host + 8 QEMU attestation 拓扑。
+当 WSL 服务不可用时，正式入口也可在完整 MSYS2 环境中运行，但这不是放宽为 Git
+Bash、Cygwin 或 Windows Python。预检联合要求 `os.name=posix`、MSYS2 Python 实际报告的
+`sys.platform=cygwin`、`MSYSTEM=MSYS` 与 `MSYS_NT-*` kernel，并显式拒绝
+`CYGWIN_NT-*`、MINGW runtime 和混合 Python。它绑定 `uname`/Windows build、
+`msys-2.0.dll`、`cygpath`、Host objdump 及全部构建/QEMU 工具的绝对 POSIX 路径和
+SHA256，验证控制面程序实际导入该 MSYS runtime，并对仓库、工具和临时目录执行
+POSIX/Windows namespace 往返核对。`run`、`verify`、成本、Dashboard 和 package 都会
+整体重入同一个 `env -i`；内层重新散列工具并校验环境 allowlist，不会只相信可伪造的
+marker。MSYS2 正式 campaign 在清单中记录 `execution_domain=native-msys2`，科研场景记录
+`native-msys2-clean-shell`，并把完整 platform proof 封入 campaign、在每个 boot 前复核
+runtime 与工具文件。中文仓库路径使用固定 `C.UTF-8` locale；原生 Linux/WSL
+仍保持原来的 `C` locale 合同。
 
-`evaluation-package` 默认只生成 `formal` profile：它在再次执行 campaign、场景和统计复验后，把 suite、plan、全部 raw 工件、metrics、summary 与离线 Dashboard 复制到 `evidence/evaluation-releases/<run-id>/`，要求 scenario preflight、已封存的场景 plan/report 和 Task 1-6 动态功能验收全部通过，再生成严格 manifest、逐文件大小/SHA256、按 boot 标识的工件回执和 checksum 清单，并立即在临时位置进行可搬运复验后再原子发布。若已运行 `evaluation-kernel-cost`，可信构建 sidecar、成本报告和 Dashboard fragment 必须完整出现并通过 portable 重放；部分组合会失败。未知顶层文件、symlink/junction 或链接祖先、路径逃逸、缺失/多余 raw 数据、Dashboard 重放差异或任一 hash 变化都会失败。仅调试接线时可显式运行 `scripts/package-evaluation-evidence.sh create <run-dir> <output-dir> --development`；这会把不可冒充正式证据的醒目警告永久写入 manifest。包生成后应作为独立 evidence commit 纳入仓库；没有实际 QEMU campaign 和已提交 formal bundle 时，只能说评价机制就绪，不能宣称新性能结论已经成立。
+platform proof v2 在 Linux、WSL 和 MSYS2 中统一从 `/proc/cpuinfo`、`/proc/meminfo`
+记录 CPU model、logical CPU count 和总内存，明确忽略会随负载变化的 `cpu MHz`。这些
+字段由 `campaign_sha256` 覆盖并在每个 QEMU boot 前重验；缺项或畸形输入直接失败。
+科研场景 plan schema v3 也绑定同一 platform proof 及其 canonical SHA256，并在每轮 pair 前后
+重验，不能把 micro 结果带到另一台机器继续采集场景。
+公开 proof 不保存 hostname，MSYS 只保留复现实验所需的 Windows build、kernel 和
+machine 信息。
+
+`evaluation-run` 只允许在 clean commit 上运行，并分别预检微基准与科研场景实际执行域中的 QEMU、交叉工具链和 shell。formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`；各组 challenge、AB/BA 顺序和规范命令由源码提交 C 确定性派生，因此不同 clone 对同一 C 得到同一计划。失败目录保留且同一输出根不会覆盖，但在没有受保护远端 Runner 时，本地机制不能证明其他 clone 从未执行或丢弃过一次尝试。关键工具以绝对路径、版本和 SHA256 写入清单，每个 boot 前后重新核验；campaign 还绑定创建时的仓库相对 artifact root，拒绝仅后缀相同的外部日志或镜像。首个 QEMU 前生成 run plan schema v2、scenario plan schema v3 和版本化 `measurement-source-receipt.json`，绑定停止规则、顺序、完整 Guest 测量源码清单及评价控制面策略清单；每个 boot 前后重验源码，package 快照还必须与 C 中相应 Git blob 一致。
+
+默认正式评价恰好包含 7 次同内核机制微基准 boot、7 轮 Plain/AgentOS 传统兼容路径配对和 7 轮 Plain/AgentOS 科研场景配对，总计 35 次 QEMU 启动，因此耗时明显长于普通回归。微基准使用唯一非零 64-bit challenge；兼容路径与场景使用由提交派生的独立 challenge，并跨 boot 交替 Plain→AgentOS 与 AgentOS→Plain。整轮采集先取得 `git-common-dir` 下独立的 campaign 锁，不同 worktree 的正式评价因此串行；每个 build/QEMU/archive 阶段再取得现有 repo 锁，并在锁内复检计划状态、clean HEAD、工具身份，清空本轮日志以及归档 Guest/runner 日志、内核和运行前后文件系统镜像。这些 Host 复核位于 Guest 计时窗口之外。微基准单 boot 默认总期限为 900 秒，可用 `EVALUATION_MICRO_TIMEOUT=60..3600` 调整。科研场景的 `EVALUATION_SCENARIO_TIMEOUT` 是每个目标的 runner 基础预算：clean、build、guest 三阶段各使用 `T+30` 秒，目标清理另留 10 秒；一轮 Plain/AgentOS 配对的 Host 硬期限严格派生为 `2 * (3 * (T + 30) + 10) + 60` 秒，默认 `T=600` 时为 3860 秒。任一外层期限到达都会终止进程组、保留部分日志并把 manifest 标为失败。正式采集期间仍不得从不遵守这些锁的外部终端并发构建同一 worktree。任何 boot 失败都会保留当次材料并使采集失败，不会删除失败样本或补零。仅开发接线时可显式设置 `EVALUATION_INCLUDE_SCENARIO=0`；这种运行的任务六和兼容成本状态必须是未测量，不能用于正式结论。
+
+`evaluation-verify` 从原始日志重算 workload challenge、Task 1-5 动态功能回执、Task6 v3 challenge receipt、结果等价性、每 boot 聚合和跨 boot 配对统计；只有合同验证通过才产生 summary。Task 2 的正式合同逐项解析版本化工具目录，只固定赛题必需的 core subset，不固定合法目录总数或可调用项总数；新增合法工具不会使验收失效，重复 ID/name、错误 schema 及被失真的 unknown/mismatch/duplicate/wrong-type 状态与诊断则 fail closed。Task 3 必须由至少六次连续生产 `agent_run` 自动形成 Context，随后执行 rollback 和新的真实工具调用；Host 独立重建 challenge 绑定的序列、path parent 与结果语义。Task 4 使用同一批 challenge 绑定真实文件：竞赛主对照 `file_query_path_index` 对预注册 corpus 的全部 N 条路径逐一执行 open/read/fstat/close 和属性检查，再与 ready index 比较；原 512 槽 metadata 扫描保留为 `file_query_table_ablation`，只解释内核机制，不能代替题面对照。suite 的 `execution_schedule` 同时固定 Guest 的 union-load 物理 marker 顺序，Host 拒绝漏项、重复、重排或与 dispatcher 不一致的日志。四个机制 headline 作为同一预注册假设族，以 Bonferroni 将 `0.05` 的族错误率分配为每项 `0.05/4`，且每项必须让全部负载共同过门。每个 micro boot 只有同时严格超过 5 us 和 5% 才算 joint-MCID win。Task6 的有符号差值固定为 Plain-AgentOS，正向同时越过 10 ms/5% 记 win，反向同时越过 -10 ms/-5% 记 loss；两个方向共用 `0.05` family，Bonferroni 后各 `0.025`，均以完整 boot 数做精确二项上尾。正向通过为 `supported`，反向通过为 `regressed`，都未通过才是 `inconclusive`；回退证据可诚实打包，但 `competition_ready=false`。scenario report 首发即为 schema v2，此前没有 v1 formal release。bootstrap 区间只作描述；任务六还要求 Plain 基线至少 50 ms，并明确只支持 full-stack 场景结论，不归因给单一机制，也不声称控制了宿主页缓存。`evaluation-dashboard` 不只检查 summary：它还读取每个 canonical evidence path，复核文件 SHA256、字节数和 marker 行摘要，并重放原始合同，生成确定性的 `dashboard-verification.json`；科研场景页显式展示 signed delta、正反 MCID、胜负数和统计结论，以及最终 parent 验收在内的 cold-start、逐程序时间、四类功能模块和预注册关键 outcome。成本 sidecar 完整时另显示 ELF/text/data/BSS；缺一项则 fail closed。完整方法、赛题任务映射、统计门和不可外推边界见 [AgentOS 竞赛评价方法](docs/evaluation.md)。这组实验入口暂不改变既有远端 1 Host + 8 QEMU attestation 拓扑。
+
+Task 1-5 的功能 receipt 还受版本化 token 源码合同约束：它封闭 launcher、关键 syscall、动态结果槽、semantic/hash 与打印出口，删除真实调用、常量替换、断开 def-use、新增伪造 sink 或提前退出的 mutation 均 fail closed。合同同时绑定 Guest include 根、syscall/`ecall`、Make 与镜像选择链，以及可能伪造 syscall 结果或 console 输出的完整受管内核源码；构建统一使用 `make -rR -f Makefile`，影子/预编译头、备用 GNUmakefile、隐式 Makefile 重建和已知预处理差异也会被拒绝。其保证边界是当前受管源码闭包与已注册典型 mutation，不是对任意恶意 C 混淆或外部编译器供应链的形式化证明。功能结论仍要求实际 QEMU 日志和 Host 独立复算同时通过，源码合同本身不能冒充运行证据。
+
+`evaluation-package` 默认只生成 `formal` profile：它在再次执行 campaign、场景和统计复验后，把 suite、plan、全部 raw 工件、metrics、summary、`measurement-source-receipt.json`、策略清单覆盖的源码快照与离线 Dashboard 封装到 `evidence/releases/evaluation-<run-id>/`。此前必须显式执行 `evaluation-full-verify`；该阶段在同一源码提交 C 的 clean detached worktree 中运行真实 `make full-verify`，保存原始日志、严格 step summary、完整 raw 工件和工具版本，且不修改 release 索引。采集器从 C 的 Git blob 提取 child dispatcher 到私有 Python runtime，使 `PATH` 中的 `python`/`python3` 以及递归进程看到的 `sys.executable`/`sys._base_executable` 都指向同一 shim；backing CPython 固定以 `-I -S -B -u` 启动，每次 dispatch 恢复精确的解释器标准库路径，再只加入当前 detached worktree 和受控临时目录。receipt 同时绑定 backing Python、Bash、dispatcher、shim、精确执行环境、PATH 解析和执行前后文件 hash。这个边界用于排除 Host 启动环境注入和普通递归 Python 入口漂移，不是针对提交 C 内恶意源码、显式绕开 launcher 的命令或执行期间敌对 Host 篡改的沙箱。formal 打包和可搬运验证先检查包内 measurement-source 快照的完整性，再从快照运行版本化 semantic verifier，重放 Reader、dual measurement、全 raw registry 与 allocator archive，且不回退到审计机 live checkout；仅有 `passed` 字段、自洽重签伪 raw、失败退出或缺失 raw 均不能通过。可搬运验证只证明包内字节的内部完整性和可重放性，不能单凭包自身证明声明的提交 C 真实存在；只有带 `--require-committed --repo-root` 的 committed verification 把快照逐项核对到 C 的 Git blob 并验证 C→E 历史后，才构成本地 E3。development profile 固定把这一项标为 `unavailable`，不得携带或冒充正式 payload。scenario preflight、封存的场景 plan/report、Task 1-6 动态功能验收以及完整 measured kernel-cost 必须全部通过；suite 的 `competition_claims.task4` 显式绑定 `file_query_path_index`，该 claim 可以诚实地是 `supported` 或 `not_supported`，但 `unavailable`、`failed` 或缺失数据会拒绝 formal 包。`file_query_table_ablation` 无论结果如何都不能顶替这一门。raw 工件按 boot 写入 canonical `gzip+USTAR` 分片，manifest 同时绑定 stored archive 与逐成员 logical hash；验证器检查固定 gzip header、USTAR 语义并拒绝拼接 gzip member，不要求当前 zlib 重新压缩后逐字节复现同一 DEFLATE 数据流。未知顶层文件、symlink/junction 或链接祖先、路径逃逸、缺失/多余 raw 数据、Dashboard 重放差异或任一 hash 变化都会失败。仅调试接线时可显式运行 `scripts/package-evaluation-evidence.sh create <run-dir> <output-dir> --development`；这会把不可冒充正式证据的醒目警告永久写入 manifest。包生成后必须形成只引入包和 INDEX 单行追加的证据提交 E；允许的后续 D 只能修改 `README.md`、`docs/**` 和 `evidence/README.md`，且 INDEX 必须保持不变。验证器定位唯一 E、复核其唯一父提交 C、全部策略快照与 C 中 Git blob、精确 diff allowlist及未改写包字节，并可在干净 clone 中完整重放。没有实际 QEMU campaign 和已提交 formal bundle 时，只能说评价机制就绪，不能宣称新性能结论已经成立。
 
 完整 `evaluation-verify` 还会重新探测 manifest 记录的绝对工具路径，因此它是采集主机上的环境复验入口，不承诺 Windows/WSL 与 Linux 间直接搬运。可移交证据由 run plan、scenario plan、内容摘要和 raw 日志组成；跨机器审计只复验这些内容绑定与统计合同，不把另一台机器的工具安装状态冒充原采集环境。
 
-内核体积是独立护栏，不与延迟拼成“总分”。`make evaluation-kernel-cost` 使用 `evaluation_kernel_build.py` 在仓库锁内从同一 clean commit 固定执行两侧 clean/build，逐命令复检源码、记录真实退出码与有界输出并验证最终 RISC-V ELF；随后 `evaluation_kernel_cost.py` 采集 ELF/text/data/BSS，以 `verify` 进行可搬运复验、以 `verify-local` 重放本机工具、以 `fragment` 生成 Dashboard 数据。`make evaluation-smoke` 会运行构建者、成本合同及篡改回归。build manifest 把 clean commit、环境 SHA256、构建配置、原始构建日志、固定命令、目标相对路径及 ELF SHA256 绑定在一起。缺失目标保持 `null + unavailable`，不能从源码行数估算二进制大小，也不能把体积护栏写成 CPU 性能优势。精确 schema 与命令见 [评价方法](docs/evaluation.md#51-内核成本证据)。
+内核体积是独立护栏，不与延迟拼成“总分”。`make evaluation-kernel-cost` 使用 `evaluation_kernel_build.py` 在仓库锁内从同一 clean commit 固定执行两侧 clean/build，逐命令复检源码、记录真实退出码与有界输出并验证最终 RISC-V ELF；随后 `evaluation_kernel_cost.py` 采集 ELF/text/data/BSS，并从 canonical kernel budget 与 user stack checker 的原始输出重算 AgentOS `struct proc` 和最坏用户调用路径栈，以 `verify` 进行可搬运复验、以 `verify-local` 重放本机工具、以 `fragment` 生成 Dashboard 数据。后两项是 AgentOS actual/limit guardrail，不冒充 baseline delta。`make evaluation-smoke` 会运行构建者、成本合同及篡改回归。build manifest 把 clean commit、环境 SHA256、构建配置、原始构建日志、固定命令、目标相对路径及 ELF SHA256 绑定在一起。formal 包要求全部成本和 guardrail 完整测量；开发报告的缺失目标保持 `null + unavailable`，不能从源码行数估算二进制大小，也不能把体积护栏写成 CPU 性能优势。精确 schema 与命令见 [评价方法](docs/evaluation.md#51-内核成本证据)。
 
 ### 5.5 双目标运行
 
@@ -490,7 +527,7 @@ flowchart LR
 | 双目标完整状态 | `evidence/releases/<bundle>/logs/raw/dual-{plain,agentos}-complete-state.zip` | 确定性保存每侧完整 Guest 状态；Host run receipt 作为同目录独立 raw artifact，不混入 ZIP。 |
 | 最终证据包 | `evidence/releases/<bundle>/metrics/file-query-benchmark.{csv,json}` | 在 clean、已提交 HEAD 上由 `make full-verify` 采集并纳入逐文件校验和。 |
 
-`results/latest/` 是可覆盖的本地预览，不是最终发布证据。正式结论应引用已提交的 `evidence/releases/<bundle>/`，并先用 `scripts/capture-final-evidence.py verify` 核验。
+`results/latest/` 是可覆盖的本地预览，不是最终发布证据。正式结论应引用已提交的 `evidence/releases/<bundle>/`，并通过 `python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py verify` 核验；裸 Python 入口不属于正式验收路径。
 
 ### 6.4 推荐运行命令
 

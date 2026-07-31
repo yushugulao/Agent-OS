@@ -12,6 +12,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -19,8 +20,151 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_test_runner
 
 
+DEFAULT_TEST_CASE_TIMEOUT = 5.0 if sys.platform == "cygwin" else 1.0
+DEFAULT_TEST_MARKER_GRACE = 2.0 if sys.platform == "cygwin" else 0.1
+STREAM_DEADLINE_TOTAL_LIMIT = 4.0 if sys.platform == "cygwin" else 1.0
+
+
 class AgentTestRunnerTests(unittest.TestCase):
     marker = "case: parent passed"
+
+    def test_attested_invocation_uses_captured_canonical_python(self):
+        identities = {
+            "python": {
+                "executable": {"path": "/canonical/tools/python3"}
+            }
+        }
+        with mock.patch.object(sys, "argv", ["runner.py", "--marker", "ok"]):
+            self.assertEqual(
+                agent_test_runner._attested_invocation_argv(identities),
+                [
+                    "/canonical/tools/python3",
+                    "runner.py",
+                    "--marker",
+                    "ok",
+                ],
+            )
+
+    def calibration_args(self, **changes):
+        values = {
+            "attestation_file": "/tmp/case.json",
+            "run_id": "2" * 64,
+            "execution_id": "3" * 64,
+            "evidence_scope": agent_test_runner.LOCAL_EVIDENCE_SCOPE,
+            "source_commit": "a" * 40,
+            "source_tree": "b" * 40,
+            "campaign_nonce": "0" * 64,
+            "calibration_plan_sha256": "c" * 64,
+            "round_nonce": "1" * 64,
+            "session_nonce": "2" * 64,
+            "execution_nonce": "3" * 64,
+            "toolchain_cc": "riscv64-linux-gnu-gcc",
+        }
+        values.update(changes)
+        return SimpleNamespace(**values)
+
+    def test_calibration_attestation_arguments_fail_closed(self):
+        absent = self.calibration_args(
+            **{
+                name: None
+                for name in vars(self.calibration_args())
+            }
+        )
+        self.assertFalse(
+            agent_test_runner.validate_calibration_attestation_args(absent)
+        )
+        with self.assertRaisesRegex(ValueError, "supplied together"):
+            agent_test_runner.validate_calibration_attestation_args(
+                self.calibration_args(source_tree=None)
+            )
+        self.assertTrue(
+            agent_test_runner.validate_calibration_attestation_args(
+                self.calibration_args()
+            )
+        )
+        generic = self.calibration_args(
+            **{
+                name: None
+                for name in (
+                    "evidence_scope",
+                    "source_commit",
+                    "source_tree",
+                    "campaign_nonce",
+                    "calibration_plan_sha256",
+                    "round_nonce",
+                    "session_nonce",
+                    "execution_nonce",
+                    "toolchain_cc",
+                )
+            }
+        )
+        self.assertFalse(
+            agent_test_runner.validate_calibration_attestation_args(generic)
+        )
+        for changes in (
+            {"evidence_scope": "ci_e4_signed"},
+            {"session_nonce": "0" * 64, "run_id": "0" * 64},
+            {"execution_id": "4" * 64},
+        ):
+            with self.subTest(changes=changes), self.assertRaisesRegex(
+                ValueError, "invalid calibration attestation identity"
+            ):
+                agent_test_runner.validate_calibration_attestation_args(
+                    self.calibration_args(**changes)
+                )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX executable paths required")
+    def test_qemu_path_is_resolved_once_before_path_or_symlink_switch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first_dir = root / "first"
+            second_dir = root / "second"
+            first_dir.mkdir()
+            second_dir.mkdir()
+            for target, marker in (
+                (first_dir / "fixture-qemu", "first"),
+                (second_dir / "fixture-qemu", "second"),
+            ):
+                target.write_text(
+                    f"#!/bin/sh\necho {marker}\n", encoding="ascii"
+                )
+                target.chmod(0o755)
+            with mock.patch.dict(
+                os.environ, {"PATH": str(first_dir)}, clear=False
+            ):
+                resolved = agent_test_runner._resolve_executable_once(
+                    "fixture-qemu", "fixture QEMU"
+                )
+            with mock.patch.dict(
+                os.environ, {"PATH": str(second_dir)}, clear=False
+            ):
+                command = agent_test_runner.build_qemu_command(resolved)
+            self.assertEqual(Path(command[0]), (first_dir / "fixture-qemu").resolve())
+
+            alias = root / "qemu-link"
+            alias.symlink_to(first_dir / "fixture-qemu")
+            real_symlink = alias.is_symlink()
+            alias_stamp = (
+                None
+                if real_symlink
+                else agent_test_runner._file_stamp(
+                    alias, "fixture QEMU alias"
+                )
+            )
+            resolved_alias = agent_test_runner._resolve_executable_once(
+                str(alias), "fixture QEMU alias"
+            )
+            alias.unlink()
+            alias.symlink_to(second_dir / "fixture-qemu")
+            if real_symlink:
+                self.assertEqual(
+                    Path(resolved_alias), (first_dir / "fixture-qemu").resolve()
+                )
+            else:
+                self.assertNotEqual(
+                    agent_test_runner._file_stamp(alias, "fixture QEMU alias"),
+                    alias_stamp,
+                )
 
     def assert_process_gone(self, pid, timeout=5.0):
         deadline = time.monotonic() + timeout
@@ -49,8 +193,8 @@ class AgentTestRunnerTests(unittest.TestCase):
         self,
         source,
         *,
-        timeout=1.0,
-        grace=0.1,
+        timeout=DEFAULT_TEST_CASE_TIMEOUT,
+        grace=DEFAULT_TEST_MARKER_GRACE,
         completion_mode=agent_test_runner.COMPLETION_NATURAL,
         expected_bad_addr_markers=(),
         marker_mode=agent_test_runner.MARKER_EXACT_LINE,
@@ -84,6 +228,31 @@ class AgentTestRunnerTests(unittest.TestCase):
         result = self.monitor("print('case: parent passed')")
         self.assertTrue(result.succeeded)
         self.assertEqual(result.reason, "process_exit")
+
+    def test_natural_exit_before_grace_survives_slow_cleanup(self):
+        original_stop_and_drain = agent_test_runner._stop_and_drain
+
+        def delayed_cleanup(*args, **kwargs):
+            result = original_stop_and_drain(*args, **kwargs)
+            time.sleep(5.1)
+            return result
+
+        with mock.patch.object(
+            agent_test_runner,
+            "_stop_and_drain",
+            side_effect=delayed_cleanup,
+        ):
+            result = self.monitor(
+                "print('case: parent passed', flush=True)",
+                timeout=10.0,
+                grace=5.0,
+            )
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.reason, "process_exit")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.signals_sent, ())
+        self.assertTrue(result.output_eof)
+        self.assertTrue(result.process_tree_gone)
 
     def test_pipe_eof_before_exit_status_does_not_trigger_signal(self):
         result = self.monitor(
@@ -145,7 +314,7 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertFalse(result.succeeded)
 
-    def test_marker_followed_by_permanent_hang_fails(self):
+    def test_process_still_alive_at_marker_grace_must_fail(self):
         result = self.monitor(
             "import time\n"
             "print('case: parent passed', flush=True)\n"
@@ -182,8 +351,73 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertEqual(result.reason, "expected_checkpoint")
         self.assertEqual(result.signals_sent, (signal.SIGTERM,))
         self.assertEqual(result.returncode, 0)
+        self.assertTrue(result.process_tree_gone)
         self.assertTrue(result.checkpoint_succeeded)
         self.assertFalse(result.succeeded)
+
+    def test_cygwin_signals_exclusive_process_group_once(self):
+        proc = mock.Mock(pid=1234, returncode=None)
+        with mock.patch.object(sys, "platform", "cygwin"), mock.patch.object(
+            agent_test_runner,
+            "_leader_exited",
+            return_value=False,
+        ), mock.patch.object(
+            agent_test_runner.os,
+            "killpg",
+            create=True,
+        ) as killpg, mock.patch.object(
+            agent_test_runner,
+            "_signal_leader",
+        ) as signal_leader:
+            delivered = agent_test_runner._signal_process_tree(
+                proc,
+                None,
+                signal.SIGTERM,
+            )
+        self.assertEqual(delivered, (True, True, True))
+        killpg.assert_called_once_with(proc.pid, signal.SIGTERM)
+        signal_leader.assert_not_called()
+
+    def test_cygwin_cleans_group_after_leader_exit(self):
+        proc = mock.Mock(pid=1234, returncode=0)
+        with mock.patch.object(sys, "platform", "cygwin"), mock.patch.object(
+            agent_test_runner,
+            "_leader_exited",
+            return_value=True,
+        ), mock.patch.object(
+            agent_test_runner.os,
+            "killpg",
+            create=True,
+        ) as killpg:
+            delivered = agent_test_runner._signal_process_tree(
+                proc,
+                None,
+                signal.SIGTERM,
+            )
+        self.assertEqual(delivered, (True, False, False))
+        killpg.assert_called_once_with(proc.pid, signal.SIGTERM)
+
+    def test_cygwin_checks_group_liveness_without_linux_procfs(self):
+        proc = mock.Mock(pid=1234, returncode=0)
+        with mock.patch.object(sys, "platform", "cygwin"), mock.patch.object(
+            agent_test_runner.os,
+            "name",
+            "posix",
+        ), mock.patch.object(
+            agent_test_runner,
+            "_leader_exited",
+            return_value=True,
+        ), mock.patch.object(
+            agent_test_runner,
+            "_linux_process_group_has_live_member",
+        ) as linux_probe, mock.patch.object(
+            agent_test_runner.os,
+            "killpg",
+            create=True,
+        ) as killpg:
+            self.assertTrue(agent_test_runner._process_tree_alive(proc))
+        linux_probe.assert_not_called()
+        killpg.assert_called_once_with(proc.pid, 0)
 
     def test_explicit_checkpoint_accepts_default_sigterm_exit(self):
         result = self.monitor(
@@ -224,7 +458,10 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertTrue(result.failure_seen)
         self.assertFalse(result.checkpoint_succeeded)
 
-    @unittest.skipUnless(os.name == "posix", "POSIX SIGKILL required")
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux powercut containment required",
+    )
     def test_explicit_powercut_uses_sigkill_without_sigterm(self):
         dumpability_before = agent_test_runner._get_linux_dumpability()
         with tempfile.TemporaryDirectory() as directory:
@@ -255,7 +492,10 @@ class AgentTestRunnerTests(unittest.TestCase):
             dumpability_before,
         )
 
-    @unittest.skipUnless(os.name == "posix", "POSIX SIGKILL required")
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux powercut containment required",
+    )
     def test_powercut_failure_after_marker_still_never_sends_sigterm(self):
         with tempfile.TemporaryDirectory() as directory:
             term_file = Path(directory) / "sigterm-delivered"
@@ -429,7 +669,10 @@ class AgentTestRunnerTests(unittest.TestCase):
             finally:
                 self.reset_dumpability_test_state(original, real_set)
 
-    @unittest.skipUnless(os.name == "posix", "POSIX signals required")
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux powercut containment required",
+    )
     def test_powercut_contract_rejects_wrong_signal_sequences(self):
         result = self.monitor(
             "import time\n"
@@ -515,7 +758,10 @@ class AgentTestRunnerTests(unittest.TestCase):
             if not lifecycle.released:
                 lifecycle.abort()
 
-    @unittest.skipUnless(os.name == "posix", "POSIX SIGKILL required")
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux powercut containment required",
+    )
     def test_powercut_rejects_leader_that_exited_naturally(self):
         class SlowStream:
             def write(self, _text):
@@ -537,7 +783,10 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertFalse(result.completion_leader_signaled)
         self.assertFalse(result.powercut_succeeded)
 
-    @unittest.skipUnless(os.name == "posix", "POSIX SIGKILL required")
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux powercut containment required",
+    )
     def test_powercut_rejects_matching_self_sigkill_exit(self):
         class SlowStream:
             def write(self, _text):
@@ -595,7 +844,10 @@ class AgentTestRunnerTests(unittest.TestCase):
                 self.assertFalse(result.completion_signal_attested)
                 self.assertFalse(result.powercut_succeeded)
 
-    @unittest.skipUnless(os.name == "posix", "POSIX process groups required")
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux powercut containment required",
+    )
     def test_powercut_kills_and_reaps_descendant_process_group(self):
         with tempfile.TemporaryDirectory() as directory:
             pid_file = Path(directory) / "descendant.pid"
@@ -754,7 +1006,10 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertTrue(result.completion_signal_attested)
         self.assertTrue(result.powercut_succeeded)
 
-    @unittest.skipUnless(os.name == "posix", "POSIX SIGKILL required")
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux powercut containment required",
+    )
     def test_powercut_contract_rejects_residual_process_tree(self):
         result = self.monitor(
             "import time\n"
@@ -1235,7 +1490,7 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertFalse(result.succeeded)
         self.assertTrue(result.timed_out)
         self.assertEqual(result.reason, "timeout")
-        self.assertLess(result.elapsed, 1.0)
+        self.assertLess(result.elapsed, STREAM_DEADLINE_TOTAL_LIMIT)
 
     def test_continuous_output_cannot_bypass_marker_grace(self):
         result = self.monitor(
@@ -1251,7 +1506,7 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertFalse(result.succeeded)
         self.assertEqual(result.reason, "marker_grace")
         self.assertIn(signal.SIGTERM, result.signals_sent)
-        self.assertLess(result.elapsed, 1.0)
+        self.assertLess(result.elapsed, STREAM_DEADLINE_TOTAL_LIMIT)
 
     def test_unterminated_output_is_bounded_and_fails_closed(self):
         result = self.monitor(

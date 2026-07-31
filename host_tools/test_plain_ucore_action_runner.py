@@ -23,22 +23,87 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def unlink_created_test_link(path: Path) -> None:
+    """Remove a link just created by this test without following its target."""
+
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except IsADirectoryError:
+        if sys.platform != "cygwin":
+            raise
+        # Cygwin Python can expose a Windows directory reparse point as a
+        # directory. Its os.rmdir then follows the target, so ask native
+        # Windows rmdir to remove only the reparse-point entry. Do not use /s:
+        # the non-empty probe target must remain impossible to delete.
+        converted = subprocess.run(
+            ["cygpath", "-aw", os.fspath(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        native_path = converted.stdout.strip()
+        if converted.returncode != 0 or not native_path:
+            raise AssertionError(
+                f"cannot convert Cygwin test-link path: {path}: "
+                f"{converted.stderr.strip()}"
+            )
+        removed = subprocess.run(
+            ["cmd.exe", "/d", "/c", "rmdir", native_path],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if removed.returncode != 0:
+            raise AssertionError(
+                f"cannot remove Windows test reparse point: {path}: "
+                f"{removed.stderr.strip()}"
+            )
+
+
+def unlink_test_link(path: Path) -> None:
+    """Remove a formal test link after the probe confirmed link detection."""
+
+    if not os.path.lexists(path):
+        return
+    if not path.is_symlink():
+        raise AssertionError(f"refusing to remove a non-symlink test path: {path}")
+    unlink_created_test_link(path)
+    if os.path.lexists(path):
+        raise AssertionError(f"test symlink still exists after cleanup: {path}")
+
+
 def symlinks_available(root: Path) -> bool:
     target_dir = root / ".symlink-target-dir"
     target_file = root / ".symlink-target-file"
     directory_link = root / ".symlink-directory-link"
     file_link = root / ".symlink-file-link"
     target_dir.mkdir()
+    target_marker = target_dir / "keep-target"
+    target_marker.write_text("keep\n", encoding="utf-8")
     target_file.write_text("target\n", encoding="utf-8")
+    directory_created = False
+    file_created = False
     try:
         directory_link.symlink_to(target_dir, target_is_directory=True)
+        directory_created = True
         file_link.symlink_to(target_file)
+        file_created = True
+        # Do not create any formal test links unless this Python runtime can
+        # reliably identify both link kinds it will later have to clean up.
+        return directory_link.is_symlink() and file_link.is_symlink()
     except (NotImplementedError, OSError):
         return False
     finally:
-        directory_link.unlink(missing_ok=True)
-        file_link.unlink(missing_ok=True)
+        if directory_created:
+            unlink_created_test_link(directory_link)
+        if file_created:
+            unlink_created_test_link(file_link)
+        if not target_marker.is_file() or read(target_marker) != "keep\n":
+            raise AssertionError("directory-symlink cleanup followed the target")
         target_file.unlink(missing_ok=True)
+        target_marker.unlink()
         target_dir.rmdir()
     return True
 
@@ -55,6 +120,34 @@ def main() -> int:
             os.environ.pop("TOOLPREFIX", None)
         else:
             os.environ["TOOLPREFIX"] = original_toolprefix
+
+    directory_like_link = mock.MagicMock(spec=Path)
+    directory_like_link.__fspath__.return_value = "/tmp/directory-link"
+    directory_like_link.unlink.side_effect = IsADirectoryError("directory-like link")
+    converted_path = subprocess.CompletedProcess(
+        ["cygpath"], 0, stdout="C:\\tmp\\directory-link\n", stderr=""
+    )
+    removed_path = subprocess.CompletedProcess(["cmd.exe"], 0, stdout="", stderr="")
+    with mock.patch.object(sys, "platform", "cygwin"), mock.patch.object(
+        subprocess,
+        "run",
+        side_effect=(converted_path, removed_path),
+    ) as run:
+        unlink_created_test_link(directory_like_link)
+    assert run.call_args_list == [
+        mock.call(
+            ["cygpath", "-aw", os.fspath(directory_like_link)],
+            check=False,
+            capture_output=True,
+            text=True,
+        ),
+        mock.call(
+            ["cmd.exe", "/d", "/c", "rmdir", "C:\\tmp\\directory-link"],
+            check=False,
+            capture_output=True,
+            text=True,
+        ),
+    ]
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -87,6 +180,34 @@ def main() -> int:
         with mock.patch.object(runner.subprocess, "run", return_value=git_result):
             lock_path = runner._run_lock_path(worktree)
             assert lock_path.parent == common_git.resolve()
+
+        # MSYS2 sees an absolute gitdir written by Windows Git as a relative
+        # POSIX spelling.  It must pass through cygpath rather than being
+        # appended below the worktree.
+        windows_git_dir = "E:/shared/repository/.git"
+        if not Path(windows_git_dir).is_absolute():
+            windows_git_result = subprocess.CompletedProcess(
+                ["git", "rev-parse", "--git-common-dir"],
+                0,
+                stdout=windows_git_dir + "\n",
+                stderr="",
+            )
+            converted_git_result = subprocess.CompletedProcess(
+                ["cygpath", "-u", windows_git_dir],
+                0,
+                stdout=str(common_git.resolve()) + "\n",
+                stderr="",
+            )
+            with mock.patch.object(
+                runner.subprocess,
+                "run",
+                side_effect=(windows_git_result, converted_git_result),
+            ) as run:
+                lock_path = runner._run_lock_path(worktree)
+            assert lock_path.parent == common_git.resolve()
+            assert run.call_args_list[1].args[0] == [
+                "cygpath", "-u", windows_git_dir,
+            ]
         with runner.exclusive_repo_run_lock(worktree):
             pass
         assert sorted(path.name for path in worktree.iterdir()) == [".git"]
@@ -110,11 +231,53 @@ def main() -> int:
             "printf ready", "Ubuntu", 20, command_identity
         )
         assert (
-            "exec env AGENTOS_UCORE_RUN_ID=" + command_identity
+            "AGENTOS_UCORE_RUN_ID=" + command_identity
         ) in bounded_wsl[-1]
-        assert "timeout --signal=TERM --kill-after=5s 5s" in bounded_wsl[-1]
-        assert "bash -lc 'printf ready'" in bounded_wsl[-1]
+        assert "'timeout' --signal=TERM --kill-after=5s 5s" in bounded_wsl[-1]
+        assert "'bash' --noprofile --norc -c 'printf ready'" in bounded_wsl[-1]
+        assert bounded_wsl[-5:-1] == ["bash", "--noprofile", "--norc", "-c"]
+        assert "env" in bounded_wsl and "-i" in bounded_wsl
+        assert " -lc " not in bounded_wsl[-1]
+        assert "--login" not in bounded_wsl
         assert runner.wsl_command_identity(bounded_wsl) == command_identity
+        with mock.patch.object(runner.os, "name", "posix"):
+            native_command = runner.make_wsl_command(
+                "printf native", "ignored", 20, "c" * 32
+            )
+        assert native_command[:2] == ["env", "-i"]
+        assert native_command[-5:-1] == [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+        ]
+        assert runner.wsl_command_identity(native_command) == "c" * 32
+
+        with mock.patch.dict(
+            runner.os.environ,
+            {
+                "CFLAGS": "AMBIENT-CFLAGS-MUST-NOT-LEAK",
+                "HOME": "/ambient/home/must-not-leak",
+                "MAKEFLAGS": "AMBIENT-MAKEFLAGS-MUST-NOT-LEAK",
+                "PATH": "/ambient/path/must-not-leak",
+            },
+            clear=True,
+        ):
+            isolated_wsl = runner.make_wsl_command(
+                "printf isolated", "Ubuntu", 20, "b" * 32
+            )
+        isolated_text = "\n".join(isolated_wsl)
+        assert "AMBIENT-" not in isolated_text
+        assert "/ambient/" not in isolated_text
+        assert "CFLAGS=" not in isolated_text
+        assert "MAKEFLAGS=" not in isolated_text
+        assert "HOME=/tmp" in isolated_text
+        assert f"PATH={runner.CONTROLLED_SHELL_PATH}" in isolated_text
+        assert "LANG=C" in isolated_text and "LC_ALL=C" in isolated_text
+        assert "TEMP=/tmp" in isolated_text and "TMP=/tmp" in isolated_text
+        assert "TMPDIR=/tmp" in isolated_text
+        assert "TZ=UTC" in isolated_text
+        assert "--noprofile" in isolated_wsl and "--norc" in isolated_wsl
         malformed_tagged = [
             *bounded_wsl[:-1],
             bounded_wsl[-1] + " AGENTOS_UCORE_RUN_ID=" + "b" * 32,
@@ -156,9 +319,17 @@ def main() -> int:
         assert cleanup["remaining_survivors"] == 0
         cleanup_command = cleanup_run.call_args.args[0]
         cleanup_script = cleanup_command[-1]
-        assert cleanup_command[:4] == ["wsl.exe", "-d", "Ubuntu", "--"] or (
-            cleanup_command[:2] == ["bash", "-lc"]
-        )
+        assert cleanup_command[:4] == ["wsl.exe", "-d", "Ubuntu", "--"] or cleanup_command[:2] == [
+            "env",
+            "-i",
+        ]
+        assert cleanup_command[-5:-1] == [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+        ]
+        assert "-lc" not in cleanup_command and "--login" not in cleanup_command
         assert f"needle='AGENTOS_UCORE_RUN_ID={command_identity}'" in cleanup_script
         assert 'env_file="/proc/$pid/environ"' in cleanup_script
         assert 'process_has_token "$env_file"' in cleanup_script
@@ -201,16 +372,26 @@ def main() -> int:
         )
         clean_status = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         clean_diff = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with mock.patch.object(
-            runner.subprocess,
-            "run",
-            side_effect=[clean_head, clean_status, clean_diff],
-        ) as source_run:
+        exact_digest = "e" * 64
+        with (
+            mock.patch.object(
+                runner.subprocess,
+                "run",
+                side_effect=[clean_head, clean_status, clean_diff],
+            ) as source_run,
+            mock.patch.object(
+                runner,
+                "tracked_worktree_identity",
+                return_value=(True, exact_digest),
+            ),
+        ):
             source_identity = runner.capture_source_identity(repo)
         assert source_identity == {
             "source_commit": commit,
             "source_tree_clean": True,
-            "source_tracked_sha256": hashlib.sha256(b"\0").hexdigest(),
+            "source_tracked_sha256": hashlib.sha256(
+                ("\0\0" + exact_digest).encode("ascii")
+            ).hexdigest(),
         }
         assert "--untracked-files=no" in source_run.call_args_list[1].args[0]
         dirty_status = subprocess.CompletedProcess(
@@ -219,10 +400,17 @@ def main() -> int:
         dirty_diff = subprocess.CompletedProcess(
             [], 0, stdout="diff --git a/os/proc.c b/os/proc.c\n", stderr=""
         )
-        with mock.patch.object(
-            runner.subprocess,
-            "run",
-            side_effect=[clean_head, dirty_status, dirty_diff],
+        with (
+            mock.patch.object(
+                runner.subprocess,
+                "run",
+                side_effect=[clean_head, dirty_status, dirty_diff],
+            ),
+            mock.patch.object(
+                runner,
+                "tracked_worktree_identity",
+                return_value=(False, "d" * 64),
+            ),
         ):
             dirty_identity = runner.capture_source_identity(repo)
         assert dirty_identity["source_commit"] == commit
@@ -233,10 +421,17 @@ def main() -> int:
         changed_head = subprocess.CompletedProcess(
             [], 0, stdout="2" * 40 + "\n", stderr=""
         )
-        with mock.patch.object(
-            runner.subprocess,
-            "run",
-            side_effect=[changed_head, clean_status, clean_diff],
+        with (
+            mock.patch.object(
+                runner.subprocess,
+                "run",
+                side_effect=[changed_head, clean_status, clean_diff],
+            ),
+            mock.patch.object(
+                runner,
+                "tracked_worktree_identity",
+                return_value=(True, exact_digest),
+            ),
         ):
             try:
                 runner.verify_source_identity(repo, source_identity)
@@ -244,6 +439,35 @@ def main() -> int:
                 assert "changed" in str(error)
             else:
                 raise AssertionError("mid-run HEAD change was accepted")
+
+        for hidden_flag in ("--assume-unchanged", "--skip-worktree"):
+            hidden_repo = root / hidden_flag.removeprefix("--")
+            hidden_repo.mkdir()
+
+            def hidden_git(*arguments: str) -> None:
+                subprocess.run(
+                    ["git", *arguments],
+                    cwd=hidden_repo,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+
+            hidden_git("init", "-q")
+            hidden_git("config", "user.email", "runner@example.invalid")
+            hidden_git("config", "user.name", "Runner Test")
+            tracked = hidden_repo / "source.c"
+            tracked.write_text("int value = 1;\n", encoding="ascii")
+            hidden_git("add", "source.c")
+            hidden_git("commit", "-q", "-m", "source")
+            hidden_git("update-index", hidden_flag, "source.c")
+            tracked.write_text("int value = 2;\n", encoding="ascii")
+            try:
+                runner.capture_source_identity(hidden_repo)
+            except ValueError as error:
+                assert "hidden or nonstandard" in str(error), error
+            else:
+                raise AssertionError(f"hidden tracked change accepted: {hidden_flag}")
 
         artifact_repo = root / "artifact-repo"
         (artifact_repo / "build").mkdir(parents=True)
@@ -443,7 +667,7 @@ def main() -> int:
                 raise AssertionError("generated-header link ancestor was accepted")
             assert not list(generated_target.iterdir())
 
-            generated_link.unlink()
+            unlink_test_link(generated_link)
             generated_link.mkdir()
             header_victim = root / "header-victim"
             header_victim.write_text("do-not-overwrite\n", encoding="utf-8")

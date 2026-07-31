@@ -243,7 +243,64 @@ def check(root):
     )
     require_contains(
         user_make,
-        "$(PYTHON_BIN)$(USER_STACK_CONTRACT_CHECKER)--root..",
+        "COMPAT_BENCH_REPO_SOURCE:=evaluation_guest/compatbench.c"
+        "COMPAT_BENCH_SOURCE:=../$(COMPAT_BENCH_REPO_SOURCE)",
+        "canonical compatibility benchmark source",
+    )
+    require_contains(
+        user_make,
+        "STACK_USAGE_LIBRARY_SRCS:=$(addprefixuser/,$(sort$(LIB_C)))",
+        "complete stack library inventory",
+    )
+    require_contains(
+        user_make,
+        "$(addprefixuser/,$(sort$(SRCS)))\\$(COMPAT_BENCH_REPO_SOURCE)"
+        "STACK_USAGE_SRCS:="
+        "$(STACK_USAGE_LIBRARY_SRCS)$(STACK_USAGE_APPLICATION_SRCS)",
+        "complete stack application inventory",
+    )
+    require_contains(
+        user_make,
+        "$(STACK_USAGE_DIR)/evaluation_guest/compatbench.o:",
+        "shared compatibility benchmark stack build",
+    )
+    require_contains(
+        user_make,
+        "-fstack-usage-fcallgraph-info=su-c$(COMPAT_BENCH_REPO_SOURCE)",
+        "canonical compatibility benchmark stack compilation",
+    )
+    require_contains(
+        user_make,
+        "-I$(abspath$(generated_dir))",
+        "absolute generated-header stack include",
+    )
+    require_contains(
+        user_make,
+        "CFLAGS:=$(COMMON_CFLAGS)-Iinclude-Ilib-I$(arch_dir)-I$(generated_dir)"
+        "CFLAGS+=$(USER_EXTRA_CFLAGS)",
+        "canonical application compiler flags",
+    )
+    require_contains(
+        user_make,
+        "STACK_USAGE_CFLAGS:=$(COMMON_CFLAGS)\\-Iuser/include-Iuser/lib"
+        "-Iuser/$(arch_dir)-I$(abspath$(generated_dir))"
+        "STACK_USAGE_CFLAGS+=$(USER_EXTRA_CFLAGS)",
+        "stack compiler flag parity",
+    )
+    require_contains(
+        user_make,
+        "$(CC_CMD)$(CFLAGS)$(LDFLAGS)$(CRT_OBJ)$(LIB_OBJS)"
+        "\\$(COMPAT_BENCH_SOURCE)-o$@",
+        "canonical compatibility benchmark link",
+    )
+    require_contains(
+        user_make,
+        "--usage-dir\"$$scratch/usage\"--source-dir..",
+        "repository-rooted stack source inventory",
+    )
+    require_contains(
+        user_make,
+        "$(PYTHON_CMD)$(USER_STACK_CONTRACT_CHECKER)--root..",
         "exec argv contract checker wiring",
     )
     if "--stack-size" in user_make or "--frame-budget" in user_make:

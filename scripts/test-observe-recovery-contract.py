@@ -2767,10 +2767,10 @@ reap_probe = (ROOT / "scripts/probes/observe-reap-state.c").read_text(
 
 def validate_host_owned_phase_runner(source: str) -> None:
     ordered = (
-        "cc -DAGENT_OBSERVE_PHASE_CONTROL_PROFILE",
+        'host_probe_compile "${TMPDIR_OBSERVE}/mkfs"',
         'make -B "${TMPDIR_OBSERVE}/kernel-build/kernel"',
         'image="${TMPDIR_OBSERVE}/observe-reboot.img"',
-        '"${TMPDIR_OBSERVE}/mkfs" "${image}"',
+        'host_probe_run "${TMPDIR_OBSERVE}/mkfs" "${image}"',
         '--image "${image}" --expect empty',
         "run_boot boot0-cut",
         "--from empty --to phase0",
@@ -2786,6 +2786,8 @@ def validate_host_owned_phase_runner(source: str) -> None:
         assert source.count(fragment) == 1
         positions.append(source.index(fragment))
     assert positions == sorted(positions)
+    mkfs_compile = source[positions[0] : positions[1]]
+    assert mkfs_compile.count("-DAGENT_OBSERVE_PHASE_CONTROL_PROFILE") == 1
     crash = source[positions[1] : positions[2]]
     assert crash.count("DURABILITY_POWERCUT_TEST_PROFILE=1") == 1
     mkfs = source[positions[3] : positions[4]]
@@ -2822,7 +2824,9 @@ validate_host_owned_phase_runner(observe_runner)
 expect_rejected(
     validate_host_owned_phase_runner,
     observe_runner.replace(
-        "cc -DAGENT_OBSERVE_PHASE_CONTROL_PROFILE", "cc", 1
+        "\t-DAGENT_OBSERVE_PHASE_CONTROL_PROFILE \\\n",
+        "",
+        1,
     ),
     "Runner omits the fixed-slot mkfs profile",
 )

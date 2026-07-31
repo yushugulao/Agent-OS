@@ -4,11 +4,16 @@
 from __future__ import annotations
 
 import importlib.util
-import os
-import shlex
 import subprocess
 import tempfile
 from pathlib import Path
+
+from host_probe_toolchain import (
+    host_compiler,
+    probe_environment,
+    probe_mode,
+    required_sanitizer_flags,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,16 +37,19 @@ def expect_mutation_rejected(kernel: str, user: str, owner: str, old: str, new: 
     raise SystemExit(f"mutation survived: {owner}: {old}")
 
 
-def run_probe(source: Path, output: Path) -> None:
-    compiler = shlex.split(os.environ.get("HOST_CC", "cc"))
+def run_probe(
+    source: Path,
+    output: Path,
+    compiler: list[str],
+    sanitizer_flags: list[str],
+) -> None:
     command = compiler + [
         "-std=gnu11",
         "-Wall",
         "-Werror",
         "-fno-builtin",
         "-fstack-protector-strong",
-        "-fsanitize=address,undefined",
-        "-fno-sanitize-recover=all",
+        *sanitizer_flags,
         "-I",
         str(ROOT / "user/include"),
         str(source),
@@ -49,9 +57,12 @@ def run_probe(source: Path, output: Path) -> None:
         str(output),
     ]
     subprocess.run(command, cwd=ROOT, check=True)
-    environment = dict(os.environ)
-    environment["ASAN_OPTIONS"] = "detect_leaks=0"
-    subprocess.run([str(output)], cwd=ROOT, env=environment, check=True)
+    subprocess.run(
+        [str(output)],
+        cwd=ROOT,
+        env=probe_environment(sanitizer_flags),
+        check=True,
+    )
 
 
 def main() -> int:
@@ -88,12 +99,25 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="agentos-printf-") as directory:
         temp = Path(directory)
-        run_probe(ROOT / "scripts/probes/kernel-printf-integer.c", temp / "kernel")
-        run_probe(ROOT / "scripts/probes/user-printf-integer.c", temp / "user")
+        compiler = host_compiler()
+        sanitizer_flags = required_sanitizer_flags(compiler, temp)
+        run_probe(
+            ROOT / "scripts/probes/kernel-printf-integer.c",
+            temp / "kernel",
+            compiler,
+            sanitizer_flags,
+        )
+        run_probe(
+            ROOT / "scripts/probes/user-printf-integer.c",
+            temp / "user",
+            compiler,
+            sanitizer_flags,
+        )
 
     print(
         "[printf-format] host probes and "
-        f"{len(mutations) + 1} mutations passed; audited={sum(inventory.values())}"
+        f"{len(mutations) + 1} mutations passed; audited={sum(inventory.values())}; "
+        f"mode={probe_mode(sanitizer_flags)}"
     )
     return 0
 

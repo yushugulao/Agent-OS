@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-120s}"
@@ -17,6 +18,8 @@ FILE_RESOURCE_DOMAIN_ORDINARY_LIMIT=16
 FILE_RESOURCE_DOMAIN_RESERVED_LIMIT=16
 TMPDIR_FILE_RESOURCE="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_FILE_RESOURCE}"' EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_FILE_RESOURCE}"
 
 build_case() {
 	local tree="$1"
@@ -36,8 +39,8 @@ build_case() {
 	mkdir -p "${TMPDIR_FILE_RESOURCE}/fixture/bin"
 	printf 'file-resource-fixture\n' \
 		>"${TMPDIR_FILE_RESOURCE}/fixture/bin/frsource"
-	cc "${mkfs_sources[@]}" -o "${TMPDIR_FILE_RESOURCE}/${tag}-mkfs"
-	"${TMPDIR_FILE_RESOURCE}/${tag}-mkfs" \
+	host_probe_compile "${TMPDIR_FILE_RESOURCE}/${tag}-mkfs" "${mkfs_sources[@]}"
+	host_probe_run "${TMPDIR_FILE_RESOURCE}/${tag}-mkfs" \
 		"${TMPDIR_FILE_RESOURCE}/${tag}.img" \
 		"${TMPDIR_FILE_RESOURCE}/${tag}-user-target/bin/fileresource_ucore" \
 		"${TMPDIR_FILE_RESOURCE}/fixture/bin/frsource"
@@ -105,3 +108,4 @@ run_case baseline "${TMPDIR_FILE_RESOURCE}/baseline-kernel" \
 	"${TMPDIR_FILE_RESOURCE}/baseline.img"
 
 echo "[file-resource] both targets passed"
+host_probe_report "file-resource mkfs"

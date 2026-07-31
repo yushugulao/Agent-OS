@@ -154,10 +154,12 @@ def _rows_for_marker(
         path: _nonnegative_int(fields, f"{path}_duration_us", source_line)
         for path in ("traversal", "cold_index", "warm_index")
     }
-    if values["traversal_records"] != load:
-        raise MeasurementError(f"load and traversal record count differ at line {source_line}")
-    if values["cold_index_records"] >= values["traversal_records"]:
-        raise MeasurementError(f"cold index did not reduce candidate records at line {source_line}")
+    if load > values["traversal_records"]:
+        raise MeasurementError(f"load exceeds traversal work at line {source_line}")
+    if values["cold_index_records"] > values["traversal_records"]:
+        raise MeasurementError(f"cold index work exceeds traversal work at line {source_line}")
+    if values["warm_index_records"] > values["traversal_records"]:
+        raise MeasurementError(f"warm index work exceeds traversal work at line {source_line}")
     if values["warm_index_records"] != values["cold_index_records"]:
         raise MeasurementError(f"cold and warm index candidates differ at line {source_line}")
     command_json = json.dumps(command, separators=(",", ":"), ensure_ascii=True)

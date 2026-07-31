@@ -3,11 +3,16 @@
 
 from __future__ import annotations
 
-import os
-import shlex
 import subprocess
 import tempfile
 from pathlib import Path
+
+from host_probe_toolchain import (
+    host_compiler,
+    probe_environment,
+    probe_mode,
+    required_sanitizer_flags,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,9 +45,10 @@ def main() -> int:
     if user_helper != baseline_helper:
         raise AssertionError("rp_append_file differs between AgentOS and baseline")
 
-    compiler = shlex.split(os.environ.get("HOST_CC", "cc"))
+    compiler = host_compiler()
     with tempfile.TemporaryDirectory(prefix="rp-state-append-") as directory:
         temporary = Path(directory)
+        sanitizer_flags = required_sanitizer_flags(compiler, temporary)
         for label, header in zip(("agentos", "baseline"), HEADERS):
             binary = temporary / f"rp-state-append-{label}"
             subprocess.run(
@@ -54,8 +60,7 @@ def main() -> int:
                     "-Werror",
                     "-fno-builtin",
                     "-fstack-protector-strong",
-                    "-fsanitize=address,undefined",
-                    "-fno-sanitize-recover=all",
+                    *sanitizer_flags,
                     "-I",
                     str(PROBE.parent / "rp-evidence-host"),
                     f'-DRP_STATE_HEADER="{header.as_posix()}"',
@@ -68,11 +73,17 @@ def main() -> int:
             )
             run_dir = temporary / label
             run_dir.mkdir()
-            environment = dict(os.environ)
-            environment["ASAN_OPTIONS"] = "detect_leaks=0"
-            subprocess.run([str(binary)], cwd=run_dir, env=environment, check=True)
+            subprocess.run(
+                [str(binary)],
+                cwd=run_dir,
+                env=probe_environment(sanitizer_flags),
+                check=True,
+            )
 
-    print("[rp-state-append] canonical boundary probes passed")
+    print(
+        "[rp-state-append] canonical boundary probes passed; "
+        f"mode={probe_mode(sanitizer_flags)}"
+    )
     return 0
 
 

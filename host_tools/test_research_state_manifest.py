@@ -101,13 +101,29 @@ def test_manifest_mutations() -> None:
     )
     expect_error(json.dumps(overlapping_archive_optional), "inventories overlap")
 
+    missing_opaque = json.loads(text)
+    del missing_opaque["opaque_guest_state_files"]
+    expect_error(json.dumps(missing_opaque), "missing keys")
+
+    duplicate_opaque = json.loads(text)
+    duplicate_opaque["opaque_guest_state_files"].append(
+        duplicate_opaque["opaque_guest_state_files"][0]
+    )
+    expect_error(json.dumps(duplicate_opaque), "duplicate entries")
+
+    host_opaque = json.loads(text)
+    host_opaque["opaque_guest_state_files"].append(
+        host_opaque["host_state_files"][0]
+    )
+    expect_error(json.dumps(host_opaque), "opaque Guest and Host")
+
     duplicate_key = text.replace(
-        '"schema_version": 2,',
-        '"schema_version": 2,\n  "schema_version": 2,',
+        '"schema_version": 3,',
+        '"schema_version": 3,\n  "schema_version": 3,',
         1,
     )
     expect_error(duplicate_key, "duplicate manifest key")
-    assert raw["schema_version"] == 2
+    assert raw["schema_version"] == 3
 
 
 def test_repository_contract() -> None:
@@ -129,6 +145,9 @@ def test_repository_contract() -> None:
     assert "rp_evidence_packet" in fixture
     assert set(manifest.archive_optional_state_files) == {
         "rp_input_fastq", "rp_object_records"
+    }
+    assert set(manifest.opaque_guest_state_files) == {
+        "rp_task6_norm", "rp_task6_raw"
     }
     for target, derived, archive in (
         ("plain", plain, plain_archive), ("agentos", agentos, agentos_archive)

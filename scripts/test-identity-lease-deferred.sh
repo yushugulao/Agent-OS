@@ -4,11 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMPDIR_LEASE="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_LEASE}"' EXIT
+source "${ROOT}/scripts/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_LEASE}"
 
-"${CC:-cc}" -std=c11 -Wall -Werror \
-	"${ROOT}/scripts/probes/identity-lease-deferred.c" \
-	-o "${TMPDIR_LEASE}/identity-lease-deferred"
-"${TMPDIR_LEASE}/identity-lease-deferred" >"${TMPDIR_LEASE}/output.log"
+host_probe_compile "${TMPDIR_LEASE}/identity-lease-deferred" \
+	-std=c11 -Wall -Werror \
+	"${ROOT}/scripts/probes/identity-lease-deferred.c"
+host_probe_run "${TMPDIR_LEASE}/identity-lease-deferred" \
+	>"${TMPDIR_LEASE}/output.log"
 
 for marker in \
 	"identity_lease_deferred: interrupt_no_persist=1 maintain_resumed=1" \
@@ -20,3 +23,4 @@ for marker in \
 	grep -Fxq "${marker}" "${TMPDIR_LEASE}/output.log"
 done
 cat "${TMPDIR_LEASE}/output.log"
+host_probe_report "identity-lease-deferred"

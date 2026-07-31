@@ -750,14 +750,15 @@ class EvidenceContractTest(unittest.TestCase):
     def test_rejects_symlinked_artifact(self) -> None:
         case_root = self.root / "cases" / MODULE.CASE_IDS[0]
         victim = case_root / "fault.diff.json"
-        target = case_root / "real-fault.diff.json"
+        target = Path(self._temp.name) / "real-fault.diff.json"
         target.write_bytes(victim.read_bytes())
         victim.unlink()
         try:
             os.symlink(target, victim)
         except OSError:
             victim.write_bytes(target.read_bytes())
-            target.unlink()
+        if not MODULE._is_link(victim):
+            target.unlink(missing_ok=True)
             original = MODULE._is_link
 
             def report_victim(path: Path) -> bool:

@@ -264,7 +264,7 @@ _RECEIPT_ASSIGNMENTS = {
     "schema": ("FILE_QUERY_MEASUREMENT_SCHEMA",),
     "traversal_ops": ("FILE_OPS",),
     "traversal_duration_us": ("bench_file_query_traversal_us", "(", "AGENT_FILE_QUERY_SCAN", ")"),
-    "load": _QUERY_RESULT + (".", "scanned_records"),
+    "load": _QUERY_RESULT + (".", "candidate_records"),
     "traversal_records": _QUERY_RESULT + (".", "scanned_records"),
     "traversal_plan": _QUERY_RESULT + (".", "plan"),
     "cold_index_ops": ("1",),
@@ -318,6 +318,8 @@ def _validate_receipt_builder(tokens: list[str]) -> None:
     required_checks = (
         ("check", "(", "receipt", ".", "cold_rebuild_records", ">", "0", ","),
         ("check", "(", "!", "receipt", ".", "warm_index_cache_hit", ","),
+        ("check", "(", "receipt", ".", "load", ">", "0", "&&", "receipt", ".", "load", "<=", "receipt", ".", "traversal_records", ","),
+        ("check", "(", "receipt", ".", "warm_index_candidates", ">", "0", "&&", "receipt", ".", "warm_index_candidates", "<=", "receipt", ".", "warm_index_records", ","),
         ("check", "(", "receipt", ".", "cold_index_records", "==", "receipt", ".", "warm_index_records", ","),
         ("check", "(") + _QUERY_RESULT + (".", "index_rebuild_records", "==", "0", ","),
     )
@@ -376,7 +378,6 @@ def _validate_marker(text: str, tokens: list[str]) -> None:
             raise ValueError("immutable measurement receipt is overwritten")
     if _locations(run, ("&", "file_query_receipt")):
         raise ValueError("immutable measurement receipt address must not escape")
-
 
 def validate_benchmark_source(path: Path = BENCHMARK_SOURCE) -> None:
     try:

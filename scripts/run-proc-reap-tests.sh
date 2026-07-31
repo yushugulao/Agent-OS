@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
@@ -13,6 +14,8 @@ IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20s}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"
 TMPDIR_REAP="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_REAP}"' EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_REAP}"
 
 build_case() {
 	local tree="$1"
@@ -33,8 +36,8 @@ build_case() {
 	if [[ -z "${tree}" ]]; then
 		apps+=("${TMPDIR_REAP}/${tag}-user-target/bin/procreap_agent_ucore")
 	fi
-	cc "${mkfs_sources[@]}" -o "${TMPDIR_REAP}/${tag}-mkfs"
-	"${TMPDIR_REAP}/${tag}-mkfs" "${TMPDIR_REAP}/${tag}.img" \
+	host_probe_compile "${TMPDIR_REAP}/${tag}-mkfs" "${mkfs_sources[@]}"
+	host_probe_run "${TMPDIR_REAP}/${tag}-mkfs" "${TMPDIR_REAP}/${tag}.img" \
 		"${apps[@]}"
 	if [[ -n "${tree}" ]]; then
 		make -C "${tree}" -B build TOOLPREFIX="${TOOLPREFIX}" \
@@ -97,3 +100,4 @@ run_case baseline "${TMPDIR_REAP}/baseline-kernel" \
 	"${TMPDIR_REAP}/baseline.img" "procreap_ucore: parent passed"
 
 echo "[proc-reap] both targets passed"
+host_probe_report "proc-reap mkfs"

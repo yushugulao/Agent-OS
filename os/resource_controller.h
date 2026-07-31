@@ -72,6 +72,16 @@ struct resource_account_kind_snapshot {
 	uint64 pending[RESOURCE_CHARGE_CLASS_COUNT];
 };
 
+struct resource_policy_snapshot {
+	uint64 capacity;
+	uint64 used;
+	uint64 pending;
+	uint64 ordinary_used;
+	uint64 ordinary_pending;
+	uint64 reserved_used;
+	uint64 reserved_pending;
+};
+
 /*
  * A reservation is a short-lived kernel lease. It never crosses a blocking
  * boundary: callers either commit it to durable usage or cancel it before
@@ -138,6 +148,7 @@ void resource_controller_init(void);
 uint resource_kind_attributes(enum resource_kind);
 int resource_policy_configure(enum resource_kind, uint64, uint64, uint64);
 int resource_policy_guarantee_reserved(enum resource_kind);
+uint resource_policy_snapshot_all(struct resource_policy_snapshot *, uint);
 #ifdef PHYSICAL_PAGE_TEST_HOOKS
 int resource_policy_reserved_snapshot(enum resource_kind, uint64 *, uint64 *);
 #endif

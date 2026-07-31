@@ -4,11 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMPDIR_REAP="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_REAP}"' EXIT
+source "${ROOT}/scripts/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_REAP}"
 
-"${CC:-cc}" -std=c11 -Wall -Werror \
-	"${ROOT}/scripts/probes/observe-reap-state.c" \
-	-o "${TMPDIR_REAP}/observe-reap-state"
-"${TMPDIR_REAP}/observe-reap-state" >"${TMPDIR_REAP}/output.log"
+host_probe_compile "${TMPDIR_REAP}/observe-reap-state" \
+	-std=c11 -Wall -Werror \
+	"${ROOT}/scripts/probes/observe-reap-state.c"
+host_probe_run "${TMPDIR_REAP}/observe-reap-state" \
+	>"${TMPDIR_REAP}/output.log"
 
 for marker in \
 	"observe_reap_state: four_slots=1 sticky_class=1" \
@@ -21,3 +24,4 @@ for marker in \
 	grep -Fxq "${marker}" "${TMPDIR_REAP}/output.log"
 done
 cat "${TMPDIR_REAP}/output.log"
+host_probe_report "observe-reap-state"

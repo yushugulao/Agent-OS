@@ -31,7 +31,12 @@ kernel-budgets:
   script:
     - mkdir -p ci-artifacts
     - bash -o pipefail -c 'bash scripts/verify-dual-target-structure.sh 2>&1 | tee ci-artifacts/kernel-budgets.log'
-    - bash -o pipefail -c 'make ci-check 2>&1 | tee -a ci-artifacts/kernel-budgets.log'
+    - >-
+      bash -o pipefail -c '
+      env AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES=0
+      HOST_CC=cc HOSTCC=cc CC=cc
+      make ci-check 2>&1 |
+      tee -a ci-artifacts/kernel-budgets.log'
     - python3 host_tools/remote_ci_evidence.py attest --job kernel-budgets --artifact-root ci-artifacts
   artifacts:
     when: always
@@ -82,6 +87,7 @@ agent-regression:
       env -u AGENT_TEST_CASE
       REQUIRE_FULL_SUITE=1
       AGENT_TEST_CALIBRATE=0
+      AGENT_TEST_DURATION_PROFILE=none
       AGENT_TEST_TIMING_FILE=ci-artifacts/agent-suite-timings.log
       AGENT_TEST_GUEST_LOG_FILE=ci-artifacts/agent-suite-guest.log
       TOOLPREFIX=riscv64-linux-gnu-

@@ -936,6 +936,20 @@ def run_case(
 
 
 def main() -> int:
+    host_state = {"rp_host_action_inbox", "rp_host_run_result"}
+    for forbidden in ("rp_host_action_inbox", "rp_host_action", "rp_host_run_re"):
+        try:
+            fsx.discover_state_inventory(None, [forbidden], host_state)
+        except ValueError as error:
+            assert "Host" in str(error), error
+        else:
+            raise AssertionError(f"Host state alias was accepted: {forbidden}")
+    name_map, allowed = fsx.discover_state_inventory(
+        None, ["rp_workflow_artifact"], host_state
+    )
+    assert allowed == {"rp_workflow_artifact"}
+    assert name_map == {"rp_workflow_ar": "rp_workflow_artifact"}
+
     assert len(fsx.DINODE_SIZE_BY_MAGIC) == 8
     assert (
         fsx.FSMAGIC_BASELINE_PRINCIPAL

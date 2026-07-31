@@ -27,10 +27,11 @@ out_dir := target
 asm_dir := asm
 arch_dir := lib/arch/riscv
 
-CFLAGS := -std=gnu11 -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
-CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall -Os
-CFLAGS += -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables
-CFLAGS += -fno-pie -static -Iinclude -Ilib -I$(arch_dir) -I$(generated_dir)
+COMMON_CFLAGS := -std=gnu11 -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
+COMMON_CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall -Os
+COMMON_CFLAGS += -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables
+COMMON_CFLAGS += -fno-pie -static
+CFLAGS := $(COMMON_CFLAGS) -Iinclude -Ilib -I$(arch_dir) -I$(generated_dir)
 CFLAGS += $(USER_EXTRA_CFLAGS)
 LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000 -Wl,--gc-sections
 
@@ -39,9 +40,14 @@ LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
 SRCS := $(wildcard $(app_dir)/*.c)
 APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
+APPS += compatbench
 GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
 EVALUATION_HEADER := $(generated_dir)/agenteval_seed.h
+COMPAT_BENCH_HEADER := $(generated_dir)/compatbench_seed.h
+COMPAT_BENCH_REPO_SOURCE := evaluation_guest/compatbench.c
+COMPAT_BENCH_SOURCE := ../$(COMPAT_BENCH_REPO_SOURCE)
 AGENT_EVAL_CHALLENGE_HEX ?= 0000000000000001
+COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 USER_BUILD_CONFIG := $(build_dir)/.user-build-config
 USER_STACK_CONTRACT := ../user_stack_policy.h
 USER_STACK_CONTRACT_WRAPPER := include/user_stack_policy.h
@@ -52,10 +58,10 @@ override USER_STACK_WORKFLOW_GLOBAL_RESERVED_CAP := 64
 # This helper invokes one of four fixed child roots through a function pointer;
 # model every target instead of treating the indirect edge as stackless.
 USER_STACK_INDIRECT_CALL_EDGES := \
-	src/fspquota_ucore.c:run_child=src/fspquota_ucore.c:leave_crash_orphan \
-	src/fspquota_ucore.c:run_child=src/fspquota_ucore.c:seed_or_verify \
-	src/fspquota_ucore.c:run_child=src/fspquota_ucore.c:verify_relaunch_and_cleanup \
-	src/fspquota_ucore.c:run_child=src/fspquota_ucore.c:verify_cleanup_reuse
+	user/src/fspquota_ucore.c:run_child=user/src/fspquota_ucore.c:leave_crash_orphan \
+	user/src/fspquota_ucore.c:run_child=user/src/fspquota_ucore.c:seed_or_verify \
+	user/src/fspquota_ucore.c:run_child=user/src/fspquota_ucore.c:verify_relaunch_and_cleanup \
+	user/src/fspquota_ucore.c:run_child=user/src/fspquota_ucore.c:verify_cleanup_reuse
 USER_STACK_CHECKER := ../scripts/check-user-stack-usage.py
 USER_STACK_CONTRACT_CHECKER := ../scripts/check-user-stack-contract.py
 STACK_USAGE_DIR ?= $(build_dir)/stack-usage
@@ -78,6 +84,7 @@ METADATA_RECOVERY_TESTS := agentmetacrash_ucore agentmetarecover_ucore agentmeta
 OBSERVE_RECOVERY_TESTS := agentobsreboot_ucore
 VIRTIO_DISK_TESTS := virtiodisk_ucore
 EVALUATION_TESTS := agenteval_ucore
+COMPATIBILITY_TESTS := compatbench
 AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentbench_ucore labbench_ucore labdemo_ucore agentsecurity_ucore agenttoolabi_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
 PLATFORM_TESTS := rp_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
@@ -117,7 +124,9 @@ CH_TESTS := $(CH8_TESTS)
 else ifeq ($(CHAPTER), agent)
 CH_TESTS := usershell $(AGENT_TESTS)
 else ifeq ($(CHAPTER), agent_eval)
-CH_TESTS := usershell $(EVALUATION_TESTS)
+CH_TESTS := $(EVALUATION_TESTS)
+else ifeq ($(CHAPTER), compat_eval)
+CH_TESTS := $(COMPATIBILITY_TESTS)
 else ifeq ($(CHAPTER), safety)
 CH_TESTS := $(SAFETY_TESTS)
 else ifeq ($(CHAPTER), fs_enospc)
@@ -143,19 +152,26 @@ CH_TESTS := $(PLATFORM_TESTS)
 else ifeq ($(CHAPTER), platform_seeded)
 CH_TESTS := $(PLATFORM_SEEDED_TESTS)
 else ifeq ($(CHAPTER), platform_agentos)
-CH_TESTS := rp_agentos_orch $(PLATFORM_TESTS)
+CH_TESTS := rp_agentos_orch rp_resource_probe $(PLATFORM_TESTS)
 else
 CH_TESTS := usershell $(AGENT_TESTS)
 endif
 
 SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))
-STACK_USAGE_SRCS := $(sort $(LIB_C) $(SRCS))
+STACK_USAGE_LIBRARY_SRCS := $(addprefix user/,$(sort $(LIB_C)))
+STACK_USAGE_APPLICATION_SRCS := \
+	$(addprefix user/,$(sort $(SRCS))) \
+	$(COMPAT_BENCH_REPO_SOURCE)
+STACK_USAGE_SRCS := $(STACK_USAGE_LIBRARY_SRCS) $(STACK_USAGE_APPLICATION_SRCS)
 STACK_USAGE_OBJS = $(patsubst %.c,$(STACK_USAGE_DIR)/%.o,$(STACK_USAGE_SRCS))
 STACK_USAGE_UNIT_ARGS = \
-	$(foreach src,$(sort $(LIB_C)),--library-unit=$(src)) \
-	$(foreach src,$(sort $(SRCS)),--application-unit=$(src))
+	$(foreach src,$(STACK_USAGE_LIBRARY_SRCS),--library-unit=$(src)) \
+	$(foreach src,$(STACK_USAGE_APPLICATION_SRCS),--application-unit=$(src))
 STACK_USAGE_POLICY_ARGS = \
 	$(foreach edge,$(USER_STACK_INDIRECT_CALL_EDGES),--indirect-call-edge=$(edge))
+STACK_USAGE_CFLAGS := $(COMMON_CFLAGS) \
+	-Iuser/include -Iuser/lib -Iuser/$(arch_dir) -I$(abspath $(generated_dir))
+STACK_USAGE_CFLAGS += $(USER_EXTRA_CFLAGS)
 
 .PHONY: binary target clean stack-usage-build user-stack-check .FORCE
 
@@ -169,6 +185,22 @@ $(EVALUATION_HEADER): .FORCE
 		'#ifndef __AGENTEVAL_SEED_H__' \
 		'#define __AGENTEVAL_SEED_H__' \
 		'#define AGENTEVAL_CHALLENGE 0x$(AGENT_EVAL_CHALLENGE_HEX)ULL' \
+		'#endif' > $@.tmp
+	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
+
+$(COMPAT_BENCH_HEADER): .FORCE
+	@mkdir -p $(@D)
+	@case '$(COMPAT_BENCH_CHALLENGE_HEX)' in \
+		????????????????) ;; \
+		*) echo 'COMPAT_BENCH_CHALLENGE_HEX must contain 16 lowercase hex digits' >&2; exit 2 ;; \
+	esac
+	@case '$(COMPAT_BENCH_CHALLENGE_HEX)' in \
+		*[!0-9a-f]*) echo 'COMPAT_BENCH_CHALLENGE_HEX must contain 16 lowercase hex digits' >&2; exit 2 ;; \
+	esac
+	@printf '%s\n' \
+		'#ifndef __COMPATBENCH_SEED_H__' \
+		'#define __COMPATBENCH_SEED_H__' \
+		'#define COMPATBENCH_CHALLENGE 0x$(COMPAT_BENCH_CHALLENGE_HEX)ULL' \
 		'#endif' > $@.tmp
 	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
 
@@ -189,24 +221,33 @@ $(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -c $< -o $@
 
-$(STACK_USAGE_DIR)/%.o: %.c $(GENERATED_HEADERS)
+$(STACK_USAGE_DIR)/user/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
-	$(CC_CMD) $(CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
-		-fstack-usage -fcallgraph-info=su -c $< -o $@
+	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
+		-fstack-usage -fcallgraph-info=su -c user/$< \
+		-o $(call shell_quote,$(abspath $@))
 
-$(STACK_USAGE_DIR)/src/workflow_teardown_race_ucore.o: \
+$(STACK_USAGE_DIR)/evaluation_guest/compatbench.o: \
+		$(COMPAT_BENCH_SOURCE) $(GENERATED_HEADERS) $(COMPAT_BENCH_HEADER)
+	@mkdir -p $(@D)
+	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
+		-fstack-usage -fcallgraph-info=su -c $(COMPAT_BENCH_REPO_SOURCE) \
+		-o $(call shell_quote,$(abspath $@))
+
+$(STACK_USAGE_DIR)/user/src/workflow_teardown_race_ucore.o: \
 	STACK_USAGE_PROFILE_CFLAGS := \
 	-DWORKFLOW_TEARDOWN_DOMAIN_FILE_CAP=$(USER_STACK_WORKFLOW_DOMAIN_FILE_CAP) \
 	-DWORKFLOW_TEARDOWN_GLOBAL_RESERVED_CAP=$(USER_STACK_WORKFLOW_GLOBAL_RESERVED_CAP)
 
 # Measure conditional test code in the same superset profiles used by its
 # QEMU runners; a default-only build would leave those call paths unaudited.
-$(STACK_USAGE_DIR)/src/agentfinal_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
+$(STACK_USAGE_DIR)/user/src/agentfinal_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
 	-DAGENT_CONTEXT_SYNC_TEST_PROFILE -DWAIT_ATOMIC_TEST_PROFILE
-$(STACK_USAGE_DIR)/lib/syscall.o: STACK_USAGE_PROFILE_CFLAGS := \
+$(STACK_USAGE_DIR)/user/lib/syscall.o: STACK_USAGE_PROFILE_CFLAGS := \
 	-DWAIT_ATOMIC_TEST_PROFILE
-$(STACK_USAGE_DIR)/src/agentobsreboot_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
+$(STACK_USAGE_DIR)/user/src/agentobsreboot_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
 	-DAGENT_OBSERVE_TEST_PROFILE
+$(STACK_USAGE_DIR)/user/src/agenteval_ucore.o: $(EVALUATION_HEADER)
 
 $(CRT_OBJ): $(arch_dir)/crt.S
 	@mkdir -p $(@D)
@@ -219,6 +260,14 @@ $(elf_dir)/%: $(app_dir)/%.c $(LIB_OBJS) $(CRT_OBJ) $(GENERATED_HEADERS) $(arch_
 	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/$*
 
 $(elf_dir)/agenteval_ucore: $(EVALUATION_HEADER)
+
+$(elf_dir)/compatbench: $(COMPAT_BENCH_SOURCE) $(LIB_OBJS) $(CRT_OBJ) \
+		$(GENERATED_HEADERS) $(COMPAT_BENCH_HEADER) $(arch_dir)/user.ld
+	@mkdir -p $(elf_dir) $(bin_dir) $(asm_dir)
+	$(CC_CMD) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) \
+		$(COMPAT_BENCH_SOURCE) -o $@
+	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/compatbench.asm
+	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/compatbench
 
 $(LIB_OBJS) $(CRT_OBJ) $(addprefix $(elf_dir)/,$(SELECTED_APPS)): \
 	$(USER_BUILD_CONFIG) $(USER_STACK_CONTRACT) $(USER_STACK_CONTRACT_WRAPPER)
@@ -237,7 +286,7 @@ user-stack-check:
 			build_dir="$$scratch/build" \
 			STACK_USAGE_DIR="$$scratch/usage"; \
 		$(PYTHON_CMD) $(USER_STACK_CHECKER) \
-			--usage-dir "$$scratch/usage" --source-dir . \
+			--usage-dir "$$scratch/usage" --source-dir .. \
 			--contract-header $(USER_STACK_CONTRACT) \
 			$(STACK_USAGE_UNIT_ARGS) $(STACK_USAGE_POLICY_ARGS)
 

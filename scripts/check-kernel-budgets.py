@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -11,6 +12,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
 
 
@@ -30,9 +32,18 @@ AGENT_TEST_CALIBRATED_FIELDS = frozenset(
         "max_seconds",
         "calibration_samples",
         "source_fingerprint_sha256",
+        "calibration_source_commit",
+        "calibration_source_tree",
+        "calibration_manifest_file",
+        "calibration_manifest_sha256",
+        "calibration_profile_id",
     )
 )
-AGENT_TEST_SOURCE_FINGERPRINT_VERSION = "agent-test-source-contract-v1"
+AGENT_TEST_SOURCE_FINGERPRINT_VERSION = "agent-test-source-contract-v3"
+AGENT_TEST_CALIBRATION_LIMIT_HEADROOM = 0.05
+AGENT_TEST_CALIBRATION_LIMIT_POLICY = (
+    "ceil(max(max_observed, median * 1.05) * 1000) / 1000"
+)
 AGENT_TEST_SOURCE_REQUIRED_PATHS = (
     "Makefile",
     ".gitlab-ci.yml",
@@ -41,6 +52,7 @@ AGENT_TEST_SOURCE_REQUIRED_PATHS = (
     "scripts/run-agent-tests.sh",
     "scripts/evidence-wiring.sh",
     "scripts/agent_test_runner.py",
+    "scripts/agent_test_calibration.py",
     "scripts/validate-kernel-test-log.py",
     "scripts/initproc.py",
     "scripts/test-sync-owner-wiring.py",
@@ -323,6 +335,7 @@ def parse_args():
             "agent-modules",
             "agent-test-policy",
             "agent-tests",
+            "agent-test-timing-inventory",
             "config",
         ),
         default="kernel",
@@ -387,6 +400,20 @@ def require_string_array(mapping, name):
     return value
 
 
+def calibrated_agent_test_limit(totals):
+    values = tuple(Decimal(str(value)) for value in totals)
+    median = statistics.median(values)
+    candidate = max(
+        max(values),
+        median
+        * (
+            Decimal(1)
+            + Decimal(str(AGENT_TEST_CALIBRATION_LIMIT_HEADROOM))
+        ),
+    )
+    return float(candidate.quantize(Decimal("0.001"), rounding=ROUND_CEILING))
+
+
 def collect_agent_test_source_paths(root):
     root = Path(root).resolve()
     if not root.is_dir():
@@ -423,6 +450,7 @@ def agent_test_source_fingerprint(root, config):
     contract = {
         "canonical_toolchain": config["canonical_toolchain"],
         "expected_cases": tests["expected_cases"],
+        "local_calibration_profile": tests["local_calibration_profile"],
         "runner_profile": tests["runner_profile"],
         "runner_tag": tests["runner_tag"],
     }
@@ -472,7 +500,7 @@ def check_agent_test_source_fingerprint(root, config):
         "[kernel-budget] Agent source/contract fingerprint: "
         f"sha256={actual}, inputs={len(paths)}"
     )
-    return actual
+    return actual, len(paths)
 
 
 def validate_pair(
@@ -761,12 +789,89 @@ def validate_config(config):
     runner = require_mapping(
         tests.get("runner_profile"), "agent_test_suite.runner_profile"
     )
+    if set(runner) != {"cpu", "virtualization", "qemu_version"}:
+        raise BudgetError("agent_test_suite.runner_profile fields mismatch")
     for name in ("cpu", "virtualization", "qemu_version"):
         if not isinstance(runner.get(name), str) or not runner[name]:
             raise BudgetError(
                 f"agent_test_suite.runner_profile.{name} must be a string"
             )
+    local_profile = require_mapping(
+        tests.get("local_calibration_profile"),
+        "agent_test_suite.local_calibration_profile",
+    )
+    expected_profile_fields = {
+        "schema_version",
+        "profile_id",
+        "cpu",
+        "runtime",
+        "toolchain_prefix",
+        "tool_versions",
+    }
+    if set(local_profile) != expected_profile_fields:
+        raise BudgetError(
+            "agent_test_suite.local_calibration_profile fields mismatch"
+        )
+    if local_profile.get("schema_version") != 1:
+        raise BudgetError(
+            "agent_test_suite.local_calibration_profile schema is unsupported"
+        )
+    profile_id = local_profile.get("profile_id")
+    if (
+        not isinstance(profile_id, str)
+        or re.fullmatch(r"[A-Za-z0-9_.-]+", profile_id) is None
+    ):
+        raise BudgetError(
+            "agent_test_suite.local_calibration_profile.profile_id is invalid"
+        )
+    for name in ("cpu", "runtime"):
+        if not isinstance(local_profile.get(name), str) or not local_profile[name]:
+            raise BudgetError(
+                "agent_test_suite.local_calibration_profile."
+                f"{name} must be a string"
+            )
+    toolchain_prefix = local_profile.get("toolchain_prefix")
+    if (
+        not isinstance(toolchain_prefix, str)
+        or re.fullmatch(r"[A-Za-z0-9_.+-]+-", toolchain_prefix) is None
+    ):
+        raise BudgetError(
+            "agent_test_suite.local_calibration_profile.toolchain_prefix "
+            "is invalid"
+        )
+    tool_versions = require_mapping(
+        local_profile.get("tool_versions"),
+        "agent_test_suite.local_calibration_profile.tool_versions",
+    )
+    expected_profile_tools = {
+        "qemu",
+        "toolchain_cc",
+        "toolchain_ld",
+        "toolchain_objcopy",
+        "toolchain_objdump",
+        "toolchain_as",
+        "host_cc",
+        "python",
+        "bash",
+        "make",
+        "git",
+    }
+    if set(tool_versions) != expected_profile_tools:
+        raise BudgetError(
+            "agent_test_suite.local_calibration_profile.tool_versions "
+            "inventory mismatch"
+        )
+    for name, version in tool_versions.items():
+        if not isinstance(version, str) or not version:
+            raise BudgetError(
+                "agent_test_suite.local_calibration_profile.tool_versions."
+                f"{name} must be a string"
+            )
     if calibration_status == AGENT_TEST_CALIBRATION_READY:
+        if tests.get("calibration_profile_id") != profile_id:
+            raise BudgetError(
+                "calibrated Agent duration must bind the local profile id"
+            )
         fingerprint = tests.get("source_fingerprint_sha256")
         if (
             not isinstance(fingerprint, str)
@@ -776,6 +881,43 @@ def validate_config(config):
                 "calibrated Agent duration requires a lowercase SHA-256 "
                 "source_fingerprint_sha256"
             )
+        source_commit = tests.get("calibration_source_commit")
+        if (
+            not isinstance(source_commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", source_commit)
+        ):
+            raise BudgetError(
+                "calibrated Agent duration requires a full lowercase Git "
+                "calibration_source_commit"
+            )
+        source_tree = tests.get("calibration_source_tree")
+        if (
+            not isinstance(source_tree, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", source_tree)
+        ):
+            raise BudgetError(
+                "calibrated Agent duration requires a full lowercase Git "
+                "calibration_source_tree"
+            )
+        commit_prefix = source_commit[:12]
+        manifest_file = tests.get("calibration_manifest_file")
+        expected_manifest_file = (
+            f"evidence/calibrations/{commit_prefix}/manifest.json"
+        )
+        if manifest_file != expected_manifest_file:
+            raise BudgetError(
+                "agent_test_suite.calibration_manifest_file must be "
+                f"{expected_manifest_file!r}"
+            )
+        manifest_sha256 = tests.get("calibration_manifest_sha256")
+        if (
+            not isinstance(manifest_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256)
+        ):
+            raise BudgetError(
+                "calibrated Agent duration requires a lowercase SHA-256 "
+                "calibration_manifest_sha256"
+            )
         validate_pair(
             tests,
             "baseline_seconds",
@@ -783,15 +925,27 @@ def validate_config(config):
             max_headroom=0.10,
         )
         samples = tests.get("calibration_samples")
-        if not isinstance(samples, list) or len(samples) < 3:
+        if not isinstance(samples, list) or len(samples) != 3:
             raise BudgetError(
-                "calibrated Agent duration requires at least three samples"
+                "calibrated Agent duration requires exactly three samples"
             )
         sample_ids = set()
+        timing_files = set()
         totals = []
         for index, sample in enumerate(samples):
             sample_name = f"agent_test_suite.calibration_samples[{index}]"
             sample = require_mapping(sample, sample_name)
+            sample_fields = {
+                "sample_id",
+                "total_seconds",
+                "timing_file",
+                "timing_file_sha256",
+                "attestation_digest_sha256",
+            }
+            if set(sample) != sample_fields:
+                raise BudgetError(
+                    f"{sample_name} fields must be {sorted(sample_fields)!r}"
+                )
             sample_id = sample.get("sample_id")
             if (
                 not isinstance(sample_id, str)
@@ -803,6 +957,48 @@ def validate_config(config):
             if sample_id in sample_ids:
                 raise BudgetError("Agent calibration sample ids must be unique")
             sample_ids.add(sample_id)
+            ordinal = index + 1
+            expected_sample_id = (
+                f"agent18-{commit_prefix}-{ordinal:02d}"
+            )
+            if sample_id != expected_sample_id:
+                raise BudgetError(
+                    f"{sample_name}.sample_id must be "
+                    f"{expected_sample_id!r}"
+                )
+            timing_file = sample.get("timing_file")
+            expected_timing_file = (
+                f"evidence/calibrations/{commit_prefix}/"
+                f"{ordinal:02d}.timing"
+            )
+            if timing_file != expected_timing_file:
+                raise BudgetError(
+                    f"{sample_name}.timing_file must be "
+                    f"{expected_timing_file!r}"
+                )
+            if timing_file in timing_files:
+                raise BudgetError(
+                    "Agent calibration timing files must be unique"
+                )
+            timing_files.add(timing_file)
+            timing_sha256 = sample.get("timing_file_sha256")
+            if (
+                not isinstance(timing_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", timing_sha256)
+            ):
+                raise BudgetError(
+                    f"{sample_name}.timing_file_sha256 requires a "
+                    "lowercase SHA-256"
+                )
+            attestation_digest = sample.get("attestation_digest_sha256")
+            if (
+                not isinstance(attestation_digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", attestation_digest)
+            ):
+                raise BudgetError(
+                    f"{sample_name}.attestation_digest_sha256 requires a "
+                    "lowercase SHA-256"
+                )
             totals.append(
                 require_positive_number(sample, "total_seconds")
             )
@@ -824,6 +1020,17 @@ def validate_config(config):
             raise BudgetError(
                 "Agent duration limit exceeds 110% of the calibration median"
             )
+        expected_max = calibrated_agent_test_limit(totals)
+        if not math.isclose(
+            tests["max_seconds"],
+            expected_max,
+            rel_tol=1e-9,
+            abs_tol=CALIBRATION_SECONDS_TOLERANCE / 10.0,
+        ):
+            raise BudgetError(
+                "Agent duration limit must follow the calibrated 5% "
+                "headroom policy"
+            )
     else:
         stale_fields = sorted(
             field
@@ -835,7 +1042,6 @@ def validate_config(config):
                 "provisional Agent duration must not carry stale calibrated "
                 f"fields: {stale_fields!r}"
             )
-
     stack = require_mapping(config.get("kernel_stack"), "kernel_stack")
     validate_pair(
         stack, "baseline_required_bytes", "max_required_bytes", integer=True
@@ -1084,6 +1290,7 @@ def validate_config(config):
         "observe_recovery",
         "observe_store",
         "observe_timeline",
+        "resource_observer",
         "resource_controller",
         "tool_protocol",
         "workflow_lifecycle",
@@ -1137,6 +1344,7 @@ def validate_config(config):
         "observe_recovery": "os/agent_observe_recovery.c",
         "observe_store": "os/agent_observe_store.c",
         "observe_timeline": "os/agent_observe_timeline.c",
+        "resource_observer": "os/agent_resource.c",
         "resource_controller": "os/resource_controller.c",
         "tool_protocol": "os/agent_tool_protocol.c",
         "workflow_lifecycle": "os/workflow_lifecycle.c",
@@ -1450,6 +1658,33 @@ def validate_config(config):
             "agent_modules facade allowlist must name forbidden authority"
         )
 
+
+def check_agent_test_calibration_evidence(
+    root, config, expected_source_inputs=None
+):
+    tests = config["agent_test_suite"]
+    if tests["calibration_status"] != AGENT_TEST_CALIBRATION_READY:
+        return
+
+    calibration_path = Path(__file__).with_name("agent_test_calibration.py")
+    spec = importlib.util.spec_from_file_location(
+        "agentos_test_calibration_contract", calibration_path
+    )
+    if spec is None or spec.loader is None:
+        raise BudgetError("cannot load Agent calibration contract")
+    calibration = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(calibration)
+        calibration.verify_calibration_package(
+            root, tests, expected_source_inputs, config
+        )
+    except (OSError, ValueError) as error:
+        raise BudgetError(f"Agent calibration evidence rejected: {error}") from error
+    print(
+        "[kernel-budget] Agent calibration evidence: "
+        "local E3, commit/tree/attestations verified"
+    )
+    return
 
 def load_config(path):
     def reject_constant(value):
@@ -3244,18 +3479,35 @@ def check_agent_tests(args, config):
     )
 
 
+def check_agent_test_timing_inventory(args, config):
+    if args.agent_test_timing_file is None:
+        raise BudgetError("Agent timing inventory requires a timing file")
+    rows, elapsed = read_agent_timing_file(
+        args.agent_test_timing_file,
+        config["agent_test_suite"]["expected_cases"],
+    )
+    if not math.isfinite(elapsed) or elapsed <= 0:
+        raise BudgetError("Agent timing inventory total must be positive")
+    print(
+        "[kernel-budget] Agent timing inventory: "
+        f"cases={len(rows)} total={elapsed:.3f} seconds threshold=not-applied"
+    )
+
+
 def check_agent_test_policy(config):
     tests = config["agent_test_suite"]
     if tests["calibration_status"] != AGENT_TEST_CALIBRATION_READY:
         raise BudgetError(
             "Agent test duration is provisional; run the complete "
             f"{len(tests['expected_cases'])}-case "
-            "suite with AGENT_TEST_CALIBRATE=1 on the pinned runner and "
-            "record at least three samples before final acceptance"
+            "suite as exactly three serialized, attested rounds through "
+            "scripts/agent_test_calibration.py on the pinned runner before "
+            "final acceptance"
         )
     print(
         "[kernel-budget] Agent duration policy: "
-        f"calibrated runner={tests['runner_tag']}"
+        "calibrated local profile="
+        f"{tests['local_calibration_profile']['profile_id']}"
     )
 
 
@@ -3267,7 +3519,12 @@ def main():
                 "--agent-test-calibration requires --check agent-tests"
             )
         config = load_config(args.config)
-        check_agent_test_source_fingerprint(args.root, config)
+        source_contract = check_agent_test_source_fingerprint(args.root, config)
+        check_agent_test_calibration_evidence(
+            args.root,
+            config,
+            None if source_contract is None else source_contract[1],
+        )
         if args.check == "kernel":
             check_kernel(args, config)
         elif args.check == "agent-modules":
@@ -3275,6 +3532,8 @@ def main():
             check_agent_modules(args, config)
         elif args.check == "agent-tests":
             check_agent_tests(args, config)
+        elif args.check == "agent-test-timing-inventory":
+            check_agent_test_timing_inventory(args, config)
         elif args.check == "agent-test-policy":
             check_agent_test_policy(config)
         else:

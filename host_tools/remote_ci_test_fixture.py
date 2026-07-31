@@ -80,6 +80,12 @@ def _job_files(name: str, bundle: Path) -> dict[str, bytes]:
                 b"[dual-target-check] docs: wording scan passed\n"
                 b"[kernel-budget] kernel checks passed\n"
                 b"[kernel-budget] agent-modules checks passed\n"
+                b"[printf-format] host probes and 4 mutations passed; audited=9; "
+                b"mode=ASan/UBSan\n"
+                b"[rp-evidence-field] streaming and malformed-input probes passed; "
+                b"mode=ASan/UBSan\n"
+                b"[rp-state-append] canonical boundary probes passed; "
+                b"mode=ASan/UBSan\n"
             )
         }
     if name == "reader-e2e":
@@ -88,7 +94,11 @@ def _job_files(name: str, bundle: Path) -> dict[str, bytes]:
         return {
             "agent-suite-timings.log": (raw / "agent-suite-timings.log").read_bytes(),
             "agent-suite-guest.log": (raw / "agent-suite-guest.log").read_bytes(),
-            "agent-regression-job.log": b"[agent-tests] all Agent-OS uCore checks passed\n",
+            "agent-regression-job.log": (
+                b"[agent-tests] duration-profile profile=none gate=skipped "
+                b"reason=different-runner\n"
+                b"[agent-tests] all Agent-OS uCore checks passed\n"
+            ),
         }
     result: dict[str, bytes] = {}
     for label in JOB_LABELS[name]:

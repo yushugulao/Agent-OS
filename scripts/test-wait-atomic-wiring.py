@@ -645,7 +645,7 @@ def validate_runner_profile_image(runner: str, makefile: str) -> None:
     start = runner.index("build_user_image() {")
     end = runner.index("\nrun_case() {", start)
     builder = runner[start:end]
-    make_image = builder.index("make nfs/fs.img")
+    make_image = builder.index('"${MAKE_TOOL}" nfs/fs.img')
     pass_flags = builder.index(
         'USER_EXTRA_CFLAGS="${user_extra_cflags}"', make_image
     )

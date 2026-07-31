@@ -49,6 +49,24 @@
       "task": "task6"
     }
   ],
+  "guardrails": [
+    {
+      "id": "struct_proc_bytes",
+      "label": "AgentOS struct proc size",
+      "unit": "bytes",
+      "direction": "lower_is_better",
+      "source": "check-kernel-budgets",
+      "task": "task6"
+    },
+    {
+      "id": "user_stack_call_path_bytes",
+      "label": "AgentOS worst user call-path stack",
+      "unit": "bytes",
+      "direction": "lower_is_better",
+      "source": "check-user-stack-usage",
+      "task": "task6"
+    }
+  ],
   "tool": {
     "output_format": "gnu-berkeley-decimal",
     "version_arguments": [

@@ -30,6 +30,12 @@ from host_tools.agent_metadata_disk_format import (
     validate_bank_set,
 )
 from host_tools import plain_ucore_fs_extract as ucore_fs
+from host_probe_toolchain import (
+    host_compiler,
+    probe_environment,
+    probe_mode,
+    required_sanitizer_flags,
+)
 
 
 class MetadataDiskFormatTests(unittest.TestCase):
@@ -425,27 +431,33 @@ class MetadataGenesisImageTests(unittest.TestCase):
         cls.directory = Path(cls._temporary.name)
         cls.mkfs = cls.directory / "mkfs-agent-metadata-genesis"
         cls.image_path = cls.directory / "fs.img"
+        compiler = host_compiler()
+        sanitizer_flags = required_sanitizer_flags(compiler, cls.directory)
+        environment = probe_environment(sanitizer_flags)
         if os.name == "nt":
             root = cls._wsl_path(ROOT)
             mkfs = cls._wsl_path(cls.mkfs)
             image = cls._wsl_path(cls.image_path)
             command = (
                 f"cd {shlex.quote(root)} && "
-                "cc nfs/fs.c nfs/host_image_snapshot.c "
+                f"{shlex.join(compiler + sanitizer_flags)} "
+                "nfs/fs.c nfs/host_image_snapshot.c "
                 f"-o {shlex.quote(mkfs)} && "
-                f"{shlex.quote(mkfs)} {shlex.quote(image)}"
+                f"{shlex.join([mkfs, image])}"
             )
             result = subprocess.run(
                 ["wsl", "bash", "-lc", command],
                 capture_output=True,
+                env=environment,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
             )
         else:
             result = subprocess.run(
-                [
-                    "cc",
+                compiler
+                + [
+                    *sanitizer_flags,
                     "nfs/fs.c",
                     "nfs/host_image_snapshot.c",
                     "-o",
@@ -460,6 +472,7 @@ class MetadataGenesisImageTests(unittest.TestCase):
                     [str(cls.mkfs), str(cls.image_path)],
                     cwd=ROOT,
                     capture_output=True,
+                    env=environment,
                     text=True,
                 )
         if result.returncode != 0:
@@ -471,6 +484,8 @@ class MetadataGenesisImageTests(unittest.TestCase):
             )
         cls.image = cls.image_path.read_bytes()
         cls.superblock = ucore_fs.read_superblock(cls.image)
+        cls.sanitizer_mode = probe_mode(sanitizer_flags)
+        print(f"[agent-metadata-genesis] fixture passed; mode={cls.sanitizer_mode}")
 
     @classmethod
     def tearDownClass(cls):

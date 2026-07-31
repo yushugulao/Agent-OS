@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "types.h"
 #include "../agent_lifecycle_abi.h"
+#include "../agent_resource_abi.h"
 #include "../agent_tool_abi.h"
 
 #define AGENT_TYPE_NONE  0
@@ -794,6 +795,7 @@ int sys_agent_workflow_close(uint64 scope_id);
 int sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 				      uint64 flags, uint64 expected_id,
 				      uint64 expected_generation);
+int sys_agent_resource_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_scope_delegate_fd(int fd);
 int sys_agent_info(uint64 addr);
 int sys_agent_sched_snapshot(uint64 recordsaddr, int max);

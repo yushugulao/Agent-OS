@@ -113,6 +113,8 @@ powercut runner 的 host 威胁边界是“受信 QEMU、非受信 Guest”：�
 
 如果需要指定工具，可以设置 `PYTHON_BIN=...`、`QEMU=...`、`CASE_TIMEOUT=...`。本机 WSL 环境下可直接使用默认 `python3`、`qemu-system-riscv64` 和 `240s` 单项超时时间。
 
+正式评价还必须对同一 run 显式执行 `make evaluation-full-verify`。该入口不会只记录一个通过布尔值，也不会修改 `evidence/releases/INDEX.md`；它在源码提交 C 的 clean detached worktree 中运行上述真实命令，并把原始 `full-verify.log`、严格 17 步 summary、全部 raw artifact、工具版本和双层校验和封存在 run 的 `full-verification/`。采集器从 C 的 Git blob 提取 child dispatcher 到私有 runtime，并把 `PATH` 中的 `python`/`python3`、`sys.executable` 和 `sys._base_executable` 统一绑定到 shim；backing CPython 固定使用 `-I -S -B -u`，嵌套 dispatch 恢复精确标准库路径后只开放当前 detached worktree 与受控临时目录。环境记录交叉绑定 backing Python、Bash、dispatcher、shim、精确环境、PATH 解析及执行前后 hash。它防止 Host 环境注入和普通递归 Python 调用漂移，但不是隔离提交 C 内恶意源码、显式绕过 launcher 的命令或执行期敌对 Host 的安全沙箱。formal package 创建和可搬运验证先检查包内 measurement-source 快照，再由快照内版本化 verifier 重放 Reader、dual measurement、全 raw semantic registry 与 allocator archive，同时检查命令退出状态、唯一完成 marker、step/raw 一一对应和逐文件内容。无快照、回退审计机 live checkout、自洽重签伪 raw、失败、删除或篡改 raw 均 fail closed。可搬运验证只证明包内快照、receipt 和 raw evidence 的内部完整性及语义可重放性，不认证声明的提交 C；只有 `verify --require-committed --repo-root <仓库>` 将快照核对到 C 的 Git blob 并验证 C→E 历史后，才达到本地 E3。development package 固定将该证明标记为 `unavailable`，不能携带 formal payload。
+
 快速目标检查：
 
 ```bash
@@ -336,8 +338,8 @@ host_surface_alignment: ... runtime_state_checked=1 status=ready
 ## AgentOS 专项验证
 
 增强目标的内核机制还需要单独运行专项脚本。若 case 集合或固定环境变化而使时长策略重新进入
-provisional，普通全套会在 QEMU 前按设计失败；开发阶段应运行定向 case，固定 runner 校准则
-必须显式保存完整 timing file：
+provisional，普通全套会在 QEMU 前按设计失败；开发阶段应运行定向 case。固定 runner 校准不能
+直接手工调用 `run-agent-tests.sh` 或独立填写 timing，而必须由统一 harness 在冻结提交上执行：
 
 当前容量合同把持久存储与 metadata catalog 分开验收：每 workflow 的 inode STORAGE policy 硬下限为 320，当前镜像约为 342；catalog 仍为每 scope 112 条，其中 live AUTOSCAN 新增长度最多 96 条并为显式 metadata 保留 16 条。旧候选把 workflow inode 同样钳制为 112 的做法只保留为历史失败基线。定向 AgentScope 必须证明第 97 个普通文件及 catalog 满后的额外文件仍能创建且保持 scope 隔离，同时第 17 个显式 metadata 请求稳定返回 `NO_SPACE`。所有 sidecar bind/clear/deferred 更新统一通过 `agent_file_state_set_index()` 校验、持久化并在失败时恢复旧值；write/sync/truncate/delete 统一通过 `agent_fs_apply_inode_event()`，create 只在 VFS 成功发布后进入目录协调。Host 合同还检查持久 deferred 状态、饱和时重复扫描抑制、释放后重建和强制 reload 后的持久结果。v7 快照加载只按表示、SYSTEM 64、ordinary 448、每 scope 112、lifecycle 与唯一键等稳定磁盘合同判定；同版本旧快照中 97 至 112 条 AUTOSCAN 会完整装载而不静默删除，第 113 条仍判损坏。加载后的超额 scope 只允许 AUTOSCAN 数量不变或减少；新增及显式记录转 AUTOSCAN 均被拒绝，降至 95 条后才可再次增长。精确 receipt 回滚只复核硬边界、唯一键与 post-state，不受后来收紧的软准入策略阻断。
 
@@ -346,12 +348,31 @@ provisional，普通全套会在 QEMU 前按设计失败；开发阶段应运行
 AGENT_TEST_CASE=agentfinal_ucore TOOLPREFIX=riscv64-linux-gnu- \
   QEMU=qemu-system-riscv64 CASE_TIMEOUT=240s bash scripts/run-agent-tests.sh
 
-# 只在固定校准环境执行；每轮使用不同、持久的 timing 文件
-REQUIRE_FULL_SUITE=1 AGENT_TEST_CALIBRATE=1 \
-  AGENT_TEST_TIMING_FILE=results/calibration/agent-suite-01.timing \
-  TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 \
-  CASE_TIMEOUT=240s bash scripts/run-agent-tests.sh
+# 只在版本化 local E3 profile 和 clean detached HEAD 执行；output 必须在仓库外
+QEMU=/opt/qemu/qemu-system-riscv64.exe \
+TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf- \
+  python3 scripts/agent_test_calibration.py collect \
+  --root . --source-commit "$(git rev-parse HEAD)" \
+  --output /var/tmp/agentos-calibration-"$(git rev-parse --short=12 HEAD)" \
+  --case-timeout 240s
 ```
+
+该 harness 预声明并串行执行严格三轮 18-case，为 campaign、round、session 和 execution 生成互不
+重复的 256-bit nonce。每个 QEMU 执行由 runner 独占创建 attestation，绑定源码 commit/tree、
+runner 与 QEMU/编译器/Python 路径和哈希、内核及文件系统镜像、Guest 日志、真实 monotonic
+区间和退出结果；18 行 timing 只能由完整 attestation 集合重建。输出明确标记为未签名的本地 E3
+复现证据，不属于 GitLab CI 或 E4 attestation，也不能证明控制本机和工具的操作者没有主动伪造。
+采集器逐字节核对 tracked tree，并把版本化 profile 中的 GCC/ld/objcopy/objdump/as、Host CC、
+QEMU、Python、Bash、Make 与 Git 身份回灌给子进程；production 路径没有公式或 fixture 输入。单元测试中的合成
+fixture 只验证拒绝逻辑，不能成为校准事实。GitLab 的 Ubuntu/QEMU 10.2.1 是不同 profile，完整
+18-case 仍验语义、日志和 timing inventory，但以 `duration-profile profile=none` 回执明确跳过本地
+墙钟阈值，不能把远端结果套入该阈值。旧 schema-2 timing/log 包只能作为历史记录。
+
+校准子进程不继承任意开发环境：只保留最小 OS/runtime 变量，并固定 locale、临时目录、
+`LOG=error`、`CHAPTER=agent` 和 local-E3 duration profile；`BASH_ENV`、`MAKEFLAGS`、`MAKEFILES`、
+`PYTHONPATH`、GCC 搜索路径及所有测试 profile 注入均被移除。采集开始时拒绝全部 ignored/untracked
+条目；每轮 clean 后重验零额外条目，结束后只允许版本化清单中的 build、用户目标、镜像和
+`initproc.S` 输出。大小写等价路径、空目录、symlink 和 NTFS junction 同样 fail closed。
 
 期望关键标记：
 

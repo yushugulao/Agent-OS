@@ -65,8 +65,10 @@ SOURCE_PATHS = (
     "user/Makefile",
     "nfs/Makefile",
     "nfs/fs.c",
+    "nfs/elf_compat.h",
     "nfs/host_image_snapshot.c",
     "nfs/host_image_snapshot.h",
+    "nfs/host_windows_compat.h",
     "os/fs.c",
     "os/fs_allocator_test.c",
     "user/src/fsallocfault_ucore.c",
@@ -74,6 +76,7 @@ SOURCE_PATHS = (
     "scripts/agent_test_runner.py",
     "scripts/fs-allocator-evidence.py",
     "scripts/fs-allocator-image.py",
+    "scripts/trusted-python-entry.py",
     "scripts/run-fs-allocator-fault-tests.sh",
 )
 SOURCE_FILES = tuple(f"sources/{path}" for path in SOURCE_PATHS)
@@ -458,7 +461,12 @@ def capture_run(
         "python": _tool_attestation(source_root, python, ["--version"], "python"),
         "qemu": _tool_attestation(source_root, qemu, ["--version"], "qemu"),
         "make": _tool_attestation(source_root, "make", ["--version"], "make"),
-        "host_cc": _tool_attestation(source_root, "cc", ["--version"], "host cc"),
+        "host_cc": _tool_attestation(
+            source_root,
+            os.environ.get("HOST_CC", os.environ.get("HOSTCC", "cc")),
+            ["--version"],
+            "host cc",
+        ),
         "cross_gcc": _tool_attestation(
             source_root, f"{toolprefix}gcc", ["--version"], "cross gcc"
         ),
@@ -744,10 +752,13 @@ def _raw_case_cli_results(
 def _raw_mutation_cli_rejection(
     directory: Path, paths: dict[str, Path]
 ) -> tuple[int, dict[str, str]]:
-    script = Path(__file__).with_name("fs-allocator-image.py").resolve()
+    launcher = Path(__file__).with_name("trusted-python-entry.py").resolve()
     command = [
         sys.executable,
-        str(script),
+        "-I",
+        "-S",
+        str(launcher),
+        "scripts/fs-allocator-image.py",
         "verify-case-raw",
         paths["before"].name,
         paths["fault"].name,

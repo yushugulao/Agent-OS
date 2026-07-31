@@ -14,6 +14,7 @@ import os
 import random
 import re
 import shutil
+import stat
 import statistics
 import tempfile
 from fractions import Fraction
@@ -26,14 +27,37 @@ from evaluation_kernel_cost import (
     build_dashboard_fragment as build_kernel_cost_fragment,
     verify_portable as verify_kernel_cost_portable,
 )
+from evaluation_campaign import CampaignError, validate_campaign
 from evaluation_contract import (
     EvaluationError as EvaluationContractError,
+    SUMMARY_SCHEMA_VERSION as SCHEMA_VERSION,
+    derive_acceptance_gates,
+    load_run_plan,
     verify as verify_evaluation_contract,
 )
 from strict_json import read_strict_json, strict_json_loads
+from safe_host_paths import (
+    path_is_link,
+    require_regular_file,
+    walk_regular_files_no_links,
+)
+from compatibility_overhead import (
+    CompatibilityRunError,
+    verify_campaign_artifacts as verify_compatibility_artifacts,
+)
+from compatibility_overhead_contract import CompatibilityContractError
+from evaluation_scenario import (
+    RESOURCE_STABILITY_CHILD_ROUNDS,
+    RESOURCE_STABILITY_FILE,
+    RESOURCE_STABILITY_GROWTH_BOUNDS,
+    RESOURCE_STABILITY_INTERPRETATION,
+    RESOURCE_STABILITY_LOAD_WORKFLOWS,
+    RESOURCE_STABILITY_MEASUREMENT_SCOPE,
+    RESOURCE_STABILITY_RESOURCE_KINDS,
+    RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
+)
 
 
-SCHEMA_VERSION = 1
 TOP_LEVEL_FIELDS = {
     "schema_version",
     "kind",
@@ -44,6 +68,7 @@ TOP_LEVEL_FIELDS = {
     "methodology",
     "evidence",
     "claims",
+    "acceptance",
 }
 BENCHMARK_FIELDS = {
     "id",
@@ -74,6 +99,7 @@ PAIRED_FIELDS = {
     "relative_ci_low",
     "relative_ci_high",
     "sign_test",
+    "mcid_sign_test",
     "samples",
 }
 EVIDENCE_FIELDS = {"id", "kind", "label", "path", "sha256", "status", "source"}
@@ -85,7 +111,47 @@ DIAGNOSTIC_FIELDS = {
     "duration_us",
     "work_units",
     "index_rebuild_records",
+    "result_cache_hits",
     "samples",
+}
+BENCHMARK_SAMPLE_FIELDS = {
+    "target_id",
+    "load",
+    "value",
+    "trial",
+    "order",
+    "boot_id",
+    "evidence_id",
+    "operations",
+    "dataset_size",
+    "work_units",
+    "records_examined",
+    "result_items",
+    "index_rebuild_records",
+    "result_cache_hits",
+}
+DIAGNOSTIC_SAMPLE_FIELDS = {
+    "boot_id",
+    "cache",
+    "operations",
+    "dataset_size",
+    "work_units",
+    "result_items",
+    "duration_us",
+    "index_rebuild_records",
+    "result_cache_hits",
+    "workload_fingerprint",
+    "result_fingerprint",
+    "evidence_id",
+    "source_log",
+    "source_line",
+    "source_log_sha256",
+    "source_marker_sha256",
+}
+CLAIM_GATE_FIELDS = {
+    "minimum_absolute_improvement_us",
+    "minimum_baseline_duration_us",
+    "minimum_relative_improvement_percent",
 }
 CLAIM_FIELDS = {
     "id",
@@ -97,19 +163,29 @@ CLAIM_FIELDS = {
 }
 
 BENCHMARK_STATUSES = {"measured", "unavailable", "failed"}
-SCENARIO_STATUSES = {"pass", "partial", "fail", "unavailable"}
-SCENARIO_PERFORMANCE_STATUSES = {"supported", "inconclusive", "failed", "unavailable"}
+SCENARIO_FUNCTIONAL_STATUSES = {"pass", "fail", "unavailable"}
+SCENARIO_PERFORMANCE_STATUSES = {
+    "supported", "regressed", "inconclusive", "failed", "unavailable"
+}
 CLAIM_STATUSES = {"supported", "not_supported", "unavailable"}
 EVIDENCE_STATUSES = {"verified", "unverified", "unavailable", "invalid"}
 RUN_STATUSES = {"measured", "unavailable", "failed"}
 DIRECTIONS = {"lower_is_better", "higher_is_better", "neutral"}
 TASK_IDS = tuple(f"task{index}" for index in range(1, 7))
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+FINGERPRINT16 = re.compile(r"^[0-9a-f]{16}$")
 WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 BOOTSTRAP_REPETITIONS = 2_000
 MINIMUM_SCENARIO_BOOTS = 7
 MINIMUM_BENCHMARK_BOOTS = 7
 MINIMUM_INNER_PAIRS = 7
+FILE_META_CAPACITY = 512
+FILE_QUERY_PATH_INDEX = "file_query_path_index"
+FILE_QUERY_TABLE_ABLATION = "file_query_table_ablation"
+FILE_QUERY_EXPERIMENTS = {
+    FILE_QUERY_PATH_INDEX,
+    FILE_QUERY_TABLE_ABLATION,
+}
 BENCHMARK_GATE_FLOORS = {
     "minimum_absolute_improvement_us": 5.0,
     "minimum_baseline_duration_us": 20.0,
@@ -120,17 +196,97 @@ SCENARIO_GATE_FLOORS = {
     "minimum_baseline_makespan_ms": 50.0,
     "minimum_relative_improvement_percent": 5.0,
 }
+SCENARIO_ALPHA = 0.05
+SCENARIO_DIRECTIONAL_ALPHA = SCENARIO_ALPHA / 2
+SCENARIO_INFERENCE = {
+    "method": "exact_directional_binomial_with_bonferroni",
+    "success_unit": "paired_boot",
+    "sample_policy": "full_n_including_non_wins",
+    "alpha": SCENARIO_ALPHA,
+    "multiplicity": "two_directions_within_task6_scenario",
+    "directional_hypothesis_count": 2,
+    "correction": "Bonferroni",
+    "per_direction_alpha": SCENARIO_DIRECTIONAL_ALPHA,
+}
+SCENARIO_INTERPRETATION = {
+    "design": "full-stack",
+    "causal_attribution": "non-single-mechanism",
+    "host_page_cache": "uncontrolled",
+}
 MAX_SCENARIO_REPORT_BYTES = 32 << 20
 MAX_SCENARIO_SAMPLES = 128
 MAX_SCENARIO_PROGRAMS = 128
 MAX_SCENARIO_MODULES = 64
 MAX_SCENARIO_DURATION_MS = 3_600_000
+MAX_PORTABLE_EVIDENCE_FILES = 256
+MAX_PORTABLE_EVIDENCE_FILE_BYTES = 32 << 20
+MAX_PORTABLE_EVIDENCE_TOTAL_BYTES = 64 << 20
+MAX_COMPATIBILITY_EVIDENCE_FILES = 256
+MAX_COMPATIBILITY_EVIDENCE_DIRECTORIES = 128
+MAX_COMPATIBILITY_EVIDENCE_FILE_BYTES = 64 << 20
+MAX_COMPATIBILITY_EVIDENCE_TOTAL_BYTES = 256 << 20
+MAX_COMPATIBILITY_EVIDENCE_DEPTH = 8
+INFERENCE_METHOD = (
+    "exact one-sided binomial sign test of per-boot joint MCID exceedance; "
+    "a win strictly exceeds both absolute and relative MCIDs"
+)
+DESCRIPTIVE_INTERVAL_ROLE = (
+    "descriptive only; never used to support a headline claim"
+)
+INTERPRETATION_BOUNDARIES = {
+    "microbenchmark_design": "same-kernel-paired-comparison",
+    "microbenchmark_causal_scope": (
+        "task-facing-path-vs-index-and-isolated-ablation-under-preregistered-workloads"
+    ),
+    "scenario_design": "full-stack",
+    "scenario_attribution": "non-single-mechanism",
+    "host_page_cache": "uncontrolled",
+}
 SCENARIO_KEY_OUTCOMES = (
     "research_rerun",
     "workflow_stage",
     "artifact_derivation",
     "llm_response",
 )
+RESOURCE_STABILITY_SUMMARY_FIELDS = {
+    "status",
+    "required_target",
+    "measurement_scope",
+    "verified_boots",
+    "load_workflows_per_boot",
+    "terminal_workflows_per_boot",
+    "child_rounds_per_load_workflow",
+    "global_observation",
+    "interpretation",
+    "boot_receipts",
+}
+RESOURCE_STABILITY_OBSERVATION_FIELDS = {
+    "coverage",
+    "measured_mask_semantics",
+    "snapshot_consistency",
+    "account_counters",
+    "rate_budgets",
+    "free_pages",
+    "resources",
+}
+RESOURCE_STABILITY_RESOURCE_FIELDS = {
+    "kind",
+    "status",
+    "coverage",
+    "per_workflow_growth_bound",
+    "terminal_growth_bound",
+    "max_observed_per_workflow_growth",
+    "terminal_observed_growth",
+    "plateau_or_reclamation",
+    "exact_terminal_recovery",
+}
+RESOURCE_STABILITY_RECEIPT_FIELDS = {
+    "sample_id",
+    "challenge",
+    "resource_receipt_sha256",
+    "binding_sha256",
+    "raw_source_receipt_sha256",
+}
 SCENARIO_OUTCOME_FIELDS = {
     *SCENARIO_KEY_OUTCOMES,
     "challenge",
@@ -152,6 +308,10 @@ KERNEL_COST_METRICS = (
     ("data_bytes", ".data"),
     ("bss_bytes", ".bss"),
 )
+KERNEL_COST_GUARDRAILS = (
+    ("struct_proc_bytes", "struct proc"),
+    ("user_stack_call_path_bytes", "最坏用户调用路径栈"),
+)
 SCENARIO_FIELDS = {
     "id",
     "label",
@@ -165,6 +325,9 @@ SCENARIO_PERFORMANCE_FIELDS = {
     "direction",
     "lower_is_better",
     "unit",
+    "paired_success_rate",
+    "inference",
+    "interpretation",
     "claim_gate",
     "n",
     "median",
@@ -174,6 +337,8 @@ SCENARIO_PERFORMANCE_FIELDS = {
     "relative_ci_low",
     "relative_ci_high",
     "sign_test",
+    "mcid_sign_test",
+    "regression_mcid_sign_test",
     "bootstrap",
     "samples",
 }
@@ -181,8 +346,11 @@ SCENARIO_PERFORMANCE_FIELDS = {
 STATUS_ZH = {
     "measured": "已测量",
     "pass": "通过",
+    "passed": "通过",
+    "ready": "就绪",
     "partial": "部分通过",
     "supported": "证据支持",
+    "regressed": "显著回退",
     "not_supported": "暂不支持",
     "inconclusive": "证据不足",
     "unverified": "未核验",
@@ -191,6 +359,9 @@ STATUS_ZH = {
     "failed": "失败",
     "fail": "失败",
     "invalid": "无效",
+    "publishable": "可发布",
+    "incomplete": "未完整",
+    "not_ready": "未就绪",
 }
 
 CSV_FIELDS = (
@@ -350,6 +521,83 @@ def _validate_sign_test(
     p_value = _require_number(value["p_value"], f"{path}.p_value")
     if not 0 <= p_value <= 1 or not math.isclose(p_value, float(expected), rel_tol=0, abs_tol=1e-15):
         _fail(f"{path}.p_value does not match exact sign test")
+    return p_value
+
+
+def _validate_mcid_sign_test(
+    raw: Any,
+    path: str,
+    pair_n: int,
+    improvements: list[float],
+    relative_improvements: list[float | None],
+    claim_gate: dict[str, float],
+) -> float:
+    value = _require_object(raw, path)
+    required = {
+        "alternative",
+        "absolute_mcid_us",
+        "relative_mcid_percent",
+        "success_rule",
+        "non_win_policy",
+        "wins",
+        "non_wins",
+        "n",
+        "p_value",
+        "numerator",
+        "denominator",
+    }
+    if set(value) != required:
+        _fail(f"{path} fields do not match the joint-MCID sign-test schema")
+    if value["alternative"] != "joint_absolute_and_relative_mcid_exceeded":
+        _fail(f"{path}.alternative is not the registered joint-MCID hypothesis")
+    if value["success_rule"] != "both_strictly_greater_per_boot":
+        _fail(f"{path}.success_rule must require both MCIDs per boot")
+    if value["non_win_policy"] != "ties_missing_or_not_exceeding_either_mcid":
+        _fail(f"{path}.non_win_policy differs from the preregistered rule")
+    absolute_mcid = _require_number(value["absolute_mcid_us"], f"{path}.absolute_mcid_us")
+    relative_mcid = _require_number(
+        value["relative_mcid_percent"], f"{path}.relative_mcid_percent"
+    )
+    if not math.isclose(
+        absolute_mcid,
+        claim_gate["minimum_absolute_improvement_us"],
+        rel_tol=0,
+        abs_tol=1e-15,
+    ) or not math.isclose(
+        relative_mcid,
+        claim_gate["minimum_relative_improvement_percent"],
+        rel_tol=0,
+        abs_tol=1e-15,
+    ):
+        _fail(f"{path} MCIDs differ from the benchmark claim gate")
+    wins = _nonnegative_int(value["wins"], f"{path}.wins")
+    non_wins = _nonnegative_int(value["non_wins"], f"{path}.non_wins")
+    n = _nonnegative_int(value["n"], f"{path}.n")
+    if n != pair_n or wins + non_wins != n:
+        _fail(f"{path} counts do not match paired n")
+    expected_wins = sum(
+        absolute > absolute_mcid
+        and relative is not None
+        and relative > relative_mcid
+        for absolute, relative in zip(improvements, relative_improvements)
+    )
+    if wins != expected_wins or non_wins != n - expected_wins:
+        _fail(f"{path} counts do not match paired joint-MCID samples")
+    expected = Fraction(
+        sum(math.comb(n, count) for count in range(wins, n + 1)), 1 << n
+    )
+    numerator = _nonnegative_int(value["numerator"], f"{path}.numerator")
+    denominator = _nonnegative_int(value["denominator"], f"{path}.denominator")
+    if denominator == 0 or (numerator, denominator) != (
+        expected.numerator,
+        expected.denominator,
+    ):
+        _fail(f"{path} exact fraction does not match joint-MCID wins")
+    p_value = _require_number(value["p_value"], f"{path}.p_value")
+    if not 0 <= p_value <= 1 or not math.isclose(
+        p_value, float(expected), rel_tol=0, abs_tol=1e-15
+    ):
+        _fail(f"{path}.p_value does not match the exact joint-MCID sign test")
     return p_value
 
 
@@ -534,6 +782,9 @@ def _validate_paired(
         if len(paired_by_trial) != n or set(paired_by_trial) != set(baseline_samples):
             _fail(f"{pair_path}.samples do not match independent target trials")
         improvements = [paired_by_trial[trial][0] for trial in sorted(paired_by_trial)]
+        relative_samples_for_mcid = [
+            paired_by_trial[trial][1] for trial in sorted(paired_by_trial)
+        ]
         median = _require_number(pair["median"], f"{pair_path}.median")
         p95 = _require_number(pair["p95"], f"{pair_path}.p95")
         ci_low = _require_number(pair["ci_low"], f"{pair_path}.ci_low")
@@ -560,10 +811,9 @@ def _validate_paired(
             relative = _require_number(relative, f"{pair_path}.relative_median_percent")
             relative_low = _require_number(relative_low, f"{pair_path}.relative_ci_low")
             relative_high = _require_number(relative_high, f"{pair_path}.relative_ci_high")
-            relative_samples = [paired_by_trial[trial][1] for trial in sorted(paired_by_trial)]
-            if any(value is None for value in relative_samples):
+            if any(value is None for value in relative_samples_for_mcid):
                 _fail(f"{pair_path} numeric relative summary requires every paired relative sample")
-            relative_samples = [float(value) for value in relative_samples]
+            relative_samples = [float(value) for value in relative_samples_for_mcid]
             expected_relative = float(statistics.median(relative_samples))
             if not math.isclose(relative, expected_relative, rel_tol=1e-12, abs_tol=1e-12):
                 _fail(f"{pair_path}.relative_median_percent does not match paired samples")
@@ -579,18 +829,28 @@ def _validate_paired(
                 _fail(f"{pair_path} relative bootstrap interval does not match paired samples")
         elif any(value[1] is not None for value in paired_by_trial.values()):
             _fail(f"{pair_path} relative summary is null but paired relative samples are present")
-        p_value = _validate_sign_test(pair["sign_test"], f"{pair_path}.sign_test", n, improvements)
+        _validate_sign_test(pair["sign_test"], f"{pair_path}.sign_test", n, improvements)
+        if claim_gate is None:
+            if pair["mcid_sign_test"] is not None:
+                _fail(f"{pair_path}.mcid_sign_test requires a benchmark claim gate")
+            mcid_p_value = None
+        else:
+            mcid_p_value = _validate_mcid_sign_test(
+                pair["mcid_sign_test"],
+                f"{pair_path}.mcid_sign_test",
+                n,
+                improvements,
+                relative_samples_for_mcid,
+                claim_gate,
+            )
         gates.append(
             claim_gate is not None
             and direction != "neutral"
             and n >= MINIMUM_BENCHMARK_BOOTS
-            and median > 0
-            and ci_low >= claim_gate["minimum_absolute_improvement_us"]
-            and relative_low is not None
-            and relative_low >= claim_gate["minimum_relative_improvement_percent"]
             and min(baseline_samples.values())
             >= claim_gate["minimum_baseline_duration_us"]
-            and p_value <= headline_alpha
+            and mcid_p_value is not None
+            and mcid_p_value <= headline_alpha
         )
     if set(pairs) != set(loads):
         _fail(f"{path} must contain exactly one record for every benchmark load")
@@ -645,8 +905,12 @@ def _validate_multiple_testing(
     if not math.isclose(familywise_alpha, 0.05, rel_tol=0, abs_tol=1e-15):
         _fail("methodology.multiple_testing.familywise_alpha must be 0.05")
     hypothesis_count = value["hypothesis_count"]
-    if isinstance(hypothesis_count, bool) or not isinstance(hypothesis_count, int) or hypothesis_count != 3:
-        _fail("methodology.multiple_testing.hypothesis_count must be the registered three")
+    if (
+        isinstance(hypothesis_count, bool)
+        or not isinstance(hypothesis_count, int)
+        or hypothesis_count <= 0
+    ):
+        _fail("methodology.multiple_testing.hypothesis_count must be positive")
     headlines = _require_list(
         value["headline_claims"], "methodology.multiple_testing.headline_claims"
     )
@@ -669,6 +933,65 @@ def _validate_multiple_testing(
     return per_claim_alpha
 
 
+def _validate_inference_methodology(
+    methodology: dict[str, Any], per_claim_alpha: float, headline_count: int
+) -> None:
+    if methodology.get("inference_method") != INFERENCE_METHOD:
+        _fail("methodology.inference_method must identify exact joint-MCID inference")
+    expected_interval = {
+        "method": "percentile bootstrap of the boot-level median",
+        "resamples": BOOTSTRAP_REPETITIONS,
+        "role": DESCRIPTIVE_INTERVAL_ROLE,
+    }
+    if methodology.get("descriptive_interval") != expected_interval:
+        _fail("methodology.descriptive_interval must be explicitly descriptive-only")
+    expected_interval_method = (
+        f"descriptive deterministic percentile bootstrap ({BOOTSTRAP_REPETITIONS} resamples)"
+    )
+    if methodology.get("interval_method") != expected_interval_method:
+        _fail("methodology.interval_method must label bootstrap intervals as descriptive")
+    fwer = _require_object(methodology.get("fwer_mcid"), "methodology.fwer_mcid")
+    expected_fields = {
+        "familywise_alpha",
+        "headline_count",
+        "per_headline_alpha",
+        "correction",
+        "per_boot_success",
+        "non_win_policy",
+        "load_gate",
+    }
+    if set(fwer) != expected_fields:
+        _fail("methodology.fwer_mcid fields differ from the registered inference contract")
+    if (
+        not math.isclose(
+            _require_number(fwer["familywise_alpha"], "methodology.fwer_mcid.familywise_alpha"),
+            0.05,
+            rel_tol=0,
+            abs_tol=1e-15,
+        )
+        or fwer["headline_count"] != headline_count
+        or not math.isclose(
+            _require_number(
+                fwer["per_headline_alpha"],
+                "methodology.fwer_mcid.per_headline_alpha",
+            ),
+            per_claim_alpha,
+            rel_tol=0,
+            abs_tol=1e-15,
+        )
+        or fwer["correction"] != "Bonferroni across headline claims"
+        or fwer["per_boot_success"] != "absolute > MCID and relative > MCID"
+        or fwer["non_win_policy"]
+        != "ties, missing relative values, and either non-exceedance"
+        or fwer["load_gate"] != "intersection; every preregistered load must pass"
+    ):
+        _fail("methodology.fwer_mcid differs from exact joint-MCID+Bonferroni inference")
+    if methodology.get("interpretation_boundaries") != INTERPRETATION_BOUNDARIES:
+        _fail(
+            "methodology.interpretation_boundaries must state the fixed causal limits"
+        )
+
+
 def _binding_sha256(value: Any, domain: str) -> str:
     encoded = json.dumps(
         value,
@@ -680,11 +1003,121 @@ def _binding_sha256(value: Any, domain: str) -> str:
     return hashlib.sha256(domain.encode("ascii") + b"\0" + encoded).hexdigest()
 
 
+def _validate_scenario_mcid_sign_test(
+    raw: Any,
+    path: str,
+    pair_n: int,
+    improvements: list[float],
+    relative_improvements: list[float | None],
+    claim_gate: dict[str, float],
+    *,
+    regression: bool = False,
+) -> Fraction:
+    value = _require_object(raw, path)
+    count_fields = (
+        {"losses", "non_losses", "non_loss_policy"}
+        if regression
+        else {"wins", "non_wins", "non_win_policy"}
+    )
+    required = {
+        "alternative",
+        "absolute_mcid_ms",
+        "relative_mcid_percent",
+        "success_rule",
+        "n",
+        "p_value",
+        "numerator",
+        "denominator",
+    } | count_fields
+    if set(value) != required:
+        _fail(f"{path} fields do not match the scenario joint-MCID schema")
+    expected_alternative = (
+        "joint_absolute_and_relative_regression_mcid_exceeded"
+        if regression
+        else "joint_absolute_and_relative_mcid_exceeded"
+    )
+    expected_success_rule = (
+        "both_strictly_less_than_negative_thresholds_per_boot"
+        if regression
+        else "both_strictly_greater_per_boot"
+    )
+    if value["alternative"] != expected_alternative:
+        _fail(f"{path}.alternative is not the registered directional joint-MCID hypothesis")
+    if value["success_rule"] != expected_success_rule:
+        _fail(f"{path}.success_rule does not match its registered direction")
+    policy_field = "non_loss_policy" if regression else "non_win_policy"
+    expected_policy = (
+        "ties_missing_or_not_exceeding_either_reverse_mcid"
+        if regression
+        else "ties_missing_or_not_exceeding_either_mcid"
+    )
+    if value[policy_field] != expected_policy:
+        _fail(f"{path}.{policy_field} differs from the preregistered rule")
+    absolute_mcid = _require_number(value["absolute_mcid_ms"], f"{path}.absolute_mcid_ms")
+    relative_mcid = _require_number(
+        value["relative_mcid_percent"], f"{path}.relative_mcid_percent"
+    )
+    if not math.isclose(
+        absolute_mcid,
+        claim_gate["minimum_absolute_improvement_ms"],
+        rel_tol=0,
+        abs_tol=1e-15,
+    ) or not math.isclose(
+        relative_mcid,
+        claim_gate["minimum_relative_improvement_percent"],
+        rel_tol=0,
+        abs_tol=1e-15,
+    ):
+        _fail(f"{path} MCIDs differ from the scenario claim gate")
+    successes_field = "losses" if regression else "wins"
+    non_successes_field = "non_losses" if regression else "non_wins"
+    successes = _nonnegative_int(value[successes_field], f"{path}.{successes_field}")
+    non_successes = _nonnegative_int(
+        value[non_successes_field], f"{path}.{non_successes_field}"
+    )
+    n = _nonnegative_int(value["n"], f"{path}.n")
+    if n != pair_n or successes + non_successes != n:
+        _fail(f"{path} counts do not match the full paired n")
+    expected_successes = sum(
+        (
+            absolute < -absolute_mcid
+            and relative is not None
+            and relative < -relative_mcid
+        )
+        if regression
+        else (
+            absolute > absolute_mcid
+            and relative is not None
+            and relative > relative_mcid
+        )
+        for absolute, relative in zip(improvements, relative_improvements)
+    )
+    if successes != expected_successes or non_successes != n - expected_successes:
+        _fail(f"{path} counts do not match paired joint-MCID samples")
+    expected = Fraction(
+        sum(math.comb(n, count) for count in range(successes, n + 1)),
+        1 << n,
+    )
+    numerator = _nonnegative_int(value["numerator"], f"{path}.numerator")
+    denominator = _nonnegative_int(value["denominator"], f"{path}.denominator")
+    if denominator == 0 or (numerator, denominator) != (
+        expected.numerator,
+        expected.denominator,
+    ):
+        _fail(f"{path} exact fraction does not match joint-MCID wins")
+    p_value = _require_number(value["p_value"], f"{path}.p_value")
+    if not 0 <= p_value <= 1 or not math.isclose(
+        p_value, float(expected), rel_tol=0, abs_tol=1e-15
+    ):
+        _fail(f"{path}.p_value does not match the exact joint-MCID test")
+    return expected
+
+
 def _validate_scenario_performance(
     raw: Any,
     path: str,
     functional_status: str,
-) -> bool:
+) -> str:
     value = _require_object(raw, path)
     if set(value) != SCENARIO_PERFORMANCE_FIELDS:
         _fail(
@@ -695,6 +1128,51 @@ def _validate_scenario_performance(
         _fail(f"{path}.direction is not the registered scenario direction")
     if value["lower_is_better"] is not True or value["unit"] != "ms":
         _fail(f"{path} must measure lower-is-better makespan in ms")
+    success_rate = _require_number(
+        value["paired_success_rate"], f"{path}.paired_success_rate"
+    )
+    if not 0 <= success_rate <= 1:
+        _fail(f"{path}.paired_success_rate must be in [0, 1]")
+    inference = _require_object(value["inference"], f"{path}.inference")
+    if set(inference) != set(SCENARIO_INFERENCE):
+        _fail(f"{path}.inference fields do not match the Task6 inference schema")
+    for field in (
+        "method", "success_unit", "sample_policy", "multiplicity", "correction"
+    ):
+        if inference[field] != SCENARIO_INFERENCE[field]:
+            _fail(f"{path}.inference.{field} differs from the registered Task6 test")
+    if not math.isclose(
+        _require_number(inference["alpha"], f"{path}.inference.alpha"),
+        SCENARIO_ALPHA,
+        rel_tol=0,
+        abs_tol=1e-15,
+    ):
+        _fail(f"{path}.inference.alpha must be the Task6 directional-family alpha 0.05")
+    if (
+        _nonnegative_int(
+            inference["directional_hypothesis_count"],
+            f"{path}.inference.directional_hypothesis_count",
+        )
+        != 2
+        or not math.isclose(
+            _require_number(
+                inference["per_direction_alpha"],
+                f"{path}.inference.per_direction_alpha",
+            ),
+            SCENARIO_DIRECTIONAL_ALPHA,
+            rel_tol=0,
+            abs_tol=1e-15,
+        )
+    ):
+        _fail(f"{path}.inference must Bonferroni-correct the two Task6 directions")
+    interpretation = _require_object(
+        value["interpretation"], f"{path}.interpretation"
+    )
+    if interpretation != SCENARIO_INTERPRETATION:
+        _fail(
+            f"{path}.interpretation must state full-stack, non-single-mechanism, "
+            "and uncontrolled Host page cache"
+        )
     gate = _require_object(value["claim_gate"], f"{path}.claim_gate")
     gate_fields = {
         "minimum_absolute_improvement_ms",
@@ -711,6 +1189,11 @@ def _validate_scenario_performance(
         _fail(f"{path}.claim_gate thresholds must be positive")
     if any(thresholds[field] < floor for field, floor in SCENARIO_GATE_FLOORS.items()):
         _fail(f"{path}.claim_gate weakens the registered scenario MCID/timing floors")
+    if any(
+        not math.isclose(thresholds[field], expected, rel_tol=0, abs_tol=1e-15)
+        for field, expected in SCENARIO_GATE_FLOORS.items()
+    ):
+        _fail(f"{path}.claim_gate differs from the fixed scenario MCID/timing floors")
 
     samples = _require_list(value["samples"], f"{path}.samples")
     n = _nonnegative_int(value["n"], f"{path}.n")
@@ -728,7 +1211,7 @@ def _validate_scenario_performance(
     sample_ids: set[str] = set()
     boot_ids: set[str] = set()
     improvements: list[float] = []
-    relatives: list[float] = []
+    relatives: list[float | None] = []
     relative_available = True
     orders = {"AB": 0, "BA": 0}
     plain_values: list[float] = []
@@ -768,12 +1251,13 @@ def _validate_scenario_performance(
         plain_values.append(plain)
         if expected_relative is None:
             relative_available = False
-        else:
-            relatives.append(expected_relative)
+        relatives.append(expected_relative)
 
     expected_seed = _binding_sha256(samples, "scenario-paired-bootstrap-seed-v1")
     bootstrap = _require_object(value["bootstrap"], f"{path}.bootstrap")
-    if set(bootstrap) != {"method", "confidence", "repetitions", "seed_sha256"}:
+    if set(bootstrap) != {
+        "method", "confidence", "repetitions", "seed_sha256", "role"
+    }:
         _fail(f"{path}.bootstrap fields do not match the scenario bootstrap schema")
     if (
         bootstrap["method"] != "deterministic_percentile_median"
@@ -781,8 +1265,11 @@ def _validate_scenario_performance(
         or _nonnegative_int(bootstrap["repetitions"], f"{path}.bootstrap.repetitions")
         != BOOTSTRAP_REPETITIONS
         or bootstrap["seed_sha256"] != expected_seed
+        or bootstrap["role"] != "descriptive_only"
     ):
-        _fail(f"{path}.bootstrap does not match the bound scenario samples")
+        _fail(
+            f"{path}.bootstrap does not match the bound descriptive-only scenario interval"
+        )
 
     median = _require_number(value["median"], f"{path}.median")
     ci_low = _require_number(value["ci_low"], f"{path}.ci_low")
@@ -801,9 +1288,10 @@ def _validate_scenario_performance(
     relative_low = value["relative_ci_low"]
     relative_high = value["relative_ci_high"]
     if relative_available:
-        expected_relative = float(statistics.median(relatives))
+        available_relatives = [relative for relative in relatives if relative is not None]
+        expected_relative = float(statistics.median(available_relatives))
         expected_relative_low, expected_relative_high = _bootstrap_interval(
-            relatives, f"{expected_seed}:relative"
+            available_relatives, f"{expected_seed}:relative"
         )
         for field, supplied, expected in (
             ("relative_median_percent", relative, expected_relative),
@@ -815,23 +1303,48 @@ def _validate_scenario_performance(
                 _fail(f"{path}.{field} does not match raw scenario samples")
     elif any(item is not None for item in (relative, relative_low, relative_high)):
         _fail(f"{path} relative scenario statistics must be null when a baseline is zero")
-    p_value = _validate_sign_test(
+    _validate_sign_test(
         value["sign_test"],
         f"{path}.sign_test",
         n,
         improvements,
         alternative="agentos_lower_makespan",
     )
-    return (
+    forward_exact_p = _validate_scenario_mcid_sign_test(
+        value["mcid_sign_test"],
+        f"{path}.mcid_sign_test",
+        n,
+        improvements,
+        relatives,
+        thresholds,
+    )
+    reverse_exact_p = _validate_scenario_mcid_sign_test(
+        value["regression_mcid_sign_test"],
+        f"{path}.regression_mcid_sign_test",
+        n,
+        improvements,
+        relatives,
+        thresholds,
+        regression=True,
+    )
+    eligible = (
         functional_status == "pass"
         and n >= MINIMUM_SCENARIO_BOOTS
+        and math.isclose(success_rate, 1.0, rel_tol=0, abs_tol=1e-15)
         and abs(orders["AB"] - orders["BA"]) <= 1
-        and ci_low >= thresholds["minimum_absolute_improvement_ms"]
-        and relative_low is not None
-        and float(relative_low) >= thresholds["minimum_relative_improvement_percent"]
         and min(plain_values) >= thresholds["minimum_baseline_makespan_ms"]
-        and p_value <= 0.05
     )
+    if not eligible:
+        return "inconclusive"
+    forward_significant = forward_exact_p <= Fraction(1, 40)
+    reverse_significant = reverse_exact_p <= Fraction(1, 40)
+    if forward_significant and reverse_significant:
+        _fail(f"{path} cannot support forward and reverse joint-MCID conclusions together")
+    if forward_significant:
+        return "supported"
+    if reverse_significant:
+        return "regressed"
+    return "inconclusive"
 
 
 def _validate_diagnostic_stat(raw: Any, path: str, samples: list[float]) -> None:
@@ -855,6 +1368,7 @@ def _validate_diagnostic_stat(raw: Any, path: str, samples: list[float]) -> None
 def _validate_diagnostics(
     raw: Any,
     path: str,
+    benchmark_id: str,
     benchmark_status: str,
     loads: list[str],
     benchmark_evidence: list[str],
@@ -865,9 +1379,11 @@ def _validate_diagnostics(
     for index, raw_item in enumerate(diagnostics):
         item_path = f"{path}[{index}]"
         item = _require_object(raw_item, item_path)
-        missing = DIAGNOSTIC_FIELDS - set(item)
-        if missing:
-            _fail(f"{item_path} missing required fields {sorted(missing)}")
+        if set(item) != DIAGNOSTIC_FIELDS:
+            _fail(
+                f"{item_path} fields mismatch: missing={sorted(DIAGNOSTIC_FIELDS - set(item))} "
+                f"extra={sorted(set(item) - DIAGNOSTIC_FIELDS)}"
+            )
         load = str(item["load"])
         if load not in loads or load in seen_loads:
             _fail(f"{item_path}.load must name one unique benchmark load")
@@ -885,7 +1401,12 @@ def _validate_diagnostics(
         if benchmark_status != "measured":
             if cache_states or samples_raw or any(
                 item[field] is not None
-                for field in ("duration_us", "work_units", "index_rebuild_records")
+                for field in (
+                    "duration_us",
+                    "work_units",
+                    "index_rebuild_records",
+                    "result_cache_hits",
+                )
             ):
                 _fail(f"{item_path} unavailable/failed diagnostic must not contain measurements")
             continue
@@ -895,17 +1416,18 @@ def _validate_diagnostics(
             "duration_us": [],
             "work_units": [],
             "index_rebuild_records": [],
+            "result_cache_hits": [],
         }
         observed_states: set[str] = set()
         boot_ids: set[str] = set()
+        try:
+            expected_dataset_size = int(load, 10)
+        except ValueError:
+            _fail(f"{item_path}.load must be a decimal dataset size for file-query diagnostics")
         for sample_index, raw_sample in enumerate(samples_raw):
             sample_path = f"{item_path}.samples[{sample_index}]"
             sample = _require_object(raw_sample, sample_path)
-            expected_fields = {
-                "boot_id", "cache", "duration_us", "work_units",
-                "index_rebuild_records", "evidence_id", "source_line",
-            }
-            if set(sample) != expected_fields:
+            if set(sample) != DIAGNOSTIC_SAMPLE_FIELDS:
                 _fail(f"{sample_path} fields do not match diagnostic sample schema")
             boot_id = _require_string(sample["boot_id"], f"{sample_path}.boot_id")
             if boot_id in boot_ids:
@@ -915,17 +1437,65 @@ def _validate_diagnostics(
             if cache not in {"ready", "cold-rebuild"}:
                 _fail(f"{sample_path}.cache has unknown readiness state")
             observed_states.add(cache)
+            integers = {
+                field: _nonnegative_int(sample[field], f"{sample_path}.{field}")
+                for field in (
+                    "operations",
+                    "dataset_size",
+                    "work_units",
+                    "result_items",
+                    "duration_us",
+                    "index_rebuild_records",
+                    "result_cache_hits",
+                )
+            }
+            if integers["operations"] != 1:
+                _fail(f"{sample_path}.operations must be 1 for the readiness diagnostic")
+            if integers["dataset_size"] != expected_dataset_size:
+                _fail(f"{sample_path}.dataset_size must equal its diagnostic load")
+            if integers["result_items"] != integers["operations"]:
+                _fail(f"{sample_path}.result_items must match completed diagnostic operations")
+            if integers["result_cache_hits"] != 0:
+                _fail(f"{sample_path}.result_cache_hits must be zero for readiness disclosure")
             for field in values_by_field:
-                number = _require_number(sample[field], f"{sample_path}.{field}")
-                if number < 0:
-                    _fail(f"{sample_path}.{field} must be non-negative")
-                values_by_field[field].append(number)
-            rebuild = sample["index_rebuild_records"]
-            if (cache == "ready" and rebuild != 0) or (cache == "cold-rebuild" and rebuild <= 0):
+                values_by_field[field].append(float(integers[field]))
+            rebuild = integers["index_rebuild_records"]
+            work_units = integers["work_units"]
+            if (
+                cache == "ready"
+                and (rebuild != 0 or work_units != integers["operations"])
+            ) or (
+                cache == "cold-rebuild"
+                and (rebuild <= 0 or work_units != rebuild)
+            ):
                 _fail(f"{sample_path} cache state conflicts with rebuild records")
+            for field in ("workload_fingerprint", "result_fingerprint"):
+                fingerprint = _require_string(sample[field], f"{sample_path}.{field}")
+                if not FINGERPRINT16.fullmatch(fingerprint) or int(fingerprint, 16) == 0:
+                    _fail(f"{sample_path}.{field} must be a non-zero lowercase 16-hex receipt")
             evidence_id = _require_string(sample["evidence_id"], f"{sample_path}.evidence_id")
             if evidence_id not in benchmark_evidence or evidence[evidence_id]["status"] != "verified":
                 _fail(f"{sample_path} requires benchmark-bound verified evidence")
+            source_log = _require_string(sample["source_log"], f"{sample_path}.source_log")
+            _canonical_evidence_reference(source_log, f"{sample_path}.source_log")
+            if evidence[evidence_id]["path"] != f"raw/{source_log}":
+                _fail(f"{sample_path}.source_log is not bound to its evidence path")
+            source_log_sha256 = _require_string(
+                sample["source_log_sha256"], f"{sample_path}.source_log_sha256"
+            )
+            if (
+                not SHA256.fullmatch(source_log_sha256)
+                or source_log_sha256 != evidence[evidence_id]["sha256"]
+            ):
+                _fail(
+                    f"{sample_path}.source_log_sha256 is not bound; "
+                    "evidence sha256 does not match the diagnostic provenance"
+                )
+            source_marker_sha256 = _require_string(
+                sample["source_marker_sha256"], f"{sample_path}.source_marker_sha256"
+            )
+            if not SHA256.fullmatch(source_marker_sha256):
+                _fail(f"{sample_path}.source_marker_sha256 must be lowercase SHA-256")
             source_line = sample["source_line"]
             if isinstance(source_line, bool) or not isinstance(source_line, int) or source_line <= 0:
                 _fail(f"{sample_path}.source_line must be a positive integer")
@@ -933,8 +1503,43 @@ def _validate_diagnostics(
             _fail(f"{item_path}.cache_states do not match diagnostic samples")
         for field, samples in values_by_field.items():
             _validate_diagnostic_stat(item[field], f"{item_path}.{field}", samples)
+    if (
+        benchmark_id in FILE_QUERY_EXPERIMENTS
+        and benchmark_status == "measured"
+        and not diagnostics
+    ):
+        _fail(
+            f"{path} must cover every measured file-query load; "
+            "empty diagnostics cannot pass"
+        )
     if diagnostics and seen_loads != set(loads):
         _fail(f"{path} must cover every benchmark load when diagnostics are present")
+
+
+def _validate_methodology(raw: Any) -> tuple[dict[str, Any], float, int]:
+    methodology = _require_object(raw, "methodology")
+    multiple = _require_object(methodology.get("multiple_testing"), "methodology.multiple_testing")
+    if multiple.get("method") != "Bonferroni" or multiple.get("load_gate") != "intersection (every preregistered load must pass)":
+        _fail("methodology.multiple_testing must use Bonferroni and the intersection load gate")
+    familywise = _require_number(multiple.get("familywise_alpha"), "methodology.multiple_testing.familywise_alpha")
+    per_claim = _require_number(multiple.get("per_claim_alpha"), "methodology.multiple_testing.per_claim_alpha")
+    count = multiple.get("hypothesis_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        _fail("methodology.multiple_testing.hypothesis_count must be positive")
+    headlines = _require_list(multiple.get("headline_claims"), "methodology.multiple_testing.headline_claims")
+    headline_ids = [
+        _require_string(value, f"methodology.multiple_testing.headline_claims[{index}]")
+        for index, value in enumerate(headlines)
+    ]
+    if len(headline_ids) != count or len(set(headline_ids)) != count:
+        _fail("methodology.multiple_testing headline claim family is inconsistent")
+    if not 0 < familywise <= 1 or not math.isclose(per_claim, familywise / count, rel_tol=0, abs_tol=1e-15):
+        _fail("methodology.multiple_testing per-claim alpha is inconsistent")
+    repetitions = _require_object(methodology.get("repetitions"), "methodology.repetitions")
+    minimum_inner_pairs = repetitions.get("minimum_inner_pairs")
+    if isinstance(minimum_inner_pairs, bool) or not isinstance(minimum_inner_pairs, int) or minimum_inner_pairs <= 0:
+        _fail("methodology.repetitions.minimum_inner_pairs must be positive")
+    return methodology, per_claim, minimum_inner_pairs
 
 
 def validate_summary(raw: Any) -> dict[str, Any]:
@@ -983,7 +1588,7 @@ def validate_summary(raw: Any) -> dict[str, Any]:
             _fail(f"unknown evidence status {status!r}")
         _require_string(item["kind"], f"{path}.kind")
         _require_string(item["label"], f"{path}.label")
-        _require_string(item["path"], f"{path}.path")
+        _canonical_evidence_reference(item["path"], f"{path}.path")
         _require_string(item["source"], f"{path}.source")
         sha256 = _require_string(item["sha256"], f"{path}.sha256")
         if not SHA256.fullmatch(sha256):
@@ -1010,6 +1615,11 @@ def validate_summary(raw: Any) -> dict[str, Any]:
     if len(claim_benchmark_ids) != len(raw_claims):
         _fail("every claim must be an object with a unique benchmark_id")
     headline_alpha = _validate_multiple_testing(methodology, claim_benchmark_ids)
+    _validate_inference_methodology(
+        methodology,
+        headline_alpha,
+        methodology["multiple_testing"]["hypothesis_count"],
+    )
 
     benchmarks_list = _require_list(root["benchmarks"], "benchmarks")
     benchmarks = _ids(benchmarks_list, "benchmarks")
@@ -1076,15 +1686,95 @@ def validate_summary(raw: Any) -> dict[str, Any]:
             p95 = _require_number(estimate.get("p95"), f"{estimate_path}.p95")
             estimate_values[key] = (value, p95, lower, upper)
         sample_values: dict[tuple[str, str], dict[str, float]] = {}
+        receipt_constants: dict[tuple[str, str], tuple[int, int, int]] = {}
         for sample_index, raw_sample in enumerate(samples):
             sample_path = f"{path}.samples[{sample_index}]"
             sample = _require_object(raw_sample, sample_path)
+            if set(sample) != BENCHMARK_SAMPLE_FIELDS:
+                _fail(f"{sample_path} fields do not match the timed benchmark sample schema")
             key = _sample_key(sample, sample_path, set(targets), set(loads))
             value = _require_number(sample.get("value"), f"{sample_path}.value")
             trial_raw = sample.get("trial")
             if isinstance(trial_raw, bool) or not isinstance(trial_raw, (str, int)) or str(trial_raw) == "":
                 _fail(f"{sample_path}.trial must be a non-empty string or integer")
             trial = str(trial_raw)
+            boot_id = _require_string(sample["boot_id"], f"{sample_path}.boot_id")
+            if boot_id != trial:
+                _fail(f"{sample_path}.boot_id must match its independent trial")
+            if sample["order"] != "boot-median":
+                _fail(f"{sample_path}.order must identify the contract-derived boot median")
+            operations = _nonnegative_int(
+                sample["operations"], f"{sample_path}.operations"
+            )
+            dataset_size = _nonnegative_int(
+                sample["dataset_size"], f"{sample_path}.dataset_size"
+            )
+            work_units = _nonnegative_int(
+                sample["work_units"], f"{sample_path}.work_units"
+            )
+            records_examined = _nonnegative_int(
+                sample["records_examined"], f"{sample_path}.records_examined"
+            )
+            result_items = _nonnegative_int(
+                sample["result_items"], f"{sample_path}.result_items"
+            )
+            if operations <= 0 or result_items != operations:
+                _fail(
+                    f"{sample_path} must report positive operations and one "
+                    "structured result per operation"
+                )
+            stable_receipt = (operations, dataset_size, result_items)
+            if key in receipt_constants and receipt_constants[key] != stable_receipt:
+                _fail(
+                    f"{sample_path} operations, dataset_size, and result_items "
+                    "must be stable across independent boots"
+                )
+            receipt_constants[key] = stable_receipt
+
+            if benchmark["id"] in FILE_QUERY_EXPERIMENTS:
+                try:
+                    expected_dataset_size = int(key[1], 10)
+                except ValueError:
+                    _fail(f"{sample_path}.load must be a decimal file corpus size")
+                if dataset_size != expected_dataset_size:
+                    _fail(f"{sample_path}.dataset_size must equal its file corpus load")
+                if key[0] == baseline:
+                    expected_work = (
+                        dataset_size * operations
+                        if benchmark["id"] == FILE_QUERY_PATH_INDEX
+                        else FILE_META_CAPACITY * operations
+                    )
+                    expected_records = dataset_size * operations
+                    if work_units != expected_work or records_examined != expected_records:
+                        _fail(
+                            f"{sample_path} baseline receipt does not prove the "
+                            "registered complete traversal"
+                        )
+                elif (
+                    work_units < operations
+                    or work_units > FILE_META_CAPACITY * operations
+                    or records_examined < operations
+                    or records_examined > work_units
+                ):
+                    _fail(
+                        f"{sample_path} ready-index receipt must disclose positive, "
+                        "internally consistent measured work"
+                    )
+            elif records_examined > work_units:
+                _fail(
+                    f"{sample_path} records_examined cannot exceed measured work_units"
+                )
+            index_rebuild_records = _nonnegative_int(
+                sample["index_rebuild_records"], f"{sample_path}.index_rebuild_records"
+            )
+            result_cache_hits = _nonnegative_int(
+                sample["result_cache_hits"], f"{sample_path}.result_cache_hits"
+            )
+            if index_rebuild_records != 0 or result_cache_hits != 0:
+                _fail(
+                    f"{sample_path} actual timed sample guardrail requires "
+                    "index_rebuild_records=0 and result_cache_hits=0"
+                )
             by_trial = sample_values.setdefault(key, {})
             if trial in by_trial:
                 _fail(f"{sample_path} duplicates target/load/trial")
@@ -1129,6 +1819,7 @@ def validate_summary(raw: Any) -> dict[str, Any]:
         _validate_diagnostics(
             benchmark["diagnostics"],
             f"{path}.diagnostics",
+            benchmark["id"],
             status,
             loads,
             benchmark_evidence,
@@ -1157,7 +1848,7 @@ def validate_summary(raw: Any) -> dict[str, Any]:
         functional_status = _require_string(
             scenario.get("functional_status"), f"{path}.functional_status"
         )
-        if functional_status not in SCENARIO_STATUSES:
+        if functional_status not in SCENARIO_FUNCTIONAL_STATUSES:
             _fail(f"unknown scenario functional status {functional_status!r}")
         performance_status = _require_string(
             scenario.get("performance_status"), f"{path}.performance_status"
@@ -1171,9 +1862,9 @@ def validate_summary(raw: Any) -> dict[str, Any]:
             required=functional_status != "unavailable" or performance_status != "unavailable",
         )
         verified = all(evidence[item_id]["status"] == "verified" for item_id in scenario_evidence)
-        if functional_status in {"pass", "partial"} and not verified:
+        if functional_status == "pass" and not verified:
             _fail(f"{path} functional status requires verified evidence")
-        if performance_status in {"supported", "inconclusive"}:
+        if performance_status in {"supported", "regressed", "inconclusive"}:
             if not verified:
                 _fail(f"{path} performance status requires verified evidence")
             if not any(
@@ -1181,10 +1872,9 @@ def validate_summary(raw: Any) -> dict[str, Any]:
                 for item_id in scenario_evidence
             ):
                 _fail(f"{path} performance statistics require bound scenario-report evidence")
-            supports = _validate_scenario_performance(
+            expected_performance_status = _validate_scenario_performance(
                 scenario["performance"], f"{path}.performance", functional_status
             )
-            expected_performance_status = "supported" if supports else "inconclusive"
             if performance_status != expected_performance_status:
                 _fail(
                     f"{path}.performance_status is forged; structured statistics require "
@@ -1226,17 +1916,59 @@ def validate_summary(raw: Any) -> dict[str, Any]:
         if status == "supported" and any(evidence[item_id]["status"] != "verified" for item_id in claim_evidence):
             _fail(f"{path} supported status requires verified evidence")
 
-    has_supported_result = any(
-        claim["status"] == "supported" for claim in claims_list
-    ) or any(
-        scenario["performance_status"] == "supported" for scenario in scenarios_list
+    acceptance = _require_object(root["acceptance"], "acceptance")
+    competition_claims = _require_object(
+        methodology.get("competition_claims"), "methodology.competition_claims"
     )
-    if has_supported_result:
+    if set(competition_claims) != {"task4"}:
+        _fail("methodology.competition_claims must register exactly Task 4")
+    task4_registration = _require_object(
+        competition_claims["task4"], "methodology.competition_claims.task4"
+    )
+    if set(task4_registration) != {"benchmark_id", "required_status"}:
+        _fail("methodology.competition_claims.task4 fields do not match the contract")
+    task4_benchmark_id = _require_string(
+        task4_registration["benchmark_id"],
+        "methodology.competition_claims.task4.benchmark_id",
+    )
+    if (
+        task4_registration["required_status"] != "supported"
+        or task4_benchmark_id not in benchmarks
+        or benchmarks[task4_benchmark_id].get("task") != "task4"
+        or task4_benchmark_id
+        not in methodology["multiple_testing"]["headline_claims"]
+        or task4_benchmark_id not in claim_benchmark_ids
+    ):
+        _fail(
+            "methodology.competition_claims.task4 must bind one registered "
+            "Task 4 headline claim and require supported"
+        )
+    try:
+        expected_acceptance = derive_acceptance_gates(
+            scenarios_list, claims_list, competition_claims
+        )
+    except EvaluationContractError as error:
+        _fail(f"methodology.competition_claims is invalid: {error}")
+    if acceptance != expected_acceptance:
+        _fail(
+            "acceptance gates are forged; scientific publication and competition "
+            "acceptance must be derived independently from functional receipts and "
+            "the explicitly registered Task 4 claim"
+        )
+
+    has_scientific_result = any(
+        claim["status"] in {"supported", "not_supported"}
+        for claim in claims_list
+    ) or any(
+        scenario["performance_status"] in {"supported", "regressed", "inconclusive"}
+        for scenario in scenarios_list
+    )
+    if has_scientific_result:
         commit = run.get("commit")
         if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
-            _fail("supported results require run.commit as a full lowercase commit")
+            _fail("measured scientific results require run.commit as a full lowercase commit")
         if run.get("evidence_grade") != "E2-local-raw":
-            _fail("supported results require contract-derived run.evidence_grade")
+            _fail("measured scientific results require contract-derived run.evidence_grade")
 
     return root
 
@@ -1255,14 +1987,15 @@ def _status(value: str) -> str:
 
 def _evidence_href(reference: str) -> str:
     parts = _canonical_evidence_reference(reference, "evidence.path")
-    return "../" + "/".join(quote(part, safe="-._~") for part in parts)
+    encoded = "/".join(quote(part, safe="-._~") for part in parts)
+    return f"evidence/{encoded}"
 
 
-def _atomic_write(path: Path, value: str) -> None:
+def _atomic_write_bytes(path: Path, value: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(value)
         os.replace(temp_name, path)
     except BaseException:
@@ -1271,6 +2004,10 @@ def _atomic_write(path: Path, value: str) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def _atomic_write(path: Path, value: str) -> None:
+    _atomic_write_bytes(path, value.encode("utf-8"))
 
 
 def _canonical_evidence_reference(value: Any, path: str) -> tuple[str, ...]:
@@ -1287,19 +2024,18 @@ def _canonical_evidence_reference(value: Any, path: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def _is_link_like(path: Path) -> bool:
-    if path.is_symlink():
-        return True
-    is_junction = getattr(path, "is_junction", None)
-    return bool(is_junction is not None and is_junction())
-
-
-def _read_evidence_file(root: Path, parts: tuple[str, ...], path: str) -> bytes:
+def _read_evidence_file(
+    root: Path,
+    parts: tuple[str, ...],
+    path: str,
+    *,
+    max_bytes: int = MAX_PORTABLE_EVIDENCE_FILE_BYTES,
+) -> bytes:
     candidate = root
     for part in parts:
         candidate /= part
         try:
-            if _is_link_like(candidate):
+            if path_is_link(candidate):
                 _fail(f"{path} must not traverse a symlink or junction")
         except OSError as error:
             _fail(f"{path} cannot inspect path component: {error}")
@@ -1315,7 +2051,18 @@ def _read_evidence_file(root: Path, parts: tuple[str, ...], path: str) -> bytes:
         _fail(f"{path} must reference a regular evidence file")
     try:
         before = resolved.stat()
-        data = resolved.read_bytes()
+        if before.st_size > max_bytes:
+            _fail(f"{path} exceeds its portable evidence byte budget")
+        payload = bytearray()
+        with resolved.open("rb") as handle:
+            while True:
+                chunk = handle.read(min(1024 * 1024, max_bytes - len(payload) + 1))
+                if not chunk:
+                    break
+                payload.extend(chunk)
+                if len(payload) > max_bytes:
+                    _fail(f"{path} exceeds its portable evidence byte budget")
+        data = bytes(payload)
         after = resolved.stat()
     except OSError as error:
         _fail(f"{path} cannot read evidence file: {error}")
@@ -1334,6 +2081,87 @@ def _read_evidence_file(root: Path, parts: tuple[str, ...], path: str) -> bytes:
     if identity_before != identity_after or len(data) != after.st_size:
         _fail(f"{path} changed while it was being verified")
     return data
+
+
+def _ensure_plain_directory(path: Path, label: str) -> None:
+    try:
+        if path_is_link(path):
+            _fail(f"{label} must not be a symlink or junction")
+        if path.exists():
+            if not path.is_dir():
+                _fail(f"{label} must be a directory")
+            return
+        path.mkdir()
+    except OSError as error:
+        _fail(f"{label} cannot be created safely: {error}")
+
+
+def _write_portable_evidence(
+    evidence_root: Path, output_dir: Path, summary: dict[str, Any]
+) -> None:
+    """Copy the small, Dashboard-linked evidence into the offline site."""
+    portable_root = output_dir / "evidence"
+    _ensure_plain_directory(portable_root, "portable evidence root")
+    expected: dict[str, str] = {}
+    payloads: dict[str, tuple[tuple[str, ...], bytes]] = {}
+    total_bytes = 0
+    for index, item in enumerate(summary["evidence"]):
+        parts = _canonical_evidence_reference(
+            item["path"], f"evidence[{index}].path"
+        )
+        relative = "/".join(parts)
+        data = _read_evidence_file(
+            evidence_root,
+            parts,
+            f"evidence[{index}].path",
+            max_bytes=min(
+                MAX_PORTABLE_EVIDENCE_FILE_BYTES,
+                MAX_PORTABLE_EVIDENCE_TOTAL_BYTES - total_bytes,
+            ),
+        )
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != item["sha256"]:
+            _fail(f"evidence[{index}] changed before portable publication")
+        previous = expected.get(relative)
+        if previous is not None:
+            if previous != digest:
+                _fail(f"portable evidence path {relative!r} has conflicting hashes")
+            continue
+        if len(expected) >= MAX_PORTABLE_EVIDENCE_FILES:
+            _fail("portable Dashboard evidence contains too many files")
+        if len(data) > MAX_PORTABLE_EVIDENCE_FILE_BYTES:
+            _fail(f"portable Dashboard evidence is too large: {relative}")
+        total_bytes += len(data)
+        if total_bytes > MAX_PORTABLE_EVIDENCE_TOTAL_BYTES:
+            _fail("portable Dashboard evidence exceeds its total byte budget")
+        expected[relative] = digest
+        payloads[relative] = (parts, data)
+
+    for relative in sorted(payloads):
+        parts, data = payloads[relative]
+        parent = portable_root
+        for part in parts[:-1]:
+            parent /= part
+            _ensure_plain_directory(parent, f"portable evidence directory {relative}")
+        _atomic_write_bytes(parent / parts[-1], data)
+
+    actual: set[str] = set()
+    for directory, dirnames, filenames in os.walk(portable_root, followlinks=False):
+        base = Path(directory)
+        for name in [*dirnames, *filenames]:
+            candidate = base / name
+            try:
+                if path_is_link(candidate):
+                    _fail("portable Dashboard evidence contains a symlink or junction")
+            except OSError as error:
+                _fail(f"portable Dashboard evidence cannot be inspected: {error}")
+        for name in filenames:
+            candidate = base / name
+            if not candidate.is_file():
+                _fail("portable Dashboard evidence contains a non-file")
+            actual.add(candidate.relative_to(portable_root).as_posix())
+    if actual != set(expected):
+        _fail("portable Dashboard evidence inventory differs from the summary")
 
 
 def _scenario_string(value: Any, path: str, *, maximum: int = 256) -> str:
@@ -1376,6 +2204,273 @@ def _scenario_sha256(value: Any, path: str) -> str:
     return result
 
 
+def _normalize_scenario_resource_stability(
+    report_summary: dict[str, Any],
+    samples: list[Any],
+    item_path: str,
+) -> dict[str, Any]:
+    path = f"{item_path}.report.summary.resource_stability"
+    resource = _require_object(report_summary.get("resource_stability"), path)
+    if set(resource) != RESOURCE_STABILITY_SUMMARY_FIELDS:
+        _fail(f"{path} fields do not match the resource stability summary schema")
+
+    status = _scenario_string(resource["status"], f"{path}.status")
+    if status not in {"passed", "partial", "unavailable"}:
+        _fail(f"{path}.status is invalid")
+    if resource["required_target"] != "agentos":
+        _fail(f"{path}.required_target must be agentos")
+    if resource["measurement_scope"] != RESOURCE_STABILITY_MEASUREMENT_SCOPE:
+        _fail(f"{path}.measurement_scope differs from the registered scope")
+    verified_boots = _scenario_uint(
+        resource["verified_boots"],
+        f"{path}.verified_boots",
+        maximum=MAX_SCENARIO_SAMPLES,
+    )
+    registered_counts = (
+        (
+            "load_workflows_per_boot",
+            RESOURCE_STABILITY_LOAD_WORKFLOWS,
+        ),
+        (
+            "terminal_workflows_per_boot",
+            RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
+        ),
+        (
+            "child_rounds_per_load_workflow",
+            RESOURCE_STABILITY_CHILD_ROUNDS,
+        ),
+    )
+    for field, expected in registered_counts:
+        actual = _scenario_uint(resource[field], f"{path}.{field}", maximum=1_000_000)
+        if actual != expected:
+            _fail(f"{path}.{field} differs from the registered workload")
+
+    interpretation = _require_object(resource["interpretation"], f"{path}.interpretation")
+    if interpretation != RESOURCE_STABILITY_INTERPRETATION:
+        _fail(f"{path}.interpretation differs from the registered claim boundary")
+
+    observation_path = f"{path}.global_observation"
+    observation = _require_object(resource["global_observation"], observation_path)
+    if set(observation) != RESOURCE_STABILITY_OBSERVATION_FIELDS:
+        _fail(f"{observation_path} fields do not match the observation schema")
+    if (
+        observation["coverage"] != "configured_global_kind_counters"
+        or observation["measured_mask_semantics"]
+        != "configured_global_resource_kind_counters_only"
+        or observation["account_counters"] != "not_measured"
+        or observation["rate_budgets"] != "not_measured"
+    ):
+        _fail(f"{observation_path} overstates the registered observation coverage")
+    free_pages_path = f"{observation_path}.free_pages"
+    free_pages = _require_object(observation["free_pages"], free_pages_path)
+    if set(free_pages) != {
+        "status",
+        "exact_pair_recovery",
+        "exact_terminal_recovery",
+    }:
+        _fail(f"{free_pages_path} fields do not match the free-page observation schema")
+    free_pages_status = _scenario_string(free_pages["status"], f"{free_pages_path}.status")
+    if free_pages_status == "measured":
+        if (
+            free_pages["exact_pair_recovery"] is not True
+            or free_pages["exact_terminal_recovery"] is not True
+        ):
+            _fail(f"{free_pages_path} measured status requires exact recovery")
+    elif free_pages_status == "not_measured":
+        if (
+            free_pages["exact_pair_recovery"] is not None
+            or free_pages["exact_terminal_recovery"] is not None
+        ):
+            _fail(f"{free_pages_path} not_measured status cannot claim recovery")
+    else:
+        _fail(f"{free_pages_path}.status is invalid")
+
+    raw_resources = _require_list(observation["resources"], f"{observation_path}.resources")
+    if len(raw_resources) != len(RESOURCE_STABILITY_RESOURCE_KINDS):
+        _fail(f"{observation_path}.resources does not cover every registered kind")
+    measured_kinds = 0
+    for index, (raw_resource, kind) in enumerate(
+        zip(raw_resources, RESOURCE_STABILITY_RESOURCE_KINDS)
+    ):
+        resource_path = f"{observation_path}.resources[{index}]"
+        observed = _require_object(raw_resource, resource_path)
+        if set(observed) != RESOURCE_STABILITY_RESOURCE_FIELDS:
+            _fail(f"{resource_path} fields do not match the resource observation schema")
+        if observed["kind"] != kind:
+            _fail(f"{resource_path}.kind differs from the registered resource order")
+        if observed["coverage"] != "configured_global_counter":
+            _fail(f"{resource_path}.coverage differs from the registered counter scope")
+        bound = RESOURCE_STABILITY_GROWTH_BOUNDS[kind]
+        for field in ("per_workflow_growth_bound", "terminal_growth_bound"):
+            if (
+                isinstance(observed[field], bool)
+                or not isinstance(observed[field], int)
+                or observed[field] != bound
+            ):
+                _fail(f"{resource_path}.{field} differs from the registered guardrail")
+        observed_status = _scenario_string(observed["status"], f"{resource_path}.status")
+        if observed_status == "measured":
+            deltas: dict[str, int] = {}
+            for field in (
+                "max_observed_per_workflow_growth",
+                "terminal_observed_growth",
+            ):
+                value = observed[field]
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or not 0 <= value <= bound
+                ):
+                    _fail(f"{resource_path}.{field} is outside the registered growth bound")
+                deltas[field] = value
+            plateau = observed["plateau_or_reclamation"]
+            if bound == 0:
+                if plateau is not None:
+                    _fail(f"{resource_path}.plateau_or_reclamation must be null at a zero bound")
+            elif plateau is not True:
+                _fail(f"{resource_path}.plateau_or_reclamation must prove a plateau or reclamation")
+            if not isinstance(observed["exact_terminal_recovery"], bool):
+                _fail(f"{resource_path}.exact_terminal_recovery must be boolean when measured")
+            if observed["exact_terminal_recovery"] is not (
+                deltas["terminal_observed_growth"] == 0
+            ):
+                _fail(f"{resource_path}.exact_terminal_recovery differs from terminal growth")
+            measured_kinds += 1
+        elif observed_status == "not_measured":
+            if (
+                observed["max_observed_per_workflow_growth"] is not None
+                or observed["terminal_observed_growth"] is not None
+                or observed["plateau_or_reclamation"] is not None
+                or observed["exact_terminal_recovery"] is not None
+            ):
+                _fail(f"{resource_path} not_measured status cannot claim a result")
+        else:
+            _fail(f"{resource_path}.status is invalid")
+
+    receipts = _require_list(resource["boot_receipts"], f"{path}.boot_receipts")
+    expected_receipts: list[tuple[str, str, str, str | None, str | None]] = []
+    for index, raw_sample in enumerate(samples):
+        sample_path = f"{item_path}.report.samples[{index}]"
+        sample = _require_object(raw_sample, sample_path)
+        binding = _require_object(sample["binding"], f"{sample_path}.binding")
+        source_receipts = _require_object(
+            binding["source_receipts"], f"{sample_path}.binding.source_receipts"
+        )
+        targets = _require_object(sample["targets"], f"{sample_path}.targets")
+        agentos = _require_object(targets["agentos"], f"{sample_path}.targets.agentos")
+        raw_source = _require_object(
+            agentos["raw_source_receipt"],
+            f"{sample_path}.targets.agentos.raw_source_receipt",
+        )
+        nested_resource_sha256: str | None = None
+        nested_binding_sha256: str | None = None
+        if status == "unavailable":
+            if "resource_stability" in raw_source:
+                _fail(f"{sample_path} unavailable resource summary conflicts with raw evidence")
+        else:
+            raw_resource_path = (
+                f"{sample_path}.targets.agentos.raw_source_receipt.resource_stability"
+            )
+            raw_resource = _require_object(
+                raw_source.get("resource_stability"), raw_resource_path
+            )
+            if set(raw_resource) != {
+                "required",
+                "status",
+                "path",
+                "bytes",
+                "sha256",
+                "acceptance",
+                "binding",
+            }:
+                _fail(f"{raw_resource_path} fields do not match the raw resource receipt schema")
+            if (
+                raw_resource["required"] is not True
+                or raw_resource["status"] != "verified"
+                or raw_resource["path"]
+                != f"state-extracted/{RESOURCE_STABILITY_FILE}"
+                or isinstance(raw_resource["bytes"], bool)
+                or not isinstance(raw_resource["bytes"], int)
+                or raw_resource["bytes"] <= 0
+            ):
+                _fail(f"{raw_resource_path} is not a verified resource receipt")
+            nested_resource_sha256 = _scenario_sha256(
+                raw_resource["sha256"], f"{raw_resource_path}.sha256"
+            )
+            raw_binding = _require_object(
+                raw_resource["binding"], f"{raw_resource_path}.binding"
+            )
+            nested_binding_sha256 = _scenario_sha256(
+                raw_binding.get("sha256"), f"{raw_resource_path}.binding.sha256"
+            )
+        expected_receipts.append(
+            (
+                _scenario_string(sample["sample_id"], f"{sample_path}.sample_id", maximum=256),
+                _scenario_string(binding["challenge"], f"{sample_path}.binding.challenge", maximum=64),
+                _scenario_sha256(
+                    source_receipts["agentos"],
+                    f"{sample_path}.binding.source_receipts.agentos",
+                ),
+                nested_resource_sha256,
+                nested_binding_sha256,
+            )
+        )
+
+    resource_receipt_hashes: set[str] = set()
+    for index, raw_receipt in enumerate(receipts):
+        receipt_path = f"{path}.boot_receipts[{index}]"
+        receipt = _require_object(raw_receipt, receipt_path)
+        if set(receipt) != RESOURCE_STABILITY_RECEIPT_FIELDS:
+            _fail(f"{receipt_path} fields do not match the resource boot receipt schema")
+        sample_id = _scenario_string(receipt["sample_id"], f"{receipt_path}.sample_id", maximum=256)
+        challenge = _scenario_string(receipt["challenge"], f"{receipt_path}.challenge", maximum=64)
+        resource_sha256 = _scenario_sha256(
+            receipt["resource_receipt_sha256"], f"{receipt_path}.resource_receipt_sha256"
+        )
+        binding_sha256 = _scenario_sha256(
+            receipt["binding_sha256"], f"{receipt_path}.binding_sha256"
+        )
+        raw_source_sha256 = _scenario_sha256(
+            receipt["raw_source_receipt_sha256"],
+            f"{receipt_path}.raw_source_receipt_sha256",
+        )
+        if index >= len(expected_receipts) or (
+            sample_id,
+            challenge,
+            raw_source_sha256,
+            resource_sha256,
+            binding_sha256,
+        ) != expected_receipts[index]:
+            _fail(f"{receipt_path} is not bound to the corresponding scenario sample")
+        if resource_sha256 in resource_receipt_hashes:
+            _fail(f"{receipt_path} replays a resource receipt across boots")
+        resource_receipt_hashes.add(resource_sha256)
+
+    if status == "unavailable":
+        if (
+            verified_boots != 0
+            or receipts
+            or free_pages_status != "not_measured"
+            or measured_kinds != 0
+            or observation["snapshot_consistency"] != "not_measured"
+        ):
+            _fail(f"{path} unavailable status cannot claim measured evidence")
+    else:
+        if (
+            len(receipts) != len(samples)
+            or free_pages_status != "measured"
+            or observation["snapshot_consistency"] != "single_core_irq_coherent"
+        ):
+            _fail(f"{path} measured status must bind every boot and free-page observation")
+        if status == "passed":
+            if verified_boots != len(samples) or measured_kinds != len(raw_resources):
+                _fail(f"{path} passed status must cover every boot and resource kind")
+        elif verified_boots >= len(samples) or measured_kinds == len(raw_resources):
+            _fail(f"{path} partial status must retain an explicit observation gap")
+
+    return copy.deepcopy(resource)
+
+
 def _extract_scenario_detail(
     data: bytes,
     item: dict[str, Any],
@@ -1399,8 +2494,8 @@ def _extract_scenario_detail(
             f"missing={sorted(required_report_fields - set(report))} "
             f"extra={sorted(set(report) - required_report_fields)}"
         )
-    if report["schema_version"] != 1:
-        _fail(f"{item_path} scenario report schema_version must be 1")
+    if report["schema_version"] != 2:
+        _fail(f"{item_path} scenario report schema_version must be 2")
     scenario_id = _scenario_string(report["scenario_id"], f"{item_path}.report.scenario_id")
     source_commit = _scenario_string(
         report["source_commit"], f"{item_path}.report.source_commit", maximum=40
@@ -1409,14 +2504,17 @@ def _extract_scenario_detail(
         _fail(f"{item_path} scenario report source_commit must be a full lowercase commit")
     run_id = _scenario_string(report["run_id"], f"{item_path}.report.run_id", maximum=128)
     report_status = _scenario_string(report["status"], f"{item_path}.report.status")
-    if report_status not in {"supported", "inconclusive"}:
-        _fail(f"{item_path} verified scenario report must be supported or inconclusive")
+    if report_status not in {"supported", "regressed", "inconclusive"}:
+        _fail(
+            f"{item_path} verified scenario report must be supported, regressed, "
+            "or inconclusive"
+        )
     supplied_report_sha256 = _scenario_sha256(
         report["report_sha256"], f"{item_path}.report.report_sha256"
     )
     unsigned_report = dict(report)
     unsigned_report.pop("report_sha256")
-    if supplied_report_sha256 != _binding_sha256(unsigned_report, "scenario-report-v1"):
+    if supplied_report_sha256 != _binding_sha256(unsigned_report, "scenario-report-v2"):
         _fail(f"{item_path} scenario report binding SHA-256 is invalid")
     receipt = item.get("receipt")
     if isinstance(receipt, dict) and "report_sha256" in receipt:
@@ -1439,9 +2537,8 @@ def _extract_scenario_detail(
             f"{item_path} scenario report must bind exactly one matching summary scenario"
         )
     bound_scenario = matching_scenarios[0]
-    if bound_scenario["performance_status"] in {"supported", "inconclusive"}:
-        if bound_scenario["performance_status"] != report_status:
-            _fail(f"{item_path} scenario report status differs from the summary scenario")
+    if bound_scenario["performance_status"] != report_status:
+        _fail(f"{item_path} scenario report status differs from the summary scenario")
 
     samples = _require_list(report["samples"], f"{item_path}.report.samples")
     if not 0 < len(samples) <= MAX_SCENARIO_SAMPLES:
@@ -1449,6 +2546,10 @@ def _extract_scenario_detail(
             f"{item_path} scenario report must contain 1 through {MAX_SCENARIO_SAMPLES} samples"
         )
     sample_ids: set[str] = set()
+    boot_ids: set[str] = set()
+    challenges: set[str] = set()
+    raw_order_counts = {"AB": 0, "BA": 0}
+    raw_paired_samples: list[dict[str, Any]] = []
     program_order: list[str] | None = None
     timings: dict[str, dict[str, list[int]]] = {
         "plain": {},
@@ -1514,6 +2615,23 @@ def _extract_scenario_detail(
             _fail(f"{sample_path}.binding does not bind the key outcome fingerprint")
         if binding.get("challenge") != challenge:
             _fail(f"{sample_path}.binding challenge differs from the key outcome")
+        if challenge in challenges:
+            _fail(f"{sample_path}.binding challenge is duplicated")
+        challenges.add(challenge)
+        boot_id = _scenario_string(
+            binding.get("boot_id"), f"{sample_path}.binding.boot_id", maximum=128
+        )
+        if boot_id in boot_ids:
+            _fail(f"{sample_path}.binding.boot_id is duplicated")
+        boot_ids.add(boot_id)
+        target_order = _scenario_string(
+            binding.get("target_order"),
+            f"{sample_path}.binding.target_order",
+            maximum=2,
+        )
+        if target_order not in raw_order_counts:
+            _fail(f"{sample_path}.binding.target_order must be AB or BA")
+        raw_order_counts[target_order] += 1
         raw_order = _require_list(binding.get("program_order"), f"{sample_path}.binding.program_order")
         current_order = [
             _scenario_string(value, f"{sample_path}.binding.program_order[{index}]", maximum=64)
@@ -1536,6 +2654,7 @@ def _extract_scenario_detail(
         targets = _require_object(sample["targets"], f"{sample_path}.targets")
         if set(targets) != {"plain", "agentos"} or set(source_receipts) != {"plain", "agentos"}:
             _fail(f"{sample_path} must bind plain and agentos targets exactly")
+        sample_makespans: dict[str, int] = {}
         for target in ("plain", "agentos"):
             target_path = f"{sample_path}.targets.{target}"
             measurement = _require_object(targets[target], target_path)
@@ -1544,6 +2663,7 @@ def _extract_scenario_detail(
                 maximum=MAX_SCENARIO_DURATION_MS,
             )
             makespans[target].append(makespan)
+            sample_makespans[target] = makespan
             rows = _require_list(measurement.get("programs"), f"{target_path}.programs")
             if len(rows) != len(program_order):
                 _fail(f"{target_path}.programs does not match the preregistered program order")
@@ -1572,6 +2692,23 @@ def _extract_scenario_detail(
             )
             if source_receipts[target] != receipt_sha256:
                 _fail(f"{target_path}.raw_source_receipt is not bound by the sample")
+        improvement = sample_makespans["plain"] - sample_makespans["agentos"]
+        relative = (
+            improvement * 100.0 / sample_makespans["plain"]
+            if sample_makespans["plain"] > 0
+            else None
+        )
+        raw_paired_samples.append(
+            {
+                "sample_id": sample_id,
+                "boot_id": boot_id,
+                "target_order": target_order,
+                "plain_ms": sample_makespans["plain"],
+                "agentos_ms": sample_makespans["agentos"],
+                "improvement_ms": improvement,
+                "relative_improvement_percent": relative,
+            }
+        )
 
     assert program_order is not None
     report_summary = _require_object(report["summary"], f"{item_path}.report.summary")
@@ -1582,6 +2719,21 @@ def _extract_scenario_detail(
     )
     if independent_boots != len(samples):
         _fail(f"{item_path} scenario summary boot count differs from its samples")
+    if report_summary.get("minimum_supported_boots") != MINIMUM_SCENARIO_BOOTS:
+        _fail(f"{item_path} scenario summary minimum boot count differs")
+    if report_summary.get("unique_challenges") != len(challenges):
+        _fail(f"{item_path} scenario summary unique challenge count differs")
+    report_success_rate = _require_number(
+        report_summary.get("paired_success_rate"),
+        f"{item_path}.report.summary.paired_success_rate",
+    )
+    if not math.isclose(report_success_rate, 1.0, rel_tol=0, abs_tol=1e-15):
+        _fail(f"{item_path} scenario paired success rate must be 1.0")
+    if report_summary.get("target_order_counts") != raw_order_counts:
+        _fail(f"{item_path} scenario target order counts differ from raw samples")
+    expected_balanced = abs(raw_order_counts["AB"] - raw_order_counts["BA"]) <= 1
+    if report_summary.get("target_order_balanced") is not expected_balanced:
+        _fail(f"{item_path} scenario target order balance differs from raw samples")
     target_summary = _require_object(
         report_summary.get("targets"), f"{item_path}.report.summary.targets"
     )
@@ -1667,15 +2819,36 @@ def _extract_scenario_detail(
             _fail(f"{functional_path}.boot_receipts do not cover every scenario sample exactly")
     elif verified_boots != 0 or boot_receipts:
         _fail(f"{functional_path} unavailable status must not claim verified boot receipts")
-    if bound_scenario["functional_status"] in {"pass", "partial"} and functional_status != "passed":
-        _fail(f"{item_path} scenario functional status lacks passed module evidence")
+    expected_functional_status = {
+        "pass": "passed",
+        "unavailable": "unavailable",
+    }.get(bound_scenario["functional_status"])
+    if expected_functional_status is None or functional_status != expected_functional_status:
+        _fail(f"{item_path} scenario functional status differs from the summary scenario")
 
+    resource_stability = _normalize_scenario_resource_stability(
+        report_summary, samples, item_path
+    )
     paired_improvement = report_summary.get("paired_improvement")
     if bound_scenario["performance"] is not None and paired_improvement != bound_scenario["performance"]:
         _fail(f"{item_path} scenario report performance differs from the summary scenario")
+    if bound_scenario["performance"] is not None:
+        if paired_improvement.get("samples") != raw_paired_samples:
+            _fail(f"{item_path} scenario performance samples differ from raw target timings")
+        if not math.isclose(
+            _require_number(
+                paired_improvement.get("paired_success_rate"),
+                f"{item_path}.report.summary.paired_improvement.paired_success_rate",
+            ),
+            report_success_rate,
+            rel_tol=0,
+            abs_tol=1e-15,
+        ):
+            _fail(f"{item_path} scenario performance success rate differs from raw summary")
     return {
         "evidence_id": item["id"],
         "scenario_id": scenario_id,
+        "task_id": _task_id(bound_scenario["task"], f"{item_path}.scenario.task"),
         "status": report_status,
         "independent_boots": independent_boots,
         "programs": display_programs,
@@ -1684,6 +2857,7 @@ def _extract_scenario_detail(
             "required_modules": modules,
             "verified_boots": verified_boots,
         },
+        "resource_stability": resource_stability,
         "outcomes": [
             {"key": key, "verified_pairs": len(samples), "status": "verified"}
             for key in SCENARIO_KEY_OUTCOMES
@@ -1700,19 +2874,19 @@ def _verify_kernel_cost_sidecar(
     present = {
         relative
         for relative, path in paths.items()
-        if path.exists() or path.is_symlink() or _is_link_like(path)
+        if path.exists() or path.is_symlink() or path_is_link(path)
     }
     directory_present = (
         kernel_directory.exists()
         or kernel_directory.is_symlink()
-        or _is_link_like(kernel_directory)
+        or path_is_link(kernel_directory)
     )
     if not present and not directory_present:
         return None, []
     if present != set(KERNEL_COST_FILES):
         missing = sorted(set(KERNEL_COST_FILES) - present)
         _fail(f"kernel-cost sidecar is incomplete; missing={missing}")
-    if _is_link_like(kernel_directory) or not kernel_directory.is_dir():
+    if path_is_link(kernel_directory) or not kernel_directory.is_dir():
         _fail("kernel-build must be a regular, non-link directory")
 
     expected_files = set(KERNEL_COST_FILES)
@@ -1723,7 +2897,7 @@ def _verify_kernel_cost_sidecar(
         _fail(f"cannot inventory kernel-build sidecar: {error}")
     for descendant in descendants:
         relative = descendant.relative_to(evidence_root).as_posix()
-        if _is_link_like(descendant):
+        if path_is_link(descendant):
             _fail(f"kernel-cost sidecar must not contain links: {relative}")
         if descendant.is_dir():
             if relative not in expected_directories:
@@ -1843,6 +3017,42 @@ def _verify_kernel_cost_sidecar(
                 else None
             ),
         })
+    fragment_guardrails = _require_list(
+        expected_fragment.get("guardrails"), "kernel-cost.fragment.guardrails"
+    )
+    if len(fragment_guardrails) != len(KERNEL_COST_GUARDRAILS):
+        _fail("kernel-cost fragment guardrail count differs from policy")
+    guardrail_rows: list[dict[str, Any]] = []
+    for index, ((guardrail_id, label), raw_guardrail) in enumerate(
+        zip(KERNEL_COST_GUARDRAILS, fragment_guardrails)
+    ):
+        path = f"kernel-cost.fragment.guardrails[{index}]"
+        guardrail = _require_object(raw_guardrail, path)
+        if guardrail.get("id") != guardrail_id or guardrail.get("status") != "measured":
+            _fail(f"{path} identity/status differs from policy")
+        value = guardrail.get("value")
+        limit = guardrail.get("limit")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or limit <= 0
+            or value > limit
+        ):
+            _fail(f"{path} value/limit is invalid")
+        guardrail_rows.append({
+            "id": guardrail_id,
+            "label": label,
+            "unit": "bytes",
+            "status": "measured",
+            "value": value,
+            "limit": limit,
+            "headroom": limit - value,
+            "source": guardrail.get("source"),
+            "source_command_sha256": guardrail.get("source_command_sha256"),
+        })
     return {
         "status": fragment_run["status"],
         "run_id": fragment_run["id"],
@@ -1850,18 +3060,324 @@ def _verify_kernel_cost_sidecar(
         "baseline": {"id": baseline_id, "label": baseline_target["label"]},
         "agentos": {"id": treatment_id, "label": treatment_target["label"]},
         "metrics": metric_rows,
+        "guardrails": guardrail_rows,
         "evidence_file_count": len(records),
     }, records
+
+
+def _campaign_environment_sha256(campaign: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        campaign["environment"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _verify_campaign_environment(
+    evidence_root: Path,
+    summary: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Recover displayable Host identity only through the sealed campaign chain."""
+
+    declared_campaign_sha256 = summary["run"].get("campaign_sha256")
+    if declared_campaign_sha256 is None:
+        return None, None
+    if (
+        not isinstance(declared_campaign_sha256, str)
+        or not SHA256.fullmatch(declared_campaign_sha256)
+    ):
+        _fail("run.campaign_sha256 must be lowercase SHA-256 when provided")
+
+    run_plan_item = next(
+        item
+        for item in summary["evidence"]
+        if item["kind"] == "evaluation-run-plan"
+    )
+    receipt = _require_object(run_plan_item.get("receipt"), "run-plan receipt")
+    expected_receipt_fields = {"run_id", "environment_sha256", "campaign_sha256"}
+    if set(receipt) != expected_receipt_fields:
+        _fail("run-plan receipt fields do not match the campaign binding schema")
+
+    run_plan_parts = _canonical_evidence_reference(
+        run_plan_item["path"], "run-plan evidence.path"
+    )
+    run_plan_path = evidence_root.joinpath(*run_plan_parts)
+    plan_bytes = _read_evidence_file(
+        evidence_root, run_plan_parts, "run-plan evidence.path"
+    )
+    try:
+        plan, plan_sha256 = load_run_plan(run_plan_path)
+    except (EvaluationContractError, OSError, UnicodeError, ValueError) as error:
+        _fail(f"campaign environment requires a strict run plan: {error}")
+    if (
+        plan_sha256 != hashlib.sha256(plan_bytes).hexdigest()
+        or plan_sha256 != run_plan_item["sha256"]
+        or plan_sha256 != summary["run"]["run_plan_sha256"]
+    ):
+        _fail("campaign environment run-plan bytes changed or are not summary-bound")
+
+    campaign_data = _read_evidence_file(
+        evidence_root, ("campaign.json",), "campaign.path"
+    )
+    campaign_sha256 = hashlib.sha256(campaign_data).hexdigest()
+    if (
+        campaign_sha256 != declared_campaign_sha256
+        or campaign_sha256 != plan["campaign_sha256"]
+        or receipt["campaign_sha256"] != campaign_sha256
+    ):
+        _fail("campaign SHA-256 differs from the summary, run plan, or receipt")
+    try:
+        campaign = strict_json_loads(campaign_data)
+        if not isinstance(campaign, dict):
+            raise CampaignError("campaign must be an object")
+        validate_campaign(campaign)
+    except (CampaignError, UnicodeError, ValueError) as error:
+        _fail(f"campaign platform proof is invalid: {error}")
+    if campaign["phase"] != "collected":
+        _fail("campaign platform proof requires a collected campaign")
+
+    run = campaign["run"]
+    if (
+        run["id"] != summary["run"]["id"]
+        or run["id"] != plan["run_id"]
+        or receipt["run_id"] != run["id"]
+        or run["commit"] != summary["run"].get("commit")
+        or {item["commit"] for item in plan["logs"]} != {run["commit"]}
+    ):
+        _fail("campaign run identity differs from the summary or run plan")
+
+    environment_sha256 = _campaign_environment_sha256(campaign)
+    if (
+        environment_sha256 != plan["environment_sha256"]
+        or environment_sha256 != summary["run"].get("environment_sha256")
+        or environment_sha256 != receipt["environment_sha256"]
+    ):
+        _fail("campaign environment SHA-256 differs from its receipts")
+
+    platform = campaign["platform"]
+    for label in ("compiler", "qemu"):
+        platform_tool = platform["tools"][label]
+        campaign_tool = campaign["environment"][label]
+        if any(
+            platform_tool[field] != campaign_tool[field]
+            for field in ("path", "sha256", "version")
+        ):
+            _fail(f"campaign {label} identity differs from the platform proof")
+
+    hardware = platform["hardware"]
+    detail = {
+        "status": "verified",
+        "source_commit": run["commit"],
+        "execution_domain": platform["entry_domain"],
+        "hardware_source": hardware["source"],
+        "cpu_model": hardware["cpu_model"],
+        "logical_cpu_count": hardware["logical_cpu_count"],
+        "memory_total_bytes": hardware["memory_total_bytes"],
+        "gcc_version": platform["tools"]["compiler"]["version"],
+        "qemu_version": platform["tools"]["qemu"]["version"],
+        "campaign_sha256": campaign_sha256,
+        "environment_sha256": environment_sha256,
+        "path": "campaign.json",
+    }
+    record = {
+        "id": "campaign-platform-proof",
+        "path": "campaign.json",
+        "bytes": len(campaign_data),
+        "sha256": campaign_sha256,
+        "receipt_bytes_checked": False,
+        "marker_receipts_verified": 0,
+        "campaign_binding_checked": True,
+    }
+    return detail, record
+
+
+def _compatibility_file_receipt(path: Path) -> tuple[int, str]:
+    safe_path = require_regular_file(
+        path, maximum_bytes=MAX_COMPATIBILITY_EVIDENCE_FILE_BYTES
+    )
+    expected = safe_path.lstat()
+    digest = hashlib.sha256()
+    total = 0
+    with safe_path.open("rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if not stat.S_ISREG(opened.st_mode) or (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+        ) != (
+            expected.st_dev,
+            expected.st_ino,
+            expected.st_size,
+        ):
+            _fail("compatibility evidence changed before it was hashed")
+        while chunk := handle.read(1 << 20):
+            total += len(chunk)
+            if total > MAX_COMPATIBILITY_EVIDENCE_FILE_BYTES:
+                _fail("compatibility evidence file exceeds its byte limit")
+            digest.update(chunk)
+        final = os.fstat(handle.fileno())
+    current = require_regular_file(
+        safe_path, maximum_bytes=MAX_COMPATIBILITY_EVIDENCE_FILE_BYTES
+    ).lstat()
+    expected_identity = (
+        expected.st_dev,
+        expected.st_ino,
+        expected.st_size,
+        expected.st_mtime_ns,
+    )
+    if (
+        total != expected.st_size
+        or (
+            final.st_dev,
+            final.st_ino,
+            final.st_size,
+            final.st_mtime_ns,
+        )
+        != expected_identity
+        or (
+            current.st_dev,
+            current.st_ino,
+            current.st_size,
+            current.st_mtime_ns,
+        )
+        != expected_identity
+    ):
+        _fail("compatibility evidence changed while it was hashed")
+    return total, digest.hexdigest()
+
+
+def _compatibility_tree_receipt(root: Path) -> tuple[str, list[dict[str, Any]]]:
+    try:
+        files = walk_regular_files_no_links(
+            root,
+            max_files=MAX_COMPATIBILITY_EVIDENCE_FILES,
+            max_directories=MAX_COMPATIBILITY_EVIDENCE_DIRECTORIES,
+            max_total_bytes=MAX_COMPATIBILITY_EVIDENCE_TOTAL_BYTES,
+            max_depth=MAX_COMPATIBILITY_EVIDENCE_DEPTH,
+        )
+    except (OSError, ValueError) as error:
+        _fail(f"compatibility evidence tree is unsafe or exceeds its budget: {error}")
+    entries: list[dict[str, Any]] = []
+    total_bytes = 0
+    for path in files:
+        size, sha256 = _compatibility_file_receipt(path)
+        total_bytes += size
+        if total_bytes > MAX_COMPATIBILITY_EVIDENCE_TOTAL_BYTES:
+            _fail("compatibility evidence tree exceeds its byte limit")
+        entries.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "bytes": size,
+                "sha256": sha256,
+            }
+        )
+    if not entries:
+        _fail("compatibility evidence tree is empty")
+    return _binding_sha256(entries, "compatibility-evidence-tree-v1"), entries
+
+
+def _verify_compatibility_sidecar(
+    evidence_root: Path,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    root = evidence_root / "compatibility"
+    if not root.exists() and not path_is_link(root):
+        return None, None
+    before_sha256, before_entries = _compatibility_tree_receipt(root)
+    summary_path = root / "compatibility-overhead.json"
+    try:
+        value = verify_compatibility_artifacts(
+            summary_path, micro_manifest=evidence_root / "campaign.json"
+        )
+    except (
+        CompatibilityContractError,
+        CompatibilityRunError,
+        OSError,
+        ValueError,
+    ) as error:
+        _fail(f"compatibility-overhead evidence is invalid: {error}")
+    after_sha256, after_entries = _compatibility_tree_receipt(root)
+    if before_sha256 != after_sha256 or before_entries != after_entries:
+        _fail("compatibility evidence changed while it was replayed")
+    summary = value["summary"]
+    metrics = summary["metrics"]
+    normalized_metrics = {
+        metric: {
+            field: metrics[metric][field]
+            for field in (
+                "paired_boots",
+                "operation_unit",
+                "plain_median_microseconds_per_operation",
+                "agentos_median_microseconds_per_operation",
+                "median_agentos_over_plain_ratio",
+            )
+        }
+        for metric in (
+            "fork_wait",
+            "fork_exec_wait",
+            "pipe_roundtrip",
+            "seq_file_io",
+        )
+    }
+    fragment = {
+        "status": "ready",
+        "claim_scope": summary["claim_scope"],
+        "aggregate_score": summary["aggregate_score"],
+        "aggregate_score_forbidden": summary["aggregate_score_forbidden"],
+        "workload_equivalence": copy.deepcopy(summary["workload_equivalence"]),
+        "metrics": normalized_metrics,
+        "artifact_tree_sha256": after_sha256,
+        "artifact_file_count": len(after_entries),
+    }
+    summary_data = summary_path.read_bytes()
+    summary_entry = next(
+        item for item in after_entries if item["path"] == "compatibility-overhead.json"
+    )
+    if (
+        len(summary_data) != summary_entry["bytes"]
+        or hashlib.sha256(summary_data).hexdigest() != summary_entry["sha256"]
+    ):
+        _fail("compatibility summary changed after tree replay")
+    record = {
+        "id": "compatibility-overhead",
+        "path": "compatibility/compatibility-overhead.json",
+        "bytes": len(summary_data),
+        "sha256": summary_entry["sha256"],
+        "receipt_bytes_checked": True,
+        "marker_receipts_verified": 0,
+        "compatibility_tree_sha256": after_sha256,
+        "compatibility_files_verified": len(after_entries),
+    }
+    return fragment, record
 
 
 def _verify_evidence_files(
     evidence_root: Path,
     summary: dict[str, Any],
     source_summary: bytes,
-) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any] | None]:
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
     records: list[dict[str, Any]] = []
     scenario_details: list[dict[str, Any]] = []
     marker_count = 0
+    diagnostic_provenance_count = 0
+    diagnostic_samples_by_evidence: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for benchmark_index, benchmark in enumerate(summary["benchmarks"]):
+        for diagnostic_index, diagnostic in enumerate(benchmark["diagnostics"]):
+            for sample_index, sample in enumerate(diagnostic["samples"]):
+                sample_path = (
+                    f"benchmarks[{benchmark_index}].diagnostics[{diagnostic_index}]"
+                    f".samples[{sample_index}]"
+                )
+                diagnostic_samples_by_evidence.setdefault(sample["evidence_id"], []).append(
+                    (sample_path, sample)
+                )
     for index, item in enumerate(summary["evidence"]):
         item_path = f"evidence[{index}]"
         parts = _canonical_evidence_reference(item["path"], f"{item_path}.path")
@@ -1872,6 +3388,26 @@ def _verify_evidence_files(
                 f"{item_path}.sha256 does not match the evidence file "
                 f"{item['path']!r}"
             )
+        diagnostic_samples = diagnostic_samples_by_evidence.get(item["id"], [])
+        diagnostic_provenance_verified = 0
+        if diagnostic_samples:
+            try:
+                source_lines = data.decode("utf-8", errors="strict").splitlines()
+            except UnicodeDecodeError as error:
+                _fail(f"{item_path} diagnostic provenance requires strict UTF-8 evidence: {error}")
+            for sample_path, sample in diagnostic_samples:
+                if sample["source_log_sha256"] != actual_sha256:
+                    _fail(f"{sample_path}.source_log_sha256 differs from the evidence bytes")
+                source_line = sample["source_line"]
+                if source_line > len(source_lines):
+                    _fail(f"{sample_path}.source_line references a missing evidence line")
+                actual_marker_sha256 = hashlib.sha256(
+                    source_lines[source_line - 1].encode("utf-8")
+                ).hexdigest()
+                if sample["source_marker_sha256"] != actual_marker_sha256:
+                    _fail(f"{sample_path}.source_marker_sha256 differs from the evidence line")
+                diagnostic_provenance_verified += 1
+            diagnostic_provenance_count += diagnostic_provenance_verified
         if item["kind"] == "research-platform-scenario" and item["status"] == "verified":
             scenario_details.append(
                 _extract_scenario_detail(data, item, item_path, summary)
@@ -1944,6 +3480,7 @@ def _verify_evidence_files(
             "sha256": actual_sha256,
             "receipt_bytes_checked": receipt_bytes_checked,
             "marker_receipts_verified": verified_markers,
+            "diagnostic_provenance_verified": diagnostic_provenance_verified,
         })
 
     run_plan_records = [
@@ -1956,10 +3493,20 @@ def _verify_evidence_files(
     if len(run_plan_records) != 1 or run_plan_records[0]["sha256"] != summary["run"]["run_plan_sha256"]:
         _fail("run.run_plan_sha256 is not bound to the actual run-plan evidence bytes")
 
+    campaign_environment, campaign_record = _verify_campaign_environment(
+        evidence_root, summary
+    )
+    if campaign_record is not None:
+        records.append(campaign_record)
     kernel_cost, kernel_cost_records = _verify_kernel_cost_sidecar(
         evidence_root, summary
     )
     records.extend(kernel_cost_records)
+    compatibility_overhead, compatibility_record = _verify_compatibility_sidecar(
+        evidence_root
+    )
+    if compatibility_record is not None:
+        records.append(compatibility_record)
     records.sort(key=lambda item: item["id"])
     evidence_set_sha256 = _binding_sha256(records, "dashboard-evidence-set-v1")
     verification = {
@@ -1972,6 +3519,7 @@ def _verify_evidence_files(
         "evidence_root": ".",
         "verified_evidence_count": len(records),
         "verified_marker_count": marker_count,
+        "verified_diagnostic_provenance_count": diagnostic_provenance_count,
         "kernel_cost": {
             "status": (
                 "unavailable" if kernel_cost is None
@@ -1980,6 +3528,16 @@ def _verify_evidence_files(
             ),
             "evidence_file_count": len(kernel_cost_records),
         },
+        "compatibility_overhead": (
+            {"status": "unavailable"}
+            if compatibility_overhead is None
+            else compatibility_overhead
+        ),
+        "campaign_environment": (
+            {"status": "unavailable"}
+            if campaign_environment is None
+            else copy.deepcopy(campaign_environment)
+        ),
         "evidence_set_sha256": evidence_set_sha256,
         "evidence": records,
     }
@@ -1987,26 +3545,31 @@ def _verify_evidence_files(
     scenario_ids = [detail["scenario_id"] for detail in scenario_details]
     if len(scenario_ids) != len(set(scenario_ids)):
         _fail("verified scenario reports repeat a scenario_id")
-    return verification, scenario_details, kernel_cost
+    return verification, scenario_details, kernel_cost, campaign_environment
 
 
-def _has_supported_result(summary: dict[str, Any]) -> bool:
+def _has_scientific_result(summary: dict[str, Any]) -> bool:
     return any(
-        claim["status"] == "supported" for claim in summary["claims"]
+        claim["status"] in {"supported", "not_supported"}
+        for claim in summary["claims"]
     ) or any(
-        scenario["performance_status"] == "supported"
+        scenario["performance_status"] in {"supported", "regressed", "inconclusive"}
         for scenario in summary["scenarios"]
+    ) or any(
+        item["kind"] == "research-platform-scenario"
+        and item["status"] == "verified"
+        for item in summary["evidence"]
     )
 
 
-def _replay_supported_contract(
+def _replay_scientific_contract(
     evidence_root: Path,
     summary_path: Path,
     summary: dict[str, Any],
 ) -> None:
-    """Rebuild every supported result from raw Guest markers before rendering."""
+    """Rebuild positive and negative measured results before rendering."""
 
-    if not _has_supported_result(summary):
+    if not _has_scientific_result(summary):
         return
     repository_suite = Path(__file__).resolve().parents[1] / "ci" / "evaluation-suite.json"
     suite_path = evidence_root / "suite.json"
@@ -2018,11 +3581,11 @@ def _replay_supported_contract(
         "metrics": evidence_root / "metrics.jsonl",
     }
     for label, path in required.items():
-        if not path.is_file() or _is_link_like(path):
-            _fail(f"supported results require a regular {label} file for contract replay")
+        if not path.is_file() or path_is_link(path):
+            _fail(f"measured scientific results require a regular {label} file for contract replay")
     raw_root = evidence_root / "raw"
-    if not raw_root.is_dir() or _is_link_like(raw_root):
-        _fail("supported results require a regular raw Guest evidence directory")
+    if not raw_root.is_dir() or path_is_link(raw_root):
+        _fail("measured scientific results require a regular raw Guest evidence directory")
     scenario_report = evidence_root / "scenario" / "report.json"
     scenario_plan = evidence_root / "scenario" / "scenario-plan.json"
     scenario_args: tuple[Path | None, Path | None]
@@ -2030,8 +3593,8 @@ def _replay_supported_contract(
         if (
             not scenario_report.is_file()
             or not scenario_plan.is_file()
-            or _is_link_like(scenario_report)
-            or _is_link_like(scenario_plan)
+            or path_is_link(scenario_report)
+            or path_is_link(scenario_plan)
         ):
             _fail("scenario contract replay requires a complete non-link plan/report pair")
         scenario_args = (scenario_report, scenario_plan)
@@ -2076,8 +3639,21 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
     estimates = _estimate_map(benchmark)
     baseline = benchmark["baseline"]
     treatment = benchmark["treatment"]
+    baseline_label = targets[baseline]["label"]
+    treatment_label = targets[treatment]["label"]
     loads = [str(value) for value in benchmark["loads"]]
+    paired_samples = {
+        str(pair["load"]): sorted(pair["samples"], key=lambda sample: str(sample["trial"]))
+        for pair in benchmark["paired"]
+        if pair["status"] == "measured"
+    }
     values = [float(item[key]) for item in estimates.values() for key in ("lower", "upper")]
+    values.extend(
+        float(sample[field])
+        for samples in paired_samples.values()
+        for sample in samples
+        for field in ("baseline_value", "treatment_value")
+    )
     low, high = min(values), max(values)
     if low == high:
         pad = abs(low) * 0.1 or 1.0
@@ -2088,7 +3664,7 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
         low -= pad
         high += pad
     plot_left, plot_right = 176.0, 748.0
-    row_height = 68
+    row_height = 92
     height = 72 + len(loads) * row_height
 
     def x(value: float) -> float:
@@ -2096,8 +3672,8 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
 
     svg: list[str] = [
         f'<svg viewBox="0 0 800 {height}" role="img" aria-labelledby="chart-title-{_h(suffix)} chart-desc-{_h(suffix)}">',
-        f'<title id="chart-title-{_h(suffix)}">{_h(benchmark["label"])}配对区间图</title>',
-        f'<desc id="chart-desc-{_h(suffix)}">单位 {_h(benchmark["unit"])}，展示基线与 AgentOS 的估计值及区间。</desc>',
+        f'<title id="chart-title-{_h(suffix)}">{_h(benchmark["label"])}逐 boot 配对与区间图</title>',
+        f'<desc id="chart-desc-{_h(suffix)}">单位 {_h(benchmark["unit"])}；小圆点和浅色连线展示每个独立 boot 的 {_h(baseline_label)} 与 {_h(treatment_label)} 原始配对值，粗区间和大圆点展示汇总估计。</desc>',
         f'<line class="axis" x1="{plot_left}" y1="36" x2="{plot_right}" y2="36" />',
         f'<text class="axis-label" x="{plot_left}" y="22">{_h(_value(low))}</text>',
         f'<text class="axis-label" x="{plot_right}" y="22" text-anchor="end">{_h(_value(high))} {_h(benchmark["unit"])}</text>',
@@ -2108,8 +3684,29 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
         svg.append(f'<text class="load-label" x="8" y="{y_base + 12}">负载 {_h(load)}</text>')
         first_x = x(float(estimates[(baseline, load)]["value"]))
         second_x = x(float(estimates[(treatment, load)]["value"]))
-        svg.append(f'<line class="pair-link" x1="{first_x:.2f}" y1="{y_base}" x2="{second_x:.2f}" y2="{y_base + 24}" />')
-        for offset, target_id, css_class in ((0, baseline, "baseline"), (24, treatment, "treatment")):
+        raw_pairs = paired_samples.get(load, [])
+        for sample_index, sample in enumerate(raw_pairs):
+            jitter = 0.0 if len(raw_pairs) == 1 else -7.0 + 14.0 * sample_index / (len(raw_pairs) - 1)
+            baseline_x = x(float(sample["baseline_value"]))
+            treatment_x = x(float(sample["treatment_value"]))
+            baseline_y = y_base + jitter
+            treatment_y = y_base + 30 + jitter
+            trial = str(sample["trial"])
+            svg.extend(
+                [
+                    f'<g class="raw-pair" data-trial="{_h(trial)}">',
+                    f'<title>boot {_h(trial)}：{_h(baseline_label)} {_h(_value(float(sample["baseline_value"])))}，{_h(treatment_label)} {_h(_value(float(sample["treatment_value"])))}</title>',
+                    f'<line class="raw-pair-link" x1="{baseline_x:.2f}" y1="{baseline_y:.2f}" x2="{treatment_x:.2f}" y2="{treatment_y:.2f}" />',
+                    f'<circle class="raw-pair-dot raw-pair-dot--baseline" cx="{baseline_x:.2f}" cy="{baseline_y:.2f}" r="2.5" />',
+                    f'<circle class="raw-pair-dot raw-pair-dot--treatment" cx="{treatment_x:.2f}" cy="{treatment_y:.2f}" r="2.5" />',
+                    "</g>",
+                ]
+            )
+        svg.append(
+            f'<line class="estimate-pair-link" x1="{first_x:.2f}" y1="{y_base}" '
+            f'x2="{second_x:.2f}" y2="{y_base + 30}" />'
+        )
+        for offset, target_id, css_class in ((0, baseline, "baseline"), (30, treatment, "treatment")):
             estimate = estimates[(target_id, load)]
             ns.append(int(estimate["n"]))
             y = y_base + offset
@@ -2125,6 +3722,7 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
                 ]
             )
     svg.append("</svg>")
+    raw_pair_count = sum(len(samples) for samples in paired_samples.values())
     n_text = str(ns[0]) if ns and len(set(ns)) == 1 else f"{min(ns)}-{max(ns)}"
     source = _evidence_sources(benchmark["evidence_ids"], evidence)
     evidence_buttons = " ".join(
@@ -2133,7 +3731,7 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
     )
     return (
         f'<figure class="interval-chart" data-chart-unit="{_h(benchmark["unit"])}" '
-        f'data-chart-n="{_h(n_text)}" data-chart-source="{_h(source)}">'
+        f'data-chart-n="{_h(n_text)}" data-raw-pairs="{raw_pair_count}" data-chart-source="{_h(source)}">'
         f'<div class="chart-scroll" role="region" tabindex="0" aria-label="{_h(benchmark["label"])}图表，可横向滚动">'
         + "".join(svg)
         + "</div>"
@@ -2141,9 +3739,74 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
         + _h(benchmark["unit"])
         + '</span><span><strong>n</strong> '
         + _h(n_text)
+        + '</span><span><strong>原始配对</strong> '
+        + _h(raw_pair_count)
+        + " 个独立 boot"
         + '</span><span><strong>来源</strong> '
         + evidence_buttons
         + '</span></figcaption></figure>'
+    )
+
+
+def _work_receipts_table(
+    benchmark: dict[str, Any], targets: dict[str, dict[str, Any]]
+) -> str:
+    if (
+        benchmark["id"] not in FILE_QUERY_EXPERIMENTS
+        or benchmark["status"] != "measured"
+        or not benchmark.get("samples")
+    ):
+        return ""
+
+    def distribution(values: list[int]) -> str:
+        ordered = sorted(values)
+        median = int(statistics.median(ordered))
+        if ordered[0] == ordered[-1]:
+            return str(ordered[0])
+        return f"{ordered[0]}-{ordered[-1]} (median {median})"
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for sample in benchmark["samples"]:
+        grouped.setdefault((str(sample["load"]), sample["target_id"]), []).append(sample)
+    rows: list[str] = []
+    for load in (str(value) for value in benchmark["loads"]):
+        for target_id in (benchmark["baseline"], benchmark["treatment"]):
+            samples = grouped.get((load, target_id), [])
+            if not samples:
+                continue
+            first = samples[0]
+            role = "baseline" if target_id == benchmark["baseline"] else "treatment"
+            rows.append(
+                '<tr>'
+                f'<th scope="row">{_h(load)}</th>'
+                f'<td><strong>{_h(targets[target_id]["label"])}</strong><br><code>{role}</code></td>'
+                f'<td>{_h(len(samples))}</td>'
+                f'<td>{_h(first["operations"])}</td>'
+                f'<td>{_h(first["dataset_size"])}</td>'
+                f'<td>{_h(distribution([int(item["work_units"]) for item in samples]))}</td>'
+                f'<td>{_h(distribution([int(item["records_examined"]) for item in samples]))}</td>'
+                f'<td>{_h(first["result_items"])}</td>'
+                '<td><code>rebuild=0 / cache-hit=0</code></td>'
+                '</tr>'
+            )
+    if not rows:
+        return ""
+    note = (
+        "主对照 baseline 的工作量必须精确等于 N x operations，证明每次均检查全部实际路径。"
+        if benchmark["id"] == FILE_QUERY_PATH_INDEX
+        else "消融 baseline 的工作量固定为 512 x operations；检查到的有效记录仍按实际 N 披露。"
+        if benchmark["id"] == FILE_QUERY_TABLE_ABLATION
+        else "工作回执按独立 boot 聚合；原始 inner-pair 数值仍由合同逐项重放。"
+    )
+    return (
+        '<section class="diagnostic-block work-receipt-block">'
+        '<h4>实际工作量回执</h4>'
+        f'<p class="diagnostic-note">{_h(note)} 不要求实验结果预先胜出。</p>'
+        '<div class="table-scroll" role="region" tabindex="0" '
+        'aria-label="实际工作量回执表，可横向滚动"><table class="diagnostic-table"><thead><tr>'
+        '<th>负载</th><th>路径</th><th>独立 boot</th><th>每 pair 操作数</th><th>实际 N</th>'
+        '<th>工作单元</th><th>检查记录</th><th>结构化结果</th><th>计时护栏</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
     )
 
 
@@ -2175,19 +3838,49 @@ def _diagnostics_table(benchmark: dict[str, Any], *, heading_level: int = 4) -> 
             f'<td>{stat(item["duration_us"], item["unit"])}</td>'
             f'<td>{stat(item["work_units"], "work units")}</td>'
             f'<td>{stat(item["index_rebuild_records"], "records")}</td>'
+            f'<td>{stat(item["result_cache_hits"], "hits")}</td>'
             f'<td>{evidence_links}</td></tr>'
         )
     heading = min(max(heading_level, 2), 6)
     return (
         '<section class="diagnostic-block">'
         f'<h{heading}>索引准备成本与缓存状态</h{heading}>'
-        '<p class="diagnostic-note">准备阶段独立计量；ready 查询优势不包含未披露的索引建立成本。</p>'
+        '<p class="diagnostic-note">独立诊断仅支持索引准备状态披露，不参与 headline 判定；'
+        'ready-index 护栏来自实际计时样本中的 index_rebuild_records=0 与 result_cache_hits=0。</p>'
         '<div class="table-scroll" role="region" tabindex="0" '
         'aria-label="索引准备成本与缓存状态表，可横向滚动"><table class="diagnostic-table"><thead><tr>'
-        '<th>负载</th><th>状态</th><th>Cache</th><th>准备耗时</th><th>工作量</th><th>重建记录</th><th>原始证据</th>'
+        '<th>负载</th><th>状态</th><th>Cache</th><th>准备耗时</th><th>工作量</th>'
+        '<th>重建记录</th><th>结果缓存命中</th><th>原始证据</th>'
         f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>'
     )
-def _task_matrix(scenarios: list[dict[str, Any]]) -> str:
+
+
+def _acceptance_band(acceptance: dict[str, Any]) -> str:
+    scientific = acceptance["scientific_evidence"]
+    competition_status = "pass" if acceptance["competition_ready"] else "not_ready"
+    task4 = acceptance["task4_gate"]
+    return (
+        '<section class="acceptance-band" aria-labelledby="acceptance-title">'
+        '<div class="subheading"><h2 id="acceptance-title">发布与竞赛验收</h2>'
+        '<span>两道独立门</span></div>'
+        '<dl class="summary-strip">'
+        f'<div><dt>科学证据发布</dt><dd>{_status(scientific["status"])}</dd></div>'
+        f'<div><dt>竞赛整体验收</dt><dd>{_status(competition_status)}</dd></div>'
+        f'<div><dt>任务四功能</dt><dd>{_status(task4["functional_status"])}</dd></div>'
+        f'<div><dt>{_h(task4["benchmark_id"])} 结论</dt>'
+        f'<dd>{_status(task4["claim_status"])}</dd></div>'
+        '</dl>'
+        '<p class="diagnostic-note">科学证据允许完整发布未通过性能支持门的负结果；'
+        f'任务四竞赛验收仅在功能回执通过且 <code>{_h(task4["benchmark_id"])}</code> '
+        f'结论为 <code>{_h(task4["required_status"])}</code> 时通过。'
+        '场景若得到 <code>regressed</code> 结论，'
+        '证据仍可诚实发布，但对应任务和竞赛整体验收必须保持未就绪。</p></section>'
+    )
+
+
+def _task_matrix(
+    scenarios: list[dict[str, Any]], competition_tasks: dict[str, str]
+) -> str:
     rank = {"pass": 0, "partial": 1, "unavailable": 2, "fail": 3}
     cells: list[str] = []
     for task in TASK_IDS:
@@ -2196,14 +3889,27 @@ def _task_matrix(scenarios: list[dict[str, Any]]) -> str:
             status = "unavailable"
             detail = "未提供动态场景"
         else:
-            status = max((item["functional_status"] for item in task_items), key=rank.__getitem__)
-            detail = "、".join(item["label"] for item in task_items)
+            functional_status = max(
+                (item["functional_status"] for item in task_items),
+                key=rank.__getitem__,
+            )
+            performance_details = "、".join(
+                f"{item['label']} 性能="
+                f"{STATUS_ZH.get(item['performance_status'], item['performance_status'])}"
+                for item in task_items
+                if item["performance_status"] != "unavailable"
+            )
+            detail = (
+                f"功能证据：{STATUS_ZH.get(functional_status, functional_status)}；"
+                + (performance_details or "、".join(item["label"] for item in task_items))
+            )
+        status = competition_tasks[task]
         number = task.removeprefix("task")
         cells.append(
             f'<div class="task-cell task-cell--{_h(status)}"><span class="task-number">任务 {number}</span>'
             f'{_status(status)}<span class="task-detail">{_h(detail)}</span></div>'
         )
-    return '<div class="task-matrix" aria-label="赛题任务一至六覆盖矩阵">' + "".join(cells) + "</div>"
+    return '<div class="task-matrix" aria-label="赛题任务一至六竞赛验收矩阵">' + "".join(cells) + "</div>"
 
 
 def _claim_text(
@@ -2215,7 +3921,7 @@ def _claim_text(
     if claim["status"] == "supported":
         title = (
             f"{targets[benchmark['treatment']]['label']} 的 {benchmark['label']}"
-            "通过预注册性能支持门"
+            "通过预注册 joint-MCID 精确检验门"
         )
     elif claim["status"] == "not_supported":
         title = f"{benchmark['label']}未通过预注册性能支持门"
@@ -2226,15 +3932,20 @@ def _claim_text(
         if pair["status"] != "measured":
             continue
         relative = (
-            f"，相对 95% CI {_value(float(pair['relative_ci_low']))}%.."
+            f"，相对描述性 bootstrap 95% 区间 {_value(float(pair['relative_ci_low']))}%.."
             f"{_value(float(pair['relative_ci_high']))}%"
             if pair["relative_ci_low"] is not None
             else "，相对改善 unavailable"
         )
+        mcid = pair["mcid_sign_test"]
         details.append(
             f"负载 {pair['load']}：改善中位数 {_value(float(pair['median']))} {benchmark['unit']}，"
-            f"95% CI {_value(float(pair['ci_low']))}..{_value(float(pair['ci_high']))}{relative}，"
-            f"sign-test p={_value(float(pair['sign_test']['p_value']))}"
+            f"描述性 bootstrap 95% 区间 {_value(float(pair['ci_low']))}.."
+            f"{_value(float(pair['ci_high']))}{relative}；推断采用每 boot 同时严格超过 "
+            f"{_value(float(mcid['absolute_mcid_us']))} us 与 "
+            f"{_value(float(mcid['relative_mcid_percent']))}% 的 joint-MCID 胜场 "
+            f"{mcid['wins']}/{mcid['n']}，exact p={_value(float(mcid['p_value']))}，"
+            "并按 headline family 做 Bonferroni 校正"
         )
     if details:
         effect = "；".join(details) + "。"
@@ -2252,15 +3963,245 @@ def _scenario_metric(scenario: dict[str, Any]) -> str:
             "failed": "性能测量失败",
             "unavailable": "未提供合同化性能测量",
         }[scenario["performance_status"]]
+    forward_mcid = performance["mcid_sign_test"]
+    reverse_mcid = performance["regression_mcid_sign_test"]
+    signs = performance["sign_test"]
+    inference = performance["inference"]
+    interpretation = performance["interpretation"]
+    relative_delta = (
+        "unavailable"
+        if performance["relative_median_percent"] is None
+        else f"{float(performance['relative_median_percent']):+.6g}%"
+    )
     return (
-        f"n={performance['n']}；配对 makespan 改善中位数 "
-        f"{_value(float(performance['median']))} {performance['unit']}；95% CI "
+        f"统计结论：{STATUS_ZH.get(scenario['performance_status'], scenario['performance_status'])} "
+        f"({scenario['performance_status']})；n={performance['n']}；"
+        "signed delta 定义为 plain-AgentOS，"
+        f"中位数 {float(performance['median']):+.6g} {performance['unit']}，"
+        f"相对中位数 {relative_delta}；"
+        f"描述性 bootstrap 95% 区间 "
         f"{_value(float(performance['ci_low']))}..{_value(float(performance['ci_high']))} "
-        f"{performance['unit']}；sign-test p={_value(float(performance['sign_test']['p_value']))}"
+        f"{performance['unit']}；符号胜/负/平="
+        f"{signs['wins']}/{signs['losses']}/{signs['ties']}；"
+        f"正向 joint-MCID {forward_mcid['absolute_mcid_ms']} ms 与 "
+        f"{_value(float(forward_mcid['relative_mcid_percent']))}%：胜场 "
+        f"{forward_mcid['wins']}/{forward_mcid['n']}，"
+        f"one-sided exact p={_value(float(forward_mcid['p_value']))}；"
+        f"反向 joint-MCID -{reverse_mcid['absolute_mcid_ms']} ms 与 "
+        f"-{_value(float(reverse_mcid['relative_mcid_percent']))}%：负场 "
+        f"{reverse_mcid['losses']}/{reverse_mcid['n']}，"
+        f"one-sided exact p={_value(float(reverse_mcid['p_value']))}；"
+        f"Task6 directional family alpha={_value(float(inference['alpha']))}，"
+        f"Bonferroni 后每方向 alpha={_value(float(inference['per_direction_alpha']))}；"
+        f"{interpretation['design']} / {interpretation['causal_attribution']}；"
+        f"Host page cache {interpretation['host_page_cache']}"
     )
 
 
-def _canonical_dashboard_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def _overview_claim_slots(
+    summary: dict[str, Any],
+    benchmarks: dict[str, dict[str, Any]],
+    targets: dict[str, dict[str, Any]],
+) -> str:
+    """Render the complete registered claim family without selecting a winner."""
+
+    registered = summary["methodology"]["multiple_testing"]["headline_claims"]
+    claims = {claim["benchmark_id"]: claim for claim in summary["claims"]}
+    slots: list[str] = []
+    for index, benchmark_id in enumerate(registered, 1):
+        benchmark = benchmarks.get(benchmark_id)
+        claim = claims.get(benchmark_id)
+        label = benchmark["label"] if benchmark is not None else benchmark_id
+        if claim is None or benchmark is None:
+            status = "unavailable"
+            statement = "未声明合同化机制 claim；不会用其他 benchmark 补位。"
+            metric = "原始配对、joint-MCID 与证据绑定 unavailable。"
+            evidence_links = "unavailable"
+        else:
+            status = claim["status"]
+            statement, _ = _claim_text(claim, benchmarks, targets)
+            measured_pairs = [pair for pair in benchmark["paired"] if pair["status"] == "measured"]
+            sample_counts = sorted({int(pair["n"]) for pair in measured_pairs})
+            n_text = (
+                str(sample_counts[0])
+                if len(sample_counts) == 1
+                else f"{sample_counts[0]}-{sample_counts[-1]}"
+                if sample_counts
+                else "unavailable"
+            )
+            metric = (
+                f"{len(benchmark['loads'])} 个预注册负载；每负载独立 boot n={n_text}；"
+                "joint-MCID 精确检验并纳入 Bonferroni family。"
+            )
+            evidence_links = " ".join(
+                f'<button class="evidence-link" type="button" data-evidence-ref="{_h(item_id)}">{_h(item_id)}</button>'
+                for item_id in claim["evidence_ids"]
+            ) or "unavailable"
+        slot_label = (
+            "Task 4 竞赛主 Claim"
+            if benchmark_id == "file_query_path_index"
+            else "Task 4 机制消融"
+            if benchmark_id == "file_query_table_ablation"
+            else f"机制 Claim {index}"
+        )
+        slots.append(
+            f'<article class="headline-result-slot" data-overview-slot="mechanism" '
+            f'data-benchmark-id="{_h(benchmark_id)}">'
+            f'<header><span>{_h(slot_label)}</span>{_status(status)}</header>'
+            f'<h3>{_h(label)}</h3><p>{_h(statement)}</p>'
+            f'<p class="slot-metric">{_h(metric)}</p>'
+            f'<footer><code>{_h(benchmark_id)}</code><span>{evidence_links}</span></footer>'
+            "</article>"
+        )
+    return "".join(slots)
+
+
+def _overview_task6_slot(scenarios: list[dict[str, Any]]) -> str:
+    task6 = [scenario for scenario in scenarios if _task_id(scenario["task"], "scenario.task") == "task6"]
+    if not task6:
+        content = (
+            '<div class="task6-slot-row"><div><strong>科研工作流</strong>'
+            f'{_status("unavailable")}</div><p>未声明 Task6 场景；不会用机制微基准补位。</p></div>'
+        )
+    else:
+        rows: list[str] = []
+        for scenario in task6:
+            refs = " ".join(
+                f'<button class="evidence-link" type="button" data-evidence-ref="{_h(item_id)}">{_h(item_id)}</button>'
+                for item_id in scenario.get("evidence_ids", [])
+            ) or "unavailable"
+            rows.append(
+                '<div class="task6-slot-row">'
+                f'<div><strong>{_h(scenario["label"])}</strong>'
+                f'<span>功能 {_status(scenario["functional_status"])}</span>'
+                f'<span>性能 {_status(scenario["performance_status"])}</span></div>'
+                f'<p>{_h(_scenario_metric(scenario))}</p><footer>{refs}</footer></div>'
+            )
+        content = "".join(rows)
+    return (
+        '<article class="headline-result-slot headline-result-slot--task6" '
+        'data-overview-slot="task6" data-benchmark-id="task6">'
+        '<header><span>Task6</span><code>full-stack</code></header>'
+        '<h3>科研场景</h3>'
+        f'<div class="task6-slot-list">{content}</div></article>'
+    )
+
+
+def _overview_extension_slots(
+    verification: dict[str, Any], scenario_details: list[dict[str, Any]]
+) -> str:
+    """Render optional guardrails in named slots; absence never borrows another result."""
+
+    task6_resources = [
+        detail["resource_stability"]
+        for detail in scenario_details
+        if detail.get("task_id") == "task6"
+        and isinstance(detail.get("resource_stability"), dict)
+    ]
+    if len(task6_resources) > 1:
+        _fail("resource stability must bind at most one verified Task6 scenario report")
+    resource = task6_resources[0] if task6_resources else None
+    if resource is None or resource.get("status") not in {"passed", "partial", "unavailable"}:
+        resource_status = "unavailable"
+        resource_text = (
+            "没有经过 Dashboard 证据重放的资源稳定性回执；不声称全局无泄漏。"
+        )
+    else:
+        resource_status = str(resource["status"])
+        interpretation = resource.get("interpretation", {})
+        observation = resource.get("global_observation", {})
+        observed_resources = (
+            observation.get("resources", [])
+            if isinstance(observation, dict)
+            else []
+        )
+        measured_kinds = sum(
+            isinstance(item, dict) and item.get("status") == "measured"
+            for item in observed_resources
+        )
+        free_pages = (
+            observation.get("free_pages", {})
+            if isinstance(observation, dict)
+            else {}
+        )
+        exact_free_pages = (
+            isinstance(free_pages, dict)
+            and free_pages.get("exact_pair_recovery") is True
+            and free_pages.get("exact_terminal_recovery") is True
+        )
+        partial_note = (
+            "部分观测，不可作为通过证据；"
+            if resource_status == "partial"
+            else ""
+        )
+        resource_text = (
+            f"{partial_note}核验 boot={resource.get('verified_boots', 'unavailable')}；"
+            f"配置全局计数覆盖={measured_kinds}/{len(observed_resources)}；"
+            f"空闲页配对/终点精确恢复={'是' if exact_free_pages else '否'}；"
+            f"计时关系={interpretation.get('timing_relationship', 'unavailable')}；"
+            f"全局无泄漏={interpretation.get('global_leak_freedom', 'not_claimed')}。"
+        )
+
+    compatibility = verification.get("compatibility_overhead")
+    if not isinstance(compatibility, dict) or compatibility.get("status") != "ready":
+        compatibility_status = "unavailable"
+        compatibility_text = (
+            "没有经过正式合同与原始树重放的传统兼容路径成本；不并入性能优势或综合分。"
+        )
+    else:
+        compatibility_status = "ready"
+        metrics = compatibility.get("metrics", {})
+        metric_count = len(metrics) if isinstance(metrics, dict) else 0
+        ratios = [
+            float(metric["median_agentos_over_plain_ratio"])
+            for metric in metrics.values()
+            if isinstance(metric, dict)
+            and isinstance(metric.get("median_agentos_over_plain_ratio"), (int, float))
+            and not isinstance(metric.get("median_agentos_over_plain_ratio"), bool)
+            and math.isfinite(float(metric["median_agentos_over_plain_ratio"]))
+        ] if isinstance(metrics, dict) else []
+        ratio_text = (
+            f"；AgentOS/plain 中位成本比 {min(ratios):.2f}x-{max(ratios):.2f}x"
+            if ratios
+            else ""
+        )
+        compatibility_text = (
+            f"{metric_count} 项传统 uCore 兼容路径配对成本{ratio_text}；仅作描述性 tax，"
+            "aggregate score 禁止。"
+        )
+
+    slots = (
+        (
+            "resource-stability",
+            "资源稳定性",
+            resource_status,
+            resource_text,
+            "Task6 makespan 外验收",
+        ),
+        (
+            "compatibility-overhead",
+            "传统兼容路径成本",
+            compatibility_status,
+            compatibility_text,
+            "fork / exec / pipe / sequential I/O",
+        ),
+    )
+    return "".join(
+        '<article class="extension-result-slot" data-extension-slot="{}">'
+        '<header><h3>{}</h3>{}</header><p>{}</p><footer>{}</footer></article>'.format(
+            _h(slot_id),
+            _h(title),
+            _status(status),
+            _h(text),
+            _h(scope),
+        )
+        for slot_id, title, status, text, scope in slots
+    )
+
+
+def _canonical_dashboard_summary(
+    summary: dict[str, Any], kernel_cost: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Remove narrative authority from caller-supplied presentation fields."""
 
     canonical = copy.deepcopy(summary)
@@ -2269,6 +4210,11 @@ def _canonical_dashboard_summary(summary: dict[str, Any]) -> dict[str, Any]:
     targets = {item["id"]: item for item in canonical["targets"]}
     for claim in canonical["claims"]:
         claim["title"], claim["effect"] = _claim_text(claim, benchmarks, targets)
+    canonical["kernel_cost"] = (
+        {"status": "unavailable", "reason": "kernel-cost sidecar absent"}
+        if kernel_cost is None
+        else copy.deepcopy(kernel_cost)
+    )
     return canonical
 
 
@@ -2291,6 +4237,38 @@ def _methodology_rows(value: Any, prefix: str = "") -> list[str]:
     else:
         rows.append(f'<dt>{_h(prefix or "value")}</dt><dd>{_h(value)}</dd>')
     return rows
+
+
+def _interpretation_boundaries_html(methodology: dict[str, Any]) -> str:
+    boundary = methodology["interpretation_boundaries"]
+    rows = (
+        (
+            "微基准因果边界",
+            boundary["microbenchmark_design"],
+            "同一内核内的机制消融，只支持预注册工作负载下被切换机制的局部因果解释。",
+        ),
+        (
+            "科研场景归因边界",
+            f"{boundary['scenario_design']} / {boundary['scenario_attribution']}",
+            "端到端结果同时包含内核、用户态和执行器差异，不能归因于单一机制。",
+        ),
+        (
+            "Host page cache",
+            boundary["host_page_cache"],
+            "宿主机页缓存未受控，不据此声称真实存储硬件上的因果性能优势。",
+        ),
+    )
+    cells = "".join(
+        '<div><dt>{}</dt><dd><code>{}</code><span>{}</span></dd></div>'.format(
+            _h(label), _h(value), _h(detail)
+        )
+        for label, value, detail in rows
+    )
+    return (
+        '<section aria-labelledby="interpretation-boundaries-title">'
+        '<h3 id="interpretation-boundaries-title" class="subsection-title">解释边界</h3>'
+        f'<dl class="summary-strip">{cells}</dl></section>'
+    )
 
 
 def _scenario_details_html(details: list[dict[str, Any]]) -> str:
@@ -2374,6 +4352,16 @@ def _kernel_cost_html(detail: dict[str, Any] | None) -> str:
             f'<td>{_h(baseline)}</td><td>{_h(agentos)}</td><td>{_h(delta)}</td>'
             f'<td>{_status(metric["status"])}</td></tr>'
         )
+    guardrail_rows = "".join(
+        '<tr>'
+        f'<th scope="row">{_h(guardrail["label"])}</th>'
+        f'<td>{int(guardrail["value"]):,} B</td>'
+        f'<td>{int(guardrail["limit"]):,} B</td>'
+        f'<td>{int(guardrail["headroom"]):,} B</td>'
+        f'<td><code>{_h(guardrail["source"])}</code></td>'
+        f'<td>{_status(guardrail["status"])}</td></tr>'
+        for guardrail in detail["guardrails"]
+    )
     return (
         '<dl class="summary-strip" aria-label="内核成本运行回执">'
         f'<div><dt>运行</dt><dd><code>{_h(detail["run_id"])}</code></dd></div>'
@@ -2385,8 +4373,56 @@ def _kernel_cost_html(detail: dict[str, Any] | None) -> str:
         f'<th>{_h(detail["agentos"]["label"])}</th>'
         '<th>Delta（AgentOS - baseline）</th><th>状态</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>'
-        '<p class="diagnostic-note">ELF、.text、.data 与 .bss 是体积和静态成本护栏，'
-        '不是 CPU 性能证据，也不会生成 performance claim。</p>'
+        '<h3 class="subsection-title">AgentOS 结构与用户栈预算</h3>'
+        '<div class="table-scroll" role="region" tabindex="0" aria-label="AgentOS 结构与用户栈预算表，可横向滚动"><table><thead><tr>'
+        '<th>预算项</th><th>实际</th><th>上限</th><th>余量</th><th>可信检查器</th><th>状态</th>'
+        f'</tr></thead><tbody>{guardrail_rows}</tbody></table></div>'
+        '<p class="diagnostic-note">ELF、.text、.data、.bss、struct proc 与用户栈是成本护栏，'
+        '不是 CPU 性能证据，也不会生成 performance claim。struct proc 与用户栈只使用 '
+        'AgentOS 的 canonical checker actual/limit，不冒充 baseline delta。</p>'
+    )
+
+
+def _memory_label(value: int) -> str:
+    gibibytes = value / (1024**3)
+    return f"{gibibytes:.2f} GiB · {value:,} B"
+
+
+def _campaign_environment_html(detail: dict[str, Any] | None) -> str:
+    heading = (
+        '<div class="environment-heading"><div><p class="eyebrow">Reproducibility Receipt</p>'
+        '<h2 id="environment-title">实验环境</h2></div>'
+    )
+    if detail is None:
+        return (
+            '<section class="environment-band" aria-labelledby="environment-title">'
+            + heading
+            + f'{_status("unavailable")}</div>'
+            '<div class="unavailable-block"><strong>实验环境 unavailable</strong>'
+            '<span>本轮没有与 run plan 绑定的已核验 campaign 平台证明。</span></div></section>'
+        )
+
+    values = (
+        ("Source commit", f'<code>{_h(detail["source_commit"])}</code>', "environment-cell--wide"),
+        ("执行域", _h(detail["execution_domain"]), ""),
+        ("CPU", _h(detail["cpu_model"]), "environment-cell--wide"),
+        ("逻辑核", _h(detail["logical_cpu_count"]), ""),
+        ("总内存", _h(_memory_label(int(detail["memory_total_bytes"]))), ""),
+        ("RISC-V GCC", _h(" ".join(str(detail["gcc_version"]).split())), ""),
+        ("QEMU", _h(" ".join(str(detail["qemu_version"]).split())), ""),
+    )
+    cells = "".join(
+        f'<div class="environment-cell {_h(css_class)}"><dt>{_h(label)}</dt><dd>{value}</dd></div>'
+        for label, value, css_class in values
+    )
+    return (
+        '<section class="environment-band" aria-labelledby="environment-title">'
+        + heading
+        + f'{_status(detail["status"])}</div>'
+        f'<dl class="environment-grid">{cells}</dl>'
+        '<footer><span>硬件来源 <code>'
+        + _h(detail["hardware_source"])
+        + '</code></span><a href="../campaign.json">campaign.json</a></footer></section>'
     )
 
 
@@ -2395,17 +4431,18 @@ def _page(
     verification: dict[str, Any],
     scenario_details: list[dict[str, Any]],
     kernel_cost: dict[str, Any] | None,
+    campaign_environment: dict[str, Any] | None,
 ) -> str:
     run = summary["run"]
     targets = {item["id"]: item for item in summary["targets"]}
     evidence = {item["id"]: item for item in summary["evidence"]}
     benchmarks = {item["id"]: item for item in summary["benchmarks"]}
+    acceptance = summary["acceptance"]
     measured = [item for item in summary["benchmarks"] if item["status"] == "measured"]
-    headline = next((claim for claim in summary["claims"] if claim["status"] == "supported"), None)
+    claim_count = summary["methodology"]["multiple_testing"]["hypothesis_count"]
     conclusion = (
-        _claim_text(headline, benchmarks, targets)[0]
-        if headline
-        else "本轮没有达到支持门的性能结论"
+        f"{claim_count} 个机制 claim 与 Task6 固定并列报告；"
+        "状态不互相替代，也不生成综合总分"
     )
     sample_counts = [int(estimate["n"]) for item in measured for estimate in item["estimates"]]
     n_display = str(min(sample_counts)) if sample_counts and len(set(sample_counts)) == 1 else (
@@ -2414,19 +4451,34 @@ def _page(
     cache_policy = run.get("cache_policy") or summary["methodology"].get("cache_policy", "unavailable")
     commit = run.get("commit", "unavailable")
     grade = run.get("evidence_grade", "unavailable")
-    overview_benchmark = benchmarks[headline["benchmark_id"]] if headline else None
-    overview_chart = _chart(overview_benchmark, targets, evidence, suffix="overview") if overview_benchmark else (
-        '<section class="unavailable-block"><strong>性能图 unavailable</strong>'
-        '<span>没有与 headline 结论绑定且通过支持门的配对测量。</span></section>'
+    scenario_boundary = summary["methodology"]["interpretation_boundaries"]
+    scenario_boundary_note = (
+        f"{scenario_boundary['scenario_design']} / "
+        f"{scenario_boundary['scenario_attribution']}；Host page cache "
+        f"{scenario_boundary['host_page_cache']}。功能完成不代替性能测量，两类证据分别标记。"
     )
+    overview_claim_slots = _overview_claim_slots(summary, benchmarks, targets)
+    overview_task6_slot = _overview_task6_slot(summary["scenarios"])
+    overview_extensions = _overview_extension_slots(verification, scenario_details)
 
     benchmark_sections = []
     for index, benchmark in enumerate(summary["benchmarks"]):
+        comparison_note = (
+            '<p class="diagnostic-note">Task 4 竞赛主对照：同一 N-file corpus 上的'
+            '逐路径 open/read/fstat/close 属性检查与 ready index；负结果仍完整展示。</p>'
+            if benchmark["id"] == "file_query_path_index"
+            else '<p class="diagnostic-note">机制消融：固定容量 metadata table scan 与索引；'
+            '它解释索引内部效果，但不能替代题面要求的逐文件对照。</p>'
+            if benchmark["id"] == "file_query_table_ablation"
+            else ""
+        )
         benchmark_sections.append(
             '<article class="benchmark-block">'
             f'<header><div><p class="eyebrow">{_h(benchmark["task"])}</p><h3>{_h(benchmark["label"])}</h3></div>'
             f'{_status(benchmark["status"])}</header>'
+            f'{comparison_note}'
             f'{_chart(benchmark, targets, evidence, suffix=f"benchmark-{index}")}'
+            f'{_work_receipts_table(benchmark, targets)}'
             f'{_diagnostics_table(benchmark)}'
             '</article>'
         )
@@ -2504,6 +4556,7 @@ def _page(
         evidence_items.append('<div class="unavailable-block"><strong>原始证据 unavailable</strong></div>')
 
     methodology_rows = "".join(_methodology_rows(summary["methodology"]))
+    interpretation_boundaries = _interpretation_boundaries_html(summary["methodology"])
     methodology_diagnostics = "".join(
         _diagnostics_table(benchmark, heading_level=3)
         for benchmark in summary["benchmarks"]
@@ -2516,6 +4569,7 @@ def _page(
     evidence_set_sha256 = str(verification["evidence_set_sha256"])
     scenario_detail_blocks = _scenario_details_html(scenario_details)
     kernel_cost_block = _kernel_cost_html(kernel_cost)
+    campaign_environment_block = _campaign_environment_html(campaign_environment)
     return f'''<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2552,11 +4606,17 @@ def _page(
         <div><dt>样本 n</dt><dd>{_h(n_display)}</dd></div>
         <div><dt>Cache</dt><dd>{_h(cache_policy)}</dd></div>
       </dl>
+      <section class="overview-results" aria-labelledby="overview-results-title">
+        <div class="subheading"><h2 id="overview-results-title">固定结果集</h2><span>{_h(claim_count)} 个机制 claim 与 Task6，不选择单一胜者</span></div>
+        <div class="headline-result-grid">{overview_claim_slots}{overview_task6_slot}</div>
+      </section>
       <section class="conclusion-band" aria-labelledby="conclusion-title"><p class="eyebrow">证据约束结论</p><h2 id="conclusion-title">{_h(conclusion)}</h2></section>
       <section class="overview-grid">
-        <div><div class="subheading"><h2>核心性能对照</h2><span>配对估计与区间</span></div>{overview_chart}</div>
-        <div><div class="subheading"><h2>赛题任务覆盖</h2><span>任务 1-6 证据状态</span></div>{_task_matrix(summary["scenarios"])}</div>
+        <div><div class="subheading"><h2>赛题任务验收</h2><span>任务 1-6 竞赛状态</span></div>{_task_matrix(summary["scenarios"], acceptance["tasks"])}</div>
+        <div><div class="subheading"><h2>独立护栏</h2><span>可扩展槽位，不进入综合分</span></div><div class="extension-result-grid">{overview_extensions}</div></div>
       </section>
+      {campaign_environment_block}
+      {_acceptance_band(acceptance)}
     </section>
     <section role="tabpanel" id="panel-performance" aria-labelledby="tab-performance" class="tab-panel" hidden>
       <div class="section-heading"><div><p class="eyebrow">可复现测量</p><h2>性能</h2></div><p>区间、单位、样本量与来源同时呈现。</p></div>
@@ -2567,7 +4627,7 @@ def _page(
       {kernel_cost_block}
     </section>
     <section role="tabpanel" id="panel-scenarios" aria-labelledby="tab-scenarios" class="tab-panel" hidden>
-      <div class="section-heading"><div><p class="eyebrow">端到端工作负载</p><h2>科研场景</h2></div><p>功能完成不代替性能测量，两类证据分别标记。</p></div>
+      <div class="section-heading"><div><p class="eyebrow">端到端工作负载</p><h2>科研场景</h2></div><p>{_h(scenario_boundary_note)}</p></div>
       <div class="table-scroll" role="region" tabindex="0" aria-label="科研场景验收表，可横向滚动"><table><thead><tr><th>赛题任务</th><th>场景</th><th>功能状态</th><th>性能状态</th><th>结构化测量</th><th>原始证据</th></tr></thead><tbody>{"".join(scenario_rows)}</tbody></table></div>
       <section aria-labelledby="scenario-details-title"><h3 id="scenario-details-title" class="subsection-title">场景明细</h3>{scenario_detail_blocks}</section>
     </section>
@@ -2584,11 +4644,12 @@ def _page(
     </section>
     <section role="tabpanel" id="panel-methodology" aria-labelledby="tab-methodology" class="tab-panel" hidden>
       <div class="section-heading"><div><p class="eyebrow">边界与可重复性</p><h2>方法学</h2></div><p>比较设计、缓存策略和局限必须随结果交付。</p></div>
+      {interpretation_boundaries}
       <dl class="methodology-list">{methodology_rows or '<dt>methodology</dt><dd>unavailable</dd>'}</dl>
       {methodology_diagnostics}
     </section>
   </main>
-  <footer class="app-footer"><span>Schema evaluation-summary-v1</span><span>生成时间 {_h(run.get("generated_at", "unavailable"))}</span></footer>
+  <footer class="app-footer"><span>Schema evaluation-summary-v2</span><span>生成时间 {_h(run.get("generated_at", "unavailable"))}</span></footer>
   <script src="assets/evaluation-dashboard.js" defer></script>
 </body>
 </html>
@@ -2646,11 +4707,11 @@ def render(summary_path: Path, output_dir: Path) -> None:
     validated = validate_summary(read_strict_json(summary_path))
     if summary_path.read_bytes() != source_summary:
         _fail("summary input changed while it was being validated")
-    verification, scenario_details, kernel_cost = _verify_evidence_files(
+    verification, scenario_details, kernel_cost, campaign_environment = _verify_evidence_files(
         summary_path.parent, validated, source_summary
     )
-    _replay_supported_contract(summary_path.parent, summary_path, validated)
-    summary = _canonical_dashboard_summary(validated)
+    _replay_scientific_contract(summary_path.parent, summary_path, validated)
+    summary = _canonical_dashboard_summary(validated, kernel_cost)
     output_dir.mkdir(parents=True, exist_ok=True)
     if not output_dir.is_dir():
         _fail("output path must be a directory")
@@ -2664,9 +4725,17 @@ def render(summary_path: Path, output_dir: Path) -> None:
             _fail(f"dashboard asset missing: {source}")
         shutil.copyfile(source, assets_output / name)
 
+    _write_portable_evidence(summary_path.parent, output_dir, validated)
+
     _atomic_write(
         output_dir / "index.html",
-        _page(summary, verification, scenario_details, kernel_cost),
+        _page(
+            summary,
+            verification,
+            scenario_details,
+            kernel_cost,
+            campaign_environment,
+        ),
     )
     _atomic_write(
         output_dir / "evaluation-summary.json",
@@ -2681,7 +4750,7 @@ def render(summary_path: Path, output_dir: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("summary", type=Path, help="evaluation-summary-v1 JSON")
+    parser.add_argument("summary", type=Path, help="evaluation-summary-v2 JSON")
     parser.add_argument("output", type=Path, help="dashboard output directory")
     args = parser.parse_args(argv)
     try:

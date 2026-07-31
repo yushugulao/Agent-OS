@@ -1,12 +1,12 @@
 # 接口与 ABI：Agent-OS
 
-本文档描述用户态程序与 Agent-OS 内核扩展之间的稳定接口约定。Agent 结构体和常量定义以内核态 `os/agent.h` 和用户态 `user/include/agent.h` 为准；版本化工具协议由内核和用户态共同包含的 `agent_tool_abi.h` 定义；workflow lifecycle 只读 ABI 由根目录共享头 `agent_lifecycle_abi.h` 定义；持久观测恢复 ABI 由共享头 `agent_observe_abi.h` 定义；块 I/O 策略 ABI 由根目录 `io_policy.h` 与 `user/include/io_policy.h` 同步定义。
+本文档描述用户态程序与 Agent-OS 内核扩展之间的稳定接口约定。Agent 结构体和常量定义以内核态 `os/agent.h` 和用户态 `user/include/agent.h` 为准；版本化工具协议由内核和用户态共同包含的 `agent_tool_abi.h` 定义；workflow lifecycle 只读 ABI 由根目录共享头 `agent_lifecycle_abi.h` 定义；持久观测恢复 ABI 由共享头 `agent_observe_abi.h` 定义；资源快照 sized ABI 由共享头 `agent_resource_abi.h` 定义；块 I/O 策略 ABI 由根目录 `io_policy.h` 与 `user/include/io_policy.h` 同步定义。
 
 ## 系统调用
 
 ### 系统调用：Agent-OS
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 557；其中 543、544 是通用内核工作与块 I/O 观测接口，547、548 是可扩展工具协议的 V2 入口，549、551、554 至 556 仅供对应测试 profile 使用：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 559；其中 543、544、558、559 是受限观测接口，547、548 是可扩展工具协议的 V2 入口，549、551、554 至 556 仅供对应测试 profile 使用：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
@@ -63,8 +63,27 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 557；其中 543、544 
 | `sys_agent_heartbeat_set` / `agent_heartbeat_set` | 552 | `int sys_agent_heartbeat_set(uint64)` | 独立心跳设置入口；从调用时 tick 重新计算周期 |
 | `sys_agent_heartbeat_stop` / `agent_heartbeat_stop` | 553 | `int sys_agent_heartbeat_stop(void)` | 独立且幂等的心跳停止入口 |
 | `agent_audit_receipt` | 557 | `int agent_audit_receipt(struct agent_audit_receipt_request *)` | orchestrator 为当前 lifecycle 中的精确审计记录取得或等待持久性回执；结果区分 `PENDING`、`DURABLE`、`FAILED`，并拒绝陈旧 lifecycle 或伪造 receipt id |
+| `kernel_work_receipt_snapshot` | 558 | `int kernel_work_receipt_snapshot(struct kernel_work_receipt *)` | 读取当前线程上一 syscall 的有界内核工作回执 |
+| `agent_resource_snapshot` | 559 | `int agent_resource_snapshot(struct agent_resource_snapshot *)` | 仅允许 bootstrap 绑定的非 Agent 资源域管理员读取版本化全局资源计数和空闲页快照；普通 Agent 与普通进程均被拒绝 |
 
 `agent_run` 和 `context_snapshot` 是性能主路径。syscall 503/504 保持 V1 名称协议二进制兼容；新程序应优先使用 syscall 547/548 的 V2 sized typed KV 协议。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一可信 scope 和 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在可信 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者和精确 scope。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 在自己的 scope 内显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_workflow_create` 是唯一创建新 workflow security boundary 的用户 ABI，角色委派接口本身不能铸造新 scope；`agent_workflow_close` 是对应的可信终止 ABI，关闭权由生命周期账本中的唯一根 control id 或可信 factory 身份决定。`agent_workflow_lifecycle_info` 只是 self-only 观测/比较接口，其返回 key 不是可转移权限。`agent_scope_delegate_fd` 只让调用线程的下一次 workflow、Agent、worker 或降权普通子主体显式携带选中的 pipe 端点。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的 scope 内系统级观测入口；底层物理表共 512 槽，但调用者最多看到自己的 128 槽配额窗口。`agent_ledger_snapshot` 在同一 scope 的逻辑账本上返回可见范围、总量、已淘汰数、分类计数和账本 hash。
+
+`agent_resource_snapshot()` 使用 sized-prefix 输出：前两个字段始终是 `version` 与完整
+`struct_size`，较旧调用者可以传入较小但不低于 8 字节的缓冲区。`measured_mask` 明确
+区分策略已配置、具有全局计数器的资源种类与零值占位；每一类同时返回 capacity、used、
+pending 以及 ordinary/reserved 分类。`measured_mask` 不代表逐 resource account 的用量
+覆盖，也不覆盖 rate lease/debt，更不是全局无泄漏声明。入口只接受内核 bootstrap 策略
+绑定、持有资源域管理权且尚未成为 Agent 的进程，用于 Task 6 验收和可信诊断，不是面向
+workflow Agent 的全局信息查询能力。
+
+当前认证目标是单核 RISC-V。内核用一个外层 `intr_save` 临界区包住所有 policy counter
+和三类空闲页的读取，使一次 `agent_resource_snapshot()` 表示禁止本地中断下的一致单核
+切片；该约束没有声称在未来多核实现中天然提供跨 CPU 原子性。Task 6 会序列化
+ordinary/reserved 的原始 used/pending 分类，Guest 与 Host 分别重算总数，并用第一个
+workflow 的 before 和最后一个 terminal after 执行一次全序列增长上限及平台期/回收
+检查。平台期只检查 load workflow 之间的不增长；若所有 load 都增长，terminal after 必须
+严格低于最后一个 load after，不能用无负载 terminal 的相等值冒充平台期。因此逐 workflow
+的局部上限不能掩盖每轮少量、最终线性累积的泄漏。
 
 `agent_observe_recovery()` 使用严格的 version/size/flags 请求。`LIST` 只列出 lifecycle 已失效或不再绑定原 scope 的封存证据；`READ` 必须携带完整、不可复用的 lifecycle key，并按 audit sequence 游标读取；`REAP` 返回内核保存的 opaque completion token；`STATUS` 只接受同一 lifecycle 的原 token。token 只在内核取得非零 durable-section serial 和持久提交目标后签发，并同时绑定 lifecycle generation、发起时的 bank generation、serial 和目标，不能用旧 workflow、旧 bank 或另一条擦除事务的完成值确认新擦除；重启恢复出的无 token intent 会在 Recovery 首次显式请求时锁定当次 active bank generation，后续重试不改写。若初次 `REAP` 的最终 request copyout 失败，内核按唯一 lifecycle 在磁盘 scope 查找前重发内存态 AUTHORIZE/ERASE/DONE 的同一 token，不启动第二条擦除。`STATUS` 先只读确认 DONE，生成绑定 slot、scope、lifecycle、token、source generation 和 active bank generation 的内核 cookie；仍持有 metadata gate 时，最终 response copyout 成功后才执行无 I/O 的精确消费。copyout 或 cookie 校验失败都保留 token，成功消费后旧 token 立即失效；期间新 admission 不能清除或复用该槽。内核 teardown 发起的无 token 擦除则在双副本完成后自动释放槽。若持久 sink 暂时返回 0，`REAP` 返回 `RETRY` 且内核保留可重试 intent，不签发零目标 token；后台接纳并完成双副本后，遗弃的 intent 也可安全回收。durable-section serial 到达 `UINT64_MAX` 后停止分配，不回绕也不覆盖已有 pending intent；新请求 fail closed，旧请求仍按原 serial 完成。证据擦除不擦除 lifecycle 槽 generation 及 audit/span/event/control/agent allocator 的持久高水位；event 编号空间耗尽后 IPC 返回 `NO_SPACE`，不会发布零身份。只有由可信 bootstrap factory 创建并在创建时绑定的 Recovery control identity 可以使用该接口，普通 Agent、Orchestrator 和后来复用 PID/PCB 的进程均被拒绝。
 
@@ -278,7 +297,7 @@ int agent_scope_delegate_fd(int fd);
 
 ### 只读生命周期观测
 
-syscall 546 的共享 ABI 定义在 `agent_lifecycle_abi.h`。当前版本为 `AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION=1`，完整 `struct agent_workflow_lifecycle_info` 为 48 字节：
+syscall 546 的共享 ABI 定义在 `agent_lifecycle_abi.h`。当前版本为 `AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION=2`，完整 `struct agent_workflow_lifecycle_info` 为 64 字节：
 
 | 字段 | 语义 |
 | --- | --- |
@@ -287,10 +306,12 @@ syscall 546 的共享 ABI 定义在 `agent_lifecycle_abi.h`。当前版本为 `A
 | `key.id` / `key.generation` | 当前进程不可变的 lifecycle 身份；`key.reserved` 固定为 0 |
 | `context_lane_depth` / `context_lane_waiters` | 当前进程 Context commit lane 的重入深度和睡眠等待者数量 |
 | `metadata_txn_owned` / `metadata_txn_waiters` | 当前进程是否持有 metadata transaction gate，以及等待该 gate 的线程数量 |
+| `resource_account_valid` | 当前进程是否绑定有效、generation-safe 的 EXEC resource account |
+| `resource_account_slot` / `resource_account_generation` | 当前进程 resource-account handle 的只读身份；slot 只有与 generation 组合才可比较 |
 
-用户 wrapper 在 `expected == NULL` 时读取当前快照；传入非空 expected 时设置 `AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT` 并精确比较完整 `(id,generation)`。匹配返回 `AGENT_STATUS_OK`，合法但不匹配返回 `AGENT_STATUS_STALE`，调用者没有有效 lifecycle 时返回 `AGENT_STATUS_NOT_FOUND`。该接口始终以 `curr_proc()` 为对象，没有 PID 或 scope 查询参数；key 仅供身份确认与竞态测试比较，不能作为关闭、委派或对象访问凭据。
+用户 wrapper 在 `expected == NULL` 时读取当前快照；传入非空 expected 时设置 `AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT` 并精确比较完整 `(id,generation)`。匹配返回 `AGENT_STATUS_OK`，合法但不匹配返回 `AGENT_STATUS_STALE`，调用者没有有效 lifecycle 时返回 `AGENT_STATUS_NOT_FOUND`。该接口始终以 `curr_proc()` 为对象，没有 PID 或 scope 查询参数；lifecycle key 和 resource-account handle 仅供 self identity 确认与竞态测试比较，不能作为关闭、委派、对象访问或账户查询凭据。
 
-raw syscall 使用 sized-prefix：`user_size` 至少为 8 字节，内核只复制 `min(user_size, 48)`。短于公共头、坏输出地址、未知 flags 或非法 expected key 在任何 copyout 前失败，输出保持不变；用户 wrapper 还在陷入前拒绝 expected 的非零 `reserved`。`STALE` 和 `NOT_FOUND` 是完成 self snapshot 后的语义结果；在输出区有效时仍可能复制当前可用前缀，调用者不能把这两种返回值理解为“输出未写”。
+raw syscall 使用 sized-prefix：`user_size` 至少为 8 字节，内核只复制 `min(user_size, 64)`。V2 仅在原 48 字节 V1 前缀之后追加 resource-account 字段，因此旧调用者传入 48 字节时仍得到布局不变的 V1 前缀，新调用者以返回的 `version`/`struct_size` 判断尾部是否存在。短于公共头、坏输出地址、未知 flags 或非法 expected key 在任何 copyout 前失败，输出保持不变；用户 wrapper 还在陷入前拒绝 expected 的非零 `reserved`。`STALE` 和 `NOT_FOUND` 是完成 self snapshot 后的语义结果；在输出区有效时仍可能复制当前可用前缀，调用者不能把这两种返回值理解为“输出未写”。
 
 ### 生命周期和配额
 
@@ -588,10 +609,10 @@ metadata 可见代数按 workflow scope 维护；某域的普通变化只推进�
 | `returned` | 实际复制到 `hits[]` 的条数 |
 | `used_index` | 本次是否使用索引路径 |
 | `truncated` | 命中数超过 `hits[]` 容量时为 1 |
-| `scanned_records` | 本次检查了多少条候选记录 |
+| `scanned_records` | 本次查询循环实际计费的 metadata 槽或索引链节点数；强制扫描会包含空槽和不可见槽 |
 | `plan` | 查询计划，0 为扫描，1/2/3 分别为 status/stage/kind 索引 |
 | `index_bucket` | 命中的索引桶；扫描路径为 -1 |
-| `candidate_records` | 本次候选记录数量，和 `scanned_records` 一起用于解释索引收益 |
+| `candidate_records` | 成功借用、对当前 scope 可见并实际进入谓词匹配的活记录数，恒不大于 `scanned_records` |
 | `index_rebuild_records` | 索引失效时，本次冷查询为实际重建索引访问的 metadata 槽数；热索引和扫描路径为 0 |
 | `reserved` | 保留为 0，供后续 ABI 扩展 |
 | `query_ticks` | 查询内部 tick 差值 |

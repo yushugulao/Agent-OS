@@ -68,6 +68,14 @@ def _require_once(raw: bytes, marker: str, label: str) -> None:
         raise RemoteCIJobSemanticError(f"{label} lacks one exact marker {marker!r}")
 
 
+def _require_once_matching(raw: bytes, pattern: re.Pattern[str], label: str) -> None:
+    matches = [line for line in _lines(raw, label) if pattern.fullmatch(line)]
+    if len(matches) != 1:
+        raise RemoteCIJobSemanticError(
+            f"{label} lacks one sanitizer-backed marker {pattern.pattern!r}"
+        )
+
+
 def _stage(
     materialize: ArtifactMaterializer,
     source: str,
@@ -92,6 +100,21 @@ def _validate_kernel(paths: set[str], read: ArtifactReader) -> None:
         "[kernel-budget] agent-modules checks passed",
     ):
         _require_once(raw, marker, name)
+    for pattern in (
+        re.compile(
+            r"\[printf-format\] host probes and [1-9][0-9]* mutations passed; "
+            r"audited=[1-9][0-9]*; mode=ASan/UBSan"
+        ),
+        re.compile(
+            r"\[rp-evidence-field\] streaming and malformed-input probes passed; "
+            r"mode=ASan/UBSan"
+        ),
+        re.compile(
+            r"\[rp-state-append\] canonical boundary probes passed; "
+            r"mode=ASan/UBSan"
+        ),
+    ):
+        _require_once_matching(raw, pattern, name)
 
 
 def _stage_reader(
@@ -141,6 +164,12 @@ def _stage_agent(
     _require_once(
         read("agent-regression-job.log", MAX_TEXT_BYTES),
         "[agent-tests] all Agent-OS uCore checks passed",
+        "agent-regression-job.log",
+    )
+    _require_once(
+        read("agent-regression-job.log", MAX_TEXT_BYTES),
+        "[agent-tests] duration-profile profile=none gate=skipped "
+        "reason=different-runner",
         "agent-regression-job.log",
     )
     for name in ("agent-suite-timings.log", "agent-suite-guest.log"):

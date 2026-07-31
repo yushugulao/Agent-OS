@@ -390,7 +390,7 @@ measure_file_query_paths(void)
 	receipt.traversal_duration_us =
 		bench_file_query_traversal_us(AGENT_FILE_QUERY_SCAN);
 	receipt.load =
-		bench_scratch.file_query_result.scanned_records;
+		bench_scratch.file_query_result.candidate_records;
 	receipt.traversal_records =
 		bench_scratch.file_query_result.scanned_records;
 	receipt.traversal_plan =
@@ -443,8 +443,12 @@ measure_file_query_paths(void)
 	      "index reason");
 	check(!receipt.warm_index_cache_hit,
 	      "kernel query cache disabled");
-	check(receipt.warm_index_candidates == receipt.warm_index_records,
-	      "index candidates");
+	check(receipt.load > 0 &&
+	      receipt.load <= receipt.traversal_records,
+	      "scan load is bounded by traversal work");
+	check(receipt.warm_index_candidates > 0 &&
+	      receipt.warm_index_candidates <= receipt.warm_index_records,
+	      "index candidates are bounded by bucket work");
 	check(receipt.cold_index_records == receipt.warm_index_records,
 	      "cold and warm index candidates");
 	check(bench_scratch.file_query_result.index_rebuild_records == 0,

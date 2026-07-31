@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -13,14 +14,30 @@ from typing import Any
 
 try:
     from .plain_ucore_action_runner import action_kind, prepare_action_state, run_seeded_ucore
+    from .safe_host_paths import read_regular_file
 except ImportError:  # Direct execution from host_tools/.
     from plain_ucore_action_runner import action_kind, prepare_action_state, run_seeded_ucore
+    from safe_host_paths import read_regular_file
 
 
 DEFAULT_CHALLENGE = "ch-000000000999"
 CHALLENGE_RE = re.compile(r"ch-[0-9]{12}\Z")
-CHALLENGE_RECEIPT_SCHEMA = "seeded-action-challenge-v1"
+CHALLENGE_RECEIPT_SCHEMA = "seeded-action-challenge-v2"
 CHALLENGE_RECEIPT_NAME = "challenge-input-receipt.json"
+TASK6_ARTIFACT_INPUT_STORAGE = "rp_task6_raw"
+TASK6_ARTIFACT_OUTPUT_STORAGE = "rp_task6_norm"
+TASK6_ARTIFACT_RECEIPT_SCHEMA = "task6_artifact_bytes_v1"
+TASK6_ARTIFACT_MAX_BYTES = 256
+TASK6_ARTIFACT_CORPUS_MAX_BYTES = 4096
+TASK6_ARTIFACT_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "evaluation_guest"
+    / "fixtures"
+    / "task6-count-corpus.csv"
+)
+TASK6_FNV_OFFSET = 1469598103934665603
+TASK6_FNV_PRIME = 1099511628211
+TASK6_UINT64_MASK = (1 << 64) - 1
 
 
 @dataclass(frozen=True)
@@ -31,6 +48,87 @@ class ChallengeValues:
     workflow_id: str
     input_sha256: str
     derived_sha256: str
+    input_bytes: int
+    derived_bytes: int
+    input_fnv64: int
+    derived_fnv64: int
+
+
+def task6_fnv64(data: bytes) -> int:
+    value = TASK6_FNV_OFFSET
+    for byte in data:
+        value ^= byte
+        value = (value * TASK6_FNV_PRIME) & TASK6_UINT64_MASK
+    return value
+
+
+def task6_artifact_payloads(
+    challenge: str, fixture_path: Path = TASK6_ARTIFACT_FIXTURE
+) -> tuple[bytes, bytes]:
+    """Select a registered raw case and derive challenge-bound normalized bytes."""
+
+    if not isinstance(challenge, str) or CHALLENGE_RE.fullmatch(challenge) is None:
+        raise ValueError("challenge must match ch-[0-9]{12}")
+    try:
+        raw = read_regular_file(
+            fixture_path,
+            nonempty=True,
+            maximum_bytes=TASK6_ARTIFACT_CORPUS_MAX_BYTES,
+        )
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            "Task6 artifact workload fixture is missing or unsafe"
+        ) from error
+
+    try:
+        text = raw.decode("ascii", errors="strict")
+    except UnicodeDecodeError as error:
+        raise ValueError("Task6 artifact workload fixture is not ASCII") from error
+    if not raw.endswith(b"\n") or b"\r" in raw or b"\0" in raw:
+        raise ValueError("Task6 artifact workload fixture is non-canonical")
+    try:
+        reader = csv.DictReader(text.splitlines(), strict=True)
+        corpus = list(reader)
+    except csv.Error as error:
+        raise ValueError("Task6 artifact workload corpus is invalid CSV") from error
+    fields = ["case_id", "treatment_count", "reference_count"]
+    if reader.fieldnames != fields or not corpus:
+        raise ValueError("Task6 artifact workload corpus has an invalid schema")
+    cases: list[tuple[int, int]] = []
+    for index, row in enumerate(corpus):
+        if set(row) != set(fields):
+            raise ValueError("Task6 artifact workload corpus has an invalid row")
+        values = [row[field] for field in fields]
+        if any(value is None or re.fullmatch(r"[0-9]+", value) is None for value in values):
+            raise ValueError("Task6 artifact workload corpus has a non-integer field")
+        case_id, treatment_count, reference_count = map(int, values)
+        if (
+            case_id != index
+            or treatment_count <= 0
+            or reference_count <= 0
+            or treatment_count > TASK6_UINT64_MASK
+            or reference_count > TASK6_UINT64_MASK - treatment_count
+        ):
+            raise ValueError("Task6 artifact workload corpus has an invalid value")
+        cases.append((treatment_count, reference_count))
+
+    suffix = challenge[3:]
+    treatment_count, reference_count = cases[int(suffix) % len(cases)]
+    input_data = (
+        "sample,count\n"
+        f"treatment-{suffix},{treatment_count}\n"
+        f"reference-{suffix},{reference_count}\n"
+    ).encode("ascii")
+    total = treatment_count + reference_count
+    first_ppm = treatment_count * 1_000_000 // total
+    normalized = (
+        "sample,normalized_ppm\n"
+        f"treatment-{suffix},{first_ppm}\n"
+        f"reference-{suffix},{1_000_000 - first_ppm}\n"
+    ).encode("ascii")
+    if len(input_data) >= TASK6_ARTIFACT_MAX_BYTES or len(normalized) >= TASK6_ARTIFACT_MAX_BYTES:
+        raise ValueError("Task6 challenge-bound artifact exceeds the Guest limit")
+    return input_data, normalized
 
 
 def derive_challenge(challenge: str) -> ChallengeValues:
@@ -40,13 +138,18 @@ def derive_challenge(challenge: str) -> ChallengeValues:
         raise ValueError("challenge must match ch-[0-9]{12}")
     suffix = str(int(challenge[3:]))
     run_id = f"RUN-{suffix}"
+    input_data, derived_data = task6_artifact_payloads(challenge)
     return ChallengeValues(
         challenge=challenge,
         run_id=run_id,
         rerun_id=f"{run_id}-rerun",
         workflow_id=f"wf-host-{suffix}",
-        input_sha256=f"sha-input-{suffix}",
-        derived_sha256=f"sha-derived-{suffix}",
+        input_sha256=hashlib.sha256(input_data).hexdigest(),
+        derived_sha256=hashlib.sha256(derived_data).hexdigest(),
+        input_bytes=len(input_data),
+        derived_bytes=len(derived_data),
+        input_fnv64=task6_fnv64(input_data),
+        derived_fnv64=task6_fnv64(derived_data),
     )
 
 
@@ -131,6 +234,7 @@ def collect_action_routes(host_dir: Path) -> list[str]:
 
 def seeded_actions(challenge: str = DEFAULT_CHALLENGE) -> list[dict[str, object]]:
     values = derive_challenge(challenge)
+    input_data, _ = task6_artifact_payloads(challenge)
     actions = [
         {
             "sequence": 1,
@@ -211,11 +315,14 @@ def seeded_actions(challenge: str = DEFAULT_CHALLENGE) -> list[dict[str, object]
             "status": "accepted",
             "payload": {
                 "run_id": "RUN-999",
-                "file": "reads_R1.fastq",
-                "artifact_kind": "fastq",
-                "sha256": "sha-input-999",
-                "bytes": "2048",
-                "source": "upload",
+                "challenge": challenge,
+                "provenance_protocol": TASK6_ARTIFACT_RECEIPT_SCHEMA,
+                "file": "raw-counts.csv",
+                "artifact_kind": "counts_csv",
+                "sha256": values.input_sha256,
+                "bytes": str(values.input_bytes),
+                "source": "host_challenge",
+                "content_hex": input_data.hex(),
             },
         },
         {
@@ -226,9 +333,11 @@ def seeded_actions(challenge: str = DEFAULT_CHALLENGE) -> list[dict[str, object]
                 "run_id": "RUN-999-rerun",
                 "input": "raw-counts.csv",
                 "output": "normalized-counts.csv",
-                "operation": "normalize",
+                "operation": "normalize_ppm",
                 "stage": "analyze",
-                "sha256": "sha-derived-999",
+                "sha256": values.derived_sha256,
+                "bytes": str(values.derived_bytes),
+                "input_sha256": values.input_sha256,
             },
         },
         {
@@ -331,10 +440,10 @@ def seeded_actions(challenge: str = DEFAULT_CHALLENGE) -> list[dict[str, object]
             "payload": {
                 "workflow_id": "wf-host-999",
                 "run_id": "RUN-999",
-                "artifact": "align.bam",
-                "artifact_kind": "alignment",
-                "sha256": "sha-host-artifact",
-                "bytes": "4096",
+                "artifact": "normalized-counts.csv",
+                "artifact_kind": "counts_csv",
+                "sha256": values.derived_sha256,
+                "bytes": str(values.derived_bytes),
             },
         },
         {
@@ -649,8 +758,6 @@ def seeded_actions(challenge: str = DEFAULT_CHALLENGE) -> list[dict[str, object]
     replacements = {
         "RUN-999-rerun": values.rerun_id,
         "wf-host-999": values.workflow_id,
-        "sha-input-999": values.input_sha256,
-        "sha-derived-999": values.derived_sha256,
         "RUN-999": values.run_id,
     }
     derived = _replace_challenge_tokens(actions, replacements)
@@ -722,6 +829,53 @@ def require_contains(failures: list[str], label: str, state_dir: Path, name: str
         return
     if token not in text:
         failures.append(f"{label}: {name} missing {token}")
+
+
+def validate_task6_artifact_bytes(
+    label: str,
+    state_dir: Path,
+    challenge: str = DEFAULT_CHALLENGE,
+) -> list[str]:
+    """Validate the extracted byte artifacts independently of Guest labels."""
+
+    failures: list[str] = []
+    values = derive_challenge(challenge)
+    expected_input, expected_output = task6_artifact_payloads(challenge)
+    expected = (
+        (
+            TASK6_ARTIFACT_INPUT_STORAGE,
+            expected_input,
+            values.input_sha256,
+            values.input_fnv64,
+        ),
+        (
+            TASK6_ARTIFACT_OUTPUT_STORAGE,
+            expected_output,
+            values.derived_sha256,
+            values.derived_fnv64,
+        ),
+    )
+    for name, expected_data, expected_sha256, expected_fnv64 in expected:
+        path = state_dir / name
+        try:
+            data = read_regular_file(
+                path,
+                nonempty=True,
+                maximum_bytes=TASK6_ARTIFACT_MAX_BYTES,
+            )
+        except (OSError, ValueError) as error:
+            failures.append(f"{label}: cannot read Task6 artifact bytes {name}: {error}")
+            continue
+        if data != expected_data:
+            failures.append(
+                f"{label}: {name} bytes do not match the Host challenge workload"
+            )
+            continue
+        if hashlib.sha256(data).hexdigest() != expected_sha256:
+            failures.append(f"{label}: {name} SHA-256 does not match its bytes")
+        if task6_fnv64(data) != expected_fnv64:
+            failures.append(f"{label}: {name} Guest byte hash does not match its bytes")
+    return failures
 
 
 def write_challenge_input_receipt(
@@ -828,6 +982,13 @@ def validate_seed_package(
     require_contains(failures, label, state_dir, "rp_host_action_seed", "title=Reusable response table")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "citation_key=agentlibrary2026")
     require_contains(failures, label, state_dir, "rp_host_action_seed", f"workflow_id={values.workflow_id}")
+    require_contains(
+        failures,
+        label,
+        state_dir,
+        "rp_host_action_seed",
+        f"provenance_protocol={TASK6_ARTIFACT_RECEIPT_SCHEMA}",
+    )
     require_contains(failures, label, state_dir, "rp_host_action_seed", "request_id=host-q1")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "response_id=host-r1")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "compare_profile=compare-profile:host-nextflow:migration")
@@ -847,6 +1008,8 @@ def validate_extracted_state(
     if not state_dir.is_dir():
         return [f"{label}: missing extracted state"]
 
+    failures.extend(validate_task6_artifact_bytes(label, state_dir, challenge))
+
     require_contains(failures, label, state_dir, "rp_input", f"host_action_rerun_id={values.rerun_id}")
     require_contains(failures, label, state_dir, "rp_input", f"host_action_rerun_parent={values.run_id}")
     require_contains(failures, label, state_dir, "rp_input", "host_action_rerun_provider=template")
@@ -862,12 +1025,27 @@ def validate_extracted_state(
     require_contains(failures, label, state_dir, "rp_report_text", f"host_report_rerun_id={values.rerun_id}")
     require_contains(failures, label, state_dir, "rp_report_text", f"host_report_rerun_parent={values.run_id}")
     require_contains(failures, label, state_dir, "rp_artifact_manifest", f"host_manifest_rerun={values.rerun_id};parent={values.run_id};status=ready")
-    require_contains(failures, label, state_dir, "rp_artifact", f"host_artifact_input=reads_R1.fastq;kind=fastq;sha256={values.input_sha256};bytes=2048;source=upload")
-    require_contains(failures, label, state_dir, "rp_artifact", f"host_artifact_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize;stage=analyze;sha256={values.derived_sha256}")
+    require_contains(failures, label, state_dir, "rp_artifact", f"host_artifact_input=raw-counts.csv;kind=counts_csv;sha256={values.input_sha256};bytes={values.input_bytes};source=host_challenge")
+    require_contains(failures, label, state_dir, "rp_artifact", f"host_artifact_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize_ppm;stage=analyze;sha256={values.derived_sha256}")
+    require_contains(
+        failures,
+        label,
+        state_dir,
+        "rp_artifact",
+        (
+            f"task6_artifact_receipt={TASK6_ARTIFACT_RECEIPT_SCHEMA};"
+            f"challenge={challenge};input_storage={TASK6_ARTIFACT_INPUT_STORAGE};"
+            f"input_bytes={values.input_bytes};input_fnv64={values.input_fnv64};"
+            f"input_sha256={values.input_sha256};"
+            f"output_storage={TASK6_ARTIFACT_OUTPUT_STORAGE};"
+            f"output_bytes={values.derived_bytes};output_fnv64={values.derived_fnv64};"
+            f"output_sha256={values.derived_sha256};operation=normalize_ppm"
+        ),
+    )
     require_contains(failures, label, state_dir, "rp_stage_log", "host_artifact_log=align.log;stage=align;level=warn;message=quality_gate_retry")
     require_contains(failures, label, state_dir, "rp_chart_data", "host_artifact_chart=qc-chart.json;type=line;data_file=normalized-counts.csv;points=12")
     require_contains(failures, label, state_dir, "rp_package", "host_artifact_package=artifact-bundle.zip;manifest=artifact-manifest.json;files=5;status=ready")
-    require_contains(failures, label, state_dir, "rp_artifact_manifest", f"host_artifact_manifest_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize;stage=analyze;sha256={values.derived_sha256}")
+    require_contains(failures, label, state_dir, "rp_artifact_manifest", f"host_artifact_manifest_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize_ppm;stage=analyze;sha256={values.derived_sha256}")
     require_contains(failures, label, state_dir, "rp_stage_dag", f"host_workflow_id={values.workflow_id}")
     require_contains(failures, label, state_dir, "rp_stage_dag", "host_workflow_dag=ingest>analyze>report")
     require_contains(failures, label, state_dir, "rp_stage_state", f"host_workflow_run_id={values.run_id}")
@@ -875,7 +1053,7 @@ def validate_extracted_state(
     require_contains(failures, label, state_dir, "rp_cache_index", f"host_workflow_cache_action=profile;key=cache:{values.run_id}:profile;result=hit;policy=content")
     require_contains(failures, label, state_dir, "rp_retry_plan", "host_workflow_retry_action=align;reason=quality_gate;next_attempt=3;decision=rerun_stage")
     require_contains(failures, label, state_dir, "rp_runner", f"host_action_workflow={values.workflow_id};run_id={values.run_id};engine=host-runner;status=ready")
-    require_contains(failures, label, state_dir, "rp_artifact_manifest", "host_workflow_artifact_action=align.bam;kind=alignment;sha256=sha-host-artifact;bytes=4096")
+    require_contains(failures, label, state_dir, "rp_artifact_manifest", f"host_workflow_artifact_action=normalized-counts.csv;kind=counts_csv;sha256={values.derived_sha256};bytes={values.derived_bytes}")
     require_contains(failures, label, state_dir, "rp_report_text", "host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready")
     require_contains(failures, label, state_dir, "rp_llm_packets", "host_llm_packet_request=host-q1")
     require_contains(failures, label, state_dir, "rp_llm_resp", "host_llm_response_id=host-r1")

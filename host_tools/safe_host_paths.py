@@ -5,13 +5,28 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
+import tempfile
+from functools import lru_cache
 from pathlib import Path
+
+
+_FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+_CCP_POSIX_TO_WIN_W = 1
+DEFAULT_MAX_WALK_FILES = 10_000
+DEFAULT_MAX_WALK_DIRECTORIES = 10_000
+DEFAULT_MAX_WALK_BYTES = 1 << 30
+DEFAULT_MAX_WALK_DEPTH = 64
 
 
 def absolute_lexical_path(path: Path) -> Path:
     """Return an absolute path without resolving a link component."""
 
-    return Path(os.path.abspath(os.fspath(path.expanduser())))
+    expanded = path.expanduser()
+    # Preserve the caller's concrete path flavour.  Platform probes may mock
+    # ``os.name`` while still handling an already-created POSIX path.
+    return type(expanded)(os.path.abspath(os.fspath(expanded)))
 
 
 def path_components(path: Path) -> list[Path]:
@@ -24,19 +39,88 @@ def path_components(path: Path) -> list[Path]:
     return components
 
 
-def path_is_link(path: Path, mode: int | None = None) -> bool:
-    if mode is None:
+@lru_cache(maxsize=1)
+def _msys_native_path_api():
+    """Return MSYS path conversion and Win32 attribute functions, if applicable."""
+
+    if os.name != "posix" or sys.platform != "cygwin":
+        return None
+
+    import ctypes
+
+    runtime = None
+    for name in ("msys-2.0.dll", "cygwin1.dll"):
         try:
-            mode = path.lstat().st_mode
+            candidate = ctypes.CDLL(name)
+        except OSError:
+            continue
+        if hasattr(candidate, "cygwin_conv_path"):
+            runtime = candidate
+            break
+    if runtime is None:
+        return None
+
+    converter = runtime.cygwin_conv_path
+    converter.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+    converter.restype = ctypes.c_ssize_t
+    kernel32 = ctypes.CDLL("Kernel32.dll")
+    attributes = kernel32.GetFileAttributesW
+    attributes.argtypes = [ctypes.c_wchar_p]
+    attributes.restype = ctypes.c_uint32
+    return ctypes, converter, attributes
+
+
+def _msys_native_file_attributes(path: Path) -> int | None:
+    """Inspect a lexical MSYS path through Win32 without opening its target."""
+
+    api = _msys_native_path_api()
+    if api is None:
+        return None
+    ctypes, converter, get_attributes = api
+    encoded = os.fsencode(absolute_lexical_path(path))
+    required = converter(_CCP_POSIX_TO_WIN_W, encoded, None, 0)
+    if required <= 0 or required % 2:
+        raise OSError(f"cannot convert MSYS path for reparse inspection: {path}")
+    native_buffer = ctypes.create_string_buffer(required)
+    if converter(_CCP_POSIX_TO_WIN_W, encoded, native_buffer, required) != 0:
+        raise OSError(f"cannot convert MSYS path for reparse inspection: {path}")
+    native_path = native_buffer.raw.decode("utf-16-le").split("\0", 1)[0]
+    value = int(get_attributes(native_path))
+    if value == _INVALID_FILE_ATTRIBUTES:
+        raise OSError(f"cannot inspect Windows file attributes: {path}")
+    return value
+
+
+def path_is_link(
+    path: Path,
+    mode: int | None = None,
+    *,
+    file_info: os.stat_result | None = None,
+) -> bool:
+    """Detect POSIX links, Windows junctions, and otherwise-hidden reparse points."""
+
+    if file_info is None:
+        try:
+            file_info = path.lstat()
         except FileNotFoundError:
-            mode = 0
+            return bool(mode is not None and stat.S_ISLNK(mode))
+    if mode is None:
+        mode = file_info.st_mode
     if stat.S_ISLNK(mode):
+        return True
+    if int(getattr(file_info, "st_file_attributes", 0)) & _FILE_ATTRIBUTE_REPARSE_POINT:
         return True
     junction_test = getattr(path, "is_junction", None)
     try:
-        return bool(junction_test and junction_test())
+        if junction_test and junction_test():
+            return True
     except OSError:
         return True
+    native_attributes = _msys_native_file_attributes(path)
+    return bool(
+        native_attributes is not None
+        and native_attributes & _FILE_ATTRIBUTE_REPARSE_POINT
+    )
 
 
 def reject_link_components(path: Path) -> Path:
@@ -48,7 +132,7 @@ def reject_link_components(path: Path) -> Path:
             info = component.lstat()
         except FileNotFoundError:
             continue
-        if path_is_link(component, info.st_mode):
+        if path_is_link(component, info.st_mode, file_info=info):
             raise ValueError(f"Path contains a symbolic link or junction: {component}")
     return absolute
 
@@ -67,11 +151,213 @@ def ensure_safe_directory(path: Path, mode: int = 0o700) -> Path:
                 info = component.lstat()
             else:
                 info = component.lstat()
-        if path_is_link(component, info.st_mode):
+        if path_is_link(component, info.st_mode, file_info=info):
             raise ValueError(f"Path contains a symbolic link or junction: {component}")
         if not stat.S_ISDIR(info.st_mode):
             raise ValueError(f"Path component is not a directory: {component}")
     return absolute
+
+
+def require_safe_directory(path: Path) -> Path:
+    """Require one existing, ordinary directory with no link-backed component."""
+
+    absolute = reject_link_components(path)
+    try:
+        info = absolute.lstat()
+    except FileNotFoundError as error:
+        raise ValueError(f"Directory is missing: {absolute}") from error
+    if path_is_link(absolute, info.st_mode, file_info=info) or not stat.S_ISDIR(
+        info.st_mode
+    ):
+        raise ValueError(f"Path is not a safe directory: {absolute}")
+    return absolute
+
+
+def require_regular_file(
+    path: Path, *, nonempty: bool = False, maximum_bytes: int | None = None
+) -> Path:
+    """Require one ordinary file whose complete lexical path is link-free."""
+
+    absolute = reject_link_components(path)
+    try:
+        info = absolute.lstat()
+    except FileNotFoundError as error:
+        raise ValueError(f"Regular file is missing: {absolute}") from error
+    if path_is_link(absolute, info.st_mode, file_info=info) or not stat.S_ISREG(
+        info.st_mode
+    ):
+        raise ValueError(f"Path is not a safe regular file: {absolute}")
+    if nonempty and info.st_size == 0:
+        raise ValueError(f"Regular file is empty: {absolute}")
+    if maximum_bytes is not None and (
+        maximum_bytes < 0 or info.st_size > maximum_bytes
+    ):
+        raise ValueError(f"Regular file exceeds its byte limit: {absolute}")
+    return absolute
+
+
+def read_regular_file(
+    path: Path, *, nonempty: bool = False, maximum_bytes: int | None = None
+) -> bytes:
+    """Read a bounded regular file after validating its complete lexical path."""
+
+    absolute = require_regular_file(
+        path, nonempty=nonempty, maximum_bytes=maximum_bytes
+    )
+    expected = absolute.lstat()
+    with absolute.open("rb") as handle:
+        if maximum_bytes is None:
+            data = handle.read()
+        else:
+            data = handle.read(maximum_bytes + 1)
+        opened = os.fstat(handle.fileno())
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or len(data) != expected.st_size
+        or opened.st_size != expected.st_size
+        or (maximum_bytes is not None and len(data) > maximum_bytes)
+    ):
+        raise ValueError(f"Regular file changed or exceeded its byte limit: {absolute}")
+    return data
+
+
+def atomic_write_bytes(
+    path: Path,
+    data: bytes,
+    *,
+    replace: bool = True,
+    mode: int = 0o600,
+) -> Path:
+    """Atomically publish bytes below a verified, link-free parent directory."""
+
+    absolute = absolute_lexical_path(path)
+    parent = ensure_safe_directory(absolute.parent)
+    try:
+        existing = absolute.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        if path_is_link(absolute, existing.st_mode, file_info=existing) or not stat.S_ISREG(
+            existing.st_mode
+        ):
+            raise ValueError(f"Output path is not a safe regular file: {absolute}")
+        if not replace:
+            raise FileExistsError(absolute)
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{absolute.name}.", suffix=".tmp", dir=parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.chmod(temporary, mode)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        reject_link_components(parent)
+        if path_is_link(absolute):
+            raise ValueError(f"Output path became link-backed: {absolute}")
+        if not replace and absolute.exists():
+            raise FileExistsError(absolute)
+        os.replace(temporary, absolute)
+        return absolute
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def walk_directory_tree_no_links(
+    root: Path,
+    *,
+    max_files: int = DEFAULT_MAX_WALK_FILES,
+    max_directories: int = DEFAULT_MAX_WALK_DIRECTORIES,
+    max_total_bytes: int = DEFAULT_MAX_WALK_BYTES,
+    max_depth: int = DEFAULT_MAX_WALK_DEPTH,
+) -> tuple[list[Path], list[Path]]:
+    """Return bounded directory and file inventories without following links."""
+
+    budgets = (max_files, max_directories, max_total_bytes, max_depth)
+    if any(type(value) is not int or value < 0 for value in budgets):
+        raise ValueError("Recursive path budgets must be nonnegative integers")
+    absolute = require_safe_directory(root)
+    pending: list[tuple[Path, int]] = [(absolute, 0)]
+    directories: list[Path] = []
+    files: list[Path] = []
+    directory_count = 0
+    total_bytes = 0
+    seen_directories: set[tuple[int, int] | str] = set()
+
+    while pending:
+        directory, depth = pending.pop()
+        if depth > max_depth:
+            raise ValueError(f"Directory tree exceeds its depth limit: {directory}")
+        info = directory.lstat()
+        if path_is_link(directory, info.st_mode, file_info=info) or not stat.S_ISDIR(
+            info.st_mode
+        ):
+            raise ValueError(f"Directory tree contains an unsafe directory: {directory}")
+        identity: tuple[int, int] | str
+        if info.st_ino:
+            identity = (info.st_dev, info.st_ino)
+        else:
+            identity = os.path.normcase(os.fspath(directory))
+        if identity in seen_directories:
+            raise ValueError(f"Directory tree contains a cycle: {directory}")
+        seen_directories.add(identity)
+        directories.append(directory)
+        directory_count += 1
+        if directory_count > max_directories:
+            raise ValueError("Directory tree exceeds its directory limit")
+
+        children: list[tuple[Path, os.stat_result]] = []
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                child = directory / entry.name
+                child_info = entry.stat(follow_symlinks=False)
+                if path_is_link(child, child_info.st_mode, file_info=child_info):
+                    raise ValueError(f"Directory tree contains a link: {child}")
+                children.append((child, child_info))
+        for child, child_info in sorted(children, key=lambda item: item[0].name):
+            if stat.S_ISDIR(child_info.st_mode):
+                pending.append((child, depth + 1))
+            elif stat.S_ISREG(child_info.st_mode):
+                files.append(child)
+                total_bytes += child_info.st_size
+                if len(files) > max_files:
+                    raise ValueError("Directory tree exceeds its file limit")
+                if total_bytes > max_total_bytes:
+                    raise ValueError("Directory tree exceeds its byte limit")
+            else:
+                raise ValueError(f"Directory tree contains a special file: {child}")
+    def relative_name(item: Path) -> str:
+        return item.relative_to(absolute).as_posix()
+
+    return sorted(directories, key=relative_name), sorted(files, key=relative_name)
+
+
+def walk_regular_files_no_links(
+    root: Path,
+    *,
+    max_files: int = DEFAULT_MAX_WALK_FILES,
+    max_directories: int = DEFAULT_MAX_WALK_DIRECTORIES,
+    max_total_bytes: int = DEFAULT_MAX_WALK_BYTES,
+    max_depth: int = DEFAULT_MAX_WALK_DEPTH,
+) -> list[Path]:
+    """Return only files from a bounded, link-free recursive inventory."""
+
+    _directories, files = walk_directory_tree_no_links(
+        root,
+        max_files=max_files,
+        max_directories=max_directories,
+        max_total_bytes=max_total_bytes,
+        max_depth=max_depth,
+    )
+    return files
 
 
 def _require_owned_directory(path: Path) -> Path:

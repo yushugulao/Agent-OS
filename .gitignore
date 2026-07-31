@@ -30,12 +30,17 @@ kernel_app.ld
 *.sym
 nfs/*.img
 nfs/fs
+nfs/fs.exe
 baseline_ucore/nfs/*.img
 baseline_ucore/nfs/fs
+baseline_ucore/nfs/fs.exe
 /results/
+/.uv-cache/
+/.uv-python/
 docs/report/
 __pycache__/
 *.pyc
+/host_tools/evaluation-scenario-*/
 docs/assets/*gfuse-style*.png
 docs/assets/*gfuse-style*.pptx
 *.aux
@@ -45,5 +50,6 @@ docs/assets/*gfuse-style*.pptx
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+# Final evidence overrides the global log ignore only under its release root.
 !evidence/releases/
 !evidence/releases/**

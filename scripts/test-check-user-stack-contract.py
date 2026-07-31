@@ -152,6 +152,94 @@ class UserStackContractTests(unittest.TestCase):
         )
         self.assert_rejected("mutation test wiring")
 
+    def test_mutation_compatibility_benchmark_omission_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "$(addprefix user/,$(sort $(SRCS))) \\\n\t$(COMPAT_BENCH_REPO_SOURCE)",
+            "$(addprefix user/,$(sort $(SRCS)))",
+        )
+        self.assert_rejected("complete stack application inventory")
+
+    def test_mutation_compatibility_benchmark_source_drift_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "COMPAT_BENCH_REPO_SOURCE := evaluation_guest/compatbench.c",
+            "COMPAT_BENCH_REPO_SOURCE := user/src/agentbench_ucore.c",
+        )
+        self.assert_rejected("canonical compatibility benchmark source")
+
+    def test_mutation_stack_library_inventory_shrink_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "$(addprefix user/,$(sort $(LIB_C)))",
+            "$(addprefix user/,$(firstword $(sort $(LIB_C))))",
+        )
+        self.assert_rejected("complete stack library inventory")
+
+    def test_mutation_stack_application_inventory_shrink_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "$(addprefix user/,$(sort $(SRCS)))",
+            "$(addprefix user/,$(firstword $(sort $(SRCS))))",
+        )
+        self.assert_rejected("complete stack application inventory")
+
+    def test_mutation_compatibility_benchmark_stack_rule_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "$(STACK_USAGE_DIR)/evaluation_guest/compatbench.o:",
+            "$(STACK_USAGE_DIR)/evaluation_guest/compatbench-omitted.o:",
+        )
+        self.assert_rejected("shared compatibility benchmark stack build")
+
+    def test_mutation_compatibility_benchmark_compile_source_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "-c $(COMPAT_BENCH_REPO_SOURCE) \\",
+            "-c user/src/agentbench_ucore.c \\",
+        )
+        self.assert_rejected("canonical compatibility benchmark stack compilation")
+
+    def test_mutation_compatibility_benchmark_link_source_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "$(COMPAT_BENCH_SOURCE) -o $@",
+            "../user/src/agentbench_ucore.c -o $@",
+        )
+        self.assert_rejected("canonical compatibility benchmark link")
+
+    def test_mutation_generated_header_stack_path_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "-I$(abspath $(generated_dir))",
+            "-I$(generated_dir)",
+        )
+        self.assert_rejected("absolute generated-header stack include")
+
+    def test_mutation_stack_compiler_flag_parity_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "STACK_USAGE_CFLAGS := $(COMMON_CFLAGS)",
+            "STACK_USAGE_CFLAGS := -Os",
+        )
+        self.assert_rejected("stack compiler flag parity")
+
+    def test_mutation_application_compiler_flag_parity_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "CFLAGS := $(COMMON_CFLAGS)",
+            "CFLAGS := -Os",
+        )
+        self.assert_rejected("canonical application compiler flags")
+
+    def test_mutation_repository_source_root_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            '--usage-dir "$$scratch/usage" --source-dir ..',
+            '--usage-dir "$$scratch/usage" --source-dir .',
+        )
+        self.assert_rejected("repository-rooted stack source inventory")
+
 
 if __name__ == "__main__":
     unittest.main()

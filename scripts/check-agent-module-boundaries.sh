@@ -49,6 +49,7 @@ agent_observe_ledger
 agent_observe_recovery
 agent_observe_store
 agent_observe_timeline
+agent_resource
 agent_tool_protocol
 resource_controller
 workflow_lifecycle
@@ -150,7 +151,7 @@ for path in "${ROOT_DIR}"/os/agent*.c; do
 	agent_metadata_catalog | agent_metadata_directory | agent_metadata_probe | agent_metadata_query | agent_metadata_recovery | agent_metadata_recovery_test | agent_metadata_scan | \
 	agent_metadata_prefetch | agent_metadata_store | agent_metadata_store_format | agent_metadata_store_io | agent_metadata_test | agent_observe | agent_observe_audit_query | agent_observe_capacity | \
 	agent_observe_ledger | agent_observe_recovery | agent_observe_store | agent_observe_test | agent_observe_timeline | \
-	agent_tool_protocol)
+	agent_resource | agent_tool_protocol)
 		;;
 	*)
 		fail "unregistered AgentOS implementation: os/${module}.c"

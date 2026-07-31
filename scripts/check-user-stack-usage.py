@@ -258,6 +258,20 @@ def read_callgraph(unit, path):
                         raise ValueError(
                             f"unbounded callgraph frame at {path}:{line_number}: {name}"
                         )
+                elif line.endswith(" shape : triangle }"):
+                    source_prefix = unit.as_posix() + ":"
+                    if (
+                        title in frames
+                        or not title.startswith(source_prefix)
+                        or (r"\n" + source_prefix) not in label
+                    ):
+                        raise ValueError(
+                            f"invalid inlined callgraph node at {path}:{line_number}: {title}"
+                        )
+                    # GCC omits a .su record for a fully inlined function. Its
+                    # locals are already charged to the emitted caller frame;
+                    # retain the call edges with a zero additional frame.
+                    frames[title] = 0
                 continue
             if edge:
                 edges.add(edge.groups())

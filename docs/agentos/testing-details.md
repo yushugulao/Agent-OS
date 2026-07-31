@@ -901,7 +901,7 @@ agentscope_ucore: parent passed
 make workflow-teardown-race-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-测试用 syscall 546 的 self-only lifecycle snapshot/compare ABI 观察当前进程自己的 immutable key、Context commit lane 与 metadata transaction gate；它不读裸 PCB，也不能把 key 当作关闭权限。完整 ABI 为 version 1/48 字节，raw syscall 接受至少 8 字节的 sized-prefix。坏 flags/key/地址在 copyout 前失败，合法 stale/not-found 则可以同时返回 self snapshot。
+测试用 syscall 546 的 self-only lifecycle snapshot/compare ABI 观察当前进程自己的 immutable key、Context commit lane、metadata transaction gate 与资源账户身份；它不读裸 PCB，也不能把 key 或资源账户编号当作关闭权限。完整 ABI 为 version 2/64 字节，并保留 version 1 的 48 字节前缀兼容；raw syscall 接受至少 8 字节的 sized-prefix。坏 flags/key/地址在 copyout 前失败，合法 stale/not-found 则可以同时返回 self snapshot。
 
 每轮组合覆盖：
 

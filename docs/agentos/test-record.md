@@ -23,7 +23,7 @@
 
 三轮中位数为 `310.491647311s`；确定性上限按 `ceil(max(max_sample, 1.05 * median) * 100) / 100` 计算为 `327.10s`。最慢样本相对中位数为 `1.0534846892`，未超过 110% 拒绝边界。每轮 runner 的最终成功标记唯一且位于最后一个非空行，成功顺序均为“前置 `agentfinal_ucore` + 18-case”，Guest 日志均有顺序一致的 19 个完整分段。
 
-源码/合同指纹为 `b1dffb44dc3caa5c9c3c3ab483c8ba4d879254416b9152879102762627a698e9`，覆盖当时的 386 个受管输入；三轮 runner 输出与该提交上的 checker 重算结果一致。原始 timing、确定性 gzip 日志、环境、退出状态、validation 与逐文件哈希保存在 `evidence/calibrations/814021ab9dac/`。它只使 `814021ab9dac` 的时长门达到 `calibrated_full_suite`，不适用于受管输入已经变化的后续候选；本文件末节单独记录当前候选。
+源码/合同指纹为 `b1dffb44dc3caa5c9c3c3ab483c8ba4d879254416b9152879102762627a698e9`，覆盖当时的 386 个受管输入；三轮 runner 输出与该提交上的 checker 重算结果一致。原始 timing、确定性 gzip 日志、环境、退出状态、validation 与逐文件哈希保存在 `evidence/calibrations/814021ab9dac/`。这是旧 schema-2 历史包，没有当前合同要求的逐执行 attestation，因而不再能解除任何候选的时长门；本文件末节单独记录当前候选。
 
 ## 冻结提交 `31d4ddf53695` 的 18-case 校准（历史）
 
@@ -37,7 +37,7 @@
 
 三轮中位数为 `242.927974276s`；确定性上限按 `ceil(max(max_sample, 1.05 * median) * 100) / 100` 计算为 `255.08s`。最慢样本相对中位数为 `1.0410314294`，没有超过 110% 拒绝边界。严格复核还要求每轮 runner 最终成功标记唯一且位于最后一行、成功 case 顺序为“前置 `agentfinal_ucore` + 18-case”、Guest 日志含对应的 19 个完整分段。三轮均满足这些条件。
 
-原始 timing、确定性 gzip 压缩的 runner/Guest 日志、环境、退出状态、逐文件哈希与人工审查边界保存在 `evidence/calibrations/31d4ddf53695/`。该记录使时长门恢复为 `calibrated_full_suite`，但不替代尚待执行的干净 `make full-verify`，也不构成 `evidence/releases/INDEX.md` 所定义的 E3 release bundle。
+原始 timing、确定性 gzip 压缩的 runner/Guest 日志、环境、退出状态、逐文件哈希与人工审查边界保存在 `evidence/calibrations/31d4ddf53695/`。该旧 schema-2 记录只描述当时状态；当前门要求 schema-3 campaign 与逐执行 attestation，因此它不能再作为校准输入，也不构成 `evidence/releases/INDEX.md` 所定义的 release bundle。
 
 ## 2026-07-27 弹性 catalog 实验与证据解析（历史，未冻结）
 
@@ -1074,5 +1074,13 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 `full-verify` 的失败是时长策略按设计 fail closed：当前受管输入尚缺固定 runner 上同版本 18-case 完整套件的至少三轮校准样本。不得绕过该门或复用旧提交样本。本轮没有生成 `results/latest`、C→E release bundle 或最终证据包，不声明 E3；远端仍无可用 Runner，也不声明远程 CI 通过或 E4。
+
+随后收紧的校准合同把本地时长阈值固定到独立的
+`local-e3-msys2-xpack-qemu11-v1`：collector 逐字节复核 commit tree，绑定并回灌实际
+GCC/ld/objcopy/objdump/as、Host CC、QEMU、Python、Bash、Make 与 Git，且 QEMU 只解析一次绝对路径并用同一路径
+启动。校准包可整体迁移到另一绝对 checkout 后离线复验；错误 suffix、路径穿越、filter 隐藏的
+字节差异、工具换靶和重复参数均 fail closed。此机制尚未产生三轮正式样本；`local_e3_unsigned`
+只证明可复验来源，不证明本机操作者诚实。GitLab Ubuntu/QEMU 10.2.1 继续跑完整 18-case 和
+timing inventory，但明确使用 `profile=none`，不套用该本地墙钟阈值。
 
 候选提交后冻结新内核功能和 ABI。下一阶段只允许完成三轮校准、形成 C→E 证据，以及按“保留、合并、删除”执行行为保持的减法审计；每个小提交继续验证 source、ELF/raw、text/BSS、`struct proc`、线程/boot 栈和测试耗时不增长。

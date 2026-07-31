@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -74,9 +75,11 @@ CONTROL_SIGNALS = tuple(
 _DUMPABILITY_CONDITION = threading.Condition()
 _DUMPABILITY_SESSION = None
 _DUMPABILITY_POISONED = False
-EXECUTION_ATTESTATION_FORMAT = "agentos-qemu-execution-attestation-v1"
+EXECUTION_ATTESTATION_FORMAT = "agentos-qemu-execution-attestation-v2"
+LOCAL_EVIDENCE_SCOPE = "local_e3_unsigned"
 RUN_ID_RE = re.compile(r"[0-9a-f]{64}\Z")
 EXECUTION_ID_RE = re.compile(r"[A-Za-z0-9._:+-]{1,128}\Z")
+GIT_OBJECT_RE = re.compile(r"[0-9a-f]{40}\Z")
 
 
 def _regular_file_identity(path, label):
@@ -101,6 +104,57 @@ def _regular_file_identity(path, label):
     }
 
 
+def _resolve_executable_once(path, label):
+    candidate = shutil.which(path) if not os.path.dirname(path) else path
+    if candidate is None:
+        raise ValueError(f"{label} executable is not resolvable")
+    resolved = os.path.realpath(candidate)
+    if not os.path.isabs(resolved):
+        raise ValueError(f"{label} executable did not resolve absolutely")
+    _regular_file_identity(resolved, label)
+    return resolved
+
+
+def _file_stamp(path, label):
+    info = os.stat(path, follow_symlinks=False)
+    if not os.path.isfile(path) or os.path.islink(path):
+        raise ValueError(f"{label} must be a regular non-symlink file")
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def _executable_identity_from_resolved(
+    requested, resolved, label, version_args=("--version",)
+):
+    identity = _regular_file_identity(resolved, label)
+    try:
+        result = subprocess.run(
+            [resolved, *version_args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError(f"cannot inspect {label} version: {error}") from error
+    output = result.stdout.strip() or result.stderr.strip()
+    first_line = output.splitlines()[0] if output else ""
+    if result.returncode != 0 or not first_line:
+        raise ValueError(f"cannot inspect {label} version")
+    return {
+        "requested_path": requested,
+        "executable": identity,
+        "version_argv": [resolved, *version_args],
+        "version_first_line": first_line,
+    }
+
+
+def _executable_identity(path, label, version_args=("--version",)):
+    resolved = _resolve_executable_once(path, label)
+    return _executable_identity_from_resolved(
+        path, resolved, label, version_args
+    )
+
+
 def _write_execution_attestation(path, value):
     destination = os.path.abspath(path)
     parent = os.path.dirname(destination)
@@ -116,6 +170,13 @@ def _write_execution_attestation(path, value):
             os.fsync(handle.fileno())
     finally:
         os.close(descriptor)
+
+
+def _attested_invocation_argv(executable_identities):
+    python_path = os.path.realpath(sys.executable)
+    if executable_identities is not None:
+        python_path = executable_identities["python"]["executable"]["path"]
+    return [python_path, *sys.argv]
 
 
 @dataclass
@@ -171,6 +232,8 @@ class MonitorResult:
     supervisor_returncode: int | None = None
     control_endpoint_restored: bool = True
     supervisor_control_healthy: bool = True
+    started_monotonic_ns: int = 0
+    finished_monotonic_ns: int = 0
 
     @property
     def succeeded(self):
@@ -1180,7 +1243,11 @@ def _process_tree_alive(proc):
         return proc.poll() is None
     if os.name != "posix":
         return False
-    live_member = _linux_process_group_has_live_member(proc.pid)
+    live_member = (
+        _linux_process_group_has_live_member(proc.pid)
+        if sys.platform.startswith("linux")
+        else None
+    )
     if live_member is not None:
         return live_member
     try:
@@ -1257,6 +1324,19 @@ def _signal_process_tree(proc, pidfd, sig):
             leader_sent,
             leader_confirmed,
         )
+    if sys.platform == "cygwin":
+        # start_new_session gives every MSYS workload an exclusive PGID.
+        # Cygwin has no pidfd, while signaling the leader and then its group
+        # delivers the same signal twice. One successful group delivery is
+        # therefore the strongest atomic leader/tree operation available.
+        leader_exited = _leader_exited(proc)
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            return False, False, False
+        if leader_exited:
+            return True, False, False
+        return True, True, True
     group_liveness = (
         _linux_process_group_has_live_member(proc.pid)
         if os.name == "posix"
@@ -1294,7 +1374,7 @@ def _wait_for_tree_exit_and_eof(
     deadline,
     initial_eof=False,
 ):
-    """Wait until the leader, its process group, and the log pipe are gone."""
+    """Wait for tree/EOF and return when natural completion was observed."""
     eof = initial_eof
     while True:
         if not eof:
@@ -1306,11 +1386,11 @@ def _wait_for_tree_exit_and_eof(
             and not _process_tree_alive(proc)
             and eof
         ):
-            return eof
+            return eof, time.monotonic()
 
         now = time.monotonic()
         if now >= deadline:
-            return eof
+            return eof, None
         wait = min(POLL_SECONDS, deadline - now)
         readers = []
         if not eof:
@@ -1337,8 +1417,9 @@ def _stop_and_drain(
     first_signal_confirmed_for_leader = False
     first_signal_sent_to_leader = False
     eof = False
+    natural_completion_observed_at = None
     if natural_exit_deadline is not None:
-        eof = _wait_for_tree_exit_and_eof(
+        eof, natural_completion_observed_at = _wait_for_tree_exit_and_eof(
             proc,
             pidfd,
             fd,
@@ -1354,7 +1435,7 @@ def _stop_and_drain(
         signals_sent.append(first_signal)
     first_signal_sent_to_leader = leader_sent
     first_signal_confirmed_for_leader = confirmed
-    eof = _wait_for_tree_exit_and_eof(
+    eof, _ = _wait_for_tree_exit_and_eof(
         proc,
         pidfd,
         fd,
@@ -1368,7 +1449,7 @@ def _stop_and_drain(
         and proc.owner.poll() is None
     ):
         proc.terminate_owner()
-        eof = _wait_for_tree_exit_and_eof(
+        eof, _ = _wait_for_tree_exit_and_eof(
             proc,
             pidfd,
             fd,
@@ -1387,7 +1468,7 @@ def _stop_and_drain(
             )
             if sent:
                 signals_sent.append(signal.SIGKILL)
-        eof = _wait_for_tree_exit_and_eof(
+        eof, _ = _wait_for_tree_exit_and_eof(
             proc,
             pidfd,
             fd,
@@ -1439,6 +1520,7 @@ def _stop_and_drain(
         process_tree_gone,
         process_tree_contained,
         completion_signal_attested,
+        natural_completion_observed_at,
     )
 
 
@@ -1879,7 +1961,8 @@ def _monitor_command_impl(
     if max_output_bytes <= 0 or max_pending_chars <= 0:
         raise ValueError("output limits must be positive")
 
-    start = time.monotonic()
+    started_monotonic_ns = time.monotonic_ns()
+    start = started_monotonic_ns / 1_000_000_000
     case_deadline = start + case_timeout
     last_output = start
     last_notice = start
@@ -2042,6 +2125,7 @@ def _monitor_command_impl(
             process_tree_gone,
             process_tree_contained,
             completion_signal_attested,
+            natural_completion_observed_at,
         ) = _stop_and_drain(
             proc,
             _lifecycle.pidfd,
@@ -2070,7 +2154,17 @@ def _monitor_command_impl(
                 "checking teardown"
             )
             _write_notice(output_stream, notice)
-        finished_at = time.monotonic()
+        finished_monotonic_ns = time.monotonic_ns()
+        finished_at = finished_monotonic_ns / 1_000_000_000
+        natural_before_case_deadline = (
+            natural_completion_observed_at is not None
+            and natural_completion_observed_at < case_deadline
+        )
+        natural_before_marker_deadline = (
+            marker_deadline is not None
+            and natural_completion_observed_at is not None
+            and natural_completion_observed_at < marker_deadline
+        )
         if scanner.output_limit_exceeded:
             reason = "output_limit"
             _write_notice(
@@ -2090,6 +2184,10 @@ def _monitor_command_impl(
                 "expected_powercut",
             )
             and finished_at >= case_deadline
+            and not (
+                reason == "process_exit"
+                and natural_before_case_deadline
+            )
         ):
             timed_out = True
             reason = "timeout"
@@ -2101,12 +2199,15 @@ def _monitor_command_impl(
             reason == "process_exit"
             and marker_deadline is not None
             and finished_at >= marker_deadline
+            and not natural_before_marker_deadline
         ):
             reason = "marker_grace"
         elif not scanner.marker_seen and reason == "process_exit":
             reason = "eof_without_marker"
 
-        elapsed = time.monotonic() - start
+        elapsed = (
+            finished_monotonic_ns - started_monotonic_ns
+        ) / 1_000_000_000
         return MonitorResult(
             marker_seen=scanner.marker_seen,
             failure_seen=scanner.failure_seen,
@@ -2133,6 +2234,8 @@ def _monitor_command_impl(
                 "control_healthy",
                 True,
             ),
+            started_monotonic_ns=started_monotonic_ns,
+            finished_monotonic_ns=finished_monotonic_ns,
         )
 
 
@@ -2208,28 +2311,96 @@ def parse_args():
     parser.add_argument("--attestation-file")
     parser.add_argument("--run-id")
     parser.add_argument("--execution-id")
+    parser.add_argument("--evidence-scope")
+    parser.add_argument("--source-commit")
+    parser.add_argument("--source-tree")
+    parser.add_argument("--campaign-nonce")
+    parser.add_argument("--calibration-plan-sha256")
+    parser.add_argument("--round-nonce")
+    parser.add_argument("--session-nonce")
+    parser.add_argument("--execution-nonce")
+    parser.add_argument("--toolchain-cc")
+    repeatable = {"--expected-bad-addr-after"}
+    for action in parser._actions:
+        for option in action.option_strings:
+            if option in repeatable or option in {"-h", "--help"}:
+                continue
+            if sys.argv[1:].count(option) > 1:
+                parser.error(f"duplicate option is forbidden: {option}")
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
+def validate_calibration_attestation_args(args):
     attestation_values = (
         args.attestation_file,
         args.run_id,
         args.execution_id,
     )
-    if any(value is not None for value in attestation_values):
-        if not all(value is not None for value in attestation_values):
-            print(
-                "[agent-tests] execution attestation options must be supplied together",
-                file=sys.stderr,
-            )
-            return 2
-        if not RUN_ID_RE.fullmatch(args.run_id) or not EXECUTION_ID_RE.fullmatch(
-            args.execution_id
-        ):
-            print("[agent-tests] invalid execution attestation identity", file=sys.stderr)
-            return 2
+    calibration_values = (
+        args.evidence_scope,
+        args.source_commit,
+        args.source_tree,
+        args.campaign_nonce,
+        args.calibration_plan_sha256,
+        args.round_nonce,
+        args.session_nonce,
+        args.execution_nonce,
+        args.toolchain_cc,
+    )
+    if not any(value is not None for value in (*attestation_values, *calibration_values)):
+        return False
+    if not all(value is not None for value in attestation_values):
+        raise ValueError("execution attestation options must be supplied together")
+    if not RUN_ID_RE.fullmatch(args.run_id) or not EXECUTION_ID_RE.fullmatch(
+        args.execution_id
+    ):
+        raise ValueError("invalid execution attestation identity")
+    if not any(value is not None for value in calibration_values):
+        return False
+    if not all(value is not None for value in calibration_values):
+        raise ValueError("calibration attestation options must be supplied together")
+    if (
+        args.evidence_scope != LOCAL_EVIDENCE_SCOPE
+        or not GIT_OBJECT_RE.fullmatch(args.source_commit)
+        or not GIT_OBJECT_RE.fullmatch(args.source_tree)
+        or not RUN_ID_RE.fullmatch(args.campaign_nonce)
+        or not RUN_ID_RE.fullmatch(args.calibration_plan_sha256)
+        or not RUN_ID_RE.fullmatch(args.round_nonce)
+        or not RUN_ID_RE.fullmatch(args.session_nonce)
+        or not RUN_ID_RE.fullmatch(args.execution_nonce)
+        or args.run_id != args.session_nonce
+        or args.execution_id != args.execution_nonce
+        or len(
+            {
+                args.campaign_nonce,
+                args.round_nonce,
+                args.session_nonce,
+                args.execution_nonce,
+            }
+        )
+        != 4
+    ):
+        raise ValueError("invalid calibration attestation identity")
+    return True
+
+
+def main():
+    args = parse_args()
+    try:
+        calibration_attestation = validate_calibration_attestation_args(args)
+    except ValueError as error:
+        print(f"[agent-tests] {error}", file=sys.stderr)
+        return 2
+    if calibration_attestation and (
+        args.timing_file is not None
+        or args.completion_mode != COMPLETION_NATURAL
+    ):
+        print(
+            "[agent-tests] calibration attestation forbids timing-file and "
+            "non-natural completion",
+            file=sys.stderr,
+        )
+        return 2
     try:
         case_timeout = parse_duration(args.case_timeout, "CASE_TIMEOUT")
         idle_notice = parse_duration(
@@ -2250,9 +2421,16 @@ def main():
         )
         return 2
 
-    qemu_command = build_qemu_command(args.qemu, args.kernel, args.image)
+    try:
+        qemu_resolved = _resolve_executable_once(args.qemu, "QEMU")
+    except (OSError, ValueError) as error:
+        print(f"[agent-tests] QEMU executable rejected: {error}", file=sys.stderr)
+        return 2
+    qemu_command = build_qemu_command(qemu_resolved, args.kernel, args.image)
     attestation_inputs = None
     runner_identity = None
+    executable_identities = None
+    executable_stamps = None
     if args.attestation_file is not None:
         try:
             attestation_inputs = {
@@ -2260,10 +2438,27 @@ def main():
                 "image": _regular_file_identity(args.image, "image input"),
             }
             runner_identity = _regular_file_identity(__file__, "runner source")
+            if calibration_attestation:
+                executable_identities = {
+                    "qemu": _executable_identity_from_resolved(
+                        args.qemu, qemu_resolved, "QEMU"
+                    ),
+                    "toolchain_cc": _executable_identity(
+                        args.toolchain_cc, "toolchain compiler"
+                    ),
+                    "python": _executable_identity(
+                        sys.executable, "Python", ("--version",)
+                    ),
+                }
+                executable_stamps = {
+                    name: _file_stamp(value["executable"]["path"], name)
+                    for name, value in executable_identities.items()
+                }
         except (OSError, ValueError) as error:
             print(f"[agent-tests] attestation input rejected: {error}", file=sys.stderr)
             return 2
 
+    started_wall_time_ns = time.time_ns()
     result = monitor_command(
         qemu_command,
         init_proc=args.init_proc,
@@ -2277,6 +2472,7 @@ def main():
         expected_fault_marker_mode=args.expected_bad_addr_marker_mode,
         log_file=args.log_file,
     )
+    finished_wall_time_ns = time.time_ns()
     if args.completion_mode == COMPLETION_CHECKPOINT:
         succeeded = result.checkpoint_succeeded
     elif args.completion_mode == COMPLETION_POWERCUT:
@@ -2311,13 +2507,43 @@ def main():
             runner_after = _regular_file_identity(__file__, "runner source")
             if runner_after != runner_identity:
                 raise ValueError("runner source changed during QEMU execution")
+            if executable_identities is not None:
+                qemu_after = _regular_file_identity(
+                    executable_identities["qemu"]["executable"]["path"],
+                    "QEMU output",
+                )
+                toolchain_after = _regular_file_identity(
+                    executable_identities["toolchain_cc"]["executable"]["path"],
+                    "toolchain compiler output",
+                )
+                python_after = _regular_file_identity(
+                    executable_identities["python"]["executable"]["path"],
+                    "Python output",
+                )
+                if (
+                    qemu_after != executable_identities["qemu"]["executable"]
+                    or toolchain_after
+                    != executable_identities["toolchain_cc"]["executable"]
+                    or python_after
+                    != executable_identities["python"]["executable"]
+                    or any(
+                        _file_stamp(
+                            identity["executable"]["path"], name
+                        )
+                        != executable_stamps[name]
+                        for name, identity in executable_identities.items()
+                    )
+                ):
+                    raise ValueError("execution tool changed during QEMU execution")
             attestation = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "format": EXECUTION_ATTESTATION_FORMAT,
                 "run_id": args.run_id,
                 "execution_id": args.execution_id,
                 "runner": runner_identity,
-                "invocation_argv": [os.path.abspath(sys.executable), *sys.argv],
+                "invocation_argv": _attested_invocation_argv(
+                    executable_identities
+                ),
                 "qemu_argv": qemu_command,
                 "request": {
                     "init_proc": args.init_proc,
@@ -2333,7 +2559,21 @@ def main():
                 "inputs": attestation_inputs,
                 "outputs": {
                     "image": _regular_file_identity(args.image, "image output"),
+                    "kernel": _regular_file_identity(
+                        args.kernel, "kernel output"
+                    ),
                     "log": _regular_file_identity(args.log_file, "Guest log output"),
+                },
+                "time": {
+                    "clock": "time.monotonic_ns",
+                    "started_monotonic_ns": result.started_monotonic_ns,
+                    "finished_monotonic_ns": result.finished_monotonic_ns,
+                    "elapsed_ns": (
+                        result.finished_monotonic_ns
+                        - result.started_monotonic_ns
+                    ),
+                    "started_wall_time_ns": started_wall_time_ns,
+                    "finished_wall_time_ns": finished_wall_time_ns,
                 },
                 "result": {
                     "succeeded": True,
@@ -2351,6 +2591,26 @@ def main():
                     "elapsed_seconds": round(result.elapsed, 9),
                 },
             }
+            if executable_identities is not None:
+                attestation.update(
+                    {
+                        "evidence_scope": args.evidence_scope,
+                        "source": {
+                            "commit": args.source_commit,
+                            "tree": args.source_tree,
+                            "calibration_plan_sha256": (
+                                args.calibration_plan_sha256
+                            ),
+                        },
+                        "identity": {
+                            "campaign_nonce": args.campaign_nonce,
+                            "round_nonce": args.round_nonce,
+                            "session_nonce": args.session_nonce,
+                            "execution_nonce": args.execution_nonce,
+                        },
+                        "executables": executable_identities,
+                    }
+                )
             _write_execution_attestation(args.attestation_file, attestation)
         except (OSError, ValueError) as error:
             print(f"[agent-tests] attestation publication failed: {error}", file=sys.stderr)

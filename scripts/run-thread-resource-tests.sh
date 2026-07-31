@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-120s}"
@@ -18,14 +19,17 @@ THREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT=6
 THREAD_RESOURCE_DOMAIN_RESERVED_LIMIT=4
 TMPDIR_THREAD_RESOURCE="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_THREAD_RESOURCE}"' EXIT
+source "${SCRIPT_DIR}/host-probe-toolchain.sh"
+host_probe_setup "${TMPDIR_THREAD_RESOURCE}"
 
 make -C user \
 	TOOLPREFIX="${TOOLPREFIX}" CHAPTER=thread_resource \
 	build_dir="${TMPDIR_THREAD_RESOURCE}/user-build" \
 	out_dir="${TMPDIR_THREAD_RESOURCE}/user-target" \
 	asm_dir="${TMPDIR_THREAD_RESOURCE}/user-asm"
-cc nfs/fs.c nfs/host_image_snapshot.c -o "${TMPDIR_THREAD_RESOURCE}/mkfs"
-"${TMPDIR_THREAD_RESOURCE}/mkfs" \
+host_probe_compile "${TMPDIR_THREAD_RESOURCE}/mkfs" \
+	nfs/fs.c nfs/host_image_snapshot.c
+host_probe_run "${TMPDIR_THREAD_RESOURCE}/mkfs" \
 	"${TMPDIR_THREAD_RESOURCE}/thread-resource.img" \
 	"${TMPDIR_THREAD_RESOURCE}/user-target/bin/threadresource_ucore"
 make -B build TOOLPREFIX="${TOOLPREFIX}" \
@@ -64,3 +68,4 @@ fi
 	--tag thread-resource \
 	--profile thread-resource
 echo "[thread-resource] all checks passed"
+host_probe_report "thread-resource mkfs"
