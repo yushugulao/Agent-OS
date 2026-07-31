@@ -1546,7 +1546,7 @@
         "toolchain_objcopy": "2.45",
         "toolchain_objdump": "2.45",
         "toolchain_as": "2.45",
-        "host_cc": "15.3.0",
+        "host_cc": "22.1.8",
         "python": "3.12.13",
         "bash": "5.3.15(1)-release",
         "make": "4.4.1",
