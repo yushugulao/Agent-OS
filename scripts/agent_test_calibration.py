@@ -26,6 +26,12 @@ from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 
+# The collector dynamically loads the reviewed budget checker before its child
+# environment exists.  Keep every invocation style from modifying the source
+# checkout, including Python -I which ignores PYTHONDONTWRITEBYTECODE.
+sys.dont_write_bytecode = True
+
+
 class CalibrationError(ValueError):
     pass
 

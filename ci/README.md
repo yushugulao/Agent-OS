@@ -162,7 +162,7 @@ outside the source worktree, for example:
 ```sh
 QEMU=/opt/qemu/qemu-system-riscv64.exe \
 TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf- \
-python3 scripts/agent_test_calibration.py collect \
+python3 -I -S -B scripts/agent_test_calibration.py collect \
   --root . --source-commit "$(git rev-parse HEAD)" \
   --output /var/tmp/agentos-calibration-"$(git rev-parse --short=12 HEAD)"
 ```

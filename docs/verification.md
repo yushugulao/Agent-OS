@@ -351,7 +351,7 @@ AGENT_TEST_CASE=agentfinal_ucore TOOLPREFIX=riscv64-linux-gnu- \
 # 只在版本化 local E3 profile 和 clean detached HEAD 执行；output 必须在仓库外
 QEMU=/opt/qemu/qemu-system-riscv64.exe \
 TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf- \
-  python3 scripts/agent_test_calibration.py collect \
+  python3 -I -S -B scripts/agent_test_calibration.py collect \
   --root . --source-commit "$(git rev-parse HEAD)" \
   --output /var/tmp/agentos-calibration-"$(git rev-parse --short=12 HEAD)" \
   --case-timeout 240s

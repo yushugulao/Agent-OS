@@ -219,6 +219,64 @@ class CalibrationTests(unittest.TestCase):
             all('"${PYTHON_BIN}" -I -S -B' in line for line in invocations)
         )
 
+    def test_collector_dynamic_import_cannot_write_bytecode(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo"
+            scripts = root / "scripts"
+            ci = root / "ci"
+            scripts.mkdir(parents=True)
+            ci.mkdir()
+            shutil.copy2(
+                ROOT / "scripts" / "agent_test_calibration.py",
+                scripts / "agent_test_calibration.py",
+            )
+            (scripts / "check-kernel-budgets.py").write_text(
+                "AGENT_TEST_CALIBRATION_PROVISIONAL = "
+                "'provisional_requires_full_suite'\n"
+                "def load_config(path):\n"
+                "    return {'agent_test_suite': {\n"
+                "        'calibration_status': "
+                "AGENT_TEST_CALIBRATION_PROVISIONAL,\n"
+                "        'local_calibration_profile': {},\n"
+                "        'expected_cases': [],\n"
+                "    }}\n"
+                "def agent_test_source_fingerprint(root, config):\n"
+                "    return ('0' * 64, ())\n",
+                encoding="ascii",
+            )
+            (ci / "kernel-budgets.json").write_text("{}\n", encoding="ascii")
+            self.git(root, "init", "-q")
+            self.git(root, "config", "user.email", "test@example.invalid")
+            self.git(root, "config", "user.name", "Calibration Test")
+            self.git(root, "add", ".")
+            self.git(root, "commit", "-q", "-m", "source")
+            commit = self.git(root, "rev-parse", "HEAD")
+            self.git(root, "checkout", "-q", "--detach", commit)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "scripts/agent_test_calibration.py",
+                    "collect",
+                    "--root",
+                    ".",
+                    "--source-commit",
+                    commit,
+                    "--output",
+                    str(Path(temp) / "output"),
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(list(root.rglob("*.pyc")), [])
+            self.assertFalse((scripts / "__pycache__").exists())
+
     def test_calibration_child_environment_preserves_windows_system_paths(self):
         windows_paths = {
             "ALLUSERSPROFILE": r"C:\ProgramData",
