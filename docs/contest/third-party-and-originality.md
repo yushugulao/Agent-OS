@@ -14,9 +14,8 @@
 
 根目录源码许可证为 GPL-3.0，技术文档和展示材料采用 CC BY-SA 4.0。当前 `NOTICE` 给出了已知
 上游链接。仓库的 `.clang-format`、`user/.clang-format` 和
-`baseline_ucore/user/.clang-format` 自带 `SPDX-License-Identifier: GPL-2.0` 标记，但现有
-`NOTICE` 没有单独解释其来源；正式提交前应由维护者核对来源和兼容口径，而不是无依据地删除
-或改写该标记。
+`baseline_ucore/user/.clang-format` 来自 Linux 内核格式配置并保留
+`SPDX-License-Identifier: GPL-2.0` 标记；它们作为独立格式数据分发，不改写为 GPL-3.0。
 
 ## 相对上游的主要项目增量
 
