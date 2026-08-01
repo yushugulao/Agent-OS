@@ -149,6 +149,100 @@ static RP_UNUSED int rp_text_contains(const char *text, const char *needle)
 	return 0;
 }
 
+struct rp_state_buffer {
+	char path[64];
+	char body[RP_STATE_BUFFER_SIZE];
+	int loaded;
+	int append_active;
+};
+
+static RP_UNUSED int rp_state_buffer_contains(
+	struct rp_state_buffer *state, const char *path, const char *needle)
+{
+	if (!state->loaded || strcmp(state->path, path) != 0) {
+		state->loaded = 0;
+		state->append_active = 0;
+		state->path[0] = 0;
+		state->body[0] = 0;
+		if (strlen(path) >= sizeof(state->path) ||
+		    rp_read_file(path, state->body, sizeof(state->body)) < 0)
+			return 0;
+		int index = 0;
+		while (path[index]) {
+			state->path[index] = path[index];
+			index++;
+		}
+		state->path[index] = 0;
+		state->loaded = 1;
+	}
+	return rp_text_contains(state->body, needle);
+}
+
+static RP_UNUSED int rp_state_append_line(
+	char *body, int capacity, const char *path, const char *line)
+{
+	int used = (int)strlen(body);
+	int add = (int)strlen(line);
+
+	while (add > 0 && line[add - 1] == '\n')
+		add--;
+	if (add == 0) {
+		printf("rp_state: append_empty path=%s\n", path);
+		return 0;
+	}
+	int separator = used > 0 && body[used - 1] != '\n';
+	if (used + separator + add + 2 > capacity) {
+		printf("rp_state: append_full path=%s\n", path);
+		return 0;
+	}
+	if (separator)
+		body[used++] = '\n';
+	for (int index = 0; index < add; index++)
+		body[used + index] = line[index];
+	body[used + add] = '\n';
+	body[used + add + 1] = 0;
+	return 1;
+}
+
+static RP_UNUSED int rp_state_buffer_begin_append(
+	struct rp_state_buffer *state, const char *path)
+{
+	state->loaded = 0;
+	state->append_active = 0;
+	state->path[0] = 0;
+	state->body[0] = 0;
+	if (strlen(path) >= sizeof(state->path))
+		return 0;
+	if (rp_read_file(path, state->body, sizeof(state->body)) < 0)
+		state->body[0] = 0;
+	int index = 0;
+	while (path[index]) {
+		state->path[index] = path[index];
+		index++;
+	}
+	state->path[index] = 0;
+	state->loaded = 1;
+	state->append_active = 1;
+	return 1;
+}
+
+static RP_UNUSED int rp_state_buffer_append(
+	struct rp_state_buffer *state, const char *line)
+{
+	if (!state->append_active)
+		return 0;
+	return rp_state_append_line(state->body, sizeof(state->body),
+				    state->path, line);
+}
+
+static RP_UNUSED int rp_state_buffer_commit(struct rp_state_buffer *state)
+{
+	if (!state->append_active)
+		return 0;
+	state->append_active = 0;
+	return rp_write_file(state->path, state->body);
+}
+
 static RP_UNUSED __attribute__((noinline)) const char *rp_host_seed_text(void)
 {
 #ifdef RP_ENABLE_HOST_ACTION_SEED
@@ -723,31 +817,10 @@ static RP_UNUSED int rp_append_file(const char *path, const char *line)
 {
 	char *buf = rp_state_buf;
 	int n = rp_read_file(path, buf, RP_STATE_BUFFER_SIZE);
-	if (n < 0) {
+	if (n < 0)
 		buf[0] = 0;
-	}
-	int used = (int)strlen(buf);
-	int add = (int)strlen(line);
-	while (add > 0 && line[add - 1] == '\n') {
-		add--;
-	}
-	if (add == 0) {
-		printf("rp_state: append_empty path=%s\n", path);
+	if (!rp_state_append_line(buf, RP_STATE_BUFFER_SIZE, path, line))
 		return 0;
-	}
-	int separator = used > 0 && buf[used - 1] != '\n';
-	if (used + separator + add + 2 > RP_STATE_BUFFER_SIZE) {
-		printf("rp_state: append_full path=%s\n", path);
-		return 0;
-	}
-	if (separator) {
-		buf[used++] = '\n';
-	}
-	for (int i = 0; i < add; i++) {
-		buf[used + i] = line[i];
-	}
-	buf[used + add] = '\n';
-	buf[used + add + 1] = 0;
 	return rp_write_file(path, buf);
 }
 

@@ -49,12 +49,94 @@ def _case(
     return changed
 
 
+def _validate_bounded_acceptance_io() -> None:
+    headers = [
+        ROOT / "baseline_ucore/user/include/research_platform_state.h",
+        ROOT / "user/include/research_platform_state.h",
+    ]
+    header_texts = [path.read_text(encoding="utf-8") for path in headers]
+    if header_texts[0] != header_texts[1]:
+        raise AssertionError("Plain and AgentOS state-buffer helpers differ")
+    header = header_texts[0]
+    for anchor in (
+        "struct rp_state_buffer",
+        "char body[RP_STATE_BUFFER_SIZE];",
+        "rp_state_buffer_contains",
+        "strcmp(state->path, path) != 0",
+        "rp_state_buffer_begin_append",
+        "rp_state_buffer_append",
+        "rp_state_buffer_commit",
+        "return rp_write_file(state->path, state->body);",
+    ):
+        if anchor not in header:
+            raise AssertionError(f"bounded state-buffer anchor is missing: {anchor}")
+
+    for prefix in ("baseline_ucore/", ""):
+        suite = (ROOT / f"{prefix}user/src/rp_test_suite.c").read_text(
+            encoding="utf-8"
+        )
+        compare = (ROOT / f"{prefix}user/src/rp_compare_plain.c").read_text(
+            encoding="utf-8"
+        )
+        if "rp_state_buffer_contains(&suite_state, path, token)" not in suite:
+            raise AssertionError(f"{prefix or 'AgentOS '}suite bypasses state buffer")
+        tool_records = re.findall(
+            r'rp_state_buffer_append\(\s*&suite_state,\s*"tool=test_suite\.',
+            suite,
+        )
+        if len(tool_records) != 10:
+            raise AssertionError(f"{prefix or 'AgentOS '}suite tool batch is incomplete")
+        if suite.count("rp_state_buffer_begin_append(&suite_state, \"rp_tool\")") != 1:
+            raise AssertionError(f"{prefix or 'AgentOS '}suite tool batch is not unique")
+        if "rp_state_buffer_contains(&compare_state, path, token)" not in compare:
+            raise AssertionError(f"{prefix or 'AgentOS '}comparator bypasses state buffer")
+        if compare.count(
+            'rp_state_buffer_begin_append(&compare_state, "rp_agentcmp")'
+        ) != 1 or compare.count("rp_state_buffer_commit(&compare_state)") != 1:
+            raise AssertionError(f"{prefix or 'AgentOS '}comparator batch is incomplete")
+
+        literal_paths = re.findall(
+            r'(?:require_file_token|rp_file_contains)\("([^"]+)"',
+            suite,
+        )
+        path_runs = sum(
+            index == 0 or path != literal_paths[index - 1]
+            for index, path in enumerate(literal_paths)
+        )
+        if len(literal_paths) < 1000 or path_runs * 2 >= len(literal_paths):
+            raise AssertionError(
+                f"{prefix or 'AgentOS '}suite no longer has bounded snapshot locality"
+            )
+
+    manifest = (ROOT / "user/include/rp_program_manifest.h").read_text(
+        encoding="utf-8"
+    )
+    platform = re.search(
+        r"#define RP_PLATFORM_PROGRAMS\(APPLY\)(.*?)(?:\n\n|#define)",
+        manifest,
+        re.S,
+    )
+    if platform is None or not platform.group(1).rstrip().endswith(
+        'APPLY("rp_test_suite")'
+    ):
+        raise AssertionError("rp_test_suite must remain the final platform verifier")
+
+    orchestrator = (ROOT / "user/src/rp_orch.c").read_text(encoding="utf-8")
+    child_start, child_end = _function_span(orchestrator, "run_child")
+    child = orchestrator[child_start:child_end]
+    if "if (!in_orchestrator)\n\t\t\tclose(attest_pipe[0]);" not in child:
+        raise AssertionError("delegated child closes a descriptor it did not inherit")
+    if child.find("read_launch_attestation") > child.find("waitpid"):
+        raise AssertionError("child attestation is not consumed before waitpid")
+
+
 def main() -> int:
     sources = {
         relative: (ROOT / relative).read_text(encoding="utf-8")
         for relative in SOURCE_PATHS
     }
     validate_source_texts(sources)
+    _validate_bounded_acceptance_io()
 
     plain = "baseline_ucore/user/src/rp_seed_orch.c"
     _reject(_case(

@@ -8,11 +8,12 @@ static int catalog_assertions_passed;
 static int runtime_assertions_executed;
 static int runtime_assertions_passed;
 static char suite_manifest[4096];
+static struct rp_state_buffer suite_state;
 
 static int require_file_token(const char *path, const char *token)
 {
 	catalog_assertions_executed++;
-	if (rp_file_contains(path, token)) {
+	if (rp_state_buffer_contains(&suite_state, path, token)) {
 		catalog_assertions_passed++;
 		return 1;
 	}
@@ -83,7 +84,7 @@ static int append_runtime_theme(const char *theme, const char *path,
 	rp_append_text(line, sizeof(line), ";claim_protocol=exact-field-v1");
 	rp_append_text(line, sizeof(line),
 		       ";assertions=2;generation=runtime;status=verified");
-	return rp_append_file("rp_tests", line);
+	return rp_state_buffer_append(&suite_state, line);
 }
 
 int main(void)
@@ -2514,6 +2515,7 @@ int main(void)
 				    source_digest);
 		rp_append_text(suite_manifest, sizeof(suite_manifest), "\n");
 		if (!rp_write_file("rp_tests", suite_manifest) ||
+		    !rp_state_buffer_begin_append(&suite_state, "rp_tests") ||
 		    !append_runtime_theme("core_state_config", "rp_agentos_kernel",
 					  "context_snapshot", "present") ||
 		    !append_runtime_theme("workflow_runtime", "rp_backend_exec",
@@ -2540,20 +2542,26 @@ int main(void)
 				    runtime_assertions_passed);
 		rp_append_text(suite_manifest, sizeof(suite_manifest),
 			       ";assertion_sets=7;status=verified");
-		if (!rp_append_file("rp_tests", suite_manifest))
+		if (!rp_state_buffer_append(&suite_state, suite_manifest) ||
+		    !rp_state_buffer_commit(&suite_state))
 			return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=test_suite;msg=test;status=passed")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.cat;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.data;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.workflow;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_artifacts;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.ui;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.web;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.llm;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_compare;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
+	if (!rp_state_buffer_begin_append(&suite_state, "rp_tool") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.cat;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.data;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.workflow;ok") ||
+	    !rp_state_buffer_append(&suite_state,
+				    "tool=test_suite.check_artifacts;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.ui;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.web;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.llm;ok") ||
+	    !rp_state_buffer_append(&suite_state,
+				    "tool=test_suite.check_compare;ok") ||
+	    !rp_state_buffer_append(&suite_state,
+				    "tool=test_suite.consistency;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.result;ok") ||
+	    !rp_state_buffer_commit(&suite_state)) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
 	printf("rp_test_suite: evidence_generation=runtime catalog_generation=demo_expected catalog_assertions=%d runtime_assertions=%d assertion_sets=7 status=verified\n",
 	       catalog_assertions_passed, runtime_assertions_passed);

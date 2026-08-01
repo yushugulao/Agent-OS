@@ -2,9 +2,11 @@
 #define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
+static struct rp_state_buffer suite_state;
+
 static int require_file_token(const char *path, const char *token)
 {
-	if (rp_file_contains(path, token)) return 1;
+	if (rp_state_buffer_contains(&suite_state, path, token)) return 1;
 	printf("rp_test_suite: missing path=%s token=%s\n", path, token);
 	return 0;
 }
@@ -2380,16 +2382,21 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=test_suite;msg=test;status=passed")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.cat;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.data;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.workflow;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_artifacts;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.ui;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.web;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.llm;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_compare;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
+	if (!rp_state_buffer_begin_append(&suite_state, "rp_tool") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.cat;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.data;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.workflow;ok") ||
+	    !rp_state_buffer_append(&suite_state,
+				    "tool=test_suite.check_artifacts;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.ui;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.web;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.llm;ok") ||
+	    !rp_state_buffer_append(&suite_state,
+				    "tool=test_suite.check_compare;ok") ||
+	    !rp_state_buffer_append(&suite_state,
+				    "tool=test_suite.consistency;ok") ||
+	    !rp_state_buffer_append(&suite_state, "tool=test_suite.result;ok") ||
+	    !rp_state_buffer_commit(&suite_state)) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
 	printf("rp_test_suite: evidence_role=demo_reference catalog_generation=demo_expected demo_expected_tests=2800 status=reference_ready\n");
 	return 0;

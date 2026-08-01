@@ -454,7 +454,9 @@ static int run_child(const struct program_launch_policy *launch,
 		pid = fork();
 	}
 	if (pid == 0) {
-		close(attest_pipe[0]);
+		/* Agent constructors inherit only explicitly delegated descriptors. */
+		if (!in_orchestrator)
+			close(attest_pipe[0]);
 		rp_copy_text(attest_arg, sizeof(attest_arg),
 			     RP_LAUNCH_ATTEST_PREFIX);
 		rp_append_uint_text(attest_arg, sizeof(attest_arg), attest_pipe[1]);

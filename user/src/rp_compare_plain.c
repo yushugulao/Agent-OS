@@ -8,19 +8,31 @@ static int compare_assertions_passed;
 static int compare_runtime_assertions_executed;
 static int compare_runtime_assertions_passed;
 static char compare_line[512];
+static struct rp_state_buffer compare_state;
 
 static int compare_file_contains(const char *path, const char *token)
 {
 	int matched;
 
 	compare_assertions_executed++;
-	matched = rp_file_contains(path, token);
+	matched = rp_state_buffer_contains(&compare_state, path, token);
 	if (matched)
 		compare_assertions_passed++;
 	return matched;
 }
 
 #define rp_file_contains compare_file_contains
+
+static int compare_append_file(const char *path, const char *line)
+{
+	if (compare_state.append_active && strcmp(path, "rp_agentcmp") == 0)
+		return rp_state_buffer_append(&compare_state, line);
+	int appended = rp_append_file(path, line);
+	compare_state.loaded = 0;
+	return appended;
+}
+
+#define rp_append_file compare_append_file
 
 static int require_equal(const char *name, int actual, int expected)
 {
@@ -1982,6 +1994,8 @@ int main(void)
 		return 1;
 	}
 	compare_assertions_passed += 2;
+	if (!rp_state_buffer_begin_append(&compare_state, "rp_agentcmp"))
+		return 1;
 	{
 		const int runtime_case_count =
 			(int)(sizeof(COMPARE_RUNTIME_SPECS) /
@@ -2128,6 +2142,7 @@ int main(void)
 	    rp_host_seed_has("kind=notebook_export")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_export_verified=1")) return 1;
 	}
+	if (!rp_state_buffer_commit(&compare_state)) return 1;
 	if (!rp_append_status("compare=ready")) return 1;
 	if (rp_host_seed_count() > 0) {
 		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
