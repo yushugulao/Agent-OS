@@ -1548,7 +1548,38 @@
       "usersafety_ucore",
       "blocking_semantics_ucore"
     ],
-    "calibration_status": "provisional_requires_full_suite",
+    "calibration_status": "calibrated_full_suite",
+    "baseline_seconds": 276.4296134,
+    "max_seconds": 294.875,
+    "calibration_samples": [
+      {
+        "sample_id": "agent18-89a146e44b13-01",
+        "total_seconds": 294.8740465,
+        "timing_file": "evidence/calibrations/89a146e44b13/01.timing",
+        "timing_file_sha256": "7f7efcf248b98cc29b97d1d48021edc0b8ff010ab0cb255094adfcfef3b555cc",
+        "attestation_digest_sha256": "fba3fa76ff5ab23f1e549b65f7585e1bbbd0b10502832c45e086a5228641b5cd"
+      },
+      {
+        "sample_id": "agent18-89a146e44b13-02",
+        "total_seconds": 276.4296134,
+        "timing_file": "evidence/calibrations/89a146e44b13/02.timing",
+        "timing_file_sha256": "2bf82bf8e85007d796b2926c7b712557d51e229b42dbfaf417aad4172c8eeb45",
+        "attestation_digest_sha256": "871f2c928029c085852d555e1adadc00925032ed2a89cd53b694a4dae091228c"
+      },
+      {
+        "sample_id": "agent18-89a146e44b13-03",
+        "total_seconds": 263.3921136,
+        "timing_file": "evidence/calibrations/89a146e44b13/03.timing",
+        "timing_file_sha256": "a54e3a81474101f775efa47493ad44810ff992cd54cceaf0d2b92a775df00894",
+        "attestation_digest_sha256": "907450b4dd8e253c607fb75b50fcad1ce89395d1de7c2fe60077782a18c532ea"
+      }
+    ],
+    "source_fingerprint_sha256": "e8afdd2c7c464573bd54d356e5dab68e4b8e7bc5318915d34e3164e9aacb760d",
+    "calibration_source_commit": "89a146e44b13681e4c1c0420ca206e15db48b468",
+    "calibration_source_tree": "da0b8db9881ef1f0e8b02fffcb5765769a3c9d3b",
+    "calibration_manifest_file": "evidence/calibrations/89a146e44b13/manifest.json",
+    "calibration_manifest_sha256": "7e604eda761f77acd10eec9e74bfe384635d5174c6871e2e44ebca0b65ceb215",
+    "calibration_profile_id": "local-e3-msys2-xpack-qemu11-v1",
     "runner_tag": "agentos-qemu-calibrated",
     "runner_profile": {
       "cpu": "ordinary GitLab Runner; not a local timing authority",
