@@ -256,25 +256,54 @@ static int initial_state_is_fresh(void)
 	       initial_agent.context_path_count == 0;
 }
 
-static int final_state_is_quiescent(void)
+static unsigned int final_state_mismatch(unsigned int expected_rounds,
+					 unsigned int mode)
 {
-	return final_lifecycle.key.id == initial_lifecycle.key.id &&
-	       final_lifecycle.key.generation ==
-		       initial_lifecycle.key.generation &&
-	       final_lifecycle.resource_account_valid == 1 &&
-	       final_lifecycle.resource_account_slot ==
-		       initial_lifecycle.resource_account_slot &&
-	       final_lifecycle.resource_account_generation ==
-		       initial_lifecycle.resource_account_generation &&
-	       final_agent.filesystem_domain == initial_agent.filesystem_domain &&
-	       final_io.owner == initial_io.owner && final_io.leased == 0 &&
-	       final_io.debt == 0 && final_io.waiters == 0 &&
-	       final_io.debt_waiters == 0 &&
-	       final_io.admission_waiters == 0 &&
-	       final_lifecycle.context_lane_depth == 0 &&
-	       final_lifecycle.context_lane_waiters == 0 &&
-	       final_lifecycle.metadata_txn_owned == 0 &&
-	       final_lifecycle.metadata_txn_waiters == 0;
+	uint64 expected_observations =
+		(uint64)expected_rounds *
+		RP_RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND;
+	unsigned int mismatch = 0;
+
+	if (final_lifecycle.key.id != initial_lifecycle.key.id ||
+	    final_lifecycle.key.generation !=
+		    initial_lifecycle.key.generation ||
+	    final_agent.filesystem_domain != initial_agent.filesystem_domain)
+		mismatch |= 1U << 0;
+	if (final_lifecycle.resource_account_valid != 1 ||
+	    final_lifecycle.resource_account_slot !=
+		    initial_lifecycle.resource_account_slot ||
+	    final_lifecycle.resource_account_generation !=
+		    initial_lifecycle.resource_account_generation)
+		mismatch |= 1U << 1;
+	if (final_io.owner != initial_io.owner || final_io.leased != 0 ||
+	    final_io.debt != 0 || final_io.waiters != 0 ||
+	    final_io.debt_waiters != 0 || final_io.admission_waiters != 0)
+		mismatch |= 1U << 2;
+	if (final_lifecycle.context_lane_depth != 0 ||
+	    final_lifecycle.context_lane_waiters != 0 ||
+	    final_lifecycle.metadata_txn_owned != 0 ||
+	    final_lifecycle.metadata_txn_waiters != 0)
+		mismatch |= 1U << 3;
+	if (final_agent.context_path_capacity !=
+		    initial_agent.context_path_capacity ||
+	    initial_agent.context_path_count >
+		    initial_agent.context_path_capacity ||
+	    expected_observations >
+		    initial_agent.context_path_capacity -
+			    initial_agent.context_path_count ||
+	    final_agent.agent_call_count !=
+		    initial_agent.agent_call_count + expected_observations ||
+	    final_agent.context_path_count !=
+		    initial_agent.context_path_count + expected_observations)
+		mismatch |= 1U << 4;
+	if (mode == RP_RESOURCE_STABILITY_MODE_TERMINAL &&
+	    (final_io.cache_resident != initial_io.cache_resident ||
+	     final_io.completion_sequence != initial_io.completion_sequence))
+		mismatch |= 1U << 5;
+	if (mode == RP_RESOURCE_STABILITY_MODE_LOAD &&
+	    final_io.completion_sequence <= initial_io.completion_sequence)
+		mismatch |= 1U << 6;
+	return mismatch;
 }
 
 int main(int argc, char **argv)
@@ -324,16 +353,19 @@ int main(int argc, char **argv)
 		}
 		report.metadata_rounds++;
 	}
-	if (!snapshot_state(&final_lifecycle, &final_io, &final_agent) ||
-	    !final_state_is_quiescent() ||
-	    (mode == RP_RESOURCE_STABILITY_MODE_TERMINAL &&
-	     (final_io.cache_resident != initial_io.cache_resident ||
-	      final_io.completion_sequence != initial_io.completion_sequence)) ||
-	    final_agent.agent_call_count != initial_agent.agent_call_count ||
-	    final_agent.context_path_count != initial_agent.context_path_count ||
-	    (mode == RP_RESOURCE_STABILITY_MODE_LOAD &&
-	     final_io.completion_sequence <= initial_io.completion_sequence)) {
-		printf("rp_resource_probe: final_state_not_quiescent\n");
+	if (!snapshot_state(&final_lifecycle, &final_io, &final_agent)) {
+		printf("rp_resource_probe: final_snapshot_failed\n");
+		return 1;
+	}
+	unsigned int mismatch = final_state_mismatch(expected_rounds, mode);
+	if (mismatch != 0) {
+		printf("rp_resource_probe: final_state_mismatch mask=%u calls=%llu/%llu context=%llu/%llu completion=%llu/%llu\n",
+		       mismatch, initial_agent.agent_call_count,
+		       final_agent.agent_call_count,
+		       initial_agent.context_path_count,
+		       final_agent.context_path_count,
+		       initial_io.completion_sequence,
+		       final_io.completion_sequence);
 		return 1;
 	}
 	report.magic = RP_RESOURCE_STABILITY_MAGIC;

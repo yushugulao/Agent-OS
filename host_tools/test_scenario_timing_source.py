@@ -377,6 +377,38 @@ def main() -> int:
     _reject(changed)
     changed = dict(sources)
     changed[header] = changed[header].replace(
+        "RP_RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND 1U",
+        "RP_RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND 0U",
+        1,
+    )
+    _reject(changed)
+    _reject(_case(
+        sources, resource_probe, "final_state_mismatch",
+        "initial_agent.agent_call_count + expected_observations",
+        "initial_agent.agent_call_count",
+    ))
+    _reject(_case(
+        sources, resource_probe, "main",
+        "!initial_state_is_fresh()",
+        "0",
+    ))
+    _reject(_case(
+        sources, resource_probe, "main",
+        "final_state_mismatch(expected_rounds, mode)",
+        "0",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_report_valid",
+        "call_delta == expected_observations",
+        "call_delta == 0",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_report_valid",
+        "context_delta == expected_observations",
+        "context_delta == 0",
+    ))
+    changed = dict(sources)
+    changed[header] = changed[header].replace(
         "RP_RESOURCE_STABILITY_REPORT_SIZE 224U",
         "RP_RESOURCE_STABILITY_REPORT_SIZE 223U",
         1,

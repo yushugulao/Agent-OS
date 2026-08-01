@@ -224,7 +224,7 @@ def _resource_report_guard(values: dict[str, object]) -> int:
 def _resource_stability(challenge: str) -> str:
     suffix = str(int(challenge[3:]))
     lines = [
-        "schema=agentos_resource_stability_v3;"
+        "schema=agentos_resource_stability_v4;"
         "measurement_scope=post_workflow_acceptance;"
         "timed_makespan_included=0;"
         "claim_scope=configured_global_counter_reclamation;"
@@ -239,6 +239,8 @@ def _resource_stability(challenge: str) -> str:
         f"memory_pages_per_round={scenario.RESOURCE_STABILITY_MEMORY_PAGES};"
         f"file_objects_per_round={scenario.RESOURCE_STABILITY_FILE_OBJECTS};"
         f"metadata_ops_per_round={scenario.RESOURCE_STABILITY_METADATA_OPS};"
+        "context_records_per_round="
+        f"{scenario.RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND};"
         "sequence_bound_status=verified;"
         "status=verified"
     ]
@@ -312,8 +314,12 @@ def _resource_stability(challenge: str) -> str:
             "final_context_lane_waiters": 0,
             "final_metadata_owned": 0,
             "final_metadata_waiters": 0,
-            "final_agent_calls": 0,
-            "final_context_records": 0,
+            "final_agent_calls": (
+                rounds * scenario.RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
+            ),
+            "final_context_records": (
+                rounds * scenario.RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
+            ),
             "initial_completion_sequence": 1000 + index * 100,
             "final_completion_sequence": 1000 + index * 100 + rounds,
             "process_rounds": rounds,
@@ -895,6 +901,36 @@ class EvaluationScenarioTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "failed")
         self.assertIn("not challenge-bound, fresh, and quiescent", report["errors"][0])
+
+    def test_resource_stability_rejects_observation_delta_drift(self) -> None:
+        expected = (
+            scenario.RESOURCE_STABILITY_CHILD_ROUNDS
+            * scenario.RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
+        )
+        cases = (
+            (83, "final_agent_calls", expected - 1),
+            (84, "final_agent_calls", expected + 1),
+            (85, "final_context_records", expected - 1),
+            (86, "final_context_records", expected + 1),
+        )
+        for boot_number, field, observed in cases:
+            with self.subTest(field=field, observed=observed):
+                boot = self.fixture.boot(boot_number, "AB")
+                path = (
+                    boot
+                    / "agentos"
+                    / "state-extracted"
+                    / scenario.RESOURCE_STABILITY_FILE
+                )
+                _rewrite_resource_workflow(path, 0, **{field: observed})
+
+                report = self.collect([boot])
+
+                self.assertEqual(report["status"], "failed")
+                self.assertIn(
+                    "not challenge-bound, fresh, and quiescent",
+                    report["errors"][0],
+                )
 
     def test_resource_stability_rejects_global_growth_above_bound(self) -> None:
         boot = self.fixture.boot(85, "AB")

@@ -1096,6 +1096,9 @@ static int stability_report_valid(
 {
 	uint expected_rounds = mode == RP_RESOURCE_STABILITY_MODE_LOAD ?
 		RP_RESOURCE_STABILITY_CHILD_ROUNDS : 0;
+	uint64 expected_observations =
+		(uint64)expected_rounds *
+		RP_RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND;
 	uint64 call_delta;
 	uint64 context_delta;
 
@@ -1138,7 +1141,8 @@ static int stability_report_valid(
 	call_delta = report->final_agent_calls - report->initial_agent_calls;
 	context_delta = report->final_context_records -
 			report->initial_context_records;
-	return call_delta == 0 && context_delta == 0 &&
+	return call_delta == expected_observations &&
+	       context_delta == expected_observations &&
 	       report->process_rounds == expected_rounds &&
 	       report->file_rounds == expected_rounds &&
 	       report->memory_rounds == expected_rounds &&
@@ -1699,7 +1703,7 @@ static int run_resource_stability_acceptance(void)
 	measured_mask = orch_stability_global_before[0].measured_mask;
 	global_verified = measured_mask == AGENT_RESOURCE_KIND_MASK_ALL;
 	rp_copy_text(body, sizeof(orch_stability_body),
-		     "schema=agentos_resource_stability_v3;measurement_scope=post_workflow_acceptance;timed_makespan_included=0;claim_scope=configured_global_counter_reclamation;configured_kind_coverage=measured_mask_only;account_coverage=self_identity_only;rate_budget_coverage=not_measured;global_leak_freedom=not_claimed;challenge_suffix=");
+		     "schema=agentos_resource_stability_v4;measurement_scope=post_workflow_acceptance;timed_makespan_included=0;claim_scope=configured_global_counter_reclamation;configured_kind_coverage=measured_mask_only;account_coverage=self_identity_only;rate_budget_coverage=not_measured;global_leak_freedom=not_claimed;challenge_suffix=");
 	rp_append_text(body, sizeof(orch_stability_body),
 		       orch_stability_workflow.suffix);
 	rp_append_text(body, sizeof(orch_stability_body), ";load_workflows=");
@@ -1725,6 +1729,11 @@ static int run_resource_stability_acceptance(void)
 		       ";metadata_ops_per_round=");
 	rp_append_uint_text(body, sizeof(orch_stability_body),
 			    RP_RESOURCE_STABILITY_METADATA_OPS);
+	rp_append_text(body, sizeof(orch_stability_body),
+		       ";context_records_per_round=");
+	rp_append_uint_text(
+		body, sizeof(orch_stability_body),
+		RP_RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND);
 	rp_append_text(body, sizeof(orch_stability_body),
 		       ";sequence_bound_status=verified");
 	rp_append_text(body, sizeof(orch_stability_body), ";status=");

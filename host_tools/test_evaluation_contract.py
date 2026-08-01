@@ -48,6 +48,7 @@ from evaluation_contract import (
 from render_evaluation_dashboard import DashboardError, validate_summary
 from evaluation_scenario import (
     RESOURCE_STABILITY_CHILD_ROUNDS,
+    RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND,
     RESOURCE_STABILITY_FILE_OBJECTS,
     RESOURCE_STABILITY_LOAD_WORKFLOWS,
     RESOURCE_STABILITY_MEASUREMENT_SCOPE,
@@ -214,8 +215,12 @@ def _scenario_resource_stability(
                 "final_context_lane_waiters": 0,
                 "final_metadata_owned": 0,
                 "final_metadata_waiters": 0,
-                "final_agent_calls": 0,
-                "final_context_records": 0,
+                "final_agent_calls": (
+                    rounds * RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
+                ),
+                "final_context_records": (
+                    rounds * RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
+                ),
                 "initial_completion_sequence": 1000 + workflow_index * 100,
                 "final_completion_sequence": 1000 + workflow_index * 100 + rounds,
                 "process_rounds": rounds,
@@ -263,7 +268,7 @@ def _scenario_resource_stability(
         "physical_page": 32256,
     }
     return {
-        "schema": "agentos_resource_stability_v3",
+        "schema": "agentos_resource_stability_v4",
         "measurement_scope": RESOURCE_STABILITY_MEASUREMENT_SCOPE,
         "timed_makespan_included": False,
         "claim_scope": "configured_global_counter_reclamation",
@@ -278,6 +283,9 @@ def _scenario_resource_stability(
         "memory_pages_per_round": RESOURCE_STABILITY_MEMORY_PAGES,
         "file_objects_per_round": RESOURCE_STABILITY_FILE_OBJECTS,
         "metadata_ops_per_round": RESOURCE_STABILITY_METADATA_OPS,
+        "context_records_per_round": (
+            RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
+        ),
         "sequence_bound_status": "verified",
         "status": "verified",
         "global_policy": {

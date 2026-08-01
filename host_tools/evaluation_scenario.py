@@ -151,6 +151,7 @@ RESOURCE_STABILITY_CHILD_ROUNDS = 12
 RESOURCE_STABILITY_MEMORY_PAGES = 128
 RESOURCE_STABILITY_FILE_OBJECTS = 12
 RESOURCE_STABILITY_METADATA_OPS = 3
+RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND = 1
 RESOURCE_STABILITY_MEASUREMENT_SCOPE = "post_workflow_acceptance"
 RESOURCE_STABILITY_LINE_MAX = 8191
 RESOURCE_STABILITY_REPORT_MAGIC = 0x52505354
@@ -1480,6 +1481,7 @@ def _validate_resource_stability_semantics(
         "memory_pages_per_round",
         "file_objects_per_round",
         "metadata_ops_per_round",
+        "context_records_per_round",
         "sequence_bound_status",
         "status",
         "global_policy",
@@ -1491,7 +1493,7 @@ def _validate_resource_stability_semantics(
         )
     suffix = str(int(challenge[3:]))
     if (
-        acceptance["schema"] != "agentos_resource_stability_v3"
+        acceptance["schema"] != "agentos_resource_stability_v4"
         or acceptance["measurement_scope"] != RESOURCE_STABILITY_MEASUREMENT_SCOPE
         or acceptance["timed_makespan_included"] is not False
         or acceptance["claim_scope"] != "configured_global_counter_reclamation"
@@ -1511,6 +1513,8 @@ def _validate_resource_stability_semantics(
         != RESOURCE_STABILITY_FILE_OBJECTS
         or acceptance["metadata_ops_per_round"]
         != RESOURCE_STABILITY_METADATA_OPS
+        or acceptance["context_records_per_round"]
+        != RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
         or acceptance["sequence_bound_status"] != "verified"
         or not isinstance(acceptance["workflows"], list)
         or len(acceptance["workflows"]) != RESOURCE_STABILITY_WORKFLOWS
@@ -1655,9 +1659,11 @@ def _validate_resource_stability_semantics(
             or record["resource_account_reserved"] != 0
             or record["resource_account_generation"] <= 0
             or any(record[field] != 0 for field in zero_fields)
-            or record["final_agent_calls"] != record["initial_agent_calls"]
+            or record["final_agent_calls"] - record["initial_agent_calls"]
+            != expected_rounds * RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
             or record["final_context_records"]
-            != record["initial_context_records"]
+            - record["initial_context_records"]
+            != expected_rounds * RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND
             or record["process_rounds"] != expected_rounds
             or record["file_rounds"] != expected_rounds
             or record["memory_rounds"] != expected_rounds
@@ -1861,6 +1867,7 @@ def _parse_resource_stability(
         "memory_pages_per_round",
         "file_objects_per_round",
         "metadata_ops_per_round",
+        "context_records_per_round",
         "sequence_bound_status",
         "status",
     )
@@ -1876,6 +1883,7 @@ def _parse_resource_stability(
         "memory_pages_per_round",
         "file_objects_per_round",
         "metadata_ops_per_round",
+        "context_records_per_round",
     )
     numeric_header = {
         key: _canonical_uint(header[key], f"agentos resource stability {key}")
@@ -1992,6 +2000,9 @@ def _parse_resource_stability(
         "memory_pages_per_round": numeric_header["memory_pages_per_round"],
         "file_objects_per_round": numeric_header["file_objects_per_round"],
         "metadata_ops_per_round": numeric_header["metadata_ops_per_round"],
+        "context_records_per_round": numeric_header[
+            "context_records_per_round"
+        ],
         "sequence_bound_status": header["sequence_bound_status"],
         "status": header["status"],
         "global_policy": {

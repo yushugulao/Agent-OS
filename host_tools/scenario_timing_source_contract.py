@@ -312,6 +312,7 @@ def _validate_resource_stability(
         "RP_RESOURCE_STABILITY_MEMORY_PAGES 128U",
         "RP_RESOURCE_STABILITY_FILE_OBJECTS 12U",
         "RP_RESOURCE_STABILITY_METADATA_OPS 3U",
+        "RP_RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND 1U",
         "RP_RESOURCE_STABILITY_FS_BLOCK_GROWTH_BOUND 32U",
         "RP_RESOURCE_STABILITY_BUFFER_GROWTH_BOUND 16U",
         "RP_RESOURCE_STABILITY_NONCE_PREFIX \"--rp-stability-nonce=\"",
@@ -405,6 +406,23 @@ def _validate_resource_stability(
         "resource stability acceptance receipt",
     )
 
+    report_valid = _function_tokens(agentos_tokens, "stability_report_valid")
+    _ordered(
+        report_valid,
+        (
+            (
+                "expected_observations", "=", "(", "uint64", ")",
+                "expected_rounds", "*",
+                "RP_RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND", ";",
+            ),
+            (
+                "call_delta", "==", "expected_observations", "&&",
+                "context_delta", "==", "expected_observations",
+            ),
+        ),
+        "bounded resource-probe observation footprint",
+    )
+
     probe_tokens = _tokens(probe_text)
     probe_snapshot = _function_tokens(probe_tokens, "snapshot_state")
     _ordered(
@@ -419,18 +437,36 @@ def _validate_resource_stability(
         ),
         "self resource-account identity snapshot",
     )
-    final_state = _function_tokens(probe_tokens, "final_state_is_quiescent")
+    final_state = _function_tokens(probe_tokens, "final_state_mismatch")
     for sequence in (
         (
-            "final_lifecycle", ".", "resource_account_slot", "==",
+            "final_lifecycle", ".", "resource_account_slot", "!=",
             "initial_lifecycle", ".", "resource_account_slot",
         ),
         (
-            "final_lifecycle", ".", "resource_account_generation", "==",
+            "final_lifecycle", ".", "resource_account_generation", "!=",
             "initial_lifecycle", ".", "resource_account_generation",
         ),
     ):
         _require_once(final_state, sequence, "stable self resource-account identity")
+    for sequence in (
+        (
+            "expected_observations", "=", "(", "uint64", ")",
+            "expected_rounds", "*",
+            "RP_RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND", ";",
+        ),
+        (
+            "final_agent", ".", "agent_call_count", "!=",
+            "initial_agent", ".", "agent_call_count", "+",
+            "expected_observations",
+        ),
+        (
+            "final_agent", ".", "context_path_count", "!=",
+            "initial_agent", ".", "context_path_count", "+",
+            "expected_observations",
+        ),
+    ):
+        _require_once(final_state, sequence, "bounded observation growth")
     child = _function_tokens(probe_tokens, "transient_resource_child")
     _ordered(
         child,
@@ -552,6 +588,7 @@ def _validate_resource_stability(
                 f"resource {side} {member} value serialization",
             )
     for boundary in (
+        "schema=agentos_resource_stability_v4",
         "claim_scope=configured_global_counter_reclamation",
         "configured_kind_coverage=measured_mask_only",
         "account_coverage=self_identity_only",
@@ -598,9 +635,23 @@ def _validate_resource_stability(
         (
             ("parse_u64_argument", "(", "argv", "[", "4", "]", ",", "RP_RESOURCE_STABILITY_NONCE_PREFIX", ",", "&", "challenge_nonce", ")"),
             ("snapshot_state", "(", "&", "initial_lifecycle", ",", "&", "initial_io", ",", "&", "initial_agent", ")"),
+            ("initial_state_is_fresh", "(", ")"),
             ("run_child_round", "(", "workflow_index", ",", "round", ",", "challenge_nonce", ")"),
             ("run_metadata_round", "(", "workflow_index", ",", "round", ",", "challenge_nonce", ")"),
             ("snapshot_state", "(", "&", "final_lifecycle", ",", "&", "final_io", ",", "&", "final_agent", ")"),
+            (
+                "mismatch", "=", "final_state_mismatch", "(",
+                "expected_rounds", ",", "mode", ")", ";",
+            ),
+            (
+                "if", "(", "mismatch", "!=", "0", ")", "{",
+                "printf", "(",
+                '"rp_resource_probe: final_state_mismatch mask=%u calls=%llu/%llu context=%llu/%llu completion=%llu/%llu\\n"',
+            ),
+            (
+                "final_io", ".", "completion_sequence", ")", ";",
+                "return", "1", ";", "}",
+            ),
             ("report", ".", "challenge_nonce", "=", "challenge_nonce", ";"),
             ("report", ".", "resource_account_slot", "=", "initial_lifecycle", ".", "resource_account_slot", ";"),
             ("report", ".", "resource_account_generation", "=", "initial_lifecycle", ".", "resource_account_generation", ";"),
