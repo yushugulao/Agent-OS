@@ -19,6 +19,7 @@ from typing import Any
 
 from evaluation_campaign import (
     CampaignError,
+    _expected_samples_per_boot,
     export_run_plan,
     validate_campaign,
     validate_scenario_campaign,
@@ -819,6 +820,17 @@ def _verify_micro_campaign(
     suite_sha256 = _sha256(suite_path)
     if campaign["protocol"]["suite_sha256"] != suite_sha256:
         raise BundleError("micro campaign is not bound to the packaged suite")
+    try:
+        expected_samples_per_boot = _expected_samples_per_boot(suite_path)
+    except CampaignError as error:
+        raise BundleError(f"packaged micro suite is invalid: {error}") from error
+    if (
+        campaign["protocol"]["expected_samples_per_boot"]
+        != expected_samples_per_boot
+    ):
+        raise BundleError(
+            "micro campaign sample count differs from the packaged suite"
+        )
 
     specs = (
         ("guest_log", "guest_log_sha256", "guest.log", "guest", False),

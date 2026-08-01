@@ -23,6 +23,7 @@ import scenario_timing_source_contract as scenario_timing_source
 
 
 COMMIT = "a" * 40
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _measurement_receipt(root: Path) -> dict[str, object]:
@@ -214,7 +215,7 @@ def _create(
     manifest = root / artifact_root / "campaign.json"
     suite = root / "ci" / "evaluation-suite.json"
     suite.parent.mkdir(parents=True, exist_ok=True)
-    suite.write_text('{"schema_version":1}\n', encoding="utf-8")
+    suite.write_bytes((PROJECT_ROOT / "ci" / "evaluation-suite.json").read_bytes())
 
     def fake_probe(name: str, _args: list[str], _repo: Path) -> dict[str, str]:
         path = root / "tools" / Path(name).name
@@ -263,13 +264,14 @@ def _create(
 
 def _guest_log(challenge: str) -> str:
     lines = [f"agenteval_ucore: challenge={challenge}"]
-    experiments = {
-        "file_query": ("scan", "index"),
-        "tool_batch": ("scalar", "batch"),
-        "context_access": ("syscall", "direct"),
-    }
-    for experiment, variants in experiments.items():
-        for load in (24, 64, 96):
+    experiments = (
+        ("file_query_path_index", ("path_walk", "index"), (8, 24, 48, 96)),
+        ("file_query_table_ablation", ("scan", "index"), (24, 64, 96)),
+        ("tool_batch", ("scalar", "batch"), (24, 64, 96)),
+        ("context_access", ("syscall", "direct"), (24, 64, 96)),
+    )
+    for experiment, variants, loads in experiments:
+        for load in loads:
             for pair in range(1, 8):
                 order = (
                     "AB"
@@ -278,10 +280,12 @@ def _guest_log(challenge: str) -> str:
                 )
                 ordered = variants if order == "AB" else tuple(reversed(variants))
                 for variant in ordered:
-                    cache = "forced-scan" if variant == "scan" else "ready-index"
-                    if experiment != "file_query":
-                        cache = "warm"
-                    work = load * load if experiment == "file_query" else load
+                    cache = {
+                        "path_walk": "warm-paths",
+                        "scan": "forced-scan",
+                        "index": "ready-index",
+                    }.get(variant, "warm")
+                    work = load * load if experiment.startswith("file_query") else load
                     lines.append(
                         "agenteval_ucore: sample schema=2 "
                         f"experiment={experiment} load={load} pair={pair} "
@@ -982,6 +986,7 @@ class CampaignTests(unittest.TestCase):
                 value["protocol"]["micro_timeout_seconds"],
                 campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
             )
+            self.assertEqual(value["protocol"]["expected_samples_per_boot"], 182)
             self.assertEqual(len(challenges), len(set(challenges)))
             self.assertNotIn("0" * 16, challenges)
             for index, boot in enumerate(value["boots"], 1):
@@ -1048,6 +1053,37 @@ class CampaignTests(unittest.TestCase):
             ] = "900.0s"
             with self.assertRaisesRegex(campaign.CampaignError, "protocol"):
                 campaign.validate_campaign(tampered_protocol)
+
+    def test_sample_identifier_grammar_accepts_registered_compound_names(self) -> None:
+        self.assertEqual(
+            f"^{campaign.SAMPLE_IDENTIFIER_PATTERN}$",
+            contract.TOKEN.pattern,
+        )
+        for identifier in ("path_walk", "variant-2", "a" + "0" * 63):
+            with self.subTest(identifier=identifier):
+                self.assertIsNotNone(contract.TOKEN.fullmatch(identifier))
+        for identifier in ("Path_walk", "a" * 65):
+            with self.subTest(identifier=identifier):
+                self.assertIsNone(contract.TOKEN.fullmatch(identifier))
+
+        challenge = "0000000000000001"
+        with tempfile.TemporaryDirectory() as temporary:
+            guest = Path(temporary) / "guest.log"
+            guest.write_text(_guest_log(challenge), encoding="utf-8")
+            count, orders = campaign._read_sample_orders(guest, challenge, 182)
+            self.assertEqual(count, 182)
+            self.assertEqual(orders, ["AB", "BA"])
+
+            guest.write_text(
+                _guest_log(challenge).replace(
+                    "variant=path_walk", "variant=Path_walk", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "malformed evaluation sample marker"
+            ):
+                campaign._read_sample_orders(guest, challenge, 182)
 
     def test_msys_micro_temporary_namespace_is_bound_and_tamper_evident(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1810,6 +1846,17 @@ class CampaignTests(unittest.TestCase):
                 campaign, "repository_identity", return_value=(COMMIT, True)
             ):
                 campaign.check_campaign(root, manifest, require_collected=True)
+                original_manifest = manifest.read_bytes()
+                tampered_count = json.loads(original_manifest)
+                tampered_count["protocol"]["expected_samples_per_boot"] = 181
+                for boot in tampered_count["boots"]:
+                    boot["sample_count"] = 181
+                manifest.write_text(json.dumps(tampered_count), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "sample count differs"
+                ):
+                    campaign.check_campaign(root, manifest, require_collected=True)
+                manifest.write_bytes(original_manifest)
                 suite = root / "ci" / "evaluation-suite.json"
                 original_suite = suite.read_text(encoding="utf-8")
                 suite.write_text('{"schema_version":2}\n', encoding="utf-8")
@@ -1941,7 +1988,7 @@ class CampaignTests(unittest.TestCase):
                         "kernel_sha256": "4" * 64,
                         "observed_sample_orders": ["AB", "BA"],
                         "runner_log_sha256": "5" * 64,
-                        "sample_count": 126,
+                        "sample_count": value["protocol"]["expected_samples_per_boot"],
                         "status": "passed",
                     }
                 )

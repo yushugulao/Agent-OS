@@ -31,6 +31,7 @@ from evaluation_campaign import (
     SCHEMA_VERSION as CAMPAIGN_SCHEMA_VERSION,
     SCENARIO_SCHEMA_VERSION,
     _canonical_sha256,
+    _expected_samples_per_boot,
     _micro_boot_environment,
     _scenario_boot_environment,
     export_run_plan,
@@ -407,6 +408,7 @@ def make_run(
         "python": tool("python3", "4"),
         "qemu": tool("qemu-system-riscv64", "5"),
     }
+    expected_samples = _expected_samples_per_boot(SUITE_PATH)
     boots = []
     prefix = artifact_root
     for index in range(7):
@@ -453,7 +455,7 @@ def make_run(
             "observed_sample_orders": ["AB", "BA"],
             "runner_log": f"{raw_ref}/runner.log",
             "runner_log_sha256": digest(boot_dir / "runner.log"),
-            "sample_count": 126,
+            "sample_count": expected_samples,
             "status": "passed",
         })
     platform["schema_version"] = platform_probe.SCHEMA_VERSION
@@ -480,6 +482,7 @@ def make_run(
         "protocol": {
             "fresh_filesystem_per_boot": True,
             "independent_unit": "fresh-qemu-boot",
+            "expected_samples_per_boot": expected_samples,
             "minimum_boots": 7,
             "micro_timeout_seconds": FORMAL_MICRO_TIMEOUT_SECONDS,
             "requested_boots": 7,
@@ -1215,6 +1218,22 @@ def main() -> int:
         )
         original_plan = json.loads(
             (development_run / "run-plan.json").read_text(encoding="utf-8")
+        )
+        forged_sample_count = json.loads(json.dumps(original_campaign))
+        forged_sample_count["protocol"]["expected_samples_per_boot"] -= 1
+        for boot in forged_sample_count["boots"]:
+            boot["sample_count"] -= 1
+        write_strict(
+            development_run / "campaign.json",
+            forged_sample_count,
+        )
+        expect_rejected(
+            lambda: bundle._verify_micro_campaign(development_run, SUITE_PATH),
+            "sample count differs from the packaged suite",
+        )
+        write_strict(
+            development_run / "campaign.json",
+            original_campaign,
         )
         swapped_suite_value = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
         swapped_suite_value["experiments"][0]["claim_gate"][

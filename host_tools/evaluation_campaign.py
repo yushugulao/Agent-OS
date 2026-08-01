@@ -149,16 +149,20 @@ except ImportError:
 
 KIND = "agentos-evaluation-campaign"
 SCENARIO_KIND = "agentos-evaluation-scenario-campaign"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SCENARIO_SCHEMA_VERSION = 5
 FORMAL_MICRO_TIMEOUT_SECONDS = 900
+FORMAL_INNER_PAIR_COUNT = 7
 MINIMUM_BOOTS = FORMAL_BOOT_COUNT
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 BOOT_ID_RE = re.compile(r"^boot-[0-9]{2,4}$")
+SAMPLE_IDENTIFIER_PATTERN = r"[a-z][a-z0-9_-]{0,63}"
 SAMPLE_RE = re.compile(
-    r"^agenteval_ucore: sample schema=2 experiment=[a-z_]+ load=[0-9]+ "
-    r"pair=([1-7]) variant=[a-z]+ order=(AB|BA) .* status=measured$"
+    rf"^agenteval_ucore: sample schema=2 "
+    rf"experiment={SAMPLE_IDENTIFIER_PATTERN} load=[0-9]+ "
+    rf"pair=([1-7]) variant={SAMPLE_IDENTIFIER_PATTERN} "
+    rf"order=(AB|BA) .* status=measured$"
 )
 CHALLENGE_RE = re.compile(r"^[0-9a-f]{16}$")
 SCENARIO_CHALLENGE_RE = re.compile(r"^ch-[0-9]{12}$")
@@ -1092,6 +1096,7 @@ def create_campaign(
     measurement_receipt = _build_measurement_receipt(repo, commit)
     suite_path = repo / "ci" / "evaluation-suite.json"
     _require_regular_file(suite_path, "evaluation suite")
+    expected_samples_per_boot = _expected_samples_per_boot(suite_path)
 
     compiler = f"{toolprefix}gcc"
     environment = {
@@ -1169,6 +1174,7 @@ def create_campaign(
         "protocol": {
             "fresh_filesystem_per_boot": True,
             "independent_unit": "fresh-qemu-boot",
+            "expected_samples_per_boot": expected_samples_per_boot,
             "minimum_boots": MINIMUM_BOOTS,
             "micro_timeout_seconds": timeout_seconds,
             "requested_boots": requested_boots,
@@ -1193,7 +1199,29 @@ def create_campaign(
     return campaign
 
 
-def _read_sample_orders(path: Path, expected_challenge: str) -> tuple[int, list[str]]:
+def _expected_samples_per_boot(suite_path: Path) -> int:
+    try:
+        from evaluation_contract import EvaluationError, load_suite
+    except ImportError:  # pragma: no cover
+        from .evaluation_contract import EvaluationError, load_suite
+
+    try:
+        suite = load_suite(suite_path)
+    except (EvaluationError, OSError, ValueError) as error:
+        raise CampaignError(f"evaluation suite sample plan is invalid: {error}") from error
+    inner_pairs = suite["pairing"]["minimum_inner_pairs"]
+    schedule = suite["execution_schedule"]
+    if inner_pairs != FORMAL_INNER_PAIR_COUNT:
+        raise CampaignError("evaluation suite inner-pair count is invalid")
+    count = len(schedule) * inner_pairs * 2
+    if type(count) is not int or count <= 0 or count > 100000:
+        raise CampaignError("evaluation suite sample count is invalid")
+    return count
+
+
+def _read_sample_orders(
+    path: Path, expected_challenge: str, expected_count: int
+) -> tuple[int, list[str]]:
     count = 0
     orders: set[str] = set()
     challenges: list[str] = []
@@ -1215,8 +1243,12 @@ def _read_sample_orders(path: Path, expected_challenge: str) -> tuple[int, list[
             raise CampaignError("evaluation sample order differs from challenge parity")
         count += 1
         orders.add(order)
-    if count != 126:
-        raise CampaignError(f"evaluation boot must contain 126 samples, observed {count}")
+    if type(expected_count) is not int or expected_count <= 0:
+        raise CampaignError("evaluation sample count contract is invalid")
+    if count != expected_count:
+        raise CampaignError(
+            f"evaluation boot must contain {expected_count} samples, observed {count}"
+        )
     if orders != {"AB", "BA"}:
         raise CampaignError(f"evaluation boot is not order-balanced: {sorted(orders)}")
     if challenges != [expected_challenge]:
@@ -1288,7 +1320,11 @@ def _record_boot_result(
         _atomic_copy(kernel, archived_kernel, "kernel image")
         _atomic_copy(input_image, archived_input, "input filesystem image")
         _atomic_copy(final_image, archived_final, "final filesystem image")
-        sample_count, orders = _read_sample_orders(guest_log, boot["challenge"])
+        sample_count, orders = _read_sample_orders(
+            guest_log,
+            boot["challenge"],
+            campaign["protocol"]["expected_samples_per_boot"],
+        )
         boot["guest_log_sha256"] = _sha256(guest_log)
         boot["kernel_sha256"] = _sha256(archived_kernel)
         boot["image_input_sha256"] = _sha256(archived_input)
@@ -1771,6 +1807,7 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         [
             "fresh_filesystem_per_boot",
             "independent_unit",
+            "expected_samples_per_boot",
             "minimum_boots",
             "micro_timeout_seconds",
             "requested_boots",
@@ -1785,6 +1822,9 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
     if (
         type(requested) is not int
         or requested != FORMAL_BOOT_COUNT
+        or type(protocol["expected_samples_per_boot"]) is not int
+        or protocol["expected_samples_per_boot"] <= 0
+        or protocol["expected_samples_per_boot"] > 100000
         or protocol["minimum_boots"] != MINIMUM_BOOTS
         or type(protocol["micro_timeout_seconds"]) is not int
         or protocol["micro_timeout_seconds"] != FORMAL_MICRO_TIMEOUT_SECONDS
@@ -1936,7 +1976,7 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         elif status == "passed":
             if (
                 boot["exit_code"] != 0
-                or boot["sample_count"] != 126
+                or boot["sample_count"] != protocol["expected_samples_per_boot"]
                 or boot["observed_sample_orders"] != ["AB", "BA"]
             ):
                 raise CampaignError("passed boot lacks the complete sample contract")
@@ -1984,6 +2024,11 @@ def check_campaign(repo: Path, manifest_path: Path, *, require_collected: bool) 
     _require_regular_file(suite_path, "evaluation suite")
     if _sha256(suite_path) != campaign["protocol"]["suite_sha256"]:
         raise CampaignError("evaluation suite changed after campaign collection")
+    if (
+        _expected_samples_per_boot(suite_path)
+        != campaign["protocol"]["expected_samples_per_boot"]
+    ):
+        raise CampaignError("evaluation sample count differs from the suite")
     for label, tool in campaign["environment"].items():
         executable = Path(tool["path"])
         _require_regular_file(executable, f"environment executable {label}")
