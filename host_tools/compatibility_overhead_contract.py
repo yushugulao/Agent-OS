@@ -18,7 +18,7 @@ SCHEMA = "agentos-compatibility-overhead-v1"
 PLAN_SCHEMA = "agentos-compatibility-overhead-plan-v1"
 BUILD_STAMP_SCHEMA = "agentos-compatibility-build-stamp-v1"
 SOURCE_SCHEMA = "agentos-compatibility-source-v1"
-FORMAL_CONTEXT_SCHEMA = "agentos-compatibility-formal-context-v1"
+FORMAL_CONTEXT_SCHEMA = "agentos-compatibility-formal-context-v2"
 GUEST_SCHEMA = 1
 GUEST_ROUNDS = 3
 FORMAL_BOOT_COUNT = 7
@@ -666,6 +666,7 @@ def validate_formal_context(
         "platform_sha256",
         "environment_sha256",
         "tool_identities_sha256",
+        "shell_environment_sha256",
         "execution_domain",
     }
     if not isinstance(value, dict) or set(value) != expected_fields:
@@ -675,6 +676,7 @@ def validate_formal_context(
         value.get("platform_sha256"),
         value.get("environment_sha256"),
         value.get("tool_identities_sha256"),
+        value.get("shell_environment_sha256"),
     )
     if (
         value.get("schema") != FORMAL_CONTEXT_SCHEMA

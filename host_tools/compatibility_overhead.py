@@ -43,7 +43,7 @@ import subprocess
 import sys
 import tempfile
 import zlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 if __name__ == "__main__":
@@ -178,6 +178,21 @@ SOURCE_SNAPSHOT_FILES = (
     "user/Makefile",
     "baseline_ucore/Makefile",
     "baseline_ucore/user/Makefile",
+)
+FORMAL_SHELL_ENVIRONMENT_KEYS = (
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "MAKE_TOOL",
+    "PATH",
+    "QEMU",
+    "SHELL",
+    "SYSTEMDRIVE",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "TOOLPREFIX",
+    "TZ",
 )
 
 
@@ -327,6 +342,9 @@ def _formal_context(
         "tool_identities_sha256": hashlib.sha256(
             canonical_json_bytes(platform.get("tools"))
         ).hexdigest(),
+        "shell_environment_sha256": hashlib.sha256(
+            canonical_json_bytes(_formal_shell_environment(campaign))
+        ).hexdigest(),
         "execution_domain": run.get("execution_domain"),
     }
     return context, campaign
@@ -347,53 +365,125 @@ def _verify_formal_tools(campaign: dict[str, Any]) -> None:
             raise CompatibilityRunError(f"formal platform tool changed: {label}")
 
 
+def _formal_shell_environment(campaign: dict[str, Any]) -> dict[str, str]:
+    """Derive the exact env -i payload from the attested micro platform."""
+
+    platform = campaign.get("platform")
+    run = campaign.get("run")
+    if not isinstance(platform, dict) or not isinstance(run, dict):
+        raise CompatibilityRunError("formal campaign platform is unavailable")
+    domain = platform.get("domain")
+    if domain not in ("native-linux", "native-msys2"):
+        raise CompatibilityRunError("formal compatibility domain is unsupported")
+    entry_domain = platform.get("entry_domain")
+    if run.get("execution_domain") != entry_domain:
+        raise CompatibilityRunError("formal compatibility execution domain differs")
+    if domain == "native-msys2":
+        if entry_domain != "native-msys2":
+            raise CompatibilityRunError("formal MSYS2 entry domain is invalid")
+    elif entry_domain != "native-linux" and (
+        not isinstance(entry_domain, str)
+        or re.fullmatch(r"windows-wsl:[A-Za-z0-9._-]{1,64}", entry_domain) is None
+    ):
+        raise CompatibilityRunError("formal Linux entry domain is invalid")
+
+    tools = platform.get("tools")
+    required = ("bash", "env", "make", "python", "qemu", "timeout")
+    if not isinstance(tools, dict) or any(label not in tools for label in required):
+        raise CompatibilityRunError("formal platform lacks a required compatibility tool")
+    tool_paths: dict[str, str] = {}
+    for label in sorted(tools):
+        identity = tools[label]
+        path = identity.get("path") if isinstance(identity, dict) else None
+        if not isinstance(path, str) or not PurePosixPath(path).is_absolute():
+            raise CompatibilityRunError(
+                f"formal compatibility tool path is invalid: {label}"
+            )
+        tool_paths[label] = path
+
+    temporary_value = platform.get("temporary_directory")
+    toolprefix = platform.get("toolprefix")
+    if (
+        not isinstance(toolprefix, str)
+        or not PurePosixPath(toolprefix).is_absolute()
+    ):
+        raise CompatibilityRunError("formal compatibility path binding is invalid")
+    if domain == "native-msys2":
+        temporary = temporary_value
+        system_drive = platform.get("windows_system_drive")
+        native_temporary = platform.get("windows_temporary_directory")
+        if (
+            not isinstance(temporary, str)
+            or not PurePosixPath(temporary).is_absolute()
+            or not isinstance(system_drive, str)
+            or re.fullmatch(r"[A-Z]:", system_drive) is None
+            or not isinstance(native_temporary, str)
+            or not PureWindowsPath(native_temporary).is_absolute()
+        ):
+            raise CompatibilityRunError(
+                "formal MSYS2 system drive or temporary directory is invalid"
+            )
+    else:
+        if (
+            temporary_value is not None
+            or platform.get("windows_system_drive") is not None
+            or platform.get("windows_temporary_directory") is not None
+        ):
+            raise CompatibilityRunError(
+                "formal Linux platform contains a Host path binding"
+            )
+        temporary = "/tmp"
+        system_drive = "/"
+        native_temporary = temporary
+
+    search_path = ":".join(
+        dict.fromkeys(str(PurePosixPath(path).parent) for path in tool_paths.values())
+    )
+    environment = {
+        "HOME": temporary,
+        "LANG": "C",
+        "LC_ALL": "C",
+        "MAKE_TOOL": tool_paths["make"],
+        "PATH": search_path,
+        "QEMU": tool_paths["qemu"],
+        "SHELL": tool_paths["bash"],
+        "SYSTEMDRIVE": system_drive,
+        "TEMP": native_temporary,
+        "TMP": native_temporary,
+        "TMPDIR": temporary,
+        "TOOLPREFIX": toolprefix,
+        "TZ": "UTC",
+    }
+    if tuple(environment) != FORMAL_SHELL_ENVIRONMENT_KEYS:
+        raise CompatibilityRunError("formal compatibility environment order changed")
+    if any(
+        not value or any(character in value for character in "\x00\r\n")
+        for value in environment.values()
+    ):
+        raise CompatibilityRunError("formal compatibility environment is invalid")
+    if any("%systemdrive%" in value.casefold() for value in environment.values()):
+        raise CompatibilityRunError(
+            "formal compatibility environment contains an unresolved system drive"
+        )
+    return environment
+
+
 def _formal_shell_command(
     command_text: str, campaign: dict[str, Any], timeout_seconds: int
 ) -> list[str]:
     platform = campaign["platform"]
     tools = platform["tools"]
-    required = ("bash", "env", "make", "python", "qemu", "timeout")
-    if any(label not in tools for label in required):
-        raise CompatibilityRunError("formal platform lacks a required compatibility tool")
-    tool_paths = {
-        label: str(
-            require_regular_file(Path(str(tools[label]["path"])), nonempty=True).resolve(
-                strict=True
-            )
-        )
-        for label in tools
-    }
-    search_path = os.pathsep.join(
-        dict.fromkeys(str(Path(path).parent) for path in tool_paths.values())
-    )
-    temporary = str(platform.get("temporary_directory") or "/tmp")
-    native_temporary = str(
-        platform.get("windows_temporary_directory") or temporary
-    )
-    assignments = (
-        f"HOME={temporary}",
-        "LANG=C",
-        "LC_ALL=C",
-        f"MAKE_TOOL={tool_paths['make']}",
-        f"PATH={search_path}",
-        f"QEMU={tool_paths['qemu']}",
-        f"SHELL={tool_paths['bash']}",
-        f"TEMP={native_temporary}",
-        f"TMP={native_temporary}",
-        f"TMPDIR={temporary}",
-        f"TOOLPREFIX={platform['toolprefix']}",
-        "TZ=UTC",
-    )
+    environment = _formal_shell_environment(campaign)
     inner_timeout = max(1, timeout_seconds - 10)
     return [
-        tool_paths["env"],
+        str(tools["env"]["path"]),
         "-i",
-        *assignments,
-        tool_paths["timeout"],
+        *(f"{name}={environment[name]}" for name in FORMAL_SHELL_ENVIRONMENT_KEYS),
+        str(tools["timeout"]["path"]),
         "--signal=TERM",
         "--kill-after=5s",
         f"{inner_timeout}s",
-        tool_paths["bash"],
+        str(tools["bash"]["path"]),
         "--noprofile",
         "--norc",
         "-c",
@@ -1015,6 +1105,10 @@ def _verify_formal_campaign_binding(
         != context.get("environment_sha256")
         or hashlib.sha256(canonical_json_bytes(platform.get("tools"))).hexdigest()
         != context.get("tool_identities_sha256")
+        or hashlib.sha256(
+            canonical_json_bytes(_formal_shell_environment(campaign))
+        ).hexdigest()
+        != context.get("shell_environment_sha256")
     ):
         raise CompatibilityRunError("formal micro campaign context differs")
 

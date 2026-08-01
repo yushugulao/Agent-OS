@@ -5,6 +5,7 @@ import copy
 import gzip
 import hashlib
 import json
+import os
 import subprocess
 import shutil
 import sys
@@ -40,6 +41,9 @@ from compatibility_overhead_contract import (  # noqa: E402
 )
 from compatibility_overhead import (  # noqa: E402
     CompatibilityRunError,
+    FORMAL_SHELL_ENVIRONMENT_KEYS,
+    _formal_shell_command,
+    _formal_shell_environment,
     _source_gate,
     _verify_gzip_archive,
     verify_campaign_artifacts,
@@ -218,6 +222,7 @@ def formal_context(
     platform_sha256: str = "8" * 64,
     environment_sha256: str = "7" * 64,
     tool_identities_sha256: str = "6" * 64,
+    shell_environment_sha256: str = "5" * 64,
     source_commit: str = COMMIT,
     micro_run_id: str | None = None,
     execution_domain: str = "native-linux",
@@ -234,7 +239,43 @@ def formal_context(
         "platform_sha256": platform_sha256,
         "environment_sha256": environment_sha256,
         "tool_identities_sha256": tool_identities_sha256,
+        "shell_environment_sha256": shell_environment_sha256,
         "execution_domain": execution_domain,
+    }
+
+
+def formal_shell_campaign(
+    domain: str = "native-linux", *, system_drive: str = "C:",
+    entry_domain: str | None = None,
+) -> dict[str, object]:
+    tools = {
+        label: {"path": f"/tools/core/{label}"}
+        for label in ("bash", "env", "make", "python", "qemu", "timeout")
+    }
+    tools.update(
+        {
+            "compiler": {"path": "/tools/riscv/bin/riscv-none-elf-gcc"},
+            "host_cc": {"path": "/tools/host/bin/cc"},
+        }
+    )
+    entry_domain = entry_domain or domain
+    platform: dict[str, object] = {
+        "domain": domain,
+        "entry_domain": entry_domain,
+        "toolprefix": "/tools/riscv-none-elf-",
+        "tools": tools,
+    }
+    if domain == "native-msys2":
+        platform.update(
+            {
+                "temporary_directory": "/tmp/agentos-formal",
+                "windows_system_drive": system_drive,
+                "windows_temporary_directory": r"R:\tmp\agentos-formal",
+            }
+        )
+    return {
+        "run": {"execution_domain": entry_domain},
+        "platform": platform,
     }
 
 
@@ -431,6 +472,9 @@ def materialize_compatibility_fixture(
         tool_identities_sha256=sha256(
             canonical_json_bytes(platform["tools"])
         ),
+        shell_environment_sha256=sha256(
+            canonical_json_bytes(_formal_shell_environment(micro_campaign))
+        ),
         source_commit=source_commit,
         micro_run_id=str(run["id"]),
         execution_domain=str(run["execution_domain"]),
@@ -471,6 +515,118 @@ class CompatibilityOverheadTests(unittest.TestCase):
             {row["target"] for row in self.source["target_bindings"]},
             {"plain", "agentos"},
         )
+
+    def test_formal_shell_environment_binds_attested_system_drive(self) -> None:
+        campaign = formal_shell_campaign("native-msys2")
+        environment = _formal_shell_environment(campaign)
+        self.assertEqual(tuple(environment), FORMAL_SHELL_ENVIRONMENT_KEYS)
+        self.assertEqual(environment["SYSTEMDRIVE"], "C:")
+        self.assertEqual(environment["TEMP"], r"R:\tmp\agentos-formal")
+        self.assertEqual(
+            environment["PATH"],
+            "/tools/core:/tools/riscv/bin:/tools/host/bin",
+        )
+        self.assertNotEqual(environment["PATH"], os.environ.get("PATH", ""))
+        command = _formal_shell_command("printf ready", campaign, 30)
+        assignments = command[2 : 2 + len(FORMAL_SHELL_ENVIRONMENT_KEYS)]
+        self.assertEqual(
+            assignments,
+            [
+                f"{name}={environment[name]}"
+                for name in FORMAL_SHELL_ENVIRONMENT_KEYS
+            ],
+        )
+        self.assertIn("SYSTEMDRIVE=C:", assignments)
+        self.assertNotIn("SYSTEMDRIVE=%SystemDrive%", assignments)
+
+    def test_formal_shell_environment_rejects_untrusted_drive_and_paths(self) -> None:
+        for system_drive in ("", "c:", "%SystemDrive%", "C:\\"):
+            campaign = formal_shell_campaign(
+                "native-msys2", system_drive=system_drive
+            )
+            with self.subTest(system_drive=system_drive):
+                with self.assertRaisesRegex(CompatibilityRunError, "system drive"):
+                    _formal_shell_environment(campaign)
+
+        missing = formal_shell_campaign("native-msys2")
+        del missing["platform"]["windows_system_drive"]
+        with self.assertRaisesRegex(CompatibilityRunError, "system drive"):
+            _formal_shell_environment(missing)
+
+        relative_temp = formal_shell_campaign("native-msys2")
+        relative_temp["platform"]["windows_temporary_directory"] = "tmp"
+        with self.assertRaisesRegex(CompatibilityRunError, "temporary"):
+            _formal_shell_environment(relative_temp)
+
+        unresolved_temp = formal_shell_campaign("native-msys2")
+        unresolved_temp["platform"][
+            "windows_temporary_directory"
+        ] = r"C:\%SystemDrive%\Temp"
+        with self.assertRaisesRegex(CompatibilityRunError, "unresolved"):
+            _formal_shell_environment(unresolved_temp)
+
+    def test_formal_linux_shell_uses_neutral_system_drive(self) -> None:
+        campaign = formal_shell_campaign("native-linux")
+        environment = _formal_shell_environment(campaign)
+        self.assertEqual(environment["SYSTEMDRIVE"], "/")
+        self.assertEqual(environment["TEMP"], "/tmp")
+        self.assertNotIn("temporary_directory", campaign["platform"])
+        campaign["platform"]["windows_system_drive"] = "C:"
+        with self.assertRaisesRegex(CompatibilityRunError, "Host path"):
+            _formal_shell_environment(campaign)
+
+        campaign = formal_shell_campaign("native-linux")
+        campaign["platform"]["temporary_directory"] = "/var/tmp"
+        with self.assertRaisesRegex(CompatibilityRunError, "Host path"):
+            _formal_shell_environment(campaign)
+
+    def test_formal_wsl_entry_maps_to_native_linux_shell(self) -> None:
+        campaign = formal_shell_campaign(
+            "native-linux", entry_domain="windows-wsl:Ubuntu-24.04"
+        )
+        self.assertEqual(
+            _formal_shell_environment(campaign)["SYSTEMDRIVE"], "/"
+        )
+        campaign["run"]["execution_domain"] = "native-linux"
+        with self.assertRaisesRegex(CompatibilityRunError, "execution domain"):
+            _formal_shell_environment(campaign)
+
+    @unittest.skipUnless(os.name == "posix", "requires the formal POSIX shell domain")
+    def test_controlled_subprocess_cannot_materialize_literal_system_drive(self) -> None:
+        domain = "native-msys2" if sys.platform == "cygwin" else "native-linux"
+        campaign = formal_shell_campaign(domain)
+        executable_names = {
+            "bash": "bash",
+            "env": "env",
+            "make": "make",
+            "python": "python3",
+            "qemu": "bash",
+            "timeout": "timeout",
+            "compiler": "bash",
+            "host_cc": "env",
+        }
+        for label, name in executable_names.items():
+            path = shutil.which(name)
+            self.assertIsNotNone(path)
+            campaign["platform"]["tools"][label]["path"] = str(path)
+        script = (
+            'case "$SYSTEMDRIVE" in /|[A-Z]:) ;; '
+            "*) mkdir -p '%SystemDrive%/ProgramData'; exit 91 ;; esac; "
+            'printf "%s" "$SYSTEMDRIVE"'
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                _formal_shell_command(script, campaign, 30),
+                cwd=temporary,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=35,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(result.stdout, ("/", "C:"))
+            self.assertFalse((Path(temporary) / "%SystemDrive%").exists())
 
     def test_make_path_binding_expansion_is_closed_and_unique(self) -> None:
         text = (
@@ -682,7 +838,7 @@ class CompatibilityOverheadTests(unittest.TestCase):
                 "baseline_ucore/user/Makefile",
             ):
                 shutil.copyfile(self.repo / relative, snapshot / relative)
-            platform = {"tools": {"make": {"sha256": "1" * 64}}}
+            platform = formal_shell_campaign("native-linux")["platform"]
             environment = {"make": {"sha256": "1" * 64}}
             micro_campaign = {
                 "phase": "collected",
@@ -723,6 +879,9 @@ class CompatibilityOverheadTests(unittest.TestCase):
                         separators=(",", ":"),
                         ensure_ascii=True,
                     ).encode("ascii")
+                ),
+                shell_environment_sha256=sha256(
+                    canonical_json_bytes(_formal_shell_environment(micro_campaign))
                 ),
             )
             boots: list[dict[str, object]] = []

@@ -160,6 +160,11 @@ baseline delta。formal bundle 缺少任一成本、guardrail 或原始命令回
 这一组数据只回答“保留传统 uCore 编程接口需要多少兼容开销”，不评价 AgentOS 专属
 功能，也不与机制微基准或科研场景拼成综合分。原始日志、源码、ELF、内核和文件系统
 镜像必须随 formal bundle 一起离线复验；缺失任一目标或结果不等价都会使打包失败。
+兼容路径的 build 与 QEMU 也必须使用由 micro platform proof 唯一派生的 `env -i`
+环境。formal context v2 额外封入该环境的 SHA256；Linux 使用中性的
+`SYSTEMDRIVE=/`，native-msys2 则强制使用已证明的规范盘符及同一份
+`TEMP`、`TMP`、`TMPDIR` 绑定。字段缺失、相对路径、字面 `%SystemDrive%` 或执行域不一致
+都会在启动 Guest 前失败，验证器会从随包 micro campaign 重新推导同一摘要。
 
 ### 2.5 Task 6 资源稳定性
 
