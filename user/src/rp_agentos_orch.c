@@ -1331,6 +1331,7 @@ static int run_stability_workflow(uint index, uint mode)
 	int got;
 	int complete;
 	int eof;
+	uint mismatch = 0;
 
 	memset(global_before, 0, sizeof(*global_before));
 	memset(global_after, 0, sizeof(*global_after));
@@ -1383,12 +1384,32 @@ static int run_stability_workflow(uint index, uint mode)
 	got = waitpid(pid, &code);
 	eof = read(report_pipe[0], &extra, 1) == 0;
 	close(report_pipe[0]);
-	if (agent_resource_snapshot(global_after) != AGENT_STATUS_OK)
+	if (agent_resource_snapshot(global_after) != AGENT_STATUS_OK) {
+		printf("rp_agentos_orch: stability_snapshot_failed index=%u\n",
+		       index);
 		return 0;
-	return complete && got == pid && code == 0 && eof &&
-	       stability_report_valid(report, index, mode, challenge_nonce) &&
-	       stability_identity_unique(index + 1) &&
-	       stability_global_pair_valid(global_before, global_after, mode);
+	}
+	if (!complete)
+		mismatch |= 1U << 0;
+	if (got != pid || code != 0)
+		mismatch |= 1U << 1;
+	if (!eof)
+		mismatch |= 1U << 2;
+	if (!stability_report_valid(report, index, mode, challenge_nonce))
+		mismatch |= 1U << 3;
+	if (!stability_identity_unique(index + 1))
+		mismatch |= 1U << 4;
+	if (!stability_global_pair_valid(global_before, global_after, mode))
+		mismatch |= 1U << 5;
+	if (mismatch != 0)
+		printf("rp_agentos_orch: stability_mismatch index=%u mask=%u ordinary_free=%llu/%llu reserved_free=%llu/%llu stack_free=%llu/%llu\n",
+		       index, mismatch, global_before->ordinary_free_pages,
+		       global_after->ordinary_free_pages,
+		       global_before->reserved_free_pages,
+		       global_after->reserved_free_pages,
+		       global_before->stack_reserved_free_pages,
+		       global_after->stack_reserved_free_pages);
+	return mismatch == 0;
 }
 
 static void append_stability_global_policy(char *body, uint measured_mask)
