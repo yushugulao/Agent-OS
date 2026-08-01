@@ -401,6 +401,7 @@ cpu MHz : 4900.000
             "PYTHON_BIN": tools["python"]["path"],
             "QEMU": tools["qemu"]["path"],
             "SIZE_TOOL": tools["size"]["path"],
+            "SYSTEMDRIVE": "C:",
             "TOOLPREFIX": "riscv-none-elf-",
             "TMPDIR": "/tmp",
             "TEMP": r"C:\tmp",
@@ -420,6 +421,7 @@ cpu MHz : 4900.000
                 toolprefix="riscv-none-elf-",
                 temporary_directory=Path("/tmp"),
                 windows_temporary_directory=r"C:\tmp",
+                windows_system_drive="C:",
             )
 
     def test_msys2_reexec_uses_bound_env_i_and_drops_host_injections(self) -> None:
@@ -441,6 +443,7 @@ cpu MHz : 4900.000
                 "repository": {"execution_path": str(root.resolve())},
                 "runtime": {"path": "/usr/bin/msys-2.0.dll", "sha256": "b" * 64},
                 "temporary_directory": "/tmp",
+                "windows_system_drive": "C:",
                 "windows_temporary_directory": r"C:\tmp",
                 "toolprefix": "riscv-none-elf-",
                 "tools": tools,
@@ -472,6 +475,7 @@ cpu MHz : 4900.000
             self.assertEqual(observed[:2], [tools["env"]["path"], "-i"])
             self.assertIn("AGENTOS_EVALUATION_EXECUTION_DOMAIN=native-msys2", observed)
             self.assertIn("MSYSTEM=MSYS", observed)
+            self.assertIn("SYSTEMDRIVE=C:", observed)
             for name in ("CC", "HOSTCC", "HOST_CC"):
                 self.assertIn(f"{name}={tools['host_cc']['path']}", observed)
             self.assertIn("EVALUATION_BOOTS=7", observed)
@@ -506,6 +510,7 @@ cpu MHz : 4900.000
                     "sha256": platform_probe._sha256(runtime),
                 },
                 "temporary_directory": str(root),
+                "windows_system_drive": "C:",
                 "windows_temporary_directory": r"C:\tmp",
                 "tools": tools,
             }
@@ -880,6 +885,7 @@ class TrustedPythonEntryTests(unittest.TestCase):
                     "sha256": platform_probe._sha256(runtime),
                 },
                 "temporary_directory": str(root),
+                "windows_system_drive": "C:",
                 "windows_temporary_directory": r"C:\tmp",
                 "tools": tools,
             }

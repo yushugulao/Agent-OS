@@ -147,6 +147,7 @@ def _msys_platform_proof(root: Path) -> dict[str, object]:
             "windows_version": "10.0-26200",
         },
         "windows_temporary_directory": r"R:\tmp",
+        "windows_system_drive": "C:",
     })
     return proof
 
@@ -803,6 +804,38 @@ class CampaignTests(unittest.TestCase):
             self.assertNotIn("-l", command)
             self.assertNotIn("-lc", command)
 
+        msys_bootstrap_path = "/usr/bin:/opt/riscv/bin"
+        with (
+            mock.patch.object(campaign.os, "name", "posix"),
+            mock.patch.dict(
+                campaign.os.environ,
+                {
+                    "AGENTOS_EVALUATION_EXECUTION_DOMAIN": "native-msys2",
+                    "BASH_BIN": "/usr/bin/bash",
+                    "PATH": msys_bootstrap_path,
+                },
+                clear=True,
+            ),
+            mock.patch.object(campaign, "_run", side_effect=outputs) as msys_run,
+        ):
+            msys_environment = campaign._probe_scenario_environment(
+                current_directory,
+                wsl_distro="Ubuntu",
+                toolprefix="/opt/riscv/bin/riscv64-linux-gnu-",
+                qemu="qemu-system-riscv64",
+                posix_temporary="/r/tmp",
+                native_temporary=r"R:\tmp",
+                system_drive="C:",
+            )
+        self.assertEqual(msys_environment["domain"], "native-msys2-clean-shell")
+        self.assertEqual(
+            msys_environment["clean_environment"]["SYSTEMDRIVE"], "C:"
+        )
+        for call in msys_run.call_args_list:
+            command = call.args[0]
+            self.assertIn("SYSTEMDRIVE=C:", command)
+            self.assertLess(command.index("SYSTEMDRIVE=C:"), command.index("/usr/bin/bash"))
+
     def test_scenario_environment_injection_mutations_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -974,6 +1007,7 @@ class CampaignTests(unittest.TestCase):
                 "domain": "native-msys2",
                 "temporary_directory": "/r/tmp",
                 "windows_temporary_directory": r"R:\tmp",
+                "windows_system_drive": "C:",
             }
             msys_environment = campaign._micro_boot_environment(
                 value["environment"],
@@ -984,6 +1018,7 @@ class CampaignTests(unittest.TestCase):
             self.assertEqual(msys_environment["TMPDIR"], "/r/tmp")
             self.assertEqual(msys_environment["TEMP"], r"R:\tmp")
             self.assertEqual(msys_environment["TMP"], r"R:\tmp")
+            self.assertEqual(msys_environment["SYSTEMDRIVE"], "C:")
 
     def test_msys_micro_temporary_namespace_is_bound_and_tamper_evident(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1004,7 +1039,7 @@ class CampaignTests(unittest.TestCase):
                 )
             campaign.validate_campaign(value)
 
-            for name in ("TEMP", "TMP", "TMPDIR"):
+            for name in ("SYSTEMDRIVE", "TEMP", "TMP", "TMPDIR"):
                 tampered = json.loads(json.dumps(value))
                 tampered["boots"][0]["command_environment"][name] = "/tmp/other"
                 with self.subTest(name=name), self.assertRaisesRegex(

@@ -149,8 +149,8 @@ except ImportError:
 
 KIND = "agentos-evaluation-campaign"
 SCENARIO_KIND = "agentos-evaluation-scenario-campaign"
-SCHEMA_VERSION = 3
-SCENARIO_SCHEMA_VERSION = 4
+SCHEMA_VERSION = 4
+SCENARIO_SCHEMA_VERSION = 5
 MINIMUM_BOOTS = FORMAL_BOOT_COUNT
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -180,6 +180,7 @@ SCENARIO_CLEAN_ENVIRONMENT_KEYS = (
     "PATH",
     "QEMU",
     "SHELL",
+    "SYSTEMDRIVE",
     "TEMP",
     "TMP",
     "TMPDIR",
@@ -881,7 +882,8 @@ def _micro_boot_environment(
     compiler_path = environment["compiler"]["path"]
     absolute_prefix, _ = _absolute_toolprefix(compiler_path)
     posix_temporary, native_temporary = _platform_temporary_identity(platform)
-    return {
+    system_drive = _platform_system_drive(platform)
+    result = {
         "AGENT_EVAL_CHALLENGE_HEX": challenge,
         "AGENT_TEST_CASE": "agenteval_ucore",
         "AGENT_TEST_GUEST_LOG_FILE": guest_log,
@@ -901,6 +903,9 @@ def _micro_boot_environment(
         "TMPDIR": posix_temporary,
         "TOOLPREFIX": absolute_prefix,
     }
+    if system_drive is not None:
+        result["SYSTEMDRIVE"] = system_drive
+    return result
 
 
 def _verify_platform_execution_binding(
@@ -1600,7 +1605,7 @@ def _validate_platform_proof(proof: object, execution_domain: str) -> None:
     expected = common | (
         {
             "runtime", "temporary_directory", "uname",
-            "windows_temporary_directory",
+            "windows_system_drive", "windows_temporary_directory",
         }
         if domain == "native-msys2"
         else set()
@@ -1664,6 +1669,8 @@ def _validate_platform_proof(proof: object, execution_domain: str) -> None:
             or not _is_portable_absolute_path(proof.get("temporary_directory"))
             or not isinstance(proof.get("windows_temporary_directory"), str)
             or not PureWindowsPath(proof["windows_temporary_directory"]).is_absolute()
+            or re.fullmatch(r"[A-Z]:", str(proof.get("windows_system_drive", "")))
+            is None
         ):
             raise CampaignError("MSYS2 runtime or temporary namespace proof is invalid")
         uname = proof.get("uname")
@@ -2018,6 +2025,7 @@ def _scenario_clean_environment(
     *,
     posix_temporary: str = "/tmp",
     native_temporary: str | None = None,
+    system_drive: str = "/",
 ) -> dict[str, str]:
     compiler_prefix, _ = _absolute_toolprefix(tools["compiler"]["path"])
     host_cc_path = tools["host_cc"]["path"]
@@ -2040,6 +2048,8 @@ def _scenario_clean_environment(
         or PureWindowsPath(native_temporary).is_absolute()
     ):
         raise CampaignError("scenario temporary namespace is invalid")
+    if system_drive != "/" and re.fullmatch(r"[A-Z]:", system_drive) is None:
+        raise CampaignError("scenario Windows system drive identity is invalid")
     environment = {
         "CC": host_cc_path,
         "HOME": SCENARIO_CLEAN_HOME,
@@ -2051,6 +2061,7 @@ def _scenario_clean_environment(
         "PATH": SCENARIO_CLEAN_PATH,
         "QEMU": tools["qemu"]["path"],
         "SHELL": tools["bash"]["path"],
+        "SYSTEMDRIVE": system_drive,
         "TEMP": native_temporary,
         "TMP": native_temporary,
         "TMPDIR": posix_temporary,
@@ -2077,9 +2088,19 @@ def _platform_temporary_identity(platform: dict[str, Any]) -> tuple[str, str]:
     return posix_temporary, native_temporary
 
 
+def _platform_system_drive(platform: dict[str, Any]) -> str | None:
+    if platform.get("domain") != "native-msys2":
+        return None
+    system_drive = platform.get("windows_system_drive")
+    if not isinstance(system_drive, str) or re.fullmatch(r"[A-Z]:", system_drive) is None:
+        raise CampaignError("MSYS2 Windows system drive identity is unavailable")
+    return system_drive
+
+
 def _probe_scenario_environment(
     repo: Path, *, wsl_distro: str, toolprefix: str, qemu: str,
     posix_temporary: str = "/tmp", native_temporary: str | None = None,
+    system_drive: str = "/",
 ) -> dict[str, Any]:
     if os.name == "nt":
         launcher = probe_executable("wsl.exe", ["--version"], repo)
@@ -2116,6 +2137,12 @@ def _probe_scenario_environment(
         f"LC_ALL={bootstrap_locale}",
         "TZ=UTC",
     ]
+    if domain == "native-msys2-clean-shell":
+        if re.fullmatch(r"[A-Z]:", system_drive) is None:
+            raise CampaignError("native-msys2 scenario probe lacks SYSTEMDRIVE")
+        bootstrap_environment.append(f"SYSTEMDRIVE={system_drive}")
+    elif system_drive != "/":
+        raise CampaignError("POSIX scenario probe received a Windows system drive")
     bootstrap_prefix = [
         *domain_prefix,
         bootstrap_env,
@@ -2189,6 +2216,7 @@ def _probe_scenario_environment(
             tools,
             posix_temporary=posix_temporary,
             native_temporary=native_temporary,
+            system_drive=system_drive,
         ),
         "domain": domain,
         "launcher": launcher,
@@ -2231,11 +2259,13 @@ def _scenario_boot_environment(
         "PYTHONHASHSEED": "0",
         "PYTHON_BIN": micro_environment["python"]["path"],
         "QEMU": clean["QEMU"],
+        "SYSTEMDRIVE": clean["SYSTEMDRIVE"],
         "TEMP": clean["TEMP"],
         "TMP": clean["TMP"],
         "TMPDIR": clean["TMPDIR"],
         "TOOLPREFIX": clean["TOOLPREFIX"],
         "TZ": "UTC",
+        "AGENTOS_WINDOWS_SYSTEM_DRIVE": clean["SYSTEMDRIVE"],
     }
 
 
@@ -2297,6 +2327,7 @@ def create_scenario_campaign(
     posix_temporary, native_temporary = _platform_temporary_identity(
         micro["platform"]
     )
+    system_drive = _platform_system_drive(micro["platform"]) or "/"
     execution_environment = _probe_scenario_environment(
         repo,
         wsl_distro=wsl_distro,
@@ -2304,6 +2335,7 @@ def create_scenario_campaign(
         qemu=micro["environment"]["qemu"]["argv0"],
         posix_temporary=posix_temporary,
         native_temporary=native_temporary,
+        system_drive=system_drive,
     )
     toolprefix, _ = _absolute_toolprefix(
         execution_environment["tools"]["compiler"]["path"]
@@ -2536,10 +2568,12 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
     ):
         raise CampaignError("scenario clean environment contains an invalid value")
     posix_temporary, native_temporary = _platform_temporary_identity(platform)
+    system_drive = _platform_system_drive(platform) or "/"
     if clean_environment != _scenario_clean_environment(
         tools,
         posix_temporary=posix_temporary,
         native_temporary=native_temporary,
+        system_drive=system_drive,
     ):
         raise CampaignError("scenario clean environment differs from bound tools")
     domain = execution_environment["domain"]
@@ -2769,6 +2803,7 @@ def _verify_scenario_execution_binding(
     posix_temporary, native_temporary = _platform_temporary_identity(
         value["platform"]
     )
+    system_drive = _platform_system_drive(value["platform"]) or "/"
     observed = _probe_scenario_environment(
         repo,
         wsl_distro=protocol["wsl_distro"],
@@ -2776,6 +2811,7 @@ def _verify_scenario_execution_binding(
         qemu=protocol["execution_environment"]["tools"]["qemu"]["argv0"],
         posix_temporary=posix_temporary,
         native_temporary=native_temporary,
+        system_drive=system_drive,
     )
     if observed != protocol["execution_environment"]:
         raise CampaignError("scenario execution environment changed before boot")
@@ -2935,6 +2971,7 @@ def check_scenario_campaign(
     posix_temporary, native_temporary = _platform_temporary_identity(
         value["platform"]
     )
+    system_drive = _platform_system_drive(value["platform"]) or "/"
     observed_environment = _probe_scenario_environment(
         repo,
         wsl_distro=value["protocol"]["wsl_distro"],
@@ -2942,6 +2979,7 @@ def check_scenario_campaign(
         qemu=value["protocol"]["execution_environment"]["tools"]["qemu"]["argv0"],
         posix_temporary=posix_temporary,
         native_temporary=native_temporary,
+        system_drive=system_drive,
     )
     if observed_environment != value["protocol"]["execution_environment"]:
         raise CampaignError("scenario execution environment changed after planning")

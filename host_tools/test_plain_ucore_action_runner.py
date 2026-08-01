@@ -253,14 +253,17 @@ def main() -> int:
         ]
         assert runner.wsl_command_identity(native_command) == "c" * 32
 
+        isolated_environment = {
+            "CFLAGS": "AMBIENT-CFLAGS-MUST-NOT-LEAK",
+            "HOME": "/ambient/home/must-not-leak",
+            "MAKEFLAGS": "AMBIENT-MAKEFLAGS-MUST-NOT-LEAK",
+            "PATH": "/ambient/path/must-not-leak",
+        }
+        if runner.sys.platform == "cygwin":
+            isolated_environment["SYSTEMDRIVE"] = "C:"
         with mock.patch.dict(
             runner.os.environ,
-            {
-                "CFLAGS": "AMBIENT-CFLAGS-MUST-NOT-LEAK",
-                "HOME": "/ambient/home/must-not-leak",
-                "MAKEFLAGS": "AMBIENT-MAKEFLAGS-MUST-NOT-LEAK",
-                "PATH": "/ambient/path/must-not-leak",
-            },
+            isolated_environment,
             clear=True,
         ):
             isolated_wsl = runner.make_wsl_command(
@@ -278,6 +281,20 @@ def main() -> int:
         assert "TMPDIR=/tmp" in isolated_text
         assert "TZ=UTC" in isolated_text
         assert "--noprofile" in isolated_wsl and "--norc" in isolated_wsl
+        if runner.sys.platform == "cygwin":
+            for system_drive in (None, "relative", "c:", "C:\\"):
+                drive_environment = {}
+                if system_drive is not None:
+                    drive_environment["SYSTEMDRIVE"] = system_drive
+                with mock.patch.dict(
+                    runner.os.environ, drive_environment, clear=True
+                ):
+                    try:
+                        runner._controlled_shell_environment()
+                    except ValueError as error:
+                        assert "SYSTEMDRIVE" in str(error)
+                    else:
+                        raise AssertionError("invalid MSYS2 SYSTEMDRIVE was accepted")
         malformed_tagged = [
             *bounded_wsl[:-1],
             bounded_wsl[-1] + " AGENTOS_UCORE_RUN_ID=" + "b" * 32,

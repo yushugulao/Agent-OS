@@ -97,6 +97,7 @@ CONTROLLED_SHELL_VARIABLES = (
     "PATH",
     "QEMU",
     "SHELL",
+    "SYSTEMDRIVE",
     "TEMP",
     "TMP",
     "TMPDIR",
@@ -1133,6 +1134,9 @@ def _controlled_shell_environment() -> dict[str, str]:
         if sys.platform == "cygwin"
         else posix_temporary
     )
+    native_system_drive = (
+        os.environ.get("SYSTEMDRIVE", "") if sys.platform == "cygwin" else "/"
+    )
     environment = {
         "HOME": os.environ.get("AGENTOS_WSL_HOME", "/tmp"),
         "LANG": os.environ.get("AGENTOS_WSL_LANG", "C"),
@@ -1141,6 +1145,9 @@ def _controlled_shell_environment() -> dict[str, str]:
         "PATH": os.environ.get("AGENTOS_WSL_PATH", CONTROLLED_SHELL_PATH),
         "QEMU": os.environ.get("QEMU", "qemu-system-riscv64"),
         "SHELL": os.environ.get("AGENTOS_WSL_BASH", "bash"),
+        "SYSTEMDRIVE": os.environ.get(
+            "AGENTOS_WINDOWS_SYSTEM_DRIVE", native_system_drive
+        ),
         "TEMP": native_temporary,
         "TMP": native_temporary,
         "TMPDIR": posix_temporary,
@@ -1165,6 +1172,11 @@ def _controlled_shell_environment() -> dict[str, str]:
         raise ValueError("MSYS2 TEMP must be absolute in one active namespace")
     if environment["TEMP"] != environment["TMP"]:
         raise ValueError("controlled shell TEMP and TMP must identify one directory")
+    if sys.platform == "cygwin":
+        if re.fullmatch(r"[A-Z]:", environment["SYSTEMDRIVE"]) is None:
+            raise ValueError("MSYS2 SYSTEMDRIVE must be a canonical drive identity")
+    elif environment["SYSTEMDRIVE"] != "/":
+        raise ValueError("POSIX controlled shell SYSTEMDRIVE must use the neutral identity")
     if not environment["PATH"] or any(
         not component.startswith("/")
         for component in environment["PATH"].split(":")

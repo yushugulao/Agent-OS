@@ -85,7 +85,7 @@ except ImportError:
     )
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 KIND = "agentos-evaluation-platform-preflight"
 MINIMUM_PYTHON = (3, 10)
 HARDWARE_SOURCE = "procfs:/proc/cpuinfo+/proc/meminfo"
@@ -592,6 +592,23 @@ def _current_msys2_identity(
     }
 
 
+def _canonical_windows_system_drive(
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    values = os.environ if environment is None else environment
+    system_drive = values.get("SYSTEMDRIVE", "")
+    system_root = values.get("SYSTEMROOT", "")
+    if (
+        re.fullmatch(r"[A-Za-z]:", system_drive) is None
+        or not PureWindowsPath(system_root).is_absolute()
+        or PureWindowsPath(system_root).drive.casefold() != system_drive.casefold()
+    ):
+        raise PlatformPreflightError(
+            "MSYS2 Windows system drive is unavailable or inconsistent"
+        )
+    return system_drive[0].upper() + ":"
+
+
 def _parse_msys_python_observation(
     raw: bytes, *, expected_path: Path
 ) -> tuple[str, dict[str, str]]:
@@ -730,6 +747,7 @@ def _validate_msys_clean_entry(
     toolprefix: str,
     temporary_directory: Path,
     windows_temporary_directory: str,
+    windows_system_drive: str,
 ) -> None:
     """Reject a forged re-entry marker or inherited host build settings."""
 
@@ -751,6 +769,7 @@ def _validate_msys_clean_entry(
         "PYTHON_BIN": tools["python"]["path"],
         "QEMU": tools["qemu"]["path"],
         "SIZE_TOOL": tools["size"]["path"],
+        "SYSTEMDRIVE": windows_system_drive,
         "TOOLPREFIX": toolprefix,
         "TMPDIR": str(temporary_directory),
         "TEMP": windows_temporary_directory,
@@ -777,8 +796,9 @@ def _validate_msys_clean_entry(
         not PureWindowsPath(system_root).is_absolute()
         or os.environ.get("WINDIR", "").casefold() != system_root.casefold()
         or PureWindowsPath(system_root).name.casefold() != "windows"
+        or _canonical_windows_system_drive() != windows_system_drive
     ):
-        mismatched.extend(["SYSTEMROOT", "WINDIR"])
+        mismatched.extend(["SYSTEMDRIVE", "SYSTEMROOT", "WINDIR"])
     unexpected = sorted(set(os.environ) - allowed)
     if mismatched or unexpected:
         raise PlatformPreflightError(
@@ -902,6 +922,7 @@ def probe_native_msys2_domain(
     """Probe a complete formal domain hosted by one native MSYS2 runtime."""
 
     uname_identity = _current_msys2_identity()
+    windows_system_drive = _canonical_windows_system_drive()
     root, _ = _canonical_repository(repo)
     _canonical_posix_path(str(root), "repository")
     temporary_directory = _resolved_safe_directory(
@@ -1006,6 +1027,7 @@ def probe_native_msys2_domain(
         "launcher": tools["bash"],
         "runtime": runtime_identity,
         "temporary_directory": str(temporary_directory),
+        "windows_system_drive": windows_system_drive,
         "windows_temporary_directory": windows_temporary_directory,
         "uname": {**uname_identity, "command": uname_text},
         # Caller-selected prefix invocation is intentional: PATH below contains
@@ -1096,6 +1118,7 @@ def probe_native_collection_domain(
             tools=proof["tools"], toolprefix=proof["toolprefix"],
             temporary_directory=Path(proof["temporary_directory"]),
             windows_temporary_directory=proof["windows_temporary_directory"],
+            windows_system_drive=proof["windows_system_drive"],
         )
         return proof
     proof = probe_native_linux_domain(
@@ -1528,8 +1551,14 @@ def _verify_bound_msys2_preflight(
     windows_temporary_directory = str(
         preflight.get("windows_temporary_directory", "")
     )
+    windows_system_drive = str(preflight.get("windows_system_drive", ""))
     if not PureWindowsPath(windows_temporary_directory).is_absolute():
         raise PlatformPreflightError("MSYS2 Windows temporary mapping is invalid")
+    if (
+        re.fullmatch(r"[A-Z]:", windows_system_drive) is None
+        or _canonical_windows_system_drive() != windows_system_drive
+    ):
+        raise PlatformPreflightError("MSYS2 Windows system drive binding changed")
     tools = preflight.get("tools")
     if not isinstance(tools, dict) or set(tools) != set(MSYS_TOOL_LABELS):
         raise PlatformPreflightError("MSYS2 tool binding is incomplete")
@@ -1603,6 +1632,7 @@ def execute_in_msys2(
         "PYTHON_BIN": tools["python"]["path"],
         "QEMU": tools["qemu"]["path"],
         "SIZE_TOOL": tools["size"]["path"],
+        "SYSTEMDRIVE": preflight["windows_system_drive"],
         "TOOLPREFIX": preflight["toolprefix"],
         "TMPDIR": preflight["temporary_directory"],
         "TEMP": preflight["windows_temporary_directory"],
