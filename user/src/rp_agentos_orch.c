@@ -1381,7 +1381,7 @@ static int run_stability_workflow(uint index, uint mode)
 	}
 	close(report_pipe[1]);
 	complete = read_stability_report(report_pipe[0], report);
-	eof = read(report_pipe[0], &extra, 1) == 0;
+	eof = read(report_pipe[0], &extra, 1) < 0;
 	got = waitpid(pid, &code);
 	close(report_pipe[0]);
 	if (agent_resource_snapshot(global_after) != AGENT_STATUS_OK) {

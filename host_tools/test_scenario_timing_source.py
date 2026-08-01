@@ -232,7 +232,7 @@ def main() -> int:
     ))
     _reject(_case(
         sources, agentos, "run_stability_workflow",
-        "eof = read(report_pipe[0], &extra, 1) == 0;",
+        "eof = read(report_pipe[0], &extra, 1) < 0;",
         "eof = 1;",
     ))
     _reject(_case(
