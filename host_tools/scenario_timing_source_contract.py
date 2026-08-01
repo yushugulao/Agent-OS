@@ -635,7 +635,12 @@ def _validate_resource_stability(
         (
             ("parse_u64_argument", "(", "argv", "[", "4", "]", ",", "RP_RESOURCE_STABILITY_NONCE_PREFIX", ",", "&", "challenge_nonce", ")"),
             ("snapshot_state", "(", "&", "initial_lifecycle", ",", "&", "initial_io", ",", "&", "initial_agent", ")"),
-            ("initial_state_is_fresh", "(", ")"),
+            (
+                "!", "initial_state_is_fresh", "(", ")", ")", "{",
+                "printf", "(",
+                '"rp_resource_probe: initial_state_not_fresh\\n"', ")", ";",
+                "return", "1", ";", "}",
+            ),
             ("run_child_round", "(", "workflow_index", ",", "round", ",", "challenge_nonce", ")"),
             ("run_metadata_round", "(", "workflow_index", ",", "round", ",", "challenge_nonce", ")"),
             ("snapshot_state", "(", "&", "final_lifecycle", ",", "&", "final_io", ",", "&", "final_agent", ")"),

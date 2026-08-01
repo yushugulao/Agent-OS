@@ -394,6 +394,11 @@ def main() -> int:
     ))
     _reject(_case(
         sources, resource_probe, "main",
+        "!initial_state_is_fresh()",
+        "initial_state_is_fresh()",
+    ))
+    _reject(_case(
+        sources, resource_probe, "main",
         "final_state_mismatch(expected_rounds, mode)",
         "0",
     ))
