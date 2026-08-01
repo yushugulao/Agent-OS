@@ -143,6 +143,10 @@ def _validate_bounded_acceptance_io() -> None:
         raise AssertionError(
             "workflow child closes a descriptor it did not inherit"
         )
+    if "RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS" not in stability:
+        raise AssertionError("resource stability admission lacks a time bound")
+    if "get_mtime() >= admission_deadline" not in stability or "sleep(1)" not in stability:
+        raise AssertionError("resource stability admission does not await reclamation")
     if "agent_scope_delegate_fd(report_pipe[1])" not in stability:
         raise AssertionError("workflow report descriptor is not explicitly delegated")
 
@@ -232,13 +236,23 @@ def main() -> int:
     ))
     _reject(_case(
         sources, agentos, "run_stability_workflow",
+        "get_mtime() >= admission_deadline",
+        "0",
+    ))
+    _reject(_case(
+        sources, agentos, "run_stability_workflow",
+        "sleep(1) < 0",
+        "0",
+    ))
+    _reject(_case(
+        sources, agentos, "run_stability_workflow",
         "eof = read(report_pipe[0], &extra, 1) < 0;",
         "eof = 1;",
     ))
     _reject(_case(
         sources, agentos, "run_stability_workflow",
-        "if (agent_resource_snapshot(global_before) != AGENT_STATUS_OK ||",
-        "if (memset(global_before, 0, sizeof(*global_before)) == 0 ||",
+        "if (agent_resource_snapshot(global_before) != AGENT_STATUS_OK) {",
+        "if (memset(global_before, 0, sizeof(*global_before)) == 0) {",
     ))
     _reject(_case(
         sources, agentos, "stability_global_pair_valid",

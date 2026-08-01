@@ -68,6 +68,7 @@ static struct rp_challenge_workflow orch_stability_workflow;
 #define RP_WORKFLOW_HANDOFF_VERSION 1U
 #define RP_WORKFLOW_HANDOFF_PREFIX "--rp-workflow-timing-fd="
 #define RP_WORKFLOW_COMPLETION_PREFIX "--rp-workflow-completion-fd="
+#define RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS 30000
 #define RP_WORKFLOW_PHASE_AGENT_CREATE   (1ULL << 0)
 #define RP_WORKFLOW_PHASE_AGENT_INFO     (1ULL << 1)
 #define RP_WORKFLOW_PHASE_CHALLENGE      (1ULL << 2)
@@ -1331,22 +1332,40 @@ static int run_stability_workflow(uint index, uint mode)
 	int got;
 	int complete;
 	int eof;
+	int delegate_status = AGENT_STATUS_OK;
+	int64 admission_start;
+	int64 admission_deadline;
 	uint mismatch = 0;
 
 	memset(global_before, 0, sizeof(*global_before));
 	memset(global_after, 0, sizeof(*global_after));
-	if (agent_resource_snapshot(global_before) != AGENT_STATUS_OK ||
-	    pipe(report_pipe) < 0)
+	if (agent_resource_snapshot(global_before) != AGENT_STATUS_OK) {
+		printf("rp_agentos_orch: stability_initial_snapshot_failed index=%u\n",
+		       index);
 		return 0;
-	for (int attempt = 0; attempt < 256; attempt++) {
-		if (agent_scope_delegate_fd(report_pipe[1]) != AGENT_STATUS_OK)
+	}
+	if (pipe(report_pipe) < 0) {
+		printf("rp_agentos_orch: stability_pipe_failed index=%u\n", index);
+		return 0;
+	}
+	admission_start = get_mtime();
+	admission_deadline = admission_start < 0 ? -1 :
+		admission_start + RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS;
+	for (;;) {
+		delegate_status = agent_scope_delegate_fd(report_pipe[1]);
+		if (delegate_status != AGENT_STATUS_OK)
 			break;
 		pid = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
 		if (pid >= 0)
 			break;
-		sched_yield();
+		if ((pid != -1 && pid != AGENT_STATUS_RETRY &&
+		     pid != AGENT_STATUS_NO_SPACE) || admission_deadline < 0 ||
+		    get_mtime() >= admission_deadline || sleep(1) < 0)
+			break;
 	}
 	if (pid < 0) {
+		printf("rp_agentos_orch: stability_admission_failed index=%u status=%d delegate=%d\n",
+		       index, pid, delegate_status);
 		close(report_pipe[0]);
 		close(report_pipe[1]);
 		return 0;
