@@ -129,6 +129,23 @@ def _validate_bounded_acceptance_io() -> None:
     if child.find("read_launch_attestation") > child.find("waitpid"):
         raise AssertionError("child attestation is not consumed before waitpid")
 
+    agentos_orchestrator = (
+        ROOT / "user/src/rp_agentos_orch.c"
+    ).read_text(encoding="utf-8")
+    stability_start, stability_end = _function_span(
+        agentos_orchestrator, "run_stability_workflow"
+    )
+    stability = agentos_orchestrator[stability_start:stability_end]
+    child_branch = stability[
+        stability.index("if (pid == 0)") : stability.index("close(report_pipe[1]);")
+    ]
+    if "close(report_pipe[0])" in child_branch:
+        raise AssertionError(
+            "workflow child closes a descriptor it did not inherit"
+        )
+    if "agent_scope_delegate_fd(report_pipe[1])" not in stability:
+        raise AssertionError("workflow report descriptor is not explicitly delegated")
+
 
 def main() -> int:
     sources = {

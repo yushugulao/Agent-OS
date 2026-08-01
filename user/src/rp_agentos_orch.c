@@ -1347,7 +1347,7 @@ static int run_stability_workflow(uint index, uint mode)
 		return 0;
 	}
 	if (pid == 0) {
-		close(report_pipe[0]);
+		/* Workflow constructors inherit only explicitly delegated descriptors. */
 		rp_copy_text(report_arg, sizeof(report_arg),
 			     RP_RESOURCE_STABILITY_REPORT_PREFIX);
 		rp_append_uint_text(report_arg, sizeof(report_arg), report_pipe[1]);
