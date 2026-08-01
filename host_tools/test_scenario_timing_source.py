@@ -49,6 +49,16 @@ def _case(
     return changed
 
 
+def _text_case(
+    sources: dict[str, str], relative: str, old: str, new: str
+) -> dict[str, str]:
+    changed = dict(sources)
+    if changed[relative].count(old) != 1:
+        raise AssertionError(f"global mutation anchor differs: {old!r}")
+    changed[relative] = changed[relative].replace(old, new, 1)
+    return changed
+
+
 def _validate_bounded_acceptance_io() -> None:
     headers = [
         ROOT / "baseline_ucore/user/include/research_platform_state.h",
@@ -66,10 +76,18 @@ def _validate_bounded_acceptance_io() -> None:
         "rp_state_buffer_begin_append",
         "rp_state_buffer_append",
         "rp_state_buffer_commit",
-        "return rp_write_file(state->path, state->body);",
+        "rp_open_bounded_append",
+        "rp_write_append_suffix",
+        "rp_bytes_equal",
     ):
         if anchor not in header:
             raise AssertionError(f"bounded state-buffer anchor is missing: {anchor}")
+    for forbidden in ("O_TRUNC", "rp_write_file", "memcmp"):
+        start, end = _function_span(header, "rp_state_buffer_commit")
+        if forbidden in header[start:end]:
+            raise AssertionError(
+                f"state-buffer commit uses unsafe append primitive: {forbidden}"
+            )
 
     for prefix in ("baseline_ucore/", ""):
         suite = (ROOT / f"{prefix}user/src/rp_test_suite.c").read_text(
@@ -195,6 +213,27 @@ def main() -> int:
     ))
 
     agentos = "user/src/rp_agentos_orch.c"
+    _reject(_text_case(
+        sources,
+        agentos,
+        "\t\tRP_RESOURCE_STABILITY_FS_BLOCK_GROWTH_BOUND,",
+        "\t\t~0ULL,",
+    ))
+    _reject(_text_case(
+        sources,
+        agentos,
+        "\t\tRP_RESOURCE_STABILITY_BUFFER_GROWTH_BOUND,",
+        "\t\t~0ULL,",
+    ))
+    _reject(_text_case(
+        sources,
+        agentos,
+        "\t[AGENT_RESOURCE_BUFFER_CACHE] =\n"
+        "\t\tRP_RESOURCE_STABILITY_BUFFER_GROWTH_BOUND,\n};",
+        "\t[AGENT_RESOURCE_BUFFER_CACHE] =\n"
+        "\t\tRP_RESOURCE_STABILITY_BUFFER_GROWTH_BOUND,\n"
+        "\t[AGENT_RESOURCE_PROCESS] = ~0ULL,\n};",
+    ))
     _reject(_case(
         sources, agentos, "main", "int64 workflow_start = get_mtime();",
         "int64 workflow_start = 7;",
@@ -255,9 +294,44 @@ def main() -> int:
         "if (memset(global_before, 0, sizeof(*global_before)) == 0) {",
     ))
     _reject(_case(
+        sources, agentos, "run_stability_workflow",
+        "if (agent_resource_snapshot(global_after) != AGENT_STATUS_OK) {",
+        "if (memset(global_after, 0, sizeof(*global_after)) == 0) {",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_positive_delta",
+        "return after > before ? after - before : 0;",
+        "return 0;",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_positive_delta",
+        "return after > before ? after - before : 0;",
+        "after = before;\n\treturn after > before ? after - before : 0;",
+    ))
+    _reject(_case(
         sources, agentos, "stability_global_pair_valid",
-        "right->reserved_used - left->reserved_used > bound",
-        "right->reserved_used - left->reserved_used > bound + 1000",
+        "positive_growth > bound",
+        "positive_growth > bound + 1000",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_global_pair_valid",
+        "stability_positive_delta(left->reserved_used,",
+        "stability_positive_delta(left->ordinary_used,",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_global_pair_valid",
+        "right->ordinary_used) +\n\t\t\tstability_positive_delta",
+        "right->ordinary_used);\n\t\t(void)stability_positive_delta",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_global_pair_valid",
+        "right->reserved_used);",
+        "right->reserved_used);\n\t\tpositive_growth = 0;",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_global_pair_valid",
+        "uint64 bound = mode == RP_RESOURCE_STABILITY_MODE_TERMINAL ?\n\t\t\t0 : orch_resource_growth_bounds[kind];",
+        "uint64 bound = ~0ULL;",
     ))
     _reject(_case(
         sources, agentos, "run_stability_workflow",
@@ -291,8 +365,28 @@ def main() -> int:
     ))
     _reject(_case(
         sources, agentos, "stability_global_sequence_valid",
-        "right->reserved_used - left->reserved_used > bound",
-        "right->reserved_used - left->reserved_used > bound + 1000",
+        "positive_growth > bound",
+        "positive_growth > bound + 1000",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_global_sequence_valid",
+        "stability_positive_delta(left->reserved_used,",
+        "stability_positive_delta(left->ordinary_used,",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_global_sequence_valid",
+        "right->ordinary_used) +\n\t\t\tstability_positive_delta",
+        "right->ordinary_used);\n\t\t(void)stability_positive_delta",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_global_sequence_valid",
+        "right->reserved_used);",
+        "right->reserved_used);\n\t\tpositive_growth = 0;",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_global_sequence_valid",
+        "uint64 bound = orch_resource_growth_bounds[kind];",
+        "uint64 bound = ~0ULL;",
     ))
     _reject(_case(
         sources, agentos, "stability_global_sequence_valid",
@@ -333,6 +427,16 @@ def main() -> int:
         sources, agentos, "append_stability_global_policy",
         "snapshot_consistency=single_core_irq_coherent",
         "snapshot_consistency=single_core_irq_atomic",
+    ))
+    _reject(_case(
+        sources, agentos, "append_stability_global_policy",
+        "growth_bound_semantics=per_class_positive_delta_sum",
+        "growth_bound_semantics=net_used_upper_delta",
+    ))
+    _reject(_case(
+        sources, agentos, "append_stability_global_policy",
+        "decrease_semantics=reclamation_allowed",
+        "decrease_semantics=forbidden",
     ))
     _reject(_case(
         sources, agentos, "run_resource_stability_acceptance",

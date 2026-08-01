@@ -224,7 +224,7 @@ def _resource_report_guard(values: dict[str, object]) -> int:
 def _resource_stability(challenge: str) -> str:
     suffix = str(int(challenge[3:]))
     lines = [
-        "schema=agentos_resource_stability_v4;"
+        "schema=agentos_resource_stability_v5;"
         "measurement_scope=post_workflow_acceptance;"
         "timed_makespan_included=0;"
         "claim_scope=configured_global_counter_reclamation;"
@@ -262,6 +262,8 @@ def _resource_stability(challenge: str) -> str:
         "coverage=configured_global_kind_counters",
         "account_counter_coverage=not_measured",
         "rate_budget_coverage=not_measured",
+        "growth_bound_semantics=per_class_positive_delta_sum",
+        "decrease_semantics=reclamation_allowed",
         "free_pages_status=measured",
         "terminal_workflow_pair_bound=0",
     ]
@@ -1134,15 +1136,44 @@ class EvaluationScenarioTests(unittest.TestCase):
             path,
             0,
             fs_block_ordinary_used_before=40,
-            fs_block_ordinary_used_after=41,
-            fs_block_reserved_used_before=4,
-            fs_block_reserved_used_after=3,
+            fs_block_ordinary_used_after=73,
+            fs_block_reserved_used_before=40,
+            fs_block_reserved_used_after=7,
         )
 
         report = self.collect([boot])
 
         self.assertEqual(report["status"], "failed")
         self.assertIn("configured global resource delta exceeds", report["errors"][0])
+
+    def test_resource_stability_allows_bounded_reclamation(self) -> None:
+        boot = self.fixture.boot(98, "AB")
+        path = (
+            boot
+            / "agentos"
+            / "state-extracted"
+            / scenario.RESOURCE_STABILITY_FILE
+        )
+        _rewrite_resource_workflow(
+            path,
+            0,
+            buffer_cache_reserved_used_before=9,
+            buffer_cache_reserved_used_after=6,
+        )
+
+        report = self.collect([boot])
+
+        self.assertEqual(
+            report["summary"]["resource_stability"]["status"], "passed"
+        )
+        resource = next(
+            item
+            for item in report["summary"]["resource_stability"]
+            ["global_observation"]["resources"]
+            if item["kind"] == "buffer_cache"
+        )
+        self.assertEqual(resource["terminal_observed_growth"], 0)
+        self.assertFalse(resource["exact_terminal_recovery"])
 
     def test_resource_stability_rejects_cumulative_terminal_growth(self) -> None:
         boot = self.fixture.boot(94, "AB")

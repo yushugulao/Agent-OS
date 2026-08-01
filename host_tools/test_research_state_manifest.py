@@ -233,6 +233,10 @@ def test_guest_state_digest_binds_inventory_and_contents() -> None:
             unsafe.symlink_to(state_dir / "rp_alpha")
         except OSError:
             return
+        # Some MSYS Python builds emulate symlink_to() by copying the target.
+        # A regular copy is not a link traversal fixture, so skip it explicitly.
+        if not unsafe.is_symlink():
+            return
         try:
             guest_state_inventory_sha256(
                 state_dir, excluded_names={"rp_host_run_result"}

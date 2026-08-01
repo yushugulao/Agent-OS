@@ -883,12 +883,15 @@ def main() -> int:
         except OSError:
             pass
         else:
-            write_summary(state, ["rp_source", "rp_evidence", "rp_link"])
-            fields = dict(valid, source="rp_link")
-            expect_value_error(
-                lambda: compare.is_source_bound_runtime_record(state, fields),
-                "unsafe entry",
-            )
+            # Some MSYS Python builds emulate symlink_to() with a regular copy.
+            # Exercise link rejection only when the platform made a real link.
+            if link.is_symlink():
+                write_summary(state, ["rp_source", "rp_evidence", "rp_link"])
+                fields = dict(valid, source="rp_link")
+                expect_value_error(
+                    lambda: compare.is_source_bound_runtime_record(state, fields),
+                    "unsafe entry",
+                )
 
         unauthorized = state / "rp_reference"
         write_state_file(

@@ -57,7 +57,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_VERSION = "scenario-timing-source-v3"
+CONTRACT_VERSION = "scenario-timing-source-v4"
 SOURCE_PATHS = (
     "baseline_ucore/user/src/rp_seed_orch.c",
     "user/src/rp_agentos_orch.c",
@@ -364,6 +364,23 @@ def _validate_resource_stability(
     )
 
     agentos_tokens = _tokens(agentos_text)
+    resource_growth_registry = (
+        "static", "const", "uint64", "orch_resource_growth_bounds", "[",
+        "AGENT_RESOURCE_KIND_COUNT", "]", "=", "{",
+        "[", "AGENT_RESOURCE_FS_BLOCK", "]", "=",
+        "RP_RESOURCE_STABILITY_FS_BLOCK_GROWTH_BOUND", ",",
+        "[", "AGENT_RESOURCE_BUFFER_CACHE", "]", "=",
+        "RP_RESOURCE_STABILITY_BUFFER_GROWTH_BOUND", ",", "}", ";",
+    )
+    _require_once(
+        agentos_tokens,
+        resource_growth_registry,
+        "resource growth-bound registry",
+    )
+    _only_references(
+        agentos_tokens, "orch_resource_growth_bounds", 5,
+        "resource growth-bound registry",
+    )
     launch = _function_tokens(agentos_tokens, "run_stability_workflow")
     _ordered(
         launch,
@@ -510,7 +527,43 @@ def _validate_resource_stability(
     _only_references(metadata, "agent_file_meta_set", 2, "metadata mutation")
     _only_references(metadata, "agent_file_query", 1, "metadata query")
     _only_references(metadata, "agent_run", 0, "metadata echo substitute")
+    positive_delta = _function_tokens(
+        agentos_tokens, "stability_positive_delta"
+    )
+    expected_positive_delta = (
+        "return", "after", ">", "before", "?", "after", "-",
+        "before", ":", "0", ";",
+    )
+    if tuple(positive_delta) != expected_positive_delta:
+        raise ValueError("class-local positive resource delta is not exact")
     global_pair = _function_tokens(agentos_tokens, "stability_global_pair_valid")
+    class_growth = (
+        "uint64", "positive_growth", "=",
+        "stability_positive_delta", "(", "left", "->", "ordinary_used",
+        ",", "right", "->", "ordinary_used", ")", "+",
+        "stability_positive_delta", "(", "left", "->", "reserved_used",
+        ",", "right", "->", "reserved_used", ")", ";",
+    )
+    _require_once(
+        global_pair,
+        class_growth,
+        "per-workflow summed class-positive growth",
+    )
+    _require_once(
+        global_pair,
+        (
+            "uint64", "bound", "=", "mode", "==",
+            "RP_RESOURCE_STABILITY_MODE_TERMINAL", "?", "0", ":",
+            "orch_resource_growth_bounds", "[", "kind", "]", ";",
+        ),
+        "per-workflow registered growth bound",
+    )
+    _only_references(global_pair, "positive_growth", 2, "per-workflow growth value")
+    _only_references(global_pair, "bound", 4, "per-workflow growth bound")
+    _only_references(
+        global_pair, "stability_positive_delta", 2,
+        "per-workflow class delta helper",
+    )
     for sequence in (
         ("before", "->", "ordinary_free_pages", "!=", "after", "->", "ordinary_free_pages"),
         ("left", "->", "ordinary_pending", "!=", "0"),
@@ -519,14 +572,19 @@ def _validate_resource_stability(
         ("right", "->", "reserved_pending", "!=", "0"),
         ("left", "->", "ordinary_used", "!=", "right", "->", "ordinary_used"),
         ("left", "->", "reserved_used", "!=", "right", "->", "reserved_used"),
-        ("right", "->", "ordinary_used", "<", "left", "->", "ordinary_used"),
-        ("right", "->", "reserved_used", "<", "left", "->", "reserved_used"),
-        (
-            "right", "->", "ordinary_used", "-", "left", "->", "ordinary_used", "+",
-            "right", "->", "reserved_used", "-", "left", "->", "reserved_used", ">", "bound", ")",
-        ),
+        ("positive_growth", ">", "bound", ")"),
     ):
         _require_once(global_pair, sequence, "per-workflow class reclamation bound")
+    for charge_class in ("ordinary", "reserved"):
+        _require_once(
+            global_pair,
+            (
+                "stability_positive_delta", "(", "left", "->",
+                f"{charge_class}_used", ",", "right", "->",
+                f"{charge_class}_used", ")",
+            ),
+            f"per-workflow {charge_class} positive growth",
+        )
 
     identity = _function_tokens(agentos_tokens, "stability_identity_unique")
     for sequence in (
@@ -542,6 +600,25 @@ def _validate_resource_stability(
     global_sequence = _function_tokens(
         agentos_tokens, "stability_global_sequence_valid"
     )
+    _require_once(
+        global_sequence,
+        class_growth,
+        "whole-sequence summed class-positive growth",
+    )
+    _require_once(
+        global_sequence,
+        (
+            "uint64", "bound", "=", "orch_resource_growth_bounds", "[",
+            "kind", "]", ";",
+        ),
+        "whole-sequence registered growth bound",
+    )
+    _only_references(global_sequence, "positive_growth", 2, "sequence growth value")
+    _only_references(global_sequence, "bound", 5, "sequence growth bound")
+    _only_references(
+        global_sequence, "stability_positive_delta", 2,
+        "whole-sequence class delta helper",
+    )
     for sequence in (
         ("&", "orch_stability_global_before", "[", "0", "]"),
         (
@@ -551,12 +628,7 @@ def _validate_resource_stability(
         ("first", "->", "ordinary_free_pages", "!=", "terminal", "->", "ordinary_free_pages"),
         ("left", "->", "ordinary_pending", "!=", "0"),
         ("right", "->", "reserved_pending", "!=", "0"),
-        ("right", "->", "ordinary_used", "<", "left", "->", "ordinary_used"),
-        ("right", "->", "reserved_used", "<", "left", "->", "reserved_used"),
-        (
-            "right", "->", "ordinary_used", "-", "left", "->", "ordinary_used", "+",
-            "right", "->", "reserved_used", "-", "left", "->", "reserved_used", ">", "bound", ")",
-        ),
+        ("positive_growth", ">", "bound", ")"),
         (
             "index", "<", "RP_RESOURCE_STABILITY_LOAD_WORKFLOWS",
         ),
@@ -565,6 +637,16 @@ def _validate_resource_stability(
         ("if", "(", "!", "plateau", ")", "return", "0", ";"),
     ):
         _require_once(global_sequence, sequence, "whole-sequence terminal bound")
+    for charge_class in ("ordinary", "reserved"):
+        _require_once(
+            global_sequence,
+            (
+                "stability_positive_delta", "(", "left", "->",
+                f"{charge_class}_used", ",", "right", "->",
+                f"{charge_class}_used", ")",
+            ),
+            f"whole-sequence {charge_class} positive growth",
+        )
 
     append_report = _function_tokens(agentos_tokens, "append_stability_report")
     for field in (
@@ -595,7 +677,7 @@ def _validate_resource_stability(
                 f"resource {side} {member} value serialization",
             )
     for boundary in (
-        "schema=agentos_resource_stability_v4",
+        "schema=agentos_resource_stability_v5",
         "claim_scope=configured_global_counter_reclamation",
         "configured_kind_coverage=measured_mask_only",
         "account_coverage=self_identity_only",
@@ -604,6 +686,8 @@ def _validate_resource_stability(
         "account_counter_coverage=not_measured",
         "rate_budget_coverage=not_measured",
         "snapshot_consistency=single_core_irq_coherent",
+        "growth_bound_semantics=per_class_positive_delta_sum",
+        "decrease_semantics=reclamation_allowed",
         "global_leak_freedom=not_claimed",
     ):
         if boundary not in agentos_text:

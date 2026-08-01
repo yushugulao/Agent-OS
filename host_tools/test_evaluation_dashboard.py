@@ -202,6 +202,8 @@ def _resource_stability_summary(samples: list[dict], *, status: str) -> dict:
             ),
             "account_counters": "not_measured",
             "rate_budgets": "not_measured",
+            "growth_bound_semantics": "per_class_positive_delta_sum",
+            "decrease_semantics": "reclamation_allowed",
             "free_pages": {
                 "status": "measured" if measured else "not_measured",
                 "exact_pair_recovery": True if measured else None,

@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -29,9 +30,16 @@ def create_directory_link(link: Path, target: Path) -> bool:
         return completed.returncode == 0 and plain_ucore_reader.path_is_link(link)
     try:
         link.symlink_to(target, target_is_directory=True)
-        return True
     except OSError:
         return False
+    if plain_ucore_reader.path_is_link(link):
+        return True
+    # Some MSYS Python builds materialize an ordinary directory instead.
+    if link.is_dir():
+        shutil.rmtree(link)
+    elif link.exists():
+        link.unlink()
+    return False
 
 
 def remove_directory_link(link: Path) -> None:
@@ -2587,45 +2595,45 @@ def main() -> int:
             "host_relay_process=planted;status=ready\n", encoding="utf-8"
         )
         linked_host_state = linked_host_out / "host-state"
-        assert create_directory_link(linked_host_state, linked_host_target)
-        try:
-            plain_ucore_reader.run_llm_relay_package(
-                state_dir,
-                linked_host_out,
-                "template",
-                FakeRelay,
+        if create_directory_link(linked_host_state, linked_host_target):
+            try:
+                plain_ucore_reader.run_llm_relay_package(
+                    state_dir,
+                    linked_host_out,
+                    "template",
+                    FakeRelay,
+                )
+            except ValueError as link_error:
+                assert "link" in str(link_error) or "junction" in str(link_error)
+            else:
+                raise AssertionError("relay accepted a linked host-state directory")
+            assert "host_relay_process=planted" in planted_response.read_text(
+                encoding="utf-8"
             )
-        except ValueError as link_error:
-            assert "link" in str(link_error) or "junction" in str(link_error)
-        else:
-            raise AssertionError("relay accepted a linked host-state directory")
-        assert "host_relay_process=planted" in planted_response.read_text(
-            encoding="utf-8"
-        )
-        assert not any(
-            path.name.startswith(".llm-relay-")
-            for path in linked_host_target.iterdir()
-        )
-        remove_directory_link(linked_host_state)
+            assert not any(
+                path.name.startswith(".llm-relay-")
+                for path in linked_host_target.iterdir()
+            )
+            remove_directory_link(linked_host_state)
 
         linked_ancestor_target = out_dir / "relay-linked-ancestor-target"
         linked_ancestor_target.mkdir()
         linked_ancestor = out_dir / "relay-linked-ancestor"
-        assert create_directory_link(linked_ancestor, linked_ancestor_target)
-        escaped_out = linked_ancestor / "reader-out"
-        try:
-            plain_ucore_reader.run_llm_relay_package(
-                state_dir,
-                escaped_out,
-                "template",
-                FakeRelay,
-            )
-        except ValueError as link_error:
-            assert "link" in str(link_error) or "junction" in str(link_error)
-        else:
-            raise AssertionError("relay accepted a linked output ancestor")
-        assert not (linked_ancestor_target / "reader-out").exists()
-        remove_directory_link(linked_ancestor)
+        if create_directory_link(linked_ancestor, linked_ancestor_target):
+            escaped_out = linked_ancestor / "reader-out"
+            try:
+                plain_ucore_reader.run_llm_relay_package(
+                    state_dir,
+                    escaped_out,
+                    "template",
+                    FakeRelay,
+                )
+            except ValueError as link_error:
+                assert "link" in str(link_error) or "junction" in str(link_error)
+            else:
+                raise AssertionError("relay accepted a linked output ancestor")
+            assert not (linked_ancestor_target / "reader-out").exists()
+            remove_directory_link(linked_ancestor)
 
         transaction_out = out_dir / "relay-transaction"
         previous_overlay = (

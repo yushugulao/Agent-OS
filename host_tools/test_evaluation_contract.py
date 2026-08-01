@@ -268,7 +268,7 @@ def _scenario_resource_stability(
         "physical_page": 32256,
     }
     return {
-        "schema": "agentos_resource_stability_v4",
+        "schema": "agentos_resource_stability_v5",
         "measurement_scope": RESOURCE_STABILITY_MEASUREMENT_SCOPE,
         "timed_makespan_included": False,
         "claim_scope": "configured_global_counter_reclamation",
@@ -295,6 +295,8 @@ def _scenario_resource_stability(
             "coverage": "configured_global_kind_counters",
             "account_counter_coverage": "not_measured",
             "rate_budget_coverage": "not_measured",
+            "growth_bound_semantics": "per_class_positive_delta_sum",
+            "decrease_semantics": "reclamation_allowed",
             "free_pages_status": "measured",
             "terminal_workflow_pair_bound": 0,
             "resources": [

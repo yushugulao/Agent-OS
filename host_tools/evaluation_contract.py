@@ -961,6 +961,8 @@ def load_scenario_report(path: Path, plan: dict[str, Any]) -> dict[str, Any]:
                 "snapshot_consistency",
                 "account_counters",
                 "rate_budgets",
+                "growth_bound_semantics",
+                "decrease_semantics",
                 "free_pages",
                 "resources",
             }
@@ -972,6 +974,10 @@ def load_scenario_report(path: Path, plan: dict[str, Any]) -> dict[str, Any]:
             == "single_core_irq_coherent"
             and global_observation["account_counters"] == "not_measured"
             and global_observation["rate_budgets"] == "not_measured"
+            and global_observation["growth_bound_semantics"]
+            == "per_class_positive_delta_sum"
+            and global_observation["decrease_semantics"]
+            == "reclamation_allowed"
             and observed_free_pages
             == {
                 "status": "measured",
@@ -1015,8 +1021,11 @@ def load_scenario_report(path: Path, plan: dict[str, Any]) -> dict[str, Any]:
                     if RESOURCE_STABILITY_GROWTH_BOUNDS[kind] != 0
                     else None
                 )
-                and resource["exact_terminal_recovery"]
-                is (resource["terminal_observed_growth"] == 0)
+                and type(resource["exact_terminal_recovery"]) is bool
+                and (
+                    not resource["exact_terminal_recovery"]
+                    or resource["terminal_observed_growth"] == 0
+                )
                 for resource, kind in zip(
                     observed_resources, RESOURCE_STABILITY_RESOURCE_KINDS
                 )

@@ -186,6 +186,8 @@ RESOURCE_STABILITY_INTERPRETATION = {
     "global_resource_observation": "configured_kind_aggregate_counters_only",
     "account_observation": "fresh_self_identity_only",
     "rate_budget_observation": "not_measured",
+    "growth_bound_semantics": "per_class_positive_delta_sum",
+    "decrease_semantics": "reclamation_allowed",
     "unmeasured_policy": "reported_as_not_measured_never_passed",
     "global_leak_freedom": "not_claimed",
 }
@@ -1051,6 +1053,18 @@ def _resource_stability_plateau_or_reclamation(
     return load_plateau or terminal_reclamation
 
 
+def _resource_stability_positive_growth(
+    ordinary_before: int,
+    ordinary_after: int,
+    reserved_before: int,
+    reserved_after: int,
+) -> int:
+    """Sum class-local positive deltas without hiding growth behind reclamation."""
+    return max(0, ordinary_after - ordinary_before) + max(
+        0, reserved_after - reserved_before
+    )
+
+
 def _validate_agentos_acceptance_semantics(
     acceptance: object, challenge: str
 ) -> None:
@@ -1493,7 +1507,7 @@ def _validate_resource_stability_semantics(
         )
     suffix = str(int(challenge[3:]))
     if (
-        acceptance["schema"] != "agentos_resource_stability_v4"
+        acceptance["schema"] != "agentos_resource_stability_v5"
         or acceptance["measurement_scope"] != RESOURCE_STABILITY_MEASUREMENT_SCOPE
         or acceptance["timed_makespan_included"] is not False
         or acceptance["claim_scope"] != "configured_global_counter_reclamation"
@@ -1531,6 +1545,8 @@ def _validate_resource_stability_semantics(
         "coverage",
         "account_counter_coverage",
         "rate_budget_coverage",
+        "growth_bound_semantics",
+        "decrease_semantics",
         "free_pages_status",
         "terminal_workflow_pair_bound",
         "resources",
@@ -1549,6 +1565,9 @@ def _validate_resource_stability_semantics(
         or policy["coverage"] != "configured_global_kind_counters"
         or policy["account_counter_coverage"] != "not_measured"
         or policy["rate_budget_coverage"] != "not_measured"
+        or policy["growth_bound_semantics"]
+        != "per_class_positive_delta_sum"
+        or policy["decrease_semantics"] != "reclamation_allowed"
         or policy["free_pages_status"] != "measured"
         or policy["terminal_workflow_pair_bound"] != 0
         or not isinstance(policy["resources"], list)
@@ -1761,15 +1780,13 @@ def _validate_resource_stability_semantics(
                 or (
                     expected_mode == "load"
                     and bound != 0
-                    and (
-                        ordinary_after < ordinary_before
-                        or reserved_after < reserved_before
-                        or ordinary_after
-                        - ordinary_before
-                        + reserved_after
-                        - reserved_before
-                        > bound
+                    and _resource_stability_positive_growth(
+                        ordinary_before,
+                        ordinary_after,
+                        reserved_before,
+                        reserved_after,
                     )
+                    > bound
                 )
             ):
                 raise ScenarioEvidenceError(
@@ -1809,15 +1826,13 @@ def _validate_resource_stability_semantics(
             ))
             or (
                 bound != 0
-                and (
-                    ordinary_after < ordinary_before
-                    or reserved_after < reserved_before
-                    or ordinary_after
-                    - ordinary_before
-                    + reserved_after
-                    - reserved_before
-                    > bound
+                and _resource_stability_positive_growth(
+                    ordinary_before,
+                    ordinary_after,
+                    reserved_before,
+                    reserved_after,
                 )
+                > bound
             )
         ):
             raise ScenarioEvidenceError(
@@ -1898,6 +1913,8 @@ def _parse_resource_stability(
         "coverage",
         "account_counter_coverage",
         "rate_budget_coverage",
+        "growth_bound_semantics",
+        "decrease_semantics",
         "free_pages_status",
         "terminal_workflow_pair_bound",
         *(
@@ -2014,6 +2031,10 @@ def _parse_resource_stability(
                 "account_counter_coverage"
             ],
             "rate_budget_coverage": policy_record["rate_budget_coverage"],
+            "growth_bound_semantics": policy_record[
+                "growth_bound_semantics"
+            ],
+            "decrease_semantics": policy_record["decrease_semantics"],
             "free_pages_status": policy_record["free_pages_status"],
             "terminal_workflow_pair_bound": terminal_workflow_pair_bound,
             "resources": policy_resources,
@@ -3069,6 +3090,8 @@ def _resource_stability_summary(
         "snapshot_consistency": "not_measured",
         "account_counters": "not_measured",
         "rate_budgets": "not_measured",
+        "growth_bound_semantics": "per_class_positive_delta_sum",
+        "decrease_semantics": "reclamation_allowed",
         "free_pages": {
             "status": "not_measured",
             "exact_pair_recovery": None,
@@ -3271,10 +3294,12 @@ def _resource_stability_summary(
         )
         growth = (
             [
-                workflow[f"{kind}_ordinary_used_after"]
-                + workflow[f"{kind}_reserved_used_after"]
-                - workflow[f"{kind}_ordinary_used_before"]
-                - workflow[f"{kind}_reserved_used_before"]
+                _resource_stability_positive_growth(
+                    workflow[f"{kind}_ordinary_used_before"],
+                    workflow[f"{kind}_ordinary_used_after"],
+                    workflow[f"{kind}_reserved_used_before"],
+                    workflow[f"{kind}_reserved_used_after"],
+                )
                 for acceptance in acceptances
                 for workflow in acceptance["workflows"]
             ]
@@ -3283,10 +3308,20 @@ def _resource_stability_summary(
         )
         terminal_growth = (
             [
-                acceptance["workflows"][-1][f"{kind}_ordinary_used_after"]
-                + acceptance["workflows"][-1][f"{kind}_reserved_used_after"]
-                - acceptance["workflows"][0][f"{kind}_ordinary_used_before"]
-                - acceptance["workflows"][0][f"{kind}_reserved_used_before"]
+                _resource_stability_positive_growth(
+                    acceptance["workflows"][0][
+                        f"{kind}_ordinary_used_before"
+                    ],
+                    acceptance["workflows"][-1][
+                        f"{kind}_ordinary_used_after"
+                    ],
+                    acceptance["workflows"][0][
+                        f"{kind}_reserved_used_before"
+                    ],
+                    acceptance["workflows"][-1][
+                        f"{kind}_reserved_used_after"
+                    ],
+                )
                 for acceptance in acceptances
             ]
             if measured
@@ -3317,7 +3352,19 @@ def _resource_stability_summary(
                 else None,
                 "plateau_or_reclamation": plateau,
                 "exact_terminal_recovery": all(
-                    value == 0 for value in terminal_growth
+                    acceptance["workflows"][0][
+                        f"{kind}_ordinary_used_before"
+                    ]
+                    == acceptance["workflows"][-1][
+                        f"{kind}_ordinary_used_after"
+                    ]
+                    and acceptance["workflows"][0][
+                        f"{kind}_reserved_used_before"
+                    ]
+                    == acceptance["workflows"][-1][
+                        f"{kind}_reserved_used_after"
+                    ]
+                    for acceptance in acceptances
                 )
                 if measured
                 else None,
@@ -3340,6 +3387,8 @@ def _resource_stability_summary(
             "snapshot_consistency": "single_core_irq_coherent",
             "account_counters": "not_measured",
             "rate_budgets": "not_measured",
+            "growth_bound_semantics": "per_class_positive_delta_sum",
+            "decrease_semantics": "reclamation_allowed",
             "free_pages": {
                 "status": "measured",
                 "exact_pair_recovery": True,

@@ -266,6 +266,8 @@ RESOURCE_STABILITY_OBSERVATION_FIELDS = {
     "snapshot_consistency",
     "account_counters",
     "rate_budgets",
+    "growth_bound_semantics",
+    "decrease_semantics",
     "free_pages",
     "resources",
 }
@@ -2285,6 +2287,9 @@ def _normalize_scenario_resource_stability(
         != "configured_global_resource_kind_counters_only"
         or observation["account_counters"] != "not_measured"
         or observation["rate_budgets"] != "not_measured"
+        or observation["growth_bound_semantics"]
+        != "per_class_positive_delta_sum"
+        or observation["decrease_semantics"] != "reclamation_allowed"
     ):
         _fail(f"{observation_path} overstates the registered observation coverage")
     free_pages_path = f"{observation_path}.free_pages"
@@ -2357,10 +2362,11 @@ def _normalize_scenario_resource_stability(
                 _fail(f"{resource_path}.plateau_or_reclamation must prove a plateau or reclamation")
             if not isinstance(observed["exact_terminal_recovery"], bool):
                 _fail(f"{resource_path}.exact_terminal_recovery must be boolean when measured")
-            if observed["exact_terminal_recovery"] is not (
-                deltas["terminal_observed_growth"] == 0
+            if (
+                observed["exact_terminal_recovery"]
+                and deltas["terminal_observed_growth"] != 0
             ):
-                _fail(f"{resource_path}.exact_terminal_recovery differs from terminal growth")
+                _fail(f"{resource_path}.exact recovery conflicts with terminal growth")
             measured_kinds += 1
         elif observed_status == "not_measured":
             if (

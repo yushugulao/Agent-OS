@@ -1192,6 +1192,40 @@ static int stability_global_snapshot_valid(
 	return 1;
 }
 
+static void stability_print_global_delta(
+	const struct agent_resource_snapshot *before,
+	const struct agent_resource_snapshot *after)
+{
+	for (uint kind = 0; kind < AGENT_RESOURCE_KIND_COUNT; kind++) {
+		const struct agent_resource_kind_snapshot *left =
+			&before->kinds[kind];
+		const struct agent_resource_kind_snapshot *right =
+			&after->kinds[kind];
+
+		if ((before->measured_mask & (1U << kind)) == 0)
+			continue;
+		if (left->used != right->used ||
+		    left->pending != right->pending ||
+		    left->ordinary_used != right->ordinary_used ||
+		    left->ordinary_pending != right->ordinary_pending ||
+		    left->reserved_used != right->reserved_used ||
+		    left->reserved_pending != right->reserved_pending)
+			printf("rp_agentos_orch: stability_delta kind=%s used=%llu/%llu pending=%llu/%llu ordinary=%llu/%llu ordinary_pending=%llu/%llu reserved=%llu/%llu reserved_pending=%llu/%llu\n",
+			       orch_resource_kind_names[kind], left->used,
+			       right->used, left->pending, right->pending,
+			       left->ordinary_used, right->ordinary_used,
+			       left->ordinary_pending,
+			       right->ordinary_pending, left->reserved_used,
+			       right->reserved_used, left->reserved_pending,
+			       right->reserved_pending);
+	}
+}
+
+static uint64 stability_positive_delta(uint64 before, uint64 after)
+{
+	return after > before ? after - before : 0;
+}
+
 static int stability_global_pair_valid(
 	const struct agent_resource_snapshot *before,
 	const struct agent_resource_snapshot *after, uint mode)
@@ -1211,6 +1245,11 @@ static int stability_global_pair_valid(
 			&after->kinds[kind];
 		uint64 bound = mode == RP_RESOURCE_STABILITY_MODE_TERMINAL ?
 			0 : orch_resource_growth_bounds[kind];
+		uint64 positive_growth =
+			stability_positive_delta(left->ordinary_used,
+						 right->ordinary_used) +
+			stability_positive_delta(left->reserved_used,
+						 right->reserved_used);
 
 		if ((before->measured_mask & (1U << kind)) == 0)
 			continue;
@@ -1222,11 +1261,7 @@ static int stability_global_pair_valid(
 		    (bound == 0 &&
 		     (left->ordinary_used != right->ordinary_used ||
 		      left->reserved_used != right->reserved_used)) ||
-		    (bound != 0 &&
-		     (right->ordinary_used < left->ordinary_used ||
-		      right->reserved_used < left->reserved_used ||
-		      right->ordinary_used - left->ordinary_used +
-			      right->reserved_used - left->reserved_used > bound)))
+		    (bound != 0 && positive_growth > bound))
 			return 0;
 	}
 	return 1;
@@ -1275,6 +1310,11 @@ static int stability_global_sequence_valid(void)
 			&orch_stability_global_after[
 				RP_RESOURCE_STABILITY_LOAD_WORKFLOWS - 1].kinds[kind];
 		uint64 bound = orch_resource_growth_bounds[kind];
+		uint64 positive_growth =
+			stability_positive_delta(left->ordinary_used,
+						 right->ordinary_used) +
+			stability_positive_delta(left->reserved_used,
+						 right->reserved_used);
 		int plateau = 0;
 
 		if ((first->measured_mask & (1U << kind)) == 0)
@@ -1284,11 +1324,7 @@ static int stability_global_sequence_valid(void)
 		    (bound == 0 &&
 		     (left->ordinary_used != right->ordinary_used ||
 		      left->reserved_used != right->reserved_used)) ||
-		    (bound != 0 &&
-		     (right->ordinary_used < left->ordinary_used ||
-		      right->reserved_used < left->reserved_used ||
-		      right->ordinary_used - left->ordinary_used +
-			      right->reserved_used - left->reserved_used > bound)))
+		    (bound != 0 && positive_growth > bound))
 			return 0;
 		if (bound == 0)
 			continue;
@@ -1420,6 +1456,8 @@ static int run_stability_workflow(uint index, uint mode)
 		mismatch |= 1U << 4;
 	if (!stability_global_pair_valid(global_before, global_after, mode))
 		mismatch |= 1U << 5;
+	if ((mismatch & (1U << 5)) != 0)
+		stability_print_global_delta(global_before, global_after);
 	if (mismatch != 0)
 		printf("rp_agentos_orch: stability_mismatch index=%u mask=%u ordinary_free=%llu/%llu reserved_free=%llu/%llu stack_free=%llu/%llu\n",
 		       index, mismatch, global_before->ordinary_free_pages,
@@ -1437,7 +1475,7 @@ static void append_stability_global_policy(char *body, uint measured_mask)
 		       "record=global_policy;measured_mask=");
 	rp_append_uint_text(body, sizeof(orch_stability_body), measured_mask);
 	rp_append_text(body, sizeof(orch_stability_body),
-		       ";measured_mask_semantics=configured_global_resource_kind_counters_only;snapshot_consistency=single_core_irq_coherent;coverage=configured_global_kind_counters;account_counter_coverage=not_measured;rate_budget_coverage=not_measured;free_pages_status=measured;terminal_workflow_pair_bound=0");
+		       ";measured_mask_semantics=configured_global_resource_kind_counters_only;snapshot_consistency=single_core_irq_coherent;coverage=configured_global_kind_counters;account_counter_coverage=not_measured;rate_budget_coverage=not_measured;growth_bound_semantics=per_class_positive_delta_sum;decrease_semantics=reclamation_allowed;free_pages_status=measured;terminal_workflow_pair_bound=0");
 	for (uint kind = 0; kind < AGENT_RESOURCE_KIND_COUNT; kind++) {
 		const struct agent_resource_kind_snapshot *resource =
 			&orch_stability_global_before[0].kinds[kind];
@@ -1743,7 +1781,7 @@ static int run_resource_stability_acceptance(void)
 	measured_mask = orch_stability_global_before[0].measured_mask;
 	global_verified = measured_mask == AGENT_RESOURCE_KIND_MASK_ALL;
 	rp_copy_text(body, sizeof(orch_stability_body),
-		     "schema=agentos_resource_stability_v4;measurement_scope=post_workflow_acceptance;timed_makespan_included=0;claim_scope=configured_global_counter_reclamation;configured_kind_coverage=measured_mask_only;account_coverage=self_identity_only;rate_budget_coverage=not_measured;global_leak_freedom=not_claimed;challenge_suffix=");
+		     "schema=agentos_resource_stability_v5;measurement_scope=post_workflow_acceptance;timed_makespan_included=0;claim_scope=configured_global_counter_reclamation;configured_kind_coverage=measured_mask_only;account_coverage=self_identity_only;rate_budget_coverage=not_measured;global_leak_freedom=not_claimed;challenge_suffix=");
 	rp_append_text(body, sizeof(orch_stability_body),
 		       orch_stability_workflow.suffix);
 	rp_append_text(body, sizeof(orch_stability_body), ";load_workflows=");

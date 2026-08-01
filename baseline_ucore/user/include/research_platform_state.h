@@ -66,9 +66,96 @@ static RP_UNUSED int rp_read_file(const char *path, char *buf, int cap)
 		if (n == 0) break;
 		total += n;
 	}
+	if (total + 1 == cap) {
+		char extra;
+		int n = read(fd, &extra, 1);
+		if (n != 0) {
+			close(fd);
+			return -1;
+		}
+	}
 	close(fd);
 	buf[total] = 0;
 	return total;
+}
+
+static RP_UNUSED int rp_open_bounded_append(
+	const char *path, char *body, int capacity, int *used)
+{
+	int fd;
+	int total = 0;
+
+	if (capacity <= 1 || used == 0)
+		return -1;
+	fd = open(path, O_RDWR);
+	if (fd < 0)
+		fd = open(path, O_CREATE | O_RDWR);
+	if (fd < 0) {
+		printf("rp_state: open_append_failed path=%s\n", path);
+		return -1;
+	}
+	while (total + 1 < capacity) {
+		int n = read(fd, body + total, capacity - 1 - total);
+
+		if (n < 0) {
+			printf("rp_state: read_append_failed path=%s\n", path);
+			close(fd);
+			return -1;
+		}
+		if (n == 0)
+			break;
+		for (int index = 0; index < n; index++) {
+			if (body[total + index] == 0) {
+				printf("rp_state: append_binary path=%s\n", path);
+				close(fd);
+				return -1;
+			}
+		}
+		total += n;
+	}
+	if (total + 1 == capacity) {
+		char extra;
+		int n = read(fd, &extra, 1);
+
+		if (n != 0) {
+			printf("rp_state: append_full path=%s\n", path);
+			close(fd);
+			return -1;
+		}
+	}
+	body[total] = 0;
+	*used = total;
+	return fd;
+}
+
+static RP_UNUSED int rp_write_append_suffix(
+	int fd, const char *path, const char *suffix, int length)
+{
+	int wrote = 0;
+
+	while (wrote < length) {
+		int n = write(fd, suffix + wrote, length - wrote);
+
+		if (n <= 0)
+			break;
+		wrote += n;
+	}
+	if (close(fd) < 0 || wrote != length) {
+		printf("rp_state: append_write_failed path=%s expected=%d actual=%d\n",
+		       path, length, wrote);
+		return 0;
+	}
+	return 1;
+}
+
+static RP_UNUSED int rp_bytes_equal(
+	const char *left, const char *right, int length)
+{
+	for (int index = 0; index < length; index++) {
+		if (left[index] != right[index])
+			return 0;
+	}
+	return 1;
 }
 
 static RP_UNUSED int rp_file_contains(const char *path, const char *needle)
@@ -154,6 +241,7 @@ struct rp_state_buffer {
 	char body[RP_STATE_BUFFER_SIZE];
 	int loaded;
 	int append_active;
+	int append_start;
 };
 
 static RP_UNUSED int rp_state_buffer_contains(
@@ -162,6 +250,7 @@ static RP_UNUSED int rp_state_buffer_contains(
 	if (!state->loaded || strcmp(state->path, path) != 0) {
 		state->loaded = 0;
 		state->append_active = 0;
+		state->append_start = 0;
 		state->path[0] = 0;
 		state->body[0] = 0;
 		if (strlen(path) >= sizeof(state->path) ||
@@ -209,12 +298,16 @@ static RP_UNUSED int rp_state_buffer_begin_append(
 {
 	state->loaded = 0;
 	state->append_active = 0;
+	state->append_start = 0;
 	state->path[0] = 0;
 	state->body[0] = 0;
 	if (strlen(path) >= sizeof(state->path))
 		return 0;
-	if (rp_read_file(path, state->body, sizeof(state->body)) < 0)
+	int original = rp_read_file(path, state->body, sizeof(state->body));
+	if (original < 0) {
 		state->body[0] = 0;
+		original = 0;
+	}
 	int index = 0;
 	while (path[index]) {
 		state->path[index] = path[index];
@@ -223,6 +316,7 @@ static RP_UNUSED int rp_state_buffer_begin_append(
 	state->path[index] = 0;
 	state->loaded = 1;
 	state->append_active = 1;
+	state->append_start = original;
 	return 1;
 }
 
@@ -237,10 +331,28 @@ static RP_UNUSED int rp_state_buffer_append(
 
 static RP_UNUSED int rp_state_buffer_commit(struct rp_state_buffer *state)
 {
+	int current;
+	int final;
+	int fd;
+
 	if (!state->append_active)
 		return 0;
 	state->append_active = 0;
-	return rp_write_file(state->path, state->body);
+	final = (int)strlen(state->body);
+	if (state->append_start < 0 || state->append_start > final)
+		return 0;
+	fd = rp_open_bounded_append(
+		state->path, rp_state_buf, RP_STATE_BUFFER_SIZE, &current);
+	if (fd < 0)
+		return 0;
+	if (current != state->append_start ||
+	    !rp_bytes_equal(rp_state_buf, state->body, current)) {
+		printf("rp_state: append_changed path=%s\n", state->path);
+		close(fd);
+		return 0;
+	}
+	return rp_write_append_suffix(
+		fd, state->path, state->body + current, final - current);
 }
 
 static RP_UNUSED __attribute__((noinline)) const char *rp_host_seed_text(void)
@@ -816,12 +928,18 @@ static RP_UNUSED int rp_get_int_value(const char *path, const char *key)
 static RP_UNUSED int rp_append_file(const char *path, const char *line)
 {
 	char *buf = rp_state_buf;
-	int n = rp_read_file(path, buf, RP_STATE_BUFFER_SIZE);
-	if (n < 0)
-		buf[0] = 0;
-	if (!rp_state_append_line(buf, RP_STATE_BUFFER_SIZE, path, line))
+	int n;
+	int fd = rp_open_bounded_append(
+		path, buf, RP_STATE_BUFFER_SIZE, &n);
+
+	if (fd < 0)
 		return 0;
-	return rp_write_file(path, buf);
+	if (!rp_state_append_line(buf, RP_STATE_BUFFER_SIZE, path, line)) {
+		close(fd);
+		return 0;
+	}
+	return rp_write_append_suffix(
+		fd, path, buf + n, (int)strlen(buf) - n);
 }
 
 static RP_UNUSED int rp_append_host_action_line(const char *path, const char *prefix, const char *value)

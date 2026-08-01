@@ -39,11 +39,24 @@ def function_text(path: Path, name: str) -> str:
 
 
 def main() -> int:
-    user_helper, baseline_helper = (
-        function_text(path, "rp_append_file") for path in HEADERS
-    )
-    if user_helper != baseline_helper:
-        raise AssertionError("rp_append_file differs between AgentOS and baseline")
+    for name in (
+        "rp_open_bounded_append",
+        "rp_write_append_suffix",
+        "rp_bytes_equal",
+        "rp_state_buffer_begin_append",
+        "rp_state_buffer_commit",
+        "rp_append_file",
+    ):
+        user_helper, baseline_helper = (
+            function_text(path, name) for path in HEADERS
+        )
+        if user_helper != baseline_helper:
+            raise AssertionError(f"{name} differs between AgentOS and baseline")
+        if name in {"rp_state_buffer_commit", "rp_append_file"}:
+            if "O_TRUNC" in user_helper or "rp_write_file" in user_helper:
+                raise AssertionError(f"{name} still rewrites through truncate")
+            if "memcmp" in user_helper:
+                raise AssertionError(f"{name} depends on unavailable user libc memcmp")
 
     compiler = host_compiler()
     with tempfile.TemporaryDirectory(prefix="rp-state-append-") as directory:
@@ -60,6 +73,7 @@ def main() -> int:
                     "-Werror",
                     "-fno-builtin",
                     "-fstack-protector-strong",
+                    "-DRP_STATE_BUFFER_SIZE=64",
                     *sanitizer_flags,
                     "-I",
                     str(PROBE.parent / "rp-evidence-host"),
