@@ -209,6 +209,7 @@ def _create(
     clean: bool = True,
     artifact_root: str = "results/evaluation/runs/run-1",
     run_id: str = "run-1",
+    timeout_seconds: int = campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
 ) -> Path:
     manifest = root / artifact_root / "campaign.json"
     suite = root / "ci" / "evaluation-suite.json"
@@ -255,6 +256,7 @@ def _create(
             qemu="qemu-system-riscv64",
             python_bin="python3",
             shell_bin="bash",
+            timeout_seconds=timeout_seconds,
         )
     return manifest
 
@@ -947,6 +949,12 @@ class CampaignTests(unittest.TestCase):
             with self.assertRaisesRegex(campaign.CampaignError, "clean committed"):
                 _create(root, clean=False)
 
+        for invalid_timeout in (180, 900.0, True):
+            with self.subTest(timeout=invalid_timeout), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with self.assertRaisesRegex(campaign.CampaignError, "fixed micro"):
+                    _create(root, timeout_seconds=invalid_timeout)
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = _create(root)
@@ -970,6 +978,10 @@ class CampaignTests(unittest.TestCase):
                 set(value["environment"]),
                 {"bash", "compiler", "git", "host_cc", "linker", "make", "objcopy", "objdump", "python", "qemu"},
             )
+            self.assertEqual(
+                value["protocol"]["micro_timeout_seconds"],
+                campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
+            )
             self.assertEqual(len(challenges), len(set(challenges)))
             self.assertNotIn("0" * 16, challenges)
             for index, boot in enumerate(value["boots"], 1):
@@ -981,6 +993,10 @@ class CampaignTests(unittest.TestCase):
                 self.assertEqual(
                     boot["command_environment"]["AGENT_TEST_GUEST_LOG_FILE"],
                     boot["guest_log"],
+                )
+                self.assertEqual(
+                    boot["command_environment"]["CASE_TIMEOUT"],
+                    f"{campaign.FORMAL_MICRO_TIMEOUT_SECONDS}s",
                 )
                 self.assertTrue(Path(boot["command_argv"][0]).is_absolute())
                 self.assertEqual(
@@ -1020,6 +1036,19 @@ class CampaignTests(unittest.TestCase):
             self.assertEqual(msys_environment["TMP"], r"R:\tmp")
             self.assertEqual(msys_environment["SYSTEMDRIVE"], "C:")
 
+            tampered_protocol = json.loads(json.dumps(value))
+            tampered_protocol["protocol"]["micro_timeout_seconds"] = 180
+            with self.assertRaisesRegex(campaign.CampaignError, "protocol"):
+                campaign.validate_campaign(tampered_protocol)
+
+            tampered_protocol = json.loads(json.dumps(value))
+            tampered_protocol["protocol"]["micro_timeout_seconds"] = 900.0
+            tampered_protocol["boots"][0]["command_environment"][
+                "CASE_TIMEOUT"
+            ] = "900.0s"
+            with self.assertRaisesRegex(campaign.CampaignError, "protocol"):
+                campaign.validate_campaign(tampered_protocol)
+
     def test_msys_micro_temporary_namespace_is_bound_and_tamper_evident(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1046,6 +1075,13 @@ class CampaignTests(unittest.TestCase):
                     campaign.CampaignError, "environment differs"
                 ):
                     campaign.validate_campaign(tampered)
+
+            tampered = json.loads(json.dumps(value))
+            tampered["boots"][0]["command_environment"]["CASE_TIMEOUT"] = "180s"
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "environment differs"
+            ):
+                campaign.validate_campaign(tampered)
 
     def test_micro_artifacts_require_the_exact_canonical_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1246,7 +1282,7 @@ class CampaignTests(unittest.TestCase):
 
                 @staticmethod
                 def communicate(timeout: int | None = None) -> tuple[str, None]:
-                    self.assertEqual(timeout, 60)
+                    self.assertEqual(timeout, campaign.FORMAL_MICRO_TIMEOUT_SECONDS)
                     return "runner completed\n", None
 
             def launch(command: list[str], **kwargs: object) -> FakeProcess:
@@ -1274,7 +1310,7 @@ class CampaignTests(unittest.TestCase):
                         repo=root,
                         manifest_path=manifest,
                         boot_id=boot["boot_id"],
-                        timeout_seconds=60,
+                        timeout_seconds=campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
                     ),
                     0,
                 )
@@ -1285,6 +1321,29 @@ class CampaignTests(unittest.TestCase):
                 (root / recorded["image_input_path"]).read_bytes(),
                 b"input:" + boot["challenge"].encode("ascii"),
             )
+
+    def test_run_boot_rejects_timeout_not_sealed_by_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _create(root)
+            with (
+                mock.patch.object(
+                    action_runner,
+                    "_run_lock_path",
+                    return_value=root / ".evaluation-test.lock",
+                ),
+                mock.patch.object(campaign.subprocess, "Popen") as launch,
+            ):
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "differs from the sealed campaign"
+                ):
+                    campaign.execute_and_record_boot(
+                        repo=root,
+                        manifest_path=manifest,
+                        boot_id="boot-01",
+                        timeout_seconds=180,
+                    )
+            launch.assert_not_called()
 
     def test_micro_timeout_kills_group_retains_output_and_records_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1303,7 +1362,9 @@ class CampaignTests(unittest.TestCase):
                 ) -> tuple[str, None]:
                     process.communicate_calls += 1
                     if process.communicate_calls == 1:
-                        self.assertEqual(timeout, 60)
+                        self.assertEqual(
+                            timeout, campaign.FORMAL_MICRO_TIMEOUT_SECONDS
+                        )
                         raise subprocess.TimeoutExpired(
                             boot["command_argv"], timeout, output=b"partial runner output\n"
                         )
@@ -1330,7 +1391,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     manifest_path=manifest,
                     boot_id=boot["boot_id"],
-                    timeout_seconds=60,
+                    timeout_seconds=campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
                 )
 
             self.assertEqual(rc, 124)
@@ -1347,7 +1408,10 @@ class CampaignTests(unittest.TestCase):
             runner_log = root / boot["runner_log"]
             retained = runner_log.read_text(encoding="utf-8")
             self.assertIn("partial runner output", retained)
-            self.assertIn("exceeded 60s total deadline", retained)
+            self.assertIn(
+                f"exceeded {campaign.FORMAL_MICRO_TIMEOUT_SECONDS}s total deadline",
+                retained,
+            )
             recorded = json.loads(manifest.read_text(encoding="utf-8"))["boots"][0]
             self.assertEqual(recorded["status"], "failed")
             self.assertEqual(recorded["exit_code"], 124)
@@ -1402,7 +1466,7 @@ class CampaignTests(unittest.TestCase):
                         repo=root,
                         manifest_path=manifest,
                         boot_id="boot-01",
-                        timeout_seconds=60,
+                        timeout_seconds=campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
                     ),
                     0,
                 )
@@ -1438,7 +1502,7 @@ class CampaignTests(unittest.TestCase):
                         repo=root,
                         manifest_path=manifest,
                         boot_id=boot["boot_id"],
-                        timeout_seconds=60,
+                        timeout_seconds=campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
                     )
             recorded = json.loads(manifest.read_text(encoding="utf-8"))["boots"][0]
             self.assertEqual(recorded["status"], "planned")
@@ -1484,7 +1548,7 @@ class CampaignTests(unittest.TestCase):
                             repo=root,
                             manifest_path=manifest,
                             boot_id="boot-01",
-                            timeout_seconds=60,
+                            timeout_seconds=campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
                         )
             finally:
                 make_path.write_bytes(original)
@@ -1531,7 +1595,7 @@ class CampaignTests(unittest.TestCase):
                         repo=root,
                         manifest_path=manifest,
                         boot_id=boot["boot_id"],
-                        timeout_seconds=60,
+                        timeout_seconds=campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
                     )
             launch.assert_not_called()
             self.assertEqual(guest.read_text(encoding="utf-8"), "competitor guest\n")
@@ -2008,9 +2072,18 @@ class CampaignTests(unittest.TestCase):
         self.assertIn("run-boot", script)
         self.assertNotIn('subparsers.add_parser("record")', campaign_source)
         self.assertIn("EVALUATION_MICRO_TIMEOUT:-900", script)
+        self.assertIn("FORMAL_MICRO_TIMEOUT=900", script)
+        self.assertIn(
+            '"CASE_TIMEOUT": f"{timeout_seconds}s"', campaign_source
+        )
+        self.assertIn("micro_timeout_seconds", campaign_source)
         self.assertIn("with-campaign-lock", script)
         self.assertIn("__run_locked", script)
         self.assertIn("--timeout \"${EVALUATION_MICRO_TIMEOUT}\"", script)
+        self.assertLess(
+            script.index('"${CAMPAIGN_TOOL}" create'),
+            script.index('--timeout "${EVALUATION_MICRO_TIMEOUT}"'),
+        )
         self.assertIn("exclusive_repo_run_lock", campaign_source)
         self.assertIn("exclusive_evaluation_campaign_lock", campaign_source)
         self.assertIn("CREATE_NEW_PROCESS_GROUP", campaign_source)

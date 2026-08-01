@@ -149,8 +149,9 @@ except ImportError:
 
 KIND = "agentos-evaluation-campaign"
 SCENARIO_KIND = "agentos-evaluation-scenario-campaign"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SCENARIO_SCHEMA_VERSION = 5
+FORMAL_MICRO_TIMEOUT_SECONDS = 900
 MINIMUM_BOOTS = FORMAL_BOOT_COUNT
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -878,6 +879,7 @@ def _micro_boot_environment(
     platform: dict[str, Any],
     challenge: str,
     guest_log: str,
+    timeout_seconds: int = FORMAL_MICRO_TIMEOUT_SECONDS,
 ) -> dict[str, str]:
     compiler_path = environment["compiler"]["path"]
     absolute_prefix, _ = _absolute_toolprefix(compiler_path)
@@ -887,6 +889,7 @@ def _micro_boot_environment(
         "AGENT_EVAL_CHALLENGE_HEX": challenge,
         "AGENT_TEST_CASE": "agenteval_ucore",
         "AGENT_TEST_GUEST_LOG_FILE": guest_log,
+        "CASE_TIMEOUT": f"{timeout_seconds}s",
         "CC": environment["host_cc"]["path"],
         "CHAPTER": "agent_eval",
         "HOSTCC": environment["host_cc"]["path"],
@@ -1053,6 +1056,7 @@ def create_campaign(
     qemu: str,
     python_bin: str,
     shell_bin: str,
+    timeout_seconds: int = FORMAL_MICRO_TIMEOUT_SECONDS,
     require_clean: bool = True,
 ) -> dict[str, Any]:
     repo = _resolved_safe_directory(repo, "repository")
@@ -1062,6 +1066,13 @@ def create_campaign(
     if type(requested_boots) is not int or requested_boots != FORMAL_BOOT_COUNT:
         raise CampaignError(
             f"formal evaluation requires the fixed {FORMAL_BOOT_COUNT}-boot stopping rule"
+        )
+    if (
+        type(timeout_seconds) is not int
+        or timeout_seconds != FORMAL_MICRO_TIMEOUT_SECONDS
+    ):
+        raise CampaignError(
+            "formal evaluation requires the fixed micro boot timeout"
         )
     if output.exists():
         raise CampaignError(f"campaign manifest already exists: {output}")
@@ -1124,7 +1135,11 @@ def create_campaign(
                 "challenge": challenge,
                 "command_argv": command,
                 "command_environment": _micro_boot_environment(
-                    environment, platform_proof, challenge, guest_log
+                    environment,
+                    platform_proof,
+                    challenge,
+                    guest_log,
+                    timeout_seconds,
                 ),
                 "exit_code": None,
                 "finished_at_utc": None,
@@ -1155,6 +1170,7 @@ def create_campaign(
             "fresh_filesystem_per_boot": True,
             "independent_unit": "fresh-qemu-boot",
             "minimum_boots": MINIMUM_BOOTS,
+            "micro_timeout_seconds": timeout_seconds,
             "requested_boots": requested_boots,
             "sample_order_policy": "guest-paired-alternating-ab-ba",
             "suite_path": "ci/evaluation-suite.json",
@@ -1429,13 +1445,16 @@ def execute_and_record_boot(
 
     repo = _resolved_safe_directory(repo, "repository")
     manifest_path = _resolved_safe_file(manifest_path, "campaign manifest")
-    if type(timeout_seconds) is not int or not 60 <= timeout_seconds <= 3600:
-        raise CampaignError("micro boot timeout must be between 60 and 3600 seconds")
     with exclusive_repo_run_lock(repo):
         # This load is intentionally inside the lock: a contender may have
         # completed or failed this same manifest while we were acquiring it.
         campaign = _strict_json(manifest_path)
         validate_campaign(campaign)
+        if (
+            type(timeout_seconds) is not int
+            or timeout_seconds != campaign["protocol"]["micro_timeout_seconds"]
+        ):
+            raise CampaignError("micro boot timeout differs from the sealed campaign")
         _require_manifest_artifact_root(
             repo, manifest_path, campaign["run"]["artifact_root"]
         )
@@ -1753,6 +1772,7 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
             "fresh_filesystem_per_boot",
             "independent_unit",
             "minimum_boots",
+            "micro_timeout_seconds",
             "requested_boots",
             "sample_order_policy",
             "suite_path",
@@ -1766,6 +1786,8 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         type(requested) is not int
         or requested != FORMAL_BOOT_COUNT
         or protocol["minimum_boots"] != MINIMUM_BOOTS
+        or type(protocol["micro_timeout_seconds"]) is not int
+        or protocol["micro_timeout_seconds"] != FORMAL_MICRO_TIMEOUT_SECONDS
         or protocol["fresh_filesystem_per_boot"] is not True
         or protocol["independent_unit"] != "fresh-qemu-boot"
         or protocol["sample_order_policy"] != "guest-paired-alternating-ab-ba"
@@ -1885,7 +1907,11 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         ):
             raise CampaignError("boot command lacks evaluation provenance binding")
         expected_environment = _micro_boot_environment(
-            environment, platform, boot["challenge"], boot["guest_log"]
+            environment,
+            platform,
+            boot["challenge"],
+            boot["guest_log"],
+            protocol["micro_timeout_seconds"],
         )
         if boot["command_environment"] != expected_environment:
             raise CampaignError("boot process environment differs from its preflight")
@@ -3017,6 +3043,7 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--qemu", required=True)
     create.add_argument("--python-bin", required=True)
     create.add_argument("--shell-bin", default="bash")
+    create.add_argument("--timeout", type=int, required=True)
 
     run_boot = subparsers.add_parser("run-boot")
     run_boot.add_argument("--repo", type=Path, required=True)
@@ -3112,6 +3139,7 @@ def main(argv: list[str] | None = None) -> int:
                 qemu=args.qemu,
                 python_bin=args.python_bin,
                 shell_bin=args.shell_bin,
+                timeout_seconds=args.timeout,
             )
         elif args.command == "run-boot":
             return execute_and_record_boot(

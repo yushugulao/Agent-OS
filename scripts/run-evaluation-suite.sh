@@ -17,6 +17,7 @@ EVALUATION_INCLUDE_SCENARIO="${EVALUATION_INCLUDE_SCENARIO:-1}"
 EVALUATION_SCENARIO_BOOTS="${EVALUATION_SCENARIO_BOOTS:-${FORMAL_SCENARIO_BOOTS}}"
 EVALUATION_SCENARIO_TIMEOUT="${EVALUATION_SCENARIO_TIMEOUT:-600}"
 EVALUATION_MICRO_TIMEOUT="${EVALUATION_MICRO_TIMEOUT:-900}"
+FORMAL_MICRO_TIMEOUT=900
 EVALUATION_WSL_DISTRO="${EVALUATION_WSL_DISTRO:-Ubuntu}"
 EVALUATION_OUTPUT_ROOT="${EVALUATION_OUTPUT_ROOT:-results/evaluation}"
 CAMPAIGN_TOOL="host_tools/evaluation_campaign.py"
@@ -48,7 +49,7 @@ Environment:
   EVALUATION_INCLUDE_SCENARIO  1 for formal research scenario, 0 for development only
   EVALUATION_SCENARIO_BOOTS    development scenario count; formal campaigns require exactly 7
   EVALUATION_SCENARIO_TIMEOUT  per-target runner budget (60..3600 seconds); the paired deadline is derived
-  EVALUATION_MICRO_TIMEOUT     total deadline for each micro boot (60..3600 seconds)
+  EVALUATION_MICRO_TIMEOUT     sealed micro boot watchdog (formal value: 900 seconds)
   EVALUATION_RUN_ID      development run id; formal runs require formal-<commit>
   EVALUATION_RUN_DIR     explicit existing run directory for verify/cost/dashboard/package
   EVALUATION_OUTPUT_ROOT Git-ignored output root (default: results/evaluation)
@@ -428,8 +429,8 @@ run_campaign() {
 		exit 2
 	}
 	[[ "${EVALUATION_MICRO_TIMEOUT}" =~ ^[0-9]+$ ]] &&
-		(( EVALUATION_MICRO_TIMEOUT >= 60 && EVALUATION_MICRO_TIMEOUT <= 3600 )) || {
-		echo "[evaluation] micro timeout must be between 60 and 3600 seconds" >&2
+		(( EVALUATION_MICRO_TIMEOUT == FORMAL_MICRO_TIMEOUT )) || {
+		echo "[evaluation] formal micro timeout must be ${FORMAL_MICRO_TIMEOUT} seconds" >&2
 		exit 2
 	}
 	if [[ "${EVALUATION_INCLUDE_SCENARIO}" == "1" ]]; then
@@ -490,6 +491,7 @@ run_campaign() {
 		--qemu "${QEMU}" \
 		--python-bin "${PYTHON_BIN}" \
 		--shell-bin "${BASH_BIN}" \
+		--timeout "${EVALUATION_MICRO_TIMEOUT}" \
 		2>&1 | tee "${RUN_DIR}/preflight.log"
 	pipeline_status=("${PIPESTATUS[@]}")
 	preflight_rc="${pipeline_status[0]}"

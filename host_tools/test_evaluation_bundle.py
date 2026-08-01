@@ -27,6 +27,7 @@ import functional_acceptance_compile_contract as functional_compile_contract
 import plain_ucore_fs_extract as fs_extract
 import test_plain_ucore_fs_extract as fs_fixture
 from evaluation_campaign import (
+    FORMAL_MICRO_TIMEOUT_SECONDS,
     SCHEMA_VERSION as CAMPAIGN_SCHEMA_VERSION,
     SCENARIO_SCHEMA_VERSION,
     _canonical_sha256,
@@ -480,6 +481,7 @@ def make_run(
             "fresh_filesystem_per_boot": True,
             "independent_unit": "fresh-qemu-boot",
             "minimum_boots": 7,
+            "micro_timeout_seconds": FORMAL_MICRO_TIMEOUT_SECONDS,
             "requested_boots": 7,
             "sample_order_policy": "guest-paired-alternating-ab-ba",
             "suite_path": "ci/evaluation-suite.json",

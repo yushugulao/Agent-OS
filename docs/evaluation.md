@@ -485,7 +485,7 @@ build/QEMU/archive；科研场景则用独立 scenario coordination 锁串行化
 per-target repo 锁保护。场景外层不会跨子进程持有子执行器还要获取的 repo 锁，因而
 既避免跨进程自死锁，也不会放弃对并发普通 runner 的 fail-closed 隔离。两类路径都在
 对应协调锁内重新读取 pending 状态，并在执行前后复核源码和工具身份。每个微基准
-boot 有 60 至 3600 秒的总期限（默认 900 秒），
+boot 使用 campaign schema 固定并内外一致绑定的 900 秒总期限，
 超时会终止进程组、保留部分输出并记录失败，而不是让残留 QEMU 污染下一轮。科研场景
 不再把同一个数误作整轮期限：manifest 中的 `timeout_seconds=T` 是每个目标的 runner
 基础预算，clean、build、guest 三阶段各取得 `T+30` 秒，目标观察器清理另有 10 秒。
