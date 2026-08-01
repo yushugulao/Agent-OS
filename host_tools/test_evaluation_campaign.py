@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import shutil
 import subprocess
@@ -248,7 +249,7 @@ def _create(
             side_effect=fake_probe,
         ),
     ):
-        campaign.create_campaign(
+        value = campaign.create_campaign(
             repo=root,
             output=manifest,
             run_id=run_id,
@@ -259,6 +260,11 @@ def _create(
             shell_bin="bash",
             timeout_seconds=timeout_seconds,
         )
+    manifest.parent.joinpath("preflight.log").write_text(
+        campaign.format_preflight_receipt(value),
+        encoding="ascii",
+        newline="\n",
+    )
     return manifest
 
 
@@ -296,6 +302,16 @@ def _guest_log(challenge: str) -> str:
                     )
     lines.append("agenteval_ucore: worker passed")
     return "\n".join(lines) + "\n"
+
+
+def _write_scenario_preflight(manifest: Path, value: dict[str, object]) -> Path:
+    receipt = manifest.parent.parent / "scenario-preflight.log"
+    receipt.write_text(
+        campaign.format_preflight_receipt(value),
+        encoding="ascii",
+        newline="\n",
+    )
+    return receipt
 
 
 class CampaignSourceGateIntegrationTests(unittest.TestCase):
@@ -1085,6 +1101,120 @@ class CampaignTests(unittest.TestCase):
             ):
                 campaign._read_sample_orders(guest, challenge, 182)
 
+    def test_preflight_receipt_binds_immutable_plan_and_cli_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _create(root)
+            planned = json.loads(manifest.read_text(encoding="utf-8"))
+            for invalid_schema in (6.0, True, "6"):
+                forged_schema = json.loads(json.dumps(planned))
+                forged_schema["schema_version"] = invalid_schema
+                with self.subTest(schema_version=invalid_schema):
+                    with self.assertRaisesRegex(
+                        campaign.CampaignError, "unsupported campaign"
+                    ):
+                        campaign.validate_campaign(forged_schema)
+            receipt = campaign.format_preflight_receipt(planned)
+            receipt_path = manifest.parent / "preflight.log"
+            receipt_path.write_text(receipt, encoding="ascii", newline="\n")
+            campaign.check_preflight_receipt(manifest, receipt_path)
+            receipt_path.unlink()
+            with mock.patch.object(campaign, "_run_micro_process") as run:
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "preflight receipt"
+                ):
+                    campaign.execute_and_record_boot(
+                        repo=root,
+                        manifest_path=manifest,
+                        boot_id="boot-01",
+                        timeout_seconds=campaign.FORMAL_MICRO_TIMEOUT_SECONDS,
+                    )
+                run.assert_not_called()
+            receipt_path.write_text(receipt, encoding="ascii", newline="\n")
+
+            collected = json.loads(json.dumps(planned))
+            collected["phase"] = "collected"
+            timestamp = planned["run"]["started_at_utc"]
+            collected["run"]["completed_at_utc"] = timestamp
+            for boot in collected["boots"]:
+                boot["exit_code"] = 0
+                boot["finished_at_utc"] = timestamp
+                for key in (
+                    "guest_log_sha256",
+                    "image_final_sha256",
+                    "image_input_sha256",
+                    "kernel_sha256",
+                    "runner_log_sha256",
+                ):
+                    boot[key] = "a" * 64
+                boot["observed_sample_orders"] = ["AB", "BA"]
+                boot["sample_count"] = planned["protocol"][
+                    "expected_samples_per_boot"
+                ]
+                boot["status"] = "passed"
+            campaign.validate_campaign(collected)
+            self.assertEqual(receipt, campaign.format_preflight_receipt(collected))
+
+            manifest.write_text(json.dumps(collected), encoding="utf-8")
+            campaign.check_preflight_receipt(manifest, receipt_path)
+            tampered = json.loads(receipt)
+            tampered["binding_sha256"] = "0" * 64
+            receipt_path.write_text(json.dumps(tampered) + "\n", encoding="ascii")
+            with self.assertRaisesRegex(campaign.CampaignError, "differs"):
+                campaign.check_preflight_receipt(manifest, receipt_path)
+            for noncanonical in (
+                receipt.replace("\n", "\r\n").encode("ascii"),
+                (receipt + "\n").encode("ascii"),
+                receipt.encode("ascii") + b"\0",
+            ):
+                with self.subTest(noncanonical=noncanonical[-4:]):
+                    receipt_path.write_bytes(noncanonical)
+                    with self.assertRaisesRegex(campaign.CampaignError, "differs"):
+                        campaign.check_preflight_receipt(manifest, receipt_path)
+            receipt_path.write_bytes(
+                b"x" * (campaign.PREFLIGHT_RECEIPT_MAX_BYTES + 1)
+            )
+            with self.assertRaisesRegex(campaign.CampaignError, "unreadable"):
+                campaign.check_preflight_receipt(manifest, receipt_path)
+
+            output = mock.Mock()
+            output.buffer = io.BytesIO()
+            with mock.patch.object(
+                campaign, "create_campaign", return_value=planned
+            ), mock.patch.object(campaign.sys, "stdout", output):
+                status = campaign.main([
+                    "create",
+                    "--repo", str(root),
+                    "--output", str(manifest),
+                    "--run-id", "run-1",
+                    "--boots", "7",
+                    "--toolprefix", "/tool/riscv-none-elf-",
+                    "--qemu", "/tool/qemu-system-riscv64",
+                    "--python-bin", "/usr/bin/python3",
+                    "--shell-bin", "/usr/bin/bash",
+                    "--timeout", "900",
+                ])
+            self.assertEqual(status, 0)
+            self.assertEqual(output.buffer.getvalue(), receipt.encode("ascii"))
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import sys;"
+                        f"sys.path.insert(0,{str(PROJECT_ROOT / 'host_tools')!r});"
+                        "import evaluation_campaign as c;"
+                        f"c._write_ascii_stdout({'x' + chr(10)!r})"
+                    ),
+                ],
+                cwd=PROJECT_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(child.returncode, 0, child.stderr)
+            self.assertEqual(child.stdout, b"x\n")
+
     def test_msys_micro_temporary_namespace_is_bound_and_tamper_evident(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1203,6 +1333,69 @@ class CampaignTests(unittest.TestCase):
                 f"{custom_root}/scenario/raw/boot-01",
             )
             scenario_manifest = manifest.parent / "scenario" / "scenario-plan.json"
+            scenario_receipt = campaign.format_preflight_receipt(scenario)
+            scenario_receipt_path = manifest.parent / "scenario-preflight.log"
+            scenario_receipt_path.write_text(
+                scenario_receipt, encoding="ascii", newline="\n"
+            )
+            campaign.check_preflight_receipt(
+                scenario_manifest, scenario_receipt_path
+            )
+            collected_scenario = json.loads(json.dumps(scenario))
+            collected_scenario["phase"] = "collected"
+            for boot in collected_scenario["boots"]:
+                boot["exit_code"] = 0
+                boot["finished_at_utc"] = "2026-07-30T00:09:00Z"
+                boot["host_summary_sha256"] = "a" * 64
+                boot["runner_log_sha256"] = "b" * 64
+                boot["status"] = "passed"
+            collected_scenario["report"]["sha256"] = "c" * 64
+            collected_scenario["report"]["status"] = "recorded"
+            campaign.validate_scenario_campaign(collected_scenario)
+            for invalid_schema in (5.0, True, "5"):
+                forged_schema = json.loads(json.dumps(scenario))
+                forged_schema["schema_version"] = invalid_schema
+                with self.subTest(scenario_schema=invalid_schema):
+                    with self.assertRaisesRegex(
+                        campaign.CampaignError, "unsupported scenario"
+                    ):
+                        campaign.validate_scenario_campaign(forged_schema)
+            self.assertEqual(
+                scenario_receipt,
+                campaign.format_preflight_receipt(collected_scenario),
+            )
+            scenario_receipt_path.unlink()
+            with mock.patch.object(campaign, "_run_micro_process") as run:
+                with self.assertRaisesRegex(
+                    campaign.CampaignError, "preflight receipt"
+                ):
+                    campaign.execute_and_record_scenario_boot(
+                        repo=root,
+                        manifest_path=scenario_manifest,
+                        boot_id="boot-01",
+                    )
+                run.assert_not_called()
+            scenario_receipt_path.write_text(
+                scenario_receipt, encoding="ascii", newline="\n"
+            )
+            output = mock.Mock()
+            output.buffer = io.BytesIO()
+            with mock.patch.object(
+                campaign, "create_scenario_campaign", return_value=scenario
+            ), mock.patch.object(campaign.sys, "stdout", output):
+                status = campaign.main([
+                    "create-scenario",
+                    "--repo", str(root),
+                    "--micro-manifest", str(manifest),
+                    "--output", str(scenario_manifest),
+                    "--boots", "7",
+                    "--timeout", "600",
+                    "--wsl-distro", "Ubuntu",
+                ])
+            self.assertEqual(status, 0)
+            self.assertEqual(
+                output.buffer.getvalue(), scenario_receipt.encode("ascii")
+            )
             relocated_scenario = root / "relocated" / "scenario-plan.json"
             relocated_scenario.parent.mkdir(parents=True)
             relocated_scenario.write_bytes(scenario_manifest.read_bytes())
@@ -2142,6 +2335,27 @@ class CampaignTests(unittest.TestCase):
         self.assertIn('input_image=repo / "nfs/fs.img"', campaign_source)
         self.assertIn('final_image=repo / "nfs/fs-copy.img"', campaign_source)
         self.assertIn("create-scenario", script)
+        self.assertEqual(script.count('"${CAMPAIGN_TOOL}" check-preflight'), 2)
+        micro_preflight_check = (
+            '"${CAMPAIGN_TOOL}" check-preflight \\\n'
+            '\t\t--manifest "${manifest}" --receipt "${RUN_DIR}/preflight.log"'
+        )
+        scenario_preflight_check = (
+            '--manifest "${RUN_DIR}/scenario/scenario-plan.json" \\\n'
+            '\t\t\t--receipt "${RUN_DIR}/scenario-preflight.log"'
+        )
+        first_boot_loop = (
+            "for ((number = 1; number <= EVALUATION_BOOTS; number++))"
+        )
+        self.assertIn(micro_preflight_check, script)
+        self.assertIn(scenario_preflight_check, script)
+        self.assertLess(
+            script.index(micro_preflight_check),
+            script.index('"${CAMPAIGN_TOOL}" create-scenario'),
+        )
+        self.assertLess(
+            script.index(scenario_preflight_check), script.index(first_boot_loop)
+        )
         self.assertIn("run-scenario-boot", script)
         self.assertNotIn('subparsers.add_parser("record-scenario")', campaign_source)
         self.assertIn("check-scenario", script)
@@ -2191,6 +2405,7 @@ class CampaignTests(unittest.TestCase):
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
+            _write_scenario_preflight(scenario_path, scenario)
             boot = scenario["boots"][0]
             repo_lock = root / ".per-target-repo.lock"
             child_lock_acquired: list[bool] = []
@@ -2276,7 +2491,7 @@ class CampaignTests(unittest.TestCase):
                     return_value=_scenario_environment(),
                 ),
             ):
-                campaign.create_scenario_campaign(
+                scenario = campaign.create_scenario_campaign(
                     repo=root,
                     micro_manifest=micro,
                     output=scenario_path,
@@ -2284,6 +2499,7 @@ class CampaignTests(unittest.TestCase):
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
+            _write_scenario_preflight(scenario_path, scenario)
 
             observed_timeouts: list[int | None] = []
 
@@ -2350,6 +2566,7 @@ class CampaignTests(unittest.TestCase):
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
+            _write_scenario_preflight(scenario_path, scenario)
 
             class TimedOutProcess:
                 returncode = -9

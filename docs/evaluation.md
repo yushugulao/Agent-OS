@@ -448,6 +448,13 @@ scenario boot 控制面及 scenario boot/target 分成彼此独立的确定性 `
 `measurement-source-receipt.json` 和策略清单覆盖的源码快照；portable verifier 重放两类
 Guest 源码合同及控制面清单，committed verifier 再要求快照、receipt 哈希和 C 中对应
 Git blob 完全一致。
+micro 与 scenario preflight 不再以“日志非空”充当成功证据：创建命令各自产生单行 canonical
+JSON receipt，绑定源码提交、run、schema、工具/平台/协议和不可变 boot 计划。正式入口在首个
+QEMU 前立即按 manifest 重算 receipt，portable bundle 在打包和离线重放时再次逐字节核对；
+空日志、普通成功文本、非 canonical 编码或篡改字段都会失败。portable 重放能证明 receipt
+字节与不可变计划一致，但该值可由同一计划确定性重建，因此不把它夸大为独立的生成时刻或
+操作者诚实性证明；首 boot 前存在性由生产入口的即时校验约束，跨主机时序仍需要远端签名
+attestation。
 `checksums.sha256` 再覆盖 manifest 与全部 payload。验证器要求文件清单精确一致，并从
 包内分片在私有临时目录安全物化 raw 日志，再运行完整 evaluation contract，并从 summary
 确定性重建 Dashboard 后逐字节比较。分片按固定成员顺序写入，gzip header、

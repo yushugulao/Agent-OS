@@ -505,6 +505,8 @@ run_campaign() {
 		echo "[evaluation] preflight failed closed; log retained at ${RUN_DIR}/preflight.log" >&2
 		exit "${preflight_rc}"
 	fi
+	run_repo_python "${CAMPAIGN_TOOL}" check-preflight \
+		--manifest "${manifest}" --receipt "${RUN_DIR}/preflight.log"
 	if [[ "${EVALUATION_INCLUDE_SCENARIO}" == "1" ]]; then
 		mkdir -p "${RUN_DIR}/scenario"
 		set +e
@@ -528,6 +530,9 @@ run_campaign() {
 			echo "[evaluation] scenario preflight failed closed; log retained at ${RUN_DIR}/scenario-preflight.log" >&2
 			exit "${preflight_rc}"
 		fi
+		run_repo_python "${CAMPAIGN_TOOL}" check-preflight \
+			--manifest "${RUN_DIR}/scenario/scenario-plan.json" \
+			--receipt "${RUN_DIR}/scenario-preflight.log"
 	fi
 
 	local number boot_id challenge rc

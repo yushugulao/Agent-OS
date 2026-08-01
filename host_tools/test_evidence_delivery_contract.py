@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import evidence_delivery_contract as delivery_contract
+import evaluation_bundle as evaluation_bundle_contract
 from evidence_delivery_contract import (
     DeliveryContractError,
     INDEX_PATH,
@@ -52,7 +53,12 @@ class DeliveryFixture:
         self.source = git(root, "rev-parse", "HEAD")
         self.source_branch = git(root, "branch", "--show-current")
 
-    def publish(self, *, symlink: bool = False) -> Path:
+    def publish(
+        self,
+        *,
+        symlink: bool = False,
+        schema_version: int = evaluation_bundle_contract.SCHEMA_VERSION,
+    ) -> Path:
         release = make_manifest_binding(self.source, self.name)
         output = self.repo / release["release"]["path"]
         stage = output.with_name(f".{self.name}.stage")
@@ -61,7 +67,7 @@ class DeliveryFixture:
             (
                 json.dumps({
                     "kind": "agentos-evaluation-evidence-bundle",
-                    "schema_version": 4,
+                    "schema_version": schema_version,
                     "source_commit": self.source,
                     "delivery": release,
                 })
@@ -83,6 +89,39 @@ class DeliveryFixture:
 
 
 class EvidenceDeliveryContractTests(unittest.TestCase):
+    def test_current_evaluation_bundle_schema_is_the_only_registered_version(self) -> None:
+        identity = (
+            evaluation_bundle_contract.KIND,
+            evaluation_bundle_contract.SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            delivery_contract.MANIFEST_SOURCE_FIELDS.get(identity),
+            "source_commit",
+        )
+        self.assertNotIn(
+            (evaluation_bundle_contract.KIND, 4),
+            delivery_contract.MANIFEST_SOURCE_FIELDS,
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = DeliveryFixture(Path(temp))
+            bundle = fixture.publish()
+            evidence = fixture.commit_evidence()
+            result = verify_manifest_delivery(bundle, fixture.repo)
+            self.assertEqual(result["status"], "committed-history")
+            self.assertEqual(result["evidence_commit"], evidence)
+
+        for invalid_schema in (4, 5.0, True, "5"):
+            with self.subTest(schema_version=invalid_schema):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = DeliveryFixture(Path(temp))
+                    bundle = fixture.publish(schema_version=invalid_schema)  # type: ignore[arg-type]
+                    fixture.commit_evidence()
+                    with self.assertRaisesRegex(
+                        DeliveryContractError, "kind/schema is unsupported"
+                    ):
+                        verify_manifest_delivery(bundle, fixture.repo)
+
     def test_full_evidence_schema_v6_uses_historical_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             fixture = DeliveryFixture(Path(temp))

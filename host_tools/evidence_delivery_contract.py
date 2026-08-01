@@ -54,7 +54,7 @@ MAX_COMMITTED_FILES = 1000
 MAX_COMMITTED_FILE_BYTES = 64 << 20
 MAX_COMMITTED_TOTAL_BYTES = 256 << 20
 MANIFEST_SOURCE_FIELDS = {
-    ("agentos-evaluation-evidence-bundle", 4): "source_commit",
+    ("agentos-evaluation-evidence-bundle", 5): "source_commit",
     (None, 6): "commit",
 }
 FULL_EVIDENCE_V6_FIELDS = {
@@ -955,7 +955,12 @@ def verify_manifest_delivery(
         raise DeliveryContractError(f"bundle manifest is invalid: {error}") from error
     if not isinstance(manifest, dict):
         raise DeliveryContractError("bundle manifest is invalid")
-    identity = (manifest.get("kind"), manifest.get("schema_version"))
+    schema_version = manifest.get("schema_version")
+    if type(schema_version) is not int:
+        raise DeliveryContractError(
+            "bundle manifest kind/schema is unsupported by verify-committed"
+        )
+    identity = (manifest.get("kind"), schema_version)
     source_field = MANIFEST_SOURCE_FIELDS.get(identity)
     if source_field is None:
         raise DeliveryContractError(

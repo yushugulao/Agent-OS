@@ -19,8 +19,10 @@ from typing import Any
 
 from evaluation_campaign import (
     CampaignError,
+    PREFLIGHT_RECEIPT_MAX_BYTES,
     _expected_samples_per_boot,
     export_run_plan,
+    format_preflight_receipt,
     validate_campaign,
     validate_scenario_campaign,
 )
@@ -72,6 +74,7 @@ try:
         atomic_write_bytes,
         ensure_safe_directory,
         path_is_link,
+        read_regular_file,
         reject_link_components,
         require_regular_file,
         require_safe_directory,
@@ -85,6 +88,7 @@ except ImportError:
         atomic_write_bytes,
         ensure_safe_directory,
         path_is_link,
+        read_regular_file,
         reject_link_components,
         require_regular_file,
         require_safe_directory,
@@ -535,8 +539,6 @@ def _validate_source_inventory(
                 "formal evidence lacks required scenario artifacts: "
                 f"{sorted(missing_scenario)}"
             )
-        if (run_dir / "scenario-preflight.log").stat().st_size == 0:
-            raise BundleError("formal scenario preflight log is empty")
     allowed = (
         FIXED_RUN_FILES
         | FIXED_DASHBOARD_FILES
@@ -805,6 +807,21 @@ def _environment_sha256(campaign: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_bytes(campaign["environment"])).hexdigest()
 
 
+def _verify_preflight_receipt(
+    path: Path, campaign: dict[str, Any], label: str
+) -> None:
+    receipt = _safe_regular_file(path, f"{label} preflight receipt")
+    try:
+        expected = format_preflight_receipt(campaign).encode("ascii")
+        observed = read_regular_file(
+            receipt, maximum_bytes=PREFLIGHT_RECEIPT_MAX_BYTES
+        )
+    except (CampaignError, OSError, UnicodeError, ValueError) as error:
+        raise BundleError(f"{label} preflight receipt is invalid: {error}") from error
+    if observed != expected:
+        raise BundleError(f"{label} preflight receipt differs from its campaign")
+
+
 def _verify_micro_campaign(
     run_root: Path,
     suite_path: Path,
@@ -817,6 +834,9 @@ def _verify_micro_campaign(
         raise BundleError(f"micro campaign is invalid: {error}") from error
     if campaign["phase"] != "collected":
         raise BundleError("micro campaign is not collected")
+    _verify_preflight_receipt(
+        run_root / "preflight.log", campaign, "micro campaign"
+    )
     suite_sha256 = _sha256(suite_path)
     if campaign["protocol"]["suite_sha256"] != suite_sha256:
         raise BundleError("micro campaign is not bound to the packaged suite")
@@ -1230,6 +1250,9 @@ def _verify_scenario_campaign(
         raise BundleError(f"scenario campaign is invalid: {error}") from error
     if scenario["phase"] != "collected" or scenario["report"]["status"] != "recorded":
         raise BundleError("scenario campaign is not collected")
+    _verify_preflight_receipt(
+        run_root / "scenario-preflight.log", scenario, "scenario campaign"
+    )
     if (
         scenario["run"]["id"] != micro["run"]["id"]
         or scenario["run"]["commit"] != micro["run"]["commit"]
@@ -2205,7 +2228,11 @@ def verify_bundle(root: Path) -> dict[str, Any]:
     }
     if set(manifest) != expected_fields:
         raise BundleError("bundle manifest fields differ")
-    if manifest["schema_version"] != SCHEMA_VERSION or manifest["kind"] != KIND:
+    if (
+        type(manifest["schema_version"]) is not int
+        or manifest["schema_version"] != SCHEMA_VERSION
+        or manifest["kind"] != KIND
+    ):
         raise BundleError("bundle manifest schema is unsupported")
     if manifest["payload_root"] != "run":
         raise BundleError("bundle payload root is invalid")

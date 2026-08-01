@@ -114,6 +114,7 @@ try:
         atomic_write_bytes,
         ensure_safe_directory,
         path_is_link,
+        read_regular_file,
         reject_link_components,
         require_regular_file,
         require_safe_directory,
@@ -124,6 +125,7 @@ except ImportError:
         atomic_write_bytes,
         ensure_safe_directory,
         path_is_link,
+        read_regular_file,
         reject_link_components,
         require_regular_file,
         require_safe_directory,
@@ -153,6 +155,9 @@ SCHEMA_VERSION = 6
 SCENARIO_SCHEMA_VERSION = 5
 FORMAL_MICRO_TIMEOUT_SECONDS = 900
 FORMAL_INNER_PAIR_COUNT = 7
+PREFLIGHT_RECEIPT_KIND = "agentos-evaluation-preflight-receipt"
+PREFLIGHT_RECEIPT_SCHEMA_VERSION = 1
+PREFLIGHT_RECEIPT_MAX_BYTES = 4096
 MINIMUM_BOOTS = FORMAL_BOOT_COUNT
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -1494,6 +1499,9 @@ def execute_and_record_boot(
         _require_manifest_artifact_root(
             repo, manifest_path, campaign["run"]["artifact_root"]
         )
+        check_preflight_receipt(
+            manifest_path, manifest_path.parent / "preflight.log"
+        )
         if campaign["phase"] != "collecting":
             raise CampaignError("cannot run a boot after campaign collection is sealed")
         matching = [boot for boot in campaign["boots"] if boot["boot_id"] == boot_id]
@@ -1752,7 +1760,11 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         ],
         "campaign",
     )
-    if campaign["schema_version"] != SCHEMA_VERSION or campaign["kind"] != KIND:
+    if (
+        type(campaign["schema_version"]) is not int
+        or campaign["schema_version"] != SCHEMA_VERSION
+        or campaign["kind"] != KIND
+    ):
         raise CampaignError("unsupported campaign schema")
     if campaign["phase"] not in {"collecting", "collected"}:
         raise CampaignError("invalid campaign phase")
@@ -2089,6 +2101,117 @@ def _canonical_sha256(value: object) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _preflight_binding(value: dict[str, Any]) -> dict[str, Any]:
+    kind = value.get("kind")
+    if kind == KIND:
+        validate_campaign(value)
+        run_keys = (
+            "artifact_root",
+            "clean_worktree",
+            "commit",
+            "execution_domain",
+            "id",
+            "started_at_utc",
+        )
+        boot_keys = (
+            "boot_id",
+            "challenge",
+            "command_argv",
+            "command_environment",
+            "guest_log",
+            "image_final_path",
+            "image_input_path",
+            "kernel_path",
+            "runner_log",
+        )
+        return {
+            "boots": [
+                {key: boot[key] for key in boot_keys} for boot in value["boots"]
+            ],
+            "environment": value["environment"],
+            "kind": kind,
+            "measurement_source_receipt": value["measurement_source_receipt"],
+            "platform": value["platform"],
+            "protocol": value["protocol"],
+            "run": {key: value["run"][key] for key in run_keys},
+            "schema_version": value["schema_version"],
+        }
+    if kind == SCENARIO_KIND:
+        validate_scenario_campaign(value)
+        boot_keys = (
+            "boot_id",
+            "challenge",
+            "command_argv",
+            "command_environment",
+            "host_summary",
+            "runner_log",
+            "target_order",
+            "work_dir",
+        )
+        return {
+            "boots": [
+                {key: boot[key] for key in boot_keys} for boot in value["boots"]
+            ],
+            "kind": kind,
+            "measurement_source_receipt": value["measurement_source_receipt"],
+            "platform": value["platform"],
+            "protocol": value["protocol"],
+            "report_path": value["report"]["path"],
+            "run": value["run"],
+            "schema_version": value["schema_version"],
+        }
+    raise CampaignError("preflight receipt campaign kind is unsupported")
+
+
+def build_preflight_receipt(value: dict[str, Any]) -> dict[str, Any]:
+    binding = _preflight_binding(value)
+    return {
+        "binding_sha256": _canonical_sha256(binding),
+        "campaign_kind": value["kind"],
+        "campaign_schema_version": value["schema_version"],
+        "kind": PREFLIGHT_RECEIPT_KIND,
+        "run_id": value["run"]["id"],
+        "schema_version": PREFLIGHT_RECEIPT_SCHEMA_VERSION,
+        "source_commit": value["run"]["commit"],
+        "status": "passed",
+    }
+
+
+def format_preflight_receipt(value: dict[str, Any]) -> str:
+    return json.dumps(
+        build_preflight_receipt(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ) + "\n"
+
+
+def _write_ascii_stdout(value: str) -> None:
+    try:
+        encoded = value.encode("ascii")
+        output = sys.stdout.buffer
+    except (UnicodeError, AttributeError) as error:
+        raise CampaignError("canonical stdout is unavailable") from error
+    output.write(encoded)
+    output.flush()
+
+
+def check_preflight_receipt(manifest_path: Path, receipt_path: Path) -> None:
+    campaign = _strict_json(manifest_path)
+    _require_regular_file(receipt_path, "campaign preflight receipt")
+    try:
+        observed = read_regular_file(
+            receipt_path, maximum_bytes=PREFLIGHT_RECEIPT_MAX_BYTES
+        )
+    except (OSError, ValueError) as error:
+        raise CampaignError(
+            f"campaign preflight receipt is unreadable: {error}"
+        ) from error
+    expected = format_preflight_receipt(campaign).encode("ascii")
+    if observed != expected:
+        raise CampaignError("campaign preflight receipt differs from its manifest")
 
 
 def _scenario_clean_environment(
@@ -2512,7 +2635,8 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
         "scenario campaign",
     )
     if (
-        value["schema_version"] != SCENARIO_SCHEMA_VERSION
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != SCENARIO_SCHEMA_VERSION
         or value["kind"] != SCENARIO_KIND
     ):
         raise CampaignError("unsupported scenario campaign schema")
@@ -2901,6 +3025,10 @@ def execute_and_record_scenario_boot(
         _require_manifest_artifact_root(
             repo, manifest_path, value["run"]["artifact_root"], scenario=True
         )
+        check_preflight_receipt(
+            manifest_path,
+            manifest_path.parent.parent / "scenario-preflight.log",
+        )
         if value["phase"] != "collecting":
             raise CampaignError("scenario collection is already sealed")
         matching = [item for item in value["boots"] if item["boot_id"] == boot_id]
@@ -3116,6 +3244,10 @@ def _parser() -> argparse.ArgumentParser:
     check.add_argument("--manifest", type=Path, required=True)
     check.add_argument("--require-collected", action="store_true")
 
+    preflight_check = subparsers.add_parser("check-preflight")
+    preflight_check.add_argument("--manifest", type=Path, required=True)
+    preflight_check.add_argument("--receipt", type=Path, required=True)
+
     boot_field = subparsers.add_parser("get-boot-field")
     boot_field.add_argument("--manifest", type=Path, required=True)
     boot_field.add_argument("--boot-id", required=True)
@@ -3175,7 +3307,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "create":
-            create_campaign(
+            campaign = create_campaign(
                 repo=args.repo,
                 output=args.output,
                 run_id=args.run_id,
@@ -3186,6 +3318,7 @@ def main(argv: list[str] | None = None) -> int:
                 shell_bin=args.shell_bin,
                 timeout_seconds=args.timeout,
             )
+            _write_ascii_stdout(format_preflight_receipt(campaign))
         elif args.command == "run-boot":
             return execute_and_record_boot(
                 repo=args.repo,
@@ -3207,10 +3340,12 @@ def main(argv: list[str] | None = None) -> int:
             check_campaign(
                 args.repo, args.manifest, require_collected=args.require_collected
             )
+        elif args.command == "check-preflight":
+            check_preflight_receipt(args.manifest, args.receipt)
         elif args.command == "get-boot-field":
             print(get_boot_field(args.manifest, args.boot_id, args.field))
         elif args.command == "create-scenario":
-            create_scenario_campaign(
+            campaign = create_scenario_campaign(
                 repo=args.repo,
                 micro_manifest=args.micro_manifest,
                 output=args.output,
@@ -3218,6 +3353,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout,
                 wsl_distro=args.wsl_distro,
             )
+            _write_ascii_stdout(format_preflight_receipt(campaign))
         elif args.command == "get-scenario-field":
             print(get_scenario_boot_field(args.manifest, args.boot_id, args.field))
         elif args.command == "get-scenario-metadata":

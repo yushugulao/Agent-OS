@@ -139,6 +139,10 @@ python3 -I -S scripts/trusted-python-entry.py \
   --bundle evidence/releases/<bundle> --repo-root .
 ```
 
+该通用 committed verifier 与 portable verifier 都只接受当前 evaluation bundle schema
+v5，并通过跨模块回归锁定同一版本；浮点、布尔、字符串版本以及未发布的旧 schema 均拒绝，
+避免两个权威入口再次发生版本漂移。
+
 远程 CI 完成后，现场抓取并绑定到一个新目录，不改写本地原包，也不保存 token：
 
 ```bash

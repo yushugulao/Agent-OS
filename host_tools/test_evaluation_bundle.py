@@ -35,6 +35,7 @@ from evaluation_campaign import (
     _micro_boot_environment,
     _scenario_boot_environment,
     export_run_plan,
+    format_preflight_receipt,
     validate_campaign,
     validate_scenario_campaign,
 )
@@ -504,12 +505,14 @@ def make_run(
     }
     validate_campaign(campaign)
     write_strict(run / "campaign.json", campaign)
+    (run / "preflight.log").write_text(
+        format_preflight_receipt(campaign), encoding="ascii", newline="\n"
+    )
     write_strict(run / "measurement-source-receipt.json", measurement_source_receipt)
     export_run_plan(run / "campaign.json", run / "run-plan.json")
     summary, rows = build(SUITE_PATH, run / "run-plan.json", raw)
     write_json(run / "summary.json", summary)
     write_jsonl(run / "metrics.jsonl", rows)
-    (run / "preflight.log").write_text("fixture preflight passed\n", encoding="utf-8")
     materialize_compatibility_fixture(run, ROOT, campaign)
     render(run / "summary.json", run / "dashboard")
     return run
@@ -848,7 +851,9 @@ def add_formal_scenario(
     validate_scenario_campaign(scenario_plan)
     write_strict(scenario_root / "scenario-plan.json", scenario_plan)
     (scenario_root / "collector.log").write_text("collector passed\n", encoding="utf-8")
-    (run / "scenario-preflight.log").write_text("scenario preflight passed\n", encoding="utf-8")
+    (run / "scenario-preflight.log").write_text(
+        format_preflight_receipt(scenario_plan), encoding="ascii", newline="\n"
+    )
     summary, rows = build(
         SUITE_PATH, run / "run-plan.json", run / "raw",
         scenario_root / "report.json", scenario_root / "scenario-plan.json",
@@ -1219,6 +1224,23 @@ def main() -> int:
         original_plan = json.loads(
             (development_run / "run-plan.json").read_text(encoding="utf-8")
         )
+        micro_preflight_path = development_run / "preflight.log"
+        original_micro_preflight = micro_preflight_path.read_bytes()
+        forged_micro_preflight = json.loads(original_micro_preflight)
+        forged_micro_preflight["binding_sha256"] = "0" * 64
+        write_strict(micro_preflight_path, forged_micro_preflight)
+        expect_rejected(
+            lambda: bundle._verify_micro_campaign(development_run, SUITE_PATH),
+            "preflight receipt differs from its campaign",
+        )
+        micro_preflight_path.write_bytes(
+            b"x" * (bundle.PREFLIGHT_RECEIPT_MAX_BYTES + 1)
+        )
+        expect_rejected(
+            lambda: bundle._verify_micro_campaign(development_run, SUITE_PATH),
+            "preflight receipt is invalid",
+        )
+        micro_preflight_path.write_bytes(original_micro_preflight)
         forged_sample_count = json.loads(json.dumps(original_campaign))
         forged_sample_count["protocol"]["expected_samples_per_boot"] -= 1
         for boot in forged_sample_count["boots"]:
@@ -1226,6 +1248,11 @@ def main() -> int:
         write_strict(
             development_run / "campaign.json",
             forged_sample_count,
+        )
+        micro_preflight_path.write_text(
+            format_preflight_receipt(forged_sample_count),
+            encoding="ascii",
+            newline="\n",
         )
         expect_rejected(
             lambda: bundle._verify_micro_campaign(development_run, SUITE_PATH),
@@ -1235,6 +1262,7 @@ def main() -> int:
             development_run / "campaign.json",
             original_campaign,
         )
+        micro_preflight_path.write_bytes(original_micro_preflight)
         swapped_suite_value = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
         swapped_suite_value["experiments"][0]["claim_gate"][
             "minimum_relative_improvement_percent"
@@ -1330,6 +1358,17 @@ def main() -> int:
         assert manifest["archive_summary"]["archive_count"] == 7
         assert not (development / "run" / "raw").exists()
         assert bundle.verify_bundle(development) == manifest
+        bundle_manifest_path = development / "manifest.json"
+        original_bundle_manifest = bundle_manifest_path.read_bytes()
+        for invalid_schema in (5.0, True, "5"):
+            forged_bundle_manifest = json.loads(original_bundle_manifest)
+            forged_bundle_manifest["schema_version"] = invalid_schema
+            write_strict(bundle_manifest_path, forged_bundle_manifest)
+            expect_rejected(
+                lambda: bundle.verify_bundle(development),
+                "bundle manifest schema is unsupported",
+            )
+        bundle_manifest_path.write_bytes(original_bundle_manifest)
         make_full_verification_payload(
             development_run / "full-verification", commit=COMMIT
         )
@@ -1443,11 +1482,28 @@ def main() -> int:
         )
         scenario_plan_path = formal_run / "scenario/scenario-plan.json"
         scenario_plan = json.loads(scenario_plan_path.read_text(encoding="utf-8"))
+        scenario_preflight_path = formal_run / "scenario-preflight.log"
+        original_scenario_preflight = scenario_preflight_path.read_bytes()
+        forged_scenario_preflight = json.loads(original_scenario_preflight)
+        forged_scenario_preflight["binding_sha256"] = "0" * 64
+        write_strict(scenario_preflight_path, forged_scenario_preflight)
+        expect_rejected(
+            lambda: bundle._verify_scenario_campaign(
+                formal_run, micro_campaign, profile="formal"
+            ),
+            "preflight receipt differs from its campaign",
+        )
+        scenario_preflight_path.write_bytes(original_scenario_preflight)
         forged_scenario = json.loads(json.dumps(scenario_plan))
         forged_scenario["measurement_source_receipt"]["sources"][0][
             "sha256"
         ] = "0" * 64
         write_strict(scenario_plan_path, forged_scenario)
+        scenario_preflight_path.write_text(
+            format_preflight_receipt(forged_scenario),
+            encoding="ascii",
+            newline="\n",
+        )
         expect_rejected(
             lambda: bundle._verify_scenario_campaign(
                 formal_run, micro_campaign, profile="formal"
@@ -1460,6 +1516,11 @@ def main() -> int:
             forged_scenario["platform"]
         )
         write_strict(scenario_plan_path, forged_scenario)
+        scenario_preflight_path.write_text(
+            format_preflight_receipt(forged_scenario),
+            encoding="ascii",
+            newline="\n",
+        )
         expect_rejected(
             lambda: bundle._verify_scenario_campaign(
                 formal_run, micro_campaign, profile="formal"
@@ -1467,6 +1528,7 @@ def main() -> int:
             "identity differs from the micro campaign",
         )
         write_strict(scenario_plan_path, scenario_plan)
+        scenario_preflight_path.write_bytes(original_scenario_preflight)
         # Exercise the real extractor for both filesystem layouts once.  The
         # mutation case below then proves the image, rather than self-consistent
         # sidecar hashes, is authoritative.  Remaining bundle tests replace the
@@ -1600,6 +1662,11 @@ def main() -> int:
             forged_scenario_plan = copy.deepcopy(scenario_plan)
             forged_scenario_plan["measurement_source_receipt"] = forged_receipt
             write_strict(scenario_plan_path, forged_scenario_plan)
+            scenario_preflight_path.write_text(
+                format_preflight_receipt(forged_scenario_plan),
+                encoding="ascii",
+                newline="\n",
+            )
 
             expect_rejected(
                 lambda: bundle._verify_scenario_campaign(
@@ -1612,6 +1679,7 @@ def main() -> int:
             )
         finally:
             write_strict(scenario_plan_path, scenario_plan)
+            scenario_preflight_path.write_bytes(original_scenario_preflight)
             micro_campaign["measurement_source_receipt"] = original_receipt
             functional_compile_contract.COMPILE_CLOSURE_FINGERPRINT = original_fingerprint
             compile_contract_path.write_bytes(original_compile_contract)
