@@ -391,6 +391,10 @@ $(KSTACK_BUILD_CONFIG): .FORCE
 	@rm -f $(INACTIVE_PROFILE_OBJS)
 	@printf '%s\n' \
 		'CC=$(CC)' \
+		'CC1=$(shell $(CC_CMD) -print-prog-name=cc1)' \
+		'AS_SUBPROGRAM=$(shell $(CC_CMD) -print-prog-name=as)' \
+		'LD=$(LD)' \
+		'OBJDUMP=$(OBJDUMP)' \
 		'CFLAGS=$(CFLAGS)' \
 		'LDFLAGS=$(LDFLAGS)' \
 		'AGENT_SIZE_OPTIMIZED_MODULES=$(AGENT_SIZE_OPTIMIZED_MODULES)' \
@@ -481,6 +485,13 @@ override KERNEL_BUDGET_LOG = warn
 override KERNEL_BUDGET_CHAPTER = agent
 override KERNEL_BUDGET_PYTHON = $(PYTHON_BIN)
 override KERNEL_BUDGET_PYTHON_CMD = $(call shell_quote,$(KERNEL_BUDGET_PYTHON))
+override KERNEL_BUDGET_TOOL_ARGS = \
+	--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
+	--ld $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)ld) \
+	--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy) \
+	--objdump $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objdump) \
+	--nm $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)nm) \
+	--size $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)size)
 override KERNEL_BUDGET_SUBMAKE = env \
 	-u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES \
 	-u CFLAGS -u CPPFLAGS -u LDFLAGS -u ASFLAGS \
@@ -575,8 +586,7 @@ agent-module-check: agent-uapi-check scripts/check-agent-module-boundaries.sh sc
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-kernel-budgets.py \
 		--check agent-modules --config $(KERNEL_BUDGET_CONFIG) --root . \
 		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
-		--nm $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)nm) \
-		--size $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)size)
+		$(KERNEL_BUDGET_TOOL_ARGS)
 
 kernel-budget-check: agent-uapi-check scripts/check-agent-module-boundaries.sh scripts/check-teardown-protocol.py scripts/check-metadata-catalog-capacity.py scripts/check-metadata-catalog-rollback-fence.py scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
 	@bash scripts/check-agent-module-boundaries.sh
@@ -589,16 +599,12 @@ kernel-budget-check: agent-uapi-check scripts/check-agent-module-boundaries.sh s
 		--check kernel --config $(KERNEL_BUDGET_CONFIG) --root . \
 		--kernel $(KERNEL_BUDGET_BUILDDIR)/kernel \
 		--struct-probe $(STRUCT_PROC_BUDGET_PROBE) \
-		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
-		--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy) \
-		--nm $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)nm) \
-		--size $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)size) \
+		$(KERNEL_BUDGET_TOOL_ARGS) \
 		--callgraph-dir $(KERNEL_BUDGET_BUILDDIR)/os
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-kernel-budgets.py \
 		--check agent-modules --config $(KERNEL_BUDGET_CONFIG) --root . \
 		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
-		--nm $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)nm) \
-		--size $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)size)
+		$(KERNEL_BUDGET_TOOL_ARGS)
 
 override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-check-kernel-budgets.py \

@@ -113,8 +113,12 @@ class KernelWorkReceiptTests(unittest.TestCase):
     def test_snapshot_observer_cannot_publish(self):
         self.mutate(
             "os/syscall.c",
-            "case SYS_kernel_work_receipt_snapshot:\n\t\treturn KERNEL_WORK_SYSCALL_OBSERVER;",
-            "case SYS_kernel_work_receipt_snapshot:\n\t\treturn KERNEL_WORK_SYSCALL_PUBLISH;",
+            "case SYS_kernel_work_receipt_snapshot:\n\tcase SYS_agent_resource_snapshot:\n"
+            "\t\treturn KERNEL_WORK_SYSCALL_OBSERVER;",
+            "case SYS_kernel_work_receipt_snapshot:\n"
+            "\t\treturn KERNEL_WORK_SYSCALL_PUBLISH;\n"
+            "\tcase SYS_agent_resource_snapshot:\n"
+            "\t\treturn KERNEL_WORK_SYSCALL_OBSERVER;",
         )
         self.assert_rejected("non-publishing syscall class")
 

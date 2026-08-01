@@ -73,6 +73,11 @@ and metadata-control-plane measurements are intentionally not copied into this
 document: they must come from the candidate's canonical `make ci-check` log,
 the same versioned JSON, and the selected release bundle. A measurement below
 its frozen maximum passes without raising the baseline merely to match it.
+The source baseline therefore remains 47,922 lines. The reviewed ceiling is
+49,834 lines: the extra 129 lines since the previous ceiling are the resource
+snapshot/lifecycle integration and general `fstat` compatibility path used by
+the contest evaluator. The ceiling equals the measured candidate, so later
+growth still requires an explicit review instead of inheriting spare capacity.
 
 The frozen catalog-capacity contract is deliberately static: 512 slots split
 into 64 SYSTEM slots and four 112-slot workflow partitions. Each workflow may
@@ -189,8 +194,15 @@ approval rule. Those owners are deployment-specific and cannot be named
 portably here; without protected review, the same change could weaken a gate
 while growing the kernel.
 
-`make ci-check` always rebuilds the fixed `agentfinal_ucore`, `LOG=warn` profile
-with the versioned `riscv64-linux-gnu` toolchain. `make full-verify` invokes the
+`make ci-check` always rebuilds the fixed `agentfinal_ucore`, `LOG=warn` profile.
+The Ubuntu CI identity remains the exact `riscv64-linux-gnu` GCC/binutils and
+`dpkg` package profile, including canonical `/usr/bin` paths, package ownership,
+and package integrity. Local E3 may instead use the versioned MSYS2 xPack
+profile only when the six direct build/measurement tools plus GCC's `cc1` and
+assembler subprogram match the committed SHA-256 inventory and the duration-
+calibration profile id, prefix, and all shared versions. The build receipt binds
+the compiler, `cc1`, assembler, linker, and objdump actually used; a mixed
+toolchain or a changed executable fails closed. `make full-verify` invokes the
 same target before starting the long QEMU regression. `.gitlab-ci.yml` defines
 an exact remote evidence set of one Host-class job and eight QEMU-class jobs.
 

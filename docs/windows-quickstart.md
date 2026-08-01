@@ -84,6 +84,13 @@ export TMPDIR=/tmp
 make evaluation-doctor
 ```
 
+本地 `kernel-budget-check` 与 Ubuntu CI 共用同一构建参数和预算，但工具身份分开证明。
+Ubuntu profile 校验固定的 `/usr/bin` 路径、`dpkg` 归属与包完整性；MSYS2 profile 校验
+gcc、cc1、as、ld、objcopy、objdump、nm、size 八个可执行文件的版本和逐文件 SHA-256，
+并要求它与本地三轮时长校准使用同一 profile 及全部共有组件版本。不能通过改名、wrapper
+或混搭工具进入该 profile。预算检查先进入显式的仓库根目录，再把仓库内文件以相对路径
+交给原生工具，因此从仓库外调用或工作区含中文时都不会泄漏不兼容的绝对路径。
+
 预检会把结果明确标为 `domain=native-msys2`，绑定 Windows build、uname、
 `msys-2.0.dll` 和所有工具哈希，并验证控制面程序确实使用该 runtime。仓库、工具和临时
 目录必须通过 cygpath 双向映射；中文路径会在受控域中固定使用 `C.UTF-8`。正式

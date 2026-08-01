@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "canonical_toolchain": {
+    "profile_id": "canonical-ubuntu-26.04-riscv64-linux-gnu-v1",
     "prefix": "riscv64-linux-gnu-",
     "gcc_version": "15.2.0",
     "gcc_package": "gcc-15-riscv64-linux-gnu",
@@ -41,10 +42,30 @@
       "-fstack-clash-protection"
     ],
     "ldflags": [
+      "-m",
+      "elf64lriscv",
       "-z",
       "max-page-size=4096"
     ]
   },
+  "local_kernel_budget_toolchains": [
+    {
+      "profile_id": "local-e3-msys2-xpack-qemu11-v1",
+      "prefix": "riscv-none-elf-",
+      "gcc_version": "15.2.0",
+      "binutils_version": "2.45",
+      "executable_sha256": {
+        "gcc": "9fd3aecdd6ae127a5545709f44f8f154b4a39898b021fe87d2991947b0a235c5",
+        "cc1": "6b038178359b0988f2e9a8e7c10bd998952ec6c245fd738669a9aed70c81e45f",
+        "as": "d6d156d52fbf69f31a60f689570fac975a8b800651e6d6d28ea471f0bef91d5a",
+        "ld": "a807fd93cb04f577af9b5b7d591990ea740771d778f20311fbc353db2858fe58",
+        "objcopy": "f795429a74b30249a0fc337dc31614f6fee265701a972844d830d1eb70cee4ad",
+        "objdump": "307d930a497551a94c7459ac49a947c842c320d28eda485c844a79fce1ce7641",
+        "nm": "9ab395ada4e901a56a16dc7753275488885f6960bf31cdf5089a8a9e59372643",
+        "size": "ce371c825b03182484b209095043d9193d67c5ec9502320699c93933bb3d7fd3"
+      }
+    }
+  ],
   "kernel_source": {
     "include_globs": [
       "os/**/*.c",
@@ -66,7 +87,7 @@
       "os/physical_page_test.c"
     ],
     "baseline_lines": 47922,
-    "max_lines": 49705
+    "max_lines": 49834
   },
   "kernel_image": {
     "baseline_stripped_elf_bytes": 332544,
@@ -486,6 +507,7 @@
           "identity",
           "identity_lease",
           "metadata",
+          "resource_controller",
           "workflow_lifecycle"
         ],
         "allowed_bridge_dependencies": [

@@ -6,8 +6,10 @@ import hashlib
 import importlib.util
 import json
 import math
+import os
 import re
 import shlex
+import shutil
 import statistics
 import subprocess
 import sys
@@ -348,6 +350,8 @@ def parse_args():
         "--agent-core-probe", default="build/ci/agent-core-boundary.o"
     )
     parser.add_argument("--objcopy")
+    parser.add_argument("--objdump")
+    parser.add_argument("--ld")
     parser.add_argument("--nm")
     parser.add_argument("--cc")
     parser.add_argument("--size")
@@ -449,6 +453,9 @@ def agent_test_source_fingerprint(root, config):
     tests = config["agent_test_suite"]
     contract = {
         "canonical_toolchain": config["canonical_toolchain"],
+        "local_kernel_budget_toolchains": config.get(
+            "local_kernel_budget_toolchains", []
+        ),
         "expected_cases": tests["expected_cases"],
         "local_calibration_profile": tests["local_calibration_profile"],
         "runner_profile": tests["runner_profile"],
@@ -609,6 +616,7 @@ def validate_config(config):
         config.get("canonical_toolchain"), "canonical_toolchain"
     )
     for name in (
+        "profile_id",
         "prefix",
         "gcc_version",
         "gcc_package",
@@ -623,6 +631,70 @@ def validate_config(config):
             raise BudgetError(f"canonical_toolchain.{name} must be a string")
     require_string_list(toolchain, "cflags")
     require_string_list(toolchain, "ldflags")
+
+    local_toolchains = config.get("local_kernel_budget_toolchains")
+    if not isinstance(local_toolchains, list) or not local_toolchains:
+        raise BudgetError(
+            "local_kernel_budget_toolchains must be a non-empty array"
+        )
+    local_profile_ids = set()
+    local_prefixes = set()
+    expected_local_fields = {
+        "profile_id",
+        "prefix",
+        "gcc_version",
+        "binutils_version",
+        "executable_sha256",
+    }
+    expected_local_tools = {
+        "gcc",
+        "cc1",
+        "as",
+        "ld",
+        "objcopy",
+        "objdump",
+        "nm",
+        "size",
+    }
+    for index, profile in enumerate(local_toolchains):
+        label = f"local_kernel_budget_toolchains[{index}]"
+        profile = require_mapping(profile, label)
+        if set(profile) != expected_local_fields:
+            raise BudgetError(f"{label} fields mismatch")
+        profile_id = profile.get("profile_id")
+        if (
+            not isinstance(profile_id, str)
+            or re.fullmatch(r"[A-Za-z0-9_.-]+", profile_id) is None
+        ):
+            raise BudgetError(f"{label}.profile_id is invalid")
+        if profile_id in local_profile_ids:
+            raise BudgetError(f"duplicate local kernel budget profile: {profile_id}")
+        local_profile_ids.add(profile_id)
+        prefix = profile.get("prefix")
+        if (
+            not isinstance(prefix, str)
+            or re.fullmatch(r"[A-Za-z0-9_.+-]+-", prefix) is None
+        ):
+            raise BudgetError(f"{label}.prefix is invalid")
+        if prefix == toolchain["prefix"] or prefix in local_prefixes:
+            raise BudgetError(f"{label}.prefix is not unique")
+        local_prefixes.add(prefix)
+        for name in ("gcc_version", "binutils_version"):
+            if not isinstance(profile.get(name), str) or not profile[name]:
+                raise BudgetError(f"{label}.{name} must be a string")
+        executable_sha256 = require_mapping(
+            profile.get("executable_sha256"), f"{label}.executable_sha256"
+        )
+        if set(executable_sha256) != expected_local_tools:
+            raise BudgetError(f"{label}.executable_sha256 inventory mismatch")
+        for name, digest in executable_sha256.items():
+            if (
+                not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                raise BudgetError(
+                    f"{label}.executable_sha256.{name} must be a lowercase SHA-256"
+                )
 
     source = require_mapping(config.get("kernel_source"), "kernel_source")
     include_globs = require_string_list(source, "include_globs")
@@ -867,6 +939,37 @@ def validate_config(config):
                 "agent_test_suite.local_calibration_profile.tool_versions."
                 f"{name} must be a string"
             )
+    matching_budget_profiles = [
+        entry
+        for entry in local_toolchains
+        if entry["profile_id"] == profile_id
+    ]
+    if len(matching_budget_profiles) != 1:
+        raise BudgetError(
+            "the local calibration profile must have one kernel budget "
+            "toolchain identity"
+        )
+    budget_profile = matching_budget_profiles[0]
+    if budget_profile["prefix"] != toolchain_prefix:
+        raise BudgetError(
+            "the local kernel budget toolchain prefix differs from the "
+            "calibration profile"
+        )
+    version_bindings = {
+        "toolchain_cc": budget_profile["gcc_version"],
+        "toolchain_ld": budget_profile["binutils_version"],
+        "toolchain_objcopy": budget_profile["binutils_version"],
+        "toolchain_objdump": budget_profile["binutils_version"],
+        "toolchain_as": budget_profile["binutils_version"],
+    }
+    if any(
+        tool_versions[name] != expected
+        for name, expected in version_bindings.items()
+    ):
+        raise BudgetError(
+            "the local kernel budget toolchain versions differ from the "
+            "calibration profile"
+        )
     if calibration_status == AGENT_TEST_CALIBRATION_READY:
         if tests.get("calibration_profile_id") != profile_id:
             raise BudgetError(
@@ -1768,17 +1871,29 @@ def read_agent_timing_file(path, expected_cases):
     return records, sum(value for _, value in records)
 
 
+def native_tool_argument(path):
+    path = Path(path).resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        relative = path.relative_to(cwd)
+    except ValueError:
+        return str(path)
+    return relative.as_posix() or "."
+
+
 def run_tool(command, description):
     try:
         result = subprocess.run(
-            command, check=False, capture_output=True, text=True
+            command, check=False, capture_output=True
         )
     except OSError as error:
         raise BudgetError(f"cannot run {description}: {error}") from error
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    stderr = result.stderr.decode("utf-8", errors="replace")
     if result.returncode != 0:
-        details = result.stderr.strip() or result.stdout.strip()
+        details = stderr.strip() or stdout.strip()
         raise BudgetError(f"{description} failed: {details}")
-    return result.stdout
+    return stdout
 
 
 def measure_kernel_images(kernel, objcopy):
@@ -1789,19 +1904,20 @@ def measure_kernel_images(kernel, objcopy):
         temp_dir = Path(temp)
         stripped = temp_dir / "kernel.stripped.elf"
         raw = temp_dir / "kernel.bin"
+        kernel_arg = native_tool_argument(kernel)
         run_tool(
             [
                 objcopy,
                 "--strip-all",
                 "--remove-section=.comment",
                 "--remove-section=.note.gnu.build-id",
-                str(kernel),
+                kernel_arg,
                 str(stripped),
             ],
             "ELF normalization",
         )
         run_tool(
-            [objcopy, "-O", "binary", str(kernel), str(raw)],
+            [objcopy, "-O", "binary", kernel_arg, str(raw)],
             "raw kernel extraction",
         )
         return stripped.stat().st_size, raw.stat().st_size
@@ -1828,7 +1944,10 @@ def parse_size_output(output):
 
 
 def measure_kernel_runtime(kernel, size):
-    output = run_tool([size, "-B", str(kernel)], "kernel runtime size inspection")
+    output = run_tool(
+        [size, "-B", native_tool_argument(kernel)],
+        "kernel runtime size inspection",
+    )
     return parse_size_output(output)
 
 
@@ -1957,9 +2076,10 @@ def validate_agent_discarded_sections(root, expected):
 
 
 def measure_agent_object_residency(size_tool, object_path, discarded_sections):
+    object_arg = native_tool_argument(object_path)
     totals = parse_size_output(
         run_tool(
-            [size_tool, "-B", str(object_path)],
+            [size_tool, "-B", object_arg],
             "Agent aggregate object residency inspection",
         )
     )
@@ -1971,7 +2091,7 @@ def measure_agent_object_residency(size_tool, object_path, discarded_sections):
         )
     sections = parse_object_size_sections(
         run_tool(
-            [size_tool, "-A", str(object_path)],
+            [size_tool, "-A", object_arg],
             "Agent aggregate discarded section inspection",
         )
     )
@@ -2272,7 +2392,7 @@ def measure_probe_symbol(probe, nm, symbol):
     if not probe.is_file():
         raise BudgetError(f"kernel layout probe is missing: {probe}")
     output = run_tool(
-        [nm, "-S", "--defined-only", str(probe)],
+        [nm, "-S", "--defined-only", native_tool_argument(probe)],
         "kernel layout probe inspection",
     )
     return parse_nm_symbol_size(output, symbol)
@@ -2283,7 +2403,7 @@ def measure_kernel_symbol_span(kernel, nm, start_symbol, end_symbol):
     if not kernel.is_file():
         raise BudgetError(f"kernel ELF is missing: {kernel}")
     output = run_tool(
-        [nm, "-n", "--defined-only", str(kernel)],
+        [nm, "-n", "--defined-only", native_tool_argument(kernel)],
         "kernel symbol boundary inspection",
     )
     start = parse_nm_symbol_address(output, start_symbol)
@@ -2409,61 +2529,274 @@ def validate_canonical_defines(cflags, config, expected_log):
         )
 
 
-def validate_canonical_toolchain(config, cc, objcopy, build_config, initproc):
+def normalized_tool_name(path):
+    name = Path(path).name
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    return name
+
+
+def resolve_executable_once(path, description):
+    requested = str(path)
+    windows_drive = re.fullmatch(r"([A-Za-z]):[\\/](.*)", requested)
+    if os.name == "posix" and windows_drive is not None:
+        converted = run_tool(
+            ["cygpath", "-u", "-a", requested],
+            f"{description} MSYS path conversion",
+        ).strip()
+        if not converted or "\n" in converted or "\r" in converted:
+            raise BudgetError(f"cannot convert {description} to an MSYS path")
+        candidate = Path(converted)
+    else:
+        candidate = Path(requested)
+    if not candidate.is_absolute() and candidate.parent == Path("."):
+        resolved = shutil.which(requested)
+        if resolved is None:
+            raise BudgetError(f"cannot resolve {description}: {requested}")
+        candidate = Path(resolved)
+    try:
+        candidate = candidate.resolve(strict=True)
+    except OSError as error:
+        raise BudgetError(f"cannot resolve {description}: {error}") from error
+    if not candidate.is_file():
+        raise BudgetError(f"{description} is not a regular file: {candidate}")
+    return candidate
+
+
+def sha256_file(path, description):
+    path = Path(path)
+    if not path.is_file():
+        raise BudgetError(f"{description} is not a regular file: {path}")
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise BudgetError(f"cannot hash {description}: {error}") from error
+    return digest.hexdigest()
+
+
+def select_kernel_budget_toolchain(config, tools):
+    suffixes = {
+        "gcc": "gcc",
+        "ld": "ld",
+        "objcopy": "objcopy",
+        "objdump": "objdump",
+        "nm": "nm",
+        "size": "size",
+    }
     canonical = config["canonical_toolchain"]
-    expected_cc = canonical["prefix"] + "gcc"
-    expected_objcopy = canonical["prefix"] + "objcopy"
-    if Path(cc).name != expected_cc or Path(objcopy).name != expected_objcopy:
+    profiles = [("canonical", canonical)] + [
+        ("local", profile)
+        for profile in config["local_kernel_budget_toolchains"]
+    ]
+    matches = []
+    for kind, profile in profiles:
+        if all(
+            normalized_tool_name(tools[name]) == profile["prefix"] + suffix
+            for name, suffix in suffixes.items()
+        ):
+            matches.append((kind, profile))
+    if len(matches) != 1:
+        expected = ", ".join(profile["prefix"] for _, profile in profiles)
         raise BudgetError(
-            f"kernel budget requires {expected_cc} and {expected_objcopy}"
+            "kernel budget toolchain identity does not match exactly one "
+            f"approved prefix ({expected})"
         )
-    gcc_version = run_tool(
-        [cc, "-dumpfullversion", "-dumpversion"], "GCC version check"
-    ).strip()
-    if gcc_version != canonical["gcc_version"]:
-        raise BudgetError(
-            f"GCC version {gcc_version!r}, expected {canonical['gcc_version']!r}"
-        )
-    gcc_package_version = run_tool(
-        [
-            "dpkg-query",
-            "-W",
-            "-f=${Version}",
-            canonical["gcc_package"],
-        ],
-        "GCC package version check",
-    ).strip()
-    if gcc_package_version != canonical["gcc_package_version"]:
-        raise BudgetError(
-            f"GCC package version {gcc_package_version!r}, "
-            f"expected {canonical['gcc_package_version']!r}"
-        )
-    first_line = run_tool([objcopy, "--version"], "binutils version check").splitlines()
+    return matches[0]
+
+
+def validate_binutils_version(tool, expected, description):
+    first_line = run_tool([tool, "--version"], description).splitlines()
     if not first_line:
-        raise BudgetError("binutils version output is empty")
+        raise BudgetError(f"{description} output is empty")
     version_match = re.search(r"([0-9]+(?:\.[0-9]+)+)\s*$", first_line[0])
-    binutils_version = version_match.group(1) if version_match else ""
-    if binutils_version != canonical["binutils_version"]:
+    version = version_match.group(1) if version_match else ""
+    if version != expected:
         raise BudgetError(
-            "binutils version "
-            f"{binutils_version!r}, expected {canonical['binutils_version']!r}"
-        )
-    binutils_package_version = run_tool(
-        [
-            "dpkg-query",
-            "-W",
-            "-f=${Version}",
-            canonical["binutils_package"],
-        ],
-        "binutils package version check",
-    ).strip()
-    if binutils_package_version != canonical["binutils_package_version"]:
-        raise BudgetError(
-            f"binutils package version {binutils_package_version!r}, "
-            f"expected {canonical['binutils_package_version']!r}"
+            f"{description} version {version!r}, expected {expected!r}"
         )
 
+
+def resolve_gcc_subprogram(gcc, name):
+    output = run_tool(
+        [str(gcc), f"-print-prog-name={name}"],
+        f"GCC {name} path discovery",
+    )
+    reported = output.strip()
+    if not reported or "\n" in reported or "\r" in reported:
+        raise BudgetError(f"GCC {name} path discovery returned an invalid path")
+    candidate = Path(reported)
+    windows_drive = re.fullmatch(r"[A-Za-z]:[\\/].*", reported)
+    if (
+        windows_drive is None
+        and not candidate.is_absolute()
+        and candidate.parent != Path(".")
+    ):
+        candidate = Path(gcc).parent / candidate
+    return resolve_executable_once(candidate, f"GCC {name} subprogram")
+
+
+def attest_local_kernel_budget_tools(profile, tools):
+    for name, tool in tools.items():
+        actual = sha256_file(tool, f"local kernel budget {name}")
+        expected = profile["executable_sha256"][name]
+        if actual != expected:
+            raise BudgetError(
+                f"local kernel budget {name} SHA-256 differs: "
+                f"expected={expected}, actual={actual}"
+            )
+
+
+def dpkg_tool_owner(path, description):
+    output = run_tool(
+        ["dpkg-query", "-S", str(path)], f"{description} package ownership"
+    )
+    owners = set()
+    for line in output.splitlines():
+        if ": " not in line:
+            continue
+        package = line.split(": ", 1)[0].split(":", 1)[0]
+        if package:
+            owners.add(package)
+    if not owners:
+        raise BudgetError(f"{description} has no dpkg package owner")
+    return owners
+
+
+def validate_canonical_kernel_budget_tools(profile, tools):
+    suffixes = {
+        "gcc": "gcc",
+        "ld": "ld",
+        "objcopy": "objcopy",
+        "objdump": "objdump",
+        "nm": "nm",
+        "size": "size",
+    }
+    for name, suffix in suffixes.items():
+        expected = resolve_executable_once(
+            Path("/usr/bin") / f"{profile['prefix']}{suffix}",
+            f"canonical {name}",
+        )
+        if tools[name] != expected:
+            raise BudgetError(
+                f"canonical {name} is not the approved /usr/bin executable"
+            )
+
+    ownership = {
+        "gcc": profile["gcc_package"],
+        "cc1": profile["gcc_package"],
+        "as": profile["binutils_package"],
+        "ld": profile["binutils_package"],
+        "objcopy": profile["binutils_package"],
+        "objdump": profile["binutils_package"],
+        "nm": profile["binutils_package"],
+        "size": profile["binutils_package"],
+    }
+    for name, package in ownership.items():
+        owners = dpkg_tool_owner(tools[name], f"canonical {name}")
+        if package not in owners:
+            raise BudgetError(
+                f"canonical {name} is owned by {sorted(owners)!r}, "
+                f"expected {package!r}"
+            )
+    for package in (profile["gcc_package"], profile["binutils_package"]):
+        verification = run_tool(
+            ["dpkg", "--verify", package], f"{package} package integrity"
+        )
+        if verification.strip():
+            raise BudgetError(
+                f"{package} package integrity verification reported drift"
+            )
+
+
+def validate_kernel_budget_toolchain(
+    config, cc, ld, objcopy, objdump, nm, size, build_config, initproc
+):
+    canonical = config["canonical_toolchain"]
+    requested_tools = {
+        "gcc": cc,
+        "ld": ld,
+        "objcopy": objcopy,
+        "objdump": objdump,
+        "nm": nm,
+        "size": size,
+    }
+    tools = {
+        name: resolve_executable_once(tool, f"kernel budget {name}")
+        for name, tool in requested_tools.items()
+    }
+    profile_kind, profile = select_kernel_budget_toolchain(config, tools)
+    tools["cc1"] = resolve_gcc_subprogram(tools["gcc"], "cc1")
+    tools["as"] = resolve_gcc_subprogram(tools["gcc"], "as")
+    if profile_kind == "local":
+        attest_local_kernel_budget_tools(profile, tools)
+    gcc_version = run_tool(
+        [str(tools["gcc"]), "-dumpfullversion", "-dumpversion"],
+        "GCC version check",
+    ).strip()
+    if gcc_version != profile["gcc_version"]:
+        raise BudgetError(
+            f"GCC version {gcc_version!r}, expected {profile['gcc_version']!r}"
+        )
+    for name in ("as", "ld", "objcopy", "objdump", "nm", "size"):
+        validate_binutils_version(
+            str(tools[name]),
+            profile["binutils_version"],
+            f"{name} version check",
+        )
+    if profile_kind == "canonical":
+        gcc_package_version = run_tool(
+            [
+                "dpkg-query",
+                "-W",
+                "-f=${Version}",
+                canonical["gcc_package"],
+            ],
+            "GCC package version check",
+        ).strip()
+        if gcc_package_version != canonical["gcc_package_version"]:
+            raise BudgetError(
+                f"GCC package version {gcc_package_version!r}, "
+                f"expected {canonical['gcc_package_version']!r}"
+            )
+        binutils_package_version = run_tool(
+            [
+                "dpkg-query",
+                "-W",
+                "-f=${Version}",
+                canonical["binutils_package"],
+            ],
+            "binutils package version check",
+        ).strip()
+        if binutils_package_version != canonical["binutils_package_version"]:
+            raise BudgetError(
+                f"binutils package version {binutils_package_version!r}, "
+                f"expected {canonical['binutils_package_version']!r}"
+            )
+        validate_canonical_kernel_budget_tools(canonical, tools)
+    profile_id = profile["profile_id"]
+    print(f"[kernel-budget] toolchain profile: {profile_id}")
+
     actual_build = read_stack_build_config(build_config)
+    for name, field in (
+        ("gcc", "CC"),
+        ("cc1", "CC1"),
+        ("as", "AS_SUBPROGRAM"),
+        ("ld", "LD"),
+        ("objdump", "OBJDUMP"),
+    ):
+        recorded = actual_build.get(field)
+        if not recorded:
+            raise BudgetError(f"kernel build config omits {field}")
+        recorded_path = resolve_executable_once(
+            recorded, f"kernel build config {field}"
+        )
+        if recorded_path != tools[name]:
+            raise BudgetError(
+                f"kernel build {field} differs from the attested {name}"
+            )
     actual_cflags = shlex.split(actual_build.get("CFLAGS", ""))
     if actual_cflags != canonical["cflags"]:
         raise BudgetError(
@@ -2491,6 +2824,7 @@ def validate_canonical_toolchain(config, cc, objcopy, build_config, initproc):
         raise BudgetError(
             f"kernel was not built with {canonical['init_proc']} init process"
         )
+    return profile_kind, profile, tools
 
 
 def production_translation_units(root, config):
@@ -2558,14 +2892,22 @@ def stack_check_command(
 
 
 def check_kernel(args, config):
-    if not args.cc or not args.objcopy or not args.nm or not args.size:
-        raise BudgetError("--cc, --objcopy, --nm, and --size are required")
+    if not all(
+        (args.cc, args.ld, args.objcopy, args.objdump, args.nm, args.size)
+    ):
+        raise BudgetError(
+            "--cc, --ld, --objcopy, --objdump, --nm, and --size are required"
+        )
     root = Path(args.root).resolve()
     build_config = root / args.stack_build_config
-    validate_canonical_toolchain(
+    profile_kind, profile, tools = validate_kernel_budget_toolchain(
         config,
         args.cc,
+        args.ld,
         args.objcopy,
+        args.objdump,
+        args.nm,
+        args.size,
         build_config,
         root / "os" / "initproc.S",
     )
@@ -2584,7 +2926,7 @@ def check_kernel(args, config):
 
     image = config["kernel_image"]
     stripped_size, raw_size = measure_kernel_images(
-        root / args.kernel, args.objcopy
+        root / args.kernel, str(tools["objcopy"])
     )
     check_limit(
         "stripped kernel ELF",
@@ -2605,7 +2947,7 @@ def check_kernel(args, config):
 
     runtime = config["kernel_runtime"]
     text_size, data_size, bss_size, total_size = measure_kernel_runtime(
-        root / args.kernel, args.size
+        root / args.kernel, str(tools["size"])
     )
     for name, actual in (
         ("text", text_size),
@@ -2624,7 +2966,7 @@ def check_kernel(args, config):
 
     proc = config["struct_proc"]
     proc_size = measure_probe_symbol(
-        root / args.struct_probe, args.nm, proc["symbol"]
+        root / args.struct_probe, str(tools["nm"]), proc["symbol"]
     )
     check_limit(
         "struct proc",
@@ -2642,7 +2984,9 @@ def check_kernel(args, config):
         ("reserved_pool", "trapframe reserved-thread capacity"),
     ):
         actual = measure_probe_symbol(
-            root / args.struct_probe, args.nm, trapframes[f"{name}_symbol"]
+            root / args.struct_probe,
+            str(tools["nm"]),
+            trapframes[f"{name}_symbol"],
         )
         check_limit(
             label,
@@ -2664,7 +3008,7 @@ def check_kernel(args, config):
     ):
         actual = measure_probe_symbol(
             root / args.struct_probe,
-            args.nm,
+            str(tools["nm"]),
             legacy_mail[f"{name}_symbol"],
         )
         check_limit(
@@ -2686,7 +3030,9 @@ def check_kernel(args, config):
         ("domain_reserved", "Agent context sidecar reserved domain"),
     ):
         actual = measure_probe_symbol(
-            root / args.struct_probe, args.nm, sidecar[f"{name}_symbol"]
+            root / args.struct_probe,
+            str(tools["nm"]),
+            sidecar[f"{name}_symbol"],
         )
         check_limit(
             label,
@@ -2707,7 +3053,8 @@ def check_kernel(args, config):
         ("domain_reserved", "Agent total state reserved domain"),
     ):
         actual = measure_probe_symbol(
-            root / args.struct_probe, args.nm,
+            root / args.struct_probe,
+            str(tools["nm"]),
             agent_state[f"{name}_symbol"]
         )
         check_limit(
@@ -2721,7 +3068,9 @@ def check_kernel(args, config):
 
     stack = config["kernel_stack"]
     stack_virtual_capacity = measure_probe_symbol(
-        root / args.struct_probe, args.nm, stack["virtual_capacity_symbol"]
+        root / args.struct_probe,
+        str(tools["nm"]),
+        stack["virtual_capacity_symbol"],
     )
     check_limit(
         "kernel stack virtual capacity",
@@ -2733,7 +3082,7 @@ def check_kernel(args, config):
     )
     stack_reserved_physical_pool = measure_probe_symbol(
         root / args.struct_probe,
-        args.nm,
+        str(tools["nm"]),
         stack["reserved_physical_pool_symbol"],
     )
     check_limit(
@@ -2746,7 +3095,7 @@ def check_kernel(args, config):
     )
     boot_stack_capacity = measure_kernel_symbol_span(
         root / args.kernel,
-        args.nm,
+        str(tools["nm"]),
         stack["boot_stack_start_symbol"],
         stack["boot_stack_end_symbol"],
     )
@@ -2782,6 +3131,8 @@ def check_kernel(args, config):
     output = run_tool(command, "kernel stack budget check")
     if output:
         print(output, end="" if output.endswith("\n") else "\n")
+    if profile_kind == "local":
+        attest_local_kernel_budget_tools(profile, tools)
 
 
 def source_function_body(source, signature):
@@ -3149,11 +3500,26 @@ def validate_metadata_directory_boundary_sources(root):
 
 def check_agent_modules(args, config):
     modules = config["agent_modules"]
-    if not args.nm:
-        raise BudgetError("--nm is required")
-    if not args.size:
-        raise BudgetError("--size is required")
+    if not all(
+        (args.cc, args.ld, args.objcopy, args.objdump, args.nm, args.size)
+    ):
+        raise BudgetError(
+            "--cc, --ld, --objcopy, --objdump, --nm, and --size are required"
+        )
     root = Path(args.root).resolve()
+    profile_kind, profile, tools = validate_kernel_budget_toolchain(
+        config,
+        args.cc,
+        args.ld,
+        args.objcopy,
+        args.objdump,
+        args.nm,
+        args.size,
+        root / args.stack_build_config,
+        root / "os" / "initproc.S",
+    )
+    nm = str(tools["nm"])
+    size = str(tools["size"])
     validate_metadata_scan_boundary_sources(root)
     validate_metadata_directory_boundary_sources(root)
     directory_callgraph = (
@@ -3184,7 +3550,7 @@ def check_agent_modules(args, config):
         raise BudgetError(f"production kernel is missing: {kernel_path}")
     production_symbols = parse_nm_defined_symbols(
         run_tool(
-            [args.nm, "-g", "--defined-only", str(kernel_path)],
+            [nm, "-g", "--defined-only", native_tool_argument(kernel_path)],
             "production test-only symbol inspection",
         )
     )
@@ -3216,7 +3582,7 @@ def check_agent_modules(args, config):
         if max_bss is not None:
             _, _, object_bss, _ = parse_size_output(
                 run_tool(
-                    [args.size, "-B", str(object_path)],
+                    [size, "-B", native_tool_argument(object_path)],
                     f"Agent module {entry['name']} BSS inspection",
                 )
             )
@@ -3230,7 +3596,7 @@ def check_agent_modules(args, config):
                     f"{object_bss} > {max_bss} bytes"
                 )
         output = run_tool(
-            [args.nm, "-g", "--defined-only", str(object_path)],
+            [nm, "-g", "--defined-only", native_tool_argument(object_path)],
             f"Agent module {entry['name']} export inspection",
         )
         records = parse_nm_defined_records(output)
@@ -3268,7 +3634,7 @@ def check_agent_modules(args, config):
             symbol_owner[symbol] = entry["name"]
 
     check_agent_aggregate_budgets(
-        root, entries, modules["aggregate_budgets"], args.size
+        root, entries, modules["aggregate_budgets"], size
     )
 
     actual_graph = {}
@@ -3279,7 +3645,7 @@ def check_agent_modules(args, config):
     for entry in entries:
         object_path = root / entry["object_path"]
         output = run_tool(
-            [args.nm, "-u", str(object_path)],
+            [nm, "-u", native_tool_argument(object_path)],
             f"Agent module {entry['name']} dependency inspection",
         )
         undefined = parse_nm_undefined_symbols(output)
@@ -3318,11 +3684,11 @@ def check_agent_modules(args, config):
         if resolved in registered_paths:
             continue
         defined_output = run_tool(
-            [args.nm, "-g", "--defined-only", str(object_path)],
+            [nm, "-g", "--defined-only", native_tool_argument(object_path)],
             f"Agent integration object {object_path.name} export inspection",
         )
         undefined_output = run_tool(
-            [args.nm, "-u", str(object_path)],
+            [nm, "-u", native_tool_argument(object_path)],
             f"Agent integration object {object_path.name} dependency inspection",
         )
         records = parse_nm_defined_records(defined_output)
@@ -3399,7 +3765,7 @@ def check_agent_modules(args, config):
     if not probe.is_file():
         raise BudgetError(f"Agent core boundary probe is missing: {probe}")
     output = run_tool(
-        [args.nm, "--defined-only", str(probe)],
+        [nm, "--defined-only", native_tool_argument(probe)],
         "Agent core boundary inspection",
     )
     violations = forbidden_symbols(
@@ -3420,6 +3786,8 @@ def check_agent_modules(args, config):
             "agent_core.c still defines migrated authority symbols: " + shown
         )
     print("[kernel-budget] Agent core migrated authority symbols: absent")
+    if profile_kind == "local":
+        attest_local_kernel_budget_tools(profile, tools)
 
 
 def check_agent_tests(args, config):
@@ -3514,6 +3882,18 @@ def check_agent_test_policy(config):
 def main():
     args = parse_args()
     try:
+        root = Path(args.root).resolve()
+        if not root.is_dir():
+            raise BudgetError(f"kernel budget root is not a directory: {root}")
+        try:
+            os.chdir(root)
+        except OSError as error:
+            raise BudgetError(
+                f"cannot enter kernel budget root {root}: {error}"
+            ) from error
+        # All repository-relative CLI paths and native PE tool arguments now
+        # share one explicit execution root, even when invoked from elsewhere.
+        args.root = str(root)
         if args.agent_test_calibration and args.check != "agent-tests":
             raise BudgetError(
                 "--agent-test-calibration requires --check agent-tests"

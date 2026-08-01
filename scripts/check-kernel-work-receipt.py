@@ -219,6 +219,7 @@ def check(root: Path) -> None:
         syscall,
         "caseSYS_kernel_work_last_preemptions:"
         "caseSYS_kernel_work_receipt_snapshot:"
+        "caseSYS_agent_resource_snapshot:"
         "returnKERNEL_WORK_SYSCALL_OBSERVER;",
         "receipt observers are not a non-publishing syscall class",
     )

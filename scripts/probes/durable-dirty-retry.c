@@ -1,6 +1,22 @@
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+/*
+ * The kernel is LP64, while native Windows compilers use LLP64.  Model the
+ * kernel's fixed-width aliases explicitly before compiling the production
+ * owner so this probe cannot silently reduce uint64 to 32 bits.
+ */
+#define TYPES_H
+typedef unsigned int uint;
+typedef unsigned short ushort;
+typedef unsigned char uchar;
+typedef uint8_t uint8;
+typedef uint16_t uint16;
+typedef uint32_t uint32;
+typedef uint64_t uint64;
+_Static_assert(sizeof(uint64) == 8, "probe must model RISC-V uint64");
 
 /* Compile the production owner with only its interrupt boundary stubbed. */
 #define DEFS_H

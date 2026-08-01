@@ -94,6 +94,279 @@ class KernelBudgetTests(unittest.TestCase):
                 kernel_budgets.measure_file_source(root, "crlf.c"),
             )
 
+    def test_local_kernel_budget_profile_is_closed_and_calibration_bound(self):
+        config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
+        with config_path.open(encoding="utf-8") as stream:
+            config = json.load(stream)
+        kernel_budgets.validate_config(config)
+        self.assertEqual(
+            config["canonical_toolchain"]["ldflags"],
+            ["-m", "elf64lriscv", "-z", "max-page-size=4096"],
+        )
+        self.assertEqual(config["kernel_source"]["baseline_lines"], 47922)
+        self.assertEqual(config["kernel_source"]["max_lines"], 49834)
+
+        missing_hash = copy.deepcopy(config)
+        del missing_hash["local_kernel_budget_toolchains"][0][
+            "executable_sha256"
+        ]["ld"]
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "inventory mismatch"
+        ):
+            kernel_budgets.validate_config(missing_hash)
+
+        duplicate_prefix = copy.deepcopy(config)
+        duplicate = copy.deepcopy(
+            duplicate_prefix["local_kernel_budget_toolchains"][0]
+        )
+        duplicate["profile_id"] = "duplicate-local-profile"
+        duplicate_prefix["local_kernel_budget_toolchains"].append(duplicate)
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "prefix is not unique"
+        ):
+            kernel_budgets.validate_config(duplicate_prefix)
+
+        detached_profile = copy.deepcopy(config)
+        detached_profile["local_kernel_budget_toolchains"][0][
+            "profile_id"
+        ] = "detached-local-profile"
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "must have one kernel budget"
+        ):
+            kernel_budgets.validate_config(detached_profile)
+
+        for tool_name in (
+            "toolchain_cc",
+            "toolchain_ld",
+            "toolchain_objcopy",
+            "toolchain_objdump",
+            "toolchain_as",
+        ):
+            with self.subTest(calibration_version=tool_name):
+                drifted = copy.deepcopy(config)
+                drifted["agent_test_suite"]["local_calibration_profile"][
+                    "tool_versions"
+                ][tool_name] = "0.0"
+                with self.assertRaisesRegex(
+                    kernel_budgets.BudgetError,
+                    "versions differ from the calibration profile",
+                ):
+                    kernel_budgets.validate_config(drifted)
+
+    def test_cli_resolves_repository_paths_from_explicit_root(self):
+        root = SCRIPT.parent.parent
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--check",
+                "config",
+                "--config",
+                "ci/kernel-budgets.json",
+                "--root",
+                str(root),
+            ],
+            cwd=root.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("configuration is valid", result.stdout)
+
+    def test_tool_diagnostics_tolerate_non_utf8_bytes(self):
+        result = subprocess.CompletedProcess(
+            args=["fixture"], returncode=1, stdout=b"", stderr=b"bad:\xff"
+        )
+        with mock.patch.object(
+            kernel_budgets.subprocess, "run", return_value=result
+        ), self.assertRaisesRegex(kernel_budgets.BudgetError, "bad:"):
+            kernel_budgets.run_tool(["fixture"], "fixture diagnostic")
+
+    def test_local_kernel_budget_toolchain_is_hashed_and_build_bound(self):
+        config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
+        with config_path.open(encoding="utf-8") as stream:
+            config = json.load(stream)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tool_paths = {}
+            for name in (
+                "gcc",
+                "cc1",
+                "as",
+                "ld",
+                "objcopy",
+                "objdump",
+                "nm",
+                "size",
+            ):
+                path = root / f"fixture-{name}.exe"
+                path.write_bytes(f"fixture {name}\n".encode("ascii"))
+                tool_paths[name] = path
+            profile = {
+                "profile_id": "fixture-local-profile",
+                "prefix": "fixture-",
+                "gcc_version": "15.2.0",
+                "binutils_version": "2.45",
+                "executable_sha256": {
+                    name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for name, path in tool_paths.items()
+                },
+            }
+            config["local_kernel_budget_toolchains"] = [profile]
+            build_config = root / "build-config"
+            canonical = config["canonical_toolchain"]
+            build_config.write_text(
+                "\n".join(
+                    (
+                        f"CC={tool_paths['gcc']}",
+                        f"CC1={tool_paths['cc1']}",
+                        f"AS_SUBPROGRAM={tool_paths['as']}",
+                        f"LD={tool_paths['ld']}",
+                        f"OBJDUMP={tool_paths['objdump']}",
+                        "CFLAGS=" + " ".join(canonical["cflags"]),
+                        "LDFLAGS=" + " ".join(canonical["ldflags"]),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            initproc = root / "initproc.S"
+            initproc.write_text(
+                '.string "agentfinal_ucore"\n', encoding="utf-8"
+            )
+
+            def fake_run(command, _description):
+                if "-print-prog-name=cc1" in command:
+                    return f"{tool_paths['cc1']}\n"
+                if "-print-prog-name=as" in command:
+                    return f"{tool_paths['as']}\n"
+                if "-dumpfullversion" in command:
+                    return "15.2.0\n"
+                return "GNU fixture tool 2.45\n"
+
+            argv = tuple(
+                str(tool_paths[name])
+                for name in ("gcc", "ld", "objcopy", "objdump", "nm", "size")
+            )
+            output = io.StringIO()
+            with mock.patch.object(
+                kernel_budgets, "run_tool", side_effect=fake_run
+            ), redirect_stdout(output):
+                kind, selected, resolved = (
+                    kernel_budgets.validate_kernel_budget_toolchain(
+                        config, *argv, build_config, initproc
+                    )
+                )
+            self.assertEqual(kind, "local")
+            self.assertEqual(selected["profile_id"], "fixture-local-profile")
+            self.assertEqual(set(resolved), set(tool_paths))
+            self.assertIn("fixture-local-profile", output.getvalue())
+
+            original_build = build_config.read_text(encoding="utf-8")
+            for field, tool_name in (("CC", "gcc"), ("CC1", "cc1"),
+                                     ("AS_SUBPROGRAM", "as"),
+                                     ("LD", "ld"), ("OBJDUMP", "objdump")):
+                with self.subTest(build_receipt=field):
+                    other_tool = root / f"other-{tool_name}.exe"
+                    other_tool.write_bytes(b"other tool\n")
+                    build_config.write_text(
+                        original_build.replace(
+                            f"{field}={tool_paths[tool_name]}",
+                            f"{field}={other_tool}",
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                    with mock.patch.object(
+                        kernel_budgets, "run_tool", side_effect=fake_run
+                    ), self.assertRaisesRegex(
+                        kernel_budgets.BudgetError,
+                        f"kernel build {field} differs",
+                    ):
+                        kernel_budgets.validate_kernel_budget_toolchain(
+                            config, *argv, build_config, initproc
+                        )
+                    build_config.write_text(original_build, encoding="utf-8")
+
+            tool_paths["size"].write_bytes(b"tampered\n")
+            with mock.patch.object(
+                kernel_budgets, "run_tool", side_effect=fake_run
+            ), self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "size SHA-256 differs"
+            ):
+                kernel_budgets.validate_kernel_budget_toolchain(
+                    config, *argv, build_config, initproc
+                )
+
+    def test_canonical_toolchain_requires_paths_ownership_and_integrity(self):
+        with (SCRIPT.parent.parent / "ci" / "kernel-budgets.json").open(
+            encoding="utf-8"
+        ) as stream:
+            profile = json.load(stream)["canonical_toolchain"]
+        direct = ("gcc", "ld", "objcopy", "objdump", "nm", "size")
+        tools = {
+            name: Path(f"/approved/{name}")
+            for name in (*direct, "cc1", "as")
+        }
+
+        def approved_path(_path, description):
+            return tools[description.rsplit(" ", 1)[-1]]
+
+        def approved_owner(_path, description):
+            name = description.rsplit(" ", 1)[-1]
+            package = (
+                profile["gcc_package"]
+                if name in ("gcc", "cc1")
+                else profile["binutils_package"]
+            )
+            return {package}
+
+        with mock.patch.object(
+            kernel_budgets, "resolve_executable_once", side_effect=approved_path
+        ), mock.patch.object(
+            kernel_budgets, "dpkg_tool_owner", side_effect=approved_owner
+        ), mock.patch.object(
+            kernel_budgets, "run_tool", return_value=""
+        ):
+            kernel_budgets.validate_canonical_kernel_budget_tools(
+                profile, tools
+            )
+
+            wrapped = dict(tools)
+            wrapped["gcc"] = Path("/wrapper/gcc")
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "approved /usr/bin executable"
+            ):
+                kernel_budgets.validate_canonical_kernel_budget_tools(
+                    profile, wrapped
+                )
+
+        def wrong_cc1_owner(path, description):
+            if description.endswith("cc1"):
+                return {"unapproved-package"}
+            return approved_owner(path, description)
+
+        with mock.patch.object(
+            kernel_budgets, "resolve_executable_once", side_effect=approved_path
+        ), mock.patch.object(
+            kernel_budgets, "dpkg_tool_owner", side_effect=wrong_cc1_owner
+        ), mock.patch.object(
+            kernel_budgets, "run_tool", return_value=""
+        ), self.assertRaisesRegex(kernel_budgets.BudgetError, "cc1 is owned"):
+            kernel_budgets.validate_canonical_kernel_budget_tools(profile, tools)
+
+        with mock.patch.object(
+            kernel_budgets, "resolve_executable_once", side_effect=approved_path
+        ), mock.patch.object(
+            kernel_budgets, "dpkg_tool_owner", side_effect=approved_owner
+        ), mock.patch.object(
+            kernel_budgets, "run_tool", return_value="package drift\n"
+        ), self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "integrity verification reported drift"
+        ):
+            kernel_budgets.validate_canonical_kernel_budget_tools(profile, tools)
+
     def test_metadata_private_apis_stay_out_of_shared_agent_contract(self):
         shared = (SCRIPT.parent.parent / "os" / "agent_internal.h").read_text(
             encoding="utf-8"
@@ -2308,6 +2581,25 @@ agent_metadata_txn_projection_require_idle();
                     "prefix": "test-toolchain-",
                     "gcc_version": "test gcc",
                 },
+                "local_kernel_budget_toolchains": [
+                    {
+                        "profile_id": "fixture-local-e3-v1",
+                        "prefix": "fixture-toolchain-",
+                        "gcc_version": "1",
+                        "binutils_version": "1",
+                        "executable_sha256": {
+                            name: "1" * 64
+                            for name in (
+                                "gcc",
+                                "ld",
+                                "objcopy",
+                                "objdump",
+                                "nm",
+                                "size",
+                            )
+                        },
+                    }
+                ],
                 "agent_test_suite": tests,
             }
             fingerprint, paths = kernel_budgets.agent_test_source_fingerprint(
@@ -2364,6 +2656,17 @@ agent_metadata_txn_projection_require_idle();
             ):
                 kernel_budgets.check_agent_test_source_fingerprint(
                     root, changed_toolchain
+                )
+
+            changed_local_toolchain = copy.deepcopy(config)
+            changed_local_toolchain["local_kernel_budget_toolchains"][0][
+                "executable_sha256"
+            ]["gcc"] = "2" * 64
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "fingerprint mismatch"
+            ):
+                kernel_budgets.check_agent_test_source_fingerprint(
+                    root, changed_local_toolchain
                 )
 
             (root / kernel_budgets.AGENT_TEST_SOURCE_REQUIRED_PATHS[0]).unlink()
@@ -2483,7 +2786,13 @@ agent_metadata_txn_projection_require_idle();
         self.assertEqual(lifecycle["max_lines"], 351)
         self.assertEqual(
             lifecycle["allowed_dependencies"],
-            ["identity", "identity_lease", "metadata", "workflow_lifecycle"],
+            [
+                "identity",
+                "identity_lease",
+                "metadata",
+                "resource_controller",
+                "workflow_lifecycle",
+            ],
         )
         self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 340)
         metadata = next(
