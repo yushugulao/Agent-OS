@@ -437,7 +437,7 @@ def make_run(
             "challenge": challenge,
             "command_argv": command,
             "command_environment": _micro_boot_environment(
-                environment, challenge, f"{raw_ref}/guest.log"
+                environment, platform, challenge, f"{raw_ref}/guest.log"
             ),
             "exit_code": 0,
             "finished_at_utc": f"2026-07-30T00:00:{number:02d}Z",

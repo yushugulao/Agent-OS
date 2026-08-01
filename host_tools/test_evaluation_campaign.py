@@ -112,6 +112,45 @@ def _platform_proof(root: Path) -> dict[str, object]:
     }
 
 
+def _msys_platform_proof(root: Path) -> dict[str, object]:
+    proof = _platform_proof(root)
+    tools = proof["tools"]
+    assert isinstance(tools, dict)
+    directory = root / "platform-tools"
+    for label in platform_probe.MSYS_EXTRA_TOOL_LABELS:
+        path = directory / label
+        path.write_bytes(f"platform:{label}\n".encode("ascii"))
+        path.chmod(0o755)
+        tools[label] = {
+            "argv0": label,
+            "path": str(path.resolve()),
+            "sha256": campaign._sha256(path),
+            "version": f"{label} 1",
+        }
+    runtime = directory / "msys-2.0.dll"
+    runtime.write_bytes(b"fixture msys runtime\n")
+    proof.update({
+        "domain": "native-msys2",
+        "entry_domain": "native-msys2",
+        "runtime": {
+            "path": str(runtime.resolve()),
+            "sha256": campaign._sha256(runtime),
+            "version": "fixture-msys-runtime-1",
+        },
+        "temporary_directory": "/r/tmp",
+        "uname": {
+            "command": "MSYS_NT-10.0-26200 fixture",
+            "machine": "x86_64",
+            "release": "fixture",
+            "system": "MSYS_NT-10.0-26200",
+            "version": "fixture",
+            "windows_version": "10.0-26200",
+        },
+        "windows_temporary_directory": r"R:\tmp",
+    })
+    return proof
+
+
 def _scenario_environment() -> dict[str, object]:
     def tool(argv0: str, number: str) -> dict[str, str]:
         return {
@@ -645,7 +684,10 @@ class CampaignTests(unittest.TestCase):
                     "/src/agentos/scripts/run-agent-tests.sh",
                 ]
                 boot["command_environment"] = campaign._micro_boot_environment(
-                    value["environment"], boot["challenge"], boot["guest_log"]
+                    value["environment"],
+                    value["platform"],
+                    boot["challenge"],
+                    boot["guest_log"],
                 )
             campaign.validate_campaign(value)
 
@@ -912,6 +954,8 @@ class CampaignTests(unittest.TestCase):
                     boot["command_environment"]["MAKE_TOOL"],
                     value["environment"]["make"]["path"],
                 )
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    self.assertEqual(boot["command_environment"][name], "/tmp")
                 for name in ("CC", "HOSTCC", "HOST_CC"):
                     self.assertEqual(
                         boot["command_environment"][name],
@@ -924,6 +968,49 @@ class CampaignTests(unittest.TestCase):
                         for item in boot["command_environment"]["PATH"].split(os.pathsep)
                     ],
                 )
+
+            msys_platform = {
+                **value["platform"],
+                "domain": "native-msys2",
+                "temporary_directory": "/r/tmp",
+                "windows_temporary_directory": r"R:\tmp",
+            }
+            msys_environment = campaign._micro_boot_environment(
+                value["environment"],
+                msys_platform,
+                value["boots"][0]["challenge"],
+                value["boots"][0]["guest_log"],
+            )
+            self.assertEqual(msys_environment["TMPDIR"], "/r/tmp")
+            self.assertEqual(msys_environment["TEMP"], r"R:\tmp")
+            self.assertEqual(msys_environment["TMP"], r"R:\tmp")
+
+    def test_msys_micro_temporary_namespace_is_bound_and_tamper_evident(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _create(root)
+            value = json.loads(manifest.read_text(encoding="utf-8"))
+            value["platform"] = _msys_platform_proof(root)
+            value["run"]["execution_domain"] = "native-msys2"
+            value["environment"]["host_cc"] = dict(
+                value["platform"]["tools"]["host_cc"]
+            )
+            for boot in value["boots"]:
+                boot["command_environment"] = campaign._micro_boot_environment(
+                    value["environment"],
+                    value["platform"],
+                    boot["challenge"],
+                    boot["guest_log"],
+                )
+            campaign.validate_campaign(value)
+
+            for name in ("TEMP", "TMP", "TMPDIR"):
+                tampered = json.loads(json.dumps(value))
+                tampered["boots"][0]["command_environment"][name] = "/tmp/other"
+                with self.subTest(name=name), self.assertRaisesRegex(
+                    campaign.CampaignError, "environment differs"
+                ):
+                    campaign.validate_campaign(tampered)
 
     def test_micro_artifacts_require_the_exact_canonical_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

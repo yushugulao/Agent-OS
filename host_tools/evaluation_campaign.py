@@ -873,10 +873,14 @@ def _verify_bound_host_cc_resolution(
 
 
 def _micro_boot_environment(
-    environment: dict[str, dict[str, str]], challenge: str, guest_log: str
+    environment: dict[str, dict[str, str]],
+    platform: dict[str, Any],
+    challenge: str,
+    guest_log: str,
 ) -> dict[str, str]:
     compiler_path = environment["compiler"]["path"]
     absolute_prefix, _ = _absolute_toolprefix(compiler_path)
+    posix_temporary, native_temporary = _platform_temporary_identity(platform)
     return {
         "AGENT_EVAL_CHALLENGE_HEX": challenge,
         "AGENT_TEST_CASE": "agenteval_ucore",
@@ -892,6 +896,9 @@ def _micro_boot_environment(
         "PYTHONHASHSEED": "0",
         "PYTHON_BIN": environment["python"]["path"],
         "QEMU": environment["qemu"]["path"],
+        "TEMP": native_temporary,
+        "TMP": native_temporary,
+        "TMPDIR": posix_temporary,
         "TOOLPREFIX": absolute_prefix,
     }
 
@@ -1112,7 +1119,7 @@ def create_campaign(
                 "challenge": challenge,
                 "command_argv": command,
                 "command_environment": _micro_boot_environment(
-                    environment, challenge, guest_log
+                    environment, platform_proof, challenge, guest_log
                 ),
                 "exit_code": None,
                 "finished_at_utc": None,
@@ -1727,7 +1734,8 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         )
     except ValueError as error:
         raise CampaignError(f"invalid measurement source receipt: {error}") from error
-    _validate_platform_proof(campaign["platform"], run["execution_domain"])
+    platform = campaign["platform"]
+    _validate_platform_proof(platform, run["execution_domain"])
 
     protocol = campaign["protocol"]
     if not isinstance(protocol, dict):
@@ -1870,7 +1878,7 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
         ):
             raise CampaignError("boot command lacks evaluation provenance binding")
         expected_environment = _micro_boot_environment(
-            environment, boot["challenge"], boot["guest_log"]
+            environment, platform, boot["challenge"], boot["guest_log"]
         )
         if boot["command_environment"] != expected_environment:
             raise CampaignError("boot process environment differs from its preflight")
@@ -2054,7 +2062,7 @@ def _scenario_clean_environment(
     return environment
 
 
-def _scenario_temporary_identity(platform: dict[str, Any]) -> tuple[str, str]:
+def _platform_temporary_identity(platform: dict[str, Any]) -> tuple[str, str]:
     if platform.get("domain") != "native-msys2":
         return "/tmp", "/tmp"
     posix_temporary = platform.get("temporary_directory")
@@ -2286,7 +2294,7 @@ def create_scenario_campaign(
     driver_path = repo / "host_tools" / "check_seeded_action_state.py"
     _require_regular_file(collector_path, "scenario collector")
     _require_regular_file(driver_path, "scenario input driver")
-    posix_temporary, native_temporary = _scenario_temporary_identity(
+    posix_temporary, native_temporary = _platform_temporary_identity(
         micro["platform"]
     )
     execution_environment = _probe_scenario_environment(
@@ -2527,7 +2535,7 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
         for value in clean_environment.values()
     ):
         raise CampaignError("scenario clean environment contains an invalid value")
-    posix_temporary, native_temporary = _scenario_temporary_identity(platform)
+    posix_temporary, native_temporary = _platform_temporary_identity(platform)
     if clean_environment != _scenario_clean_environment(
         tools,
         posix_temporary=posix_temporary,
@@ -2758,7 +2766,7 @@ def _verify_scenario_execution_binding(
     )
     if boot["command_argv"][:2] != [str(python_path), expected_driver]:
         raise CampaignError("scenario command does not use preflighted absolute inputs")
-    posix_temporary, native_temporary = _scenario_temporary_identity(
+    posix_temporary, native_temporary = _platform_temporary_identity(
         value["platform"]
     )
     observed = _probe_scenario_environment(
@@ -2924,7 +2932,7 @@ def check_scenario_campaign(
         _require_regular_file(source, f"scenario {path_key}")
         if _sha256(source) != value["protocol"][hash_key]:
             raise CampaignError(f"scenario input contract changed: {source}")
-    posix_temporary, native_temporary = _scenario_temporary_identity(
+    posix_temporary, native_temporary = _platform_temporary_identity(
         value["platform"]
     )
     observed_environment = _probe_scenario_environment(
