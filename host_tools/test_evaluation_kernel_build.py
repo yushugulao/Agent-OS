@@ -119,6 +119,7 @@ class FakeMake:
         self.recreate_stale_after_clean = False
         self.mutate_previous_artifact = False
         self.mutate_toolchain = False
+        self.guardrail_rebuilds_treatment = False
 
     def __call__(
         self,
@@ -140,6 +141,10 @@ class FakeMake:
             )
             return builder.CommandExecution(0, (version + "\n").encode(), b"", 3)
         if command[-1] == "kernel-budget-check":
+            if self.guardrail_rebuilds_treatment:
+                artifact = self.root / "build" / "kernel"
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_bytes(_valid_elf(b"guardrail-profile"))
             return builder.CommandExecution(
                 0,
                 b"[kernel-budget] struct proc: actual=26448 bytes baseline=26448 bytes limit=27233 bytes\n",
@@ -356,14 +361,24 @@ class TrustedKernelBuildTests(unittest.TestCase):
             [
                 [make, "--version"],
                 *tool_versions,
+                [make, f"TOOLPREFIX={prefix}", "kernel-budget-check"],
+                [make, f"TOOLPREFIX={prefix}", "user-stack-check"],
                 [make, "-C", "baseline_ucore", f"TOOLPREFIX={prefix}", "clean"],
                 [make, "-C", "baseline_ucore", f"TOOLPREFIX={prefix}", "build/kernel"],
                 [make, f"TOOLPREFIX={prefix}", "clean"],
                 [make, f"TOOLPREFIX={prefix}", "build/kernel"],
-                [make, f"TOOLPREFIX={prefix}", "kernel-budget-check"],
-                [make, f"TOOLPREFIX={prefix}", "user-stack-check"],
             ],
         )
+
+    def test_guardrail_rebuild_is_replaced_by_the_measured_treatment_build(self) -> None:
+        self.fixture.runner.guardrail_rebuilds_treatment = True
+        result = self.fixture.build()
+        treatment = next(
+            target for target in result["targets"] if target["id"] == "agentos"
+        )
+        artifact = self.fixture.root / "build" / "kernel"
+        self.assertEqual(treatment["sha256"], cost._file_sha(artifact))
+        self.assertNotIn(b"guardrail-profile", artifact.read_bytes())
 
     def test_portable_receipts_can_be_rooted_at_the_evaluation_run(self) -> None:
         evidence_root = self.fixture.root / "results" / "evaluation" / "portable-run"

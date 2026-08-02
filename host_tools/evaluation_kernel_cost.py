@@ -122,7 +122,7 @@ ENVIRONMENT_KIND = "agentos-evaluation-environment"
 BUILD_KIND = "agentos-kernel-build-manifest"
 REPORT_KIND = "agentos-kernel-cost-report"
 FRAGMENT_KIND = "agentos-evaluation-benchmark-fragment"
-TRUSTED_BUILD_SCHEMA_VERSION = 2
+TRUSTED_BUILD_SCHEMA_VERSION = 3
 TRUSTED_BUILD_CONFIG_KIND = "agentos-trusted-kernel-build-config"
 TRUSTED_BUILD_LOG_KIND = "agentos-trusted-kernel-build-log"
 TRUSTED_BUILD_TIMEOUT_SECONDS = 900
@@ -1139,13 +1139,6 @@ def validate_trusted_build_log(
         expected_commands.append(
             ("toolchain", f"{tool['name']}_version", list(tool["version_argv"]))
         )
-    for target in trusted_config["targets"]:
-        expected_commands.extend(
-            [
-                (target["id"], "clean", list(target["clean_argv"])),
-                (target["id"], "build", list(target["build_argv"])),
-            ]
-        )
     for guardrail in trusted_config["guardrail_commands"]:
         expected_commands.append(
             (
@@ -1153,6 +1146,13 @@ def validate_trusted_build_log(
                 guardrail["phase"],
                 list(guardrail["argv"]),
             )
+        )
+    for target in trusted_config["targets"]:
+        expected_commands.extend(
+            [
+                (target["id"], "clean", list(target["clean_argv"])),
+                (target["id"], "build", list(target["build_argv"])),
+            ]
         )
     commands = _array(root["commands"], "trusted build log commands")
     if len(commands) != len(expected_commands):

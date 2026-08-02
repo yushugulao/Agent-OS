@@ -835,6 +835,67 @@ def build_evidence(
             )
         )
 
+        treatment_id = by_role["treatment"]["id"]
+        guardrail_commands = [
+            {
+                "id": "struct_proc_bytes",
+                "target_id": treatment_id,
+                "phase": "kernel_budget",
+                "argv": [
+                    str(tool),
+                    f"TOOLPREFIX={recorded_toolprefix}",
+                    "kernel-budget-check",
+                ],
+            },
+            {
+                "id": "user_stack_call_path_bytes",
+                "target_id": treatment_id,
+                "phase": "user_stack",
+                "argv": [
+                    str(tool),
+                    f"TOOLPREFIX={recorded_toolprefix}",
+                    "user-stack-check",
+                ],
+            },
+        ]
+        # Guardrails may rebuild the treatment kernel with their own canonical
+        # profile. Run them before the measured builds so no validation command
+        # can overwrite an artifact after its byte receipt has been recorded.
+        for guardrail in guardrail_commands:
+            execution = runner(
+                guardrail["argv"],
+                root,
+                environment,
+                COMMAND_TIMEOUT_SECONDS,
+                MAX_COMMAND_OUTPUT_BYTES,
+            )
+            commands.append(
+                _command_record(
+                    sequence,
+                    guardrail["target_id"],
+                    guardrail["phase"],
+                    ".",
+                    guardrail["argv"],
+                    execution,
+                    environment_sha,
+                )
+            )
+            sequence += 1
+            if execution.error is not None or execution.returncode != 0:
+                raise KernelBuildError(
+                    f"{guardrail['id']} check failed with return code "
+                    f"{execution.returncode!r} "
+                    f"({execution.error or 'no execution error'})"
+                )
+            _require_tool_hashes(tool, make_sha256, toolchain_identities)
+            _require_same_clean_head(root, commit)
+            _source_gate(
+                root,
+                commit,
+                evidence_gate_root,
+                f"after {guardrail['id']}",
+            )
+
         target_receipts: list[dict[str, Any]] = []
         for configured_target in config["targets"]:
             role = configured_target["role"]
@@ -900,64 +961,6 @@ def build_evidence(
                     "sha256": _file_sha(target_path),
                     "command_argv": commands[-1]["argv"],
                 }
-            )
-
-        treatment_id = by_role["treatment"]["id"]
-        guardrail_commands = [
-            {
-                "id": "struct_proc_bytes",
-                "target_id": treatment_id,
-                "phase": "kernel_budget",
-                "argv": [
-                    str(tool),
-                    f"TOOLPREFIX={recorded_toolprefix}",
-                    "kernel-budget-check",
-                ],
-            },
-            {
-                "id": "user_stack_call_path_bytes",
-                "target_id": treatment_id,
-                "phase": "user_stack",
-                "argv": [
-                    str(tool),
-                    f"TOOLPREFIX={recorded_toolprefix}",
-                    "user-stack-check",
-                ],
-            },
-        ]
-        for guardrail in guardrail_commands:
-            execution = runner(
-                guardrail["argv"],
-                root,
-                environment,
-                COMMAND_TIMEOUT_SECONDS,
-                MAX_COMMAND_OUTPUT_BYTES,
-            )
-            commands.append(
-                _command_record(
-                    sequence,
-                    guardrail["target_id"],
-                    guardrail["phase"],
-                    ".",
-                    guardrail["argv"],
-                    execution,
-                    environment_sha,
-                )
-            )
-            sequence += 1
-            if execution.error is not None or execution.returncode != 0:
-                raise KernelBuildError(
-                    f"{guardrail['id']} check failed with return code "
-                    f"{execution.returncode!r} "
-                    f"({execution.error or 'no execution error'})"
-                )
-            _require_tool_hashes(tool, make_sha256, toolchain_identities)
-            _require_same_clean_head(root, commit)
-            _source_gate(
-                root,
-                commit,
-                evidence_gate_root,
-                f"after {guardrail['id']}",
             )
 
         _require_same_clean_head(root, commit)

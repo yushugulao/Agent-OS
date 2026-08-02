@@ -414,7 +414,7 @@ Task 1-5 的功能 receipt 还受版本化 token 源码合同约束：它封闭 
 
 完整 `evaluation-verify` 还会重新探测 manifest 记录的绝对工具路径，因此它是采集主机上的环境复验入口，不承诺 Windows/WSL 与 Linux 间直接搬运。可移交证据由 run plan、scenario plan、内容摘要和 raw 日志组成；跨机器审计只复验这些内容绑定与统计合同，不把另一台机器的工具安装状态冒充原采集环境。
 
-内核体积是独立护栏，不与延迟拼成“总分”。`make evaluation-kernel-cost` 使用 `evaluation_kernel_build.py` 在仓库锁内从同一 clean commit 固定执行两侧 clean/build，逐命令复检源码、记录真实退出码与有界输出并验证最终 RISC-V ELF；随后 `evaluation_kernel_cost.py` 采集 ELF/text/data/BSS，并从 canonical kernel budget 与 user stack checker 的原始输出重算 AgentOS `struct proc` 和最坏用户调用路径栈，以 `verify` 进行可搬运复验、以 `verify-local` 重放本机工具、以 `fragment` 生成 Dashboard 数据。后两项是 AgentOS actual/limit guardrail，不冒充 baseline delta。`make evaluation-smoke` 会运行构建者、成本合同及篡改回归。build manifest 把 clean commit、环境 SHA256、构建配置、原始构建日志、固定命令、目标相对路径及 ELF SHA256 绑定在一起。formal 包要求全部成本和 guardrail 完整测量；开发报告的缺失目标保持 `null + unavailable`，不能从源码行数估算二进制大小，也不能把体积护栏写成 CPU 性能优势。精确 schema 与命令见 [评价方法](docs/evaluation.md#51-内核成本证据)。
+内核体积是独立护栏，不与延迟拼成“总分”。`make evaluation-kernel-cost` 使用 `evaluation_kernel_build.py` 在仓库锁内从同一 clean commit 先执行可能重建内核的成本与栈 guardrail，再固定执行两侧最终 clean/build；因此记录 ELF 字节回执后不再运行会覆盖它的检查命令。构建者逐命令复检源码、记录真实退出码与有界输出并验证最终 RISC-V ELF；随后 `evaluation_kernel_cost.py` 采集 ELF/text/data/BSS，并从 canonical kernel budget 与 user stack checker 的原始输出重算 AgentOS `struct proc` 和最坏用户调用路径栈，以 `verify` 进行可搬运复验、以 `verify-local` 重放本机工具、以 `fragment` 生成 Dashboard 数据。后两项是 AgentOS actual/limit guardrail，不冒充 baseline delta。`make evaluation-smoke` 会运行构建者、成本合同及篡改回归。build manifest 把 clean commit、环境 SHA256、构建配置、原始构建日志、固定命令、目标相对路径及 ELF SHA256 绑定在一起。formal 包要求全部成本和 guardrail 完整测量；开发报告的缺失目标保持 `null + unavailable`，不能从源码行数估算二进制大小，也不能把体积护栏写成 CPU 性能优势。精确 schema 与命令见 [评价方法](docs/evaluation.md#51-内核成本证据)。
 
 ### 5.5 双目标运行
 

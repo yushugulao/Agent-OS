@@ -265,8 +265,8 @@ class Fixture:
                 "stderr_sha256": cost._bytes_sha(stderr),
             }
 
-        build_start = 1 + len(toolchain_tools)
-        guardrail_start = build_start + 4
+        guardrail_start = 1 + len(toolchain_tools)
+        build_start = guardrail_start + 2
         self.trusted_log = {
             "schema_version": cost.TRUSTED_BUILD_SCHEMA_VERSION,
             "kind": cost.TRUSTED_BUILD_LOG_KIND,
@@ -286,10 +286,6 @@ class Fixture:
                     )
                     for index, tool in enumerate(toolchain_tools)
                 ],
-                command_record(build_start, "baseline", "clean", [make_path, "-C", "baseline_ucore", f"TOOLPREFIX={toolprefix}", "clean"], b"baseline clean\n"),
-                command_record(build_start + 1, "baseline", "build", [make_path, "-C", "baseline_ucore", f"TOOLPREFIX={toolprefix}", "build/kernel"], b"baseline build\n"),
-                command_record(build_start + 2, "agentos", "clean", [make_path, f"TOOLPREFIX={toolprefix}", "clean"], b"agentos clean\n"),
-                command_record(build_start + 3, "agentos", "build", [make_path, f"TOOLPREFIX={toolprefix}", "build/kernel"], b"agentos build\n"),
                 command_record(
                     guardrail_start,
                     "agentos",
@@ -304,6 +300,10 @@ class Fixture:
                     [make_path, f"TOOLPREFIX={toolprefix}", "user-stack-check"],
                     b"user stack call-path budget: apps=182 max=2944 (app:main) budget=3072 stack=4096 reserve=1024\n",
                 ),
+                command_record(build_start, "baseline", "clean", [make_path, "-C", "baseline_ucore", f"TOOLPREFIX={toolprefix}", "clean"], b"baseline clean\n"),
+                command_record(build_start + 1, "baseline", "build", [make_path, "-C", "baseline_ucore", f"TOOLPREFIX={toolprefix}", "build/kernel"], b"baseline build\n"),
+                command_record(build_start + 2, "agentos", "clean", [make_path, f"TOOLPREFIX={toolprefix}", "clean"], b"agentos clean\n"),
+                command_record(build_start + 3, "agentos", "build", [make_path, f"TOOLPREFIX={toolprefix}", "build/kernel"], b"agentos build\n"),
             ],
         }
         _write_json(self.build_log, self.trusted_log)
@@ -673,18 +673,54 @@ class KernelCostTests(unittest.TestCase):
 
     def test_portable_verify_rejects_command_and_returncode_tampering(self) -> None:
         report = self.fixture.collect()
-        build_index = 1 + len(cost.TRUSTED_BUILD_TOOL_NAMES) + 1
-        self.fixture.trusted_log["commands"][build_index]["argv"][-1] = "forged-target"
+        build_command = next(
+            command
+            for command in self.fixture.trusted_log["commands"]
+            if command["target_id"] == "baseline" and command["phase"] == "build"
+        )
+        build_command["argv"][-1] = "forged-target"
         self.fixture.rewrite_trusted_log()
         self.fixture.rebind_portable_report(copy.deepcopy(report))
         with self.assertRaisesRegex(cost.KernelCostError, "sequence/cwd/phase/target/argv"):
             cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
 
-        self.fixture.trusted_log["commands"][build_index]["argv"][-1] = "build/kernel"
-        self.fixture.trusted_log["commands"][build_index + 1]["returncode"] = 23
+        build_command["argv"][-1] = "build/kernel"
+        build_command["returncode"] = 23
         self.fixture.rewrite_trusted_log()
         self.fixture.rebind_portable_report(copy.deepcopy(report))
         with self.assertRaisesRegex(cost.KernelCostError, "not a successful command"):
+            cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
+
+    def test_portable_verify_rejects_guardrail_after_measured_build(self) -> None:
+        report = self.fixture.collect()
+        commands = self.fixture.trusted_log["commands"]
+        guardrail_index = next(
+            index
+            for index, command in enumerate(commands)
+            if command["phase"] == "kernel_budget"
+        )
+        build_index = next(
+            index
+            for index, command in enumerate(commands)
+            if command["target_id"] == "baseline" and command["phase"] == "build"
+        )
+        commands[guardrail_index], commands[build_index] = (
+            commands[build_index],
+            commands[guardrail_index],
+        )
+        for sequence, command in enumerate(commands):
+            command["sequence"] = sequence
+        self.fixture.rewrite_trusted_log()
+        self.fixture.rebind_portable_report(copy.deepcopy(report))
+        with self.assertRaisesRegex(cost.KernelCostError, "sequence/cwd/phase/target/argv"):
+            cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
+
+    def test_portable_verify_rejects_legacy_trusted_build_schema(self) -> None:
+        report = self.fixture.collect()
+        self.fixture.trusted_config["schema_version"] = 2
+        self.fixture.rewrite_trusted_config()
+        self.fixture.rebind_portable_report(copy.deepcopy(report))
+        with self.assertRaisesRegex(cost.KernelCostError, "unsupported trusted build config"):
             cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
 
     def test_build_manifest_command_must_match_trusted_log(self) -> None:
@@ -931,7 +967,12 @@ class KernelCostTests(unittest.TestCase):
             b"[kernel-budget] struct proc: actual=26447 bytes "
             b"baseline=26448 bytes limit=27233 bytes\n"
         )
-        command = self.fixture.trusted_log["commands"][-2]
+        command = next(
+            command
+            for command in self.fixture.trusted_log["commands"]
+            if command["target_id"] == "agentos"
+            and command["phase"] == "kernel_budget"
+        )
         command["stdout_base64"] = base64.b64encode(changed).decode("ascii")
         command["stdout_sha256"] = cost._bytes_sha(changed)
         self.fixture.rewrite_trusted_log()

@@ -520,9 +520,12 @@ argv 和每个 boot 的 Host 环境都进入 manifest 摘要；加入 login flag
 
 ELF、text、data 和 BSS 是系统成本护栏，不是延迟或吞吐量。成本采集器不执行构建，
 也不相信孤立的 commit 参数。`evaluation_kernel_build.py` 是其可信生产者：它在仓库锁
-内从同一 clean HEAD 依次清理并构建两个目标，逐命令复检 source commit/clean 状态，
-验证 RISC-V ELF，绑定固定命令、真实退出码和有界原始输出，再原子保存 environment
-manifest 和 build manifest。构建者还要求绝对 `TOOLPREFIX`，在 Windows 接受
+内从同一 clean HEAD 先执行可能重建 AgentOS 内核的 canonical kernel budget 与 user
+stack guardrail，再依次清理并构建两个最终测量目标。这样 guardrail 仍在同一可信
+transcript 内，且 ELF 字节回执形成后不再运行会覆盖目标的检查命令。构建者逐命令复检
+source commit/clean 状态，验证 RISC-V ELF，绑定固定命令、真实退出码和有界原始输出，
+再原子保存 environment manifest 和 build manifest。构建者还要求绝对 `TOOLPREFIX`，
+在 Windows 接受
 `C:/.../riscv64-unknown-elf-`，在 Linux 接受
 `/usr/bin/riscv64-linux-gnu-`。它逐一解析并绑定 `gcc`、`ld`、`objcopy`、
 `objdump` 的绝对路径、文件 SHA256 和 `--version` 原始输出；每条 Make 命令同时在
@@ -538,7 +541,7 @@ manifest 和 build manifest。构建者还要求绝对 `TOOLPREFIX`，在 Window
   "environment_id": "kernel-build-<环境摘要前缀>",
   "facts": [
     {"name": "build_environment_sha256", "value": "<64 位小写 SHA256>"},
-    {"name": "builder", "value": "evaluation_kernel_build.py/2"},
+    {"name": "builder", "value": "evaluation_kernel_build.py/3"},
     {"name": "git", "value": "git version ..."},
     {"name": "make", "value": "GNU Make ..."},
     {"name": "make_path", "value": "/usr/bin/make"},
