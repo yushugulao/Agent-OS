@@ -307,6 +307,31 @@ def main() -> None:
     assert "host_tools/evaluation_platform.py formal-exec" in makefile
     assert "--script-relative scripts/run-evaluation-suite.sh --mode $(1)" in makefile
 
+    replay_environment: dict[str, str] = {}
+    bounded_runner = payload._run_bounded
+
+    def record_replay_environment(
+        _command, _cwd, environment, log_path, *_args, **_kwargs
+    ):
+        replay_environment.update(environment)
+        Path(log_path).write_text("fixture replay failure\n", encoding="ascii")
+        return 1, 0.0, False
+
+    payload._run_bounded = record_replay_environment
+    try:
+        expect_rejected(
+            lambda: payload._replay_semantics(
+                repository,
+                repository / "README.md",
+                COMMIT,
+                repository,
+            ),
+            "semantic replay failed",
+        )
+    finally:
+        payload._run_bounded = bounded_runner
+    assert Path(replay_environment["TMPDIR"]).is_absolute()
+
     make_tool = shutil.which("make")
     if make_tool is not None and os.name == "posix":
         # A dry run proves the canonical target enters the Python preflight

@@ -249,6 +249,7 @@ def _replay_semantics(
         with tempfile.TemporaryDirectory(
             prefix="agentos-full-verify-replay-"
         ) as temporary:
+            environment["TMPDIR"] = str(Path(temporary).resolve(strict=True))
             replay_log = Path(temporary) / "semantic-replay.log"
             returncode, _elapsed, timed_out = _run_bounded(
                 command,
