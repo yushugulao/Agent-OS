@@ -1784,7 +1784,7 @@ exit 91
             self.assertFalse(policy_marker.exists())
             self.assertFalse(make_marker.exists())
     @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
-    def test_non_utf8_tool_version_is_preserved_as_diagnostic_text(self) -> None:
+    def test_non_utf8_tool_version_preserves_raw_identity_and_diagnostic_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             repo = base / "repo"
@@ -1799,12 +1799,16 @@ exit 91
                       if failed_log.is_file() else "")
             self.assertEqual(result.returncode, 0,
                              result.stdout + result.stderr + detail)
-            version = (output / "environment/versions/qemu.txt").read_text(
-                encoding="utf-8"
-            )
-            self.assertEqual(version, "\ufffdfixture tool 1.0\n")
-            self.assertEqual(json.loads((output / "manifest.json").read_text(
-                encoding="utf-8"))["status"], "ready")
+            version_path = output / "environment/versions/qemu.txt"
+            self.assertEqual(version_path.read_bytes(), b"\xd2fixture tool 1.0\n")
+            manifest = json.loads((output / "manifest.json").read_text(
+                encoding="utf-8"))
+            self.assertEqual(manifest["status"], "ready")
+            environment = json.loads((output / "environment/environment.json").read_text(
+                encoding="utf-8"))
+            qemu = next(record for record in environment["tools"]
+                        if record["label"] == "qemu")
+            self.assertEqual(qemu["first_line"], "\ufffdfixture tool 1.0")
 
     @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
     def test_repository_filters_cannot_pollute_detached_execution(self) -> None:

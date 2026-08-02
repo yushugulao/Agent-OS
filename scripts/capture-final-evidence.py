@@ -846,11 +846,13 @@ def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, ob
         label, relative = record["label"], record.get("log")
         expected_log = f"environment/versions/{label}.txt"
         version_path = root / safe_relative(str(relative))
-        if (relative != expected_log or not version_path.is_file()
-                or record.get("log_sha256") != sha256_file(version_path)
+        if relative != expected_log or not version_path.is_file():
+            raise EvidenceError(f"environment version record is invalid: {label}")
+        version_lines = decode_external_output(version_path.read_bytes()).splitlines()
+        if (record.get("log_sha256") != sha256_file(version_path)
                 or not SHA256.fullmatch(str(record.get("executable_sha256", "")))
-                or not version_path.read_text(encoding="utf-8").splitlines()
-                or record.get("first_line") != version_path.read_text(encoding="utf-8").splitlines()[0]):
+                or not version_lines
+                or record.get("first_line") != version_lines[0]):
             raise EvidenceError(f"environment version record is invalid: {label}")
         version_logs.add(relative)
     actual_version_logs = {path.relative_to(root).as_posix() for path in

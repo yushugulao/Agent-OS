@@ -73,6 +73,7 @@ from evidence_toolchain_attestation import (
     capture_version,
     controlled_environment,
     create_isolated_detached_worktree,
+    decode_external_output,
     purge_evaluation_generated_outputs,
     require_nested_tool_resolution,
     resolve_bash_executable,
@@ -574,7 +575,7 @@ def _validate_tools(
             expected,
             "tool version log",
         )
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = decode_external_output(path.read_bytes()).splitlines()
         if (
             set(record) != {
                 "label",

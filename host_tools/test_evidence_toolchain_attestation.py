@@ -591,6 +591,26 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                     {"tool": tool}, records, root, dict(os.environ), "during execution"
                 )
 
+    def test_crlf_version_output_is_compared_as_exact_bytes(self) -> None:
+        if os.name != "posix":
+            self.skipTest("executable script fixture requires POSIX")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = root / "tool"
+            tool.write_text(
+                "#!/bin/sh\nprintf 'tool-v1\\r\\nsecond-line\\r\\n'\n",
+                encoding="ascii",
+            )
+            tool.chmod(0o755)
+            records = [
+                attestation.capture_version("tool", tool, root, dict(os.environ))
+            ]
+            version_log = root / str(records[0]["log"])
+            self.assertEqual(version_log.read_bytes(), b"tool-v1\r\nsecond-line\r\n")
+            attestation.verify_tool_attestations(
+                {"tool": tool}, records, root, dict(os.environ), "during execution"
+            )
+
     def test_nested_bare_tools_must_resolve_to_attested_paths(self) -> None:
         roots = {
             label: Path(f"/trusted/{command}")

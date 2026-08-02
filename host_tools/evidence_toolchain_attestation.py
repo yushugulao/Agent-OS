@@ -293,7 +293,8 @@ def capture_version(
         [str(executable), "--version"], stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, check=False, env=environment,
     )
-    output = decode_external_output(result.stdout)
+    raw_output = result.stdout or b""
+    output = decode_external_output(raw_output)
     if result.returncode or not output.strip():
         raise ToolAttestationError(f"cannot capture {label} version")
     if _sha256_file(executable) != before:
@@ -301,7 +302,7 @@ def capture_version(
     relative = f"environment/versions/{label}.txt"
     path = directory / relative
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(output, encoding="utf-8")
+    path.write_bytes(raw_output)
     return {
         "label": label, "path": str(executable), "executable_sha256": before,
         "first_line": output.splitlines()[0], "log": relative,
@@ -326,7 +327,8 @@ def verify_tool_attestations(
             [str(executable), "--version"], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, check=False, env=environment,
         )
-        output = decode_external_output(result.stdout)
+        raw_output = result.stdout or b""
+        output = decode_external_output(raw_output)
         after = _sha256_file(executable)
         version_path = directory / str(record["log"])
         if (
@@ -334,7 +336,7 @@ def verify_tool_attestations(
             or before != record.get("executable_sha256")
             or str(executable) != record.get("path")
             or output.splitlines()[0] != record.get("first_line")
-            or version_path.read_text(encoding="utf-8") != output
+            or version_path.read_bytes() != raw_output
             or _sha256_file(version_path) != record.get("log_sha256")
         ):
             raise ToolAttestationError(f"{label} tool identity changed {stage}")

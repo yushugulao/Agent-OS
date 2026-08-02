@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import formal_python_runtime as runtime_module
 from evidence_toolchain_attestation import resolve_bash_executable, resolve_executable
@@ -87,6 +88,54 @@ class FormalPythonRuntimeTests(unittest.TestCase):
                 self.assertEqual((isolated, no_site), (1, 1))
                 self.assertEqual(executable, str(formal.executable))
                 self.assertEqual(base, str(formal.executable))
+
+    def test_backing_probe_normalizes_an_equivalent_executable_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "python"
+            alias = root / "python.exe"
+            executable.write_bytes(b"runtime")
+            try:
+                os.link(executable, alias)
+            except OSError as error:
+                self.skipTest(f"hard-link fixture is unavailable: {error}")
+            value = {
+                "implementation": "CPython",
+                "version": [3, 12, 0],
+                "cache_tag": "cpython-312",
+                "abi_flags": "",
+                "executable": str(alias),
+                "base_executable": str(alias),
+                "path": [str(root / "stdlib")],
+                "isolated": 1,
+                "no_site": 1,
+                "safe_path": 1,
+                "ignore_environment": 1,
+                "no_user_site": 1,
+                "dont_write_bytecode": 1,
+            }
+            completed = subprocess.CompletedProcess(
+                [str(executable)], 0, json.dumps(value).encode("utf-8"), b""
+            )
+            with mock.patch.object(runtime_module.subprocess, "run", return_value=completed):
+                probe = runtime_module._probe_backing(executable, {})
+            self.assertEqual(probe["executable"], str(executable))
+            self.assertEqual(probe["base_executable"], str(executable))
+
+            different = root / "different-python"
+            different.write_bytes(b"other runtime")
+            mismatched = dict(value)
+            mismatched["base_executable"] = str(different)
+            rejected = subprocess.CompletedProcess(
+                [str(executable)], 0, json.dumps(mismatched).encode("utf-8"), b""
+            )
+            with (
+                mock.patch.object(runtime_module.subprocess, "run", return_value=rejected),
+                self.assertRaisesRegex(
+                    runtime_module.FormalPythonRuntimeError, "backing Python probe failed"
+                ),
+            ):
+                runtime_module._probe_backing(executable, {})
 
     def test_nested_runtime_discards_outer_repository_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

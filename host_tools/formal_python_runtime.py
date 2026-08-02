@@ -270,8 +270,8 @@ def _probe_backing(executable: Path, environment: dict[str, str]) -> dict[str, o
             "base_executable", "path", *flags,
         }
         or any(value[name] != 1 for name in flags)
-        or executable_identity != executable
-        or base_identity != executable
+        or not os.path.samefile(executable_identity, executable)
+        or not os.path.samefile(base_identity, executable)
         or len(version) != 3
         or any(isinstance(item, bool) or not isinstance(item, int) for item in version)
         or version < (3, 10, 0)
@@ -287,6 +287,11 @@ def _probe_backing(executable: Path, environment: dict[str, str]) -> dict[str, o
     ):
         detail = result.stderr.decode("utf-8", "replace")[-1000:]
         raise FormalPythonRuntimeError(f"backing Python probe failed: {detail}")
+    # Some POSIX compatibility layers expose the same executable both with and
+    # without a platform suffix. Bind the record to the already-attested path
+    # after proving file identity instead of trusting either spelling.
+    value["executable"] = str(executable)
+    value["base_executable"] = str(executable)
     return value
 
 
