@@ -296,21 +296,18 @@ require_text "ci/kernel-budgets.json" '"boot_stack_start_symbol"' "boot stack bu
 require_text "ci/kernel-budgets.json" '"calibration_status"' "Agent duration calibration state is missing"
 require_text "scripts/check-kernel-budgets.py" '"provisional_requires_full_suite"' "checker does not recognize the fail-closed calibration state"
 require_text "scripts/check-kernel-budgets.py" '"calibrated_full_suite"' "checker does not recognize the reviewed calibration state"
-require_text "scripts/run-agent-tests.sh" \
-	'^if \[\[ -z "\$\{AGENT_TEST_CASE:-\}" && "\$\{AGENT_TEST_CALIBRATE\}" == "0" \]\]; then$' \
-	"Agent duration policy does not distinguish full, targeted, and calibration modes"
+require_text "host_tools/test_capture_final_evidence.py" \
+	'test_agent_duration_policy_fails_before_build_with_bounded_exceptions' \
+	"Agent duration mode behavior lacks a regression contract"
+require_text "Makefile" \
+	'^[[:space:]]*@\$\(PYTHON_CMD\)[[:space:]]+host_tools/test_capture_final_evidence\.py$' \
+	"Agent duration mode regression is not executed by its self-test target"
+require_text "Makefile" '^ci-check:.*evidence-capture-selftest' \
+	"Agent duration mode regression is not wired into ci-check"
 require_text "scripts/run-agent-tests.sh" '--check[[:space:]]+agent-test-policy' \
 	"full Agent suite does not reject provisional duration policy before QEMU"
 require_text "scripts/run-full-verification.sh" '--check[[:space:]]+agent-test-policy' \
 	"full verification does not reject provisional duration policy before executing its profile"
-agent_policy_line="$(grep -n -- '--check agent-test-policy' \
-	"${ROOT_DIR}/scripts/run-agent-tests.sh" | head -1 | cut -d: -f1)"
-agent_first_build_line="$(grep -n '^"${MAKE_TOOL}" -C user clean$' \
-	"${ROOT_DIR}/scripts/run-agent-tests.sh" | head -1 | cut -d: -f1)"
-if [ -z "${agent_policy_line}" ] || [ -z "${agent_first_build_line}" ] ||
-   [ "${agent_policy_line}" -ge "${agent_first_build_line}" ]; then
-	fail "full Agent duration policy must run before any suite build or QEMU"
-fi
 require_text "scripts/check-kernel-budgets.py" "invalid_global_object_exports" "Agent writable export gate is missing"
 require_text "Makefile" "scripts/run-syscall-fairness-tests.sh" "Makefile syscall fairness target does not call its runner"
 require_text "Makefile" "scripts/run-file-resource-tests.sh" "Makefile file resource target does not call its runner"
@@ -335,7 +332,7 @@ do
 done
 
 require_text "scripts/run-agent-tests.sh" \
-	'^[[:space:]]*(if[[:space:]]+)?"\$\{PYTHON_BIN\}"[[:space:]]+scripts/agent_test_runner\.py[[:space:]]+\\$' \
+	'^[[:space:]]*if[[:space:]]+"\$\{PYTHON_BIN\}"[[:space:]]+-I[[:space:]]+-S[[:space:]]+-B[[:space:]]+scripts/agent_test_runner\.py[[:space:]]+\\$' \
 	"Agent regression runner bypasses the shared fail-closed QEMU runner"
 require_text "scripts/run-agent-tests.sh" "AGENT_TEST_GUEST_LOG_FILE" \
 	"Agent regression runner does not preserve per-case Guest evidence"

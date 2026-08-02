@@ -1771,8 +1771,17 @@ exit 91
             self.assertTrue(make_marker.exists())
 
             make_marker.unlink()
+            portable_env = {**env, "AGENT_TEST_DURATION_PROFILE": "none"}
+            portable = run(["bash", "scripts/run-agent-tests.sh"], REPO,
+                           check=False, env=portable_env)
+            self.assertEqual(portable.returncode, 91,
+                             portable.stdout + portable.stderr)
+            self.assertFalse(policy_marker.exists())
+            self.assertTrue(make_marker.exists())
+
+            make_marker.unlink()
             calibration_env = {**env, "AGENT_TEST_CALIBRATE": "1",
-                               "REQUIRE_FULL_SUITE": "1"}
+                                "REQUIRE_FULL_SUITE": "1"}
             calibration = run(["bash", "scripts/run-agent-tests.sh"], REPO,
                               check=False, env=calibration_env)
             self.assertEqual(calibration.returncode, 1,
