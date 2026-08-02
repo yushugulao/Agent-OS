@@ -19,12 +19,15 @@ DISPATCHER_PATH = "scripts/trusted-python-child.py"
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FORMAL_TOOL_ORDER = ("make", "git", "bash", "python", "host_cc", "compiler", "qemu")
+# The C locale is the POSIX producer and historical Cygwin default. New Cygwin
+# producers override the pair with FORMAL_CYGWIN_LOCALE below.
 FORMAL_ENVIRONMENT_FIXED = {
     "LC_ALL": "C", "LANG": "C", "TZ": "UTC", "PYTHONNOUSERSITE": "1",
     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_ATTR_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
     "GIT_NO_REPLACE_OBJECTS": "1", "GIT_OPTIONAL_LOCKS": "0",
 }
+FORMAL_CYGWIN_LOCALE = "C.UTF-8"
 FORMAL_ENVIRONMENT_DYNAMIC = {
     "PATH", "HOME", "TMPDIR", "TEMP", "TMP", "FINAL_EVIDENCE_STAGE",
     "QEMU", "PYTHON_BIN",
@@ -574,7 +577,26 @@ def validate_formal_execution_environment(
         not isinstance(value, dict)
         or set(value) != expected_keys
         or any(not isinstance(item, str) or not item for item in value.values())
-        or any(value.get(name) != expected for name, expected in FORMAL_ENVIRONMENT_FIXED.items())
+    ):
+        raise FormalPythonRuntimeError("formal execution environment schema differs")
+    validate_formal_temporary_binding(temporary_binding, value)
+    platform_name = temporary_binding["execution_platform"]
+    fixed_without_locale = {
+        name: expected
+        for name, expected in FORMAL_ENVIRONMENT_FIXED.items()
+        if name not in {"LANG", "LC_ALL"}
+    }
+    locale = (
+        value.get("LANG"), value.get("LC_ALL")
+    ) if isinstance(value, dict) else (None, None)
+    allowed_locales = {("C", "C")}
+    if platform_name == "cygwin":
+        # Historical payloads used C. New Cygwin executions require UTF-8 so
+        # native compiler paths survive argv conversion through POSIX tools.
+        allowed_locales.add((FORMAL_CYGWIN_LOCALE, FORMAL_CYGWIN_LOCALE))
+    if (
+        locale not in allowed_locales
+        or any(value.get(name) != expected for name, expected in fixed_without_locale.items())
     ):
         raise FormalPythonRuntimeError("formal execution environment schema differs")
     for name in ("HOME", "TMPDIR", "FINAL_EVIDENCE_STAGE", "QEMU", "PYTHON_BIN", "HOST_CC", "HOSTCC", "CC"):
@@ -589,7 +611,6 @@ def validate_formal_execution_environment(
         if directory not in directories:
             directories.append(directory)
     expected_path = controlled_search_path(directories, ":", POSIX_SYSTEM_PATHS)
-    validate_formal_temporary_binding(temporary_binding, value)
     if (
         value["PATH"] != expected_path
         or value["HOME"] != str(launch_root / "home")

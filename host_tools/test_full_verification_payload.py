@@ -547,6 +547,22 @@ exit 0
         assert binding["file_count"] == len(paths)
         assert payload.CHECKSUM_NAME in paths
 
+        posix_utf8_locale = base / "posix-utf8-locale"
+        shutil.copytree(valid, posix_utf8_locale)
+        rewrite_environment_and_receipt(
+            posix_utf8_locale,
+            lambda environment: environment["execution_environment"].update(
+                LANG=python_runtime.FORMAL_CYGWIN_LOCALE,
+                LC_ALL=python_runtime.FORMAL_CYGWIN_LOCALE,
+            ),
+        )
+        expect_rejected(
+            lambda: payload.verify_payload(
+                posix_utf8_locale, contract_root=repository
+            ),
+            "environment schema differs",
+        )
+
         legacy_schema = base / "legacy-schema"
         shutil.copytree(valid, legacy_schema)
         rewrite_receipt(
@@ -563,6 +579,8 @@ exit 0
         def use_cygwin_temporary_binding(environment):
             execution = environment["execution_environment"]
             execution.update(
+                LANG=python_runtime.FORMAL_CYGWIN_LOCALE,
+                LC_ALL=python_runtime.FORMAL_CYGWIN_LOCALE,
                 TEMP="R:/fixture/runtime/tmp",
                 TMP="R:/fixture/runtime/tmp",
                 SYSTEMDRIVE="C:",
@@ -578,6 +596,46 @@ exit 0
             cygwin_valid, use_cygwin_temporary_binding
         )
         payload.verify_payload(cygwin_valid, contract_root=repository)
+
+        cygwin_legacy_locale = base / "cygwin-legacy-locale"
+        shutil.copytree(cygwin_valid, cygwin_legacy_locale)
+        rewrite_environment_and_receipt(
+            cygwin_legacy_locale,
+            lambda environment: environment["execution_environment"].update(
+                LANG="C", LC_ALL="C"
+            ),
+        )
+        payload.verify_payload(cygwin_legacy_locale, contract_root=repository)
+
+        cygwin_mixed_locale = base / "cygwin-mixed-locale"
+        shutil.copytree(cygwin_valid, cygwin_mixed_locale)
+        rewrite_environment_and_receipt(
+            cygwin_mixed_locale,
+            lambda environment: environment["execution_environment"].update(
+                LC_ALL="C"
+            ),
+        )
+        expect_rejected(
+            lambda: payload.verify_payload(
+                cygwin_mixed_locale, contract_root=repository
+            ),
+            "environment schema differs",
+        )
+
+        cygwin_other_locale = base / "cygwin-other-locale"
+        shutil.copytree(cygwin_valid, cygwin_other_locale)
+        rewrite_environment_and_receipt(
+            cygwin_other_locale,
+            lambda environment: environment["execution_environment"].update(
+                LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"
+            ),
+        )
+        expect_rejected(
+            lambda: payload.verify_payload(
+                cygwin_other_locale, contract_root=repository
+            ),
+            "environment schema differs",
+        )
 
         platform_downgrade = base / "platform-downgrade"
         shutil.copytree(cygwin_valid, platform_downgrade)

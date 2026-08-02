@@ -29,6 +29,7 @@ except ImportError:
 
 try:
     from .formal_python_runtime import (
+        FORMAL_CYGWIN_LOCALE,
         FORMAL_ENVIRONMENT_FIXED,
         FORMAL_EXECUTION_OVERRIDE_KEYS,
         POSIX_SYSTEM_PATHS,
@@ -42,6 +43,7 @@ try:
     )
 except ImportError:
     from formal_python_runtime import (
+        FORMAL_CYGWIN_LOCALE,
         FORMAL_ENVIRONMENT_FIXED,
         FORMAL_EXECUTION_OVERRIDE_KEYS,
         POSIX_SYSTEM_PATHS,
@@ -286,6 +288,11 @@ def controlled_environment(
         environment.update({
             **FORMAL_ENVIRONMENT_FIXED,
             "GIT_CONFIG_GLOBAL": os.devnull,
+        })
+    if sys.platform == "cygwin":
+        environment.update({
+            "LANG": FORMAL_CYGWIN_LOCALE,
+            "LC_ALL": FORMAL_CYGWIN_LOCALE,
         })
     if os.name == "nt":
         for name in ("SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"):

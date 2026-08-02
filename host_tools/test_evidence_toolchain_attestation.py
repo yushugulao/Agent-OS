@@ -32,9 +32,14 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                 if sys.platform == "cygwin"
                 else environment["TMPDIR"] == environment["TEMP"]
             )
+        expected_fixed = dict(attestation.FORMAL_ENVIRONMENT_FIXED)
+        if sys.platform == "cygwin":
+            expected_fixed.update(
+                LANG=attestation.FORMAL_CYGWIN_LOCALE,
+                LC_ALL=attestation.FORMAL_CYGWIN_LOCALE,
+            )
         self.assertEqual(
-            {name: environment[name] for name in attestation.FORMAL_ENVIRONMENT_FIXED},
-            attestation.FORMAL_ENVIRONMENT_FIXED,
+            {name: environment[name] for name in expected_fixed}, expected_fixed
         )
         self.assertEqual(
             environment["PATH"],
