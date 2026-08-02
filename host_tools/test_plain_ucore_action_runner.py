@@ -389,18 +389,21 @@ def main() -> int:
         )
         clean_status = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         clean_diff = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        clean_top = subprocess.CompletedProcess(
+            [], 0, stdout=str(repo.resolve()) + "\n", stderr=""
+        )
         exact_digest = "e" * 64
         with (
             mock.patch.object(
                 runner.subprocess,
                 "run",
-                side_effect=[clean_head, clean_status, clean_diff],
+                side_effect=[clean_top, clean_head, clean_status, clean_diff],
             ) as source_run,
             mock.patch.object(
                 runner,
                 "tracked_worktree_identity",
                 return_value=(True, exact_digest),
-            ),
+            ) as exact_identity,
         ):
             source_identity = runner.capture_source_identity(repo)
         assert source_identity == {
@@ -410,7 +413,45 @@ def main() -> int:
                 ("\0\0" + exact_digest).encode("ascii")
             ).hexdigest(),
         }
-        assert "--untracked-files=no" in source_run.call_args_list[1].args[0]
+        assert "--untracked-files=no" in source_run.call_args_list[2].args[0]
+        for git_call in source_run.call_args_list[1:]:
+            arguments = git_call.args[0]
+            assert arguments[arguments.index("-C") + 1] == str(repo.resolve())
+        assert exact_identity.call_args.args[1] == repo.resolve()
+
+        for invalid_root in ("relative/root\n", "one\ntwo\n"):
+            try:
+                runner._normalize_git_toplevel(repo.resolve(), invalid_root)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"invalid Git root accepted: {invalid_root!r}")
+        unrelated_root = root / "unrelated-root"
+        unrelated_root.mkdir()
+        try:
+            runner._normalize_git_toplevel(
+                repo.resolve(), str(unrelated_root.resolve()) + "\n"
+            )
+        except ValueError as error:
+            assert "outside" in str(error)
+        else:
+            raise AssertionError("Git root outside the requested worktree was accepted")
+
+        windows_top = "E:/shared/repository"
+        if not Path(windows_top).is_absolute():
+            converted_top = subprocess.CompletedProcess(
+                ["cygpath"], 0, stdout=str(repo.resolve()) + "\n", stderr=""
+            )
+            with mock.patch.object(
+                runner.subprocess, "run", return_value=converted_top
+            ) as convert_top:
+                normalized_top = runner._normalize_git_toplevel(
+                    repo.resolve(), windows_top + "\n"
+                )
+            assert normalized_top == repo.resolve()
+            assert convert_top.call_args.args[0] == [
+                "cygpath", "-a", "-u", windows_top,
+            ]
         dirty_status = subprocess.CompletedProcess(
             [], 0, stdout=" M os/proc.c\n", stderr=""
         )
@@ -421,7 +462,7 @@ def main() -> int:
             mock.patch.object(
                 runner.subprocess,
                 "run",
-                side_effect=[clean_head, dirty_status, dirty_diff],
+                side_effect=[clean_top, clean_head, dirty_status, dirty_diff],
             ),
             mock.patch.object(
                 runner,
@@ -442,7 +483,7 @@ def main() -> int:
             mock.patch.object(
                 runner.subprocess,
                 "run",
-                side_effect=[changed_head, clean_status, clean_diff],
+                side_effect=[clean_top, changed_head, clean_status, clean_diff],
             ),
             mock.patch.object(
                 runner,
@@ -485,6 +526,42 @@ def main() -> int:
                 assert "hidden or nonstandard" in str(error), error
             else:
                 raise AssertionError(f"hidden tracked change accepted: {hidden_flag}")
+
+        nested_repo = root / "nested-source-repo"
+        nested_repo.mkdir()
+
+        def nested_git(*arguments: str) -> None:
+            subprocess.run(
+                ["git", *arguments],
+                cwd=nested_repo,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        nested_git("init", "-q")
+        nested_git("config", "user.email", "runner@example.invalid")
+        nested_git("config", "user.name", "Runner Test")
+        source_subdir = nested_repo / "baseline_ucore"
+        source_subdir.mkdir()
+        (source_subdir / "kernel.c").write_text(
+            "int kernel = 1;\n", encoding="ascii"
+        )
+        outside_source = nested_repo / "shared-contract.txt"
+        outside_source.write_text("contract=v1\n", encoding="ascii")
+        nested_git("add", "-A")
+        nested_git("commit", "-q", "-m", "nested source")
+        root_identity = runner.capture_source_identity(nested_repo)
+        subdir_identity = runner.capture_source_identity(source_subdir)
+        assert root_identity == subdir_identity
+        assert subdir_identity["source_tree_clean"] is True
+        outside_source.write_text("contract=tampered\n", encoding="ascii")
+        dirty_subdir_identity = runner.capture_source_identity(source_subdir)
+        assert dirty_subdir_identity["source_tree_clean"] is False
+        assert dirty_subdir_identity["source_tracked_sha256"] != subdir_identity[
+            "source_tracked_sha256"
+        ]
+        outside_source.write_text("contract=v1\n", encoding="ascii")
 
         artifact_repo = root / "artifact-repo"
         (artifact_repo / "build").mkdir(parents=True)
@@ -604,6 +681,24 @@ def main() -> int:
         assert read(occupied_marker) == "keep\n"
 
         if symlinks_available(root):
+            source_alias = root / "source-alias"
+            source_alias.symlink_to(source_subdir, target_is_directory=True)
+            try:
+                runner.capture_source_identity(source_alias)
+            except ValueError as error:
+                assert "symbolic link" in str(error)
+            else:
+                raise AssertionError("link-backed source directory was accepted")
+            try:
+                runner._normalize_git_toplevel(
+                    source_subdir.resolve(), str(source_alias) + "\n"
+                )
+            except ValueError as error:
+                assert "symbolic link" in str(error)
+            else:
+                raise AssertionError("link-backed Git top-level was accepted")
+            unlink_test_link(source_alias)
+
             planted_target = root / "planted-run-target"
             planted_target.mkdir()
             planted_run = root / "planted-run"

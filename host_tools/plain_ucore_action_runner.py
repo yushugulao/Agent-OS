@@ -260,9 +260,21 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
         "env": controlled_git_environment(),
     }
     try:
-        head = subprocess.run(
+        top_level = subprocess.run(
             [str(git), "-c", "core.fsmonitor=false", "-c",
              "core.untrackedCache=false", "-C", str(repo_dir), "rev-parse",
+             "--show-toplevel"],
+            **common_kwargs,
+        )
+        if top_level.returncode != 0:
+            diagnostic = (top_level.stderr or "").strip()
+            raise ValueError(
+                f"source repository root is unavailable: {diagnostic}"
+            )
+        source_root = _normalize_git_toplevel(repo_dir, top_level.stdout)
+        head = subprocess.run(
+            [str(git), "-c", "core.fsmonitor=false", "-c",
+             "core.untrackedCache=false", "-C", str(source_root), "rev-parse",
              "--verify", "HEAD^{commit}"],
             **common_kwargs,
         )
@@ -271,7 +283,7 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
                 str(git),
                 "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
                 "-C",
-                str(repo_dir),
+                str(source_root),
                 "status",
                 "--porcelain=v1",
                 "--untracked-files=no",
@@ -284,7 +296,7 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
                 str(git),
                 "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
                 "-C",
-                str(repo_dir),
+                str(source_root),
                 "diff",
                 "--binary",
                 "--no-ext-diff",
@@ -308,7 +320,7 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
         raise ValueError(f"tracked source diff is unavailable: {diagnostic}")
     try:
         tracked_clean, exact_tracked_digest = tracked_worktree_identity(
-            str(git), repo_dir
+            str(git), source_root
         )
     except DeliveryContractError as error:
         raise ValueError(f"tracked source identity is unsafe: {error}") from error
@@ -326,6 +338,47 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
         "source_tree_clean": status.stdout == "" and tracked_clean,
         "source_tracked_sha256": tracked_fingerprint,
     }
+
+
+def _normalize_git_toplevel(repo_dir: Path, reported: str) -> Path:
+    """Return Git's link-free worktree root in the active Host namespace."""
+
+    lines = reported.splitlines()
+    if len(lines) != 1 or not lines[0] or "\0" in lines[0]:
+        raise ValueError("Git repository root is malformed")
+    value = lines[0]
+    candidate = Path(value)
+    if not candidate.is_absolute() and PureWindowsPath(value).is_absolute():
+        converted = subprocess.run(
+            ["cygpath", "-a", "-u", value],
+            cwd=repo_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            timeout=5,
+            check=False,
+            env=controlled_git_environment(),
+        )
+        converted_lines = converted.stdout.splitlines()
+        if (
+            converted.returncode != 0
+            or len(converted_lines) != 1
+            or not converted_lines[0]
+        ):
+            raise ValueError("Git repository root cannot be converted")
+        candidate = Path(converted_lines[0])
+    if not candidate.is_absolute():
+        raise ValueError("Git repository root is not absolute")
+    source_root = require_safe_directory(
+        _absolute_lexical_path(candidate)
+    ).resolve(strict=True)
+    try:
+        repo_dir.relative_to(source_root)
+    except ValueError as error:
+        raise ValueError("source directory is outside its Git worktree") from error
+    return source_root
 
 
 def verify_source_identity(
