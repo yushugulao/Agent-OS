@@ -55,7 +55,7 @@ Windows/WSL 和 MSYS2 的工具配置见 [Windows 快速开始](../windows-quick
 截至本页所在提交，源码、测试合同和评价框架已经进入仓库，但以下事实必须区分：
 
 - [正式证据索引](../../evidence/releases/INDEX.md) 尚未登记当前提交的 release bundle；
-- `ci/kernel-budgets.json` 中 18-case 时长状态为 `calibrated_full_suite`，绑定 `ef0f77edee83` 的三轮未签名本地 E3 校准包；
+- `ci/kernel-budgets.json` 中 18-case 时长状态为 `calibrated_full_suite`，绑定 `04c1e6652324` 的三轮未签名本地 E3 校准包；
 - 历史提交的日志和校准只证明其绑定提交，不能自动证明当前提交；
 - `results/latest/` 和 development Dashboard 是可覆盖预览，不是提交证据；
 - 没有可用远程 Runner 时可以形成绑定干净提交的本地 E3，但不能宣称远程 CI/E4；

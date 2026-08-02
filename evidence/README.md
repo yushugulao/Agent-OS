@@ -110,16 +110,16 @@ python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py 
 该总上限只为容纳串行 recovery/allocator 矩阵，不能把无期限挂起误当成慢速成功；实际采用的
 上限同时写入 manifest 和 command CSV，离线复验要求两处一致。
 
-当前受管源码指纹已由 `scripts/agent_test_calibration.py collect` 在冻结提交 `ef0f77edee83` 的
-clean detached worktree 上串行执行三轮完整 18-case。样本为 `280.4274567s`、`278.9655878s`、
-`281.1814338s`，中位基线 `280.4274567s`，确定性上限 `294.449s`；71 个文件保存在
-`evidence/calibrations/ef0f77edee83/`。timing 从 commit/tree、随机 nonce、可执行文件身份、
+当前受管源码指纹已由 `scripts/agent_test_calibration.py collect` 在冻结提交 `04c1e6652324` 的
+clean detached worktree 上串行执行三轮完整 18-case。样本为 `287.9945528s`、`283.0201263s`、
+`280.9651484s`，中位基线 `283.0201263s`，确定性上限 `297.172s`；71 个文件保存在
+`evidence/calibrations/04c1e6652324/`。timing 从 commit/tree、随机 nonce、可执行文件身份、
 镜像/Guest 日志哈希、真实 monotonic 区间和退出结果绑定的 attestations 重建。校准包只标记为未签名本地 E3 复现证据，
 不是 release bundle，更不是 GitLab CI 或 E4 attestation；它证明包内字节可重放和来源绑定，不能
 证明掌控本机 checkout、工具与输出的操作者诚实。production collector 没有公式/fixture 通道，
 测试 fixture 也不得进入正式证据。采集会逐 blob 核对 clean detached worktree，并严格匹配独立的
 `local-e3-msys2-xpack-qemu11-v1` 工具与主机 profile；更换 case、提交、硬件、虚拟化层、QEMU
-或工具链可执行文件后必须重新校准。`814021ab9dac` 等旧包只保留为历史记录。Ubuntu/QEMU 10.2.1 GitLab job 只交付另一 profile 的完整
+或工具链可执行文件后必须重新校准。`ef0f77edee83`、`814021ab9dac` 等旧包只保留为历史记录。Ubuntu/QEMU 10.2.1 GitLab job 只交付另一 profile 的完整
 18-case 语义与原始日志，不适用本地 wall-time 阈值。
 
 离线验证文件集合、引用和 SHA256：

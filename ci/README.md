@@ -100,12 +100,12 @@ immutable lifecycle id and generation.
 
 The current candidate's full-suite duration gate is `calibrated_full_suite`.
 The clean detached calibration source is commit
-`ef0f77edee83be11629735d47a4001493fec7fd8`, with source fingerprint
-`c2afdbd7a566bc94d61fdc7e7c1578d3ad977fa588b5487d92af07ca8ad589b0`.
-Its three complete 18-case samples are `280.4274567`, `278.9655878`, and
-`281.1814338` seconds. The median baseline is `280.4274567` seconds and the
-deterministic limit is `294.449` seconds. The complete local-E3 calibration
-package is committed at `evidence/calibrations/ef0f77edee83/`; it is explicitly
+`04c1e66523240878d670aa5aa4070360788dec86`, with source fingerprint
+`2162696ef9fb944b2f1dfbad4daa0aafbc7ae0847fe4b0a347f4a93050b536e7`.
+Its three complete 18-case samples are `287.9945528`, `283.0201263`, and
+`280.9651484` seconds. The median baseline is `283.0201263` seconds and the
+deterministic limit is `297.172` seconds. The complete local-E3 calibration
+package is committed at `evidence/calibrations/04c1e6652324/`; it is explicitly
 `local_e3_unsigned` and is not GitLab Runner or E4 evidence. The older
 `610df28bda64`, `814021ab9dac`, and `31d4ddf53695` packages remain historical artifacts
 only and are not admissible as a threshold for this or any new candidate.

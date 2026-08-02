@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16、`31d4ddf53695` 和 `814021ab9dac` 的三轮 18/18 都只作为对应源码的历史 checkpoint。当前受管源码指纹已在 `ef0f77edee83` 上取得三轮 `280.4274567s`、`278.9655878s`、`281.1814338s`，中位基线 `280.4274567s`、上限 `294.449s`，状态为 `calibrated_full_suite`；该包仅为未签名本地 E3 校准证据，不能替代最终 `full-verify` 或 C→E release bundle。历史独立 `agentscope_ucore`、Reader 和 `agentfinal_ucore` 输出同样不能替代最终验收；旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以版本化配置为准：
+完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16、`31d4ddf53695` 和 `814021ab9dac` 的三轮 18/18 都只作为对应源码的历史 checkpoint。当前受管源码指纹已在 `04c1e6652324` 上取得三轮 `287.9945528s`、`283.0201263s`、`280.9651484s`，中位基线 `283.0201263s`、上限 `297.172s`，状态为 `calibrated_full_suite`；该包仅为未签名本地 E3 校准证据，不能替代最终 `full-verify` 或 C→E release bundle。历史独立 `agentscope_ucore`、Reader 和 `agentfinal_ucore` 输出同样不能替代最终验收；旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以版本化配置为准：
 
 ```bash
 agentfinal_ucore
