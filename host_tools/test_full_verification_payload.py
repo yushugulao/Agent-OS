@@ -331,6 +331,9 @@ def main() -> None:
     finally:
         payload._run_bounded = bounded_runner
     assert Path(replay_environment["TMPDIR"]).is_absolute()
+    inherited_temporary = getattr(sys, "_agentos_temporary_root", None)
+    if inherited_temporary is not None:
+        assert replay_environment["TMPDIR"] == inherited_temporary
 
     make_tool = shutil.which("make")
     if make_tool is not None and os.name == "posix":

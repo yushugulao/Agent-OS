@@ -249,7 +249,23 @@ def _replay_semantics(
         with tempfile.TemporaryDirectory(
             prefix="agentos-full-verify-replay-"
         ) as temporary:
-            environment["TMPDIR"] = str(Path(temporary).resolve(strict=True))
+            inherited_temporary = getattr(sys, "_agentos_temporary_root", None)
+            if inherited_temporary is None:
+                replay_temporary = Path(temporary).resolve(strict=True)
+            else:
+                try:
+                    replay_temporary = require_safe_directory(
+                        absolute_lexical_path(Path(inherited_temporary))
+                    ).resolve(strict=True)
+                except (OSError, ValueError) as error:
+                    raise FullVerificationError(
+                        "trusted semantic-replay temporary root is unsafe"
+                    ) from error
+                if str(replay_temporary) != inherited_temporary:
+                    raise FullVerificationError(
+                        "trusted semantic-replay temporary root is noncanonical"
+                    )
+            environment["TMPDIR"] = str(replay_temporary)
             replay_log = Path(temporary) / "semantic-replay.log"
             returncode, _elapsed, timed_out = _run_bounded(
                 command,

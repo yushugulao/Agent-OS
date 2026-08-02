@@ -163,6 +163,7 @@ def main() -> None:
     temporary = _absolute_directory(os.environ.get("TMPDIR", ""), "temporary root")
     _reset_import_paths()
     sys._agentos_backing_executable = backing_executable
+    sys._agentos_temporary_root = str(temporary)
     sys.executable = str(shim)
     sys._base_executable = str(shim)
     sys._agentos_safe_path = True
