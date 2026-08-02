@@ -23,6 +23,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CalibrationTests(unittest.TestCase):
+    @staticmethod
+    def canonical_windows_fixture_environment():
+        if sys.platform in {"cygwin", "msys"} or os.name == "nt":
+            return {
+                "ALLUSERSPROFILE": r"C:\ProgramData",
+                "PROGRAMDATA": r"C:\ProgramData",
+                "SYSTEMDRIVE": "C:",
+            }
+        return {}
+
     def git(self, root, *args):
         return subprocess.run(
             ["git", *args],
@@ -198,7 +208,11 @@ class CalibrationTests(unittest.TestCase):
             "MAKEFILES": "/tmp/poison.mk",
             "PYTHONPATH": "/tmp/poison-python",
         }
-        with mock.patch.dict(os.environ, poisoned, clear=False):
+        with mock.patch.dict(
+            os.environ,
+            {**self.canonical_windows_fixture_environment(), **poisoned},
+            clear=False,
+        ):
             environment = calibration.calibration_child_environment()
         for name in poisoned:
             self.assertNotIn(name, environment)
@@ -346,7 +360,10 @@ class CalibrationTests(unittest.TestCase):
                 + ").write_text('ran')\n",
                 encoding="ascii",
             )
-            environment = calibration.calibration_child_environment()
+            with mock.patch.dict(
+                os.environ, self.canonical_windows_fixture_environment(), clear=False
+            ):
+                environment = calibration.calibration_child_environment()
             environment["HOME"] = str(home)
             result = subprocess.run(
                 [sys.executable, "-c", "import site"],
@@ -489,12 +506,9 @@ class CalibrationTests(unittest.TestCase):
 
     def test_duration_profile_values_fail_closed_before_execution(self):
         root = Path(__file__).resolve().parents[1]
-        if sys.platform in {"cygwin", "msys"}:
-            bash = Path(sys.executable).with_name("bash.exe")
-            self.assertTrue(bash.is_file())
-        else:
-            bash = shutil.which("bash")
-            self.assertIsNotNone(bash)
+        bash = shutil.which("bash")
+        self.assertIsNotNone(bash)
+        self.assertTrue(Path(bash).is_file())
         for profile, calibrate, message in (
             ("typo", "0", "must be local-e3 or none"),
             ("none", "1", "requires the local-e3 duration profile"),
