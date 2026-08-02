@@ -253,6 +253,7 @@ TRUSTED_ENVIRONMENT_REQUIRED = {
 TRUSTED_ENVIRONMENT_OPTIONAL = {
     "PATH", "SystemRoot", "COMSPEC", "PATHEXT", "HOME", "TMP", "TEMP",
 }
+TRUSTED_BUILD_LOCALES = frozenset(("C", "C.UTF-8"))
 
 
 class KernelCostError(ValueError):
@@ -1016,8 +1017,8 @@ def validate_trusted_build_config(
         if not isinstance(raw, str) or len(raw) > 32768 or "\x00" in raw:
             raise KernelCostError(f"trusted build environment {name} is invalid")
     if (
-        environment["LANG"] != "C"
-        or environment["LC_ALL"] != "C"
+        environment["LANG"] not in TRUSTED_BUILD_LOCALES
+        or environment["LC_ALL"] != environment["LANG"]
         or environment["PYTHONHASHSEED"] != "0"
         or environment["TZ"] != "UTC"
         or environment["TOOLPREFIX"] != prefix

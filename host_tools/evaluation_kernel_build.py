@@ -607,9 +607,12 @@ def _run_command(
 
 
 def _fixed_environment(commit_epoch: str, toolprefix: str) -> dict[str, str]:
+    # MSYS/Cygwin tools need a UTF-8 C locale to preserve non-ASCII Win32
+    # paths when a compiler subprogram is normalized through cygpath.
+    build_locale = "C.UTF-8" if sys.platform in {"cygwin", "msys"} else "C"
     environment: dict[str, str] = {
-        "LANG": "C",
-        "LC_ALL": "C",
+        "LANG": build_locale,
+        "LC_ALL": build_locale,
         "PYTHONHASHSEED": "0",
         "SOURCE_DATE_EPOCH": commit_epoch,
         "TOOLPREFIX": toolprefix,

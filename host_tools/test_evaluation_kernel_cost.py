@@ -719,6 +719,46 @@ class KernelCostTests(unittest.TestCase):
         with self.assertRaisesRegex(cost.KernelCostError, "stdout SHA-256"):
             cost.verify_portable(self.fixture.report, self.fixture.config, self.fixture.root)
 
+    def test_trusted_build_locale_domain_is_closed_and_utf8_capable(self) -> None:
+        config, config_raw = cost.load_config(self.fixture.config)
+        environment = self.fixture.trusted_config["environment"]
+        environment["LANG"] = "C.UTF-8"
+        environment["LC_ALL"] = "C.UTF-8"
+        self.fixture.trusted_config["environment_sha256"] = cost._bytes_sha(
+            cost._canonical_json(environment)
+        )
+        self.assertIs(
+            cost.validate_trusted_build_config(
+                self.fixture.trusted_config,
+                config,
+                cost._bytes_sha(config_raw),
+            ),
+            self.fixture.trusted_config,
+        )
+
+        environment["LC_ALL"] = "C"
+        self.fixture.trusted_config["environment_sha256"] = cost._bytes_sha(
+            cost._canonical_json(environment)
+        )
+        with self.assertRaisesRegex(cost.KernelCostError, "deterministic environment"):
+            cost.validate_trusted_build_config(
+                self.fixture.trusted_config,
+                config,
+                cost._bytes_sha(config_raw),
+            )
+
+        environment["LANG"] = "en_US.UTF-8"
+        environment["LC_ALL"] = "en_US.UTF-8"
+        self.fixture.trusted_config["environment_sha256"] = cost._bytes_sha(
+            cost._canonical_json(environment)
+        )
+        with self.assertRaisesRegex(cost.KernelCostError, "deterministic environment"):
+            cost.validate_trusted_build_config(
+                self.fixture.trusted_config,
+                config,
+                cost._bytes_sha(config_raw),
+            )
+
     def test_portable_verify_rejects_toolchain_path_hash_and_version_mutation(self) -> None:
         report = self.fixture.collect()
         self.fixture.trusted_config["toolchain"]["tools"][0]["path"] = str(
