@@ -60,6 +60,30 @@ def _valid_elf(payload: bytes) -> bytes:
     return header + program_header + payload
 
 
+def _elf_with_file_only_metadata_segment(payload: bytes) -> bytes:
+    ident = bytearray(16)
+    ident[:7] = b"\x7fELF\x02\x01\x01"
+    metadata = b"riscv-attributes"
+    program_header_bytes = 2 * 56
+    total_size = 64 + program_header_bytes + len(payload) + len(metadata)
+    virtual_address = 0x80200000
+    header = struct.pack(
+        "<16sHHIQQQIHHHHHH",
+        bytes(ident), 2, 243, 1, virtual_address, 64, 0, 0,
+        64, 56, 2, 0, 0, 0,
+    )
+    load = struct.pack(
+        "<IIQQQQQQ",
+        1, 5, 0, virtual_address, virtual_address, total_size, total_size, 4096,
+    )
+    metadata_offset = 64 + program_header_bytes + len(payload)
+    attributes = struct.pack(
+        "<IIQQQQQQ",
+        0x70000003, 4, metadata_offset, 0, 0, len(metadata), 0, 1,
+    )
+    return header + load + attributes + payload + metadata
+
+
 def _write_json(path: Path, value: object) -> bytes:
     raw = (
         json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n"
@@ -496,6 +520,39 @@ class KernelCostTests(unittest.TestCase):
         target = report["targets"][1]
         self.assertEqual(target["status"], "failed")
         self.assertTrue(all(metric["value"] is None for metric in target["metrics"]))
+
+    def test_file_only_metadata_segment_is_valid(self) -> None:
+        artifact = self.fixture.root / "file-only-metadata.elf"
+        artifact.write_bytes(_elf_with_file_only_metadata_segment(b"kernel"))
+        self.assertEqual(cost.parse_elf_identity(artifact)["machine"], "RISC-V")
+
+    def test_load_segment_file_image_cannot_exceed_memory_image(self) -> None:
+        artifact = self.fixture.root / "invalid-load-size.elf"
+        raw = bytearray(_valid_elf(b"kernel"))
+        file_bytes = struct.unpack_from("<Q", raw, 64 + 32)[0]
+        struct.pack_into("<Q", raw, 64 + 40, file_bytes - 1)
+        artifact.write_bytes(raw)
+        with self.assertRaisesRegex(cost.KernelCostError, "PT_LOAD"):
+            cost.parse_elf_identity(artifact)
+
+    def test_file_only_metadata_segment_still_obeys_file_bounds(self) -> None:
+        artifact = self.fixture.root / "invalid-metadata-range.elf"
+        raw = bytearray(_elf_with_file_only_metadata_segment(b"kernel"))
+        second_program_header = 64 + 56
+        struct.pack_into("<Q", raw, second_program_header + 8, len(raw) + 1)
+        artifact.write_bytes(raw)
+        with self.assertRaisesRegex(cost.KernelCostError, "escapes the file"):
+            cost.parse_elf_identity(artifact)
+
+    def test_load_segment_memory_range_cannot_overflow_elf64(self) -> None:
+        artifact = self.fixture.root / "invalid-load-address-range.elf"
+        raw = bytearray(_valid_elf(b"kernel"))
+        struct.pack_into("<Q", raw, 64 + 16, (1 << 64) - 4)
+        struct.pack_into("<Q", raw, 64 + 32, 1)
+        struct.pack_into("<Q", raw, 64 + 40, 8)
+        artifact.write_bytes(raw)
+        with self.assertRaisesRegex(cost.KernelCostError, "overflows ELF64"):
+            cost.parse_elf_identity(artifact)
 
     def test_dirty_or_wrong_commit_repository_is_rejected(self) -> None:
         for state in ((COMMIT, False), ("c" * 40, True)):

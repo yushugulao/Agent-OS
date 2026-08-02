@@ -641,8 +641,15 @@ def parse_elf_identity(path: Path) -> dict[str, Any]:
             memory_bytes,
             _alignment,
         ) = struct.unpack_from("<IIQQQQQQ", program_headers, index * phentsize)
-        if file_bytes > memory_bytes or offset > size or file_bytes > size - offset:
+        if offset > size or file_bytes > size - offset:
             raise KernelCostError("ELF segment escapes the file")
+        # The ELF ABI only requires p_filesz <= p_memsz for PT_LOAD.  Metadata
+        # segments such as PT_RISCV_ATTRIBUTES legitimately have no memory
+        # image even though they carry bytes in the file.
+        if segment_type == 1 and file_bytes > memory_bytes:
+            raise KernelCostError("ELF PT_LOAD file size exceeds its memory size")
+        if segment_type == 1 and memory_bytes > (1 << 64) - virtual_address:
+            raise KernelCostError("ELF PT_LOAD memory range overflows ELF64")
         if (
             segment_type == 1
             and flags & 1
