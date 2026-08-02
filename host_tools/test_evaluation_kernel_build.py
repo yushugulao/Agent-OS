@@ -248,18 +248,25 @@ class Fixture:
 
 class TrustedKernelBuildTests(unittest.TestCase):
     def test_fixed_environment_preserves_msys_unicode_paths(self) -> None:
-        for platform_name in ("cygwin", "msys"):
-            with mock.patch.object(builder.sys, "platform", platform_name):
-                environment = builder._fixed_environment(
-                    "1700000000", "/tools/riscv-"
-                )
-            self.assertEqual(environment["LANG"], "C.UTF-8")
-            self.assertEqual(environment["LC_ALL"], "C.UTF-8")
+        with mock.patch.dict(builder.os.environ, {"TMPDIR": "/r/tmp"}, clear=True):
+            for platform_name in ("cygwin", "msys"):
+                with mock.patch.object(builder.sys, "platform", platform_name):
+                    environment = builder._fixed_environment(
+                        "1700000000", "/tools/riscv-"
+                    )
+                self.assertEqual(environment["LANG"], "C.UTF-8")
+                self.assertEqual(environment["LC_ALL"], "C.UTF-8")
+                self.assertEqual(environment["TMPDIR"], "/r/tmp")
 
-        with mock.patch.object(builder.sys, "platform", "linux"):
-            environment = builder._fixed_environment("1700000000", "/tools/riscv-")
+        with mock.patch.dict(builder.os.environ, {}, clear=True), mock.patch.object(
+            builder.sys, "platform", "linux"
+        ):
+            environment = builder._fixed_environment(
+                "1700000000", "/tools/riscv-"
+            )
         self.assertEqual(environment["LANG"], "C")
         self.assertEqual(environment["LC_ALL"], "C")
+        self.assertNotIn("TMPDIR", environment)
 
     def setUp(self) -> None:
         self.fixture = Fixture()

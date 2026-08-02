@@ -620,7 +620,9 @@ def _fixed_environment(commit_epoch: str, toolprefix: str) -> dict[str, str]:
     }
     # Only process-discovery and OS bootstrap variables are inherited.  Build
     # flags and tool overrides must come from the committed Makefiles.
-    inherited = ("PATH", "SystemRoot", "COMSPEC", "PATHEXT", "HOME", "TMP", "TEMP")
+    inherited = (
+        "PATH", "SystemRoot", "COMSPEC", "PATHEXT", "HOME", "TMP", "TEMP", "TMPDIR",
+    )
     for name in inherited:
         if name in os.environ:
             environment[name] = os.environ[name]

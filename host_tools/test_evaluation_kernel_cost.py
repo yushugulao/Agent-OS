@@ -724,6 +724,7 @@ class KernelCostTests(unittest.TestCase):
         environment = self.fixture.trusted_config["environment"]
         environment["LANG"] = "C.UTF-8"
         environment["LC_ALL"] = "C.UTF-8"
+        environment["TMPDIR"] = "/r/tmp"
         self.fixture.trusted_config["environment_sha256"] = cost._bytes_sha(
             cost._canonical_json(environment)
         )
