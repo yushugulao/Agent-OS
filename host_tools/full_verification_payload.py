@@ -71,6 +71,7 @@ from evidence_toolchain_attestation import (
     EVALUATION_CACHE_OUTPUT_ROOTS,
     ToolAttestationError,
     capture_version,
+    capture_formal_temporary_binding,
     controlled_environment,
     create_isolated_detached_worktree,
     decode_external_output,
@@ -99,7 +100,7 @@ from formal_python_runtime import (
 
 
 KIND = "agentos-full-verification-stage"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RECEIPT_NAME = "receipt.json"
 SUMMARY_NAME = "verification-summary.json"
 CHECKSUM_NAME = "checksums.sha256"
@@ -816,6 +817,7 @@ def _seal_payload(
     python_launch: dict[str, object],
     python_path_resolution: dict[str, str],
     execution_environment: dict[str, str],
+    temporary_directory_binding: dict[str, object],
     source_tree: Path,
     collector: ModuleType,
 ) -> None:
@@ -870,6 +872,7 @@ def _seal_payload(
             "python_launch": python_launch,
             "python_path_resolution": python_path_resolution,
             "execution_environment": execution_environment,
+            "temporary_directory_binding": temporary_directory_binding,
             "tools": tools,
         },
     )
@@ -1023,6 +1026,7 @@ def collect(args: argparse.Namespace) -> int:
         execution_env = controlled_environment(
             environment_root, [python_runtime.directory, *tool_dirs], selected
         )
+        temporary_directory_binding = capture_formal_temporary_binding(execution_env)
         python_path_resolution = python_runtime.path_resolution(execution_env)
         verify_tool_attestations(tools, versions, stage, base_env, "before execution")
         python_runtime.verify("before execution")
@@ -1043,6 +1047,10 @@ def collect(args: argparse.Namespace) -> int:
         )
         verify_tool_attestations(tools, versions, stage, base_env, "during execution")
         python_runtime.verify("after execution")
+        if capture_formal_temporary_binding(execution_env) != temporary_directory_binding:
+            raise FullVerificationError(
+                "formal temporary directory identity changed during execution"
+            )
         _source_gate(
             git,
             _isolated,
@@ -1065,6 +1073,7 @@ def collect(args: argparse.Namespace) -> int:
             python_launch=python_runtime.record,
             python_path_resolution=python_path_resolution,
             execution_environment=execution_env,
+            temporary_directory_binding=temporary_directory_binding,
             source_tree=worktree,
             collector=detached_collector,
         )

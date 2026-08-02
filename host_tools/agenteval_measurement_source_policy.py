@@ -23,6 +23,7 @@ CONTROL_PLANE_POLICY = (
     ("trusted-python-child", "scripts/trusted-python-child.py"),
     ("evaluation-source-gate", "host_tools/evaluation_source_gate.py"),
     ("formal-python-runtime", "host_tools/formal_python_runtime.py"),
+    ("formal-temporary-binding", "host_tools/formal_temp_binding.py"),
     ("campaign", "host_tools/evaluation_campaign.py"),
     ("contract", "host_tools/evaluation_contract.py"),
     ("scenario", "host_tools/evaluation_scenario.py"),

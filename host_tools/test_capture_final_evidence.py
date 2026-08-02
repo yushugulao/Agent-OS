@@ -993,6 +993,10 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
         root / "host_tools" / "formal_python_runtime.py",
     )
     shutil.copyfile(
+        REPO / "host_tools" / "formal_temp_binding.py",
+        root / "host_tools" / "formal_temp_binding.py",
+    )
+    shutil.copyfile(
         REPO / "host_tools" / "full_verification_metrics.py",
         root / "host_tools" / "full_verification_metrics.py",
     )
@@ -1601,7 +1605,7 @@ class FinalEvidenceTests(unittest.TestCase):
             run([*collector_command(REPO, "write-summary"), "--stage", str(stage),
                  "--steps", str(steps), "--commit", commit], REPO)
             summary = json.loads((incoming / "verification-summary.json").read_text())
-            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (6, 5))
+            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (7, 5))
             canonical_steps = json.dumps(summary["steps"], ensure_ascii=True,
                                          sort_keys=True, separators=(",", ":"))
             self.assertEqual(summary["step_contract_sha256"],
@@ -2752,6 +2756,14 @@ procreap_ucore: parent passed
             ),
             400,
         )
+        self.assertLessEqual(
+            len(
+                (REPO / "host_tools" / "formal_temp_binding.py")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ),
+            175,
+        )
         self.assertLessEqual(len(MEASUREMENT_MODULE.read_text(encoding="utf-8").splitlines()), 450)
         # The contract now performs token-level control-flow and def-use
         # validation instead of accepting a short list of source substrings.
@@ -2771,7 +2783,7 @@ procreap_ucore: parent passed
             self.assertEqual(makefile.count(once), 1)
         self.assertNotIn("hash-tree", collector + full)
         self.assertNotIn("immutable CI artifact", collector)
-        for contract in ("'^SCHEMA_VERSION = 6$'", "'^FULL_VERIFY_PROFILE_VERSION = 5$'",
+        for contract in ("'^SCHEMA_VERSION = 7$'", "'^FULL_VERIFY_PROFILE_VERSION = 5$'",
                          "'^REMOTE_CI_SCHEMA_VERSION = 1$'"):
             self.assertIn(contract, structure)
         self.assertNotIn("'^SCHEMA_VERSION = 1$'", structure)

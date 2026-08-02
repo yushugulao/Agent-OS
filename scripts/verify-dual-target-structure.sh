@@ -231,6 +231,7 @@ require_path "scripts/run-workflow-teardown-race-tests.sh" "workflow teardown ra
 require_path "scripts/evidence-wiring.sh" "final evidence runner wiring is missing"
 require_path "scripts/capture-final-evidence.py" "final evidence collector is missing"
 require_path "host_tools/evidence_toolchain_attestation.py" "final evidence tool attestation module is missing"
+require_path "host_tools/formal_temp_binding.py" "formal temporary binding module is missing"
 require_path "host_tools/test_capture_final_evidence.py" "final evidence selftest is missing"
 require_path "host_tools/evidence_delivery_contract.py" "final evidence delivery contract is missing"
 require_path "host_tools/test_evidence_delivery_contract.py" "final evidence delivery mutations are missing"
@@ -453,7 +454,7 @@ require_text "scripts/run-full-verification.sh" "write-summary" \
 	"full verification does not atomically publish its public summary"
 require_text "scripts/evidence-wiring.sh" 'pipeline_status=.*PIPESTATUS' \
 	"evidence tee status is not captured fail-closed"
-require_text "scripts/capture-final-evidence.py" '^SCHEMA_VERSION = 6$' \
+require_text "scripts/capture-final-evidence.py" '^SCHEMA_VERSION = 7$' \
 	"evidence summary schema version is not stable"
 require_text "scripts/capture-final-evidence.py" '^FULL_VERIFY_PROFILE_VERSION = 5$' \
 	"evidence full-verify profile version is not stable"

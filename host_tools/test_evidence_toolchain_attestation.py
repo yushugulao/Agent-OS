@@ -24,6 +24,14 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
             root = Path(temporary)
             tool_directories = [Path("/usr/bin"), Path("/fixture/bin")]
             environment = attestation.controlled_environment(root, tool_directories)
+            temporary_binding = attestation.capture_formal_temporary_binding(
+                environment
+            )
+            native_temporary_matches = (
+                os.path.samefile(environment["TMPDIR"], environment["TEMP"])
+                if sys.platform == "cygwin"
+                else environment["TMPDIR"] == environment["TEMP"]
+            )
         self.assertEqual(
             {name: environment[name] for name in attestation.FORMAL_ENVIRONMENT_FIXED},
             attestation.FORMAL_ENVIRONMENT_FIXED,
@@ -36,6 +44,30 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
         )
         expected_drive = os.environ["SYSTEMDRIVE"] if sys.platform == "cygwin" else "/"
         self.assertEqual(environment["SYSTEMDRIVE"], expected_drive)
+        self.assertTrue(native_temporary_matches)
+        self.assertEqual(environment["TEMP"], environment["TMP"])
+        self.assertEqual(
+            temporary_binding["execution_platform"],
+            "cygwin" if sys.platform == "cygwin" else "posix",
+        )
+        self.assertEqual(temporary_binding["posix_path"], environment["TMPDIR"])
+        self.assertEqual(temporary_binding["native_path"], environment["TEMP"])
+        self.assertEqual(
+            temporary_binding["checks"],
+            ["posix-native-samefile", "posix-roundtrip-samefile"],
+        )
+
+    @unittest.skipUnless(os.name == "posix", "formal environment is POSIX-only")
+    def test_formal_environment_rejects_base_variable_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(
+                attestation.ToolAttestationError, "override schema"
+            ):
+                attestation.controlled_environment(
+                    Path(temporary),
+                    [Path("/usr/bin")],
+                    {"TMPDIR": "/hostile"},
+                )
 
     def test_msys_system_drive_identity_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, (

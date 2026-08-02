@@ -26,10 +26,16 @@ FORMAL_ENVIRONMENT_FIXED = {
     "GIT_NO_REPLACE_OBJECTS": "1", "GIT_OPTIONAL_LOCKS": "0",
 }
 FORMAL_ENVIRONMENT_DYNAMIC = {
-    "PATH", "HOME", "TMPDIR", "FINAL_EVIDENCE_STAGE", "QEMU", "PYTHON_BIN",
+    "PATH", "HOME", "TMPDIR", "TEMP", "TMP", "FINAL_EVIDENCE_STAGE",
+    "QEMU", "PYTHON_BIN",
     "CASE_TIMEOUT", "IDLE_NOTICE_SECONDS", "MARKER_GRACE_SECONDS",
     "MECHANISM_MARKER_GRACE_SECONDS", "HOST_CC", "HOSTCC", "CC", "SYSTEMDRIVE",
 }
+FORMAL_EXECUTION_OVERRIDE_KEYS = frozenset({
+    "FINAL_EVIDENCE_STAGE", "QEMU", "PYTHON_BIN", "CASE_TIMEOUT",
+    "IDLE_NOTICE_SECONDS", "MARKER_GRACE_SECONDS",
+    "MECHANISM_MARKER_GRACE_SECONDS", "HOST_CC", "HOSTCC", "CC",
+})
 POSIX_SYSTEM_PATHS = (
     "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
 )
@@ -58,13 +64,16 @@ def formal_execution_overrides(
     """Build the sole allowlist of dynamic full-verification variables."""
 
     host_cc = str(tools["host_cc"])
-    return {
+    overrides = {
         "FINAL_EVIDENCE_STAGE": str(evidence_stage), "QEMU": str(tools["qemu"]),
         "PYTHON_BIN": str(python), "CASE_TIMEOUT": case_timeout,
         "IDLE_NOTICE_SECONDS": idle_notice, "MARKER_GRACE_SECONDS": "2s",
         "MECHANISM_MARKER_GRACE_SECONDS": "5s", "HOST_CC": host_cc,
         "HOSTCC": host_cc, "CC": host_cc,
     }
+    if set(overrides) != FORMAL_EXECUTION_OVERRIDE_KEYS:
+        raise FormalPythonRuntimeError("formal execution override schema differs")
+    return overrides
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -104,6 +113,17 @@ def _canonical_posix_absolute(value: object, label: str) -> PurePosixPath:
     ):
         raise FormalPythonRuntimeError(f"{label} is not an absolute POSIX path")
     return path
+
+
+def _canonical_windows_absolute(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[A-Z]:/(?:[^\\/:\x00-\x1f\x7f]+(?:/[^\\/:\x00-\x1f\x7f]+)*)?", value)
+        is None
+        or any(part in {"", ".", ".."} for part in value[3:].split("/") if value[3:])
+    ):
+        raise FormalPythonRuntimeError(f"{label} is not a canonical Windows path")
+    return value
 
 
 def _write_exclusive(path: Path, value: bytes, mode: int) -> None:
@@ -545,6 +565,7 @@ def validate_formal_execution_environment(
     value: object,
     launch: dict[str, object],
     tools: dict[str, dict[str, object]],
+    temporary_binding: object,
 ) -> None:
     """Validate the exact POSIX environment used by a formal full verify."""
 
@@ -568,6 +589,7 @@ def validate_formal_execution_environment(
         if directory not in directories:
             directories.append(directory)
     expected_path = controlled_search_path(directories, ":", POSIX_SYSTEM_PATHS)
+    validate_formal_temporary_binding(temporary_binding, value)
     if (
         value["PATH"] != expected_path
         or value["HOME"] != str(launch_root / "home")
@@ -585,6 +607,82 @@ def validate_formal_execution_environment(
         raise FormalPythonRuntimeError("formal execution environment binding differs")
 
 
+def validate_formal_temporary_binding(
+    binding: object,
+    environment: dict[str, str],
+) -> None:
+    """Validate the portable receipt for the POSIX/native temp identity check."""
+
+    expected_keys = {
+        "schema_version", "kind", "execution_platform", "conversion_api",
+        "posix_path", "native_path", "roundtrip_path", "identities", "checks",
+    }
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != expected_keys
+        or binding.get("schema_version") != 1
+        or binding.get("kind") != "formal-temporary-directory-binding"
+        or binding.get("checks") != [
+            "posix-native-samefile", "posix-roundtrip-samefile",
+        ]
+        or binding.get("posix_path") != environment.get("TMPDIR")
+        or binding.get("native_path") != environment.get("TEMP")
+        or binding.get("roundtrip_path") != environment.get("TMPDIR")
+        or environment.get("TMP") != environment.get("TEMP")
+    ):
+        raise FormalPythonRuntimeError("formal temporary directory binding differs")
+    identities = binding.get("identities")
+    if not isinstance(identities, dict) or set(identities) != {
+        "posix", "native", "roundtrip",
+    }:
+        raise FormalPythonRuntimeError("formal temporary directory identity is invalid")
+    normalized_identities = []
+    for identity in identities.values():
+        if (
+            not isinstance(identity, dict)
+            or set(identity) != {"device", "inode"}
+            or any(
+                isinstance(identity.get(name), bool)
+                or not isinstance(identity.get(name), int)
+                or identity[name] < 0
+                for name in ("device", "inode")
+            )
+        ):
+            raise FormalPythonRuntimeError(
+                "formal temporary directory identity is invalid"
+            )
+        normalized_identities.append((identity["device"], identity["inode"]))
+    if len(set(normalized_identities)) != 1:
+        raise FormalPythonRuntimeError("formal temporary directory identities differ")
+    platform_name = binding.get("execution_platform")
+    if platform_name == "posix":
+        if (
+            binding.get("conversion_api") != "identity"
+            or binding.get("roundtrip_path") != environment["TMPDIR"]
+            or environment.get("TEMP") != environment["TMPDIR"]
+            or environment.get("SYSTEMDRIVE") != "/"
+        ):
+            raise FormalPythonRuntimeError("formal POSIX temporary binding differs")
+    elif platform_name == "cygwin":
+        if (
+            binding.get("conversion_api")
+            not in {
+                "msys-2.0.dll:cygwin_conv_path",
+                "cygwin1.dll:cygwin_conv_path",
+            }
+            or re.fullmatch(r"[A-Z]:", environment.get("SYSTEMDRIVE", "")) is None
+        ):
+            raise FormalPythonRuntimeError("formal Cygwin temporary binding differs")
+        _canonical_windows_absolute(
+            binding.get("native_path"), "formal native temporary directory"
+        )
+        _canonical_posix_absolute(
+            binding.get("roundtrip_path"), "formal temporary roundtrip path"
+        )
+    else:
+        raise FormalPythonRuntimeError("formal execution platform is invalid")
+
+
 def validate_formal_evidence_binding(
     environment_record: object,
     execution_environment: object,
@@ -597,7 +695,8 @@ def validate_formal_evidence_binding(
 
     if not isinstance(environment_record, dict) or set(environment_record) != {
         "captured_at_utc", "platform", "machine", "python_runtime", "python_launch",
-        "python_path_resolution", "execution_environment", "tools",
+        "python_path_resolution", "execution_environment",
+        "temporary_directory_binding", "tools",
     } or environment_record.get("execution_environment") != execution_environment or (
         environment_record.get("python_path_resolution") != path_resolution
     ):
@@ -616,5 +715,8 @@ def validate_formal_evidence_binding(
     validate_formal_python_tool_binding(
         launch, tools["python"], tools["bash"], python_bin, path_resolution
     )
-    validate_formal_execution_environment(execution_environment, launch, tools)
+    validate_formal_execution_environment(
+        execution_environment, launch, tools,
+        environment_record["temporary_directory_binding"],
+    )
     return tools

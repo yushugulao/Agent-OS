@@ -56,8 +56,9 @@ MAX_COMMITTED_TOTAL_BYTES = 256 << 20
 MANIFEST_SOURCE_FIELDS = {
     ("agentos-evaluation-evidence-bundle", 5): "source_commit",
     (None, 6): "commit",
+    (None, 7): "commit",
 }
-FULL_EVIDENCE_V6_FIELDS = {
+FULL_EVIDENCE_FIELDS = {
     "authenticity",
     "collected_at_utc",
     "command",
@@ -963,10 +964,10 @@ def verify_manifest_delivery(
         raise DeliveryContractError(
             "bundle manifest kind/schema is unsupported by verify-committed"
         )
-    if identity == (None, 6) and (
-        set(manifest) != FULL_EVIDENCE_V6_FIELDS or manifest.get("status") != "ready"
+    if identity in {(None, 6), (None, 7)} and (
+        set(manifest) != FULL_EVIDENCE_FIELDS or manifest.get("status") != "ready"
     ):
-        raise DeliveryContractError("full-evidence schema v6 manifest is not ready or differs")
+        raise DeliveryContractError(f"full-evidence schema v{schema_version} manifest is not ready or differs")
     source_commit = manifest.get(source_field)
     if not isinstance(source_commit, str):
         raise DeliveryContractError("bundle manifest source commit is invalid")

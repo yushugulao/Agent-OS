@@ -155,25 +155,16 @@ def calibrated_limit(totals):
 def msys_native_path_api():
     if os.name != "posix" or sys.platform != "cygwin":
         return None
-    import ctypes
-
-    runtime = None
-    for name in ("msys-2.0.dll", "cygwin1.dll"):
-        try:
-            candidate = ctypes.CDLL(name)
-        except OSError:
-            continue
-        if hasattr(candidate, "cygwin_conv_path"):
-            runtime = candidate
-            break
-    if runtime is None:
+    source = Path(__file__).resolve().parents[1] / "host_tools" / "safe_host_paths.py"
+    spec = importlib.util.spec_from_file_location("agentos_safe_host_paths", source)
+    if spec is None or spec.loader is None:
+        raise CalibrationError("cannot load the shared path-safety runtime")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    api = module.loaded_msys_path_api()
+    if api is None:
         return None
-    converter = runtime.cygwin_conv_path
-    converter.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-    converter.restype = ctypes.c_ssize_t
-    attributes = ctypes.CDLL("Kernel32.dll").GetFileAttributesW
-    attributes.argtypes = [ctypes.c_wchar_p]
-    attributes.restype = ctypes.c_uint32
+    ctypes, converter, attributes, _runtime_name = api
     return ctypes, converter, attributes
 
 

@@ -182,12 +182,27 @@ def make_payload(root: Path, *, commit: str = COMMIT) -> None:
             *python_runtime.POSIX_SYSTEM_PATHS,
         )),
         "HOME": f"{runtime_root}/home", "TMPDIR": f"{runtime_root}/tmp",
+        "TEMP": f"{runtime_root}/tmp", "TMP": f"{runtime_root}/tmp",
         "FINAL_EVIDENCE_STAGE": "/fixture/stage", "QEMU": tool_paths["qemu"],
         "PYTHON_BIN": shim_path, "CASE_TIMEOUT": "300s",
         "IDLE_NOTICE_SECONDS": "20", "MARKER_GRACE_SECONDS": "2s",
         "MECHANISM_MARKER_GRACE_SECONDS": "5s",
         "HOST_CC": tool_paths["host_cc"], "HOSTCC": tool_paths["host_cc"],
         "CC": tool_paths["host_cc"], "SYSTEMDRIVE": "/",
+    }
+    temporary_directory_binding = {
+        "schema_version": 1,
+        "kind": "formal-temporary-directory-binding",
+        "execution_platform": "posix",
+        "conversion_api": "identity",
+        "posix_path": f"{runtime_root}/tmp",
+        "native_path": f"{runtime_root}/tmp",
+        "roundtrip_path": f"{runtime_root}/tmp",
+        "identities": {
+            name: {"device": 1, "inode": 1}
+            for name in ("posix", "native", "roundtrip")
+        },
+        "checks": ["posix-native-samefile", "posix-roundtrip-samefile"],
     }
     environment = root / payload.ENVIRONMENT_NAME
     write_json(
@@ -200,6 +215,7 @@ def make_payload(root: Path, *, commit: str = COMMIT) -> None:
             "python_launch": python_launch,
             "python_path_resolution": python_path_resolution,
             "execution_environment": execution_environment,
+            "temporary_directory_binding": temporary_directory_binding,
             "tools": tools,
         },
     )
@@ -531,6 +547,57 @@ exit 0
         assert binding["file_count"] == len(paths)
         assert payload.CHECKSUM_NAME in paths
 
+        legacy_schema = base / "legacy-schema"
+        shutil.copytree(valid, legacy_schema)
+        rewrite_receipt(
+            legacy_schema, lambda value: value.update(schema_version=1)
+        )
+        expect_rejected(
+            lambda: payload.verify_payload(legacy_schema, contract_root=repository),
+            "receipt schema differs",
+        )
+
+        cygwin_valid = base / "cygwin-valid"
+        shutil.copytree(valid, cygwin_valid)
+
+        def use_cygwin_temporary_binding(environment):
+            execution = environment["execution_environment"]
+            execution.update(
+                TEMP="R:/fixture/runtime/tmp",
+                TMP="R:/fixture/runtime/tmp",
+                SYSTEMDRIVE="C:",
+            )
+            binding_record = environment["temporary_directory_binding"]
+            binding_record.update(
+                execution_platform="cygwin",
+                conversion_api="msys-2.0.dll:cygwin_conv_path",
+                native_path="R:/fixture/runtime/tmp",
+            )
+
+        rewrite_environment_and_receipt(
+            cygwin_valid, use_cygwin_temporary_binding
+        )
+        payload.verify_payload(cygwin_valid, contract_root=repository)
+
+        platform_downgrade = base / "platform-downgrade"
+        shutil.copytree(cygwin_valid, platform_downgrade)
+
+        def downgrade_temporary_platform(environment):
+            execution = environment["execution_environment"]
+            execution.update(
+                TEMP=execution["TMPDIR"], TMP=execution["TMPDIR"], SYSTEMDRIVE="/"
+            )
+
+        rewrite_environment_and_receipt(
+            platform_downgrade, downgrade_temporary_platform
+        )
+        expect_rejected(
+            lambda: payload.verify_payload(
+                platform_downgrade, contract_root=repository
+            ),
+            "temporary directory binding differs",
+        )
+
         missing = base / "missing-raw"
         shutil.copytree(valid, missing)
         (missing / payload.RAW_ROOT / "proc-reap.log").unlink()
@@ -732,6 +799,34 @@ exit 0
                 PATH=environment["execution_environment"]["PATH"] + ":/hostile"
             ),
             "environment binding differs",
+        )
+        binding_case(
+            "native-temporary-redirect",
+            lambda environment: environment["execution_environment"].update(
+                TEMP="Z:/hostile", TMP="Z:/hostile", SYSTEMDRIVE="C:"
+            ),
+            "temporary directory binding differs",
+        )
+
+        def forge_temporary_receipt(environment):
+            execution = environment["execution_environment"]
+            execution.update(TEMP="Z:/hostile", TMP="Z:/hostile", SYSTEMDRIVE="C:")
+            temporary = environment["temporary_directory_binding"]
+            temporary.update(
+                execution_platform="cygwin",
+                conversion_api="msys-2.0.dll:cygwin_conv_path",
+                native_path="Z:/hostile",
+                roundtrip_path="/totally/different",
+                identities={
+                    name: {"device": 999, "inode": 999}
+                    for name in ("posix", "native", "roundtrip")
+                },
+            )
+
+        binding_case(
+            "forged-temporary-receipt",
+            forge_temporary_receipt,
+            "temporary directory binding differs",
         )
         binding_case(
             "dangerous-environment",

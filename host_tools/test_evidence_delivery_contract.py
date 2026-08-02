@@ -122,37 +122,42 @@ class EvidenceDeliveryContractTests(unittest.TestCase):
                     ):
                         verify_manifest_delivery(bundle, fixture.repo)
 
-    def test_full_evidence_schema_v6_uses_historical_delivery(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            fixture = DeliveryFixture(Path(temp))
-            bundle = fixture.publish()
-            manifest_path = bundle / "manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            delivery = manifest["delivery"]
-            manifest = {
-                "schema_version": 6,
-                "status": "ready",
-                "commit": fixture.source,
-                "collected_at_utc": "2026-01-01T00:00:00Z",
-                "authenticity": {},
-                "delivery": delivery,
-                "command": {},
-                "verification_summary": {},
-                "raw_artifacts": [],
-                "environment": {},
-                "configuration": {},
-                "metrics": [],
-            }
-            manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
-            evidence = fixture.commit_evidence()
-            documentation = fixture.repo / "docs" / "after-evidence.md"
-            documentation.parent.mkdir()
-            documentation.write_text("documentation\n", encoding="ascii")
-            git(fixture.repo, "add", "docs/after-evidence.md")
-            git(fixture.repo, "commit", "-q", "-m", "documentation descendant")
-            result = verify_manifest_delivery(bundle, fixture.repo)
-            self.assertEqual(result["status"], "committed-history")
-            self.assertEqual(result["evidence_commit"], evidence)
+    def test_full_evidence_schemas_use_historical_delivery(self) -> None:
+        for schema_version in (6, 7):
+            with self.subTest(schema_version=schema_version), (
+                tempfile.TemporaryDirectory()
+            ) as temp:
+                fixture = DeliveryFixture(Path(temp))
+                bundle = fixture.publish()
+                manifest_path = bundle / "manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                delivery = manifest["delivery"]
+                manifest = {
+                    "schema_version": schema_version,
+                    "status": "ready",
+                    "commit": fixture.source,
+                    "collected_at_utc": "2026-01-01T00:00:00Z",
+                    "authenticity": {},
+                    "delivery": delivery,
+                    "command": {},
+                    "verification_summary": {},
+                    "raw_artifacts": [],
+                    "environment": {},
+                    "configuration": {},
+                    "metrics": [],
+                }
+                manifest_path.write_text(
+                    json.dumps(manifest) + "\n", encoding="utf-8"
+                )
+                evidence = fixture.commit_evidence()
+                documentation = fixture.repo / "docs" / "after-evidence.md"
+                documentation.parent.mkdir()
+                documentation.write_text("documentation\n", encoding="ascii")
+                git(fixture.repo, "add", "docs/after-evidence.md")
+                git(fixture.repo, "commit", "-q", "-m", "documentation descendant")
+                result = verify_manifest_delivery(bundle, fixture.repo)
+                self.assertEqual(result["status"], "committed-history")
+                self.assertEqual(result["evidence_commit"], evidence)
 
     def test_unknown_or_incomplete_manifest_identity_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

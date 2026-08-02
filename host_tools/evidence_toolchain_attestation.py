@@ -17,8 +17,20 @@ except ImportError:
     from safe_host_paths import path_is_link
 
 try:
+    from .formal_temp_binding import (
+        capture_formal_temporary_binding,
+        cygwin_native_directory,
+    )
+except ImportError:
+    from formal_temp_binding import (
+        capture_formal_temporary_binding,
+        cygwin_native_directory,
+    )
+
+try:
     from .formal_python_runtime import (
         FORMAL_ENVIRONMENT_FIXED,
+        FORMAL_EXECUTION_OVERRIDE_KEYS,
         POSIX_SYSTEM_PATHS,
         FormalPythonRuntimeError,
         controlled_search_path,
@@ -31,6 +43,7 @@ try:
 except ImportError:
     from formal_python_runtime import (
         FORMAL_ENVIRONMENT_FIXED,
+        FORMAL_EXECUTION_OVERRIDE_KEYS,
         POSIX_SYSTEM_PATHS,
         FormalPythonRuntimeError,
         controlled_search_path,
@@ -243,6 +256,11 @@ def controlled_environment(
     tool_directories: list[Path],
     extra: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    if extra is not None and (
+        set(extra) != FORMAL_EXECUTION_OVERRIDE_KEYS
+        or any(not isinstance(value, str) or not value for value in extra.values())
+    ):
+        raise ToolAttestationError("formal execution override schema differs")
     home, temporary = root / "home", root / "tmp"
     home.mkdir(parents=True, exist_ok=True)
     temporary.mkdir(parents=True, exist_ok=True)
@@ -251,10 +269,15 @@ def controlled_environment(
     system_drive = os.environ.get("SYSTEMDRIVE", "") if sys.platform == "cygwin" else "/"
     if re.fullmatch(r"[A-Z]:", system_drive) is None and system_drive != "/":
         raise ToolAttestationError("host system drive identity is not canonical")
+    native_temporary = str(temporary)
+    if sys.platform == "cygwin":
+        native_temporary = cygwin_native_directory(temporary)
     environment = {
         "PATH": search_path,
         "HOME": str(home),
         "TMPDIR": str(temporary),
+        "TEMP": native_temporary,
+        "TMP": native_temporary,
         "SYSTEMDRIVE": system_drive,
     }
     if os.name == "posix":
@@ -268,7 +291,7 @@ def controlled_environment(
         for name in ("SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"):
             if name in os.environ:
                 environment[name] = os.environ[name]
-    if extra:
+    if extra is not None:
         environment.update(extra)
     return environment
 

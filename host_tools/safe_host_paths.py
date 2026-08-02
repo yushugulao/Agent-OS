@@ -40,7 +40,7 @@ def path_components(path: Path) -> list[Path]:
 
 
 @lru_cache(maxsize=1)
-def _msys_native_path_api():
+def loaded_msys_path_api():
     """Return MSYS path conversion and Win32 attribute functions, if applicable."""
 
     if os.name != "posix" or sys.platform != "cygwin":
@@ -48,35 +48,40 @@ def _msys_native_path_api():
 
     import ctypes
 
-    runtime = None
+    kernel32 = ctypes.CDLL("Kernel32.dll", use_last_error=True)
+    get_module_handle = kernel32.GetModuleHandleW
+    get_module_handle.argtypes = [ctypes.c_wchar_p]
+    get_module_handle.restype = ctypes.c_void_p
+    loaded = []
     for name in ("msys-2.0.dll", "cygwin1.dll"):
-        try:
-            candidate = ctypes.CDLL(name)
-        except OSError:
+        handle = get_module_handle(name)
+        if not handle:
             continue
-        if hasattr(candidate, "cygwin_conv_path"):
-            runtime = candidate
-            break
-    if runtime is None:
+        runtime = ctypes.CDLL(None, handle=handle, use_errno=True)
+        if hasattr(runtime, "cygwin_conv_path"):
+            loaded.append((runtime, name))
+    if not loaded:
         return None
+    if len(loaded) != 1:
+        raise OSError("multiple POSIX runtimes are loaded")
 
+    runtime, runtime_name = loaded[0]
     converter = runtime.cygwin_conv_path
     converter.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
     converter.restype = ctypes.c_ssize_t
-    kernel32 = ctypes.CDLL("Kernel32.dll")
     attributes = kernel32.GetFileAttributesW
     attributes.argtypes = [ctypes.c_wchar_p]
     attributes.restype = ctypes.c_uint32
-    return ctypes, converter, attributes
+    return ctypes, converter, attributes, runtime_name
 
 
 def _msys_native_file_attributes(path: Path) -> int | None:
     """Inspect a lexical MSYS path through Win32 without opening its target."""
 
-    api = _msys_native_path_api()
+    api = loaded_msys_path_api()
     if api is None:
         return None
-    ctypes, converter, get_attributes = api
+    ctypes, converter, get_attributes, _runtime_name = api
     encoded = os.fsencode(absolute_lexical_path(path))
     required = converter(_CCP_POSIX_TO_WIN_W, encoded, None, 0)
     if required <= 0 or required % 2:

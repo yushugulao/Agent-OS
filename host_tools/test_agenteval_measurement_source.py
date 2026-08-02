@@ -565,6 +565,7 @@ def main() -> int:
     assert "scripts/capture-final-evidence.py" in policy_paths
     assert "scripts/run-full-verification.sh" in policy_paths
     assert "host_tools/evidence_toolchain_attestation.py" in policy_paths
+    assert "host_tools/formal_temp_binding.py" in policy_paths
     semantic_replay_dependencies = {
         "host_tools/evidence_semantic_registry.py",
         "host_tools/evidence_semantic_profiles.py",

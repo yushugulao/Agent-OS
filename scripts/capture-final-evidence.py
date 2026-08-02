@@ -68,14 +68,15 @@ from host_tools.evidence_toolchain_attestation import (  # noqa: E402
     EVALUATION_ARTIFACT_OUTPUT_FILES, EVALUATION_BUILD_OUTPUT_FILES,
     EVALUATION_BUILD_OUTPUT_ROOTS, EVALUATION_CACHE_OUTPUT_ROOTS,
     FormalPythonRuntimeError, ToolAttestationError,
-    capture_version, controlled_environment, decode_external_output,
+    capture_formal_temporary_binding, capture_version,
+    controlled_environment, decode_external_output,
     create_isolated_detached_worktree, create_formal_python_runtime,
     formal_execution_overrides, purge_evaluation_generated_outputs,
     require_nested_tool_resolution, resolve_bash_executable, resolve_executable,
     verify_evaluation_source_tree, validate_formal_evidence_binding,
     verify_tool_attestations, verify_tracked_worktree_bytes,
 )
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 FULL_VERIFY_PROFILE_VERSION = 5
 REMOTE_CI_SCHEMA_VERSION = 1
 REMOTE_CI_JOBS = (("kernel-budgets", "host"), ("reader-e2e", "qemu"), ("agent-regression", "qemu"),
@@ -1052,6 +1053,7 @@ def collect(args: argparse.Namespace) -> int:
             evidence_stage, tools, python_runtime.executable,
             args.case_timeout, args.idle_notice)
         environment = controlled_environment(environment_root, [python_runtime.directory, *tool_directories], selected_env)
+        temporary_directory_binding = capture_formal_temporary_binding(environment)
         python_path_resolution = python_runtime.path_resolution(environment)
         verify_tool_attestations(tools, versions, stage, base_environment, "before execution")
         python_runtime.verify("before execution")
@@ -1060,6 +1062,10 @@ def collect(args: argparse.Namespace) -> int:
         )
         verify_tool_attestations(tools, versions, stage, base_environment, "during execution")
         python_runtime.verify("after execution")
+        if capture_formal_temporary_binding(environment) != temporary_directory_binding:
+            raise EvidenceError(
+                "formal temporary directory identity changed during execution"
+            )
         verify_capture_source_tree(
             git,
             _isolated,
@@ -1131,6 +1137,7 @@ def collect(args: argparse.Namespace) -> int:
             "python_launch": python_runtime.record,
             "python_path_resolution": python_path_resolution,
             "execution_environment": environment,
+            "temporary_directory_binding": temporary_directory_binding,
             "tools": versions,
         }
         environment_path = stage / "environment" / "environment.json"

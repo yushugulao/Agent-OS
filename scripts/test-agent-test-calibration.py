@@ -211,12 +211,19 @@ class CalibrationTests(unittest.TestCase):
         runner = (ROOT / "scripts" / "run-agent-tests.sh").read_text(
             encoding="utf-8"
         )
+        collector = (ROOT / "scripts" / "agent_test_calibration.py").read_text(
+            encoding="utf-8"
+        )
         invocations = [
             line for line in runner.splitlines() if '"${PYTHON_BIN}"' in line
         ]
         self.assertEqual(len(invocations), 13)
         self.assertTrue(
             all('"${PYTHON_BIN}" -I -S -B' in line for line in invocations)
+        )
+        self.assertIn("loaded_msys_path_api", collector)
+        self.assertNotRegex(
+            collector, r'ctypes\.CDLL\(["\'](?:msys-2\.0|cygwin1)\.dll'
         )
 
     def test_collector_dynamic_import_cannot_write_bytecode(self):
