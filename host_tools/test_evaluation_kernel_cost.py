@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import copy
 import base64
+import contextlib
+import io
 import json
 import shutil
 import struct
@@ -507,6 +509,32 @@ class KernelCostTests(unittest.TestCase):
                 all(metric["value"] is None for metric in target["metrics"][1:])
             )
 
+    def test_cli_strict_verify_rejects_incomplete_development_report(self) -> None:
+        report = self.fixture.collect(tool=self.fixture.root / "tools" / "missing")
+        self.fixture.save_report(report)
+        arguments = [
+            "verify",
+            "--config", str(self.fixture.config),
+            "--report", str(self.fixture.report),
+            "--evidence-root", str(self.fixture.root),
+        ]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            self.assertEqual(cost.main(arguments), 0)
+            self.assertEqual(cost.main([*arguments, "--require-complete"]), 2)
+
+    def test_formal_shell_enables_strict_kernel_cost_verification(self) -> None:
+        source = (ROOT / "scripts" / "run-evaluation-suite.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('if [[ "$(basename "${RUN_DIR}")" == formal-* ]]; then', source)
+        self.assertIn("verify_cost_args+=(--require-complete)", source)
+        self.assertIn(
+            'run_repo_python "${KERNEL_COST_TOOL}" verify "${verify_cost_args[@]}"',
+            source,
+        )
+
     def test_source_hash_must_match_build_manifest(self) -> None:
         self.fixture.agentos.write_bytes(_valid_elf(b"tampered"))
         with self.assertRaisesRegex(cost.KernelCostError, "build manifest"):
@@ -870,6 +898,42 @@ class KernelCostTests(unittest.TestCase):
         config, _ = cost.load_config(self.fixture.config)
         with self.assertRaisesRegex(cost.KernelCostError, "raw size output"):
             cost.validate_report(forged, config)
+
+    def test_size_output_accepts_only_exact_msys_drive_alias(self) -> None:
+        expected = "/c/tmp/agentos kernel/build/kernel"
+        output = (
+            "text data bss dec hex filename\n"
+            "100 8 200 308 134 C:/tmp/agentos kernel/build/kernel\n"
+        ).encode()
+        self.assertEqual(
+            cost.parse_size_output(output, expected),
+            {"text_bytes": 100, "data_bytes": 8, "bss_bytes": 200},
+        )
+        reverse_output = output.replace(
+            b"C:/tmp/agentos kernel/build/kernel",
+            b"/c/tmp/agentos kernel/build/kernel",
+        )
+        self.assertEqual(
+            cost.parse_size_output(
+                reverse_output, "C:/tmp/agentos kernel/build/kernel"
+            ),
+            {"text_bytes": 100, "data_bytes": 8, "bss_bytes": 200},
+        )
+
+        for reported in (
+            "D:/tmp/agentos kernel/build/kernel",
+            "C:/tmp/AgentOS kernel/build/kernel",
+            "C:/tmp/../agentos kernel/build/kernel",
+            "C:/tmp//agentos kernel/build/kernel",
+            r"C:\tmp\agentos kernel\build\kernel",
+        ):
+            forged = output.replace(
+                b"C:/tmp/agentos kernel/build/kernel", reported.encode()
+            )
+            with self.subTest(reported=reported), self.assertRaisesRegex(
+                cost.KernelCostError, "filename differs"
+            ):
+                cost.parse_size_output(forged, expected)
 
     def test_long_integer_nan_and_unknown_fields_fail_closed(self) -> None:
         expected = str(self.fixture.agentos)

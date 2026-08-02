@@ -675,9 +675,15 @@ kernel-cost)
 		--build-manifest "${kernel_dir}/kernel-build.json" \
 		--size-tool "${size_python_path}" --evidence-root "${RUN_DIR}" \
 		--output "${RUN_DIR}/kernel-cost-report.json"
-	run_repo_python "${KERNEL_COST_TOOL}" verify \
-		--config "${kernel_config}" \
-		--report "${RUN_DIR}/kernel-cost-report.json" --evidence-root "${RUN_DIR}"
+	verify_cost_args=(
+		--config "${kernel_config}"
+		--report "${RUN_DIR}/kernel-cost-report.json"
+		--evidence-root "${RUN_DIR}"
+	)
+	if [[ "$(basename "${RUN_DIR}")" == formal-* ]]; then
+		verify_cost_args+=(--require-complete)
+	fi
+	run_repo_python "${KERNEL_COST_TOOL}" verify "${verify_cost_args[@]}"
 	run_repo_python "${KERNEL_COST_TOOL}" fragment \
 		--config "${kernel_config}" \
 		--report "${RUN_DIR}/kernel-cost-report.json" --evidence-root "${RUN_DIR}" \

@@ -530,6 +530,12 @@ source commit/clean 状态，验证 RISC-V ELF，绑定固定命令、真实退�
 `/usr/bin/riscv64-linux-gnu-`。它逐一解析并绑定 `gcc`、`ld`、`objcopy`、
 `objdump` 的绝对路径、文件 SHA256 和 `--version` 原始输出；每条 Make 命令同时在
 环境和命令行固定同一个 `TOOLPREFIX`，任一工具在构建期间变化都会使整次发布失败。
+MSYS 启动原生 Win32 `size.exe` 时会把记录的 `/x/...` 参数转换为 `X:/...`；原始输出
+验证只接受这一种严格双命名空间等价，盘符以外的路径必须逐字相同；跨命名空间别名中
+包含 `.`、`..`、重复分隔符、反斜杠或仅后缀相同的路径仍 fail closed。
+普通 portable verify 保留 `failed`、`partial` 和 `unavailable` 作为开发诊断状态；正式
+`evaluation-kernel-cost` 另外启用 `--require-complete`，任何目标、指标或 guardrail 不是
+`measured` 都立即返回非零，而不是延迟到打包阶段才暴露失败。
 前者 `facts` 按 `name` 排序：
 
 ```json

@@ -668,6 +668,41 @@ def parse_elf_identity(path: Path) -> dict[str, Any]:
     }
 
 
+def _same_size_filename(observed: str, expected: str) -> bool:
+    if observed == expected:
+        return True
+
+    # MSYS converts POSIX drive paths in argv when it launches a native Win32
+    # tool. GNU size therefore reports C:/... even though the POSIX Python
+    # producer recorded /c/... in the command. Admit only that exact namespace
+    # translation; the path tail remains byte-for-byte case-sensitive.
+    def drive_identity(value: str) -> tuple[str, str, str] | None:
+        if "\\" in value:
+            return None
+        posix = re.fullmatch(r"/([A-Za-z])/(.+)", value)
+        if posix is not None:
+            parts = posix.group(2).split("/")
+            if any(part in {"", ".", ".."} for part in parts):
+                return None
+            return "posix", posix.group(1).casefold(), "/".join(parts)
+        windows = re.fullmatch(r"([A-Za-z]):/(.+)", value)
+        if windows is not None:
+            parts = windows.group(2).split("/")
+            if any(part in {"", ".", ".."} for part in parts):
+                return None
+            return "windows", windows.group(1).casefold(), "/".join(parts)
+        return None
+
+    observed_identity = drive_identity(observed)
+    expected_identity = drive_identity(expected)
+    return (
+        observed_identity is not None
+        and expected_identity is not None
+        and observed_identity[0] != expected_identity[0]
+        and observed_identity[1:] == expected_identity[1:]
+    )
+
+
 def parse_size_output(output: bytes, expected_filename: str) -> dict[str, int]:
     try:
         text = output.decode("utf-8", errors="strict")
@@ -685,7 +720,7 @@ def parse_size_output(output: bytes, expected_filename: str) -> dict[str, int]:
         or HEX_RE.fullmatch(fields[4]) is None
     ):
         raise KernelCostError("size output row is not canonical and bounded")
-    if fields[5] != expected_filename:
+    if not _same_size_filename(fields[5], expected_filename):
         raise KernelCostError("size output filename differs from the requested ELF")
     try:
         text_size, data_size, bss_size, total = (int(item, 10) for item in fields[:4])
@@ -2214,6 +2249,7 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--config", required=True, type=Path)
     verify.add_argument("--report", required=True, type=Path)
     verify.add_argument("--evidence-root", required=True, type=Path)
+    verify.add_argument("--require-complete", action="store_true")
     local = commands.add_parser("verify-local")
     local.add_argument("--config", required=True, type=Path)
     local.add_argument("--report", required=True, type=Path)
@@ -2252,6 +2288,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             report, _, _ = verify_portable(
                 args.report, args.config, args.evidence_root
             )
+            if args.require_complete:
+                require_complete(report)
             print(f"kernel cost report verified: {report['content_sha256']}")
         elif args.command == "verify-local":
             report = verify_local(
