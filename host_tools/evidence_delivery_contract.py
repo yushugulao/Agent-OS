@@ -92,10 +92,7 @@ GIT_FIXED_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
 }
-SAFE_GIT_CONFIG_ARGUMENTS = (
-    "-c", "core.fsmonitor=false",
-    "-c", "core.untrackedCache=false",
-)
+SAFE_GIT_CONFIG_ARGUMENTS = ("-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false")
 
 
 class DeliveryContractError(RuntimeError):
