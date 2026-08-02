@@ -19,6 +19,7 @@ from evidence_toolchain_attestation import resolve_bash_executable, resolve_exec
 
 
 REPOSITORY = Path(__file__).resolve().parents[1]
+BACKING_PYTHON = getattr(sys, "_agentos_backing_executable", sys.executable)
 
 
 @unittest.skipUnless(os.name == "posix", "formal runtime requires POSIX shims")
@@ -62,7 +63,7 @@ class FormalPythonRuntimeTests(unittest.TestCase):
         root = base / "runtime-root"
         root.mkdir()
         formal = runtime_module.create_formal_python_runtime(
-            root=root, real_python=Path(sys.executable), shell=bash,
+            root=root, real_python=Path(BACKING_PYTHON), shell=bash,
             git=git, repository=repository, worktree=repository,
             commit=commit, environment=environment,
         )
@@ -154,7 +155,8 @@ class FormalPythonRuntimeTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 "from formal_python_runtime import create_formal_python_runtime\n"
                 "nested=create_formal_python_runtime(root=Path(sys.argv[1]),"
-                "real_python=Path(sys.executable),shell=Path(sys.argv[2]),"
+                "real_python=Path(getattr(sys,'_agentos_backing_executable',"
+                "sys.executable)),shell=Path(sys.argv[2]),"
                 "git=Path(sys.argv[3]),repository=Path(sys.argv[4]),"
                 "worktree=Path(sys.argv[4]),commit=sys.argv[5],environment=dict(os.environ))\n"
                 "print(subprocess.check_output([str(nested.executable),'-c',"
@@ -174,7 +176,7 @@ class FormalPythonRuntimeTests(unittest.TestCase):
             # Recreate the outer runtime so its authenticated dispatcher commit matches.
             refreshed_root = outer_base / "refreshed"; refreshed_root.mkdir()
             formal = runtime_module.create_formal_python_runtime(
-                root=refreshed_root, real_python=Path(sys.executable), shell=bash,
+                root=refreshed_root, real_python=Path(BACKING_PYTHON), shell=bash,
                 git=git, repository=outer_repo, worktree=outer_repo,
                 commit=outer_commit, environment=environment,
             )

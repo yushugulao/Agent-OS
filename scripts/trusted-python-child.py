@@ -155,12 +155,14 @@ def main() -> None:
         _fail("backing Python lacks -I -S")
     if len(sys.argv) < 5 or sys.argv[1] != "--shim" or sys.argv[3] != "--repo":
         _fail("private runtime arguments are malformed")
+    backing_executable = sys.executable
     shim = Path(sys.argv[2])
     if not shim.is_absolute() or not shim.is_file():
         _fail("private shim is unavailable")
     repository = _absolute_directory(sys.argv[4], "repository")
     temporary = _absolute_directory(os.environ.get("TMPDIR", ""), "temporary root")
     _reset_import_paths()
+    sys._agentos_backing_executable = backing_executable
     sys.executable = str(shim)
     sys._base_executable = str(shim)
     sys._agentos_safe_path = True

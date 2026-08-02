@@ -57,6 +57,7 @@ from evidence_toolchain_attestation import (
     decode_external_output, resolve_bash_executable, resolve_executable,
 )
 REPO = Path(__file__).resolve().parents[1]
+BACKING_PYTHON = getattr(sys, "_agentos_backing_executable", sys.executable)
 COLLECTOR = REPO / "scripts" / "capture-final-evidence.py"
 CI_MECHANISM = REPO / "scripts" / "run-ci-mechanism.sh"
 MEASUREMENT_MODULE = REPO / "host_tools" / "measured_experiments.py"
@@ -1178,7 +1179,7 @@ def collect_args(repo: Path, output: Path, tools: dict[str, Path]) -> list[str]:
     return [*collector_command(repo, "collect"), "--repo-root", str(repo),
             "--output", str(output), "--toolprefix", str(tools["compiler_prefix"]),
             "--qemu", str(tools["qemu"]), "--make", str(tools["make"]),
-            "--host-cc", str(tools["host_cc"]), "--python", sys.executable,
+            "--host-cc", str(tools["host_cc"]), "--python", BACKING_PYTHON,
             "--bash", str(resolve_bash_executable("bash", resolve_executable("git"))),
             "--command-timeout", "30"]
 def start_gitlab_fixture(commit: str, pipeline_sha: str | None = None,

@@ -3058,16 +3058,17 @@ def main() -> int:
             linked = False
             try:
                 linked = create_directory_link(out_dir, outside)
-                if linked:
-                    try:
-                        request.urlopen(base + "/index.html", timeout=5)
-                    except error.HTTPError as http_error:
-                        body = http_error.read().decode("utf-8", errors="replace")
-                        http_error.close()
-                        assert http_error.code == 404
-                        assert secret not in body
-                    else:
-                        raise AssertionError("rebound Reader output root was served")
+                if not linked:
+                    raise AssertionError("could not create Reader root-rebind fixture")
+                try:
+                    request.urlopen(base + "/index.html", timeout=5)
+                except error.HTTPError as http_error:
+                    body = http_error.read().decode("utf-8", errors="replace")
+                    http_error.close()
+                    assert http_error.code == 404
+                    assert secret not in body
+                else:
+                    raise AssertionError("rebound Reader output root was served")
             finally:
                 if linked:
                     remove_directory_link(out_dir)

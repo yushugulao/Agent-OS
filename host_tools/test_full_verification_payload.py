@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
@@ -17,6 +18,7 @@ import formal_python_runtime as python_runtime
 
 
 COMMIT = "1" * 40
+BACKING_PYTHON = getattr(sys, "_agentos_backing_executable", sys.executable)
 
 
 def write_json(path: Path, value: object) -> None:
@@ -735,6 +737,12 @@ exit 0
             integration_root = Path(
                 tempfile.mkdtemp(prefix="full-verification-test-", dir=integration_parent)
             )
+
+            def cleanup_integration_root() -> None:
+                if integration_root.exists():
+                    shutil.rmtree(integration_root)
+
+            atexit.register(cleanup_integration_root)
             repo = integration_root / "collector-repo"
             repo.mkdir()
             tools = init_fixture_repo(repo)
@@ -767,7 +775,7 @@ exit 0
                 "--host-cc",
                 str(tools["host_cc"]),
                 "--python",
-                sys.executable,
+                BACKING_PYTHON,
                 "--bash",
                 str(resolve_bash_executable("bash", resolve_executable("git"))),
                 "--command-timeout",
@@ -927,7 +935,8 @@ exit 0
                 check=True,
             ).stdout
             assert status == ""
-            shutil.rmtree(integration_root)
+            cleanup_integration_root()
+            atexit.unregister(cleanup_integration_root)
 
     print("test_full_verification_payload: passed")
 
