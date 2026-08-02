@@ -2587,9 +2587,12 @@ procreap_ucore: parent passed
             )
             alias = base / "source-alias"
             if sys.platform == "cygwin":
-                from test_safe_host_paths import _create_junction, _remove_junction
+                from windows_reparse_fixture import (
+                    create_directory_junction,
+                    remove_directory_junction,
+                )
 
-                if not _create_junction(repo, alias):
+                if not create_directory_junction(repo, alias):
                     self.fail("native MSYS test could not create a detectable junction")
             else:
                 try:
@@ -2608,7 +2611,7 @@ procreap_ucore: parent passed
                 env=environment,
             )
             if sys.platform == "cygwin":
-                _remove_junction(alias)
+                remove_directory_junction(alias)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("capture source gate failed", result.stderr)
             self.assertFalse(sentinel.exists())

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,89 +13,57 @@ from unittest import mock
 import evaluation_bundle
 import evidence_delivery_contract
 import safe_host_paths
+from windows_reparse_fixture import (
+    create_directory_junction,
+    remove_directory_junction,
+)
 
 
 HOST_TOOLS = Path(__file__).resolve().parent
 
 
-def _native_windows_path(path: Path) -> str | None:
-    if os.name == "nt":
-        return str(path.absolute())
-    if sys.platform != "cygwin":
-        return None
-    completed = subprocess.run(
-        ["/usr/bin/cygpath", "-w", os.path.abspath(path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return None
-    return completed.stdout.strip() or None
-
-
-def _windows_command(*arguments: str) -> subprocess.CompletedProcess[str]:
-    import ctypes
-
-    kernel32 = ctypes.CDLL("Kernel32.dll")
-    get_system_directory = kernel32.GetSystemDirectoryW
-    get_system_directory.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
-    get_system_directory.restype = ctypes.c_uint32
-    system_directory = ctypes.create_unicode_buffer(32_768)
-    length = int(get_system_directory(system_directory, len(system_directory)))
-    if length <= 0 or length >= len(system_directory):
-        raise OSError("cannot locate the native Windows system directory")
-    command = system_directory.value.replace(chr(92), "/") + "/cmd.exe"
-    previous = os.environ.get("MSYS2_ARG_CONV_EXCL")
-    os.environ["MSYS2_ARG_CONV_EXCL"] = "*"
-    try:
-        return subprocess.run(
-            [command, "/d", "/c", *arguments],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        if previous is None:
-            os.environ.pop("MSYS2_ARG_CONV_EXCL", None)
-        else:
-            os.environ["MSYS2_ARG_CONV_EXCL"] = previous
-
-
-def _create_junction(target: Path, link: Path) -> bool:
-    import ctypes
-
-    native_target = _native_windows_path(target)
-    native_link = _native_windows_path(link)
-    if native_target is None or native_link is None:
-        return False
-    completed = _windows_command("mklink", "/J", native_link, native_target)
-    if completed.returncode != 0:
-        return False
-    kernel32 = ctypes.CDLL("Kernel32.dll")
-    get_attributes = kernel32.GetFileAttributesW
-    get_attributes.argtypes = [ctypes.c_wchar_p]
-    get_attributes.restype = ctypes.c_uint32
-    attributes = int(get_attributes(native_link))
-    detected = bool(
-        attributes != safe_host_paths._INVALID_FILE_ATTRIBUTES
-        and attributes & safe_host_paths._FILE_ATTRIBUTE_REPARSE_POINT
-    )
-    if not detected:
-        _remove_junction(link)
-    return detected
-
-
-def _remove_junction(link: Path) -> None:
-    native_link = _native_windows_path(link)
-    if native_link is None:
-        raise AssertionError(f"cannot convert test junction path: {link}")
-    completed = _windows_command("rmdir", native_link)
-    if completed.returncode != 0 or os.path.lexists(link):
-        raise AssertionError(f"cannot remove test junction: {link}")
-
-
 class SafeHostPathTests(unittest.TestCase):
+    def test_regular_read_rejects_replacement_at_descriptor_open(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            replacement = root / "replacement"
+            source.write_bytes(b"public")
+            replacement.write_bytes(b"secret")
+            real_open = os.open
+
+            def replace_then_open(path, flags, *args, **kwargs):
+                os.replace(replacement, source)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch(
+                "safe_host_paths.os.open", side_effect=replace_then_open
+            ):
+                with self.assertRaises(ValueError):
+                    safe_host_paths.read_regular_file(source, maximum_bytes=6)
+            self.assertEqual(source.read_bytes(), b"secret")
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX FIFO support")
+    def test_regular_read_rejects_fifo_replacement_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            fifo = root / "fifo"
+            source.write_bytes(b"public")
+            os.mkfifo(fifo)
+            real_open = os.open
+
+            def replace_then_open(path, flags, *args, **kwargs):
+                source.unlink()
+                fifo.rename(source)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch(
+                "safe_host_paths.os.open", side_effect=replace_then_open
+            ):
+                with self.assertRaises(ValueError):
+                    safe_host_paths.read_regular_file(source, maximum_bytes=6)
+
     def test_hidden_reparse_attribute_is_rejected_by_all_shared_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -155,7 +122,7 @@ class SafeHostPathTests(unittest.TestCase):
             target.mkdir()
             (target / "payload").write_bytes(b"payload")
             link = root / "junction"
-            created = _create_junction(target, link)
+            created = create_directory_junction(target, link)
             if not created:
                 if sys.platform == "cygwin":
                     self.fail("native MSYS test could not create a detectable junction")
@@ -171,7 +138,7 @@ class SafeHostPathTests(unittest.TestCase):
                 ):
                     evidence_delivery_contract._worktree_files(link)
             finally:
-                _remove_junction(link)
+                remove_directory_junction(link)
             self.assertEqual((target / "payload").read_bytes(), b"payload")
 
 

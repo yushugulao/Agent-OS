@@ -6,44 +6,38 @@ from __future__ import annotations
 import ast
 import json
 import os
-import shutil
-import subprocess
+import sys
 import tempfile
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 from urllib import error, request
 
 import plain_ucore_reader
 import test_plain_ucore_reader_e2e
+from windows_reparse_fixture import (
+    create_directory_junction,
+    remove_directory_junction,
+)
 
 
 def create_directory_link(link: Path, target: Path) -> bool:
-    if os.name == "nt":
-        completed = subprocess.run(
-            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        return completed.returncode == 0 and plain_ucore_reader.path_is_link(link)
+    if os.name == "nt" or sys.platform == "cygwin":
+        return create_directory_junction(target, link)
     try:
         link.symlink_to(target, target_is_directory=True)
     except OSError:
         return False
     if plain_ucore_reader.path_is_link(link):
         return True
-    # Some MSYS Python builds materialize an ordinary directory instead.
-    if link.is_dir():
-        shutil.rmtree(link)
-    elif link.exists():
-        link.unlink()
     return False
 
 
 def remove_directory_link(link: Path) -> None:
-    if link.is_symlink():
+    if os.name == "nt" or sys.platform == "cygwin":
+        remove_directory_junction(link)
+    elif link.is_symlink():
         link.unlink()
     elif plain_ucore_reader.path_is_link(link):
         link.rmdir()
@@ -1569,6 +1563,26 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as state_tmp, tempfile.TemporaryDirectory() as out_tmp:
         state_dir = Path(state_tmp)
         out_dir = Path(out_tmp)
+        unchanged = out_dir / "atomic-cache-probe"
+        plain_ucore_reader.atomic_write_bytes(unchanged, b"same")
+        with mock.patch.object(
+            plain_ucore_reader.tempfile,
+            "mkstemp",
+            side_effect=AssertionError("unchanged output was rewritten"),
+        ):
+            plain_ucore_reader.atomic_write_bytes(unchanged, b"same")
+        with unchanged.open("wb") as handle:
+            handle.seek(64 * 1024 * 1024)
+            handle.write(b"x")
+        with mock.patch.object(
+            plain_ucore_reader,
+            "read_regular_file",
+            side_effect=AssertionError("oversized old output was read"),
+        ):
+            plain_ucore_reader.atomic_write_bytes(unchanged, b"small")
+        assert unchanged.read_bytes() == b"small"
+        unchanged.unlink()
+
         for name, text in STATE_FILES.items():
             (state_dir / name).write_text(text, encoding="utf-8")
 
@@ -2698,6 +2712,7 @@ def main() -> int:
             request.urlopen(oversized, timeout=5)
         except error.HTTPError as http_error:
             assert http_error.code == 413
+            http_error.close()
         else:
             raise AssertionError("oversized action payload was accepted")
         (out_dir / "dual-results" / "charts").mkdir(parents=True, exist_ok=True)
@@ -2746,6 +2761,11 @@ def main() -> int:
             assert action_contract["auto_run_ucore"] is True
             assert action_contract["runner_timeout_seconds"] == 80
             assert action_contract["server_deadline_seconds"] == 340
+            action_client_timeout = (
+                test_plain_ucore_reader_e2e.action_client_timeout_seconds(
+                    action_contract
+                )
+            )
 
             valid_deadline_contract = FakeRunner.seeded_ucore_deadline_contract(80)
             forged_deadlines = (
@@ -2859,7 +2879,7 @@ def main() -> int:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with request.urlopen(action, timeout=5) as response:
+            with request.urlopen(action, timeout=action_client_timeout) as response:
                 result = json.loads(response.read().decode("utf-8"))
             assert result["action"]["status"] == "accepted"
             assert result["action"]["path"] == "/actions/research/run"
@@ -2900,7 +2920,9 @@ def main() -> int:
             assert (out_dir / "last-run.json").exists()
             assert (out_dir / "llm-relay-summary.json").exists()
 
-            with request.urlopen(base + "/api/live", timeout=5) as response:
+            with request.urlopen(
+                base + "/api/live", timeout=action_client_timeout
+            ) as response:
                 live = json.loads(response.read().decode("utf-8"))
             assert live["action_count"] == 1
             assert live["last_run"]["status"] == "ready"
@@ -2918,14 +2940,16 @@ def main() -> int:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with request.urlopen(batch, timeout=5) as response:
+            with request.urlopen(batch, timeout=action_client_timeout) as response:
                 batch_result = json.loads(response.read().decode("utf-8"))
             assert len(batch_result["actions"]) == 2, batch_result
             assert batch_result["actions"][0]["sequence"] == 2, batch_result
             assert batch_result["actions"][1]["path"] == "/actions/research/export-bundle", batch_result
             assert batch_result["run"]["status"] == "ready", batch_result
 
-            with request.urlopen(base + "/api/live", timeout=5) as response:
+            with request.urlopen(
+                base + "/api/live", timeout=action_client_timeout
+            ) as response:
                 live = json.loads(response.read().decode("utf-8"))
             assert live["action_count"] == 3, live
             assert not (state_dir / "rp_host_action_inbox").exists()
@@ -2987,8 +3011,13 @@ def main() -> int:
             except Exception as exc:
                 assert getattr(exc, "code", None) == 400, exc
 
-            with request.urlopen(base + "/index.html", timeout=5) as response:
-                index_html = response.read().decode("utf-8")
+            with mock.patch.object(
+                plain_ucore_reader,
+                "render_site",
+                side_effect=AssertionError("static GET performed a synchronous render"),
+            ):
+                with request.urlopen(base + "/index.html", timeout=5) as response:
+                    index_html = response.read().decode("utf-8")
             assert "Rendered from plain uCore state files" in index_html
             assert "Dual Target Overview" in index_html
 
@@ -3019,6 +3048,32 @@ def main() -> int:
                 svg_text = response.read().decode("utf-8")
             assert "image/svg+xml" in svg_type
             assert "运行观测图" in svg_text
+
+            saved_out = out_dir.with_name(out_dir.name + "-pinned")
+            outside = state_dir / "outside-reader-root"
+            outside.mkdir()
+            secret = "outside-root-secret"
+            (outside / "index.html").write_text(secret, encoding="utf-8")
+            out_dir.rename(saved_out)
+            linked = False
+            try:
+                linked = create_directory_link(out_dir, outside)
+                if linked:
+                    try:
+                        request.urlopen(base + "/index.html", timeout=5)
+                    except error.HTTPError as http_error:
+                        body = http_error.read().decode("utf-8", errors="replace")
+                        http_error.close()
+                        assert http_error.code == 404
+                        assert secret not in body
+                    else:
+                        raise AssertionError("rebound Reader output root was served")
+            finally:
+                if linked:
+                    remove_directory_link(out_dir)
+                saved_out.rename(out_dir)
+                (outside / "index.html").unlink()
+                outside.rmdir()
         finally:
             server.shutdown()
             server.server_close()

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,7 +32,9 @@ if __package__:
         ensure_private_directory,
         ensure_safe_directory,
         path_is_link,
+        read_regular_file,
         reject_link_components,
+        require_safe_directory,
     )
 else:
     from dual_state_evidence_contract import RUN_RESULT_IDENTITIES
@@ -46,7 +49,9 @@ else:
         ensure_private_directory,
         ensure_safe_directory,
         path_is_link,
+        read_regular_file,
         reject_link_components,
+        require_safe_directory,
     )
 
 
@@ -66,6 +71,7 @@ HOST_RUN_RESULT_MAX_BYTES = 64 * 1024
 ACTION_REQUEST_MAX_BYTES = 1024 * 1024
 ACTION_REQUEST_READ_TIMEOUT_SECONDS = 5
 HOST_LLM_OVERLAY_RELATIVE_PATH = Path("host-state/llm-relay")
+READER_STATIC_MAX_BYTES = 16 * 1024 * 1024
 
 
 PAGE_SPECS = [
@@ -440,8 +446,19 @@ def write_json(path: Path, data: object) -> None:
 def atomic_write_bytes(path: Path, data: bytes) -> None:
     path = absolute_lexical_path(path)
     parent = ensure_safe_directory(path.parent)
-    if path_is_link(path) or (path.exists() and not path.is_file()):
-        raise ValueError(f"Output path is unsafe: {path}")
+    try:
+        existing = path.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        if path_is_link(path, existing.st_mode, file_info=existing) or not stat.S_ISREG(
+            existing.st_mode
+        ):
+            raise ValueError(f"Output path is unsafe: {path}")
+        if existing.st_size == len(data) and read_regular_file(
+            path, maximum_bytes=len(data)
+        ) == data:
+            return
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=parent
     )
@@ -5150,7 +5167,6 @@ def render_site(
     for old_api in api_dir.glob("*.json"):
         if old_api.is_symlink() or not old_api.is_file():
             raise ValueError(f"Reader API output is unsafe: {old_api}")
-        old_api.unlink()
     action_log = out_dir / "host-actions.jsonl"
     actions = read_jsonl_file(action_log)
     last_run = read_json_file(out_dir / "last-run.json")
@@ -5163,6 +5179,19 @@ def render_site(
     extra_api_files += write_optional_api(api_dir, "host_platform_alignment_raw", host_platform_alignment)
     extra_api_files += write_optional_api(api_dir, "host_test_alignment_raw", host_test_alignment)
     extra_api_files += write_optional_api(api_dir, "host_surface_alignment_raw", host_surface_alignment)
+    expected_api_names = {f"{name}.json" for name in render_state}
+    expected_api_names.update(
+        f"{name}.json"
+        for name, data in (
+            ("host_platform_alignment_raw", host_platform_alignment),
+            ("host_test_alignment_raw", host_test_alignment),
+            ("host_surface_alignment_raw", host_surface_alignment),
+        )
+        if data
+    )
+    for old_api in api_dir.glob("*.json"):
+        if old_api.name not in expected_api_names:
+            old_api.unlink()
     alignment_state_files = sum(
         int(bool(item))
         for item in (
@@ -5609,6 +5638,18 @@ def make_service_handler(
     host_overlay_dir: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     service_lock = RLock()
+    out_dir = ensure_safe_directory(out_dir)
+    pinned_out_info = out_dir.lstat()
+    pinned_out_identity = (pinned_out_info.st_dev, pinned_out_info.st_ino)
+
+    def require_pinned_output_root() -> Path:
+        current = require_safe_directory(out_dir)
+        info = current.lstat()
+        identity = (info.st_dev, info.st_ino)
+        if identity != pinned_out_identity:
+            raise ValueError("Reader output directory identity changed")
+        return current
+
     actual_repo_dir = repo_dir or Path(".")
     actual_run_root = run_root or (out_dir / "auto-runs")
     actual_host_run_result = host_run_result_path
@@ -5652,7 +5693,8 @@ def make_service_handler(
             self.wfile.write(payload)
 
         def send_text_file(self, path: Path, content_type: str) -> None:
-            data = path.read_bytes()
+            data = read_regular_file(path, maximum_bytes=READER_STATIC_MAX_BYTES)
+            require_pinned_output_root()
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
@@ -5722,24 +5764,17 @@ def make_service_handler(
                 self.send_json(200, {"name": name, "values": item["values"], "lines": item["lines"]})
                 return
 
-            render_site(
-                state_dir,
-                out_dir,
-                host_run_result_path=active_host_run_result(),
-                expected_target=actual_expected_target,
-                host_overlay_dir=actual_host_overlay,
-            )
             rel = "index.html" if path in ("", "/") else unquote(path.lstrip("/"))
             if "\\" in rel or any(part in ("", ".", "..") for part in Path(rel).parts):
                 self.send_json(404, {"error": "not_found"})
                 return
             try:
-                file_path = (out_dir / rel).resolve()
-                file_path.relative_to(out_dir.resolve())
-            except ValueError:
-                self.send_json(404, {"error": "not_found"})
-                return
-            if not file_path.exists() or not file_path.is_file():
+                root = require_pinned_output_root()
+                file_path = reject_link_components(root / rel)
+                file_path.relative_to(root)
+                if not file_path.is_file():
+                    raise ValueError("static output is not a regular file")
+            except (OSError, ValueError):
                 self.send_json(404, {"error": "not_found"})
                 return
             content_type = "text/html; charset=utf-8" if file_path.suffix == ".html" else "application/octet-stream"
@@ -5753,13 +5788,13 @@ def make_service_handler(
                 content_type = "text/markdown; charset=utf-8"
             elif file_path.suffix == ".txt":
                 content_type = "text/plain; charset=utf-8"
-            self.send_text_file(file_path, content_type)
+            try:
+                self.send_text_file(file_path, content_type)
+            except (OSError, ValueError):
+                self.send_json(404, {"error": "not_found"})
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if not parsed.path.startswith("/actions/"):
-                self.send_json(404, {"error": "action_not_found"})
-                return
             length_text = self.headers.get("Content-Length", "0") or "0"
             if re.fullmatch(r"0|[1-9][0-9]*", length_text) is None:
                 self.send_json(400, {"error": "invalid_content_length"})
@@ -5779,6 +5814,9 @@ def make_service_handler(
                 self.connection.settimeout(previous_timeout)
             if len(body) != length:
                 self.send_json(400, {"error": "incomplete_action_payload"})
+                return
+            if not parsed.path.startswith("/actions/"):
+                self.send_json(404, {"error": "action_not_found"})
                 return
             payload = parse_request_body(self.headers, body)
             with service_lock:

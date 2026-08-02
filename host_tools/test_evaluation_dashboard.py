@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,6 +24,10 @@ from urllib.parse import unquote, urlsplit
 
 import evaluation_kernel_cost as kernel_cost
 import safe_host_paths
+from windows_reparse_fixture import (
+    create_directory_junction,
+    remove_directory_junction,
+)
 from test_evaluation_kernel_cost import Fixture as KernelCostFixture
 from test_evaluation_kernel_cost import _write_json as write_kernel_json
 
@@ -87,67 +90,6 @@ def assert_offline_links_resolve(page: Path) -> None:
         target = (root / Path(*path.split("/"))).resolve(strict=True)
         target.relative_to(root)
         assert target.is_file(), reference
-
-
-def _native_windows_path(path: Path) -> str | None:
-    if os.name == "nt":
-        return str(path.absolute())
-    if sys.platform != "cygwin":
-        return None
-    completed = subprocess.run(
-        ["/usr/bin/cygpath", "-w", os.path.abspath(path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return None
-    value = completed.stdout.strip()
-    return value or None
-
-
-def _windows_command(*arguments: str) -> subprocess.CompletedProcess[str]:
-    previous = os.environ.get("MSYS2_ARG_CONV_EXCL")
-    os.environ["MSYS2_ARG_CONV_EXCL"] = "*"
-    try:
-        return subprocess.run(
-            ["cmd.exe", "/d", "/c", *arguments],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        if previous is None:
-            os.environ.pop("MSYS2_ARG_CONV_EXCL", None)
-        else:
-            os.environ["MSYS2_ARG_CONV_EXCL"] = previous
-
-
-def _create_windows_directory_junction(target: Path, link: Path) -> bool:
-    native_target = _native_windows_path(target)
-    native_link = _native_windows_path(link)
-    if native_target is None or native_link is None:
-        return False
-    completed = _windows_command("mklink", "/J", native_link, native_target)
-    if completed.returncode != 0:
-        return False
-    if _windows_command(
-        "fsutil", "reparsepoint", "query", native_link
-    ).returncode == 0:
-        return True
-    _remove_windows_directory_junction(link)
-    return False
-
-
-def _remove_windows_directory_junction(link: Path) -> None:
-    native_link = _native_windows_path(link)
-    if native_link is None:
-        raise AssertionError(f"cannot convert test junction path: {link}")
-    completed = _windows_command("rmdir", native_link)
-    if completed.returncode != 0 or os.path.lexists(link):
-        raise AssertionError(
-            f"cannot remove test junction {link}: {completed.stderr.strip()}"
-        )
 
 
 def _test_percentile(values: list[int], quantile: float) -> float | int:
@@ -1631,7 +1573,7 @@ class DashboardContractTests(unittest.TestCase):
             raw = root / "raw"
             raw_target = root / "raw-target"
             raw.rename(raw_target)
-            created = _create_windows_directory_junction(raw_target, raw)
+            created = create_directory_junction(raw_target, raw)
             if not created:
                 raw_target.rename(raw)
                 if sys.platform == "cygwin":
@@ -1641,7 +1583,7 @@ class DashboardContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(DashboardError, "symlink or junction"):
                     render(source, root / "site")
             finally:
-                _remove_windows_directory_junction(raw)
+                remove_directory_junction(raw)
             self.assertTrue((raw_target / "boot-01" / "guest.log").is_file())
 
     def test_shared_path_guard_detects_reparse_attributes_without_following(self) -> None:

@@ -17,7 +17,9 @@ from evaluation_contract import (
     EvaluationError,
     _binding_sha256,
     _expected_result,
+    _expected_result_cached,
     _expected_workload,
+    _expected_workload_cached,
     _file_operation_targets,
     _file_target_meta,
     _file_target_sequence,
@@ -952,6 +954,38 @@ def main() -> int:
         "tool_batch": "03dcdc53ddad7ecf",
         "context_access": "56b98203222b1384",
     }
+    tool_experiment = next(
+        experiment for experiment in suite["experiments"]
+        if experiment["id"] == "tool_batch"
+    )
+    _expected_workload_cached.cache_clear()
+    _expected_result_cached.cache_clear()
+    workload = _expected_workload(tool_experiment, 24, 1, "0000000000000001")
+    workload_cache = _expected_workload_cached.cache_info()
+    assert _expected_workload(
+        tool_experiment, 24, 1, "0000000000000001"
+    ) == workload
+    assert _expected_workload_cached.cache_info().hits == workload_cache.hits + 1
+    changed_selector = copy.deepcopy(tool_experiment)
+    changed_selector["selector"] += 1
+    assert _expected_workload(
+        changed_selector, 24, 1, "0000000000000001"
+    ) != workload
+    result = _expected_result(tool_experiment, 24, 1, "0000000000000001")
+    result_cache = _expected_result_cached.cache_info()
+    assert _expected_result(
+        tool_experiment, 24, 1, "0000000000000001"
+    ) == result
+    assert _expected_result_cached.cache_info().hits == result_cache.hits + 1
+    assert _expected_result(
+        tool_experiment,
+        24,
+        1,
+        "0000000000000001",
+        operations_override=_operations_for(tool_experiment, 24) + 1,
+    ) != result
+    _expected_workload_cached.cache_clear()
+    _expected_result_cached.cache_clear()
     for experiment in file_experiments.values():
         for load, operations in zip(
             experiment["loads"], experiment["operation_counts"]

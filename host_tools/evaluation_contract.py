@@ -16,6 +16,7 @@ import random
 import re
 import statistics
 from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -1380,6 +1381,7 @@ def _operations_for(experiment: dict[str, Any], load: int) -> int:
         raise EvaluationError(f"load {load} has no operation count") from error
 
 
+@lru_cache(maxsize=4096)
 def _semantic_token(domain: str, load: int, pair: int, item: int, challenge: str) -> int:
     value = _fnv_bytes(1469598103934665603, domain.encode("ascii"))
     for part in (int(challenge, 16), load, pair, item):
@@ -1387,6 +1389,7 @@ def _semantic_token(domain: str, load: int, pair: int, item: int, challenge: str
     return value | (1 << 63)
 
 
+@lru_cache(maxsize=4096)
 def _file_target_step(load: int, challenge: str) -> int:
     if load <= 0:
         raise EvaluationError("file-query load must be positive")
@@ -1435,6 +1438,7 @@ def _file_operation_targets(
     return targets
 
 
+@lru_cache(maxsize=4096)
 def _file_manifest_selector(
     load: int, pair: int, operations: int, challenge: str
 ) -> int:
@@ -1448,33 +1452,29 @@ def _file_manifest_selector(
     return value
 
 
-def _expected_workload(
-    experiment: dict[str, Any],
+@lru_cache(maxsize=4096)
+def _expected_workload_cached(
+    experiment_id: str,
+    selector_value: int,
     load: int,
     pair: int,
     challenge: str,
-    *,
-    operations_override: int | None = None,
+    operations: int,
 ) -> str:
     value = 1469598103934665603
     value = _fnv_u64(value, int(challenge, 16))
-    value = _fnv_bytes(value, experiment["id"].encode("ascii"))
-    operations = (
-        _operations_for(experiment, load)
-        if operations_override is None
-        else operations_override
-    )
+    value = _fnv_bytes(value, experiment_id.encode("ascii"))
     selector = (
         _file_manifest_selector(load, pair, operations, challenge)
-        if experiment["id"] in FILE_QUERY_EXPERIMENTS
-        else experiment["selector"]
+        if experiment_id in FILE_QUERY_EXPERIMENTS
+        else selector_value
     )
     for item in (load, pair, operations, selector):
         value = _fnv_u64(value, item)
     return f"{value:016x}"
 
 
-def _expected_result(
+def _expected_workload(
     experiment: dict[str, Any],
     load: int,
     pair: int,
@@ -1488,6 +1488,24 @@ def _expected_result(
         if operations_override is None
         else operations_override
     )
+    return _expected_workload_cached(
+        experiment_id,
+        experiment["selector"],
+        load,
+        pair,
+        challenge,
+        operations,
+    )
+
+
+@lru_cache(maxsize=4096)
+def _expected_result_cached(
+    experiment_id: str,
+    load: int,
+    pair: int,
+    challenge: str,
+    operations: int,
+) -> str:
     value = _fnv_bytes(1469598103934665603, b"agentos-result-v1")
     value = _fnv_u64(value, int(challenge, 16))
     value = _fnv_bytes(value, experiment_id.encode("ascii"))
@@ -1533,6 +1551,24 @@ def _expected_result(
     else:
         raise EvaluationError(f"no result oracle for experiment {experiment_id}")
     return f"{value:016x}"
+
+
+def _expected_result(
+    experiment: dict[str, Any],
+    load: int,
+    pair: int,
+    challenge: str,
+    *,
+    operations_override: int | None = None,
+) -> str:
+    operations = (
+        _operations_for(experiment, load)
+        if operations_override is None
+        else operations_override
+    )
+    return _expected_result_cached(
+        experiment["id"], load, pair, challenge, operations
+    )
 
 
 def _functional_semantic(

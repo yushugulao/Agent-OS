@@ -205,16 +205,52 @@ def read_regular_file(
         path, nonempty=nonempty, maximum_bytes=maximum_bytes
     )
     expected = absolute.lstat()
-    with absolute.open("rb") as handle:
-        if maximum_bytes is None:
-            data = handle.read()
-        else:
-            data = handle.read(maximum_bytes + 1)
-        opened = os.fstat(handle.fileno())
+    flags = os.O_RDONLY
+    for name in ("O_BINARY", "O_CLOEXEC", "O_NOINHERIT", "O_NOFOLLOW", "O_NONBLOCK"):
+        flags |= int(getattr(os, name, 0))
+    descriptor = os.open(os.fspath(absolute), flags)
+    try:
+        opened_before = os.fstat(descriptor)
+        expected_identity = (expected.st_dev, expected.st_ino, expected.st_ctime_ns)
+        opened_identity = (
+            opened_before.st_dev,
+            opened_before.st_ino,
+            opened_before.st_ctime_ns,
+        )
+        if (
+            not stat.S_ISREG(opened_before.st_mode)
+            or opened_identity != expected_identity
+            or opened_before.st_size != expected.st_size
+        ):
+            raise ValueError(f"Regular file changed before it was read: {absolute}")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            if maximum_bytes is None:
+                data = handle.read()
+            else:
+                data = handle.read(maximum_bytes + 1)
+            opened_after = os.fstat(handle.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    try:
+        final = absolute.lstat()
+    except FileNotFoundError as error:
+        raise ValueError(f"Regular file disappeared while being read: {absolute}") from error
     if (
-        not stat.S_ISREG(opened.st_mode)
+        not stat.S_ISREG(opened_after.st_mode)
         or len(data) != expected.st_size
-        or opened.st_size != expected.st_size
+        or (
+            opened_after.st_dev,
+            opened_after.st_ino,
+            opened_after.st_ctime_ns,
+        )
+        != expected_identity
+        or opened_after.st_size != expected.st_size
+        or path_is_link(absolute, final.st_mode, file_info=final)
+        or not stat.S_ISREG(final.st_mode)
+        or (final.st_dev, final.st_ino, final.st_ctime_ns) != expected_identity
+        or final.st_size != expected.st_size
         or (maximum_bytes is not None and len(data) > maximum_bytes)
     ):
         raise ValueError(f"Regular file changed or exceeded its byte limit: {absolute}")
