@@ -27,7 +27,7 @@ Kernel measurements are normalized and deterministic under the pinned Ubuntu
   and the nine-page sidecar detail are capped per process, across the global
   ordinary/reserved pools, and per ordinary/reserved resource domain, so
   moving state out of BSS cannot hide worst-case physical growth;
-- all 34 registered Agent/security translation units have individual LOC and
+- all 35 registered Agent/security translation units have individual LOC and
   exact no-growth BSS caps, code-only export namespaces, an exact
   registered-module dependency graph, and a reviewed maximum strongly
   connected component size of three. Twenty registered modules, including
@@ -37,7 +37,7 @@ Kernel measurements are normalized and deterministic under the pinned Ubuntu
   `workflow_lifecycle_` namespaces, or references the exact `agentinit`
   entry point, must appear in the exact
   `integration_bridges` inventory. Bridge exports are exact and code-only,
-  and the combined 34-module-plus-bridge controlled-symbol graph has its
+  and the combined 35-module-plus-bridge controlled-symbol graph has its
   own exact edge and SCC policy. The eleven reviewed bridges are `bio`, `file`,
   `fs`, `kalloc`, `loader`, `main`, `pipe`, `proc`, `syscall`, `trap`, and
   `vfs_security`.
@@ -98,13 +98,17 @@ borrowing, a separate catalog resource kind, global union/max approximations,
 or a metadata-envelope ledger; scoped reload instead binds and revalidates the
 immutable lifecycle id and generation.
 
-The current candidate's full-suite duration gate is
-`provisional_requires_full_suite`. It intentionally carries no source
-fingerprint, baseline, limit, or calibration samples and therefore fails closed
-before a normal full-suite QEMU run. The older `814021ab9dac` and
-`31d4ddf53695` packages are historical schema-2 artifacts only. They predate
-per-execution attestation and are not admissible as a threshold for this or any
-new candidate.
+The current candidate's full-suite duration gate is `calibrated_full_suite`.
+The clean detached calibration source is commit
+`610df28bda6476edc2679a2a9b9c284d9fa2e27c`, with source fingerprint
+`e0f4aadda1f16792200a87790adaa8593bbd6e0d551c62f335155c67fd6fcad8`.
+Its three complete 18-case samples are `300.5258207`, `302.9130704`, and
+`285.0845327` seconds. The median baseline is `300.5258207` seconds and the
+deterministic limit is `315.553` seconds. The complete local-E3 calibration
+package is committed at `evidence/calibrations/610df28bda64/`; it is explicitly
+`local_e3_unsigned` and is not GitLab Runner or E4 evidence. The older
+`814021ab9dac` and `31d4ddf53695` packages remain historical schema-2 artifacts
+only and are not admissible as a threshold for this or any new candidate.
 
 A production calibration is collected only by
 `scripts/agent_test_calibration.py collect`. The harness requires a real Git
