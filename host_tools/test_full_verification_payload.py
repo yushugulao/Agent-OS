@@ -185,7 +185,7 @@ def make_payload(root: Path, *, commit: str = COMMIT) -> None:
         "IDLE_NOTICE_SECONDS": "20", "MARKER_GRACE_SECONDS": "2s",
         "MECHANISM_MARKER_GRACE_SECONDS": "5s",
         "HOST_CC": tool_paths["host_cc"], "HOSTCC": tool_paths["host_cc"],
-        "CC": tool_paths["host_cc"],
+        "CC": tool_paths["host_cc"], "SYSTEMDRIVE": "/",
     }
     environment = root / payload.ENVIRONMENT_NAME
     write_json(

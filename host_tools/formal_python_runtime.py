@@ -28,7 +28,7 @@ FORMAL_ENVIRONMENT_FIXED = {
 FORMAL_ENVIRONMENT_DYNAMIC = {
     "PATH", "HOME", "TMPDIR", "FINAL_EVIDENCE_STAGE", "QEMU", "PYTHON_BIN",
     "CASE_TIMEOUT", "IDLE_NOTICE_SECONDS", "MARKER_GRACE_SECONDS",
-    "MECHANISM_MARKER_GRACE_SECONDS", "HOST_CC", "HOSTCC", "CC",
+    "MECHANISM_MARKER_GRACE_SECONDS", "HOST_CC", "HOSTCC", "CC", "SYSTEMDRIVE",
 }
 POSIX_SYSTEM_PATHS = (
     "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
@@ -579,6 +579,7 @@ def validate_formal_execution_environment(
         or re.fullmatch(r"[1-9][0-9]*", value["IDLE_NOTICE_SECONDS"]) is None
         or value["MARKER_GRACE_SECONDS"] != "2s"
         or value["MECHANISM_MARKER_GRACE_SECONDS"] != "5s"
+        or re.fullmatch(r"(?:/|[A-Z]:)", value["SYSTEMDRIVE"]) is None
         or not PurePosixPath(value["FINAL_EVIDENCE_STAGE"]).is_absolute()
     ):
         raise FormalPythonRuntimeError("formal execution environment binding differs")

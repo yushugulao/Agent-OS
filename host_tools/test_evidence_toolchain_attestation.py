@@ -34,6 +34,17 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                 tool_directories, os.pathsep, attestation.POSIX_SYSTEM_PATHS
             ),
         )
+        expected_drive = os.environ["SYSTEMDRIVE"] if sys.platform == "cygwin" else "/"
+        self.assertEqual(environment["SYSTEMDRIVE"], expected_drive)
+
+    def test_msys_system_drive_identity_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, (
+            mock.patch.object(attestation.sys, "platform", "cygwin")
+        ), mock.patch.dict(os.environ, {"SYSTEMDRIVE": "c:"}, clear=False):
+            with self.assertRaisesRegex(
+                attestation.ToolAttestationError, "system drive identity"
+            ):
+                attestation.controlled_environment(Path(temporary), [Path("/usr/bin")])
 
     def _source_fixture(self, base: Path) -> tuple[Path, Path, str, dict[str, str]]:
         git_name = shutil.which("git")

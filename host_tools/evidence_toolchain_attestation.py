@@ -248,7 +248,15 @@ def controlled_environment(
     temporary.mkdir(parents=True, exist_ok=True)
     system_paths = list(POSIX_SYSTEM_PATHS) if os.name == "posix" else [os.defpath]
     search_path = controlled_search_path(tool_directories, os.pathsep, system_paths)
-    environment = {"PATH": search_path, "HOME": str(home), "TMPDIR": str(temporary)}
+    system_drive = os.environ.get("SYSTEMDRIVE", "") if sys.platform == "cygwin" else "/"
+    if re.fullmatch(r"[A-Z]:", system_drive) is None and system_drive != "/":
+        raise ToolAttestationError("host system drive identity is not canonical")
+    environment = {
+        "PATH": search_path,
+        "HOME": str(home),
+        "TMPDIR": str(temporary),
+        "SYSTEMDRIVE": system_drive,
+    }
     if os.name == "posix":
         environment.update(FORMAL_ENVIRONMENT_FIXED)
     else:
