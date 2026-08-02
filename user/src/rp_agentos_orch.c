@@ -25,7 +25,6 @@ static struct agent_file_query_result orch_file_query_result;
 static struct agent_file_hit orch_metadata_hit;
 static struct agent_file_prefetch_hint orch_prefetch_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
 static char orch_acceptance_body[4096];
-static char orch_state_body[1024];
 static char orch_stability_body[32768];
 static char orch_check_token[160];
 static struct rp_resource_stability_report
@@ -890,27 +889,6 @@ static int record_agentos_prerequisites(void)
 		"stage=entry_dependency;dependency_graph=kernel_records;status=ready\n");
 }
 
-static int record_challenge_kernel_binding(
-	const struct rp_challenge_workflow *workflow)
-{
-	char *body = orch_state_body;
-
-	rp_copy_text(body, sizeof(orch_state_body), "challenge_workflow_id=");
-	rp_append_text(body, sizeof(orch_state_body), workflow->workflow_id);
-	rp_append_text(body, sizeof(orch_state_body), "\nchallenge_run_id=");
-	rp_append_text(body, sizeof(orch_state_body), workflow->run_id);
-	rp_append_text(body, sizeof(orch_state_body), "\nchallenge_rerun_id=");
-	rp_append_text(body, sizeof(orch_state_body), workflow->rerun_id);
-	rp_append_text(body, sizeof(orch_state_body), "\nchallenge_input_sha256=");
-	rp_append_text(body, sizeof(orch_state_body), workflow->input_sha256);
-	rp_append_text(body, sizeof(orch_state_body), "\nchallenge_derived_sha256=");
-	rp_append_text(body, sizeof(orch_state_body), workflow->derived_sha256);
-	rp_append_text(body, sizeof(orch_state_body),
-		       "\nchallenge_output_source=rp_input,rp_stage_dag,rp_stage_state,rp_artifact,rp_runner\n"
-		       "challenge_output_validation=exact_unique_records\n");
-	return rp_append_file("rp_agentos_kernel", body);
-}
-
 static int run_research_orchestrator(int timing_read_fd, int timing_write_fd,
 				     int completion_write_fd,
 				     uint64 workflow_start)
@@ -1055,8 +1033,6 @@ static int run_research_orchestrator(int timing_read_fd, int timing_write_fd,
 		return 1;
 	}
 	if (verify_kernel_dependency_path(&orch_workflow) < 0)
-		return 1;
-	if (!record_challenge_kernel_binding(&orch_workflow))
 		return 1;
 	if (!rp_append_file("rp_tool", "tool=agentos.agent_run.echo")) return 1;
 	if (!rp_append_file("rp_tool", "tool=agentos.context_snapshot")) return 1;

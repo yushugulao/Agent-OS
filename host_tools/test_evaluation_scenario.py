@@ -765,6 +765,10 @@ class EvaluationScenarioTests(unittest.TestCase):
         agentos = (root / "user/src/rp_agentos_orch.c").read_text(
             encoding="utf-8"
         )
+        kernel_state_writes = re.findall(
+            r'rp_(?:write|append)_file\(\s*"rp_agentos_kernel"', agentos
+        )
+        self.assertEqual(kernel_state_writes, ['rp_write_file("rp_agentos_kernel"'])
         agentos_main = agentos[agentos.index("int main(void)") :]
         wait_at = agentos_main.index("waitpid(pid, &code)")
         completion_at = agentos_main.index("read_workflow_completion(")
