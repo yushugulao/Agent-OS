@@ -1,0 +1,187 @@
+{
+  "evidence_scope": "local_e3_unsigned",
+  "executables": {
+    "python": {
+      "executable": {
+        "bytes": 10026,
+        "path": "/usr/bin/python3.exe",
+        "sha256": "c03d7a278464ecde7d48118ee55d7840cf09ae98611645113ab18c86d778e8ab"
+      },
+      "requested_path": "/usr/bin/python3.exe",
+      "version_argv": [
+        "/usr/bin/python3.exe",
+        "--version"
+      ],
+      "version_first_line": "Python 3.12.13"
+    },
+    "qemu": {
+      "executable": {
+        "bytes": 12844680,
+        "path": "/r/qemu-11.0.0/qemu-system-riscv64.exe",
+        "sha256": "207fcc62a1a3a83d2e23de3a4cdada17a8619c1dc130224d8036f1671cfc24d1"
+      },
+      "requested_path": "/r/qemu-11.0.0/qemu-system-riscv64.exe",
+      "version_argv": [
+        "/r/qemu-11.0.0/qemu-system-riscv64.exe",
+        "--version"
+      ],
+      "version_first_line": "QEMU emulator version 11.0.0 (v11.0.0-12122-ga4bb4b10c9)"
+    },
+    "toolchain_cc": {
+      "executable": {
+        "bytes": 2957665,
+        "path": "/r/riscv-gcc-15.2.0-1/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc",
+        "sha256": "9fd3aecdd6ae127a5545709f44f8f154b4a39898b021fe87d2991947b0a235c5"
+      },
+      "requested_path": "/r/riscv-gcc-15.2.0-1/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc",
+      "version_argv": [
+        "/r/riscv-gcc-15.2.0-1/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc",
+        "--version"
+      ],
+      "version_first_line": "riscv-none-elf-gcc.exe (xPack GNU RISC-V Embedded GCC x86_64) 15.2.0"
+    }
+  },
+  "execution_id": "2f958c19932ca593a5513c5d4703133302dd201a3721f61ef585aea3accaa7ae",
+  "format": "agentos-qemu-execution-attestation-v2",
+  "identity": {
+    "campaign_nonce": "6d42e498c7b3d55413287e7d2a8586b519d411d4c13a5d415dcf37766a213517",
+    "execution_nonce": "2f958c19932ca593a5513c5d4703133302dd201a3721f61ef585aea3accaa7ae",
+    "round_nonce": "8c7de56841a2788dfa435edb8ea0248828f7b4ba3fc2c2fa7e57d3046432b20b",
+    "session_nonce": "610388816641e0220f46ba601bd6fff912de554f610cbe6b3f0179312f6030d1"
+  },
+  "inputs": {
+    "image": {
+      "bytes": 16777216,
+      "path": "/c/tmp/agentos-calibration-ef0f77e-source/nfs/fs-copy.img",
+      "sha256": "1ef3d533d0504dde50133e83e55f76bffbf0a8e2d57eb69a6b14943d761f4f23"
+    },
+    "kernel": {
+      "bytes": 2699248,
+      "path": "/c/tmp/agentos-calibration-ef0f77e-source/build/kernel",
+      "sha256": "c310ecffeb08805f27684c056afcadc5f43bb88cf01e7a39f7b2a91de84fea12"
+    }
+  },
+  "invocation_argv": [
+    "/usr/bin/python3.exe",
+    "scripts/agent_test_runner.py",
+    "--init-proc",
+    "agentfinal_ucore",
+    "--marker",
+    "agentfinal_ucore: parent passed",
+    "--marker-mode",
+    "exact-line",
+    "--expected-bad-addr-marker-mode",
+    "exact-line",
+    "--log-file",
+    "/tmp/agentos-agentfinal_ucore.2760.log",
+    "--case-timeout",
+    "300s",
+    "--idle-notice-seconds",
+    "20",
+    "--marker-grace-seconds",
+    "2s",
+    "--qemu",
+    "/r/qemu-11.0.0/qemu-system-riscv64.exe",
+    "--attestation-file",
+    "/c/tmp/.agentos-calibration-ef0f77e-output.partial-6d42e498c7b3d554/attestations/02/01-agentfinal_ucore.json",
+    "--run-id",
+    "610388816641e0220f46ba601bd6fff912de554f610cbe6b3f0179312f6030d1",
+    "--execution-id",
+    "2f958c19932ca593a5513c5d4703133302dd201a3721f61ef585aea3accaa7ae",
+    "--evidence-scope",
+    "local_e3_unsigned",
+    "--source-commit",
+    "ef0f77edee83be11629735d47a4001493fec7fd8",
+    "--source-tree",
+    "3af52d92243e8e9ce1011f7ebe45c47cee26c990",
+    "--campaign-nonce",
+    "6d42e498c7b3d55413287e7d2a8586b519d411d4c13a5d415dcf37766a213517",
+    "--calibration-plan-sha256",
+    "0c5134e3a9c7de7d8c0131c5c048157baa3ffcde689eee67607140f267f074bf",
+    "--round-nonce",
+    "8c7de56841a2788dfa435edb8ea0248828f7b4ba3fc2c2fa7e57d3046432b20b",
+    "--session-nonce",
+    "610388816641e0220f46ba601bd6fff912de554f610cbe6b3f0179312f6030d1",
+    "--execution-nonce",
+    "2f958c19932ca593a5513c5d4703133302dd201a3721f61ef585aea3accaa7ae",
+    "--toolchain-cc",
+    "/r/riscv-gcc-15.2.0-1/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc"
+  ],
+  "outputs": {
+    "image": {
+      "bytes": 16777216,
+      "path": "/c/tmp/agentos-calibration-ef0f77e-source/nfs/fs-copy.img",
+      "sha256": "28f3cb3c648db515ea013e76c5b23838cf194d40181be95822847e7d10fb60a8"
+    },
+    "kernel": {
+      "bytes": 2699248,
+      "path": "/c/tmp/agentos-calibration-ef0f77e-source/build/kernel",
+      "sha256": "c310ecffeb08805f27684c056afcadc5f43bb88cf01e7a39f7b2a91de84fea12"
+    },
+    "log": {
+      "bytes": 5368,
+      "path": "/tmp/agentos-agentfinal_ucore.2760.log",
+      "sha256": "796d9aa8845ca0a20dafa5ca400b51444354f219c3db0638f1117c715dc91781"
+    }
+  },
+  "qemu_argv": [
+    "/r/qemu-11.0.0/qemu-system-riscv64.exe",
+    "-nographic",
+    "-machine",
+    "virt",
+    "-bios",
+    "default",
+    "-kernel",
+    "build/kernel",
+    "-drive",
+    "file=nfs/fs-copy.img,if=none,format=raw,id=x0",
+    "-device",
+    "virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0"
+  ],
+  "request": {
+    "case_timeout_seconds": 300.0,
+    "completion_mode": "natural",
+    "expected_bad_addr_markers": [],
+    "expected_fault_marker_mode": "exact-line",
+    "idle_notice_seconds": 20.0,
+    "init_proc": "agentfinal_ucore",
+    "marker": "agentfinal_ucore: parent passed",
+    "marker_grace_seconds": 2.0,
+    "marker_mode": "exact-line"
+  },
+  "result": {
+    "completion_signal_attested": false,
+    "control_endpoint_restored": true,
+    "elapsed_seconds": 8.2847732,
+    "expected_faults_satisfied": true,
+    "output_eof": true,
+    "process_tree_contained": false,
+    "process_tree_gone": true,
+    "reason": "process_exit",
+    "returncode": 0,
+    "signals_sent": [],
+    "succeeded": true,
+    "supervisor_control_healthy": true,
+    "supervisor_returncode": null
+  },
+  "run_id": "610388816641e0220f46ba601bd6fff912de554f610cbe6b3f0179312f6030d1",
+  "runner": {
+    "bytes": 90292,
+    "path": "/c/tmp/agentos-calibration-ef0f77e-source/scripts/agent_test_runner.py",
+    "sha256": "e82ecdc3d8b150646751cff71c5219b871b6aa4aac32ba895779253d1804c305"
+  },
+  "schema_version": 2,
+  "source": {
+    "calibration_plan_sha256": "0c5134e3a9c7de7d8c0131c5c048157baa3ffcde689eee67607140f267f074bf",
+    "commit": "ef0f77edee83be11629735d47a4001493fec7fd8",
+    "tree": "3af52d92243e8e9ce1011f7ebe45c47cee26c990"
+  },
+  "time": {
+    "clock": "time.monotonic_ns",
+    "elapsed_ns": 8284773200,
+    "finished_monotonic_ns": 85713117432300,
+    "finished_wall_time_ns": 1785694687131236400,
+    "started_monotonic_ns": 85704832659100,
+    "started_wall_time_ns": 1785694678846145900
+  }
+}

@@ -1026,7 +1026,7 @@ agentbench_ucore: file_query_benchmark schema=2 unit=us load=125 traversal_ops=6
 
 双目标总墙钟约 731 秒，其中 seeded 双 Guest 为 604 秒，真实文件查询阶段为 97 秒；这些数字及上方状态计数只属于该次历史工作树。生产链没有可信 runner tick runtime producer，`runner-sweep.csv` 只接受一条 `evidence_status=unavailable,evidence_reason=plain_runtime_cases_zero` availability 记录和零 measurement 行；不可达的 measured collector、重复身份 ABI 与两张推导图已删除。恢复测量必须另行引入非 reference runtime source 和日志/commit 绑定，不能从历史 fixture 复活。当前候选的唯一状态见下一节。
 
-## 2026-07-29 当前冻结候选验收（未形成 E3）
+## 2026-07-29 历史冻结候选验收（未形成 E3）
 
 本轮只收敛已有机制和验收边界，不新增内核功能或 ABI。reference registry、Host-derived Mainflow、精确状态清单、Reader 分阶段故障检测、统一 14 字节目录键、metadata 空 catalog 重协调及 dead runner ABI 删除均进入同一候选工作树。
 
@@ -1036,7 +1036,7 @@ Host action 输入也与 Guest 输出分代保存。runner 以独占 `0700` 目�
 
 上述最终阻断项的 Windows 聚焦测试均通过；同一代码在 WSL/DrvFS 顺序执行 action runner、状态清单、双目标比较、Reader 与 14 项最终证据回归也全部通过，其中 POSIX 最终证据用例为 14/14。它们补足链接预置、同数内容篡改、relay 不改 Guest、旧 receipt 继续有效、dangling overlay、Windows junction、链接祖先与事务回滚场景，但不替代下方完整双目标和 `full-verify` 门。
 
-当前工作树的实际命令与结果如下。它们是提交前的本地 E1/动态回归事实，不是 clean C 的 release bundle，也不能授予 E3：
+当时工作树的实际命令与结果如下。它们是提交前的本地 E1/动态回归事实，不是 clean C 的 release bundle，也不能授予 E3：
 
 ```text
 make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
@@ -1079,8 +1079,22 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 `local-e3-msys2-xpack-qemu11-v1`：collector 逐字节复核 commit tree，绑定并回灌实际
 GCC/ld/objcopy/objdump/as、Host CC、QEMU、Python、Bash、Make 与 Git，且 QEMU 只解析一次绝对路径并用同一路径
 启动。校准包可整体迁移到另一绝对 checkout 后离线复验；错误 suffix、路径穿越、filter 隐藏的
-字节差异、工具换靶和重复参数均 fail closed。此机制尚未产生三轮正式样本；`local_e3_unsigned`
+字节差异、工具换靶和重复参数均 fail closed。当时此机制尚未产生三轮正式样本；`local_e3_unsigned`
 只证明可复验来源，不证明本机操作者诚实。GitLab Ubuntu/QEMU 10.2.1 继续跑完整 18-case 和
 timing inventory，但明确使用 `profile=none`，不套用该本地墙钟阈值。
 
 候选提交后冻结新内核功能和 ABI。下一阶段只允许完成三轮校准、形成 C→E 证据，以及按“保留、合并、删除”执行行为保持的减法审计；每个小提交继续验证 source、ELF/raw、text/BSS、`struct proc`、线程/boot 栈和测试耗时不增长。
+
+## 2026-08-02 当前受管源码时长校准
+
+冻结提交 `ef0f77edee83be11629735d47a4001493fec7fd8` 在干净 detached worktree 上按
+`local-e3-msys2-xpack-qemu11-v1` 串行执行三轮完整 18-case。受管源码指纹为
+`c2afdbd7a566bc94d61fdc7e7c1578d3ad977fa588b5487d92af07ca8ad589b0`，覆盖 394 个输入；
+三轮总时长分别为 `280.4274567s`、`278.9655878s`、`281.1814338s`，均为 18 项成功。
+中位基线为 `280.4274567s`，按版本化公式得到上限 `294.449s`。
+
+完整包位于 `evidence/calibrations/ef0f77edee83/`，共 71 个文件、57 份逐执行 attestation；
+manifest SHA-256 为 `df14e5f3a9c567be6ce3ef74de40bc5657d3b66d499f1b0ba94f4134f946fbdf`。
+配置现为 `calibrated_full_suite`，checker 已重算 commit/tree/fingerprint、三轮 timing、日志、nonce、
+逐文件哈希与阈值关系。该材料只证明未签名本地 E3 校准事实，不是最终 release bundle、GitLab CI、
+远程 Runner 或 E4；完整动态发布状态仍以最终 C→E bundle 为准。
