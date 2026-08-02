@@ -36,11 +36,22 @@ def _native_windows_path(path: Path) -> str | None:
 
 
 def _windows_command(*arguments: str) -> subprocess.CompletedProcess[str]:
+    import ctypes
+
+    kernel32 = ctypes.CDLL("Kernel32.dll")
+    get_system_directory = kernel32.GetSystemDirectoryW
+    get_system_directory.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+    get_system_directory.restype = ctypes.c_uint32
+    system_directory = ctypes.create_unicode_buffer(32_768)
+    length = int(get_system_directory(system_directory, len(system_directory)))
+    if length <= 0 or length >= len(system_directory):
+        raise OSError("cannot locate the native Windows system directory")
+    command = system_directory.value.replace(chr(92), "/") + "/cmd.exe"
     previous = os.environ.get("MSYS2_ARG_CONV_EXCL")
     os.environ["MSYS2_ARG_CONV_EXCL"] = "*"
     try:
         return subprocess.run(
-            ["cmd.exe", "/d", "/c", *arguments],
+            [command, "/d", "/c", *arguments],
             check=False,
             capture_output=True,
             text=True,
@@ -53,6 +64,8 @@ def _windows_command(*arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def _create_junction(target: Path, link: Path) -> bool:
+    import ctypes
+
     native_target = _native_windows_path(target)
     native_link = _native_windows_path(link)
     if native_target is None or native_link is None:
@@ -60,9 +73,15 @@ def _create_junction(target: Path, link: Path) -> bool:
     completed = _windows_command("mklink", "/J", native_link, native_target)
     if completed.returncode != 0:
         return False
-    detected = _windows_command(
-        "fsutil", "reparsepoint", "query", native_link
-    ).returncode == 0
+    kernel32 = ctypes.CDLL("Kernel32.dll")
+    get_attributes = kernel32.GetFileAttributesW
+    get_attributes.argtypes = [ctypes.c_wchar_p]
+    get_attributes.restype = ctypes.c_uint32
+    attributes = int(get_attributes(native_link))
+    detected = bool(
+        attributes != safe_host_paths._INVALID_FILE_ATTRIBUTES
+        and attributes & safe_host_paths._FILE_ATTRIBUTE_REPARSE_POINT
+    )
     if not detected:
         _remove_junction(link)
     return detected

@@ -17,6 +17,7 @@ from unittest import mock
 import plain_ucore_action_runner as runner
 import test_plain_ucore_reader_e2e as reader_e2e
 from gitlab_ci_contract import validate_repository_ci
+from safe_host_paths import path_is_link
 
 
 def read(path: Path) -> str:
@@ -31,35 +32,11 @@ def unlink_created_test_link(path: Path) -> None:
     except FileNotFoundError:
         return
     except IsADirectoryError:
-        if sys.platform != "cygwin":
+        # Default MSYS symlink emulation can create an ordinary directory copy.
+        # Only remove that empty probe artifact; never traverse a real link.
+        if sys.platform != "cygwin" or path_is_link(path):
             raise
-        # Cygwin Python can expose a Windows directory reparse point as a
-        # directory. Its os.rmdir then follows the target, so ask native
-        # Windows rmdir to remove only the reparse-point entry. Do not use /s:
-        # the non-empty probe target must remain impossible to delete.
-        converted = subprocess.run(
-            ["cygpath", "-aw", os.fspath(path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        native_path = converted.stdout.strip()
-        if converted.returncode != 0 or not native_path:
-            raise AssertionError(
-                f"cannot convert Cygwin test-link path: {path}: "
-                f"{converted.stderr.strip()}"
-            )
-        removed = subprocess.run(
-            ["cmd.exe", "/d", "/c", "rmdir", native_path],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if removed.returncode != 0:
-            raise AssertionError(
-                f"cannot remove Windows test reparse point: {path}: "
-                f"{removed.stderr.strip()}"
-            )
+        path.rmdir()
 
 
 def unlink_test_link(path: Path) -> None:
@@ -80,19 +57,22 @@ def symlinks_available(root: Path) -> bool:
     directory_link = root / ".symlink-directory-link"
     file_link = root / ".symlink-file-link"
     target_dir.mkdir()
-    target_marker = target_dir / "keep-target"
-    target_marker.write_text("keep\n", encoding="utf-8")
     target_file.write_text("target\n", encoding="utf-8")
+    target_marker = target_dir / "keep-target"
     directory_created = False
     file_created = False
+    marker_created = False
     try:
         directory_link.symlink_to(target_dir, target_is_directory=True)
         directory_created = True
+        directory_supported = directory_link.is_symlink()
+        target_marker.write_text("keep\n", encoding="utf-8")
+        marker_created = True
         file_link.symlink_to(target_file)
         file_created = True
         # Do not create any formal test links unless this Python runtime can
         # reliably identify both link kinds it will later have to clean up.
-        return directory_link.is_symlink() and file_link.is_symlink()
+        return directory_supported and file_link.is_symlink()
     except (NotImplementedError, OSError):
         return False
     finally:
@@ -100,10 +80,12 @@ def symlinks_available(root: Path) -> bool:
             unlink_created_test_link(directory_link)
         if file_created:
             unlink_created_test_link(file_link)
-        if not target_marker.is_file() or read(target_marker) != "keep\n":
+        if marker_created and (
+            not target_marker.is_file() or read(target_marker) != "keep\n"
+        ):
             raise AssertionError("directory-symlink cleanup followed the target")
         target_file.unlink(missing_ok=True)
-        target_marker.unlink()
+        target_marker.unlink(missing_ok=True)
         target_dir.rmdir()
     return True
 
@@ -121,33 +103,45 @@ def main() -> int:
         else:
             os.environ["TOOLPREFIX"] = original_toolprefix
 
-    directory_like_link = mock.MagicMock(spec=Path)
-    directory_like_link.__fspath__.return_value = "/tmp/directory-link"
-    directory_like_link.unlink.side_effect = IsADirectoryError("directory-like link")
-    converted_path = subprocess.CompletedProcess(
-        ["cygpath"], 0, stdout="C:\\tmp\\directory-link\n", stderr=""
-    )
-    removed_path = subprocess.CompletedProcess(["cmd.exe"], 0, stdout="", stderr="")
+    directory_copy = mock.MagicMock(spec=Path)
+    directory_copy.unlink.side_effect = IsADirectoryError("directory copy")
+    module = sys.modules[__name__]
     with mock.patch.object(sys, "platform", "cygwin"), mock.patch.object(
-        subprocess,
-        "run",
-        side_effect=(converted_path, removed_path),
-    ) as run:
-        unlink_created_test_link(directory_like_link)
-    assert run.call_args_list == [
-        mock.call(
-            ["cygpath", "-aw", os.fspath(directory_like_link)],
-            check=False,
-            capture_output=True,
-            text=True,
-        ),
-        mock.call(
-            ["cmd.exe", "/d", "/c", "rmdir", "C:\\tmp\\directory-link"],
-            check=False,
-            capture_output=True,
-            text=True,
-        ),
-    ]
+        module, "path_is_link", return_value=False
+    ) as detect_link:
+        unlink_created_test_link(directory_copy)
+    detect_link.assert_called_once_with(directory_copy)
+    directory_copy.rmdir.assert_called_once_with()
+
+    real_directory_link = mock.MagicMock(spec=Path)
+    real_directory_link.unlink.side_effect = IsADirectoryError("directory link")
+    with mock.patch.object(sys, "platform", "cygwin"), mock.patch.object(
+        module, "path_is_link", return_value=True
+    ):
+        try:
+            unlink_created_test_link(real_directory_link)
+        except IsADirectoryError:
+            pass
+        else:
+            raise AssertionError("directory link cleanup did not fail closed")
+    real_directory_link.rmdir.assert_not_called()
+
+    foreign_directory = mock.MagicMock(spec=Path)
+    foreign_directory.unlink.side_effect = IsADirectoryError("directory")
+    with mock.patch.object(sys, "platform", "linux"):
+        try:
+            unlink_created_test_link(foreign_directory)
+        except IsADirectoryError:
+            pass
+        else:
+            raise AssertionError("non-MSYS directory cleanup did not fail closed")
+    foreign_directory.rmdir.assert_not_called()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        with mock.patch.object(Path, "symlink_to", side_effect=OSError("unsupported")):
+            assert not symlinks_available(root)
+        assert list(root.iterdir()) == [], "failed link probe leaked test artifacts"
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
