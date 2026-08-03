@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import ast
 import os
 import py_compile
 import shutil
@@ -13,11 +14,11 @@ import sys
 import tempfile
 import types
 import unittest
-import venv
 from pathlib import Path
 from unittest import mock
 
 import evaluation_platform as platform_probe
+import duration_profile_attestation as duration_attestation
 
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -37,6 +38,84 @@ def completed(argv: list[str], returncode: int, output: bytes) -> subprocess.Com
 
 
 class EvaluationPlatformTests(unittest.TestCase):
+    def test_duration_attestation_rejects_previous_schema(self) -> None:
+        value = duration_attestation.build_duration_attestation(
+            contract_root=REPOSITORY, profile="none", toolprefix="n/a",
+            qemu="n/a", python_bin="n/a", host_cc="n/a", shell_bin="n/a",
+        )
+        value["schema_version"] = duration_attestation.SCHEMA_VERSION - 1
+        with self.assertRaisesRegex(
+            duration_attestation.DurationAttestationError, "schema differs"
+        ):
+            duration_attestation.validate_duration_attestation(
+                value, contract_root=REPOSITORY
+            )
+
+    def test_formal_duration_attestation_rejects_provisional_local_profile(self) -> None:
+        profile = {
+            "calibration_status": "provisional_requires_full_suite",
+            "name": "local-e3", "profile_id": "fixture", "status": "matched",
+        }
+        platform = {
+            "domain": "native-msys2", "duration_profile": profile,
+            "entry_domain": "native-msys2", "hardware": {}, "runtime": {},
+            "tools": {}, "uname": {},
+        }
+        value = {
+            "applicability": "calibrated-local-e3",
+            "configuration": duration_attestation._configuration(REPOSITORY),
+            "platform": platform, "profile": profile,
+            "platform_identity_sha256": duration_attestation.duration_platform_identity_sha256(platform),
+            "schema_version": duration_attestation.SCHEMA_VERSION,
+        }
+        contract = (None, lambda *_args, **_kwargs: None,
+                    lambda *_args, **_kwargs: "local-e3")
+        with mock.patch.object(duration_attestation, "_platform_contract", return_value=contract):
+            with self.assertRaisesRegex(
+                duration_attestation.DurationAttestationError,
+                "requires calibrated_full_suite",
+            ):
+                duration_attestation.validate_duration_attestation(
+                    value, contract_root=REPOSITORY
+                )
+
+    def test_duration_attestation_binds_execution_tools_and_campaign_platform(self) -> None:
+        platform_tools = {
+            label: {"path": f"/tools/{label}", "sha256": "a" * 64, "version": "v1"}
+            for label in duration_attestation.EXECUTION_TOOL_LABELS
+        }
+        platform = {
+            "domain": "native-msys2", "entry_domain": "native-msys2",
+            "duration_profile": {"name": "local-e3"}, "hardware": HARDWARE,
+            "runtime": {"version": "fixture"}, "tools": platform_tools,
+            "uname": {"system": "fixture"},
+        }
+        value = {
+            "platform": platform, "profile": {"name": "local-e3"},
+            "platform_identity_sha256": duration_attestation.duration_platform_identity_sha256(platform),
+        }
+        execution = {
+            label: {"path": record["path"], "executable_sha256": record["sha256"],
+                    "first_line": record["version"]}
+            for label, record in platform_tools.items()
+        }
+        duration_attestation.validate_duration_execution_binding(
+            value, execution, expected_platform=platform
+        )
+        execution["qemu"]["executable_sha256"] = "b" * 64
+        with self.assertRaisesRegex(
+            duration_attestation.DurationAttestationError, "qemu"
+        ):
+            duration_attestation.validate_duration_execution_binding(value, execution)
+        execution["qemu"]["executable_sha256"] = "a" * 64
+        changed_platform = {**platform, "hardware": {**HARDWARE, "logical_cpu_count": 8}}
+        with self.assertRaisesRegex(
+            duration_attestation.DurationAttestationError, "differs from campaign"
+        ):
+            duration_attestation.validate_duration_execution_binding(
+                value, execution, expected_platform=changed_platform
+            )
+
     def test_full_verify_is_routed_through_formal_execution_domain(self) -> None:
         self.assertIn("full-verify", platform_probe.FORMAL_MODES)
 
@@ -44,7 +123,7 @@ class EvaluationPlatformTests(unittest.TestCase):
         self.assertEqual(
             set(platform_probe.TOOL_LABELS),
             {
-                "bash", "env", "git", "make", "python", "compiler", "host_cc",
+                "bash", "env", "git", "make", "python", "assembler", "compiler", "host_cc",
                 "linker", "objcopy", "objdump", "size", "qemu", "timeout",
                 "readlink", "sha256sum",
             },
@@ -53,6 +132,76 @@ class EvaluationPlatformTests(unittest.TestCase):
             set(platform_probe.MSYS_EXTRA_TOOL_LABELS),
             {"cygpath", "host_objdump", "uname"},
         )
+
+    def test_platform_cli_requires_explicit_host_cc_and_duration_profile(self) -> None:
+        parser = platform_probe._parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["doctor", "--repo", str(REPOSITORY)])
+        parsed = parser.parse_args([
+            "doctor", "--repo", str(REPOSITORY),
+            "--host-cc", "/bound/clang",
+            "--duration-profile", "none",
+        ])
+        self.assertEqual(parsed.host_cc, "/bound/clang")
+        self.assertEqual(parsed.duration_profile, "none")
+
+    def test_local_e3_profile_rejects_host_cc_mutation_and_none_is_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            names = (
+                "qemu", "assembler", "compiler", "linker", "objcopy", "objdump", "size",
+                "host_cc", "python", "bash", "make", "git",
+            )
+            tools = {name: {"path": f"/bound/{name}"} for name in names}
+            tools.update(compiler={"path": "/bound/riscv-none-elf-gcc"},
+                         host_cc={"path": "/bound/clang"})
+            proof = {"domain": "native-msys2", "tools": tools}
+
+            def identity(command: str, name: str) -> dict[str, object]:
+                if name == "host_cc" and command != "/bound/clang":
+                    raise ValueError("host_cc version differs")
+                return {
+                    "requested_path": command, "executable": {"path": command},
+                    "version_argv": [command, "--version"],
+                    "version_first_line": "fixture",
+                }
+
+            calibration = mock.Mock()
+            calibration.executable_identity.side_effect = identity
+            calibration.validate_live_calibration_profile.return_value = "fixture-local-e3"
+            calibration.capture_host_identity.return_value = {}
+            budget = mock.Mock()
+            budget.load_config.return_value = {"agent_test_suite": {
+                "calibration_status": "provisional_requires_full_suite",
+                "local_calibration_profile": {},
+            }}
+            budget.resolve_executable_once.side_effect = lambda path, _label: Path(path)
+            budget.resolve_gcc_subprogram.side_effect = lambda _gcc, name: Path(f"/bound/{name}")
+            budget.select_kernel_budget_toolchain.return_value = (
+                "local", {"profile_id": "fixture-local-e3"}
+            )
+
+            with mock.patch.object(
+                platform_probe,
+                "_load_profile_component",
+                side_effect=(calibration, budget),
+            ):
+                matched = platform_probe._duration_profile_binding(root, proof, "local-e3")
+            self.assertEqual(matched["status"], "matched")
+            tools["host_cc"]["path"] = "/usr/bin/cc"
+            with (
+                mock.patch.object(
+                    platform_probe,
+                    "_load_profile_component",
+                    side_effect=(calibration, budget),
+                ),
+                self.assertRaisesRegex(
+                    platform_probe.PlatformPreflightError, "host_cc version differs"
+                ),
+            ):
+                platform_probe._duration_profile_binding(root, proof, "local-e3")
+            disabled = platform_probe._duration_profile_binding(root, proof, "none")
+            self.assertEqual(disabled["status"], "disabled-different-runner")
 
     def test_native_windows_is_not_a_formal_collection_domain(self) -> None:
         current_directory = Path.cwd()
@@ -68,6 +217,8 @@ class EvaluationPlatformTests(unittest.TestCase):
                 toolprefix="riscv64-linux-gnu-",
                 qemu="qemu-system-riscv64",
                 python_bin="python3",
+                host_cc="cc",
+                duration_profile="none",
             )
 
     def test_python_39_is_rejected_before_collection(self) -> None:
@@ -103,6 +254,8 @@ class EvaluationPlatformTests(unittest.TestCase):
                 }
                 for label in platform_probe.TOOL_LABELS
             }
+            tools["host_cc"]["argv0"] = "/opt/host/bin/clang"
+            tools["host_cc"]["path"] = "/opt/host/bin/clang"
             observed = {
                 "distribution": "Ubuntu-24.04",
                 "hardware": dict(HARDWARE),
@@ -143,10 +296,14 @@ class EvaluationPlatformTests(unittest.TestCase):
                     distro="Ubuntu-24.04",
                     toolprefix="riscv64-linux-gnu-",
                     qemu="qemu-system-riscv64",
+                    host_cc="/opt/host/bin/clang",
+                    duration_profile="none",
                 )
             self.assertEqual(result["domain"], "windows-wsl")
             self.assertEqual(result["hardware"], HARDWARE)
             self.assertEqual(result["schema_version"], platform_probe.SCHEMA_VERSION)
+            self.assertEqual(result["requested_host_cc"], "/opt/host/bin/clang")
+            self.assertEqual(result["duration_profile"]["name"], "none")
             self.assertIn("bound by SHA256", result["launcher"]["version"])
             self.assertTrue(
                 all("-d" in argv and "Ubuntu-24.04" in argv for argv in calls[1:])
@@ -177,6 +334,12 @@ class EvaluationPlatformTests(unittest.TestCase):
                 },
                 "toolprefix": "/usr/bin/riscv64-linux-gnu-",
                 "tools": tools,
+                "duration_profile": {
+                    "calibration_status": "not-applicable",
+                    "name": "none",
+                    "profile_id": "none",
+                    "status": "disabled-different-runner",
+                },
             }
             observed: list[str] = []
 
@@ -204,6 +367,7 @@ class EvaluationPlatformTests(unittest.TestCase):
                 self.assertIn(f"{name}={tools['host_cc']['path']}", observed)
             self.assertIn("EVALUATION_BOOTS=7", observed)
             self.assertIn("EVALUATION_FULL_VERIFY_TIMEOUT=4321", observed)
+            self.assertIn("AGENT_TEST_DURATION_PROFILE=none", observed)
             self.assertIn("/mnt/e/repo/scripts/run-evaluation-suite.sh", observed)
             self.assertNotIn(str(root), observed[4:])
 
@@ -327,6 +491,7 @@ cpu MHz : 4900.000
         self.assertEqual(arm["logical_cpu_count"], 1)
 
     def test_wsl_hardware_probe_rejects_each_lowercase_processor_record(self) -> None:
+        ast.parse(platform_probe._WSL_PROBE_PROGRAM)
         self.assertIn(
             'if raw_key.strip()=="processor":',
             platform_probe._WSL_PROBE_PROGRAM,
@@ -385,6 +550,7 @@ cpu MHz : 4900.000
         }
         controlled_path = platform_probe._msys_controlled_path(tools)
         environment = {
+            "AGENT_TEST_DURATION_PROFILE": "none",
             "AGENTOS_EVALUATION_EXECUTION_DOMAIN": "native-msys2",
             "BASH_BIN": tools["bash"]["path"],
             "BASH_ENV": "/tmp/injected",
@@ -419,6 +585,7 @@ cpu MHz : 4900.000
             platform_probe._validate_msys_clean_entry(
                 tools=tools,
                 toolprefix="riscv-none-elf-",
+                duration_profile_name="none",
                 temporary_directory=Path("/tmp"),
                 windows_temporary_directory=r"C:\tmp",
                 windows_system_drive="C:",
@@ -439,6 +606,12 @@ cpu MHz : 4900.000
             }
             preflight = {
                 "domain": "native-msys2",
+                "duration_profile": {
+                    "calibration_status": "not-applicable",
+                    "name": "none",
+                    "profile_id": "none",
+                    "status": "disabled-different-runner",
+                },
                 "hardware": dict(HARDWARE),
                 "repository": {"execution_path": str(root.resolve())},
                 "runtime": {"path": "/usr/bin/msys-2.0.dll", "sha256": "b" * 64},
@@ -480,6 +653,7 @@ cpu MHz : 4900.000
                 self.assertIn(f"{name}={tools['host_cc']['path']}", observed)
             self.assertIn("EVALUATION_BOOTS=7", observed)
             self.assertIn("EVALUATION_FULL_VERIFY_TIMEOUT=4321", observed)
+            self.assertIn("AGENT_TEST_DURATION_PROFILE=none", observed)
             self.assertIn("--noprofile", observed)
             self.assertIn("--norc", observed)
             self.assertFalse(any("BASH_ENV" in item for item in observed))
@@ -503,6 +677,12 @@ cpu MHz : 4900.000
                 }
             preflight = {
                 "domain": "native-msys2",
+                "duration_profile": {
+                    "calibration_status": "not-applicable",
+                    "name": "none",
+                    "profile_id": "none",
+                    "status": "disabled-different-runner",
+                },
                 "hardware": dict(HARDWARE),
                 "repository": {"execution_path": str(root.resolve())},
                 "runtime": {
@@ -516,6 +696,10 @@ cpu MHz : 4900.000
             }
             with (
                 mock.patch.object(platform_probe, "_current_msys2_identity"),
+                mock.patch.object(
+                    platform_probe, "_canonical_windows_system_drive",
+                    return_value="C:",
+                ),
                 mock.patch.object(
                     platform_probe,
                     "_probe_proc_hardware_identity",
@@ -675,10 +859,26 @@ class TrustedPythonEntryTests(unittest.TestCase):
             root = Path(temporary)
             launcher = self._fixture(root, "print('safe entry')\n")
             environment_root = root / "venv"
-            try:
-                venv.EnvBuilder(with_pip=False).create(environment_root)
-            except (OSError, subprocess.SubprocessError) as error:
-                self.skipTest(f"venv fixture is unavailable: {error}")
+            backing_interpreter = getattr(
+                sys, "_agentos_backing_executable", sys.executable
+            )
+            creation = subprocess.run(
+                [
+                    str(backing_interpreter),
+                    "-I",
+                    "-S",
+                    "-m",
+                    "venv",
+                    "--without-pip",
+                    str(environment_root),
+                ],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(creation.returncode, 0, creation.stderr)
             interpreter = next(
                 (
                     candidate
@@ -691,8 +891,8 @@ class TrustedPythonEntryTests(unittest.TestCase):
                 ),
                 None,
             )
-            if interpreter is None:
-                self.skipTest("venv interpreter is unavailable")
+            self.assertIsNotNone(interpreter, "venv interpreter is unavailable")
+            assert interpreter is not None
             capability = subprocess.run(
                 [str(interpreter), "-I", "-c", "pass"],
                 cwd=root,
@@ -700,23 +900,24 @@ class TrustedPythonEntryTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 check=False,
             )
-            if capability.returncode != 0:
-                self.skipTest("venv interpreter cannot execute in this runtime")
+            self.assertEqual(
+                capability.returncode, 0,
+                capability.stderr.decode("utf-8", "replace"),
+            )
             site_packages = next(
                 (
                     candidate
                     for candidate in (
-                        environment_root / "lib" / (
-                            f"python{sys.version_info.major}.{sys.version_info.minor}"
-                        ) / "site-packages",
                         environment_root / "Lib" / "site-packages",
+                        *sorted((environment_root / "lib").glob("python*/site-packages")),
+                        *sorted((environment_root / "lib64").glob("python*/site-packages")),
                     )
                     if candidate.is_dir()
                 ),
                 None,
             )
-            if site_packages is None:
-                self.skipTest("venv site-packages is unavailable")
+            self.assertIsNotNone(site_packages, "venv site-packages is unavailable")
+            assert site_packages is not None
             site_sentinel = root / "sitecustomize-executed"
             pth_sentinel = root / "pth-executed"
             (site_packages / "sitecustomize.py").write_text(
@@ -729,15 +930,19 @@ class TrustedPythonEntryTests(unittest.TestCase):
                 f"pathlib.Path({str(pth_sentinel)!r}).write_text('executed', encoding='ascii')\n",
                 encoding="utf-8",
             )
-            if not self._inside_formal_runtime():
-                vulnerable = subprocess.run(
-                    [str(interpreter), "-I", "-c", "pass"], cwd=root,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-                )
-                self.assertEqual(vulnerable.returncode, 0, vulnerable.stderr)
-                self.assertTrue(site_sentinel.is_file(), "sitecustomize fixture did not execute")
-                self.assertTrue(pth_sentinel.is_file(), ".pth fixture did not execute")
-                site_sentinel.unlink(); pth_sentinel.unlink()
+            vulnerable = subprocess.run(
+                [str(interpreter), "-I", "-c", "pass"], cwd=root,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            self.assertEqual(vulnerable.returncode, 0, vulnerable.stderr)
+            triggered = tuple(
+                sentinel
+                for sentinel in (site_sentinel, pth_sentinel)
+                if sentinel.is_file()
+            )
+            self.assertTrue(triggered, "venv startup hook fixture did not execute")
+            for sentinel in triggered:
+                sentinel.unlink()
             protected = subprocess.run(
                 [
                     str(interpreter),
@@ -862,6 +1067,10 @@ class TrustedPythonEntryTests(unittest.TestCase):
             self.assertEqual(arguments[3:6], [
                 "host_tools/evaluation_bundle.py", "verify", "--bundle",
             ])
+            self.assertIn("--contract-root", arguments)
+            contract_index = arguments.index("--contract-root")
+            self.assertLess(contract_index + 1, len(arguments))
+            self.assertTrue(arguments[contract_index + 1])
 
     def test_msys2_hardware_change_between_probe_and_exec_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -878,6 +1087,12 @@ class TrustedPythonEntryTests(unittest.TestCase):
                 }
             preflight = {
                 "domain": "native-msys2",
+                "duration_profile": {
+                    "calibration_status": "not-applicable",
+                    "name": "none",
+                    "profile_id": "none",
+                    "status": "disabled-different-runner",
+                },
                 "hardware": dict(HARDWARE),
                 "repository": {"execution_path": str(root.resolve())},
                 "runtime": {
@@ -892,6 +1107,10 @@ class TrustedPythonEntryTests(unittest.TestCase):
             changed = {**HARDWARE, "logical_cpu_count": 8}
             with (
                 mock.patch.object(platform_probe, "_current_msys2_identity"),
+                mock.patch.object(
+                    platform_probe, "_canonical_windows_system_drive",
+                    return_value="C:",
+                ),
                 mock.patch.object(
                     platform_probe,
                     "_probe_proc_hardware_identity",

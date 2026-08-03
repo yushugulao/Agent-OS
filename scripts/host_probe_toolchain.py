@@ -18,8 +18,8 @@ SANITIZER_FLAGS = (
 UNSANITIZED_OPT_IN = "AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES"
 
 
-def host_compiler() -> list[str]:
-    configured = (
+def host_compiler(configured: str | None = None) -> list[str]:
+    configured = configured or (
         os.environ.get("HOST_CC")
         or os.environ.get("HOSTCC")
         or os.environ.get("CC")
@@ -85,9 +85,9 @@ def probe_mode(sanitizer_flags: list[str]) -> str:
     return "ASan/UBSan" if sanitizer_flags else "functional-only; sanitizer unavailable"
 
 
-def shell_records(directory: Path) -> list[str]:
+def shell_records(directory: Path, configured_compiler: str | None = None) -> list[str]:
     """Return a data-only record consumed by host-probe-toolchain.sh."""
-    compiler = host_compiler()
+    compiler = host_compiler(configured_compiler)
     flags = required_sanitizer_flags(compiler, directory)
     environment = probe_environment(flags)
     records = [*(f"compiler\t{item}" for item in compiler)]
@@ -111,11 +111,12 @@ def main(argv: list[str] | None = None) -> int:
         description="Select the mandatory Host C probe compiler and sanitizers"
     )
     parser.add_argument("--directory", type=Path, required=True)
+    parser.add_argument("--compiler")
     args = parser.parse_args(argv)
     if not args.directory.is_dir():
         parser.error("--directory must name an existing directory")
     try:
-        records = shell_records(args.directory)
+        records = shell_records(args.directory, args.compiler)
     except RuntimeError as error:
         print(f"host-probe-toolchain: {error}", file=sys.stderr)
         return 2

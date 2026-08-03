@@ -10,6 +10,9 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 BASH_BIN="${BASH_BIN:-bash}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
+REQUESTED_AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-}"
+AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-local-e3}"
 FORMAL_MICRO_BOOTS=7
 FORMAL_SCENARIO_BOOTS=7
 EVALUATION_BOOTS="${EVALUATION_BOOTS:-${FORMAL_MICRO_BOOTS}}"
@@ -30,6 +33,7 @@ FULL_VERIFICATION_TOOL="host_tools/full_verification_payload.py"
 PLATFORM_TOOL="host_tools/evaluation_platform.py"
 KERNEL_BUILD_TOOL="host_tools/evaluation_kernel_build.py"
 KERNEL_COST_TOOL="host_tools/evaluation_kernel_cost.py"
+KERNEL_BUDGET_POLICY_TOOL="scripts/check-kernel-budgets.py"
 MEASUREMENT_SOURCE_TOOL="host_tools/agenteval_measurement_source_contract.py"
 SCENARIO_SOURCE_TOOL="host_tools/scenario_timing_source_contract.py"
 COMPATIBILITY_TOOL="host_tools/compatibility_overhead.py"
@@ -57,7 +61,8 @@ Environment:
   EVALUATION_FULL_VERIFY_TIMEOUT  detached full-verify budget in seconds (default: 18000)
   MAKE_TOOL, SIZE_TOOL   explicit build and GNU size executables for kernel-cost
   TOOLPREFIX, QEMU       RISC-V toolchain prefix and QEMU executable
-  PYTHON_BIN, BASH_BIN   host Python and Bash executables
+  PYTHON_BIN, BASH_BIN, HOST_CC  exact host Python, Bash and C compiler
+  AGENT_TEST_DURATION_PROFILE    local-e3 only on its bound machine, otherwise none
   EVALUATION_WSL_DISTRO  exact WSL distribution used for every formal stage on Windows
   EVALUATION_WSL_TOOLPREFIX, EVALUATION_WSL_QEMU  tools inside that WSL distribution
   Native MSYS2 is detected from its POSIX Python/runtime and always re-enters env -i
@@ -74,23 +79,34 @@ python_platform_name() {
 }
 
 platform_arguments() {
-	local host_os toolprefix qemu python_bin shell_bin
+	local host_os toolprefix qemu python_bin shell_bin host_cc
 	host_os="$(python_host_os)"
 	toolprefix="${TOOLPREFIX}"
 	qemu="${QEMU}"
 	python_bin="${PYTHON_BIN}"
 	shell_bin="${BASH_BIN}"
+	host_cc="${HOST_CC}"
 	if [[ "${host_os}" == "nt" ]]; then
 		toolprefix="${EVALUATION_WSL_TOOLPREFIX:-riscv64-linux-gnu-}"
 		qemu="${EVALUATION_WSL_QEMU:-qemu-system-riscv64}"
 		python_bin="${EVALUATION_WSL_PYTHON:-python3}"
 		shell_bin="${EVALUATION_WSL_BASH:-bash}"
+		host_cc="${EVALUATION_WSL_HOST_CC:-cc}"
 	fi
 	PLATFORM_ARGS=(
 		--repo "${ROOT}" --distro "${EVALUATION_WSL_DISTRO}"
 		--toolprefix "${toolprefix}" --qemu "${qemu}"
 		--python-bin "${python_bin}" --shell-bin "${shell_bin}"
+		--host-cc "${host_cc}" --duration-profile "${AGENT_TEST_DURATION_PROFILE}"
 	)
+}
+
+validate_duration_profile() {
+	[[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ||
+	   "${AGENT_TEST_DURATION_PROFILE}" == "none" ]] || {
+		echo "[evaluation] AGENT_TEST_DURATION_PROFILE must be local-e3 or none" >&2
+		exit 2
+	}
 }
 
 route_formal_domain() {
@@ -128,9 +144,16 @@ route_formal_domain() {
 }
 
 run_platform_doctor() {
+	validate_duration_profile
 	require_file "${PLATFORM_TOOL}"
 	platform_arguments
 	run_repo_python "${PLATFORM_TOOL}" doctor "${PLATFORM_ARGS[@]}"
+	if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ]]; then
+		require_file "${KERNEL_BUDGET_POLICY_TOOL}"
+		run_repo_python "${KERNEL_BUDGET_POLICY_TOOL}" \
+			--root "${ROOT}" --config ci/kernel-budgets.json \
+			--check agent-test-policy
+	fi
 }
 
 require_file() {
@@ -229,11 +252,30 @@ resolve_run_dir() {
 	}
 }
 
+bind_full_verify_duration_profile() {
+	[[ "${MODE}" == "full-verify" ]] || return 0
+	resolve_run_dir
+	require_file "${CAMPAIGN_TOOL}"
+	require_file "${RUN_DIR}/campaign.json"
+	local campaign_profile
+	campaign_profile="$(run_repo_python "${CAMPAIGN_TOOL}" get-campaign-metadata \
+		--repo "${ROOT}" --manifest "${RUN_DIR}/campaign.json" \
+		--field duration_profile)"
+	if [[ -n "${REQUESTED_AGENT_TEST_DURATION_PROFILE}" &&
+	      "${REQUESTED_AGENT_TEST_DURATION_PROFILE}" != "${campaign_profile}" ]]; then
+		echo "[evaluation] requested duration profile differs from campaign" >&2
+		exit 2
+	fi
+	AGENT_TEST_DURATION_PROFILE="${campaign_profile}"
+	export AGENT_TEST_DURATION_PROFILE
+}
+
 contract_args() {
 	CONTRACT_ARGS=(
 		--suite "${CONTRACT_SUITE}"
 		--run-plan "${RUN_DIR}/run-plan.json"
 		--source-root "${RUN_DIR}/raw"
+		--contract-root "${ROOT}"
 		--summary "${RUN_DIR}/summary.json"
 		--rows "${RUN_DIR}/metrics.jsonl"
 	)
@@ -248,18 +290,18 @@ contract_args() {
 scenario_collector_args() {
 	local plan="$1" count run_id commit number boot_id work_dir order
 	count="$(run_repo_python "${CAMPAIGN_TOOL}" get-scenario-metadata \
-		--manifest "${plan}" --field boots)"
+		--repo "${ROOT}" --manifest "${plan}" --field boots)"
 	run_id="$(run_repo_python "${CAMPAIGN_TOOL}" get-scenario-metadata \
-		--manifest "${plan}" --field run_id)"
+		--repo "${ROOT}" --manifest "${plan}" --field run_id)"
 	commit="$(run_repo_python "${CAMPAIGN_TOOL}" get-scenario-metadata \
-		--manifest "${plan}" --field commit)"
+		--repo "${ROOT}" --manifest "${plan}" --field commit)"
 	SCENARIO_COLLECTOR_ARGS=(--commit "${commit}" --run-id "${run_id}")
 	for ((number = 1; number <= count; number++)); do
 		printf -v boot_id 'boot-%02d' "${number}"
 		work_dir="$(run_repo_python "${CAMPAIGN_TOOL}" get-scenario-field \
-			--manifest "${plan}" --boot-id "${boot_id}" --field work_dir)"
+			--repo "${ROOT}" --manifest "${plan}" --boot-id "${boot_id}" --field work_dir)"
 		order="$(run_repo_python "${CAMPAIGN_TOOL}" get-scenario-field \
-			--manifest "${plan}" --boot-id "${boot_id}" --field target_order)"
+			--repo "${ROOT}" --manifest "${plan}" --boot-id "${boot_id}" --field target_order)"
 		if [[ "${order}" == "plain-agentos" ]]; then order=AB; else order=BA; fi
 		SCENARIO_COLLECTOR_ARGS+=(--boot "${work_dir}" --target-order "${order}")
 	done
@@ -307,6 +349,7 @@ verify_run() {
 	fi
 	local replay_plan="${RUN_DIR}/.run-plan.verify.$$.json"
 	run_repo_python "${CAMPAIGN_TOOL}" export-plan \
+		--repo "${ROOT}" \
 		--manifest "${RUN_DIR}/campaign.json" \
 		--output "${replay_plan}"
 	cmp -s "${RUN_DIR}/run-plan.json" "${replay_plan}" || {
@@ -373,11 +416,11 @@ run_scenario_campaign() {
 	for ((number = 1; number <= EVALUATION_SCENARIO_BOOTS; number++)); do
 		printf -v boot_id 'boot-%02d' "${number}"
 		challenge="$(run_repo_python "${CAMPAIGN_TOOL}" get-scenario-field \
-			--manifest "${scenario_plan}" --boot-id "${boot_id}" --field challenge)"
+			--repo "${ROOT}" --manifest "${scenario_plan}" --boot-id "${boot_id}" --field challenge)"
 		order="$(run_repo_python "${CAMPAIGN_TOOL}" get-scenario-field \
-			--manifest "${scenario_plan}" --boot-id "${boot_id}" --field target_order)"
+			--repo "${ROOT}" --manifest "${scenario_plan}" --boot-id "${boot_id}" --field target_order)"
 		work_dir="$(run_repo_python "${CAMPAIGN_TOOL}" get-scenario-field \
-			--manifest "${scenario_plan}" --boot-id "${boot_id}" --field work_dir)"
+			--repo "${ROOT}" --manifest "${scenario_plan}" --boot-id "${boot_id}" --field work_dir)"
 		mkdir -p "${work_dir}"
 		echo "[evaluation] scenario ${boot_id}/${EVALUATION_SCENARIO_BOOTS}: ${order}, ${challenge}"
 		set +e
@@ -409,7 +452,8 @@ run_scenario_campaign() {
 	run_repo_python "${CAMPAIGN_TOOL}" record-scenario-report \
 		--repo "${ROOT}" --manifest "${scenario_plan}" \
 		--report "${scenario_dir}/report.json"
-	run_repo_python "${CAMPAIGN_TOOL}" seal-scenario --manifest "${scenario_plan}"
+	run_repo_python "${CAMPAIGN_TOOL}" seal-scenario \
+		--repo "${ROOT}" --manifest "${scenario_plan}"
 }
 
 run_campaign() {
@@ -491,6 +535,8 @@ run_campaign() {
 		--qemu "${QEMU}" \
 		--python-bin "${PYTHON_BIN}" \
 		--shell-bin "${BASH_BIN}" \
+		--host-cc "${HOST_CC}" \
+		--duration-profile "${AGENT_TEST_DURATION_PROFILE}" \
 		--timeout "${EVALUATION_MICRO_TIMEOUT}" \
 		2>&1 | tee "${RUN_DIR}/preflight.log"
 	pipeline_status=("${PIPESTATUS[@]}")
@@ -506,7 +552,8 @@ run_campaign() {
 		exit "${preflight_rc}"
 	fi
 	run_repo_python "${CAMPAIGN_TOOL}" check-preflight \
-		--manifest "${manifest}" --receipt "${RUN_DIR}/preflight.log"
+		--repo "${ROOT}" --manifest "${manifest}" \
+		--receipt "${RUN_DIR}/preflight.log"
 	if [[ "${EVALUATION_INCLUDE_SCENARIO}" == "1" ]]; then
 		mkdir -p "${RUN_DIR}/scenario"
 		set +e
@@ -531,6 +578,7 @@ run_campaign() {
 			exit "${preflight_rc}"
 		fi
 		run_repo_python "${CAMPAIGN_TOOL}" check-preflight \
+			--repo "${ROOT}" \
 			--manifest "${RUN_DIR}/scenario/scenario-plan.json" \
 			--receipt "${RUN_DIR}/scenario-preflight.log"
 	fi
@@ -539,7 +587,8 @@ run_campaign() {
 	for ((number = 1; number <= EVALUATION_BOOTS; number++)); do
 		printf -v boot_id 'boot-%02d' "${number}"
 		challenge="$(run_repo_python "${CAMPAIGN_TOOL}" get-boot-field \
-			--manifest "${manifest}" --boot-id "${boot_id}" --field challenge)"
+			--repo "${ROOT}" --manifest "${manifest}" \
+			--boot-id "${boot_id}" --field challenge)"
 		[[ "${challenge}" =~ ^[0-9a-f]{16}$ && "${challenge}" != "0000000000000000" ]] || {
 			echo "[evaluation] invalid precommitted challenge for ${boot_id}" >&2
 			exit 2
@@ -557,9 +606,11 @@ run_campaign() {
 		fi
 	done
 
-	run_repo_python "${CAMPAIGN_TOOL}" seal --manifest "${manifest}"
+	run_repo_python "${CAMPAIGN_TOOL}" seal \
+		--repo "${ROOT}" --manifest "${manifest}"
 	run_repo_python "${CAMPAIGN_TOOL}" export-plan \
-		--manifest "${manifest}" --output "${RUN_DIR}/run-plan.json"
+		--repo "${ROOT}" --manifest "${manifest}" \
+		--output "${RUN_DIR}/run-plan.json"
 	if [[ "${EVALUATION_INCLUDE_SCENARIO}" == "1" ]]; then
 		require_file "${COMPATIBILITY_TOOL}"
 		run_repo_python "${COMPATIBILITY_TOOL}" run \
@@ -576,6 +627,7 @@ run_campaign() {
 	echo "[evaluation] run 'make evaluation-verify' before interpreting results"
 }
 
+bind_full_verify_duration_profile
 route_formal_domain
 
 case "${MODE}" in
@@ -712,7 +764,8 @@ print(commit)
 		--expected-commit "${commit}" --toolprefix "${TOOLPREFIX}" \
 		--qemu "${QEMU}" --python "${PYTHON_BIN}" \
 		--make "${MAKE_TOOL:-make}" --bash "${BASH_BIN}" \
-		--host-cc "${HOST_CC:-cc}" \
+		--host-cc "${HOST_CC}" \
+		--agent-test-duration-profile "${AGENT_TEST_DURATION_PROFILE}" \
 		--command-timeout "${EVALUATION_FULL_VERIFY_TIMEOUT:-18000}"
 	echo "[evaluation] verified full-verify payload: ${RUN_DIR}/full-verification"
 	;;
@@ -721,7 +774,8 @@ dashboard)
 	verify_run
 	require_file "${DASHBOARD_TOOL}"
 	run_repo_python "${DASHBOARD_TOOL}" \
-		"${RUN_DIR}/summary.json" "${RUN_DIR}/dashboard"
+		"${RUN_DIR}/summary.json" "${RUN_DIR}/dashboard" \
+		--contract-root "${ROOT}"
 	echo "[evaluation] dashboard: ${RUN_DIR}/dashboard/index.html"
 	;;
 package)
@@ -730,12 +784,13 @@ package)
 	require_file "${DASHBOARD_TOOL}"
 	require_file "${BUNDLE_TOOL}"
 	run_repo_python "${DASHBOARD_TOOL}" \
-		"${RUN_DIR}/summary.json" "${RUN_DIR}/dashboard"
+		"${RUN_DIR}/summary.json" "${RUN_DIR}/dashboard" \
+		--contract-root "${ROOT}"
 	run_id="$(basename "${RUN_DIR}")"
 	bundle_dir="${EVALUATION_BUNDLE_DIR:-evidence/releases/evaluation-${run_id,,}}"
 	run_repo_python "${BUNDLE_TOOL}" create \
 		--run-dir "${RUN_DIR}" --suite "${CONTRACT_SUITE}" \
-		--output "${bundle_dir}" --repo-root "${ROOT}"
+		--output "${bundle_dir}" --contract-root "${ROOT}" --repo-root "${ROOT}"
 	echo "[evaluation] portable evidence bundle: ${bundle_dir}"
 	;;
 verify-package)
@@ -746,7 +801,7 @@ verify-package)
 	require_file "${BUNDLE_TOOL}"
 	run_repo_python "${BUNDLE_TOOL}" verify \
 		--bundle "${EVALUATION_BUNDLE_DIR}" \
-		--repo-root "${ROOT}" --require-committed
+		--contract-root "${ROOT}" --repo-root "${ROOT}" --require-committed
 	;;
 *)
 	usage

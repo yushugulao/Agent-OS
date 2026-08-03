@@ -1,4 +1,5 @@
 #include "defs.h"
+#include "bio.h"
 #include "fs_allocator_test.h"
 #include "proc.h"
 #include "riscv.h"
@@ -23,7 +24,12 @@ struct fs_allocator_fault_state {
 	uint phase;
 	uint action;
 	uint hook_hits;
+	uint64 raw_writes_before;
+	uint64 flushes_before;
+	uint64 physical_writes_before;
+	uint64 physical_flushes_before;
 	int armed;
+	int receipt_baseline_valid;
 };
 
 static struct fs_allocator_fault_state fs_allocator_fault;
@@ -87,12 +93,21 @@ int fs_allocator_test_authorized(const struct proc *p)
 
 int fs_allocator_test_arm(uint operation, uint phase, uint action, uint oneshot)
 {
+	struct virtio_durability_test_stats durability;
+	struct bio_physical_stats physical;
 	int enabled;
 
 	if (operation < FSALLOC_OP_ALLOC || operation > FSALLOC_OP_IFREE ||
 	    phase < FSALLOC_PHASE_INTENT || phase > FSALLOC_PHASE_REFUND ||
 	    action < FSALLOC_ACTION_BUSY || action > FSALLOC_ACTION_CRASH ||
 	    oneshot != 1)
+		return -1;
+	virtio_disk_durability_test_stats(&durability);
+	if (durability.version != VIRTIO_DURABILITY_TEST_ABI_VERSION ||
+	    durability.size != sizeof(durability) ||
+	    bio_physical_snapshot(&physical) < 0 ||
+	    physical.version != BIO_PHYSICAL_STATS_VERSION ||
+	    physical.size != sizeof(physical))
 		return -1;
 	enabled = intr_save();
 	if (fs_allocator_fault.armed) {
@@ -102,6 +117,11 @@ int fs_allocator_test_arm(uint operation, uint phase, uint action, uint oneshot)
 	fs_allocator_fault.operation = operation;
 	fs_allocator_fault.phase = phase;
 	fs_allocator_fault.action = action;
+	fs_allocator_fault.raw_writes_before = durability.raw_writes;
+	fs_allocator_fault.flushes_before = durability.successful_flushes;
+	fs_allocator_fault.physical_writes_before = physical.writes;
+	fs_allocator_fault.physical_flushes_before = physical.flushes;
+	fs_allocator_fault.receipt_baseline_valid = 1;
 	fs_allocator_fault.armed = 1;
 	intr_restore(enabled);
 	return 0;
@@ -144,12 +164,15 @@ int fs_allocator_test_before(uint operation, uint phase)
 void fs_allocator_test_after(uint operation, uint phase)
 {
 	struct virtio_durability_test_stats durability;
+	struct bio_physical_stats physical;
 	const char *operation_name;
 	const char *phase_name;
 
 	if (!fs_allocator_test_claim(operation, phase, FSALLOC_ACTION_CRASH))
 		return;
 	virtio_disk_durability_test_stats(&durability);
+	memset(&physical, 0, sizeof(physical));
+	(void)bio_physical_snapshot(&physical);
 	operation_name = fs_allocator_test_operation_name(operation);
 	phase_name = fs_allocator_test_phase_name(phase);
 	if (durability.version != VIRTIO_DURABILITY_TEST_ABI_VERSION ||
@@ -164,7 +187,18 @@ void fs_allocator_test_after(uint operation, uint phase)
 	    durability.last_acknowledged_sequence != durability.cached_writes ||
 	    durability.raw_writes > durability.last_acknowledged_sequence ||
 	    durability.failed_flushes != 0 ||
-	    durability.capacity_failures != 0) {
+	    durability.capacity_failures != 0 ||
+	    physical.version != BIO_PHYSICAL_STATS_VERSION ||
+	    physical.size != sizeof(physical) ||
+	    !fs_allocator_fault.receipt_baseline_valid ||
+	    durability.raw_writes < fs_allocator_fault.raw_writes_before ||
+	    durability.successful_flushes < fs_allocator_fault.flushes_before ||
+	    physical.writes < fs_allocator_fault.physical_writes_before ||
+	    physical.flushes < fs_allocator_fault.physical_flushes_before ||
+	    durability.raw_writes - fs_allocator_fault.raw_writes_before !=
+		physical.writes - fs_allocator_fault.physical_writes_before ||
+	    durability.successful_flushes - fs_allocator_fault.flushes_before !=
+		physical.flushes - fs_allocator_fault.physical_flushes_before) {
 #ifdef FS_ALLOCATOR_DELETE_BARRIER_MUTANT
 		printf("fsalloc-cache: mutation=delete-flush "
 		       "target=allocator-phase-barrier durable_epoch=%llu "
@@ -211,6 +245,7 @@ void fs_allocator_test_after(uint operation, uint phase)
 void fs_allocator_test_snapshot(struct fsalloc_test_snapshot *snapshot)
 {
 	struct virtio_durability_test_stats durability;
+	struct bio_physical_stats physical;
 	int enabled;
 
 	if (snapshot == 0)
@@ -238,6 +273,16 @@ void fs_allocator_test_snapshot(struct fsalloc_test_snapshot *snapshot)
 	snapshot->durability_successful_flushes = durability.successful_flushes;
 	snapshot->durability_failed_flushes = durability.failed_flushes;
 	snapshot->durability_capacity_failures = durability.capacity_failures;
+	if (bio_physical_snapshot(&physical) == 0 &&
+	    physical.version == BIO_PHYSICAL_STATS_VERSION &&
+	    physical.size == sizeof(physical)) {
+		snapshot->physical_reads = physical.reads;
+		snapshot->physical_writes = physical.writes;
+		snapshot->physical_flushes = physical.flushes;
+		snapshot->physical_failed_transfers = physical.failed_transfers;
+		snapshot->physical_completion_sequence =
+			physical.completion_sequence;
+	}
 	fs_allocator_test_storage_snapshot(snapshot);
 }
 #endif

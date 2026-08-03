@@ -180,6 +180,24 @@ def verify_tracked_worktree_bytes(
     return count
 
 
+def require_clean_head(
+    git: Path, repository: Path, environment: dict[str, str]
+) -> str:
+    """Return HEAD only after the complete checkout matches that commit."""
+
+    head = _run_git(git, repository, environment, "rev-parse", "--verify", "HEAD^{commit}")
+    raw_commit = head.stdout.strip()
+    if head.returncode or len(raw_commit) != 40 or any(c not in b"0123456789abcdef" for c in raw_commit):
+        raise ToolAttestationError("HEAD is not a full commit")
+    commit = raw_commit.decode("ascii")
+    staged = _run_git(git, repository, environment, "diff-index", "--cached", "--quiet", commit, "--")
+    untracked = _run_git(git, repository, environment, "ls-files", "--others", "--exclude-standard", "-z")
+    if staged.returncode or untracked.returncode or untracked.stdout:
+        raise ToolAttestationError("repository worktree is dirty")
+    verify_tracked_worktree_bytes(git, repository, repository, commit, environment)
+    return commit
+
+
 def _executable_mode_is_reliable(
     git: Path, worktree: Path, environment: dict[str, str]
 ) -> bool:

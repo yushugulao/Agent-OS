@@ -122,7 +122,7 @@ int main(int argc, char *argv[])
 
 	for (i = 2; i < argc; i++) {
 		char *shortname = basename(argv[i]);
-		assert(index(shortname, '/') == 0);
+		assert(strchr(shortname, '/') == 0);
 
 		if ((fd = open(argv[i], O_RDONLY | O_BINARY)) < 0) {
 			perror(argv[i]);
@@ -131,7 +131,7 @@ int main(int argc, char *argv[])
 
 		inum = ialloc(T_FILE);
 
-		bzero(&de, sizeof(de));
+		memset(&de, 0, sizeof(de));
 		de.inum = xshort(inum);
 		strncpy(de.name, shortname, DIRSIZ);
 		iappend(rootino, &de, sizeof(de));
@@ -157,8 +157,8 @@ int main(int argc, char *argv[])
 
 char *basename(char *path)
 {
-	while (index(path, '/') != 0) {
-		path = index(path, '/') + 1;
+	while (strchr(path, '/') != 0) {
+		path = strchr(path, '/') + 1;
 	}
 	return path;
 }
@@ -232,7 +232,7 @@ uint ialloc(ushort type)
 		exit(1);
 	}
 	inum = freeinode++;
-	bzero(&din, sizeof(din));
+	memset(&din, 0, sizeof(din));
 	din.type = xshort(type);
 	din.fs_owner_version = xshort(FS_OWNER_VERSION);
 	din.fs_owner_domain = xint(FS_OWNER_SYSTEM);
@@ -256,7 +256,7 @@ void balloc(int used)
 			limit = 0;
 		if (limit > BPB)
 			limit = BPB;
-		bzero(buf, BSIZE);
+		memset(buf, 0, BSIZE);
 		for (int i = 0; i < limit; i++)
 			buf[i / 8] |= 0x1 << (i % 8);
 		wsect(xint(sb.bmapstart) + block, buf);
@@ -276,7 +276,7 @@ void qalloc(int used)
 			limit = 0;
 		if (limit > (int)QPB)
 			limit = (int)QPB;
-		bzero(owners, sizeof(owners));
+		memset(owners, 0, sizeof(owners));
 		for (int i = 0; i < limit; i++)
 			owners[i] = xint(FS_OWNER_SYSTEM);
 		wsect(xint(sb.qmapstart) + block, owners);
@@ -321,7 +321,7 @@ void iappend(uint inum, void *xp, int n)
 		}
 		n1 = min(n, (fbn + 1) * BSIZE - off);
 		rsect(x, buf);
-		bcopy(p, buf + (off - (fbn * BSIZE)), n1);
+		memmove(buf + (off - (fbn * BSIZE)), p, n1);
 		wsect(x, buf);
 		n -= n1;
 		off += n1;

@@ -36,7 +36,9 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "nfs/host_image_snapshot.h",
     "nfs/host_windows_compat.h",
     "nfs/types.h",
+    "host_tools/committed_source_identity.py",
     "scripts/agent_test_runner.py",
+    "scripts/guest_failure_classifier.py",
     "scripts/initproc.py",
     "scripts/run-agent-tests.sh",
     "scripts/trusted-python-entry.py",
@@ -241,7 +243,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # translation phase input exact prevents line splices, directives, assembly,
 # or linker syntax from disappearing during normalization.
 COMPILE_CLOSURE_FINGERPRINT = (
-    "77733c755dd48333fa54f780d8e8759f8d8fab9269b7347a9c6e74a9d319980a"
+    "63a2b2050bd0f5c73d23aa605be8d115a3f1cdef8fc4a53152db9dbcc54e5ddd"
 )
 
 USER_TRANSLATION_UNITS = (
@@ -767,6 +769,27 @@ def _require_single_assignment(
         raise ValueError(f"functional build assignment differs: {label}")
 
 
+def _isolated_python_invocation_lines(runner: str) -> tuple[str, ...]:
+    """Return Python command sites while ignoring explicit --python-bin values."""
+
+    token = '"${PYTHON_BIN}"'
+    invocations: list[str] = []
+    for line in runner.splitlines():
+        for match in re.finditer(re.escape(token), line):
+            prefix = line[:match.start()].strip()
+            if re.search(r"(?:^|\s)--python-bin$", prefix):
+                continue
+            if prefix not in {"", "if"} and not prefix.endswith("$("):
+                raise ValueError("functional runner has an ambiguous Python reference")
+            if not line[match.start():].startswith(f"{token} -I -S -B"):
+                raise ValueError(
+                    "functional runner has a non-isolated or source-polluting "
+                    "Python invocation"
+                )
+            invocations.append(line)
+    return tuple(invocations)
+
+
 def _validate_build_selectors(texts: dict[str, str]) -> None:
     user_make = texts["user/Makefile"].replace("\r\n", "\n")
     _require_single_assignment(user_make, "app_dir", "app_dir := src", "app source")
@@ -904,6 +927,18 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             "functional kernel build",
         ),
         (
+            'if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" &&\n'
+            '      -z "${AGENT_TEST_CASE:-}" ]]; then',
+            "duration profile full-suite scope",
+        ),
+        (
+            '"${PYTHON_BIN}" -I -S -B host_tools/evaluation_platform.py doctor \\\n'
+            '\t\t--repo . --toolprefix "${TOOLPREFIX}" --qemu "${QEMU}" \\\n'
+            '\t\t--python-bin "${PYTHON_BIN}" --shell-bin "${BASH_BIN}" \\\n'
+            '\t\t--host-cc "${HOST_CC}" --duration-profile local-e3 >/dev/null',
+            "duration profile identity preflight",
+        ),
+        (
             '"${PYTHON_BIN}" -I -S -B scripts/agent_test_runner.py \\\n'
             '\t\t--init-proc "${init_proc}" \\\n'
             '\t\t--marker "${marker}" \\\n'
@@ -922,15 +957,8 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         raise ValueError("functional runner has an unpinned GNU make invocation")
     if runner.count("FUNCTIONAL_REVIEW_BUILD=1") != 5:
         raise ValueError("functional runner does not isolate generated dependencies")
-    python_lines = [
-        line for line in runner.splitlines() if '"${PYTHON_BIN}"' in line
-    ]
-    if len(python_lines) != 13 or any(
-        '"${PYTHON_BIN}" -I -S -B' not in line for line in python_lines
-    ):
-        raise ValueError(
-            "functional runner has a non-isolated or source-polluting Python invocation"
-        )
+    if len(_isolated_python_invocation_lines(runner)) != 14:
+        raise ValueError("functional runner Python invocation count differs")
 
     initproc = texts["scripts/initproc.py"].replace("\r\n", "\n")
     for fragment, label in (

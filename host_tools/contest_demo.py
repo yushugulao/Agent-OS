@@ -6,18 +6,36 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import importlib.util
 import json
 import os
 import re
+import statistics
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from measured_experiments import MeasurementError, extract_file_query_measurements
+from evaluation_contract import (
+    FILE_QUERY_PATH_INDEX,
+    MARKER_PREFIX,
+    EvaluationError,
+    _parse_marker,
+    load_suite,
+    validate_guest_log,
+)
+from agenteval_measurement_source_receipt import build_measurement_source_receipt
+from agenteval_measurement_source_policy import _receipt_source_paths
+from evidence_delivery_contract import (
+    DeliveryContractError,
+    SAFE_GIT_CONFIG_ARGUMENTS,
+    controlled_git_environment,
+    tracked_worktree_identity,
+)
+from committed_source_identity import committed_source_path_sample
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 KIND = "agentos-contest-demo"
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[0-9a-f]{16}$")
@@ -29,37 +47,6 @@ TASK_LABELS = {
     "task5": "事件、心跳与调度",
     "task6": "多 Agent 恢复场景",
 }
-FAILURE_LINE = re.compile(
-    r"^(?:\[PANIC |\[ERROR |(?:agentfinal|agentbench|labdemo)_ucore: "
-    r"(?:check failed|failed|result status mismatch))",
-    re.IGNORECASE,
-)
-FUNCTIONAL_PATTERNS = {
-    "task1": (
-        re.compile(r"^agentfinal_ucore: context size=([1-9][0-9]*) capacity=([1-9][0-9]*)$"),
-        re.compile(r"^agentfinal_ucore: context_commit_lane=1 sequence=1\.\.3 hash=1$"),
-        re.compile(r"^agentfinal_ucore: batch first_seq=1 last_seq=64$"),
-    ),
-    "task2": (
-        re.compile(r"^agentfinal_ucore: generic_action_abi=1$"),
-        re.compile(r"^agentfinal_ucore: llm_template_relay=1$"),
-        re.compile(r"^agentfinal_ucore: legacy_name_protocol=1$"),
-    ),
-    "task3": (
-        re.compile(r"^agentfinal_ucore: context_rollback_branch=1 sequence_reuse=0 provenance_bound=1$"),
-        re.compile(r"^agentfinal_ucore: context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1$"),
-        re.compile(r"^agentfinal_ucore: context_rollback_negative nonexistent=1 evicted=1$"),
-    ),
-    "task4": (
-        re.compile(r"^agentfinal_ucore: file_query hits=([1-9][0-9]*) scanned=([1-9][0-9]*) used_index=1$"),
-        re.compile(r"^agentfinal_ucore: prefetch_hints=1 count=([1-9][0-9]*) first_stage=[A-Za-z0-9._-]+$"),
-    ),
-    "task5": (
-        re.compile(r"^agentfinal_ucore: event_wait=1 payload=self wake$"),
-        re.compile(r"^agentfinal_ucore: runtime_trace=1 records=([1-9][0-9]*) context=1 sched=1 wait=1$"),
-        re.compile(r"^agentfinal_ucore: timeline_wait=1 timeout=-7 source_gate=1 event_gate=1 wake=1 query=1 read=1 sleeps=([1-9][0-9]*) wakeups=([1-9][0-9]*)$"),
-    ),
-}
 LAB_PATTERNS = {
     "startup": re.compile(r"^labdemo_ucore: startup_barrier ready=3 event_queued=1 released=3$"),
     "audit": re.compile(r"^labdemo_ucore: global_audit=1 records=([1-9][0-9]*) agents=3 context=1 event=1 sched=1 prefetch=1$"),
@@ -70,13 +57,28 @@ LAB_PATTERNS = {
 }
 
 
+def _load_guest_failure_classifier() -> Any:
+    path = Path(__file__).resolve().parents[1] / "scripts" / "guest_failure_classifier.py"
+    spec = importlib.util.spec_from_file_location(
+        "_agentos_contest_demo_guest_failure_classifier", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Guest failure classifier is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_GUEST_FAILURE_CLASSIFIER = _load_guest_failure_classifier()
+
+
 class ContestDemoError(RuntimeError):
     """The live evidence cannot be proved from its source and Guest logs."""
 
 
 def _run_git(root: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", "-C", str(root), *args],
+        ["git", *SAFE_GIT_CONFIG_ARGUMENTS, "-C", str(root), *args],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -84,6 +86,7 @@ def _run_git(root: Path, *args: str) -> str:
         encoding="utf-8",
         errors="strict",
         check=False,
+        env=controlled_git_environment(),
     )
     if result.returncode != 0:
         raise ContestDemoError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
@@ -99,10 +102,45 @@ def clean_source_identity(root: Path) -> str:
     commit = _run_git(root, "rev-parse", "--verify", "HEAD")
     if not COMMIT.fullmatch(commit):
         raise ContestDemoError("HEAD is not a full commit identity")
+    try:
+        tracked_clean, _tracked_digest = tracked_worktree_identity("git", root)
+    except DeliveryContractError as error:
+        raise ContestDemoError(f"tracked source identity is unsafe: {error}") from error
+    if not tracked_clean:
+        raise ContestDemoError("tracked source bytes differ from HEAD; worktree is dirty")
     dirty = _run_git(root, "status", "--porcelain=v1", "--untracked-files=all")
     if dirty:
         raise ContestDemoError("source worktree is dirty; commit before running contest-demo")
+    if _run_git(root, "rev-parse", "--verify", "HEAD") != commit:
+        raise ContestDemoError("source commit changed during identity verification")
     return commit
+
+
+def _measurement_source_sample(
+    root: Path, commit: str, *, snapshot_root: Path | None = None
+) -> tuple[tuple[str, int, str, str], ...]:
+    try:
+        return committed_source_path_sample(
+            "git", root, commit, tuple(_receipt_source_paths()),
+            snapshot_root=snapshot_root,
+        )
+    except DeliveryContractError as error:
+        raise ContestDemoError(
+            f"measurement source is not bound to commit: {error}"
+        ) from error
+
+
+def _require_measurement_receipt_sample(
+    receipt: object, sample: tuple[tuple[str, int, str, str], ...]
+) -> None:
+    expected = [
+        {"path": path, "bytes": size, "sha256": sha256}
+        for path, size, sha256, _oid in sample
+    ]
+    if not isinstance(receipt, dict) or receipt.get("sources") != expected:
+        raise ContestDemoError(
+            "measurement source receipt differs from committed source sample"
+        )
 
 
 def _sha256(path: Path) -> str:
@@ -140,8 +178,12 @@ def _atomic_write(path: Path, payload: bytes) -> None:
 def _read_guest(path: Path, label: str) -> list[str]:
     path = _regular_file(path, label)
     lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
-    if any(FAILURE_LINE.match(line) for line in lines):
-        raise ContestDemoError(f"{label} contains a Guest failure line")
+    for line in lines:
+        failure = _GUEST_FAILURE_CLASSIFIER.classify_output_line(
+            line, phase=_GUEST_FAILURE_CLASSIFIER.PHASE_GUEST
+        )
+        if failure is not None:
+            raise ContestDemoError(f"{label} contains Guest failure: {failure}")
     return lines
 
 
@@ -152,22 +194,95 @@ def _unique_match(lines: list[str], pattern: re.Pattern[str], label: str) -> re.
     return found[0]
 
 
-def _verify_functional(path: Path) -> dict[str, Any]:
-    lines = _read_guest(path, "Task 1-5 Guest log")
-    _unique_match(
-        lines, re.compile(r"^agentfinal_ucore: parent passed$"), "functional parent pass"
+def _verify_evaluation(
+    path: Path, suite_path: Path, challenge: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Use the canonical evaluation parser for Task1-5 and Task4 timing."""
+    lines = _read_guest(path, "Task 1-5 evaluation Guest log")
+    try:
+        suite = load_suite(suite_path)
+        receipt = validate_guest_log(path, suite, challenge)
+    except EvaluationError as error:
+        raise ContestDemoError(f"Task 1-5 evaluation failed: {error}") from error
+
+    experiment = next(
+        item for item in suite["experiments"] if item["id"] == FILE_QUERY_PATH_INDEX
     )
-    receipts: dict[str, Any] = {}
-    for task, patterns in FUNCTIONAL_PATTERNS.items():
-        matches = [
-            _unique_match(lines, pattern, f"{task} mechanism marker {index}")
-            for index, pattern in enumerate(patterns, 1)
-        ]
-        receipts[task] = {
-            "mechanism_markers": len(matches),
-            "captured_values": [list(match.groups()) for match in matches if match.groups()],
+    samples: dict[int, dict[str, list[dict[str, Any]]]] = {}
+    for line_number, line in enumerate(lines, 1):
+        if not line.startswith(MARKER_PREFIX):
+            continue
+        try:
+            marker = _parse_marker(line, line_number)
+        except EvaluationError as error:
+            raise ContestDemoError(f"Task 4 sample parse failed: {error}") from error
+        if marker["experiment"] != FILE_QUERY_PATH_INDEX:
+            continue
+        role = next(
+            (
+                candidate
+                for candidate in ("baseline", "treatment")
+                if marker["variant"] == experiment[candidate]["id"]
+            ),
+            None,
+        )
+        if role is None:
+            raise ContestDemoError("Task 4 path-index sample has an unknown variant")
+        samples.setdefault(marker["load"], {"baseline": [], "treatment": []})[
+            role
+        ].append(marker)
+
+    expected_loads = experiment["loads"]
+    if sorted(samples) != sorted(expected_loads):
+        raise ContestDemoError("Task 4 path-index samples are incomplete")
+    loads: dict[str, Any] = {}
+    minimum_pairs = suite["pairing"]["minimum_inner_pairs"]
+    for load in expected_loads:
+        roles = samples[load]
+        if any(len(roles[role]) != minimum_pairs for role in roles):
+            raise ContestDemoError("Task 4 path-index inner pairs are incomplete")
+        baseline = statistics.median(
+            row["duration_us"] / row["operations"] for row in roles["baseline"]
+        )
+        treatment = statistics.median(
+            row["duration_us"] / row["operations"] for row in roles["treatment"]
+        )
+        loads[str(load)] = {
+            "baseline_us_per_query": round(baseline, 3),
+            "treatment_us_per_query": round(treatment, 3),
+            "baseline_records_per_query": round(
+                statistics.median(
+                    row["records_examined"] / row["operations"]
+                    for row in roles["baseline"]
+                ),
+                3,
+            ),
+            "treatment_records_per_query": round(
+                statistics.median(
+                    row["records_examined"] / row["operations"]
+                    for row in roles["treatment"]
+                ),
+                3,
+            ),
+            "speedup": round(baseline / treatment, 2) if treatment > 0 else None,
+            "inner_pairs": minimum_pairs,
         }
-    return receipts
+    headline_load = max(expected_loads)
+    headline = loads[str(headline_load)]
+    return receipt, {
+        "experiment": FILE_QUERY_PATH_INDEX,
+        "design": "single_boot_challenge_bound_ab_ba",
+        "loads": loads,
+        "comparison": {
+            "load": headline_load,
+            "baseline": experiment["baseline"]["id"],
+            "treatment": experiment["treatment"]["id"],
+            "baseline_us_per_query": headline["baseline_us_per_query"],
+            "treatment_us_per_query": headline["treatment_us_per_query"],
+            "speedup": headline["speedup"],
+            "scope": "single_boot_path_index_observation",
+        },
+    }
 
 
 def _verify_labdemo(path: Path) -> dict[str, int]:
@@ -193,58 +308,9 @@ def _verify_labdemo(path: Path) -> dict[str, int]:
     }
 
 
-def _verify_benchmark(path: Path, commit: str, run_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    _read_guest(path, "benchmark Guest log")
-    try:
-        receipt = extract_file_query_measurements(
-            path,
-            "benchmark-qemu.log",
-            ["make", "contest-demo"],
-            commit,
-            run_id,
-        )
-    except MeasurementError as error:
-        raise ContestDemoError(f"benchmark validation failed: {error}") from error
-    rows = receipt["rows"]
-    if len(rows) != 3 or {row["path"] for row in rows} != {
-        "traversal",
-        "cold_index",
-        "warm_index",
-    }:
-        raise ContestDemoError("benchmark must contain one complete three-path trial")
-    paths = {}
-    for row in rows:
-        operations = int(row["operations"])
-        paths[str(row["path"])] = {
-            "duration_us": int(row["duration_value"]),
-            "operations": operations,
-            "us_per_operation": round(int(row["duration_value"]) / operations, 3),
-            "records": int(row["primary_value"]),
-            # The Guest receipt stores one query's candidate count, not a
-            # total accumulated across the timed repetitions.
-            "records_per_query": int(row["primary_value"]),
-            "rebuild_records": int(row["rebuild_records"]),
-        }
-    baseline = paths["traversal"]["us_per_operation"]
-    optimized = paths["warm_index"]["us_per_operation"]
-    comparison = {
-        "baseline": "metadata_table_traversal",
-        "treatment": "warm_metadata_index",
-        "baseline_us_per_operation": baseline,
-        "treatment_us_per_operation": optimized,
-        "speedup": round(baseline / optimized, 2) if optimized > 0 else None,
-        "improvement_percent": (
-            round((baseline - optimized) * 100.0 / baseline, 1) if baseline > 0 else None
-        ),
-        "scope": "single_boot_internal_metadata_paths",
-    }
-    return receipt, {"paths": paths, "comparison": comparison}
-
-
 def build_report(
     source_root: Path,
-    functional_log: Path,
-    benchmark_log: Path,
+    evaluation_log: Path,
     lab_log: Path,
     run_id: str,
     commit: str,
@@ -259,13 +325,34 @@ def build_report(
         raise ContestDemoError("elapsed time must be positive")
     if clean_source_identity(source_root) != commit:
         raise ContestDemoError("source identity changed during the demo")
-    functional_log = _regular_file(functional_log, "Task 1-5 Guest log")
-    benchmark_log = _regular_file(benchmark_log, "benchmark Guest log")
+    with tempfile.TemporaryDirectory(prefix="agentos-committed-source-") as temporary:
+        snapshot_root = Path(temporary)
+        source_sample_before = _measurement_source_sample(
+            source_root, commit, snapshot_root=snapshot_root
+        )
+        try:
+            source_receipt = build_measurement_source_receipt(
+                snapshot_root, source_commit=commit
+            )
+        except ValueError as error:
+            raise ContestDemoError(
+                f"evaluation source contract failed: {error}"
+            ) from error
+    source_sample_after = _measurement_source_sample(source_root, commit)
+    if source_sample_after != source_sample_before:
+        raise ContestDemoError(
+            "measurement source changed between committed source samples"
+        )
+    _require_measurement_receipt_sample(source_receipt, source_sample_after)
+    if clean_source_identity(source_root) != commit:
+        raise ContestDemoError("source identity changed while validating source contracts")
+    evaluation_log = _regular_file(evaluation_log, "Task 1-5 evaluation Guest log")
     lab_log = _regular_file(lab_log, "Task 6 Guest log")
-    functional = _verify_functional(functional_log)
-    benchmark_receipt, performance = _verify_benchmark(benchmark_log, commit, run_id)
+    functional, performance = _verify_evaluation(
+        evaluation_log, source_root / "ci" / "evaluation-suite.json", run_id
+    )
     task6 = _verify_labdemo(lab_log)
-    artifact_paths = [functional_log, benchmark_log, lab_log]
+    artifact_paths = [evaluation_log, lab_log]
     artifact_paths.extend(_regular_file(path, "demo artifact") for path in artifacts)
     if len({path.resolve() for path in artifact_paths}) != len(artifact_paths):
         raise ContestDemoError("demo artifact list contains duplicates")
@@ -273,23 +360,31 @@ def build_report(
         task: {
             "label": TASK_LABELS[task],
             "status": "passed",
-            "source": "agentfinal_ucore" if task != "task6" else "labdemo_ucore",
+            "source": "agenteval_ucore",
+            "evidence_scope": "challenge_bound_functional_receipt",
         }
-        for task in TASK_LABELS
+        for task in tuple(TASK_LABELS)[:5]
+    }
+    tasks["task6"] = {
+        "label": TASK_LABELS["task6"],
+        "status": "partial",
+        "source": "labdemo_ucore",
+        "evidence_scope": "short_labdemo_scenario",
+        "formal_scenario_status": "unavailable",
     }
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
-        "status": "passed",
+        "status": "partial",
         "evidence_scope": "live_single_run_demo",
         "formal_claim": False,
         "run_id": run_id,
         "commit": commit,
         "elapsed_seconds": round(elapsed_seconds, 3),
-        "qemu_boots": 3,
+        "qemu_boots": 2,
         "tasks": tasks,
         "functional_receipt": functional,
-        "benchmark_receipt": benchmark_receipt,
+        "measurement_source_receipt": source_receipt,
         "task6_receipt": task6,
         "performance": performance,
         "artifacts": {
@@ -297,9 +392,10 @@ def build_report(
             for path in artifact_paths
         },
         "interpretation": (
-            "本页来自本次三次真实 RISC-V QEMU 启动。任务覆盖是本提交 Guest 的"
-            "自检回执；性能只比较同一 Guest 内的 metadata 全表遍历、冷索引和暖索引"
-            "路径，是现场单次观测，不构成源码语义证明，也不替代正式多启动统计。"
+            "本页来自本次两次真实 RISC-V QEMU 启动。任务一至五由现有挑战绑定"
+            "agenteval 合同复验；性能是题面 N 路径遍历与索引查询的单启动观测，"
+            "不替代正式多启动统计。任务六仅运行短版 labdemo，完整 rp_* 科研平台"
+            "场景未纳入本入口，明确记为 unavailable。"
         ),
     }
 
@@ -313,6 +409,7 @@ def _fmt(value: Any, digits: int = 2) -> str:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    status_labels = {"passed": "通过", "partial": "短场景通过；完整场景不可用"}
     lines = [
         "# AgentOS 竞赛现场演示",
         "",
@@ -328,28 +425,32 @@ def render_markdown(report: dict[str, Any]) -> str:
         "| --- | --- | --- |",
     ]
     for task, item in report["tasks"].items():
-        lines.append(f"| {task.upper()} {item['label']} | `{item['source']}` | 通过 |")
+        lines.append(
+            f"| {task.upper()} {item['label']} | `{item['source']}` | "
+            f"{status_labels.get(item['status'], '不可用')} |"
+        )
     lines.extend(
         [
             "",
-            "## 现场性能观测",
+            "## 现场性能观测 (`file_query_path_index`)",
             "",
-            "| 路径 | us/op | records/query | 重建记录 |",
-            "| --- | ---: | ---: | ---: |",
+            "| 文件数 | N 路径遍历 us/query | 索引 us/query | 速度比 | 遍历/索引 records/query |",
+            "| ---: | ---: | ---: | ---: | ---: |",
         ]
     )
-    labels = {"traversal": "全表遍历", "cold_index": "冷索引", "warm_index": "暖索引"}
-    for name in ("traversal", "cold_index", "warm_index"):
-        row = report["performance"]["paths"][name]
+    for load, row in report["performance"]["loads"].items():
         lines.append(
-            f"| {labels[name]} | {_fmt(row['us_per_operation'], 3)} | "
-            f"{row['records_per_query']} | {row['rebuild_records']} |"
+            f"| {load} | {_fmt(row['baseline_us_per_query'], 3)} | "
+            f"{_fmt(row['treatment_us_per_query'], 3)} | {_fmt(row['speedup'])}x | "
+            f"{_fmt(row['baseline_records_per_query'], 1)} / "
+            f"{_fmt(row['treatment_records_per_query'], 1)} |"
         )
     comparison = report["performance"]["comparison"]
     lines.extend(
         [
             "",
-            f"暖索引相对遍历的本轮速度比：`{_fmt(comparison['speedup'])}x`。",
+            f"在 N={comparison['load']} 时，索引相对 N 路径遍历的本轮速度比："
+            f"`{_fmt(comparison['speedup'])}x`。",
             "",
             f"> {report['interpretation']}",
             "",
@@ -359,26 +460,41 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def render_html(report: dict[str, Any]) -> str:
+    status_labels = {
+        "passed": "挑战绑定合同通过",
+        "partial": "短场景通过；完整 rp_* unavailable",
+    }
     task_cards = "".join(
-        '<article class="task"><span>{task}</span><h3>{label}</h3><p>Guest 自检回执</p></article>'.format(
-            task=html.escape(task.upper()), label=html.escape(item["label"])
+        '<article class="task {status}"><span>{task}</span><h3>{label}</h3><p>{detail}</p></article>'.format(
+            status=html.escape(item["status"]),
+            task=html.escape(task.upper()),
+            label=html.escape(item["label"]),
+            detail=html.escape(status_labels.get(item["status"], "unavailable")),
         )
         for task, item in report["tasks"].items()
     )
-    labels = {"traversal": "Metadata 全表遍历", "cold_index": "冷索引（含重建）", "warm_index": "暖索引"}
     metric_rows = "".join(
-        "<tr><td><strong>{label}</strong><small>{name}</small></td>"
-        "<td>{duration}</td><td>{records}</td><td>{rebuild}</td></tr>".format(
-            label=labels[name],
-            name=name,
-            duration=_fmt(report["performance"]["paths"][name]["us_per_operation"], 3),
-            records=report["performance"]["paths"][name]["records_per_query"],
-            rebuild=report["performance"]["paths"][name]["rebuild_records"],
+        "<tr><td><strong>{load}</strong></td><td>{baseline}</td><td>{treatment}</td>"
+        "<td>{speedup}x</td><td>{records}</td></tr>".format(
+            load=load,
+            baseline=_fmt(row["baseline_us_per_query"], 3),
+            treatment=_fmt(row["treatment_us_per_query"], 3),
+            speedup=_fmt(row["speedup"]),
+            records=(
+                f"{_fmt(row['baseline_records_per_query'], 1)} / "
+                f"{_fmt(row['treatment_records_per_query'], 1)}"
+            ),
         )
-        for name in ("traversal", "cold_index", "warm_index")
+        for load, row in report["performance"]["loads"].items()
     )
     comparison = report["performance"]["comparison"]
-    artifact_digest = report["artifacts"]["benchmark-qemu.log"]["sha256"]
+    artifact_digest = report["artifacts"]["evaluation-qemu.log"]["sha256"]
+    passed_count = sum(
+        item["status"] == "passed" for item in report["tasks"].values()
+    )
+    partial_count = sum(
+        item["status"] == "partial" for item in report["tasks"].values()
+    )
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AgentOS 竞赛现场演示</title>
@@ -388,17 +504,17 @@ def render_html(report: dict[str, Any]) -> str:
 header{{background:#153238;color:#fff;padding:28px max(24px,calc((100% - 1180px)/2)) 24px;border-bottom:5px solid #35aa70}}header p{{margin:6px 0 0;color:#d7e7e8}}h1{{margin:0;font-size:38px;line-height:1.15}}
 main{{max-width:1180px;margin:auto;padding:24px}}.status{{display:grid;grid-template-columns:1.4fr repeat(3,1fr);border:1px solid var(--line);background:var(--paper);border-radius:6px;overflow:hidden}}
 .status>div{{padding:18px;border-right:1px solid var(--line)}}.status>div:last-child{{border:0}}.status b{{display:block;font-size:24px;color:var(--green)}}.status span,small{{display:block;color:var(--muted);font-size:13px;margin-top:4px}}
-h2{{font-size:20px;margin:28px 0 12px}}.tasks{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}}.task{{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--green);border-radius:6px;padding:14px;min-height:104px}}
-.task span{{font:700 12px ui-monospace,monospace;color:var(--cyan)}}.task h3{{font-size:15px;margin:8px 0 0}}.task p{{font-size:13px;color:var(--green);margin:8px 0 0}}
+h2{{font-size:20px;margin:28px 0 12px}}.tasks{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}}.task{{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--green);border-radius:6px;padding:14px;min-height:104px}}.task.partial{{border-left-color:var(--gold)}}
+.task span{{font:700 12px ui-monospace,monospace;color:var(--cyan)}}.task h3{{font-size:15px;margin:8px 0 0}}.task p{{font-size:13px;color:var(--green);margin:8px 0 0}}.task.partial p{{color:var(--gold)}}
 .table-wrap{{overflow-x:auto;background:var(--paper);border:1px solid var(--line);border-radius:6px}}table{{width:100%;border-collapse:collapse;min-width:700px}}th,td{{padding:12px 14px;text-align:right;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}}th{{font-size:12px;color:var(--muted);background:#edf2f3}}th:first-child,td:first-child{{text-align:left}}tr:last-child td{{border:0}}
 .note{{margin-top:14px;padding:14px 16px;border-left:4px solid var(--gold);background:#fff8e8;color:#5f4a1f}}.proof code{{display:block;overflow-wrap:anywhere;background:#e9eff1;padding:12px;border-radius:4px;font-size:12px}}footer{{padding:20px 0 8px;color:var(--muted);font-size:12px}}
 @media(max-width:760px){{h1{{font-size:30px}}.status{{grid-template-columns:1fr 1fr}}.status>div{{border-bottom:1px solid var(--line)}}.tasks{{grid-template-columns:1fr}}main{{padding:16px}}}}
 </style></head><body>
-<header><h1>AgentOS 竞赛现场演示</h1><p>真实 RISC-V QEMU，离线验证任务一至六与关键优化路径</p></header><main>
-<section class="status"><div><span>现场状态</span><b>Guest 自检通过</b><small>本提交的机制回执</small></div><div><span>QEMU 启动</span><b>{report['qemu_boots']}</b><small>隔离 Guest 语料</small></div><div><span>覆盖任务</span><b>6 / 6</b><small>必做与选做模块</small></div><div><span>现场耗时</span><b>{report['elapsed_seconds']:.1f}s</b><small>构建、运行、核验</small></div></section>
+<header><h1>AgentOS 竞赛现场演示</h1><p>真实 RISC-V QEMU，挑战绑定复验任务一至五与任务六短场景</p></header><main>
+<section class="status"><div><span>现场状态</span><b>部分就绪</b><small>完整 rp_* 场景未纳入</small></div><div><span>QEMU 启动</span><b>{report['qemu_boots']}</b><small>隔离 Guest 语料</small></div><div><span>动态覆盖</span><b>{passed_count} 完整</b><small>{partial_count} 项短场景</small></div><div><span>现场耗时</span><b>{report['elapsed_seconds']:.1f}s</b><small>构建、运行、核验</small></div></section>
 <h2>赛题任务 Guest 自检覆盖</h2><section class="tasks">{task_cards}</section>
-<h2>真实计时对照</h2><div class="table-wrap"><table><thead><tr><th>路径</th><th>us/op</th><th>records/query</th><th>重建记录</th></tr></thead><tbody>{metric_rows}</tbody></table></div>
-<p class="note">暖索引相对全表遍历：<strong>{_fmt(comparison['speedup'])}x</strong>。{html.escape(report['interpretation'])}</p>
+<h2>题面路径查询现场对照</h2><small>file_query_path_index · challenge-bound AB/BA</small><div class="table-wrap"><table><thead><tr><th>文件数 N</th><th>N 路径遍历 us/query</th><th>索引 us/query</th><th>速度比</th><th>遍历/索引 records/query</th></tr></thead><tbody>{metric_rows}</tbody></table></div>
+<p class="note">N={comparison['load']} 时索引相对 N 路径遍历：<strong>{_fmt(comparison['speedup'])}x</strong>。{html.escape(report['interpretation'])}</p>
 <h2>可追溯身份</h2><section class="proof"><code>commit {html.escape(report['commit'])}<br>run {html.escape(report['run_id'])}<br>benchmark log sha256 {artifact_digest}</code></section>
 <footer>页面由本轮已核验的 Guest 原始日志生成，不读取历史 results，也不访问云 API。</footer>
 </main></body></html>"""
@@ -423,8 +539,7 @@ def _parser() -> argparse.ArgumentParser:
     identity.add_argument("--root", type=Path, required=True)
     render = commands.add_parser("render", help="verify Guest logs and render the report")
     render.add_argument("--source-root", type=Path, required=True)
-    render.add_argument("--functional-log", type=Path, required=True)
-    render.add_argument("--benchmark-log", type=Path, required=True)
+    render.add_argument("--evaluation-log", type=Path, required=True)
     render.add_argument("--lab-log", type=Path, required=True)
     render.add_argument("--run-id", required=True)
     render.add_argument("--commit", required=True)
@@ -442,8 +557,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         report = build_report(
             args.source_root,
-            args.functional_log,
-            args.benchmark_log,
+            args.evaluation_log,
             args.lab_log,
             args.run_id,
             args.commit,
@@ -453,13 +567,14 @@ def main(argv: list[str] | None = None) -> int:
         publish(report, args.output_dir)
     except (ContestDemoError, OSError, UnicodeError, ValueError) as error:
         raise SystemExit(f"contest demo failed: {error}") from error
-    print("[contest-demo] Task 1-6 Guest self-check receipts: passed")
-    print(f"[contest-demo] QEMU boots=3 elapsed={report['elapsed_seconds']:.1f}s")
+    print("[contest-demo] Task 1-5 canonical receipts: passed")
+    print("[contest-demo] Task 6 short scenario: passed; formal rp_*: unavailable")
+    print(f"[contest-demo] QEMU boots=2 elapsed={report['elapsed_seconds']:.1f}s")
     comparison = report["performance"]["comparison"]
     print(
-        "[contest-demo] metadata traversal={:.3f}us/op warm-index={:.3f}us/op speedup={}x".format(
-            comparison["baseline_us_per_operation"],
-            comparison["treatment_us_per_operation"],
+        "[contest-demo] path-walk={:.3f}us/query index={:.3f}us/query speedup={}x".format(
+            comparison["baseline_us_per_query"],
+            comparison["treatment_us_per_query"],
             _fmt(comparison["speedup"]),
         )
     )

@@ -454,7 +454,7 @@ require_text "scripts/run-full-verification.sh" "write-summary" \
 	"full verification does not atomically publish its public summary"
 require_text "scripts/evidence-wiring.sh" 'pipeline_status=.*PIPESTATUS' \
 	"evidence tee status is not captured fail-closed"
-require_text "scripts/capture-final-evidence.py" '^SCHEMA_VERSION = 7$' \
+require_text "scripts/capture-final-evidence.py" '^SCHEMA_VERSION = 8$' \
 	"evidence summary schema version is not stable"
 require_text "scripts/capture-final-evidence.py" '^FULL_VERIFY_PROFILE_VERSION = 5$' \
 	"evidence full-verify profile version is not stable"

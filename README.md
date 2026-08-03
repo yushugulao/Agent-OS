@@ -7,7 +7,9 @@
 首次审阅请从 [竞赛评审入口](docs/contest/README.md) 开始。该页把赛题任务映射、最短验证路径、
 提交材料、第三方来源和当前证据边界集中在一起；完整技术说明仍保留在本文后续章节。
 
-> 当前仓库已经包含任务实现、测试、评价工具和绑定受管源码指纹的三轮 18-case 本地时长校准，
+> 当前仓库已经包含任务实现、测试和评价工具。`04c1e6652324` 的三轮 18-case 本地时长校准
+> 仅证明该历史提交；当前候选在冻结并重新完成三轮校准前保持
+> `provisional_requires_full_suite`，
 > 但 `evidence/releases/INDEX.md` 尚未登记当前提交的正式证据包。因此校准材料、历史日志、
 > 预览页面和评价框架不能表述为当前提交已经通过最终验收。发布前剩余事项见
 > [提交清单](docs/contest/submission-checklist.md)。
@@ -68,7 +70,7 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 3. **工具调用从自然语言约定变成结构化系统接口**：工具名称、工具 id、参数键、参数类型、结果状态和错误码由 ABI 明确定义，便于 LLM Relay、多 Agent worker 和测试程序共同使用。
 4. **文件查询从路径扫描扩展到对象语义查询**：文件对象可以附加 namespace、object id、type、state、owner、tags、digest 和 summary，并返回候选数量、扫描数量和查询计划。
 5. **运行记录统一进入 timeline、audit 和 provenance**：Context、事件、调度、文件查询、权限拒绝、预取提示和 LLM 请求可以按同一套记录读取，减少用户态从日志中重新拼接运行事实的成本。
-6. **块 I/O 与缓存按持久主体隔离**：进程 syscall 在入口捕获 PUBLIC 或 workflow owner 和 I/O class，内核维护显式建立 SYSTEM 或触发 workflow 的 background job；实际完成的 1 KiB 传输同时计入分域 bucket 和设备根账本。普通流量受设备根速率限制，SYSTEM/CONTROL 在根信用耗尽时仍可带债前进；buffer cache 以同一稳定 owner 设置保留量和上限。
+6. **块 I/O 与缓存按持久主体隔离**：进程 syscall 在入口捕获 PUBLIC 或 workflow owner 和 I/O class，内核维护显式建立 SYSTEM 或触发 workflow 的 background job；每次真实 `disk_submit` 是唯一物理计费边界，shared 560/280 与设备根同时扣减而不形成额外容量。准入时 account endpoint 不带债；reserved lane 只有取得真实 account lease 后，设备端才可为保证份额形成 debt，shared 永不带债。已接纳的有界原子多传输若耗尽 reserved/shared，后续真实提交可形成受请求上界约束的 owner lane debt，由 checkpoint 或 teardown settlement 清偿。全局 device debt 不绑定 owner 生命周期：NORMAL/BACKGROUND 非保护 lane 在其存在时被 gate，SYSTEM/CONTROL 保护 lane可以跨越；设备根 tick refill 优先偿还它，有界 request 与 protected aggregate envelope 共同限制上界。buffer cache 以同一稳定 owner 设置保留量和上限。
 7. **高成本内核服务使用统一工作预算**：metadata action/依赖解析和 audit/span/timeline/provenance 查询都使用有界选集、单遍或有序归并，并按候选批次预付 kernel-work；计数查询和不复制结果的路径同样不能绕过公平边界。
 8. **跨主体 pipe 只允许显式单跳委派**：一次性票据绑定发起线程的下一次主体创建并固定精确 file 对象；子主体获得端点但不获得继续传播权，失败、exec 和未知继承类别默认撤销或拒绝。
 9. **Workflow 具有可信强制撤销生命周期**：内核把唯一根 controller 绑定到不复用的 control id；根退出或可信 factory 显式关闭时，scope 原子进入 CLOSING、立即撤销授权并协作终止全部成员，最后沿既有 RETIRING 回收路径释放资源。
@@ -100,7 +102,7 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 
 终审提出的 17 项问题按“机制、验收 oracle、当前证据等级、剩余限制”集中记录在
 [最终加固与证据状态矩阵](docs/agentos/final-hardening-matrix.md)。该矩阵是当前发布状态的
-约束：历史 QEMU 日志不能外推到最终 HEAD。schema v6 采集/语义 registry、严格 C→E 交付和
+约束：历史 QEMU 日志不能外推到最终 HEAD。schema v8 采集/语义 registry、严格 C→E 交付和
 远端 1 Host + 8 QEMU job attestation 的 Host/mutation 合同当前是 E1；尚无本轮 release
 bundle 或 E3，远端也没有可用 Runner，不能宣称远程 CI 通过或 E4。
 
@@ -250,7 +252,7 @@ AgentOS-uCore 将普通用户可触发的坏地址、同步取消、长 syscall 
 
 每线程仍保留 16 KiB 内核栈虚拟槽、4 KiB 未映射 guard 和 canary，但物理栈页改为线程 admission 时按需分配，并在 scheduler 已切回 idle stack 后释放。32 MiB 是全部 `NPROC * NTHREAD` 槽的虚拟容量，不是启动常驻物理占用；8 MiB 才是受信/保留线程的物理栈保留池，普通线程从通用页分配器取得 live stack。启动/调度使用的 `boot_stack` 是与线程栈分开的 64 KiB 物理栈；构建门同时核对其链接符号跨度和从 `main` 出发的调用图预算。
 
-块设备路径沿用持久主体身份，而不是 PID 或短命进程资源域。PUBLIC、每个 active workflow 和 SYSTEM 分别拥有速率 bucket；workflow 的普通、控制与后台工作使用不同 class。前台请求可借未使用的 shared slice；存在 admission 排队者时，shared grant 按 owner/class cursor 轮转，没有排队者的 fast path 可直接借用，后台工作不能借共享容量。一次 syscall 先取得 owner 或 shared lease，并尝试取得设备根 lease；真实 VirtIO 完成事件再消费两级信用，多块请求产生 owner/device debt。普通流量必须等待设备根信用和债务偿还；SYSTEM/CONTROL 即使设备根暂时无信用也保留前进机会，但每次完成仍增加 device debt，不把根 bucket 误当作保护流量的硬总上限。退出撤销会归还未消费 lease。scheduler 每轮先在 idle context 安装 kernel trap 向量并短暂打开中断，使唯一 runnable 线程即使反复在内核态 pipe 路径 `yield()`，timer/device 中断仍有固定交付窗口，I/O debt 与后台 token refill 不会因长期不返回用户态而停摆。
+块设备路径沿用持久主体身份，而不是 PID 或短命进程资源域。PUBLIC、每个 active workflow 和 SYSTEM 分别拥有速率 bucket；workflow 的普通、控制与后台工作使用不同 class。ABI v5 把 shared 改成与 560/280 设备根同尺寸的机会流量门，而不是额外保证：单一前台 owner 可借空闲设备容量；出现异域活动或排队后停止直接借用，排队 shared grant 按 owner/class cursor 轮转，后台工作不能借用。准入时 account endpoint 不带债；reserved lane 只有取得真实 account lease 后，设备端才可在根信用暂空时形成 debt，shared 永不带债。请求完成首笔 reservation 后，已接纳的有界原子多传输若耗尽 reserved/shared，后续真实提交可形成受请求上界约束的 owner lane debt；owner lease/debt 由 checkpoint 或 teardown settlement 清偿，未获准请求不得裸透支。全局 device debt 可以跨 request 和 owner lifecycle：NORMAL/BACKGROUND 非保护 lane 会等待其清零，SYSTEM/CONTROL 保护 lane仍可前进；设备根 tick refill 优先偿还它，有界 request 与 protected aggregate envelope 限制最坏上界。每次真实 `disk_submit` 是唯一物理计费边界；volatile 掉电测试 overlay 的内存命中不计物理 I/O，批量写回的每个块和最终 FLUSH 分别计费。退出撤销会归还未消费 lease。scheduler 每轮先在 idle context 安装 kernel trap 向量并短暂打开中断，使唯一 runnable 线程即使反复在内核态 pipe 路径 `yield()`，timer/device 中断仍有固定交付窗口，I/O debt 与后台 token refill 不会因长期不返回用户态而停摆。
 
 buffer cache 同样记录稳定 sponsor，为 SYSTEM、PUBLIC 和每个 active workflow 设置 floor/cap，跨域命中不会刷新原 sponsor 的 LRU，超上限的 transient buffer 在释放时失效。每个 buffer 另有 exclusive holder、递归深度和私有等待队列；进程在持有 buffer 或处于复合文件系统原子段时只会延后预算检查，只有释放全部 buffer 且对象状态已提交的 quiescent checkpoint 才能睡眠。不可回滚的 qmap claim、truncate 和清理路径使用 cleanup checkpoint 完成前向提交。
 
@@ -264,7 +266,7 @@ Agent 专属安全链由构建期可信映像清单、loader 映像绑定、boot
 
 为防止机制性修复再次把内核推向臃肿，`.gitlab-ci.yml` 和 `make ci-check` 使用 `ci/kernel-budgets.json` 作为可审查事实源，限制内核源码行数、ELF/raw 镜像、text/data/BSS/总运行体积、`struct proc`、Context sidecar 与完整 21 页 Agent 状态的单实例/全局/分类/账户上限、线程栈深度与虚拟/物理容量、64 KiB boot stack 的实际跨度和调用图。每个 owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合，不在文档复制容易漂移的固定数量。metadata 拆分单元及其 contract headers 还共同进入 `metadata_control_plane` 聚合预算：source 只保留固定接口开销，loaded text 与 BSS 不得增长，因而不能靠把状态或代码迁到另一个文件绕过 downward ratchet。预算 checker、通用 QEMU monitor 和生产 profile validator 的 fail-closed 自测集合也以源码和配置为准。
 
-通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在完成判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 profile 必须自然 `rc=0`；checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；powercut profile 则要求认证 supervisor 在完整 marker 后以 `SIGKILL` 直接终止稳定身份的 QEMU leader，隔离并回收跨 `setsid()` 的全部后代，再提交带随机 nonce、PID/starttime 和镜像退出码的完成证明。workload 自行杀死 leader 或 supervisor、控制通道 EOF、残留后代、超时、非零退出和 marker 后 panic 均失败。powercut 是“宿主强制中止 VM 后检查原始磁盘”的突然 VM 终止模型；它比 `SIGTERM` checkpoint 更接近掉电边界，但不会清空宿主页缓存，也不等同于整机物理断电。当前 Agent 套件为 18 case，checker 只接受完整有序的 18-case timing file。受管源码指纹 `2162696e...36e7` 已在冻结提交 `04c1e6652324` 的干净 detached worktree 上串行实测三轮：`287.9945528s`、`283.0201263s`、`280.9651484s`；中位基线为 `283.0201263s`，确定性上限为 `297.172s`。完整 71 文件包位于 `evidence/calibrations/04c1e6652324/`，逐执行 attestation、日志、环境和哈希均可离线复验。它严格限定为未签名本地 E3 校准证据，不是 release bundle、GitLab CI、远程 Runner 或 E4 证明；完整发布状态仍由最终 C→E bundle 决定。更早的 16-case、`31d4ddf53695` 和 `814021ab9dac` 校准只属于各自历史提交。
+通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在完成判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 profile 必须自然 `rc=0`；checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；powercut profile 则要求认证 supervisor 在完整 marker 后以 `SIGKILL` 直接终止稳定身份的 QEMU leader，隔离并回收跨 `setsid()` 的全部后代，再提交带随机 nonce、PID/starttime 和镜像退出码的完成证明。workload 自行杀死 leader 或 supervisor、控制通道 EOF、残留后代、超时、非零退出和 marker 后 panic 均失败。powercut 是“宿主强制中止 VM 后检查原始磁盘”的突然 VM 终止模型；它比 `SIGTERM` checkpoint 更接近掉电边界，但不会清空宿主页缓存，也不等同于整机物理断电。当前 Agent 套件为 18 case，checker 只接受完整有序的 18-case timing file。`04c1e6652324` 的三轮结果与 71 文件包只属于该历史提交；当前受管输入已变化，时长门为 `provisional_requires_full_suite`，冻结源码并重新取得三轮完整样本前不得复用旧 fingerprint、基线或上限。完整发布状态仍由最终 C→E bundle 决定。
 
 Reader seeded-action runner 另把 clean、build、guest 明确分阶段：clean/build 只按子进程退出码判定，只有 QEMU guest 启动后才逐条完整匹配 Guest panic/fault/check-failed 记录。构建输出中的 `build/riscv64/ch6b_panic` 因而不会再被字符串扫描误判；对应单测同时要求这种文件名通过、规范 Guest `[PANIC ...]` 行失败。
 
@@ -323,6 +325,7 @@ make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
 增强目标运行同一套科研 Agent 负载，但关键阶段会进入 AgentOS syscall。这一对照衡量完整系统路径的综合效果；由于两侧入口和内核机制并不完全相同，不能把场景差异单独归因给某一个 syscall。单机制因果结论由 5.4 节的同内核消融实验提供。
 
 ```bash
+export AGENT_TEST_DURATION_PROFILE=none
 make agentos-user TOOLPREFIX=riscv64-linux-gnu-
 make agentos-build TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
@@ -339,14 +342,14 @@ make contest-demo TOOLPREFIX=riscv64-linux-gnu-
 make contest-demo-check
 ```
 
-`contest-demo` 只接受干净提交，不读取历史 `results/`，也不连接云 API。它分别为
-`agentfinal_ucore`、`agentbench_ucore` 和 `labdemo_ucore` 构建隔离镜像并启动三次真实
-RISC-V QEMU：第一条路径动态验证任务一至五的机制语义，第二条路径采集 metadata
-全表遍历、冷索引和暖索引的真实 Guest 计时，第三条路径运行多 Agent 恢复、审计、
-时间线和 provenance 综合场景。Host 通过既有 measurement parser 和逐项机制回执核验
-原始日志，才会在 `results/contest-demo/` 生成终端摘要和离线 `index.html`。该入口用于
-短时现场展示；性能数字明确是单次启动、同内核路径观测，不替代正式多启动统计或
-`evidence/releases/` 发布证据。
+`contest-demo` 只接受干净提交，不读取历史 `results/`，也不连接云 API。它为
+`agenteval_ucore` 和 `labdemo_ucore` 构建隔离镜像并启动两次真实 RISC-V QEMU。第一条
+路径用本轮非零 challenge 复用正式评价合同，动态核验任务一至五 receipt、工具目录与
+typed KV 错误矩阵、六轮 Context/rollback，以及题面要求的 N 路径遍历与 metadata 索引
+对照；Host 同时复验受管测量源码和编译闭包，不能用硬编码 marker 代替执行。第二条路径
+只运行短版多 Agent 恢复、审计、时间线和 provenance 场景。报告将任务六的完整 `rp_*`
+科研平台验收明确标为 `unavailable`，不会显示虚构的“6/6 通过”。性能数字是单次启动的
+现场观测，不替代正式多启动统计或 `evidence/releases/` 发布证据。
 
 直接调试内核时，`make run` 会原子安装当前源码生成的全新可写镜像，确保用户程序、可信清单和 `INIT_PROC` 不会沿用旧版本。需要验证同一磁盘的持久状态时使用 `make run-persist`；该目标只在可写镜像不存在时初始化一次，之后原样重启 `nfs/fs-copy.img`，不自动迁移或覆盖不兼容格式。`baseline_ucore/` 下提供同名的两种入口。
 
@@ -357,6 +360,7 @@ RISC-V QEMU：第一条路径动态验证任务一至五的机制语义，第二
 实验分支把“采集、验证、展示”拆成独立入口，避免页面或旧结果反向成为性能证据：
 
 ```bash
+export AGENT_TEST_DURATION_PROFILE=none
 make evaluation-doctor
 make evaluation-smoke
 make evaluation-run EVALUATION_BOOTS=7 TOOLPREFIX=riscv64-linux-gnu-
@@ -368,6 +372,19 @@ make evaluation-package
 make evaluation-package-development EVALUATION_RUN_DIR=<run-dir> EVALUATION_BUNDLE_DIR=<output-dir>
 make evaluation-package-verify EVALUATION_BUNDLE_DIR=evidence/releases/evaluation-<run-id>
 ```
+
+普通 Linux、WSL 和普通 Runner 必须显式使用 `none`：18 个 case、语义检查、Guest 日志和
+完整 timing 行清单仍是必需项，但本地 E3 wall-time 基线、上限和比例记为不适用。只有与
+校准记录逐项一致的受信原生 MSYS2 E3 才能改用：
+
+```bash
+export AGENT_TEST_DURATION_PROFILE=local-e3
+make evaluation-doctor
+make evaluation-full-verify TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf-
+```
+
+`local-e3` 会校验精确的硬件、MSYS2 runtime、工具文件和配置身份；当前配置若仍为
+`provisional_requires_full_suite`，会在进入 QEMU 前 fail closed，不能借用历史阈值继续运行。
 
 正式采集只接受一个完整 POSIX 执行域：原生 Linux、由 Windows Host 指定并验证的
 `EVALUATION_WSL_DISTRO`，或通过严格运行时证明的原生 MSYS2。Windows/WSL 入口会先在
@@ -395,12 +412,12 @@ runtime 与工具文件。中文仓库路径使用固定 `C.UTF-8` locale；原�
 platform proof v2 在 Linux、WSL 和 MSYS2 中统一从 `/proc/cpuinfo`、`/proc/meminfo`
 记录 CPU model、logical CPU count 和总内存，明确忽略会随负载变化的 `cpu MHz`。这些
 字段由 `campaign_sha256` 覆盖并在每个 QEMU boot 前重验；缺项或畸形输入直接失败。
-科研场景 plan schema v3 也绑定同一 platform proof 及其 canonical SHA256，并在每轮 pair 前后
+科研场景 plan schema v5 也绑定同一 platform proof 及其 canonical SHA256，并在每轮 pair 前后
 重验，不能把 micro 结果带到另一台机器继续采集场景。
 公开 proof 不保存 hostname，MSYS 只保留复现实验所需的 Windows build、kernel 和
 machine 信息。
 
-`evaluation-run` 只允许在 clean commit 上运行，并分别预检微基准与科研场景实际执行域中的 QEMU、交叉工具链和 shell。formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`；各组 challenge、AB/BA 顺序和规范命令由源码提交 C 确定性派生，因此不同 clone 对同一 C 得到同一计划。失败目录保留且同一输出根不会覆盖，但在没有受保护远端 Runner 时，本地机制不能证明其他 clone 从未执行或丢弃过一次尝试。关键工具以绝对路径、版本和 SHA256 写入清单，每个 boot 前后重新核验；campaign 还绑定创建时的仓库相对 artifact root，拒绝仅后缀相同的外部日志或镜像。首个 QEMU 前生成 run plan schema v2、scenario plan schema v3 和版本化 `measurement-source-receipt.json`，绑定停止规则、顺序、完整 Guest 测量源码清单及评价控制面策略清单；每个 boot 前后重验源码，package 快照还必须与 C 中相应 Git blob 一致。
+`evaluation-run` 只允许在 clean commit 上运行，并分别预检微基准与科研场景实际执行域中的 QEMU、交叉工具链和 shell。formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`；各组 challenge、AB/BA 顺序和规范命令由源码提交 C 确定性派生，因此不同 clone 对同一 C 得到同一计划。失败目录保留且同一输出根不会覆盖，但在没有受保护远端 Runner 时，本地机制不能证明其他 clone 从未执行或丢弃过一次尝试。关键工具以绝对路径、版本和 SHA256 写入清单，每个 boot 前后重新核验；campaign 还绑定创建时的仓库相对 artifact root，拒绝仅后缀相同的外部日志或镜像。首个 QEMU 前生成 run plan schema v2、scenario plan schema v5 和版本化 `measurement-source-receipt.json`，绑定停止规则、顺序、完整 Guest 测量源码清单及评价控制面策略清单；每个 boot 前后重验源码，package 快照还必须与 C 中相应 Git blob 一致。
 
 默认正式评价恰好包含 7 次同内核机制微基准 boot、7 轮 Plain/AgentOS 传统兼容路径配对和 7 轮 Plain/AgentOS 科研场景配对，总计 35 次 QEMU 启动，因此耗时明显长于普通回归。微基准使用唯一非零 64-bit challenge；兼容路径与场景使用由提交派生的独立 challenge，并跨 boot 交替 Plain→AgentOS 与 AgentOS→Plain。整轮采集先取得 `git-common-dir` 下独立的 campaign 锁，不同 worktree 的正式评价因此串行；每个 build/QEMU/archive 阶段再取得现有 repo 锁，并在锁内复检计划状态、clean HEAD、工具身份，清空本轮日志以及归档 Guest/runner 日志、内核和运行前后文件系统镜像。这些 Host 复核位于 Guest 计时窗口之外。微基准单 boot 的 900 秒看门狗由 campaign schema 固定，并同时绑定外层进程监督和 Guest runner，调用方不能再通过未记录的环境变量制造更早截止。科研场景的 `EVALUATION_SCENARIO_TIMEOUT` 是每个目标的 runner 基础预算：clean、build、guest 三阶段各使用 `T+30` 秒，目标清理另留 10 秒；一轮 Plain/AgentOS 配对的 Host 硬期限严格派生为 `2 * (3 * (T + 30) + 10) + 60` 秒，默认 `T=600` 时为 3860 秒。任一外层期限到达都会终止进程组、保留部分日志并把 manifest 标为失败。正式采集期间仍不得从不遵守这些锁的外部终端并发构建同一 worktree。任何 boot 失败都会保留当次材料并使采集失败，不会删除失败样本或补零。仅开发接线时可显式设置 `EVALUATION_INCLUDE_SCENARIO=0`；这种运行的任务六和兼容成本状态必须是未测量，不能用于正式结论。
 
@@ -465,10 +482,16 @@ http://127.0.0.1:8767/
 完整验证入口：
 
 ```bash
-make full-verify TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_DURATION_PROFILE=none make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-该命令先要求当前 18-case 时长预算已经 calibrated；provisional 会在 profile/QEMU 前 fail closed。校准有效后，profile v5 串起结构检查、Host/Reader、18-case AgentOS 专项、双目标 QEMU、proc/syscall/file/thread/physical 资源、metadata/观测重启恢复、VirtIO 故障矩阵、workflow teardown race、ENOSPC 和文件系统分配器故障一致性测试，并强制保存和复验分配器 raw-image/flush 证据归档。需要快速检查目录职责和 Host 工具时，可以运行：
+上述普通 Linux/WSL 命令仍执行完整 18-case 和全部语义验收，只把本地 E3 时长比较记为
+不适用。在绑定且已经完成当前源码三轮校准的原生 MSYS2 E3 上，改用
+`AGENT_TEST_DURATION_PROFILE=local-e3 make full-verify ...`；provisional 会在 profile/QEMU
+前 fail closed。校准有效后，profile v5 串起结构检查、Host/Reader、18-case AgentOS 专项、
+双目标 QEMU、proc/syscall/file/thread/physical 资源、metadata/观测重启恢复、VirtIO 故障
+矩阵、workflow teardown race、ENOSPC 和文件系统分配器故障一致性测试，并强制保存和
+复验分配器 raw-image/flush 证据归档。需要快速检查目录职责和 Host 工具时，可以运行：
 
 ```bash
 make target-readiness
@@ -496,7 +519,7 @@ make target-readiness
 | 宿主机工具测试 | `host_tools/test_*.py` | 检查镜像提取、状态对照、页面渲染、图表契约和 LLM Relay 模式。 |
 | 完整验证 | `make full-verify` | 按 profile v5 串联 Host/Reader、18-case Agent、双目标和十一类机制 runner；证据模式保留 runner stdout、Guest 合并日志及 allocator canonical archive。 |
 
-AgentOS 专项测试程序如下：
+AgentOS 专项测试程序如下。表内 marker 是验收合同或历史输出，不是当前候选已经通过的声明；在同一冻结提交 C 的动态日志、三轮校准和 release bundle 生成前，当前状态统一为“机制/静态验收完成，候选动态复验待生成”。
 
 | 测试程序 | 主要内容 | 关键输出 |
 | --- | --- | --- |
@@ -515,10 +538,10 @@ AgentOS 专项测试程序如下：
 | `agenttrust_ucore` | 可信映像、不可变代码、bootstrap 授权范围和 role-image 绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | public/workflow 文件安全域、能力读写、继承 fd 重新校验和普通命名空间兼容。 | `agentvfs_ucore: parent passed` |
 | `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、持久微写合并、volatile 分流、观测双索引与预算化查询、配额、线程私有一次性 fd 委派，以及根退出/factory 关闭触发的强制撤销和 lifecycle generation 回收。 | 历史专项约 `93.7s`，曾输出 `scope_controller_exit_revoke=1 public_lineage=1` 和 `agentscope_ucore: parent passed`；最终 HEAD 待复跑 |
-| `iobudget_ucore` | PUBLIC 速率/缓存压力、稳定 owner 归因、两级 lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault/异常退出清理归因与 debt 结算、workflow cache floor、CONTROL 保留预算和跨域有界进展。 | 最终 teardown 修复后的独立轮输出八项机制标记与 `parent passed`，`elapsed=2.4s`；完整轮本项 `2.1s` |
+| `iobudget_ucore` | PUBLIC 速率/缓存压力、稳定 owner 归因、两级 lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault/异常退出清理归因与 debt 结算、workflow cache floor、CONTROL 保留预算和跨域有界进展。 | ABI v5 定向结果仅作阶段性回归；当前候选的动态状态只由冻结提交的原始日志和对应 release bundle 判定 |
 | `usersafety_ucore` | syscall 坏地址、超长参数和对象私有等待队列。 | `usersafety_ucore: parent passed` |
 | `blocking_semantics_ucore` | mutex owner、递归/非 owner 拒绝、owner 退出交接、FIFO waiter，以及 waittid/pipe/close 唤醒语义。 | `mutex_owner=1 ... owner_exit_handoff=1`、`waittid_sleep=1 pipe_wait_queue=1 close_wake_all=1`、`parent passed` |
-| `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 当前重构后的双目标 `make syscall-fairness-test` 已通过 |
+| `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 历史双目标运行曾通过；当前候选只由冻结提交的原始日志和对应 release bundle 授予动态通过状态 |
 | `threadresource_ucore` | 普通/保留域上限与复用、容量拒绝计数稳定、普通/保留全局水位与复用、系统保留进展和跨域调度公平。 | `make thread-resource-test` 输出 12 项机制标记、`parent passed` 和 `[thread-resource] all checks passed` |
 
 `workflow_teardown_race_ucore` 是独立机制专项，不计入上表 18-case Agent 套件。它通过 syscall 546 的 self-only lifecycle 快照确定竞态窗口，并连续三轮组合覆盖 factory 撤销、根自然退出、PUBLIC 后代、Context lane、metadata transaction gate、阻塞 `fdget` 临时引用、I/O debt/cache、inode/file object 回收和 lifecycle generation 重用。
@@ -555,7 +578,7 @@ flowchart LR
 | 双目标完整状态 | `evidence/releases/<bundle>/logs/raw/dual-{plain,agentos}-complete-state.zip` | 确定性保存每侧完整 Guest 状态；Host run receipt 作为同目录独立 raw artifact，不混入 ZIP。 |
 | 最终证据包 | `evidence/releases/<bundle>/metrics/file-query-benchmark.{csv,json}` | 在 clean、已提交 HEAD 上由 `make full-verify` 采集并纳入逐文件校验和。 |
 
-`results/latest/` 是可覆盖的本地预览，不是最终发布证据。正式结论应引用已提交的 `evidence/releases/<bundle>/`，并通过 `python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py verify` 核验；裸 Python 入口不属于正式验收路径。
+`results/latest/` 是可覆盖的本地预览，不是最终发布证据。正式结论应引用已提交的 `evidence/releases/<bundle>/`，并通过 `python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py verify evidence/releases/<bundle> --contract-root <clean-checkout-of-C>` 核验；显式可信源码根必须是该证据 commit C 的干净 checkout，不能用证据提交 E 冒充，裸 Python 入口不属于正式验收路径。
 
 ### 6.4 推荐运行命令
 
@@ -568,7 +591,7 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 运行完整验证：
 
 ```bash
-make full-verify TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_DURATION_PROFILE=none make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 只运行 AgentOS 专项测试：

@@ -3,11 +3,17 @@
 
 host_probe_setup() {
 	local directory="$1"
+	local compiler="${2:-}"
 	local script_dir python record kind value assignment name
 
 	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	python="${PYTHON_BIN:-python3}"
-	if ! record="$("${python}" "${script_dir}/host_probe_toolchain.py" \
+	if declare -F fsalloc_trusted_python >/dev/null 2>&1; then
+		if ! record="$(fsalloc_trusted_python scripts/host_probe_toolchain.py \
+			--directory "${directory}" --compiler "${compiler}")"; then
+			return 2
+		fi
+	elif ! record="$("${python}" "${script_dir}/host_probe_toolchain.py" \
 		--directory "${directory}")"; then
 		return 2
 	fi
@@ -62,12 +68,21 @@ host_probe_setup() {
 host_probe_compile() {
 	local output="$1"
 	shift
-	"${HOST_PROBE_CC[@]}" "${HOST_PROBE_SANITIZER_FLAGS[@]}" \
-		"$@" -o "${output}"
+	if declare -F fsalloc_clean_exec >/dev/null 2>&1; then
+		fsalloc_clean_exec "${HOST_PROBE_CC[@]}" \
+			"${HOST_PROBE_SANITIZER_FLAGS[@]}" "$@" -o "${output}"
+	else
+		"${HOST_PROBE_CC[@]}" "${HOST_PROBE_SANITIZER_FLAGS[@]}" \
+			"$@" -o "${output}"
+	fi
 }
 
 host_probe_run() {
-	"$@"
+	if declare -F fsalloc_clean_exec >/dev/null 2>&1; then
+		fsalloc_clean_exec "$@"
+	else
+		"$@"
+	fi
 }
 
 host_probe_report() {

@@ -686,7 +686,7 @@ static int disk_durability_overlay_store(const struct buf *b)
 #endif
 
 static int disk_submit(struct buf *b, uint type, int test_direct,
-		       uint64 sector, int account_transfer)
+		       uint64 sector)
 {
 	int count = type == VIRTIO_BLK_T_FLUSH ? 2 : 3;
 	int idx[3], head = -1, submitted = 0;
@@ -868,7 +868,7 @@ out:
 	}
 #endif
 	intr_restore(enabled);
-	if (submitted && account_transfer)
+	if (submitted)
 		bio_account_transfer(owner, io_class,
 				     type == VIRTIO_BLK_T_IN ? BIO_TRANSFER_READ :
 				     type == VIRTIO_BLK_T_OUT ? BIO_TRANSFER_WRITE :
@@ -881,13 +881,10 @@ int virtio_disk_rw(struct buf *b, int write)
 {
 	int result;
 	int overlay_acquired = 0;
-	uint owner;
-	uint io_class;
 
 	if (b == 0)
 		return VIRTIO_DISK_ERR_IO;
 #ifdef DURABILITY_POWERCUT_TEST_PROFILE
-	bio_current_sponsor(&owner, &io_class);
 	result = disk_durability_overlay_enter();
 	if (result == VIRTIO_DISK_OK)
 		overlay_acquired = 1;
@@ -908,21 +905,17 @@ int virtio_disk_rw(struct buf *b, int write)
 		} else {
 			result = disk_submit(
 				b, VIRTIO_BLK_T_IN, 0,
-				(uint64)b->blockno * (BSIZE / 512), 0);
+				(uint64)b->blockno * (BSIZE / 512));
 		}
 	}
 	if (overlay_acquired)
 		disk_durability_overlay_leave();
-	bio_account_transfer(owner, io_class,
-		write ? BIO_TRANSFER_WRITE : BIO_TRANSFER_READ, result);
 	return result;
 #else
 	(void)result;
 	(void)overlay_acquired;
-	(void)owner;
-	(void)io_class;
 	return disk_submit(b, write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN, 0,
-			   (uint64)b->blockno * (BSIZE / 512), 1);
+			   (uint64)b->blockno * (BSIZE / 512));
 #endif
 }
 
@@ -974,17 +967,12 @@ static int disk_durability_barrier(int test_direct)
 	}
 #ifdef DURABILITY_POWERCUT_TEST_PROFILE
 	int result;
-	uint owner;
-	uint io_class;
 	uint remaining;
 	uint64 after_sequence = 0;
 
-	bio_current_sponsor(&owner, &io_class);
 	result = disk_durability_overlay_enter();
-	if (result != VIRTIO_DISK_OK) {
-		bio_account_transfer(owner, io_class, BIO_TRANSFER_FLUSH, result);
+	if (result != VIRTIO_DISK_OK)
 		return result;
-	}
 	disk.durability_stats.flush_attempts++;
 	remaining = disk.durability_count;
 	disk.durability_stats.last_flush_pending_before = remaining;
@@ -1015,7 +1003,7 @@ static int disk_durability_barrier(int test_direct)
 		result = disk_submit(
 			&disk.durability_commit_buf, VIRTIO_BLK_T_OUT, 0,
 			(uint64)disk.durability_commit_buf.blockno *
-				(BSIZE / 512), 0);
+				(BSIZE / 512));
 		if (result != VIRTIO_DISK_OK)
 			break;
 		disk.durability_stats.raw_writes++;
@@ -1024,7 +1012,7 @@ static int disk_durability_barrier(int test_direct)
 	}
 	if (result == VIRTIO_DISK_OK)
 		result = disk_submit(0, VIRTIO_BLK_T_FLUSH,
-				     test_direct, 0, 0);
+				     test_direct, 0);
 	if (result == VIRTIO_DISK_OK) {
 		for (uint slot = 0;
 		     slot < VIRTIO_DURABILITY_OVERLAY_CAPACITY; slot++)
@@ -1044,10 +1032,9 @@ static int disk_durability_barrier(int test_direct)
 		disk.durability_stats.failed_flushes++;
 	}
 	disk_durability_overlay_leave();
-	bio_account_transfer(owner, io_class, BIO_TRANSFER_FLUSH, result);
 	return result;
 #else
-	return disk_submit(0, VIRTIO_BLK_T_FLUSH, test_direct, 0, 1);
+	return disk_submit(0, VIRTIO_BLK_T_FLUSH, test_direct, 0);
 #endif
 }
 
@@ -1133,7 +1120,7 @@ int virtio_disk_test_read(uint blockno)
 	memset(&probe, 0, sizeof(probe));
 	probe.blockno = blockno;
 	return disk_submit(&probe, VIRTIO_BLK_T_IN, 1,
-			   (uint64)blockno * (BSIZE / 512), 1);
+			   (uint64)blockno * (BSIZE / 512));
 }
 
 int virtio_disk_test_read_range(void)
@@ -1141,7 +1128,7 @@ int virtio_disk_test_read_range(void)
 	struct buf probe;
 
 	memset(&probe, 0, sizeof(probe));
-	return disk_submit(&probe, VIRTIO_BLK_T_IN, 1, ~(uint64)0, 1);
+	return disk_submit(&probe, VIRTIO_BLK_T_IN, 1, ~(uint64)0);
 }
 
 int virtio_disk_test_flush(void)

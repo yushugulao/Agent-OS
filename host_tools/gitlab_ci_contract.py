@@ -534,7 +534,8 @@ EXPECTED_SCRIPT_CALLS: dict[str, tuple[ShellCall, ...]] = {
     ),
     "fs-allocator-fault-regression": (
         _call(
-            "bash", "scripts/run-ci-mechanism.sh", "fs-allocator-fault",
+            "/bin/bash", "--noprofile", "--norc", "-p",
+            "scripts/run-ci-mechanism.sh", "fs-allocator-fault",
             "scripts/run-fs-allocator-fault-tests.sh",
             env={
                 "FS_ALLOCATOR_ARTIFACT_DIR": "${CI_PROJECT_DIR}/.fs-allocator-evidence",

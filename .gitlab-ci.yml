@@ -183,7 +183,7 @@ fs-allocator-fault-regression:
     - >-
       FS_ALLOCATOR_ARTIFACT_DIR=${CI_PROJECT_DIR}/.fs-allocator-evidence
       FS_ALLOCATOR_EVIDENCE_ARCHIVE=${CI_PROJECT_DIR}/ci-artifacts/fs-allocator-evidence.tar
-      bash scripts/run-ci-mechanism.sh fs-allocator-fault
+      /bin/bash --noprofile --norc -p scripts/run-ci-mechanism.sh fs-allocator-fault
       scripts/run-fs-allocator-fault-tests.sh
     - python3 scripts/fs-allocator-evidence.py verify-archive --archive "${CI_PROJECT_DIR}/ci-artifacts/fs-allocator-evidence.tar"
     - python3 host_tools/remote_ci_evidence.py attest --job fs-allocator-fault-regression --artifact-root ci-artifacts

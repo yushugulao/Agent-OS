@@ -95,12 +95,18 @@ from formal_python_runtime import (
     FormalPythonRuntimeError,
     create_formal_python_runtime,
     formal_execution_overrides,
+    validate_duration_profile_policy_marker,
     validate_formal_evidence_binding,
+)
+from duration_profile_attestation import (
+    DurationAttestationError, build_duration_attestation,
+    duration_attestation_sha256, validate_duration_attestation,
+    validate_duration_execution_binding,
 )
 
 
 KIND = "agentos-full-verification-stage"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 RECEIPT_NAME = "receipt.json"
 SUMMARY_NAME = "verification-summary.json"
 CHECKSUM_NAME = "checksums.sha256"
@@ -125,6 +131,7 @@ RECEIPT_FIELDS = {
     "verification_summary",
     "raw_artifacts",
     "environment",
+    "duration_attestation",
 }
 
 
@@ -564,7 +571,7 @@ def _validate_tools(
     environment_path: Path,
     execution: dict[str, Any],
     contract_root: Path,
-) -> None:
+) -> tuple[str, dict[str, dict[str, object]]]:
     try:
         environment = read_strict_json(environment_path)
     except (OSError, UnicodeDecodeError, ValueError) as error:
@@ -630,6 +637,10 @@ def _validate_tools(
         or argv[2] != f"TOOLPREFIX={compiler[:-3]}"
     ):
         raise FullVerificationError("full-verification command argv is not canonical")
+    return (
+        str(environment["execution_environment"]["AGENT_TEST_DURATION_PROFILE"]),
+        tool_by_label,
+    )
 
 
 def verify_payload(
@@ -714,9 +725,8 @@ def verify_payload(
     ):
         raise FullVerificationError("full-verification Python execution binding differs")
     log_path = _validate_file_record(root, execution.get("log"), LOG_NAME, "full-verify log")
-    if log_path.read_text(encoding="utf-8", errors="replace").splitlines().count(
-        SUCCESS_MARKER
-    ) != 1:
+    log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if log_lines.count(SUCCESS_MARKER) != 1:
         raise FullVerificationError(
             "full-verification completion marker is missing or duplicated"
         )
@@ -758,7 +768,35 @@ def verify_payload(
     environment_path = _validate_file_record(
         root, receipt.get("environment"), ENVIRONMENT_NAME, "environment"
     )
-    _validate_tools(root, environment_path, execution, contract_root)
+    duration_profile, execution_tools = _validate_tools(
+        root, environment_path, execution, contract_root
+    )
+    try:
+        attested_profile = validate_duration_attestation(
+            receipt["duration_attestation"], contract_root=contract_root
+        )
+    except (DurationAttestationError, OSError, ValueError) as error:
+        raise FullVerificationError(
+            f"full-verification duration attestation is invalid: {error}"
+        ) from error
+    if attested_profile != duration_profile:
+        raise FullVerificationError(
+            "full-verification duration attestation differs from execution"
+        )
+    try:
+        validate_duration_execution_binding(
+            receipt["duration_attestation"], execution_tools
+        )
+    except DurationAttestationError as error:
+        raise FullVerificationError(
+            f"full-verification duration execution binding is invalid: {error}"
+        ) from error
+    try:
+        validate_duration_profile_policy_marker(
+            {"AGENT_TEST_DURATION_PROFILE": duration_profile}, log_lines
+        )
+    except FormalPythonRuntimeError as error:
+        raise FullVerificationError(str(error)) from error
     required = {
         RECEIPT_NAME,
         SUMMARY_NAME,
@@ -780,6 +818,13 @@ def verify_payload(
     binding = {
         "status": "verified",
         "source_commit": commit,
+        "agent_test_duration_profile": duration_profile,
+        "duration_attestation_sha256": duration_attestation_sha256(
+            receipt["duration_attestation"]
+        ),
+        "duration_platform_identity_sha256": receipt["duration_attestation"].get(
+            "platform_identity_sha256"
+        ),
         "payload_root": "full-verification",
         "receipt_sha256": _sha256(root / RECEIPT_NAME),
         "summary_sha256": _sha256(root / SUMMARY_NAME),
@@ -818,6 +863,7 @@ def _seal_payload(
     python_path_resolution: dict[str, str],
     execution_environment: dict[str, str],
     temporary_directory_binding: dict[str, object],
+    duration_attestation: dict[str, object],
     source_tree: Path,
     collector: ModuleType,
 ) -> None:
@@ -895,6 +941,7 @@ def _seal_payload(
         "verification_summary": _file_record(stage, stage / SUMMARY_NAME),
         "raw_artifacts": raw_records,
         "environment": _file_record(stage, environment_path),
+        "duration_attestation": duration_attestation,
     }
     _write_json(stage / RECEIPT_NAME, receipt)
 
@@ -1005,6 +1052,19 @@ def collect(args: argparse.Namespace) -> int:
             base_env,
             "after trusted purge",
         )
+        duration_attestation = build_duration_attestation(
+            contract_root=worktree,
+            profile=args.agent_test_duration_profile,
+            toolprefix=args.toolprefix,
+            qemu=args.qemu,
+            python_bin=args.python,
+            host_cc=args.host_cc,
+            shell_bin=args.bash,
+        )
+        validate_duration_execution_binding(
+            duration_attestation,
+            {record["label"]: record for record in versions},
+        )
         python_runtime = create_formal_python_runtime(
             root=environment_root,
             real_python=tools["python"],
@@ -1021,7 +1081,7 @@ def collect(args: argparse.Namespace) -> int:
         command = [str(tools["make"]), "full-verify", f"TOOLPREFIX={str(compiler)[:-3]}"]
         selected = formal_execution_overrides(
             evidence_stage, tools, python_runtime.executable,
-            args.case_timeout, args.idle_notice,
+            args.case_timeout, args.idle_notice, args.agent_test_duration_profile,
         )
         execution_env = controlled_environment(
             environment_root, [python_runtime.directory, *tool_dirs], selected
@@ -1074,6 +1134,7 @@ def collect(args: argparse.Namespace) -> int:
             python_path_resolution=python_path_resolution,
             execution_environment=execution_env,
             temporary_directory_binding=temporary_directory_binding,
+            duration_attestation=duration_attestation,
             source_tree=worktree,
             collector=detached_collector,
         )
@@ -1116,6 +1177,11 @@ def _add_collect_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--make", default="make")
     parser.add_argument("--bash", default="bash")
     parser.add_argument("--host-cc", default="cc")
+    parser.add_argument(
+        "--agent-test-duration-profile",
+        choices=("local-e3", "none"),
+        required=True,
+    )
     parser.add_argument("--case-timeout", default="300s")
     parser.add_argument("--idle-notice", default="20")
     parser.add_argument("--command-timeout", type=float, default=5 * 60 * 60)

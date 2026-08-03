@@ -122,6 +122,17 @@ def main() -> int:
     source = SOURCE.read_text(encoding="utf-8")
     validate_source_text(source)
     dependency_texts = compile_contract.load_compile_dependency_texts(ROOT)
+    continuation = (
+        '"${PYTHON_BIN}" -I -S -B tool.py \\\n'
+        '\t--python-bin "${PYTHON_BIN}" --shell-bin "${BASH_BIN}"'
+    )
+    assert len(compile_contract._isolated_python_invocation_lines(continuation)) == 1
+    try:
+        compile_contract._isolated_python_invocation_lines('"${PYTHON_BIN}" tool.py')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("accepted an unisolated Python command")
     compile_contract.validate_functional_compile_source_texts(dependency_texts)
 
     header_redirect = dict(dependency_texts)
@@ -214,6 +225,15 @@ def main() -> int:
     )
     _reject_compile(python_shadow)
     _reject_compile(python_shadow, refresh_fingerprint=True)
+
+    duration_profile_shadow = dict(dependency_texts)
+    duration_profile_shadow["scripts/run-agent-tests.sh"] = _replace_once(
+        duration_profile_shadow["scripts/run-agent-tests.sh"],
+        '"${HOST_CC}" --duration-profile local-e3 >/dev/null',
+        '"${HOST_CC}" --duration-profile none >/dev/null',
+    )
+    _reject_compile(duration_profile_shadow)
+    _reject_compile(duration_profile_shadow, refresh_fingerprint=True)
 
     usershell_prefix = dict(dependency_texts)
     usershell_prefix["user/Makefile"] = _replace_once(
@@ -556,6 +576,8 @@ def main() -> int:
     policy_paths = {path for _role, path in policy_entries}
     assert EVALUATION_SUITE_SOURCE_PATH in policy_paths
     assert "host_tools/evaluation_bundle.py" in policy_paths
+    assert "host_tools/contest_demo.py" in policy_paths
+    assert "host_tools/committed_source_identity.py" in policy_paths
     assert "host_tools/full_verification_payload.py" in policy_paths
     assert "host_tools/full_verification_metrics.py" in policy_paths
     assert "host_tools/agenteval_measurement_source_policy.py" in policy_paths
@@ -587,6 +609,8 @@ def main() -> int:
         assert expected <= policy_paths
     assert "host_tools/git_history_contract.py" in policy_paths
     assert "host_tools/render_evaluation_dashboard.py" in policy_paths
+    assert "host_tools/assets/evaluation-dashboard.css" in policy_paths
+    assert "host_tools/assets/evaluation-dashboard.js" in policy_paths
     compatibility_execution_policy = {
         ("compatibility-producer", "host_tools/compatibility_overhead.py"),
         (
@@ -599,6 +623,7 @@ def main() -> int:
         ("micro-runner", "scripts/run-agent-tests.sh"),
         ("micro-evidence-wiring", "scripts/evidence-wiring.sh"),
         ("micro-qemu-runner", "scripts/agent_test_runner.py"),
+        ("micro-guest-failure-classifier", "scripts/guest_failure_classifier.py"),
         ("micro-preflight", "scripts/test-sync-owner-wiring.py"),
         ("micro-preflight", "scripts/test-wait-atomic-wiring.py"),
         ("micro-preflight", "scripts/check-wait-queue-contract.py"),

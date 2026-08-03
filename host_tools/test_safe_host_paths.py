@@ -23,6 +23,38 @@ HOST_TOOLS = Path(__file__).resolve().parent
 
 
 class SafeHostPathTests(unittest.TestCase):
+    def test_regular_read_accepts_unchanged_ordinary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            source.write_bytes(b"public")
+            self.assertEqual(
+                safe_host_paths.read_regular_file(source, maximum_bytes=6),
+                b"public",
+            )
+
+    def test_nonempty_read_rejects_empty_replacement_after_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            replacement = root / "replacement"
+            source.write_bytes(b"public")
+            replacement.write_bytes(b"")
+            real_require = safe_host_paths.require_regular_file
+
+            def replace_after_validation(path, **kwargs):
+                absolute = real_require(path, **kwargs)
+                os.replace(replacement, source)
+                return absolute
+
+            with mock.patch(
+                "safe_host_paths.require_regular_file",
+                side_effect=replace_after_validation,
+            ):
+                with self.assertRaises(ValueError):
+                    safe_host_paths.read_regular_file(
+                        source, nonempty=True, maximum_bytes=6
+                    )
+
     def test_regular_read_rejects_replacement_at_descriptor_open(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

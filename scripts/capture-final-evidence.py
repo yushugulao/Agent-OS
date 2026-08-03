@@ -23,10 +23,8 @@ def _isolate_direct_entry_imports() -> None:
     ]
 _isolate_direct_entry_imports()
 import argparse, csv, hashlib, json
-import math, os, platform, re, shutil
-import signal, subprocess, sys, tempfile, time
-from urllib import parse as urlparse
-from datetime import datetime, timezone
+import math, os, platform, re, shutil, signal, subprocess, sys, tempfile, time
+from urllib import parse as urlparse; from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 if __name__ == "__main__":
     sys.dont_write_bytecode = True
@@ -59,9 +57,13 @@ from host_tools.strict_json import read_strict_json, strict_json_loads  # noqa: 
 from host_tools.safe_host_paths import (  # noqa: E402
     require_regular_file, require_safe_directory, walk_regular_files_no_links,
 )
+from host_tools.duration_profile_attestation import (  # noqa: E402
+    DurationAttestationError, build_duration_attestation,
+    validate_attested_duration_policy, validate_duration_execution_binding)
 from host_tools.full_verification_metrics import (  # noqa: E402
     FullVerificationEvidenceError as EvidenceError,
-    REQUIRED_EVIDENCE_METRICS, load_budget_config, parse_measurements,
+    REQUIRED_EVIDENCE_METRICS, load_budget_config, measurement_values_match,
+    parse_measurements,
     write_agent_csv, write_chart, write_metrics_csv,
 )
 from host_tools.evidence_toolchain_attestation import (  # noqa: E402
@@ -72,11 +74,12 @@ from host_tools.evidence_toolchain_attestation import (  # noqa: E402
     controlled_environment, decode_external_output,
     create_isolated_detached_worktree, create_formal_python_runtime,
     formal_execution_overrides, purge_evaluation_generated_outputs,
-    require_nested_tool_resolution, resolve_bash_executable, resolve_executable,
+    require_clean_head, require_nested_tool_resolution,
+    resolve_bash_executable, resolve_executable,
     verify_evaluation_source_tree, validate_formal_evidence_binding,
     verify_tool_attestations, verify_tracked_worktree_bytes,
 )
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 FULL_VERIFY_PROFILE_VERSION = 5
 REMOTE_CI_SCHEMA_VERSION = 1
 REMOTE_CI_JOBS = (("kernel-budgets", "host"), ("reader-e2e", "qemu"), ("agent-regression", "qemu"),
@@ -89,7 +92,7 @@ SUCCESS_MARKER = "[full-verify] all checks passed"
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SUMMARY_FIELDS = {"schema_version", "full_verify_profile_version", "kind", "status", "commit", "completed_at_utc", "settings", "steps", "artifacts", "step_contract_sha256"}
-MANIFEST_FIELDS = {"schema_version", "status", "commit", "collected_at_utc", "authenticity", "delivery", "command", "verification_summary", "raw_artifacts", "environment", "configuration", "metrics"}
+MANIFEST_FIELDS = {"schema_version", "status", "commit", "collected_at_utc", "authenticity", "delivery", "command", "verification_summary", "raw_artifacts", "environment", "configuration", "metrics", "duration_attestation"}
 READER_RUN_ARTIFACTS = (
     re.compile(r"^reader-e2e-run-[a-z0-9._-]+-ucore-build\.log$"),
     re.compile(r"^reader-e2e-run-[a-z0-9._-]+-ucore-run\.log$"),
@@ -180,36 +183,6 @@ def atomic_json(path: Path, value: object) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-def git_output(git: Path, repo: Path, environment: dict[str, str], *args: str) -> str:
-    result = subprocess.run(
-        [str(git), "-c", "core.fsmonitor=false", "-c",
-         "core.untrackedCache=false", *args], cwd=repo, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, check=False, env=environment,
-    )
-    output = decode_external_output(result.stdout)
-    if result.returncode:
-        raise EvidenceError(f"git {' '.join(args)} failed: {output.strip()}")
-    return output.strip()
-def require_clean_head(git: Path, repo: Path, environment: dict[str, str]) -> str:
-    commit = git_output(git, repo, environment, "rev-parse", "--verify", "HEAD^{commit}")
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise EvidenceError("HEAD is not a full commit")
-    staged = subprocess.run(
-        [str(git), "-c", "core.fsmonitor=false", "-c",
-         "core.untrackedCache=false", "diff-index", "--cached", "--quiet",
-         commit, "--"], cwd=repo, env=environment, check=False,
-    )
-    untracked = subprocess.run(
-        [str(git), "-c", "core.fsmonitor=false", "-c",
-         "core.untrackedCache=false", "ls-files", "--others",
-         "--exclude-standard", "-z"], cwd=repo, env=environment,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
-    )
-    if staged.returncode or untracked.returncode or untracked.stdout:
-        raise EvidenceError("repository worktree is dirty")
-    verify_tracked_worktree_bytes(git, repo, repo, commit, environment)
-    return commit
-
 def verify_capture_source_tree(
     git: Path,
     repository: Path,
@@ -516,12 +489,10 @@ def validate_fs_allocator_archive(path: Path) -> None:
                   or decode_external_output(result.stdout).strip()
                   or f"exit {result.returncode}")
         raise EvidenceError(f"filesystem allocator evidence is invalid: {detail}")
-
 def replay_raw_contract(
     raw_dir: Path, summary_path: Path, expected_commit: str
 ) -> dict[str, object]:
     """Replay every semantic contract from this script's immutable source tree."""
-
     if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
         raise EvidenceError("raw replay expected commit is invalid")
     try:
@@ -614,7 +585,8 @@ def validate_remote_file(root: Path, record: object, expected_path: str) -> Path
             or not positive_int(record.get("bytes")) or path.stat().st_size != record["bytes"]):
         raise EvidenceError(f"remote CI artifact differs: {expected_path}")
     return path
-def validate_remote_ci_provenance(value: object, commit: str, root: Path) -> set[str]:
+def validate_remote_ci_provenance(
+        value: object, commit: str, root: Path, contract_root: Path) -> set[str]:
     fields = {"schema_version", "kind", "capture", "project", "pipeline", "api_records", "jobs"}
     if (not isinstance(value, dict) or set(value) != fields
             or value.get("schema_version") != REMOTE_CI_SCHEMA_VERSION
@@ -712,11 +684,13 @@ def validate_remote_ci_provenance(value: object, commit: str, root: Path) -> set
             raise EvidenceError("remote CI job API record differs from provenance")
         execution = verify_job_execution(
             root / job["trace"]["path"], root / job["artifact"]["path"],
-            raw_project, raw_pipeline, raw_job, job["runner_tag"], Path(__file__).resolve().parents[1])
+            raw_project, raw_pipeline, raw_job, job["runner_tag"], contract_root)
         if job["execution_attestation"] != execution:
             raise EvidenceError("remote CI execution result differs from provenance")
     return remote_paths
-def validate_authenticity(root: Path, manifest: dict[str, object], commit: str) -> set[str]:
+def validate_authenticity(
+        root: Path, manifest: dict[str, object], commit: str,
+        contract_root: Path) -> set[str]:
     authenticity = manifest.get("authenticity")
     if not isinstance(authenticity, dict) or set(authenticity) != {"local", "remote_ci"}:
         raise EvidenceError("manifest authenticity boundary is invalid")
@@ -740,9 +714,10 @@ def validate_authenticity(root: Path, manifest: dict[str, object], commit: str) 
         proof = read_strict_json(proof_path)
     except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError("remote CI provenance JSON is invalid") from error
-    return validate_remote_ci_provenance(proof, commit, root)
-def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, object]:
+    return validate_remote_ci_provenance(proof, commit, root, contract_root)
+def verify_bundle(root: Path, contract_root: Path) -> dict[str, object]:
     root = root.resolve()
+    contract_root = require_safe_directory(contract_root).resolve(strict=True)
     checksum = root / "checksums.sha256"
     if not checksum.is_file() or checksum.is_symlink():
         raise EvidenceError("bundle has no checksum inventory")
@@ -776,8 +751,20 @@ def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, ob
         raise EvidenceError("manifest is not ready")
     if manifest.get("commit") != summary["commit"]:
         raise EvidenceError("manifest and summary commits differ")
+    git = resolve_executable("git")
+    identity_root = Path(tempfile.mkdtemp(prefix="agentos-verify-source-"))
+    try:
+        source_commit = require_clean_head(
+            git, contract_root, controlled_environment(identity_root, [git.parent])
+        )
+    except ToolAttestationError as error: raise EvidenceError(f"contract root is not authenticated: {error}") from error
+    finally:
+        shutil.rmtree(identity_root, ignore_errors=True)
+    if source_commit != manifest["commit"]:
+        raise EvidenceError("contract root HEAD differs from evidence commit")
     validate_delivery_field(manifest.get("delivery"), manifest["commit"])
-    remote_files = validate_authenticity(root, manifest, str(summary["commit"]))
+    remote_files = validate_authenticity(
+        root, manifest, str(summary["commit"]), contract_root)
     summary_ref = manifest.get("verification_summary")
     if not isinstance(summary_ref, dict) or summary_ref.get("path") != SUMMARY_NAME:
         raise EvidenceError("manifest summary reference is invalid")
@@ -803,7 +790,7 @@ def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, ob
             raise EvidenceError(f"raw artifact differs: {record.get('name')}")
     validate_reader_inventory(root / "logs/raw", summary["steps"])
     validate_dual_measurement_inventory(root / "logs/raw", str(summary["commit"]))
-    validate_raw_artifacts(root / "logs/raw", Path(__file__).resolve().parents[1])
+    validate_raw_artifacts(root / "logs/raw", contract_root)
     validate_fs_allocator_archive(root / "logs/raw" / "fs-allocator-evidence.tar")
     command = manifest.get("command")
     if (not isinstance(command, dict)
@@ -820,7 +807,8 @@ def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, ob
             or command.get("log_sha256") != sha256_file(root / "logs/full-verify.log")):
         raise EvidenceError("full-verify command did not succeed")
     full_log = root / "logs/full-verify.log"
-    if full_log.read_text(encoding="utf-8", errors="replace").splitlines().count(SUCCESS_MARKER) != 1: raise EvidenceError("full-verify completion marker is missing or duplicated")
+    full_log_lines = full_log.read_text(encoding="utf-8", errors="replace").splitlines()
+    if full_log_lines.count(SUCCESS_MARKER) != 1: raise EvidenceError("full-verify completion marker is missing or duplicated")
     metric_paths = {"measurements_csv": "metrics/measurements.csv",
                     "agent_timings_csv": "metrics/agent-case-timings.csv", "command_csv": "metrics/commands.csv"}
     csv_rows = {key: read_exact_csv(root / path, CSV_SCHEMAS[key]) for key, path in metric_paths.items()}
@@ -837,9 +825,16 @@ def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, ob
         tool_by_label = validate_formal_evidence_binding(
             environment_record, command["environment"], command["environment"].get("PYTHON_BIN"),
             environment_record.get("python_path_resolution") if isinstance(environment_record, dict) else None,
-            contract_root or Path(__file__).resolve().parents[1], TOOL_LABELS)
+            contract_root, TOOL_LABELS)
     except (OSError, FormalPythonRuntimeError) as error:
         raise EvidenceError(f"formal execution environment is invalid: {error}") from error
+    try:
+        duration_profile = validate_attested_duration_policy(
+            manifest["duration_attestation"], contract_root=contract_root,
+            environment=command["environment"], log_lines=full_log_lines,
+            execution_tools=tool_by_label, configuration_path=configuration_path)
+    except (DurationAttestationError, OSError, ValueError) as error:
+        raise EvidenceError(f"formal duration policy is invalid: {error}") from error
     tool_records = environment_record["tools"]
     if (not (compiler_path := str(tool_by_label["compiler"].get("path", ""))).endswith("gcc") or command["argv"] != [tool_by_label["make"].get("path"), "full-verify", f"TOOLPREFIX={compiler_path[:-3]}"]): raise EvidenceError("full-verify command argv is not canonical")
     version_logs = set()
@@ -910,20 +905,24 @@ def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, ob
             or abs(row_elapsed - float(command["elapsed_seconds"])) > 1e-9):
         raise EvidenceError("command CSV differs from manifest command")
     config = load_budget_config(configuration_path)
-    replayed, replayed_cases = parse_measurements(root / "logs/full-verify.log", root / "logs/raw/agent-suite-timings.log", config)
+    replayed, replayed_cases = parse_measurements(
+        root / "logs/full-verify.log",
+        root / "logs/raw/agent-suite-timings.log",
+        config,
+        duration_profile=duration_profile,
+    )
     expected_rows = {row["metric"]: row for row in replayed}
     for row in measurement_rows:
         expected_row = expected_rows[row["metric"]]
-        try:
-            numeric_equal = all(float(row[key]) == float(expected_row[key]) for key in ("actual", "baseline", "limit", "usage_ratio"))
-        except (KeyError, ValueError) as error:
-            raise EvidenceError("measurement values are invalid") from error
-        if (not numeric_equal or row["unit"] != expected_row["unit"] or row["source_line"] != str(expected_row["source_line"])):
+        if (not measurement_values_match(row, expected_row)
+                or row["unit"] != expected_row["unit"]
+                or row["source_line"] != str(expected_row["source_line"])):
             raise EvidenceError("measurements CSV differs from raw evidence")
     agent_row = next(row for row in measurement_rows
                      if row["metric"] == "agent_suite_total_seconds")
     agent_total = metrics_ref.get("agent_total_seconds")
-    if not isinstance(agent_total, dict) or agent_total.get("actual") != float(agent_row["actual"]):
+    expected_agent_total = expected_rows["agent_suite_total_seconds"]
+    if not isinstance(agent_total, dict) or agent_total != expected_agent_total:
         raise EvidenceError("manifest Agent total differs from metrics CSV")
     agent_rows = csv_rows["agent_timings_csv"]
     case_fields = ("sequence", "case", "seconds", "source_line")
@@ -932,11 +931,16 @@ def verify_bundle(root: Path, contract_root: Path | None = None) -> dict[str, ob
             for row, expected in zip(agent_rows, replayed_cases)):
         raise EvidenceError("Agent timing CSV differs from raw evidence")
     full_hash = command["log_sha256"]
-    chart = chart_path.read_text(encoding="utf-8")
+    chart = (chart_bytes := chart_path.read_bytes()).decode("utf-8")
     expected_metadata = (f"source_measurements_sha256={measurement_hash} full_verify_sha256={full_hash} "
                          f"agent_timing_sha256={timing_hash}")
     if re.findall(r"<metadata>([^<>]*)</metadata>", chart) != [expected_metadata]:
         raise EvidenceError("chart provenance hashes are incomplete")
+    with tempfile.TemporaryDirectory(prefix="agentos-chart-replay-") as temporary:
+        replayed_chart = Path(temporary) / "budget-usage.svg"
+        write_chart(replayed_chart, replayed, measurement_hash, full_hash, str(timing_hash))
+        if chart_bytes != replayed_chart.read_bytes():
+            raise EvidenceError("chart differs from replayed metrics")
     return {"schema_version": SCHEMA_VERSION, "status": "ready", "commit": manifest["commit"],
             "remote_ci": manifest["authenticity"]["remote_ci"]["status"],
             "files_verified": len(expected)}
@@ -1041,6 +1045,12 @@ def collect(args: argparse.Namespace) -> int:
             "after full-verify purge",
             source_checkout=False,
         )
+        duration_attestation = build_duration_attestation(
+            contract_root=worktree, profile=args.agent_test_duration_profile,
+            toolprefix=args.toolprefix, qemu=args.qemu, python_bin=args.python,
+            host_cc=args.host_cc, shell_bin=args.bash)
+        validate_duration_execution_binding(
+            duration_attestation, {record["label"]: record for record in versions})
         python_runtime = create_formal_python_runtime(
             root=environment_root, real_python=tools["python"], shell=tools["bash"],
             git=git, repository=_isolated, worktree=worktree, commit=commit,
@@ -1051,7 +1061,8 @@ def collect(args: argparse.Namespace) -> int:
         command = [str(tools["make"]), "full-verify", f"TOOLPREFIX={effective_prefix}"]
         selected_env = formal_execution_overrides(
             evidence_stage, tools, python_runtime.executable,
-            args.case_timeout, args.idle_notice)
+            args.case_timeout, args.idle_notice,
+            args.agent_test_duration_profile)
         environment = controlled_environment(environment_root, [python_runtime.directory, *tool_directories], selected_env)
         temporary_directory_binding = capture_formal_temporary_binding(environment)
         python_path_resolution = python_runtime.path_resolution(environment)
@@ -1119,7 +1130,12 @@ def collect(args: argparse.Namespace) -> int:
             )
         except MeasurementError as error:
             raise EvidenceError(f"measured file-query benchmark is missing: {error}") from error
-        metrics, agent_cases = parse_measurements(full_log, stage / timing["path"], config)
+        metrics, agent_cases = parse_measurements(
+            full_log,
+            stage / timing["path"],
+            config,
+            duration_profile=args.agent_test_duration_profile,
+        )
         full_relative = "logs/full-verify.log"
         full_hash = sha256_file(full_log)
         timing_hash = timing["sha256"]
@@ -1168,6 +1184,7 @@ def collect(args: argparse.Namespace) -> int:
                 "remote_ci": {"status": "not-attached"},
             },
             "delivery": make_manifest_binding(commit, output.name),
+            "duration_attestation": duration_attestation,
             "command": command_record,
             "verification_summary": {"path": SUMMARY_NAME,
                                      "sha256": sha256_file(stage / SUMMARY_NAME)},
@@ -1232,7 +1249,7 @@ def bind_remote_ci(args: argparse.Namespace) -> int:
         pass
     else:
         raise EvidenceError("remote CI output cannot be inside the source bundle")
-    local_result = verify_bundle(bundle)
+    local_result = verify_bundle(bundle, Path(args.contract_root))
     try:
         token = token_path.read_text(encoding="utf-8").strip()
     except UnicodeDecodeError as error:
@@ -1342,7 +1359,8 @@ def bind_remote_ci(args: argparse.Namespace) -> int:
         }
         remote_path = stage / "remote-ci" / "provenance.json"
         write_json(remote_path, proof)
-        validate_remote_ci_provenance(proof, commit, stage)
+        validate_remote_ci_provenance(
+            proof, commit, stage, Path(args.contract_root))
         source_manifest["authenticity"]["remote_ci"] = {
             "status": "provenance-attached", "pipeline_sha": commit,
             "pipeline_ref": "main", "pipeline_source": "push",
@@ -1352,7 +1370,7 @@ def bind_remote_ci(args: argparse.Namespace) -> int:
         }
         write_json(stage / "manifest.json", source_manifest)
         write_checksums(stage)
-        verify_bundle(stage)
+        verify_bundle(stage, Path(args.contract_root))
         if output.exists():
             raise EvidenceError(f"output appeared while remote CI binding was running: {output}")
         os.replace(stage, output)
@@ -1375,11 +1393,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     collect_parser.add_argument("--make", default="make")
     collect_parser.add_argument("--bash", default="bash")
     collect_parser.add_argument("--host-cc", default="cc")
+    collect_parser.add_argument(
+        "--agent-test-duration-profile",
+        choices=("local-e3", "none"),
+        required=True,
+    )
     collect_parser.add_argument("--case-timeout", default="300s")
     collect_parser.add_argument("--idle-notice", default="20")
     collect_parser.add_argument("--command-timeout", type=float, default=FULL_VERIFY_TIMEOUT_SECONDS)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("bundle")
+    verify_parser.add_argument("--contract-root", required=True)
     raw_parser = commands.add_parser("replay-raw")
     raw_parser.add_argument("--raw-dir", type=Path, required=True)
     raw_parser.add_argument("--summary", type=Path, required=True)
@@ -1391,6 +1415,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     remote_parser.add_argument("--project-id", required=True, type=int)
     remote_parser.add_argument("--pipeline-id", required=True, type=int)
     remote_parser.add_argument("--token-file", required=True)
+    remote_parser.add_argument("--contract-root", required=True)
     remote_parser.add_argument("--api-timeout", type=float, default=60.0)
     summary_parser = commands.add_parser("write-summary")
     summary_parser.add_argument("--stage", required=True)
@@ -1413,7 +1438,7 @@ def main(argv: list[str] | None = None) -> int:
             replay_raw_contract(args.raw_dir, args.summary, args.expected_commit)
             print("[evidence] raw semantic replay passed")
             return 0
-        print(json.dumps(verify_bundle(Path(args.bundle)), indent=2, sort_keys=True))
+        print(json.dumps(verify_bundle(Path(args.bundle), Path(args.contract_root)), indent=2, sort_keys=True))
         return 0
     except KeyboardInterrupt:
         print("[evidence] interrupted", file=sys.stderr)

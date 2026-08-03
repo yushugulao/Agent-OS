@@ -184,6 +184,11 @@ class GitLabCIContractTests(unittest.TestCase):
                 1,
             ),
             source.replace(
+                "/bin/bash --noprofile --norc -p scripts/run-ci-mechanism.sh fs-allocator-fault",
+                "bash scripts/run-ci-mechanism.sh fs-allocator-fault",
+                1,
+            ),
+            source.replace(
                 "python3 scripts/fs-allocator-evidence.py verify-archive --archive",
                 "python3 host_tools/always-pass.py scripts/fs-allocator-evidence.py verify-archive --archive",
                 1,

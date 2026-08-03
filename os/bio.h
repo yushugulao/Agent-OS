@@ -55,6 +55,7 @@ struct buf {
 	void *holder;
 	uint hold_depth;
 	struct wait_queue holder_waiters;
+	struct buf *hash_next;
 	struct buf *prev; // LRU cache list
 	struct buf *next;
 	uchar data[BSIZE];
@@ -94,7 +95,20 @@ enum bio_transfer_type {
 	BIO_TRANSFER_WRITE,
 	BIO_TRANSFER_FLUSH,
 };
+
+#define BIO_PHYSICAL_STATS_VERSION 1U
+struct bio_physical_stats {
+	uint version;
+	uint size;
+	uint64 reads;
+	uint64 writes;
+	uint64 flushes;
+	uint64 failed_transfers;
+	uint64 completion_sequence;
+};
+
 void bio_account_transfer(uint, uint, enum bio_transfer_type, int);
+int bio_physical_snapshot(struct bio_physical_stats *);
 uint bio_current_owner(void);
 int bio_principal_bind(uint, struct resource_account_handle);
 int bio_scope_acquire(uint, struct resource_account_handle);

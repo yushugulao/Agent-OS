@@ -41,7 +41,9 @@ def record(root: Path, path: Path) -> dict[str, object]:
     }
 
 
-def make_payload(root: Path, *, commit: str = COMMIT) -> None:
+def make_payload(
+    root: Path, *, commit: str = COMMIT, duration_profile: str = "none"
+) -> None:
     collector = payload._collector()
     root.mkdir()
     raw = root / payload.RAW_ROOT
@@ -95,7 +97,14 @@ def make_payload(root: Path, *, commit: str = COMMIT) -> None:
     write_json(root / payload.SUMMARY_NAME, summary)
     log = root / payload.LOG_NAME
     log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(f"full verification fixture\n{payload.SUCCESS_MARKER}\n", encoding="utf-8")
+    policy_marker = {
+        "local-e3": "[full-verify] Agent duration policy profile=local-e3 status=enforced",
+        "none": "[full-verify] Agent duration policy profile=none status=skipped-different-runner",
+    }[duration_profile]
+    log.write_text(
+        f"full verification fixture\n{policy_marker}\n{payload.SUCCESS_MARKER}\n",
+        encoding="utf-8",
+    )
 
     tools: list[dict[str, object]] = []
     tool_paths = {
@@ -177,6 +186,7 @@ def make_payload(root: Path, *, commit: str = COMMIT) -> None:
     python_path_resolution = {"python": aliases[0], "python3": aliases[1]}
     execution_environment = {
         **python_runtime.FORMAL_ENVIRONMENT_FIXED,
+        "AGENT_TEST_DURATION_PROFILE": duration_profile,
         "PATH": ":".join((
             f"{runtime_root}/python-runtime", "/fixture/bin",
             *python_runtime.POSIX_SYSTEM_PATHS,
@@ -251,6 +261,13 @@ def make_payload(root: Path, *, commit: str = COMMIT) -> None:
         "verification_summary": record(root, root / payload.SUMMARY_NAME),
         "raw_artifacts": raw_records,
         "environment": record(root, environment),
+        "duration_attestation": payload.build_duration_attestation(
+            contract_root=Path(__file__).resolve().parents[1],
+            profile=duration_profile,
+            toolprefix="not-applicable", qemu="not-applicable",
+            python_bin="not-applicable", host_cc="not-applicable",
+            shell_bin="not-applicable",
+        ),
     }
     write_json(root / payload.RECEIPT_NAME, receipt)
     payload._write_checksums(root)
@@ -318,6 +335,9 @@ def main() -> None:
     package_mode = runner.split("\npackage)\n", 1)[1].split("\n\t;;", 1)[0]
     assert '"${FULL_VERIFICATION_TOOL}" collect' in full_mode
     assert '--expected-commit "${commit}"' in full_mode
+    assert '--agent-test-duration-profile "${AGENT_TEST_DURATION_PROFILE}"' in full_mode
+    assert "get-campaign-metadata" in runner
+    assert "requested duration profile differs from campaign" in runner
     assert "FULL_VERIFICATION_TOOL" not in package_mode
     assert "evaluation-full-verify:" in makefile
     assert "host_tools/evaluation_platform.py formal-exec" in makefile
@@ -544,8 +564,22 @@ exit 0
         )
         assert binding["status"] == "verified"
         assert binding["source_commit"] == COMMIT
+        assert binding["agent_test_duration_profile"] == "none"
         assert binding["file_count"] == len(paths)
         assert payload.CHECKSUM_NAME in paths
+
+        relabeled = base / "relabeled-profile"
+        shutil.copytree(valid, relabeled)
+        rewrite_environment_and_receipt(
+            relabeled,
+            lambda environment: environment["execution_environment"].update(
+                AGENT_TEST_DURATION_PROFILE="local-e3"
+            ),
+        )
+        expect_rejected(
+            lambda: payload.verify_payload(relabeled, contract_root=repository),
+            "duration attestation differs from execution",
+        )
 
         posix_utf8_locale = base / "posix-utf8-locale"
         shutil.copytree(valid, posix_utf8_locale)
@@ -566,7 +600,7 @@ exit 0
         legacy_schema = base / "legacy-schema"
         shutil.copytree(valid, legacy_schema)
         rewrite_receipt(
-            legacy_schema, lambda value: value.update(schema_version=1)
+            legacy_schema, lambda value: value.update(schema_version=2)
         )
         expect_rejected(
             lambda: payload.verify_payload(legacy_schema, contract_root=repository),
@@ -955,6 +989,8 @@ exit 0
                 str(tools["make"]),
                 "--host-cc",
                 str(tools["host_cc"]),
+                "--agent-test-duration-profile",
+                "none",
                 "--python",
                 BACKING_PYTHON,
                 "--bash",
@@ -1020,10 +1056,9 @@ exit 0
             assert binding["status"] == "verified"
 
             # Exercise the exact source allowlist and copier used by formal
-            # bundles.  The first verification above proves the fixture raw
-            # evidence; this one proves that a portable source snapshot is a
-            # complete closure for the authenticated launcher and every nested
-            # semantic verifier, without falling back to the live checkout.
+            # bundles as data only. Semantic replay must stay rooted in the
+            # explicitly trusted collector checkout and never execute snapshot
+            # Python, even when that snapshot is directly attacker-controlled.
             import evaluation_bundle
             from agenteval_measurement_source_receipt import (
                 build_measurement_source_receipt,
@@ -1071,10 +1106,17 @@ exit 0
             verify_measurement_source_receipt(
                 source_receipt, snapshot_root, expected_commit=source_commit
             )
+            snapshot_sentinel = integration_root / "snapshot-code-executed"
+            (snapshot_root / "scripts" / "capture-final-evidence.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(snapshot_sentinel)!r}).write_text('executed')\n",
+                encoding="utf-8",
+            )
             snapshot_binding, _snapshot_paths = payload.verify_payload(
-                output, expected_commit=commit, contract_root=snapshot_root
+                output, expected_commit=commit, contract_root=repo
             )
             assert snapshot_binding == binding
+            assert not snapshot_sentinel.exists()
 
             forged = integration_root / "self-consistent-forgery"
             shutil.copytree(output, forged)

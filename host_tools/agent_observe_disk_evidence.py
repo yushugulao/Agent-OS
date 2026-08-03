@@ -117,7 +117,7 @@ def _record_hash(raw: bytes, layout: ObservationLayout) -> int:
     return value or 1
 
 
-def _parse_observation(raw: bytes, layout: ObservationLayout, identity: dict[str, int]) -> dict[str, Any]:
+def _parse_observation(raw: bytes, layout: ObservationLayout, identity: dict[str, int] | None) -> dict[str, Any]:
     if len(raw) != layout.observe_bytes:
         raise ObservationEvidenceError("observation section byte count differs")
     f = layout.observe_fields
@@ -223,7 +223,7 @@ def _parse_observation(raw: bytes, layout: ObservationLayout, identity: dict[str
         first_prev_hash = 0
         chain_gap = False
         tail_start = max(0, record_count - layout.latest_tail)
-        identity_scope = (
+        identity_scope = identity is not None and (
             scope_id == identity["scope"]
             and lifecycle_id == identity["lifecycle_id"]
             and lifecycle_generation == identity["lifecycle_generation"]
@@ -329,7 +329,7 @@ def _parse_observation(raw: bytes, layout: ObservationLayout, identity: dict[str
             max_agent = max(max_agent, agent_id)
             if kind in layout.event_kinds:
                 max_event = max(max_event, _record_value(record, layout, "value0"))
-            if (
+            if identity is not None and (
                 scope_id == identity["scope"]
                 and lifecycle_id == identity["lifecycle_id"]
                 and lifecycle_generation == identity["lifecycle_generation"]
@@ -398,15 +398,9 @@ def _parse_observation(raw: bytes, layout: ObservationLayout, identity: dict[str
         raise ObservationEvidenceError("observation allocator lease does not exceed stored identity")
     if leases["agent_lease_end"] > layout.agent_id_max:
         raise ObservationEvidenceError("observation Agent lease exceeds signed identity range")
-    if len(identity_matches) != 1:
-        raise ObservationEvidenceError(
-            "boot1 durable identity does not select exactly one checkpoint record"
-        )
-    if matched_scope is None:
-        raise ObservationEvidenceError(
-            "boot1 durable identity does not select a checkpoint scope"
-        )
-    return {
+    if identity is not None and (len(identity_matches) != 1 or matched_scope is None):
+        raise ObservationEvidenceError("boot1 durable identity does not select exactly one record and scope")
+    result = {
         "generation": generation,
         "image_hash": f"{_u(raw, f['image_hash'], 8):016x}",
         "scope_count": scope_count,
@@ -414,9 +408,15 @@ def _parse_observation(raw: bytes, layout: ObservationLayout, identity: dict[str
         "record_count": aggregate_record_count,
         "admission_drops": aggregate_admission_drops,
         "dropped_records": aggregate_total_records - aggregate_record_count,
-        "matched_scope": matched_scope,
-        "identity": identity_matches[0],
     }
+    if identity is not None:
+        result.update(matched_scope=matched_scope, identity=identity_matches[0])
+    return result
+
+
+def validate_observation_payload(raw: bytes, layout: ObservationLayout | None = None) -> dict[str, Any]:
+    """Apply the production observation-provider invariants without a run receipt."""
+    return _parse_observation(raw, layout or load_observation_contract(), None)
 
 
 def _parse_arena(raw: bytes, layout: ObservationLayout, identity: dict[str, int]) -> dict[str, Any]:
@@ -598,6 +598,7 @@ __all__ = [
     "DEFAULT_OBSERVE_CONTRACT",
     "IDENTITY_MARKER",
     "ObservationEvidenceError",
+    "validate_observation_payload",
     "ObservationLayout",
     "load_observation_contract",
     "parse_boot1_identity",

@@ -5,6 +5,7 @@ import argparse
 import codecs
 import ctypes
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -22,35 +23,24 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 
 
-ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-PANIC_LINE_RE = re.compile(
-    r"^\[PANIC (?:"
-    r"-?\d+--?\d+\]\s+\S+:\d+:"
-    r"|-?\d+\]\[\S+:\d+\]:"
-    r")\s+.+$",
-    re.IGNORECASE,
-)
-ERROR_LINE_RE = re.compile(
-    r"^\[ERROR -?\d+--?\d+\](?:"
-    r"unknown syscall\s+-?\d+"
-    r"|-?\d+ in application, bad addr = .+?, bad instruction = .+?, "
-    r"core dumped\."
-    r"|IllegalInstruction in application, core dumped\."
-    r"|unknown trap:.+"
-    r"|invalid trap from kernel:.+"
-    r")$",
-    re.IGNORECASE,
-)
-BAD_ADDR_LINE_RE = re.compile(
-    r"^\[ERROR -?\d+--?\d+\]-?\d+ in application, bad addr = .+?, "
-    r"bad instruction = .+?, core dumped\.$",
-    re.IGNORECASE,
-)
-USER_FAILURE_LINE_RE = re.compile(
-    r"^[A-Za-z0-9_.-]+:\s+(?:.*\s)?(?:check failed|child_failed)"
-    r"(?::|\s|$).*$",
-    re.IGNORECASE,
-)
+def _load_guest_failure_classifier():
+    path = os.path.join(os.path.dirname(__file__), "guest_failure_classifier.py")
+    spec = importlib.util.spec_from_file_location(
+        "_agentos_guest_failure_classifier", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Guest failure classifier is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_GUEST_FAILURE_CLASSIFIER = _load_guest_failure_classifier()
+ANSI_ESCAPE_RE = _GUEST_FAILURE_CLASSIFIER.ANSI_ESCAPE_RE
+PANIC_LINE_RE = _GUEST_FAILURE_CLASSIFIER.PANIC_LINE_RE
+ERROR_LINE_RE = _GUEST_FAILURE_CLASSIFIER.ERROR_LINE_RE
+BAD_ADDR_LINE_RE = _GUEST_FAILURE_CLASSIFIER.BAD_ADDR_LINE_RE
+USER_FAILURE_LINE_RE = _GUEST_FAILURE_CLASSIFIER.USER_FAILURE_LINE_RE
 READ_SIZE = 64 * 1024
 POLL_SECONDS = 0.1
 TERMINATE_SECONDS = 2.0
@@ -400,7 +390,6 @@ class OutputScanner:
         ):
             self._note_marker()
 
-        normalized = ANSI_ESCAPE_RE.sub("", line)
         for marker in self.expected_bad_addr_markers:
             if self.expected_fault_marker_mode == MARKER_EXACT_LINE:
                 if line == marker:
@@ -410,17 +399,16 @@ class OutputScanner:
             while start >= 0:
                 self._arm_expected_fault(marker)
                 start = line.find(marker, start + len(marker))
-        if BAD_ADDR_LINE_RE.fullmatch(normalized):
+        failure = _GUEST_FAILURE_CLASSIFIER.classify_output_line(
+            line, phase=_GUEST_FAILURE_CLASSIFIER.PHASE_GUEST
+        )
+        if failure == _GUEST_FAILURE_CLASSIFIER.FAILURE_BAD_ADDRESS:
             if self.expected_fault_pending:
                 self.expected_fault_pending -= 1
                 self.expected_faults_consumed += 1
             else:
                 self.failure_seen = True
-        elif (
-            PANIC_LINE_RE.fullmatch(normalized)
-            or ERROR_LINE_RE.fullmatch(normalized)
-            or USER_FAILURE_LINE_RE.fullmatch(normalized)
-        ):
+        elif failure is not None:
             self.failure_seen = True
 
     def _arm_expected_fault(self, marker):
@@ -981,6 +969,22 @@ def _run_powercut_supervisor(control_fd, request_fd, nonce, command):
         return 125
     os.close(control_fd)
     return 0
+
+
+def _powercut_supervisor_command(control_fd, request_fd, nonce, command):
+    return [
+        sys.executable,
+        "-I",
+        "-S",
+        "-B",
+        os.path.abspath(__file__),
+        "--internal-powercut-supervisor",
+        str(control_fd),
+        str(request_fd),
+        nonce,
+        "--",
+        *command,
+    ]
 
 
 class _SupervisedProcess:
@@ -1715,16 +1719,9 @@ class _ProcessLifecycle:
                 control_read, control_write = os.pipe()
                 request_read, request_write = os.pipe()
                 nonce = secrets.token_hex(32)
-                supervisor_command = [
-                    sys.executable,
-                    os.path.abspath(__file__),
-                    "--internal-powercut-supervisor",
-                    str(control_write),
-                    str(request_read),
-                    nonce,
-                    "--",
-                    *command,
-                ]
+                supervisor_command = _powercut_supervisor_command(
+                    control_write, request_read, nonce, command
+                )
                 popen_options["pass_fds"] = (control_write, request_read)
                 try:
                     owner = subprocess.Popen(

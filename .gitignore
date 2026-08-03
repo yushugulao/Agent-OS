@@ -35,6 +35,8 @@ baseline_ucore/nfs/*.img
 baseline_ucore/nfs/fs
 baseline_ucore/nfs/fs.exe
 /results/
+/ci-artifacts/
+/.fs-allocator-evidence/
 /.uv-cache/
 /.uv-python/
 docs/report/

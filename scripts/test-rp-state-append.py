@@ -21,6 +21,10 @@ HEADERS = (
     ROOT / "user/include/research_platform_state.h",
     ROOT / "baseline_ucore/user/include/research_platform_state.h",
 )
+PLANNERS = (
+    ROOT / "user/src/rp_planner.c",
+    ROOT / "baseline_ucore/user/src/rp_planner.c",
+)
 
 
 def function_text(path: Path, name: str) -> str:
@@ -57,6 +61,17 @@ def main() -> int:
                 raise AssertionError(f"{name} still rewrites through truncate")
             if "memcmp" in user_helper:
                 raise AssertionError(f"{name} depends on unavailable user libc memcmp")
+
+    agentos_planner, baseline_planner = (
+        path.read_text(encoding="ascii") for path in PLANNERS
+    )
+    if agentos_planner != baseline_planner:
+        raise AssertionError("planner append policy differs between targets")
+    for journal in ("rp_ack", "rp_tool"):
+        if f'rp_write_file("{journal}"' in agentos_planner:
+            raise AssertionError(f"planner truncates shared append journal {journal}")
+        if f'rp_append_file("{journal}"' not in agentos_planner:
+            raise AssertionError(f"planner no longer appends shared journal {journal}")
 
     compiler = host_compiler()
     with tempfile.TemporaryDirectory(prefix="rp-state-append-") as directory:

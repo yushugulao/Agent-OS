@@ -28,6 +28,23 @@ STREAM_DEADLINE_TOTAL_LIMIT = 4.0 if sys.platform == "cygwin" else 1.0
 class AgentTestRunnerTests(unittest.TestCase):
     marker = "case: parent passed"
 
+    def test_isolated_entrypoint_loads_shared_failure_classifier(self):
+        runner = Path(agent_test_runner.__file__).resolve()
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [sys.executable, "-I", "-S", "-B", str(runner), "--help"],
+                cwd=directory,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=10,
+            )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stderr.decode("utf-8", errors="replace"),
+        )
+
     def test_attested_invocation_uses_captured_canonical_python(self):
         identities = {
             "python": {
@@ -44,6 +61,33 @@ class AgentTestRunnerTests(unittest.TestCase):
                     "ok",
                 ],
             )
+
+    def test_powercut_supervisor_preserves_isolated_python(self):
+        command = agent_test_runner._powercut_supervisor_command(
+            7, 9, "a" * 64, ["qemu-system-riscv64", "-nographic"]
+        )
+        self.assertEqual(
+            command[:5],
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-B",
+                str(Path(agent_test_runner.__file__).resolve()),
+            ],
+        )
+        self.assertEqual(
+            command[5:],
+            [
+                "--internal-powercut-supervisor",
+                "7",
+                "9",
+                "a" * 64,
+                "--",
+                "qemu-system-riscv64",
+                "-nographic",
+            ],
+        )
 
     def calibration_args(self, **changes):
         values = {
@@ -1457,6 +1501,40 @@ class AgentTestRunnerTests(unittest.TestCase):
                 )
                 self.assertTrue(result.failure_seen)
                 self.assertFalse(result.succeeded)
+
+    def test_shared_classifier_only_interprets_post_launch_guest_lines(self):
+        classifier = agent_test_runner._GUEST_FAILURE_CLASSIFIER
+        build_line = "CC -o build/riscv64/ch6b_panic user/ch6b_panic.c"
+        self.assertIsNone(
+            classifier.classify_output_line(
+                build_line, phase=classifier.PHASE_BUILD
+            )
+        )
+        self.assertIsNone(
+            classifier.classify_output_line(
+                build_line, phase=classifier.PHASE_GUEST
+            )
+        )
+        records = {
+            "panic": "[PANIC -1--1] os/main.c:7: boot failed",
+            "error": "[ERROR 4-0]unknown syscall -1",
+            "user": "fsallocfault_ucore: child_failed: worker 2",
+            "orchestrator": "rp_orch: failed code=1",
+            "legacy-panic": "panic: synthetic legacy failure",
+            "assertion": "kernel: assertion failed in recovery",
+        }
+        for label, record in records.items():
+            with self.subTest(label=label):
+                self.assertIsNotNone(
+                    classifier.classify_output_line(
+                        record, phase=classifier.PHASE_GUEST
+                    )
+                )
+                scanner = agent_test_runner.OutputScanner(
+                    "case", self.marker, io.StringIO(), None
+                )
+                scanner._process_line(record)
+                self.assertTrue(scanner.failure_seen)
 
     def test_failure_words_inside_diagnostics_are_not_failures(self):
         result = self.monitor(

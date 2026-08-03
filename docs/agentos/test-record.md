@@ -73,7 +73,7 @@ metadata aggregate: loaded text=77162/77896 bytes, BSS=1118596/1118596 bytes
 
 ## 2026-07-27 冻结前工作树本地阶段性验收
 
-Reader action runner 已改为阶段感知故障判定：clean/build 阶段只依据子进程退出码，QEMU guest 启动后才按去 ANSI 的完整日志行识别 panic、trap、`check failed` 和 orchestrator failure。以下三组测试在当前工作树本地依次通过：
+Reader action runner 已改为阶段感知故障判定：clean/build 阶段只依据子进程退出码，QEMU guest 启动后才按去 ANSI 的完整日志行识别 panic、trap、`check failed` 和 orchestrator failure。以下三组测试在该阶段工作树本地依次通过：
 
 ```text
 python3 host_tools/test_plain_ucore_action_runner.py
@@ -86,7 +86,7 @@ test_plain_ucore_reader_e2e: passed
 
 action runner 回归明确包含两个相反样例：构建路径 `build/riscv64/ch6b_panic` 只含文件名，不得提前失败；QEMU 启动后的规范 Guest `[PANIC ...]` 完整行必须失败。由此修复的是阶段边界，不是对特定构建目录或单条日志加白名单。
 
-同一当前工作树的 catalog/reprobe/rollback Host 合同结果为：
+同一阶段工作树的 catalog/reprobe/rollback Host 合同结果为：
 
 ```text
 metadata catalog capacity: 14/14 passed
@@ -280,13 +280,13 @@ runner 控制台可以转发原始字节；持久 `.guest.log` 将 CRLF 和孤�
 | `agentscope_ucore` | `scope_close_authority=1`、`scope_controller_exit_revoke=1 public_lineage=1`、`scope_forced_cleanup=1`、`scope_replacement_admitted=1`，以及既有 observe/pipe 标记 | 唯一根/factory 可信关闭、PUBLIC child/grandchild 谱系撤销、阻塞成员资源释放和 9 轮 generation 回收通过；观测查询预算和 pipe 单跳委派继续通过 |
 | `agenttrust_ucore` | `wx_image=1`、`immutable_image=1`、`role_image_binding=1` | W^X、可信映像不可变和 Agent 角色映像绑定可验证 |
 | `agentvfs_ucore` | `cross_scope_fd_revoked=1`、`worker_pipe_delegation=1`、`protected_paths=1` | 普通 VFS 路径不能绕过文件能力；降权 fork 撤销跨 scope inode fd，worker pipe 只接受单跳显式委派 |
-| `iobudget_ucore` | `thread_exit_lease_cleanup=1`、`scheduler_interrupt_progress=1`、`fault_exit_cleanup=1`、`lineage_rate_accounting=1 immutable_owner=1`、`nested_io_attribution=1`、`cache_scope_isolation=1`、`workflow_bounded_progress=1`、`control_reserve_progress=1`、`parent passed` | ABI v4 lineage/cache-floor 探针修正后定向轮 `elapsed=19.0s`；sized-copy 另由无单独 marker 的断言覆盖，最终状态仍待 bundle 复跑 |
+| `iobudget_ucore` | `thread_exit_lease_cleanup=1`、`scheduler_interrupt_progress=1`、`fault_exit_cleanup=1`、`lineage_rate_accounting=1 immutable_owner=1`、`nested_io_attribution=1`、`cache_scope_isolation=1`、`workflow_bounded_progress=1`、`control_reserve_progress=1`、`parent passed` | ABI v5 工作保守型 shared、lineage/cache-floor 探针已接线；最终动态状态待当前候选 bundle 复跑 |
 | `usersafety_ucore` | `live after pointer bounds`、`live after directed wakeup`、`parent passed` | syscall 输入检查、定向唤醒和失败事务回滚可验证 |
 | `fsenospc_ucore` | `inode exhaustion survived`、`block exhaustion survived` | inode、inode cache 与数据块耗尽返回失败而非触发内核 panic |
-| `fspquota_ucore` | `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`relaunch_charge_persisted=1`、`cleanup_reuse=1` | 双目标同镜像三次启动已通过，验证 checkpoint 终止后的孤儿回收及 PUBLIC 计费跨完整进程域退出与重启保持；不宣称硬掉电注入 |
+| `fspquota_ucore` | `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`relaunch_charge_persisted=1`、`cleanup_reuse=1` | 历史双目标同镜像三次启动曾完成，验证 checkpoint 终止后的孤儿回收及 PUBLIC 计费跨完整进程域退出与重启保持；不宣称硬掉电注入，当前候选仍须由 bundle 复跑 |
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
-| `syscallfair_ucore` | `[syscall-fairness] both targets passed`、console/inode/trunc 顺序、last-syscall 重调度与 `parent passed` | 本次线程改动后双目标脚本已通过 |
-| `threadresource_ucore` | `domain_limit`、`capacity_reject_stable`、`reserved_domain_limit`、`reserved_domain_reuse`、`exit_reuse`、`ordinary_waterline`、`global_thread_limit`、`reserved_global_limit`、`reserved_progress`、`reserved_global_reuse`、`global_reuse`、`domain_fairness`、`parent passed` | 本次改动后 19/12/6/6/4 tiny policy 专项通过 |
+| `syscallfair_ucore` | `[syscall-fairness] both targets passed`、console/inode/trunc 顺序、last-syscall 重调度与 `parent passed` | 历史双目标脚本曾输出这些 marker；当前候选仍须由 bundle 复跑 |
+| `threadresource_ucore` | `domain_limit`、`capacity_reject_stable`、`reserved_domain_limit`、`reserved_domain_reuse`、`exit_reuse`、`ordinary_waterline`、`global_thread_limit`、`reserved_global_limit`、`reserved_progress`、`reserved_global_reuse`、`global_reuse`、`domain_fairness`、`parent passed` | 该历史轮的 19/12/6/6/4 tiny policy 专项曾通过；当前候选仍须由 bundle 复跑 |
 | 内核栈预算 | `kernel stack budget: user=7456 interrupt=2272 margin=4096 required=13824 limit=16384` | workflow 强制撤销历史构建的 callgraph/栈帧预算检查通过；不是发布 C 的最终栈指标 |
 
 ## 本次可信 IPC 变更验证状态
@@ -806,7 +806,7 @@ agentfs_ucore: parent passed
 
 ## 2026-07-23 块 I/O 与 buffer cache 分域回归
 
-当时版本的 `iobudget_ucore` 已纳入 `scripts/run-agent-tests.sh`。它通过 syscall 544 读取 I/O policy ABI v3，并使用 PUBLIC 压力场景；下列 marker 只记录该历史实现，不能当作当前 ABI v4/lineage 探针的输出合同。当前机制与验收步骤见 [testing-details.md](testing-details.md#22-iobudget_ucore)。
+当时版本的 `iobudget_ucore` 已纳入 `scripts/run-agent-tests.sh`。它通过 syscall 544 读取 I/O policy ABI v3，并使用 PUBLIC 压力场景；下列 marker 只记录该历史实现，不能当作当前 ABI v5/lineage 探针的输出合同。当前机制与验收步骤见 [testing-details.md](testing-details.md#22-iobudget_ucore)。
 
 最终 teardown 修复后的独立 QEMU 观察到：
 
@@ -822,7 +822,7 @@ iobudget_ucore: control_reserve_progress=1
 iobudget_ucore: parent passed
 ```
 
-最终修复后的独立运行 `elapsed=2.4s`。ABI sized-copy、线程退出 lease、scheduler 中断交付、fault 退出清理、PUBLIC budget/shared 上界、完成归因、cache 服务隔离、workflow 进展和 CONTROL class 共九类实质断言；日志中是八个具名机制 marker 加 `parent passed`。2026-07-24 的 pipe 安全主体委派改动后，完整 Agent 脚本以墙钟约 `359.4s` 完成 16/16。ABI v3 的设备 burst/refill 为 560/280：普通流量必须取得根信用，SYSTEM/CONTROL 可在根信用耗尽时带 device debt 前进，因此根 bucket 不是保护流量的硬总上限。静态 envelope 只约束配置总和。cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，退役清理 job 临时为 3/8。
+该历史独立轮只保留机制 marker，不再引用其短时单例耗时。ABI sized-copy、线程退出 lease、scheduler 中断交付、fault 退出清理、PUBLIC budget/shared 上界、完成归因、cache 服务隔离、workflow 进展和 CONTROL class 共九类实质断言；日志中是八个具名机制 marker 加 `parent passed`。2026-07-24 的 pipe 安全主体委派改动后，完整 Agent 脚本以墙钟约 `359.4s` 完成 16/16。ABI v3 的设备 burst/refill 为 560/280：普通流量必须取得根信用，SYSTEM/CONTROL 可在根信用耗尽时带 device debt 前进，因此根 bucket 不是保护流量的硬总上限。静态 envelope 只约束配置总和。cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，退役清理 job 临时为 3/8；这些数值不外推到 ABI v5 或当前候选。
 
 历史 metadata/I/O 完整轮的 `agentscope_ucore` 观察到 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=684`、metadata transaction/COW、微写合并、最终一致性、容量、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=139.9s`。该阶段的生命周期状态后来扩展为 ACTIVE/CLOSING/RETIRING；当时的 `NPROC` 身份账本只复用 `used == 0` 的记录，计入 admission 的 ACTIVE/CLOSING 与 RETIRING scope 合计不超过 8，并由 reaper 在 `NPROC` 身份账本范围轮转选择 retiring 清理。冻结候选随后把运行时 admission 收紧为三种状态合计最多 4 个；这不反向改写该历史结果。
 
@@ -1085,9 +1085,9 @@ timing inventory，但明确使用 `profile=none`，不套用该本地墙钟阈�
 
 候选提交后冻结新内核功能和 ABI。下一阶段只允许完成三轮校准、形成 C→E 证据，以及按“保留、合并、删除”执行行为保持的减法审计；每个小提交继续验证 source、ELF/raw、text/BSS、`struct proc`、线程/boot 栈和测试耗时不增长。
 
-## 2026-08-02 当前受管源码时长校准
+## 2026-08-02 历史受管源码时长校准（`04c1e6652324`）
 
-冻结提交 `04c1e66523240878d670aa5aa4070360788dec86` 在干净 detached worktree 上按
+历史冻结提交 `04c1e66523240878d670aa5aa4070360788dec86` 在干净 detached worktree 上按
 `local-e3-msys2-xpack-qemu11-v1` 串行执行三轮完整 18-case。受管源码指纹为
 `2162696ef9fb944b2f1dfbad4daa0aafbc7ae0847fe4b0a347f4a93050b536e7`，覆盖 394 个输入；
 三轮总时长分别为 `287.9945528s`、`283.0201263s`、`280.9651484s`，均为 18 项成功。
@@ -1095,8 +1095,8 @@ timing inventory，但明确使用 `profile=none`，不套用该本地墙钟阈�
 
 完整包位于 `evidence/calibrations/04c1e6652324/`，共 71 个文件、57 份逐执行 attestation；
 manifest SHA-256 为 `2b8fe54853a35f75fbf94bc5afb1eadc2dc474fa2f85f0f67c444b8c074603be`。
-配置现为 `calibrated_full_suite`，checker 已重算 commit/tree/fingerprint、三轮 timing、日志、nonce、
-逐文件哈希与阈值关系。该材料只证明未签名本地 E3 校准事实，不是最终 release bundle、GitLab CI、
+该历史提交的配置曾为 `calibrated_full_suite`，checker 已重算 commit/tree/fingerprint、三轮 timing、日志、nonce、
+逐文件哈希与阈值关系。当前候选已回到 `provisional_requires_full_suite`，不得复用这些旧字段。该材料只证明历史未签名本地 E3 校准事实，不是最终 release bundle、GitLab CI、
 远程 Runner 或 E4；完整动态发布状态仍以最终 C→E bundle 为准。
 
 本次冻结前还修正了正式验收链中的三个集成问题。Windows fixture 不再依赖调用者继承的

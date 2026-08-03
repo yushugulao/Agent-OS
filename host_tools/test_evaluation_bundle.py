@@ -8,6 +8,7 @@ import copy
 import hashlib
 import gzip
 import io
+import inspect
 import json
 import os
 import shutil
@@ -49,7 +50,11 @@ from evaluation_contract import (
 )
 from evaluation_scenario import collect_scenario, read_expected_programs
 from render_evaluation_dashboard import render
-from test_evaluation_campaign import _platform_proof, _scenario_environment
+from test_evaluation_campaign import (
+    _msys_platform_proof,
+    _platform_proof,
+    _scenario_environment,
+)
 from test_compatibility_overhead import materialize_compatibility_fixture
 from test_evaluation_contract import COMMIT, SUITE_PATH, make_log
 from test_evaluation_scenario import _write_target
@@ -113,6 +118,123 @@ def write_strict(path: Path, value: object) -> None:
         encoding="utf-8",
         newline="\n",
     )
+
+
+def reseal_portable_bundle_fixture(root: Path) -> None:
+    """Rebind a deliberately attacker-controlled portable bundle fixture."""
+
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["campaign_sha256"] = digest(root / "run" / "campaign.json")
+    records = {record["path"]: record for record in manifest["files"]}
+    for relative, record in records.items():
+        path = root.joinpath(*relative.split("/"))
+        record["bytes"] = path.stat().st_size
+        record["sha256"] = digest(path)
+    receipt_path = "run/measurement-source-receipt.json"
+    receipt_record = records[receipt_path]
+    for artifact in manifest["artifacts"]:
+        if artifact["path"] == receipt_path:
+            artifact["bytes"] = receipt_record["bytes"]
+            artifact["sha256"] = receipt_record["sha256"]
+    body = {
+        key: value for key, value in manifest.items() if key != "binding_sha256"
+    }
+    manifest["binding_sha256"] = bundle._binding_sha256(body)
+    write_strict(manifest_path, manifest)
+    checksum_paths = sorted(["manifest.json", *records])
+    (root / "checksums.sha256").write_text(
+        "".join(
+            f"{digest(root.joinpath(*relative.split('/')))}  {relative}\n"
+            for relative in checksum_paths
+        ),
+        encoding="ascii",
+        newline="\n",
+    )
+
+
+def assert_packaged_contract_code_is_never_executed(
+    original_bundle: Path, root: Path
+) -> None:
+    attack = root / "untrusted-contract-code-bundle"
+    shutil.copytree(original_bundle, attack)
+    sentinel = root / "untrusted-calibration-executed"
+    snapshot = attack / "run" / bundle.MEASUREMENT_SOURCE_SNAPSHOT_ROOT
+    calibration = snapshot / "scripts" / "agent_test_calibration.py"
+    calibration.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(sentinel)!r}).write_text('executed', encoding='ascii')\n"
+        "def validate_recorded_calibration_profile(profile, tools, host):\n"
+        "    return profile['profile_id']\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    # Prove the fixture is executable if a verifier ever treats the snapshot as
+    # a Python contract root, then remove the setup sentinel before both APIs.
+    platform_probe._load_profile_component(
+        snapshot,
+        "scripts/agent_test_calibration.py",
+        "agentos_malicious_bundle_calibration_fixture",
+    )
+    assert sentinel.is_file(), "malicious calibration fixture did not execute"
+    sentinel.unlink()
+
+    receipt_path = attack / "run" / "measurement-source-receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    calibration_record = next(
+        record
+        for record in receipt["sources"]
+        if record["path"] == "scripts/agent_test_calibration.py"
+    )
+    calibration_record["bytes"] = calibration.stat().st_size
+    calibration_record["sha256"] = digest(calibration)
+    write_strict(receipt_path, receipt)
+
+    campaign_path = attack / "run" / "campaign.json"
+    campaign = json.loads(campaign_path.read_text(encoding="utf-8"))
+    forged_platform = _msys_platform_proof(root / "untrusted-platform-fixture")
+    config = json.loads(
+        (ROOT / "ci" / "kernel-budgets.json").read_text(encoding="utf-8")
+    )["agent_test_suite"]
+    forged_platform["duration_profile"] = {
+        "calibration_status": config["calibration_status"],
+        "name": "local-e3",
+        "profile_id": config["local_calibration_profile"]["profile_id"],
+        "status": "matched",
+    }
+    campaign["platform"] = forged_platform
+    campaign["run"]["execution_domain"] = "native-msys2"
+    campaign["measurement_source_receipt"] = receipt
+    write_strict(campaign_path, campaign)
+
+    plan_path = attack / "run" / "run-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["measurement_source_receipt"] = receipt
+    plan["campaign_sha256"] = digest(campaign_path)
+    write_strict(plan_path, plan)
+    reseal_portable_bundle_fixture(attack)
+
+    for label, verifier in (
+        ("portable", lambda: bundle.verify_bundle(attack, contract_root=ROOT)),
+        (
+            "embedded-contract",
+            lambda: bundle.verify_bundle(attack, contract_root=snapshot),
+        ),
+        (
+            "committed",
+            lambda: bundle.verify_committed_bundle(
+                attack, ROOT, contract_root=ROOT
+            ),
+        ),
+    ):
+        try:
+            verifier()
+        except bundle.BundleError:
+            pass
+        else:
+            raise AssertionError(f"{label} verifier accepted malicious bundle")
+        assert not sentinel.exists(), f"{label} verifier executed packaged code"
 
 
 def expect_rejected(action, message: str) -> None:
@@ -367,6 +489,7 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
+        env=bundle.controlled_git_environment(),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -375,6 +498,45 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     if check and result.returncode:
         raise AssertionError(f"git {' '.join(args)} failed: {result.stderr}")
     return result
+
+
+def assert_isolated_fixture_repository(repo: Path) -> None:
+    observed = git(repo, "rev-parse", "--show-toplevel").stdout.strip()
+    assert Path(observed).resolve(strict=True) == repo.resolve(strict=True)
+
+
+def materialize_committed_measurement_sources(
+    repo: Path, commit: str, source_inventory: list[dict[str, object]]
+) -> None:
+    """Replace fixture worktree sources with their exact committed blob bytes."""
+
+    executable = shutil.which("git")
+    assert executable is not None
+    process = subprocess.Popen(
+        [executable, "-C", str(repo), "cat-file", "--batch"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=bundle.controlled_git_environment(),
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    for record in source_inventory:
+        source = str(record["path"])
+        process.stdin.write(f"{commit}:{source}\n".encode("utf-8"))
+        process.stdin.flush()
+        header = process.stdout.readline().rstrip(b"\n").split()
+        assert len(header) == 3 and header[1] == b"blob", (source, header)
+        size = int(header[2])
+        data = process.stdout.read(size)
+        assert len(data) == size and process.stdout.read(1) == b"\n"
+        destination = repo.joinpath(*source.split("/"))
+        destination.write_bytes(data)
+    process.stdin.close()
+    returncode = process.wait(timeout=30)
+    diagnostics = process.stderr.read().decode("utf-8", errors="replace")
+    assert returncode == 0, diagnostics
 
 
 def tool(argv0: str, marker: str) -> dict[str, str]:
@@ -391,6 +553,7 @@ def make_run(
     *,
     artifact_root: str = "results/evaluation/runs/contract-test",
     commit: str = COMMIT,
+    measurement_source_root: Path = ROOT,
 ) -> Path:
     run = root / "run"
     raw = run / "raw"
@@ -398,6 +561,7 @@ def make_run(
     suite = load_suite(SUITE_PATH)
     platform = _platform_proof(root)
     environment = {
+        "assembler": tool("riscv64-linux-gnu-as", "a"),
         "bash": tool("bash", "1"),
         "compiler": tool("riscv64-linux-gnu-gcc", "2"),
         "git": tool("git", "6"),
@@ -471,7 +635,7 @@ def make_run(
         "source": "procfs:/proc/cpuinfo+/proc/meminfo",
     })
     measurement_source_receipt = build_measurement_source_receipt(
-        ROOT, source_commit=commit
+        measurement_source_root, source_commit=commit
     )
     campaign = {
         "boots": boots,
@@ -514,7 +678,7 @@ def make_run(
     write_json(run / "summary.json", summary)
     write_jsonl(run / "metrics.jsonl", rows)
     materialize_compatibility_fixture(run, ROOT, campaign)
-    render(run / "summary.json", run / "dashboard")
+    render(run / "summary.json", run / "dashboard", contract_root=ROOT)
     return run
 
 
@@ -769,7 +933,9 @@ def add_formal_scenario(
     scenario_evidence._write_report(scenario_root / "report.json", report)
 
     micro = json.loads((run / "campaign.json").read_text(encoding="utf-8"))
-    execution = _scenario_environment()
+    execution = _scenario_environment(
+        micro["platform"]["tools"]["host_cc"]["path"]
+    )
     python_bin = micro["environment"]["python"]["path"]
     driver_path = str(
         (Path(__file__).resolve().parent / "check_seeded_action_state.py").resolve()
@@ -857,6 +1023,7 @@ def add_formal_scenario(
     summary, rows = build(
         SUITE_PATH, run / "run-plan.json", run / "raw",
         scenario_root / "report.json", scenario_root / "scenario-plan.json",
+        contract_root=ROOT,
     )
     write_json(run / "summary.json", summary)
     write_jsonl(run / "metrics.jsonl", rows)
@@ -864,7 +1031,7 @@ def add_formal_scenario(
         run, run_id="contract-test", source_commit=commit
     )
     shutil.rmtree(run / "dashboard")
-    render(run / "summary.json", run / "dashboard")
+    render(run / "summary.json", run / "dashboard", contract_root=ROOT)
 
 
 def assert_image_replay_rejects_self_consistent_state_forgery(
@@ -942,7 +1109,11 @@ def assert_image_replay_rejects_self_consistent_state_forgery(
         assert digest(image_path) == original_image_sha256
         expect_rejected(
             lambda: bundle._verify_scenario_campaign(
-                run, micro_campaign, profile="formal"
+                run,
+                micro_campaign,
+                profile="formal",
+                source_tree=ROOT,
+                trusted_contract_root=ROOT,
             ),
             "final filesystem state bytes differ",
         )
@@ -991,7 +1162,11 @@ def assert_image_budget_precedes_extraction(
         bundle.extract_state_files = forbidden_extractor
         expect_rejected(
             lambda: bundle._verify_scenario_campaign(
-                run, micro_campaign, profile="formal"
+                run,
+                micro_campaign,
+                profile="formal",
+                source_tree=ROOT,
+                trusted_contract_root=ROOT,
             ),
             "exceeds its budget",
         )
@@ -1006,9 +1181,10 @@ def assert_committed_delivery_roundtrip(
     repo = root / "delivery-repo"
     repo.mkdir()
     git(repo, "init", "-q")
+    assert_isolated_fixture_repository(repo)
     git(repo, "config", "user.email", "evaluation@example.invalid")
     git(repo, "config", "user.name", "Evaluation Test")
-    git(repo, "config", "core.autocrlf", "false")
+    git(repo, "config", "core.autocrlf", "true")
     shutil.copyfile(ROOT / ".gitignore", repo / ".gitignore")
     shutil.copyfile(ROOT / ".gitattributes", repo / ".gitattributes")
     index = repo / "evidence" / "releases" / "INDEX.md"
@@ -1027,11 +1203,34 @@ def assert_committed_delivery_roundtrip(
         destination = repo / record["path"]
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / record["path"], destination)
+    normalization_fixture = repo / "baseline_ucore" / "user" / "src" / "rp_plain.c"
+    normalization_source = normalization_fixture.read_bytes().replace(b"\r\n", b"\n")
+    assert b"\n" in normalization_source
+    normalization_fixture.write_bytes(normalization_source.replace(b"\n", b"\r\n"))
+    alternate_contract = repo / "host_tools" / "full_verification_metrics_render.py"
+    alternate_contract.write_text(
+        alternate_contract.read_text(encoding="utf-8")
+        + "\n# Alternate trusted contract root fixture.\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "source")
     source = git(repo, "rev-parse", "HEAD").stdout.strip()
+    normalized_blob = bundle._git_capture(
+        repo,
+        "cat-file",
+        "blob",
+        f"{source}:baseline_ucore/user/src/rp_plain.c",
+    )
+    assert b"\r\n" not in normalized_blob
+    assert normalization_fixture.read_bytes() != normalized_blob
+    materialize_committed_measurement_sources(repo, source, source_inventory)
+    assert normalization_fixture.read_bytes() == normalized_blob
 
-    formal_run = make_run(root / "delivery-run", commit=source)
+    formal_run = make_run(
+        root / "delivery-run", commit=source, measurement_source_root=repo
+    )
     add_formal_scenario(formal_run, commit=source)
     make_full_verification_payload(formal_run / "full-verification", commit=source)
     output = repo / "evidence" / "releases" / "evaluation-contract-test"
@@ -1039,8 +1238,17 @@ def assert_committed_delivery_roundtrip(
         run_dir=formal_run,
         suite_path=SUITE_PATH,
         output=output,
+        contract_root=repo,
         repo_root=repo,
     )
+    packaged_contract = (
+        output / "run" / bundle.MEASUREMENT_SOURCE_SNAPSHOT_ROOT
+        / "host_tools" / "full_verification_metrics_render.py"
+    )
+    assert packaged_contract.read_bytes() == alternate_contract.read_bytes()
+    assert packaged_contract.read_bytes() != (
+        ROOT / "host_tools" / "full_verification_metrics_render.py"
+    ).read_bytes()
     assert manifest["delivery"]["release"] == {
         "name": "evaluation-contract-test",
         "path": "evidence/releases/evaluation-contract-test",
@@ -1067,7 +1275,9 @@ def assert_committed_delivery_roundtrip(
     assert required_log.relative_to(repo).as_posix() in git(
         repo, "ls-tree", "-r", "--name-only", "HEAD"
     ).stdout.splitlines()
-    verified = bundle.verify_committed_bundle(output, repo)
+    verified = bundle.verify_committed_bundle(
+        output, repo, contract_root=repo
+    )
     assert verified == manifest
 
     documentation = repo / "docs" / "delivery.md"
@@ -1076,7 +1286,9 @@ def assert_committed_delivery_roundtrip(
     git(repo, "add", "docs/delivery.md")
     git(repo, "commit", "-q", "-m", "docs")
     assert git(repo, "rev-parse", "HEAD^").stdout.strip() == evidence
-    assert bundle.verify_committed_bundle(output, repo) == manifest
+    assert bundle.verify_committed_bundle(
+        output, repo, contract_root=repo
+    ) == manifest
 
     clone = root / "clean-clone"
     git(root, "clone", "-q", str(repo), str(clone))
@@ -1128,15 +1340,18 @@ def assert_committed_delivery_roundtrip(
         clone_output / "run",
     )
     clean_clone_call_start = len(image_verifier_calls)
-    assert bundle.verify_bundle(clone_output) == manifest
+    assert bundle.verify_bundle(clone_output, contract_root=clone) == manifest
     assert_image_verification_delta(image_verifier_calls, clean_clone_call_start)
-    assert bundle.verify_committed_bundle(clone_output, clone) == manifest
+    assert bundle.verify_committed_bundle(
+        clone_output, clone, contract_root=clone
+    ) == manifest
 
 
 def assert_git_source_blob_tamper_rejected(root: Path) -> None:
     repo = root / "source-blob-tamper-repo"
     repo.mkdir()
     git(repo, "init", "-q")
+    assert_isolated_fixture_repository(repo)
     git(repo, "config", "user.email", "evaluation@example.invalid")
     git(repo, "config", "user.name", "Evaluation Test")
     source_inventory = build_measurement_source_receipt(
@@ -1168,6 +1383,14 @@ def assert_git_source_blob_tamper_rejected(root: Path) -> None:
 
 
 def main() -> int:
+    for operation in (
+        bundle.create_bundle,
+        bundle.verify_bundle,
+        bundle.verify_committed_bundle,
+    ):
+        parameter = inspect.signature(operation).parameters["contract_root"]
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameter.default is inspect.Parameter.empty
     runner = (ROOT / "scripts" / "run-evaluation-suite.sh").read_text(
         encoding="utf-8"
     )
@@ -1176,6 +1399,8 @@ def main() -> int:
     assert "full-verify)" in runner
     assert "--expected-commit \"${commit}\"" in runner
     assert "full-verification is unavailable for development runs" in runner
+    assert 'KERNEL_BUDGET_POLICY_TOOL="scripts/check-kernel-budgets.py"' in runner
+    assert "--check agent-test-policy" in runner
     expected = Path("raw/boot-01/guest.log")
     canonical = "results/evaluation/runs/contract-test/raw/boot-01/guest.log"
     assert bundle._campaign_artifact_relative(
@@ -1212,6 +1437,29 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        profile_run = root / "profile-binding"
+        (profile_run / "full-verification").mkdir(parents=True)
+        original_full_verifier = bundle.verify_full_verification_payload
+        try:
+            for campaign_profile, payload_profile in (
+                ("local-e3", "none"), ("none", "local-e3")
+            ):
+                bundle.verify_full_verification_payload = (
+                    lambda *_args, profile=payload_profile, **_kwargs: (
+                        {"agent_test_duration_profile": profile}, {"receipt.json"}
+                    )
+                )
+                expect_rejected(
+                    lambda profile=campaign_profile: bundle._verify_full_verification(
+                        profile_run, expected_commit=COMMIT, profile="formal",
+                        expected_duration_platform={
+                            "duration_profile": {"name": profile}
+                        }, contract_root=ROOT,
+                    ),
+                    "duration profile differs from campaign",
+                )
+        finally:
+            bundle.verify_full_verification_payload = original_full_verifier
         assert_archive_safety(root)
         assert_formal_kernel_cost_contract(root)
         development_run = make_run(
@@ -1296,6 +1544,7 @@ def main() -> int:
                 run_dir=development_run,
                 suite_path=SUITE_PATH,
                 output=root / "missing-source-receipt",
+                contract_root=ROOT,
                 profile="development",
             ),
             "measurement source receipt is missing or unsafe",
@@ -1309,6 +1558,7 @@ def main() -> int:
                 run_dir=development_run,
                 suite_path=SUITE_PATH,
                 output=root / "mismatched-source-receipt",
+                contract_root=ROOT,
                 profile="development",
             ),
             "differs from the campaign or run plan",
@@ -1341,13 +1591,14 @@ def main() -> int:
             lambda: bundle.create_bundle(
                 run_dir=development_run, suite_path=SUITE_PATH,
                 output=root / "formal-missing-scenario",
+                contract_root=ROOT,
             ),
             "formal evidence requires",
         )
         development = root / "development-bundle"
         manifest = bundle.create_bundle(
             run_dir=development_run, suite_path=SUITE_PATH,
-            output=development, profile="development",
+            output=development, contract_root=ROOT, profile="development",
         )
         assert manifest["profile"] == {
             "name": "development", "formal": False,
@@ -1357,15 +1608,18 @@ def main() -> int:
         assert manifest["full_verification"] == bundle.DEVELOPMENT_FULL_VERIFICATION
         assert manifest["archive_summary"]["archive_count"] == 7
         assert not (development / "run" / "raw").exists()
-        assert bundle.verify_bundle(development) == manifest
+        assert bundle.verify_bundle(
+            development, contract_root=ROOT
+        ) == manifest
+        assert_packaged_contract_code_is_never_executed(development, root)
         bundle_manifest_path = development / "manifest.json"
         original_bundle_manifest = bundle_manifest_path.read_bytes()
-        for invalid_schema in (5.0, True, "5"):
+        for invalid_schema in (5, 6.0, True, "6"):
             forged_bundle_manifest = json.loads(original_bundle_manifest)
             forged_bundle_manifest["schema_version"] = invalid_schema
             write_strict(bundle_manifest_path, forged_bundle_manifest)
             expect_rejected(
-                lambda: bundle.verify_bundle(development),
+                lambda: bundle.verify_bundle(development, contract_root=ROOT),
                 "bundle manifest schema is unsupported",
             )
         bundle_manifest_path.write_bytes(original_bundle_manifest)
@@ -1377,6 +1631,7 @@ def main() -> int:
                 run_dir=development_run,
                 suite_path=SUITE_PATH,
                 output=root / "development-with-full-verification",
+                contract_root=ROOT,
                 profile="development",
             ),
             "must declare full-verification unavailable",
@@ -1387,7 +1642,7 @@ def main() -> int:
         )
         missing_snapshot.unlink()
         expect_rejected(
-            lambda: bundle.verify_bundle(development),
+            lambda: bundle.verify_bundle(development, contract_root=ROOT),
             "bundle inventory differs",
         )
 
@@ -1397,7 +1652,7 @@ def main() -> int:
         expect_rejected(
             lambda: bundle.create_bundle(
                 run_dir=development_run, suite_path=SUITE_PATH,
-                output=failed_output, profile="development",
+                output=failed_output, contract_root=ROOT, profile="development",
             ),
             "raw inventory differs",
         )
@@ -1408,7 +1663,7 @@ def main() -> int:
         expect_rejected(
             lambda: bundle.create_bundle(
                 run_dir=development_run, suite_path=SUITE_PATH,
-                output=failed_output, profile="development",
+                output=failed_output, contract_root=ROOT, profile="development",
             ),
             "hash differs",
         )
@@ -1444,6 +1699,7 @@ def main() -> int:
                 run_dir=formal_run,
                 suite_path=SUITE_PATH,
                 output=root / "formal-without-full-verification",
+                contract_root=ROOT,
             ),
             "requires a full-verification payload",
         )
@@ -1451,7 +1707,7 @@ def main() -> int:
             formal_run / "full-verification", commit=COMMIT
         )
         original_full_verifier = bundle.verify_full_verification_payload
-        semantic_contract_roots: list[str] = []
+        semantic_contract_roots: list[Path] = []
 
         def structural_full_verifier(
             root: Path, *, expected_commit: str | None = None, contract_root: Path
@@ -1462,9 +1718,7 @@ def main() -> int:
             ) -> None:
                 resolved = source_root.resolve(strict=True)
                 assert (resolved / "scripts/capture-final-evidence.py").is_file()
-                semantic_contract_roots.append(
-                    "live" if resolved == ROOT.resolve(strict=True) else "snapshot"
-                )
+                semantic_contract_roots.append(resolved)
 
             full_verification_contract._replay_semantics = structural_replay
             try:
@@ -1489,7 +1743,11 @@ def main() -> int:
         write_strict(scenario_preflight_path, forged_scenario_preflight)
         expect_rejected(
             lambda: bundle._verify_scenario_campaign(
-                formal_run, micro_campaign, profile="formal"
+                formal_run,
+                micro_campaign,
+                profile="formal",
+                source_tree=ROOT,
+                trusted_contract_root=ROOT,
             ),
             "preflight receipt differs from its campaign",
         )
@@ -1506,7 +1764,11 @@ def main() -> int:
         )
         expect_rejected(
             lambda: bundle._verify_scenario_campaign(
-                formal_run, micro_campaign, profile="formal"
+                formal_run,
+                micro_campaign,
+                profile="formal",
+                source_tree=ROOT,
+                trusted_contract_root=ROOT,
             ),
             "identity differs from the micro campaign",
         )
@@ -1523,7 +1785,11 @@ def main() -> int:
         )
         expect_rejected(
             lambda: bundle._verify_scenario_campaign(
-                formal_run, micro_campaign, profile="formal"
+                formal_run,
+                micro_campaign,
+                profile="formal",
+                source_tree=ROOT,
+                trusted_contract_root=ROOT,
             ),
             "identity differs from the micro campaign",
         )
@@ -1589,6 +1855,7 @@ def main() -> int:
             micro_campaign,
             profile="formal",
             source_tree=source_snapshot,
+            trusted_contract_root=ROOT,
         )
         scenario_evidence.task6_artifact_payloads = original_payload_builder
         assert snapshot_corpus_calls
@@ -1607,6 +1874,7 @@ def main() -> int:
                 micro_campaign,
                 profile="formal",
                 source_tree=source_snapshot,
+                trusted_contract_root=ROOT,
             ),
             "source-C semantic replay failed",
         )
@@ -1674,6 +1942,7 @@ def main() -> int:
                     micro_campaign,
                     profile="formal",
                     source_tree=source_snapshot,
+                    trusted_contract_root=ROOT,
                 ),
                 "source-C program manifests",
             )
@@ -1688,7 +1957,10 @@ def main() -> int:
 
         formal = root / "formal-bundle"
         formal_manifest = bundle.create_bundle(
-            run_dir=formal_run, suite_path=SUITE_PATH, output=formal
+            run_dir=formal_run,
+            suite_path=SUITE_PATH,
+            output=formal,
+            contract_root=ROOT,
         )
         assert formal_manifest["profile"] == {
             "name": "formal", "formal": True, "warning": None,
@@ -1742,7 +2014,9 @@ def main() -> int:
         assert not (formal / "run" / "raw").exists()
         assert not (formal / "run" / "scenario" / "raw").exists()
         materialized_call_start = len(image_verifier_calls)
-        assert bundle.verify_bundle(formal) == formal_manifest
+        assert bundle.verify_bundle(
+            formal, contract_root=ROOT
+        ) == formal_manifest
         assert_image_verification_delta(image_verifier_calls, materialized_call_start)
         unexpected_scenario = (
             formal_run / "scenario" / "raw" / "boot-01" / "plain" / "temporary.log"
@@ -1752,6 +2026,7 @@ def main() -> int:
             lambda: bundle.create_bundle(
                 run_dir=formal_run, suite_path=SUITE_PATH,
                 output=root / "unknown-scenario-bundle",
+                contract_root=ROOT,
             ),
             "not explicitly bound",
         )
@@ -1820,13 +2095,18 @@ def main() -> int:
                 lambda: bundle.create_bundle(
                     run_dir=formal_run, suite_path=SUITE_PATH,
                     output=link_parent / "bundle",
+                    contract_root=ROOT,
                 ),
                 "link-backed",
             )
         assert ("boot-01", "plain") in image_verifier_calls
         assert ("boot-01", "agentos") in image_verifier_calls
-        assert "live" in semantic_contract_roots
-        assert "snapshot" in semantic_contract_roots
+        assert semantic_contract_roots
+        assert ROOT.resolve(strict=True) in semantic_contract_roots
+        assert all(
+            bundle.MEASUREMENT_SOURCE_SNAPSHOT_ROOT not in root.parts
+            for root in semantic_contract_roots
+        )
         bundle._verify_scenario_image_state = image_verifier
         bundle.verify_full_verification_payload = original_full_verifier
     print("test_evaluation_bundle: passed")

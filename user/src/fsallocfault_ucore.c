@@ -65,6 +65,10 @@ static void verify_flush_receipt(
 {
 	unsigned long long raw_delta =
 		after->durability_raw_writes - before->durability_raw_writes;
+	unsigned long long physical_write_delta =
+		after->physical_writes - before->physical_writes;
+	unsigned long long physical_flush_delta =
+		after->physical_flushes - before->physical_flushes;
 
 	if (after->durability_capacity != before->durability_capacity ||
 	    after->durability_epoch != before->durability_epoch + 1 ||
@@ -86,17 +90,23 @@ static void verify_flush_receipt(
 		    after->durability_cached_writes ||
 	    after->durability_raw_writes >
 		    after->durability_last_acknowledged_sequence ||
-	    raw_delta < before->durability_pending_blocks)
+	    raw_delta != before->durability_pending_blocks ||
+	    physical_write_delta != raw_delta ||
+	    physical_flush_delta != 1 ||
+	    after->physical_failed_transfers !=
+		before->physical_failed_transfers)
 		fail("volatile durability flush receipt");
 	printf("fsallocfault_ucore: flush_receipt stage=%s abi=%u "
 	       "capacity=%u epoch_before=%llu epoch_after=%llu "
 	       "pending_before=%u pending_after=%u raw_writes_delta=%llu "
+	       "physical_write_delta=%llu physical_flush_delta=%llu "
 	       "real_flush_delta=%llu failed_flush_delta=%llu "
 	       "capacity_failures=%llu\n",
 	       stage, FSALLOC_DURABILITY_BACKEND_ABI_VERSION,
 	       after->durability_capacity, before->durability_epoch,
 	       after->durability_epoch, before->durability_pending_blocks,
 	       after->durability_pending_blocks, raw_delta,
+	       physical_write_delta, physical_flush_delta,
 	       after->durability_successful_flushes -
 		       before->durability_successful_flushes,
 	       after->durability_failed_flushes -
@@ -142,6 +152,37 @@ static void flush_with_receipt(const char *stage,
 		fail("explicit durability flush");
 	snapshot(after);
 	verify_flush_receipt(stage, &before, after, 1);
+}
+
+static void verify_operation_io_receipt(
+	const struct fsalloc_test_snapshot *before,
+	const struct fsalloc_test_snapshot *after)
+{
+	unsigned long long raw_delta;
+	unsigned long long flush_delta;
+	unsigned long long physical_write_delta;
+	unsigned long long physical_flush_delta;
+
+	if (after->durability_raw_writes < before->durability_raw_writes ||
+	    after->durability_successful_flushes <
+		before->durability_successful_flushes ||
+	    after->physical_writes < before->physical_writes ||
+	    after->physical_flushes < before->physical_flushes)
+		fail("operation I/O counters are not monotonic");
+	raw_delta = after->durability_raw_writes -
+		before->durability_raw_writes;
+	flush_delta = after->durability_successful_flushes -
+		before->durability_successful_flushes;
+	physical_write_delta = after->physical_writes -
+		before->physical_writes;
+	physical_flush_delta = after->physical_flushes -
+		before->physical_flushes;
+	if (raw_delta != physical_write_delta ||
+	    flush_delta != physical_flush_delta)
+		fail("allocator operation physical I/O receipt");
+	printf("fsallocfault_ucore: operation_io raw=%llu physical_write=%llu "
+	       "flush=%llu physical_flush=%llu\n", raw_delta,
+	       physical_write_delta, flush_delta, physical_flush_delta);
 }
 
 static int exercise_operation(void)
@@ -233,6 +274,13 @@ static void verify_runtime_settlement(
 			expected_account_inode = 1;
 		}
 	}
+	printf("fsallocfault_ucore: settlement result=%d block=%d inode=%d "
+	       "account_block=%d account_inode=%d expected_ok=%d "
+	       "expected_block=%d expected_inode=%d "
+	       "expected_account_block=%d expected_account_inode=%d\n",
+	       result, block_delta, inode_delta, account_block_delta,
+	       account_inode_delta, expected_result_ok, expected_block,
+	       expected_inode, expected_account_block, expected_account_inode);
 	if (!expected_result_ok || block_delta != expected_block ||
 	    inode_delta != expected_inode ||
 	    account_block_delta != expected_account_block ||
@@ -349,6 +397,7 @@ int main(void)
 	snapshot(&after);
 	if (after.hook_hits != before.hook_hits + 1 || after.armed != 0)
 		fail("one-shot allocator fault receipt");
+	verify_operation_io_receipt(&before, &after);
 	verify_runtime_settlement(result, &before, &after);
 	flush_before = after;
 	if (test_call(FSALLOC_TEST_FLUSH, 0, 0, 0, 0) < 0)

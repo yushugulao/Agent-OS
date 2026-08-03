@@ -2348,12 +2348,73 @@ out:
 	return result;
 }
 
-//The inode table in memory
+// The inode table is capacity-sized, so key lookup must not scan every slot.
+#define FS_ICACHE_HASH_BUCKETS 256U
+#define FS_ICACHE_INDEX_NONE (-1)
+_Static_assert((FS_ICACHE_HASH_BUCKETS & (FS_ICACHE_HASH_BUCKETS - 1)) == 0,
+	       "inode-cache hash size must be a power of two");
+
 struct {
 	struct inode inode[FS_ICACHE_SIZE];
+	int next[FS_ICACHE_SIZE];
+	int hash_head[FS_ICACHE_HASH_BUCKETS];
+	int free_head;
+	int initialized;
 } itable;
 
 static struct inode *iget(uint dev, uint inum);
+
+static uint inode_cache_bucket(uint dev, uint inum)
+{
+	return ((dev * 16777619U) ^ inum) & (FS_ICACHE_HASH_BUCKETS - 1);
+}
+
+static int inode_cache_index(struct inode *ip)
+{
+	if (ip < &itable.inode[0] || ip >= &itable.inode[FS_ICACHE_SIZE])
+		panic("inode cache pointer");
+	return (int)(ip - &itable.inode[0]);
+}
+
+static void inode_cache_init_once(void)
+{
+	if (itable.initialized)
+		return;
+	for (uint bucket = 0; bucket < FS_ICACHE_HASH_BUCKETS; bucket++)
+		itable.hash_head[bucket] = FS_ICACHE_INDEX_NONE;
+	itable.free_head = FS_ICACHE_INDEX_NONE;
+	for (int index = FS_ICACHE_SIZE - 1; index >= 0; index--) {
+		itable.next[index] = itable.free_head;
+		itable.free_head = index;
+	}
+	itable.initialized = 1;
+}
+
+static void inode_cache_drop_ref(struct inode *ip)
+{
+	uint bucket;
+	uint scanned = 0;
+	int index, *link;
+
+	if (ip == 0 || ip->ref <= 0)
+		panic("inode reference underflow");
+	ip->ref--;
+	if (ip->ref != 0)
+		return;
+	index = inode_cache_index(ip);
+	bucket = inode_cache_bucket(ip->dev, ip->inum);
+	link = &itable.hash_head[bucket];
+	while (*link != FS_ICACHE_INDEX_NONE && *link != index) {
+		if (scanned++ >= FS_ICACHE_SIZE)
+			panic("inode cache hash cycle");
+		link = &itable.next[*link];
+	}
+	if (*link != index)
+		panic("inode cache unlink");
+	*link = itable.next[index];
+	itable.next[index] = itable.free_head;
+	itable.free_head = index;
+}
 
 // Allocate an inode on device dev.
 // Mark it as allocated by  giving it type `type`.
@@ -2428,21 +2489,21 @@ struct inode *ialloc(uint dev, short type,
 					FSALLOC_PHASE_INTENT, 0);
 				if (result < 0) {
 					brelse(bp);
-					ip->ref--;
+					inode_cache_drop_ref(ip);
 					ip = 0;
 					goto out;
 				}
 				result = fs_write_metadata_block(bp);
 				if (result < 0) {
 					brelse(bp);
-					ip->ref--;
+					inode_cache_drop_ref(ip);
 					ip = 0;
 					goto out;
 				}
 				brelse(bp);
 				result = fs_durable_barrier_forward();
 				if (result < 0) {
-					ip->ref--;
+					inode_cache_drop_ref(ip);
 					ip = 0;
 					goto out;
 				}
@@ -2535,28 +2596,37 @@ int iupdate(struct inode *ip)
 // it from disk.
 static struct inode *iget(uint dev, uint inum)
 {
-	struct inode *ip, *empty;
-	// Is the inode already in the table?
-	empty = 0;
-	for (ip = &itable.inode[0]; ip < &itable.inode[FS_ICACHE_SIZE]; ip++) {
-		if (ip->ref > 0 && ip->dev == dev && ip->inum == inum) {
+	uint bucket;
+	uint scanned = 0;
+	int index;
+	struct inode *ip;
+
+	inode_cache_init_once();
+	bucket = inode_cache_bucket(dev, inum);
+	for (index = itable.hash_head[bucket];
+	     index != FS_ICACHE_INDEX_NONE; index = itable.next[index]) {
+		if (scanned++ >= FS_ICACHE_SIZE)
+			panic("inode cache hash cycle");
+		ip = &itable.inode[index];
+		if (ip->ref <= 0)
+			panic("free inode in hash");
+		if (ip->dev == dev && ip->inum == inum) {
 			ip->ref++;
 			return ip;
 		}
-		if (empty == 0 && ip->ref == 0) // Remember empty slot.
-			empty = ip;
 	}
 
-	// Recycle an inode entry.
-	if (empty == 0)
+	index = itable.free_head;
+	if (index == FS_ICACHE_INDEX_NONE)
 		return 0;
-
-	ip = empty;
+	itable.free_head = itable.next[index];
+	ip = &itable.inode[index];
+	memset(ip, 0, sizeof(*ip));
 	ip->dev = dev;
 	ip->inum = inum;
 	ip->ref = 1;
-	ip->valid = 0;
-	ip->removed = 0;
+	itable.next[index] = itable.hash_head[bucket];
+	itable.hash_head[bucket] = index;
 	return ip;
 }
 
@@ -2647,13 +2717,13 @@ int inode_remove_detach(struct inode *ip, struct inode_reclaim *reclaim)
 	freeing = fs_qmap_transition(FS_QMAP_FREEING_FLAG, storage_owner);
 	if (freeing == FS_OWNER_NONE) {
 		ip->removed = 0;
-		ip->ref--;
+		inode_cache_drop_ref(ip);
 		return -1;
 	}
 	vfs_cred_kernel(&kernel_cred);
 	if (itruncate_detach(ip, &kernel_cred, 0, reclaim) < 0) {
 		ip->removed = 0;
-		ip->ref--;
+		inode_cache_drop_ref(ip);
 		return -1;
 	}
 	if (fs_allocator_gate_lock(1) < 0) {
@@ -2665,7 +2735,7 @@ int inode_remove_detach(struct inode *ip, struct inode_reclaim *reclaim)
 						 reclaim->page_charge_class);
 		memset(reclaim, 0, sizeof(*reclaim));
 		ip->removed = 0;
-		ip->ref--;
+		inode_cache_drop_ref(ip);
 		return -1;
 	}
 	memmove(&allocated_inode, ip, sizeof(allocated_inode));
@@ -2728,7 +2798,7 @@ int inode_remove_detach(struct inode *ip, struct inode_reclaim *reclaim)
 	fs_allocator_gate_unlock();
 	ip->valid = 0;
 	ip->removed = 0;
-	ip->ref--;
+	inode_cache_drop_ref(ip);
 	return 1;
 
 publish_fail:
@@ -2741,7 +2811,7 @@ publish_fail:
 					 reclaim->page_charge_class);
 	memset(reclaim, 0, sizeof(*reclaim));
 	ip->removed = 0;
-	ip->ref--;
+	inode_cache_drop_ref(ip);
 	return -1;
 }
 
@@ -2760,7 +2830,7 @@ void iput(struct inode *ip)
 		}
 		return;
 	}
-	ip->ref--;
+	inode_cache_drop_ref(ip);
 }
 
 static int fs_put_removed_checked(struct inode *) __attribute__((noinline));
@@ -4208,7 +4278,8 @@ struct inode *fs_create(char *path, short type, int *created,
 			iput(dp);
 		return 0;
 	}
-	if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE)) {
+	if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE) ||
+	    !vfs_create_request_authorize(cred, policy, 0, 0, 0)) {
 		iput(dp);
 		return 0;
 	}
@@ -4277,15 +4348,17 @@ struct inode *fs_create(char *path, short type, int *created,
 		goto fail_allocated;
 	}
 	ip->fs_owner_domain = charge.owner;
+	result = vfs_inode_init_label(ip, cred, policy);
+	if (result < 0) {
+		result = fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		goto fail_allocated;
+	}
 	lookup_status = fs_allocator_fault_before(
 		FSALLOC_OP_IALLOC, FSALLOC_PHASE_OWNER, 0);
 	if (lookup_status < 0) {
 		result = lookup_status;
 		goto fail_allocated;
 	}
-	result = vfs_inode_init_label(ip, cred, policy);
-	if (result < 0)
-		goto fail_allocated;
 	result = iupdate(ip);
 	if (result < 0)
 		goto fail_allocated;

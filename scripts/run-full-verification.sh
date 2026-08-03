@@ -12,7 +12,8 @@ MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"
 HOST_CC="${HOST_CC:-${HOSTCC:-${CC:-cc}}}"
 HOSTCC="${HOST_CC}"
 CC="${HOST_CC}"
-export HOST_CC HOSTCC CC
+AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-local-e3}"
+export HOST_CC HOSTCC CC AGENT_TEST_DURATION_PROFILE
 
 if [[ "${AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES:-0}" != "0" ]]; then
 	echo "[full-verify] unsanitized host probes are forbidden" >&2
@@ -23,10 +24,21 @@ export AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES=0
 source "${ROOT_DIR}/scripts/evidence-wiring.sh"
 evidence_initialize
 
-echo "[full-verify] Agent duration calibration policy"
-"${PYTHON_BIN}" "${ROOT_DIR}/scripts/check-kernel-budgets.py" \
-	--check agent-test-policy \
-	--config "${ROOT_DIR}/ci/kernel-budgets.json"
+case "${AGENT_TEST_DURATION_PROFILE}" in
+local-e3)
+	echo "[full-verify] Agent duration policy profile=local-e3 status=enforced"
+	"${PYTHON_BIN}" "${ROOT_DIR}/scripts/check-kernel-budgets.py" \
+		--check agent-test-policy \
+		--config "${ROOT_DIR}/ci/kernel-budgets.json"
+	;;
+none)
+	echo "[full-verify] Agent duration policy profile=none status=skipped-different-runner"
+	;;
+*)
+	echo "[full-verify] AGENT_TEST_DURATION_PROFILE must be local-e3 or none" >&2
+	exit 2
+	;;
+esac
 
 agent_suite_guest_log=""
 agent_suite_guest_log_owned=0
@@ -69,6 +81,10 @@ run_resource_regression() {
 		IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}"
 		MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS}"
 	)
+	local runner_shell=(bash)
+	if [[ "${label}" == "fs-allocator-fault" ]]; then
+		runner_shell=(/bin/bash --noprofile --norc -p)
+	fi
 
 	if evidence_enabled; then
 		local stdout_file="${EVIDENCE_WORK_DIR}/${label}.stdout"
@@ -77,7 +93,7 @@ run_resource_regression() {
 		: >"${guest_file}"
 		evidence_capture "${stdout_file}" env \
 			EVIDENCE_GUEST_LOG_FILE="${guest_file}" \
-			"${common_env[@]}" "$@" bash "${runner}"
+			"${common_env[@]}" "$@" "${runner_shell[@]}" "${runner}"
 		[[ -s "${guest_file}" ]]
 		{
 			printf '===== runner-stdout:%s =====\n' "${label}"
@@ -87,7 +103,7 @@ run_resource_regression() {
 		} >"${combined_file}"
 		evidence_publish_file "${combined_file}" "${filename}"
 	else
-		env "${common_env[@]}" "$@" bash "${runner}"
+		env "${common_env[@]}" "$@" "${runner_shell[@]}" "${runner}"
 	fi
 }
 
@@ -172,6 +188,7 @@ echo "[full-verify] AgentOS kernel tests"
 		env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
 			-u AGENT_TEST_GUEST_LOG_FILE \
 			AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
+			AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE}" \
 			AGENT_TEST_TIMING_FILE="${timing_file}" \
 			AGENT_TEST_GUEST_LOG_FILE="${agent_suite_guest_log}" \
 			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
@@ -188,6 +205,7 @@ echo "[full-verify] AgentOS kernel tests"
 		: >"${agent_suite_guest_log}"
 		env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
 			AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
+			AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE}" \
 			AGENT_TEST_GUEST_LOG_FILE="${agent_suite_guest_log}" \
 			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
 			PYTHON_BIN="${PYTHON_BIN}" \

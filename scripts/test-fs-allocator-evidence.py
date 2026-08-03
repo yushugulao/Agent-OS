@@ -9,6 +9,8 @@ import io
 import json
 import os
 import shutil
+import subprocess
+import struct
 import tarfile
 import tempfile
 import unittest
@@ -23,21 +25,33 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
 BASELINE_COMPILE_ARGV = [
-    "make",
+    "/fixture/bin/make",
     "build",
-    "TOOLPREFIX=riscv64-unknown-elf-",
+    "TOOLPREFIX=",
+    "CC=/fixture/bin/riscv64-linux-gnu-gcc",
+    "AS=/fixture/bin/riscv64-linux-gnu-gcc",
+    "LD=/fixture/bin/riscv64-linux-gnu-ld",
+    "OBJCOPY=/fixture/bin/riscv64-linux-gnu-objcopy",
+    "OBJDUMP=/fixture/bin/riscv64-linux-gnu-objdump",
     "LOG=error",
     "BUILDDIR=/tmp/kernel-build",
     "INIT_PROC=fsallocfault_ucore",
+    "PYTHON_BIN=/fixture/bin/python3",
     MODULE.PROFILE_BUILD_FLAG,
 ]
 MUTANT_COMPILE_ARGV = [
-    "make",
+    "/fixture/bin/make",
     "build",
-    "TOOLPREFIX=riscv64-unknown-elf-",
+    "TOOLPREFIX=",
+    "CC=/fixture/bin/riscv64-linux-gnu-gcc",
+    "AS=/fixture/bin/riscv64-linux-gnu-gcc",
+    "LD=/fixture/bin/riscv64-linux-gnu-ld",
+    "OBJCOPY=/fixture/bin/riscv64-linux-gnu-objcopy",
+    "OBJDUMP=/fixture/bin/riscv64-linux-gnu-objdump",
     "LOG=error",
     "BUILDDIR=/tmp/mutant-kernel-build",
     "INIT_PROC=fsallocfault_ucore",
+    "PYTHON_BIN=/fixture/bin/python3",
     MODULE.PROFILE_BUILD_FLAG,
     MODULE.MUTANT_BUILD_FLAG,
 ]
@@ -57,6 +71,42 @@ def artifact_record(path: Path, relative: str) -> dict[str, object]:
     return {"path": relative, "bytes": len(raw), "sha256": sha256_bytes(raw)}
 
 
+def fake_program_pair(case_id: str) -> tuple[bytes, bytes]:
+    rx = hashlib.sha256(f"{case_id}:rx".encode("ascii")).digest()
+    rw = hashlib.sha256(f"{case_id}:rw".encode("ascii")).digest()
+    rw_offset = 4096
+    program = rx + bytes(rw_offset - len(rx)) + rw
+    ident = bytearray(16)
+    ident[:7] = b"\x7fELF\x02\x01\x01"
+    elf_header = struct.pack(
+        "<16sHHIQQQIHHHHHH",
+        bytes(ident),
+        2,
+        243,
+        1,
+        0x1000,
+        64,
+        0,
+        0,
+        64,
+        56,
+        2,
+        0,
+        0,
+        0,
+    )
+    program_headers = b"".join(
+        (
+            struct.pack("<IIQQQQQQ", 1, 5, 4096, 0x1000, 0x1000, len(rx), len(rx), 4096),
+            struct.pack("<IIQQQQQQ", 1, 6, 8192, 0x2000, 0x2000, len(rw), len(rw), 4096),
+        )
+    )
+    elf = elf_header + program_headers
+    elf += bytes(4096 - len(elf)) + rx
+    elf += bytes(8192 - len(elf)) + rw
+    return program, elf
+
+
 def fake_raw_image(case_id: str, stage: str) -> bytes:
     header = json.dumps({"case": case_id, "stage": stage}, sort_keys=True).encode("ascii") + b"\n"
     return header + bytes(64 * 1024 - len(header))
@@ -71,6 +121,7 @@ def parse_fake_raw(path: Path) -> tuple[str, str, bytes]:
 def make_snapshot(case_id: str, stage: str, raw: bytes | None = None) -> dict[str, object]:
     if raw is None:
         raw = fake_raw_image(case_id, stage)
+    program, _elf = fake_program_pair(case_id)
     semantic: dict[str, object] = {
         "format": MODULE.SNAPSHOT_FORMAT,
         "geometry": {
@@ -99,19 +150,30 @@ def make_snapshot(case_id: str, stage: str, raw: bytes | None = None) -> dict[st
         "canonical_violations": [],
         "allocated_unowned": [],
         "owner_without_bitmap": [],
-        "inodes": {},
+        "inodes": {
+            "3": {
+                "type": 2,
+                "size": len(program),
+                "exec_layout_version": 1,
+                "exec_rw_offset": 4096,
+            }
+        },
         "inode_raw_sha256": {},
         "inode_incarnations": {},
         "free_inode_owners": {},
         "inode_owner_entries": {},
         "inode_owner_state_counts": {},
-        "root_names": {"fixture": 2},
-        "root_dirents": [{"name": "fixture", "inum": 2}],
+        "root_names": {"fixture": 2, MODULE.WORKLOAD_IMAGE_NAME: 3},
+        "root_dirents": [
+            {"name": "fixture", "inum": 2},
+            {"name": MODULE.WORKLOAD_IMAGE_NAME, "inum": 3},
+        ],
         "reachable_inodes": [],
         "reachable_blocks": [],
         "inode_blocks": {},
         "payload_sha256": {
-            "2": sha256_bytes(f"{case_id}:{stage}:payload".encode("ascii"))
+            "2": sha256_bytes(f"{case_id}:{stage}:payload".encode("ascii")),
+            "3": sha256_bytes(program),
         },
         "block_sha256": {},
         "orphan_inodes": [],
@@ -122,6 +184,21 @@ def make_snapshot(case_id: str, stage: str, raw: bytes | None = None) -> dict[st
     semantic["image"] = {"bytes": len(raw), "sha256": sha256_bytes(raw)}
     semantic["generator"] = {"name": MODULE.GENERATOR_NAME, "version": "2"}
     return semantic
+
+
+def make_canonical(snapshot: dict[str, object]) -> dict[str, object]:
+    return {
+        "format": MODULE.CANONICAL_FORMAT,
+        "generator": snapshot["generator"],
+        "image": snapshot["image"],
+        "state_sha256": snapshot["state_sha256"],
+        "qmap_state_counts": snapshot["qmap_state_counts"],
+        "qmap_top_state_counts": snapshot["qmap_top_state_counts"],
+        "inode_owner_state_counts": snapshot["inode_owner_state_counts"],
+        "transitions": [],
+        "inode_transitions": [],
+        "violations": [],
+    }
 
 
 def make_diff(case_id: str, after_stage: str) -> dict[str, object]:
@@ -199,12 +276,7 @@ class FakeImageTool:
         elif command == "validate":
             case_id, stage, _ = parse_fake_raw(Path(args[1]))
             snapshot = make_snapshot(case_id, stage)
-            value = {
-                "violations": [],
-                "transitions": [],
-                "inode_transitions": [],
-                "state_sha256": snapshot["state_sha256"],
-            }
+            value = make_canonical(snapshot)
         elif command == "verify-case-raw":
             case_id, before_stage, _ = parse_fake_raw(Path(args[1]))
             fault_case, fault_stage, _ = parse_fake_raw(Path(args[2]))
@@ -263,6 +335,9 @@ def make_package(root: Path) -> None:
             "make": "make",
             "host_cc": "cc",
             "cross_gcc": "riscv64-linux-gnu-gcc",
+            "cross_ld": "riscv64-linux-gnu-ld",
+            "cross_objcopy": "riscv64-linux-gnu-objcopy",
+            "cross_objdump": "riscv64-linux-gnu-objdump",
         }[label]
         requested = f"/fixture/bin/{executable_name}"
         executable = f"fixture-{label}-executable".encode("ascii")
@@ -287,6 +362,7 @@ def make_package(root: Path) -> None:
             "run_id": run_id,
             "source": {
                 "commit": source_commit,
+                "tree": "c" * 40,
                 "dirty": False,
                 "status_bytes": 0,
                 "status_sha256": sha256_bytes(b""),
@@ -296,7 +372,16 @@ def make_package(root: Path) -> None:
             "sources": source_records,
             "toolchain": {
                 label: tool_record(label)
-                for label in ("python", "qemu", "make", "host_cc", "cross_gcc")
+                for label in (
+                    "python",
+                    "qemu",
+                    "make",
+                    "host_cc",
+                    "cross_gcc",
+                    "cross_ld",
+                    "cross_objcopy",
+                    "cross_objdump",
+                )
             },
         },
     )
@@ -318,6 +403,10 @@ def make_package(root: Path) -> None:
             "compile_argv": BASELINE_COMPILE_ARGV,
             "launch_argv": [
                 "/fixture/bin/python3",
+                "-I",
+                "-S",
+                "-B",
+                "/fixture/evidence/sources/scripts/trusted-python-entry.py",
                 "scripts/agent_test_runner.py",
                 "--init-proc",
                 "fsallocfault_ucore",
@@ -337,6 +426,10 @@ def make_package(root: Path) -> None:
         tag = "mutation-alloc-intent-crash" if mutation else case_id
         argv = [
             "/fixture/bin/python3",
+            "-I",
+            "-S",
+            "-B",
+            "/fixture/evidence/sources/scripts/trusted-python-entry.py",
             "scripts/agent_test_runner.py",
             "--init-proc",
             "fsallocfault_ucore",
@@ -497,14 +590,19 @@ def make_package(root: Path) -> None:
         case_id = "-".join(case)
         case_root = root / "cases" / case_id
         case_root.mkdir(parents=True)
-        program_raw = f"fixture program: {case_id}\n".encode("ascii")
+        program_raw, elf_raw = fake_program_pair(case_id)
         (case_root / "program.bin").write_bytes(program_raw)
+        (case_root / "program.elf").write_bytes(elf_raw)
         build_argv = [
-            "make",
+            "/fixture/bin/make",
             "-C",
             "user",
-            "TOOLPREFIX=riscv64-linux-gnu-",
+            "TOOLPREFIX=",
             "CHAPTER=agent",
+            "CC=/fixture/bin/riscv64-linux-gnu-gcc",
+            "OBJCOPY=/fixture/bin/riscv64-linux-gnu-objcopy",
+            "OBJDUMP=/fixture/bin/riscv64-linux-gnu-objdump",
+            "PYTHON_BIN=/fixture/bin/python3",
             MODULE._expected_user_build_flag(case),
             f"build_dir=/tmp/{case_id}-user-build",
             f"out_dir=/tmp/{case_id}-user-target",
@@ -521,6 +619,12 @@ def make_package(root: Path) -> None:
                 "build_argv": build_argv,
                 "program": artifact_record(
                     case_root / "program.bin", f"cases/{case_id}/program.bin"
+                ),
+                "elf": artifact_record(
+                    case_root / "program.elf", f"cases/{case_id}/program.elf"
+                ),
+                "image_shape": MODULE._elf_image_shape(
+                    program_raw, elf_raw, case_id
                 ),
             },
         )
@@ -539,12 +643,7 @@ def make_package(root: Path) -> None:
         write_json(case_root / "reboot.snapshot.json", reboot)
         write_json(
             case_root / "reboot.canonical.json",
-            {
-                "violations": [],
-                "transitions": [],
-                "inode_transitions": [],
-                "state_sha256": reboot["state_sha256"],
-            },
+            make_canonical(reboot),
         )
         write_json(case_root / "reboot.diff.json", reboot_diff)
         write_json(case_root / "verified.json", make_verified(case_id))
@@ -604,11 +703,45 @@ def make_package(root: Path) -> None:
             success_marker, _, _ = MODULE._expected_execution_semantics(
                 case_id, stage, False
             )
+            physical_lines = []
+            if stage == "fault":
+                physical_lines.append(
+                    MODULE._physical_flush_log_marker(
+                        "fault-baseline", 2, 4096, 8, 9, 1, 0, 1, 1, 1, 1, 0, 0
+                    )
+                )
+                if action != "crash":
+                    physical_lines.append(
+                        MODULE._physical_operation_log_marker(1, 1, 1, 1)
+                    )
+            if stage != "fault" or action != "crash":
+                physical_lines.append(
+                    MODULE._physical_flush_log_marker(
+                        stage,
+                        2,
+                        4096,
+                        stage_index - 1,
+                        stage_index,
+                        stage_index,
+                        0,
+                        stage_index,
+                        stage_index,
+                        1,
+                        1,
+                        0,
+                        0,
+                    )
+                )
+            log_lines = [
+                *physical_lines,
+                success_marker,
+                f"{case_id}: {stage}: durable flush receipt",
+                receipt_marker,
+            ]
             log_path = case_root / f"{stage}.guest.log"
-            log_path.write_text(
-                f"{success_marker}\n{case_id}: {stage}: durable flush receipt\n"
-                f"{receipt_marker}\n",
-                encoding="utf-8",
+            log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+            physical_io = MODULE._parse_physical_io_receipts(
+                case, stage, backend["backend"], receipt_body, log_lines
             )
             log_record = artifact_record(log_path, f"cases/{case_id}/{stage}.guest.log")
             write_json(
@@ -621,6 +754,7 @@ def make_package(root: Path) -> None:
                     "backend": receipt_backend,
                     "launch_argv": runner_argv(case_id, stage, False),
                     "receipt": receipt_body,
+                    "physical_io": physical_io,
                     "source_log": log_record,
                 },
             )
@@ -659,6 +793,490 @@ def make_package(root: Path) -> None:
     MODULE.seal_run(root)
 
 
+class SourceClosureContractTest(unittest.TestCase):
+    def make_source_evidence(self, root: Path) -> None:
+        source_records = []
+        for relative in MODULE.SOURCE_PATHS:
+            raw = f"fixture source: {relative}\n".encode("utf-8")
+            destination = root / "sources" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(raw)
+            source_records.append(
+                {
+                    "source_path": relative,
+                    "artifact": {
+                        "path": f"sources/{relative}",
+                        "bytes": len(raw),
+                        "sha256": sha256_bytes(raw),
+                    },
+                }
+            )
+
+        def tool_record(name: str) -> dict[str, object]:
+            raw = f"fixture-{name}".encode("ascii")
+            version = f"fixture {name} 1\n".encode("ascii")
+            resolved = f"/fixture/bin/{name}"
+            return {
+                "requested": resolved,
+                "resolved": resolved,
+                "executable": {"bytes": len(raw), "sha256": sha256_bytes(raw)},
+                "version_argv": [resolved, "--version"],
+                "version_first_line": version.decode("ascii").strip(),
+                "version_sha256": sha256_bytes(version),
+            }
+
+        write_json(
+            root / "run.json",
+            {
+                "schema_version": 1,
+                "format": MODULE.RUN_FORMAT,
+                "run_id": "a" * 64,
+                "source": {
+                    "commit": "b" * 40,
+                    "tree": "c" * 40,
+                    "dirty": False,
+                    "status_bytes": 0,
+                    "status_sha256": sha256_bytes(b""),
+                    "status_hex": "",
+                    "snapshot_sha256": sha256_bytes(
+                        MODULE._render_json(source_records)
+                    ),
+                },
+                "sources": source_records,
+                "toolchain": {
+                    name: tool_record(name)
+                    for name in (
+                        "python",
+                        "qemu",
+                        "make",
+                        "host_cc",
+                        "cross_gcc",
+                        "cross_ld",
+                        "cross_objcopy",
+                        "cross_objdump",
+                    )
+                },
+            },
+        )
+
+    def test_source_inventory_closes_over_all_guest_build_inputs(self) -> None:
+        repository = SCRIPT.parent.parent
+        declared = set(
+            MODULE.ROOT_BUILD_SOURCE_PATHS
+            + MODULE.KERNEL_BUILD_SOURCE_PATHS
+            + MODULE.USER_BUILD_SOURCE_PATHS
+            + MODULE.MKFS_SOURCE_PATHS
+        )
+        self.assertEqual(MODULE._discover_guest_build_inputs(repository), declared)
+        self.assertEqual(len(MODULE.SOURCE_PATHS), len(set(MODULE.SOURCE_PATHS)))
+        self.assertEqual(
+            set(MODULE.SOURCE_PATHS),
+            declared | set(MODULE.HOST_VERIFIER_SOURCE_PATHS),
+        )
+
+    def test_git_index_hiding_flags_cannot_forge_a_clean_snapshot(self) -> None:
+        git = shutil.which("git")
+        self.assertIsNotNone(git)
+        for enable, disable in (
+            ("--assume-unchanged", "--no-assume-unchanged"),
+            ("--skip-worktree", "--no-skip-worktree"),
+        ):
+            with self.subTest(flag=enable), tempfile.TemporaryDirectory() as tmp:
+                repository = Path(tmp)
+
+                def run_git(*args: str) -> subprocess.CompletedProcess[bytes]:
+                    return subprocess.run(
+                        [str(git), *args],
+                        cwd=repository,
+                        input=b"",
+                        capture_output=True,
+                        check=True,
+                    )
+
+                run_git("init", "-q")
+                run_git("config", "user.name", "Allocator Evidence Test")
+                run_git("config", "user.email", "allocator@example.invalid")
+                (repository / "tracked.txt").write_text("committed\n", encoding="ascii")
+                run_git("add", "tracked.txt")
+                run_git("commit", "-q", "-m", "fixture")
+                run_git("update-index", enable, "tracked.txt")
+                (repository / "tracked.txt").write_text("hidden change\n", encoding="ascii")
+                self.assertEqual(run_git("status", "--porcelain").stdout, b"")
+                with patch.object(MODULE, "SOURCE_PATHS", ("tracked.txt",)):
+                    with self.assertRaisesRegex(MODULE.EvidenceError, "index flags"):
+                        MODULE._git_head_source_payloads(
+                            repository,
+                            Path(str(git)).resolve(),
+                            run_git("rev-parse", "HEAD").stdout.decode().strip(),
+                        )
+                run_git("update-index", disable, "tracked.txt")
+
+    def test_attested_tool_rejects_post_capture_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            evidence = directory / "evidence"
+            evidence.mkdir()
+            self.make_source_evidence(evidence)
+            tool = directory / "tool.bin"
+            tool.write_bytes(b"trusted-tool")
+            run = json.loads((evidence / "run.json").read_text(encoding="utf-8"))
+            record = run["toolchain"]["make"]
+            record["requested"] = str(tool)
+            record["resolved"] = str(tool)
+            record["version_argv"] = [str(tool), "--version"]
+            record["executable"] = {
+                "bytes": tool.stat().st_size,
+                "sha256": sha256_bytes(tool.read_bytes()),
+            }
+            write_json(evidence / "run.json", run)
+            self.assertEqual(MODULE.attested_tool_path(evidence, "make"), str(tool))
+            tool.write_bytes(b"hostile-tool")
+            with self.assertRaisesRegex(MODULE.EvidenceError, "changed after capture"):
+                MODULE.attested_tool_path(evidence, "make")
+
+    def test_formal_shell_strips_exported_function_injection(self) -> None:
+        bash = shutil.which("bash")
+        self.assertIsNotNone(bash)
+        poison = f"/tmp/fsalloc-bash-env-{id(self)}"
+        completed = subprocess.run(
+            [
+                str(bash),
+                "-c",
+                f"printf 'exit 0\\n' >{poison}; "
+                "cp() { exit 91; }; exec() { exit 92; }; "
+                "export -f cp exec; "
+                f"BASH_ENV={poison} /bin/bash --noprofile --norc -p "
+                "scripts/run-fs-allocator-fault-tests.sh "
+                f"--hermetic-shell-selftest && /bin/rm -f {poison}",
+            ],
+            cwd=SCRIPT.parent.parent,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        stderr = completed.stderr.decode("utf-8", errors="replace")
+        self.assertEqual(completed.returncode, 0, stderr)
+        self.assertIn(b"fsalloc-hermetic-shell: passed", completed.stdout)
+        repository = SCRIPT.parent.parent
+        self.assertIn(
+            "/bin/bash --noprofile --norc -p scripts/run-fs-allocator-fault-tests.sh",
+            (repository / "Makefile").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "/bin/bash --noprofile --norc -p scripts/run-ci-mechanism.sh fs-allocator-fault",
+            (repository / ".gitlab-ci.yml").read_text(encoding="utf-8"),
+        )
+        for relative in (
+            "scripts/run-ci-mechanism.sh",
+            "scripts/run-full-verification.sh",
+        ):
+            self.assertIn(
+                "runner_shell=(/bin/bash --noprofile --norc -p)",
+                (repository / relative).read_text(encoding="utf-8"),
+            )
+
+    def test_source_inventory_keeps_metadata_and_observation_tcb(self) -> None:
+        required = {
+            "agent_observe_test_phase_abi.h",
+            "nfs/fs.h",
+            "nfs/types.h",
+            "os/agent_durable_section.c",
+            "os/agent_identity_lease.c",
+            "os/agent_metadata_disk.h",
+            "os/agent_metadata_probe.c",
+            "os/agent_metadata_probe.h",
+            "os/agent_metadata_recovery.c",
+            "os/agent_metadata_recovery.h",
+            "os/agent_metadata_recovery_test.c",
+            "os/agent_metadata_recovery_test.h",
+            "os/agent_metadata_store.c",
+            "os/agent_metadata_store_format.c",
+            "os/agent_metadata_store_format.h",
+            "os/agent_metadata_store_io.c",
+            "os/agent_metadata_store_io.h",
+            "os/agent_observe_capacity.c",
+            "os/agent_observe_capacity.h",
+            "os/agent_observe_recovery.c",
+            "os/agent_observe_recovery.h",
+            "os/agent_observe_recovery_store.h",
+            "os/agent_observe_store.c",
+            "os/agent_observe_store.h",
+            "os/workflow_lifecycle.c",
+            "os/workflow_lifecycle.h",
+            "user/include/agent_observe_test_phase_abi.h",
+            "user/include/fs_allocator_test_abi.h",
+            "host_tools/agent_metadata_disk_format.py",
+            "host_tools/agent_observe_disk_acceptance.py",
+            "host_tools/plain_ucore_fs_extract.py",
+        }
+        self.assertTrue(required.issubset(MODULE.SOURCE_PATHS))
+
+    def test_capture_rejects_guest_source_inventory_drift(self) -> None:
+        declared = set(
+            MODULE.ROOT_BUILD_SOURCE_PATHS
+            + MODULE.KERNEL_BUILD_SOURCE_PATHS
+            + MODULE.USER_BUILD_SOURCE_PATHS
+            + MODULE.MKFS_SOURCE_PATHS
+        )
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            MODULE,
+            "_discover_guest_build_inputs",
+            return_value=declared | {"os/untracked-build-owner.c"},
+        ):
+            with self.assertRaisesRegex(
+                MODULE.EvidenceError, "Guest build source inventory differs"
+            ):
+                MODULE.capture_run(
+                    Path(tmp) / "evidence",
+                    SCRIPT.parent.parent,
+                    "a" * 64,
+                    "qemu-system-riscv64",
+                    "python3",
+                    "riscv64-linux-gnu-",
+                )
+
+    def test_capture_rejects_dirty_source_tree(self) -> None:
+        completed = type(
+            "Completed",
+            (),
+            {"stdout": b" M os/fs.c\0", "stderr": b"", "returncode": 0},
+        )()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            MODULE, "_resolved_tool", return_value=Path(MODULE.sys.executable)
+        ), patch.object(
+            MODULE, "_capture_command", return_value=b"b" * 40 + b"\n"
+        ), patch.object(MODULE.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(MODULE.EvidenceError, "source tree must be clean"):
+                MODULE.capture_run(
+                    Path(tmp) / "evidence",
+                    SCRIPT.parent.parent,
+                    "a" * 64,
+                    "qemu-system-riscv64",
+                    "python3",
+                    "riscv64-linux-gnu-",
+                )
+
+    def test_capture_rejects_commit_or_tree_drift_during_snapshot(self) -> None:
+        states = [
+            ("b" * 40, "c" * 40, b""),
+            ("b" * 40, "d" * 40, b""),
+        ]
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            MODULE, "_git_source_state", side_effect=states
+        ), patch.object(
+            MODULE, "_require_sources_match_commit"
+        ):
+            with self.assertRaisesRegex(MODULE.EvidenceError, "changed while.*captured"):
+                MODULE.capture_run(
+                    Path(tmp) / "evidence",
+                    SCRIPT.parent.parent,
+                    "a" * 64,
+                    "qemu-system-riscv64",
+                    "python3",
+                    "riscv64-linux-gnu-",
+                )
+
+    def test_materialized_source_is_stable_and_boundaries_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            evidence = directory / "evidence"
+            evidence.mkdir()
+            self.make_source_evidence(evidence)
+            live = directory / "live"
+            shutil.copytree(evidence / "sources", live)
+            (live / "docs").mkdir()
+            (live / "docs/ignored.txt").write_text(
+                "not a build input\n", encoding="ascii"
+            )
+            snapshot = directory / "snapshot"
+            MODULE.materialize_source(evidence, snapshot)
+            original = (snapshot / "os/fs.c").read_bytes()
+            clean = ("b" * 40, "c" * 40, b"")
+            with patch.object(
+                MODULE, "_git_source_state", return_value=clean
+            ), patch.object(MODULE, "_require_sources_match_commit"):
+                MODULE.verify_source_boundary(evidence, live, snapshot, "initial")
+                (live / "os/fs.c").write_text("changed live source\n", encoding="utf-8")
+                with self.assertRaisesRegex(MODULE.EvidenceError, "live source snapshot"):
+                    MODULE.verify_source_boundary(evidence, live, snapshot, "live-change")
+                self.assertEqual((snapshot / "os/fs.c").read_bytes(), original)
+
+                shutil.copyfile(evidence / "sources/os/fs.c", live / "os/fs.c")
+                (live / "os/injected.c").write_text("int injected;\n", encoding="ascii")
+                with self.assertRaisesRegex(MODULE.EvidenceError, "inventory differs"):
+                    MODULE.verify_source_boundary(evidence, live, snapshot, "extra-input")
+                (live / "os/injected.c").unlink()
+                (snapshot / "scripts/injected.py").write_text(
+                    "raise RuntimeError('injected')\n", encoding="ascii"
+                )
+                with self.assertRaisesRegex(MODULE.EvidenceError, "entries differ"):
+                    MODULE.verify_source_boundary(
+                        evidence, live, snapshot, "extra-host-input"
+                    )
+                (snapshot / "scripts/injected.py").unlink()
+                (snapshot / "os/fs.c").write_text("changed snapshot\n", encoding="utf-8")
+                with self.assertRaisesRegex(
+                    MODULE.EvidenceError, "materialized source snapshot"
+                ):
+                    MODULE.verify_source_boundary(
+                        evidence, live, snapshot, "snapshot-change"
+                    )
+
+    def test_controlled_environment_blocks_host_injection(self) -> None:
+        hostile = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": "/poison/python",
+            "PYTHONHOME": "/poison/home",
+            "MAKEFILES": "/poison/makefile",
+            "MAKEFLAGS": "--eval=poison",
+            "CPATH": "/poison/include",
+            "LD_PRELOAD": "/poison/library",
+            "ASAN_OPTIONS": "halt_on_error=0:exitcode=0",
+            "UBSAN_OPTIONS": "halt_on_error=0:suppressions=/poison",
+            "FS_DOMAIN_BLOCK_LIMIT": "1",
+            "FS_ALLOCATOR_DELETE_BARRIER_MUTANT": "1",
+            "FS_STORAGE_TINY_TEST_PROFILE": "1",
+        }
+        clean = MODULE.controlled_environment(hostile)
+        self.assertEqual(clean["PATH"], "/usr/bin:/bin")
+        for name in hostile:
+            if name not in {"PATH", "ASAN_OPTIONS", "UBSAN_OPTIONS"}:
+                self.assertNotIn(name, clean)
+        self.assertEqual(
+            clean["ASAN_OPTIONS"], "detect_leaks=0:halt_on_error=1"
+        )
+        self.assertEqual(clean["UBSAN_OPTIONS"], "halt_on_error=1")
+        self.assertFalse(any(name.startswith("FS_") for name in clean))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            sentinel = directory / "sitecustomize-ran"
+            poison = directory / "sitecustomize.py"
+            poison.write_text(
+                f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('bad')\n",
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            environment.update(hostile)
+            environment["PYTHONPATH"] = str(directory)
+            launcher = SCRIPT.with_name("trusted-python-entry.py")
+            code = (
+                "import json,os;"
+                "print(json.dumps(sorted(k for k in os.environ "
+                "if k.startswith(('PYTHON','MAKE','FS_','CPATH','LD_',"
+                "'ASAN_','UBSAN_')))))"
+            )
+            completed = MODULE.subprocess.run(
+                [
+                    MODULE.sys.executable,
+                    "-I",
+                    "-S",
+                    "-B",
+                    str(launcher),
+                    "scripts/fs-allocator-evidence.py",
+                    "clean-exec",
+                    "--",
+                    MODULE.sys.executable,
+                    "-I",
+                    "-S",
+                    "-B",
+                    "-c",
+                    code,
+                ],
+                cwd=SCRIPT.parent.parent,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                json.loads(completed.stdout),
+                [
+                    "ASAN_OPTIONS",
+                    "PYTHONDONTWRITEBYTECODE",
+                    "PYTHONNOUSERSITE",
+                    "UBSAN_OPTIONS",
+                ],
+            )
+            self.assertFalse(sentinel.exists())
+
+    def test_packaged_host_verifier_import_closure_is_self_contained(self) -> None:
+        repository = SCRIPT.parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "sources"
+            for relative in MODULE.SOURCE_PATHS:
+                destination = snapshot / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(repository / relative, destination)
+            for relative in (
+                "scripts/agent_test_runner.py",
+                "scripts/fs-allocator-evidence.py",
+                "scripts/fs-allocator-image.py",
+            ):
+                completed = MODULE.subprocess.run(
+                    [
+                        MODULE.sys.executable,
+                        "-I",
+                        "-S",
+                        "-B",
+                        str(snapshot / relative),
+                        "--help",
+                    ],
+                    cwd=snapshot,
+                    stdin=MODULE.subprocess.DEVNULL,
+                    stdout=MODULE.subprocess.PIPE,
+                    stderr=MODULE.subprocess.PIPE,
+                    check=False,
+                    timeout=15,
+                )
+                self.assertEqual(
+                    completed.returncode,
+                    0,
+                    completed.stderr.decode("utf-8", errors="replace"),
+                )
+
+    def test_formal_raw_verifiers_require_metadata_cow_once(self) -> None:
+        calls = []
+
+        def fake_cli(_directory, arguments, _output, _label):
+            calls.append(arguments)
+            return {
+                "operation": "alloc",
+                "phase": "intent",
+                "action": "busy",
+                "verified": True,
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            paths = {
+                stage: directory / f"{stage}.img"
+                for stage in ("before", "fault", "reboot")
+            }
+            with patch.object(MODULE, "_run_image_cli_json", side_effect=fake_cli):
+                MODULE._raw_case_cli_results(
+                    directory, paths, ("alloc", "intent", "busy")
+                )
+                MODULE._raw_mutation_control_acceptance(directory, paths)
+
+            stderr = json.dumps(
+                {"error": {"code": "EXPECTED", "message": "expected rejection"}}
+            ).encode("utf-8")
+            completed = type(
+                "Completed", (), {"stdout": b"", "stderr": stderr, "returncode": 2}
+            )()
+            with patch.object(MODULE.subprocess, "run", return_value=completed) as run:
+                MODULE._raw_mutation_cli_rejection(directory, paths)
+            calls.append(run.call_args.args[0])
+
+        formal = [argv for argv in calls if "verify-case-raw" in argv]
+        self.assertEqual(len(formal), 3)
+        for argv in formal:
+            self.assertEqual(argv.count("--require-metadata-cow"), 1)
+
+
 class EvidenceContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -693,6 +1311,25 @@ class EvidenceContractTest(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.EvidenceError, fragment):
             function(self.root)
 
+    def test_manifest_rejects_deleted_core_source(self) -> None:
+        (self.root / "sources" / "os" / "agent_metadata_store.c").unlink()
+        self.expect_rejected("source snapshot entries mismatch")
+
+    def test_manifest_rejects_dirty_source_attestation(self) -> None:
+        path = self.root / "run.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        status = b" M os/fs.c\0"
+        value["source"].update(
+            {
+                "dirty": True,
+                "status_bytes": len(status),
+                "status_sha256": sha256_bytes(status),
+                "status_hex": status.hex(),
+            }
+        )
+        write_json(path, value)
+        self.expect_rejected("not from a clean tree")
+
     def test_builds_and_verifies_exact_36_case_manifest(self) -> None:
         manifest = MODULE.write_manifest(self.root)
         self.assertEqual(manifest["format"], MODULE.MANIFEST_FORMAT)
@@ -711,6 +1348,18 @@ class EvidenceContractTest(unittest.TestCase):
             self.assertEqual(set(case["artifacts"]), set(MODULE.CASE_FILES))
             self.assertEqual(set(case["executions"]), set(MODULE.STAGES))
             self.assertEqual(case["generator"]["name"], MODULE.GENERATOR_NAME)
+            self.assertEqual(
+                case["workload"]["build_program"]["sha256"],
+                case["workload"]["stages"]["before"]["payload_sha256"],
+            )
+            self.assertEqual(
+                case["physical_io"]["flush_receipt_count"],
+                3 if case["action"] == "crash" else 4,
+            )
+            self.assertEqual(
+                case["physical_io"]["operation_receipt_count"],
+                0 if case["action"] == "crash" else 1,
+            )
             self.assertEqual(
                 case["negative_mutations"][MODULE.DELETE_FLUSH_MUTATION]["status"],
                 "passed",
@@ -808,6 +1457,21 @@ class EvidenceContractTest(unittest.TestCase):
         write_json(mutation_path, mutation)
         self.expect_rejected("allocator mutant exactly once")
 
+    def test_make_argv_rejects_option_and_variable_injection(self) -> None:
+        backend_path = self.root / "backend.json"
+        backend = json.loads(backend_path.read_text(encoding="utf-8"))
+        backend["backend"]["compile_argv"].insert(1, "--eval=all:; @true")
+        write_json(backend_path, backend)
+        self.expect_rejected("canonical profile build")
+
+        shutil.rmtree(self.root)
+        shutil.copytree(self.template, self.root)
+        build_path = self.root / "cases/alloc-intent-busy/build.json"
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+        build["build_argv"].insert(1, "-f")
+        write_json(build_path, build)
+        self.expect_rejected("canonical build")
+
     def test_mutation_oracle_binds_baseline_and_exact_checkpoint_failure(self) -> None:
         mutation_path = self.root / "flush-deletion-mutation.json"
         other_case = "alloc-intent-busy"
@@ -884,12 +1548,131 @@ class EvidenceContractTest(unittest.TestCase):
         mutant.write_bytes(mutant.read_bytes() + b"tampered\n")
         self.expect_rejected("mutant kernel does not match|execution kernel")
 
+    def test_case_build_seals_flat_program_paired_elf_and_inode_shape(self) -> None:
+        case_id = MODULE.CASE_IDS[0]
+        case_root = self.root / "cases" / case_id
+        program = case_root / "program.bin"
+        program.write_bytes(program.read_bytes() + b"tampered")
+        self.expect_rejected("program does not match its artifact")
+
+        shutil.rmtree(self.root)
+        shutil.copytree(self.template, self.root)
+        case_root = self.root / "cases" / case_id
+        elf = case_root / "program.elf"
+        elf.write_bytes(elf.read_bytes() + b"tampered")
+        self.expect_rejected("paired ELF does not match its artifact")
+
+        shutil.rmtree(self.root)
+        shutil.copytree(self.template, self.root)
+        case_root = self.root / "cases" / case_id
+        build = MODULE._validate_case_build(
+            self.root,
+            case_id,
+            json.loads((case_root / "build.json").read_text(encoding="utf-8")),
+            MODULE._load_run(self.root),
+        )
+        snapshot = json.loads(
+            (case_root / "before.snapshot.json").read_text(encoding="utf-8")
+        )
+        snapshot["payload_sha256"]["3"] = "0" * 64
+        with self.assertRaisesRegex(MODULE.EvidenceError, "payload or ELF-derived"):
+            MODULE._validate_workload_snapshot(snapshot, build, "fixture")
+        snapshot = json.loads(
+            (case_root / "before.snapshot.json").read_text(encoding="utf-8")
+        )
+        snapshot["inodes"]["3"]["exec_rw_offset"] += 4096
+        with self.assertRaisesRegex(MODULE.EvidenceError, "payload or ELF-derived"):
+            MODULE._validate_workload_snapshot(snapshot, build, "fixture")
+
     def test_rejects_receipt_without_acknowledged_flush(self) -> None:
         path = self.root / "cases" / MODULE.CASE_IDS[0] / "prepare.flush.json"
         value = json.loads(path.read_text(encoding="utf-8"))
         value["receipt"]["acknowledged_flush_count"] = 0
         write_json(path, value)
         self.expect_rejected("no acknowledged durable flush")
+
+    def test_rejects_missing_or_tampered_physical_io_receipts(self) -> None:
+        case_id = MODULE.CASE_IDS[0]
+        case_root = self.root / "cases" / case_id
+        log_path = case_root / "prepare.guest.log"
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        log_path.write_text(
+            "\n".join(
+                line
+                for line in lines
+                if not line.startswith("fsallocfault_ucore: flush_receipt")
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        receipt_path = case_root / "prepare.flush.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["source_log"] = artifact_record(
+            log_path, f"cases/{case_id}/prepare.guest.log"
+        )
+        write_json(receipt_path, receipt)
+        with self.assertRaisesRegex(
+            MODULE.EvidenceError, "physical flush receipt inventory differs"
+        ):
+            MODULE._validate_receipt(
+                receipt,
+                MODULE._case_tuple(case_id),
+                "prepare",
+                MODULE._load_backend_root(self.root),
+                receipt["source_log"],
+                log_path,
+            )
+
+        shutil.rmtree(self.root)
+        shutil.copytree(self.template, self.root)
+        case_root = self.root / "cases" / case_id
+        receipt_path = case_root / "prepare.flush.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["physical_io"]["flushes"][0]["physical_write_delta"] += 1
+        write_json(receipt_path, receipt)
+        with self.assertRaisesRegex(
+            MODULE.EvidenceError, "physical I/O schema differs from its Guest log"
+        ):
+            MODULE._validate_receipt(
+                receipt,
+                MODULE._case_tuple(case_id),
+                "prepare",
+                MODULE._load_backend_root(self.root),
+                receipt["source_log"],
+                case_root / "prepare.guest.log",
+            )
+
+    def test_rejects_missing_fault_operation_physical_receipt(self) -> None:
+        case_id = "alloc-intent-busy"
+        case_root = self.root / "cases" / case_id
+        log_path = case_root / "fault.guest.log"
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        log_path.write_text(
+            "\n".join(
+                line
+                for line in lines
+                if not line.startswith("fsallocfault_ucore: operation_io")
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        receipt_path = case_root / "fault.flush.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["source_log"] = artifact_record(
+            log_path, f"cases/{case_id}/fault.guest.log"
+        )
+        write_json(receipt_path, receipt)
+        with self.assertRaisesRegex(
+            MODULE.EvidenceError, "physical operation receipt inventory differs"
+        ):
+            MODULE._validate_receipt(
+                receipt,
+                MODULE._case_tuple(case_id),
+                "fault",
+                MODULE._load_backend_root(self.root),
+                receipt["source_log"],
+                log_path,
+            )
 
     def test_rejects_receipt_not_present_in_its_bound_guest_log(self) -> None:
         case_id = MODULE.CASE_IDS[0]
@@ -905,6 +1688,44 @@ class EvidenceContractTest(unittest.TestCase):
         self.expect_rejected(
             "execution Guest log does not match|success marker|flush receipt marker is absent"
         )
+
+    def test_execution_rejects_runner_equivalent_guest_failure_lines(self) -> None:
+        case_id = MODULE.CASE_IDS[0]
+        stage = "prepare"
+        records = {
+            "panic": "[PANIC -1--1] os/main.c:7: synthetic panic",
+            "error": "[ERROR 4-0]unknown syscall -1",
+            "user": "fsallocfault_ucore: check failed: synthetic failure",
+            "orchestrator": "rp_orch: failed code=1",
+        }
+        for label, failure_line in records.items():
+            with self.subTest(label=label):
+                shutil.rmtree(self.root)
+                shutil.copytree(self.template, self.root)
+                log_relative = f"cases/{case_id}/{stage}.guest.log"
+                log_path = self.root / log_relative
+                log_path.write_text(
+                    log_path.read_text(encoding="utf-8") + failure_line + "\n",
+                    encoding="utf-8",
+                )
+                execution_path = self.root / MODULE._execution_relative(
+                    case_id, stage, False
+                )
+                execution = json.loads(execution_path.read_text(encoding="utf-8"))
+                execution["source_log"] = artifact_record(log_path, log_relative)
+                write_json(execution_path, execution)
+                with self.assertRaisesRegex(
+                    MODULE.EvidenceError, "execution log contains a Guest failure"
+                ):
+                    MODULE._validate_execution(
+                        self.root,
+                        case_id,
+                        stage,
+                        False,
+                        execution,
+                        MODULE._load_run(self.root),
+                        MODULE._load_backend_root(self.root),
+                    )
 
     def test_rejects_image_or_generator_provenance_mismatch(self) -> None:
         path = self.root / "cases" / MODULE.CASE_IDS[0] / "verified.json"
@@ -988,6 +1809,8 @@ class EvidenceContractTest(unittest.TestCase):
     def test_safe_writers_parse_facts_and_refuse_overwrite(self) -> None:
         writer_root = Path(self._temp.name) / "writer-root"
         writer_root.mkdir()
+        shutil.copyfile(self.template / "run.json", writer_root / "run.json")
+        shutil.copytree(self.template / "sources", writer_root / "sources")
         kernel = Path(self._temp.name) / "profile-input.kernel"
         kernel.write_bytes(b"writer profile kernel\n")
         compile_argv = Path(self._temp.name) / "compile.json"
@@ -1013,6 +1836,31 @@ class EvidenceContractTest(unittest.TestCase):
             abi_version="2",
         )
         case_id = "alloc-intent-crash"
+        case = MODULE._case_tuple(case_id)
+        program_raw, elf_raw = fake_program_pair(case_id)
+        program_input = Path(self._temp.name) / "writer-program.bin"
+        elf_input = Path(self._temp.name) / "writer-program.elf"
+        build_argv = Path(self._temp.name) / "writer-build.json"
+        program_input.write_bytes(program_raw)
+        elf_input.write_bytes(elf_raw)
+        write_json(
+            build_argv,
+            [
+                "make",
+                "-C",
+                "user",
+                "CHAPTER=agent",
+                MODULE._expected_user_build_flag(case),
+                "/tmp/writer/riscv64/fsallocfault_ucore",
+            ],
+        )
+        MODULE.record_build(
+            writer_root, case_id, program_input, elf_input, build_argv
+        )
+        with self.assertRaisesRegex(MODULE.EvidenceError, "refuses to overwrite"):
+            MODULE.record_build(
+                writer_root, case_id, program_input, elf_input, build_argv
+            )
         stage_argv = Path(self._temp.name) / "stage-argv.json"
         write_json(stage_argv, base_launch + ["-case", case_id, "-stage", "prepare"])
         marker = MODULE._receipt_log_marker(
@@ -1032,7 +1880,10 @@ class EvidenceContractTest(unittest.TestCase):
             False,
         )
         stage_log = Path(self._temp.name) / "stage.log"
-        stage_log.write_text(marker + "\n", encoding="utf-8")
+        physical = MODULE._physical_flush_log_marker(
+            "prepare", 2, 4096, 0, 1, 1, 0, 1, 1, 1, 1, 0, 0
+        )
+        stage_log.write_text(f"{physical}\n{marker}\n", encoding="utf-8")
         MODULE.record_stage(writer_root, case_id, "prepare", stage_log, stage_argv)
         with self.assertRaisesRegex(MODULE.EvidenceError, "refuses to overwrite"):
             MODULE.record_stage(writer_root, case_id, "prepare", stage_log, stage_argv)

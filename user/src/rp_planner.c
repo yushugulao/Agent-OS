@@ -104,8 +104,6 @@ int main(void)
 			   "status=pending\n")) {
 		return 1;
 	}
-	if (!rp_write_file("rp_ack", "")) return 1;
-	if (!rp_write_file("rp_tool", "")) return 1;
 	if (!rp_append_file("rp_ack", "ack=planner;msg=0;status=sent")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.create_plan")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.schedule_tasks")) return 1;

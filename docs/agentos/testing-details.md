@@ -792,21 +792,21 @@ threadresource_ucore: parent passed
 [thread-resource] all checks passed
 ```
 
-321s、359.4s、13680 和 13856 是旧线程计数/固定物理栈路径的历史结果。统一 resource account 与 lazy physical stack 版本已经通过本专项、`ci-check` 和三轮完整 Agent 套件；线程专项还在同一镜像连续 50/50 轮通过。
+321s、359.4s、13680 和 13856 是旧线程计数/固定物理栈路径的历史结果。提交 `17240b7f` 上的统一 resource account 与 lazy physical stack 版本曾通过本专项、`ci-check` 和三轮完整 Agent 套件；线程专项也曾在同一镜像连续 50/50 轮通过。这些结果只属于该历史源码，当前候选仍须由绑定代码提交 C 的发布 bundle 重新验证。
 
 ## 22. `iobudget_ucore`
 
-`iobudget_ucore` 是块设备 I/O 与 buffer cache 分域机制的回归，随 `scripts/run-agent-tests.sh` 运行。它不通过固定 PID、文件名白名单或固定等待时长推断公平性，而是用 syscall 544 读取 `io_policy_info()` ABI v4 的持久 owner、class、owner/device lease/debt、物理完成和 cache 分区计数，再用 Guest pipe 建立原始 workflow lineage 压力进程与独立 workflow 的先后关系。测试还构造唯一 runnable 线程在内核 pipe 条件路径反复 `yield()` 的场景，要求 scheduler 的 idle kerneltrap 窗口仍能交付 timer/device 中断；另让持有已 unlink 文件的 lineage 子进程触发 page fault，验证 terminal teardown 的清理 I/O 仍归因并结清 debt。用户 wrapper 自动传入当前 `sizeof(struct io_policy_info)`；测试同时调用较小旧结构前缀，要求 `version/struct_size` 可读且尾部哨兵不被覆盖。内核的 sized-copy 规则由 `(addr, user_size)` 分发、8 字节最小头和 `min(user_size, current_size)` copyout 实现。
+`iobudget_ucore` 是块设备 I/O 与 buffer cache 分域机制的回归，随 `scripts/run-agent-tests.sh` 运行。它不通过固定 PID、文件名白名单或固定等待时长推断公平性，而是用 syscall 544 读取 `io_policy_info()` ABI v5 的持久 owner、class、owner/device lease/debt、物理提交、提交后失败和 cache 分区计数，再用 Guest pipe 建立原始 workflow lineage 压力进程与独立 workflow 的先后关系。测试还构造唯一 runnable 线程在内核 pipe 条件路径反复 `yield()` 的场景，要求 scheduler 的 idle kerneltrap 窗口仍能交付 timer/device 中断；另让持有已 unlink 文件的 lineage 子进程触发 page fault，验证 terminal teardown 的清理 I/O 仍归因并结清 owner lane debt。用户 wrapper 自动传入当前 `sizeof(struct io_policy_info)`；测试同时调用较小旧结构前缀，要求 `version/struct_size` 可读且尾部哨兵不被覆盖。内核的 sized-copy 规则由 `(addr, user_size)` 分发、8 字节最小头和 `min(user_size, current_size)` copyout 实现。
 
 测试流程：
 
 1. 在创建压力进程前先检查完整 ABI 和较短前缀 sized-copy，覆盖 `version`、内核 `struct_size`、最小 8 字节头和调用者尾部不被越界写。
 2. 创建一个线程，使其阻塞在 I/O admission 后请求进程退出；等待线程展开，再比较 lease 计数，确认未完成 request 的 owner/shared/device lease 已退款。
 3. 用一对 pipe 让子进程阻塞在内核读条件路径，父进程创建超过 workflow NORMAL burst 的文件并等待 I/O refill。该场景只有反复在内核态 `yield()` 的 waiter 可运行；操作必须完成并回收 waiter，证明 scheduler 每轮短中断窗口能交付 timer/device interrupt。
-4. lineage 子进程创建并写入文件、保持已 unlink 文件描述符后报告 I/O 状态，再触发用户 page fault。父进程确认退出码为 `-2`，随后由同一 lineage 的观察子进程读取状态：owner 与 `NORMAL` class 不变、清理物理写增长、`unreserved_transfers` 不变，且 lease、owner debt、device debt 均为 0。
+4. lineage 子进程创建并写入文件、保持已 unlink 文件描述符后报告 I/O 状态，再触发用户 page fault。父进程确认退出码为 `-2`，随后由同一 lineage 的观察子进程读取状态：owner 与 `NORMAL` class 不变、清理物理写增长、`unreserved_transfers` 不变，且 owner lease/lane debt 为 0；本用例等待设备根 refill 后还观测 global device debt 为 0，不把后者解释为 owner 释放条件。
 5. 测试主体创建独立 Orchestrator workflow，并只委派探针所需 pipe 端点。workflow 创建、预热并保持一个私有热块，读取 `io_policy_info()` 确认它取得不同于原 lineage 的持久 scope owner，并保存初始 resident/floor/cap。
-6. 原 lineage 的独立子进程创建循环读写文件和同时越过 workflow NORMAL 初始信用包络及 `IO_CACHE_WORKFLOW_CAP` 的冷工作集。它校验物理传输与 rate decision 的单调、覆盖和无溢出关系，要求 refill 或 throttle 前进并观察到 cache eviction，证明压力实际到达速率和自身 cache cap。
-7. 压力进程确认 owner 为不可变的原 lineage owner、class 为 `NORMAL`、profile 为 workflow NORMAL；owner/shared/device 的 token 与 lease 分别受 burst 约束，压力阶段结束时 lease 和 debt 全部结清且 completion sequence 前进。
+6. 原 lineage 的独立子进程创建循环读写文件和越过 workflow NORMAL 保留 burst 及 `IO_CACHE_WORKFLOW_CAP` 的冷工作集。它要求 `shared_grants` 增长，证明单 owner 能机制化借用空闲设备容量；同时校验物理传输与 rate decision 的单调、覆盖和无溢出关系，并观察 cache eviction。
+7. 压力进程确认 owner 为不可变的原 lineage owner、class 为 `NORMAL`、profile 为 workflow NORMAL；owner/shared/device 的 token 与 lease 分别受 burst 约束，压力阶段结束时 owner lease/lane debt 已结清、设备根 refill 已偿还本轮 global debt，且 completion sequence 前进。
 8. 外部压力存活期间，父进程命令 workflow 探测此前预热的块。workflow 先在 probe read 前快照压力后的 owner 驻留量，再读取并校验内容，要求读取前仍保留 `min(initial_resident, cache_floor)` 且不超过 `cache_cap`；这样探针重新装入块也不能修饰被测状态。`physical_reads` 和 `cache_hits` 是 owner 聚合计数，可能包含异步 metadata 校验，因此不再被误作单次读取凭据。
 9. 同一 Orchestrator 再成功完成真实文件写入，并要求 owner 聚合 `physical_writes` 增长且 `io_class == CONTROL`，证明 lineage 压力下 workflow 控制路径仍有进展。syscall 成功是操作完成依据；聚合计数只用于确认该 owner 确实产生物理写，不充当单次操作 receipt。
 10. 停止 lineage 压力并等待两个子进程完整退出。原 lineage 的 `unreserved_transfers` 不得增长，证明用户物理传输没有丢失 syscall/background 归因。
@@ -827,7 +827,7 @@ iobudget_ucore: parent passed
 
 ABI sized-copy 是没有单独 marker 的实质断言。上面的 marker 只能说明本次 Guest 运行完成；最终交付状态必须由与候选提交绑定的原始日志和证据包判定，历史耗时或旧套件结果不能替代当前完整验收。
 
-PUBLIC 32/16、每 active workflow 24/12 + 48/24 + 8/4、每 retiring workflow `BACKGROUND` 8/4、SYSTEM 96/48 + 16/8、shared 32/16 的配置总和由编译期断言保守按 4 active + 8 retiring 放入 560/280 静态 envelope。运行时设备根对普通流量执行 token/lease/debt 限速；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭 owner/class 保留预算带 device debt 前进，所以根 bucket 不是保护流量的硬总上限。shared fast path 在没有 admission waiter 时可直接借用，只有排队授权再按 owner/class cursor 轮转；当前测试没有断言 `shared_grants` 或排队轮转。
+PUBLIC 32/16、每 active workflow 24/12 + 48/24 + 8/4、每 retiring workflow `BACKGROUND` 8/4、SYSTEM 96/48 + 16/8 的最坏保留总和为 528/264，编译期要求它不超过 560/280 设备根。shared gate 为 560/280，并单独受设备根约束；每次 shared charge 与设备根同步扣减，所以它不是额外容量。每次真实 `disk_submit` 是唯一物理计费边界；准入 account endpoint 不带债，reserved 设备端只由真实 account lease 背书带 debt，shared 永不带 debt。完成首笔 reservation 的有界原子请求可在后续真实提交中形成受请求上界约束的 owner lane debt，并由 checkpoint 或 teardown settlement 清偿；global device debt 对非保护 lane 是 gate，SYSTEM/CONTROL 保护 lane可跨 request/owner lifecycle，由设备根 refill 清偿并受有界 request/aggregate envelope 限制；未获准请求不得裸透支。当前动态测试断言单 owner 的 `shared_grants` 增长；排队 cursor 的多 workflow 轮转仍是后续组合覆盖项。
 
 cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，当前退役清理 job 临时使用 3/8；cap 是稳态驻留边界，transient buffer 可暂时越界并在最后释放时失效。同块用 exclusive holder 串行化；持有 buffer 时 I/O/CPU checkpoint 均不睡眠或 yield，复合文件系统原语使用 FS atomic depth，只有释放全部 buffer 后才能在 quiescent checkpoint 偿债。这些 holder/atomic 条件由源码不变量和相关回归共同覆盖，`iobudget_ucore` 不逐项输出 marker。
 

@@ -1152,7 +1152,13 @@ def bind_scenario_plan(
     path: Path,
     scenario_record: dict[str, Any],
     micro_plan: dict[str, Any],
+    *,
+    contract_root: Path,
 ) -> dict[str, Any]:
+    try:
+        trusted_contract_root = require_safe_directory(contract_root)
+    except (OSError, TypeError, ValueError) as error:
+        raise EvaluationError("scenario contract root is unavailable or unsafe") from error
     path = _safe_regular_file(path, "scenario plan")
     raw = path.read_bytes()
     value = strict_json_loads(raw)
@@ -1161,7 +1167,7 @@ def bind_scenario_plan(
     except ImportError as error:
         raise EvaluationError(f"scenario plan validator is unavailable: {error}") from error
     try:
-        validate_scenario_campaign(value)
+        validate_scenario_campaign(value, contract_root=trusted_contract_root)
     except (CampaignError, KeyError, TypeError, ValueError) as error:
         raise EvaluationError(f"scenario plan is invalid: {error}") from error
     report = scenario_record["report"]
@@ -3648,6 +3654,8 @@ def build(
     source_root: Path,
     scenario_path: Path | None = None,
     scenario_plan_path: Path | None = None,
+    *,
+    contract_root: Path | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     suite = load_suite(suite_path)
     plan, plan_hash = load_run_plan(plan_path)
@@ -3669,10 +3677,15 @@ def build(
         raise EvaluationError("scenario report and scenario plan must be supplied together")
     scenario = None
     if scenario_path is not None and scenario_plan_path is not None:
+        if contract_root is None:
+            raise EvaluationError(
+                "scenario evidence requires an explicit trusted contract root"
+            )
         scenario = bind_scenario_plan(
             scenario_plan_path,
             load_scenario_report(scenario_path, plan),
             plan,
+            contract_root=contract_root,
         )
         scenario["path"] = _evidence_path(
             plan_path.parent, scenario_path, "scenario report evidence path"
@@ -3736,9 +3749,16 @@ def verify(
     rows_path: Path,
     scenario_path: Path | None = None,
     scenario_plan_path: Path | None = None,
+    *,
+    contract_root: Path | None = None,
 ) -> dict[str, Any]:
     expected_summary, expected_rows = build(
-        suite_path, plan_path, source_root, scenario_path, scenario_plan_path
+        suite_path,
+        plan_path,
+        source_root,
+        scenario_path,
+        scenario_plan_path,
+        contract_root=contract_root,
     )
     actual_summary = _read_json(summary_path)
     actual_rows = read_jsonl(rows_path)
@@ -3761,6 +3781,7 @@ def _parser() -> argparse.ArgumentParser:
         sub.add_argument("--rows", type=Path, required=True)
         sub.add_argument("--scenario-report", type=Path)
         sub.add_argument("--scenario-plan", type=Path)
+        sub.add_argument("--contract-root", type=Path)
     targeted = subparsers.add_parser("validate-guest")
     targeted.add_argument("--suite", type=Path, required=True)
     targeted.add_argument("--log", type=Path, required=True)
@@ -3780,6 +3801,7 @@ def main(argv: list[str] | None = None) -> int:
             summary, rows = build(
                 args.suite, args.run_plan, args.source_root,
                 args.scenario_report, args.scenario_plan,
+                contract_root=args.contract_root,
             )
             write_json(args.summary, summary)
             write_jsonl(args.rows, rows)
@@ -3787,6 +3809,7 @@ def main(argv: list[str] | None = None) -> int:
             verify(
                 args.suite, args.run_plan, args.source_root, args.summary,
                 args.rows, args.scenario_report, args.scenario_plan,
+                contract_root=args.contract_root,
             )
     except EvaluationError as error:
         raise SystemExit(f"evaluation contract failed: {error}") from error

@@ -30,6 +30,8 @@ fi
 CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+BASH_BIN="${BASH_BIN:-bash}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 REQUIRE_FULL_SUITE="${REQUIRE_FULL_SUITE:-0}"
@@ -73,6 +75,14 @@ if [[ "${AGENT_TEST_CALIBRATE}" == "1" &&
       "${AGENT_TEST_DURATION_PROFILE}" != "local-e3" ]]; then
 	echo "[agent-tests] calibration requires the local-e3 duration profile" >&2
 	exit 1
+fi
+if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" &&
+      -z "${AGENT_TEST_CASE:-}" ]]; then
+	"${PYTHON_BIN}" -I -S -B host_tools/evaluation_platform.py doctor \
+		--repo . --toolprefix "${TOOLPREFIX}" --qemu "${QEMU}" \
+		--python-bin "${PYTHON_BIN}" --shell-bin "${BASH_BIN}" \
+		--host-cc "${HOST_CC}" --duration-profile local-e3 >/dev/null
+	echo "[agent-tests] duration-profile profile=local-e3 identity=matched"
 fi
 if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
 	if [[ "${REQUIRE_FULL_SUITE}" != "1" ]]; then

@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -28,6 +29,21 @@ import tempfile
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+
+def _load_guest_failure_classifier() -> Any:
+    path = Path(__file__).with_name("guest_failure_classifier.py")
+    spec = importlib.util.spec_from_file_location(
+        "_agentos_guest_failure_classifier", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Guest failure classifier is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_GUEST_FAILURE_CLASSIFIER = _load_guest_failure_classifier()
 
 
 MANIFEST_FORMAT = "agentos-fs-allocator-evidence-manifest-v1"
@@ -42,6 +58,7 @@ SEAL_FORMAT = "agentos-fs-allocator-run-seal-v1"
 SNAPSHOT_FORMAT = "agentos-fs-allocator-v2"
 VERIFIED_FORMAT = "agentos-fs-allocator-case-v2"
 DIFF_FORMAT = "agentos-fs-allocator-diff-v2"
+CANONICAL_FORMAT = "agentos-fs-allocator-canonical-v2"
 SUITE = "fs-allocator-fault"
 SCHEMA_VERSION = 1
 BACKEND_MODEL = "deterministic-volatile-write-cache"
@@ -53,33 +70,336 @@ MUTATION_REJECTION_MESSAGE = (
     "('alloc', 'intent', 'crash') qmap transition count []"
 )
 GENERATOR_NAME = "fs-allocator-image.py"
+WORKLOAD_SOURCE_NAME = "fsallocfault_ucore"
+WORKLOAD_IMAGE_NAME = WORKLOAD_SOURCE_NAME[:14]
 ARCHIVE_BASENAME = "fs-allocator-evidence.tar"
 MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024
 RUN_ID = re.compile(r"[0-9a-f]{64}\Z")
+GIT_OBJECT_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 
-SOURCE_PATHS = (
+# Formal allocator children receive only platform plumbing plus deterministic
+# locale/Git policy.  In particular, Python startup hooks, Make include flags,
+# compiler search paths, and every caller-supplied FS_* knob are absent.
+CONTROLLED_ENV_PASSTHROUGH = frozenset(
+    {
+        "HOME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "SYSTEMDRIVE",
+        "USERPROFILE",
+        "MSYSTEM",
+    }
+)
+CONTROLLED_ENV_FIXED = {
+    "PATH": "/usr/bin:/bin",
+    "LC_ALL": "C",
+    "LANG": "C",
+    "TZ": "UTC",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONNOUSERSITE": "1",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_ATTR_NOSYSTEM": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_NO_REPLACE_OBJECTS": "1",
+    "GIT_OPTIONAL_LOCKS": "0",
+    "ASAN_OPTIONS": "detect_leaks=0:halt_on_error=1",
+    "UBSAN_OPTIONS": "halt_on_error=1",
+}
+
+ROOT_BUILD_SOURCE_PATHS = (
     "Makefile",
+    "agent_lifecycle_abi.h",
+    "agent_metadata_disk_abi.h",
+    "agent_metadata_test_abi.h",
+    "agent_observe_abi.h",
+    "agent_observe_test_phase_abi.h",
+    "agent_resource_abi.h",
+    "agent_tool_abi.h",
+    "exec_image_policy.h",
+    "file_resource_policy.h",
+    "fs_allocator_test_abi.h",
+    "fs_storage_policy.h",
+    "io_policy.h",
+    "kernel_work_abi.h",
+    "physical_page_policy.h",
+    "physical_page_test_abi.h",
+    "thread_resource_policy.h",
+    "user_stack_policy.h",
+    "virtio_test_abi.h",
+    "wait_atomic_test_abi.h",
+)
+
+# The profile kernel is selected from Makefile's os/*.c and os/*.S wildcards.
+# Snapshot the complete checked-in input set, including inactive test owners,
+# rather than trying to maintain a fragile hand-picked allocator call graph.
+KERNEL_BUILD_SOURCE_PATHS = (
+    "os/agent_background.c",
+    "os/agent_context_path.c",
+    "os/agent_context_path.h",
+    "os/agent_context.c",
+    "os/agent_context.h",
+    "os/agent_core.c",
+    "os/agent_durable_section.c",
+    "os/agent_durable_section.h",
+    "os/agent_file_name_policy.h",
+    "os/agent_file_state_internal.h",
+    "os/agent_file_state.c",
+    "os/agent_identity_lease.c",
+    "os/agent_identity_lease.h",
+    "os/agent_identity.c",
+    "os/agent_internal.h",
+    "os/agent_ipc.c",
+    "os/agent_lifecycle.c",
+    "os/agent_lifecycle.h",
+    "os/agent_metadata_actions.c",
+    "os/agent_metadata_actions.h",
+    "os/agent_metadata_catalog.c",
+    "os/agent_metadata_catalog.h",
+    "os/agent_metadata_directory.c",
+    "os/agent_metadata_directory.h",
+    "os/agent_metadata_disk.h",
+    "os/agent_metadata_internal.h",
+    "os/agent_metadata_objects.c",
+    "os/agent_metadata_prefetch.c",
+    "os/agent_metadata_prefetch.h",
+    "os/agent_metadata_probe.c",
+    "os/agent_metadata_probe.h",
+    "os/agent_metadata_query.c",
+    "os/agent_metadata_query.h",
+    "os/agent_metadata_recovery_test.c",
+    "os/agent_metadata_recovery_test.h",
+    "os/agent_metadata_recovery.c",
+    "os/agent_metadata_recovery.h",
+    "os/agent_metadata_scan.c",
+    "os/agent_metadata_scan.h",
+    "os/agent_metadata_store_format.c",
+    "os/agent_metadata_store_format.h",
+    "os/agent_metadata_store_io.c",
+    "os/agent_metadata_store_io.h",
+    "os/agent_metadata_store.c",
+    "os/agent_metadata_test.c",
+    "os/agent_metadata.c",
+    "os/agent_observe_audit_query.c",
+    "os/agent_observe_capacity.c",
+    "os/agent_observe_capacity.h",
+    "os/agent_observe_internal.h",
+    "os/agent_observe_ledger.c",
+    "os/agent_observe_persist_context.h",
+    "os/agent_observe_recovery_store.h",
+    "os/agent_observe_recovery.c",
+    "os/agent_observe_recovery.h",
+    "os/agent_observe_store.c",
+    "os/agent_observe_store.h",
+    "os/agent_observe_test.c",
+    "os/agent_observe_test.h",
+    "os/agent_observe_timeline.c",
+    "os/agent_observe.c",
+    "os/agent_resource.c",
+    "os/agent_tool_protocol.c",
+    "os/agent_tool_protocol.h",
+    "os/agent.c",
+    "os/agent.h",
+    "os/bio.c",
+    "os/bio.h",
+    "os/console.c",
+    "os/console.h",
+    "os/const.h",
+    "os/defs.h",
+    "os/entry.S",
+    "os/exec_policy.c",
+    "os/exec_policy.h",
+    "os/fcntl.h",
+    "os/file.c",
+    "os/file.h",
+    "os/fs_allocator_test.c",
+    "os/fs_allocator_test.h",
+    "os/fs.c",
+    "os/fs.h",
+    "os/kalloc.c",
+    "os/kalloc.h",
+    "os/kernel_work.c",
+    "os/kernel_work.h",
+    "os/kernel.ld",
+    "os/kernelvec.S",
+    "os/loader.c",
+    "os/loader.h",
+    "os/log.h",
+    "os/main.c",
+    "os/metadata_crash_test.h",
+    "os/physical_page_test.c",
+    "os/physical_page_test.h",
+    "os/pipe.c",
+    "os/plic.c",
+    "os/plic.h",
+    "os/printf.c",
+    "os/printf.h",
+    "os/proc.c",
+    "os/proc.h",
+    "os/queue.c",
+    "os/queue.h",
+    "os/resource_controller.c",
+    "os/resource_controller.h",
+    "os/riscv.h",
+    "os/sbi.c",
+    "os/sbi.h",
+    "os/string.c",
+    "os/string.h",
+    "os/switch.S",
+    "os/sync.c",
+    "os/sync.h",
+    "os/syscall_ids.h",
+    "os/syscall.c",
+    "os/syscall.h",
+    "os/timer.c",
+    "os/timer.h",
+    "os/trampoline.S",
+    "os/trap.c",
+    "os/trap.h",
+    "os/types.h",
+    "os/user_stack_layout.h",
+    "os/vfs_security.c",
+    "os/vfs_security.h",
+    "os/virtio_disk.c",
+    "os/virtio.h",
+    "os/vm.c",
+    "os/vm.h",
+    "os/wait_atomic_test.c",
+    "os/wait_atomic_test.h",
+    "os/wait.c",
+    "os/wait.h",
+    "os/workflow_lifecycle.c",
+    "os/workflow_lifecycle.h",
+)
+
+USER_BUILD_SOURCE_PATHS = (
     "user/Makefile",
+    "user/src/fsallocfault_ucore.c",
+    "user/include/agent_metadata_test_abi.h",
+    "user/include/agent_observe_test_phase_abi.h",
+    "user/include/agent.h",
+    "user/include/exec_policy_manifest.h",
+    "user/include/fcntl.h",
+    "user/include/fs_allocator_test_abi.h",
+    "user/include/io_policy.h",
+    "user/include/kernel_work_abi.h",
+    "user/include/physical_page_test_abi.h",
+    "user/include/research_platform_state.h",
+    "user/include/rp_evidence.h",
+    "user/include/rp_launch_attestation.h",
+    "user/include/rp_program_manifest.h",
+    "user/include/rp_resource_stability.h",
+    "user/include/stddef.h",
+    "user/include/stdio.h",
+    "user/include/stdlib.h",
+    "user/include/string.h",
+    "user/include/unistd.h",
+    "user/include/user_stack_policy.h",
+    "user/include/virtio_test_abi.h",
+    "user/include/wait_atomic_test_abi.h",
+    "user/lib/arch/riscv/crt.S",
+    "user/lib/arch/riscv/syscall_arch.h",
+    "user/lib/arch/riscv/syscall_ids.h.in",
+    "user/lib/arch/riscv/user.ld",
+    "user/lib/main.c",
+    "user/lib/stdio.c",
+    "user/lib/stdlib.c",
+    "user/lib/string.c",
+    "user/lib/syscall_ids.h",
+    "user/lib/syscall.c",
+    "user/lib/syscall.h",
+)
+
+MKFS_SOURCE_PATHS = (
     "nfs/Makefile",
-    "nfs/fs.c",
     "nfs/elf_compat.h",
+    "nfs/fs.c",
+    "nfs/fs.h",
     "nfs/host_image_snapshot.c",
     "nfs/host_image_snapshot.h",
     "nfs/host_windows_compat.h",
-    "os/fs.c",
-    "os/fs_allocator_test.c",
-    "user/src/fsallocfault_ucore.c",
-    "fs_allocator_test_abi.h",
+    "nfs/types.h",
+)
+
+HOST_VERIFIER_SOURCE_PATHS = (
+    ".gitattributes",
+    "ci/agent-metadata-disk-format.json",
+    "ci/agent-observe-disk-format.json",
+    "host_tools/__init__.py",
+    "host_tools/agent_metadata_disk_format.py",
+    "host_tools/agent_observe_disk_acceptance.py",
+    "host_tools/agent_observe_disk_contract.py",
+    "host_tools/agent_observe_disk_evidence.py",
+    "host_tools/plain_ucore_fs_extract.py",
+    "host_tools/research_state_manifest.py",
     "scripts/agent_test_runner.py",
+    "scripts/check-agent-metadata-disk-format.py",
+    "scripts/check-agent-observe-disk-format.py",
+    "scripts/check-fs-allocator-state.py",
+    "scripts/check-kernel-stack-usage.py",
+    "scripts/evidence-wiring.sh",
     "scripts/fs-allocator-evidence.py",
     "scripts/fs-allocator-image.py",
-    "scripts/trusted-python-entry.py",
+    "scripts/guest_failure_classifier.py",
+    "scripts/host-probe-toolchain.sh",
+    "scripts/host_probe_toolchain.py",
+    "scripts/initproc.py",
+    "scripts/probes/agent-metadata-disk-layout.c",
+    "scripts/probes/agent-observe-disk-layout.c",
     "scripts/run-fs-allocator-fault-tests.sh",
+    "scripts/test-fs-allocator-image.py",
+    "scripts/trusted-python-entry.py",
 )
+
+SOURCE_PATHS = (
+    ROOT_BUILD_SOURCE_PATHS
+    + KERNEL_BUILD_SOURCE_PATHS
+    + USER_BUILD_SOURCE_PATHS
+    + MKFS_SOURCE_PATHS
+    + HOST_VERIFIER_SOURCE_PATHS
+)
+if len(SOURCE_PATHS) != len(set(SOURCE_PATHS)):
+    raise RuntimeError("filesystem allocator source inventory contains duplicates")
 SOURCE_FILES = tuple(f"sources/{path}" for path in SOURCE_PATHS)
+
+
+def _discover_guest_build_inputs(root: Path) -> set[str]:
+    paths = {"Makefile"}
+    paths.update(path.name for path in root.glob("*.h") if path.is_file())
+    paths.update(
+        path.relative_to(root).as_posix()
+        for path in (root / "os").iterdir()
+        if path.is_file()
+        and path.name != "initproc.S"
+        and path.suffix in {".c", ".h", ".S", ".ld"}
+    )
+    paths.update({"user/Makefile", "user/src/fsallocfault_ucore.c"})
+    paths.update(
+        path.relative_to(root).as_posix()
+        for path in (root / "user" / "include").glob("*.h")
+        if path.is_file()
+    )
+    paths.update(
+        path.relative_to(root).as_posix()
+        for path in (root / "user" / "lib").rglob("*")
+        if path.is_file()
+        and path.name.endswith((".c", ".h", ".S", ".ld", ".h.in"))
+    )
+    paths.add("nfs/Makefile")
+    paths.update(
+        path.relative_to(root).as_posix()
+        for path in (root / "nfs").iterdir()
+        if path.is_file() and path.suffix in {".c", ".h"}
+    )
+    return paths
 
 STAGES = ("prepare", "fault", "reboot")
 ACTIONS = ("busy", "eio", "crash")
@@ -121,6 +441,7 @@ ROOT_SOURCE_FILES = (
 CASE_FILES = (
     "build.json",
     "program.bin",
+    "program.elf",
     "before.img.gz",
     "before.snapshot.json",
     "fault.img.gz",
@@ -290,7 +611,7 @@ def _require_argv(value: object, label: str) -> list[str]:
 
 
 def _normalize_profile_compile_argv(
-    argv: list[str], label: str, *, mutant: bool
+    argv: list[str], label: str, *, mutant: bool, run: dict[str, Any] | None = None
 ) -> list[str]:
     """Bind profile builds while ignoring only their private output directory."""
     normalized: list[str] = []
@@ -322,6 +643,25 @@ def _normalize_profile_compile_argv(
     if mutant_count != expected_mutant_count:
         qualifier = "exactly once" if mutant else "not at all"
         raise EvidenceError(f"{label} must select the allocator mutant {qualifier}")
+    if run is not None:
+        tools = run["toolchain"]
+        expected = [
+            tools["make"]["resolved"],
+            "build",
+            "TOOLPREFIX=",
+            f"CC={tools['cross_gcc']['resolved']}",
+            f"AS={tools['cross_gcc']['resolved']}",
+            f"LD={tools['cross_ld']['resolved']}",
+            f"OBJCOPY={tools['cross_objcopy']['resolved']}",
+            f"OBJDUMP={tools['cross_objdump']['resolved']}",
+            "LOG=error",
+            "BUILDDIR=<OUTPUT>",
+            "INIT_PROC=fsallocfault_ucore",
+            f"PYTHON_BIN={tools['python']['resolved']}",
+            PROFILE_BUILD_FLAG,
+        ]
+        if normalized != expected:
+            raise EvidenceError(f"{label} differs from the canonical profile build")
     return normalized
 
 
@@ -352,7 +692,38 @@ def _bytes_identity(raw: bytes) -> dict[str, Any]:
     return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
-def _capture_command(command: list[str], cwd: Path, label: str) -> bytes:
+def controlled_environment(source: dict[str, str]) -> dict[str, str]:
+    """Return the complete environment admitted to a formal runner child."""
+
+    environment = {
+        name: value
+        for name, value in source.items()
+        if name in CONTROLLED_ENV_PASSTHROUGH and value
+    }
+    environment.update(CONTROLLED_ENV_FIXED)
+    return environment
+
+
+def clean_exec(argv: list[str]) -> None:
+    if not argv or any(not isinstance(value, str) or not value for value in argv):
+        raise EvidenceError("clean-exec requires a non-empty argv")
+    environment = controlled_environment(dict(os.environ))
+    try:
+        if os.name == "posix":
+            os.execvpe(argv[0], argv, environment)
+        completed = subprocess.run(
+            argv,
+            env=environment,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise EvidenceError(f"clean-exec could not start child: {error}") from error
+    raise SystemExit(completed.returncode)
+
+
+def _capture_command(
+    command: list[str], cwd: Path, label: str, *, max_bytes: int = 1024 * 1024
+) -> bytes:
     try:
         completed = subprocess.run(
             command,
@@ -365,9 +736,170 @@ def _capture_command(command: list[str], cwd: Path, label: str) -> bytes:
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise EvidenceError(f"could not inspect {label}: {error}") from error
-    if completed.returncode != 0 or not completed.stdout or len(completed.stdout) > 1024 * 1024:
+    if completed.returncode != 0 or not completed.stdout or len(completed.stdout) > max_bytes:
         raise EvidenceError(f"{label} inspection failed with exit {completed.returncode}")
     return completed.stdout
+
+
+def _git_source_state(source_root: Path, git: Path | None = None) -> tuple[str, str, bytes]:
+    if git is None:
+        git = _resolved_tool("git", source_root, "git")
+    command = [
+        str(git),
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+    ]
+    commit = _capture_command(
+        [*command, "rev-parse", "--verify", "HEAD"], source_root, "source commit"
+    ).decode("ascii", errors="strict").strip()
+    tree = _capture_command(
+        [*command, "rev-parse", "--verify", "HEAD^{tree}"],
+        source_root,
+        "source tree",
+    ).decode("ascii", errors="strict").strip()
+    if GIT_OBJECT_ID.fullmatch(commit) is None or GIT_OBJECT_ID.fullmatch(tree) is None:
+        raise EvidenceError("source commit or tree is not a full Git object id")
+    try:
+        status = subprocess.run(
+            [
+                *command,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ],
+            cwd=source_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise EvidenceError(f"could not inspect source dirty state: {error}") from error
+    if status.returncode != 0 or status.stderr or len(status.stdout) > MAX_JSON_BYTES:
+        raise EvidenceError("source dirty-state inspection failed")
+    return commit, tree, status.stdout
+
+
+def _git_head_source_payloads(
+    source_root: Path, git: Path, commit: str
+) -> dict[str, bytes]:
+    """Read the selected source closure from the captured commit, not the index."""
+
+    command = [
+        str(git),
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+    ]
+    flags_raw = _capture_command(
+        [*command, "ls-files", "-v", "-z", "--", *SOURCE_PATHS],
+        source_root,
+        "source index flags",
+        max_bytes=MAX_JSON_BYTES,
+    )
+    flags: dict[str, str] = {}
+    for record in flags_raw.rstrip(b"\0").split(b"\0"):
+        try:
+            flag, raw_path = record[:1].decode("ascii"), record[2:].decode("utf-8")
+        except (UnicodeDecodeError, IndexError) as error:
+            raise EvidenceError("source index flags are malformed") from error
+        if len(record) < 3 or record[1:2] != b" " or raw_path in flags:
+            raise EvidenceError("source index flags are malformed")
+        flags[raw_path] = flag
+    if set(flags) != set(SOURCE_PATHS):
+        raise EvidenceError("source closure is not fully tracked by Git")
+    unsafe = sorted(path for path, flag in flags.items() if flag != "H")
+    if unsafe:
+        raise EvidenceError(
+            "source closure uses assume-unchanged/skip-worktree index flags: "
+            + ", ".join(unsafe)
+        )
+
+    payloads: dict[str, bytes] = {}
+    for relative in SOURCE_PATHS:
+        listing = _capture_command(
+            [*command, "ls-tree", "-z", commit, "--", relative],
+            source_root,
+            f"committed source entry {relative}",
+            max_bytes=8192,
+        )
+        if not listing.endswith(b"\0") or listing.count(b"\0") != 1:
+            raise EvidenceError(f"committed source entry is ambiguous: {relative}")
+        try:
+            metadata, raw_path = listing[:-1].split(b"\t", 1)
+            mode, kind, raw_oid = metadata.split(b" ", 2)
+            path = raw_path.decode("utf-8")
+            oid = raw_oid.decode("ascii")
+        except (ValueError, UnicodeDecodeError) as error:
+            raise EvidenceError(f"committed source entry is malformed: {relative}") from error
+        if (
+            path != relative
+            or mode not in {b"100644", b"100755"}
+            or kind != b"blob"
+            or GIT_OBJECT_ID.fullmatch(oid) is None
+        ):
+            raise EvidenceError(f"committed source entry is unsafe: {relative}")
+        payloads[relative] = _capture_command(
+            [*command, "cat-file", "blob", oid],
+            source_root,
+            f"committed source blob {relative}",
+            max_bytes=MAX_ARTIFACT_BYTES,
+        )
+    return payloads
+
+
+def _require_sources_match_commit(
+    source_root: Path, git: Path, commit: str, payloads: dict[str, bytes]
+) -> None:
+    committed = _git_head_source_payloads(source_root, git, commit)
+    if committed != {path.removeprefix("sources/"): raw for path, raw in payloads.items()}:
+        raise EvidenceError("source snapshot bytes differ from the captured Git commit")
+
+
+def _source_snapshot(
+    source_root: Path, *, include_payloads: bool
+) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+    payloads: dict[str, bytes] = {}
+    records: list[dict[str, Any]] = []
+    for relative in SOURCE_PATHS:
+        raw = _read_bounded_regular(
+            source_root / relative, f"source snapshot {relative}", MAX_ARTIFACT_BYTES
+        )
+        packaged = f"sources/{relative}"
+        if include_payloads:
+            payloads[packaged] = raw
+        records.append(
+            {"source_path": relative, "artifact": {"path": packaged, **_bytes_identity(raw)}}
+        )
+    return records, payloads
+
+
+def _require_guest_source_inventory(source_root: Path, label: str) -> None:
+    declared = set(
+        ROOT_BUILD_SOURCE_PATHS
+        + KERNEL_BUILD_SOURCE_PATHS
+        + USER_BUILD_SOURCE_PATHS
+        + MKFS_SOURCE_PATHS
+    )
+    try:
+        discovered = _discover_guest_build_inputs(source_root)
+    except OSError as error:
+        raise EvidenceError(f"could not enumerate {label} Guest build inputs: {error}") from error
+    if discovered != declared:
+        raise EvidenceError(
+            f"{label} Guest build source inventory differs: "
+            f"missing={sorted(declared - discovered)}, "
+            f"extra={sorted(discovered - declared)}"
+        )
 
 
 def _resolved_tool(command: str, source_root: Path, label: str) -> Path:
@@ -394,7 +926,7 @@ def _tool_attestation(
     version = _capture_command([str(executable), *version_args], source_root, label)
     first_line = version.decode("utf-8", errors="replace").splitlines()[0]
     return {
-        "requested": requested,
+        "requested": str(executable),
         "resolved": str(executable),
         "executable": _bytes_identity(raw),
         "version_argv": [str(executable), *version_args],
@@ -409,7 +941,13 @@ def capture_run(
     run_id: str,
     qemu: str,
     python: str,
-    toolprefix: str,
+    toolprefix: str | None,
+    make: str = "make",
+    host_cc: str | None = None,
+    cross_gcc: str | None = None,
+    cross_ld: str | None = None,
+    cross_objcopy: str | None = None,
+    cross_objdump: str | None = None,
 ) -> dict[str, Any]:
     if not RUN_ID.fullmatch(run_id):
         raise EvidenceError("run id must be 32 random bytes encoded as lowercase hex")
@@ -419,56 +957,59 @@ def capture_run(
         source_root = source_root.resolve(strict=True)
     except OSError as error:
         raise EvidenceError(f"source root is unavailable: {error}") from error
+    _require_guest_source_inventory(source_root, "live")
     git = _resolved_tool("git", source_root, "git")
-    commit = _capture_command(
-        [str(git), "rev-parse", "--verify", "HEAD"], source_root, "source commit"
-    ).decode("ascii", errors="strict").strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise EvidenceError("source commit is not a full Git object id")
-    try:
-        status = subprocess.run(
-            [
-                str(git),
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=all",
-            ],
-            cwd=source_root,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
+    commit, tree, status = _git_source_state(source_root, git)
+    if status:
+        raise EvidenceError(
+            "source tree must be clean before filesystem allocator evidence capture"
         )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise EvidenceError(f"could not inspect source dirty state: {error}") from error
-    if status.returncode != 0 or status.stderr or len(status.stdout) > MAX_JSON_BYTES:
-        raise EvidenceError("source dirty-state inspection failed")
-    source_payloads: dict[str, bytes] = {}
-    source_records = []
-    for relative in SOURCE_PATHS:
-        raw = _read_bounded_regular(
-            source_root / relative, f"source snapshot {relative}", MAX_ARTIFACT_BYTES
-        )
-        packaged = f"sources/{relative}"
-        source_payloads[packaged] = raw
-        source_records.append(
-            {"source_path": relative, "artifact": {"path": packaged, **_bytes_identity(raw)}}
-        )
+    source_records, source_payloads = _source_snapshot(
+        source_root, include_payloads=True
+    )
+    _require_sources_match_commit(source_root, git, commit, source_payloads)
     snapshot_sha256 = hashlib.sha256(_render_json(source_records)).hexdigest()
+    commit_after, tree_after, status_after = _git_source_state(source_root, git)
+    records_after, _ = _source_snapshot(source_root, include_payloads=False)
+    _require_sources_match_commit(source_root, git, commit_after, source_payloads)
+    if (
+        (commit_after, tree_after, status_after) != (commit, tree, status)
+        or records_after != source_records
+    ):
+        raise EvidenceError("source changed while filesystem allocator snapshot was captured")
     tools = {
         "python": _tool_attestation(source_root, python, ["--version"], "python"),
         "qemu": _tool_attestation(source_root, qemu, ["--version"], "qemu"),
-        "make": _tool_attestation(source_root, "make", ["--version"], "make"),
+        "make": _tool_attestation(source_root, make, ["--version"], "make"),
         "host_cc": _tool_attestation(
             source_root,
-            os.environ.get("HOST_CC", os.environ.get("HOSTCC", "cc")),
+            host_cc or "cc",
             ["--version"],
             "host cc",
         ),
         "cross_gcc": _tool_attestation(
-            source_root, f"{toolprefix}gcc", ["--version"], "cross gcc"
+            source_root,
+            cross_gcc or f"{toolprefix or ''}gcc",
+            ["--version"],
+            "cross gcc",
+        ),
+        "cross_ld": _tool_attestation(
+            source_root,
+            cross_ld or f"{toolprefix or ''}ld",
+            ["--version"],
+            "cross ld",
+        ),
+        "cross_objcopy": _tool_attestation(
+            source_root,
+            cross_objcopy or f"{toolprefix or ''}objcopy",
+            ["--version"],
+            "cross objcopy",
+        ),
+        "cross_objdump": _tool_attestation(
+            source_root,
+            cross_objdump or f"{toolprefix or ''}objdump",
+            ["--version"],
+            "cross objdump",
         ),
     }
     record = {
@@ -477,10 +1018,11 @@ def capture_run(
         "run_id": run_id,
         "source": {
             "commit": commit,
-            "dirty": bool(status.stdout),
-            "status_bytes": len(status.stdout),
-            "status_sha256": hashlib.sha256(status.stdout).hexdigest(),
-            "status_hex": status.stdout.hex(),
+            "tree": tree,
+            "dirty": bool(status),
+            "status_bytes": len(status),
+            "status_sha256": hashlib.sha256(status).hexdigest(),
+            "status_hex": status.hex(),
             "snapshot_sha256": snapshot_sha256,
         },
         "sources": source_records,
@@ -513,6 +1055,7 @@ def _validate_run_record(root: Path, value: dict[str, Any]) -> dict[str, Any]:
         source,
         {
             "commit",
+            "tree",
             "dirty",
             "status_bytes",
             "status_sha256",
@@ -521,10 +1064,13 @@ def _validate_run_record(root: Path, value: dict[str, Any]) -> dict[str, Any]:
         },
         "run source attestation",
     )
-    if not isinstance(source["commit"], str) or not re.fullmatch(
-        r"[0-9a-f]{40}", source["commit"]
+    if (
+        not isinstance(source["commit"], str)
+        or GIT_OBJECT_ID.fullmatch(source["commit"]) is None
+        or not isinstance(source["tree"], str)
+        or GIT_OBJECT_ID.fullmatch(source["tree"]) is None
     ):
-        raise EvidenceError("run source commit is not a full Git object id")
+        raise EvidenceError("run source commit or tree is not a full Git object id")
     if not isinstance(source["dirty"], bool):
         raise EvidenceError("run source dirty state must be boolean")
     status_bytes = _require_nonnegative_int(
@@ -541,6 +1087,8 @@ def _validate_run_record(root: Path, value: dict[str, Any]) -> dict[str, Any]:
         or source["dirty"] != bool(status_raw)
     ):
         raise EvidenceError("run source dirty-state attestation is inconsistent")
+    if source["dirty"] or status_bytes != 0:
+        raise EvidenceError("run source attestation is not from a clean tree")
     sources = value["sources"]
     if not isinstance(sources, list) or len(sources) != len(SOURCE_PATHS):
         raise EvidenceError("run source snapshot inventory is incomplete")
@@ -559,7 +1107,16 @@ def _validate_run_record(root: Path, value: dict[str, Any]) -> dict[str, Any]:
     ):
         raise EvidenceError("run source snapshot hash differs")
     toolchain = value["toolchain"]
-    expected_tools = {"python", "qemu", "make", "host_cc", "cross_gcc"}
+    expected_tools = {
+        "python",
+        "qemu",
+        "make",
+        "host_cc",
+        "cross_gcc",
+        "cross_ld",
+        "cross_objcopy",
+        "cross_objdump",
+    }
     if not isinstance(toolchain, dict) or set(toolchain) != expected_tools:
         raise EvidenceError("run toolchain inventory is incomplete")
     for label, record in toolchain.items():
@@ -577,8 +1134,17 @@ def _validate_run_record(root: Path, value: dict[str, Any]) -> dict[str, Any]:
             },
             f"run tool {label}",
         )
-        _require_text(record["requested"], f"run tool {label} requested")
-        _require_text(record["resolved"], f"run tool {label} resolved")
+        requested = _require_text(record["requested"], f"run tool {label} requested")
+        resolved = _require_text(record["resolved"], f"run tool {label} resolved")
+        normalized = resolved.replace("\\", "/")
+        if (
+            requested != resolved
+            or not (
+                normalized.startswith("/")
+                or re.fullmatch(r"[A-Za-z]:/.*", normalized)
+            )
+        ):
+            raise EvidenceError(f"run tool {label} is not bound to one absolute path")
         executable = record["executable"]
         if not isinstance(executable, dict):
             raise EvidenceError(f"run tool {label} executable identity is invalid")
@@ -586,7 +1152,11 @@ def _validate_run_record(root: Path, value: dict[str, Any]) -> dict[str, Any]:
         if _require_nonnegative_int(executable["bytes"], f"run tool {label} bytes") == 0:
             raise EvidenceError(f"run tool {label} executable is empty")
         _require_sha256(executable["sha256"], f"run tool {label} executable hash")
-        _require_argv(record["version_argv"], f"run tool {label} version argv")
+        version_argv = _require_argv(
+            record["version_argv"], f"run tool {label} version argv"
+        )
+        if version_argv != [resolved, "--version"]:
+            raise EvidenceError(f"run tool {label} version argv is not canonical")
         _require_text(record["version_first_line"], f"run tool {label} version")
         _require_sha256(record["version_sha256"], f"run tool {label} version hash")
     return value
@@ -596,6 +1166,118 @@ def _load_run(root: Path) -> dict[str, Any]:
     return _validate_run_record(
         root, _read_canonical_json(root / "run.json", "run attestation")
     )
+
+
+def _verify_source_tree_against_run(
+    source_root: Path, run: dict[str, Any], label: str, *, exact_tree: bool = False
+) -> None:
+    try:
+        source_root = source_root.resolve(strict=True)
+    except OSError as error:
+        raise EvidenceError(f"{label} source root is unavailable: {error}") from error
+    if _is_link(source_root) or not source_root.is_dir():
+        raise EvidenceError(f"{label} source root is link-backed or not a directory")
+    if exact_tree:
+        expected_files = set(SOURCE_PATHS)
+        expected_directories: set[str] = set()
+        for relative in SOURCE_PATHS:
+            parent = PurePosixPath(relative).parent
+            while parent.parts:
+                expected_directories.add(parent.as_posix())
+                parent = parent.parent
+        actual_files: set[str] = set()
+        actual_directories: set[str] = set()
+        for directory, directories, files in os.walk(source_root, followlinks=False):
+            base = Path(directory)
+            for name in directories:
+                candidate = base / name
+                if _is_link(candidate):
+                    raise EvidenceError(
+                        f"{label} source tree contains a linked directory"
+                    )
+                actual_directories.add(candidate.relative_to(source_root).as_posix())
+            for name in files:
+                candidate = base / name
+                if _is_link(candidate):
+                    raise EvidenceError(f"{label} source tree contains a linked file")
+                actual_files.add(candidate.relative_to(source_root).as_posix())
+        extra_files = actual_files - expected_files
+        if extra_files - {"os/initproc.S"} or actual_directories != expected_directories:
+            raise EvidenceError(
+                f"{label} source tree entries differ from the captured closure"
+            )
+    _require_guest_source_inventory(source_root, label)
+    records, _ = _source_snapshot(source_root, include_payloads=False)
+    if records != run["sources"]:
+        raise EvidenceError(f"{label} source snapshot differs from captured source")
+    actual_hash = hashlib.sha256(_render_json(records)).hexdigest()
+    if actual_hash != run["source"]["snapshot_sha256"]:
+        raise EvidenceError(f"{label} source snapshot hash differs from captured source")
+
+
+def materialize_source(root: Path, output: Path) -> None:
+    run = _load_run(root)
+    if output.exists() or _is_link(output):
+        raise EvidenceError("materialized source output must not already exist")
+    try:
+        output.parent.resolve(strict=True)
+        output.mkdir()
+        for item in run["sources"]:
+            relative = item["source_path"]
+            raw = _read_bounded_regular(
+                root / "sources" / relative,
+                f"captured source {relative}",
+                MAX_ARTIFACT_BYTES,
+            )
+            destination = output / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_publish_bytes(destination, raw)
+        _verify_source_tree_against_run(output, run, "materialized", exact_tree=True)
+    except BaseException:
+        if output.exists() and not _is_link(output):
+            shutil.rmtree(output, ignore_errors=True)
+        raise
+
+
+def verify_source_boundary(
+    root: Path, live_source_root: Path, snapshot_root: Path, boundary: str
+) -> dict[str, str]:
+    boundary = _require_text(boundary, "source boundary", stable_id=True)
+    run = _load_run(root)
+    git = _resolved_tool("git", live_source_root, "git")
+    commit, tree, status = _git_source_state(live_source_root, git)
+    if (
+        commit != run["source"]["commit"]
+        or tree != run["source"]["tree"]
+        or status
+    ):
+        raise EvidenceError(
+            f"live source commit/tree/clean state changed at boundary {boundary}"
+        )
+    _, live_payloads = _source_snapshot(live_source_root, include_payloads=True)
+    _require_sources_match_commit(live_source_root, git, commit, live_payloads)
+    _verify_source_tree_against_run(live_source_root, run, "live")
+    _verify_source_tree_against_run(
+        snapshot_root, run, "materialized", exact_tree=True
+    )
+    return {
+        "boundary": boundary,
+        "commit": commit,
+        "tree": tree,
+        "snapshot_sha256": run["source"]["snapshot_sha256"],
+    }
+
+
+def attested_tool_path(root: Path, label: str) -> str:
+    run = _load_run(root)
+    if label not in run["toolchain"]:
+        raise EvidenceError(f"unknown attested tool: {label}")
+    record = run["toolchain"][label]
+    path = Path(record["resolved"])
+    raw = _read_bounded_regular(path, f"attested {label} executable", MAX_ARTIFACT_BYTES)
+    if _bytes_identity(raw) != record["executable"]:
+        raise EvidenceError(f"attested {label} executable changed after capture")
+    return str(path)
 
 
 _IMAGE_TOOL: Any | None = None
@@ -742,6 +1424,7 @@ def _raw_case_cli_results(
             case[1],
             "--action",
             case[2],
+            "--require-metadata-cow",
         ],
         "verified.actual.json",
         "case verification",
@@ -769,6 +1452,7 @@ def _raw_mutation_cli_rejection(
         "intent",
         "--action",
         "crash",
+        "--require-metadata-cow",
         "--output",
         "mutation-verified.json",
     ]
@@ -825,6 +1509,7 @@ def _raw_mutation_control_acceptance(
             "intent",
             "--action",
             "busy",
+            "--require-metadata-cow",
         ],
         "mutation-busy-control.json",
         "mutant busy control",
@@ -910,7 +1595,9 @@ def _validate_exact_tree(root: Path, *, require_manifest: bool) -> None:
                 raise EvidenceError(f"case artifact is missing or unsafe: {case_id}/{name}")
 
 
-def _validate_backend(value: dict[str, Any]) -> dict[str, Any]:
+def _validate_backend(
+    value: dict[str, Any], run: dict[str, Any] | None = None
+) -> dict[str, Any]:
     _require_fields(value, {"schema_version", "format", "backend"}, "backend record")
     if value["schema_version"] != SCHEMA_VERSION or value["format"] != BACKEND_FORMAT:
         raise EvidenceError("backend record version is unsupported")
@@ -950,9 +1637,25 @@ def _validate_backend(value: dict[str, Any]) -> dict[str, Any]:
     build_sha256 = _require_sha256(backend["build_sha256"], "backend build_sha256")
     compile_argv = _require_argv(backend["compile_argv"], "backend compile_argv")
     _normalize_profile_compile_argv(
-        compile_argv, "backend compile argv", mutant=False
+        compile_argv, "backend compile argv", mutant=False, run=run
     )
     argv = _require_argv(backend["launch_argv"], "backend launch_argv")
+    if run is not None:
+        trusted = argv[4].replace("\\", "/") if len(argv) > 4 else ""
+        expected_prefix = [
+            run["toolchain"]["python"]["resolved"],
+            "-I",
+            "-S",
+            "-B",
+        ]
+        if (
+            len(argv) != 8
+            or argv[:4] != expected_prefix
+            or not trusted.endswith("/sources/scripts/trusted-python-entry.py")
+            or argv[5] != "scripts/agent_test_runner.py"
+            or argv[6:] != ["--init-proc", "fsallocfault_ucore"]
+        ):
+            raise EvidenceError("backend launch argv is not bound to trusted Python")
     return {
         "identity": identity,
         "version": version,
@@ -1311,17 +2014,35 @@ def _validate_diff(
         raise EvidenceError(f"{label} state identities do not match its snapshots")
 
 
-def _validate_canonical(value: dict[str, Any], reboot_sha256: str) -> None:
+def _validate_canonical(value: dict[str, Any], reboot: dict[str, Any]) -> None:
     _require_fields(
         value,
-        {"violations", "transitions", "inode_transitions", "state_sha256"},
+        {
+            "format",
+            "generator",
+            "image",
+            "state_sha256",
+            "qmap_state_counts",
+            "qmap_top_state_counts",
+            "inode_owner_state_counts",
+            "violations",
+            "transitions",
+            "inode_transitions",
+        },
         "reboot canonical record",
     )
     if (
-        value["violations"] != []
+        value["format"] != CANONICAL_FORMAT
+        or value["generator"] != reboot["generator"]
+        or value["image"] != reboot["image"]
+        or value["state_sha256"] != reboot["state_sha256"]
+        or value["qmap_state_counts"] != reboot["qmap_state_counts"]
+        or value["qmap_top_state_counts"] != reboot["qmap_top_state_counts"]
+        or value["inode_owner_state_counts"]
+        != reboot["inode_owner_state_counts"]
+        or value["violations"] != []
         or value["transitions"] != []
         or value["inode_transitions"] != []
-        or value["state_sha256"] != reboot_sha256
     ):
         raise EvidenceError("reboot canonical record is not clean or is for another state")
 
@@ -1425,6 +2146,7 @@ def _validate_receipt(
             "backend",
             "launch_argv",
             "receipt",
+            "physical_io",
             "source_log",
         },
         f"{case_id} {stage} flush receipt",
@@ -1571,6 +2293,13 @@ def _validate_receipt(
         raise EvidenceError(f"{case_id} {stage} source log is not stable UTF-8: {error}") from error
     if marker not in log_lines:
         raise EvidenceError(f"{case_id} {stage} flush receipt marker is absent from its log")
+    physical_io = _parse_physical_io_receipts(
+        case, stage, backend, receipt, log_lines
+    )
+    if value["physical_io"] != physical_io:
+        raise EvidenceError(
+            f"{case_id} {stage} physical I/O schema differs from its Guest log"
+        )
     return {
         "launch_argv": launch_argv,
         "receipt": {
@@ -1587,8 +2316,73 @@ def _validate_receipt(
             "pending_write_count_at_stage_end": pending_at_stage_end,
             "powercut_after_receipt": expected_powercut,
         },
+        "physical_io": physical_io,
         "receipt_log_marker": marker,
         "source_log": log,
+    }
+
+
+def _validate_physical_io_chain(
+    receipts: dict[str, dict[str, Any]], case_id: str, action: str
+) -> dict[str, Any]:
+    if list(receipts) != list(STAGES):
+        raise EvidenceError(f"{case_id} physical receipt stage order differs")
+    flushes = [
+        item
+        for stage in STAGES
+        for item in receipts[stage]["physical_io"]["flushes"]
+    ]
+    operations = [
+        item
+        for stage in STAGES
+        for item in receipts[stage]["physical_io"]["operations"]
+    ]
+    expected_flush_count = 3 if action == "crash" else 4
+    expected_operation_count = 0 if action == "crash" else 1
+    if (
+        len(flushes) != expected_flush_count
+        or len(operations) != expected_operation_count
+    ):
+        raise EvidenceError(f"{case_id} physical receipt chain is incomplete")
+    raw_write_delta = sum(item["raw_write_delta"] for item in flushes)
+    physical_write_delta = sum(item["physical_write_delta"] for item in flushes)
+    logical_flush_delta = sum(item["logical_flush_delta"] for item in flushes)
+    physical_flush_delta = sum(item["physical_flush_delta"] for item in flushes)
+    operation_raw_write_delta = sum(
+        item["raw_write_delta"] for item in operations
+    )
+    operation_physical_write_delta = sum(
+        item["physical_write_delta"] for item in operations
+    )
+    operation_logical_flush_delta = sum(
+        item["logical_flush_delta"] for item in operations
+    )
+    operation_physical_flush_delta = sum(
+        item["physical_flush_delta"] for item in operations
+    )
+    if (
+        raw_write_delta != physical_write_delta
+        or logical_flush_delta != physical_flush_delta
+        or operation_raw_write_delta != operation_physical_write_delta
+        or operation_logical_flush_delta != operation_physical_flush_delta
+    ):
+        raise EvidenceError(f"{case_id} cross-stage physical I/O totals differ")
+    return {
+        "stage_order": list(STAGES),
+        "flush_receipt_count": len(flushes),
+        "operation_receipt_count": len(operations),
+        "flush_totals": {
+            "raw_write_delta": raw_write_delta,
+            "physical_write_delta": physical_write_delta,
+            "logical_flush_delta": logical_flush_delta,
+            "physical_flush_delta": physical_flush_delta,
+        },
+        "operation_totals": {
+            "raw_write_delta": operation_raw_write_delta,
+            "physical_write_delta": operation_physical_write_delta,
+            "logical_flush_delta": operation_logical_flush_delta,
+            "physical_flush_delta": operation_physical_flush_delta,
+        },
     }
 
 
@@ -1628,6 +2422,9 @@ def _case_manifest(
         raise EvidenceError(f"{case_id} snapshot generator versions differ")
     if len({before_image["bytes"], fault_image["bytes"], reboot_image["bytes"]}) != 1:
         raise EvidenceError(f"{case_id} image sizes differ between stages")
+    workload = _validate_workload_image_chain(
+        {"before": before, "fault": fault, "reboot": reboot}, build, case_id
+    )
 
     fault_diff = _read_canonical_json(case_root / "fault.diff.json", f"{case_id} fault diff")
     reboot_diff = _read_canonical_json(case_root / "reboot.diff.json", f"{case_id} reboot diff")
@@ -1636,7 +2433,7 @@ def _case_manifest(
     canonical = _read_canonical_json(
         case_root / "reboot.canonical.json", f"{case_id} reboot canonical record"
     )
-    _validate_canonical(canonical, reboot_state)
+    _validate_canonical(canonical, reboot)
 
     verified = _read_canonical_json(case_root / "verified.json", f"{case_id} verified record")
     if verified.get("format") != VERIFIED_FORMAT:
@@ -1721,6 +2518,8 @@ def _case_manifest(
             backend,
         )
 
+    physical_io = _validate_physical_io_chain(receipts, case_id, action)
+
     if (
         executions["prepare"]["output_image"] != before_image
         or executions["fault"]["input_image"] != before_image
@@ -1750,6 +2549,7 @@ def _case_manifest(
         "action": action,
         "verified": True,
         "build": build,
+        "workload": workload,
         "backend": case_backend,
         "generator": before_generator,
         "images": expected_images,
@@ -1759,6 +2559,7 @@ def _case_manifest(
             "reboot_sha256": reboot_state,
         },
         "executions": receipts,
+        "physical_io": physical_io,
         "runner_executions": executions,
         "negative_mutations": {
             DELETE_FLUSH_MUTATION: {
@@ -1786,7 +2587,7 @@ def construct_manifest(evidence_root: Path) -> dict[str, Any]:
     run = _load_run(root)
     transcript, run_seal = _validate_run_seal(root)
     backend_record = _read_canonical_json(root / "backend.json", "backend record")
-    backend = _validate_backend(backend_record)
+    backend = _validate_backend(backend_record, run)
     if backend["build_sha256"] != root_artifacts["profile.kernel"]["sha256"]:
         raise EvidenceError("backend build identity does not match profile.kernel")
     if backend["capacity_bytes"] > MAX_RAW_IMAGE_BYTES:
@@ -1909,8 +2710,9 @@ def _case_tuple(case_id: str) -> tuple[str, str, str]:
 def _load_backend_root(root: Path) -> dict[str, Any]:
     if _is_link(root) or not root.is_dir():
         raise EvidenceError("evidence writer root is missing or unsafe")
+    run = _load_run(root)
     backend = _validate_backend(
-        _read_canonical_json(root / "backend.json", "backend record")
+        _read_canonical_json(root / "backend.json", "backend record"), run
     )
     profile = _artifact_record(root, "profile.kernel")
     if backend["build_sha256"] != profile["sha256"]:
@@ -1938,13 +2740,183 @@ def _expected_user_build_flag(case: tuple[str, str, str]) -> str:
     )
 
 
+def _normalize_case_build_argv(
+    argv: list[str], case: tuple[str, str, str], run: dict[str, Any]
+) -> list[str]:
+    tools = run["toolchain"]
+    if len(argv) != 14:
+        raise EvidenceError("case build argv length differs from the canonical build")
+    values: dict[str, str] = {}
+    for name, index in (("build_dir", 10), ("out_dir", 11), ("asm_dir", 12)):
+        prefix = f"{name}="
+        if not argv[index].startswith(prefix) or argv[index] == prefix:
+            raise EvidenceError(f"case build argv lacks one private {name}")
+        values[name] = argv[index][len(prefix) :]
+    if argv[13] != f"{values['build_dir']}/riscv64/fsallocfault_ucore":
+        raise EvidenceError("case build target is not inside its private build directory")
+    normalized = list(argv)
+    normalized[10:14] = [
+        "build_dir=<BUILD>",
+        "out_dir=<OUT>",
+        "asm_dir=<ASM>",
+        "<BUILD>/riscv64/fsallocfault_ucore",
+    ]
+    expected = [
+        tools["make"]["resolved"],
+        "-C",
+        "user",
+        "TOOLPREFIX=",
+        "CHAPTER=agent",
+        f"CC={tools['cross_gcc']['resolved']}",
+        f"OBJCOPY={tools['cross_objcopy']['resolved']}",
+        f"OBJDUMP={tools['cross_objdump']['resolved']}",
+        f"PYTHON_BIN={tools['python']['resolved']}",
+        "build_dir=<BUILD>",
+        "out_dir=<OUT>",
+        "asm_dir=<ASM>",
+        "<BUILD>/riscv64/fsallocfault_ucore",
+    ]
+    expected.insert(9, _expected_user_build_flag(case))
+    if normalized != expected:
+        raise EvidenceError("case build argv differs from the canonical user build")
+    return normalized
+
+
+def _elf_image_shape(program_raw: bytes, elf_raw: bytes, label: str) -> dict[str, Any]:
+    """Validate the mkfs ELF/flat pair and return its durable inode shape."""
+    elf_header = struct.Struct("<16sHHIQQQIHHHHHH")
+    program_header = struct.Struct("<IIQQQQQQ")
+    if len(elf_raw) < elf_header.size:
+        raise EvidenceError(f"{label} paired ELF has a truncated header")
+    (
+        ident,
+        elf_type,
+        machine,
+        version,
+        entry,
+        program_header_offset,
+        _section_header_offset,
+        _flags,
+        elf_header_size,
+        program_header_size,
+        program_header_count,
+        _section_header_size,
+        _section_header_count,
+        _section_name_index,
+    ) = elf_header.unpack_from(elf_raw)
+    if (
+        ident[:4] != b"\x7fELF"
+        or ident[4] != 2
+        or ident[5] != 1
+        or ident[6] != 1
+        or elf_type != 2
+        or machine != 243
+        or version != 1
+        or entry != 0x1000
+        or elf_header_size != elf_header.size
+        or program_header_size != program_header.size
+        or program_header_count == 0
+        or program_header_count > 32
+        or program_header_offset > len(elf_raw)
+        or program_header_count * program_header.size
+        > len(elf_raw) - program_header_offset
+    ):
+        raise EvidenceError(f"{label} paired ELF header is unsupported")
+
+    load_segments: dict[str, dict[str, int]] = {}
+    for index in range(program_header_count):
+        (
+            segment_type,
+            segment_flags,
+            file_offset,
+            virtual_address,
+            physical_address,
+            file_size,
+            memory_size,
+            alignment,
+        ) = program_header.unpack_from(
+            elf_raw, program_header_offset + index * program_header.size
+        )
+        if segment_type != 1:
+            continue
+        if (
+            file_size == 0
+            or file_size != memory_size
+            or virtual_address != physical_address
+            or alignment != 4096
+            or file_offset > len(elf_raw)
+            or file_size > len(elf_raw) - file_offset
+        ):
+            raise EvidenceError(f"{label} paired ELF has an invalid load segment")
+        kind = {5: "rx", 6: "rw"}.get(segment_flags)
+        if kind is None or kind in load_segments:
+            raise EvidenceError(
+                f"{label} paired ELF must contain exactly one RX and one RW segment"
+            )
+        load_segments[kind] = {
+            "file_offset": file_offset,
+            "virtual_address": virtual_address,
+            "bytes": file_size,
+            "flags": segment_flags,
+            "alignment": alignment,
+        }
+    if set(load_segments) != {"rx", "rw"}:
+        raise EvidenceError(
+            f"{label} paired ELF must contain exactly one RX and one RW segment"
+        )
+    rx = load_segments["rx"]
+    rw = load_segments["rw"]
+    rx_end = rx["virtual_address"] + rx["bytes"]
+    rw_end = rw["virtual_address"] + rw["bytes"]
+    expected_rw_address = (rx_end + 4095) & ~4095
+    rw_offset = rw["virtual_address"] - 0x1000
+    if (
+        rx["virtual_address"] != 0x1000
+        or not (rx["virtual_address"] <= entry < rx_end)
+        or rw["virtual_address"] != expected_rw_address
+        or rw_offset < 4096
+        or rw_offset % 4096
+        or rx["bytes"] > rw_offset
+        or rw_end - 0x1000 != len(program_raw)
+    ):
+        raise EvidenceError(f"{label} paired ELF layout does not match the flat image")
+    if (
+        program_raw[: rx["bytes"]]
+        != elf_raw[rx["file_offset"] : rx["file_offset"] + rx["bytes"]]
+        or program_raw[rw_offset : rw_offset + rw["bytes"]]
+        != elf_raw[rw["file_offset"] : rw["file_offset"] + rw["bytes"]]
+        or any(program_raw[rx["bytes"] : rw_offset])
+    ):
+        raise EvidenceError(f"{label} flat image contents differ from the paired ELF")
+    return {
+        "format": "elf64-little-riscv-exec",
+        "entry": entry,
+        "layout_version": 1,
+        "rw_offset": rw_offset,
+        "flat_image_bytes": len(program_raw),
+        "flat_image_sha256": hashlib.sha256(program_raw).hexdigest(),
+        "elf_sha256": hashlib.sha256(elf_raw).hexdigest(),
+        "rx": rx,
+        "rw": rw,
+    }
+
+
 def _validate_case_build(
     root: Path, case_id: str, value: dict[str, Any], run: dict[str, Any]
 ) -> dict[str, Any]:
     case = _case_tuple(case_id)
     _require_fields(
         value,
-        {"schema_version", "format", "run_id", "case", "build_argv", "program"},
+        {
+            "schema_version",
+            "format",
+            "run_id",
+            "case",
+            "build_argv",
+            "program",
+            "elf",
+            "image_shape",
+        },
         f"{case_id} build attestation",
     )
     if value["schema_version"] != SCHEMA_VERSION or value["format"] != BUILD_FORMAT:
@@ -1952,22 +2924,25 @@ def _validate_case_build(
     if value["run_id"] != run["run_id"] or value["case"] != _case_value(case_id):
         raise EvidenceError(f"{case_id} build is not bound to this run and case")
     argv = _require_argv(value["build_argv"], f"{case_id} build argv")
-    if argv[:3] != ["make", "-C", "user"]:
-        raise EvidenceError(f"{case_id} build must invoke the canonical user Makefile")
-    if argv.count("CHAPTER=agent") != 1 or argv.count(
-        _expected_user_build_flag(case)
-    ) != 1:
-        raise EvidenceError(f"{case_id} build flags do not select the exact workload")
-    targets = [item for item in argv if item.endswith("/riscv64/fsallocfault_ucore")]
-    if len(targets) != 1:
-        raise EvidenceError(f"{case_id} build must select one fsallocfault ELF target")
+    _normalize_case_build_argv(argv, case, run)
     program = _artifact_record(root, f"cases/{case_id}/program.bin")
     _validate_artifact_reference(value["program"], program, f"{case_id} program")
+    elf = _artifact_record(root, f"cases/{case_id}/program.elf")
+    _validate_artifact_reference(value["elf"], elf, f"{case_id} paired ELF")
+    program_raw = _read_bounded_regular(
+        root / program["path"], f"{case_id} sealed program", MAX_ARTIFACT_BYTES
+    )
+    elf_raw = _read_bounded_regular(
+        root / elf["path"], f"{case_id} sealed paired ELF", MAX_ARTIFACT_BYTES
+    )
+    expected_shape = _elf_image_shape(program_raw, elf_raw, case_id)
+    if value["image_shape"] != expected_shape:
+        raise EvidenceError(f"{case_id} ELF shape is not bound to its sealed build")
     return value
 
 
 def record_build(
-    root: Path, case_id: str, program: Path, build_argv_json: Path
+    root: Path, case_id: str, program: Path, elf: Path, build_argv_json: Path
 ) -> dict[str, Any]:
     _case_tuple(case_id)
     run = _load_run(root)
@@ -1975,6 +2950,8 @@ def record_build(
     program_raw = _read_bounded_regular(
         program, f"{case_id} program", MAX_ARTIFACT_BYTES
     )
+    elf_raw = _read_bounded_regular(elf, f"{case_id} paired ELF", MAX_ARTIFACT_BYTES)
+    image_shape = _elf_image_shape(program_raw, elf_raw, case_id)
     argv = _load_argv_json(build_argv_json, f"{case_id} build argv")
     case_root = root / "cases" / case_id
     if case_root.exists():
@@ -1986,6 +2963,10 @@ def record_build(
         "path": f"cases/{case_id}/program.bin",
         **_bytes_identity(program_raw),
     }
+    elf_record = {
+        "path": f"cases/{case_id}/program.elf",
+        **_bytes_identity(elf_raw),
+    }
     record = {
         "schema_version": SCHEMA_VERSION,
         "format": BUILD_FORMAT,
@@ -1993,14 +2974,82 @@ def record_build(
         "case": _case_value(case_id),
         "build_argv": argv,
         "program": program_record,
+        "elf": elf_record,
+        "image_shape": image_shape,
     }
-    for path in (case_root / "program.bin", case_root / "build.json"):
+    for path in (
+        case_root / "program.bin",
+        case_root / "program.elf",
+        case_root / "build.json",
+    ):
         if path.exists() or _is_link(path):
             raise EvidenceError(f"record-build refuses to overwrite: {path.name}")
     _atomic_publish_bytes(case_root / "program.bin", program_raw)
+    _atomic_publish_bytes(case_root / "program.elf", elf_raw)
     _atomic_publish_bytes(case_root / "build.json", _render_json(record))
     _validate_case_build(root, case_id, record, run)
     return record
+
+
+def _validate_workload_snapshot(
+    snapshot: dict[str, Any], build: dict[str, Any], label: str
+) -> dict[str, Any]:
+    root_names = snapshot.get("root_names")
+    inodes = snapshot.get("inodes")
+    payloads = snapshot.get("payload_sha256")
+    if not isinstance(root_names, dict) or not isinstance(inodes, dict) or not isinstance(
+        payloads, dict
+    ):
+        raise EvidenceError(f"{label} lacks the workload inode inventory")
+    inum = root_names.get(WORKLOAD_IMAGE_NAME)
+    if isinstance(inum, bool) or not isinstance(inum, int) or inum <= 0:
+        raise EvidenceError(
+            f"{label} lacks the exact {WORKLOAD_SOURCE_NAME} inode payload"
+        )
+    key = str(inum)
+    inode = inodes.get(key)
+    if not isinstance(inode, dict):
+        raise EvidenceError(f"{label} workload inode record is missing")
+    shape = build["image_shape"]
+    if (
+        inode.get("type") != 2
+        or inode.get("size") != build["program"]["bytes"]
+        or inode.get("exec_layout_version") != shape["layout_version"]
+        or inode.get("exec_rw_offset") != shape["rw_offset"]
+        or payloads.get(key) != build["program"]["sha256"]
+    ):
+        raise EvidenceError(
+            f"{label} workload payload or ELF-derived inode shape differs from build record"
+        )
+    return {
+        "root_name": WORKLOAD_IMAGE_NAME,
+        "inum": inum,
+        "payload_sha256": payloads[key],
+        "size": inode["size"],
+        "layout_version": inode["exec_layout_version"],
+        "rw_offset": inode["exec_rw_offset"],
+        "program_sha256": build["program"]["sha256"],
+        "elf_sha256": build["elf"]["sha256"],
+    }
+
+
+def _validate_workload_image_chain(
+    snapshots: dict[str, dict[str, Any]], build: dict[str, Any], case_id: str
+) -> dict[str, Any]:
+    bindings = {
+        stage: _validate_workload_snapshot(
+            snapshots[stage], build, f"{case_id} {stage} image"
+        )
+        for stage in ("before", "fault", "reboot")
+    }
+    if len({json.dumps(value, sort_keys=True) for value in bindings.values()}) != 1:
+        raise EvidenceError(f"{case_id} workload inode identity changed across stages")
+    return {
+        "build_program": build["program"],
+        "build_elf": build["elf"],
+        "image_shape": build["image_shape"],
+        "stages": bindings,
+    }
 
 
 _RUNNER_OPTIONS = {
@@ -2019,12 +3068,20 @@ _RUNNER_OPTIONS = {
 
 
 def _parse_runner_argv(argv: list[str], label: str) -> dict[str, str]:
-    if len(argv) < 4 or PurePosixPath(argv[1].replace("\\", "/")).as_posix() != (
-        "scripts/agent_test_runner.py"
+    trusted = argv[4].replace("\\", "/") if len(argv) > 4 else ""
+    target = PurePosixPath(argv[5].replace("\\", "/")) if len(argv) > 5 else None
+    if (
+        len(argv) < 8
+        or argv[1:4] != ["-I", "-S", "-B"]
+        or not trusted.endswith("/sources/scripts/trusted-python-entry.py")
+        or target is None
+        or target.as_posix() != "scripts/agent_test_runner.py"
     ):
-        raise EvidenceError(f"{label} must invoke scripts/agent_test_runner.py directly")
+        raise EvidenceError(
+            f"{label} must invoke the runner through isolated trusted Python"
+        )
     options: dict[str, str] = {}
-    index = 2
+    index = 6
     while index < len(argv):
         option = argv[index]
         if option not in _RUNNER_OPTIONS or option in options or index + 1 >= len(argv):
@@ -2258,8 +3315,9 @@ def _validate_execution(
         else "fsalloc-profile-kernel"
     )
     if (
-        argv[0] != run["toolchain"]["python"]["requested"]
-        or options["--qemu"] != run["toolchain"]["qemu"]["requested"]
+        argv[:8] != backend["launch_argv"]
+        or argv[0] != run["toolchain"]["python"]["resolved"]
+        or options["--qemu"] != run["toolchain"]["qemu"]["resolved"]
         or Path(options["--kernel"]).name != expected_kernel_basename
         or Path(options["--image"]).name != f"{tag}.img"
         or Path(options["--log-file"]).name != f"{tag}-{stage}.log"
@@ -2284,7 +3342,9 @@ def _validate_execution(
     if log_lines.count(marker) != 1:
         raise EvidenceError(f"{case_id} {stage} execution lacks one exact success marker")
     if any(
-        re.search(r"(?:^|\s)(?:kernel panic|panic:|assertion failed)(?:\s|$)", line, re.I)
+        _GUEST_FAILURE_CLASSIFIER.is_failure_line(
+            line, phase=_GUEST_FAILURE_CLASSIFIER.PHASE_GUEST
+        )
         for line in log_lines
     ):
         raise EvidenceError(f"{case_id} {stage} execution log contains a Guest failure")
@@ -2311,6 +3371,8 @@ def _execution_inventory(root: Path) -> tuple[list[dict[str, Any]], list[dict[st
                 "case": case_id,
                 "artifact": _artifact_record(root, f"cases/{case_id}/build.json"),
                 "program": build["program"],
+                "elf": build["elf"],
+                "image_shape": build["image_shape"],
             }
         )
         for stage in STAGES:
@@ -2477,7 +3539,7 @@ def init_backend(
             "launch_argv": launch_argv,
         },
     }
-    _validate_backend(backend_record)
+    _validate_backend(backend_record, _load_run(root))
     try:
         (root / "cases").mkdir()
     except OSError as error:
@@ -2503,6 +3565,169 @@ _RECEIPT_LINE = re.compile(
     r"pending_at_stage_end=(?P<pending_at_stage_end>[0-9]+) "
     r"powercut_after_receipt=(?P<powercut>[01])\Z"
 )
+
+
+_PHYSICAL_FLUSH_LINE = re.compile(
+    r"fsallocfault_ucore: flush_receipt stage=(?P<label>[a-z-]+) "
+    r"abi=(?P<abi>[0-9]+) capacity=(?P<capacity>[0-9]+) "
+    r"epoch_before=(?P<epoch_before>[0-9]+) epoch_after=(?P<epoch_after>[0-9]+) "
+    r"pending_before=(?P<pending_before>[0-9]+) pending_after=(?P<pending_after>[0-9]+) "
+    r"raw_writes_delta=(?P<raw_write>[0-9]+) "
+    r"physical_write_delta=(?P<physical_write>[0-9]+) "
+    r"physical_flush_delta=(?P<physical_flush>[0-9]+) "
+    r"real_flush_delta=(?P<real_flush>[0-9]+) "
+    r"failed_flush_delta=(?P<failed_flush>[0-9]+) "
+    r"capacity_failures=(?P<capacity_failures>[0-9]+)\Z"
+)
+
+_PHYSICAL_OPERATION_LINE = re.compile(
+    r"fsallocfault_ucore: operation_io raw=(?P<raw>[0-9]+) "
+    r"physical_write=(?P<physical_write>[0-9]+) "
+    r"flush=(?P<flush>[0-9]+) physical_flush=(?P<physical_flush>[0-9]+)\Z"
+)
+
+
+def _physical_flush_log_marker(
+    label: str,
+    abi: int,
+    capacity: int,
+    epoch_before: int,
+    epoch_after: int,
+    pending_before: int,
+    pending_after: int,
+    raw_write: int,
+    physical_write: int,
+    physical_flush: int,
+    real_flush: int,
+    failed_flush: int,
+    capacity_failures: int,
+) -> str:
+    return (
+        f"fsallocfault_ucore: flush_receipt stage={label} abi={abi} "
+        f"capacity={capacity} epoch_before={epoch_before} "
+        f"epoch_after={epoch_after} pending_before={pending_before} "
+        f"pending_after={pending_after} raw_writes_delta={raw_write} "
+        f"physical_write_delta={physical_write} "
+        f"physical_flush_delta={physical_flush} real_flush_delta={real_flush} "
+        f"failed_flush_delta={failed_flush} capacity_failures={capacity_failures}"
+    )
+
+
+def _physical_operation_log_marker(
+    raw: int, physical_write: int, flush: int, physical_flush: int
+) -> str:
+    return (
+        f"fsallocfault_ucore: operation_io raw={raw} "
+        f"physical_write={physical_write} flush={flush} "
+        f"physical_flush={physical_flush}"
+    )
+
+
+def _parse_physical_io_receipts(
+    case: tuple[str, str, str],
+    stage: str,
+    backend: dict[str, Any],
+    receipt: dict[str, Any],
+    log_lines: list[str],
+) -> dict[str, Any]:
+    case_id = "-".join(case)
+    flush_matches = [
+        (index, match)
+        for index, line in enumerate(log_lines)
+        if (match := _PHYSICAL_FLUSH_LINE.fullmatch(line))
+    ]
+    expected_labels = (
+        ["fault-baseline", "fault"]
+        if stage == "fault" and case[2] != "crash"
+        else ["fault-baseline"]
+        if stage == "fault"
+        else [stage]
+    )
+    if [match.group("label") for _, match in flush_matches] != expected_labels:
+        raise EvidenceError(
+            f"{case_id} {stage} physical flush receipt inventory differs"
+        )
+    flushes: list[dict[str, Any]] = []
+    for _index, match in flush_matches:
+        parsed = {
+            "label": match.group("label"),
+            "abi_version": int(match.group("abi")),
+            "capacity_blocks": int(match.group("capacity")),
+            "epoch_before": int(match.group("epoch_before")),
+            "epoch_after": int(match.group("epoch_after")),
+            "pending_before": int(match.group("pending_before")),
+            "pending_after": int(match.group("pending_after")),
+            "raw_write_delta": int(match.group("raw_write")),
+            "physical_write_delta": int(match.group("physical_write")),
+            "physical_flush_delta": int(match.group("physical_flush")),
+            "logical_flush_delta": int(match.group("real_flush")),
+            "failed_flush_delta": int(match.group("failed_flush")),
+            "capacity_failures": int(match.group("capacity_failures")),
+        }
+        if (
+            str(parsed["abi_version"]) != backend["abi_version"]
+            or parsed["capacity_blocks"] * 1024 != backend["capacity_bytes"]
+            or parsed["epoch_after"] != parsed["epoch_before"] + 1
+            or parsed["pending_after"] != 0
+            or parsed["raw_write_delta"] != parsed["pending_before"]
+            or parsed["physical_write_delta"] != parsed["raw_write_delta"]
+            or parsed["physical_flush_delta"] != 1
+            or parsed["logical_flush_delta"] != parsed["physical_flush_delta"]
+            or parsed["failed_flush_delta"] != 0
+            or parsed["capacity_failures"] != 0
+        ):
+            raise EvidenceError(
+                f"{case_id} {stage} physical flush receipt is inconsistent"
+            )
+        flushes.append(parsed)
+
+    primary = next((item for item in flushes if item["label"] == stage), None)
+    if primary is not None and (
+        primary["epoch_after"] != receipt["durable_epoch"]
+        or primary["pending_before"]
+        != receipt["pending_write_count_before_flush"]
+        or primary["pending_after"]
+        != receipt["pending_write_count_after_flush"]
+    ):
+        raise EvidenceError(
+            f"{case_id} {stage} physical receipt differs from durable receipt"
+        )
+
+    operation_matches = [
+        (index, match)
+        for index, line in enumerate(log_lines)
+        if (match := _PHYSICAL_OPERATION_LINE.fullmatch(line))
+    ]
+    expected_operation_count = 1 if stage == "fault" and case[2] != "crash" else 0
+    if len(operation_matches) != expected_operation_count:
+        raise EvidenceError(
+            f"{case_id} {stage} physical operation receipt inventory differs"
+        )
+    operations: list[dict[str, int]] = []
+    for _index, match in operation_matches:
+        parsed_operation = {
+            "raw_write_delta": int(match.group("raw")),
+            "physical_write_delta": int(match.group("physical_write")),
+            "logical_flush_delta": int(match.group("flush")),
+            "physical_flush_delta": int(match.group("physical_flush")),
+        }
+        if (
+            parsed_operation["raw_write_delta"]
+            != parsed_operation["physical_write_delta"]
+            or parsed_operation["logical_flush_delta"]
+            != parsed_operation["physical_flush_delta"]
+        ):
+            raise EvidenceError(
+                f"{case_id} {stage} physical operation receipt is inconsistent"
+            )
+        operations.append(parsed_operation)
+    if operation_matches and not (
+        flush_matches[0][0] < operation_matches[0][0] < flush_matches[-1][0]
+    ):
+        raise EvidenceError(
+            f"{case_id} fault physical receipts are not in execution order"
+        )
+    return {"flushes": flushes, "operations": operations}
 
 
 def record_stage(
@@ -2580,6 +3805,9 @@ def record_stage(
         },
         "source_log": log_record,
     }
+    receipt["physical_io"] = _parse_physical_io_receipts(
+        case, stage, backend, receipt["receipt"], log_lines
+    )
     _validate_receipt(receipt, case, stage, backend, log_record, log_path)
     case_root = root / "cases" / case_id
     if case_root.exists():
@@ -2608,6 +3836,15 @@ def record_case(
 ) -> dict[str, Any]:
     case = _case_tuple(case_id)
     _load_backend_root(root)
+    run = _load_run(root)
+    build = _validate_case_build(
+        root,
+        case_id,
+        _read_canonical_json(
+            root / "cases" / case_id / "build.json", f"{case_id} build"
+        ),
+        run,
+    )
     inputs = {
         "before": before_image,
         "fault": fault_image,
@@ -2621,6 +3858,7 @@ def record_case(
         snapshots, fault_diff, reboot_diff, canonical, verified = _raw_case_cli_results(
             Path(temporary), inputs, case
         )
+    _validate_workload_image_chain(snapshots, build, case_id)
     case_root = root / "cases" / case_id
     if case_root.exists():
         if _is_link(case_root) or not case_root.is_dir():
@@ -3150,7 +4388,39 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--run-id", required=True)
     run_parser.add_argument("--qemu", required=True)
     run_parser.add_argument("--python", required=True)
-    run_parser.add_argument("--toolprefix", required=True)
+    run_parser.add_argument("--toolprefix")
+    run_parser.add_argument("--make", default="make")
+    run_parser.add_argument("--host-cc")
+    run_parser.add_argument("--cross-gcc")
+    run_parser.add_argument("--cross-ld")
+    run_parser.add_argument("--cross-objcopy")
+    run_parser.add_argument("--cross-objdump")
+    tool_parser = subparsers.add_parser("tool-path")
+    tool_parser.add_argument("--root", type=Path, required=True)
+    tool_parser.add_argument(
+        "--tool",
+        choices=(
+            "python",
+            "qemu",
+            "make",
+            "host_cc",
+            "cross_gcc",
+            "cross_ld",
+            "cross_objcopy",
+            "cross_objdump",
+        ),
+        required=True,
+    )
+    materialize_parser = subparsers.add_parser("materialize-source")
+    materialize_parser.add_argument("--root", type=Path, required=True)
+    materialize_parser.add_argument("--output", type=Path, required=True)
+    boundary_parser = subparsers.add_parser("verify-source-boundary")
+    boundary_parser.add_argument("--root", type=Path, required=True)
+    boundary_parser.add_argument("--source-root", type=Path, required=True)
+    boundary_parser.add_argument("--snapshot-root", type=Path, required=True)
+    boundary_parser.add_argument("--boundary", required=True)
+    clean_parser = subparsers.add_parser("clean-exec")
+    clean_parser.add_argument("argv", nargs=argparse.REMAINDER)
     init_parser = subparsers.add_parser("init-backend")
     init_parser.add_argument("--root", type=Path, required=True)
     init_parser.add_argument("--kernel", type=Path, required=True)
@@ -3164,6 +4434,7 @@ def main(argv: list[str] | None = None) -> int:
     build_parser.add_argument("--root", type=Path, required=True)
     build_parser.add_argument("--case", required=True)
     build_parser.add_argument("--program", type=Path, required=True)
+    build_parser.add_argument("--elf", type=Path, required=True)
     build_parser.add_argument("--build-argv-json", type=Path, required=True)
     execution_parser = subparsers.add_parser("record-execution")
     execution_parser.add_argument("--root", type=Path, required=True)
@@ -3223,9 +4494,38 @@ def main(argv: list[str] | None = None) -> int:
                 args.qemu,
                 args.python,
                 args.toolprefix,
+                args.make,
+                args.host_cc,
+                args.cross_gcc,
+                args.cross_ld,
+                args.cross_objcopy,
+                args.cross_objdump,
             )
             writer_label = "run captured"
             manifest = None
+        elif args.command == "tool-path":
+            print(attested_tool_path(args.root, args.tool))
+            return 0
+        elif args.command == "materialize-source":
+            materialize_source(args.root, args.output)
+            writer_label = "source materialized"
+            manifest = None
+        elif args.command == "verify-source-boundary":
+            boundary = verify_source_boundary(
+                args.root,
+                args.source_root,
+                args.snapshot_root,
+                args.boundary,
+            )
+            writer_label = (
+                f"source boundary verified boundary={boundary['boundary']} "
+                f"snapshot={boundary['snapshot_sha256']}"
+            )
+            manifest = None
+        elif args.command == "clean-exec":
+            child_argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+            clean_exec(child_argv)
+            raise AssertionError("clean-exec unexpectedly returned")
         elif args.command == "init-backend":
             init_backend(
                 args.root,
@@ -3240,7 +4540,13 @@ def main(argv: list[str] | None = None) -> int:
             writer_label = "backend initialized"
             manifest = None
         elif args.command == "record-build":
-            record_build(args.root, args.case, args.program, args.build_argv_json)
+            record_build(
+                args.root,
+                args.case,
+                args.program,
+                args.elf,
+                args.build_argv_json,
+            )
             writer_label = f"build recorded case={args.case}"
             manifest = None
         elif args.command == "record-execution":

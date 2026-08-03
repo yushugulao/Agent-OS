@@ -54,6 +54,7 @@ AGENT_TEST_SOURCE_REQUIRED_PATHS = (
     "scripts/run-agent-tests.sh",
     "scripts/evidence-wiring.sh",
     "scripts/agent_test_runner.py",
+    "scripts/guest_failure_classifier.py",
     "scripts/agent_test_calibration.py",
     "scripts/validate-kernel-test-log.py",
     "scripts/initproc.py",

@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-import csv
-import html
 import math
 import re
 from pathlib import Path
 
 try:
+    from .full_verification_metrics_render import (
+        measurement_values_match, write_agent_csv, write_chart, write_metrics_csv,
+    )
     from .strict_json import read_strict_json
 except ImportError:
+    from full_verification_metrics_render import (
+        measurement_values_match, write_agent_csv, write_chart, write_metrics_csv,
+    )
     from strict_json import read_strict_json
 
 
@@ -91,8 +95,16 @@ def load_budget_config(path: Path) -> dict[str, object]:
 
 
 def parse_measurements(
-    full_log: Path, timing_log: Path, config: dict[str, object]
+    full_log: Path,
+    timing_log: Path,
+    config: dict[str, object],
+    *,
+    duration_profile: str,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if duration_profile not in {"local-e3", "none"}:
+        raise FullVerificationEvidenceError(
+            "Agent duration profile must be exactly local-e3 or none"
+        )
     text = full_log.read_text(encoding="utf-8", errors="replace")
     modules = config.get("agent_modules")
     groups = modules.get("aggregate_budgets") if isinstance(modules, dict) else None
@@ -306,16 +318,46 @@ def parse_measurements(
             "Agent timing cases do not match the configured suite"
         )
     total = sum(float(row["seconds"]) for row in cases)
+    calibration_status = suite.get("calibration_status")
+    if duration_profile == "local-e3":
+        if calibration_status != "calibrated_full_suite":
+            raise FullVerificationEvidenceError(
+                "local-e3 Agent duration policy is not fully calibrated"
+            )
+        duration_budget = (suite.get("baseline_seconds"), suite.get("max_seconds"))
+        if (
+            any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for value in duration_budget
+            )
+            or duration_budget[0] < 0
+            or duration_budget[1] <= 0
+        ):
+            raise FullVerificationEvidenceError(
+                "local-e3 Agent duration budget is invalid"
+            )
+        duration_baseline: float | None = float(duration_budget[0])
+        duration_limit: float | None = float(duration_budget[1])
+    else:
+        # A different runner remains useful for semantic and inventory evidence,
+        # but its wall-clock total is deliberately not compared with local-e3.
+        duration_baseline = None
+        duration_limit = None
     metrics["agent_suite_total_seconds"] = {
         "metric": "agent_suite_total_seconds",
         "actual": total,
-        "baseline": float(suite["baseline_seconds"]),
-        "limit": float(suite["max_seconds"]),
+        "baseline": duration_baseline,
+        "limit": duration_limit,
         "unit": "seconds",
         "source_line": 0,
     }
     rows = list(metrics.values())
     for row in rows:
+        if row["metric"] == "agent_suite_total_seconds" and duration_profile == "none":
+            row["usage_ratio"] = None
+            continue
         limit = float(row["limit"])
         if limit <= 0 or float(row["actual"]) > limit:
             raise FullVerificationEvidenceError(
@@ -325,99 +367,11 @@ def parse_measurements(
     return rows, cases
 
 
-def write_metrics_csv(
-    path: Path,
-    rows: list[dict[str, object]],
-    full_source: str,
-    full_hash: str,
-    timing_source: str,
-    timing_hash: str,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fields = [
-        "metric", "actual", "baseline", "limit", "unit", "usage_ratio",
-        "source_line", "source_log", "source_log_sha256",
-    ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        for row in rows:
-            agent_total = row["metric"] == "agent_suite_total_seconds"
-            writer.writerow({
-                **row,
-                "source_log": timing_source if agent_total else full_source,
-                "source_log_sha256": timing_hash if agent_total else full_hash,
-            })
-
-
-def write_agent_csv(
-    path: Path, rows: list[dict[str, object]], source: str, source_hash: str
-) -> None:
-    fields = [
-        "sequence", "case", "seconds", "source_line", "source_log",
-        "source_log_sha256",
-    ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({
-                **row,
-                "source_log": source,
-                "source_log_sha256": source_hash,
-            })
-
-
-def write_chart(
-    path: Path,
-    rows: list[dict[str, object]],
-    measurements_hash: str,
-    full_hash: str,
-    timing_hash: str,
-) -> None:
-    width, row_height, top = 980, 34, 54
-    height = top + row_height * len(rows) + 24
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-        f'viewBox="0 0 {width} {height}">',
-        '<rect width="100%" height="100%" fill="#ffffff"/>',
-        '<text x="20" y="28" font-family="sans-serif" font-size="18" fill="#111">'
-        'AgentOS acceptance budgets</text>',
-        f'<metadata>source_measurements_sha256={measurements_hash} '
-        f'full_verify_sha256={full_hash} agent_timing_sha256={timing_hash}</metadata>',
-    ]
-    for index, row in enumerate(rows):
-        y = top + index * row_height
-        usage = float(row["usage_ratio"])
-        baseline = float(row["baseline"]) / float(row["limit"])
-        bar_width = min(430, 430 * usage)
-        baseline_x = 330 + min(430, 430 * baseline)
-        label = html.escape(str(row["metric"]))
-        detail = html.escape(
-            f"actual={row['actual']:.9g} baseline={row['baseline']:.9g} "
-            f"limit={row['limit']:.9g} usage={usage:.2%}"
-        )
-        parts.extend([
-            f'<text x="20" y="{y + 16}" font-family="monospace" '
-            f'font-size="12">{label}</text>',
-            f'<rect x="330" y="{y + 3}" width="430" height="15" '
-            'fill="#e5e7eb"/>',
-            f'<rect x="330" y="{y + 3}" width="{bar_width:.2f}" height="15" '
-            'fill="#167d68"/>',
-            f'<line x1="{baseline_x:.2f}" y1="{y}" x2="{baseline_x:.2f}" '
-            f'y2="{y + 21}" stroke="#b45309" stroke-width="2"/>',
-            f'<text x="775" y="{y + 16}" font-family="sans-serif" '
-            f'font-size="11">{detail}</text>',
-        ])
-    parts.append("</svg>")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(parts) + "\n", encoding="utf-8")
-
-
 __all__ = [
     "FullVerificationEvidenceError",
     "REQUIRED_EVIDENCE_METRICS",
     "load_budget_config",
+    "measurement_values_match",
     "metric_key",
     "parse_measurements",
     "write_agent_csv",

@@ -15,8 +15,9 @@ WORKSPACE_GENERATED_PATHS = \
 	baseline_ucore/user/build baseline_ucore/user/build-* \
 	baseline_ucore/user/target baseline_ucore/user/target-* \
 	baseline_ucore/user/asm baseline_ucore/user/asm-* \
-	nfs/*.img nfs/fs os/initproc.S \
-	baseline_ucore/nfs/*.img baseline_ucore/nfs/fs baseline_ucore/os/initproc.S \
+	nfs/*.img nfs/fs nfs/*.exe os/initproc.S \
+	baseline_ucore/nfs/*.img baseline_ucore/nfs/fs baseline_ucore/nfs/*.exe \
+	baseline_ucore/os/initproc.S results .pytest_cache \
 	host_tools/__pycache__ scripts/__pycache__
 
 TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then echo riscv64-unknown-elf-; else echo riscv64-linux-gnu-; fi)
@@ -30,7 +31,8 @@ SIZE = $(TOOLPREFIX)size
 PYTHON_BIN ?= python3
 BASH_BIN ?= bash
 override PY = $(PYTHON_BIN)
-HOST_CC ?= cc
+HOST_CC ?= $(if $(strip $(HOSTCC)),$(HOSTCC),cc)
+AGENT_TEST_DURATION_PROFILE ?= local-e3
 COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 GDB = $(TOOLPREFIX)gdb
 # Keep the variables above as raw tool identities.  Recipes and probes must
@@ -631,6 +633,8 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-wait-atomic-wiring.py \
 	scripts/check-bio-fs-must-check.py \
 	scripts/test-bio-background-context.py \
+	scripts/test-cache-index-wiring.py \
+	scripts/test-io-work-conserving-wiring.py \
 	scripts/test-audit-lease-admission.py \
 	scripts/test-observe-span-retention.py \
 	scripts/check-fs-allocator-state.py \
@@ -734,12 +738,7 @@ clean:
 
 # BOARD
 BOARD		?= qemu
-SBI			?= opensbi
-ifeq ($(SBI), rustsbi)
-BOOTLOADER	:= ./bootloader/rustsbi-qemu.bin
-else
 BOOTLOADER	:= default
-endif
 
 QEMU ?= qemu-system-riscv64
 QEMU_CMD = $(call shell_quote,$(QEMU))
@@ -839,10 +838,12 @@ agentos-build:
 
 agentos-test:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
-	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-agent-tests.sh
+	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
+		HOST_CC=$(call shell_quote,$(HOST_CC)) \
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-agent-tests.sh
 
-# Three isolated Guest boots: Task 1-5, a measured metadata-path comparison,
-# and the integrated Task 6 workflow. No cloud API or prior result is read.
+# Two isolated Guest boots: challenge-bound Task 1-5 plus the path/index
+# comparison, then the short Task 6 workflow. No cloud API or prior result is read.
 contest-demo:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		QEMU=$(call shell_quote,$(QEMU)) \
@@ -858,7 +859,7 @@ fs-enospc-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-fs-enospc-tests.sh
 
 fs-allocator-fault-test:
-	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-fs-allocator-fault-tests.sh
+	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) /bin/bash --noprofile --norc -p scripts/run-fs-allocator-fault-tests.sh
 
 proc-reap-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-proc-reap-tests.sh
@@ -914,14 +915,20 @@ target-readiness:
 	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/check-target-readiness.sh
 
 full-verify:
-	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-full-verification.sh
+	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
+		HOST_CC=$(call shell_quote,$(HOST_CC)) \
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-full-verification.sh
 
 # Host evaluation contracts join ci-check; QEMU campaigns do not add remote jobs.
 evaluation-doctor:
-	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh doctor
+	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
+		HOST_CC=$(call shell_quote,$(HOST_CC)) \
+		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh doctor
 
 evaluation-smoke:
-	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh smoke
+	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
+		HOST_CC=$(call shell_quote,$(HOST_CC)) \
+		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/run-evaluation-suite.sh smoke
 
 define evaluation_formal_exec
 	$(PYTHON_CMD) -I -S scripts/trusted-python-entry.py \
@@ -930,6 +937,8 @@ define evaluation_formal_exec
 		--qemu $(call shell_quote,$(QEMU)) \
 		--python-bin $(call shell_quote,$(PYTHON_BIN)) \
 		--shell-bin $(call shell_quote,$(BASH_BIN)) \
+		--host-cc $(call shell_quote,$(HOST_CC)) \
+		--duration-profile $(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
 		--script-relative scripts/run-evaluation-suite.sh --mode $(1)
 endef
 

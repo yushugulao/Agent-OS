@@ -21,7 +21,12 @@ combined_log="${artifact_dir}/${label}-combined.log"
 : >"${guest_log}"
 
 set +e
-env EVIDENCE_GUEST_LOG_FILE="${guest_log}" bash "${runner}" 2>&1 | tee "${job_log}"
+runner_shell=(bash)
+if [[ "${label}" == "fs-allocator-fault" ]]; then
+	runner_shell=(/bin/bash --noprofile --norc -p)
+fi
+env EVIDENCE_GUEST_LOG_FILE="${guest_log}" \
+	"${runner_shell[@]}" "${runner}" 2>&1 | tee "${job_log}"
 pipeline_status=("${PIPESTATUS[@]}")
 set -e
 

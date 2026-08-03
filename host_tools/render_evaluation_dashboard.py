@@ -39,6 +39,7 @@ from strict_json import read_strict_json, strict_json_loads
 from safe_host_paths import (
     path_is_link,
     require_regular_file,
+    require_safe_directory,
     walk_regular_files_no_links,
 )
 from compatibility_overhead import (
@@ -3111,6 +3112,8 @@ def _campaign_environment_sha256(campaign: dict[str, Any]) -> str:
 def _verify_campaign_environment(
     evidence_root: Path,
     summary: dict[str, Any],
+    *,
+    contract_root: Path,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Recover displayable Host identity only through the sealed campaign chain."""
 
@@ -3165,7 +3168,7 @@ def _verify_campaign_environment(
         campaign = strict_json_loads(campaign_data)
         if not isinstance(campaign, dict):
             raise CampaignError("campaign must be an object")
-        validate_campaign(campaign)
+        validate_campaign(campaign, contract_root=contract_root)
     except (CampaignError, UnicodeError, ValueError) as error:
         _fail(f"campaign platform proof is invalid: {error}")
     if campaign["phase"] != "collected":
@@ -3389,6 +3392,8 @@ def _verify_evidence_files(
     evidence_root: Path,
     summary: dict[str, Any],
     source_summary: bytes,
+    *,
+    contract_root: Path,
 ) -> tuple[
     dict[str, Any],
     list[dict[str, Any]],
@@ -3526,7 +3531,7 @@ def _verify_evidence_files(
         _fail("run.run_plan_sha256 is not bound to the actual run-plan evidence bytes")
 
     campaign_environment, campaign_record = _verify_campaign_environment(
-        evidence_root, summary
+        evidence_root, summary, contract_root=contract_root
     )
     if campaign_record is not None:
         records.append(campaign_record)
@@ -3598,12 +3603,14 @@ def _replay_scientific_contract(
     evidence_root: Path,
     summary_path: Path,
     summary: dict[str, Any],
+    *,
+    contract_root: Path,
 ) -> None:
     """Rebuild positive and negative measured results before rendering."""
 
     if not _has_scientific_result(summary):
         return
-    repository_suite = Path(__file__).resolve().parents[1] / "ci" / "evaluation-suite.json"
+    repository_suite = contract_root / "ci" / "evaluation-suite.json"
     suite_path = evidence_root / "suite.json"
     if not suite_path.exists():
         suite_path = repository_suite
@@ -3641,6 +3648,7 @@ def _replay_scientific_contract(
             required["metrics"],
             scenario_args[0],
             scenario_args[1],
+            contract_root=contract_root,
         )
     except (EvaluationContractError, OSError, UnicodeError, ValueError) as error:
         _fail(f"raw Guest contract replay failed: {error}")
@@ -4731,7 +4739,16 @@ def _write_csv(path: Path, summary: dict[str, Any]) -> None:
         raise
 
 
-def render(summary_path: Path, output_dir: Path) -> None:
+def render(
+    summary_path: Path,
+    output_dir: Path,
+    *,
+    contract_root: Path,
+) -> None:
+    try:
+        contract_root = require_safe_directory(contract_root).resolve(strict=True)
+    except (OSError, ValueError) as error:
+        _fail(f"trusted contract root is missing or unsafe: {error}")
     summary_path = summary_path.resolve(strict=True)
     if not summary_path.is_file():
         _fail("summary input must be a regular file")
@@ -4740,21 +4757,31 @@ def render(summary_path: Path, output_dir: Path) -> None:
     if summary_path.read_bytes() != source_summary:
         _fail("summary input changed while it was being validated")
     verification, scenario_details, kernel_cost, campaign_environment = _verify_evidence_files(
-        summary_path.parent, validated, source_summary
+        summary_path.parent,
+        validated,
+        source_summary,
+        contract_root=contract_root,
     )
-    _replay_scientific_contract(summary_path.parent, summary_path, validated)
+    _replay_scientific_contract(
+        summary_path.parent,
+        summary_path,
+        validated,
+        contract_root=contract_root,
+    )
     summary = _canonical_dashboard_summary(validated, kernel_cost)
     output_dir.mkdir(parents=True, exist_ok=True)
     if not output_dir.is_dir():
         _fail("output path must be a directory")
 
-    assets_source = Path(__file__).resolve().parent / "assets"
+    assets_source = contract_root / "host_tools" / "assets"
     assets_output = output_dir / "assets"
     assets_output.mkdir(exist_ok=True)
     for name in ("evaluation-dashboard.css", "evaluation-dashboard.js"):
         source = assets_source / name
-        if not source.is_file():
-            _fail(f"dashboard asset missing: {source}")
+        try:
+            require_regular_file(source)
+        except (OSError, ValueError) as error:
+            _fail(f"dashboard asset missing or unsafe: {source}: {error}")
         shutil.copyfile(source, assets_output / name)
 
     _write_portable_evidence(summary_path.parent, output_dir, validated)
@@ -4784,9 +4811,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("summary", type=Path, help="evaluation-summary-v2 JSON")
     parser.add_argument("output", type=Path, help="dashboard output directory")
+    parser.add_argument(
+        "--contract-root",
+        type=Path,
+        required=True,
+        help="trusted repository root containing the evaluation contract and assets",
+    )
     args = parser.parse_args(argv)
     try:
-        render(args.summary, args.output)
+        render(args.summary, args.output, contract_root=args.contract_root)
     except (DashboardError, OSError, ValueError) as error:
         parser.error(str(error))
     return 0

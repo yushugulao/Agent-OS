@@ -228,13 +228,34 @@ class CalibrationTests(unittest.TestCase):
         collector = (ROOT / "scripts" / "agent_test_calibration.py").read_text(
             encoding="utf-8"
         )
-        invocations = [
+        references = [
             line for line in runner.splitlines() if '"${PYTHON_BIN}"' in line
         ]
-        self.assertEqual(len(invocations), 13)
-        self.assertTrue(
-            all('"${PYTHON_BIN}" -I -S -B' in line for line in invocations)
+        invocations = [
+            line for line in references if '"${PYTHON_BIN}" -I -S -B' in line
+        ]
+        self.assertTrue(invocations)
+        self.assertEqual(
+            [],
+            [
+                line
+                for line in references
+                if line not in invocations
+                and '--python-bin "${PYTHON_BIN}"' not in line
+            ],
+            "every calibration Python execution must use isolated mode",
         )
+        for required in (
+            "host_tools/evaluation_platform.py doctor",
+            "scripts/check-kernel-budgets.py",
+            "scripts/agent_test_runner.py",
+            "scripts/agent_test_calibration.py check-source",
+            "scripts/agent_test_calibration.py derive-round",
+        ):
+            self.assertTrue(
+                any(required in line for line in invocations),
+                f"missing isolated Python invocation: {required}",
+            )
         self.assertIn("loaded_msys_path_api", collector)
         self.assertNotRegex(
             collector, r'ctypes\.CDLL\(["\'](?:msys-2\.0|cygwin1)\.dll'

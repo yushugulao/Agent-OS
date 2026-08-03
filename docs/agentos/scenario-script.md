@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16、`31d4ddf53695` 和 `814021ab9dac` 的三轮 18/18 都只作为对应源码的历史 checkpoint。当前受管源码指纹已在 `04c1e6652324` 上取得三轮 `287.9945528s`、`283.0201263s`、`280.9651484s`，中位基线 `283.0201263s`、上限 `297.172s`，状态为 `calibrated_full_suite`；该包仅为未签名本地 E3 校准证据，不能替代最终 `full-verify` 或 C→E release bundle。历史独立 `agentscope_ucore`、Reader 和 `agentfinal_ucore` 输出同样不能替代最终验收；旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以版本化配置为准：
+完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16、`31d4ddf53695`、`814021ab9dac` 和 `04c1e6652324` 的三轮 18/18 都只作为对应源码的历史 checkpoint。当前候选时长门为 `provisional_requires_full_suite`，冻结并重新完成三轮前不能复用旧 fingerprint、基线或上限。历史独立 `agentscope_ucore`、Reader 和 `agentfinal_ucore` 输出同样不能替代最终验收；旧时长和栈数据只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以版本化配置为准：
 
 ```bash
 agentfinal_ucore
@@ -47,7 +47,7 @@ blocking_semantics_ucore
 | `agentscope_ucore` | 检查动态 workflow scope、跨域对象/IPC 隔离、事务竞争、微写合并、观测双索引与预算化查询、跨域进展、配额、fd 委派，以及可信关闭权、根退出强制撤销、阻塞成员清理和生命周期回收 |
 | `agenttrust_ucore` | 检查代码 RX、数据 RW+NX、可信映像不可变及 Agent 角色与可执行 inode 绑定 |
 | `agentvfs_ucore` | 检查 public/workflow 文件隔离、非 Agent worker 能力衰减、跨 scope fd 撤销及 pipe 单跳委派 |
-| `iobudget_ucore` | 检查稳定 PUBLIC/workflow owner、普通流量设备根预算、完成归因、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出清理的归因/debt 结算、buffer cache floor/cap 和 CONTROL 保留预算下的有界进展；最终机制独立轮 `elapsed=2.4s`，完整轮 `2.1s` |
+| `iobudget_ucore` | 检查稳定 PUBLIC/workflow owner、真实提交归因、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出清理的归因/debt 结算、buffer cache floor/cap 和 CONTROL 保留预算下的有界进展；ABI v5 定向结果只作阶段性回归，当前发布结果以冻结提交原始日志为准 |
 | `usersafety_ucore` | 检查用户指针范围、exec 参数、pipe/file 失败回滚和定向等待队列 |
 
 ## 2. 环境和运行方式

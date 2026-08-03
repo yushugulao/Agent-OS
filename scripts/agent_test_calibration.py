@@ -428,6 +428,35 @@ def validate_recorded_calibration_profile(profile, tools, host):
         raise CalibrationError("calibration host does not match the local profile")
     if not isinstance(tools, dict) or set(tools) != set(CALIBRATION_TOOL_NAMES):
         raise CalibrationError("calibration executable inventory mismatch")
+    platform_fields = {"argv0", "path", "sha256", "version"}
+    platform_records = all(
+        isinstance(record, dict) and set(record) == platform_fields
+        for record in tools.values()
+    )
+    if platform_records:
+        normalized = {}
+        for name, record in tools.items():
+            for field in platform_fields:
+                require_text(record[field], f"calibration executable {name}.{field}")
+            require_text(
+                record["sha256"], f"calibration executable {name}.sha256", HEX64_RE
+            )
+            version = record["version"]
+            python_version = re.fullmatch(
+                r"CPython ([0-9]+\.[0-9]+\.[0-9]+)(?: \(MSYS2\))?", version
+            ) if name == "python" else None
+            if python_version is not None:
+                version = "Python " + python_version.group(1)
+            normalized[name] = {
+                "requested_path": record["path"],
+                "executable": {
+                    "path": record["path"], "bytes": 1,
+                    "sha256": record["sha256"],
+                },
+                "version_argv": [record["path"], "--version"],
+                "version_first_line": version,
+            }
+        tools = normalized
     versions = profile["tool_versions"]
     for name in CALIBRATION_TOOL_NAMES:
         validate_executable_identity(

@@ -41,6 +41,7 @@ _isolate_direct_entry_imports()
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -75,6 +76,7 @@ try:
         require_regular_file,
         require_safe_directory,
     )
+    from .strict_json import read_strict_json
 except ImportError:
     from safe_host_paths import (
         absolute_lexical_path,
@@ -83,9 +85,10 @@ except ImportError:
         require_regular_file,
         require_safe_directory,
     )
+    from strict_json import read_strict_json
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 KIND = "agentos-evaluation-platform-preflight"
 MINIMUM_PYTHON = (3, 10)
 HARDWARE_SOURCE = "procfs:/proc/cpuinfo+/proc/meminfo"
@@ -99,6 +102,7 @@ TOOL_LABELS = (
     "git",
     "make",
     "python",
+    "assembler",
     "compiler",
     "host_cc",
     "linker",
@@ -122,6 +126,7 @@ FORMAL_MODES = frozenset(
 )
 MSYS_REENTRY_MARKER = "native-msys2"
 NATIVE_REENTRY_MARKER = "native-linux"
+DURATION_PROFILES = frozenset({"local-e3", "none"})
 PATH_ENVIRONMENT_NAMES = (
     "EVALUATION_OUTPUT_ROOT",
     "EVALUATION_RUN_DIR",
@@ -745,6 +750,7 @@ def _validate_msys_clean_entry(
     *,
     tools: Mapping[str, Mapping[str, str]],
     toolprefix: str,
+    duration_profile_name: str,
     temporary_directory: Path,
     windows_temporary_directory: str,
     windows_system_drive: str,
@@ -754,6 +760,7 @@ def _validate_msys_clean_entry(
     if os.environ.get("AGENTOS_EVALUATION_EXECUTION_DOMAIN") != MSYS_REENTRY_MARKER:
         raise PlatformPreflightError("formal MSYS2 collection did not use clean re-entry")
     expected = {
+        "AGENT_TEST_DURATION_PROFILE": duration_profile_name,
         "AGENTOS_EVALUATION_EXECUTION_DOMAIN": MSYS_REENTRY_MARKER,
         "BASH_BIN": tools["bash"]["path"],
         "CC": tools["host_cc"]["path"],
@@ -825,12 +832,295 @@ def _canonical_repository(root: Path) -> tuple[Path, str]:
     return repository, observed
 
 
+def _load_profile_component(repository: Path, relative: str, module_name: str) -> Any:
+    path = _resolved_safe_file(repository / relative, f"profile component {relative}")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise PlatformPreflightError(f"cannot load profile component: {relative}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except (ImportError, OSError, ValueError) as error:
+        raise PlatformPreflightError(
+            f"cannot initialize profile component: {relative}"
+        ) from error
+    return module
+
+
+def _duration_profile_binding(
+    repository: Path, proof: Mapping[str, Any], profile_name: str
+) -> dict[str, str]:
+    if profile_name not in DURATION_PROFILES:
+        raise PlatformPreflightError(
+            "Agent duration profile must be exactly local-e3 or none"
+        )
+    if profile_name == "none":
+        return {
+            "calibration_status": "not-applicable",
+            "name": "none",
+            "profile_id": "none",
+            "status": "disabled-different-runner",
+        }
+
+    def mismatch(detail: str) -> None:
+        raise PlatformPreflightError(f"local-e3 duration profile mismatch: {detail}")
+
+    if proof.get("domain") != "native-msys2":
+        mismatch("execution domain is not native-msys2")
+    tools = proof.get("tools")
+    if not isinstance(tools, dict):
+        mismatch("tool inventory is unavailable")
+    calibration = _load_profile_component(
+        repository, "scripts/agent_test_calibration.py",
+        "agentos_evaluation_profile_calibration",
+    )
+    budget = _load_profile_component(
+        repository, "scripts/check-kernel-budgets.py",
+        "agentos_evaluation_profile_budget",
+    )
+    try:
+        config = budget.load_config(repository / "ci" / "kernel-budgets.json")
+        suite = config["agent_test_suite"]
+        profile = suite["local_calibration_profile"]
+        compiler_prefix = _toolprefix_from_compiler(tools["compiler"]["path"])
+        commands = {
+            "qemu": tools["qemu"]["path"],
+            "toolchain_cc": tools["compiler"]["path"],
+            "toolchain_ld": tools["linker"]["path"],
+            "toolchain_objcopy": tools["objcopy"]["path"],
+            "toolchain_objdump": tools["objdump"]["path"],
+            "toolchain_as": tools["assembler"]["path"],
+            "host_cc": tools["host_cc"]["path"],
+            "python": tools["python"]["path"],
+            "bash": tools["bash"]["path"],
+            "make": tools["make"]["path"],
+            "git": tools["git"]["path"],
+        }
+        calibration_tools = {
+            name: calibration.executable_identity(command, name)
+            for name, command in commands.items()
+        }
+        for identity in calibration_tools.values():
+            resolved = identity["executable"]["path"]
+            identity["requested_path"] = resolved
+            identity["version_argv"][0] = resolved
+        profile_id = calibration.validate_live_calibration_profile(
+            profile, calibration_tools, calibration.capture_host_identity()
+        )
+
+        budget_tools = {
+            "gcc": Path(tools["compiler"]["path"]),
+            "ld": Path(tools["linker"]["path"]),
+            "objcopy": Path(tools["objcopy"]["path"]),
+            "objdump": Path(tools["objdump"]["path"]),
+            "nm": budget.resolve_executable_once(f"{compiler_prefix}nm", "profile nm"),
+            "size": Path(tools["size"]["path"]),
+        }
+        profile_kind, budget_profile = budget.select_kernel_budget_toolchain(
+            config, budget_tools
+        )
+        budget_tools["cc1"] = budget.resolve_gcc_subprogram(budget_tools["gcc"], "cc1")
+        budget_tools["as"] = Path(tools["assembler"]["path"])
+        if profile_kind != "local" or budget_profile.get("profile_id") != profile_id:
+            mismatch("kernel toolchain profile differs")
+        budget.attest_local_kernel_budget_tools(budget_profile, budget_tools)
+        calibration_status = suite["calibration_status"]
+        if calibration_status not in {
+            "provisional_requires_full_suite", "calibrated_full_suite"
+        }:
+            mismatch("calibration status is invalid")
+    except (KeyError, OSError, subprocess.SubprocessError, ValueError) as error:
+        mismatch(str(error))
+    return {
+        "calibration_status": calibration_status,
+        "name": "local-e3",
+        "profile_id": profile_id,
+        "status": "matched",
+    }
+
+
+def _finalize_platform_proof(
+    repository: Path,
+    proof: dict[str, Any],
+    *,
+    requested_host_cc: str,
+    duration_profile: str,
+) -> dict[str, Any]:
+    if (
+        not isinstance(requested_host_cc, str)
+        or not requested_host_cc
+        or len(requested_host_cc) > 1024
+        or any(character in requested_host_cc for character in "\x00\r\n")
+    ):
+        raise PlatformPreflightError("requested Host C compiler is invalid")
+    tools = proof.get("tools")
+    host_cc = tools.get("host_cc") if isinstance(tools, dict) else None
+    if not isinstance(host_cc, dict) or host_cc.get("argv0") != requested_host_cc:
+        raise PlatformPreflightError("Host C compiler request is not bound to its identity")
+    proof["requested_host_cc"] = requested_host_cc
+    proof["duration_profile"] = _duration_profile_binding(
+        repository, proof, duration_profile
+    )
+    validate_duration_profile_binding(proof, repository=repository)
+    return proof
+
+
+def _recorded_duration_profile(
+    repository: Path,
+) -> tuple[str, str, dict[str, Any], Any]:
+    try:
+        root = _resolved_safe_directory(repository, "duration profile repository")
+        config_path = _resolved_safe_file(
+            root / "ci" / "kernel-budgets.json", "duration profile configuration"
+        )
+        config = read_strict_json(config_path)
+        suite = config["agent_test_suite"]
+        profile = suite["local_calibration_profile"]
+        profile_id = profile["profile_id"]
+        calibration_status = suite["calibration_status"]
+        calibration = _load_profile_component(
+            root, "scripts/agent_test_calibration.py",
+            "agentos_evaluation_recorded_profile_calibration",
+        )
+    except (KeyError, OSError, TypeError, UnicodeDecodeError, ValueError) as error:
+        raise PlatformPreflightError(
+            f"recorded duration profile is invalid: {error}"
+        ) from error
+    if (
+        not isinstance(profile, dict)
+        or not isinstance(profile_id, str)
+        or re.fullmatch(r"[A-Za-z0-9_.-]+", profile_id) is None
+        or calibration_status
+        not in {"provisional_requires_full_suite", "calibrated_full_suite"}
+    ):
+        raise PlatformPreflightError("recorded duration profile is invalid")
+    return profile_id, str(calibration_status), profile, calibration
+
+
+def validate_duration_profile_binding(
+    preflight: Mapping[str, Any], *, repository: Path | None = None
+) -> str:
+    """Validate the profile against its execution domain and recorded tool profile."""
+
+    binding = preflight.get("duration_profile")
+    none = {
+        "calibration_status": "not-applicable", "name": "none",
+        "profile_id": "none", "status": "disabled-different-runner",
+    }
+    local_valid = isinstance(binding, dict) and (
+        binding.get("name") == "local-e3"
+        and binding.get("status") == "matched"
+        and binding.get("calibration_status") in {
+            "provisional_requires_full_suite", "calibrated_full_suite"
+        }
+        and re.fullmatch(r"[A-Za-z0-9_.-]+", str(binding.get("profile_id", "")))
+        is not None
+    )
+    if not isinstance(binding, dict) or set(binding) != set(none):
+        raise PlatformPreflightError("duration profile binding is invalid")
+    domain = preflight.get("domain")
+    entry_domain = preflight.get("entry_domain")
+    if binding == none:
+        if domain == "native-msys2" and entry_domain not in {None, "native-msys2"}:
+            raise PlatformPreflightError(
+                "duration profile differs from its execution domain"
+            )
+        if domain == "native-linux" and entry_domain is not None and not (
+            entry_domain == "native-linux"
+            or (
+                isinstance(entry_domain, str)
+                and re.fullmatch(r"windows-wsl:[A-Za-z0-9._-]{1,64}", entry_domain)
+                is not None
+            )
+        ):
+            raise PlatformPreflightError(
+                "duration profile differs from its execution domain"
+            )
+        return "none"
+    if not local_valid:
+        raise PlatformPreflightError("duration profile binding is invalid")
+    if domain != "native-msys2" or entry_domain not in {None, "native-msys2"}:
+        raise PlatformPreflightError(
+            "local-e3 duration profile requires native-msys2"
+        )
+    tools = preflight.get("tools")
+    if not isinstance(tools, dict) or set(tools) != set(MSYS_TOOL_LABELS):
+        raise PlatformPreflightError(
+            "local-e3 duration profile lacks its MSYS2 tool proof"
+        )
+    if repository is None:
+        raise PlatformPreflightError(
+            "local-e3 duration profile requires a trusted contract root"
+        )
+
+    profile_id, calibration_status, profile, calibration = (
+        _recorded_duration_profile(repository)
+    )
+    if (
+        binding.get("profile_id") != profile_id
+        or binding.get("calibration_status") != calibration_status
+    ):
+        raise PlatformPreflightError(
+            "local-e3 duration profile differs from recorded configuration"
+        )
+    hardware = preflight.get("hardware")
+    uname = preflight.get("uname")
+    if not isinstance(hardware, dict) or not isinstance(uname, dict):
+        raise PlatformPreflightError("local-e3 duration host proof is unavailable")
+    release_match = re.match(r"[0-9]+\.[0-9]+\.[0-9]+", str(uname.get("release", "")))
+    system_match = MSYS_SYSTEM_RE.fullmatch(str(uname.get("system", "")))
+    python_match = re.fullmatch(
+        r"CPython ([0-9]+\.[0-9]+\.[0-9]+)(?: \(MSYS2\))?",
+        str(tools["python"].get("version", "")),
+    )
+    runtime = (
+        f"MSYS2 {release_match.group(0)} on Windows build "
+        f"{system_match.group('windows').rsplit('-', 1)[-1]}; QEMU TCG"
+        if release_match is not None and system_match is not None
+        else ""
+    )
+    labels = {
+        "qemu": "qemu", "toolchain_cc": "compiler",
+        "toolchain_ld": "linker", "toolchain_objcopy": "objcopy",
+        "toolchain_objdump": "objdump", "toolchain_as": "assembler",
+        "host_cc": "host_cc",
+        "python": "python", "bash": "bash", "make": "make", "git": "git",
+    }
+    try:
+        observed_profile_id = calibration.validate_recorded_calibration_profile(
+            profile,
+            {name: tools[label] for name, label in labels.items()},
+            {
+                "platform": runtime, "machine": hardware.get("cpu_model"),
+                "python_runtime": (
+                    f"{python_match.group(1)} platform-proof"
+                    if python_match is not None else "invalid"
+                ),
+            },
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise PlatformPreflightError(
+            f"local-e3 recorded profile validation failed: {error}"
+        ) from error
+    if observed_profile_id != profile_id:
+        raise PlatformPreflightError("local-e3 profile identity differs")
+    return "local-e3"
+
+
+def _bound_duration_profile_name(
+    preflight: Mapping[str, Any], *, repository: Path | None = None
+) -> str:
+    return validate_duration_profile_binding(preflight, repository=repository)
+
+
 def probe_native_linux_domain(
     *,
     repo: Path,
     toolprefix: str,
     qemu: str,
     python_bin: str,
+    host_cc: str,
+    duration_profile: str,
     shell_bin: str = "bash",
 ) -> dict[str, Any]:
     """Probe the exact native Linux domain used by formal collection."""
@@ -846,8 +1136,9 @@ def probe_native_linux_domain(
         "env": "env",
         "git": "git",
         "make": "make",
+        "assembler": f"{toolprefix}as",
         "compiler": f"{toolprefix}gcc",
-        "host_cc": "cc",
+        "host_cc": host_cc,
         "linker": f"{toolprefix}ld",
         "objcopy": f"{toolprefix}objcopy",
         "objdump": f"{toolprefix}objdump",
@@ -878,7 +1169,7 @@ def probe_native_linux_domain(
     if compiler_invocation is None or not compiler_invocation.endswith("gcc"):
         raise PlatformPreflightError("compiler invocation cannot derive TOOLPREFIX")
     observed_prefix = str(Path(compiler_invocation).absolute())[:-3]
-    return {
+    proof = {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
         "status": "ready",
@@ -890,6 +1181,12 @@ def probe_native_linux_domain(
         "toolprefix": observed_prefix,
         "tools": {label: tools[label] for label in TOOL_LABELS},
     }
+    return _finalize_platform_proof(
+        root,
+        proof,
+        requested_host_cc=host_cc,
+        duration_profile=duration_profile,
+    )
 
 
 def _require_msys_runtime_import(
@@ -917,6 +1214,8 @@ def probe_native_msys2_domain(
     toolprefix: str,
     qemu: str,
     python_bin: str,
+    host_cc: str,
+    duration_profile: str,
     shell_bin: str = "bash",
 ) -> dict[str, Any]:
     """Probe a complete formal domain hosted by one native MSYS2 runtime."""
@@ -936,8 +1235,9 @@ def probe_native_msys2_domain(
         "git": "git",
         "host_objdump": "objdump",
         "make": "make",
+        "assembler": f"{toolprefix}as",
         "compiler": f"{toolprefix}gcc",
-        "host_cc": "cc",
+        "host_cc": host_cc,
         "linker": f"{toolprefix}ld",
         "objcopy": f"{toolprefix}objcopy",
         "objdump": f"{toolprefix}objdump",
@@ -981,8 +1281,10 @@ def probe_native_msys2_domain(
         )
 
     host_objdump = Path(tools["host_objdump"]["path"])
+    # Build payload tools may be native PE; only the MSYS2 control plane must
+    # import the single bound POSIX runtime.
     for label in (
-        "bash", "cygpath", "env", "git", "host_cc", "host_objdump", "make", "python",
+        "bash", "cygpath", "env", "git", "host_objdump", "make", "python",
         "readlink", "sha256sum", "timeout", "uname",
     ):
         _require_msys_runtime_import(
@@ -1016,7 +1318,7 @@ def probe_native_msys2_domain(
     if compiler_invocation is None:
         raise PlatformPreflightError("compiler invocation cannot derive TOOLPREFIX")
     _canonical_posix_path(compiler_invocation, "compiler invocation")
-    return {
+    proof = {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
         "status": "ready",
@@ -1037,9 +1339,17 @@ def probe_native_msys2_domain(
         "toolprefix": toolprefix,
         "tools": {label: tools[label] for label in MSYS_TOOL_LABELS},
     }
+    return _finalize_platform_proof(
+        root,
+        proof,
+        requested_host_cc=host_cc,
+        duration_profile=duration_profile,
+    )
 
 
-def _validate_posix_clean_entry(proof: Mapping[str, Any]) -> None:
+def _validate_posix_clean_entry(
+    proof: Mapping[str, Any], *, repository: Path
+) -> None:
     """Require a native/WSL collector to match the env -i launch contract."""
 
     tools = proof.get("tools")
@@ -1064,6 +1374,9 @@ def _validate_posix_clean_entry(proof: Mapping[str, Any]) -> None:
         if directory not in path_directories:
             path_directories.append(directory)
     expected = {
+        "AGENT_TEST_DURATION_PROFILE": _bound_duration_profile_name(
+            proof, repository=repository
+        ),
         "AGENTOS_EVALUATION_EXECUTION_DOMAIN": marker,
         "BASH_BIN": tools["bash"]["path"], "CC": tools["host_cc"]["path"],
         "HOME": "/tmp", "HOSTCC": tools["host_cc"]["path"],
@@ -1102,6 +1415,8 @@ def probe_native_collection_domain(
     toolprefix: str,
     qemu: str,
     python_bin: str,
+    host_cc: str,
+    duration_profile: str,
     shell_bin: str = "bash",
 ) -> dict[str, Any]:
     """Probe a domain already entered by the formal collection process."""
@@ -1112,10 +1427,15 @@ def probe_native_collection_domain(
             toolprefix=toolprefix,
             qemu=qemu,
             python_bin=python_bin,
+            host_cc=host_cc,
+            duration_profile=duration_profile,
             shell_bin=shell_bin,
         )
         _validate_msys_clean_entry(
             tools=proof["tools"], toolprefix=proof["toolprefix"],
+            duration_profile_name=_bound_duration_profile_name(
+                proof, repository=repo
+            ),
             temporary_directory=Path(proof["temporary_directory"]),
             windows_temporary_directory=proof["windows_temporary_directory"],
             windows_system_drive=proof["windows_system_drive"],
@@ -1126,9 +1446,11 @@ def probe_native_collection_domain(
         toolprefix=toolprefix,
         qemu=qemu,
         python_bin=python_bin,
+        host_cc=host_cc,
+        duration_profile=duration_profile,
         shell_bin=shell_bin,
     )
-    _validate_posix_clean_entry(proof)
+    _validate_posix_clean_entry(proof, repository=repo)
     return proof
 
 
@@ -1140,10 +1462,11 @@ repo=Path(sys.argv[1]).resolve()
 prefix=sys.argv[2]
 qemu=sys.argv[3]
 requested_distro=sys.argv[4]
+host_cc=sys.argv[5]
 hardware_source="procfs:/proc/cpuinfo+/proc/meminfo"
 names={
  "bash":"bash","env":"env","git":"git","make":"make","python":"python3",
- "compiler":prefix+"gcc","host_cc":"cc","linker":prefix+"ld","objcopy":prefix+"objcopy",
+ "assembler":prefix+"as","compiler":prefix+"gcc","host_cc":host_cc,"linker":prefix+"ld","objcopy":prefix+"objcopy",
  "objdump":prefix+"objdump","size":prefix+"size","qemu":qemu,
  "timeout":"timeout","readlink":"readlink","sha256sum":"sha256sum",
 }
@@ -1223,10 +1546,10 @@ for label,name in names.items():
  if not invocation: raise SystemExit("required executable unavailable: "+name)
  if label=="compiler": compiler_invocation=invocation
  path=str(Path(invocation).resolve())
-  if label=="python":
-   result=run([path,"-I","-S","-c","import os,platform,sys; print('%d.%d.%d' % sys.version_info[:3]); print(platform.python_implementation()); print('%d%d%d%d' % (sys.flags.isolated,sys.flags.no_site,int(bool(getattr(sys.flags,'safe_path',False) or (sys.flags.isolated and '' not in sys.path and os.path.abspath(os.getcwd()) not in [os.path.abspath(p) for p in sys.path]))),sys.flags.ignore_environment))"])
-   lines=[x.strip() for x in result.stdout.decode("utf-8","replace").splitlines() if x.strip()]
-   if result.returncode or len(lines)!=3 or lines[1]!="CPython" or lines[2]!="1111": raise SystemExit("Python version probe failed")
+ if label=="python":
+  result=run([path,"-I","-S","-c","import os,platform,sys; print('%d.%d.%d' % sys.version_info[:3]); print(platform.python_implementation()); print('%d%d%d%d' % (sys.flags.isolated,sys.flags.no_site,int(bool(getattr(sys.flags,'safe_path',False) or (sys.flags.isolated and '' not in sys.path and os.path.abspath(os.getcwd()) not in [os.path.abspath(p) for p in sys.path]))),sys.flags.ignore_environment))"])
+  lines=[x.strip() for x in result.stdout.decode("utf-8","replace").splitlines() if x.strip()]
+  if result.returncode or len(lines)!=3 or lines[1]!="CPython" or lines[2]!="1111": raise SystemExit("Python version probe failed")
   version=tuple(map(int,lines[0].split(".")))
   if version<(3,10): raise SystemExit("formal evaluation requires Python >= 3.10")
   version_text=lines[1]+" "+lines[0]
@@ -1323,6 +1646,8 @@ def probe_windows_wsl_domain(
     distro: str,
     toolprefix: str,
     qemu: str,
+    host_cc: str,
+    duration_profile: str,
 ) -> dict[str, Any]:
     if os.name != "nt":
         raise PlatformPreflightError("Windows WSL preflight requires a Windows Host")
@@ -1344,13 +1669,14 @@ def probe_windows_wsl_domain(
             "-c",
             'for tool in bash env python3 git make timeout readlink sha256sum wslpath; do '
             'command -v -- "$tool" >/dev/null || exit 127; done; '
-            'exec python3 -I -S -c "$1" "$2" "$3" "$4" "$5"',
+            'exec python3 -I -S -c "$1" "$2" "$3" "$4" "$5" "$6"',
             "agentos-platform-probe",
             _WSL_PROBE_PROGRAM,
             execution_root,
             toolprefix,
             qemu,
             distro,
+            host_cc,
         ],
         cwd=root,
         timeout=120,
@@ -1383,7 +1709,7 @@ def probe_windows_wsl_domain(
         or set(observed.get("tools", {})) != set(TOOL_LABELS)
     ):
         raise PlatformPreflightError("WSL platform probe identity is incomplete")
-    return {
+    proof = {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
         "status": "ready",
@@ -1396,6 +1722,12 @@ def probe_windows_wsl_domain(
         "toolprefix": observed["toolprefix"],
         "tools": observed["tools"],
     }
+    return _finalize_platform_proof(
+        root,
+        proof,
+        requested_host_cc=host_cc,
+        duration_profile=duration_profile,
+    )
 
 
 def probe_execution_domain(
@@ -1406,21 +1738,27 @@ def probe_execution_domain(
     qemu: str,
     python_bin: str,
     shell_bin: str,
+    host_cc: str,
+    duration_profile: str,
 ) -> dict[str, Any]:
     if os.name == "nt":
         return probe_windows_wsl_domain(
-            repo=repo, distro=distro, toolprefix=toolprefix, qemu=qemu
+            repo=repo, distro=distro, toolprefix=toolprefix, qemu=qemu,
+            host_cc=host_cc, duration_profile=duration_profile,
         )
     if sys.platform == "cygwin":
         return probe_native_msys2_domain(
             repo=repo, toolprefix=toolprefix, qemu=qemu,
-            python_bin=python_bin, shell_bin=shell_bin,
+            python_bin=python_bin, host_cc=host_cc,
+            duration_profile=duration_profile, shell_bin=shell_bin,
         )
     return probe_native_linux_domain(
         repo=repo,
         toolprefix=toolprefix,
         qemu=qemu,
         python_bin=python_bin,
+        host_cc=host_cc,
+        duration_profile=duration_profile,
         shell_bin=shell_bin,
     )
 
@@ -1463,10 +1801,12 @@ def execute_in_wsl(
     if _sha256(launcher) != preflight["launcher"]["sha256"]:
         raise PlatformPreflightError("WSL launcher changed after preflight")
     tools = preflight["tools"]
+    duration_name = _bound_duration_profile_name(preflight, repository=repo)
     root = _resolved_safe_directory(repo, "repository root")
     execution_root = preflight["repository"]["execution_path"]
     script = (PurePosixPath(execution_root) / script_relative).as_posix()
     environment = {
+        "AGENT_TEST_DURATION_PROFILE": duration_name,
         "AGENTOS_EVALUATION_EXECUTION_DOMAIN": f"windows-wsl:{preflight['distribution']}",
         "BASH_BIN": tools["bash"]["path"],
         "CC": tools["host_cc"]["path"],
@@ -1530,6 +1870,7 @@ def _verify_bound_msys2_preflight(
     _current_msys2_identity()
     if preflight.get("domain") != "native-msys2":
         raise PlatformPreflightError("MSYS2 re-exec requires a verified native-msys2 domain")
+    _bound_duration_profile_name(preflight, repository=repo)
     root = _resolved_safe_directory(repo, "MSYS2 repository")
     repository = preflight.get("repository")
     if not isinstance(repository, dict) or repository.get("execution_path") != str(
@@ -1613,6 +1954,7 @@ def execute_in_msys2(
     root = _resolved_safe_directory(repo, "repository root")
     _verify_bound_msys2_preflight(preflight, repo=root)
     tools = preflight["tools"]
+    duration_name = _bound_duration_profile_name(preflight, repository=root)
     script_path = _resolved_safe_file(
         root / script_relative, "MSYS2 evaluation script"
     )
@@ -1620,6 +1962,7 @@ def execute_in_msys2(
     _canonical_posix_path(script, "evaluation script")
 
     environment = {
+        "AGENT_TEST_DURATION_PROFILE": duration_name,
         "AGENTOS_EVALUATION_EXECUTION_DOMAIN": MSYS_REENTRY_MARKER,
         "BASH_BIN": tools["bash"]["path"],
         "CC": tools["host_cc"]["path"],
@@ -1704,6 +2047,7 @@ def execute_in_native_linux(
         if _sha256(path) != value.get("sha256"):
             raise PlatformPreflightError(f"native Linux tool changed after preflight: {label}")
     _verify_hardware_identity(preflight.get("hardware"))
+    duration_name = _bound_duration_profile_name(preflight, repository=root)
     relative = PurePosixPath(script_relative)
     if (
         relative.is_absolute()
@@ -1713,6 +2057,7 @@ def execute_in_native_linux(
         raise PlatformPreflightError("native evaluation script path is not canonical")
     script = _resolved_safe_file(root.joinpath(*relative.parts), "native evaluation script")
     environment = {
+        "AGENT_TEST_DURATION_PROFILE": duration_name,
         "AGENTOS_EVALUATION_EXECUTION_DOMAIN": NATIVE_REENTRY_MARKER,
         "BASH_BIN": tools["bash"]["path"],
         "CC": tools["host_cc"]["path"],
@@ -1768,6 +2113,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--qemu", default="qemu-system-riscv64")
         command.add_argument("--python-bin", default="python3")
         command.add_argument("--shell-bin", default="bash")
+        command.add_argument("--host-cc", required=True)
+        command.add_argument(
+            "--duration-profile", choices=sorted(DURATION_PROFILES), required=True
+        )
         if name in {"formal-exec", "wsl-exec", "msys-exec"}:
             command.add_argument("--script-relative", required=True)
             command.add_argument("--mode", required=True)
@@ -1784,6 +2133,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             qemu=args.qemu,
             python_bin=args.python_bin,
             shell_bin=args.shell_bin,
+            host_cc=args.host_cc,
+            duration_profile=args.duration_profile,
         )
         print(json.dumps(preflight, indent=2, sort_keys=True, ensure_ascii=True))
         if args.command == "formal-exec":

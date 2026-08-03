@@ -56,7 +56,7 @@ make doctor
 竞赛评价另有更严格的执行域检查。在 Windows PowerShell 或 Git Bash 启动评价前运行：
 
 ```bash
-make evaluation-doctor EVALUATION_WSL_DISTRO=Ubuntu
+make evaluation-doctor EVALUATION_WSL_DISTRO=Ubuntu AGENT_TEST_DURATION_PROFILE=none
 ```
 
 它只检查指定发行版，不使用另一个默认 WSL 发行版代替；同时验证 `wslpath` 对当前仓库
@@ -81,6 +81,7 @@ export QEMU=/opt/qemu/qemu-system-riscv64.exe
 export PYTHON_BIN=/usr/bin/python3
 export BASH_BIN=/usr/bin/bash
 export TMPDIR=/tmp
+export AGENT_TEST_DURATION_PROFILE=local-e3
 make evaluation-doctor
 ```
 
@@ -102,15 +103,21 @@ gcc、cc1、as、ld、objcopy、objdump、nm、size 八个可执行文件的版�
 
 同一 platform proof v2 还会从 MSYS2 的 `/proc/cpuinfo` 和 `/proc/meminfo` 记录稳定的
 CPU model、logical CPU count 与总内存，并在每个 Guest boot 前复验；动态 MHz 不作为
-身份。硬件字段包含在 campaign 哈希内，scenario plan schema v3 也绑定同一 proof 并在每轮
+身份。硬件字段包含在 campaign 哈希内，scenario plan schema v5 也绑定同一 proof 并在每轮
 pair 前后复验。公开证据不记录计算机名，uname 证明只保留
 Windows build、kernel release/version 与 machine。
 
+`local-e3` 只用于与校准记录逐项一致的本地 MSYS2 E3。若当前
+`ci/kernel-budgets.json` 仍标记 `provisional_requires_full_suite`，doctor/full-verify 会在
+QEMU 前 fail closed；必须先冻结源码并完成当前 profile 的三轮完整 18-case 校准，不能复用
+历史提交的基线或把 `none` 冒充本地 E3 时长证明。
+
 ## 正式竞赛评价流程
 
-依赖检查通过后，在同一受控 POSIX 执行域中依次运行：
+普通 Linux/WSL 或普通 Runner 在同一受控 POSIX 执行域中依次运行：
 
 ```bash
+export AGENT_TEST_DURATION_PROFILE=none
 make evaluation-doctor
 make evaluation-smoke
 make evaluation-run
@@ -121,10 +128,15 @@ make evaluation-dashboard
 make evaluation-package
 ```
 
+`none` 仍强制完整 18-case、语义、Guest 日志和 timing 行清单，只把本地 wall-time
+baseline/limit/ratio 记为不适用。受信且已完成当前校准的 MSYS2 E3 改用
+`export AGENT_TEST_DURATION_PROFILE=local-e3` 后执行同一组命令；不得让 Makefile 默认值替代
+这两个显式选择。
+
 formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`。challenge 和 AB/BA 顺序
 由 C 确定性派生，所以不同 clone 的计划一致；失败目录会保留且同一输出根拒绝覆盖。
 本地机制不能替代受保护远端 Runner，也不声称能证明其他 clone 从未丢弃尝试。首个 QEMU
-前生成的 run plan schema v2、scenario plan schema v3 和
+前生成的 run plan schema v2、scenario plan schema v5 和
 `measurement-source-receipt.json` 绑定计划、六份 Guest 测量源码及评价控制面策略清单；
 package 中的全部策略快照还要与 C 的 Git blob 一致。
 

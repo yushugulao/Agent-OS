@@ -75,6 +75,11 @@ if __name__ == "__main__":
         sys.path.append(_entry_package.__path__[0])
 
 try:
+    from .evaluation_platform import _bound_duration_profile_name
+except ImportError:
+    from evaluation_platform import _bound_duration_profile_name
+
+try:
     from .evidence_delivery_contract import (
         DeliveryContractError,
         controlled_git_environment,
@@ -855,20 +860,28 @@ def _trusted_process_path(tools: Iterable[dict[str, str]]) -> str:
 def _verify_bound_host_cc_resolution(
     host_cc: dict[str, str], process_path: str
 ) -> None:
-    """Require an unqualified ``cc`` lookup to reach the attested compiler."""
+    """Require the requested Host C compiler to resolve to its attested file."""
 
-    if host_cc.get("argv0") != "cc":
-        raise CampaignError("Host C compiler identity must use the canonical cc name")
+    requested = host_cc.get("argv0")
+    if not isinstance(requested, str) or not requested:
+        raise CampaignError("Host C compiler request is unavailable")
     separator = ":" if process_path.startswith("/") else ";"
     invocation: Path | None = None
-    for directory in process_path.split(separator):
-        for executable in ("cc", "cc.exe"):
-            candidate = Path(directory) / executable
-            if candidate.exists():
-                invocation = candidate
+    requested_path = PurePosixPath(requested) if separator == ":" else PureWindowsPath(requested)
+    if requested_path.is_absolute():
+        invocation = Path(requested)
+    elif "/" in requested or "\\" in requested:
+        raise CampaignError("relative Host C compiler paths are forbidden")
+    else:
+        names = (requested,) if requested.endswith(".exe") else (requested, f"{requested}.exe")
+        for directory in process_path.split(separator):
+            for executable in names:
+                candidate = Path(directory) / executable
+                if candidate.exists():
+                    invocation = candidate
+                    break
+            if invocation is not None:
                 break
-        if invocation is not None:
-            break
     if invocation is None:
         raise CampaignError("bound Host C compiler is unavailable through PATH")
     try:
@@ -889,6 +902,8 @@ def _micro_boot_environment(
     challenge: str,
     guest_log: str,
     timeout_seconds: int = FORMAL_MICRO_TIMEOUT_SECONDS,
+    *,
+    contract_root: Path | None = None,
 ) -> dict[str, str]:
     compiler_path = environment["compiler"]["path"]
     absolute_prefix, _ = _absolute_toolprefix(compiler_path)
@@ -897,7 +912,11 @@ def _micro_boot_environment(
     result = {
         "AGENT_EVAL_CHALLENGE_HEX": challenge,
         "AGENT_TEST_CASE": "agenteval_ucore",
+        "AGENT_TEST_DURATION_PROFILE": _bound_duration_profile_name(
+            platform, repository=contract_root
+        ),
         "AGENT_TEST_GUEST_LOG_FILE": guest_log,
+        "AGENTOS_EVALUATION_EXECUTION_DOMAIN": platform["entry_domain"],
         "CASE_TIMEOUT": f"{timeout_seconds}s",
         "CC": environment["host_cc"]["path"],
         "CHAPTER": "agent_eval",
@@ -1008,6 +1027,8 @@ def require_formal_execution_domain(
     qemu: str,
     python_bin: str,
     shell_bin: str,
+    host_cc: str,
+    duration_profile: str,
 ) -> dict[str, Any]:
     """Reject native Windows and incomplete POSIX domains before planning."""
 
@@ -1028,6 +1049,8 @@ def require_formal_execution_domain(
             qemu=qemu,
             python_bin=python_bin,
             shell_bin=shell_bin,
+            host_cc=host_cc,
+            duration_profile=duration_profile,
         )
     except PlatformPreflightError as error:
         raise CampaignError(f"formal execution-domain preflight failed: {error}") from error
@@ -1065,6 +1088,8 @@ def create_campaign(
     qemu: str,
     python_bin: str,
     shell_bin: str,
+    host_cc: str,
+    duration_profile: str,
     timeout_seconds: int = FORMAL_MICRO_TIMEOUT_SECONDS,
     require_clean: bool = True,
 ) -> dict[str, Any]:
@@ -1091,6 +1116,8 @@ def create_campaign(
         qemu=qemu,
         python_bin=python_bin,
         shell_bin=shell_bin,
+        host_cc=host_cc,
+        duration_profile=duration_profile,
     )
     manifest_rel = _repo_relative(repo, output)
     run_dir_rel = str(Path(manifest_rel).parent.as_posix())
@@ -1105,6 +1132,7 @@ def create_campaign(
 
     compiler = f"{toolprefix}gcc"
     environment = {
+        "assembler": probe_executable(f"{toolprefix}as", ["--version"], repo),
         "bash": probe_executable(shell_bin, ["--version"], repo),
         "compiler": probe_executable(compiler, ["--version"], repo),
         "git": probe_executable("git", ["--version"], repo),
@@ -1150,6 +1178,7 @@ def create_campaign(
                     challenge,
                     guest_log,
                     timeout_seconds,
+                    contract_root=repo,
                 ),
                 "exit_code": None,
                 "finished_at_utc": None,
@@ -1199,7 +1228,7 @@ def create_campaign(
         },
         "schema_version": SCHEMA_VERSION,
     }
-    validate_campaign(campaign)
+    validate_campaign(campaign, contract_root=repo)
     _atomic_json(output, campaign)
     return campaign
 
@@ -1278,7 +1307,7 @@ def _record_boot_result(
     repo = _resolved_safe_directory(repo, "repository")
     manifest_path = _resolved_safe_file(manifest_path, "campaign manifest")
     campaign = _strict_json(manifest_path)
-    validate_campaign(campaign)
+    validate_campaign(campaign, contract_root=repo)
     _require_manifest_artifact_root(repo, manifest_path, campaign["run"]["artifact_root"])
     if campaign["phase"] != "collecting":
         raise CampaignError("cannot record a boot after campaign collection is sealed")
@@ -1352,7 +1381,7 @@ def _record_boot_result(
             boot["guest_log_sha256"] = _sha256(guest_log)
         boot["status"] = "failed"
 
-    validate_campaign(campaign)
+    validate_campaign(campaign, contract_root=repo)
     _atomic_json(manifest_path, campaign)
     return campaign
 
@@ -1490,7 +1519,7 @@ def execute_and_record_boot(
         # This load is intentionally inside the lock: a contender may have
         # completed or failed this same manifest while we were acquiring it.
         campaign = _strict_json(manifest_path)
-        validate_campaign(campaign)
+        validate_campaign(campaign, contract_root=repo)
         if (
             type(timeout_seconds) is not int
             or timeout_seconds != campaign["protocol"]["micro_timeout_seconds"]
@@ -1500,7 +1529,8 @@ def execute_and_record_boot(
             repo, manifest_path, campaign["run"]["artifact_root"]
         )
         check_preflight_receipt(
-            manifest_path, manifest_path.parent / "preflight.log"
+            manifest_path, manifest_path.parent / "preflight.log",
+            contract_root=repo,
         )
         if campaign["phase"] != "collecting":
             raise CampaignError("cannot run a boot after campaign collection is sealed")
@@ -1556,9 +1586,11 @@ def execute_and_record_boot(
     return exit_code
 
 
-def seal_campaign(manifest_path: Path) -> dict[str, Any]:
+def seal_campaign(
+    manifest_path: Path, *, contract_root: Path | None = None
+) -> dict[str, Any]:
     campaign = _strict_json(manifest_path)
-    validate_campaign(campaign)
+    validate_campaign(campaign, contract_root=contract_root)
     if campaign["phase"] != "collecting":
         raise CampaignError("campaign is already sealed")
     statuses = [boot["status"] for boot in campaign["boots"]]
@@ -1566,15 +1598,17 @@ def seal_campaign(manifest_path: Path) -> dict[str, Any]:
         raise CampaignError(f"cannot seal incomplete campaign: {statuses}")
     campaign["phase"] = "collected"
     campaign["run"]["completed_at_utc"] = _utc_now()
-    validate_campaign(campaign)
+    validate_campaign(campaign, contract_root=contract_root)
     _atomic_json(manifest_path, campaign)
     return campaign
 
 
-def export_run_plan(manifest_path: Path, output: Path) -> dict[str, Any]:
+def export_run_plan(
+    manifest_path: Path, output: Path, *, contract_root: Path | None = None
+) -> dict[str, Any]:
     """Export the intentionally small input accepted by evaluation_contract.py."""
     campaign = _strict_json(manifest_path)
-    validate_campaign(campaign)
+    validate_campaign(campaign, contract_root=contract_root)
     if campaign["phase"] != "collected":
         raise CampaignError("run plan can only be exported from a collected campaign")
     environment_bytes = json.dumps(
@@ -1639,7 +1673,9 @@ def export_run_plan(manifest_path: Path, output: Path) -> dict[str, Any]:
     return plan
 
 
-def _validate_platform_proof(proof: object, execution_domain: str) -> None:
+def _validate_platform_proof(
+    proof: object, execution_domain: str, *, contract_root: Path | None = None
+) -> None:
     try:
         from evaluation_platform import (
             SCHEMA_VERSION as PLATFORM_SCHEMA_VERSION,
@@ -1647,6 +1683,7 @@ def _validate_platform_proof(proof: object, execution_domain: str) -> None:
             MSYS_TOOL_LABELS,
             TOOL_LABELS,
             PlatformPreflightError,
+            _bound_duration_profile_name,
             _validate_hardware_identity,
         )
     except ImportError:  # pragma: no cover
@@ -1656,13 +1693,15 @@ def _validate_platform_proof(proof: object, execution_domain: str) -> None:
             MSYS_TOOL_LABELS,
             TOOL_LABELS,
             PlatformPreflightError,
+            _bound_duration_profile_name,
             _validate_hardware_identity,
         )
     if not isinstance(proof, dict):
         raise CampaignError("platform proof must be an object")
     common = {
-        "distribution", "domain", "entry_domain", "hardware", "kind", "launcher",
-        "repository", "schema_version", "status", "toolprefix", "tools",
+        "distribution", "domain", "duration_profile", "entry_domain", "hardware",
+        "kind", "launcher", "repository", "requested_host_cc", "schema_version",
+        "status", "toolprefix", "tools",
     }
     domain = proof.get("domain")
     expected = common | (
@@ -1715,8 +1754,17 @@ def _validate_platform_proof(proof: object, execution_domain: str) -> None:
             or re.fullmatch(r"[0-9a-f]{64}", tool["sha256"]) is None
         ):
             raise CampaignError(f"platform tool identity is invalid: {label}")
-    if tools["host_cc"]["argv0"] != "cc":
-        raise CampaignError("platform Host C compiler is not the canonical cc tool")
+    requested_host_cc = proof.get("requested_host_cc")
+    if (
+        not isinstance(requested_host_cc, str)
+        or not requested_host_cc
+        or tools["host_cc"]["argv0"] != requested_host_cc
+    ):
+        raise CampaignError("platform Host C compiler request is not identity-bound")
+    try:
+        _bound_duration_profile_name(proof, repository=contract_root)
+    except PlatformPreflightError as error:
+        raise CampaignError(f"platform duration profile binding is invalid: {error}") from error
     if proof.get("launcher") != tools["bash"]:
         raise CampaignError("platform launcher is not the bound Bash")
     if domain == "native-msys2":
@@ -1751,7 +1799,9 @@ def _validate_platform_proof(proof: object, execution_domain: str) -> None:
             raise CampaignError("MSYS2 uname proof is invalid")
 
 
-def validate_campaign(campaign: dict[str, Any]) -> None:
+def validate_campaign(
+    campaign: dict[str, Any], *, contract_root: Path | None = None
+) -> None:
     _expect_keys(
         campaign,
         [
@@ -1809,7 +1859,9 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
     except ValueError as error:
         raise CampaignError(f"invalid measurement source receipt: {error}") from error
     platform = campaign["platform"]
-    _validate_platform_proof(platform, run["execution_domain"])
+    _validate_platform_proof(
+        platform, run["execution_domain"], contract_root=contract_root
+    )
 
     protocol = campaign["protocol"]
     if not isinstance(protocol, dict):
@@ -1856,7 +1908,7 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
     _expect_keys(
         environment,
         [
-            "bash", "compiler", "git", "host_cc", "linker", "make", "objcopy",
+            "assembler", "bash", "compiler", "git", "host_cc", "linker", "make", "objcopy",
             "objdump", "python", "qemu",
         ],
         "environment",
@@ -1874,11 +1926,18 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
     compiler_path = environment["compiler"]["path"]
     absolute_prefix, executable_suffix = _absolute_toolprefix(compiler_path)
     if (
-        environment["host_cc"].get("argv0") != "cc"
+        environment["host_cc"].get("argv0")
+        != campaign["platform"].get("requested_host_cc")
         or environment["host_cc"] != campaign["platform"]["tools"]["host_cc"]
     ):
         raise CampaignError("Host C compiler is not bound to the platform proof")
-    for label, suffix in (("linker", "ld"), ("objcopy", "objcopy"), ("objdump", "objdump")):
+    if _bound_duration_profile_name(platform, repository=contract_root) == "local-e3" and any(
+        environment[label] != platform["tools"][label] for label in environment
+    ):
+        raise CampaignError(
+            "local-e3 execution tools differ from the calibrated platform proof"
+        )
+    for label, suffix in (("assembler", "as"), ("linker", "ld"), ("objcopy", "objcopy"), ("objdump", "objdump")):
         if environment[label]["path"] != absolute_prefix + suffix + executable_suffix:
             raise CampaignError(f"environment.{label} does not share TOOLPREFIX")
 
@@ -1964,6 +2023,7 @@ def validate_campaign(campaign: dict[str, Any]) -> None:
             boot["challenge"],
             boot["guest_log"],
             protocol["micro_timeout_seconds"],
+            contract_root=contract_root,
         )
         if boot["command_environment"] != expected_environment:
             raise CampaignError("boot process environment differs from its preflight")
@@ -2015,7 +2075,7 @@ def check_campaign(repo: Path, manifest_path: Path, *, require_collected: bool) 
     repo = _resolved_safe_directory(repo, "repository")
     manifest_path = _resolved_safe_file(manifest_path, "campaign manifest")
     campaign = _strict_json(manifest_path)
-    validate_campaign(campaign)
+    validate_campaign(campaign, contract_root=repo)
     _require_manifest_artifact_root(repo, manifest_path, campaign["run"]["artifact_root"])
     if require_collected and campaign["phase"] != "collected":
         raise CampaignError("campaign has not completed collection")
@@ -2068,9 +2128,12 @@ def check_campaign(repo: Path, manifest_path: Path, *, require_collected: bool) 
     return campaign
 
 
-def get_boot_field(manifest_path: Path, boot_id: str, field: str) -> str:
+def get_boot_field(
+    manifest_path: Path, boot_id: str, field: str,
+    *, contract_root: Path | None = None,
+) -> str:
     campaign = _strict_json(manifest_path)
-    validate_campaign(campaign)
+    validate_campaign(campaign, contract_root=contract_root)
     matching = [boot for boot in campaign["boots"] if boot["boot_id"] == boot_id]
     if len(matching) != 1:
         raise CampaignError(f"boot is not uniquely planned: {boot_id}")
@@ -2080,6 +2143,18 @@ def get_boot_field(manifest_path: Path, boot_id: str, field: str) -> str:
     }:
         raise CampaignError(f"boot field is not exportable: {field}")
     return matching[0][field]
+
+
+def get_campaign_metadata(
+    manifest_path: Path, field: str, *, contract_root: Path | None = None
+) -> str:
+    campaign = _strict_json(manifest_path)
+    validate_campaign(campaign, contract_root=contract_root)
+    if field == "duration_profile":
+        return _bound_duration_profile_name(
+            campaign["platform"], repository=contract_root
+        )
+    raise CampaignError("campaign metadata field is not exportable")
 
 
 def _environment_sha256(campaign: dict[str, Any]) -> str:
@@ -2103,10 +2178,12 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _preflight_binding(value: dict[str, Any]) -> dict[str, Any]:
+def _preflight_binding(
+    value: dict[str, Any], *, contract_root: Path | None = None
+) -> dict[str, Any]:
     kind = value.get("kind")
     if kind == KIND:
-        validate_campaign(value)
+        validate_campaign(value, contract_root=contract_root)
         run_keys = (
             "artifact_root",
             "clean_worktree",
@@ -2139,7 +2216,7 @@ def _preflight_binding(value: dict[str, Any]) -> dict[str, Any]:
             "schema_version": value["schema_version"],
         }
     if kind == SCENARIO_KIND:
-        validate_scenario_campaign(value)
+        validate_scenario_campaign(value, contract_root=contract_root)
         boot_keys = (
             "boot_id",
             "challenge",
@@ -2165,8 +2242,10 @@ def _preflight_binding(value: dict[str, Any]) -> dict[str, Any]:
     raise CampaignError("preflight receipt campaign kind is unsupported")
 
 
-def build_preflight_receipt(value: dict[str, Any]) -> dict[str, Any]:
-    binding = _preflight_binding(value)
+def build_preflight_receipt(
+    value: dict[str, Any], *, contract_root: Path | None = None
+) -> dict[str, Any]:
+    binding = _preflight_binding(value, contract_root=contract_root)
     return {
         "binding_sha256": _canonical_sha256(binding),
         "campaign_kind": value["kind"],
@@ -2179,9 +2258,11 @@ def build_preflight_receipt(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def format_preflight_receipt(value: dict[str, Any]) -> str:
+def format_preflight_receipt(
+    value: dict[str, Any], *, contract_root: Path | None = None
+) -> str:
     return json.dumps(
-        build_preflight_receipt(value),
+        build_preflight_receipt(value, contract_root=contract_root),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
@@ -2198,7 +2279,9 @@ def _write_ascii_stdout(value: str) -> None:
     output.flush()
 
 
-def check_preflight_receipt(manifest_path: Path, receipt_path: Path) -> None:
+def check_preflight_receipt(
+    manifest_path: Path, receipt_path: Path, *, contract_root: Path | None = None
+) -> None:
     campaign = _strict_json(manifest_path)
     _require_regular_file(receipt_path, "campaign preflight receipt")
     try:
@@ -2209,7 +2292,9 @@ def check_preflight_receipt(manifest_path: Path, receipt_path: Path) -> None:
         raise CampaignError(
             f"campaign preflight receipt is unreadable: {error}"
         ) from error
-    expected = format_preflight_receipt(campaign).encode("ascii")
+    expected = format_preflight_receipt(
+        campaign, contract_root=contract_root
+    ).encode("ascii")
     if observed != expected:
         raise CampaignError("campaign preflight receipt differs from its manifest")
 
@@ -2223,11 +2308,16 @@ def _scenario_clean_environment(
 ) -> dict[str, str]:
     compiler_prefix, _ = _absolute_toolprefix(tools["compiler"]["path"])
     host_cc_path = tools["host_cc"]["path"]
+    path_directories = [str(PurePosixPath(host_cc_path).parent)]
+    for label in tools:
+        directory = str(PurePosixPath(tools[label]["path"]).parent)
+        if directory not in path_directories:
+            path_directories.append(directory)
+    clean_path = ":".join(path_directories)
     if (
-        tools["host_cc"].get("argv0") != "cc"
-        or not host_cc_path.startswith("/")
+        not host_cc_path.startswith("/")
         or str(PurePosixPath(host_cc_path).parent)
-        not in SCENARIO_CLEAN_PATH.split(":")
+        not in clean_path.split(":")
     ):
         raise CampaignError(
             "scenario Host C compiler is unavailable through the clean PATH"
@@ -2252,7 +2342,7 @@ def _scenario_clean_environment(
         "LANG": locale,
         "LC_ALL": locale,
         "MAKE_TOOL": tools["make"]["path"],
-        "PATH": SCENARIO_CLEAN_PATH,
+        "PATH": clean_path,
         "QEMU": tools["qemu"]["path"],
         "SHELL": tools["bash"]["path"],
         "SYSTEMDRIVE": system_drive,
@@ -2292,7 +2382,7 @@ def _platform_system_drive(platform: dict[str, Any]) -> str | None:
 
 
 def _probe_scenario_environment(
-    repo: Path, *, wsl_distro: str, toolprefix: str, qemu: str,
+    repo: Path, *, wsl_distro: str, toolprefix: str, qemu: str, host_cc: str,
     posix_temporary: str = "/tmp", native_temporary: str | None = None,
     system_drive: str = "/",
 ) -> dict[str, Any]:
@@ -2350,10 +2440,11 @@ def _probe_scenario_environment(
 
     tools: dict[str, dict[str, str]] = {}
     for label, argv0 in (
+        ("assembler", f"{toolprefix}as"),
         ("bash", "bash"),
         ("compiler", f"{toolprefix}gcc"),
         ("env", "env"),
-        ("host_cc", "cc"),
+        ("host_cc", host_cc),
         ("linker", f"{toolprefix}ld"),
         ("make", "make"),
         ("objcopy", f"{toolprefix}objcopy"),
@@ -2479,7 +2570,7 @@ def create_scenario_campaign(
     repo = _resolved_safe_directory(repo, "repository")
     micro_manifest = _resolved_safe_file(micro_manifest, "micro campaign manifest")
     micro = _strict_json(micro_manifest)
-    validate_campaign(micro)
+    validate_campaign(micro, contract_root=repo)
     _require_manifest_artifact_root(
         repo, micro_manifest, micro["run"]["artifact_root"]
     )
@@ -2527,6 +2618,7 @@ def create_scenario_campaign(
         wsl_distro=wsl_distro,
         toolprefix=requested_toolprefix,
         qemu=micro["environment"]["qemu"]["argv0"],
+        host_cc=micro["environment"]["host_cc"]["path"],
         posix_temporary=posix_temporary,
         native_temporary=native_temporary,
         system_drive=system_drive,
@@ -2620,12 +2712,14 @@ def create_scenario_campaign(
         },
         "schema_version": SCENARIO_SCHEMA_VERSION,
     }
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=repo)
     _atomic_json(output, value)
     return value
 
 
-def validate_scenario_campaign(value: dict[str, Any]) -> None:
+def validate_scenario_campaign(
+    value: dict[str, Any], *, contract_root: Path | None = None
+) -> None:
     _expect_keys(
         value,
         [
@@ -2677,7 +2771,10 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
     platform = value["platform"]
     if not isinstance(platform, dict):
         raise CampaignError("scenario platform proof must be an object")
-    _validate_platform_proof(platform, str(platform.get("entry_domain", "")))
+    _validate_platform_proof(
+        platform, str(platform.get("entry_domain", "")),
+        contract_root=contract_root,
+    )
     if run["platform_sha256"] != _canonical_sha256(platform):
         raise CampaignError("scenario platform proof differs from its hash")
     protocol = value["protocol"]
@@ -2725,8 +2822,8 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
         (
             execution_environment["tools"],
             {
-                "bash", "compiler", "env", "host_cc", "linker", "make",
-                "objcopy", "objdump", "qemu", "timeout",
+                "assembler", "bash", "compiler", "env", "host_cc", "linker",
+                "make", "objcopy", "objdump", "qemu", "timeout",
             },
         ),
     ):
@@ -2798,8 +2895,15 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
     if (
         tools["bash"]["argv0"] != "bash"
         or tools["env"]["argv0"] != "env"
-        or tools["host_cc"]["argv0"] != "cc"
+        or tools["host_cc"].get("argv0")
+        != platform["tools"]["host_cc"].get("path")
+        or any(
+            tools["host_cc"].get(key)
+            != platform["tools"]["host_cc"].get(key)
+            for key in ("path", "sha256", "version")
+        )
         or tools["make"]["argv0"] != "make"
+        or tools["assembler"]["path"] != f"{protocol['toolprefix']}as"
         or tools["compiler"]["path"] != f"{protocol['toolprefix']}gcc"
         or tools["linker"]["path"] != f"{protocol['toolprefix']}ld"
         or tools["objcopy"]["path"] != f"{protocol['toolprefix']}objcopy"
@@ -2897,9 +3001,12 @@ def validate_scenario_campaign(value: dict[str, Any]) -> None:
         raise CampaignError("collected scenario campaign is incomplete")
 
 
-def get_scenario_boot_field(path: Path, boot_id: str, field: str) -> str:
+def get_scenario_boot_field(
+    path: Path, boot_id: str, field: str,
+    *, contract_root: Path | None = None,
+) -> str:
     value = _strict_json(path)
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=contract_root)
     if field not in {"challenge", "target_order", "work_dir", "runner_log", "host_summary"}:
         raise CampaignError("scenario field is not exportable")
     matching = [item for item in value["boots"] if item["boot_id"] == boot_id]
@@ -2908,9 +3015,11 @@ def get_scenario_boot_field(path: Path, boot_id: str, field: str) -> str:
     return matching[0][field]
 
 
-def get_scenario_metadata(path: Path, field: str) -> str:
+def get_scenario_metadata(
+    path: Path, field: str, *, contract_root: Path | None = None
+) -> str:
     value = _strict_json(path)
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=contract_root)
     if field == "boots":
         return str(value["protocol"]["requested_boots"])
     if field == "run_id":
@@ -2924,7 +3033,7 @@ def _record_scenario_boot_result(*, repo: Path, manifest_path: Path, boot_id: st
     repo = _resolved_safe_directory(repo, "repository")
     manifest_path = _resolved_safe_file(manifest_path, "scenario campaign manifest")
     value = _strict_json(manifest_path)
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=repo)
     _require_manifest_artifact_root(
         repo, manifest_path, value["run"]["artifact_root"], scenario=True
     )
@@ -2971,7 +3080,7 @@ def _record_scenario_boot_result(*, repo: Path, manifest_path: Path, boot_id: st
             _require_regular_file(host_summary, "failed scenario host summary", nonempty=False)
             boot["host_summary_sha256"] = _sha256(host_summary)
         boot["status"] = "failed"
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=repo)
     _atomic_json(manifest_path, value)
 
 
@@ -3004,6 +3113,7 @@ def _verify_scenario_execution_binding(
         wsl_distro=protocol["wsl_distro"],
         toolprefix=protocol["execution_environment"]["tools"]["compiler"]["argv0"][:-3],
         qemu=protocol["execution_environment"]["tools"]["qemu"]["argv0"],
+        host_cc=value["platform"]["tools"]["host_cc"]["path"],
         posix_temporary=posix_temporary,
         native_temporary=native_temporary,
         system_drive=system_drive,
@@ -3021,13 +3131,14 @@ def execute_and_record_scenario_boot(
     manifest_path = _resolved_safe_file(manifest_path, "scenario campaign manifest")
     with exclusive_scenario_coordination_lock(repo):
         value = _strict_json(manifest_path)
-        validate_scenario_campaign(value)
+        validate_scenario_campaign(value, contract_root=repo)
         _require_manifest_artifact_root(
             repo, manifest_path, value["run"]["artifact_root"], scenario=True
         )
         check_preflight_receipt(
             manifest_path,
             manifest_path.parent.parent / "scenario-preflight.log",
+            contract_root=repo,
         )
         if value["phase"] != "collecting":
             raise CampaignError("scenario collection is already sealed")
@@ -3092,7 +3203,7 @@ def record_scenario_report(*, repo: Path, manifest_path: Path, report_path: Path
     manifest_path = _resolved_safe_file(manifest_path, "scenario campaign manifest")
     report_path = _resolved_safe_file(report_path, "scenario report")
     value = _strict_json(manifest_path)
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=repo)
     _require_manifest_artifact_root(
         repo, manifest_path, value["run"]["artifact_root"], scenario=True
     )
@@ -3109,17 +3220,19 @@ def record_scenario_report(*, repo: Path, manifest_path: Path, report_path: Path
         raise CampaignError("scenario report does not cover the planned balanced boots")
     value["report"]["sha256"] = _sha256(report_path)
     value["report"]["status"] = "recorded"
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=repo)
     _atomic_json(manifest_path, value)
 
 
-def seal_scenario_campaign(path: Path) -> None:
+def seal_scenario_campaign(
+    path: Path, *, contract_root: Path | None = None
+) -> None:
     value = _strict_json(path)
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=contract_root)
     if any(boot["status"] != "passed" for boot in value["boots"]) or value["report"]["status"] != "recorded":
         raise CampaignError("scenario campaign is incomplete")
     value["phase"] = "collected"
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=contract_root)
     _atomic_json(path, value)
 
 
@@ -3129,7 +3242,7 @@ def check_scenario_campaign(
     repo = _resolved_safe_directory(repo, "repository")
     path = _resolved_safe_file(path, "scenario campaign manifest")
     value = _strict_json(path)
-    validate_scenario_campaign(value)
+    validate_scenario_campaign(value, contract_root=repo)
     _require_manifest_artifact_root(
         repo, path, value["run"]["artifact_root"], scenario=True
     )
@@ -3137,7 +3250,7 @@ def check_scenario_campaign(
         raise CampaignError("scenario campaign is not collected")
     if micro_manifest is not None:
         micro = _strict_json(micro_manifest)
-        validate_campaign(micro)
+        validate_campaign(micro, contract_root=repo)
         if (
             micro["phase"] != "collected"
             or value["run"]["commit"] != micro["run"]["commit"]
@@ -3176,6 +3289,7 @@ def check_scenario_campaign(
         wsl_distro=value["protocol"]["wsl_distro"],
         toolprefix=value["protocol"]["execution_environment"]["tools"]["compiler"]["argv0"][:-3],
         qemu=value["protocol"]["execution_environment"]["tools"]["qemu"]["argv0"],
+        host_cc=value["platform"]["tools"]["host_cc"]["path"],
         posix_temporary=posix_temporary,
         native_temporary=native_temporary,
         system_drive=system_drive,
@@ -3216,6 +3330,10 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--qemu", required=True)
     create.add_argument("--python-bin", required=True)
     create.add_argument("--shell-bin", default="bash")
+    create.add_argument("--host-cc", required=True)
+    create.add_argument(
+        "--duration-profile", choices=("local-e3", "none"), required=True
+    )
     create.add_argument("--timeout", type=int, required=True)
 
     run_boot = subparsers.add_parser("run-boot")
@@ -3233,9 +3351,11 @@ def _parser() -> argparse.ArgumentParser:
     verify_lock.add_argument("--token", required=True)
 
     seal = subparsers.add_parser("seal")
+    seal.add_argument("--repo", type=Path, required=True)
     seal.add_argument("--manifest", type=Path, required=True)
 
     export = subparsers.add_parser("export-plan")
+    export.add_argument("--repo", type=Path, required=True)
     export.add_argument("--manifest", type=Path, required=True)
     export.add_argument("--output", type=Path, required=True)
 
@@ -3245,10 +3365,12 @@ def _parser() -> argparse.ArgumentParser:
     check.add_argument("--require-collected", action="store_true")
 
     preflight_check = subparsers.add_parser("check-preflight")
+    preflight_check.add_argument("--repo", type=Path, required=True)
     preflight_check.add_argument("--manifest", type=Path, required=True)
     preflight_check.add_argument("--receipt", type=Path, required=True)
 
     boot_field = subparsers.add_parser("get-boot-field")
+    boot_field.add_argument("--repo", type=Path, required=True)
     boot_field.add_argument("--manifest", type=Path, required=True)
     boot_field.add_argument("--boot-id", required=True)
     boot_field.add_argument(
@@ -3260,6 +3382,11 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
 
+    metadata = subparsers.add_parser("get-campaign-metadata")
+    metadata.add_argument("--repo", type=Path, required=True)
+    metadata.add_argument("--manifest", type=Path, required=True)
+    metadata.add_argument("--field", choices=("duration_profile",), required=True)
+
     scenario_create = subparsers.add_parser("create-scenario")
     scenario_create.add_argument("--repo", type=Path, required=True)
     scenario_create.add_argument("--micro-manifest", type=Path, required=True)
@@ -3269,6 +3396,7 @@ def _parser() -> argparse.ArgumentParser:
     scenario_create.add_argument("--wsl-distro", required=True)
 
     scenario_field = subparsers.add_parser("get-scenario-field")
+    scenario_field.add_argument("--repo", type=Path, required=True)
     scenario_field.add_argument("--manifest", type=Path, required=True)
     scenario_field.add_argument("--boot-id", required=True)
     scenario_field.add_argument(
@@ -3278,6 +3406,7 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     scenario_metadata = subparsers.add_parser("get-scenario-metadata")
+    scenario_metadata.add_argument("--repo", type=Path, required=True)
     scenario_metadata.add_argument("--manifest", type=Path, required=True)
     scenario_metadata.add_argument(
         "--field", choices=("boots", "run_id", "commit"), required=True
@@ -3294,6 +3423,7 @@ def _parser() -> argparse.ArgumentParser:
     scenario_report.add_argument("--report", type=Path, required=True)
 
     scenario_seal = subparsers.add_parser("seal-scenario")
+    scenario_seal.add_argument("--repo", type=Path, required=True)
     scenario_seal.add_argument("--manifest", type=Path, required=True)
 
     scenario_check = subparsers.add_parser("check-scenario")
@@ -3316,9 +3446,13 @@ def main(argv: list[str] | None = None) -> int:
                 qemu=args.qemu,
                 python_bin=args.python_bin,
                 shell_bin=args.shell_bin,
+                host_cc=args.host_cc,
+                duration_profile=args.duration_profile,
                 timeout_seconds=args.timeout,
             )
-            _write_ascii_stdout(format_preflight_receipt(campaign))
+            _write_ascii_stdout(
+                format_preflight_receipt(campaign, contract_root=args.repo)
+            )
         elif args.command == "run-boot":
             return execute_and_record_boot(
                 repo=args.repo,
@@ -3333,17 +3467,28 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "verify-campaign-lock":
             verify_campaign_lock_lease(repo=args.repo, token=args.token)
         elif args.command == "seal":
-            seal_campaign(args.manifest)
+            seal_campaign(args.manifest, contract_root=args.repo)
         elif args.command == "export-plan":
-            export_run_plan(args.manifest, args.output)
+            export_run_plan(
+                args.manifest, args.output, contract_root=args.repo
+            )
         elif args.command == "check":
             check_campaign(
                 args.repo, args.manifest, require_collected=args.require_collected
             )
         elif args.command == "check-preflight":
-            check_preflight_receipt(args.manifest, args.receipt)
+            check_preflight_receipt(
+                args.manifest, args.receipt, contract_root=args.repo
+            )
         elif args.command == "get-boot-field":
-            print(get_boot_field(args.manifest, args.boot_id, args.field))
+            print(get_boot_field(
+                args.manifest, args.boot_id, args.field,
+                contract_root=args.repo,
+            ))
+        elif args.command == "get-campaign-metadata":
+            print(get_campaign_metadata(
+                args.manifest, args.field, contract_root=args.repo
+            ))
         elif args.command == "create-scenario":
             campaign = create_scenario_campaign(
                 repo=args.repo,
@@ -3353,11 +3498,18 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout,
                 wsl_distro=args.wsl_distro,
             )
-            _write_ascii_stdout(format_preflight_receipt(campaign))
+            _write_ascii_stdout(
+                format_preflight_receipt(campaign, contract_root=args.repo)
+            )
         elif args.command == "get-scenario-field":
-            print(get_scenario_boot_field(args.manifest, args.boot_id, args.field))
+            print(get_scenario_boot_field(
+                args.manifest, args.boot_id, args.field,
+                contract_root=args.repo,
+            ))
         elif args.command == "get-scenario-metadata":
-            print(get_scenario_metadata(args.manifest, args.field))
+            print(get_scenario_metadata(
+                args.manifest, args.field, contract_root=args.repo
+            ))
         elif args.command == "run-scenario-boot":
             return execute_and_record_scenario_boot(
                 repo=args.repo,
@@ -3371,7 +3523,7 @@ def main(argv: list[str] | None = None) -> int:
                 report_path=args.report,
             )
         elif args.command == "seal-scenario":
-            seal_scenario_campaign(args.manifest)
+            seal_scenario_campaign(args.manifest, contract_root=args.repo)
         elif args.command == "check-scenario":
             check_scenario_campaign(
                 args.repo, args.manifest, micro_manifest=args.micro_manifest

@@ -104,7 +104,7 @@ class KernelBudgetTests(unittest.TestCase):
             ["-m", "elf64lriscv", "-z", "max-page-size=4096"],
         )
         self.assertEqual(config["kernel_source"]["baseline_lines"], 47922)
-        self.assertEqual(config["kernel_source"]["max_lines"], 49834)
+        self.assertEqual(config["kernel_source"]["max_lines"], 50066)
 
         missing_hash = copy.deepcopy(config)
         del missing_hash["local_kernel_budget_toolchains"][0][
@@ -2505,6 +2505,10 @@ agent_metadata_txn_projection_require_idle();
                 )
 
     def test_agent_duration_fingerprint_covers_sources_and_contract(self):
+        self.assertIn(
+            "scripts/guest_failure_classifier.py",
+            kernel_budgets.AGENT_TEST_SOURCE_REQUIRED_PATHS,
+        )
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             for relative in kernel_budgets.AGENT_TEST_SOURCE_REQUIRED_PATHS:

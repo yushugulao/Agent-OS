@@ -114,6 +114,26 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
         ).strip()
         return root, git, commit, dict(os.environ)
 
+    def test_clean_head_binds_commit_tracked_bytes_and_untracked_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, git, commit, environment = self._source_fixture(Path(temporary))
+            self.assertEqual(
+                source_gate.require_clean_head(git, root, environment), commit
+            )
+            tracked = root / "os" / "kernel.c"
+            original = tracked.read_bytes()
+            tracked.write_bytes(b"int forged;\n")
+            with self.assertRaisesRegex(
+                source_gate.ToolAttestationError, "bytes differ"
+            ):
+                source_gate.require_clean_head(git, root, environment)
+            tracked.write_bytes(original)
+            (root / "untracked.c").write_text("int untracked;\n", encoding="ascii")
+            with self.assertRaisesRegex(
+                source_gate.ToolAttestationError, "worktree is dirty"
+            ):
+                source_gate.require_clean_head(git, root, environment)
+
     @unittest.skipUnless(os.name == "posix", "filter command fixture requires POSIX")
     def test_isolated_checkout_does_not_run_repository_filter(self) -> None:
         git_name = shutil.which("git")

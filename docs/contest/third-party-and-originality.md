@@ -9,7 +9,6 @@
 | --- | --- | --- | --- |
 | LearningOS/uCore-Tutorial-Code-2025S | 教学内核和基础用户态代码 | 本仓库衍生修改 | GPL-3.0；见根目录 `NOTICE`、`LICENSE` |
 | LearningOS/uCore-Tutorial-Test-2025S | 教学测试基础 | 本仓库衍生修改 | GPL-3.0；见根目录 `NOTICE` |
-| RustSBI `rustsbi-qemu.bin` | 可选 QEMU 启动固件 | 可选二进制 | MIT 或 Mulan PSL v2；见根目录 `NOTICE` |
 | QEMU、RISC-V GCC/binutils、GNU Make、Bash、Python | 构建和运行环境 | 不随仓库捆绑，由复现环境安装 | 各自上游许可；其绝对路径、版本和哈希由正式证据清单记录 |
 
 根目录源码许可证为 GPL-3.0，技术文档和展示材料采用 CC BY-SA 4.0。当前 `NOTICE` 给出了已知

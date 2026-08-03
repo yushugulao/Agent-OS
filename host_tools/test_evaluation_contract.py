@@ -1824,10 +1824,64 @@ def main() -> int:
         }
         scenario_plan_path = scenario_dir / "scenario-plan.json"
         scenario_plan_path.write_text(json.dumps(scenario_plan_value), encoding="utf-8")
-        with mock.patch("evaluation_campaign.validate_scenario_campaign"):
-            scenario_summary, _ = build(
+        expect_rejected(
+            lambda: build(
                 SUITE_PATH, plan_path, root, scenario_path, scenario_plan_path
+            ),
+            "explicit trusted contract root",
+        )
+        with mock.patch(
+            "evaluation_campaign.validate_scenario_campaign"
+        ) as validate_scenario_campaign:
+            scenario_summary, _ = build(
+                SUITE_PATH,
+                plan_path,
+                root,
+                scenario_path,
+                scenario_plan_path,
+                contract_root=ROOT,
             )
+        validate_scenario_campaign.assert_called_once_with(
+            scenario_plan_value, contract_root=ROOT
+        )
+        cli_summary_path = root / "cli-scenario-summary.json"
+        cli_rows_path = root / "cli-scenario-metrics.jsonl"
+        cli_common = [
+            "--suite", str(SUITE_PATH),
+            "--run-plan", str(plan_path),
+            "--source-root", str(root),
+            "--summary", str(cli_summary_path),
+            "--rows", str(cli_rows_path),
+            "--scenario-report", str(scenario_path),
+            "--scenario-plan", str(scenario_plan_path),
+            "--contract-root", str(ROOT),
+        ]
+        with mock.patch(
+            "evaluation_contract.build", return_value=(scenario_summary, [])
+        ) as cli_build:
+            assert evaluation_contract_main(["build", *cli_common]) == 0
+        cli_build.assert_called_once_with(
+            SUITE_PATH,
+            plan_path,
+            root,
+            scenario_path,
+            scenario_plan_path,
+            contract_root=ROOT,
+        )
+        with mock.patch(
+            "evaluation_contract.verify", return_value=scenario_summary
+        ) as cli_verify:
+            assert evaluation_contract_main(["verify", *cli_common]) == 0
+        cli_verify.assert_called_once_with(
+            SUITE_PATH,
+            plan_path,
+            root,
+            cli_summary_path,
+            cli_rows_path,
+            scenario_path,
+            scenario_plan_path,
+            contract_root=ROOT,
+        )
         validate_summary(scenario_summary)
         task6 = next(item for item in scenario_summary["scenarios"] if item["task"] == "task6")
         assert set(task6) == {
@@ -1905,6 +1959,7 @@ def main() -> int:
                     root,
                     scenario_path,
                     failed_boot_plan_path,
+                    contract_root=ROOT,
                 ),
                 "differs from its sealed boot plan",
             )
@@ -1941,6 +1996,7 @@ def main() -> int:
                 root,
                 inconclusive_path,
                 inconclusive_plan_path,
+                contract_root=ROOT,
             )
         validate_summary(inconclusive_summary)
         inconclusive_task6 = next(
@@ -1985,6 +2041,7 @@ def main() -> int:
                 root,
                 regressed_path,
                 regressed_plan_path,
+                contract_root=ROOT,
             )
         regressed_task6 = next(
             item for item in regressed_summary["scenarios"]
@@ -2051,6 +2108,7 @@ def main() -> int:
                 scenario_rows_path,
                 inconclusive_path,
                 inconclusive_plan_path,
+                contract_root=ROOT,
             ) == inconclusive_summary
         forged_contract_summary = copy.deepcopy(inconclusive_summary)
         forged_task6 = next(
@@ -2070,6 +2128,7 @@ def main() -> int:
                     scenario_rows_path,
                     inconclusive_path,
                     inconclusive_plan_path,
+                    contract_root=ROOT,
                 ),
                 "summary differs",
             )

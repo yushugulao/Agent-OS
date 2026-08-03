@@ -19,6 +19,7 @@ from agent_observe_disk_evidence import (
     _fnv,
     _record_hash,
     load_observation_contract,
+    validate_observation_payload,
     verify_observation_acceptance,
     verify_observation_image,
 )
@@ -78,6 +79,16 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
         return verify_observation_image(
             self.image, self.marker if marker is None else marker
         )
+
+    def test_generic_provider_validation_does_not_require_boot_identity(self) -> None:
+        image = self.image.read_bytes()
+        _, inodes = self._bank_inodes(image)
+        bank = self._read_inode_bytes(image, inodes[0])
+        start = self.metadata.header_bytes + self.layout.arena_fields["payload"]
+        payload = bytes(bank[start : start + self.layout.observe_bytes])
+        result = validate_observation_payload(payload, self.layout)
+        self.assertGreater(result["generation"], 0)
+        self.assertNotIn("identity", result)
 
     def _bank_inodes(self, image: bytes):
         sb = fs.read_superblock(image)

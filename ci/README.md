@@ -74,10 +74,13 @@ document: they must come from the candidate's canonical `make ci-check` log,
 the same versioned JSON, and the selected release bundle. A measurement below
 its frozen maximum passes without raising the baseline merely to match it.
 The source baseline therefore remains 47,922 lines. The reviewed ceiling is
-49,834 lines: the extra 129 lines since the previous ceiling are the resource
-snapshot/lifecycle integration and general `fstat` compatibility path used by
-the contest evaluator. The ceiling equals the measured candidate, so later
-growth still requires an explicit review instead of inheriting spare capacity.
+50,066 lines: the additional 232 lines over the previous candidate close the
+work-conserving block-I/O path, physical-transfer receipts, and the complete
+inode-owner prepare/commit boundary used by allocator rollback verification.
+The ceiling equals the measured candidate, so later growth still requires an
+explicit review instead of inheriting spare capacity. The allocator profile is
+separately rebaselined at its measured 288 lines with no growth headroom; it is
+excluded from the production kernel and cannot conceal production growth.
 
 The frozen catalog-capacity contract is deliberately static: 512 slots split
 into 64 SYSTEM slots and four 112-slot workflow partitions. Each workflow may
@@ -98,14 +101,12 @@ borrowing, a separate catalog resource kind, global union/max approximations,
 or a metadata-envelope ledger; scoped reload instead binds and revalidates the
 immutable lifecycle id and generation.
 
-The current candidate's full-suite duration gate is `calibrated_full_suite`.
-The clean detached calibration source is commit
-`04c1e66523240878d670aa5aa4070360788dec86`, with source fingerprint
-`2162696ef9fb944b2f1dfbad4daa0aafbc7ae0847fe4b0a347f4a93050b536e7`.
-Its three complete 18-case samples are `287.9945528`, `283.0201263`, and
-`280.9651484` seconds. The median baseline is `283.0201263` seconds and the
-deterministic limit is `297.172` seconds. The complete local-E3 calibration
-package is committed at `evidence/calibrations/04c1e6652324/`; it is explicitly
+The current candidate's full-suite duration gate is
+`provisional_requires_full_suite`. Commit `04c1e6652324` and its package under
+`evidence/calibrations/04c1e6652324/` remain historical local-E3 evidence for
+that exact source fingerprint only. The current candidate must be frozen and
+calibrated with three complete 18-case runs before a baseline or deterministic
+limit can be restored. The historical package is explicitly
 `local_e3_unsigned` and is not GitLab Runner or E4 evidence. The older
 `610df28bda64`, `814021ab9dac`, and `31d4ddf53695` packages remain historical artifacts
 only and are not admissible as a threshold for this or any new candidate.
@@ -226,7 +227,7 @@ checkout changes and dangerous environment overrides, checks the required
 Runner tag, validates the exact artifact inventory and job semantics, and then
 publishes canonical `remote-ci-attestation.json`. It emits one complete trace
 marker binding the job name, commit, and attestation SHA256. QEMU artifacts are
-projected into the same semantic registry used by schema v6 final-evidence
+projected into the same semantic registry used by schema v7 final-evidence
 collection and offline verification; the Host budget artifact uses an exact
 inventory and exact completion markers.
 

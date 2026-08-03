@@ -89,7 +89,7 @@ class DeliveryFixture:
 
 
 class EvidenceDeliveryContractTests(unittest.TestCase):
-    def test_current_evaluation_bundle_schema_is_the_only_registered_version(self) -> None:
+    def test_current_and_previous_evaluation_bundle_schemas_are_registered(self) -> None:
         identity = (
             evaluation_bundle_contract.KIND,
             evaluation_bundle_contract.SCHEMA_VERSION,
@@ -102,6 +102,12 @@ class EvidenceDeliveryContractTests(unittest.TestCase):
             (evaluation_bundle_contract.KIND, 4),
             delivery_contract.MANIFEST_SOURCE_FIELDS,
         )
+        self.assertEqual(
+            delivery_contract.MANIFEST_SOURCE_FIELDS.get(
+                (evaluation_bundle_contract.KIND, 5)
+            ),
+            "source_commit",
+        )
 
         with tempfile.TemporaryDirectory() as temp:
             fixture = DeliveryFixture(Path(temp))
@@ -111,7 +117,7 @@ class EvidenceDeliveryContractTests(unittest.TestCase):
             self.assertEqual(result["status"], "committed-history")
             self.assertEqual(result["evidence_commit"], evidence)
 
-        for invalid_schema in (4, 5.0, True, "5"):
+        for invalid_schema in (4, 6.0, True, "6"):
             with self.subTest(schema_version=invalid_schema):
                 with tempfile.TemporaryDirectory() as temp:
                     fixture = DeliveryFixture(Path(temp))
@@ -123,7 +129,7 @@ class EvidenceDeliveryContractTests(unittest.TestCase):
                         verify_manifest_delivery(bundle, fixture.repo)
 
     def test_full_evidence_schemas_use_historical_delivery(self) -> None:
-        for schema_version in (6, 7):
+        for schema_version in (6, 7, 8):
             with self.subTest(schema_version=schema_version), (
                 tempfile.TemporaryDirectory()
             ) as temp:
@@ -146,6 +152,8 @@ class EvidenceDeliveryContractTests(unittest.TestCase):
                     "configuration": {},
                     "metrics": [],
                 }
+                if schema_version == 8:
+                    manifest["duration_attestation"] = {}
                 manifest_path.write_text(
                     json.dumps(manifest) + "\n", encoding="utf-8"
                 )
@@ -390,6 +398,7 @@ class EvidenceDeliveryContractTests(unittest.TestCase):
             bundle = fixture.publish()
             git(fixture.repo, "add", "-A")
             git(fixture.repo, "update-index", "--chmod=+x", INDEX_PATH)
+            os.chmod(fixture.repo / INDEX_PATH, 0o755)
             git(fixture.repo, "commit", "-q", "-m", "executable index")
             self.assertTrue(git(fixture.repo, "ls-tree", "HEAD", INDEX_PATH).startswith("100755 "))
             with self.assertRaisesRegex(DeliveryContractError, "100644 regular blob"):

@@ -1,7 +1,7 @@
 #ifndef FS_ALLOCATOR_TEST_ABI_H
 #define FS_ALLOCATOR_TEST_ABI_H
 
-#define FSALLOC_TEST_ABI_VERSION 3U
+#define FSALLOC_TEST_ABI_VERSION 4U
 #define FSALLOC_DURABILITY_BACKEND_ABI_VERSION 2U
 #define FSALLOC_DURABILITY_OVERLAY_CAPACITY 640U
 
@@ -54,6 +54,11 @@ struct fsalloc_test_snapshot {
 	unsigned long long durability_successful_flushes;
 	unsigned long long durability_failed_flushes;
 	unsigned long long durability_capacity_failures;
+	unsigned long long physical_reads;
+	unsigned long long physical_writes;
+	unsigned long long physical_flushes;
+	unsigned long long physical_failed_transfers;
+	unsigned long long physical_completion_sequence;
 };
 
 #endif

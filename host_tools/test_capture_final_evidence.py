@@ -910,7 +910,7 @@ def collector_command(root: Path, *arguments: str) -> list[str]:
     launcher = root / "scripts" / "trusted-python-entry.py"
     if not launcher.is_file():
         launcher = REPO / "scripts" / "trusted-python-entry.py"
-    return [
+    command = [
         sys.executable,
         "-I",
         "-S",
@@ -918,6 +918,9 @@ def collector_command(root: Path, *arguments: str) -> list[str]:
         "scripts/capture-final-evidence.py",
         *arguments,
     ]
+    if arguments and arguments[0] in {"verify", "bind-remote-ci"}:
+        command.extend(("--contract-root", str(root)))
+    return command
 def populate_summary_stage(stage: Path) -> Path:
     incoming, runtime = stage / "incoming", stage / "runtime"
     incoming.mkdir(parents=True)
@@ -1000,6 +1003,13 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
         REPO / "host_tools" / "full_verification_metrics.py",
         root / "host_tools" / "full_verification_metrics.py",
     )
+    for module_name in (
+        "duration_profile_attestation.py", "full_verification_metrics_render.py",
+    ):
+        shutil.copyfile(
+            REPO / "host_tools" / module_name,
+            root / "host_tools" / module_name,
+        )
     shutil.copyfile(STRICT_JSON, root / "host_tools" / STRICT_JSON.name)
     for module in (
         SEMANTIC_REGISTRY, SEMANTIC_COMMON, SEMANTIC_PROFILES,
@@ -1157,6 +1167,7 @@ echo '[kernel-budget] Agent aggregate metadata_control_plane bss_bytes: actual=2
 echo '[kernel-budget] agent-modules checks passed'
 echo 'kernel stack budget: user=1 interrupt=1 margin=1 required=8191 limit=8192'
 echo 'boot stack budget: root=main path=1 interrupt=1 margin=1 required=4095 limit=4096'
+echo '[full-verify] Agent duration policy profile=none status=skipped-different-runner'
 echo '[full-verify] all checks passed'
 '''
         if slow_make:
@@ -1184,6 +1195,7 @@ def collect_args(repo: Path, output: Path, tools: dict[str, Path]) -> list[str]:
             "--output", str(output), "--toolprefix", str(tools["compiler_prefix"]),
             "--qemu", str(tools["qemu"]), "--make", str(tools["make"]),
             "--host-cc", str(tools["host_cc"]), "--python", BACKING_PYTHON,
+            "--agent-test-duration-profile", "none",
             "--bash", str(resolve_bash_executable("bash", resolve_executable("git"))),
             "--command-timeout", "30"]
 def start_gitlab_fixture(commit: str, pipeline_sha: str | None = None,
@@ -1535,7 +1547,9 @@ class FinalEvidenceTests(unittest.TestCase):
             ]
             lines = outside + canonical + list(reversed(outside))
             full_log.write_text("\n".join(lines) + "\n")
-            rows, _ = parse_measurements(full_log, timing_log, config)
+            rows, _ = parse_measurements(
+                full_log, timing_log, config, duration_profile="none"
+            )
             metrics = {row["metric"]: row for row in rows}
             self.assertEqual(metrics["kernel_stack_required_bytes"]["actual"], 101)
             self.assertEqual(metrics["boot_stack_required_bytes"]["actual"], 81)
@@ -1584,7 +1598,9 @@ class FinalEvidenceTests(unittest.TestCase):
                 with self.subTest(index=index, message=message):
                     full_log.write_text("\n".join(contents) + "\n")
                     with self.assertRaisesRegex(evidence_error, message):
-                        parse_measurements(full_log, timing_log, config)
+                        parse_measurements(
+                            full_log, timing_log, config, duration_profile="none"
+                        )
             full_log.write_text("\n".join(canonical) + "\n")
             for field in (
                 "baseline_source_lines", "max_source_lines", "baseline_source_bytes", "max_source_bytes",
@@ -1594,7 +1610,41 @@ class FinalEvidenceTests(unittest.TestCase):
                     changed = json.loads(json.dumps(config))
                     changed["agent_modules"]["aggregate_budgets"][0][field] += 1
                     with self.assertRaisesRegex(evidence_error, "log and configuration differ"):
-                        parse_measurements(full_log, timing_log, changed)
+                        parse_measurements(
+                            full_log, timing_log, changed, duration_profile="none"
+                        )
+
+            duration_row = metrics["agent_suite_total_seconds"]
+            self.assertIsNone(duration_row["baseline"])
+            self.assertIsNone(duration_row["limit"])
+            self.assertIsNone(duration_row["usage_ratio"])
+            over_historical_limit = json.loads(json.dumps(config))
+            over_historical_limit["agent_test_suite"]["max_seconds"] = 0.001
+            rows, _ = parse_measurements(
+                full_log,
+                timing_log,
+                over_historical_limit,
+                duration_profile="none",
+            )
+            self.assertEqual(
+                next(
+                    row["actual"]
+                    for row in rows
+                    if row["metric"] == "agent_suite_total_seconds"
+                ),
+                2.75,
+            )
+            provisional = json.loads(json.dumps(config))
+            provisional["agent_test_suite"][
+                "calibration_status"
+            ] = "provisional_requires_full_suite"
+            with self.assertRaisesRegex(evidence_error, "not fully calibrated"):
+                parse_measurements(
+                    full_log,
+                    timing_log,
+                    provisional,
+                    duration_profile="local-e3",
+                )
     def test_summary_inventory_is_generated_and_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
@@ -1605,7 +1655,7 @@ class FinalEvidenceTests(unittest.TestCase):
             run([*collector_command(REPO, "write-summary"), "--stage", str(stage),
                  "--steps", str(steps), "--commit", commit], REPO)
             summary = json.loads((incoming / "verification-summary.json").read_text())
-            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (7, 5))
+            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (8, 5))
             canonical_steps = json.dumps(summary["steps"], ensure_ascii=True,
                                          sort_keys=True, separators=(",", ":"))
             self.assertEqual(summary["step_contract_sha256"],
@@ -1734,6 +1784,9 @@ while [[ ${1:-} == -I || ${1:-} == -S || ${1:-} == -B || ${1:-} == -u ]]; do
     shift
 done
 case "$1" in
+host_tools/evaluation_platform.py)
+    exit 0
+    ;;
 scripts/test-sync-owner-wiring.py|scripts/test-wait-atomic-wiring.py|scripts/check-wait-queue-contract.py)
     exit 0
     ;;
@@ -1797,6 +1850,24 @@ exit 91
             )
             self.assertFalse(policy_marker.exists())
             self.assertFalse(make_marker.exists())
+
+    @unittest.skipUnless(os.name == "posix", "full-verify profile is POSIX-only")
+    def test_full_verify_duration_profile_is_explicit_and_fail_closed(self) -> None:
+        source = (REPO / "scripts/run-full-verification.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("profile=local-e3 status=enforced", source)
+        self.assertIn("profile=none status=skipped-different-runner", source)
+        self.assertIn(
+            'AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE}"', source
+        )
+        result = run(
+            ["bash", "scripts/run-full-verification.sh"], REPO, check=False,
+            env={**os.environ, "AGENT_TEST_DURATION_PROFILE": "forged"},
+        )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("must be local-e3 or none", result.stdout + result.stderr)
+
     @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
     def test_non_utf8_tool_version_preserves_raw_identity_and_diagnostic_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1880,8 +1951,11 @@ exit 91
             with (output / "metrics" / "measurements.csv").open(newline="") as handle:
                 metrics = {row["metric"]: row for row in csv.DictReader(handle)}
             agent = metrics["agent_suite_total_seconds"]
-            self.assertEqual(tuple(float(agent[key]) for key in ("actual", "baseline", "limit", "usage_ratio")),
-                             (2.75, 2.0, 4.0, 0.6875))
+            self.assertEqual(float(agent["actual"]), 2.75)
+            self.assertEqual(
+                tuple(agent[key] for key in ("baseline", "limit", "usage_ratio")),
+                ("not-applicable", "not-applicable", "not-applicable"),
+            )
             self.assertEqual(tuple((float(metrics[name]["limit"]), int(metrics[name]["source_line"]) > 0)
                                    for name in ("kernel_stack_required_bytes", "boot_stack_required_bytes")),
                              ((110, True), (90, True)))
@@ -2141,6 +2215,32 @@ exit 91
                     self.assert_verify_rejected(output, repo, "completion marker")
                 finally:
                     restore_files(output, originals)
+            environment_path = output / "environment/environment.json"
+            manifest_path = output / "manifest.json"
+            originals = {
+                path: path.read_bytes() for path in (environment_path, manifest_path)
+            }
+            environment = json.loads(originals[environment_path])
+            environment["execution_environment"][
+                "AGENT_TEST_DURATION_PROFILE"
+            ] = "local-e3"
+            environment_path.write_text(json.dumps(environment) + "\n", encoding="utf-8")
+            manifest = json.loads(originals[manifest_path])
+            manifest["command"]["environment"][
+                "AGENT_TEST_DURATION_PROFILE"
+            ] = "local-e3"
+            manifest["environment"].update({
+                "bytes": environment_path.stat().st_size,
+                "sha256": __import__("hashlib").sha256(
+                    environment_path.read_bytes()
+                ).hexdigest(),
+            })
+            manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+            rewrite_checksums(output)
+            try:
+                self.assert_verify_rejected(output, repo, "duration policy")
+            finally:
+                restore_files(output, originals)
             manifest_path = output / "manifest.json"
             command_path = output / "metrics/commands.csv"
             command_originals = {path: path.read_bytes() for path in (manifest_path, command_path)}
@@ -2340,6 +2440,13 @@ procreap_ucore: parent passed
             rewrite_checksums(output)
             self.assert_metric_tamper_rejected(output, repo, "chart",
                                                ("</svg>", "<metadata>forged</metadata></svg>"), "chart provenance")
+            self.assert_metric_tamper_rejected(
+                output,
+                repo,
+                "chart",
+                ("AgentOS acceptance budgets", "Forged acceptance budgets"),
+                "chart differs from replayed metrics",
+            )
             original_manifest = (output / "manifest.json").read_bytes()
             forged = json.loads(original_manifest)
             forged["raw_artifacts"][1] = dict(forged["raw_artifacts"][0])
@@ -2723,6 +2830,7 @@ procreap_ucore: parent passed
             (REPO / "host_tools" / "agent_observe_disk_contract.py", 400),
             (REPO / "host_tools" / "agent_observe_disk_evidence.py", 750),
             (REPO / "host_tools" / "agent_observe_disk_fixture.py", 350),
+            (REPO / "host_tools" / "committed_source_identity.py", 225),
         ):
             self.assertLessEqual(len(module.read_text(encoding="utf-8").splitlines()), limit)
         observe_host_lines = sum(
@@ -2783,12 +2891,22 @@ procreap_ucore: parent passed
             self.assertEqual(makefile.count(once), 1)
         self.assertNotIn("hash-tree", collector + full)
         self.assertNotIn("immutable CI artifact", collector)
-        for contract in ("'^SCHEMA_VERSION = 7$'", "'^FULL_VERIFY_PROFILE_VERSION = 5$'",
+        for contract in ("'^SCHEMA_VERSION = 8$'", "'^FULL_VERIFY_PROFILE_VERSION = 5$'",
                          "'^REMOTE_CI_SCHEMA_VERSION = 1$'"):
             self.assertIn(contract, structure)
         self.assertNotIn("'^SCHEMA_VERSION = 1$'", structure)
-        for document in (REPO / "README.md", REPO / "ci" / "README.md", REPO / "evidence" / "README.md"):
-            self.assertNotIn("schema v5", document.read_text(encoding="utf-8"))
+        public_docs = {
+            document: document.read_text(encoding="utf-8")
+            for document in (
+                REPO / "README.md",
+                REPO / "ci" / "README.md",
+                REPO / "evidence" / "README.md",
+            )
+        }
+        for content in public_docs.values():
+            self.assertNotRegex(content, r"full-evidence(?: bundle)? schema v5")
+            self.assertNotRegex(content, r"schema v5 的 `?verification-summary")
+        self.assertIn("scenario plan schema v5", public_docs[REPO / "README.md"])
         self.assertNotIn("依赖已提交的 Git 对象和不可变的 CI artifact", evidence_readme)
         for token in ("bind-remote-ci", "not-attached", "provenance-attached", "GitLab API",
                       "trace", "artifact"):

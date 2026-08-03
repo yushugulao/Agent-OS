@@ -388,7 +388,9 @@ def _formal_shell_environment(campaign: dict[str, Any]) -> dict[str, str]:
         raise CompatibilityRunError("formal Linux entry domain is invalid")
 
     tools = platform.get("tools")
-    required = ("bash", "env", "make", "python", "qemu", "timeout")
+    required = (
+        "assembler", "bash", "env", "make", "python", "qemu", "timeout",
+    )
     if not isinstance(tools, dict) or any(label not in tools for label in required):
         raise CompatibilityRunError("formal platform lacks a required compatibility tool")
     tool_paths: dict[str, str] = {}

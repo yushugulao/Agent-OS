@@ -361,9 +361,10 @@ flowchart LR
 
 ## 5. 评价入口
 
-实验分支提供以下正式、自检及显式开发入口：
+普通 Linux、WSL 和普通 Runner 使用以下正式、自检及显式开发入口：
 
 ```bash
+export AGENT_TEST_DURATION_PROFILE=none
 make evaluation-doctor
 make evaluation-smoke
 make evaluation-run
@@ -375,6 +376,21 @@ make evaluation-package
 make evaluation-package-development EVALUATION_RUN_DIR=<run-dir> EVALUATION_BUNDLE_DIR=<output-dir>
 make evaluation-package-verify EVALUATION_BUNDLE_DIR=evidence/releases/evaluation-<run-id>
 ```
+
+`none` 不缩减验收：18 个 Agent case、Guest 语义、原始日志和精确 timing 行清单仍必须
+完整，只是不把不同机器的 wall-time 与本地 E3 阈值比较，duration baseline/limit/ratio
+明确记为不适用。只有与记录的硬件、MSYS2 runtime、工具文件和配置完全一致的原生 MSYS2
+E3 才能使用：
+
+```bash
+export AGENT_TEST_DURATION_PROFILE=local-e3
+make evaluation-doctor
+make evaluation-full-verify
+```
+
+`local-e3` 采用 fail-closed 门禁；`ci/kernel-budgets.json` 中的校准状态只要仍是
+`provisional_requires_full_suite`，正式入口就在 QEMU 前失败，不能回退到历史基线或隐式改用
+`none`。
 
 - `evaluation-doctor`：fail closed 检查正式采集的唯一执行域与全部必要工具；
 - `evaluation-smoke`：运行 Host 合同测试并检查 Guest 接线，不发布性能结论；
@@ -421,7 +437,7 @@ campaign 的 `run.execution_domain` 明确写为 `native-msys2`，场景执行�
 `/proc/meminfo` 提取稳定、可公开的 Host 硬件身份：CPU model、logical CPU count 与
 `MemTotal` 字节数；动态 `cpu MHz` 不进入身份。缺失、重复或畸形的 processor/MemTotal
 记录会 fail closed。硬件字段随完整 campaign 一起被 `campaign_sha256` 覆盖，并在每个
-Guest boot 前重新采集核对；scenario plan schema v3 复制同一 platform proof、单独记录其
+Guest boot 前重新采集核对；scenario plan schema v5 复制同一 platform proof、单独记录其
 canonical SHA256，并在每轮科研场景 pair 前后执行同样核对。工具文件也会重新散列，
 MSYS2 还会重新绑定当前 runtime。
 公开 proof 不记录 hostname，MSYS uname 只保留 OS build、kernel release/version 与
@@ -435,7 +451,7 @@ formal run id 由冻结的源码提交 C 唯一确定为 `formal-<C 的完整 40
 科研场景 challenge、AB/BA 顺序由 C 确定性派生；不同 clone 对同一 C 得到相同计划。
 失败目录会保留且同一输出根拒绝覆盖。没有受保护的远端 Runner 时，本地 Git 与目录锁
 不能证明其他 clone 从未重跑或丢弃一次尝试，因此文档不作这种超出证据的声明。首个
-QEMU 启动前生成的 run plan schema v2、scenario plan schema v3 和
+QEMU 启动前生成的 run plan schema v2、scenario plan schema v5 和
 `measurement-source-receipt.json` 共同绑定该确定性计划、完整 Guest 测量源码清单和版本化
 评价控制面策略清单。
 
@@ -484,7 +500,7 @@ committed delivery 还直接从 Git tree/blob（而非 manifest 或 worktree 声
 开发接线包必须显式执行：
 
 ```bash
-scripts/package-evaluation-evidence.sh create <run-dir> <output-dir> --development
+bash scripts/package-evaluation-evidence.sh create <run-dir> <output-dir> --development
 ```
 
 该 profile 会在 manifest 中永久保存 `DEVELOPMENT EVIDENCE ONLY` 警告，验证时也会再次

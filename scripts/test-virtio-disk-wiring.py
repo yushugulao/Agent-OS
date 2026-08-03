@@ -205,11 +205,9 @@ def validate_submission_accounting(source):
     while (len(condition_tokens) >= 2 and condition_tokens[0] == "(" and
            condition_tokens[-1] == ")"):
         condition_tokens = condition_tokens[1:-1]
-    if (len(condition_tokens) != 3 or condition_tokens[1] != "&&" or
-            set((condition_tokens[0], condition_tokens[2])) !=
-            {"submitted", "account_transfer"}):
+    if condition_tokens != ["submitted"]:
         raise ContractError(
-            "disk_submit accounting must require submitted && account_transfer"
+            "disk_submit accounting must require a real device submission"
         )
     out_label = re.search(r"(?m)^[ \t]*out:[ \t]*$", body)
     if out_label is None:
@@ -226,33 +224,41 @@ def validate_submission_accounting(source):
 
 
 def validate_overlay_accounting(source):
-    body_start, _, body = function_region(source, "int virtio_disk_rw(")
+    _, _, body = function_region(source, "int virtio_disk_rw(")
     (overlay_start, _, overlay, production_start, _, production) = \
         preprocessor_branches(body, "DURABILITY_POWERCUT_TEST_PROFILE")
     overlay_transfers = function_calls(overlay, "bio_account_transfer")
     overlay_submits = function_calls(overlay, "disk_submit")
     overlay_returns = list(re.finditer(r"\breturn\s+result\s*;", overlay))
-    if (len(overlay_transfers) != 1 or not overlay_submits or
-            len(overlay_returns) != 1):
+    if (overlay_transfers or not overlay_submits or len(overlay_returns) != 1):
         raise ContractError(
-            "durability overlay must publish exactly one outer accounting result"
+            "volatile overlay I/O is incorrectly counted as physical I/O"
         )
-    if any(not call["arguments"] or call["arguments"][-1][2] != "0"
-           for call in overlay_submits):
-        raise ContractError("durability overlay submitted an inner accounting charge")
-    if not (overlay_transfers[0]["start"] < overlay_returns[0].start()):
-        raise ContractError("durability overlay returns before outer accounting")
     production_transfers = function_calls(production, "bio_account_transfer")
     production_submits = function_calls(production, "disk_submit")
-    if (production_transfers or len(production_submits) != 1 or
-            production_submits[0]["arguments"][-1][2] != "1"):
+    if production_transfers or len(production_submits) != 1:
         raise ContractError(
             "production read/write must delegate exactly one charge to disk_submit"
         )
-    first_submit = overlay_submits[0]
-    last_begin, last_end, _ = first_submit["arguments"][-1]
-    return (body_start + overlay_start + last_begin,
-            body_start + overlay_start + last_end)
+    signature_start = source.find("static int disk_submit(")
+    signature_end = source.find("{", signature_start)
+    if (signature_start < 0 or signature_end < 0 or
+            "account_transfer" in source[signature_start:signature_end]):
+        raise ContractError("physical submission still exposes an accounting bypass")
+
+
+def validate_barrier_accounting(source):
+    _, _, body = function_region(source, "static int disk_durability_barrier(")
+    _, _, overlay, _, _, production = preprocessor_branches(
+        body, "DURABILITY_POWERCUT_TEST_PROFILE"
+    )
+    if function_calls(overlay, "bio_account_transfer"):
+        raise ContractError("overlay barrier aggregates physical submissions")
+    if len(function_calls(overlay, "disk_submit")) != 2:
+        raise ContractError("overlay commit does not expose write and flush submissions")
+    if (function_calls(production, "bio_account_transfer") or
+            len(function_calls(production, "disk_submit")) != 1):
+        raise ContractError("production barrier bypasses submission accounting")
 
 
 def validate_range_execution(source):
@@ -280,6 +286,39 @@ def validate_range_execution(source):
     if end >= len(body) or body[end] != ";":
         raise ContractError("range rejection invocation is not a statement")
     return body_start + range_call["start"], body_start + end + 1
+
+
+def validate_event_driven_queue_checks(source):
+    _, _, full_ring = function_region(
+        source, "static void test_full_ring_reclaim("
+    )
+    if re.search(r"\bsleep\s*\(", full_ring):
+        raise ContractError("full-ring ordering relies on a wall-time sleep")
+    for token in (
+        "value.completions > 2",
+        "value.completions == 2 && value.descriptor_reclaims >= 2",
+        "full_ring_done[0] && full_ring_done[3]",
+        "full_ring_done[1] || full_ring_done[2]",
+    ):
+        if token not in full_ring:
+            raise ContractError(f"full-ring event oracle missing {token}")
+    loop_end = full_ring.find("check(full_ring_done[0]")
+    refresh = full_ring.rfind("value = stats();", 0, loop_end)
+    if loop_end < 0 or refresh < 0:
+        raise ContractError("full-ring oracle uses a stale completion snapshot")
+
+    _, _, used_ring = function_region(
+        source, "static void test_used_ring_validation("
+    )
+    if re.search(r"\bsleep\s*\(", used_ring):
+        raise ContractError("used-ring recovery relies on a wall-time sleep")
+    for token in (
+        "if (value.reset_recoveries == 1)",
+        "get_mtime() < recovery_deadline",
+        "sched_yield();",
+    ):
+        if token not in used_ring:
+            raise ContractError(f"used-ring recovery oracle missing {token}")
 
 
 def expect_accounting_rejected(source, label):
@@ -336,7 +375,8 @@ if min(submit, range_check, descriptor_allocation, queue_notify) < 0 or not (
 account_transfer = driver.find("bio_account_transfer(owner, io_class", submit)
 try:
     guard_start, guard_end = validate_submission_accounting(driver)
-    overlay_charge_start, overlay_charge_end = validate_overlay_accounting(driver)
+    validate_overlay_accounting(driver)
+    validate_barrier_accounting(driver)
 except ContractError as error:
     raise SystemExit(f"invalid physical I/O accounting contract: {error}") from error
 if account_transfer < 0:
@@ -388,8 +428,9 @@ if unsupported_provenance not in test_program:
     raise SystemExit("pre-submit unsupported result lacks rejection provenance")
 try:
     range_call_start, range_call_end = validate_range_execution(test_program)
+    validate_event_driven_queue_checks(test_program)
 except ContractError as error:
-    raise SystemExit(f"invalid dynamic range execution: {error}") from error
+    raise SystemExit(f"invalid dynamic queue execution: {error}") from error
 for token in (
     "full-ring-reclaim passed",
     "forged-used-index passed",
@@ -458,17 +499,36 @@ if trap.count("agent_background_checkpoint();") != 1:
     raise SystemExit("user interrupt path lacks one bounded background checkpoint")
 
 expect_accounting_rejected(
-    driver[:guard_start] + "account_transfer" + driver[guard_end:],
+    driver[:guard_start] + "1" + driver[guard_end:],
     "submitted predicate removed",
 )
-expect_accounting_rejected(
-    driver[:guard_start] + "submitted" + driver[guard_end:],
-    "account_transfer predicate removed",
-)
-expect_accounting_rejected(
-    driver[:overlay_charge_start] + "1" + driver[overlay_charge_end:],
-    "durability overlay charged both inside and outside disk_submit",
-)
+for old, new, label in (
+    (
+        "\tif (overlay_acquired)\n\t\tdisk_durability_overlay_leave();\n"
+        "\treturn result;",
+        "\tif (overlay_acquired)\n\t\tdisk_durability_overlay_leave();\n"
+        "\tbio_account_transfer(0, 0, BIO_TRANSFER_WRITE, result);\n"
+        "\treturn result;",
+        "volatile overlay charged as a physical transfer",
+    ),
+    (
+        "\tdisk_durability_overlay_leave();\n\treturn result;\n#else\n"
+        "\treturn disk_submit(0, VIRTIO_BLK_T_FLUSH, test_direct, 0);",
+        "\tdisk_durability_overlay_leave();\n"
+        "\tbio_account_transfer(0, 0, BIO_TRANSFER_FLUSH, result);\n"
+        "\treturn result;\n#else\n"
+        "\treturn disk_submit(0, VIRTIO_BLK_T_FLUSH, test_direct, 0);",
+        "overlay barrier aggregated physical submissions",
+    ),
+):
+    if old not in driver:
+        raise SystemExit(f"accounting mutation anchor drifted: {label}")
+    try:
+        validate_overlay_accounting(driver.replace(old, new, 1))
+        validate_barrier_accounting(driver.replace(old, new, 1))
+    except ContractError:
+        continue
+    raise SystemExit(f"physical accounting mutation survived: {label}")
 range_call_removed = (
     test_program[:range_call_start] + test_program[range_call_end:]
 )
@@ -476,4 +536,14 @@ if ("static void test_range_rejection" not in range_call_removed or
         "virtiodisk_ucore: range-rejection passed" not in range_call_removed):
     raise SystemExit("range execution mutation did not preserve residual strings")
 expect_range_execution_rejected(range_call_removed)
+for old, label in (
+    ("value.completions > 2", "long-peer completion sentinel removed"),
+    ("if (value.reset_recoveries == 1)", "reset recovery event removed"),
+):
+    mutated = test_program.replace(old, "0", 1)
+    try:
+        validate_event_driven_queue_checks(mutated)
+    except ContractError:
+        continue
+    raise SystemExit(f"queue event mutation survived: {label}")
 print("[virtio-disk] static wiring passed")

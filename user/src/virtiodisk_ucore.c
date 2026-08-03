@@ -176,6 +176,7 @@ static void test_descriptor_pressure(void)
 static void test_full_ring_reclaim(void)
 {
 	struct virtio_test_stats value;
+	int64 short_pair_deadline;
 	int tids[FULL_RING_THREADS];
 
 	configure(VIRTIO_TEST_FULL_RING_RECLAIM, 20, 0, 200, 0);
@@ -193,10 +194,21 @@ static void test_full_ring_reclaim(void)
 	tids[3] = thread_create(full_ring_worker, (void *)(long)3);
 	check(tids[3] > 0, "create full-ring descriptor waiter");
 	(void)wait_for_stats(3, 1);
-	sleep(35);
+	short_pair_deadline = get_mtime() + 2000;
+	for (;;) {
+		value = stats();
+		if ((full_ring_done[0] && full_ring_done[3]) ||
+		    full_ring_done[1] || full_ring_done[2] ||
+		    value.completions > 2 || get_mtime() >= short_pair_deadline)
+			break;
+		sched_yield();
+	}
+	value = stats();
 	check(full_ring_done[0] && full_ring_done[3] &&
 	      !full_ring_done[1] && !full_ring_done[2],
 	      "head reclamation wakes waiter before long peers");
+	check(value.completions == 2 && value.descriptor_reclaims >= 2,
+	      "short owner and descriptor waiter publish ordered receipts");
 	for (int i = 0; i < FULL_RING_THREADS; i++) {
 		check(waittid(tids[i]) == 0, "join full-ring request");
 		check(full_ring_result[i] == VIRTIO_TEST_OK,
@@ -297,9 +309,9 @@ static void test_flush_disabled(void)
 	      "disabled FLUSH fails closed");
 	check(io_policy_info(&after) == 0,
 	      "read post-failed-FLUSH I/O accounting");
-	check(after.physical_flushes > before.physical_flushes &&
-		      after.failed_transfers == before.failed_transfers + 1,
-	      "failed FLUSH still consumes I/O accounting");
+	check(after.physical_flushes == before.physical_flushes &&
+		      after.failed_transfers == before.failed_transfers,
+	      "unsupported FLUSH stays outside physical I/O accounting");
 	value = stats();
 	check(value.unsupported_errors == 1 && value.rejected_requests == 1 &&
 		      value.submits == 0,
@@ -345,6 +357,7 @@ static void test_timeout_reset(void)
 static void test_used_ring_validation(void)
 {
 	struct virtio_test_stats value;
+	int64 recovery_deadline;
 
 	configure(VIRTIO_TEST_FORGE_USED_INDEX, 0, 0, 50, 0);
 	check(read_probe() == VIRTIO_TEST_IOERR,
@@ -359,8 +372,13 @@ static void test_used_ring_validation(void)
 	configure(VIRTIO_TEST_DUPLICATE_USED, 0, 0, 50, 0);
 	check(read_probe() == VIRTIO_TEST_OK,
 	      "first completion remains attributable before duplicate reset");
-	sleep(2);
-	value = stats();
+	recovery_deadline = get_mtime() + 1000;
+	do {
+		value = stats();
+		if (value.reset_recoveries == 1)
+			break;
+		sched_yield();
+	} while (get_mtime() < recovery_deadline);
 	check(value.resets == 1 && value.invalid_used_entries == 1 &&
 	      value.duplicate_used_injections == 1 &&
 	      value.reset_recoveries == 1 && value.max_used_batch <= 8,

@@ -1,7 +1,7 @@
 #ifndef IO_POLICY_H
 #define IO_POLICY_H
 
-#define IO_POLICY_VERSION 4U
+#define IO_POLICY_VERSION 5U
 
 #define IO_POLICY_OWNER_SYSTEM 1U
 #define IO_POLICY_OWNER_PUBLIC 2U
@@ -16,13 +16,17 @@ enum io_policy_class {
 };
 
 /*
- * Credits represent attempted 1 KiB block transfers and durability flushes;
- * failed attempts are charged as well.  The profile is a
+ * Credits represent device-submitted 1 KiB block transfers and durability
+ * flushes; submitted attempts are charged even when completion fails.
+ * Capability and range rejections never reach the device and remain separate
+ * logical-request evidence.  The profile is a
  * hierarchy flattened into protected per-owner slices: PUBLIC has one normal
  * slice, every active workflow has normal/control/background slices, every
  * retiring workflow keeps only its cleanup background slice, and SYSTEM has
- * system/background slices. Their configured sums, including the
- * opportunistic shared slice, cannot exceed the device envelope below.
+ * system/background slices.  Those guarantees fit below the device envelope.
+ * The shared pool mirrors that envelope as an opportunistic gate rather than
+ * an additional guarantee: every shared charge must also consume the device
+ * root, so idle capacity is work-conserving without increasing physical I/O.
  */
 #define IO_POLICY_PUBLIC_NORMAL_BURST 32U
 #define IO_POLICY_PUBLIC_NORMAL_REFILL 16U
@@ -36,8 +40,8 @@ enum io_policy_class {
 #define IO_POLICY_SYSTEM_REFILL 48U
 #define IO_POLICY_SYSTEM_BACKGROUND_BURST 16U
 #define IO_POLICY_SYSTEM_BACKGROUND_REFILL 8U
-#define IO_POLICY_SHARED_BURST 32U
-#define IO_POLICY_SHARED_REFILL 16U
+#define IO_POLICY_SHARED_BURST 560U
+#define IO_POLICY_SHARED_REFILL 280U
 #define IO_POLICY_DEVICE_BURST 560U
 #define IO_POLICY_DEVICE_REFILL 280U
 

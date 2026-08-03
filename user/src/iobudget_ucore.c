@@ -12,7 +12,7 @@
 #define PRESSURE_BYTES (PRESSURE_BLOCKS * IO_BLOCK_SIZE)
 #define COLD_CACHE_BLOCKS (IO_CACHE_WORKFLOW_CAP + 1)
 #define COLD_RATE_BLOCKS \
-	(IO_POLICY_WORKFLOW_NORMAL_BURST + IO_POLICY_SHARED_BURST + 1)
+	(IO_POLICY_WORKFLOW_NORMAL_BURST + 1)
 #define COLD_PRESSURE_BLOCKS \
 	(COLD_CACHE_BLOCKS > COLD_RATE_BLOCKS ? \
 	 COLD_CACHE_BLOCKS : COLD_RATE_BLOCKS)
@@ -345,9 +345,10 @@ static void run_lineage_attacker(int ready_fd, int stop_fd,
 	check(budget_decisions <= ~0ULL - throttle_decisions,
 	      "rate decision total fits the accounting type");
 	budget_decisions += throttle_decisions;
-	check(write_transfers > (unsigned long long)before.class_burst +
-				 IO_POLICY_SHARED_BURST,
-	      "cold pressure crosses the initial credit envelope");
+	check(write_transfers > (unsigned long long)before.class_burst,
+	      "cold pressure crosses the owner credit envelope");
+	check(shared_decisions > 0,
+	      "single-owner pressure borrows idle device capacity");
 	check(transfers <= budget_decisions,
 	      "aggregate rate decisions cover physical transfers");
 	check(after.refills > before.refills ||

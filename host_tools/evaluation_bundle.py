@@ -60,6 +60,7 @@ from full_verification_payload import (
     FullVerificationError,
     verify_payload as verify_full_verification_payload,
 )
+from duration_profile_attestation import duration_platform_identity_sha256
 from evaluation_scenario import (
     ScenarioEvidenceError,
     read_expected_programs,
@@ -97,7 +98,7 @@ except ImportError:
 
 
 KIND = "agentos-evaluation-evidence-bundle"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 FORMAL_PROFILE = "formal"
 DEVELOPMENT_PROFILE = "development"
 PROFILES = {FORMAL_PROFILE, DEVELOPMENT_PROFILE}
@@ -131,7 +132,6 @@ MAX_COMPRESSION_RATIO = 4096
 MIN_RATIO_STORED_BYTES = 1024
 ARCHIVE_FORMAT = "gzip+ustar-v1"
 ARCHIVE_MODE = 0o644
-SOURCE_TREE_ROOT = Path(__file__).resolve().parents[1]
 MEASUREMENT_SOURCE_SNAPSHOT_ROOT = "measurement-sources"
 FIXED_RUN_FILES = {
     "campaign.json",
@@ -563,7 +563,8 @@ def _validate_source_inventory(
 
 
 def _verify_full_verification(
-    run_dir: Path, *, expected_commit: str, profile: str, contract_root: Path
+    run_dir: Path, *, expected_commit: str, profile: str,
+    expected_duration_platform: dict[str, object], contract_root: Path,
 ) -> tuple[dict[str, object], set[str]]:
     """Replay the detached-C full-verify stage and expose its exact inventory."""
 
@@ -583,6 +584,15 @@ def _verify_full_verification(
         )
     except (FullVerificationError, OSError, ValueError) as error:
         raise BundleError(f"full-verification payload failed: {error}") from error
+    expected_duration_profile = expected_duration_platform["duration_profile"]["name"]
+    if binding.get("agent_test_duration_profile") != expected_duration_profile:
+        raise BundleError("full-verification duration profile differs from campaign")
+    expected_identity = (
+        duration_platform_identity_sha256(expected_duration_platform)
+        if expected_duration_profile == "local-e3" else None
+    )
+    if binding.get("duration_platform_identity_sha256") != expected_identity:
+        raise BundleError("full-verification duration platform differs from campaign")
     paths = {f"full-verification/{path}" for path in nested_paths}
     if not paths:
         raise BundleError("full-verification payload inventory is empty")
@@ -783,6 +793,14 @@ def _verify_committed_measurement_sources(
     repo = _safe_directory(absolute_lexical_path(repo), "source repository")
     if COMMIT_RE.fullmatch(source_commit) is None:
         raise BundleError("measurement source commit is invalid")
+    try:
+        validate_measurement_source_receipt_shape(
+            receipt, expected_commit=source_commit
+        )
+    except ValueError as error:
+        raise BundleError(
+            f"committed measurement source receipt is invalid: {error}"
+        ) from error
     resolved = _git_capture(repo, "rev-parse", "--verify", f"{source_commit}^{{commit}}")
     if resolved.decode("ascii", errors="strict").strip() != source_commit:
         raise BundleError("measurement source commit does not resolve exactly")
@@ -808,11 +826,14 @@ def _environment_sha256(campaign: dict[str, Any]) -> str:
 
 
 def _verify_preflight_receipt(
-    path: Path, campaign: dict[str, Any], label: str
+    path: Path, campaign: dict[str, Any], label: str,
+    *, contract_root: Path | None = None,
 ) -> None:
     receipt = _safe_regular_file(path, f"{label} preflight receipt")
     try:
-        expected = format_preflight_receipt(campaign).encode("ascii")
+        expected = format_preflight_receipt(
+            campaign, contract_root=contract_root
+        ).encode("ascii")
         observed = read_regular_file(
             receipt, maximum_bytes=PREFLIGHT_RECEIPT_MAX_BYTES
         )
@@ -825,17 +846,20 @@ def _verify_preflight_receipt(
 def _verify_micro_campaign(
     run_root: Path,
     suite_path: Path,
+    *,
+    contract_root: Path | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, object]], set[str]]:
     campaign_path = run_root / "campaign.json"
     campaign = _strict_json(campaign_path)
     try:
-        validate_campaign(campaign)
+        validate_campaign(campaign, contract_root=contract_root)
     except CampaignError as error:
         raise BundleError(f"micro campaign is invalid: {error}") from error
     if campaign["phase"] != "collected":
         raise BundleError("micro campaign is not collected")
     _verify_preflight_receipt(
-        run_root / "preflight.log", campaign, "micro campaign"
+        run_root / "preflight.log", campaign, "micro campaign",
+        contract_root=contract_root,
     )
     suite_sha256 = _sha256(suite_path)
     if campaign["protocol"]["suite_sha256"] != suite_sha256:
@@ -897,7 +921,9 @@ def _verify_micro_campaign(
     with tempfile.TemporaryDirectory(prefix="agentos-run-plan-replay-") as temporary:
         replay_path = Path(temporary) / "run-plan.json"
         try:
-            expected_plan = export_run_plan(campaign_path, replay_path)
+            expected_plan = export_run_plan(
+                campaign_path, replay_path, contract_root=contract_root
+            )
         except CampaignError as error:
             raise BundleError(f"micro run plan cannot be replayed: {error}") from error
     if observed_plan != expected_plan:
@@ -1208,7 +1234,8 @@ def _verify_scenario_campaign(
     micro: dict[str, Any],
     *,
     profile: str,
-    source_tree: Path = SOURCE_TREE_ROOT,
+    source_tree: Path,
+    trusted_contract_root: Path,
 ) -> tuple[list[dict[str, object]], set[str]]:
     plan_path = run_root / "scenario" / "scenario-plan.json"
     report_path = run_root / "scenario" / "report.json"
@@ -1245,13 +1272,16 @@ def _verify_scenario_campaign(
 
     scenario = _strict_json(plan_path)
     try:
-        validate_scenario_campaign(scenario)
+        validate_scenario_campaign(
+            scenario, contract_root=trusted_contract_root
+        )
     except CampaignError as error:
         raise BundleError(f"scenario campaign is invalid: {error}") from error
     if scenario["phase"] != "collected" or scenario["report"]["status"] != "recorded":
         raise BundleError("scenario campaign is not collected")
     _verify_preflight_receipt(
-        run_root / "scenario-preflight.log", scenario, "scenario campaign"
+        run_root / "scenario-preflight.log", scenario, "scenario campaign",
+        contract_root=trusted_contract_root,
     )
     if (
         scenario["run"]["id"] != micro["run"]["id"]
@@ -1437,7 +1467,10 @@ def _contract_paths(run_root: Path) -> tuple[Path | None, Path | None]:
 
 
 def _verify_evaluation_contract(
-    run_root: Path, suite_path: Path | None = None
+    run_root: Path,
+    suite_path: Path | None = None,
+    *,
+    contract_root: Path,
 ) -> dict[str, Any]:
     report, plan = _contract_paths(run_root)
     try:
@@ -1449,16 +1482,19 @@ def _verify_evaluation_contract(
             run_root / "metrics.jsonl",
             report,
             plan,
+            contract_root=contract_root,
         )
     except EvaluationError as error:
         raise BundleError(f"packaged evaluation contract failed: {error}") from error
 
 
-def _compare_dashboard(run_root: Path) -> None:
+def _compare_dashboard(run_root: Path, *, contract_root: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="agentos-evaluation-dashboard-verify-") as temporary:
         replay = Path(temporary)
         try:
-            render_dashboard(run_root / "summary.json", replay)
+            render_dashboard(
+                run_root / "summary.json", replay, contract_root=contract_root
+            )
         except DashboardError as error:
             raise BundleError(f"packaged dashboard cannot be replayed: {error}") from error
         expected_root = _safe_directory(run_root / "dashboard", "packaged Dashboard")
@@ -2002,6 +2038,7 @@ def create_bundle(
     run_dir: Path,
     suite_path: Path,
     output: Path,
+    contract_root: Path,
     profile: str = FORMAL_PROFILE,
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -2025,7 +2062,25 @@ def create_bundle(
     else:
         raise BundleError("bundle output cannot be inside the source run")
 
-    campaign, micro_receipts, micro_paths = _verify_micro_campaign(run_dir, suite_path)
+    contract_root = _safe_directory(
+        absolute_lexical_path(contract_root), "trusted verifier contract root"
+    ).resolve(strict=True)
+    try:
+        contract_root.relative_to(run_dir)
+    except ValueError:
+        pass
+    else:
+        raise BundleError(
+            "trusted verifier contract root cannot be inside the evaluation run"
+        )
+    if repo_root is not None:
+        repo_root = _safe_directory(
+            absolute_lexical_path(repo_root), "evidence repository root"
+        ).resolve(strict=True)
+
+    campaign, micro_receipts, micro_paths = _verify_micro_campaign(
+        run_dir, suite_path, contract_root=contract_root
+    )
     summary = _strict_json(run_dir / "summary.json")
     run = summary.get("run")
     if not isinstance(run, dict):
@@ -2044,20 +2099,22 @@ def create_bundle(
         campaign,
         plan,
         commit,
-        source_tree=SOURCE_TREE_ROOT,
+        source_tree=contract_root,
         suite_path=suite_path,
     )
     full_verification, full_verification_paths = _verify_full_verification(
         run_dir,
         expected_commit=commit,
         profile=profile,
-        contract_root=SOURCE_TREE_ROOT,
+        expected_duration_platform=campaign["platform"],
+        contract_root=contract_root,
     )
     compatibility_receipts, compatibility_paths = _verify_compatibility_campaign(
         run_dir, campaign, required=profile == FORMAL_PROFILE
     )
     scenario_receipts, scenario_paths = _verify_scenario_campaign(
-        run_dir, campaign, profile=profile
+        run_dir, campaign, profile=profile, source_tree=contract_root,
+        trusted_contract_root=contract_root,
     )
     source_files = _validate_source_inventory(
         run_dir,
@@ -2082,13 +2139,15 @@ def create_bundle(
     if plan.get("suite_sha256") != suite_sha256:
         raise BundleError("run plan is not bound to the supplied suite")
 
-    verified_summary = _verify_evaluation_contract(run_dir, suite_path)
+    verified_summary = _verify_evaluation_contract(
+        run_dir, suite_path, contract_root=contract_root
+    )
     if profile == FORMAL_PROFILE:
         _verify_formal_summary(verified_summary)
     _verify_kernel_cost(
         run_dir, require_complete=profile == FORMAL_PROFILE
     )
-    _compare_dashboard(run_dir)
+    _compare_dashboard(run_dir, contract_root=contract_root)
     delivery: dict[str, object] | None = None
     if profile == FORMAL_PROFILE:
         try:
@@ -2096,9 +2155,6 @@ def create_bundle(
         except DeliveryContractError as error:
             raise BundleError(f"formal evidence release binding failed: {error}") from error
     if repo_root is not None:
-        repo_root = _safe_directory(
-            absolute_lexical_path(repo_root), "evidence repository root"
-        ).resolve(strict=True)
         if profile != FORMAL_PROFILE or delivery is None:
             raise BundleError("only formal evidence can use committed delivery")
         expected_output = repo_root / delivery["release"]["path"]
@@ -2128,7 +2184,7 @@ def create_bundle(
             _copy_regular_file(source, destination, "bundle payload")
         _copy_regular_file(suite_path, payload / "suite.json", "evaluation suite")
         _copy_measurement_source_snapshot(
-            SOURCE_TREE_ROOT, payload, measurement_receipt
+            contract_root, payload, measurement_receipt
         )
         archives = [
             _make_archive_record(
@@ -2182,7 +2238,7 @@ def create_bundle(
                 for path in sorted(inventory_paths, key=lambda item: item.relative_to(stage).as_posix())
             ),
         )
-        verify_bundle(stage)
+        verify_bundle(stage, contract_root=contract_root)
         if repo_root is None:
             _ensure_directory(output.parent, "bundle output parent")
             if output.exists() or path_is_link(output):
@@ -2205,10 +2261,21 @@ def create_bundle(
         raise
 
 
-def verify_bundle(root: Path) -> dict[str, Any]:
+def verify_bundle(root: Path, *, contract_root: Path) -> dict[str, Any]:
     """Replay portable evidence; Git authenticity requires verify_committed_bundle."""
+    contract_root = _safe_directory(
+        absolute_lexical_path(contract_root), "trusted verifier contract root"
+    ).resolve(strict=True)
     lexical_root = _safe_directory(absolute_lexical_path(root), "bundle root")
     root = lexical_root.resolve(strict=True)
+    try:
+        contract_root.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        raise BundleError(
+            "trusted verifier contract root cannot be inside the evidence bundle"
+        )
     for name in ("manifest.json", "checksums.sha256"):
         control = root / name
         try:
@@ -2252,6 +2319,9 @@ def verify_bundle(root: Path) -> dict[str, Any]:
             != {
                 "status",
                 "source_commit",
+                "agent_test_duration_profile",
+                "duration_attestation_sha256",
+                "duration_platform_identity_sha256",
                 "payload_root",
                 "receipt_sha256",
                 "summary_sha256",
@@ -2427,22 +2497,29 @@ def verify_bundle(root: Path) -> dict[str, Any]:
             raise BundleError("packaged run plan differs from campaign")
         if _sha256(payload / "summary.json") != manifest["summary_sha256"]:
             raise BundleError("packaged summary differs from manifest")
-        campaign, micro_receipts, micro_paths = _verify_micro_campaign(
-            payload, payload / "suite.json"
-        )
+        snapshot_root = payload / MEASUREMENT_SOURCE_SNAPSHOT_ROOT
+        campaign_data = _strict_json(payload / "campaign.json")
+        # Authenticate every snapshot byte with the current pure-data receipt
+        # validator before any semantic replay reads snapshot content.
         measurement_source_receipt, measurement_receipt = _verify_measurement_source_receipt(
             payload,
-            campaign,
+            campaign_data,
             plan,
             str(manifest["source_commit"]),
-            source_tree=payload / MEASUREMENT_SOURCE_SNAPSHOT_ROOT,
+            source_tree=snapshot_root,
             suite_path=payload / "suite.json",
+        )
+        campaign, micro_receipts, micro_paths = _verify_micro_campaign(
+            payload,
+            payload / "suite.json",
+            contract_root=contract_root,
         )
         replayed_full_verification, full_verification_paths = _verify_full_verification(
             payload,
             expected_commit=str(manifest["source_commit"]),
             profile=str(profile["name"]),
-            contract_root=payload / MEASUREMENT_SOURCE_SNAPSHOT_ROOT,
+            expected_duration_platform=campaign["platform"],
+            contract_root=contract_root,
         )
         if replayed_full_verification != manifest["full_verification"]:
             raise BundleError(
@@ -2455,7 +2532,8 @@ def verify_bundle(root: Path) -> dict[str, Any]:
             payload,
             campaign,
             profile=str(profile["name"]),
-            source_tree=payload / MEASUREMENT_SOURCE_SNAPSHOT_ROOT,
+            source_tree=snapshot_root,
+            trusted_contract_root=contract_root,
         )
         expected_artifacts = [
             measurement_source_receipt,
@@ -2477,13 +2555,13 @@ def verify_bundle(root: Path) -> dict[str, Any]:
                 measurement_receipt
             ),
         )
-        summary = _verify_evaluation_contract(payload)
+        summary = _verify_evaluation_contract(payload, contract_root=contract_root)
         if profile["name"] == FORMAL_PROFILE:
             _verify_formal_summary(summary)
         _verify_kernel_cost(
             payload, require_complete=profile["name"] == FORMAL_PROFILE
         )
-        _compare_dashboard(payload)
+        _compare_dashboard(payload, contract_root=contract_root)
         if (
             summary["run"]["id"] != manifest["run_id"]
             or summary["run"]["commit"] != manifest["source_commit"]
@@ -2492,14 +2570,39 @@ def verify_bundle(root: Path) -> dict[str, Any]:
     return manifest
 
 
-def verify_committed_bundle(root: Path, repo_root: Path) -> dict[str, Any]:
-    """Verify portable bytes and the source-C to evidence-E Git delivery."""
-    manifest = verify_bundle(root)
-    if manifest["profile"]["name"] != FORMAL_PROFILE:
+def _preauthenticate_committed_bundle(
+    root: Path, repo_root: Path
+) -> dict[str, Any]:
+    """Authenticate source-C and delivery using data-only parsing."""
+
+    root = _safe_directory(absolute_lexical_path(root), "bundle root").resolve(
+        strict=True
+    )
+    manifest_path = _safe_regular_file(root / "manifest.json", "bundle manifest")
+    receipt_path = _safe_regular_file(
+        root / "run" / "measurement-source-receipt.json",
+        "measurement source receipt",
+    )
+    if (
+        manifest_path.stat().st_size > MAX_CONTROL_FILE_BYTES
+        or receipt_path.stat().st_size > MAX_CONTROL_FILE_BYTES
+    ):
+        raise BundleError("committed bundle control input exceeds its budget")
+    manifest = _strict_json(manifest_path)
+    source_commit = manifest.get("source_commit")
+    if (
+        manifest.get("kind") != KIND
+        or manifest.get("schema_version") != SCHEMA_VERSION
+        or not isinstance(source_commit, str)
+        or COMMIT_RE.fullmatch(source_commit) is None
+    ):
+        raise BundleError("committed bundle identity is invalid")
+    profile = _validate_profile_record(manifest.get("profile"))
+    if profile["name"] != FORMAL_PROFILE:
         raise BundleError("committed delivery is only valid for formal evidence")
     try:
         delivery = validate_delivery_field(
-            manifest["delivery"], manifest["source_commit"]
+            manifest.get("delivery"), source_commit
         )
         verify_historical_committed_delivery(
             root,
@@ -2511,14 +2614,22 @@ def verify_committed_bundle(root: Path, repo_root: Path) -> dict[str, Any]:
         )
     except DeliveryContractError as error:
         raise BundleError(f"committed evidence delivery failed: {error}") from error
-    receipt = _strict_json(
-        _safe_directory(absolute_lexical_path(root), "bundle root")
-        / "run"
-        / "measurement-source-receipt.json"
-    )
+    receipt = _strict_json(receipt_path)
     _verify_committed_measurement_sources(
-        repo_root, str(manifest["source_commit"]), receipt
+        repo_root, source_commit, receipt
     )
+    return manifest
+
+
+def verify_committed_bundle(
+    root: Path, repo_root: Path, *, contract_root: Path
+) -> dict[str, Any]:
+    """Authenticate Git delivery before replaying portable bundle semantics."""
+
+    authenticated_manifest = _preauthenticate_committed_bundle(root, repo_root)
+    manifest = verify_bundle(root, contract_root=contract_root)
+    if manifest != authenticated_manifest:
+        raise BundleError("bundle manifest changed after committed authentication")
     return manifest
 
 
@@ -2529,6 +2640,12 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--run-dir", type=Path, required=True)
     create.add_argument("--suite", type=Path, required=True)
     create.add_argument("--output", type=Path, required=True)
+    create.add_argument(
+        "--contract-root",
+        type=Path,
+        required=True,
+        help="trusted repository root containing verifier code and assets",
+    )
     create.add_argument(
         "--repo-root",
         type=Path,
@@ -2542,6 +2659,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     verify = commands.add_parser("verify")
     verify.add_argument("--bundle", type=Path, required=True)
+    verify.add_argument(
+        "--contract-root",
+        type=Path,
+        required=True,
+        help="trusted repository root containing verifier code and assets",
+    )
     verify.add_argument("--repo-root", type=Path)
     verify.add_argument("--require-committed", action="store_true")
     return parser
@@ -2555,6 +2678,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_dir=args.run_dir,
                 suite_path=args.suite,
                 output=args.output,
+                contract_root=args.contract_root,
                 profile=args.profile,
                 repo_root=args.repo_root,
             )
@@ -2565,9 +2689,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.require_committed:
                 if args.repo_root is None:
                     raise BundleError("--require-committed requires --repo-root")
-                result = verify_committed_bundle(args.bundle, args.repo_root)
+                result = verify_committed_bundle(
+                    args.bundle,
+                    args.repo_root,
+                    contract_root=args.contract_root,
+                )
             else:
-                result = verify_bundle(args.bundle)
+                result = verify_bundle(
+                    args.bundle, contract_root=args.contract_root
+                )
             if result["profile"]["name"] == DEVELOPMENT_PROFILE:
                 print(f"WARNING: {result['profile']['warning']}", file=__import__("sys").stderr)
             elif not args.require_committed:

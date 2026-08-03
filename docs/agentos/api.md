@@ -115,7 +115,7 @@ int io_policy_info(struct io_policy_info *info);
 
 该接口是只读观测面。普通进程返回安装级 PUBLIC owner，workflow 进程返回带 `IO_POLICY_OWNER_SCOPE_FLAG` 的稳定 scope owner；Orchestrator/Recovery 的前台请求使用 `CONTROL` class，其他 workflow 与 PUBLIC 前台请求使用 `NORMAL`。内核扫描、metadata checkpoint 和 scope reclaim 不伪装成调用 scheduler 的进程，而是显式使用 SYSTEM 或触发 workflow 的 `BACKGROUND` class。owner 在 syscall 或后台 job 开始时捕获，PID 退出、重新 fork 或调度切换不会重置其账本。
 
-预算信用代表一次已经完成的 1 KiB 块设备传输，refill 以 I/O policy tick 为单位：
+预算信用代表一次已提交到设备的 1 KiB 块传输或一次 FLUSH；提交后的失败仍计费，未提交的 capability/range 拒绝不计费。refill 以 I/O policy tick 为单位：
 
 | owner / class | burst | 每 tick refill |
 | --- | ---: | ---: |
@@ -126,12 +126,12 @@ int io_policy_info(struct io_policy_info *info);
 | 每个 retiring workflow / BACKGROUND | 8 | 4 |
 | SYSTEM / SYSTEM | 96 | 48 |
 | SYSTEM / BACKGROUND | 16 | 8 |
-| 前台共享 slice | 32 | 16 |
+| 前台机会流量门 | 560 | 280 |
 | 设备根 bucket | 560 | 280 |
 
-每个可能触盘的 syscall 先取得 owner 或 shared lease，并尝试取得设备根 lease；首个 VirtIO 完成事件提交已有 lease，后续完成事件继续消费本 class 与设备根 token，超额分别形成 owner debt 和 device debt。没有发生物理传输的请求会退款。相同线程中的嵌套文件操作沿用外层归因；退出撤销会清理未提交 lease。owner/class admission 使用各自的 FIFO 等待队列；存在 admission 排队者时，shared grant 按有资格的前台 owner/class cursor 轮转，没有排队者的 fast path 可直接借用 shared slice。`BACKGROUND` 不能借 shared slice。
+每个可能触盘的 syscall 先取得 reserved 或 shared account lease。每次真实 `disk_submit` 是唯一物理计费边界：所选 account lane 与设备根同步扣减，shared 不叠加额外物理容量。无竞争时，前台 owner 在自身 reserved lane 后可通过与设备根同尺寸的 shared gate 借用空闲容量；出现异域活动、排队、retire/quiesce 或既有 lane debt 后停止直接借用。排队 shared grant 按 owner/class cursor 轮转，`BACKGROUND` 不能借 shared。准入时 account endpoint 不带债；reserved lane 只有取得真实 account lease 后，设备端才可为保证份额形成 debt，shared 永不带债。已接纳的有界原子多传输若耗尽 reserved/shared，后续真实提交可形成受请求上界约束的 owner lane debt；owner lease/debt 由 quiescent checkpoint 或 teardown settlement 清偿，未获准请求不得裸透支。全局 device debt 不属于 owner 生命周期：NORMAL/BACKGROUND 非保护 lane 在其存在时被 gate，SYSTEM/CONTROL 保护 lane可以跨越；设备根 tick refill 优先偿还它，有界 request 与 protected aggregate envelope 共同限制上界。没有物理提交的请求退款；掉电测试的 volatile overlay 命中不进入物理计数，写回的每个块和最终 FLUSH 均在统一提交边界独立计费。
 
-设备根不是对所有 class 一刀切的硬总上限。PUBLIC、workflow `NORMAL` 和非保护后台流量必须取得根信用，并在 device debt 清零前等待；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭自己的 owner/class 保留预算前进，但物理完成仍记入 device debt，后续 refill 先偿债。这样普通流量受 560/280 根速率约束，关键恢复/控制路径又不会因 PUBLIC 已耗尽根信用而停顿。编译期 envelope 保守地按 8 槽 lifecycle ledger 的全部 cleanup bucket 验证 PUBLIC、SYSTEM、shared 与 workflow class 的 burst/refill；这只是静态数组容量，不表示可同时 admission 8 个 workflow，也不把保护流量的运行时带债前进描述成硬聚合限额。冻结期 ACTIVE/CLOSING/RETIRING 身份合计不超过 4。
+设备根是物理机会容量的 560/280 envelope；各 owner/class 保留承诺的最坏总和分别为 528/264，编译期独立验证其不超过设备根，shared gate 也单独不超过设备根，二者不相加，因为 shared 每次与设备根同步扣减。准入 reservation 的 account endpoint 永不带债；reserved lane 的设备端只可由真实 account lease 背书带债。完成首笔 reservation 的有界原子请求可在后续真实传输中产生有界 owner lane debt 和 global device debt：前者由 checkpoint/settlement 清偿，后者可跨 owner lifecycle，并由设备根 refill 优先偿还。冻结期 ACTIVE/CLOSING/RETIRING 身份合计不超过 4；静态断言为 8 槽 ledger 保留全部 cleanup lane，不表示可同时 admission 8 个 workflow。
 
 scheduler 每轮先把 `current_thread` 指向 idle context，安装 kernel trap 向量，短暂开启中断后再执行后台维护和选择下一线程。这个固定交付窗口不是按进程或 syscall 加白名单；它保证唯一 runnable 线程反复在内核态 pipe 条件路径 `yield()`、长期不返回用户态时，pending timer/device 中断仍能推进 I/O debt、token refill 和设备完成。中断窗口结束后 scheduler 再关中断进入两级选择：先严格轮转 active `resource_domain_id`，再从选中域的线程队列选择一个候选。这里的 `resource_domain_id` 仅是 CPU 调度分区索引，不是配额账户。
 
@@ -145,19 +145,20 @@ scheduler 每轮先把 `current_thread` 指向 idle context，安装 kernel trap
 
 | 字段 | 说明 |
 | --- | --- |
-| `version` | 当前为 `IO_POLICY_VERSION=3` |
+| `version` | 当前为 `IO_POLICY_VERSION=5` |
 | `struct_size` | 当前内核完整 `struct io_policy_info` 的字节数；调用者收到的前缀长度仍由它传入的 `user_size` 决定 |
 | `owner` / `io_class` | 调用者的稳定 owner 与前台 class |
-| `tokens` / `leased` / `debt` | 当前 class 可用信用、尚未由完成事件提交的 lease 和待偿还超额传输 |
+| `tokens` / `leased` / `debt` | 当前 class 可用信用、尚未在真实 `disk_submit` 边界结算的 lease 和待偿还超额传输 |
 | `class_burst` / `class_refill` | 当前 class 配置 |
-| `shared_tokens` / `shared_leased` | 前台共享 slice 的可用与已租信用 |
-| `device_burst` / `device_refill` | 普通流量设备根 bucket 的 560/280 配置；保护流量可带债前进 |
-| `device_tokens` / `device_leased` / `device_debt` | 设备根可用信用、未提交 lease 和累计待偿还传输；其中 debt 也包含保护流量在根信用耗尽后的实际完成 |
+| `shared_tokens` / `shared_leased` | 前台机会流量门的可用与已租信用；它与设备根同时扣减，不是额外物理容量 |
+| `device_burst` / `device_refill` | 设备根 bucket 的 560/280 配置；reserved 准入只允许设备端由真实 account lease 背书形成 debt；已接纳的有界原子请求可形成受请求上界约束的 owner lane debt 与可跨 owner lifecycle、由设备根 refill 清偿的 global device debt |
+| `device_tokens` / `device_leased` / `device_debt` | 设备根可用信用、未提交 lease 和累计待偿还传输；每次真实 `disk_submit` 是唯一计费边界，shared 与设备根同步扣减且不叠加容量 |
 | `waiters` | admission 与 debt waiter 总数 |
 | `admission_waiters` / `debt_waiters` / `admission_granted` | 两阶段等待队列及当前 FIFO baton 状态 |
 | `admissions` / `throttles` / `waits` / `refills` | owner 聚合的接纳、限流、睡眠和补充计数 |
 | `reserved_grants` / `shared_grants` | owner 保留信用和共享信用的累计授予数 |
-| `physical_reads` / `physical_writes` | 在 VirtIO 完成路径按稳定 owner 累计的真实块传输 |
+| `physical_reads` / `physical_writes` | 在真实 `disk_submit` 边界按稳定 owner 累计的块传输；完成失败另记 `failed_transfers`，不撤销已经发生的物理提交 |
+| `physical_flushes` / `failed_transfers` | 已提交的真实 FLUSH 数，以及提交后失败的 read/write/FLUSH 数；capability/range 拒绝和 volatile overlay 命中不计入 |
 | `unreserved_transfers` | 未处于 syscall/background reservation 的防御性计数；正常用户 I/O 应保持不增长 |
 | `cache_resident` / `cache_floor` / `cache_cap` | 当前 owner 的 buffer cache 驻留数、受保护下限和稳态上限；必要的 transient 引用可暂时越过 cap，归零即失效 |
 | `cache_hits` / `cache_misses` / `cache_evictions` | owner 聚合 cache 观测 |
@@ -315,7 +316,7 @@ raw syscall 使用 sized-prefix：`user_size` 至少为 8 字节，内核只复�
 
 ### 生命周期和配额
 
-scope 状态序列是 ACTIVE -> CLOSING -> RETIRING -> FREE。权威 `workflow_lifecycle` ledger 固定 8 槽，key 为 `(id,generation)`；自然耗尽可以从 ACTIVE 进入 RETIRING，强制关闭先进入 CLOSING。成员数降为 0 后，reaper 清理 metadata、dependency、action history、edit lease/version、digest cache、audit、span prefetch、IPC route 和普通文件。文件查询没有内核结果 cache；用户 Context cache 随所属 Agent 地址空间 teardown。只有 lifecycle 成员、退休工作、STORAGE usage 与 I/O lease/debt 全部归零，槽才回到 FREE，并在下一次使用时递增 generation；generation 耗尽时拒绝复用。`vfs_scope_refs[NPROC]` 仅用于 VFS 引用/清理，不是身份 ledger。
+scope 状态序列是 ACTIVE -> CLOSING -> RETIRING -> FREE。权威 `workflow_lifecycle` ledger 固定 8 槽，key 为 `(id,generation)`；自然耗尽可以从 ACTIVE 进入 RETIRING，强制关闭先进入 CLOSING。成员数降为 0 后，reaper 清理 metadata、dependency、action history、edit lease/version、digest cache、audit、span prefetch、IPC route 和普通文件。文件查询没有内核结果 cache；用户 Context cache 随所属 Agent 地址空间 teardown。只有 lifecycle 成员、退休工作、STORAGE usage 与 owner-scoped I/O request/lease/lane debt 全部归零，槽才回到 FREE，并在下一次使用时递增 generation；global device debt 不属于该槽，允许跨 owner lifecycle 并由设备根 refill 偿还；generation 耗尽时拒绝复用。`vfs_scope_refs[NPROC]` 仅用于 VFS 引用/清理，不是身份 ledger。
 
 当前固定 workflow 边界为 ACTIVE+CLOSING+RETIRING 最多 4 个、lifecycle ledger 8 槽。RETIRING 在 catalog 回收完成前继续占用这 4 个准入槽之一，不能由新 generation 提前复用。进程、线程、file object、block/inode、buffer cache 与 Agent state page 的容量由 generation-safe EXEC/STORAGE account 和 ordinary/reserved policy 控制。metadata catalog 总计 512 条：SYSTEM 固定 64 条，4 个 workflow 分区各固定 112 条；每个 workflow 的自动扫描物化视图最多占 96 条，余下 16 条保留给显式 metadata。catalog 是有界索引而不是文件系统 inode 的 backing lease，workflow inode 账户使用独立的 STORAGE policy 上限。该设计不允许 catalog 跨 scope 借用，不计算全局 union/max，也不增加 catalog resource kind 或 metadata envelope 账本。dependency 仍为每 scope 16 条、action history 8 条、edit lease 8 条、span prefetch 8 条、audit 128 条；action status 一次原子批次独立限制为 112 条，超出时在修改任何记录前返回可恢复的 `NO_SPACE`。lifecycle 改变、键冲突与不可确定提交分别保留可重试、`CONFLICT` 与 `INDETERMINATE` 状态。
 

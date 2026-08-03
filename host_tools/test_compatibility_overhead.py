@@ -254,6 +254,7 @@ def formal_shell_campaign(
     }
     tools.update(
         {
+            "assembler": {"path": "/tools/riscv/bin/riscv-none-elf-as"},
             "compiler": {"path": "/tools/riscv/bin/riscv-none-elf-gcc"},
             "host_cc": {"path": "/tools/host/bin/cc"},
         }
@@ -524,7 +525,7 @@ class CompatibilityOverheadTests(unittest.TestCase):
         self.assertEqual(environment["TEMP"], r"R:\tmp\agentos-formal")
         self.assertEqual(
             environment["PATH"],
-            "/tools/core:/tools/riscv/bin:/tools/host/bin",
+            "/tools/riscv/bin:/tools/core:/tools/host/bin",
         )
         self.assertNotEqual(environment["PATH"], os.environ.get("PATH", ""))
         command = _formal_shell_command("printf ready", campaign, 30)
@@ -552,6 +553,13 @@ class CompatibilityOverheadTests(unittest.TestCase):
         del missing["platform"]["windows_system_drive"]
         with self.assertRaisesRegex(CompatibilityRunError, "system drive"):
             _formal_shell_environment(missing)
+
+        missing_assembler = formal_shell_campaign("native-msys2")
+        del missing_assembler["platform"]["tools"]["assembler"]
+        with self.assertRaisesRegex(
+            CompatibilityRunError, "lacks a required compatibility tool"
+        ):
+            _formal_shell_environment(missing_assembler)
 
         relative_temp = formal_shell_campaign("native-msys2")
         relative_temp["platform"]["windows_temporary_directory"] = "tmp"
@@ -596,6 +604,7 @@ class CompatibilityOverheadTests(unittest.TestCase):
         domain = "native-msys2" if sys.platform == "cygwin" else "native-linux"
         campaign = formal_shell_campaign(domain)
         executable_names = {
+            "assembler": "bash",
             "bash": "bash",
             "env": "env",
             "make": "make",

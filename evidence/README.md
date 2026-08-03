@@ -68,7 +68,7 @@ ANSI 控制序列或宿主显示差异，不能替代 canonical transcript。exa
 派生 CSV 和 manifest 引用均绑定 canonical 文件；需要复盘传输时才另外查看 raw console。
 
 `full-verify` 根据实际执行的步骤记录步骤名、耗时和产物，并在全部步骤成功后原子发布
-schema v6 的 `verification-summary.json`。summary 内的步骤契约使用规范 JSON 重算哈希，
+schema v8 的 `verification-summary.json`。summary 内的步骤契约使用规范 JSON 重算哈希，
 离线验证不依赖未交付的临时文件。summary 不存在就没有 ready 证据；发布失败只会留下
 旁路 `.failed` 诊断目录，不会留下目标 release 目录。
 
@@ -84,7 +84,7 @@ job/runner、trace 和 artifact。下载端把 artifact ZIP 当作不可信输�
 symlink/特殊文件、加密或不支持的压缩及超出数量、大小、展开量和压缩比预算的成员；随后要求
 唯一 trace marker 绑定 canonical attestation，attestation 身份与 API 身份逐字段一致，清单与
 逐字节 SHA256 一致，并在本地同一 C checkout 上再次执行 job 语义验证。QEMU job 的投影复用
-schema v6 发布包的共享语义注册表；Host job 复验其精确清单和具名预算完成标记。
+schema v8 发布包的共享语义注册表；Host job 复验其精确清单和具名预算完成标记。
 
 组合包的 manifest 仍只标为 `provenance-attached`，不声称 GitLab provider 的密码学签名、
 artifact 永久不可变或对已控制 Runner 的防护；未绑定的本地包固定标为 `not-attached`。
@@ -99,21 +99,31 @@ artifact 永久不可变或对已控制 Runner 的防护；未绑定的本地包
 `delivery` 将 `source_commit` 固定为 C，并以 `SELF` 表示必须解析为实际承载该包的 E；任何
 越界改动都必须形成新的 C 并重新采集。
 
-代码冻结、提交且工作区干净后执行：
+代码冻结、提交且工作区干净后，优先以
+`AGENT_TEST_DURATION_PROFILE=local-e3 make evaluation-full-verify` 建立并复核受信原生 MSYS2
+E3 child domain。下面的直接 collector 命令只应在该已验证 child domain 中执行：
 
 ```bash
 python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py collect \
+  --agent-test-duration-profile local-e3 \
   --output "evidence/releases/$(date -u +%Y%m%d)-$(git rev-parse --short=12 HEAD)"
 ```
+
+当前校准状态若仍为 `provisional_requires_full_suite`，`local-e3` 必须在 QEMU 前 fail closed，
+不得借用历史 baseline/limit。普通 Linux、WSL 和普通 Runner 应显式选择
+`--agent-test-duration-profile none`；它仍保存完整 18-case、语义、Guest 日志和 timing 行清单，
+但 manifest 中的本地 duration baseline/limit/ratio 明确为不适用，不构成本地 E3 时长证明。
 
 聚合命令有 5 小时的进程组级硬上限；各 case 和 runner 仍使用更短的独立 deadline。
 该总上限只为容纳串行 recovery/allocator 矩阵，不能把无期限挂起误当成慢速成功；实际采用的
 上限同时写入 manifest 和 command CSV，离线复验要求两处一致。
 
-当前受管源码指纹已由 `scripts/agent_test_calibration.py collect` 在冻结提交 `04c1e6652324` 的
-clean detached worktree 上串行执行三轮完整 18-case。样本为 `287.9945528s`、`283.0201263s`、
+历史提交 `04c1e6652324` 曾由 `scripts/agent_test_calibration.py collect` 在对应 clean detached
+worktree 上串行执行三轮完整 18-case。样本为 `287.9945528s`、`283.0201263s`、
 `280.9651484s`，中位基线 `283.0201263s`，确定性上限 `297.172s`；71 个文件保存在
-`evidence/calibrations/04c1e6652324/`。timing 从 commit/tree、随机 nonce、可执行文件身份、
+`evidence/calibrations/04c1e6652324/`，这些数值仅适用于该提交和源码指纹。当前候选的
+`ci/kernel-budgets.json` 明确保持 `provisional_requires_full_suite`，没有沿用该基线、上限、样本或
+指纹；必须在最终源码 C 冻结后重新采集三轮，才可恢复当前候选的时长门。timing 从 commit/tree、随机 nonce、可执行文件身份、
 镜像/Guest 日志哈希、真实 monotonic 区间和退出结果绑定的 attestations 重建。校准包只标记为未签名本地 E3 复现证据，
 不是 release bundle，更不是 GitLab CI 或 E4 attestation；它证明包内字节可重放和来源绑定，不能
 证明掌控本机 checkout、工具与输出的操作者诚实。production collector 没有公式/fixture 通道，
@@ -126,7 +136,7 @@ clean detached worktree 上串行执行三轮完整 18-case。样本为 `287.994
 
 ```bash
 python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py \
-  verify evidence/releases/<bundle>
+  verify evidence/releases/<bundle> --contract-root <clean-checkout-of-C>
 ```
 
 上式验证独立包的字节、引用和语义，但尚不能证明它已经按 C→E 规则提交。提交 E 并保持
@@ -138,9 +148,11 @@ python3 -I -S scripts/trusted-python-entry.py \
   --bundle evidence/releases/<bundle> --repo-root .
 ```
 
-该通用 committed verifier 与 portable verifier 都只接受当前 evaluation bundle schema
-v5，并通过跨模块回归锁定同一版本；浮点、布尔、字符串版本以及未发布的旧 schema 均拒绝，
-避免两个权威入口再次发生版本漂移。
+当前 formal producer 和 portable verifier 固定使用 full-evidence v8；portable 入口不会把旧包
+升级为当前证据。`evaluation-package` 另行使用 evaluation-bundle format v6。committed verifier
+为复验已经提交的历史证据，兼容 evaluation-bundle v5/v6 与完整的 full-evidence v6/v7/v8，并按各自
+格式执行严格字段与 Git 关系校验。浮点、布尔、字符串版本以及未发布版本一律拒绝，避免生产
+入口和复验入口再次发生版本漂移。
 
 远程 CI 完成后，现场抓取并绑定到一个新目录，不改写本地原包，也不保存 token：
 
@@ -151,7 +163,7 @@ python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py 
   --output evidence/releases/<combined-bundle> \
   --gitlab-url https://gitlab.example \
   --project-id <project-id> --pipeline-id <pipeline-id> \
-  --token-file /secure/path/gitlab-token.txt
+  --token-file /secure/path/gitlab-token.txt --contract-root <clean-checkout-of-C>
 ```
 
 无 QEMU 自测入口：

@@ -50,7 +50,7 @@ AgentOS 专项构建和测试命令见 [agentos/verification.md](agentos/verific
 make ci-check
 ```
 
-它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量，以及线程栈与独立 64 KiB boot stack 的调用图和容量。owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合；metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还受聚合 source/text/BSS 预算约束，不能靠拆文件迁移绕过增长门。受控图不是完整 uCore 调用图。Agent 套件为 18 case；当前受管源码指纹的三轮完整 timing 在 `04c1e6652324` 上校准为 `287.9945528s`、`283.0201263s`、`280.9651484s`，中位基线 `283.0201263s`、上限 `297.172s`。任何受管输入变化都会在普通完整 QEMU 套件前使策略重新 fail closed。
+它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量，以及线程栈与独立 64 KiB boot stack 的调用图和容量。owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合；metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还受聚合 source/text/BSS 预算约束，不能靠拆文件迁移绕过增长门。受控图不是完整 uCore 调用图。Agent 套件为 18 case；`04c1e6652324` 的三轮 timing 只属于该历史提交。当前候选的时长门为 `provisional_requires_full_suite`，冻结并重新校准前不携带旧 baseline、limit、samples 或 fingerprint。
 
 双目标运行：
 
@@ -228,6 +228,12 @@ dual_platform_reader_compare: ... status=ready
 ```
 
 这条命令的意义是：用同一批 seeded 请求分别运行共享安全基底的 uCore 对照目标和 AgentOS-uCore 目标，并检查两个目标是否实际跑完同一批科研平台程序、围绕同一设定的模拟流程输出可比较结果。该流程包含数据准备、比对处理、结果分析、报告生成和归档交付；脚本会从两个文件系统镜像中提取 `rp_*` 状态文件，并执行状态文件对照：plain target 产出的状态文件必须全部能在 AgentOS target 中找到；只有普通的非证据状态兼容记录才要求 AgentOS 保留同一标识和状态。提取 summary 不是路径权威，必须与目录内单层、非链接、名字匹配 `rp_[a-z0-9_]+` 的普通文件精确相等，目录穿越、链接、重复或计数不符都失败。`demo_reference`/`demo_expected` 目录与 `runtime_verified` 记录从兼容性计数中排除。参考目录只能包含 target-specific registry 登记的文件和 `(destination, anchor)` 记录，并在去注释的源码中精确绑定唯一 owner；缺失、未知、重复、跨 owner 预发布和 reference/runtime 身份混用都会失败。Plain seeded 程序清单还要同时绑定 seeded profile、QEMU 日志和 `rp_orch_timing` 的 orchestrator/launcher、程序顺序、字节数、hash 与名称摘要。AgentOS target 可以额外增加内核证据文件和内核观测字段；`rp_agentos_mainflow` 只提供 11 个唯一、完整、有序的未验证 telemetry 阶段并覆盖 12 类内核事实，Host 再从安全状态清单独立复验每个来源的唯一 claim、成功状态、阶段字段、byte count 和 hash。任何 Guest runtime 验证回执都被拒绝。随后脚本会把两个目标的真实状态文件交给状态渲染工具，检查 HTML 和 API JSON 能否从同一批 `rp_*` 文件生成，并确认 AgentOS 目标多出的 Context、metadata、事件、ledger、真实任务和文件编辑租约字段可被读取。最后比较渲染摘要，确认两个目标生成同一套结果入口，AgentOS target 的状态产物和 API JSON 不少于 plain target。两侧共有的通用安全加固不是本组对照的 AgentOS 增量。
+
+`rp_ack` 与 `rp_tool` 是多个科研平台程序共享的追加日志。两个目标的 planner 都只通过
+`rp_append_file()` 写入后缀，不再在启动时截断共享文件；追加 helper 以 `O_RDWR | O_CREATE`
+打开并在写入前复核既有前缀，因此程序调度顺序不会丢弃先行 writer 的记录，也不会把一次
+planner 启动放大成全文件 truncate/reclaim。`scripts/test-rp-state-append.py` 同时锁定两侧源码和
+ASan/UBSan 下的追加行为。
 
 双目标状态与 Host 执行回执不混用。每侧 complete-state ZIP 只含 `extract-summary.json` 和其中精确列出的纯 Guest `rp_*` 普通文件，禁止 `rp_host_run_result`；Plain/AgentOS Host run receipt 分别作为 `dual-plain-host-run-result.state` 和 `dual-agentos-host-run-result.state` 独立 raw artifact。receipt 使用 `sha256-inventory-v1` 规范绑定排序文件名、文件数、长度与全部字节，Reader 和比较器均重算校验；Host LLM relay 的变化只进入事务化差异 overlay，不改变该 Guest generation。离线验证安全解包，以 `min_common_files=240`、两份 receipt、seeded summary 和两份 Guest 日志显式重放 `compare_state()`，要求结果等于 `dual-state-compare.json`，并逐字核对 Mainflow、program ledger 与 backend 原件。普通 `make dual-platform-run` 只保留状态目录和 Host sidecar，只有最终采集启用的 `full-verify` evidence mode 才生成并发布 complete-state ZIP。
 
@@ -465,7 +471,7 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make ci-check
 ```
 
-旧 16-case 校准、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据，不能外推到当前 18-case 套件或 profile v5。提交 `31d4ddf53695`、`814021ab9dac` 及其他旧候选的 timing 同样只证明各自提交。当前受管源码指纹已由 `04c1e6652324` 的三轮新样本校准；独立 Context-sync/WAIT_ATOMIC prelude 不计入这 18 行。`make full-verify` 会动态串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner。GitLab 远端必选集合恰好是同一 C 的 1 个 Host-class job 和 8 个 QEMU-class jobs；每项都要生成绑定 checkout/CI 身份、artifact 清单和语义结果的 attestation，并由下载端以 API 身份、唯一 trace marker、安全 ZIP、逐文件哈希和共享 registry 离线复验。allocator job 还必须交付并复验固定的 `fs-allocator-evidence.tar`，不能只凭合并文本日志判定。本地 clean full-verify 是否完成及是否已有 E3 只由 `INDEX.md` 和 bundle manifest 判定，不在本文硬编码；远端没有可用 Runner 时仅 E4 不可用。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
+旧 16-case 校准、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据，不能外推到当前 18-case 套件或 profile v5。提交 `31d4ddf53695`、`814021ab9dac`、`04c1e6652324` 及其他旧候选的 timing 同样只证明各自提交；独立 Context-sync/WAIT_ATOMIC prelude 不计入这 18 行。`make full-verify` 会动态串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner。GitLab 远端必选集合恰好是同一 C 的 1 个 Host-class job 和 8 个 QEMU-class jobs；每项都要生成绑定 checkout/CI 身份、artifact 清单和语义结果的 attestation，并由下载端以 API 身份、唯一 trace marker、安全 ZIP、逐文件哈希和共享 registry 离线复验。allocator job 还必须交付并复验固定的 `fs-allocator-evidence.tar`，不能只凭合并文本日志判定。本地 clean full-verify 是否完成及是否已有 E3 只由 `INDEX.md` 和 bundle manifest 判定，不在本文硬编码；远端没有可用 Runner 时仅 E4 不可用。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
 
 ## 内核机制说明
 

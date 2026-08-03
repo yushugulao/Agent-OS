@@ -37,7 +37,8 @@ from render_evaluation_dashboard import (
     _bootstrap_interval,
     _overview_extension_slots,
     _read_evidence_file,
-    render,
+    main as dashboard_main,
+    render as render_dashboard,
     validate_summary,
 )
 from evaluation_contract import derive_acceptance_gates
@@ -54,6 +55,7 @@ from evaluation_scenario import (
 
 
 HOST_TOOLS = Path(__file__).resolve().parent
+CONTRACT_ROOT = HOST_TOOLS.parent
 ASSETS = HOST_TOOLS / "assets"
 TEST_RUN_PLAN_BYTES = b'{"kind":"dashboard-test-run-plan","schema_version":1}\n'
 TEST_RUN_PLAN_SHA256 = hashlib.sha256(TEST_RUN_PLAN_BYTES).hexdigest()
@@ -63,6 +65,10 @@ COMPETITION_CLAIMS = {
         "required_status": "supported",
     }
 }
+
+
+def render(summary_path: Path, output_dir: Path) -> None:
+    render_dashboard(summary_path, output_dir, contract_root=CONTRACT_ROOT)
 
 
 class _LocalLinkCollector(HTMLParser):
@@ -1181,6 +1187,50 @@ class DashboardContractTests(unittest.TestCase):
             self.assertEqual(rows[0]["unit"], "us/query")
             self.assertEqual(rows[0]["n"], "7")
             self.assertEqual(rows[0]["evidence_ids"], "raw-perf")
+
+    def test_render_uses_explicit_contract_root_for_suite_and_assets(self) -> None:
+        summary = fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            contract_root = root / "trusted-contract"
+            (contract_root / "ci").mkdir(parents=True)
+            (contract_root / "host_tools" / "assets").mkdir(parents=True)
+            shutil.copyfile(
+                CONTRACT_ROOT / "ci" / "evaluation-suite.json",
+                contract_root / "ci" / "evaluation-suite.json",
+            )
+            for name in ("evaluation-dashboard.css", "evaluation-dashboard.js"):
+                shutil.copyfile(
+                    ASSETS / name,
+                    contract_root / "host_tools" / "assets" / name,
+                )
+            trusted_css = contract_root / "host_tools" / "assets" / "evaluation-dashboard.css"
+            trusted_css.write_bytes(trusted_css.read_bytes() + b"\n/* explicit-contract-root */\n")
+
+            run = root / "run"
+            run.mkdir()
+            source = write_render_input(run, summary)
+            output = root / "site"
+            render_dashboard(source, output, contract_root=contract_root)
+
+            self.assertEqual(
+                (output / "assets" / "evaluation-dashboard.css").read_bytes(),
+                trusted_css.read_bytes(),
+            )
+            self.assertEqual(
+                self.contract_replay_mock.call_args.args[0],
+                contract_root.resolve(strict=True) / "ci" / "evaluation-suite.json",
+            )
+            self.assertEqual(
+                self.contract_replay_mock.call_args.kwargs["contract_root"],
+                contract_root.resolve(strict=True),
+            )
+
+    def test_cli_requires_explicit_contract_root(self) -> None:
+        with mock.patch.object(sys, "stderr"):
+            with self.assertRaises(SystemExit) as raised:
+                dashboard_main(["summary.json", "dashboard"])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_optional_guardrail_slots_consume_normalized_verified_fragments(self) -> None:
         resource = _resource_stability_summary(

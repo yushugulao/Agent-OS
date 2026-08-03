@@ -11,7 +11,7 @@ import shutil
 import stat
 import subprocess
 from pathlib import Path, PureWindowsPath
-from typing import Any
+from typing import Any, Callable
 
 from strict_json import read_strict_json
 
@@ -55,8 +55,10 @@ MAX_COMMITTED_FILE_BYTES = 64 << 20
 MAX_COMMITTED_TOTAL_BYTES = 256 << 20
 MANIFEST_SOURCE_FIELDS = {
     ("agentos-evaluation-evidence-bundle", 5): "source_commit",
+    ("agentos-evaluation-evidence-bundle", 6): "source_commit",
     (None, 6): "commit",
     (None, 7): "commit",
+    (None, 8): "commit",
 }
 FULL_EVIDENCE_FIELDS = {
     "authenticity",
@@ -72,17 +74,16 @@ FULL_EVIDENCE_FIELDS = {
     "status",
     "verification_summary",
 }
+FULL_EVIDENCE_FIELDS_BY_SCHEMA = {
+    6: FULL_EVIDENCE_FIELDS,
+    7: FULL_EVIDENCE_FIELDS,
+    8: FULL_EVIDENCE_FIELDS | {"duration_attestation"},
+}
 DOCUMENTATION_DESCENDANT_FILES = {"README.md", "evidence/README.md"}
 DOCUMENTATION_DESCENDANT_PREFIX = "docs/"
 GIT_SYSTEM_ENVIRONMENT_KEYS = (
-    "COMSPEC",
-    "PATHEXT",
-    "SYSTEMDRIVE",
-    "SYSTEMROOT",
-    "TEMP",
-    "TMP",
-    "TMPDIR",
-    "WINDIR",
+    "COMSPEC", "PATHEXT", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP",
+    "TMPDIR", "WINDIR",
 )
 GIT_FIXED_ENVIRONMENT = {
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -100,32 +101,29 @@ class DeliveryContractError(RuntimeError):
     pass
 
 
-def _safe_directory(path: Path, label: str) -> Path:
+def _checked_host_path(
+    operation: Callable[[Path], Path], path: Path, label: str, failure: str
+) -> Path:
     try:
-        return require_safe_directory(path)
+        return operation(path)
     except (OSError, ValueError) as error:
-        raise DeliveryContractError(f"{label} is missing or link-backed: {path}") from error
+        raise DeliveryContractError(f"{label} {failure}: {path}") from error
+
+
+def _safe_directory(path: Path, label: str) -> Path:
+    return _checked_host_path(require_safe_directory, path, label, "is missing or link-backed")
 
 
 def _safe_regular_file(path: Path, label: str) -> Path:
-    try:
-        return require_regular_file(path)
-    except (OSError, ValueError) as error:
-        raise DeliveryContractError(f"{label} is missing or link-backed: {path}") from error
+    return _checked_host_path(require_regular_file, path, label, "is missing or link-backed")
 
 
 def _reject_link_chain(path: Path, label: str) -> Path:
-    try:
-        return reject_link_components(path)
-    except (OSError, ValueError) as error:
-        raise DeliveryContractError(f"{label} is link-backed: {path}") from error
+    return _checked_host_path(reject_link_components, path, label, "is link-backed")
 
 
 def _ensure_directory(path: Path, label: str) -> Path:
-    try:
-        return ensure_safe_directory(path)
-    except (OSError, ValueError) as error:
-        raise DeliveryContractError(f"{label} is link-backed: {path}") from error
+    return _checked_host_path(ensure_safe_directory, path, label, "is link-backed")
 
 
 def _new_file_path(path: Path, label: str) -> Path:
@@ -832,13 +830,6 @@ def verify_committed_delivery(
     )
 
 
-def _documentation_descendant_path(path: str) -> bool:
-    return (
-        path in DOCUMENTATION_DESCENDANT_FILES
-        or path.startswith(DOCUMENTATION_DESCENDANT_PREFIX)
-    )
-
-
 def _verify_documentation_descendants(
     executable: str,
     repo: Path,
@@ -869,7 +860,11 @@ def _verify_documentation_descendants(
         )
     except _git_history.GitHistoryError as error:
         raise DeliveryContractError(str(error)) from error
-    forbidden = sorted(path for path in changed if not _documentation_descendant_path(path))
+    forbidden = sorted(
+        path for path in changed
+        if path not in DOCUMENTATION_DESCENDANT_FILES
+        and not path.startswith(DOCUMENTATION_DESCENDANT_PREFIX)
+    )
     if forbidden:
         raise DeliveryContractError(
             f"E..HEAD must be documentation-only; forbidden paths: {forbidden}"
@@ -964,8 +959,9 @@ def verify_manifest_delivery(
         raise DeliveryContractError(
             "bundle manifest kind/schema is unsupported by verify-committed"
         )
-    if identity in {(None, 6), (None, 7)} and (
-        set(manifest) != FULL_EVIDENCE_FIELDS or manifest.get("status") != "ready"
+    expected_full_fields = FULL_EVIDENCE_FIELDS_BY_SCHEMA.get(schema_version)
+    if identity[0] is None and (
+        set(manifest) != expected_full_fields or manifest.get("status") != "ready"
     ):
         raise DeliveryContractError(f"full-evidence schema v{schema_version} manifest is not ready or differs")
     source_commit = manifest.get(source_field)

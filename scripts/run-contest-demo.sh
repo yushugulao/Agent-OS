@@ -33,18 +33,27 @@ rm -f "${OUTPUT_DIR}"/*-qemu.log "${OUTPUT_DIR}"/*-kernel \
 build_and_run() {
 	local init_proc="$1"
 	local label="$2"
+	local challenge="${3:-}"
+	local chapter="agent"
 	local log_file="${OUTPUT_DIR}/${label}-qemu.log"
+	local -a challenge_arg=()
+	if [[ "${init_proc}" == "agenteval_ucore" ]]; then
+		chapter="agent_eval"
+	fi
+	if [[ -n "${challenge}" ]]; then
+		challenge_arg=("AGENT_EVAL_CHALLENGE_HEX=${challenge}")
+	fi
 
 	echo "[contest-demo] 构建隔离 Guest: ${init_proc}"
 	rm -f nfs/fs.img nfs/fs-copy.img os/initproc.S build/os/initproc.o
 	"${MAKE_TOOL}" --no-print-directory -s -rR -f Makefile nfs/fs.img \
 		TOOLPREFIX="${TOOLPREFIX}" PYTHON_BIN="${PYTHON_BIN}" \
-		HOST_CC="${HOST_CC:-cc}" CHAPTER=agent \
-		"CH_TESTS=${init_proc}" FUNCTIONAL_REVIEW_BUILD=1
+		HOST_CC="${HOST_CC:-cc}" CHAPTER="${chapter}" \
+		"CH_TESTS=${init_proc}" "${challenge_arg[@]}" FUNCTIONAL_REVIEW_BUILD=1
 	"${MAKE_TOOL}" --no-print-directory -s -rR -f Makefile build \
 		TOOLPREFIX="${TOOLPREFIX}" PYTHON_BIN="${PYTHON_BIN}" \
-		LOG=error INIT_PROC="${init_proc}" CHAPTER=agent \
-		FUNCTIONAL_REVIEW_BUILD=1
+		LOG=error INIT_PROC="${init_proc}" CHAPTER="${chapter}" \
+		"${challenge_arg[@]}" FUNCTIONAL_REVIEW_BUILD=1
 	cp build/kernel "${OUTPUT_DIR}/${label}-kernel"
 	cp nfs/fs.img "${OUTPUT_DIR}/${label}-fs.img"
 	cp nfs/fs.img nfs/fs-copy.img
@@ -59,17 +68,14 @@ build_and_run() {
 		--qemu "${QEMU}"
 }
 
-echo "[contest-demo] 1/5 清理并准备完全离线的真实 QEMU 演示"
+echo "[contest-demo] 1/4 清理并准备完全离线的真实 QEMU 演示"
 "${MAKE_TOOL}" --no-print-directory -s -rR -f Makefile clean \
 	FUNCTIONAL_REVIEW_BUILD=1
 
-echo "[contest-demo] 2/5 动态验证任务 1-5"
-build_and_run agentfinal_ucore functional
+echo "[contest-demo] 2/4 动态验证任务 1-5 与题面路径索引对照"
+build_and_run agenteval_ucore evaluation "${run_id}"
 
-echo "[contest-demo] 3/5 采集真实 metadata 对照计时"
-build_and_run agentbench_ucore benchmark
-
-echo "[contest-demo] 4/5 动态运行任务 6 多 Agent 恢复场景"
+echo "[contest-demo] 3/4 动态运行任务 6 短版多 Agent 恢复场景"
 build_and_run labdemo_ucore lab
 
 finished_seconds="$("${PYTHON_BIN}" -I -S -c \
@@ -78,20 +84,17 @@ elapsed_seconds="$("${PYTHON_BIN}" -I -S -c \
 	'import sys; print(float(sys.argv[2]) - float(sys.argv[1]))' \
 	"${started_seconds}" "${finished_seconds}")"
 
-echo "[contest-demo] 5/5 从本轮原始 Guest 日志核验并生成离线报告"
+echo "[contest-demo] 4/4 从本轮原始 Guest 日志核验并生成离线报告"
 "${PYTHON_BIN}" -I -S scripts/trusted-python-entry.py \
 	host_tools/contest_demo.py render \
 	--source-root . \
-	--functional-log "${OUTPUT_DIR}/functional-qemu.log" \
-	--benchmark-log "${OUTPUT_DIR}/benchmark-qemu.log" \
+	--evaluation-log "${OUTPUT_DIR}/evaluation-qemu.log" \
 	--lab-log "${OUTPUT_DIR}/lab-qemu.log" \
 	--run-id "${run_id}" \
 	--commit "${commit}" \
 	--elapsed-seconds "${elapsed_seconds}" \
-	--artifact "${OUTPUT_DIR}/functional-kernel" \
-	--artifact "${OUTPUT_DIR}/functional-fs.img" \
-	--artifact "${OUTPUT_DIR}/benchmark-kernel" \
-	--artifact "${OUTPUT_DIR}/benchmark-fs.img" \
+	--artifact "${OUTPUT_DIR}/evaluation-kernel" \
+	--artifact "${OUTPUT_DIR}/evaluation-fs.img" \
 	--artifact "${OUTPUT_DIR}/lab-kernel" \
 	--artifact "${OUTPUT_DIR}/lab-fs.img" \
 	--output-dir "${OUTPUT_DIR}"

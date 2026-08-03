@@ -20,6 +20,29 @@ DEFAULT_MAX_WALK_BYTES = 1 << 30
 DEFAULT_MAX_WALK_DEPTH = 64
 
 
+def _regular_file_identity(file_info: os.stat_result) -> tuple[int, int, int]:
+    """Return a stable path/descriptor identity on the current host."""
+
+    # CPython 3.12+ exposes Windows creation time as st_birthtime.  On some
+    # Windows releases Path.lstat() reports that value through st_ctime while
+    # os.fstat() reports the last-write time through st_ctime.  Comparing the
+    # two ctime values therefore rejects an unchanged file.  Creation time is
+    # the stable replacement marker on Windows; POSIX keeps the stronger ctime
+    # marker, which also changes when an inode is relinked.
+    identity_time = (
+        file_info.st_birthtime_ns
+        if os.name == "nt" and hasattr(file_info, "st_birthtime_ns")
+        else file_info.st_ctime_ns
+    )
+    return (file_info.st_dev, file_info.st_ino, identity_time)
+
+
+def _regular_file_content_stamp(file_info: os.stat_result) -> tuple[int, int]:
+    """Return metadata that changes when an opened file is rewritten."""
+
+    return (file_info.st_size, file_info.st_mtime_ns)
+
+
 def absolute_lexical_path(path: Path) -> Path:
     """Return an absolute path without resolving a link component."""
 
@@ -216,16 +239,13 @@ def read_regular_file(
     descriptor = os.open(os.fspath(absolute), flags)
     try:
         opened_before = os.fstat(descriptor)
-        expected_identity = (expected.st_dev, expected.st_ino, expected.st_ctime_ns)
-        opened_identity = (
-            opened_before.st_dev,
-            opened_before.st_ino,
-            opened_before.st_ctime_ns,
-        )
+        expected_identity = _regular_file_identity(expected)
+        expected_content = _regular_file_content_stamp(expected)
+        opened_identity = _regular_file_identity(opened_before)
         if (
             not stat.S_ISREG(opened_before.st_mode)
             or opened_identity != expected_identity
-            or opened_before.st_size != expected.st_size
+            or _regular_file_content_stamp(opened_before) != expected_content
         ):
             raise ValueError(f"Regular file changed before it was read: {absolute}")
         with os.fdopen(descriptor, "rb") as handle:
@@ -245,17 +265,13 @@ def read_regular_file(
     if (
         not stat.S_ISREG(opened_after.st_mode)
         or len(data) != expected.st_size
-        or (
-            opened_after.st_dev,
-            opened_after.st_ino,
-            opened_after.st_ctime_ns,
-        )
-        != expected_identity
-        or opened_after.st_size != expected.st_size
+        or _regular_file_identity(opened_after) != expected_identity
+        or _regular_file_content_stamp(opened_after) != expected_content
         or path_is_link(absolute, final.st_mode, file_info=final)
         or not stat.S_ISREG(final.st_mode)
-        or (final.st_dev, final.st_ino, final.st_ctime_ns) != expected_identity
-        or final.st_size != expected.st_size
+        or _regular_file_identity(final) != expected_identity
+        or _regular_file_content_stamp(final) != expected_content
+        or (nonempty and len(data) == 0)
         or (maximum_bytes is not None and len(data) > maximum_bytes)
     ):
         raise ValueError(f"Regular file changed or exceeded its byte limit: {absolute}")

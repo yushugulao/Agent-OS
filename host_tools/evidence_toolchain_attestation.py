@@ -67,6 +67,7 @@ try:
         SourceTreeReceipt,
         ToolAttestationError,
         purge_evaluation_generated_outputs,
+        require_clean_head,
         verify_evaluation_source_tree,
         verify_tracked_worktree_bytes,
     )
@@ -81,6 +82,7 @@ except ImportError:
         SourceTreeReceipt,
         ToolAttestationError,
         purge_evaluation_generated_outputs,
+        require_clean_head,
         verify_evaluation_source_tree,
         verify_tracked_worktree_bytes,
     )

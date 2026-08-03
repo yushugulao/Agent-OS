@@ -161,7 +161,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
             "bio_cache_release_closed_owner(owner)"):
         raise ContractError("background cache floor is still active during final release")
     if background_end.index("bio_cache_release_closed_owner(owner)") > \
-            background_end.index("state->active_requests--"):
+            background_end.index("io_active_request_release(state)"):
         raise ContractError("background owner is unpinned before cache settlement")
 
     cache_wait = compact(function_body(bio, "bio_background_wait_for_cache_progress"))
@@ -201,10 +201,18 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
             )
 
     bget = compact(function_body(bio, "bget"))
-    if ("if (b->background_reserved) continue; "
-            "if (b->dev == dev && b->blockno == blockno)" not in bget):
+    if ("b = bio_cache_hash_find(dev, blockno); if (b != 0) { "
+            "if (b->background_reserved) panic(\"reserved buffer in hash\")"
+            not in bget):
         raise ContractError(
             "reserved buffers remain reachable through exact-key hits"
+        )
+    reserve = compact(function_body(bio, "bio_background_reserve_buffers"))
+    unlink = reserve.find("bio_cache_hash_remove(candidate);")
+    hide = reserve.find("candidate->background_reserved = 1;")
+    if unlink < 0 or hide < 0 or unlink > hide:
+        raise ContractError(
+            "background reservation remains linked in the exact-key index"
         )
     reserved = (
         "if (b->background_reserved) { "
@@ -355,7 +363,9 @@ MUTATIONS = (
     (BIO.replace("if (b->background_reserved) {",
                  "if (0 && b->background_reserved) {", 1), BIO_H, FS,
      "reserved-buffer isolation disabled"),
-    (BIO.replace("if (b->background_reserved)\n\t\t\tcontinue;", "", 1), BIO_H, FS,
+    (replace_in_function(
+        BIO, "bio_background_reserve_buffers",
+        "bio_cache_hash_remove(candidate);", ""), BIO_H, FS,
      "reserved-buffer exact-hit isolation disabled"),
     (BIO.replace("*result = VIRTIO_DISK_ERR_BUSY;", "", 1), BIO_H, FS,
      "background cache retry removed"),

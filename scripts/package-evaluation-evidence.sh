@@ -30,7 +30,8 @@ create)
 		profile=development
 		printf 'WARNING: creating DEVELOPMENT-ONLY evidence; it is not formal competition evidence.\n' >&2
 	fi
-	args=(create --run-dir "$2" --suite "${SUITE}" --output "$3" --profile "${profile}")
+	args=(create --run-dir "$2" --suite "${SUITE}" --output "$3" \
+		--contract-root "${ROOT}" --profile "${profile}")
 	if [[ "${profile}" == "formal" ]]; then
 		args+=(--repo-root "${ROOT}")
 	fi
@@ -41,7 +42,7 @@ verify)
 	[[ $# -eq 2 ]] || usage
 	exec "${PYTHON_BIN}" -I -S "${TRUSTED_PYTHON_ENTRY}" \
 		"host_tools/evaluation_bundle.py" verify --bundle "$2" \
-		--repo-root "${ROOT}" --require-committed
+		--contract-root "${ROOT}" --repo-root "${ROOT}" --require-committed
 	;;
 *)
 	usage

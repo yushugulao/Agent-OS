@@ -31,14 +31,23 @@ FORMAL_CYGWIN_LOCALE = "C.UTF-8"
 FORMAL_ENVIRONMENT_DYNAMIC = {
     "PATH", "HOME", "TMPDIR", "TEMP", "TMP", "FINAL_EVIDENCE_STAGE",
     "QEMU", "PYTHON_BIN",
+    "AGENT_TEST_DURATION_PROFILE",
     "CASE_TIMEOUT", "IDLE_NOTICE_SECONDS", "MARKER_GRACE_SECONDS",
     "MECHANISM_MARKER_GRACE_SECONDS", "HOST_CC", "HOSTCC", "CC", "SYSTEMDRIVE",
 }
 FORMAL_EXECUTION_OVERRIDE_KEYS = frozenset({
     "FINAL_EVIDENCE_STAGE", "QEMU", "PYTHON_BIN", "CASE_TIMEOUT",
+    "AGENT_TEST_DURATION_PROFILE",
     "IDLE_NOTICE_SECONDS", "MARKER_GRACE_SECONDS",
     "MECHANISM_MARKER_GRACE_SECONDS", "HOST_CC", "HOSTCC", "CC",
 })
+DURATION_PROFILE_POLICY_MARKERS = {
+    "local-e3": "[full-verify] Agent duration policy profile=local-e3 status=enforced",
+    "none": (
+        "[full-verify] Agent duration policy profile=none "
+        "status=skipped-different-runner"
+    ),
+}
 POSIX_SYSTEM_PATHS = (
     "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
 )
@@ -46,6 +55,32 @@ POSIX_SYSTEM_PATHS = (
 
 class FormalPythonRuntimeError(ValueError):
     """Raised when the private Python runtime cannot be trusted."""
+
+
+def validate_duration_profile_policy_marker(
+    environment: object, log_lines: list[str]
+) -> str:
+    """Bind the formal duration profile to its single named policy decision."""
+
+    profile = (
+        environment.get("AGENT_TEST_DURATION_PROFILE")
+        if isinstance(environment, dict)
+        else None
+    )
+    if profile not in DURATION_PROFILE_POLICY_MARKERS or any(
+        not isinstance(line, str) for line in log_lines
+    ):
+        raise FormalPythonRuntimeError("formal duration profile is invalid")
+    expected = DURATION_PROFILE_POLICY_MARKERS[profile]
+    if log_lines.count(expected) != 1 or any(
+        marker in log_lines
+        for name, marker in DURATION_PROFILE_POLICY_MARKERS.items()
+        if name != profile
+    ):
+        raise FormalPythonRuntimeError(
+            "formal duration profile differs from its policy marker"
+        )
+    return str(profile)
 
 
 def controlled_search_path(
@@ -63,11 +98,17 @@ def formal_execution_overrides(
     python: Path,
     case_timeout: str,
     idle_notice: str,
+    duration_profile: str,
 ) -> dict[str, str]:
     """Build the sole allowlist of dynamic full-verification variables."""
 
+    if duration_profile not in {"local-e3", "none"}:
+        raise FormalPythonRuntimeError(
+            "formal Agent duration profile must be local-e3 or none"
+        )
     host_cc = str(tools["host_cc"])
     overrides = {
+        "AGENT_TEST_DURATION_PROFILE": duration_profile,
         "FINAL_EVIDENCE_STAGE": str(evidence_stage), "QEMU": str(tools["qemu"]),
         "PYTHON_BIN": str(python), "CASE_TIMEOUT": case_timeout,
         "IDLE_NOTICE_SECONDS": idle_notice, "MARKER_GRACE_SECONDS": "2s",
@@ -622,6 +663,7 @@ def validate_formal_execution_environment(
         or re.fullmatch(r"[1-9][0-9]*", value["IDLE_NOTICE_SECONDS"]) is None
         or value["MARKER_GRACE_SECONDS"] != "2s"
         or value["MECHANISM_MARKER_GRACE_SECONDS"] != "5s"
+        or value["AGENT_TEST_DURATION_PROFILE"] not in {"local-e3", "none"}
         or re.fullmatch(r"(?:/|[A-Z]:)", value["SYSTEMDRIVE"]) is None
         or not PurePosixPath(value["FINAL_EVIDENCE_STAGE"]).is_absolute()
     ):

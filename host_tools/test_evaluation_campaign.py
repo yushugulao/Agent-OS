@@ -99,6 +99,12 @@ def _platform_proof(root: Path) -> dict[str, object]:
     return {
         "distribution": None,
         "domain": "native-linux",
+        "duration_profile": {
+            "calibration_status": "not-applicable",
+            "name": "none",
+            "profile_id": "none",
+            "status": "disabled-different-runner",
+        },
         "entry_domain": "native-linux",
         "hardware": _test_hardware(),
         "kind": platform_probe.KIND,
@@ -107,6 +113,7 @@ def _platform_proof(root: Path) -> dict[str, object]:
             "execution_path": str(root.resolve()),
             "host_path": str(root.resolve()),
         },
+        "requested_host_cc": "cc",
         "schema_version": platform_probe.SCHEMA_VERSION,
         "status": "ready",
         "toolprefix": "/opt/riscv/bin/riscv64-linux-gnu-",
@@ -154,7 +161,7 @@ def _msys_platform_proof(root: Path) -> dict[str, object]:
     return proof
 
 
-def _scenario_environment() -> dict[str, object]:
+def _scenario_environment(host_cc: str | None = None) -> dict[str, object]:
     def tool(argv0: str, number: str) -> dict[str, str]:
         return {
             "argv0": argv0,
@@ -164,6 +171,7 @@ def _scenario_environment() -> dict[str, object]:
         }
 
     tools = {
+        "assembler": tool("riscv64-linux-gnu-as", "2"),
         "bash": tool("bash", "7"),
         "compiler": tool("riscv64-linux-gnu-gcc", "8"),
         "env": tool("env", "b"),
@@ -175,6 +183,14 @@ def _scenario_environment() -> dict[str, object]:
         "qemu": tool("qemu-system-riscv64", "a"),
         "timeout": tool("timeout", "f"),
     }
+    if host_cc is not None:
+        host_path = Path(host_cc)
+        tools["host_cc"] = {
+            "argv0": host_cc,
+            "path": host_cc,
+            "sha256": campaign._sha256(host_path),
+            "version": "host_cc 1",
+        }
     if os.name == "nt":
         launcher = {
             "argv0": "wsl.exe",
@@ -202,6 +218,10 @@ def _scenario_environment() -> dict[str, object]:
         "launcher_argv": launcher_argv,
         "tools": tools,
     }
+
+
+def _bound_scenario_environment(*_args: object, **kwargs: object) -> dict[str, object]:
+    return _scenario_environment(str(kwargs["host_cc"]))
 
 
 def _create(
@@ -258,6 +278,8 @@ def _create(
             qemu="qemu-system-riscv64",
             python_bin="python3",
             shell_bin="bash",
+            host_cc="cc",
+            duration_profile="none",
             timeout_seconds=timeout_seconds,
         )
     manifest.parent.joinpath("preflight.log").write_text(
@@ -574,7 +596,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(
                     campaign,
                     "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
             ):
                 value = campaign.create_scenario_campaign(
@@ -689,6 +711,7 @@ class CampaignTests(unittest.TestCase):
             value = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(value["run"]["execution_domain"], "native-linux")
             paths = {
+                "assembler": "/opt/riscv/bin/riscv64-linux-gnu-as",
                 "bash": "/opt/tools/bash",
                 "compiler": "/opt/riscv/bin/riscv64-linux-gnu-gcc",
                 "git": "/opt/tools/git",
@@ -730,7 +753,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(
                     campaign,
                     "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
             ):
                 value = campaign.create_scenario_campaign(
@@ -772,6 +795,7 @@ class CampaignTests(unittest.TestCase):
 
     def test_scenario_probe_uses_an_empty_non_login_shell(self) -> None:
         paths = [
+            "/opt/riscv/bin/riscv64-linux-gnu-as",
             "/usr/bin/bash",
             "/opt/riscv/bin/riscv64-linux-gnu-gcc",
             "/usr/bin/env",
@@ -803,6 +827,7 @@ class CampaignTests(unittest.TestCase):
                 wsl_distro="Ubuntu",
                 toolprefix="/opt/riscv/bin/riscv64-linux-gnu-",
                 qemu="qemu-system-riscv64",
+                host_cc="/usr/bin/cc",
             )
         self.assertEqual(environment["domain"], "native-clean-shell")
         self.assertEqual(environment["launcher_argv"], ["/usr/bin/env", "-i"])
@@ -845,6 +870,7 @@ class CampaignTests(unittest.TestCase):
                 wsl_distro="Ubuntu",
                 toolprefix="/opt/riscv/bin/riscv64-linux-gnu-",
                 qemu="qemu-system-riscv64",
+                host_cc="/usr/bin/cc",
                 posix_temporary="/r/tmp",
                 native_temporary=r"R:\tmp",
                 system_drive="C:",
@@ -873,7 +899,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(
                     campaign,
                     "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
             ):
                 original = campaign.create_scenario_campaign(
@@ -934,6 +960,20 @@ class CampaignTests(unittest.TestCase):
                 campaign.CampaignError, "clean environment differs"
             ):
                 campaign.validate_scenario_campaign(changed_host_cc)
+
+            missing_assembler = json.loads(json.dumps(original))
+            del missing_assembler["protocol"]["execution_environment"]["tools"][
+                "assembler"
+            ]
+            missing_assembler["run"]["scenario_environment_sha256"] = (
+                campaign._canonical_sha256(
+                    missing_assembler["protocol"]["execution_environment"]
+                )
+            )
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "invalid scenario execution-domain tools"
+            ):
+                campaign.validate_scenario_campaign(missing_assembler)
 
     def test_command_timeout_fails_closed_with_diagnostics(self) -> None:
         error = subprocess.TimeoutExpired(
@@ -996,7 +1036,7 @@ class CampaignTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(value["environment"]),
-                {"bash", "compiler", "git", "host_cc", "linker", "make", "objcopy", "objdump", "python", "qemu"},
+                {"assembler", "bash", "compiler", "git", "host_cc", "linker", "make", "objcopy", "objdump", "python", "qemu"},
             )
             self.assertEqual(
                 value["protocol"]["micro_timeout_seconds"],
@@ -1014,6 +1054,14 @@ class CampaignTests(unittest.TestCase):
                 self.assertEqual(
                     boot["command_environment"]["AGENT_TEST_GUEST_LOG_FILE"],
                     boot["guest_log"],
+                )
+                self.assertEqual(
+                    boot["command_environment"]["AGENT_TEST_DURATION_PROFILE"],
+                    "none",
+                )
+                self.assertEqual(
+                    boot["command_environment"]["AGENTOS_EVALUATION_EXECUTION_DOMAIN"],
+                    "native-linux",
                 )
                 self.assertEqual(
                     boot["command_environment"]["CASE_TIMEOUT"],
@@ -1042,6 +1090,7 @@ class CampaignTests(unittest.TestCase):
             msys_platform = {
                 **value["platform"],
                 "domain": "native-msys2",
+                "entry_domain": "native-msys2",
                 "temporary_directory": "/r/tmp",
                 "windows_temporary_directory": r"R:\tmp",
                 "windows_system_drive": "C:",
@@ -1056,6 +1105,32 @@ class CampaignTests(unittest.TestCase):
             self.assertEqual(msys_environment["TEMP"], r"R:\tmp")
             self.assertEqual(msys_environment["TMP"], r"R:\tmp")
             self.assertEqual(msys_environment["SYSTEMDRIVE"], "C:")
+            self.assertEqual(
+                campaign.get_campaign_metadata(manifest, "duration_profile"), "none"
+            )
+
+            tampered_profile = json.loads(json.dumps(value))
+            tampered_profile["boots"][0]["command_environment"][
+                "AGENT_TEST_DURATION_PROFILE"
+            ] = "local-e3"
+            with self.assertRaisesRegex(campaign.CampaignError, "environment differs"):
+                campaign.validate_campaign(tampered_profile)
+
+            coordinated = json.loads(json.dumps(value))
+            coordinated["platform"]["duration_profile"] = {
+                "calibration_status": "calibrated_full_suite",
+                "name": "local-e3",
+                "profile_id": "forged-local-e3",
+                "status": "matched",
+            }
+            for boot in coordinated["boots"]:
+                boot["command_environment"][
+                    "AGENT_TEST_DURATION_PROFILE"
+                ] = "local-e3"
+            with self.assertRaisesRegex(
+                campaign.CampaignError, "requires native-msys2"
+            ):
+                campaign.validate_campaign(coordinated, contract_root=PROJECT_ROOT)
 
             tampered_protocol = json.loads(json.dumps(value))
             tampered_protocol["protocol"]["micro_timeout_seconds"] = 180
@@ -1179,6 +1254,8 @@ class CampaignTests(unittest.TestCase):
 
             output = mock.Mock()
             output.buffer = io.BytesIO()
+            output.isatty.return_value = False
+            output.fileno.return_value = 1
             with mock.patch.object(
                 campaign, "create_campaign", return_value=planned
             ), mock.patch.object(campaign.sys, "stdout", output):
@@ -1192,6 +1269,8 @@ class CampaignTests(unittest.TestCase):
                     "--qemu", "/tool/qemu-system-riscv64",
                     "--python-bin", "/usr/bin/python3",
                     "--shell-bin", "/usr/bin/bash",
+                    "--host-cc", "/usr/bin/cc",
+                    "--duration-profile", "none",
                     "--timeout", "900",
                 ])
             self.assertEqual(status, 0)
@@ -1233,6 +1312,23 @@ class CampaignTests(unittest.TestCase):
                     boot["guest_log"],
                 )
             campaign.validate_campaign(value)
+
+            coordinated = json.loads(json.dumps(value))
+            coordinated["platform"]["duration_profile"] = {
+                "calibration_status": "calibrated_full_suite",
+                "name": "local-e3",
+                "profile_id": "forged-local-e3",
+                "status": "matched",
+            }
+            for boot in coordinated["boots"]:
+                boot["command_environment"][
+                    "AGENT_TEST_DURATION_PROFILE"
+                ] = "local-e3"
+            with self.assertRaisesRegex(
+                campaign.CampaignError,
+                "recorded configuration|recorded hardware|recorded tool",
+            ):
+                campaign.validate_campaign(coordinated, contract_root=PROJECT_ROOT)
 
             for name in ("SYSTEMDRIVE", "TEMP", "TMP", "TMPDIR"):
                 tampered = json.loads(json.dumps(value))
@@ -1316,7 +1412,7 @@ class CampaignTests(unittest.TestCase):
                 ),
                 mock.patch.object(
                     campaign, "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
             ):
                 scenario = campaign.create_scenario_campaign(
@@ -1380,6 +1476,8 @@ class CampaignTests(unittest.TestCase):
             )
             output = mock.Mock()
             output.buffer = io.BytesIO()
+            output.isatty.return_value = False
+            output.fileno.return_value = 1
             with mock.patch.object(
                 campaign, "create_scenario_campaign", return_value=scenario
             ), mock.patch.object(campaign.sys, "stdout", output):
@@ -1453,7 +1551,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(campaign, "repository_identity", return_value=(COMMIT, True)),
                 mock.patch.object(
                     campaign, "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
             ):
                 original = campaign.create_scenario_campaign(
@@ -2157,7 +2255,7 @@ class CampaignTests(unittest.TestCase):
             ), mock.patch.object(
                 campaign,
                 "_probe_scenario_environment",
-                return_value=_scenario_environment(),
+                side_effect=_bound_scenario_environment,
             ):
                 scenario = campaign.create_scenario_campaign(
                     repo=root,
@@ -2208,7 +2306,7 @@ class CampaignTests(unittest.TestCase):
             for name in ("CC", "HOSTCC", "HOST_CC"):
                 self.assertEqual(
                     scenario["boots"][0]["command_environment"][name],
-                    "/usr/bin/cc",
+                    scenario["platform"]["tools"]["host_cc"]["path"],
                 )
             self.assertTrue(Path(scenario["boots"][0]["command_argv"][0]).is_absolute())
             with mock.patch.object(
@@ -2268,7 +2366,7 @@ class CampaignTests(unittest.TestCase):
             ), mock.patch.object(
                 campaign,
                 "_probe_scenario_environment",
-                return_value=_scenario_environment(),
+                side_effect=_bound_scenario_environment,
             ):
                 campaign.check_scenario_campaign(root, scenario_plan, micro)
                 changed_environment = _scenario_environment()
@@ -2307,6 +2405,15 @@ class CampaignTests(unittest.TestCase):
         self.assertIn("write_measurement_source_receipt \"${commit}\"", script)
         self.assertIn("verify_measurement_source_receipt", script)
         self.assertIn('"AGENT_TEST_CASE": "agenteval_ucore"', campaign_source)
+        self.assertIn(
+            '"AGENT_TEST_DURATION_PROFILE": _bound_duration_profile_name(',
+            campaign_source,
+        )
+        self.assertIn(
+            '"${AGENT_TEST_DURATION_PROFILE}" == "local-e3" &&\n'
+            '      -z "${AGENT_TEST_CASE:-}"',
+            (PROJECT_ROOT / "scripts" / "run-agent-tests.sh").read_text(encoding="utf-8"),
+        )
         self.assertIn('"AGENT_EVAL_CHALLENGE_HEX": challenge', campaign_source)
         self.assertIn("get-boot-field", script)
         self.assertIn("run-boot", script)
@@ -2338,10 +2445,12 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(script.count('"${CAMPAIGN_TOOL}" check-preflight'), 2)
         micro_preflight_check = (
             '"${CAMPAIGN_TOOL}" check-preflight \\\n'
-            '\t\t--manifest "${manifest}" --receipt "${RUN_DIR}/preflight.log"'
+            '\t\t--repo "${ROOT}" --manifest "${manifest}" \\\n'
+            '\t\t--receipt "${RUN_DIR}/preflight.log"'
         )
         scenario_preflight_check = (
-            '--manifest "${RUN_DIR}/scenario/scenario-plan.json" \\\n'
+            '--repo "${ROOT}" \\\n'
+            '\t\t\t--manifest "${RUN_DIR}/scenario/scenario-plan.json" \\\n'
             '\t\t\t--receipt "${RUN_DIR}/scenario-preflight.log"'
         )
         first_boot_loop = (
@@ -2362,6 +2471,7 @@ class CampaignTests(unittest.TestCase):
         self.assertNotIn('"QEMU=${QEMU}"', script)
         self.assertIn("scenario report differs from a raw-source replay", script)
         self.assertIn("--scenario-report", script)
+        self.assertIn('--contract-root "${ROOT}"', script)
         self.assertLess(
             script.index('"${CAMPAIGN_TOOL}" create-scenario'),
             script.index("for ((number = 1; number <= EVALUATION_BOOTS; number++))"),
@@ -2386,7 +2496,10 @@ class CampaignTests(unittest.TestCase):
                 source.parent.mkdir(parents=True, exist_ok=True)
                 source.write_text(f"# {name}\n", encoding="utf-8")
             scenario_path = micro.parent / "scenario" / "scenario-plan.json"
-            execution_environment = _scenario_environment()
+            host_cc = json.loads(micro.read_text(encoding="utf-8"))["environment"][
+                "host_cc"
+            ]["path"]
+            execution_environment = _scenario_environment(host_cc)
             with (
                 mock.patch.object(
                     campaign, "repository_identity", return_value=(COMMIT, True)
@@ -2488,7 +2601,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(
                     campaign,
                     "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
             ):
                 scenario = campaign.create_scenario_campaign(
@@ -2521,7 +2634,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(
                     campaign,
                     "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
                 mock.patch.object(
                     campaign,
@@ -2555,7 +2668,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(
                     campaign,
                     "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
             ):
                 scenario = campaign.create_scenario_campaign(
@@ -2600,7 +2713,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(
                     campaign,
                     "_probe_scenario_environment",
-                    return_value=_scenario_environment(),
+                    side_effect=_bound_scenario_environment,
                 ),
                 mock.patch.object(
                     campaign, "repository_identity", return_value=(COMMIT, True)

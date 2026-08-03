@@ -206,12 +206,7 @@ clean:
 
 # BOARD
 BOARD		?= qemu
-SBI			?= opensbi
-ifeq ($(SBI), rustsbi)
-BOOTLOADER	:= ./bootloader/rustsbi-qemu.bin
-else
 BOOTLOADER	:= default
-endif
 
 QEMU ?= qemu-system-riscv64
 QEMU_CMD = $(call shell_quote,$(QEMU))
