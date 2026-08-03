@@ -55,14 +55,14 @@ Windows/WSL 和 MSYS2 的工具配置见 [Windows 快速开始](../windows-quick
 截至本页所在提交，源码、测试合同和评价框架已经进入仓库，但以下事实必须区分：
 
 - [正式证据索引](../../evidence/releases/INDEX.md) 尚未登记当前提交的 release bundle；
-- `04c1e6652324` 的三轮未签名本地 E3 校准包只属于该历史提交；当前 18-case 时长状态为 `provisional_requires_full_suite`，冻结候选后必须重新校准；
+- `a9e7c67feda5` 已完成三轮 18-case 未签名本地 E3 校准，当前时长状态为 `calibrated_full_suite`；包内 57 份执行 attestation、三轮 timing 和源码指纹均已由 checker 重算；
 - 历史提交的日志和校准只证明其绑定提交，不能自动证明当前提交；
 - `results/latest/` 和 development Dashboard 是可覆盖预览，不是提交证据；
 - 没有可用远程 Runner 时可以形成绑定干净提交的本地 E3，但不能宣称远程 CI/E4；
 - 新评价体系已定义真实路径对照和正式科研场景统计，但必须在同一冻结提交上实际运行、复验并
   打包后，才能引用由数据支持的性能结论。
 
-因此，当前正确表述是“机制/静态验收完成，候选动态复验待生成；候选校准与正式发布证据待生成”，而不是“最终验收已通过”。
+因此，当前正确表述是“机制/静态验收和候选校准完成，完整动态发布证据待生成”，而不是“最终验收已通过”。
 最新状态应始终以 `evidence/releases/INDEX.md` 及其指向 bundle 的 manifest 为准。
 
 ## 提交材料

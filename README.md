@@ -7,9 +7,8 @@
 首次审阅请从 [竞赛评审入口](docs/contest/README.md) 开始。该页把赛题任务映射、最短验证路径、
 提交材料、第三方来源和当前证据边界集中在一起；完整技术说明仍保留在本文后续章节。
 
-> 当前仓库已经包含任务实现、测试和评价工具。`04c1e6652324` 的三轮 18-case 本地时长校准
-> 仅证明该历史提交；当前候选在冻结并重新完成三轮校准前保持
-> `provisional_requires_full_suite`，
+> 当前仓库已经包含任务实现、测试和评价工具。冻结提交 `a9e7c67feda5` 已在绑定的
+> `local-e3` 环境完成三轮 18-case 本地时长校准，配置状态为 `calibrated_full_suite`；
 > 但 `evidence/releases/INDEX.md` 尚未登记当前提交的正式证据包。因此校准材料、历史日志、
 > 预览页面和评价框架不能表述为当前提交已经通过最终验收。发布前剩余事项见
 > [提交清单](docs/contest/submission-checklist.md)。
@@ -266,7 +265,7 @@ Agent 专属安全链由构建期可信映像清单、loader 映像绑定、boot
 
 为防止机制性修复再次把内核推向臃肿，`.gitlab-ci.yml` 和 `make ci-check` 使用 `ci/kernel-budgets.json` 作为可审查事实源，限制内核源码行数、ELF/raw 镜像、text/data/BSS/总运行体积、`struct proc`、Context sidecar 与完整 21 页 Agent 状态的单实例/全局/分类/账户上限、线程栈深度与虚拟/物理容量、64 KiB boot stack 的实际跨度和调用图。每个 owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合，不在文档复制容易漂移的固定数量。metadata 拆分单元及其 contract headers 还共同进入 `metadata_control_plane` 聚合预算：source 只保留固定接口开销，loaded text 与 BSS 不得增长，因而不能靠把状态或代码迁到另一个文件绕过 downward ratchet。预算 checker、通用 QEMU monitor 和生产 profile validator 的 fail-closed 自测集合也以源码和配置为准。
 
-通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在完成判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 profile 必须自然 `rc=0`；checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；powercut profile 则要求认证 supervisor 在完整 marker 后以 `SIGKILL` 直接终止稳定身份的 QEMU leader，隔离并回收跨 `setsid()` 的全部后代，再提交带随机 nonce、PID/starttime 和镜像退出码的完成证明。workload 自行杀死 leader 或 supervisor、控制通道 EOF、残留后代、超时、非零退出和 marker 后 panic 均失败。powercut 是“宿主强制中止 VM 后检查原始磁盘”的突然 VM 终止模型；它比 `SIGTERM` checkpoint 更接近掉电边界，但不会清空宿主页缓存，也不等同于整机物理断电。当前 Agent 套件为 18 case，checker 只接受完整有序的 18-case timing file。`04c1e6652324` 的三轮结果与 71 文件包只属于该历史提交；当前受管输入已变化，时长门为 `provisional_requires_full_suite`，冻结源码并重新取得三轮完整样本前不得复用旧 fingerprint、基线或上限。完整发布状态仍由最终 C→E bundle 决定。
+通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在完成判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 profile 必须自然 `rc=0`；checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；powercut profile 则要求认证 supervisor 在完整 marker 后以 `SIGKILL` 直接终止稳定身份的 QEMU leader，隔离并回收跨 `setsid()` 的全部后代，再提交带随机 nonce、PID/starttime 和镜像退出码的完成证明。workload 自行杀死 leader 或 supervisor、控制通道 EOF、残留后代、超时、非零退出和 marker 后 panic 均失败。powercut 是“宿主强制中止 VM 后检查原始磁盘”的突然 VM 终止模型；它比 `SIGTERM` checkpoint 更接近掉电边界，但不会清空宿主页缓存，也不等同于整机物理断电。当前 Agent 套件为 18 case，checker 只接受完整有序的 18-case timing file。冻结提交 `a9e7c67feda5` 的三轮总时长为 `269.1409306s`、`271.32236290000003s`、`281.8869957s`，中位基线 `271.32236290000003s`，确定性上限 `284.889s`；71 文件校准包绑定源码指纹 `847d5218...ffd`。这些校准值不等于完整发布通过，完整发布状态仍由最终 C→E bundle 决定。
 
 Reader seeded-action runner 另把 clean、build、guest 明确分阶段：clean/build 只按子进程退出码判定，只有 QEMU guest 启动后才逐条完整匹配 Guest panic/fault/check-failed 记录。构建输出中的 `build/riscv64/ch6b_panic` 因而不会再被字符串扫描误判；对应单测同时要求这种文件名通过、规范 Guest `[PANIC ...]` 行失败。
 
@@ -383,8 +382,8 @@ make evaluation-doctor
 make evaluation-full-verify TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf-
 ```
 
-`local-e3` 会校验精确的硬件、MSYS2 runtime、工具文件和配置身份；当前配置若仍为
-`provisional_requires_full_suite`，会在进入 QEMU 前 fail closed，不能借用历史阈值继续运行。
+`local-e3` 会校验精确的硬件、MSYS2 runtime、工具文件和配置身份；当前配置绑定
+`a9e7c67feda5` 的完整三轮校准。受管输入、profile 或证据任一漂移都会在进入 QEMU 前 fail closed。
 
 正式采集只接受一个完整 POSIX 执行域：原生 Linux、由 Windows Host 指定并验证的
 `EVALUATION_WSL_DISTRO`，或通过严格运行时证明的原生 MSYS2。Windows/WSL 入口会先在
@@ -487,7 +486,7 @@ AGENT_TEST_DURATION_PROFILE=none make full-verify TOOLPREFIX=riscv64-linux-gnu-
 
 上述普通 Linux/WSL 命令仍执行完整 18-case 和全部语义验收，只把本地 E3 时长比较记为
 不适用。在绑定且已经完成当前源码三轮校准的原生 MSYS2 E3 上，改用
-`AGENT_TEST_DURATION_PROFILE=local-e3 make full-verify ...`；provisional 会在 profile/QEMU
+`AGENT_TEST_DURATION_PROFILE=local-e3 make full-verify ...`；无效或过期的校准会在 profile/QEMU
 前 fail closed。校准有效后，profile v5 串起结构检查、Host/Reader、18-case AgentOS 专项、
 双目标 QEMU、proc/syscall/file/thread/physical 资源、metadata/观测重启恢复、VirtIO 故障
 矩阵、workflow teardown race、ENOSPC 和文件系统分配器故障一致性测试，并强制保存和

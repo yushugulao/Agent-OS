@@ -74,9 +74,9 @@ toolchain、runner profile/tag、构建规则、内核、用户程序、NFS 镜�
 普通 Linux、WSL 和普通 Runner 必须显式使用 `AGENT_TEST_DURATION_PROFILE=none`：完整 18-case、
 语义、Guest 日志与 timing 行清单仍需通过，但本地 duration baseline/limit/ratio 记为不适用。
 `local-e3` 只属于与记录身份完全一致的受信原生 MSYS2 E3。
-冻结提交 `04c1e6652324` 的三轮完整样本和 71 文件包仍可作为该历史源码的离线证据，但当前
-受管输入已变化，门禁为 `provisional_requires_full_suite`。新候选不得复用与自身指纹不一致的
-基线；冻结并重新完成三轮后，当前策略与实际门禁结果见 `ci/kernel-budgets.json` 和
+冻结提交 `04c1e6652324` 的三轮完整样本和 71 文件包仍只作为该历史源码的离线证据。当前
+门禁已由 `a9e7c67feda5` 的新三轮完整样本恢复为 `calibrated_full_suite`，且绑定自身源码指纹；
+当前策略与实际门禁结果见 `ci/kernel-budgets.json` 和
 [test-record.md](test-record.md)。该包只构成未签名本地 E3 校准证据，仍不能宣称 release E3、远端
 attestation 或 E4；发布等级由最终 C→E evidence registry 决定。
 

@@ -1096,7 +1096,7 @@ timing inventory，但明确使用 `profile=none`，不套用该本地墙钟阈�
 完整包位于 `evidence/calibrations/04c1e6652324/`，共 71 个文件、57 份逐执行 attestation；
 manifest SHA-256 为 `2b8fe54853a35f75fbf94bc5afb1eadc2dc474fa2f85f0f67c444b8c074603be`。
 该历史提交的配置曾为 `calibrated_full_suite`，checker 已重算 commit/tree/fingerprint、三轮 timing、日志、nonce、
-逐文件哈希与阈值关系。当前候选已回到 `provisional_requires_full_suite`，不得复用这些旧字段。该材料只证明历史未签名本地 E3 校准事实，不是最终 release bundle、GitLab CI、
+逐文件哈希与阈值关系。其后候选曾回到 `provisional_requires_full_suite`，并未复用这些旧字段；当前状态由下节的新校准取代。该材料只证明历史未签名本地 E3 校准事实，不是最终 release bundle、GitLab CI、
 远程 Runner 或 E4；完整动态发布状态仍以最终 C→E bundle 为准。
 
 本次冻结前还修正了正式验收链中的三个集成问题。Windows fixture 不再依赖调用者继承的
@@ -1106,3 +1106,18 @@ MSYS2 正式执行域统一使用 `C.UTF-8`，避免中文宿主路径被外部 
 继续由 `rp_agentos_acceptance` 对实际 workflow/run、输入/派生哈希和四类内核操作动态绑定。
 动态抽取状态中的 13 条 source-bound runtime record 已由 Host 按最终文件长度与 FNV 全量重算通过；
 comparator 仍拒绝任何事后追加或篡改，不通过前缀哈希或文件名特判放宽证据边界。
+
+## 当前候选三轮时长校准（`a9e7c67feda5`）
+
+冻结提交 `a9e7c67feda5d3a2491311ef977e39d9f4882ad3` 在 clean detached ASCII worktree 上，
+按 `local-e3-msys2-xpack-qemu11-v1` 严格串行执行三轮完整 18-case。三轮均为 18/18，
+总 case monotonic 时间分别为 `269.1409306s`、`271.32236290000003s`、`281.8869957s`；
+中位基线为 `271.32236290000003s`，按版本化 5% headroom 公式得到上限 `284.889s`。
+
+受管源码指纹为 `847d521803bac7e6d5c2c87b9240433002cf4e2dd7bb0cf0230e3a3fcaa11ffd`，
+覆盖 395 个输入。71 文件校准包位于 `evidence/calibrations/a9e7c67feda5/`，包含
+57 份逐执行 attestation；manifest SHA-256 为
+`2d5a218c59217b08a8a327958aa6823c140c0c6a8c167a6546f3e3350cfaf9dc`。
+checker 已重算 commit/tree/fingerprint、timing、日志、nonce、逐文件哈希与阈值关系，
+`agent-test-policy` 通过。该结果恢复了当前候选的时长门，但不替代尚未生成的完整 C→E
+release bundle，也不宣称远端 CI/E4。

@@ -121,9 +121,14 @@ python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py 
 历史提交 `04c1e6652324` 曾由 `scripts/agent_test_calibration.py collect` 在对应 clean detached
 worktree 上串行执行三轮完整 18-case。样本为 `287.9945528s`、`283.0201263s`、
 `280.9651484s`，中位基线 `283.0201263s`，确定性上限 `297.172s`；71 个文件保存在
-`evidence/calibrations/04c1e6652324/`，这些数值仅适用于该提交和源码指纹。当前候选的
-`ci/kernel-budgets.json` 明确保持 `provisional_requires_full_suite`，没有沿用该基线、上限、样本或
-指纹；必须在最终源码 C 冻结后重新采集三轮，才可恢复当前候选的时长门。timing 从 commit/tree、随机 nonce、可执行文件身份、
+`evidence/calibrations/04c1e6652324/`，这些数值仅适用于该提交和源码指纹。
+
+当前候选冻结提交 `a9e7c67feda5d3a2491311ef977e39d9f4882ad3` 已重新采集三轮完整
+18-case，样本为 `269.1409306s`、`271.32236290000003s`、`281.8869957s`，中位基线
+`271.32236290000003s`，确定性上限 `284.889s`。71 个文件保存在
+`evidence/calibrations/a9e7c67feda5/`，manifest SHA-256 为
+`2d5a218c59217b08a8a327958aa6823c140c0c6a8c167a6546f3e3350cfaf9dc`，受管源码指纹为
+`847d521803bac7e6d5c2c87b9240433002cf4e2dd7bb0cf0230e3a3fcaa11ffd`。timing 从 commit/tree、随机 nonce、可执行文件身份、
 镜像/Guest 日志哈希、真实 monotonic 区间和退出结果绑定的 attestations 重建。校准包只标记为未签名本地 E3 复现证据，
 不是 release bundle，更不是 GitLab CI 或 E4 attestation；它证明包内字节可重放和来源绑定，不能
 证明掌控本机 checkout、工具与输出的操作者诚实。production collector 没有公式/fixture 通道，

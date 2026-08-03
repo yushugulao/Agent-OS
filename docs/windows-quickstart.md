@@ -107,10 +107,9 @@ CPU model、logical CPU count 与总内存，并在每个 Guest boot 前复验�
 pair 前后复验。公开证据不记录计算机名，uname 证明只保留
 Windows build、kernel release/version 与 machine。
 
-`local-e3` 只用于与校准记录逐项一致的本地 MSYS2 E3。若当前
-`ci/kernel-budgets.json` 仍标记 `provisional_requires_full_suite`，doctor/full-verify 会在
-QEMU 前 fail closed；必须先冻结源码并完成当前 profile 的三轮完整 18-case 校准，不能复用
-历史提交的基线或把 `none` 冒充本地 E3 时长证明。
+`local-e3` 只用于与校准记录逐项一致的本地 MSYS2 E3。当前配置绑定 `a9e7c67feda5`
+的三轮完整 18-case；若受管输入或 profile 漂移，doctor/full-verify 会在 QEMU 前 fail closed。
+不得复用历史提交的基线，也不能把 `none` 冒充本地 E3 时长证明。
 
 ## 正式竞赛评价流程
 
