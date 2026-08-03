@@ -216,7 +216,8 @@ class CalibrationTests(unittest.TestCase):
             environment = calibration.calibration_child_environment()
         for name in poisoned:
             self.assertNotIn(name, environment)
-        self.assertEqual(environment["LC_ALL"], "C")
+        self.assertEqual(environment["LANG"], "C.UTF-8")
+        self.assertEqual(environment["LC_ALL"], "C.UTF-8")
         self.assertEqual(environment["PYTHONHASHSEED"], "0")
         self.assertEqual(environment["PYTHONNOUSERSITE"], "1")
         self.assertEqual(environment["TMPDIR"], "/tmp")

@@ -636,8 +636,8 @@ def calibration_child_environment():
     }
     environment.update(
         {
-            "LANG": "C",
-            "LC_ALL": "C",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONHASHSEED": "0",
             "PYTHONNOUSERSITE": "1",
