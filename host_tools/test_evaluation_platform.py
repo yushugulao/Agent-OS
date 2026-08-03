@@ -8,6 +8,7 @@ import importlib.util
 import ast
 import os
 import py_compile
+import re
 import shutil
 import subprocess
 import sys
@@ -725,6 +726,36 @@ class TrustedPythonEntryTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    def test_evaluation_shell_python_tools_are_launcher_allowlisted(self) -> None:
+        launcher = self._load_launcher(
+            TRUSTED_PYTHON_ENTRY, "agentos_evaluation_launcher_allowlist"
+        )
+        shell = (REPOSITORY / "scripts" / "run-evaluation-suite.sh").read_text(
+            encoding="utf-8"
+        )
+        assignments = dict(
+            re.findall(
+                r'^([A-Z][A-Z0-9_]*)="([^"\n]+\.py)"$',
+                shell,
+                flags=re.MULTILINE,
+            )
+        )
+        invoked = {
+            name: entrypoint
+            for name, entrypoint in assignments.items()
+            if f'run_repo_python "${{{name}}}"' in shell
+        }
+        self.assertTrue(invoked)
+        self.assertEqual(
+            {},
+            {
+                name: entrypoint
+                for name, entrypoint in invoked.items()
+                if entrypoint not in launcher.ALLOWED_ENTRYPOINTS
+            },
+            "every formal shell Python target must use the reviewed launcher",
+        )
 
     def test_python_310_flags_without_safe_path_are_supported(self) -> None:
         launchers = (

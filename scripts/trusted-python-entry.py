@@ -30,6 +30,7 @@ ALLOWED_ENTRYPOINTS = frozenset(
         "host_tools/scenario_timing_source_contract.py",
         "scripts/capture-final-evidence.py",
         "scripts/agent_test_runner.py",
+        "scripts/check-kernel-budgets.py",
         "scripts/check-fs-allocator-state.py",
         "scripts/fs-allocator-evidence.py",
         "scripts/fs-allocator-image.py",
