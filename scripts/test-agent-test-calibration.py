@@ -222,6 +222,30 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(environment["PYTHONNOUSERSITE"], "1")
         self.assertEqual(environment["TMPDIR"], "/tmp")
 
+    def test_calibration_control_tools_precede_build_tool_directories(self):
+        directories = {
+            "qemu": "/qemu/bin",
+            "toolchain_cc": "/cross/bin",
+            "toolchain_ld": "/cross/bin",
+            "toolchain_objcopy": "/cross/bin",
+            "toolchain_objdump": "/cross/bin",
+            "toolchain_as": "/cross/bin",
+            "host_cc": "/clang64/bin",
+            "python": "/usr/bin",
+            "bash": "/usr/bin",
+            "make": "/usr/bin",
+            "git": "/usr/bin",
+        }
+        tools = {
+            name: {"executable": {"path": f"{directories[name]}/{name}"}}
+            for name in calibration.CALIBRATION_TOOL_NAMES
+        }
+        path = calibration.locked_tool_path(tools).split(os.pathsep)
+        self.assertEqual(path[:2], ["/usr/bin", "/bin"])
+        self.assertEqual(
+            path[2:], ["/qemu/bin", "/cross/bin", "/clang64/bin"]
+        )
+
     def test_calibration_runner_python_cannot_pollute_source_checkout(self):
         runner = (ROOT / "scripts" / "run-agent-tests.sh").read_text(
             encoding="utf-8"

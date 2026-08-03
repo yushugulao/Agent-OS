@@ -530,12 +530,12 @@ def canonical_toolchain_prefix(profile, tools):
 
 
 def locked_tool_path(tools):
-    directories = []
+    # Bare commands belong to the attested MSYS control plane. Build and QEMU
+    # tools are invoked by their captured absolute paths, so their directories
+    # must not shadow control utilities such as objdump.
+    directories = ["/usr/bin", "/bin"]
     for name in CALIBRATION_TOOL_NAMES:
         directory = str(Path(tools[name]["executable"]["path"]).parent)
-        if directory not in directories:
-            directories.append(directory)
-    for directory in ("/usr/bin", "/bin"):
         if directory not in directories:
             directories.append(directory)
     return os.pathsep.join(directories)
