@@ -55,6 +55,38 @@ MUTANT_COMPILE_ARGV = [
     MODULE.PROFILE_BUILD_FLAG,
     MODULE.MUTANT_BUILD_FLAG,
 ]
+BASELINE_LAUNCH_ARGV = [
+    "/fixture/bin/python3",
+    "-I",
+    "-S",
+    "-B",
+    "/fixture/evidence/sources/scripts/trusted-python-entry.py",
+    "scripts/agent_test_runner.py",
+    "--init-proc",
+    "fsallocfault_ucore",
+]
+
+
+def canonical_case_build_argv(
+    case: tuple[str, str, str], stem: str
+) -> list[str]:
+    build_dir = f"/tmp/{stem}-user-build"
+    return [
+        "/fixture/bin/make",
+        "-C",
+        "user",
+        "TOOLPREFIX=",
+        "CHAPTER=agent",
+        "CC=/fixture/bin/riscv64-linux-gnu-gcc",
+        "OBJCOPY=/fixture/bin/riscv64-linux-gnu-objcopy",
+        "OBJDUMP=/fixture/bin/riscv64-linux-gnu-objdump",
+        "PYTHON_BIN=/fixture/bin/python3",
+        MODULE._expected_user_build_flag(case),
+        f"build_dir={build_dir}",
+        f"out_dir=/tmp/{stem}-user-target",
+        f"asm_dir=/tmp/{stem}-user-asm",
+        f"{build_dir}/riscv64/fsallocfault_ucore",
+    ]
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -401,16 +433,7 @@ def make_package(root: Path) -> None:
             "capacity_bytes": 4 * 1024 * 1024,
             "build_sha256": backend_build_sha256,
             "compile_argv": BASELINE_COMPILE_ARGV,
-            "launch_argv": [
-                "/fixture/bin/python3",
-                "-I",
-                "-S",
-                "-B",
-                "/fixture/evidence/sources/scripts/trusted-python-entry.py",
-                "scripts/agent_test_runner.py",
-                "--init-proc",
-                "fsallocfault_ucore",
-            ],
+            "launch_argv": BASELINE_LAUNCH_ARGV,
         },
     }
     (root / "profile.kernel").write_bytes(profile_kernel)
@@ -593,22 +616,7 @@ def make_package(root: Path) -> None:
         program_raw, elf_raw = fake_program_pair(case_id)
         (case_root / "program.bin").write_bytes(program_raw)
         (case_root / "program.elf").write_bytes(elf_raw)
-        build_argv = [
-            "/fixture/bin/make",
-            "-C",
-            "user",
-            "TOOLPREFIX=",
-            "CHAPTER=agent",
-            "CC=/fixture/bin/riscv64-linux-gnu-gcc",
-            "OBJCOPY=/fixture/bin/riscv64-linux-gnu-objcopy",
-            "OBJDUMP=/fixture/bin/riscv64-linux-gnu-objdump",
-            "PYTHON_BIN=/fixture/bin/python3",
-            MODULE._expected_user_build_flag(case),
-            f"build_dir=/tmp/{case_id}-user-build",
-            f"out_dir=/tmp/{case_id}-user-target",
-            f"asm_dir=/tmp/{case_id}-user-asm",
-            f"/tmp/{case_id}-user-build/riscv64/fsallocfault_ucore",
-        ]
+        build_argv = canonical_case_build_argv(case, case_id)
         write_json(
             case_root / "build.json",
             {
@@ -1156,15 +1164,32 @@ class SourceClosureContractTest(unittest.TestCase):
                 f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('bad')\n",
                 encoding="utf-8",
             )
-            environment = dict(os.environ)
-            environment.update(hostile)
-            environment["PYTHONPATH"] = str(directory)
+            poisoned_environment = dict(hostile)
+            poisoned_environment["PYTHONPATH"] = str(directory)
             launcher = SCRIPT.with_name("trusted-python-entry.py")
-            code = (
+            child_code = (
                 "import json,os;"
                 "print(json.dumps(sorted(k for k in os.environ "
                 "if k.startswith(('PYTHON','MAKE','FS_','CPATH','LD_',"
                 "'ASAN_','UBSAN_')))))"
+            )
+            entry_argv = [
+                str(launcher),
+                "scripts/fs-allocator-evidence.py",
+                "clean-exec",
+                "--",
+                MODULE.sys.executable,
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                child_code,
+            ]
+            bootstrap = (
+                "import os,runpy,sys;"
+                f"os.environ.update({poisoned_environment!r});"
+                f"sys.argv={entry_argv!r};"
+                f"runpy.run_path({str(launcher)!r},run_name='__main__')"
             )
             completed = MODULE.subprocess.run(
                 [
@@ -1172,19 +1197,11 @@ class SourceClosureContractTest(unittest.TestCase):
                     "-I",
                     "-S",
                     "-B",
-                    str(launcher),
-                    "scripts/fs-allocator-evidence.py",
-                    "clean-exec",
-                    "--",
-                    MODULE.sys.executable,
-                    "-I",
-                    "-S",
-                    "-B",
                     "-c",
-                    code,
+                    bootstrap,
                 ],
                 cwd=SCRIPT.parent.parent,
-                env=environment,
+                env=MODULE.controlled_environment(dict(os.environ)),
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -1815,15 +1832,9 @@ class EvidenceContractTest(unittest.TestCase):
         kernel.write_bytes(b"writer profile kernel\n")
         compile_argv = Path(self._temp.name) / "compile.json"
         launch_argv = Path(self._temp.name) / "launch.json"
-        writer_baseline_compile = [
-            "make",
-            "build",
-            "BUILDDIR=C:/tmp/kernel-build",
-            "INIT_PROC=fsallocfault_ucore",
-            MODULE.PROFILE_BUILD_FLAG,
-        ]
+        writer_baseline_compile = list(BASELINE_COMPILE_ARGV)
         write_json(compile_argv, writer_baseline_compile)
-        base_launch = ["qemu-system-riscv64", "-device", "agentos-ram-overlay"]
+        base_launch = list(BASELINE_LAUNCH_ARGV)
         write_json(launch_argv, base_launch)
         MODULE.init_backend(
             writer_root,
@@ -1845,14 +1856,7 @@ class EvidenceContractTest(unittest.TestCase):
         elf_input.write_bytes(elf_raw)
         write_json(
             build_argv,
-            [
-                "make",
-                "-C",
-                "user",
-                "CHAPTER=agent",
-                MODULE._expected_user_build_flag(case),
-                "/tmp/writer/riscv64/fsallocfault_ucore",
-            ],
+            canonical_case_build_argv(case, "writer"),
         )
         MODULE.record_build(
             writer_root, case_id, program_input, elf_input, build_argv
@@ -1935,14 +1939,7 @@ class EvidenceContractTest(unittest.TestCase):
         write_json(baseline_compile, writer_baseline_compile)
         write_json(
             mutant_compile,
-            [
-                "make",
-                "build",
-                "BUILDDIR=C:/tmp/mutant-kernel-build",
-                "INIT_PROC=fsallocfault_ucore",
-                MODULE.PROFILE_BUILD_FLAG,
-                MODULE.MUTANT_BUILD_FLAG,
-            ],
+            MUTANT_COMPILE_ARGV,
         )
         write_json(
             command_argv,
