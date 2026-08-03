@@ -628,6 +628,26 @@ def calibration_child_environment():
                 "Windows calibration environment lacks canonical system paths: "
                 + ", ".join(invalid)
             )
+    temporary_directory = isolated.get("TMPDIR", "/tmp")
+    if not isinstance(temporary_directory, str) or not temporary_directory:
+        raise CalibrationError(
+            "calibration TMPDIR must be a canonical absolute POSIX path"
+        )
+    temporary_path = PurePosixPath(temporary_directory)
+    if (
+        not temporary_path.is_absolute()
+        or temporary_path.root != "/"
+        or temporary_path.as_posix() != temporary_directory
+        or any(part in {".", ".."} for part in temporary_path.parts)
+        or "\\" in temporary_directory
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in temporary_directory
+        )
+    ):
+        raise CalibrationError(
+            "calibration TMPDIR must be a canonical absolute POSIX path"
+        )
     environment = {
         name: value
         for name, value in isolated.items()
@@ -641,9 +661,9 @@ def calibration_child_environment():
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONHASHSEED": "0",
             "PYTHONNOUSERSITE": "1",
-            "TEMP": "/tmp",
-            "TMP": "/tmp",
-            "TMPDIR": "/tmp",
+            "TEMP": temporary_directory,
+            "TMP": temporary_directory,
+            "TMPDIR": temporary_directory,
             "TZ": "UTC",
         }
     )

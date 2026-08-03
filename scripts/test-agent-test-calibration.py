@@ -211,7 +211,7 @@ class CalibrationTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {**self.canonical_windows_fixture_environment(), **poisoned},
-            clear=False,
+            clear=True,
         ):
             environment = calibration.calibration_child_environment()
         for name in poisoned:
@@ -221,6 +221,39 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(environment["PYTHONHASHSEED"], "0")
         self.assertEqual(environment["PYTHONNOUSERSITE"], "1")
         self.assertEqual(environment["TMPDIR"], "/tmp")
+
+    def test_calibration_child_environment_preserves_canonical_tmpdir(self):
+        inherited = {
+            **self.canonical_windows_fixture_environment(),
+            "TMPDIR": "/r/tmp",
+        }
+        with mock.patch.dict(os.environ, inherited, clear=True):
+            environment = calibration.calibration_child_environment()
+        self.assertEqual(environment["TEMP"], "/r/tmp")
+        self.assertEqual(environment["TMP"], "/r/tmp")
+        self.assertEqual(environment["TMPDIR"], "/r/tmp")
+
+    def test_calibration_child_environment_rejects_invalid_tmpdir(self):
+        for value in (
+            "relative/tmp",
+            "/tmp/../escape",
+            "/tmp\\escape",
+            "/tmp\nextra",
+            "/tmp\textra",
+            "//server/share",
+            "",
+        ):
+            with self.subTest(value=value), mock.patch.dict(
+                os.environ,
+                {
+                    **self.canonical_windows_fixture_environment(),
+                    "TMPDIR": value,
+                },
+                clear=True,
+            ), self.assertRaisesRegex(
+                calibration.CalibrationError, "canonical absolute POSIX path"
+            ):
+                calibration.calibration_child_environment()
 
     def test_calibration_control_tools_precede_build_tool_directories(self):
         directories = {
