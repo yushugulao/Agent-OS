@@ -550,6 +550,104 @@ exit 0
         base = Path(temporary)
         valid = base / "valid"
         make_payload(valid)
+
+        # A verifier contract is executable policy, never payload data.  Both
+        # the exact payload root and a canonical descendant must be rejected
+        # before checksum inventory inspection or semantic replay can run.
+        guard_cases = [
+            ("equal", False, False, False),
+            ("nested", True, False, False),
+        ]
+        if os.name == "nt":
+            guard_cases.extend((
+                ("extended-payload", True, True, False),
+                ("extended-contract", True, False, True),
+            ))
+        for name, nested, extend_payload, extend_contract in guard_cases:
+            case = base / f"untrusted-contract-{name}"
+            shutil.copytree(valid, case)
+            contract = case / "contract" if nested else case
+            scripts = contract / "scripts"
+            scripts.mkdir(parents=True, exist_ok=True)
+            sentinel = base / f"untrusted-contract-{name}-executed"
+            (scripts / "capture-final-evidence.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(sentinel)!r}).write_text('executed')\n",
+                encoding="utf-8",
+            )
+            (scripts / "trusted-python-entry.py").write_text(
+                "raise SystemExit('untrusted launcher executed')\n",
+                encoding="utf-8",
+            )
+            contract_argument = contract
+            if not nested:
+                alias = case / "canonical-alias"
+                alias.mkdir()
+                contract_argument = alias / ".."
+            payload_argument = case
+            if extend_payload:
+                payload_argument = Path("\\\\?\\" + str(case))
+            if extend_contract:
+                contract_argument = Path("\\\\?\\" + str(contract_argument))
+            inventory_calls: list[Path] = []
+            checksum_verifier = payload._verify_checksum_inventory
+
+            def observe_inventory(root):
+                inventory_calls.append(root)
+                return checksum_verifier(root)
+
+            payload._verify_checksum_inventory = observe_inventory
+            try:
+                expect_rejected(
+                    lambda: payload.verify_payload(
+                        payload_argument, contract_root=contract_argument
+                    ),
+                    "contract root cannot be inside the payload",
+                )
+            finally:
+                payload._verify_checksum_inventory = checksum_verifier
+            assert inventory_calls == []
+            assert not sentinel.exists()
+
+        # Self-consistent checksum rows do not make an extra payload file
+        # publishable.  Reject the exact inventory before any duration-policy
+        # validation can dynamically load platform/profile code.
+        extra_inventory = base / "extra-inventory"
+        shutil.copytree(valid, extra_inventory)
+        (extra_inventory / "unexpected-policy.py").write_text(
+            "raise SystemExit('unexpected policy executed')\n", encoding="utf-8"
+        )
+        payload._write_checksums(extra_inventory)
+        duration_sentinel = base / "duration-validation-ran"
+        validation_calls: list[str] = []
+        tools_validator = payload._validate_tools
+        duration_validator = payload.validate_duration_attestation
+
+        def observe_tools(*args, **kwargs):
+            validation_calls.append("tools")
+            duration_sentinel.write_text("tools", encoding="ascii")
+            return tools_validator(*args, **kwargs)
+
+        def observe_duration(*args, **kwargs):
+            validation_calls.append("duration")
+            duration_sentinel.write_text("duration", encoding="ascii")
+            return duration_validator(*args, **kwargs)
+
+        payload._validate_tools = observe_tools
+        payload.validate_duration_attestation = observe_duration
+        try:
+            expect_rejected(
+                lambda: payload.verify_payload(
+                    extra_inventory, contract_root=repository
+                ),
+                "payload inventory differs",
+            )
+        finally:
+            payload._validate_tools = tools_validator
+            payload.validate_duration_attestation = duration_validator
+        assert validation_calls == []
+        assert not duration_sentinel.exists()
+
         expect_rejected(
             lambda: payload.verify_payload(
                 valid, expected_commit=COMMIT, contract_root=repository

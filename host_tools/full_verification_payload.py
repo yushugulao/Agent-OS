@@ -219,6 +219,24 @@ def _contract_root(path: Path) -> Path:
     return root
 
 
+def _directory_is_at_or_below(path: Path, root: Path) -> bool:
+    """Compare canonical directories by identity across host path aliases."""
+
+    current = path
+    while True:
+        try:
+            if current.samefile(root):
+                return True
+        except OSError as error:
+            raise FullVerificationError(
+                "full-verification contract containment cannot be verified safely"
+            ) from error
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+
+
 def _replay_semantics(
     raw_root: Path,
     summary_path: Path,
@@ -654,6 +672,11 @@ def verify_payload(
         root = require_safe_directory(lexical).resolve(strict=True)
     except (OSError, ValueError) as error:
         raise FullVerificationError("full-verification payload is missing or link-backed") from error
+    contract_root = _contract_root(contract_root)
+    if _directory_is_at_or_below(contract_root, root):
+        raise FullVerificationError(
+            "trusted full-verification contract root cannot be inside the payload"
+        )
     records = _verify_checksum_inventory(root)
     try:
         receipt = read_strict_json(_regular_file(root, RECEIPT_NAME, "receipt"))
@@ -765,6 +788,19 @@ def verify_payload(
     if names != set(by_name):
         raise FullVerificationError("full-verification raw inventory differs from summary")
 
+    required = {
+        RECEIPT_NAME,
+        SUMMARY_NAME,
+        CHECKSUM_NAME,
+        LOG_NAME,
+        ENVIRONMENT_NAME,
+        *(f"{RAW_ROOT}/{name}" for name in names),
+        *(f"environment/versions/{label}.txt" for label in TOOL_LABELS),
+    }
+    actual = {CHECKSUM_NAME, *(str(record["path"]) for record in records)}
+    if actual != required:
+        raise FullVerificationError("full-verification payload inventory differs")
+
     environment_path = _validate_file_record(
         root, receipt.get("environment"), ENVIRONMENT_NAME, "environment"
     )
@@ -797,18 +833,6 @@ def verify_payload(
         )
     except FormalPythonRuntimeError as error:
         raise FullVerificationError(str(error)) from error
-    required = {
-        RECEIPT_NAME,
-        SUMMARY_NAME,
-        CHECKSUM_NAME,
-        LOG_NAME,
-        ENVIRONMENT_NAME,
-        *(f"{RAW_ROOT}/{name}" for name in names),
-        *(f"environment/versions/{label}.txt" for label in TOOL_LABELS),
-    }
-    actual = {path.relative_to(root).as_posix() for path in _inventory(root)}
-    if actual != required:
-        raise FullVerificationError("full-verification payload inventory differs")
     _replay_semantics(root / RAW_ROOT, summary_path, commit, contract_root)
 
     all_records = sorted(

@@ -434,6 +434,78 @@ class CampaignTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_calibrated_campaign_reuses_platform_tool_identities(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            proof = _msys_platform_proof(root)
+            proof["duration_profile"] = {
+                "calibration_status": "calibrated_full_suite",
+                "name": "local-e3",
+                "profile_id": "fixture-local-e3",
+                "status": "matched",
+            }
+            proof["tools"]["python"]["version"] = "CPython 3.12.13 (MSYS2)"
+            with mock.patch.object(
+                campaign,
+                "probe_executable",
+                side_effect=AssertionError("calibrated tools must not be re-probed"),
+            ):
+                environment = campaign._campaign_execution_environment(
+                    repo=root,
+                    platform_proof=proof,
+                    toolprefix="/unused/riscv-none-elf-",
+                    qemu="unused-qemu",
+                    python_bin="unused-python",
+                    shell_bin="unused-bash",
+                )
+
+            self.assertEqual(set(environment), set(campaign.MICRO_EXECUTION_TOOL_LABELS))
+            for label in campaign.MICRO_EXECUTION_TOOL_LABELS:
+                self.assertEqual(environment[label], proof["tools"][label])
+                self.assertIsNot(environment[label], proof["tools"][label])
+
+    def test_unattested_campaign_probes_requested_execution_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            proof = _platform_proof(root)
+            calls: list[str] = []
+
+            def probe(name: str, _args: list[str], _repo: Path) -> dict[str, str]:
+                calls.append(name)
+                return {
+                    "argv0": name,
+                    "path": str((root / Path(name).name).resolve()),
+                    "sha256": "a" * 64,
+                    "version": f"{name} fixture",
+                }
+
+            with mock.patch.object(campaign, "probe_executable", side_effect=probe):
+                environment = campaign._campaign_execution_environment(
+                    repo=root,
+                    platform_proof=proof,
+                    toolprefix="/toolchain/riscv-none-elf-",
+                    qemu="chosen-qemu",
+                    python_bin="chosen-python",
+                    shell_bin="chosen-bash",
+                )
+
+            self.assertEqual(
+                calls,
+                [
+                    "/toolchain/riscv-none-elf-as",
+                    "chosen-bash",
+                    "/toolchain/riscv-none-elf-gcc",
+                    "git",
+                    "/toolchain/riscv-none-elf-ld",
+                    "make",
+                    "/toolchain/riscv-none-elf-objcopy",
+                    "/toolchain/riscv-none-elf-objdump",
+                    "chosen-python",
+                    "chosen-qemu",
+                ],
+            )
+            self.assertEqual(environment["host_cc"], proof["tools"]["host_cc"])
+
     def test_formal_campaigns_reject_optional_stopping_counts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

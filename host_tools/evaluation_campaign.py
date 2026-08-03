@@ -180,6 +180,10 @@ CAMPAIGN_LOCK_TOKEN_ENV = "AGENTOS_EVALUATION_CAMPAIGN_TOKEN"
 CAMPAIGN_LOCK_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
 SCENARIO_TARGET_COUNT = 2
 SCENARIO_COORDINATION_ALLOWANCE_SECONDS = 60
+MICRO_EXECUTION_TOOL_LABELS = (
+    "assembler", "bash", "compiler", "git", "host_cc", "linker", "make",
+    "objcopy", "objdump", "python", "qemu",
+)
 SCENARIO_CLEAN_HOME = "/tmp"
 SCENARIO_CLEAN_PATH = (
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1020,6 +1024,47 @@ def probe_executable(name: str, version_args: list[str], repo: Path) -> dict[str
     }
 
 
+def _campaign_execution_environment(
+    *,
+    repo: Path,
+    platform_proof: dict[str, Any],
+    toolprefix: str,
+    qemu: str,
+    python_bin: str,
+    shell_bin: str,
+) -> dict[str, dict[str, str]]:
+    profile = platform_proof.get("duration_profile")
+    profile_name = profile.get("name") if isinstance(profile, dict) else None
+    if profile_name not in {"none", "local-e3"}:
+        raise CampaignError("platform duration profile is unavailable")
+    if profile_name != "none":
+        tools = platform_proof.get("tools")
+        if not isinstance(tools, dict) or any(
+            not isinstance(tools.get(label), dict)
+            for label in MICRO_EXECUTION_TOOL_LABELS
+        ):
+            raise CampaignError("platform execution tool proof is incomplete")
+        return {
+            label: dict(tools[label])
+            for label in MICRO_EXECUTION_TOOL_LABELS
+        }
+
+    compiler = f"{toolprefix}gcc"
+    return {
+        "assembler": probe_executable(f"{toolprefix}as", ["--version"], repo),
+        "bash": probe_executable(shell_bin, ["--version"], repo),
+        "compiler": probe_executable(compiler, ["--version"], repo),
+        "git": probe_executable("git", ["--version"], repo),
+        "host_cc": dict(platform_proof["tools"]["host_cc"]),
+        "linker": probe_executable(f"{toolprefix}ld", ["--version"], repo),
+        "make": probe_executable("make", ["--version"], repo),
+        "objcopy": probe_executable(f"{toolprefix}objcopy", ["--version"], repo),
+        "objdump": probe_executable(f"{toolprefix}objdump", ["--version"], repo),
+        "python": probe_executable(python_bin, ["--version"], repo),
+        "qemu": probe_executable(qemu, ["--version"], repo),
+    }
+
+
 def require_formal_execution_domain(
     repo: Path,
     *,
@@ -1130,20 +1175,17 @@ def create_campaign(
     _require_regular_file(suite_path, "evaluation suite")
     expected_samples_per_boot = _expected_samples_per_boot(suite_path)
 
-    compiler = f"{toolprefix}gcc"
-    environment = {
-        "assembler": probe_executable(f"{toolprefix}as", ["--version"], repo),
-        "bash": probe_executable(shell_bin, ["--version"], repo),
-        "compiler": probe_executable(compiler, ["--version"], repo),
-        "git": probe_executable("git", ["--version"], repo),
-        "host_cc": dict(platform_proof["tools"]["host_cc"]),
-        "linker": probe_executable(f"{toolprefix}ld", ["--version"], repo),
-        "make": probe_executable("make", ["--version"], repo),
-        "objcopy": probe_executable(f"{toolprefix}objcopy", ["--version"], repo),
-        "objdump": probe_executable(f"{toolprefix}objdump", ["--version"], repo),
-        "python": probe_executable(python_bin, ["--version"], repo),
-        "qemu": probe_executable(qemu, ["--version"], repo),
-    }
+    # Calibrated profiles use the platform proof as their single executable
+    # identity provider. Re-probing used a different Python version formatter
+    # and made one valid platform disagree with itself before the first boot.
+    environment = _campaign_execution_environment(
+        repo=repo,
+        platform_proof=platform_proof,
+        toolprefix=toolprefix,
+        qemu=qemu,
+        python_bin=python_bin,
+        shell_bin=shell_bin,
+    )
     _verify_bound_host_cc_resolution(
         environment["host_cc"], _trusted_process_path(environment.values())
     )
@@ -1907,10 +1949,7 @@ def validate_campaign(
         raise CampaignError("environment must be an object")
     _expect_keys(
         environment,
-        [
-            "assembler", "bash", "compiler", "git", "host_cc", "linker", "make", "objcopy",
-            "objdump", "python", "qemu",
-        ],
+        list(MICRO_EXECUTION_TOOL_LABELS),
         "environment",
     )
     for label, tool in environment.items():

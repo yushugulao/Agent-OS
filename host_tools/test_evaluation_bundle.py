@@ -1175,6 +1175,57 @@ def assert_image_budget_precedes_extraction(
         bundle.extract_state_files = original_extractor
 
 
+def assert_committed_contract_root_gate(root: Path) -> None:
+    repo = root / "contract-root-gate-repo"
+    foreign_contract = root / "contract-root-gate-foreign"
+    run = root / "contract-root-gate-run"
+    repo.mkdir()
+    foreign_contract.mkdir()
+    run.mkdir()
+    suite = root / "contract-root-gate-suite.json"
+    suite.write_text("{}\n", encoding="ascii", newline="\n")
+    sentinel = root / "foreign-contract-semantics-executed"
+    calls: list[str] = []
+
+    def forbidden(label: str):
+        def execute(*_args: object, **_kwargs: object) -> object:
+            calls.append(label)
+            sentinel.write_text("executed\n", encoding="ascii")
+            raise AssertionError(f"committed {label} ran with a foreign contract root")
+
+        return execute
+
+    original_micro_verifier = bundle._verify_micro_campaign
+    original_preauthenticator = bundle._preauthenticate_committed_bundle
+    original_portable_verifier = bundle.verify_bundle
+    try:
+        bundle._verify_micro_campaign = forbidden("create semantics")
+        expect_rejected(
+            lambda: bundle.create_bundle(
+                run_dir=run,
+                suite_path=suite,
+                output=repo / "evidence" / "releases" / "foreign-create",
+                contract_root=foreign_contract,
+                repo_root=repo,
+            ),
+            "same canonical directory",
+        )
+        bundle._preauthenticate_committed_bundle = forbidden("Git preauthentication")
+        bundle.verify_bundle = forbidden("verify semantics")
+        expect_rejected(
+            lambda: bundle.verify_committed_bundle(
+                root / "untrusted-bundle", repo, contract_root=foreign_contract
+            ),
+            "same canonical directory",
+        )
+    finally:
+        bundle._verify_micro_campaign = original_micro_verifier
+        bundle._preauthenticate_committed_bundle = original_preauthenticator
+        bundle.verify_bundle = original_portable_verifier
+    assert calls == []
+    assert not sentinel.exists()
+
+
 def assert_committed_delivery_roundtrip(
     root: Path, image_verifier_calls: list[tuple[str, str]]
 ) -> None:
@@ -1437,6 +1488,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        assert_committed_contract_root_gate(root)
         profile_run = root / "profile-binding"
         (profile_run / "full-verification").mkdir(parents=True)
         original_full_verifier = bundle.verify_full_verification_payload

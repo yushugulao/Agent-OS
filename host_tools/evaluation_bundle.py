@@ -200,6 +200,17 @@ def _safe_directory(path: Path, label: str) -> Path:
         raise BundleError(f"{label} is missing or link-backed: {path}") from error
 
 
+def _require_same_directory(left: Path, right: Path, label: str) -> None:
+    """Require two already-canonical roots to name the same directory."""
+
+    try:
+        same = os.path.samefile(left, right)
+    except OSError as error:
+        raise BundleError(f"{label} identity cannot be established") from error
+    if not same:
+        raise BundleError(f"{label} must be the same canonical directory")
+
+
 def _safe_regular_file(path: Path, label: str) -> Path:
     try:
         return require_regular_file(path)
@@ -2077,6 +2088,11 @@ def create_bundle(
         repo_root = _safe_directory(
             absolute_lexical_path(repo_root), "evidence repository root"
         ).resolve(strict=True)
+        _require_same_directory(
+            repo_root,
+            contract_root,
+            "committed evidence repository and trusted contract root",
+        )
 
     campaign, micro_receipts, micro_paths = _verify_micro_campaign(
         run_dir, suite_path, contract_root=contract_root
@@ -2626,8 +2642,19 @@ def verify_committed_bundle(
 ) -> dict[str, Any]:
     """Authenticate Git delivery before replaying portable bundle semantics."""
 
+    repo_root = _safe_directory(
+        absolute_lexical_path(repo_root), "evidence repository root"
+    ).resolve(strict=True)
+    contract_root = _safe_directory(
+        absolute_lexical_path(contract_root), "trusted verifier contract root"
+    ).resolve(strict=True)
+    _require_same_directory(
+        repo_root,
+        contract_root,
+        "committed evidence repository and trusted contract root",
+    )
     authenticated_manifest = _preauthenticate_committed_bundle(root, repo_root)
-    manifest = verify_bundle(root, contract_root=contract_root)
+    manifest = verify_bundle(root, contract_root=repo_root)
     if manifest != authenticated_manifest:
         raise BundleError("bundle manifest changed after committed authentication")
     return manifest
