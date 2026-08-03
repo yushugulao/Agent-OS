@@ -379,6 +379,59 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                 stage="after trusted purge",
             )
 
+    def test_source_and_generated_inventories_have_independent_budgets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, git, commit, environment = self._source_fixture(Path(temporary))
+            build = root / "build"
+            build.mkdir()
+            for index in range(4):
+                (build / f"output-{index}").write_bytes(b"generated\n")
+
+            with mock.patch.object(source_gate, "DEFAULT_MAX_WALK_FILES", 4):
+                receipt = attestation.verify_evaluation_source_tree(
+                    git,
+                    root,
+                    root,
+                    commit,
+                    environment,
+                    allowed_output_roots=("build",),
+                    stage="independent inventory budgets",
+                )
+                self.assertEqual(
+                    len([path for path in receipt.generated_paths if path.startswith("build/")]),
+                    4,
+                )
+
+                (build / "output-over-budget").write_bytes(b"generated\n")
+                with self.assertRaisesRegex(
+                    attestation.ToolAttestationError, "generated inventory exceeds"
+                ):
+                    attestation.verify_evaluation_source_tree(
+                        git,
+                        root,
+                        root,
+                        commit,
+                        environment,
+                        allowed_output_roots=("build",),
+                        stage="generated inventory over budget",
+                    )
+                (build / "output-over-budget").unlink()
+
+                (root / "extra-one").write_bytes(b"source\n")
+                (root / "extra-two").write_bytes(b"source\n")
+                with self.assertRaisesRegex(
+                    attestation.ToolAttestationError, "source inventory exceeds"
+                ):
+                    attestation.verify_evaluation_source_tree(
+                        git,
+                        root,
+                        root,
+                        commit,
+                        environment,
+                        allowed_output_roots=("build",),
+                        stage="source inventory over budget",
+                    )
+
     @unittest.skipUnless(os.name == "posix", "tracked symlink fixture requires POSIX")
     def test_tracked_symlink_cannot_escape_source_closure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

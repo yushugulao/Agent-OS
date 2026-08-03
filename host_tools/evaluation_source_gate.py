@@ -308,16 +308,24 @@ def _verify_tracked_parent_directories(
 
 
 def _filesystem_worktree_paths(
-    repository: Path, worktree: Path
+    repository: Path,
+    worktree: Path,
+    *,
+    generated_roots: Iterable[PurePosixPath] = (),
+    generated_files: Iterable[PurePosixPath] = (),
 ) -> tuple[tuple[PurePosixPath, bool], ...]:
     """Inventory every non-administrative path without consulting Git ignores."""
 
+    generated_roots = tuple(generated_roots)
+    generated_files = frozenset(generated_files)
     paths: list[tuple[PurePosixPath, bool]] = []
     seen: dict[str, PurePosixPath] = {}
-    file_count = directory_count = total_bytes = 0
+    counters = {
+        "source": [0, 0, 0],
+        "generated": [0, 0, 0],
+    }
 
     def add(path: Path, is_directory: bool) -> None:
-        nonlocal file_count, directory_count, total_bytes
         relative = _canonical_relative_path(
             path.relative_to(worktree).as_posix(), "filesystem worktree inventory"
         )
@@ -326,17 +334,26 @@ def _filesystem_worktree_paths(
             raise ToolAttestationError("filesystem worktree inventory contains a path collision")
         seen[folded] = relative
         paths.append((relative, is_directory))
+        namespace = (
+            "generated"
+            if _under(relative, generated_roots) or relative in generated_files
+            else "source"
+        )
+        file_count, directory_count, total_bytes = counters[namespace]
         if is_directory:
             directory_count += 1
         else:
             file_count += 1
             total_bytes += path.lstat().st_size
+        counters[namespace] = [file_count, directory_count, total_bytes]
         if (
             file_count > DEFAULT_MAX_WALK_FILES
             or directory_count > DEFAULT_MAX_WALK_DIRECTORIES
             or total_bytes > DEFAULT_MAX_WALK_BYTES
         ):
-            raise ToolAttestationError("filesystem worktree inventory exceeds its budget")
+            raise ToolAttestationError(
+                f"filesystem worktree {namespace} inventory exceeds its budget"
+            )
 
     try:
         with os.scandir(worktree) as iterator:
@@ -478,7 +495,12 @@ def verify_evaluation_source_tree(
     }
     generated: list[str] = []
     unauthorized: list[str] = []
-    for relative, is_directory in _filesystem_worktree_paths(repository, worktree):
+    for relative, is_directory in _filesystem_worktree_paths(
+        repository,
+        worktree,
+        generated_roots=roots,
+        generated_files=files,
+    ):
         value = relative.as_posix()
         folded = value.casefold()
         tracked = tracked_directories if is_directory else tracked_files
