@@ -17,7 +17,7 @@ WORKSPACE_GENERATED_PATHS = \
 	baseline_ucore/user/asm baseline_ucore/user/asm-* \
 	nfs/*.img nfs/fs nfs/*.exe os/initproc.S \
 	baseline_ucore/nfs/*.img baseline_ucore/nfs/fs baseline_ucore/nfs/*.exe \
-	baseline_ucore/os/initproc.S results .pytest_cache \
+	baseline_ucore/os/initproc.S .pytest_cache \
 	host_tools/__pycache__ scripts/__pycache__
 
 TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then echo riscv64-unknown-elf-; else echo riscv64-linux-gnu-; fi)
