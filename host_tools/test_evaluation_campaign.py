@@ -2492,6 +2492,15 @@ class CampaignTests(unittest.TestCase):
         self.assertNotIn('subparsers.add_parser("record")', campaign_source)
         self.assertIn("EVALUATION_MICRO_TIMEOUT:-900", script)
         self.assertIn("FORMAL_MICRO_TIMEOUT=900", script)
+        self.assertIn("preflight_scenario_builders()", script)
+        self.assertIn(
+            '[[ "${EVALUATION_INCLUDE_SCENARIO}" == "1" ]] || return 0', script
+        )
+        self.assertIn("local status=$? cleanup_status", script)
+        self.assertIn('exit "${cleanup_status}"', script)
+        self.assertIn(
+            '"${make_tool}" -rR -C baseline_ucore/nfs -f Makefile fs', script
+        )
         self.assertIn(
             '"CASE_TIMEOUT": f"{timeout_seconds}s"', campaign_source
         )
@@ -2537,6 +2546,11 @@ class CampaignTests(unittest.TestCase):
         self.assertLess(
             script.index(scenario_preflight_check), script.index(first_boot_loop)
         )
+        builder_preflight_call = script.index("\t\tpreflight_scenario_builders\n")
+        self.assertGreater(
+            builder_preflight_call, script.index(scenario_preflight_check)
+        )
+        self.assertLess(builder_preflight_call, script.index(first_boot_loop))
         self.assertIn("run-scenario-boot", script)
         self.assertNotIn('subparsers.add_parser("record-scenario")', campaign_source)
         self.assertIn("check-scenario", script)

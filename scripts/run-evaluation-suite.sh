@@ -196,6 +196,29 @@ pipeline_status_selftest() {
 	fi
 }
 
+preflight_scenario_builders() {
+	[[ "${EVALUATION_INCLUDE_SCENARIO}" == "1" ]] || return 0
+	local make_tool="${MAKE_TOOL:-make}"
+	require_file baseline_ucore/nfs/Makefile
+	(
+		cleanup_scenario_builder() {
+			local status=$? cleanup_status
+			set +e
+			"${make_tool}" -rR -C baseline_ucore/nfs -f Makefile clean
+			cleanup_status=$?
+			trap - EXIT
+			if [[ "${status}" -ne 0 ]]; then
+				exit "${status}"
+			fi
+			exit "${cleanup_status}"
+		}
+		trap cleanup_scenario_builder EXIT
+		"${make_tool}" -rR -C baseline_ucore/nfs -f Makefile clean
+		"${make_tool}" -rR -C baseline_ucore/nfs -f Makefile fs \
+			HOSTCC="${HOST_CC}"
+	)
+}
+
 write_pointer() {
 	local name="$1" value="$2" partial
 	mkdir -p "${EVALUATION_OUTPUT_ROOT}"
@@ -581,6 +604,7 @@ run_campaign() {
 			--repo "${ROOT}" \
 			--manifest "${RUN_DIR}/scenario/scenario-plan.json" \
 			--receipt "${RUN_DIR}/scenario-preflight.log"
+		preflight_scenario_builders
 	fi
 
 	local number boot_id challenge rc

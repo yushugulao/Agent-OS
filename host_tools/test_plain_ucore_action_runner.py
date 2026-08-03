@@ -2485,6 +2485,78 @@ def main() -> int:
     assert "--marker-mode exact-line" in read(
         repo_root / "scripts" / "run-agent-tests.sh"
     )
+
+    baseline_nfs_make = read(repo_root / "baseline_ucore" / "nfs" / "Makefile")
+    assert "HOSTCC ?= cc" in baseline_nfs_make
+    assert "HOSTCC_CMD = $(call shell_quote,$(HOSTCC))" in baseline_nfs_make
+    assert ".PHONY: .FORCE clean $(FS_FUSE)" in baseline_nfs_make
+    assert "$(HOSTCC_CMD) fs.c -o \"$$tmp\"" in baseline_nfs_make
+    assert "$(HOSTCC) fs.c fs.h" not in baseline_nfs_make
+
+    with tempfile.TemporaryDirectory() as temporary:
+        builder = Path(temporary) / "builder"
+        builder.mkdir()
+        (builder / "Makefile").write_text(baseline_nfs_make, encoding="utf-8")
+        (builder / "fs.c").write_text("int main(void) { return 0; }\n", encoding="ascii")
+        (builder / "fs.h").write_text("/* dependency only */\n", encoding="ascii")
+        (builder / "types.h").write_text("/* dependency only */\n", encoding="ascii")
+        tool_dir = Path(temporary) / "host compiler"
+        tool_dir.mkdir()
+        fake_cc = tool_dir / "fake cc"
+        fake_cc.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            ": > compiler.args\n"
+            "out=\n"
+            "while [ \"$#\" -gt 0 ]; do\n"
+            "  printf '%s\\n' \"$1\" >> compiler.args\n"
+            "  if [ \"$1\" = -o ]; then shift; out=$1; "
+            "printf '%s\\n' \"$1\" >> compiler.args; fi\n"
+            "  shift\n"
+            "done\n"
+            "test -n \"$out\"\n"
+            "printf '#!/bin/sh\\nexit 0\\n' > \"$out\"\n"
+            "chmod +x \"$out\"\n",
+            encoding="ascii",
+        )
+        fake_cc.chmod(0o755)
+        make_tool = os.environ.get("MAKE_TOOL", "make")
+        built = subprocess.run(
+            [make_tool, "-rR", "-f", "Makefile", "fs", f"HOSTCC={fake_cc}"],
+            cwd=builder,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert built.returncode == 0, built.stderr
+        compiler_args = read(builder / "compiler.args").splitlines()
+        assert compiler_args[0] == "fs.c"
+        assert "fs.h" not in compiler_args and "types.h" not in compiler_args
+        assert (builder / "fs").is_file()
+
+        (builder / "fs").unlink()
+        fake_cc.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            "while [ \"$1\" != -o ]; do shift; done\n"
+            "shift\n"
+            ": > \"$1\"\n"
+            "exit 17\n",
+            encoding="ascii",
+        )
+        failed = subprocess.run(
+            [make_tool, "-rR", "-f", "Makefile", "fs", f"HOSTCC={fake_cc}"],
+            cwd=builder,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert failed.returncode != 0
+        assert not (builder / "fs").exists()
+        assert not list(builder.glob("fs.*.tmp"))
+
     mechanism_runners = (
         "proc-reap",
         "syscall-fairness",
