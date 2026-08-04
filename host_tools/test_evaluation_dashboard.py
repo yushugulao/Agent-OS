@@ -2289,6 +2289,14 @@ class DashboardContractTests(unittest.TestCase):
                     validate_summary(summary)
 
     def test_diagnostic_readiness_cannot_be_forged(self) -> None:
+        ready_index = fixture()
+        ready_diagnostic = ready_index["benchmarks"][0]["diagnostics"][0]
+        ready_work = [2, 3, 5, 6, 7, 8, 8]
+        for sample, work_units in zip(ready_diagnostic["samples"], ready_work):
+            sample["work_units"] = work_units
+        ready_diagnostic["work_units"] = {"median": 6.0, "p95": 8.0, "n": 7}
+        validate_summary(ready_index)
+
         mutations = (
             (
                 "summary",
@@ -2319,6 +2327,11 @@ class DashboardContractTests(unittest.TestCase):
                 "result cache",
                 lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("result_cache_hits", 1),
                 "result_cache_hits must be zero",
+            ),
+            (
+                "unbounded ready work",
+                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("work_units", 513),
+                "conflicts with rebuild records",
             ),
             (
                 "workload fingerprint",
@@ -2410,6 +2423,10 @@ class DashboardContractTests(unittest.TestCase):
         self.assertRegex(
             css,
             r"\.headline-result-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,",
+        )
+        self.assertRegex(
+            css,
+            r"\.headline-result-slot--task6\s*\{[^}]*grid-column:\s*1\s*/\s*-1",
         )
         self.assertRegex(css, r"\.raw-pair-link\s*\{[^}]*opacity:\s*0\.55")
         self.assertRegex(
@@ -2574,7 +2591,8 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(overview.count('data-overview-slot="task6"'), 1)
         self.assertIn("任务 6 端到端场景", overview)
         self.assertIn("status--supported", overview)
-        self.assertIn("signed delta 定义为 plain-AgentOS，中位数 +20 ms", overview)
+        self.assertIn("plain-AgentOS 中位差 +20 ms", overview)
+        self.assertNotIn("描述性 bootstrap 95% 区间", overview)
         scenario_panel = page.split('id="panel-scenarios"', 1)[1].split(
             'id="panel-evidence"', 1
         )[0]

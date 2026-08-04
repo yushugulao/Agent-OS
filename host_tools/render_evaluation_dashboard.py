@@ -1466,7 +1466,11 @@ def _validate_diagnostics(
             work_units = integers["work_units"]
             if (
                 cache == "ready"
-                and (rebuild != 0 or work_units != integers["operations"])
+                and (
+                    rebuild != 0
+                    or work_units < integers["operations"]
+                    or work_units > FILE_META_CAPACITY * integers["operations"]
+                )
             ) or (
                 cache == "cold-rebuild"
                 and (rebuild <= 0 or work_units != rebuild)
@@ -4053,6 +4057,26 @@ def _scenario_metric(scenario: dict[str, Any]) -> str:
     )
 
 
+def _scenario_overview_metric(scenario: dict[str, Any]) -> str:
+    """Keep the overview scannable; the scenario panel owns full inference detail."""
+
+    performance = scenario.get("performance")
+    if not isinstance(performance, dict):
+        return _scenario_metric(scenario)
+    relative_delta = (
+        "unavailable"
+        if performance["relative_median_percent"] is None
+        else f"{float(performance['relative_median_percent']):+.6g}%"
+    )
+    status = scenario["performance_status"]
+    return (
+        f"{STATUS_ZH.get(status, status)} ({status})；n={performance['n']}；"
+        f"plain-AgentOS 中位差 {float(performance['median']):+.6g} "
+        f"{performance['unit']}；相对中位数 {relative_delta}。"
+        "完整区间与检验见科研场景页。"
+    )
+
+
 def _overview_claim_slots(
     summary: dict[str, Any],
     benchmarks: dict[str, dict[str, Any]],
@@ -4130,7 +4154,7 @@ def _overview_task6_slot(scenarios: list[dict[str, Any]]) -> str:
                 f'<div><strong>{_h(scenario["label"])}</strong>'
                 f'<span>功能 {_status(scenario["functional_status"])}</span>'
                 f'<span>性能 {_status(scenario["performance_status"])}</span></div>'
-                f'<p>{_h(_scenario_metric(scenario))}</p><footer>{refs}</footer></div>'
+                f'<p>{_h(_scenario_overview_metric(scenario))}</p><footer>{refs}</footer></div>'
             )
         content = "".join(rows)
     return (
@@ -4663,7 +4687,7 @@ def _page(
       </dl>
       <section class="overview-results" aria-labelledby="overview-results-title">
         <div class="subheading"><h2 id="overview-results-title">固定结果集</h2><span>{_h(claim_count)} 个机制 claim 与 Task6，不选择单一胜者</span></div>
-        <div class="headline-result-grid">{overview_claim_slots}{overview_task6_slot}</div>
+        <div class="headline-result-grid">{overview_task6_slot}{overview_claim_slots}</div>
       </section>
       <section class="conclusion-band" aria-labelledby="conclusion-title"><p class="eyebrow">证据约束结论</p><h2 id="conclusion-title">{_h(conclusion)}</h2></section>
       <section class="overview-grid">

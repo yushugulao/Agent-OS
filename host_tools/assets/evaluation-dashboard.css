@@ -348,6 +348,11 @@ code {
   padding: 14px;
 }
 
+.headline-result-slot--task6 {
+  grid-column: 1 / -1;
+  min-height: 0;
+}
+
 .headline-result-slot > header,
 .extension-result-slot > header,
 .task6-slot-row > div {
