@@ -28,6 +28,7 @@ from evaluation_campaign import (
 )
 from evaluation_contract import (
     EvaluationError,
+    SUITE_IDS,
     derive_acceptance_gates,
     verify as verify_contract,
 )
@@ -1552,6 +1553,15 @@ def _verify_kernel_cost(run_root: Path, *, require_complete: bool = False) -> No
 
 
 def _verify_formal_summary(summary: dict[str, Any]) -> None:
+    summary_schema = summary.get("schema_version")
+    run = summary.get("run")
+    if (
+        type(summary_schema) is not int
+        or summary_schema not in SUITE_IDS
+        or not isinstance(run, dict)
+        or run.get("suite_id") != SUITE_IDS[summary_schema]
+    ):
+        raise BundleError("formal summary acceptance policy binding is invalid")
     scenarios = summary.get("scenarios")
     if not isinstance(scenarios, list):
         raise BundleError("formal summary has no scenario results")
@@ -1620,7 +1630,10 @@ def _verify_formal_summary(summary: dict[str, Any]) -> None:
         )
     try:
         expected_acceptance = derive_acceptance_gates(
-            scenarios, claims, competition_claims
+            scenarios,
+            claims,
+            competition_claims,
+            suite_schema_version=summary_schema,
         )
     except EvaluationError as error:
         raise BundleError(f"formal competition claim registration is invalid: {error}") from error
@@ -1635,16 +1648,26 @@ def _verify_formal_summary(summary: dict[str, Any]) -> None:
         for task, item in by_task.items()
         if item.get("performance_status") == "regressed"
     }
-    if regressed_tasks and (
+    blocking_regressions = (
+        regressed_tasks
+        if summary_schema == 2
+        else regressed_tasks.intersection(competition_claims)
+    )
+    if blocking_regressions and (
         expected_acceptance["competition_ready"]
         or any(
             expected_acceptance["tasks"].get(task) != "not_ready"
-            for task in regressed_tasks
+            for task in blocking_regressions
         )
     ):
+        policy = (
+            "suite v2 scenario regressions"
+            if summary_schema == 2
+            else "regressions for registered competition claims"
+        )
         raise BundleError(
-            "formal scenario regressions must remain publishable negative evidence "
-            "and cannot be competition-ready"
+            f"formal {policy} must remain publishable negative evidence and "
+            "cannot be competition-ready"
         )
     # A negative result for the preregistered Task 4 claim is a complete
     # scientific result.  It remains publishable but cannot pass the rubric.

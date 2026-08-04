@@ -315,8 +315,13 @@ joint-MCID loss。等于阈值、缺失相对值或任一阈值未越过都分�
 功能数据有效；还必须满足 Plain 基线窗口至少 50 ms。正向门通过时状态为 `supported`，
 反向门通过时状态为 `regressed`，两边都未通过时才是 `inconclusive`。统计结构缺失、
 自相矛盾或被篡改属于 `failed`，不得软化为证据不足。`regressed` 仍保留并允许打包完整
-负结果，但对应任务与 `competition_ready` 必须为未就绪。scenario report 首个正式协议
-直接使用 schema v2 和 `scenario-report-v2` 绑定域；本分支此前没有 schema v1 formal release。
+负结果，也始终禁止宣称 Task 6 全栈性能优势。竞赛性能门只适用于 suite
+`competition_claims` 显式注册的任务；题面没有要求 Task 6 full-stack 必须快于 Plain，
+因此它的性能方向作为诊断展示，不覆盖 Task 6 的功能、稳定性和证据完整性验收。
+evaluation suite 与 summary v3 在采集新一轮数据前固定了这项区分；验证器仍按 v2 旧规则
+复验历史负结果，并拒绝 suite/summary 版本混搭，因而不会追溯改判旧证据。
+scenario report 继续使用 schema v2 和 `scenario-report-v2` 绑定域，因为原始测量与统计合同
+没有改变。
 该场景是 full-stack 对照，不能把结果归因给单一内核机制；宿主页缓存也未受控。
 
 任务六功能通过还要求每个 AgentOS boot 的 extracted state 都包含严格的

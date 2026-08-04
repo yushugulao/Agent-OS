@@ -892,6 +892,8 @@ def main() -> int:
     assert_evaluation_image_role_contract()
     assert_targeted_runner_uses_canonical_contract()
     suite = load_suite(SUITE_PATH)
+    assert suite["schema_version"] == 3
+    assert suite["suite_id"] == "agentos-evaluation-v3"
     assert suite["claim_family"] == {
         "familywise_alpha": 0.05,
         "hypotheses": [
@@ -1017,6 +1019,14 @@ def main() -> int:
     )
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        legacy_suite = copy.deepcopy(suite)
+        legacy_suite["schema_version"] = 2
+        legacy_suite["suite_id"] = "agentos-evaluation-v2"
+        legacy_suite_path = root / "legacy-suite.json"
+        legacy_suite_path.write_text(
+            json.dumps(legacy_suite), encoding="utf-8"
+        )
+        assert load_suite(legacy_suite_path) == legacy_suite
         plan_path = write_campaign(root, suite)
         loaded_plan, _ = load_run_plan(plan_path)
         assert loaded_plan["schema_version"] == 2
@@ -2056,8 +2066,8 @@ def main() -> int:
         assert regressed_summary["acceptance"]["scientific_evidence"][
             "status"
         ] == "publishable"
-        assert not regressed_summary["acceptance"]["competition_ready"]
-        assert regressed_summary["acceptance"]["tasks"]["task6"] == "not_ready"
+        assert regressed_summary["acceptance"]["competition_ready"]
+        assert regressed_summary["acceptance"]["tasks"]["task6"] == "pass"
 
         forged_regression_status = copy.deepcopy(regressed_scenario)
         forged_regression_status["status"] = "inconclusive"
@@ -2339,6 +2349,18 @@ def main() -> int:
             )
 
         for name, mutate, message in (
+            (
+                "mixed-acceptance-policy",
+                lambda value: value.__setitem__("schema_version", 2),
+                "suite id is invalid",
+            ),
+            (
+                "legacy-suite-id",
+                lambda value: value.__setitem__(
+                    "suite_id", "agentos-evaluation-v2"
+                ),
+                "suite id is invalid",
+            ),
             (
                 "missing-task4-claim",
                 lambda value: value["competition_claims"].clear(),

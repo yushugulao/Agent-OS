@@ -50,8 +50,12 @@ except ImportError:
 
 
 SCHEMA_VERSION = 1
-SUMMARY_SCHEMA_VERSION = 2
-SUITE_SCHEMA_VERSION = 2
+SUMMARY_SCHEMA_VERSION = 3
+SUITE_SCHEMA_VERSION = 3
+SUITE_IDS = {
+    2: "agentos-evaluation-v2",
+    3: "agentos-evaluation-v3",
+}
 MARKER_PREFIX = "agenteval_ucore: sample "
 DIAGNOSTIC_PREFIX = "agenteval_ucore: diagnostic "
 LAUNCHER_PREFIX = "agenteval_ucore: launcher "
@@ -172,17 +176,23 @@ def derive_acceptance_gates(
     scenarios: list[dict[str, Any]],
     claims: list[dict[str, Any]],
     competition_claims: dict[str, Any],
+    *,
+    suite_schema_version: int,
 ) -> dict[str, Any]:
     """Derive scientific-publication and competition-acceptance gates.
 
-    A measured negative result remains scientifically publishable.  A
-    statistically verified scenario regression is never relabelled as missing
-    evidence, but it does make the affected competition task not ready.  The
-    competition rubric is deliberately stricter: Task 4 requires both its
-    functional receipt and the explicitly registered performance claim.
-    Keeping this derivation in the evidence contract prevents the packager or
-    dashboard from silently turning publication success into rubric success.
+    A measured negative result remains scientifically publishable and is never
+    relabelled as missing evidence.  Suite v2 conservatively made every
+    scenario regression block its task.  Suite v3 applies performance gates
+    only to tasks explicitly registered in ``competition_claims``;
+    unregistered full-stack measurements remain visible diagnostics.  This
+    versioned derivation preserves old evidence while preventing the packager
+    or dashboard from silently turning publication success into a performance
+    claim or an unregistered diagnostic into a rubric requirement.
     """
+
+    if type(suite_schema_version) is not int or suite_schema_version not in SUITE_IDS:
+        raise EvaluationError("acceptance policy version is unsupported")
 
     functional: dict[str, bool] = {}
     functional_status: dict[str, str] = {}
@@ -228,7 +238,7 @@ def derive_acceptance_gates(
     competition_tasks = {
         task: (
             "not_ready"
-            if task in regressed_tasks
+            if suite_schema_version == 2 and task in regressed_tasks
             else status
         )
         for task, status in functional_status.items()
@@ -388,11 +398,13 @@ def load_suite(path: Path) -> dict[str, Any]:
         "suite",
     )
     if (
-        suite["schema_version"] != SUITE_SCHEMA_VERSION
+        type(suite["schema_version"]) is not int
+        or suite["schema_version"] not in SUITE_IDS
         or suite["kind"] != "agentos-evaluation-suite"
     ):
         raise EvaluationError("suite header is invalid")
-    _text(suite["suite_id"], "suite_id")
+    if suite["suite_id"] != SUITE_IDS[suite["schema_version"]]:
+        raise EvaluationError("suite id is invalid")
     pairing = _exact(
         suite["pairing"],
         {
@@ -3569,10 +3581,13 @@ def evaluate(
             ),
         })
     acceptance = derive_acceptance_gates(
-        scenarios, claims, suite["competition_claims"]
+        scenarios,
+        claims,
+        suite["competition_claims"],
+        suite_schema_version=suite["schema_version"],
     )
     return {
-        "schema_version": SUMMARY_SCHEMA_VERSION,
+        "schema_version": suite["schema_version"],
         "kind": "agentos-evaluation-summary",
         "run": {
             "id": plan["run_id"],

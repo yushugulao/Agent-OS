@@ -730,10 +730,11 @@ def fixture() -> dict:
             }
         )
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "agentos-evaluation-summary",
         "run": {
             "id": "evaluation-20260730",
+            "suite_id": "agentos-evaluation-v3",
             "status": "unavailable",
             "run_plan_sha256": TEST_RUN_PLAN_SHA256,
             "label": "竞赛候选版本",
@@ -863,7 +864,10 @@ def fixture() -> dict:
     }
     attach_scenario(result, [8] * 7)
     result["acceptance"] = derive_acceptance_gates(
-        result["scenarios"], result["claims"], COMPETITION_CLAIMS
+        result["scenarios"],
+        result["claims"],
+        COMPETITION_CLAIMS,
+        suite_schema_version=result["schema_version"],
     )
     return result
 
@@ -1078,7 +1082,10 @@ def attach_scenario(
         evidence_ids=["raw-scenario"],
     )
     summary["acceptance"] = derive_acceptance_gates(
-        summary["scenarios"], summary["claims"], COMPETITION_CLAIMS
+        summary["scenarios"],
+        summary["claims"],
+        COMPETITION_CLAIMS,
+        suite_schema_version=summary["schema_version"],
     )
     return scenario
 
@@ -1369,7 +1376,10 @@ class DashboardContractTests(unittest.TestCase):
                 performance=None,
             )
             summary["acceptance"] = derive_acceptance_gates(
-                summary["scenarios"], summary["claims"], COMPETITION_CLAIMS
+                summary["scenarios"],
+                summary["claims"],
+                COMPETITION_CLAIMS,
+                suite_schema_version=summary["schema_version"],
             )
             rewrite_summary(source, summary)
             with self.assertRaisesRegex(
@@ -1975,7 +1985,10 @@ class DashboardContractTests(unittest.TestCase):
         ]
         summary["run"].pop("conclusion")
         summary["acceptance"] = derive_acceptance_gates(
-            summary["scenarios"], summary["claims"], COMPETITION_CLAIMS
+            summary["scenarios"],
+            summary["claims"],
+            COMPETITION_CLAIMS,
+            suite_schema_version=summary["schema_version"],
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2000,7 +2013,10 @@ class DashboardContractTests(unittest.TestCase):
             effect="负结果仍应完整发布。",
         )
         summary["acceptance"] = derive_acceptance_gates(
-            summary["scenarios"], summary["claims"], COMPETITION_CLAIMS
+            summary["scenarios"],
+            summary["claims"],
+            COMPETITION_CLAIMS,
+            suite_schema_version=summary["schema_version"],
         )
 
         validate_summary(summary)
@@ -2124,7 +2140,10 @@ class DashboardContractTests(unittest.TestCase):
             effect="原始测量不可用，没有填补数值。",
         )
         unavailable["acceptance"] = derive_acceptance_gates(
-            unavailable["scenarios"], unavailable["claims"], COMPETITION_CLAIMS
+            unavailable["scenarios"],
+            unavailable["claims"],
+            COMPETITION_CLAIMS,
+            suite_schema_version=unavailable["schema_version"],
         )
         validate_summary(unavailable)
         with tempfile.TemporaryDirectory() as temporary:
@@ -2586,7 +2605,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("正向 joint-MCID 10 ms 与 5%：胜场 6/7", page)
         self.assertIn("one-sided exact p=0.0625", page)
 
-    def test_scenario_regression_is_explicit_and_not_competition_ready(self) -> None:
+    def test_unregistered_scenario_regression_is_explicit_and_diagnostic(self) -> None:
         summary = fixture()
         scenario = attach_scenario(summary, [-20] * 7)
         performance = scenario["performance"]
@@ -2595,8 +2614,8 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(performance["sign_test"]["wins"], 0)
         self.assertEqual(performance["sign_test"]["losses"], 7)
         self.assertEqual(performance["regression_mcid_sign_test"]["losses"], 7)
-        self.assertFalse(summary["acceptance"]["competition_ready"])
-        self.assertEqual(summary["acceptance"]["tasks"]["task6"], "not_ready")
+        self.assertTrue(summary["acceptance"]["competition_ready"])
+        self.assertEqual(summary["acceptance"]["tasks"]["task6"], "pass")
         validate_summary(summary)
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -2612,6 +2631,37 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("反向 joint-MCID -10 ms 与 -5%：负场 7/7", page)
         self.assertIn("Bonferroni 后每方向 alpha=0.025", page)
         self.assertIn("任务 6 端到端场景 性能=显著回退", page)
+        self.assertIn("但只作为诊断", page)
+
+        legacy = copy.deepcopy(summary)
+        legacy["schema_version"] = 2
+        legacy["run"]["suite_id"] = "agentos-evaluation-v2"
+        legacy["acceptance"] = derive_acceptance_gates(
+            legacy["scenarios"],
+            legacy["claims"],
+            COMPETITION_CLAIMS,
+            suite_schema_version=2,
+        )
+        self.assertFalse(legacy["acceptance"]["competition_ready"])
+        self.assertEqual(legacy["acceptance"]["tasks"]["task6"], "not_ready")
+        validate_summary(legacy)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, legacy)
+            render(source, root / "site")
+            legacy_page = (root / "site" / "index.html").read_text(
+                encoding="utf-8"
+            )
+        self.assertIn("suite v2 中场景若得到", legacy_page)
+        self.assertIn("必须保持未就绪", legacy_page)
+        self.assertNotIn("但只作为诊断", legacy_page)
+
+        mixed = copy.deepcopy(legacy)
+        mixed["run"]["suite_id"] = "agentos-evaluation-v3"
+        with self.assertRaisesRegex(
+            DashboardError, "suite_id does not match"
+        ):
+            validate_summary(mixed)
 
     def test_scenario_statistics_cannot_be_forged(self) -> None:
         mutations = (

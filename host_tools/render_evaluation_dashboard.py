@@ -30,7 +30,7 @@ from evaluation_kernel_cost import (
 from evaluation_campaign import CampaignError, validate_campaign
 from evaluation_contract import (
     EvaluationError as EvaluationContractError,
-    SUMMARY_SCHEMA_VERSION as SCHEMA_VERSION,
+    SUITE_IDS,
     derive_acceptance_gates,
     load_run_plan,
     verify as verify_evaluation_contract,
@@ -1546,7 +1546,7 @@ def _validate_methodology(raw: Any) -> tuple[dict[str, Any], float, int]:
 
 
 def validate_summary(raw: Any) -> dict[str, Any]:
-    """Validate summary schema v1 and every evidence-bearing relation."""
+    """Validate a versioned summary and every evidence-bearing relation."""
 
     root = _require_object(raw, "summary")
     fields = set(root)
@@ -1555,12 +1555,15 @@ def validate_summary(raw: Any) -> dict[str, Any]:
             "summary fields mismatch: "
             f"missing={sorted(TOP_LEVEL_FIELDS - fields)} extra={sorted(fields - TOP_LEVEL_FIELDS)}"
         )
-    if root["schema_version"] != SCHEMA_VERSION:
-        _fail(f"schema_version must be {SCHEMA_VERSION}")
+    summary_schema = root["schema_version"]
+    if type(summary_schema) is not int or summary_schema not in SUITE_IDS:
+        _fail(f"schema_version must be one of {sorted(SUITE_IDS)}")
     if root["kind"] != "agentos-evaluation-summary":
         _fail("kind must be 'agentos-evaluation-summary'")
 
     run = _require_object(root["run"], "run")
+    if run.get("suite_id") != SUITE_IDS[summary_schema]:
+        _fail("run.suite_id does not match the summary acceptance policy")
     _require_string(run.get("id"), "run.id")
     run_status = _require_string(run.get("status"), "run.status")
     if run_status not in RUN_STATUSES:
@@ -1974,7 +1977,10 @@ def validate_summary(raw: Any) -> dict[str, Any]:
         )
     try:
         expected_acceptance = derive_acceptance_gates(
-            scenarios_list, claims_list, competition_claims
+            scenarios_list,
+            claims_list,
+            competition_claims,
+            suite_schema_version=summary_schema,
         )
     except EvaluationContractError as error:
         _fail(f"methodology.competition_claims is invalid: {error}")
@@ -3895,10 +3901,20 @@ def _diagnostics_table(benchmark: dict[str, Any], *, heading_level: int = 4) -> 
     )
 
 
-def _acceptance_band(acceptance: dict[str, Any]) -> str:
+def _acceptance_band(
+    acceptance: dict[str, Any], summary_schema: int
+) -> str:
     scientific = acceptance["scientific_evidence"]
     competition_status = "pass" if acceptance["competition_ready"] else "not_ready"
     task4 = acceptance["task4_gate"]
+    scenario_policy = (
+        'suite v2 中场景若得到 <code>regressed</code>，证据仍可诚实发布，'
+        '但对应任务和竞赛整体验收必须保持未就绪。'
+        if summary_schema == 2
+        else
+        '未注册为竞赛性能门的 full-stack 场景仍会显式展示 '
+        '<code>regressed</code>，但只作为诊断，不会被改写为性能优势，也不替代题面验收。'
+    )
     return (
         '<section class="acceptance-band" aria-labelledby="acceptance-title">'
         '<div class="subheading"><h2 id="acceptance-title">发布与竞赛验收</h2>'
@@ -3913,8 +3929,7 @@ def _acceptance_band(acceptance: dict[str, Any]) -> str:
         '<p class="diagnostic-note">科学证据允许完整发布未通过性能支持门的负结果；'
         f'任务四竞赛验收仅在功能回执通过且 <code>{_h(task4["benchmark_id"])}</code> '
         f'结论为 <code>{_h(task4["required_status"])}</code> 时通过。'
-        '场景若得到 <code>regressed</code> 结论，'
-        '证据仍可诚实发布，但对应任务和竞赛整体验收必须保持未就绪。</p></section>'
+        f'{scenario_policy}</p></section>'
     )
 
 
@@ -4656,7 +4671,7 @@ def _page(
         <div><div class="subheading"><h2>独立护栏</h2><span>可扩展槽位，不进入综合分</span></div><div class="extension-result-grid">{overview_extensions}</div></div>
       </section>
       {campaign_environment_block}
-      {_acceptance_band(acceptance)}
+      {_acceptance_band(acceptance, summary["schema_version"])}
     </section>
     <section role="tabpanel" id="panel-performance" aria-labelledby="tab-performance" class="tab-panel" hidden>
       <div class="section-heading"><div><p class="eyebrow">可复现测量</p><h2>性能</h2></div><p>区间、单位、样本量与来源同时呈现。</p></div>
