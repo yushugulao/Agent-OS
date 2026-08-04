@@ -103,6 +103,18 @@ class EvaluationPlatformTests(unittest.TestCase):
         duration_attestation.validate_duration_execution_binding(
             value, execution, expected_platform=platform
         )
+        execution["python"]["first_line"] = "Python 3.12.13"
+        duration_attestation.validate_duration_execution_binding(
+            value, execution, expected_platform=platform
+        )
+        execution["python"]["path"] = "/tools/other-python"
+        with self.assertRaisesRegex(
+            duration_attestation.DurationAttestationError, "python"
+        ):
+            duration_attestation.validate_duration_execution_binding(
+                value, execution
+            )
+        execution["python"]["path"] = platform_tools["python"]["path"]
         execution["qemu"]["executable_sha256"] = "b" * 64
         with self.assertRaisesRegex(
             duration_attestation.DurationAttestationError, "qemu"

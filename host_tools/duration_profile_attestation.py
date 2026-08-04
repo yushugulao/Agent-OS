@@ -84,13 +84,14 @@ def duration_platform_identity_sha256(platform: object) -> str:
     return duration_attestation_sha256(duration_platform_identity(platform))
 
 
-def _tool_identity(record: object) -> dict[str, object]:
+def _tool_binary_identity(record: object) -> dict[str, object]:
+    """Return the cross-probe identity; each probe validates its own version log."""
+
     if not isinstance(record, Mapping):
         raise DurationAttestationError("duration execution tool identity is invalid")
     identity = {
         "path": record.get("path"),
         "sha256": record.get("sha256", record.get("executable_sha256")),
-        "version": record.get("version", record.get("first_line")),
     }
     if not all(isinstance(identity[key], str) and identity[key] for key in identity):
         raise DurationAttestationError("duration execution tool identity is invalid")
@@ -111,7 +112,9 @@ def validate_duration_execution_binding(
     if not isinstance(tools, dict) or not isinstance(execution_tools, Mapping):
         raise DurationAttestationError("local-e3 execution tool binding is unavailable")
     for label in EXECUTION_TOOL_LABELS:
-        if _tool_identity(tools.get(label)) != _tool_identity(execution_tools.get(label)):
+        if _tool_binary_identity(tools.get(label)) != _tool_binary_identity(
+            execution_tools.get(label)
+        ):
             raise DurationAttestationError(
                 f"local-e3 execution tool differs from platform proof: {label}"
             )
