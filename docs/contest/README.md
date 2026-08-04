@@ -2,7 +2,7 @@
 
 AgentOS-uCore 面向长时间、多角色的 AI Agent 工作流，在 RISC-V 64 uCore 中提供结构化工具调用、可信 Context、语义文件查询、事件驱动 Agent Loop、workflow 生命周期和统一资源控制。
 
-根目录是 AgentOS-uCore；`baseline_ucore/` 是不含 AgentOS 服务的共享安全基底对照。两侧运行同一科研 Agent 工作流，用于区分用户态实现与内核原生机制的行为和成本。
+根目录是 AgentOS-uCore；`baseline_ucore/` 是不含 AgentOS 服务的共享安全基底对照。Task 6 两侧使用相同的 70 项程序顺序、challenge 和结果契约，其中 28 项同源、42 项为目标特定实现。该场景用于观察完整系统行为和成本，不作为单机制性能证明。
 
 ## 核心能力
 
@@ -13,7 +13,7 @@ AgentOS-uCore 面向长时间、多角色的 AI Agent 工作流，在 RISC-V 64 
 | 任务三 | Context Path、快照、FIFO 淘汰和 rollback | 连续工具调用、分支回溯和可信历史 |
 | 任务四 | inode 绑定 metadata、摘要、索引和租约 | 路径遍历与语义索引实测对照 |
 | 任务五 | watch/wait、heartbeat、IPC 和公平调度 | 无事件休眠、事件唤醒和多 Agent 协作 |
-| 任务六 | 科研 Agent 检索、分析、恢复、写作和审计流程 | 双目标完整场景、结果一致性和阶段耗时 |
+| 任务六 | 科研 Agent 检索、分析、恢复、写作和审计流程 | 双目标完整场景、28/42 源码关系、结果一致性和阶段耗时 |
 
 [赛题要求追踪表](../agentos/requirements-traceability.md)列出每项要求对应的实现、ABI 和动态测试入口。
 
@@ -23,7 +23,8 @@ AgentOS-uCore 面向长时间、多角色的 AI Agent 工作流，在 RISC-V 64 
 
 - 路径遍历与 metadata 索引的各负载耗时、工作量和样本数；
 - metadata 全表扫描消融、工具批处理和 Context 映射读取；
-- Task 6 双目标 p50/p95、逐阶段耗时、结果一致性和样本数；
+- 同源兼容负载的 Plain/AgentOS p50、p95、倍率、样本数和输出一致性；
+- Task 6 完整场景的 p50/p95、28/42 源码关系、逐阶段耗时和结果一致性；
 - 两个内核的 ELF、text/data/BSS，以及 `struct proc` 和栈预算。
 
 每个数值均可从 Dashboard 回到 bundle 中登记的 Guest/Host 原始材料、源码提交和执行环境。统计方法与比较边界见[评价方法](../evaluation.md)。

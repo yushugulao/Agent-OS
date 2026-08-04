@@ -576,6 +576,7 @@ def main() -> int:
     policy_paths = {path for _role, path in policy_entries}
     assert EVALUATION_SUITE_SOURCE_PATH in policy_paths
     assert "host_tools/evaluation_bundle.py" in policy_paths
+    assert "evaluation_guest/compatbench.c" in policy_paths
     assert "host_tools/contest_demo.py" in policy_paths
     assert "host_tools/committed_source_identity.py" in policy_paths
     assert "host_tools/full_verification_payload.py" in policy_paths

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +19,10 @@ except ImportError:  # Direct execution from host_tools/.
     import check_seeded_action_state as seeded
 
 
-SOURCE_COMMIT = "a" * 40
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_COMMIT = subprocess.check_output(
+    ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+).strip()
 
 
 def _ledger(
@@ -584,6 +588,10 @@ class EvaluationScenarioTests(unittest.TestCase):
         self.assertEqual(report["summary"]["independent_boots"], 1)
         self.assertEqual(report["summary"]["paired_success_rate"], 1.0)
         self.assertEqual(report["summary"]["target_order_counts"], {"AB": 1, "BA": 0})
+        source_comparability = report["summary"]["source_comparability"]
+        self.assertEqual(source_comparability["expected_programs"], 70)
+        self.assertEqual(source_comparability["same_source_programs"], 28)
+        self.assertEqual(source_comparability["platform_specific_programs"], 42)
         sample = report["samples"][0]
         self.assertEqual(sample["binding"]["source_commit"], SOURCE_COMMIT)
         self.assertEqual(sample["binding"]["boot_order"], 1)
@@ -604,6 +612,12 @@ class EvaluationScenarioTests(unittest.TestCase):
             )
             self.assertEqual(len(receipt["qemu_log"]["sha256"]), 64)
             self.assertEqual(len(receipt["run_summary"]["sha256"]), 64)
+            source_receipt = receipt["program_source_comparability"]
+            self.assertEqual(
+                source_receipt["sha256"],
+                source_comparability["receipt_sha256"],
+            )
+            self.assertEqual(len(source_receipt["programs"]), 70)
             provenance = receipt["artifact_provenance"]
             self.assertEqual(provenance["schema"], "task6-artifact-provenance-v1")
             self.assertEqual(provenance["challenge"], _challenge(1))

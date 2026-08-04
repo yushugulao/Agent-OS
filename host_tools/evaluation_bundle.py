@@ -947,6 +947,7 @@ def _verify_compatibility_campaign(
     run_root: Path,
     micro_campaign: dict[str, Any],
     *,
+    measurement_receipt: dict[str, Any],
     required: bool,
 ) -> tuple[list[dict[str, object]], set[str]]:
     compatibility_root = run_root / "compatibility"
@@ -977,6 +978,26 @@ def _verify_compatibility_campaign(
         or context.get("micro_run_id") != run.get("id")
     ):
         raise BundleError("compatibility-overhead formal identity differs")
+    source_records = [
+        record
+        for record in measurement_receipt.get("sources", [])
+        if isinstance(record, dict)
+        and record.get("path") == "evaluation_guest/compatbench.c"
+    ]
+    compatibility_source = value.get("source")
+    if (
+        len(source_records) != 1
+        or not isinstance(compatibility_source, dict)
+        or compatibility_source.get("canonical_path")
+        != "evaluation_guest/compatbench.c"
+        or compatibility_source.get("canonical_sha256")
+        != source_records[0].get("sha256")
+        or compatibility_source.get("canonical_bytes")
+        != source_records[0].get("bytes")
+    ):
+        raise BundleError(
+            "compatibility Guest source differs from the committed measurement source"
+        )
     paths = {
         path.relative_to(run_root).as_posix()
         for path in _regular_files(compatibility_root)
@@ -1483,6 +1504,7 @@ def _verify_evaluation_contract(
     suite_path: Path | None = None,
     *,
     contract_root: Path,
+    scenario_source_tree: Path | None = None,
 ) -> dict[str, Any]:
     report, plan = _contract_paths(run_root)
     try:
@@ -1495,17 +1517,26 @@ def _verify_evaluation_contract(
             report,
             plan,
             contract_root=contract_root,
+            scenario_source_tree=scenario_source_tree,
         )
     except EvaluationError as error:
         raise BundleError(f"packaged evaluation contract failed: {error}") from error
 
 
-def _compare_dashboard(run_root: Path, *, contract_root: Path) -> None:
+def _compare_dashboard(
+    run_root: Path,
+    *,
+    contract_root: Path,
+    measurement_source_tree: Path | None = None,
+) -> None:
     with tempfile.TemporaryDirectory(prefix="agentos-evaluation-dashboard-verify-") as temporary:
         replay = Path(temporary)
         try:
             render_dashboard(
-                run_root / "summary.json", replay, contract_root=contract_root
+                run_root / "summary.json",
+                replay,
+                contract_root=contract_root,
+                measurement_source_tree=measurement_source_tree,
             )
         except DashboardError as error:
             raise BundleError(f"packaged dashboard cannot be replayed: {error}") from error
@@ -2149,7 +2180,10 @@ def create_bundle(
         contract_root=contract_root,
     )
     compatibility_receipts, compatibility_paths = _verify_compatibility_campaign(
-        run_dir, campaign, required=profile == FORMAL_PROFILE
+        run_dir,
+        campaign,
+        measurement_receipt=measurement_receipt,
+        required=profile == FORMAL_PROFILE,
     )
     scenario_receipts, scenario_paths = _verify_scenario_campaign(
         run_dir, campaign, profile=profile, source_tree=contract_root,
@@ -2179,14 +2213,21 @@ def create_bundle(
         raise BundleError("run plan is not bound to the supplied suite")
 
     verified_summary = _verify_evaluation_contract(
-        run_dir, suite_path, contract_root=contract_root
+        run_dir,
+        suite_path,
+        contract_root=contract_root,
+        scenario_source_tree=contract_root,
     )
     if profile == FORMAL_PROFILE:
         _verify_formal_summary(verified_summary)
     _verify_kernel_cost(
         run_dir, require_complete=profile == FORMAL_PROFILE
     )
-    _compare_dashboard(run_dir, contract_root=contract_root)
+    _compare_dashboard(
+        run_dir,
+        contract_root=contract_root,
+        measurement_source_tree=contract_root,
+    )
     delivery: dict[str, object] | None = None
     if profile == FORMAL_PROFILE:
         try:
@@ -2565,7 +2606,10 @@ def verify_bundle(root: Path, *, contract_root: Path) -> dict[str, Any]:
                 "full-verification binding differs from packaged raw evidence"
             )
         compatibility_receipts, compatibility_paths = _verify_compatibility_campaign(
-            payload, campaign, required=profile["name"] == FORMAL_PROFILE
+            payload,
+            campaign,
+            measurement_receipt=measurement_receipt,
+            required=profile["name"] == FORMAL_PROFILE,
         )
         scenario_receipts, scenario_paths = _verify_scenario_campaign(
             payload,
@@ -2594,13 +2638,21 @@ def verify_bundle(root: Path, *, contract_root: Path) -> dict[str, Any]:
                 measurement_receipt
             ),
         )
-        summary = _verify_evaluation_contract(payload, contract_root=contract_root)
+        summary = _verify_evaluation_contract(
+            payload,
+            contract_root=contract_root,
+            scenario_source_tree=snapshot_root,
+        )
         if profile["name"] == FORMAL_PROFILE:
             _verify_formal_summary(summary)
         _verify_kernel_cost(
             payload, require_complete=profile["name"] == FORMAL_PROFILE
         )
-        _compare_dashboard(payload, contract_root=contract_root)
+        _compare_dashboard(
+            payload,
+            contract_root=contract_root,
+            measurement_source_tree=snapshot_root,
+        )
         if (
             summary["run"]["id"] != manifest["run_id"]
             or summary["run"]["commit"] != manifest["source_commit"]

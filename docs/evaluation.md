@@ -134,6 +134,11 @@ oracle 在原始采集和序列化 report 复验两条路径上共同重算；�
 outcome；未登记的缓存、诊断文件和内核私有状态不属于等价结论。只有今后建立覆盖
 完整业务状态的 canonical oracle，才可扩大该表述。
 
+场景清单固定为 70 项程序。采集器对每项 AgentOS/Plain C 源记录路径、字节数和
+SHA-256，再把配对关系收据绑定到每个 target、boot 和 summary。当前仓库重算结果为
+28 项同源、42 项目标特定实现；跨 target 或跨 boot 不一致、关系改写、路径或 hash
+重签都会使合同失败。这个计数来自源码收据，不是 Dashboard 常量。
+
 这一层衡量完整 AgentOS 栈在任务六场景中的 Guest workflow 执行效果，但不同内核、安全机制和
 应用入口都属于处理，因此不能单独归因给某一个内核机制。具体机制的因果结论只来自
 2.1 的同内核消融；两层结论在 Dashboard 中分开展示，不拼成一个总分。
@@ -152,14 +157,31 @@ baseline delta。formal bundle 缺少任一成本、guardrail 或原始命令回
 ### 2.4 传统兼容路径开销
 
 评价使用同一份 `evaluation_guest/compatbench.c`，分别由 Plain uCore 与 AgentOS-uCore
-原样编译，测量 `fork/wait`、`fork/exec/wait`、pipe 往返和顺序文件 I/O。formal
+独立编译，测量 `fork/wait`、`fork/exec/wait`、pipe 往返、顺序文件 I/O，以及
+`research_artifact_pipeline` 应用形负载。同源只表示两侧编译相同的 C 输入和执行相同
+的 Guest 逻辑，不表示两个目标产生相同二进制。formal
 协议固定为 7 个配对 boot；challenge 与 AB/BA 顺序由源码提交确定性派生，不允许按
-中间结果提前停止。每个 boot 都重新 clean、build 并启动 QEMU，Host 还会重放 Guest
-回执并要求两侧操作数和结果 checksum 完全一致。
+中间结果提前停止。每个 boot 都重新 clean、build 并启动 QEMU；每侧先执行一次相同的
+非计时 warmup，三轮计时再按 challenge 派生的轮换顺序执行五项负载，避免某项始终紧随
+固定前序。该组结果属于 warm Guest path。Host 独立重建五项结果 checksum，重放 Guest
+回执，并要求两侧操作数和完整 workload outcome 一致。Guest 计时依赖被测内核时钟，
+Host 进程墙钟只作外层上界核对，不将其冒充为逐项独立计时。
+
+`research_artifact_pipeline` 每轮固定生成 8 个输入分片，每片 64 条 16 字节记录，共
+512 条、8192 字节；随后逐条校验并转换，聚合到 8 个组，写出并重新读取验证一个
+64 字节结果工件。计时窗口从首个输入文件创建前开始，到结果工件完成回读和关闭后
+结束，删除临时文件不计入窗口。每个目标在每个 boot 内固定执行 3 轮，因此正式协议
+为每个目标 21 个内部样本；独立统计单位仍是 7 个配对 boot，不能把 21 轮当作 21 个
+独立样本。Host 根据 challenge 独立重建结果 checksum，并在每个配对 boot 中要求
+Plain 与 AgentOS 的完整 workload outcome 相同。
 
 这一组数据只回答“保留传统 uCore 编程接口需要多少兼容开销”，不评价 AgentOS 专属
-功能，也不与机制微基准或科研场景拼成综合分。原始日志、源码、ELF、内核和文件系统
-镜像必须随 formal bundle 一起离线复验；缺失任一目标或结果不等价都会使打包失败。
+功能，也不与机制微基准或科研场景拼成综合分。新增 pipeline 同时包含用户态记录生成、
+文件系统调用、数据转换、聚合和结果验证，是应用形 Guest 全路径成本，不能表述为纯内核
+成本或某个单一内核机制的因果效果。原始日志、源码、ELF、内核和文件系统
+镜像必须随 formal bundle 一起离线复验；`compatbench.c` 同时进入 measurement-source
+receipt，并与冻结源码提交中的 Git blob 逐字节核对。缺失任一目标、源码锚点或结果不等价
+都会使打包失败。
 兼容路径的 build 与 QEMU 也必须使用由 micro platform proof 唯一派生的 `env -i`
 环境。formal context v2 额外封入该环境的 SHA256；Linux 使用中性的
 `SYSTEMDRIVE=/`，native-msys2 则强制使用已证明的规范盘符及同一份

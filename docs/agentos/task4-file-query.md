@@ -325,7 +325,7 @@ align+analyze+report+archive
 
 `agentbench_ucore` 在真实 Agent suite Guest 中输出 schema 2 benchmark marker，分别记录强制遍历、包含索引重建的冷索引和索引已就绪后的热索引。提取器要求该 marker 后面出现完整的 `agentbench_ucore: parent passed`，再把每行绑定到 Guest 日志 SHA256、marker SHA256、行号、命令、commit 和 run id。当前仓库只有这一组 provenance-bound 原始实验；其他任务的功能 marker 不自动转换成性能数据。
 
-正式证据位于 `evidence/releases/<bundle>/metrics/file-query-benchmark.{csv,json}`，本地预览位于 `results/latest/experiments/raw/file-query-benchmark.csv`。原始输出见 [test-record.md](test-record.md)。这些测量用于确认当前系统同时具备：
+正式证据位于 `evidence/releases/<bundle>/metrics/file-query-benchmark.{csv,json}`，本地预览位于 `results/latest/experiments/raw/file-query-benchmark.csv`。原始输出见 [正式证据索引](../../evidence/releases/INDEX.md)。这些测量用于确认当前系统同时具备：
 
 - 可观测扫描路径；
 - 可观测索引路径；
@@ -349,7 +349,7 @@ align+analyze+report+archive
 
 `agentvfs_ucore` 进一步验证 public/workflow 路径隔离、普通进程不能读写或删除 workflow 工件、读写 worker 的映像 profile 上限、错误映像不能取得 pending 委派、普通 fork 不继承文件能力、跨 scope inode fd 被撤销、worker pipe 需单跳委派，以及 public 命名空间仍可由普通进程使用。
 
-原始输出统一见 [test-record.md](test-record.md)，测试步骤见 [testing-details.md](testing-details.md)。
+原始输出统一见 [正式证据索引](../../evidence/releases/INDEX.md)，测试步骤见 [验证说明](verification.md)。
 
 ## 当前限制
 

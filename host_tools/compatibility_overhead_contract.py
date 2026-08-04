@@ -14,14 +14,22 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA = "agentos-compatibility-overhead-v1"
-PLAN_SCHEMA = "agentos-compatibility-overhead-plan-v1"
+SCHEMA = "agentos-compatibility-overhead-v2"
+PLAN_SCHEMA = "agentos-compatibility-overhead-plan-v2"
 BUILD_STAMP_SCHEMA = "agentos-compatibility-build-stamp-v1"
-SOURCE_SCHEMA = "agentos-compatibility-source-v1"
+SOURCE_SCHEMA = "agentos-compatibility-source-v2"
 FORMAL_CONTEXT_SCHEMA = "agentos-compatibility-formal-context-v2"
-GUEST_SCHEMA = 1
+GUEST_SCHEMA = 2
 GUEST_ROUNDS = 3
 FORMAL_BOOT_COUNT = 7
+GUEST_CACHE_STATE = "warm_guest_paths"
+GUEST_SCHEDULE = "challenge_rotated_v1"
+MEASUREMENT_STATE = {
+    "cache_state": GUEST_CACHE_STATE,
+    "schedule": GUEST_SCHEDULE,
+    "untimed_warmup": True,
+    "fresh_boot_per_target": True,
+}
 CANONICAL_SOURCE = "evaluation_guest/compatbench.c"
 TARGETS = ("plain", "agentos")
 ORDERS = (("plain", "agentos"), ("agentos", "plain"))
@@ -34,10 +42,37 @@ MAX_ELAPSED_MS = 30 * 60 * 1000
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 EVIDENCE_TIER = "formal_traditional_compatibility_tax"
 LIMITATIONS = (
-    "Results describe traditional uCore compatibility overhead only.",
+    "Results describe traditional uCore compatibility and Guest application-path overhead only.",
     "Metrics remain separate; no composite AgentOS score is defined.",
     "AgentOS-only capabilities are intentionally outside this comparison.",
+    "Both targets compile one canonical C source separately; binary identity is not claimed.",
+    "research_artifact_pipeline is an application-shaped full path, not a pure-kernel cost.",
+    "Timed samples follow one identical untimed warmup and a challenge-derived rotating metric order.",
+    "Guest timings trust the evaluated kernel clock; Host process time is only an outer sanity bound.",
+    "Commit provenance is supplied by the formal bundle's measurement-source receipt.",
 )
+
+PIPELINE_WORKLOAD = {
+    "kind": "bounded_research_artifact_pipeline",
+    "input_shards": 8,
+    "records_per_shard": 64,
+    "source_records": 512,
+    "record_bytes": 16,
+    "source_bytes": 8192,
+    "aggregation_groups": 8,
+    "artifact_bytes": 64,
+    "stages": [
+        "generate_input_shards",
+        "read_validate_transform",
+        "aggregate_groups",
+        "write_read_verify_artifact",
+    ],
+    "samples_per_target_boot": GUEST_ROUNDS,
+    "formal_paired_boots": FORMAL_BOOT_COUNT,
+    "formal_samples_per_target": GUEST_ROUNDS * FORMAL_BOOT_COUNT,
+    "cache_state": GUEST_CACHE_STATE,
+    "schedule": GUEST_SCHEDULE,
+}
 
 METRICS: tuple[dict[str, object], ...] = (
     {
@@ -64,21 +99,31 @@ METRICS: tuple[dict[str, object], ...] = (
         "operation_unit": "byte_read_or_written",
         "window": "after_create_to_after_read_close",
     },
+    {
+        "id": "research_artifact_pipeline",
+        "operations": 512,
+        "operation_unit": "source_record_transformed",
+        "window": "before_first_input_create_to_after_verified_artifact_read_close",
+        "workload": PIPELINE_WORKLOAD,
+        "attribution": "guest_application_full_path_not_pure_kernel",
+    },
 )
 METRIC_BY_ID = {str(item["id"]): item for item in METRICS}
+GUEST_SAMPLE_COUNT = GUEST_ROUNDS * len(METRICS)
 
 BEGIN_RE = re.compile(
-    r"compatbench: begin schema=1 challenge=([0-9a-f]{16}) "
-    r"clock=gettimeofday_ms rounds=3 source=canonical-v1\Z"
+    rf"compatbench: begin schema={GUEST_SCHEMA} challenge=([0-9a-f]{{16}}) "
+    rf"clock=gettimeofday_ms rounds={GUEST_ROUNDS} source=canonical-v2 "
+    rf"cache={GUEST_CACHE_STATE} schedule={GUEST_SCHEDULE}\Z"
 )
 SAMPLE_RE = re.compile(
-    r"compatbench: sample schema=1 challenge=([0-9a-f]{16}) "
+    rf"compatbench: sample schema={GUEST_SCHEMA} challenge=([0-9a-f]{{16}}) "
     r"metric=([a-z_]+) round=([1-9][0-9]*) ops=([1-9][0-9]*) "
     r"elapsed_ms=([1-9][0-9]*) checksum=([0-9a-f]{8})\Z"
 )
 DONE_RE = re.compile(
-    r"compatbench: done schema=1 challenge=([0-9a-f]{16}) "
-    r"samples=12 receipt=([0-9a-f]{8})\Z"
+    rf"compatbench: done schema={GUEST_SCHEMA} challenge=([0-9a-f]{{16}}) "
+    rf"samples={GUEST_SAMPLE_COUNT} receipt=([0-9a-f]{{8}})\Z"
 )
 PASS_LINE = "compatbench: passed"
 
@@ -117,6 +162,112 @@ def _fnv_u32(value: int, word: int) -> int:
     for shift in range(0, 32, 8):
         value = _fnv_byte(value, word >> shift)
     return value
+
+
+def expected_sample_sequence(challenge: str) -> list[tuple[int, str]]:
+    """Return the precommitted per-boot metric order used by both targets."""
+
+    if HEX16_RE.fullmatch(challenge) is None or int(challenge, 16) == 0:
+        raise CompatibilityContractError("schedule challenge must be nonzero 64-bit hex")
+    challenge_value = int(challenge, 16)
+    sequence: list[tuple[int, str]] = []
+    metric_count = len(METRICS)
+    for round_number in range(1, GUEST_ROUNDS + 1):
+        start = ((challenge_value & 0xFFFFFFFF) + (round_number - 1) * 2) % metric_count
+        forward = ((challenge_value >> 8) ^ round_number) & 1
+        for position in range(metric_count):
+            offset = position if forward else (-position) % metric_count
+            metric = str(METRICS[(start + offset) % metric_count]["id"])
+            sequence.append((round_number, metric))
+    return sequence
+
+
+def research_artifact_pipeline_checksum(challenge: str) -> str:
+    """Rebuild the deterministic application artifact result from its challenge."""
+
+    if HEX16_RE.fullmatch(challenge) is None or int(challenge, 16) == 0:
+        raise CompatibilityContractError("pipeline challenge must be nonzero 64-bit hex")
+    challenge_value = int(challenge, 16)
+    source_checksum = 2166136261
+    group_count = int(PIPELINE_WORKLOAD["aggregation_groups"])
+    if group_count <= 0 or group_count & (group_count - 1):
+        raise CompatibilityContractError(
+            "pipeline aggregation group count must be a power of two"
+        )
+    group_totals = [0] * group_count
+    group_mask = group_count - 1
+    records_per_shard = int(PIPELINE_WORKLOAD["records_per_shard"])
+    for index in range(int(PIPELINE_WORKLOAD["source_records"])):
+        lane = (challenge_value >> ((index & 7) * 8)) & 0xFF
+        group = (index + (challenge_value & 0xFFFFFFFF)) & group_mask
+        measurement = (
+            lane * 257 + index * 17 + (index // records_per_shard) * 31
+        ) & 0xFFFF
+        proof = 2166136261
+        for word in (
+            challenge_value & 0xFFFFFFFF,
+            challenge_value >> 32,
+            index,
+            group,
+            measurement,
+        ):
+            proof = _fnv_u32(proof, word)
+        for word in (index, group, measurement, proof):
+            source_checksum = _fnv_u32(source_checksum, word)
+        group_totals[group] = (
+            group_totals[group] + ((measurement ^ proof) & 0xFFFF)
+        ) & 0xFFFFFFFF
+
+    artifact_checksum = 2166136261
+    for word in (
+        0x52504150,
+        1,
+        int(PIPELINE_WORKLOAD["source_records"]),
+        int(PIPELINE_WORKLOAD["source_bytes"]),
+        int(PIPELINE_WORKLOAD["source_records"]),
+        group_count,
+        *group_totals,
+        source_checksum,
+    ):
+        artifact_checksum = _fnv_u32(artifact_checksum, word)
+    return f"{artifact_checksum:08x}"
+
+
+def metric_checksum(challenge: str, metric: str) -> str:
+    """Rebuild a metric's deterministic result without trusting Guest output."""
+
+    if HEX16_RE.fullmatch(challenge) is None or int(challenge, 16) == 0:
+        raise CompatibilityContractError("metric challenge must be nonzero 64-bit hex")
+    challenge_value = int(challenge, 16)
+    value = 2166136261
+    if metric == "fork_wait":
+        for index in range(32):
+            value = _fnv_u32(value, index)
+    elif metric == "fork_exec_wait":
+        for index in range(12):
+            value = _fnv_u32(value, index + 0x100)
+    elif metric == "pipe_roundtrip":
+        for index in range(1024):
+            word = ((challenge_value & 0xFFFFFFFF) ^ index) ^ 0xA5A55A5A
+            value = _fnv_u32(value, word)
+    elif metric == "seq_file_io":
+        def file_byte(offset: int) -> int:
+            lane = offset & 7
+            return (
+                ((challenge_value >> (lane * 8)) & 0xFF)
+                ^ (offset * 131)
+                ^ (offset >> 7)
+            ) & 0xFF
+
+        for chunk in range(256):
+            value = _fnv_u32(value, file_byte(chunk))
+        for _chunk in range(256):
+            value = _fnv_u32(value, file_byte(511))
+    elif metric == "research_artifact_pipeline":
+        return research_artifact_pipeline_checksum(challenge)
+    else:
+        raise CompatibilityContractError(f"unknown metric checksum oracle: {metric}")
+    return f"{value:08x}"
 
 
 def guest_receipt(challenge: str, samples: Sequence[Mapping[str, object]]) -> str:
@@ -215,11 +366,7 @@ def parse_guest_log(text: str, expected_challenge: str) -> dict[str, object]:
         raise CompatibilityContractError("guest envelope challenge differs from the Host plan")
 
     samples: list[dict[str, object]] = []
-    expected_sequence = [
-        (round_number, str(metric["id"]))
-        for round_number in range(1, GUEST_ROUNDS + 1)
-        for metric in METRICS
-    ]
+    expected_sequence = expected_sample_sequence(expected_challenge)
     if len(samples_with_lines) != len(expected_sequence):
         raise CompatibilityContractError("guest sample count differs from the fixed protocol")
     for (line_number, match), expected in zip(samples_with_lines, expected_sequence):
@@ -251,8 +398,14 @@ def parse_guest_log(text: str, expected_challenge: str) -> dict[str, object]:
             "checksum": checksum,
             "microseconds_per_operation": normalized_us,
         }
+        if checksum != metric_checksum(expected_challenge, metric):
+            raise CompatibilityContractError(
+                f"{metric} output differs from its challenge oracle"
+            )
         if metric == "seq_file_io":
             sample["mib_per_second"] = operations * 1000.0 / elapsed_ms / (1024 * 1024)
+        elif metric == "research_artifact_pipeline":
+            sample["workload"] = dict(PIPELINE_WORKLOAD)
         samples.append(sample)
 
     expected_receipt = guest_receipt(expected_challenge, samples)
@@ -262,6 +415,8 @@ def parse_guest_log(text: str, expected_challenge: str) -> dict[str, object]:
         "schema": GUEST_SCHEMA,
         "challenge": expected_challenge,
         "clock": "gettimeofday_ms",
+        "cache_state": GUEST_CACHE_STATE,
+        "schedule": GUEST_SCHEDULE,
         "rounds": GUEST_ROUNDS,
         "sample_count": len(samples),
         "receipt": expected_receipt,
@@ -282,23 +437,31 @@ def validate_guest_receipt(value: object, expected_challenge: str) -> dict[str, 
         or value.get("status") != "ready"
         or value.get("challenge") != expected_challenge
         or value.get("clock") != "gettimeofday_ms"
+        or value.get("cache_state") != GUEST_CACHE_STATE
+        or value.get("schedule") != GUEST_SCHEDULE
         or value.get("rounds") != GUEST_ROUNDS
     ):
         raise CompatibilityContractError("parsed Guest receipt envelope is invalid")
     samples = value.get("samples")
     if not isinstance(samples, list) or value.get("sample_count") != len(samples):
         raise CompatibilityContractError("parsed Guest sample inventory is invalid")
-    expected_sequence = [
-        (round_number, str(metric["id"]))
-        for round_number in range(1, GUEST_ROUNDS + 1)
-        for metric in METRICS
-    ]
+    expected_sequence = expected_sample_sequence(expected_challenge)
     if len(samples) != len(expected_sequence):
         raise CompatibilityContractError("parsed Guest sample count is invalid")
     previous_line = 0
     for sample, (round_number, metric) in zip(samples, expected_sequence):
         if not isinstance(sample, dict):
             raise CompatibilityContractError("parsed Guest sample is invalid")
+        expected_fields = {
+            "line", "challenge", "metric", "round", "operations",
+            "elapsed_ms", "checksum", "microseconds_per_operation",
+        }
+        if metric == "seq_file_io":
+            expected_fields.add("mib_per_second")
+        elif metric == "research_artifact_pipeline":
+            expected_fields.add("workload")
+        if set(sample) != expected_fields:
+            raise CompatibilityContractError("parsed Guest sample fields differ")
         line = sample.get("line")
         elapsed = sample.get("elapsed_ms")
         operations = sample.get("operations")
@@ -321,10 +484,19 @@ def validate_guest_receipt(value: object, expected_challenge: str) -> dict[str, 
         normalized = elapsed * 1000.0 / int(operations)
         if sample.get("microseconds_per_operation") != normalized:
             raise CompatibilityContractError("parsed Guest normalized timing was rewritten")
+        if checksum != metric_checksum(expected_challenge, metric):
+            raise CompatibilityContractError(
+                f"parsed {metric} output differs from its challenge oracle"
+            )
         if metric == "seq_file_io":
             throughput = int(operations) * 1000.0 / elapsed / (1024 * 1024)
             if sample.get("mib_per_second") != throughput:
                 raise CompatibilityContractError("parsed file throughput was rewritten")
+        elif metric == "research_artifact_pipeline":
+            if sample.get("workload") != PIPELINE_WORKLOAD:
+                raise CompatibilityContractError(
+                    "parsed research artifact pipeline workload was rewritten"
+                )
         elif "mib_per_second" in sample:
             raise CompatibilityContractError("non-file sample has a file throughput field")
     expected_receipt = guest_receipt(expected_challenge, samples)
@@ -393,6 +565,7 @@ def create_plan(
             ),
         },
         "guest_rounds_per_boot": GUEST_ROUNDS,
+        "measurement_state": dict(MEASUREMENT_STATE),
         "metrics": [dict(metric) for metric in METRICS],
         "aggregate_score_forbidden": True,
     }
@@ -496,15 +669,28 @@ def source_receipt(repo: Path) -> dict[str, object]:
 
     source_text = source_data.decode("ascii")
     source_requirements = (
+        "#define BENCH_SCHEMA 2",
         "#define BENCH_ROUNDS 3",
+        "#define METRIC_COUNT 5",
+        '#define BENCH_CACHE_STATE "warm_guest_paths"',
+        '#define BENCH_SCHEDULE "challenge_rotated_v1"',
         "#define FORK_WAIT_OPS 32",
         "#define FORK_EXEC_WAIT_OPS 12",
         "#define PIPE_ROUNDTRIP_OPS 1024",
         "#define FILE_CHUNKS_PER_DIRECTION 256",
+        "#define PIPELINE_INPUT_SHARDS 8",
+        "#define PIPELINE_RECORDS_PER_SHARD 64",
+        "#define PIPELINE_GROUPS 8",
+        "#define PIPELINE_RECORD_BYTES 16",
+        "#define PIPELINE_ARTIFACT_BYTES 64",
         "get_mtime()",
         'exec("compatbench", worker_argv)',
         "bench_pipe_roundtrip",
         "bench_seq_file_io",
+        '"research_artifact_pipeline"',
+        "bench_research_artifact_pipeline",
+        "pipeline_artifact_checksum",
+        "scheduled_metric",
     )
     if any(token not in source_text for token in source_requirements):
         raise CompatibilityContractError("canonical workload or timing contract drifted")
@@ -526,15 +712,26 @@ def source_receipt(repo: Path) -> dict[str, object]:
         "target_bindings": bindings,
         "clock": "gettimeofday_ms",
         "guest_rounds": GUEST_ROUNDS,
+        "measurement_state": dict(MEASUREMENT_STATE),
         "metrics": [dict(metric) for metric in METRICS],
         "single_canonical_source": True,
         "target_specific_guest_branches": False,
+        "target_build_relation": "same_c_source_separately_compiled",
+        "same_binary_claimed": False,
+        "pure_kernel_cost_claimed": False,
     }
 
 
 def validate_source_receipt(value: object) -> dict[str, object]:
     if (
         not isinstance(value, dict)
+        or set(value) != {
+            "schema", "canonical_path", "canonical_sha256", "canonical_bytes",
+            "target_bindings", "clock", "guest_rounds", "measurement_state", "metrics",
+            "single_canonical_source", "target_specific_guest_branches",
+            "target_build_relation", "same_binary_claimed",
+            "pure_kernel_cost_claimed",
+        }
         or value.get("schema") != SOURCE_SCHEMA
         or value.get("canonical_path") != CANONICAL_SOURCE
         or not isinstance(value.get("canonical_sha256"), str)
@@ -543,9 +740,14 @@ def validate_source_receipt(value: object) -> dict[str, object]:
         or not 0 < int(value["canonical_bytes"]) <= MAX_ARTIFACT_BYTES
         or value.get("clock") != "gettimeofday_ms"
         or value.get("guest_rounds") != GUEST_ROUNDS
+        or value.get("measurement_state") != MEASUREMENT_STATE
         or value.get("metrics") != [dict(metric) for metric in METRICS]
         or value.get("single_canonical_source") is not True
         or value.get("target_specific_guest_branches") is not False
+        or value.get("target_build_relation")
+        != "same_c_source_separately_compiled"
+        or value.get("same_binary_claimed") is not False
+        or value.get("pure_kernel_cost_claimed") is not False
     ):
         raise CompatibilityContractError("campaign source receipt is invalid")
     bindings = value.get("target_bindings")
@@ -768,6 +970,8 @@ def summarize_boots(boots: Sequence[Mapping[str, object]]) -> dict[str, object]:
             "operation_unit": spec["operation_unit"],
             "window": spec["window"],
             "paired_boots": len(pairs),
+            "samples_per_target_boot": GUEST_ROUNDS,
+            "samples_per_target": GUEST_ROUNDS * len(pairs),
             "plain_median_microseconds_per_operation": statistics.median(
                 float(pair["plain_microseconds_per_operation"]) for pair in pairs
             ),
@@ -780,6 +984,9 @@ def summarize_boots(boots: Sequence[Mapping[str, object]]) -> dict[str, object]:
             "pairs": pairs,
             "inference": "descriptive_paired_boot_medians_only",
         }
+        if "workload" in spec:
+            metric_results[metric]["workload"] = dict(spec["workload"])
+            metric_results[metric]["attribution"] = spec["attribution"]
     return {
         "metrics": metric_results,
         "workload_equivalence": {
@@ -876,7 +1083,16 @@ def validate_campaign(value: object) -> dict[str, object]:
                 raise CompatibilityContractError(
                     "campaign Guest observer termination receipt is invalid"
                 )
-            validate_guest_receipt(result.get("guest"), str(planned["challenge"]))
+            guest = validate_guest_receipt(
+                result.get("guest"), str(planned["challenge"])
+            )
+            guest_elapsed_ms = sum(
+                int(sample["elapsed_ms"]) for sample in guest["samples"]
+            )
+            if guest_elapsed_ms > float(observer["elapsed_seconds"]) * 1000.0 + 1.0:
+                raise CompatibilityContractError(
+                    "Guest timing windows exceed their Host process observation"
+                )
             stamp = validate_build_stamp(
                 result.get("build_stamp"),
                 target=target,
@@ -943,17 +1159,26 @@ __all__ = [
     "EVIDENCE_TIER",
     "FORMAL_BOOT_COUNT",
     "FORMAL_CONTEXT_SCHEMA",
+    "GUEST_CACHE_STATE",
     "GUEST_ROUNDS",
+    "GUEST_SAMPLE_COUNT",
+    "GUEST_SCHEDULE",
+    "GUEST_SCHEMA",
     "LIMITATIONS",
     "METRICS",
+    "MEASUREMENT_STATE",
+    "PIPELINE_WORKLOAD",
     "PLAN_SCHEMA",
     "SCHEMA",
     "SOURCE_SCHEMA",
     "TARGETS",
     "canonical_json_bytes",
     "create_plan",
+    "expected_sample_sequence",
     "guest_receipt",
+    "metric_checksum",
     "parse_guest_log",
+    "research_artifact_pipeline_checksum",
     "sha256_file",
     "source_receipt",
     "summarize_boots",

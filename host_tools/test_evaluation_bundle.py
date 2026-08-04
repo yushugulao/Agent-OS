@@ -883,7 +883,11 @@ def _bind_target_state_image(boot_dir: Path, target: str) -> None:
 
 
 def add_formal_scenario(
-    run: Path, *, commit: str = COMMIT, agentos_advantage_ms: int = 5
+    run: Path,
+    *,
+    commit: str = COMMIT,
+    agentos_advantage_ms: int = 5,
+    source_tree: Path = ROOT,
 ) -> None:
     scenario_root = run / "scenario"
     raw_root = scenario_root / "raw"
@@ -923,7 +927,11 @@ def add_formal_scenario(
         boot_dirs.append(boot_dir)
         order_codes.append(order)
     report = collect_scenario(
-        boot_dirs, source_commit=commit, run_id="contract-test", target_orders=order_codes
+        boot_dirs,
+        source_commit=commit,
+        run_id="contract-test",
+        target_orders=order_codes,
+        source_tree=source_tree,
     )
     assert report["summary"]["functional_acceptance"]["status"] == "passed"
     # Exercise the collector's real persistence format.  Resource Stability v3
@@ -1282,7 +1290,7 @@ def assert_committed_delivery_roundtrip(
     formal_run = make_run(
         root / "delivery-run", commit=source, measurement_source_root=repo
     )
-    add_formal_scenario(formal_run, commit=source)
+    add_formal_scenario(formal_run, commit=source, source_tree=repo)
     make_full_verification_payload(formal_run / "full-verification", commit=source)
     output = repo / "evidence" / "releases" / "evaluation-contract-test"
     manifest = bundle.create_bundle(

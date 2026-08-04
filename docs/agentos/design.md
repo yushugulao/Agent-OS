@@ -618,7 +618,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 内核增长和模块所有权受预算约束 | `make ci-check`；检查项和 deterministic 阈值以 `ci/kernel-budgets.json` 为准，不根据最终文件系统补丁后的轻微变化猜测数值 |
 | 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |
 
-详细验证见 [verification.md](verification.md) 和 [test-record.md](test-record.md)。
+详细验证见 [verification.md](verification.md) 和 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 ## 11. 当前范围与取舍
 

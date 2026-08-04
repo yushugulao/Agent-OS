@@ -299,24 +299,111 @@ code {
   line-height: 1.4;
 }
 
-.overview-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(330px, 0.65fr);
-  gap: 32px;
-  align-items: start;
-}
-
-.overview-grid > div {
-  min-width: 0;
-}
-
-.overview-results {
+.judge-overview,
+.overview-results,
+.overview-resources {
   margin-top: 24px;
+}
+
+.evaluation-track-list {
+  display: grid;
+  gap: 18px;
+  margin-top: 14px;
+}
+
+.evaluation-track {
+  min-width: 0;
+  padding-block: 17px;
+  border-block: 1px solid var(--line);
+}
+
+.evaluation-track-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 28px;
+  margin-bottom: 14px;
+}
+
+.evaluation-track-heading h2,
+.track-kicker {
+  margin: 0;
+}
+
+.evaluation-track-heading h2 {
+  margin-top: 2px;
+  font-size: 1.18rem;
+}
+
+.track-kicker {
+  color: var(--teal);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.evaluation-track-heading > p {
+  max-width: 560px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.track-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 14px;
+  border-block: 1px solid var(--line);
+}
+
+.track-summary > div {
+  min-width: 0;
+  padding: 10px 14px;
+  border-right: 1px solid var(--line);
+}
+
+.track-summary > div:last-child {
+  border-right: 0;
+}
+
+.track-summary dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.track-summary dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 690;
+}
+
+.scenario-source-summary {
+  margin-top: 14px;
+}
+
+.compatibility-table th > span,
+.compatibility-table th > code,
+.compatibility-table th > small {
+  display: block;
+}
+
+.compatibility-table th > code,
+.compatibility-table th > small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.compatibility-table td {
+  white-space: nowrap;
 }
 
 .headline-result-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: 14px;
 }
@@ -334,15 +421,6 @@ code {
   flex-direction: column;
   min-height: 220px;
   padding: 14px;
-}
-
-.headline-result-slot--task6 {
-  grid-column: 1 / -1;
-  min-height: 0;
-}
-
-.headline-result-slot--regressed:not(.headline-result-slot--task6) {
-  border-top: 3px solid var(--red);
 }
 
 .headline-result-slot > header,
@@ -379,6 +457,13 @@ code {
   color: var(--muted);
 }
 
+.headline-result-slot .slot-p95 {
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 680;
+}
+
 .headline-result-slot .slot-targets {
   margin-top: 7px;
   color: var(--navy);
@@ -396,13 +481,9 @@ code {
 
 .headline-result-slot .slot-effect {
   margin-top: 5px;
-  color: var(--green);
+  color: var(--navy);
   font-size: 1rem;
   font-weight: 720;
-}
-
-.headline-result-slot--regressed .slot-effect {
-  color: var(--red);
 }
 
 .headline-result-slot > footer,
@@ -479,17 +560,14 @@ code {
   line-height: 1.3;
 }
 
-.task6-slot-row--regressed .task6-debt strong {
-  color: var(--red);
+.task6-ratio strong {
+  color: var(--navy);
 }
 
-.task6-slot-row--regressed {
-  border-left: 4px solid var(--red);
-  padding-left: 10px;
-}
-
-.task6-slot-row--improved .task6-debt strong {
-  color: var(--green);
+.workflow-composition {
+  margin-top: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .extension-result-grid {
@@ -990,10 +1068,6 @@ tbody th {
     width: min(100% - 32px, 1024px);
   }
 
-  .overview-grid {
-    grid-template-columns: 1fr;
-  }
-
   .headline-result-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1042,6 +1116,16 @@ tbody th {
     text-align: left;
   }
 
+  .evaluation-track-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .evaluation-track-heading > p {
+    text-align: left;
+  }
+
   .section-heading h1,
   .section-heading h2 {
     font-size: 1.75rem;
@@ -1049,6 +1133,20 @@ tbody th {
 
   .summary-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .track-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .track-summary > div,
+  .track-summary > div:last-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .track-summary > div:last-child {
+    border-bottom: 0;
   }
 
   .environment-grid {
@@ -1106,7 +1204,7 @@ tbody th {
     border-bottom: 0;
   }
 
-  .task6-comparison .task6-debt {
+  .task6-comparison .task6-ratio {
     order: -1;
     border-bottom: 1px solid var(--line);
   }

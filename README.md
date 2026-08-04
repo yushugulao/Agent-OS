@@ -18,7 +18,7 @@
 | 基础系统 | uCore RISC-V 教学操作系统 |
 | 项目定位 | 在教学操作系统中实现面向 AI Agent / LLM 工作流的通用内核机制 |
 | 主目标 | 根目录 AgentOS-uCore 增强内核 |
-| 对照目标 | `baseline_ucore/` 是共享基础安全加固、不含 AgentOS 扩展的 uCore 对照组，运行同一科研 Agent 平台负载 |
+| 对照目标 | `baseline_ucore/` 是共享基础安全加固、不含 AgentOS 扩展的 uCore 对照组，运行同一份有序场景清单和结果契约 |
 | 主运行方式 | WSL2 Ubuntu / Linux + RISC-V 工具链 + QEMU |
 | 源代码许可 | GPL-3.0，见 [LICENSE](LICENSE) |
 | 文档许可 | CC-BY-SA-4.0，见 [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md) |
@@ -52,10 +52,10 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 
 本仓库同时维护两个可比较目标：
 
-- 根目录目标：AgentOS-uCore 增强内核。科研 Agent 平台保持同一输入场景和输出契约，关键阶段使用内核 Agent 服务。
+- 根目录目标：AgentOS-uCore 增强内核。科研 Agent 平台保持相同输入、程序顺序和结果契约，关键阶段使用内核 Agent 服务。
 - `baseline_ucore/` 目标：共享 syscall、文件系统和进程生命周期等通用安全加固，但不包含 AgentOS 服务。科研 Agent 平台全部运行在普通用户态进程和普通文件之上。
 
-也就是说，科研 Agent 平台先作为普通用户态应用存在，再分别放到两个目标里运行。读者看到的是同一套流程在“共享安全基底对照”和“AgentOS-uCore”两种系统条件下的表现。
+Task 6 固定 70 项有序程序；当前源码收据逐项重算出 28 项同源、42 项目标特定实现。两侧共享 challenge、阶段顺序和 outcome oracle，但完整场景不是同一二进制或单变量实验，因此只用于全栈诊断。同源兼容负载说明传统接口及应用全路径成本；内核机制的因果结论只来自同内核消融，不从 Task 6 或兼容负载总耗时作外推。
 
 这种双目标设计让同一科研 Agent 工作流分别运行在共享安全基底对照和 AgentOS-uCore 上。对照目标说明纯用户态路径可以完成的工作，增强目标说明内核支持在文件查询、上下文读取、事件等待、失败恢复、权限控制和运行记录方面带来的差异。
 
@@ -96,9 +96,9 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 - [x] 提供覆盖四组机制对照、Task 6 双目标场景和内核成本的统一正式评价合同与 Dashboard 生成器。
 - [x] 正式采集时，每项测量绑定 Guest/Host 原始日志、源码提交、执行环境和统计口径；已发布数据以正式证据索引为准。
 
-终审提出的 17 项问题按“机制、验收 oracle、证据等级、剩余限制”集中记录在
-[最终加固与证据状态矩阵](docs/agentos/final-hardening-matrix.md)。正式 release 只引用与源码
-提交绑定的 QEMU、Host 和 Dashboard 材料；未连接的远程 CI 在 manifest 中保持 `not-attached`。
+实现、赛题映射和剩余边界集中在[要求追踪表](docs/agentos/requirements-traceability.md)与
+[验证说明](docs/agentos/verification.md)。正式 release 只引用与源码提交绑定的 QEMU、Host
+和 Dashboard 材料；未连接的远程 CI 在 manifest 中保持 `not-attached`。
 
 ## 四、方案设计
 
@@ -316,7 +316,7 @@ make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 ### 5.3 AgentOS-uCore 目标
 
-增强目标运行同一套科研 Agent 负载，但关键阶段会进入 AgentOS syscall。这一对照衡量完整系统路径的综合效果；由于两侧入口和内核机制并不完全相同，不能把场景差异单独归因给某一个 syscall。单机制因果结论由 5.4 节的同内核消融实验提供。
+增强目标运行相同的 70 项有序场景清单，但关键阶段会进入 AgentOS syscall。当前清单中 28 项源码逐字相同，42 项是目标特定实现；Host 会把逐程序 SHA-256 和关系收据绑定进每个 boot。该对照衡量完整系统路径的综合效果，不用于证明单个 syscall 或 AgentOS 整体更快。单机制因果结论由 5.4 节的同内核消融实验提供。
 
 ```bash
 export AGENT_TEST_DURATION_PROFILE=none
@@ -540,7 +540,7 @@ AgentOS 专项测试程序如下。表内 marker 描述动态验收合同；具�
 
 `workflow_teardown_race_ucore` 是独立机制专项，不计入上表 18-case Agent 套件。它通过 syscall 546 的 self-only lifecycle 快照确定竞态窗口，并连续三轮组合覆盖 factory 撤销、根自然退出、PUBLIC 后代、Context lane、metadata transaction gate、阻塞 `fdget` 临时引用、I/O debt/cache、inode/file object 回收和 lifecycle generation 重用。
 
-专项测试的历史记录集中保存在[测试记录](docs/agentos/test-record.md)；本页不把历史耗时并入正式评价。
+专项测试的发布记录只从[正式证据索引](evidence/releases/INDEX.md)读取；本页不把历史耗时并入正式评价。
 
 ### 6.2 正式评价对象
 
@@ -625,7 +625,7 @@ README 只保留项目全貌和主要运行方式。需要查看实现细节、�
 | 安全加固、可信执行、文件安全域和资源配额 | [docs/agentos/security-hardening.md](docs/agentos/security-hardening.md) |
 | AgentOS-uCore 系统调用和 ABI | [docs/agentos/api.md](docs/agentos/api.md) |
 | 任务要求到实现和测试的对应关系 | [docs/agentos/requirements-traceability.md](docs/agentos/requirements-traceability.md) |
-| AgentOS 专项测试详情 | [docs/agentos/testing-details.md](docs/agentos/testing-details.md) |
+| AgentOS 专项测试与证据边界 | [docs/agentos/verification.md](docs/agentos/verification.md) |
 | Windows 克隆后的依赖检查 | [docs/windows-quickstart.md](docs/windows-quickstart.md) |
 | 当前权威开发文档 | 以本表所列 Markdown 文档为准；旧 PDF 因把 `demo_expected`/公式生成数据误作实测证据，现已撤回。 |
 

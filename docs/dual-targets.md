@@ -1,6 +1,6 @@
 # 双目标 uCore 科研 Agent 平台说明
 
-当前项目同时保留两个可比较目标：同一套科研 Agent 流程分别运行在共享基础安全加固、不含 AgentOS 扩展的 uCore 对照目标和 AgentOS-uCore 上，直接呈现 AgentOS 专属内核支持带来的差异。
+当前项目同时保留两个目标：共享基础安全加固、不含 AgentOS 扩展的 uCore 对照目标，以及 AgentOS-uCore。Task 6 在两侧固定相同的 70 项程序顺序、challenge 和结果契约；逐项源码收据当前为 28 项同源、42 项目标特定实现。因此这一层呈现完整平台差异，但不把总耗时归因给单一内核机制。
 
 这里的“科研 Agent 流程”指项目内置的用户态示例负载。它模拟一次科研处理任务，包含数据准备、比对处理、结果分析、报告生成和归档交付五个环节，并由多个角色程序协作完成查询、分析、恢复、写作和审计。
 
@@ -29,7 +29,7 @@
 - 启动和辅助脚本：`baseline_ucore/scripts/`
 - 用户态科研 Agent 平台：`baseline_ucore/user/`
 
-这个目标与主目标共享 syscall 用户输入防护、定向等待、syscall 内核工作预算、可恢复文件系统耗尽、块 owner map、安装级 PUBLIC 存储 principal、普通主体配额与系统保留量、内核栈保护、进程退出回收和进程域配额等通用安全机制，但不加入 Agent syscall、Agent Context、Agent 文件 metadata、Agent capability 或 Agent 事件队列。两个目标都把持久存储身份与短命进程资源域分离，并在挂载时从 qmap/dinode 重建 PUBLIC 用量；主目标基于 VFS 凭据进一步区分 PUBLIC/WORKFLOW/SYSTEM 三级存储水位，baseline 只保留普通与系统两级，不依赖任何 Agent 符号。科研 Agent 平台通过普通用户进程、普通文件、`fork/exec/wait`、`open/read/write/close` 等机制运行。它用于回答一个问题：不使用 AgentOS 专属服务时，一个复杂科研 Agent 平台能做到什么，哪些地方会依赖约定、扫描和文件重建。
+这个目标与主目标共享 syscall 用户输入防护、定向等待、syscall 内核工作预算、可恢复文件系统耗尽、块 owner map、安装级 PUBLIC 存储 principal、普通主体配额与系统保留量、内核栈保护、进程退出回收和进程域配额等通用安全机制，但不加入 Agent syscall、Agent Context、Agent 文件 metadata、Agent capability 或 Agent 事件队列。两个目标都把持久存储身份与短命进程资源域分离，并在挂载时从 qmap/dinode 重建 PUBLIC 用量；主目标基于 VFS 凭据进一步区分 PUBLIC/WORKFLOW/SYSTEM 三级存储水位，baseline 只保留普通与系统两级，不依赖任何 Agent 符号。科研 Agent 平台通过普通用户进程、普通文件、`fork/exec/wait`、`open/read/write/close` 等机制运行。它用于观察不使用 AgentOS 专属服务时，哪些工作依赖用户态约定、扫描和文件重建。
 
 两个目标的通用内核工作预算都以线程 dispatch 建立 deadline/工作额度，由 syscall begin/end、timer pending 和 resumed 检测共同维护；console、pipe、exec 分页、fork 页表快照、FD_INODE 分块读写及 truncate detach/reclaim 使用同一安全点和资源生命周期协议。fork 的 VM snapshot 屏障只暂缓同进程 sibling，不阻塞其他进程。只有主目标额外把 Agent batch 接入该机制。双目标 `syscallfair_ucore` 使用纯 Guest 同一契约验证控制台长写、inode 大写入的内核重调度计数、短写与 observer 进展，以及截断回收；固定上界目录扫描与仅主目标可信 Agent 可达的 metadata raw I/O 仍是残余覆盖。
 

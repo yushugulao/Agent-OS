@@ -11,12 +11,10 @@
 | 1 | [../../README.md](../../README.md) | 项目概览、构建运行、当前完成状态 |
 | 2 | [design.md](design.md) | 主设计文档：架构、模块、运行视图、关键决策、当前范围和取舍 |
 | 3 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
-| 4 | [final-hardening-matrix.md](final-hardening-matrix.md) | 终审 17 项问题的机制、测试、限制和最终证据状态矩阵 |
-| 5 | [api.md](api.md) | 系统调用、Agent ABI、self-only workflow lifecycle 观测、工具协议和错误语义 |
-| 6 | [security-hardening.md](security-hardening.md) | 安全威胁、可信执行、文件安全域、统一 teardown、生命周期和资源韧性设计 |
-| 7 | [verification.md](verification.md) | 验证计划、Reader E2E、18-case Agent 套件、独立持久化/故障/teardown 专项、测试覆盖和性能数据摘要 |
-| 8 | [testing-details.md](testing-details.md) | Agent 功能、可信映像、VFS、安全约束、资源耗尽和进程生命周期测试的逐项说明 |
-| 9 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
+| 4 | [api.md](api.md) | 系统调用、Agent ABI、self-only workflow lifecycle 观测、工具协议和错误语义 |
+| 5 | [security-hardening.md](security-hardening.md) | 安全威胁、可信执行、文件安全域、统一 teardown、生命周期和资源韧性设计 |
+| 6 | [verification.md](verification.md) | 验证计划、18-case Agent 套件、持久化/故障/teardown 专项与证据边界 |
+| 7 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
 
 ## 详细附录
 
@@ -28,7 +26,6 @@
 | [task3-context-path.md](task3-context-path.md) | 任务三 Context Path、运行轨迹、cause/span 因果字段、用户自管 cache、统一 timeline 导出、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
 | [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、真实 inode 关联、私有 `.agentmeta` 元数据文件、根目录自动扫描、索引、查询计划、内容摘要、依赖查询、本地预取提示和 span 预取提示设计细节 |
 | [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/unwatch、FIFO 事件队列、wait/timeout 睡眠、事件因果继承、heartbeat、Agent 感知调度、受权调度配置、调度原因记录、运行轨迹、当前 span 短记录、全局审计短记录、过滤查询、统一 timeline、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
-| [test-record.md](test-record.md) | 历史测试记录、clean full-verify checkpoint、当前最终验收边界和关键输出 |
 | [assets/agentos_arch.svg](assets/agentos_arch.svg) | 用户态/内核态总架构图 |
 | [assets/agentos_telemetry_pipeline.svg](assets/agentos_telemetry_pipeline.svg) | 内核记录到平台页面的数据路径图 |
 | [assets/agentos_test_evidence.svg](assets/agentos_test_evidence.svg) | 测试证据组织图 |
@@ -42,8 +39,7 @@
 - 用户态/内核态接口分工和结构体布局以 [api.md](api.md) 为准。
 - 通用安全修复与 AgentOS 专属安全机制的分工以 [security-hardening.md](security-hardening.md) 为准。
 - 赛题完成度判断以 [requirements-traceability.md](requirements-traceability.md) 和 [verification.md](verification.md) 共同为准。
-- 当前终审问题及发布阻塞以 [final-hardening-matrix.md](final-hardening-matrix.md) 为准；其中 E0/E1 不得写成当前 HEAD 的 QEMU 或最终发布通过。
 - 新增功能需要同步更新对应设计说明、API/ABI、验证记录和示例脚本。
-- `test-record.md` 保留测试输出摘要，不替代验证结论。
+- 发布测试结果只从 `evidence/releases/INDEX.md` 指向的冻结 bundle 读取。
 - 模块列表、自测集合和增长阈值以 `ci/kernel-budgets.json` 及对应 checker 的版本化注册集合为准；文档不复制会随拆分变化的固定计数。
 - 18-case Agent 套件与 physical/metadata recovery/observation recovery/VirtIO/workflow teardown 等独立专项分别记账，不把这些机制 runner 混入 Agent case 数量。

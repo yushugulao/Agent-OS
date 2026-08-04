@@ -24,15 +24,24 @@ from compatibility_overhead_contract import (  # noqa: E402
     EVIDENCE_TIER,
     FORMAL_BOOT_COUNT,
     FORMAL_CONTEXT_SCHEMA,
+    GUEST_ROUNDS,
+    GUEST_SAMPLE_COUNT,
+    GUEST_CACHE_STATE,
+    GUEST_SCHEDULE,
+    GUEST_SCHEMA,
     LIMITATIONS,
     SCHEMA,
     CompatibilityContractError,
     METRICS,
+    PIPELINE_WORKLOAD,
     _extract_make_variable,
     canonical_json_bytes,
     create_plan,
+    expected_sample_sequence,
     guest_receipt,
+    metric_checksum,
     parse_guest_log,
+    research_artifact_pipeline_checksum,
     source_receipt,
     summarize_boots,
     validate_campaign,
@@ -105,35 +114,43 @@ class CompatibilitySourceGateTests(unittest.TestCase):
                 hidden.unlink()
 
 
-def guest_log(challenge: str, elapsed_bias: int = 0) -> str:
+def guest_log(
+    challenge: str,
+    elapsed_bias: int = 0,
+    *,
+    checksum_overrides: dict[str, str] | None = None,
+) -> str:
     samples: list[dict[str, object]] = []
     lines = [
-        f"compatbench: begin schema=1 challenge={challenge} "
-        "clock=gettimeofday_ms rounds=3 source=canonical-v1"
+        f"compatbench: begin schema={GUEST_SCHEMA} challenge={challenge} "
+        f"clock=gettimeofday_ms rounds={GUEST_ROUNDS} source=canonical-v2 "
+        f"cache={GUEST_CACHE_STATE} schedule={GUEST_SCHEDULE}"
     ]
-    for round_number in range(1, 4):
-        for metric_number, spec in enumerate(METRICS):
-            elapsed = 10 + elapsed_bias + round_number + metric_number
-            checksum = f"{(round_number * 0x1000 + metric_number):08x}"
-            sample = {
-                "challenge": challenge,
-                "metric": spec["id"],
-                "round": round_number,
-                "operations": spec["operations"],
-                "elapsed_ms": elapsed,
-                "checksum": checksum,
-            }
-            samples.append(sample)
-            lines.append(
-                "compatbench: sample schema=1 "
-                f"challenge={challenge} metric={spec['id']} round={round_number} "
-                f"ops={spec['operations']} elapsed_ms={elapsed} checksum={checksum}"
-            )
+    overrides = checksum_overrides or {}
+    for round_number, metric in expected_sample_sequence(challenge):
+        metric_number = [str(spec["id"]) for spec in METRICS].index(metric)
+        spec = METRICS[metric_number]
+        elapsed = 10 + elapsed_bias + round_number + metric_number
+        checksum = overrides.get(metric, metric_checksum(challenge, metric))
+        sample = {
+            "challenge": challenge,
+            "metric": spec["id"],
+            "round": round_number,
+            "operations": spec["operations"],
+            "elapsed_ms": elapsed,
+            "checksum": checksum,
+        }
+        samples.append(sample)
+        lines.append(
+            f"compatbench: sample schema={GUEST_SCHEMA} "
+            f"challenge={challenge} metric={spec['id']} round={round_number} "
+            f"ops={spec['operations']} elapsed_ms={elapsed} checksum={checksum}"
+        )
     receipt = guest_receipt(challenge, samples)
     lines.extend(
         (
-            f"compatbench: done schema=1 challenge={challenge} "
-            f"samples=12 receipt={receipt}",
+            f"compatbench: done schema={GUEST_SCHEMA} challenge={challenge} "
+            f"samples={GUEST_SAMPLE_COUNT} receipt={receipt}",
             "compatbench: passed",
             "[runner] pass marker observed",
         )
@@ -505,9 +522,15 @@ class CompatibilityOverheadTests(unittest.TestCase):
         cls.repo = Path(__file__).resolve().parents[1]
         cls.source = source_receipt(cls.repo)
 
-    def test_both_targets_compile_one_canonical_source(self) -> None:
+    def test_both_targets_separately_compile_one_canonical_source(self) -> None:
         self.assertTrue(self.source["single_canonical_source"])
         self.assertFalse(self.source["target_specific_guest_branches"])
+        self.assertEqual(
+            self.source["target_build_relation"],
+            "same_c_source_separately_compiled",
+        )
+        self.assertFalse(self.source["same_binary_claimed"])
+        self.assertFalse(self.source["pure_kernel_cost_claimed"])
         self.assertEqual(
             {row["resolved_source"] for row in self.source["target_bindings"]},
             {"evaluation_guest/compatbench.c"},
@@ -515,6 +538,46 @@ class CompatibilityOverheadTests(unittest.TestCase):
         self.assertEqual(
             {row["target"] for row in self.source["target_bindings"]},
             {"plain", "agentos"},
+        )
+
+    def test_research_artifact_pipeline_contract_is_bounded_and_explicit(self) -> None:
+        pipeline = next(
+            metric for metric in METRICS
+            if metric["id"] == "research_artifact_pipeline"
+        )
+        self.assertEqual(pipeline["operations"], PIPELINE_WORKLOAD["source_records"])
+        self.assertEqual(PIPELINE_WORKLOAD, {
+            "kind": "bounded_research_artifact_pipeline",
+            "input_shards": 8,
+            "records_per_shard": 64,
+            "source_records": 512,
+            "record_bytes": 16,
+            "source_bytes": 8192,
+            "aggregation_groups": 8,
+            "artifact_bytes": 64,
+            "stages": [
+                "generate_input_shards",
+                "read_validate_transform",
+                "aggregate_groups",
+                "write_read_verify_artifact",
+            ],
+            "samples_per_target_boot": 3,
+            "formal_paired_boots": 7,
+            "formal_samples_per_target": 21,
+            "cache_state": GUEST_CACHE_STATE,
+            "schedule": GUEST_SCHEDULE,
+        })
+        self.assertEqual(
+            pipeline["attribution"],
+            "guest_application_full_path_not_pure_kernel",
+        )
+        self.assertEqual(
+            research_artifact_pipeline_checksum("1234567890abcdef"),
+            "575b3dc9",
+        )
+        self.assertEqual(
+            research_artifact_pipeline_checksum("fedcba0987654321"),
+            "e5e7a19a",
         )
 
     def test_formal_shell_environment_binds_attested_system_drive(self) -> None:
@@ -676,16 +739,26 @@ class CompatibilityOverheadTests(unittest.TestCase):
     def test_parser_accepts_only_complete_bound_raw_stream(self) -> None:
         challenge = "1234567890abcdef"
         parsed = parse_guest_log(guest_log(challenge), challenge)
-        self.assertEqual(parsed["sample_count"], 12)
+        self.assertEqual(parsed["sample_count"], GUEST_SAMPLE_COUNT)
+        self.assertEqual(parsed["cache_state"], GUEST_CACHE_STATE)
+        self.assertEqual(parsed["schedule"], GUEST_SCHEDULE)
         self.assertEqual(
-            [(item["round"], item["metric"]) for item in parsed["samples"][:5]],
-            [
-                (1, "fork_wait"),
-                (1, "fork_exec_wait"),
-                (1, "pipe_roundtrip"),
-                (1, "seq_file_io"),
-                (2, "fork_wait"),
-            ],
+            [(item["round"], item["metric"]) for item in parsed["samples"]],
+            expected_sample_sequence(challenge),
+        )
+        for round_number in range(1, GUEST_ROUNDS + 1):
+            round_metrics = [
+                metric for sample_round, metric in expected_sample_sequence(challenge)
+                if sample_round == round_number
+            ]
+            self.assertEqual(set(round_metrics), {str(item["id"]) for item in METRICS})
+        pipeline_samples = [
+            item for item in parsed["samples"]
+            if item["metric"] == "research_artifact_pipeline"
+        ]
+        self.assertEqual(len(pipeline_samples), GUEST_ROUNDS)
+        self.assertTrue(
+            all(item["workload"] == PIPELINE_WORKLOAD for item in pipeline_samples)
         )
         with self.assertRaisesRegex(CompatibilityContractError, "Host plan"):
             parse_guest_log(guest_log(challenge), "fedcba0987654321")
@@ -704,6 +777,14 @@ class CompatibilityOverheadTests(unittest.TestCase):
         changed_elapsed = guest_log(challenge).replace("elapsed_ms=11", "elapsed_ms=12", 1)
         with self.assertRaisesRegex(CompatibilityContractError, "receipt"):
             parse_guest_log(changed_elapsed, challenge)
+        for metric in (str(item["id"]) for item in METRICS):
+            with self.subTest(metric=metric), self.assertRaisesRegex(
+                CompatibilityContractError, rf"{metric} output"
+            ):
+                parse_guest_log(
+                    guest_log(challenge, checksum_overrides={metric: "deadbeef"}),
+                    challenge,
+                )
 
     def test_gzip_replay_rejects_trailing_members_and_expansion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -769,6 +850,14 @@ class CompatibilityOverheadTests(unittest.TestCase):
         self.assertIsNone(summary["aggregate_score"])
         self.assertTrue(summary["aggregate_score_forbidden"])
         self.assertEqual(set(summary["metrics"]), {item["id"] for item in METRICS})
+        pipeline_summary = summary["metrics"]["research_artifact_pipeline"]
+        self.assertEqual(pipeline_summary["workload"], PIPELINE_WORKLOAD)
+        self.assertEqual(pipeline_summary["samples_per_target_boot"], 3)
+        self.assertEqual(pipeline_summary["samples_per_target"], 21)
+        self.assertEqual(
+            pipeline_summary["attribution"],
+            "guest_application_full_path_not_pure_kernel",
+        )
         campaign = {
             "schema": SCHEMA,
             "status": "ready",
@@ -797,6 +886,13 @@ class CompatibilityOverheadTests(unittest.TestCase):
         with self.assertRaisesRegex(CompatibilityContractError, "observer"):
             validate_campaign(observer_tamper)
 
+        host_bound = copy.deepcopy(campaign)
+        host_bound["boots"][0]["targets"]["plain"]["observer"][
+            "elapsed_seconds"
+        ] = 0.001
+        with self.assertRaisesRegex(CompatibilityContractError, "Host process"):
+            validate_campaign(host_bound)
+
         natural_exit = copy.deepcopy(campaign)
         natural_observer = natural_exit["boots"][0]["targets"]["plain"]["observer"]
         natural_observer.update(
@@ -823,7 +919,7 @@ class CompatibilityOverheadTests(unittest.TestCase):
         guest["workload_outcome_sha256"] = workload_outcome_sha256(
             guest["challenge"], guest["samples"]
         )
-        with self.assertRaisesRegex(CompatibilityContractError, "outcomes"):
+        with self.assertRaisesRegex(CompatibilityContractError, "output"):
             validate_campaign(outcome_tamper)
 
     def test_artifact_replay_binds_raw_logs_stamps_and_archived_elf(self) -> None:

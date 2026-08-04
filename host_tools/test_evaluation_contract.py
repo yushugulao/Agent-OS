@@ -8,6 +8,8 @@ import hashlib
 import io
 import json
 import re
+import shutil
+import subprocess
 import tempfile
 from contextlib import redirect_stdout
 from unittest import mock
@@ -63,7 +65,9 @@ from evaluation_scenario import (
     _agentos_challenge_oracle,
     _resource_stability_nonce,
     _resource_stability_report_guard,
+    _program_source_comparability_receipt,
     _summarize as summarize_scenario,
+    read_committed_expected_programs,
 )
 import agenteval_measurement_source_contract as measurement_source
 import scenario_timing_source_contract as scenario_timing_source
@@ -71,8 +75,11 @@ import scenario_timing_source_contract as scenario_timing_source
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE_PATH = ROOT / "ci" / "evaluation-suite.json"
-COMMIT = "a" * 40
+COMMIT = subprocess.check_output(
+    ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+).strip()
 ENVIRONMENT = "e" * 64
+_MEASUREMENT_SOURCE_RECEIPT: dict[str, object] | None = None
 
 
 def _scenario_agentos_acceptance(challenge: str, index: int) -> dict[str, object]:
@@ -317,28 +324,34 @@ def _scenario_resource_stability(
 
 
 def measurement_source_receipt() -> dict[str, object]:
-    return {
-        "contract_versions": {
-            "functional": measurement_source.FUNCTIONAL_CONTRACT_VERSION,
-            "functional_compile": (
-                measurement_source.FUNCTIONAL_COMPILE_CONTRACT_VERSION
-            ),
-            "micro": measurement_source.CONTRACT_VERSION,
-            "policy": measurement_source.POLICY_INVENTORY_SCHEMA,
-            "scenario": scenario_timing_source.CONTRACT_VERSION,
-        },
-        "formal_boot_count": measurement_source.FORMAL_BOOT_COUNT,
-        "policy_inventory": measurement_source.measurement_source_policy_inventory(),
-        "schema": measurement_source.RECEIPT_SCHEMA,
-        "source_commit": COMMIT,
-        "sources": [
-            {"bytes": index, "path": path, "sha256": f"{index:064x}"}
-            for index, path in enumerate(
-                measurement_source._receipt_source_paths(), 1
-            )
-        ],
-        "stop_rule": measurement_source.STOP_RULE,
-    }
+    global _MEASUREMENT_SOURCE_RECEIPT
+    if _MEASUREMENT_SOURCE_RECEIPT is None:
+        _MEASUREMENT_SOURCE_RECEIPT = {
+            "contract_versions": {
+                "functional": measurement_source.FUNCTIONAL_CONTRACT_VERSION,
+                "functional_compile": (
+                    measurement_source.FUNCTIONAL_COMPILE_CONTRACT_VERSION
+                ),
+                "micro": measurement_source.CONTRACT_VERSION,
+                "policy": measurement_source.POLICY_INVENTORY_SCHEMA,
+                "scenario": scenario_timing_source.CONTRACT_VERSION,
+            },
+            "formal_boot_count": measurement_source.FORMAL_BOOT_COUNT,
+            "policy_inventory": measurement_source.measurement_source_policy_inventory(),
+            "schema": measurement_source.RECEIPT_SCHEMA,
+            "source_commit": COMMIT,
+            "sources": [
+                {
+                    "bytes": len(data),
+                    "path": path,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+                for path in measurement_source._receipt_source_paths()
+                for data in [(ROOT / path).read_bytes()]
+            ],
+            "stop_rule": measurement_source.STOP_RULE,
+        }
+    return copy.deepcopy(_MEASUREMENT_SOURCE_RECEIPT)
 
 
 def expect_rejected(action, message: str) -> None:
@@ -1655,6 +1668,10 @@ def main() -> int:
         )
 
         scenario_samples = []
+        scenario_programs, _ = read_committed_expected_programs(ROOT, COMMIT)
+        program_source_receipt = _program_source_comparability_receipt(
+            ROOT, COMMIT, scenario_programs
+        )
         required_modules = [
             "context", "structured_tool", "metadata_query", "observation"
         ]
@@ -1666,6 +1683,9 @@ def main() -> int:
                 outcome, "research-platform-outcome-v2"
             )
             plain_raw = {
+                "program_source_comparability": copy.deepcopy(
+                    program_source_receipt
+                ),
                 "functional_acceptance": {
                     "required": False,
                     "status": "not_applicable",
@@ -1754,6 +1774,9 @@ def main() -> int:
                         },
                     ],
                 },
+                "program_source_comparability": copy.deepcopy(
+                    program_source_receipt
+                ),
                 "functional_acceptance": acceptance_receipt,
                 "resource_stability": resource_receipt,
             }
@@ -1767,7 +1790,7 @@ def main() -> int:
                 "boot_order": index,
                 "target_order": "AB" if index % 2 else "BA",
                 "challenge": challenge,
-                "program_order": ["rp_runner"],
+                "program_order": list(scenario_programs),
                 "outcome_fingerprint": outcome_fingerprint,
                 "source_receipts": {
                     "plain": plain_raw["sha256"],
@@ -1783,12 +1806,24 @@ def main() -> int:
                 "targets": {
                     "plain": {
                         "makespan_ms": 100 + index,
-                        "programs": [{"program": "rp_runner", "elapsed_ms": 100 + index}],
+                        "programs": [
+                            {
+                                "program": program,
+                                "elapsed_ms": 100 + index if position == 0 else 0,
+                            }
+                            for position, program in enumerate(scenario_programs)
+                        ],
                         "raw_source_receipt": plain_raw,
                     },
                     "agentos": {
                         "makespan_ms": 80 + index,
-                        "programs": [{"program": "rp_runner", "elapsed_ms": 80 + index}],
+                        "programs": [
+                            {
+                                "program": program,
+                                "elapsed_ms": 80 + index if position == 0 else 0,
+                            }
+                            for position, program in enumerate(scenario_programs)
+                        ],
                         "raw_source_receipt": agentos_raw,
                     },
                 },
@@ -1910,6 +1945,94 @@ def main() -> int:
         assert scenario_evidence_paths["research-scenario-report"] == "scenario/report.json"
         assert scenario_evidence_paths["research-scenario-plan"] == "scenario/scenario-plan.json"
 
+        portable_sources = root / "portable-measurement-sources"
+        for record in measurement_source_receipt()["sources"]:
+            destination = portable_sources / record["path"]
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / record["path"], destination)
+        assert not (portable_sources / ".git").exists()
+        portable_scenario = load_scenario_report(
+            scenario_path,
+            load_run_plan(plan_path)[0],
+            contract_root=ROOT,
+            source_tree=portable_sources,
+        )
+        assert portable_scenario["report"]["summary"][
+            "source_comparability"
+        ] == scenario["summary"]["source_comparability"]
+
+        truncated_scenario = copy.deepcopy(scenario)
+        truncated_program = scenario_programs[0]
+        truncated_receipt = copy.deepcopy(program_source_receipt)
+        truncated_receipt["expected_programs"] = 1
+        truncated_receipt["programs"] = truncated_receipt["programs"][:1]
+        is_same = truncated_receipt["programs"][0]["relation"] == "same_source"
+        truncated_receipt["same_source_programs"] = int(is_same)
+        truncated_receipt["platform_specific_programs"] = int(not is_same)
+        manifest_binding = truncated_receipt["manifest_binding"]
+        manifest_binding["expected_programs"] = 1
+        manifest_binding["program_order_sha256"] = _binding_sha256(
+            [truncated_program], "task6-program-order-v1"
+        )
+        manifest_binding.pop("sha256")
+        manifest_binding["sha256"] = _binding_sha256(
+            manifest_binding, "task6-program-manifest-binding-v1"
+        )
+        truncated_receipt.pop("sha256")
+        truncated_receipt["sha256"] = _binding_sha256(
+            truncated_receipt, "task6-program-source-comparability-v2"
+        )
+        for sample in truncated_scenario["samples"]:
+            sample["binding"]["program_order"] = [truncated_program]
+            for target in ("plain", "agentos"):
+                measurement = sample["targets"][target]
+                measurement["programs"] = measurement["programs"][:1]
+                raw_receipt = measurement["raw_source_receipt"]
+                raw_receipt["program_source_comparability"] = copy.deepcopy(
+                    truncated_receipt
+                )
+                raw_receipt.pop("sha256")
+                raw_receipt["sha256"] = _binding_sha256(
+                    raw_receipt, "scenario-raw-source-receipt-v1"
+                )
+                sample["binding"]["source_receipts"][target] = raw_receipt[
+                    "sha256"
+                ]
+            sample["binding"].pop("sha256")
+            sample["binding"]["sha256"] = _binding_sha256(
+                sample["binding"], "scenario-sample-v1"
+            )
+        truncated_summary = truncated_scenario["summary"]
+        truncated_summary["source_comparability"] = {
+            "schema": truncated_receipt["schema"],
+            "source_commit": COMMIT,
+            "expected_programs": 1,
+            "same_source_programs": int(is_same),
+            "platform_specific_programs": int(not is_same),
+            "receipt_sha256": truncated_receipt["sha256"],
+        }
+        for target in ("plain", "agentos"):
+            programs_summary = truncated_summary["targets"][target]["programs"]
+            truncated_summary["targets"][target]["programs"] = {
+                truncated_program: programs_summary[truncated_program]
+            }
+        truncated_scenario.pop("report_sha256")
+        truncated_scenario["report_sha256"] = _binding_sha256(
+            truncated_scenario, "scenario-report-v2"
+        )
+        truncated_path = root / "truncated-scenario.json"
+        truncated_path.write_text(
+            json.dumps(truncated_scenario) + "\n", encoding="utf-8"
+        )
+        expect_rejected(
+            lambda: load_scenario_report(
+                truncated_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
+            ),
+            "committed manifests",
+        )
+
         broadened_resource_claim = copy.deepcopy(scenario)
         broadened_resource_claim["summary"]["resource_stability"][
             "global_observation"
@@ -1924,7 +2047,9 @@ def main() -> int:
         )
         expect_rejected(
             lambda: load_scenario_report(
-                broadened_resource_path, load_run_plan(plan_path)[0]
+                broadened_resource_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
             ),
             "summary differs from bound samples",
         )
@@ -1950,7 +2075,9 @@ def main() -> int:
         )
         expect_rejected(
             lambda: load_scenario_report(
-                forged_terminal_path, load_run_plan(plan_path)[0]
+                forged_terminal_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
             ),
             "summary differs from bound samples",
         )
@@ -2081,7 +2208,9 @@ def main() -> int:
         )
         expect_rejected(
             lambda: load_scenario_report(
-                forged_regression_path, load_run_plan(plan_path)[0]
+                forged_regression_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
             ),
             "status differs from paired performance gate",
         )
@@ -2100,7 +2229,9 @@ def main() -> int:
         )
         expect_rejected(
             lambda: load_scenario_report(
-                forged_reverse_path, load_run_plan(plan_path)[0]
+                forged_reverse_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
             ),
             "summary differs from bound samples",
         )
@@ -2157,7 +2288,11 @@ def main() -> int:
             json.dumps(insufficient_scenario) + "\n", encoding="utf-8"
         )
         expect_rejected(
-            lambda: load_scenario_report(insufficient_path, load_run_plan(plan_path)[0]),
+            lambda: load_scenario_report(
+                insufficient_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
+            ),
             "functional acceptance is incomplete",
         )
 
@@ -2177,7 +2312,11 @@ def main() -> int:
             json.dumps(reordered_scenario) + "\n", encoding="utf-8"
         )
         expect_rejected(
-            lambda: load_scenario_report(reordered_path, load_run_plan(plan_path)[0]),
+            lambda: load_scenario_report(
+                reordered_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
+            ),
             "not in sealed boot order",
         )
 
@@ -2192,7 +2331,11 @@ def main() -> int:
             json.dumps(forged_output) + "\n", encoding="utf-8"
         )
         expect_rejected(
-            lambda: load_scenario_report(forged_output_path, load_run_plan(plan_path)[0]),
+            lambda: load_scenario_report(
+                forged_output_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
+            ),
             "normalized output differs from its fingerprint",
         )
 
@@ -2209,7 +2352,11 @@ def main() -> int:
             json.dumps(forged_receipt) + "\n", encoding="utf-8"
         )
         expect_rejected(
-            lambda: load_scenario_report(forged_receipt_path, load_run_plan(plan_path)[0]),
+            lambda: load_scenario_report(
+                forged_receipt_path,
+                load_run_plan(plan_path)[0],
+                contract_root=ROOT,
+            ),
             "differs from its bound source receipt",
         )
 
@@ -2230,7 +2377,9 @@ def main() -> int:
         )
         micro_plan, _ = load_run_plan(plan_path)
         expect_rejected(
-            lambda: load_scenario_report(forged_scenario_path, micro_plan),
+            lambda: load_scenario_report(
+                forged_scenario_path, micro_plan, contract_root=ROOT
+            ),
             "status differs from paired performance gate",
         )
 

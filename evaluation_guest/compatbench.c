@@ -11,8 +11,11 @@
  * This file is compiled verbatim by baseline uCore and AgentOS-uCore. Keep
  * target-specific APIs out of the workload so the measured work stays equal.
  */
-#define BENCH_SCHEMA 1
+#define BENCH_SCHEMA 2
 #define BENCH_ROUNDS 3
+#define METRIC_COUNT 5
+#define BENCH_CACHE_STATE "warm_guest_paths"
+#define BENCH_SCHEDULE "challenge_rotated_v1"
 #define FORK_WAIT_OPS 32
 #define FORK_EXEC_WAIT_OPS 12
 #define PIPE_ROUNDTRIP_OPS 1024
@@ -20,12 +23,42 @@
 #define FILE_CHUNKS_PER_DIRECTION 256
 #define FILE_TOTAL_BYTES \
 	(FILE_CHUNK_BYTES * FILE_CHUNKS_PER_DIRECTION * 2)
+#define PIPELINE_INPUT_SHARDS 8
+#define PIPELINE_RECORDS_PER_SHARD 64
+#define PIPELINE_RECORDS \
+	(PIPELINE_INPUT_SHARDS * PIPELINE_RECORDS_PER_SHARD)
+#define PIPELINE_GROUPS 8
+#define PIPELINE_RECORD_BYTES 16
+#define PIPELINE_SOURCE_BYTES (PIPELINE_RECORDS * PIPELINE_RECORD_BYTES)
+#define PIPELINE_ARTIFACT_BYTES 64
+#define PIPELINE_ARTIFACT_MAGIC 0x52504150U
+#define PIPELINE_ARTIFACT_SCHEMA 1U
 
 static const char *const metric_names[] = {
 	"fork_wait",
 	"fork_exec_wait",
 	"pipe_roundtrip",
 	"seq_file_io",
+	"research_artifact_pipeline",
+};
+
+struct pipeline_record {
+	unsigned int record_id;
+	unsigned int group;
+	unsigned int measurement;
+	unsigned int proof;
+};
+
+struct pipeline_artifact {
+	unsigned int magic;
+	unsigned int schema;
+	unsigned int source_records;
+	unsigned int source_bytes;
+	unsigned int transformed_records;
+	unsigned int group_count;
+	unsigned int group_totals[PIPELINE_GROUPS];
+	unsigned int source_checksum;
+	unsigned int result_checksum;
 };
 
 static void fail(const char *message)
@@ -82,6 +115,18 @@ static unsigned int receipt_add(unsigned int hash, int metric, int round,
 	hash = fnv_u32(hash, operations);
 	hash = fnv_u32(hash, elapsed_ms);
 	return fnv_u32(hash, checksum);
+}
+
+static int scheduled_metric(int round, int position)
+{
+	unsigned int start = ((unsigned int)COMPATBENCH_CHALLENGE +
+		(unsigned int)(round - 1) * 2U) % METRIC_COUNT;
+	int forward = (int)(((COMPATBENCH_CHALLENGE >> 8) ^
+		(unsigned long long)round) & 1ULL);
+	unsigned int offset = forward ? (unsigned int)position :
+		(METRIC_COUNT - (unsigned int)position) % METRIC_COUNT;
+
+	return (int)((start + offset) % METRIC_COUNT);
 }
 
 static int read_full(int fd, void *buffer, int length)
@@ -275,6 +320,153 @@ static unsigned int bench_seq_file_io(unsigned int *elapsed_ms)
 	return checksum;
 }
 
+static struct pipeline_record pipeline_record_at(unsigned int index)
+{
+	struct pipeline_record record;
+	unsigned long long challenge = COMPATBENCH_CHALLENGE;
+	unsigned int lane = (unsigned int)
+		((challenge >> ((index & 7U) * 8U)) & 0xffU);
+	unsigned int checksum = 2166136261U;
+
+	record.record_id = index;
+	record.group = (index + (unsigned int)challenge) &
+		(PIPELINE_GROUPS - 1U);
+	record.measurement = (lane * 257U + index * 17U +
+		(index / PIPELINE_RECORDS_PER_SHARD) * 31U) & 0xffffU;
+	checksum = fnv_u32(checksum, (unsigned int)challenge);
+	checksum = fnv_u32(checksum, (unsigned int)(challenge >> 32));
+	checksum = fnv_u32(checksum, record.record_id);
+	checksum = fnv_u32(checksum, record.group);
+	record.proof = fnv_u32(checksum, record.measurement);
+	return record;
+}
+
+static void pipeline_shard_path(unsigned int shard, char path[5])
+{
+	path[0] = 'c';
+	path[1] = 'b';
+	path[2] = 'p';
+	path[3] = (char)('0' + shard);
+	path[4] = 0;
+}
+
+static unsigned int pipeline_artifact_checksum(
+	const struct pipeline_artifact *artifact)
+{
+	unsigned int checksum = 2166136261U;
+
+	checksum = fnv_u32(checksum, artifact->magic);
+	checksum = fnv_u32(checksum, artifact->schema);
+	checksum = fnv_u32(checksum, artifact->source_records);
+	checksum = fnv_u32(checksum, artifact->source_bytes);
+	checksum = fnv_u32(checksum, artifact->transformed_records);
+	checksum = fnv_u32(checksum, artifact->group_count);
+	for (unsigned int group = 0; group < PIPELINE_GROUPS; group++)
+		checksum = fnv_u32(checksum, artifact->group_totals[group]);
+	return fnv_u32(checksum, artifact->source_checksum);
+}
+
+static unsigned int bench_research_artifact_pipeline(unsigned int *elapsed_ms)
+{
+	struct pipeline_record records[PIPELINE_RECORDS_PER_SHARD];
+	struct pipeline_artifact artifact;
+	struct pipeline_artifact observed;
+	unsigned int source_checksum = 2166136261U;
+	char path[5];
+	char trailing;
+	const char *artifact_path = "cbpart";
+
+	require(sizeof(struct pipeline_record) == PIPELINE_RECORD_BYTES,
+		"pipeline record layout");
+	require(sizeof(struct pipeline_artifact) == PIPELINE_ARTIFACT_BYTES,
+		"pipeline artifact layout");
+	for (unsigned int shard = 0; shard < PIPELINE_INPUT_SHARDS; shard++) {
+		pipeline_shard_path(shard, path);
+		(void)unlink(path);
+	}
+	(void)unlink(artifact_path);
+
+	long long start = get_mtime();
+	for (unsigned int shard = 0; shard < PIPELINE_INPUT_SHARDS; shard++) {
+		for (unsigned int slot = 0; slot < PIPELINE_RECORDS_PER_SHARD;
+		     slot++)
+			records[slot] = pipeline_record_at(
+				shard * PIPELINE_RECORDS_PER_SHARD + slot);
+		pipeline_shard_path(shard, path);
+		int fd = open(path, O_CREATE | O_WRONLY | O_TRUNC);
+		require(fd >= 0, "pipeline shard create");
+		require(write_full(fd, records, sizeof(records)) == 0,
+			"pipeline shard write");
+		require(close(fd) == 0, "pipeline shard write close");
+	}
+
+	memset(&artifact, 0, sizeof(artifact));
+	artifact.magic = PIPELINE_ARTIFACT_MAGIC;
+	artifact.schema = PIPELINE_ARTIFACT_SCHEMA;
+	artifact.source_records = PIPELINE_RECORDS;
+	artifact.source_bytes = PIPELINE_SOURCE_BYTES;
+	artifact.transformed_records = PIPELINE_RECORDS;
+	artifact.group_count = PIPELINE_GROUPS;
+	for (unsigned int shard = 0; shard < PIPELINE_INPUT_SHARDS; shard++) {
+		pipeline_shard_path(shard, path);
+		int fd = open(path, O_RDONLY);
+		require(fd >= 0, "pipeline shard open");
+		require(read_full(fd, records, sizeof(records)) == 0,
+			"pipeline shard read");
+		require(read(fd, &trailing, 1) == 0, "pipeline shard length");
+		require(close(fd) == 0, "pipeline shard read close");
+		for (unsigned int slot = 0; slot < PIPELINE_RECORDS_PER_SHARD;
+		     slot++) {
+			unsigned int index =
+				shard * PIPELINE_RECORDS_PER_SHARD + slot;
+			struct pipeline_record expected = pipeline_record_at(index);
+			unsigned int transformed;
+
+			require(bytes_equal((const char *)&records[slot],
+					    (const char *)&expected,
+					    sizeof(expected)),
+				"pipeline source record");
+			source_checksum = fnv_u32(source_checksum,
+						 records[slot].record_id);
+			source_checksum = fnv_u32(source_checksum,
+						 records[slot].group);
+			source_checksum = fnv_u32(source_checksum,
+						 records[slot].measurement);
+			source_checksum = fnv_u32(source_checksum,
+						 records[slot].proof);
+			transformed = (records[slot].measurement ^
+				       records[slot].proof) & 0xffffU;
+			artifact.group_totals[records[slot].group] += transformed;
+		}
+	}
+	artifact.source_checksum = source_checksum;
+	artifact.result_checksum = pipeline_artifact_checksum(&artifact);
+
+	int fd = open(artifact_path, O_CREATE | O_WRONLY | O_TRUNC);
+	require(fd >= 0, "pipeline artifact create");
+	require(write_full(fd, &artifact, sizeof(artifact)) == 0,
+		"pipeline artifact write");
+	require(close(fd) == 0, "pipeline artifact write close");
+	fd = open(artifact_path, O_RDONLY);
+	require(fd >= 0, "pipeline artifact open");
+	require(read_full(fd, &observed, sizeof(observed)) == 0,
+		"pipeline artifact read");
+	require(read(fd, &trailing, 1) == 0, "pipeline artifact length");
+	require(close(fd) == 0, "pipeline artifact read close");
+	require(bytes_equal((const char *)&artifact, (const char *)&observed,
+			    sizeof(artifact)), "pipeline artifact content");
+	long long end = get_mtime();
+
+	for (unsigned int shard = 0; shard < PIPELINE_INPUT_SHARDS; shard++) {
+		pipeline_shard_path(shard, path);
+		require(unlink(path) == 0, "pipeline shard unlink");
+	}
+	require(unlink(artifact_path) == 0, "pipeline artifact unlink");
+	require(start >= 0 && end >= start, "pipeline measurement window");
+	*elapsed_ms = (unsigned int)(end - start);
+	return artifact.result_checksum;
+}
+
 static void emit_sample(const char *challenge, int metric, int round,
 			unsigned int operations, unsigned int elapsed_ms,
 			unsigned int checksum)
@@ -320,10 +512,17 @@ static unsigned int timed_metric(const char *challenge, int metric, int round,
 		operations = PIPE_ROUNDTRIP_OPS;
 		checksum = bench_pipe_roundtrip(&elapsed);
 		break;
-	default:
+	case 3:
 		operations = FILE_TOTAL_BYTES;
 		checksum = bench_seq_file_io(&elapsed);
 		break;
+	case 4:
+		operations = PIPELINE_RECORDS;
+		checksum = bench_research_artifact_pipeline(&elapsed);
+		break;
+	default:
+		fail("unknown metric");
+		return receipt;
 	}
 
 	require(elapsed > 0, "nonzero millisecond measurement");
@@ -340,10 +539,14 @@ int main(int argc, char **argv)
 		return strcmp(argv[2], challenge) == 0 ? 0 : 90;
 	require(argc == 1, "unexpected arguments");
 	require(COMPATBENCH_CHALLENGE != 0, "nonzero challenge");
+	require(sizeof(metric_names) / sizeof(metric_names[0]) == METRIC_COUNT,
+		"metric table size");
 
 	printf("compatbench: begin schema=%d challenge=%s "
-	       "clock=gettimeofday_ms rounds=%d source=canonical-v1\n",
-	       BENCH_SCHEMA, challenge, BENCH_ROUNDS);
+	       "clock=gettimeofday_ms rounds=%d source=canonical-v2 "
+	       "cache=%s schedule=%s\n",
+	       BENCH_SCHEMA, challenge, BENCH_ROUNDS, BENCH_CACHE_STATE,
+	       BENCH_SCHEDULE);
 
 	/* One identical untimed pass removes first-use allocation from both sides. */
 	(void)bench_fork_wait();
@@ -351,16 +554,21 @@ int main(int argc, char **argv)
 	unsigned int warmup_elapsed;
 	(void)bench_pipe_roundtrip(&warmup_elapsed);
 	(void)bench_seq_file_io(&warmup_elapsed);
+	(void)bench_research_artifact_pipeline(&warmup_elapsed);
 
 	unsigned int receipt = receipt_begin();
 	for (int round = 1; round <= BENCH_ROUNDS; round++)
-		for (int metric = 0; metric < 4; metric++)
+		for (int position = 0; position < METRIC_COUNT; position++) {
+			int metric = scheduled_metric(round, position);
+
 			receipt = timed_metric(challenge, metric, round, receipt);
+		}
 
 	char receipt_text[9];
 	hex_fixed(receipt, receipt_text, 8);
 	printf("compatbench: done schema=%d challenge=%s samples=%d receipt=%s\n",
-	       BENCH_SCHEMA, challenge, BENCH_ROUNDS * 4, receipt_text);
+	       BENCH_SCHEMA, challenge, BENCH_ROUNDS * METRIC_COUNT,
+	       receipt_text);
 	puts("compatbench: passed");
 	return 0;
 }

@@ -734,7 +734,13 @@ def _binding_sha256(value: object, domain: str) -> str:
     return sha256_bytes(domain.encode("ascii") + b"\0" + raw)
 
 
-def load_scenario_report(path: Path, plan: dict[str, Any]) -> dict[str, Any]:
+def load_scenario_report(
+    path: Path,
+    plan: dict[str, Any],
+    *,
+    contract_root: Path,
+    source_tree: Path | None = None,
+) -> dict[str, Any]:
     path = _safe_regular_file(path, "scenario report")
     raw = path.read_bytes()
     report = strict_json_loads(raw)
@@ -774,11 +780,50 @@ def load_scenario_report(path: Path, plan: dict[str, Any]) -> dict[str, Any]:
         if samples or not isinstance(report.get("errors"), list) or not report["errors"]:
             raise EvaluationError("failed scenario must contain errors and no samples")
     else:
+        try:
+            from evaluation_scenario import (
+                MIN_SUPPORTED_BOOTS,
+                PROGRAM_SOURCE_RECEIPT_SCHEMA,
+                REQUIRED_AGENTOS_MODULES,
+                RESOURCE_STABILITY_CHILD_ROUNDS,
+                RESOURCE_STABILITY_GROWTH_BOUNDS,
+                RESOURCE_STABILITY_INTERPRETATION,
+                RESOURCE_STABILITY_LOAD_WORKFLOWS,
+                RESOURCE_STABILITY_MEASUREMENT_SCOPE,
+                RESOURCE_STABILITY_RESOURCE_KINDS,
+                RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
+                TASK6_EXPECTED_PROGRAM_COUNT,
+                ScenarioEvidenceError,
+                _classify_claim as classify_scenario_claim,
+                _program_source_comparability_receipt_from_snapshot,
+                _summarize as summarize_scenario,
+                read_snapshot_expected_programs,
+            )
+
+            snapshot_root = source_tree or contract_root
+            committed_programs, _ = read_snapshot_expected_programs(
+                snapshot_root,
+                report["source_commit"],
+                plan["measurement_source_receipt"],
+            )
+            committed_source_receipt = (
+                _program_source_comparability_receipt_from_snapshot(
+                    snapshot_root,
+                    report["source_commit"],
+                    committed_programs,
+                    plan["measurement_source_receipt"],
+                )
+            )
+        except (ImportError, KeyError, OSError, TypeError, ValueError) as error:
+            raise EvaluationError(
+                f"scenario committed program inventory is invalid: {error}"
+            ) from error
+
         boot_ids: set[str] = set()
         boot_orders: set[int] = set()
         challenges: set[str] = set()
         outcome_fingerprints: set[str] = set()
-        expected_program_order: list[str] | None = None
+        expected_program_order = list(committed_programs)
         for index, raw_sample in enumerate(samples):
             sample = _exact(
                 raw_sample,
@@ -828,10 +873,10 @@ def load_scenario_report(path: Path, plan: dict[str, Any]) -> dict[str, Any]:
                 or len(set(program_order)) != len(program_order)
             ):
                 raise EvaluationError("scenario program order is invalid")
-            if expected_program_order is None:
-                expected_program_order = program_order
-            elif program_order != expected_program_order:
-                raise EvaluationError("scenario program order differs across boots")
+            if program_order != expected_program_order:
+                raise EvaluationError(
+                    "scenario program order differs from the committed manifests"
+                )
             if (
                 binding["source_commit"] != report["source_commit"]
                 or binding["run_id"] != report["run_id"]
@@ -900,6 +945,13 @@ def load_scenario_report(path: Path, plan: dict[str, Any]) -> dict[str, Any]:
                     raise EvaluationError(
                         "scenario target evidence differs from its bound source receipt"
                     )
+                if (
+                    raw_receipt.get("program_source_comparability")
+                    != committed_source_receipt
+                ):
+                    raise EvaluationError(
+                        "scenario program source receipt differs from committed blobs"
+                    )
             binding_hash = binding["sha256"]
             _text(binding_hash, "scenario sample binding sha256", SHA256)
             unsigned_binding = dict(binding)
@@ -907,26 +959,52 @@ def load_scenario_report(path: Path, plan: dict[str, Any]) -> dict[str, Any]:
             if binding_hash != _binding_sha256(unsigned_binding, "scenario-sample-v1"):
                 raise EvaluationError("scenario sample binding hash differs")
         try:
-            from evaluation_scenario import (
-                MIN_SUPPORTED_BOOTS,
-                REQUIRED_AGENTOS_MODULES,
-                RESOURCE_STABILITY_CHILD_ROUNDS,
-                RESOURCE_STABILITY_GROWTH_BOUNDS,
-                RESOURCE_STABILITY_INTERPRETATION,
-                RESOURCE_STABILITY_LOAD_WORKFLOWS,
-                RESOURCE_STABILITY_MEASUREMENT_SCOPE,
-                RESOURCE_STABILITY_RESOURCE_KINDS,
-                RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
-                ScenarioEvidenceError,
-                _summarize as summarize_scenario,
-                _classify_claim as classify_scenario_claim,
-            )
-
             rebuilt_summary = summarize_scenario(samples)
         except (ImportError, KeyError, TypeError, ValueError) as error:
             raise EvaluationError(f"scenario samples cannot be summarized: {error}") from error
         if rebuilt_summary != report["summary"]:
             raise EvaluationError("scenario summary differs from bound samples")
+        source_comparability = _exact(
+            rebuilt_summary.get("source_comparability"),
+            {
+                "schema",
+                "source_commit",
+                "expected_programs",
+                "same_source_programs",
+                "platform_specific_programs",
+                "receipt_sha256",
+            },
+            "scenario source comparability summary",
+        )
+        expected_count = TASK6_EXPECTED_PROGRAM_COUNT
+        recorded_count = _int(
+            source_comparability["expected_programs"],
+            "scenario source comparability program count",
+            1,
+        )
+        same_source_count = _int(
+            source_comparability["same_source_programs"],
+            "scenario same-source program count",
+        )
+        platform_specific_count = _int(
+            source_comparability["platform_specific_programs"],
+            "scenario platform-specific program count",
+        )
+        _text(
+            source_comparability["receipt_sha256"],
+            "scenario source comparability receipt sha256",
+            SHA256,
+        )
+        if (
+            source_comparability["schema"] != PROGRAM_SOURCE_RECEIPT_SCHEMA
+            or source_comparability["source_commit"] != report["source_commit"]
+            or len(expected_program_order) != expected_count
+            or recorded_count != expected_count
+            or same_source_count + platform_specific_count != expected_count
+        ):
+            raise EvaluationError(
+                "scenario source comparability summary differs from the workload"
+            )
         try:
             performance_status = classify_scenario_claim(rebuilt_summary)
         except ScenarioEvidenceError as error:
@@ -3671,6 +3749,7 @@ def build(
     scenario_plan_path: Path | None = None,
     *,
     contract_root: Path | None = None,
+    scenario_source_tree: Path | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     suite = load_suite(suite_path)
     plan, plan_hash = load_run_plan(plan_path)
@@ -3698,7 +3777,12 @@ def build(
             )
         scenario = bind_scenario_plan(
             scenario_plan_path,
-            load_scenario_report(scenario_path, plan),
+            load_scenario_report(
+                scenario_path,
+                plan,
+                contract_root=contract_root,
+                source_tree=scenario_source_tree,
+            ),
             plan,
             contract_root=contract_root,
         )
@@ -3766,6 +3850,7 @@ def verify(
     scenario_plan_path: Path | None = None,
     *,
     contract_root: Path | None = None,
+    scenario_source_tree: Path | None = None,
 ) -> dict[str, Any]:
     expected_summary, expected_rows = build(
         suite_path,
@@ -3774,6 +3859,7 @@ def verify(
         scenario_path,
         scenario_plan_path,
         contract_root=contract_root,
+        scenario_source_tree=scenario_source_tree,
     )
     actual_summary = _read_json(summary_path)
     actual_rows = read_jsonl(rows_path)
@@ -3797,6 +3883,7 @@ def _parser() -> argparse.ArgumentParser:
         sub.add_argument("--scenario-report", type=Path)
         sub.add_argument("--scenario-plan", type=Path)
         sub.add_argument("--contract-root", type=Path)
+        sub.add_argument("--scenario-source-tree", type=Path)
     targeted = subparsers.add_parser("validate-guest")
     targeted.add_argument("--suite", type=Path, required=True)
     targeted.add_argument("--log", type=Path, required=True)
@@ -3807,6 +3894,14 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        scenario_kwargs: dict[str, object] = {
+            "contract_root": args.contract_root
+        } if args.command != "validate-guest" else {}
+        if (
+            args.command != "validate-guest"
+            and args.scenario_source_tree is not None
+        ):
+            scenario_kwargs["scenario_source_tree"] = args.scenario_source_tree
         if args.command == "validate-guest":
             receipt = validate_guest_log(
                 args.log, load_suite(args.suite), args.challenge
@@ -3816,7 +3911,7 @@ def main(argv: list[str] | None = None) -> int:
             summary, rows = build(
                 args.suite, args.run_plan, args.source_root,
                 args.scenario_report, args.scenario_plan,
-                contract_root=args.contract_root,
+                **scenario_kwargs,
             )
             write_json(args.summary, summary)
             write_jsonl(args.rows, rows)
@@ -3824,7 +3919,7 @@ def main(argv: list[str] | None = None) -> int:
             verify(
                 args.suite, args.run_plan, args.source_root, args.summary,
                 args.rows, args.scenario_report, args.scenario_plan,
-                contract_root=args.contract_root,
+                **scenario_kwargs,
             )
     except EvaluationError as error:
         raise SystemExit(f"evaluation contract failed: {error}") from error

@@ -93,7 +93,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAP
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
 ```
 
-这一段不需要逐行朗读全部测试输出。建议把串口输出按以下观察点讲清楚，完整原始输出放在 [test-record.md](test-record.md) 中查询。
+这一段不需要逐行朗读全部测试输出。建议把串口输出按以下观察点讲清楚，完整原始输出放在 [正式证据索引](../../evidence/releases/INDEX.md) 中查询。
 
 | 观察点 | 讲解重点 |
 | --- | --- |
@@ -291,7 +291,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 
 ### 9.3 关键观察点
 
-综合场景的原始事件日志较长，完整样例放在 [test-record.md](test-record.md)。现场讲解时建议按事件链路观察，而不是逐行读串口：
+综合场景的原始事件日志较长，完整样例放在 [正式证据索引](../../evidence/releases/INDEX.md)。现场讲解时建议按事件链路观察，而不是逐行读串口：
 
 | 阶段 | 观察点 | 机制含义 |
 | --- | --- | --- |

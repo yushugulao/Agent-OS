@@ -211,7 +211,7 @@ bash scripts/verify-dual-target-structure.sh
 make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-语义成功标记的形状如下；实际计数只从本次日志和 [AgentOS 测试记录](agentos/test-record.md) 读取：
+语义成功标记的形状如下；发布计数只从本次日志和[正式证据索引](../evidence/releases/INDEX.md)指向的 bundle 读取：
 
 ```text
 [dual-platform] checking target structure

@@ -50,7 +50,13 @@ OBJECT_ID = re.compile(rb"[0-9a-f]{40}|[0-9a-f]{64}")
 def _git_output(git: Path, repo: Path, *arguments: str) -> bytes:
     try:
         result = subprocess.run(
-            [str(git), *SAFE_GIT_CONFIG_ARGUMENTS, *arguments],
+            [
+                str(git),
+                *SAFE_GIT_CONFIG_ARGUMENTS,
+                "-c",
+                f"safe.directory={repo}",
+                *arguments,
+            ],
             cwd=repo,
             env=controlled_git_environment(),
             stdin=subprocess.DEVNULL,

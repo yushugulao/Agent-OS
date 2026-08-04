@@ -99,7 +99,7 @@ header-last 是发布顺序，不是面向无锁多线程 reader 的 seqlock。�
 6. 再次调用 `context_snapshot()`；
 7. cache 内容仍然保留，表示 snapshot 只刷新内核管理区，不覆盖用户自管 cache。
 
-对应检查项为 `tamper_protected` 和 `user_cache_preserved`，原始输出见 [test-record.md](test-record.md)。
+对应检查项为 `tamper_protected` 和 `user_cache_preserved`，原始输出见 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 ## 因果链记录
 
@@ -117,7 +117,7 @@ Context v8 会把工具调用、手动记录和事件消费串成轻量因果链
 
 这使 Context Path 不只保存“发生了什么”，还保存“为什么接着发生”，并能验证当前可见路径的相邻顺序由内核维护。跨 Agent 事件中的 `cause_sequence` 是 source 进程本地序号；provenance 通过内核私有 source pid/control sidecar 解释它，不会把它误连到 target 恰好相同的本地序号。该链只在同一 workflow scope 内传播，用于运行追踪，不是磁盘持久化日志。
 
-`agentfinal_ucore` 会检查首条记录是 root，第二条记录指向第一条记录，span 连续，header 中的当前 cause/span 与最新状态一致；同时检查每条记录的 prev/hash 链接关系。对应检查项为 `causal_context` 和 `context_integrity`，原始输出见 [test-record.md](test-record.md)。
+`agentfinal_ucore` 会检查首条记录是 root，第二条记录指向第一条记录，span 连续，header 中的当前 cause/span 与最新状态一致；同时检查每条记录的 prev/hash 链接关系。对应检查项为 `causal_context` 和 `context_integrity`，原始输出见 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 ## 写入路径
 
@@ -181,7 +181,7 @@ rollback 先验证目标与 attribution，再预检 latest/header，之后才分
 
 观测接口本身也纳入公平边界。每个 scope 同时维护按 sequence 和按 `(tick, sequence)` 排列的 128 槽索引，audit/span/provenance 使用单遍读取，timeline 对四个已排序来源做四路归并；包括 `max=0` 计数在内，每检查 16 个候选就预付 kernel-work，发生预算让出后重新读取可见边界并补足增长差额。`agentscope_ucore` 用 `observe_query_bounded`、`observe_index_ordered` 和 `observe_cross_scope_progress` 验证让出证据、顺序/隔离及另一 scope 的实际进展。
 
-本组接口的检查点如下。原始输出统一见 [test-record.md](test-record.md)。
+本组接口的检查点如下。原始输出统一见 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 | 接口 | 检查点 |
 | --- | --- |
@@ -210,7 +210,7 @@ span 同时用于文件预取提示。文件查询产生的 metadata 提示进�
 | `active_path_count` | 128 |
 | `active_path_oldest_sequence` | 66 |
 
-对应原始输出见 [test-record.md](test-record.md)。
+对应原始输出见 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 ## 性能路径
 
@@ -232,7 +232,7 @@ Context Path 有三种读取方式：
 | `agent_audit_query()` | 在当前 scope 可见窗口内过滤，不能扩大 scope/owner |
 | `agent_ledger_snapshot()` | 读取本 scope 稀疏窗口、dropped 和逻辑链尾，仅 orchestrator 可读 |
 
-`agentbench_ucore` 对比 direct、query 和 snapshot 三条读取路径，并在 [test-record.md](test-record.md) 中保留具体 tick 样例。本文档只说明结论：直接读 mirror 适合高频 latest 状态读取，`context_query()` 适合少量历史，`context_snapshot()` 适合批量读取当前可见路径。
+`agentbench_ucore` 对比 direct、query 和 snapshot 三条读取路径，并在 [正式证据索引](../../evidence/releases/INDEX.md) 中保留具体 tick 样例。本文档只说明结论：直接读 mirror 适合高频 latest 状态读取，`context_query()` 适合少量历史，`context_snapshot()` 适合批量读取当前可见路径。
 
 ## 当前限制
 
@@ -247,7 +247,7 @@ Context Path 有三种读取方式：
 
 ## 验证证据
 
-原始输出见 [test-record.md](test-record.md)，测试步骤见 [testing-details.md](testing-details.md)。任务三重点检查以下内容：
+原始输出见 [正式证据索引](../../evidence/releases/INDEX.md)，测试步骤见 [验证说明](verification.md)。任务三重点检查以下内容：
 
 | 检查项 | 含义 |
 | --- | --- |

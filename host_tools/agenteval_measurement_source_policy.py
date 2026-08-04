@@ -12,7 +12,7 @@ else:
 
 SOURCE_RELATIVE = "user/src/agenteval_ucore.c"
 EVALUATION_SUITE_SOURCE_PATH = "ci/evaluation-suite.json"
-POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v2"
+POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v3"
 
 # This is deliberately an allowlist, not a recursive source-tree snapshot.
 # Each entry participates in selecting, executing, interpreting, rendering, or
@@ -29,6 +29,7 @@ CONTROL_PLANE_POLICY = (
     ("scenario", "host_tools/evaluation_scenario.py"),
     ("compatibility-producer", "host_tools/compatibility_overhead.py"),
     ("compatibility-contract", "host_tools/compatibility_overhead_contract.py"),
+    ("compatibility-guest-source", "evaluation_guest/compatbench.c"),
     ("bundle", "host_tools/evaluation_bundle.py"),
     ("contest-demo", "host_tools/contest_demo.py"),
     ("committed-source-identity", "host_tools/committed_source_identity.py"),

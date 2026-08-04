@@ -1,6 +1,6 @@
 # 验证与性能评估
 
-本文档说明 AgentOS-uCore 专项测试如何运行、每个测试覆盖哪些能力、性能数据如何解读。逐项流程见 [testing-details.md](testing-details.md)，原始输出样例见 [test-record.md](test-record.md)。
+本文档说明 AgentOS-uCore 专项测试如何运行、每个测试覆盖哪些能力、性能数据如何解读。发布结果只从 `evidence/releases/INDEX.md` 指向的冻结 bundle 读取，不在说明文档中复制历史日志。
 
 发布状态不绑定可变工作树或本文的“最近一次”文字，而绑定 `evidence/releases/INDEX.md` 与对应 release bundle 的 `manifest.json`。代码提交 C 必须先冻结；采集器在干净 C 上执行唯一一次 `make full-verify`，随后证据提交 E 作为 C 的直接子提交，只新增该 bundle 并精确追加索引。包内 `source_commit` 仍指向 C，承载提交由 `SELF` 解析为 E。C 的本地完整验收和可校验 bundle 可形成 E3，不依赖远端 Runner；没有可用 Runner 时 `remote_ci.status` 必须保持 `not-attached`，只阻止同一 C 的远端 attestation 等级 E4。下文带日期、提交号或旧数值的段落都是历史记录，不能外推到未被 bundle 绑定的代码。
 
@@ -58,11 +58,11 @@ Agent suite duration 只累计各 QEMU case 的 monotonic 运行时间，不包�
 
 通用 QEMU runner 以字节流读取并在进程退出前后全量 drain，不依赖文本行边界；包括 panic 在内的预定义 failure 模式按大小写不敏感方式检查，marker 后的剩余输出也不会跳过。控制台仍可转发原始字节，落盘的 `.guest.log` 则把 CRLF、孤立 CR 统一成 LF；exact-line marker、SHA256、CSV 行号和 release manifest 一律绑定这份 canonical LF transcript。监控循环每轮最多读取一个 64 KiB 块，随后重新检查 case timeout 和 marker grace，持续 stdout 洪泛不能饿死 deadline。每 case 最多接受 16 MiB 总输出，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；总量/记录越界 fail closed，诊断副本截断。case deadline 优先于完成判断，并在 scanner feed 和 runner notice 后重新核对，迟到 marker 不能通过。普通 case 必须自然 `rc=0`；stdout/stderr pipe 先到 EOF 时仍在原 deadline 内等待真实退出状态。checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`。powercut profile 另由专用 supervisor 隔离被测树，以随机 nonce 和稳定 PID/starttime 认证控制请求；它只在向 QEMU leader 发送 `SIGKILL`、回收跨 `setsid()` 的全部后代并取得一致镜像退出码后提交完成证明。supervisor/leader 被 workload 提前杀死、控制通道 EOF、残留后代、超时、非零退出或后置 panic 均失败。该 profile 建模突然 VM 终止，`SIGKILL` 不清空宿主页缓存，不能等同于整机物理断电。预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，不固化易过时数量。
 
-Reader seeded-action runner 不复用“对所有阶段扫描 panic 子串”的旧逻辑。clean/build/guest 各有独立 phase 和 timeout，前两阶段只依据进程退出码；QEMU guest 启动后才对去除 ANSI 的完整日志行匹配 Guest panic、trap、`check failed` 或 orchestrator failure，并在 summary 中记录 `failure_phase`。单测明确要求构建输出 `build/riscv64/ch6b_panic` 成功，也要求规范 Guest `[PANIC ...]` 行失败。科研平台 `exact-field-v1` receipt 以 128 B 分块流式读取完整文件，只接受唯一完整的目标 `key=value`；跨块长 key/目标和长无关字段合法，空 key/value、CR、NUL、重复目标及前后缀伪匹配 fail closed。完整 bytes/hash/line count 与字段断言一并进入 receipt，ASan/UBSan Host probe 接入 `ci-check`。历史与当前候选的 Reader 执行结果统一见 [test-record.md](test-record.md)。
+Reader seeded-action runner 不复用“对所有阶段扫描 panic 子串”的旧逻辑。clean/build/guest 各有独立 phase 和 timeout，前两阶段只依据进程退出码；QEMU guest 启动后才对去除 ANSI 的完整日志行匹配 Guest panic、trap、`check failed` 或 orchestrator failure，并在 summary 中记录 `failure_phase`。单测明确要求构建输出 `build/riscv64/ch6b_panic` 成功，也要求规范 Guest `[PANIC ...]` 行失败。科研平台 `exact-field-v1` receipt 以 128 B 分块流式读取完整文件，只接受唯一完整的目标 `key=value`；跨块长 key/目标和长无关字段合法，空 key/value、CR、NUL、重复目标及前后缀伪匹配 fail closed。完整 bytes/hash/line count 与字段断言一并进入 receipt，ASan/UBSan Host probe 接入 `ci-check`。
 
 Plain reference registry 按目标登记唯一 source owner，先剥除注释再严格校验真实调用及完整文件/记录 envelope；missing、unknown、duplicate、cross-owner prepublication 和 impersonation 都 fail closed。seeded program observation 还绑定 seeded profile、QEMU 日志和 `rp_orch_timing` 中 orchestrator/launcher/program 的顺序、数量、字节、哈希与名称摘要。AgentOS `rp_agentos_mainflow` 只给出 11 个唯一、完整、有序的未验证 telemetry stage；任何 Guest `runtime_verified` 记录都 fail closed。Host 从与提取清单一致的单层非链接目录读取 telemetry 和 11 个规范来源，逐 source 复验唯一 claim、预期成功状态、阶段字段及完整 bytes/hash。`host-platform-alignment.json` 保存逐来源明细，最终 bundle 保存对应原始文件并在离线验签时重算。
 
-每侧 complete-state ZIP 只含 `extract-summary.json` 和其中精确列出的纯 Guest `rp_*` 普通文件，并显式拒绝 `rp_host_run_result`。Plain/AgentOS Host run receipt 分别作为 `dual-plain-host-run-result.state` 和 `dual-agentos-host-run-result.state` 独立保存，并以 `sha256-inventory-v1` 绑定 Guest 清单和内容；Reader 与比较器都重算该摘要，同数量内容替换不能继续使用旧 receipt。Host LLM relay 只发布独立差异 overlay，不改写已签收 Guest generation。离线验证安全解包，以 `min_common_files=240`、两份 receipt、seeded summary 与两份 Guest 日志重放 `compare_state()`，要求摘要逐字段一致，并核对 Mainflow、program ledger 和 backend 原始字节。普通 `dual-platform-run` 不打包 complete-state ZIP；只有最终采集启用的 `full-verify` evidence mode 才发布它们。当前候选的实际执行和发布边界只在 [test-record.md](test-record.md) 记录。
+每侧 complete-state ZIP 只含 `extract-summary.json` 和其中精确列出的纯 Guest `rp_*` 普通文件，并显式拒绝 `rp_host_run_result`。Plain/AgentOS Host run receipt 分别作为 `dual-plain-host-run-result.state` 和 `dual-agentos-host-run-result.state` 独立保存，并以 `sha256-inventory-v1` 绑定 Guest 清单和内容；Reader 与比较器都重算该摘要，同数量内容替换不能继续使用旧 receipt。Host LLM relay 只发布独立差异 overlay，不改写已签收 Guest generation。离线验证安全解包，以 `min_common_files=240`、两份 receipt、seeded summary 与两份 Guest 日志重放 `compare_state()`，要求摘要逐字段一致，并核对 Mainflow、program ledger 和 backend 原始字节。普通 `dual-platform-run` 不打包 complete-state ZIP；只有最终采集启用的 `full-verify` evidence mode 才发布它们。当前候选的实际执行和发布边界只在 [正式证据索引](../../evidence/releases/INDEX.md) 记录。
 
 只需要构建用户态测试程序时：
 
@@ -109,7 +109,7 @@ bash scripts/run-agent-tests.sh
 | `usersafety_ucore` | syscall 指针、字符串、`exec` 参数、线程入口、等待队列、管道、文件和信号量输入范围。 | `usersafety_ucore: parent passed` |
 | `blocking_semantics_ucore` | mutex owner、递归锁拒绝、非 owner 解锁拒绝、owner 退出交接和 FIFO waiter。 | `mutex_fifo_waiters=... dispatch_stable=1`、`blocking_semantics_ucore: parent passed` |
 
-原始输出不在本文档重复展开，统一保存在 [test-record.md](test-record.md)。每个测试的流程和断言解释见 [testing-details.md](testing-details.md)。
+原始输出不在本文档重复展开，统一由正式 evidence bundle 保存。下表只说明测试意图和关键动态观察点。
 
 `workflow_teardown_race_ucore` 不在上述 18-case Agent 套件中。独立入口 `make workflow-teardown-race-test` 默认连续运行三轮，并按顺序核对 syscall 546 ABI/self-only stale、factory close、根自然退出、PUBLIC lineage、Context/metadata waiter、阻塞 `fdget` 容量跨越、I/O debt/cache、inode/file/account 回收、同 id 更高 generation 重用和 `parent passed`。checkpoint `75d0dfd` 的 clean `full-verify` 已执行这三轮；目录拆分提交 `14a9450` 后又完成三轮定向复测。
 
@@ -247,7 +247,7 @@ results/latest/
 | --- | --- |
 | QEMU 长时间无输出 | `/tmp/agentos-dual-platform/seeded-action-state/*/ucore-run.log` |
 | 构建失败 | `make agentos-user` 或 `make agentos-build` 的编译输出 |
-| 某个专项测试失败 | [testing-details.md](testing-details.md) 中对应测试流程 |
+| 某个专项测试失败 | 根目录 [README](../../README.md) 的专项测试表与对应 `scripts/*runner*` |
 | 双目标状态不一致 | [../verification.md](../verification.md) 的双目标验证章节 |
 | 页面或图表缺失 | `host_tools/test_*.py` 和 `results/latest/` |
 
@@ -257,12 +257,12 @@ results/latest/
 
 - `13824/16384`、`371.5s`、`126.1s`、曾经的 `sizeof(struct proc)=25640/25936` B 及相邻 H-17 模块体积都是历史快照，不是待发布 C 的最终指标；最终源码、镜像、运行段、`struct proc`、栈和 metadata 聚合数值由 C 上的 `make ci-check` 原始日志、包内 `metrics/measurements.csv` 与版本化 JSON 共同绑定。schema v8 固定收集 `metadata_control_plane` 的 source lines/source bytes/loaded text/BSS，并在离线验证时从严格日志块和配置重算；
 - 完整 Agent 状态的机制口径仍是每 Agent 21 页/`86016` B 原子计费，legacy mail 两页 sidecar 按需另计；这类固定布局事实不能替代发布时的全局容量实测；
-- `31d4ddf53695`、`814021ab9dac` 的三轮 18-case duration 和更早 16-case 结果都只作各自源码的历史记录；任何新候选都不得复用不匹配的 fingerprint、baseline、limit 或 samples，当前门禁结果见 [test-record.md](test-record.md)；
+- `31d4ddf53695`、`814021ab9dac` 的三轮 18-case duration 和更早 16-case 结果都只作各自源码的历史记录；任何新候选都不得复用不匹配的 fingerprint、baseline、limit 或 samples，当前门禁结果见 [正式证据索引](../../evidence/releases/INDEX.md)；
 - 2026-07-26 的 `75d0dfde716453af90d7310c6a1521968fcf7167` 曾在 clean 环境完成一次旧 profile `make full-verify`，墙钟 `19:45.97`；`14a9450` 后也有具名定向复测。这些都是明确提交上的 checkpoint，不证明其他 HEAD；
-- profile v5 已把 physical、metadata recovery、observation recovery、VirtIO 和 filesystem allocator fault runner 纳入本地聚合。是否实际通过由 [test-record.md](test-record.md) 的候选记录和最终 `INDEX.md` 指向的 C/E bundle 分级判定；
+- profile v5 已把 physical、metadata recovery、observation recovery、VirtIO 和 filesystem allocator fault runner 纳入本地聚合。是否实际通过由 [正式证据索引](../../evidence/releases/INDEX.md) 的候选记录和最终 `INDEX.md` 指向的 C/E bundle 分级判定；
 - 干净 C 的完整本地 bundle 经提交 E 绑定后可达到 E3。远程必选集合仍是同一 C 的 1 个 Host-class 和 8 个 QEMU-class job；没有可用 Runner 时 `remote_ci.status=not-attached`，仅 E4 不可用，不否定已校验的本地 E3。
 
-详细命令、关键输出和覆盖边界见 [test-record.md](test-record.md)。
+详细命令、关键输出和覆盖边界见 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 ## 当前范围说明
 

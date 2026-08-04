@@ -11,8 +11,9 @@ C..E 只新增该包普通文件并精确追加 INDEX。后续 D 只允许修改
 都会失败。传统
 `capture-final-evidence.py` 包继续保持原有“当前 HEAD 就是 E”的严格合同。
 
-终审 17 项问题与证据等级口径见
-[docs/agentos/final-hardening-matrix.md](../docs/agentos/final-hardening-matrix.md)。代码提交 C 本身
+赛题要求、实现边界与证据等级口径见
+[要求追踪表](../docs/agentos/requirements-traceability.md)和
+[验证说明](../docs/agentos/verification.md)。代码提交 C 本身
 不得预置声称由 C 生成的发布包；实际发布状态以 append-only `releases/INDEX.md` 和各包内
 manifest 为准。通过 C→E committed delivery 合同及完整离线复验的本地包可以独立达到 E3，
 不依赖远程 Runner；没有可用

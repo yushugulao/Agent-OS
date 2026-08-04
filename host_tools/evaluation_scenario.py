@@ -19,6 +19,7 @@ import statistics
 import sys
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -43,6 +44,11 @@ try:
         seeded_actions,
         task6_artifact_payloads,
     )
+    from .committed_source_identity import committed_source_path_sample
+    from .evidence_delivery_contract import DeliveryContractError
+    from .agenteval_measurement_source_contract import (
+        validate_measurement_source_receipt_shape,
+    )
 except ImportError:  # Direct execution from host_tools/.
     from strict_json import strict_json_loads
     from safe_host_paths import (
@@ -63,6 +69,11 @@ except ImportError:  # Direct execution from host_tools/.
         derive_challenge,
         seeded_actions,
         task6_artifact_payloads,
+    )
+    from committed_source_identity import committed_source_path_sample
+    from evidence_delivery_contract import DeliveryContractError
+    from agenteval_measurement_source_contract import (
+        validate_measurement_source_receipt_shape,
     )
 
 
@@ -91,10 +102,20 @@ SCENARIO_INTERPRETATION = {
     "causal_attribution": "non-single-mechanism",
     "host_page_cache": "uncontrolled",
 }
+TASK6_EXPECTED_PROGRAM_COUNT = 70
+PROGRAM_SOURCE_RECEIPT_SCHEMA = "task6-program-source-comparability-v2"
+PROGRAM_SOURCE_RECEIPT_DOMAIN = "task6-program-source-comparability-v2"
+PROGRAM_SOURCE_PAIR_DOMAIN = "task6-program-source-pair-v2"
+PROGRAM_MANIFEST_BINDING_SCHEMA = "task6-program-manifest-binding-v1"
+PROGRAM_MANIFEST_BINDING_DOMAIN = "task6-program-manifest-binding-v1"
+PROGRAM_ORDER_DOMAIN = "task6-program-order-v1"
+MAX_PROGRAM_SOURCE_BYTES = 1 << 20
 VALID_STATUSES = frozenset({"supported", "regressed", "inconclusive", "failed"})
 STATE_NAME_RE = re.compile(r"rp_[a-z0-9_]+\Z")
 PROGRAM_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+GIT_OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 CANONICAL_UINT_RE = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 PROGRAM_MANIFEST_ENTRY_RE = re.compile(
@@ -111,6 +132,10 @@ ROLE_NUMBERS = {
     "orchestrator": 4,
     "artifact": 5,
 }
+PROGRAM_MANIFEST_PATHS = (
+    "user/include/rp_program_manifest.h",
+    "baseline_ucore/user/include/rp_program_manifest.h",
+)
 LEDGER_LINE_MAX = 255
 WORKFLOW_TIMING_LINE_MAX = 511
 MAX_PROGRAM_ELAPSED_MS = 3_600_000
@@ -538,6 +563,481 @@ def read_expected_programs(
     if plain != agentos:
         raise ScenarioEvidenceError("plain and AgentOS program manifests differ")
     return agentos
+
+
+@lru_cache(maxsize=8)
+def _cached_committed_source_sample(
+    root_text: str,
+    source_commit: str,
+    source_paths: tuple[str, ...],
+) -> tuple[tuple[str, int, str, str], ...]:
+    return committed_source_path_sample(
+        "git", Path(root_text), source_commit, source_paths
+    )
+
+
+def _committed_source_records(
+    source_tree: Path,
+    source_commit: str,
+    source_paths: tuple[str, ...],
+    label: str,
+) -> tuple[dict[str, dict[str, object]], dict[str, bytes]]:
+    root = _require_directory(source_tree, "program source tree").resolve(strict=True)
+    try:
+        samples = _cached_committed_source_sample(
+            str(root), source_commit, source_paths
+        )
+    except DeliveryContractError as error:
+        raise ScenarioEvidenceError(
+            f"{label} is not bound to source_commit: {error}"
+        ) from error
+
+    records: dict[str, dict[str, object]] = {}
+    contents: dict[str, bytes] = {}
+    for path, size, digest, blob_oid in samples:
+        data = _read_regular_file(
+            root / Path(path), label, MAX_PROGRAM_SOURCE_BYTES
+        )
+        if len(data) != size or _sha256(data) != digest:
+            raise ScenarioEvidenceError(
+                f"{label} differs from source_commit blob: {path}"
+            )
+        records[path] = {
+            "path": path,
+            "bytes": size,
+            "sha256": digest,
+            "git_blob_oid": blob_oid,
+        }
+        contents[path] = data
+    return records, contents
+
+
+def _git_blob_oid(data: bytes, oid_length: int = 40) -> str:
+    framed = f"blob {len(data)}\0".encode("ascii") + data
+    if oid_length == 40:
+        return hashlib.sha1(framed).hexdigest()
+    if oid_length == 64:
+        return hashlib.sha256(framed).hexdigest()
+    raise ScenarioEvidenceError("unsupported Git object-id length")
+
+
+def _snapshot_source_records(
+    source_tree: Path,
+    source_commit: str,
+    measurement_source_receipt: object,
+    source_paths: tuple[str, ...],
+    label: str,
+) -> tuple[dict[str, dict[str, object]], dict[str, bytes]]:
+    try:
+        receipt = validate_measurement_source_receipt_shape(
+            measurement_source_receipt, expected_commit=source_commit
+        )
+    except ValueError as error:
+        raise ScenarioEvidenceError(
+            f"{label} measurement-source receipt is invalid: {error}"
+        ) from error
+    root = _require_directory(source_tree, "measurement source snapshot").resolve(
+        strict=True
+    )
+    inventory = {
+        record["path"]: record
+        for record in receipt["sources"]
+        if isinstance(record, dict) and isinstance(record.get("path"), str)
+    }
+    if len(inventory) != len(receipt["sources"]):
+        raise ScenarioEvidenceError("measurement-source receipt paths are duplicated")
+
+    records: dict[str, dict[str, object]] = {}
+    contents: dict[str, bytes] = {}
+    for path in source_paths:
+        record = inventory.get(path)
+        if record is None:
+            raise ScenarioEvidenceError(
+                f"{label} is absent from the measurement-source receipt: {path}"
+            )
+        data = _read_regular_file(root / Path(path), label, MAX_PROGRAM_SOURCE_BYTES)
+        if len(data) != record["bytes"] or _sha256(data) != record["sha256"]:
+            raise ScenarioEvidenceError(
+                f"{label} differs from the measurement-source receipt: {path}"
+            )
+        records[path] = {
+            "path": path,
+            "bytes": len(data),
+            "sha256": _sha256(data),
+            "git_blob_oid": _git_blob_oid(data),
+        }
+        contents[path] = data
+    return records, contents
+
+
+def read_committed_expected_programs(
+    source_tree: Path,
+    source_commit: str,
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Read the two Task 6 manifests only after binding them to commit blobs."""
+
+    _committed_source_records(
+        source_tree,
+        source_commit,
+        PROGRAM_MANIFEST_PATHS,
+        "Task 6 program manifest",
+    )
+    programs, roles = read_expected_programs(source_tree)
+    if len(programs) != TASK6_EXPECTED_PROGRAM_COUNT:
+        raise ScenarioEvidenceError(
+            "Task 6 committed manifests do not contain exactly "
+            f"{TASK6_EXPECTED_PROGRAM_COUNT} programs"
+        )
+    return programs, roles
+
+
+def read_snapshot_expected_programs(
+    source_tree: Path,
+    source_commit: str,
+    measurement_source_receipt: object,
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Read the fixed Task 6 inventory from a v6-bound portable snapshot."""
+
+    _snapshot_source_records(
+        source_tree,
+        source_commit,
+        measurement_source_receipt,
+        PROGRAM_MANIFEST_PATHS,
+        "Task 6 program manifest",
+    )
+    programs, roles = read_expected_programs(source_tree)
+    if len(programs) != TASK6_EXPECTED_PROGRAM_COUNT:
+        raise ScenarioEvidenceError(
+            "Task 6 snapshot manifests do not contain exactly "
+            f"{TASK6_EXPECTED_PROGRAM_COUNT} programs"
+        )
+    return programs, roles
+
+
+def _program_manifest_binding_from_records(
+    records: dict[str, dict[str, object]],
+    expected_programs: tuple[str, ...],
+) -> dict[str, object]:
+    binding: dict[str, object] = {
+        "schema": PROGRAM_MANIFEST_BINDING_SCHEMA,
+        "expected_programs": TASK6_EXPECTED_PROGRAM_COUNT,
+        "program_order_sha256": _binding_sha256(
+            list(expected_programs), PROGRAM_ORDER_DOMAIN
+        ),
+        "agentos": records[PROGRAM_MANIFEST_PATHS[0]],
+        "plain": records[PROGRAM_MANIFEST_PATHS[1]],
+    }
+    binding["sha256"] = _binding_sha256(
+        binding, PROGRAM_MANIFEST_BINDING_DOMAIN
+    )
+    return binding
+
+
+def _program_manifest_binding(
+    source_tree: Path,
+    source_commit: str,
+    expected_programs: tuple[str, ...],
+) -> dict[str, object]:
+    records, _ = _committed_source_records(
+        source_tree,
+        source_commit,
+        PROGRAM_MANIFEST_PATHS,
+        "Task 6 program manifest",
+    )
+    return _program_manifest_binding_from_records(records, expected_programs)
+
+
+def _assemble_program_source_comparability_receipt(
+    source_commit: str,
+    expected_programs: tuple[str, ...],
+    source_records: dict[str, dict[str, object]],
+    source_contents: dict[str, bytes],
+    manifest_records: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    pairs: list[dict[str, object]] = []
+    same_source = 0
+    for program in expected_programs:
+        if PROGRAM_NAME_RE.fullmatch(program) is None:
+            raise ScenarioEvidenceError(
+                f"program source receipt contains an invalid program: {program!r}"
+            )
+        target_records: dict[str, dict[str, object]] = {}
+        source_bytes: dict[str, bytes] = {}
+        for target, relative in (
+            ("agentos", f"user/src/{program}.c"),
+            ("plain", f"baseline_ucore/user/src/{program}.c"),
+        ):
+            data = source_contents[relative]
+            source_bytes[target] = data
+            target_records[target] = source_records[relative]
+        relation = (
+            "same_source"
+            if source_bytes["agentos"] == source_bytes["plain"]
+            else "platform_specific"
+        )
+        if relation == "same_source":
+            same_source += 1
+        pair: dict[str, object] = {
+            "program": program,
+            "relation": relation,
+            "agentos": target_records["agentos"],
+            "plain": target_records["plain"],
+        }
+        pair["sha256"] = _binding_sha256(pair, PROGRAM_SOURCE_PAIR_DOMAIN)
+        pairs.append(pair)
+
+    receipt: dict[str, object] = {
+        "schema": PROGRAM_SOURCE_RECEIPT_SCHEMA,
+        "source_commit": source_commit,
+        "expected_programs": len(expected_programs),
+        "manifest_binding": _program_manifest_binding_from_records(
+            manifest_records, expected_programs
+        ),
+        "same_source_programs": same_source,
+        "platform_specific_programs": len(expected_programs) - same_source,
+        "programs": pairs,
+    }
+    receipt["sha256"] = _binding_sha256(receipt, PROGRAM_SOURCE_RECEIPT_DOMAIN)
+    return receipt
+
+
+def _program_source_paths(expected_programs: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
+        path
+        for program in expected_programs
+        for path in (
+            f"user/src/{program}.c",
+            f"baseline_ucore/user/src/{program}.c",
+        )
+    )
+
+
+def _program_source_comparability_receipt(
+    source_tree: Path,
+    source_commit: str,
+    expected_programs: tuple[str, ...],
+) -> dict[str, object]:
+    """Collect Task 6 source identity from exact Git commit blobs."""
+
+    if COMMIT_RE.fullmatch(source_commit) is None:
+        raise ScenarioEvidenceError("program source receipt commit is invalid")
+    root = _require_directory(source_tree, "program source tree").resolve(strict=True)
+    committed_programs, _ = read_committed_expected_programs(root, source_commit)
+    if (
+        expected_programs != committed_programs
+        or len(expected_programs) != TASK6_EXPECTED_PROGRAM_COUNT
+        or len(expected_programs) != len(set(expected_programs))
+    ):
+        raise ScenarioEvidenceError("program source receipt inventory is invalid")
+    manifest_records, _ = _committed_source_records(
+        root,
+        source_commit,
+        PROGRAM_MANIFEST_PATHS,
+        "Task 6 program manifest",
+    )
+    source_records, source_contents = _committed_source_records(
+        root,
+        source_commit,
+        _program_source_paths(expected_programs),
+        "Task 6 program source",
+    )
+    return _assemble_program_source_comparability_receipt(
+        source_commit,
+        expected_programs,
+        source_records,
+        source_contents,
+        manifest_records,
+    )
+
+
+def _program_source_comparability_receipt_from_snapshot(
+    source_tree: Path,
+    source_commit: str,
+    expected_programs: tuple[str, ...],
+    measurement_source_receipt: object,
+) -> dict[str, object]:
+    """Rebuild Task 6 source identity from a portable v6 source snapshot."""
+
+    snapshot_programs, _ = read_snapshot_expected_programs(
+        source_tree, source_commit, measurement_source_receipt
+    )
+    if expected_programs != snapshot_programs:
+        raise ScenarioEvidenceError(
+            "program source receipt inventory differs from snapshot manifests"
+        )
+    manifest_records, _ = _snapshot_source_records(
+        source_tree,
+        source_commit,
+        measurement_source_receipt,
+        PROGRAM_MANIFEST_PATHS,
+        "Task 6 program manifest",
+    )
+    source_records, source_contents = _snapshot_source_records(
+        source_tree,
+        source_commit,
+        measurement_source_receipt,
+        _program_source_paths(expected_programs),
+        "Task 6 program source",
+    )
+    return _assemble_program_source_comparability_receipt(
+        source_commit,
+        expected_programs,
+        source_records,
+        source_contents,
+        manifest_records,
+    )
+
+
+def _validate_program_source_comparability_receipt(
+    value: object,
+    expected_programs: Sequence[str],
+    source_commit: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "source_commit",
+        "expected_programs",
+        "manifest_binding",
+        "same_source_programs",
+        "platform_specific_programs",
+        "programs",
+        "sha256",
+    }:
+        raise ScenarioEvidenceError("program source comparability receipt is invalid")
+    unsigned = dict(value)
+    supplied_sha = unsigned.pop("sha256")
+    if (
+        value["schema"] != PROGRAM_SOURCE_RECEIPT_SCHEMA
+        or value["source_commit"] != source_commit
+        or type(value["expected_programs"]) is not int
+        or value["expected_programs"] != TASK6_EXPECTED_PROGRAM_COUNT
+        or len(expected_programs) != TASK6_EXPECTED_PROGRAM_COUNT
+        or not isinstance(supplied_sha, str)
+        or SHA256_RE.fullmatch(supplied_sha) is None
+        or supplied_sha
+        != _binding_sha256(unsigned, PROGRAM_SOURCE_RECEIPT_DOMAIN)
+    ):
+        raise ScenarioEvidenceError(
+            "program source comparability receipt binding differs"
+        )
+    manifest_binding = value["manifest_binding"]
+    if not isinstance(manifest_binding, dict) or set(manifest_binding) != {
+        "schema",
+        "expected_programs",
+        "program_order_sha256",
+        "agentos",
+        "plain",
+        "sha256",
+    }:
+        raise ScenarioEvidenceError("program manifest binding is invalid")
+    unsigned_manifest = dict(manifest_binding)
+    manifest_sha = unsigned_manifest.pop("sha256")
+    if (
+        manifest_binding["schema"] != PROGRAM_MANIFEST_BINDING_SCHEMA
+        or manifest_binding["expected_programs"] != TASK6_EXPECTED_PROGRAM_COUNT
+        or manifest_binding["program_order_sha256"]
+        != _binding_sha256(list(expected_programs), PROGRAM_ORDER_DOMAIN)
+        or not isinstance(manifest_sha, str)
+        or SHA256_RE.fullmatch(manifest_sha) is None
+        or manifest_sha
+        != _binding_sha256(unsigned_manifest, PROGRAM_MANIFEST_BINDING_DOMAIN)
+    ):
+        raise ScenarioEvidenceError("program manifest binding differs")
+    for target, expected_path in (
+        ("agentos", PROGRAM_MANIFEST_PATHS[0]),
+        ("plain", PROGRAM_MANIFEST_PATHS[1]),
+    ):
+        record = manifest_binding[target]
+        if not isinstance(record, dict) or set(record) != {
+            "path", "bytes", "sha256", "git_blob_oid"
+        }:
+            raise ScenarioEvidenceError("program manifest target binding is invalid")
+        if (
+            record["path"] != expected_path
+            or type(record["bytes"]) is not int
+            or record["bytes"] <= 0
+            or record["bytes"] > MAX_PROGRAM_SOURCE_BYTES
+            or not isinstance(record["sha256"], str)
+            or SHA256_RE.fullmatch(record["sha256"]) is None
+            or not isinstance(record["git_blob_oid"], str)
+            or GIT_OBJECT_ID_RE.fullmatch(record["git_blob_oid"]) is None
+        ):
+            raise ScenarioEvidenceError("program manifest target binding is invalid")
+
+    pairs = value["programs"]
+    if not isinstance(pairs, list) or len(pairs) != len(expected_programs):
+        raise ScenarioEvidenceError(
+            "program source comparability receipt does not cover the workload"
+        )
+
+    same_source = 0
+    for index, expected_program in enumerate(expected_programs):
+        pair = pairs[index]
+        if not isinstance(pair, dict) or set(pair) != {
+            "program", "relation", "agentos", "plain", "sha256"
+        }:
+            raise ScenarioEvidenceError("program source pair receipt is invalid")
+        pair_unsigned = dict(pair)
+        pair_sha = pair_unsigned.pop("sha256")
+        if (
+            pair["program"] != expected_program
+            or pair["relation"] not in {"same_source", "platform_specific"}
+            or not isinstance(pair_sha, str)
+            or SHA256_RE.fullmatch(pair_sha) is None
+            or pair_sha != _binding_sha256(pair_unsigned, PROGRAM_SOURCE_PAIR_DOMAIN)
+        ):
+            raise ScenarioEvidenceError("program source pair receipt binding differs")
+        records: dict[str, dict[str, object]] = {}
+        for target, expected_path in (
+            ("agentos", f"user/src/{expected_program}.c"),
+            ("plain", f"baseline_ucore/user/src/{expected_program}.c"),
+        ):
+            record = pair[target]
+            if not isinstance(record, dict) or set(record) != {
+                "path", "bytes", "sha256", "git_blob_oid"
+            }:
+                raise ScenarioEvidenceError("program source target receipt is invalid")
+            if (
+                record["path"] != expected_path
+                or type(record["bytes"]) is not int
+                or record["bytes"] <= 0
+                or record["bytes"] > MAX_PROGRAM_SOURCE_BYTES
+                or not isinstance(record["sha256"], str)
+                or SHA256_RE.fullmatch(record["sha256"]) is None
+                or not isinstance(record["git_blob_oid"], str)
+                or GIT_OBJECT_ID_RE.fullmatch(record["git_blob_oid"]) is None
+            ):
+                raise ScenarioEvidenceError("program source target receipt is invalid")
+            records[target] = record
+        equal_receipts = (
+            records["agentos"]["bytes"] == records["plain"]["bytes"]
+            and records["agentos"]["sha256"] == records["plain"]["sha256"]
+        )
+        if (pair["relation"] == "same_source") != equal_receipts:
+            raise ScenarioEvidenceError(
+                "program source relation differs from its source hashes"
+            )
+        if equal_receipts:
+            same_source += 1
+
+    platform_specific = len(expected_programs) - same_source
+    if (
+        type(value["same_source_programs"]) is not int
+        or type(value["platform_specific_programs"]) is not int
+        or value["same_source_programs"] != same_source
+        or value["platform_specific_programs"] != platform_specific
+    ):
+        raise ScenarioEvidenceError(
+            "program source comparability counts differ from the pair receipts"
+        )
+    return {
+        "schema": PROGRAM_SOURCE_RECEIPT_SCHEMA,
+        "source_commit": source_commit,
+        "expected_programs": len(expected_programs),
+        "same_source_programs": same_source,
+        "platform_specific_programs": platform_specific,
+        "receipt_sha256": supplied_sha,
+    }
 
 
 def _read_ascii_lines(
@@ -2469,6 +2969,7 @@ def _collect_target(
     expected_commit: str,
     expected_programs: tuple[str, ...],
     expected_roles: dict[str, str],
+    program_source_receipt: dict[str, object],
 ) -> tuple[TargetMeasurement, dict[str, object]]:
     _require_directory(target_dir, f"{target} run directory")
     state_dir = _require_directory(target_dir / "state-extracted", f"{target} state directory")
@@ -2589,6 +3090,9 @@ def _collect_target(
         "challenge_source": challenge_source,
         "sealed_inventory": sealed_inventory,
         "artifact_provenance": artifact_provenance,
+        "program_source_comparability": json.loads(
+            _canonical_json(program_source_receipt)
+        ),
         "functional_acceptance": functional_receipt,
         "resource_stability": stability_receipt,
     }
@@ -2631,16 +3135,19 @@ def _collect_boot(
     supplied_target_order: object | None,
     expected_programs: tuple[str, ...],
     expected_roles: dict[str, str],
+    program_source_receipt: dict[str, object],
 ) -> dict[str, object]:
     _require_directory(boot_dir, "boot directory")
     boot_id = boot_dir.name
     if IDENTIFIER_RE.fullmatch(boot_id) is None:
         raise ScenarioEvidenceError(f"invalid boot directory name: {boot_id!r}")
     plain, plain_summary = _collect_target(
-        boot_dir / "plain", "plain", source_commit, expected_programs, expected_roles
+        boot_dir / "plain", "plain", source_commit, expected_programs,
+        expected_roles, program_source_receipt,
     )
     agentos, agentos_summary = _collect_target(
-        boot_dir / "agentos", "agentos", source_commit, expected_programs, expected_roles
+        boot_dir / "agentos", "agentos", source_commit, expected_programs,
+        expected_roles, program_source_receipt,
     )
     target_order = _resolve_boot_order(
         supplied_target_order,
@@ -3401,6 +3908,52 @@ def _resource_stability_summary(
     }
 
 
+def _source_comparability_summary(
+    samples: Sequence[dict[str, object]],
+) -> dict[str, object]:
+    reference: dict[str, object] | None = None
+    summary: dict[str, object] | None = None
+    for sample in samples:
+        try:
+            source_commit = sample["binding"]["source_commit"]
+            program_order = sample["binding"]["program_order"]
+            targets = sample["targets"]
+        except (KeyError, TypeError) as error:
+            raise ScenarioEvidenceError(
+                "scenario lacks bound program source comparability evidence"
+            ) from error
+        if (
+            not isinstance(source_commit, str)
+            or not isinstance(program_order, list)
+            or not all(isinstance(program, str) for program in program_order)
+        ):
+            raise ScenarioEvidenceError(
+                "scenario program source comparability binding is invalid"
+            )
+        for target in ("plain", "agentos"):
+            try:
+                receipt = targets[target]["raw_source_receipt"][
+                    "program_source_comparability"
+                ]
+            except (KeyError, TypeError) as error:
+                raise ScenarioEvidenceError(
+                    f"{target} target lacks program source comparability evidence"
+                ) from error
+            current = _validate_program_source_comparability_receipt(
+                receipt, program_order, source_commit
+            )
+            if reference is None:
+                reference = receipt
+                summary = current
+            elif receipt != reference or current != summary:
+                raise ScenarioEvidenceError(
+                    "program source comparability receipt differs across targets or boots"
+                )
+    if summary is None:
+        raise ScenarioEvidenceError("program source comparability evidence is empty")
+    return summary
+
+
 def _summarize(samples: Sequence[dict[str, object]]) -> dict[str, object]:
     programs = samples[0]["binding"]["program_order"]
     targets: dict[str, object] = {}
@@ -3442,6 +3995,7 @@ def _summarize(samples: Sequence[dict[str, object]]) -> dict[str, object]:
         "target_order_counts": order_counts,
         "target_order_balanced": abs(order_counts["AB"] - order_counts["BA"]) <= 1,
         "paired_improvement": _paired_improvement(samples),
+        "source_comparability": _source_comparability_summary(samples),
         "functional_acceptance": _functional_acceptance_summary(samples),
         "resource_stability": _resource_stability_summary(samples),
         "targets": targets,
@@ -3511,6 +4065,7 @@ def collect_scenario(
     source_commit: str,
     run_id: str,
     target_orders: Sequence[object | None] | None = None,
+    source_tree: Path | None = None,
 ) -> dict[str, object]:
     """Return a fail-closed scenario report without fabricating missing samples."""
 
@@ -3532,7 +4087,13 @@ def collect_scenario(
         boot_ids = [Path(path).name for path in boot_dirs]
         if len(boot_ids) != len(set(boot_ids)):
             raise ScenarioEvidenceError("boot directory names must be unique")
-        manifest_programs, expected_roles = read_expected_programs()
+        source_root = source_tree or Path(__file__).resolve().parents[1]
+        manifest_programs, expected_roles = read_committed_expected_programs(
+            source_root, source_commit
+        )
+        program_source_receipt = _program_source_comparability_receipt(
+            source_root, source_commit, manifest_programs
+        )
 
         samples: list[dict[str, object]] = []
         observed_programs: list[str] | None = None
@@ -3547,6 +4108,7 @@ def collect_scenario(
                 supplied,
                 manifest_programs,
                 expected_roles,
+                program_source_receipt,
             )
             programs = sample["binding"]["program_order"]
             challenge = sample["binding"]["challenge"]

@@ -175,7 +175,7 @@ V2 结构如下：
 
 ## 验证证据
 
-原始串口输出统一保存在 [test-record.md](test-record.md)，逐项测试步骤见 [testing-details.md](testing-details.md)。本任务文档只保留任务二相关检查点：
+原始串口输出统一保存在 [正式证据索引](../../evidence/releases/INDEX.md)，逐项测试步骤见 [验证说明](verification.md)。本任务文档只保留任务二相关检查点：
 
 | 程序 | 检查点 |
 | --- | --- |

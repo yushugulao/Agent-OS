@@ -199,7 +199,7 @@ worker 映像不使用 Agent 的 `TRUSTED` role-image 身份。mkfs 为布局有
 
 ## 验证证据
 
-原始输出统一见 [test-record.md](test-record.md)，测试步骤见 [testing-details.md](testing-details.md)。任务一重点检查以下内容：
+原始输出统一见 [正式证据索引](../../evidence/releases/INDEX.md)，测试步骤见 [验证说明](verification.md)。任务一重点检查以下内容：
 
 | 程序 | 检查项 |
 | --- | --- |

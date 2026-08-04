@@ -35,6 +35,7 @@ from render_evaluation_dashboard import (
     DashboardError,
     _binding_sha256,
     _bootstrap_interval,
+    _compatibility_workload_html,
     _duration_label,
     _evidence_entry_link,
     _overview_claim_slots,
@@ -48,7 +49,11 @@ from render_evaluation_dashboard import (
     validate_summary,
 )
 from evaluation_contract import derive_acceptance_gates
+import agenteval_measurement_source_contract as measurement_source
+import scenario_timing_source_contract
 from evaluation_scenario import (
+    PROGRAM_SOURCE_PAIR_DOMAIN,
+    PROGRAM_SOURCE_RECEIPT_DOMAIN,
     RESOURCE_STABILITY_CHILD_ROUNDS,
     RESOURCE_STABILITY_FILE,
     RESOURCE_STABILITY_GROWTH_BOUNDS,
@@ -57,6 +62,8 @@ from evaluation_scenario import (
     RESOURCE_STABILITY_MEASUREMENT_SCOPE,
     RESOURCE_STABILITY_RESOURCE_KINDS,
     RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
+    _program_source_comparability_receipt_from_snapshot,
+    read_snapshot_expected_programs,
 )
 
 
@@ -71,6 +78,7 @@ COMPETITION_CLAIMS = {
         "required_status": "supported",
     }
 }
+_MEASUREMENT_SOURCE_RECEIPTS: dict[str, dict] = {}
 
 
 def render(summary_path: Path, output_dir: Path) -> None:
@@ -202,6 +210,57 @@ def attach_passed_resource_stability(report: dict) -> None:
     report["summary"]["resource_stability"] = resource
 
 
+def _measurement_source_receipt(source_commit: str) -> dict:
+    if source_commit not in _MEASUREMENT_SOURCE_RECEIPTS:
+        _MEASUREMENT_SOURCE_RECEIPTS[source_commit] = {
+            "contract_versions": {
+                "functional": measurement_source.FUNCTIONAL_CONTRACT_VERSION,
+                "functional_compile": (
+                    measurement_source.FUNCTIONAL_COMPILE_CONTRACT_VERSION
+                ),
+                "micro": measurement_source.CONTRACT_VERSION,
+                "policy": measurement_source.POLICY_INVENTORY_SCHEMA,
+                "scenario": scenario_timing_source_contract.CONTRACT_VERSION,
+            },
+            "formal_boot_count": measurement_source.FORMAL_BOOT_COUNT,
+            "policy_inventory": measurement_source.measurement_source_policy_inventory(),
+            "schema": measurement_source.RECEIPT_SCHEMA,
+            "source_commit": source_commit,
+            "sources": [
+                {
+                    "bytes": len(data),
+                    "path": path,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+                for path in measurement_source._receipt_source_paths()
+                for data in [(CONTRACT_ROOT / path).read_bytes()]
+            ],
+            "stop_rule": measurement_source.STOP_RULE,
+        }
+    return copy.deepcopy(_MEASUREMENT_SOURCE_RECEIPTS[source_commit])
+
+
+def _scenario_source_comparability_fixture(
+    source_commit: str,
+) -> tuple[list[str], dict, dict]:
+    measurement_receipt = _measurement_source_receipt(source_commit)
+    programs, _ = read_snapshot_expected_programs(
+        CONTRACT_ROOT, source_commit, measurement_receipt
+    )
+    receipt = _program_source_comparability_receipt_from_snapshot(
+        CONTRACT_ROOT, source_commit, programs, measurement_receipt
+    )
+    summary = {
+        "schema": receipt["schema"],
+        "source_commit": source_commit,
+        "expected_programs": len(programs),
+        "same_source_programs": receipt["same_source_programs"],
+        "platform_specific_programs": receipt["platform_specific_programs"],
+        "receipt_sha256": receipt["sha256"],
+    }
+    return list(programs), receipt, summary
+
+
 def _scenario_report_payload(summary: dict, evidence_id: str) -> bytes:
     candidates = [
         scenario
@@ -222,7 +281,9 @@ def _scenario_report_payload(summary: dict, evidence_id: str) -> bytes:
         if scenario["performance"] is not None
         else None
     )
-    programs = ["rp_runner", "rp_artifact", "rp_llm_resp"]
+    programs, source_receipt, source_comparability = (
+        _scenario_source_comparability_fixture(summary["run"]["commit"])
+    )
     samples = []
     for index in range(1, 8):
         challenge = f"{index:016x}"
@@ -296,18 +357,25 @@ def _scenario_report_payload(summary: dict, evidence_id: str) -> bytes:
         binding["sha256"] = _binding_sha256(binding, "scenario-sample-v1")
         targets = {}
         for target, advantage in (("plain", 0), ("agentos", 5)):
+            makespan = (
+                performance_sample[f"{target}_ms"]
+                if performance_sample is not None
+                else 100 + index - advantage
+            )
             rows = [
-                {"program": program, "elapsed_ms": 100 + program_index * 10 + index - advantage}
+                {
+                    "program": program,
+                    "elapsed_ms": makespan if program_index == 0 else 0,
+                }
                 for program_index, program in enumerate(programs)
             ]
             targets[target] = {
-                "makespan_ms": (
-                    performance_sample[f"{target}_ms"]
-                    if performance_sample is not None
-                    else sum(row["elapsed_ms"] for row in rows) + 37
-                ),
+                "makespan_ms": makespan,
                 "programs": rows,
-                "raw_source_receipt": {"sha256": receipts[target]},
+                "raw_source_receipt": {
+                    "sha256": receipts[target],
+                    "program_source_comparability": copy.deepcopy(source_receipt),
+                },
             }
         samples.append({
             "sample_id": (
@@ -385,6 +453,7 @@ def _scenario_report_payload(summary: dict, evidence_id: str) -> bytes:
             "target_order_counts": {"AB": 4, "BA": 3},
             "target_order_balanced": True,
             "paired_improvement": copy.deepcopy(scenario["performance"] or {}),
+            "source_comparability": source_comparability,
             "functional_acceptance": functional,
             "resource_stability": _resource_stability_summary(
                 samples, status="unavailable"
@@ -417,6 +486,16 @@ def _evidence_payload(evidence_id: str, summary: dict) -> bytes:
 
 
 def write_render_input(root: Path, summary: dict, name: str = "summary.json") -> Path:
+    if any(item["id"] == "raw-scenario" for item in summary["evidence"]):
+        (root / "measurement-source-receipt.json").write_text(
+            json.dumps(
+                _measurement_source_receipt(summary["run"]["commit"]),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     for item in summary["evidence"]:
         path = root.joinpath(*item["path"].split("/"))
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1129,7 +1208,7 @@ class DashboardContractTests(unittest.TestCase):
             page = (output / "index.html").read_text(encoding="utf-8")
             self.assertNotIn("https://", page)
             self.assertNotIn("http://", page)
-            for tab in ("总览", "性能", "系统成本", "科研场景", "可信证据", "方法学"):
+            for tab in ("总览", "性能", "系统成本", "负载与流程", "可信证据", "方法学"):
                 self.assertIn(tab, page)
             for task in range(1, 7):
                 self.assertIn(f"任务 {task}", page)
@@ -1144,8 +1223,12 @@ class DashboardContractTests(unittest.TestCase):
             self.assertIn('data-extension-slot="resource-stability"', page)
             self.assertIn('data-extension-slot="compatibility-overhead"', page)
             self.assertIn('data-extension-slot="kernel-cost"', page)
-            self.assertIn("核心机制实测", page)
-            self.assertIn("真实负载、样本量与正负结果同屏展示", page)
+            self.assertIn("评委速览", page)
+            self.assertIn("机制微基准", page)
+            self.assertIn('data-evaluation-track="same-source-compatibility"', page)
+            self.assertIn('data-evaluation-track="full-research-workflow"', page)
+            self.assertIn("比较口径、p50/p95、样本量与输出一致性同屏展示", page)
+            self.assertNotIn("优势未形成", page)
             self.assertNotIn('chart-title-overview', page)
             self.assertIn('data-raw-pairs="14"', page)
             self.assertEqual(page.count('class="raw-pair-link"'), 14)
@@ -1165,7 +1248,7 @@ class DashboardContractTests(unittest.TestCase):
             self.assertNotIn("发布与竞赛验收", page)
             self.assertNotIn("科学证据发布", page)
             self.assertNotIn("竞赛整体验收", page)
-            self.assertIn("任务 1-6 的动态回执数据", page)
+            self.assertIn("任务功能回执", page)
             self.assertIn("2 负载 · n=7", page)
             self.assertNotIn("任务 1-6 动态验收", page)
             self.assertIn("joint-MCID", page)
@@ -1184,6 +1267,11 @@ class DashboardContractTests(unittest.TestCase):
             self.assertIn("Plain p50", overview)
             self.assertIn("AgentOS p50", overview)
             self.assertIn("n=7", overview)
+            self.assertIn("p95 79.300 us/query → 13.700 us/query", overview)
+            self.assertIn(
+                "计时程序 70 项：同源 28 · 平台特定 42", overview
+            )
+            self.assertIn("AgentOS 专属诊断模块 4 项", overview)
             self.assertIn("安全机制对照 uCore → AgentOS", overview)
             load_y = float(re.search(r'class="load-label" x="8" y="([0-9.]+)"', page).group(1))
             series_y = float(re.search(r'class="series-label" x="168" y="([0-9.]+)"', page).group(1))
@@ -1195,7 +1283,9 @@ class DashboardContractTests(unittest.TestCase):
             assert_offline_links_resolve(output / "index.html")
             self.assertIn("场景明细", page)
             self.assertIn("逐程序耗时", page)
-            self.assertIn("rp_runner", page)
+            self.assertIn("同源程序", page)
+            self.assertIn("平台特定程序", page)
+            self.assertIn("rp_catalog", page)
             self.assertIn("structured_tool", page)
             self.assertIn("预注册 key outcome 一致性", page)
             self.assertIn("不代表完整最终状态相同", page)
@@ -1242,7 +1332,12 @@ class DashboardContractTests(unittest.TestCase):
             run.mkdir()
             source = write_render_input(run, summary)
             output = root / "site"
-            render_dashboard(source, output, contract_root=contract_root)
+            render_dashboard(
+                source,
+                output,
+                contract_root=contract_root,
+                measurement_source_tree=CONTRACT_ROOT,
+            )
 
             self.assertEqual(
                 (output / "assets" / "evaluation-dashboard.css").read_bytes(),
@@ -1293,7 +1388,9 @@ class DashboardContractTests(unittest.TestCase):
         )
         self.assertIn("10.250 ms", task6)
         self.assertIn("9.750 ms", task6)
-        self.assertIn("task6-slot-row--improved", task6)
+        self.assertIn("AgentOS/Plain 0.95x", task6)
+        self.assertIn("程序来源与专属诊断模块 unavailable", task6)
+        self.assertNotIn("task6-slot-row--improved", task6)
         self.assertNotIn("task6-slot-row--regressed", task6)
 
     def test_evidence_navigation_and_boot_counts_use_stable_receipts(self) -> None:
@@ -1415,6 +1512,82 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("3/7 次独立启动有资源回执", partial_content)
         self.assertNotIn("7/7 次独立启动", partial_content)
 
+    def test_same_source_compatibility_track_shows_percentiles_counts_and_output(self) -> None:
+        pairs = [
+            {
+                "plain_microseconds_per_operation": 10.0 + index,
+                "agentos_microseconds_per_operation": 20.0 + index,
+            }
+            for index in range(7)
+        ]
+        verification = {
+            "compatibility_overhead": {
+                "status": "ready",
+                "measurement_state": {
+                    "cache_state": "warm_guest_paths",
+                    "schedule": "challenge_rotated_v1",
+                    "untimed_warmup": True,
+                    "fresh_boot_per_target": True,
+                },
+                "workload_equivalence": {
+                    "all_paired_outcomes_equal": True,
+                    "paired_boots": 7,
+                },
+                "metrics": {
+                    "fork_wait": {
+                        "paired_boots": 7,
+                        "operation_unit": "process",
+                        "plain_median_microseconds_per_operation": 13.0,
+                        "agentos_median_microseconds_per_operation": 23.0,
+                        "median_agentos_over_plain_ratio": 23.0 / 13.0,
+                        "pairs": pairs,
+                    },
+                    "research_artifact_pipeline": {
+                        "paired_boots": 7,
+                        "operation_unit": "source_record_transformed",
+                        "attribution": "guest_application_full_path_not_pure_kernel",
+                        "plain_median_microseconds_per_operation": 13.0,
+                        "agentos_median_microseconds_per_operation": 23.0,
+                        "median_agentos_over_plain_ratio": 23.0 / 13.0,
+                        "pairs": copy.deepcopy(pairs),
+                    },
+                },
+            }
+        }
+        content = _compatibility_workload_html(verification)
+        self.assertIn('data-evaluation-track="same-source-compatibility"', content)
+        self.assertIn("同源程序 1 · 平台特定程序 0", content)
+        self.assertIn("7/7 配对输出一致", content)
+        self.assertIn("传统接口 1 · 应用全路径 1", content)
+        self.assertIn("warm Guest path · challenge 派生轮换顺序", content)
+        self.assertIn("科研工件流水线", content)
+        self.assertIn("应用全路径，非纯内核成本", content)
+        self.assertIn("传统接口路径", content)
+        self.assertIn("Plain p50", content)
+        self.assertIn("Plain p95", content)
+        self.assertIn("AgentOS p50", content)
+        self.assertIn("AgentOS p95", content)
+        self.assertIn("13.000 us/op", content)
+        self.assertIn("15.700 us/op", content)
+        self.assertIn("23.000 us/op", content)
+        self.assertIn("25.700 us/op", content)
+        self.assertIn("1.77x", content)
+        self.assertIn("n=7", content)
+        self.assertNotIn('class="status ', content)
+
+        partial = copy.deepcopy(verification)
+        partial_metric = partial["compatibility_overhead"]["metrics"]["fork_wait"]
+        del partial_metric["pairs"]
+        del partial_metric["agentos_median_microseconds_per_operation"]
+        del partial_metric["median_agentos_over_plain_ratio"]
+        partial_content = _compatibility_workload_html(partial)
+        self.assertIn("13.000 us/op", partial_content)
+        self.assertGreaterEqual(partial_content.count("unavailable"), 4)
+
+        unavailable = _compatibility_workload_html({})
+        self.assertIn("同源/平台特定程序数 unavailable", unavailable)
+        self.assertIn("p50、p95、倍率与样本量均不填补", unavailable)
+
     def test_verified_scenario_resource_stability_reaches_overview_end_to_end(self) -> None:
         summary = fixture()
         attach_scenario(summary)
@@ -1485,6 +1658,88 @@ class DashboardContractTests(unittest.TestCase):
                     rewrite_scenario_report(root, source, summary, forge)
                     with self.assertRaisesRegex(DashboardError, message):
                         render(source, root / f"forged-site-{name.replace(' ', '-')}")
+
+    def test_scenario_program_source_counts_are_replayed_from_bound_pairs(self) -> None:
+        def replace_relation_without_pair_rebind(report: dict) -> None:
+            receipt = report["samples"][0]["targets"]["plain"][
+                "raw_source_receipt"
+            ]["program_source_comparability"]
+            receipt["programs"][0]["relation"] = "platform_specific"
+            unsigned_receipt = dict(receipt)
+            unsigned_receipt.pop("sha256")
+            receipt["sha256"] = _binding_sha256(
+                unsigned_receipt, PROGRAM_SOURCE_RECEIPT_DOMAIN
+            )
+
+        def replace_one_valid_receipt(report: dict) -> None:
+            receipt = report["samples"][0]["targets"]["plain"][
+                "raw_source_receipt"
+            ]["program_source_comparability"]
+            pair = receipt["programs"][0]
+            replacement = hashlib.sha256(b"replacement-shared-source").hexdigest()
+            pair["plain"]["sha256"] = replacement
+            pair["agentos"]["sha256"] = replacement
+            unsigned_pair = dict(pair)
+            unsigned_pair.pop("sha256")
+            pair["sha256"] = _binding_sha256(
+                unsigned_pair, PROGRAM_SOURCE_PAIR_DOMAIN
+            )
+            unsigned_receipt = dict(receipt)
+            unsigned_receipt.pop("sha256")
+            receipt["sha256"] = _binding_sha256(
+                unsigned_receipt, PROGRAM_SOURCE_RECEIPT_DOMAIN
+            )
+
+        mutations = (
+            (
+                "summary count",
+                lambda report: report["summary"]["source_comparability"].__setitem__(
+                    "same_source_programs", 3
+                ),
+                "differs from the raw receipts",
+            ),
+            (
+                "pair relation",
+                replace_relation_without_pair_rebind,
+                "differs from the committed manifests and source blobs",
+            ),
+            (
+                "cross target receipt",
+                replace_one_valid_receipt,
+                "differs from the committed manifests and source blobs",
+            ),
+        )
+        for name, mutate, message in mutations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                summary = fixture()
+                root = Path(temporary)
+                source = write_render_input(root, summary)
+                rewrite_scenario_report(root, source, summary, mutate)
+                with self.assertRaisesRegex(DashboardError, message):
+                    render(source, root / "forged-site")
+
+    def test_scenario_program_order_cannot_be_truncated_consistently(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = fixture()
+            source = write_render_input(root, summary)
+
+            def truncate(report: dict) -> None:
+                for sample in report["samples"]:
+                    first = sample["binding"]["program_order"][0]
+                    sample["binding"]["program_order"] = [first]
+                    for target in ("plain", "agentos"):
+                        sample["targets"][target]["programs"] = sample["targets"][
+                            target
+                        ]["programs"][:1]
+                    sample["binding"].pop("sha256")
+                    sample["binding"]["sha256"] = _binding_sha256(
+                        sample["binding"], "scenario-sample-v1"
+                    )
+
+            rewrite_scenario_report(root, source, summary, truncate)
+            with self.assertRaisesRegex(DashboardError, "committed manifests"):
+                render(source, root / "truncated-site")
 
     def test_verified_scenario_report_cannot_upgrade_an_unavailable_summary(self) -> None:
         summary = fixture()
@@ -1932,7 +2187,7 @@ class DashboardContractTests(unittest.TestCase):
             item = next(item for item in summary["evidence"] if item["id"] == "raw-scenario")
             report_path = root.joinpath(*item["path"].split("/"))
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            report["summary"]["targets"]["plain"]["programs"]["rp_runner"]["p50_ms"] += 1
+            report["summary"]["targets"]["plain"]["programs"]["rp_catalog"]["p50_ms"] += 1
             unsigned = dict(report)
             unsigned.pop("report_sha256")
             report["report_sha256"] = _binding_sha256(unsigned, "scenario-report-v2")
@@ -2542,26 +2797,31 @@ class DashboardContractTests(unittest.TestCase):
         self.assertRegex(css, r"\.chart-scroll svg\s*\{[^}]*min-width:\s*760px")
         self.assertRegex(css, r"\.benchmark-block\s*\{[^}]*min-width:\s*0")
         self.assertRegex(css, r"\.table-scroll\s*\{[^}]*max-width:\s*100%")
-        self.assertRegex(css, r"\.overview-grid > div\s*\{[^}]*min-width:\s*0")
         self.assertRegex(
             css,
-            r"\.headline-result-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,",
+            r"\.headline-result-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,",
         )
         self.assertRegex(
             css,
-            r"\.headline-result-slot--task6\s*\{[^}]*grid-column:\s*1\s*/\s*-1",
+            r"\.evaluation-track\s*\{[^}]*min-width:\s*0",
         )
-        task6_rule = re.search(r"\.headline-result-slot--task6\s*\{([^}]*)\}", css)
-        self.assertIsNotNone(task6_rule)
-        self.assertNotIn("var(--red)", task6_rule.group(1))
+        workflow_rule = re.search(r"\.evaluation-track\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(workflow_rule)
+        self.assertNotIn("var(--red)", workflow_rule.group(1))
         self.assertRegex(
             css,
-            r"\.task6-slot-row--regressed\s+\.task6-debt strong\s*\{[^}]*var\(--red\)",
+            r"\.track-summary\s*\{[^}]*grid-template-columns:\s*repeat\(3,",
         )
         self.assertRegex(
             css,
-            r"\.task6-slot-row--improved\s+\.task6-debt strong\s*\{[^}]*var\(--green\)",
+            r"\.task6-ratio strong\s*\{[^}]*var\(--navy\)",
         )
+        self.assertRegex(
+            css,
+            r"\.headline-result-slot \.slot-effect\s*\{[^}]*color:\s*var\(--navy\)",
+        )
+        self.assertNotIn("task6-slot-row--regressed", css)
+        self.assertNotIn("task6-slot-row--improved", css)
         self.assertRegex(
             css,
             r"\.task6-comparison\s*\{[^}]*display:\s*grid[^}]*repeat\(3,",
@@ -2729,8 +2989,8 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("反向 joint-MCID -10 ms 与 -5%：负场 0/7", page)
         self.assertIn("one-sided exact p=0.007812", page)
         self.assertIn("Bonferroni 后每方向 alpha=0.025", page)
-        overview = page.split('<div class="headline-result-grid">', 1)[1].split(
-            "</section>", 1
+        overview = page.split('id="panel-overview"', 1)[1].split(
+            'id="panel-performance"', 1
         )[0]
         self.assertEqual(overview.count('data-overview-slot="task6"'), 1)
         self.assertIn("科研工作流", overview)
@@ -2738,8 +2998,10 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("Plain p50", overview)
         self.assertIn("AgentOS p50", overview)
         self.assertIn("AgentOS/Plain 0.81x", overview)
-        self.assertIn("7/7 工作流结果一致", overview)
-        self.assertIn("task6-slot-row--improved", overview)
+        self.assertIn("7/7 预注册 outcome 一致", overview)
+        self.assertIn("计时程序 70 项：同源 28 · 平台特定 42", overview)
+        self.assertIn("AgentOS 专属诊断模块 4 项", overview)
+        self.assertNotIn("task6-slot-row--improved", overview)
         self.assertNotIn("task6-slot-row--regressed", overview)
         self.assertNotIn("描述性 bootstrap 95% 区间", overview)
         scenario_panel = page.split('id="panel-scenarios"', 1)[1].split(
@@ -2797,8 +3059,12 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("正向 joint-MCID 10 ms 与 5%：胜场 0/7", page)
         self.assertIn("反向 joint-MCID -10 ms 与 -5%：负场 7/7", page)
         self.assertIn("Bonferroni 后每方向 alpha=0.025", page)
-        self.assertIn("task6-slot-row--regressed", page)
-        self.assertIn("当前性能债务 1.2x", page)
+        overview = page.split('id="panel-overview"', 1)[1].split(
+            'id="panel-performance"', 1
+        )[0]
+        self.assertNotIn("task6-slot-row--regressed", overview)
+        self.assertNotIn("显著回退", overview)
+        self.assertIn("AgentOS/Plain 1.19x", overview)
         self.assertIn("Plain p50 103.000 ms", page)
         self.assertIn("AgentOS p50 123.000 ms", page)
         self.assertNotIn("竞赛整体验收", page)

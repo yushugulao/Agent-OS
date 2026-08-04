@@ -46,8 +46,16 @@ from compatibility_overhead import (
     CompatibilityRunError,
     verify_campaign_artifacts as verify_compatibility_artifacts,
 )
-from compatibility_overhead_contract import CompatibilityContractError
+from compatibility_overhead_contract import (
+    METRICS as COMPATIBILITY_METRICS,
+    CompatibilityContractError,
+)
 from evaluation_scenario import (
+    GIT_OBJECT_ID_RE,
+    MAX_PROGRAM_SOURCE_BYTES,
+    PROGRAM_SOURCE_PAIR_DOMAIN,
+    PROGRAM_SOURCE_RECEIPT_DOMAIN,
+    PROGRAM_SOURCE_RECEIPT_SCHEMA,
     RESOURCE_STABILITY_CHILD_ROUNDS,
     RESOURCE_STABILITY_FILE,
     RESOURCE_STABILITY_GROWTH_BOUNDS,
@@ -56,6 +64,10 @@ from evaluation_scenario import (
     RESOURCE_STABILITY_MEASUREMENT_SCOPE,
     RESOURCE_STABILITY_RESOURCE_KINDS,
     RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
+    TASK6_EXPECTED_PROGRAM_COUNT,
+    ScenarioEvidenceError,
+    _program_source_comparability_receipt_from_snapshot,
+    read_snapshot_expected_programs,
 )
 
 
@@ -348,10 +360,10 @@ SCENARIO_PERFORMANCE_FIELDS = {
 
 STATUS_ZH = {
     "measured": "已测量",
-    "pass": "通过",
-    "passed": "通过",
+    "pass": "功能数据完整",
+    "passed": "资源观测完整",
     "ready": "就绪",
-    "partial": "部分通过",
+    "partial": "部分观测",
     "supported": "证据支持",
     "regressed": "显著回退",
     "not_supported": "暂不支持",
@@ -2514,11 +2526,123 @@ def _normalize_scenario_resource_stability(
     return copy.deepcopy(resource)
 
 
+def _normalize_scenario_source_comparability(
+    value: Any,
+    program_order: list[str],
+    source_commit: str,
+    committed_receipt: dict[str, object],
+    path: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    receipt = _require_object(value, path)
+    if receipt != committed_receipt:
+        _fail(f"{path} differs from the committed manifests and source blobs")
+    required = {
+        "schema",
+        "source_commit",
+        "expected_programs",
+        "manifest_binding",
+        "same_source_programs",
+        "platform_specific_programs",
+        "programs",
+        "sha256",
+    }
+    if set(receipt) != required:
+        _fail(f"{path} fields do not match the program source receipt schema")
+    supplied_sha256 = _scenario_sha256(receipt["sha256"], f"{path}.sha256")
+    unsigned = dict(receipt)
+    unsigned.pop("sha256")
+    if (
+        receipt["schema"] != PROGRAM_SOURCE_RECEIPT_SCHEMA
+        or receipt["source_commit"] != source_commit
+        or supplied_sha256
+        != _binding_sha256(unsigned, PROGRAM_SOURCE_RECEIPT_DOMAIN)
+    ):
+        _fail(f"{path} binding or source identity is invalid")
+    expected_count = receipt["expected_programs"]
+    same_count = receipt["same_source_programs"]
+    platform_count = receipt["platform_specific_programs"]
+    if any(
+        isinstance(count, bool) or not isinstance(count, int) or count < 0
+        for count in (expected_count, same_count, platform_count)
+    ) or expected_count != TASK6_EXPECTED_PROGRAM_COUNT or len(program_order) != TASK6_EXPECTED_PROGRAM_COUNT:
+        _fail(f"{path} program counts are invalid")
+    pairs = _require_list(receipt["programs"], f"{path}.programs")
+    if len(pairs) != len(program_order):
+        _fail(f"{path}.programs does not cover the timed program order")
+
+    observed_same = 0
+    for index, expected_program in enumerate(program_order):
+        pair_path = f"{path}.programs[{index}]"
+        pair = _require_object(pairs[index], pair_path)
+        if set(pair) != {"program", "relation", "agentos", "plain", "sha256"}:
+            _fail(f"{pair_path} fields do not match the source pair schema")
+        pair_sha256 = _scenario_sha256(pair["sha256"], f"{pair_path}.sha256")
+        unsigned_pair = dict(pair)
+        unsigned_pair.pop("sha256")
+        relation = _scenario_string(pair["relation"], f"{pair_path}.relation")
+        if (
+            pair["program"] != expected_program
+            or relation not in {"same_source", "platform_specific"}
+            or pair_sha256
+            != _binding_sha256(unsigned_pair, PROGRAM_SOURCE_PAIR_DOMAIN)
+        ):
+            _fail(f"{pair_path} identity, relation, or binding is invalid")
+
+        target_records: dict[str, dict[str, Any]] = {}
+        for target, expected_path in (
+            ("agentos", f"user/src/{expected_program}.c"),
+            ("plain", f"baseline_ucore/user/src/{expected_program}.c"),
+        ):
+            record_path = f"{pair_path}.{target}"
+            record = _require_object(pair[target], record_path)
+            if set(record) != {"path", "bytes", "sha256", "git_blob_oid"}:
+                _fail(f"{record_path} fields do not match the source file receipt schema")
+            byte_count = record["bytes"]
+            if (
+                record["path"] != expected_path
+                or isinstance(byte_count, bool)
+                or not isinstance(byte_count, int)
+                or not 0 < byte_count <= MAX_PROGRAM_SOURCE_BYTES
+            ):
+                _fail(f"{record_path} path or byte count is invalid")
+            _scenario_sha256(record["sha256"], f"{record_path}.sha256")
+            if (
+                not isinstance(record["git_blob_oid"], str)
+                or GIT_OBJECT_ID_RE.fullmatch(record["git_blob_oid"]) is None
+            ):
+                _fail(f"{record_path}.git_blob_oid is invalid")
+            target_records[target] = record
+        byte_equal = (
+            target_records["agentos"]["bytes"] == target_records["plain"]["bytes"]
+            and target_records["agentos"]["sha256"]
+            == target_records["plain"]["sha256"]
+        )
+        if (relation == "same_source") != byte_equal:
+            _fail(f"{pair_path}.relation differs from the paired source receipts")
+        observed_same += int(byte_equal)
+
+    observed_platform = len(program_order) - observed_same
+    if same_count != observed_same or platform_count != observed_platform:
+        _fail(f"{path} source comparability counts differ from the paired receipts")
+    normalized = {
+        "schema": PROGRAM_SOURCE_RECEIPT_SCHEMA,
+        "source_commit": source_commit,
+        "expected_programs": len(program_order),
+        "same_source_programs": observed_same,
+        "platform_specific_programs": observed_platform,
+        "receipt_sha256": supplied_sha256,
+    }
+    return normalized, copy.deepcopy(receipt)
+
+
 def _extract_scenario_detail(
     data: bytes,
     item: dict[str, Any],
     item_path: str,
     summary_document: dict[str, Any],
+    *,
+    source_tree: Path,
+    measurement_source_receipt: object,
 ) -> dict[str, Any]:
     if len(data) > MAX_SCENARIO_REPORT_BYTES:
         _fail(f"{item_path} scenario report exceeds the bounded JSON size")
@@ -2569,6 +2693,18 @@ def _extract_scenario_detail(
         _fail(f"{item_path} scenario report commit differs from the evaluation summary")
     if run["id"] != run_id:
         _fail(f"{item_path} scenario report run_id differs from the evaluation summary")
+    try:
+        committed_programs, _ = read_snapshot_expected_programs(
+            source_tree, source_commit, measurement_source_receipt
+        )
+        committed_source_receipt = _program_source_comparability_receipt_from_snapshot(
+            source_tree,
+            source_commit,
+            committed_programs,
+            measurement_source_receipt,
+        )
+    except (OSError, ScenarioEvidenceError, TypeError, ValueError) as error:
+        _fail(f"{item_path} committed Task 6 inventory is invalid: {error}")
     bound_scenarios = [
         scenario
         for scenario in summary_document["scenarios"]
@@ -2593,10 +2729,12 @@ def _extract_scenario_detail(
     challenges: set[str] = set()
     raw_order_counts = {"AB": 0, "BA": 0}
     raw_paired_samples: list[dict[str, Any]] = []
-    program_order: list[str] | None = None
+    program_order = list(committed_programs)
+    source_comparability: dict[str, Any] | None = None
+    source_receipt_reference: dict[str, Any] | None = None
     timings: dict[str, dict[str, list[int]]] = {
-        "plain": {},
-        "agentos": {},
+        target: {program: [] for program in program_order}
+        for target in ("plain", "agentos")
     }
     makespans: dict[str, list[int]] = {"plain": [], "agentos": []}
     for sample_index, raw_sample in enumerate(samples):
@@ -2682,14 +2820,10 @@ def _extract_scenario_detail(
         ]
         if not current_order or len(current_order) > MAX_SCENARIO_PROGRAMS or len(current_order) != len(set(current_order)):
             _fail(f"{sample_path}.binding.program_order is empty, duplicated, or over the bound")
-        if program_order is None:
-            program_order = current_order
-            timings = {
-                target: {program: [] for program in program_order}
-                for target in ("plain", "agentos")
-            }
-        elif current_order != program_order:
-            _fail(f"{sample_path}.binding.program_order differs between samples")
+        if current_order != program_order:
+            _fail(
+                f"{sample_path}.binding.program_order differs from the committed manifests"
+            )
 
         source_receipts = _require_object(
             binding.get("source_receipts"), f"{sample_path}.binding.source_receipts"
@@ -2735,6 +2869,23 @@ def _extract_scenario_detail(
             )
             if source_receipts[target] != receipt_sha256:
                 _fail(f"{target_path}.raw_source_receipt is not bound by the sample")
+            current_source, current_receipt = _normalize_scenario_source_comparability(
+                raw_receipt.get("program_source_comparability"),
+                program_order,
+                source_commit,
+                committed_source_receipt,
+                f"{target_path}.raw_source_receipt.program_source_comparability",
+            )
+            if source_comparability is None:
+                source_comparability = current_source
+                source_receipt_reference = current_receipt
+            elif (
+                current_source != source_comparability
+                or current_receipt != source_receipt_reference
+            ):
+                _fail(
+                    f"{target_path} program source comparability differs across targets or boots"
+                )
         improvement = sample_makespans["plain"] - sample_makespans["agentos"]
         relative = (
             improvement * 100.0 / sample_makespans["plain"]
@@ -2753,8 +2904,16 @@ def _extract_scenario_detail(
             }
         )
 
-    assert program_order is not None
+    assert source_comparability is not None
     report_summary = _require_object(report["summary"], f"{item_path}.report.summary")
+    summary_source = _require_object(
+        report_summary.get("source_comparability"),
+        f"{item_path}.report.summary.source_comparability",
+    )
+    if summary_source != source_comparability:
+        _fail(
+            f"{item_path}.report.summary.source_comparability differs from the raw receipts"
+        )
     independent_boots = _scenario_uint(
         report_summary.get("independent_boots"),
         f"{item_path}.report.summary.independent_boots",
@@ -2895,6 +3054,7 @@ def _extract_scenario_detail(
         "status": report_status,
         "independent_boots": independent_boots,
         "programs": display_programs,
+        "source_comparability": copy.deepcopy(source_comparability),
         "functional": {
             "status": functional_status,
             "required_modules": modules,
@@ -3348,8 +3508,10 @@ def _verify_compatibility_sidecar(
         _fail("compatibility evidence changed while it was replayed")
     summary = value["summary"]
     metrics = summary["metrics"]
-    normalized_metrics = {
-        metric: {
+    normalized_metrics: dict[str, dict[str, Any]] = {}
+    for spec in COMPATIBILITY_METRICS:
+        metric = str(spec["id"])
+        normalized = {
             field: metrics[metric][field]
             for field in (
                 "paired_boots",
@@ -3357,21 +3519,20 @@ def _verify_compatibility_sidecar(
                 "plain_median_microseconds_per_operation",
                 "agentos_median_microseconds_per_operation",
                 "median_agentos_over_plain_ratio",
+                "pairs",
             )
         }
-        for metric in (
-            "fork_wait",
-            "fork_exec_wait",
-            "pipe_roundtrip",
-            "seq_file_io",
-        )
-    }
+        if "workload" in spec:
+            normalized["workload"] = copy.deepcopy(metrics[metric]["workload"])
+            normalized["attribution"] = metrics[metric]["attribution"]
+        normalized_metrics[metric] = normalized
     fragment = {
         "status": "ready",
         "claim_scope": summary["claim_scope"],
         "aggregate_score": summary["aggregate_score"],
         "aggregate_score_forbidden": summary["aggregate_score_forbidden"],
         "workload_equivalence": copy.deepcopy(summary["workload_equivalence"]),
+        "measurement_state": copy.deepcopy(value["source"]["measurement_state"]),
         "metrics": normalized_metrics,
         "artifact_tree_sha256": after_sha256,
         "artifact_file_count": len(after_entries),
@@ -3404,6 +3565,7 @@ def _verify_evidence_files(
     source_summary: bytes,
     *,
     contract_root: Path,
+    measurement_source_tree: Path,
 ) -> tuple[
     dict[str, Any],
     list[dict[str, Any]],
@@ -3425,6 +3587,7 @@ def _verify_evidence_files(
                 diagnostic_samples_by_evidence.setdefault(sample["evidence_id"], []).append(
                     (sample_path, sample)
                 )
+    measurement_source_receipt: object | None = None
     for index, item in enumerate(summary["evidence"]):
         item_path = f"evidence[{index}]"
         parts = _canonical_evidence_reference(item["path"], f"{item_path}.path")
@@ -3456,8 +3619,26 @@ def _verify_evidence_files(
                 diagnostic_provenance_verified += 1
             diagnostic_provenance_count += diagnostic_provenance_verified
         if item["kind"] == "research-platform-scenario" and item["status"] == "verified":
+            if measurement_source_receipt is None:
+                receipt_path = evidence_root / "measurement-source-receipt.json"
+                try:
+                    measurement_source_receipt = read_strict_json(
+                        require_regular_file(receipt_path)
+                    )
+                except (OSError, UnicodeError, ValueError) as error:
+                    _fail(
+                        "verified Task 6 evidence requires a portable "
+                        f"measurement-source receipt: {error}"
+                    )
             scenario_details.append(
-                _extract_scenario_detail(data, item, item_path, summary)
+                _extract_scenario_detail(
+                    data,
+                    item,
+                    item_path,
+                    summary,
+                    source_tree=measurement_source_tree,
+                    measurement_source_receipt=measurement_source_receipt,
+                )
             )
 
         receipt = item.get("receipt")
@@ -3615,6 +3796,7 @@ def _replay_scientific_contract(
     summary: dict[str, Any],
     *,
     contract_root: Path,
+    measurement_source_tree: Path,
 ) -> None:
     """Rebuild positive and negative measured results before rendering."""
 
@@ -3659,6 +3841,7 @@ def _replay_scientific_contract(
             scenario_args[0],
             scenario_args[1],
             contract_root=contract_root,
+            scenario_source_tree=measurement_source_tree,
         )
     except (EvaluationContractError, OSError, UnicodeError, ValueError) as error:
         _fail(f"raw Guest contract replay failed: {error}")
@@ -4111,6 +4294,163 @@ OVERVIEW_TASK_LABELS = {
     "task6": "科研工作流",
 }
 
+COMPATIBILITY_METRIC_LABELS = {
+    "fork_wait": "fork / wait",
+    "fork_exec_wait": "fork / exec / wait",
+    "pipe_roundtrip": "pipe 往返",
+    "seq_file_io": "顺序文件 I/O",
+    "research_artifact_pipeline": "科研工件流水线",
+}
+
+
+def _finite_float(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _compatibility_p95(metric: dict[str, Any], field: str) -> float | None:
+    pairs = metric.get("pairs")
+    expected = _positive_int(metric.get("paired_boots"))
+    if not isinstance(pairs, list) or expected is None or len(pairs) != expected:
+        return None
+    values: list[float] = []
+    for pair in pairs:
+        if not isinstance(pair, dict):
+            return None
+        value = _finite_float(pair.get(field))
+        if value is None or value <= 0:
+            return None
+        values.append(value)
+    return _scenario_percentile(values, 0.95) if values else None
+
+
+def _compatibility_workload_html(verification: dict[str, Any]) -> str:
+    compatibility = verification.get("compatibility_overhead")
+    ready = isinstance(compatibility, dict) and compatibility.get("status") == "ready"
+    metrics = compatibility.get("metrics", {}) if ready else {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+
+    if ready:
+        program_mix = "同源程序 1 · 平台特定程序 0"
+        equivalence = compatibility.get("workload_equivalence")
+        if (
+            isinstance(equivalence, dict)
+            and equivalence.get("all_paired_outcomes_equal") is True
+            and (paired_boots := _positive_int(equivalence.get("paired_boots"))) is not None
+        ):
+            output_text = f"{paired_boots}/{paired_boots} 配对输出一致"
+        else:
+            output_text = "输出一致性 unavailable"
+        application_paths = sum(
+            isinstance(metric, dict)
+            and metric.get("attribution") == "guest_application_full_path_not_pure_kernel"
+            for metric in metrics.values()
+        )
+        interface_paths = len(metrics) - application_paths
+        scope_text = f"传统接口 {interface_paths} · 应用全路径 {application_paths}"
+        state = compatibility.get("measurement_state")
+        measurement_state_text = (
+            "warm Guest path · challenge 派生轮换顺序"
+            if isinstance(state, dict)
+            and state.get("cache_state") == "warm_guest_paths"
+            and state.get("schedule") == "challenge_rotated_v1"
+            and state.get("untimed_warmup") is True
+            else "测量状态 unavailable"
+        )
+    else:
+        program_mix = "同源/平台特定程序数 unavailable"
+        output_text = "输出一致性 unavailable"
+        scope_text = "兼容负载 unavailable"
+        measurement_state_text = "测量状态 unavailable"
+
+    rows: list[str] = []
+    ordered_ids = [
+        metric_id for metric_id in COMPATIBILITY_METRIC_LABELS if metric_id in metrics
+    ]
+    ordered_ids.extend(sorted(
+        metric_id
+        for metric_id in metrics
+        if isinstance(metric_id, str) and metric_id not in ordered_ids
+    ))
+    for metric_id in ordered_ids:
+        metric = metrics.get(metric_id)
+        if not isinstance(metric, dict):
+            continue
+        plain_p50 = _finite_float(
+            metric.get("plain_median_microseconds_per_operation")
+        )
+        agentos_p50 = _finite_float(
+            metric.get("agentos_median_microseconds_per_operation")
+        )
+        plain_p95 = _compatibility_p95(
+            metric, "plain_microseconds_per_operation"
+        )
+        agentos_p95 = _compatibility_p95(
+            metric, "agentos_microseconds_per_operation"
+        )
+        ratio = _finite_float(metric.get("median_agentos_over_plain_ratio"))
+        n = _positive_int(metric.get("paired_boots"))
+        operation_unit = metric.get("operation_unit")
+        operation_text = (
+            str(operation_unit) if isinstance(operation_unit, str) and operation_unit else "operation"
+        )
+        attribution = metric.get("attribution")
+        attribution_text = (
+            "应用全路径，非纯内核成本"
+            if attribution == "guest_application_full_path_not_pure_kernel"
+            else "传统接口路径"
+        )
+
+        def duration(value: float | None) -> str:
+            return "unavailable" if value is None else _duration_label(value, "us/op")
+
+        rows.append(
+            '<tr>'
+            f'<th scope="row"><span>{_h(COMPATIBILITY_METRIC_LABELS.get(metric_id, metric_id))}</span>'
+            f'<code>{_h(metric_id)}</code><small>{_h(attribution_text)} · 每 {_h(operation_text)}</small></th>'
+            f'<td>{_h(duration(plain_p50))}</td>'
+            f'<td>{_h(duration(plain_p95))}</td>'
+            f'<td>{_h(duration(agentos_p50))}</td>'
+            f'<td>{_h(duration(agentos_p95))}</td>'
+            f'<td>{_h("unavailable" if ratio is None else f"{ratio:.2f}x")}</td>'
+            f'<td>{_h("unavailable" if n is None else f"n={n}")}</td>'
+            '</tr>'
+        )
+
+    measurement = (
+        '<div class="table-scroll compatibility-table" role="region" tabindex="0" '
+        'aria-label="同源兼容负载耗时表，可横向滚动"><table><thead><tr>'
+        '<th>同源负载</th><th>Plain p50</th><th>Plain p95</th>'
+        '<th>AgentOS p50</th><th>AgentOS p95</th><th>AgentOS/Plain</th><th>样本</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+        '<p class="diagnostic-note">p50/p95 汇总各独立 boot 的 Guest 内轮次中位数；'
+        '倍率为逐 boot AgentOS/Plain 比值的中位数。</p>'
+        if rows
+        else '<div class="unavailable-block"><strong>同源兼容负载 unavailable</strong>'
+        '<span>没有可信配对数据；p50、p95、倍率与样本量均不填补。</span></div>'
+    )
+    return (
+        '<section class="evaluation-track" data-evaluation-track="same-source-compatibility" '
+        'aria-labelledby="same-source-compatibility-title">'
+        '<header class="evaluation-track-heading"><div><p class="track-kicker">同一份 compatbench.c · 双目标分别编译</p>'
+        '<h2 id="same-source-compatibility-title">同源兼容负载</h2></div>'
+        '<p>只回答传统 uCore 接口的兼容成本，不计作 AgentOS 机制优势。</p></header>'
+        '<dl class="track-summary">'
+        f'<div><dt>程序构成</dt><dd>{_h(program_mix)}</dd></div>'
+        f'<div><dt>输出一致性</dt><dd>{_h(output_text)}</dd></div>'
+        f'<div><dt>测量范围</dt><dd>{_h(scope_text)}</dd></div></dl>'
+        f'{measurement}<p class="diagnostic-note">{_h(measurement_state_text)}</p></section>'
+    )
+
 
 def _duration_label(value: float, unit: str) -> str:
     if unit.startswith("us"):
@@ -4161,7 +4501,9 @@ def _overview_benchmark_measurement(benchmark: dict[str, Any]) -> dict[str, Any]
         "load": load,
         "pair": pair,
         "baseline": float(baseline["value"]),
+        "baseline_p95": float(baseline["p95"]),
         "treatment": float(treatment["value"]),
+        "treatment_p95": float(treatment["p95"]),
         "n": int(pair["n"]),
         "measured_pairs": measured_pairs,
     }
@@ -4200,14 +4542,14 @@ def _overview_claim_slots(
             metric = "不会使用其他 benchmark 补位"
             n_text = "n=0"
             load_text = "-"
-            slot_modifier = ""
+            p95_text = "p95 unavailable"
         elif measurement is None:
             value_text = "暂无测量"
             effect_text = "本轮没有完整的配对数据"
             metric = f"{len(benchmark['loads'])} 个预注册负载"
             n_text = "n=0"
             load_text = "-"
-            slot_modifier = ""
+            p95_text = "p95 unavailable"
         else:
             pair = measurement["pair"]
             relative = (
@@ -4216,8 +4558,12 @@ def _overview_claim_slots(
                 else None
             )
             value_text = (
-                f"{_duration_label(measurement['baseline'], benchmark['unit'])} → "
+                f"p50 {_duration_label(measurement['baseline'], benchmark['unit'])} → "
                 f"{_duration_label(measurement['treatment'], benchmark['unit'])}"
+            )
+            p95_text = (
+                f"p95 {_duration_label(measurement['baseline_p95'], benchmark['unit'])} → "
+                f"{_duration_label(measurement['treatment_p95'], benchmark['unit'])}"
             )
             effect_text = _relative_effect_label(
                 relative,
@@ -4240,7 +4586,7 @@ def _overview_claim_slots(
                     else ""
                 )
                 metric = "上方为最高负载两端中位数；" + coverage + (
-                    f"{faster_loads}/{relative_count} 个负载降低延迟，优势未形成"
+                    f"{faster_loads}/{relative_count} 个负载降低延迟"
                 )
             elif all_relative:
                 scope = (
@@ -4269,16 +4615,12 @@ def _overview_claim_slots(
                 metric += "；本轮未登记性能结论"
             n_text = f"n={measurement['n']} 独立 Guest 启动/负载"
             load_text = str(measurement["load"])
-            slot_modifier = (
-                " headline-result-slot--regressed"
-                if relative is not None and relative < 0 and benchmark["direction"] != "neutral"
-                else ""
-            )
         slots.append(
-            f'<article class="headline-result-slot{slot_modifier}" data-overview-slot="mechanism" '
+            f'<article class="headline-result-slot" data-overview-slot="mechanism" '
             f'data-benchmark-id="{_h(benchmark_id)}">'
             f'<header><span>{_h(label)}</span><code>{_h(load_text)} {_h(load_unit)}</code></header>'
             f'<p class="slot-value">{_h(value_text)}</p>'
+            f'<p class="slot-p95">{_h(p95_text)}</p>'
             f'<p class="slot-targets">{_h(target_text)}</p>'
             f'<p class="slot-effect">{_h(effect_text)}</p>'
             f'<p class="slot-metric">{_h(metric)}</p>'
@@ -4288,12 +4630,45 @@ def _overview_claim_slots(
     return "".join(slots)
 
 
-def _overview_task6_slot(scenarios: list[dict[str, Any]]) -> str:
+def _overview_task6_slot(
+    scenarios: list[dict[str, Any]],
+    scenario_details: list[dict[str, Any]] | None = None,
+) -> str:
     task6 = [scenario for scenario in scenarios if _task_id(scenario["task"], "scenario.task") == "task6"]
+    task6_details = [
+        detail
+        for detail in (scenario_details or [])
+        if detail.get("task_id") == "task6"
+    ]
+    if len(task6_details) == 1:
+        detail = task6_details[0]
+        source = detail.get("source_comparability")
+        functional = detail.get("functional")
+        modules = functional.get("required_modules") if isinstance(functional, dict) else None
+        composition = (
+            f"计时程序 {int(source['expected_programs'])} 项："
+            f"同源 {int(source['same_source_programs'])} · "
+            f"平台特定 {int(source['platform_specific_programs'])}；"
+            f"AgentOS 专属诊断模块 {len(modules)} 项"
+            if isinstance(source, dict)
+            and all(
+                type(source.get(field)) is int and int(source[field]) >= 0
+                for field in (
+                    "expected_programs",
+                    "same_source_programs",
+                    "platform_specific_programs",
+                )
+            )
+            and isinstance(modules, list)
+            else "程序来源与专属诊断模块 unavailable"
+        )
+    else:
+        composition = "程序来源与专属诊断模块 unavailable"
     if not task6:
         content = (
             '<div class="task6-slot-row"><strong>暂无 Task6 动态测量</strong>'
-            '<p>不会使用机制微基准替代完整科研流程。</p></div>'
+            '<p>不会使用机制微基准替代完整科研流程；'
+            f'{_h(composition)}。</p></div>'
         )
     else:
         rows: list[str] = []
@@ -4319,38 +4694,31 @@ def _overview_task6_slot(scenarios: list[dict[str, Any]]) -> str:
             ratio = agentos_p50 / plain_p50 if plain_p50 > 0 else None
             n = int(performance["n"])
             consistent = round(n * float(performance.get("paired_success_rate", 0.0)))
-            debt = (
-                f"当前性能债务 {ratio:.1f}x"
-                if ratio is not None and ratio >= 1
-                else f"AgentOS/Plain {ratio:.2f}x"
-                if ratio is not None
-                else "倍率暂无数据"
-            )
-            modifier = (
-                " task6-slot-row--regressed"
-                if scenario["performance_status"] == "regressed"
-                else " task6-slot-row--improved"
-                if scenario["performance_status"] == "supported" and ratio is not None and ratio < 1
-                else ""
+            ratio_text = (
+                f"AgentOS/Plain {ratio:.2f}x" if ratio is not None else "倍率暂无数据"
             )
             rows.append(
-                f'<div class="task6-slot-row{modifier}">'
+                '<div class="task6-slot-row">'
                 f'<div class="task6-slot-heading"><strong>{_h(OVERVIEW_TASK_LABELS["task6"])}</strong>'
-                f'<span>{consistent}/{n} 工作流结果一致</span></div>'
+                f'<span>{consistent}/{n} 预注册 outcome 一致</span></div>'
                 '<div class="task6-comparison">'
                 f'<div><span>Plain p50</span><strong>{_h(_duration_label(plain_p50, "ms"))}</strong>'
                 f'<small>p95 {_h(_duration_label(plain_p95, "ms"))}</small></div>'
                 f'<div><span>AgentOS p50</span><strong>{_h(_duration_label(agentos_p50, "ms"))}</strong>'
                 f'<small>p95 {_h(_duration_label(agentos_p95, "ms"))}</small></div>'
-                f'<div class="task6-debt"><span>完整链路</span><strong>{_h(debt)}</strong>'
-                f'<small>n={n} 配对启动</small></div></div></div>'
+                f'<div class="task6-ratio"><span>完整链路</span><strong>{_h(ratio_text)}</strong>'
+                f'<small>n={n} 配对启动</small></div></div>'
+                f'<p class="workflow-composition">{_h(composition)}</p></div>'
             )
         content = "".join(rows)
     return (
-        '<article class="headline-result-slot headline-result-slot--task6" '
-        'data-overview-slot="task6" data-benchmark-id="task6">'
-        '<header><span>任务 6 完整科研流程</span><code>Plain / AgentOS</code></header>'
-        f'<div class="task6-slot-list">{content}</div></article>'
+        '<section class="evaluation-track workflow-track" '
+        'data-overview-slot="task6" data-evaluation-track="full-research-workflow" '
+        'data-benchmark-id="task6" aria-labelledby="full-workflow-title">'
+        '<header class="evaluation-track-heading"><div><p class="track-kicker">同输入 · 不同 backend</p>'
+        '<h2 id="full-workflow-title">完整科研流程诊断</h2></div>'
+        '<p>展示完整 AgentOS 栈的端到端表现，不归因给单一内核机制。</p></header>'
+        f'<div class="task6-slot-list">{content}</div></section>'
     )
 
 
@@ -4474,7 +4842,7 @@ def _overview_extension_slots(
             "传统路径成本",
             compatibility_value,
             compatibility_text,
-            "fork / exec / pipe / sequential I/O",
+            "fork / exec / pipe / sequential I/O / research pipeline",
         ),
         (
             "kernel-cost",
@@ -4578,6 +4946,15 @@ def _scenario_details_html(details: list[dict[str, Any]]) -> str:
         )
     blocks: list[str] = []
     for detail in details:
+        source = detail.get("source_comparability", {})
+        if not isinstance(source, dict):
+            source = {}
+        source_summary = (
+            '<dl class="track-summary scenario-source-summary" aria-label="计时程序源码可比性">'
+            f'<div><dt>计时程序</dt><dd>{_h(source.get("expected_programs", "unavailable"))}</dd></div>'
+            f'<div><dt>同源程序</dt><dd>{_h(source.get("same_source_programs", "unavailable"))}</dd></div>'
+            f'<div><dt>平台特定程序</dt><dd>{_h(source.get("platform_specific_programs", "unavailable"))}</dd></div></dl>'
+        )
         program_rows = "".join(
             '<tr>'
             f'<th scope="row"><code>{_h(program["program"])}</code></th>'
@@ -4610,6 +4987,9 @@ def _scenario_details_html(details: list[dict[str, Any]]) -> str:
             '<header><div>'
             f'<p class="eyebrow">{_h(detail["independent_boots"])} 个独立 Guest boot</p>'
             f'<h3>{_h(detail["scenario_id"])}</h3></div>{_status(detail["status"])}</header>'
+            f'{source_summary}'
+            '<p class="diagnostic-note">同源表示 Plain 与 AgentOS 对应 C 源文件字节一致；'
+            '平台特定表示两侧实现源码不同，不把 backend 差异误写为纯内核效果。</p>'
             '<section class="diagnostic-block" aria-label="逐程序耗时">'
             '<h4>逐程序耗时</h4><p class="diagnostic-note">来自已核验场景报告；单位 ms，不提升为新的 headline claim。</p>'
             '<div class="table-scroll" role="region" tabindex="0" aria-label="逐程序耗时表，可横向滚动"><table><thead><tr><th>程序</th><th>Plain p50</th><th>Plain p95</th>'
@@ -4768,7 +5148,10 @@ def _page(
         "功能结果与性能数据分别呈现。"
     )
     overview_claim_slots = _overview_claim_slots(summary, benchmarks, targets)
-    overview_task6_slot = _overview_task6_slot(summary["scenarios"])
+    compatibility_workload = _compatibility_workload_html(verification)
+    overview_task6_slot = _overview_task6_slot(
+        summary["scenarios"], scenario_details
+    )
     overview_extensions = _overview_extension_slots(
         verification, scenario_details, kernel_cost
     )
@@ -4940,27 +5323,31 @@ def _page(
       <button role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true">总览</button>
       <button role="tab" id="tab-performance" aria-controls="panel-performance" aria-selected="false" tabindex="-1">性能</button>
       <button role="tab" id="tab-cost" aria-controls="panel-cost" aria-selected="false" tabindex="-1">系统成本</button>
-      <button role="tab" id="tab-scenarios" aria-controls="panel-scenarios" aria-selected="false" tabindex="-1">科研场景</button>
+      <button role="tab" id="tab-scenarios" aria-controls="panel-scenarios" aria-selected="false" tabindex="-1">负载与流程</button>
       <button role="tab" id="tab-evidence" aria-controls="panel-evidence" aria-selected="false" tabindex="-1">可信证据</button>
       <button role="tab" id="tab-methodology" aria-controls="panel-methodology" aria-selected="false" tabindex="-1">方法学</button>
     </div>
   </nav>
   <main id="main">
     <section role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" class="tab-panel">
-      <div class="section-heading"><div><p class="eyebrow">评测运行 {_h(run["id"])}</p><h1>AgentOS-uCore 实测数据</h1></div><p>真实负载、样本量与正负结果同屏展示。</p></div>
+      <div class="section-heading"><div><p class="eyebrow">评测运行 {_h(run["id"])}</p><h1>AgentOS-uCore 实测数据</h1></div><p>比较口径、p50/p95、样本量与输出一致性同屏展示。</p></div>
       <dl class="summary-strip">
         <div><dt>独立 Guest 启动</dt><dd>{_h(n_display)}</dd></div>
         <div><dt>机制负载</dt><dd>{_h(mechanism_load_count)}</dd></div>
         <div><dt>完整流程配对</dt><dd>{_h(paired_scenario_count)}</dd></div>
         <div><dt>Commit</dt><dd><code title="{_h(commit)}">{_h(short_commit)}</code></dd></div>
       </dl>
-      <section class="overview-results" aria-labelledby="overview-results-title">
-        <div class="subheading"><h2 id="overview-results-title">核心机制实测</h2><span>对照端点、负载和样本量随数据展示</span></div>
-        <div class="headline-result-grid">{overview_task6_slot}{overview_claim_slots}</div>
+      <section class="judge-overview" aria-labelledby="judge-overview-title">
+        <div class="subheading"><h2 id="judge-overview-title">评委速览</h2><span>先看可比口径，再看数值</span></div>
+        <div class="evaluation-track-list">{compatibility_workload}{overview_task6_slot}</div>
       </section>
-      <section class="overview-grid">
-        <div><div class="subheading"><h2>赛题功能复现</h2><span>任务 1-6 的动态回执数据</span></div>{_task_matrix(summary["scenarios"], evidence)}</div>
-        <div><div class="subheading"><h2>资源与成本</h2><span>收益和代价同时展示</span></div><div class="extension-result-grid">{overview_extensions}</div></div>
+      <section class="overview-results" aria-labelledby="overview-results-title">
+        <div class="subheading"><h2 id="overview-results-title">机制微基准</h2><span>最高预注册负载的 p50、p95、相对效果与 n</span></div>
+        <div class="headline-result-grid">{overview_claim_slots}</div>
+      </section>
+      <section class="overview-resources" aria-labelledby="overview-resources-title">
+        <div class="subheading"><h2 id="overview-resources-title">资源与系统成本</h2><span>回收压力、兼容成本范围和静态体积</span></div>
+        <div class="extension-result-grid">{overview_extensions}</div>
       </section>
     </section>
     <section role="tabpanel" id="panel-performance" aria-labelledby="tab-performance" class="tab-panel" hidden>
@@ -4972,7 +5359,8 @@ def _page(
       {kernel_cost_block}
     </section>
     <section role="tabpanel" id="panel-scenarios" aria-labelledby="tab-scenarios" class="tab-panel" hidden>
-      <div class="section-heading"><div><p class="eyebrow">端到端工作负载</p><h2>科研场景</h2></div><p>{_h(scenario_boundary_note)}</p></div>
+      <div class="section-heading"><div><p class="eyebrow">同源负载 / 完整工作流</p><h2>负载与流程</h2></div><p>{_h(scenario_boundary_note)}</p></div>
+      <section aria-labelledby="functional-receipts-title"><h3 id="functional-receipts-title" class="subsection-title">任务功能回执</h3>{_task_matrix(summary["scenarios"], evidence)}</section>
       <div class="table-scroll" role="region" tabindex="0" aria-label="科研场景实测表，可横向滚动"><table><thead><tr><th>赛题任务</th><th>能力</th><th>动态复现</th><th>耗时对照</th><th>原始证据</th></tr></thead><tbody>{"".join(scenario_rows)}</tbody></table></div>
       {"".join(scenario_inference)}
       <section aria-labelledby="scenario-details-title"><h3 id="scenario-details-title" class="subsection-title">场景明细</h3>{scenario_detail_blocks}</section>
@@ -5057,11 +5445,18 @@ def render(
     output_dir: Path,
     *,
     contract_root: Path,
+    measurement_source_tree: Path | None = None,
 ) -> None:
     try:
         contract_root = require_safe_directory(contract_root).resolve(strict=True)
     except (OSError, ValueError) as error:
         _fail(f"trusted contract root is missing or unsafe: {error}")
+    try:
+        measurement_source_tree = require_safe_directory(
+            measurement_source_tree or contract_root
+        ).resolve(strict=True)
+    except (OSError, ValueError) as error:
+        _fail(f"measurement source tree is missing or unsafe: {error}")
     summary_path = summary_path.resolve(strict=True)
     if not summary_path.is_file():
         _fail("summary input must be a regular file")
@@ -5074,12 +5469,14 @@ def render(
         validated,
         source_summary,
         contract_root=contract_root,
+        measurement_source_tree=measurement_source_tree,
     )
     _replay_scientific_contract(
         summary_path.parent,
         summary_path,
         validated,
         contract_root=contract_root,
+        measurement_source_tree=measurement_source_tree,
     )
     summary = _canonical_dashboard_summary(validated, kernel_cost)
     output_dir.mkdir(parents=True, exist_ok=True)

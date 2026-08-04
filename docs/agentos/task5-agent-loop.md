@@ -86,7 +86,7 @@ int agent_unwatch(int event_type, const char *filter);
 5. 相同 `event_type + filter` 的 watch 会被替换。
 6. `agent_unwatch(AGENT_EVENT_NONE, "")` 会清空当前 Agent 的全部 watch。
 
-`labdemo_ucore` 中 sentinel 会注册文件状态 watch。对应检查项为 `WATCH_REGISTERED`，原始输出见 [test-record.md](test-record.md)。
+`labdemo_ucore` 中 sentinel 会注册文件状态 watch。对应检查项为 `WATCH_REGISTERED`，原始输出见 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 ## 等待：Wait
 
@@ -112,7 +112,7 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 
 `WAIT_ATOMIC_TEST_PROFILE` 不是生产 ABI，而是原子边界的动态注入 profile。runner 要求 `agentfinal_ucore: thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1`，以及 `agentfinal_ucore: wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1`。前者覆盖 sibling 独立 deadline、generation key 和线程槽复用，后者覆盖事件在最终谓词重检前到达时不误睡，以及 teardown 撤销等待 sibling；reserve/cookie/commit/abort 顺序另由静态与 mutation 合同约束。当前 profile 尚未把“reserve 后用户页失效、sibling waiter、cancel、teardown”四项同时组合，不能把该组合写成已取得 Guest 证据。
 
-`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于用户看到轮询路径与事件路径的成本都可测。具体 tick 样例统一保存在 [test-record.md](test-record.md)。
+`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于用户看到轮询路径与事件路径的成本都可测。具体 tick 样例统一保存在 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 这里的 `speedup_x100=100` 是单项自身的计时基线。`busy_poll_vs_wait` 用于呈现两个路径的观测数据，不设置固定 tick 阈值。
 
@@ -160,7 +160,7 @@ int agent_wake(int pid, struct agent_event *event);
 
 这里的 capability 只决定能否发起消息；scope 决定目标集合，route 决定同 scope 中的具体边。跨 scope、未建 route 或保留事件伪造均返回拒绝。已有 source/direct/external/total 队列配额继续作为同 scope 路由通过后的资源边界。
 
-`agentfinal_ucore` 用自唤醒验证最小路径，检查事件能够入队、等待能够返回，并且相关记录进入 Run Ledger。`labdemo_ucore` 用跨 Agent 消息验证场景路径，检查 sentinel 到 investigator 的消息事件能够被内核投递和消费。原始输出统一见 [test-record.md](test-record.md)。
+`agentfinal_ucore` 用自唤醒验证最小路径，检查事件能够入队、等待能够返回，并且相关记录进入 Run Ledger。`labdemo_ucore` 用跨 Agent 消息验证场景路径，检查 sentinel 到 investigator 的消息事件能够被内核投递和消费。原始输出统一见 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 ## 取消等待：Wait Cancel
 
@@ -329,7 +329,7 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 4. 逐目标独立投递；某个 watcher 队列已满时继续检查后续 watcher；
 5. 目标 Agent 从 `agent_wait()` 返回。
 
-文件 metadata 是先提交的权威状态，广播只是 best-effort 通知。单个慢 watcher 的队列资源不足不会回滚状态，也不会让 `agent_file_meta_set()` 在提交后错误返回 `AGENT_STATUS_NO_SPACE`。`labdemo_ucore` 会在用户态写入科研示例数据后触发文件状态变化，sentinel 通过 watch 收到事件。原始输出见 [test-record.md](test-record.md)。
+文件 metadata 是先提交的权威状态，广播只是 best-effort 通知。单个慢 watcher 的队列资源不足不会回滚状态，也不会让 `agent_file_meta_set()` 在提交后错误返回 `AGENT_STATUS_NO_SPACE`。`labdemo_ucore` 会在用户态写入科研示例数据后触发文件状态变化，sentinel 通过 watch 收到事件。原始输出见 [正式证据索引](../../evidence/releases/INDEX.md)。
 
 ## 消息事件
 
@@ -388,7 +388,7 @@ Context v8 还会把事件和后续工具调用连起来，并继续维护 Conte
 
 ## 验证证据
 
-原始输出统一保存在 [test-record.md](test-record.md)，逐项测试步骤见 [testing-details.md](testing-details.md)。任务五重点检查以下内容：
+原始输出统一保存在 [正式证据索引](../../evidence/releases/INDEX.md)，逐项测试步骤见 [验证说明](verification.md)。任务五重点检查以下内容：
 
 | 程序 | 检查项 |
 | --- | --- |
