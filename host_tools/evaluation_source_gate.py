@@ -10,7 +10,7 @@ import stat
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Iterable
 
 try:
@@ -20,6 +20,7 @@ try:
         DEFAULT_MAX_WALK_FILES,
         path_is_link,
         reject_link_components,
+        require_regular_file,
         require_safe_directory,
         walk_directory_tree_no_links,
     )
@@ -30,6 +31,7 @@ except ImportError:
         DEFAULT_MAX_WALK_FILES,
         path_is_link,
         reject_link_components,
+        require_regular_file,
         require_safe_directory,
         walk_directory_tree_no_links,
     )
@@ -325,10 +327,122 @@ def _verify_tracked_parent_directories(
             )
 
 
+def _one_output_line(payload: bytes, label: str) -> str:
+    raw = payload[:-2] if payload.endswith(b"\r\n") else payload[:-1]
+    if not raw or any(separator in raw for separator in (b"\0", b"\r", b"\n")):
+        raise ToolAttestationError(f"{label} is malformed")
+    if not payload.endswith((b"\n", b"\r\n")):
+        raise ToolAttestationError(f"{label} is malformed")
+    return os.fsdecode(raw)
+
+
+def _host_absolute_git_path(
+    git: Path,
+    directory: Path,
+    environment: dict[str, str],
+    value: str,
+    label: str,
+) -> Path:
+    if not value or "\\" in value or any(character in value for character in "\0\r\n"):
+        raise ToolAttestationError(f"{label} is not a canonical absolute path")
+    candidate = Path(value)
+    windows = PureWindowsPath(value)
+    parts = PurePosixPath(value).parts if candidate.is_absolute() else windows.parts
+    if not candidate.is_absolute() and windows.is_absolute() and sys.platform == "cygwin":
+        cygpath = require_regular_file(Path("/usr/bin/cygpath.exe")).resolve(strict=True)
+        converted = subprocess.run(
+            [str(cygpath), "-a", "-u", value], cwd=directory, env=environment,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, check=False, timeout=5,
+        )
+        if converted.returncode:
+            raise ToolAttestationError(f"{label} cannot be converted")
+        candidate = Path(_one_output_line(converted.stdout, label))
+    if not candidate.is_absolute():
+        raise ToolAttestationError(f"{label} is not a canonical absolute path")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ToolAttestationError(f"{label} is not a canonical absolute path")
+    return reject_link_components(candidate).resolve(strict=True)
+
+
+def _git_admin_directory(
+    git: Path,
+    directory: Path,
+    environment: dict[str, str],
+    argument: str,
+    label: str,
+) -> Path:
+    result = _run_git(
+        git,
+        directory,
+        environment,
+        "rev-parse",
+        "--path-format=absolute",
+        argument,
+    )
+    if result.returncode:
+        raise ToolAttestationError(f"Git cannot resolve {label}")
+    value = _one_output_line(result.stdout, f"Git {label}")
+    return require_safe_directory(
+        _host_absolute_git_path(git, directory, environment, value, f"Git {label}")
+    ).resolve(strict=True)
+
+
+def _linked_worktree_administration(
+    git: Path,
+    repository: Path,
+    worktree: Path,
+    environment: dict[str, str],
+) -> tuple[Path, Path]:
+    repository_common = _git_admin_directory(
+        git, repository, environment, "--git-common-dir", "repository common directory"
+    )
+    worktree_common = _git_admin_directory(
+        git, worktree, environment, "--git-common-dir", "worktree common directory"
+    )
+    if not os.path.samefile(repository_common, worktree_common):
+        raise ToolAttestationError("evaluation worktree uses a different Git common directory")
+    git_dir = _git_admin_directory(
+        git, worktree, environment, "--git-dir", "worktree administration directory"
+    )
+    try:
+        objects = require_safe_directory(worktree_common / "objects").resolve(
+            strict=True
+        )
+    except (OSError, ValueError) as error:
+        raise ToolAttestationError("Git object directory is unsafe") from error
+    for name in ("info", "pack"):
+        directory = objects / name
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ToolAttestationError("Git object directory is unsafe") from error
+        if path_is_link(directory, info.st_mode, file_info=info) or not stat.S_ISDIR(
+            info.st_mode
+        ):
+            raise ToolAttestationError("Git object directory is unsafe")
+    info_directory = objects / "info"
+    if info_directory.is_dir():
+        for name in ("alternates", "http-alternates"):
+            alternate = info_directory / name
+            try:
+                alternate.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise ToolAttestationError("Git alternate object store is unsafe") from error
+            raise ToolAttestationError("Git alternate object store is not allowed")
+    return worktree_common, git_dir
+
+
 def _filesystem_worktree_paths(
     repository: Path,
     worktree: Path,
     *,
+    git: Path,
+    environment: dict[str, str],
     generated_roots: Iterable[PurePosixPath] = (),
     generated_files: Iterable[PurePosixPath] = (),
 ) -> tuple[tuple[PurePosixPath, bool], ...]:
@@ -393,19 +507,19 @@ def _filesystem_worktree_paths(
                 raise ToolAttestationError("worktree Git administration file is malformed")
             try:
                 target_name = os.fsdecode(raw[8:-1])
-                target_path = PurePosixPath(target_name)
-                if (
-                    "\\" in target_name
-                    or any(part in {"", ".", ".."} for part in target_path.parts)
-                    or not (
-                        target_path.is_absolute()
-                        or ((os.name == "nt" or sys.platform == "cygwin")
-                            and len(target_name) >= 3
-                            and target_name[0].isalpha() and target_name[1:3] == ":/")
-                    )
-                ):
-                    raise ValueError("noncanonical gitdir")
-                root = reject_link_components(repository / ".git" / "worktrees").resolve(
+                target = _host_absolute_git_path(
+                    git,
+                    worktree,
+                    environment,
+                    target_name,
+                    "worktree Git administration target",
+                )
+                common_dir, resolved_git_dir = _linked_worktree_administration(
+                    git, repository, worktree, environment
+                )
+                if not os.path.samefile(target, resolved_git_dir):
+                    raise ValueError("gitfile target differs from Git resolution")
+                root = require_safe_directory(common_dir / "worktrees").resolve(
                     strict=True
                 )
                 candidates = []
@@ -415,19 +529,33 @@ def _filesystem_worktree_paths(
                         info = entry.stat(follow_symlinks=False)
                         if path_is_link(candidate, info.st_mode, file_info=info):
                             raise ValueError("link-backed worktree administration")
-                        if stat.S_ISDIR(info.st_mode) and os.path.samefile(target_name, candidate):
+                        if stat.S_ISDIR(info.st_mode) and os.path.samefile(target, candidate):
                             candidates.append(candidate)
                 if len(candidates) != 1:
                     raise ValueError("gitdir does not identify one registered worktree")
                 target = candidates[0]
-                backpointer = target / "gitdir"
+                commondir = require_regular_file(
+                    target / "commondir", maximum_bytes=4096
+                )
+                if commondir.read_bytes() != b"../..\n":
+                    raise ValueError("registered worktree common directory differs")
+                backpointer = require_regular_file(
+                    target / "gitdir", maximum_bytes=4096
+                )
                 back_raw = backpointer.read_bytes()
-                if (
-                    back_raw.count(b"\n") != 1 or not back_raw.endswith(b"\n")
-                    or not os.path.samefile(os.fsdecode(back_raw[:-1]), admin_path)
-                ):
+                back_name = _one_output_line(
+                    back_raw, "registered worktree backpointer"
+                )
+                back_target = _host_absolute_git_path(
+                    git,
+                    worktree,
+                    environment,
+                    back_name,
+                    "registered worktree backpointer",
+                )
+                if not os.path.samefile(back_target, admin_path):
                     raise ValueError("registered worktree backpointer differs")
-            except (OSError, ValueError, UnicodeError) as error:
+            except (OSError, ToolAttestationError, ValueError, UnicodeError) as error:
                 raise ToolAttestationError(
                     "worktree Git administration file escapes its repository"
                 ) from error
@@ -491,6 +619,7 @@ def verify_evaluation_source_tree(
         raise ToolAttestationError(
             f"Git registered worktree differs from evaluation worktree {stage}"
         )
+    _linked_worktree_administration(git, repository, worktree, environment)
     tracked_paths = _tracked_path_inventory(git, repository, commit, environment)
     _verify_tracked_parent_directories(worktree, tracked_paths)
     executable_mode_verified = _executable_mode_is_reliable(git, worktree, environment)
@@ -516,6 +645,8 @@ def verify_evaluation_source_tree(
     for relative, is_directory in _filesystem_worktree_paths(
         repository,
         worktree,
+        git=git,
+        environment=environment,
         generated_roots=roots,
         generated_files=files,
     ):

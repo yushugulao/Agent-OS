@@ -211,7 +211,9 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         attestation.ToolAttestationError, "administration file"
                     ):
-                        source_gate._filesystem_worktree_paths(repository, worktree)
+                        source_gate._filesystem_worktree_paths(
+                            repository, worktree, git=git, environment=environment
+                        )
                     gitfile.write_bytes(original)
             target_name = os.fsdecode(original.removeprefix(b"gitdir: ").rstrip(b"\n"))
             backpointer = Path(target_name) / "gitdir"
@@ -222,9 +224,23 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     attestation.ToolAttestationError, "administration file"
                 ):
-                    source_gate._filesystem_worktree_paths(repository, worktree)
+                    source_gate._filesystem_worktree_paths(
+                        repository, worktree, git=git, environment=environment
+                    )
             finally:
                 backpointer.write_bytes(original_backpointer)
+            commondir = Path(target_name) / "commondir"
+            original_commondir = commondir.read_bytes()
+            try:
+                commondir.write_bytes(b"../../outside\n")
+                with self.assertRaisesRegex(
+                    attestation.ToolAttestationError, "administration file"
+                ):
+                    source_gate._filesystem_worktree_paths(
+                        repository, worktree, git=git, environment=environment
+                    )
+            finally:
+                commondir.write_bytes(original_commondir)
             if os.name == "posix":
                 external = base / "external-gitfile"
                 external.write_bytes(original)
@@ -241,7 +257,87 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         attestation.ToolAttestationError, "administration entry"
                     ):
-                        source_gate._filesystem_worktree_paths(repository, worktree)
+                        source_gate._filesystem_worktree_paths(
+                            repository, worktree, git=git, environment=environment
+                        )
+
+    def test_linked_worktree_is_accepted_from_its_own_repository_root(self) -> None:
+        git_name = shutil.which("git")
+        if git_name is None:
+            self.skipTest("git is unavailable")
+        git = Path(git_name).resolve()
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source, _git, commit, environment = self._source_fixture(base)
+            checkout = base / "checkout"
+            checkout.mkdir()
+            _repository, worktree = attestation.create_isolated_detached_worktree(
+                git, source, commit, checkout, environment
+            )
+
+            receipt = source_gate.verify_evaluation_source_tree(
+                git,
+                worktree,
+                worktree,
+                commit,
+                environment,
+                stage="direct linked worktree fixture",
+            )
+
+            self.assertEqual(receipt.tracked_files, 3)
+
+    def test_linked_worktree_rejects_an_alternate_object_store(self) -> None:
+        git_name = shutil.which("git")
+        if git_name is None:
+            self.skipTest("git is unavailable")
+        git = Path(git_name).resolve()
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source, _git, commit, environment = self._source_fixture(base)
+            checkout = base / "checkout"
+            checkout.mkdir()
+            repository, worktree = attestation.create_isolated_detached_worktree(
+                git, source, commit, checkout, environment
+            )
+            alternates = repository / ".git" / "objects" / "info" / "alternates"
+            alternates.parent.mkdir(exist_ok=True)
+            alternates.write_text(str(base / "outside") + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                source_gate.ToolAttestationError, "alternate object store"
+            ):
+                source_gate.verify_evaluation_source_tree(
+                    git,
+                    worktree,
+                    worktree,
+                    commit,
+                    environment,
+                    stage="alternate object fixture",
+                )
+
+    def test_linked_worktree_from_alternate_common_directory_is_rejected(self) -> None:
+        git_name = shutil.which("git")
+        if git_name is None:
+            self.skipTest("git is unavailable")
+        git = Path(git_name).resolve()
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repository, _git, _commit, environment = self._source_fixture(
+                base / "first"
+            )
+            source, _git, commit, _environment = self._source_fixture(base / "second")
+            checkout = base / "checkout"
+            checkout.mkdir()
+            _other_repository, worktree = attestation.create_isolated_detached_worktree(
+                git, source, commit, checkout, environment
+            )
+
+            with self.assertRaisesRegex(
+                source_gate.ToolAttestationError, "administration file"
+            ):
+                source_gate._filesystem_worktree_paths(
+                    repository, worktree, git=git, environment=environment
+                )
 
     def test_raw_worktree_bytes_must_equal_committed_blob(self) -> None:
         git_name = shutil.which("git")
