@@ -1,78 +1,67 @@
 # AgentOS-uCore 竞赛评审入口
 
-本页面向首次接触项目的评委和复现人员。它只提供可快速核对的导航，不替代完整设计文档，
-也不把历史结果或待采集数据写成当前提交的证据。
+AgentOS-uCore 面向长时间、多角色的 AI Agent 工作流，在 RISC-V 64 uCore 中提供结构化工具调用、可信 Context、语义文件查询、事件驱动 Agent Loop、workflow 生命周期和统一资源控制。
 
-## 一分钟了解项目
+根目录是 AgentOS-uCore；`baseline_ucore/` 是不含 AgentOS 服务的共享安全基底对照。两侧运行同一科研 Agent 工作流，用于区分用户态实现与内核原生机制的行为和成本。
 
-AgentOS-uCore 在 RISC-V 64 uCore 教学内核中加入 Agent 身份与 Context、结构化工具调用、
-Context Path、文件对象语义查询、事件驱动 Agent Loop、可信 workflow 生命周期和统一资源控制。
-同一科研 Agent 工作流分别运行在根目录增强内核和 `baseline_ucore/` 对照目标上；后者是
-共享通用安全加固的对照组，不是未经修改的上游 uCore。
+## 核心能力
 
-本地赛题说明要求系统在 QEMU 上运行，并交付内核源码、用户态测试、综合示例、设计文档和
-运行说明。任务一至三为必做，任务四至六提供进阶和创新评分。实现与要求的逐条对应关系见
-[赛题要求追踪表](../agentos/requirements-traceability.md)。
-
-## 建议审阅顺序
-
-| 时间 | 内容 | 入口 |
+| 赛题任务 | 系统能力 | 演示观察点 |
 | --- | --- | --- |
-| 3 分钟 | 项目定位、任务一至六完成面 | [根 README](../../README.md)、[要求追踪表](../agentos/requirements-traceability.md) |
-| 8 分钟 | 内核边界、关键抽象和机制/策略分离 | [系统设计](../agentos/design.md)、[系统调用与 ABI](../agentos/api.md) |
-| 5 分钟 | 科研 Agent 综合场景 | [演示脚本](../agentos/scenario-script.md) |
-| 8 分钟 | 双目标实验、统计口径和禁止外推边界 | [评价方法](../evaluation.md)、[验证说明](../verification.md) |
-| 3 分钟 | 第三方来源、原创增量和 AI 辅助开发 | [第三方与原创说明](third-party-and-originality.md)、[AI 工具使用披露](ai-usage-disclosure.md) |
+| 任务一 | Agent 身份、角色、Context 映射和生命周期 | 普通进程与 Agent 共存，Context 可直接读取 |
+| 任务二 | 名称协议、typed KV、工具目录和批处理 | 结构化请求、响应、错误和扩展字段 |
+| 任务三 | Context Path、快照、FIFO 淘汰和 rollback | 连续工具调用、分支回溯和可信历史 |
+| 任务四 | inode 绑定 metadata、摘要、索引和租约 | 路径遍历与语义索引实测对照 |
+| 任务五 | watch/wait、heartbeat、IPC 和公平调度 | 无事件休眠、事件唤醒和多 Agent 协作 |
+| 任务六 | 科研 Agent 检索、分析、恢复、写作和审计流程 | 双目标完整场景、结果一致性和阶段耗时 |
 
-## 最短复现路径
+[赛题要求追踪表](../agentos/requirements-traceability.md)列出每项要求对应的实现、ABI 和动态测试入口。
+
+## 实测数据
+
+[正式证据索引](../../evidence/releases/INDEX.md)是评审数据入口。索引存在 release 记录时，请打开最新 bundle 内的 `dashboard/index.html`；索引为空表示正式数据尚未发布，不应引用开发日志或历史结果。正式 Dashboard 展示实际样本，而不是测试状态汇总：
+
+- 路径遍历与 metadata 索引的各负载耗时、工作量和样本数；
+- metadata 全表扫描消融、工具批处理和 Context 映射读取；
+- Task 6 双目标 p50/p95、逐阶段耗时、结果一致性和样本数；
+- 两个内核的 ELF、text/data/BSS，以及 `struct proc` 和栈预算。
+
+每个数值均可从 Dashboard 回到 bundle 中登记的 Guest/Host 原始材料、源码提交和执行环境。统计方法与比较边界见[评价方法](../evaluation.md)。
+
+## 三分钟演示
 
 在已安装 Bash、Python 3.10+、RISC-V GCC/binutils 和 `qemu-system-riscv64` 的 POSIX 环境中：
 
 ```bash
 make doctor
+make contest-demo TOOLPREFIX=riscv64-linux-gnu-
+make contest-demo-check
+```
+
+演示包含任务一至五的结构化功能路径和短版多 Agent 科研恢复场景，不连接云 API。完整科研工作流的讲解顺序见[演示脚本](../agentos/scenario-script.md)。
+
+## 完整复现
+
+```bash
 make target-readiness
 make ci-check
+AGENT_TEST_DURATION_PROFILE=none make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-这些命令分别检查环境、Host/Reader 合同和静态内核预算，不等于 QEMU 动态验收。典型动态入口为：
+正式评价的采集、复验、成本测量、Dashboard 和打包入口见[评价方法](../evaluation.md)；Windows、WSL 和 MSYS2 配置见[Windows 快速开始](../windows-quickstart.md)。同一工作树内不要并发运行多个 QEMU 测试。
 
-```bash
-make agentos-test TOOLPREFIX=riscv64-linux-gnu-
-make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
-```
+## 建议审阅顺序
 
-完整发布验收入口是：
+| 时间 | 内容 | 入口 |
+| --- | --- | --- |
+| 3 分钟 | 项目定位与任务一至六 | [根 README](../../README.md)、[要求追踪表](../agentos/requirements-traceability.md) |
+| 8 分钟 | 架构、内核边界与机制/策略分离 | [系统设计](../agentos/design.md)、[系统调用与 ABI](../agentos/api.md) |
+| 5 分钟 | 科研 Agent 综合场景 | [演示脚本](../agentos/scenario-script.md) |
+| 8 分钟 | 实验设计、原始材料和统计口径 | [正式证据索引](../../evidence/releases/INDEX.md)、[评价方法](../evaluation.md) |
 
-```bash
-make full-verify TOOLPREFIX=riscv64-linux-gnu-
-```
+## 项目材料
 
-Windows/WSL 和 MSYS2 的工具配置见 [Windows 快速开始](../windows-quickstart.md)。同一工作树内
-不要并发运行多个 QEMU 测试，因为它们可能访问同一文件系统镜像。
-
-## 当前证据状态
-
-截至本页所在提交，源码、测试合同和评价框架已经进入仓库，但以下事实必须区分：
-
-- [正式证据索引](../../evidence/releases/INDEX.md) 尚未登记当前提交的 release bundle；
-- `a9e7c67feda5` 已完成三轮 18-case 未签名本地 E3 校准，当前时长状态为 `calibrated_full_suite`；包内 57 份执行 attestation、三轮 timing 和源码指纹均已由 checker 重算；
-- 历史提交的日志和校准只证明其绑定提交，不能自动证明当前提交；
-- `results/latest/` 和 development Dashboard 是可覆盖预览，不是提交证据；
-- 没有可用远程 Runner 时可以形成绑定干净提交的本地 E3，但不能宣称远程 CI/E4；
-- 新评价体系已定义真实路径对照和正式科研场景统计，但必须在同一冻结提交上实际运行、复验并
-  打包后，才能引用由数据支持的性能结论。
-
-因此，当前正确表述是“机制/静态验收和候选校准完成，完整动态发布证据待生成”，而不是“最终验收已通过”。
-最新状态应始终以 `evidence/releases/INDEX.md` 及其指向 bundle 的 manifest 为准。
-
-## 提交材料
-
-- [提交前检查清单](submission-checklist.md)
+- [视频和幻灯片](../../项目介绍视频和ppt网盘链接.txt)
+- [第三方来源与原创增量](third-party-and-originality.md)
 - [AI 工具使用披露](ai-usage-disclosure.md)
-- [第三方与原创增量说明](third-party-and-originality.md)
-- [材料版本与 SHA-256 清单模板](materials-manifest-template.md)
-- [现有视频和幻灯片下载入口](../../项目介绍视频和ppt网盘链接.txt)
 - [源码许可证](../../LICENSE)、[文档许可证](../../DOCUMENTATION_LICENSE.md)、[第三方通知](../../NOTICE)
-
-外部网盘链接不能代替版本绑定。最终提交时应下载实际材料、计算 SHA-256，并把文件名、大小、
-版本和下载位置写入材料清单；无法随仓库交付的大文件至少要提供稳定链接和校验值。

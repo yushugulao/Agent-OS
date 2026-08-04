@@ -7,17 +7,14 @@
 首次审阅请从 [竞赛评审入口](docs/contest/README.md) 开始。该页把赛题任务映射、最短验证路径、
 提交材料、第三方来源和当前证据边界集中在一起；完整技术说明仍保留在本文后续章节。
 
-> 当前仓库已经包含任务实现、测试和评价工具。冻结提交 `a9e7c67feda5` 已在绑定的
-> `local-e3` 环境完成三轮 18-case 本地时长校准，配置状态为 `calibrated_full_suite`；
-> 但 `evidence/releases/INDEX.md` 尚未登记当前提交的正式证据包。因此校准材料、历史日志、
-> 预览页面和评价框架不能表述为当前提交已经通过最终验收。发布前剩余事项见
-> [提交清单](docs/contest/submission-checklist.md)。
+> 评审数据统一从 [正式证据索引](evidence/releases/INDEX.md) 读取。每条记录绑定源码提交、
+> 执行环境、原始材料和离线 Dashboard；开发日志和历史结果不作为当前 release 的数据来源。
 
 ## 一、基本信息
 
 | 项目 | 内容 |
 | --- | --- |
-| 项目名称 | `project61-agentOS-happylegend` |
+| 项目名称 | AgentOS-uCore |
 | 基础系统 | uCore RISC-V 教学操作系统 |
 | 项目定位 | 在教学操作系统中实现面向 AI Agent / LLM 工作流的通用内核机制 |
 | 主目标 | 根目录 AgentOS-uCore 增强内核 |
@@ -58,9 +55,9 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 - 根目录目标：AgentOS-uCore 增强内核。科研 Agent 平台保持同一输入场景和输出契约，关键阶段使用内核 Agent 服务。
 - `baseline_ucore/` 目标：共享 syscall、文件系统和进程生命周期等通用安全加固，但不包含 AgentOS 服务。科研 Agent 平台全部运行在普通用户态进程和普通文件之上。
 
-也就是说，科研 Agent 平台先作为普通用户态应用存在，再分别放到两个目标里运行。读者看到的是同一套流程在“普通 uCore”和“AgentOS-uCore”两种系统条件下的表现。
+也就是说，科研 Agent 平台先作为普通用户态应用存在，再分别放到两个目标里运行。读者看到的是同一套流程在“共享安全基底对照”和“AgentOS-uCore”两种系统条件下的表现。
 
-这种双目标设计让同一科研 Agent 工作流分别运行在普通 uCore 和 AgentOS-uCore 上。普通目标说明纯用户态路径可以完成的工作，增强目标说明内核支持在文件查询、上下文读取、事件等待、失败恢复、权限控制和运行记录方面带来的差异。
+这种双目标设计让同一科研 Agent 工作流分别运行在共享安全基底对照和 AgentOS-uCore 上。对照目标说明纯用户态路径可以完成的工作，增强目标说明内核支持在文件查询、上下文读取、事件等待、失败恢复、权限控制和运行记录方面带来的差异。
 
 综合分析项目创新点如下：
 
@@ -96,14 +93,12 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 - [x] 实现 AgentOS 专项测试、双目标 QEMU 运行、状态文件对照和状态查看工具。
 - [x] 提供默认离线 LLM Relay，并支持本机配置 cloud Relay。
 - [x] 提供 Windows/WSL 依赖检查脚本和 Ubuntu 依赖安装脚本。
-- [x] 为文件查询 benchmark 生成逐行绑定 Guest 日志、marker、commit 和 run id 的原始对照数据。
-- [ ] Context/timeline、事件等待、并发 Agent、LLM Relay 和恢复阶段当前只有动态功能证据；补齐同等级来源绑定前，不把历史公式产物称为原始实验数据。
+- [x] 提供覆盖四组机制对照、Task 6 双目标场景和内核成本的统一正式评价合同与 Dashboard 生成器。
+- [x] 正式采集时，每项测量绑定 Guest/Host 原始日志、源码提交、执行环境和统计口径；已发布数据以正式证据索引为准。
 
-终审提出的 17 项问题按“机制、验收 oracle、当前证据等级、剩余限制”集中记录在
-[最终加固与证据状态矩阵](docs/agentos/final-hardening-matrix.md)。该矩阵是当前发布状态的
-约束：历史 QEMU 日志不能外推到最终 HEAD。schema v8 采集/语义 registry、严格 C→E 交付和
-远端 1 Host + 8 QEMU job attestation 的 Host/mutation 合同当前是 E1；尚无本轮 release
-bundle 或 E3，远端也没有可用 Runner，不能宣称远程 CI 通过或 E4。
+终审提出的 17 项问题按“机制、验收 oracle、证据等级、剩余限制”集中记录在
+[最终加固与证据状态矩阵](docs/agentos/final-hardening-matrix.md)。正式 release 只引用与源码
+提交绑定的 QEMU、Host 和 Dashboard 材料；未连接的远程 CI 在 manifest 中保持 `not-attached`。
 
 ## 四、方案设计
 
@@ -115,7 +110,7 @@ bundle 或 E3，远端也没有可用 Runner，不能宣称远程 CI 通过或 E
 
 **面向 Agent 进程的内核支持。** 我们在 uCore 的进程模型上增加 Agent 身份、角色模板、能力位、上下文区、事件队列、心跳信息和运行统计。普通进程仍按原有 uCore 路径运行；Agent 进程在创建时由内核分配专属元数据和上下文页，之后的工具调用、事件等待、文件查询和审计记录都围绕该身份展开。Agent 实现不再堆叠在单个大文件中：`os/agent.c` 只保留不持有可写状态的兼容 facade，实际 owner 集合由 `ci/kernel-budgets.json` 版本化登记。metadata 控制面进一步拆为事务门 `agent_metadata.c`、incarnation-bound 文件状态 `agent_file_state.c`、catalog、query、scan、目录协调、对象操作和 COW store；Context、身份授权、IPC、生命周期、观测、通用资源控制器与 workflow lifecycle ledger 也各自由对应模块持有。
 
-**面向工具调用和文件对象的系统接口。** Agent 的行动通过结构化工具调用进入内核，工具请求包含工具名称或工具编号、参数类型、参数值、payload 和执行标志；文件对象查询则通过 metadata、摘要、索引和真实 inode 关联完成。这样同一科研平台负载既能在普通 uCore 上运行，也能在 AgentOS-uCore 上使用内核加速和内核记录。
+**面向工具调用和文件对象的系统接口。** Agent 的行动通过结构化工具调用进入内核，工具请求包含工具名称或工具编号、参数类型、参数值、payload 和执行标志；文件对象查询则通过 metadata、摘要、索引和真实 inode 关联完成。这样同一科研平台负载既能在共享安全基底对照上运行，也能在 AgentOS-uCore 上使用内核加速和内核记录。
 
 **面向长期协作的运行记录。** 多 Agent 工作流会出现等待、唤醒、失败恢复、LLM Relay、权限拒绝、文件更新和报告生成等动作。AgentOS-uCore 将这些动作写入 Context Path、timeline、audit ledger 和 provenance 结构，使用户态可以按 Agent、span、工具、事件和时间读取运行过程。
 
@@ -124,10 +119,10 @@ bundle 或 E3，远端也没有可用 Runner，不能宣称远程 CI 通过或 E
 | 层次 | 位置 | 职责 |
 | --- | --- | --- |
 | AgentOS-uCore 内核层 | `os/`、`nfs/` | 扩展进程控制块、系统调用、文件系统元数据、事件等待、审计记录和来源追踪。 |
-| uCore 用户态层 | `user/`、`baseline_ucore/user/` | 提供专项测试、科研 Agent 平台程序、普通目标程序和 AgentOS 目标程序。 |
+| uCore 用户态层 | `user/`、`baseline_ucore/user/` | 提供专项测试、科研 Agent 平台程序、对照目标程序和 AgentOS 目标程序。 |
 | 宿主机工具层 | `host_tools/`、`scripts/` | 构建运行、提取镜像状态、比较双目标结果、生成 CSV/SVG/HTML 材料和运行 LLM Relay。 |
 
-根目录是增强目标，`baseline_ucore/` 是普通 uCore 对照目标。两个目标共享科研平台的核心对象和运行请求，但内核支持程度不同。结构检查脚本会确认：`baseline_ucore/` 不包含 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等增强符号；根目录包含 AgentOS 内核模块、用户态 ABI、专项测试和科研平台增强程序。
+根目录是增强目标，`baseline_ucore/` 是共享安全基底对照目标。两个目标共享科研平台的核心对象和运行请求，但内核支持程度不同。结构检查脚本会确认：`baseline_ucore/` 不包含 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等增强符号；根目录包含 AgentOS 内核模块、用户态 ABI、专项测试和科研平台增强程序。
 
 ### 4.2 核心模块设计
 
@@ -135,7 +130,7 @@ bundle 或 E3，远端也没有可用 Runner，不能宣称远程 CI 通过或 E
 
 #### 4.2.1 Agent 进程与上下文区
 
-本模块面向 Agent 身份、生命周期和地址空间管理。普通 uCore 进程只能通过进程号、父子关系和文件描述符表达运行状态；Agent 工作流需要额外记录当前角色、能力、上下文、事件、心跳和运行原因。进程控制块只保存热路径身份、映射指针和生命周期句柄；完整 Context detail 与可信归因放入按活跃 Agent 分配、受资源账户计费的内核私有 sidecar，避免把固定大数组永久嵌入每个 PCB。`agent_create`、`agent_create_role` 和 `agent_info` 等系统调用让用户态能够创建 Agent、查询真实角色和读取能力位。
+本模块面向 Agent 身份、生命周期和地址空间管理。传统教学内核进程只能通过进程号、父子关系和文件描述符表达运行状态；Agent 工作流需要额外记录当前角色、能力、上下文、事件、心跳和运行原因。进程控制块只保存热路径身份、映射指针和生命周期句柄；完整 Context detail 与可信归因放入按活跃 Agent 分配、受资源账户计费的内核私有 sidecar，避免把固定大数组永久嵌入每个 PCB。`agent_create`、`agent_create_role` 和 `agent_info` 等系统调用让用户态能够创建 Agent、查询真实角色和读取能力位。
 
 Agent Context 固定映射在用户地址空间中，内核同时维护可信 shadow 区、用户可读 mirror 区和用户自管 cache 区。shadow 区保存可信历史；mirror 区提供低成本直接读取；cache 区留给用户态 Agent 保存策略状态。一个活跃 Agent 的完整状态按 21 页整体接纳：9 页私有 detail/attribution sidecar、6 页用户 mirror 和 6 页可信 shadow；控制器先以一次 `RESOURCE_AGENT_STATE_PAGE` 向量预留完成原子计费，任何映射失败都统一回滚 21 页，不允许只发布其中一部分。进程还持有不可变的 workflow lifecycle key，即 `workflow_lifecycle_id + generation`。它不等同于可清除的 Agent/VFS 凭据：fork 后代即使降权为 PUBLIC，仍留在原 workflow 的撤销谱系中；exec 身份准备、地址空间发布和凭据提交使用同一事务边界；只有 terminal teardown 才释放 lifecycle 引用。
 
@@ -284,7 +279,7 @@ Reader seeded-action runner 另把 clean、build、guest 明确分阶段：clean
 
 ## 五、构建与运行
 
-前面的章节说明项目结构和设计。本节给出实际运行顺序：先检查环境，再分别运行普通目标和增强目标，最后用双目标脚本生成可对照的结果材料。
+前面的章节说明项目结构和设计。本节给出实际运行顺序：先检查环境，再分别运行对照目标和增强目标，最后用双目标脚本生成可对照的结果材料。
 
 ### 5.1 依赖检查
 
@@ -308,16 +303,16 @@ bash scripts/install-ubuntu-deps.sh
 
 仓库不内置 QEMU、RISC-V GCC/binutils、WSL 发行版或云端模型密钥。这些内容依赖本机环境或涉及私密配置。公开验证默认使用离线 LLM Relay，不需要外部密钥。
 
-### 5.2 普通 uCore 目标
+### 5.2 共享安全基底对照目标
 
-普通目标是实验对照组，不属于 AgentOS 系统本体。它与主目标共享不依赖 AgentOS 的 syscall、同步、文件系统和进程生命周期安全加固，但不提供 Agent syscall、Agent Context、Agent 文件 metadata 或 Agent 事件队列。它用于比较哪些工作由普通用户态约定完成，哪些工作可以交给 AgentOS 内核机制。
+对照目标不属于 AgentOS 系统本体。它与主目标共享不依赖 AgentOS 的 syscall、同步、文件系统和进程生命周期安全加固，但不提供 Agent syscall、Agent Context、Agent 文件 metadata 或 Agent 事件队列。它用于比较哪些工作由普通用户态约定完成，哪些工作可以交给 AgentOS 内核机制。
 
 ```bash
 make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
 make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-普通目标运行科研 Agent 平台的用户态版本，使用普通进程、普通文件、`fork`、`exec`、`waitpid`、`open`、`read`、`write`、`close` 等机制生成 `rp_*` 状态文件。
+对照目标运行科研 Agent 平台的用户态版本，使用普通进程、普通文件、`fork`、`exec`、`waitpid`、`open`、`read`、`write`、`close` 等机制生成 `rp_*` 状态文件。
 
 ### 5.3 AgentOS-uCore 目标
 
@@ -434,7 +429,7 @@ Task 1-5 的功能 receipt 还受版本化 token 源码合同约束：它封闭 
 
 ### 5.5 双目标运行
 
-单独运行两个目标只能证明它们各自可用；双目标运行会把两次 QEMU 输出、状态文件和经验证的实验数据放到同一目录结构下，便于后续页面和图表读取。旧 `dual-platform-run` 的发布级性能证据仍只覆盖文件查询 benchmark；5.4 节的新评价套件另外采集 Context 读取、工具批处理和完整科研 workflow，但只有正式 campaign 通过并生成绑定 summary 后才能形成新结论。
+双目标运行把两次 QEMU 输出和状态文件放到同一目录结构，适合开发调试和场景复查。正式性能数据由 5.4 节的评价套件统一采集，不从双目标状态文件或页面计数推导。
 
 ```bash
 make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
@@ -449,7 +444,7 @@ seeded 参考产物另由目标相关的 reference registry 精确登记“源�
 双目标状态与 Host 执行回执属于不同信任域。每侧 complete-state ZIP 只包含 `extract-summary.json` 和其中精确列出的 Guest `rp_*` 普通文件，明确禁止 `rp_host_run_result`；Plain/AgentOS 的 Host run receipt 分别以 `dual-plain-host-run-result.state` 和 `dual-agentos-host-run-result.state` 作为独立 raw sidecar 保存。`sha256-inventory-v1` receipt 绑定排序后的 Guest 文件名、文件数、逐文件长度和全部内容，Reader 与双目标比较器都会重算并拒绝同文件数篡改。Host LLM relay 只发布独立的差异 overlay，不再原地修改已签收的 Guest 快照；overlay 与 action runner 共用逐组件链接检查和私有目录机制，拒绝 symlink、Windows junction 及链接祖先。离线验证会安全解包两份 ZIP，以 `min_common_files=240`、两份 receipt、seeded summary 和两份 Guest 日志显式重放 `compare_state()`，要求结果等于 `dual-state-compare.json`，并逐字核对 Mainflow、program ledger 与 backend 原件。普通 `make dual-platform-run` 只保留状态目录和 Host sidecar；只有最终采集使用的 `full-verify` evidence mode 才生成并发布 complete-state ZIP。
 
 - `/tmp/agentos-dual-platform/`：QEMU 日志、纯 Guest 状态目录、独立 Host run receipt、页面渲染结果和阶段耗时。
-- `results/latest/`：`summary.csv`、`runner-sweep.csv`、`experiments/raw/file-query-benchmark.csv`、`experiments/status.json`、`experiments/experiment-stats.csv`、`charts/*.svg`、`report.md`、`reader-guide.html`、`monitor.html` 等本地预览材料。当前只有文件查询 benchmark 是由 Guest 日志逐行绑定的原始实测；缺少可信 marker 时，该实验必须显示为 unavailable，不能生成替代数据。当前仓库没有独立、可信的 runner tick runtime producer，因此 `runner-sweep.csv` 只允许 `unavailable/plain_runtime_cases_zero` 且没有数据行；旧 measured collector 和两张推导图已删除，不能用任意 source blob 或参考目录恢复性能结论。
+- [正式证据索引](evidence/releases/INDEX.md)：冻结 release 的 Dashboard、统计摘要、内核成本和原始材料入口。
 
 如果运行长时间没有输出，优先查看：
 
@@ -500,7 +495,7 @@ make target-readiness
 
 运行命令回答“怎么跑”，测试章节回答“跑完以后应该看什么”。本节把专项测试、双目标实验、原始数据和图表结果放在同一条叙事里。
 
-测试部分按“测试对象、实验负载、原始数据、图表结果、结论解释”组织。我们不只检查某个程序是否输出 `passed`，还把普通 uCore 与 AgentOS-uCore 放在同一批输入下运行，记录扫描数、候选数、重建步骤、轮询次数、拒绝次数、tick 观测和状态文件结果。功能状态用于回答系统路径是否完整；只有 provenance-bound 文件查询 benchmark 当前可用于比较同一负载下的用户态查询成本，其他机制不能从派生计数外推性能结论。
+测试部分按“机制回归、双目标场景、正式评价、证据复验”组织。同一批输入分别进入共享安全基底对照和 AgentOS-uCore；正式评价记录真实耗时、工作量、功能结果与内核成本，派生计数只用于解释，不替代测量。
 
 本章“关键输出”中的字面 `...` 只表示省略字段的格式示例，不是实际 Guest marker；验收时
 必须使用 validator 要求的完整原行。
@@ -514,11 +509,11 @@ make target-readiness
 | AgentOS 专项测试 | `scripts/run-agent-tests.sh`、`make agentos-test` | 逐项检查 Agent 进程、工具调用、Context、文件查询、事件循环、调度、LLM、权限和冲突控制。 |
 | 安全与资源专项 | 既有资源入口，加 `make physical-resource-test`、`make metadata-recovery-test`、`make observe-recovery-test`、`make virtio-disk-test`、`make fs-allocator-fault-test` | 检查资源耗尽/退款、物理页保留、metadata 与观测同盘重启、VirtIO 故障恢复、文件系统分配事务一致性及跨资源 teardown；必须以动态 Guest marker 判定。 |
 | 内核增长预算 | `make ci-check` | 以固定工具链/profile 检查源码、镜像、运行段、PCB、栈容量和 Agent 模块边界；不启动 QEMU，也不等同于动态回归。 |
-| 双目标运行测试 | `make dual-platform-run` | 让同一科研 Agent 请求分别进入普通 uCore 和 AgentOS-uCore，生成可比较状态文件。 |
+| 双目标运行测试 | `make dual-platform-run` | 让同一科研 Agent 请求分别进入共享安全基底对照和 AgentOS-uCore，生成可比较状态文件。 |
 | 宿主机工具测试 | `host_tools/test_*.py` | 检查镜像提取、状态对照、页面渲染、图表契约和 LLM Relay 模式。 |
 | 完整验证 | `make full-verify` | 按 profile v5 串联 Host/Reader、18-case Agent、双目标和十一类机制 runner；证据模式保留 runner stdout、Guest 合并日志及 allocator canonical archive。 |
 
-AgentOS 专项测试程序如下。表内 marker 是验收合同或历史输出，不是当前候选已经通过的声明；在同一冻结提交 C 的动态日志、三轮校准和 release bundle 生成前，当前状态统一为“机制/静态验收完成，候选动态复验待生成”。
+AgentOS 专项测试程序如下。表内 marker 描述动态验收合同；具体 release 的运行次数、耗时和结果从正式证据索引读取。
 
 | 测试程序 | 主要内容 | 关键输出 |
 | --- | --- | --- |
@@ -536,48 +531,44 @@ AgentOS 专项测试程序如下。表内 marker 是验收合同或历史输出�
 | `agenttoolabi_ucore` | V1 兼容、V2 sized typed KV、单一 typed rule 派生的 25 项 schema 全表、15 字符键容量边界、两版 LLM response、用户缓冲哨兵、可选参数/heartbeat 描述、参数重排及未知/重复/类型/size/version 负向矩阵。 | `schema_generated=1 validated=25`、`key_capacity=1 llm_response_v1_v2=1 buffer_sentinel=1`、`optional_schema=1 heartbeat_zero_stop=1`、`strict_negative_matrix=1`、`parent passed` |
 | `agenttrust_ucore` | 可信映像、不可变代码、bootstrap 授权范围和 role-image 绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | public/workflow 文件安全域、能力读写、继承 fd 重新校验和普通命名空间兼容。 | `agentvfs_ucore: parent passed` |
-| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、持久微写合并、volatile 分流、观测双索引与预算化查询、配额、线程私有一次性 fd 委派，以及根退出/factory 关闭触发的强制撤销和 lifecycle generation 回收。 | 历史专项约 `93.7s`，曾输出 `scope_controller_exit_revoke=1 public_lineage=1` 和 `agentscope_ucore: parent passed`；最终 HEAD 待复跑 |
-| `iobudget_ucore` | PUBLIC 速率/缓存压力、稳定 owner 归因、两级 lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault/异常退出清理归因与 debt 结算、workflow cache floor、CONTROL 保留预算和跨域有界进展。 | ABI v5 定向结果仅作阶段性回归；当前候选的动态状态只由冻结提交的原始日志和对应 release bundle 判定 |
+| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、持久微写合并、volatile 分流、观测双索引与预算化查询、配额、线程私有一次性 fd 委派，以及根退出/factory 关闭触发的强制撤销和 lifecycle generation 回收。 | `scope_controller_exit_revoke=1 public_lineage=1`、`agentscope_ucore: parent passed` |
+| `iobudget_ucore` | PUBLIC 速率/缓存压力、稳定 owner 归因、两级 lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault/异常退出清理归因与 debt 结算、workflow cache floor、CONTROL 保留预算和跨域有界进展。 | ABI v5 机制标记、`iobudget_ucore: parent passed` |
 | `usersafety_ucore` | syscall 坏地址、超长参数和对象私有等待队列。 | `usersafety_ucore: parent passed` |
 | `blocking_semantics_ucore` | mutex owner、递归/非 owner 拒绝、owner 退出交接、FIFO waiter，以及 waittid/pipe/close 唤醒语义。 | `mutex_owner=1 ... owner_exit_handoff=1`、`waittid_sleep=1 pipe_wait_queue=1 close_wake_all=1`、`parent passed` |
-| `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 历史双目标运行曾通过；当前候选只由冻结提交的原始日志和对应 release bundle 授予动态通过状态 |
+| `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 公平性阶段标记、`syscallfair_ucore: parent passed` |
 | `threadresource_ucore` | 普通/保留域上限与复用、容量拒绝计数稳定、普通/保留全局水位与复用、系统保留进展和跨域调度公平。 | `make thread-resource-test` 输出 12 项机制标记、`parent passed` 和 `[thread-resource] all checks passed` |
 
 `workflow_teardown_race_ucore` 是独立机制专项，不计入上表 18-case Agent 套件。它通过 syscall 546 的 self-only lifecycle 快照确定竞态窗口，并连续三轮组合覆盖 factory 撤销、根自然退出、PUBLIC 后代、Context lane、metadata transaction gate、阻塞 `fdget` 临时引用、I/O debt/cache、inode/file object 回收和 lifecycle generation 重用。
 
-`371.5s`、`127.9s` 和 `126.1s` 保留为 Workflow 强制撤销早期实现的历史数据。2026-07-26，提交 `75d0dfde716453af90d7310c6a1521968fcf7167` 在干净环境完成一次 `make full-verify TOOLPREFIX=riscv64-linux-gnu-`，墙钟 `19:45.97`；该 checkpoint 不能外推到后续代码。当前候选的 Reader、双目标、预算、聚合门和发布边界只在 [测试记录](docs/agentos/test-record.md) 集中维护，远端状态只由同一提交的 Runner attestation 判定。
+专项测试的历史记录集中保存在[测试记录](docs/agentos/test-record.md)；本页不把历史耗时并入正式评价。
 
-### 6.2 双目标负载与实测边界
+### 6.2 正式评价对象
 
-双目标运行仍会执行同一批科研 Agent 请求，生成状态文件、Reader 页面和运行诊断。不过，这些功能状态与派生计数不自动等同于“原始实验数据”。当前仓库只承认一组 provenance-bound Guest 实测：`agentbench_ucore` 的文件查询 benchmark。
+正式评价在同一冻结源码、执行环境和预注册负载下采集四组机制对照，并把综合场景和内核成本分别呈现：
 
-该 benchmark 在同一次真实 AgentOS Guest 运行中测量三条路径：强制遍历 metadata catalog、包含索引重建成本的冷索引查询，以及索引已就绪后的多次热索引查询。热路径每次仍真实遍历索引候选，不使用内核查询结果缓存。Guest 必须先输出完整的 `file_query_benchmark ... status=measured` 行，并在之后输出完整的 `agentbench_ucore: parent passed`；宿主机提取器才会生成测量数据。
-
-```mermaid
-flowchart LR
-    A["Agent suite Guest 原始日志"] --> B["完整 benchmark marker"]
-    B --> C["完整 parent passed marker"]
-    C --> D["校验字段、顺序与来源"]
-    D --> E["file-query-benchmark.csv"]
-    D --> F["measured-experiments.json"]
-    E --> G["统计表与文件查询图"]
-    F --> G
-```
-
-每一行原始测量都绑定来源日志路径和 SHA256、marker SHA256、行号、实际命令、commit 与 run id。缺少 marker、通过行、来源文件或任一绑定字段时，实验状态是 `unavailable`，汇总工具不会用公式、常量或状态文件派生值补齐。Context/timeline、事件等待、并发写入、LLM Relay 和恢复流程仍有动态功能测试，但在补充同等级来源绑定前，不再宣称它们拥有独立原始实验数据或性能曲线。
-
-### 6.3 结果产物与图表
-
-| 材料 | 位置 | 说明 |
+| 对象 | 对照 | 展示数据 |
 | --- | --- | --- |
-| QEMU 日志和提取状态 | `/tmp/agentos-dual-platform/` | 保存两个目标的原始运行输出、状态文件和阶段耗时。 |
-| 文件查询原始测量 | `results/latest/experiments/raw/file-query-benchmark.csv` | 保存强制遍历、冷索引和热索引的实际操作数、触达记录数、未经补值的 Guest 微秒差值及完整 provenance 字段。 |
-| 测量状态 | `results/latest/experiments/status.json` | 明确本轮测量是 `measured` 还是 `unavailable`，并引用来源日志、commit 与 run id。 |
-| 统计和图表 | `results/latest/experiments/experiment-stats.csv`、`results/latest/charts/experiment-file-query-bar.svg` | 只从已验证的文件查询原始测量聚合；图表不是独立证据。 |
-| 双目标完整状态 | `evidence/releases/<bundle>/logs/raw/dual-{plain,agentos}-complete-state.zip` | 确定性保存每侧完整 Guest 状态；Host run receipt 作为同目录独立 raw artifact，不混入 ZIP。 |
-| 最终证据包 | `evidence/releases/<bundle>/metrics/file-query-benchmark.{csv,json}` | 在 clean、已提交 HEAD 上由 `make full-verify` 采集并纳入逐文件校验和。 |
+| 任务四路径查询 | 逐路径 `open/read/fstat/close` 与就绪 metadata 索引 | 各负载中位数、区间、触达记录数与查询工作量 |
+| metadata 索引消融 | 强制全表扫描与就绪索引 | 各负载查询耗时、扫描量和索引诊断 |
+| 结构化工具批处理 | 标量工具调用与 `agent_run` 批处理 | 24/64/96 次操作的实测耗时 |
+| Agent Context 访问 | Context syscall 与用户态映射视图 | 24/64/96 次读取的实测耗时 |
+| Task 6 科研场景 | 共享安全基底对照与 AgentOS-uCore 完整工作流 | 冷启动、阶段耗时、p50/p95、结果一致性和预注册 outcome |
+| 内核成本 | 两个目标的同配置构建 | ELF、text/data/BSS、`struct proc`、栈和预算占用 |
 
-`results/latest/` 是可覆盖的本地预览，不是最终发布证据。正式结论应引用已提交的 `evidence/releases/<bundle>/`，并通过 `python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py verify evidence/releases/<bundle> --contract-root <clean-checkout-of-C>` 核验；显式可信源码根必须是该证据 commit C 的干净 checkout，不能用证据提交 E 冒充，裸 Python 入口不属于正式验收路径。
+四组机制数据来自真实 Guest 执行；Task 6 只解释完整系统路径；内核成本作为独立护栏，不与延迟合成单一分数。原始日志、统计摘要和 Dashboard 使用同一来源清单与哈希。
+
+### 6.3 正式数据入口
+
+[正式证据索引](evidence/releases/INDEX.md)是评审数据的唯一入口。每个索引记录指向一个不可覆盖的 release bundle，评委可从中查看：
+
+| 内容 | bundle 内位置 |
+| --- | --- |
+| 离线数据看板 | `dashboard/index.html` |
+| 机器可读汇总 | `dashboard/evaluation-summary.json`、`dashboard/metrics.csv` |
+| 采集身份与文件校验 | `manifest.json`、`checksums.sha256` |
+| Guest/Host 原始材料 | manifest 登记的 evidence 与日志归档 |
+
+README 不复制某次运行的数值。引用结果时应指明 release、源码提交和样本量，并以 bundle 中的 Dashboard 与原始材料为准。
 
 ### 6.4 推荐运行命令
 
@@ -616,17 +607,11 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make ci-check
 ```
 
-重新生成汇总材料：
-
-```bash
-python3 host_tools/summarize_dual_platform_results.py \
-  --work-dir /tmp/agentos-dual-platform \
-  --out-dir results/latest
-```
+正式结果与离线 Dashboard 从 [正式证据索引](evidence/releases/INDEX.md) 进入。
 
 ### 6.5 测试小结
 
-从当前测试组织看，AgentOS-uCore 的测试由三个层次共同支撑：专项 Guest 测试检查机制是否独立可用；双目标运行检查同一科研平台负载能否在两个内核目标上完成；provenance-bound 文件查询 benchmark 提供当前唯一可作为原始性能数据的 Guest 实测。其他状态表、页面和图表用于功能验收与诊断，不能冒充尚未采集的实验数据。详细边界见 [docs/verification.md](docs/verification.md) 与 [docs/agentos/verification.md](docs/agentos/verification.md)。
+AgentOS-uCore 以专项 Guest 测试检查机制，以双目标运行检查完整科研流程，再由正式评价包汇集四组机制、Task 6 和内核成本数据。评审数值统一从 [正式证据索引](evidence/releases/INDEX.md) 读取；详细口径见 [docs/evaluation.md](docs/evaluation.md) 与 [docs/verification.md](docs/verification.md)。
 
 ## 七、文档入口
 

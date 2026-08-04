@@ -16,7 +16,7 @@
 
 ## 发布阻塞项
 
-- [ ] 在固定 runner、同一干净提交上完成三轮完整 18-case 校准，并提交有效校准记录。
+- [ ] 在固定执行环境中核对最终提交的受管测试源码指纹；与有效校准指纹一致时复用，发生漂移时在干净 detached worktree 重新完成三轮完整 18-case 校准并提交记录。
 - [ ] 用校准后的策略从干净 worktree 完整通过 `make full-verify`。
 - [ ] 完成正式评价 campaign，而不是 development/smoke 运行；保存全部原始 Guest/Host 工件。
 - [ ] 生成 Dashboard，并从原始数据重放验证，确认性能结论是 `supported`、`regressed` 或

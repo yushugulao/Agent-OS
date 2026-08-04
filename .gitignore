@@ -1,6 +1,12 @@
 .DS_Store
 .vscode
 .idea
+/.env*
+!/.env.example
+!/.env.sample
+!/.env.template
+/tokens.txt
+/*_api.txt
 build
 target
 /build-*
