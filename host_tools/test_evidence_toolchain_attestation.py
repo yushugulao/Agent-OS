@@ -268,8 +268,9 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
         git = Path(git_name).resolve()
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            source, _git, commit, environment = self._source_fixture(base)
-            checkout = base / "checkout"
+            unicode_root = base / "含中文路径"
+            source, _git, commit, environment = self._source_fixture(unicode_root)
+            checkout = unicode_root / "checkout"
             checkout.mkdir()
             _repository, worktree = attestation.create_isolated_detached_worktree(
                 git, source, commit, checkout, environment

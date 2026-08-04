@@ -350,8 +350,12 @@ def _host_absolute_git_path(
     parts = PurePosixPath(value).parts if candidate.is_absolute() else windows.parts
     if not candidate.is_absolute() and windows.is_absolute() and sys.platform == "cygwin":
         cygpath = require_regular_file(Path("/usr/bin/cygpath.exe")).resolve(strict=True)
+        conversion_environment = dict(environment)
+        conversion_environment.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"})
         converted = subprocess.run(
-            [str(cygpath), "-a", "-u", value], cwd=directory, env=environment,
+            [str(cygpath), "-a", "-u", value],
+            cwd=directory,
+            env=conversion_environment,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, check=False, timeout=5,
         )
