@@ -2223,7 +2223,7 @@ def _scenario_duration_metric(value: Any, path: str) -> float:
     return result
 
 
-def _scenario_percentile(values: list[int], quantile: float) -> float:
+def _scenario_percentile(values: list[float], quantile: float) -> float:
     ordered = sorted(values)
     position = (len(ordered) - 1) * quantile
     lower = math.floor(position)
@@ -3680,6 +3680,26 @@ def _evidence_sources(ids: Iterable[str], evidence: dict[str, dict[str, Any]]) -
     return "; ".join(values) if values else "unavailable"
 
 
+def _evidence_entry_link(ids: Iterable[str]) -> str:
+    unique_ids = list(dict.fromkeys(ids))
+    if not unique_ids:
+        return "暂无证据"
+    if len(unique_ids) == 1:
+        return (
+            f'<button class="evidence-link" type="button" '
+            f'data-evidence-ref="{_h(unique_ids[0])}">查看证据</button>'
+        )
+    buttons = "".join(
+        f'<button class="evidence-link" type="button" data-evidence-ref="{_h(evidence_id)}">'
+        f'证据 {index}</button>'
+        for index, evidence_id in enumerate(unique_ids, 1)
+    )
+    return (
+        '<details class="evidence-menu"><summary>'
+        f'{len(unique_ids)} 份证据</summary><div>{buttons}</div></details>'
+    )
+
+
 def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], evidence: dict[str, dict[str, Any]], *, suffix: str) -> str:
     if benchmark["status"] != "measured":
         return (
@@ -3705,6 +3725,7 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
         for field in ("baseline_value", "treatment_value")
     )
     low, high = min(values), max(values)
+    observed_nonnegative = low >= 0
     if low == high:
         pad = abs(low) * 0.1 or 1.0
         low -= pad
@@ -3713,9 +3734,11 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
         pad = (high - low) * 0.08
         low -= pad
         high += pad
+    if observed_nonnegative:
+        low = max(0.0, low)
     plot_left, plot_right = 176.0, 748.0
-    row_height = 92
-    height = 72 + len(loads) * row_height
+    row_height = 104
+    height = 70 + len(loads) * row_height
 
     def x(value: float) -> float:
         return plot_left + (value - low) / (high - low) * (plot_right - plot_left)
@@ -3730,8 +3753,9 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
     ]
     ns: list[int] = []
     for row, load in enumerate(loads):
-        y_base = 67 + row * row_height
-        svg.append(f'<text class="load-label" x="8" y="{y_base + 12}">负载 {_h(load)}</text>')
+        row_top = 64 + row * row_height
+        y_base = row_top + 26
+        svg.append(f'<text class="load-label" x="8" y="{row_top}">负载 {_h(load)}</text>')
         first_x = x(float(estimates[(baseline, load)]["value"]))
         second_x = x(float(estimates[(treatment, load)]["value"]))
         raw_pairs = paired_samples.get(load, [])
@@ -3775,10 +3799,7 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
     raw_pair_count = sum(len(samples) for samples in paired_samples.values())
     n_text = str(ns[0]) if ns and len(set(ns)) == 1 else f"{min(ns)}-{max(ns)}"
     source = _evidence_sources(benchmark["evidence_ids"], evidence)
-    evidence_buttons = " ".join(
-        f'<button class="evidence-link" type="button" data-evidence-ref="{_h(item_id)}">{_h(item_id)}</button>'
-        for item_id in benchmark["evidence_ids"]
-    )
+    evidence_buttons = _evidence_entry_link(benchmark["evidence_ids"])
     return (
         f'<figure class="interval-chart" data-chart-unit="{_h(benchmark["unit"])}" '
         f'data-chart-n="{_h(n_text)}" data-raw-pairs="{raw_pair_count}" data-chart-source="{_h(source)}">'
@@ -3792,9 +3813,9 @@ def _chart(benchmark: dict[str, Any], targets: dict[str, dict[str, Any]], eviden
         + '</span><span><strong>原始配对</strong> '
         + _h(raw_pair_count)
         + " 个独立 boot"
-        + '</span><span><strong>来源</strong> '
+        + '</span><div class="caption-source"><strong>来源</strong> '
         + evidence_buttons
-        + '</span></figcaption></figure>'
+        + '</div></figcaption></figure>'
     )
 
 
@@ -3876,10 +3897,7 @@ def _diagnostics_table(benchmark: dict[str, Any], *, heading_level: int = 4) -> 
     rows = []
     for item in diagnostics:
         evidence_ids = list(dict.fromkeys(sample["evidence_id"] for sample in item["samples"]))
-        evidence_links = " ".join(
-            f'<button class="evidence-link" type="button" data-evidence-ref="{_h(evidence_id)}">{_h(evidence_id)}</button>'
-            for evidence_id in evidence_ids
-        ) or "unavailable"
+        evidence_links = _evidence_entry_link(evidence_ids)
         cache = " / ".join(item["cache_states"]) if item["cache_states"] else "unavailable"
         rows.append(
             '<tr>'
@@ -3905,70 +3923,64 @@ def _diagnostics_table(benchmark: dict[str, Any], *, heading_level: int = 4) -> 
     )
 
 
-def _acceptance_band(
-    acceptance: dict[str, Any], summary_schema: int
-) -> str:
-    scientific = acceptance["scientific_evidence"]
-    competition_status = "pass" if acceptance["competition_ready"] else "not_ready"
-    task4 = acceptance["task4_gate"]
-    scenario_policy = (
-        'suite v2 中场景若得到 <code>regressed</code>，证据仍可诚实发布，'
-        '但对应任务和竞赛整体验收必须保持未就绪。'
-        if summary_schema == 2
-        else
-        '未注册为竞赛性能门的 full-stack 场景仍会显式展示 '
-        '<code>regressed</code>，但只作为诊断，不会被改写为性能优势，也不替代题面验收。'
-    )
-    return (
-        '<section class="acceptance-band" aria-labelledby="acceptance-title">'
-        '<div class="subheading"><h2 id="acceptance-title">发布与竞赛验收</h2>'
-        '<span>两道独立门</span></div>'
-        '<dl class="summary-strip">'
-        f'<div><dt>科学证据发布</dt><dd>{_status(scientific["status"])}</dd></div>'
-        f'<div><dt>竞赛整体验收</dt><dd>{_status(competition_status)}</dd></div>'
-        f'<div><dt>任务四功能</dt><dd>{_status(task4["functional_status"])}</dd></div>'
-        f'<div><dt>{_h(task4["benchmark_id"])} 结论</dt>'
-        f'<dd>{_status(task4["claim_status"])}</dd></div>'
-        '</dl>'
-        '<p class="diagnostic-note">科学证据允许完整发布未通过性能支持门的负结果；'
-        f'任务四竞赛验收仅在功能回执通过且 <code>{_h(task4["benchmark_id"])}</code> '
-        f'结论为 <code>{_h(task4["required_status"])}</code> 时通过。'
-        f'{scenario_policy}</p></section>'
-    )
+def _evidence_boot_ids(
+    ids: Iterable[str], evidence: dict[str, dict[str, Any]]
+) -> set[str]:
+    boot_ids: set[str] = set()
+    for evidence_id in ids:
+        item = evidence.get(evidence_id)
+        receipt = item.get("receipt") if isinstance(item, dict) else None
+        boot_id = receipt.get("boot_id") if isinstance(receipt, dict) else None
+        if isinstance(boot_id, str) and boot_id:
+            boot_ids.add(boot_id)
+    return boot_ids
+
+
+def _scenario_sample_count(
+    scenario: dict[str, Any], evidence: dict[str, dict[str, Any]]
+) -> tuple[int, str]:
+    performance = scenario.get("performance")
+    if isinstance(performance, dict):
+        return int(performance["n"]), "独立启动"
+    boot_count = len(_evidence_boot_ids(scenario.get("evidence_ids", []), evidence))
+    if boot_count:
+        return boot_count, "独立启动"
+    return len(set(scenario.get("evidence_ids", []))), "证据文件"
 
 
 def _task_matrix(
-    scenarios: list[dict[str, Any]], competition_tasks: dict[str, str]
+    scenarios: list[dict[str, Any]], evidence: dict[str, dict[str, Any]]
 ) -> str:
-    rank = {"pass": 0, "partial": 1, "unavailable": 2, "fail": 3}
     cells: list[str] = []
     for task in TASK_IDS:
         task_items = [item for item in scenarios if _task_id(item["task"], "scenario.task") == task]
         if not task_items:
-            status = "unavailable"
-            detail = "未提供动态场景"
+            detail = "尚无动态样本"
+            sample_text = "0/0"
         else:
-            functional_status = max(
-                (item["functional_status"] for item in task_items),
-                key=rank.__getitem__,
+            sample_counts: list[tuple[int, str]] = []
+            for item in task_items:
+                sample_counts.append(_scenario_sample_count(item, evidence))
+            sample_count, sample_kind = max(
+                sample_counts, key=lambda item: item[0], default=(0, "证据文件")
             )
-            performance_details = "、".join(
-                f"{item['label']} 性能="
-                f"{STATUS_ZH.get(item['performance_status'], item['performance_status'])}"
-                for item in task_items
-                if item["performance_status"] != "unavailable"
-            )
-            detail = (
-                f"功能证据：{STATUS_ZH.get(functional_status, functional_status)}；"
-                + (performance_details or "、".join(item["label"] for item in task_items))
-            )
-        status = competition_tasks[task]
+            functional = {item["functional_status"] for item in task_items}
+            if functional == {"pass"}:
+                sample_text = f"{sample_count}/{sample_count}" if sample_count else "0/0"
+                detail = f"{sample_kind}结果一致" if sample_count else "尚无动态样本"
+            elif "fail" in functional:
+                sample_text = f"{sample_count} 组" if sample_count else "0/0"
+                detail = f"{sample_kind}出现功能差异"
+            else:
+                sample_text = f"{sample_count} 组" if sample_count else "0/0"
+                detail = "尚未完成动态测量"
         number = task.removeprefix("task")
         cells.append(
-            f'<div class="task-cell task-cell--{_h(status)}"><span class="task-number">任务 {number}</span>'
-            f'{_status(status)}<span class="task-detail">{_h(detail)}</span></div>'
+            f'<div class="task-cell"><span class="task-number">任务 {number} · '
+            f'{_h(OVERVIEW_TASK_LABELS[task])}</span><strong class="task-count">'
+            f'{_h(sample_text)}</strong><span class="task-detail">{_h(detail)}</span></div>'
         )
-    return '<div class="task-matrix" aria-label="赛题任务一至六竞赛验收矩阵">' + "".join(cells) + "</div>"
+    return '<div class="task-matrix" aria-label="赛题任务一至六动态复现数据">' + "".join(cells) + "</div>"
 
 
 def _claim_text(
@@ -3980,10 +3992,10 @@ def _claim_text(
     if claim["status"] == "supported":
         title = (
             f"{targets[benchmark['treatment']]['label']} 的 {benchmark['label']}"
-            "通过预注册 joint-MCID 精确检验门"
+            "在全部预注册负载达到 joint-MCID 门槛"
         )
     elif claim["status"] == "not_supported":
-        title = f"{benchmark['label']}未通过预注册性能支持门"
+        title = f"{benchmark['label']}至少有一个预注册负载未达到 joint-MCID 门槛"
     else:
         title = f"{benchmark['label']}没有可用的合同测量"
     details: list[str] = []
@@ -4058,23 +4070,101 @@ def _scenario_metric(scenario: dict[str, Any]) -> str:
 
 
 def _scenario_overview_metric(scenario: dict[str, Any]) -> str:
-    """Keep the overview scannable; the scenario panel owns full inference detail."""
-
     performance = scenario.get("performance")
     if not isinstance(performance, dict):
-        return _scenario_metric(scenario)
-    relative_delta = (
-        "unavailable"
-        if performance["relative_median_percent"] is None
-        else f"{float(performance['relative_median_percent']):+.6g}%"
-    )
-    status = scenario["performance_status"]
+        return {
+            "failed": "完整链路性能测量失败",
+            "unavailable": "未采集合同化性能数据",
+        }.get(scenario["performance_status"], "未采集合同化性能数据")
+    samples = performance.get("samples", [])
+    if not samples:
+        return "合同化性能样本为空"
+    plain = [float(sample["plain_ms"]) for sample in samples]
+    agentos = [float(sample["agentos_ms"]) for sample in samples]
+    plain_p50 = float(statistics.median(plain))
+    agentos_p50 = float(statistics.median(agentos))
+    plain_p95 = _scenario_percentile(plain, 0.95)
+    agentos_p95 = _scenario_percentile(agentos, 0.95)
+    ratio = agentos_p50 / plain_p50 if plain_p50 > 0 else None
+    ratio_text = f"；AgentOS/Plain {ratio:.1f}x" if ratio is not None else ""
     return (
-        f"{STATUS_ZH.get(status, status)} ({status})；n={performance['n']}；"
-        f"plain-AgentOS 中位差 {float(performance['median']):+.6g} "
-        f"{performance['unit']}；相对中位数 {relative_delta}。"
-        "完整区间与检验见科研场景页。"
+        f"Plain p50 {_duration_label(plain_p50, 'ms')} / p95 "
+        f"{_duration_label(plain_p95, 'ms')}；AgentOS p50 "
+        f"{_duration_label(agentos_p50, 'ms')} / p95 "
+        f"{_duration_label(agentos_p95, 'ms')}；n={performance['n']}{ratio_text}"
     )
+
+
+OVERVIEW_BENCHMARK_LABELS = {
+    "file_query_path_index": ("文件对象查询", "文件"),
+    "file_query_table_ablation": ("元数据索引消融", "对象"),
+    "tool_batch": ("结构化工具批处理", "项"),
+    "context_access": ("Context 映射读取", "条"),
+}
+
+OVERVIEW_TASK_LABELS = {
+    "task1": "Agent 进程",
+    "task2": "工具协议",
+    "task3": "Context Path",
+    "task4": "文件对象",
+    "task5": "协作调度",
+    "task6": "科研工作流",
+}
+
+
+def _duration_label(value: float, unit: str) -> str:
+    if unit.startswith("us"):
+        suffix = unit[2:]
+        if abs(value) >= 1_000_000:
+            return f"{value / 1_000_000:.3f} s{suffix}"
+        if abs(value) >= 100:
+            return f"{value / 1_000:.3f} ms{suffix}"
+        return f"{value:.3f} us{suffix}"
+    if unit.startswith("ms"):
+        suffix = unit[2:]
+        if abs(value) >= 1_000:
+            return f"{value / 1_000:.3f} s{suffix}"
+        return f"{value:.3f} ms{suffix}"
+    return f"{_value(value)} {unit}"
+
+
+def _relative_effect_label(relative: float | None, direction: str, median: float, unit: str) -> str:
+    if relative is None or direction == "neutral":
+        return f"配对中位差 {median:+.3f} {unit}"
+    if direction == "lower_is_better":
+        if relative >= 0:
+            return f"逐 boot 延迟降幅中位数 {relative:.3f}%"
+        return f"逐 boot 延迟倍率中位数 {1 + abs(relative) / 100:.2f}x"
+    if relative >= 0:
+        return f"逐 boot 吞吐增幅中位数 {relative:.3f}%"
+    return f"逐 boot 吞吐降幅中位数 {abs(relative):.3f}%"
+
+
+def _overview_benchmark_measurement(benchmark: dict[str, Any]) -> dict[str, Any] | None:
+    measured_pairs = [pair for pair in benchmark["paired"] if pair["status"] == "measured"]
+    if not measured_pairs or not benchmark["loads"]:
+        return None
+    load = benchmark["loads"][-1]
+    pair = next((item for item in measured_pairs if str(item["load"]) == str(load)), None)
+    if pair is None:
+        return None
+    estimates = {
+        estimate["target_id"]: estimate
+        for estimate in benchmark["estimates"]
+        if str(estimate["load"]) == str(load)
+    }
+    baseline = estimates.get(benchmark["baseline"])
+    treatment = estimates.get(benchmark["treatment"])
+    if baseline is None or treatment is None:
+        return None
+    return {
+        "load": load,
+        "pair": pair,
+        "baseline": float(baseline["value"]),
+        "treatment": float(treatment["value"]),
+        "n": int(pair["n"]),
+        "measured_pairs": measured_pairs,
+    }
 
 
 def _overview_claim_slots(
@@ -4082,54 +4172,117 @@ def _overview_claim_slots(
     benchmarks: dict[str, dict[str, Any]],
     targets: dict[str, dict[str, Any]],
 ) -> str:
-    """Render the complete registered claim family without selecting a winner."""
-
     registered = summary["methodology"]["multiple_testing"]["headline_claims"]
     claims = {claim["benchmark_id"]: claim for claim in summary["claims"]}
     slots: list[str] = []
-    for index, benchmark_id in enumerate(registered, 1):
+    for benchmark_id in registered:
         benchmark = benchmarks.get(benchmark_id)
         claim = claims.get(benchmark_id)
-        label = benchmark["label"] if benchmark is not None else benchmark_id
-        if claim is None or benchmark is None:
-            status = "unavailable"
-            statement = "未声明合同化机制 claim；不会用其他 benchmark 补位。"
-            metric = "原始配对、joint-MCID 与证据绑定 unavailable。"
-            evidence_links = "unavailable"
-        else:
-            status = claim["status"]
-            statement, _ = _claim_text(claim, benchmarks, targets)
-            measured_pairs = [pair for pair in benchmark["paired"] if pair["status"] == "measured"]
-            sample_counts = sorted({int(pair["n"]) for pair in measured_pairs})
-            n_text = (
-                str(sample_counts[0])
-                if len(sample_counts) == 1
-                else f"{sample_counts[0]}-{sample_counts[-1]}"
-                if sample_counts
-                else "unavailable"
-            )
-            metric = (
-                f"{len(benchmark['loads'])} 个预注册负载；每负载独立 boot n={n_text}；"
-                "joint-MCID 精确检验并纳入 Bonferroni family。"
-            )
-            evidence_links = " ".join(
-                f'<button class="evidence-link" type="button" data-evidence-ref="{_h(item_id)}">{_h(item_id)}</button>'
-                for item_id in claim["evidence_ids"]
-            ) or "unavailable"
-        slot_label = (
-            "Task 4 竞赛主 Claim"
-            if benchmark_id == "file_query_path_index"
-            else "Task 4 机制消融"
-            if benchmark_id == "file_query_table_ablation"
-            else f"机制 Claim {index}"
+        friendly = OVERVIEW_BENCHMARK_LABELS.get(benchmark_id)
+        label = friendly[0] if friendly is not None else (
+            benchmark["label"] if benchmark is not None else benchmark_id
         )
+        load_unit = friendly[1] if friendly is not None else "负载"
+        target_text = (
+            f"{targets[benchmark['baseline']]['label']} → "
+            f"{targets[benchmark['treatment']]['label']}"
+            if benchmark is not None
+            else "比较端点暂无"
+        )
+        measurement = (
+            _overview_benchmark_measurement(benchmark)
+            if benchmark is not None
+            else None
+        )
+        if benchmark is None:
+            value_text = "暂无测量"
+            effect_text = "该预注册位置没有 benchmark 数据"
+            metric = "不会使用其他 benchmark 补位"
+            n_text = "n=0"
+            load_text = "-"
+            slot_modifier = ""
+        elif measurement is None:
+            value_text = "暂无测量"
+            effect_text = "本轮没有完整的配对数据"
+            metric = f"{len(benchmark['loads'])} 个预注册负载"
+            n_text = "n=0"
+            load_text = "-"
+            slot_modifier = ""
+        else:
+            pair = measurement["pair"]
+            relative = (
+                float(pair["relative_median_percent"])
+                if pair["relative_median_percent"] is not None
+                else None
+            )
+            value_text = (
+                f"{_duration_label(measurement['baseline'], benchmark['unit'])} → "
+                f"{_duration_label(measurement['treatment'], benchmark['unit'])}"
+            )
+            effect_text = _relative_effect_label(
+                relative,
+                benchmark["direction"],
+                float(pair["median"]),
+                benchmark["unit"],
+            )
+            all_relative = [
+                float(item["relative_median_percent"])
+                for item in measurement["measured_pairs"]
+                if item["relative_median_percent"] is not None
+            ]
+            relative_count = len(all_relative)
+            pair_count = len(measurement["measured_pairs"])
+            if benchmark_id == "tool_batch" and all_relative:
+                faster_loads = sum(value > 0 for value in all_relative)
+                coverage = (
+                    f"{relative_count}/{pair_count} 个负载有相对口径，其中"
+                    if relative_count != pair_count
+                    else ""
+                )
+                metric = "上方为最高负载两端中位数；" + coverage + (
+                    f"{faster_loads}/{relative_count} 个负载降低延迟，优势未形成"
+                )
+            elif all_relative:
+                scope = (
+                    "全负载"
+                    if relative_count == pair_count
+                    else f"{relative_count}/{pair_count} 个负载的"
+                )
+                if benchmark["direction"] == "lower_is_better" and min(all_relative) >= 0:
+                    metric = (
+                        f"{scope}逐 boot 延迟降幅中位数 {min(all_relative):.3f}%–"
+                        f"{max(all_relative):.3f}%"
+                    )
+                elif benchmark["direction"] == "higher_is_better" and min(all_relative) >= 0:
+                    metric = (
+                        f"{scope}逐 boot 吞吐增幅中位数 {min(all_relative):.3f}%–"
+                        f"{max(all_relative):.3f}%"
+                    )
+                else:
+                    metric = (
+                        f"{scope}逐 boot 相对效果中位数 {min(all_relative):.3f}%–"
+                        f"{max(all_relative):.3f}%"
+                    )
+            else:
+                metric = f"{pair_count} 个负载没有可用的相对口径"
+            if claim is None:
+                metric += "；本轮未登记性能结论"
+            n_text = f"n={measurement['n']} 独立 Guest 启动/负载"
+            load_text = str(measurement["load"])
+            slot_modifier = (
+                " headline-result-slot--regressed"
+                if relative is not None and relative < 0 and benchmark["direction"] != "neutral"
+                else ""
+            )
         slots.append(
-            f'<article class="headline-result-slot" data-overview-slot="mechanism" '
+            f'<article class="headline-result-slot{slot_modifier}" data-overview-slot="mechanism" '
             f'data-benchmark-id="{_h(benchmark_id)}">'
-            f'<header><span>{_h(slot_label)}</span>{_status(status)}</header>'
-            f'<h3>{_h(label)}</h3><p>{_h(statement)}</p>'
+            f'<header><span>{_h(label)}</span><code>{_h(load_text)} {_h(load_unit)}</code></header>'
+            f'<p class="slot-value">{_h(value_text)}</p>'
+            f'<p class="slot-targets">{_h(target_text)}</p>'
+            f'<p class="slot-effect">{_h(effect_text)}</p>'
             f'<p class="slot-metric">{_h(metric)}</p>'
-            f'<footer><code>{_h(benchmark_id)}</code><span>{evidence_links}</span></footer>'
+            f'<footer><code>{_h(benchmark_id)}</code><span>{_h(n_text)}</span></footer>'
             "</article>"
         )
     return "".join(slots)
@@ -4139,55 +4292,85 @@ def _overview_task6_slot(scenarios: list[dict[str, Any]]) -> str:
     task6 = [scenario for scenario in scenarios if _task_id(scenario["task"], "scenario.task") == "task6"]
     if not task6:
         content = (
-            '<div class="task6-slot-row"><div><strong>科研工作流</strong>'
-            f'{_status("unavailable")}</div><p>未声明 Task6 场景；不会用机制微基准补位。</p></div>'
+            '<div class="task6-slot-row"><strong>暂无 Task6 动态测量</strong>'
+            '<p>不会使用机制微基准替代完整科研流程。</p></div>'
         )
     else:
         rows: list[str] = []
         for scenario in task6:
-            refs = " ".join(
-                f'<button class="evidence-link" type="button" data-evidence-ref="{_h(item_id)}">{_h(item_id)}</button>'
-                for item_id in scenario.get("evidence_ids", [])
-            ) or "unavailable"
+            performance = scenario.get("performance")
+            if not isinstance(performance, dict) or not performance.get("samples"):
+                absence = (
+                    "完整链路测量失败，未生成耗时数据。"
+                    if scenario["performance_status"] == "failed"
+                    else "尚未采集完整链路耗时。"
+                )
+                rows.append(
+                    '<div class="task6-slot-row"><strong>'
+                    f'{_h(scenario["label"])}</strong><p>{_h(absence)}</p></div>'
+                )
+                continue
+            plain = [float(sample["plain_ms"]) for sample in performance["samples"]]
+            agentos = [float(sample["agentos_ms"]) for sample in performance["samples"]]
+            plain_p50 = float(statistics.median(plain))
+            agentos_p50 = float(statistics.median(agentos))
+            plain_p95 = _scenario_percentile(plain, 0.95)
+            agentos_p95 = _scenario_percentile(agentos, 0.95)
+            ratio = agentos_p50 / plain_p50 if plain_p50 > 0 else None
+            n = int(performance["n"])
+            consistent = round(n * float(performance.get("paired_success_rate", 0.0)))
+            debt = (
+                f"当前性能债务 {ratio:.1f}x"
+                if ratio is not None and ratio >= 1
+                else f"AgentOS/Plain {ratio:.2f}x"
+                if ratio is not None
+                else "倍率暂无数据"
+            )
+            modifier = (
+                " task6-slot-row--regressed"
+                if scenario["performance_status"] == "regressed"
+                else " task6-slot-row--improved"
+                if scenario["performance_status"] == "supported" and ratio is not None and ratio < 1
+                else ""
+            )
             rows.append(
-                '<div class="task6-slot-row">'
-                f'<div><strong>{_h(scenario["label"])}</strong>'
-                f'<span>功能 {_status(scenario["functional_status"])}</span>'
-                f'<span>性能 {_status(scenario["performance_status"])}</span></div>'
-                f'<p>{_h(_scenario_overview_metric(scenario))}</p><footer>{refs}</footer></div>'
+                f'<div class="task6-slot-row{modifier}">'
+                f'<div class="task6-slot-heading"><strong>{_h(OVERVIEW_TASK_LABELS["task6"])}</strong>'
+                f'<span>{consistent}/{n} 工作流结果一致</span></div>'
+                '<div class="task6-comparison">'
+                f'<div><span>Plain p50</span><strong>{_h(_duration_label(plain_p50, "ms"))}</strong>'
+                f'<small>p95 {_h(_duration_label(plain_p95, "ms"))}</small></div>'
+                f'<div><span>AgentOS p50</span><strong>{_h(_duration_label(agentos_p50, "ms"))}</strong>'
+                f'<small>p95 {_h(_duration_label(agentos_p95, "ms"))}</small></div>'
+                f'<div class="task6-debt"><span>完整链路</span><strong>{_h(debt)}</strong>'
+                f'<small>n={n} 配对启动</small></div></div></div>'
             )
         content = "".join(rows)
     return (
         '<article class="headline-result-slot headline-result-slot--task6" '
         'data-overview-slot="task6" data-benchmark-id="task6">'
-        '<header><span>Task6</span><code>full-stack</code></header>'
-        '<h3>科研场景</h3>'
+        '<header><span>任务 6 完整科研流程</span><code>Plain / AgentOS</code></header>'
         f'<div class="task6-slot-list">{content}</div></article>'
     )
 
 
 def _overview_extension_slots(
-    verification: dict[str, Any], scenario_details: list[dict[str, Any]]
+    verification: dict[str, Any], scenario_details: list[dict[str, Any]],
+    kernel_cost: dict[str, Any] | None = None,
 ) -> str:
-    """Render optional guardrails in named slots; absence never borrows another result."""
-
     task6_resources = [
-        detail["resource_stability"]
+        (detail["resource_stability"], int(detail.get("independent_boots", 0)))
         for detail in scenario_details
         if detail.get("task_id") == "task6"
         and isinstance(detail.get("resource_stability"), dict)
     ]
     if len(task6_resources) > 1:
         _fail("resource stability must bind at most one verified Task6 scenario report")
-    resource = task6_resources[0] if task6_resources else None
-    if resource is None or resource.get("status") not in {"passed", "partial", "unavailable"}:
-        resource_status = "unavailable"
-        resource_text = (
-            "没有经过 Dashboard 证据重放的资源稳定性回执；不声称全局无泄漏。"
-        )
+    resource, expected_boots = task6_resources[0] if task6_resources else (None, 0)
+    if resource is None or resource.get("status") not in {"passed", "partial"}:
+        resource_value = "暂无动态数据"
+        resource_text = "本轮未提供资源回收测量"
     else:
-        resource_status = str(resource["status"])
-        interpretation = resource.get("interpretation", {})
         observation = resource.get("global_observation", {})
         observed_resources = (
             observation.get("resources", [])
@@ -4208,27 +4391,23 @@ def _overview_extension_slots(
             and free_pages.get("exact_pair_recovery") is True
             and free_pages.get("exact_terminal_recovery") is True
         )
-        partial_note = (
-            "部分观测，不可作为通过证据；"
-            if resource_status == "partial"
-            else ""
-        )
+        boots = int(resource.get("verified_boots", 0))
+        load_workflows = int(resource.get("load_workflows_per_boot", 0))
+        child_rounds = int(resource.get("child_rounds_per_load_workflow", 0))
+        stress_rounds = boots * load_workflows * child_rounds
+        resource_value = f"{stress_rounds} 轮压力 · {measured_kinds}/{len(observed_resources)} 类计数"
+        boot_coverage = f"{boots}/{expected_boots}" if expected_boots else str(boots)
         resource_text = (
-            f"{partial_note}核验 boot={resource.get('verified_boots', 'unavailable')}；"
-            f"配置全局计数覆盖={measured_kinds}/{len(observed_resources)}；"
-            f"空闲页配对/终点精确恢复={'是' if exact_free_pages else '否'}；"
-            f"计时关系={interpretation.get('timing_relationship', 'unavailable')}；"
-            f"全局无泄漏={interpretation.get('global_leak_freedom', 'not_claimed')}。"
+            f"{boot_coverage} 次独立启动有资源回执；空闲页配对与终点"
+            f"{'精确恢复' if exact_free_pages else '未确认精确恢复'}；"
+            "buffer cache 仅声明有界增长与可回收"
         )
 
     compatibility = verification.get("compatibility_overhead")
     if not isinstance(compatibility, dict) or compatibility.get("status") != "ready":
-        compatibility_status = "unavailable"
-        compatibility_text = (
-            "没有经过正式合同与原始树重放的传统兼容路径成本；不并入性能优势或综合分。"
-        )
+        compatibility_value = "暂无动态数据"
+        compatibility_text = "本轮未提供传统 uCore 路径配对成本"
     else:
-        compatibility_status = "ready"
         metrics = compatibility.get("metrics", {})
         metric_count = len(metrics) if isinstance(metrics, dict) else 0
         ratios = [
@@ -4239,42 +4418,83 @@ def _overview_extension_slots(
             and not isinstance(metric.get("median_agentos_over_plain_ratio"), bool)
             and math.isfinite(float(metric["median_agentos_over_plain_ratio"]))
         ] if isinstance(metrics, dict) else []
-        ratio_text = (
-            f"；AgentOS/plain 中位成本比 {min(ratios):.2f}x-{max(ratios):.2f}x"
-            if ratios
-            else ""
+        compatibility_value = (
+            f"{min(ratios):.2f}x–{max(ratios):.2f}x" if ratios else "暂无倍率"
         )
+        paired_boots = sorted({
+            int(metric["paired_boots"])
+            for metric in metrics.values()
+            if isinstance(metric, dict) and isinstance(metric.get("paired_boots"), int)
+        }) if isinstance(metrics, dict) else []
+        paired_text = str(paired_boots[0]) if len(paired_boots) == 1 else "多组"
         compatibility_text = (
-            f"{metric_count} 项传统 uCore 兼容路径配对成本{ratio_text}；仅作描述性 tax，"
-            "aggregate score 禁止。"
+            f"{metric_count} 项传统路径 · {paired_text} 次配对启动；"
+            "数值是兼容成本，不计作机制性能优势"
         )
+
+    cost_value = "暂无静态数据"
+    cost_text = "本轮未提供绑定同一提交的内核成本"
+    if isinstance(kernel_cost, dict):
+        metrics_by_id = {item["id"]: item for item in kernel_cost.get("metrics", [])}
+        required = [metrics_by_id.get(item) for item in ("text_bytes", "data_bytes", "bss_bytes")]
+        text_metric = metrics_by_id.get("text_bytes")
+        elf_metric = metrics_by_id.get("elf_file_bytes")
+        if all(item is not None and item.get("status") == "measured" for item in required):
+            baseline_static = sum(int(item["baseline"]) for item in required if item is not None)
+            agentos_static = sum(int(item["agentos"]) for item in required if item is not None)
+            static_delta = (agentos_static - baseline_static) * 100.0 / baseline_static
+            text_delta = (
+                (int(text_metric["agentos"]) - int(text_metric["baseline"]))
+                * 100.0 / int(text_metric["baseline"])
+                if text_metric is not None and int(text_metric["baseline"]) > 0
+                else 0.0
+            )
+            cost_value = f"内存映像 {static_delta:+.1f}% · .text {text_delta:+.1f}%"
+            elf_text = ""
+            if elf_metric is not None and elf_metric.get("status") == "measured":
+                elf_text = (
+                    f"；ELF {int(elf_metric['baseline']) / 1024**2:.3f} → "
+                    f"{int(elf_metric['agentos']) / 1024**2:.3f} MiB"
+                )
+            cost_text = (
+                f"text+data+bss {baseline_static / 1024**2:.3f} → "
+                f"{agentos_static / 1024**2:.3f} MiB{elf_text}"
+            )
 
     slots = (
         (
             "resource-stability",
-            "资源稳定性",
-            resource_status,
+            "资源回收",
+            resource_value,
             resource_text,
-            "Task6 makespan 外验收",
+            "Task6 场景结束后测量",
         ),
         (
             "compatibility-overhead",
-            "传统兼容路径成本",
-            compatibility_status,
+            "传统路径成本",
+            compatibility_value,
             compatibility_text,
             "fork / exec / pipe / sequential I/O",
+        ),
+        (
+            "kernel-cost",
+            "内核静态成本",
+            cost_value,
+            cost_text,
+            "同一提交的确定性构建，n=1",
         ),
     )
     return "".join(
         '<article class="extension-result-slot" data-extension-slot="{}">'
-        '<header><h3>{}</h3>{}</header><p>{}</p><footer>{}</footer></article>'.format(
+        '<header><h3>{}</h3></header><strong class="extension-value">{}</strong>'
+        '<p>{}</p><footer>{}</footer></article>'.format(
             _h(slot_id),
             _h(title),
-            _status(status),
+            _h(value),
             _h(text),
             _h(scope),
         )
-        for slot_id, title, status, text, scope in slots
+        for slot_id, title, value, text, scope in slots
     )
 
 
@@ -4516,32 +4736,55 @@ def _page(
     targets = {item["id"]: item for item in summary["targets"]}
     evidence = {item["id"]: item for item in summary["evidence"]}
     benchmarks = {item["id"]: item for item in summary["benchmarks"]}
-    acceptance = summary["acceptance"]
     measured = [item for item in summary["benchmarks"] if item["status"] == "measured"]
-    claim_count = summary["methodology"]["multiple_testing"]["hypothesis_count"]
-    conclusion = (
-        f"{claim_count} 个机制 claim 与 Task6 固定并列报告；"
-        "状态不互相替代，也不生成综合总分"
-    )
+    mechanism_load_count = sum(len(item["loads"]) for item in measured)
     sample_counts = [int(estimate["n"]) for item in measured for estimate in item["estimates"]]
     n_display = str(min(sample_counts)) if sample_counts and len(set(sample_counts)) == 1 else (
-        f"{min(sample_counts)}-{max(sample_counts)}" if sample_counts else "unavailable"
+        f"{min(sample_counts)}-{max(sample_counts)}" if sample_counts else "暂无"
     )
-    cache_policy = run.get("cache_policy") or summary["methodology"].get("cache_policy", "unavailable")
     commit = run.get("commit", "unavailable")
-    grade = run.get("evidence_grade", "unavailable")
+    short_commit = commit[:12] if commit != "unavailable" else commit
+    scenario_sample_counts = [
+        int(item["performance"]["n"])
+        for item in summary["scenarios"]
+        if isinstance(item.get("performance"), dict)
+    ]
+    paired_scenario_count = max(scenario_sample_counts, default=0)
     scenario_boundary = summary["methodology"]["interpretation_boundaries"]
+    scenario_design = {
+        "full-stack": "完整链路",
+    }.get(scenario_boundary["scenario_design"], scenario_boundary["scenario_design"])
+    scenario_attribution = {
+        "non-single-mechanism": "多机制共同影响",
+    }.get(
+        scenario_boundary["scenario_attribution"],
+        scenario_boundary["scenario_attribution"],
+    )
+    host_cache = {
+        "uncontrolled": "未控制",
+    }.get(scenario_boundary["host_page_cache"], scenario_boundary["host_page_cache"])
     scenario_boundary_note = (
-        f"{scenario_boundary['scenario_design']} / "
-        f"{scenario_boundary['scenario_attribution']}；Host page cache "
-        f"{scenario_boundary['host_page_cache']}。功能完成不代替性能测量，两类证据分别标记。"
+        f"{scenario_design}；{scenario_attribution}；宿主页缓存{host_cache}。"
+        "功能结果与性能数据分别呈现。"
     )
     overview_claim_slots = _overview_claim_slots(summary, benchmarks, targets)
     overview_task6_slot = _overview_task6_slot(summary["scenarios"])
-    overview_extensions = _overview_extension_slots(verification, scenario_details)
+    overview_extensions = _overview_extension_slots(
+        verification, scenario_details, kernel_cost
+    )
 
     benchmark_sections = []
     for index, benchmark in enumerate(summary["benchmarks"]):
+        measured_pairs = [pair for pair in benchmark["paired"] if pair["status"] == "measured"]
+        pair_ns = sorted({int(pair["n"]) for pair in measured_pairs})
+        pair_n = (
+            str(pair_ns[0])
+            if len(pair_ns) == 1
+            else f"{pair_ns[0]}-{pair_ns[-1]}"
+            if pair_ns
+            else "0"
+        )
+        measurement_label = f"{len(measured_pairs)} 个负载 · n={pair_n}"
         comparison_note = (
             '<p class="diagnostic-note">Task 4 竞赛主对照：同一 N-file corpus 上的'
             '逐路径 open/read/fstat/close 属性检查与 ready index；负结果仍完整展示。</p>'
@@ -4554,7 +4797,7 @@ def _page(
         benchmark_sections.append(
             '<article class="benchmark-block">'
             f'<header><div><p class="eyebrow">{_h(benchmark["task"])}</p><h3>{_h(benchmark["label"])}</h3></div>'
-            f'{_status(benchmark["status"])}</header>'
+            f'<span class="measurement-count">{_h(measurement_label)}</span></header>'
             f'{comparison_note}'
             f'{_chart(benchmark, targets, evidence, suffix=f"benchmark-{index}")}'
             f'{_work_receipts_table(benchmark, targets)}'
@@ -4563,32 +4806,58 @@ def _page(
         )
 
     scenario_rows = []
+    scenario_inference = []
     for scenario in summary["scenarios"]:
-        refs = " ".join(
-            f'<button class="evidence-link" type="button" data-evidence-ref="{_h(item_id)}">{_h(item_id)}</button>'
-            for item_id in scenario.get("evidence_ids", [])
-        ) or "unavailable"
+        refs = _evidence_entry_link(scenario.get("evidence_ids", []))
+        performance = scenario.get("performance")
+        if isinstance(performance, dict):
+            sample_count = int(performance["n"])
+            sample_kind = "独立启动"
+            scenario_inference.append(
+                '<details class="evidence-item scenario-inference">'
+                f'<summary>{_h(scenario["label"])} 的统计明细</summary>'
+                f'<p>{_h(_scenario_metric(scenario))}</p></details>'
+            )
+        else:
+            sample_count, sample_kind = _scenario_sample_count(scenario, evidence)
+        reproduction = (
+            f"{sample_count}/{sample_count} {sample_kind}结果一致"
+            if scenario["functional_status"] == "pass"
+            else "功能测量未提供"
+            if scenario["functional_status"] == "unavailable"
+            else f"{sample_count} 组{sample_kind}出现功能差异"
+        )
+        task_id = _task_id(scenario["task"], "scenario.task")
         scenario_rows.append(
             '<tr>'
-            f'<td>{_h(scenario["task"])}</td><th scope="row">{_h(scenario["label"])}</th>'
-            f'<td>{_status(scenario["functional_status"])}</td>'
-            f'<td>{_status(scenario["performance_status"])}</td>'
-            f'<td>{_h(_scenario_metric(scenario))}</td>'
+            f'<td>任务 {_h(task_id.removeprefix("task"))}</td>'
+            f'<th scope="row">{_h(OVERVIEW_TASK_LABELS[task_id])}</th>'
+            f'<td>{_h(reproduction)}</td>'
+            f'<td>{_h(_scenario_overview_metric(scenario))}</td>'
             f'<td>{refs}</td></tr>'
         )
     if not scenario_rows:
-        scenario_rows.append('<tr><td colspan="6" class="empty-cell">unavailable：未提供科研场景测量。</td></tr>')
+        scenario_rows.append('<tr><td colspan="5" class="empty-cell">尚未提供科研场景测量。</td></tr>')
 
     claim_items = []
     for claim in summary["claims"]:
         claim_title, claim_effect = _claim_text(claim, benchmarks, targets)
-        refs = " ".join(
-            f'<button class="evidence-link" type="button" data-evidence-ref="{_h(item_id)}">{_h(item_id)}</button>'
-            for item_id in claim["evidence_ids"]
+        refs = _evidence_entry_link(claim["evidence_ids"])
+        claim_benchmark = benchmarks[claim["benchmark_id"]]
+        measured_pairs = [
+            pair for pair in claim_benchmark["paired"] if pair["status"] == "measured"
+        ]
+        sample_ns = sorted({int(pair["n"]) for pair in measured_pairs})
+        sample_text = (
+            f"{len(measured_pairs)} 负载 · n={sample_ns[0]}"
+            if len(sample_ns) == 1
+            else f"{len(measured_pairs)} 负载 · n={sample_ns[0]}-{sample_ns[-1]}"
+            if sample_ns
+            else "0 负载 · n=0"
         )
         claim_items.append(
             '<article class="claim-item">'
-            f'<header>{_status(claim["status"])}<code>{_h(claim["benchmark_id"])}</code></header>'
+            f'<header><code>{_h(claim["benchmark_id"])}</code><span>{_h(sample_text)}</span></header>'
             f'<h3>{_h(claim_title)}</h3><p>{_h(claim_effect)}</p>'
             f'<footer><strong>绑定证据</strong> {refs}</footer></article>'
         )
@@ -4641,7 +4910,7 @@ def _page(
         for benchmark in summary["benchmarks"]
         if benchmark.get("diagnostics")
     )
-    target_text = " 对 ".join(str(target["label"]) for target in summary["targets"][:2])
+    target_text = f"{n_display} 次独立 Guest 启动 · RISC-V / QEMU"
     evidence_count = int(verification["verified_evidence_count"])
     declared_evidence_count = len(verification["evidence"])
     marker_count = int(verification["verified_marker_count"])
@@ -4655,14 +4924,14 @@ def _page(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>AgentOS 竞赛评价仪表板</title>
+  <title>AgentOS-uCore 实测数据</title>
   <link rel="stylesheet" href="assets/evaluation-dashboard.css">
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
   <header class="app-header">
     <div class="header-inner">
-      <div><p class="product-name">AgentOS Evaluation</p><p class="run-name">{_h(run.get("label", run["id"]))}</p></div>
+      <div><p class="product-name">AgentOS-uCore 实测数据</p><p class="run-name">同一提交 · 原始日志可查</p></div>
       <div class="header-actions"><span>{_h(target_text)}</span><a href="evaluation-summary.json" download>下载 JSON</a><a href="dashboard-verification.json" download>下载核验回执</a><a href="metrics.csv" download>下载 CSV</a></div>
     </div>
   </header>
@@ -4678,40 +4947,38 @@ def _page(
   </nav>
   <main id="main">
     <section role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" class="tab-panel">
-      <div class="section-heading"><div><p class="eyebrow">评测运行 {_h(run["id"])}</p><h1>AgentOS 竞赛评价</h1></div><p>只展示可回溯到原始证据的测量；缺项保持 unavailable。</p></div>
+      <div class="section-heading"><div><p class="eyebrow">评测运行 {_h(run["id"])}</p><h1>AgentOS-uCore 实测数据</h1></div><p>真实负载、样本量与正负结果同屏展示。</p></div>
       <dl class="summary-strip">
-        <div><dt>Commit</dt><dd><code>{_h(commit)}</code></dd></div>
-        <div><dt>证据等级</dt><dd>{_h(grade)}</dd></div>
-        <div><dt>样本 n</dt><dd>{_h(n_display)}</dd></div>
-        <div><dt>Cache</dt><dd>{_h(cache_policy)}</dd></div>
+        <div><dt>独立 Guest 启动</dt><dd>{_h(n_display)}</dd></div>
+        <div><dt>机制负载</dt><dd>{_h(mechanism_load_count)}</dd></div>
+        <div><dt>完整流程配对</dt><dd>{_h(paired_scenario_count)}</dd></div>
+        <div><dt>Commit</dt><dd><code title="{_h(commit)}">{_h(short_commit)}</code></dd></div>
       </dl>
       <section class="overview-results" aria-labelledby="overview-results-title">
-        <div class="subheading"><h2 id="overview-results-title">固定结果集</h2><span>{_h(claim_count)} 个机制 claim 与 Task6，不选择单一胜者</span></div>
+        <div class="subheading"><h2 id="overview-results-title">核心机制实测</h2><span>对照端点、负载和样本量随数据展示</span></div>
         <div class="headline-result-grid">{overview_task6_slot}{overview_claim_slots}</div>
       </section>
-      <section class="conclusion-band" aria-labelledby="conclusion-title"><p class="eyebrow">证据约束结论</p><h2 id="conclusion-title">{_h(conclusion)}</h2></section>
       <section class="overview-grid">
-        <div><div class="subheading"><h2>赛题任务验收</h2><span>任务 1-6 竞赛状态</span></div>{_task_matrix(summary["scenarios"], acceptance["tasks"])}</div>
-        <div><div class="subheading"><h2>独立护栏</h2><span>可扩展槽位，不进入综合分</span></div><div class="extension-result-grid">{overview_extensions}</div></div>
+        <div><div class="subheading"><h2>赛题功能复现</h2><span>任务 1-6 的动态回执数据</span></div>{_task_matrix(summary["scenarios"], evidence)}</div>
+        <div><div class="subheading"><h2>资源与成本</h2><span>收益和代价同时展示</span></div><div class="extension-result-grid">{overview_extensions}</div></div>
       </section>
-      {campaign_environment_block}
-      {_acceptance_band(acceptance, summary["schema_version"])}
     </section>
     <section role="tabpanel" id="panel-performance" aria-labelledby="tab-performance" class="tab-panel" hidden>
       <div class="section-heading"><div><p class="eyebrow">可复现测量</p><h2>性能</h2></div><p>区间、单位、样本量与来源同时呈现。</p></div>
       <div class="benchmark-list">{"".join(benchmark_sections) or '<div class="unavailable-block"><strong>unavailable</strong><span>没有 benchmark 记录。</span></div>'}</div>
     </section>
     <section role="tabpanel" id="panel-cost" aria-labelledby="tab-cost" class="tab-panel" hidden>
-      <div class="section-heading"><div><p class="eyebrow">Artifact Guardrails</p><h2>系统成本</h2></div><p>同 commit、构建清单绑定的内核静态体积对照。</p></div>
+      <div class="section-heading"><div><p class="eyebrow">同提交构建</p><h2>系统成本</h2></div><p>同 commit、构建清单绑定的内核静态体积对照。</p></div>
       {kernel_cost_block}
     </section>
     <section role="tabpanel" id="panel-scenarios" aria-labelledby="tab-scenarios" class="tab-panel" hidden>
       <div class="section-heading"><div><p class="eyebrow">端到端工作负载</p><h2>科研场景</h2></div><p>{_h(scenario_boundary_note)}</p></div>
-      <div class="table-scroll" role="region" tabindex="0" aria-label="科研场景验收表，可横向滚动"><table><thead><tr><th>赛题任务</th><th>场景</th><th>功能状态</th><th>性能状态</th><th>结构化测量</th><th>原始证据</th></tr></thead><tbody>{"".join(scenario_rows)}</tbody></table></div>
+      <div class="table-scroll" role="region" tabindex="0" aria-label="科研场景实测表，可横向滚动"><table><thead><tr><th>赛题任务</th><th>能力</th><th>动态复现</th><th>耗时对照</th><th>原始证据</th></tr></thead><tbody>{"".join(scenario_rows)}</tbody></table></div>
+      {"".join(scenario_inference)}
       <section aria-labelledby="scenario-details-title"><h3 id="scenario-details-title" class="subsection-title">场景明细</h3>{scenario_detail_blocks}</section>
     </section>
     <section role="tabpanel" id="panel-evidence" aria-labelledby="tab-evidence" class="tab-panel" hidden>
-      <div class="section-heading"><div><p class="eyebrow">Claim → Evidence</p><h2>可信证据</h2></div><p>每条 headline claim 必须绑定已声明的 evidence ID。</p></div>
+      <div class="section-heading"><div><p class="eyebrow">结论与原始数据</p><h2>可信证据</h2></div><p>每项性能结论都可下钻到对应的原始文件。</p></div>
       <dl class="summary-strip" aria-label="本地证据核验回执">
         <div><dt>本地文件核验</dt><dd>{_h(evidence_count)} / {_h(declared_evidence_count)}</dd></div>
         <div><dt>SHA-256</dt><dd>全部匹配</dd></div>
@@ -4723,6 +4990,13 @@ def _page(
     </section>
     <section role="tabpanel" id="panel-methodology" aria-labelledby="tab-methodology" class="tab-panel" hidden>
       <div class="section-heading"><div><p class="eyebrow">边界与可重复性</p><h2>方法学</h2></div><p>比较设计、缓存策略和局限必须随结果交付。</p></div>
+      <dl class="summary-strip" aria-label="运行身份">
+        <div><dt>Commit</dt><dd><code>{_h(commit)}</code></dd></div>
+        <div><dt>证据等级</dt><dd>{_h(run.get("evidence_grade", "暂无"))}</dd></div>
+        <div><dt>Cache 策略</dt><dd>{_h(run.get("cache_policy", "暂无"))}</dd></div>
+        <div><dt>Suite</dt><dd><code>{_h(run.get("suite_id", "暂无"))}</code></dd></div>
+      </dl>
+      {campaign_environment_block}
       {interpretation_boundaries}
       <dl class="methodology-list">{methodology_rows or '<dt>methodology</dt><dd>unavailable</dd>'}</dl>
       {methodology_diagnostics}

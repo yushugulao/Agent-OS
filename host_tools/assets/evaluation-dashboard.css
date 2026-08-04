@@ -293,18 +293,6 @@ code {
   background: #eef7f5;
 }
 
-.acceptance-band {
-  margin-block: 24px;
-}
-
-.acceptance-band .summary-strip {
-  margin-top: 12px;
-}
-
-.acceptance-band .diagnostic-note {
-  margin: 10px 0 0;
-}
-
 .conclusion-band h2 {
   margin-top: 5px;
   font-size: 1.25rem;
@@ -344,7 +332,7 @@ code {
 .headline-result-slot {
   display: flex;
   flex-direction: column;
-  min-height: 250px;
+  min-height: 220px;
   padding: 14px;
 }
 
@@ -353,9 +341,12 @@ code {
   min-height: 0;
 }
 
+.headline-result-slot--regressed:not(.headline-result-slot--task6) {
+  border-top: 3px solid var(--red);
+}
+
 .headline-result-slot > header,
-.extension-result-slot > header,
-.task6-slot-row > div {
+.extension-result-slot > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -369,9 +360,8 @@ code {
   text-transform: uppercase;
 }
 
-.headline-result-slot h3,
 .extension-result-slot h3 {
-  margin: 12px 0 5px;
+  margin: 0;
   font-size: 1rem;
   line-height: 1.35;
 }
@@ -386,7 +376,33 @@ code {
 }
 
 .headline-result-slot .slot-metric {
+  color: var(--muted);
+}
+
+.headline-result-slot .slot-targets {
+  margin-top: 7px;
+  color: var(--navy);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.headline-result-slot .slot-value {
+  margin-top: 18px;
   color: var(--ink);
+  font-size: 1.45rem;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.headline-result-slot .slot-effect {
+  margin-top: 5px;
+  color: var(--green);
+  font-size: 1rem;
+  font-weight: 720;
+}
+
+.headline-result-slot--regressed .slot-effect {
+  color: var(--red);
 }
 
 .headline-result-slot > footer,
@@ -413,21 +429,67 @@ code {
 .task6-slot-list {
   display: grid;
   gap: 10px;
+  margin-top: 12px;
 }
 
 .task6-slot-row {
   display: grid;
-  gap: 5px;
+  gap: 12px;
 }
 
-.task6-slot-row > div {
-  align-items: flex-start;
-  flex-wrap: wrap;
-  justify-content: flex-start;
+.task6-slot-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.task6-slot-row > div > strong {
-  width: 100%;
+.task6-slot-heading > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.task6-comparison {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-block: 1px solid var(--line);
+}
+
+.task6-comparison > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 12px 14px;
+  border-right: 1px solid var(--line);
+}
+
+.task6-comparison > div:last-child {
+  border-right: 0;
+}
+
+.task6-comparison span,
+.task6-comparison small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.task6-comparison strong {
+  overflow-wrap: anywhere;
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+.task6-slot-row--regressed .task6-debt strong {
+  color: var(--red);
+}
+
+.task6-slot-row--regressed {
+  border-left: 4px solid var(--red);
+  padding-left: 10px;
+}
+
+.task6-slot-row--improved .task6-debt strong {
+  color: var(--green);
 }
 
 .extension-result-grid {
@@ -446,6 +508,14 @@ code {
 
 .extension-result-slot h3 {
   margin: 0;
+}
+
+.extension-value {
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 1.12rem;
+  line-height: 1.35;
 }
 
 .subheading {
@@ -574,6 +644,12 @@ code {
   color: var(--ink);
 }
 
+.caption-source {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+
 .evidence-link {
   padding: 0;
   border: 0;
@@ -583,6 +659,24 @@ code {
   cursor: pointer;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 0.82rem;
+}
+
+.evidence-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.evidence-menu > summary {
+  cursor: pointer;
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.evidence-menu > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 7px;
 }
 
 .task-matrix {
@@ -595,7 +689,7 @@ code {
 
 .task-cell {
   display: grid;
-  grid-template-columns: minmax(58px, 72px) minmax(76px, 92px) minmax(0, 1fr);
+  grid-template-columns: minmax(150px, 1.2fr) minmax(58px, 76px) minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   min-height: 58px;
@@ -609,6 +703,11 @@ code {
 
 .task-number {
   font-weight: 750;
+}
+
+.task-count {
+  color: var(--teal);
+  font-size: 1.05rem;
 }
 
 .task-detail {
@@ -680,6 +779,13 @@ code {
   align-items: start;
   justify-content: space-between;
   gap: 18px;
+}
+
+.measurement-count,
+.claim-item header > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
 }
 
 .benchmark-block h3,
@@ -980,6 +1086,35 @@ tbody th {
     grid-template-columns: 1fr;
   }
 
+  .task6-slot-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .task6-comparison {
+    grid-template-columns: 1fr;
+  }
+
+  .task6-comparison > div,
+  .task6-comparison > div:last-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .task6-comparison > div:last-child {
+    border-bottom: 0;
+  }
+
+  .task6-comparison .task6-debt {
+    order: -1;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .task6-comparison > div:nth-child(2) {
+    border-bottom: 0;
+  }
+
   .task-matrix {
     grid-template-columns: 1fr;
   }
@@ -1012,7 +1147,10 @@ tbody th {
     padding-block: 20px 38px;
   }
 
-  .summary-strip,
+  .summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .task-matrix {
     grid-template-columns: 1fr;
   }
@@ -1025,15 +1163,40 @@ tbody th {
     border-bottom: 1px solid var(--line);
   }
 
-  .summary-strip > div:last-child,
+  .summary-strip > div:nth-child(odd) {
+    border-right: 1px solid var(--line);
+  }
+
+  .summary-strip > div:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .summary-strip:has(> div:nth-child(3):last-child) {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-strip:has(> div:nth-child(3):last-child) > div,
+  .summary-strip:has(> div:nth-child(3):last-child) > div:nth-child(odd) {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .summary-strip:has(> div:nth-child(3):last-child) > div:last-child {
+    border-bottom: 0;
+  }
+
   .task-cell:last-child {
     border-bottom: 0;
   }
 
   .task-cell {
-    grid-template-columns: 68px 86px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 62px;
     gap: 7px;
     padding-inline: 9px;
+  }
+
+  .task-detail {
+    grid-column: 1 / -1;
   }
 
   .interval-chart {

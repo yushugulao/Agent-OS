@@ -35,8 +35,14 @@ from render_evaluation_dashboard import (
     DashboardError,
     _binding_sha256,
     _bootstrap_interval,
+    _duration_label,
+    _evidence_entry_link,
+    _overview_claim_slots,
     _overview_extension_slots,
+    _overview_task6_slot,
     _read_evidence_file,
+    _relative_effect_label,
+    _task_matrix,
     main as dashboard_main,
     render as render_dashboard,
     validate_summary,
@@ -1134,16 +1140,19 @@ class DashboardContractTests(unittest.TestCase):
             self.assertIn('tabindex="0"', page)
             self.assertEqual(page.count('data-overview-slot="mechanism"'), 3)
             self.assertEqual(page.count('data-overview-slot="task6"'), 1)
-            self.assertEqual(page.count('data-extension-slot="'), 2)
+            self.assertEqual(page.count('data-extension-slot="'), 3)
             self.assertIn('data-extension-slot="resource-stability"', page)
             self.assertIn('data-extension-slot="compatibility-overhead"', page)
-            self.assertIn("不选择单一胜者", page)
-            self.assertIn("状态不互相替代，也不生成综合总分", page)
+            self.assertIn('data-extension-slot="kernel-cost"', page)
+            self.assertIn("核心机制实测", page)
+            self.assertIn("真实负载、样本量与正负结果同屏展示", page)
             self.assertNotIn('chart-title-overview', page)
             self.assertIn('data-raw-pairs="14"', page)
             self.assertEqual(page.count('class="raw-pair-link"'), 14)
             self.assertEqual(page.count('class="raw-pair-dot raw-pair-dot--'), 28)
             self.assertIn("小圆点和浅色连线展示每个独立 boot", page)
+            self.assertIn('<div class="caption-source"><strong>来源</strong>', page)
+            self.assertNotIn('<span><strong>来源</strong> <details', page)
             self.assertGreaterEqual(page.count("索引准备成本与缓存状态"), 2)
             self.assertIn("独立诊断仅支持索引准备状态披露，不参与 headline 判定", page)
             self.assertIn("index_rebuild_records=0 与 result_cache_hits=0", page)
@@ -1153,11 +1162,11 @@ class DashboardContractTests(unittest.TestCase):
             self.assertIn("实际 N", page)
             self.assertIn("精确等于 N x operations", page)
             self.assertIn("不要求实验结果预先胜出", page)
-            self.assertIn("发布与竞赛验收", page)
-            self.assertIn("科学证据发布", page)
-            self.assertIn("竞赛整体验收", page)
-            self.assertIn("任务 1-6 竞赛状态", page)
-            self.assertIn("file_query_path_index 结论", page)
+            self.assertNotIn("发布与竞赛验收", page)
+            self.assertNotIn("科学证据发布", page)
+            self.assertNotIn("竞赛整体验收", page)
+            self.assertIn("任务 1-6 的动态回执数据", page)
+            self.assertIn("2 负载 · n=7", page)
             self.assertNotIn("任务 1-6 动态验收", page)
             self.assertIn("joint-MCID", page)
             self.assertIn("描述性 bootstrap 95% 区间", page)
@@ -1166,6 +1175,21 @@ class DashboardContractTests(unittest.TestCase):
             self.assertIn("full-stack / non-single-mechanism", page)
             self.assertIn("Host page cache", page)
             self.assertIn("uncontrolled", page)
+            overview = page.split('id="panel-overview"', 1)[1].split(
+                'id="panel-performance"', 1
+            )[0]
+            self.assertNotIn("竞赛整体验收", overview)
+            self.assertNotIn("证据支持", overview)
+            self.assertNotIn('class="status ', overview)
+            self.assertIn("Plain p50", overview)
+            self.assertIn("AgentOS p50", overview)
+            self.assertIn("n=7", overview)
+            self.assertIn("安全机制对照 uCore → AgentOS", overview)
+            load_y = float(re.search(r'class="load-label" x="8" y="([0-9.]+)"', page).group(1))
+            series_y = float(re.search(r'class="series-label" x="168" y="([0-9.]+)"', page).group(1))
+            self.assertGreaterEqual(series_y - load_y, 20)
+            first_axis = re.search(r'class="axis-label"[^>]*>([^<]+)</text>', page).group(1)
+            self.assertFalse(first_axis.lstrip().startswith("-"), first_axis)
             self.assertIn('href="evidence/raw/boot-01/guest.log"', page)
             self.assertIn('href="evidence/scenario/report.json"', page)
             assert_offline_links_resolve(output / "index.html")
@@ -1239,6 +1263,85 @@ class DashboardContractTests(unittest.TestCase):
                 dashboard_main(["summary.json", "dashboard"])
         self.assertEqual(raised.exception.code, 2)
 
+    def test_overview_formatters_keep_units_direction_and_float_precision(self) -> None:
+        self.assertEqual(_duration_label(120.25, "us/query"), "0.120 ms/query")
+        self.assertEqual(
+            _relative_effect_label(-50.0, "lower_is_better", -1.0, "us/query"),
+            "逐 boot 延迟倍率中位数 1.50x",
+        )
+        self.assertEqual(
+            _relative_effect_label(-12.5, "higher_is_better", -1.0, "items/s"),
+            "逐 boot 吞吐降幅中位数 12.500%",
+        )
+        self.assertEqual(
+            _relative_effect_label(None, "neutral", 0.125, "points"),
+            "配对中位差 +0.125 points",
+        )
+        task6 = _overview_task6_slot(
+            [
+                {
+                    "task": "task6",
+                    "label": "浮点场景",
+                    "performance_status": "supported",
+                    "performance": {
+                        "n": 1,
+                        "paired_success_rate": 1.0,
+                        "samples": [{"plain_ms": 10.25, "agentos_ms": 9.75}],
+                    },
+                }
+            ]
+        )
+        self.assertIn("10.250 ms", task6)
+        self.assertIn("9.750 ms", task6)
+        self.assertIn("task6-slot-row--improved", task6)
+        self.assertNotIn("task6-slot-row--regressed", task6)
+
+    def test_evidence_navigation_and_boot_counts_use_stable_receipts(self) -> None:
+        links = _evidence_entry_link(["first", "second", "first"])
+        self.assertEqual(links.count("data-evidence-ref="), 2)
+        self.assertIn("2 份证据", links)
+        evidence = {
+            "first": {"receipt": {"boot_id": "boot-a"}},
+            "second": {"receipt": {"boot_id": "boot-a"}},
+        }
+        matrix = _task_matrix(
+            [
+                {
+                    "task": "task1",
+                    "functional_status": "pass",
+                    "performance": None,
+                    "evidence_ids": ["first", "second"],
+                }
+            ],
+            evidence,
+        )
+        self.assertIn("1/1", matrix)
+        self.assertIn("独立启动结果一致", matrix)
+        self.assertNotIn("2/2", matrix)
+
+    def test_overview_claim_slots_report_partial_relative_coverage_and_missing_claims(self) -> None:
+        summary = fixture()
+        benchmark = summary["benchmarks"][0]
+        benchmark["paired"][0]["relative_median_percent"] = None
+        benchmarks = {item["id"]: item for item in summary["benchmarks"]}
+        targets = {item["id"]: item for item in summary["targets"]}
+        partial = _overview_claim_slots(summary, benchmarks, targets)
+        slot = partial.split('data-benchmark-id="file_query_path_index"', 1)[1].split(
+            "</article>", 1
+        )[0]
+        self.assertIn("1/2 个负载的逐 boot 延迟降幅中位数", slot)
+        self.assertNotIn("全负载逐 boot 延迟降幅", slot)
+
+        summary["claims"] = []
+        no_claim = _overview_claim_slots(summary, benchmarks, targets)
+        slot = no_claim.split('data-benchmark-id="file_query_path_index"', 1)[1].split(
+            "</article>", 1
+        )[0]
+        self.assertIn("79.000 us/query → 13.400 us/query", slot)
+        self.assertIn("安全机制对照 uCore → AgentOS", slot)
+        self.assertIn("本轮未登记性能结论", slot)
+        self.assertNotIn("暂无测量", slot)
+
     def test_optional_guardrail_slots_consume_normalized_verified_fragments(self) -> None:
         resource = _resource_stability_summary(
             [
@@ -1274,23 +1377,43 @@ class DashboardContractTests(unittest.TestCase):
         }
         content = _overview_extension_slots(
             {"compatibility_overhead": compatibility},
-            [{"task_id": "task6", "resource_stability": resource}],
+            [
+                {
+                    "task_id": "task6",
+                    "independent_boots": 7,
+                    "resource_stability": resource,
+                }
+            ],
         )
-        self.assertEqual(content.count('data-extension-slot="'), 2)
-        self.assertIn('status--passed', content)
-        self.assertIn('status--ready', content)
-        self.assertIn("配置全局计数覆盖=8/8", content)
-        self.assertIn("空闲页配对/终点精确恢复=是", content)
-        self.assertIn("计时关系=excluded_from_task6_makespan", content)
-        self.assertIn("全局无泄漏=not_claimed", content)
-        self.assertIn("4 项传统 uCore 兼容路径配对成本", content)
-        self.assertIn("AgentOS/plain 中位成本比 1.05x-1.35x", content)
-        self.assertIn("aggregate score 禁止", content)
+        self.assertEqual(content.count('data-extension-slot="'), 3)
+        self.assertNotIn('class="status ', content)
+        self.assertIn("336 轮压力 · 8/8 类计数", content)
+        self.assertIn("7/7 次独立启动", content)
+        self.assertIn("空闲页配对与终点精确恢复", content)
+        self.assertIn("4 项传统路径 · 7 次配对启动", content)
+        self.assertIn("1.05x–1.35x", content)
+        self.assertIn("数值是兼容成本", content)
+        self.assertIn("暂无静态数据", content)
 
         unavailable = _overview_extension_slots({}, [])
-        self.assertEqual(unavailable.count('status--unavailable'), 2)
-        self.assertIn("不声称全局无泄漏", unavailable)
-        self.assertIn("不并入性能优势或综合分", unavailable)
+        self.assertEqual(unavailable.count('data-extension-slot="'), 3)
+        self.assertIn("暂无动态数据", unavailable)
+        self.assertIn("暂无静态数据", unavailable)
+
+        partial = copy.deepcopy(resource)
+        partial.update(status="partial", verified_boots=3)
+        partial_content = _overview_extension_slots(
+            {},
+            [
+                {
+                    "task_id": "task6",
+                    "independent_boots": 7,
+                    "resource_stability": partial,
+                }
+            ],
+        )
+        self.assertIn("3/7 次独立启动有资源回执", partial_content)
+        self.assertNotIn("7/7 次独立启动", partial_content)
 
     def test_verified_scenario_resource_stability_reaches_overview_end_to_end(self) -> None:
         summary = fixture()
@@ -1308,12 +1431,11 @@ class DashboardContractTests(unittest.TestCase):
             slot = page.split('data-extension-slot="resource-stability"', 1)[1].split(
                 "</article>", 1
             )[0]
-            self.assertIn("status--passed", slot)
-            self.assertIn("核验 boot=7", slot)
-            self.assertIn("配置全局计数覆盖=8/8", slot)
-            self.assertIn("空闲页配对/终点精确恢复=是", slot)
-            self.assertIn("excluded_from_task6_makespan", slot)
-            self.assertIn("全局无泄漏=not_claimed", slot)
+            self.assertNotIn('class="status ', slot)
+            self.assertIn("336 轮压力 · 8/8 类计数", slot)
+            self.assertIn("7/7 次独立启动", slot)
+            self.assertIn("空闲页配对与终点精确恢复", slot)
+            self.assertIn("buffer cache 仅声明有界增长与可回收", slot)
 
             mutations = (
                 (
@@ -1708,6 +1830,11 @@ class DashboardContractTests(unittest.TestCase):
                 self.assertIn(label, page)
             for value in ("200 B", "176 B", "-24 B", "100 B", "90 B", "-10 B"):
                 self.assertIn(value, page)
+            cost_slot = page.split('data-extension-slot="kernel-cost"', 1)[1].split(
+                "</article>", 1
+            )[0]
+            self.assertIn("内存映像 -30.5% · .text -10.0%", cost_slot)
+            self.assertIn("text+data+bss 0.000 → 0.000 MiB", cost_slot)
             self.assertIn("不是 CPU 性能证据", page)
             self.assertIn("不会生成 performance claim", page)
             self.assertEqual(verification["kernel_cost"]["status"], "verified")
@@ -1958,12 +2085,7 @@ class DashboardContractTests(unittest.TestCase):
             source = write_render_input(root, summary)
             render(source, root / "site")
             page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        match = re.search(r'<h2 id="conclusion-title">(.*?)</h2>', page)
-        self.assertIsNotNone(match)
-        self.assertEqual(
-            match.group(1),
-            "3 个机制 claim 与 Task6 固定并列报告；状态不互相替代，也不生成综合总分",
-        )
+        self.assertNotIn('id="conclusion-title"', page)
         overview = page.split('<div class="headline-result-grid">', 1)[1].split("</section>", 1)[0]
         self.assertEqual(
             re.findall(
@@ -1974,8 +2096,9 @@ class DashboardContractTests(unittest.TestCase):
         )
         self.assertIn('data-benchmark-id="file_query_path_index"', overview)
         self.assertIn('data-benchmark-id="metadata-query-no-gate"', overview)
-        self.assertIn('status--supported', overview)
-        self.assertIn('status--not_supported', overview)
+        self.assertNotIn('class="status ', overview)
+        self.assertIn("独立 Guest 启动/负载", overview)
+        self.assertIn("暂无测量", overview)
 
         summary["benchmarks"] = summary["benchmarks"][:2]
         summary["claims"] = [
@@ -1995,12 +2118,7 @@ class DashboardContractTests(unittest.TestCase):
             source = write_render_input(root, summary)
             render(source, root / "site")
             page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        match = re.search(r'<h2 id="conclusion-title">(.*?)</h2>', page)
-        self.assertIsNotNone(match)
-        self.assertEqual(
-            match.group(1),
-            "3 个机制 claim 与 Task6 固定并列报告；状态不互相替代，也不生成综合总分",
-        )
+        self.assertNotIn('id="conclusion-title"', page)
         self.assertEqual(page.count('data-overview-slot="mechanism"'), 3)
 
     def test_negative_file_query_is_publishable_but_not_competition_ready(self) -> None:
@@ -2032,11 +2150,16 @@ class DashboardContractTests(unittest.TestCase):
             source = write_render_input(root, summary)
             render(source, root / "site")
             page = (root / "site/index.html").read_text(encoding="utf-8")
-        self.assertIn("科学证据发布", page)
-        self.assertIn("可发布", page)
-        self.assertIn("竞赛整体验收", page)
-        self.assertIn("未就绪", page)
-        self.assertIn("任务四竞赛验收仅在功能回执通过", page)
+            published = json.loads(
+                (root / "site" / "evaluation-summary.json").read_text(encoding="utf-8")
+            )
+        self.assertNotIn("科学证据发布", page)
+        self.assertNotIn("竞赛整体验收", page)
+        self.assertNotIn("任务四竞赛验收", page)
+        self.assertEqual(
+            published["acceptance"]["scientific_evidence"]["status"], "publishable"
+        )
+        self.assertFalse(published["acceptance"]["competition_ready"])
         self.contract_replay_mock.assert_called_once()
 
         forged = copy.deepcopy(summary)
@@ -2428,6 +2551,27 @@ class DashboardContractTests(unittest.TestCase):
             css,
             r"\.headline-result-slot--task6\s*\{[^}]*grid-column:\s*1\s*/\s*-1",
         )
+        task6_rule = re.search(r"\.headline-result-slot--task6\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(task6_rule)
+        self.assertNotIn("var(--red)", task6_rule.group(1))
+        self.assertRegex(
+            css,
+            r"\.task6-slot-row--regressed\s+\.task6-debt strong\s*\{[^}]*var\(--red\)",
+        )
+        self.assertRegex(
+            css,
+            r"\.task6-slot-row--improved\s+\.task6-debt strong\s*\{[^}]*var\(--green\)",
+        )
+        self.assertRegex(
+            css,
+            r"\.task6-comparison\s*\{[^}]*display:\s*grid[^}]*repeat\(3,",
+        )
+        self.assertRegex(
+            css,
+            r"(?s)@media \(max-width: 700px\).*?\.task6-comparison\s*\{[^}]*grid-template-columns:\s*1fr",
+        )
+        self.assertRegex(css, r"\.slot-value\s*\{[^}]*font-size:\s*1\.45rem")
+        self.assertRegex(css, r"\.evidence-menu\s*\{[^}]*display:\s*inline-block")
         self.assertRegex(css, r"\.raw-pair-link\s*\{[^}]*opacity:\s*0\.55")
         self.assertRegex(
             css,
@@ -2577,8 +2721,8 @@ class DashboardContractTests(unittest.TestCase):
             source = write_render_input(root, summary)
             render(source, root / "site")
             page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("功能状态", page)
-        self.assertIn("性能状态", page)
+        self.assertIn("动态复现", page)
+        self.assertIn("耗时对照", page)
         self.assertIn("signed delta 定义为 plain-AgentOS，中位数 +20 ms", page)
         self.assertIn("描述性 bootstrap 95% 区间", page)
         self.assertIn("正向 joint-MCID 10 ms 与 5%：胜场 7/7", page)
@@ -2589,15 +2733,20 @@ class DashboardContractTests(unittest.TestCase):
             "</section>", 1
         )[0]
         self.assertEqual(overview.count('data-overview-slot="task6"'), 1)
-        self.assertIn("任务 6 端到端场景", overview)
-        self.assertIn("status--supported", overview)
-        self.assertIn("plain-AgentOS 中位差 +20 ms", overview)
+        self.assertIn("科研工作流", overview)
+        self.assertNotIn('class="status ', overview)
+        self.assertIn("Plain p50", overview)
+        self.assertIn("AgentOS p50", overview)
+        self.assertIn("AgentOS/Plain 0.81x", overview)
+        self.assertIn("7/7 工作流结果一致", overview)
+        self.assertIn("task6-slot-row--improved", overview)
+        self.assertNotIn("task6-slot-row--regressed", overview)
         self.assertNotIn("描述性 bootstrap 95% 区间", overview)
         scenario_panel = page.split('id="panel-scenarios"', 1)[1].split(
             'id="panel-evidence"', 1
         )[0]
-        self.assertIn("full-stack / non-single-mechanism", scenario_panel)
-        self.assertIn("Host page cache uncontrolled", scenario_panel)
+        self.assertIn("完整链路；多机制共同影响", scenario_panel)
+        self.assertIn("宿主页缓存未控制", scenario_panel)
 
     def test_scenario_joint_mcid_six_of_seven_is_inconclusive(self) -> None:
         summary = fixture()
@@ -2648,8 +2797,11 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("正向 joint-MCID 10 ms 与 5%：胜场 0/7", page)
         self.assertIn("反向 joint-MCID -10 ms 与 -5%：负场 7/7", page)
         self.assertIn("Bonferroni 后每方向 alpha=0.025", page)
-        self.assertIn("任务 6 端到端场景 性能=显著回退", page)
-        self.assertIn("但只作为诊断", page)
+        self.assertIn("task6-slot-row--regressed", page)
+        self.assertIn("当前性能债务 1.2x", page)
+        self.assertIn("Plain p50 103.000 ms", page)
+        self.assertIn("AgentOS p50 123.000 ms", page)
+        self.assertNotIn("竞赛整体验收", page)
         self.assertIn("Schema evaluation-summary-v3", page)
 
         legacy = copy.deepcopy(summary)
@@ -2671,9 +2823,8 @@ class DashboardContractTests(unittest.TestCase):
             legacy_page = (root / "site" / "index.html").read_text(
                 encoding="utf-8"
             )
-        self.assertIn("suite v2 中场景若得到", legacy_page)
-        self.assertIn("必须保持未就绪", legacy_page)
-        self.assertNotIn("但只作为诊断", legacy_page)
+        self.assertNotIn("竞赛整体验收", legacy_page)
+        self.assertNotIn("科学证据发布", legacy_page)
         self.assertIn("Schema evaluation-summary-v2", legacy_page)
 
         mixed = copy.deepcopy(legacy)
@@ -2769,7 +2920,7 @@ class DashboardContractTests(unittest.TestCase):
             exported = (root / "site" / "evaluation-summary.json").read_text(encoding="utf-8")
         self.assertNotIn(attack, page)
         self.assertNotIn(attack, exported)
-        self.assertIn("通过预注册 joint-MCID 精确检验门", page)
+        self.assertIn("在全部预注册负载达到 joint-MCID 门槛", page)
         self.assertNotIn('"conclusion"', exported)
 
         summary = fixture()

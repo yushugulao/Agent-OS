@@ -117,9 +117,12 @@ def main() -> int:
         repo_root / "docs" / "assets" / "verification-charts" / name
         for name in (
             "cost-replacement.svg",
-            "runtime-observation.svg",
         )
     ]
+    static_runtime_chart = (
+        repo_root / "docs" / "assets" / "verification-charts" / "runtime-observation.svg"
+    )
+    assert not static_runtime_chart.exists(), static_runtime_chart
     assert all(chart.is_file() for chart in doc_charts), doc_charts
     for chart in doc_charts:
         validate_chart(chart)

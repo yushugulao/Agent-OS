@@ -271,7 +271,7 @@ Context/timeline、事件等待、并发写入、LLM Relay 和恢复流程仍由
 
 这张图只是 `rp_backend_exec` 演示目录的架构示意：左侧列出普通用户态平台可能承担的成本，右侧列出 AgentOS 对应机制。它没有 provenance-bound Guest 原始测量，不能用于声称某项机制已动态通过，也不能给出性能收益。
 
-`runtime-observation.svg` 来自运行状态派生字段，只用于本地演示和诊断。当前完整生产链没有独立、可信的 runner tick runtime producer；因此删除 `runner-ticks.svg`、`runner-speedup.svg` 及不可达的 measured 分支，`runner-sweep.csv` 只能记录 `unavailable/plain_runtime_cases_zero` 且没有对照行。任意部分记录、伪造 ticks 或参考目录内容都不能升级成性能结论。以后若恢复 measured 状态，必须先引入非 reference 的 runtime 文件、逐字段来源 receipt、日志 SHA256 和 commit/run 绑定，再作为新的协议版本审查。
+已移除硬编码布局的运行时示例，避免将演示图误读为性能证据。运行时性能只接受由可信动态测量生成、并与原始日志及 commit/run 身份绑定的数据。
 
 文件查询图只在 provenance-bound 测量可用时生成。阅读时必须同时打开 `file-query-benchmark.csv` 和 JSON manifest，核对三条路径的 `operations`、`primary_value`、`duration_unit=us`、`duration_value`、`rebuild_records` 以及来源绑定。时间来自 Guest `gettimeofday` 的原始微秒差值，允许真实的零差值，禁止 floor 或公式补值。图表只是同一 CSV 的可视化，不是额外证据，也不能用来外推 Context、事件、并发写入、LLM Relay 或恢复路径的性能。
 

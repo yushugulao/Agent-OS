@@ -39,6 +39,7 @@ baseline_ucore/nfs/fs.exe
 /.fs-allocator-evidence/
 /.uv-cache/
 /.uv-python/
+/.pytest_cache/
 docs/report/
 __pycache__/
 *.pyc
