@@ -101,15 +101,16 @@ borrowing, a separate catalog resource kind, global union/max approximations,
 or a metadata-envelope ledger; scoped reload instead binds and revalidates the
 immutable lifecycle id and generation.
 
-The current candidate's full-suite duration gate is
-`provisional_requires_full_suite`. Commit `04c1e6652324` and its package under
-`evidence/calibrations/04c1e6652324/` remain historical local-E3 evidence for
-that exact source fingerprint only. The current candidate must be frozen and
-calibrated with three complete 18-case runs before a baseline or deterministic
-limit can be restored. The historical package is explicitly
-`local_e3_unsigned` and is not GitLab Runner or E4 evidence. The older
-`610df28bda64`, `814021ab9dac`, and `31d4ddf53695` packages remain historical artifacts
-only and are not admissible as a threshold for this or any new candidate.
+The current candidate's full-suite duration gate is `calibrated_full_suite`.
+Its source fingerprint is calibrated by the three complete 18-case runs under
+`evidence/calibrations/a9e7c67feda5/`: the median baseline is 271.3223629
+seconds and the deterministic local-E3 limit is 284.889 seconds. The
+calibration applies only while both the recorded source fingerprint and the
+`local-e3-msys2-xpack-qemu11-v1` execution profile match. The package is
+explicitly `local_e3_unsigned` and is not GitLab Runner or E4 evidence. The
+older `04c1e6652324`, `610df28bda64`, `814021ab9dac`, and `31d4ddf53695`
+packages remain historical artifacts only and are not admissible as a
+threshold for this or any new fingerprint.
 
 A production calibration is collected only by
 `scripts/agent_test_calibration.py collect`. The harness requires a real Git
@@ -122,8 +123,8 @@ from an empty extra-file inventory after cleanup and ends with only the exact
 generated-output roots admitted. Native POSIX collection also checks the committed
 executable bit; MSYS2 uses the raw-byte contract because its POSIX mode bits are
 emulated. The harness binds that tree plus the complete source fingerprint into
-a predeclared schema-3 plan. It then runs exactly three complete, serialized
-18-case rounds.
+a predeclared schema-1 plan and publishes a schema-3 manifest. It then runs
+exactly three complete, serialized 18-case rounds.
 The campaign, rounds, and all 57 prelude/case executions receive distinct
 256-bit random nonces.
 
@@ -227,7 +228,7 @@ checkout changes and dangerous environment overrides, checks the required
 Runner tag, validates the exact artifact inventory and job semantics, and then
 publishes canonical `remote-ci-attestation.json`. It emits one complete trace
 marker binding the job name, commit, and attestation SHA256. QEMU artifacts are
-projected into the same semantic registry used by schema v7 final-evidence
+projected into the same semantic registry used by schema v8 final-evidence
 collection and offline verification; the Host budget artifact uses an exact
 inventory and exact completion markers.
 

@@ -2632,6 +2632,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("Bonferroni 后每方向 alpha=0.025", page)
         self.assertIn("任务 6 端到端场景 性能=显著回退", page)
         self.assertIn("但只作为诊断", page)
+        self.assertIn("Schema evaluation-summary-v3", page)
 
         legacy = copy.deepcopy(summary)
         legacy["schema_version"] = 2
@@ -2655,6 +2656,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("suite v2 中场景若得到", legacy_page)
         self.assertIn("必须保持未就绪", legacy_page)
         self.assertNotIn("但只作为诊断", legacy_page)
+        self.assertIn("Schema evaluation-summary-v2", legacy_page)
 
         mixed = copy.deepcopy(legacy)
         mixed["run"]["suite_id"] = "agentos-evaluation-v3"

@@ -4704,7 +4704,7 @@ def _page(
       {methodology_diagnostics}
     </section>
   </main>
-  <footer class="app-footer"><span>Schema evaluation-summary-v2</span><span>生成时间 {_h(run.get("generated_at", "unavailable"))}</span></footer>
+  <footer class="app-footer"><span>Schema evaluation-summary-v{_h(summary["schema_version"])}</span><span>生成时间 {_h(run.get("generated_at", "unavailable"))}</span></footer>
   <script src="assets/evaluation-dashboard.js" defer></script>
 </body>
 </html>
@@ -4824,7 +4824,7 @@ def render(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("summary", type=Path, help="evaluation-summary-v2 JSON")
+    parser.add_argument("summary", type=Path, help="versioned evaluation-summary JSON")
     parser.add_argument("output", type=Path, help="dashboard output directory")
     parser.add_argument(
         "--contract-root",
