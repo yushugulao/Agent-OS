@@ -21,6 +21,9 @@ static void agent_text_append(char *dst, int n, const char *src);
 static void agent_file_catalog_sync(const struct agent_catalog_delta *);
 static int agent_file_store_complete(struct agent_metadata_store_commit *, int);
 
+#define AGENT_QUERY_SNAPSHOT_RETRIES 2
+#define AGENT_METADATA_TOOL_READ_VIEW 2
+
 static void agent_result_text(struct agent_result *res, const char *text) {
 	safestrcpy(res->result, text, sizeof(res->result));
 }
@@ -246,7 +249,22 @@ agent_file_finish_mutation(struct proc *p, struct agent_file_meta *request,
 
 	memset(&persistence, 0, sizeof(persistence));
 	if (persistent) {
-		agent_metadata_store_mark_dirty(scope_id);
+		persistence.completion_token =
+			agent_metadata_store_mark_dirty(scope_id);
+		if (persistence.completion_token == 0) {
+			result = agent_file_restore_status(
+				fence, undo, previous, previous_scope,
+				had_previous, AGENT_STATUS_RETRY);
+			agent_direct_effect_audit(
+				p, AGENT_TOOL_FILE_META_INIT, result,
+				"metadata_queue_full", audit_fid,
+				request->update_mask, 0, request->flags, 1);
+			agent_file_request_scan();
+			return result;
+		}
+#if defined(AGENT_METADATA_CRASH_PHASE) || defined(AGENT_METADATA_EIO_PHASE)
+		/* Fault profiles keep an explicit syscall boundary so each injected
+		 * durable phase has one receipted inducing mutation. */
 		if (agent_metadata_store_persist_commit(&persistence) < 0) {
 			if (!persistence.irrevocable &&
 			    agent_file_restore_status(fence, undo, previous,
@@ -266,11 +284,11 @@ agent_file_finish_mutation(struct proc *p, struct agent_file_meta *request,
 			agent_file_request_scan();
 			return result;
 		}
+#endif
 	}
 	if (event_payload)
 		agent_ipc_deliver_watchers(p, AGENT_EVENT_FILE_STATUS,
 			request->fid, p->context_path_latest, event_payload);
-	agent_file_request_scan();
 	agent_direct_effect_audit(p, AGENT_TOOL_FILE_META_INIT, AGENT_STATUS_OK,
 		success_text, audit_fid, request->update_mask,
 		persistence.completion_token, request->flags, 1);
@@ -350,6 +368,9 @@ int agent_metadata_inode_trackable(struct inode *ip)
 {
 	if (ip == 0)
 		return 0;
+	if (ip->valid && (ip->vfs_policy != VFS_POLICY_WORKFLOW ||
+			  ip->type != T_FILE))
+		return 0;
 	if (ivalid(ip) < 0)
 		return 0;
 	return vfs_inode_label_valid(ip) &&
@@ -396,14 +417,47 @@ void agent_metadata_note_catalog_changes(uint changes)
 	agent_metadata_actions_note_changes(changes);
 }
 
-int agent_scope_reclaim_begin(uint scope_id, uint64 *metadata_target)
+int agent_metadata_durability_fence_current(void)
 {
+	struct proc *p = curr_proc();
+	uint scope_id;
+
+	if (p == 0 || !p->is_agent)
+		return 0;
+	scope_id = agent_identity_proc_scope(p);
+	if (!agent_scope_valid(scope_id))
+		return -1;
+	return agent_metadata_store_durability_fence(scope_id);
+}
+
+int agent_metadata_quiescence_fence_current(void)
+{
+	struct proc *p = curr_proc();
+	uint scope_id;
+
+	if (p == 0 || !p->is_agent)
+		return 0;
+	scope_id = agent_identity_proc_scope(p);
+	if (!agent_scope_valid(scope_id))
+		return -1;
+	return agent_metadata_store_quiescence_fence(scope_id);
+}
+
+int agent_scope_reclaim_begin(
+	uint scope_id, struct workflow_lifecycle_key lifecycle,
+	uint64 *metadata_target)
+{
+	struct workflow_lifecycle_key current = workflow_lifecycle_none();
 	int result;
 	int changed;
 	int reclaimed;
 	int metadata_available;
 
-	if (!agent_scope_valid(scope_id) || metadata_target == 0)
+	if (!agent_scope_valid(scope_id) ||
+	    !workflow_lifecycle_key_valid(lifecycle) ||
+	    vfs_scope_lifecycle(scope_id, &current) < 0 ||
+	    !workflow_lifecycle_key_equal(current, lifecycle) ||
+	    metadata_target == 0)
 		return -1;
 	*metadata_target = 0;
 	if (!agent_metadata_txn_try_external())
@@ -451,9 +505,25 @@ out_txn:
 	return result;
 }
 
-int agent_scope_reclaim_metadata_done(uint scope_id, uint64 metadata_target)
+int agent_scope_reclaim_metadata_done(
+	uint scope_id, struct workflow_lifecycle_key lifecycle,
+	uint64 metadata_target)
 {
+	struct workflow_lifecycle_key current = workflow_lifecycle_none();
+
+	if (!workflow_lifecycle_key_valid(lifecycle) ||
+	    vfs_scope_lifecycle(scope_id, &current) < 0 ||
+	    !workflow_lifecycle_key_equal(current, lifecycle))
+		return 0;
 	return agent_metadata_store_scope_target_done(scope_id, metadata_target);
+}
+
+static void
+agent_file_query_reset(struct agent_file_query_result *result, int *hit_slots)
+{
+	memset(result, 0, sizeof(*result));
+	for (int i = 0; i < AGENT_FILE_QUERY_MAX_HITS; i++)
+		hit_slots[i] = -1;
 }
 
 static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
@@ -463,15 +533,33 @@ static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
 {
 	int result;
 
-	memset(r, 0, sizeof(*r));
-	for (int i = 0; i < AGENT_FILE_QUERY_MAX_HITS; i++)
-		hit_slots[i] = -1;
+	agent_file_query_reset(r, hit_slots);
+	if (!agent_scope_valid(scope_id)) {
+		return AGENT_STATUS_DENIED;
+	}
+	if (agent_metadata_store_available() &&
+	    agent_metadata_store_loaded()) {
+		for (int attempt = 0;
+		     attempt < AGENT_QUERY_SNAPSHOT_RETRIES; attempt++) {
+			result = agent_metadata_query_execute_snapshot(
+				scope_id, q, r, hit_slots);
+			if (result >= 0 && agent_metadata_store_available() &&
+			    agent_metadata_store_loaded())
+				return result;
+			if (result == AGENT_CATALOG_CONFLICT) {
+				agent_file_query_reset(r, hit_slots);
+				return AGENT_STATUS_RETRY;
+			}
+			if (result != AGENT_CATALOG_STALE) {
+				agent_file_query_reset(r, hit_slots);
+				return AGENT_STATUS_RETRY;
+			}
+		}
+		agent_file_query_reset(r, hit_slots);
+		return AGENT_STATUS_RETRY;
+	}
 	if (!agent_metadata_txn_lock(1))
 		return AGENT_STATUS_NO_SPACE;
-	if (!agent_scope_valid(scope_id)) {
-		result = AGENT_STATUS_DENIED;
-		goto out_txn;
-	}
 	r->plan = AGENT_FILE_QUERY_PLAN_SCAN;
 	r->index_bucket = -1;
 	result = agent_file_store_load();
@@ -483,6 +571,8 @@ static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
 		scope_id, q, r, hit_slots, agent_metadata_scan_query_stable());
 out_txn:
 	agent_metadata_txn_unlock();
+	if (result < 0)
+		agent_file_query_reset(r, hit_slots);
 	return result;
 }
 
@@ -1474,19 +1564,15 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 		return AGENT_STATUS_BAD_PARAM;
 	if (agent_lifecycle_context_lane_enter(p) < 0)
 		return -1;
-	if (!agent_metadata_txn_lock(1)) {
-		agent_lifecycle_context_lane_leave(p);
-		return AGENT_STATUS_NO_SPACE;
-	}
 	returned = agent_file_query_internal(agent_identity_proc_scope(p), &query,
 					     &result, query_hit_slots);
 	if (copyout(p->pagetable, resultaddr, (char *)&result,
 		    sizeof(result)) < 0) {
 		returned = -1;
-		goto out_txn;
+		goto out_lane;
 	}
 	if (returned < 0)
-		goto out_txn;
+		goto out_lane;
 	if (agent_context_append_system(
 		    p, AGENT_TOOL_QUERY_FILE, 0, query.flags,
 		    query.status[0] ? query.status : query.stage,
@@ -1495,8 +1581,7 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 		    result.used_index) == 0)
 		agent_metadata_prefetch_update(p, &query, &result,
 				       query_hit_slots, p->agent_call_count);
-out_txn:
-	agent_metadata_txn_unlock();
+out_lane:
 	agent_lifecycle_context_lane_leave(p);
 	return returned;
 }
@@ -1504,6 +1589,8 @@ out_txn:
 int
 agent_metadata_tool_enter(int tool_id)
 {
+	if (tool_id == AGENT_TOOL_QUERY_FILE)
+		return AGENT_METADATA_TOOL_READ_VIEW;
 	if (!agent_tool_uses_file_metadata(tool_id))
 		return 0;
 	if (!agent_metadata_txn_lock(1))
@@ -1516,7 +1603,7 @@ agent_metadata_tool_enter(int tool_id)
 void
 agent_metadata_tool_exit(int locked)
 {
-	if (locked > 0)
+	if (locked == 1)
 		agent_metadata_txn_unlock();
 }
 

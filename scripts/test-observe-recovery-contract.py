@@ -2468,11 +2468,12 @@ def validate_system_workflow_data_policy(
     assert "(cred->capabilities & VFS_CAP_CONTENT_READ) != 0" in authorize
     assert "vfs_system_workflow_exec_valid(ip)" in authorize
     link = function_body_named(directory_source, "dirlink")
+    compact_link = " ".join(link.split())
     assert "ip->vfs_scope_id == VFS_SCOPE_SYSTEM" in link
     assert (
-        "(target_policy == VFS_POLICY_PUBLIC &&\n"
-        "\t\t      ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE)"
-    ) in link
+        "(target_policy == VFS_POLICY_PUBLIC && "
+        "ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE)"
+    ) in compact_link
 
 
 validate_system_workflow_data_policy(
@@ -2501,11 +2502,12 @@ expect_rejected(
     lambda source: validate_system_workflow_data_policy(
         vfs_security_source, source, exec_image_policy_source
     ),
-    fs_source.replace(
-        "(target_policy == VFS_POLICY_PUBLIC &&\n"
-        "\t\t      ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE)",
+    re.sub(
+        r"\(target_policy == VFS_POLICY_PUBLIC &&\s*"
+        r"ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE\)",
         "(target_policy == VFS_POLICY_PUBLIC && 0)",
-        1,
+        fs_source,
+        count=1,
     ),
     "PUBLIC creation can shadow a protected SYSTEM data object",
 )
@@ -3301,14 +3303,109 @@ assert token_count(
 assert token_count(
     store_lease_maintain, ("agent_identity_lease_maintain", "(", ")")
 ) == 1
-assert token_count(
-    background_checkpoint,
-    ("lease_pending", "=", "agent_identity_lease_maintenance_pending", "("),
-) == 1
-assert token_count(
-    background_checkpoint,
-    ("!", "agent_background_take", "(", ")", "&&", "!", "lease_pending"),
-) == 1
+
+
+def validate_background_checkpoint_contract(source: str) -> None:
+    tokens = c_tokens(function_body_named(source, "agent_background_checkpoint"))
+    thread_guard = token_index(tokens, ("if", "(", "t", "==", "0"))
+    lease = token_index(
+        tokens,
+        ("lease_pending", "=", "agent_identity_lease_maintenance_pending", "(", ")", ";"),
+    )
+    pending = token_index(
+        tokens, ("pending", "=", "agent_background_take", "(", ")", ";")
+    )
+    epoch = token_index(
+        tokens, ("epoch_due", "=", "fs_epoch_should_commit", "(", ")", ";")
+    )
+    quiet = token_index(
+        tokens,
+        (
+            "if", "(", "!", "pending", "&&", "!", "lease_pending", "&&",
+            "!", "epoch_due", ")", "return", ";",
+        ),
+    )
+    gate = token_index(
+        tokens,
+        ("if", "(", "fs_epoch_request_begin", "(", ")", "<", "0", ")"),
+    )
+    gate_open = token_index(tokens, ("{",), gate)
+    gate_end = matching_brace(tokens, gate_open)
+    gate_failure = tokens[gate_open : gate_end + 1]
+    assert token_count(
+        gate_failure, ("if", "(", "pending", "||", "lease_pending", ")")
+    ) == 1
+    assert token_count(
+        gate_failure, ("agent_background_request", "(", ")", ";")
+    ) == 1
+    assert token_count(gate_failure, ("return", ";")) == 1
+    maintain = token_index(
+        tokens,
+        (
+            "if", "(", "pending", "||", "lease_pending", ")",
+            "agent_background_maintain", "(", ")", ";",
+        ),
+        gate_end,
+    )
+    commit_check = token_index(
+        tokens,
+        ("if", "(", "fs_epoch_should_commit", "(", ")", ")"),
+        maintain,
+    )
+    commit = token_index(
+        tokens, ("fs_epoch_commit", "(", ")", ";"), commit_check
+    )
+    gate_end_call = token_index(
+        tokens, ("fs_epoch_request_end", "(", ")", ";"), commit
+    )
+    assert thread_guard < lease < pending < epoch < quiet < gate
+    assert gate_end < maintain < commit_check < commit < gate_end_call
+    assert token_count(tokens, ("agent_background_take", "(", ")")) == 1
+    assert token_count(tokens, ("fs_epoch_should_commit", "(", ")")) == 2
+    assert token_count(tokens, ("agent_background_maintain", "(", ")")) == 1
+    assert token_count(tokens, ("fs_epoch_request_end", "(", ")")) == 1
+    assert token_count(tokens, ("for", "(")) == 0
+    assert token_count(tokens, ("while", "(")) == 0
+
+
+validate_background_checkpoint_contract(core)
+expect_rejected(
+    validate_background_checkpoint_contract,
+    core.replace(
+        "if (!pending && !lease_pending && !epoch_due)",
+        "if (!pending && !lease_pending)",
+        1,
+    ),
+    "filesystem epoch work was dropped from checkpoint admission",
+)
+expect_rejected(
+    validate_background_checkpoint_contract,
+    core.replace(
+        "\tif (pending || lease_pending)\n\t\tagent_background_maintain();",
+        "\tif (pending)\n\t\tagent_background_maintain();",
+        1,
+    ),
+    "lease-only maintenance no longer enters the bounded pass",
+)
+expect_rejected(
+    validate_background_checkpoint_contract,
+    core.replace(
+        "\tif (fs_epoch_should_commit())\n\t\t(void)fs_epoch_commit();",
+        "\tif (epoch_due)\n\t\t(void)fs_epoch_commit();",
+        1,
+    ),
+    "epoch commit used a stale pre-admission snapshot",
+)
+expect_rejected(
+    validate_background_checkpoint_contract,
+    core.replace(
+        "\t\tif (pending || lease_pending)\n"
+        "\t\t\tagent_background_request();",
+        "\t\tif (pending)\n\t\t\tagent_background_request();",
+        1,
+    ),
+    "failed gate admission stranded lease maintenance",
+)
 
 identity = (ROOT / "os/agent_identity.c").read_text(encoding="utf-8")
 lifecycle_owner = (ROOT / "os/agent_lifecycle.c").read_text(encoding="utf-8")
@@ -4206,6 +4303,9 @@ io_admission = c_tokens(
     function_body_named(syscall_source, "syscall_may_issue_block_io")
 )
 syscall_dispatch = c_tokens(function_body_named(syscall_source, "syscall"))
+syscall_begin = c_tokens(
+    function_body_named(syscall_source, "syscall_transaction_begin")
+)
 kernel_ids = (ROOT / "os/syscall_ids.h").read_text(encoding="utf-8")
 user_ids = (ROOT / "user/lib/syscall_ids.h").read_text(encoding="utf-8")
 user_syscalls = (ROOT / "user/lib/syscall.c").read_text(encoding="utf-8")
@@ -4215,9 +4315,14 @@ for ids in (kernel_ids, user_ids):
 assert "case SYS_agent_audit_receipt:" in syscall_source
 assert "sys_agent_audit_receipt(args[0])" in syscall_source
 assert token_count(io_admission, ("SYS_agent_audit_receipt",)) == 0
-io_begin = token_index(syscall_dispatch, ("bio_request_begin_current", "(", ")"))
+transaction_begin = token_index(
+    syscall_dispatch, ("syscall_transaction_begin", "(", "&", "transaction", ")")
+)
+dispatch_switch = token_index(syscall_dispatch, ("switch", "(", "id", ")"))
+assert transaction_begin < dispatch_switch
+io_begin = token_index(syscall_begin, ("bio_request_begin_current", "(", ")"))
 io_marked = token_index(
-    syscall_dispatch, ("io_admitted", "=", "1", ";"), io_begin
+    syscall_begin, ("io_admitted", "=", "1", ";"), io_begin
 )
 assert io_begin < io_marked
 assert "int agent_audit_receipt(struct agent_audit_receipt_request *request)" in user_syscalls

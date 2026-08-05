@@ -479,7 +479,7 @@ class KernelBudgetTests(unittest.TestCase):
         execute = query[execute_at:execute_end]
         self.assertLess(
             execute.index("agent_metadata_txn_projection_require_idle()"),
-            execute.index("limit = q->max_hits"),
+            execute.index("agent_query_plan_build(q, r, &plan)"),
         )
 
         unlock_at = metadata.index("agent_metadata_txn_unlock(void)")
@@ -725,9 +725,9 @@ agent_file_store_complete(&commit, result);
             1,
         )
         direct_inode_unbind = directory.replace(
-            "\t\tif (agent_metadata_catalog_clear_slot(slot) < 0)",
+            "\tif (agent_metadata_catalog_clear_slot(slot) < 0)",
             "\tip->agent_meta_slot = 0;\n"
-            "\t\tif (agent_metadata_catalog_clear_slot(slot) < 0)",
+            "\tif (agent_metadata_catalog_clear_slot(slot) < 0)",
             1,
         )
         cases = (
@@ -1637,7 +1637,6 @@ agent_metadata_txn_projection_require_idle();
                 "agent_fs_note_delete",
                 "agent_fs_note_truncate",
                 "agent_fs_note_write",
-                "agent_fs_sync_write",
             ],
         )
         objects = next(
@@ -2129,6 +2128,281 @@ agent_metadata_txn_projection_require_idle();
         self.assertIn("CC=$(call shell_quote,$(HOST_CC))", makefile)
         self.assertIn("HOSTCC=$(call shell_quote,$(HOST_CC))", makefile)
 
+    def test_parallel_build_and_test_limits_are_closed(self):
+        makefile = (SCRIPT.parent.parent / "Makefile").read_text(
+            encoding="utf-8"
+        )
+        adaptive = {
+            "AGENTOS_BUILD_JOBS": "build",
+            "AGENTOS_TEST_JOBS": "host",
+        }
+        for name, kind in adaptive.items():
+            declaration = (
+                f"{name} ?= $(or $(shell $(PYTHON_BIN) -I -S -B "
+                f"scripts/resource-jobs.py --kind {kind} 2>/dev/null),8)"
+            )
+            self.assertEqual(makefile.count(declaration), 1)
+            self.assertIn(f"ifneq ($(words $({name})),1)", makefile)
+            self.assertIn(
+                f"ifeq ($(filter $({name}),$(AGENTOS_JOB_VALUES)),)",
+                makefile,
+            )
+        self.assertNotIn(".NOTPARALLEL", makefile)
+        ci_check = (
+            "ci-check:\n"
+            "\t+@$(MAKE) --no-print-directory ci-host-selftests\n"
+            "\t+@$(MAKE) --no-print-directory kernel-budget-check\n"
+            "\t+@$(MAKE) --no-print-directory user-stack-check\n"
+        )
+        self.assertEqual(makefile.count(ci_check), 1)
+        self.assertIn(
+            "override CI_HOST_SELFTESTS := \\\n"
+            "\t$(HOST_CONTRACT_TESTS) \\\n"
+            "\t$(filter-out $(HOST_CONTRACT_TESTS),"
+            "$(EVIDENCE_CAPTURE_TESTS))",
+            makefile,
+        )
+        self.assertRegex(
+            makefile,
+            r"(?m)^ci-host-selftests: \$\(CI_HOST_SELFTESTS\).*"
+            r"agent-observe-disk-format-check printf-format-static-check$",
+        )
+        self.assertIn(
+            "AGENTOS_SUBMAKE_JOBS = $(if $(filter -j% --jobs=% "
+            "--jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS)),"
+            ",-j$(AGENTOS_BUILD_JOBS))",
+            makefile,
+        )
+        self.assertIn(
+            "ifneq ($(filter -j% --jobs=% --jobserver-auth=% "
+            "--jobserver-fds=%,$(MAKEFLAGS)),)\n"
+            "build: $(BUILDDIR)/kernel\n"
+            "else\n"
+            "build:\n"
+            "\t+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory "
+            "$(BUILDDIR)/kernel\n"
+            "endif\n",
+            makefile,
+        )
+        for fragment in (
+            "$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -C baseline_ucore build",
+            "$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -C baseline_ucore run",
+            "$(MAKE) $(AGENTOS_SUBMAKE_JOBS) build "
+            "TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn "
+            "INIT_PROC=agentfinal_ucore",
+            "$(MAKE) $(AGENTOS_SUBMAKE_JOBS) build "
+            "TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn "
+            "INIT_PROC=rp_agentos_orch",
+            "$(MAKE) $(AGENTOS_SUBMAKE_JOBS) run "
+            "TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX))",
+        ):
+            self.assertIn(fragment, makefile)
+        self.assertIn(
+            "override KERNEL_BUDGET_BUILDDIR = build/ci-kernel-budget",
+            makefile,
+        )
+        self.assertIn(
+            "BUILDDIR=$(call shell_quote,$(KERNEL_BUDGET_BUILDDIR))",
+            makefile,
+        )
+        self.assertIn(
+            "-u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES "
+            "-u GNUMAKEFLAGS -u MAKEFILES",
+            makefile,
+        )
+        self.assertEqual(
+            makefile.count(
+                "+@$(KERNEL_BUDGET_SUBMAKE) "
+                "$(KERNEL_BUDGET_BUILDDIR)/kernel "
+                "$(KERNEL_BUDGET_MAKE_ARGS)"
+            ),
+            2,
+        )
+
+    @unittest.skipUnless(
+        sys.platform != "win32" and shutil.which("make"),
+        "GNU make jobserver contract requires a POSIX host",
+    )
+    def test_parallel_worker_limits_reject_invalid_make_values(self):
+        root = SCRIPT.parent.parent
+        environment = os.environ.copy()
+        for name in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES"):
+            environment.pop(name, None)
+        for variable in ("AGENTOS_BUILD_JOBS", "AGENTOS_TEST_JOBS"):
+            accepted = subprocess.run(
+                ["make", "--no-print-directory", "-n", ".FORCE", f"{variable}=8"],
+                cwd=root,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            for value in ("0", "25", "1 2", "eight"):
+                rejected = subprocess.run(
+                    [
+                        "make", "--no-print-directory", "-n", ".FORCE",
+                        f"{variable}={value}",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("must be an integer between 1 and 24", rejected.stderr)
+
+    @unittest.skipUnless(
+        sys.platform != "win32" and shutil.which("make"),
+        "GNU make jobserver contract requires a POSIX host",
+    )
+    def test_recursive_build_reuses_outer_parallel_policy(self):
+        makefile = (SCRIPT.parent.parent / "Makefile").read_text(
+            encoding="utf-8"
+        )
+        assignment = next(
+            line for line in makefile.splitlines()
+            if line.startswith("AGENTOS_SUBMAKE_JOBS = ")
+        )
+        fixture = (
+            "AGENTOS_BUILD_JOBS := 8\n"
+            f"{assignment}\n"
+            ".PHONY: print\n"
+            "print:\n"
+            "\t@printf '%s\\n' '$(AGENTOS_SUBMAKE_JOBS)'\n"
+        )
+        environment = os.environ.copy()
+        for name in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES"):
+            environment.pop(name, None)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "parallel.mk"
+            path.write_text(fixture, encoding="ascii")
+            serial = subprocess.run(
+                ["make", "-s", "-f", str(path), "print"],
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(serial.stdout.strip(), "-j8")
+            for option in ("-j1", "-j2"):
+                inherited = subprocess.run(
+                    ["make", option, "-s", "-f", str(path), "print"],
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(inherited.stdout.strip(), "")
+
+    @unittest.skipUnless(
+        sys.platform != "win32" and shutil.which("make"),
+        "GNU make jobserver contract requires a POSIX host",
+    )
+    def test_kernel_budget_build_reuses_only_outer_jobserver_flags(self):
+        makefile = (SCRIPT.parent.parent / "Makefile").read_text(
+            encoding="utf-8"
+        )
+        lines = makefile.splitlines()
+        start = next(
+            index for index, line in enumerate(lines)
+            if line.startswith("override KERNEL_BUDGET_SUBMAKE_JOBS = ")
+        )
+        assignment_lines = [lines[start].removeprefix("override ")]
+        while assignment_lines[-1].endswith("\\"):
+            start += 1
+            assignment_lines.append(lines[start])
+        submake_start = next(
+            index for index, line in enumerate(lines)
+            if line.startswith("override KERNEL_BUDGET_SUBMAKE = ")
+        )
+        submake_lines = [lines[submake_start].removeprefix("override ")]
+        while submake_lines[-1].endswith("\\"):
+            submake_start += 1
+            submake_lines.append(lines[submake_start])
+        fixture = (
+            "AGENTOS_BUILD_JOBS := 8\n"
+            + "\n".join(assignment_lines)
+            + "\n.PHONY: print\n"
+            + "print:\n\t@printf '%s\\n' "
+            + "'$(KERNEL_BUDGET_SUBMAKE_JOBS)'\n"
+        )
+        environment = os.environ.copy()
+        for name in (
+            "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GNUMAKEFLAGS", "MAKEFILES"
+        ):
+            environment.pop(name, None)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "budget-parallel.mk"
+            path.write_text(fixture, encoding="ascii")
+            serial = subprocess.run(
+                ["make", "-s", "-f", str(path), "print"],
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(serial.stdout.strip(), "-j8")
+            explicit_serial = subprocess.run(
+                ["make", "-j1", "-s", "-f", str(path), "print"],
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(explicit_serial.stdout.strip(), "-j1")
+            inherited = subprocess.run(
+                ["make", "-j2", "-s", "-f", str(path), "print"],
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            inherited_flags = inherited.stdout.strip().split()
+            self.assertIn("-j2", inherited_flags)
+            self.assertTrue(
+                any(
+                    flag.startswith(("--jobserver-auth=", "--jobserver-fds="))
+                    for flag in inherited_flags
+                ),
+                inherited.stdout,
+            )
+            child = Path(temp) / "child.mk"
+            child.write_text(
+                "check:\n\t@printf 'child=%s\\n' '$(MAKEFLAGS)'\n",
+                encoding="ascii",
+            )
+            nested = Path(temp) / "nested.mk"
+            nested.write_text(
+                "AGENTOS_BUILD_JOBS := 8\n"
+                + "\n".join(assignment_lines)
+                + "\n"
+                + "\n".join(submake_lines)
+                + "\n.PHONY: all\n"
+                + "all:\n\t+@$(KERNEL_BUDGET_SUBMAKE) "
+                + "--no-print-directory -f child.mk check\n",
+                encoding="ascii",
+            )
+            nested_result = subprocess.run(
+                ["make", "-j2", "-s", "-f", str(nested)],
+                cwd=temp,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotIn("jobserver unavailable", nested_result.stderr)
+            child_flags = nested_result.stdout.removeprefix("child=").split()
+            self.assertIn("-j2", child_flags)
+            self.assertTrue(
+                any(
+                    flag.startswith(("--jobserver-auth=", "--jobserver-fds="))
+                    for flag in child_flags
+                ),
+                nested_result.stdout,
+            )
+
     def test_stack_indirect_edge_inventory_matches_compiled_call_owners(self):
         expected = [
             "agent_durable_arena_validate=agent_observe_store_validate",
@@ -2145,7 +2419,7 @@ agent_metadata_txn_projection_require_idle();
         root = SCRIPT.parent.parent
         makefile = (root / "Makefile").read_text(encoding="utf-8")
         default_start = makefile.index("KSTACK_INDIRECT_CALL_EDGES ?=")
-        default_end = makefile.index("\n# printf", default_start)
+        default_end = makefile.index("\n# Sv39", default_start)
         default_edges = re.findall(
             r"[A-Za-z0-9_]+=[A-Za-z0-9_]+",
             makefile[default_start:default_end],
@@ -2169,7 +2443,7 @@ agent_metadata_txn_projection_require_idle();
         self.assertEqual(len(configured_edges), len(set(configured_edges)))
 
     def test_stack_recursion_inventory_matches_bounded_walkers(self):
-        expected = ["printf=2", "freewalk=3", "uvm_prune_empty_walk=3"]
+        expected = ["freewalk=3", "uvm_prune_empty_walk=3"]
         root = SCRIPT.parent.parent
         makefile = (root / "Makefile").read_text(encoding="utf-8")
         default_match = re.search(
@@ -2273,7 +2547,7 @@ agent_metadata_txn_projection_require_idle();
                 ]["profile_id"],
                 "calibration_samples": [
                     {
-                        "sample_id": "agent18-0123456789ab-01",
+                        "sample_id": "agent19-0123456789ab-01",
                         "total_seconds": 261.343281873,
                         "timing_file": (
                             "evidence/calibrations/0123456789ab/01.timing"
@@ -2282,7 +2556,7 @@ agent_metadata_txn_projection_require_idle();
                         "attestation_digest_sha256": "4" * 64,
                     },
                     {
-                        "sample_id": "agent18-0123456789ab-02",
+                        "sample_id": "agent19-0123456789ab-02",
                         "total_seconds": 237.948978492,
                         "timing_file": (
                             "evidence/calibrations/0123456789ab/02.timing"
@@ -2291,7 +2565,7 @@ agent_metadata_txn_projection_require_idle();
                         "attestation_digest_sha256": "5" * 64,
                     },
                     {
-                        "sample_id": "agent18-0123456789ab-03",
+                        "sample_id": "agent19-0123456789ab-03",
                         "total_seconds": 255.370930671,
                         "timing_file": (
                             "evidence/calibrations/0123456789ab/03.timing"
@@ -2901,17 +3175,19 @@ agent_metadata_txn_projection_require_idle();
     def test_agent_aggregate_runtime_limit_is_enforced(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            object_dir = root / "build" / "os"
+            object_dir.mkdir(parents=True)
             entries = []
             for name in ("one", "two", "three"):
                 source = root / f"{name}.c"
-                obj = root / f"{name}.o"
+                obj = object_dir / f"{name}.o"
                 source.write_text("line\n", encoding="utf-8")
                 obj.write_bytes(b"object")
                 entries.append(
                     {
                         "name": name,
                         "source_path": source.name,
-                        "object_path": obj.name,
+                        "object_path": f"build/os/{obj.name}",
                     }
                 )
             group = {
@@ -2968,6 +3244,67 @@ agent_metadata_txn_projection_require_idle();
                             kernel_budgets.check_agent_aggregate_budgets(
                                 root, entries, [group], "fake-size"
                             )
+
+    def test_agent_object_directory_ignores_stale_default_build(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stale_dir = root / "build" / "os"
+            isolated_dir = root / "build" / "ci-kernel-budget" / "os"
+            stale_dir.mkdir(parents=True)
+            isolated_dir.mkdir(parents=True)
+            (stale_dir / "metadata.o").write_bytes(b"stale")
+            (isolated_dir / "metadata.o").write_bytes(b"isolated")
+            (root / "metadata.c").write_text("line\n", encoding="utf-8")
+            (root / "contract.h").write_text("contract\n", encoding="utf-8")
+            (root / "os").mkdir()
+            (root / "os" / "kernel.ld").write_text(
+                "SECTIONS { /DISCARD/ : { *(.eh_frame) } }\n",
+                encoding="utf-8",
+            )
+            entries = [
+                {
+                    "name": "metadata",
+                    "source_path": "metadata.c",
+                    "object_path": "build/os/metadata.o",
+                }
+            ]
+            group = {
+                "name": "fixture",
+                "members": ["metadata"],
+                "contract_headers": ["contract.h"],
+                "contract_header_globs": ["contract.h"],
+                "baseline_source_lines": 2,
+                "max_source_lines": 2,
+                "baseline_source_bytes": 14,
+                "max_source_bytes": 14,
+                "baseline_loaded_text_bytes": 10,
+                "max_loaded_text_bytes": 10,
+                "baseline_bss_bytes": 1,
+                "max_bss_bytes": 1,
+                "discarded_sections": [".eh_frame"],
+            }
+            inspected = []
+
+            def measure(_size, path, _discarded):
+                inspected.append(path.resolve())
+                return 10, 1
+
+            with mock.patch.object(
+                kernel_budgets,
+                "measure_agent_object_residency",
+                side_effect=measure,
+            ), redirect_stdout(io.StringIO()):
+                kernel_budgets.check_agent_aggregate_budgets(
+                    root, entries, [group], "fake-size", isolated_dir
+                )
+            self.assertEqual(inspected, [(isolated_dir / "metadata.o").resolve()])
+            self.assertNotIn((stale_dir / "metadata.o").resolve(), inspected)
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "escapes repository"
+            ):
+                kernel_budgets.resolve_agent_object_path(
+                    root, root.parent, "build/os/metadata.o"
+                )
 
     def test_json_loader_rejects_non_finite_numbers(self):
         with tempfile.TemporaryDirectory() as temp:

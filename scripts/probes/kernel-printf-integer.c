@@ -15,9 +15,8 @@ static void consputc(int c)
 	captured[captured_count++] = c;
 }
 
-static void panic(char *message)
+static void shutdown(void)
 {
-	(void)message;
 	failed = 1;
 }
 

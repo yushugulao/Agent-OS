@@ -10,10 +10,27 @@ IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"
 HOST_CC="${HOST_CC:-${HOSTCC:-${CC:-cc}}}"
+adaptive_jobs() {
+	"${PYTHON_BIN}" -I -S -B "${ROOT_DIR}/scripts/resource-jobs.py" --kind "$1"
+}
+AGENTOS_BUILD_JOBS="${AGENTOS_BUILD_JOBS:-$(adaptive_jobs build)}"
+AGENTOS_TEST_JOBS="${AGENTOS_TEST_JOBS:-$(adaptive_jobs host)}"
+AGENTOS_QEMU_JOBS="${AGENTOS_QEMU_JOBS:-$(adaptive_jobs qemu)}"
 HOSTCC="${HOST_CC}"
 CC="${HOST_CC}"
 AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-local-e3}"
+for jobs in "${AGENTOS_BUILD_JOBS}" "${AGENTOS_TEST_JOBS}"; do
+	if [[ ! "${jobs}" =~ ^([1-9]|1[0-9]|2[0-4])$ ]]; then
+		echo "[full-verify] build/test jobs must be between 1 and 24" >&2
+		exit 2
+	fi
+done
+if [[ ! "${AGENTOS_QEMU_JOBS}" =~ ^([1-8])$ ]]; then
+	echo "[full-verify] QEMU jobs must be between 1 and 8" >&2
+	exit 2
+fi
 export HOST_CC HOSTCC CC AGENT_TEST_DURATION_PROFILE
+export AGENTOS_BUILD_JOBS AGENTOS_TEST_JOBS AGENTOS_QEMU_JOBS
 
 case "${AGENT_TEST_DURATION_PROFILE}" in
 local-e3|none)
@@ -170,10 +187,13 @@ evidence_step_begin
 echo "[full-verify] host platform alignment"
 (
 	cd "${ROOT_DIR}"
-	"${PYTHON_BIN}" host_tools/check_host_platform_alignment.py
-	"${PYTHON_BIN}" host_tools/check_host_action_kind_alignment.py
-	"${PYTHON_BIN}" host_tools/check_host_surface_alignment.py
-	"${PYTHON_BIN}" host_tools/check_host_test_alignment.py
+	"${PYTHON_BIN}" -I -S -B scripts/run-parallel-tests.py \
+		--jobs "${AGENTOS_TEST_JOBS}" \
+		--python "${PYTHON_BIN}" \
+		host_tools/check_host_platform_alignment.py \
+		host_tools/check_host_action_kind_alignment.py \
+		host_tools/check_host_surface_alignment.py \
+		host_tools/check_host_test_alignment.py
 )
 evidence_step_end "host-platform-alignment"
 
@@ -185,6 +205,35 @@ else
 fi
 evidence_step_begin
 echo "[full-verify] AgentOS kernel tests"
+
+if ! evidence_enabled; then
+	parallel_agent_output="${ROOT_DIR}/build/agent-qemu-lanes-$(date +%s)-$$"
+	echo "[full-verify] AgentOS kernel test lanes=${AGENTOS_QEMU_JOBS}"
+	"${PYTHON_BIN}" -I -S -B \
+		"${ROOT_DIR}/scripts/run-parallel-qemu-regressions.py" \
+		--root "${ROOT_DIR}" \
+		--output-dir "${parallel_agent_output}" \
+		--suite agent \
+		--jobs "${AGENTOS_QEMU_JOBS}" \
+		--build-jobs "${AGENTOS_BUILD_JOBS}"
+	cp "${parallel_agent_output}/agent-suite-guest.log" \
+		"${agent_suite_guest_log}"
+	if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ]]; then
+		"${PYTHON_BIN}" -I -S -B \
+			"${ROOT_DIR}/scripts/check-kernel-budgets.py" \
+			--check agent-tests \
+			--config "${ROOT_DIR}/ci/kernel-budgets.json" \
+			--agent-test-timing-file \
+			"${parallel_agent_output}/agent-suite-timings.log"
+	else
+		"${PYTHON_BIN}" -I -S -B \
+			"${ROOT_DIR}/scripts/check-kernel-budgets.py" \
+			--check agent-test-timing-inventory \
+			--config "${ROOT_DIR}/ci/kernel-budgets.json" \
+			--agent-test-timing-file \
+			"${parallel_agent_output}/agent-suite-timings.log"
+	fi
+else
 (
 	cd "${ROOT_DIR}"
 	if evidence_enabled; then
@@ -220,6 +269,7 @@ echo "[full-verify] AgentOS kernel tests"
 			bash scripts/run-agent-tests.sh
 	fi
 )
+fi
 evidence_step_end "agent-suite" "agent-suite-timings.log" "agent-suite-guest.log"
 
 mapfile -t mainflow_artifact_specs < <(
@@ -313,6 +363,20 @@ evidence_step_end "dual-platforms" \
 	"${mainflow_artifacts[@]}" "dual-targeted-agentbench-guest.log" \
 	"dual-measured-experiments.json" "dual-file-query-benchmark.csv"
 
+parallel_resource_regressions=0
+if ! evidence_enabled; then
+	parallel_output="${ROOT_DIR}/build/qemu-regressions-$(date +%s)-$$"
+	echo "[full-verify] resource regressions lanes=${AGENTOS_QEMU_JOBS}"
+	"${PYTHON_BIN}" -I -S -B \
+		"${ROOT_DIR}/scripts/run-parallel-qemu-regressions.py" \
+		--root "${ROOT_DIR}" \
+		--output-dir "${parallel_output}" \
+		--jobs "${AGENTOS_QEMU_JOBS}" \
+		--build-jobs "${AGENTOS_BUILD_JOBS}"
+	parallel_resource_regressions=1
+fi
+
+if [[ "${parallel_resource_regressions}" == "0" ]]; then
 evidence_step_begin
 echo "[full-verify] process reaper tests"
 (
@@ -442,6 +506,22 @@ if evidence_enabled; then
 		"fs-allocator-fault.log" "fs-allocator-evidence.tar"
 else
 	evidence_step_end "fs-allocator-fault"
+fi
+
+# This campaign is a hard acceptance gate. Its raw-image receipts remain in
+# the full-verification log until the final evidence schema gains a dedicated
+# fs_epoch artifact without changing an existing profile in place.
+echo "[full-verify] filesystem ordered epoch power-cut tests"
+(
+	cd "${ROOT_DIR}"
+	fs_epoch_jobs="${AGENTOS_QEMU_JOBS}"
+	((fs_epoch_jobs > 3)) && fs_epoch_jobs=3
+	env TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
+		PYTHON_BIN="${PYTHON_BIN}" CASE_TIMEOUT="${CASE_TIMEOUT}" \
+		IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
+		FSEPOCH_QEMU_JOBS="${fs_epoch_jobs}" \
+		bash scripts/run-fs-epoch-tests.sh
+)
 fi
 
 if evidence_enabled; then

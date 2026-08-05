@@ -138,6 +138,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     failures: list[str] = []
     fs = sources["os/fs.c"]
     fs_h = sources["os/fs.h"]
+    fs_epoch = sources["os/fs_epoch.c"]
+    fs_epoch_h = sources["os/fs_epoch.h"]
     makefile = sources["Makefile"]
     loader = sources["os/loader.c"]
     syscall = sources["os/syscall.c"]
@@ -147,6 +149,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     virtio_h = sources["os/virtio.h"]
     bio = sources["os/bio.c"]
     bio_h = sources["os/bio.h"]
+    proc = sources["os/proc.c"]
+    agent_core = sources["os/agent_core.c"]
     client = sources["user/src/fsallocfault_ucore.c"]
     image_tool = sources["scripts/fs-allocator-image.py"]
     evidence = sources["scripts/fs-allocator-evidence.py"]
@@ -162,9 +166,210 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         if token not in fs_h:
             failures.append(f"os/fs.h: missing four-state contract {token}")
 
+    for token, label in (
+        ("FS_EPOCH_BUFFER_CAP 48U", "bounded epoch capacity"),
+        ("FS_EPOCH_PREPARE", "prepare phase"),
+        ("FS_EPOCH_INODE", "inode phase"),
+        ("FS_EPOCH_NAMESPACE_DETACH", "namespace detach phase"),
+        ("FS_EPOCH_NAMESPACE_ATTACH", "namespace attach phase"),
+    ):
+        if token not in fs_epoch_h:
+            failures.append(f"filesystem epoch missing {label}")
+    phase_order = (
+        "FS_EPOCH_PREPARE",
+        "FS_EPOCH_NAMESPACE_DETACH",
+        "FS_EPOCH_INODE",
+        "FS_EPOCH_NAMESPACE_ATTACH",
+    )
+    cursor = 0
+    for token in phase_order:
+        found = fs_epoch_h.find(token, cursor)
+        if found < 0:
+            failures.append(f"filesystem epoch phase order missing {token}")
+            break
+        cursor = found + len(token)
+    for token, label in (
+        ("bio_deferred_owner_retain_current(",
+         "foreground class retain"),
+        ("&sponsor_request_id) < 0", "foreground request identity retain"),
+        ("bio_deferred_owner_retain_cleanup(",
+         "cleanup owner lifetime retain"),
+        ("bio_deferred_sponsor_begin(", "explicit I/O sponsor"),
+        ("commit_owner, sponsor_class, sponsor_request_id)",
+         "exact request sponsor"),
+        ("virtio_disk_write_batch(batch, batch_count)", "batched writeback"),
+        ("bio_deferred_sponsor_end();", "sponsor release"),
+        ("bio_deferred_owner_release(commit_owner);", "owner lifetime release"),
+        ("wait_queue_wake_all(&epoch.request_queue);", "lifecycle-safe gate wakeup"),
+    ):
+        if token not in fs_epoch:
+            failures.append(f"filesystem epoch missing {label}")
+    if "request_handoff" in fs_epoch or "wait_queue_wake_one_thread" in fs_epoch:
+        failures.append("filesystem epoch retains a teardown-unsafe thread handoff")
+    reserve_phase = function_body(fs_epoch, "fs_epoch_reserve_ordered") or ""
+    for token in (
+        "FS_EPOCH_NAMESPACE_DETACH",
+        "epoch.phase_count[FS_EPOCH_NAMESPACE_ATTACH] != 0",
+        "FS_EPOCH_NAMESPACE_ATTACH",
+        "epoch.phase_count[FS_EPOCH_NAMESPACE_DETACH] != 0",
+    ):
+        if token not in reserve_phase:
+            failures.append(f"filesystem epoch namespace split missing {token}")
+    stage = function_body(fs_epoch, "fs_epoch_stage") or ""
+    if not all(
+        token in stage
+        for token in (
+            "entry->phase == FS_EPOCH_NAMESPACE_DETACH",
+            "phase == FS_EPOCH_NAMESPACE_ATTACH",
+            "entry->phase == FS_EPOCH_NAMESPACE_ATTACH",
+            "phase == FS_EPOCH_NAMESPACE_DETACH",
+        )
+    ):
+        failures.append("filesystem epoch stage accepts opposite namespace images")
+    fence = function_body(fs_epoch, "fs_epoch_generation_fence") or ""
+    for token in (
+        "!fs_epoch_dirty_locked()",
+        "epoch.active_generation == 0",
+        "epoch.owner != owner",
+        "*generation = epoch.active_generation",
+    ):
+        if token not in fence:
+            failures.append(f"filesystem reclaim fence missing {token}")
     require_order(
-        function_body(fs, "balloc"),
-        "balloc",
+        function_body(fs_epoch, "fs_epoch_commit"),
+        "filesystem epoch commit",
+        (
+            r"bio_deferred_sponsor_begin\s*\(",
+            r"FS_EPOCH_PREPARE",
+            r"FS_EPOCH_PHASE_COUNT",
+            r"fs_epoch_write_phase\s*\(",
+            r"fs_epoch_flush_forward\s*\(",
+            r"bio_deferred_sponsor_end\s*\(",
+            r"bunpin\s*\(",
+            r"bio_deferred_owner_release\s*\(",
+        ),
+        failures,
+    )
+    commit = function_body(fs_epoch, "fs_epoch_commit") or ""
+    forward_wait = function_body(fs_epoch, "fs_epoch_forward_wait") or ""
+    if "bio_request_settle_quiescent_cleanup" in commit:
+        failures.append("filesystem epoch settles rate debt while holding the gate")
+    if forward_wait.count("bio_request_settle_quiescent_cleanup()") != 1:
+        failures.append("forward-only filesystem commit lacks bounded debt wait")
+    for token, label in (
+        ("bio_deferred_sponsor_current()", "deferred sponsor lookup"),
+        ("return io_policy.deferred.owner;", "deferred owner attribution"),
+        ("return io_policy.deferred.io_class;", "deferred class attribution"),
+    ):
+        if token not in bio:
+            failures.append(f"I/O policy missing {label}")
+    cleanup_retain = function_body(bio, "bio_deferred_owner_retain_cleanup") or ""
+    require_order(
+        cleanup_retain,
+        "cleanup-only deferred owner retain",
+        (
+            r"caller_holds\s*=",
+            r"if\s*\(\s*!caller_holds\s*\)",
+            r"state\s*=\s*io_state_find",
+            r"state->active_requests\s*==\s*0",
+            r"io_active_request_acquire\s*\(",
+        ),
+        failures,
+    )
+    if "BIO_CACHE_CLEANUP_CAP 8U" not in bio_h:
+        failures.append("cleanup cache budget is not exported to deferred reclaim")
+
+    for token, label in (
+        ("FS_DEFERRED_RECLAIM_CAP 128U", "bounded reclaim queue"),
+        ("FS_DEFERRED_RECLAIM_SYSTEM_RESERVE 16U", "system reclaim reserve"),
+        ("FS_DEFERRED_RECLAIM_OWNER_CAP 32U", "per-owner reclaim cap"),
+        ("FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS 6U", "cleanup cache budget"),
+    ):
+        if token not in fs:
+            failures.append(f"deferred reclaim missing {label}")
+    require_order(
+        function_body(fs, "fs_deferred_reclaim_reserve"),
+        "deferred reclaim reservation",
+        (
+            r"fs_deferred_reclaim_capacity_available",
+            r"fs_epoch_commit\s*\(",
+            r"fs_deferred_reclaim_maintain_owner",
+            r"bio_deferred_owner_retain",
+            r"bio_deferred_owner_retain_cleanup",
+            r"entry.*reserved|\.reserved\s*=\s*1",
+            r"reclaim->deferred_reserved\s*=\s*1",
+        ),
+        failures,
+    )
+    require_order(
+        function_body(fs, "fs_deferred_reclaim_publish"),
+        "deferred reclaim publish",
+        (
+            r"fs_epoch_generation_fence",
+            r"entry->reclaim\s*=\s*\*reclaim",
+            r"entry->fence_generation\s*=\s*generation",
+            r"entry->published\s*=\s*1",
+            r"agent_background_request",
+        ),
+        failures,
+    )
+    maintain = function_body(fs, "fs_deferred_reclaim_maintain_owner") or ""
+    require_order(
+        maintain,
+        "deferred reclaim ordered settlement",
+        (
+            r"fs_epoch_generation_committed",
+            r"bio_deferred_sponsor_begin",
+            r"fs_allocator_gate_lock\s*\(\s*1\s*\)",
+            r"fs_deferred_reclaim_stage_",
+            r"fs_epoch_commit\s*\(",
+            r"fs_deferred_reclaim_advance",
+            r"fs_storage_release_many_accounted",
+            r"fs_allocator_gate_unlock",
+            r"bio_deferred_sponsor_end",
+        ),
+        failures,
+    )
+    if "bfree(" in (function_body(fs, "fs_deferred_reclaim_stage_block") or ""):
+        failures.append("deferred reclaim restored per-block synchronous free")
+    require_order(
+        function_body(syscall, "sys_sync"),
+        "owner-scoped sync fence",
+        (
+            r"agent_metadata_quiescence_fence_current",
+            r"fs_deferred_reclaim_drain_current",
+            r"fs_epoch_commit",
+        ),
+        failures,
+    )
+    if "fs_deferred_reclaim_maintain();" not in agent_core:
+        failures.append("Agent background maintenance does not advance reclaim")
+
+    request_token = function_body(fs_epoch, "fs_epoch_request_token") or ""
+    if not all(
+        token in request_token
+        for token in ("thread->tid < 0", "thread->identity_generation == 0")
+    ):
+        failures.append("filesystem epoch lacks permanent idle request token")
+    require_order(
+        function_body(proc, "scheduler"),
+        "idle aged epoch commit",
+        (
+            r"current_thread\s*=\s*&idle",
+            r"t\s*=\s*fetch_task",
+            r"t\s*==\s*NULL\s*&&\s*fs_epoch_should_commit",
+            r"fs_epoch_request_begin",
+            r"fs_epoch_commit",
+            r"fs_epoch_request_end",
+        ),
+        failures,
+    )
+    if "bio_deferred_polling_current()" not in virtio:
+        failures.append("VirtIO runtime path rejects idle deferred polling")
+
+    require_order(
+        function_body(fs, "balloc_one"),
+        "balloc_one durable fallback",
         (
             r"fs_storage_reserve\s*\(\s*charge\s*,\s*0\s*\)",
             r"bzero\s*\(\s*dev\s*,\s*block\s*\)",
@@ -177,19 +382,148 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         ),
         failures,
     )
-    balloc_body = function_body(fs, "balloc") or ""
-    reserve = re.search(r"fs_storage_reserve\s*\(\s*charge\s*,\s*0\s*\)", balloc_body)
-    valid_guard = re.search(
-        r"if\s*\(\s*charge\s*==\s*0\s*\|\|\s*"
-        r"fs_allocator_gate_lock\s*\(\s*0\s*\)\s*<\s*0\s*\)\s*"
-        r"return\s+0\s*;",
-        balloc_body,
-        re.DOTALL,
+    require_order(
+        function_body(fs, "balloc"),
+        "balloc path selection",
+        (
+            r"FS_ALLOCATOR_FAULT_TEST_PROFILE",
+            r"balloc_one\s*\(",
+            r"!fs_epoch_runtime_enabled\s*\(\s*\)\s*\|\|\s*"
+            r"fs_epoch_bypass_active\s*\(\s*\)",
+            r"balloc_one\s*\(",
+            r"balloc_epoch\s*\(",
+        ),
+        failures,
     )
-    if reserve is None or valid_guard is None or valid_guard.end() > reserve.start():
-        failures.append("balloc: missing exact invalid-input/gate guard")
-    elif len(re.findall(r"\breturn\b", balloc_body[: reserve.start()])) != 1:
-        failures.append("balloc: unexpected early return before quota reservation")
+    if "#define FS_BLOCK_CANDIDATE_BYTES ((FSSIZE + 7U) / 8U)" not in fs:
+        failures.append("candidate cache: reservation bitmap is not capacity-sized")
+    candidate_cap = re.search(
+        r"^\s*#define\s+FS_BLOCK_MAGAZINE_CAP\s+([0-9]+)U\s*$",
+        fs,
+        re.MULTILINE,
+    )
+    if candidate_cap is None or not 2 <= int(candidate_cap.group(1)) <= 32:
+        failures.append("candidate cache: bounded scan cache must be in [2, 32]")
+
+    refill_body = function_body(fs, "fs_block_candidate_refill")
+    require_order(
+        refill_body,
+        "candidate refill",
+        (
+            r"fs_block_magazine_find\s*\(",
+            r"fs_read_block\s*\(\s*dev\s*,\s*BBLOCK",
+            r"fs_block_candidate_is_reserved\s*\(",
+            r"fs_block_candidate_set\s*\(",
+            r"magazine->blocks\s*\[\s*magazine->count\+\+\s*\]",
+            r"fs_block_candidate_transfer\s*\(",
+        ),
+        failures,
+    )
+    if refill_body is not None and re.search(
+        r"fs_storage_reserve|\bbzero\s*\(|fs_qmap_write|fs_bitmap_write",
+        refill_body,
+    ):
+        failures.append("candidate refill: unused candidates touch durable allocation state")
+
+    require_order(
+        function_body(fs, "balloc_epoch"),
+        "epoch allocation",
+        (
+            r"fs_epoch_preflight\s*\(\s*3\s*\)",
+            r"fs_allocator_gate_lock\s*\(\s*0\s*\)",
+            r"fs_block_candidate_take\s*\(",
+            r"fs_storage_reserve\s*\(\s*charge\s*,\s*0\s*\)",
+            r"fs_scrub_block_allocated\s*\(",
+            r"fs_qmap_read\s*\(",
+            r"allocated\s*\|\|\s*qstate\s*!=\s*FS_OWNER_NONE",
+            r"bzero\s*\(",
+            r"epoch_staged\s*=\s*1",
+            r"fs_qmap_write\s*\(\s*dev\s*,\s*block\s*,\s*charge->owner\s*\)",
+            r"mapping_staged\s*=\s*1",
+            r"fs_bitmap_write\s*\(\s*dev\s*,\s*block\s*,\s*1\s*\)",
+            r"fs_block_candidate_clear\s*\(",
+        ),
+        failures,
+    )
+    epoch_alloc = function_body(fs, "balloc_epoch") or ""
+    if "FS_QMAP_ALLOCATING_FLAG" in epoch_alloc or re.search(
+        r"fs_durable_barrier(?:_forward)?\s*\(", epoch_alloc
+    ):
+        failures.append("epoch allocation: production fast path retains intermediate intent/barrier")
+    if len(re.findall(r"fs_storage_reserve\s*\(", epoch_alloc)) != 1:
+        failures.append("epoch allocation: quota reservation is not exactly one block")
+    require_order(
+        epoch_alloc,
+        "epoch allocation abort",
+        (
+            r"if\s*\(\s*epoch_staged\s*\)",
+            r"fs_epoch_commit\s*\(\s*\)",
+            r"commit_result\s*<\s*0\s*\|\|\s*mapping_staged",
+            r"quota_reserved\s*=\s*0",
+            r"FS_FAILURE_METADATA_WRITE_INDETERMINATE",
+            r"fs_storage_release\s*\(",
+        ),
+        failures,
+    )
+    legacy_alloc = function_body(fs, "balloc_one") or ""
+    if "fs_block_candidate_reclaim" not in legacy_alloc:
+        failures.append("balloc_one: synchronous path cannot reclaim cached capacity")
+    drain_body = function_body(fs, "fs_block_candidate_drain") or ""
+    if "fs_block_candidate_clear" not in drain_body or re.search(
+        r"\bbfree\s*\(|fs_storage_release|fs_(?:qmap|bitmap)_write|\bbzero\s*\(",
+        drain_body,
+    ):
+        failures.append("candidate drain: closing an owner mutates unallocated candidates")
+
+    reserve_many_body = function_body(fs, "fs_storage_reserve_many")
+    require_order(
+        reserve_many_body,
+        "fs_storage_reserve_many",
+        (
+            r"\.amount\s*=\s*amount",
+            r"amount\s*>\s*\*free_count\s*\|\|\s*"
+            r"\*free_count\s*-\s*amount\s*<\s*reserve",
+            r"resource_reserve_many\s*\(\s*account\s*,\s*charge_class\s*,\s*"
+            r"&request\s*,\s*1\s*,\s*&reservation\s*\)",
+            r"resource_reservation_commit\s*\(\s*&reservation\s*\)",
+            r"\*free_count\s*-=\s*amount",
+        ),
+        failures,
+    )
+    if reserve_many_body is not None and len(
+        re.findall(r"resource_reserve_many\s*\(", reserve_many_body)
+    ) != 1:
+        failures.append("fs_storage_reserve_many: quota must use one atomic reservation")
+
+    release_many_body = function_body(fs, "fs_storage_release_many_accounted")
+    require_order(
+        release_many_body,
+        "fs_storage_release_many",
+        (
+            r"\.amount\s*=\s*amount",
+            r"amount\s*>\s*total\s*-\s*\*free_count",
+            r"\*free_count\s*\+=\s*amount",
+            r"resource_release_many\s*\(\s*account\s*,\s*charge_class\s*,\s*"
+            r"&request\s*,\s*1\s*\)",
+        ),
+        failures,
+    )
+
+    scrub_inode = function_body(fs, "fs_scrub_mark_inode_blocks")
+    require_order(
+        scrub_inode,
+        "allocation-ahead EOF recovery",
+        (
+            r"needed\s*=\s*fs_div_round_up\s*\(\s*dip->size\s*,\s*BSIZE\s*\)",
+            r"indirect_needed\s*=\s*needed\s*>\s*NDIRECT",
+            r"i\s*<\s*indirect_needed",
+            r"fs_scrub_mark_block",
+            r"brelse\s*\(\s*bp\s*\)",
+            r"indirect_needed\s*<\s*NINDIRECT",
+            r"fs_scrub_clear_indirect_suffix_forward",
+        ),
+        failures,
+    )
     require_order(
         function_body(fs, "bfree"),
         "bfree",
@@ -209,7 +543,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             r"intent\s*=\s*fs_qmap_transition\s*\(\s*FS_QMAP_ALLOCATING_FLAG",
             r"fs_storage_reserve\s*\(\s*charge\s*,\s*1\s*\)",
             r"dip->fs_owner_domain\s*=\s*intent\s*;",
-            r"fs_write_metadata_block\s*\(\s*bp\s*\)",
+            r"fs_write_inode_block\s*\(\s*bp\s*\)",
             r"fs_durable_barrier_forward\s*\(\s*\)",
             r"FS_ALLOCATOR_FAULT_AFTER\s*\(\s*FSALLOC_OP_IALLOC",
             r"reserved\s*=\s*0\s*;",
@@ -319,6 +653,10 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     )
     for critical in (
         "balloc",
+        "balloc_one",
+        "balloc_epoch",
+        "fs_block_candidate_refill",
+        "fs_block_candidate_drain",
         "bfree",
         "ialloc",
         "inode_remove_detach",
@@ -673,6 +1011,8 @@ def main() -> int:
     paths = (
         "os/fs.c",
         "os/fs.h",
+        "os/fs_epoch.c",
+        "os/fs_epoch.h",
         "Makefile",
         "os/loader.c",
         "os/syscall.c",
@@ -682,6 +1022,8 @@ def main() -> int:
         "os/virtio.h",
         "os/bio.c",
         "os/bio.h",
+        "os/proc.c",
+        "os/agent_core.c",
         "user/src/fsallocfault_ucore.c",
         "scripts/fs-allocator-image.py",
         "scripts/fs-allocator-evidence.py",
@@ -723,10 +1065,96 @@ def main() -> int:
             "static int fs_bitmap_write_forward(int dev, uint block, int allocated)\n{",
             "static int fs_bitmap_write_forward(int dev, uint block, int allocated)\n{\n\treturn 0;",
         ),
-        "balloc-valid-input-early-success": (
+        "balloc-fast-path-disabled": (
             "os/fs.c",
-            "static uint balloc(uint dev, const struct fs_storage_charge *charge, int *error)\n{",
-            "static uint balloc(uint dev, const struct fs_storage_charge *charge, int *error)\n{\n\tif (charge != 0) return 0;",
+            "return balloc_epoch(dev, charge, error);",
+            "return balloc_one(dev, charge, error);",
+        ),
+        "candidate-refill-reserves-quota": (
+            "os/fs.c",
+            "magazine = fs_block_magazine_find(owner, 1);",
+            "magazine = fs_block_magazine_find(owner, 1);\n\t(void)fs_storage_reserve(0, 0);",
+        ),
+        "candidate-refill-zeroes-block": (
+            "os/fs.c",
+            "fs_block_candidate_set(block);",
+            "(void)bzero(dev, block);\n\t\t\t\tfs_block_candidate_set(block);",
+        ),
+        "candidate-cache-bypass": (
+            "os/fs.c",
+            "fs_block_candidate_reclaim(b + bi) < 0",
+            "0 /* candidate index ignored */",
+        ),
+        "epoch-intent-restored": (
+            "os/fs.c",
+            "result = fs_qmap_write(dev, block, charge->owner);",
+            "result = fs_qmap_write(dev, block, FS_QMAP_ALLOCATING_FLAG | charge->owner);",
+        ),
+        "epoch-intermediate-barrier": (
+            "os/fs.c",
+            "epoch_staged = 1;",
+            "epoch_staged = 1;\n\t(void)fs_durable_barrier();",
+        ),
+        "epoch-partial-map-refund": (
+            "os/fs.c",
+            "quota_reserved = 0;\n\t\t\tresult = fs_io_fail(",
+            "result = fs_io_fail(",
+        ),
+        "epoch-owner-release-deleted": (
+            "os/fs_epoch.c",
+            "bio_deferred_owner_release(commit_owner);",
+            "(void)commit_owner;",
+        ),
+        "epoch-sponsor-deleted": (
+            "os/fs_epoch.c",
+            "if (bio_deferred_sponsor_begin(\n"
+            "\t\t    commit_owner, sponsor_class, sponsor_request_id) < 0)",
+            "if (0)",
+        ),
+        "epoch-gate-handoff-restored": (
+            "os/fs_epoch.c",
+            "wait_queue_wake_all(&epoch.request_queue);",
+            "wait_queue_wake_one_thread(&epoch.request_queue);",
+        ),
+        "epoch-namespace-order-swapped": (
+            "os/fs_epoch.h",
+            "FS_EPOCH_NAMESPACE_DETACH,\n\tFS_EPOCH_INODE,",
+            "FS_EPOCH_INODE,\n\tFS_EPOCH_NAMESPACE_DETACH,",
+        ),
+        "epoch-opposite-namespace-merged": (
+            "os/fs_epoch.c",
+            "if ((entry->phase == FS_EPOCH_NAMESPACE_DETACH &&\n"
+            "\t\t     phase == FS_EPOCH_NAMESPACE_ATTACH) ||\n"
+            "\t\t    (entry->phase == FS_EPOCH_NAMESPACE_ATTACH &&\n"
+            "\t\t     phase == FS_EPOCH_NAMESPACE_DETACH)) {",
+            "if (0) {",
+        ),
+        "reclaim-fence-allows-empty-epoch": (
+            "os/fs_epoch.c",
+            "!fs_epoch_dirty_locked() || epoch.active_generation == 0 ||",
+            "epoch.active_generation == (uint64)-1 ||",
+        ),
+        "reclaim-cleanup-resurrects-owner": (
+            "os/bio.c",
+            "if (state == 0 ||\n"
+            "\t    (state->active_requests == 0 &&",
+            "if (state == 0 ||\n"
+            "\t    (0 &&",
+        ),
+        "reclaim-release-before-commit": (
+            "os/fs.c",
+            "result = fs_epoch_commit();\n\tif (result < 0)\n\t\tgoto out_unlock;\n\tfor (uint i = 0; i < plan_count; i++) {",
+            "for (uint i = 0; i < plan_count; i++) {",
+        ),
+        "sync-skips-owner-reclaim": (
+            "os/syscall.c",
+            "result = fs_deferred_reclaim_drain_current();",
+            "result = 0;",
+        ),
+        "idle-aged-commit-disabled": (
+            "os/proc.c",
+            "t == NULL && fs_epoch_should_commit() &&",
+            "0 && fs_epoch_should_commit() &&",
         ),
         "bitmap-forward-goto-bypass": (
             "os/fs.c",

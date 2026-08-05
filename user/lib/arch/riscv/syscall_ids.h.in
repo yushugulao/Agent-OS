@@ -357,3 +357,4 @@
 #define __NR_agent_audit_receipt 557
 #define __NR_kernel_work_receipt_snapshot 558
 #define __NR_agent_resource_snapshot 559
+#define __NR_agent_performance_snapshot 560

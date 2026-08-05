@@ -4,6 +4,22 @@ ARCH ?= riscv64
 CHAPTER ?= 8
 BASE ?= 0
 TOOLPREFIX ?= $(shell if command -v $(ARCH)-linux-musl-gcc >/dev/null 2>&1; then echo $(ARCH)-linux-musl-; else echo riscv64-linux-gnu-; fi)
+ifeq ($(FUNCTIONAL_REVIEW_BUILD),1)
+override FUNCTIONAL_REVIEW_FORBIDDEN_USER_VARS := \
+	ARCH CC OBJCOPY OBJDUMP COMMON_CFLAGS CFLAGS CPPFLAGS LDFLAGS LIB_C LIB_OBJS CRT_OBJ \
+	app_dir build_dir elf_dir obj_dir bin_dir generated_dir out_dir asm_dir arch_dir \
+	SRCS APPS SELECTED_APPS
+override FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS := $(strip $(foreach variable,$(FUNCTIONAL_REVIEW_FORBIDDEN_USER_VARS),$(if $(filter command line environment override,$(origin $(variable))),$(variable))))
+ifneq ($(FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS),)
+$(error FUNCTIONAL_REVIEW_BUILD rejects external user variables: $(FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS))
+endif
+override FUNCTIONAL_REVIEW_USER_CFLAGS := $(USER_EXTRA_CFLAGS)
+override FUNCTIONAL_REVIEW_FLAGS_STATUS := $(shell python3 -I -S -B ../scripts/validate-functional-review-flags.py '$(subst ','"'"',$(FUNCTIONAL_REVIEW_USER_CFLAGS))' '$(subst ','"'"',$(CHAPTER))' '$(subst ','"'"',$(CH_TESTS))' '$(subst ','"'"',$(INIT_PROC))' 2>/dev/null)
+ifneq ($(FUNCTIONAL_REVIEW_FLAGS_STATUS),ok)
+$(error FUNCTIONAL_REVIEW_BUILD rejects USER_EXTRA_CFLAGS or its build context)
+endif
+override USER_EXTRA_CFLAGS := $(FUNCTIONAL_REVIEW_USER_CFLAGS)
+endif
 CC := $(TOOLPREFIX)gcc
 OBJCOPY := $(TOOLPREFIX)objcopy
 OBJDUMP := $(TOOLPREFIX)objdump
@@ -40,14 +56,22 @@ LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
 SRCS := $(wildcard $(app_dir)/*.c)
 APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
-APPS += compatbench
+APPS += compatbench tradperf tradexec
 GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
 EVALUATION_HEADER := $(generated_dir)/agenteval_seed.h
 COMPAT_BENCH_HEADER := $(generated_dir)/compatbench_seed.h
 COMPAT_BENCH_REPO_SOURCE := evaluation_guest/compatbench.c
 COMPAT_BENCH_SOURCE := ../$(COMPAT_BENCH_REPO_SOURCE)
+TRADPERF_HEADER := $(generated_dir)/traditional_perf_seed.h
+TRADPERF_REPO_SOURCE := evaluation_guest/traditional_perf.c
+TRADEXEC_REPO_SOURCE := evaluation_guest/traditional_execprobe.c
+TRADPERF_SOURCE := ../$(TRADPERF_REPO_SOURCE)
+TRADEXEC_SOURCE := ../$(TRADEXEC_REPO_SOURCE)
 AGENT_EVAL_CHALLENGE_HEX ?= 0000000000000001
 COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
+TRADPERF_RUN_NONCE ?= 1
+TRADPERF_SAMPLE_ID ?= 1
+TRADPERF_ORDER_SLOT ?= 1
 USER_BUILD_CONFIG := $(build_dir)/.user-build-config
 USER_STACK_CONTRACT := ../user_stack_policy.h
 USER_STACK_CONTRACT_WRAPPER := include/user_stack_policy.h
@@ -85,7 +109,8 @@ OBSERVE_RECOVERY_TESTS := agentobsreboot_ucore
 VIRTIO_DISK_TESTS := virtiodisk_ucore
 EVALUATION_TESTS := agenteval_ucore
 COMPATIBILITY_TESTS := compatbench
-AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentbench_ucore labbench_ucore labdemo_ucore agentsecurity_ucore agenttoolabi_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
+TRADITIONAL_PERF_TESTS := tradperf tradexec
+AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentbench_ucore ch8_cow_ucore labbench_ucore labdemo_ucore agentsecurity_ucore agenttoolabi_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
 PLATFORM_TESTS := rp_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 
@@ -127,6 +152,8 @@ else ifeq ($(CHAPTER), agent_eval)
 CH_TESTS := $(EVALUATION_TESTS)
 else ifeq ($(CHAPTER), compat_eval)
 CH_TESTS := $(COMPATIBILITY_TESTS)
+else ifeq ($(CHAPTER), traditional_perf)
+CH_TESTS := $(TRADITIONAL_PERF_TESTS)
 else ifeq ($(CHAPTER), safety)
 CH_TESTS := $(SAFETY_TESTS)
 else ifeq ($(CHAPTER), fs_enospc)
@@ -160,6 +187,8 @@ endif
 SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))
 STACK_USAGE_LIBRARY_SRCS := $(addprefix user/,$(sort $(LIB_C)))
 STACK_USAGE_APPLICATION_SRCS := \
+	$(TRADPERF_REPO_SOURCE) \
+	$(TRADEXEC_REPO_SOURCE) \
 	$(addprefix user/,$(sort $(SRCS))) \
 	$(COMPAT_BENCH_REPO_SOURCE)
 STACK_USAGE_SRCS := $(STACK_USAGE_LIBRARY_SRCS) $(STACK_USAGE_APPLICATION_SRCS)
@@ -204,6 +233,29 @@ $(COMPAT_BENCH_HEADER): .FORCE
 		'#endif' > $@.tmp
 	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
 
+$(TRADPERF_HEADER): .FORCE
+	@mkdir -p $(@D)
+	@case '$(TRADPERF_RUN_NONCE)' in \
+		''|0|*[!0-9]*) echo 'TRADPERF_RUN_NONCE must be a nonzero decimal uint64' >&2; exit 2 ;; \
+	esac
+	@case '$(TRADPERF_SAMPLE_ID)' in \
+		1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32) ;; \
+		*) echo 'TRADPERF_SAMPLE_ID must be in 1..32' >&2; exit 2 ;; \
+	esac
+	@case '$(TRADPERF_ORDER_SLOT)' in \
+		1|2) ;; \
+		*) echo 'TRADPERF_ORDER_SLOT must be 1 or 2' >&2; exit 2 ;; \
+	esac
+	@printf '%s\n' \
+		'#ifndef __TRADITIONAL_PERF_SEED_H__' \
+		'#define __TRADITIONAL_PERF_SEED_H__' \
+		'#define TRADPERF_RUN_NONCE $(TRADPERF_RUN_NONCE)ULL' \
+		'#define TRADPERF_SAMPLE_ID $(TRADPERF_SAMPLE_ID)U' \
+		'#define TRADPERF_TARGET_AGENTOS 1' \
+		'#define TRADPERF_ORDER_SLOT $(TRADPERF_ORDER_SLOT)U' \
+		'#endif' > $@.tmp
+	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
+
 $(USER_BUILD_CONFIG): .FORCE
 	@mkdir -p $(@D)
 	@printf '%s\n' \
@@ -232,6 +284,20 @@ $(STACK_USAGE_DIR)/evaluation_guest/compatbench.o: \
 	@mkdir -p $(@D)
 	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
 		-fstack-usage -fcallgraph-info=su -c $(COMPAT_BENCH_REPO_SOURCE) \
+		-o $(call shell_quote,$(abspath $@))
+
+$(STACK_USAGE_DIR)/evaluation_guest/traditional_perf.o: \
+		$(TRADPERF_SOURCE) $(GENERATED_HEADERS) $(TRADPERF_HEADER)
+	@mkdir -p $(@D)
+	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
+		-fstack-usage -fcallgraph-info=su -c $(TRADPERF_REPO_SOURCE) \
+		-o $(call shell_quote,$(abspath $@))
+
+$(STACK_USAGE_DIR)/evaluation_guest/traditional_execprobe.o: \
+		$(TRADEXEC_SOURCE) $(GENERATED_HEADERS) $(TRADPERF_HEADER)
+	@mkdir -p $(@D)
+	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
+		-fstack-usage -fcallgraph-info=su -c $(TRADEXEC_REPO_SOURCE) \
 		-o $(call shell_quote,$(abspath $@))
 
 $(STACK_USAGE_DIR)/user/src/workflow_teardown_race_ucore.o: \
@@ -268,6 +334,22 @@ $(elf_dir)/compatbench: $(COMPAT_BENCH_SOURCE) $(LIB_OBJS) $(CRT_OBJ) \
 		$(COMPAT_BENCH_SOURCE) -o $@
 	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/compatbench.asm
 	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/compatbench
+
+$(elf_dir)/tradperf: $(TRADPERF_SOURCE) $(LIB_OBJS) $(CRT_OBJ) \
+		$(GENERATED_HEADERS) $(TRADPERF_HEADER) $(arch_dir)/user.ld
+	@mkdir -p $(elf_dir) $(bin_dir) $(asm_dir)
+	$(CC_CMD) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) \
+		$(TRADPERF_SOURCE) -o $@
+	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/tradperf.asm
+	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/tradperf
+
+$(elf_dir)/tradexec: $(TRADEXEC_SOURCE) $(LIB_OBJS) $(CRT_OBJ) \
+		$(GENERATED_HEADERS) $(TRADPERF_HEADER) $(arch_dir)/user.ld
+	@mkdir -p $(elf_dir) $(bin_dir) $(asm_dir)
+	$(CC_CMD) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) \
+		$(TRADEXEC_SOURCE) -o $@
+	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/tradexec.asm
+	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/tradexec
 
 $(LIB_OBJS) $(CRT_OBJ) $(addprefix $(elf_dir)/,$(SELECTED_APPS)): \
 	$(USER_BUILD_CONFIG) $(USER_STACK_CONTRACT) $(USER_STACK_CONTRACT_WRAPPER)

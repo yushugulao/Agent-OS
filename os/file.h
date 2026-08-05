@@ -1,6 +1,7 @@
 #ifndef FILE_H
 #define FILE_H
 
+#include "bio.h"
 #include "fs.h"
 #include "proc.h"
 #include "types.h"
@@ -79,6 +80,33 @@ struct file {
 	int resource_reserved;
 };
 
+/*
+ * The final reference is unpublished with interrupts disabled, but its
+ * destructor may sleep.  A prepared receipt owns every field needed to finish
+ * that destructor after the caller has entered the appropriate slow path.
+ */
+enum file_close_receipt_state {
+	FILE_CLOSE_RECEIPT_EMPTY = 0,
+	FILE_CLOSE_RECEIPT_PREPARED,
+	FILE_CLOSE_RECEIPT_FINALIZING,
+	FILE_CLOSE_RECEIPT_SETTLEMENT,
+	FILE_CLOSE_RECEIPT_CONSUMED,
+};
+
+struct file_close_receipt {
+	enum file_close_receipt_state state;
+	int type;
+	int writable;
+	struct pipe *pipe;
+	struct inode *ip;
+	struct resource_account_handle resource_account;
+	int resource_reserved;
+	int result;
+	struct bio_cleanup_token cleanup_token;
+};
+
+#define FILE_CLOSE_RECEIPT_INIT { 0 }
+
 //A few specific fd
 enum {
 	STDIN = 0,
@@ -88,10 +116,18 @@ enum {
 
 extern struct file filepool[FILEPOOLSIZE];
 
+void filepool_init(void);
 int pipealloc(struct file *, struct file *);
 void pipeclose(struct pipe *, int);
 int piperead(struct pipe *, uint64, uint64);
 int pipewrite(struct pipe *, uint64, uint64);
+int fileclose_prepare(struct file *, struct file_close_receipt *);
+int fileclose_receipt_is_inode(const struct file_close_receipt *);
+int fileclose_finish_drop_only(struct file_close_receipt *);
+int fileclose_finish_epoch(struct file_close_receipt *);
+int fileclose_finish_settle(struct file_close_receipt *);
+int fileclose_finish_result(const struct file_close_receipt *);
+void fileclose_finish(struct file_close_receipt *);
 void fileclose(struct file *);
 struct file *filedup(struct file *);
 struct file *filealloc(struct proc *);

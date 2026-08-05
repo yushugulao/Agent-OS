@@ -3,6 +3,8 @@
 #include "agent_internal.h"
 #include "bio.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "fs_epoch.h"
 #include "kernel_work.h"
 #include "loader.h"
 #include "sync.h"
@@ -166,7 +168,8 @@ uint64 console_write(uint64 va, uint64 len)
 			console_putchar(buf[i]);
 			written++;
 			if ((written % KERNEL_WORK_STREAM_GRANULE) == 0 &&
-			    kernel_work_checkpoint(KERNEL_WORK_STREAM_GRANULE) < 0)
+			    kernel_work_checkpoint_bytes(
+				    KERNEL_WORK_STREAM_GRANULE) < 0)
 				return written;
 		}
 	}
@@ -194,25 +197,21 @@ uint64 console_read(uint64 va, uint64 len)
 	return got;
 }
 
-uint64 sys_write(int fd, uint64 va, uint64 len)
+static uint64 sys_write(struct file *f, int fd, uint64 va, uint64 len)
 {
 	uint64 result;
-	struct file *f;
 	struct proc *p;
 
 	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
 	p = curr_proc();
-	f = fdget(fd);
 	if (f == NULL) {
 		errorf("invalid fd %d\n", fd);
 		return -1;
 	}
 	if (!f->writable || len > MAX_RW_COUNT ||
-	    user_range_check(p->pagetable, va, len, PTE_R) < 0) {
-		fileclose(f);
+	    user_range_check(p->pagetable, va, len, PTE_R) < 0)
 		return -1;
-	}
 	switch (f->type) {
 	case FD_STDIO:
 		result = console_write(va, len);
@@ -226,29 +225,24 @@ uint64 sys_write(int fd, uint64 va, uint64 len)
 	default:
 		panic("unknown file type %d\n", f->type);
 	}
-	fileclose(f);
 	return result;
 }
 
-uint64 sys_read(int fd, uint64 va, uint64 len)
+static uint64 sys_read(struct file *f, int fd, uint64 va, uint64 len)
 {
 	uint64 result;
-	struct file *f;
 	struct proc *p;
 
 	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
 	p = curr_proc();
-	f = fdget(fd);
 	if (f == NULL) {
 		errorf("invalid fd %d\n", fd);
 		return -1;
 	}
 	if (!f->readable || len > MAX_RW_COUNT ||
-	    user_range_check(p->pagetable, va, len, PTE_W) < 0) {
-		fileclose(f);
+	    user_range_check(p->pagetable, va, len, PTE_W) < 0)
 		return -1;
-	}
 	switch (f->type) {
 	case FD_STDIO:
 		result = console_read(va, len);
@@ -262,7 +256,6 @@ uint64 sys_read(int fd, uint64 va, uint64 len)
 	default:
 		panic("unknown file type %d\n", f->type);
 	}
-	fileclose(f);
 	return result;
 }
 
@@ -586,13 +579,34 @@ uint64 sys_unlinkat(int dirfd, uint64 va, uint64 flags)
 	return fileunlink(path);
 }
 
-uint64 sys_close(int fd)
+static int sys_sync(void)
 {
-	if (fdclose(fd) < 0) {
-		errorf("invalid fd %d", fd);
+	int result = agent_metadata_quiescence_fence_current();
+
+	if (result < 0)
+		return result;
+	result = fs_deferred_reclaim_drain_current();
+	if (result < 0)
+		return result;
+	return fs_epoch_commit();
+}
+
+static int sys_fsync(int fd)
+{
+	struct file *f = fdget(fd);
+	int result;
+	int valid;
+
+	if (f == 0)
 		return -1;
-	}
-	return 0;
+	valid = f->type == FD_INODE;
+	fileclose(f);
+	if (!valid)
+		return -1;
+	result = agent_metadata_durability_fence_current();
+	if (result < 0)
+		return result;
+	return fs_epoch_commit();
 }
 
 int sys_thread_create(uint64 entry, uint64 arg)
@@ -783,29 +797,46 @@ int sys_condvar_wait(int cond_id, int mutex_id)
 
 extern char trap_page[];
 
-static int syscall_fd_uses_disk(uint64 fd)
-{
-	struct proc *p = curr_proc();
-	struct file *f;
-	int result = 0;
-	int enabled = intr_save();
+/* Admission and execution share one pinned file-table identity. */
+struct syscall_transaction_context {
+	int id;
+	uint64 args[6];
+	struct file *file;
+	struct file_close_receipt close_receipt;
+	int fd_uses_disk;
+	int close_attempted;
+	int close_result;
+	int close_final;
+	int io_admitted;
+	int io_cleanup_admitted;
+	int fs_epoch_admitted;
+};
 
-	if (p != 0 && fd < FD_BUFFER_SIZE && (f = p->files[fd]) != 0 &&
-	    !fd_is_reserved(f) && f->type == FD_INODE)
-		result = 1;
-	intr_restore(enabled);
-	return result;
+static struct file *syscall_fd_pin(uint64 fd)
+{
+	if (fd >= FD_BUFFER_SIZE)
+		return 0;
+	return fdget((int)fd);
+}
+
+static int syscall_file_uses_disk(const struct file *file)
+{
+	return file != 0 && file->type == FD_INODE;
 }
 
 // New syscalls are admitted by default. A syscall may bypass the block-I/O
 // governor only when its implementation is known not to reach the filesystem.
-static int syscall_may_issue_block_io(int id, uint64 *args)
+static int syscall_may_issue_block_io(
+	const struct syscall_transaction_context *transaction)
 {
+	int id = transaction->id;
+
 	switch (id) {
 	case SYS_read:
 	case SYS_write:
+		return transaction->fd_uses_disk;
 	case SYS_close:
-		return syscall_fd_uses_disk(args[0]);
+		return 0;
 	case SYS_sched_yield:
 	case SYS_gettimeofday:
 	case SYS_getpid:
@@ -836,6 +867,7 @@ static int syscall_may_issue_block_io(int id, uint64 *args)
 	case SYS_agent_workflow_close:
 	case SYS_agent_workflow_lifecycle_info:
 	case SYS_agent_resource_snapshot:
+	case SYS_agent_performance_snapshot:
 	case SYS_agent_info:
 	case SYS_agent_sched_snapshot:
 	case SYS_agent_sched_config:
@@ -863,6 +895,7 @@ static int syscall_may_issue_block_io(int id, uint64 *args)
 	case SYS_agent_wake:
 	case SYS_agent_route_config:
 	case SYS_agent_observe_recovery:
+	case SYS_exit:
 #ifdef AGENT_METADATA_CRASH_PHASE
 	case SYS_agent_metadata_test:
 #endif
@@ -878,12 +911,271 @@ static int syscall_may_issue_block_io(int id, uint64 *args)
 	}
 }
 
+/*
+ * Filesystem mutation is serialized below the VFS so one ordered epoch can
+ * publish allocation, inode and namespace state without per-operation
+ * barriers.  Pure reads and non-filesystem teaching calls stay off this path.
+ */
+static int syscall_needs_fs_epoch(
+	const struct syscall_transaction_context *transaction)
+{
+	int id = transaction->id;
+	const uint64 *args = transaction->args;
+
+	switch (id) {
+	case SYS_read:
+		return 0;
+	case SYS_write:
+		return transaction->fd_uses_disk;
+	case SYS_close:
+		return 0;
+	case SYS_openat:
+		return (args[1] & (O_CREATE | O_TRUNC)) != 0;
+	case SYS_unlinkat:
+	case SYS_sync:
+	case SYS_fsync:
+	case SYS_fdatasync:
+		return 1;
+	case SYS_fstat:
+	case SYS_execve:
+	case SYS_sched_yield:
+	case SYS_gettimeofday:
+	case SYS_getpid:
+	case SYS_getppid:
+	case SYS_brk:
+	case SYS_mailread:
+	case SYS_mailwrite:
+	case SYS_trace:
+	case SYS_clone:
+	case SYS_wait4:
+	case SYS_pipe2:
+	case SYS_thread_create:
+	case SYS_gettid:
+	case SYS_waittid:
+	case SYS_mutex_create:
+	case SYS_mutex_lock:
+	case SYS_mutex_unlock:
+	case SYS_semaphore_create:
+	case SYS_semaphore_up:
+	case SYS_semaphore_down:
+	case SYS_condvar_create:
+	case SYS_condvar_signal:
+	case SYS_condvar_wait:
+	case SYS_kernel_work_last_preemptions:
+	case SYS_kernel_work_receipt_snapshot:
+	case SYS_io_policy_info:
+	case SYS_agent_resource_snapshot:
+	case SYS_agent_performance_snapshot:
+	case SYS_agent_info:
+	case SYS_agent_sched_snapshot:
+	case SYS_agent_trace_snapshot:
+	case SYS_agent_audit_snapshot:
+	case SYS_agent_audit_query:
+	case SYS_agent_audit_receipt:
+	case SYS_agent_span_trace_snapshot:
+	case SYS_agent_timeline_snapshot:
+	case SYS_agent_timeline_query:
+	case SYS_agent_timeline_wait:
+	case SYS_agent_timeline_read:
+	case SYS_agent_provenance_snapshot:
+	case SYS_agent_ledger_snapshot:
+	case SYS_agent_file_prefetch_snapshot:
+	case SYS_agent_file_prefetch_span_snapshot:
+	case SYS_agent_tool_list:
+	case SYS_tool_list:
+	case SYS_agent_watch:
+	case SYS_agent_unwatch:
+	case SYS_agent_wait:
+	case SYS_agent_wait_cancel:
+	case SYS_agent_heartbeat:
+	case SYS_agent_heartbeat_set:
+	case SYS_agent_heartbeat_stop:
+	case SYS_agent_wake:
+	case SYS_agent_route_config:
+	case SYS_exit:
+#ifdef VIRTIO_DISK_TEST_PROFILE
+	case SYS_virtio_disk_test:
+#endif
+		return 0;
+	default:
+		/* New Agent calls fail closed into the ordered mutation path. */
+		return 1;
+	}
+}
+
+static void syscall_transaction_prepare(
+	struct syscall_transaction_context *transaction,
+	const struct trapframe *trapframe)
+{
+	memset(transaction, 0, sizeof(*transaction));
+	transaction->id = trapframe->a7;
+	transaction->args[0] = trapframe->a0;
+	transaction->args[1] = trapframe->a1;
+	transaction->args[2] = trapframe->a2;
+	transaction->args[3] = trapframe->a3;
+	transaction->args[4] = trapframe->a4;
+	transaction->args[5] = trapframe->a5;
+	switch (transaction->id) {
+	case SYS_read:
+	case SYS_write:
+		transaction->file = syscall_fd_pin(transaction->args[0]);
+		transaction->fd_uses_disk =
+			syscall_file_uses_disk(transaction->file);
+		break;
+	default:
+		break;
+	}
+}
+
+static int syscall_transaction_begin(
+	struct syscall_transaction_context *transaction)
+{
+	if (transaction->id == SYS_close) {
+		int close_status;
+
+		transaction->close_attempted = 1;
+		if (transaction->args[0] >= FD_BUFFER_SIZE)
+			close_status = -1;
+		else
+			close_status = fdclose_prepare(
+				(int)transaction->args[0],
+				&transaction->close_receipt);
+		transaction->close_result = close_status < 0 ? -1 : 0;
+		if (close_status <= 0)
+			return 0;
+		transaction->close_final = 1;
+		if (transaction->close_receipt.type != FD_INODE)
+			return 0;
+		return 0;
+	}
+	/* Serialize mutators before reserving scarce device-rate capacity. */
+	if (syscall_needs_fs_epoch(transaction)) {
+		if (fs_epoch_request_begin() < 0)
+			return -1;
+		transaction->fs_epoch_admitted = 1;
+	}
+	if (syscall_may_issue_block_io(transaction)) {
+		int io_begin_result = transaction->fs_epoch_admitted ?
+			bio_request_begin_current() :
+			bio_request_begin_current_lazy();
+
+		if (io_begin_result < 0) {
+			/* A failed admission can race descriptor close. Obtain the
+			 * teardown reservation before dropping a possibly-final pin. */
+			if (transaction->file != 0 &&
+			    transaction->fd_uses_disk &&
+			    bio_request_begin_current_cleanup() == 0) {
+				transaction->io_admitted = 1;
+				transaction->io_cleanup_admitted = 1;
+			}
+			return -1;
+		}
+		transaction->io_admitted = 1;
+	}
+	return 0;
+}
+
+static void syscall_transaction_end_io(
+	struct syscall_transaction_context *transaction)
+{
+	if (!transaction->io_admitted)
+		return;
+	if (transaction->io_cleanup_admitted)
+		(void)bio_request_end_current_cleanup();
+	else
+		(void)bio_request_end_current(1);
+	transaction->io_admitted = 0;
+	transaction->io_cleanup_admitted = 0;
+}
+
+static void syscall_transaction_commit(
+	struct syscall_transaction_context *transaction, int *result)
+{
+	if (transaction->io_admitted && fs_epoch_should_commit()) {
+		int commit_result = fs_epoch_commit();
+
+		if (commit_result < 0 && *result >= 0)
+			*result = commit_result;
+	}
+}
+
+static void syscall_transaction_finish(
+	struct syscall_transaction_context *transaction, int *result)
+{
+	struct file_close_receipt *receipt = &transaction->close_receipt;
+	int final = 0;
+
+	if (transaction->close_final) {
+		if (transaction->close_receipt.state !=
+		    FILE_CLOSE_RECEIPT_PREPARED)
+			panic("syscall close receipt");
+		final = 1;
+		transaction->close_final = 0;
+	}
+	/* A concurrent close/reopen cannot redirect this reference drop. */
+	if (transaction->file != 0) {
+		if (final)
+			panic("syscall duplicate file receipt");
+		do {
+			final = fileclose_prepare(transaction->file, receipt);
+			if (final < 0)
+				(void)kernel_work_checkpoint_cleanup(
+					KERNEL_WORK_OPERATION_UNITS);
+		} while (final < 0);
+		transaction->file = 0;
+	}
+	if (final && receipt->type != FD_INODE) {
+		fileclose_finish(receipt);
+		final = 0;
+	}
+	if (final) {
+		int dropped = fileclose_finish_drop_only(receipt);
+
+		if (dropped < 0)
+			panic("syscall file drop-only receipt");
+		if (dropped > 0)
+			final = 0;
+	}
+	if (final && !transaction->fs_epoch_admitted) {
+		/* Never acquire the filesystem gate while carrying an I/O lease. */
+		syscall_transaction_end_io(transaction);
+		if (fs_epoch_request_begin() < 0) {
+			fileclose_finish(receipt);
+			if (*result >= 0)
+				*result = -1;
+			return;
+		}
+		transaction->fs_epoch_admitted = 1;
+	}
+	if (final) {
+		while (fileclose_finish_epoch(receipt) < 0 &&
+		       receipt->state == FILE_CLOSE_RECEIPT_PREPARED)
+			(void)kernel_work_checkpoint_cleanup(
+				KERNEL_WORK_OPERATION_UNITS);
+	}
+	if (transaction->fs_epoch_admitted) {
+		syscall_transaction_commit(transaction, result);
+		fs_epoch_request_end();
+		transaction->fs_epoch_admitted = 0;
+	}
+	syscall_transaction_end_io(transaction);
+	if (final && receipt->state == FILE_CLOSE_RECEIPT_SETTLEMENT) {
+		while (fileclose_finish_settle(receipt) !=
+		       BIO_CLEANUP_RELEASED)
+			(void)kernel_work_checkpoint_cleanup(
+				KERNEL_WORK_OPERATION_UNITS);
+	}
+	if (final && fileclose_finish_result(receipt) < 0 && *result >= 0)
+		*result = -1;
+}
+
 static uint syscall_kernel_work_class(int id)
 {
 	switch (id) {
 	case SYS_kernel_work_last_preemptions:
 	case SYS_kernel_work_receipt_snapshot:
 	case SYS_agent_resource_snapshot:
+	case SYS_agent_performance_snapshot:
 		return KERNEL_WORK_SYSCALL_OBSERVER;
 	default:
 		return KERNEL_WORK_SYSCALL_PUBLISH;
@@ -893,19 +1185,20 @@ static uint syscall_kernel_work_class(int id)
 void syscall()
 {
 	struct trapframe *trapframe = curr_thread()->trapframe;
-	int id = trapframe->a7, ret;
-	int io_admitted = 0;
-	uint64 args[6] = { trapframe->a0, trapframe->a1, trapframe->a2,
-			   trapframe->a3, trapframe->a4, trapframe->a5 };
+	struct syscall_transaction_context transaction;
+	uint64 *args;
+	int id;
+	int ret;
+
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
+	syscall_transaction_prepare(&transaction, trapframe);
+	id = transaction.id;
+	args = transaction.args;
 	kernel_work_begin_syscall(id, syscall_kernel_work_class(id));
-	if (syscall_may_issue_block_io(id, args)) {
-		if (bio_request_begin_current() < 0) {
-			ret = -1;
-			goto syscall_out;
-		}
-		io_admitted = 1;
+	if (syscall_transaction_begin(&transaction) < 0) {
+		ret = -1;
+		goto syscall_out;
 	}
 	if (id >= 0 && id < SYSCALL_COUNT_MAX)
 		curr_proc()->syscall_count[id]++;
@@ -915,10 +1208,12 @@ void syscall()
 	}
 	switch (id) {
 	case SYS_write:
-		ret = sys_write(args[0], args[1], args[2]);
+		ret = sys_write(transaction.file, (int)args[0],
+				args[1], args[2]);
 		break;
 	case SYS_read:
-		ret = sys_read(args[0], args[1], args[2]);
+		ret = sys_read(transaction.file, (int)args[0],
+			       args[1], args[2]);
 		break;
 	case SYS_fstat:
 		ret = sys_fstat(args[0], args[1]);
@@ -930,7 +1225,15 @@ void syscall()
 		ret = sys_unlinkat(args[0], args[1], args[2]);
 		break;
 	case SYS_close:
-		ret = sys_close(args[0]);
+		ret = transaction.close_attempted ?
+			transaction.close_result : -1;
+		break;
+	case SYS_sync:
+		ret = sys_sync();
+		break;
+	case SYS_fsync:
+	case SYS_fdatasync:
+		ret = sys_fsync(args[0]);
 		break;
 	case SYS_exit:
 		sys_exit(args[0]);
@@ -1040,6 +1343,9 @@ void syscall()
 		break;
 	case SYS_agent_resource_snapshot:
 		ret = sys_agent_resource_snapshot(args[0], args[1]);
+		break;
+	case SYS_agent_performance_snapshot:
+		ret = sys_agent_performance_snapshot(args[0], args[1]);
 		break;
 	case SYS_agent_info:
 		ret = sys_agent_info(args[0]);
@@ -1212,10 +1518,11 @@ void syscall()
 		errorf("unknown syscall %d", id);
 	}
 syscall_out:
-	if (io_admitted)
-		(void)bio_request_end_current(1);
-	/* Bounded maintenance runs only on a schedulable, real thread context. */
-	agent_background_checkpoint();
+	syscall_transaction_finish(&transaction, &ret);
+	/* Timer delivery owns periodic maintenance.  A voluntary yield is the
+	 * only syscall-tail assist, so unrelated calls never inherit writeback. */
+	if (id == SYS_sched_yield)
+		agent_background_checkpoint();
 	kernel_work_end();
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);

@@ -34,10 +34,97 @@ static struct {
 	int initialized;
 } physical_reserve;
 
+#define ACCOUNT_PAGE_CAP ((PHYSTOP - KERNBASE) / PGSIZE)
+#define ACCOUNT_PAGE_OWNER_MASK 0x1ffU
+#define ACCOUNT_PAGE_CLASS_SHIFT 9
+#define ACCOUNT_PAGE_REF_MAX 0xffU
+
+/*
+ * A physical page is charged once, even while several COW mappings refer to
+ * it.  The compact owner tag keeps the original account alive until the last
+ * mapping disappears, including forks that enter a different resource domain.
+ */
+static ushort account_page_owner_class[ACCOUNT_PAGE_CAP];
+static uchar account_page_refs[ACCOUNT_PAGE_CAP];
+static uint64 account_page_generation[RESOURCE_ACCOUNT_CAP];
+static uint account_page_count[RESOURCE_ACCOUNT_CAP];
+
+_Static_assert(RESOURCE_ACCOUNT_CAP <= ACCOUNT_PAGE_OWNER_MASK,
+	       "account page owner tag is too small");
+_Static_assert(NPROC < ACCOUNT_PAGE_REF_MAX,
+	       "account page reference tag is too small");
+
 static int page_address_valid(void *pa)
 {
 	return ((uint64)pa % PGSIZE) == 0 && (char *)pa >= ekernel &&
 	       (uint64)pa < PHYSTOP;
+}
+
+static uint account_page_index(void *pa)
+{
+	if (!page_address_valid(pa) || (uint64)pa < KERNBASE)
+		panic("account page address");
+	return ((uint64)pa - KERNBASE) / PGSIZE;
+}
+
+static int account_page_tracked(void *pa)
+{
+	uint index = account_page_index(pa);
+
+	return account_page_owner_class[index] != 0 ||
+	       account_page_refs[index] != 0;
+}
+
+static uint account_page_owner(ushort owner_class)
+{
+	uint encoded = owner_class & ACCOUNT_PAGE_OWNER_MASK;
+
+	if (encoded == 0 || encoded > RESOURCE_ACCOUNT_CAP)
+		panic("account page owner");
+	return encoded - 1;
+}
+
+static enum resource_charge_class account_page_class(ushort owner_class)
+{
+	return (enum resource_charge_class)
+		((owner_class >> ACCOUNT_PAGE_CLASS_SHIFT) & 1U);
+}
+
+static void account_page_track(
+	void *pa, struct resource_account_handle account,
+	enum resource_charge_class charge_class)
+{
+	uint index = account_page_index(pa);
+	int enabled = intr_save();
+
+	if (account.slot >= RESOURCE_ACCOUNT_CAP || account.generation == 0 ||
+	    charge_class < RESOURCE_CHARGE_ORDINARY ||
+	    charge_class >= RESOURCE_CHARGE_CLASS_COUNT ||
+	    account_page_owner_class[index] != 0 ||
+	    account_page_refs[index] != 0 ||
+	    account_page_count[account.slot] == (uint)-1)
+		panic("account page track");
+	if (account_page_count[account.slot] == 0)
+		account_page_generation[account.slot] = account.generation;
+	else if (account_page_generation[account.slot] != account.generation)
+		panic("account page generation");
+	account_page_count[account.slot]++;
+	account_page_owner_class[index] =
+		(ushort)((account.slot + 1) |
+			 ((uint)charge_class << ACCOUNT_PAGE_CLASS_SHIFT));
+	account_page_refs[index] = 1;
+	intr_restore(enabled);
+}
+
+static int account_page_matches(
+	ushort owner_class, struct resource_account_handle account,
+	enum resource_charge_class charge_class)
+{
+	uint owner = account_page_owner(owner_class);
+
+	return owner == account.slot &&
+	       account_page_generation[owner] == account.generation &&
+	       account_page_class(owner_class) == charge_class;
 }
 
 static int physical_reserved_page_owned(void *pa)
@@ -96,6 +183,8 @@ void kfree_system_page(void *pa)
 	struct linklist *l;
 	if (!page_address_valid(pa))
 		panic("kfree");
+	if (account_page_tracked(pa))
+		panic("kfree account page");
 	// Fill with junk to catch dangling refs.
 	memset(pa, 1, PGSIZE);
 	l = (struct linklist *)pa;
@@ -112,6 +201,8 @@ void *kalloc_system_page(void)
 	struct linklist *l;
 	l = kmem.freelist;
 	if (l) {
+		if (account_page_tracked(l))
+			panic("kalloc account page");
 		kmem.freelist = l->next;
 		if (kmem.free_pages == 0)
 			panic("kalloc count");
@@ -285,6 +376,8 @@ static void kfree_reserved_page_validated(void *pa)
 {
 	struct linklist *page;
 
+	if (account_page_tracked(pa))
+		panic("reserved account page");
 	memset(pa, 1, PGSIZE);
 	page = pa;
 	page->next = physical_reserve.freelist;
@@ -321,28 +414,107 @@ void *kalloc_account_page(struct resource_account_handle account,
 		}
 		return 0;
 	}
+	account_page_track(page, account, charge_class);
 	return page;
 }
 
-int kfree_account_page(void *pa, struct resource_account_handle account,
-		       enum resource_charge_class charge_class)
+int kretain_account_page(void *pa)
+{
+	uint index = account_page_index(pa);
+	int enabled = intr_save();
+	uint refs = account_page_refs[index];
+
+	if (account_page_owner_class[index] == 0 || refs == 0 ||
+	    refs == ACCOUNT_PAGE_REF_MAX) {
+		intr_restore(enabled);
+		return -1;
+	}
+	account_page_refs[index] = refs + 1;
+	intr_restore(enabled);
+	return 0;
+}
+
+int kaccount_page_exclusive(
+	void *pa, struct resource_account_handle account,
+	enum resource_charge_class charge_class)
+{
+	uint index = account_page_index(pa);
+	int enabled = intr_save();
+	ushort owner_class = account_page_owner_class[index];
+	int exclusive = owner_class != 0 && account_page_refs[index] == 1 &&
+			account_page_matches(owner_class, account,
+					     charge_class);
+
+	intr_restore(enabled);
+	return exclusive;
+}
+
+static int account_page_release(
+	void *pa, const struct resource_account_handle *expected_account,
+	int expected_class)
 {
 	struct resource_request request = {
 		.kind = RESOURCE_PHYSICAL_PAGE,
 		.amount = 1,
 	};
+	struct resource_account_handle owner;
+	enum resource_charge_class charge_class;
+	uint index = account_page_index(pa);
+	int enabled = intr_save();
+	ushort owner_class = account_page_owner_class[index];
+	uint refs = account_page_refs[index];
+	uint owner_slot;
 
-	if (charge_class == RESOURCE_CHARGE_RESERVED)
-		physical_reserved_page_validate_allocated(pa);
-	else if (!page_address_valid(pa) || physical_reserved_page_owned(pa))
-		panic("physical page pool");
-	if (resource_release_many(account, charge_class, &request, 1) < 0)
+	if (owner_class == 0 || refs == 0) {
+		intr_restore(enabled);
+		return -1;
+	}
+	charge_class = account_page_class(owner_class);
+	if (expected_account != 0 &&
+	    !account_page_matches(owner_class, *expected_account,
+				  (enum resource_charge_class)expected_class)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	if (refs > 1) {
+		account_page_refs[index] = refs - 1;
+		intr_restore(enabled);
+		return 0;
+	}
+	owner_slot = account_page_owner(owner_class);
+	owner.slot = owner_slot;
+	owner.generation = account_page_generation[owner_slot];
+	if (owner.generation == 0 || account_page_count[owner_slot] == 0)
+		panic("account page release owner");
+	account_page_owner_class[index] = 0;
+	account_page_refs[index] = 0;
+	account_page_count[owner_slot]--;
+	if (resource_release_many(owner, charge_class, &request, 1) < 0)
 		panic("physical page accounting");
-	if (charge_class == RESOURCE_CHARGE_RESERVED)
+	proc_resource_account_reap(owner);
+	if (account_page_count[owner_slot] == 0)
+		account_page_generation[owner_slot] = 0;
+	if (charge_class == RESOURCE_CHARGE_RESERVED) {
+		physical_reserved_page_validate_allocated(pa);
 		kfree_reserved_page_validated(pa);
-	else
+	} else {
+		if (!page_address_valid(pa) || physical_reserved_page_owned(pa))
+			panic("physical page pool");
 		kfree_system_page(pa);
+	}
+	intr_restore(enabled);
 	return 0;
+}
+
+int krelease_account_page(void *pa)
+{
+	return account_page_release(pa, 0, 0);
+}
+
+int kfree_account_page(void *pa, struct resource_account_handle account,
+		       enum resource_charge_class charge_class)
+{
+	return account_page_release(pa, &account, charge_class);
 }
 
 uint kalloc_physical_reserved_free_pages(void)

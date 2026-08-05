@@ -4,6 +4,9 @@ import re
 
 root = Path(__file__).resolve().parents[1]
 driver = (root / "os/virtio_disk.c").read_text(encoding="utf-8")
+bio_header = (root / "os/bio.h").read_text(encoding="utf-8")
+bio_source = (root / "os/bio.c").read_text(encoding="utf-8")
+virtio_header = (root / "os/virtio.h").read_text(encoding="utf-8")
 syscall = (root / "os/syscall.c").read_text(encoding="utf-8")
 test_abi = (root / "virtio_test_abi.h").read_text(encoding="utf-8")
 test_program = (root / "user/src/virtiodisk_ucore.c").read_text(encoding="utf-8")
@@ -223,6 +226,147 @@ def validate_submission_accounting(source):
     return body_start + condition_start, body_start + condition_end
 
 
+def validate_batch_submission(source):
+    _, _, public_body = function_region(source, "int virtio_disk_write_batch(")
+    _, _, pair = function_region(source, "static int disk_submit_write_pair(")
+    _, _, indirect = function_region(source, "static int disk_submit_indirect(")
+    required_public = (
+        "if (count == 1)",
+        "return virtio_disk_rw(buffers[0], 1);",
+        "disk.features & (1U << VIRTIO_RING_F_INDIRECT_DESC)",
+        "disk_submit_indirect(",
+        "VIRTIO_BLK_T_OUT",
+        "disk_submit_write_pair(&buffers[offset])",
+    )
+    for token in required_public:
+        if token not in public_body:
+            raise ContractError(f"batch API lost fallback or chunking: {token}")
+    required_pair = (
+        "alloc_desc_chain(all_idx, 6)",
+        "disk.avail->idx += 2;",
+        "*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;",
+        "KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH, 0);",
+        "disk_wait_request(head[0], boot_deadline);",
+        "disk_wait_request(head[1], boot_deadline);",
+        "bio_account_transfer_batch(owner, io_class, BIO_TRANSFER_WRITE,",
+    )
+    positions = []
+    for token in required_pair:
+        position = pair.find(token)
+        if position < 0:
+            raise ContractError(f"batch pair mechanism missing: {token}")
+        positions.append(position)
+    if positions != sorted(positions):
+        raise ContractError("batch publish/wait/accounting order is invalid")
+    if pair.count("*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;") != 1:
+        raise ContractError("a two-request batch must issue exactly one notify")
+    account_call = function_calls(pair, "bio_account_transfer_batch")
+    if len(account_call) != 1:
+        raise ContractError("batch results do not have one controlled accounting tail")
+    _, _, condition = submission_accounting_guard(pair, account_call[0]["start"])
+    if re.sub(r"\s+", "", condition) != "submitted":
+        raise ContractError("batch accounting is not guarded by real submission")
+    restore = pair.find("intr_restore(enabled);")
+    if restore < 0 or restore > account_call[0]["start"]:
+        raise ContractError("batch accounting runs with interrupts disabled")
+    required_indirect = (
+        "alloc_desc_chain(heads, count)",
+        "disk_prepare_indirect_request(",
+        "disk.avail->idx += count;",
+        "*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;",
+        "kernel_performance_virtio_notify(",
+        "disk_wait_request(heads[i], boot_deadline);",
+        "bio_account_transfer_batch(",
+    )
+    positions = []
+    for token in required_indirect:
+        position = indirect.find(token)
+        if position < 0:
+            raise ContractError(f"indirect batch mechanism missing: {token}")
+        positions.append(position)
+    if positions != sorted(positions):
+        raise ContractError("indirect publish/wait/accounting order is invalid")
+    if indirect.count("*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;") != 1:
+        raise ContractError("an indirect batch must issue exactly one notify")
+    indirect_mode = re.sub(r"\s+", "", indirect)
+    required_mode = (
+        "type==VIRTIO_BLK_T_OUT?"
+        "KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH:"
+        "KERNEL_PERFORMANCE_VIRTIO_READ_BATCH"
+    )
+    if required_mode not in indirect_mode:
+        raise ContractError("indirect read/write batches share a telemetry mode")
+    indirect_account = function_calls(indirect, "bio_account_transfer_batch")
+    if len(indirect_account) != 1:
+        raise ContractError("indirect results lack one accounting tail")
+    _, _, condition = submission_accounting_guard(
+        indirect, indirect_account[0]["start"]
+    )
+    if re.sub(r"\s+", "", condition) != "submitted":
+        raise ContractError("indirect accounting is not submission-guarded")
+    restore = indirect.find("intr_restore(enabled);")
+    if restore < 0 or restore > indirect_account[0]["start"]:
+        raise ContractError("indirect accounting runs with interrupts disabled")
+    if "#define VRING_DESC_F_INDIRECT 4" not in virtio_header:
+        raise ContractError("indirect descriptor ABI flag is missing")
+    if "#define VIRTIO_DISK_WRITE_BATCH_MAX NUM" not in virtio_header:
+        raise ContractError("batch width does not cover the negotiated queue")
+    if "#define VIRTIO_DISK_READ_BATCH_MAX NUM" not in virtio_header:
+        raise ContractError("read batch width does not cover the negotiated queue")
+    if "int virtio_disk_write_batch(struct buf **, uint);" not in virtio_header:
+        raise ContractError("batch write API is not exported")
+    if "int virtio_disk_read_batch(struct buf **, uint);" not in virtio_header:
+        raise ContractError("batch read API is not exported")
+    _, _, read_batch = function_region(source, "int virtio_disk_read_batch(")
+    for token in (
+            "return virtio_disk_rw(buffers[0], 0);",
+            "disk.features & (1U << VIRTIO_RING_F_INDIRECT_DESC)",
+            "disk_submit_indirect(",
+            "VIRTIO_BLK_T_IN",
+            "result = virtio_disk_rw(buffers[offset], 0);"):
+        if token not in read_batch:
+            raise ContractError(f"batch read API lost queue or fallback path: {token}")
+    if "void bio_account_transfer_batch(uint, uint, enum bio_transfer_type," \
+            not in bio_header:
+        raise ContractError("batch physical accounting API is not exported")
+    _, _, accounting = function_region(
+        bio_source, "void bio_account_transfer_batch("
+    )
+    if (len(function_calls(accounting, "bio_account_transfer")) != 1 or
+            "for (uint i = 0; i < count; i++)" not in accounting):
+        raise ContractError("batch accounting does not preserve per-transfer semantics")
+
+
+def validate_dirty_overlay_protection():
+    _, _, ordinary = function_region(bio_source, "int bread(")
+    _, _, direct = function_region(bio_source, "int bread_device(")
+    dirty = direct.find("fs_epoch_buffer_dirty(dev, blockno)")
+    acquire = direct.find("b = bget(dev, blockno, &result, 0);")
+    busy = direct.find("return VIRTIO_DISK_ERR_BUSY;", dirty)
+    if min(dirty, acquire, busy) < 0 or not (dirty < busy < acquire):
+        raise ContractError("device read can overwrite a pinned dirty epoch buffer")
+    if "fs_epoch_buffer_dirty" in ordinary:
+        raise ContractError("ordinary cache reads must continue to observe dirty buffers")
+
+
+def validate_batch_cache_fill():
+    _, _, body = function_region(bio_source, "int bread_batch(")
+    body = " ".join(body.split())
+    required = (
+        "bget( dev, blocknos[acquired], &result, 0)",
+        "pending[i]->disk_result = VIRTIO_DISK_ERR_IO;",
+        "virtio_disk_read_batch(pending, pending_count)",
+        "if (b->disk_result == VIRTIO_DISK_OK)",
+        "b->valid = 1;",
+        "brelse(out[acquired]);",
+    )
+    positions = [body.find(token) for token in required]
+    if min(positions) < 0 or positions != sorted(positions):
+        raise ContractError("buffer-cache batch fill lacks ordered failure handling")
+    if "int bread_batch(uint, const uint *, struct buf **, uint)" not in bio_header:
+        raise ContractError("buffer-cache batch API is not exported")
+
+
 def validate_overlay_accounting(source):
     _, _, body = function_region(source, "int virtio_disk_rw(")
     (overlay_start, _, overlay, production_start, _, production) = \
@@ -375,6 +519,11 @@ if min(submit, range_check, descriptor_allocation, queue_notify) < 0 or not (
 account_transfer = driver.find("bio_account_transfer(owner, io_class", submit)
 try:
     guard_start, guard_end = validate_submission_accounting(driver)
+    if driver.count("kernel_performance_virtio_notify(") != 3:
+        raise ContractError("every production queue notify needs one performance receipt")
+    validate_batch_submission(driver)
+    validate_dirty_overlay_protection()
+    validate_batch_cache_fill()
     validate_overlay_accounting(driver)
     validate_barrier_accounting(driver)
 except ContractError as error:
@@ -529,6 +678,26 @@ for old, new, label in (
     except ContractError:
         continue
     raise SystemExit(f"physical accounting mutation survived: {label}")
+for old, new, label in (
+    (
+        "\tdisk.avail->idx += 2;",
+        "\tdisk.avail->idx++;",
+        "batch published only one queue head",
+    ),
+    (
+        "\tbio_account_transfer_batch(owner, io_class, BIO_TRANSFER_WRITE,",
+        "\tbio_account_transfer_batch_disabled(owner, io_class, "
+        "BIO_TRANSFER_WRITE,",
+        "batch physical accounting removed",
+    ),
+):
+    if old not in driver:
+        raise SystemExit(f"batch mutation anchor drifted: {label}")
+    try:
+        validate_batch_submission(driver.replace(old, new, 1))
+    except ContractError:
+        continue
+    raise SystemExit(f"batch submission mutation survived: {label}")
 range_call_removed = (
     test_program[:range_call_start] + test_program[range_call_end:]
 )

@@ -4,8 +4,10 @@
 #include "bio.h"
 #include "defs.h"
 #include "exec_policy.h"
+#include "fs_epoch.h"
 #include "kernel_work.h"
 #include "loader.h"
+#include "sbi.h"
 #include "trap.h"
 #include "user_stack_layout.h"
 #include "vm.h"
@@ -28,6 +30,20 @@ static int scheduler_domain_task_data[PROC_RESOURCE_DOMAIN_CAP]
 				     [THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT];
 static int scheduler_domain_active[PROC_RESOURCE_DOMAIN_CAP];
 static int scheduler_retained[THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT];
+
+__attribute__((noreturn, noinline, cold))
+static void scheduler_invariant_stop(uint code)
+{
+	static const char prefix[] = "[PANIC] scheduler invariant ";
+
+	for (uint i = 0; i < sizeof(prefix) - 1; i++)
+		console_putchar(prefix[i]);
+	console_putchar('0' + (code / 10) % 10);
+	console_putchar('0' + code % 10);
+	console_putchar('\n');
+	shutdown();
+	__builtin_unreachable();
+}
 
 enum proc_admission {
 	PROC_ADMIT_BOOT,
@@ -835,10 +851,10 @@ static int proc_vm_snapshot_schedulable(const struct thread *t)
 
 static void scheduler_queues_init(void)
 {
-	init_queue(&scheduler_active_domains, PROC_RESOURCE_DOMAIN_CAP,
+	queue_init(&scheduler_active_domains, PROC_RESOURCE_DOMAIN_CAP,
 		   scheduler_active_domain_data);
 	for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++) {
-		init_queue(&scheduler_domain_tasks[i],
+		queue_init(&scheduler_domain_tasks[i],
 			   THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT,
 			   scheduler_domain_task_data[i]);
 		scheduler_domain_active[i] = 0;
@@ -854,7 +870,7 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 	if (scheduler_domain_tasks[domain_id].count != 0 ||
 	    scheduler_domain_active[domain_id])
 		panic("resource domain run queue invariant");
-	init_queue(&scheduler_domain_tasks[domain_id],
+	queue_init(&scheduler_domain_tasks[domain_id],
 		   THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT,
 		   scheduler_domain_task_data[domain_id]);
 	domain->used = 0;
@@ -863,6 +879,23 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 	domain->runnable_agents = 0;
 	domain->scheduler_agent_burst = 0;
 	domain->scheduler_score_burst = 0;
+}
+
+void proc_resource_account_reap(struct resource_account_handle account)
+{
+	int enabled = intr_save();
+
+	if (resource_account_state_get(account) == RESOURCE_ACCOUNT_FREE) {
+		for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++)
+			if (proc_resource_domains[i].used &&
+			    resource_account_handle_equal(
+				    proc_resource_domains[i].account, account)) {
+				proc_resource_domain_clear(
+					&proc_resource_domains[i]);
+				break;
+			}
+	}
+	intr_restore(enabled);
 }
 
 static void proc_resource_init(void)
@@ -1323,17 +1356,7 @@ void proc_file_slot_release(struct resource_account_handle account,
 			       RESOURCE_CHARGE_ORDINARY,
 		    &request, 1) < 0)
 		panic("file resource release invariant");
-	if (resource_account_state_get(account) == RESOURCE_ACCOUNT_FREE) {
-		for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++)
-			if (proc_resource_domains[i].used &&
-			    resource_account_handle_equal(
-				    proc_resource_domains[i].account,
-				    account)) {
-				proc_resource_domain_clear(
-					&proc_resource_domains[i]);
-				break;
-			}
-	}
+	proc_resource_account_reap(account);
 	intr_restore(enabled);
 }
 
@@ -1538,6 +1561,7 @@ void proc_init()
 	struct proc *p;
 	scheduler_queues_init();
 	proc_resource_init();
+	filepool_init();
 	kernel_stack_live_slots = 0;
 	kernel_stack_live_ordinary = 0;
 	kernel_stack_live_reserved = 0;
@@ -1665,12 +1689,12 @@ int task_to_id(struct thread *t)
 static void scheduler_activate_domain(int domain_id)
 {
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
-		panic("scheduler domain id invariant");
+		scheduler_invariant_stop(1);
 	if (scheduler_domain_tasks[domain_id].count == 0 ||
 	    scheduler_domain_active[domain_id])
 		return;
-	if (push_queue(&scheduler_active_domains, domain_id) < 0)
-		panic("active domain queue invariant");
+	if (queue_push_locked(&scheduler_active_domains, domain_id) < 0)
+		scheduler_invariant_stop(2);
 	scheduler_domain_active[domain_id] = 1;
 }
 
@@ -1679,12 +1703,12 @@ static void scheduler_deactivate_domain(int domain_id)
 	int removed;
 
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
-		panic("scheduler domain id invariant");
+		scheduler_invariant_stop(3);
 	if (!scheduler_domain_active[domain_id])
 		return;
-	removed = remove_queue_value(&scheduler_active_domains, domain_id);
+	removed = queue_remove_locked(&scheduler_active_domains, domain_id);
 	if (removed != 1)
-		panic("active domain uniqueness invariant");
+		scheduler_invariant_stop(4);
 	scheduler_domain_active[domain_id] = 0;
 }
 
@@ -1693,10 +1717,10 @@ static void scheduler_drop_queued_thread(struct proc_resource_domain *domain,
 {
 	if (domain == 0 || t == 0 || !t->on_run_queue ||
 	    domain->runnable_threads <= 0)
-		panic("runnable thread count invariant");
+		scheduler_invariant_stop(5);
 	if (t->run_queue_agent) {
 		if (domain->runnable_agents <= 0)
-			panic("runnable agent count invariant");
+			scheduler_invariant_stop(6);
 		domain->runnable_agents--;
 	}
 	domain->runnable_threads--;
@@ -1715,7 +1739,7 @@ static void scheduler_validate_queued_thread(struct thread *t, int domain_id)
 	    !resource_account_handle_equal(
 		    t->resource_account,
 		    proc_resource_domains[domain_id].account))
-		panic("domain task queue ownership invariant");
+		scheduler_invariant_stop(7);
 }
 
 static struct thread *fetch_domain_fifo(int domain_id)
@@ -1726,7 +1750,7 @@ static struct thread *fetch_domain_fifo(int domain_id)
 	int remaining = queue->count;
 
 	while (remaining-- > 0) {
-		int index = pop_queue(queue);
+		int index = queue_pop_locked(queue);
 		struct thread *t = id_to_task(index);
 
 		scheduler_validate_queued_thread(t, domain_id);
@@ -1735,8 +1759,8 @@ static struct thread *fetch_domain_fifo(int domain_id)
 			continue;
 		}
 		if (!proc_vm_snapshot_schedulable(t)) {
-			if (push_queue(queue, index) < 0)
-				panic("domain task queue invariant");
+			if (queue_push_locked(queue, index) < 0)
+				scheduler_invariant_stop(8);
 			continue;
 		}
 		scheduler_drop_queued_thread(domain, t);
@@ -1761,7 +1785,7 @@ static struct thread *fetch_domain_best(int domain_id)
 	struct thread *best_task;
 
 	for (;;) {
-		int index = pop_queue(queue);
+		int index = queue_pop_locked(queue);
 
 		if (index < 0)
 			break;
@@ -1772,7 +1796,7 @@ static struct thread *fetch_domain_best(int domain_id)
 			continue;
 		}
 		if (candidate_count >= THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT)
-			panic("scheduler retained queue invariant");
+			scheduler_invariant_stop(9);
 		scheduler_retained[candidate_count++] = index;
 		if (!proc_vm_snapshot_schedulable(candidate))
 			continue;
@@ -1814,8 +1838,8 @@ static struct thread *fetch_domain_best(int domain_id)
 	for (int i = 0; i < candidate_count; i++) {
 		if (scheduler_retained[i] == selected)
 			continue;
-		if (push_queue(queue, scheduler_retained[i]) < 0)
-			panic("domain task queue invariant");
+		if (queue_push_locked(queue, scheduler_retained[i]) < 0)
+			scheduler_invariant_stop(10);
 	}
 	if (selected < 0) {
 		domain->scheduler_agent_burst = 0;
@@ -1842,19 +1866,19 @@ struct thread *fetch_task()
 	int remaining = scheduler_active_domains.count;
 
 	while (remaining-- > 0) {
-		int domain_id = pop_queue(&scheduler_active_domains);
+		int domain_id = queue_pop_locked(&scheduler_active_domains);
 		struct proc_resource_domain *domain;
 		struct thread *t;
 
 		if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
 		    !scheduler_domain_active[domain_id])
-			panic("active domain queue entry invariant");
+			scheduler_invariant_stop(11);
 		scheduler_domain_active[domain_id] = 0;
 		domain = &proc_resource_domains[domain_id];
 		if (!domain->used || domain->runnable_threads <= 0 ||
 		    domain->runnable_threads !=
 			    scheduler_domain_tasks[domain_id].count)
-			panic("active domain accounting invariant");
+			scheduler_invariant_stop(12);
 		t = domain->runnable_agents > 0 ?
 			    fetch_domain_best(domain_id) :
 			    fetch_domain_fifo(domain_id);
@@ -1888,7 +1912,7 @@ void add_task(struct thread *t)
 		return;
 	}
 	if (!t->resource_slot_charged)
-		panic("runnable thread without resource charge");
+		scheduler_invariant_stop(13);
 	domain_id = t->resource_domain_id;
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
 	    t->process->resource_domain_id != domain_id ||
@@ -1898,13 +1922,13 @@ void add_task(struct thread *t)
 	    !resource_account_handle_equal(
 		    t->resource_account,
 		    proc_resource_domains[domain_id].account))
-		panic("task resource domain invariant");
+		scheduler_invariant_stop(14);
 	domain = &proc_resource_domains[domain_id];
 	int task_id = task_to_id(t);
 	int pid = t->process->pid;
 	agent_sched_on_enqueue(t);
-	if (push_queue(&scheduler_domain_tasks[domain_id], task_id) < 0)
-		panic("domain task queue invariant");
+	if (queue_push_locked(&scheduler_domain_tasks[domain_id], task_id) < 0)
+		scheduler_invariant_stop(15);
 	t->on_run_queue = 1;
 	t->run_queue_agent = t->process->is_agent != 0;
 	domain->runnable_threads++;
@@ -1912,7 +1936,7 @@ void add_task(struct thread *t)
 		domain->runnable_agents++;
 	if (domain->runnable_threads !=
 	    scheduler_domain_tasks[domain_id].count)
-		panic("runnable task accounting invariant");
+		scheduler_invariant_stop(16);
 	scheduler_activate_domain(domain_id);
 	intr_restore(enabled);
 	tracef("add domain %d index %d(pid=%d, tid=%d, addr=%p)",
@@ -1938,12 +1962,12 @@ static void remove_task(struct thread *t)
 	}
 	domain_id = t->resource_domain_id;
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
-		panic("queued task domain invariant");
+		scheduler_invariant_stop(17);
 	domain = &proc_resource_domains[domain_id];
-	removed = remove_queue_value(&scheduler_domain_tasks[domain_id],
+	removed = queue_remove_locked(&scheduler_domain_tasks[domain_id],
 				     task_to_id(t));
 	if (removed != 1)
-		panic("domain task uniqueness invariant");
+		scheduler_invariant_stop(18);
 	scheduler_drop_queued_thread(domain, t);
 	if (scheduler_domain_tasks[domain_id].count == 0)
 		scheduler_deactivate_domain(domain_id);
@@ -2306,6 +2330,14 @@ void scheduler()
 		intr_off();
 		agent_background_maintain();
 		t = fetch_task();
+		/* Polling writeback runs only when no user thread is runnable. */
+		if (t == NULL && fs_epoch_should_commit() &&
+		    fs_epoch_request_begin() == 0) {
+			if (fs_epoch_should_commit())
+				(void)fs_epoch_commit();
+			fs_epoch_request_end();
+			t = fetch_task();
+		}
 		if (t == NULL) {
 			int live = 0;
 			for (struct proc *p = pool; p < &pool[NPROC]; p++) {
@@ -2828,12 +2860,13 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 	if (!agent_ipc_legacy_mailbox_empty(p))
 		panic("process teardown legacy mailbox");
 	/*
-	 * File and VM reclaim are complete. The terminal owner settles the entire
-	 * syscall/cleanup lease before lifecycle release can quiesce its BIO
-	 * principal. Foreign unpublished rollback must never end its caller's
-	 * lease.
+	 * File and VM reclaim are complete. Drop the global filesystem gate before
+	 * settling the terminal lease, but finish settlement before lifecycle
+	 * release can quiesce its BIO principal. Foreign unpublished rollback keeps
+	 * both resources under caller control.
 	 */
 	if (terminal_current) {
+		fs_epoch_request_end();
 		if (bio_request_end_current_cleanup() < 0)
 			panic("process teardown I/O settlement");
 		kernel_work_end_cleanup();
@@ -2845,7 +2878,9 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 	    p->vfs_pending_scope_id != VFS_SCOPE_NONE || p->is_agent)
 		panic("process teardown settlement");
 	if (terminal_current &&
-	    (owner->io_request_depth != 0 || owner->kernel_work_depth != 0 ||
+	    (owner->io_request_flags != 0 || owner->io_request_id != 0 ||
+	     owner->io_request_depth != 0 ||
+	     owner->kernel_work_depth != 0 ||
 	     owner->bio_buffer_holds != 0 ||
 	     owner->bio_fs_atomic_depth != 0))
 		panic("process teardown active work");
@@ -2903,6 +2938,7 @@ static void proc_recycle(struct proc *p)
 
 void freeproc(struct proc *p)
 {
+	int epoch_entered = 0;
 	int enabled;
 
 	if (p == 0)
@@ -2914,10 +2950,17 @@ void freeproc(struct proc *p)
 		panic("invalid unpublished process rollback");
 	}
 	intr_restore(enabled);
+	if (fs_epoch_runtime_enabled() && !fs_epoch_request_held()) {
+		if (fs_epoch_request_begin() < 0)
+			panic("process rollback epoch admission");
+		epoch_entered = 1;
+	}
 	agent_proc_teardown(p);
 	proc_child_unbind(p);
 	if (proc_teardown_run(p, 0, 0) < 0)
 		panic("active process release");
+	if (epoch_entered)
+		fs_epoch_request_end();
 	proc_teardown_advance(p, PROC_TEARDOWN_HANDOFF,
 			      PROC_TEARDOWN_PUBLISHED);
 	proc_recycle(p);
@@ -3098,7 +3141,6 @@ static int fork_common(int make_agent, int agent_role,
 		fds.files[i] = 0;
 	}
 	fd_spawn_snapshot_release(&fds);
-	memset(np->syscall_count, 0, sizeof(np->syscall_count));
 	// A new process contains one thread, but it resumes the thread that issued
 	// the spawn. Using thread 0 here would redirect a sibling's spawn into the
 	// main thread's syscall continuation and break thread-bound delegation.
@@ -3518,6 +3560,8 @@ void exit(int code)
 			yield();
 	}
 	kernel_work_begin_cleanup();
+	if (fs_epoch_request_begin() < 0)
+		panic("process teardown epoch admission");
 	if (bio_request_begin_current_cleanup() < 0)
 		panic("process teardown I/O admission");
 	if (proc_teardown_run(p, t, 1) < 0)
@@ -3598,21 +3642,41 @@ struct file *fdget(int fd)
 	return f;
 }
 
-int fdclose(int fd)
+int fdclose_prepare(int fd, struct file_close_receipt *receipt)
 {
 	struct proc *p = curr_proc();
 	struct file *f;
+	int final;
 	int enabled = intr_save();
 
+	if (receipt == 0 ||
+	    receipt->state != FILE_CLOSE_RECEIPT_EMPTY)
+		panic("fdclose receipt prepare");
 	if (p == 0 || fd < 0 || fd >= FD_BUFFER_SIZE ||
 	    (f = p->files[fd]) == 0 || fd_is_reserved(f)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	final = fileclose_prepare(f, receipt);
+	if (final < 0) {
 		intr_restore(enabled);
 		return -1;
 	}
 	p->files[fd] = 0;
 	proc_clear_fd_delegate_tickets(p, fd);
 	intr_restore(enabled);
-	fileclose(f);
+	return final;
+}
+
+int fdclose(int fd)
+{
+	struct file_close_receipt receipt = FILE_CLOSE_RECEIPT_INIT;
+	int result = fdclose_prepare(fd, &receipt);
+
+	if (result < 0)
+		return -1;
+	if (result > 0)
+		fileclose_finish(&receipt);
 	return 0;
 }
 

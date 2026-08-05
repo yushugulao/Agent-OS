@@ -3,6 +3,7 @@
 #include "agent_metadata_catalog.h"
 #include "agent_metadata_query.h"
 #include "defs.h"
+#include "kernel_work.h"
 
 struct agent_query_alias {
 	char name[10];
@@ -14,6 +15,7 @@ struct agent_query_alias {
 	  (ushort)sizeof(((struct agent_file_query *)0)->field) }
 #define AGENT_QUERY_FIELDS 8
 #define AGENT_QUERY_INDEX_FIRST 5
+#define AGENT_QUERY_READ_GRANULE 128
 #define AGENT_QUERY_META_DELTA \
 	((int)__builtin_offsetof(struct agent_file_meta, physical_name) - \
 	 (int)__builtin_offsetof(struct agent_file_query, physical_name))
@@ -129,6 +131,63 @@ agent_metadata_query_has_filter(const struct agent_file_query *q)
 	return q->summary_contains[0] != 0;
 }
 
+struct agent_query_plan {
+	const char *index_key;
+	int limit;
+	int force_scan;
+	int index;
+	int use_index;
+	uint64 reason;
+};
+
+static void
+agent_query_plan_build(const struct agent_file_query *q,
+		       struct agent_file_query_result *r,
+		       struct agent_query_plan *plan)
+{
+	memset(plan, 0, sizeof(*plan));
+	plan->limit = q->max_hits;
+	if (plan->limit <= 0 || plan->limit > AGENT_FILE_QUERY_MAX_HITS)
+		plan->limit = AGENT_FILE_QUERY_MAX_HITS;
+	r->plan = AGENT_FILE_QUERY_PLAN_SCAN;
+	r->index_bucket = -1;
+	if (q->flags & AGENT_FILE_QUERY_SCAN) {
+		plan->force_scan = 1;
+		plan->reason |= AGENT_FILE_QUERY_REASON_FORCED_SCAN;
+		return;
+	}
+	if ((q->flags & AGENT_FILE_QUERY_USE_INDEX) == 0) {
+		plan->reason |= AGENT_FILE_QUERY_REASON_INDEX_OFF;
+		return;
+	}
+	for (int i = AGENT_QUERY_INDEX_FIRST; i < AGENT_QUERY_FIELDS; i++) {
+		const struct agent_query_alias *alias = &agent_query_aliases[i];
+		const char *value = (const char *)q + alias->offset;
+
+		if (!value[0])
+			continue;
+		plan->index = AGENT_CATALOG_INDEX_STATUS +
+			i - AGENT_QUERY_INDEX_FIRST;
+		plan->use_index = 1;
+		plan->index_key = value;
+		r->plan = AGENT_FILE_QUERY_PLAN_STATUS_INDEX +
+			i - AGENT_QUERY_INDEX_FIRST;
+		plan->reason |= AGENT_FILE_QUERY_REASON_STATUS_INDEX <<
+			(i - AGENT_QUERY_INDEX_FIRST);
+		return;
+	}
+	plan->reason |= AGENT_FILE_QUERY_REASON_NO_INDEX_KEY;
+}
+
+static void
+agent_query_result_reset(struct agent_file_query_result *r,
+			 int slots[AGENT_FILE_QUERY_MAX_HITS])
+{
+	memset(r, 0, sizeof(*r));
+	for (int i = 0; i < AGENT_FILE_QUERY_MAX_HITS; i++)
+		slots[i] = -1;
+}
+
 int
 agent_metadata_query_execute_locked(
 	uint scope, const struct agent_file_query *q,
@@ -136,55 +195,32 @@ agent_metadata_query_execute_locked(
 	int slots[AGENT_FILE_QUERY_MAX_HITS], int allow_insert)
 {
 	struct agent_catalog_view view;
-	struct agent_file_query key;
-	int cursor = -1, index = 0, use_index = 0, bucket = -1;
+	struct agent_query_plan plan;
+	int cursor = -1, bucket = -1;
 	int rebuild_records = 0;
-	int limit;
-	uint64 start, generation, reason = 0;
+	uint64 start, generation;
 
 	agent_metadata_txn_projection_require_idle();
 	(void)allow_insert;
-	limit = q->max_hits;
-	if (limit <= 0 || limit > AGENT_FILE_QUERY_MAX_HITS)
-		limit = AGENT_FILE_QUERY_MAX_HITS;
-	memmove(&key, q, sizeof(key));
-	key.max_hits = limit;
+	agent_query_plan_build(q, r, &plan);
 	start = agent_file_state_now();
 	generation = agent_metadata_catalog_generation();
-	if (key.flags & AGENT_FILE_QUERY_SCAN) {
-		reason |= AGENT_FILE_QUERY_REASON_FORCED_SCAN;
-	} else if (key.flags & AGENT_FILE_QUERY_USE_INDEX) {
-		for (int i = AGENT_QUERY_INDEX_FIRST;
-		     i < AGENT_QUERY_FIELDS; i++) {
-			const struct agent_query_alias *alias =
-				&agent_query_aliases[i];
-			char *value = (char *)&key + alias->offset;
-
-			if (!value[0])
-				continue;
-			index = AGENT_CATALOG_INDEX_STATUS +
-				i - AGENT_QUERY_INDEX_FIRST;
-			cursor = agent_metadata_catalog_index_seek(
-				generation, index, value, -1, &bucket,
-				&rebuild_records);
-			use_index = 1;
-			r->plan = AGENT_FILE_QUERY_PLAN_STATUS_INDEX +
-				i - AGENT_QUERY_INDEX_FIRST;
-			reason |= AGENT_FILE_QUERY_REASON_STATUS_INDEX <<
-				  (i - AGENT_QUERY_INDEX_FIRST);
-			break;
-		}
-		if (!use_index)
-			reason |= AGENT_FILE_QUERY_REASON_NO_INDEX_KEY;
-	} else {
-		reason |= AGENT_FILE_QUERY_REASON_INDEX_OFF;
-	}
-	if (use_index)
+	if (plan.use_index) {
+		cursor = agent_metadata_catalog_index_seek(
+			generation, plan.index, (char *)plan.index_key, -1,
+			&bucket, &rebuild_records);
 		r->index_bucket = bucket;
-	for (int i = use_index ? cursor : 0;
+	}
+	if (plan.force_scan)
+		cursor = 0;
+	else if (!plan.use_index)
+		cursor = agent_metadata_catalog_live_seek(generation, -1);
+	for (int i = cursor;
 	     i >= 0 && i < AGENT_FILE_META_MAX;
-	     i = use_index ? agent_metadata_catalog_index_seek(
-				     generation, index, 0, i, 0, 0) : i + 1) {
+	     i = plan.use_index ? agent_metadata_catalog_index_seek(
+				     generation, plan.index, 0, i, 0, 0) :
+		 plan.force_scan ? i + 1 :
+			     agent_metadata_catalog_live_seek(generation, i)) {
 		agent_metadata_txn_work_charge(1);
 		r->scanned_records++;
 		if (agent_metadata_catalog_borrow(generation, i, &view) <= 0)
@@ -194,10 +230,10 @@ agent_metadata_query_execute_locked(
 			continue;
 		}
 		r->candidate_records++;
-		if (agent_metadata_query_matches(scope, view.scope_id, &key,
+		if (agent_metadata_query_matches(scope, view.scope_id, q,
 					       view.meta)) {
 			r->total_hits++;
-			if (r->returned < limit) {
+			if (r->returned < plan.limit) {
 				slots[r->returned] = i;
 				agent_file_state_project_hit(
 					&r->hits[r->returned++],
@@ -208,10 +244,73 @@ agent_metadata_query_execute_locked(
 		}
 		view.meta = 0;
 	}
-	r->used_index = use_index;
+	r->used_index = plan.use_index;
 	r->index_rebuild_records = rebuild_records;
 	r->query_ticks = agent_file_state_now() - start;
-	r->plan_reason = reason;
+	r->plan_reason = plan.reason;
+	r->fs_generation = agent_file_state_scope_generation(scope);
+	return r->returned;
+}
+
+int
+agent_metadata_query_execute_snapshot(
+	uint scope, const struct agent_file_query *q,
+	struct agent_file_query_result *r,
+	int slots[AGENT_FILE_QUERY_MAX_HITS])
+{
+	struct agent_catalog_read_snapshot snapshot;
+	struct agent_file_meta meta;
+	struct agent_query_plan plan;
+	uint owner;
+	uint work = 0;
+	int bucket = -1;
+	int copied;
+	uint64 start;
+
+	agent_query_result_reset(r, slots);
+	agent_query_plan_build(q, r, &plan);
+	start = agent_file_state_now();
+	copied = agent_metadata_catalog_read_begin(
+		scope, plan.index, plan.index_key, plan.force_scan,
+		&snapshot, &bucket);
+	if (copied < 0)
+		return copied;
+	if (plan.use_index)
+		r->index_bucket = bucket;
+	for (int slot = agent_metadata_catalog_read_next(&snapshot, -1);
+	     slot >= 0;
+	     slot = agent_metadata_catalog_read_next(&snapshot, slot)) {
+		r->scanned_records++;
+		copied = agent_metadata_catalog_read_copy(
+			&snapshot, slot, &meta, &owner);
+		if (copied < 0)
+			return copied;
+		if (copied > 0 && agent_object_scope_visible(scope, owner)) {
+			r->candidate_records++;
+			if (agent_metadata_query_matches(scope, owner, q, &meta)) {
+				r->total_hits++;
+				if (r->returned < plan.limit) {
+					slots[r->returned] = slot;
+					agent_file_state_project_hit(
+						&r->hits[r->returned++],
+						&meta, owner);
+				} else {
+					r->truncated = 1;
+				}
+			}
+		}
+		if (++work == AGENT_QUERY_READ_GRANULE) {
+			work = 0;
+			(void)kernel_work_checkpoint_cleanup(
+				KERNEL_WORK_OPERATION_UNITS);
+		}
+	}
+	if (!agent_metadata_catalog_read_end(&snapshot))
+		return AGENT_CATALOG_STALE;
+	r->used_index = plan.use_index;
+	r->index_rebuild_records = 0;
+	r->query_ticks = agent_file_state_now() - start;
+	r->plan_reason = plan.reason;
 	r->fs_generation = agent_file_state_scope_generation(scope);
 	return r->returned;
 }

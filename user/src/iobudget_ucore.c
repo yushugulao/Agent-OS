@@ -19,6 +19,7 @@
 #define COLD_PRESSURE_BYTES (COLD_PRESSURE_BLOCKS * IO_BLOCK_SIZE)
 #define ATTACKER_MAX_MS 30000
 #define EXIT_LEASE_ROUNDS 72
+#define LAZY_CACHE_ROUNDS 8
 
 static char block_data[IO_BLOCK_SIZE];
 static char pressure_data[PRESSURE_BYTES];
@@ -262,6 +263,42 @@ static void create_file(const char *name, const void *data, size_t size)
 	check(fd >= 0, "create pressure file");
 	write_exact(fd, data, size, "populate pressure file");
 	check(close(fd) == 0, "close pressure file");
+}
+
+static void check_lazy_cache_admission(void)
+{
+	struct io_policy_info before;
+	struct io_policy_info after;
+	char value;
+	int fd;
+
+	memset(block_data, 'L', sizeof(block_data));
+	create_file("iolazy", block_data, sizeof(block_data));
+	fd = open("iolazy", O_RDONLY);
+	check(fd >= 0 && read(fd, &value, 1) == 1 && value == 'L',
+	      "warm lazy I/O cache line");
+	check(close(fd) == 0, "close lazy I/O warmup");
+	check(io_policy_info(&before) == 0, "snapshot lazy I/O counters");
+	for (int i = 0; i < LAZY_CACHE_ROUNDS; i++) {
+		fd = open("iolazy", O_RDONLY);
+		check(fd >= 0 && read(fd, &value, 1) == 1 && value == 'L',
+		      "read lazy I/O cache line");
+		check(close(fd) == 0, "close lazy I/O reader");
+	}
+	check(io_policy_info(&after) == 0, "snapshot lazy I/O result");
+	check(after.lazy_started - before.lazy_started ==
+		      2 * LAZY_CACHE_ROUNDS &&
+	      after.cache_only - before.cache_only ==
+		      2 * LAZY_CACHE_ROUNDS,
+	      "cache-hit open/read uses identity-only admission");
+	check(after.upgraded == before.upgraded &&
+	      after.leased == before.leased,
+	      "cache-hit open/read consumes no rate or device lease");
+	printf("iobudget_ucore: lazy_started=%llu upgraded=%llu cache_only=%llu\n",
+	       after.lazy_started - before.lazy_started,
+	       after.upgraded - before.upgraded,
+	       after.cache_only - before.cache_only);
+	check(unlink("iolazy") == 0, "remove lazy I/O probe");
 }
 
 static void setup_lineage_pressure(void)
@@ -508,6 +545,7 @@ int main(void)
 	      "snapshot boot workflow I/O identity");
 	check((lineage.owner & IO_POLICY_OWNER_SCOPE_FLAG) != 0,
 	      "boot workload has an immutable workflow owner");
+	check_lazy_cache_admission();
 	check_thread_exit_lease_cleanup();
 	printf("iobudget_ucore: thread_exit_lease_cleanup=1\n");
 	check_scheduler_interrupt_progress();

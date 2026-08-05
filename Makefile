@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check ci-host-selftests agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check traditional-performance traditional-performance-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -21,6 +21,21 @@ WORKSPACE_GENERATED_PATHS = \
 	host_tools/__pycache__ scripts/__pycache__
 
 TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then echo riscv64-unknown-elf-; else echo riscv64-linux-gnu-; fi)
+ifeq ($(FUNCTIONAL_REVIEW_BUILD),1)
+override FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS := \
+	K U F BUILDDIR CC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS \
+	C_SRCS AS_SRCS C_OBJS AS_OBJS OBJS HEADER_DEP
+override FUNCTIONAL_REVIEW_EXTERNAL_BUILD_VARS := $(strip $(foreach variable,$(FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS),$(if $(filter command line environment environment\ override,$(origin $(variable))),$(variable))))
+ifneq ($(FUNCTIONAL_REVIEW_EXTERNAL_BUILD_VARS),)
+$(error FUNCTIONAL_REVIEW_BUILD rejects external build variables: $(FUNCTIONAL_REVIEW_EXTERNAL_BUILD_VARS))
+endif
+override FUNCTIONAL_REVIEW_USER_CFLAGS := $(USER_EXTRA_CFLAGS)
+override FUNCTIONAL_REVIEW_FLAGS_STATUS := $(shell python3 -I -S -B scripts/validate-functional-review-flags.py '$(subst ','"'"',$(FUNCTIONAL_REVIEW_USER_CFLAGS))' '$(subst ','"'"',$(CHAPTER))' '$(subst ','"'"',$(CH_TESTS))' '$(subst ','"'"',$(INIT_PROC))' 2>/dev/null)
+ifneq ($(FUNCTIONAL_REVIEW_FLAGS_STATUS),ok)
+$(error FUNCTIONAL_REVIEW_BUILD rejects USER_EXTRA_CFLAGS or its build context)
+endif
+override USER_EXTRA_CFLAGS := $(FUNCTIONAL_REVIEW_USER_CFLAGS)
+endif
 CC = $(TOOLPREFIX)gcc
 AS = $(TOOLPREFIX)gcc
 LD = $(TOOLPREFIX)ld
@@ -34,6 +49,26 @@ override PY = $(PYTHON_BIN)
 HOST_CC ?= $(if $(strip $(HOSTCC)),$(HOSTCC),cc)
 AGENT_TEST_DURATION_PROFILE ?= local-e3
 COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
+AGENTOS_BUILD_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind build 2>/dev/null),8)
+AGENTOS_TEST_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind host 2>/dev/null),8)
+override AGENTOS_JOB_VALUES := \
+	1 2 3 4 5 6 7 8 9 10 11 12 \
+	13 14 15 16 17 18 19 20 21 22 23 24
+ifneq ($(words $(AGENTOS_BUILD_JOBS)),1)
+$(error AGENTOS_BUILD_JOBS must be an integer between 1 and 24)
+endif
+ifeq ($(filter $(AGENTOS_BUILD_JOBS),$(AGENTOS_JOB_VALUES)),)
+$(error AGENTOS_BUILD_JOBS must be an integer between 1 and 24)
+endif
+ifneq ($(words $(AGENTOS_TEST_JOBS)),1)
+$(error AGENTOS_TEST_JOBS must be an integer between 1 and 24)
+endif
+ifeq ($(filter $(AGENTOS_TEST_JOBS),$(AGENTOS_JOB_VALUES)),)
+$(error AGENTOS_TEST_JOBS must be an integer between 1 and 24)
+endif
+# Reuse an outer GNU make jobserver when one exists.  A serial top-level make
+# gives each independent recursive build the configured bounded worker pool.
+AGENTOS_SUBMAKE_JOBS = $(if $(filter -j% --jobs=% --jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS)),,-j$(AGENTOS_BUILD_JOBS))
 GDB = $(TOOLPREFIX)gdb
 # Keep the variables above as raw tool identities.  Recipes and probes must
 # quote the complete executable after suffix expansion so prefixes and host
@@ -124,8 +159,8 @@ KSTACK_INDIRECT_CALL_EDGES ?= \
 	agent_durable_section_persist_scope=agent_meta_durable_persist_scope \
 	agent_durable_section_mirror_scope=agent_observe_store_replicated_scope \
 	agent_identity_lease_progress=agent_observe_lease_persist_bridge
-# printf can enter panic once; Sv39 walkers visit at most three page-table levels.
-KSTACK_RECURSION_BOUNDS ?= printf=2 freewalk=3 uvm_prune_empty_walk=3
+# Sv39 walkers visit at most three page-table levels.
+KSTACK_RECURSION_BOUNDS ?= freewalk=3 uvm_prune_empty_walk=3
 KSTACK_POLICY_ARGS = \
 	$(foreach fn,$(KSTACK_STACK_BOUNDARIES),--stack-boundary $(fn)) \
 	$(foreach fn,$(KSTACK_INDIRECT_CALLERS),--allow-indirect-from $(fn)) \
@@ -383,7 +418,7 @@ override CFLAGS += $(KSTACK_REQUIRED_CFLAGS)
 
 # These bounded control/persistence owners favor size after ownership splits.
 # Keep this allowlist exact; the module checker rejects any expansion.
-AGENT_SIZE_OPTIMIZED_MODULES := agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_objects agent_metadata_prefetch agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store
+AGENT_SIZE_OPTIMIZED_MODULES := agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_prefetch agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store
 AGENT_SIZE_OPTIMIZED_OBJS := $(addprefix $(BUILDDIR)/$(K)/,$(addsuffix .o,$(AGENT_SIZE_OPTIMIZED_MODULES)))
 $(AGENT_SIZE_OPTIMIZED_OBJS): private CFLAGS += -Os
 
@@ -451,7 +486,12 @@ endif
 
 INIT_PROC ?= usershell
 
+ifneq ($(filter -j% --jobs=% --jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS)),)
 build: $(BUILDDIR)/kernel
+else
+build:
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory $(BUILDDIR)/kernel
+endif
 
 $(BUILDDIR)/kernel: $(OBJS) os/kernel.ld scripts/check-kernel-stack-usage.py $(KSTACK_BUILD_CONFIG) Makefile
 	$(PYTHON_CMD) -I -S scripts/check-kernel-stack-usage.py \
@@ -478,7 +518,7 @@ kernel-stack-check: build/kernel
 		$(KSTACK_POLICY_ARGS) $(KSTACK_TRANSLATION_UNIT_ARGS)
 
 override KERNEL_BUDGET_CONFIG = ci/kernel-budgets.json
-override KERNEL_BUDGET_BUILDDIR = build
+override KERNEL_BUDGET_BUILDDIR = build/ci-kernel-budget
 override STRUCT_PROC_BUDGET_PROBE = $(KERNEL_BUDGET_BUILDDIR)/ci/struct-proc-size.o
 override AGENT_CORE_BOUNDARY_PROBE = $(KERNEL_BUDGET_BUILDDIR)/ci/agent-core-boundary.o
 override KERNEL_BUDGET_TOOLPREFIX = $(TOOLPREFIX)
@@ -494,12 +534,17 @@ override KERNEL_BUDGET_TOOL_ARGS = \
 	--objdump $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objdump) \
 	--nm $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)nm) \
 	--size $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)size)
+override KERNEL_BUDGET_SUBMAKE_JOBS = $(if \
+	$(filter -j% --jobs=% --jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS)),\
+	$(filter -j% --jobs=% --jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS)),\
+	-j$(AGENTOS_BUILD_JOBS))
 override KERNEL_BUDGET_SUBMAKE = env \
-	-u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES \
+	-u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES -u GNUMAKEFLAGS -u MAKEFILES \
 	-u CFLAGS -u CPPFLAGS -u LDFLAGS -u ASFLAGS \
-	make
+	$(MAKE) $(KERNEL_BUDGET_SUBMAKE_JOBS)
 override KERNEL_BUDGET_MAKE_ARGS = \
 	MAKEOVERRIDES= \
+	BUILDDIR=$(call shell_quote,$(KERNEL_BUDGET_BUILDDIR)) \
 	TOOLPREFIX=$(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)) \
 	LOG=$(KERNEL_BUDGET_LOG) \
 	INIT_PROC=$(KERNEL_BUDGET_INIT_PROC) \
@@ -514,7 +559,7 @@ override KERNEL_BUDGET_MAKE_ARGS = \
 	KSTACK_STACK_BOUNDARIES=swtch \
 	KSTACK_INDIRECT_CALLERS=usertrapret \
 	KSTACK_INDIRECT_CALL_EDGES='agent_durable_arena_validate=agent_observe_store_validate agent_durable_arena_update_scope=agent_observe_store_update_scope agent_durable_arena_recover=agent_observe_store_recover agent_durable_arena_has_scope=agent_observe_store_has_scope agent_durable_notify_locked=agent_meta_durable_dirty agent_durable_section_replicated=agent_meta_durable_replicated agent_durable_section_active_replicated=agent_meta_durable_active_replicated agent_durable_section_persist_scope=agent_meta_durable_persist_scope agent_durable_section_mirror_scope=agent_observe_store_replicated_scope agent_identity_lease_progress=agent_observe_lease_persist_bridge' \
-	KSTACK_RECURSION_BOUNDS='printf=2 freewalk=3 uvm_prune_empty_walk=3' \
+	KSTACK_RECURSION_BOUNDS='freewalk=3 uvm_prune_empty_walk=3' \
 	FS_ICACHE_SIZE= \
 	FILE_RESOURCE_POOL_SIZE= \
 	FILE_RESOURCE_ORDINARY_LIMIT= \
@@ -573,7 +618,7 @@ $(AGENT_CORE_BOUNDARY_PROBE): $(K)/agent_core.c $(wildcard $(K)/*.h) $(wildcard 
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -fno-inline -fkeep-static-functions -c $< -o $@
 
-agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_lifecycle_abi.h agent_tool_abi.h agent_metadata_disk_abi.h agent_resource_abi.h
+agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_lifecycle_abi.h agent_tool_abi.h agent_metadata_disk_abi.h agent_performance_abi.h agent_resource_abi.h
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-uapi-layout.py \
 		--root . --build-dir $(KERNEL_BUDGET_BUILDDIR)/ci \
 		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
@@ -583,10 +628,14 @@ agent-module-check: agent-uapi-check scripts/check-agent-module-boundaries.sh sc
 	@bash scripts/check-agent-module-boundaries.sh
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-metadata-catalog-capacity.py --root .
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-metadata-catalog-rollback-fence.py --root .
-	@$(KERNEL_BUDGET_SUBMAKE) build/kernel $(KERNEL_BUDGET_MAKE_ARGS)
-	@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
+	+@$(KERNEL_BUDGET_SUBMAKE) $(KERNEL_BUDGET_BUILDDIR)/kernel $(KERNEL_BUDGET_MAKE_ARGS)
+	+@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-kernel-budgets.py \
 		--check agent-modules --config $(KERNEL_BUDGET_CONFIG) --root . \
+		--kernel $(KERNEL_BUDGET_BUILDDIR)/kernel \
+		--object-dir $(KERNEL_BUDGET_BUILDDIR)/os \
+		--callgraph-dir $(KERNEL_BUDGET_BUILDDIR)/os \
+		--stack-build-config $(KERNEL_BUDGET_BUILDDIR)/.kernel-stack-config \
 		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
 		$(KERNEL_BUDGET_TOOL_ARGS)
 
@@ -594,19 +643,28 @@ kernel-budget-check: agent-uapi-check scripts/check-agent-module-boundaries.sh s
 	@bash scripts/check-agent-module-boundaries.sh
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-metadata-catalog-capacity.py --root .
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-metadata-catalog-rollback-fence.py --root .
-	@$(KERNEL_BUDGET_SUBMAKE) build/kernel $(KERNEL_BUDGET_MAKE_ARGS)
-	@$(KERNEL_BUDGET_SUBMAKE) $(STRUCT_PROC_BUDGET_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
-	@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
+	+@$(KERNEL_BUDGET_SUBMAKE) $(KERNEL_BUDGET_BUILDDIR)/kernel $(KERNEL_BUDGET_MAKE_ARGS)
+	+@$(KERNEL_BUDGET_SUBMAKE) $(STRUCT_PROC_BUDGET_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
+	+@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-kernel-budgets.py \
 		--check kernel --config $(KERNEL_BUDGET_CONFIG) --root . \
 		--kernel $(KERNEL_BUDGET_BUILDDIR)/kernel \
 		--struct-probe $(STRUCT_PROC_BUDGET_PROBE) \
+		--stack-build-config $(KERNEL_BUDGET_BUILDDIR)/.kernel-stack-config \
 		$(KERNEL_BUDGET_TOOL_ARGS) \
 		--callgraph-dir $(KERNEL_BUDGET_BUILDDIR)/os
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-kernel-budgets.py \
 		--check agent-modules --config $(KERNEL_BUDGET_CONFIG) --root . \
+		--kernel $(KERNEL_BUDGET_BUILDDIR)/kernel \
+		--object-dir $(KERNEL_BUDGET_BUILDDIR)/os \
+		--callgraph-dir $(KERNEL_BUDGET_BUILDDIR)/os \
+		--stack-build-config $(KERNEL_BUDGET_BUILDDIR)/.kernel-stack-config \
 		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
 		$(KERNEL_BUDGET_TOOL_ARGS)
+
+override KERNEL_BUDGET_STATIC_CHECKS := \
+	scripts/check-agent-file-generation-index.py \
+	scripts/check-vfs-scope-registry.py
 
 override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-check-kernel-budgets.py \
@@ -634,12 +692,35 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/check-bio-fs-must-check.py \
 	scripts/test-bio-background-context.py \
 	scripts/test-cache-index-wiring.py \
+	scripts/test-buffer-cache-victim-index.py \
+	scripts/test-bio-deferred-sponsor.py \
+	scripts/test-bio-overwrite-cache.py \
+	scripts/test-fs-epoch-sponsor.py \
+	scripts/test-fs-epoch-index.py \
+	scripts/test-fs-overwrite-fastpath.py \
+	scripts/test-copyoutv-window.py \
+	scripts/test-agent-metadata-content-fastpath.py \
+	scripts/test-agent-metadata-journal.py \
+	scripts/test-agent-metadata-read-view.py \
 	scripts/test-io-work-conserving-wiring.py \
+	scripts/test-syscall-file-transaction.py \
+	scripts/test-traditional-io-fastpath.py \
+	scripts/test-traditional-performance-contract.py \
+	scripts/test-open-file-io-lease.py \
+	scripts/test-lazy-bio-admission.py \
+	scripts/test-inode-mapping-guard.py \
+	scripts/test-read-epoch-lazy-finalizer.py \
+	scripts/test-close-lazy-finalizer.py \
+	scripts/test-background-dispatch-fastpath.py \
+	scripts/test-filepool-freelist.py \
+	scripts/test-vm-page-table-fastpath.py \
 	scripts/test-audit-lease-admission.py \
 	scripts/test-observe-span-retention.py \
 	scripts/check-fs-allocator-state.py \
+	scripts/test-fs-dentry-index.py \
 	scripts/test-fs-allocator-image.py \
 	scripts/test-fs-allocator-evidence.py \
+	scripts/test-fs-epoch-regression.py \
 	scripts/test-mkfs-host-snapshot.py \
 	scripts/test-observe-recovery-contract.py \
 	scripts/test-physical-brk-wiring.py \
@@ -649,12 +730,17 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-resource-kind-policy.py \
 	scripts/test-sync-owner-wiring.py \
 	scripts/test-validate-virtio-disk-log.py \
-	scripts/test-virtio-disk-wiring.py
+	scripts/test-sequential-read-batch.py \
+	scripts/test-virtio-disk-wiring.py \
+	scripts/test-parallel-qemu-regressions.py \
+	scripts/test-parallel-test-runner.py \
+	scripts/test-resource-jobs.py
 
-kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh host_tools/gitlab_ci_contract.py agent-observe-disk-format-check printf-format-static-check
-	@set -e; for test in $(KERNEL_BUDGET_PYTHON_SELFTESTS); do \
-		$(KERNEL_BUDGET_PYTHON_CMD) "$$test"; \
-	done
+kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh host_tools/gitlab_ci_contract.py agent-observe-disk-format-check printf-format-static-check
+	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
+		--jobs $(AGENTOS_TEST_JOBS) \
+		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
+		$(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS)
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-metadata-disk-format.py \
 		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
 		--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy)
@@ -711,6 +797,8 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_evaluation_scenario.py \
 	host_tools/test_task6_source_comparability.py \
 	host_tools/test_evaluation_dashboard.py \
+	host_tools/test_same_kernel_performance.py \
+	host_tools/test_traditional_performance.py \
 	host_tools/test_contest_demo.py \
 	host_tools/test_full_verification_payload.py \
 	host_tools/test_evaluation_bundle.py \
@@ -720,17 +808,64 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_safe_host_paths.py \
 	host_tools/test_plain_ucore_reader.py
 
-host-contract-selftest: $(HOST_CONTRACT_TESTS)
-	@set -e; for test in $(HOST_CONTRACT_TESTS); do \
-		$(PYTHON_CMD) "$$test"; \
-	done
+host-contract-selftest: $(HOST_CONTRACT_TESTS) scripts/run-parallel-tests.py
+	@$(PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
+		--jobs $(AGENTOS_TEST_JOBS) \
+		--python $(call shell_quote,$(PYTHON_BIN)) \
+		$(HOST_CONTRACT_TESTS)
+
+override EVIDENCE_CAPTURE_TESTS := \
+	host_tools/test_capture_final_evidence.py \
+	host_tools/test_evidence_delivery_contract.py
 
 evidence-capture-selftest: scripts/trusted-python-entry.py scripts/trusted-python-child.py host_tools/evaluation_source_gate.py host_tools/formal_python_runtime.py
-evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/result_bundle_publication.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py host_tools/remote_ci_archive.py host_tools/remote_ci_bundle.py host_tools/remote_ci_evidence.py host_tools/remote_ci_job_semantics.py host_tools/remote_ci_test_fixture.py host_tools/test_capture_final_evidence.py host_tools/test_evidence_delivery_contract.py
-	@$(PYTHON_CMD) host_tools/test_capture_final_evidence.py
-	@$(PYTHON_CMD) host_tools/test_evidence_delivery_contract.py
+evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/result_bundle_publication.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py host_tools/remote_ci_archive.py host_tools/remote_ci_bundle.py host_tools/remote_ci_evidence.py host_tools/remote_ci_job_semantics.py host_tools/remote_ci_test_fixture.py $(EVIDENCE_CAPTURE_TESTS)
+	@$(PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
+		--jobs $(AGENTOS_TEST_JOBS) \
+		--python $(call shell_quote,$(PYTHON_BIN)) \
+		$(EVIDENCE_CAPTURE_TESTS)
 
-ci-check: host-contract-selftest evidence-capture-selftest kernel-budget-selftest kernel-budget-check user-stack-check
+override CI_HOST_SELFTESTS := \
+	$(HOST_CONTRACT_TESTS) \
+	$(filter-out $(HOST_CONTRACT_TESTS),$(EVIDENCE_CAPTURE_TESTS)) \
+	$(filter-out $(HOST_CONTRACT_TESTS) $(EVIDENCE_CAPTURE_TESTS),$(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS))
+
+# Expensive evidence mutation suites remain mandatory in ci-check/full-verify,
+# but do not make every development checkpoint wait for package-scale replay.
+override STAGE_EXPENSIVE_HOST_SELFTESTS := \
+	$(EVIDENCE_CAPTURE_TESTS) \
+	scripts/test-fs-allocator-evidence.py
+override STAGE_HOST_SELFTESTS := \
+	$(filter-out $(STAGE_EXPENSIVE_HOST_SELFTESTS),$(CI_HOST_SELFTESTS))
+
+stage-host-selftests: $(STAGE_HOST_SELFTESTS) scripts/run-parallel-tests.py
+	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
+		--jobs $(AGENTOS_TEST_JOBS) \
+		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
+		$(STAGE_HOST_SELFTESTS)
+
+ci-host-selftests: $(CI_HOST_SELFTESTS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh host_tools/gitlab_ci_contract.py agent-observe-disk-format-check printf-format-static-check
+	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
+		--jobs $(AGENTOS_TEST_JOBS) \
+		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
+		$(CI_HOST_SELFTESTS)
+	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-metadata-disk-format.py \
+		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
+		--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy)
+	@CC=$(call shell_quote,$(HOST_CC)) \
+		HOST_CC=$(call shell_quote,$(HOST_CC)) \
+		HOSTCC=$(call shell_quote,$(HOST_CC)) \
+		bash scripts/test-durable-dirty-retry.sh
+
+ci-check:
+	+@$(MAKE) --no-print-directory ci-host-selftests
+	+@$(MAKE) --no-print-directory kernel-budget-check
+	+@$(MAKE) --no-print-directory user-stack-check
+
+stage-check:
+	+@$(MAKE) --no-print-directory stage-host-selftests
+	+@$(MAKE) --no-print-directory kernel-budget-check
+	+@$(MAKE) --no-print-directory user-stack-check
 
 clean:
 	$(MAKE) -rR -C $(U) -f Makefile clean
@@ -752,7 +887,7 @@ QEMUOPTS = \
     -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 $(F)/fs.img: user .FORCE
-	$(MAKE) -rR -C $(F) -f Makefile
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C $(F) -f Makefile
 
 $(F)/fs-copy.img: $(F)/fs.img
 	@set -e; tmp="$@.$$$$.tmp"; \
@@ -774,7 +909,7 @@ run-prebuilt:
 # Reboot the current writable disk explicitly.  Normal `run` always installs
 # the freshly built userspace image so code and manifest updates cannot go stale.
 run-persist: build/kernel
-	@if [ ! -f "$(F)/fs-copy.img" ]; then $(MAKE) $(F)/fs-copy.img; fi
+	@if [ ! -f "$(F)/fs-copy.img" ]; then $(MAKE) $(AGENTOS_SUBMAKE_JOBS) $(F)/fs-copy.img; fi
 	$(QEMU_CMD) $(QEMUOPTS)
 
 # QEMU's gdb stub command line changed in 0.11
@@ -797,18 +932,18 @@ gdbclient:
 CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]' || echo 8)
 
 user:
-	$(MAKE) -rR -C user -f Makefile CHAPTER=$(CHAPTER) BASE=$(BASE) \
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C user -f Makefile CHAPTER=$(CHAPTER) BASE=$(BASE) \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		COMPAT_BENCH_CHALLENGE_HEX=$(call shell_quote,$(COMPAT_BENCH_CHALLENGE_HEX)) \
 		USER_EXTRA_CFLAGS='$(USER_EXTRA_CFLAGS)'
 
 user-stack-check:
-	$(MAKE) -rR -C user -f Makefile user-stack-check TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C user -f Makefile user-stack-check TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN))
 
 test:
-	$(MAKE) user CHAPTER=$(CHAPTER) BASE=$(BASE)
-	$(MAKE) run CHAPTER=$(CHAPTER) BASE=$(BASE)
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) user CHAPTER=$(CHAPTER) BASE=$(BASE)
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) run CHAPTER=$(CHAPTER) BASE=$(BASE)
 
 doctor:
 	bash scripts/check-dependencies.sh
@@ -816,26 +951,26 @@ doctor:
 plain-platform-build:
 	rm -f baseline_ucore/$(F)/fs.img baseline_ucore/$(F)/fs-copy.img
 	$(MAKE) -C baseline_ucore/user clean
-	$(MAKE) -C baseline_ucore user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) CHAPTER=platform
-	$(MAKE) -C baseline_ucore nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) CHAPTER=platform
-	$(MAKE) -C baseline_ucore build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) LOG=warn INIT_PROC=rp_orch CHAPTER=platform
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -C baseline_ucore user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) CHAPTER=platform
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -C baseline_ucore nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) CHAPTER=platform
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -C baseline_ucore build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) LOG=warn INIT_PROC=rp_orch CHAPTER=platform
 
 plain-platform-run:
 	rm -f baseline_ucore/$(F)/fs.img baseline_ucore/$(F)/fs-copy.img
 	$(MAKE) -C baseline_ucore/user clean
-	$(MAKE) -C baseline_ucore user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) CHAPTER=platform
-	$(MAKE) -C baseline_ucore nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) CHAPTER=platform
-	$(MAKE) -C baseline_ucore run TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) QEMU=$(call shell_quote,$(QEMU)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) LOG=error INIT_PROC=rp_orch CHAPTER=platform
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -C baseline_ucore user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) CHAPTER=platform
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -C baseline_ucore nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) CHAPTER=platform
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -C baseline_ucore run TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) QEMU=$(call shell_quote,$(QEMU)) PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) LOG=error INIT_PROC=rp_orch CHAPTER=platform
 
 agentos-user:
-	$(MAKE) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=agent
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=agent
 
 agentos-build:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
 	$(MAKE) -rR -C user -f Makefile clean
-	$(MAKE) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=agent
-	$(MAKE) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=agent
-	$(MAKE) build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn INIT_PROC=agentfinal_ucore
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=agent
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=agent
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn INIT_PROC=agentfinal_ucore
 
 agentos-test:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
@@ -856,11 +991,27 @@ contest-demo-check: scripts/run-contest-demo.sh host_tools/contest_demo.py host_
 	@$(call shell_quote,$(BASH_BIN)) -n scripts/run-contest-demo.sh
 	@$(PYTHON_CMD) host_tools/test_contest_demo.py
 
+traditional-performance:
+	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+		QEMU=$(call shell_quote,$(QEMU)) \
+		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) \
+		MAKE_TOOL=$(call shell_quote,$(MAKE)) \
+		TRADPERF_BUILD_JOBS=$(AGENTOS_BUILD_JOBS) \
+		$(call shell_quote,$(BASH_BIN)) scripts/run-traditional-performance.sh
+
+traditional-performance-check: scripts/run-traditional-performance.sh host_tools/traditional_performance.py host_tools/test_traditional_performance.py scripts/test-traditional-performance-contract.py
+	@$(call shell_quote,$(BASH_BIN)) -n scripts/run-traditional-performance.sh
+	@$(PYTHON_CMD) -I -S -B host_tools/test_traditional_performance.py
+	@$(PYTHON_CMD) -I -S -B scripts/test-traditional-performance-contract.py
+
 fs-enospc-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-fs-enospc-tests.sh
 
 fs-allocator-fault-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) /bin/bash --noprofile --norc -p scripts/run-fs-allocator-fault-tests.sh
+
+fs-epoch-test:
+	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-fs-epoch-tests.sh
 
 proc-reap-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-proc-reap-tests.sh
@@ -890,21 +1041,21 @@ virtio-disk-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-virtio-disk-tests.sh
 
 agentos-platform-user:
-	$(MAKE) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
 
 agentos-platform-build:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
 	$(MAKE) -rR -C user -f Makefile clean
-	$(MAKE) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
-	$(MAKE) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
-	$(MAKE) build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn INIT_PROC=rp_agentos_orch
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn INIT_PROC=rp_agentos_orch
 
 agentos-platform-run:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
 	$(MAKE) -rR -C user -f Makefile clean
-	$(MAKE) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
-	$(MAKE) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
-	$(MAKE) run TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) QEMU=$(call shell_quote,$(QEMU)) LOG=error INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) user TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) nfs/fs.img TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) CHAPTER=platform_agentos
+	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) run TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) QEMU=$(call shell_quote,$(QEMU)) LOG=error INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos
 
 dual-platform-run:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-dual-platforms.sh

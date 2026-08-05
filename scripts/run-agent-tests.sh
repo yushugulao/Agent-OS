@@ -32,11 +32,35 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 BASH_BIN="${BASH_BIN:-bash}"
 HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
+AGENTOS_BUILD_JOBS="${AGENTOS_BUILD_JOBS:-$("${PYTHON_BIN}" -I -S -B scripts/resource-jobs.py --kind build)}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 REQUIRE_FULL_SUITE="${REQUIRE_FULL_SUITE:-0}"
 AGENT_TEST_CALIBRATE="${AGENT_TEST_CALIBRATE:-0}"
 AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-local-e3}"
+# Preserve the resolved Host probe compiler, then remove every ambient GNU
+# make input that a review build deliberately rejects.  Command-line values
+# supplied below remain explicit and auditable.
+readonly HOST_CC
+readonly -a FUNCTIONAL_REVIEW_SANITIZED_ENV=(
+	MAKEFILES MAKEFLAGS MFLAGS MAKEOVERRIDES GNUMAKEFLAGS
+	HOSTCC CC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS ASFLAGS
+	K U F BUILDDIR C_SRCS AS_SRCS C_OBJS AS_OBJS OBJS HEADER_DEP
+	ARCH COMMON_CFLAGS LIB_C LIB_OBJS CRT_OBJ
+	app_dir build_dir elf_dir obj_dir bin_dir generated_dir out_dir asm_dir arch_dir
+	SRCS APPS SELECTED_APPS USER_BIN_DIR USER_ELF_DIR
+	STORAGE_POLICY_CPPFLAGS FS_FUSE USER_BINS USER_ELFS EXEC_POLICY
+)
+for functional_review_env in "${FUNCTIONAL_REVIEW_SANITIZED_ENV[@]}"; do
+	unset "${functional_review_env}"
+done
+if [[ ! "${AGENTOS_BUILD_JOBS}" =~ ^([1-9]|1[0-9]|2[0-4])$ ]]; then
+	echo "[agent-tests] AGENTOS_BUILD_JOBS must be between 1 and 24" >&2
+	exit 1
+fi
+MAKE_JOB_ARGS=(-j "${AGENTOS_BUILD_JOBS}")
+readonly -a MAKE_JOB_ARGS
+echo "[agent-tests] build_jobs=${AGENTOS_BUILD_JOBS}"
 CONTEXT_SYNC_TIMING_FILE="${TMPDIR:-/tmp}/agentos-context-sync-timings.$$"
 CONTEXT_SYNC_USER_CFLAGS="-DAGENT_CONTEXT_SYNC_TEST_PROFILE -DWAIT_ATOMIC_TEST_PROFILE"
 calibration_case_ordinal=0
@@ -216,6 +240,10 @@ check_case_contract() {
 	local context_sync_profile="${3:-0}"
 
 	case "${init_proc}" in
+	ch8_cow_ucore)
+		require_exact_case_marker "${log_file}" \
+			"ch8_cow_ucore: passed"
+		;;
 	agenteval_ucore)
 		"${PYTHON_BIN}" -I -S -B scripts/trusted-python-entry.py \
 			host_tools/evaluation_contract.py validate-guest \
@@ -345,7 +373,7 @@ build_user_image() {
 
 	# nfs/fs.img depends on the user target.  Keep both compilation and image
 	# construction in one make invocation so profile flags cannot be dropped.
-	"${MAKE_TOOL}" -rR -f Makefile nfs/fs.img \
+	"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile nfs/fs.img \
 		TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}" \
 		FUNCTIONAL_REVIEW_BUILD=1 \
 		USER_EXTRA_CFLAGS="${user_extra_cflags}"
@@ -410,7 +438,7 @@ run_case() {
 
 	echo "[agent-tests] running ${init_proc}"
 	rm -f nfs/fs-copy.img os/initproc.S build/os/initproc.o
-	"${MAKE_TOOL}" -rR -f Makefile build \
+	"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile build \
 		TOOLPREFIX="${TOOLPREFIX}" \
 		LOG="${LOG}" \
 		INIT_PROC="${init_proc}" \
@@ -475,16 +503,19 @@ if [[ -z "${AGENT_TEST_CASE:-}" ||
 fi
 
 build_user_image
-"${MAKE_TOOL}" -rR -f Makefile build \
+"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile build \
 	TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore \
 	FUNCTIONAL_REVIEW_BUILD=1
 
 if [[ -n "${AGENT_TEST_CASE:-}" ]]; then
 	expected_bad_addr_marker=""
+	case_marker="${AGENT_TEST_CASE}: parent passed"
 	if [[ "${AGENT_TEST_CASE}" == "iobudget_ucore" ]]; then
 		expected_bad_addr_marker="iobudget_ucore: fault_exit_armed=1"
+	elif [[ "${AGENT_TEST_CASE}" == "ch8_cow_ucore" ]]; then
+		case_marker="ch8_cow_ucore: passed"
 	fi
-	run_case "${AGENT_TEST_CASE}" "${AGENT_TEST_CASE}: parent passed" \
+	run_case "${AGENT_TEST_CASE}" "${case_marker}" \
 		"${expected_bad_addr_marker}"
 	echo "[agent-tests] full-suite duration budget skipped for targeted run"
 	exit 0
@@ -498,6 +529,7 @@ run_case agentsched_ucore "agentsched_ucore: parent passed"
 run_case agentconflict_ucore "agentconflict_ucore: parent passed"
 run_case agentllm_ucore "agentllm_ucore: parent passed"
 run_case agentbench_ucore "agentbench_ucore: parent passed"
+run_case ch8_cow_ucore "ch8_cow_ucore: passed"
 run_case labbench_ucore "labbench_ucore: parent passed"
 run_case labdemo_ucore "labdemo_ucore: parent passed"
 run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
@@ -511,8 +543,8 @@ run_case usersafety_ucore "usersafety_ucore: parent passed"
 run_case blocking_semantics_ucore "blocking_semantics_ucore: parent passed"
 
 if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-	if [[ "${calibration_case_ordinal}" != "18" ]]; then
-		echo "[agent-tests] calibration did not execute exactly 18 cases" >&2
+	if [[ "${calibration_case_ordinal}" != "19" ]]; then
+		echo "[agent-tests] calibration did not execute exactly 19 cases" >&2
 		exit 1
 	fi
 	"${PYTHON_BIN}" -I -S -B scripts/agent_test_calibration.py derive-round \

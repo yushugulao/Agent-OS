@@ -13,6 +13,7 @@ enum agent_metadata_probe_phase {
 	AGENT_META_PROBE_HEADER = 1,
 	AGENT_META_PROBE_PAYLOAD,
 	AGENT_META_PROBE_VERIFY_HEADER,
+	AGENT_META_PROBE_JOURNAL,
 };
 
 struct agent_metadata_probe_summary {
@@ -21,6 +22,7 @@ struct agent_metadata_probe_summary {
 	int migration;
 	uint64 generation;
 	uint64 payload_hash;
+	struct agent_meta_journal_cursor journal_cursor;
 };
 
 struct agent_metadata_probe_cursor {
@@ -34,8 +36,11 @@ struct agent_metadata_probe_cursor {
 	uint64 inum;
 	uint64 incarnation;
 	uint64 inode_size;
+	uint journal_block;
 	struct agent_meta_store_header header;
 	struct agent_meta_store_header verify_header;
+	struct agent_meta_journal_replay journal_replay;
+	char journal_data[AGENT_META_JOURNAL_BLOCK_BYTES];
 };
 
 static struct {
@@ -178,13 +183,23 @@ agent_metadata_probe_header_valid(struct agent_meta_store *store,
 		return AGENT_META_BANK_UNCOMMITTED;
 	if (store->header.magic != AGENT_META_STORE_MAGIC ||
 	    (version != AGENT_META_STORE_VERSION &&
+	     version != AGENT_META_STORE_VERSION_V7 &&
 	     version != AGENT_META_STORE_VERSION_V5) ||
 	    store->header.generation == 0)
 		return AGENT_META_BANK_CORRUPT;
-	size_status = version == AGENT_META_STORE_VERSION ?
-		agent_meta_format_store_bytes(store->header.count, &store_bytes) :
-		agent_meta_format_store_v5_bytes(store->header.count, &store_bytes);
+	if (version == AGENT_META_STORE_VERSION)
+		size_status = agent_meta_format_store_bytes(
+			store->header.count, &store_bytes);
+	else if (version == AGENT_META_STORE_VERSION_V7)
+		size_status = agent_meta_format_store_v7_bytes(
+			store->header.count, &store_bytes);
+	else
+		size_status = agent_meta_format_store_v5_bytes(
+			store->header.count, &store_bytes);
 	if (size_status < 0 || inode_size < store_bytes)
+		return AGENT_META_BANK_CORRUPT;
+	if (version == AGENT_META_STORE_VERSION &&
+	    inode_size < AGENT_META_STORE_MAX_BYTES)
 		return AGENT_META_BANK_CORRUPT;
 	probe.cursor.store_bytes = store_bytes;
 	probe.cursor.header = store->header;
@@ -197,7 +212,8 @@ agent_metadata_probe_validate(struct agent_meta_store *store,
 			      int *migration)
 {
 	uint64 version = probe.cursor.header.version;
-	char *payload = version == AGENT_META_STORE_VERSION ?
+	char *payload = version == AGENT_META_STORE_VERSION ||
+		version == AGENT_META_STORE_VERSION_V7 ?
 			(char *)&store->durable : (char *)store->records;
 	uint payload_bytes = probe.cursor.store_bytes - sizeof(store->header);
 
@@ -207,16 +223,22 @@ agent_metadata_probe_validate(struct agent_meta_store *store,
 		&store->header, payload, payload_bytes) ||
 	    (version == AGENT_META_STORE_VERSION ?
 		     !agent_meta_format_records_valid(store) :
+	     version == AGENT_META_STORE_VERSION_V7 ?
+		     !agent_meta_format_v7_records_valid(store) :
 		     !agent_meta_format_v5_records_valid(store)))
 		return AGENT_META_BANK_CORRUPT;
-	*generation = store->header.generation;
-	*payload_hash = store->header.payload_hash;
 	*migration = 0;
 	if (version == AGENT_META_STORE_VERSION_V5) {
 		if (agent_meta_format_migrate_v5(store) < 0)
 			return AGENT_META_BANK_CORRUPT;
-		*migration = 1;
+		*migration = AGENT_META_STORE_VERSION_V5;
+	} else if (version == AGENT_META_STORE_VERSION_V7) {
+		if (agent_meta_format_migrate_v7(store) < 0)
+			return AGENT_META_BANK_CORRUPT;
+		*migration = AGENT_META_STORE_VERSION_V7;
 	}
+	*generation = store->header.generation;
+	*payload_hash = store->header.payload_hash;
 	return AGENT_META_BANK_VALID;
 }
 
@@ -300,7 +322,8 @@ agent_metadata_probe_read(const struct agent_metadata_probe_key *key, int bank,
 		probe.cursor.phase = AGENT_META_PROBE_PAYLOAD;
 		probe.cursor.offset = 0;
 	}
-	payload = probe.cursor.header.version == AGENT_META_STORE_VERSION ?
+	payload = probe.cursor.header.version == AGENT_META_STORE_VERSION ||
+		  probe.cursor.header.version == AGENT_META_STORE_VERSION_V7 ?
 			  (char *)&store->durable : (char *)store->records;
 	if (probe.cursor.phase == AGENT_META_PROBE_PAYLOAD) {
 		status = agent_metadata_probe_piece(
@@ -313,15 +336,55 @@ agent_metadata_probe_read(const struct agent_metadata_probe_key *key, int bank,
 		memset(&probe.cursor.verify_header, 0,
 		       sizeof(probe.cursor.verify_header));
 	}
-	status = agent_metadata_probe_piece(
-		ip, &cred, (char *)&probe.cursor.verify_header, 0,
-		sizeof(probe.cursor.verify_header));
-	if (status != AGENT_META_BANK_VALID)
-		goto out;
-	status = agent_metadata_probe_validate(
-		store, generation, payload_hash, migration);
-	if (status != AGENT_META_BANK_VALID)
-		goto out_reset;
+	if (probe.cursor.phase == AGENT_META_PROBE_VERIFY_HEADER) {
+		status = agent_metadata_probe_piece(
+			ip, &cred, (char *)&probe.cursor.verify_header, 0,
+			sizeof(probe.cursor.verify_header));
+		if (status != AGENT_META_BANK_VALID)
+			goto out;
+		status = agent_metadata_probe_validate(
+			store, generation, payload_hash, migration);
+		if (status != AGENT_META_BANK_VALID)
+			goto out_reset;
+		status = agent_meta_journal_replay_init(
+			&probe.cursor.journal_replay, *generation, *payload_hash);
+		if (status != AGENT_META_JOURNAL_OK)
+			goto corrupt;
+		if (*migration != 0)
+			goto journal_complete;
+		probe.cursor.phase = AGENT_META_PROBE_JOURNAL;
+		probe.cursor.offset = 0;
+		probe.cursor.journal_block = 0;
+	}
+	while (probe.cursor.phase == AGENT_META_PROBE_JOURNAL &&
+	       probe.cursor.journal_block < AGENT_META_JOURNAL_BLOCKS) {
+		status = agent_metadata_probe_piece(
+			ip, &cred, probe.cursor.journal_data,
+			AGENT_META_JOURNAL_OFFSET +
+				probe.cursor.journal_block *
+					AGENT_META_JOURNAL_BLOCK_BYTES,
+			AGENT_META_JOURNAL_BLOCK_BYTES);
+		if (status != AGENT_META_BANK_VALID)
+			goto out;
+		status = agent_meta_journal_replay_block(
+			&probe.cursor.journal_replay, store,
+			probe.cursor.journal_data, probe.cursor.journal_block);
+		if (status != AGENT_META_JOURNAL_OK)
+			goto corrupt;
+		probe.cursor.journal_block++;
+		probe.cursor.offset = 0;
+	}
+	if (probe.cursor.phase == AGENT_META_PROBE_JOURNAL &&
+	    agent_meta_journal_replay_finish(
+		    &probe.cursor.journal_replay) != AGENT_META_JOURNAL_OK)
+		goto corrupt;
+journal_complete:
+	*generation = probe.cursor.journal_replay.cursor.generation;
+	*payload_hash = store->header.payload_hash;
+	{
+		struct agent_meta_journal_cursor recovered_cursor =
+			probe.cursor.journal_replay.cursor;
+
 	memset(&probe.cursor, 0, sizeof(probe.cursor));
 	if (!confirm) {
 		probe.summary[bank].classified = 1;
@@ -329,9 +392,14 @@ agent_metadata_probe_read(const struct agent_metadata_probe_key *key, int bank,
 		probe.summary[bank].generation = *generation;
 		probe.summary[bank].payload_hash = *payload_hash;
 		probe.summary[bank].migration = *migration;
+		probe.summary[bank].journal_cursor = recovered_cursor;
+	}
 	}
 	iput(ip);
 	return AGENT_META_BANK_VALID;
+corrupt:
+	status = AGENT_META_BANK_CORRUPT;
+	goto out_reset;
 out:
 	iput(ip);
 	if (status == AGENT_META_BANK_BUSY &&
@@ -413,6 +481,18 @@ agent_metadata_probe_confirm(const struct agent_metadata_probe_key *key,
 	if (key->resumable)
 		probe.confirmed_bank = bank;
 	return AGENT_META_BANK_VALID;
+}
+
+int
+agent_metadata_probe_journal_cursor(int bank,
+				    struct agent_meta_journal_cursor *cursor)
+{
+	if (cursor == 0 || bank < 0 || bank >= AGENT_META_STORE_BANKS ||
+	    !probe.summary[bank].classified ||
+	    probe.summary[bank].status != AGENT_META_BANK_VALID)
+		return -1;
+	*cursor = probe.summary[bank].journal_cursor;
+	return 0;
 }
 
 uint64

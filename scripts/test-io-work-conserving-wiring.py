@@ -50,7 +50,7 @@ def define(source: str, name: str) -> int:
 
 
 def validate(bio: str, policy: str, iobudget: str) -> None:
-    if define(policy, "IO_POLICY_VERSION") != 5:
+    if define(policy, "IO_POLICY_VERSION") != 6:
         raise ContractError("work-conserving policy version is not published")
     if define(policy, "IO_POLICY_SHARED_BURST") != define(
             policy, "IO_POLICY_DEVICE_BURST"):
@@ -126,10 +126,22 @@ def validate(bio: str, policy: str, iobudget: str) -> None:
             "--state->active_requests == 0" not in release or
             "io_policy.active_owner_states--" not in release):
         raise ContractError("active-owner accounting is not transition based")
-    if bio.count("io_active_request_acquire(state);") != 2:
-        raise ContractError("an I/O request begin bypasses active-owner accounting")
-    if bio.count("io_active_request_release(state);") != 3:
-        raise ContractError("an I/O request end bypasses active-owner accounting")
+    begin = compact(function_body(bio, "bio_request_begin_current_mode"))
+    upgrade = compact(function_body(bio, "bio_request_upgrade_current_mode"))
+    end = compact(function_body(bio, "bio_request_end_current_mode"))
+    abort = compact(function_body(bio, "bio_request_abort_thread"))
+    if "io_active_request_acquire(state);" not in begin:
+        raise ContractError("eager I/O begin bypasses active-owner accounting")
+    if ("io_active_request_acquire(state);" not in upgrade or
+            "io_active_request_release(state);" not in upgrade):
+        raise ContractError("lazy I/O upgrade does not pin and unwind its owner")
+    if "io_active_request_release(state);" not in end:
+        raise ContractError("normal I/O end bypasses active-owner accounting")
+    if "io_active_request_release(state);" not in abort:
+        raise ContractError("aborted I/O request bypasses active-owner accounting")
+    if ("state->active_requests++;" in bio or
+            "state->active_requests--;" in bio):
+        raise ContractError("request lifecycle updates active owners directly")
 
     if "IO_POLICY_SHARED_BURST + 1" in iobudget:
         raise ContractError("dynamic pressure scales with the elastic envelope")
@@ -148,7 +160,7 @@ def validate(bio: str, policy: str, iobudget: str) -> None:
 validate(BIO, POLICY, IOBUDGET)
 
 MUTATIONS = (
-    (BIO, POLICY.replace("#define IO_POLICY_VERSION 5U", "#define IO_POLICY_VERSION 4U", 1), IOBUDGET),
+    (BIO, POLICY.replace("#define IO_POLICY_VERSION 6U", "#define IO_POLICY_VERSION 5U", 1), IOBUDGET),
     (BIO, POLICY.replace("#define IO_POLICY_SHARED_REFILL 280U", "#define IO_POLICY_SHARED_REFILL 16U", 1), IOBUDGET),
     (BIO.replace("if (!shared)", "if (!shared || io_device_protected(state->owner, io_class))", 1), POLICY, IOBUDGET),
     (BIO.replace("if (!shared)", "if (shared)", 1), POLICY, IOBUDGET),

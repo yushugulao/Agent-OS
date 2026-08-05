@@ -155,13 +155,19 @@ def check(root: Path) -> None:
     )
     require(
         implementation,
-        "kernel_work_receipt_next_generation++;"
+        "if(t->kernel_receipt_generation==(uint64)-1)"
+        "panic(\"kernelworkreceiptgenerationexhausted\");"
+        "t->kernel_receipt_generation++;"
         "t->kernel_last_syscall_preemptions=t->kernel_work_redispatches-"
         "t->kernel_syscall_preemptions_start;"
-        "t->kernel_receipt_generation=kernel_work_receipt_next_generation;"
         "t->kernel_receipt_completion_timer_epoch=kernel_work_timer_epoch;"
         "t->kernel_receipt_syscall_id=t->kernel_work_target_syscall_id;",
-        "published receipt is not atomically sourced from completed syscall work",
+        "published receipt is not sourced from its stable owner sequence",
+    )
+    reject(
+        implementation,
+        "kernel_work_receipt_next_generation",
+        "receipt publication still serializes every syscall on a global counter",
     )
     require(
         implementation,
@@ -220,6 +226,7 @@ def check(root: Path) -> None:
         "caseSYS_kernel_work_last_preemptions:"
         "caseSYS_kernel_work_receipt_snapshot:"
         "caseSYS_agent_resource_snapshot:"
+        "caseSYS_agent_performance_snapshot:"
         "returnKERNEL_WORK_SYSCALL_OBSERVER;",
         "receipt observers are not a non-publishing syscall class",
     )

@@ -3,6 +3,7 @@
 #include "agent_durable_section.h"
 #include "agent_identity_lease.h"
 #include "agent_internal.h"
+#include "fs_epoch.h"
 #include "agent_observe_capacity.h"
 #include "agent_observe_recovery.h"
 #include "agent_observe_store.h"
@@ -80,6 +81,7 @@ agent_background_maintain(void)
 	if (!proc_thread_exit_requested() &&
 	    agent_identity_lease_admission_ready())
 		agent_obsstore_lease_maintain();
+	(void)fs_deferred_reclaim_maintain();
 	agent_metadata_background_maintain();
 	if (agent_metadata_durable_status() == AGENT_STATUS_OK &&
 	    !agent_identity_lease_admission_ready())
@@ -112,14 +114,27 @@ agent_core_create_admission_status(void)
 void agent_background_checkpoint(void)
 {
 	struct thread *t = curr_thread();
+	int epoch_due;
 	int lease_pending;
+	int pending;
 
 	if (t == 0 || t->tid < 0 || t->state != RUNNING || t->process == 0)
 		return;
 	lease_pending = agent_identity_lease_maintenance_pending();
-	if (!agent_background_take() && !lease_pending)
+	pending = agent_background_take();
+	epoch_due = fs_epoch_should_commit();
+	if (!pending && !lease_pending && !epoch_due)
 		return;
-	agent_background_maintain();
+	if (fs_epoch_request_begin() < 0) {
+		if (pending || lease_pending)
+			agent_background_request();
+		return;
+	}
+	if (pending || lease_pending)
+		agent_background_maintain();
+	if (fs_epoch_should_commit())
+		(void)fs_epoch_commit();
+	fs_epoch_request_end();
 }
 
 void
@@ -158,18 +173,33 @@ static void agent_core_proc_state_reset(struct proc *p)
 
 void agent_core_clear_metadata(struct proc *p)
 {
-	agent_context_proc_reset(p);
-	agent_observe_proc_reset(p);
+	int inactive;
+
+	/* PUBLIC slots never activate the Agent state plane.  Their legacy
+	 * mailbox is sidecar-owned, so teardown only has to release that endpoint
+	 * and clear the identity edge. */
+	inactive = p != 0 && !p->is_agent && p->agent_control_id == 0 &&
+		   agent_context_is_empty(p);
+	if (!inactive) {
+		agent_context_proc_reset(p);
+		agent_observe_proc_reset(p);
+	}
 	agent_ipc_proc_teardown(p);
 	agent_identity_proc_reset(p, 0);
-	agent_core_proc_state_reset(p);
+	if (!inactive)
+		agent_core_proc_state_reset(p);
 }
 
 void agent_core_proc_prepare(struct proc *p)
 {
-	if (p == 0 || !proc_teardown_live(p))
+	if (p == 0 || !proc_teardown_live(p) || p->is_agent ||
+	    p->agent_control_id != 0 || p->agent_controller_id != 0 ||
+	    !agent_context_is_empty(p) ||
+	    !agent_ipc_legacy_mailbox_empty(p) ||
+	    p->legacy_mail_endpoint_generation != 0)
 		panic("Agent prepare outside live process");
-	agent_core_clear_metadata(p);
+	/* RECLAIMING is the sole reset owner.  Admission only rotates the PUBLIC
+	 * endpoint, avoiding a second full-state clear on every fork. */
 	agent_ipc_proc_prepare(p);
 }
 

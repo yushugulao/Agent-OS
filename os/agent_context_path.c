@@ -4,6 +4,55 @@
 #include "kernel_work.h"
 #include "proc.h"
 
+static struct agent_context_path_stats context_path_stats;
+
+static void
+context_path_note_walk(uint64 records_examined)
+{
+	int enabled = intr_save();
+
+	context_path_stats.history_walks++;
+	context_path_stats.history_records_examined += records_examined;
+	intr_restore(enabled);
+}
+
+void
+agent_context_path_note_append(uint64 records_examined)
+{
+	int enabled = intr_save();
+
+	context_path_stats.append_fast_commits++;
+	context_path_stats.append_history_records_examined += records_examined;
+	intr_restore(enabled);
+}
+
+void
+agent_context_path_note_forward_query(uint64 records_examined,
+				      uint64 active_records)
+{
+	int enabled;
+
+	if (records_examined > active_records)
+		panic("Agent context forward query accounting");
+	enabled = intr_save();
+	context_path_stats.forward_query_calls++;
+	context_path_stats.forward_query_active_records += active_records;
+	context_path_stats.forward_query_records_examined += records_examined;
+	intr_restore(enabled);
+}
+
+void
+agent_context_path_stats_snapshot(struct agent_context_path_stats *out)
+{
+	int enabled;
+
+	if (out == 0)
+		return;
+	enabled = intr_save();
+	memmove(out, &context_path_stats, sizeof(*out));
+	intr_restore(enabled);
+}
+
 static uint64
 context_hash_mix(uint64 hash, uint64 value)
 {
@@ -16,7 +65,7 @@ context_hash_mix(uint64 hash, uint64 value)
 }
 
 static uint64
-context_hash_bytes(uint64 hash, char *buffer, int length)
+context_hash_bytes(uint64 hash, const char *buffer, int length)
 {
 	for (int i = 0; i < length; i++) {
 		hash ^= (uchar)buffer[i];
@@ -26,7 +75,7 @@ context_hash_bytes(uint64 hash, char *buffer, int length)
 }
 
 uint64
-agent_context_record_hash(struct agent_context_record *record)
+agent_context_record_hash(const struct agent_context_record *record)
 {
 	uint64 hash = 1469598103934665603ULL;
 
@@ -108,43 +157,60 @@ context_read_sequence(struct proc *p, uint64 sequence,
 static int
 context_active_walk(struct proc *p, uint64 head, uint64 target,
 		    struct agent_context_record *result, uint64 *count,
-		    uint64 *oldest, int checkpoint)
+		    uint64 *oldest, int checkpoint, uint64 *successors,
+		    uint64 successor_capacity)
 {
 	struct agent_context_record record;
-	uint64 cursor = head, seen = 0, expected_hash = 0;
+	uint64 cursor = head, seen = 0, expected_hash = 0, successor = 0;
+	int status = -1;
 	int terminal;
 
-	if (p == 0 || head == 0)
-		return -1;
+	if (p == 0 || head == 0 ||
+	    (successors != 0 && successor_capacity < p->context_path_capacity))
+		goto out;
 	while (seen < p->context_path_capacity) {
 		if (context_read_sequence(p, cursor, &record) < 0 ||
-		    (expected_hash != 0 && record.record_hash != expected_hash))
-			return -1;
+		    (expected_hash != 0 && record.record_hash != expected_hash) ||
+		    record.branch_generation == 0 ||
+		    record.branch_generation > p->context_branch_generation)
+			goto out;
 		terminal = record.path_parent_sequence == 0 ||
 			   record.path_parent_sequence < p->context_path_oldest;
-		if ((!terminal && record.path_parent_sequence >= cursor) ||
+		if ((!terminal && (record.path_parent_sequence >= cursor ||
+				  record.prev_hash == 0)) ||
 		    (terminal && ((record.path_parent_sequence == 0) !=
 				 (record.prev_hash == 0))))
-			return -1;
+			goto out;
+		if (successors != 0) {
+			successors[(record.sequence - 1) % successor_capacity] =
+				successor;
+			successor = record.sequence;
+		}
 		if (seen++ == target) {
 			if (result == 0)
-				return -1;
+				goto out;
 			*result = record;
-			return 0;
+			status = 0;
+			goto out;
 		}
 		if (terminal) {
 			if (count == 0 || oldest == 0)
-				return -1;
+				goto out;
 			*count = seen;
 			*oldest = cursor;
-			return 0;
+			status = 0;
+			goto out;
 		}
 		expected_hash = record.prev_hash;
 		cursor = record.path_parent_sequence;
-		if (checkpoint && kernel_work_checkpoint(1) < 0)
-			return -2;
+		if (checkpoint && kernel_work_checkpoint(1) < 0) {
+			status = -2;
+			goto out;
+		}
 	}
-	return -1;
+out:
+	context_path_note_walk(seen);
+	return status;
 }
 
 int
@@ -158,7 +224,20 @@ agent_context_active_measure(struct proc *p, uint64 head,
 		*oldest = 0;
 		return 0;
 	}
-	return context_active_walk(p, head, ~0ULL, 0, count, oldest, 0);
+	return context_active_walk(p, head, ~0ULL, 0, count, oldest, 0, 0, 0);
+}
+
+int
+agent_context_active_rebuild(struct proc *p, uint64 head, uint64 *successors,
+			     uint64 successor_capacity, uint64 *count,
+			     uint64 *oldest)
+{
+	if (p == 0 || successors == 0 || count == 0 || oldest == 0 ||
+	    successor_capacity < p->context_path_capacity)
+		return -1;
+	memset(successors, 0, successor_capacity * sizeof(*successors));
+	return context_active_walk(p, head, ~0ULL, 0, count, oldest, 0,
+				   successors, successor_capacity);
 }
 
 int
@@ -172,7 +251,7 @@ agent_context_active_record(struct proc *p, uint64 index,
 		return -1;
 	status = context_active_walk(
 		p, p->context_path_visible_head,
-		p->context_active_path_count - index - 1, record, 0, 0, 1);
+		p->context_active_path_count - index - 1, record, 0, 0, 1, 0, 0);
 	if (status < 0)
 		return status;
 	if ((index == 0 && record->sequence != p->context_active_path_oldest) ||

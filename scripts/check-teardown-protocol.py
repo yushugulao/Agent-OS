@@ -300,9 +300,21 @@ def validate_begin(objects, actions):
 def validate_metadata_poll(objects, store):
     poll = function_body(objects, "agent_scope_reclaim_metadata_done")
     compact = normalize(poll)
-    expected = "returnagent_metadata_store_scope_target_done(scope_id,metadata_target);"
-    if compact != expected:
-        raise ProtocolError("teardown METADATA wrapper may only poll its captured target")
+    for contract in (
+        "workflow_lifecycle_key_valid(lifecycle)",
+        "vfs_scope_lifecycle(scope_id,&current)<0",
+        "!workflow_lifecycle_key_equal(current,lifecycle)",
+        "returnagent_metadata_store_scope_target_done(scope_id,metadata_target);",
+    ):
+        if compact.count(contract) != 1:
+            raise ProtocolError(
+                "teardown METADATA wrapper lost its lifecycle-keyed poll contract"
+            )
+    for forbidden in ("mark_dirty", "persist(", "sleep(", "yield("):
+        if forbidden in compact:
+            raise ProtocolError(
+                "teardown METADATA wrapper may only validate and poll its target"
+            )
 
     retire = function_body(store, "agent_file_scope_state_retire")
     retire_compact = normalize(retire)
@@ -402,7 +414,7 @@ def validate_driver(vfs):
 
     begin_guard = require_if(
         begin,
-        "agent_scope_reclaim_begin(scope_id,&target)<0",
+        "agent_scope_reclaim_begin(scope_id,lifecycle,&target)<0",
         "teardown BEGIN phase",
     )
     if normalize(begin_guard["statement"]) != "return;":
@@ -469,7 +481,7 @@ def validate_driver(vfs):
 
     metadata_guard = require_if(
         metadata,
-        "!agent_scope_reclaim_metadata_done(scope_id,metadata_target)",
+        "!agent_scope_reclaim_metadata_done(scope_id,lifecycle,metadata_target)",
         "teardown METADATA phase",
     )
     if normalize(metadata_guard["statement"]) != "return;":
@@ -537,11 +549,31 @@ def validate_driver(vfs):
     if not reclaim_positions or min(reclaim_positions) < done_guard["end"]:
         raise ProtocolError("workflow lifecycle reclaimed before DONE")
 
+    lookup = function_body(vfs, "vfs_scope_find_locked")
+    lookup_compact = normalize(lookup)
+    lookup_contract = (
+        "vfs_scope_registry_init_locked();",
+        "link=registry->hash_heads[vfs_scope_hash(scope_id)];",
+        "if(visited>=VFS_SCOPE_LIFECYCLE_CAP)panic();",
+        "ref=&registry->refs[vfs_scope_slot(link)];",
+        "if(!ref->used)panic();",
+        "if(ref->scope_id==scope_id)returnref;",
+        "link=ref->hash_next;",
+    )
+    for invariant in lookup_contract:
+        if lookup_compact.count(invariant) != 1:
+            raise ProtocolError(
+                f"workflow scope hash lookup lost invariant: {invariant}"
+            )
+    if lookup_compact.count("for(") != 1 or "registry->refs[visited]" in lookup_compact:
+        raise ProtocolError("workflow scope lookup must follow one bounded hash chain")
+
     advance = function_body(vfs, "vfs_scope_reclaim_advance")
     advance_compact = normalize(advance)
     guards = (
-        "ref->scope_id!=scope_id",
-        "!ref->retiring",
+        "structvfs_scope_ref*ref=vfs_scope_find_locked(scope_id);",
+        "ref!=0",
+        "ref->retiring",
         "workflow_lifecycle_key_equal(ref->lifecycle,lifecycle)",
         "ref->reclaim_phase==expected",
         "workflow_lifecycle_retiring(lifecycle)",
@@ -549,6 +581,12 @@ def validate_driver(vfs):
     for guard in guards:
         if guard not in advance_compact:
             raise ProtocolError(f"teardown phase publication lost guard: {guard}")
+    if advance_compact.count("vfs_scope_find_locked(scope_id)") != 1 or re.search(
+        r"\b(?:for|while)\s*\(", advance
+    ):
+        raise ProtocolError(
+            "teardown phase publication must use one direct hashed scope match"
+        )
     target_assignment = "ref->reclaim_metadata_target=metadata_target;"
     phase_assignment = "ref->reclaim_phase=next;"
     if advance_compact.count(target_assignment) != 1 or advance_compact.count(phase_assignment) != 1:
@@ -558,12 +596,28 @@ def validate_driver(vfs):
     if advance_compact.index(target_assignment) > advance_compact.index(phase_assignment):
         raise ProtocolError("teardown target must be published before its phase")
 
-    for function in ("vfs_scope_create", "vfs_scope_release"):
-        body = normalize(function_body(vfs, function))
-        if body.count("reclaim_phase=VFS_SCOPE_RECLAIM_BEGIN;") != 1 or body.count(
-            "reclaim_metadata_target=0;"
-        ) != 1:
-            raise ProtocolError(f"{function} must reset teardown phase and target")
+    insert = normalize(function_body(vfs, "vfs_scope_registry_insert_locked"))
+    create = normalize(function_body(vfs, "vfs_scope_create"))
+    release = normalize(function_body(vfs, "vfs_scope_release"))
+    if (
+        insert.count("memset(ref,0,sizeof(*ref));") != 1
+        or insert.count("ref->reclaim_phase=VFS_SCOPE_RECLAIM_BEGIN;") != 1
+        or insert.index("memset(ref,0,sizeof(*ref));")
+        > insert.index("ref->reclaim_phase=VFS_SCOPE_RECLAIM_BEGIN;")
+        or create.count(
+            "vfs_scope_registry_insert_locked(scope_id,created,storage)"
+        ) != 1
+    ):
+        raise ProtocolError(
+            "vfs_scope_create must initialize phase and target in its registry insertion"
+        )
+    if (
+        release.count("matched->reclaim_phase=VFS_SCOPE_RECLAIM_BEGIN;") != 1
+        or release.count("matched->reclaim_metadata_target=0;") != 1
+        or release.index("matched->reclaim_phase=VFS_SCOPE_RECLAIM_BEGIN;")
+        > release.index("matched->reclaim_metadata_target=0;")
+    ):
+        raise ProtocolError("vfs_scope_release must reset teardown phase and target")
 
 
 def validate_reaper_liveness(vfs, objects, background, agent_core):
@@ -596,8 +650,8 @@ def validate_reaper_liveness(vfs, objects, background, agent_core):
     pending = function_body(vfs, "vfs_scope_reap_work_pending")
     pending_compact = normalize(pending)
     for invariant in (
-        "ref->used&&ref->retiring&&workflow_lifecycle_retiring(ref->lifecycle)",
-        "pending=1;",
+        "vfs_scope_registry_init_locked();",
+        "pending=registry->retiring_count!=0;",
         "intr_save()",
         "intr_restore(enabled)",
     ):
@@ -605,10 +659,15 @@ def validate_reaper_liveness(vfs, objects, background, agent_core):
             raise ProtocolError(
                 f"workflow reaper level predicate lost invariant: {invariant}"
             )
-    if "agent_background_request(" in pending_compact or re.search(
-        r"\b(?:while|goto)\b", pending
+    if (
+        "agent_background_request(" in pending_compact
+        or "registry->refs[" in pending_compact
+        or "vfs_scope_find_locked(" in pending_compact
+        or re.search(r"\b(?:for|while|goto)\b", pending)
     ):
-        raise ProtocolError("workflow reaper level predicate may not spin or publish")
+        raise ProtocolError(
+            "workflow reaper level predicate must use the O(1) retiring counter"
+        )
 
     reap = function_body(vfs, "vfs_scope_reap_pending")
     reap_compact = normalize(reap)
@@ -888,14 +947,106 @@ def validate_legacy_mail_protocol(agent_core, agent_ipc, syscall):
     forbid_calls(core_exec, ("agent_ipc_proc_teardown",), label)
     require_calls(core_clear, "agent_ipc_proc_teardown", 1, label)
     forbid_calls(core_clear, ("agent_ipc_exec_public",), label)
-    clear_at = require_calls(
-        core_prepare, "agent_core_clear_metadata", 1, label
-    )[0]
+    prepare_guard = require_if_predicates(
+        core_prepare,
+        (
+            "p==0",
+            "!proc_teardown_live(p)",
+            "p->is_agent",
+            "p->agent_control_id!=0",
+            "p->agent_controller_id!=0",
+            "!agent_context_is_empty(p)",
+            "!agent_ipc_legacy_mailbox_empty(p)",
+            "p->legacy_mail_endpoint_generation!=0",
+        ),
+        "RECYCLED_CLEAN process prepare guard",
+        top_level=True,
+    )
+    require_calls(
+        prepare_guard["statement"], "panic", 1,
+        "RECYCLED_CLEAN process prepare guard",
+    )
     prepare_at = require_calls(
         core_prepare, "agent_ipc_proc_prepare", 1, label
     )[0]
-    if clear_at >= prepare_at:
-        raise ProtocolError(f"{label} must clear before assigning an endpoint")
+    if prepare_guard["end"] >= prepare_at:
+        raise ProtocolError(
+            f"{label} must validate RECYCLED_CLEAN before assigning an endpoint"
+        )
+    forbidden_prepare_calls = (
+        "agent_core_clear_metadata",
+        "agent_core_proc_state_reset",
+        "agent_context_proc_reset",
+        "agent_free_proc_context",
+        "agent_observe_proc_reset",
+        "agent_ipc_proc_reset",
+        "agent_ipc_proc_teardown",
+        "agent_ipc_exec_public",
+        "agent_identity_proc_reset",
+        "agent_scope_controller_departing",
+    )
+    if any(call_positions(core_prepare, name) for name in forbidden_prepare_calls):
+        raise ProtocolError(
+            f"{label} prepare must not clear or reset recycled process state"
+        )
+    prepare_calls = {
+        match.group(1)
+        for match in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", core_prepare)
+        if match.group(1) not in {"if", "for", "while", "switch", "sizeof"}
+    }
+    allowed_prepare_calls = {
+        "proc_teardown_live",
+        "agent_context_is_empty",
+        "agent_ipc_legacy_mailbox_empty",
+        "panic",
+        "agent_ipc_proc_prepare",
+    }
+    unexpected_prepare_calls = prepare_calls - allowed_prepare_calls
+    if unexpected_prepare_calls:
+        raise ProtocolError(
+            f"{label} prepare may only validate RECYCLED_CLEAN and assign its "
+            "endpoint: " + ", ".join(sorted(unexpected_prepare_calls))
+        )
+    if re.search(
+        r"\bp\s*->\s*(?:agent_|context_|legacy_mail_|heartbeat_|resource_quota)"
+        r"[A-Za-z0-9_]*\s*(?:=(?!=)|\+=|-=|\*=|/=|&=|\|=|\^=|\+\+|--)",
+        core_prepare,
+    ):
+        raise ProtocolError(
+            f"{label} prepare must not zero recycled process fields"
+        )
+
+    ipc_prepare = function_body(agent_ipc, "agent_ipc_proc_prepare")
+    endpoint_guard = require_if_predicates(
+        ipc_prepare,
+        (
+            "p->mail_sidecar!=0",
+            "p->legacy_mail_endpoint_generation!=0",
+        ),
+        "legacy endpoint RECYCLED_CLEAN guard",
+        top_level=True,
+    )
+    require_calls(
+        endpoint_guard["statement"], "panic", 1,
+        "legacy endpoint RECYCLED_CLEAN guard",
+    )
+    save_at = require_calls(ipc_prepare, "intr_save", 1, label)[0]
+    alloc_at = require_calls(
+        ipc_prepare, "agent_ipc_legacy_endpoint_alloc_locked", 1, label
+    )[0]
+    restore_at = require_calls(ipc_prepare, "intr_restore", 1, label)[0]
+    if not (save_at < endpoint_guard["start"] < alloc_at < restore_at):
+        raise ProtocolError(
+            f"{label} endpoint generation must rotate under one locked boundary"
+        )
+    if (
+        "p->legacy_mail_endpoint_generation="
+        "agent_ipc_legacy_endpoint_alloc_locked();"
+        not in normalize(ipc_prepare)
+    ):
+        raise ProtocolError(
+            f"{label} prepare must assign one fresh endpoint generation"
+        )
 
     exec_public = function_body(agent_ipc, "agent_ipc_exec_public")
     teardown = function_body(agent_ipc, "agent_ipc_proc_teardown")
@@ -991,6 +1142,51 @@ def validate_legacy_absent(os_sources):
             raise ProtocolError(f"legacy all-in-one reclaim entry returned in {path}")
 
 
+def validate_terminal_teardown(proc):
+    teardown = function_body(proc, "proc_teardown_run")
+    compact = normalize(teardown)
+    gate = "fs_epoch_request_end();"
+    settle = "bio_request_end_current_cleanup()"
+    work = "kernel_work_end_cleanup();"
+    clear = "vfs_proc_terminal_clear(p);"
+    release = "vfs_proc_lifecycle_release(p);"
+    for token, label in (
+        (gate, "filesystem gate release"),
+        (settle, "terminal I/O settlement"),
+        (work, "terminal work settlement"),
+        (clear, "terminal identity clear"),
+        (release, "lifecycle release"),
+    ):
+        if compact.count(token) != 1:
+            raise ProtocolError(f"process teardown needs one {label}")
+    positions = [compact.index(token) for token in (gate, settle, work, clear, release)]
+    if positions != sorted(positions):
+        raise ProtocolError(
+            "terminal teardown must release FS gate, settle BIO/work, then release lifecycle"
+        )
+    terminal_blocks = [
+        normalize(branch["statement"])
+        for branch in parsed_ifs(teardown)
+        if branch["condition"] == "terminal_current"
+    ]
+    settlement_blocks = [body for body in terminal_blocks if gate in body]
+    if len(settlement_blocks) != 1 or not all(
+        token in settlement_blocks[0] for token in (gate, settle, work)
+    ):
+        raise ProtocolError("terminal settlement is not one guarded ownership transfer")
+
+    exit_body = normalize(function_body(proc, "exit"))
+    if gate in exit_body:
+        raise ProtocolError("exit releases the filesystem gate twice")
+    begin = "fs_epoch_request_begin()"
+    io_begin = "bio_request_begin_current_cleanup()"
+    run = "proc_teardown_run(p,t,1)"
+    if not all(token in exit_body for token in (begin, io_begin, run)) or not (
+        exit_body.index(begin) < exit_body.index(io_begin) < exit_body.index(run)
+    ):
+        raise ProtocolError("exit teardown admission order is incomplete")
+
+
 def validate_budget_wiring(budget):
     modules = budget.get("agent_modules", {})
     entries = {entry.get("name"): entry for entry in modules.get("modules", [])}
@@ -1071,6 +1267,7 @@ def validate_protocol(sources):
     )
     validate_trapframe_lifecycle(sources["proc"])
     validate_exec_publication(sources["proc"])
+    validate_terminal_teardown(sources["proc"])
     validate_legacy_mail_protocol(
         sources["agent_core"], sources["agent_ipc"], sources["syscall"]
     )

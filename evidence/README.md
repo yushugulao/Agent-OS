@@ -124,7 +124,7 @@ worktree 上串行执行三轮完整 18-case。样本为 `287.9945528s`、`283.0
 `280.9651484s`，中位基线 `283.0201263s`，确定性上限 `297.172s`；71 个文件保存在
 `evidence/calibrations/04c1e6652324/`，这些数值仅适用于该提交和源码指纹。
 
-当前候选冻结提交 `14607e825f06c5ffe4a69dd992dbe79b210ab8a4` 已采集三轮完整
+历史提交 `14607e825f06c5ffe4a69dd992dbe79b210ab8a4` 已采集三轮完整
 18-case，样本为 `278.6982115s`、`294.053138s`、`296.7989493s`，中位基线
 `294.053138s`，确定性上限 `308.756s`。71 个文件保存在
 `evidence/calibrations/14607e825f06/`，其中包含 57 份执行 attestation；manifest SHA-256 为
@@ -135,7 +135,9 @@ worktree 上串行执行三轮完整 18-case。样本为 `287.9945528s`、`283.0
 证明掌控本机 checkout、工具与输出的操作者诚实。production collector 没有公式/fixture 通道，
 测试 fixture 也不得进入正式证据。采集会逐 blob 核对 clean detached worktree，并严格匹配独立的
 `local-e3-msys2-xpack-qemu11-v1` 工具与主机 profile；更换 case、提交、硬件、虚拟化层、QEMU
-或工具链可执行文件后必须重新校准。`ef0f77edee83`、`814021ab9dac` 等旧包只保留为历史记录。Ubuntu/QEMU 10.2.1 GitLab job 只交付另一 profile 的完整
+或工具链可执行文件后必须重新校准。当前预算配置为 `provisional_requires_full_suite`，不复用该历史包的
+baseline、limit、samples 或源码指纹；最终冻结提交必须重新完成三轮完整校准。`ef0f77edee83`、`814021ab9dac`
+等旧包也只保留为历史记录。Ubuntu/QEMU 10.2.1 GitLab job 只交付另一 profile 的完整
 18-case 语义与原始日志，不适用本地 wall-time 阈值。
 
 离线验证文件集合、引用和 SHA256：

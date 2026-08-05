@@ -28,6 +28,7 @@ ALLOWED_ENTRYPOINTS = frozenset(
         "host_tools/full_verification_payload.py",
         "host_tools/render_evaluation_dashboard.py",
         "host_tools/scenario_timing_source_contract.py",
+        "host_tools/traditional_performance.py",
         "scripts/capture-final-evidence.py",
         "scripts/agent_test_runner.py",
         "scripts/check-kernel-budgets.py",

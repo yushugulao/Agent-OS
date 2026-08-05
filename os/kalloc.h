@@ -20,6 +20,10 @@ void *kalloc_account_page(struct resource_account_handle,
 			  enum resource_charge_class);
 int kfree_account_page(void *, struct resource_account_handle,
 		       enum resource_charge_class);
+int kretain_account_page(void *);
+int krelease_account_page(void *);
+int kaccount_page_exclusive(void *, struct resource_account_handle,
+			    enum resource_charge_class);
 uint kalloc_physical_reserved_free_pages(void);
 uint kalloc_physical_reserved_total_pages(void);
 

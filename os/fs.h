@@ -218,6 +218,7 @@ struct dirent {
 
 // file.h
 struct inode;
+struct open_file_io_token;
 struct vfs_cred;
 
 // A truncate first publishes an inode without the discarded mappings, then
@@ -229,6 +230,8 @@ struct vfs_cred;
 struct inode_reclaim {
 	uint mode;
 	int dev;
+	uint storage_owner;
+	struct resource_account_handle storage_account;
 	uint direct[NDIRECT];
 	uint indirect;
 	uint *block_list;
@@ -238,6 +241,11 @@ struct inode_reclaim {
 	uint block_cursor;
 	struct resource_account_handle page_account;
 	enum resource_charge_class page_charge_class;
+	uint inode;
+	uint incarnation;
+	uint release_inode;
+	uint deferred_slot;
+	uint deferred_reserved;
 };
 
 void fsinit();
@@ -262,6 +270,7 @@ struct inode *idup(struct inode *);
 void iinit();
 int ivalid(struct inode *) FS_MUST_CHECK;
 void iput(struct inode *);
+int iput_drop_only(struct inode *);
 int inode_remove_detach(struct inode *, struct inode_reclaim *);
 void iunlock(struct inode *);
 void iunlockput(struct inode *);
@@ -269,14 +278,26 @@ int iupdate(struct inode *) FS_MUST_CHECK;
 struct inode *namei_scope_status(char *, uint, uint, int *);
 struct inode *root_dir_status(int *);
 int readi(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
+int readi_lease(struct inode *, const struct vfs_cred *,
+		const struct open_file_io_token *, int, uint64, uint, uint);
 int readi_device(struct inode *, const struct vfs_cred *, int, uint64, uint,
 		 uint);
 int writei(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
+int writei_lease(struct inode *, const struct vfs_cred *,
+		 const struct open_file_io_token *, int, uint64, uint, uint);
 int fs_preallocate_inode(struct inode *, const struct vfs_cred *, uint);
 int itruncate_detach(struct inode *, const struct vfs_cred *, uint,
 			 struct inode_reclaim *);
 int itruncate_reclaim(struct inode_reclaim *) FS_MUST_CHECK;
 int itruncate_reclaim_step(struct inode_reclaim *, uint);
+/* Pending tokens retain their original owner and exact storage account. */
+int fs_deferred_reclaim_pending(void);
+int fs_deferred_reclaim_owner_pending(uint);
+int fs_deferred_reclaim_maintain(void);
+/* A caller may synchronously settle only its admitted owner. */
+int fs_deferred_reclaim_drain_current(void);
+/* Global settlement is reserved for an admitted SYSTEM cleanup request. */
+int fs_deferred_reclaim_drain_all(void);
 int itruncate(struct inode *, const struct vfs_cred *, uint);
 int itrunc(struct inode *, const struct vfs_cred *);
 int dirls(struct inode *, const struct vfs_cred *);

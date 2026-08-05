@@ -57,7 +57,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_VERSION = "scenario-timing-source-v4"
+CONTRACT_VERSION = "scenario-timing-source-v8"
 SOURCE_PATHS = (
     "baseline_ucore/user/src/rp_seed_orch.c",
     "user/src/rp_agentos_orch.c",
@@ -67,15 +67,27 @@ SOURCE_PATHS = (
     "user/include/exec_policy_manifest.h",
     "agent_lifecycle_abi.h",
     "os/agent_lifecycle.c",
+    "agent_performance_abi.h",
     "agent_resource_abi.h",
     "os/agent_resource.c",
+    "os/performance_stats.c",
+    "os/performance_stats.h",
+    "os/agent_identity.c",
+    "os/exec_policy.c",
+    "os/bio.c",
+    "os/virtio_disk.c",
+    "os/fs_epoch.c",
+    "os/vm.c",
+    "os/loader.c",
     "os/resource_controller.c",
     "os/resource_controller.h",
     "os/syscall.c",
     "os/syscall_ids.h",
+    "user/lib/arch/riscv/syscall_ids.h.in",
     "user/lib/syscall_ids.h",
     "baseline_ucore/user/lib/syscall.c",
     "user/lib/syscall.c",
+    "user/src/labdemo_ucore.c",
 )
 
 
@@ -170,6 +182,22 @@ def _validate_plain_timing(text: str) -> None:
     _require_top_level(record, end_sample, "plain workflow end clock")
     _require_top_level(record, elapsed, "plain raw makespan")
     _require_top_level(record, serialize, "plain direct makespan serialization")
+    _require_top_level(
+        record,
+        (
+            "if", "(", "workflow_start", "<", "0", "||", "steady_start",
+            "<", "workflow_start", "||", "workflow_end", "<",
+            "steady_start", ")", "return", "0", ";",
+        ),
+        "plain timing clock-order guard",
+    )
+    write_at = _require_top_level(record, write, "plain timing receipt write")
+    if record[write_at:] != list(write):
+        raise ValueError("plain timing receipt write must be the final statement")
+    if record.count("return") != 2 or any(
+        token in {"goto", "break", "continue"} for token in record
+    ):
+        raise ValueError("plain timing receipt control flow differs")
     _only_references(record, "workflow_elapsed", 3, "plain makespan")
     _only_references(record, "workflow_end", 5, "plain workflow end")
     _only_references(record, "workflow_start", 5, "plain receipt start")
@@ -218,6 +246,21 @@ def _validate_agentos_timing(text: str) -> None:
     _ordered(record, (elapsed, serialize, write), "AgentOS timing receipt")
     _require_top_level(record, elapsed, "AgentOS raw makespan")
     _require_top_level(record, serialize, "AgentOS direct makespan serialization")
+    _require_top_level(
+        record,
+        (
+            "if", "(", "workflow_end", "<", "record", "->",
+            "steady_start_ms", ")", "return", "0", ";",
+        ),
+        "AgentOS timing clock-order guard",
+    )
+    write_at = _require_top_level(record, write, "AgentOS timing receipt write")
+    if record[write_at:] != list(write):
+        raise ValueError("AgentOS timing receipt write must be the final statement")
+    if record.count("return") != 2 or any(
+        token in {"goto", "break", "continue"} for token in record
+    ):
+        raise ValueError("AgentOS timing receipt control flow differs")
     _only_references(record, "workflow_elapsed", 3, "AgentOS makespan")
     _only_references(record, "workflow_end", 4, "AgentOS receipt end")
 
@@ -865,6 +908,772 @@ def _validate_resource_observer(
     )
 
 
+def _validate_performance_observer(
+    abi: str,
+    observer: str,
+    performance_source: str,
+    performance_header: str,
+    syscall_source: str,
+    kernel_ids: str,
+    arch_ids: str,
+    user_ids: str,
+    user_syscall: str,
+) -> None:
+    counter_fields = (
+        "fs_epoch_commits",
+        "fs_epoch_buffers_staged",
+        "block_physical_writes",
+        "block_physical_reads",
+        "block_durable_flushes",
+        "fs_epoch_deduplicated_stages",
+        "cow_pages_shared",
+        "cow_pages_copied",
+        "cow_fault_promotions",
+        "exec_cache_hits",
+        "exec_cache_misses",
+        "exec_cache_shared_pages",
+        "exec_cache_evictions",
+        "observer_workload_syscalls",
+        "directory_block_probes",
+        "directory_entries_examined",
+        "virtio_notifications",
+        "virtio_submitted_requests",
+        "virtio_write_batch_calls",
+        "virtio_batched_write_requests",
+        "virtio_indirect_write_batch_calls",
+        "virtio_read_batch_calls",
+        "virtio_batched_read_requests",
+        "overwrite_prereads_skipped",
+    )
+    for declaration in (
+        "#define AGENT_PERFORMANCE_SNAPSHOT_VERSION 3U",
+        "#define AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL 1U",
+        "struct agent_performance_snapshot",
+        "sizeof(struct agent_performance_snapshot) == 256",
+        "unsigned long long observer_lifecycle_id;",
+        "unsigned long long observer_lifecycle_generation;",
+        *(f"unsigned long long {field};" for field in counter_fields),
+    ):
+        if declaration not in abi:
+            raise ValueError(f"performance snapshot ABI differs: {declaration}")
+
+    observer_tokens = _tokens(observer)
+    authorization = _function_tokens(
+        observer_tokens, "agent_performance_snapshot_authorized"
+    )
+    _require_top_level(
+        authorization,
+        (
+            "return", "p", "!=", "0", "&&", "p", "->",
+            "resource_domain_admin", "&&", "exec_policy_process_bootstrap",
+            "(", "p", ")", ";",
+        ),
+        "performance observer signed bootstrap authorization",
+    )
+    if authorization.count("return") != 1 or any(
+        token in {"if", "goto", "break", "continue"} for token in authorization
+    ):
+        raise ValueError("performance observer authorization control flow differs")
+
+    snapshot = _function_tokens(observer_tokens, "sys_agent_performance_snapshot")
+    _require_top_level(
+        snapshot,
+        (
+            "if", "(", "!", "agent_performance_snapshot_authorized", "(",
+            "p", ")", ")", "return", "AGENT_STATUS_DENIED", ";",
+        ),
+        "performance snapshot authorization guard",
+    )
+    _require_top_level(
+        snapshot,
+        (
+            "if", "(", "user_size", "<", "2", "*", "sizeof", "(",
+            "unsigned", "int", ")", ")", "return",
+            "AGENT_STATUS_BAD_PARAM", ";",
+        ),
+        "performance snapshot sized-prefix minimum",
+    )
+    _require_top_level(
+        snapshot,
+        (
+            "copy_size", "=", "MIN", "(", "user_size", ",", "sizeof",
+            "(", "snapshot", ")", ")", ";",
+        ),
+        "performance snapshot bounded copy size",
+    )
+    _require_top_level(
+        snapshot,
+        (
+            "if", "(", "user_range_check", "(", "p", "->", "pagetable",
+            ",", "addr", ",", "copy_size", ",", "PTE_W", ")", "<", "0",
+            ")", "return", "-", "1", ";",
+        ),
+        "performance snapshot writable range guard",
+    )
+    _require_top_level(
+        snapshot,
+        (
+            "if", "(", "copyout", "(", "p", "->", "pagetable", ",",
+            "addr", ",", "(", "char", "*", ")", "&", "snapshot", ",",
+            "copy_size", ")", "<", "0", ")", "return", "-", "1", ";",
+        ),
+        "performance snapshot copyout guard",
+    )
+    _ordered(
+        snapshot,
+        (
+            ("agent_performance_snapshot_authorized", "(", "p", ")"),
+            (
+                "user_range_check", "(", "p", "->", "pagetable", ",",
+                "addr", ",", "copy_size", ",", "PTE_W", ")",
+            ),
+            (
+                "memset", "(", "&", "snapshot", ",", "0", ",",
+                "sizeof", "(", "snapshot", ")", ")",
+            ),
+            ("bio_physical_snapshot", "(", "&", "io", ")"),
+            ("fs_epoch_stats_snapshot", "(", "&", "epoch", ")"),
+            ("uvm_cow_stats_snapshot", "(", "&", "cow", ")"),
+            (
+                "user_image_rx_cache_stats_snapshot", "(", "&",
+                "exec_cache", ")",
+            ),
+            ("kernel_performance_stats_snapshot", "(", "&", "kernel", ")"),
+            (
+                "snapshot", ".", "counter_scope", "=",
+                "AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL", ";",
+            ),
+            (
+                "copyout", "(", "p", "->", "pagetable", ",", "addr", ",",
+                "(", "char", "*", ")", "&", "snapshot", ",", "copy_size",
+                ")",
+            ),
+        ),
+        "global performance snapshot",
+    )
+    for source, target in (
+        ("epoch.successful_commits", "fs_epoch_commits"),
+        ("epoch.staged_buffers", "fs_epoch_buffers_staged"),
+        ("io.successful_writes", "block_physical_writes"),
+        ("io.reads", "block_physical_reads"),
+        ("io.successful_flushes", "block_durable_flushes"),
+        ("epoch.deduplicated_stages", "fs_epoch_deduplicated_stages"),
+        ("cow.cow_shared_mappings", "cow_pages_shared"),
+        ("cow.cow_fault_copies", "cow_pages_copied"),
+        ("cow.cow_fault_promotions", "cow_fault_promotions"),
+        ("exec_cache.exec_cache_hits", "exec_cache_hits"),
+        ("exec_cache.exec_cache_misses", "exec_cache_misses"),
+        ("exec_cache.exec_cache_shared_pages", "exec_cache_shared_pages"),
+        ("exec_cache.exec_cache_evictions", "exec_cache_evictions"),
+        ("kernel.directory_block_probes", "directory_block_probes"),
+        ("kernel.directory_entries_examined", "directory_entries_examined"),
+        ("kernel.virtio_notifications", "virtio_notifications"),
+        ("kernel.virtio_submitted_requests", "virtio_submitted_requests"),
+        ("kernel.virtio_write_batch_calls", "virtio_write_batch_calls"),
+        ("kernel.virtio_batched_write_requests", "virtio_batched_write_requests"),
+        ("kernel.virtio_indirect_write_batch_calls", "virtio_indirect_write_batch_calls"),
+        ("kernel.virtio_read_batch_calls", "virtio_read_batch_calls"),
+        ("kernel.virtio_batched_read_requests", "virtio_batched_read_requests"),
+        ("kernel.overwrite_prereads_skipped", "overwrite_prereads_skipped"),
+    ):
+        sequence = (
+            "snapshot", ".", target, "=", *source.replace(".", " . ").split(), ";"
+        )
+        _require_top_level(snapshot, sequence, f"performance counter {target}")
+    for sequence, label in (
+        (
+            ("snapshot", ".", "version", "=", "AGENT_PERFORMANCE_SNAPSHOT_VERSION", ";"),
+            "performance snapshot version",
+        ),
+        (
+            ("snapshot", ".", "struct_size", "=", "sizeof", "(", "snapshot", ")", ";"),
+            "performance snapshot sized prefix",
+        ),
+        (
+            (
+                "snapshot", ".", "sample_tick", "=", "get_cycle", "(",
+                ")", ";",
+            ),
+            "performance snapshot monotonic tick",
+        ),
+        (
+            (
+                "snapshot", ".", "observer_lifecycle_id", "=", "p", "->",
+                "workflow_lifecycle_id", ";",
+            ),
+            "performance observer lifecycle label",
+        ),
+        (
+            (
+                "snapshot", ".", "observer_lifecycle_generation", "=", "p",
+                "->", "workflow_lifecycle_generation", ";",
+            ),
+            "performance observer lifecycle generation",
+        ),
+    ):
+        _require_top_level(snapshot, sequence, label)
+    _require_top_level(
+        snapshot,
+        (
+            "snapshot", ".", "observer_workload_syscalls", "=",
+            "agent_performance_workload_syscalls", "(", "p", ")", ";",
+        ),
+        "observer workload syscall counter",
+    )
+    for declaration in (
+        "KERNEL_PERFORMANCE_VIRTIO_SINGLE = 0",
+        "KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH = 1",
+        "KERNEL_PERFORMANCE_VIRTIO_READ_BATCH = 2",
+        "void kernel_performance_overwrite_preread_skipped(uint);",
+    ):
+        if declaration not in performance_header:
+            raise ValueError(f"performance stats interface differs: {declaration}")
+    performance_tokens = _tokens(performance_source)
+    preread = _function_tokens(
+        performance_tokens, "kernel_performance_overwrite_preread_skipped"
+    )
+    _require_top_level(
+        preread,
+        (
+            "performance_stats", ".", "overwrite_prereads_skipped", "+", "=",
+            "blocks", ";",
+        ),
+        "overwrite preread counter",
+    )
+    success = ("return", "AGENT_STATUS_OK", ";")
+    success_at = _require_top_level(
+        snapshot, success, "performance snapshot success return"
+    )
+    if snapshot[success_at:] != list(success):
+        raise ValueError("performance snapshot success must be the final statement")
+    if any(token in {"goto", "break", "continue"} for token in snapshot):
+        raise ValueError("performance snapshot contains an early control-flow escape")
+    if snapshot.count("return") != 5:
+        raise ValueError("performance snapshot return structure differs")
+
+    for ids, label in ((kernel_ids, "kernel"), (user_ids, "AgentOS user")):
+        if ids.count("agent_performance_snapshot 560") != 1:
+            raise ValueError(f"{label} performance snapshot syscall ID differs")
+    if arch_ids.count("__NR_agent_performance_snapshot 560") != 1:
+        raise ValueError("RISC-V performance snapshot syscall ID differs")
+    dispatch = _function_tokens(_tokens(syscall_source), "syscall")
+    _require_once(
+        dispatch,
+        (
+            "case", "SYS_agent_performance_snapshot", ":", "ret", "=",
+            "sys_agent_performance_snapshot", "(", "args", "[", "0", "]",
+            ",", "args", "[", "1", "]", ")", ";", "break", ";",
+        ),
+        "performance snapshot syscall dispatch",
+    )
+    wrapper = _function_tokens(_tokens(user_syscall), "agent_performance_snapshot")
+    _require_top_level(
+        wrapper,
+        (
+            "return", "syscall", "(", "SYS_agent_performance_snapshot", ",",
+            "snapshot", ",", "sizeof", "(", "*", "snapshot", ")", ")", ";",
+        ),
+        "performance snapshot user ABI binding",
+    )
+
+
+def _validate_performance_producers(
+    identity_source: str,
+    exec_policy_source: str,
+    bio_source: str,
+    virtio_source: str,
+    epoch_source: str,
+    vm_source: str,
+    loader_source: str,
+) -> None:
+    identity = _function_tokens(
+        _tokens(identity_source), "agent_identity_authority_bootstrap"
+    )
+    _require_once(
+        identity,
+        ("if", "(", "exec_policy_process_bootstrap", "(", "p", ")", ")"),
+        "signed bootstrap identity authority",
+    )
+
+    bootstrap = _function_tokens(
+        _tokens(exec_policy_source), "exec_policy_process_bootstrap"
+    )
+    _require_top_level(
+        bootstrap,
+        (
+            "if", "(", "p", "==", "0", "||", "!", "exec_policy_valid",
+            "(", "p", "->", "exec_dev", ",", "p", "->", "exec_inum",
+            ",", "p", "->", "exec_flags", ",", "p", "->",
+            "exec_generation", ",", "p", "->", "exec_role_mask", ",",
+            "p", "->", "exec_layout_version", ",", "p", "->",
+            "exec_rw_offset", ")", ")", "return", "0", ";",
+        ),
+        "performance observer signed image validation",
+    )
+    _require_top_level(
+        bootstrap,
+        (
+            "return", "(", "p", "->", "exec_flags", "&",
+            "EXEC_FLAG_BOOTSTRAP", ")", "!=", "0", ";",
+        ),
+        "performance observer bootstrap flag",
+    )
+
+    bio_tokens = _tokens(bio_source)
+    transfer = _function_tokens(bio_tokens, "bio_account_transfer")
+    _require_top_level(
+        transfer,
+        (
+            "if", "(", "transfer", "==", "BIO_TRANSFER_READ", ")",
+            "io_policy", ".", "physical_reads", "++", ";", "else",
+            "if", "(", "transfer", "==", "BIO_TRANSFER_WRITE", ")",
+            "io_policy", ".", "physical_writes", "++", ";", "else",
+            "if", "(", "transfer", "==", "BIO_TRANSFER_FLUSH", ")",
+            "io_policy", ".", "physical_flushes", "++", ";",
+        ),
+        "physical transfer request accounting",
+    )
+    _require_top_level(
+        transfer,
+        (
+            "if", "(", "result", "<", "0", ")", "io_policy", ".",
+            "failed_transfers", "++", ";", "else", "if", "(",
+            "transfer", "==", "BIO_TRANSFER_WRITE", ")", "io_policy", ".",
+            "successful_writes", "++", ";", "else", "if", "(",
+            "transfer", "==", "BIO_TRANSFER_FLUSH", ")", "io_policy", ".",
+            "successful_flushes", "++", ";",
+        ),
+        "successful physical transfer accounting",
+    )
+    if bio_source.count("io_policy.successful_writes++") != 1 or \
+       bio_source.count("io_policy.successful_flushes++") != 1:
+        raise ValueError("global successful I/O counters have multiple producers")
+    if bio_source.count("io_policy.physical_reads++") != 1:
+        raise ValueError("global physical read counter must have one producer")
+    if bio_source.count("kernel_performance_overwrite_preread_skipped(1)") != 1:
+        raise ValueError("overwrite preread skip counter must have one publish producer")
+    bio_snapshot = _function_tokens(bio_tokens, "bio_physical_snapshot")
+    for sequence, label in (
+        (
+            (
+                "stats", "->", "reads", "=", "io_policy", ".",
+                "physical_reads", ";",
+            ),
+            "physical read request snapshot",
+        ),
+        (
+            (
+                "stats", "->", "successful_writes", "=", "io_policy", ".",
+                "successful_writes", ";",
+            ),
+            "successful physical write snapshot",
+        ),
+        (
+            (
+                "stats", "->", "successful_flushes", "=", "io_policy", ".",
+                "successful_flushes", ";",
+            ),
+            "successful durable flush snapshot",
+        ),
+    ):
+        _require_top_level(bio_snapshot, sequence, label)
+    overwrite_prepare = _function_tokens(bio_tokens, "bprepare_overwrite")
+    _ordered(
+        overwrite_prepare,
+        (
+            ("receipt", "->", "skipped_preread", "=", "1", ";"),
+            ("return", "VIRTIO_DISK_OK", ";"),
+        ),
+        "overwrite preread omission receipt",
+    )
+    overwrite_publish = _function_tokens(bio_tokens, "bpublish_overwrite")
+    _ordered(
+        overwrite_publish,
+        (
+            ("b", "->", "valid", "=", "1", ";"),
+            ("b", "->", "disk_result", "=", "VIRTIO_DISK_OK", ";"),
+            (
+                "kernel_performance_overwrite_preread_skipped", "(", "1",
+                ")", ";",
+            ),
+            ("*", "out", "=", "b", ";"),
+            (
+                "memset", "(", "receipt", ",", "0", ",", "sizeof", "(",
+                "*", "receipt", ")", ")", ";",
+            ),
+            ("return", "VIRTIO_DISK_OK", ";"),
+        ),
+        "published overwrite preread skip accounting",
+    )
+
+    virtio_tokens = _tokens(virtio_source)
+    single_submit = _function_tokens(virtio_tokens, "disk_submit")
+    _ordered(
+        single_submit,
+        (
+            ("*", "R", "(", "VIRTIO_MMIO_QUEUE_NOTIFY", ")", "=", "0", ";"),
+            (
+                "kernel_performance_virtio_notify", "(", "1", ",",
+                "KERNEL_PERFORMANCE_VIRTIO_SINGLE", ",", "0", ")", ";",
+            ),
+        ),
+        "single VirtIO submission accounting",
+    )
+    direct_pair = _function_tokens(virtio_tokens, "disk_submit_write_pair")
+    _ordered(
+        direct_pair,
+        (
+            ("*", "R", "(", "VIRTIO_MMIO_QUEUE_NOTIFY", ")", "=", "0", ";"),
+            (
+                "kernel_performance_virtio_notify", "(", "2", ",",
+                "KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH", ",", "0", ")", ";",
+            ),
+        ),
+        "direct VirtIO write batch accounting",
+    )
+    indirect = _function_tokens(virtio_tokens, "disk_submit_indirect")
+    _ordered(
+        indirect,
+        (
+            ("*", "R", "(", "VIRTIO_MMIO_QUEUE_NOTIFY", ")", "=", "0", ";"),
+            (
+                "kernel_performance_virtio_notify", "(", "count", ",",
+                "type", "==", "VIRTIO_BLK_T_OUT", "?",
+                "KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH", ":",
+                "KERNEL_PERFORMANCE_VIRTIO_READ_BATCH", ",", "1", ")", ";",
+            ),
+        ),
+        "indirect VirtIO batch accounting",
+    )
+    read_batch = _function_tokens(virtio_tokens, "virtio_disk_read_batch")
+    _require_once(
+        read_batch,
+        (
+            "disk_submit_indirect", "(", "&", "buffers", "[", "offset", "]",
+            ",", "batch", ",", "VIRTIO_BLK_T_IN", ")",
+        ),
+        "indirect VirtIO read batch producer",
+    )
+
+    epoch_tokens = _tokens(epoch_source)
+    commit = _function_tokens(epoch_tokens, "fs_epoch_commit")
+    _ordered(
+        commit,
+        (
+            ("bio_deferred_sponsor_end", "(", ")", ";"),
+            ("epoch", ".", "totals", ".", "successful_commits", "++", ";"),
+            ("bio_deferred_owner_release", "(", "commit_owner", ")", ";"),
+        ),
+        "successful filesystem epoch publication",
+    )
+    if "bio_request_settle_quiescent_cleanup" in commit:
+        raise ValueError(
+            "filesystem epoch must release its gate before I/O debt settlement"
+        )
+    if commit[-3:] != ["return", "0", ";"]:
+        raise ValueError("successful filesystem epoch return must be final")
+    if epoch_source.count("epoch.totals.successful_commits++") != 1:
+        raise ValueError("filesystem epoch success counter has multiple producers")
+    epoch_snapshot = _function_tokens(epoch_tokens, "fs_epoch_stats_snapshot")
+    _require_top_level(
+        epoch_snapshot,
+        ("*", "stats", "=", "epoch", ".", "totals", ";"),
+        "filesystem epoch totals snapshot",
+    )
+
+    vm_tokens = _tokens(vm_source)
+    vm_snapshot = _function_tokens(vm_tokens, "uvm_cow_stats_snapshot")
+    _require_top_level(
+        vm_snapshot,
+        ("memmove", "(", "out", ",", "&", "cow_stats", ",", "sizeof", "(", "*", "out", ")", ")", ";"),
+        "COW counter snapshot",
+    )
+    for counter in (
+        "cow_shared_mappings",
+        "cow_fault_copies",
+        "cow_fault_promotions",
+    ):
+        if vm_source.count(f"cow_stats.{counter}++") + vm_source.count(
+            f"cow_stats.{counter} +="
+        ) != 1:
+            raise ValueError(f"COW counter producer differs: {counter}")
+    copyout = _function_tokens(vm_tokens, "copyout")
+    _require_once(
+        copyout,
+        ("uvm_cow_fault", "(", "pagetable", ",", "page", ")"),
+        "copyout COW accounting",
+    )
+
+    loader_tokens = _tokens(loader_source)
+    loader_snapshot = _function_tokens(
+        loader_tokens, "user_image_rx_cache_stats_snapshot"
+    )
+    _require_top_level(
+        loader_snapshot,
+        (
+            "memmove", "(", "out", ",", "&", "user_image_rx_cache_stats",
+            ",", "sizeof", "(", "*", "out", ")", ")", ";",
+        ),
+        "exec cache counter snapshot",
+    )
+    for counter in (
+        "exec_cache_hits",
+        "exec_cache_misses",
+        "exec_cache_shared_pages",
+        "exec_cache_evictions",
+    ):
+        if loader_source.count(
+            f"user_image_rx_cache_stats.{counter}++"
+        ) != 1:
+            raise ValueError(f"exec cache counter producer differs: {counter}")
+
+
+def _validate_performance_pair_consumer(source: str) -> None:
+    """Bind showcase deltas to raw, same-observer Guest snapshots."""
+
+    snapshot_pairs = (
+        ("fs_epoch_commits", "epoch_commits"),
+        ("fs_epoch_buffers_staged", "epoch_buffers_staged"),
+        ("block_physical_writes", "physical_writes"),
+        ("block_physical_reads", "physical_reads"),
+        ("block_durable_flushes", "durable_flushes"),
+        ("fs_epoch_deduplicated_stages", "deduplicated_stages"),
+        ("cow_pages_shared", "cow_shared_pages"),
+        ("cow_pages_copied", "cow_copied_pages"),
+        ("cow_fault_promotions", "cow_fault_promotions"),
+        ("exec_cache_hits", "exec_cache_hits"),
+        ("exec_cache_misses", "exec_cache_misses"),
+        ("exec_cache_shared_pages", "exec_cache_shared_pages"),
+        ("exec_cache_evictions", "exec_cache_evictions"),
+        ("observer_workload_syscalls", "workload_syscalls"),
+        ("directory_block_probes", "directory_block_probes"),
+        ("directory_entries_examined", "directory_entries_examined"),
+        ("virtio_notifications", "virtio_notifications"),
+        ("virtio_submitted_requests", "virtio_submitted_requests"),
+        ("virtio_write_batch_calls", "virtio_write_batch_calls"),
+        ("virtio_batched_write_requests", "virtio_batched_write_requests"),
+        ("virtio_indirect_write_batch_calls", "virtio_indirect_write_batch_calls"),
+        ("virtio_read_batch_calls", "virtio_read_batch_calls"),
+        ("virtio_batched_read_requests", "virtio_batched_read_requests"),
+        ("overwrite_prereads_skipped", "overwrite_prereads_skipped"),
+    )
+    metadata_pairs = (
+        ("metadata_dirty", "metadata_dirty"),
+        ("metadata_durable", "metadata_durable"),
+        ("metadata_requests", "metadata_requests"),
+        ("metadata_coalesced", "metadata_coalesced"),
+        ("metadata_commits", "metadata_commits"),
+    )
+    raw_names = tuple(name for _field, name in snapshot_pairs + metadata_pairs) + (
+        "metadata_pending",
+    )
+    tokens = _tokens(source)
+    take = _function_tokens(tokens, "take_performance_snapshot")
+    _ordered(
+        take,
+        (
+            ("memset", "(", "receipt", ",", "0", ",", "sizeof", "(", "*", "receipt", ")", ")", ";"),
+            ("receipt", "->", "observer_pid", "=", "(", "uint64", ")", "getpid", "(", ")", ";"),
+            ("agent_performance_snapshot", "(", "&", "receipt", "->", "snapshot", ")"),
+            (
+                "receipt", "->", "snapshot", ".", "version", "==",
+                "AGENT_PERFORMANCE_SNAPSHOT_VERSION",
+            ),
+            (
+                "receipt", "->", "snapshot", ".", "counter_scope", "==",
+                "AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL",
+            ),
+        ),
+        "showcase performance snapshot",
+    )
+    if take.count("agent_performance_snapshot") != 1 or take.count("return") != 0:
+        raise ValueError("showcase performance snapshot control flow differs")
+
+    delta = _function_tokens(tokens, "performance_delta")
+    if delta != [
+        "check", "(", "after", ">=", "before", ",",
+        '"monotonic performance counter"', ")", ";",
+        "return", "after", "-", "before", ";",
+    ]:
+        raise ValueError("showcase performance delta is not a raw monotonic delta")
+
+    pair = _function_tokens(tokens, "print_mechanism_delta")
+    for sequence, label in (
+        (
+            (
+                "before", "->", "counter_scope", "==", "after", "->",
+                "counter_scope",
+            ),
+            "showcase pair counter scope",
+        ),
+        (
+            (
+                "before_receipt", "->", "observer_pid", "==",
+                "after_receipt", "->", "observer_pid",
+            ),
+            "showcase pair observer pid",
+        ),
+        (
+            (
+                "before", "->", "observer_lifecycle_id", "==", "after",
+                "->", "observer_lifecycle_id",
+            ),
+            "showcase pair observer lifecycle",
+        ),
+        (
+            (
+                "before", "->", "observer_lifecycle_generation", "==",
+                "after", "->", "observer_lifecycle_generation",
+            ),
+            "showcase pair observer generation",
+        ),
+        (
+            (
+                "before", "->", "sample_tick", "<", "after", "->",
+                "sample_tick",
+            ),
+            "showcase pair increasing sample tick",
+        ),
+    ):
+        _require_once(pair, sequence, label)
+    for field, _raw_name in snapshot_pairs:
+        _require_once(
+            pair,
+            (
+                "performance_delta", "(", "before", "->", field, ",",
+                "after", "->", field, ")",
+            ),
+            f"showcase pair delta {field}",
+        )
+        if pair.count(field) != 4:
+            raise ValueError(f"showcase raw pair serialization differs: {field}")
+    for field, _raw_name in metadata_pairs:
+        _require_once(
+            pair,
+            (
+                "performance_delta", "(", "before_receipt", "->", field,
+                ",", "after_receipt", "->", field, ")",
+            ),
+            f"showcase metadata pair delta {field}",
+        )
+        if pair.count(field) != 4:
+            raise ValueError(f"showcase metadata serialization differs: {field}")
+    if pair.count("performance_delta") != len(snapshot_pairs) + len(metadata_pairs):
+        raise ValueError("showcase performance pair has extra delta producers")
+    string_literals = tuple(
+        token for token in pair if token.startswith('"') and token.endswith('"')
+    )
+    if len(string_literals) != 3:
+        raise ValueError("showcase performance pair record structure differs")
+    record = string_literals[-1]
+    for name in raw_names:
+        if record.count(f"before_{name}=%llu") != 1 or record.count(
+            f"after_{name}=%llu"
+        ) != 1:
+            raise ValueError(f"showcase raw pair field differs: {name}")
+    for field in (
+        "observer_pid=%llu", "before_tick=%llu", "after_tick=%llu",
+        "observer_lifecycle_id=%llu",
+        "observer_lifecycle_generation=%llu", "counter_scope=global",
+    ):
+        if record.count(field) != 1:
+            raise ValueError(f"showcase raw pair identity differs: {field}")
+    serialized_values = [
+        "before_receipt", "->", "observer_pid", ",",
+        "before", "->", "sample_tick", ",",
+        "after", "->", "sample_tick", ",",
+        "before", "->", "observer_lifecycle_id", ",",
+        "before", "->", "observer_lifecycle_generation", ",",
+    ]
+    serialized_pairs = [
+        ("before", "after", field) for field, _raw in snapshot_pairs
+    ] + [
+        ("before_receipt", "after_receipt", field)
+        for field, _raw in metadata_pairs
+    ] + [
+        ("before_receipt", "after_receipt", "metadata_pending")
+    ]
+    for index, (before_name, after_name, field) in enumerate(serialized_pairs):
+        serialized_values.extend(
+            (before_name, "->", field, ",", after_name, "->", field)
+        )
+        if index + 1 != len(serialized_pairs):
+            serialized_values.append(",")
+    _require_once(
+        pair, tuple(serialized_values), "showcase raw before/after serialization"
+    )
+    if pair.count("printf") != 1 or pair.count("return") != 0:
+        raise ValueError("showcase raw pair emission control flow differs")
+
+    orchestrator = _function_tokens(tokens, "run_orchestrator")
+    _ordered(
+        orchestrator,
+        (
+            (
+                "memset", "(", "&", "measurement_warmup", ",", "0", ",",
+                "sizeof", "(", "measurement_warmup", ")", ")", ";",
+            ),
+            (
+                "take_performance_snapshot", "(", "&", "measurement_warmup",
+                ")", ";",
+            ),
+            (
+                "take_performance_snapshot", "(", "&",
+                "workflow_perf_before", ")", ";",
+            ),
+            (
+                "take_performance_snapshot", "(", "&",
+                "workflow_perf_after", ")", ";",
+            ),
+            (
+                "print_mechanism_delta", "(", '"workflow"', ",",
+                '"end_to_end"', ",", "&", "workflow_perf_before", ",",
+                "&", "workflow_perf_after", ")", ";",
+            ),
+        ),
+        "showcase pre-touched performance interval",
+    )
+    for function_name, mode in (
+        ("run_compat_workload", "compat"),
+        ("run_native_workload", "native"),
+    ):
+        lane = _function_tokens(tokens, function_name)
+        _ordered(
+            lane,
+            (
+                (
+                    "demo_quiescence_fence", "(", f'"{mode}"', ",",
+                    '"CORE_START"', ",", "2", ",", "&", "state", "->",
+                    "core_start", ")", ";",
+                ),
+                (
+                    "metrics", "->", "started_us", "=", "demo_now_us",
+                    "(", ")", ";",
+                ),
+                (
+                    "metrics", "->", "finished_us", "=", "demo_now_us",
+                    "(", ")", ";",
+                ),
+                (
+                    "take_performance_snapshot", "(", "&", "state", "->",
+                    "core_ack", ")", ";",
+                ),
+                (
+                    "demo_quiescence_fence", "(", f'"{mode}"', ",",
+                    '"ACK_SETTLED"', ",", "3", ",", "&", "state", "->",
+                    "ack_settled", ")", ";",
+                ),
+                (
+                    "print_mechanism_delta", "(", f'"{mode}"', ",",
+                    '"core"', ",", "&", "state", "->", "core_start", ".",
+                    "performance", ",", "&", "state", "->", "core_ack",
+                    ")", ";",
+                ),
+            ),
+            f"{mode} core performance interval",
+        )
+
+
 def _validate_lifecycle_identity(abi: str, implementation: str) -> None:
     for declaration in (
         "AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION 2U",
@@ -946,6 +1755,29 @@ def validate_source_texts(sources: dict[str, str]) -> None:
         sources["os/syscall_ids.h"],
         sources["user/lib/syscall_ids.h"],
         sources["user/lib/syscall.c"],
+    )
+    _validate_performance_observer(
+        sources["agent_performance_abi.h"],
+        sources["os/agent_resource.c"],
+        sources["os/performance_stats.c"],
+        sources["os/performance_stats.h"],
+        sources["os/syscall.c"],
+        sources["os/syscall_ids.h"],
+        sources["user/lib/arch/riscv/syscall_ids.h.in"],
+        sources["user/lib/syscall_ids.h"],
+        sources["user/lib/syscall.c"],
+    )
+    _validate_performance_producers(
+        sources["os/agent_identity.c"],
+        sources["os/exec_policy.c"],
+        sources["os/bio.c"],
+        sources["os/virtio_disk.c"],
+        sources["os/fs_epoch.c"],
+        sources["os/vm.c"],
+        sources["os/loader.c"],
+    )
+    _validate_performance_pair_consumer(
+        sources["user/src/labdemo_ucore.c"]
     )
     _validate_clock_source(
         sources["baseline_ucore/user/lib/syscall.c"], "plain Guest"

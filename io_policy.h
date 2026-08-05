@@ -1,7 +1,7 @@
 #ifndef IO_POLICY_H
 #define IO_POLICY_H
 
-#define IO_POLICY_VERSION 5U
+#define IO_POLICY_VERSION 6U
 
 #define IO_POLICY_OWNER_SYSTEM 1U
 #define IO_POLICY_OWNER_PUBLIC 2U
@@ -91,6 +91,9 @@ struct io_policy_info {
 	unsigned long long completion_sequence;
 	unsigned long long physical_flushes;
 	unsigned long long failed_transfers;
+	unsigned long long lazy_started;
+	unsigned long long upgraded;
+	unsigned long long cache_only;
 };
 
 #endif // IO_POLICY_H

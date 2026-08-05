@@ -58,6 +58,10 @@ ABI_OFFSET(struct agent_info, filesystem_capability_mask, info);
 ABI_OFFSET(struct agent_info, legacy_mailbox_allocated, info);
 ABI_OFFSET(struct agent_info, legacy_mailbox_pages, info);
 ABI_OFFSET(struct agent_info, file_scan_deferred, info);
+ABI_OFFSET(struct agent_info, metadata_journal_txns, info);
+ABI_OFFSET(struct agent_info, metadata_journal_blocks, info);
+ABI_OFFSET(struct agent_info, metadata_compactions, info);
+ABI_OFFSET(struct agent_info, metadata_full_cow_blocks, info);
 ABI_RECORD(struct agent_sched_record, sched_record, tick, priority);
 ABI_RECORD(struct agent_sched_config, sched_config, update_mask, budget);
 ABI_RECORD(struct agent_trace_record, trace_record, tick, text);
@@ -103,6 +107,72 @@ ABI_OFFSET(struct agent_observe_recovery_request, evidence,
 	   observe_recovery_request);
 ABI_OFFSET(struct agent_observe_recovery_request, bank_generation,
 	   observe_recovery_request);
+
+ABI_RECORD(struct agent_performance_snapshot, performance_snapshot, version,
+	   overwrite_prereads_skipped);
+ABI_OFFSET(struct agent_performance_snapshot, struct_size,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, counter_scope,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, reserved, performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, sample_tick,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, observer_lifecycle_id,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, observer_lifecycle_generation,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, fs_epoch_commits,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, fs_epoch_buffers_staged,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, block_physical_writes,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, block_durable_flushes,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, fs_epoch_deduplicated_stages,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, cow_pages_shared,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, cow_pages_copied,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, cow_fault_promotions,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, exec_cache_hits,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, exec_cache_misses,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, exec_cache_shared_pages,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, exec_cache_evictions,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, observer_workload_syscalls,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, directory_block_probes,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, directory_entries_examined,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, virtio_notifications,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, virtio_submitted_requests,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, virtio_write_batch_calls,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, virtio_batched_write_requests,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot,
+	   virtio_indirect_write_batch_calls, performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, virtio_read_batch_calls,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, virtio_batched_read_requests,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, block_physical_reads,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, file_auth_full,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, file_auth_lease_hits,
+	   performance_snapshot);
+ABI_OFFSET(struct agent_performance_snapshot, file_auth_revalidations,
+	   performance_snapshot);
 
 ABI_OFFSET(struct agent_context_header, records_offset, context_header);
 ABI_OFFSET(struct agent_context_header, active_path_count, context_header);

@@ -2255,7 +2255,8 @@ def collect_campaign(args):
             {
                 "round": round_number,
                 "sample_id": (
-                    f"agent18-{args.source_commit[:12]}-{round_number:02d}"
+                    f"agent{len(expected_cases)}-{args.source_commit[:12]}-"
+                    f"{round_number:02d}"
                 ),
                 "round_nonce": round_nonce,
                 "started_utc": round_started_utc,

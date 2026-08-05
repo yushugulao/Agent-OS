@@ -69,6 +69,8 @@ uint64 agent_metadata_store_mark_dirty(uint);
 void agent_metadata_store_expedite(uint);
 int agent_metadata_store_persist_commit(
 	struct agent_metadata_persist_result *);
+int agent_metadata_store_durability_fence(uint);
+int agent_metadata_store_quiescence_fence(uint);
 int agent_metadata_store_scope_target_done(uint, uint64);
 int agent_metadata_store_scope_pending(uint);
 void agent_metadata_store_fill_info(uint, struct agent_info *);

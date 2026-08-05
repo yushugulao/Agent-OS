@@ -200,14 +200,20 @@ def validate_sources(sources: dict[str, str]) -> None:
         raise ContractError("catalog introduced a reverse store-format dependency")
     resolver = function_body(catalog, "agent_metadata_catalog_resolve(")
     key_match = function_body(catalog, "agent_catalog_key_matches(")
-    for token in ("agent_metadata_txn_work_charge(1)", "i == except_slot",
-                  "result->ordinary++", "result->owned++",
-                  "result->autoscan++",
-                  "agent_catalog_files[i].flags & AGENT_FILE_META_F_AUTOSCAN",
+    for token in ("agent_metadata_txn_work_charge(1)",
+                  "agent_catalog_target_lifecycle(",
+                  "agent_catalog_scope_counts(\n"
+                  "\t\tscope_id, lifecycle, &owned, &autoscan)",
+                  "result->ordinary = agent_catalog_ordinary",
+                  "agent_catalog_primary_candidates(",
+                  "agent_catalog_bitmap_next(candidates, -1)",
+                  "slot == except_slot",
                   "result->matched |= matched",
-                  "result->states |= agent_catalog_states[i]",
+                  "result->states |= agent_catalog_states[slot]",
                   "result->slot = AGENT_CATALOG_CONFLICT"):
-        require(resolver, token, "single catalog selector resolver")
+        require(resolver, token, "incremental catalog selector resolver")
+    if "for (int i = 0; i < AGENT_FILE_META_MAX" in resolver:
+        raise ContractError("ordinary resolver restored a full catalog scan")
     require(catalog_h, "int slot, owned, ordinary, autoscan;",
             "per-scope autoscan accounting")
     for token in ("selector->fid", "selector->physical_name",
@@ -230,23 +236,22 @@ def validate_sources(sources: dict[str, str]) -> None:
         require(scope_admission, token, "trusted target lifecycle admission")
     scope_create = function_body(vfs, "static int vfs_scope_create(")
     for token in (
-        "if (ref->retiring)\n\t\t\t\tretiring++",
-        "workflow_lifecycle_active(ref->lifecycle) ||",
-        "workflow_lifecycle_closing(ref->lifecycle)",
-        "allocated++",
-        "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
-        "allocated + retiring < VFS_SCOPE_LIFECYCLE_CAP",
+        "registry->active_count + registry->retiring_count <\n"
+        "\t\t    VFS_SCOPE_MAX_ACTIVE",
+        "registry->active_count + registry->retiring_count <\n"
+        "\t\t    VFS_SCOPE_LIFECYCLE_CAP",
+        "registry->free_count > 0",
+        "vfs_scope_registry_insert_locked(scope_id, created, storage)",
     ):
         require(scope_create, token, "active/closing/retiring scope slots")
-    if not (scope_create.find("if (ref->retiring)") <
-            scope_create.find("allocated + retiring < VFS_SCOPE_MAX_ACTIVE")):
+    if scope_create.find("registry->active_count + registry->retiring_count") > \
+            scope_create.find("workflow_lifecycle_create(scope_id, &created)"):
         raise ContractError("retiring scopes must occupy admission slots")
     storage_guarantee = function_body(vfs, "vfs_scope_storage_guarantee(")
     for token in (
         "(!ref->retiring &&",
-        "!workflow_lifecycle_active(ref->lifecycle)",
-        "!workflow_lifecycle_closing(ref->lifecycle)",
-        "allocated++",
+        "!workflow_lifecycle_key_valid(ref->lifecycle)",
+        "allocated = registry->active_count + registry->retiring_count",
         "if (ref->scope_id == exempt_scope)",
         "used = resource_account_usage(",
         "inode ? RESOURCE_FS_INODE : RESOURCE_FS_BLOCK",
@@ -259,20 +264,20 @@ def validate_sources(sources: dict[str, str]) -> None:
     if "!ref->used || ref->retiring ||" in storage_guarantee:
         raise ContractError("retiring scope was skipped by storage guarantee")
     retained_pos = storage_guarantee.find("(!ref->retiring &&")
-    allocated_pos = storage_guarantee.find("allocated++")
+    allocated_pos = storage_guarantee.find(
+        "allocated = registry->active_count + registry->retiring_count"
+    )
     exempt_pos = storage_guarantee.find("if (ref->scope_id == exempt_scope)")
     usage_pos = storage_guarantee.find("used = resource_account_usage(")
     deficit_pos = storage_guarantee.find("required += guarantee - used")
     future_pos = storage_guarantee.find(
         "(VFS_SCOPE_MAX_ACTIVE - allocated) * guarantee"
     )
-    if not (0 <= retained_pos < allocated_pos < exempt_pos < usage_pos <
+    if not (0 <= allocated_pos < retained_pos < exempt_pos < usage_pos <
             deficit_pos < future_pos):
         raise ContractError(
             "retiring/active usage must offset its slot before future guarantees"
         )
-    if storage_guarantee.count("allocated++") != 1:
-        raise ContractError("each retained scope must occupy exactly one guarantee slot")
     hard_admission = function_body(
         catalog, "static int agent_catalog_hard_admission("
     )
@@ -293,6 +298,13 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "agent_catalog_scope_admissible(scope_id, &lifecycle)",
                   "return AGENT_CATALOG_INTERRUPTED"):
         require(admission, token, "live catalog admission")
+    require(
+        admission,
+        "if (scope_id != VFS_SCOPE_SYSTEM &&\n"
+        "\t    (flags & AGENT_FILE_META_F_AUTOSCAN) &&\n"
+        "\t    !(old_flags & AGENT_FILE_META_F_AUTOSCAN)",
+        "exact autoscan delta admission",
+    )
     hard_pos = admission.find("agent_catalog_hard_admission(")
     autoscan_pos = admission.find(
         "result.autoscan >= AGENT_FILE_AUTOSCAN_SCOPE_LIMIT"
@@ -320,6 +332,7 @@ def validate_sources(sources: dict[str, str]) -> None:
             "immutable record scope")
     allocate = function_body(catalog, "int agent_metadata_catalog_alloc_slot(")
     for token in ("agent_catalog_admission(scope_id, -1, 0, 0, flags, 1)",
+                  "agent_catalog_bitmap_next(agent_catalog_free_bits, -1)",
                   "agent_metadata_txn_work_charge(1)"):
         require(allocate, token, "candidate-bound slot allocation")
     require(catalog_h, "int agent_metadata_catalog_alloc_slot(uint, uint);",
@@ -413,14 +426,14 @@ def validate_sources(sources: dict[str, str]) -> None:
             "scoped lifecycle generation must be rechecked before apply"
         )
     allocate_fid = function_body(catalog, "uint64 agent_metadata_catalog_alloc_fid(")
-    for token in ("uchar used_fids[(AGENT_FILE_META_MAX + 7) / 8]",
-                  "memset(used_fids, 0, sizeof(used_fids))",
-                  "used_fids[(fid - 1) / 8]",
-                  "used_fids[(candidate - 1) / 8]",
+    for token in ("agent_catalog_target_lifecycle(-1, scope_id, &lifecycle)",
+                  "agent_catalog_usage_find(scope_id, lifecycle, 0)",
+                  "~usage->fids[word]",
+                  "agent_catalog_first_bit(candidates) + 1",
                   "agent_metadata_txn_work_charge(1)"):
-        require(allocate_fid, token, "linear fid allocation")
-    if allocate_fid.count("for (") != 2:
-        raise ContractError("fid allocation must remain two linear passes")
+        require(allocate_fid, token, "incremental fid allocation")
+    if "agent_catalog_files[" in allocate_fid:
+        raise ContractError("fid allocation restored a catalog scan")
     restart_validator = function_body(
         store_format, "records_valid(struct agent_meta_store *store"
     )
@@ -674,28 +687,39 @@ def validate_sources(sources: dict[str, str]) -> None:
     if not (0 <= fs_create_pos < note_create_pos < success_pos):
         raise ContractError("catalog hook can still roll back successful VFS creation")
 
-    update_inode = function_body(directory, "agent_fs_apply_inode_event(")
-    deferred_pos = update_inode.find("agent_file_state_index_deferred(ip)")
-    txn_pos = update_inode.find("agent_metadata_txn_try_external()")
-    rescan_pos = update_inode.find("agent_file_request_scan()")
-    if not (0 <= deferred_pos < txn_pos < rescan_pos):
-        raise ContractError("writes to deferred inodes can repeatedly request scans")
-    busy_remove_pos = update_inode.find("else if (remove)", txn_pos)
-    busy_scan_pos = update_inode.find("agent_file_request_scan()", busy_remove_pos)
-    busy_next_pos = update_inode.find("else if (published < 0)", busy_remove_pos)
-    busy_return_pos = update_inode.find("return;", busy_next_pos)
-    if not (txn_pos < busy_remove_pos < busy_scan_pos < busy_next_pos <
-            busy_return_pos):
+    publish_content = function_body(directory, "agent_fs_publish_content(")
+    receipt_note = "agent_metadata_catalog_journal_note_content(&receipt)"
+    if publish_content.count(receipt_note) != 1:
+        raise ContractError("ordinary writes lost their bounded journal receipt")
+    guarded_content = publish_content.replace(receipt_note, "")
+    if ("agent_metadata_txn_" in guarded_content or
+            "agent_metadata_catalog_" in guarded_content):
+        raise ContractError("ordinary writes still enter catalog transactions")
+    for token in (
+        "agent_file_state_content_publish(ip, &receipt)",
+        "agent_metadata_store_mark_dirty(ip->vfs_scope_id)",
+        "agent_file_request_scan()",
+    ):
+        require(publish_content, token, "content overlay fast path")
+
+    remove_inode = function_body(directory, "agent_fs_remove_inode(")
+    deferred_pos = remove_inode.find("agent_file_state_index_deferred(ip)")
+    txn_pos = remove_inode.find("agent_metadata_txn_try_external()")
+    rescan_pos = remove_inode.find("agent_file_request_scan()", deferred_pos)
+    if not (0 <= deferred_pos < rescan_pos < txn_pos):
+        raise ContractError("deferred delete does not reconcile before catalog work")
+    busy_scan_pos = remove_inode.find("agent_file_request_scan()", txn_pos)
+    busy_return_pos = remove_inode.find("return;", busy_scan_pos)
+    if not (txn_pos < busy_scan_pos < busy_return_pos):
         raise ContractError("metadata-gate busy delete can strand catalog cleanup")
-    if "agent_metadata_scan_slot_freed" in update_inode[
-            busy_remove_pos:busy_next_pos]:
+    if "agent_metadata_scan_slot_freed" in remove_inode[
+            txn_pos:busy_return_pos]:
         raise ContractError("metadata-gate busy delete claims unreleased capacity")
-    remove_pos = update_inode.find("if (remove) {")
-    clear_pos = update_inode.find("agent_metadata_catalog_clear_slot(slot)", remove_pos)
-    retry_pos = update_inode.find(
+    clear_pos = remove_inode.find("agent_metadata_catalog_clear_slot(slot)")
+    retry_pos = remove_inode.find(
         "agent_metadata_scan_slot_freed(scope_id)", clear_pos)
-    update_pos = update_inode.find("} else {", retry_pos)
-    if not (0 <= remove_pos < clear_pos < retry_pos < update_pos):
+    unlock_pos = remove_inode.find("agent_metadata_txn_unlock()", retry_pos)
+    if not (0 <= clear_pos < retry_pos < unlock_pos):
         raise ContractError("catalog capacity release can strand deferred inodes")
     require(scan_h, "void agent_metadata_scan_slot_freed(uint);",
             "capacity-release retry declaration")
@@ -901,15 +925,17 @@ def validate_sources(sources: dict[str, str]) -> None:
             "canonical creation rollback")
     reconcile = function_body(catalog, "agent_metadata_catalog_reconcile_slot(")
     for token in ("AGENT_CATALOG_STATE_PENDING",
-                  "agent_catalog_state_clear(slot)",
+                  "agent_catalog_slot_lifecycle(slot)",
+                  "agent_catalog_slot_publish(\n"
+                  "\t\tslot, &agent_catalog_files[slot], scope_id, 0, lifecycle,",
                   "AGENT_FILE_CHANGE_MEMBERSHIP"):
         require(reconcile, token, "pending reconciliation")
-    state_clear = function_body(catalog, "agent_catalog_state_clear(int slot)")
-    for token in ("AGENT_CATALOG_STATE_PENDING",
-                  "agent_catalog_pending_count == 0",
-                  "agent_catalog_pending_count--",
-                  "agent_catalog_states[slot] = 0"):
-        require(state_clear, token, "central catalog state clear")
+    publish = function_body(catalog, "agent_catalog_slot_publish(")
+    for token in ("agent_catalog_derived_remove(slot)",
+                  "agent_catalog_derived_add(",
+                  "agent_catalog_changed(changes)",
+                  "agent_catalog_journal_note(old_scope, old_lifecycle, slot)"):
+        require(publish, token, "single catalog publication boundary")
 
     apply = function_body(catalog, "agent_metadata_catalog_apply_snapshot(")
     for token in (

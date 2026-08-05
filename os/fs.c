@@ -15,7 +15,10 @@
 #include "defs.h"
 #include "exec_policy.h"
 #include "file.h"
+#include "fs_epoch.h"
 #include "kernel_work.h"
+#include "open_file_io_lease.h"
+#include "performance_stats.h"
 #include "proc.h"
 #include "riscv.h"
 #include "types.h"
@@ -70,6 +73,13 @@ enum fs_failure_class {
 
 static enum fs_io_health fs_io_health;
 
+#define FS_READ_BATCH_MAX 4U
+_Static_assert(FS_READ_BATCH_MAX <= VIRTIO_DISK_READ_BATCH_MAX,
+	       "filesystem read batch must fit the device queue");
+_Static_assert(FS_READ_BATCH_MAX <= VM_COPY_SEGMENT_MAX &&
+	       FS_READ_BATCH_MAX * BSIZE <= VM_COPYOUTV_MAX_BYTES,
+	       "filesystem read batch must fit the VM copy window");
+
 #define FS_TRANSIENT_PAGE_SYSTEM_CAP \
 	PHYSICAL_PAGE_STORAGE_SYSTEM_RESERVED_LIMIT
 #define FS_TRANSIENT_PAGE_PUBLIC_CAP 16U
@@ -80,6 +90,133 @@ static struct wait_queue fs_claim_waiters;
 static struct thread *fs_claim_owner;
 static struct wait_queue fs_allocator_waiters;
 static struct thread *fs_allocator_owner;
+static struct wait_queue fs_namespace_waiters;
+static void *fs_namespace_owner;
+static uint64 fs_namespace_owner_generation;
+static struct wait_queue fs_dentry_waiters;
+static void *fs_dentry_owner;
+static uint64 fs_dentry_owner_generation;
+static char fs_dentry_boot_token;
+
+/*
+ * File contents use an inode-local mapping guard rather than the filesystem
+ * request gate.  Readers may therefore proceed in parallel across unrelated
+ * inodes while truncate, allocation and detach publish one mapping image at a
+ * time.  The wait queue is shared; the indexed state remains compact.
+ */
+struct inode_mapping_guard {
+	uint readers;
+	uint reader_waiters;
+	uint writer_waiters;
+	uint writer_depth;
+	void *writer;
+	uint64 writer_generation;
+};
+
+static struct inode_mapping_guard
+	inode_mapping_guards[FS_ICACHE_SIZE];
+static struct wait_queue inode_mapping_waiters;
+static char inode_mapping_boot_token;
+
+/* Free-block candidates amortize bitmap scans without allocating ahead. */
+#define FS_BLOCK_MAGAZINE_SLOTS (VFS_SCOPE_MAX_ACTIVE + 2U)
+#define FS_BLOCK_MAGAZINE_CAP 24U
+#define FS_BLOCK_CANDIDATE_BYTES ((FSSIZE + 7U) / 8U)
+
+struct fs_block_magazine {
+	uint owner;
+	uint count;
+	uint blocks[FS_BLOCK_MAGAZINE_CAP];
+};
+
+static struct fs_block_magazine
+	fs_block_magazines[FS_BLOCK_MAGAZINE_SLOTS];
+static uchar fs_block_candidate_reserved[FS_BLOCK_CANDIDATE_BYTES];
+
+/*
+ * Foreground unlink/truncate publishes only the unreachable mapping image.
+ * This bounded queue owns the detached token until a generation fence makes
+ * batched allocator-map reclamation safe.
+ */
+#define FS_DEFERRED_RECLAIM_CAP 128U
+#define FS_DEFERRED_RECLAIM_BATCH_UNITS 64U
+#define FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS 6U
+#define FS_DEFERRED_RECLAIM_OWNER_CAP 32U
+#define FS_DEFERRED_RECLAIM_SYSTEM_RESERVE 16U
+
+struct fs_deferred_reclaim_entry {
+	int reserved;
+	int published;
+	uint sponsor_owner;
+	uint sponsor_class;
+	uint64 fence_generation;
+	struct inode_reclaim reclaim;
+};
+
+struct fs_deferred_reclaim_action {
+	uint slot;
+	uint block;
+	uint advance;
+	uint cursor;
+	uint inode;
+};
+
+static struct fs_deferred_reclaim_entry
+	fs_deferred_reclaims[FS_DEFERRED_RECLAIM_CAP];
+static struct fs_deferred_reclaim_action
+	fs_deferred_reclaim_plan[FS_DEFERRED_RECLAIM_BATCH_UNITS];
+static struct inode_reclaim fs_deferred_reclaim_shadow;
+static uint fs_deferred_reclaim_unique[
+	FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS];
+static uint fs_deferred_reclaim_count;
+static uint fs_deferred_reclaim_cursor;
+
+/* Derived namespace indexes never authorize an object; they only locate the
+ * dirent that the normal inode/label path must revalidate. */
+#define FS_DENTRY_INDEX_CAP 512U
+#define FS_DIRECTORY_INDEX_CAP 8U
+#define FS_DIRECTORY_INDEX_MAX_ENTRIES NINODE
+#define FS_DIRECTORY_INDEX_BITMAP_BYTES \
+	((FS_DIRECTORY_INDEX_MAX_ENTRIES + 7U) / 8U)
+
+enum fs_dentry_index_slot_state {
+	FS_DENTRY_INDEX_EMPTY = 0,
+	FS_DENTRY_INDEX_USED,
+	FS_DENTRY_INDEX_TOMBSTONE,
+};
+
+struct fs_dentry_index_entry {
+	uint hash;
+	uint offset;
+	uint dir_incarnation;
+	uint target_incarnation;
+	ushort dev;
+	ushort dir_inum;
+	ushort target_inum;
+	uchar state;
+};
+
+struct fs_directory_index_state {
+	uint dev;
+	uint inum;
+	uint incarnation;
+	uint size;
+	uint entries;
+	uint first_free_entry;
+	uint complete;
+	uint overflow;
+	uint used;
+	uchar occupied[FS_DIRECTORY_INDEX_BITMAP_BYTES];
+};
+
+static struct fs_dentry_index_entry
+	fs_dentry_index[FS_DENTRY_INDEX_CAP];
+static struct fs_directory_index_state
+	fs_directory_indexes[FS_DIRECTORY_INDEX_CAP];
+static uint fs_dentry_index_used;
+static uint fs_dentry_index_tombstones;
+static uint fs_directory_index_cursor;
+static uint64 fs_dentry_index_generation;
 // The claim gate serializes this bounded workspace after mount recovery.
 // Keeping it in BSS avoids adding a full indirect map to the syscall stack.
 static uint fs_claim_blocks[MAXFILE + 1];
@@ -118,12 +255,43 @@ _Static_assert(FS_WORKFLOW_SCOPE_SLOTS > 0 &&
 	       FS_WORKFLOW_BLOCK_MIN_PER_SCOPE > 0 &&
 	       FS_WORKFLOW_INODE_MIN_PER_SCOPE > 0,
 	       "workflow storage policy must keep bounded shared capacity");
+_Static_assert((FS_DENTRY_INDEX_CAP & (FS_DENTRY_INDEX_CAP - 1)) == 0 &&
+	       FS_DENTRY_INDEX_CAP >= 2,
+	       "dentry index must use power-of-two open addressing");
+_Static_assert(NINODE <= 65535U && NDEV <= 65535U,
+	       "compact dentry identities must fit on-disk limits");
+_Static_assert(FS_DIRECTORY_INDEX_MAX_ENTRIES > 0,
+	       "directory occupancy index must cover a full inode");
+_Static_assert(sizeof(struct fs_dentry_index_entry) <= 24,
+	       "dentry entry must retain only derived location identity");
+_Static_assert(sizeof(fs_dentry_index) + sizeof(fs_directory_indexes) <=
+	       16U * 1024U,
+	       "dentry derived index BSS must stay within 16 KiB");
 
 static int writei_charged(struct inode *, const struct vfs_cred *,
 			  const struct fs_storage_charge *, int, uint64, uint,
-			  uint);
+			  uint, enum fs_epoch_phase);
 static int fs_qmap_write_forward(int dev, uint block, uint state);
 static int fs_bitmap_write_forward(int dev, uint block, int allocated);
+static int bfree(int dev, uint block);
+static int fs_block_candidate_drain(uint owner);
+static int fs_block_candidate_is_reserved(uint block);
+static int fs_block_candidate_reclaim(uint block);
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
+static int fs_deferred_reclaim_reserve(uint, struct inode_reclaim *);
+static void fs_deferred_reclaim_cancel(struct inode_reclaim *);
+static int fs_deferred_reclaim_maintain_owner(uint, int);
+#endif
+static void itruncate_reclaim_finish(struct inode_reclaim *);
+static int itruncate_detach_all(struct inode *, struct inode_reclaim *);
+static int fs_directory_index_rebuild(struct inode *);
+static void fs_directory_index_invalidate(struct inode *);
+static void fs_dentry_index_invalidate_directory(struct inode *);
+static int fs_dentry_gate_lock(void);
+static void fs_dentry_gate_lock_uninterruptible(void);
+static void fs_dentry_gate_unlock(void);
+static int fs_namespace_gate_lock(void);
+static void fs_namespace_gate_unlock(void);
 
 static int fs_io_fail(enum fs_failure_class failure)
 {
@@ -161,6 +329,24 @@ static int fs_read_block(uint dev, uint blockno, struct buf **out)
 			      FS_FAILURE_TRANSIENT_READ);
 }
 
+static int fs_read_blocks_batch(uint dev, const uint *blocknos,
+				struct buf **out, uint count)
+{
+	int result;
+
+	if (blocknos == 0 || out == 0 || count < 2 ||
+	    count > FS_READ_BATCH_MAX)
+		return fs_io_fail(FS_FAILURE_OPERATION);
+	if (fs_io_health != FS_IO_HEALTHY)
+		return -1;
+	result = bread_batch(dev, blocknos, out, count);
+	if (result >= 0)
+		return 0;
+	return fs_io_fail(result == VIRTIO_DISK_ERR_BUSY ?
+			      FS_FAILURE_SCHEDULING_UNAVAILABLE :
+			      FS_FAILURE_TRANSIENT_READ);
+}
+
 static int fs_read_device_block(uint dev, uint blockno, struct buf **out)
 {
 	struct buf *bp;
@@ -191,32 +377,133 @@ static enum fs_failure_class fs_write_failure(int result)
 	return FS_FAILURE_METADATA_WRITE_INDETERMINATE;
 }
 
-/* Allocation maps, directories, indirect maps and dinodes are FS metadata. */
-static int fs_write_metadata_block(struct buf *bp)
+static int fs_epoch_preflight(uint worst_case_buffers)
 {
-	int result;
-
-	if (fs_io_health != FS_IO_HEALTHY)
-		return -1;
-	result = bwrite(bp);
-
-	return result < 0 ? fs_io_fail(fs_write_failure(result)) : 0;
-}
-
-/* File payload failures are contained by the owning object/protocol. */
-static int fs_write_data_block(struct buf *bp)
-{
-	int result;
-
-	if (fs_io_health != FS_IO_HEALTHY)
-		return -1;
-	result = bwrite(bp);
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	(void)worst_case_buffers;
+	return 0;
+#else
+	int result = fs_epoch_reserve(bio_current_owner(),
+				      worst_case_buffers);
 
 	if (result >= 0)
 		return 0;
 	return fs_io_fail(result == VIRTIO_DISK_ERR_BUSY ?
 			      FS_FAILURE_SCHEDULING_UNAVAILABLE :
-			      FS_FAILURE_OPERATION);
+			      FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+#endif
+}
+
+static int
+fs_epoch_preflight_phase(uint worst_case_buffers, enum fs_epoch_phase phase)
+{
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	(void)phase;
+	return fs_epoch_preflight(worst_case_buffers);
+#else
+	int result;
+
+	result = fs_epoch_reserve_phase(bio_current_owner(),
+					worst_case_buffers, phase);
+	if (result >= 0)
+		return 0;
+	return fs_io_fail(result == VIRTIO_DISK_ERR_BUSY ?
+			      FS_FAILURE_SCHEDULING_UNAVAILABLE :
+			      FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+#endif
+}
+
+static int fs_epoch_destructive_begin(int *entered)
+{
+	int result;
+
+	if (entered == 0)
+		return -1;
+	*entered = 0;
+	if (!fs_epoch_runtime_enabled() || fs_epoch_bypass_active())
+		return 0;
+	if (!fs_epoch_request_held())
+		return -1;
+	if (fs_epoch_dirty()) {
+		result = fs_epoch_commit();
+		if (result < 0)
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+	}
+	if (fs_epoch_bypass_begin() < 0)
+		return -1;
+	*entered = 1;
+	return 0;
+}
+
+static void fs_epoch_destructive_end(int entered)
+{
+	if (entered)
+		fs_epoch_bypass_end();
+}
+
+/* Allocation maps, directories, indirect maps and dinodes are FS metadata. */
+static int fs_write_ordered_block(struct buf *bp,
+				  enum fs_epoch_phase phase, int data)
+{
+	int result;
+
+	if (fs_io_health != FS_IO_HEALTHY)
+		return -1;
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	if (data) {
+		result = fs_epoch_note_data(bio_current_owner());
+		if (result == FS_EPOCH_OWNER_MISMATCH ||
+		    result == FS_EPOCH_FULL)
+			return VIRTIO_DISK_ERR_BUSY;
+		if (result < 0)
+			return result;
+	}
+	result = fs_epoch_stage(bp, phase);
+	if (result == FS_EPOCH_CACHED)
+		return 0;
+	if (result == FS_EPOCH_OWNER_MISMATCH ||
+	    result == FS_EPOCH_FULL)
+		return VIRTIO_DISK_ERR_BUSY;
+	if (result < 0)
+		return result;
+#else
+	(void)phase;
+#endif
+	result = bwrite(bp);
+	if (result >= 0)
+		return 0;
+	if (data)
+		return fs_io_fail(result == VIRTIO_DISK_ERR_BUSY ?
+				      FS_FAILURE_SCHEDULING_UNAVAILABLE :
+				      FS_FAILURE_OPERATION);
+	return fs_io_fail(fs_write_failure(result));
+}
+
+/* Allocation maps, zeroed blocks and indirect maps precede inode publish. */
+static int fs_write_metadata_block(struct buf *bp)
+{
+	return fs_write_ordered_block(bp, FS_EPOCH_PREPARE, 0);
+}
+
+static int fs_write_inode_block(struct buf *bp)
+{
+	return fs_write_ordered_block(bp, FS_EPOCH_INODE, 0);
+}
+
+static int fs_write_namespace_block(struct buf *bp,
+				    enum fs_epoch_phase phase)
+{
+	if (phase != FS_EPOCH_NAMESPACE_DETACH &&
+	    phase != FS_EPOCH_NAMESPACE_ATTACH)
+		return -1;
+	return fs_write_ordered_block(bp, phase, 0);
+}
+
+/* File payload failures are contained by the owning object/protocol. */
+static int fs_write_data_block(struct buf *bp)
+{
+	return fs_write_ordered_block(bp, FS_EPOCH_PREPARE, 1);
 }
 
 /* A completed metadata write is not a power-loss ordering point by itself. */
@@ -226,6 +513,11 @@ static int fs_durable_barrier(void)
 
 	if (fs_io_health != FS_IO_HEALTHY)
 		return -1;
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	if (fs_epoch_request_held() && fs_epoch_dirty() &&
+	    !fs_epoch_bypass_active())
+		return 0;
+#endif
 	result = bio_durable_flush();
 	if (result >= 0)
 		return 0;
@@ -241,6 +533,14 @@ static int fs_durable_barrier(void)
  */
 static int fs_forward_checkpoint(void)
 {
+	if (fs_epoch_request_held() && fs_epoch_dirty() &&
+	    !fs_epoch_bypass_active()) {
+		int result = fs_epoch_commit();
+
+		if (result < 0)
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+	}
 	if (bio_request_settle_quiescent_cleanup() == 0)
 		return 0;
 	return fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
@@ -746,7 +1046,7 @@ static int fs_scrub_retire_inode_forward(int dev, uint inum, int *changed)
 			return 0;
 		}
 		fs_scrub_retire_dinode(dip, inum);
-		result = fs_write_metadata_block(bp);
+		result = fs_write_inode_block(bp);
 		brelse(bp);
 		if (result == VIRTIO_DISK_ERR_BUSY) {
 			if (fs_forward_checkpoint() < 0)
@@ -1237,6 +1537,15 @@ int fs_storage_owner_account(uint owner,
 void fs_storage_scope_account_close(
 	struct resource_account_handle account)
 {
+	struct resource_account_kind_snapshot snapshot;
+
+	if (resource_account_kind_snapshot(
+		    account, RESOURCE_FS_BLOCK, &snapshot) < 0 ||
+	    snapshot.account_kind != RESOURCE_ACCOUNT_STORAGE ||
+	    snapshot.external_id < FS_OWNER_SCOPE_FLAG ||
+	    snapshot.external_id > (uint64)~0U ||
+	    fs_block_candidate_drain((uint)snapshot.external_id) < 0)
+		panic("workflow storage candidate close");
 	if (resource_account_close(account) < 0 ||
 	    resource_account_member_release(account, 0) < 0)
 		panic("workflow storage account close");
@@ -1295,24 +1604,25 @@ static int fs_storage_charge_from_vfs(const struct vfs_cred *cred,
 	return 0;
 }
 
-static int fs_storage_reserve(const struct fs_storage_charge *charge,
-			      int inode)
+static int fs_storage_reserve_many(const struct fs_storage_charge *charge,
+				   int inode, uint amount)
 {
 	uint *free_count;
 	uint reserve;
 	uint guarantee;
+	uint reserve_spent = 0;
 	uint *system_remaining;
 	uint scope_id = VFS_SCOPE_NONE;
 	int enabled;
 	struct resource_account_handle account;
 	struct resource_request request = {
 		.kind = inode ? RESOURCE_FS_INODE : RESOURCE_FS_BLOCK,
-		.amount = 1,
+		.amount = amount,
 	};
 	struct resource_reservation reservation;
 	enum resource_charge_class charge_class;
 
-	if (!fs_storage.ready || charge == 0 ||
+	if (!fs_storage.ready || charge == 0 || amount == 0 ||
 	    charge->level > FS_CHARGE_SYSTEM ||
 	    charge->owner < FS_OWNER_SYSTEM)
 		return -1;
@@ -1345,7 +1655,7 @@ static int fs_storage_reserve(const struct fs_storage_charge *charge,
 						      guarantee);
 	}
 
-	if (*free_count <= reserve) {
+	if (amount > *free_count || *free_count - amount < reserve) {
 		intr_restore(enabled);
 		return -1;
 	}
@@ -1362,18 +1672,29 @@ static int fs_storage_reserve(const struct fs_storage_charge *charge,
 	}
 	if (resource_reservation_commit(&reservation) < 0)
 		panic("filesystem resource commit");
-	if (charge->level == FS_CHARGE_SYSTEM &&
-	    *free_count <= reserve + *system_remaining) {
-		if (*system_remaining == 0)
+	if (charge->level == FS_CHARGE_SYSTEM) {
+		uint shared = *free_count > reserve + *system_remaining ?
+			*free_count - reserve - *system_remaining : 0;
+
+		reserve_spent = amount > shared ? amount - shared : 0;
+		if (reserve_spent > *system_remaining)
 			panic("system storage reserve invariant");
-		(*system_remaining)--;
+		*system_remaining -= reserve_spent;
 	}
-	(*free_count)--;
+	*free_count -= amount;
 	intr_restore(enabled);
 	return 0;
 }
 
-static void fs_storage_release(uint owner, int inode)
+static int fs_storage_reserve(const struct fs_storage_charge *charge,
+			      int inode)
+{
+	return fs_storage_reserve_many(charge, inode, 1);
+}
+
+static void fs_storage_release_many_accounted(
+	uint owner, struct resource_account_handle exact_account,
+	int inode, uint amount)
 {
 	uint *free_count = inode ? &fs_storage.free_inodes :
 					  &fs_storage.free_blocks;
@@ -1387,11 +1708,11 @@ static void fs_storage_release(uint owner, int inode)
 	struct resource_account_handle account;
 	struct resource_request request = {
 		.kind = inode ? RESOURCE_FS_INODE : RESOURCE_FS_BLOCK,
-		.amount = 1,
+		.amount = amount,
 	};
 	enum resource_charge_class charge_class;
 
-	if (owner < FS_OWNER_SYSTEM)
+	if (owner < FS_OWNER_SYSTEM || amount == 0)
 		panic("storage release invariant");
 	// Another I/O may have closed the filesystem while this free was in
 	// flight.  Persistent recovery will rebuild the counters; do not turn a
@@ -1399,12 +1720,23 @@ static void fs_storage_release(uint owner, int inode)
 	if (!fs_storage.ready)
 		return;
 	enabled = intr_save();
-	if (*free_count >= total)
+	if (*free_count > total || amount > total - *free_count)
 		panic("storage free count invariant");
-	(*free_count)++;
-	if (owner == FS_OWNER_SYSTEM && *system_remaining < system_reserve)
-		(*system_remaining)++;
-	if (FS_OWNER_IS_SCOPE(owner)) {
+	*free_count += amount;
+	if (owner == FS_OWNER_SYSTEM && *system_remaining < system_reserve) {
+		uint available = system_reserve - *system_remaining;
+
+		*system_remaining += MIN(amount, available);
+	}
+	if (resource_account_handle_valid(exact_account)) {
+		if (!resource_account_matches(exact_account,
+					      RESOURCE_ACCOUNT_STORAGE,
+					      owner))
+			panic("storage release account identity");
+		account = exact_account;
+		charge_class = owner == fs_storage.public_principal_id ?
+			RESOURCE_CHARGE_ORDINARY : RESOURCE_CHARGE_RESERVED;
+	} else if (FS_OWNER_IS_SCOPE(owner)) {
 		if (FS_OWNER_SCOPE_ID(owner) < VFS_SCOPE_FIRST_DYNAMIC)
 			panic("workflow storage release invariant");
 		/*
@@ -1426,6 +1758,17 @@ static void fs_storage_release(uint owner, int inode)
 	if (resource_release_many(account, charge_class, &request, 1) < 0)
 		panic("storage resource release invariant");
 	intr_restore(enabled);
+}
+
+static void fs_storage_release_many(uint owner, int inode, uint amount)
+{
+	fs_storage_release_many_accounted(owner, resource_account_none(),
+					   inode, amount);
+}
+
+static void fs_storage_release(uint owner, int inode)
+{
+	fs_storage_release_many(owner, inode, 1);
 }
 
 #ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
@@ -1727,7 +2070,7 @@ static int fs_recover_public_claims(int dev)
 			dip->vfs_exec_profile, dip->vfs_policy_generation,
 			dip->vfs_incarnation, dip->fs_owner_domain,
 			dip->fs_owner_version);
-		if (fs_write_metadata_block(bp) < 0) {
+		if (fs_write_inode_block(bp) < 0) {
 			brelse(bp);
 			return -1;
 		}
@@ -1871,7 +2214,7 @@ static int fs_reap_scope_inode_forward(int dev, uint inum, int *changed)
 			return 0;
 		}
 		fs_scrub_retire_dinode(dip, inum);
-		result = fs_write_metadata_block(bp);
+		result = fs_write_inode_block(bp);
 		brelse(bp);
 		if (result == VIRTIO_DISK_ERR_BUSY) {
 			if (fs_forward_checkpoint() < 0)
@@ -1940,18 +2283,27 @@ static int fs_reap_boot_workflow_objects(int dev)
 		if (!owned)
 			continue;
 		memset(&de, 0, sizeof(de));
+		if (fs_namespace_gate_lock() < 0) {
+			iput(root);
+			return -1;
+		}
 		for (;;) {
 			io_result = writei_charged(
 				root, &kernel_cred, &system_charge, 0,
-				(uint64)&de, off, sizeof(de));
+				(uint64)&de, off, sizeof(de),
+				FS_EPOCH_NAMESPACE_DETACH);
 			if (io_result == sizeof(de))
 				break;
 			if (io_result != VIRTIO_DISK_ERR_BUSY ||
 			    fs_forward_checkpoint() < 0) {
+				fs_dentry_index_invalidate_directory(root);
+				fs_namespace_gate_unlock();
 				iput(root);
 				return io_result < 0 ? io_result : -1;
 			}
 		}
+		fs_dentry_index_invalidate_directory(root);
+		fs_namespace_gate_unlock();
 		names_changed = 1;
 	}
 	iput(root);
@@ -1994,11 +2346,34 @@ void fsinit()
 {
 	int dev = ROOTDEV;
 
+	fs_epoch_init();
+	memset(fs_block_magazines, 0, sizeof(fs_block_magazines));
+	memset(fs_block_candidate_reserved, 0,
+	       sizeof(fs_block_candidate_reserved));
+	memset(fs_deferred_reclaims, 0, sizeof(fs_deferred_reclaims));
+	memset(fs_deferred_reclaim_plan, 0,
+	       sizeof(fs_deferred_reclaim_plan));
+	fs_deferred_reclaim_count = 0;
+	fs_deferred_reclaim_cursor = 0;
+	memset(fs_dentry_index, 0, sizeof(fs_dentry_index));
+	memset(fs_directory_indexes, 0, sizeof(fs_directory_indexes));
+	fs_dentry_index_used = 0;
+	fs_dentry_index_tombstones = 0;
+	fs_directory_index_cursor = 0;
+	fs_dentry_index_generation = 1;
 	fs_io_health = FS_IO_HEALTHY;
 	fs_claim_owner = 0;
 	fs_allocator_owner = 0;
+	fs_namespace_owner = 0;
+	fs_namespace_owner_generation = 0;
+	fs_dentry_owner = 0;
+	fs_dentry_owner_generation = 0;
+	memset(inode_mapping_guards, 0, sizeof(inode_mapping_guards));
 	wait_queue_init(&fs_claim_waiters, WAIT_REASON_FS_CLAIM);
 	wait_queue_init(&fs_allocator_waiters, WAIT_REASON_FS_CLAIM);
+	wait_queue_init(&fs_namespace_waiters, WAIT_REASON_FS_CLAIM);
+	wait_queue_init(&fs_dentry_waiters, WAIT_REASON_FS_CLAIM);
+	wait_queue_init(&inode_mapping_waiters, WAIT_REASON_FS_CLAIM);
 	if (readsb(dev, &sb) < 0) {
 		(void)fs_io_fail(FS_FAILURE_MOUNT_UNAVAILABLE);
 		return;
@@ -2012,23 +2387,71 @@ void fsinit()
 	    fs_reap_boot_workflow_objects(dev) < 0 ||
 	    fs_storage_rebuild(dev, 1) < 0)
 		(void)fs_io_fail(FS_FAILURE_MOUNT_UNAVAILABLE);
+	if (fs_io_health == FS_IO_HEALTHY) {
+		struct inode *root;
+		int status;
+		int index_result = -1;
+
+		root = root_dir_status(&status);
+		if (root != 0 && status == FS_LOOKUP_FOUND &&
+		    fs_dentry_gate_lock() == 0) {
+			index_result = fs_directory_index_rebuild(root);
+			fs_dentry_gate_unlock();
+		}
+		if (root == 0 || status != FS_LOOKUP_FOUND || index_result < 0)
+			(void)fs_io_fail(FS_FAILURE_MOUNT_UNAVAILABLE);
+		if (root != 0)
+			iput(root);
+	}
 }
 
 // Zero a block.
 static int bzero(int dev, int bno)
 {
-	struct buf *bp;
+	struct bio_overwrite_receipt overwrite = BIO_OVERWRITE_RECEIPT_INIT;
+	struct buf *bp = 0;
 	int result;
 
-	result = fs_read_block(dev, bno, &bp);
+	result = bprepare_overwrite(dev, bno, &overwrite);
+	if (result == BIO_OVERWRITE_FALLBACK) {
+		result = fs_read_block(dev, bno, &bp);
+	} else if (result == VIRTIO_DISK_OK) {
+		bp = overwrite.buf;
+	} else {
+		bcancel_overwrite(&overwrite);
+		return fs_io_fail(result == VIRTIO_DISK_ERR_BUSY ?
+				      FS_FAILURE_SCHEDULING_UNAVAILABLE :
+				      FS_FAILURE_TRANSIENT_READ);
+	}
 	if (result < 0)
 		return result;
 	result = bclaim(bp);
 	if (result < 0) {
-		brelse(bp);
+		if (overwrite.active)
+			bcancel_overwrite(&overwrite);
+		else
+			brelse(bp);
 		return result;
 	}
 	memset(bp->data, 0, BSIZE);
+	if (overwrite.active) {
+		result = bpublish_overwrite(&overwrite, BSIZE, &bp);
+		if (result == VIRTIO_DISK_ERR_BUSY) {
+			bcancel_overwrite(&overwrite);
+			result = fs_read_block(dev, bno, &bp);
+			if (result < 0)
+				return result;
+			result = bclaim(bp);
+			if (result < 0) {
+				brelse(bp);
+				return result;
+			}
+			memset(bp->data, 0, BSIZE);
+		} else if (result < 0) {
+			bcancel_overwrite(&overwrite);
+			return fs_io_fail(FS_FAILURE_TRANSIENT_READ);
+		}
+	}
 	result = fs_write_data_block(bp);
 	if (result < 0) {
 		brelse(bp);
@@ -2114,7 +2537,8 @@ static int fs_bitmap_write_forward(int dev, uint block, int allocated)
 // Blocks.
 
 // Allocate a zeroed disk block through the recoverable qmap state machine.
-static uint balloc(uint dev, const struct fs_storage_charge *charge, int *error)
+static uint balloc_one(uint dev, const struct fs_storage_charge *charge,
+		       int *error)
 {
 	uint b, bi, block = 0, first, limit, range_start, range_end;
 	uint cursor;
@@ -2128,7 +2552,8 @@ static uint balloc(uint dev, const struct fs_storage_charge *charge, int *error)
 
 	if (error)
 		*error = -1;
-	if (charge == 0 || fs_allocator_gate_lock(0) < 0)
+	if (charge == 0 || fs_epoch_preflight(3) < 0 ||
+	    fs_allocator_gate_lock(0) < 0)
 		return 0;
 	if (fs_storage_reserve(charge, 0) < 0)
 		goto out;
@@ -2153,6 +2578,9 @@ static uint balloc(uint dev, const struct fs_storage_charge *charge, int *error)
 			for (bi = first; bi < limit; bi++) {
 				m = 1 << (bi % 8);
 				if ((bp->data[bi / 8] & m) == 0) {
+					if (fs_block_candidate_is_reserved(b + bi) &&
+					    fs_block_candidate_reclaim(b + bi) < 0)
+						panic("filesystem candidate index");
 					block = b + bi;
 					break;
 				}
@@ -2246,6 +2674,266 @@ out:
 	return 0;
 }
 
+static struct fs_block_magazine *
+fs_block_magazine_find(uint owner, int create)
+{
+	struct fs_block_magazine *free_slot = 0;
+
+	for (uint i = 0; i < FS_BLOCK_MAGAZINE_SLOTS; i++) {
+		struct fs_block_magazine *magazine = &fs_block_magazines[i];
+
+		if (magazine->owner == owner)
+			return magazine;
+		if (magazine->owner == FS_OWNER_NONE && free_slot == 0)
+			free_slot = magazine;
+	}
+	if (!create || free_slot == 0)
+		return 0;
+	free_slot->owner = owner;
+	return free_slot;
+}
+
+static int fs_block_candidate_is_reserved(uint block)
+{
+	if (block >= FSSIZE)
+		return 1;
+	return (fs_block_candidate_reserved[block / 8] &
+		(1U << (block % 8))) != 0;
+}
+
+static void fs_block_candidate_set(uint block)
+{
+	if (block < sb.datastart || block >= sb.size || block >= FSSIZE ||
+	    fs_block_candidate_is_reserved(block))
+		panic("filesystem block candidate reserve");
+	fs_block_candidate_reserved[block / 8] |= 1U << (block % 8);
+}
+
+static void fs_block_candidate_clear(uint block)
+{
+	if (block < sb.datastart || block >= sb.size || block >= FSSIZE ||
+	    !fs_block_candidate_is_reserved(block))
+		panic("filesystem block candidate release");
+	fs_block_candidate_reserved[block / 8] &= ~(1U << (block % 8));
+}
+
+static int fs_block_candidate_reclaim(uint block)
+{
+	if (!fs_block_candidate_is_reserved(block))
+		return 0;
+	for (uint i = 0; i < FS_BLOCK_MAGAZINE_SLOTS; i++) {
+		struct fs_block_magazine *magazine = &fs_block_magazines[i];
+
+		for (uint j = 0; j < magazine->count; j++) {
+			if (magazine->blocks[j] != block)
+				continue;
+			magazine->blocks[j] =
+				magazine->blocks[--magazine->count];
+			fs_block_candidate_clear(block);
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static int fs_block_candidate_transfer(uint owner)
+{
+	struct fs_block_magazine *target =
+		fs_block_magazine_find(owner, 0);
+
+	if (target == 0 || target->count != 0)
+		return -1;
+	for (uint i = 0; i < FS_BLOCK_MAGAZINE_SLOTS; i++) {
+		struct fs_block_magazine *donor = &fs_block_magazines[i];
+
+		if (donor == target || donor->count == 0)
+			continue;
+		target->blocks[target->count++] =
+			donor->blocks[--donor->count];
+		return 0;
+	}
+	return -1;
+}
+
+static int fs_block_candidate_refill(int dev, uint owner)
+{
+	struct fs_block_magazine *magazine;
+	struct bio_checkpoint_result checkpoint;
+	struct buf *bp;
+	uint cursor;
+	uint range_end;
+	uint range_start;
+	int pass;
+	int result = -1;
+
+	magazine = fs_block_magazine_find(owner, 1);
+	if (magazine == 0 || magazine->count != 0)
+		return -1;
+	cursor = fs_storage.block_alloc_cursor;
+	if (cursor < sb.datastart || cursor >= sb.size)
+		cursor = sb.datastart;
+	for (pass = 0; pass < 2 && magazine->count == 0; pass++) {
+		range_start = pass == 0 ? cursor : sb.datastart;
+		range_end = pass == 0 ? sb.size : cursor;
+		for (uint base = range_start - range_start % BPB;
+		     base < range_end &&
+		     magazine->count < FS_BLOCK_MAGAZINE_CAP; base += BPB) {
+			uint first = range_start > base ? range_start - base : 0;
+			uint limit = MIN(BPB, range_end - base);
+
+			if (base + first < sb.datastart)
+				first = sb.datastart - base;
+			result = fs_read_block(dev, BBLOCK(base, sb), &bp);
+			if (result < 0)
+				goto out;
+			for (uint bit = first;
+			     bit < limit &&
+			     magazine->count < FS_BLOCK_MAGAZINE_CAP; bit++) {
+				uint block = base + bit;
+
+				if ((bp->data[bit / 8] &
+				     (1U << (bit % 8))) != 0 ||
+				    fs_block_candidate_is_reserved(block))
+					continue;
+				fs_block_candidate_set(block);
+				magazine->blocks[magazine->count++] = block;
+			}
+			brelse(bp);
+			fs_storage.block_alloc_cursor = base + limit;
+			if (fs_storage.block_alloc_cursor >= sb.size)
+				fs_storage.block_alloc_cursor = sb.datastart;
+			checkpoint = bio_request_checkpoint();
+			if (bio_checkpoint_should_stop(checkpoint)) {
+				result = checkpoint.state ==
+					BIO_CHECKPOINT_DEFERRED ?
+						VIRTIO_DISK_ERR_BUSY : -1;
+				goto out;
+			}
+		}
+	}
+out:
+	if (magazine->count != 0)
+		return 0;
+	if (result != VIRTIO_DISK_ERR_BUSY &&
+	    fs_block_candidate_transfer(owner) == 0)
+		return 0;
+	magazine->owner = FS_OWNER_NONE;
+	return result;
+}
+
+static uint fs_block_candidate_take(int dev, uint owner, int *result)
+{
+	struct fs_block_magazine *magazine =
+		fs_block_magazine_find(owner, 0);
+	int refill_result;
+
+	if (magazine == 0 || magazine->count == 0) {
+		refill_result = fs_block_candidate_refill(dev, owner);
+		if (refill_result >= 0)
+			goto ready;
+		if (result != 0)
+			*result = refill_result;
+		return 0;
+	}
+ready:
+	magazine = fs_block_magazine_find(owner, 0);
+	if (magazine == 0 || magazine->count == 0)
+		panic("filesystem candidate cache empty");
+	if (result != 0)
+		*result = 0;
+	return magazine->blocks[--magazine->count];
+}
+
+static uint balloc_epoch(int dev, const struct fs_storage_charge *charge,
+			 int *error)
+{
+	uint block = 0;
+	uint qstate = FS_OWNER_NONE;
+	int allocated = 0;
+	int epoch_staged = 0;
+	int mapping_staged = 0;
+	int quota_reserved = 0;
+	int result = -1;
+
+	if (error != 0)
+		*error = -1;
+	if (charge == 0 || fs_epoch_preflight(3) < 0 ||
+	    fs_allocator_gate_lock(0) < 0)
+		return 0;
+	block = fs_block_candidate_take(dev, charge->owner, &result);
+	if (block == 0)
+		goto out;
+	result = fs_storage_reserve(charge, 0);
+	if (result < 0)
+		goto out;
+	quota_reserved = 1;
+	result = fs_scrub_block_allocated(dev, block, &allocated);
+	if (result < 0)
+		goto out;
+	result = fs_qmap_read(dev, block, &qstate);
+	if (result < 0)
+		goto out;
+	if (allocated || qstate != FS_OWNER_NONE) {
+		result = fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		goto out;
+	}
+	result = bzero(dev, block);
+	if (result < 0)
+		goto out;
+	epoch_staged = 1;
+	result = fs_qmap_write(dev, block, charge->owner);
+	if (result < 0)
+		goto out;
+	mapping_staged = 1;
+	result = fs_bitmap_write(dev, block, 1);
+	if (result < 0) {
+		result = fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		goto out;
+	}
+	quota_reserved = 0;
+	fs_block_candidate_clear(block);
+	if (error != 0)
+		*error = 0;
+	fs_allocator_gate_unlock();
+	return block;
+
+out:
+	if (epoch_staged) {
+		int commit_result = fs_epoch_commit();
+
+		if (commit_result < 0 || mapping_staged) {
+			/*
+			 * A published allocation-map image owns its quota even when
+			 * the remaining map update fails.  Recovery will reclaim the
+			 * unreachable block; refunding here would let another caller
+			 * spend capacity whose durable state is still ambiguous.
+			 */
+			quota_reserved = 0;
+			result = fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		}
+	}
+	if (block != 0 && fs_block_candidate_is_reserved(block))
+		fs_block_candidate_clear(block);
+	if (quota_reserved && fs_storage.ready)
+		fs_storage_release(charge->owner, 0);
+	if (error != 0)
+		*error = result;
+	fs_allocator_gate_unlock();
+	return 0;
+}
+
+static uint balloc(uint dev, const struct fs_storage_charge *charge, int *error)
+{
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	return balloc_one(dev, charge, error);
+#else
+	if (!fs_epoch_runtime_enabled() || fs_epoch_bypass_active())
+		return balloc_one(dev, charge, error);
+	return balloc_epoch(dev, charge, error);
+#endif
+}
+
 // Free is idempotent and retains its owner in qmap until refund is safe.
 static int bfree(int dev, uint block)
 {
@@ -2254,12 +2942,15 @@ static int bfree(int dev, uint block)
 	uint qstate;
 	int allocated;
 	int attempts = 0;
-	int result;
+	int bypass_entered = 0;
+	int result = -1;
 
 	if (block < sb.datastart || block >= sb.size)
 		return fs_io_fail(FS_FAILURE_OPERATION);
-	if (fs_allocator_gate_lock(1) < 0)
+	if (fs_epoch_destructive_begin(&bypass_entered) < 0)
 		return -1;
+	if (fs_allocator_gate_lock(1) < 0)
+		goto out_bypass;
 
 	for (;;) {
 		result = fs_scrub_block_allocated(dev, block, &allocated);
@@ -2345,7 +3036,641 @@ static int bfree(int dev, uint block)
 	result = 0;
 out:
 	fs_allocator_gate_unlock();
+out_bypass:
+	fs_epoch_destructive_end(bypass_entered);
 	return result;
+}
+
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
+
+_Static_assert(FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS + 2U <=
+		       BIO_CACHE_CLEANUP_CAP,
+	       "deferred reclaim must leave cleanup cache working slots");
+_Static_assert(FS_DEFERRED_RECLAIM_SYSTEM_RESERVE <
+		       FS_DEFERRED_RECLAIM_CAP,
+	       "deferred reclaim system reserve must be usable");
+
+static uint
+fs_deferred_reclaim_owner_count(uint sponsor_owner)
+{
+	uint count = 0;
+
+	for (uint slot = 0; slot < FS_DEFERRED_RECLAIM_CAP; slot++) {
+		struct fs_deferred_reclaim_entry *entry =
+			&fs_deferred_reclaims[slot];
+
+		if (entry->reserved && entry->sponsor_owner == sponsor_owner)
+			count++;
+	}
+	return count;
+}
+
+static int
+fs_deferred_reclaim_capacity_available(uint sponsor_owner)
+{
+	if (fs_deferred_reclaim_count >= FS_DEFERRED_RECLAIM_CAP)
+		return 0;
+	if (sponsor_owner != FS_OWNER_SYSTEM &&
+	    fs_deferred_reclaim_count >=
+		    FS_DEFERRED_RECLAIM_CAP -
+			    FS_DEFERRED_RECLAIM_SYSTEM_RESERVE)
+		return 0;
+	return fs_deferred_reclaim_owner_count(sponsor_owner) <
+	       FS_DEFERRED_RECLAIM_OWNER_CAP;
+}
+
+static int
+fs_deferred_reclaim_reserve(uint sponsor_owner,
+			    struct inode_reclaim *reclaim)
+{
+	uint sponsor_class;
+	uint slot;
+
+	if (reclaim == 0 || reclaim->deferred_reserved ||
+	    sponsor_owner == FS_OWNER_NONE || !fs_epoch_request_held())
+		return -1;
+	while (!fs_deferred_reclaim_capacity_available(sponsor_owner)) {
+		if (fs_epoch_dirty() && fs_epoch_commit() < 0)
+			return -1;
+		if (fs_deferred_reclaim_maintain_owner(
+			    FS_OWNER_NONE, 0) <= 0)
+			return -1;
+	}
+	if (bio_deferred_owner_retain(sponsor_owner, &sponsor_class) < 0 &&
+	    bio_deferred_owner_retain_cleanup(sponsor_owner,
+					      &sponsor_class) < 0)
+		return -1;
+	for (slot = 0; slot < FS_DEFERRED_RECLAIM_CAP; slot++)
+		if (!fs_deferred_reclaims[slot].reserved)
+			break;
+	if (slot == FS_DEFERRED_RECLAIM_CAP)
+		panic("deferred reclaim free slot");
+	fs_deferred_reclaim_count++;
+	memset(&fs_deferred_reclaims[slot], 0,
+	       sizeof(fs_deferred_reclaims[slot]));
+	fs_deferred_reclaims[slot].reserved = 1;
+	fs_deferred_reclaims[slot].sponsor_owner = sponsor_owner;
+	fs_deferred_reclaims[slot].sponsor_class = sponsor_class;
+	reclaim->deferred_slot = slot;
+	reclaim->deferred_reserved = 1;
+	return 0;
+}
+
+static void
+fs_deferred_reclaim_cancel(struct inode_reclaim *reclaim)
+{
+	struct fs_deferred_reclaim_entry *entry;
+	uint sponsor_owner;
+
+	if (reclaim == 0 || !reclaim->deferred_reserved)
+		return;
+	if (fs_deferred_reclaim_count == 0 ||
+	    reclaim->deferred_slot >= FS_DEFERRED_RECLAIM_CAP)
+		panic("deferred reclaim cancel underflow");
+	entry = &fs_deferred_reclaims[reclaim->deferred_slot];
+	if (!entry->reserved || entry->published)
+		panic("deferred reclaim published cancel");
+	sponsor_owner = entry->sponsor_owner;
+	memset(entry, 0, sizeof(*entry));
+	fs_deferred_reclaim_count--;
+	reclaim->deferred_reserved = 0;
+	reclaim->deferred_slot = 0;
+	bio_deferred_owner_release(sponsor_owner);
+}
+
+static int
+fs_deferred_reclaim_publish(struct inode_reclaim *reclaim)
+{
+	struct fs_deferred_reclaim_entry *entry;
+	uint64 generation;
+
+	if (reclaim == 0 || !reclaim->deferred_reserved ||
+	    reclaim->deferred_slot >= FS_DEFERRED_RECLAIM_CAP)
+		return -1;
+	entry = &fs_deferred_reclaims[reclaim->deferred_slot];
+	if (!entry->reserved || entry->published ||
+	    fs_epoch_generation_fence(entry->sponsor_owner,
+				      &generation) < 0)
+		return -1;
+	entry->reclaim = *reclaim;
+	entry->reclaim.deferred_reserved = 0;
+	entry->reclaim.deferred_slot = 0;
+	entry->fence_generation = generation;
+	entry->published = 1;
+	memset(reclaim, 0, sizeof(*reclaim));
+	agent_background_request();
+	return 0;
+}
+
+static int
+fs_deferred_reclaim_blocks_done(const struct inode_reclaim *reclaim)
+{
+	if (reclaim->mode == INODE_RECLAIM_DIRECT)
+		return reclaim->direct_cursor >= NDIRECT &&
+		       reclaim->indirect == 0;
+	if (reclaim->mode == INODE_RECLAIM_LIST)
+		return reclaim->block_cursor >= reclaim->block_count &&
+		       reclaim->indirect == 0;
+	return reclaim->mode == INODE_RECLAIM_NONE;
+}
+
+static int
+fs_deferred_reclaim_next(struct inode_reclaim *reclaim,
+			 struct fs_deferred_reclaim_action *action)
+{
+	memset(action, 0, sizeof(*action));
+	if (reclaim->mode == INODE_RECLAIM_DIRECT) {
+		if (reclaim->direct_cursor < NDIRECT) {
+			uint cursor = reclaim->direct_cursor;
+
+			while (cursor < NDIRECT &&
+			       reclaim->direct[cursor] == 0)
+				cursor++;
+			action->block = cursor < NDIRECT ?
+				reclaim->direct[cursor] : 0;
+			action->advance = 1;
+			action->cursor = cursor < NDIRECT ? cursor + 1 :
+							      NDIRECT;
+			return 1;
+		}
+		if (reclaim->indirect != 0 &&
+		    reclaim->indirect_cursor < NINDIRECT) {
+			struct buf *bp;
+
+			if (fs_read_block(reclaim->dev, reclaim->indirect,
+					  &bp) < 0)
+				return -1;
+			uint cursor = reclaim->indirect_cursor;
+			uint *blocks = (uint *)bp->data;
+
+			while (cursor < NINDIRECT && blocks[cursor] == 0)
+				cursor++;
+			action->block = cursor < NINDIRECT ? blocks[cursor] : 0;
+			brelse(bp);
+			action->advance = 2;
+			action->cursor = cursor < NINDIRECT ? cursor + 1 :
+								NINDIRECT;
+			return 1;
+		}
+		if (reclaim->indirect != 0) {
+			action->block = reclaim->indirect;
+			action->advance = 3;
+			return 1;
+		}
+	} else if (reclaim->mode == INODE_RECLAIM_LIST) {
+		if (reclaim->block_cursor < reclaim->block_count) {
+			uint cursor = reclaim->block_cursor;
+
+			while (cursor < reclaim->block_count &&
+			       reclaim->block_list[cursor] == 0)
+				cursor++;
+			action->block = cursor < reclaim->block_count ?
+				reclaim->block_list[cursor] : 0;
+			action->advance = 4;
+			action->cursor = cursor < reclaim->block_count ?
+					 cursor + 1 : reclaim->block_count;
+			return 1;
+		}
+		if (reclaim->indirect != 0) {
+			action->block = reclaim->indirect;
+			action->advance = 3;
+			return 1;
+		}
+	} else if (reclaim->mode != INODE_RECLAIM_NONE) {
+		panic("deferred reclaim mode");
+	}
+	if (reclaim->release_inode) {
+		action->inode = reclaim->inode;
+		action->advance = 5;
+		return 1;
+	}
+	return 0;
+}
+
+static void
+fs_deferred_reclaim_advance(
+	struct inode_reclaim *reclaim,
+	const struct fs_deferred_reclaim_action *action)
+{
+	if (action->advance == 1) {
+		if (action->cursor <= reclaim->direct_cursor ||
+		    action->cursor > NDIRECT)
+			panic("deferred direct reclaim cursor");
+		reclaim->direct_cursor = action->cursor;
+	} else if (action->advance == 2) {
+		if (action->cursor <= reclaim->indirect_cursor ||
+		    action->cursor > NINDIRECT)
+			panic("deferred indirect reclaim cursor");
+		reclaim->indirect_cursor = action->cursor;
+	} else if (action->advance == 3)
+		reclaim->indirect = 0;
+	else if (action->advance == 4) {
+		if (action->cursor <= reclaim->block_cursor ||
+		    action->cursor > reclaim->block_count)
+			panic("deferred list reclaim cursor");
+		reclaim->block_cursor = action->cursor;
+	} else if (action->advance == 5)
+		reclaim->release_inode = 0;
+	else
+		panic("deferred reclaim advance");
+}
+
+static int
+fs_deferred_reclaim_unique_add(uint blocks[], uint *count, uint block)
+{
+	for (uint i = 0; i < *count; i++)
+		if (blocks[i] == block)
+			return 0;
+	if (*count >= FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS)
+		return -1;
+	blocks[(*count)++] = block;
+	return 0;
+}
+
+static int
+fs_deferred_reclaim_action_fits(
+	const struct fs_deferred_reclaim_action *action,
+	uint unique[], uint *unique_count)
+{
+	uint trial[FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS];
+	uint count = *unique_count;
+
+	memmove(trial, unique, sizeof(trial));
+	if (action->inode != 0) {
+		if (action->inode >= sb.ninodes ||
+		    fs_deferred_reclaim_unique_add(
+			    trial, &count, IBLOCK(action->inode, sb)) < 0)
+			return 0;
+	} else if (action->block != 0) {
+		if (action->block < sb.datastart || action->block >= sb.size ||
+		    fs_deferred_reclaim_unique_add(
+			    trial, &count, BBLOCK(action->block, sb)) < 0 ||
+		    fs_deferred_reclaim_unique_add(
+			    trial, &count, QBLOCK(action->block, sb)) < 0)
+			return 0;
+	}
+	memmove(unique, trial, sizeof(trial));
+	*unique_count = count;
+	return 1;
+}
+
+static int
+fs_deferred_reclaim_stage_block(struct inode_reclaim *reclaim, uint block)
+{
+	uint qstate;
+	uint owner = FS_OWNER_NONE;
+	int allocated;
+	int result;
+
+	if (block == 0)
+		return 0;
+	if (block < sb.datastart || block >= sb.size ||
+	    fs_epoch_preflight(2) < 0 ||
+	    fs_scrub_block_allocated(reclaim->dev, block, &allocated) < 0 ||
+	    fs_qmap_read(reclaim->dev, block, &qstate) < 0)
+		return -1;
+	if (qstate != FS_OWNER_NONE) {
+		if (fs_storage_owner_valid(qstate))
+			owner = qstate;
+		else if (fs_qmap_transition_owner(
+				 qstate, FS_QMAP_ALLOCATING_FLAG, &owner) < 0 &&
+			 fs_qmap_transition_owner(
+				 qstate, FS_QMAP_FREEING_FLAG, &owner) < 0)
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		if (owner != reclaim->storage_owner)
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		result = fs_qmap_write(reclaim->dev, block, FS_OWNER_NONE);
+		if (result < 0)
+			return result;
+	}
+	if (allocated) {
+		result = fs_bitmap_write(reclaim->dev, block, 0);
+		if (result < 0)
+			return result;
+	}
+	return 0;
+}
+
+static int
+fs_deferred_reclaim_stage_inode(struct inode_reclaim *reclaim)
+{
+	struct buf *bp;
+	struct dinode *dip;
+	int result;
+
+	if (!reclaim->release_inode || reclaim->inode == 0 ||
+	    reclaim->inode >= sb.ninodes || fs_epoch_preflight(1) < 0)
+		return -1;
+	result = fs_read_block(reclaim->dev,
+			       IBLOCK(reclaim->inode, sb), &bp);
+	if (result < 0)
+		return result;
+	dip = (struct dinode *)bp->data + reclaim->inode % IPB;
+	if (dip->vfs_incarnation != reclaim->incarnation) {
+		brelse(bp);
+		return fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+	}
+	if (dip->type == 0 && dip->fs_owner_domain == FS_OWNER_NONE &&
+	    dip->fs_owner_version == 0) {
+		brelse(bp);
+		return 0;
+	}
+	if (dip->type != T_FILE || dip->size != 0 ||
+	    dip->fs_owner_domain != reclaim->storage_owner) {
+		brelse(bp);
+		return fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+	}
+	for (uint i = 0; i < NDIRECT + 1; i++) {
+		if (dip->addrs[i] != 0) {
+			brelse(bp);
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		}
+	}
+	fs_scrub_retire_dinode(dip, reclaim->inode);
+	result = fs_write_inode_block(bp);
+	brelse(bp);
+	return result;
+}
+
+static int
+fs_deferred_reclaim_entry_complete(
+	const struct fs_deferred_reclaim_entry *entry)
+{
+	return entry->published &&
+	       fs_deferred_reclaim_blocks_done(&entry->reclaim) &&
+	       !entry->reclaim.release_inode;
+}
+
+static void
+fs_deferred_reclaim_pop_complete(void)
+{
+	for (uint slot = 0; slot < FS_DEFERRED_RECLAIM_CAP; slot++) {
+		struct fs_deferred_reclaim_entry *entry =
+			&fs_deferred_reclaims[slot];
+		uint sponsor_owner;
+
+		if (!entry->reserved ||
+		    !fs_deferred_reclaim_entry_complete(entry))
+			continue;
+		if (fs_deferred_reclaim_count == 0)
+			panic("deferred reclaim pop underflow");
+		sponsor_owner = entry->sponsor_owner;
+		itruncate_reclaim_finish(&entry->reclaim);
+		memset(entry, 0, sizeof(*entry));
+		fs_deferred_reclaim_count--;
+		bio_deferred_owner_release(sponsor_owner);
+	}
+}
+
+int
+fs_deferred_reclaim_pending(void)
+{
+	return fs_deferred_reclaim_count != 0;
+}
+
+int
+fs_deferred_reclaim_owner_pending(uint owner)
+{
+	return owner != FS_OWNER_NONE &&
+	       fs_deferred_reclaim_owner_count(owner) != 0;
+}
+
+static int
+fs_deferred_reclaim_maintain_owner(uint owner_filter, int filtered)
+{
+	uint unique_count = 0;
+	uint plan_count = 0;
+	uint sponsor_owner;
+	uint sponsor_class;
+	uint selected = FS_DEFERRED_RECLAIM_CAP;
+	int result = -1;
+
+	if (!fs_epoch_request_held())
+		return -1;
+	fs_deferred_reclaim_pop_complete();
+	if (fs_deferred_reclaim_count == 0)
+		return 0;
+	for (uint scanned = 0; scanned < FS_DEFERRED_RECLAIM_CAP;
+	     scanned++) {
+		uint slot = (fs_deferred_reclaim_cursor + scanned) %
+			    FS_DEFERRED_RECLAIM_CAP;
+		struct fs_deferred_reclaim_entry *entry =
+			&fs_deferred_reclaims[slot];
+
+		if (!entry->reserved || !entry->published ||
+		    (filtered && entry->sponsor_owner != owner_filter) ||
+		    !fs_epoch_generation_committed(entry->fence_generation))
+			continue;
+		selected = slot;
+		break;
+	}
+	if (selected == FS_DEFERRED_RECLAIM_CAP) {
+		agent_background_request();
+		return 0;
+	}
+	fs_deferred_reclaim_cursor =
+		(selected + 1) % FS_DEFERRED_RECLAIM_CAP;
+	sponsor_owner = fs_deferred_reclaims[selected].sponsor_owner;
+	sponsor_class = fs_deferred_reclaims[selected].sponsor_class;
+	if (fs_epoch_dirty() && fs_epoch_commit() < 0)
+		return -1;
+	if (bio_deferred_sponsor_begin(sponsor_owner, sponsor_class, 0) < 0)
+		return -1;
+	memset(fs_deferred_reclaim_unique, 0,
+	       sizeof(fs_deferred_reclaim_unique));
+
+	for (uint scanned = 0;
+	     scanned < FS_DEFERRED_RECLAIM_CAP &&
+	     plan_count < FS_DEFERRED_RECLAIM_BATCH_UNITS; scanned++) {
+		uint slot = (selected + scanned) % FS_DEFERRED_RECLAIM_CAP;
+		struct fs_deferred_reclaim_entry *entry =
+			&fs_deferred_reclaims[slot];
+
+		if (!entry->reserved || !entry->published ||
+		    entry->sponsor_owner != sponsor_owner ||
+		    !fs_epoch_generation_committed(entry->fence_generation))
+			continue;
+		fs_deferred_reclaim_shadow = entry->reclaim;
+		for (;;) {
+			struct fs_deferred_reclaim_action action;
+			int next = fs_deferred_reclaim_next(
+				&fs_deferred_reclaim_shadow, &action);
+
+			if (next < 0)
+				goto out;
+			if (next == 0)
+				break;
+			if (!fs_deferred_reclaim_action_fits(
+				    &action, fs_deferred_reclaim_unique,
+				    &unique_count)) {
+				if (plan_count != 0)
+					goto planned;
+				result = fs_io_fail(
+					FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+				goto out;
+			}
+			for (uint i = 0; i < plan_count; i++)
+				if (action.block != 0 &&
+				    fs_deferred_reclaim_plan[i].block ==
+					    action.block) {
+					result = fs_io_fail(
+						FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+					goto out;
+				}
+			action.slot = slot;
+			fs_deferred_reclaim_plan[plan_count++] = action;
+			fs_deferred_reclaim_advance(
+				&fs_deferred_reclaim_shadow, &action);
+			if (plan_count == FS_DEFERRED_RECLAIM_BATCH_UNITS)
+				goto planned;
+		}
+	}
+planned:
+	if (plan_count == 0)
+		goto out;
+	if (fs_allocator_gate_lock(1) < 0)
+		goto out;
+	for (uint i = 0; i < plan_count; i++) {
+		struct fs_deferred_reclaim_action *action =
+			&fs_deferred_reclaim_plan[i];
+		struct inode_reclaim *reclaim =
+			&fs_deferred_reclaims[action->slot].reclaim;
+
+		result = action->inode != 0 ?
+			fs_deferred_reclaim_stage_inode(reclaim) :
+			fs_deferred_reclaim_stage_block(reclaim,
+							 action->block);
+		if (result < 0)
+			goto out_unlock;
+	}
+	result = fs_epoch_commit();
+	if (result < 0)
+		goto out_unlock;
+	for (uint i = 0; i < plan_count; i++) {
+		struct fs_deferred_reclaim_action *action =
+			&fs_deferred_reclaim_plan[i];
+		struct inode_reclaim *reclaim =
+			&fs_deferred_reclaims[action->slot].reclaim;
+
+		fs_deferred_reclaim_advance(reclaim, action);
+		if (action->block != 0)
+			fs_storage_release_many_accounted(
+				reclaim->storage_owner,
+				reclaim->storage_account, 0, 1);
+		else if (action->inode != 0)
+			fs_storage_release_many_accounted(
+				reclaim->storage_owner,
+				reclaim->storage_account, 1, 1);
+	}
+	result = 1;
+out_unlock:
+	fs_allocator_gate_unlock();
+out:
+	bio_deferred_sponsor_end();
+	if (result > 0)
+		fs_deferred_reclaim_pop_complete();
+	if (fs_deferred_reclaim_count != 0)
+		agent_background_request();
+	return result;
+}
+
+int
+fs_deferred_reclaim_maintain(void)
+{
+	return fs_deferred_reclaim_maintain_owner(FS_OWNER_NONE, 0) < 0 ?
+		-1 : 0;
+}
+
+static int
+fs_deferred_reclaim_drain_owner(uint owner)
+{
+	if (owner == FS_OWNER_NONE || !fs_epoch_request_held())
+		return -1;
+	while (fs_deferred_reclaim_owner_count(owner) != 0) {
+		int result;
+
+		if (fs_epoch_dirty() && fs_epoch_commit() < 0)
+			return -1;
+		result = fs_deferred_reclaim_maintain_owner(owner, 1);
+		if (result <= 0)
+			return -1;
+	}
+	return 0;
+}
+
+int
+fs_deferred_reclaim_drain_current(void)
+{
+	return fs_deferred_reclaim_drain_owner(bio_current_owner());
+}
+
+int
+fs_deferred_reclaim_drain_all(void)
+{
+	if (!fs_epoch_request_held() || bio_current_owner() != FS_OWNER_SYSTEM)
+		return -1;
+	while (fs_deferred_reclaim_count != 0) {
+		int result;
+
+		if (fs_epoch_dirty() && fs_epoch_commit() < 0)
+			return -1;
+		result = fs_deferred_reclaim_maintain_owner(FS_OWNER_NONE, 0);
+		if (result <= 0)
+			return -1;
+	}
+	return 0;
+}
+
+#else
+
+int fs_deferred_reclaim_pending(void)
+{
+	return 0;
+}
+
+int fs_deferred_reclaim_owner_pending(uint owner)
+{
+	(void)owner;
+	return 0;
+}
+
+int fs_deferred_reclaim_maintain(void)
+{
+	return 0;
+}
+
+int fs_deferred_reclaim_drain_current(void)
+{
+	return 0;
+}
+
+int fs_deferred_reclaim_drain_all(void)
+{
+	return 0;
+}
+
+#endif
+
+static int fs_block_candidate_drain(uint owner)
+{
+	struct fs_block_magazine *magazine;
+
+	if (fs_allocator_gate_lock(1) < 0)
+		return -1;
+	magazine = fs_block_magazine_find(owner, 0);
+	if (magazine != 0) {
+		while (magazine->count != 0) {
+			uint block = magazine->blocks[--magazine->count];
+
+			fs_block_candidate_clear(block);
+		}
+		magazine->owner = FS_OWNER_NONE;
+	}
+	fs_allocator_gate_unlock();
+	return 0;
 }
 
 // The inode table is capacity-sized, so key lookup must not scan every slot.
@@ -2376,6 +3701,208 @@ static int inode_cache_index(struct inode *ip)
 	return (int)(ip - &itable.inode[0]);
 }
 
+static void
+inode_mapping_token(void **token, uint64 *generation)
+{
+	struct thread *self = curr_thread();
+
+	if (self != 0 && self->identity_generation != 0) {
+		*token = self;
+		*generation = self->identity_generation;
+	} else {
+		*token = &inode_mapping_boot_token;
+		*generation = 0;
+	}
+}
+
+static int
+inode_mapping_writer_owned_locked(struct inode_mapping_guard *guard,
+				   void *token, uint64 generation)
+{
+	return guard->writer == token &&
+	       guard->writer_generation == generation;
+}
+
+static int
+inode_mapping_read_lock(struct inode *ip)
+{
+	struct inode_mapping_guard *guard;
+	void *token;
+	uint64 generation;
+	int queued = 0;
+	int enabled;
+
+	if (ip == 0)
+		return -1;
+	guard = &inode_mapping_guards[inode_cache_index(ip)];
+	inode_mapping_token(&token, &generation);
+	enabled = intr_save();
+	for (;;) {
+		if (guard->writer == 0 && guard->writer_waiters == 0) {
+			if (guard->readers == (uint)-1)
+				panic("inode mapping reader overflow");
+			guard->readers++;
+			if (queued) {
+				if (guard->reader_waiters == 0)
+					panic("inode mapping reader waiter underflow");
+				guard->reader_waiters--;
+			}
+			intr_restore(enabled);
+			return 0;
+		}
+		if (inode_mapping_writer_owned_locked(guard, token, generation))
+			panic("inode mapping read recursion");
+		if (!queued) {
+			if (guard->reader_waiters == (uint)-1)
+				panic("inode mapping reader waiter overflow");
+			guard->reader_waiters++;
+			queued = 1;
+		}
+		if (token == &inode_mapping_boot_token ||
+		    wait_queue_sleep_irq(&inode_mapping_waiters) !=
+			    WAIT_QUEUE_OK) {
+			if (guard->reader_waiters == 0)
+				panic("inode mapping reader waiter underflow");
+			guard->reader_waiters--;
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+}
+
+static void
+inode_mapping_read_unlock(struct inode *ip)
+{
+	struct inode_mapping_guard *guard;
+	int enabled;
+
+	if (ip == 0)
+		panic("inode mapping read unlock");
+	guard = &inode_mapping_guards[inode_cache_index(ip)];
+	enabled = intr_save();
+	if (guard->readers == 0)
+		panic("inode mapping reader underflow");
+	guard->readers--;
+	if (guard->readers == 0 && guard->writer_waiters != 0)
+		wait_queue_wake_all(&inode_mapping_waiters);
+	intr_restore(enabled);
+}
+
+static int
+inode_mapping_write_lock(struct inode *ip, int cleanup)
+{
+	struct inode_mapping_guard *guard;
+	void *token;
+	uint64 generation;
+	int queued = 0;
+	int enabled;
+
+	if (ip == 0)
+		return -1;
+	guard = &inode_mapping_guards[inode_cache_index(ip)];
+	inode_mapping_token(&token, &generation);
+	enabled = intr_save();
+	for (;;) {
+		if (inode_mapping_writer_owned_locked(guard, token, generation)) {
+			if (guard->writer_depth == (uint)-1)
+				panic("inode mapping writer overflow");
+			guard->writer_depth++;
+			intr_restore(enabled);
+			return 0;
+		}
+		if (guard->writer == 0 && guard->readers == 0) {
+			guard->writer = token;
+			guard->writer_generation = generation;
+			guard->writer_depth = 1;
+			if (queued) {
+				if (guard->writer_waiters == 0)
+					panic("inode mapping waiter underflow");
+				guard->writer_waiters--;
+			}
+			intr_restore(enabled);
+			return 0;
+		}
+		if (!queued) {
+			if (guard->writer_waiters == (uint)-1)
+				panic("inode mapping waiter overflow");
+			guard->writer_waiters++;
+			queued = 1;
+		}
+		if (token == &inode_mapping_boot_token) {
+			guard->writer_waiters--;
+			intr_restore(enabled);
+			if (cleanup)
+				panic("boot inode mapping contention");
+			return -1;
+		}
+		if (cleanup) {
+			(void)wait_queue_sleep_irq_uninterruptible(
+				&inode_mapping_waiters);
+			continue;
+		}
+		if (wait_queue_sleep_irq(&inode_mapping_waiters) !=
+		    WAIT_QUEUE_OK) {
+			if (guard->writer_waiters == 0)
+				panic("inode mapping waiter underflow");
+			guard->writer_waiters--;
+			wait_queue_wake_all(&inode_mapping_waiters);
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+}
+
+static void
+inode_mapping_write_unlock(struct inode *ip)
+{
+	struct inode_mapping_guard *guard;
+	void *token;
+	uint64 generation;
+	int enabled;
+
+	if (ip == 0)
+		panic("inode mapping write unlock");
+	guard = &inode_mapping_guards[inode_cache_index(ip)];
+	inode_mapping_token(&token, &generation);
+	enabled = intr_save();
+	if (!inode_mapping_writer_owned_locked(guard, token, generation))
+		panic("inode mapping writer owner");
+	if (guard->writer_depth == 0)
+		panic("inode mapping writer underflow");
+	guard->writer_depth--;
+	if (guard->writer_depth != 0) {
+		intr_restore(enabled);
+		return;
+	}
+	guard->writer = 0;
+	guard->writer_generation = 0;
+	if (guard->writer_waiters != 0 || guard->reader_waiters != 0)
+		wait_queue_wake_all(&inode_mapping_waiters);
+	intr_restore(enabled);
+}
+
+static void
+inode_mapping_require(struct inode *ip, int write)
+{
+	struct inode_mapping_guard *guard;
+	void *token;
+	uint64 generation;
+	int enabled;
+	int held;
+
+	guard = &inode_mapping_guards[inode_cache_index(ip)];
+	inode_mapping_token(&token, &generation);
+	enabled = intr_save();
+	held = inode_mapping_writer_owned_locked(guard, token, generation) ||
+	       (!write && guard->readers != 0);
+	intr_restore(enabled);
+	if (!held) {
+		if (write)
+			panic("inode mapping write guard");
+		panic("inode mapping read guard");
+	}
+}
+
 static void inode_cache_init_once(void)
 {
 	if (itable.initialized)
@@ -2402,6 +3929,12 @@ static void inode_cache_drop_ref(struct inode *ip)
 	if (ip->ref != 0)
 		return;
 	index = inode_cache_index(ip);
+	if (inode_mapping_guards[index].readers != 0 ||
+	    inode_mapping_guards[index].reader_waiters != 0 ||
+	    inode_mapping_guards[index].writer != 0 ||
+	    inode_mapping_guards[index].writer_depth != 0 ||
+	    inode_mapping_guards[index].writer_waiters != 0)
+		panic("inode cache mapping guard live");
 	bucket = inode_cache_bucket(ip->dev, ip->inum);
 	link = &itable.hash_head[bucket];
 	while (*link != FS_ICACHE_INDEX_NONE && *link != index) {
@@ -2435,6 +3968,8 @@ struct inode *ialloc(uint dev, short type,
 	if (error)
 		*error = -1;
 	if (charge == 0)
+		return 0;
+	if (fs_epoch_preflight(1) < 0)
 		return 0;
 	if (fs_allocator_gate_lock(0) < 0)
 		return 0;
@@ -2493,7 +4028,7 @@ struct inode *ialloc(uint dev, short type,
 					ip = 0;
 					goto out;
 				}
-				result = fs_write_metadata_block(bp);
+				result = fs_write_inode_block(bp);
 				if (result < 0) {
 					brelse(bp);
 					inode_cache_drop_ref(ip);
@@ -2559,6 +4094,8 @@ int iupdate(struct inode *ip)
 		return fs_io_fail(FS_FAILURE_OPERATION);
 	if (fs_io_health != FS_IO_HEALTHY)
 		return -1;
+	if (fs_epoch_preflight(1) < 0)
+		return -1;
 	result = fs_read_block(ip->dev, IBLOCK(ip->inum, sb), &bp);
 	if (result < 0)
 		return result;
@@ -2586,7 +4123,7 @@ int iupdate(struct inode *ip)
 	dip->vfs_checksum = ip->vfs_checksum;
 	// LAB4: you may need to update link count here
 	memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
-	result = fs_write_metadata_block(bp);
+	result = fs_write_inode_block(bp);
 	brelse(bp);
 	return result;
 }
@@ -2621,6 +4158,12 @@ static struct inode *iget(uint dev, uint inum)
 		return 0;
 	itable.free_head = itable.next[index];
 	ip = &itable.inode[index];
+	if (inode_mapping_guards[index].readers != 0 ||
+	    inode_mapping_guards[index].reader_waiters != 0 ||
+	    inode_mapping_guards[index].writer != 0 ||
+	    inode_mapping_guards[index].writer_depth != 0 ||
+	    inode_mapping_guards[index].writer_waiters != 0)
+		panic("inode cache reused with mapping guard");
 	memset(ip, 0, sizeof(*ip));
 	ip->dev = dev;
 	ip->inum = inum;
@@ -2655,6 +4198,13 @@ int ivalid(struct inode *ip)
 	if (ip == 0)
 		return -1;
 	if (ip->valid == 0) {
+		if (inode_mapping_write_lock(ip, 0) < 0)
+			return -1;
+		/* Another loader may have published the image while we waited. */
+		if (ip->valid != 0) {
+			inode_mapping_write_unlock(ip);
+			return 0;
+		}
 		result = fs_read_block(ip->dev, IBLOCK(ip->inum, sb), &bp);
 		if (result < 0) {
 			uint dev = ip->dev;
@@ -2667,6 +4217,7 @@ int ivalid(struct inode *ip)
 			ip->inum = inum;
 			ip->ref = ref;
 			ip->removed = removed;
+			inode_mapping_write_unlock(ip);
 			return result;
 		}
 		dip = (struct dinode *)bp->data + ip->inum % IPB;
@@ -2695,6 +4246,7 @@ int ivalid(struct inode *ip)
 		memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
 		brelse(bp);
 		ip->valid = 1;
+		inode_mapping_write_unlock(ip);
 	}
 	return 0;
 }
@@ -2704,26 +4256,108 @@ int ivalid(struct inode *ip)
 // background reclaimer without keeping an inode or buffer pinned.
 int inode_remove_detach(struct inode *ip, struct inode_reclaim *reclaim)
 {
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	uint sponsor_owner;
+	int result;
+
+	if (ip == 0 || reclaim == 0)
+		return 0;
+	if (inode_mapping_write_lock(ip, 1) < 0)
+		return -1;
+	if (ip->ref != 1 || !ip->valid || !ip->removed) {
+		inode_mapping_write_unlock(ip);
+		return 0;
+	}
+	memset(reclaim, 0, sizeof(*reclaim));
+	reclaim->dev = ip->dev;
+	reclaim->storage_owner = ip->fs_owner_domain;
+	reclaim->storage_account = resource_account_none();
+	if (!fs_storage_owner_valid(reclaim->storage_owner) ||
+	    fs_storage_owner_account(reclaim->storage_owner,
+				     &reclaim->storage_account) < 0) {
+		ip->removed = 0;
+		inode_mapping_write_unlock(ip);
+		inode_cache_drop_ref(ip);
+		return -1;
+	}
+	sponsor_owner = bio_current_owner();
+	if (fs_deferred_reclaim_reserve(sponsor_owner, reclaim) < 0) {
+		ip->removed = 0;
+		inode_mapping_write_unlock(ip);
+		inode_cache_drop_ref(ip);
+		return -1;
+	}
+	if (ip->size != 0) {
+		result = itruncate_detach_all(ip, reclaim);
+		if (result < 0)
+			goto deferred_fail;
+	} else {
+		/* Stage an explicit inode image so the reclaim fence cannot refer
+		 * to an older, unrelated committed generation. */
+		reclaim->mode = INODE_RECLAIM_NONE;
+		result = iupdate(ip);
+		if (result < 0)
+			goto deferred_fail;
+	}
+	reclaim->inode = ip->inum;
+	reclaim->incarnation = ip->vfs_incarnation;
+	reclaim->release_inode = 1;
+	agent_file_version_reclaim(ip);
+	if (fs_deferred_reclaim_publish(reclaim) < 0)
+		panic("inode reclaim publish");
+	ip->valid = 0;
+	ip->removed = 0;
+	inode_mapping_write_unlock(ip);
+	inode_cache_drop_ref(ip);
+	return 1;
+
+deferred_fail:
+	fs_deferred_reclaim_cancel(reclaim);
+	if (reclaim->mode == INODE_RECLAIM_LIST &&
+	    reclaim->block_list != 0)
+		(void)kfree_account_page((char *)reclaim->block_list,
+					 reclaim->page_account,
+					 reclaim->page_charge_class);
+	memset(reclaim, 0, sizeof(*reclaim));
+	ip->removed = 0;
+	inode_mapping_write_unlock(ip);
+	inode_cache_drop_ref(ip);
+	return -1;
+#else
 	struct vfs_cred kernel_cred;
 	struct inode allocated_inode;
 	uint storage_owner;
 	uint freeing;
+	int bypass_entered = 0;
 	int transition_status;
 
-	if (ip == 0 || reclaim == 0 || ip->ref != 1 || !ip->valid ||
-	    !ip->removed)
+	if (ip == 0 || reclaim == 0)
 		return 0;
+	if (inode_mapping_write_lock(ip, 1) < 0)
+		return -1;
+	if (ip->ref != 1 || !ip->valid || !ip->removed) {
+		inode_mapping_write_unlock(ip);
+		return 0;
+	}
+	if (fs_epoch_destructive_begin(&bypass_entered) < 0) {
+		inode_mapping_write_unlock(ip);
+		return -1;
+	}
 	storage_owner = ip->fs_owner_domain;
 	freeing = fs_qmap_transition(FS_QMAP_FREEING_FLAG, storage_owner);
 	if (freeing == FS_OWNER_NONE) {
 		ip->removed = 0;
+		inode_mapping_write_unlock(ip);
 		inode_cache_drop_ref(ip);
+		fs_epoch_destructive_end(bypass_entered);
 		return -1;
 	}
 	vfs_cred_kernel(&kernel_cred);
 	if (itruncate_detach(ip, &kernel_cred, 0, reclaim) < 0) {
 		ip->removed = 0;
+		inode_mapping_write_unlock(ip);
 		inode_cache_drop_ref(ip);
+		fs_epoch_destructive_end(bypass_entered);
 		return -1;
 	}
 	if (fs_allocator_gate_lock(1) < 0) {
@@ -2735,7 +4369,9 @@ int inode_remove_detach(struct inode *ip, struct inode_reclaim *reclaim)
 						 reclaim->page_charge_class);
 		memset(reclaim, 0, sizeof(*reclaim));
 		ip->removed = 0;
+		inode_mapping_write_unlock(ip);
 		inode_cache_drop_ref(ip);
+		fs_epoch_destructive_end(bypass_entered);
 		return -1;
 	}
 	memmove(&allocated_inode, ip, sizeof(allocated_inode));
@@ -2798,7 +4434,9 @@ int inode_remove_detach(struct inode *ip, struct inode_reclaim *reclaim)
 	fs_allocator_gate_unlock();
 	ip->valid = 0;
 	ip->removed = 0;
+	inode_mapping_write_unlock(ip);
 	inode_cache_drop_ref(ip);
+	fs_epoch_destructive_end(bypass_entered);
 	return 1;
 
 publish_fail:
@@ -2811,12 +4449,31 @@ publish_fail:
 					 reclaim->page_charge_class);
 	memset(reclaim, 0, sizeof(*reclaim));
 	ip->removed = 0;
+	inode_mapping_write_unlock(ip);
 	inode_cache_drop_ref(ip);
+	fs_epoch_destructive_end(bypass_entered);
 	return -1;
+#endif
 }
 
 // Drop a reference to an in-memory inode. Removed objects first publish a
 // detached, free inode and then reclaim the private block token.
+int iput_drop_only(struct inode *ip)
+{
+	int enabled;
+
+	if (ip == 0)
+		return -1;
+	enabled = intr_save();
+	if (ip->ref == 1 && ip->valid && ip->removed) {
+		intr_restore(enabled);
+		return 0;
+	}
+	inode_cache_drop_ref(ip);
+	intr_restore(enabled);
+	return 1;
+}
+
 void iput(struct inode *ip)
 {
 	if (ip->ref == 1 && ip->valid && ip->removed) {
@@ -2890,6 +4547,7 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 
 	if (error != 0)
 		*error = 0;
+	inode_mapping_require(ip, alloc != 0);
 
 	if (bn < NDIRECT) {
 		addr = ip->addrs[bn];
@@ -3024,6 +4682,51 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 	return 0;
 }
 
+static uint bmap_read_batch(struct inode *ip, uint bn, uint count,
+			    uint *out, int *error)
+{
+	struct buf *bp;
+	uint *indirect;
+	uint mapped = 0;
+	uint index;
+	int result;
+
+	if (out == 0 || error == 0 || count == 0)
+		return 0;
+	inode_mapping_require(ip, 0);
+	*error = 0;
+	while (mapped < count && bn + mapped < NDIRECT) {
+		uint addr = ip->addrs[bn + mapped];
+
+		if (addr == 0)
+			return mapped;
+		out[mapped++] = addr;
+	}
+	if (mapped == count)
+		return mapped;
+	index = bn + mapped;
+	if (index < NDIRECT)
+		return mapped;
+	index -= NDIRECT;
+	if (index >= NINDIRECT || ip->addrs[NDIRECT] == 0)
+		return mapped;
+	result = fs_read_block(ip->dev, ip->addrs[NDIRECT], &bp);
+	if (result < 0) {
+		*error = result;
+		return mapped;
+	}
+	indirect = (uint *)bp->data;
+	while (mapped < count && index < NINDIRECT) {
+		uint addr = indirect[index++];
+
+		if (addr == 0)
+			break;
+		out[mapped++] = addr;
+	}
+	brelse(bp);
+	return mapped;
+}
+
 // Undo a block allocated for a write that could not copy any data into it.
 static int bmap_discard(struct inode *ip, uint bn)
 {
@@ -3031,6 +4734,8 @@ static int bmap_discard(struct inode *ip, uint bn)
 	uint addr;
 	uint indirect;
 	uint *a;
+
+	inode_mapping_require(ip, 1);
 
 	if (bn < NDIRECT) {
 		addr = ip->addrs[bn];
@@ -3081,6 +4786,13 @@ static int itruncate_detach_all(struct inode *ip,
 {
 	uint old_addrs[NDIRECT + 1];
 	uint old_size = ip->size;
+	uint deferred_slot = reclaim->deferred_slot;
+	uint deferred_reserved = reclaim->deferred_reserved;
+	uint storage_owner = reclaim->storage_owner;
+	struct resource_account_handle storage_account =
+		reclaim->storage_account;
+
+	inode_mapping_require(ip, 1);
 
 	memmove(old_addrs, ip->addrs, sizeof(old_addrs));
 	reclaim->mode = INODE_RECLAIM_DIRECT;
@@ -3093,6 +4805,10 @@ static int itruncate_detach_all(struct inode *ip,
 		memmove(ip->addrs, old_addrs, sizeof(old_addrs));
 		ip->size = old_size;
 		memset(reclaim, 0, sizeof(*reclaim));
+		reclaim->deferred_slot = deferred_slot;
+		reclaim->deferred_reserved = deferred_reserved;
+		reclaim->storage_owner = storage_owner;
+		reclaim->storage_account = storage_account;
 		return -1;
 	}
 	if (fs_durable_barrier_forward() < 0)
@@ -3116,6 +4832,8 @@ static int itruncate_detach_partial(struct inode *ip, uint size,
 	uint first_indirect = 0;
 	int clear_indirect_tail = 0;
 	int result;
+
+	inode_mapping_require(ip, 1);
 
 	_Static_assert(MAXFILE * sizeof(uint) <= PGSIZE,
 		       "truncate reclaim list must fit in one page");
@@ -3229,21 +4947,53 @@ fail:
 int itruncate_detach(struct inode *ip, const struct vfs_cred *cred, uint size,
 			 struct inode_reclaim *reclaim)
 {
-	if (reclaim == 0)
+	int bypass_entered = 0;
+	int result = -1;
+
+	if (ip == 0 || reclaim == 0)
 		return -1;
 	memset(reclaim, 0, sizeof(*reclaim));
+	if (inode_mapping_write_lock(ip, 0) < 0)
+		return -1;
 	if (!vfs_inode_authorize(ip, cred, VFS_OP_TRUNCATE) ||
 	    !exec_policy_inode_mutable(ip))
-		return -1;
+		goto out;
 	if (size > ip->size)
-		return -1;
-	if (size == ip->size)
-		return 0;
+		goto out;
+	if (size == ip->size) {
+		result = 0;
+		goto out;
+	}
 	if (fs_claim_sponsored_public_inode(ip, cred) < 0)
-		return -1;
-	if (size == 0)
-		return itruncate_detach_all(ip, reclaim);
-	return itruncate_detach_partial(ip, size, reclaim);
+		goto out;
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	if (size == 0) {
+		reclaim->dev = ip->dev;
+		reclaim->storage_owner = ip->fs_owner_domain;
+		if (fs_storage_owner_account(reclaim->storage_owner,
+					     &reclaim->storage_account) < 0 ||
+		    fs_deferred_reclaim_reserve(bio_current_owner(),
+						 reclaim) < 0)
+			goto out;
+		result = itruncate_detach_all(ip, reclaim);
+		if (result < 0) {
+			fs_deferred_reclaim_cancel(reclaim);
+			goto out;
+		}
+		if (fs_deferred_reclaim_publish(reclaim) < 0)
+			panic("truncate reclaim publish");
+		result = 0;
+		goto out;
+	}
+#endif
+	if (fs_epoch_destructive_begin(&bypass_entered) < 0)
+		goto out;
+	result = size == 0 ? itruncate_detach_all(ip, reclaim) :
+			     itruncate_detach_partial(ip, size, reclaim);
+	fs_epoch_destructive_end(bypass_entered);
+	out:
+	inode_mapping_write_unlock(ip);
+	return result;
 }
 
 static void itruncate_reclaim_finish(struct inode_reclaim *reclaim)
@@ -3362,50 +5112,115 @@ int itrunc(struct inode *ip, const struct vfs_cred *cred)
 // If user_dst==1, then dst is a user virtual address;
 // otherwise, dst is a kernel address.
 static int readi_atomic(struct inode *ip, const struct vfs_cred *cred,
+			const struct open_file_io_token *lease,
 			int user_dst, uint64 dst, uint off, uint n,
 			int device_read)
 {
-	uint tot, m, addr;
-	struct buf *bp;
+	uint blocknos[FS_READ_BATCH_MAX];
+	struct buf *buffers[FS_READ_BATCH_MAX];
+	struct vm_copy_segment segments[FS_READ_BATCH_MAX];
 	struct bio_checkpoint_result checkpoint;
+	uint tot = 0;
+	uint m;
+	uint batch_bytes;
+	uint batch_limit;
+	uint batch_count;
+	uint mapped;
+	uint copied;
+	uint span;
+	int map_result;
+	int mapping_failed;
 	int failed = 0;
 	int failure_result = -1;
 
+	inode_mapping_require(ip, 0);
+
 	if (fs_io_health != FS_IO_HEALTHY ||
-	    !vfs_inode_authorize(ip, cred, VFS_OP_READ))
+	    (lease != 0 ?
+	     !open_file_io_token_validate(lease, ip, VFS_OP_READ) :
+	     !vfs_inode_authorize(ip, cred, VFS_OP_READ)))
 		return -1;
 	if (off > ip->size || off + n < off)
 		return 0;
 	if (off + n > ip->size)
 		n = ip->size - off;
 
-	for (tot = 0; tot < n; tot += m, off += m, dst += m) {
-		addr = bmap(ip, off / BSIZE, 0, 0, &failure_result);
-		if (addr == 0) {
-			if (failure_result >= 0)
-				failure_result = -1;
+	batch_limit = device_read ? 1U : FS_READ_BATCH_MAX;
+	while (tot < n) {
+		span = off % BSIZE + n - tot;
+		batch_count = span / BSIZE;
+		if (span % BSIZE != 0)
+			batch_count++;
+		batch_count = MIN(batch_count, batch_limit);
+		map_result = 0;
+		mapped = bmap_read_batch(ip, off / BSIZE, batch_count,
+					 blocknos, &map_result);
+		mapping_failed = mapped != batch_count;
+		batch_count = mapped;
+		if (mapping_failed && map_result >= 0)
+			map_result = -1;
+		if (batch_count == 0) {
+			failure_result = map_result;
 			failed = 1;
 			break;
 		}
-		failure_result = device_read ?
-			fs_read_device_block(ip->dev, addr, &bp) :
-			fs_read_block(ip->dev, addr, &bp);
+		if (device_read) {
+			failure_result = fs_read_device_block(
+				ip->dev, blocknos[0], &buffers[0]);
+		} else if (batch_count == 1) {
+			failure_result = fs_read_block(
+				ip->dev, blocknos[0], &buffers[0]);
+		} else {
+			failure_result = fs_read_blocks_batch(ip->dev, blocknos, buffers,
+						      batch_count);
+			if (failure_result < 0) {
+				batch_count = 1;
+				mapping_failed = 0;
+				failure_result = fs_read_block(ip->dev, blocknos[0],
+							       &buffers[0]);
+			}
+		}
 		if (failure_result < 0) {
 			failed = 1;
 			break;
 		}
-		m = MIN(n - tot, BSIZE - off % BSIZE);
-		if (either_copyout(user_dst, dst,
-				   (char *)bp->data + (off % BSIZE), m) == -1) {
-			brelse(bp);
+
+		batch_bytes = 0;
+		for (copied = 0; copied < batch_count; copied++) {
+			uint block_offset = copied == 0 ? off % BSIZE : 0;
+
+			m = MIN(n - tot - batch_bytes, BSIZE - block_offset);
+			segments[copied].source =
+				(char *)buffers[copied]->data + block_offset;
+			segments[copied].length = m;
+			batch_bytes += m;
+		}
+		if ((batch_count == 1 &&
+		     either_copyout(user_dst, dst, (char *)segments[0].source,
+				    segments[0].length) < 0) ||
+		    (batch_count > 1 &&
+		     either_copyoutv(user_dst, dst, segments, batch_count) < 0)) {
 			failure_result = -1;
+			failed = 1;
+		}
+		copied = 0;
+		while (copied < batch_count) {
+			if (buffers[copied] != 0)
+				brelse(buffers[copied]);
+			copied++;
+		}
+		if (failed)
+			break;
+		tot += batch_bytes;
+		off += batch_bytes;
+		dst += batch_bytes;
+		checkpoint = bio_request_checkpoint();
+		if (bio_checkpoint_should_stop(checkpoint)) {
 			failed = 1;
 			break;
 		}
-		brelse(bp);
-		checkpoint = bio_request_checkpoint();
-		if (bio_checkpoint_should_stop(checkpoint)) {
-			tot += m;
+		if (mapping_failed) {
+			failure_result = map_result;
 			failed = 1;
 			break;
 		}
@@ -3415,15 +5230,32 @@ static int readi_atomic(struct inode *ip, const struct vfs_cred *cred,
 	return tot;
 }
 
-int readi(struct inode *ip, const struct vfs_cred *cred, int user_dst,
-	  uint64 dst, uint off, uint n)
+static int readi_with_auth(struct inode *ip, const struct vfs_cred *cred,
+			   const struct open_file_io_token *lease,
+			   int user_dst, uint64 dst, uint off, uint n)
 {
 	int result;
 
-	bio_fs_atomic_enter();
-	result = readi_atomic(ip, cred, user_dst, dst, off, n, 0);
-	bio_fs_atomic_leave();
+	if (inode_mapping_read_lock(ip) < 0)
+		return -1;
+	result = readi_atomic(ip, cred, lease, user_dst, dst, off, n, 0);
+	inode_mapping_read_unlock(ip);
 	return result;
+}
+
+int readi(struct inode *ip, const struct vfs_cred *cred, int user_dst,
+	  uint64 dst, uint off, uint n)
+{
+	return readi_with_auth(ip, cred, 0, user_dst, dst, off, n);
+}
+
+int readi_lease(struct inode *ip, const struct vfs_cred *cred,
+		const struct open_file_io_token *lease, int user_dst,
+		uint64 dst, uint off, uint n)
+{
+	if (lease == 0)
+		return -1;
+	return readi_with_auth(ip, cred, lease, user_dst, dst, off, n);
 }
 
 int readi_device(struct inode *ip, const struct vfs_cred *cred, int user_dst,
@@ -3431,9 +5263,10 @@ int readi_device(struct inode *ip, const struct vfs_cred *cred, int user_dst,
 {
 	int result;
 
-	bio_fs_atomic_enter();
-	result = readi_atomic(ip, cred, user_dst, dst, off, n, 1);
-	bio_fs_atomic_leave();
+	if (inode_mapping_read_lock(ip) < 0)
+		return -1;
+	result = readi_atomic(ip, cred, 0, user_dst, dst, off, n, 1);
+	inode_mapping_read_unlock(ip);
 	return result;
 }
 
@@ -3444,9 +5277,12 @@ int readi_device(struct inode *ip, const struct vfs_cred *cred, int user_dst,
 // Returns the number of bytes successfully written.
 // If the return value is less than the requested n,
 // there was an error of some kind.
-static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
-			  const struct fs_storage_charge *charge,
-			  int user_src, uint64 src, uint off, uint n)
+static int writei_charged_locked(struct inode *ip,
+				 const struct vfs_cred *cred,
+				 const struct fs_storage_charge *charge,
+				 const struct open_file_io_token *lease,
+				 int user_src, uint64 src, uint off, uint n,
+				 enum fs_epoch_phase namespace_phase)
 {
 	struct fs_storage_charge object_charge;
 	const struct fs_storage_charge *allocation_charge = charge;
@@ -3458,8 +5294,12 @@ static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
 	int inode_changed = 0;
 	int failure_result = -1;
 
+	inode_mapping_require(ip, 1);
+
 	if (fs_io_health != FS_IO_HEALTHY ||
-	    !vfs_inode_authorize(ip, cred, VFS_OP_WRITE))
+	    (lease != 0 ?
+	     !open_file_io_token_validate(lease, ip, VFS_OP_WRITE) :
+	     !vfs_inode_authorize(ip, cred, VFS_OP_WRITE)))
 		return -1;
 	if (n != 0 && !exec_policy_inode_mutable(ip))
 		return -1;
@@ -3476,6 +5316,20 @@ static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
 	}
 
 	for (tot = 0; tot < n; tot += m, off += m, src += m) {
+		struct bio_overwrite_receipt overwrite =
+			BIO_OVERWRITE_RECEIPT_INIT;
+		int full_overwrite;
+
+		m = MIN(n - tot, BSIZE - off % BSIZE);
+		full_overwrite = ip->type != T_DIR && (off % BSIZE) == 0 &&
+				 m == BSIZE;
+		if ((ip->type == T_DIR ?
+		     fs_epoch_preflight_phase(2, namespace_phase) :
+		     fs_epoch_preflight(2)) < 0) {
+			failure_result = -1;
+			failed = 1;
+			break;
+		}
 		bn = off / BSIZE;
 		addr = bmap(ip, bn, 0, 0, &failure_result);
 		allocated = 0;
@@ -3490,25 +5344,69 @@ static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
 			}
 			allocated = 1;
 		}
-		failure_result = fs_read_block(ip->dev, addr, &bp);
+		bp = 0;
+		if (full_overwrite) {
+			failure_result = bprepare_overwrite(ip->dev, addr,
+							      &overwrite);
+			if (failure_result == BIO_OVERWRITE_FALLBACK)
+				failure_result = fs_read_block(ip->dev, addr, &bp);
+			else if (failure_result == VIRTIO_DISK_OK)
+				bp = overwrite.buf;
+			else {
+				bcancel_overwrite(&overwrite);
+				failure_result = fs_io_fail(
+					failure_result == VIRTIO_DISK_ERR_BUSY ?
+					FS_FAILURE_SCHEDULING_UNAVAILABLE :
+					FS_FAILURE_TRANSIENT_READ);
+			}
+		} else {
+			failure_result = fs_read_block(ip->dev, addr, &bp);
+		}
 		if (failure_result < 0) {
 			if (allocated)
 				(void)bmap_discard(ip, bn);
 			failed = 1;
 			break;
 		}
-		m = MIN(n - tot, BSIZE - off % BSIZE);
 		if (either_copyin(user_src, src,
 				  (char *)bp->data + (off % BSIZE), m) == -1) {
-			brelse(bp);
+			if (overwrite.active)
+				bcancel_overwrite(&overwrite);
+			else
+				brelse(bp);
 			if (allocated)
 				(void)bmap_discard(ip, bn);
 			failure_result = -1;
 			failed = 1;
 			break;
 		}
+		if (overwrite.active) {
+			failure_result = bpublish_overwrite(&overwrite, m, &bp);
+			if (failure_result == VIRTIO_DISK_ERR_BUSY) {
+				bcancel_overwrite(&overwrite);
+				failure_result = fs_read_block(ip->dev, addr, &bp);
+				if (failure_result >= 0 &&
+				    either_copyin(user_src, src,
+						  (char *)bp->data, m) == -1) {
+					brelse(bp);
+					bp = 0;
+					failure_result = -1;
+				}
+			} else if (failure_result < 0) {
+				bcancel_overwrite(&overwrite);
+				failure_result =
+					fs_io_fail(FS_FAILURE_TRANSIENT_READ);
+			}
+			if (failure_result < 0) {
+				if (allocated)
+					(void)bmap_discard(ip, bn);
+				failed = 1;
+				break;
+			}
+		}
 		failure_result = ip->type == T_DIR ?
-			fs_write_metadata_block(bp) : fs_write_data_block(bp);
+			fs_write_namespace_block(bp, namespace_phase) :
+			fs_write_data_block(bp);
 		if (failure_result < 0) {
 			brelse(bp);
 			if (allocated)
@@ -3527,7 +5425,6 @@ static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
 			break;
 		}
 	}
-
 	if (off > ip->size) {
 		ip->size = off;
 		inode_changed = 1;
@@ -3543,18 +5440,67 @@ static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
 	return tot;
 }
 
-int writei(struct inode *ip, const struct vfs_cred *cred, int user_src,
-	   uint64 src, uint off, uint n)
+static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
+			  const struct fs_storage_charge *charge,
+			  int user_src, uint64 src, uint off, uint n,
+			  enum fs_epoch_phase namespace_phase)
+{
+	int result;
+
+	if (inode_mapping_write_lock(ip, 0) < 0)
+		return -1;
+	result = writei_charged_locked(ip, cred, charge, 0, user_src, src, off,
+				       n, namespace_phase);
+	inode_mapping_write_unlock(ip);
+	return result;
+}
+
+static int writei_with_auth(struct inode *ip, const struct vfs_cred *cred,
+			    const struct open_file_io_token *lease,
+			    int user_src, uint64 src, uint off, uint n)
 {
 	struct fs_storage_charge charge;
+	int namespace_locked = 0;
 	int result;
 
 	if (fs_storage_charge_from_vfs(cred, &charge) < 0)
 		return -1;
+	if (ip != 0 && ip->type == T_DIR) {
+		if (fs_namespace_gate_lock() < 0)
+			return -1;
+		namespace_locked = 1;
+	}
+	if (inode_mapping_write_lock(ip, 0) < 0) {
+		if (namespace_locked)
+			fs_namespace_gate_unlock();
+		return -1;
+	}
 	bio_fs_atomic_enter();
-	result = writei_charged(ip, cred, &charge, user_src, src, off, n);
+	result = writei_charged_locked(ip, cred, &charge, lease, user_src, src, off,
+				       n, FS_EPOCH_NAMESPACE_ATTACH);
 	bio_fs_atomic_leave();
+	inode_mapping_write_unlock(ip);
+	if (namespace_locked) {
+		if (n != 0)
+			fs_dentry_index_invalidate_directory(ip);
+		fs_namespace_gate_unlock();
+	}
 	return result;
+}
+
+int writei(struct inode *ip, const struct vfs_cred *cred, int user_src,
+	   uint64 src, uint off, uint n)
+{
+	return writei_with_auth(ip, cred, 0, user_src, src, off, n);
+}
+
+int writei_lease(struct inode *ip, const struct vfs_cred *cred,
+		 const struct open_file_io_token *lease, int user_src,
+		 uint64 src, uint off, uint n)
+{
+	if (lease == 0)
+		return -1;
+	return writei_with_auth(ip, cred, lease, user_src, src, off, n);
 }
 
 /*
@@ -3575,6 +5521,8 @@ fs_preallocate_inode(struct inode *ip, const struct vfs_cred *cred, uint size)
 	    !vfs_inode_authorize(ip, cred, VFS_OP_WRITE) ||
 	    !exec_policy_inode_mutable(ip) ||
 	    fs_storage_charge_from_vfs(cred, &charge) < 0)
+		return -1;
+	if (inode_mapping_write_lock(ip, 0) < 0)
 		return -1;
 	blocks = (size + BSIZE - 1) / BSIZE;
 	start_block = MIN(blocks, (ip->size + BSIZE - 1) / BSIZE);
@@ -3630,6 +5578,7 @@ fs_preallocate_inode(struct inode *ip, const struct vfs_cred *cred, uint size)
 	}
 	result = 0;
 out:
+	inode_mapping_write_unlock(ip);
 	return result;
 }
 
@@ -3645,6 +5594,970 @@ int fs_dirent_canonicalize(const char *input, char out[DIRSIZ + 1])
 	return 0;
 }
 
+#define DIR_SCAN_BATCH_ENTRIES 8U
+
+struct dir_scan_candidate {
+	uint offset;
+	struct dirent entry;
+};
+
+struct dir_scan_batch {
+	uint count;
+	uint scanned;
+	uint next_offset;
+	struct dir_scan_candidate candidates[DIR_SCAN_BATCH_ENTRIES];
+};
+
+static struct dir_scan_batch fs_dentry_rebuild_batch;
+
+_Static_assert(BSIZE % sizeof(struct dirent) == 0,
+	       "directory entries must not cross filesystem blocks");
+_Static_assert(sizeof(struct dir_scan_batch) <= 256,
+	       "directory scan batch must stay stack bounded");
+
+/*
+ * Copy only the interesting entries from one directory block.  Target inode
+ * validation happens after the buffer is released, so a cache holder is never
+ * carried across an operation that may issue another disk request.
+ */
+static int dir_scan_fill(struct inode *dp, const char *key, uint start,
+			 int *first_empty, struct dir_scan_batch *batch)
+{
+	struct buf *bp = 0;
+	struct dirent de;
+	uint addr;
+	uint block_end;
+	uint block_start;
+	uint off;
+	int map_result = -1;
+	int result = -1;
+
+	if (dp == 0 || batch == 0 ||
+	    start % sizeof(struct dirent) != 0)
+		return -1;
+	if (inode_mapping_read_lock(dp) < 0)
+		return -1;
+	if (start >= dp->size || dp->size % sizeof(struct dirent) != 0)
+		goto unlock;
+	memset(batch, 0, sizeof(*batch));
+	batch->next_offset = start;
+	block_start = start - start % BSIZE;
+	block_end = MIN(block_start + BSIZE, dp->size);
+
+	addr = bmap(dp, block_start / BSIZE, 0, 0, &map_result);
+	if (addr == 0) {
+		result = map_result < 0 ? map_result : -1;
+		goto out;
+	}
+	result = fs_read_block(dp->dev, addr, &bp);
+	if (result < 0)
+		goto out;
+	for (off = start; off < block_end; off += sizeof(de)) {
+		memmove(&de, bp->data + off - block_start, sizeof(de));
+		batch->scanned++;
+		batch->next_offset = off + sizeof(de);
+		if (de.inum == 0) {
+			if (first_empty != 0 && *first_empty < 0)
+				*first_empty = (int)off;
+			continue;
+		}
+		if (key != 0 && strncmp(key, de.name, DIRSIZ) != 0)
+			continue;
+		batch->candidates[batch->count].offset = off;
+		batch->candidates[batch->count].entry = de;
+		batch->count++;
+		if (batch->count == DIR_SCAN_BATCH_ENTRIES)
+			break;
+	}
+	kernel_performance_directory_probe(batch->scanned);
+	result = 0;
+out:
+	if (bp != 0)
+		brelse(bp);
+	inode_mapping_read_unlock(dp);
+	return result;
+unlock:
+	inode_mapping_read_unlock(dp);
+	return result;
+}
+
+static int dir_scan_checkpoint(uint scanned)
+{
+	struct bio_checkpoint_result checkpoint = bio_request_checkpoint();
+
+	if (bio_checkpoint_should_stop(checkpoint))
+		return checkpoint.state == BIO_CHECKPOINT_DEFERRED ?
+			FS_LOOKUP_BUSY : FS_LOOKUP_ERROR;
+	return kernel_work_checkpoint(scanned) < 0 ? FS_LOOKUP_ERROR : 0;
+}
+
+static int
+fs_dentry_gate_owned(void)
+{
+	struct thread *self = curr_thread();
+	void *token;
+	uint64 generation;
+
+	if (self != 0 && self->identity_generation != 0) {
+		token = self;
+		generation = self->identity_generation;
+	} else {
+		token = &fs_dentry_boot_token;
+		generation = 0;
+	}
+	return fs_dentry_owner == token &&
+	       fs_dentry_owner_generation == generation;
+}
+
+static int
+fs_dentry_gate_lock(void)
+{
+	struct thread *self = curr_thread();
+	void *token;
+	uint64 generation;
+	int enabled;
+
+	if (self != 0 && self->identity_generation != 0) {
+		token = self;
+		generation = self->identity_generation;
+	} else {
+		token = &fs_dentry_boot_token;
+		generation = 0;
+	}
+	enabled = intr_save();
+	for (;;) {
+		if (fs_dentry_owner == 0) {
+			fs_dentry_owner = token;
+			fs_dentry_owner_generation = generation;
+			intr_restore(enabled);
+			return 0;
+		}
+		if (fs_dentry_gate_owned())
+			panic("dentry gate recursion");
+		if (token == &fs_dentry_boot_token) {
+			intr_restore(enabled);
+			return -1;
+		}
+		if (wait_queue_sleep_irq(&fs_dentry_waiters) != WAIT_QUEUE_OK) {
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+}
+
+static void
+fs_dentry_gate_unlock(void)
+{
+	int enabled = intr_save();
+
+	if (!fs_dentry_gate_owned())
+		panic("dentry gate owner");
+	fs_dentry_owner = 0;
+	fs_dentry_owner_generation = 0;
+	wait_queue_wake_one(&fs_dentry_waiters);
+	intr_restore(enabled);
+}
+
+static void
+fs_dentry_gate_lock_uninterruptible(void)
+{
+	struct thread *self = curr_thread();
+	void *token;
+	uint64 generation;
+	int enabled;
+
+	if (self != 0 && self->identity_generation != 0) {
+		token = self;
+		generation = self->identity_generation;
+	} else {
+		token = &fs_dentry_boot_token;
+		generation = 0;
+	}
+	enabled = intr_save();
+	for (;;) {
+		if (fs_dentry_owner == 0) {
+			fs_dentry_owner = token;
+			fs_dentry_owner_generation = generation;
+			intr_restore(enabled);
+			return;
+		}
+		if (fs_dentry_gate_owned())
+			panic("dentry gate recursion");
+		if (token == &fs_dentry_boot_token)
+			panic("boot dentry gate contention");
+		(void)wait_queue_sleep_irq_uninterruptible(&fs_dentry_waiters);
+	}
+}
+
+static void
+fs_dentry_gate_require(void)
+{
+	if (!fs_dentry_gate_owned())
+		panic("dentry index outside gate");
+}
+
+static int
+fs_namespace_gate_owned(void)
+{
+	struct thread *self = curr_thread();
+	void *token;
+	uint64 generation;
+
+	if (self != 0 && self->identity_generation != 0) {
+		token = self;
+		generation = self->identity_generation;
+	} else {
+		token = &fs_dentry_boot_token;
+		generation = 0;
+	}
+	return fs_namespace_owner == token &&
+	       fs_namespace_owner_generation == generation;
+}
+
+static int
+fs_namespace_gate_lock(void)
+{
+	struct thread *self = curr_thread();
+	void *token;
+	uint64 generation;
+	int enabled;
+
+	if (self != 0 && self->identity_generation != 0) {
+		token = self;
+		generation = self->identity_generation;
+	} else {
+		token = &fs_dentry_boot_token;
+		generation = 0;
+	}
+	enabled = intr_save();
+	for (;;) {
+		if (fs_namespace_owner == 0) {
+			fs_namespace_owner = token;
+			fs_namespace_owner_generation = generation;
+			intr_restore(enabled);
+			return 0;
+		}
+		if (fs_namespace_gate_owned())
+			panic("namespace gate recursion");
+		if (token == &fs_dentry_boot_token) {
+			intr_restore(enabled);
+			return -1;
+		}
+		if (wait_queue_sleep_irq(&fs_namespace_waiters) !=
+		    WAIT_QUEUE_OK) {
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+}
+
+static void
+fs_namespace_gate_unlock(void)
+{
+	int enabled = intr_save();
+
+	if (!fs_namespace_gate_owned())
+		panic("namespace gate owner");
+	fs_namespace_owner = 0;
+	fs_namespace_owner_generation = 0;
+	wait_queue_wake_one(&fs_namespace_waiters);
+	intr_restore(enabled);
+}
+
+static uint
+fs_dentry_hash(struct inode *dp, const char key[DIRSIZ + 1])
+{
+	uint hash = 2166136261U;
+	uint identity[3] = { dp->dev, dp->inum, dp->vfs_incarnation };
+
+	for (uint i = 0; i < 3; i++) {
+		uint value = identity[i];
+
+		for (uint byte = 0; byte < sizeof(value); byte++) {
+			hash ^= value & 0xffU;
+			hash *= 16777619U;
+			value >>= 8;
+		}
+	}
+	for (uint i = 0; i < DIRSIZ; i++) {
+		hash ^= (uchar)key[i];
+		hash *= 16777619U;
+	}
+	return hash ? hash : 1;
+}
+
+static void
+fs_dentry_index_bump(void)
+{
+	fs_dentry_gate_require();
+	fs_dentry_index_generation++;
+	if (fs_dentry_index_generation == 0)
+		fs_dentry_index_generation = 1;
+}
+
+static void
+fs_dentry_index_reset_all(void)
+{
+	fs_dentry_gate_require();
+	fs_dentry_index_bump();
+	memset(fs_dentry_index, 0, sizeof(fs_dentry_index));
+	fs_dentry_index_used = 0;
+	fs_dentry_index_tombstones = 0;
+	for (uint i = 0; i < FS_DIRECTORY_INDEX_CAP; i++) {
+		struct fs_directory_index_state *state =
+			&fs_directory_indexes[i];
+
+		if (!state->used)
+			continue;
+		state->complete = 0;
+		state->overflow = 0;
+		state->entries = 0;
+		state->first_free_entry = 0;
+		memset(state->occupied, 0, sizeof(state->occupied));
+	}
+}
+
+static void
+fs_directory_index_discard(struct fs_directory_index_state *state)
+{
+	fs_dentry_gate_require();
+	if (state == 0 || !state->used)
+		return;
+	fs_dentry_index_bump();
+	for (uint slot = 0; slot < FS_DENTRY_INDEX_CAP; slot++) {
+		struct fs_dentry_index_entry *entry = &fs_dentry_index[slot];
+
+		if (entry->state != FS_DENTRY_INDEX_USED ||
+		    entry->dev != state->dev ||
+		    entry->dir_inum != state->inum ||
+		    entry->dir_incarnation != state->incarnation)
+			continue;
+		entry->state = FS_DENTRY_INDEX_TOMBSTONE;
+		if (fs_dentry_index_used == 0)
+			panic("dentry index used underflow");
+		fs_dentry_index_used--;
+		fs_dentry_index_tombstones++;
+	}
+	state->complete = 0;
+	state->overflow = 0;
+	state->entries = 0;
+	state->first_free_entry = 0;
+	memset(state->occupied, 0, sizeof(state->occupied));
+	if (fs_dentry_index_tombstones > FS_DENTRY_INDEX_CAP / 2)
+		fs_dentry_index_reset_all();
+}
+
+static struct fs_directory_index_state *
+fs_directory_index_find(struct inode *dp, int create)
+{
+	struct fs_directory_index_state *free_state = 0;
+
+	fs_dentry_gate_require();
+	if (dp == 0 || dp->dev > 65535U || dp->inum > 65535U)
+		return 0;
+	for (uint i = 0; i < FS_DIRECTORY_INDEX_CAP; i++) {
+		struct fs_directory_index_state *state =
+			&fs_directory_indexes[i];
+
+		if (!state->used) {
+			if (free_state == 0)
+				free_state = state;
+			continue;
+		}
+		if (state->dev != dp->dev || state->inum != dp->inum)
+			continue;
+		if (state->incarnation == dp->vfs_incarnation &&
+		    state->size == dp->size)
+			return state;
+		fs_directory_index_discard(state);
+		memset(state, 0, sizeof(*state));
+		free_state = state;
+		break;
+	}
+	if (!create)
+		return 0;
+	if (free_state == 0) {
+		free_state = &fs_directory_indexes[fs_directory_index_cursor];
+		fs_directory_index_cursor =
+			(fs_directory_index_cursor + 1) %
+			FS_DIRECTORY_INDEX_CAP;
+		fs_directory_index_discard(free_state);
+		memset(free_state, 0, sizeof(*free_state));
+	}
+	free_state->used = 1;
+	free_state->dev = dp->dev;
+	free_state->inum = dp->inum;
+	free_state->incarnation = dp->vfs_incarnation;
+	free_state->size = dp->size;
+	return free_state;
+}
+
+static int
+fs_dentry_index_probe(struct inode *dp, uint hash, uint offset,
+		      uint *slot_out, int *found_out)
+{
+	uint first_tombstone = FS_DENTRY_INDEX_CAP;
+
+	fs_dentry_gate_require();
+	if (slot_out == 0 || found_out == 0)
+		return -1;
+	for (uint scanned = 0; scanned < FS_DENTRY_INDEX_CAP; scanned++) {
+		uint slot = (hash + scanned) & (FS_DENTRY_INDEX_CAP - 1);
+		struct fs_dentry_index_entry *entry = &fs_dentry_index[slot];
+
+		if (entry->state == FS_DENTRY_INDEX_EMPTY) {
+			*slot_out = first_tombstone < FS_DENTRY_INDEX_CAP ?
+				first_tombstone : slot;
+			*found_out = 0;
+			return 0;
+		}
+		if (entry->state == FS_DENTRY_INDEX_TOMBSTONE) {
+			if (first_tombstone == FS_DENTRY_INDEX_CAP)
+				first_tombstone = slot;
+			continue;
+		}
+		if (entry->hash == hash && entry->dev == dp->dev &&
+		    entry->dir_inum == dp->inum &&
+		    entry->dir_incarnation == dp->vfs_incarnation &&
+		    entry->offset == offset) {
+			*slot_out = slot;
+			*found_out = 1;
+			return 0;
+		}
+	}
+	if (first_tombstone < FS_DENTRY_INDEX_CAP) {
+		*slot_out = first_tombstone;
+		*found_out = 0;
+		return 0;
+	}
+	return -1;
+}
+
+static int
+fs_dentry_index_insert(struct inode *dp, const char key[DIRSIZ + 1],
+		       uint offset, uint target_inum,
+		       uint target_incarnation, int replace)
+{
+	struct fs_dentry_index_entry *entry;
+	uint hash;
+	uint slot;
+	int found;
+
+	fs_dentry_gate_require();
+	hash = fs_dentry_hash(dp, key);
+	if (target_inum == 0 || target_inum > 65535U ||
+	    fs_dentry_index_probe(dp, hash, offset, &slot, &found) < 0)
+		return -1;
+	entry = &fs_dentry_index[slot];
+	if (found && !replace)
+		return -2;
+	if (!found) {
+		if (entry->state == FS_DENTRY_INDEX_TOMBSTONE) {
+			if (fs_dentry_index_tombstones == 0)
+				panic("dentry tombstone underflow");
+			fs_dentry_index_tombstones--;
+		}
+		fs_dentry_index_used++;
+	}
+	memset(entry, 0, sizeof(*entry));
+	entry->hash = hash;
+	entry->offset = offset;
+	entry->dir_incarnation = dp->vfs_incarnation;
+	entry->target_incarnation = target_incarnation;
+	entry->dev = (ushort)dp->dev;
+	entry->dir_inum = (ushort)dp->inum;
+	entry->target_inum = (ushort)target_inum;
+	entry->state = FS_DENTRY_INDEX_USED;
+	fs_dentry_index_bump();
+	return 0;
+}
+
+static void
+fs_directory_index_occupied_set(struct fs_directory_index_state *state,
+				uint offset, int occupied)
+{
+	uint entry = offset / sizeof(struct dirent);
+	uint limit;
+
+	fs_dentry_gate_require();
+	if (state == 0 || entry >= FS_DIRECTORY_INDEX_MAX_ENTRIES ||
+	    offset % sizeof(struct dirent) != 0)
+		panic("directory occupancy index");
+	limit = state->size / sizeof(struct dirent);
+	if (entry >= limit)
+		panic("directory occupancy range");
+	if (occupied) {
+		state->occupied[entry / 8] |= 1U << (entry % 8);
+		if (entry == state->first_free_entry)
+			while (state->first_free_entry < limit &&
+			       (state->occupied[state->first_free_entry / 8] &
+				(1U << (state->first_free_entry % 8))) != 0)
+				state->first_free_entry++;
+	} else {
+		state->occupied[entry / 8] &= ~(1U << (entry % 8));
+		if (entry < state->first_free_entry)
+			state->first_free_entry = entry;
+	}
+}
+
+static int
+fs_directory_index_first_empty(struct fs_directory_index_state *state)
+{
+	uint entry;
+	uint entries;
+
+	fs_dentry_gate_require();
+	if (state == 0 || !state->complete)
+		return -1;
+	entries = state->size / sizeof(struct dirent);
+	entry = state->first_free_entry;
+	if (entry >= entries ||
+	    (state->occupied[entry / 8] & (1U << (entry % 8))) != 0)
+		return -1;
+	return (int)(entry * sizeof(struct dirent));
+}
+
+static int
+fs_directory_index_rebuild(struct inode *dp)
+{
+	struct fs_directory_index_state *state;
+	struct dir_scan_batch *batch = &fs_dentry_rebuild_batch;
+	uint incarnation;
+	uint size;
+	uint off = 0;
+	int result = -1;
+
+	fs_dentry_gate_require();
+	if (dp == 0 || dp->type != T_DIR ||
+	    dp->size > MAXFILE * BSIZE ||
+	    dp->size % sizeof(struct dirent) != 0)
+		return -1;
+	state = fs_directory_index_find(dp, 1);
+	if (state == 0)
+		return -1;
+	fs_directory_index_discard(state);
+	state->dev = dp->dev;
+	state->inum = dp->inum;
+	incarnation = dp->vfs_incarnation;
+	size = dp->size;
+	state->incarnation = incarnation;
+	state->size = size;
+	state->first_free_entry = 0;
+	if (size / sizeof(struct dirent) >
+	    FS_DIRECTORY_INDEX_MAX_ENTRIES) {
+		state->overflow = 1;
+		state->complete = 1;
+		return 0;
+	}
+	while (off < dp->size) {
+		if (dir_scan_fill(dp, 0, off, 0, batch) < 0)
+			goto fail;
+		off = batch->next_offset;
+		for (uint i = 0; i < batch->count; i++) {
+			struct dir_scan_candidate *candidate =
+				&batch->candidates[i];
+			struct inode *target;
+			char key[DIRSIZ + 1];
+
+			if (candidate->entry.inum == 0 ||
+			    candidate->entry.inum >= sb.ninodes ||
+			    candidate->entry.name[0] == 0)
+				goto fail;
+			memset(key, 0, sizeof(key));
+			memmove(key, candidate->entry.name, DIRSIZ);
+			target = inode_get(dp->dev, candidate->entry.inum);
+			if (target == 0)
+				goto fail;
+			result = ivalid(target);
+			if (result < 0 || !vfs_inode_label_valid(target)) {
+				iput(target);
+				goto fail;
+			}
+			if (!state->overflow)
+				result = fs_dentry_index_insert(
+					dp, key, candidate->offset,
+					candidate->entry.inum,
+					target->vfs_incarnation, 0);
+			else
+				result = 0;
+			iput(target);
+			if (result == -2)
+				goto fail;
+			if (result < 0)
+				state->overflow = 1;
+			fs_directory_index_occupied_set(
+				state, candidate->offset, 1);
+			state->entries++;
+		}
+		result = dir_scan_checkpoint(batch->scanned);
+		if (result < 0)
+			goto fail;
+	}
+	if (dp->vfs_incarnation != incarnation || dp->size != size ||
+	    state->dev != dp->dev || state->inum != dp->inum)
+		goto fail;
+	state->complete = 1;
+	return 0;
+
+fail:
+	fs_directory_index_discard(state);
+	return result < 0 ? result : -1;
+}
+
+static int
+fs_directory_index_prepare(struct inode *dp,
+			   struct fs_directory_index_state **out)
+{
+	struct fs_directory_index_state *state;
+	int result;
+
+	fs_dentry_gate_require();
+	if (out == 0)
+		return -1;
+	*out = 0;
+	state = fs_directory_index_find(dp, 0);
+	if (state == 0 || !state->complete) {
+		result = fs_directory_index_rebuild(dp);
+		if (result < 0)
+			return result;
+		state = fs_directory_index_find(dp, 0);
+	}
+	if (state == 0 || !state->complete)
+		return -1;
+	*out = state;
+	return state->overflow ? 0 : 1;
+}
+
+static void
+fs_directory_index_invalidate(struct inode *dp)
+{
+	fs_dentry_gate_require();
+	struct fs_directory_index_state *state =
+		fs_directory_index_find(dp, 0);
+
+	if (state != 0)
+		fs_directory_index_discard(state);
+}
+
+#define FS_DENTRY_LOCATE_FALLBACK 0
+#define FS_DENTRY_LOCATE_HIT 1
+#define FS_DENTRY_LOCATE_ABSENT 2
+
+static int
+fs_dentry_index_snapshot_begin(struct inode *dp, uint64 *generation)
+{
+	struct fs_directory_index_state *state;
+	int result;
+
+	fs_dentry_gate_require();
+	if (generation == 0)
+		return -1;
+	result = fs_directory_index_prepare(dp, &state);
+	if (result <= 0)
+		return FS_DENTRY_LOCATE_FALLBACK;
+	*generation = fs_dentry_index_generation;
+	return 1;
+}
+
+static int
+fs_dentry_index_snapshot_next(struct inode *dp, uint hash,
+			      uint64 generation, uint *cursor,
+			      struct fs_dentry_index_entry *out)
+{
+	fs_dentry_gate_require();
+	if (cursor == 0 || out == 0 ||
+	    generation != fs_dentry_index_generation)
+		return -1;
+	while (*cursor < FS_DENTRY_INDEX_CAP) {
+		uint scanned = (*cursor)++;
+		uint slot = (hash + scanned) & (FS_DENTRY_INDEX_CAP - 1);
+		struct fs_dentry_index_entry *entry = &fs_dentry_index[slot];
+
+		if (entry->state == FS_DENTRY_INDEX_EMPTY)
+			return 0;
+		if (entry->state != FS_DENTRY_INDEX_USED ||
+		    entry->hash != hash || entry->dev != dp->dev ||
+		    entry->dir_inum != dp->inum ||
+		    entry->dir_incarnation != dp->vfs_incarnation)
+			continue;
+		*out = *entry;
+		return 1;
+	}
+	return 0;
+}
+
+static int
+fs_dentry_entry_equal(const struct fs_dentry_index_entry *left,
+		      const struct fs_dentry_index_entry *right)
+{
+	return left->hash == right->hash && left->offset == right->offset &&
+	       left->dir_incarnation == right->dir_incarnation &&
+	       left->target_incarnation == right->target_incarnation &&
+	       left->dev == right->dev && left->dir_inum == right->dir_inum &&
+	       left->target_inum == right->target_inum &&
+	       left->state == right->state;
+}
+
+static void
+fs_dentry_index_invalidate_snapshot(
+	struct inode *dp, const struct fs_dentry_index_entry *snapshot,
+	uint64 generation)
+{
+	uint slot;
+	int found;
+
+	if (snapshot == 0 || fs_dentry_gate_lock() < 0)
+		return;
+	if (generation == fs_dentry_index_generation &&
+	    fs_dentry_index_probe(dp, snapshot->hash, snapshot->offset,
+				   &slot, &found) == 0 && found &&
+	    fs_dentry_entry_equal(&fs_dentry_index[slot], snapshot))
+		fs_directory_index_invalidate(dp);
+	fs_dentry_gate_unlock();
+}
+
+static int
+fs_dentry_index_snapshot_stable(uint64 generation)
+{
+	int stable;
+
+	if (fs_dentry_gate_lock() < 0)
+		return 0;
+	stable = generation == fs_dentry_index_generation;
+	fs_dentry_gate_unlock();
+	return stable;
+}
+
+static struct inode *
+fs_dentry_index_validate(struct inode *dp, const char key[DIRSIZ + 1],
+			 const struct fs_dentry_index_entry *entry,
+			 int *name_match, int *stale, int *status)
+{
+	struct dirent de;
+	struct inode *target;
+	struct vfs_cred kernel_cred;
+	char actual[DIRSIZ + 1];
+	int result;
+
+	if (name_match)
+		*name_match = 0;
+	if (stale)
+		*stale = 0;
+	if (entry == 0 || entry->offset >= dp->size ||
+	    entry->offset % sizeof(de) != 0 || entry->dev != dp->dev ||
+	    entry->dir_inum != dp->inum ||
+	    entry->dir_incarnation != dp->vfs_incarnation) {
+		if (stale)
+			*stale = 1;
+		if (status)
+			*status = FS_LOOKUP_ERROR;
+		return 0;
+	}
+	vfs_cred_kernel(&kernel_cred);
+	result = readi(dp, &kernel_cred, 0, (uint64)&de,
+		       entry->offset, sizeof(de));
+	if (result != sizeof(de)) {
+		if (status)
+			*status = result < 0 ? result : FS_LOOKUP_ERROR;
+		return 0;
+	}
+	kernel_performance_directory_probe(1);
+	memset(actual, 0, sizeof(actual));
+	memmove(actual, de.name, DIRSIZ);
+	if (de.inum != entry->target_inum ||
+	    fs_dentry_hash(dp, actual) != entry->hash) {
+		if (stale)
+			*stale = 1;
+		if (status)
+			*status = FS_LOOKUP_ERROR;
+		return 0;
+	}
+	if (strncmp(actual, key, DIRSIZ) != 0) {
+		if (status)
+			*status = FS_LOOKUP_ABSENT;
+		return 0;
+	}
+	if (name_match)
+		*name_match = 1;
+	target = inode_get(dp->dev, de.inum);
+	if (target == 0) {
+		if (status)
+			*status = FS_LOOKUP_ERROR;
+		return 0;
+	}
+	result = ivalid(target);
+	if (result < 0 || !vfs_inode_label_valid(target) ||
+	    target->vfs_incarnation != entry->target_incarnation) {
+		iput(target);
+		if (stale)
+			*stale = 1;
+		if (status)
+			*status = result < 0 ? result : FS_LOOKUP_ERROR;
+		return 0;
+	}
+	if (status)
+		*status = FS_LOOKUP_FOUND;
+	return target;
+}
+
+static int
+fs_dentry_index_create_conflict(struct inode *dp,
+				const char key[DIRSIZ + 1],
+				uint target_policy, uint target_scope_id,
+				int *empty_off)
+{
+	struct fs_dentry_index_entry snapshot;
+	struct fs_directory_index_state *state;
+	uint64 generation = 0;
+	uint cursor = 0;
+	uint hash = fs_dentry_hash(dp, key);
+	int result;
+
+	if (empty_off == 0 || fs_dentry_gate_lock() < 0)
+		return FS_DENTRY_LOCATE_FALLBACK;
+	result = fs_dentry_index_snapshot_begin(dp, &generation);
+	fs_dentry_gate_unlock();
+	if (result <= 0)
+		return FS_DENTRY_LOCATE_FALLBACK;
+	for (;;) {
+		struct inode *target;
+		int name_match;
+		int stale;
+		int validation_status = FS_LOOKUP_ERROR;
+		int matches;
+
+		if (fs_dentry_gate_lock() < 0)
+			return FS_DENTRY_LOCATE_FALLBACK;
+		result = fs_dentry_index_snapshot_next(
+			dp, hash, generation, &cursor, &snapshot);
+		fs_dentry_gate_unlock();
+		if (result < 0)
+			return FS_DENTRY_LOCATE_FALLBACK;
+		if (result == 0)
+			break;
+		target = fs_dentry_index_validate(
+			dp, key, &snapshot, &name_match, &stale,
+			&validation_status);
+		if (target == 0) {
+			if (stale)
+				fs_dentry_index_invalidate_snapshot(
+					dp, &snapshot, generation);
+			if (!name_match && !stale &&
+			    validation_status == FS_LOOKUP_ABSENT)
+				continue;
+			return FS_DENTRY_LOCATE_FALLBACK;
+		}
+		if (!fs_dentry_index_snapshot_stable(generation)) {
+			iput(target);
+			return FS_DENTRY_LOCATE_FALLBACK;
+		}
+		matches = target->vfs_policy == target_policy &&
+			  (target_policy != VFS_POLICY_WORKFLOW ||
+			   target->vfs_scope_id == target_scope_id);
+		if (target->vfs_policy == VFS_POLICY_WORKFLOW &&
+		    target->vfs_scope_id == VFS_SCOPE_SYSTEM &&
+		    ((target_policy == VFS_POLICY_WORKFLOW &&
+		      target_scope_id >= VFS_SCOPE_FIRST_DYNAMIC) ||
+		     (target_policy == VFS_POLICY_PUBLIC &&
+		      target->vfs_exec_profile == VFS_EXEC_PROFILE_NONE)))
+			matches = 1;
+		iput(target);
+		if (matches)
+			return FS_DENTRY_LOCATE_HIT;
+	}
+	if (fs_dentry_gate_lock() < 0)
+		return FS_DENTRY_LOCATE_FALLBACK;
+	state = generation == fs_dentry_index_generation ?
+		fs_directory_index_find(dp, 0) : 0;
+	if (state == 0 || !state->complete || state->overflow) {
+		fs_dentry_gate_unlock();
+		return FS_DENTRY_LOCATE_FALLBACK;
+	}
+	*empty_off = fs_directory_index_first_empty(state);
+	fs_dentry_gate_unlock();
+	return FS_DENTRY_LOCATE_ABSENT;
+}
+
+static void
+fs_dentry_index_publish_link(struct inode *dp,
+			     const char key[DIRSIZ + 1], uint offset,
+			     uint target_inum, uint target_incarnation)
+{
+	struct fs_directory_index_state *state;
+	uint ordinal = offset / sizeof(struct dirent);
+
+	fs_dentry_gate_lock_uninterruptible();
+	state = fs_directory_index_find(dp, 0);
+	if (state != 0 && state->complete && !state->overflow &&
+	    ordinal < FS_DIRECTORY_INDEX_MAX_ENTRIES &&
+	    (state->occupied[ordinal / 8] & (1U << (ordinal % 8))) == 0 &&
+	    state->entries < FS_DIRECTORY_INDEX_MAX_ENTRIES) {
+		fs_directory_index_occupied_set(state, offset, 1);
+		state->entries++;
+		if (fs_dentry_index_insert(dp, key, offset, target_inum,
+					   target_incarnation, 0) < 0)
+			fs_directory_index_invalidate(dp);
+	} else if (state != 0) {
+		fs_directory_index_invalidate(dp);
+	}
+	fs_dentry_gate_unlock();
+}
+
+static void
+fs_dentry_index_publish_unlink(struct inode *dp,
+			       const char key[DIRSIZ + 1], uint offset,
+			       uint target_inum, uint target_incarnation)
+{
+	struct fs_directory_index_state *state;
+	struct fs_dentry_index_entry *entry;
+	uint hash = fs_dentry_hash(dp, key);
+	uint slot;
+	uint ordinal = offset / sizeof(struct dirent);
+	int found;
+
+	fs_dentry_gate_lock_uninterruptible();
+	state = fs_directory_index_find(dp, 0);
+	if (state == 0) {
+		fs_dentry_gate_unlock();
+		return;
+	}
+	if (!state->complete || state->overflow ||
+	    fs_dentry_index_probe(dp, hash, offset, &slot, &found) < 0 ||
+	    !found || ordinal >= FS_DIRECTORY_INDEX_MAX_ENTRIES ||
+	    (state->occupied[ordinal / 8] & (1U << (ordinal % 8))) == 0) {
+		fs_directory_index_invalidate(dp);
+		fs_dentry_gate_unlock();
+		return;
+	}
+	entry = &fs_dentry_index[slot];
+	if (entry->target_inum != target_inum ||
+	    entry->target_incarnation != target_incarnation ||
+	    state->entries == 0) {
+		fs_directory_index_invalidate(dp);
+		fs_dentry_gate_unlock();
+		return;
+	}
+	entry->state = FS_DENTRY_INDEX_TOMBSTONE;
+	if (fs_dentry_index_used == 0)
+		panic("dentry unlink used underflow");
+	fs_dentry_index_used--;
+	fs_dentry_index_tombstones++;
+	state->entries--;
+	fs_directory_index_occupied_set(state, offset, 0);
+	fs_dentry_index_bump();
+	if (fs_dentry_index_tombstones > FS_DENTRY_INDEX_CAP / 2)
+		fs_dentry_index_reset_all();
+	fs_dentry_gate_unlock();
+}
+
+static void
+fs_dentry_index_invalidate_directory(struct inode *dp)
+{
+	fs_dentry_gate_lock_uninterruptible();
+	fs_directory_index_invalidate(dp);
+	fs_dentry_gate_unlock();
+}
+
 /*
  * Prebuilt images historically use a fixed DIRSIZ dirent as their lookup key.
  * Canonicalize every operation to that on-disk key. Target inode policy and
@@ -3655,12 +6568,19 @@ int fs_dirent_canonicalize(const char *input, char out[DIRSIZ + 1])
 struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
 			uint policy, uint scope_id, int *status)
 {
-	uint off, found_off = 0;
+	uint off = 0, found_off = 0;
 	struct dirent de;
+	struct dir_scan_batch batch;
 	struct inode *found = 0;
 	struct inode *target;
 	struct vfs_cred kernel_cred;
 	char key[DIRSIZ + 1];
+	struct fs_dentry_index_entry indexed;
+	uint64 index_generation = 0;
+	uint index_cursor = 0;
+	uint index_hash;
+	int name_match;
+	int stale;
 	int result;
 
 	if (status)
@@ -3669,58 +6589,126 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
 	    dp->type != T_DIR || policy == 0)
 		return 0;
 	vfs_cred_kernel(&kernel_cred);
+	if (!vfs_inode_authorize(dp, &kernel_cred, VFS_OP_READ))
+		return 0;
+	index_hash = fs_dentry_hash(dp, key);
+	if (fs_dentry_gate_lock() < 0)
+		return 0;
+	result = fs_dentry_index_snapshot_begin(dp, &index_generation);
+	fs_dentry_gate_unlock();
+	if (result > 0) {
+		for (;;) {
+			int validation_status = FS_LOOKUP_ERROR;
 
-	for (off = 0; off < dp->size; off += sizeof(de)) {
-		result = readi(dp, &kernel_cred, 0, (uint64)&de, off,
-			       sizeof(de));
-		if (result != sizeof(de)) {
-			if (status && result < 0)
-				*status = result;
-			if (found)
-				iput(found);
-			return 0;
-		}
-		if (de.inum == 0)
-			continue;
-		if (strncmp(key, de.name, DIRSIZ) == 0) {
-			target = inode_get(dp->dev, de.inum);
+			if (fs_dentry_gate_lock() < 0)
+				goto authoritative;
+			result = fs_dentry_index_snapshot_next(
+				dp, index_hash, index_generation,
+				&index_cursor, &indexed);
+			fs_dentry_gate_unlock();
+			if (result < 0)
+				goto authoritative;
+			if (result == 0) {
+				if (found) {
+					if (poff)
+						*poff = found_off;
+					if (status)
+						*status = FS_LOOKUP_FOUND;
+				} else if (status) {
+					*status = FS_LOOKUP_ABSENT;
+				}
+				return found;
+			}
+			target = fs_dentry_index_validate(
+				dp, key, &indexed, &name_match, &stale,
+				&validation_status);
 			if (target == 0) {
-				if (found)
-					iput(found);
-				return 0;
+				if (stale) {
+					fs_dentry_index_invalidate_snapshot(
+						dp, &indexed, index_generation);
+					goto authoritative;
+				}
+				if (!name_match &&
+				    validation_status == FS_LOOKUP_ABSENT)
+					continue;
+				result = validation_status;
+				goto fail;
 			}
-			result = ivalid(target);
-			if (result < 0) {
-				if (status)
-					*status = result;
+			if (!fs_dentry_index_snapshot_stable(index_generation)) {
 				iput(target);
-				if (found)
-					iput(found);
-				return 0;
+				goto authoritative;
 			}
-			if (!vfs_inode_label_valid(target)) {
-				iput(target);
-				if (found)
-					iput(found);
-				return 0;
-			}
-			if (policy != 0 && target->vfs_policy != policy) {
-				iput(target);
-				continue;
-			}
-			if (target->vfs_policy == VFS_POLICY_WORKFLOW &&
-			    target->vfs_scope_id != scope_id) {
+			if (target->vfs_policy != policy ||
+			    (target->vfs_policy == VFS_POLICY_WORKFLOW &&
+			     target->vfs_scope_id != scope_id)) {
 				iput(target);
 				continue;
 			}
 			if (found) {
 				iput(target);
-				iput(found);
-				return 0;
+				result = FS_LOOKUP_ERROR;
+				goto fail;
 			}
 			found = target;
-			found_off = off;
+			found_off = indexed.offset;
 		}
+	}
+
+authoritative:
+	if (found) {
+		iput(found);
+		found = 0;
+	}
+	off = 0;
+	while (off < dp->size) {
+		if (!vfs_inode_authorize(dp, &kernel_cred, VFS_OP_READ)) {
+			result = FS_LOOKUP_ERROR;
+			goto fail;
+		}
+		result = dir_scan_fill(dp, key, off, 0, &batch);
+		if (result < 0)
+			goto fail;
+		off = batch.next_offset;
+		for (uint i = 0; i < batch.count; i++) {
+			de = batch.candidates[i].entry;
+			if (strncmp(key, de.name, DIRSIZ) == 0) {
+				target = inode_get(dp->dev, de.inum);
+				if (target == 0) {
+					result = FS_LOOKUP_ERROR;
+					goto fail;
+				}
+				result = ivalid(target);
+				if (result < 0) {
+					iput(target);
+					goto fail;
+				}
+				if (!vfs_inode_label_valid(target)) {
+					iput(target);
+					result = FS_LOOKUP_ERROR;
+					goto fail;
+				}
+				if (policy != 0 &&
+				    target->vfs_policy != policy) {
+					iput(target);
+					continue;
+				}
+				if (target->vfs_policy == VFS_POLICY_WORKFLOW &&
+				    target->vfs_scope_id != scope_id) {
+					iput(target);
+					continue;
+				}
+				if (found) {
+					iput(target);
+					result = FS_LOOKUP_ERROR;
+					goto fail;
+				}
+				found = target;
+				found_off = batch.candidates[i].offset;
+			}
+		}
+		result = dir_scan_checkpoint(batch.scanned);
+		if (result < 0)
+			goto fail;
 	}
 	if (found) {
 		if (poff)
@@ -3731,48 +6719,65 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
 		*status = FS_LOOKUP_ABSENT;
 	}
 	return found;
+
+fail:
+	if (status)
+		*status = result;
+	if (found)
+		iput(found);
+	return 0;
 }
 
 //Show the filenames of all files in the directory
 int dirls(struct inode *dp, const struct vfs_cred *cred)
 {
-	uint64 off, count;
+	uint count = 0;
+	uint off = 0;
 	struct dirent de;
+	struct dir_scan_batch batch;
 	struct inode *target;
 	char name[DIRSIZ + 1];
+	int result;
 
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
 	if (!vfs_inode_authorize(dp, cred, VFS_OP_READ))
 		return -1;
 
-	count = 0;
-	for (off = 0; off < dp->size; off += sizeof(de)) {
-		if (readi(dp, cred, 0, (uint64)&de, off, sizeof(de)) !=
-		    sizeof(de))
+	while (off < dp->size) {
+		if (!vfs_inode_authorize(dp, cred, VFS_OP_READ))
 			return -1;
-		if (de.inum == 0)
-			continue;
-		target = inode_get(dp->dev, de.inum);
-		if (target == 0)
-			return -1;
-		if (ivalid(target) < 0) {
+		result = dir_scan_fill(dp, 0, off, 0, &batch);
+		if (result < 0)
+			return result;
+		off = batch.next_offset;
+		for (uint i = 0; i < batch.count; i++) {
+			de = batch.candidates[i].entry;
+			target = inode_get(dp->dev, de.inum);
+			if (target == 0)
+				return -1;
+			result = ivalid(target);
+			if (result < 0) {
+				iput(target);
+				return result;
+			}
+			if (!vfs_inode_label_valid(target)) {
+				iput(target);
+				return -1;
+			}
+			if (!vfs_inode_authorize(target, cred, VFS_OP_LOOKUP)) {
+				iput(target);
+				continue;
+			}
 			iput(target);
-			return -1;
+			memmove(name, de.name, DIRSIZ);
+			name[DIRSIZ] = 0;
+			printf("%s\n", name);
+			count++;
 		}
-		if (!vfs_inode_label_valid(target)) {
-			iput(target);
-			return -1;
-		}
-		if (!vfs_inode_authorize(target, cred, VFS_OP_LOOKUP)) {
-			iput(target);
-			continue;
-		}
-		iput(target);
-		memmove(name, de.name, DIRSIZ);
-		name[DIRSIZ] = 0;
-		printf("%s\n", name);
-		count++;
+		result = dir_scan_checkpoint(batch.scanned);
+		if (result < 0)
+			return result;
 	}
 	return count;
 }
@@ -3781,9 +6786,10 @@ int dirls(struct inode *dp, const struct vfs_cred *cred)
 int dirlink(struct inode *dp, char *name, uint inum,
 	    const struct vfs_cred *cred)
 {
-	int off;
+	uint off = 0;
 	int empty_off = -1;
 	struct dirent de;
+	struct dir_scan_batch batch;
 	struct inode *ip;
 	struct inode *target;
 	struct vfs_cred kernel_cred;
@@ -3793,8 +6799,10 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	};
 	uint target_policy;
 	uint target_scope_id;
+	uint target_incarnation;
 	char key[DIRSIZ + 1];
 	int lookup_status;
+	int index_status;
 	int result;
 	if (fs_dirent_canonicalize(name, key) < 0 || dp == 0 ||
 	    dp->type != T_DIR)
@@ -3811,6 +6819,7 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	}
 	target_policy = target->vfs_policy;
 	target_scope_id = target->vfs_scope_id;
+	target_incarnation = target->vfs_incarnation;
 	if ((target_policy == VFS_POLICY_WORKFLOW &&
 	     target_scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
 	     (cred == 0 || cred->scope_id != target_scope_id)) ||
@@ -3824,61 +6833,99 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	}
 	iput(target);
 	vfs_cred_kernel(&kernel_cred);
-	// Validate namespace uniqueness, immutable SYSTEM-name reservation, and
-	// free-slot selection in one pass.  The fixed root table is intentionally
-	// large, so multiplying full scans would defeat block-I/O fairness.
-	for (off = 0; off < dp->size; off += sizeof(de)) {
-		result = readi(dp, &kernel_cred, 0, (uint64)&de, off,
-			       sizeof(de));
-		if (result != sizeof(de))
-			return result < 0 ? result : -1;
-		if (de.inum == 0) {
-			if (empty_off < 0)
-				empty_off = off;
-			continue;
-		}
-		if (strncmp(key, de.name, DIRSIZ) != 0)
-			continue;
-		ip = inode_get(dp->dev, de.inum);
-		if (ip == 0)
-			return -1;
-		result = ivalid(ip);
-		if (result < 0) {
-			iput(ip);
-			return result;
-		}
-		if (!vfs_inode_label_valid(ip)) {
-			iput(ip);
-			return -1;
-		}
-		lookup_status = ip->vfs_policy == target_policy &&
-			(target_policy != VFS_POLICY_WORKFLOW ||
-			 ip->vfs_scope_id == target_scope_id);
-		if (ip->vfs_policy == VFS_POLICY_WORKFLOW &&
-		    ip->vfs_scope_id == VFS_SCOPE_SYSTEM &&
-		    ((target_policy == VFS_POLICY_WORKFLOW &&
-		      target_scope_id >= VFS_SCOPE_FIRST_DYNAMIC) ||
-		     (target_policy == VFS_POLICY_PUBLIC &&
-		      ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE)))
-			lookup_status = 1;
-		iput(ip);
-		if (lookup_status)
-			return -1;
-	}
-	if (empty_off < 0)
+	if (fs_namespace_gate_lock() < 0)
 		return -1;
-	off = empty_off;
+	index_status = fs_dentry_index_create_conflict(
+		dp, key, target_policy, target_scope_id, &empty_off);
+	if (index_status == FS_DENTRY_LOCATE_HIT) {
+		result = -1;
+		goto out_namespace;
+	}
+	if (index_status == FS_DENTRY_LOCATE_ABSENT) {
+		if (empty_off < 0) {
+			result = -1;
+			goto out_namespace;
+		}
+		goto write_entry;
+	}
+	// Validate namespace uniqueness, immutable SYSTEM-name reservation, and
+	// free-slot selection with one bounded block walker.  Inode validation is
+	// deliberately outside the buffer lifetime.
+	while (off < dp->size) {
+		if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE) ||
+		    !vfs_inode_authorize(dp, &kernel_cred, VFS_OP_READ)) {
+			result = -1;
+			goto out_namespace;
+		}
+		result = dir_scan_fill(dp, key, off, &empty_off, &batch);
+		if (result < 0)
+			goto out_namespace;
+		off = batch.next_offset;
+		for (uint i = 0; i < batch.count; i++) {
+			de = batch.candidates[i].entry;
+			if (strncmp(key, de.name, DIRSIZ) != 0)
+				continue;
+			ip = inode_get(dp->dev, de.inum);
+			if (ip == 0) {
+				result = -1;
+				goto out_namespace;
+			}
+			result = ivalid(ip);
+			if (result < 0) {
+				iput(ip);
+				goto out_namespace;
+			}
+			if (!vfs_inode_label_valid(ip)) {
+				iput(ip);
+				result = -1;
+				goto out_namespace;
+			}
+			lookup_status = ip->vfs_policy == target_policy &&
+				(target_policy != VFS_POLICY_WORKFLOW ||
+				 ip->vfs_scope_id == target_scope_id);
+			if (ip->vfs_policy == VFS_POLICY_WORKFLOW &&
+			    ip->vfs_scope_id == VFS_SCOPE_SYSTEM &&
+			    ((target_policy == VFS_POLICY_WORKFLOW &&
+			      target_scope_id >= VFS_SCOPE_FIRST_DYNAMIC) ||
+			     (target_policy == VFS_POLICY_PUBLIC &&
+			      ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE)))
+				lookup_status = 1;
+			iput(ip);
+			if (lookup_status) {
+				result = -1;
+				goto out_namespace;
+			}
+		}
+		result = dir_scan_checkpoint(batch.scanned);
+		if (result < 0)
+			goto out_namespace;
+	}
+	if (empty_off < 0) {
+		result = -1;
+		goto out_namespace;
+	}
+write_entry:
 	memmove(de.name, key, DIRSIZ);
 	de.inum = inum;
 	result = writei_charged(dp, &kernel_cred, &charge, 0,
-				(uint64)&de, off, sizeof(de));
-	if (result != sizeof(de))
-		return fs_io_health == FS_IO_INDETERMINATE ?
+				(uint64)&de, (uint)empty_off, sizeof(de),
+				FS_EPOCH_NAMESPACE_ATTACH);
+	if (result != sizeof(de)) {
+		fs_dentry_index_invalidate_directory(dp);
+		result = fs_io_health == FS_IO_INDETERMINATE ?
 			FS_LOOKUP_INDETERMINATE : (result < 0 ? result : -1);
+		goto out_namespace;
+	}
+	fs_dentry_index_publish_link(dp, key, (uint)empty_off, inum,
+				     target_incarnation);
 	result = fs_durable_barrier_forward();
 	if (result < 0)
-		return FS_LOOKUP_INDETERMINATE;
-	return 0;
+		result = FS_LOOKUP_INDETERMINATE;
+	else
+		result = 0;
+out_namespace:
+	fs_namespace_gate_unlock();
+	return result;
 }
 
 int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
@@ -3902,21 +6949,29 @@ int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
 		return -1;
 	if (offset >= dp->size || offset % sizeof(de) != 0)
 		return -1;
+	if (fs_namespace_gate_lock() < 0)
+		return -1;
 	vfs_cred_kernel(&kernel_cred);
 	result = readi(dp, &kernel_cred, 0, (uint64)&de, offset,
 		       sizeof(de));
-	if (result != sizeof(de))
-		return result < 0 ? result : -1;
+	if (result != sizeof(de)) {
+		result = result < 0 ? result : -1;
+		goto out_namespace;
+	}
 	if (de.inum != expected_inum ||
-	    strncmp(key, de.name, DIRSIZ) != 0)
-		return -1;
+	    strncmp(key, de.name, DIRSIZ) != 0) {
+		result = -1;
+		goto out_namespace;
+	}
 	target = inode_get(dp->dev, de.inum);
-	if (target == 0)
-		return -1;
+	if (target == 0) {
+		result = -1;
+		goto out_namespace;
+	}
 	result = ivalid(target);
 	if (result < 0) {
 		iput(target);
-		return result;
+		goto out_namespace;
 	}
 	if (!vfs_inode_label_valid(target) ||
 	    target->vfs_policy != policy ||
@@ -3924,18 +6979,25 @@ int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
 	    !vfs_inode_authorize(target, cred, VFS_OP_DELETE) ||
 	    !exec_policy_inode_mutable(target)) {
 		iput(target);
-		return -1;
+		result = -1;
+		goto out_namespace;
 	}
 	iput(target);
 	memset(&de, 0, sizeof(de));
 	result = writei_charged(dp, &kernel_cred, &charge, 0,
-				(uint64)&de, offset, sizeof(de));
-	if (result != sizeof(de))
-		return result < 0 ? result : -1;
+				(uint64)&de, offset, sizeof(de),
+				FS_EPOCH_NAMESPACE_DETACH);
+	if (result != sizeof(de)) {
+		fs_dentry_index_invalidate_directory(dp);
+		result = result < 0 ? result : -1;
+		goto out_namespace;
+	}
+	fs_dentry_index_publish_unlink(dp, key, offset, expected_inum,
+				       expected_incarnation);
 	result = fs_durable_barrier_forward();
-	if (result < 0)
-		return result;
-	return 0;
+out_namespace:
+	fs_namespace_gate_unlock();
+	return result;
 }
 
 int fs_rollback_created_workflow(char *path, uint expected_dev,
@@ -4117,16 +7179,26 @@ int fs_reclaim_scope_files(uint scope_id)
 							struct dirent empty;
 
 							memset(&empty, 0, sizeof(empty));
-							if (writei_charged(
-								    dp, &kernel_cred,
-								    &system_charge, 0,
-								    (uint64)&empty, off,
-								    sizeof(empty)) !=
-							    sizeof(empty)) {
+							if (fs_namespace_gate_lock() < 0) {
 								iput(target);
 								iput(dp);
 								return -1;
 							}
+							if (writei_charged(
+								    dp, &kernel_cred,
+								    &system_charge, 0,
+								    (uint64)&empty, off,
+								    sizeof(empty),
+								    FS_EPOCH_NAMESPACE_DETACH) !=
+							    sizeof(empty)) {
+								fs_dentry_index_invalidate_directory(dp);
+								fs_namespace_gate_unlock();
+								iput(target);
+								iput(dp);
+								return -1;
+							}
+							fs_dentry_index_invalidate_directory(dp);
+							fs_namespace_gate_unlock();
 							if (cursor->inode_count >= NINODE) {
 								iput(target);
 								iput(dp);

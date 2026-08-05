@@ -109,8 +109,11 @@ void usertrap()
 			trapframe->epc += 4;
 			syscall();
 			break;
-		case StoreMisaligned:
 		case StorePageFault:
+			if (uvm_cow_fault(curr_proc()->pagetable, r_stval()) == 0)
+				break;
+			/* fall through */
+		case StoreMisaligned:
 		case InstructionMisaligned:
 		case InstructionPageFault:
 		case LoadMisaligned:

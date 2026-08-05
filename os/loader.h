@@ -18,6 +18,17 @@ enum user_image_agent_class {
 	USER_IMAGE_AGENT_TRUSTED,
 };
 
+#define USER_IMAGE_RX_CACHE_STATS_VERSION 1ULL
+
+struct user_image_rx_cache_stats {
+	uint64 version;
+	uint64 size;
+	uint64 exec_cache_hits;
+	uint64 exec_cache_misses;
+	uint64 exec_cache_shared_pages;
+	uint64 exec_cache_evictions;
+};
+
 struct user_image {
 	pagetable_t pagetable;
 	uint64 max_page;
@@ -44,6 +55,8 @@ int user_image_build(struct inode *, uint64,
 		     struct resource_account_handle,
 		     enum resource_charge_class, struct user_image *);
 void user_image_discard(struct user_image *);
+void user_image_rx_cache_stats_snapshot(
+	struct user_image_rx_cache_stats *);
 
 #define BASE_ADDRESS (0x1000)
 #define USTACK_SIZE (USER_STACK_SIZE_BYTES)

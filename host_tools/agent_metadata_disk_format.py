@@ -15,6 +15,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from host_tools import plain_ucore_fs_extract as ucore_fs
+from host_tools.agent_metadata_journal import (
+    JOURNAL_BYTES,
+    JOURNAL_OFFSET,
+    JournalError,
+    extract_journal,
+    materialize_arena,
+    materialize_records,
+    metadata_record_slot,
+    recover_journal,
+)
 
 
 DEFAULT_CONTRACT = ROOT / "ci" / "agent-metadata-disk-format.json"
@@ -382,7 +392,13 @@ def canonical_genesis_store(layout: DiskLayout) -> bytes:
 def parse_bank(raw: bytes, name: str, layout: DiskLayout) -> dict[str, Any]:
     if len(raw) < layout.header_bytes:
         if not raw or not any(raw):
-            return {"name": name, "state": "uncommitted", "bytes": len(raw)}
+            return {
+                "name": name,
+                "state": "uncommitted",
+                "bytes": len(raw),
+                "header_bytes": layout.header_bytes,
+                "store_image": raw,
+            }
         raise BankError(f"{name}: partial non-zero header ({len(raw)} bytes)")
     header = {
         field: _read_integer(
@@ -391,7 +407,15 @@ def parse_bank(raw: bytes, name: str, layout: DiskLayout) -> dict[str, Any]:
         for field, offset in layout.header_offsets.items()
     }
     if all(value == 0 for value in header.values()):
-        return {"name": name, "state": "uncommitted", "bytes": len(raw)}
+        if any(raw[: layout.header_bytes]):
+            raise BankError(f"{name}: invalidated header contains non-zero bytes")
+        return {
+            "name": name,
+            "state": "uncommitted",
+            "bytes": len(raw),
+            "header_bytes": layout.header_bytes,
+            "store_image": raw,
+        }
     if header["magic"] != layout.disk_magic:
         raise BankError(f"{name}: unsupported magic 0x{header['magic']:016x}")
     if header["version"] != layout.disk_version:
@@ -418,9 +442,11 @@ def parse_bank(raw: bytes, name: str, layout: DiskLayout) -> dict[str, Any]:
         )
 
     statuses: list[str] = []
+    record_images: list[bytes] = []
     records_offset = layout.header_bytes + layout.durable_arena_bytes
     for index in range(header["count"]):
         start = records_offset + index * layout.record_bytes
+        record_images.append(bytes(raw[start : start + layout.record_bytes]))
         used = _read_integer(
             raw,
             start + layout.record_offsets["used"],
@@ -450,14 +476,66 @@ def parse_bank(raw: bytes, name: str, layout: DiskLayout) -> dict[str, Any]:
             )
     if len(statuses) > 1:
         raise BankError(f"{name}: duplicate metafile records {statuses}")
+    effective_header = dict(header)
+    effective_payload = payload
+    journal_summary = {
+        "base_generation": header["generation"],
+        "transactions": 0,
+        "blocks": 0,
+        "next_slot": 0,
+        "ignored_tail_slot": None,
+    }
+    if len(raw) >= JOURNAL_OFFSET + JOURNAL_BYTES:
+        try:
+            recovered = recover_journal(
+                extract_journal(raw),
+                base_generation=header["generation"],
+                base_payload_hash=header["payload_hash"],
+            )
+            materialized = materialize_records(record_images, recovered)
+            materialized_arena = materialize_arena(
+                bytes(raw[layout.header_bytes : records_offset]), recovered
+            )
+        except JournalError as error:
+            raise BankError(f"{name}: invalid v8 journal: {error}") from error
+        records = sorted(
+            materialized.values(),
+            key=metadata_record_slot,
+        )
+        effective_header["count"] = len(records)
+        effective_header["generation"] = recovered.last_generation
+        effective_payload = (
+            materialized_arena
+            + b"".join(records)
+        )
+        effective_header["payload_hash"] = payload_hash(
+            layout, effective_header, effective_payload
+        )
+        journal_summary = {
+            "base_generation": recovered.base_generation,
+            "transactions": len(recovered.transactions),
+            "blocks": sum(transaction.blocks for transaction in recovered.transactions),
+            "next_slot": recovered.next_slot,
+            "ignored_tail_slot": recovered.ignored_tail_slot,
+            "last_commit_hash": f"{recovered.last_commit_hash:016x}",
+        }
+    logical = bytearray(layout.header_bytes)
+    for field, value in effective_header.items():
+        offset = layout.header_offsets[field]
+        logical[offset : offset + layout.header_integer_bytes] = value.to_bytes(
+            layout.header_integer_bytes, "little"
+        )
+    logical.extend(effective_payload)
     return {
         "name": name,
         "state": "valid",
-        "generation": header["generation"],
-        "payload_hash": f"{header['payload_hash']:016x}",
-        "count": header["count"],
+        "generation": effective_header["generation"],
+        "payload_hash": f"{effective_header['payload_hash']:016x}",
+        "count": effective_header["count"],
+        "header_bytes": layout.header_bytes,
         "metafile_status": statuses[0] if statuses else None,
-        "store_image": raw[:store_bytes],
+        "store_image": bytes(logical),
+        "journal": journal_summary,
     }
 
 
@@ -474,15 +552,19 @@ def _require_identical_banks(valid: list[dict[str, Any]], where: str) -> None:
 
 
 def _validate_interrupted_bank_set(
-    banks: list[dict[str, Any]], interrupted_leg: str, phase: int
+    banks: list[dict[str, Any]],
+    interrupted_leg: str,
+    phase: int,
+    reference_updated: dict[str, Any] | None,
 ) -> None:
     """Validate the exact raw-media state at every COW crash checkpoint.
 
     The primary leg replaces one bank of a replicated generation-B baseline
     with generation B+1.  The mirror leg then replaces the remaining baseline
-    bank with that verified image.  Phases 2..5 follow a durable zero-header;
-    phase 6 follows an unflushed header write; phases 7/8 follow its durability
-    barrier and device readback respectively.
+    bank with that verified image. Phase 1 is before the epoch can write back.
+    Capacity or age pressure may commit a partial, still-invalid target during
+    phase 2. Phase 3 is the prepared-image fence, phase 5 only stages the valid
+    header, and phases 6..8 follow its fence, verification and commit.
     """
     if len(banks) != 2 or len({bank.get("name") for bank in banks}) != 2:
         raise RecoveryInvariantError(
@@ -545,30 +627,113 @@ def _validate_interrupted_bank_set(
                 f"{status} target/peer images"
             )
 
+    def expected_updated() -> dict[str, Any] | None:
+        if reference_updated is not None:
+            if (
+                reference_updated.get("state") != "valid"
+                or reference_updated.get("metafile_status") != "updated"
+            ):
+                raise RecoveryInvariantError(
+                    "reference metadata bank is not a verified update"
+                )
+            return reference_updated
+        if interrupted_leg == "mirror" and len(groups["updated"]) == 1:
+            return groups["updated"][0]
+        return None
+
+    def require_prepared_payload() -> None:
+        if len(groups["uncommitted"]) != 1:
+            raise RecoveryInvariantError(
+                f"{interrupted_leg} phase {phase} lacks one prepared target"
+            )
+        expected = expected_updated()
+        if expected is None:
+            raise RecoveryInvariantError(
+                f"{interrupted_leg} phase {phase} requires a verified "
+                "updated reference"
+            )
+        if groups["baseline"] and (
+            expected.get("generation")
+            != groups["baseline"][0].get("generation", -1) + 1
+        ):
+            raise RecoveryInvariantError(
+                f"{interrupted_leg} phase {phase} reference generation does "
+                "not follow the baseline"
+            )
+        raw = groups["uncommitted"][0].get("store_image")
+        published = expected.get("store_image")
+        if not isinstance(raw, bytes) or not isinstance(published, bytes):
+            raise RecoveryInvariantError("metadata bank payload bytes are absent")
+        header_bytes = expected.get("header_bytes")
+        if not isinstance(header_bytes, int) or header_bytes <= 0:
+            raise RecoveryInvariantError("metadata header size is absent")
+        if len(raw) < len(published) or (
+            raw[header_bytes : len(published)]
+            != published[header_bytes:]
+        ):
+            raise RecoveryInvariantError(
+                f"{interrupted_leg} phase {phase} contains a partial or "
+                "foreign prepared payload"
+            )
+
+    def require_partial_target() -> None:
+        target = groups["uncommitted"][0]
+        raw = target.get("store_image")
+        header_bytes = target.get("header_bytes")
+        if (
+            not isinstance(raw, bytes)
+            or not isinstance(header_bytes, int)
+            or len(raw) < header_bytes
+        ):
+            raise RecoveryInvariantError(
+                f"{interrupted_leg} phase {phase} has a truncated invalid target"
+            )
+
+    def require_updated_reference() -> None:
+        expected = expected_updated()
+        if expected is None:
+            return
+        for updated in groups["updated"]:
+            if not _bank_images_equal(updated, expected):
+                raise RecoveryInvariantError(
+                    f"{interrupted_leg} phase {phase} published an unexpected "
+                    "updated payload"
+                )
+
     if interrupted_leg == "primary":
         if phase == 1:
             require_counts(
                 (2, 0, 0), "valid replicated baseline target/peer banks"
             )
             require_replicated("baseline")
-        elif phase <= 5:
-            require_counts(
-                (1, 0, 1),
-                "an uncommitted target header and a valid baseline peer",
-            )
-        elif phase == 6:
-            if counts() == (1, 1, 0):
-                require_adjacent()
+        elif phase == 2:
+            if counts() == (2, 0, 0):
+                require_replicated("baseline")
             elif counts() != (1, 0, 1):
                 require_counts(
                     (1, 0, 1),
-                    "a baseline peer and an uncommitted or valid updated target",
+                    "a baseline peer and a baseline or partial invalid target",
                 )
+            else:
+                require_partial_target()
+        elif phase <= 4:
+            require_counts(
+                (1, 0, 1),
+                "a fully prepared uncommitted target and a valid baseline peer",
+            )
+            require_prepared_payload()
+        elif phase == 5:
+            require_counts(
+                (1, 0, 1),
+                "a baseline peer and a fully prepared uncommitted target",
+            )
+            require_prepared_payload()
         else:
             require_counts(
                 (1, 1, 0), "a valid updated target and a valid baseline peer"
             )
             require_adjacent()
+            require_updated_reference()
         return
 
     if phase == 1:
@@ -576,25 +741,38 @@ def _validate_interrupted_bank_set(
             (1, 1, 0), "a valid baseline target and verified updated peer"
         )
         require_adjacent()
-    elif phase <= 5:
-        require_counts(
-            (0, 1, 1),
-            "an uncommitted target header and verified updated peer",
-        )
-    elif phase == 6:
-        if counts() == (0, 2, 0):
-            require_replicated("updated")
+        require_updated_reference()
+    elif phase == 2:
+        if counts() == (1, 1, 0):
+            require_adjacent()
         elif counts() != (0, 1, 1):
             require_counts(
                 (0, 1, 1),
-                "a verified updated peer and an uncommitted or "
-                "identical updated target",
+                "an updated peer and a baseline or partial invalid target",
             )
+        else:
+            require_partial_target()
+        require_updated_reference()
+    elif phase <= 4:
+        require_counts(
+            (0, 1, 1),
+            "a fully prepared uncommitted target and verified updated peer",
+        )
+        require_prepared_payload()
+        require_updated_reference()
+    elif phase == 5:
+        require_counts(
+            (0, 1, 1),
+            "a verified updated peer and fully prepared uncommitted target",
+        )
+        require_prepared_payload()
+        require_updated_reference()
     else:
         require_counts(
             (0, 2, 0), "valid identical updated target/peer banks"
         )
         require_replicated("updated")
+        require_updated_reference()
 
 
 def validate_bank_set(
@@ -603,6 +781,7 @@ def validate_bank_set(
     *,
     interrupted_leg: str = "none",
     phase: int | None = None,
+    reference_updated: dict[str, Any] | None = None,
 ) -> None:
     valid = [bank for bank in banks if bank["state"] == "valid"]
     if not valid:
@@ -627,7 +806,9 @@ def validate_bank_set(
             )
         if phase is None or phase < 1 or phase > 8:
             raise RecoveryInvariantError("interrupted update requires phase in [1, 8]")
-        _validate_interrupted_bank_set(banks, interrupted_leg, phase)
+        _validate_interrupted_bank_set(
+            banks, interrupted_leg, phase, reference_updated
+        )
         return
 
     if stage == "genesis":
@@ -689,11 +870,14 @@ def inspect_genesis_image_data(
     superblock = ucore_fs.read_superblock(image)
     entries_list = ucore_fs.root_entries(image, superblock)
     canonical = canonical_genesis_store(layout)
-    capacity = (
+    snapshot_capacity = (
         layout.header_bytes
         + layout.durable_arena_bytes
         + layout.max_count * layout.record_bytes
     )
+    if snapshot_capacity > JOURNAL_OFFSET:
+        raise RecoveryInvariantError("metadata snapshot overlaps the v8 journal")
+    capacity = JOURNAL_OFFSET + JOURNAL_BYTES
     reports: list[dict[str, Any]] = []
     all_blocks: set[int] = set()
     bank_blocks: list[int] = []
@@ -808,17 +992,10 @@ def inspect_genesis_image_data(
     return reports
 
 
-def inspect_image(
-    image_path: Path,
-    layout: DiskLayout,
-    stage: str,
-    *,
-    interrupted_leg: str = "none",
-    phase: int | None = None,
+def _read_image_banks(
+    image_path: Path, layout: DiskLayout
 ) -> list[dict[str, Any]]:
     image = image_path.read_bytes()
-    if stage == "genesis":
-        return inspect_genesis_image_data(image, layout)
     superblock = ucore_fs.read_superblock(image)
     entries = {name: inum for inum, name in ucore_fs.root_entries(image, superblock)}
     banks: list[dict[str, Any]] = []
@@ -833,11 +1010,50 @@ def inspect_image(
             banks.append(parse_bank(raw, name, layout))
         except BankError as error:
             banks.append({"name": name, "state": "corrupt", "error": str(error)})
+    return banks
+
+
+def inspect_image(
+    image_path: Path,
+    layout: DiskLayout,
+    stage: str,
+    *,
+    interrupted_leg: str = "none",
+    phase: int | None = None,
+    reference_image_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    if stage == "genesis":
+        if reference_image_path is not None:
+            raise RecoveryInvariantError(
+                "reference image is only valid for an interrupted update"
+            )
+        return inspect_genesis_image_data(image_path.read_bytes(), layout)
+    if reference_image_path is not None and stage != "interrupted-update":
+        raise RecoveryInvariantError(
+            "reference image is only valid for an interrupted update"
+        )
+    banks = _read_image_banks(image_path, layout)
+    reference_updated = None
+    if reference_image_path is not None:
+        reference = _read_image_banks(reference_image_path, layout)
+        _validate_interrupted_bank_set(reference, "primary", 6, None)
+        updated = [
+            bank
+            for bank in reference
+            if bank.get("state") == "valid"
+            and bank.get("metafile_status") == "updated"
+        ]
+        if len(updated) != 1:
+            raise RecoveryInvariantError(
+                "reference image must contain exactly one verified update"
+            )
+        reference_updated = updated[0]
     validate_bank_set(
         banks,
         stage,
         interrupted_leg=interrupted_leg,
         phase=phase,
+        reference_updated=reference_updated,
     )
     return banks
 
@@ -857,6 +1073,7 @@ def main() -> int:
     )
     parser.add_argument("--interrupted-leg", choices=("none", "primary", "mirror"), default="none")
     parser.add_argument("--phase", type=int)
+    parser.add_argument("--reference-image", type=Path)
     args = parser.parse_args()
 
     try:
@@ -867,6 +1084,7 @@ def main() -> int:
             args.stage,
             interrupted_leg=args.interrupted_leg,
             phase=args.phase,
+            reference_image_path=args.reference_image,
         )
     except (ContractError, BankError, RecoveryInvariantError, OSError, ValueError) as error:
         parser.error(str(error))

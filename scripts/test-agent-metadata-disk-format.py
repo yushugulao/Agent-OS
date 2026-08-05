@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import os
 import shlex
@@ -109,8 +110,20 @@ class MetadataDiskFormatTests(unittest.TestCase):
             for index, raw in enumerate(banks)
         ]
 
+    def uncommitted(self, published):
+        raw = bytearray(published)
+        raw[: self.layout.header_bytes] = bytes(self.layout.header_bytes)
+        return bytes(raw)
+
+    def updated_reference(self, generation=81):
+        return parse_bank(
+            self.make_bank("updated", generation=generation),
+            "reference",
+            self.layout,
+        )
+
     def test_versioned_contract_loads(self):
-        self.assertEqual(self.layout.disk_version, 7)
+        self.assertEqual(self.layout.disk_version, 8)
         self.assertEqual(self.layout.bank_names, (".agentmeta", ".agentmeta1"))
 
     def test_unpublished_v6_is_rejected(self):
@@ -148,7 +161,7 @@ class MetadataDiskFormatTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertEqual(fmt.count("return format_bytes("), 2)
+        self.assertEqual(fmt.count("return format_bytes("), 3)
         for token in (
             "bytes == 0 || count > AGENT_FILE_META_MAX",
             "prefix + count * stride",
@@ -232,6 +245,21 @@ class MetadataDiskFormatTests(unittest.TestCase):
         with self.assertRaisesRegex(BankError, "unterminated C string"):
             parse_bank(bytes(raw), self.layout.bank_names[0], self.layout)
 
+    def test_invalidated_header_requires_every_byte_to_be_zero(self):
+        layout = dataclasses.replace(
+            self.layout, header_bytes=self.layout.header_bytes + 1
+        )
+        published = self.make_bank("updated")
+        raw = bytearray(
+            published[: self.layout.header_bytes]
+            + b"\0"
+            + published[self.layout.header_bytes :]
+        )
+        raw[: layout.header_bytes] = bytes(layout.header_bytes)
+        raw[self.layout.header_bytes] = 1
+        with self.assertRaisesRegex(BankError, "non-zero bytes"):
+            parse_bank(bytes(raw), layout.bank_names[0], layout)
+
     def test_same_generation_fork_is_rejected(self):
         banks = self.reports(
             self.make_bank("baseline", generation=77),
@@ -245,22 +273,24 @@ class MetadataDiskFormatTests(unittest.TestCase):
                 phase=6,
             )
 
-    def matrix_reports(self, leg, phase, *, phase6_published=False):
+    def matrix_reports(self, leg, phase, *, phase2_partial=False):
         baseline = self.make_bank("baseline", generation=80)
         updated = self.make_bank("updated", generation=81)
-        uncommitted = bytes(
-            self.layout.header_bytes + self.layout.durable_arena_bytes
-        )
+        uncommitted = self.uncommitted(updated)
         if leg == "primary":
-            if phase == 1:
+            if phase == 1 or (phase == 2 and not phase2_partial):
                 raw = (baseline, baseline)
-            elif phase <= 5 or (phase == 6 and not phase6_published):
+            elif phase == 2:
+                raw = (baseline, self.uncommitted(baseline))
+            elif phase <= 5:
                 raw = (baseline, uncommitted)
             else:
                 raw = (baseline, updated)
-        elif phase == 1:
+        elif phase == 1 or (phase == 2 and not phase2_partial):
             raw = (baseline, updated)
-        elif phase <= 5 or (phase == 6 and not phase6_published):
+        elif phase == 2:
+            raw = (updated, self.uncommitted(baseline))
+        elif phase <= 5:
             raw = (updated, uncommitted)
         else:
             raw = (updated, updated)
@@ -269,21 +299,25 @@ class MetadataDiskFormatTests(unittest.TestCase):
     def mutated_matrix_reports(self, leg, phase):
         baseline = self.make_bank("baseline", generation=80)
         updated = self.make_bank("updated", generation=81)
-        uncommitted = bytes(
-            self.layout.header_bytes + self.layout.durable_arena_bytes
-        )
+        uncommitted = self.uncommitted(updated)
         if leg == "primary":
-            if phase == 1 or phase <= 5:
+            if phase <= 2:
                 raw = (baseline, updated)
-            elif phase == 6:
+            elif phase <= 4:
+                broken = bytearray(uncommitted)
+                broken[-1] ^= 1
+                raw = (baseline, bytes(broken))
+            elif phase == 5:
                 raw = (baseline, baseline)
             else:
                 raw = (baseline, uncommitted)
-        elif phase == 1:
+        elif phase <= 2:
             raw = (updated, updated)
-        elif phase <= 5:
-            raw = (baseline, updated)
-        elif phase == 6:
+        elif phase <= 4:
+            broken = bytearray(uncommitted)
+            broken[-1] ^= 1
+            raw = (updated, bytes(broken))
+        elif phase == 5:
             raw = (baseline, updated)
         else:
             raw = (updated, uncommitted)
@@ -299,30 +333,152 @@ class MetadataDiskFormatTests(unittest.TestCase):
                         "interrupted-update",
                         interrupted_leg=leg,
                         phase=phase,
+                        reference_updated=self.updated_reference(),
                     )
                     validate_bank_set(
                         list(reversed(banks)),
                         "interrupted-update",
                         interrupted_leg=leg,
                         phase=phase,
+                        reference_updated=self.updated_reference(),
                     )
 
-    def test_phase6_accepts_only_uncommitted_or_published_target(self):
+    def test_prepared_primary_payload_requires_verified_reference(self):
+        for phase in (3, 4):
+            with self.subTest(phase=phase):
+                with self.assertRaisesRegex(
+                    RecoveryInvariantError, "verified updated reference"
+                ):
+                    validate_bank_set(
+                        self.matrix_reports("primary", phase),
+                        "interrupted-update",
+                        interrupted_leg="primary",
+                        phase=phase,
+                    )
+
+    def test_prepared_primary_reference_generation_must_follow_baseline(self):
+        for phase in (3, 4, 5):
+            with self.subTest(phase=phase):
+                with self.assertRaisesRegex(
+                    RecoveryInvariantError, "does not follow the baseline"
+                ):
+                    validate_bank_set(
+                        self.matrix_reports("primary", phase),
+                        "interrupted-update",
+                        interrupted_leg="primary",
+                        phase=phase,
+                        reference_updated=self.updated_reference(82),
+                    )
+
+    def test_mirror_published_payload_must_match_reference(self):
+        actual = self.make_bank("updated", generation=81)
+        reference_raw = bytearray(actual)
+        record = self.layout.header_bytes + self.layout.durable_arena_bytes
+        fid = record + self.layout.record_offsets["fid"]
+        reference_raw[fid : fid + self.layout.fid_bytes] = (2).to_bytes(
+            self.layout.fid_bytes, "little", signed=True
+        )
+        header = {
+            field: int.from_bytes(
+                reference_raw[
+                    offset : offset + self.layout.header_integer_bytes
+                ],
+                "little",
+            )
+            for field, offset in self.layout.header_offsets.items()
+        }
+        header["payload_hash"] = payload_hash(
+            self.layout,
+            header,
+            bytes(reference_raw[self.layout.header_bytes :]),
+        )
+        offset = self.layout.header_offsets["payload_hash"]
+        reference_raw[
+            offset : offset + self.layout.header_integer_bytes
+        ] = header["payload_hash"].to_bytes(
+            self.layout.header_integer_bytes, "little"
+        )
+        reference = parse_bank(bytes(reference_raw), "reference", self.layout)
+        for phase in (1, 2, 6, 7, 8):
+            banks = (
+                self.matrix_reports("mirror", phase)
+                if phase <= 2
+                else self.reports(actual, actual)
+            )
+            with self.subTest(phase=phase):
+                with self.assertRaisesRegex(
+                    RecoveryInvariantError, "unexpected updated payload"
+                ):
+                    validate_bank_set(
+                        banks,
+                        "interrupted-update",
+                        interrupted_leg="mirror",
+                        phase=phase,
+                        reference_updated=reference,
+                    )
+
+    def test_phase2_accepts_partial_invalid_target(self):
         for leg in ("primary", "mirror"):
-            with self.subTest(leg=leg, state="uncommitted"):
+            with self.subTest(leg=leg):
                 validate_bank_set(
-                    self.matrix_reports(leg, 6),
+                    self.matrix_reports(leg, 2, phase2_partial=True),
                     "interrupted-update",
                     interrupted_leg=leg,
-                    phase=6,
+                    phase=2,
+                    reference_updated=self.updated_reference(),
                 )
-            with self.subTest(leg=leg, state="published"):
+
+    def test_phase2_rejects_truncated_invalid_target(self):
+        truncated = parse_bank(
+            b"\0" * (self.layout.header_bytes - 1),
+            self.layout.bank_names[1],
+            self.layout,
+        )
+        for leg in ("primary", "mirror"):
+            peer = parse_bank(
+                self.make_bank(
+                    "baseline" if leg == "primary" else "updated",
+                    generation=80 if leg == "primary" else 81,
+                ),
+                self.layout.bank_names[0],
+                self.layout,
+            )
+            with self.subTest(leg=leg):
+                with self.assertRaisesRegex(
+                    RecoveryInvariantError, "truncated invalid target"
+                ):
+                    validate_bank_set(
+                        [peer, truncated],
+                        "interrupted-update",
+                        interrupted_leg=leg,
+                        phase=2,
+                        reference_updated=self.updated_reference(),
+                    )
+
+    def test_phase5_accepts_only_complete_uncommitted_target(self):
+        for leg in ("primary", "mirror"):
+            with self.subTest(leg=leg):
                 validate_bank_set(
-                    self.matrix_reports(leg, 6, phase6_published=True),
+                    self.matrix_reports(leg, 5),
                     "interrupted-update",
                     interrupted_leg=leg,
-                    phase=6,
+                    phase=5,
+                    reference_updated=self.updated_reference(),
                 )
+                with self.assertRaises(RecoveryInvariantError):
+                    validate_bank_set(
+                        self.reports(
+                            self.make_bank(
+                                "baseline" if leg == "primary" else "updated",
+                                generation=80 if leg == "primary" else 81,
+                            ),
+                            self.make_bank("updated", generation=81),
+                        ),
+                        "interrupted-update",
+                        interrupted_leg=leg,
+                        phase=5,
+                        reference_updated=self.updated_reference(),
+                    )
 
     def test_every_interrupted_phase_rejects_role_state_mutation(self):
         for leg in ("primary", "mirror"):
@@ -336,6 +492,7 @@ class MetadataDiskFormatTests(unittest.TestCase):
                             "interrupted-update",
                             interrupted_leg=leg,
                             phase=phase,
+                            reference_updated=self.updated_reference(),
                         )
 
     def test_every_interrupted_phase_rejects_absent_or_corrupt_target(self):
@@ -359,6 +516,7 @@ class MetadataDiskFormatTests(unittest.TestCase):
                                 "interrupted-update",
                                 interrupted_leg=leg,
                                 phase=phase,
+                                reference_updated=self.updated_reference(),
                             )
 
     def test_primary_published_generation_must_follow_baseline(self):
@@ -374,6 +532,7 @@ class MetadataDiskFormatTests(unittest.TestCase):
                         "interrupted-update",
                         interrupted_leg="primary",
                         phase=phase,
+                        reference_updated=self.updated_reference(903),
                     )
 
     def test_mirror_published_target_must_equal_verified_primary(self):
@@ -387,6 +546,9 @@ class MetadataDiskFormatTests(unittest.TestCase):
                         "interrupted-update",
                         interrupted_leg="mirror",
                         phase=phase,
+                        reference_updated=parse_bank(
+                            updated_902, "reference", self.layout
+                        ),
                     )
 
     def test_same_generation_requires_both_hash_and_image_identity(self):
@@ -544,7 +706,7 @@ class MetadataGenesisImageTests(unittest.TestCase):
         self.assertEqual(len(canonical), 8232)
         self.assertEqual(
             {report["payload_hash"] for report in reports},
-            {"4c04cdefefa6f030"},
+            {"4a3f3c374fa5b25f"},
         )
         self.assertTrue(
             all(report["store_image"] == canonical for report in reports)

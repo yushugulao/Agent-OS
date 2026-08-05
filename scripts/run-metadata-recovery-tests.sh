@@ -12,6 +12,83 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-120s}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20s}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"
+METADATA_MATRIX_LEGS="${METADATA_MATRIX_LEGS:-primary mirror}"
+METADATA_MATRIX_PHASES="${METADATA_MATRIX_PHASES:-6 1 2 3 4 5 7 8}"
+METADATA_MATRIX_ONLY="${METADATA_MATRIX_ONLY:-0}"
+
+case "${METADATA_MATRIX_ONLY}" in
+0|1) ;;
+*) echo "METADATA_MATRIX_ONLY must be 0 or 1" >&2; exit 2 ;;
+esac
+read -r -a requested_legs <<< "${METADATA_MATRIX_LEGS}"
+read -r -a requested_phases <<< "${METADATA_MATRIX_PHASES}"
+[[ ${#requested_legs[@]} -gt 0 ]] || {
+	echo "METADATA_MATRIX_LEGS must not be empty" >&2
+	exit 2
+}
+[[ ${#requested_phases[@]} -gt 0 ]] || {
+	echo "METADATA_MATRIX_PHASES must not be empty" >&2
+	exit 2
+}
+
+matrix_legs=()
+for candidate in primary mirror; do
+	seen=0
+	for leg in "${requested_legs[@]}"; do
+		[[ "${leg}" == primary || "${leg}" == mirror ]] || {
+			echo "invalid metadata matrix leg: ${leg}" >&2
+			exit 2
+		}
+		if [[ "${leg}" == "${candidate}" ]]; then
+			[[ "${seen}" -eq 0 ]] || {
+				echo "duplicate metadata matrix leg: ${leg}" >&2
+				exit 2
+			}
+			seen=1
+		fi
+	done
+	[[ "${seen}" -eq 0 ]] || matrix_legs+=("${candidate}")
+done
+
+matrix_phases=()
+for candidate in 6 1 2 3 4 5 7 8; do
+	seen=0
+	for phase in "${requested_phases[@]}"; do
+		[[ "${phase}" =~ ^[1-8]$ ]] || {
+			echo "invalid metadata matrix phase: ${phase}" >&2
+			exit 2
+		}
+		if [[ "${phase}" == "${candidate}" ]]; then
+			[[ "${seen}" -eq 0 ]] || {
+				echo "duplicate metadata matrix phase: ${phase}" >&2
+				exit 2
+			}
+			seen=1
+		fi
+	done
+	[[ "${seen}" -eq 0 ]] || matrix_phases+=("${candidate}")
+done
+
+needs_reference=0
+has_primary=0
+has_phase6=0
+[[ "${METADATA_MATRIX_ONLY}" -eq 1 ]] || needs_reference=1
+for leg in "${matrix_legs[@]}"; do
+	[[ "${leg}" != primary ]] || has_primary=1
+	[[ "${leg}" != mirror ]] || needs_reference=1
+done
+for phase in "${matrix_phases[@]}"; do
+	[[ "${phase}" != 6 ]] || has_phase6=1
+	if [[ "${phase}" -ge 3 && "${phase}" -ne 6 ]]; then
+		needs_reference=1
+	fi
+done
+if [[ "${needs_reference}" -eq 1 &&
+	( "${has_primary}" -ne 1 || "${has_phase6}" -ne 1 ) ]]; then
+	echo "selected matrix needs primary phase 6 as its reference" >&2
+	exit 2
+fi
+
 TMPDIR_META="$(mktemp -d)"
 had_initproc=0
 if [[ -f os/initproc.S ]]; then
@@ -111,7 +188,7 @@ make_image() {
 
 validate_banks() {
 	local image="$1" stage="$2" interrupted_leg="${3:-none}"
-	local phase="${4:-}"
+	local phase="${4:-}" reference_image="${5:-}"
 	local args=(
 		--image "${image}"
 		--stage "${stage}"
@@ -120,6 +197,9 @@ validate_banks() {
 
 	if [[ -n "${phase}" ]]; then
 		args+=(--phase "${phase}")
+	fi
+	if [[ -n "${reference_image}" ]]; then
+		args+=(--reference-image "${reference_image}")
 	fi
 	"${PYTHON_BIN}" host_tools/agent_metadata_disk_format.py "${args[@]}"
 }
@@ -137,7 +217,7 @@ from agent_metadata_disk_format import DEFAULT_CONTRACT, inspect_image, load_con
 layout = load_contract(DEFAULT_CONTRACT)
 banks = inspect_image(
     Path(sys.argv[1]), layout, "interrupted-update",
-    interrupted_leg="primary", phase=7,
+    interrupted_leg="primary", phase=6,
 )
 updated = [bank for bank in banks if bank.get("metafile_status") == "updated"]
 if len(updated) != 1:
@@ -298,8 +378,10 @@ authority_image="${TMPDIR_META}/disk-authority-newer.img"
 # that relative generation before entering the selected update checkpoint.
 # The host sends SIGKILL as its first signal only after an exact phase marker.
 # Raw banks are inspected before any recovery boot can repair them.
-for interrupted_leg in primary mirror; do
-	for phase in 1 2 3 4 5 6 7 8; do
+for interrupted_leg in "${matrix_legs[@]}"; do
+	# Phase 6 yields the verified reference used to prove that the merged
+	# INVALIDATE+payload epoch in phases 3/4 contains the complete new image.
+	for phase in "${matrix_phases[@]}"; do
 		tag="${interrupted_leg}-${phase}"
 		image="${TMPDIR_META}/disk-${tag}.img"
 		make_image "${image}"
@@ -314,10 +396,14 @@ for interrupted_leg in primary mirror; do
 			--log-file \
 			"${TMPDIR_META}/agentmetacrash_ucore-${tag}.log" \
 			--bank "${interrupted_leg}" --phase "${phase}"
+		reference_image=""
+		if [[ -f "${authority_image}" ]]; then
+			reference_image="${authority_image}"
+		fi
 		validate_banks "${image}" interrupted-update \
-			"${interrupted_leg}" "${phase}" | tee \
+			"${interrupted_leg}" "${phase}" "${reference_image}" | tee \
 			"${TMPDIR_META}/bank-interrupted-${tag}.log"
-		if [[ "${interrupted_leg}" == primary && "${phase}" -eq 7 ]]; then
+		if [[ "${interrupted_leg}" == primary && "${phase}" -eq 6 ]]; then
 			cp "${image}" "${authority_image}"
 		fi
 
@@ -333,6 +419,11 @@ for interrupted_leg in primary mirror; do
 			"${TMPDIR_META}/bank-recovered-${tag}.log"
 	done
 done
+
+if [[ "${METADATA_MATRIX_ONLY}" -eq 1 ]]; then
+	echo "metadata crash matrix: ok legs=${matrix_legs[*]} phases=${matrix_phases[*]}"
+	exit 0
+fi
 
 # Build an unfaulted, fully replicated image for the simultaneous-fault cases.
 select_image="${TMPDIR_META}/disk-select-fault.img"
@@ -450,7 +541,7 @@ require_line_once "agentmetarecover_ucore: query_found=0 returned=0" \
 	"${TMPDIR_META}/agentmetarecover_ucore-eio-baseline.log"
 validate_banks "${eio_image}" baseline | tee \
 	"${TMPDIR_META}/bank-eio-baseline.log"
-build_kernel eio agentmetaeio_ucore AGENT_METADATA_EIO_PHASE=7
+build_kernel eio agentmetaeio_ucore AGENT_METADATA_EIO_PHASE=6
 run_guest agentmetaeio_ucore-eio \
 	"agentmetaeio_ucore: parent passed" natural \
 	"${TMPDIR_META}/kernel-eio" "${eio_image}"

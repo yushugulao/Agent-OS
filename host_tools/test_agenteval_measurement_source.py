@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import shutil
 import tempfile
 from pathlib import Path
@@ -122,6 +123,44 @@ def main() -> int:
     source = SOURCE.read_text(encoding="utf-8")
     validate_source_text(source)
     dependency_texts = compile_contract.load_compile_dependency_texts(ROOT)
+    validator_path = ROOT / "scripts" / "validate-functional-review-flags.py"
+    validator_spec = importlib.util.spec_from_file_location(
+        "functional_review_flags", validator_path
+    )
+    if validator_spec is None or validator_spec.loader is None:
+        raise AssertionError("cannot load functional review flag validator")
+    validator = importlib.util.module_from_spec(validator_spec)
+    validator_spec.loader.exec_module(validator)
+    showcase_context = (
+        "agent", "labdemo_ucore labdemo_execprobe_ucore", "labdemo_ucore"
+    )
+    good_showcase_flags = (
+        "-Werror "
+        "-DLABDEMO_RUN_NONCE=0x0123456789abcdefULL "
+        "-DLABDEMO_SAMPLE_ID=8 -DLABDEMO_NATIVE_FIRST=0"
+    )
+    assert validator.validate(good_showcase_flags, *showcase_context)
+    assert validator.validate("", "", "", "")
+    assert validator.validate(validator.LEGACY_PROFILE, "", "", "")
+    for bad_flags in (
+        good_showcase_flags.replace("0123456789abcdef", "1234"),
+        good_showcase_flags.replace("abcdef", "abcdeF"),
+        good_showcase_flags.replace("SAMPLE_ID=8", "SAMPLE_ID=0"),
+        good_showcase_flags.replace("SAMPLE_ID=8", "SAMPLE_ID=65"),
+        good_showcase_flags.replace("-Werror ", "-Werror  "),
+        good_showcase_flags.replace(
+            "-Werror -DLABDEMO_RUN_NONCE=0x0123456789abcdefULL",
+            "-DLABDEMO_RUN_NONCE=0x0123456789abcdefULL -Werror",
+        ),
+        f"{good_showcase_flags} -DFORGED=1",
+    ):
+        assert not validator.validate(bad_flags, *showcase_context)
+    for bad_context in (
+        ("agent_eval", showcase_context[1], showcase_context[2]),
+        (showcase_context[0], "labdemo_ucore", showcase_context[2]),
+        (showcase_context[0], showcase_context[1], "usershell"),
+    ):
+        assert not validator.validate(good_showcase_flags, *bad_context)
     continuation = (
         '"${PYTHON_BIN}" -I -S -B tool.py \\\n'
         '\t--python-bin "${PYTHON_BIN}" --shell-bin "${BASH_BIN}"'
@@ -199,8 +238,9 @@ def main() -> int:
     build_redirect = dict(dependency_texts)
     build_redirect["Makefile"] = _replace_once(
         build_redirect["Makefile"],
-        "$(MAKE) -rR -C user -f Makefile CHAPTER=$(CHAPTER) BASE=$(BASE)",
-        "$(MAKE) -rR -C forged_user -f Makefile "
+        "$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C user -f Makefile "
+        "CHAPTER=$(CHAPTER) BASE=$(BASE)",
+        "$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C forged_user -f Makefile "
         "CHAPTER=$(CHAPTER) BASE=$(BASE)",
     )
     _reject_compile(build_redirect)
@@ -216,6 +256,47 @@ def main() -> int:
     )
     _reject_compile(dependency_include)
     _reject_compile(dependency_include, refresh_fingerprint=True)
+
+    for make_path, injection in (
+        ("Makefile", "CFLAGS += -include forged.h"),
+        ("Makefile", "CFLAGS += -Dprintf=forged_printf"),
+        ("Makefile", "OBJS += forged.o"),
+        ("user/Makefile", "LDFLAGS += forged.o"),
+    ):
+        compile_escape = dict(dependency_texts)
+        compile_escape[make_path] += f"\n{injection}\n"
+        _reject_compile(compile_escape)
+        _reject_compile(compile_escape, refresh_fingerprint=True)
+
+    for old, new in (
+        ("([0-9a-f]{16})", "([0-9a-f]{4,16})"),
+        ("([1-9]|[1-5][0-9]|6[0-4])", "([0-9]|[1-6][0-9])"),
+        ('tests == SHOWCASE_TESTS', 'tests != ""'),
+    ):
+        flag_escape = dict(dependency_texts)
+        flag_escape["scripts/validate-functional-review-flags.py"] = _replace_once(
+            flag_escape["scripts/validate-functional-review-flags.py"], old, new
+        )
+        _reject_compile(flag_escape)
+        _reject_compile(flag_escape, refresh_fingerprint=True)
+
+    make_flag_escape = dict(dependency_texts)
+    make_flag_escape["nfs/Makefile"] = _replace_once(
+        make_flag_escape["nfs/Makefile"],
+        "python3 -I -S -B ../scripts/validate-functional-review-flags.py",
+        "printf ok",
+    )
+    _reject_compile(make_flag_escape)
+    _reject_compile(make_flag_escape, refresh_fingerprint=True)
+
+    runner_env_escape = dict(dependency_texts)
+    runner_env_escape["scripts/run-agent-tests.sh"] = _replace_once(
+        runner_env_escape["scripts/run-agent-tests.sh"],
+        "\tHOSTCC CC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS ASFLAGS",
+        "\tCC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS ASFLAGS",
+    )
+    _reject_compile(runner_env_escape)
+    _reject_compile(runner_env_escape, refresh_fingerprint=True)
 
     python_shadow = dict(dependency_texts)
     python_shadow["scripts/run-agent-tests.sh"] = _replace_once(
@@ -562,7 +643,7 @@ def main() -> int:
         "agentos-functional-acceptance-source-v2"
     )
     assert receipt["contract_versions"]["functional_compile"] == (
-        "agentos-functional-compile-closure-v1"
+        "agentos-functional-compile-closure-v2"
     )
     assert receipt["stop_rule"] == "fixed_7_boots_per_source_commit"
     validate_measurement_source_receipt_shape(receipt, expected_commit=commit)
@@ -653,6 +734,8 @@ def main() -> int:
     assert "baseline_ucore/scripts/initproc.py" in policy_paths
     assert "nfs/Makefile" in policy_paths
     assert "baseline_ucore/nfs/Makefile" in policy_paths
+    assert "host_tools/agent_metadata_journal.py" in policy_paths
+    assert "host_tools/same_kernel_performance.py" in policy_paths
     assert "user/include/research_platform_state.h" in policy_paths
     assert "baseline_ucore/user/include/research_platform_state.h" in policy_paths
     forged = json.loads(json.dumps(receipt))

@@ -3,6 +3,7 @@
 #include "agent_file_name_policy.h"
 #include "agent_file_state_internal.h"
 #include "agent_metadata_internal.h"
+#include "agent_metadata_journal.h"
 #include "agent_metadata_probe.h"
 #include "agent_metadata_recovery.h"
 #include "agent_metadata_recovery_test.h"
@@ -13,6 +14,7 @@
 #include "defs.h"
 #include "file.h"
 #include "fs.h"
+#include "fs_epoch.h"
 #include "kernel_work.h"
 #include "timer.h"
 #include "vfs_security.h"
@@ -21,17 +23,20 @@
 /* Durable COW coordinator. */
 
 #define AGENT_META_WRITEBACK_COALESCE_TICKS TICKS_PER_SEC
-#define AGENT_META_WRITEBACK_SCOPE_MAX NPROC
+#define AGENT_META_WRITEBACK_SCOPE_MAX (VFS_SCOPE_LIFECYCLE_CAP + 1U)
 #define AGENT_META_PERSIST_IDLE 0U
 #define AGENT_META_PERSIST_INVALIDATE 1U
-#define AGENT_META_PERSIST_FLUSH_INVALID 2U
-#define AGENT_META_PERSIST_WRITE 3U
-#define AGENT_META_PERSIST_FLUSH_PAYLOAD 4U
-#define AGENT_META_PERSIST_VERIFY_PAYLOAD 5U
-#define AGENT_META_PERSIST_PUBLISH 6U
-#define AGENT_META_PERSIST_FLUSH_HEADER 7U
-#define AGENT_META_PERSIST_VERIFY_HEADER 8U
-#define AGENT_META_PERSIST_COMMIT 9U
+#define AGENT_META_PERSIST_WRITE 2U
+#define AGENT_META_PERSIST_FLUSH_PREPARED 3U
+#define AGENT_META_PERSIST_VERIFY_PAYLOAD 4U
+#define AGENT_META_PERSIST_PUBLISH 5U
+#define AGENT_META_PERSIST_FLUSH_HEADER 6U
+#define AGENT_META_PERSIST_VERIFY_HEADER 7U
+#define AGENT_META_PERSIST_COMMIT 8U
+#define AGENT_META_PERSIST_JOURNAL_WRITE 9U
+#define AGENT_META_PERSIST_JOURNAL_FLUSH 10U
+#define AGENT_META_PERSIST_JOURNAL_VERIFY 11U
+#define AGENT_META_PERSIST_JOURNAL_COMMIT 12U
 #define AGENT_META_PERSIST_DIRTY_BYTES ((MAXFILE + 7) / 8)
 #define AGENT_META_PERSIST_DEFERRED (-4096)
 #define AGENT_META_REPAIR_NONE 0
@@ -43,6 +48,17 @@
 _Static_assert(AGENT_META_WRITEBACK_SCOPE_MAX >=
 	       VFS_SCOPE_LIFECYCLE_CAP + 1,
 	       "metadata writeback must cover every workflow and system scope");
+
+static int
+agent_meta_durable_flush(void)
+{
+	if (fs_epoch_request_held())
+		return fs_epoch_commit();
+	/* Boot preparation runs before ordered runtime writeback is enabled. */
+	if (fs_epoch_dirty())
+		return VIRTIO_DISK_ERR_BUSY;
+	return bio_durable_flush();
+}
 _Static_assert(AGENT_META_PERSIST_DEFERRED < VIRTIO_DISK_ERR_RANGE,
 	       "metadata deferred sentinel must not alias a device status");
 
@@ -56,17 +72,27 @@ struct agent_file_scope_state {
 	uint64 request_count;
 	uint64 coalesced_count;
 	uint64 commit_count;
+	uint64 journal_txns;
+	uint64 journal_blocks;
+	uint64 compactions;
+	uint64 full_cow_blocks;
 };
 
 struct agent_meta_persist_state {
 	uint phase;
 	uint owner;
 	uint scope_id;
+	struct workflow_lifecycle_key lifecycle;
 	uint64 job_id;
+	int snapshot_sealed;
+	int payload_durable;
+	int header_durable;
 	int published;
 	int irrevocable;
 	int primary_verified;
 	int mirroring;
+	int journal;
+	int journal_compaction;
 	int restart_target;
 	int target_bank;
 	uint target_dev;
@@ -76,12 +102,14 @@ struct agent_meta_persist_state {
 	uint write_limit;
 	uint write_offset;
 	uint verify_offset;
+	uint journal_clear_offset;
 	uint64 expected_generation;
 	uint64 expected_hash;
 	uint64 captured_generation;
 	uint64 verify_hash;
 	uint64 size_sequence;
 	uint64 durable_serial;
+	int catalog_settle;
 	uint64 retry_tick;
 	uint retry_failures;
 	int error_cause;
@@ -89,10 +117,10 @@ struct agent_meta_persist_state {
 	char verify_block[BSIZE];
 };
 
-_Static_assert(sizeof(struct agent_meta_store) <= MAXFILE * BSIZE,
+_Static_assert(AGENT_META_STORE_MAX_BYTES <= MAXFILE * BSIZE,
 	       "Agent metadata store exceeds maximum file size");
 #define AGENT_META_STORE_MAX_DATA_BLOCKS \
-	((sizeof(struct agent_meta_store) + BSIZE - 1) / BSIZE)
+	((AGENT_META_STORE_MAX_BYTES + BSIZE - 1) / BSIZE)
 #define AGENT_META_STORE_MAX_INDEX_BLOCKS \
 	(AGENT_META_STORE_MAX_DATA_BLOCKS > NDIRECT ? 1 : 0)
 _Static_assert(FS_STORAGE_TINY_TEST_PROFILE ||
@@ -116,12 +144,27 @@ static struct agent_meta_store
 static union {
 	struct { struct agent_meta_record record; int index[AGENT_FILE_META_MAX]; } sort;
 	struct { struct agent_metadata_apply_result result; int scratch_bank; } load;
+	struct agent_meta_journal_plan journal;
 } agent_meta_workspace;
 #define agent_meta_sort_record agent_meta_workspace.sort.record
 #define agent_meta_sort_index agent_meta_workspace.sort.index
+#define agent_meta_journal_plan agent_meta_workspace.journal
 static uint agent_meta_bank_write_limit[AGENT_META_STORE_BANKS];
 static int agent_meta_bank_shadow_valid[AGENT_META_STORE_BANKS];
 static int agent_meta_bank_delta_valid[AGENT_META_STORE_BANKS];
+static struct agent_meta_journal_cursor
+	agent_meta_bank_journal[AGENT_META_STORE_BANKS];
+static int agent_meta_bank_journal_valid[AGENT_META_STORE_BANKS];
+static short agent_meta_bank_record_index[AGENT_META_STORE_BANKS]
+	[AGENT_FILE_META_MAX];
+static struct agent_catalog_journal_receipt agent_meta_journal_receipt;
+static struct agent_catalog_journal_settle agent_meta_journal_settle;
+#if !defined(AGENT_METADATA_CRASH_PHASE) && \
+	!defined(AGENT_METADATA_EIO_PHASE)
+static struct agent_meta_journal_change
+	agent_meta_journal_changes[AGENT_META_JOURNAL_MAX_DATA_RECORDS];
+static struct agent_durable_arena agent_meta_journal_durable;
+#endif
 static uchar stale_slots[AGENT_META_STALE_BYTES];
 static int agent_file_loaded;
 static struct wait_queue waiters;
@@ -142,6 +185,10 @@ static int banks_prepared;
 static uint64 next_write_tick;
 static uint owner_cursor;
 
+_Static_assert(AGENT_CATALOG_JOURNAL_RECEIPT_MAX ==
+	       AGENT_META_JOURNAL_MAX_DATA_RECORDS,
+	       "catalog receipt must fit one journal transaction");
+
 static void
 agent_meta_store_set_replicated_generation(uint64 generation)
 {
@@ -154,6 +201,8 @@ agent_meta_store_set_replicated_generation(uint64 generation)
 static int agent_file_persist(struct agent_metadata_persist_result *);
 static int agent_file_persist_system(void);
 static int agent_meta_persist_drain_owner(uint owner);
+static int agent_meta_persist_note_failure_locked(void);
+static void agent_meta_persist_fail_closed_locked(void);
 static uint64 agent_meta_durable_dirty(uint scope_id);
 static int agent_meta_durable_replicated(uint scope_id, uint64 target);
 static int agent_meta_durable_active_replicated(uint64 generation);
@@ -228,6 +277,12 @@ agent_metadata_store_init(void)
 	       sizeof(agent_meta_bank_shadow_valid));
 	memset(agent_meta_bank_delta_valid, 0,
 	       sizeof(agent_meta_bank_delta_valid));
+	memset(agent_meta_bank_journal, 0,
+	       sizeof(agent_meta_bank_journal));
+	memset(agent_meta_bank_journal_valid, 0,
+	       sizeof(agent_meta_bank_journal_valid));
+	memset(agent_meta_bank_record_index, 0xff,
+	       sizeof(agent_meta_bank_record_index));
 	memset(stale_slots, 0, sizeof(stale_slots));
 	agent_file_loaded = 0;
 	agent_meta_store_io_init();
@@ -401,10 +456,44 @@ static uint64 scope_target(uint scope_id)
 		state.dirty_generation : 0;
 }
 
+static uint64 scope_fence_target(uint scope_id)
+{
+	struct agent_file_scope_state state;
+
+	scope_snapshot(scope_id, &state);
+	return state.used &&
+	       state.dirty_generation != state.replicated_generation ?
+		state.dirty_generation : 0;
+}
+
 static int agent_file_writeback_generation_reached(uint64 generation,
 						    uint64 target)
 {
 	return target == 0 || (long)(generation - target) >= 0;
+}
+
+static int scope_commit_reached(uint scope_id, uint64 target, int replicated)
+{
+	struct agent_file_scope_state state;
+	uint64 generation;
+
+	if (target == 0)
+		return 1;
+	scope_snapshot(scope_id, &state);
+	if (!state.used)
+		return 0;
+	generation = replicated ? state.replicated_generation :
+				  state.durable_generation;
+	return agent_file_writeback_generation_reached(generation, target);
+}
+
+static int
+scope_fence_reached(uint scope_id, uint64 target, int replicated,
+		    int require_idle)
+{
+	if (!scope_commit_reached(scope_id, target, replicated))
+		return 0;
+	return !require_idle || !agent_file_writeback_scope_busy(scope_id);
 }
 
 static int scope_reached(uint scope_id, uint64 target, int settled)
@@ -555,6 +644,52 @@ static void agent_file_writeback_advance(int replicated)
 	intr_restore(enabled);
 }
 
+static void
+agent_file_writeback_replicate_settled(void)
+{
+	int enabled = intr_save();
+
+	for (uint i = 0; i < AGENT_META_WRITEBACK_SCOPE_MAX; i++) {
+		struct agent_file_scope_state *state = &scope_states[i];
+
+		if (state->used && state->dirty_generation ==
+					 state->durable_generation)
+			state->replicated_generation = state->durable_generation;
+	}
+	intr_restore(enabled);
+}
+
+static void
+agent_file_writeback_note_journal(uint scope_id, uint blocks, int transaction)
+{
+	struct agent_file_scope_state *state;
+	int enabled = intr_save();
+
+	state = agent_file_scope_state_locked(scope_id, 0);
+	if (state != 0) {
+		state->journal_blocks += blocks;
+		if (transaction)
+			state->journal_txns++;
+	}
+	intr_restore(enabled);
+}
+
+static void
+agent_file_writeback_note_full_cow(uint scope_id, uint blocks,
+				   int compaction)
+{
+	struct agent_file_scope_state *state;
+	int enabled = intr_save();
+
+	state = agent_file_scope_state_locked(scope_id, 0);
+	if (state != 0) {
+		state->full_cow_blocks += blocks;
+		if (compaction)
+			state->compactions++;
+	}
+	intr_restore(enabled);
+}
+
 static void agent_file_writeback_defer(void)
 {
 	uint64 now = agent_ticks();
@@ -612,6 +747,10 @@ void agent_metadata_store_fill_info(uint scope_id, struct agent_info *info)
 		info->metadata_writeback_commits = state.commit_count;
 		info->metadata_writeback_pending =
 			state.dirty_generation != state.durable_generation || busy;
+		info->metadata_journal_txns = state.journal_txns;
+		info->metadata_journal_blocks = state.journal_blocks;
+		info->metadata_compactions = state.compactions;
+		info->metadata_full_cow_blocks = state.full_cow_blocks;
 	}
 }
 
@@ -635,7 +774,10 @@ int agent_metadata_store_submit_wait_locked(void)
 			return 0;
 		}
 		if (ticket == serving_ticket &&
-		    agent_meta_persist.phase == AGENT_META_PERSIST_IDLE &&
+		    (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE ||
+		     (agent_meta_persist.snapshot_sealed &&
+		      !agent_meta_store_recovery_required &&
+		      !agent_meta_persist.restart_target)) &&
 		    (submitter == 0 || submitter == token) &&
 		    agent_metadata_reload_available()) {
 			serving_ticket++;
@@ -756,6 +898,18 @@ static int agent_meta_persist_block_dirty(uint offset)
 		(1U << (block % 8))) != 0;
 }
 
+static uint
+agent_meta_persist_full_cow_blocks(void)
+{
+	uint blocks = AGENT_META_JOURNAL_BLOCKS + 2U;
+
+	for (uint i = 0; i < MAXFILE; i++)
+		if ((agent_meta_persist.dirty_blocks[i / 8] &
+		     (1U << (i % 8))) != 0)
+			blocks++;
+	return blocks;
+}
+
 static void agent_meta_bank_delta_invalidate(int bank)
 {
 	if (bank < 0 || bank >= AGENT_META_STORE_BANKS)
@@ -768,6 +922,11 @@ static void agent_meta_bank_shadow_invalidate(int bank)
 {
 	agent_meta_bank_delta_invalidate(bank);
 	agent_meta_bank_shadow_valid[bank] = 0;
+	agent_meta_bank_journal_valid[bank] = 0;
+	memset(agent_meta_bank_record_index[bank], 0xff,
+	       sizeof(agent_meta_bank_record_index[bank]));
+	memset(&agent_meta_bank_journal[bank], 0,
+	       sizeof(agent_meta_bank_journal[bank]));
 }
 
 static void agent_meta_persist_prepare_blocks(struct agent_meta_store *store,
@@ -809,10 +968,25 @@ static void agent_meta_bank_shadow_install(struct agent_meta_store *store,
 	memset(&agent_meta_bank_shadow[target_bank], 0,
 	       sizeof(agent_meta_bank_shadow[target_bank]));
 	memmove(&agent_meta_bank_shadow[target_bank], store, write_limit);
+	memset(agent_meta_bank_record_index[target_bank], 0xff,
+	       sizeof(agent_meta_bank_record_index[target_bank]));
+	for (uint64 i = 0; i < store->header.count; i++) {
+		uint slot = store->records[i].slot;
+
+		if (slot >= AGENT_FILE_META_MAX ||
+		    agent_meta_bank_record_index[target_bank][slot] != -1)
+			panic("metadata shadow slot index");
+		agent_meta_bank_record_index[target_bank][slot] = i;
+	}
 	agent_meta_bank_shadow_valid[target_bank] = 1;
 	agent_meta_bank_delta_valid[target_bank] = physical_delta_valid;
 	agent_meta_bank_write_limit[target_bank] =
 		physical_delta_valid ? write_limit : 0;
+	agent_meta_bank_journal_valid[target_bank] =
+		agent_meta_journal_cursor_init(
+			&agent_meta_bank_journal[target_bank],
+			store->header.generation,
+			store->header.payload_hash) == AGENT_META_JOURNAL_OK;
 }
 
 int agent_file_is_meta_store_name(char *path)
@@ -846,7 +1020,8 @@ static int agent_meta_store_select(struct agent_meta_store *store,
 				   int *repair_mode, int *repair_bank,
 				   int force, uint reload_scope,
 				   uint64 *candidate_epoch,
-				   int *selected_migrated)
+				   int *selected_migrated,
+				   struct agent_meta_journal_cursor *selected_cursor)
 {
 	struct agent_metadata_probe_key key = {
 		.authority_cookie = store_authority_cookie(),
@@ -858,15 +1033,20 @@ static int agent_meta_store_select(struct agent_meta_store *store,
 	uint64 hashes[AGENT_META_STORE_BANKS];
 	int status[AGENT_META_STORE_BANKS];
 	int migration[AGENT_META_STORE_BANKS];
+	struct agent_meta_journal_cursor cursors[AGENT_META_STORE_BANKS];
+	int cursor_valid[AGENT_META_STORE_BANKS];
 	int selected = -1;
+	int v8_seen = 0;
 
 	if (store == 0 || selected_bank == 0 || selected_generation == 0 ||
 	    repair_mode == 0 || repair_bank == 0 || candidate_epoch == 0 ||
-	    selected_migrated == 0)
+	    selected_migrated == 0 || selected_cursor == 0)
 		return -1;
 	memset(generations, 0, sizeof(generations));
 	memset(hashes, 0, sizeof(hashes));
 	memset(migration, 0, sizeof(migration));
+	memset(cursors, 0, sizeof(cursors));
+	memset(cursor_valid, 0, sizeof(cursor_valid));
 	*repair_mode = AGENT_META_REPAIR_NONE;
 	*repair_bank = -1;
 	for (int bank = 0; bank < AGENT_META_STORE_BANKS; bank++) {
@@ -878,7 +1058,19 @@ static int agent_meta_store_select(struct agent_meta_store *store,
 		    status[bank] == AGENT_META_BANK_BUSY ||
 		    status[bank] == AGENT_META_BANK_IO)
 			return status[bank];
-		if (status[bank] != AGENT_META_BANK_VALID)
+		if (status[bank] == AGENT_META_BANK_VALID) {
+			cursor_valid[bank] =
+				agent_metadata_probe_journal_cursor(
+					bank, &cursors[bank]) == 0;
+			if (!cursor_valid[bank])
+				return AGENT_META_BANK_CORRUPT;
+			if (migration[bank] == 0)
+				v8_seen = 1;
+		}
+	}
+	for (int bank = 0; bank < AGENT_META_STORE_BANKS; bank++) {
+		if (status[bank] != AGENT_META_BANK_VALID ||
+		    (v8_seen && migration[bank] != 0))
 			continue;
 		if (selected < 0 || generations[bank] > generations[selected])
 			selected = bank;
@@ -891,11 +1083,24 @@ static int agent_meta_store_select(struct agent_meta_store *store,
 	}
 	if (selected < 0)
 		return AGENT_META_BANK_CORRUPT;
+	if (v8_seen)
+		for (int bank = 0; bank < AGENT_META_STORE_BANKS; bank++) {
+			if (status[bank] != AGENT_META_BANK_VALID ||
+			    migration[bank] == 0)
+				continue;
+			if (generations[bank] > generations[selected] ||
+			    (generations[bank] == generations[selected] &&
+			     hashes[bank] != hashes[selected]))
+				return AGENT_META_BANK_CORRUPT;
+		}
 	int peer = selected == 0 ? 1 : 0;
 
 	if (status[peer] != AGENT_META_BANK_VALID ||
 		 generations[peer] != generations[selected] ||
-		 migration[peer] || migration[selected])
+		 hashes[peer] != hashes[selected] || migration[peer] ||
+		 migration[selected] || !cursor_valid[peer] ||
+		 memcmp(&cursors[peer], &cursors[selected],
+			sizeof(cursors[selected])) != 0)
 		*repair_mode = AGENT_META_REPAIR_MIRROR;
 	if (*repair_mode != AGENT_META_REPAIR_NONE)
 		*repair_bank = peer;
@@ -908,6 +1113,7 @@ static int agent_meta_store_select(struct agent_meta_store *store,
 	*selected_generation = generations[selected];
 	*selected_bank = selected;
 	*selected_migrated = migration[selected];
+	*selected_cursor = cursors[selected];
 	*candidate_epoch = agent_metadata_probe_epoch();
 	return AGENT_META_BANK_VALID;
 }
@@ -1011,6 +1217,7 @@ agent_file_load_snapshot(int force, uint reload_scope,
 	uint store_bytes;
 	int selected_bank;
 	int selected_migrated = 0;
+	struct agent_meta_journal_cursor selected_cursor;
 	uint64 selected_generation;
 	uint64 candidate_epoch = 0;
 	int reload_one_scope;
@@ -1050,7 +1257,7 @@ agent_file_load_snapshot(int force, uint reload_scope,
 	select_status = agent_meta_store_select(
 		store, &selected_bank, &selected_generation, &repair_mode,
 		&repair_bank, force, reload_scope, &candidate_epoch,
-		&selected_migrated);
+		&selected_migrated, &selected_cursor);
 	if (select_status != AGENT_META_BANK_VALID) {
 		if (apply->plan_active)
 			agent_meta_store_apply_abort();
@@ -1099,10 +1306,23 @@ agent_file_load_snapshot(int force, uint reload_scope,
 		memset(stale_slots, 0, sizeof(stale_slots));
 	orphan_stale = classify_missing(
 		store, reload_one_scope, reload_scope, apply);
-	agent_meta_bank_shadow_invalidate(selected_bank == 0 ? 1 : 0);
+	int selected_peer = selected_bank == 0 ? 1 : 0;
+
+	if (repair_mode == AGENT_META_REPAIR_NONE) {
+		agent_meta_bank_shadow_install(
+			store, selected_peer,
+			agent_meta_persist_segment_end(store_bytes - 1),
+			selected_cursor.slots_used == 0);
+		agent_meta_bank_journal[selected_peer] = selected_cursor;
+		agent_meta_bank_journal_valid[selected_peer] = 1;
+	} else {
+		agent_meta_bank_shadow_invalidate(selected_peer);
+	}
 	agent_meta_bank_shadow_install(
 		store, selected_bank, agent_meta_persist_segment_end(store_bytes - 1),
-		!selected_migrated);
+		!selected_migrated && selected_cursor.slots_used == 0);
+	agent_meta_bank_journal[selected_bank] = selected_cursor;
+	agent_meta_bank_journal_valid[selected_bank] = 1;
 	agent_meta_store_active_bank = selected_bank;
 	agent_meta_store_generation = selected_generation;
 	agent_meta_store_set_replicated_generation(
@@ -1359,6 +1579,72 @@ static int agent_meta_store_build_scope(struct agent_meta_store *store,
 	return 0;
 }
 
+#if !defined(AGENT_METADATA_CRASH_PHASE) && \
+	!defined(AGENT_METADATA_EIO_PHASE)
+static int
+agent_meta_store_prepare_journal(
+	uint scope_id, struct workflow_lifecycle_key lifecycle,
+	uint64 *size_sequence, uint64 *durable_serial)
+{
+	struct agent_meta_store *base;
+	uint change_count = 0;
+	int bank = agent_meta_store_active_bank;
+	int status;
+
+	if (bank < 0 || bank >= AGENT_META_STORE_BANKS ||
+	    !agent_meta_bank_shadow_valid[bank] ||
+	    !agent_meta_bank_journal_valid[bank])
+		return AGENT_META_JOURNAL_CORRUPT;
+	base = &agent_meta_bank_shadow[bank];
+	status = agent_metadata_catalog_journal_capture(
+		scope_id, lifecycle, &agent_meta_journal_receipt,
+		size_sequence);
+	if (status == AGENT_CATALOG_NO_SPACE)
+		return AGENT_META_JOURNAL_NO_SPACE;
+	if (status < 0)
+		return AGENT_META_JOURNAL_CORRUPT;
+	agent_meta_journal_durable = base->durable;
+	if (agent_durable_arena_update_scope(
+		    &agent_meta_journal_durable, scope_id, lifecycle,
+		    durable_serial) < 0)
+		return AGENT_META_JOURNAL_CORRUPT;
+	for (uint i = 0; i < agent_meta_journal_receipt.count; i++) {
+		const struct agent_catalog_journal_change *captured =
+			&agent_meta_journal_receipt.changes[i];
+		struct agent_meta_journal_change *change;
+		short found = agent_meta_bank_record_index[bank][captured->slot];
+
+		if (found >= 0 &&
+		    (uint)found >= base->header.count)
+			return AGENT_META_JOURNAL_CORRUPT;
+		if (captured->present) {
+			if (found >= 0 &&
+			    memcmp(&base->records[found], &captured->record,
+				   sizeof(captured->record)) == 0)
+				continue;
+			if (found >= 0 &&
+			    base->records[found].scope_id != scope_id)
+				return AGENT_META_JOURNAL_NO_SPACE;
+			change = &agent_meta_journal_changes[change_count++];
+			change->operation = AGENT_META_JOURNAL_OP_UPSERT;
+			change->record = captured->record;
+		} else {
+			if (found < 0)
+				continue;
+			if (base->records[found].scope_id != scope_id)
+				return AGENT_META_JOURNAL_NO_SPACE;
+			change = &agent_meta_journal_changes[change_count++];
+			change->operation = AGENT_META_JOURNAL_OP_DELETE;
+			change->record = base->records[found];
+		}
+	}
+	return agent_meta_journal_plan_delta(
+		&agent_meta_journal_plan, &agent_meta_bank_journal[bank],
+		scope_id, lifecycle, agent_meta_journal_changes,
+		change_count, &base->durable, &agent_meta_journal_durable);
+}
+#endif
+
 int agent_metadata_store_shadow_has_scope(uint scope_id)
 {
 	struct agent_meta_store *store;
@@ -1399,6 +1685,9 @@ static int agent_meta_persist_target_locked(int target_bank, int force_full)
 	}
 	agent_meta_persist.write_offset = sizeof(store->header);
 	agent_meta_persist.verify_offset = sizeof(store->header);
+	agent_meta_persist.journal_clear_offset = AGENT_META_JOURNAL_OFFSET;
+	agent_meta_persist.payload_durable = 0;
+	agent_meta_persist.header_durable = 0;
 	agent_meta_persist.verify_hash = AGENT_META_STORE_HASH_INITIAL;
 	agent_meta_persist.verify_hash = agent_meta_format_hash_mix(
 		agent_meta_persist.verify_hash, store->header.magic);
@@ -1412,6 +1701,37 @@ static int agent_meta_persist_target_locked(int target_bank, int force_full)
 	 * generation before INVALIDATE can make that fact externally visible. */
 	agent_meta_store_set_replicated_generation(0);
 	agent_meta_persist.phase = AGENT_META_PERSIST_INVALIDATE;
+	return 0;
+}
+
+static int
+agent_meta_journal_target_locked(int target_bank)
+{
+	struct inode *ip;
+	int lookup_status;
+
+	if (target_bank < 0 || target_bank >= AGENT_META_STORE_BANKS ||
+	    !agent_meta_bank_journal_valid[target_bank])
+		return VIRTIO_DISK_ERR_IO;
+	ip = agent_meta_store_io_lookup_bank(
+		agent_meta_store_io_name(target_bank), 0, &lookup_status);
+	if (ip == 0)
+		return lookup_status < 0 ? lookup_status : VIRTIO_DISK_ERR_IO;
+	if (ip->size < AGENT_META_STORE_MAX_BYTES) {
+		iput(ip);
+		return VIRTIO_DISK_ERR_IO;
+	}
+	agent_meta_persist.target_bank = target_bank;
+	agent_meta_persist.target_dev = ip->dev;
+	agent_meta_persist.target_inum = ip->inum;
+	agent_meta_persist.target_incarnation = ip->vfs_incarnation;
+	iput(ip);
+	agent_meta_persist.write_offset = 0;
+	agent_meta_persist.verify_offset = 0;
+	agent_meta_persist.payload_durable = 0;
+	agent_meta_persist.header_durable = 0;
+	agent_meta_persist.phase = AGENT_META_PERSIST_JOURNAL_WRITE;
+	agent_meta_store_set_replicated_generation(0);
 	return 0;
 }
 
@@ -1439,12 +1759,12 @@ static int agent_meta_store_prepare_banks_locked(void)
 			inode_status = VIRTIO_DISK_ERR_IO;
 		if (inode_status >= 0)
 			inode_status = fs_preallocate_inode(
-				ip, &kernel_cred, sizeof(struct agent_meta_store));
+				ip, &kernel_cred, AGENT_META_STORE_MAX_BYTES);
 		iput(ip);
 		if (inode_status < 0)
 			return inode_status;
 	}
-	flush_status = bio_durable_flush();
+	flush_status = agent_meta_durable_flush();
 	if (flush_status < 0)
 		return flush_status;
 	banks_prepared = 1;
@@ -1463,7 +1783,10 @@ static int agent_meta_store_active_verified(void)
 	return store->header.magic == AGENT_META_STORE_MAGIC &&
 	       store->header.version == AGENT_META_STORE_VERSION &&
 	       store->header.generation == agent_meta_store_generation &&
-	       store->header.payload_hash == agent_meta_format_store_hash(store);
+	       store->header.count <= AGENT_FILE_META_MAX &&
+	       agent_meta_bank_journal_valid[bank] &&
+	       agent_meta_bank_journal[bank].generation ==
+		       agent_meta_store_generation;
 }
 
 static void agent_meta_persist_retry_next_tick(void)
@@ -1498,13 +1821,19 @@ static void agent_meta_persist_release_locked(int cancel_test)
 static int agent_meta_persist_start_locked(uint owner)
 {
 	struct agent_meta_store *store = &store_buf;
-	uint store_bytes;
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
+	uint store_bytes = 0;
 	uint scope_id;
 	uint64 captured_generation;
-	uint64 size_sequence;
-	uint64 durable_serial;
+	uint64 size_sequence = 0;
+	uint64 durable_serial = 0;
 	int target_bank;
 	int operation_status;
+#if !defined(AGENT_METADATA_CRASH_PHASE) && \
+	!defined(AGENT_METADATA_EIO_PHASE)
+	int journal_status = AGENT_META_JOURNAL_INCOMPLETE;
+#endif
+	int use_journal = 0;
 
 	agent_metadata_txn_projection_require_idle();
 
@@ -1530,26 +1859,62 @@ static int agent_meta_persist_start_locked(uint owner)
 		owner = FS_OWNER_SYSTEM;
 	scope_id = FS_OWNER_IS_SCOPE(owner) ? FS_OWNER_SCOPE_ID(owner) :
 		VFS_SCOPE_SYSTEM;
-	captured_generation = agent_file_writeback_capture_state(scope_id);
-	if (agent_meta_store_build_scope(
-		    store, scope_id, &size_sequence, &durable_serial) < 0 ||
-	    agent_meta_format_store_bytes(store->header.count, &store_bytes) < 0)
+	if (scope_id != VFS_SCOPE_SYSTEM &&
+	    (vfs_scope_lifecycle(scope_id, &lifecycle) < 0 ||
+	     !workflow_lifecycle_key_valid(lifecycle)))
 		goto fail;
-	store->header.payload_hash = agent_meta_format_store_hash(store);
-	target_bank = agent_meta_store_active_bank == 0 ? 1 : 0;
+	captured_generation = agent_file_writeback_capture_state(scope_id);
+#if !defined(AGENT_METADATA_CRASH_PHASE) && \
+	!defined(AGENT_METADATA_EIO_PHASE)
+	if (scope_id != VFS_SCOPE_SYSTEM &&
+	    agent_meta_bank_journal_valid[agent_meta_store_active_bank]) {
+		journal_status = agent_meta_store_prepare_journal(
+			scope_id, lifecycle, &size_sequence, &durable_serial);
+		if (journal_status == AGENT_META_JOURNAL_CORRUPT)
+			goto fail;
+		use_journal = journal_status == AGENT_META_JOURNAL_OK;
+	}
+#endif
+	if (!use_journal) {
+		if (agent_metadata_catalog_journal_settle_capture(
+			    scope_id, lifecycle,
+			    &agent_meta_journal_settle) < 0)
+			goto fail;
+		if (agent_meta_store_build_scope(
+			    store, scope_id, &size_sequence,
+			    &durable_serial) < 0 ||
+		    agent_meta_format_store_bytes(
+			    store->header.count, &store_bytes) < 0)
+			goto fail;
+		store->header.payload_hash = agent_meta_format_store_hash(store);
+		if (store->header.payload_hash == 0)
+			goto fail;
+	}
+	target_bank = use_journal ? agent_meta_store_active_bank :
+		(agent_meta_store_active_bank == 0 ? 1 : 0);
 	memset(&agent_meta_persist, 0, sizeof(agent_meta_persist));
 	agent_meta_persist.owner = owner;
 	agent_meta_persist.scope_id = scope_id;
+	agent_meta_persist.lifecycle = lifecycle;
+	agent_meta_persist.catalog_settle = !use_journal;
 	if (next_job_id == 0)
 		next_job_id = 1;
 	agent_meta_persist.job_id = next_job_id++;
 	agent_meta_persist.store_bytes = store_bytes;
-	agent_meta_persist.expected_generation = store->header.generation;
-	agent_meta_persist.expected_hash = store->header.payload_hash;
+	agent_meta_persist.snapshot_sealed = 1;
+	agent_meta_persist.journal = use_journal;
+	agent_meta_persist.journal_compaction =
+		scope_id != VFS_SCOPE_SYSTEM && !use_journal;
+	agent_meta_persist.expected_generation = use_journal ?
+		agent_meta_journal_plan.generation : store->header.generation;
+	agent_meta_persist.expected_hash = use_journal ?
+		agent_meta_journal_plan.commit_hash : store->header.payload_hash;
 	agent_meta_persist.captured_generation = captured_generation;
 	agent_meta_persist.size_sequence = size_sequence;
 	agent_meta_persist.durable_serial = durable_serial;
-	operation_status = agent_meta_persist_target_locked(target_bank, 0);
+	operation_status = use_journal ?
+		agent_meta_journal_target_locked(target_bank) :
+		agent_meta_persist_target_locked(target_bank, 0);
 	if (operation_status < 0) {
 		agent_meta_store_io_leave();
 		memset(&agent_meta_persist, 0, sizeof(agent_meta_persist));
@@ -1564,10 +1929,43 @@ fail:
 	return -1;
 }
 
+static int agent_meta_persist_journal_abort_locked(void)
+{
+	int damaged = agent_meta_persist.target_bank;
+	int peer = damaged == 0 ? 1 : 0;
+
+	if (!agent_meta_persist.published) {
+		if (!agent_meta_bank_shadow_valid[peer] ||
+		    !agent_meta_bank_journal_valid[peer] ||
+		    agent_meta_bank_shadow[peer].header.generation !=
+			    agent_meta_store_generation) {
+			agent_meta_persist_fail_closed_locked();
+			return -1;
+		}
+		agent_meta_store_active_bank = peer;
+		agent_meta_store_generation =
+			agent_meta_bank_shadow[peer].header.generation;
+		agent_durable_section_active_bind(
+			&agent_meta_bank_shadow[peer].durable,
+			agent_meta_store_generation);
+	}
+	agent_meta_bank_shadow_invalidate(damaged);
+	agent_meta_store_require_mirror(damaged, 0);
+	agent_metadata_store_mark_dirty(VFS_SCOPE_SYSTEM);
+	agent_metadata_store_expedite(VFS_SCOPE_SYSTEM);
+	agent_meta_persist_release_locked(1);
+	agent_background_request();
+	return 0;
+}
+
 static void agent_meta_persist_abort_locked(void)
 {
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
 		return;
+	if (agent_meta_persist.journal) {
+		(void)agent_meta_persist_journal_abort_locked();
+		return;
+	}
 	agent_meta_store_require_mirror(
 		agent_meta_persist.target_bank,
 		!agent_meta_persist.published ||
@@ -1596,9 +1994,16 @@ static void agent_meta_persist_fail_closed_locked(void)
 
 static void agent_meta_persist_primary_publish_locked(void)
 {
+	agent_file_writeback_note_full_cow(
+		agent_meta_persist.scope_id,
+		agent_meta_persist_full_cow_blocks(),
+		agent_meta_persist.journal_compaction);
 	agent_meta_bank_shadow_install(
 		&store_buf, agent_meta_persist.target_bank,
 		agent_meta_persist.write_limit, 1);
+	if (agent_meta_persist.catalog_settle)
+		agent_metadata_catalog_journal_settle_commit(
+			&agent_meta_journal_settle);
 	agent_meta_store_active_bank = agent_meta_persist.target_bank;
 	agent_meta_store_generation = agent_meta_persist.expected_generation;
 	agent_durable_section_active_bind(
@@ -1638,6 +2043,8 @@ static int agent_meta_persist_note_failure_locked(void)
 {
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
 		return -1;
+	if (agent_meta_persist.journal)
+		return agent_meta_persist_journal_abort_locked();
 	if (!agent_meta_persist.published &&
 	    !agent_meta_persist.irrevocable) {
 		agent_meta_persist_abort_locked();
@@ -1663,6 +2070,151 @@ static int agent_meta_persist_note_failure_locked(void)
 	return -1;
 }
 
+static void
+agent_meta_journal_primary_publish_locked(void)
+{
+	int bank = agent_meta_persist.target_bank;
+	struct agent_meta_journal_cursor cursor =
+		agent_meta_bank_journal[bank];
+
+	if (agent_meta_journal_apply_trusted(
+		    &agent_meta_bank_shadow[bank], &agent_meta_journal_plan,
+		    agent_meta_bank_record_index[bank],
+		    AGENT_FILE_META_MAX) != AGENT_META_JOURNAL_OK)
+		panic("metadata journal shadow apply");
+	if (agent_meta_journal_cursor_publish(
+		    &cursor, &agent_meta_journal_plan) != AGENT_META_JOURNAL_OK)
+		panic("metadata journal publish cursor");
+	agent_meta_bank_delta_invalidate(bank);
+	agent_meta_bank_journal[bank] = cursor;
+	agent_meta_bank_journal_valid[bank] = 1;
+	agent_meta_store_active_bank = bank;
+	agent_meta_store_generation = agent_meta_persist.expected_generation;
+	agent_metadata_catalog_journal_commit(&agent_meta_journal_receipt);
+	agent_durable_section_active_bind(
+		&agent_meta_bank_shadow[agent_meta_store_active_bank].durable,
+		agent_meta_store_generation);
+	agent_meta_persist.published = 1;
+	agent_meta_persist.primary_verified = 1;
+	agent_file_writeback_note_journal(
+		agent_meta_persist.scope_id, 0, 1);
+	agent_file_writeback_advance(0);
+	agent_durable_section_commit_scope(
+		agent_meta_persist.scope_id,
+		agent_meta_persist.durable_serial);
+	agent_background_request();
+}
+
+static int
+agent_meta_persist_journal_step_locked(void)
+{
+	struct agent_meta_persist_state *state = &agent_meta_persist;
+	struct inode *ip;
+	struct vfs_cred kernel_cred;
+	uint journal_bytes = agent_meta_journal_plan.block_count * BSIZE;
+	uint disk_offset = AGENT_META_JOURNAL_OFFSET +
+		agent_meta_journal_plan.start_slot *
+			AGENT_META_JOURNAL_SLOT_BYTES;
+	int result = 0;
+	int n;
+
+	if (!state->journal || journal_bytes == 0 ||
+	    journal_bytes > AGENT_META_JOURNAL_MAX_TXN_BLOCKS * BSIZE ||
+	    disk_offset % BSIZE != 0 ||
+	    disk_offset > AGENT_META_STORE_MAX_BYTES - journal_bytes)
+		panic("metadata journal persist range");
+	ip = inode_get(state->target_dev, state->target_inum);
+	if (ip == 0)
+		return agent_meta_persist_device_error(VIRTIO_DISK_ERR_IO);
+	n = ivalid(ip);
+	if (n < 0 || ip->type != T_FILE || !vfs_inode_label_valid(ip) ||
+	    ip->vfs_policy != VFS_POLICY_KERNEL_PRIVATE ||
+	    ip->vfs_incarnation != state->target_incarnation ||
+	    ip->size < AGENT_META_STORE_MAX_BYTES) {
+		iput(ip);
+		return agent_meta_persist_device_error(
+			n < 0 ? n : VIRTIO_DISK_ERR_IO);
+	}
+	vfs_cred_kernel(&kernel_cred);
+	switch (state->phase) {
+	case AGENT_META_PERSIST_JOURNAL_WRITE:
+		if (state->write_offset >= journal_bytes) {
+			state->phase = AGENT_META_PERSIST_JOURNAL_FLUSH;
+			break;
+		}
+		n = writei(ip, &kernel_cred, 0,
+			   (uint64)((char *)agent_meta_journal_plan.slots +
+				    state->write_offset),
+			   disk_offset + state->write_offset,
+			   journal_bytes - state->write_offset);
+		if (n > 0 && (uint)n % BSIZE == 0)
+			state->write_offset += n;
+		else
+			result = n == 0 ? AGENT_META_PERSIST_DEFERRED : -1;
+		break;
+	case AGENT_META_PERSIST_JOURNAL_FLUSH:
+		n = agent_meta_durable_flush();
+		if (n < 0)
+			result = agent_meta_persist_device_error(n);
+		else {
+			agent_file_writeback_note_journal(
+				state->scope_id,
+				agent_meta_journal_plan.block_count, 0);
+			state->payload_durable = 1;
+			state->irrevocable = 1;
+			/* The flush-completed COMMIT slot is the authority.  Scrub and
+			 * mirror verification run outside the inducing scope. */
+			state->phase = AGENT_META_PERSIST_JOURNAL_COMMIT;
+		}
+		break;
+	case AGENT_META_PERSIST_JOURNAL_VERIFY:
+		if (!state->payload_durable)
+			panic("metadata journal verify before flush");
+		if (state->verify_offset >= journal_bytes) {
+			state->phase = AGENT_META_PERSIST_JOURNAL_COMMIT;
+			break;
+		}
+		n = readi_device(ip, &kernel_cred, 0,
+				 (uint64)state->verify_block,
+				 disk_offset + state->verify_offset, BSIZE);
+		if (n == BSIZE) {
+			if (memcmp(state->verify_block,
+				   (char *)agent_meta_journal_plan.slots +
+					   state->verify_offset,
+				   BSIZE) != 0)
+				result = -1;
+			else
+				state->verify_offset += BSIZE;
+		} else
+			result = n == 0 ? AGENT_META_PERSIST_DEFERRED : -1;
+		break;
+	case AGENT_META_PERSIST_JOURNAL_COMMIT:
+		{
+			int mirror = state->target_bank == 0 ? 1 : 0;
+
+			if (state->mirroring)
+				panic("foreground journal mirror invariant");
+			agent_meta_journal_primary_publish_locked();
+			/* Do not charge peer replay/readback to the mutating workflow.
+			 * Block another append until the SYSTEM repair re-establishes a
+			 * current fallback bank. */
+			agent_meta_store_require_mirror(mirror, 0);
+			agent_metadata_store_mark_dirty(VFS_SCOPE_SYSTEM);
+			agent_metadata_store_expedite(VFS_SCOPE_SYSTEM);
+			agent_meta_persist_release_locked(0);
+			iput(ip);
+			return 1;
+		}
+	default:
+		iput(ip);
+		panic("invalid metadata journal persist phase");
+	}
+	iput(ip);
+	if (result < 0 && state->error_cause == AGENT_METADATA_PERSIST_NONE)
+		state->error_cause = AGENT_METADATA_PERSIST_IO;
+	return result;
+}
+
 // Only a verified header publishes a bank.
 static int agent_meta_persist_step_locked(void)
 {
@@ -1681,8 +2233,18 @@ static int agent_meta_persist_step_locked(void)
 
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
 		return 1;
+	if (state->journal)
+		return agent_meta_persist_journal_step_locked();
+	if (!state->snapshot_sealed)
+		panic("metadata COW snapshot is not sealed");
 	if (state->target_bank < 0 || state->target_bank >= AGENT_META_STORE_BANKS)
 		panic("invalid metadata persist bank");
+	if (state->phase >= AGENT_META_PERSIST_VERIFY_PAYLOAD &&
+	    !state->payload_durable)
+		panic("metadata payload published before durability");
+	if (state->phase >= AGENT_META_PERSIST_VERIFY_HEADER &&
+	    !state->header_durable)
+		panic("metadata header verified before durability");
 	if (agent_meta_persist.restart_target) {
 		int target_bank = state->target_bank;
 
@@ -1695,6 +2257,7 @@ static int agent_meta_persist_step_locked(void)
 		return 0;
 	}
 	if (state->phase == AGENT_META_PERSIST_COMMIT) {
+		agent_meta_crash_checkpoint(8);
 		if (!state->mirroring) {
 			if (!state->primary_verified)
 				return agent_meta_persist_device_error(
@@ -1749,59 +2312,41 @@ static int agent_meta_persist_step_locked(void)
 	vfs_cred_kernel(&kernel_cred);
 	switch (state->phase) {
 	case AGENT_META_PERSIST_INVALIDATE:
-	case AGENT_META_PERSIST_PUBLISH:
-	{
-		uint checkpoint = agent_meta_persist.phase;
-		struct agent_meta_store_header *header = &store->header;
-
-		if (checkpoint == 1)
-			agent_meta_crash_checkpoint(checkpoint);
-		agent_meta_eio_checkpoint(checkpoint);
-		if (checkpoint == 1) {
-			memset(&invalid_header, 0, sizeof(invalid_header));
-			header = &invalid_header;
-		} else
-			/* Header writes make disk state unknown. */
-			state->irrevocable = 1;
-		n = writei(ip, &kernel_cred, 0, (uint64)header, 0,
-			   sizeof(*header));
-		if (n == (int)sizeof(*header)) {
-			if (checkpoint == 1)
-				state->write_offset = sizeof(*header);
-			else
-				agent_meta_crash_checkpoint(checkpoint);
-			state->phase++;
+		memset(&invalid_header, 0, sizeof(invalid_header));
+		agent_meta_eio_checkpoint(1);
+		n = writei(ip, &kernel_cred, 0, (uint64)&invalid_header, 0,
+			   sizeof(invalid_header));
+		if (n == (int)sizeof(invalid_header)) {
+			state->write_offset = sizeof(invalid_header);
+			state->phase = AGENT_META_PERSIST_WRITE;
+			agent_meta_crash_checkpoint(1);
 		} else
 			result = n == 0 ? AGENT_META_PERSIST_DEFERRED : -1;
 		break;
-	}
-	case AGENT_META_PERSIST_FLUSH_INVALID:
-	case AGENT_META_PERSIST_FLUSH_PAYLOAD:
-	case AGENT_META_PERSIST_FLUSH_HEADER:
-	{
-		uint checkpoint = agent_meta_persist.phase;
-
-		agent_meta_eio_checkpoint(checkpoint);
-		n = bio_durable_flush();
-		if (n < 0)
-			result = agent_meta_persist_device_error(n);
-		else {
-			if (checkpoint == 4)
-				state->verify_offset = sizeof(store->header);
-			state->phase++;
-			agent_meta_crash_checkpoint(checkpoint);
-		}
-		break;
-	}
 	case AGENT_META_PERSIST_WRITE:
 		if (state->write_offset >= state->write_limit) {
-			agent_meta_crash_checkpoint(3);
-			state->phase = AGENT_META_PERSIST_FLUSH_PAYLOAD;
+			if (state->journal_clear_offset <
+			    AGENT_META_STORE_MAX_BYTES) {
+				memset(state->verify_block, 0,
+				       sizeof(state->verify_block));
+				agent_meta_eio_checkpoint(2);
+				n = writei(ip, &kernel_cred, 0,
+					   (uint64)state->verify_block,
+					   state->journal_clear_offset, BSIZE);
+				if (n == BSIZE)
+					state->journal_clear_offset += BSIZE;
+				else
+					result = n == 0 ?
+						AGENT_META_PERSIST_DEFERRED : -1;
+				break;
+			}
+			state->phase = AGENT_META_PERSIST_FLUSH_PREPARED;
+			agent_meta_crash_checkpoint(2);
 			break;
 		}
 		chunk = agent_meta_persist_segment_end(
 			state->write_offset) - state->write_offset;
-		agent_meta_eio_checkpoint(3);
+		agent_meta_eio_checkpoint(2);
 		n = writei(ip, &kernel_cred, 0,
 			   (uint64)((char *)store + state->write_offset),
 			   state->write_offset, chunk);
@@ -1810,9 +2355,73 @@ static int agent_meta_persist_step_locked(void)
 		else if (n == 0)
 			result = AGENT_META_PERSIST_DEFERRED;
 		break;
+	case AGENT_META_PERSIST_FLUSH_PREPARED:
+		agent_meta_eio_checkpoint(3);
+		n = agent_meta_durable_flush();
+		if (n < 0)
+			result = agent_meta_persist_device_error(n);
+		else {
+			state->payload_durable = 1;
+			state->verify_offset = sizeof(store->header);
+			state->phase = AGENT_META_PERSIST_VERIFY_PAYLOAD;
+			agent_meta_crash_checkpoint(3);
+		}
+		break;
+	case AGENT_META_PERSIST_VERIFY_PAYLOAD:
+		if (ip->size < state->store_bytes)
+			goto invalid_target;
+		if (state->verify_offset >= state->store_bytes) {
+			if (state->verify_hash == state->expected_hash) {
+				agent_meta_crash_checkpoint(4);
+				state->phase = AGENT_META_PERSIST_PUBLISH;
+			} else
+				goto invalid_target;
+			break;
+		}
+		chunk = MIN(BSIZE - state->verify_offset % BSIZE,
+			    state->store_bytes - state->verify_offset);
+		agent_meta_eio_checkpoint(4);
+		n = readi_device(ip, &kernel_cred, 0,
+				 (uint64)state->verify_block,
+				 state->verify_offset, chunk);
+		if (n > 0) {
+			if (memcmp(state->verify_block,
+				   (char *)store + state->verify_offset, n) != 0)
+				goto invalid_target;
+			state->verify_hash = agent_meta_format_hash_bytes(
+				state->verify_hash, state->verify_block, n);
+			state->verify_offset += n;
+		} else if (n == 0)
+			result = AGENT_META_PERSIST_DEFERRED;
+		break;
+	case AGENT_META_PERSIST_PUBLISH:
+		if (!state->payload_durable || state->header_durable)
+			panic("metadata publish ordering invariant");
+		/* A valid header can make the new generation externally visible. */
+		state->irrevocable = 1;
+		agent_meta_eio_checkpoint(5);
+		n = writei(ip, &kernel_cred, 0, (uint64)&store->header, 0,
+			   sizeof(store->header));
+		if (n == (int)sizeof(store->header)) {
+			state->phase = AGENT_META_PERSIST_FLUSH_HEADER;
+			agent_meta_crash_checkpoint(5);
+		} else
+			result = n == 0 ? AGENT_META_PERSIST_DEFERRED : -1;
+		break;
+	case AGENT_META_PERSIST_FLUSH_HEADER:
+		agent_meta_eio_checkpoint(6);
+		n = agent_meta_durable_flush();
+		if (n < 0)
+			result = agent_meta_persist_device_error(n);
+		else {
+			state->header_durable = 1;
+			state->phase = AGENT_META_PERSIST_VERIFY_HEADER;
+			agent_meta_crash_checkpoint(6);
+		}
+		break;
 	case AGENT_META_PERSIST_VERIFY_HEADER:
 		memset(&verified_header, 0, sizeof(verified_header));
-		agent_meta_eio_checkpoint(8);
+		agent_meta_eio_checkpoint(7);
 		n = readi_device(ip, &kernel_cred, 0,
 				 (uint64)&verified_header, 0,
 				 sizeof(store->header));
@@ -1832,51 +2441,27 @@ static int agent_meta_persist_step_locked(void)
 		if (!state->mirroring) {
 			agent_meta_persist_primary_publish_locked();
 			state->primary_verified = 1;
-			agent_meta_crash_checkpoint(8);
 			if (state->scope_id == VFS_SCOPE_SYSTEM)
 				memset(stale_slots, 0, sizeof(stale_slots));
 		} else {
 			if (!state->primary_verified)
 				goto invalid_target;
-			agent_meta_crash_checkpoint(8);
 			agent_meta_bank_shadow_install(
 				store, state->target_bank,
 				agent_meta_persist.write_limit, 1);
+			agent_file_writeback_note_full_cow(
+				state->scope_id,
+				agent_meta_persist_full_cow_blocks(), 0);
 			agent_meta_store_recovery_required = 0;
 			pending_repair_mode = AGENT_META_REPAIR_NONE;
 			pending_repair_bank = -1;
 			agent_file_writeback_advance(1);
+			agent_file_writeback_replicate_settled();
 			agent_metadata_test_eio_commit(
 				state->scope_id, state->job_id);
 		}
 		state->phase = AGENT_META_PERSIST_COMMIT;
-		break;
-	case AGENT_META_PERSIST_VERIFY_PAYLOAD:
-		if (ip->size < state->store_bytes)
-			goto invalid_target;
-		if (state->verify_offset >= state->store_bytes) {
-			if (state->verify_hash == state->expected_hash) {
-				agent_meta_crash_checkpoint(5);
-				state->phase = AGENT_META_PERSIST_PUBLISH;
-			} else
-				goto invalid_target;
-			break;
-		}
-		chunk = MIN(BSIZE - state->verify_offset % BSIZE,
-			    state->store_bytes - state->verify_offset);
-		agent_meta_eio_checkpoint(5);
-		n = readi_device(ip, &kernel_cred, 0,
-				 (uint64)state->verify_block,
-				 state->verify_offset, chunk);
-		if (n > 0) {
-			if (memcmp(state->verify_block,
-				   (char *)store + state->verify_offset, n) != 0)
-				goto invalid_target;
-			state->verify_hash = agent_meta_format_hash_bytes(
-				state->verify_hash, state->verify_block, n);
-			state->verify_offset += n;
-		} else if (n == 0)
-			result = AGENT_META_PERSIST_DEFERRED;
+		agent_meta_crash_checkpoint(7);
 		break;
 	default:
 		iput(ip);
@@ -1966,8 +2551,7 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 		struct bio_checkpoint_result checkpoint =
 			bio_checkpoint_make(BIO_CHECKPOINT_READY);
 
-		if (scope_reached(
-			    scope_id, target_generation, 0)) {
+		if (scope_reached(scope_id, target_generation, 0)) {
 			status = 0;
 			break;
 		}
@@ -2025,8 +2609,7 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 		// job_id detects replacement across the checkpoint.
 		checkpoint = agent_meta_persist_checkpoint_unlocked(
 			job_id, &same_job);
-		if (scope_reached(
-			    scope_id, target_generation, 0)) {
+		if (scope_reached(scope_id, target_generation, 0)) {
 			status = 0;
 			break;
 		}
@@ -2062,6 +2645,82 @@ out:
 		    agent_meta_persist.scope_id == scope_id)
 			completion->irrevocable = 1;
 	}
+	if (submitter == token) {
+		submitter = 0;
+		wait_queue_wake_all(&waiters);
+	}
+	agent_metadata_txn_unlock();
+	return status;
+}
+
+static int
+agent_meta_persist_fence_owner(uint owner, uint scope_id, uint64 target,
+			       int require_replication, int require_idle)
+{
+	void *token = agent_metadata_txn_token();
+	uint step_limit = require_replication ?
+		2U * AGENT_META_REPLICATED_STEP_LIMIT :
+		AGENT_META_REPLICATED_STEP_LIMIT;
+	int status = -1;
+
+	if (target == 0)
+		return 0;
+	if (!agent_metadata_txn_lock(1))
+		return -1;
+	if ((submitter != 0 && submitter != token) ||
+	    agent_meta_store_failed_closed || agent_metadata_recovery_pending())
+		goto out;
+	if (agent_meta_store_recovery_required && owner != FS_OWNER_SYSTEM)
+		goto out;
+	submitter = token;
+	for (uint steps = 0; steps < step_limit; steps++) {
+		uint64 job_id;
+		int same_job;
+		int step;
+		struct bio_checkpoint_result checkpoint;
+
+		if (scope_fence_reached(scope_id, target, require_replication,
+					require_idle)) {
+			status = 0;
+			break;
+		}
+		if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
+			step = agent_meta_persist_start_locked(owner);
+			if (step == AGENT_META_PERSIST_DEFERRED) {
+				agent_meta_persist_retry_next_tick();
+				break;
+			}
+			if (step < 0)
+				break;
+		} else if (agent_meta_persist.owner != owner ||
+			   !agent_meta_persist.snapshot_sealed) {
+			break;
+		}
+		job_id = agent_meta_persist.job_id;
+		step = agent_meta_persist_step_locked();
+		if (step == AGENT_META_PERSIST_DEFERRED) {
+			if (agent_meta_persist.retry_tick == 0)
+				agent_meta_persist_retry_next_tick();
+			break;
+		}
+		if (step < 0) {
+			(void)agent_meta_persist_note_failure_locked();
+			break;
+		}
+		agent_meta_persist.retry_failures = 0;
+		checkpoint = agent_meta_persist_checkpoint_unlocked(
+			job_id, &same_job);
+		if (scope_fence_reached(scope_id, target, require_replication,
+					require_idle)) {
+			status = 0;
+			break;
+		}
+		if (!same_job)
+			continue;
+		if (bio_checkpoint_should_stop(checkpoint))
+			break;
+	}
+out:
 	if (submitter == token) {
 		submitter = 0;
 		wait_queue_wake_all(&waiters);
@@ -2231,6 +2890,50 @@ agent_metadata_store_persist_commit(
 	if (completion == 0)
 		return -1;
 	return agent_file_persist(completion);
+}
+
+int agent_metadata_store_durability_fence(uint scope_id)
+{
+	uint owner = bio_current_owner();
+	uint expected_owner;
+	int result;
+
+	if (scope_id == VFS_SCOPE_SYSTEM)
+		expected_owner = FS_OWNER_SYSTEM;
+	else if (scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
+		 scope_id < FS_OWNER_SCOPE_FLAG)
+		expected_owner = FS_OWNER_SCOPE(scope_id);
+	else
+		return -1;
+	if (owner != expected_owner)
+		return -1;
+	result = agent_meta_persist_fence_owner(
+		owner, scope_id, scope_target(scope_id), 0, 0);
+	if (result < 0)
+		agent_background_request();
+	return result;
+}
+
+int agent_metadata_store_quiescence_fence(uint scope_id)
+{
+	uint owner = bio_current_owner();
+	uint expected_owner;
+	int result;
+
+	if (scope_id == VFS_SCOPE_SYSTEM)
+		expected_owner = FS_OWNER_SYSTEM;
+	else if (scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
+		 scope_id < FS_OWNER_SCOPE_FLAG)
+		expected_owner = FS_OWNER_SCOPE(scope_id);
+	else
+		return -1;
+	if (owner != expected_owner)
+		return -1;
+	result = agent_meta_persist_fence_owner(
+		owner, scope_id, scope_fence_target(scope_id), 1, 1);
+	if (result < 0)
+		agent_background_request();
+	return result;
 }
 
 int

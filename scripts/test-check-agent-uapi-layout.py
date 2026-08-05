@@ -23,7 +23,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 148)
+        self.assertEqual(len(self.golden), 187)
         self.assertEqual(
             self.golden["agent_uapi_layout_offset_info_file_scan_deferred"],
             577,
@@ -31,6 +31,14 @@ class AgentUapiLayoutTests(unittest.TestCase):
         self.assertEqual(
             self.golden["agent_uapi_layout_offset_info_file_scan_failures"],
             585,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_offset_info_metadata_journal_txns"],
+            593,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_offset_info_metadata_full_cow_blocks"],
+            617,
         )
         self.assertEqual(
             self.golden[
@@ -43,6 +51,28 @@ class AgentUapiLayoutTests(unittest.TestCase):
                 "agent_uapi_layout_offset_lifecycle_info_resource_account_generation"
             ],
             57,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_performance_snapshot"],
+            256,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_performance_snapshot_exec_cache_evictions"
+            ],
+            129,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_performance_snapshot_virtio_batched_read_requests"
+            ],
+            209,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_performance_snapshot_overwrite_prereads_skipped"
+            ],
+            225,
         )
         agent_uapi_layout.compare_golden(self.golden, self.golden)
 

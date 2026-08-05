@@ -33,6 +33,7 @@ agent_metadata
 agent_metadata_actions
 agent_metadata_catalog
 agent_metadata_directory
+agent_metadata_journal
 agent_metadata_objects
 agent_metadata_prefetch
 agent_metadata_probe
@@ -69,14 +70,14 @@ for module in ${modules}; do
 	: >"${TMP_FILE}"
 done
 
-# The ownership splits have exactly twenty reviewed size-optimized translation
+# The ownership splits have exactly twenty-one reviewed size-optimized translation
 # units. Keep the build rule target-local and reject silent policy expansion.
 makefile="${ROOT_DIR}/Makefile"
 size_optimized_modules="$(sed -n \
 	's/^AGENT_SIZE_OPTIMIZED_MODULES[[:space:]]*:=[[:space:]]*//p' \
 	"${makefile}")"
 [ "${size_optimized_modules}" = \
-	"agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_objects agent_metadata_prefetch agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store" ] ||
+	"agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_prefetch agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store" ] ||
 	fail "Agent size-optimization allowlist drifted"
 grep -q -F '$(AGENT_SIZE_OPTIMIZED_OBJS): private CFLAGS += -Os' \
 	"${makefile}" || fail "Agent size optimization is not target-local"
@@ -148,7 +149,7 @@ for path in "${ROOT_DIR}"/os/agent*.c; do
 	case "${module}" in
 	agent | agent_background | agent_core | agent_context | agent_context_path | agent_durable_section | agent_file_state | agent_identity | agent_identity_lease | agent_ipc | \
 		agent_lifecycle | agent_metadata | agent_metadata_actions | agent_metadata_objects | \
-	agent_metadata_catalog | agent_metadata_directory | agent_metadata_probe | agent_metadata_query | agent_metadata_recovery | agent_metadata_recovery_test | agent_metadata_scan | \
+	agent_metadata_catalog | agent_metadata_directory | agent_metadata_journal | agent_metadata_probe | agent_metadata_query | agent_metadata_recovery | agent_metadata_recovery_test | agent_metadata_scan | \
 	agent_metadata_prefetch | agent_metadata_store | agent_metadata_store_format | agent_metadata_store_io | agent_metadata_test | agent_observe | agent_observe_audit_query | agent_observe_capacity | \
 	agent_observe_ledger | agent_observe_recovery | agent_observe_store | agent_observe_test | agent_observe_timeline | \
 	agent_resource | agent_tool_protocol)
@@ -360,8 +361,9 @@ agent_metadata_actions.h
 agent_metadata_catalog.h
  agent_metadata_directory.h
  agent_metadata_disk.h
- agent_metadata_internal.h
- agent_metadata_probe.h
+agent_metadata_internal.h
+agent_metadata_journal.h
+agent_metadata_probe.h
  agent_metadata_recovery.h
  agent_metadata_recovery_test.h
  agent_metadata_store_format.h
@@ -490,7 +492,7 @@ fi
 
 if grep -R -n -E '#include[[:space:]]+"agent_metadata_store_format\.h"' \
 	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/agent_metadata_(probe|store(_format|_io)?)\.c:' >"${TMP_FILE}"; then
+	grep -v -E '/agent_metadata_(journal|probe|store(_format|_io)?)\.c:' >"${TMP_FILE}"; then
 	fail "metadata store format contract escaped its owners"
 fi
 : >"${TMP_FILE}"
@@ -738,6 +740,10 @@ reclaim_advance="$(sed -n '/^vfs_scope_reclaim_advance(/,/^}/p' \
 	"${vfs_source}")"
 reclaim_driver="$(sed -n '/^static void vfs_scope_reclaim_complete(/,/^}/p' \
 	"${vfs_source}")"
+scope_insert="$(sed -n '/^vfs_scope_registry_insert_locked(/,/^}/p' \
+	"${vfs_source}")"
+scope_release="$(sed -n '/^static int vfs_scope_release(/,/^}/p' \
+	"${vfs_source}")"
 target_retire="$(sed -n '/^agent_file_scope_state_retire(/,/^}/p' \
 	"${store_source}")"
 target_done="$(sed -n '/^agent_metadata_store_scope_target_done(/,/^}/p' \
@@ -745,7 +751,8 @@ target_done="$(sed -n '/^agent_metadata_store_scope_target_done(/,/^}/p' \
 
 [ -n "${reclaim_begin}" ] && [ -n "${reclaim_done}" ] &&
 	[ -n "${reclaim_advance}" ] &&
-	[ -n "${reclaim_driver}" ] && [ -n "${target_retire}" ] &&
+	[ -n "${reclaim_driver}" ] && [ -n "${scope_insert}" ] &&
+	[ -n "${scope_release}" ] && [ -n "${target_retire}" ] &&
 	[ -n "${target_done}" ] ||
 	fail "scope reclaim phases are missing"
 mark_count="$(printf '%s\n' "${reclaim_begin}" |
@@ -808,18 +815,32 @@ printf '%s\n' "${reclaim_advance}" |
 	grep -q -F 'ref->reclaim_phase == expected' ||
 	fail "scope reclaim publication is not expected-phase guarded"
 printf '%s\n' "${reclaim_advance}" |
-	grep -q -F 'ref->scope_id != scope_id || !ref->retiring' ||
-	fail "scope reclaim publication is not retiring-scope guarded"
+	grep -q -F 'vfs_scope_find_locked(scope_id)' ||
+	fail "scope reclaim publication bypasses the indexed scope authority"
+printf '%s\n' "${reclaim_advance}" |
+	grep -q -F 'ref != 0 && ref->retiring' ||
+	fail "scope reclaim publication is not retiring-record guarded"
+printf '%s\n' "${reclaim_advance}" |
+	grep -q -F 'workflow_lifecycle_retiring(lifecycle)' ||
+	fail "scope reclaim publication is not trusted-lifecycle guarded"
 files_count="$(printf '%s\n' "${reclaim_driver}" |
 	grep -c -F 'fs_reclaim_scope_files(scope_id)' || true)"
 [ "${files_count}" -eq 1 ] ||
 	fail "scope reclaim FILES must have one resumable cursor driver"
 phase_reset_count="$(grep -c -F \
 	'reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN' "${vfs_source}" || true)"
-target_reset_count="$(grep -c -F \
-	'reclaim_metadata_target = 0' "${vfs_source}" || true)"
-[ "${phase_reset_count}" -ge 2 ] && [ "${target_reset_count}" -ge 2 ] ||
-	fail "scope create and release must reset reclaim state"
+[ "${phase_reset_count}" -ge 2 ] ||
+	fail "scope create and release must reset the reclaim phase"
+printf '%s\n' "${scope_insert}" | awk '
+	/memset\(ref, 0, sizeof\(\*ref\)\)/ { clear = NR }
+	/ref->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN/ { phase = NR }
+	END { exit !(clear && phase && clear < phase) }
+	' || fail "scope insertion must clear recycled reclaim state"
+for reset in 'matched->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN' \
+	'matched->reclaim_metadata_target = 0'; do
+	printf '%s\n' "${scope_release}" | grep -q -F "${reset}" ||
+		fail "scope release lost reclaim reset: ${reset}"
+done
 if grep -R -n -E 'agent_scope_reclaim[[:space:]]*\(' \
 	"${ROOT_DIR}/os" >"${TMP_FILE}"; then
 	fail "legacy all-in-one scope reclaim entry point returned"

@@ -29,8 +29,58 @@ class TeardownProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(teardown_protocol.ProtocolError, pattern):
             teardown_protocol.validate_protocol(sources)
 
+    def assert_terminal_rejected(self, sources, pattern):
+        with self.assertRaisesRegex(teardown_protocol.ProtocolError, pattern):
+            teardown_protocol.validate_terminal_teardown(sources["proc"])
+
     def test_repository_protocol_is_valid(self):
         teardown_protocol.validate_protocol(copy.deepcopy(self.good))
+
+    def test_terminal_teardown_releases_gate_before_io_settlement(self):
+        sources = self.changed(
+            "proc",
+            "\t\tfs_epoch_request_end();\n"
+            "\t\tif (bio_request_end_current_cleanup() < 0)",
+            "\t\tif (bio_request_end_current_cleanup() < 0)\n"
+            "\t\tfs_epoch_request_end();",
+        )
+        self.assert_terminal_rejected(sources, "release FS gate, settle BIO")
+
+    def test_terminal_teardown_cannot_drop_gate_release(self):
+        before = (
+            "\tif (terminal_current) {\n"
+            "\t\tfs_epoch_request_end();\n"
+            "\t\tif (bio_request_end_current_cleanup() < 0)"
+        )
+        after = (
+            "\tif (terminal_current) {\n"
+            "\t\tif (bio_request_end_current_cleanup() < 0)"
+        )
+        sources = self.changed("proc", before, after)
+        self.assert_terminal_rejected(sources, "filesystem gate release")
+
+    def test_terminal_teardown_settles_before_lifecycle_release(self):
+        before = (
+            "\tvfs_proc_terminal_clear(p);\n"
+            "\tvfs_proc_lifecycle_release(p);"
+        )
+        after = (
+            "\tvfs_proc_lifecycle_release(p);\n"
+            "\tvfs_proc_terminal_clear(p);"
+        )
+        sources = self.changed("proc", before, after)
+        self.assert_terminal_rejected(sources, "release FS gate, settle BIO")
+
+    def test_exit_cannot_release_gate_after_terminal_teardown(self):
+        sources = self.changed(
+            "proc",
+            "\tif (proc_teardown_run(p, t, 1) < 0)\n"
+            "\t\tpanic(\"active process exit\");",
+            "\tif (proc_teardown_run(p, t, 1) < 0)\n"
+            "\t\tpanic(\"active process exit\");\n"
+            "\tfs_epoch_request_end();",
+        )
+        self.assert_terminal_rejected(sources, "releases the filesystem gate twice")
 
     def test_last_reference_must_request_reaper(self):
         sources = self.changed(
@@ -83,6 +133,43 @@ class TeardownProtocolTests(unittest.TestCase):
         )
         self.assert_rejected(sources, "level-rearm|busy-loop")
 
+    def test_reaper_pending_must_use_retiring_counter(self):
+        sources = self.changed(
+            "vfs",
+            "\tpending = registry->retiring_count != 0;",
+            "\tpending = registry->used_count != 0;",
+        )
+        self.assert_rejected(sources, "level predicate")
+
+    def test_scope_lookup_must_use_scope_hash(self):
+        sources = self.changed(
+            "vfs",
+            "\tlink = registry->hash_heads[vfs_scope_hash(scope_id)];",
+            "\tlink = registry->hash_heads[0];",
+        )
+        self.assert_rejected(sources, "hash lookup")
+
+    def test_scope_lookup_must_match_exact_scope(self):
+        sources = self.changed(
+            "vfs",
+            "\t\tif (ref->scope_id == scope_id)\n\t\t\treturn ref;",
+            "\t\tif (ref->scope_id != scope_id)\n\t\t\treturn ref;",
+        )
+        self.assert_rejected(sources, "hash lookup")
+
+    def test_phase_publication_must_use_direct_scope_lookup(self):
+        before = (
+            "\t\tstruct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);\n\n"
+            "\t\tif (ref != 0 && ref->retiring &&\n"
+            "\t\t    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle) &&\n"
+            "\t\t    ref->reclaim_phase == expected &&"
+        )
+        after = before.replace(
+            "vfs_scope_find_locked(scope_id)", "&vfs_scope_registry.refs[0]", 1
+        )
+        sources = self.changed("vfs", before, after)
+        self.assert_rejected(sources, "direct hashed scope match|lost guard")
+
     def test_background_edge_take_must_remain_atomic(self):
         sources = self.changed(
             "background",
@@ -95,10 +182,10 @@ class TeardownProtocolTests(unittest.TestCase):
     def test_background_checkpoint_cannot_drain_in_a_loop(self):
         sources = self.changed(
             "agent_core",
-            "\tagent_background_maintain();\n}",
+            "\tagent_background_maintain();",
             "\tdo {\n"
             "\t\tagent_background_maintain();\n"
-            "\t} while (agent_background_take());\n}",
+            "\t} while (agent_background_take());",
         )
         self.assert_rejected(sources, "exactly 1|one maintenance pass")
 
@@ -537,6 +624,119 @@ class TeardownProtocolTests(unittest.TestCase):
         )
         sources = self.changed("proc", before, after)
         self.assert_rejected(sources, "Context alias failure must abort")
+
+    def test_process_prepare_requires_complete_recycled_clean_guard(self):
+        guard = (
+            "\tif (p == 0 || !proc_teardown_live(p) || p->is_agent ||\n"
+            "\t    p->agent_control_id != 0 || p->agent_controller_id != 0 ||\n"
+            "\t    !agent_context_is_empty(p) ||\n"
+            "\t    !agent_ipc_legacy_mailbox_empty(p) ||\n"
+            "\t    p->legacy_mail_endpoint_generation != 0)\n"
+            "\t\tpanic(\"Agent prepare outside live process\");"
+        )
+        predicates = (
+            "p == 0",
+            "!proc_teardown_live(p)",
+            "p->is_agent",
+            "p->agent_control_id != 0",
+            "p->agent_controller_id != 0",
+            "!agent_context_is_empty(p)",
+            "!agent_ipc_legacy_mailbox_empty(p)",
+            "p->legacy_mail_endpoint_generation != 0",
+        )
+        for predicate in predicates:
+            with self.subTest(predicate=predicate):
+                sources = self.changed(
+                    "agent_core", guard, guard.replace(predicate, "0", 1)
+                )
+                self.assert_rejected(
+                    sources, "RECYCLED_CLEAN process prepare guard"
+                )
+
+    def test_process_prepare_cannot_repeat_full_clear(self):
+        sources = self.changed(
+            "agent_core",
+            "\tagent_ipc_proc_prepare(p);",
+            "\tagent_core_clear_metadata(p);\n\tagent_ipc_proc_prepare(p);",
+        )
+        self.assert_rejected(sources, "must not clear or reset")
+
+    def test_process_prepare_cannot_repeat_subsystem_reset(self):
+        sources = self.changed(
+            "agent_core",
+            "\tagent_ipc_proc_prepare(p);",
+            "\tagent_observe_proc_reset(p);\n\tagent_ipc_proc_prepare(p);",
+        )
+        self.assert_rejected(sources, "must not clear or reset")
+
+    def test_process_prepare_cannot_zero_recycled_fields(self):
+        sources = self.changed(
+            "agent_core",
+            "\tagent_ipc_proc_prepare(p);",
+            "\tp->agent_id = 0;\n\tagent_ipc_proc_prepare(p);",
+        )
+        self.assert_rejected(sources, "must not zero recycled process fields")
+
+    def test_process_prepare_must_issue_endpoint_incarnation(self):
+        sources = self.changed(
+            "agent_core", "\tagent_ipc_proc_prepare(p);", "\t(void)p;"
+        )
+        self.assert_rejected(sources, "must call agent_ipc_proc_prepare")
+
+    def test_endpoint_prepare_requires_recycled_clean_guard(self):
+        guard = (
+            "\tif (p->mail_sidecar != 0 || "
+            "p->legacy_mail_endpoint_generation != 0)\n"
+            "\t\tpanic(\"legacy endpoint prepare state\");"
+        )
+        for predicate in (
+            "p->mail_sidecar != 0",
+            "p->legacy_mail_endpoint_generation != 0",
+        ):
+            with self.subTest(predicate=predicate):
+                sources = self.changed(
+                    "agent_ipc", guard, guard.replace(predicate, "0", 1)
+                )
+                self.assert_rejected(
+                    sources, "legacy endpoint RECYCLED_CLEAN guard"
+                )
+
+    def test_endpoint_prepare_must_allocate_fresh_generation(self):
+        block = (
+            "\tif (p->mail_sidecar != 0 || "
+            "p->legacy_mail_endpoint_generation != 0)\n"
+            "\t\tpanic(\"legacy endpoint prepare state\");\n"
+            "\tp->legacy_mail_endpoint_generation =\n"
+            "\t\tagent_ipc_legacy_endpoint_alloc_locked();"
+        )
+        sources = self.changed(
+            "agent_ipc",
+            block,
+            block.replace("agent_ipc_legacy_endpoint_alloc_locked()", "1", 1),
+        )
+        self.assert_rejected(
+            sources, "must call agent_ipc_legacy_endpoint_alloc_locked"
+        )
+
+    def test_endpoint_prepare_rotation_must_remain_locked(self):
+        before = (
+            "\tif (p->mail_sidecar != 0 || "
+            "p->legacy_mail_endpoint_generation != 0)\n"
+            "\t\tpanic(\"legacy endpoint prepare state\");\n"
+            "\tp->legacy_mail_endpoint_generation =\n"
+            "\t\tagent_ipc_legacy_endpoint_alloc_locked();\n"
+            "\tintr_restore(enabled);"
+        )
+        after = (
+            "\tif (p->mail_sidecar != 0 || "
+            "p->legacy_mail_endpoint_generation != 0)\n"
+            "\t\tpanic(\"legacy endpoint prepare state\");\n"
+            "\tintr_restore(enabled);\n"
+            "\tp->legacy_mail_endpoint_generation =\n"
+            "\t\tagent_ipc_legacy_endpoint_alloc_locked();"
+        )
+        sources = self.changed("agent_ipc", before, after)
+        self.assert_rejected(sources, "rotate under one locked boundary")
 
     def test_public_exec_cannot_use_teardown_endpoint_operation(self):
         before = "\t\tagent_ipc_exec_public(p);\n\t\treturn 0;"

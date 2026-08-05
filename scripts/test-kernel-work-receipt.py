@@ -114,10 +114,12 @@ class KernelWorkReceiptTests(unittest.TestCase):
         self.mutate(
             "os/syscall.c",
             "case SYS_kernel_work_receipt_snapshot:\n\tcase SYS_agent_resource_snapshot:\n"
+            "\tcase SYS_agent_performance_snapshot:\n"
             "\t\treturn KERNEL_WORK_SYSCALL_OBSERVER;",
             "case SYS_kernel_work_receipt_snapshot:\n"
             "\t\treturn KERNEL_WORK_SYSCALL_PUBLISH;\n"
             "\tcase SYS_agent_resource_snapshot:\n"
+            "\tcase SYS_agent_performance_snapshot:\n"
             "\t\treturn KERNEL_WORK_SYSCALL_OBSERVER;",
         )
         self.assert_rejected("non-publishing syscall class")
@@ -153,13 +155,22 @@ class KernelWorkReceiptTests(unittest.TestCase):
         )
         self.assert_rejected("trusted epoch")
 
-    def test_generation_must_come_from_global_monotonic_source(self):
+    def test_generation_must_advance_in_the_stable_owner(self):
         self.mutate(
             "os/kernel_work.c",
-            "t->kernel_receipt_generation = kernel_work_receipt_next_generation;",
             "t->kernel_receipt_generation++;",
+            "t->kernel_receipt_generation = 1;",
         )
-        self.assert_rejected("atomically sourced")
+        self.assert_rejected("stable owner sequence")
+
+    def test_generation_cannot_reintroduce_global_serialization(self):
+        self.mutate(
+            "os/kernel_work.c",
+            "static uint64 kernel_work_timer_epoch;",
+            "static uint64 kernel_work_receipt_next_generation;\n"
+            "static uint64 kernel_work_timer_epoch;",
+        )
+        self.assert_rejected("global counter")
 
     def test_user_workload_cannot_depend_on_rdtime(self):
         self.mutate(

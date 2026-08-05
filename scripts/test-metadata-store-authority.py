@@ -106,7 +106,8 @@ def validate(source: str) -> None:
     load = body(source, "agent_file_load_snapshot(")
     require(
         "agent_meta_bank_shadow_install(store,selected_bank,"
-        "agent_meta_persist_segment_end(store_bytes-1),!selected_migrated)" in load,
+        "agent_meta_persist_segment_end(store_bytes-1),"
+        "!selected_migrated&&selected_cursor.slots_used==0)" in load,
         "migrated v5 authority is published as a skippable v7 delta",
     )
     require(
@@ -195,7 +196,7 @@ def main() -> int:
         ),
         (
             "trust migrated bank bytes",
-            "\t\t!selected_migrated);",
+            "\t\t!selected_migrated && selected_cursor.slots_used == 0);",
             "\t\t1);",
         ),
         (
@@ -210,8 +211,9 @@ def main() -> int:
         ),
         (
             "logical invalidation retains delta",
-            "\tagent_meta_bank_delta_invalidate(bank);\n",
-            "",
+            "\tagent_meta_bank_delta_invalidate(bank);\n"
+            "\tagent_meta_bank_shadow_valid[bank] = 0;",
+            "\tagent_meta_bank_shadow_valid[bank] = 0;",
         ),
         (
             "classify header error as corruption",

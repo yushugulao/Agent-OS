@@ -993,7 +993,10 @@ class CalibrationTests(unittest.TestCase):
             rounds.append(
                 {
                     "round": round_number,
-                    "sample_id": f"agent18-{commit[:12]}-{ordinal}",
+                    "sample_id": (
+                        f"agent{len(plan['expected_cases'])}-"
+                        f"{commit[:12]}-{ordinal}"
+                    ),
                     "round_nonce": plan["rounds"][round_number - 1]["round_nonce"],
                     "started_utc": f"2026-07-31T00:00:{round_number * 2 - 1:02d}Z",
                     "completed_utc": f"2026-07-31T00:00:{round_number * 2:02d}Z",

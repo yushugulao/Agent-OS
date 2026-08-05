@@ -239,6 +239,7 @@ class AgentTestRunnerTests(unittest.TestCase):
         *,
         timeout=DEFAULT_TEST_CASE_TIMEOUT,
         grace=DEFAULT_TEST_MARKER_GRACE,
+        powercut_delay=0,
         completion_mode=agent_test_runner.COMPLETION_NATURAL,
         expected_bad_addr_markers=(),
         marker_mode=agent_test_runner.MARKER_EXACT_LINE,
@@ -257,6 +258,7 @@ class AgentTestRunnerTests(unittest.TestCase):
             case_timeout=timeout,
             idle_notice=0,
             marker_grace=grace,
+            powercut_delay=powercut_delay,
             completion_mode=completion_mode,
             expected_bad_addr_markers=expected_bad_addr_markers,
             marker_mode=marker_mode,
@@ -1066,6 +1068,33 @@ class AgentTestRunnerTests(unittest.TestCase):
 
     @unittest.skipUnless(
         sys.platform.startswith("linux"),
+        "Linux powercut containment required",
+    )
+    def test_powercut_delay_monitors_guest_until_cut_deadline(self):
+        result = self.monitor(
+            "import time\n"
+            "print('case: parent passed', flush=True)\n"
+            "time.sleep(0.03)\n"
+            "print('case: commit entered', flush=True)\n"
+            "time.sleep(10)\n",
+            timeout=2,
+            grace=0,
+            powercut_delay=0.08,
+            completion_mode=agent_test_runner.COMPLETION_POWERCUT,
+        )
+        self.assertTrue(result.powercut_succeeded)
+        self.assertIn("case: commit entered", result.lines)
+        self.assertGreaterEqual(result.elapsed, 0.07)
+
+    def test_powercut_delay_requires_powercut_completion(self):
+        with self.assertRaisesRegex(ValueError, "requires powercut"):
+            self.monitor(
+                "print('case: parent passed')\n",
+                powercut_delay=0.01,
+            )
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
         "Linux supervisor containment required",
     )
     def test_powercut_does_not_claim_concurrent_unrelated_child(self):
@@ -1519,6 +1548,7 @@ class AgentTestRunnerTests(unittest.TestCase):
             "panic": "[PANIC -1--1] os/main.c:7: boot failed",
             "error": "[ERROR 4-0]unknown syscall -1",
             "user": "fsallocfault_ucore: child_failed: worker 2",
+            "user-check": "ch8_cow_ucore: check failed: fork",
             "orchestrator": "rp_orch: failed code=1",
             "legacy-panic": "panic: synthetic legacy failure",
             "assertion": "kernel: assertion failed in recovery",

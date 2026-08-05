@@ -7,8 +7,11 @@
 struct thread;
 
 // Long kernel paths may only reschedule after committing an atomic chunk and
-// releasing transient state. This granule bounds polling overhead for streams.
+// releasing transient state. Byte-moving paths normalize copied bytes into an
+// approximate CPU-work unit instead of treating one byte as one unit.
 #define KERNEL_WORK_STREAM_GRANULE 64U
+#define KERNEL_WORK_BYTES_PER_UNIT 64U
+#define KERNEL_WORK_IO_BATCH_BYTES (16U * 1024U)
 #define KERNEL_WORK_BUDGET_UNITS 1024U
 #define KERNEL_WORK_OPERATION_UNITS 256U
 #define KERNEL_WORK_PAGE_UNITS 64U
@@ -30,7 +33,9 @@ int kernel_work_receipt_snapshot(struct thread *,
 				 struct kernel_work_receipt *);
 uint64 kernel_work_last_preemptions(struct thread *);
 void kernel_work_request_resched(void);
+uint kernel_work_units_from_bytes(uint64);
 int kernel_work_checkpoint(uint work_units);
+int kernel_work_checkpoint_bytes(uint64 bytes);
 int kernel_work_checkpoint_cleanup(uint work_units);
 
 #endif // KERNEL_WORK_H

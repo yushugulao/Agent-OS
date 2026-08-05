@@ -316,7 +316,7 @@ def _validate_receipt_builder(tokens: list[str]) -> None:
         if after + 2 < len(body) and body[after] == "." and body[after + 2] == "=":
             raise ValueError("kernel query scratch output must not be overwritten")
     required_checks = (
-        ("check", "(", "receipt", ".", "cold_rebuild_records", ">", "0", ","),
+        ("check", "(", "receipt", ".", "cold_rebuild_records", "==", "0", ","),
         ("check", "(", "!", "receipt", ".", "warm_index_cache_hit", ","),
         ("check", "(", "receipt", ".", "load", ">", "0", "&&", "receipt", ".", "load", "<=", "receipt", ".", "traversal_records", ","),
         ("check", "(", "receipt", ".", "warm_index_candidates", ">", "0", "&&", "receipt", ".", "warm_index_candidates", "<=", "receipt", ".", "warm_index_records", ","),

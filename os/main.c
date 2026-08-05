@@ -2,6 +2,7 @@
 #include "agent.h"
 #include "bio.h"
 #include "defs.h"
+#include "fs_epoch.h"
 #include "loader.h"
 #include "plic.h"
 #include "timer.h"
@@ -34,6 +35,7 @@ void main()
 	fsinit();
 	timer_init();
 	agent_storage_init();
+	fs_epoch_runtime_enable();
 	bio_policy_start();
 	load_init_app();
 	infof("start scheduler!");

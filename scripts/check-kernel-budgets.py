@@ -196,6 +196,7 @@ REQUIRED_AGENT_TEST_CASES = (
     "agentconflict_ucore",
     "agentllm_ucore",
     "agentbench_ucore",
+    "ch8_cow_ucore",
     "labbench_ucore",
     "labdemo_ucore",
     "agentsecurity_ucore",
@@ -242,6 +243,7 @@ REQUIRED_AGENT_AGGREGATES = {
             "metadata_prefetch",
             "metadata_catalog",
             "metadata_directory",
+            "metadata_journal",
             "metadata_query",
             "metadata_probe",
             "metadata_recovery",
@@ -261,6 +263,7 @@ REQUIRED_AGENT_AGGREGATE_HEADERS = {
             "os/agent_file_state_internal.h",
             "os/agent_metadata_actions.h",
             "os/agent_metadata_internal.h",
+            "os/agent_metadata_journal.h",
             "os/agent_metadata_catalog.h",
             "os/agent_metadata_directory.h",
             "os/agent_metadata_disk.h",
@@ -304,6 +307,7 @@ REQUIRED_AGENT_MODULE_CFLAGS = {
     "metadata_actions": ("-Os",),
     "metadata_catalog": ("-Os",),
     "metadata_directory": ("-Os",),
+    "metadata_journal": ("-Os",),
     "metadata_objects": ("-Os",),
     "metadata_prefetch": ("-Os",),
     "metadata_probe": ("-Os",),
@@ -357,6 +361,7 @@ def parse_args():
     parser.add_argument("--cc")
     parser.add_argument("--size")
     parser.add_argument("--callgraph-dir", default="build/os")
+    parser.add_argument("--object-dir", default="build/os")
     parser.add_argument(
         "--stack-build-config", default="build/.kernel-stack-config"
     )
@@ -1063,7 +1068,8 @@ def validate_config(config):
             sample_ids.add(sample_id)
             ordinal = index + 1
             expected_sample_id = (
-                f"agent18-{commit_prefix}-{ordinal:02d}"
+                f"agent{len(tests['expected_cases'])}-"
+                f"{commit_prefix}-{ordinal:02d}"
             )
             if sample_id != expected_sample_id:
                 raise BudgetError(
@@ -1378,6 +1384,7 @@ def validate_config(config):
         "metadata_actions",
         "metadata_catalog",
         "metadata_directory",
+        "metadata_journal",
         "metadata_objects",
         "metadata_prefetch",
         "metadata_query",
@@ -1432,6 +1439,7 @@ def validate_config(config):
         "metadata_actions": "os/agent_metadata_actions.c",
         "metadata_catalog": "os/agent_metadata_catalog.c",
         "metadata_directory": "os/agent_metadata_directory.c",
+        "metadata_journal": "os/agent_metadata_journal.c",
         "metadata_objects": "os/agent_metadata_objects.c",
         "metadata_prefetch": "os/agent_metadata_prefetch.c",
         "metadata_query": "os/agent_metadata_query.c",
@@ -2102,7 +2110,32 @@ def measure_agent_object_residency(size_tool, object_path, discarded_sections):
     return text_size - discarded_size, bss_size
 
 
-def check_agent_aggregate_budgets(root, entries, groups, size_tool):
+def resolve_agent_object_path(root, object_dir, configured_path):
+    root = Path(root).resolve()
+    configured = Path(configured_path)
+    if (
+        configured.is_absolute()
+        or ".." in configured.parts
+        or configured.parent.as_posix() != "build/os"
+        or configured.suffix != ".o"
+    ):
+        raise BudgetError(
+            f"Agent object identity must be a build/os object: {configured_path}"
+        )
+    directory = Path(object_dir)
+    if not directory.is_absolute():
+        directory = root / directory
+    directory = directory.resolve()
+    try:
+        directory.relative_to(root)
+    except ValueError as error:
+        raise BudgetError(f"Agent object directory escapes repository: {object_dir}") from error
+    return directory / configured.name
+
+
+def check_agent_aggregate_budgets(
+    root, entries, groups, size_tool, object_dir="build/os"
+):
     if not size_tool:
         raise BudgetError("--size is required for Agent aggregate budgets")
     by_name = {entry["name"]: entry for entry in entries}
@@ -2122,7 +2155,9 @@ def check_agent_aggregate_budgets(root, entries, groups, size_tool):
         bss = 0
         for member in group["members"]:
             entry = by_name[member]
-            object_path = Path(root).resolve() / entry["object_path"]
+            object_path = resolve_agent_object_path(
+                root, object_dir, entry["object_path"]
+            )
             if not object_path.is_file():
                 raise BudgetError(f"Agent aggregate object is missing: {object_path}")
             object_loaded, object_bss = measure_agent_object_residency(
@@ -3337,7 +3372,6 @@ def validate_metadata_directory_boundary_text(objects, directory):
     hooks = (
         "agent_fs_note_create",
         "agent_fs_note_write",
-        "agent_fs_sync_write",
         "agent_fs_note_truncate",
         "agent_fs_note_delete",
     )
@@ -3404,45 +3438,33 @@ def validate_metadata_directory_boundary_text(objects, directory):
     )
     if create.count("agent_metadata_txn_unlock()") != 1:
         raise BudgetError("metadata directory create must unlock exactly once")
-    update = source_function_body(directory, "agent_fs_apply_inode_event(struct inode *ip")
+    update = source_function_body(directory, "static void agent_fs_publish_content(")
     require_source_order(
         update,
         (
-            "agent_file_state_content_bump(ip)",
-            "agent_file_state_size_publish(ip, dirty)",
-            "if (!remove && !dirty && !published)",
-            "agent_file_state_index_deferred(ip)",
-            "agent_metadata_txn_try_external()",
+            "agent_file_state_content_publish(ip, &receipt)",
+            "agent_metadata_store_mark_dirty(ip->vfs_scope_id)",
+            "agent_file_request_scan()",
         ),
-        "metadata directory shared content state machine",
-    )
-    require_source_order(
-        update,
-        (
-            "agent_metadata_txn_try_external()",
-            "agent_metadata_catalog_borrow(0, slot, &view)",
-            "view.scope_id != scope_id",
-            "view.meta->dev != ip->dev",
-            "view.meta->inum != ip->inum",
-            "view.meta->incarnation != ip->vfs_incarnation",
-            "agent_metadata_catalog_edit_commit(&edit, 0)",
-            "agent_metadata_store_mark_dirty(scope_id)",
-            "agent_metadata_txn_unlock()",
-        ),
-        "metadata directory inode update",
+        "metadata directory content overlay",
     )
     require_source_tokens(
         update,
-        ("published > 0", "published < 0", "agent_file_request_scan()"),
-        "metadata directory write-contention fallback",
+        ("!agent_file_state_content_publish(ip, &receipt)",
+         "AGENT_FILE_META_F_PERSIST",
+         "AGENT_FILE_META_F_AUTOSCAN", "agent_file_request_scan()"),
+        "metadata directory content fallback",
     )
-    if update.count("agent_metadata_txn_unlock()") != 1:
-        raise BudgetError("metadata directory inode update must unlock exactly once")
+    if "agent_metadata_txn_" in update or re.search(
+        r"agent_metadata_catalog_(?!journal_note_content\b)", update
+    ):
+        raise BudgetError("ordinary content publication entered the catalog gate")
+    remove = source_function_body(directory, "static void agent_fs_remove_inode(")
     delete = source_function_body(directory, "agent_fs_note_delete(struct inode *ip")
-    require_source_tokens(delete, ("agent_fs_apply_inode_event(ip, 0, 0, 1)",),
+    require_source_tokens(delete, ("agent_fs_remove_inode(ip)",),
                           "metadata directory delete delegation")
     require_source_order(
-        update,
+        remove,
         (
             "agent_file_state_content_bump(ip)",
             "agent_metadata_txn_try_external()",
@@ -3458,7 +3480,7 @@ def validate_metadata_directory_boundary_text(objects, directory):
         ),
         "metadata directory delete hook",
     )
-    if re.search(r"ip->agent_meta_(?:slot|flags|version)\s*=|iupdate\s*\(", update):
+    if re.search(r"ip->agent_meta_(?:slot|flags|version)\s*=|iupdate\s*\(", remove):
         raise BudgetError(
             "metadata directory delete must unbind through the catalog API"
         )
@@ -3508,6 +3530,16 @@ def check_agent_modules(args, config):
             "--cc, --ld, --objcopy, --objdump, --nm, and --size are required"
         )
     root = Path(args.root).resolve()
+    object_dir = Path(args.object_dir)
+    if not object_dir.is_absolute():
+        object_dir = root / object_dir
+    object_dir = object_dir.resolve()
+    try:
+        object_dir.relative_to(root)
+    except ValueError as error:
+        raise BudgetError(
+            f"Agent object directory escapes repository: {args.object_dir}"
+        ) from error
     profile_kind, profile, tools = validate_kernel_budget_toolchain(
         config,
         args.cc,
@@ -3574,7 +3606,9 @@ def check_agent_modules(args, config):
             " lines",
             ratchet=True,
         )
-        object_path = root / entry["object_path"]
+        object_path = resolve_agent_object_path(
+            root, object_dir, entry["object_path"]
+        )
         if not object_path.is_file():
             raise BudgetError(
                 f"Agent module object is missing: {object_path}"
@@ -3635,7 +3669,7 @@ def check_agent_modules(args, config):
             symbol_owner[symbol] = entry["name"]
 
     check_agent_aggregate_budgets(
-        root, entries, modules["aggregate_budgets"], size
+        root, entries, modules["aggregate_budgets"], size, object_dir
     )
 
     actual_graph = {}
@@ -3644,7 +3678,9 @@ def check_agent_modules(args, config):
         entry["name"]: set(entry["allowed_dependencies"]) for entry in entries
     }
     for entry in entries:
-        object_path = root / entry["object_path"]
+        object_path = resolve_agent_object_path(
+            root, object_dir, entry["object_path"]
+        )
         output = run_tool(
             [nm, "-u", native_tool_argument(object_path)],
             f"Agent module {entry['name']} dependency inspection",
@@ -3677,10 +3713,11 @@ def check_agent_modules(args, config):
             f"Agent integration object directory is missing: {callgraph_dir}"
         )
     registered_paths = {
-        (root / entry["object_path"]).resolve() for entry in entries
+        resolve_agent_object_path(root, object_dir, entry["object_path"])
+        for entry in entries
     }
     discovered = {}
-    for object_path in sorted(callgraph_dir.glob("*.o")):
+    for object_path in sorted(object_dir.glob("*.o")):
         resolved = object_path.resolve()
         if resolved in registered_paths:
             continue
@@ -3698,13 +3735,8 @@ def check_agent_modules(args, config):
             controlled_undefined_symbols(undefined)
         ):
             continue
-        try:
-            relative_path = resolved.relative_to(root).as_posix()
-        except ValueError as error:
-            raise BudgetError(
-                f"Agent integration object escapes repository: {object_path}"
-            ) from error
-        discovered[relative_path] = (records, undefined)
+        canonical_path = (Path("build/os") / resolved.name).as_posix()
+        discovered[canonical_path] = (records, undefined)
 
     bridges = modules["integration_bridges"]
     bridge_by_path = {

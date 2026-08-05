@@ -4,13 +4,246 @@
 #include "exec_policy.h"
 #include "fcntl.h"
 #include "fs.h"
+#include "fs_epoch.h"
 #include "kernel_work.h"
 #include "agent_metadata_directory.h"
+#include "open_file_io_lease.h"
 #include "proc.h"
 #include "vfs_security.h"
 
 //This is a system-level open file table that holds open files of all process.
 struct file filepool[FILEPOOLSIZE];
+
+/*
+ * A traditional read/write syscall carries one immutable subject credential
+ * across a bounded series of filesystem batches.  The filesystem still
+ * revalidates the credential at each batch boundary, so workflow revocation
+ * cannot be hidden by a long syscall, while per-block credential construction
+ * and admission overhead disappear from file.c.
+ */
+struct inode_io_transaction {
+	struct file *file;
+	struct inode *inode;
+	struct vfs_cred cred;
+	struct open_file_io_token lease;
+	uint64 user_base;
+	uint64 total;
+	uint64 done;
+};
+
+#define FILEPOOL_INDEX_NONE ((uint16)0xffffU)
+
+enum filepool_slot_state {
+	FILEPOOL_SLOT_FREE = 0,
+	FILEPOOL_SLOT_LIVE,
+};
+
+struct filepool_allocator_state {
+	uint16 free_head;
+	uint16 next[FILEPOOLSIZE];
+	uchar slot_state[FILEPOOLSIZE];
+	uchar offset_busy[FILEPOOLSIZE];
+	uint16 offset_waiters[FILEPOOLSIZE];
+	struct wait_queue offset_wait_queue;
+	uint free_count;
+	int initialized;
+	volatile uint64 allocation_probes;
+	volatile uint max_slot_pop_probes;
+};
+
+static struct filepool_allocator_state filepool_allocator;
+
+_Static_assert(FILEPOOLSIZE < 0xffffU,
+	       "filepool index must fit in the freelist link");
+
+static uint filepool_index_locked(struct file *f)
+{
+	uint64 base = (uint64)&filepool[0];
+	uint64 address = (uint64)f;
+	uint64 offset;
+
+	if (address < base || address >= (uint64)&filepool[FILEPOOLSIZE])
+		panic("filepool pointer");
+	offset = address - base;
+	if (offset % sizeof(struct file) != 0)
+		panic("filepool alignment");
+	return (uint)(offset / sizeof(struct file));
+}
+
+/* Serialize the shared open-file description offset without a global VFS gate. */
+static int file_offset_lock(struct file *f)
+{
+	uint index;
+	int queued = 0;
+	int enabled = intr_save();
+
+	if (!filepool_allocator.initialized) {
+		intr_restore(enabled);
+		return -1;
+	}
+	index = filepool_index_locked(f);
+	for (;;) {
+		if (filepool_allocator.slot_state[index] != FILEPOOL_SLOT_LIVE ||
+		    f->ref < 1) {
+			if (queued) {
+				if (filepool_allocator.offset_waiters[index] == 0)
+					panic("file offset waiter underflow");
+				filepool_allocator.offset_waiters[index]--;
+			}
+			intr_restore(enabled);
+			return -1;
+		}
+		if (!filepool_allocator.offset_busy[index]) {
+			filepool_allocator.offset_busy[index] = 1;
+			if (queued) {
+				if (filepool_allocator.offset_waiters[index] == 0)
+					panic("file offset waiter underflow");
+				filepool_allocator.offset_waiters[index]--;
+			}
+			intr_restore(enabled);
+			return 0;
+		}
+		if (!queued) {
+			if (filepool_allocator.offset_waiters[index] ==
+			    (uint16)0xffffU)
+				panic("file offset waiter overflow");
+			filepool_allocator.offset_waiters[index]++;
+			queued = 1;
+		}
+		if (wait_queue_sleep_irq(&filepool_allocator.offset_wait_queue) !=
+		    WAIT_QUEUE_OK) {
+			if (filepool_allocator.offset_waiters[index] == 0)
+				panic("file offset waiter underflow");
+			filepool_allocator.offset_waiters[index]--;
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+}
+
+static void file_offset_unlock(struct file *f)
+{
+	uint index;
+	int enabled = intr_save();
+
+	index = filepool_index_locked(f);
+	if (filepool_allocator.slot_state[index] != FILEPOOL_SLOT_LIVE ||
+	    f->ref < 1 || !filepool_allocator.offset_busy[index])
+		panic("file offset unlock");
+	filepool_allocator.offset_busy[index] = 0;
+	/* One queue serves compact per-slot predicates; the uncontended fast path
+	 * performs no scheduler scan. */
+	if (filepool_allocator.offset_waiters[index] != 0)
+		wait_queue_wake_all(&filepool_allocator.offset_wait_queue);
+	intr_restore(enabled);
+}
+
+static void filepool_assert_locked(void)
+{
+#ifdef FILEPOOL_DEBUG
+	uchar seen[(FILEPOOLSIZE + 7) / 8];
+	uint16 index = filepool_allocator.free_head;
+	uint count = 0;
+
+	memset(seen, 0, sizeof(seen));
+	while (index != FILEPOOL_INDEX_NONE) {
+		uint byte;
+		uchar bit;
+
+		if (index >= FILEPOOLSIZE)
+			panic("filepool free index");
+		byte = index / 8;
+		bit = (uchar)(1U << (index % 8));
+		if (seen[byte] & bit)
+			panic("filepool free cycle");
+		seen[byte] |= bit;
+		if (filepool_allocator.slot_state[index] !=
+			    FILEPOOL_SLOT_FREE ||
+		    filepool[index].ref != 0)
+			panic("filepool free state");
+		index = filepool_allocator.next[index];
+		count++;
+	}
+	if (count != filepool_allocator.free_count)
+		panic("filepool free count");
+	for (uint i = 0; i < FILEPOOLSIZE; i++) {
+		int listed = (seen[i / 8] & (1U << (i % 8))) != 0;
+
+		if ((filepool_allocator.slot_state[i] ==
+		     FILEPOOL_SLOT_FREE) != listed)
+			panic("filepool membership");
+		if (!listed &&
+		    (filepool_allocator.slot_state[i] != FILEPOOL_SLOT_LIVE ||
+		     filepool[i].ref < 1))
+			panic("filepool live state");
+	}
+#endif
+}
+
+void filepool_init(void)
+{
+	int enabled = intr_save();
+
+	if (filepool_allocator.initialized)
+		panic("filepool reinit");
+	for (uint i = 0; i < FILEPOOLSIZE; i++) {
+		if (filepool[i].ref != 0)
+			panic("filepool init live");
+		filepool_allocator.next[i] =
+			i + 1 < FILEPOOLSIZE ? (uint16)(i + 1) :
+						 FILEPOOL_INDEX_NONE;
+		filepool_allocator.slot_state[i] = FILEPOOL_SLOT_FREE;
+		filepool_allocator.offset_busy[i] = 0;
+		filepool_allocator.offset_waiters[i] = 0;
+	}
+	filepool_allocator.free_head = 0;
+	filepool_allocator.free_count = FILEPOOLSIZE;
+	filepool_allocator.allocation_probes = 0;
+	filepool_allocator.max_slot_pop_probes = 0;
+	wait_queue_init(&filepool_allocator.offset_wait_queue,
+			WAIT_REASON_MUTEX);
+	filepool_allocator.initialized = 1;
+	filepool_assert_locked();
+	intr_restore(enabled);
+}
+
+static uint filepool_pop_locked(void)
+{
+	uint16 index = filepool_allocator.free_head;
+
+	if (index == FILEPOOL_INDEX_NONE || index >= FILEPOOLSIZE ||
+	    filepool_allocator.free_count == 0)
+		panic("filepool empty");
+	if (filepool_allocator.slot_state[index] != FILEPOOL_SLOT_FREE ||
+	    filepool[index].ref != 0)
+		panic("filepool corrupt pop");
+	if (filepool_allocator.offset_busy[index] != 0 ||
+	    filepool_allocator.offset_waiters[index] != 0)
+		panic("filepool offset state on pop");
+	filepool_allocator.free_head = filepool_allocator.next[index];
+	filepool_allocator.next[index] = FILEPOOL_INDEX_NONE;
+	filepool_allocator.slot_state[index] = FILEPOOL_SLOT_LIVE;
+	filepool_allocator.free_count--;
+	filepool_allocator.allocation_probes++;
+	if (filepool_allocator.max_slot_pop_probes < 1)
+		filepool_allocator.max_slot_pop_probes = 1;
+	return index;
+}
+
+static void filepool_push_locked(uint index)
+{
+	if (index >= FILEPOOLSIZE ||
+	    filepool_allocator.slot_state[index] != FILEPOOL_SLOT_LIVE ||
+	    filepool[index].ref != 0 ||
+	    filepool_allocator.offset_busy[index] != 0 ||
+	    filepool_allocator.offset_waiters[index] != 0 ||
+	    filepool_allocator.free_count >= FILEPOOLSIZE)
+		panic("filepool corrupt push");
+	filepool_allocator.slot_state[index] = FILEPOOL_SLOT_FREE;
+	filepool_allocator.next[index] = filepool_allocator.free_head;
+	filepool_allocator.free_head = (uint16)index;
+	filepool_allocator.free_count++;
+}
 
 //Abstract the stdio into a file.
 struct file *stdio_init(int fd, struct proc *owner)
@@ -25,34 +258,81 @@ struct file *stdio_init(int fd, struct proc *owner)
 	return f;
 }
 
-//The operation performed on the system-level open file table entry after some process closes a file.
-void fileclose(struct file *f)
+static uint fileclose_inode_cleanup_owner(const struct inode *ip)
 {
-	int type;
-	int writable;
-	struct pipe *pipe;
-	struct inode *ip;
-	struct resource_account_handle account;
-	int reserved;
+	uint owner;
+
+	if (ip == 0 || !ip->valid ||
+	    ip->fs_owner_version != FS_OWNER_VERSION)
+		return FS_OWNER_SYSTEM;
+	owner = ip->fs_owner_domain;
+	if (owner == FS_OWNER_SYSTEM || owner == FS_OWNER_PUBLIC)
+		return owner;
+	if (FS_OWNER_IS_SCOPE(owner) &&
+	    FS_OWNER_SCOPE_ID(owner) >= VFS_SCOPE_FIRST_DYNAMIC &&
+	    FS_OWNER_SCOPE_ID(owner) <= FS_OWNER_MAX_PERSISTENT_ID)
+		return owner;
+	return FS_OWNER_SYSTEM;
+}
+
+/*
+ * Drop one reference and atomically detach a final file-table slot.  A final
+ * receipt must be consumed exactly once; a non-final drop leaves it empty.
+ */
+int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
+{
+	uint index;
 	int enabled;
 
+	if (receipt == 0 ||
+	    receipt->state != FILE_CLOSE_RECEIPT_EMPTY)
+		panic("fileclose receipt prepare");
+	receipt->type = FD_NONE;
+	receipt->writable = 0;
+	receipt->pipe = 0;
+	receipt->ip = 0;
+	receipt->resource_account = resource_account_none();
+	receipt->resource_reserved = 0;
+	receipt->result = 0;
+	receipt->cleanup_token =
+		(struct bio_cleanup_token)BIO_CLEANUP_TOKEN_INIT;
 	if (fd_is_reserved(f))
-		return;
+		return 0;
 	enabled = intr_save();
-	if (f->ref < 1)
+	if (!filepool_allocator.initialized)
+		panic("filepool uninitialized");
+	index = filepool_index_locked(f);
+	if (filepool_allocator.slot_state[index] != FILEPOOL_SLOT_LIVE ||
+	    f->ref < 1)
 		panic("fileclose");
-	if (--f->ref > 0) {
+	if (f->ref > 1) {
+		f->ref--;
 		intr_restore(enabled);
-		return;
+		return 0;
 	}
+	if (f->type == FD_INODE) {
+		uint owner = fileclose_inode_cleanup_owner(f->ip);
+
+		if (bio_cleanup_token_prepare(owner,
+					      &receipt->cleanup_token) < 0 &&
+		    (owner == FS_OWNER_SYSTEM ||
+		     bio_cleanup_token_prepare(FS_OWNER_SYSTEM,
+					       &receipt->cleanup_token) < 0)) {
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+	open_file_io_lease_file_retire(f);
+	f->ref = 0;
 
 	// Publish the free slot before cleanup, which may cross safe points.
-	type = f->type;
-	writable = f->writable;
-	pipe = f->pipe;
-	ip = f->ip;
-	account = f->resource_account;
-	reserved = f->resource_reserved;
+	receipt->type = f->type;
+	receipt->writable = f->writable;
+	receipt->pipe = f->pipe;
+	receipt->ip = f->ip;
+	receipt->resource_account = f->resource_account;
+	receipt->resource_reserved = f->resource_reserved;
+	receipt->state = FILE_CLOSE_RECEIPT_PREPARED;
 	f->off = 0;
 	f->readable = 0;
 	f->writable = 0;
@@ -63,9 +343,36 @@ void fileclose(struct file *f)
 	f->inherit_class = FD_INHERIT_DENY;
 	f->resource_account = resource_account_none();
 	f->resource_reserved = 0;
+	filepool_push_locked(index);
+	filepool_assert_locked();
 	intr_restore(enabled);
+	return 1;
+}
 
-	switch (type) {
+int fileclose_receipt_is_inode(const struct file_close_receipt *receipt)
+{
+	return receipt != 0 &&
+	       receipt->state == FILE_CLOSE_RECEIPT_PREPARED &&
+	       receipt->type == FD_INODE;
+}
+
+static void fileclose_receipt_complete(struct file_close_receipt *receipt)
+{
+	receipt->state = FILE_CLOSE_RECEIPT_CONSUMED;
+	proc_file_slot_release(receipt->resource_account,
+			       receipt->resource_reserved);
+}
+
+static void fileclose_finish_direct(struct file_close_receipt *receipt)
+{
+	if (receipt == 0 ||
+	    receipt->state != FILE_CLOSE_RECEIPT_PREPARED ||
+	    receipt->type == FD_INODE)
+		panic("fileclose direct receipt");
+	/* Publish exactly-once consumption before a pipe destructor can yield. */
+	receipt->state = FILE_CLOSE_RECEIPT_FINALIZING;
+
+	switch (receipt->type) {
 	case FD_NONE:
 		// A reserved file slot may be released before it is initialized.
 		break;
@@ -73,17 +380,135 @@ void fileclose(struct file *f)
 		// Do nothing
 		break;
 	case FD_PIPE:
-		pipeclose(pipe, writable);
-		break;
-	case FD_INODE:
-		iput(ip);
+		pipeclose(receipt->pipe, receipt->writable);
 		break;
 	default:
-		panic("unknown file type %d\n", type);
+		panic("unknown file type %d\n", receipt->type);
 	}
-	// The charge covers the complete destructor, including reclaim I/O that
-	// may yield after the table slot itself has been unpublished.
-	proc_file_slot_release(account, reserved);
+	fileclose_receipt_complete(receipt);
+}
+
+int fileclose_finish_drop_only(struct file_close_receipt *receipt)
+{
+	int dropped;
+
+	if (!fileclose_receipt_is_inode(receipt))
+		return -1;
+	receipt->state = FILE_CLOSE_RECEIPT_FINALIZING;
+	dropped = iput_drop_only(receipt->ip);
+	if (dropped <= 0) {
+		receipt->state = FILE_CLOSE_RECEIPT_PREPARED;
+		return dropped;
+	}
+	if (bio_cleanup_token_release(&receipt->cleanup_token, 1) !=
+	    BIO_CLEANUP_RELEASED)
+		panic("fileclose drop token release");
+	fileclose_receipt_complete(receipt);
+	return 1;
+}
+
+int fileclose_finish_epoch(struct file_close_receipt *receipt)
+{
+	int release_result;
+
+	if (!fileclose_receipt_is_inode(receipt) ||
+	    !fs_epoch_request_held())
+		return -1;
+	if (bio_cleanup_token_begin(&receipt->cleanup_token) < 0)
+		return -1;
+	receipt->state = FILE_CLOSE_RECEIPT_FINALIZING;
+	iput(receipt->ip);
+	if (fs_epoch_should_commit() && fs_epoch_commit() < 0)
+		receipt->result = -1;
+	if (bio_cleanup_token_end(&receipt->cleanup_token) < 0)
+		panic("fileclose cleanup token end");
+	receipt->state = FILE_CLOSE_RECEIPT_SETTLEMENT;
+	release_result = bio_cleanup_token_release(
+		&receipt->cleanup_token, 1);
+	if (release_result == BIO_CLEANUP_RELEASED)
+		fileclose_receipt_complete(receipt);
+	return release_result < 0 ? BIO_CLEANUP_NEEDS_SETTLEMENT :
+				    release_result;
+}
+
+int fileclose_finish_settle(struct file_close_receipt *receipt)
+{
+	int result;
+
+	if (receipt == 0 ||
+	    receipt->state != FILE_CLOSE_RECEIPT_SETTLEMENT ||
+	    fs_epoch_request_held())
+		return -1;
+	result = bio_cleanup_token_release(&receipt->cleanup_token, 1);
+	if (result == BIO_CLEANUP_RELEASED)
+		fileclose_receipt_complete(receipt);
+	return result;
+}
+
+int fileclose_finish_result(const struct file_close_receipt *receipt)
+{
+	if (receipt == 0 || receipt->state != FILE_CLOSE_RECEIPT_CONSUMED)
+		return -1;
+	return receipt->result;
+}
+
+void fileclose_finish(struct file_close_receipt *receipt)
+{
+	int borrowed_epoch;
+	int result;
+
+	if (receipt == 0 ||
+	    receipt->state != FILE_CLOSE_RECEIPT_PREPARED)
+		panic("fileclose receipt finish");
+	if (receipt->type != FD_INODE) {
+		fileclose_finish_direct(receipt);
+		return;
+	}
+	result = fileclose_finish_drop_only(receipt);
+	if (result > 0)
+		return;
+	if (result < 0)
+		panic("fileclose drop-only finalizer");
+	borrowed_epoch = fs_epoch_request_held();
+	if (!borrowed_epoch && fs_epoch_request_begin() < 0)
+		panic("fileclose filesystem epoch");
+	for (;;) {
+		result = fileclose_finish_epoch(receipt);
+		if (result >= 0 ||
+		    receipt->state != FILE_CLOSE_RECEIPT_PREPARED)
+			break;
+		(void)kernel_work_checkpoint_cleanup(
+			KERNEL_WORK_OPERATION_UNITS);
+	}
+	if (!borrowed_epoch)
+		fs_epoch_request_end();
+	if (receipt->state == FILE_CLOSE_RECEIPT_SETTLEMENT) {
+		if (borrowed_epoch)
+			panic("fileclose settlement inside borrowed epoch");
+		while (fileclose_finish_settle(receipt) !=
+		       BIO_CLEANUP_RELEASED)
+			(void)kernel_work_checkpoint_cleanup(
+				KERNEL_WORK_OPERATION_UNITS);
+	}
+	if (receipt->state != FILE_CLOSE_RECEIPT_CONSUMED)
+		panic("fileclose receipt incomplete");
+}
+
+// Drop and, if necessary, synchronously destroy one file reference.
+void fileclose(struct file *f)
+{
+	struct file_close_receipt receipt = FILE_CLOSE_RECEIPT_INIT;
+
+	int prepared;
+
+	do {
+		prepared = fileclose_prepare(f, &receipt);
+		if (prepared < 0)
+			(void)kernel_work_checkpoint_cleanup(
+				KERNEL_WORK_OPERATION_UNITS);
+	} while (prepared < 0);
+	if (prepared > 0)
+		fileclose_finish(&receipt);
 }
 
 // Pin an open-file entry across operations that may yield.
@@ -105,23 +530,22 @@ int filealloc_many(struct proc *owner, struct file **files, uint count)
 	int enabled = intr_save();
 	struct resource_account_handle account;
 	int reserved;
-	uint found = 0;
 
 	if (owner == 0 || files == 0 || count == 0 ||
 	    count > FILEPOOLSIZE)
 		goto fail;
+	if (!filepool_allocator.initialized)
+		panic("filepool uninitialized");
 	for (uint i = 0; i < count; i++)
 		files[i] = 0;
-	for (int i = 0; i < FILEPOOLSIZE && found < count; i++) {
-		if (filepool[i].ref == 0)
-			files[found++] = &filepool[i];
-	}
-	if (found != count ||
+	if (filepool_allocator.free_count < count ||
 	    proc_file_slots_reserve(owner, count, &account, &reserved) < 0)
 		goto fail;
 	for (uint i = 0; i < count; i++) {
-		struct file *f = files[i];
+		uint index = filepool_pop_locked();
+		struct file *f = &filepool[index];
 
+		files[i] = f;
 		f->type = FD_NONE;
 		f->inherit_class = FD_INHERIT_DENY;
 		f->ref = 1;
@@ -132,7 +556,9 @@ int filealloc_many(struct proc *owner, struct file **files, uint count)
 		f->off = 0;
 		f->resource_account = account;
 		f->resource_reserved = reserved;
+		open_file_io_lease_file_init(f);
 	}
+	filepool_assert_locked();
 	intr_restore(enabled);
 	return 0;
 fail:
@@ -181,6 +607,34 @@ static int filetruncate(struct inode *ip, const struct vfs_cred *cred)
 	agent_edit_note_truncate(ip);
 	agent_fs_note_truncate(ip);
 	return itruncate_reclaim(&reclaim);
+}
+
+static int inode_io_transaction_begin(struct inode_io_transaction *transaction,
+				      struct file *file, uint64 user_base,
+				      uint64 total, enum vfs_operation operation)
+{
+	if (transaction == 0 || file == 0 || file->ip == 0)
+		return -1;
+	memset(transaction, 0, sizeof(*transaction));
+	transaction->file = file;
+	transaction->inode = file->ip;
+	transaction->user_base = user_base;
+	transaction->total = total;
+	if (open_file_io_lease_acquire(file, operation,
+				       &transaction->lease,
+				       &transaction->cred) < 0)
+		return -1;
+	return 0;
+}
+
+static uint inode_io_transaction_batch(
+	const struct inode_io_transaction *transaction)
+{
+	uint64 remaining = transaction->total - transaction->done;
+	uint alignment = transaction->file->off % BSIZE;
+	uint limit = KERNEL_WORK_IO_BATCH_BYTES - alignment;
+
+	return (uint)MIN(remaining, limit);
 }
 
 //A process creates or opens a file according to its path, returning the file descriptor of the created or opened file.
@@ -349,99 +803,117 @@ int fileunlink(char *path)
 // Write data to inode.
 uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 {
-	uint64 done = 0;
+	struct inode_io_transaction transaction;
 	uint64 user_addr;
-	uint64 remaining;
 	uint offset;
 	uint chunk;
 	int checkpoint;
-	int noted = 0;
 	int r;
-	struct vfs_cred cred;
+	uint64 result = 0;
 
 	if (len == 0)
 		return 0;
-	if (ivalid(f->ip) < 0)
+	if (file_offset_lock(f) < 0)
 		return (uint64)-1;
-	if (f->ip->type != T_FILE)
-		return (uint64)-1;
-	if (!exec_policy_inode_mutable(f->ip))
-		return (uint64)-1;
-	vfs_cred_from_proc(curr_proc(), &cred);
-	if (!vfs_inode_authorize(f->ip, &cred, VFS_OP_WRITE))
-		return (uint64)-1;
-	if (!agent_edit_write_allowed(f->ip))
-		return (uint64)-1;
+	if (inode_io_transaction_begin(&transaction, f, va, len,
+				       VFS_OP_WRITE) < 0) {
+		result = (uint64)-1;
+		goto out;
+	}
 
-	while (done < len) {
+	while (transaction.done < transaction.total) {
 		offset = f->off;
-		remaining = len - done;
-		chunk = BSIZE - offset % BSIZE;
-		if (remaining < chunk)
-			chunk = (uint)remaining;
-		if (checked_user_offset(va, done, 1, &user_addr) < 0)
-			return done == 0 ? (uint64)-1 : done;
-		r = writei(f->ip, &cred, 1, user_addr, offset, chunk);
-		if (r <= 0)
-			return done == 0 ? (uint64)r : done;
+		chunk = inode_io_transaction_batch(&transaction);
+		if (checked_user_offset(transaction.user_base,
+					transaction.done, chunk, &user_addr) < 0) {
+			result = transaction.done == 0 ? (uint64)-1 :
+				 transaction.done;
+			break;
+		}
+		r = writei_lease(transaction.inode, &transaction.cred,
+				 &transaction.lease, 1, user_addr, offset, chunk);
+		if (r <= 0) {
+			result = transaction.done == 0 ? (uint64)r :
+				 transaction.done;
+			break;
+		}
 
 		f->off = offset + r;
-		done += r;
-		if (!noted) {
-			agent_edit_note_write(f->ip);
-			agent_fs_note_write(f->ip);
-			noted = 1;
-		} else {
-			agent_fs_sync_write(f->ip);
+		transaction.done += r;
+		if (bio_checkpoint_should_stop(bio_request_checkpoint())) {
+			result = transaction.done;
+			break;
 		}
-		if (bio_checkpoint_should_stop(bio_request_checkpoint()))
-			return done;
-		checkpoint = kernel_work_checkpoint((uint)r);
-		if (checkpoint != 0 || (uint)r < chunk)
-			return done;
+		checkpoint = kernel_work_checkpoint_bytes((uint)r);
+		if (checkpoint != 0 || (uint)r < chunk) {
+			result = transaction.done;
+			break;
+		}
 	}
-	return done;
+	if (transaction.done != 0) {
+		agent_edit_note_write(transaction.inode);
+		agent_fs_note_write(transaction.inode);
+	}
+	result = result == 0 ? transaction.done : result;
+out:
+	open_file_io_token_end(&transaction.lease);
+	file_offset_unlock(f);
+	return result;
 }
 
 //Read data from inode.
 uint64 inoderead(struct file *f, uint64 va, uint64 len)
 {
-	uint64 done = 0;
+	struct inode_io_transaction transaction;
 	uint64 user_addr;
-	uint64 remaining;
 	uint offset;
 	uint chunk;
 	int checkpoint;
 	int r;
-	struct vfs_cred cred;
+	uint64 result;
 
 	if (len == 0)
 		return 0;
-	if (ivalid(f->ip) < 0)
+	if (file_offset_lock(f) < 0)
 		return (uint64)-1;
-	if (f->ip->type != T_FILE)
-		return (uint64)-1;
-	vfs_cred_from_proc(curr_proc(), &cred);
+	if (inode_io_transaction_begin(&transaction, f, va, len,
+				       VFS_OP_READ) < 0) {
+		result = (uint64)-1;
+		goto out;
+	}
 
-	while (done < len) {
+	while (transaction.done < transaction.total) {
 		offset = f->off;
-		remaining = len - done;
-		chunk = BSIZE - offset % BSIZE;
-		if (remaining < chunk)
-			chunk = (uint)remaining;
-		if (checked_user_offset(va, done, 1, &user_addr) < 0)
-			return done == 0 ? (uint64)-1 : done;
-		r = readi(f->ip, &cred, 1, user_addr, offset, chunk);
-		if (r <= 0)
-			return done == 0 ? (uint64)r : done;
+		chunk = inode_io_transaction_batch(&transaction);
+		if (checked_user_offset(transaction.user_base,
+					transaction.done, chunk, &user_addr) < 0) {
+			result = transaction.done == 0 ? (uint64)-1 :
+				 transaction.done;
+			goto out;
+		}
+		r = readi_lease(transaction.inode, &transaction.cred,
+				&transaction.lease, 1, user_addr, offset, chunk);
+		if (r <= 0) {
+			result = transaction.done == 0 ? (uint64)r :
+				 transaction.done;
+			goto out;
+		}
 
 		f->off = offset + r;
-		done += r;
-		if (bio_checkpoint_should_stop(bio_request_checkpoint()))
-			return done;
-		checkpoint = kernel_work_checkpoint((uint)r);
-		if (checkpoint != 0 || (uint)r < chunk)
-			return done;
+		transaction.done += r;
+		if (bio_checkpoint_should_stop(bio_request_checkpoint())) {
+			result = transaction.done;
+			goto out;
+		}
+		checkpoint = kernel_work_checkpoint_bytes((uint)r);
+		if (checkpoint != 0 || (uint)r < chunk) {
+			result = transaction.done;
+			goto out;
+		}
 	}
-	return done;
+	result = transaction.done;
+out:
+	open_file_io_token_end(&transaction.lease);
+	file_offset_unlock(f);
+	return result;
 }

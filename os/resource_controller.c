@@ -332,7 +332,8 @@ int resource_account_create(enum resource_account_kind kind,
 
 	if (out == 0 || limits == 0 ||
 	    (kind != RESOURCE_ACCOUNT_EXEC &&
-	     kind != RESOURCE_ACCOUNT_STORAGE) ||
+	     kind != RESOURCE_ACCOUNT_STORAGE &&
+	     kind != RESOURCE_ACCOUNT_CACHE) ||
 	    charge_grants == 0 ||
 	    (charge_grants &
 	     ~(RESOURCE_CHARGE_GRANT(RESOURCE_CHARGE_ORDINARY) |
@@ -1336,6 +1337,12 @@ int resource_rate_reserve_many(
 		entries[i].endpoint = endpoints[i];
 		if (state->debt == 0 &&
 		    state->tokens >= endpoints[i].amount) {
+			uint64 leased;
+
+			if (resource_u64_add(state->leased,
+					     endpoints[i].amount,
+					     &leased) < 0)
+				goto fail;
 			entries[i].leased_amount = endpoints[i].amount;
 		} else if (endpoints[i].flags &
 			   RESOURCE_RATE_ENDPOINT_ALLOW_DEBT) {
@@ -1360,18 +1367,12 @@ int resource_rate_reserve_many(
 		struct resource_rate_state *state =
 			resource_rate_endpoint_lookup(
 				&entries[i].endpoint, 0, 0);
-		uint64 leased;
 
 		if (entries[i].leased_amount == 0)
 			state->pending_debt += entries[i].debt_amount;
 		else {
-			if (resource_u64_add(
-				    state->leased,
-				    entries[i].leased_amount,
-				    &leased) < 0)
-				panic("rate lease overflow");
 			state->tokens -= entries[i].leased_amount;
-			state->leased = leased;
+			state->leased += entries[i].leased_amount;
 		}
 	}
 	intr_restore(enabled);

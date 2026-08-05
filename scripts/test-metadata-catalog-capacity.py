@@ -637,8 +637,10 @@ class CatalogCapacityContractTests(unittest.TestCase):
             ("catalog", "result->ordinary >= AGENT_FILE_ORDINARY_LIMIT",
              "result->ordinary >= AGENT_FILE_META_MAX"),
             ("catalog",
-             "agent_catalog_files[i].flags & AGENT_FILE_META_F_AUTOSCAN",
-             "agent_catalog_files[i].flags & AGENT_FILE_META_F_PERSIST"),
+             "agent_catalog_scope_counts(\n"
+             "\t\tscope_id, lifecycle, &owned, &autoscan)",
+             "agent_catalog_scope_counts(\n"
+             "\t\tscope_id, workflow_lifecycle_none(), &owned, &autoscan)"),
             ("catalog",
              "result.autoscan >= AGENT_FILE_AUTOSCAN_SCOPE_LIMIT",
              "result.autoscan > AGENT_FILE_AUTOSCAN_SCOPE_LIMIT"),
@@ -651,25 +653,24 @@ class CatalogCapacityContractTests(unittest.TestCase):
             ("catalog", "static int agent_catalog_admission(\n",
              "static int agent_catalog_pressure_admissible(void);\n"
              "static int agent_catalog_admission(\n"),
-            ("vfs", "if (ref->retiring)\n\t\t\t\tretiring++",
-             "if (ref->retiring)\n\t\t\t\tretiring += 0"),
-            ("vfs", "workflow_lifecycle_closing(ref->lifecycle)",
-             "workflow_lifecycle_active(ref->lifecycle)"),
-            ("vfs", "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
-             "allocated < VFS_SCOPE_MAX_ACTIVE"),
-            ("vfs", "allocated + retiring < VFS_SCOPE_LIFECYCLE_CAP",
-             "allocated < VFS_SCOPE_LIFECYCLE_CAP"),
+            ("vfs", "registry->free_count > 0",
+             "registry->free_count >= 0"),
+            ("vfs", "!workflow_lifecycle_key_valid(ref->lifecycle)",
+             "workflow_lifecycle_key_valid(ref->lifecycle)"),
+            ("vfs",
+             "registry->active_count + registry->retiring_count <\n"
+             "\t\t    VFS_SCOPE_MAX_ACTIVE",
+             "registry->active_count < VFS_SCOPE_MAX_ACTIVE"),
+            ("vfs",
+             "registry->active_count + registry->retiring_count <\n"
+             "\t\t    VFS_SCOPE_LIFECYCLE_CAP",
+             "registry->active_count < VFS_SCOPE_LIFECYCLE_CAP"),
             ("vfs", "if (!ref->used ||\n\t\t    (!ref->retiring &&",
              "if (!ref->used || ref->retiring ||\n"
              "\t\t    (!ref->retiring &&"),
-            ("vfs", "\t\tallocated++;\n"
-             "\t\tif (ref->scope_id == exempt_scope)\n"
-             "\t\t\tcontinue;\n"
-             "\t\tused = resource_account_usage(",
-             "\t\tif (ref->scope_id == exempt_scope)\n"
-             "\t\t\tcontinue;\n"
-             "\t\tallocated++;\n"
-             "\t\tused = resource_account_usage("),
+            ("vfs",
+             "allocated = registry->active_count + registry->retiring_count;",
+             "allocated = registry->active_count;"),
             ("vfs", "used = resource_account_usage(",
              "used = 0; /* resource_account_usage( */"),
             ("vfs", "if (used < guarantee)",
@@ -696,8 +697,13 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "\t\t\t    previous_scope, slot, previous, 0, 0, 0)"),
             ("catalog", "agent_catalog_admission(scope_id, -1, 0, 0, flags, 1)",
              "agent_catalog_admission(scope_id, -1, 0, 0, flags, 0)"),
-            ("catalog", "flags & AGENT_FILE_META_F_AUTOSCAN",
-             "flags & AGENT_FILE_META_F_PERSIST"),
+            ("catalog",
+             "if (scope_id != VFS_SCOPE_SYSTEM &&\n"
+             "\t    (flags & AGENT_FILE_META_F_AUTOSCAN) &&\n"
+             "\t    !(old_flags & AGENT_FILE_META_F_AUTOSCAN)",
+             "if (scope_id != VFS_SCOPE_SYSTEM &&\n"
+             "\t    (flags & AGENT_FILE_META_F_PERSIST) &&\n"
+             "\t    !(old_flags & AGENT_FILE_META_F_AUTOSCAN)"),
             ("catalog", "!(old_flags & AGENT_FILE_META_F_AUTOSCAN)",
              "(old_flags & AGENT_FILE_META_F_AUTOSCAN)"),
             ("catalog_h",
@@ -752,10 +758,10 @@ class CatalogCapacityContractTests(unittest.TestCase):
             ("fs_program",
              "dirent_name_bound=14 legacy_alias=1 metadata_canonical=1",
              "dirent_name_bound=14 legacy_alias=0 metadata_canonical=1"),
-            ("catalog", "uchar used_fids[(AGENT_FILE_META_MAX + 7) / 8]",
-             "int used_fids[AGENT_FILE_META_MAX]"),
-            ("catalog", "used_fids[(fid - 1) / 8]",
-             "used_fids[fid / 8]"),
+            ("catalog", "~usage->fids[word]", "~0ULL"),
+            ("catalog",
+             "agent_catalog_first_bit(candidates) + 1;",
+             "agent_catalog_first_bit(~candidates) + 1;"),
             ("catalog",
              "return agent_metadata_catalog_record_base_valid(\n"
              "\t\t       meta, record->scope_id, record->slot) &&",
@@ -800,17 +806,31 @@ class CatalogCapacityContractTests(unittest.TestCase):
             ("directory", "rescan:\n\tagent_file_request_scan();",
              "rescan:\n\t;"),
             ("directory",
-             "if (agent_file_state_index_deferred(ip))\n\t\treturn;",
-             "if (0)\n\t\treturn;"),
+             "if (agent_file_state_index_deferred(ip)) {\n"
+             "\t\tagent_file_request_scan();\n"
+             "\t\treturn;\n\t}",
+             "if (0) {\n\t\tagent_file_request_scan();\n"
+             "\t\treturn;\n\t}"),
             ("directory",
-             "else if (remove)\n\t\t\tagent_file_request_scan();",
-             "else if (remove)\n\t\t\tagent_metadata_scan_slot_freed(scope_id);"),
+             "if (agent_file_state_index_deferred(ip)) {\n"
+             "\t\tagent_file_request_scan();\n"
+             "\t\treturn;\n\t}\n"
+             "\tif (!agent_metadata_txn_try_external()) {\n"
+             "\t\tagent_file_request_scan();\n"
+             "\t\treturn;\n\t}",
+             "if (agent_file_state_index_deferred(ip)) {\n"
+             "\t\tagent_file_request_scan();\n"
+             "\t\treturn;\n\t}\n"
+             "\tif (!agent_metadata_txn_try_external()) {\n"
+             "\t\tagent_background_request();\n"
+             "\t\treturn;\n\t}"),
             ("directory",
-             "else if (remove)\n\t\t\tagent_file_request_scan();",
-             "else if (remove)\n\t\t\t;"),
+             "if (agent_metadata_catalog_clear_slot(slot) < 0)\n"
+             "\t\tgoto rescan;",
+             "if (0)\n\t\tgoto rescan;"),
             ("directory",
              "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);\n"
-             "\t\tagent_metadata_scan_slot_freed(scope_id);",
+             "\tagent_metadata_scan_slot_freed(scope_id);",
              "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);"),
             ("scan_h", "void agent_metadata_scan_slot_freed(uint);",
              "void agent_metadata_scan_slot_freed(void);"),
@@ -978,10 +998,10 @@ class CatalogCapacityContractTests(unittest.TestCase):
             ("scan", "agent_metadata_catalog_reconcile_slot(slot)",
              "agent_metadata_catalog_reconcile_slot(-1)"),
             ("catalog",
-             "agent_catalog_state_clear(slot);\n"
-             "\tagent_catalog_changed(AGENT_FILE_CHANGE_MEMBERSHIP);",
+             "agent_catalog_slot_publish(\n"
+             "\t\tslot, &agent_catalog_files[slot], scope_id, 0, lifecycle,",
              "agent_catalog_states[slot] = 0;\n"
-             "\tagent_catalog_changed(AGENT_FILE_CHANGE_MEMBERSHIP);"),
+             "\t(void)(slot, scope_id, lifecycle,"),
             ("scan", "if (view.state & AGENT_CATALOG_STATE_QUARANTINE)\n\t\t\t\tcontinue;",
              "if (0)\n\t\t\t\tcontinue;"),
             ("objects", "agent_metadata_store_take_reconcile_request())\n\t\tagent_file_request_scan();",

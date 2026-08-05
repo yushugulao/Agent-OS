@@ -12,5 +12,8 @@ int agent_metadata_query_matches(uint, uint, const struct agent_file_query *,
 int agent_metadata_query_execute_locked(
 	uint, const struct agent_file_query *, struct agent_file_query_result *,
 	int [AGENT_FILE_QUERY_MAX_HITS], int);
+int agent_metadata_query_execute_snapshot(
+	uint, const struct agent_file_query *, struct agent_file_query_result *,
+	int [AGENT_FILE_QUERY_MAX_HITS]);
 
 #endif

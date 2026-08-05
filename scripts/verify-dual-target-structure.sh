@@ -254,7 +254,10 @@ require_text "Makefile" "^target-readiness:" "target readiness target is missing
 require_text "Makefile" "^full-verify:" "full verification target is missing"
 require_text "Makefile" "^workflow-teardown-race-test:" "workflow teardown race target is missing"
 require_text "Makefile" "^evidence-capture-selftest:" "evidence collector selftest target is missing"
-require_text "Makefile" "^ci-check:.*evidence-capture-selftest" "ci-check omits the evidence collector selftest"
+require_text "Makefile" "^ci-check:$" "ci-check target is missing"
+require_text "Makefile" \
+	'^[[:space:]]*\+@\$\(MAKE\) --no-print-directory ci-host-selftests$' \
+	"ci-check omits the unified Host selftest pool"
 require_text "Makefile" "^doctor:" "dependency doctor target is missing"
 require_text "Makefile" "INIT_PROC=rp_orch CHAPTER=platform" "plain platform run target does not launch rp_orch"
 require_text "Makefile" "INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos" "AgentOS platform run target does not launch rp_agentos_orch"
@@ -300,10 +303,18 @@ require_text "scripts/check-kernel-budgets.py" '"calibrated_full_suite"' "checke
 require_text "host_tools/test_capture_final_evidence.py" \
 	'test_agent_duration_policy_fails_before_build_with_bounded_exceptions' \
 	"Agent duration mode behavior lacks a regression contract"
+require_text "Makefile" '^override EVIDENCE_CAPTURE_TESTS :=' \
+	"Evidence capture tests do not have a closed inventory"
+evidence_capture_inventory_uses="$(
+	grep -c '\$(EVIDENCE_CAPTURE_TESTS)' "${ROOT_DIR}/Makefile" || true
+)"
+if [ "${evidence_capture_inventory_uses}" -lt 4 ]; then
+	fail "Evidence capture inventory is not bound to standalone and unified execution"
+fi
+require_text "Makefile" 'scripts/run-parallel-tests\.py' \
+	"Host contract tests are not wired to the bounded parallel runner"
 require_text "Makefile" \
-	'^[[:space:]]*@\$\(PYTHON_CMD\)[[:space:]]+host_tools/test_capture_final_evidence\.py$' \
-	"Agent duration mode regression is not executed by its self-test target"
-require_text "Makefile" '^ci-check:.*evidence-capture-selftest' \
+	'^[[:space:]]*\+@\$\(MAKE\) --no-print-directory ci-host-selftests$' \
 	"Agent duration mode regression is not wired into ci-check"
 require_text "scripts/run-agent-tests.sh" '--check[[:space:]]+agent-test-policy' \
 	"full Agent suite does not reject provisional duration policy before QEMU"
@@ -410,10 +421,52 @@ require_text "scripts/validate-kernel-test-log.py" "cleanup_reuse=1" "fs runner 
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" "full verification does not run the structure check"
 require_text "scripts/run-full-verification.sh" "make ci-check" "full verification does not enforce kernel budgets"
 require_text "scripts/run-agent-tests.sh" "check_suite_budget" "Agent test suite has no total duration budget"
-require_text "Makefile" '^ci-check: host-contract-selftest ' "ci-check bypasses the shared Host contract suite"
+require_text "Makefile" \
+	'^ci-host-selftests: \$\(CI_HOST_SELFTESTS\)' \
+	"ci-check bypasses the unified Host contract inventory"
 require_text "Makefile" '^override HOST_CONTRACT_TESTS :=' "Host contract inventory can be overridden"
 require_text "Makefile" '^host-contract-selftest: \$\(HOST_CONTRACT_TESTS\)' "Host contract target is not inventory-bound"
-require_text "Makefile" 'for test in \$\(HOST_CONTRACT_TESTS\)' "Host contract target does not execute its inventory"
+require_text "Makefile" '^override CI_HOST_SELFTESTS :=' "Unified Host selftest inventory can be overridden"
+require_text "Makefile" '--jobs \$\(AGENTOS_TEST_JOBS\)' "Host contract target does not use the bounded parallel runner"
+require_text "Makefile" '--python \$\(call shell_quote,\$\(PYTHON_BIN\)\)' "Parallel Host tests do not preserve the selected Python interpreter"
+reject_text "Makefile" '^\.NOTPARALLEL' \
+	"GNU make before 4.4 treats target-specific NOTPARALLEL as global"
+for ci_phase in ci-host-selftests kernel-budget-check user-stack-check
+do
+	phase_count="$(grep -c -F "+@\$(MAKE) --no-print-directory ${ci_phase}" "${ROOT_DIR}/Makefile" || true)"
+	if [ "${phase_count}" -ne 1 ]; then
+		fail "ci-check must invoke ${ci_phase} exactly once through a recursive make"
+	fi
+done
+require_text "Makefile" '^AGENTOS_SUBMAKE_JOBS = .*-[j]%' "Recursive builds ignore an outer GNU make parallel policy"
+require_text "Makefile" '^AGENTOS_SUBMAKE_JOBS = .*--jobserver-auth' "Recursive builds do not preserve the GNU make jobserver"
+require_text "Makefile" \
+	'^build:$' "Top-level build does not delegate to a bounded recursive build"
+require_text "Makefile" \
+	'^build: \$\(BUILDDIR\)/kernel$' \
+	"Parallel top-level build no longer shares the kernel dependency graph"
+require_text "Makefile" \
+	'^[[:space:]]*\+@\$\(MAKE\) \$\(AGENTOS_SUBMAKE_JOBS\) --no-print-directory \$\(BUILDDIR\)/kernel$' \
+	"Top-level build does not activate bounded parallel compilation"
+require_text "Makefile" \
+	'\$\(MAKE\) \$\(AGENTOS_SUBMAKE_JOBS\) -C baseline_ucore build' \
+	"Plain platform build does not activate bounded parallel compilation"
+require_text "Makefile" \
+	'\$\(MAKE\) \$\(AGENTOS_SUBMAKE_JOBS\) build .*INIT_PROC=agentfinal_ucore' \
+	"AgentOS build does not activate bounded parallel compilation"
+require_text "Makefile" \
+	'^override KERNEL_BUDGET_BUILDDIR = build/ci-kernel-budget$' \
+	"Canonical budget build is not isolated from ordinary build output"
+require_text "Makefile" \
+	'^override KERNEL_BUDGET_SUBMAKE_JOBS = ' \
+	"Canonical budget build does not select bounded jobserver flags"
+require_text "Makefile" \
+	'^[[:space:]]*-u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES -u GNUMAKEFLAGS -u MAKEFILES' \
+	"Canonical budget build inherits makefile or variable injection"
+require_text "Makefile" \
+	'^[[:space:]]*\+@\$\(KERNEL_BUDGET_SUBMAKE\) \$\(KERNEL_BUDGET_BUILDDIR\)/kernel ' \
+	"Canonical budget build bypasses the recursive jobserver boundary"
+require_text "scripts/run-agent-tests.sh" 'MAKE_JOB_ARGS=\(-j "\$\{AGENTOS_BUILD_JOBS\}"\)' "Agent builds do not use the bounded parallel worker count"
 require_text "Makefile" '^override KERNEL_BUDGET_TOOLPREFIX = \$\(TOOLPREFIX\)$' \
 	"kernel budgets do not use the selected compiler toolchain"
 require_text "Makefile" '^override KERNEL_BUDGET_PYTHON = \$\(PYTHON_BIN\)$' \
@@ -1009,6 +1062,20 @@ require_text "os" "AGENT_TOOL_LLM_REQUEST" "AgentOS LLM request tool is missing"
 require_text "os" "agent_file_edit_begin" "AgentOS edit lease syscall is missing"
 require_text "user/Makefile" "agentllm_ucore" "AgentOS LLM test is not in the user build list"
 require_text "scripts/run-agent-tests.sh" "agentllm_ucore" "AgentOS LLM test is not in the test script"
+require_text "user/Makefile" 'AGENT_TESTS := .*ch8_cow_ucore' \
+	"COW fork regression is not in the Agent user image"
+require_text "scripts/run-agent-tests.sh" \
+	'run_case ch8_cow_ucore "ch8_cow_ucore: passed"' \
+	"COW fork regression is not executed by the Agent suite"
+require_text "scripts/run-agent-tests.sh" \
+	'require_exact_case_marker "\$\{log_file\}"' \
+	"Agent case contracts do not enforce exact-line evidence"
+require_text "user/src/ch8_cow_ucore.c" \
+	'ch8_cow_ucore: check failed:' \
+	"COW fork regression failures bypass the shared Guest failure classifier"
+require_text "user/src/ch8_cow_ucore.c" \
+	'ch8_cow_ucore: passed' \
+	"COW fork regression has no success marker"
 
 if grep -E -n 'AGENT_TOOL_(RERUN_STAGE|WRITE_REPORT)' \
 	"${ROOT_DIR}"/user/src/rp_*.c >"${TMP_FILE}" 2>/dev/null; then

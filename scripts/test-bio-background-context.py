@@ -108,20 +108,21 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
     if "if (!bio_background_current())" not in end:
         raise ContractError("background end is not restricted to its executor")
 
-    retained = function_body(bio, "bio_cache_owner_retained")
-    if "io_policy.background.active" not in retained:
+    retained = function_body(bio, "bio_cache_state_retained")
+    if ("io_policy.background.active" not in retained or
+            "state->deferred_references != 0" not in retained):
         raise ContractError("active cleanup cache floor is not retained globally")
     # Direct active state is only lifetime state. Every ambient caller path
     # must go through the executor-and-generation predicate.
-    if bio.count("io_policy.background.active") != 7:
+    if bio.count("io_policy.background.active") != 8:
         raise ContractError("ambient background-active access escaped its allowlist")
 
-    debt_wait = compact(function_body(bio, "io_wait_for_debt"))
+    debt_wait = compact(function_body(bio, "io_wait_for_debt_mode"))
     for token in (
         "closing_background = cleanup && io_class == IO_POLICY_CLASS_BACKGROUND",
         "bio_background_current() && state->active_requests != 0",
         "state->owner == io_policy.background.owner",
-        "(state->retiring || state->quiesced) && !closing_background",
+        "(state->retiring || state->quiesced) && !closing_background && !closing_deferred",
     ):
         if token not in debt_wait:
             raise ContractError(f"closing background debt settlement missing {token}")
@@ -147,8 +148,9 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
 
     release_closed = compact(function_body(bio, "bio_cache_release_closed_owner"))
     if ("if (bio_cache_owner_retained(owner)) return" not in release_closed or
-            "bcache.buf[i].cache_owner == owner" not in release_closed or
-            "bcache.buf[i].refcnt == 0" not in release_closed):
+            "state = bio_cache_owner_state(owner)" not in release_closed or
+            "while (state->idle.tail != 0)" not in release_closed or
+            "bio_cache_invalidate(state->idle.tail)" not in release_closed):
         raise ContractError("closed-owner cache partition release is incomplete")
     for name in ("bio_scope_quiesce", "bio_scope_retire", "bio_background_end"):
         release = compact(function_body(bio, name))
@@ -201,9 +203,13 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
             )
 
     bget = compact(function_body(bio, "bget"))
-    if ("b = bio_cache_hash_find(dev, blockno); if (b != 0) { "
-            "if (b->background_reserved) panic(\"reserved buffer in hash\")"
-            not in bget):
+    hash_find = bget.find("b = bio_cache_hash_find(dev, blockno);")
+    hit = bget.find("if (b != 0) {", hash_find)
+    reserved_guard = bget.find(
+        "if (b->background_reserved) panic(\"reserved buffer in hash\")",
+        hit,
+    )
+    if hash_find < 0 or hit < 0 or reserved_guard < 0:
         raise ContractError(
             "reserved buffers remain reachable through exact-key hits"
         )
@@ -214,18 +220,25 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         raise ContractError(
             "background reservation remains linked in the exact-key index"
         )
-    reserved = (
-        "if (b->background_reserved) { "
-        "if (bio_background_current() && b->cache_owner == owner && "
-        "reserved_candidate == 0) reserved_candidate = b; continue; }"
-    )
-    if reserved not in bget:
+    for token in (
+        "if (bio_background_current())",
+        "if (bcache.reserved_idle.tail != 0)",
+        "bcache.reserved_idle.tail->cache_owner != owner",
+        "b = bcache.reserved_idle.tail",
+    ):
+        if token not in bget:
+            raise ContractError(
+                "foreground callers can consume a background-reserved buffer"
+            )
+    if "struct bio_idle_queue reserved_idle;" not in bio:
         raise ContractError(
             "foreground callers can consume a background-reserved buffer"
         )
-    if bget.count("*result = VIRTIO_DISK_ERR_BUSY;") != 3:
+    # Three background-contention exits plus stale-owner and upgrade failures
+    # must all return a retryable cache result.
+    if bget.count("*result = VIRTIO_DISK_ERR_BUSY;") != 5:
         raise ContractError("background cache contention is not a retry result")
-    if bget.count("intr_restore(enabled); return 0;") != 3:
+    if bget.count("intr_restore(enabled); return 0;") != 4:
         raise ContractError("background cache retry returns with IRQs disabled")
     for panic_text in (
         "background hit busy buffer",
@@ -236,7 +249,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
             raise ContractError(f"ordinary background contention can panic: {panic_text}")
     for name in ("bread", "bread_device"):
         read = compact(function_body(bio, name))
-        if "b = bget(dev, blockno, &result); if (b == 0) return result;" not in read:
+        if "b = bget(dev, blockno, &result, 0); if (b == 0) return result;" not in read:
             raise ContractError(f"{name} does not propagate cache retry")
 
     for token in (
@@ -265,7 +278,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
     if "checkpoint < 0" in ialloc:
         raise ContractError("ialloc conflates deferred work with interruption")
 
-    balloc = compact(function_body(fs, "balloc"))
+    balloc = compact(function_body(fs, "balloc_one"))
     for token in (
         "fs_storage.block_alloc_cursor = b + limit;",
         "bio_checkpoint_should_stop(checkpoint)",
@@ -360,8 +373,9 @@ MUTATIONS = (
     (replace_in_function(
         BIO, "bio_current_owner", "bio_background_current()",
         "io_policy.background.active"), BIO_H, FS, "owner lookup made ambient"),
-    (BIO.replace("if (b->background_reserved) {",
-                 "if (0 && b->background_reserved) {", 1), BIO_H, FS,
+    (replace_in_function(
+        BIO, "bget", "if (bcache.reserved_idle.tail != 0)", "if (0)"),
+     BIO_H, FS,
      "reserved-buffer isolation disabled"),
     (replace_in_function(
         BIO, "bio_background_reserve_buffers",
@@ -382,7 +396,7 @@ MUTATIONS = (
         "bio_request_settle_quiescent_cleanup() == 0", "0"),
      "forward settlement bypassed"),
     (replace_in_function(
-        BIO, "io_wait_for_debt", "!closing_background", "1"), BIO_H, FS,
+        BIO, "io_wait_for_debt_mode", "!closing_background", "1"), BIO_H, FS,
      "closing background debt settlement removed"),
     (replace_in_function(
         BIO, "bio_request_checkpoint_mode", "if (cleanup && quiescent)",

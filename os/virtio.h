@@ -68,6 +68,7 @@ struct virtq_desc {
 };
 #define VRING_DESC_F_NEXT 1 // chained with another descriptor
 #define VRING_DESC_F_WRITE 2 // device writes (vs read)
+#define VRING_DESC_F_INDIRECT 4 // descriptor points at an indirect table
 
 // the (entire) avail ring, from the spec.
 struct virtq_avail {
@@ -112,6 +113,11 @@ enum {
 /* Controller reset is bounded independently from a request deadline. */
 #define VIRTIO_DISK_RESET_TIMEOUT_TICKS 100U
 
+/* Indirect descriptors let every queue entry carry one block request. */
+#define VIRTIO_DISK_WRITE_BATCH_MAX NUM
+#define VIRTIO_DISK_READ_BATCH_MAX NUM
+#define VIRTIO_DISK_DIRECT_WRITE_BATCH_MAX 2U
+
 // the format of the first descriptor in a disk request.
 // to be followed by two more descriptors containing
 // the block, and a one-byte status.
@@ -124,6 +130,8 @@ struct virtio_blk_req {
 void virtio_disk_init();
 void virtio_disk_runtime_start(void);
 int virtio_disk_rw(struct buf *, int);
+int virtio_disk_read_batch(struct buf **, uint);
+int virtio_disk_write_batch(struct buf **, uint);
 int virtio_disk_durability_capability(void);
 int virtio_disk_durability_barrier(void);
 void virtio_disk_intr();

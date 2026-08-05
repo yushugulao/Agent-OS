@@ -7,8 +7,12 @@
 
 _Static_assert(KERNEL_WORK_QUANTUM_CYCLES > 0,
 	       "kernel work quantum must be positive");
+_Static_assert(KERNEL_WORK_BYTES_PER_UNIT > 0,
+	       "kernel byte normalization granule must be positive");
+_Static_assert(KERNEL_WORK_IO_BATCH_BYTES / KERNEL_WORK_BYTES_PER_UNIT <
+	       KERNEL_WORK_BUDGET_UNITS,
+	       "one I/O batch must leave room for deadline accounting");
 
-static uint64 kernel_work_receipt_next_generation;
 static uint64 kernel_work_timer_epoch;
 
 static int kernel_work_running(struct thread *t)
@@ -35,6 +39,7 @@ void kernel_work_reset(struct thread *t)
 	t->kernel_receipt_syscall_id = -1;
 	t->kernel_work_target_syscall_id = -1;
 	t->kernel_work_publish_receipt = 0;
+	t->io_request_flags = 0;
 	t->io_request_depth = 0;
 	t->io_request_owner = 0;
 	t->io_request_class = 0;
@@ -148,11 +153,31 @@ static int kernel_work_checkpoint_mode(uint work_units, int cleanup)
 	return !cleanup && proc_thread_exit_requested() ? -1 : 1;
 }
 
+uint kernel_work_units_from_bytes(uint64 bytes)
+{
+	uint64 units;
+
+	if (bytes == 0)
+		return 0;
+	units = bytes / KERNEL_WORK_BYTES_PER_UNIT;
+	if (bytes % KERNEL_WORK_BYTES_PER_UNIT != 0)
+		units++;
+	if (units > KERNEL_WORK_BUDGET_UNITS)
+		return KERNEL_WORK_BUDGET_UNITS;
+	return (uint)units;
+}
+
 // Returns one after a scheduling round, zero if the slice remains valid, and
 // minus one when cooperative process teardown asks this thread to unwind.
 int kernel_work_checkpoint(uint work_units)
 {
 	return kernel_work_checkpoint_mode(work_units, 0);
+}
+
+int kernel_work_checkpoint_bytes(uint64 bytes)
+{
+	return kernel_work_checkpoint(
+		kernel_work_units_from_bytes(bytes));
 }
 
 // Teardown has already detached its objects, so it must finish reclaiming
@@ -164,28 +189,23 @@ int kernel_work_checkpoint_cleanup(uint work_units)
 
 static void kernel_work_publish_receipt(struct thread *t)
 {
-	int enabled = intr_save();
-
-	if (kernel_work_receipt_next_generation == (uint64)-1)
+	/* owner_generation + this local sequence is globally unambiguous. */
+	if (t->kernel_receipt_generation == (uint64)-1)
 		panic("kernel work receipt generation exhausted");
-	kernel_work_receipt_next_generation++;
+	t->kernel_receipt_generation++;
 	t->kernel_last_syscall_preemptions =
 		t->kernel_work_redispatches -
 		t->kernel_syscall_preemptions_start;
-	t->kernel_receipt_generation = kernel_work_receipt_next_generation;
 	t->kernel_receipt_completion_timer_epoch = kernel_work_timer_epoch;
 	t->kernel_receipt_syscall_id = t->kernel_work_target_syscall_id;
-	intr_restore(enabled);
 }
 
 void kernel_work_timer_advance(void)
 {
-	int enabled = intr_save();
-
+	/* Called from the timer trap with supervisor interrupts masked. */
 	if (kernel_work_timer_epoch == (uint64)-1)
 		panic("kernel work timer epoch exhausted");
 	kernel_work_timer_epoch++;
-	intr_restore(enabled);
 }
 
 int kernel_work_receipt_snapshot(struct thread *t,

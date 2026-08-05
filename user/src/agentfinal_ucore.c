@@ -606,6 +606,71 @@ static void check_context_rollback_identity(void)
 		    PROVENANCE_EDGES[i].target_record_hash == records[1].record_hash)
 			found = 1;
 	check(found, "rollback provenance immutable identity");
+	check(context_clear() == 0, "incremental summary clear");
+	for (int round = 0; round < 2; round++) {
+		for (int i = 0; i < AGENT_BATCH_MAX; i++)
+			make_echo(&ops[i], 7400 + round * AGENT_BATCH_MAX + i,
+				  "summary-fill");
+		check(agent_run(ops, results, AGENT_BATCH_MAX, 0) ==
+			      AGENT_BATCH_MAX,
+		      "incremental summary fill");
+	}
+	check(context_snapshot(&final_header, records,
+			       AGENT_CONTEXT_MAX_RECORDS) ==
+		      AGENT_CONTEXT_MAX_RECORDS,
+	      "incremental summary full snapshot");
+	source_hash = records[1].record_hash;
+	old_branch = final_header.branch_generation;
+	check(context_rollback(2) == 0,
+	      "incremental summary rollback");
+	check(context_snapshot(&final_header, records,
+			       AGENT_CONTEXT_MAX_RECORDS) == 2 &&
+		      final_header.count == AGENT_CONTEXT_MAX_RECORDS &&
+		      final_header.latest_sequence == AGENT_CONTEXT_MAX_RECORDS &&
+		      final_header.rollback_count == 1 &&
+		      final_header.active_path_count == 2 &&
+		      final_header.active_path_oldest_sequence == 1 &&
+		      final_header.visible_head_sequence == 2 &&
+		      final_header.latest_record_hash == source_hash &&
+		      final_header.branch_generation > old_branch,
+	      "incremental summary rollback receipt");
+	new_branch = final_header.branch_generation;
+	make_echo(&ops[0], 7529, "summary-evict-a");
+	check(agent_run(&ops[0], &results[0], 1, 0) == 1 &&
+		      results[0].sequence == 129,
+	      "incremental summary first eviction");
+	check(context_snapshot(&final_header, records,
+			       AGENT_CONTEXT_MAX_RECORDS) == 2 &&
+		      final_header.oldest_sequence == 2 &&
+		      final_header.active_path_count == 2 &&
+		      final_header.active_path_oldest_sequence == 2 &&
+		      records[0].sequence == 2 && records[1].sequence == 129 &&
+		      records[1].prev_hash == source_hash &&
+		      final_header.branch_generation == new_branch,
+	      "incremental summary captured successor");
+	make_echo(&ops[0], 7530, "summary-evict-b");
+	check(agent_run(&ops[0], &results[0], 1, 0) == 1 &&
+		      results[0].sequence == 130,
+	      "incremental summary second eviction");
+	check(context_snapshot(&final_header, records,
+			       AGENT_CONTEXT_MAX_RECORDS) == 2 &&
+		      final_header.oldest_sequence == 3 &&
+		      final_header.rollback_count == 1 &&
+		      final_header.active_path_count == 2 &&
+		      final_header.active_path_oldest_sequence == 129 &&
+		      final_header.visible_head_sequence == 130 &&
+		      records[0].sequence == 129 && records[1].sequence == 130 &&
+		      records[1].path_parent_sequence == 129 &&
+		      records[1].prev_hash == records[0].record_hash &&
+		      final_header.latest_record_hash == records[1].record_hash &&
+		      final_header.branch_generation == new_branch,
+	      "incremental summary second successor");
+	printf("agentfinal_ucore: context_summary branch=%d rollback_count=%d active_count=%d active_oldest=%d head=%d\n",
+	       (int)final_header.branch_generation,
+	       (int)final_header.rollback_count,
+	       (int)final_header.active_path_count,
+	       (int)final_header.active_path_oldest_sequence,
+	       (int)final_header.visible_head_sequence);
 	printf("agentfinal_ucore: context_rollback_branch=1 sequence_reuse=0 provenance_bound=1\n");
 	printf("agentfinal_ucore: context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1\n");
 }

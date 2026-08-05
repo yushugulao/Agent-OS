@@ -411,8 +411,8 @@ measure_file_query_paths(void)
 	check((bench_scratch.file_query_result.plan_reason &
 	       AGENT_FILE_QUERY_REASON_CACHE_HIT) == 0,
 	      "cold index must include real index work");
-	check(receipt.cold_rebuild_records > 0,
-	      "cold index reports measured rebuild work");
+	check(receipt.cold_rebuild_records == 0,
+	      "incremental index avoids cold rebuild work");
 
 	memset(&bench_scratch.file_query_result, 0,
 	       sizeof(bench_scratch.file_query_result));

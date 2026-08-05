@@ -13,7 +13,73 @@ else:
     from benchmark_source_contract import _function_tokens, _lex
 
 
-CONTRACT_VERSION = "agentos-functional-compile-closure-v1"
+CONTRACT_VERSION = "agentos-functional-compile-closure-v2"
+
+EXPECTED_FUNCTIONAL_CPP_DEFINES = frozenset({
+    "AGENT_CONTEXT_SYNC_TEST_PROFILE",
+    "AGENT_METADATA_BOOT_READ_FAULT",
+    "AGENT_METADATA_BOOT_READ_FAULT_BANK",
+    "AGENT_METADATA_BOOT_READ_FAULT_COUNT",
+    "AGENT_METADATA_CRASH_BANK",
+    "AGENT_METADATA_CRASH_PHASE",
+    "AGENT_METADATA_EIO_BANK",
+    "AGENT_METADATA_EIO_PHASE",
+    "AGENT_METADATA_EIO_SKIP_SCOPE_COMMITS",
+    "AGENT_METADATA_SELECT_FAULT_BANK",
+    "AGENT_METADATA_SELECT_FAULT_COUNT",
+    "AGENT_OBSERVE_TEST_PROFILE",
+    "DURABILITY_POWERCUT_TEST_PROFILE",
+    "FILE_RESOURCE_DOMAIN_ORDINARY_LIMIT",
+    "FILE_RESOURCE_DOMAIN_RESERVED_LIMIT",
+    "FILE_RESOURCE_ORDINARY_LIMIT",
+    "FILE_RESOURCE_POOL_SIZE",
+    "FS_ALLOCATOR_DELETE_BARRIER_MUTANT",
+    "FS_ALLOCATOR_FAULT_TEST_PROFILE",
+    "FS_ALLOCATOR_TEST_INIT_NAME",
+    "FS_DOMAIN_BLOCK_LIMIT",
+    "FS_DOMAIN_INODE_LIMIT",
+    "FS_ICACHE_SIZE",
+    "FS_STORAGE_TINY_TEST_PROFILE",
+    "FS_SYSTEM_BLOCK_MIN_RESERVE",
+    "FS_SYSTEM_BLOCK_RESERVE",
+    "FS_SYSTEM_INODE_MIN_RESERVE",
+    "FS_SYSTEM_INODE_RESERVE",
+    "FS_WORKFLOW_BLOCK_MIN_PER_SCOPE",
+    "FS_WORKFLOW_BLOCK_RESERVE",
+    "FS_WORKFLOW_DOMAIN_BLOCK_LIMIT",
+    "FS_WORKFLOW_DOMAIN_INODE_LIMIT",
+    "FS_WORKFLOW_INODE_MIN_PER_SCOPE",
+    "FS_WORKFLOW_INODE_RESERVE",
+    "KERNELVEC_FRAME_SIZE",
+    "KSTACK_GUARD_SIZE",
+    "KSTACK_SIZE",
+    "LOG_LEVEL_DEBUG",
+    "LOG_LEVEL_ERROR",
+    "LOG_LEVEL_INFO",
+    "LOG_LEVEL_TRACE",
+    "LOG_LEVEL_WARN",
+    "PHYSICAL_PAGE_ADDRESSABLE_LIMIT",
+    "PHYSICAL_PAGE_DOMAIN_ORDINARY_LIMIT",
+    "PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT",
+    "PHYSICAL_PAGE_ORDINARY_LIMIT",
+    "PHYSICAL_PAGE_RESERVED_DOMAIN_CAP",
+    "PHYSICAL_PAGE_STORAGE_DOMAIN_RESERVED_LIMIT",
+    "PHYSICAL_PAGE_STORAGE_SYSTEM_RESERVED_LIMIT",
+    "PHYSICAL_PAGE_SYSTEM_RESERVE",
+    "PHYSICAL_PAGE_TEST_HOOKS",
+    "PHYSICAL_PAGE_TEST_INIT_NAME",
+    "THREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT",
+    "THREAD_RESOURCE_DOMAIN_RESERVED_LIMIT",
+    "THREAD_RESOURCE_ORDINARY_LIMIT",
+    "THREAD_RESOURCE_POOL_SIZE",
+    "THREAD_RESOURCE_RESERVED_LIMIT",
+    "VIRTIO_DISK_FAULT_INJECTION",
+    "VIRTIO_DISK_TEST_INIT_NAME",
+    "VIRTIO_DISK_TEST_PROFILE",
+    "WAIT_ATOMIC_TEST_PROFILE",
+    "WORKFLOW_TEARDOWN_DOMAIN_FILE_CAP",
+    "WORKFLOW_TEARDOWN_GLOBAL_RESERVED_CAP",
+})
 
 # These are the repository inputs that can redirect a reviewed call, fabricate
 # a result before it reaches the Guest, replace the output sink, or bypass main.
@@ -24,6 +90,7 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "agent_lifecycle_abi.h",
     "agent_metadata_test_abi.h",
     "agent_observe_abi.h",
+    "agent_performance_abi.h",
     "agent_resource_abi.h",
     "agent_tool_abi.h",
     "io_policy.h",
@@ -42,6 +109,7 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "scripts/initproc.py",
     "scripts/run-agent-tests.sh",
     "scripts/trusted-python-entry.py",
+    "scripts/validate-functional-review-flags.py",
     "agent_metadata_disk_abi.h",
     "exec_image_policy.h",
     "fs_storage_policy.h",
@@ -54,6 +122,7 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "user/include/fs_allocator_test_abi.h",
     "user/include/io_policy.h",
     "user/include/kernel_work_abi.h",
+    "user/include/labdemo_workload.h",
     "user/include/physical_page_test_abi.h",
     "user/include/research_platform_state.h",
     "user/include/rp_evidence.h",
@@ -124,6 +193,8 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/agent_metadata_directory.h",
     "os/agent_metadata_disk.h",
     "os/agent_metadata_internal.h",
+    "os/agent_metadata_journal.c",
+    "os/agent_metadata_journal.h",
     "os/agent_metadata_objects.c",
     "os/agent_metadata_prefetch.c",
     "os/agent_metadata_prefetch.h",
@@ -179,6 +250,8 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/fs.h",
     "os/fs_allocator_test.c",
     "os/fs_allocator_test.h",
+    "os/fs_epoch.c",
+    "os/fs_epoch.h",
     "os/kalloc.c",
     "os/kalloc.h",
     "os/kernel.ld",
@@ -190,8 +263,12 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/log.h",
     "os/main.c",
     "os/metadata_crash_test.h",
+    "os/open_file_io_lease.c",
+    "os/open_file_io_lease.h",
     "os/physical_page_test.c",
     "os/physical_page_test.h",
+    "os/performance_stats.c",
+    "os/performance_stats.h",
     "os/pipe.c",
     "os/plic.c",
     "os/plic.h",
@@ -243,7 +320,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # translation phase input exact prevents line splices, directives, assembly,
 # or linker syntax from disappearing during normalization.
 COMPILE_CLOSURE_FINGERPRINT = (
-    "c18d243237153bf35e64115dc27a59945cc9a7134407c3991acf71434d25dbfd"
+    "edb9a10cf93bc2e7d93fc6023262827a6d2a611de3b577e52230b90fef844d26"
 )
 
 USER_TRANSLATION_UNITS = (
@@ -266,6 +343,7 @@ EXPECTED_INCLUDE_CLOSURE = (
     "agent_lifecycle_abi.h",
     "agent_metadata_test_abi.h",
     "agent_observe_abi.h",
+    "agent_performance_abi.h",
     "agent_resource_abi.h",
     "agent_tool_abi.h",
     "io_policy.h",
@@ -311,6 +389,7 @@ EXPECTED_USER_INCLUDE_ROOT_FILES = (
     "user/include/fs_allocator_test_abi.h",
     "user/include/io_policy.h",
     "user/include/kernel_work_abi.h",
+    "user/include/labdemo_workload.h",
     "user/include/physical_page_test_abi.h",
     "user/include/research_platform_state.h",
     "user/include/rp_evidence.h",
@@ -396,8 +475,8 @@ CRITICAL_LIBRARY_HELPER_FINGERPRINTS = {
     "context_mirror_hash_bytes": "9406ede880c01e3a985538016deb4dee226a39e0e2026184fd712b078f82f392",
     "context_mirror_record_hash": "26b8dcc17795eb689d69a61840d52b9162ccb4142edf21b1e87e14316a6fbca9",
     "context_mirror_record": "2c269ae66429dd7c786b9c7891dc7bc38f948c81be59cd09060a020f1872867d",
-    "context_mirror_active_record": "b6794e3c46cdd6d504c4d9a4b437a93a5eac40c785d9a4e4da49a6a0d20c8eaf",
-    "context_mirror_active_query": "18a286ce9b8e546eb2231bfcbe5a901bfd70265f7ada0639f55cf532fa799b25",
+    "context_mirror_active_record": "b8226c4f02c662fc8c4fd2f0b9923d61032d7239c6edc9af7ea2409a07d01998",
+    "context_mirror_active_query": "9bf294d9e5e207bbaa0106ba489286643e12339120ec648b25fdce5cd6c5126f",
 }
 
 CRITICAL_PUBLIC_NAMES = frozenset(
@@ -792,6 +871,19 @@ def _isolated_python_invocation_lines(runner: str) -> tuple[str, ...]:
 
 def _validate_build_selectors(texts: dict[str, str]) -> None:
     user_make = texts["user/Makefile"].replace("\r\n", "\n")
+    runner = texts["scripts/run-agent-tests.sh"].replace("\r\n", "\n")
+    cpp_defines = frozenset(
+        re.findall(
+            r"(?<![A-Za-z0-9_])-D\s*([A-Za-z_]\w*)",
+            "\n".join((texts["Makefile"], user_make, texts["nfs/Makefile"], runner)),
+        )
+    )
+    if cpp_defines != EXPECTED_FUNCTIONAL_CPP_DEFINES:
+        raise ValueError(
+            "functional compiler define allowlist differs: "
+            f"missing={sorted(EXPECTED_FUNCTIONAL_CPP_DEFINES - cpp_defines)} "
+            f"extra={sorted(cpp_defines - EXPECTED_FUNCTIONAL_CPP_DEFINES)}"
+        )
     _require_single_assignment(user_make, "app_dir", "app_dir := src", "app source")
     _require_single_assignment(
         user_make, "LIB_C", "LIB_C := $(wildcard lib/*.c)", "user libraries"
@@ -810,6 +902,24 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         "SELECTED_APPS",
         "SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))",
         "selected applications",
+    )
+    _require_single_assignment(
+        user_make,
+        "LIB_OBJS",
+        "LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))",
+        "user library objects",
+    )
+    _require_single_assignment(
+        user_make,
+        "CRT_OBJ",
+        "CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o",
+        "user startup object",
+    )
+    _require_single_assignment(
+        user_make,
+        "LDFLAGS",
+        "LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000 -Wl,--gc-sections",
+        "user linker flags",
     )
     for fragment, label in (
         (
@@ -850,6 +960,32 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         _require_fragment_once(user_make, fragment, label)
 
     root_make = texts["Makefile"].replace("\r\n", "\n")
+    _require_single_assignment(
+        root_make,
+        "C_OBJS",
+        "C_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(C_SRCS))))",
+        "kernel C objects",
+    )
+    as_object_assignments = re.findall(
+        r"(?m)^[ \t]*AS_OBJS[ \t]*(?:\+?=).*$", root_make
+    )
+    if as_object_assignments != [
+        "AS_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(AS_SRCS))))",
+        "\tAS_OBJS += $(BUILDDIR)/$K/initproc.o",
+    ]:
+        raise ValueError("functional kernel assembly object assignments differ")
+    _require_single_assignment(
+        root_make,
+        "OBJS",
+        "OBJS = $(sort $(C_OBJS) $(AS_OBJS))",
+        "kernel link objects",
+    )
+    _require_single_assignment(
+        root_make,
+        "LDFLAGS",
+        "LDFLAGS = -m elf64lriscv -z max-page-size=4096",
+        "kernel linker flags",
+    )
     for fragment, label in (
         ("C_SRCS = $(wildcard $K/*.c)", "kernel C wildcard"),
         ("AS_SRCS = $(wildcard $K/*.S)", "kernel assembly wildcard"),
@@ -871,7 +1007,7 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         ),
         (
             "$(F)/fs.img: user .FORCE\n"
-            "\t$(MAKE) -rR -C $(F) -f Makefile",
+            "\t$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C $(F) -f Makefile",
             "filesystem user dependency",
         ),
         (
@@ -882,10 +1018,16 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         ),
         (
             "user:\n"
-            "\t$(MAKE) -rR -C user -f Makefile "
+            "\t$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C user -f Makefile "
             "CHAPTER=$(CHAPTER) BASE=$(BASE) \\\n"
             "\t\tTOOLPREFIX=$(call shell_quote,$(TOOLPREFIX))",
             "root user delegation",
+        ),
+        (
+            "AGENTOS_SUBMAKE_JOBS = $(if $(filter -j% --jobs=% "
+            "--jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS)),"
+            ",-j$(AGENTOS_BUILD_JOBS))",
+            "recursive build jobserver",
         ),
     ):
         _require_fragment_once(root_make, fragment, label)
@@ -904,22 +1046,149 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
     ):
         _require_fragment_once(nfs_make, fragment, label)
 
-    runner = texts["scripts/run-agent-tests.sh"].replace("\r\n", "\n")
+    review_guards = (
+        (
+            root_make,
+            "FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS := \\\n"
+            "\tK U F BUILDDIR CC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS \\\n"
+            "\tC_SRCS AS_SRCS C_OBJS AS_OBJS OBJS HEADER_DEP",
+            "kernel review variable boundary",
+        ),
+        (
+            user_make,
+            "FUNCTIONAL_REVIEW_FORBIDDEN_USER_VARS := \\\n"
+            "\tARCH CC OBJCOPY OBJDUMP COMMON_CFLAGS CFLAGS CPPFLAGS LDFLAGS "
+            "LIB_C LIB_OBJS CRT_OBJ \\\n"
+            "\tapp_dir build_dir elf_dir obj_dir bin_dir generated_dir out_dir asm_dir arch_dir \\\n"
+            "\tSRCS APPS SELECTED_APPS",
+            "user review variable boundary",
+        ),
+        (
+            nfs_make,
+            "FUNCTIONAL_REVIEW_FORBIDDEN_IMAGE_VARS := \\\n"
+            "\tU USER_BIN_DIR USER_ELF_DIR HOSTCC CFLAGS CPPFLAGS LDFLAGS \\\n"
+            "\tSTORAGE_POLICY_CPPFLAGS FS_FUSE USER_BINS USER_ELFS EXEC_POLICY",
+            "filesystem image review variable boundary",
+        ),
+    )
+    for make_text, fragment, label in review_guards:
+        _require_fragment_once(make_text, fragment, label)
+
+    flag_policy = texts["scripts/validate-functional-review-flags.py"].replace(
+        "\r\n", "\n"
+    )
     for fragment, label in (
+        (
+            'LEGACY_PROFILE = (\n'
+            '    "-DAGENT_CONTEXT_SYNC_TEST_PROFILE '
+            '-DWAIT_ATOMIC_TEST_PROFILE"\n'
+            ')',
+            "review legacy flag profile",
+        ),
+        (
+            'r"-Werror "\n'
+            '    r"-DLABDEMO_RUN_NONCE=0x([0-9a-f]{16})ULL "\n'
+            '    r"-DLABDEMO_SAMPLE_ID=([1-9]|[1-5][0-9]|6[0-4]) "\n'
+            '    r"-DLABDEMO_NATIVE_FIRST=([01])\\Z"',
+            "review showcase flag grammar",
+        ),
+        ('SHOWCASE_TESTS = "labdemo_ucore labdemo_execprobe_ucore"',
+         "review showcase application set"),
+        ('match = SHOWCASE_PROFILE.fullmatch(flags)',
+         "review exact showcase flag match"),
+        ('match is None or match.group(1) == "0000000000000000"',
+         "review nonzero showcase nonce"),
+        ('chapter == "agent"', "review showcase chapter"),
+        ('tests == SHOWCASE_TESTS', "review showcase test selection"),
+        ('init_proc == "labdemo_ucore"', "review showcase init"),
+    ):
+        _require_fragment_once(flag_policy, fragment, label)
+    if flag_policy.count("return True") != 1 or flag_policy.count(
+        "return False"
+    ) != 1:
+        raise ValueError("functional review flag decision structure differs")
+
+    review_flag_guards = (
+        (
+            root_make,
+            "override FUNCTIONAL_REVIEW_FLAGS_STATUS := $(shell python3 -I -S -B "
+            "scripts/validate-functional-review-flags.py",
+            "kernel review flag validator",
+        ),
+        (
+            user_make,
+            "override FUNCTIONAL_REVIEW_FLAGS_STATUS := $(shell python3 -I -S -B "
+            "../scripts/validate-functional-review-flags.py",
+            "user review flag validator",
+        ),
+        (
+            nfs_make,
+            "override FUNCTIONAL_REVIEW_FLAGS_STATUS := $(shell python3 -I -S -B "
+            "../scripts/validate-functional-review-flags.py",
+            "filesystem review flag validator",
+        ),
+    )
+    for make_text, fragment, label in review_flag_guards:
+        _require_fragment_once(make_text, fragment, label)
+        _require_fragment_once(
+            make_text,
+            "ifneq ($(FUNCTIONAL_REVIEW_FLAGS_STATUS),ok)\n"
+            "$(error FUNCTIONAL_REVIEW_BUILD rejects USER_EXTRA_CFLAGS or its build context)\n"
+            "endif",
+            f"{label} fail-closed result",
+        )
+
+    make_surface = "\n".join(
+        (
+            root_make.replace("-include $(HEADER_DEP)", "", 1),
+            user_make,
+            nfs_make,
+        )
+    )
+    for pattern, label in (
+        (r"(?<![A-Za-z0-9_])-include(?:\s|=)", "forced include"),
+        (r"(?<![A-Za-z0-9_])-imacros(?:\s|=)", "forced macro include"),
+        (r"(?<![A-Za-z0-9_])-fplugin(?:\s|=)", "compiler plugin"),
+        (r"(?<![A-Za-z0-9_])-specs(?:\s|=)", "compiler specs"),
+        (r"(?<![A-Za-z0-9_])-wrapper(?:\s|=)", "compiler wrapper"),
+        (r"(?<![A-Za-z0-9_])-Xpreprocessor(?:\s|=)", "preprocessor escape"),
+        (r"(?<![A-Za-z0-9_])-U\s*[A-Za-z_]", "macro undefinition"),
+    ):
+        if re.search(pattern, make_surface):
+            raise ValueError(f"functional build contains a {label} escape")
+
+    root_link = "\t$(LD_CMD) $(LDFLAGS) -T os/kernel.ld -o $(BUILDDIR)/kernel $(OBJS)"
+    if root_make.splitlines().count(root_link) != 1:
+        raise ValueError("functional kernel link command differs")
+    user_link = "\t$(CC_CMD) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) $< -o $@"
+    if user_make.splitlines().count(user_link) != 1:
+        raise ValueError("functional user link command differs")
+
+    for fragment, label in (
+        (
+            'if [[ ! "${AGENTOS_BUILD_JOBS}" =~ '
+            '^([1-9]|1[0-9]|2[0-4])$ ]]; then\n'
+            '\techo "[agent-tests] AGENTOS_BUILD_JOBS must be between 1 and 24" >&2\n'
+            '\texit 1\n'
+            'fi\n'
+            'MAKE_JOB_ARGS=(-j "${AGENTOS_BUILD_JOBS}")\n'
+            'readonly -a MAKE_JOB_ARGS',
+            "functional runner parallel build policy",
+        ),
         (
             'if [[ "${AGENT_TEST_CASE:-}" == "agenteval_ucore" ]]; then\n'
             '\tCHAPTER="${CHAPTER:-agent_eval}"',
             "functional runner selection",
         ),
         (
-            '"${MAKE_TOOL}" -rR -f Makefile nfs/fs.img \\\n'
+            '"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile nfs/fs.img \\\n'
             '\t\tTOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}" \\\n'
             '\t\tFUNCTIONAL_REVIEW_BUILD=1 \\\n'
             '\t\tUSER_EXTRA_CFLAGS="${user_extra_cflags}"',
             "functional image build",
         ),
         (
-            '"${MAKE_TOOL}" -rR -f Makefile build \\\n'
+            '"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile build \\\n'
             '\t\tTOOLPREFIX="${TOOLPREFIX}" \\\n'
             '\t\tLOG="${LOG}" \\\n'
             '\t\tINIT_PROC="${init_proc}" \\\n'
@@ -945,19 +1214,44 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             '\t\t--marker-mode exact-line',
             "QEMU result monitor",
         ),
+        (
+            'HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"',
+            "Host compiler capture before environment cleanup",
+        ),
+        (
+            'readonly -a FUNCTIONAL_REVIEW_SANITIZED_ENV=(\n'
+            '\tMAKEFILES MAKEFLAGS MFLAGS MAKEOVERRIDES GNUMAKEFLAGS\n'
+            '\tHOSTCC CC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS ASFLAGS',
+            "functional review environment allowlist",
+        ),
+        (
+            'for functional_review_env in "${FUNCTIONAL_REVIEW_SANITIZED_ENV[@]}"; do\n'
+            '\tunset "${functional_review_env}"\n'
+            'done',
+            "functional review environment cleanup",
+        ),
     ):
         _require_fragment_once(runner, fragment, label)
+    if runner.find('HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"') > runner.find(
+        'unset "${functional_review_env}"'
+    ):
+        raise ValueError("Host compiler is captured after review environment cleanup")
     make_lines = [
         line.lstrip() for line in runner.splitlines()
         if '"${MAKE_TOOL}"' in line
     ]
     if len(make_lines) != 7 or any(
-        not line.startswith('"${MAKE_TOOL}" -rR ') for line in make_lines
+        not line.startswith(
+            ('"${MAKE_TOOL}" -rR ', '"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR ')
+        )
+        for line in make_lines
     ):
         raise ValueError("functional runner has an unpinned GNU make invocation")
+    if sum('"${MAKE_JOB_ARGS[@]}"' in line for line in make_lines) != 3:
+        raise ValueError("functional runner parallel build boundary differs")
     if runner.count("FUNCTIONAL_REVIEW_BUILD=1") != 5:
         raise ValueError("functional runner does not isolate generated dependencies")
-    if len(_isolated_python_invocation_lines(runner)) != 14:
+    if len(_isolated_python_invocation_lines(runner)) != 15:
         raise ValueError("functional runner Python invocation count differs")
 
     initproc = texts["scripts/initproc.py"].replace("\r\n", "\n")

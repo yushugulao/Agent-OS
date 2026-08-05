@@ -15,18 +15,59 @@ struct vm_account_binding {
 	pagetable_t root;
 	struct resource_account_handle account;
 	enum resource_charge_class charge_class;
+	uint state;
 };
 
 static struct vm_account_binding vm_accounts[VM_ACCOUNT_BINDING_CAP];
+static struct uvm_cow_stats cow_stats = {
+	.version = UVM_COW_STATS_VERSION,
+	.size = sizeof(struct uvm_cow_stats),
+};
+
+_Static_assert(VM_COPY_SEGMENT_MAX == 4U,
+	       "scatter copyout segment bound");
+_Static_assert(VM_COPYOUTV_MAX_BYTES == PGSIZE &&
+	       VM_COPYOUTV_MAX_USER_PAGES == 2U,
+	       "scatter copyout page bound");
+
+enum vm_account_binding_state {
+	VM_ACCOUNT_EMPTY = 0,
+	VM_ACCOUNT_LIVE,
+	VM_ACCOUNT_TOMBSTONE,
+};
+
+void
+uvm_cow_stats_snapshot(struct uvm_cow_stats *out)
+{
+	int enabled;
+
+	if (out == 0)
+		return;
+	enabled = intr_save();
+	memmove(out, &cow_stats, sizeof(*out));
+	intr_restore(enabled);
+}
+
+static uint
+vm_account_slot(pagetable_t root)
+{
+	return ((uint64)root >> PGSHIFT) % VM_ACCOUNT_BINDING_CAP;
+}
 
 static int vm_account_get(pagetable_t root,
 			  struct resource_account_handle *account,
 			  enum resource_charge_class *charge_class)
 {
 	int enabled = intr_save();
+	uint start = vm_account_slot(root);
 
-	for (uint i = 0; i < VM_ACCOUNT_BINDING_CAP; i++) {
-		if (vm_accounts[i].root != root)
+	for (uint probe = 0; probe < VM_ACCOUNT_BINDING_CAP; probe++) {
+		uint i = (start + probe) % VM_ACCOUNT_BINDING_CAP;
+
+		if (vm_accounts[i].state == VM_ACCOUNT_EMPTY)
+			break;
+		if (vm_accounts[i].state != VM_ACCOUNT_LIVE ||
+		    vm_accounts[i].root != root)
 			continue;
 		*account = vm_accounts[i].account;
 		*charge_class = vm_accounts[i].charge_class;
@@ -43,18 +84,29 @@ static int vm_account_bind(pagetable_t root,
 {
 	int enabled = intr_save();
 	int free_slot = -1;
+	uint start = vm_account_slot(root);
 
-	for (uint i = 0; i < VM_ACCOUNT_BINDING_CAP; i++) {
-		if (vm_accounts[i].root == root)
+	for (uint probe = 0; probe < VM_ACCOUNT_BINDING_CAP; probe++) {
+		uint i = (start + probe) % VM_ACCOUNT_BINDING_CAP;
+
+		if (vm_accounts[i].state == VM_ACCOUNT_LIVE &&
+		    vm_accounts[i].root == root)
 			goto fail;
-		if (vm_accounts[i].root == 0 && free_slot < 0)
+		if (vm_accounts[i].state == VM_ACCOUNT_TOMBSTONE &&
+		    free_slot < 0)
 			free_slot = (int)i;
+		if (vm_accounts[i].state == VM_ACCOUNT_EMPTY) {
+			if (free_slot < 0)
+				free_slot = (int)i;
+			break;
+		}
 	}
 	if (free_slot < 0)
 		goto fail;
 	vm_accounts[free_slot].root = root;
 	vm_accounts[free_slot].account = account;
 	vm_accounts[free_slot].charge_class = charge_class;
+	vm_accounts[free_slot].state = VM_ACCOUNT_LIVE;
 	intr_restore(enabled);
 	return 0;
 fail:
@@ -65,11 +117,18 @@ fail:
 static int vm_account_unbind(pagetable_t root)
 {
 	int enabled = intr_save();
+	uint start = vm_account_slot(root);
 
-	for (uint i = 0; i < VM_ACCOUNT_BINDING_CAP; i++) {
-		if (vm_accounts[i].root != root)
+	for (uint probe = 0; probe < VM_ACCOUNT_BINDING_CAP; probe++) {
+		uint i = (start + probe) % VM_ACCOUNT_BINDING_CAP;
+
+		if (vm_accounts[i].state == VM_ACCOUNT_EMPTY)
+			break;
+		if (vm_accounts[i].state != VM_ACCOUNT_LIVE ||
+		    vm_accounts[i].root != root)
 			continue;
 		memset(&vm_accounts[i], 0, sizeof(vm_accounts[i]));
+		vm_accounts[i].state = VM_ACCOUNT_TOMBSTONE;
 		intr_restore(enabled);
 		return 0;
 	}
@@ -106,7 +165,7 @@ int uvm_page_free(pagetable_t root, void *page)
 
 	if (vm_account_get(root, &account, &charge_class) < 0)
 		return -1;
-	return kfree_account_page(page, account, charge_class);
+	return krelease_account_page(page);
 }
 
 // Make a direct-map page table for the kernel.
@@ -181,6 +240,7 @@ static pte_t *walk_user_leaf(pagetable_t pagetable, uint64 va, int perm)
 {
 	pte_t *pte;
 	uint64 flags;
+	uint64 required;
 
 	if (pagetable == 0 || va >= MAXVA ||
 	    (perm & ~(PTE_R | PTE_W | PTE_X)) != 0)
@@ -193,11 +253,17 @@ static pte_t *walk_user_leaf(pagetable_t pagetable, uint64 va, int perm)
 		return 0;
 	if ((flags & (PTE_W | PTE_X)) == (PTE_W | PTE_X))
 		return 0;
+	if ((flags & PTE_COW) != 0 &&
+	    ((flags & (PTE_R | PTE_W | PTE_X)) != PTE_R))
+		return 0;
 	if ((flags & (PTE_R | PTE_W | PTE_X)) == 0)
 		return 0;
 	if ((flags & PTE_W) != 0 && (flags & PTE_R) == 0)
 		return 0;
-	if ((flags & perm) != (uint64)perm)
+	required = perm;
+	if ((required & PTE_W) != 0 && (flags & PTE_COW) != 0)
+		required &= ~PTE_W;
+	if ((flags & required) != required)
 		return 0;
 	return pte;
 }
@@ -452,6 +518,84 @@ static int freewalk(
 	return kfree_account_page((void *)pagetable, account, charge_class);
 }
 
+/*
+ * User mappings are sparse, while max_page is an address-space high-water
+ * mark.  Walking every virtual page makes fork/exec teardown proportional to
+ * holes.  Traverse the allocated Sv39 tree instead and release only leaves
+ * that actually exist below limit.
+ */
+static void
+uvm_release_range_tree(pagetable_t root, uint64 limit, int cleanup)
+{
+	const uint64 l2_span = 1ULL << PXSHIFT(2);
+	const uint64 l1_span = 1ULL << PXSHIFT(1);
+
+	for (uint l2_slot = 0; l2_slot < 512; l2_slot++) {
+		uint64 l2_base = (uint64)l2_slot * l2_span;
+		pte_t l2_pte = root[l2_slot];
+		pagetable_t l1;
+		int l1_empty = 1;
+
+		if ((l2_pte & PTE_V) == 0 || l2_base >= limit)
+			continue;
+		if ((l2_pte & (PTE_R | PTE_W | PTE_X)) != 0)
+			panic("uvm release level2 leaf");
+		l1 = (pagetable_t)PTE2PA(l2_pte);
+		for (uint l1_slot = 0; l1_slot < 512; l1_slot++) {
+			uint64 l1_base = l2_base + (uint64)l1_slot * l1_span;
+			pte_t l1_pte = l1[l1_slot];
+			pagetable_t l0;
+			int l0_empty = 1;
+
+			if ((l1_pte & PTE_V) == 0)
+				continue;
+			if (l1_base >= limit) {
+				l1_empty = 0;
+				continue;
+			}
+			if ((l1_pte & (PTE_R | PTE_W | PTE_X)) != 0)
+				panic("uvm release level1 leaf");
+			l0 = (pagetable_t)PTE2PA(l1_pte);
+			for (uint l0_slot = 0; l0_slot < 512; l0_slot++) {
+				uint64 va = l1_base +
+					(uint64)l0_slot * PGSIZE;
+				pte_t leaf = l0[l0_slot];
+
+				if ((leaf & PTE_V) == 0)
+					continue;
+				if (va >= limit) {
+					l0_empty = 0;
+					continue;
+				}
+				if ((leaf & (PTE_R | PTE_W | PTE_X)) == 0)
+					panic("uvm release level0 nonleaf");
+				if (krelease_account_page(
+					    (void *)PTE2PA(leaf)) < 0)
+					panic("uvm release account");
+				l0[l0_slot] = 0;
+				if (cleanup)
+					(void)kernel_work_checkpoint_cleanup(
+						KERNEL_WORK_PAGE_UNITS);
+			}
+			if (l0_empty) {
+				l1[l1_slot] = 0;
+				if (uvm_page_free(root, l0) < 0)
+					panic("uvm release level0 table");
+			} else {
+				l1_empty = 0;
+			}
+			if (cleanup)
+				(void)kernel_work_checkpoint_cleanup(
+					KERNEL_WORK_PAGE_UNITS);
+		}
+		if (l1_empty) {
+			root[l2_slot] = 0;
+			if (uvm_page_free(root, l1) < 0)
+				panic("uvm release level1 table");
+		}
+	}
+}
+
 /**
  * @brief Free user memory pages, then free page-table pages.
  *
@@ -462,8 +606,10 @@ void uvmfree(pagetable_t pagetable, uint64 max_page)
 	struct resource_account_handle account;
 	enum resource_charge_class charge_class;
 
+	if (max_page > MAXVA / PGSIZE)
+		panic("uvmfree range");
 	if (max_page > 0)
-		uvmunmap(pagetable, 0, max_page, 1);
+		uvm_release_range_tree(pagetable, max_page * PGSIZE, 0);
 	if (vm_account_get(pagetable, &account, &charge_class) < 0)
 		panic("uvmfree account");
 	if (freewalk(pagetable, account, charge_class) < 0 ||
@@ -479,10 +625,10 @@ void uvmfree_cleanup(pagetable_t pagetable, uint64 max_page)
 	struct resource_account_handle account;
 	enum resource_charge_class charge_class;
 
-	for (uint64 page = 0; page < max_page; page++) {
-		uvmunmap(pagetable, page * PGSIZE, 1, 1);
-		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_PAGE_UNITS);
-	}
+	if (max_page > MAXVA / PGSIZE)
+		panic("uvmfree cleanup range");
+	if (max_page > 0)
+		uvm_release_range_tree(pagetable, max_page * PGSIZE, 1);
 	if (vm_account_get(pagetable, &account, &charge_class) < 0)
 		panic("uvmfree cleanup account");
 	if (freewalk(pagetable, account, charge_class) < 0 ||
@@ -490,46 +636,276 @@ void uvmfree_cleanup(pagetable_t pagetable, uint64 max_page)
 		panic("uvmfree cleanup release");
 }
 
-// Used in fork.
-// Copy the pagetable page and all the user pages.
-// Return 0 on success, -1 on error.
-int uvmcopy(pagetable_t old, pagetable_t new, uint64 max_page)
+struct uvmcopy_tree_state {
+	pagetable_t new_root;
+	uint64 shared_mappings;
+};
+
+static int uvmcopy_leaf_flags_valid(uint64 flags)
 {
-	pte_t *pte;
-	uint64 pa, page;
-	uint64 scanned_pages = 0;
-	uint flags;
-	char *mem;
+	uint64 access = flags & (PTE_R | PTE_W | PTE_X);
 
-	for (page = 0; page < max_page; page++) {
-		uint64 va = page * PGSIZE;
+	if (access == 0 || (access & (PTE_W | PTE_X)) ==
+			   (PTE_W | PTE_X))
+		return 0;
+	if ((flags & PTE_W) != 0 && (flags & PTE_R) == 0)
+		return 0;
+	return (flags & PTE_COW) == 0 || access == PTE_R;
+}
 
-		pte = walk(old, va, 0);
-		if (pte != 0 && (*pte & PTE_V) != 0) {
-			pa = PTE2PA(*pte);
-			flags = PTE_FLAGS(*pte);
-			if ((mem = uvm_page_alloc(new)) == 0)
-				goto err;
-			memmove(mem, (char *)pa, PGSIZE);
-			if (mappages(new, va, PGSIZE, (uint64)mem,
-				     flags) != 0) {
-				(void)uvm_page_free(new, mem);
-				goto err;
+static int
+uvmcopy_clone_tree(struct uvmcopy_tree_state *state, pagetable_t old_table,
+		   pagetable_t new_table, uint64 limit)
+{
+	const uint64 l2_span = 1ULL << PXSHIFT(2);
+	const uint64 l1_span = 1ULL << PXSHIFT(1);
+
+	for (uint l2_slot = 0; l2_slot < 512; l2_slot++) {
+		uint64 l2_base = (uint64)l2_slot * l2_span;
+		pte_t old_l2_pte = old_table[l2_slot];
+		pagetable_t old_l1;
+		pagetable_t new_l1;
+		int new_l1_populated = 0;
+
+		if (l2_base >= limit)
+			break;
+		if ((old_l2_pte & PTE_V) == 0)
+			continue;
+		if ((old_l2_pte & (PTE_R | PTE_W | PTE_X)) != 0 ||
+		    new_table[l2_slot] != 0)
+			return -1;
+		old_l1 = (pagetable_t)PTE2PA(old_l2_pte);
+		new_l1 = (pagetable_t)uvm_page_alloc(state->new_root);
+		if (new_l1 == 0)
+			return -1;
+		memset(new_l1, 0, PGSIZE);
+		new_table[l2_slot] = PA2PTE(new_l1) | PTE_V;
+
+		for (uint l1_slot = 0; l1_slot < 512; l1_slot++) {
+			uint64 l1_base = l2_base +
+				(uint64)l1_slot * l1_span;
+			pte_t old_l1_pte = old_l1[l1_slot];
+			pagetable_t old_l0;
+			pagetable_t new_l0;
+			int new_l0_populated = 0;
+
+			if (l1_base >= limit)
+				break;
+			if ((old_l1_pte & PTE_V) == 0)
+				continue;
+			if ((old_l1_pte & (PTE_R | PTE_W | PTE_X)) != 0)
+				return -1;
+			old_l0 = (pagetable_t)PTE2PA(old_l1_pte);
+			new_l0 = (pagetable_t)uvm_page_alloc(
+				state->new_root);
+			if (new_l0 == 0)
+				return -1;
+			memset(new_l0, 0, PGSIZE);
+			new_l1[l1_slot] = PA2PTE(new_l0) | PTE_V;
+
+			for (uint l0_slot = 0; l0_slot < 512; l0_slot++) {
+				uint64 va = l1_base +
+					(uint64)l0_slot * PGSIZE;
+				pte_t source = old_l0[l0_slot];
+				uint64 flags;
+
+				if (va >= limit)
+					break;
+				if ((source & PTE_V) == 0)
+					continue;
+				flags = PTE_FLAGS(source);
+				if ((source & (PTE_R | PTE_W | PTE_X)) == 0 ||
+				    !uvmcopy_leaf_flags_valid(flags))
+					return -1;
+				if ((flags & PTE_W) != 0)
+					flags = (flags & ~PTE_W) | PTE_COW;
+				if (kretain_account_page(
+					    (void *)PTE2PA(source)) < 0)
+					return -1;
+				new_l0[l0_slot] =
+					PA2PTE(PTE2PA(source)) | flags;
+				new_l0_populated = 1;
+				if ((flags & PTE_COW) != 0)
+					state->shared_mappings++;
+				if (kernel_work_checkpoint(
+					    KERNEL_WORK_PAGE_UNITS) < 0)
+					return -1;
 			}
+			if (!new_l0_populated) {
+				new_l1[l1_slot] = 0;
+				if (uvm_page_free(state->new_root, new_l0) < 0)
+					panic("uvmcopy empty level0 table");
+			} else {
+				new_l1_populated = 1;
+			}
+			if (kernel_work_checkpoint(KERNEL_WORK_PAGE_UNITS) < 0)
+				return -1;
 		}
-		scanned_pages = page + 1;
-		if (kernel_work_checkpoint(KERNEL_WORK_PAGE_UNITS) < 0)
-			goto err;
+		if (!new_l1_populated) {
+			new_table[l2_slot] = 0;
+			if (uvm_page_free(state->new_root, new_l1) < 0)
+				panic("uvmcopy empty level1 table");
+		}
 	}
 	return 0;
+}
 
-err:
-	while (scanned_pages != 0) {
-		scanned_pages--;
-		uvmunmap(new, scanned_pages * PGSIZE, 1, 1);
-		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_PAGE_UNITS);
+static void
+uvmcopy_commit_parent(pagetable_t old_table, pagetable_t new_table,
+		      uint64 limit)
+{
+	const uint64 l2_span = 1ULL << PXSHIFT(2);
+	const uint64 l1_span = 1ULL << PXSHIFT(1);
+
+	for (uint l2_slot = 0; l2_slot < 512; l2_slot++) {
+		uint64 l2_base = (uint64)l2_slot * l2_span;
+		pte_t child_l2_pte = new_table[l2_slot];
+		pte_t parent_l2_pte;
+		pagetable_t child_l1;
+		pagetable_t parent_l1;
+
+		if (l2_base >= limit)
+			break;
+		if ((child_l2_pte & PTE_V) == 0)
+			continue;
+		parent_l2_pte = old_table[l2_slot];
+		if ((child_l2_pte & (PTE_R | PTE_W | PTE_X)) != 0 ||
+		    (parent_l2_pte & PTE_V) == 0 ||
+		    (parent_l2_pte & (PTE_R | PTE_W | PTE_X)) != 0)
+			panic("uvmcopy parent level2");
+		child_l1 = (pagetable_t)PTE2PA(child_l2_pte);
+		parent_l1 = (pagetable_t)PTE2PA(parent_l2_pte);
+
+		for (uint l1_slot = 0; l1_slot < 512; l1_slot++) {
+			uint64 l1_base = l2_base +
+				(uint64)l1_slot * l1_span;
+			pte_t child_l1_pte = child_l1[l1_slot];
+			pte_t parent_l1_pte;
+			pagetable_t child_l0;
+			pagetable_t parent_l0;
+
+			if (l1_base >= limit)
+				break;
+			if ((child_l1_pte & PTE_V) == 0)
+				continue;
+			parent_l1_pte = parent_l1[l1_slot];
+			if ((child_l1_pte & (PTE_R | PTE_W | PTE_X)) != 0 ||
+			    (parent_l1_pte & PTE_V) == 0 ||
+			    (parent_l1_pte & (PTE_R | PTE_W | PTE_X)) != 0)
+				panic("uvmcopy parent level1");
+			child_l0 = (pagetable_t)PTE2PA(child_l1_pte);
+			parent_l0 = (pagetable_t)PTE2PA(parent_l1_pte);
+
+			for (uint l0_slot = 0; l0_slot < 512; l0_slot++) {
+				uint64 va = l1_base +
+					(uint64)l0_slot * PGSIZE;
+				pte_t child = child_l0[l0_slot];
+				pte_t parent;
+				uint64 expected;
+
+				if (va >= limit)
+					break;
+				if ((child & PTE_V) == 0)
+					continue;
+				parent = parent_l0[l0_slot];
+				if ((child & (PTE_R | PTE_W | PTE_X)) == 0 ||
+				    (parent & PTE_V) == 0 ||
+				    PTE2PA(parent) != PTE2PA(child))
+					panic("uvmcopy parent leaf");
+				expected = PTE_FLAGS(parent);
+				if ((expected & PTE_W) != 0)
+					expected =
+						(expected & ~PTE_W) | PTE_COW;
+				if (PTE_FLAGS(child) != expected)
+					panic("uvmcopy parent flags");
+				if ((parent & PTE_W) != 0)
+					parent_l0[l0_slot] =
+						(parent & ~PTE_W) | PTE_COW;
+			}
+		}
 	}
-	return -1;
+}
+
+// Used in fork. Clone only allocated Sv39 branches, then atomically harden
+// writable parent leaves after the unpublished child is complete.
+int uvmcopy(pagetable_t old, pagetable_t new, uint64 max_page)
+{
+	struct uvmcopy_tree_state state;
+	uint64 limit;
+
+	if (old == 0 || new == 0 || max_page > MAXVA / PGSIZE)
+		return -1;
+	limit = max_page * PGSIZE;
+	for (uint i = 0;
+	     i < 512 && ((uint64)i << PXSHIFT(2)) < limit;
+	     i++)
+		if ((new[i] & PTE_V) != 0)
+			return -1;
+	memset(&state, 0, sizeof(state));
+	state.new_root = new;
+	if (uvmcopy_clone_tree(&state, old, new, limit) < 0) {
+		uvm_release_range_tree(new, limit, 1);
+		return -1;
+	}
+	uvmcopy_commit_parent(old, new, limit);
+	if (state.shared_mappings != 0) {
+		int enabled = intr_save();
+
+		cow_stats.cow_shared_mappings += state.shared_mappings;
+		intr_restore(enabled);
+		sfence_vma();
+	}
+	return 0;
+}
+
+int uvm_cow_fault(pagetable_t pagetable, uint64 va)
+{
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+	pte_t *pte;
+	uint64 old_pa;
+	uint flags;
+	void *page;
+
+	if (pagetable == 0 || va >= MAXVA)
+		return -1;
+	va = PGROUNDDOWN(va);
+	pte = walk(pagetable, va, 0);
+	if (pte == 0)
+		return -1;
+	flags = PTE_FLAGS(*pte);
+	if ((flags & (PTE_V | PTE_U | PTE_R | PTE_COW)) !=
+		    (PTE_V | PTE_U | PTE_R | PTE_COW) ||
+	    (flags & (PTE_W | PTE_X)) != 0 ||
+	    vm_account_get(pagetable, &account, &charge_class) < 0)
+		return -1;
+	old_pa = PTE2PA(*pte);
+	if (kaccount_page_exclusive((void *)old_pa, account,
+				    charge_class)) {
+		int enabled;
+
+		*pte = PA2PTE(old_pa) | ((flags | PTE_W) & ~PTE_COW);
+		sfence_vma_addr(va);
+		enabled = intr_save();
+		cow_stats.cow_fault_promotions++;
+		intr_restore(enabled);
+		return 0;
+	}
+	page = kalloc_account_page(account, charge_class);
+	if (page == 0)
+		return -1;
+	memmove(page, (void *)old_pa, PGSIZE);
+	*pte = PA2PTE(page) | ((flags | PTE_W) & ~PTE_COW);
+	sfence_vma_addr(va);
+	if (krelease_account_page((void *)old_pa) < 0)
+		panic("COW page release");
+	{
+		int enabled = intr_save();
+
+		cow_stats.cow_fault_copies++;
+		intr_restore(enabled);
+	}
+	return 0;
 }
 
 // Copy from kernel to user.
@@ -542,6 +918,22 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
 	if (user_range_check(pagetable, dstva, len, PTE_W) < 0)
 		return -1;
+	if (len != 0) {
+		uint64 page = PGROUNDDOWN(dstva);
+		uint64 last = PGROUNDDOWN(dstva + len - 1);
+
+		for (;;) {
+			pte = walk_user_leaf(pagetable, page, PTE_W);
+			if (pte == 0)
+				return -1;
+			if ((*pte & PTE_COW) != 0 &&
+			    uvm_cow_fault(pagetable, page) < 0)
+				return -1;
+			if (page == last)
+				break;
+			page += PGSIZE;
+		}
+	}
 
 	while (len > 0) {
 		va0 = PGROUNDDOWN(dstva);
@@ -559,6 +951,102 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 		dstva = va0 + PGSIZE;
 	}
 	return 0;
+}
+
+static int vm_copy_segments_total(const struct vm_copy_segment *segments,
+				  uint count, uint64 *total_out)
+{
+	uint64 total = 0;
+
+	if (total_out == 0 || count > VM_COPY_SEGMENT_MAX ||
+	    (count != 0 && segments == 0))
+		return -1;
+	for (uint i = 0; i < count; i++) {
+		uint64 length = segments[i].length;
+		uint64 source = (uint64)segments[i].source;
+
+		if (length != 0 &&
+		    (source == 0 || length > (uint64)-1 - source))
+			return -1;
+		if (length > VM_COPYOUTV_MAX_BYTES - total)
+			return -1;
+		total += length;
+	}
+	*total_out = total;
+	return 0;
+}
+
+int copyoutv(pagetable_t pagetable, uint64 dstva,
+	     const struct vm_copy_segment *segments, uint count)
+{
+	pte_t *leaves[VM_COPYOUTV_MAX_USER_PAGES];
+	struct proc *p;
+	uint64 total;
+	uint64 first;
+	uint64 last;
+	uint64 cursor;
+	uint page_count;
+	int result = -1;
+
+	if (vm_copy_segments_total(segments, count, &total) < 0)
+		return -1;
+	if (total == 0)
+		return 0;
+	if (pagetable == 0 || dstva >= MAXVA || total > MAXVA - dstva)
+		return -1;
+	first = PGROUNDDOWN(dstva);
+	last = PGROUNDDOWN(dstva + total - 1);
+	page_count = (uint)((last - first) / PGSIZE + 1);
+	if (page_count > VM_COPYOUTV_MAX_USER_PAGES)
+		return -1;
+	p = curr_proc();
+	if (p == 0 || p->pagetable != pagetable ||
+	    proc_vm_snapshot_begin(p) < 0)
+		return -1;
+
+	for (uint i = 0; i < page_count; i++) {
+		uint64 page = first + (uint64)i * PGSIZE;
+		pte_t *pte = walk_user_leaf(pagetable, page, PTE_W);
+
+		if (pte == 0)
+			goto out_snapshot;
+		leaves[i] = pte;
+	}
+	for (uint i = 0; i < page_count; i++) {
+		uint64 page = first + (uint64)i * PGSIZE;
+		pte_t *pte = leaves[i];
+
+		if ((*pte & PTE_COW) != 0) {
+			if (uvm_cow_fault(pagetable, page) < 0)
+				goto out_snapshot;
+		}
+		if ((*pte & (PTE_W | PTE_COW)) != PTE_W)
+			goto out_snapshot;
+	}
+
+	cursor = dstva;
+	for (uint i = 0; i < count; i++) {
+		const char *source = segments[i].source;
+		uint64 remaining = segments[i].length;
+
+		while (remaining != 0) {
+			uint page_index = (uint)((cursor - first) / PGSIZE);
+			uint64 offset = cursor -
+				(first + (uint64)page_index * PGSIZE);
+			uint64 n = MIN(remaining, PGSIZE - offset);
+
+			memmove((void *)(PTE2PA(*leaves[page_index]) + offset), source,
+				(uint)n);
+			source += n;
+			cursor += n;
+			remaining -= n;
+		}
+	}
+	result = 0;
+
+out_snapshot:
+	proc_vm_snapshot_end(p);
+	return result;
 }
 
 // Copy from user to kernel.
@@ -650,6 +1138,40 @@ int either_copyout(int user_dst, uint64 dst, char *src, uint64 len)
 		memmove((void *)dst, src, len);
 		return 0;
 	}
+}
+
+static int copyoutv_kernel(uint64 dst,
+			   const struct vm_copy_segment *segments, uint count)
+{
+	uint64 total;
+	uint64 cursor;
+
+	if (vm_copy_segments_total(segments, count, &total) < 0)
+		return -1;
+	if (total == 0)
+		return 0;
+	if (dst == 0 || total > (uint64)-1 - dst)
+		return -1;
+	cursor = dst;
+	for (uint i = 0; i < count; i++) {
+		memmove((void *)cursor, segments[i].source,
+			(uint)segments[i].length);
+		cursor += segments[i].length;
+	}
+	return 0;
+}
+
+int either_copyoutv(int user_dst, uint64 dst,
+		    const struct vm_copy_segment *segments, uint count)
+{
+	struct proc *p;
+
+	if (!user_dst)
+		return copyoutv_kernel(dst, segments, count);
+	p = curr_proc();
+	if (p == 0)
+		return -1;
+	return copyoutv(p->pagetable, dst, segments, count);
 }
 
 // Copy from either a user address, or kernel address,

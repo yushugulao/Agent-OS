@@ -28,6 +28,7 @@ enum resource_kind_attribute {
 enum resource_account_kind {
 	RESOURCE_ACCOUNT_EXEC = 1,
 	RESOURCE_ACCOUNT_STORAGE,
+	RESOURCE_ACCOUNT_CACHE,
 };
 
 enum resource_charge_class {

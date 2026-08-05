@@ -674,7 +674,8 @@ def validate(sources: dict[str, str]) -> None:
             f"selector can decide authority before {status}",
         )
     require(
-        "generations[bank]>generations[selected]" in select,
+        "if(selected<0||generations[bank]>generations[selected])"
+        "selected=bank;elseif(generations[bank]==generations[selected])" in select,
         "selector does not choose the highest generation",
     )
     require(
@@ -849,10 +850,30 @@ def validate(sources: dict[str, str]) -> None:
         "verified stale sidecar conversion after catalog miss",
     )
     compact_scope_create = compact(function_body(vfs, "static int vfs_scope_create("))
+    for token in (
+        "vfs_scope_registry_init_locked()",
+        "vfs_scope_find_locked(scope_id)==0",
+        "registry->free_count>0",
+        "registry->active_count+registry->retiring_count<VFS_SCOPE_MAX_ACTIVE",
+        "registry->active_count+registry->retiring_count<VFS_SCOPE_LIFECYCLE_CAP",
+    ):
+        require(
+            token in compact_scope_create,
+            f"scope admission lost O(1) registry accounting: {token}",
+        )
     require(
-        "if(ref->retiring)retiring++" in compact_scope_create
-        and "allocated+retiring<VFS_SCOPE_MAX_ACTIVE" in compact_scope_create,
-        "retiring scope no longer retains its fixed catalog partition",
+        "for(" not in compact_scope_create and "while(" not in compact_scope_create,
+        "scope admission regressed to a registry-wide recount",
+    )
+    retire_add = compact(function_body(vfs, "vfs_scope_retiring_add_locked("))
+    require_order(
+        retire_add,
+        (
+            "registry->active_count--",
+            "registry->retiring_count++",
+            "vfs_scope_registry_check_locked()",
+        ),
+        "active-to-retiring registry accounting",
     )
     for token in (
         "conststructagent_meta_record*records;",
@@ -1279,6 +1300,9 @@ def validate(sources: dict[str, str]) -> None:
         "AGENT_METADATA_EIO_PHASE",
         "AGENT_METADATA_EIO_BANK",
         "AGENT_METADATA_EIO_SKIP_SCOPE_COMMITS",
+    ):
+        require(token in persist_profile, f"persistence profile lost EIO state: {token}")
+    for token in (
         "eio_armed",
         "completed_scope_commits",
     ):
@@ -1292,6 +1316,11 @@ def validate(sources: dict[str, str]) -> None:
     ):
         require(hook in persist_profile_h, f"persistence profile header lost {hook}")
         require(hook in persist_profile, f"persistence profile owner lost {hook}")
+    require(
+        "AGENT_METADATA_EIO_PHASE > 7" in persist_profile
+        and "AGENT_METADATA_EIO_PHASE must be in [1, 7]" in persist_profile,
+        "EIO profile admits the non-I/O commit checkpoint",
+    )
     start = compact(function_body(store, "agent_meta_persist_start_locked("))
     require_order(
         start,
@@ -1313,37 +1342,38 @@ def validate(sources: dict[str, str]) -> None:
     ):
         require(token in eio_checkpoint, f"EIO hook is not job-bound: {token}")
     persist_step = compact(function_body(store, "agent_meta_persist_step_locked("))
-    for phase in (3, 5, 8):
+    for phase in range(1, 8):
         require(
             f"agent_meta_eio_checkpoint({phase})" in persist_step,
             f"EIO phase {phase} has no pre-I/O checkpoint",
         )
     for phase_name in (
         "INVALIDATE",
-        "PUBLISH",
-        "FLUSH_INVALID",
-        "FLUSH_PAYLOAD",
-        "FLUSH_HEADER",
-    ):
-        require(
-            f"caseAGENT_META_PERSIST_{phase_name}:" in persist_step,
-            f"shared EIO phase lost {phase_name}",
-        )
-    require(
-        persist_step.count("uintcheckpoint=agent_meta_persist.phase;") == 2
-        and persist_step.count("agent_meta_eio_checkpoint(checkpoint);") == 2,
-        "shared header/flush EIO phases are not bound to the current phase",
-    )
-    compact_store = compact(store)
-    phase_names = (
-        "INVALIDATE",
-        "FLUSH_INVALID",
         "WRITE",
-        "FLUSH_PAYLOAD",
+        "FLUSH_PREPARED",
         "VERIFY_PAYLOAD",
         "PUBLISH",
         "FLUSH_HEADER",
         "VERIFY_HEADER",
+    ):
+        require(
+            f"caseAGENT_META_PERSIST_{phase_name}:" in persist_step,
+            f"persistence phase lost {phase_name}",
+        )
+    require(
+        "agent_meta_crash_checkpoint(8)" in persist_step,
+        "commit crash checkpoint is not represented",
+    )
+    compact_store = compact(store)
+    phase_names = (
+        "INVALIDATE",
+        "WRITE",
+        "FLUSH_PREPARED",
+        "VERIFY_PAYLOAD",
+        "PUBLISH",
+        "FLUSH_HEADER",
+        "VERIFY_HEADER",
+        "COMMIT",
     )
     for phase, phase_name in enumerate(phase_names, 1):
         require(
@@ -1627,17 +1657,16 @@ def main() -> int:
             "\t\tVFS_SCOPE_NONE, 0, agent_meta_persist.mirroring, phase);",
         ),
         replacement(
-            "drop EIO phase-8 read checkpoint",
+            "drop EIO phase-7 header-read checkpoint",
             "store",
-            "\t\tagent_meta_eio_checkpoint(8);",
+            "\t\tagent_meta_eio_checkpoint(7);",
             "\t\t(void)verified_header;",
         ),
         replacement(
-            "drop shared header EIO checkpoint",
+            "drop prepared-fence EIO checkpoint",
             "store",
-            "\t\tagent_meta_eio_checkpoint(checkpoint);\n"
-            "\t\tif (checkpoint == 1) {",
-            "\t\t(void)checkpoint;\n\t\tif (checkpoint == 1) {",
+            "\t\tagent_meta_eio_checkpoint(3);",
+            "\t\t(void)state;",
         ),
         replacement(
             "drop EIO build fingerprint",
@@ -1760,8 +1789,8 @@ def main() -> int:
         replacement(
             "invert selector generation comparison",
             "store",
-            "generations[bank] > generations[selected]",
-            "generations[bank] < generations[selected]",
+            "if (selected < 0 || generations[bank] > generations[selected])",
+            "if (selected < 0 || generations[bank] < generations[selected])",
         ),
         replacement(
             "write catalog plan into raw bank",
@@ -1926,8 +1955,15 @@ def main() -> int:
         replacement(
             "free retiring catalog partition early",
             "vfs",
-            "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
-            "allocated < VFS_SCOPE_MAX_ACTIVE",
+            "registry->active_count + registry->retiring_count <\n"
+            "\t\t    VFS_SCOPE_MAX_ACTIVE",
+            "registry->active_count < VFS_SCOPE_MAX_ACTIVE",
+        ),
+        replacement(
+            "lose retiring registry accounting",
+            "vfs",
+            "\tregistry->retiring_count++;",
+            "\tregistry->active_count++;",
         ),
         replacement(
             "discard apply plan on progress",
@@ -2034,8 +2070,12 @@ def main() -> int:
         replacement(
             "couple durable readiness to catalog reconciliation",
             "objects",
+            "agent_metadata_durable_status(void)\n"
+            "{\n"
             "\tif (agent_metadata_store_available() &&\n"
             "\t    agent_metadata_store_loaded())",
+            "agent_metadata_durable_status(void)\n"
+            "{\n"
             "\tif (!agent_metadata_catalog_reconcile_pending() &&\n"
             "\t    agent_metadata_store_available() &&\n"
             "\t    agent_metadata_store_loaded())",

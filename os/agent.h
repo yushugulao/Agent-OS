@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "types.h"
 #include "../agent_lifecycle_abi.h"
+#include "../agent_performance_abi.h"
 #include "../agent_resource_abi.h"
 #include "../agent_tool_abi.h"
 
@@ -366,6 +367,10 @@ struct agent_info {
 	uint64 legacy_mailbox_queue_count;
 	uint64 file_scan_deferred;
 	uint64 file_scan_failures;
+	uint64 metadata_journal_txns;
+	uint64 metadata_journal_blocks;
+	uint64 metadata_compactions;
+	uint64 metadata_full_cow_blocks;
 };
 
 struct agent_sched_record {
@@ -746,6 +751,7 @@ struct agent_file_edit_state {
 };
 
 struct proc;
+struct workflow_lifecycle_key;
 struct inode;
 struct thread;
 
@@ -772,11 +778,16 @@ void agent_tick(void);
 void agent_background_request(void);
 void agent_background_maintain(void);
 void agent_background_checkpoint(void);
+int agent_metadata_durability_fence_current(void);
+int agent_metadata_quiescence_fence_current(void);
 void agent_file_request_scan(void);
-int agent_scope_reclaim_begin(uint scope_id, uint64 *metadata_target);
-int agent_scope_reclaim_metadata_done(uint scope_id, uint64 metadata_target);
+int agent_scope_reclaim_begin(
+	uint scope_id, struct workflow_lifecycle_key, uint64 *metadata_target);
+int agent_scope_reclaim_metadata_done(
+	uint scope_id, struct workflow_lifecycle_key, uint64 metadata_target);
 void agent_file_version_reclaim(struct inode *ip);
 int agent_edit_write_allowed(struct inode *ip);
+int agent_edit_write_lease_allowed(struct inode *ip, uint64 *);
 int agent_edit_truncate_allowed(struct inode *ip);
 int agent_edit_unlink_allowed(struct inode *ip);
 void agent_edit_note_write(struct inode *ip);
@@ -796,6 +807,7 @@ int sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 				      uint64 flags, uint64 expected_id,
 				      uint64 expected_generation);
 int sys_agent_resource_snapshot(uint64 addr, uint64 user_size);
+int sys_agent_performance_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_scope_delegate_fd(int fd);
 int sys_agent_info(uint64 addr);
 int sys_agent_sched_snapshot(uint64 recordsaddr, int max);

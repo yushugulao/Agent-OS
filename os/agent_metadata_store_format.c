@@ -46,6 +46,13 @@ agent_meta_format_store_bytes(uint64 count, uint *bytes)
 }
 
 int
+agent_meta_format_store_v7_bytes(uint64 count, uint *bytes)
+{
+	return format_bytes(count, sizeof(struct agent_durable_arena),
+			    sizeof(struct agent_meta_record), bytes);
+}
+
+int
 agent_meta_format_store_v5_bytes(uint64 count, uint *bytes)
 {
 	return format_bytes(count, 0, sizeof(struct agent_meta_record_v5), bytes);
@@ -137,6 +144,13 @@ agent_meta_format_records_valid(struct agent_meta_store *store)
 }
 
 int
+agent_meta_format_v7_records_valid(struct agent_meta_store *store)
+{
+	return agent_durable_arena_validate(&store->durable) >= 0 &&
+	       records_valid(store, sizeof(struct agent_meta_record), 0);
+}
+
+int
 agent_meta_format_recover_identifiers(const struct agent_meta_store *store)
 {
 	for (uint64 i = 0; i < store->header.count; i++) {
@@ -153,6 +167,17 @@ int
 agent_meta_format_v5_records_valid(struct agent_meta_store *store)
 {
 	return records_valid(store, sizeof(struct agent_meta_record_v5), 1);
+}
+
+int
+agent_meta_format_migrate_v7(struct agent_meta_store *store)
+{
+	if (store == 0 || store->header.version != AGENT_META_STORE_VERSION_V7 ||
+	    !agent_meta_format_v7_records_valid(store))
+		return -1;
+	store->header.version = AGENT_META_STORE_VERSION;
+	store->header.payload_hash = agent_meta_format_store_hash(store);
+	return store->header.payload_hash ? 0 : -1;
 }
 
 int

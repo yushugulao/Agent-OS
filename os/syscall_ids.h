@@ -369,3 +369,4 @@
 #define SYS_agent_audit_receipt 557
 #define SYS_kernel_work_receipt_snapshot 558
 #define SYS_agent_resource_snapshot 559
+#define SYS_agent_performance_snapshot 560

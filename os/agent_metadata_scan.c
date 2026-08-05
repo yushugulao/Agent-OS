@@ -170,6 +170,11 @@ static void scan_pause(int retry, int resume) {
 		scan.start = 0;
 		scan_ctl.pending = 1;
 		scan.next_tick = current;
+	} else if (!retry && !resume && scan_ctl.pending == 0) {
+		/* A clean reconciliation is one-shot.  Only an explicit request,
+		 * boot/recovery gap, or retry arms another directory sweep. */
+		scan_ctl.on = 0;
+		scan.next_tick = 0;
 	} else {
 		if (retry) {
 			if (!resume || scan_ctl.pending > 0)

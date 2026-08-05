@@ -179,6 +179,13 @@ def main() -> int:
 
     plain = "baseline_ucore/user/src/rp_seed_orch.c"
     _reject(_case(
+        sources,
+        plain,
+        "record_workflow_timing",
+        "char line[512];",
+        "return 1;\n\tchar line[512];",
+    ))
+    _reject(_case(
         sources, plain, "main", "workflow_start = get_mtime();",
         "workflow_start = 7;",
     ))
@@ -213,6 +220,13 @@ def main() -> int:
     ))
 
     agentos = "user/src/rp_agentos_orch.c"
+    _reject(_case(
+        sources,
+        agentos,
+        "record_workflow_timing",
+        "char line[640];",
+        "return 1;\n\tchar line[640];",
+    ))
     _reject(_text_case(
         sources,
         agentos,
@@ -576,9 +590,295 @@ def main() -> int:
     ))
     changed = dict(sources)
     kernel_ids = "os/syscall_ids.h"
+    user_ids = "user/lib/syscall_ids.h"
     changed[kernel_ids] = changed[kernel_ids].replace(
         "SYS_agent_resource_snapshot 559",
         "SYS_agent_resource_snapshot 558",
+        1,
+    )
+    _reject(changed)
+
+    performance_abi = "agent_performance_abi.h"
+    _reject(_case(
+        sources,
+        observer,
+        "sys_agent_performance_snapshot",
+        "struct agent_performance_snapshot snapshot;",
+        "return AGENT_STATUS_OK;\n\tstruct agent_performance_snapshot snapshot;",
+    ))
+    _reject(_text_case(
+        sources,
+        performance_abi,
+        "AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL 1U",
+        "AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL 2U",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "agent_performance_snapshot_authorized",
+        "p->resource_domain_admin",
+        "p->is_agent",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "agent_performance_snapshot_authorized",
+        "exec_policy_process_bootstrap(p)",
+        "exec_policy_process_allows_role(p, p->agent_role)",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "agent_performance_snapshot_authorized",
+        "return p != 0 && p->resource_domain_admin",
+        "return p != 0 && !p->is_agent && p->resource_domain_admin",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "sys_agent_performance_snapshot",
+        "user_size < 2 * sizeof(unsigned int)",
+        "user_size < sizeof(unsigned int)",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "sys_agent_performance_snapshot",
+        "copy_size = MIN(user_size, sizeof(snapshot));",
+        "copy_size = sizeof(snapshot);",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "sys_agent_performance_snapshot",
+        "snapshot.block_physical_writes = io.successful_writes;",
+        "snapshot.block_physical_writes = io.writes;",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "sys_agent_performance_snapshot",
+        "snapshot.block_physical_reads = io.reads;",
+        "snapshot.block_physical_reads = io.writes;",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "sys_agent_performance_snapshot",
+        "snapshot.overwrite_prereads_skipped =\n\t\tkernel.overwrite_prereads_skipped;",
+        "snapshot.overwrite_prereads_skipped = 0;",
+    ))
+    _reject(_case(
+        sources,
+        "os/performance_stats.c",
+        "kernel_performance_overwrite_preread_skipped",
+        "performance_stats.overwrite_prereads_skipped += blocks;",
+        "performance_stats.overwrite_prereads_skipped += 0;",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "sys_agent_performance_snapshot",
+        "copyout(p->pagetable, addr, (char *)&snapshot,",
+        "copyout_observer(p->pagetable, addr, (char *)&snapshot,",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfer",
+        "io_policy.physical_reads++;",
+        "io_policy.physical_writes++;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_physical_snapshot",
+        "stats->reads = io_policy.physical_reads;",
+        "stats->reads = io_policy.physical_writes;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bpublish_overwrite",
+        "kernel_performance_overwrite_preread_skipped(1);",
+        "kernel_performance_overwrite_preread_skipped(0);",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bprepare_overwrite",
+        "receipt->skipped_preread = 1;",
+        "receipt->skipped_preread = 0;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfer",
+        "else if (transfer == BIO_TRANSFER_WRITE)\n\t\tio_policy.successful_writes++;",
+        "if (transfer == BIO_TRANSFER_WRITE)\n\t\tio_policy.successful_writes++;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfer",
+        "io_policy.successful_flushes++;",
+        "io_policy.failed_transfers++;",
+    ))
+    _reject(_case(
+        sources,
+        "os/virtio_disk.c",
+        "disk_submit",
+        "1, KERNEL_PERFORMANCE_VIRTIO_SINGLE, 0",
+        "1, KERNEL_PERFORMANCE_VIRTIO_READ_BATCH, 0",
+    ))
+    _reject(_case(
+        sources,
+        "os/virtio_disk.c",
+        "disk_submit_indirect",
+        "KERNEL_PERFORMANCE_VIRTIO_READ_BATCH,\n\t\t1",
+        "KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH,\n\t\t1",
+    ))
+    _reject(_case(
+        sources,
+        "os/virtio_disk.c",
+        "virtio_disk_read_batch",
+        "&buffers[offset], batch, VIRTIO_BLK_T_IN",
+        "&buffers[offset], batch, VIRTIO_BLK_T_OUT",
+    ))
+    _reject(_case(
+        sources,
+        "os/fs_epoch.c",
+        "fs_epoch_commit",
+        "epoch.totals.successful_commits++;",
+        "epoch.totals.failed_commits++;",
+    ))
+    _reject(_case(
+        sources,
+        "os/vm.c",
+        "uvm_cow_fault",
+        "cow_stats.cow_fault_copies++;",
+        "cow_stats.cow_fault_promotions++;",
+    ))
+    _reject(_case(
+        sources,
+        "os/loader.c",
+        "user_image_rx_cache_lookup",
+        "user_image_rx_cache_stats.exec_cache_hits++;",
+        "user_image_rx_cache_stats.exec_cache_misses++;",
+    ))
+    _reject(_case(
+        sources,
+        "os/exec_policy.c",
+        "exec_policy_process_bootstrap",
+        "EXEC_FLAG_BOOTSTRAP",
+        "EXEC_FLAG_TRUSTED",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "sys_agent_performance_snapshot",
+        "snapshot.sample_tick = get_cycle();",
+        "snapshot.sample_tick = 0;",
+    ))
+    showcase = "user/src/labdemo_ucore.c"
+    _reject(_case(
+        sources,
+        showcase,
+        "take_performance_snapshot",
+        "memset(receipt, 0, sizeof(*receipt));",
+        "receipt->observer_pid = 0;",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "performance_delta",
+        "return after - before;",
+        "return 0;",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "print_mechanism_delta",
+        "before_receipt->observer_pid == after_receipt->observer_pid",
+        "before_receipt->observer_pid != after_receipt->observer_pid",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "print_mechanism_delta",
+        "before->observer_lifecycle_id == after->observer_lifecycle_id",
+        "before->observer_lifecycle_id != after->observer_lifecycle_id",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "print_mechanism_delta",
+        "before->observer_lifecycle_generation ==\n\t\t      after->observer_lifecycle_generation",
+        "before->observer_lifecycle_generation !=\n\t\t      after->observer_lifecycle_generation",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "print_mechanism_delta",
+        "before->sample_tick < after->sample_tick",
+        "before->sample_tick <= after->sample_tick",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "print_mechanism_delta",
+        "before_epoch_commits=%llu after_epoch_commits=%llu",
+        "epoch_commits=%llu epoch_commits_delta=%llu",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "print_mechanism_delta",
+        "before->fs_epoch_commits, after->fs_epoch_commits,",
+        "after->fs_epoch_commits, after->fs_epoch_commits,",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "run_orchestrator",
+        "take_performance_snapshot(&measurement_warmup);",
+        "memset(&measurement_warmup, 0, sizeof(measurement_warmup));",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "run_compat_workload",
+        "take_performance_snapshot(&state->core_ack);\n"
+        "\tmetrics->workload_syscalls = performance_delta(\n"
+        "\t\tstate->core_start.performance.snapshot.observer_workload_syscalls,\n"
+        "\t\tstate->core_ack.snapshot.observer_workload_syscalls);\n"
+        "\tcheck(metrics->workload_syscalls != 0, \"compat workload syscall receipt\");\n"
+        "\tdemo_quiescence_fence(\"compat\", \"ACK_SETTLED\", 3,",
+        "demo_quiescence_fence(\"compat\", \"ACK_SETTLED\", 3,\n"
+        "\t\t\t      &state->ack_settled);\n"
+        "\ttake_performance_snapshot(&state->core_ack);\n"
+        "\t/* forged late core boundary */\n"
+        "\tdemo_quiescence_fence(\"compat\", \"ACK_SETTLED_FORGED\", 3,",
+    ))
+    changed = dict(sources)
+    changed[kernel_ids] = changed[kernel_ids].replace(
+        "SYS_agent_performance_snapshot 560",
+        "SYS_agent_performance_snapshot 559",
+        1,
+    )
+    _reject(changed)
+    changed = dict(sources)
+    changed[user_ids] = changed[user_ids].replace(
+        "SYS_agent_performance_snapshot 560",
+        "SYS_agent_performance_snapshot 559",
+        1,
+    )
+    _reject(changed)
+    changed = dict(sources)
+    arch_ids = "user/lib/arch/riscv/syscall_ids.h.in"
+    changed[arch_ids] = changed[arch_ids].replace(
+        "__NR_agent_performance_snapshot 560",
+        "__NR_agent_performance_snapshot 559",
         1,
     )
     _reject(changed)

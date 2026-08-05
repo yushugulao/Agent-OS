@@ -56,6 +56,7 @@ _Static_assert(1ULL * PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT >=
 	((uint)THREAD_RESOURCE_RESERVED_LIMIT * KSTACK_PAGES_PER_THREAD)
 
 struct file;
+struct file_close_receipt;
 struct proc;
 struct user_image;
 struct agent_timeline_wait_state;
@@ -145,6 +146,9 @@ struct thread {
 	int kernel_receipt_syscall_id;
 	int kernel_work_target_syscall_id;
 	uint kernel_work_publish_receipt;
+	/* BIO request state occupies the padding before the 64-bit identity. */
+	uint io_request_flags;
+	uint64 io_request_id;
 	uint io_request_depth;
 	uint io_request_owner;
 	uint io_request_class;
@@ -426,12 +430,15 @@ int fdinstall(int, struct file *);
 void fdrelease(int);
 int fd_is_reserved(struct file *);
 struct file *fdget(int);
+/* -1 invalid, 0 detached/non-final, 1 detached with a prepared receipt. */
+int fdclose_prepare(int, struct file_close_receipt *);
 int fdclose(int);
 int proc_file_slot_reserve(struct proc *,
 			   struct resource_account_handle *, int *);
 int proc_file_slots_reserve(struct proc *, uint,
 			    struct resource_account_handle *, int *);
 void proc_file_slot_release(struct resource_account_handle, int);
+void proc_resource_account_reap(struct resource_account_handle);
 int init_stdio(struct proc *);
 int push_argv(struct proc *, char **);
 int push_argv_image(pagetable_t, uint64, struct trapframe *, char **);

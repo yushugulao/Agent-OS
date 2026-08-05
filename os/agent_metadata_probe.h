@@ -2,6 +2,7 @@
 #define AGENT_METADATA_PROBE_H
 
 #include "agent_metadata_internal.h"
+#include "agent_metadata_journal.h"
 #include "agent_metadata_store_format.h"
 
 #define AGENT_META_BANK_VALID 0
@@ -31,5 +32,7 @@ int agent_metadata_probe_confirm(const struct agent_metadata_probe_key *, int,
 void agent_metadata_probe_finish(uint64);
 void agent_metadata_probe_catalog_progress(int, uint);
 void agent_metadata_probe_progress(uint64 *, int *, uint *, uint *);
+int agent_metadata_probe_journal_cursor(
+	int, struct agent_meta_journal_cursor *);
 
 #endif

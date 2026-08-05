@@ -1,9 +1,18 @@
 #include "agent.h"
+#include "agent_internal.h"
+#include "bio.h"
 #include "defs.h"
 #include "exec_policy.h"
+#include "fs_epoch.h"
 #include "kalloc.h"
+#include "loader.h"
+#include "open_file_io_lease.h"
+#include "performance_stats.h"
 #include "proc.h"
 #include "resource_controller.h"
+#include "syscall_ids.h"
+#include "timer.h"
+#include "vm.h"
 
 _Static_assert((int)AGENT_RESOURCE_PROCESS == (int)RESOURCE_PROCESS,
 	       "resource snapshot process kind drift");
@@ -29,6 +38,25 @@ static int agent_resource_snapshot_authorized(const struct proc *p)
 {
 	return p != 0 && !p->is_agent && p->resource_domain_admin &&
 	       exec_policy_process_bootstrap(p);
+}
+
+static int agent_performance_snapshot_authorized(struct proc *p)
+{
+	/* Global counters are restricted to the signed bootstrap authority. */
+	return p != 0 && p->resource_domain_admin &&
+	       exec_policy_process_bootstrap(p);
+}
+
+static uint64 agent_performance_workload_syscalls(const struct proc *p)
+{
+	return p->syscall_count[SYS_openat] +
+	       p->syscall_count[SYS_read] +
+	       p->syscall_count[SYS_write] +
+	       p->syscall_count[SYS_close] +
+	       p->syscall_count[SYS_unlinkat] +
+	       p->syscall_count[SYS_fsync] +
+	       p->syscall_count[SYS_agent_file_meta_set] +
+	       p->syscall_count[SYS_agent_file_query];
 }
 
 int sys_agent_resource_snapshot(uint64 addr, uint64 user_size)
@@ -71,6 +99,86 @@ int sys_agent_resource_snapshot(uint64 addr, uint64 user_size)
 		out->reserved_used = in->reserved_used;
 		out->reserved_pending = in->reserved_pending;
 	}
+	if (copyout(p->pagetable, addr, (char *)&snapshot, copy_size) < 0)
+		return -1;
+	return AGENT_STATUS_OK;
+}
+
+int sys_agent_performance_snapshot(uint64 addr, uint64 user_size)
+{
+	struct agent_performance_snapshot snapshot;
+	struct bio_physical_stats io;
+	struct fs_epoch_stats epoch;
+	struct uvm_cow_stats cow;
+	struct user_image_rx_cache_stats exec_cache;
+	struct kernel_performance_stats kernel;
+	struct open_file_io_lease_stats file_auth;
+	struct proc *p = curr_proc();
+	uint64 copy_size;
+
+	if (!agent_performance_snapshot_authorized(p))
+		return AGENT_STATUS_DENIED;
+	if (user_size < 2 * sizeof(unsigned int))
+		return AGENT_STATUS_BAD_PARAM;
+	copy_size = MIN(user_size, sizeof(snapshot));
+	if (user_range_check(p->pagetable, addr, copy_size, PTE_W) < 0)
+		return -1;
+	memset(&snapshot, 0, sizeof(snapshot));
+	memset(&io, 0, sizeof(io));
+	memset(&epoch, 0, sizeof(epoch));
+	memset(&cow, 0, sizeof(cow));
+	memset(&exec_cache, 0, sizeof(exec_cache));
+	memset(&kernel, 0, sizeof(kernel));
+	memset(&file_auth, 0, sizeof(file_auth));
+	bio_physical_snapshot(&io);
+	fs_epoch_stats_snapshot(&epoch);
+	uvm_cow_stats_snapshot(&cow);
+	user_image_rx_cache_stats_snapshot(&exec_cache);
+	kernel_performance_stats_snapshot(&kernel);
+	open_file_io_lease_stats_snapshot(&file_auth);
+	snapshot.version = AGENT_PERFORMANCE_SNAPSHOT_VERSION;
+	snapshot.struct_size = sizeof(snapshot);
+	snapshot.counter_scope = AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL;
+	/* Ordering token only: keep raw cycle precision for short core intervals. */
+	snapshot.sample_tick = get_cycle();
+	snapshot.observer_lifecycle_id = p->workflow_lifecycle_id;
+	snapshot.observer_lifecycle_generation =
+		p->workflow_lifecycle_generation;
+	snapshot.fs_epoch_commits = epoch.successful_commits;
+	snapshot.fs_epoch_buffers_staged = epoch.staged_buffers;
+	snapshot.block_physical_writes = io.successful_writes;
+	snapshot.block_physical_reads = io.reads;
+	snapshot.block_durable_flushes = io.successful_flushes;
+	snapshot.fs_epoch_deduplicated_stages =
+		epoch.deduplicated_stages;
+	snapshot.cow_pages_shared = cow.cow_shared_mappings;
+	snapshot.cow_pages_copied = cow.cow_fault_copies;
+	snapshot.cow_fault_promotions = cow.cow_fault_promotions;
+	snapshot.exec_cache_hits = exec_cache.exec_cache_hits;
+	snapshot.exec_cache_misses = exec_cache.exec_cache_misses;
+	snapshot.exec_cache_shared_pages =
+		exec_cache.exec_cache_shared_pages;
+	snapshot.exec_cache_evictions = exec_cache.exec_cache_evictions;
+	snapshot.observer_workload_syscalls =
+		agent_performance_workload_syscalls(p);
+	snapshot.directory_block_probes = kernel.directory_block_probes;
+	snapshot.directory_entries_examined =
+		kernel.directory_entries_examined;
+	snapshot.virtio_notifications = kernel.virtio_notifications;
+	snapshot.virtio_submitted_requests = kernel.virtio_submitted_requests;
+	snapshot.virtio_write_batch_calls = kernel.virtio_write_batch_calls;
+	snapshot.virtio_batched_write_requests =
+		kernel.virtio_batched_write_requests;
+	snapshot.virtio_indirect_write_batch_calls =
+		kernel.virtio_indirect_write_batch_calls;
+	snapshot.virtio_read_batch_calls = kernel.virtio_read_batch_calls;
+	snapshot.virtio_batched_read_requests =
+		kernel.virtio_batched_read_requests;
+	snapshot.overwrite_prereads_skipped =
+		kernel.overwrite_prereads_skipped;
+	snapshot.file_auth_full = file_auth.full_auth;
+	snapshot.file_auth_lease_hits = file_auth.lease_hit;
+	snapshot.file_auth_revalidations = file_auth.revalidation;
 	if (copyout(p->pagetable, addr, (char *)&snapshot, copy_size) < 0)
 		return -1;
 	return AGENT_STATUS_OK;

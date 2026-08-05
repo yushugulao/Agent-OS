@@ -38,31 +38,43 @@ out:
 	agent_metadata_txn_unlock();
 }
 
-static void agent_fs_apply_inode_event(struct inode *ip, char *note,
-				       int dirty, int remove) {
-	struct agent_catalog_view view;
-	struct agent_catalog_edit edit;
-	struct agent_file_meta *meta;
-	int slot, persist, published;
-	uint scope_id;
+static void agent_fs_publish_content(struct inode *ip) {
+	struct agent_file_content_receipt receipt;
+	int reconcile = 0;
+
 	if (!agent_metadata_inode_trackable(ip))
 		return;
-	if (dirty || remove)
-		agent_file_state_content_bump(ip);
-	published = remove ? 0 : agent_file_state_size_publish(ip, dirty);
-	if (!remove && !dirty && !published)
+	if (!agent_file_state_content_publish(ip, &receipt) ||
+	    ip->agent_meta_slot <= 0 ||
+	    ip->agent_meta_version != AGENT_INODE_META_VERSION) {
+		agent_file_request_scan();
 		return;
+	}
+	if (ip->agent_meta_flags & AGENT_FILE_META_F_PERSIST) {
+		if (agent_metadata_catalog_journal_note_content(&receipt) < 0)
+			reconcile = 1;
+		agent_metadata_store_mark_dirty(ip->vfs_scope_id);
+	}
+	if (reconcile ||
+	    (ip->agent_meta_flags & AGENT_FILE_META_F_AUTOSCAN))
+		agent_file_request_scan();
+}
+
+static void agent_fs_remove_inode(struct inode *ip) {
+	struct agent_catalog_view view;
+	int slot, persist;
+	uint scope_id;
+
+	if (!agent_metadata_inode_trackable(ip))
+		return;
+	agent_file_state_content_bump(ip);
 	scope_id = ip->vfs_scope_id;
-	if (agent_file_state_index_deferred(ip))
+	if (agent_file_state_index_deferred(ip)) {
+		agent_file_request_scan();
 		return;
+	}
 	if (!agent_metadata_txn_try_external()) {
-		if (!remove && published > 0 &&
-		    (ip->agent_meta_flags & AGENT_FILE_META_F_PERSIST))
-			agent_metadata_store_mark_dirty(scope_id);
-		else if (remove)
-			agent_file_request_scan();
-		else if (published < 0)
-			agent_file_request_scan();
+		agent_file_request_scan();
 		return;
 	}
 	if (!agent_metadata_inode_trackable(ip) ||
@@ -75,28 +87,10 @@ static void agent_fs_apply_inode_event(struct inode *ip, char *note,
 	    view.meta->incarnation != ip->vfs_incarnation)
 		goto rescan;
 	persist = view.meta->flags & AGENT_FILE_META_F_PERSIST;
-	if (remove) {
-		if (agent_metadata_catalog_clear_slot(slot) < 0)
-			goto rescan;
-		agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);
-		agent_metadata_scan_slot_freed(scope_id);
-	} else {
-		if (agent_metadata_catalog_edit_begin(slot, scope_id, &edit) < 0)
-			goto rescan;
-		meta = edit.meta;
-		meta->size = ip->size;
-		if (published > 0)
-			agent_file_state_overlay_published_size(meta, scope_id);
-		else {
-			meta->updated_tick = agent_file_state_now();
-			meta->fs_generation = agent_file_state_generation_next(scope_id);
-		}
-		if (note && note[0] &&
-		    (meta->flags & AGENT_FILE_META_F_AUTOSCAN))
-			safestrcpy(meta->summary, note, sizeof(meta->summary));
-		if (agent_metadata_catalog_edit_commit(&edit, 0) < 0)
-			goto rescan;
-	}
+	if (agent_metadata_catalog_clear_slot(slot) < 0)
+		goto rescan;
+	agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);
+	agent_metadata_scan_slot_freed(scope_id);
 	if (persist)
 		agent_metadata_store_mark_dirty(scope_id);
 	goto out;
@@ -107,17 +101,13 @@ out:
 }
 
 void agent_fs_note_write(struct inode *ip) {
-	agent_fs_apply_inode_event(ip, "file content updated", 1, 0);
-}
-
-void agent_fs_sync_write(struct inode *ip) {
-	agent_fs_apply_inode_event(ip, "file content updated", 0, 0);
+	agent_fs_publish_content(ip);
 }
 
 void agent_fs_note_truncate(struct inode *ip) {
-	agent_fs_apply_inode_event(ip, "file truncated", 1, 0);
+	agent_fs_publish_content(ip);
 }
 
 void agent_fs_note_delete(struct inode *ip) {
-	agent_fs_apply_inode_event(ip, 0, 0, 1);
+	agent_fs_remove_inode(ip);
 }

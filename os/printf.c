@@ -1,6 +1,8 @@
 #include <stdarg.h>
 #include "console.h"
 #include "defs.h"
+extern void shutdown(void);
+
 static char digits[] = "0123456789abcdef";
 
 static void printint(unsigned long long value, int base, int negative)
@@ -40,8 +42,14 @@ void printf(char *fmt, ...)
 	int i, c, length;
 	char *s;
 
-	if (fmt == 0)
-		panic("null fmt");
+	if (fmt == 0) {
+		static const char fatal[] = "[PANIC] null printf format\n";
+
+		for (unsigned int i = 0; i < sizeof(fatal) - 1; i++)
+			consputc(fatal[i]);
+		shutdown();
+		__builtin_unreachable();
+	}
 
 	va_start(ap, fmt);
 	for (i = 0; (c = fmt[i] & 0xff) != 0; i++) {

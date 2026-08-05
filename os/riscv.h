@@ -253,8 +253,12 @@ static inline int intr_get()
 
 static inline int intr_save()
 {
-	int enabled = intr_get();
-	intr_off();
+	uint64 status = r_sstatus();
+	int enabled = (status & SSTATUS_SIE) != 0;
+
+	/* Nested critical sections need no second CSR write. */
+	if (enabled)
+		w_sstatus(status & ~SSTATUS_SIE);
 	return enabled;
 }
 
@@ -262,8 +266,6 @@ static inline void intr_restore(int enabled)
 {
 	if (enabled)
 		intr_on();
-	else
-		intr_off();
 }
 
 static inline uint64 r_sp()
@@ -301,6 +303,11 @@ static inline void sfence_vma()
 	asm volatile("sfence.vma zero, zero" ::: "memory");
 }
 
+static inline void sfence_vma_addr(uint64 va)
+{
+	asm volatile("sfence.vma %0, zero" : : "r"(va) : "memory");
+}
+
 #define PGSIZE 4096 // bytes per page
 #define PGSHIFT 12 // bits of offset within a page
 
@@ -313,6 +320,7 @@ static inline void sfence_vma()
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // 1 -> user can access
+#define PTE_COW (1L << 8) // RSW: writable after a private copy
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)

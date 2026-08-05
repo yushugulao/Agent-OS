@@ -34,6 +34,11 @@ _Static_assert(VFS_SCOPE_RECLAIM_BEGIN < VFS_SCOPE_RECLAIM_FILES &&
 struct vfs_scope_ref {
 	int used;
 	uint scope_id;
+	uint hash_prev;
+	uint hash_next;
+	uint free_next;
+	uint retire_prev;
+	uint retire_next;
 	int retiring;
 	int preserve_on_retire;
 	uint reclaim_phase;
@@ -42,20 +47,256 @@ struct vfs_scope_ref {
 	struct resource_account_handle storage_account;
 };
 
-static struct vfs_scope_ref vfs_scope_refs[NPROC];
-static uint vfs_scope_reap_cursor;
+/*
+ * Scope admission is bounded by the lifecycle ledger, not the process table.
+ * Keep a compact, hashed registry so the VFS authorization path never pays an
+ * entire process-table scan. Links encode slot + 1; zero is the null link.
+ */
+struct vfs_scope_registry {
+	struct vfs_scope_ref refs[VFS_SCOPE_LIFECYCLE_CAP];
+	uint hash_heads[VFS_SCOPE_LIFECYCLE_CAP];
+	uint free_head;
+	uint retiring_head;
+	uint retiring_tail;
+	uint retiring_cursor;
+	uint used_count;
+	uint active_count;
+	uint retiring_count;
+	uint free_count;
+	int initialized;
+};
+
+static struct vfs_scope_registry vfs_scope_registry;
 
 _Static_assert(VFS_SCOPE_MAX_ACTIVE == WORKFLOW_LIFECYCLE_MAX_ACTIVE,
 	       "workflow active limit mismatch");
 _Static_assert(VFS_SCOPE_LIFECYCLE_CAP == WORKFLOW_LIFECYCLE_CAP,
 	       "workflow lifecycle limit mismatch");
+_Static_assert(VFS_SCOPE_LIFECYCLE_CAP > 0,
+	       "workflow scope registry must have capacity");
+
+static uint vfs_scope_link(uint slot)
+{
+	return slot + 1;
+}
+
+static uint vfs_scope_slot(uint link)
+{
+	if (link == 0 || link > VFS_SCOPE_LIFECYCLE_CAP)
+		panic("workflow scope registry link");
+	return link - 1;
+}
+
+static uint vfs_scope_hash(uint scope_id)
+{
+	/* Dynamic scope ids are monotonic, so low-bit bucketing is well spread. */
+	return scope_id % VFS_SCOPE_LIFECYCLE_CAP;
+}
+
+static void vfs_scope_registry_init_locked(void)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+
+	if (registry->initialized)
+		return;
+	for (uint i = 0; i < VFS_SCOPE_LIFECYCLE_CAP; i++)
+		registry->refs[i].free_next =
+			i + 1 < VFS_SCOPE_LIFECYCLE_CAP ? vfs_scope_link(i + 1) : 0;
+	registry->free_head = vfs_scope_link(0);
+	registry->free_count = VFS_SCOPE_LIFECYCLE_CAP;
+	registry->initialized = 1;
+}
+
+static void vfs_scope_registry_check_locked(void)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+
+	if (registry->used_count + registry->free_count !=
+			VFS_SCOPE_LIFECYCLE_CAP ||
+	    registry->active_count + registry->retiring_count >
+			registry->used_count ||
+	    (registry->retiring_count == 0) !=
+			(registry->retiring_head == 0) ||
+	    (registry->retiring_count == 0) !=
+			(registry->retiring_tail == 0) ||
+	    (registry->retiring_count == 0) !=
+			(registry->retiring_cursor == 0))
+		panic("workflow scope registry counts");
+}
+
+static struct vfs_scope_ref *vfs_scope_find_locked(uint scope_id)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	uint link;
+
+	vfs_scope_registry_init_locked();
+	link = registry->hash_heads[vfs_scope_hash(scope_id)];
+	for (uint visited = 0; link != 0; visited++) {
+		struct vfs_scope_ref *ref;
+
+		if (visited >= VFS_SCOPE_LIFECYCLE_CAP)
+			panic("workflow scope hash cycle");
+		ref = &registry->refs[vfs_scope_slot(link)];
+		if (!ref->used)
+			panic("workflow scope hash free entry");
+		if (ref->scope_id == scope_id)
+			return ref;
+		link = ref->hash_next;
+	}
+	return 0;
+}
+
+static struct vfs_scope_ref *
+vfs_scope_registry_insert_locked(uint scope_id,
+				 struct workflow_lifecycle_key lifecycle,
+				 struct resource_account_handle storage)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	struct vfs_scope_ref *ref;
+	uint bucket;
+	uint link;
+
+	vfs_scope_registry_init_locked();
+	if (registry->free_head == 0 || vfs_scope_find_locked(scope_id) != 0)
+		return 0;
+	link = registry->free_head;
+	ref = &registry->refs[vfs_scope_slot(link)];
+	registry->free_head = ref->free_next;
+	memset(ref, 0, sizeof(*ref));
+	ref->used = 1;
+	ref->scope_id = scope_id;
+	ref->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
+	ref->lifecycle = lifecycle;
+	ref->storage_account = storage;
+	bucket = vfs_scope_hash(scope_id);
+	ref->hash_next = registry->hash_heads[bucket];
+	if (ref->hash_next != 0)
+		registry->refs[vfs_scope_slot(ref->hash_next)].hash_prev = link;
+	registry->hash_heads[bucket] = link;
+	registry->free_count--;
+	registry->used_count++;
+	registry->active_count++;
+	vfs_scope_registry_check_locked();
+	return ref;
+}
+
+static void vfs_scope_retiring_add_locked(struct vfs_scope_ref *ref)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	uint slot = ref - registry->refs;
+	uint link = vfs_scope_link(slot);
+
+	if (!ref->used || ref->retiring || registry->active_count == 0)
+		panic("workflow scope retire transition");
+	ref->retiring = 1;
+	ref->retire_prev = registry->retiring_tail;
+	ref->retire_next = 0;
+	if (registry->retiring_tail != 0)
+		registry->refs[vfs_scope_slot(registry->retiring_tail)].retire_next =
+			link;
+	else
+		registry->retiring_head = link;
+	registry->retiring_tail = link;
+	if (registry->retiring_cursor == 0)
+		registry->retiring_cursor = link;
+	registry->active_count--;
+	registry->retiring_count++;
+	vfs_scope_registry_check_locked();
+}
+
+static void vfs_scope_retiring_remove_locked(struct vfs_scope_ref *ref)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	uint slot = ref - registry->refs;
+	uint link = vfs_scope_link(slot);
+	uint next;
+
+	if (!ref->used || !ref->retiring || registry->retiring_count == 0)
+		panic("workflow scope retire removal");
+	next = ref->retire_next;
+	if (ref->retire_prev != 0)
+		registry->refs[vfs_scope_slot(ref->retire_prev)].retire_next = next;
+	else
+		registry->retiring_head = next;
+	if (next != 0)
+		registry->refs[vfs_scope_slot(next)].retire_prev =
+			ref->retire_prev;
+	else
+		registry->retiring_tail = ref->retire_prev;
+	if (registry->retiring_cursor == link)
+		registry->retiring_cursor = next != 0 ? next :
+			registry->retiring_head;
+	ref->retire_prev = 0;
+	ref->retire_next = 0;
+	ref->retiring = 0;
+	registry->retiring_count--;
+	if (registry->retiring_count == 0)
+		registry->retiring_cursor = 0;
+	vfs_scope_registry_check_locked();
+}
+
+static void vfs_scope_registry_remove_locked(struct vfs_scope_ref *ref)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	uint slot = ref - registry->refs;
+	uint link = vfs_scope_link(slot);
+	uint bucket;
+
+	if (!ref->used || registry->used_count == 0)
+		panic("workflow scope registry removal");
+	if (ref->retiring)
+		vfs_scope_retiring_remove_locked(ref);
+	else if (workflow_lifecycle_key_valid(ref->lifecycle)) {
+		if (registry->active_count == 0)
+			panic("workflow scope active removal");
+		registry->active_count--;
+	}
+	bucket = vfs_scope_hash(ref->scope_id);
+	if (ref->hash_prev != 0)
+		registry->refs[vfs_scope_slot(ref->hash_prev)].hash_next =
+			ref->hash_next;
+	else
+		registry->hash_heads[bucket] = ref->hash_next;
+	if (ref->hash_next != 0)
+		registry->refs[vfs_scope_slot(ref->hash_next)].hash_prev =
+			ref->hash_prev;
+	memset(ref, 0, sizeof(*ref));
+	ref->free_next = registry->free_head;
+	registry->free_head = link;
+	registry->used_count--;
+	registry->free_count++;
+	vfs_scope_registry_check_locked();
+}
+
+static struct vfs_scope_ref *vfs_scope_retiring_next_locked(void)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	uint link;
+
+	vfs_scope_registry_init_locked();
+	link = registry->retiring_cursor != 0 ? registry->retiring_cursor :
+		registry->retiring_head;
+	for (uint visited = 0; link != 0 && visited < registry->retiring_count;
+	     visited++) {
+		struct vfs_scope_ref *ref =
+			&registry->refs[vfs_scope_slot(link)];
+		uint next = ref->retire_next != 0 ? ref->retire_next :
+			registry->retiring_head;
+
+		registry->retiring_cursor = next;
+		if (ref->used && ref->retiring &&
+		    workflow_lifecycle_retiring(ref->lifecycle))
+			return ref;
+		link = next;
+	}
+	return 0;
+}
 
 static int vfs_scope_create(uint scope_id,
 			    struct workflow_lifecycle_key *lifecycle)
 {
-	int free_slot = -1;
-	int allocated = 0;
-	int retiring = 0;
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	int admitted = 0;
 	int enabled;
 	struct workflow_lifecycle_key created = workflow_lifecycle_none();
 	struct resource_account_handle storage = resource_account_none();
@@ -67,40 +308,19 @@ static int vfs_scope_create(uint scope_id,
 	if (workflow_lifecycle_prepare_create() < 0)
 		return -1;
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
-
-		if (ref->used && ref->scope_id == scope_id) {
-			intr_restore(enabled);
-			return -1;
-		}
-		if (ref->used) {
-			if (ref->retiring)
-				retiring++;
-			else if (workflow_lifecycle_active(ref->lifecycle) ||
-				 workflow_lifecycle_closing(ref->lifecycle))
-				allocated++;
-		} else if (free_slot < 0) {
-			free_slot = i;
-		}
-	}
-	if (free_slot >= 0 && allocated + retiring < VFS_SCOPE_MAX_ACTIVE &&
-	    allocated + retiring < VFS_SCOPE_LIFECYCLE_CAP &&
+	vfs_scope_registry_init_locked();
+	if (vfs_scope_find_locked(scope_id) == 0 && registry->free_count > 0 &&
+	    registry->active_count + registry->retiring_count <
+		    VFS_SCOPE_MAX_ACTIVE &&
+	    registry->active_count + registry->retiring_count <
+		    VFS_SCOPE_LIFECYCLE_CAP &&
 	    fs_storage_scope_admissible() &&
 	    fs_storage_scope_account_create(scope_id, &storage) == 0 &&
 	    workflow_lifecycle_create(scope_id, &created) == 0 &&
-	    bio_scope_acquire(scope_id, storage) == 0) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[free_slot];
-
-		ref->used = 1;
-		ref->scope_id = scope_id;
-		ref->retiring = 0;
-		ref->preserve_on_retire = 0;
-		ref->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
-		ref->reclaim_metadata_target = 0;
-		ref->lifecycle = created;
-		ref->storage_account = storage;
+	    bio_scope_acquire(scope_id, storage) == 0 &&
+	    vfs_scope_registry_insert_locked(scope_id, created, storage) != 0) {
 		*lifecycle = created;
+		admitted = 1;
 	} else {
 		if (workflow_lifecycle_key_valid(created)) {
 			(void)workflow_lifecycle_leave(created);
@@ -110,10 +330,9 @@ static int vfs_scope_create(uint scope_id,
 		}
 		if (resource_account_handle_valid(storage))
 			fs_storage_scope_account_close(storage);
-		free_slot = -1;
 	}
 	intr_restore(enabled);
-	return free_slot >= 0 ? 0 : -1;
+	return admitted ? 0 : -1;
 }
 
 static int vfs_scope_join(uint scope_id,
@@ -126,15 +345,12 @@ static int vfs_scope_join(uint scope_id,
 	    !workflow_lifecycle_key_valid(lifecycle))
 		return -1;
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (!ref->used || ref->scope_id != scope_id ||
-		    ref->retiring ||
-		    !workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
-			continue;
-		result = workflow_lifecycle_join(lifecycle);
-		break;
+		if (ref != 0 && !ref->retiring &&
+		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
+			result = workflow_lifecycle_join(lifecycle);
 	}
 	intr_restore(enabled);
 	return result;
@@ -152,22 +368,17 @@ static int vfs_scope_release(uint scope_id,
 	    !workflow_lifecycle_key_valid(lifecycle))
 		return -1;
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
-
-		if (!ref->used || ref->scope_id != scope_id ||
-		    !workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
-			continue;
-		matched = ref;
-		break;
-	}
+	matched = vfs_scope_find_locked(scope_id);
+	if (matched != 0 &&
+	    !workflow_lifecycle_key_equal(matched->lifecycle, lifecycle))
+		matched = 0;
 	if (matched != 0) {
 		last = workflow_lifecycle_leave(lifecycle);
 		if (last > 0) {
-			matched->retiring = 1;
 			matched->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
 			matched->reclaim_metadata_target = 0;
 			storage = matched->storage_account;
+			vfs_scope_retiring_add_locked(matched);
 		}
 	}
 	intr_restore(enabled);
@@ -197,19 +408,17 @@ vfs_scope_reclaim_advance(uint scope_id,
 
 	/* Slow phase work runs unlocked; the immutable key guards publication. */
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (!ref->used || ref->scope_id != scope_id || !ref->retiring ||
-		    !workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
-			continue;
-		if (ref->reclaim_phase == expected &&
+		if (ref != 0 && ref->retiring &&
+		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle) &&
+		    ref->reclaim_phase == expected &&
 		    workflow_lifecycle_retiring(lifecycle)) {
 			ref->reclaim_metadata_target = metadata_target;
 			ref->reclaim_phase = next;
 			advanced = 1;
 		}
-		break;
 	}
 	intr_restore(enabled);
 	return advanced;
@@ -228,18 +437,17 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
 		return;
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (!ref->used || ref->scope_id != scope_id)
-			continue;
-		lifecycle = ref->lifecycle;
-		eligible = ref->retiring &&
-			   workflow_lifecycle_retiring(lifecycle);
-		preserve_files = ref->preserve_on_retire;
-		phase = ref->reclaim_phase;
-		metadata_target = ref->reclaim_metadata_target;
-		break;
+		if (ref != 0) {
+			lifecycle = ref->lifecycle;
+			eligible = ref->retiring &&
+				   workflow_lifecycle_retiring(lifecycle);
+			preserve_files = ref->preserve_on_retire;
+			phase = ref->reclaim_phase;
+			metadata_target = ref->reclaim_metadata_target;
+		}
 	}
 	intr_restore(enabled);
 	if (!eligible)
@@ -250,7 +458,7 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 		uint next = preserve_files ? VFS_SCOPE_RECLAIM_METADATA :
 					     VFS_SCOPE_RECLAIM_FILES;
 
-		if (agent_scope_reclaim_begin(scope_id, &target) < 0)
+		if (agent_scope_reclaim_begin(scope_id, lifecycle, &target) < 0)
 			return;
 		(void)vfs_scope_reclaim_advance(scope_id, lifecycle, phase,
 					 next, target);
@@ -272,8 +480,8 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 		return;
 	}
 	if (phase == VFS_SCOPE_RECLAIM_METADATA) {
-		if (!agent_scope_reclaim_metadata_done(scope_id,
-						       metadata_target))
+		if (!agent_scope_reclaim_metadata_done(
+			    scope_id, lifecycle, metadata_target))
 			return;
 		(void)vfs_scope_reclaim_advance(
 			scope_id, lifecycle, phase, VFS_SCOPE_RECLAIM_RETIRE,
@@ -291,13 +499,11 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 		panic("invalid workflow reclaim phase");
 
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (!ref->used || ref->scope_id != scope_id ||
-		    !workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
-			continue;
-		if (ref->retiring &&
+		if (ref != 0 && ref->retiring &&
+		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle) &&
 		    ref->reclaim_phase == VFS_SCOPE_RECLAIM_DONE &&
 		    workflow_lifecycle_retiring(lifecycle)) {
 			if (preserve_files &&
@@ -305,17 +511,16 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 				// A completed boot lease remains an admitted, inactive
 				// storage owner until reboot. This keeps its durable
 				// output in the same guarantee calculation.
-				ref->retiring = 0;
+				vfs_scope_retiring_remove_locked(ref);
 				ref->lifecycle = workflow_lifecycle_none();
 			} else if (!preserve_files &&
 				   resource_account_state_get(
 					   ref->storage_account) ==
 					   RESOURCE_ACCOUNT_FREE &&
 				   workflow_lifecycle_reclaim(lifecycle) == 0) {
-				memset(ref, 0, sizeof(*ref));
+				vfs_scope_registry_remove_locked(ref);
 			}
 		}
-		break;
 	}
 	intr_restore(enabled);
 }
@@ -324,18 +529,12 @@ static int vfs_scope_preserve_on_retire(uint scope_id)
 {
 	int result = -1;
 	int enabled = intr_save();
+	struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
-
-		if (!ref->used || ref->scope_id != scope_id)
-			continue;
-		if (!ref->retiring &&
-		    workflow_lifecycle_active(ref->lifecycle)) {
-			ref->preserve_on_retire = 1;
-			result = 0;
-		}
-		break;
+	if (ref != 0 && !ref->retiring &&
+	    workflow_lifecycle_active(ref->lifecycle)) {
+		ref->preserve_on_retire = 1;
+		result = 0;
 	}
 	intr_restore(enabled);
 	return result;
@@ -343,18 +542,12 @@ static int vfs_scope_preserve_on_retire(uint scope_id)
 
 static int vfs_scope_reap_work_pending(void)
 {
-	int pending = 0;
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
 	int enabled = intr_save();
+	int pending;
 
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
-
-		if (ref->used && ref->retiring &&
-		    workflow_lifecycle_retiring(ref->lifecycle)) {
-			pending = 1;
-			break;
-		}
-	}
+	vfs_scope_registry_init_locked();
+	pending = registry->retiring_count != 0;
 	intr_restore(enabled);
 	return pending;
 }
@@ -364,19 +557,11 @@ void vfs_scope_reap_pending(void)
 	uint scope_id = VFS_SCOPE_NONE;
 	uint reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
 	int enabled = intr_save();
+	struct vfs_scope_ref *ref = vfs_scope_retiring_next_locked();
 
-	for (uint scanned = 0; scanned < NPROC; scanned++) {
-		uint i = (vfs_scope_reap_cursor + scanned) % NPROC;
-
-		if (vfs_scope_refs[i].used &&
-		    vfs_scope_refs[i].retiring &&
-		    workflow_lifecycle_retiring(
-			    vfs_scope_refs[i].lifecycle)) {
-			scope_id = vfs_scope_refs[i].scope_id;
-			reclaim_phase = vfs_scope_refs[i].reclaim_phase;
-			vfs_scope_reap_cursor = (i + 1) % NPROC;
-			break;
-		}
+	if (ref != 0) {
+		scope_id = ref->scope_id;
+		reclaim_phase = ref->reclaim_phase;
 	}
 	intr_restore(enabled);
 	if (scope_id == VFS_SCOPE_NONE)
@@ -401,16 +586,11 @@ int vfs_scope_active(uint scope_id)
 {
 	int active = 0;
 	int enabled = intr_save();
+	struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-	for (int i = 0; i < NPROC; i++)
-		if (vfs_scope_refs[i].used &&
-		    vfs_scope_refs[i].scope_id == scope_id &&
-		    !vfs_scope_refs[i].retiring &&
-		    workflow_lifecycle_active(
-			    vfs_scope_refs[i].lifecycle)) {
-			active = 1;
-			break;
-		}
+	if (ref != 0 && !ref->retiring &&
+	    workflow_lifecycle_active(ref->lifecycle))
+		active = 1;
 	intr_restore(enabled);
 	return active;
 }
@@ -419,31 +599,21 @@ int vfs_scope_retiring(uint scope_id)
 {
 	int retiring = 0;
 	int enabled = intr_save();
+	struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-	for (int i = 0; i < NPROC; i++)
-		if (vfs_scope_refs[i].used &&
-		    vfs_scope_refs[i].scope_id == scope_id &&
-		    vfs_scope_refs[i].retiring &&
-		    workflow_lifecycle_retiring(
-			    vfs_scope_refs[i].lifecycle)) {
-			retiring = 1;
-			break;
-		}
+	if (ref != 0 && ref->retiring &&
+	    workflow_lifecycle_retiring(ref->lifecycle))
+		retiring = 1;
 	intr_restore(enabled);
 	return retiring;
 }
 
 int vfs_scope_retained(uint scope_id)
 {
-	int retained = 0;
+	int retained;
 	int enabled = intr_save();
 
-	for (int i = 0; i < NPROC; i++)
-		if (vfs_scope_refs[i].used &&
-		    vfs_scope_refs[i].scope_id == scope_id) {
-			retained = 1;
-			break;
-		}
+	retained = vfs_scope_find_locked(scope_id) != 0;
 	intr_restore(enabled);
 	return retained;
 }
@@ -458,14 +628,14 @@ vfs_scope_lifecycle(uint scope_id, struct workflow_lifecycle_key *lifecycle)
 		return -1;
 	*lifecycle = workflow_lifecycle_none();
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++)
-		if (vfs_scope_refs[i].used &&
-		    vfs_scope_refs[i].scope_id == scope_id &&
-		    workflow_lifecycle_key_valid(vfs_scope_refs[i].lifecycle)) {
-			*lifecycle = vfs_scope_refs[i].lifecycle;
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
+
+		if (ref != 0 && workflow_lifecycle_key_valid(ref->lifecycle)) {
+			*lifecycle = ref->lifecycle;
 			result = 0;
-			break;
 		}
+	}
 	intr_restore(enabled);
 	return result;
 }
@@ -480,16 +650,13 @@ int vfs_scope_bind_controller(uint scope_id,
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC || control_id == 0)
 		return -1;
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (!ref->used || ref->scope_id != scope_id ||
-		    ref->retiring ||
-		    !workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
-			continue;
-		result = workflow_lifecycle_bind_controller(
-			lifecycle, scope_id, control_id);
-		break;
+		if (ref != 0 && !ref->retiring &&
+		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
+			result = workflow_lifecycle_bind_controller(
+				lifecycle, scope_id, control_id);
 	}
 	intr_restore(enabled);
 	return result;
@@ -507,16 +674,13 @@ int vfs_scope_close_owned(uint scope_id,
 		return -1;
 	*closed = workflow_lifecycle_none();
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (!ref->used || ref->scope_id != scope_id ||
-		    ref->retiring ||
-		    !workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
-			continue;
-		result = workflow_lifecycle_close_owned(
-			scope_id, lifecycle, control_id, closed);
-		break;
+		if (ref != 0 && !ref->retiring &&
+		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
+			result = workflow_lifecycle_close_owned(
+				scope_id, lifecycle, control_id, closed);
 	}
 	intr_restore(enabled);
 	return result;
@@ -532,19 +696,17 @@ int vfs_scope_close_trusted(uint scope_id,
 		return -1;
 	*closed = workflow_lifecycle_none();
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (!ref->used || ref->scope_id != scope_id ||
-		    ref->retiring)
-			continue;
-		result = workflow_lifecycle_close_trusted(scope_id, closed);
-		if (result == 0 &&
-		    !workflow_lifecycle_key_equal(*closed, ref->lifecycle)) {
-			*closed = workflow_lifecycle_none();
-			result = -1;
+		if (ref != 0 && !ref->retiring) {
+			result = workflow_lifecycle_close_trusted(scope_id, closed);
+			if (result == 0 && !workflow_lifecycle_key_equal(
+						*closed, ref->lifecycle)) {
+				*closed = workflow_lifecycle_none();
+				result = -1;
+			}
 		}
-		break;
 	}
 	intr_restore(enabled);
 	return result;
@@ -556,23 +718,24 @@ int vfs_scope_close_trusted(uint scope_id,
 // than being counted again as a completely empty future slot.
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 {
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
 	uint required = 0;
-	int allocated = 0;
+	uint allocated;
 	int enabled;
 
 	if (guarantee == 0)
 		return 0;
 	enabled = intr_save();
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+	vfs_scope_registry_init_locked();
+	allocated = registry->active_count + registry->retiring_count;
+	for (uint i = 0; i < VFS_SCOPE_LIFECYCLE_CAP; i++) {
+		struct vfs_scope_ref *ref = &registry->refs[i];
 		uint used;
 
 		if (!ref->used ||
 		    (!ref->retiring &&
-		     !workflow_lifecycle_active(ref->lifecycle) &&
-		     !workflow_lifecycle_closing(ref->lifecycle)))
+		     !workflow_lifecycle_key_valid(ref->lifecycle)))
 			continue;
-		allocated++;
 		if (ref->scope_id == exempt_scope)
 			continue;
 		used = resource_account_usage(
@@ -768,6 +931,19 @@ static void vfs_proc_clear_credentials(struct proc *p)
 	p->vfs_bound_exec_incarnation = 0;
 }
 
+static int vfs_proc_credentials_empty(const struct proc *p)
+{
+	return p != 0 && p->vfs_scope_id == VFS_SCOPE_NONE &&
+	       p->vfs_scope_controller == 0 && p->vfs_effective_caps == 0 &&
+	       p->vfs_inheritable_caps == 0 &&
+	       p->vfs_pending_scope_id == VFS_SCOPE_NONE &&
+	       p->vfs_pending_caps == 0 && p->vfs_pending_exec_dev == 0 &&
+	       p->vfs_pending_exec_inum == 0 &&
+	       p->vfs_pending_exec_incarnation == 0 &&
+	       p->vfs_bound_exec_dev == 0 && p->vfs_bound_exec_inum == 0 &&
+	       p->vfs_bound_exec_incarnation == 0;
+}
+
 void vfs_proc_reset(struct proc *p)
 {
 	if (p == 0)
@@ -793,9 +969,9 @@ int vfs_proc_spawn_scope(const struct proc *parent, struct proc *child,
 	uint scope_id;
 	int enabled;
 
-	if (child == 0 || child->workflow_lifecycle_charged)
+	if (child == 0 || child->workflow_lifecycle_charged ||
+	    !vfs_proc_credentials_empty(child))
 		return -1;
-	vfs_proc_reset(child);
 	if (mode == VFS_SPAWN_SCOPE_DROP) {
 		int joined = 0;
 
@@ -919,6 +1095,7 @@ int vfs_proc_delegate_exec(const struct proc *parent, struct proc *child,
 	uint64 ceiling;
 
 	if (parent == 0 || child == 0 || image == 0 ||
+	    !vfs_proc_credentials_empty(child) ||
 	    parent->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    parent->vfs_scope_id != parent->storage_principal_id ||
 	    child->storage_principal_id != parent->storage_principal_id ||
@@ -938,7 +1115,6 @@ int vfs_proc_delegate_exec(const struct proc *parent, struct proc *child,
 	    (requested_caps & parent->vfs_effective_caps) != requested_caps ||
 	    (requested_caps & ceiling) != requested_caps)
 		return -1;
-	vfs_proc_reset(child);
 	child->vfs_pending_scope_id = parent->vfs_scope_id;
 	child->vfs_pending_caps = requested_caps;
 	child->vfs_pending_exec_dev = image->dev;

@@ -6,6 +6,7 @@
 #include "fs.h"
 #include "plic.h"
 #include "proc.h"
+#include "performance_stats.h"
 #include "riscv.h"
 #include "timer.h"
 #include "types.h"
@@ -18,6 +19,12 @@ _Static_assert((int)VIRTIO_TEST_REJECTED_RANGE ==
 	       (int)VIRTIO_DISK_ERR_RANGE,
 	       "VirtIO range result must be stable across the test ABI");
 #endif
+_Static_assert(VIRTIO_DISK_WRITE_BATCH_MAX <= NUM,
+	       "VirtIO indirect write batch exceeds queue capacity");
+_Static_assert(3U * VIRTIO_DISK_DIRECT_WRITE_BATCH_MAX <= NUM,
+	       "VirtIO direct fallback exceeds descriptor capacity");
+_Static_assert(3U * (VIRTIO_DISK_DIRECT_WRITE_BATCH_MAX + 1U) > NUM,
+	       "VirtIO direct fallback must consume the usable queue width");
 
 enum virtio_disk_state {
 	VIRTIO_DISK_OFFLINE = 0,
@@ -60,6 +67,7 @@ static struct disk {
 	} info[NUM];
 
 	struct virtio_blk_req ops[2][NUM];
+	struct virtq_desc indirect[2][NUM][3] __attribute__((aligned(16)));
 	/* DMA never targets a caller-owned buffer. Reset quarantine stays static. */
 	uchar bounce[2][NUM][BSIZE];
 	uchar device_status[2][NUM];
@@ -124,6 +132,8 @@ static void disk_queue_reset_memory(void)
 	memset(pages, 0, 2 * PGSIZE);
 	memset(disk.device_status[disk.active_bank], 0xff,
 	       sizeof(disk.device_status[disk.active_bank]));
+	memset(disk.indirect[disk.active_bank], 0,
+	       sizeof(disk.indirect[disk.active_bank]));
 	disk.desc = (struct virtq_desc *)pages;
 	disk.avail = (struct virtq_avail *)(pages +
 					    NUM * sizeof(struct virtq_desc));
@@ -155,7 +165,8 @@ static int disk_device_start(int rotate_bank)
 	*R(VIRTIO_MMIO_STATUS) = status;
 
 	uint32 features = *R(VIRTIO_MMIO_DEVICE_FEATURES) &
-		(1U << VIRTIO_BLK_F_FLUSH);
+		((1U << VIRTIO_BLK_F_FLUSH) |
+		 (1U << VIRTIO_RING_F_INDIRECT_DESC));
 	*R(VIRTIO_MMIO_DRIVER_FEATURES) = features;
 	disk.features = features;
 	status |= VIRTIO_CONFIG_S_FEATURES_OK;
@@ -685,102 +696,11 @@ static int disk_durability_overlay_store(const struct buf *b)
 }
 #endif
 
-static int disk_submit(struct buf *b, uint type, int test_direct,
-		       uint64 sector)
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+static void disk_test_arm_request(int head, int test_direct)
 {
-	int count = type == VIRTIO_BLK_T_FLUSH ? 2 : 3;
-	int idx[3], head = -1, submitted = 0;
-	int status = VIRTIO_DISK_ERR_IO;
-	uint owner = FS_OWNER_SYSTEM;
-	uint io_class = IO_POLICY_CLASS_SYSTEM;
-	int enabled;
-	uint64 boot_deadline = get_cycle() +
-		(uint64)VIRTIO_DISK_REQUEST_TIMEOUT_TICKS *
-		(CPU_FREQ / TICKS_PER_SEC);
-	uint64 request_id;
-
-	(void)test_direct;
-	bio_current_sponsor(&owner, &io_class);
-	enabled = intr_save();
-	disk.next_request_id++;
-	if (disk.next_request_id == 0)
-		disk.next_request_id++;
-	request_id = disk.next_request_id;
-
-	if (b != 0 && (sector >= disk.capacity ||
-	    BSIZE / 512 > disk.capacity - sector)) {
-		status = VIRTIO_DISK_ERR_RANGE;
-		goto out;
-	}
-	if (disk.runtime && !disk_can_sleep()) {
-		status = VIRTIO_DISK_ERR_BUSY;
-		goto out;
-	}
-	for (;;) {
-		while (disk.state != VIRTIO_DISK_ONLINE) {
-			if (disk.state == VIRTIO_DISK_OFFLINE) {
-				status = VIRTIO_DISK_ERR_OFFLINE;
-				goto out;
-			}
-			if (!disk_can_sleep()) {
-				disk_reset_step();
-				if (get_cycle() >= disk.reset_cycle_deadline)
-					disk_reset_offline();
-				continue;
-			}
-			(void)wait_queue_sleep_irq_uninterruptible(
-				&disk.desc_waiters);
-		}
-		if (alloc_desc_chain(idx, count) == 0)
-			break;
-		if (!disk_can_sleep()) {
-			disk_process_used(0);
-			continue;
-		}
-#ifdef VIRTIO_DISK_FAULT_INJECTION
-		disk.test_stats.descriptor_waits++;
-#endif
-		(void)wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters);
-	}
-	head = idx[0];
-	int tail = idx[count - 1];
-	struct virtio_blk_req *req = &disk.ops[disk.active_bank][head];
-	req->type = type;
-	req->reserved = 0;
-	req->sector = sector;
-	disk.desc[head].addr = (uint64)req;
-	disk.desc[head].len = sizeof(*req);
-	disk.desc[head].flags = VRING_DESC_F_NEXT;
-	disk.desc[head].next = idx[1];
-	if (b != 0) {
-		if (type == VIRTIO_BLK_T_OUT)
-			memmove(disk.bounce[disk.active_bank][head], b->data,
-				BSIZE);
-		disk.desc[idx[1]].addr =
-			(uint64)disk.bounce[disk.active_bank][head];
-		disk.desc[idx[1]].len = BSIZE;
-		disk.desc[idx[1]].flags = (type == VIRTIO_BLK_T_IN ?
-			VRING_DESC_F_WRITE : 0) | VRING_DESC_F_NEXT;
-		disk.desc[idx[1]].next = tail;
-		b->disk = 1;
-	}
-	disk.info[head].b = b;
-	disk.device_status[disk.active_bank][head] = 0xff;
-	disk.info[head].active = 1;
-	disk.info[head].completed = 0;
-	disk.info[head].device_done = 0;
-	disk.info[head].descriptors_freed = 0;
-	disk.info[head].type = type;
-	disk.info[head].bank = disk.active_bank;
-	disk.info[head].release_tick = 0;
-	disk.info[head].submit_tick = disk.tick;
-	disk.info[head].deadline = disk.tick + disk.timeout_ticks;
-	disk.info[head].generation = disk.queue_generation;
-	disk.info[head].request_id = request_id;
-	disk.info[head].owner = owner;
-	disk.info[head].io_class = io_class;
-#ifdef VIRTIO_DISK_FAULT_INJECTION
 	int inject_test_fault = 1;
+
 #ifdef VIRTIO_DISK_TEST_PROFILE
 	inject_test_fault = test_direct;
 #else
@@ -817,24 +737,115 @@ static int disk_submit(struct buf *b, uint type, int test_direct,
 			}
 		}
 	}
+}
 #endif
+
+static void disk_prepare_request_state(struct buf *b, uint type,
+				       uint64 sector, int head,
+				       uint64 request_id, uint owner,
+				       uint io_class, int test_direct)
+{
+	struct virtio_blk_req *req = &disk.ops[disk.active_bank][head];
+
+	req->type = type;
+	req->reserved = 0;
+	req->sector = sector;
+	if (b != 0) {
+		if (type == VIRTIO_BLK_T_OUT)
+			memmove(disk.bounce[disk.active_bank][head], b->data,
+				BSIZE);
+		b->disk = 1;
+	}
+	disk.info[head].b = b;
+	disk.device_status[disk.active_bank][head] = 0xff;
+	disk.info[head].active = 1;
+	disk.info[head].completed = 0;
+	disk.info[head].device_done = 0;
+	disk.info[head].descriptors_freed = 0;
+	disk.info[head].type = type;
+	disk.info[head].bank = disk.active_bank;
+	disk.info[head].release_tick = 0;
+	disk.info[head].submit_tick = disk.tick;
+	disk.info[head].deadline = disk.tick + disk.timeout_ticks;
+	disk.info[head].generation = disk.queue_generation;
+	disk.info[head].request_id = request_id;
+	disk.info[head].owner = owner;
+	disk.info[head].io_class = io_class;
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+	disk_test_arm_request(head, test_direct);
+#else
+	(void)test_direct;
+#endif
+}
+
+static int disk_prepare_request(struct buf *b, uint type, uint64 sector,
+				int *idx, int count, uint64 request_id,
+				uint owner, uint io_class, int test_direct)
+{
+	int head = idx[0];
+	int tail = idx[count - 1];
+	struct virtio_blk_req *req = &disk.ops[disk.active_bank][head];
+
+	disk_prepare_request_state(b, type, sector, head, request_id, owner,
+				   io_class, test_direct);
+	disk.desc[head].addr = (uint64)req;
+	disk.desc[head].len = sizeof(*req);
+	disk.desc[head].flags = VRING_DESC_F_NEXT;
+	disk.desc[head].next = idx[1];
+	if (b != 0) {
+		disk.desc[idx[1]].addr =
+			(uint64)disk.bounce[disk.active_bank][head];
+		disk.desc[idx[1]].len = BSIZE;
+		disk.desc[idx[1]].flags =
+			(type == VIRTIO_BLK_T_IN ? VRING_DESC_F_WRITE : 0) |
+			VRING_DESC_F_NEXT;
+		disk.desc[idx[1]].next = tail;
+	}
 	disk.desc[tail].addr =
 		(uint64)&disk.device_status[disk.active_bank][head];
 	disk.desc[tail].len = 1;
 	disk.desc[tail].flags = VRING_DESC_F_WRITE;
 	disk.desc[tail].next = 0;
-	disk.avail->ring[disk.avail->idx % NUM] = head;
-	__sync_synchronize();
-	disk.avail->idx++;
-	__sync_synchronize();
-	*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;
-	submitted = 1;
-#ifdef VIRTIO_DISK_FAULT_INJECTION
-	disk.test_stats.submits++;
-	disk.test_stats.inflight++;
-	if (disk.test_stats.inflight > disk.test_stats.max_inflight)
-		disk.test_stats.max_inflight = disk.test_stats.inflight;
+	return head;
+}
+
+#ifndef DURABILITY_POWERCUT_TEST_PROFILE
+static int disk_prepare_indirect_request(struct buf *b, uint type, int head,
+					 uint64 request_id, uint owner,
+					 uint io_class)
+{
+	struct virtq_desc *table = disk.indirect[disk.active_bank][head];
+	struct virtio_blk_req *req = &disk.ops[disk.active_bank][head];
+	uint64 sector = (uint64)b->blockno * (BSIZE / 512);
+
+	disk_prepare_request_state(b, type, sector, head,
+				   request_id, owner, io_class, 0);
+	table[0].addr = (uint64)req;
+	table[0].len = sizeof(*req);
+	table[0].flags = VRING_DESC_F_NEXT;
+	table[0].next = 1;
+	table[1].addr = (uint64)disk.bounce[disk.active_bank][head];
+	table[1].len = BSIZE;
+	table[1].flags = VRING_DESC_F_NEXT |
+		(type == VIRTIO_BLK_T_IN ? VRING_DESC_F_WRITE : 0);
+	table[1].next = 2;
+	table[2].addr =
+		(uint64)&disk.device_status[disk.active_bank][head];
+	table[2].len = 1;
+	table[2].flags = VRING_DESC_F_WRITE;
+	table[2].next = 0;
+	disk.desc[head].addr = (uint64)table;
+	disk.desc[head].len = sizeof(disk.indirect[disk.active_bank][head]);
+	disk.desc[head].flags = VRING_DESC_F_INDIRECT;
+	disk.desc[head].next = 0;
+	return head;
+}
 #endif
+
+static void disk_wait_request(int head, uint64 boot_deadline)
+{
+	int enabled = intr_save();
+
 	while (!disk.info[head].completed) {
 		if (disk_can_sleep()) {
 			(void)wait_queue_sleep_irq_uninterruptible(
@@ -851,6 +862,84 @@ static int disk_submit(struct buf *b, uint type, int test_direct,
 				disk_reset_offline();
 		}
 	}
+	intr_restore(enabled);
+}
+
+static int disk_submit(struct buf *b, uint type, int test_direct,
+		       uint64 sector)
+{
+	int count = type == VIRTIO_BLK_T_FLUSH ? 2 : 3;
+	int idx[3], head = -1, submitted = 0;
+	int status = VIRTIO_DISK_ERR_IO;
+	uint owner = FS_OWNER_SYSTEM;
+	uint io_class = IO_POLICY_CLASS_SYSTEM;
+	int enabled;
+	uint64 boot_deadline = get_cycle() +
+		(uint64)VIRTIO_DISK_REQUEST_TIMEOUT_TICKS *
+		(CPU_FREQ / TICKS_PER_SEC);
+	uint64 request_id;
+
+	(void)test_direct;
+	bio_current_sponsor(&owner, &io_class);
+	enabled = intr_save();
+	disk.next_request_id++;
+	if (disk.next_request_id == 0)
+		disk.next_request_id++;
+	request_id = disk.next_request_id;
+
+	if (b != 0 && (sector >= disk.capacity ||
+	    BSIZE / 512 > disk.capacity - sector)) {
+		status = VIRTIO_DISK_ERR_RANGE;
+		goto out;
+	}
+	if (disk.runtime && !disk_can_sleep() &&
+	    !bio_deferred_polling_current()) {
+		status = VIRTIO_DISK_ERR_BUSY;
+		goto out;
+	}
+	for (;;) {
+		while (disk.state != VIRTIO_DISK_ONLINE) {
+			if (disk.state == VIRTIO_DISK_OFFLINE) {
+				status = VIRTIO_DISK_ERR_OFFLINE;
+				goto out;
+			}
+			if (!disk_can_sleep()) {
+				disk_reset_step();
+				if (get_cycle() >= disk.reset_cycle_deadline)
+					disk_reset_offline();
+				continue;
+			}
+			(void)wait_queue_sleep_irq_uninterruptible(
+				&disk.desc_waiters);
+		}
+		if (alloc_desc_chain(idx, count) == 0)
+			break;
+		if (!disk_can_sleep()) {
+			disk_process_used(0);
+			continue;
+		}
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+		disk.test_stats.descriptor_waits++;
+#endif
+		(void)wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters);
+	}
+	head = disk_prepare_request(b, type, sector, idx, count, request_id,
+				    owner, io_class, test_direct);
+	disk.avail->ring[disk.avail->idx % NUM] = head;
+	__sync_synchronize();
+	disk.avail->idx++;
+	__sync_synchronize();
+	*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;
+	kernel_performance_virtio_notify(
+		1, KERNEL_PERFORMANCE_VIRTIO_SINGLE, 0);
+	submitted = 1;
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+	disk.test_stats.submits++;
+	disk.test_stats.inflight++;
+	if (disk.test_stats.inflight > disk.test_stats.max_inflight)
+		disk.test_stats.max_inflight = disk.test_stats.inflight;
+#endif
+	disk_wait_request(head, boot_deadline);
 	status = disk.info[head].result;
 	disk_release_request(head);
 out:
@@ -876,6 +965,240 @@ out:
 				     status);
 	return status;
 }
+
+#ifndef DURABILITY_POWERCUT_TEST_PROFILE
+static int disk_submit_write_pair(struct buf *buffers[2])
+{
+	int idx[2][3];
+	int all_idx[6];
+	int head[2] = { -1, -1 };
+	int result[2] = { VIRTIO_DISK_ERR_IO, VIRTIO_DISK_ERR_IO };
+	int status = VIRTIO_DISK_ERR_IO;
+	int submitted = 0;
+	uint owner = FS_OWNER_SYSTEM;
+	uint io_class = IO_POLICY_CLASS_SYSTEM;
+	uint64 request_id[2];
+	uint64 boot_deadline = get_cycle() +
+		(uint64)VIRTIO_DISK_REQUEST_TIMEOUT_TICKS *
+		(CPU_FREQ / TICKS_PER_SEC);
+	int enabled;
+
+	bio_current_sponsor(&owner, &io_class);
+	enabled = intr_save();
+	for (uint i = 0; i < 2; i++) {
+		disk.next_request_id++;
+		if (disk.next_request_id == 0)
+			disk.next_request_id++;
+		request_id[i] = disk.next_request_id;
+	}
+	for (uint i = 0; i < 2; i++) {
+		if (buffers[i] == 0 ||
+		    (uint64)buffers[i]->blockno * (BSIZE / 512) >=
+			disk.capacity ||
+		    BSIZE / 512 > disk.capacity -
+			(uint64)buffers[i]->blockno * (BSIZE / 512)) {
+			status = buffers[i] == 0 ? VIRTIO_DISK_ERR_IO :
+				VIRTIO_DISK_ERR_RANGE;
+			goto out;
+		}
+	}
+	if (disk.runtime && !disk_can_sleep() &&
+	    !bio_deferred_polling_current()) {
+		status = VIRTIO_DISK_ERR_BUSY;
+		goto out;
+	}
+	for (;;) {
+		while (disk.state != VIRTIO_DISK_ONLINE) {
+			if (disk.state == VIRTIO_DISK_OFFLINE) {
+				status = VIRTIO_DISK_ERR_OFFLINE;
+				goto out;
+			}
+			if (!disk_can_sleep()) {
+				disk_reset_step();
+				if (get_cycle() >= disk.reset_cycle_deadline)
+					disk_reset_offline();
+				continue;
+			}
+			(void)wait_queue_sleep_irq_uninterruptible(
+				&disk.desc_waiters);
+		}
+		if (alloc_desc_chain(all_idx, 6) == 0)
+			break;
+		if (!disk_can_sleep()) {
+			disk_process_used(0);
+			continue;
+		}
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+		disk.test_stats.descriptor_waits++;
+#endif
+		(void)wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters);
+	}
+	for (uint i = 0; i < 2; i++)
+		for (uint d = 0; d < 3; d++)
+			idx[i][d] = all_idx[i * 3 + d];
+
+	for (uint i = 0; i < 2; i++) {
+		head[i] = disk_prepare_request(
+			buffers[i], VIRTIO_BLK_T_OUT,
+			(uint64)buffers[i]->blockno * (BSIZE / 512), idx[i], 3,
+			request_id[i], owner, io_class, 0);
+	}
+	for (uint i = 0; i < 2; i++)
+		disk.avail->ring[(disk.avail->idx + i) % NUM] = head[i];
+	__sync_synchronize();
+	disk.avail->idx += 2;
+	__sync_synchronize();
+	*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;
+	kernel_performance_virtio_notify(
+		2, KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH, 0);
+	submitted = 1;
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+	disk.test_stats.submits += 2;
+	disk.test_stats.inflight += 2;
+	if (disk.test_stats.inflight > disk.test_stats.max_inflight)
+		disk.test_stats.max_inflight = disk.test_stats.inflight;
+#endif
+	disk_wait_request(head[0], boot_deadline);
+	disk_wait_request(head[1], boot_deadline);
+	for (uint i = 0; i < 2; i++) {
+		result[i] = disk.info[head[i]].result;
+		disk_release_request(head[i]);
+	}
+	status = result[0] != VIRTIO_DISK_OK ? result[0] : result[1];
+out:
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+	if (!submitted) {
+		for (uint i = 0; i < 2; i++) {
+			disk.test_stats.last_request_id = request_id[i];
+			disk.test_stats.last_request_type = VIRTIO_BLK_T_OUT;
+			disk.test_stats.last_submit_tick = disk.tick;
+			disk.test_stats.last_complete_tick = disk.tick;
+			disk.test_stats.last_result = status;
+			disk.test_stats.rejected_requests++;
+			if (status == VIRTIO_DISK_ERR_RANGE)
+				disk.test_stats.range_rejections++;
+			disk_test_result(status);
+		}
+	}
+#endif
+	intr_restore(enabled);
+	if (submitted)
+		bio_account_transfer_batch(owner, io_class, BIO_TRANSFER_WRITE,
+					   result, 2);
+	return status;
+}
+
+static int disk_submit_indirect(struct buf **buffers, uint count, uint type)
+{
+	int heads[NUM];
+	int results[NUM];
+	int status = VIRTIO_DISK_ERR_IO;
+	int submitted = 0;
+	uint owner = FS_OWNER_SYSTEM;
+	uint io_class = IO_POLICY_CLASS_SYSTEM;
+	uint64 boot_deadline = get_cycle() +
+		(uint64)VIRTIO_DISK_REQUEST_TIMEOUT_TICKS *
+		(CPU_FREQ / TICKS_PER_SEC);
+	int enabled;
+
+	if ((type != VIRTIO_BLK_T_IN && type != VIRTIO_BLK_T_OUT) ||
+	    count < 2 || count > NUM)
+		return VIRTIO_DISK_ERR_IO;
+	bio_current_sponsor(&owner, &io_class);
+	enabled = intr_save();
+	for (uint i = 0; i < count; i++) {
+		if (buffers[i] == 0 ||
+		    (uint64)buffers[i]->blockno * (BSIZE / 512) >=
+			disk.capacity ||
+		    BSIZE / 512 > disk.capacity -
+			(uint64)buffers[i]->blockno * (BSIZE / 512)) {
+			status = buffers[i] == 0 ? VIRTIO_DISK_ERR_IO :
+				VIRTIO_DISK_ERR_RANGE;
+			goto out;
+		}
+	}
+	if (disk.runtime && !disk_can_sleep() &&
+	    !bio_deferred_polling_current()) {
+		status = VIRTIO_DISK_ERR_BUSY;
+		goto out;
+	}
+	for (;;) {
+		while (disk.state != VIRTIO_DISK_ONLINE) {
+			if (disk.state == VIRTIO_DISK_OFFLINE) {
+				status = VIRTIO_DISK_ERR_OFFLINE;
+				goto out;
+			}
+			if (!disk_can_sleep()) {
+				disk_reset_step();
+				if (get_cycle() >= disk.reset_cycle_deadline)
+					disk_reset_offline();
+				continue;
+			}
+			(void)wait_queue_sleep_irq_uninterruptible(
+				&disk.desc_waiters);
+		}
+		if (alloc_desc_chain(heads, count) == 0)
+			break;
+		if (!disk_can_sleep()) {
+			disk_process_used(0);
+			continue;
+		}
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+		disk.test_stats.descriptor_waits++;
+#endif
+		(void)wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters);
+	}
+	for (uint i = 0; i < count; i++) {
+		uint64 request_id;
+
+		disk.next_request_id++;
+		if (disk.next_request_id == 0)
+			disk.next_request_id++;
+		request_id = disk.next_request_id;
+		disk_prepare_indirect_request(
+			buffers[i], type, heads[i], request_id, owner, io_class);
+		disk.avail->ring[(disk.avail->idx + i) % NUM] = heads[i];
+		results[i] = VIRTIO_DISK_ERR_IO;
+	}
+	__sync_synchronize();
+	disk.avail->idx += count;
+	__sync_synchronize();
+	*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;
+	kernel_performance_virtio_notify(
+		count, type == VIRTIO_BLK_T_OUT ?
+			KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH :
+			KERNEL_PERFORMANCE_VIRTIO_READ_BATCH,
+		1);
+	submitted = 1;
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+	disk.test_stats.submits += count;
+	disk.test_stats.inflight += count;
+	if (disk.test_stats.inflight > disk.test_stats.max_inflight)
+		disk.test_stats.max_inflight = disk.test_stats.inflight;
+#endif
+	for (uint i = 0; i < count; i++)
+		disk_wait_request(heads[i], boot_deadline);
+	for (uint i = 0; i < count; i++) {
+		results[i] = disk.info[heads[i]].result;
+		disk_release_request(heads[i]);
+	}
+	status = VIRTIO_DISK_OK;
+	for (uint i = 0; i < count; i++)
+		if (results[i] != VIRTIO_DISK_OK) {
+			status = results[i];
+			break;
+		}
+out:
+	intr_restore(enabled);
+	if (submitted)
+		bio_account_transfer_batch(
+			owner, io_class,
+			type == VIRTIO_BLK_T_IN ? BIO_TRANSFER_READ :
+						       BIO_TRANSFER_WRITE,
+			results, count);
+	return status;
+}
+#endif
 
 int virtio_disk_rw(struct buf *b, int write)
 {
@@ -917,6 +1240,104 @@ int virtio_disk_rw(struct buf *b, int write)
 	return disk_submit(b, write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN, 0,
 			   (uint64)b->blockno * (BSIZE / 512));
 #endif
+}
+
+int virtio_disk_write_batch(struct buf **buffers, uint count)
+{
+	uint offset = 0;
+	int result;
+
+	if (count == 0)
+		return VIRTIO_DISK_OK;
+	if (buffers == 0)
+		return VIRTIO_DISK_ERR_IO;
+	/* Keep the established single-request path bit-for-bit authoritative. */
+	if (count == 1)
+		return virtio_disk_rw(buffers[0], 1);
+
+#ifdef DURABILITY_POWERCUT_TEST_PROFILE
+	result = disk_durability_overlay_enter();
+	if (result != VIRTIO_DISK_OK)
+		return result;
+	for (; offset < count; offset++) {
+		struct buf *b = buffers[offset];
+
+		if (b == 0) {
+			result = VIRTIO_DISK_ERR_IO;
+			break;
+		}
+		if ((uint64)b->blockno * (BSIZE / 512) >= disk.capacity ||
+		    BSIZE / 512 > disk.capacity -
+			(uint64)b->blockno * (BSIZE / 512)) {
+			result = VIRTIO_DISK_ERR_RANGE;
+			break;
+		}
+		result = disk_durability_overlay_store(b);
+		if (result != VIRTIO_DISK_OK)
+			break;
+	}
+	disk_durability_overlay_leave();
+	return result;
+#else
+	(void)result;
+	if (disk.features & (1U << VIRTIO_RING_F_INDIRECT_DESC)) {
+		while (count - offset > 1) {
+			uint batch = MIN(count - offset,
+					 VIRTIO_DISK_WRITE_BATCH_MAX);
+
+			result = disk_submit_indirect(
+				&buffers[offset], batch, VIRTIO_BLK_T_OUT);
+			if (result != VIRTIO_DISK_OK)
+				return result;
+			offset += batch;
+		}
+	} else {
+		while (count - offset >=
+		       VIRTIO_DISK_DIRECT_WRITE_BATCH_MAX) {
+			result = disk_submit_write_pair(&buffers[offset]);
+			if (result != VIRTIO_DISK_OK)
+				return result;
+			offset += VIRTIO_DISK_DIRECT_WRITE_BATCH_MAX;
+		}
+	}
+	if (offset != count)
+		return virtio_disk_rw(buffers[offset], 1);
+	return VIRTIO_DISK_OK;
+#endif
+}
+
+int virtio_disk_read_batch(struct buf **buffers, uint count)
+{
+	uint offset = 0;
+	int result;
+
+	if (count == 0)
+		return VIRTIO_DISK_OK;
+	if (buffers == 0)
+		return VIRTIO_DISK_ERR_IO;
+	if (count == 1)
+		return virtio_disk_rw(buffers[0], 0);
+
+#ifndef DURABILITY_POWERCUT_TEST_PROFILE
+	if (disk.features & (1U << VIRTIO_RING_F_INDIRECT_DESC)) {
+		while (count - offset > 1) {
+			uint batch = MIN(count - offset,
+					 VIRTIO_DISK_READ_BATCH_MAX);
+
+			result = disk_submit_indirect(
+				&buffers[offset], batch, VIRTIO_BLK_T_IN);
+			if (result != VIRTIO_DISK_OK)
+				return result;
+			offset += batch;
+		}
+	}
+#endif
+	for (; offset < count; offset++) {
+		result = virtio_disk_rw(buffers[offset], 0);
+		if (result != VIRTIO_DISK_OK)
+			return result;
+	}
+	return VIRTIO_DISK_OK;
 }
 
 static int disk_durability_capability(int test_direct)

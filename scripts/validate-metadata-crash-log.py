@@ -10,6 +10,16 @@ from pathlib import Path
 
 
 PROGRAM = "agentmetacrash_ucore"
+PHASE_NAMES = {
+    1: "invalidate-stage",
+    2: "payload-stage",
+    3: "prepared-flush",
+    4: "payload-verify",
+    5: "publish-stage",
+    6: "header-flush",
+    7: "header-verify",
+    8: "commit",
+}
 
 
 class ValidationError(RuntimeError):
@@ -154,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--log-file", required=True, type=Path)
     parser.add_argument("--bank", required=True, choices=("primary", "mirror"))
-    parser.add_argument("--phase", required=True, type=int, choices=range(1, 9))
+    parser.add_argument("--phase", required=True, type=int, choices=PHASE_NAMES)
     args = parser.parse_args(argv)
 
     try:
@@ -164,7 +174,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"metadata crash log validation failed: {error}", file=sys.stderr)
         return 1
 
-    print(f"metadata crash log: ok bank={args.bank} phase={args.phase}")
+    print(
+        f"metadata crash log: ok bank={args.bank} phase={args.phase} "
+        f"checkpoint={PHASE_NAMES[args.phase]}"
+    )
     return 0
 
 

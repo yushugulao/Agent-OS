@@ -605,6 +605,28 @@
         "allowed_bridge_dependencies": []
       },
       {
+        "name": "metadata_journal",
+        "source_path": "os/agent_metadata_journal.c",
+        "object_path": "build/os/agent_metadata_journal.o",
+        "baseline_lines": 1125,
+        "max_lines": 1125,
+        "max_bss_bytes": 0,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [
+          "agent_meta_journal_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "durable_section",
+          "metadata_catalog",
+          "metadata_store_format"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "metadata_query",
         "source_path": "os/agent_metadata_query.c",
         "object_path": "build/os/agent_metadata_query.o",
@@ -667,8 +689,7 @@
           "agent_fs_note_create",
           "agent_fs_note_delete",
           "agent_fs_note_truncate",
-          "agent_fs_note_write",
-          "agent_fs_sync_write"
+          "agent_fs_note_write"
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
@@ -803,6 +824,7 @@
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
           "metadata",
+          "metadata_journal",
           "metadata_store_format",
           "metadata_store_io"
         ],
@@ -849,6 +871,7 @@
           "file_state",
           "metadata",
           "metadata_catalog",
+          "metadata_journal",
           "metadata_probe",
           "metadata_recovery",
           "metadata_store_format",
@@ -1411,6 +1434,7 @@
           "metadata_prefetch",
           "metadata_catalog",
           "metadata_directory",
+          "metadata_journal",
           "metadata_query",
           "metadata_probe",
           "metadata_recovery",
@@ -1426,6 +1450,7 @@
           "os/agent_file_state_internal.h",
           "os/agent_metadata_actions.h",
           "os/agent_metadata_internal.h",
+          "os/agent_metadata_journal.h",
           "os/agent_metadata_probe.h",
           "os/agent_metadata_catalog.h",
           "os/agent_metadata_directory.h",
@@ -1537,6 +1562,7 @@
       "agentconflict_ucore",
       "agentllm_ucore",
       "agentbench_ucore",
+      "ch8_cow_ucore",
       "labbench_ucore",
       "labdemo_ucore",
       "agentsecurity_ucore",
@@ -1548,38 +1574,7 @@
       "usersafety_ucore",
       "blocking_semantics_ucore"
     ],
-    "calibration_status": "calibrated_full_suite",
-    "baseline_seconds": 294.053138,
-    "max_seconds": 308.756,
-    "calibration_samples": [
-      {
-        "sample_id": "agent18-14607e825f06-01",
-        "total_seconds": 278.6982115,
-        "timing_file": "evidence/calibrations/14607e825f06/01.timing",
-        "timing_file_sha256": "aee27cd8dc27dccf02fdee20c03db9ce8d9b5f068d9bbd85c6064dcdd1b5a9dc",
-        "attestation_digest_sha256": "d5ae5c7bbd4bdff7072baa8bb025f6b9481e5de7d1da7377a0c3d30a56c27e29"
-      },
-      {
-        "sample_id": "agent18-14607e825f06-02",
-        "total_seconds": 294.053138,
-        "timing_file": "evidence/calibrations/14607e825f06/02.timing",
-        "timing_file_sha256": "c94da15848890eefe7bf8a837d3ef964e29da5cf7378d7396f0b112ab1118085",
-        "attestation_digest_sha256": "3add5fe0cc00e48cbcee7169a3c9c8583912f3758fa626bf015f7b173fe84d3b"
-      },
-      {
-        "sample_id": "agent18-14607e825f06-03",
-        "total_seconds": 296.7989493,
-        "timing_file": "evidence/calibrations/14607e825f06/03.timing",
-        "timing_file_sha256": "bb43334bcb2201bcddb11e13e65382acdb932f3872cfff3fc1f00cccbfe342fa",
-        "attestation_digest_sha256": "e7691d25907169abedc03fccae726fe2b6abd4fba420931e686b4212dae4b34f"
-      }
-    ],
-    "calibration_source_commit": "14607e825f06c5ffe4a69dd992dbe79b210ab8a4",
-    "calibration_source_tree": "e16b777069ef376c7d2fbf6c5be725ee6700b005",
-    "calibration_profile_id": "local-e3-msys2-xpack-qemu11-v1",
-    "source_fingerprint_sha256": "58bc32576b47f776ec49325b71bb7c5c04e1c8c6a8ccd44a446becee57bf458d",
-    "calibration_manifest_file": "evidence/calibrations/14607e825f06/manifest.json",
-    "calibration_manifest_sha256": "52c5a80d5fc5e3c230922e1cbbd6fc3522cdabe3dfac443f71e4a4c429fbc788",
+    "calibration_status": "provisional_requires_full_suite",
     "runner_tag": "agentos-qemu-calibrated",
     "runner_profile": {
       "cpu": "ordinary GitLab Runner; not a local timing authority",
@@ -1645,7 +1640,6 @@
       "agent_identity_lease_progress=agent_observe_lease_persist_bridge"
     ],
     "recursion_bounds": [
-      "printf=2",
       "freewalk=3",
       "uvm_prune_empty_walk=3"
     ]

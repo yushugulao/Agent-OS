@@ -1,5 +1,21 @@
 .DEFAULT_GOAL = fs.img
 
+ifeq ($(FUNCTIONAL_REVIEW_BUILD),1)
+override FUNCTIONAL_REVIEW_FORBIDDEN_IMAGE_VARS := \
+	U USER_BIN_DIR USER_ELF_DIR HOSTCC CFLAGS CPPFLAGS LDFLAGS \
+	STORAGE_POLICY_CPPFLAGS FS_FUSE USER_BINS USER_ELFS EXEC_POLICY
+override FUNCTIONAL_REVIEW_EXTERNAL_IMAGE_VARS := $(strip $(foreach variable,$(FUNCTIONAL_REVIEW_FORBIDDEN_IMAGE_VARS),$(if $(filter command line environment override,$(origin $(variable))),$(variable))))
+ifneq ($(FUNCTIONAL_REVIEW_EXTERNAL_IMAGE_VARS),)
+$(error FUNCTIONAL_REVIEW_BUILD rejects external image variables: $(FUNCTIONAL_REVIEW_EXTERNAL_IMAGE_VARS))
+endif
+override FUNCTIONAL_REVIEW_USER_CFLAGS := $(USER_EXTRA_CFLAGS)
+override FUNCTIONAL_REVIEW_FLAGS_STATUS := $(shell python3 -I -S -B ../scripts/validate-functional-review-flags.py '$(subst ','"'"',$(FUNCTIONAL_REVIEW_USER_CFLAGS))' '$(subst ','"'"',$(CHAPTER))' '$(subst ','"'"',$(CH_TESTS))' '$(subst ','"'"',$(INIT_PROC))' 2>/dev/null)
+ifneq ($(FUNCTIONAL_REVIEW_FLAGS_STATUS),ok)
+$(error FUNCTIONAL_REVIEW_BUILD rejects USER_EXTRA_CFLAGS or its build context)
+endif
+override USER_EXTRA_CFLAGS := $(FUNCTIONAL_REVIEW_USER_CFLAGS)
+endif
+
 U := ../user
 USER_BIN_DIR := target/bin
 USER_ELF_DIR := target/elf

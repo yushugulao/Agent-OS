@@ -82,7 +82,8 @@ COMPARE_DUAL_TEST = REPO / "host_tools" / "test_compare_dual_platform_state.py"
 OBSERVE_EVIDENCE_MODULES = tuple(
     REPO / "host_tools" / name
     for name in (
-        "agent_metadata_disk_format.py", "agent_observe_disk_acceptance.py",
+        "agent_metadata_disk_format.py", "agent_metadata_journal.py",
+        "agent_observe_disk_acceptance.py",
         "agent_observe_disk_contract.py", "agent_observe_disk_evidence.py",
         "agent_observe_disk_fixture.py", "plain_ucore_fs_extract.py",
         "research_state_manifest.py",

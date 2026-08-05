@@ -1153,15 +1153,18 @@ agent_ipc_proc_prepare(struct proc *p)
 void
 agent_ipc_proc_reset(struct proc *p)
 {
+	int inactive;
 	int enabled;
 
 	if (p == 0)
 		return;
+	inactive = !p->is_agent && p->agent_control_id == 0;
 	enabled = intr_save();
 	agent_ipc_legacy_mailbox_release_locked(p);
 	intr_restore(enabled);
-	/* IPC owns this contiguous proc.h range. */
-	memset(&p->agent_mailbox_valid, 0, AGENT_IPC_PROC_STATE_BYTES);
+	/* The event plane is initialized only when an Agent role is activated. */
+	if (!inactive)
+		memset(&p->agent_mailbox_valid, 0, AGENT_IPC_PROC_STATE_BYTES);
 	p->heartbeat_interval = 0;
 	enabled = intr_save();
 	for (int tid = 0; tid < NTHREAD; tid++)

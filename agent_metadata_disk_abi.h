@@ -15,7 +15,8 @@ typedef unsigned long long amd_u64;
 #define AGENT_META_STORE_NAME_1 ".agentmeta1"
 #define AGENT_META_STORE_MAGIC 0x41474d4554413036ULL
 #define AGENT_META_STORE_VERSION_V5 5U
-#define AGENT_META_STORE_VERSION 7U
+#define AGENT_META_STORE_VERSION_V7 7U
+#define AGENT_META_STORE_VERSION 8U
 #define AGENT_META_STORE_GENESIS_GENERATION 1ULL
 #define AGENT_META_STORE_HASH_ALGORITHM 1U
 #define AGENT_META_STORE_HASH_INITIAL 1469598103934665603ULL
@@ -23,6 +24,34 @@ typedef unsigned long long amd_u64;
 #define AGENT_META_STORE_DURABLE_BYTES 8192U
 #define AGENT_META_STORE_RECORD_BYTES 416U
 #define AGENT_META_STORE_MAX_RECORDS 512U
+
+/*
+ * Version 8 keeps the canonical full-bank image as a compaction baseline and
+ * uses the block-aligned, preallocated tail for ordinary workflow deltas.
+ * A journal generation never rewrites a tail block: compaction moves to the
+ * peer bank and creates a new baseline generation before the old tail can be
+ * reused.
+ */
+#define AGENT_META_JOURNAL_MAGIC 0x41474d4a4e4c3038ULL
+#define AGENT_META_JOURNAL_VERSION 1U
+#define AGENT_META_JOURNAL_KIND_DATA 1U
+#define AGENT_META_JOURNAL_KIND_COMMIT 2U
+#define AGENT_META_JOURNAL_KIND_PAD 3U
+#define AGENT_META_JOURNAL_OP_NONE 0U
+#define AGENT_META_JOURNAL_OP_UPSERT 1U
+#define AGENT_META_JOURNAL_OP_DELETE 2U
+#define AGENT_META_JOURNAL_OP_ARENA_PATCH 3U
+#define AGENT_META_JOURNAL_BLOCK_BYTES 1024U
+#define AGENT_META_JOURNAL_SLOT_BYTES 512U
+#define AGENT_META_JOURNAL_HEADER_BYTES 96U
+#define AGENT_META_JOURNAL_PAYLOAD_BYTES AGENT_META_STORE_RECORD_BYTES
+#define AGENT_META_JOURNAL_SLOTS_PER_BLOCK 2U
+#define AGENT_META_JOURNAL_BLOCKS 32U
+#define AGENT_META_JOURNAL_SLOTS \
+	(AGENT_META_JOURNAL_BLOCKS * AGENT_META_JOURNAL_SLOTS_PER_BLOCK)
+#define AGENT_META_JOURNAL_MAX_DATA_RECORDS 15U
+#define AGENT_META_JOURNAL_MAX_TXN_BLOCKS 8U
+#define AGENT_META_JOURNAL_COMPACTION_RESERVE_BLOCKS 8U
 
 #define AGENT_DURABLE_ARENA_MAGIC 0x4147445552413031ULL
 #define AGENT_DURABLE_ARENA_VERSION 1U
@@ -55,15 +84,83 @@ typedef struct agent_meta_store_genesis {
 } amd_genesis;
 
 #define AGENT_META_STORE_GENESIS_BYTES sizeof(amd_genesis)
-#define AGENT_META_STORE_MAX_BYTES \
+#define AGENT_META_STORE_SNAPSHOT_MAX_BYTES \
 	(AGENT_META_STORE_GENESIS_BYTES + \
 	 AGENT_META_STORE_MAX_RECORDS * AGENT_META_STORE_RECORD_BYTES)
+#define AGENT_META_STORE_V7_MAX_BYTES AGENT_META_STORE_SNAPSHOT_MAX_BYTES
+#define AGENT_META_JOURNAL_OFFSET 222208U
+#define AGENT_META_JOURNAL_BYTES \
+	(AGENT_META_JOURNAL_BLOCKS * AGENT_META_JOURNAL_BLOCK_BYTES)
+#define AGENT_META_STORE_MAX_BYTES \
+	(AGENT_META_JOURNAL_OFFSET + AGENT_META_JOURNAL_BYTES)
+
+typedef struct agent_meta_journal_header {
+	amd_u64 magic;
+	amd_u32 version, kind;
+	amd_u64 base_generation, generation;
+	amd_u32 scope_id, lifecycle_id;
+	amd_u64 lifecycle_generation;
+	amd_u32 record_index, record_count, operation, payload_bytes;
+	amd_u64 previous_commit_hash, payload_hash, group_hash, slot_hash;
+} amd_journal_header;
+
+typedef struct agent_meta_journal_slot {
+	amd_journal_header header;
+	unsigned char payload[AGENT_META_JOURNAL_PAYLOAD_BYTES];
+} amd_journal_slot;
+
+/*
+ * A durable-arena delta is one canonical 400-byte window.  The old-window
+ * hash makes replay conditional on the exact baseline produced by the
+ * preceding committed generation; the slot checksum protects the new bytes.
+ */
+#define AGENT_META_JOURNAL_PATCH_DATA_BYTES 400U
+typedef struct agent_meta_journal_arena_patch {
+	amd_u32 offset, bytes;
+	amd_u64 before_hash;
+	unsigned char data[AGENT_META_JOURNAL_PATCH_DATA_BYTES];
+} amd_journal_arena_patch;
 
 _Static_assert(sizeof(amd_u32) == 4U && sizeof(amd_u64) == 8U &&
 	       sizeof(amd_header) == 40U && sizeof(amd_section) == 32U &&
 	       sizeof(amd_arena) == AGENT_DURABLE_ARENA_BYTES &&
 	       sizeof(amd_genesis) == 8232U,
 	       "metadata ABI");
+_Static_assert(AGENT_META_STORE_SNAPSHOT_MAX_BYTES == 221224U &&
+	       AGENT_META_JOURNAL_OFFSET == 217U *
+		       AGENT_META_JOURNAL_BLOCK_BYTES &&
+	       AGENT_META_STORE_SNAPSHOT_MAX_BYTES <=
+		       AGENT_META_JOURNAL_OFFSET &&
+	       AGENT_META_STORE_MAX_BYTES == 249U *
+		       AGENT_META_JOURNAL_BLOCK_BYTES,
+	       "metadata v8 fixed tail layout");
+_Static_assert(sizeof(amd_journal_header) ==
+	       AGENT_META_JOURNAL_HEADER_BYTES &&
+	       sizeof(amd_journal_slot) == AGENT_META_JOURNAL_SLOT_BYTES &&
+	       sizeof(amd_journal_arena_patch) ==
+		       AGENT_META_JOURNAL_PAYLOAD_BYTES &&
+	       __builtin_offsetof(amd_journal_header, magic) == 0U &&
+	       __builtin_offsetof(amd_journal_header, version) == 8U &&
+	       __builtin_offsetof(amd_journal_header, kind) == 12U &&
+	       __builtin_offsetof(amd_journal_header, base_generation) == 16U &&
+	       __builtin_offsetof(amd_journal_header, generation) == 24U &&
+	       __builtin_offsetof(amd_journal_header, scope_id) == 32U &&
+	       __builtin_offsetof(amd_journal_header, lifecycle_id) == 36U &&
+	       __builtin_offsetof(amd_journal_header, lifecycle_generation) == 40U &&
+	       __builtin_offsetof(amd_journal_header, record_index) == 48U &&
+	       __builtin_offsetof(amd_journal_header, record_count) == 52U &&
+	       __builtin_offsetof(amd_journal_header, operation) == 56U &&
+	       __builtin_offsetof(amd_journal_header, payload_bytes) == 60U &&
+	       __builtin_offsetof(amd_journal_header, previous_commit_hash) == 64U &&
+	       __builtin_offsetof(amd_journal_header, payload_hash) == 72U &&
+	       __builtin_offsetof(amd_journal_header, group_hash) == 80U &&
+	       __builtin_offsetof(amd_journal_header, slot_hash) == 88U,
+	       "metadata v8 journal slot ABI");
+_Static_assert(AGENT_META_JOURNAL_MAX_DATA_RECORDS + 1U <=
+	       AGENT_META_JOURNAL_MAX_TXN_BLOCKS *
+		       AGENT_META_JOURNAL_SLOTS_PER_BLOCK &&
+	       AGENT_META_JOURNAL_SLOTS == 64U,
+	       "metadata v8 transaction bound");
 
 static inline amd_u64
 agent_disk_hash(amd_u64 hash, const void *data, amd_u32 bytes)

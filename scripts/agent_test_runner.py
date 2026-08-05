@@ -1922,6 +1922,7 @@ def _monitor_command_impl(
     case_timeout,
     idle_notice,
     marker_grace,
+    powercut_delay=0,
     completion_mode=COMPLETION_NATURAL,
     expected_bad_addr_markers=(),
     marker_mode=MARKER_EXACT_LINE,
@@ -1957,6 +1958,10 @@ def _monitor_command_impl(
         )
     if max_output_bytes <= 0 or max_pending_chars <= 0:
         raise ValueError("output limits must be positive")
+    if not math.isfinite(powercut_delay) or powercut_delay < 0:
+        raise ValueError("powercut delay must be finite and non-negative")
+    if powercut_delay != 0 and completion_mode != COMPLETION_POWERCUT:
+        raise ValueError("powercut delay requires powercut completion")
 
     started_monotonic_ns = time.monotonic_ns()
     start = started_monotonic_ns / 1_000_000_000
@@ -2006,12 +2011,12 @@ def _monitor_command_impl(
                     f"[agent-tests] {init_proc}: exceeded {case_timeout:g}s",
                 )
                 break
-            if (
-                completion_mode in (
-                    COMPLETION_CHECKPOINT,
-                    COMPLETION_POWERCUT,
+            if scanner.marker_seen and (
+                completion_mode == COMPLETION_CHECKPOINT
+                or (
+                    completion_mode == COMPLETION_POWERCUT
+                    and now >= scanner.marker_seen_at + powercut_delay
                 )
-                and scanner.marker_seen
             ):
                 reason = (
                     "expected_powercut"
@@ -2042,6 +2047,11 @@ def _monitor_command_impl(
             deadlines = [case_deadline]
             if marker_deadline is not None:
                 deadlines.append(marker_deadline)
+            if (
+                completion_mode == COMPLETION_POWERCUT
+                and scanner.marker_seen
+            ):
+                deadlines.append(scanner.marker_seen_at + powercut_delay)
             wait = min(POLL_SECONDS, max(0.0, min(deadlines) - now))
             ready, _, _ = select.select([fd], [], [], wait)
             if ready:
@@ -2050,7 +2060,8 @@ def _monitor_command_impl(
                     last_output = time.monotonic()
                 if scanner.marker_seen and marker_deadline is None:
                     marker_deadline = (
-                        scanner.marker_seen_at + marker_grace
+                        scanner.marker_seen_at
+                        + max(marker_grace, powercut_delay)
                     )
                 if scanner.marker_seen and not marker_reported:
                     marker_reported = True
@@ -2076,12 +2087,12 @@ def _monitor_command_impl(
                         f"{case_timeout:g}s",
                     )
                     break
-                if (
-                    completion_mode in (
-                        COMPLETION_CHECKPOINT,
-                        COMPLETION_POWERCUT,
+                if scanner.marker_seen and (
+                    completion_mode == COMPLETION_CHECKPOINT
+                    or (
+                        completion_mode == COMPLETION_POWERCUT
+                        and now >= scanner.marker_seen_at + powercut_delay
                     )
-                    and scanner.marker_seen
                 ):
                     reason = (
                         "expected_powercut"
@@ -2298,6 +2309,11 @@ def parse_args():
         ),
         default=COMPLETION_NATURAL,
     )
+    parser.add_argument(
+        "--powercut-delay-seconds",
+        default="0s",
+        help="continue monitoring for this interval after a powercut marker",
+    )
     parser.add_argument("--expected-bad-addr-after", action="append", default=[])
     parser.add_argument(
         "--expected-bad-addr-marker-mode",
@@ -2408,12 +2424,23 @@ def main():
             args.marker_grace_seconds,
             "MARKER_GRACE_SECONDS",
         )
+        powercut_delay = parse_duration(
+            args.powercut_delay_seconds,
+            "POWERCUT_DELAY_SECONDS",
+        )
     except ValueError as error:
         print(f"[agent-tests] {args.init_proc}: {error}", file=sys.stderr)
         return 2
     if case_timeout <= 0:
         print(
             f"[agent-tests] {args.init_proc}: CASE_TIMEOUT must be positive",
+            file=sys.stderr,
+        )
+        return 2
+    if powercut_delay != 0 and args.completion_mode != COMPLETION_POWERCUT:
+        print(
+            f"[agent-tests] {args.init_proc}: POWERCUT_DELAY_SECONDS "
+            "requires powercut completion",
             file=sys.stderr,
         )
         return 2
@@ -2463,6 +2490,7 @@ def main():
         case_timeout=case_timeout,
         idle_notice=idle_notice,
         marker_grace=marker_grace,
+        powercut_delay=powercut_delay,
         completion_mode=args.completion_mode,
         expected_bad_addr_markers=args.expected_bad_addr_after,
         marker_mode=args.marker_mode,

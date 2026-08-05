@@ -55,6 +55,7 @@ def validate_sources(sources: dict[str, str]) -> None:
     file_source = sources["file"]
     store_io = sources["store_io"]
     store = sources["store"]
+    syscall = sources["syscall"]
     vfs = sources["vfs"]
 
     for token in (
@@ -101,11 +102,12 @@ def validate_sources(sources: dict[str, str]) -> None:
         require(plan_count, token, "snapshot fixed partition admission")
     scope_create = function_body(vfs, "static int vfs_scope_create(")
     for token in (
-        "if (ref->retiring)",
-        "retiring++",
-        "workflow_lifecycle_active(ref->lifecycle)",
-        "workflow_lifecycle_closing(ref->lifecycle)",
-        "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
+        "registry->active_count + registry->retiring_count <\n"
+        "\t\t    VFS_SCOPE_MAX_ACTIVE",
+        "registry->active_count + registry->retiring_count <\n"
+        "\t\t    VFS_SCOPE_LIFECYCLE_CAP",
+        "registry->free_count > 0",
+        "vfs_scope_registry_insert_locked(scope_id, created, storage)",
     ):
         require(scope_create, token, "retiring catalog partition retention")
 
@@ -243,7 +245,9 @@ def validate_sources(sources: dict[str, str]) -> None:
          "agent_catalog_hard_admission(",
          "agent_catalog_unbind(slot",
          "fs_rollback_created_workflow(",
-         "agent_catalog_state_clear(slot)"),
+         "agent_catalog_edit_buffer = *previous",
+         "agent_catalog_bind_status(",
+         "agent_catalog_slot_publish("),
         "validate and admit before rollback write",
     )
     if "agent_catalog_admission(" in restore or \
@@ -251,9 +255,14 @@ def validate_sources(sources: dict[str, str]) -> None:
         raise ContractError("exact rollback depends on live soft admission")
     if "undo->catalog_generation != agent_catalog_generation" in restore:
         raise ContractError("unrelated catalog generation became a rollback veto")
+    if restore.count("agent_catalog_edit_buffer = *previous;") != 1:
+        raise ContractError(
+            "rollback overwrites the live identity/size rebound after I/O"
+        )
     restore_cleanup = restore[
         restore.find("if ((undo->reserved & AGENT_CATALOG_UNDO_CREATED)"):
-        restore.find("agent_catalog_state_clear(slot)")
+        restore.find("if (had_previous) {", restore.find(
+            "if ((undo->reserved & AGENT_CATALOG_UNDO_CREATED)"))
     ]
     for token in ("fs_rollback_created_workflow(", ") < 0)", "return -1;"):
         require(restore_cleanup, token, "created receipt cleanup failure")
@@ -293,6 +302,14 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "return fs_rollback_created_workflow(meta->physical_name",
                   "AGENT_CATALOG_INDETERMINATE : -1"):
         require(bind_status, token, "bind-local create rollback")
+    for token in (
+        "meta->dev = ip->dev",
+        "meta->inum = ip->inum",
+        "meta->incarnation = ip->vfs_incarnation",
+        "meta->size = ip->size",
+        "meta->fs_generation = agent_file_state_generation_next(scope_id)",
+    ):
+        require(bind_status, token, "rollback live inode rebound")
     mismatch = bind_status[
         bind_status.find("if ((meta->dev"):
         bind_status.find("agent_file_state_set_index(")
@@ -320,7 +337,9 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "fs_io_health == FS_IO_INDETERMINATE ?\n"
                   "\t\t\tFS_LOOKUP_INDETERMINATE",
                   "result = fs_durable_barrier_forward()",
-                  "return FS_LOOKUP_INDETERMINATE;"):
+                  "result = FS_LOOKUP_INDETERMINATE;",
+                  "fs_namespace_gate_unlock()",
+                  "return result;"):
         require(dirlink, token, "directory publication state")
     classifier = function_body(fs, "static int fs_create_failure_status(")
     for token in ("fs_io_health == FS_IO_INDETERMINATE",
@@ -497,6 +516,181 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "agent_metadata_store_persist_commit(&persistence)",
                   "agent_file_restore_status(fence, undo"):
         require(finish, token, "fenced persistence rollback")
+    dirty = finish.find("agent_metadata_store_mark_dirty(scope_id)")
+    fault_guard = finish.find("#if defined(AGENT_METADATA_CRASH_PHASE)")
+    persist = finish.find("agent_metadata_store_persist_commit(&persistence)")
+    fault_end = finish.find("#endif", persist)
+    if min(dirty, fault_guard, persist, fault_end) < 0 or not (
+            dirty < fault_guard < persist < fault_end):
+        raise ContractError(
+            "ordinary PERSIST metadata mutation regained synchronous writeback"
+        )
+
+    submit = function_body(
+        store, "int agent_metadata_store_submit_wait_locked("
+    )
+    for token in ("agent_meta_persist.snapshot_sealed",
+                  "!agent_meta_store_recovery_required",
+                  "!agent_meta_persist.restart_target",
+                  "submitter == 0 || submitter == token",
+                  "agent_metadata_reload_available()"):
+        require(submit, token, "sealed COW submit fast path")
+    start = function_body(store, "static int agent_meta_persist_start_locked(")
+    require_order(
+        start,
+        ("agent_meta_store_build_scope(",
+         "agent_meta_persist.snapshot_sealed = 1",
+         "agent_meta_persist_target_locked(target_bank, 0)"),
+        "COW snapshot sealed only after capture",
+    )
+    step = function_body(store, "static int agent_meta_persist_step_locked(")
+    require_order(
+        step,
+        ("if (!state->snapshot_sealed)",
+         'panic("metadata COW snapshot is not sealed")',
+         "state->target_bank"),
+        "persist step sealed snapshot invariant",
+    )
+    compact_store = "".join(store.split())
+    phase_names = (
+        "INVALIDATE",
+        "WRITE",
+        "FLUSH_PREPARED",
+        "VERIFY_PAYLOAD",
+        "PUBLISH",
+        "FLUSH_HEADER",
+        "VERIFY_HEADER",
+        "COMMIT",
+    )
+    for phase, phase_name in enumerate(phase_names, 1):
+        require(
+            compact_store,
+            f"#defineAGENT_META_PERSIST_{phase_name}{phase}U",
+            "ordered metadata COW phase identity",
+        )
+    if "AGENT_META_PERSIST_FLUSH_INVALID" in store:
+        raise ContractError("metadata COW regained its redundant invalid barrier")
+    target = function_body(store, "static int agent_meta_persist_target_locked(")
+    require_order(
+        target,
+        ("agent_meta_persist_prepare_blocks(store, target_bank)",
+         "agent_meta_persist.payload_durable = 0",
+         "agent_meta_persist.header_durable = 0",
+         "agent_meta_persist.phase = AGENT_META_PERSIST_INVALIDATE"),
+        "metadata COW target resets durability proof",
+    )
+    require_order(
+        step,
+        ("if (state->phase >= AGENT_META_PERSIST_VERIFY_PAYLOAD",
+         "!state->payload_durable",
+         'panic("metadata payload published before durability")',
+         "if (state->phase >= AGENT_META_PERSIST_VERIFY_HEADER",
+         "!state->header_durable",
+         'panic("metadata header verified before durability")'),
+        "metadata COW runtime durability proof",
+    )
+    if step.count("agent_meta_durable_flush()") != 2:
+        raise ContractError(
+            "metadata COW must have exactly prepared and header durability fences"
+        )
+    require_order(
+        step,
+        ("case AGENT_META_PERSIST_INVALIDATE:",
+         "writei(ip, &kernel_cred, 0, (uint64)&invalid_header",
+         "state->phase = AGENT_META_PERSIST_WRITE",
+         "agent_meta_crash_checkpoint(1)",
+         "case AGENT_META_PERSIST_WRITE:",
+         "state->phase = AGENT_META_PERSIST_FLUSH_PREPARED",
+         "agent_meta_crash_checkpoint(2)",
+         "case AGENT_META_PERSIST_FLUSH_PREPARED:",
+         "agent_meta_eio_checkpoint(3)",
+         "agent_meta_durable_flush()",
+         "state->payload_durable = 1",
+         "state->phase = AGENT_META_PERSIST_VERIFY_PAYLOAD",
+         "agent_meta_crash_checkpoint(3)",
+         "case AGENT_META_PERSIST_VERIFY_PAYLOAD:",
+         "agent_meta_crash_checkpoint(4)",
+         "state->phase = AGENT_META_PERSIST_PUBLISH",
+         "case AGENT_META_PERSIST_PUBLISH:",
+         "if (!state->payload_durable || state->header_durable)",
+         "state->irrevocable = 1",
+         "writei(ip, &kernel_cred, 0, (uint64)&store->header",
+         "state->phase = AGENT_META_PERSIST_FLUSH_HEADER",
+         "agent_meta_crash_checkpoint(5)",
+         "case AGENT_META_PERSIST_FLUSH_HEADER:",
+         "agent_meta_eio_checkpoint(6)",
+         "state->header_durable = 1",
+         "state->phase = AGENT_META_PERSIST_VERIFY_HEADER",
+         "agent_meta_crash_checkpoint(6)",
+         "case AGENT_META_PERSIST_VERIFY_HEADER:",
+         "agent_meta_eio_checkpoint(7)",
+         "state->phase = AGENT_META_PERSIST_COMMIT",
+         "agent_meta_crash_checkpoint(7)"),
+        "metadata COW ordered publication protocol",
+    )
+    header_fence = step[step.find("case AGENT_META_PERSIST_FLUSH_HEADER:"):]
+    require_order(
+        header_fence,
+        ("case AGENT_META_PERSIST_FLUSH_HEADER:",
+         "agent_meta_eio_checkpoint(6)",
+         "agent_meta_durable_flush()",
+         "state->header_durable = 1",
+         "state->phase = AGENT_META_PERSIST_VERIFY_HEADER"),
+        "metadata COW header durability fence",
+    )
+    require_order(
+        step,
+        ("if (state->phase == AGENT_META_PERSIST_COMMIT)",
+         "agent_meta_crash_checkpoint(8)",
+         "agent_meta_persist_begin_mirror_locked(0)"),
+        "metadata COW commit checkpoint",
+    )
+    primary_fence = function_body(
+        store, "int agent_metadata_store_durability_fence("
+    )
+    require(primary_fence, "scope_target(scope_id), 0, 0",
+            "primary durability fence")
+    quiescence_fence = function_body(
+        store, "int agent_metadata_store_quiescence_fence("
+    )
+    require(quiescence_fence, "scope_fence_target(scope_id), 1, 1",
+            "replicated quiescence fence")
+    fence_current = function_body(
+        objects, "int agent_metadata_durability_fence_current("
+    )
+    require(fence_current, "agent_metadata_store_durability_fence(scope_id)",
+            "current-scope primary fence")
+    quiescence_current = function_body(
+        objects, "int agent_metadata_quiescence_fence_current("
+    )
+    require(quiescence_current,
+            "agent_metadata_store_quiescence_fence(scope_id)",
+            "current-scope replicated fence")
+    sync = function_body(syscall, "static int sys_sync(")
+    require_order(
+        sync,
+        ("agent_metadata_quiescence_fence_current()", "if (result < 0)",
+         "return fs_epoch_commit()"),
+        "sync grouped replicated metadata boundary",
+    )
+    if sync.count("fs_epoch_commit()") != 1:
+        raise ContractError("sync regained an eager filesystem barrier")
+    fsync = function_body(syscall, "static int sys_fsync(")
+    require_order(
+        fsync,
+        ("fdget(fd)", "fileclose(f)",
+         "agent_metadata_durability_fence_current()", "if (result < 0)",
+         "return fs_epoch_commit()"),
+        "fsync grouped verified-primary metadata boundary",
+    )
+    if fsync.count("fs_epoch_commit()") != 1:
+        raise ContractError("fsync regained an eager filesystem barrier")
+    require_order(
+        syscall,
+        ("case SYS_fsync:", "case SYS_fdatasync:",
+         "ret = sys_fsync(args[0]);"),
+        "fsync and fdatasync shared primary fence",
+    )
     reclaim = function_body(objects, "int agent_scope_reclaim_begin(")
     require_order(reclaim,
                   ("reclaimed = agent_metadata_catalog_reclaim_scope(scope_id)",
@@ -619,6 +813,7 @@ def load_sources(root: Path) -> dict[str, str]:
         "file": root / "os/file.c",
         "store_io": root / "os/agent_metadata_store_io.c",
         "store": root / "os/agent_metadata_store.c",
+        "syscall": root / "os/syscall.c",
         "vfs": root / "os/vfs_security.c",
     }
     return {name: path.read_text(encoding="utf-8")

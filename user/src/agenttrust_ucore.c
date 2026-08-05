@@ -114,6 +114,35 @@ static void run_exec_probe(int role, const char *image, const char *argument,
 					      "untrusted agent exec denied");
 }
 
+static void check_exec_cache(void)
+{
+	struct agent_performance_snapshot before;
+	struct agent_performance_snapshot after;
+
+	memset(&before, 0, sizeof(before));
+	memset(&after, 0, sizeof(after));
+	check(agent_performance_snapshot(&before) == AGENT_STATUS_OK,
+	      "read exec cache counters");
+	check(before.version == AGENT_PERFORMANCE_SNAPSHOT_VERSION &&
+	      before.struct_size == sizeof(before), "exec cache counter ABI");
+	run_exec_probe(AGENT_ROLE_ORCHESTRATOR, TRUSTED_TARGET,
+		       "--trusted-probe", 1);
+	run_exec_probe(AGENT_ROLE_ORCHESTRATOR, TRUSTED_TARGET,
+		       "--trusted-probe", 1);
+	check(agent_performance_snapshot(&after) == AGENT_STATUS_OK,
+	      "reread exec cache counters");
+	check(after.exec_cache_misses > before.exec_cache_misses,
+	      "cold exec records misses");
+	check(after.exec_cache_hits > before.exec_cache_hits,
+	      "warm exec reuses RX pages");
+	check(after.exec_cache_shared_pages > before.exec_cache_shared_pages,
+	      "warm exec maps shared RX pages");
+	printf("agenttrust_ucore: exec_cache hits=%llu misses=%llu shared=%llu\n",
+	       after.exec_cache_hits - before.exec_cache_hits,
+	       after.exec_cache_misses - before.exec_cache_misses,
+	       after.exec_cache_shared_pages - before.exec_cache_shared_pages);
+}
+
 int main(int argc, char **argv)
 {
 	struct agent_info info;
@@ -139,8 +168,7 @@ int main(int argc, char **argv)
 	printf("agenttrust_ucore: bootstrap_role_boundary=1\n");
 	unlink(UNTRUSTED_COPY);
 	copy_file("agenttrust_ucore", UNTRUSTED_COPY);
-	run_exec_probe(AGENT_ROLE_ORCHESTRATOR, TRUSTED_TARGET,
-		       "--trusted-probe", 1);
+	check_exec_cache();
 	run_exec_probe(AGENT_ROLE_ORCHESTRATOR, WRONG_ROLE_TARGET,
 		       "--untrusted-probe", 0);
 	run_exec_probe(AGENT_ROLE_ORCHESTRATOR, UNTRUSTED_COPY,

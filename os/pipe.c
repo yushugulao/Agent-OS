@@ -109,7 +109,7 @@ int pipewrite(struct pipe *pi, uint64 addr, uint64 n)
 		w += size;
 		pipe_wake_units(&pi->read_waiters, size);
 		intr_restore(enabled);
-		if (kernel_work_checkpoint((uint)size) < 0)
+		if (kernel_work_checkpoint_bytes(size) < 0)
 			return (int)w;
 		continue;
 interrupted:
@@ -150,7 +150,7 @@ int piperead(struct pipe *pi, uint64 addr, uint64 n)
 		r += size;
 		pipe_wake_units(&pi->write_waiters, size);
 		intr_restore(enabled);
-		if (kernel_work_checkpoint((uint)size) < 0)
+		if (kernel_work_checkpoint_bytes(size) < 0)
 			return (int)r;
 		enabled = intr_save();
 	}

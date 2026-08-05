@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include "../../agent_lifecycle_abi.h"
+#include "../../agent_performance_abi.h"
 #include "../../agent_resource_abi.h"
 #include "../../agent_tool_abi.h"
 #define AGENT_TYPE_NONE  0
@@ -358,6 +359,10 @@ struct agent_info {
 	uint64 legacy_mailbox_queue_count;
 	uint64 file_scan_deferred;
 	uint64 file_scan_failures;
+	uint64 metadata_journal_txns;
+	uint64 metadata_journal_blocks;
+	uint64 metadata_compactions;
+	uint64 metadata_full_cow_blocks;
 };
 
 struct agent_sched_record {
@@ -745,6 +750,7 @@ int agent_workflow_lifecycle_info(
 	struct agent_workflow_lifecycle_info *info,
 	const struct agent_workflow_lifecycle_key *expected);
 int agent_resource_snapshot(struct agent_resource_snapshot *snapshot);
+int agent_performance_snapshot(struct agent_performance_snapshot *snapshot);
 int agent_scope_delegate_fd(int fd);
 int agent_worker_create(const char *image, uint64 capabilities);
 int agent_info(struct agent_info *info);

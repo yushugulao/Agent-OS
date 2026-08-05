@@ -43,6 +43,21 @@ ssize_t write(int fd, const void *buf, size_t len)
 	return syscall(SYS_write, fd, buf, len);
 }
 
+int sync(void)
+{
+	return syscall(SYS_sync);
+}
+
+int fsync(int fd)
+{
+	return syscall(SYS_fsync, fd);
+}
+
+int fdatasync(int fd)
+{
+	return syscall(SYS_fdatasync, fd);
+}
+
 int getpid()
 {
 	return syscall(SYS_getpid);
@@ -351,6 +366,12 @@ int agent_resource_snapshot(struct agent_resource_snapshot *snapshot)
 		       sizeof(*snapshot));
 }
 
+int agent_performance_snapshot(struct agent_performance_snapshot *snapshot)
+{
+	return syscall(SYS_agent_performance_snapshot, snapshot,
+		       sizeof(*snapshot));
+}
+
 int agent_scope_delegate_fd(int fd)
 {
 	return syscall(SYS_agent_scope_delegate_fd, fd);
@@ -598,6 +619,7 @@ static int context_mirror_active_record(
 					  &cursor_record) < 0 ||
 		    (expected_hash != 0 &&
 		     cursor_record.record_hash != expected_hash) ||
+		    cursor_record.prev_hash == 0 ||
 		    cursor_record.path_parent_sequence == 0 ||
 		    cursor_record.path_parent_sequence < header->oldest_sequence)
 			return -1;
@@ -663,7 +685,8 @@ int context_mirror_active_query(const struct agent_context_header *header,
 
 			if (context_mirror_active_record(header, mirror_records,
 						 index - 1, &previous) < 0 ||
-			    record.path_parent_sequence != previous.sequence)
+			    record.path_parent_sequence != previous.sequence ||
+			    record.prev_hash != previous.record_hash)
 				return -1;
 		}
 		if (start_sequence != 0 && record.sequence < start_sequence)

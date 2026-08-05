@@ -2,6 +2,7 @@
 #include "agent_context_path.h"
 #include "agent_internal.h"
 #include "defs.h"
+#include "kernel_work.h"
 #include "timer.h"
 #include "trap.h"
 
@@ -15,6 +16,40 @@ struct agent_context_private_slot {
 
 #define AGENT_CONTEXT_SLOTS_PER_PAGE \
 	(PAGE_SIZE / sizeof(struct agent_context_private_slot))
+#define AGENT_CONTEXT_LAST_PAGE_RECORDS \
+	(AGENT_CONTEXT_MAX_RECORDS - \
+	 (AGENT_CONTEXT_SIDECAR_PAGE_COUNT - 1) * \
+		 AGENT_CONTEXT_SLOTS_PER_PAGE)
+#define AGENT_CONTEXT_PATH_INDEX_MAGIC 0x4354585041544831ULL
+
+struct agent_context_path_summary {
+	uint64 workflow_lifecycle_id;
+	uint64 workflow_lifecycle_generation;
+	uint64 branch_generation;
+	uint64 head_sequence;
+	uint64 head_hash;
+	uint64 count;
+	uint64 oldest_sequence;
+};
+
+struct agent_context_path_index {
+	uint64 magic;
+	struct agent_context_path_summary summary;
+	uint64 successors[AGENT_CONTEXT_MAX_RECORDS];
+};
+
+struct agent_context_append_receipt {
+	struct agent_context_path_summary before;
+	uint64 archive_count;
+	uint64 archive_oldest;
+	uint64 archive_latest;
+	uint64 archive_head;
+	uint64 sequence;
+	uint64 slot;
+	uint64 evicted_sequence;
+	uint64 evicted_successor;
+	int evicted_active;
+};
 
 _Static_assert(AGENT_CONTEXT_SLOTS_PER_PAGE > 0,
 	       "an Agent context slot must fit in one page");
@@ -30,6 +65,15 @@ _Static_assert((AGENT_CONTEXT_SIDECAR_PAGE_COUNT - 1) *
 			       AGENT_CONTEXT_SLOTS_PER_PAGE <
 		       AGENT_CONTEXT_MAX_RECORDS,
 	       "eight sidecar pages must remain insufficient");
+_Static_assert(AGENT_CONTEXT_LAST_PAGE_RECORDS > 0 &&
+		       AGENT_CONTEXT_LAST_PAGE_RECORDS <=
+			       AGENT_CONTEXT_SLOTS_PER_PAGE,
+	       "Agent context last-page record count");
+_Static_assert(AGENT_CONTEXT_LAST_PAGE_RECORDS *
+			       sizeof(struct agent_context_private_slot) +
+		       sizeof(struct agent_context_path_index) <=
+		       PAGE_SIZE,
+	       "Agent context path index must fit sidecar slack");
 _Static_assert(AGENT_STATE_PAGE_COUNT ==
 		       AGENT_CONTEXT_SIDECAR_PAGE_COUNT +
 			       2U * AGENT_CONTEXT_PAGES,
@@ -138,6 +182,227 @@ agent_context_slot(struct proc *p, uint64 slot)
 
 	return &((struct agent_context_private_slot *)
 			 p->agent_context_sidecar_kva[page])[index];
+}
+
+static struct agent_context_path_index *
+agent_context_path_index(struct proc *p)
+{
+	char *last_page;
+
+	if (p == 0 ||
+	    p->agent_context_sidecar_kva[AGENT_CONTEXT_SIDECAR_PAGE_COUNT - 1] ==
+		    0)
+		return 0;
+	last_page = (char *)p->agent_context_sidecar_kva
+		[AGENT_CONTEXT_SIDECAR_PAGE_COUNT - 1];
+	return (struct agent_context_path_index *)(
+		last_page + AGENT_CONTEXT_LAST_PAGE_RECORDS *
+				    sizeof(struct agent_context_private_slot));
+}
+
+static int
+agent_context_path_index_matches(struct proc *p,
+				 struct agent_context_path_index *index)
+{
+	struct agent_context_path_summary *summary;
+
+	if (p == 0 || index == 0 || index->magic != AGENT_CONTEXT_PATH_INDEX_MAGIC)
+		return 0;
+	summary = &index->summary;
+	if (summary->workflow_lifecycle_id != p->workflow_lifecycle_id ||
+	    summary->workflow_lifecycle_generation !=
+		    p->workflow_lifecycle_generation ||
+	    summary->branch_generation != p->context_branch_generation ||
+	    summary->head_sequence != p->context_path_visible_head ||
+	    summary->head_hash != p->agent_context_chain_hash ||
+	    summary->count != p->context_active_path_count ||
+	    summary->oldest_sequence != p->context_active_path_oldest ||
+	    summary->count > p->context_path_count)
+		return 0;
+	if (summary->count == 0)
+		return summary->head_sequence == 0 && summary->head_hash == 0 &&
+		       summary->oldest_sequence == 0;
+	return summary->head_sequence >= p->context_path_oldest &&
+	       summary->head_sequence <= p->context_path_latest &&
+	       summary->oldest_sequence >= p->context_path_oldest &&
+	       summary->oldest_sequence <= summary->head_sequence &&
+	       summary->branch_generation != 0;
+}
+
+static int
+agent_context_path_summary_capture(struct proc *p,
+				   struct agent_context_path_summary *summary)
+{
+	struct agent_context_path_index *index = agent_context_path_index(p);
+
+	if (summary == 0 || !agent_context_path_index_matches(p, index))
+		return -1;
+	*summary = index->summary;
+	return 0;
+}
+
+static int
+agent_context_path_summary_matches(struct proc *p,
+				   const struct agent_context_path_summary *summary)
+{
+	struct agent_context_path_index *index = agent_context_path_index(p);
+	struct agent_context_path_summary current;
+
+	if (p == 0 || summary == 0 || index == 0 ||
+	    index->magic != AGENT_CONTEXT_PATH_INDEX_MAGIC)
+		return 0;
+	current = index->summary;
+	return current.workflow_lifecycle_id == summary->workflow_lifecycle_id &&
+	       current.workflow_lifecycle_generation ==
+		       summary->workflow_lifecycle_generation &&
+	       current.branch_generation == summary->branch_generation &&
+	       current.head_sequence == summary->head_sequence &&
+	       current.head_hash == summary->head_hash &&
+	       current.count == summary->count &&
+	       current.oldest_sequence == summary->oldest_sequence &&
+	       p->workflow_lifecycle_id == summary->workflow_lifecycle_id &&
+	       p->workflow_lifecycle_generation ==
+		       summary->workflow_lifecycle_generation &&
+	       p->context_branch_generation == summary->branch_generation &&
+	       p->context_path_visible_head == summary->head_sequence &&
+	       p->agent_context_chain_hash == summary->head_hash &&
+	       p->context_active_path_count == summary->count &&
+	       p->context_active_path_oldest == summary->oldest_sequence;
+}
+
+static int
+agent_context_path_index_reset(struct proc *p, uint64 branch_generation)
+{
+	struct agent_context_path_index *index = agent_context_path_index(p);
+
+	if (!agent_context_ready(p) || index == 0 || branch_generation == 0)
+		return -1;
+	memset(index, 0, sizeof(*index));
+	index->magic = AGENT_CONTEXT_PATH_INDEX_MAGIC;
+	index->summary.workflow_lifecycle_id = p->workflow_lifecycle_id;
+	index->summary.workflow_lifecycle_generation =
+		p->workflow_lifecycle_generation;
+	index->summary.branch_generation = branch_generation;
+	return 0;
+}
+
+static int
+agent_context_append_receipt_prepare(
+	struct proc *p, const struct agent_context_record *record, uint64 slot,
+	struct agent_context_append_receipt *receipt)
+{
+	struct agent_context_path_index *index = agent_context_path_index(p);
+	uint64 successor;
+
+	if (p == 0 || record == 0 || receipt == 0 ||
+	    !agent_context_path_index_matches(p, index) ||
+	    p->context_path_capacity == 0 || slot >= p->context_path_capacity ||
+	    slot != p->context_path_head % p->context_path_capacity ||
+	    p->context_path_latest == ~0ULL ||
+	    record->sequence != p->context_path_latest + 1 ||
+	    record->branch_generation != index->summary.branch_generation ||
+	    record->path_parent_sequence != index->summary.head_sequence ||
+	    record->prev_hash != index->summary.head_hash ||
+	    record->record_hash == 0 ||
+	    record->record_hash != agent_context_record_hash(record) ||
+	    (index->summary.count == 0) !=
+		    (record->path_parent_sequence == 0) ||
+	    (index->summary.head_sequence != 0 &&
+	     index->successors[(index->summary.head_sequence - 1) %
+			       p->context_path_capacity] != 0))
+		return -1;
+	memset(receipt, 0, sizeof(*receipt));
+	receipt->before = index->summary;
+	receipt->archive_count = p->context_path_count;
+	receipt->archive_oldest = p->context_path_oldest;
+	receipt->archive_latest = p->context_path_latest;
+	receipt->archive_head = p->context_path_head;
+	receipt->sequence = record->sequence;
+	receipt->slot = slot;
+	if (p->context_path_count < p->context_path_capacity)
+		return 0;
+	receipt->evicted_sequence = p->context_path_oldest;
+	if ((receipt->evicted_sequence - 1) % p->context_path_capacity != slot)
+		return -1;
+	if (receipt->evicted_sequence != index->summary.oldest_sequence)
+		return 0;
+	receipt->evicted_active = 1;
+	successor = index->successors[slot];
+	if ((index->summary.count == 1 && successor != 0) ||
+	    (index->summary.count > 1 &&
+	     (successor <= receipt->evicted_sequence ||
+	      successor > index->summary.head_sequence ||
+	      successor < p->context_path_oldest)))
+		return -1;
+	receipt->evicted_successor = successor;
+	return 0;
+}
+
+static int
+agent_context_append_receipt_commit(
+	struct proc *p, const struct agent_context_record *record,
+	const struct agent_context_append_receipt *receipt)
+{
+	struct agent_context_path_index *index = agent_context_path_index(p);
+	uint64 expected_archive_count;
+	uint64 expected_archive_oldest;
+	uint64 active_count;
+	uint64 active_oldest;
+
+	if (p == 0 || record == 0 || receipt == 0 ||
+	    !agent_context_path_summary_matches(p, &receipt->before) ||
+	    record->sequence != receipt->sequence ||
+	    record->branch_generation != receipt->before.branch_generation ||
+	    record->path_parent_sequence != receipt->before.head_sequence ||
+	    record->prev_hash != receipt->before.head_hash ||
+	    receipt->slot >= p->context_path_capacity ||
+	    receipt->archive_head != receipt->slot ||
+	    receipt->archive_latest == ~0ULL ||
+	    receipt->archive_latest + 1 != receipt->sequence)
+		return -1;
+	expected_archive_count = receipt->archive_count < p->context_path_capacity ?
+				 receipt->archive_count + 1 :
+				 receipt->archive_count;
+	expected_archive_oldest = receipt->archive_count == 0 ?
+				  receipt->sequence :
+				  receipt->archive_oldest;
+	if (receipt->archive_count == p->context_path_capacity)
+		expected_archive_oldest =
+			receipt->sequence - p->context_path_capacity + 1;
+	if (p->context_path_count != expected_archive_count ||
+	    p->context_path_oldest != expected_archive_oldest ||
+	    p->context_path_latest != receipt->sequence ||
+	    p->context_path_head !=
+		    (receipt->slot + 1) % p->context_path_capacity)
+		return -1;
+	active_count = receipt->before.count + 1;
+	if (receipt->evicted_active)
+		active_count--;
+	if (receipt->before.count == 0 ||
+	    (receipt->evicted_active && receipt->before.count == 1))
+		active_oldest = receipt->sequence;
+	else if (receipt->evicted_active)
+		active_oldest = receipt->evicted_successor;
+	else
+		active_oldest = receipt->before.oldest_sequence;
+	if (active_count == 0 || active_count > p->context_path_count ||
+	    active_oldest < p->context_path_oldest ||
+	    active_oldest > receipt->sequence)
+		return -1;
+	if (receipt->before.head_sequence != 0 &&
+	    receipt->before.head_sequence != receipt->evicted_sequence)
+		index->successors[(receipt->before.head_sequence - 1) %
+				  p->context_path_capacity] = receipt->sequence;
+	index->successors[receipt->slot] = 0;
+	index->summary.head_sequence = receipt->sequence;
+	index->summary.head_hash = record->record_hash;
+	index->summary.count = active_count;
+	index->summary.oldest_sequence = active_oldest;
+	p->context_path_visible_head = receipt->sequence;
+	p->context_active_path_count = active_count;
+	p->context_active_path_oldest = active_oldest;
+	agent_context_path_note_append(0);
+	return 0;
 }
 
 int
@@ -830,6 +1095,8 @@ agent_context_init(struct proc *p)
 	p->agent_current_cause_control = 0;
 	p->agent_context_chain_hash = 0;
 	p->agent_provenance_edges = 0;
+	if (agent_context_path_index_reset(p, branch_generation) < 0)
+		return -1;
 	if (agent_context_write_header_locked(p) < 0)
 		return -1;
 	return agent_context_write_latest(p, 0);
@@ -969,6 +1236,7 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 			   uint64 flags, int authority_effect,
 			   int causal_audit)
 {
+	struct agent_context_append_receipt receipt;
 	struct agent_context_detail detail;
 	struct agent_context_publish_range ranges[3];
 	struct agent_context_record record;
@@ -1008,6 +1276,8 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 	safestrcpy(record.result, latest->result, sizeof(record.result));
 	record.prev_hash = p->agent_context_chain_hash;
 	record.record_hash = agent_context_record_hash(&record);
+	if (agent_context_append_receipt_prepare(p, &record, slot, &receipt) < 0)
+		return -1;
 
 	memset(&detail, 0, sizeof(detail));
 	detail.sequence = latest->sequence;
@@ -1033,12 +1303,8 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 	p->context_path_head = (slot + 1) % p->context_path_capacity;
 	if (record.cause_sequence != 0)
 		p->agent_provenance_edges++;
-	p->context_path_visible_head = latest->sequence;
-	if (agent_context_active_measure(
-		    p, p->context_path_visible_head,
-		    &p->context_active_path_count,
-		    &p->context_active_path_oldest) < 0)
-		panic("Agent context active path");
+	if (agent_context_append_receipt_commit(p, &record, &receipt) < 0)
+		panic("Agent context append receipt");
 	p->agent_context_chain_hash = record.record_hash;
 	p->agent_current_cause_sequence = latest->sequence;
 	p->context_cause_branch_generation = record.branch_generation;
@@ -1192,10 +1458,19 @@ int
 sys_context_query(uint64 start_sequence, uint64 outaddr, int max)
 {
 	struct proc *p = curr_proc();
+	struct agent_context_path_summary query_summary;
+	struct agent_context_path_index *path_index;
 	struct agent_context_record record;
-	uint64 index;
+	uint64 cursor;
+	uint64 successor;
+	uint64 previous_sequence = 0;
+	uint64 previous_hash = 0;
+	uint64 records_examined = 0;
 	int copied = 0;
-	int read_status;
+	int first = 1;
+	int finished = 0;
+	int account_query = 0;
+	int terminal;
 	int result;
 
 	if (!p->is_agent)
@@ -1208,30 +1483,101 @@ sys_context_query(uint64 start_sequence, uint64 outaddr, int max)
 		result = 0;
 		goto out;
 	}
-	if (start_sequence > p->context_path_visible_head) {
+	if (agent_context_path_summary_capture(p, &query_summary) < 0) {
+		result = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	path_index = agent_context_path_index(p);
+	account_query = 1;
+	if (start_sequence > query_summary.head_sequence) {
 		result = 0;
 		goto out;
 	}
-	for (index = 0;
-	     index < p->context_active_path_count && copied < max;
-	     index++) {
-		read_status = agent_context_active_record(p, index, &record);
-		if (read_status < 0) {
-			result = read_status == -2 ? -1 : AGENT_STATUS_NO_SPACE;
+	cursor = query_summary.oldest_sequence;
+	while (records_examined < query_summary.count && copied < max) {
+		if (agent_context_read_record(
+			    p, (cursor - 1) % p->context_path_capacity,
+			    &record) < 0) {
+			result = AGENT_STATUS_NO_SPACE;
 			goto out;
 		}
-		if (start_sequence != 0 && record.sequence < start_sequence)
-			continue;
-		if (copyout(p->pagetable,
-			    outaddr + copied * sizeof(struct agent_context_record),
+		records_examined++;
+		if (record.sequence != cursor || record.record_hash == 0 ||
+		    record.record_hash != agent_context_record_hash(&record) ||
+		    record.branch_generation == 0 ||
+		    record.branch_generation > query_summary.branch_generation) {
+			result = AGENT_STATUS_NO_SPACE;
+			goto out;
+		}
+		terminal = record.path_parent_sequence == 0 ||
+			   record.path_parent_sequence < p->context_path_oldest;
+		if (first) {
+			if (cursor != query_summary.oldest_sequence || !terminal ||
+			    ((record.path_parent_sequence == 0) !=
+			     (record.prev_hash == 0))) {
+				result = AGENT_STATUS_NO_SPACE;
+				goto out;
+			}
+		} else if (terminal ||
+			   record.path_parent_sequence != previous_sequence ||
+			   record.prev_hash != previous_hash) {
+			result = AGENT_STATUS_NO_SPACE;
+			goto out;
+		}
+		successor = path_index->successors[
+			(record.sequence - 1) % p->context_path_capacity];
+		if (successor == 0) {
+			if (record.sequence != query_summary.head_sequence ||
+			    record.record_hash != query_summary.head_hash ||
+			    records_examined != query_summary.count) {
+				result = AGENT_STATUS_NO_SPACE;
+				goto out;
+			}
+			finished = 1;
+		} else if (successor <= record.sequence ||
+			   successor > query_summary.head_sequence ||
+			   records_examined >= query_summary.count) {
+			result = AGENT_STATUS_NO_SPACE;
+			goto out;
+		}
+		if (kernel_work_checkpoint(1) < 0) {
+			result = -1;
+			goto out;
+		}
+		if (!agent_context_path_summary_matches(p, &query_summary)) {
+			result = AGENT_STATUS_STALE;
+			goto out;
+		}
+		if ((start_sequence == 0 || record.sequence >= start_sequence) &&
+		    copyout(p->pagetable,
+			    outaddr + copied *
+					      sizeof(struct agent_context_record),
 			    (char *)&record, sizeof(record)) < 0) {
 			result = -1;
 			goto out;
 		}
-		copied++;
+		if (start_sequence == 0 || record.sequence >= start_sequence)
+			copied++;
+		if (finished || copied == max)
+			break;
+		previous_sequence = record.sequence;
+		previous_hash = record.record_hash;
+		cursor = successor;
+		first = 0;
+	}
+	if (!agent_context_path_summary_matches(p, &query_summary)) {
+		result = AGENT_STATUS_STALE;
+		goto out;
+	}
+	if (copied < max && !finished) {
+		result = AGENT_STATUS_NO_SPACE;
+		goto out;
 	}
 	result = copied;
 out:
+	if (account_query)
+		agent_context_path_note_forward_query(records_examined,
+					      query_summary.count);
 	agent_lifecycle_context_lane_leave(p);
 	return result;
 }
@@ -1325,6 +1671,8 @@ sys_context_rollback(uint64 sequence)
 		{ AGENT_CONTEXT_HEADER_OFFSET,
 		  sizeof(struct agent_context_header) },
 	};
+	struct agent_context_path_summary source_summary;
+	struct agent_context_path_index *path_index;
 	struct agent_context_record record;
 	struct agent_result latest;
 	uint64 span_owner;
@@ -1334,6 +1682,8 @@ sys_context_rollback(uint64 sequence)
 	uint64 branch_generation;
 	uint64 active_path_count;
 	uint64 active_path_oldest;
+	uint64 rebuilt_path_count;
+	uint64 rebuilt_path_oldest;
 	int cause_pid;
 	int result;
 
@@ -1341,7 +1691,8 @@ sys_context_rollback(uint64 sequence)
 		return -1;
 	if (agent_lifecycle_context_lane_enter(p) < 0)
 		return -1;
-	if (p->context_path_count == 0 ||
+	if (agent_context_path_summary_capture(p, &source_summary) < 0 ||
+	    p->context_path_count == 0 ||
 	    sequence < p->context_path_oldest ||
 	    sequence > p->context_path_latest) {
 		result = AGENT_STATUS_NOT_FOUND;
@@ -1380,11 +1731,36 @@ sys_context_rollback(uint64 sequence)
 		result = AGENT_STATUS_NO_SPACE;
 		goto out;
 	}
+	if (branch_generation <= source_summary.branch_generation ||
+	    !agent_context_path_summary_matches(p, &source_summary)) {
+		result = AGENT_STATUS_STALE;
+		goto out;
+	}
+	path_index = agent_context_path_index(p);
+	if (path_index == 0)
+		panic("Agent context rollback path index");
+	path_index->magic = 0;
+	if (agent_context_active_rebuild(
+		    p, sequence, path_index->successors,
+		    AGENT_CONTEXT_MAX_RECORDS, &rebuilt_path_count,
+		    &rebuilt_path_oldest) < 0 ||
+	    rebuilt_path_count != active_path_count ||
+	    rebuilt_path_oldest != active_path_oldest)
+		panic("Agent context rollback path receipt");
 	p->context_branch_generation = branch_generation;
 	p->context_cause_branch_generation = record.branch_generation;
 	p->context_path_visible_head = sequence;
 	p->context_active_path_count = active_path_count;
 	p->context_active_path_oldest = active_path_oldest;
+	path_index->summary.workflow_lifecycle_id =
+		source_summary.workflow_lifecycle_id;
+	path_index->summary.workflow_lifecycle_generation =
+		source_summary.workflow_lifecycle_generation;
+	path_index->summary.branch_generation = branch_generation;
+	path_index->summary.head_sequence = sequence;
+	path_index->summary.head_hash = record.record_hash;
+	path_index->summary.count = active_path_count;
+	path_index->summary.oldest_sequence = active_path_oldest;
 	p->context_path_rollback_count++;
 	memset(&latest, 0, sizeof(latest));
 	latest.version = AGENT_CALL_VERSION;
@@ -1402,6 +1778,9 @@ sys_context_rollback(uint64 sequence)
 	p->agent_context_chain_hash = record.record_hash;
 	p->agent_current_span_id = record.span_id;
 	p->agent_current_span_owner = span_owner;
+	path_index->magic = AGENT_CONTEXT_PATH_INDEX_MAGIC;
+	if (!agent_context_path_index_matches(p, path_index))
+		panic("Agent context rollback summary");
 	agent_context_write_latest_shadow(p, &latest);
 	agent_context_write_header_shadow(p);
 	agent_context_publish_commit(p, ranges, 2);
@@ -1452,6 +1831,8 @@ sys_context_clear(void)
 	p->agent_current_cause_control = 0;
 	p->agent_context_chain_hash = 0;
 	p->agent_provenance_edges = 0;
+	if (agent_context_path_index_reset(p, branch_generation) < 0)
+		panic("Agent context cleared path index");
 	agent_context_shadow_zero(p, AGENT_CONTEXT_HEADER_OFFSET,
 				  agent_context_user_cache_offset());
 	agent_context_write_latest_shadow(p, 0);

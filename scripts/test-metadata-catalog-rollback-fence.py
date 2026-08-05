@@ -142,6 +142,23 @@ class PersistCompletionModel:
         return "io", False, "agent_io_error"
 
 
+class RestoreRebindModel:
+    def __init__(self, generation: int) -> None:
+        self.generation = generation
+
+    def restore(self, previous: dict[str, object],
+                live_identity: tuple[int, int, int],
+                live_size: int) -> dict[str, object]:
+        restored = copy.deepcopy(previous)
+        if tuple(previous["identity"]) != live_identity:
+            raise ValueError("stale identity")
+        self.generation += 1
+        restored["identity"] = live_identity
+        restored["size"] = live_size
+        restored["fs_generation"] = self.generation
+        return restored
+
+
 class FixedPartitionModel:
     SCOPE_LIMIT = 112
     ACTIVE_SLOTS = 4
@@ -176,6 +193,71 @@ class CatalogRollbackFenceTests(unittest.TestCase):
 
     def test_current_tree_passes(self) -> None:
         CONTRACT.validate_sources(self.sources)
+
+    def test_cow_submit_and_durability_fence_mutations_are_rejected(self) -> None:
+        cases = (
+            ("objects", "#if defined(AGENT_METADATA_CRASH_PHASE) || ",
+             "#if 1 || "),
+            ("store", "agent_meta_persist.snapshot_sealed &&",
+             "1 &&"),
+            ("store", "agent_meta_persist.snapshot_sealed = 1;",
+             "agent_meta_persist.snapshot_sealed = 0;"),
+            ("store", "if (!state->snapshot_sealed)", "if (0)"),
+            ("store", "scope_target(scope_id), 0, 0",
+             "scope_fence_target(scope_id), 0, 0"),
+            ("store", "scope_fence_target(scope_id), 1, 1",
+             "scope_target(scope_id), 1, 1"),
+            ("objects",
+             "agent_metadata_store_quiescence_fence(scope_id)",
+             "agent_metadata_store_durability_fence(scope_id)"),
+            ("syscall", "agent_metadata_quiescence_fence_current()",
+             "agent_metadata_durability_fence_current()"),
+            ("syscall",
+             "static int sys_sync(void)\n{\n\tint result = "
+             "agent_metadata_quiescence_fence_current();",
+             "static int sys_sync(void)\n{\n\tint result = fs_epoch_commit();\n\n"
+             "\tif (result < 0)\n\t\treturn result;\n\tresult = "
+             "agent_metadata_quiescence_fence_current();"),
+            ("syscall",
+             "result = agent_metadata_durability_fence_current();",
+             "result = fs_epoch_commit();\n\tif (result < 0)\n"
+             "\t\treturn result;\n\tresult = "
+             "agent_metadata_durability_fence_current();"),
+            ("syscall", "case SYS_fdatasync:\n\t\tret = sys_fsync(args[0]);",
+             "case SYS_fdatasync:\n\t\tret = sys_sync();"),
+        )
+        for name, old, new in cases:
+            with self.subTest(name=name, anchor=old):
+                altered = mutate(self.sources, name, old, new)
+                with self.assertRaises(CONTRACT.ContractError):
+                    CONTRACT.validate_sources(altered)
+
+    def test_ordered_cow_publication_mutations_are_rejected(self) -> None:
+        cases = (
+            ("#define AGENT_META_PERSIST_FLUSH_PREPARED 3U",
+             "#define AGENT_META_PERSIST_FLUSH_INVALID 3U"),
+            ("agent_meta_persist.payload_durable = 0;",
+             "agent_meta_persist.payload_durable = 1;"),
+            ("agent_meta_persist.header_durable = 0;",
+             "agent_meta_persist.header_durable = 1;"),
+            ("if (state->phase >= AGENT_META_PERSIST_VERIFY_PAYLOAD &&",
+             "if (0 &&"),
+            ("if (!state->payload_durable || state->header_durable)",
+             "if (0)"),
+            ("state->payload_durable = 1;\n"
+             "\t\t\tstate->verify_offset = sizeof(store->header);",
+             "state->payload_durable = 0;\n"
+             "\t\t\tstate->verify_offset = sizeof(store->header);"),
+            ("state->header_durable = 1;",
+             "state->header_durable = 0;"),
+            ("agent_meta_crash_checkpoint(8);",
+             "agent_meta_crash_checkpoint(7);"),
+        )
+        for old, new in cases:
+            with self.subTest(anchor=old):
+                altered = mutate(self.sources, "store", old, new)
+                with self.assertRaises(CONTRACT.ContractError):
+                    CONTRACT.validate_sources(altered)
 
     def test_foreign_writer_is_retried_and_owner_restores(self) -> None:
         catalog = CatalogModel()
@@ -256,6 +338,39 @@ class CatalogRollbackFenceTests(unittest.TestCase):
         catalog.generation += 1
         self.assertTrue(catalog.restore("A", fence, 0, token, before))
         self.assertEqual(catalog.read(2), record(9, "unrelated", scope=8))
+
+    def test_cross_io_rollback_publishes_live_rebound(self) -> None:
+        previous = record(1, "before")
+        previous.update(size=16, fs_generation=40)
+        model = RestoreRebindModel(generation=44)
+
+        # The metadata mutation drops its gate for durable I/O. A concurrent
+        # append changes the inode size before the failed mutation rolls back.
+        restored = model.restore(previous, (1, 1, 1), live_size=73)
+
+        self.assertEqual(restored["state"], "ready")
+        self.assertEqual(restored["size"], 73)
+        self.assertEqual(restored["identity"], (1, 1, 1))
+        self.assertGreater(restored["fs_generation"], 44)
+
+    def test_rejects_overwrite_after_live_rollback_rebind(self) -> None:
+        altered = mutate(
+            self.sources,
+            "catalog",
+            "if (agent_catalog_bind_status(\n"
+            "\t\t\t    slot, &agent_catalog_edit_buffer, previous_scope, 0,\n"
+            "\t\t\t    0, 0, 0) < 0)\n"
+            "\t\t\treturn -1;",
+            "if (agent_catalog_bind_status(\n"
+            "\t\t\t    slot, &agent_catalog_edit_buffer, previous_scope, 0,\n"
+            "\t\t\t    0, 0, 0) < 0)\n"
+            "\t\t\treturn -1;\n"
+            "\t\tagent_catalog_edit_buffer = *previous;",
+        )
+        with self.assertRaisesRegex(
+            CONTRACT.ContractError, "overwrites the live identity/size"
+        ):
+            CONTRACT.validate_sources(altered)
 
     def test_created_inode_exact_receipt_removes_only_its_identity(self) -> None:
         identity = (1, 44, 9)
@@ -452,8 +567,9 @@ class CatalogRollbackFenceTests(unittest.TestCase):
              "++result->plan_scope_counts[scope_index] > "
              "AGENT_FILE_ORDINARY_LIMIT"),
             ("vfs",
-             "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
-             "allocated < VFS_SCOPE_MAX_ACTIVE"),
+             "registry->active_count + registry->retiring_count <\n"
+             "\t\t    VFS_SCOPE_MAX_ACTIVE",
+             "registry->active_count < VFS_SCOPE_MAX_ACTIVE"),
             ("catalog",
              "workflow_lifecycle_active(*lifecycle) ||\n"
              "\t\tworkflow_lifecycle_closing(*lifecycle)",
@@ -532,11 +648,18 @@ class CatalogRollbackFenceTests(unittest.TestCase):
              "iput(ip);\n\t\treturn -1;\n\t}\n\tdetached = inode_remove_detach",
              "iput(ip);\n\t\treturn 0;\n\t}\n\tdetached = inode_remove_detach"),
             ("fs",
-             "result = fs_durable_barrier_forward();\n\tif (result < 0)\n\t\treturn FS_LOOKUP_INDETERMINATE;",
-             "result = fs_durable_barrier_forward();\n\tif (result < 0)\n\t\treturn result;"),
+             "result = fs_durable_barrier_forward();\n"
+             "\tif (result < 0)\n"
+             "\t\tresult = FS_LOOKUP_INDETERMINATE;",
+             "result = fs_durable_barrier_forward();\n"
+             "\tif (result < 0)\n\t\tresult = -1;"),
             ("fs",
-             "if (result != sizeof(de))\n\t\treturn fs_io_health == FS_IO_INDETERMINATE ?",
-             "if (result != sizeof(de))\n\t\treturn result < 0 ? result : -1;\n\tif (0)"),
+             "if (result != sizeof(de)) {\n"
+             "\t\tfs_dentry_index_invalidate_directory(dp);\n"
+             "\t\tresult = fs_io_health == FS_IO_INDETERMINATE ?",
+             "if (result != sizeof(de)) {\n"
+             "\t\tfs_dentry_index_invalidate_directory(dp);\n"
+             "\t\tresult = result < 0 ? result : -1;\n\t\tif (0) ?"),
             ("fs",
              "if (result == FS_LOOKUP_INDETERMINATE)\n\t\tiput(ip);",
              "if (0)\n\t\tiput(ip);"),

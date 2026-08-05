@@ -7,7 +7,7 @@
   },
   "disk": {
     "magic": "0x41474d4554413036",
-    "version": 7,
+    "version": 8,
     "byte_order": "little",
     "bank_name_bytes": 14,
     "bank_names": [
