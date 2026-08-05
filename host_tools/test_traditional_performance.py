@@ -7,7 +7,9 @@ import csv
 import io
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -97,6 +99,18 @@ def parsed_pair() -> dict[str, object]:
 
 
 class TraditionalPerformanceTests(unittest.TestCase):
+    def test_objcopy_uses_a_relative_repository_input(self) -> None:
+        def fake_run(argv: list[str], **_kwargs: object) -> SimpleNamespace:
+            self.assertFalse(Path(argv[3]).is_absolute())
+            Path(argv[4]).write_bytes(b"program")
+            return SimpleNamespace(returncode=0)
+
+        with patch.object(performance.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(
+                performance._objcopy_binary("objcopy", Path(__file__)),
+                b"program",
+            )
+
     def test_hash_vectors_are_host_recomputed(self) -> None:
         metrics = [metric(workload) for workload in performance.WORKLOADS]
         self.assertEqual(tuple(row["outcome_hash"] for row in metrics), KNOWN_HASHES)

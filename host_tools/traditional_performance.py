@@ -377,11 +377,16 @@ def _extract_root_file(image: bytes, name: str) -> bytes:
 
 
 def _objcopy_binary(objcopy: str, elf: Path) -> bytes:
+    elf = elf.resolve()
+    try:
+        elf_argument = str(elf.relative_to(Path.cwd().resolve()))
+    except ValueError:
+        elf_argument = str(elf)
     with tempfile.TemporaryDirectory(prefix="tradperf-objcopy-") as directory:
         output = Path(directory) / "program.bin"
         try:
             result = subprocess.run(
-                [objcopy, "-O", "binary", str(elf), str(output)],
+                [objcopy, "-O", "binary", elf_argument, str(output)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 check=False, timeout=30,
             )
