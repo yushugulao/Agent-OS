@@ -124,12 +124,12 @@ worktree 上串行执行三轮完整 18-case。样本为 `287.9945528s`、`283.0
 `280.9651484s`，中位基线 `283.0201263s`，确定性上限 `297.172s`；71 个文件保存在
 `evidence/calibrations/04c1e6652324/`，这些数值仅适用于该提交和源码指纹。
 
-当前候选冻结提交 `a9e7c67feda5d3a2491311ef977e39d9f4882ad3` 已重新采集三轮完整
-18-case，样本为 `269.1409306s`、`271.32236290000003s`、`281.8869957s`，中位基线
-`271.32236290000003s`，确定性上限 `284.889s`。71 个文件保存在
-`evidence/calibrations/a9e7c67feda5/`，manifest SHA-256 为
-`2d5a218c59217b08a8a327958aa6823c140c0c6a8c167a6546f3e3350cfaf9dc`，受管源码指纹为
-`847d521803bac7e6d5c2c87b9240433002cf4e2dd7bb0cf0230e3a3fcaa11ffd`。timing 从 commit/tree、随机 nonce、可执行文件身份、
+当前候选冻结提交 `14607e825f06c5ffe4a69dd992dbe79b210ab8a4` 已采集三轮完整
+18-case，样本为 `278.6982115s`、`294.053138s`、`296.7989493s`，中位基线
+`294.053138s`，确定性上限 `308.756s`。71 个文件保存在
+`evidence/calibrations/14607e825f06/`，其中包含 57 份执行 attestation；manifest SHA-256 为
+`52c5a80d5fc5e3c230922e1cbbd6fc3522cdabe3dfac443f71e4a4c429fbc788`，受管源码指纹为
+`58bc32576b47f776ec49325b71bb7c5c04e1c8c6a8ccd44a446becee57bf458d`。timing 从 commit/tree、随机 nonce、可执行文件身份、
 镜像/Guest 日志哈希、真实 monotonic 区间和退出结果绑定的 attestations 重建。校准包只标记为未签名本地 E3 复现证据，
 不是 release bundle，更不是 GitLab CI 或 E4 attestation；它证明包内字节可重放和来源绑定，不能
 证明掌控本机 checkout、工具与输出的操作者诚实。production collector 没有公式/fixture 通道，

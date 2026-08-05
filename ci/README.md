@@ -102,15 +102,20 @@ or a metadata-envelope ledger; scoped reload instead binds and revalidates the
 immutable lifecycle id and generation.
 
 The current candidate's full-suite duration gate is `calibrated_full_suite`.
-Its source fingerprint is calibrated by the three complete 18-case runs under
-`evidence/calibrations/a9e7c67feda5/`: the median baseline is 271.3223629
-seconds and the deterministic local-E3 limit is 284.889 seconds. The
-calibration applies only while both the recorded source fingerprint and the
+Source commit `14607e825f06c5ffe4a69dd992dbe79b210ab8a4` was measured by three
+complete 18-case runs under `evidence/calibrations/14607e825f06/`: 278.6982115,
+294.053138, and 296.7989493 seconds. The median baseline is 294.053138 seconds
+and the deterministic local-E3 limit is 308.756 seconds. The 71-file package
+contains 57 execution attestations and binds source fingerprint
+`58bc32576b47f776ec49325b71bb7c5c04e1c8c6a8ccd44a446becee57bf458d` and
+manifest SHA-256 `52c5a80d5fc5e3c230922e1cbbd6fc3522cdabe3dfac443f71e4a4c429fbc788`.
+Calibration applies only while that fingerprint and the
 `local-e3-msys2-xpack-qemu11-v1` execution profile match. The package is
-explicitly `local_e3_unsigned` and is not GitLab Runner or E4 evidence. The
-older `04c1e6652324`, `610df28bda64`, `814021ab9dac`, and `31d4ddf53695`
-packages remain historical artifacts only and are not admissible as a
-threshold for this or any new fingerprint.
+explicitly `local_e3_unsigned`: it is neither final release evidence nor
+GitLab Runner or E4 evidence. The older `04c1e6652324`, `610df28bda64`,
+`814021ab9dac`, and `31d4ddf53695` packages remain historical
+artifacts only and are not admissible as a threshold for this or any new
+fingerprint.
 
 A production calibration is collected only by
 `scripts/agent_test_calibration.py collect`. The harness requires a real Git

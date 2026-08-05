@@ -107,7 +107,7 @@ CPU model、logical CPU count 与总内存，并在每个 Guest boot 前复验�
 pair 前后复验。公开证据不记录计算机名，uname 证明只保留
 Windows build、kernel release/version 与 machine。
 
-`local-e3` 只用于与校准记录逐项一致的本地 MSYS2 E3。当前配置绑定 `a9e7c67feda5`
+`local-e3` 只用于与校准记录逐项一致的本地 MSYS2 E3。当前配置绑定 `14607e825f06`
 的三轮完整 18-case；若受管输入或 profile 漂移，doctor/full-verify 会在 QEMU 前 fail closed。
 不得复用历史提交的基线，也不能把 `none` 冒充本地 E3 时长证明。
 
