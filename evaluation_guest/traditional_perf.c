@@ -311,13 +311,29 @@ static void create_file(const char *path, const void *data, uint length)
 	require(close(fd) == 0, "fixture-close");
 }
 
+static uint read_fd_exact(int fd, void *data, uint length, const char *step)
+{
+	char *bytes = data;
+	uint calls = 0;
+	uint done = 0;
+
+	while (done < length) {
+		int count = read(fd, bytes + done, length - done);
+
+		require(count > 0 && (uint)count <= length - done, step);
+		done += (uint)count;
+		calls++;
+	}
+	return calls;
+}
+
 static void read_file_exact(const char *path, void *data, uint length)
 {
 	int fd = open(path, O_RDONLY);
 	char trailing;
 
 	require(fd >= 0, "verify-open");
-	require(read(fd, data, length) == (int)length, "verify-read");
+	(void)read_fd_exact(fd, data, length, "verify-read");
 	require(read(fd, &trailing, 1) == 0, "verify-length");
 	require(close(fd) == 0, "verify-close");
 }
@@ -344,7 +360,8 @@ static struct result run_cache_read(void)
 
 	/*
 	 * uCore has no seek syscall. Each batch pre-opens independent offsets;
-	 * only the eight read calls are timed, and the 32 real windows are added.
+	 * only reads are timed, and the 32 real windows are added. Short reads are
+	 * completed inside the same window and reported as actual syscall counts.
 	 */
 	for (uint batch = 0; batch < CACHE_READ_OPS / CACHE_BATCH_FDS;
 	     batch++) {
@@ -354,11 +371,9 @@ static struct result run_cache_read(void)
 		}
 		struct clock_sample start = clock_now();
 		for (uint lane = 0; lane < CACHE_BATCH_FDS; lane++) {
-			int count = read(fds[lane], cache_reads[lane], CACHE_BYTES);
-
-			require(count == (int)CACHE_BYTES, "cache-batch-read");
-			result.calls.read_calls++;
-			result.calls.bytes_read += (uint)count;
+			result.calls.read_calls += read_fd_exact(fds[lane],
+				cache_reads[lane], CACHE_BYTES, "cache-batch-read");
+			result.calls.bytes_read += CACHE_BYTES;
 		}
 		struct clock_sample end = clock_now();
 		duration_add(&result.elapsed, &start, &end);

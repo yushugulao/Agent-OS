@@ -140,7 +140,8 @@ END_RE = re.compile(
 
 PROFILES = {
     "cache_read_4k": {
-        "ops": 256, "read_calls": 256, "bytes_read": 1_048_576,
+        "ops": 256, "bytes_read": 1_048_576,
+        "counter_ranges": {"read_calls": (256, 1_048_576)},
         "barrier_kind": {"agentos": "none", "baseline": "none"},
     },
     "open_close": {
@@ -595,14 +596,17 @@ def parse_guest(payload: bytes, *, target: str, sample: int,
         ):
             raise TraditionalPerformanceError("Guest metric identity or order is invalid")
         profile = PROFILES[expected_name]
+        counter_ranges = profile.get("counter_ranges", {})
         expected_counters = {
             key: (raw[target] if isinstance(raw := profile.get(key, 0), dict) else raw)
-            for key in COUNTERS
+            for key in COUNTERS if key not in counter_ranges
         }
         if (metric["duration_us"] == 0 or
                 metric["duration_ticks"] != metric["duration_us"] // 1000 or
                 metric["ops"] != profile["ops"] or
                 any(metric[key] != value for key, value in expected_counters.items()) or
+                any(not lower <= metric[key] <= upper
+                    for key, (lower, upper) in counter_ranges.items()) or
                 metric["barrier_kind"] != profile["barrier_kind"][target]):
             raise TraditionalPerformanceError("Guest duration or operation count is invalid")
         if target == "baseline" and any(metric[key] != 0 for key in MECHANISM_COUNTERS):

@@ -42,8 +42,11 @@ def metric(workload: str, target: str = "agentos", duration: int = 12_345) -> di
         "barrier_kind": profile["barrier_kind"][target],
     }
     for name in performance.COUNTERS:
-        count = profile.get(name, 0)
-        value[name] = count[target] if isinstance(count, dict) else count
+        if name in profile.get("counter_ranges", {}):
+            value[name] = profile["counter_ranges"][name][0]
+        else:
+            count = profile.get(name, 0)
+            value[name] = count[target] if isinstance(count, dict) else count
     for name in performance.MECHANISM_COUNTERS:
         value[name] = 0
     if target == "agentos" and workload == "cache_read_4k":
@@ -169,6 +172,16 @@ class TraditionalPerformanceTests(unittest.TestCase):
         with self.assertRaises(performance.TraditionalPerformanceError):
             performance.parse_guest(forged, target="agentos", sample=SAMPLE,
                                     nonce=NONCE, order_slot=1)
+
+    def test_cache_read_accepts_honest_short_read_syscall_count(self) -> None:
+        payload = guest_log("baseline", 2).replace(
+            b"read_calls=256", b"read_calls=512", 1
+        )
+        parsed = performance.parse_guest(
+            payload, target="baseline", sample=SAMPLE, nonce=NONCE,
+            order_slot=2,
+        )
+        self.assertEqual(parsed["metrics"][0]["read_calls"], 512)
 
     def test_non_equivalent_target_is_rejected(self) -> None:
         pair = parsed_pair()

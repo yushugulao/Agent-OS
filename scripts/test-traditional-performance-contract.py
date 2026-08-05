@@ -43,6 +43,11 @@ class TraditionalPerformanceContractTests(unittest.TestCase):
         self.assertIn("sample.ticks = now.sec * 1000ULL + now.usec / 1000ULL;", guest)
         self.assertIn("elapsed->us += end->us - start->us;", guest)
         self.assertIn("elapsed->ticks = elapsed->us / 1000ULL;", guest)
+        self.assertIn("static uint read_fd_exact", guest)
+        self.assertIn("while (done < length)", guest)
+        self.assertIn("result.calls.read_calls += read_fd_exact", guest)
+        self.assertNotIn("require(read(fd, data, length) ==", guest)
+        self.assertNotIn("require(count == (int)CACHE_BYTES", guest)
         self.assertNotIn('printf("agentos:tradperf', guest)
         for workload in (
             "cache_read_4k",
