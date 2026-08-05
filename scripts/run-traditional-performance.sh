@@ -74,7 +74,7 @@ build_agentos_sample() {
 		FUNCTIONAL_REVIEW_BUILD=1
 	run_logged "${log}" "sample-${tag} filesystem" \
 		"${MAKE_TOOL}" --no-print-directory -j"${BUILD_JOBS}" -rR \
-		-C nfs -f Makefile fs.img HOSTCC="${HOST_CC:-cc}" \
+		-C nfs -f Makefile fs.img \
 		CHAPTER=traditional_perf INIT_PROC=tradperf \
 		CH_TESTS="tradperf tradexec" FUNCTIONAL_REVIEW_BUILD=1
 	cp nfs/fs.img "${pair_dir}/agentos-fs.img"
