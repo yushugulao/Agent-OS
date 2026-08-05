@@ -611,6 +611,12 @@ def parse_guest(payload: bytes, *, target: str, sample: int,
             raise TraditionalPerformanceError("Guest duration or operation count is invalid")
         if target == "baseline" and any(metric[key] != 0 for key in MECHANISM_COUNTERS):
             raise TraditionalPerformanceError("Baseline emitted AgentOS mechanism counters")
+        if target == "agentos" and expected_name == "cache_read_4k" and (
+                metric["file_auth_full"] != 0 or
+                metric["file_auth_lease_hits"] != metric["read_calls"] or
+                metric["file_auth_revalidations"] != 0):
+            raise TraditionalPerformanceError(
+                "Open-time authorization proof did not cover cached reads")
         if target == "agentos" and expected_name == "tiny_write_fsync" and (
                 metric["file_auth_full"] == 0 or
                 metric["file_auth_lease_hits"] + metric["file_auth_full"] !=

@@ -73,11 +73,85 @@ class OpenFileIoLeaseTests(unittest.TestCase):
         self.mutate("os/fs.c", "open_file_io_token_validate(lease, ip, VFS_OP_READ)", "1")
         self.assert_rejected("filesystem does not verify")
 
-    def test_rejects_repeated_authorization_walk_at_fs_boundary(self) -> None:
-        self.mutate("os/open_file_io_lease.c",
-                    "grant->subject == proc && grant->file != 0 &&",
-                    "open_file_io_grant_matches_locked(grant, grant->file, proc, 0, operation) &&\n\t    grant->subject == proc && grant->file != 0 &&")
-        self.assert_rejected("repeats the authorization walk")
+    def test_rejects_full_authorization_walk_at_fs_boundary(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "if (open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
+            "if (vfs_inode_authorize(inode, &current.cred, operation) &&\n\t    open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
+        )
+        self.assert_rejected("repeats full VFS authorization")
+
+    def test_rejects_missing_revocation_check_after_blocking(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
+            "current.valid &&",
+        )
+        self.assert_rejected("filesystem token validation is incomplete")
+
+    def test_rejects_token_dependency_on_cache_residency(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "if (open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
+            "if (open_file_io_state.grants[0].valid &&\n\t    open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
+        )
+        self.assert_rejected("grant-cache residency")
+
+    def test_rejects_missing_open_authorization_seed(self) -> None:
+        self.mutate(
+            "os/file.c",
+            "open_file_io_lease_seed_authorized(f, VFS_OP_READ, &cred);",
+            "(void)f;",
+        )
+        self.assert_rejected("publish its completed read/write authorization")
+
+    def test_rejects_file_slot_aba_bypass(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "generation == open_file_io_state.file_generations[slot]",
+            "generation == generation",
+        )
+        self.assert_rejected("file-slot ABA")
+
+    def test_rejects_short_lived_file_slot_cache_key(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "cache_slot = open_file_io_cache_slot(file->ip, proc, operation);",
+            "cache_slot = file_slot & (OPEN_FILE_IO_CACHE_CAP - 1);",
+        )
+        self.assert_rejected("short-lived file slots")
+
+    def test_rejects_read_write_cache_alias(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "open_file_io_operation_mask(operation) *\n\t       0x9e3779b97f4a7c15ULL",
+            "open_file_io_operation_mask(operation) << 8",
+        )
+        self.assert_rejected("read and write grants collide")
+
+    def test_rejects_missing_stable_inode_identity(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "grant->inode_inum == inode->inum",
+            "grant->inode_inum == grant->inode_inum",
+        )
+        self.assert_rejected("stable inode security identity")
+
+    def test_rejects_global_edit_authority_generation(self) -> None:
+        self.mutate(
+            "os/agent_file_state.c",
+            "uint64 edit_authority_generation;",
+            "uint64 unrelated_generation;",
+        )
+        self.assert_rejected("inode-scoped revocation generation")
+
+    def test_rejects_edit_generation_on_read_grants(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "grant->edit_authority_generation != 0 ||",
+            "0 ||",
+        )
+        self.assert_rejected("global edit invalidation")
 
     def test_rejects_unbounded_lifetime_hook(self) -> None:
         self.mutate("os/open_file_io_lease.c", "\topen_file_io_next32(&open_file_io_state.file_generations[slot]);",

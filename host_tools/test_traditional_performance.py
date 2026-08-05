@@ -50,7 +50,7 @@ def metric(workload: str, target: str = "agentos", duration: int = 12_345) -> di
     for name in performance.MECHANISM_COUNTERS:
         value[name] = 0
     if target == "agentos" and workload == "cache_read_4k":
-        value["file_auth_full"] = value["read_calls"]
+        value["file_auth_lease_hits"] = value["read_calls"]
     if target == "agentos" and workload == "tiny_write_fsync":
         value["file_auth_full"] = 1
         value["file_auth_lease_hits"] = value["write_calls"] - 1
@@ -73,8 +73,14 @@ def metric_line(value: dict[str, object]) -> str:
     return " ".join(fields)
 
 
-def guest_log(target: str = "agentos", slot: int = 1) -> bytes:
+def guest_log(target: str = "agentos", slot: int = 1,
+              cache_full: int = 0) -> bytes:
     metrics = [metric(workload, target) for workload in performance.WORKLOADS]
+    if target == "agentos" and cache_full:
+        cache = metrics[0]
+        cache["file_auth_full"] = cache_full
+        cache["file_auth_lease_hits"] = cache["read_calls"] - cache_full
+        cache["outcome_hash"] = performance._expected_outcome(cache, NONCE)
     aggregate = performance._aggregate_hash(NONCE, metrics)
     lines = [
         "uCore boot",
@@ -182,6 +188,15 @@ class TraditionalPerformanceTests(unittest.TestCase):
             order_slot=2,
         )
         self.assertEqual(parsed["metrics"][0]["read_calls"], 512)
+
+    def test_cache_read_requires_open_authorization_proof_hits(self) -> None:
+        with self.assertRaisesRegex(
+                performance.TraditionalPerformanceError,
+                "Open-time authorization proof"):
+            performance.parse_guest(
+                guest_log(cache_full=1), target="agentos", sample=SAMPLE,
+                nonce=NONCE, order_slot=1,
+            )
 
     def test_non_equivalent_target_is_rejected(self) -> None:
         pair = parsed_pair()

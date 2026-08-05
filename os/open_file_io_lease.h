@@ -21,7 +21,8 @@ struct open_file_io_lease_stats {
 
 void open_file_io_lease_file_init(struct file *);
 void open_file_io_lease_file_retire(struct file *);
-void open_file_io_lease_edit_changed(void);
+void open_file_io_lease_seed_authorized(struct file *, enum vfs_operation,
+					const struct vfs_cred *);
 
 int open_file_io_lease_acquire(struct file *, enum vfs_operation,
 			       struct open_file_io_token *, struct vfs_cred *);

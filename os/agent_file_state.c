@@ -6,7 +6,6 @@
 #include "exec_policy.h"
 #include "file.h"
 #include "fs.h"
-#include "open_file_io_lease.h"
 #include "timer.h"
 #include "trap.h"
 #include "vfs_security.h"
@@ -63,6 +62,7 @@ struct file_version {
 	uint storage_owner;
 	uint vfs_policy;
 	uint64 edit_version;
+	uint64 edit_authority_generation;
 	uint64 content_version;
 	uint64 published_size;
 	uint64 published_size_sequence;
@@ -291,7 +291,6 @@ file_version_clear_locked(int slot)
 	uint64 dev;
 	uint64 inum;
 	uint64 incarnation;
-	int edit_authority_changed = 0;
 
 	if (slot < 0 || slot >= AGENT_FILE_VERSION_MAX)
 		return;
@@ -308,10 +307,7 @@ file_version_clear_locked(int slot)
 		    agent_file_edits[i].incarnation == incarnation) {
 			memset(&agent_file_edits[i], 0,
 			       sizeof(agent_file_edits[i]));
-			edit_authority_changed = 1;
 		}
-	if (edit_authority_changed)
-		open_file_io_lease_edit_changed();
 	for (int i = 0; i < AGENT_FILE_DIGEST_CACHE_MAX; i++)
 		if (agent_file_digest_cache[i].valid &&
 		    agent_file_digest_cache[i].dev == dev &&
@@ -607,10 +603,12 @@ agent_edit_release_locked(struct agent_file_edit_entry *e, int publish_dirty)
 	if (e == 0 || !e->active)
 		return;
 	version = file_version_identity_locked(e->dev, e->inum, e->incarnation);
-	if (version && publish_dirty && e->dirty)
-		version->edit_version = e->base_version + 1;
+	if (version) {
+		if (publish_dirty && e->dirty)
+			version->edit_version = e->base_version + 1;
+		agent_file_counter_next(&version->edit_authority_generation);
+	}
 	memset(e, 0, sizeof(*e));
-	open_file_io_lease_edit_changed();
 }
 
 static void
@@ -685,15 +683,19 @@ agent_edit_audit(struct proc *p, int status, char *text,
 
 static int
 agent_edit_modify_allowed(struct inode *ip, char *action,
+			  uint64 *authority_generation,
 			  uint64 *valid_until_tick)
 {
 	struct proc *p = curr_proc();
 	struct agent_file_edit_entry *edit;
 	struct agent_file_edit_state state;
+	struct file_version *version;
 	uint64 now;
 	int allowed = 1;
 	int enabled;
 
+	if (authority_generation)
+		*authority_generation = 0;
 	if (valid_until_tick)
 		*valid_until_tick = 0;
 	if (ip == 0)
@@ -703,23 +705,28 @@ agent_edit_modify_allowed(struct inode *ip, char *action,
 	enabled = agent_edit_lock();
 	now = agent_file_state_now();
 	agent_edit_cleanup_expired_locked(now);
+	version = file_version_inode_locked(ip, 0);
+	if (authority_generation && version)
+		*authority_generation = version->edit_authority_generation;
 	edit = agent_edit_find_locked(ip->vfs_scope_id, 0, ip);
 	if (edit && !agent_edit_owner(edit, p)) {
-		edit->conflict_count++;
-		edit_state_locked(&state, edit, ip, 0, 0);
+		if (action) {
+			edit->conflict_count++;
+			edit_state_locked(&state, edit, ip, 0, 0);
+		}
 		allowed = 0;
 	} else if (edit && valid_until_tick) {
 		*valid_until_tick = edit->deadline_tick;
 	}
 	agent_edit_unlock(enabled);
-	if (!allowed)
+	if (!allowed && action)
 		agent_edit_audit(p, AGENT_STATUS_CONFLICT, action, &state, 0);
 	return allowed;
 }
 
 #define DEFINE_AGENT_EDIT_ALLOWED(operation, event) \
 	int agent_edit_##operation##_allowed(struct inode *ip) \
-	{ return agent_edit_modify_allowed(ip, event, 0); }
+	{ return agent_edit_modify_allowed(ip, event, 0, 0); }
 
 DEFINE_AGENT_EDIT_ALLOWED(write, "edit_write_conflict")
 DEFINE_AGENT_EDIT_ALLOWED(truncate, "edit_trunc_conflict")
@@ -727,10 +734,46 @@ DEFINE_AGENT_EDIT_ALLOWED(unlink, "edit_unlink_conflict")
 #undef DEFINE_AGENT_EDIT_ALLOWED
 
 int
-agent_edit_write_lease_allowed(struct inode *ip, uint64 *valid_until_tick)
+agent_edit_write_lease_allowed(struct inode *ip,
+			       uint64 *authority_generation,
+			       uint64 *valid_until_tick)
 {
 	return agent_edit_modify_allowed(
-		ip, "edit_write_conflict", valid_until_tick);
+		ip, "edit_write_conflict", authority_generation,
+		valid_until_tick);
+}
+
+int
+agent_edit_write_lease_snapshot(struct inode *ip,
+				uint64 *authority_generation,
+				uint64 *valid_until_tick)
+{
+	struct proc *p = curr_proc();
+	struct agent_file_edit_entry *edit;
+	struct file_version *version;
+	int allowed = 1;
+	int enabled;
+
+	if (authority_generation)
+		*authority_generation = 0;
+	if (valid_until_tick)
+		*valid_until_tick = 0;
+	if (ip == 0)
+		return 0;
+	if (ip->vfs_policy != VFS_POLICY_WORKFLOW)
+		return 1;
+	enabled = agent_edit_lock();
+	agent_edit_cleanup_expired_locked(agent_file_state_now());
+	version = file_version_inode_locked(ip, 0);
+	if (authority_generation && version)
+		*authority_generation = version->edit_authority_generation;
+	edit = agent_edit_find_locked(ip->vfs_scope_id, 0, ip);
+	if (edit && !agent_edit_owner(edit, p))
+		allowed = 0;
+	else if (edit && valid_until_tick)
+		*valid_until_tick = edit->deadline_tick;
+	agent_edit_unlock(enabled);
+	return allowed;
 }
 
 static void
@@ -793,7 +836,6 @@ void
 agent_file_state_scope_reclaim(uint scope_id)
 {
 	struct agent_file_cache_scope_state *scope_state;
-	int edit_authority_changed = 0;
 	int enabled = agent_edit_lock();
 
 	scope_state = agent_file_cache_scope_locked(scope_id, 0);
@@ -810,13 +852,10 @@ agent_file_state_scope_reclaim(uint scope_id)
 		    agent_file_edits[i].scope_id == scope_id) {
 			memset(&agent_file_edits[i], 0,
 			       sizeof(agent_file_edits[i]));
-			edit_authority_changed = 1;
 		}
 	CLEAR_SCOPED(agent_file_digest_cache, AGENT_FILE_DIGEST_CACHE_MAX, valid);
 	CLEAR_SCOPED(agent_file_versions, AGENT_FILE_VERSION_MAX, used);
 #undef CLEAR_SCOPED
-	if (edit_authority_changed)
-		open_file_io_lease_edit_changed();
 	agent_edit_unlock(enabled);
 }
 
@@ -1131,7 +1170,7 @@ sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 	call.entry->base_version = version;
 	call.entry->deadline_tick = now + ttl;
 	safestrcpy(call.entry->path, path, sizeof(call.entry->path));
-	open_file_io_lease_edit_changed();
+	agent_file_counter_next(&version_entry->edit_authority_generation);
 	edit_state_locked(&call.state, call.entry, call.inode, path, 0);
 	return edit_reply(&call, AGENT_STATUS_OK, "edit_begin", stateaddr);
 }
@@ -1165,9 +1204,9 @@ sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 	new_version = call.entry->dirty ? call.entry->base_version + 1 :
 					call.entry->base_version;
 	version->edit_version = new_version;
+	agent_file_counter_next(&version->edit_authority_generation);
 	edit_state_locked(&call.state, call.entry, 0, call.entry->path, 1);
 	memset(call.entry, 0, sizeof(*call.entry));
-	open_file_io_lease_edit_changed();
 	return edit_reply(&call, AGENT_STATUS_OK, "edit_commit", stateaddr);
 }
 

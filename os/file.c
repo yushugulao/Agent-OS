@@ -717,6 +717,10 @@ int fileopen(char *path, uint64 omode)
 	f->ip = ip;
 	f->readable = !(omode & O_WRONLY);
 	f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+	if (!created && f->readable)
+		open_file_io_lease_seed_authorized(f, VFS_OP_READ, &cred);
+	if (!created && f->writable)
+		open_file_io_lease_seed_authorized(f, VFS_OP_WRITE, &cred);
 	if (created)
 		agent_fs_note_create(ip, path);
 	if (fdinstall(fd, f) < 0)

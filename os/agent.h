@@ -787,7 +787,8 @@ int agent_scope_reclaim_metadata_done(
 	uint scope_id, struct workflow_lifecycle_key, uint64 metadata_target);
 void agent_file_version_reclaim(struct inode *ip);
 int agent_edit_write_allowed(struct inode *ip);
-int agent_edit_write_lease_allowed(struct inode *ip, uint64 *);
+int agent_edit_write_lease_allowed(struct inode *, uint64 *, uint64 *);
+int agent_edit_write_lease_snapshot(struct inode *, uint64 *, uint64 *);
 int agent_edit_truncate_allowed(struct inode *ip);
 int agent_edit_unlink_allowed(struct inode *ip);
 void agent_edit_note_write(struct inode *ip);
