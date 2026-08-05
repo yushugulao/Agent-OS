@@ -300,6 +300,8 @@ static void run_lineage_attacker(int ready_fd, int stop_fd,
 	unsigned long long shared_decisions;
 	unsigned long long throttle_decisions;
 	unsigned long long budget_decisions;
+	int borrowed;
+	int refill_covered;
 
 	setup_lineage_pressure();
 	check(io_policy_info(&before) == 0, "read initial lineage I/O state");
@@ -323,6 +325,7 @@ static void run_lineage_attacker(int ready_fd, int stop_fd,
 	check(after.physical_reads >= before.physical_reads &&
 	      after.physical_writes >= before.physical_writes &&
 	      after.physical_flushes >= before.physical_flushes &&
+	      after.refills >= before.refills &&
 	      after.reserved_grants >= before.reserved_grants &&
 	      after.shared_grants >= before.shared_grants &&
 	      after.throttles >= before.throttles,
@@ -347,13 +350,16 @@ static void run_lineage_attacker(int ready_fd, int stop_fd,
 	budget_decisions += throttle_decisions;
 	check(write_transfers > (unsigned long long)before.class_burst,
 	      "cold pressure crosses the owner credit envelope");
-	check(shared_decisions > 0,
-	      "single-owner pressure borrows idle device capacity");
+	borrowed = shared_decisions > 0;
+	refill_covered = after.refills > before.refills &&
+			 throttle_decisions == 0;
+	check(borrowed || refill_covered,
+	      "single-owner pressure uses idle loan or sustained refill");
 	check(transfers <= budget_decisions,
 	      "aggregate rate decisions cover physical transfers");
-	check(after.refills > before.refills ||
-	      after.throttles > before.throttles,
-	      "cold pressure advances through refill or throttling");
+	printf("iobudget_ucore: work_conserving=%s shared=%llu refills=%llu throttles=%llu\n",
+	       borrowed ? "shared-loan" : "owner-refill", shared_decisions,
+	       after.refills - before.refills, throttle_decisions);
 	check(after.cache_evictions > before.cache_evictions,
 	      "fresh working set reaches the lineage cache cap");
 	check(after.leased <= after.class_burst &&

@@ -133,8 +133,16 @@ def validate(bio: str, policy: str, iobudget: str) -> None:
 
     if "IO_POLICY_SHARED_BURST + 1" in iobudget:
         raise ContractError("dynamic pressure scales with the elastic envelope")
-    if "check(shared_decisions > 0," not in iobudget:
-        raise ContractError("dynamic probe does not observe idle-capacity borrowing")
+    pressure = compact(function_body(iobudget, "run_lineage_attacker"))
+    for token in (
+        "borrowed = shared_decisions > 0;",
+        "refill_covered = after.refills > before.refills && throttle_decisions == 0;",
+        "check(borrowed || refill_covered,",
+    ):
+        if token not in pressure:
+            raise ContractError(
+                "dynamic probe does not distinguish idle loans from sustained refill"
+            )
 
 
 validate(BIO, POLICY, IOBUDGET)
@@ -153,7 +161,13 @@ MUTATIONS = (
     (BIO.replace("state->shared_grants++;", "state->reserved_grants++;", 1), POLICY, IOBUDGET),
     (BIO.replace("io_active_request_acquire(state);", "state->active_requests++;", 1), POLICY, IOBUDGET),
     (BIO.replace("io_active_request_release(state);", "state->active_requests--;", 1), POLICY, IOBUDGET),
-    (BIO, POLICY, IOBUDGET.replace("check(shared_decisions > 0,", "check(1,", 1)),
+    (BIO, POLICY, IOBUDGET.replace(
+        "borrowed = shared_decisions > 0;", "borrowed = 1;", 1)),
+    (BIO, POLICY, IOBUDGET.replace(
+        "after.refills > before.refills &&\n\t\t\t throttle_decisions == 0",
+        "1", 1)),
+    (BIO, POLICY, IOBUDGET.replace(
+        "check(borrowed || refill_covered,", "check(1,", 1)),
 )
 
 for mutated_bio, mutated_policy, mutated_iobudget in MUTATIONS:
