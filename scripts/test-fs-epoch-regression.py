@@ -73,10 +73,10 @@ def snapshot(*, batch: bytes, stage: bytes, created: bool) -> dict[str, object]:
     )
     allocated = [90, *range(100, 100 + image.BATCH_BLOCKS), 120, 122]
     inodes = {
-        "1": {"size": 64 if created else 48},
-        "10": {"size": len(batch)},
-        "11": {"size": 1},
-        "13": {"size": 8},
+        "1": {"size": 64 if created else 48, "vfs_policy": 4},
+        "10": {"size": len(batch), "vfs_policy": 2},
+        "11": {"size": 1, "vfs_policy": 2},
+        "13": {"size": 8, "vfs_policy": 1},
     }
     if created:
         root_names[image.CREATED_PATH] = 12
@@ -84,7 +84,7 @@ def snapshot(*, batch: bytes, stage: bytes, created: bool) -> dict[str, object]:
         inode_blocks["12"] = [121]
         block_hashes["121"] = image.digest(image.CREATED_NEW)
         allocated.append(121)
-        inodes["12"] = {"size": image.BLOCK_SIZE}
+        inodes["12"] = {"size": image.BLOCK_SIZE, "vfs_policy": 2}
 
     inode_raw = {str(inum): image.digest(f"free:{inum}".encode()) for inum in range(16)}
     inode_raw["1"] = image.digest(b"root-created" if created else b"root-base")
@@ -216,6 +216,44 @@ class FsEpochImageTests(unittest.TestCase):
         final["payload_sha256"]["13"] = image.digest(b"replaced")
         seal(retry)
         seal(final)
+        with self.assertRaisesRegex(image.VerificationError, "non-target payload"):
+            image.verify("dirty", self.before, fault, retry, final)
+
+    def test_kernel_private_payload_may_advance_between_boots(self):
+        fault = snapshot(batch=image.BATCH_OLD, stage=b"R", created=False)
+        retry = copy.deepcopy(self.complete)
+        final = copy.deepcopy(self.complete)
+        for candidate, value in (
+            (self.before, b"private-before"),
+            (fault, b"private-fault"),
+            (retry, b"private-retry"),
+            (final, b"private-final"),
+        ):
+            candidate["root_names"][".agentmeta"] = candidate[
+                "root_names"
+            ].pop("sentinel")
+            candidate["inodes"]["13"]["vfs_policy"] = (
+                image.VFS_POLICY_KERNEL_PRIVATE
+            )
+            candidate["payload_sha256"]["13"] = image.digest(value)
+            block = value + bytes(image.BLOCK_SIZE - len(value))
+            candidate["block_sha256"]["122"] = image.digest(block)
+            candidate["nonzero_data_block_sha256"]["122"] = image.digest(block)
+            seal(candidate)
+        result = image.verify("dirty", self.before, fault, retry, final)
+        self.assertEqual(result["case"], "dirty")
+
+    def test_unrecognized_kernel_private_payload_is_preserved(self):
+        fault = snapshot(batch=image.BATCH_OLD, stage=b"R", created=False)
+        retry = copy.deepcopy(self.complete)
+        final = copy.deepcopy(self.complete)
+        for candidate in (self.before, fault, retry, final):
+            candidate["inodes"]["13"]["vfs_policy"] = (
+                image.VFS_POLICY_KERNEL_PRIVATE
+            )
+            seal(candidate)
+        retry["payload_sha256"]["13"] = image.digest(b"private-replaced")
+        seal(retry)
         with self.assertRaisesRegex(image.VerificationError, "non-target payload"):
             image.verify("dirty", self.before, fault, retry, final)
 

@@ -27,6 +27,7 @@ struct fs_epoch_state {
 	uint forward_only;
 	uint runtime_enabled;
 	uint committing;
+	uint rollover_pending;
 	uint bypass_depth;
 	uint64 active_generation;
 	uint64 next_generation;
@@ -170,6 +171,7 @@ fs_epoch_start_locked(uint owner)
 		panic("filesystem epoch generation wrapped");
 	now = get_cycle();
 	epoch.owner = owner;
+	epoch.rollover_pending = 0;
 	epoch.sponsor_class = sponsor_class;
 	epoch.sponsor_request_id = sponsor_request_id;
 	epoch.forward_only = 0;
@@ -588,8 +590,18 @@ fs_epoch_commit(void)
 	if (epoch.bypass_depth != 0 || epoch.committing)
 		panic("filesystem epoch commit state");
 	if (!epoch.runtime_enabled || !fs_epoch_dirty_locked()) {
+		if (!fs_epoch_dirty_locked())
+			epoch.rollover_pending = 0;
 		intr_restore(enabled);
 		return 0;
+	}
+	/* Device publication and debt settlement may sleep.  A caller holding a
+	 * cache line or an atomic filesystem unit must defer the rollover instead
+	 * of carrying that transient state into the commit sponsor. */
+	if (!bio_io_quiescent_current()) {
+		epoch.rollover_pending = 1;
+		intr_restore(enabled);
+		return VIRTIO_DISK_ERR_BUSY;
 	}
 	epoch.committing = 1;
 	epoch.totals.commit_attempts++;
@@ -636,6 +648,7 @@ fs_epoch_commit(void)
 	epoch.sponsor_class = 0;
 	epoch.sponsor_request_id = 0;
 	epoch.forward_only = 0;
+	epoch.rollover_pending = 0;
 	epoch.active_generation = 0;
 	epoch.opened_cycle = 0;
 	epoch.deadline_cycle = 0;
@@ -652,7 +665,8 @@ fs_epoch_should_commit(void)
 {
 	int enabled = intr_save();
 	int should = fs_epoch_dirty_locked() &&
-		     (epoch.count >= FS_EPOCH_HIGH_WATER ||
+		     (epoch.rollover_pending ||
+		      epoch.count >= FS_EPOCH_HIGH_WATER ||
 		      get_cycle() - epoch.opened_cycle >=
 			      FS_EPOCH_MAX_AGE_CYCLES);
 
@@ -674,7 +688,9 @@ static int
 fs_epoch_reserve_ordered(uint owner, uint worst_case_buffers,
 			 enum fs_epoch_phase phase)
 {
-	int commit = 0;
+	int hard_rollover = 0;
+	int quiescent;
+	int soft_rollover = 0;
 	int enabled;
 
 	if (owner == 0 || worst_case_buffers > FS_EPOCH_BUFFER_CAP ||
@@ -691,22 +707,32 @@ fs_epoch_reserve_ordered(uint owner, uint worst_case_buffers,
 		return FS_EPOCH_ERROR;
 	}
 	if (epoch.totals.last_error < 0)
-		commit = 1;
-	else if (fs_epoch_dirty_locked() &&
-		 (epoch.owner != owner ||
-		  (phase == FS_EPOCH_NAMESPACE_DETACH &&
-		   epoch.phase_count[FS_EPOCH_NAMESPACE_ATTACH] != 0) ||
-		  (phase == FS_EPOCH_NAMESPACE_ATTACH &&
-		   epoch.phase_count[FS_EPOCH_NAMESPACE_DETACH] != 0) ||
-		  worst_case_buffers > FS_EPOCH_BUFFER_CAP - epoch.count ||
-		  epoch.count >= FS_EPOCH_HIGH_WATER ||
-		  worst_case_buffers >
-			  FS_EPOCH_HIGH_WATER - epoch.count ||
-		  get_cycle() - epoch.opened_cycle >=
-			  FS_EPOCH_MAX_AGE_CYCLES))
-		commit = 1;
+		hard_rollover = 1;
+	else if (fs_epoch_dirty_locked()) {
+		hard_rollover = epoch.owner != owner ||
+			(phase == FS_EPOCH_NAMESPACE_DETACH &&
+			 epoch.phase_count[FS_EPOCH_NAMESPACE_ATTACH] != 0) ||
+			(phase == FS_EPOCH_NAMESPACE_ATTACH &&
+			 epoch.phase_count[FS_EPOCH_NAMESPACE_DETACH] != 0) ||
+			worst_case_buffers > FS_EPOCH_BUFFER_CAP - epoch.count;
+		if (!hard_rollover)
+			soft_rollover = epoch.count >= FS_EPOCH_HIGH_WATER ||
+				worst_case_buffers >
+					FS_EPOCH_HIGH_WATER - epoch.count ||
+				get_cycle() - epoch.opened_cycle >=
+					FS_EPOCH_MAX_AGE_CYCLES;
+	}
+	quiescent = bio_io_quiescent_current();
+	if (hard_rollover && !quiescent)
+		epoch.rollover_pending = 1;
 	intr_restore(enabled);
-	return commit ? fs_epoch_commit() : 0;
+	if (!hard_rollover && !soft_rollover)
+		return 0;
+	/* Compatible soft rollovers may wait while absolute capacity still fits.
+	 * Owner, phase and capacity conflicts stop before the next mutation unit. */
+	if (!quiescent)
+		return hard_rollover ? VIRTIO_DISK_ERR_BUSY : 0;
+	return fs_epoch_commit();
 }
 
 int

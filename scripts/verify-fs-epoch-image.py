@@ -21,6 +21,8 @@ SNAPSHOT_GENERATOR = {"name": "fs-allocator-image.py", "version": "2"}
 ROOT_INODE = 1
 INFLIGHT_WINDOW_MISS = 3
 TARGET_PATHS = frozenset((BATCH_PATH, CREATED_PATH, STATE_PATH))
+VFS_POLICY_KERNEL_PRIVATE = 3
+MUTABLE_KERNEL_PRIVATE_PATHS = frozenset((".agentmeta", ".agentmeta1"))
 
 
 class VerificationError(ValueError):
@@ -263,17 +265,42 @@ def blocks_for_inodes(
     return result
 
 
+def kernel_private_inums(snapshot: dict[str, object], label: str) -> set[int]:
+    root = names(snapshot)
+    inodes = table(snapshot, "inodes", label)
+    result: set[int] = set()
+    for path, inum in root.items():
+        if path not in MUTABLE_KERNEL_PRIVATE_PATHS:
+            continue
+        inode = inodes.get(str(inum))
+        if (
+            isinstance(inode, dict)
+            and inode.get("vfs_policy") == VFS_POLICY_KERNEL_PRIVATE
+        ):
+            result.add(inum)
+    return result
+
+
 def require_non_target_objects(
     before: dict[str, object], candidate: dict[str, object], label: str
 ) -> None:
     before_names = names(before)
     candidate_names = names(candidate)
+    before_inodes = table(before, "inodes", "before")
     for path, inum in before_names.items():
         if path in TARGET_PATHS:
             continue
         if candidate_names.get(path) != inum:
             raise VerificationError(f"{label}: non-target object {path} was replaced")
-        if payload_hash(candidate, path) != payload_hash(before, path):
+        inode = before_inodes.get(str(inum))
+        kernel_private = (
+            path in MUTABLE_KERNEL_PRIVATE_PATHS
+            and isinstance(inode, dict)
+            and inode.get("vfs_policy") == VFS_POLICY_KERNEL_PRIVATE
+        )
+        if not kernel_private and payload_hash(candidate, path) != payload_hash(
+            before, path
+        ):
             raise VerificationError(f"{label}: non-target payload {path} changed")
         for key in ("inode_blocks", "inodes", "inode_raw_sha256"):
             before_table = table(before, key, "before")
@@ -292,11 +319,12 @@ def require_global_preservation(
         raise VerificationError("filesystem geometry changed across the campaign")
 
     mutable_inums = {ROOT_INODE}
-    for _, snapshot in snapshots:
+    for label, snapshot in snapshots:
         root = names(snapshot)
         mutable_inums.update(
             root[path] for path in TARGET_PATHS if path in root
         )
+        mutable_inums.update(kernel_private_inums(snapshot, label))
     mutable_blocks: set[int] = set()
     for label, snapshot in snapshots:
         mutable_blocks.update(blocks_for_inodes(snapshot, mutable_inums, label))

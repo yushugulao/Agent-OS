@@ -136,9 +136,37 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str) -> None:
     if fs_epoch.count("bio_request_settle_quiescent_cleanup()") != 1:
         raise ContractError("epoch settles debt outside irreversible BUSY recovery")
 
+    quiescent = compact(function_body(bio, "bio_io_quiescent_current"))
+    for token in (
+        "io_policy.background.buffer_holds == 0",
+        "io_policy.background.fs_atomic_depth == 0",
+        "thread->bio_buffer_holds == 0",
+        "thread->bio_fs_atomic_depth == 0",
+        "bio_boot_buffer_holds == 0",
+        "bio_boot_fs_atomic_depth == 0",
+    ):
+        if token not in quiescent:
+            raise ContractError(f"commit quiescence omits {token}")
+
+    reserve = compact(function_body(fs_epoch, "fs_epoch_reserve_ordered"))
+    ordered(
+        reserve,
+        "hard_rollover = epoch.owner != owner",
+        "soft_rollover = epoch.count >= FS_EPOCH_HIGH_WATER",
+        "quiescent = bio_io_quiescent_current()",
+        "if (hard_rollover && !quiescent) epoch.rollover_pending = 1",
+        "if (!hard_rollover && !soft_rollover)",
+        "if (!quiescent)",
+        "return hard_rollover ? VIRTIO_DISK_ERR_BUSY : 0",
+        "return fs_epoch_commit()",
+    )
+
     commit = compact(function_body(fs_epoch, "fs_epoch_commit"))
     ordered(
         commit,
+        "if (!bio_io_quiescent_current())",
+        "return VIRTIO_DISK_ERR_BUSY",
+        "epoch.committing = 1",
         "commit_owner = epoch.owner",
         "sponsor_class = epoch.sponsor_class",
         "sponsor_request_id = epoch.sponsor_request_id",
@@ -153,6 +181,9 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str) -> None:
     )
     if "bio_request_settle_quiescent_cleanup" in commit:
         raise ContractError("successful commit settles the outer request inside the gate")
+    should_commit = compact(function_body(fs_epoch, "fs_epoch_should_commit"))
+    if "epoch.rollover_pending" not in should_commit:
+        raise ContractError("hard rollover is not retried at the syscall boundary")
 
     fail = compact(function_body(fs_epoch, "fs_epoch_commit_fail"))
     sponsored_fail = compact(
@@ -198,11 +229,99 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str) -> None:
     reclaim = compact(function_body(FS, "fs_deferred_reclaim_maintain_owner"))
     if "bio_deferred_sponsor_begin(sponsor_owner, sponsor_class, 0)" not in reclaim:
         raise ContractError("asynchronous reclaim can borrow a coincidental request")
+    if "#define FS_WRITE_EPOCH_CREDITS 9U" not in FS:
+        raise ContractError("write mutation lacks transitive epoch credits")
+    write_locked = compact(function_body(FS, "writei_charged_locked"))
+    if "fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS)" not in write_locked:
+        raise ContractError("write block does not preserve final inode credit")
+    if "failure_result = preflight_result" not in write_locked:
+        raise ContractError("write block discards retryable preflight status")
+    write = compact(function_body(FS, "writei_with_auth"))
+    ordered(
+        write,
+        "fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS)",
+        "bio_fs_atomic_enter()",
+        "bio_fs_atomic_leave()",
+    )
+    if "return preflight_result" not in write:
+        raise ContractError("write entry discards retryable preflight status")
+    preallocate = compact(function_body(FS, "fs_preallocate_inode"))
+    ordered(
+        preallocate,
+        "fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS)",
+        "bio_fs_atomic_enter()",
+    )
+    if preallocate.count(
+        "result = fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS)"
+    ) != 2:
+        raise ContractError("preallocation discards retryable preflight status")
+    balloc = compact(function_body(FS, "balloc_epoch"))
+    ordered(
+        balloc,
+        "fs_read_block(dev, BBLOCK(block, sb), &bitmap_bp)",
+        "fs_read_block(dev, QBLOCK(block, sb), &qmap_bp)",
+        "result = bzero(dev, block)",
+        "qmap_changed = 1",
+        "bitmap_changed = 1",
+        "if (bitmap_changed)",
+        "if (qmap_changed)",
+        "fs_storage_release(charge->owner, 0)",
+    )
+    if "*error = preflight_result" not in balloc:
+        raise ContractError("allocation discards retryable preflight status")
+    if "fs_epoch_commit()" in balloc:
+        raise ContractError("allocation abort commits inside an atomic write")
+    bmap = compact(function_body(FS, "bmap"))
+    if (
+        "receipt->data_block = candidate; a[bn] = candidate; "
+        "result = fs_write_metadata_block(bp);"
+    ) not in bmap:
+        raise ContractError("indirect publish lacks a prior allocation receipt")
+    if "bmap_abort_allocation( ip, bn + NDIRECT, receipt)" not in bmap:
+        raise ContractError("indirect barrier failure does not consume its receipt")
+    abort = compact(function_body(FS, "bfree_epoch_allocation"))
+    ordered(
+        abort,
+        "fs_epoch_buffer_dirty(dev, QBLOCK(block, sb))",
+        "fs_epoch_buffer_dirty(dev, BBLOCK(block, sb))",
+        "qmap[block % QPB] = FS_OWNER_NONE",
+        "fs_write_metadata_block(qmap_bp)",
+        "fs_write_metadata_block(bitmap_bp)",
+        "fs_storage_release(owner, 0)",
+    )
+    destructive = compact(function_body(FS, "fs_epoch_destructive_begin"))
+    if "result == VIRTIO_DISK_ERR_BUSY ? FS_FAILURE_SCHEDULING_UNAVAILABLE" not in destructive:
+        raise ContractError("destructive path converts retryable BUSY to fail-closed")
+    forward_checkpoint = compact(function_body(FS, "fs_forward_checkpoint"))
+    if "result == VIRTIO_DISK_ERR_BUSY ? FS_FAILURE_SCHEDULING_UNAVAILABLE" not in forward_checkpoint:
+        raise ContractError("forward checkpoint converts pre-publication BUSY to fail-closed")
 
 
 validate(FS_EPOCH, FS_EPOCH_H, BIO, SYSCALL)
 
 MUTATIONS = (
+    (
+        replace_in_function(
+            FS_EPOCH,
+            "fs_epoch_commit",
+            "if (!bio_io_quiescent_current()) {\n\t\tepoch.rollover_pending = 1;\n\t\tintr_restore(enabled);\n\t\treturn VIRTIO_DISK_ERR_BUSY;\n\t}",
+            "",
+        ),
+        BIO,
+        SYSCALL,
+        "commit accepts active transient state",
+    ),
+    (
+        replace_in_function(
+            FS_EPOCH,
+            "fs_epoch_reserve_ordered",
+            "return hard_rollover ? VIRTIO_DISK_ERR_BUSY : 0;",
+            "return 0;",
+        ),
+        BIO,
+        SYSCALL,
+        "hard rollover starts no retry boundary",
+    ),
     (
         replace_in_function(
             FS_EPOCH,

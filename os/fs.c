@@ -427,7 +427,8 @@ static int fs_epoch_destructive_begin(int *entered)
 	if (fs_epoch_dirty()) {
 		result = fs_epoch_commit();
 		if (result < 0)
-			return fs_io_fail(
+			return fs_io_fail(result == VIRTIO_DISK_ERR_BUSY ?
+				FS_FAILURE_SCHEDULING_UNAVAILABLE :
 				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 	}
 	if (fs_epoch_bypass_begin() < 0)
@@ -538,7 +539,8 @@ static int fs_forward_checkpoint(void)
 		int result = fs_epoch_commit();
 
 		if (result < 0)
-			return fs_io_fail(
+			return fs_io_fail(result == VIRTIO_DISK_ERR_BUSY ?
+				FS_FAILURE_SCHEDULING_UNAVAILABLE :
 				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 	}
 	if (bio_request_settle_quiescent_cleanup() == 0)
@@ -2546,14 +2548,22 @@ static uint balloc_one(uint dev, const struct fs_storage_charge *charge,
 	uint qstate;
 	struct bio_checkpoint_result checkpoint;
 	int m, pass;
+	int preflight_result;
 	int reserved = 0;
 	int result = -1;
 	struct buf *bp;
 
 	if (error)
 		*error = -1;
-	if (charge == 0 || fs_epoch_preflight(3) < 0 ||
-	    fs_allocator_gate_lock(0) < 0)
+	if (charge == 0)
+		return 0;
+	preflight_result = fs_epoch_preflight(3);
+	if (preflight_result < 0) {
+		if (error != 0)
+			*error = preflight_result;
+		return 0;
+	}
+	if (fs_allocator_gate_lock(0) < 0)
 		return 0;
 	if (fs_storage_reserve(charge, 0) < 0)
 		goto out;
@@ -2847,18 +2857,29 @@ ready:
 static uint balloc_epoch(int dev, const struct fs_storage_charge *charge,
 			 int *error)
 {
+	struct buf *bitmap_bp = 0;
+	struct buf *qmap_bp = 0;
 	uint block = 0;
+	uint bit;
 	uint qstate = FS_OWNER_NONE;
 	int allocated = 0;
-	int epoch_staged = 0;
-	int mapping_staged = 0;
+	int bitmap_changed = 0;
+	int qmap_changed = 0;
+	int preflight_result;
 	int quota_reserved = 0;
 	int result = -1;
 
 	if (error != 0)
 		*error = -1;
-	if (charge == 0 || fs_epoch_preflight(3) < 0 ||
-	    fs_allocator_gate_lock(0) < 0)
+	if (charge == 0)
+		return 0;
+	preflight_result = fs_epoch_preflight(3);
+	if (preflight_result < 0) {
+		if (error != 0)
+			*error = preflight_result;
+		return 0;
+	}
+	if (fs_allocator_gate_lock(0) < 0)
 		return 0;
 	block = fs_block_candidate_take(dev, charge->owner, &result);
 	if (block == 0)
@@ -2867,12 +2888,16 @@ static uint balloc_epoch(int dev, const struct fs_storage_charge *charge,
 	if (result < 0)
 		goto out;
 	quota_reserved = 1;
-	result = fs_scrub_block_allocated(dev, block, &allocated);
+	result = fs_read_block(dev, BBLOCK(block, sb), &bitmap_bp);
 	if (result < 0)
 		goto out;
-	result = fs_qmap_read(dev, block, &qstate);
+	result = fs_read_block(dev, QBLOCK(block, sb), &qmap_bp);
 	if (result < 0)
 		goto out;
+	bit = block % BPB;
+	allocated = (bitmap_bp->data[bit / 8] &
+		     (1U << (bit % 8))) != 0;
+	qstate = ((uint *)qmap_bp->data)[block % QPB];
 	if (allocated || qstate != FS_OWNER_NONE) {
 		result = fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 		goto out;
@@ -2880,39 +2905,37 @@ static uint balloc_epoch(int dev, const struct fs_storage_charge *charge,
 	result = bzero(dev, block);
 	if (result < 0)
 		goto out;
-	epoch_staged = 1;
-	result = fs_qmap_write(dev, block, charge->owner);
+	((uint *)qmap_bp->data)[block % QPB] = charge->owner;
+	qmap_changed = 1;
+	result = fs_write_metadata_block(qmap_bp);
 	if (result < 0)
 		goto out;
-	mapping_staged = 1;
-	result = fs_bitmap_write(dev, block, 1);
-	if (result < 0) {
-		result = fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+	bitmap_bp->data[bit / 8] |= 1U << (bit % 8);
+	bitmap_changed = 1;
+	result = fs_write_metadata_block(bitmap_bp);
+	if (result < 0)
 		goto out;
-	}
 	quota_reserved = 0;
 	fs_block_candidate_clear(block);
 	if (error != 0)
 		*error = 0;
+	brelse(qmap_bp);
+	brelse(bitmap_bp);
 	fs_allocator_gate_unlock();
 	return block;
 
 out:
-	if (epoch_staged) {
-		int commit_result = fs_epoch_commit();
-
-		if (commit_result < 0 || mapping_staged) {
-			/*
-			 * A published allocation-map image owns its quota even when
-			 * the remaining map update fails.  Recovery will reclaim the
-			 * unreachable block; refunding here would let another caller
-			 * spend capacity whose durable state is still ambiguous.
-			 */
-			quota_reserved = 0;
-			result = fs_io_fail(
-				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
-		}
-	}
+	/* Epoch buffers retain their final image by reference.  Restore both maps
+	 * before releasing them so an aborted allocation commits only a harmless
+	 * zeroed free block, never a half-owned resource. */
+	if (bitmap_changed)
+		bitmap_bp->data[bit / 8] &= ~(1U << (bit % 8));
+	if (qmap_changed)
+		((uint *)qmap_bp->data)[block % QPB] = FS_OWNER_NONE;
+	if (qmap_bp != 0)
+		brelse(qmap_bp);
+	if (bitmap_bp != 0)
+		brelse(bitmap_bp);
 	if (block != 0 && fs_block_candidate_is_reserved(block))
 		fs_block_candidate_clear(block);
 	if (quota_reserved && fs_storage.ready)
@@ -3039,6 +3062,67 @@ out:
 out_bypass:
 	fs_epoch_destructive_end(bypass_entered);
 	return result;
+}
+
+/* Undo an allocation that is still owned by the current, unpublished epoch.
+ * The allocation receipt is the authority for using this path; ordinary frees
+ * continue through the crash-recoverable destructive protocol above. */
+static int
+bfree_epoch_allocation(int dev, uint block, uint owner)
+{
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	struct buf *bitmap_bp = 0;
+	struct buf *qmap_bp = 0;
+	uint bit;
+	uint *qmap;
+
+	if (fs_epoch_runtime_enabled() && !fs_epoch_bypass_active() &&
+	    fs_epoch_request_held()) {
+		if (!fs_storage_owner_valid(owner) ||
+		    block < sb.datastart || block >= sb.size ||
+		    !fs_epoch_buffer_dirty(dev, QBLOCK(block, sb)) ||
+		    !fs_epoch_buffer_dirty(dev, BBLOCK(block, sb)))
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		if (fs_allocator_gate_lock(1) < 0)
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		if (fs_read_block(dev, BBLOCK(block, sb), &bitmap_bp) < 0 ||
+		    fs_read_block(dev, QBLOCK(block, sb), &qmap_bp) < 0)
+			goto fail;
+		bit = block % BPB;
+		qmap = (uint *)qmap_bp->data;
+		if (qmap[block % QPB] != owner ||
+		    (bitmap_bp->data[bit / 8] & (1U << (bit % 8))) == 0)
+			goto fail;
+
+		qmap[block % QPB] = FS_OWNER_NONE;
+		bitmap_bp->data[bit / 8] &= ~(1U << (bit % 8));
+		if (fs_write_metadata_block(qmap_bp) < 0 ||
+		    fs_write_metadata_block(bitmap_bp) < 0) {
+			/* Epoch entries pin these buffers by reference.  Restoring the
+			 * bytes also restores the image a later commit will publish. */
+			qmap[block % QPB] = owner;
+			bitmap_bp->data[bit / 8] |= 1U << (bit % 8);
+			goto fail;
+		}
+		brelse(qmap_bp);
+		brelse(bitmap_bp);
+		fs_storage_release(owner, 0);
+		fs_allocator_gate_unlock();
+		return 0;
+
+fail:
+		if (qmap_bp != 0)
+			brelse(qmap_bp);
+		if (bitmap_bp != 0)
+			brelse(bitmap_bp);
+		fs_allocator_gate_unlock();
+		return fs_io_fail(
+			FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+	}
+#endif
+	return bfree(dev, block);
 }
 
 #ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
@@ -4530,6 +4614,15 @@ void iabort(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // When alloc is zero, a missing mapping is reported without changing the file.
+struct bmap_allocation_receipt {
+	uint owner;
+	uint data_block;
+	uint indirect_block;
+};
+
+static int bmap_abort_allocation(struct inode *, uint,
+				 struct bmap_allocation_receipt *);
+
 static uint bmap_error(int *error, int result)
 {
 	if (error != 0)
@@ -4538,7 +4631,8 @@ static uint bmap_error(int *error, int result)
 }
 
 static uint bmap(struct inode *ip, uint bn, int alloc,
-		 const struct fs_storage_charge *charge, int *error)
+		 const struct fs_storage_charge *charge, int *error,
+		 struct bmap_allocation_receipt *receipt)
 {
 	uint addr, candidate, indirect, *a;
 	struct buf *bp;
@@ -4547,6 +4641,10 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 
 	if (error != 0)
 		*error = 0;
+	if (receipt != 0)
+		memset(receipt, 0, sizeof(*receipt));
+	if (alloc && (charge == 0 || receipt == 0))
+		return bmap_error(error, -1);
 	inode_mapping_require(ip, alloc != 0);
 
 	if (bn < NDIRECT) {
@@ -4557,10 +4655,13 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 				return bmap_error(error, result);
 			if (ip->addrs[bn] == 0) {
 				ip->addrs[bn] = candidate;
+				receipt->owner = charge->owner;
+				receipt->data_block = candidate;
 				addr = candidate;
 			} else {
 				addr = ip->addrs[bn];
-				result = bfree(ip->dev, candidate);
+				result = bfree_epoch_allocation(
+					ip->dev, candidate, charge->owner);
 				if (result < 0)
 					return bmap_error(error, result);
 			}
@@ -4579,11 +4680,14 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 				return bmap_error(error, result);
 			if (ip->addrs[NDIRECT] == 0) {
 				ip->addrs[NDIRECT] = candidate;
+				receipt->owner = charge->owner;
+				receipt->indirect_block = candidate;
 				indirect = candidate;
 				indirect_allocated = 1;
 			} else {
 				indirect = ip->addrs[NDIRECT];
-				result = bfree(ip->dev, candidate);
+				result = bfree_epoch_allocation(
+					ip->dev, candidate, charge->owner);
 				if (result < 0)
 					return bmap_error(error, result);
 			}
@@ -4594,7 +4698,9 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 				int cleanup;
 
 				ip->addrs[NDIRECT] = 0;
-				cleanup = bfree(ip->dev, indirect);
+				receipt->indirect_block = 0;
+				cleanup = bfree_epoch_allocation(
+					ip->dev, indirect, charge->owner);
 				if (cleanup < 0)
 					result = cleanup;
 			}
@@ -4607,7 +4713,9 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 			candidate = balloc(ip->dev, charge, &result);
 			if (candidate == 0 && indirect_allocated) {
 				ip->addrs[NDIRECT] = 0;
-				if (bfree(ip->dev, indirect) < 0)
+				receipt->indirect_block = 0;
+				if (bfree_epoch_allocation(
+					    ip->dev, indirect, charge->owner) < 0)
 					result = -1;
 				return bmap_error(error, result);
 			}
@@ -4620,26 +4728,57 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 				 */
 				result = fs_read_block(ip->dev, indirect, &bp);
 				if (result < 0) {
-					int cleanup = bfree(ip->dev, candidate);
+					int cleanup = bfree_epoch_allocation(
+						ip->dev, candidate, charge->owner);
 
 					if (cleanup < 0)
 						result = cleanup;
+					if (indirect_allocated) {
+						ip->addrs[NDIRECT] = 0;
+						receipt->indirect_block = 0;
+						cleanup = bfree_epoch_allocation(
+							ip->dev, indirect,
+							charge->owner);
+						if (cleanup < 0)
+							result = cleanup;
+					}
 					return bmap_error(error, result);
 				}
 				a = (uint *)bp->data;
 				if (a[bn] == 0) {
+					receipt->owner = charge->owner;
+					receipt->data_block = candidate;
 					a[bn] = candidate;
 					result = fs_write_metadata_block(bp);
 					if (result < 0) {
+						a[bn] = 0;
 						brelse(bp);
-						if (bfree(ip->dev, candidate) < 0)
+						if (bfree_epoch_allocation(
+							    ip->dev, candidate,
+							    charge->owner) < 0)
 							result = -1;
+						else
+							receipt->data_block = 0;
+						if (indirect_allocated) {
+							ip->addrs[NDIRECT] = 0;
+							receipt->indirect_block = 0;
+							if (bfree_epoch_allocation(
+								    ip->dev, indirect,
+								    charge->owner) < 0)
+								result = -1;
+						}
 						return bmap_error(error, result);
 					}
 					brelse(bp);
 					result = fs_durable_barrier_forward();
-					if (result < 0)
+					if (result < 0) {
+						int cleanup = bmap_abort_allocation(
+							ip, bn + NDIRECT, receipt);
+
+						if (cleanup < 0)
+							result = cleanup;
 						return bmap_error(error, result);
+					}
 					addr = candidate;
 					candidate = 0;
 				} else {
@@ -4647,7 +4786,8 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 					brelse(bp);
 				}
 				if (candidate != 0) {
-					result = bfree(ip->dev, candidate);
+					result = bfree_epoch_allocation(
+						ip->dev, candidate, charge->owner);
 					if (result < 0)
 						return bmap_error(error, result);
 				}
@@ -4671,7 +4811,9 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 				empty = 0;
 			brelse(bp);
 			if (empty) {
-				result = bfree(ip->dev, indirect);
+				receipt->indirect_block = 0;
+				result = bfree_epoch_allocation(
+					ip->dev, indirect, charge->owner);
 				if (result < 0)
 					return bmap_error(error, result);
 			}
@@ -4727,47 +4869,76 @@ static uint bmap_read_batch(struct inode *ip, uint bn, uint count,
 	return mapped;
 }
 
-// Undo a block allocated for a write that could not copy any data into it.
-static int bmap_discard(struct inode *ip, uint bn)
+// Roll back only the blocks named by the allocation receipt.  Existing inode
+// mappings are never inferred from mutable state and therefore cannot be freed
+// by an aborting write.
+static int
+bmap_abort_allocation(struct inode *ip, uint bn,
+		      struct bmap_allocation_receipt *receipt)
 {
 	struct buf *bp;
-	uint addr;
 	uint indirect;
 	uint *a;
+	int empty;
 
 	inode_mapping_require(ip, 1);
+	if (receipt == 0 || receipt->owner == FS_OWNER_NONE ||
+	    (receipt->data_block == 0 && receipt->indirect_block == 0))
+		return 0;
 
 	if (bn < NDIRECT) {
-		addr = ip->addrs[bn];
-		if (addr != 0) {
-			ip->addrs[bn] = 0;
-			if (bfree(ip->dev, addr) < 0)
-				return -1;
-		}
+		if (receipt->indirect_block != 0 ||
+		    ip->addrs[bn] != receipt->data_block)
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		ip->addrs[bn] = 0;
+		if (bfree_epoch_allocation(
+			    ip->dev, receipt->data_block, receipt->owner) < 0)
+			return -1;
+		memset(receipt, 0, sizeof(*receipt));
 		return 0;
 	}
 	bn -= NDIRECT;
-	if (bn >= NINDIRECT || ip->addrs[NDIRECT] == 0)
-		return 0;
+	if (bn >= NINDIRECT || ip->addrs[NDIRECT] == 0 ||
+	    receipt->data_block == 0)
+		return fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 	indirect = ip->addrs[NDIRECT];
 	if (fs_read_block(ip->dev, indirect, &bp) < 0)
 		return -1;
 	a = (uint *)bp->data;
-	addr = a[bn];
-	if (addr == 0) {
+	if (a[bn] != receipt->data_block) {
 		brelse(bp);
-		return 0;
+		return fs_io_fail(
+			FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 	}
 	a[bn] = 0;
 	if (fs_write_metadata_block(bp) < 0) {
+		a[bn] = receipt->data_block;
 		brelse(bp);
 		return -1;
 	}
+	empty = 1;
+	if (receipt->indirect_block != 0) {
+		if (receipt->indirect_block != indirect)
+			empty = 0;
+		for (uint i = 0; empty && i < NINDIRECT; i++)
+			if (a[i] != 0)
+				empty = 0;
+	}
 	brelse(bp);
-	if (fs_durable_barrier_forward() < 0)
+	if (bfree_epoch_allocation(
+		    ip->dev, receipt->data_block, receipt->owner) < 0)
 		return -1;
-	if (bfree(ip->dev, addr) < 0)
-		return -1;
+	if (receipt->indirect_block != 0) {
+		if (!empty || ip->addrs[NDIRECT] != indirect)
+			return fs_io_fail(
+				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+		ip->addrs[NDIRECT] = 0;
+		if (bfree_epoch_allocation(
+			    ip->dev, indirect, receipt->owner) < 0)
+			return -1;
+	}
+	memset(receipt, 0, sizeof(*receipt));
 	return 0;
 }
 
@@ -5277,6 +5448,10 @@ int readi_device(struct inode *ip, const struct vfs_cred *cred, int user_dst,
 // Returns the number of bytes successfully written.
 // If the return value is less than the requested n,
 // there was an error of some kind.
+#define FS_WRITE_EPOCH_CREDITS 9U
+_Static_assert(FS_WRITE_EPOCH_CREDITS <= FS_EPOCH_HIGH_WATER,
+	       "write mutation credits must fit one epoch");
+
 static int writei_charged_locked(struct inode *ip,
 				 const struct vfs_cred *cred,
 				 const struct fs_storage_charge *charge,
@@ -5288,10 +5463,8 @@ static int writei_charged_locked(struct inode *ip,
 	const struct fs_storage_charge *allocation_charge = charge;
 	uint tot, m, addr, bn;
 	struct buf *bp;
-	int allocated;
 	struct bio_checkpoint_result checkpoint;
 	int failed = 0;
-	int inode_changed = 0;
 	int failure_result = -1;
 
 	inode_mapping_require(ip, 1);
@@ -5316,33 +5489,37 @@ static int writei_charged_locked(struct inode *ip,
 	}
 
 	for (tot = 0; tot < n; tot += m, off += m, src += m) {
+		struct bmap_allocation_receipt allocation = {0};
 		struct bio_overwrite_receipt overwrite =
 			BIO_OVERWRITE_RECEIPT_INIT;
 		int full_overwrite;
+		int inode_changed = 0;
+		int preflight_result;
+		uint old_size = ip->size;
 
 		m = MIN(n - tot, BSIZE - off % BSIZE);
 		full_overwrite = ip->type != T_DIR && (off % BSIZE) == 0 &&
 				 m == BSIZE;
-		if ((ip->type == T_DIR ?
-		     fs_epoch_preflight_phase(2, namespace_phase) :
-		     fs_epoch_preflight(2)) < 0) {
-			failure_result = -1;
+		preflight_result = ip->type == T_DIR ?
+			fs_epoch_preflight_phase(FS_WRITE_EPOCH_CREDITS,
+						 namespace_phase) :
+			fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS);
+		if (preflight_result < 0) {
+			failure_result = preflight_result;
 			failed = 1;
 			break;
 		}
 		bn = off / BSIZE;
-		addr = bmap(ip, bn, 0, 0, &failure_result);
-		allocated = 0;
+		addr = bmap(ip, bn, 0, 0, &failure_result, 0);
 		if (addr == 0) {
 			addr = bmap(ip, bn, 1, allocation_charge,
-				    &failure_result);
+				    &failure_result, &allocation);
 			if (addr == 0) {
 				if (failure_result >= 0)
 					failure_result = -1;
 				failed = 1;
 				break;
 			}
-			allocated = 1;
 		}
 		bp = 0;
 		if (full_overwrite) {
@@ -5363,8 +5540,9 @@ static int writei_charged_locked(struct inode *ip,
 			failure_result = fs_read_block(ip->dev, addr, &bp);
 		}
 		if (failure_result < 0) {
-			if (allocated)
-				(void)bmap_discard(ip, bn);
+			if (allocation.data_block != 0 &&
+			    bmap_abort_allocation(ip, bn, &allocation) < 0)
+				failure_result = -1;
 			failed = 1;
 			break;
 		}
@@ -5374,8 +5552,9 @@ static int writei_charged_locked(struct inode *ip,
 				bcancel_overwrite(&overwrite);
 			else
 				brelse(bp);
-			if (allocated)
-				(void)bmap_discard(ip, bn);
+			if (allocation.data_block != 0 &&
+			    bmap_abort_allocation(ip, bn, &allocation) < 0)
+				failure_result = -1;
 			failure_result = -1;
 			failed = 1;
 			break;
@@ -5398,8 +5577,10 @@ static int writei_charged_locked(struct inode *ip,
 					fs_io_fail(FS_FAILURE_TRANSIENT_READ);
 			}
 			if (failure_result < 0) {
-				if (allocated)
-					(void)bmap_discard(ip, bn);
+				if (allocation.data_block != 0 &&
+				    bmap_abort_allocation(
+					    ip, bn, &allocation) < 0)
+					failure_result = -1;
 				failed = 1;
 				break;
 			}
@@ -5409,14 +5590,28 @@ static int writei_charged_locked(struct inode *ip,
 			fs_write_data_block(bp);
 		if (failure_result < 0) {
 			brelse(bp);
-			if (allocated)
-				(void)bmap_discard(ip, bn);
+			if (allocation.data_block != 0 &&
+			    bmap_abort_allocation(ip, bn, &allocation) < 0)
+				failure_result = -1;
 			failed = 1;
 			break;
 		}
 		brelse(bp);
-		if (allocated)
+		if (allocation.data_block != 0)
 			inode_changed = 1;
+		if (off + m > ip->size) {
+			ip->size = off + m;
+			inode_changed = 1;
+		}
+		if (inode_changed && iupdate(ip) < 0) {
+			ip->size = old_size;
+			if (allocation.data_block != 0)
+				(void)bmap_abort_allocation(
+					ip, bn, &allocation);
+			failure_result = -1;
+			failed = 1;
+			break;
+		}
 		checkpoint = bio_request_checkpoint();
 		if (bio_checkpoint_should_stop(checkpoint)) {
 			tot += m;
@@ -5425,16 +5620,6 @@ static int writei_charged_locked(struct inode *ip,
 			break;
 		}
 	}
-	if (off > ip->size) {
-		ip->size = off;
-		inode_changed = 1;
-	}
-
-	// Existing-block overwrites do not change inode metadata. Avoid turning
-	// every small data write into an unrelated inode-table write.
-	if (inode_changed && iupdate(ip) < 0)
-		return -1;
-
 	if (failed && tot == 0)
 		return failure_result;
 	return tot;
@@ -5461,10 +5646,21 @@ static int writei_with_auth(struct inode *ip, const struct vfs_cred *cred,
 {
 	struct fs_storage_charge charge;
 	int namespace_locked = 0;
+	int preflight_result;
 	int result;
 
+	if (ip == 0)
+		return -1;
 	if (fs_storage_charge_from_vfs(cred, &charge) < 0)
 		return -1;
+	if (n != 0) {
+		preflight_result = ip->type == T_DIR ?
+			fs_epoch_preflight_phase(FS_WRITE_EPOCH_CREDITS,
+						 FS_EPOCH_NAMESPACE_ATTACH) :
+			fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS);
+		if (preflight_result < 0)
+			return preflight_result;
+	}
 	if (ip != 0 && ip->type == T_DIR) {
 		if (fs_namespace_gate_lock() < 0)
 			return -1;
@@ -5527,21 +5723,27 @@ fs_preallocate_inode(struct inode *ip, const struct vfs_cred *cred, uint size)
 	blocks = (size + BSIZE - 1) / BSIZE;
 	start_block = MIN(blocks, (ip->size + BSIZE - 1) / BSIZE);
 	for (uint bn = start_block; bn < blocks; bn++) {
+		struct bmap_allocation_receipt allocation = {0};
 		uint addr;
+		uint old_size = ip->size;
 		uint published_size = MIN(size, (bn + 1) * BSIZE);
 		struct bio_checkpoint_result checkpoint;
 		int inode_changed = 0;
 		int map_result;
 
+		result = fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS);
+		if (result < 0)
+			goto out;
 		bio_fs_atomic_enter();
-		addr = bmap(ip, bn, 0, 0, &map_result);
+		addr = bmap(ip, bn, 0, 0, &map_result, 0);
 		if (addr == 0) {
 			if (map_result < 0) {
 				result = map_result;
 				bio_fs_atomic_leave();
 				goto out;
 			}
-			addr = bmap(ip, bn, 1, &charge, &map_result);
+			addr = bmap(ip, bn, 1, &charge, &map_result,
+				    &allocation);
 			if (addr == 0) {
 				result = map_result < 0 ? map_result :
 					 fs_io_fail(FS_FAILURE_OPERATION);
@@ -5555,6 +5757,10 @@ fs_preallocate_inode(struct inode *ip, const struct vfs_cred *cred, uint size)
 			inode_changed = 1;
 		}
 		if (inode_changed && (result = iupdate(ip)) < 0) {
+			ip->size = old_size;
+			if (allocation.data_block != 0)
+				(void)bmap_abort_allocation(
+					ip, bn, &allocation);
 			bio_fs_atomic_leave();
 			goto out;
 		}
@@ -5567,10 +5773,16 @@ fs_preallocate_inode(struct inode *ip, const struct vfs_cred *cred, uint size)
 		}
 	}
 	if (ip->size < size) {
+		uint old_size = ip->size;
+
+		result = fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS);
+		if (result < 0)
+			goto out;
 		bio_fs_atomic_enter();
 		ip->size = size;
 		result = iupdate(ip);
 		if (result < 0) {
+			ip->size = old_size;
 			bio_fs_atomic_leave();
 			goto out;
 		}
@@ -5644,7 +5856,7 @@ static int dir_scan_fill(struct inode *dp, const char *key, uint start,
 	block_start = start - start % BSIZE;
 	block_end = MIN(block_start + BSIZE, dp->size);
 
-	addr = bmap(dp, block_start / BSIZE, 0, 0, &map_result);
+	addr = bmap(dp, block_start / BSIZE, 0, 0, &map_result, 0);
 	if (addr == 0) {
 		result = map_result < 0 ? map_result : -1;
 		goto out;

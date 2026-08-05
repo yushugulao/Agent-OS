@@ -111,13 +111,30 @@ def check(root: Path) -> None:
     bmap = function(fs_source, "bmap")
     require(bmap, "inode_mapping_require(ip,alloc!=0)",
             "bmap does not enforce read/write mapping ownership")
-    discard = function(fs_source, "bmap_discard")
-    require(discard, "inode_mapping_require(ip,1)",
-            "failed allocation can discard a block outside the writer guard")
+    require(
+        bmap,
+        "receipt->data_block=candidate;a[bn]=candidate;"
+        "result=fs_write_metadata_block(bp)",
+        "indirect mapping publishes before establishing a rollback receipt",
+    )
+    require(
+        bmap,
+        "bmap_abort_allocation(ip,bn+NDIRECT,receipt)",
+        "indirect publish barrier failure drops its allocation receipt",
+    )
+    abort = function(fs_source, "bmap_abort_allocation")
+    require(abort, "inode_mapping_require(ip,1)",
+            "failed allocation can roll back a block outside the writer guard")
+    require(abort, "ip->addrs[bn]!=receipt->data_block",
+            "allocation rollback is inferred without an allocation receipt")
 
     charged = function(fs_source, "writei_charged_locked")
     require(charged, "inode_mapping_require(ip,1)",
             "write implementation does not require the mapping writer")
+    require(charged, "structbmap_allocation_receiptallocation={0}",
+            "write allocation does not retain a rollback receipt")
+    require(charged, "bmap_abort_allocation(ip,bn,&allocation)",
+            "failed write does not consume its allocation receipt")
     charged_wrapper = function(fs_source, "writei_charged")
     ordered(
         charged_wrapper,

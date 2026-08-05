@@ -111,6 +111,7 @@ int bio_request_end_current_cleanup(void);
 void bio_request_abort_thread(struct thread *);
 void bio_fs_atomic_enter(void);
 void bio_fs_atomic_leave(void);
+int bio_io_quiescent_current(void);
 int bio_background_begin(uint);
 void bio_background_end(void);
 int bio_background_active(uint);

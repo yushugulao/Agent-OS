@@ -78,6 +78,22 @@ class InodeMappingGuardTests(unittest.TestCase):
         )
         self.assert_rejected("bmap does not enforce")
 
+    def test_allocation_abort_requires_exact_receipt(self) -> None:
+        self.mutate(
+            "os/fs.c",
+            "ip->addrs[bn] != receipt->data_block",
+            "ip->addrs[bn] == 0",
+        )
+        self.assert_rejected("without an allocation receipt")
+
+    def test_indirect_barrier_failure_consumes_receipt(self) -> None:
+        self.mutate(
+            "os/fs.c",
+            "ip, bn + NDIRECT, receipt);",
+            "ip, bn + NDIRECT, 0);",
+        )
+        self.assert_rejected("barrier failure drops")
+
     def test_truncate_must_take_writer(self) -> None:
         path = self.root / "os/fs.c"
         source = path.read_text(encoding="utf-8")

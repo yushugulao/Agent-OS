@@ -229,6 +229,7 @@ static struct {
 static struct wait_queue cache_waiters;
 static uint64 cache_progress_sequence;
 static char bio_boot_holder_token;
+static uint bio_boot_buffer_holds;
 static uint bio_boot_fs_atomic_depth;
 static uint64 bio_request_next_id;
 
@@ -1883,6 +1884,25 @@ void bio_fs_atomic_leave(void)
 	(*depth)--;
 }
 
+int bio_io_quiescent_current(void)
+{
+	struct thread *thread = curr_thread();
+	int quiescent;
+	int enabled = intr_save();
+
+	if (bio_background_current())
+		quiescent = io_policy.background.buffer_holds == 0 &&
+			io_policy.background.fs_atomic_depth == 0;
+	else if (thread != 0 && thread->state == RUNNING)
+		quiescent = thread->bio_buffer_holds == 0 &&
+			thread->bio_fs_atomic_depth == 0;
+	else
+		quiescent = bio_boot_buffer_holds == 0 &&
+			bio_boot_fs_atomic_depth == 0;
+	intr_restore(enabled);
+	return quiescent;
+}
+
 static int bio_request_end_current_mode(int wait_for_budget, int cleanup,
 					int terminal)
 {
@@ -2582,6 +2602,8 @@ bio_cleanup_token_begin(struct bio_cleanup_token *token)
 	polling_executor = thread->tid < 0 && thread->identity_generation == 0;
 	if (!polling_executor && thread->state != RUNNING)
 		return -1;
+	if (!bio_io_quiescent_current())
+		return -1;
 	enabled = intr_save();
 	record = bio_cleanup_record_lookup_locked(token);
 	if (record != 0 && record->state == BIO_CLEANUP_TOKEN_ACTIVE) {
@@ -2669,7 +2691,6 @@ bio_cleanup_token_begin(struct bio_cleanup_token *token)
 int
 bio_cleanup_token_end(struct bio_cleanup_token *token)
 {
-	struct thread *thread = curr_thread();
 	int enabled = intr_save();
 	struct bio_cleanup_record *record =
 		bio_cleanup_record_lookup_locked(token);
@@ -2685,8 +2706,7 @@ bio_cleanup_token_end(struct bio_cleanup_token *token)
 		intr_restore(enabled);
 		return 0;
 	}
-	if (thread->bio_buffer_holds != 0 ||
-	    thread->bio_fs_atomic_depth != 0)
+	if (!bio_io_quiescent_current())
 		panic("cleanup token active I/O");
 	if (io_policy.deferred.transfers != 0)
 		record->flags |= BIO_CLEANUP_TOKEN_TRANSFERRED;
@@ -2795,6 +2815,8 @@ int bio_deferred_sponsor_begin(uint owner, uint io_class,
 	polling_executor = thread->tid < 0 && thread->identity_generation == 0;
 	if (!polling_executor && thread->state != RUNNING)
 		return -1;
+	if (!bio_io_quiescent_current())
+		return -1;
 	enabled = intr_save();
 	state = io_state_find(owner, 0);
 	if (io_policy.deferred.active) {
@@ -2884,8 +2906,7 @@ void bio_deferred_sponsor_end(void)
 		intr_restore(enabled);
 		return;
 	}
-	if (curr_thread()->bio_buffer_holds != 0 ||
-	    curr_thread()->bio_fs_atomic_depth != 0)
+	if (!bio_io_quiescent_current())
 		panic("deferred sponsor active I/O");
 	independent = io_policy.deferred.independent_lease;
 	owner = io_policy.deferred.owner;
@@ -3342,7 +3363,9 @@ static void bio_cache_hold_acquire(void *token)
 {
 	if (token == &io_policy.background)
 		io_policy.background.buffer_holds++;
-	else if (token != &bio_boot_holder_token)
+	else if (token == &bio_boot_holder_token)
+		bio_boot_buffer_holds++;
+	else
 		((struct thread *)token)->bio_buffer_holds++;
 }
 
@@ -3352,10 +3375,10 @@ static void bio_cache_hold_release(void *token)
 
 	if (token == &io_policy.background)
 		holds = &io_policy.background.buffer_holds;
-	else if (token != &bio_boot_holder_token)
-		holds = &((struct thread *)token)->bio_buffer_holds;
+	else if (token == &bio_boot_holder_token)
+		holds = &bio_boot_buffer_holds;
 	else
-		return;
+		holds = &((struct thread *)token)->bio_buffer_holds;
 	if (*holds == 0)
 		panic("buffer holder underflow");
 	(*holds)--;

@@ -136,6 +136,13 @@ def validate(bio: str, bio_h: str) -> None:
     ):
         if token not in sponsor:
             raise ContractError(f"deferred execution class missing {token}")
+    if sponsor.count("if (!bio_io_quiescent_current())") != 1:
+        raise ContractError("deferred sponsor starts with active transient I/O")
+    cleanup_begin = compact(function_body(bio, "bio_cleanup_token_begin"))
+    cleanup_end = compact(function_body(bio, "bio_cleanup_token_end"))
+    if cleanup_begin.count("if (!bio_io_quiescent_current())") != 1 or \
+            cleanup_end.count("if (!bio_io_quiescent_current())") != 1:
+        raise ContractError("cleanup token quiescence is not symmetric")
 
     retained = compact(function_body(bio, "bio_cache_state_retained"))
     if "state->deferred_references != 0" not in retained:
@@ -187,6 +194,8 @@ def validate(bio: str, bio_h: str) -> None:
     ):
         if token not in sponsor_end:
             raise ContractError(f"independent sponsor settlement missing {token}")
+    if sponsor_end.count("if (!bio_io_quiescent_current())") != 1:
+        raise ContractError("deferred sponsor end uses a context-specific hold check")
     if transfer.index("if (bio_deferred_sponsor_current()") > transfer.index(
             "else if (thread != 0 && thread->state == RUNNING"):
         raise ContractError("ambient request path hides deferred lease matching")
@@ -214,6 +223,18 @@ def validate(bio: str, bio_h: str) -> None:
 validate(BIO, BIO_H)
 
 MUTATIONS = (
+    (replace_in_function(BIO, "bio_deferred_sponsor_begin",
+                         "if (!bio_io_quiescent_current())\n\t\treturn -1;", ""), BIO_H,
+     "sponsor begins inside active I/O"),
+    (replace_in_function(BIO, "bio_deferred_sponsor_end",
+                         "if (!bio_io_quiescent_current())", "if (0)"), BIO_H,
+     "sponsor end drops context quiescence"),
+    (replace_in_function(BIO, "bio_cleanup_token_begin",
+                         "if (!bio_io_quiescent_current())\n\t\treturn -1;", ""), BIO_H,
+     "cleanup begins inside active I/O"),
+    (replace_in_function(BIO, "bio_cleanup_token_end",
+                         "if (!bio_io_quiescent_current())", "if (0)"), BIO_H,
+     "cleanup end drops context quiescence"),
     (replace_in_function(BIO, "bio_deferred_owner_retain_current",
                          "thread->io_request_owner != owner", "0"), BIO_H,
      "owner match removed"),
