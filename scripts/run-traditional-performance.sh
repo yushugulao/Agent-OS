@@ -9,6 +9,8 @@ TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 MAKE_TOOL="${MAKE_TOOL:-make}"
+HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
+unset CC HOSTCC
 BUILD_JOBS="${TRADPERF_BUILD_JOBS:-${AGENTOS_BUILD_JOBS:-$("${PYTHON_BIN:-python3}" -I -S -B scripts/resource-jobs.py --kind build)}}"
 SAMPLES="${TRADPERF_SAMPLES:-8}"
 CASE_TIMEOUT="${TRADPERF_CASE_TIMEOUT:-180s}"
