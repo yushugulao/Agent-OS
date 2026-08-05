@@ -6244,19 +6244,28 @@ fs_directory_index_invalidate(struct inode *dp)
 #define FS_DENTRY_LOCATE_ABSENT 2
 
 static int
-fs_dentry_index_snapshot_begin(struct inode *dp, uint64 *generation)
+fs_dentry_index_snapshot_begin(struct inode *dp, uint hash,
+			       uint64 *generation)
 {
-	struct fs_directory_index_state *state;
-	int result;
-
 	fs_dentry_gate_require();
 	if (generation == 0)
 		return -1;
-	result = fs_directory_index_prepare(dp, &state);
-	if (result <= 0)
-		return FS_DENTRY_LOCATE_FALLBACK;
-	*generation = fs_dentry_index_generation;
-	return 1;
+	for (uint scanned = 0; scanned < FS_DENTRY_INDEX_CAP; scanned++) {
+		struct fs_dentry_index_entry *entry =
+			&fs_dentry_index[(hash + scanned) &
+					 (FS_DENTRY_INDEX_CAP - 1)];
+
+		if (entry->state == FS_DENTRY_INDEX_EMPTY)
+			break;
+		if (entry->state == FS_DENTRY_INDEX_USED &&
+		    entry->hash == hash && entry->dev == dp->dev &&
+		    entry->dir_inum == dp->inum &&
+		    entry->dir_incarnation == dp->vfs_incarnation) {
+			*generation = fs_dentry_index_generation;
+			return 1;
+		}
+	}
+	return FS_DENTRY_LOCATE_FALLBACK;
 }
 
 static int
@@ -6415,7 +6424,9 @@ fs_dentry_index_create_conflict(struct inode *dp,
 
 	if (empty_off == 0 || fs_dentry_gate_lock() < 0)
 		return FS_DENTRY_LOCATE_FALLBACK;
-	result = fs_dentry_index_snapshot_begin(dp, &generation);
+	result = fs_directory_index_prepare(dp, &state);
+	if (result > 0)
+		generation = fs_dentry_index_generation;
 	fs_dentry_gate_unlock();
 	if (result <= 0)
 		return FS_DENTRY_LOCATE_FALLBACK;
@@ -6500,6 +6511,22 @@ fs_dentry_index_publish_link(struct inode *dp,
 	} else if (state != 0) {
 		fs_directory_index_invalidate(dp);
 	}
+	fs_dentry_gate_unlock();
+}
+
+static void
+fs_dentry_index_publish_hit(struct inode *dp,
+			    const char key[DIRSIZ + 1], uint offset,
+			    uint target_inum, uint target_incarnation)
+{
+	struct fs_directory_index_state *state;
+
+	if (fs_dentry_gate_lock() < 0)
+		return;
+	state = fs_directory_index_find(dp, 1);
+	if (state != 0)
+		(void)fs_dentry_index_insert(dp, key, offset, target_inum,
+					     target_incarnation, 1);
 	fs_dentry_gate_unlock();
 }
 
@@ -6594,7 +6621,8 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
 	index_hash = fs_dentry_hash(dp, key);
 	if (fs_dentry_gate_lock() < 0)
 		return 0;
-	result = fs_dentry_index_snapshot_begin(dp, &index_generation);
+	result = fs_dentry_index_snapshot_begin(dp, index_hash,
+						 &index_generation);
 	fs_dentry_gate_unlock();
 	if (result > 0) {
 		for (;;) {
@@ -6614,10 +6642,9 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
 						*poff = found_off;
 					if (status)
 						*status = FS_LOOKUP_FOUND;
-				} else if (status) {
-					*status = FS_LOOKUP_ABSENT;
+					return found;
 				}
-				return found;
+				goto authoritative;
 			}
 			target = fs_dentry_index_validate(
 				dp, key, &indexed, &name_match, &stale,
@@ -6711,6 +6738,8 @@ authoritative:
 			goto fail;
 	}
 	if (found) {
+		fs_dentry_index_publish_hit(dp, key, found_off, found->inum,
+					    found->vfs_incarnation);
 		if (poff)
 			*poff = found_off;
 		if (status)
