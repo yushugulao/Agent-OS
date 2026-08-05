@@ -22,6 +22,11 @@ class ResourceJobsTests(unittest.TestCase):
         self.assertEqual(MODULE.choose_jobs("build", cpus=12), 11)
         self.assertEqual(MODULE.choose_jobs("host", cpus=6), 5)
 
+    def test_nested_host_tools_keep_a_process_headroom(self) -> None:
+        self.assertEqual(MODULE.choose_jobs("host", cpus=64), 12)
+        memory = 1024 * MODULE.MIB + 3 * 768 * MODULE.MIB
+        self.assertEqual(MODULE.choose_jobs("host", cpus=64, memory=memory), 3)
+
     def test_memory_bounds_parallel_qemu_lanes(self) -> None:
         memory = 1024 * MODULE.MIB + 2 * 1280 * MODULE.MIB
         self.assertEqual(MODULE.choose_jobs("qemu", cpus=32, memory=memory), 2)

@@ -544,6 +544,7 @@ override KERNEL_BUDGET_SUBMAKE = env \
 	$(MAKE) $(KERNEL_BUDGET_SUBMAKE_JOBS)
 override KERNEL_BUDGET_MAKE_ARGS = \
 	MAKEOVERRIDES= \
+	FUNCTIONAL_REVIEW_BUILD= \
 	BUILDDIR=$(call shell_quote,$(KERNEL_BUDGET_BUILDDIR)) \
 	TOOLPREFIX=$(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)) \
 	LOG=$(KERNEL_BUDGET_LOG) \
@@ -808,11 +809,34 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_safe_host_paths.py \
 	host_tools/test_plain_ucore_reader.py
 
+override LONG_HOST_SELFTESTS := \
+	host_tools/test_evaluation_campaign.py \
+	host_tools/test_evaluation_contract.py \
+	host_tools/test_evaluation_kernel_build.py \
+	host_tools/test_evaluation_scenario.py \
+	host_tools/test_task6_source_comparability.py \
+	host_tools/test_evaluation_dashboard.py \
+	host_tools/test_full_verification_payload.py \
+	host_tools/test_evaluation_bundle.py \
+	scripts/test-check-kernel-budgets.py \
+	scripts/test-check-teardown-protocol.py
+override HOST_CONTRACT_FAST_TESTS := \
+	$(filter-out $(LONG_HOST_SELFTESTS),$(HOST_CONTRACT_TESTS))
+override HOST_CONTRACT_LONG_TESTS := \
+	$(filter $(LONG_HOST_SELFTESTS),$(HOST_CONTRACT_TESTS))
+override AGENTOS_LONG_TEST_JOBS := \
+	$(if $(filter 1,$(AGENTOS_TEST_JOBS)),1,2)
+
 host-contract-selftest: $(HOST_CONTRACT_TESTS) scripts/run-parallel-tests.py
 	@$(PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(PYTHON_BIN)) \
-		$(HOST_CONTRACT_TESTS)
+		$(HOST_CONTRACT_FAST_TESTS)
+	@$(PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
+		--jobs $(AGENTOS_LONG_TEST_JOBS) \
+		--timeout 1800 \
+		--python $(call shell_quote,$(PYTHON_BIN)) \
+		$(HOST_CONTRACT_LONG_TESTS)
 
 override EVIDENCE_CAPTURE_TESTS := \
 	host_tools/test_capture_final_evidence.py \
@@ -834,9 +858,14 @@ override CI_HOST_SELFTESTS := \
 # but do not make every development checkpoint wait for package-scale replay.
 override STAGE_EXPENSIVE_HOST_SELFTESTS := \
 	$(EVIDENCE_CAPTURE_TESTS) \
-	scripts/test-fs-allocator-evidence.py
+	scripts/test-fs-allocator-evidence.py \
+	$(LONG_HOST_SELFTESTS)
 override STAGE_HOST_SELFTESTS := \
 	$(filter-out $(STAGE_EXPENSIVE_HOST_SELFTESTS),$(CI_HOST_SELFTESTS))
+override CI_FAST_HOST_SELFTESTS := \
+	$(filter-out $(LONG_HOST_SELFTESTS),$(CI_HOST_SELFTESTS))
+override CI_LONG_HOST_SELFTESTS := \
+	$(filter $(LONG_HOST_SELFTESTS),$(CI_HOST_SELFTESTS))
 
 stage-host-selftests: $(STAGE_HOST_SELFTESTS) scripts/run-parallel-tests.py
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
@@ -848,7 +877,12 @@ ci-host-selftests: $(CI_HOST_SELFTESTS) scripts/run-parallel-tests.py scripts/ch
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
-		$(CI_HOST_SELFTESTS)
+		$(CI_FAST_HOST_SELFTESTS)
+	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
+		--jobs $(AGENTOS_LONG_TEST_JOBS) \
+		--timeout 1800 \
+		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
+		$(CI_LONG_HOST_SELFTESTS)
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-metadata-disk-format.py \
 		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
 		--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy)

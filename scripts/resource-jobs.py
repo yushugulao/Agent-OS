@@ -12,7 +12,7 @@ from pathlib import Path
 MIB = 1024 * 1024
 POLICY = {
     "build": (16, 768 * MIB),
-    "host": (16, 384 * MIB),
+    "host": (12, 768 * MIB),
     "qemu": (6, 1280 * MIB),
 }
 
