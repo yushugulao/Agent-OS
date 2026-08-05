@@ -36,11 +36,13 @@ void main()
 	timer_init();
 	agent_storage_init();
 	fs_epoch_runtime_enable();
-	bio_policy_start();
 	load_init_app();
 	infof("start scheduler!");
 	/* Boot-only callers may poll because no schedulable thread exists yet. */
 	show_all_files();
+	/* Runtime I/O admission may sleep, so enable it only after the first
+	 * runnable process and all polling-only boot I/O have been prepared. */
+	bio_policy_start();
 	virtio_disk_runtime_start();
 	scheduler();
 }

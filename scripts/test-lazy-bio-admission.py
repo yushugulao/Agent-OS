@@ -17,6 +17,7 @@ FILES = (
     "io_policy.h",
     "os/bio.h",
     "os/bio.c",
+    "os/main.c",
     "os/proc.h",
     "os/syscall.c",
     "os/fs.c",
@@ -117,6 +118,18 @@ class LazyBioAdmissionTests(unittest.TestCase):
             "if (0)\n\t\treturn VIRTIO_DISK_ERR_BUSY;",
         )
         self.assert_rejected("physical writes can bypass")
+
+    def test_rejects_runtime_policy_before_boot_io(self) -> None:
+        self.mutate(
+            "os/main.c",
+            "\tshow_all_files();\n"
+            "\t/* Runtime I/O admission may sleep, so enable it only after the first\n"
+            "\t * runnable process and all polling-only boot I/O have been prepared. */\n"
+            "\tbio_policy_start();",
+            "\tbio_policy_start();\n"
+            "\tshow_all_files();",
+        )
+        self.assert_rejected("runtime I/O admission starts before")
 
     def test_rejects_guest_without_lease_assertion(self) -> None:
         self.mutate(

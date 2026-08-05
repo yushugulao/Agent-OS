@@ -112,6 +112,9 @@ static inline void exec_manifest_worker_image(const char *source,
 	  EXEC_MANIFEST_ROLE_ALL, 0, EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("labdemo_execprobe_ucore", "ldexecprobe", \
 	  EXEC_MANIFEST_F_SEALED, 0, 0, EXEC_MANIFEST_VFS_PROFILE_NONE) \
+	X("tradperf", "tradperf", EXEC_MANIFEST_F_BOOT_SEALED, \
+	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_SENTINEL), 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("tradexec", "tradexec", EXEC_MANIFEST_F_SEALED, 0, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_NONE) \
 	X("agentsecurity_ucore", "agentsecurity_ucore", \

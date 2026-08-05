@@ -45,6 +45,7 @@ def reject(text: str, fragment: str, message: str) -> None:
 def check(root: Path) -> None:
     bio_h = compact(root / "os/bio.h")
     bio = compact(root / "os/bio.c")
+    main = compact(root / "os/main.c")
     proc = compact(root / "os/proc.h")
     syscall = compact(root / "os/syscall.c")
     fs = compact(root / "os/fs.c")
@@ -138,6 +139,19 @@ def check(root: Path) -> None:
     require(write, "if(!bio_request_active_current())"
                    "returnVIRTIO_DISK_ERR_BUSY;",
             "physical writes can bypass lazy admission")
+    boot = function(main, "main")
+    boot_steps = tuple(
+        boot.find(fragment)
+        for fragment in (
+            "load_init_app();",
+            "show_all_files();",
+            "bio_policy_start();",
+            "virtio_disk_runtime_start();",
+            "scheduler();",
+        )
+    )
+    if any(position < 0 for position in boot_steps) or tuple(sorted(boot_steps)) != boot_steps:
+        raise ValueError("runtime I/O admission starts before polling-only boot I/O completes")
     guest_probe = function(guest, "check_lazy_cache_admission")
     for fragment in (
         "after.lazy_started-before.lazy_started==2*LAZY_CACHE_ROUNDS",
