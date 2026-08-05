@@ -603,9 +603,9 @@ def write_kernel_cost_sidecar(
         write_kernel_json(build_manifest, build)
         runner = fixture.runner
         if fail_measurement:
-            def runner(argv, timeout, maximum):
+            def runner(argv, timeout, maximum, cwd):
                 if list(argv)[-1] == "--version":
-                    return fixture.runner(argv, timeout, maximum)
+                    return fixture.runner(argv, timeout, maximum, cwd)
                 return kernel_cost.ToolExecution(1, b"", b"size failed\n")
         report = kernel_cost.collect_report(
             config_path=config,
@@ -1268,11 +1268,15 @@ class DashboardContractTests(unittest.TestCase):
             self.assertIn("AgentOS p50", overview)
             self.assertIn("n=7", overview)
             self.assertIn("p95 79.300 us/query → 13.700 us/query", overview)
+            self.assertIn("<dt>机制样本/负载</dt><dd>n=7</dd>", overview)
+            self.assertIn("每负载 n=7", overview)
+            self.assertNotIn("<dt>独立 Guest 启动</dt>", overview)
+            self.assertNotIn("独立 Guest 启动/负载", overview)
             self.assertIn(
                 "计时程序 70 项：同源 28 · 平台特定 42", overview
             )
             self.assertIn("AgentOS 专属诊断模块 4 项", overview)
-            self.assertIn("安全机制对照 uCore → AgentOS", overview)
+            self.assertIn("传统逐路径查询 → 就绪元数据索引", overview)
             load_y = float(re.search(r'class="load-label" x="8" y="([0-9.]+)"', page).group(1))
             series_y = float(re.search(r'class="series-label" x="168" y="([0-9.]+)"', page).group(1))
             self.assertGreaterEqual(series_y - load_y, 20)
@@ -1288,6 +1292,10 @@ class DashboardContractTests(unittest.TestCase):
             self.assertIn("rp_catalog", page)
             self.assertIn("structured_tool", page)
             self.assertIn("预注册 key outcome 一致性", page)
+            self.assertIn("<th>模块</th><th>核验 boot</th>", page)
+            self.assertNotIn("<th>模块</th><th>状态</th>", page)
+            self.assertIn("<th>Key outcome</th><th>一致配对</th>", page)
+            self.assertNotIn("<th>Key outcome</th><th>状态</th>", page)
             self.assertIn("不代表完整最终状态相同", page)
             self.assertIn("系统成本 unavailable", page)
             verification = json.loads(
@@ -1388,7 +1396,8 @@ class DashboardContractTests(unittest.TestCase):
         )
         self.assertIn("10.250 ms", task6)
         self.assertIn("9.750 ms", task6)
-        self.assertIn("AgentOS/Plain 0.95x", task6)
+        self.assertIn("端到端延迟（越低越好）", task6)
+        self.assertIn("AgentOS 延迟为 Plain 的 0.95 倍", task6)
         self.assertIn("程序来源与专属诊断模块 unavailable", task6)
         self.assertNotIn("task6-slot-row--improved", task6)
         self.assertNotIn("task6-slot-row--regressed", task6)
@@ -1435,7 +1444,7 @@ class DashboardContractTests(unittest.TestCase):
             "</article>", 1
         )[0]
         self.assertIn("79.000 us/query → 13.400 us/query", slot)
-        self.assertIn("安全机制对照 uCore → AgentOS", slot)
+        self.assertIn("传统逐路径查询 → 就绪元数据索引", slot)
         self.assertIn("本轮未登记性能结论", slot)
         self.assertNotIn("暂无测量", slot)
 
@@ -2352,7 +2361,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn('data-benchmark-id="file_query_path_index"', overview)
         self.assertIn('data-benchmark-id="metadata-query-no-gate"', overview)
         self.assertNotIn('class="status ', overview)
-        self.assertIn("独立 Guest 启动/负载", overview)
+        self.assertIn("每负载 n=7", overview)
         self.assertIn("暂无测量", overview)
 
         summary["benchmarks"] = summary["benchmarks"][:2]
@@ -2799,7 +2808,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertRegex(css, r"\.table-scroll\s*\{[^}]*max-width:\s*100%")
         self.assertRegex(
             css,
-            r"\.headline-result-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,",
+            r"\.headline-result-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,",
         )
         self.assertRegex(
             css,
@@ -2836,6 +2845,10 @@ class DashboardContractTests(unittest.TestCase):
         self.assertRegex(
             css,
             r"(?s)@media \(max-width: 1024px\).*?\.headline-result-grid\s*\{[^}]*repeat\(2,",
+        )
+        self.assertRegex(
+            css,
+            r"(?s)@media \(max-width: 1024px\).*?\.header-actions\s*\{[^}]*flex-wrap:\s*wrap[^}]*justify-content:\s*flex-end",
         )
         self.assertRegex(
             css,
@@ -2997,7 +3010,8 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn('class="status ', overview)
         self.assertIn("Plain p50", overview)
         self.assertIn("AgentOS p50", overview)
-        self.assertIn("AgentOS/Plain 0.81x", overview)
+        self.assertIn("端到端延迟（越低越好）", overview)
+        self.assertIn("AgentOS 延迟为 Plain 的 0.81 倍", overview)
         self.assertIn("7/7 预注册 outcome 一致", overview)
         self.assertIn("计时程序 70 项：同源 28 · 平台特定 42", overview)
         self.assertIn("AgentOS 专属诊断模块 4 项", overview)
@@ -3063,8 +3077,8 @@ class DashboardContractTests(unittest.TestCase):
             'id="panel-performance"', 1
         )[0]
         self.assertNotIn("task6-slot-row--regressed", overview)
-        self.assertNotIn("显著回退", overview)
-        self.assertIn("AgentOS/Plain 1.19x", overview)
+        self.assertIn("显著回退", overview)
+        self.assertIn("AgentOS 延迟为 Plain 的 1.19 倍", overview)
         self.assertIn("Plain p50 103.000 ms", page)
         self.assertIn("AgentOS p50 123.000 ms", page)
         self.assertNotIn("竞赛整体验收", page)

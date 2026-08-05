@@ -709,6 +709,7 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_evaluation_kernel_build.py \
 	host_tools/test_evaluation_kernel_cost.py \
 	host_tools/test_evaluation_scenario.py \
+	host_tools/test_task6_source_comparability.py \
 	host_tools/test_evaluation_dashboard.py \
 	host_tools/test_contest_demo.py \
 	host_tools/test_full_verification_payload.py \

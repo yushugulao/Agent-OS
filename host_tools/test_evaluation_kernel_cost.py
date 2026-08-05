@@ -111,11 +111,12 @@ class Fixture:
         *,
         source_commit: str = COMMIT,
         run_id: str = "kernel-cost-run-1",
+        temporary_prefix: str = "kernel-cost-",
     ) -> None:
         self.source_commit = source_commit
         self.run_id = run_id
         self._temporary = tempfile.TemporaryDirectory(
-            prefix="kernel-cost-", dir=Path(__file__).resolve().parent
+            prefix=temporary_prefix, dir=Path(__file__).resolve().parent
         )
         self.root = Path(self._temporary.name)
         self.config = self.root / "ci" / "evaluation-kernel-cost.json"
@@ -362,6 +363,7 @@ class Fixture:
         }
         _write_json(self.build_manifest, self.build)
         self.commands: list[list[str]] = []
+        self.command_cwds: list[Path] = []
 
     def close(self) -> None:
         self._temporary.cleanup()
@@ -393,19 +395,31 @@ class Fixture:
         return self.source_commit, True
 
     def runner(
-        self, argv: cost.Sequence[str], timeout: int, maximum: int
+        self, argv: cost.Sequence[str], timeout: int, maximum: int, cwd: Path
     ) -> cost.ToolExecution:
         del timeout, maximum
         command = list(argv)
         self.commands.append(command)
+        self.command_cwds.append(cwd)
+        if cwd != self.root:
+            raise AssertionError(f"tool cwd differs from repository root: {cwd}")
         if command[-1] == "--version":
             return cost.ToolExecution(0, b"GNU size (fixture) 2.46\n", b"")
-        source = Path(command[-1])
-        values = (100, 8, 200) if "baseline_ucore" in source.parts else (90, 4, 120)
+        source_text = command[-1]
+        source_argument = Path(source_text)
+        source = source_argument if source_argument.is_absolute() else cwd / source_argument
+        if not source.is_file():
+            return cost.ToolExecution(1, b"", b"source missing\n")
+        values = (
+            (100, 8, 200)
+            if "baseline_ucore" in source_text.split("/")
+            else (90, 4, 120)
+        )
         total = sum(values)
         output = (
             "text data bss dec hex filename\n"
-            f"{values[0]} {values[1]} {values[2]} {total} {total:x} {source}\n"
+            f"{values[0]} {values[1]} {values[2]} {total} {total:x} "
+            f"{source_text}\n"
         ).encode()
         return cost.ToolExecution(0, output, b"")
 
@@ -449,6 +463,87 @@ class KernelCostTests(unittest.TestCase):
         self.assertEqual(targets["baseline"]["source"]["elf_identity"]["machine"], "RISC-V")
         self.assertEqual(report["tool"]["version"], "GNU size (fixture) 2.46")
         self.assertIn("stdout_base64", targets["agentos"]["size_command"])
+
+    def test_unicode_repository_uses_bound_cwd_and_relative_artifact_path(self) -> None:
+        self.fixture.close()
+        self.fixture = Fixture(temporary_prefix="内核成本-")
+        self.assertTrue(any(ord(character) > 127 for character in str(self.fixture.root)))
+
+        def narrow_path_runner(
+            argv: cost.Sequence[str], timeout: int, maximum: int, cwd: Path
+        ) -> cost.ToolExecution:
+            argument = list(argv)[-1]
+            if argument != "--version" and (
+                Path(argument).is_absolute()
+                or any(ord(character) > 127 for character in argument)
+            ):
+                return cost.ToolExecution(
+                    23, b"", b"native narrow-path open failed\n"
+                )
+            return self.fixture.runner(argv, timeout, maximum, cwd)
+
+        report = self.fixture.collect(runner=narrow_path_runner)
+        for target in report["targets"]:
+            self.assertEqual(target["status"], "measured")
+            self.assertEqual(target["size_command"]["cwd"], ".")
+            self.assertEqual(
+                target["size_command"]["argv"][-1], target["source"]["path"]
+            )
+            self.assertFalse(Path(target["size_command"]["argv"][-1]).is_absolute())
+        self.assertTrue(
+            all(cwd == self.fixture.root for cwd in self.fixture.command_cwds)
+        )
+
+        self.fixture.save_report(report)
+        verified, _, _ = cost.verify_portable(
+            self.fixture.report, self.fixture.config, self.fixture.root
+        )
+        self.assertEqual(verified, report)
+        cost.verify_local(
+            self.fixture.report,
+            self.fixture.config,
+            self.fixture.root,
+            self.fixture.root,
+            self.fixture.tool,
+            runner=narrow_path_runner,
+            repository_reader=self.fixture.repository,
+        )
+
+    def test_nonzero_exit_precedes_empty_stdout_parse_error(self) -> None:
+        def failing_measurement(
+            argv: cost.Sequence[str], timeout: int, maximum: int, cwd: Path
+        ) -> cost.ToolExecution:
+            if list(argv)[-1] == "--version":
+                return self.fixture.runner(argv, timeout, maximum, cwd)
+            return cost.ToolExecution(23, b"", b"cannot open input\n")
+
+        report = self.fixture.collect(runner=failing_measurement)
+        for target in report["targets"]:
+            self.assertEqual(target["status"], "failed")
+            self.assertEqual(target["reason"], "size_command_exit_23")
+            self.assertNotIn("two lines", target["reason"])
+            self.assertTrue(
+                all(
+                    metric["reason"] == "size_command_exit_23"
+                    for metric in target["metrics"][1:]
+                )
+            )
+        config, _ = cost.load_config(self.fixture.config)
+        self.assertIs(cost.validate_report(report, config), report)
+
+    def test_version_exit_precedes_empty_stdout_parse_error(self) -> None:
+        def failing_version(
+            argv: cost.Sequence[str], timeout: int, maximum: int, cwd: Path
+        ) -> cost.ToolExecution:
+            del argv, timeout, maximum, cwd
+            return cost.ToolExecution(17, b"", b"version probe failed\n")
+
+        report = self.fixture.collect(runner=failing_version)
+        self.assertEqual(report["tool"]["status"], "unavailable")
+        self.assertEqual(report["tool"]["reason"], "version_command_exit_17")
+        self.assertNotIn("printable", report["tool"]["reason"])
+        config, _ = cost.load_config(self.fixture.config)
+        self.assertIs(cost.validate_report(report, config), report)
 
     def test_collection_can_emit_a_relocatable_run_root(self) -> None:
         portable = self.fixture.root / "portable-run"
@@ -897,6 +992,21 @@ class KernelCostTests(unittest.TestCase):
         )
         config, _ = cost.load_config(self.fixture.config)
         with self.assertRaisesRegex(cost.KernelCostError, "raw size output"):
+            cost.validate_report(forged, config)
+
+    def test_portable_verify_rejects_absolute_artifact_command_rebinding(self) -> None:
+        report = self.fixture.collect()
+        forged = copy.deepcopy(report)
+        forged["targets"][1]["size_command"]["argv"][-1] = str(
+            self.fixture.agentos
+        )
+        forged["content_sha256"] = cost._bytes_sha(
+            cost._canonical_json(
+                {key: value for key, value in forged.items() if key != "content_sha256"}
+            )
+        )
+        config, _ = cost.load_config(self.fixture.config)
+        with self.assertRaisesRegex(cost.KernelCostError, "manifest-relative"):
             cost.validate_report(forged, config)
 
     def test_size_output_accepts_only_exact_msys_drive_alias(self) -> None:

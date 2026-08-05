@@ -251,6 +251,74 @@ class Fixture:
         )
 
 
+class RepositoryLockTests(unittest.TestCase):
+    def _repository(self, root: Path) -> None:
+        root.mkdir()
+        _run(root, "init", "-q")
+        _run(root, "config", "user.name", "Kernel Lock Test")
+        _run(root, "config", "user.email", "kernel-lock@example.invalid")
+        (root / "tracked.txt").write_text("bound\n", encoding="utf-8")
+        _run(root, "add", ".")
+        _run(root, "commit", "-q", "-m", "fixture")
+
+    def test_unicode_linked_worktree_lock_uses_real_common_directory(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="kernel-lock-中文-", dir=ROOT.parent
+        ) as temporary:
+            base = Path(temporary) / "源仓库"
+            worktree = Path(temporary) / "验收工作树"
+            self._repository(base)
+            _run(base, "worktree", "add", "--detach", str(worktree), "HEAD")
+
+            lock = builder._RepositoryLock(worktree)
+            self.assertTrue(os.path.samefile(lock.path.parent, base / ".git"))
+            with lock:
+                self.assertTrue(lock.path.is_file())
+            self.assertFalse(
+                any(
+                    "agentos-kernel-build.lock" in str(path)
+                    for path in worktree.rglob("*")
+                )
+            )
+
+    def test_linked_worktrees_share_one_nonblocking_build_lock(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="kernel-lock-shared-") as temporary:
+            base = Path(temporary) / "repository"
+            first = Path(temporary) / "worktree-a"
+            second = Path(temporary) / "worktree-b"
+            self._repository(base)
+            _run(base, "worktree", "add", "--detach", str(first), "HEAD")
+            _run(base, "worktree", "add", "--detach", str(second), "HEAD")
+
+            with builder._RepositoryLock(first):
+                contender = builder._RepositoryLock(second)
+                with self.assertRaisesRegex(
+                    builder.KernelBuildError, "another trusted kernel build is active"
+                ):
+                    contender.__enter__()
+
+    def test_linked_worktree_lock_rejects_tampered_gitfile_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="kernel-lock-tamper-") as temporary:
+            base = Path(temporary) / "repository"
+            worktree = Path(temporary) / "worktree"
+            self._repository(base)
+            _run(base, "worktree", "add", "--detach", str(worktree), "HEAD")
+            gitfile = worktree / ".git"
+            original = worktree / ".git.original"
+            gitfile.rename(original)
+            try:
+                gitfile.write_text(
+                    f"gitdir: {(base / '.git').as_posix()}\n", encoding="utf-8"
+                )
+                with self.assertRaisesRegex(
+                    builder.KernelBuildError, "Git administration is unsafe"
+                ):
+                    builder._RepositoryLock(worktree)
+            finally:
+                gitfile.unlink(missing_ok=True)
+                original.rename(gitfile)
+
+
 class TrustedKernelBuildTests(unittest.TestCase):
     def test_fixed_environment_preserves_msys_unicode_paths(self) -> None:
         with mock.patch.dict(builder.os.environ, {"TMPDIR": "/r/tmp"}, clear=True):
@@ -408,7 +476,18 @@ class TrustedKernelBuildTests(unittest.TestCase):
 
     def test_dirty_or_untracked_source_is_rejected_before_execution(self) -> None:
         (self.fixture.root / "untracked.txt").write_text("no\n", encoding="utf-8")
-        with self.assertRaisesRegex(builder.KernelBuildError, "must be clean"):
+        with self.assertRaisesRegex(builder.KernelBuildError, "source gate"):
+            self.fixture.build()
+        self.assertEqual(self.fixture.runner.calls, [])
+        self.assertFalse(self.fixture.output.exists())
+
+    def test_staged_only_source_change_is_rejected_by_source_gate(self) -> None:
+        source = self.fixture.root / "Makefile"
+        original = source.read_bytes()
+        source.write_bytes(original + b"# staged only\n")
+        _run(self.fixture.root, "add", "--", "Makefile")
+        source.write_bytes(original)
+        with self.assertRaisesRegex(builder.KernelBuildError, "source gate"):
             self.fixture.build()
         self.assertEqual(self.fixture.runner.calls, [])
         self.assertFalse(self.fixture.output.exists())
@@ -449,7 +528,7 @@ class TrustedKernelBuildTests(unittest.TestCase):
                 ).stdout
                 self.assertEqual(status, b"")
                 with self.assertRaisesRegex(
-                    builder.KernelBuildError, "tracked source identity is unsafe"
+                    builder.KernelBuildError, "source gate"
                 ):
                     self.fixture.build()
                 self.assertEqual(self.fixture.runner.calls, [])
@@ -473,7 +552,7 @@ class TrustedKernelBuildTests(unittest.TestCase):
 
     def test_source_mutation_during_build_is_fail_closed(self) -> None:
         self.fixture.runner.mutate_source = True
-        with self.assertRaisesRegex(builder.KernelBuildError, "must be clean"):
+        with self.assertRaisesRegex(builder.KernelBuildError, "source gate"):
             self.fixture.build()
         self.assertFalse(self.fixture.output.exists())
 

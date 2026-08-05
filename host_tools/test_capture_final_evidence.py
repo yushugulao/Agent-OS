@@ -1868,6 +1868,24 @@ exit 91
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("must be local-e3 or none", result.stdout + result.stderr)
 
+        with tempfile.TemporaryDirectory() as temp:
+            stage = Path(temp) / "stage"
+            incoming = stage / "incoming"
+            runtime = stage / "runtime" / "full-verify"
+            incoming.mkdir(parents=True)
+            runtime.mkdir(parents=True)
+            nested = run(
+                ["bash", "scripts/run-full-verification.sh"], REPO, check=False,
+                env={
+                    **os.environ,
+                    "AGENT_TEST_DURATION_PROFILE": "forged",
+                    "FINAL_EVIDENCE_STAGE": str(stage),
+                    "EVIDENCE_WORK_DIR": str(runtime),
+                },
+            )
+        self.assertEqual(nested.returncode, 2, nested.stdout + nested.stderr)
+        self.assertIn("must be local-e3 or none", nested.stdout + nested.stderr)
+
     @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
     def test_non_utf8_tool_version_preserves_raw_identity_and_diagnostic_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

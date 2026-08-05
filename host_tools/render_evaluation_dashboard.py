@@ -4269,7 +4269,9 @@ def _scenario_overview_metric(scenario: dict[str, Any]) -> str:
     plain_p95 = _scenario_percentile(plain, 0.95)
     agentos_p95 = _scenario_percentile(agentos, 0.95)
     ratio = agentos_p50 / plain_p50 if plain_p50 > 0 else None
-    ratio_text = f"；AgentOS/Plain {ratio:.1f}x" if ratio is not None else ""
+    ratio_text = (
+        f"；AgentOS 延迟为 Plain 的 {ratio:.1f} 倍" if ratio is not None else ""
+    )
     return (
         f"Plain p50 {_duration_label(plain_p50, 'ms')} / p95 "
         f"{_duration_label(plain_p95, 'ms')}；AgentOS p50 "
@@ -4283,6 +4285,13 @@ OVERVIEW_BENCHMARK_LABELS = {
     "file_query_table_ablation": ("元数据索引消融", "对象"),
     "tool_batch": ("结构化工具批处理", "项"),
     "context_access": ("Context 映射读取", "条"),
+}
+
+OVERVIEW_ENDPOINT_LABELS = {
+    "file_query_path_index": ("传统逐路径查询", "就绪元数据索引"),
+    "file_query_table_ablation": ("固定元数据表扫描", "就绪元数据索引"),
+    "tool_batch": ("逐项工具调用", "批量工具调用"),
+    "context_access": ("Context 系统调用读取", "Context 映射读取"),
 }
 
 OVERVIEW_TASK_LABELS = {
@@ -4525,8 +4534,11 @@ def _overview_claim_slots(
             benchmark["label"] if benchmark is not None else benchmark_id
         )
         load_unit = friendly[1] if friendly is not None else "负载"
+        endpoint_labels = OVERVIEW_ENDPOINT_LABELS.get(benchmark_id)
         target_text = (
-            f"{targets[benchmark['baseline']]['label']} → "
+            f"{endpoint_labels[0]} → {endpoint_labels[1]}"
+            if benchmark is not None and endpoint_labels is not None
+            else f"{targets[benchmark['baseline']]['label']} → "
             f"{targets[benchmark['treatment']]['label']}"
             if benchmark is not None
             else "比较端点暂无"
@@ -4613,7 +4625,7 @@ def _overview_claim_slots(
                 metric = f"{pair_count} 个负载没有可用的相对口径"
             if claim is None:
                 metric += "；本轮未登记性能结论"
-            n_text = f"n={measurement['n']} 独立 Guest 启动/负载"
+            n_text = f"每负载 n={measurement['n']}"
             load_text = str(measurement["load"])
         slots.append(
             f'<article class="headline-result-slot" data-overview-slot="mechanism" '
@@ -4695,8 +4707,16 @@ def _overview_task6_slot(
             n = int(performance["n"])
             consistent = round(n * float(performance.get("paired_success_rate", 0.0)))
             ratio_text = (
-                f"AgentOS/Plain {ratio:.2f}x" if ratio is not None else "倍率暂无数据"
+                f"AgentOS 延迟为 Plain 的 {ratio:.2f} 倍"
+                if ratio is not None
+                else "倍率暂无数据"
             )
+            conclusion_text = {
+                "regressed": "显著回退",
+                "inconclusive": "差异未达统计门槛",
+                "failed": "测量失败",
+                "unavailable": "未测量",
+            }.get(scenario["performance_status"], "配对数据")
             rows.append(
                 '<div class="task6-slot-row">'
                 f'<div class="task6-slot-heading"><strong>{_h(OVERVIEW_TASK_LABELS["task6"])}</strong>'
@@ -4706,8 +4726,8 @@ def _overview_task6_slot(
                 f'<small>p95 {_h(_duration_label(plain_p95, "ms"))}</small></div>'
                 f'<div><span>AgentOS p50</span><strong>{_h(_duration_label(agentos_p50, "ms"))}</strong>'
                 f'<small>p95 {_h(_duration_label(agentos_p95, "ms"))}</small></div>'
-                f'<div class="task6-ratio"><span>完整链路</span><strong>{_h(ratio_text)}</strong>'
-                f'<small>n={n} 配对启动</small></div></div>'
+                f'<div class="task6-ratio"><span>端到端延迟（越低越好）</span><strong>{_h(ratio_text)}</strong>'
+                f'<small>{_h(conclusion_text)} · n={n} 配对启动</small></div></div>'
                 f'<p class="workflow-composition">{_h(composition)}</p></div>'
             )
         content = "".join(rows)
@@ -4965,11 +4985,9 @@ def _scenario_details_html(details: list[dict[str, Any]]) -> str:
             '</tr>'
             for program in detail["programs"]
         )
-        module_status = "verified" if detail["functional"]["status"] == "passed" else "unavailable"
         module_rows = "".join(
             '<tr>'
             f'<th scope="row"><code>{_h(module)}</code></th>'
-            f'<td>{_status(module_status)}</td>'
             f'<td>{_h(detail["functional"]["verified_boots"])} / {_h(detail["independent_boots"])}</td>'
             '</tr>'
             for module in detail["functional"]["required_modules"]
@@ -4977,7 +4995,6 @@ def _scenario_details_html(details: list[dict[str, Any]]) -> str:
         outcome_rows = "".join(
             '<tr>'
             f'<th scope="row"><code>{_h(outcome["key"])}</code></th>'
-            f'<td>{_status(outcome["status"])}</td>'
             f'<td>{_h(outcome["verified_pairs"])} / {_h(detail["independent_boots"])}</td>'
             '</tr>'
             for outcome in detail["outcomes"]
@@ -4997,12 +5014,12 @@ def _scenario_details_html(details: list[dict[str, Any]]) -> str:
             '</section>'
             '<section class="diagnostic-block" aria-label="AgentOS 功能模块">'
             '<h4>AgentOS 功能模块</h4><p class="diagnostic-note">required_modules 的逐 boot 验收回执。</p>'
-            '<div class="table-scroll" role="region" tabindex="0" aria-label="AgentOS 功能模块表，可横向滚动"><table><thead><tr><th>模块</th><th>状态</th><th>核验 boot</th>'
+            '<div class="table-scroll" role="region" tabindex="0" aria-label="AgentOS 功能模块表，可横向滚动"><table><thead><tr><th>模块</th><th>核验 boot</th>'
             f'</tr></thead><tbody>{module_rows}</tbody></table></div></section>'
             '<section class="diagnostic-block" aria-label="关键 outcome 一致性">'
             '<h4>预注册 key outcome 一致性</h4>'
             '<p class="diagnostic-note">仅覆盖预注册关键 outcome 的配对回执，不代表完整最终状态相同。</p>'
-            '<div class="table-scroll" role="region" tabindex="0" aria-label="关键 outcome 一致性表，可横向滚动"><table><thead><tr><th>Key outcome</th><th>状态</th><th>一致配对</th>'
+            '<div class="table-scroll" role="region" tabindex="0" aria-label="关键 outcome 一致性表，可横向滚动"><table><thead><tr><th>Key outcome</th><th>一致配对</th>'
             f'</tr></thead><tbody>{outcome_rows}</tbody></table></div></section>'
             f'<footer><strong>绑定证据</strong> <button class="evidence-link" type="button" data-evidence-ref="{_h(detail["evidence_id"])}">{_h(detail["evidence_id"])}</button></footer>'
             '</article>'
@@ -5293,7 +5310,7 @@ def _page(
         for benchmark in summary["benchmarks"]
         if benchmark.get("diagnostics")
     )
-    target_text = f"{n_display} 次独立 Guest 启动 · RISC-V / QEMU"
+    target_text = f"机制样本/负载 n={n_display} · RISC-V / QEMU"
     evidence_count = int(verification["verified_evidence_count"])
     declared_evidence_count = len(verification["evidence"])
     marker_count = int(verification["verified_marker_count"])
@@ -5332,7 +5349,7 @@ def _page(
     <section role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" class="tab-panel">
       <div class="section-heading"><div><p class="eyebrow">评测运行 {_h(run["id"])}</p><h1>AgentOS-uCore 实测数据</h1></div><p>比较口径、p50/p95、样本量与输出一致性同屏展示。</p></div>
       <dl class="summary-strip">
-        <div><dt>独立 Guest 启动</dt><dd>{_h(n_display)}</dd></div>
+        <div><dt>机制样本/负载</dt><dd>n={_h(n_display)}</dd></div>
         <div><dt>机制负载</dt><dd>{_h(mechanism_load_count)}</dd></div>
         <div><dt>完整流程配对</dt><dd>{_h(paired_scenario_count)}</dd></div>
         <div><dt>Commit</dt><dd><code title="{_h(commit)}">{_h(short_commit)}</code></dd></div>

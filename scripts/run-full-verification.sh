@@ -15,6 +15,15 @@ CC="${HOST_CC}"
 AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-local-e3}"
 export HOST_CC HOSTCC CC AGENT_TEST_DURATION_PROFILE
 
+case "${AGENT_TEST_DURATION_PROFILE}" in
+local-e3|none)
+	;;
+*)
+	echo "[full-verify] AGENT_TEST_DURATION_PROFILE must be local-e3 or none" >&2
+	exit 2
+	;;
+esac
+
 if [[ "${AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES:-0}" != "0" ]]; then
 	echo "[full-verify] unsanitized host probes are forbidden" >&2
 	exit 2
@@ -33,10 +42,6 @@ local-e3)
 	;;
 none)
 	echo "[full-verify] Agent duration policy profile=none status=skipped-different-runner"
-	;;
-*)
-	echo "[full-verify] AGENT_TEST_DURATION_PROFILE must be local-e3 or none" >&2
-	exit 2
 	;;
 esac
 

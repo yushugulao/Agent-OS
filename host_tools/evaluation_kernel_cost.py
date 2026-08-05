@@ -197,7 +197,9 @@ BINDING_FIELDS = {
     "build_manifest",
 }
 TOOL_FIELDS = {"status", "sha256", "version", "version_command", "path_hint", "reason"}
-COMMAND_FIELDS = {"argv", "returncode", "stdout_base64", "stderr_base64", "error"}
+COMMAND_FIELDS = {
+    "cwd", "argv", "returncode", "stdout_base64", "stderr_base64", "error",
+}
 TARGET_FIELDS = {"id", "status", "reason", "source", "size_command", "metrics"}
 SOURCE_FIELDS = {
     "path",
@@ -290,7 +292,7 @@ class ToolExecution:
     error: str | None = None
 
 
-ToolRunner = Callable[[Sequence[str], int, int], ToolExecution]
+ToolRunner = Callable[[Sequence[str], int, int, Path], ToolExecution]
 RepositoryReader = Callable[[Path], tuple[str, bool]]
 
 
@@ -736,9 +738,12 @@ def parse_size_output(output: bytes, expected_filename: str) -> dict[str, int]:
     }
 
 
-def _run_tool(argv: Sequence[str], timeout: int, maximum: int) -> ToolExecution:
+def _run_tool(
+    argv: Sequence[str], timeout: int, maximum: int, cwd: Path
+) -> ToolExecution:
     """Run a trusted tool with bounded disk-backed stdout and stderr capture."""
 
+    cwd = _resolved_safe_directory(cwd, "tool working directory")
     environment = os.environ.copy()
     environment.update(COMMAND_ENVIRONMENT)
     with tempfile.TemporaryDirectory(prefix="agentos-size-output-") as temporary:
@@ -752,6 +757,7 @@ def _run_tool(argv: Sequence[str], timeout: int, maximum: int) -> ToolExecution:
                     stdout=stdout,
                     stderr=stderr,
                     env=environment,
+                    cwd=cwd,
                 )
                 deadline = time.monotonic() + timeout
                 error: str | None = None
@@ -782,6 +788,7 @@ def _run_tool(argv: Sequence[str], timeout: int, maximum: int) -> ToolExecution:
 
 def _command(argv: Sequence[str], execution: ToolExecution) -> dict[str, Any]:
     return {
+        "cwd": ".",
         "argv": list(argv),
         "returncode": execution.returncode,
         "stdout_base64": base64.b64encode(execution.stdout).decode("ascii"),
@@ -806,6 +813,8 @@ def _command_bytes(command: dict[str, Any], stream: str) -> bytes:
 def _validate_command(value: Any, maximum: int, label: str) -> dict[str, Any]:
     command = _object(value, label)
     _expect_keys(command, COMMAND_FIELDS, label)
+    if command["cwd"] != ".":
+        raise KernelCostError(f"{label}.cwd must be the bound repository root")
     argv = _array(command["argv"], f"{label}.argv")
     if not argv or any(not isinstance(item, str) or not item for item in argv):
         raise KernelCostError(f"{label}.argv is invalid")
@@ -1504,20 +1513,29 @@ def collect_report(
         raise KernelCostError("size tool is link-backed") from error
     if size_tool.exists():
         resolved_tool = _resolved_safe_file(size_tool, "size tool")
+        size_tool = resolved_tool
         tool_sha = _file_sha(resolved_tool)
         argv = [str(resolved_tool), *config["tool"]["version_arguments"]]
-        execution = runner(argv, limits["timeout_seconds"], limits["max_output_bytes"])
+        execution = runner(
+            argv, limits["timeout_seconds"], limits["max_output_bytes"], root
+        )
         version_command = _command(argv, execution)
-        try:
-            version = _version(execution.stdout)
-        except KernelCostError as error:
+        if execution.error is not None:
             version = None
-            tool_reason = str(error)
+            tool_reason = execution.error
+        elif execution.returncode != 0:
+            version = None
+            tool_reason = f"version_command_exit_{execution.returncode}"
         else:
-            tool_reason = None
-        if execution.error is not None or execution.returncode != 0 or version is None:
+            try:
+                version = _version(execution.stdout)
+            except KernelCostError as error:
+                version = None
+                tool_reason = str(error)
+            else:
+                tool_reason = None
+        if version is None:
             tool_status = "unavailable"
-            tool_reason = execution.error or tool_reason or "version_command_failed"
             resolved_tool = None
         else:
             tool_status = "available"
@@ -1590,19 +1608,27 @@ def collect_report(
             argv = [
                 str(resolved_tool),
                 *config["tool"]["measurement_arguments"],
-                str(source_path),
+                relative,
             ]
-            execution = runner(argv, limits["timeout_seconds"], limits["max_output_bytes"])
+            execution = runner(
+                argv, limits["timeout_seconds"], limits["max_output_bytes"], root
+            )
             size_command = _command(argv, execution)
-            try:
-                sizes = parse_size_output(execution.stdout, str(source_path))
-            except KernelCostError as error:
+            if execution.error is not None:
                 sizes = None
-                target_reason = str(error)
+                target_reason = execution.error
+            elif execution.returncode != 0:
+                sizes = None
+                target_reason = f"size_command_exit_{execution.returncode}"
             else:
-                target_reason = None
-            if execution.error is not None or execution.returncode != 0 or sizes is None:
-                target_reason = execution.error or target_reason or "size_command_failed"
+                try:
+                    sizes = parse_size_output(execution.stdout, relative)
+                except KernelCostError as error:
+                    sizes = None
+                    target_reason = str(error)
+                else:
+                    target_reason = None
+            if sizes is None:
                 metrics.extend(
                     _metric(metric_id, "failed", None, target_reason)
                     for metric_id in METRIC_IDS[1:]
@@ -1702,11 +1728,14 @@ def validate_report(report: Any, config: dict[str, Any]) -> dict[str, Any]:
     maximum = config["limits"]["max_output_bytes"]
     tool = _object(root["tool"], "report.tool")
     _expect_keys(tool, TOOL_FIELDS, "report.tool")
-    _string(tool["path_hint"], "report.tool.path_hint")
+    tool_path_hint = _string(tool["path_hint"], "report.tool.path_hint")
+    expected_version_argv = [tool_path_hint, *config["tool"]["version_arguments"]]
     if tool["status"] == "available":
         _sha(tool["sha256"], "report.tool.sha256")
         _string(tool["version"], "report.tool.version")
         command = _validate_command(tool["version_command"], maximum, "tool version command")
+        if command["argv"] != expected_version_argv:
+            raise KernelCostError("tool version command is not the configured invocation")
         if command["returncode"] != 0 or command["error"] is not None:
             raise KernelCostError("available tool has a failed version command")
         if _version(_command_bytes(command, "stdout")) != tool["version"]:
@@ -1717,7 +1746,26 @@ def validate_report(report: Any, config: dict[str, Any]) -> dict[str, Any]:
         if tool["sha256"] is not None:
             _sha(tool["sha256"], "report.tool.sha256")
         if tool["version_command"] is not None:
-            _validate_command(tool["version_command"], maximum, "tool version command")
+            command = _validate_command(
+                tool["version_command"], maximum, "tool version command"
+            )
+            if command["argv"] != expected_version_argv:
+                raise KernelCostError("tool version command is not the configured invocation")
+            if command["error"] is not None:
+                expected_reason = command["error"]
+            elif command["returncode"] != 0:
+                expected_reason = f"version_command_exit_{command['returncode']}"
+            else:
+                try:
+                    _version(_command_bytes(command, "stdout"))
+                except KernelCostError as error:
+                    expected_reason = str(error)
+                else:
+                    raise KernelCostError("unavailable tool has a successful version command")
+            if tool["reason"] != expected_reason:
+                raise KernelCostError("unavailable tool reason differs from command outcome")
+        elif tool["reason"] != "size_tool_missing" or tool["sha256"] is not None:
+            raise KernelCostError("missing size tool relations are invalid")
         if tool["version"] is not None:
             raise KernelCostError("unavailable tool cannot have a version")
         _string(tool["reason"], "report.tool.reason")
@@ -1800,6 +1848,13 @@ def validate_report(report: Any, config: dict[str, Any]) -> dict[str, Any]:
             if runtime_statuses == {"measured"}:
                 expected_status = "measured"
                 command = _validate_command(target["size_command"], maximum, f"{label}.size_command")
+                expected_argv = [
+                    tool_path_hint,
+                    *config["tool"]["measurement_arguments"],
+                    source["path"],
+                ]
+                if tool["status"] != "available" or command["argv"] != expected_argv:
+                    raise KernelCostError(f"{label} size command is not manifest-relative")
                 if command["returncode"] != 0 or command["error"] is not None:
                     raise KernelCostError(f"{label} measured command failed")
                 sizes = parse_size_output(
@@ -1815,6 +1870,13 @@ def validate_report(report: Any, config: dict[str, Any]) -> dict[str, Any]:
             elif runtime_statuses == {"failed"}:
                 expected_status = "failed"
                 command = _validate_command(target["size_command"], maximum, f"{label}.size_command")
+                expected_argv = [
+                    tool_path_hint,
+                    *config["tool"]["measurement_arguments"],
+                    source["path"],
+                ]
+                if tool["status"] != "available" or command["argv"] != expected_argv:
+                    raise KernelCostError(f"{label} size command is not manifest-relative")
                 if command["returncode"] == 0 and command["error"] is None:
                     try:
                         parse_size_output(_command_bytes(command, "stdout"), command["argv"][-1])
@@ -1822,6 +1884,23 @@ def validate_report(report: Any, config: dict[str, Any]) -> dict[str, Any]:
                         pass
                     else:
                         raise KernelCostError(f"{label} marks valid size output failed")
+                if command["error"] is not None:
+                    expected_reason = command["error"]
+                elif command["returncode"] != 0:
+                    expected_reason = f"size_command_exit_{command['returncode']}"
+                else:
+                    try:
+                        parse_size_output(
+                            _command_bytes(command, "stdout"), source["path"]
+                        )
+                    except KernelCostError as error:
+                        expected_reason = str(error)
+                    else:  # pragma: no cover - rejected by the branch above
+                        raise KernelCostError(f"{label} marks valid size output failed")
+                if target["reason"] != expected_reason or any(
+                    metric["reason"] != expected_reason for metric in parsed_metrics[1:]
+                ):
+                    raise KernelCostError(f"{label} failure reason differs from command outcome")
             else:
                 raise KernelCostError(f"{label} runtime statuses are inconsistent")
         if target["status"] != expected_status:
@@ -1991,6 +2070,8 @@ def verify_local(
                 raise KernelCostError(f"local ELF identity changed: {target['id']}")
 
     if report["tool"]["status"] == "available":
+        if not size_tool.is_absolute():
+            raise KernelCostError("local size tool must be an explicit absolute path")
         resolved_tool = _resolved_safe_file(size_tool, "local size tool")
         if _file_sha(resolved_tool) != report["tool"]["sha256"]:
             raise KernelCostError("local size tool differs from the report")
@@ -1999,11 +2080,23 @@ def verify_local(
             if target["status"] != "measured":
                 continue
             source = _root_path(repository_root, target["source"]["path"])
-            argv = [str(resolved_tool), *config["tool"]["measurement_arguments"], str(source)]
-            execution = runner(argv, limits["timeout_seconds"], limits["max_output_bytes"])
+            relative = target["source"]["path"]
+            argv = [
+                str(resolved_tool),
+                *config["tool"]["measurement_arguments"],
+                relative,
+            ]
+            execution = runner(
+                argv,
+                limits["timeout_seconds"],
+                limits["max_output_bytes"],
+                repository_root,
+            )
             if execution.returncode != 0 or execution.error is not None:
                 raise KernelCostError(f"local size replay failed: {target['id']}")
-            current = parse_size_output(execution.stdout, str(source))
+            current = parse_size_output(execution.stdout, relative)
+            if _file_sha(source) != target["source"]["observed_sha256"]:
+                raise KernelCostError(f"local target changed during replay: {target['id']}")
             recorded = {metric["id"]: metric["value"] for metric in target["metrics"]}
             if any(current[metric_id] != recorded[metric_id] for metric_id in METRIC_IDS[1:]):
                 raise KernelCostError(f"local size replay differs: {target['id']}")

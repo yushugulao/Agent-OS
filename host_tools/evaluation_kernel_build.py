@@ -71,9 +71,7 @@ if __name__ == "__main__":
 try:
     from . import evaluation_kernel_cost as cost
     from .evidence_delivery_contract import (
-        DeliveryContractError,
         controlled_git_environment,
-        tracked_worktree_identity,
     )
     from .evidence_toolchain_attestation import (
         EVALUATION_ARTIFACT_OUTPUT_FILES,
@@ -82,6 +80,7 @@ try:
         EVALUATION_CACHE_OUTPUT_ROOTS,
         ToolAttestationError,
         purge_evaluation_generated_outputs,
+        resolve_evaluation_git_common_directory,
         verify_evaluation_source_tree,
     )
     from .safe_host_paths import (
@@ -95,9 +94,7 @@ try:
 except ImportError:
     import evaluation_kernel_cost as cost
     from evidence_delivery_contract import (
-        DeliveryContractError,
         controlled_git_environment,
-        tracked_worktree_identity,
     )
     from evidence_toolchain_attestation import (
         EVALUATION_ARTIFACT_OUTPUT_FILES,
@@ -106,6 +103,7 @@ except ImportError:
         EVALUATION_CACHE_OUTPUT_ROOTS,
         ToolAttestationError,
         purge_evaluation_generated_outputs,
+        resolve_evaluation_git_common_directory,
         verify_evaluation_source_tree,
     )
     from safe_host_paths import (
@@ -343,33 +341,15 @@ def _git(root: Path, arguments: Sequence[str], maximum: int = 1024 * 1024) -> by
     return result.stdout
 
 
-def _repository_state(root: Path) -> tuple[str, str, bool]:
+def _repository_head(root: Path) -> str:
     try:
         commit = _git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
             "ascii", errors="strict"
         ).strip()
-        status = _git(
-            root, ["status", "--porcelain=v1", "--untracked-files=all"]
-        ).decode("utf-8", errors="strict")
     except UnicodeError as error:
-        raise KernelBuildError("repository state is not canonical text") from error
+        raise KernelBuildError("repository HEAD is not canonical text") from error
     if cost.COMMIT_RE.fullmatch(commit) is None:
         raise KernelBuildError("repository HEAD is not a canonical commit")
-    try:
-        tracked_clean, _tracked_digest = tracked_worktree_identity("git", root)
-    except DeliveryContractError as error:
-        raise KernelBuildError(
-            f"tracked source identity is unsafe: {error}"
-        ) from error
-    return commit, status, tracked_clean
-
-
-def _require_same_clean_head(root: Path, expected_commit: str | None = None) -> str:
-    commit, status, tracked_clean = _repository_state(root)
-    if status or not tracked_clean:
-        raise KernelBuildError("repository must be clean, including untracked files")
-    if expected_commit is not None and commit != expected_commit:
-        raise KernelBuildError("repository HEAD changed during the kernel build")
     return commit
 
 
@@ -462,13 +442,21 @@ def _require_ignored(root: Path, relative: str) -> None:
 
 class _RepositoryLock(AbstractContextManager["_RepositoryLock"]):
     def __init__(self, root: Path) -> None:
-        raw = _git(root, ["rev-parse", "--git-path", "agentos-kernel-build.lock"], 4096)
+        git_name = shutil.which("git")
+        if git_name is None:
+            raise KernelBuildError("Git executable is unavailable")
+        git = Path(git_name)
+        _regular_file(git, "Git executable")
+        git = git.resolve(strict=True)
         try:
-            value = raw.decode("utf-8", errors="strict").strip()
-        except UnicodeError as error:
-            raise KernelBuildError("git lock path is not UTF-8") from error
-        candidate = Path(value)
-        self.path = _lexical_absolute(candidate if candidate.is_absolute() else root / candidate)
+            common_dir = resolve_evaluation_git_common_directory(
+                git, root, root, controlled_git_environment()
+            )
+        except (OSError, ToolAttestationError) as error:
+            raise KernelBuildError(
+                f"kernel build Git administration is unsafe: {error}"
+            ) from error
+        self.path = common_dir / "agentos-kernel-build.lock"
         _reject_external_link_components(self.path, "kernel build lock")
         self.handle: Any = None
 
@@ -476,13 +464,25 @@ class _RepositoryLock(AbstractContextManager["_RepositoryLock"]):
         _ensure_directory(self.path.parent, "kernel build lock parent")
         if path_is_link(self.path):
             raise KernelBuildError("kernel build lock is link-backed")
-        self.handle = self.path.open("a+b")
-        self.handle.seek(0)
-        if self.handle.read(1) == b"":
-            self.handle.write(b"0")
-            self.handle.flush()
-        self.handle.seek(0)
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor: int | None = None
         try:
+            descriptor = os.open(self.path, flags, 0o600)
+            self.handle = os.fdopen(descriptor, "r+b")
+            descriptor = None
+        except (OSError, ValueError) as error:
+            if descriptor is not None:
+                os.close(descriptor)
+            raise KernelBuildError(
+                "kernel build lock cannot be opened safely"
+            ) from error
+        try:
+            if os.fstat(self.handle.fileno()).st_size == 0:
+                self.handle.write(b"0")
+                self.handle.flush()
+            self.handle.seek(0)
             if os.name == "nt":
                 import msvcrt
 
@@ -756,7 +756,7 @@ def build_evidence(
         _require_tracked(root, canonical, f"{relative} build input")
 
     with _RepositoryLock(root):
-        commit = _require_same_clean_head(root)
+        commit = _repository_head(root)
         _source_gate(root, commit, evidence_gate_root, "before trusted purge")
         _purge_build_outputs(root, commit)
         _source_gate(root, commit, evidence_gate_root, "after trusted purge")
@@ -788,7 +788,6 @@ def build_evidence(
             raise KernelBuildError("make --version did not complete successfully")
         make_version = _first_line(version_execution.stdout, "make")
         _require_tool_hashes(tool, make_sha256, toolchain_identities)
-        _require_same_clean_head(root, commit)
 
         toolchain_records: list[dict[str, Any]] = []
         sequence = 1
@@ -828,7 +827,7 @@ def build_evidence(
                 }
             )
             _require_tool_hashes(tool, make_sha256, toolchain_identities)
-            _require_same_clean_head(root, commit)
+        _source_gate(root, commit, evidence_gate_root, "after tool version probes")
         toolchain_sha = _bytes_sha(
             cost._canonical_json(
                 {"prefix": recorded_toolprefix, "tools": toolchain_records}
@@ -888,7 +887,6 @@ def build_evidence(
                     f"({execution.error or 'no execution error'})"
                 )
             _require_tool_hashes(tool, make_sha256, toolchain_identities)
-            _require_same_clean_head(root, commit)
             _source_gate(
                 root,
                 commit,
@@ -943,7 +941,6 @@ def build_evidence(
                         f"{execution.returncode!r} ({execution.error or 'no execution error'})"
                     )
                 _require_tool_hashes(tool, make_sha256, toolchain_identities)
-                _require_same_clean_head(root, commit)
                 _source_gate(
                     root,
                     commit,
@@ -963,7 +960,7 @@ def build_evidence(
                 }
             )
 
-        _require_same_clean_head(root, commit)
+        _source_gate(root, commit, evidence_gate_root, "after measured builds")
         for target in target_receipts:
             final_path, _ = _inside(
                 root, Path(*PurePosixPath(target["path"]).parts),

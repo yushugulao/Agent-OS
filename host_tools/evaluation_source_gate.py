@@ -348,7 +348,11 @@ def _host_absolute_git_path(
     candidate = Path(value)
     windows = PureWindowsPath(value)
     parts = PurePosixPath(value).parts if candidate.is_absolute() else windows.parts
-    if not candidate.is_absolute() and windows.is_absolute() and sys.platform == "cygwin":
+    if (
+        not candidate.is_absolute()
+        and windows.is_absolute()
+        and sys.platform in {"cygwin", "msys"}
+    ):
         cygpath = require_regular_file(Path("/usr/bin/cygpath.exe")).resolve(strict=True)
         conversion_environment = dict(environment)
         conversion_environment.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"})
@@ -392,7 +396,7 @@ def _git_admin_directory(
     ).resolve(strict=True)
 
 
-def _linked_worktree_administration(
+def _resolved_worktree_administration(
     git: Path,
     repository: Path,
     worktree: Path,
@@ -409,10 +413,12 @@ def _linked_worktree_administration(
     git_dir = _git_admin_directory(
         git, worktree, environment, "--git-dir", "worktree administration directory"
     )
+    return worktree_common, git_dir
+
+
+def _validate_git_object_directory(common_dir: Path) -> None:
     try:
-        objects = require_safe_directory(worktree_common / "objects").resolve(
-            strict=True
-        )
+        objects = require_safe_directory(common_dir / "objects").resolve(strict=True)
     except (OSError, ValueError) as error:
         raise ToolAttestationError("Git object directory is unsafe") from error
     for name in ("info", "pack"):
@@ -438,7 +444,128 @@ def _linked_worktree_administration(
             except OSError as error:
                 raise ToolAttestationError("Git alternate object store is unsafe") from error
             raise ToolAttestationError("Git alternate object store is not allowed")
-    return worktree_common, git_dir
+
+
+def _validated_worktree_administration(
+    git: Path,
+    repository: Path,
+    worktree: Path,
+    environment: dict[str, str],
+) -> tuple[Path, Path, Path]:
+    """Bind the on-disk .git entry to Git's resolved administration paths."""
+
+    try:
+        with os.scandir(worktree) as iterator:
+            entries = [entry for entry in iterator if entry.name.casefold() == ".git"]
+        if len(entries) != 1:
+            raise ValueError("ambiguous Git administration entry")
+        entry = entries[0]
+        admin_path = worktree / entry.name
+        admin_info = entry.stat(follow_symlinks=False)
+        if entry.name != ".git" or path_is_link(
+            admin_path, admin_info.st_mode, file_info=admin_info
+        ):
+            raise ValueError("unsafe Git administration entry")
+        if stat.S_ISDIR(admin_info.st_mode):
+            common_dir, git_dir = _resolved_worktree_administration(
+                git, repository, worktree, environment
+            )
+            if not os.path.samefile(admin_path, git_dir) or not os.path.samefile(
+                admin_path, common_dir
+            ):
+                raise ValueError("Git directory differs from worktree administration")
+        elif not stat.S_ISREG(admin_info.st_mode):
+            raise ValueError("unsafe Git administration entry type")
+        else:
+            if admin_info.st_size > 4096:
+                raise ValueError("oversized Git administration file")
+            raw = admin_path.read_bytes()
+            if (
+                not raw.startswith(b"gitdir: ")
+                or raw.count(b"\n") != 1
+                or not raw.endswith(b"\n")
+            ):
+                raise ValueError("malformed Git administration file")
+            target = _host_absolute_git_path(
+                git,
+                worktree,
+                environment,
+                os.fsdecode(raw[8:-1]),
+                "worktree Git administration target",
+            )
+            common_dir, git_dir = _resolved_worktree_administration(
+                git, repository, worktree, environment
+            )
+            if not os.path.samefile(target, git_dir):
+                raise ValueError("gitfile target differs from Git resolution")
+            registrations = require_safe_directory(common_dir / "worktrees").resolve(
+                strict=True
+            )
+            candidates: list[Path] = []
+            with os.scandir(registrations) as iterator:
+                for registered in iterator:
+                    candidate = registrations / registered.name
+                    info = registered.stat(follow_symlinks=False)
+                    if path_is_link(candidate, info.st_mode, file_info=info):
+                        raise ValueError("link-backed worktree administration")
+                    if stat.S_ISDIR(info.st_mode) and os.path.samefile(
+                        target, candidate
+                    ):
+                        candidates.append(candidate)
+            if len(candidates) != 1:
+                raise ValueError("gitdir does not identify one registered worktree")
+            target = candidates[0]
+            commondir = require_regular_file(
+                target / "commondir", maximum_bytes=4096
+            )
+            if commondir.read_bytes() != b"../..\n":
+                raise ValueError("registered worktree common directory differs")
+            backpointer = require_regular_file(
+                target / "gitdir", maximum_bytes=4096
+            )
+            back_name = _one_output_line(
+                backpointer.read_bytes(), "registered worktree backpointer"
+            )
+            back_target = _host_absolute_git_path(
+                git,
+                worktree,
+                environment,
+                back_name,
+                "registered worktree backpointer",
+            )
+            if not os.path.samefile(back_target, admin_path):
+                raise ValueError("registered worktree backpointer differs")
+            if not stat.S_ISDIR(target.lstat().st_mode):
+                raise ValueError("unsafe worktree administration target")
+    except (OSError, ToolAttestationError, ValueError, UnicodeError) as error:
+        raise ToolAttestationError(
+            "worktree Git administration file escapes its repository"
+        ) from error
+    _validate_git_object_directory(common_dir)
+    return common_dir, git_dir, admin_path
+
+
+def resolve_evaluation_git_common_directory(
+    git: Path,
+    repository: Path,
+    worktree: Path,
+    environment: dict[str, str],
+) -> Path:
+    """Return a verified common Git directory for cross-worktree coordination."""
+
+    try:
+        repository = require_safe_directory(repository).resolve(strict=True)
+        worktree = require_safe_directory(worktree).resolve(strict=True)
+        common_dir, _git_dir, _admin = _validated_worktree_administration(
+            git, repository, worktree, environment
+        )
+        return common_dir
+    except ToolAttestationError:
+        raise
+    except (OSError, ValueError) as error:
+        raise ToolAttestationError(
+            "cannot safely resolve evaluation Git common directory"
+        ) from error
 
 
 def _filesystem_worktree_paths(
@@ -449,6 +576,7 @@ def _filesystem_worktree_paths(
     environment: dict[str, str],
     generated_roots: Iterable[PurePosixPath] = (),
     generated_files: Iterable[PurePosixPath] = (),
+    administration_entry: Path | None = None,
 ) -> tuple[tuple[PurePosixPath, bool], ...]:
     """Inventory every non-administrative path without consulting Git ignores."""
 
@@ -495,78 +623,16 @@ def _filesystem_worktree_paths(
         with os.scandir(worktree) as iterator:
             entries = sorted(iterator, key=lambda item: item.name)
         admin = [entry for entry in entries if entry.name.casefold() == ".git"]
-        if len(admin) != 1:
-            raise ToolAttestationError("worktree Git administration entry is ambiguous")
-        admin_info = admin[0].stat(follow_symlinks=False)
-        admin_path = worktree / admin[0].name
-        if admin[0].name != ".git" or path_is_link(
-            admin_path, admin_info.st_mode, file_info=admin_info
-        ):
-            raise ToolAttestationError("worktree Git administration entry is unsafe")
-        if stat.S_ISREG(admin_info.st_mode):
-            if admin_info.st_size > 4096:
-                raise ToolAttestationError("worktree Git administration file is oversized")
-            raw = admin_path.read_bytes()
-            if not raw.startswith(b"gitdir: ") or raw.count(b"\n") != 1 or not raw.endswith(b"\n"):
-                raise ToolAttestationError("worktree Git administration file is malformed")
-            try:
-                target_name = os.fsdecode(raw[8:-1])
-                target = _host_absolute_git_path(
-                    git,
-                    worktree,
-                    environment,
-                    target_name,
-                    "worktree Git administration target",
-                )
-                common_dir, resolved_git_dir = _linked_worktree_administration(
+        if administration_entry is None:
+            _common_dir, _git_dir, administration_entry = (
+                _validated_worktree_administration(
                     git, repository, worktree, environment
                 )
-                if not os.path.samefile(target, resolved_git_dir):
-                    raise ValueError("gitfile target differs from Git resolution")
-                root = require_safe_directory(common_dir / "worktrees").resolve(
-                    strict=True
-                )
-                candidates = []
-                with os.scandir(root) as iterator:
-                    for entry in iterator:
-                        candidate = root / entry.name
-                        info = entry.stat(follow_symlinks=False)
-                        if path_is_link(candidate, info.st_mode, file_info=info):
-                            raise ValueError("link-backed worktree administration")
-                        if stat.S_ISDIR(info.st_mode) and os.path.samefile(target, candidate):
-                            candidates.append(candidate)
-                if len(candidates) != 1:
-                    raise ValueError("gitdir does not identify one registered worktree")
-                target = candidates[0]
-                commondir = require_regular_file(
-                    target / "commondir", maximum_bytes=4096
-                )
-                if commondir.read_bytes() != b"../..\n":
-                    raise ValueError("registered worktree common directory differs")
-                backpointer = require_regular_file(
-                    target / "gitdir", maximum_bytes=4096
-                )
-                back_raw = backpointer.read_bytes()
-                back_name = _one_output_line(
-                    back_raw, "registered worktree backpointer"
-                )
-                back_target = _host_absolute_git_path(
-                    git,
-                    worktree,
-                    environment,
-                    back_name,
-                    "registered worktree backpointer",
-                )
-                if not os.path.samefile(back_target, admin_path):
-                    raise ValueError("registered worktree backpointer differs")
-            except (OSError, ToolAttestationError, ValueError, UnicodeError) as error:
-                raise ToolAttestationError(
-                    "worktree Git administration file escapes its repository"
-                ) from error
-            if not stat.S_ISDIR(target.lstat().st_mode):
-                raise ToolAttestationError("worktree Git administration target is unsafe")
-        elif not stat.S_ISDIR(admin_info.st_mode):
-            raise ToolAttestationError("worktree Git administration entry is unsafe")
+            )
+        if len(admin) != 1 or admin[0].name != ".git" or not os.path.samefile(
+            worktree / admin[0].name, administration_entry
+        ):
+            raise ToolAttestationError("worktree Git administration entry is ambiguous")
         for entry in entries:
             if entry is admin[0]:
                 continue
@@ -623,7 +689,26 @@ def verify_evaluation_source_tree(
         raise ToolAttestationError(
             f"Git registered worktree differs from evaluation worktree {stage}"
         )
-    _linked_worktree_administration(git, repository, worktree, environment)
+    _common_dir, _git_dir, administration_entry = (
+        _validated_worktree_administration(git, repository, worktree, environment)
+    )
+    head = _run_git(
+        git, worktree, environment, "rev-parse", "--verify", "HEAD^{commit}"
+    )
+    if head.returncode or head.stdout.rstrip(b"\r\n") != commit.encode("ascii"):
+        raise ToolAttestationError(f"evaluation worktree HEAD changed {stage}")
+    index = _run_git(
+        git,
+        worktree,
+        environment,
+        "diff-index",
+        "--cached",
+        "--quiet",
+        commit,
+        "--",
+    )
+    if index.returncode:
+        raise ToolAttestationError(f"evaluation worktree index changed {stage}")
     tracked_paths = _tracked_path_inventory(git, repository, commit, environment)
     _verify_tracked_parent_directories(worktree, tracked_paths)
     executable_mode_verified = _executable_mode_is_reliable(git, worktree, environment)
@@ -653,6 +738,7 @@ def verify_evaluation_source_tree(
         environment=environment,
         generated_roots=roots,
         generated_files=files,
+        administration_entry=administration_entry,
     ):
         value = relative.as_posix()
         folded = value.casefold()

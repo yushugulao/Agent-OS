@@ -68,6 +68,7 @@ try:
         ToolAttestationError,
         purge_evaluation_generated_outputs,
         require_clean_head,
+        resolve_evaluation_git_common_directory,
         verify_evaluation_source_tree,
         verify_tracked_worktree_bytes,
     )
@@ -83,6 +84,7 @@ except ImportError:
         ToolAttestationError,
         purge_evaluation_generated_outputs,
         require_clean_head,
+        resolve_evaluation_git_common_directory,
         verify_evaluation_source_tree,
         verify_tracked_worktree_bytes,
     )
