@@ -98,7 +98,8 @@ Task 6 固定 70 项有序程序；当前源码收据逐项重算出 28 项同�
 
 实现、赛题映射和剩余边界集中在[要求追踪表](docs/agentos/requirements-traceability.md)与
 [验证说明](docs/agentos/verification.md)。正式 release 只引用与源码提交绑定的 QEMU、Host
-和 Dashboard 材料；未连接的远程 CI 在 manifest 中保持 `not-attached`。
+和 Dashboard 材料。GitLab 只托管源码与已提交证据，不配置 Runner；manifest 的兼容字段
+`remote_ci.status` 固定为 `not-attached`。
 
 ## 四、方案设计
 
@@ -258,7 +259,7 @@ syscall 546 `agent_workflow_lifecycle_info()` 只读取调用进程自身的 lif
 
 Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。可信 bootstrap factory 只能通过内核签发新的动态 workflow scope，scope 内 orchestrator 只能委派本域角色；敏感对象访问必须同时命中 capability、active scope 和精确 owner。workflow 的关闭权不由 PID、父子关系、角色名或 `ORCHESTRATE` capability 推导，而是由创建发布前写入生命周期账本的根 `agent_control_id` 精确绑定；低权限 Agent 和后创建的 Orchestrator 都不能关闭或继续钉住该 scope。跨 Agent 消息默认拒绝，只有同 scope 且命中 stable control id 入站路由后才能投递；`MESSAGE_SEND` 不授予等待控制权，等待取消还必须具备独立 `WAIT_CANCEL` capability 并命中直接 controller 关系。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置域内软策略，但 Agent burst 和评分逃生边界也只在域内生效，外层资源域轮转不可配置。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
 
-为防止机制性修复再次把内核推向臃肿，`.gitlab-ci.yml` 和 `make ci-check` 使用 `ci/kernel-budgets.json` 作为可审查事实源，限制内核源码行数、ELF/raw 镜像、text/data/BSS/总运行体积、`struct proc`、Context sidecar 与完整 21 页 Agent 状态的单实例/全局/分类/账户上限、线程栈深度与虚拟/物理容量、64 KiB boot stack 的实际跨度和调用图。每个 owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合，不在文档复制容易漂移的固定数量。metadata 拆分单元及其 contract headers 还共同进入 `metadata_control_plane` 聚合预算：source 只保留固定接口开销，loaded text 与 BSS 不得增长，因而不能靠把状态或代码迁到另一个文件绕过 downward ratchet。预算 checker、通用 QEMU monitor 和生产 profile validator 的 fail-closed 自测集合也以源码和配置为准。
+为防止机制性修复再次把内核推向臃肿，`make local-check` 使用 `ci/kernel-budgets.json` 作为可审查事实源，限制内核源码行数、ELF/raw 镜像、text/data/BSS/总运行体积、`struct proc`、Context sidecar 与完整 21 页 Agent 状态的单实例/全局/分类/账户上限、线程栈深度与虚拟/物理容量、64 KiB boot stack 的实际跨度和调用图。每个 owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合，不在文档复制容易漂移的固定数量。metadata 拆分单元及其 contract headers 还共同进入 `metadata_control_plane` 聚合预算：source 只保留固定接口开销，loaded text 与 BSS 不得增长，因而不能靠把状态或代码迁到另一个文件绕过 downward ratchet。预算 checker、通用 QEMU monitor 和生产 profile validator 的 fail-closed 自测集合也以源码和配置为准。`make ci-check` 仅是兼容别名。
 
 通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在完成判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 profile 必须自然 `rc=0`；checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；powercut profile 则要求认证 supervisor 在完整 marker 后以 `SIGKILL` 直接终止稳定身份的 QEMU leader，隔离并回收跨 `setsid()` 的全部后代，再提交带随机 nonce、PID/starttime 和镜像退出码的完成证明。workload 自行杀死 leader 或 supervisor、控制通道 EOF、残留后代、超时、非零退出和 marker 后 panic 均失败。powercut 是“宿主强制中止 VM 后检查原始磁盘”的突然 VM 终止模型；它比 `SIGTERM` checkpoint 更接近掉电边界，但不会清空宿主页缓存，也不等同于整机物理断电。当前 Agent 套件为 18 case，checker 只接受完整有序的 18-case timing file。历史提交 `14607e825f06` 的三轮总时长为 `278.6982115s`、`294.053138s`、`296.7989493s`，中位基线 `294.053138s`，确定性上限 `308.756s`；71 文件校准包含 57 份执行 attestation，并绑定源码指纹 `58bc3257...458d`。这些校准值不等于当前候选或完整发布通过，完整发布状态仍由最终 C→E bundle 决定。
 
@@ -365,7 +366,7 @@ make evaluation-package-development EVALUATION_RUN_DIR=<run-dir> EVALUATION_BUND
 make evaluation-package-verify EVALUATION_BUNDLE_DIR=evidence/releases/evaluation-<run-id>
 ```
 
-普通 Linux、WSL 和普通 Runner 必须显式使用 `none`：18 个 case、语义检查、Guest 日志和
+普通 Linux 或 WSL 本地环境必须显式使用 `none`：18 个 case、语义检查、Guest 日志和
 完整 timing 行清单仍是必需项，但本地 E3 wall-time 基线、上限和比例记为不适用。只有与
 校准记录逐项一致的受信原生 MSYS2 E3 才能改用：
 
@@ -411,13 +412,13 @@ platform proof v2 在 Linux、WSL 和 MSYS2 中统一从 `/proc/cpuinfo`、`/pro
 公开 proof 不保存 hostname，MSYS 只保留复现实验所需的 Windows build、kernel 和
 machine 信息。
 
-`evaluation-run` 只允许在 clean commit 上运行，并分别预检微基准与科研场景实际执行域中的 QEMU、交叉工具链和 shell。formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`；各组 challenge、AB/BA 顺序和规范命令由源码提交 C 确定性派生，因此不同 clone 对同一 C 得到同一计划。失败目录保留且同一输出根不会覆盖，但在没有受保护远端 Runner 时，本地机制不能证明其他 clone 从未执行或丢弃过一次尝试。关键工具以绝对路径、版本和 SHA256 写入清单，每个 boot 前后重新核验；campaign 还绑定创建时的仓库相对 artifact root，拒绝仅后缀相同的外部日志或镜像。首个 QEMU 前生成 run plan schema v2、scenario plan schema v5 和版本化 `measurement-source-receipt.json`，绑定停止规则、顺序、完整 Guest 测量源码清单及评价控制面策略清单；每个 boot 前后重验源码，package 快照还必须与 C 中相应 Git blob 一致。
+`evaluation-run` 只允许在 clean commit 上运行，并分别预检微基准与科研场景实际执行域中的 QEMU、交叉工具链和 shell。formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`；各组 challenge、AB/BA 顺序和规范命令由源码提交 C 确定性派生，因此不同 clone 对同一 C 得到同一计划。失败目录保留且同一输出根不会覆盖。本地证据证明包内容与已提交 Git 对象可重放，不证明操作者或其他 clone 的诚实性。关键工具以绝对路径、版本和 SHA256 写入清单，每个 boot 前后重新核验；campaign 还绑定创建时的仓库相对 artifact root，拒绝仅后缀相同的外部日志或镜像。首个 QEMU 前生成 run plan schema v2、scenario plan schema v5 和版本化 `measurement-source-receipt.json`，绑定停止规则、顺序、完整 Guest 测量源码清单及评价控制面策略清单；每个 boot 前后重验源码，package 快照还必须与 C 中相应 Git blob 一致。
 
 默认正式评价恰好包含 7 次同内核机制微基准 boot、7 轮 Plain/AgentOS 传统兼容路径配对和 7 轮 Plain/AgentOS 科研场景配对，总计 35 次 QEMU 启动，因此耗时明显长于普通回归。微基准使用唯一非零 64-bit challenge；兼容路径与场景使用由提交派生的独立 challenge，并跨 boot 交替 Plain→AgentOS 与 AgentOS→Plain。整轮采集先取得 `git-common-dir` 下独立的 campaign 锁，不同 worktree 的正式评价因此串行；每个 build/QEMU/archive 阶段再取得现有 repo 锁，并在锁内复检计划状态、clean HEAD、工具身份，清空本轮日志以及归档 Guest/runner 日志、内核和运行前后文件系统镜像。这些 Host 复核位于 Guest 计时窗口之外。微基准单 boot 的 900 秒看门狗由 campaign schema 固定，并同时绑定外层进程监督和 Guest runner，调用方不能再通过未记录的环境变量制造更早截止。科研场景的 `EVALUATION_SCENARIO_TIMEOUT` 是每个目标的 runner 基础预算：clean、build、guest 三阶段各使用 `T+30` 秒，目标清理另留 10 秒；一轮 Plain/AgentOS 配对的 Host 硬期限严格派生为 `2 * (3 * (T + 30) + 10) + 60` 秒，默认 `T=600` 时为 3860 秒。任一外层期限到达都会终止进程组、保留部分日志并把 manifest 标为失败。正式采集期间仍不得从不遵守这些锁的外部终端并发构建同一 worktree。任何 boot 失败都会保留当次材料并使采集失败，不会删除失败样本或补零。仅开发接线时可显式设置 `EVALUATION_INCLUDE_SCENARIO=0`；这种运行的任务六和兼容成本状态必须是未测量，不能用于正式结论。
 
 传统兼容路径不再自行拼接一套宽松宿主环境：它从同一 micro platform proof 推导精确的 clean child environment，并在 formal context v2 中绑定摘要。native-msys2 的 `SYSTEMDRIVE`、原生临时目录和 POSIX `TMPDIR` 均为必填且在 build、QEMU 与离线复验间一致；缺失或伪造盘符会在启动前 fail closed，不能把 Windows 缓存误写进源码树后再加入忽略规则。
 
-`evaluation-verify` 从原始日志重算 workload challenge、Task 1-5 动态功能回执、Task6 v3 challenge receipt、结果等价性、每 boot 聚合和跨 boot 配对统计；只有合同验证通过才产生 summary。Task 2 的正式合同逐项解析版本化工具目录，只固定赛题必需的 core subset，不固定合法目录总数或可调用项总数；新增合法工具不会使验收失效，重复 ID/name、错误 schema 及被失真的 unknown/mismatch/duplicate/wrong-type 状态与诊断则 fail closed。Task 3 必须由至少六次连续生产 `agent_run` 自动形成 Context，随后执行 rollback 和新的真实工具调用；Host 独立重建 challenge 绑定的序列、path parent 与结果语义。Task 4 使用同一批 challenge 绑定真实文件：竞赛主对照 `file_query_path_index` 对预注册 corpus 的全部 N 条路径逐一执行 open/read/fstat/close 和属性检查，再与 ready index 比较；原 512 槽 metadata 扫描保留为 `file_query_table_ablation`，只解释内核机制，不能代替题面对照。suite 的 `execution_schedule` 同时固定 Guest 的 union-load 物理 marker 顺序；campaign 从已验证 schedule、pair 数和双变体合同推导每 boot 样本数，不再维护会随实验扩展漂移的常量，Host 拒绝漏项、重复、重排或与 dispatcher 不一致的日志。四个机制 headline 作为同一预注册假设族，以 Bonferroni 将 `0.05` 的族错误率分配为每项 `0.05/4`，且每项必须让全部负载共同过门。每个 micro boot 只有同时严格超过 5 us 和 5% 才算 joint-MCID win。Task6 的有符号差值固定为 Plain-AgentOS，正向同时越过 10 ms/5% 记 win，反向同时越过 -10 ms/-5% 记 loss；两个方向共用 `0.05` family，Bonferroni 后各 `0.025`，均以完整 boot 数做精确二项上尾。正向通过为 `supported`，反向通过为 `regressed`，都未通过才是 `inconclusive`。suite v3 在新数据采集前把竞赛性能门限定为 `competition_claims` 中显式注册的 Task 4；Task6 回退仍完整展示并禁止性能优势声明，但不覆盖题面规定的功能、稳定性和证据完整性验收。bootstrap 区间只作描述；任务六还要求 Plain 基线至少 50 ms，并明确只支持 full-stack 场景结论，不归因给单一机制，也不声称控制了宿主页缓存。`evaluation-dashboard` 不只检查 summary：它还读取每个 canonical evidence path，复核文件 SHA256、字节数和 marker 行摘要，并重放原始合同，生成确定性的 `dashboard-verification.json`；科研场景页显式展示 signed delta、正反 MCID、胜负数和统计结论，以及最终 parent 验收在内的 cold-start、逐程序时间、四类功能模块和预注册关键 outcome。成本 sidecar 完整时另显示 ELF/text/data/BSS；缺一项则 fail closed。完整方法、赛题任务映射、统计门和不可外推边界见 [AgentOS 竞赛评价方法](docs/evaluation.md)。这组实验入口暂不改变既有远端 1 Host + 8 QEMU attestation 拓扑。
+`evaluation-verify` 从原始日志重算 workload challenge、Task 1-5 动态功能回执、Task6 v3 challenge receipt、结果等价性、每 boot 聚合和跨 boot 配对统计；只有合同验证通过才产生 summary。Task 2 的正式合同逐项解析版本化工具目录，只固定赛题必需的 core subset，不固定合法目录总数或可调用项总数；新增合法工具不会使验收失效，重复 ID/name、错误 schema 及被失真的 unknown/mismatch/duplicate/wrong-type 状态与诊断则 fail closed。Task 3 必须由至少六次连续生产 `agent_run` 自动形成 Context，随后执行 rollback 和新的真实工具调用；Host 独立重建 challenge 绑定的序列、path parent 与结果语义。Task 4 使用同一批 challenge 绑定真实文件：竞赛主对照 `file_query_path_index` 对预注册 corpus 的全部 N 条路径逐一执行 open/read/fstat/close 和属性检查，再与 ready index 比较；原 512 槽 metadata 扫描保留为 `file_query_table_ablation`，只解释内核机制，不能代替题面对照。suite 的 `execution_schedule` 同时固定 Guest 的 union-load 物理 marker 顺序；campaign 从已验证 schedule、pair 数和双变体合同推导每 boot 样本数，不再维护会随实验扩展漂移的常量，Host 拒绝漏项、重复、重排或与 dispatcher 不一致的日志。四个机制 headline 作为同一预注册假设族，以 Bonferroni 将 `0.05` 的族错误率分配为每项 `0.05/4`，且每项必须让全部负载共同过门。每个 micro boot 只有同时严格超过 5 us 和 5% 才算 joint-MCID win。Task6 的有符号差值固定为 Plain-AgentOS，正向同时越过 10 ms/5% 记 win，反向同时越过 -10 ms/-5% 记 loss；两个方向共用 `0.05` family，Bonferroni 后各 `0.025`，均以完整 boot 数做精确二项上尾。正向通过为 `supported`，反向通过为 `regressed`，都未通过才是 `inconclusive`。suite v3 在新数据采集前把竞赛性能门限定为 `competition_claims` 中显式注册的 Task 4；Task6 回退仍完整展示并禁止性能优势声明，但不覆盖题面规定的功能、稳定性和证据完整性验收。bootstrap 区间只作描述；任务六还要求 Plain 基线至少 50 ms，并明确只支持 full-stack 场景结论，不归因给单一机制，也不声称控制了宿主页缓存。`evaluation-dashboard` 不只检查 summary：它还读取每个 canonical evidence path，复核文件 SHA256、字节数和 marker 行摘要，并重放原始合同，生成确定性的 `dashboard-verification.json`；科研场景页显式展示 signed delta、正反 MCID、胜负数和统计结论，以及最终 parent 验收在内的 cold-start、逐程序时间、四类功能模块和预注册关键 outcome。成本 sidecar 完整时另显示 ELF/text/data/BSS；缺一项则 fail closed。完整方法、赛题任务映射、统计门和不可外推边界见 [AgentOS 竞赛评价方法](docs/evaluation.md)。正式结果由本地采集、离线复验并随 C→E bundle 提交。
 
 Task 1-5 的功能 receipt 还受版本化 token 源码合同约束：它封闭 launcher、关键 syscall、动态结果槽、semantic/hash 与打印出口，删除真实调用、常量替换、断开 def-use、新增伪造 sink 或提前退出的 mutation 均 fail closed。合同同时绑定 Guest include 根、syscall/`ecall`、Make 与镜像选择链，以及可能伪造 syscall 结果或 console 输出的完整受管内核源码；构建统一使用 `make -rR -f Makefile`，影子/预编译头、备用 GNUmakefile、隐式 Makefile 重建和已知预处理差异也会被拒绝。其保证边界是当前受管源码闭包与已注册典型 mutation，不是对任意恶意 C 混淆或外部编译器供应链的形式化证明。功能结论仍要求实际 QEMU 日志和 Host 独立复算同时通过，源码合同本身不能冒充运行证据。
 
@@ -508,7 +509,7 @@ make target-readiness
 | --- | --- | --- |
 | AgentOS 专项测试 | `scripts/run-agent-tests.sh`、`make agentos-test` | 逐项检查 Agent 进程、工具调用、Context、文件查询、事件循环、调度、LLM、权限和冲突控制。 |
 | 安全与资源专项 | 既有资源入口，加 `make physical-resource-test`、`make metadata-recovery-test`、`make observe-recovery-test`、`make virtio-disk-test`、`make fs-allocator-fault-test` | 检查资源耗尽/退款、物理页保留、metadata 与观测同盘重启、VirtIO 故障恢复、文件系统分配事务一致性及跨资源 teardown；必须以动态 Guest marker 判定。 |
-| 内核增长预算 | `make ci-check` | 以固定工具链/profile 检查源码、镜像、运行段、PCB、栈容量和 Agent 模块边界；不启动 QEMU，也不等同于动态回归。 |
+| 内核增长预算 | `make local-check` | 以固定工具链/profile 检查源码、镜像、运行段、PCB、栈容量和 Agent 模块边界；不启动 QEMU，`make ci-check` 仅作兼容别名。 |
 | 双目标运行测试 | `make dual-platform-run` | 让同一科研 Agent 请求分别进入共享安全基底对照和 AgentOS-uCore，生成可比较状态文件。 |
 | 宿主机工具测试 | `host_tools/test_*.py` | 检查镜像提取、状态对照、页面渲染、图表契约和 LLM Relay 模式。 |
 | 完整验证 | `make full-verify` | 按 profile v5 串联 Host/Reader、18-case Agent、双目标和十一类机制 runner；证据模式保留 runner stdout、Guest 合并日志及 allocator canonical archive。 |
@@ -604,7 +605,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 运行不启动 QEMU 的内核增长与模块边界门：
 
 ```bash
-make ci-check
+make local-check
 ```
 
 正式结果与离线 Dashboard 从 [正式证据索引](evidence/releases/INDEX.md) 进入。
@@ -642,7 +643,7 @@ README 只保留项目全貌和主要运行方式。需要查看实现细节、�
 ├── host_tools/              镜像提取、状态对照、页面渲染、LLM Relay 和图表工具
 ├── scripts/                 依赖检查、双目标运行、完整验证和页面服务脚本
 ├── ci/                      固定工具链/profile 下的内核增长预算事实源
-├── .gitlab-ci.yml           静态预算与串行 QEMU 回归流水线
+├── .gitlab-ci.yml           本地验证命令的兼容映射（远程不执行）
 ├── docs/                    双目标说明、AgentOS 设计、验证文档和报告
 ├── results/                 本机运行生成的结果目录，默认不提交
 ├── LICENSE                  源代码 GPL-3.0 许可文本

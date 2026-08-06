@@ -685,9 +685,37 @@ def main() -> int:
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfer",
-        "io_policy.physical_reads++;",
-        "io_policy.physical_writes++;",
+        "bio_account_transfers",
+        "io_policy.physical_reads += count;",
+        "io_policy.physical_writes += count;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfers",
+        "io_policy.physical_writes += count;",
+        "io_policy.physical_writes += 1;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfers",
+        "io_policy.physical_flushes += count;",
+        "io_policy.physical_flushes += 1;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfers",
+        "successful = count - failed;",
+        "successful = count;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfers",
+        "io_policy.failed_transfers += failed;",
+        "io_policy.failed_transfers += count;",
     ))
     _reject(_case(
         sources,
@@ -713,16 +741,45 @@ def main() -> int:
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfer",
-        "else if (transfer == BIO_TRANSFER_WRITE)\n\t\tio_policy.successful_writes++;",
-        "if (transfer == BIO_TRANSFER_WRITE)\n\t\tio_policy.successful_writes++;",
+        "bio_account_transfers",
+        "io_policy.successful_writes += successful;",
+        "io_policy.successful_writes += count;",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfers",
+        "io_policy.successful_flushes += successful;",
+        "io_policy.successful_flushes += count;",
     ))
     _reject(_case(
         sources,
         "os/bio.c",
         "bio_account_transfer",
-        "io_policy.successful_flushes++;",
-        "io_policy.failed_transfers++;",
+        "&result, 1);",
+        "&result, 0);",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfer_batch",
+        "bio_account_transfers(owner, io_class, transfer, results, count);",
+        "for (uint i = 0; i < count; i++)\n"
+        "\t\tbio_account_transfer(owner, io_class, transfer, results[i]);",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "bio_account_transfers",
+        "if (*transfers >= IO_RATE_LOCAL_BATCH)",
+        "if (*transfers >= 1)",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "io_rate_charge_transfers",
+        "state, io_class, 0, reserved, endpoints);",
+        "state, io_class, 0, 1, endpoints);",
     ))
     _reject(_case(
         sources,

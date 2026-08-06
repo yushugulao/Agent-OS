@@ -1524,7 +1524,14 @@ agent_metadata_txn_projection_require_idle();
             self.assertTrue(calibrated_fields.issubset(tests))
         else:
             self.assertEqual(calibrated_fields.intersection(tests), set())
-        self.assertEqual(tests["runner_tag"], "agentos-qemu-calibrated")
+        self.assertNotIn("runner_tag", tests)
+        self.assertNotIn("runner_profile", tests)
+        legacy_remote = copy.deepcopy(config)
+        legacy_remote["agent_test_suite"]["runner_tag"] = "obsolete"
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "remote runner fields are obsolete"
+        ):
+            kernel_budgets.validate_config(legacy_remote)
         self.assertEqual(
             tuple(tests["expected_cases"]),
             kernel_budgets.REQUIRED_AGENT_TEST_CASES,
@@ -2148,15 +2155,16 @@ agent_metadata_txn_projection_require_idle();
                 makefile,
             )
         self.assertNotIn(".NOTPARALLEL", makefile)
-        ci_check = (
-            "ci-check:\n"
-            "\t+@$(MAKE) --no-print-directory ci-host-selftests\n"
+        local_check = (
+            "local-check:\n"
+            "\t+@$(MAKE) --no-print-directory local-host-selftests\n"
             "\t+@$(MAKE) --no-print-directory kernel-budget-check\n"
             "\t+@$(MAKE) --no-print-directory user-stack-check\n"
         )
-        self.assertEqual(makefile.count(ci_check), 1)
+        self.assertEqual(makefile.count(local_check), 1)
+        self.assertEqual(makefile.count("ci-check: local-check\n"), 1)
         self.assertIn(
-            "override CI_HOST_SELFTESTS := \\\n"
+            "override LOCAL_HOST_SELFTESTS := \\\n"
             "\t$(HOST_CONTRACT_TESTS) \\\n"
             "\t$(filter-out $(HOST_CONTRACT_TESTS),"
             "$(EVIDENCE_CAPTURE_TESTS))",
@@ -2164,7 +2172,7 @@ agent_metadata_txn_projection_require_idle();
         )
         self.assertRegex(
             makefile,
-            r"(?m)^ci-host-selftests: \$\(CI_HOST_SELFTESTS\).*"
+            r"(?m)^local-host-selftests: \$\(LOCAL_HOST_SELFTESTS\).*"
             r"agent-observe-disk-format-check printf-format-static-check$",
         )
         self.assertIn(
@@ -2824,12 +2832,6 @@ agent_metadata_txn_projection_require_idle();
             generated.write_text("generated one\n", encoding="utf-8")
             tests = {
                 "expected_cases": ["one", "two"],
-                "runner_tag": "agentos-qemu-calibrated",
-                "runner_profile": {
-                    "cpu": "test cpu",
-                    "virtualization": "test vm",
-                    "qemu_version": "test qemu",
-                },
                 "local_calibration_profile": {
                     "schema_version": 1,
                     "profile_id": "fixture-local-e3-v1",
@@ -2890,6 +2892,7 @@ agent_metadata_txn_projection_require_idle();
                 )
             )
             self.assertNotIn("os/initproc.S", paths)
+            self.assertNotIn(".gitlab-ci.yml", paths)
             tests["source_fingerprint_sha256"] = fingerprint
             with redirect_stdout(io.StringIO()):
                 kernel_budgets.check_agent_test_source_fingerprint(root, config)
@@ -2915,9 +2918,9 @@ agent_metadata_txn_projection_require_idle();
                 kernel_budgets.check_agent_test_source_fingerprint(root, config)
 
             changed_contract = copy.deepcopy(config)
-            changed_contract["agent_test_suite"]["runner_profile"][
-                "qemu_version"
-            ] = "different qemu"
+            changed_contract["agent_test_suite"]["local_calibration_profile"][
+                "tool_versions"
+            ]["qemu"] = "different qemu"
             with self.assertRaisesRegex(
                 kernel_budgets.BudgetError, "fingerprint mismatch"
             ):
@@ -3328,7 +3331,6 @@ agent_metadata_txn_projection_require_idle();
                     "baseline_seconds": 300.0,
                     "max_seconds": 330.0,
                     "calibration_status": "calibrated_full_suite",
-                    "runner_tag": "agentos-qemu-calibrated",
                     "local_calibration_profile": {
                         "profile_id": "test-local-profile"
                     },
@@ -3438,12 +3440,6 @@ agent_metadata_txn_projection_require_idle();
                 "agent_test_suite": {
                     "expected_cases": ["one", "two"],
                     "calibration_status": "provisional_requires_full_suite",
-                    "runner_tag": "agentos-qemu-calibrated",
-                    "runner_profile": {
-                        "cpu": "test cpu",
-                        "virtualization": "test vm",
-                        "qemu_version": "test qemu",
-                    },
                     "local_calibration_profile": {
                         "schema_version": 1,
                         "profile_id": "fixture-local-e3-v1",
@@ -3482,7 +3478,6 @@ agent_metadata_txn_projection_require_idle();
         config = {
             "agent_test_suite": {
                 "expected_cases": ["one"],
-                "runner_tag": "agentos-qemu-calibrated",
                 "calibration_status": "provisional_requires_full_suite",
             }
         }

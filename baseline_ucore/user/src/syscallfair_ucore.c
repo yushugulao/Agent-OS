@@ -5,6 +5,9 @@
 #include <unistd.h>
 
 #define STRESS_BYTES (64 * 1024)
+#define OFFSET_BLOCK_BYTES 1024
+#define OFFSET_BLOCKS 32
+#define OFFSET_READERS 2
 
 static const char console_begin[] = "SYSCALLFAIR_CONSOLE_BEGIN\n";
 static const char console_peer[] = "SYSCALLFAIR_CONSOLE_PEER\n";
@@ -24,6 +27,11 @@ static volatile int trunc_observer_ready;
 static volatile int trunc_started;
 static volatile int trunc_done;
 static volatile int trunc_observed;
+static volatile int offset_ready[OFFSET_READERS];
+static volatile int offset_start;
+static volatile int offset_error;
+static int offset_fd;
+static unsigned char offset_tags[OFFSET_READERS][OFFSET_BLOCKS / 2];
 
 static void write_stdout(const char *data, int length)
 {
@@ -263,6 +271,93 @@ static void run_truncate_phase(void)
 	check(unlink(path) == 0, "remove truncated file");
 }
 
+static void offset_reader(void *arg)
+{
+	int reader = (int)(long)arg;
+	char block[OFFSET_BLOCK_BYTES];
+
+	offset_ready[reader] = 1;
+	while (!offset_start)
+		sched_yield();
+	for (int i = 0; i < OFFSET_BLOCKS / OFFSET_READERS; i++) {
+		int n = read(offset_fd, block, sizeof(block));
+
+		if (n != sizeof(block)) {
+			offset_error = 1;
+			return;
+		}
+		offset_tags[reader][i] = (unsigned char)block[0];
+	}
+}
+
+static void run_shared_offset_phase(void)
+{
+	static const char path[] = "fairoffset";
+	static const char pressure_path[] = "fairoffsetpressure";
+	char block[OFFSET_BLOCK_BYTES];
+	int seen[OFFSET_BLOCKS];
+	int tids[OFFSET_READERS];
+	int pressure;
+
+	unlink(path);
+	unlink(pressure_path);
+	offset_fd = open(path, O_CREATE | O_WRONLY | O_TRUNC);
+	check(offset_fd >= 0, "create shared-offset file");
+	for (int i = 0; i < OFFSET_BLOCKS; i++) {
+		memset(block, i + 1, sizeof(block));
+		check(write(offset_fd, block, sizeof(block)) == sizeof(block),
+		      "populate shared-offset file");
+	}
+	check(close(offset_fd) == 0, "close shared-offset writer");
+
+	/* Evict target blocks so competing reads exercise cold-cache behavior. */
+	pressure = open(pressure_path, O_CREATE | O_WRONLY | O_TRUNC);
+	check(pressure >= 0, "create offset cache pressure file");
+	memset(block, 0x5a, sizeof(block));
+	for (int i = 0; i < 64; i++)
+		check(write(pressure, block, sizeof(block)) == sizeof(block),
+		      "populate offset cache pressure file");
+	check(close(pressure) == 0, "close offset cache pressure file");
+
+	offset_fd = open(path, O_RDONLY);
+	check(offset_fd >= 0, "open shared-offset reader");
+	for (int i = 0; i < OFFSET_READERS; i++)
+		offset_ready[i] = 0;
+	offset_start = 0;
+	offset_error = 0;
+	memset(offset_tags, 0, sizeof(offset_tags));
+	for (int i = 0; i < OFFSET_READERS; i++) {
+		tids[i] = thread_create(offset_reader, (void *)(long)i);
+		check(tids[i] >= 0, "create shared-offset reader");
+	}
+	for (int i = 0; i < OFFSET_READERS; i++)
+		while (!offset_ready[i])
+			check(sched_yield() == 0, "start shared-offset readers");
+	offset_start = 1;
+	for (int i = 0; i < OFFSET_READERS; i++) {
+		int status;
+
+		while ((status = waittid(tids[i])) == -2)
+			check(sched_yield() == 0, "finish shared-offset reader");
+		check(status == 0, "shared-offset reader exited cleanly");
+	}
+	check(!offset_error, "shared-offset reader completed every block");
+	memset(seen, 0, sizeof(seen));
+	for (int reader = 0; reader < OFFSET_READERS; reader++)
+		for (int i = 0; i < OFFSET_BLOCKS / OFFSET_READERS; i++) {
+			int tag = offset_tags[reader][i];
+
+			check(tag >= 1 && tag <= OFFSET_BLOCKS,
+			      "shared offset returned a valid block identity");
+			seen[tag - 1]++;
+		}
+	for (int i = 0; i < OFFSET_BLOCKS; i++)
+		check(seen[i] == 1, "shared offset consumed each block once");
+	check(close(offset_fd) == 0, "close shared-offset reader");
+	check(unlink(path) == 0, "remove shared-offset file");
+	check(unlink(pressure_path) == 0, "remove offset pressure file");
+}
+
 int main(void)
 {
 	int pid;
@@ -281,6 +376,7 @@ int main(void)
 		memset(stress, '.', sizeof(stress));
 		run_inode_phase();
 		run_truncate_phase();
+		run_shared_offset_phase();
 		exit(0);
 	}
 	check(waitpid(pid, &status) == pid, "wait fairness worker");

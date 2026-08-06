@@ -24,7 +24,7 @@ def _isolate_direct_entry_imports() -> None:
 _isolate_direct_entry_imports()
 import argparse, csv, hashlib, json
 import math, os, platform, re, shutil, signal, subprocess, sys, tempfile, time
-from urllib import parse as urlparse; from datetime import datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 if __name__ == "__main__":
     sys.dont_write_bytecode = True
@@ -50,9 +50,6 @@ from host_tools.evidence_delivery_contract import (  # noqa: E402
 )
 from host_tools.evidence_semantic_registry import validate_raw_artifacts  # noqa: E402
 from host_tools.dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS  # noqa: E402
-from host_tools.remote_ci_bundle import (  # noqa: E402
-    decode_gitlab_json, gitlab_fetch, verify_job_execution,
-)
 from host_tools.strict_json import read_strict_json, strict_json_loads  # noqa: E402
 from host_tools.safe_host_paths import (  # noqa: E402
     require_regular_file, require_safe_directory, walk_regular_files_no_links,
@@ -81,11 +78,6 @@ from host_tools.evidence_toolchain_attestation import (  # noqa: E402
 )
 SCHEMA_VERSION = 8
 FULL_VERIFY_PROFILE_VERSION = 5
-REMOTE_CI_SCHEMA_VERSION = 1
-REMOTE_CI_JOBS = (("kernel-budgets", "host"), ("reader-e2e", "qemu"), ("agent-regression", "qemu"),
-                  ("kernel-mechanism-regression", "qemu"), ("physical-resource-regression", "qemu"), ("metadata-recovery-regression", "qemu"),
-                  ("observe-recovery-regression", "qemu"), ("virtio-disk-regression", "qemu"), ("fs-allocator-fault-regression", "qemu"))
-REMOTE_CI_TAGS = {"host": "agentos-host-calibrated", "qemu": "agentos-qemu-calibrated"}
 FULL_VERIFY_TIMEOUT_SECONDS = 5 * 60 * 60
 SUMMARY_NAME = "verification-summary.json"
 SUCCESS_MARKER = "[full-verify] all checks passed"
@@ -570,127 +562,7 @@ def release_output_lock(handle) -> None:
     import fcntl
     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     handle.close()
-def positive_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
-def valid_gitlab_base_url(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    parsed = urlparse.urlsplit(value)
-    loopback = parsed.hostname in {"127.0.0.1", "::1", "localhost"}
-    return (parsed.scheme == "https" or (parsed.scheme == "http" and loopback)) and bool(parsed.netloc) \
-        and parsed.path in {"", "/"} and not parsed.query and not parsed.fragment and not parsed.username
-def validate_remote_file(root: Path, record: object, expected_path: str) -> Path:
-    path = require_file_ref(root, record, expected_path)
-    if (not isinstance(record, dict) or set(record) != {"path", "bytes", "sha256"}
-            or not positive_int(record.get("bytes")) or path.stat().st_size != record["bytes"]):
-        raise EvidenceError(f"remote CI artifact differs: {expected_path}")
-    return path
-def validate_remote_ci_provenance(
-        value: object, commit: str, root: Path, contract_root: Path) -> set[str]:
-    fields = {"schema_version", "kind", "capture", "project", "pipeline", "api_records", "jobs"}
-    if (not isinstance(value, dict) or set(value) != fields
-            or value.get("schema_version") != REMOTE_CI_SCHEMA_VERSION
-            or value.get("kind") != "agentos-gitlab-api-provenance"):
-        raise EvidenceError("remote CI provenance schema is invalid")
-    capture, project, pipeline = value.get("capture"), value.get("project"), value.get("pipeline")
-    if (not isinstance(capture, dict)
-            or set(capture) != {"method", "api_base_url", "fetched_at_utc"}
-            or capture.get("method") != "gitlab-api-live-fetch"
-            or not valid_gitlab_base_url(capture.get("api_base_url"))
-            or not valid_utc_timestamp(capture.get("fetched_at_utc"))):
-        raise EvidenceError("remote CI capture provenance is invalid")
-    if (not isinstance(project, dict) or set(project) != {"id", "path_with_namespace", "web_url"}
-            or not positive_int(project.get("id")) or not project.get("path_with_namespace")
-            or not str(project.get("web_url", "")).startswith("https://")):
-        raise EvidenceError("remote CI project provenance is invalid")
-    if (not isinstance(pipeline, dict)
-            or set(pipeline) != {"id", "sha", "ref", "source", "status", "web_url"}
-            or not positive_int(pipeline.get("id")) or pipeline.get("sha") != commit
-            or pipeline.get("ref") != "main" or pipeline.get("source") != "push"
-            or pipeline.get("status") != "success"
-            or not str(pipeline.get("web_url", "")).startswith("https://")):
-        raise EvidenceError("remote CI pipeline provenance is invalid")
-    api_records = value.get("api_records")
-    expected_api = {"project": "remote-ci/api/project.json",
-                    "pipeline": "remote-ci/api/pipeline.json",
-                    "pipeline-jobs": "remote-ci/api/pipeline-jobs.json"}
-    expected_api.update({f"job-{name}": f"remote-ci/api/job-{name}.json"
-                         for name, _ in REMOTE_CI_JOBS})
-    if not isinstance(api_records, list) or len(api_records) != len(expected_api):
-        raise EvidenceError("remote CI API record inventory is invalid")
-    api_paths: dict[str, Path] = {}
-    for record in api_records:
-        name = record.get("name") if isinstance(record, dict) else None
-        if (not isinstance(record, dict) or set(record) != {"name", "path", "bytes", "sha256"}
-                or name not in expected_api or name in api_paths):
-            raise EvidenceError("remote CI API record inventory is invalid")
-        api_paths[name] = validate_remote_file(root, {key: record[key] for key in ("path", "bytes", "sha256")},
-                                               expected_api[name])
-    jobs = value.get("jobs")
-    if (not isinstance(jobs, list) or [job.get("name") if isinstance(job, dict) else None for job in jobs]
-            != [name for name, _ in REMOTE_CI_JOBS]):
-        raise EvidenceError("remote CI job provenance is incomplete")
-    job_ids: set[int] = set()
-    remote_paths = {"remote-ci/provenance.json", *expected_api.values()}
-    for job, (name, runner_class) in zip(jobs, REMOTE_CI_JOBS):
-        job_fields = {"name", "job_id", "runner_id", "runner_class", "runner_tag", "status",
-                      "trace", "artifact", "execution_attestation"}
-        if (not isinstance(job, dict) or set(job) != job_fields or job.get("name") != name
-                or not positive_int(job.get("job_id")) or job["job_id"] in job_ids
-                or not positive_int(job.get("runner_id")) or job.get("runner_class") != runner_class
-                or job.get("runner_tag") != REMOTE_CI_TAGS[runner_class]
-                or job.get("status") != "success"):
-            raise EvidenceError("remote CI job provenance is invalid")
-        job_ids.add(job["job_id"])
-        for kind, suffix in (("trace", "trace.log"), ("artifact", "artifacts.zip")):
-            relative = f"remote-ci/jobs/{name}.{suffix}"
-            validate_remote_file(root, job[kind], relative)
-            remote_paths.add(relative)
-    try:
-        raw_project = read_strict_json(api_paths["project"])
-        raw_pipeline = read_strict_json(api_paths["pipeline"])
-        raw_jobs = read_strict_json(api_paths["pipeline-jobs"])
-    except (OSError, UnicodeDecodeError, ValueError) as error:
-        raise EvidenceError("remote CI API JSON is invalid") from error
-    if (not isinstance(raw_project, dict) or any(raw_project.get(key) != project[key]
-            for key in ("id", "path_with_namespace", "web_url"))
-            or not isinstance(raw_pipeline, dict) or any(raw_pipeline.get(key) != pipeline[key]
-            for key in ("id", "sha", "ref", "source", "status", "web_url"))
-            or not isinstance(raw_jobs, list)):
-        raise EvidenceError("remote CI API records differ from provenance")
-    listed_names = [item.get("name") for item in raw_jobs if isinstance(item, dict)]
-    if (len(listed_names) != len(raw_jobs) or any(not isinstance(name, str) for name in listed_names)
-            or sorted(listed_names) != sorted(name for name, _ in REMOTE_CI_JOBS)
-            or len(raw_jobs) != len(REMOTE_CI_JOBS)):
-        raise EvidenceError("remote CI API job inventory differs from the required jobs")
-    listed = {item.get("name"): item for item in raw_jobs if isinstance(item, dict)}
-    for job in jobs:
-        try:
-            raw_job = read_strict_json(api_paths[f"job-{job['name']}"])
-        except (OSError, UnicodeDecodeError, ValueError) as error:
-            raise EvidenceError("remote CI job API JSON is invalid") from error
-        listed_job = listed.get(job["name"])
-        runner = raw_job.get("runner") if isinstance(raw_job, dict) else None
-        raw_pipeline_ref = raw_job.get("pipeline") if isinstance(raw_job, dict) else None
-        if (not isinstance(listed_job, dict) or listed_job.get("id") != job["job_id"]
-                or listed_job.get("status") != "success" or not isinstance(raw_job, dict)
-                or raw_job.get("id") != job["job_id"] or raw_job.get("name") != job["name"]
-                or raw_job.get("status") != "success" or not isinstance(runner, dict)
-                or runner.get("id") != job["runner_id"]
-                or raw_job.get("tag_list") != [job["runner_tag"]]
-                or not isinstance(raw_pipeline_ref, dict)
-                or raw_pipeline_ref.get("id") != pipeline["id"]
-                or raw_pipeline_ref.get("sha") != commit):
-            raise EvidenceError("remote CI job API record differs from provenance")
-        execution = verify_job_execution(
-            root / job["trace"]["path"], root / job["artifact"]["path"],
-            raw_project, raw_pipeline, raw_job, job["runner_tag"], contract_root)
-        if job["execution_attestation"] != execution:
-            raise EvidenceError("remote CI execution result differs from provenance")
-    return remote_paths
-def validate_authenticity(
-        root: Path, manifest: dict[str, object], commit: str,
-        contract_root: Path) -> set[str]:
+def validate_authenticity(manifest: dict[str, object], commit: str) -> None:
     authenticity = manifest.get("authenticity")
     if not isinstance(authenticity, dict) or set(authenticity) != {"local", "remote_ci"}:
         raise EvidenceError("manifest authenticity boundary is invalid")
@@ -698,23 +570,8 @@ def validate_authenticity(
     if local != {"kind": "committed-git-head", "commit": commit,
                   "execution": "clean-detached-worktree"}:
         raise EvidenceError("manifest local authenticity boundary is invalid")
-    remote = authenticity.get("remote_ci")
-    if remote == {"status": "not-attached"}:
-        return set()
-    fields = {"status", "pipeline_sha", "pipeline_ref", "pipeline_source",
-              "source_local_checksums_sha256", "provenance"}
-    if (not isinstance(remote, dict) or set(remote) != fields
-            or remote.get("status") != "provenance-attached"
-            or remote.get("pipeline_sha") != commit
-            or remote.get("pipeline_ref") != "main" or remote.get("pipeline_source") != "push"
-            or not SHA256.fullmatch(str(remote.get("source_local_checksums_sha256", "")))):
-        raise EvidenceError("manifest remote CI binding is invalid")
-    proof_path = require_file_ref(root, remote.get("provenance"), "remote-ci/provenance.json")
-    try:
-        proof = read_strict_json(proof_path)
-    except (OSError, UnicodeDecodeError, ValueError) as error:
-        raise EvidenceError("remote CI provenance JSON is invalid") from error
-    return validate_remote_ci_provenance(proof, commit, root, contract_root)
+    if authenticity.get("remote_ci") != {"status": "not-attached"}:
+        raise EvidenceError("manifest remote CI boundary must remain not-attached")
 def verify_bundle(root: Path, contract_root: Path) -> dict[str, object]:
     root = root.resolve()
     contract_root = require_safe_directory(contract_root).resolve(strict=True)
@@ -763,8 +620,7 @@ def verify_bundle(root: Path, contract_root: Path) -> dict[str, object]:
     if source_commit != manifest["commit"]:
         raise EvidenceError("contract root HEAD differs from evidence commit")
     validate_delivery_field(manifest.get("delivery"), manifest["commit"])
-    remote_files = validate_authenticity(
-        root, manifest, str(summary["commit"]), contract_root)
+    validate_authenticity(manifest, str(summary["commit"]))
     summary_ref = manifest.get("verification_summary")
     if not isinstance(summary_ref, dict) or summary_ref.get("path") != SUMMARY_NAME:
         raise EvidenceError("manifest summary reference is invalid")
@@ -856,7 +712,7 @@ def verify_bundle(root: Path, contract_root: Path) -> dict[str, object]:
     if actual_version_logs != version_logs:
         raise EvidenceError("environment version file inventory differs")
     allowed_files = ((CORE_FILES - {"checksums.sha256"}) | version_logs
-                     | {record["path"] for record in raw_records} | remote_files)
+                     | {record["path"] for record in raw_records})
     if actual != allowed_files:
         raise EvidenceError("bundle contains unreferenced files")
     metrics_ref = manifest.get("metrics")
@@ -1232,154 +1088,6 @@ def collect(args: argparse.Namespace) -> int:
             shutil.rmtree(checkout_root, ignore_errors=True)
         release_output_lock(output_lock)
         shutil.rmtree(environment_root, ignore_errors=True)
-def bind_remote_ci(args: argparse.Namespace) -> int:
-    bundle = Path(args.bundle).resolve()
-    output = Path(args.output).resolve()
-    token_input = Path(args.token_file)
-    token_path = token_input.resolve()
-    if (not bundle.is_dir() or output.exists() or output == bundle
-            or token_input.is_symlink() or not token_path.is_file()
-            or not positive_int(args.project_id) or not positive_int(args.pipeline_id)
-            or not math.isfinite(args.api_timeout) or args.api_timeout <= 0 or args.api_timeout > 300
-            or not valid_gitlab_base_url(args.gitlab_url)):
-        raise EvidenceError("remote CI binding input or output is invalid")
-    try:
-        output.relative_to(bundle)
-    except ValueError:
-        pass
-    else:
-        raise EvidenceError("remote CI output cannot be inside the source bundle")
-    local_result = verify_bundle(bundle, Path(args.contract_root))
-    try:
-        token = token_path.read_text(encoding="utf-8").strip()
-    except UnicodeDecodeError as error:
-        raise EvidenceError("GitLab token file is invalid") from error
-    if not 8 <= len(token) <= 512 or any(character.isspace() for character in token):
-        raise EvidenceError("GitLab token file is invalid")
-    source_manifest = read_strict_json(bundle / "manifest.json")
-    if source_manifest["authenticity"]["remote_ci"] != {"status": "not-attached"}:
-        raise EvidenceError("source bundle already has remote CI provenance")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    lock = None
-    stage = None
-    try:
-        lock = acquire_output_lock(output)
-        stage = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=output.parent))
-        shutil.copytree(bundle, stage, dirs_exist_ok=True)
-        (stage / "checksums.sha256").unlink()
-        api_dir = stage / "remote-ci" / "api"
-        jobs_dir = stage / "remote-ci" / "jobs"
-        api_dir.mkdir(parents=True)
-        jobs_dir.mkdir()
-        api_records: list[dict[str, object]] = []
-        api_base = args.gitlab_url.rstrip("/")
-        prefix = f"projects/{args.project_id}"
-        def fetch_json(name: str, endpoint: str) -> object:
-            data, headers = gitlab_fetch(api_base, endpoint, token, args.api_timeout)
-            relative = f"remote-ci/api/{name}.json"
-            path = stage / relative
-            path.write_bytes(data)
-            api_records.append({"name": name, "path": relative, "bytes": len(data),
-                                "sha256": sha256_file(path)})
-            return decode_gitlab_json(data, name), headers
-        project_pair = fetch_json("project", prefix)
-        project = project_pair[0]
-        pipeline_pair = fetch_json("pipeline", f"{prefix}/pipelines/{args.pipeline_id}")
-        pipeline = pipeline_pair[0]
-        jobs_pair = fetch_json("pipeline-jobs",
-                               f"{prefix}/pipelines/{args.pipeline_id}/jobs?per_page=100")
-        listed_jobs, jobs_headers = jobs_pair
-        commit = str(local_result["commit"])
-        if (not isinstance(project, dict) or project.get("id") != args.project_id
-                or not project.get("path_with_namespace")
-                or not str(project.get("web_url", "")).startswith("https://")):
-            raise EvidenceError("GitLab project response differs from requested project")
-        if (not isinstance(pipeline, dict) or pipeline.get("id") != args.pipeline_id
-                or pipeline.get("sha") != commit or pipeline.get("ref") != "main"
-                or pipeline.get("source") != "push" or pipeline.get("status") != "success"
-                or not str(pipeline.get("web_url", "")).startswith("https://")):
-            raise EvidenceError("GitLab pipeline did not pass the final main push")
-        listed_names = [item.get("name") for item in listed_jobs if isinstance(item, dict)] \
-            if isinstance(listed_jobs, list) else []
-        if (not isinstance(listed_jobs, list) or len(listed_names) != len(listed_jobs)
-                or any(not isinstance(name, str) for name in listed_names)
-                or str(jobs_headers.get("X-Next-Page", ""))
-                or sorted(listed_names) != sorted(name for name, _ in REMOTE_CI_JOBS)
-                or len(listed_jobs) != len(REMOTE_CI_JOBS)):
-            raise EvidenceError("GitLab pipeline job inventory is invalid or incomplete")
-        job_records: list[dict[str, object]] = []
-        for name, runner_class in REMOTE_CI_JOBS:
-            candidates = [job for job in listed_jobs
-                          if isinstance(job, dict) and job.get("name") == name]
-            if (len(candidates) != 1 or not positive_int(candidates[0].get("id"))
-                    or candidates[0].get("status") != "success"):
-                raise EvidenceError(f"GitLab pipeline lacks unique required job: {name}")
-            job_id = candidates[0]["id"]
-            detail_pair = fetch_json(f"job-{name}", f"{prefix}/jobs/{job_id}")
-            detail = detail_pair[0]
-            runner = detail.get("runner") if isinstance(detail, dict) else None
-            job_pipeline = detail.get("pipeline") if isinstance(detail, dict) else None
-            required_tag = REMOTE_CI_TAGS[runner_class]
-            if (not isinstance(detail, dict) or detail.get("id") != job_id
-                    or detail.get("name") != name or detail.get("status") != "success"
-                    or not isinstance(runner, dict) or not positive_int(runner.get("id"))
-                    or detail.get("tag_list") != [required_tag]
-                    or not isinstance(job_pipeline, dict) or job_pipeline.get("id") != args.pipeline_id
-                    or job_pipeline.get("sha") != commit):
-                raise EvidenceError(f"GitLab required job provenance is invalid: {name}")
-            references: dict[str, dict[str, object]] = {}
-            for kind, endpoint, suffix in (
-                ("trace", f"{prefix}/jobs/{job_id}/trace", "trace.log"),
-                ("artifact", f"{prefix}/jobs/{job_id}/artifacts", "artifacts.zip"),
-            ):
-                data, _ = gitlab_fetch(api_base, endpoint, token, args.api_timeout,
-                                       allow_cross_origin=True)
-                relative = f"remote-ci/jobs/{name}.{suffix}"
-                path = stage / relative
-                path.write_bytes(data)
-                references[kind] = {"path": relative, "bytes": len(data),
-                                     "sha256": sha256_file(path)}
-            execution = verify_job_execution(
-                stage / references["trace"]["path"], stage / references["artifact"]["path"],
-                project, pipeline, detail, required_tag, Path(__file__).resolve().parents[1])
-            job_records.append({"name": name, "job_id": job_id, "runner_id": runner["id"],
-                                "runner_class": runner_class, "runner_tag": required_tag,
-                                "status": "success", "execution_attestation": execution,
-                                **references})
-        proof = {
-            "schema_version": REMOTE_CI_SCHEMA_VERSION,
-            "kind": "agentos-gitlab-api-provenance",
-            "capture": {"method": "gitlab-api-live-fetch", "api_base_url": api_base,
-                        "fetched_at_utc": utc_now()},
-            "project": {key: project[key] for key in ("id", "path_with_namespace", "web_url")},
-            "pipeline": {key: pipeline[key]
-                         for key in ("id", "sha", "ref", "source", "status", "web_url")},
-            "api_records": api_records,
-            "jobs": job_records,
-        }
-        remote_path = stage / "remote-ci" / "provenance.json"
-        write_json(remote_path, proof)
-        validate_remote_ci_provenance(
-            proof, commit, stage, Path(args.contract_root))
-        source_manifest["authenticity"]["remote_ci"] = {
-            "status": "provenance-attached", "pipeline_sha": commit,
-            "pipeline_ref": "main", "pipeline_source": "push",
-            "source_local_checksums_sha256": sha256_file(bundle / "checksums.sha256"),
-            "provenance": {"path": "remote-ci/provenance.json",
-                           "sha256": sha256_file(remote_path)},
-        }
-        write_json(stage / "manifest.json", source_manifest)
-        write_checksums(stage)
-        verify_bundle(stage, Path(args.contract_root))
-        if output.exists():
-            raise EvidenceError(f"output appeared while remote CI binding was running: {output}")
-        os.replace(stage, output)
-        print(f"[evidence] live GitLab CI provenance attached: {output}")
-        return 0
-    finally:
-        if stage is not None:
-            shutil.rmtree(stage, ignore_errors=True)
-        release_output_lock(lock)
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="operation", required=True)
@@ -1408,15 +1116,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_parser.add_argument("--raw-dir", type=Path, required=True)
     raw_parser.add_argument("--summary", type=Path, required=True)
     raw_parser.add_argument("--expected-commit", required=True)
-    remote_parser = commands.add_parser("bind-remote-ci")
-    remote_parser.add_argument("--bundle", required=True)
-    remote_parser.add_argument("--output", required=True)
-    remote_parser.add_argument("--gitlab-url", required=True)
-    remote_parser.add_argument("--project-id", required=True, type=int)
-    remote_parser.add_argument("--pipeline-id", required=True, type=int)
-    remote_parser.add_argument("--token-file", required=True)
-    remote_parser.add_argument("--contract-root", required=True)
-    remote_parser.add_argument("--api-timeout", type=float, default=60.0)
     summary_parser = commands.add_parser("write-summary")
     summary_parser.add_argument("--stage", required=True)
     summary_parser.add_argument("--steps", required=True)
@@ -1432,8 +1131,6 @@ def main(argv: list[str] | None = None) -> int:
             return collect(args)
         if args.operation == "write-summary":
             return write_summary(args)
-        if args.operation == "bind-remote-ci":
-            return bind_remote_ci(args)
         if args.operation == "replay-raw":
             replay_raw_contract(args.raw_dir, args.summary, args.expected_commit)
             print("[evidence] raw semantic replay passed")

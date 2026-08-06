@@ -110,7 +110,7 @@ flowchart LR
 | 存储配额与保留量 | mkfs 与内核共享容量策略；按完成镜像空闲量计算后把 version/slots/PUBLIC principal/G/S/checksum 持久化到 superblock，挂载从 qmap/dinode 重建 PUBLIC 用量，workflow owner 只恢复 scope ID 下界，SYSTEM credit 由空闲量与 G/S 推导；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block；当前平台镜像的存储保证为每 scope 342 inode/1195 block、SYSTEM 64/512。workflow inode 账户使用该独立 STORAGE domain limit，不受每 scope 112 条 metadata catalog 容量钳制 |
 | 块 I/O 与 buffer cache 分域 | syscall 入口捕获稳定 owner/class；每次真实 `disk_submit` 是唯一物理计费边界，shared 560/280 与设备根同时扣减而不是额外容量；准入 account endpoint 不带债，reserved 设备端只由真实 account lease 背书带债；已接纳的有界原子多传输可在后续提交形成有上界的 owner lane debt，由 checkpoint/teardown settlement 清偿；global device debt 对非保护 lane 是 gate，SYSTEM/CONTROL 保护 lane可跨 owner lifecycle并由设备根 refill 清偿；syscall 544 使用 `version + struct_size + user_size` 的可扩展前缀 ABI；cache 为 SYSTEM、PUBLIC 和各 active workflow 维护 floor/cap，退役清理仅在轮到时取得 3/8 临时分区 |
 | 可恢复资源耗尽 | inode、inode cache、数据块、文件表和线程分配失败返回错误并回滚；计费走 generation-safe resource account，`resource_domain_id` 仅用于 CPU 调度分区；每线程 16 KiB 虚拟栈按需取得物理页，保留 guard、canary 和调用图预算 |
-| 增长预算 | `make ci-check` 在固定 profile 下检查源码、镜像、运行段、PCB、9 页 sidecar、完整 21 页 Agent 状态、栈虚拟/物理容量及 `ci/kernel-budgets.json` 登记的 owner/bridge 集合；metadata control plane 另受聚合 source/text/BSS 预算，防止靠跨文件迁移绕过单模块门；facade 不持有可写状态，受控符号图的 SCC 硬限由 checker 强制 |
+| 增长预算 | `make local-check` 在固定 profile 下检查源码、镜像、运行段、PCB、9 页 sidecar、完整 21 页 Agent 状态、栈虚拟/物理容量及 `ci/kernel-budgets.json` 登记的 owner/bridge 集合；metadata control plane 另受聚合 source/text/BSS 预算，防止靠跨文件迁移绕过单模块门；facade 不持有可写状态，受控符号图的 SCC 硬限由 checker 强制 |
 | 通用动作和工件更新 | `action_commit` 与 `artifact_update` 作为核心对象状态更新工具，`rerun_stage` 和 `write_report` 只作为旧示例兼容别名；记录、事件 action 和重复请求判断都归入通用类别 |
 | LLM Relay 支持 | 内核提供 `llm_request`、`llm_response`、`LLM_RELAY` capability 和 `AGENT_EVENT_LLM_DONE`；prompt/response 摘要进入 Context、timeline 和审计记录；云端 API、secret、HTTP/TLS 留在用户态 |
 | 结构化事件 | `labdemo_ucore` 输出 `agentos:event type=... key=value`，为页面工具和 LLM Relay 保留解析契约 |
@@ -615,7 +615,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 撤销、自然退出和跨资源结算竞争不会遗留旧 lifecycle 或临时资源 | checkpoint 的 `make workflow-teardown-race-test` 连续三轮通过；覆盖 syscall 546 sized-prefix/self-only 比较、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 generation 重用；该专项独立于 18-case Agent 套件 |
 | thread bomb 不能耗尽普通/保留线程池或垄断跨域 CPU | `make thread-resource-test` 合同要求同一镜像 50/50 轮压力，并覆盖普通/保留域上限与复用、全局水位、退出退款、系统保留进展和 `domain_fairness` |
 | 内核栈有 guard、按需物理映射和构建期预算 | 发布 bundle 必须包含 Agent 与线程/退出专项对应的栈检查；具体调用图和容量阈值以代码提交 C 的 `ci/kernel-budgets.json` 为准，旧 `13824 < 16384` 只作为历史快照 |
-| 内核增长和模块所有权受预算约束 | `make ci-check`；检查项和 deterministic 阈值以 `ci/kernel-budgets.json` 为准，不根据最终文件系统补丁后的轻微变化猜测数值 |
+| 内核增长和模块所有权受预算约束 | `make local-check`；`make ci-check` 仅作兼容别名。检查项和 deterministic 阈值以 `ci/kernel-budgets.json` 为准 |
 | 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |
 
 详细验证见 [verification.md](verification.md) 和 [正式证据索引](../../evidence/releases/INDEX.md)。
@@ -633,7 +633,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 页面和图表 | 内核输出结构化事件、状态文件、timeline、audit 和 provenance | 宿主机工具负责渲染页面、生成 SVG 和汇总 CSV。 |
 | Agent Context 状态 | 每个活跃 Agent 原子计费 21 页：9 页 detail/attribution sidecar + 6 页用户 mirror + 6 页可信 shadow | Context detail 与 legacy mail 先后迁出 PCB 后，`struct proc` 曾从 62072 字节降至 25640 字节；25936 字节及 25936/27233 字节 baseline/max 都是后续历史 probe。当前 candidate 的最终 PCB 和容量指标必须由重新运行的 canonical budget log 与 release bundle 给出。完整状态的机制口径仍为 84 KiB/Agent，legacy mail 的两页按需 sidecar 另行计费。 |
 | CI 模块与 runner 门 | owner、bridge、依赖和 aggregate budget 以版本化注册集合为准；受控 integration graph 的 SCC=3 为 checker 硬约束；metadata 聚合 source/text/BSS 防止跨文件迁移；各 fail-closed 自测集合随源码演进 | integration graph 不是完整 uCore 调用图；通用 runner 全量 drain 并要求普通 case 自然 `rc=0`。Reader action runner 则只在 guest 阶段按完整日志行识别故障，构建阶段仅看退出码。输出洪泛、迟到 marker、普通 marker grace、非零退出或后置 panic 都不能成功；显式 checkpoint 只接受 marker 后 runner 发出的单次 `SIGTERM`，显式 powercut 只接受认证 supervisor 对稳定 QEMU leader 发出的单次 `SIGKILL` 及完整证明。powercut 是突然 VM 终止模型，不等同于整机物理断电。 |
-| CI 时间预算 | 只统计完整 18 个 QEMU case 的 monotonic 运行时，不含编译 | `14607e825f06` 的三轮样本和 57 份执行 attestation 是历史校准；当前配置为 `provisional_requires_full_suite`，最终提交三轮重校准前不启用本地时长门。最终发布 E3/E4 状态仍只由 C→E release bundle 与远端 attestation 判定。 |
+| 本地时间预算 | 只统计完整 18 个 QEMU case 的 monotonic 运行时，不含编译 | `14607e825f06` 的三轮样本和 57 份执行 attestation 是历史校准；当前配置为 `provisional_requires_full_suite`，最终提交三轮重校准前不启用时长门。发布状态只由本地 C→E release bundle 判定。 |
 
 ## 12. 术语表
 

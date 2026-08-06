@@ -57,7 +57,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_VERSION = "scenario-timing-source-v8"
+CONTRACT_VERSION = "scenario-timing-source-v9"
 SOURCE_PATHS = (
     "baseline_ucore/user/src/rp_seed_orch.c",
     "user/src/rp_agentos_orch.c",
@@ -1220,36 +1220,144 @@ def _validate_performance_producers(
     )
 
     bio_tokens = _tokens(bio_source)
-    transfer = _function_tokens(bio_tokens, "bio_account_transfer")
-    _require_top_level(
-        transfer,
-        (
-            "if", "(", "transfer", "==", "BIO_TRANSFER_READ", ")",
-            "io_policy", ".", "physical_reads", "++", ";", "else",
-            "if", "(", "transfer", "==", "BIO_TRANSFER_WRITE", ")",
-            "io_policy", ".", "physical_writes", "++", ";", "else",
-            "if", "(", "transfer", "==", "BIO_TRANSFER_FLUSH", ")",
-            "io_policy", ".", "physical_flushes", "++", ";",
-        ),
-        "physical transfer request accounting",
+    transfers = _function_tokens(bio_tokens, "bio_account_transfers")
+    input_guard = (
+        "if", "(", "results", "==", "0", "||", "count", "==", "0",
+        "||", "(", "transfer", "!=", "BIO_TRANSFER_READ", "&&",
+        "transfer", "!=", "BIO_TRANSFER_WRITE", "&&", "transfer", "!=",
+        "BIO_TRANSFER_FLUSH", ")", ")", "return", ";",
     )
-    _require_top_level(
-        transfer,
-        (
-            "if", "(", "result", "<", "0", ")", "io_policy", ".",
-            "failed_transfers", "++", ";", "else", "if", "(",
-            "transfer", "==", "BIO_TRANSFER_WRITE", ")", "io_policy", ".",
-            "successful_writes", "++", ";", "else", "if", "(",
-            "transfer", "==", "BIO_TRANSFER_FLUSH", ")", "io_policy", ".",
-            "successful_flushes", "++", ";",
-        ),
-        "successful physical transfer accounting",
+    failed_scan = (
+        "for", "(", "uint", "i", "=", "0", ";", "i", "<", "count",
+        ";", "i", "++", ")", "if", "(", "results", "[", "i", "]",
+        "<", "0", ")", "failed", "++", ";",
     )
-    if bio_source.count("io_policy.successful_writes++") != 1 or \
-       bio_source.count("io_policy.successful_flushes++") != 1:
-        raise ValueError("global successful I/O counters have multiple producers")
-    if bio_source.count("io_policy.physical_reads++") != 1:
-        raise ValueError("global physical read counter must have one producer")
+    global_requests = (
+        "if", "(", "transfer", "==", "BIO_TRANSFER_READ", ")",
+        "io_policy", ".", "physical_reads", "+", "=", "count", ";",
+        "else", "if", "(", "transfer", "==", "BIO_TRANSFER_WRITE", ")",
+        "io_policy", ".", "physical_writes", "+", "=", "count", ";",
+        "else", "io_policy", ".", "physical_flushes", "+", "=", "count",
+        ";",
+    )
+    global_results = (
+        "io_policy", ".", "failed_transfers", "+", "=", "failed", ";",
+        "if", "(", "transfer", "==", "BIO_TRANSFER_WRITE", ")",
+        "io_policy", ".", "successful_writes", "+", "=", "successful",
+        ";", "else", "if", "(", "transfer", "==",
+        "BIO_TRANSFER_FLUSH", ")", "io_policy", ".", "successful_flushes",
+        "+", "=", "successful", ";",
+    )
+    owner_requests = (
+        "if", "(", "transfer", "==", "BIO_TRANSFER_READ", ")", "state",
+        "->", "physical_reads", "+", "=", "count", ";", "else", "if",
+        "(", "transfer", "==", "BIO_TRANSFER_WRITE", ")", "state", "->",
+        "physical_writes", "+", "=", "count", ";", "else", "state", "->",
+        "physical_flushes", "+", "=", "count", ";",
+    )
+    owner_results = (
+        "state", "->", "failed_transfers", "+", "=", "failed", ";", "if",
+        "(", "transfer", "==", "BIO_TRANSFER_WRITE", ")", "state", "->",
+        "successful_writes", "+", "=", "successful", ";", "else", "if",
+        "(", "transfer", "==", "BIO_TRANSFER_FLUSH", ")", "state", "->",
+        "successful_flushes", "+", "=", "successful", ";",
+    )
+    _ordered(
+        transfers,
+        (
+            input_guard,
+            failed_scan,
+            ("successful", "=", "count", "-", "failed", ";"),
+            ("enabled", "=", "intr_save", "(", ")", ";"),
+            global_requests,
+            global_results,
+            (
+                "io_policy", ".", "completion_sequence", "+", "=", "count",
+                ";",
+            ),
+            owner_requests,
+            owner_results,
+            (
+                "state", "->", "completion_sequence", "=",
+                "completion_sequence", ";",
+            ),
+        ),
+        "batched physical transfer accounting",
+    )
+    for sequence, label in (
+        (input_guard, "physical transfer input guard"),
+        (failed_scan, "physical transfer failure scan"),
+        (global_requests, "global physical request totals"),
+        (global_results, "global physical outcome totals"),
+        (owner_requests, "owner physical request totals"),
+        (owner_results, "owner physical outcome totals"),
+    ):
+        _require_top_level(transfers, sequence, label)
+    if transfers.count("for") != 1:
+        raise ValueError("physical transfer batch has a per-request accounting loop")
+
+    single_transfer = _function_tokens(bio_tokens, "bio_account_transfer")
+    if single_transfer != [
+        "bio_account_transfers", "(", "owner", ",", "io_class", ",",
+        "transfer", ",", "&", "result", ",", "1", ")", ";",
+    ]:
+        raise ValueError("single physical transfer is not a batch-of-one adapter")
+    transfer_batch = _function_tokens(bio_tokens, "bio_account_transfer_batch")
+    if transfer_batch != [
+        "bio_account_transfers", "(", "owner", ",", "io_class", ",",
+        "transfer", ",", "results", ",", "count", ")", ";",
+    ]:
+        raise ValueError("physical transfer batch expands into per-request accounting")
+
+    request_batch = (
+        "*", "transfers", "+", "=", "count", ";", "if", "(", "*",
+        "transfers", ">=", "IO_RATE_LOCAL_BATCH", ")", "{",
+        "io_rate_charge_transfers", "(", "state", ",", "io_class", ",",
+        "*", "transfers", ")", ";", "*", "transfers", "=", "0", ";",
+        "}",
+    )
+    _require_once(
+        transfers, request_batch, "request-local batched resource charge"
+    )
+    if transfers.count("io_rate_charge_transfers") != 3 or \
+       transfers.count("io_rate_charge_transfer") != 2:
+        raise ValueError("physical transfer batch resource-charge topology differs")
+
+    rate_batch = _function_tokens(bio_tokens, "io_rate_charge_transfers")
+    _ordered(
+        rate_batch,
+        (
+            ("reserved", "=", "MIN", "(", "amount", ",", "lane", ".", "tokens", ")", ";"),
+            (
+                "io_rate_bundle_amount", "(", "state", ",", "io_class", ",",
+                "0", ",", "reserved", ",", "endpoints", ")", ";",
+            ),
+            ("state", "->", "reserved_grants", "+", "=", "reserved", ";"),
+            ("amount", "-", "=", "reserved", ";"),
+            ("shared", "=", "MIN", "(", "amount", ",", "capacity", ".", "tokens", ")", ";"),
+            (
+                "io_rate_bundle_amount", "(", "state", ",", "io_class", ",",
+                "1", ",", "shared", ",", "endpoints", ")", ";",
+            ),
+            ("state", "->", "shared_grants", "+", "=", "shared", ";"),
+            ("amount", "-", "=", "shared", ";"),
+        ),
+        "bulk resource-controller charge",
+    )
+    if rate_batch.count("io_rate_bundle_amount") != 2:
+        raise ValueError("resource-controller fast path no longer charges by batch")
+
+    producer_assignments = (
+        "io_policy.physical_reads += count;",
+        "io_policy.physical_writes += count;",
+        "io_policy.physical_flushes += count;",
+        "io_policy.failed_transfers += failed;",
+        "io_policy.successful_writes += successful;",
+        "io_policy.successful_flushes += successful;",
+        "io_policy.completion_sequence += count;",
+    )
+    if any(bio_source.count(assignment) != 1 for assignment in producer_assignments):
+        raise ValueError("global batched I/O counter producers differ")
     if bio_source.count("kernel_performance_overwrite_preread_skipped(1)") != 1:
         raise ValueError("overwrite preread skip counter must have one publish producer")
     bio_snapshot = _function_tokens(bio_tokens, "bio_physical_snapshot")

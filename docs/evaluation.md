@@ -388,7 +388,7 @@ flowchart LR
 
 ## 5. 评价入口
 
-普通 Linux、WSL 和普通 Runner 使用以下正式、自检及显式开发入口：
+普通 Linux 或 WSL 本地环境使用以下正式、自检及显式开发入口：
 
 ```bash
 export AGENT_TEST_DURATION_PROFILE=none
@@ -470,14 +470,13 @@ MSYS2 还会重新绑定当前 runtime。
 公开 proof 不记录 hostname，MSYS uname 只保留 OS build、kernel release/version 与
 machine，避免把个人设备名带入证据包。
 
-正式发布仍沿用项目已有的 clean C 到 evidence E 的原子交付模型。实验阶段不得直接
-增加主流水线 job，因为当前远端 attestation 合同精确绑定 1 个 Host 和 8 个 QEMU
-job；评价任务应先作为独立或 child pipeline 运行，稳定后整体升级合同。
+正式发布沿用 clean C 到 evidence E 的原子交付模型。评价任务由本地资源自适应编排，
+所有原始日志、清单和 Dashboard 随 bundle 提交；GitLab 不创建 pipeline。
 
 formal run id 由冻结的源码提交 C 唯一确定为 `formal-<C 的完整 40 位提交号>`。微基准和
 科研场景 challenge、AB/BA 顺序由 C 确定性派生；不同 clone 对同一 C 得到相同计划。
-失败目录会保留且同一输出根拒绝覆盖。没有受保护的远端 Runner 时，本地 Git 与目录锁
-不能证明其他 clone 从未重跑或丢弃一次尝试，因此文档不作这种超出证据的声明。首个
+失败目录会保留且同一输出根拒绝覆盖。本地 Git 与目录锁不能证明操作者或其他 clone
+从未重跑或丢弃一次尝试，因此文档不作这种超出证据的声明。首个
 QEMU 启动前生成的 run plan schema v2、scenario plan schema v5 和
 `measurement-source-receipt.json` 共同绑定该确定性计划、完整 Guest 测量源码清单和版本化
 评价控制面策略清单。
@@ -501,8 +500,7 @@ JSON receipt，绑定源码提交、run、schema、工具/平台/协议和不可
 QEMU 前立即按 manifest 重算 receipt，portable bundle 在打包和离线重放时再次逐字节核对；
 空日志、普通成功文本、非 canonical 编码或篡改字段都会失败。portable 重放能证明 receipt
 字节与不可变计划一致，但该值可由同一计划确定性重建，因此不把它夸大为独立的生成时刻或
-操作者诚实性证明；首 boot 前存在性由生产入口的即时校验约束，跨主机时序仍需要远端签名
-attestation。
+操作者诚实性证明；首 boot 前存在性由生产入口的即时校验约束。本项目不声明跨主机可信时序。
 `checksums.sha256` 再覆盖 manifest 与全部 payload。验证器要求文件清单精确一致，并从
 包内分片在私有临时目录安全物化 raw 日志，再运行完整 evaluation contract，并从 summary
 确定性重建 Dashboard 后逐字节比较。分片按固定成员顺序写入，gzip header、
@@ -730,6 +728,6 @@ marker 行回执，再生成确定性的 `dashboard-verification.json`；成本 
 - 突然终止 QEMU 不等于切断真实存储控制器电源；
 - checksum 和 hash 不等于密码学身份或供应链认证；
 - 有界审计窗口不等于永久、外部不可抵赖日志；
-- 没有远端 Runner attestation 时，本地 E3 不能写成远端 E4。
+- GitLab 只托管源码和证据；本地 E3 不能写成第三方执行或签名证明。
 
 这些是实验适用范围，不是用更漂亮的页面应当掩盖的缺陷。

@@ -1,6 +1,6 @@
 # 双目标 uCore 科研 Agent 平台验证说明
 
-本文档说明如何构建、运行和检查项目的两个目标。正文使用中文；命令、程序名、状态字段和运行输出保持原文。发布状态不由可变工作树或本文中的样例输出决定，而由 `evidence/releases/INDEX.md` 指向的 release bundle 和 `manifest.json` 决定。代码提交 C 先冻结，采集器在干净 C 上完成唯一 `make full-verify`，证据提交 E 再作为 C 的直接子提交只加入 bundle 与索引行。可重验的本地 C→E 交付可达到 E3；远端没有 Runner 时 `remote_ci.status=not-attached`，只阻止同一 C 的 E4。
+本文档说明如何构建、运行和检查项目的两个目标。正文使用中文；命令、程序名、状态字段和运行输出保持原文。发布状态不由可变工作树或本文中的样例输出决定，而由 `evidence/releases/INDEX.md` 指向的 release bundle 和 `manifest.json` 决定。代码提交 C 先冻结，采集器在干净 C 上完成唯一 `make full-verify`，证据提交 E 再作为 C 的直接子提交只加入 bundle 与索引行。可重验的本地 C→E 交付是唯一正式交付链。GitLab 只托管源码与证据，不配置 Runner；`remote_ci.status` 固定为 `not-attached`。
 
 本文日志或“关键输出”片段中出现的字面 `...` 只表示省略字段的格式示例，不是实际 marker；
 validator 要求保存并匹配完整原行，不能把含省略号的示例复制成验收日志。
@@ -47,7 +47,7 @@ AgentOS 专项构建和测试命令见 [agentos/verification.md](agentos/verific
 不启动 QEMU 的 AgentOS 内核增长与模块边界检查：
 
 ```bash
-make ci-check
+make local-check
 ```
 
 它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量，以及线程栈与独立 64 KiB boot stack 的调用图和容量。owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合；metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还受聚合 source/text/BSS 预算约束，不能靠拆文件迁移绕过增长门。受控图不是完整 uCore 调用图。Agent 套件为 18 case；`14607e825f06` 的三轮 timing、57 份执行 attestation 和源码指纹只属于该历史提交。当前配置为 `provisional_requires_full_suite`，在最终提交完成三轮重校准前不启用本地时长门。
@@ -367,12 +367,12 @@ TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf- \
 重复的 256-bit nonce。每个 QEMU 执行由 runner 独占创建 attestation，绑定源码 commit/tree、
 runner 与 QEMU/编译器/Python 路径和哈希、内核及文件系统镜像、Guest 日志、真实 monotonic
 区间和退出结果；18 行 timing 只能由完整 attestation 集合重建。输出明确标记为未签名的本地 E3
-复现证据，不属于 GitLab CI 或 E4 attestation，也不能证明控制本机和工具的操作者没有主动伪造。
+复现证据，不是第三方执行或签名证明，也不能证明控制本机和工具的操作者没有主动伪造。
 采集器逐字节核对 tracked tree，并把版本化 profile 中的 GCC/ld/objcopy/objdump/as、Host CC、
 QEMU、Python、Bash、Make 与 Git 身份回灌给子进程；production 路径没有公式或 fixture 输入。单元测试中的合成
-fixture 只验证拒绝逻辑，不能成为校准事实。GitLab 的 Ubuntu/QEMU 10.2.1 是不同 profile，完整
-18-case 仍验语义、日志和 timing inventory，但以 `duration-profile profile=none` 回执明确跳过本地
-墙钟阈值，不能把远端结果套入该阈值。旧 schema-2 timing/log 包只能作为历史记录。
+fixture 只验证拒绝逻辑，不能成为校准事实。未校准的本地环境仍验完整
+18-case 语义、日志和 timing inventory，但以 `duration-profile profile=none` 回执明确跳过
+墙钟阈值。旧 schema-2 timing/log 包只能作为历史记录。
 
 校准子进程不继承任意开发环境：只保留最小 OS/runtime 变量，并固定 locale、临时目录、
 `LOG=error`、`CHAPTER=agent` 和 local-E3 duration profile；`BASH_ENV`、`MAKEFLAGS`、`MAKEFILES`、
@@ -468,10 +468,10 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 
 # canonical profile 下的增长、PCB、栈容量和 Agent 模块边界
-make ci-check
+make local-check
 ```
 
-旧 16-case 校准、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据，不能外推到当前 18-case 套件或 profile v5。提交 `31d4ddf53695`、`814021ab9dac`、`04c1e6652324` 及其他旧候选的 timing 同样只证明各自提交；独立 Context-sync/WAIT_ATOMIC prelude 不计入这 18 行。`make full-verify` 会动态串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner。GitLab 远端必选集合恰好是同一 C 的 1 个 Host-class job 和 8 个 QEMU-class jobs；每项都要生成绑定 checkout/CI 身份、artifact 清单和语义结果的 attestation，并由下载端以 API 身份、唯一 trace marker、安全 ZIP、逐文件哈希和共享 registry 离线复验。allocator job 还必须交付并复验固定的 `fs-allocator-evidence.tar`，不能只凭合并文本日志判定。本地 clean full-verify 是否完成及是否已有 E3 只由 `INDEX.md` 和 bundle manifest 判定，不在本文硬编码；远端没有可用 Runner 时仅 E4 不可用。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
+旧 16-case 校准、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据，不能外推到当前 18-case 套件或 profile v5。提交 `31d4ddf53695`、`814021ab9dac`、`04c1e6652324` 及其他旧候选的 timing 同样只证明各自提交；独立 Context-sync/WAIT_ATOMIC prelude 不计入这 18 行。`make full-verify` 会动态串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner。本地 clean full-verify 必须保存每项原始 runner/Guest 日志，allocator 步骤还必须交付并复验固定的 `fs-allocator-evidence.tar`。本地验收是否完成只由 `INDEX.md` 和 bundle manifest 判定。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
 
 ## 内核机制说明
 

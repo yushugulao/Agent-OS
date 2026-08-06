@@ -148,12 +148,9 @@ def _rows_for_marker(
     values = {
         key: _positive_int(fields, key, source_line)
         for key in EXPECTED_KEYS
-        if key.endswith(("_ops", "_records")) and
-        key != "cold_rebuild_records"
+        if key.endswith(("_ops", "_records")) and key != "cold_rebuild_records"
     }
-    values["cold_rebuild_records"] = _nonnegative_int(
-        fields, "cold_rebuild_records", source_line
-    )
+    values["cold_rebuild_records"] = _nonnegative_int(fields, "cold_rebuild_records", source_line)
     durations = {
         path: _nonnegative_int(fields, f"{path}_duration_us", source_line)
         for path in ("traversal", "cold_index", "warm_index")
@@ -423,7 +420,6 @@ def verify_measurement_artifact_set(
     ):
         raise MeasurementError("file-query benchmark is not bound to this Guest run")
     return value
-
 
 def verify_bundle_artifacts(
     root: Path,

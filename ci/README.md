@@ -6,8 +6,7 @@ recorded baseline; a reviewed limit may be tighter. The calibrated QEMU
 duration gate alone may use up to 10% because it must cover observed runner
 variance.
 
-Kernel measurements are normalized and deterministic under the pinned Ubuntu
-26.04 compiler and binutils packages:
+Kernel measurements are normalized under the versioned local toolchain profile:
 
 - source size counts physical lines in committed production kernel C, headers,
   assembly, linker scripts, and top-level policy headers. It excludes generated
@@ -70,7 +69,7 @@ over the general page allocator, not physically pinned reserves.
 A JSON `baseline_*` or `max_*` value is a frozen review ratchet, not a duplicate
 of the current measurement. Current source, image, runtime, `struct proc`, stack,
 and metadata-control-plane measurements are intentionally not copied into this
-document: they must come from the candidate's canonical `make ci-check` log,
+document: they must come from the candidate's canonical `make local-check` log,
 the same versioned JSON, and the selected release bundle. A measurement below
 its frozen maximum passes without raising the baseline merely to match it.
 The source baseline therefore remains 47,922 lines. The reviewed ceiling is
@@ -102,14 +101,14 @@ or a metadata-envelope ledger; scoped reload instead binds and revalidates the
 immutable lifecycle id and generation.
 
 The current candidate's full-suite duration gate is
-`provisional_requires_full_suite`. Build parallelism and the runtime fast-path
+`provisional_requires_full_suite`. Resource-adaptive local build parallelism and the runtime fast-path
 changes invalidate the previous source fingerprint before any QEMU timing is
 accepted. Commit `14607e825f06c5ffe4a69dd992dbe79b210ab8a4` and its three-run
 calibration under `evidence/calibrations/14607e825f06/` remain historical
 evidence only. A new `calibrated_full_suite` threshold requires three complete
 18-case runs from the final clean commit on the recorded
 `local-e3-msys2-xpack-qemu11-v1` profile. Until then, local E3 timing claims
-remain disabled; the `none` profile may execute functional CI coverage but
+remain disabled; the `none` profile may execute functional local coverage but
 cannot establish a wall-clock threshold.
 
 A production calibration is collected only by
@@ -144,14 +143,13 @@ is derived rather than chosen manually: the greater of the largest sample and
 above the median still reject calibration. Synthetic fixtures remain valid for
 static mutation and relocation tests but are never admissible calibration
 evidence. A production package is explicitly `local_e3_unsigned`; it is never
-described as GitLab CI, signed, or E4 evidence. Content addressing proves
+described as third-party execution or signed evidence. Content addressing proves
 internal replay and provenance, not the honesty of a local operator who
 controls the checkout, tools, and output files.
 
 The checker
-recomputes a length-framed SHA-256 over the expected cases, canonical CI
-toolchain, remote runner profile/tag, the independent versioned local E3
-profile, root build contract, production kernel inputs,
+recomputes a length-framed SHA-256 over the expected cases, canonical local
+toolchain, the versioned local E3 profile, root build contract, production kernel inputs,
 Agent user programs, NFS image inputs, and the Agent runner's direct scripts.
 Generated images/build output, `os/initproc.S`, documentation, release evidence,
 and `ci/kernel-budgets.json` itself are excluded. Any relevant byte or contract
@@ -178,13 +176,10 @@ python3 -I -S -B scripts/agent_test_calibration.py collect \
   --output /var/tmp/agentos-calibration-"$(git rev-parse --short=12 HEAD)"
 ```
 
-GitLab uses Ubuntu 26.04, `riscv64-linux-gnu`, and QEMU 10.2.1, which is a
-different ordinary runner profile. It explicitly sets
+An uncalibrated local environment explicitly sets
 `AGENT_TEST_DURATION_PROFILE=none`: all 18 cases, semantic checks, Guest logs,
-and the exact timing-row inventory remain mandatory, but the local wall-time
-limit is not applied. Its log must contain the machine-checkable
-`duration-profile` receipt. A GitLab success therefore cannot calibrate or
-validate the local E3 threshold. Targeted `AGENT_TEST_CASE` development runs
+and the exact timing-row inventory remain mandatory, but the calibrated
+wall-time limit is not applied. Targeted `AGENT_TEST_CASE` development runs
 likewise do not claim it.
 
 The duration checker rejects the summary-only `--agent-test-seconds` and
@@ -194,70 +189,38 @@ The duration checker rejects the summary-only `--agent-test-seconds` and
 the schema-3 verifier has independently reconstructed the same bytes and totals
 from the per-execution attestations.
 
-Repository maintainers should protect `.gitlab-ci.yml`, `Makefile`,
-`ci/kernel-budgets.json`, and `scripts/check-*` with `CODEOWNERS` plus a GitLab
-approval rule. Those owners are deployment-specific and cannot be named
-portably here; without protected review, the same change could weaken a gate
-while growing the kernel.
+Changes to `Makefile`, `ci/kernel-budgets.json`, and `scripts/check-*` require
+normal code review because the same change could weaken a gate while growing
+the kernel.
 
-`make ci-check` always rebuilds the fixed `agentfinal_ucore`, `LOG=warn` profile.
-Independent Python contract programs run through an eight-worker bounded
-runner with per-test logs and inventory-ordered output. Kernel and user
+`make local-check` always rebuilds the fixed `agentfinal_ucore`, `LOG=warn` profile.
+Independent Python contract programs run through a resource-adaptive bounded
+local worker pool with per-test logs and inventory-ordered output. Kernel and user
 compilation use the same bounded build setting and reuse an outer GNU make
-jobserver instead of creating nested worker pools. The top-level `ci-check`
+jobserver instead of creating nested worker pools. The top-level `local-check`
 phases remain serial because they share build and evidence artifacts. Formal
-collection starts from its closed environment, so the committed eight-worker
-defaults cannot be replaced by ambient variables.
-The Ubuntu CI identity remains the exact `riscv64-linux-gnu` GCC/binutils and
-`dpkg` package profile, including canonical `/usr/bin` paths, package ownership,
-and package integrity. Local E3 may instead use the versioned MSYS2 xPack
-profile only when the six direct build/measurement tools plus GCC's `cc1` and
+collection starts from its closed environment, so the computed worker limit
+cannot be replaced by ambient variables. `make ci-check` remains only
+as a compatibility alias.
+The local E3 identity uses the versioned MSYS2 xPack profile only when the six
+direct build/measurement tools plus GCC's `cc1` and
 assembler subprogram match the committed SHA-256 inventory and the duration-
 calibration profile id, prefix, and all shared versions. The build receipt binds
 the compiler, `cc1`, assembler, linker, and objdump actually used; a mixed
 toolchain or a changed executable fails closed. `make full-verify` invokes the
-same target before starting the long QEMU regression. `.gitlab-ci.yml` defines
-an exact remote evidence set of one Host-class job and eight QEMU-class jobs.
+same target before starting the long QEMU regression.
 
-## Remote CI execution evidence
+## Repository delivery
 
-The Host-class job is `kernel-budgets`. The QEMU-class jobs are `reader-e2e`,
-`agent-regression`, `kernel-mechanism-regression`,
-`physical-resource-regression`, `metadata-recovery-regression`,
-`observe-recovery-regression`, `virtio-disk-regression`, and
-`fs-allocator-fault-regression`. This is a job inventory, not a claim that nine
-separate Runner machines exist; QEMU jobs may be serialized by their resource
-group.
-
-Each successful job candidate runs `remote_ci_evidence.py attest` last. The
-attester requires the CI checkout HEAD to equal `CI_COMMIT_SHA`, rejects tracked
-checkout changes and dangerous environment overrides, checks the required
-Runner tag, validates the exact artifact inventory and job semantics, and then
-publishes canonical `remote-ci-attestation.json`. It emits one complete trace
-marker binding the job name, commit, and attestation SHA256. QEMU artifacts are
-projected into the same semantic registry used by schema v8 final-evidence
-collection and offline verification; the Host budget artifact uses an exact
-inventory and exact completion markers.
-
-`capture-final-evidence.py bind-remote-ci` live-fetches the GitLab project,
-final `main` push pipeline, all nine job records, traces, and artifact ZIPs. The
-offline verifier binds attestation identity to the API project/pipeline/job,
-commit/ref, Runner id/tag, and verifier checkout. It requires exactly one trace
-marker, exact artifact hashes, and a matching source-contract hash set, then
-replays job semantics locally. ZIP input is bounded by archive, entry, expanded
-size, and compression-ratio limits and rejects path escape, duplicate paths,
-encryption, symlinks, special files, and unsupported compression.
-
-These contracts and their mutation tests are E1 evidence only. The remote
-project currently has no available Runner, so there is no successful remote
-execution record and no E4 claim. A local bundle must remain `not-attached`
-until every required job for the same source commit passes these checks. The
-result is an execution/provenance attestation, not a cryptographic GitLab
-provider signature or a guarantee that an already controlled Runner is honest.
+GitLab stores source commits and committed evidence only. The project does not
+configure a Runner or create pipelines. A release is accepted through the local
+clean C-to-E bundle, offline semantic verification, and the append-only release
+index. The compatibility manifest field `remote_ci.status` is always
+`not-attached`; it is not an incomplete upgrade step.
 
 The filesystem allocator regression publishes one canonical
-`fs-allocator-evidence.tar`. Its transient source directory is kept outside
-`ci-artifacts/`; both the job and the final bundle collector invoke
+`fs-allocator-evidence.tar`. Its transient source directory is kept outside the
+archive; both the local regression runner and the final bundle collector invoke
 `fs-allocator-evidence.py verify-archive`, so a combined text log alone cannot
 satisfy that mechanism gate.
 

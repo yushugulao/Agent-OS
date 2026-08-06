@@ -136,7 +136,7 @@ is_agentos_adapted_source() {
 }
 
 require_path "baseline_ucore/os" "baseline kernel directory is missing"
-require_path ".gitlab-ci.yml" "GitLab CI budget pipeline is missing"
+require_path ".gitlab-ci.yml" "GitLab runnerless policy is missing"
 require_path "os/kernel_work.c" "AgentOS kernel work budget module is missing"
 require_path "os/kernel_work.h" "AgentOS kernel work budget API is missing"
 require_path "baseline_ucore/os/kernel_work.c" "baseline kernel work budget module is missing"
@@ -171,13 +171,8 @@ require_path "host_tools/backend_evidence_contract.py" "shared backend evidence 
 require_path "host_tools/test_backend_evidence_contract.py" "backend evidence contract regressions are missing"
 require_path "host_tools/reference_catalog_contract.py" "reference catalog source contract is missing"
 require_path "host_tools/test_reference_catalog_contract.py" "reference catalog mutation tests are missing"
-require_path "host_tools/gitlab_ci_contract.py" "GitLab CI effective-job resolver is missing"
-require_path "host_tools/test_gitlab_ci_contract.py" "GitLab CI resolver mutation tests are missing"
-require_path "host_tools/remote_ci_evidence.py" "GitLab CI execution attester is missing"
-require_path "host_tools/remote_ci_archive.py" "GitLab CI archive verifier is missing"
-require_path "host_tools/remote_ci_job_semantics.py" "GitLab CI semantic adapter is missing"
-require_path "host_tools/remote_ci_bundle.py" "GitLab CI bundle bridge is missing"
-require_path "host_tools/test_remote_ci_evidence.py" "GitLab CI attestation mutations are missing"
+require_path "host_tools/gitlab_ci_contract.py" "GitLab runnerless contract is missing"
+require_path "host_tools/test_gitlab_ci_contract.py" "GitLab runnerless mutation tests are missing"
 require_path "ci/research-state-manifest.json" "shared research state manifest is missing"
 require_path "host_tools/__init__.py" "host tools package marker is missing"
 require_path "host_tools/research_state_manifest.py" "research state manifest resolver is missing"
@@ -190,7 +185,6 @@ require_path "scripts/check-windows-prereqs.ps1" "Windows dependency checker is 
 require_path "scripts/install-ubuntu-deps.sh" "Ubuntu dependency installer is missing"
 require_path "scripts/run-dual-platforms.sh" "dual target runner is missing"
 require_path "scripts/run-full-verification.sh" "full verification runner is missing"
-require_path "scripts/run-ci-mechanism.sh" "CI mechanism evidence wrapper is missing"
 require_path "scripts/run-physical-resource-tests.sh" "physical resource runner is missing"
 require_path "scripts/run-metadata-recovery-tests.sh" "metadata recovery runner is missing"
 require_path "scripts/run-observe-recovery-tests.sh" "observation recovery runner is missing"
@@ -254,10 +248,11 @@ require_text "Makefile" "^target-readiness:" "target readiness target is missing
 require_text "Makefile" "^full-verify:" "full verification target is missing"
 require_text "Makefile" "^workflow-teardown-race-test:" "workflow teardown race target is missing"
 require_text "Makefile" "^evidence-capture-selftest:" "evidence collector selftest target is missing"
-require_text "Makefile" "^ci-check:$" "ci-check target is missing"
+require_text "Makefile" "^local-check:$" "local-check target is missing"
 require_text "Makefile" \
-	'^[[:space:]]*\+@\$\(MAKE\) --no-print-directory ci-host-selftests$' \
-	"ci-check omits the unified Host selftest pool"
+	'^[[:space:]]*\+@\$\(MAKE\) --no-print-directory local-host-selftests$' \
+	"local-check omits the unified Host selftest pool"
+require_text "Makefile" '^ci-check: local-check$' "ci-check compatibility alias is missing"
 require_text "Makefile" "^doctor:" "dependency doctor target is missing"
 require_text "Makefile" "INIT_PROC=rp_orch CHAPTER=platform" "plain platform run target does not launch rp_orch"
 require_text "Makefile" "INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos" "AgentOS platform run target does not launch rp_agentos_orch"
@@ -286,7 +281,7 @@ require_text "ci/kernel-budgets.json" '"agent_metadata_disk_abi[.]h"' \
 if ! "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/gitlab_ci_contract.py" verify \
 	--path "${ROOT_DIR}/.gitlab-ci.yml" \
 	--budget-config "${ROOT_DIR}/ci/kernel-budgets.json" >"${TMP_FILE}" 2>&1; then
-	fail "GitLab CI effective-job contract failed"
+	fail "GitLab runnerless contract failed"
 fi
 : >"${TMP_FILE}"
 if ! "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/research_state_manifest.py" \
@@ -314,8 +309,8 @@ fi
 require_text "Makefile" 'scripts/run-parallel-tests\.py' \
 	"Host contract tests are not wired to the bounded parallel runner"
 require_text "Makefile" \
-	'^[[:space:]]*\+@\$\(MAKE\) --no-print-directory ci-host-selftests$' \
-	"Agent duration mode regression is not wired into ci-check"
+	'^[[:space:]]*\+@\$\(MAKE\) --no-print-directory local-host-selftests$' \
+	"Agent duration mode regression is not wired into local-check"
 require_text "scripts/run-agent-tests.sh" '--check[[:space:]]+agent-test-policy' \
 	"full Agent suite does not reject provisional duration policy before QEMU"
 require_text "scripts/run-full-verification.sh" '--check[[:space:]]+agent-test-policy' \
@@ -419,23 +414,26 @@ require_text "scripts/validate-kernel-test-log.py" "deletion_reuse=1" "fs runner
 require_text "scripts/validate-kernel-test-log.py" "relaunch_charge_persisted=1 launches=2" "fs runner omits repeated relaunch quota contract"
 require_text "scripts/validate-kernel-test-log.py" "cleanup_reuse=1" "fs runner omits persistent quota cleanup contract"
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" "full verification does not run the structure check"
-require_text "scripts/run-full-verification.sh" "make ci-check" "full verification does not enforce kernel budgets"
+require_text "scripts/run-full-verification.sh" "make local-check" "full verification does not enforce local kernel budgets"
 require_text "scripts/run-agent-tests.sh" "check_suite_budget" "Agent test suite has no total duration budget"
 require_text "Makefile" \
-	'^ci-host-selftests: \$\(CI_HOST_SELFTESTS\)' \
-	"ci-check bypasses the unified Host contract inventory"
+	'^local-host-selftests: \$\(LOCAL_HOST_SELFTESTS\)' \
+	"local-check bypasses the unified Host contract inventory"
 require_text "Makefile" '^override HOST_CONTRACT_TESTS :=' "Host contract inventory can be overridden"
 require_text "Makefile" '^host-contract-selftest: \$\(HOST_CONTRACT_TESTS\)' "Host contract target is not inventory-bound"
-require_text "Makefile" '^override CI_HOST_SELFTESTS :=' "Unified Host selftest inventory can be overridden"
+require_text "Makefile" '^override LOCAL_HOST_SELFTESTS :=' "Unified Host selftest inventory can be overridden"
 require_text "Makefile" '--jobs \$\(AGENTOS_TEST_JOBS\)' "Host contract target does not use the bounded parallel runner"
 require_text "Makefile" '--python \$\(call shell_quote,\$\(PYTHON_BIN\)\)' "Parallel Host tests do not preserve the selected Python interpreter"
 reject_text "Makefile" '^\.NOTPARALLEL' \
 	"GNU make before 4.4 treats target-specific NOTPARALLEL as global"
-for ci_phase in ci-host-selftests kernel-budget-check user-stack-check
+local_check_recipe="$(sed -n '/^local-check:$/,/^[^[:space:]#][^:]*:/p' \
+	"${ROOT_DIR}/Makefile")"
+for local_phase in local-host-selftests kernel-budget-check user-stack-check
 do
-	phase_count="$(grep -c -F "+@\$(MAKE) --no-print-directory ${ci_phase}" "${ROOT_DIR}/Makefile" || true)"
+	phase_count="$(printf '%s\n' "${local_check_recipe}" | \
+		grep -c -F "+@\$(MAKE) --no-print-directory ${local_phase}" || true)"
 	if [ "${phase_count}" -ne 1 ]; then
-		fail "ci-check must invoke ${ci_phase} exactly once through a recursive make"
+		fail "local-check must invoke ${local_phase} exactly once through a recursive make"
 	fi
 done
 require_text "Makefile" '^AGENTOS_SUBMAKE_JOBS = .*-[j]%' "Recursive builds ignore an outer GNU make parallel policy"
@@ -476,7 +474,7 @@ require_text "Makefile" '^override PY = \$\(PYTHON_BIN\)$' \
 for host_contract_test in \
 	test_check_host_platform_alignment test_check_host_action_kind_alignment \
 	test_check_seeded_action_state test_check_host_surface_alignment \
-	test_check_host_test_alignment test_gitlab_ci_contract test_remote_ci_evidence \
+	test_check_host_test_alignment test_gitlab_ci_contract \
 	test_plain_ucore_action_runner test_research_state_manifest \
 	test_plain_ucore_fs_extract test_plain_ucore_llm_relay \
 	test_llm_relay_mode_contract test_check_reader_output \
@@ -513,8 +511,8 @@ require_text "scripts/capture-final-evidence.py" '^FULL_VERIFY_PROFILE_VERSION =
 	"evidence full-verify profile version is not stable"
 require_text "scripts/check-kernel-budgets.py" 'agent-modules checks begin' \
 	"Agent module budget output lacks a strict begin boundary"
-require_text "scripts/capture-final-evidence.py" '^REMOTE_CI_SCHEMA_VERSION = 1$' \
-	"evidence remote CI provenance schema version is not stable"
+require_text "scripts/capture-final-evidence.py" '"remote_ci": \{"status": "not-attached"\}' \
+	"evidence runnerless compatibility status is not fixed"
 require_text "scripts/capture-final-evidence.py" 'SUMMARY_NAME = "verification-summary.json"' \
 	"evidence collector does not expose verification-summary.json"
 require_text "scripts/capture-final-evidence.py" 'commands.add_parser\("write-summary"\)' \
@@ -561,16 +559,8 @@ reject_text "scripts/run-fs-allocator-fault-tests.sh" 'evidence_publish_file|FIN
 	"allocator runner must not publish into the final evidence stage"
 require_text "scripts/capture-final-evidence.py" "validate_fs_allocator_archive" \
 	"final evidence collector does not semantically verify allocator evidence"
-require_text ".gitlab-ci.yml" 'FS_ALLOCATOR_EVIDENCE_ARCHIVE=\$\{CI_PROJECT_DIR\}/ci-artifacts/fs-allocator-evidence.tar' \
-	"allocator CI job does not retain the canonical evidence archive"
-require_text ".gitlab-ci.yml" 'fs-allocator-evidence.py verify-archive --archive "\$\{CI_PROJECT_DIR\}/ci-artifacts/fs-allocator-evidence.tar"' \
-	"allocator CI job does not verify the exact archived artifact"
 require_text "scripts/test-fs-allocator-evidence.py" "test_archive_rejects_noncanonical_bytes" \
 	"allocator archive contract lacks canonical-byte mutation coverage"
-require_text "scripts/run-ci-mechanism.sh" "runner-stdout" \
-	"CI mechanism wrapper omits runner stdout"
-require_text "scripts/run-ci-mechanism.sh" "runner-guest-logs" \
-	"CI mechanism wrapper omits Guest logs"
 
 for header in os/kernel_work.h baseline_ucore/os/kernel_work.h; do
 	for contract in \
@@ -634,7 +624,7 @@ require_text "scripts/check-target-readiness.sh" "test_compare_dual_platform_rea
 require_text "scripts/check-target-readiness.sh" "test_measured_experiments.py" "target readiness checker does not run measured experiment unit test"
 require_text "scripts/check-target-readiness.sh" "test_backend_evidence_contract.py" "target readiness checker does not run backend evidence contract test"
 require_text "scripts/check-target-readiness.sh" "test_reference_catalog_contract.py" "target readiness checker does not run reference catalog mutation tests"
-require_text "scripts/check-target-readiness.sh" "test_gitlab_ci_contract.py" "target readiness checker does not run GitLab CI resolver tests"
+require_text "scripts/check-target-readiness.sh" "test_gitlab_ci_contract.py" "target readiness checker does not run the GitLab runnerless contract"
 require_text "scripts/check-target-readiness.sh" "test_summarize_dual_platform_results.py" "target readiness checker does not run result summary unit test"
 require_text "scripts/check-target-readiness.sh" "test_dual_measurement_source_contract.py" "target readiness checker does not test runner-owned measurement evidence"
 require_text "scripts/check-target-readiness.sh" "test_result_bundle_contract.py" "target readiness checker does not test served result provenance"
@@ -766,17 +756,8 @@ require_text "host_tools/test_measured_experiments.py" "not followed by a pass m
 require_text "host_tools/test_measured_experiments.py" "child-only.log" "measurement test does not reject child-only success"
 require_text "host_tools/test_backend_evidence_contract.py" "substring_matched" "backend log contract lacks strict-line regressions"
 require_text "host_tools/test_backend_evidence_contract.py" "printf_binding_mutations" "backend source wiring mutations are not rejected"
-require_text "host_tools/test_gitlab_ci_contract.py" "recursive_extends_and_child_override" "GitLab CI resolver lacks inheritance override regression"
-require_text "host_tools/test_gitlab_ci_contract.py" "unknown_parent_cycle_and_duplicate_field" "GitLab CI resolver lacks fail-closed graph regressions"
-require_text "host_tools/test_gitlab_ci_contract.py" "child_duplication_are_rejected" "GitLab CI contract permits duplicated inherited policy"
-require_text "host_tools/test_gitlab_ci_contract.py" "skip_capable_root_and_job_policies" "GitLab CI contract lacks skip-policy mutations"
-require_text "host_tools/test_gitlab_ci_contract.py" "wrapper_extra_command_and_environment_hijacks" "GitLab CI contract lacks command and environment mutations"
-require_text "host_tools/test_remote_ci_evidence.py" "real_zip_attestation_round_trip" "remote CI evidence lacks a real ZIP positive control"
-require_text "host_tools/test_remote_ci_evidence.py" "unsafe_zip_mutations" "remote CI evidence lacks unsafe ZIP mutations"
-require_text "host_tools/test_remote_ci_evidence.py" "stay_within_maintenance_budgets" "remote CI modules have no line-count budgets"
-require_text "host_tools/remote_ci_evidence.py" "host_tools/remote_ci_archive.py" "remote CI attestation does not bind its archive verifier"
-require_text "host_tools/remote_ci_evidence.py" "host_tools/evidence_semantic_profiles.py" "remote CI attestation does not bind semantic implementations"
-require_text "host_tools/remote_ci_evidence.py" "host_tools/dual_state_evidence_contract.py" "remote CI attestation does not bind the dual-state contract"
+require_text "host_tools/test_gitlab_ci_contract.py" "execution_enabling_mutations_are_rejected" "GitLab runnerless contract lacks workflow mutations"
+require_text "host_tools/test_gitlab_ci_contract.py" "remote_runner_surfaces_are_rejected" "GitLab runnerless contract lacks remote surface mutations"
 require_text "scripts/capture-final-evidence.py" "host-platform-alignment.json" "final evidence omits Host-derived alignment"
 require_text "scripts/run-full-verification.sh" "MAIN_FLOW_SOURCE_ARTIFACTS" "full verification does not publish Mainflow source evidence"
 require_text "host_tools/evidence_semantic_dual.py" "mainflow_host_telemetry_hash" "offline evidence does not replay Mainflow telemetry"
@@ -806,8 +787,7 @@ require_text "host_tools/test_compare_dual_platform_state.py" "Host run result m
 require_text "host_tools/test_compare_dual_platform_state.py" "contradictory success fields" "state comparison lacks contradictory Host receipt coverage"
 require_text "host_tools/test_capture_final_evidence.py" "traversal_files" "complete-state archive lacks path traversal mutation coverage"
 require_text "host_tools/evidence_semantic_dual.py" "CAPABILITY_GROUPS" "Host alignment groups are not bound to the shared capability contract"
-require_text "scripts/capture-final-evidence.py" "verify_job_execution" "final evidence does not verify downloaded CI execution attestations"
-require_text "scripts/check-target-readiness.sh" "test_remote_ci_evidence.py" "target readiness omits remote CI attestation mutations"
+reject_text "scripts/capture-final-evidence.py" "bind-remote-ci|provenance-attached|verify_job_execution" "final evidence still exposes dead remote execution binding"
 reject_text "host_tools/summarize_dual_platform_results.py" "stable_jitter" "result summarizer still contains formula jitter generation"
 if find "${ROOT_DIR}/docs/assets/verification-charts" -maxdepth 1 -type f \
 	-name 'experiment-*.svg' -print -quit | grep -q .; then
@@ -910,7 +890,7 @@ require_text "user/src/agentfinal_ucore.c" "context_active_path=1 archive_retain
 require_text "os/agent.h" "path_parent_sequence" "kernel Context ABI lacks local active-path parent"
 require_text "user/include/agent.h" "path_parent_sequence" "user Context ABI lacks local active-path parent"
 require_text "os/agent_context.c" "record.path_parent_sequence = p->context_path_visible_head" "Context append does not bind the active-path predecessor"
-require_text "os/agent_context.c" "agent_context_active_record" "Context query does not project the active path"
+require_text "os/agent_context_path.c" "agent_context_active_record" "Context query does not project the active path"
 require_text "os/agent_context_path.c" "kernel_work_checkpoint\(1\)" "Context active-path query lacks bounded fairness checkpoints"
 require_text "os/agent_context_path.c" "record->path_parent_sequence" "Context record hash omits the active-path predecessor"
 require_text "user/lib/syscall.c" "context_mirror_active_query" "user ABI lacks direct active-path mirror validation"

@@ -41,14 +41,13 @@ AGENT_TEST_CALIBRATED_FIELDS = frozenset(
         "calibration_profile_id",
     )
 )
-AGENT_TEST_SOURCE_FINGERPRINT_VERSION = "agent-test-source-contract-v3"
+AGENT_TEST_SOURCE_FINGERPRINT_VERSION = "agent-test-source-contract-v4"
 AGENT_TEST_CALIBRATION_LIMIT_HEADROOM = 0.05
 AGENT_TEST_CALIBRATION_LIMIT_POLICY = (
     "ceil(max(max_observed, median * 1.05) * 1000) / 1000"
 )
 AGENT_TEST_SOURCE_REQUIRED_PATHS = (
     "Makefile",
-    ".gitlab-ci.yml",
     "user/Makefile",
     "nfs/Makefile",
     "scripts/run-agent-tests.sh",
@@ -464,8 +463,6 @@ def agent_test_source_fingerprint(root, config):
         ),
         "expected_cases": tests["expected_cases"],
         "local_calibration_profile": tests["local_calibration_profile"],
-        "runner_profile": tests["runner_profile"],
-        "runner_tag": tests["runner_tag"],
     }
     contract_bytes = json.dumps(
         contract,
@@ -856,24 +853,10 @@ def validate_config(config):
         raise BudgetError(
             "agent_test_suite.calibration_status is not recognized"
         )
-    runner_tag = tests.get("runner_tag")
-    if (
-        not isinstance(runner_tag, str)
-        or not re.fullmatch(r"[A-Za-z0-9_.-]+", runner_tag)
-    ):
+    if "runner_tag" in tests or "runner_profile" in tests:
         raise BudgetError(
-            "agent_test_suite.runner_tag must be a GitLab runner tag"
+            "agent_test_suite remote runner fields are obsolete"
         )
-    runner = require_mapping(
-        tests.get("runner_profile"), "agent_test_suite.runner_profile"
-    )
-    if set(runner) != {"cpu", "virtualization", "qemu_version"}:
-        raise BudgetError("agent_test_suite.runner_profile fields mismatch")
-    for name in ("cpu", "virtualization", "qemu_version"):
-        if not isinstance(runner.get(name), str) or not runner[name]:
-            raise BudgetError(
-                f"agent_test_suite.runner_profile.{name} must be a string"
-            )
     local_profile = require_mapping(
         tests.get("local_calibration_profile"),
         "agent_test_suite.local_calibration_profile",

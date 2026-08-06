@@ -85,8 +85,7 @@ export AGENT_TEST_DURATION_PROFILE=local-e3
 make evaluation-doctor
 ```
 
-本地 `kernel-budget-check` 与 Ubuntu CI 共用同一构建参数和预算，但工具身份分开证明。
-Ubuntu profile 校验固定的 `/usr/bin` 路径、`dpkg` 归属与包完整性；MSYS2 profile 校验
+本地 `kernel-budget-check` 使用版本化构建参数、预算和工具身份。MSYS2 profile 校验
 gcc、cc1、as、ld、objcopy、objdump、nm、size 八个可执行文件的版本和逐文件 SHA-256，
 并要求它与本地三轮时长校准使用同一 profile 及全部共有组件版本。不能通过改名、wrapper
 或混搭工具进入该 profile。预算检查先进入显式的仓库根目录，再把仓库内文件以相对路径
@@ -114,7 +113,7 @@ QEMU 前 fail closed。不得复用历史提交的基线，也不能把 `none` �
 
 ## 正式竞赛评价流程
 
-普通 Linux/WSL 或普通 Runner 在同一受控 POSIX 执行域中依次运行：
+普通 Linux/WSL 本地环境在同一受控 POSIX 执行域中依次运行：
 
 ```bash
 export AGENT_TEST_DURATION_PROFILE=none
@@ -135,7 +134,7 @@ baseline/limit/ratio 记为不适用。受信且已完成当前校准的 MSYS2 E
 
 formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`。challenge 和 AB/BA 顺序
 由 C 确定性派生，所以不同 clone 的计划一致；失败目录会保留且同一输出根拒绝覆盖。
-本地机制不能替代受保护远端 Runner，也不声称能证明其他 clone 从未丢弃尝试。首个 QEMU
+本地机制不声称能证明操作者或其他 clone 从未丢弃尝试。GitLab 只托管源码和已提交证据。首个 QEMU
 前生成的 run plan schema v2、scenario plan schema v5 和
 `measurement-source-receipt.json` 绑定计划、六份 Guest 测量源码及评价控制面策略清单；
 package 中的全部策略快照还要与 C 的 Git blob 一致。

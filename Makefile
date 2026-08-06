@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check ci-host-selftests agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check traditional-performance traditional-performance-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check ci-host-selftests ci-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check traditional-performance traditional-performance-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -737,7 +737,7 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-parallel-test-runner.py \
 	scripts/test-resource-jobs.py
 
-kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh host_tools/gitlab_ci_contract.py agent-observe-disk-format-check printf-format-static-check
+kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh agent-observe-disk-format-check printf-format-static-check
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
@@ -769,7 +769,6 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_check_host_surface_alignment.py \
 	host_tools/test_check_host_test_alignment.py \
 	host_tools/test_gitlab_ci_contract.py \
-	host_tools/test_remote_ci_evidence.py \
 	host_tools/test_agent_observe_disk_evidence.py \
 	host_tools/test_plain_ucore_action_runner.py \
 	host_tools/test_research_state_manifest.py \
@@ -843,13 +842,13 @@ override EVIDENCE_CAPTURE_TESTS := \
 	host_tools/test_evidence_delivery_contract.py
 
 evidence-capture-selftest: scripts/trusted-python-entry.py scripts/trusted-python-child.py host_tools/evaluation_source_gate.py host_tools/formal_python_runtime.py
-evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/result_bundle_publication.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py host_tools/remote_ci_archive.py host_tools/remote_ci_bundle.py host_tools/remote_ci_evidence.py host_tools/remote_ci_job_semantics.py host_tools/remote_ci_test_fixture.py $(EVIDENCE_CAPTURE_TESTS)
+evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/result_bundle_publication.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py $(EVIDENCE_CAPTURE_TESTS)
 	@$(PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(PYTHON_BIN)) \
 		$(EVIDENCE_CAPTURE_TESTS)
 
-override CI_HOST_SELFTESTS := \
+override LOCAL_HOST_SELFTESTS := \
 	$(HOST_CONTRACT_TESTS) \
 	$(filter-out $(HOST_CONTRACT_TESTS),$(EVIDENCE_CAPTURE_TESTS)) \
 	$(filter-out $(HOST_CONTRACT_TESTS) $(EVIDENCE_CAPTURE_TESTS),$(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS))
@@ -861,11 +860,11 @@ override STAGE_EXPENSIVE_HOST_SELFTESTS := \
 	scripts/test-fs-allocator-evidence.py \
 	$(LONG_HOST_SELFTESTS)
 override STAGE_HOST_SELFTESTS := \
-	$(filter-out $(STAGE_EXPENSIVE_HOST_SELFTESTS),$(CI_HOST_SELFTESTS))
-override CI_FAST_HOST_SELFTESTS := \
-	$(filter-out $(LONG_HOST_SELFTESTS),$(CI_HOST_SELFTESTS))
-override CI_LONG_HOST_SELFTESTS := \
-	$(filter $(LONG_HOST_SELFTESTS),$(CI_HOST_SELFTESTS))
+	$(filter-out $(STAGE_EXPENSIVE_HOST_SELFTESTS),$(LOCAL_HOST_SELFTESTS))
+override LOCAL_FAST_HOST_SELFTESTS := \
+	$(filter-out $(LONG_HOST_SELFTESTS),$(LOCAL_HOST_SELFTESTS))
+override LOCAL_LONG_HOST_SELFTESTS := \
+	$(filter $(LONG_HOST_SELFTESTS),$(LOCAL_HOST_SELFTESTS))
 
 stage-host-selftests: $(STAGE_HOST_SELFTESTS) scripts/run-parallel-tests.py
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
@@ -873,16 +872,16 @@ stage-host-selftests: $(STAGE_HOST_SELFTESTS) scripts/run-parallel-tests.py
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
 		$(STAGE_HOST_SELFTESTS)
 
-ci-host-selftests: $(CI_HOST_SELFTESTS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh host_tools/gitlab_ci_contract.py agent-observe-disk-format-check printf-format-static-check
+local-host-selftests: $(LOCAL_HOST_SELFTESTS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh host_tools/gitlab_ci_contract.py agent-observe-disk-format-check printf-format-static-check
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
-		$(CI_FAST_HOST_SELFTESTS)
+		$(LOCAL_FAST_HOST_SELFTESTS)
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_LONG_TEST_JOBS) \
 		--timeout 1800 \
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
-		$(CI_LONG_HOST_SELFTESTS)
+		$(LOCAL_LONG_HOST_SELFTESTS)
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-metadata-disk-format.py \
 		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
 		--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy)
@@ -891,10 +890,15 @@ ci-host-selftests: $(CI_HOST_SELFTESTS) scripts/run-parallel-tests.py scripts/ch
 		HOSTCC=$(call shell_quote,$(HOST_CC)) \
 		bash scripts/test-durable-dirty-retry.sh
 
-ci-check:
-	+@$(MAKE) --no-print-directory ci-host-selftests
+local-check:
+	+@$(MAKE) --no-print-directory local-host-selftests
 	+@$(MAKE) --no-print-directory kernel-budget-check
 	+@$(MAKE) --no-print-directory user-stack-check
+
+# Backward-compatible local alias. GitLab never schedules this target.
+ci-host-selftests: local-host-selftests
+
+ci-check: local-check
 
 stage-check:
 	+@$(MAKE) --no-print-directory stage-host-selftests
@@ -1105,7 +1109,7 @@ full-verify:
 		HOST_CC=$(call shell_quote,$(HOST_CC)) \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-full-verification.sh
 
-# Host evaluation contracts join ci-check; QEMU campaigns do not add remote jobs.
+# Host evaluation contracts join local-check; QEMU campaigns run locally.
 evaluation-doctor:
 	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
 		HOST_CC=$(call shell_quote,$(HOST_CC)) \

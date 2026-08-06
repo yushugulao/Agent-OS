@@ -27,7 +27,7 @@ static volatile int trunc_observer_ready;
 static volatile int trunc_started;
 static volatile int trunc_done;
 static volatile int trunc_observed;
-static volatile int offset_ready;
+static volatile int offset_ready[OFFSET_READERS];
 static volatile int offset_start;
 static volatile int offset_error;
 static int offset_fd;
@@ -276,7 +276,7 @@ static void offset_reader(void *arg)
 	int reader = (int)(long)arg;
 	char block[OFFSET_BLOCK_BYTES];
 
-	offset_ready++;
+	offset_ready[reader] = 1;
 	while (!offset_start)
 		sched_yield();
 	for (int i = 0; i < OFFSET_BLOCKS / OFFSET_READERS; i++) {
@@ -310,7 +310,7 @@ static void run_shared_offset_phase(void)
 	}
 	check(close(offset_fd) == 0, "close shared-offset writer");
 
-	/* Exceed the PUBLIC cache partition so the first competing reads block. */
+	/* Evict target blocks so competing reads exercise cold-cache behavior. */
 	pressure = open(pressure_path, O_CREATE | O_WRONLY | O_TRUNC);
 	check(pressure >= 0, "create offset cache pressure file");
 	memset(block, 0x5a, sizeof(block));
@@ -321,7 +321,8 @@ static void run_shared_offset_phase(void)
 
 	offset_fd = open(path, O_RDONLY);
 	check(offset_fd >= 0, "open shared-offset reader");
-	offset_ready = 0;
+	for (int i = 0; i < OFFSET_READERS; i++)
+		offset_ready[i] = 0;
 	offset_start = 0;
 	offset_error = 0;
 	memset(offset_tags, 0, sizeof(offset_tags));
@@ -329,8 +330,9 @@ static void run_shared_offset_phase(void)
 		tids[i] = thread_create(offset_reader, (void *)(long)i);
 		check(tids[i] >= 0, "create shared-offset reader");
 	}
-	while (offset_ready != OFFSET_READERS)
-		check(sched_yield() == 0, "start shared-offset readers");
+	for (int i = 0; i < OFFSET_READERS; i++)
+		while (!offset_ready[i])
+			check(sched_yield() == 0, "start shared-offset readers");
 	offset_start = 1;
 	for (int i = 0; i < OFFSET_READERS; i++) {
 		int status;

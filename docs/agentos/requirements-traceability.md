@@ -2,7 +2,7 @@
 
 本文按 ISO/IEC/IEEE 29148 的需求可追踪思想裁剪编写。每条需求都给出来源、实现状态、验证证据和剩余缺口。表中的 `已验证` 只描述机制曾有对应历史证据，不是对可变工作树或任意 HEAD 的发布背书；带日期或提交号的输出只能归属于该历史提交。`14607e825f06` 的三轮 18-case 校准只属于该历史提交；当前配置为 `provisional_requires_full_suite`。统一状态是“机制/静态验收完成，候选动态复验待生成”，直至同一冻结提交 C 完成全量动态验收、三轮重校准和 C→E 证据绑定。
 
-发布状态只从 append-only `evidence/releases/INDEX.md` 及其指向 bundle 的 `manifest.json` 读取。代码提交 C 先冻结，采集器在干净 C 上执行 `make full-verify`，证据提交 E 再作为 C 的直接子提交只加入 bundle 和索引行；包内 `source_commit` 绑定 C，`SELF` 绑定承载包的 E。canonical `.guest.log` 将 CRLF/CR 统一为 LF，exact-line、SHA256 和 CSV 来源均绑定该文本。完成本地 C→E 合同即可形成 E3，不依赖远端 Runner；没有可用 Runner 时 `remote_ci.status=not-attached`，只阻止同一 C 的 E4，不能把这一事实反写成“本地 E3 不可能”。
+发布状态只从 append-only `evidence/releases/INDEX.md` 及其指向 bundle 的 `manifest.json` 读取。代码提交 C 先冻结，采集器在干净 C 上执行 `make full-verify`，证据提交 E 再作为 C 的直接子提交只加入 bundle 和索引行。完成本地 C→E 合同即形成正式 E3。GitLab 只托管源码与证据，不配置 Runner；`remote_ci.status=not-attached` 是固定兼容值。
 
 ## 状态定义
 
@@ -25,7 +25,7 @@
 | G-5 | 提供综合示例场景 | 已验证 | `user/src/labdemo_ucore.c` | `labdemo_ucore: passed` |
 | G-6 | 提供设计文档和运行说明 | 已验证 | [../../README.md](../../README.md)、[design.md](design.md)、[scenario-script.md](scenario-script.md) | 本文档、[verification.md](verification.md) |
 | G-7 | 保留代表性的 uCore 基础 syscall 兼容性，同时禁止 legacy mail 绕过 workflow 隔离 | 实现完成，动态复跑待验 | `SYS_trace`；`agent_ipc` 所有的 lazy 两页 PUBLIC mailbox；同 EXEC account、endpoint generation、ACTIVE lifecycle/nonzero OPEN controller lineage 授权；Agent/跨账户/跨 scope 拒绝；copyout 后提交；teardown 先于 account release 退款 | `ch3_trace` 历史输出 `Test trace OK!`；C 对应 bundle 必须重新包含 `mail_read_failure_atomic`、`mail_endpoint_reuse_isolated`、`mail_ordinary_domain_isolation`、`mail_active_workflow_isolation`、`mail_scoped_public`、跨域拒绝和 `legacy_mail_accounting=1 alloc_delta=2 exit_delta=0` |
-| G-8 | 内核增长、模块边界和关键运行预算必须可审查并在 CI 中拒绝回退 | 已验证，保留发布缺口 | `.gitlab-ci.yml`、`ci/kernel-budgets.json`、`scripts/check-kernel-budgets.py`、`scripts/check-agent-module-boundaries.sh`、`scripts/check-kernel-stack-usage.py`、`make ci-check` | 版本化 owner/bridge/dependency/SCC 与逐模块 LOC/BSS 之外，还强制全内核 source、ELF/raw image、runtime text/data/BSS、`struct proc`、线程/boot 栈及 metadata aggregate source/text/BSS。当前数值只在 [正式证据索引](../../evidence/releases/INDEX.md) 集中记录，最终指标须由 C 对应 bundle 绑定，远端 Runner 只决定 E4 |
+| G-8 | 内核增长、模块边界和关键运行预算必须可审查并由本地门禁拒绝回退 | 已验证，保留发布缺口 | `ci/kernel-budgets.json`、`scripts/check-kernel-budgets.py`、`scripts/check-agent-module-boundaries.sh`、`scripts/check-kernel-stack-usage.py`、`make local-check` | 版本化 owner/bridge/dependency/SCC 与逐模块 LOC/BSS 之外，还强制全内核 source、ELF/raw image、runtime text/data/BSS、`struct proc`、线程/boot 栈及 metadata aggregate source/text/BSS。当前数值只在 [正式证据索引](../../evidence/releases/INDEX.md) 集中记录，最终指标须由 C 对应 bundle 绑定 |
 
 ## 内核安全与稳定性机制
 
@@ -58,7 +58,7 @@
 | S-23 | lifecycle 诊断必须 self-only、版本化且不成为 bearer credential；竞态测试不得依赖裸 PCB 或任意 PID 查询 | 已验证 | syscall 546、`agent_lifecycle_abi.h` v1、sized-prefix copyout、expected-key compare、Context/metadata runtime snapshot | teardown race 三轮输出 `lifecycle_abi_prefix=1 bad_param_no_write=1 factory_charged=1 self_only_stale=1`，并核对 stale key 与 generation advancement |
 | S-24 | audit 证据和 Agent/lifecycle/control/span/event 身份必须跨重启保持单调，安全擦除旧证据不能重置 allocator；耗尽或持久目标拒绝时必须 fail closed；scope 目标已复制不能替代精确记录持久证明 | 实现完成，待发布动态复验 | metadata 双 bank 内的 8 KiB durable section、每槽 lifecycle generation 与五组 allocator 的 exclusive-end durable lease、prepare/persist/publish admission、bootstrap-bound Recovery LIST/READ/REAP/STATUS、与 ledger 槽绑定的 exact receipt、SYSTEM dirty retry、section serial 不回绕和 retirement barrier | `test-observe-recovery-contract.py` 的 Host/mutation 与 prod/profile/UAPI/module 编译门禁通过；本轮冻结前工作树的 Observe 三启动专项输出 `receipt_durable_exact=1`、`boot3_erased=1 generation_isolated=1 stable_identity=1` 和 `parent passed`。日志未纳入 C→E bundle，故仍是冻结前动态线索；最终 E2/E3 必须由同一 C 的 `make observe-recovery-test` 原始日志和 raw-bank 校验授予 |
 
-S-16 验证的是已识别的可扩展长路径，不表示穷尽任意 syscall。S-13、S-18、S-19、S-20 的 AgentOS 实现都汇入 `resource_controller`：EXEC account 承载 process/thread/file/Agent page，STORAGE account 承载 block/inode/cache 和 BIO rate lane；`resource_domain_id` 只用于 CPU 分区。提交 `75d0dfd` 的 clean `full-verify` 是包含 16-case Agent 套件和独立三轮 teardown race 的历史 checkpoint。S-19 的 shared 560/280 是与设备根同步扣减且永不带债的机会流量门，不是额外容量；准入 account endpoint 不带债，reserved 设备端只由真实 account lease 背书带 debt。完成首笔 reservation 的有界原子请求可在后续提交形成有上界的 owner lane debt，并由生命周期 settlement 清偿；global device debt 独立于 owner 生命周期，对非保护 lane 是 gate，对 SYSTEM/CONTROL 保护 lane可跨越，并由设备根 refill 清偿。S-21 的证据也不是任意规模或 SMP 下的形式化复杂度证明；后续代码的聚合结果由 release bundle 绑定，远端 Runner 只影响 E4。
+S-16 验证的是已识别的可扩展长路径，不表示穷尽任意 syscall。S-13、S-18、S-19、S-20 的 AgentOS 实现都汇入 `resource_controller`：EXEC account 承载 process/thread/file/Agent page，STORAGE account 承载 block/inode/cache 和 BIO rate lane；`resource_domain_id` 只用于 CPU 分区。提交 `75d0dfd` 的 clean `full-verify` 是包含 16-case Agent 套件和独立三轮 teardown race 的历史 checkpoint。S-19 的 shared 560/280 是与设备根同步扣减且永不带债的机会流量门，不是额外容量；准入 account endpoint 不带债，reserved 设备端只由真实 account lease 背书带 debt。完成首笔 reservation 的有界原子请求可在后续提交形成有上界的 owner lane debt，并由生命周期 settlement 清偿；global device debt 独立于 owner 生命周期，对非保护 lane 是 gate，对 SYSTEM/CONTROL 保护 lane可跨越，并由设备根 refill 清偿。S-21 的证据也不是任意规模或 SMP 下的形式化复杂度证明；后续代码的聚合结果由 release bundle 绑定。
 
 ## 任务一：Agent 进程创建与地址空间设计
 
@@ -191,4 +191,4 @@ S-16 验证的是已识别的可扩展长路径，不表示穷尽任意 syscall�
 
 任务一至三已有增强实现；授权凭据与不可变 lifecycle key 分离，PUBLIC 降权、fork 和 exec 不再改变终止谱系。syscall 546 只提供 self-only 身份/运行状态比较，key 不是 bearer credential。进程、线程、文件、存储、缓存、I/O 与 Agent 私有页统一映射到 generation-safe EXEC/STORAGE account，CPU 公平仍由独立调度 domain 实现。`os/agent.c` 已收敛为 facade，metadata 又分为 transaction、file state、catalog、query、scan、directory、objects、actions、prefetch 与 store（含 format/I/O）。CI 的 owner/bridge/dependency 集合和 fail-closed 自测均以版本化配置/源码为准，metadata control plane 另受 source/text/BSS 聚合预算，防止横向迁移绕过增长门禁。
 
-历史 checkpoint、当前候选命令和预算数值只在 [正式证据索引](../../evidence/releases/INDEX.md) 集中记录。旧校准只能证明其绑定提交，不得向受管输入不同的候选传播 baseline、limit、samples 或 fingerprint。最终 E3/E4 只从 `evidence/releases/INDEX.md` 指向且可重验的 bundle 与远端 attestation 读取。
+历史 checkpoint、当前候选命令和预算数值只在 [正式证据索引](../../evidence/releases/INDEX.md) 集中记录。旧校准只能证明其绑定提交，不得向受管输入不同的候选传播 baseline、limit、samples 或 fingerprint。正式 E3 只从索引指向且可重验的本地 C→E bundle 读取。

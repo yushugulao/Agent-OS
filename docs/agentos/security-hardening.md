@@ -298,7 +298,7 @@ scanner 的绑定回退使用 catalog 的单一 resolver，而不是另一套全
 
 全局文件对象表进一步由 EXEC resource account 和 ordinary/reserved 水位约束。一个活跃 Agent 的 9 页 detail/attribution sidecar、6 页用户 mirror 和 6 页可信 shadow 作为一次 21 页 `RESOURCE_AGENT_STATE_PAGE` 请求原子预留、提交和退款，共 84 KiB；六项总状态预算为每进程/全局/ordinary 池/reserved 池/ordinary 域/reserved 域 `86016/11010048/8257536/2752512/5505024/688128` B。CI 另以 sidecar-only 指标观察 9 页细节结构，其全局 1152 页、ordinary/reserved 864/288 页以及单 account 576/72 页仍有效，但不再代表独立的运行时 reserve。idle 普通进程不承担这些物理页；逻辑 admission 不是总内存 OOM 下的硬页保留。
 
-每线程内核栈仍有 16 KiB 虚拟槽、4 KiB 未映射 guard 与 canary；物理页按 live thread 分配，32 MiB 只表示全部虚拟槽容量，8 MiB 才是受信/保留线程的物理池。启动/调度使用独立的 64 KiB `boot_stack`。`make kernel-stack-check` 拒绝越界线程/启动调用链，`make ci-check` 还核对 boot stack 链接跨度、栈虚拟容量、物理保留池、sidecar 动态容量和 `struct proc` 体积。
+每线程内核栈仍有 16 KiB 虚拟槽、4 KiB 未映射 guard 与 canary；物理页按 live thread 分配，32 MiB 只表示全部虚拟槽容量，8 MiB 才是受信/保留线程的物理池。启动/调度使用独立的 64 KiB `boot_stack`。`make kernel-stack-check` 拒绝越界线程/启动调用链，`make local-check` 还核对 boot stack 链接跨度、栈虚拟容量、物理保留池、sidecar 动态容量和 `struct proc` 体积。
 
 ## 9. 验证入口
 
@@ -329,14 +329,14 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 
 # 固定 profile 下的增长、PCB、栈容量和 Agent 模块所有权预算
-make ci-check
+make local-check
 ```
 
 `scripts/run-agent-tests.sh` 当前包含 18 个程序；`workflow_teardown_race_ucore` 是独立机制专项，不计入这 18 项。371.5s、126.1s 和 `13824 < 16384` 是 generation-safe lifecycle、资源控制器、统一 teardown、lazy stack 和后续模块拆分之前的历史结果。2026-07-25 的 bounded/flood-safe runner 在固定 runner 连续三轮 16/16，总 case monotonic 时间为 `261.343281873s`、`237.948978492s`、`255.370930671s`；中位 `255.370930671s` 低于当时的 `268.14s` gate。2026-07-26，checkpoint `75d0dfde716453af90d7310c6a1521968fcf7167` 又在干净环境完成过一次 `make full-verify`，墙钟 `19:45.97`，其中 Reader E2E 和独立 teardown race 三轮通过。这些均是带日期和提交号的历史事实，不自动继承给后续代码。
 
-18-case 时长门的校准状态由版本化 `ci/kernel-budgets.json` 判定。`04c1e6652324` 与 `14607e825f06` 的三轮结果都只属于各自历史提交；当前配置状态为 `provisional_requires_full_suite`，不携带旧 baseline、limit、samples 或 fingerprint。最终提交须在相同受管 profile 下完成三轮重校准后才能恢复本地时长门。历史校准包不等于当前发布验收、GitLab CI、远程 Runner 或 E4。某次发布的完整动态通过项和最终指标只由 `evidence/releases/INDEX.md` 选中的 release bundle 判定；bundle manifest 必须绑定被测代码提交 C、命令、原始/规范化日志和校验结果。INDEX 未指向完整且验证通过的 bundle 时，本文列出的其他 marker 只能解释验收合同或历史校准，不能作为当前 HEAD 已完成完整 E3 发布验收的证据；远程 Runner 是否执行同理由 bundle 的 remote attestation 字段决定。
+18-case 时长门的校准状态由版本化 `ci/kernel-budgets.json` 判定。历史校准只属于其绑定提交；最终提交须在相同受管 profile 下完成三轮重校准。发布的动态结果和指标只由 `evidence/releases/INDEX.md` 选中的本地 C→E bundle 判定；INDEX 未指向完整且验证通过的 bundle 时，历史 marker 不能作为当前 HEAD 的正式证据。`remote_ci.status` 固定为 `not-attached`。
 
-通用 QEMU runner 二进制全量 drain，并在 marker 后继续大小写不敏感地检查包括 panic 在内的预定义 failure 模式；输出洪泛、迟到 marker、普通 case 信号退出、非零退出和后置 panic 都失败。显式 checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；显式 powercut profile 只接受认证 supervisor 对稳定 QEMU leader 发出的单次 `SIGKILL`，并要求随机 nonce、PID/starttime、镜像退出码及完整后代回收证明一致。该 powercut profile 是突然 VM 终止后的重启路径，不会清空宿主页缓存，也不能表述为整机物理断电。Reader seeded-action runner 使用另一条阶段契约：clean/build 只看退出码，guest 启动后才按完整日志行识别故障，文件名含 `panic` 不触发失败。预算 checker、runner 与生产 profile validator 的 fail-closed 自测集合以源码为准，不在文档固化容易变化的数量；任一具体发布是否完成 clean `full-verify` 或远程普通/QEMU Runner，仍须查该发布的 bundle manifest，不能由工作树状态或本文叙述推断。
+通用 QEMU runner 二进制全量 drain，并在 marker 后继续大小写不敏感地检查包括 panic 在内的预定义 failure 模式；输出洪泛、迟到 marker、普通 case 信号退出、非零退出和后置 panic 都失败。显式 checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；显式 powercut profile 只接受认证 supervisor 对稳定 QEMU leader 发出的单次 `SIGKILL`，并要求随机 nonce、PID/starttime、镜像退出码及完整后代回收证明一致。该 powercut profile 是突然 VM 终止后的重启路径，不会清空宿主页缓存，也不能表述为整机物理断电。Reader seeded-action runner 使用另一条阶段契约：clean/build 只看退出码，guest 启动后才按完整日志行识别故障，文件名含 `panic` 不触发失败。预算 checker、runner 与生产 profile validator 的 fail-closed 自测集合以源码为准，不在文档固化容易变化的数量；任一具体发布是否完成 clean `full-verify`，仍须查该发布的本地 bundle manifest，不能由工作树状态或本文叙述推断。
 
 这些专项入口检查的是机制约束。`make dual-platform-run` 继续验证科研平台功能等价和 AgentOS 专属证据；profile v5 的 `make full-verify` 串联 target structure、`ci-check`、宿主机/Reader、18-case Agent、双目标、进程生命周期、线程资源域、syscall 公平性、全局文件对象表、物理页资源、metadata 恢复、观测恢复、VirtIO fault、workflow teardown race、ENOSPC 和 filesystem allocator fault 专项，并把 allocator raw-image/flush 证据作为 canonical archive 交付。未校准的 18-case 时长策略会在首个 Agent QEMU 前 fail closed。内核栈与各机制测试仍保留独立入口，便于定位失败。
 
@@ -352,5 +352,5 @@ make ci-check
 - 通用安全机制若同步到 `baseline_ucore/`，必须保持两侧行为契约一致；当前 resource controller、workflow lifecycle、统一 teardown 和 lazy stack 尚不是 baseline 的共享实现。
 - 新的可恢复资源不足路径必须返回错误并回滚，不能把普通用户可触发的条件写成 `panic()`。
 - 调整 `io_policy.h` 的 budget 或 cache floor/cap 时，必须同时保持 4 active + 8 retiring BACKGROUND 的保守静态 envelope、reserved 528/264 与 shared 560/280 分别不超过设备根、shared 每次与设备根同步扣减且永不带债、准入 account endpoint 不带债、reserved 设备端只由真实 account lease 背书带 debt，以及已接纳请求的 owner lane debt 上界与生命周期 settlement、不受 owner lifecycle 约束但由设备根 refill 清偿的 global device debt、protected aggregate envelope 和 `NBUF` 静态断言；还须复测 PUBLIC 压力、多 workflow、SYSTEM/workflow BACKGROUND、retiring 3/8、shared 排队轮转和 `disk_submit` 物理计费。
-- 修改内核或 Agent 模块边界时必须更新并运行 `make ci-check`。源码、镜像、text/data/BSS/total、PCB、legacy mail 两页 sidecar、Agent Context sidecar 与完整 Agent 状态容量、线程与 64 KiB boot stack 调用图、32 MiB 虚拟容量、8 MiB 物理保留池、owner/bridge 注册集合和模块阈值以 `ci/kernel-budgets.json` 为准；受控符号用户必须登记，SCC 硬上限不能仅改 JSON 放宽。metadata 拆分单元、IPC 及 contract headers 必须同时纳入聚合 source/text/BSS 预算，禁止靠跨文件迁移绕过 no-growth 约束。完整 18-case 套件耗时只在固定校准 runner 上作为硬门，独立 teardown race 另行验证。
+- 修改内核或 Agent 模块边界时必须更新并运行 `make local-check`。源码、镜像、text/data/BSS/total、PCB、legacy mail 两页 sidecar、Agent Context sidecar 与完整 Agent 状态容量、线程与 64 KiB boot stack 调用图、32 MiB 虚拟容量、8 MiB 物理保留池、owner/bridge 注册集合和模块阈值以 `ci/kernel-budgets.json` 为准；受控符号用户必须登记，SCC 硬上限不能仅改 JSON 放宽。metadata 拆分单元、IPC 及 contract headers 必须同时纳入聚合 source/text/BSS 预算，禁止靠跨文件迁移绕过 no-growth 约束。完整 18-case 套件耗时只在固定本地校准环境 上作为硬门，独立 teardown race 另行验证。
 - 文档不得把共享加固 baseline 描述为未修改的上游 uCore，也不得把通过结构扫描解释为完整运行验证。

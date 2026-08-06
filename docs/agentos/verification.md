@@ -2,7 +2,7 @@
 
 本文档说明 AgentOS-uCore 专项测试如何运行、每个测试覆盖哪些能力、性能数据如何解读。发布结果只从 `evidence/releases/INDEX.md` 指向的冻结 bundle 读取，不在说明文档中复制历史日志。
 
-发布状态不绑定可变工作树或本文的“最近一次”文字，而绑定 `evidence/releases/INDEX.md` 与对应 release bundle 的 `manifest.json`。代码提交 C 必须先冻结；采集器在干净 C 上执行唯一一次 `make full-verify`，随后证据提交 E 作为 C 的直接子提交，只新增该 bundle 并精确追加索引。包内 `source_commit` 仍指向 C，承载提交由 `SELF` 解析为 E。C 的本地完整验收和可校验 bundle 可形成 E3，不依赖远端 Runner；没有可用 Runner 时 `remote_ci.status` 必须保持 `not-attached`，只阻止同一 C 的远端 attestation 等级 E4。下文带日期、提交号或旧数值的段落都是历史记录，不能外推到未被 bundle 绑定的代码。
+发布状态绑定 `evidence/releases/INDEX.md` 与对应 release bundle 的 `manifest.json`。代码提交 C 先冻结，采集器在干净 C 上执行唯一一次 `make full-verify`，证据提交 E 作为 C 的直接子提交，只新增 bundle 并追加索引。包内 `source_commit` 指向 C，`SELF` 解析为 E。本地完整验收和 C→E bundle 是唯一正式交付链。GitLab 只托管源码与证据，不配置 Runner；`remote_ci.status` 固定为 `not-attached`。下文历史记录不能外推到未被 bundle 绑定的代码。
 
 ## 验证组织方式
 
@@ -11,7 +11,7 @@ AgentOS-uCore 的验证分五层：
 | 层次 | 入口 | 作用 |
 | --- | --- | --- |
 | 构建检查 | `make agentos-user`、`make agentos-build`、`make kernel-stack-check` | 确认内核、用户态 ABI 和文件系统镜像能从当前源码构建。 |
-| 增长与边界门 | `make ci-check` | 固定 profile 下检查源码、镜像、运行段、PCB、栈深/容量、完整 Agent 状态、版本化 owner/bridge 集合及 metadata 聚合 source/text/BSS；不启动 QEMU。 |
+| 增长与边界门 | `make local-check` | 固定 profile 下检查源码、镜像、运行段、PCB、栈深/容量、完整 Agent 状态、版本化 owner/bridge 集合及 metadata 聚合 source/text/BSS；不启动 QEMU。 |
 | AgentOS 专项测试 | `make agentos-test` 或 `bash scripts/run-agent-tests.sh` | 在 QEMU 中逐项运行 Agent 功能、权限和用户输入检查。 |
 | 资源与持久化复测 | `make fs-enospc-test`、`make fs-allocator-fault-test`、`make proc-reap-test`、`make thread-resource-test`、`make file-resource-test`、`make physical-resource-test`、`make metadata-recovery-test`、`make observe-recovery-test`、`make virtio-disk-test`、`make syscall-fairness-test`、`make workflow-teardown-race-test` | 动态验证存储/物理页资源边界、统一 teardown、metadata/观测重启恢复、VirtIO 故障矩阵、文件系统分配事务一致性和跨资源竞态。 |
 | 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标负载；profile v5 按固定顺序串联 Host/Reader、18-case Agent、双目标及十一类机制专项。 |
@@ -47,14 +47,14 @@ Windows 侧检查入口：
 ```bash
 make agentos-user TOOLPREFIX=riscv64-linux-gnu-
 make agentos-build TOOLPREFIX=riscv64-linux-gnu-
-make ci-check
+make local-check
 ```
 
-`make ci-check` 使用 `ci/kernel-budgets.json` 的 canonical toolchain/profile。静态指标包括内核 LOC、stripped ELF/raw、text/data/BSS/total、`struct proc`、Context detail sidecar 与完整 21 页 Agent 状态的单实例/全局/ordinary/reserved/account 容量、线程调用图栈深、64 KiB boot stack 的链接跨度与启动调用图、32 MiB 虚拟栈容量和 8 MiB 受信/保留物理栈池。owner 模块、integration bridge、允许依赖和 SCC 边界都由版本化注册集合给出，不在文档复制固定数量。metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还共同受 `metadata_control_plane` 聚合 source/text/BSS 预算；source 只保留固定接口开销，loaded text 与 BSS 维持 no-growth，防止跨文件迁移。受控 integration graph 不包含只通过普通 uCore 符号形成的依赖，不能解释为完整 uCore 调用图。
+`make local-check` 使用 `ci/kernel-budgets.json` 的 canonical toolchain/profile。静态指标包括内核 LOC、stripped ELF/raw、text/data/BSS/total、`struct proc`、Context detail sidecar 与完整 21 页 Agent 状态的单实例/全局/ordinary/reserved/account 容量、线程调用图栈深、64 KiB boot stack 的链接跨度与启动调用图、32 MiB 虚拟栈容量和 8 MiB 受信/保留物理栈池。owner 模块、integration bridge、允许依赖和 SCC 边界都由版本化注册集合给出，不在文档复制固定数量。metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还共同受 `metadata_control_plane` 聚合 source/text/BSS 预算；source 只保留固定接口开销，loaded text 与 BSS 维持 no-growth，防止跨文件迁移。受控 integration graph 不包含只通过普通 uCore 符号形成的依赖，不能解释为完整 uCore 调用图。 `make ci-check` 仅作兼容别名。
 
 同一 Host 门还执行 metadata canonical genesis raw-image 合同、catalog capacity、catalog rollback fence 模型/变异、metadata boot reprobe 和 Agent wait 原子交付接线检查。catalog capacity 模型要求 512 总量、SYSTEM 64、ordinary 448、最多 4 个 ACTIVE/CLOSING/RETIRING workflow 各固定 112，其中 live AUTOSCAN 新增长度最多 96 条并保留 16 条显式 metadata；RETIRING 的目录未回收前继续占准入槽。workflow inode 账户改用独立 STORAGE policy domain limit，每 scope 硬下限 320、当前镜像约 342，不再以 catalog 112 为上限。所有 `agent_meta_slot/flags/version` 更新统一经 `agent_file_state_set_index()` 校验、`iupdate()` 并在失败时恢复旧值；write/sync/truncate/delete 统一经 `agent_fs_apply_inode_event()`，create 只在 VFS 发布成功后进入目录协调。checker 还验证 catalog 满后 VFS create 与 scope 隔离不降级、持久 deferred sidecar 抑制重复扫描，以及释放槽位后的重建、写回和强制 reload。v7 load 以表示、总表、SYSTEM/ordinary、每 scope 112、lifecycle 和唯一键为稳定合同，完整接受同版本旧快照中的 97 至 112 条 AUTOSCAN；113 条仍是损坏。加载后的超额 scope 只能保持或减少 AUTOSCAN，新增或 explicit-to-AUTOSCAN 在 96 条及以上均拒绝，降到 95 后才重新准入；失败事务的 receipt restore 只受硬边界、唯一键和 exact post-state 约束。合同拒绝重新引入跨 scope 借用、全局 union/max、快照软策略迁移状态、catalog resource kind 或 metadata envelope 账本。scoped snapshot 的 `(lifecycle_id,generation)` 绑定以及 `NO_SPACE`、重试、`CONFLICT`、`INDETERMINATE` 的错误传播保持不变；具体 mutation 数由当前候选的 checker 输出记录。genesis 合同从真实 mkfs 镜像独立解析两份完整预分配 bank，复核 canonical hash、VFS label checksum、bitmap/qmap、SYSTEM owner、零尾部和跨 bank 无 alias，并拒绝双 `ABSENT`、双 `UNCOMMITTED`、双损坏及混合状态。rollback fence checker 删除 owner guard、post-state binding、容量/唯一键复核或清理路径时必须失败；wait checker 删除 reserve/cookie/abort/commit 顺序时必须失败。这些均为 E1，不能替代 reserve 后 copyout 失效或持久化 checkpoint 并发的 Guest 故障注入。`WAIT_ATOMIC_TEST_PROFILE` 的动态用例与 Context 同步故障 profile 在单独构建中运行，不属于普通 18-case 套件，也不计入其 timing file。
 
-Agent suite duration 只累计各 QEMU case 的 monotonic 运行时间，不包含编译。固定 runner 上 `bounded-runner-final-01/02/03` 的历史 16/16，以及 `31d4ddf53695`、`814021ab9dac` 和 `04c1e6652324` 的三轮 18/18 都只证明各自源码。`14607e825f06` 的三轮 18/18 总时长为 `278.6982115s`、`294.053138s`、`296.7989493s`，中位基线 `294.053138s`，上限 `308.756s`；71 文件校准包包含 57 份执行 attestation，保存在 `evidence/calibrations/14607e825f06/`。该包是历史未签名本地校准证据，不是当前 release bundle、GitLab CI 或 E4 attestation。当前配置为 `provisional_requires_full_suite`，最终提交完成三轮重校准后才能重新建立本地时长门。
+Agent suite duration 只累计各 QEMU case 的 monotonic 运行时间，不包含编译。固定 runner 上 `bounded-runner-final-01/02/03` 的历史 16/16，以及 `31d4ddf53695`、`814021ab9dac` 和 `04c1e6652324` 的三轮 18/18 都只证明各自源码。`14607e825f06` 的三轮 18/18 总时长为 `278.6982115s`、`294.053138s`、`296.7989493s`，中位基线 `294.053138s`，上限 `308.756s`；71 文件校准包包含 57 份执行 attestation，保存在 `evidence/calibrations/14607e825f06/`。该包是历史未签名本地校准证据，不是当前 release bundle或第三方执行证明。当前配置为 `provisional_requires_full_suite`，最终提交完成三轮重校准后才能重新建立本地时长门。
 
 通用 QEMU runner 以字节流读取并在进程退出前后全量 drain，不依赖文本行边界；包括 panic 在内的预定义 failure 模式按大小写不敏感方式检查，marker 后的剩余输出也不会跳过。控制台仍可转发原始字节，落盘的 `.guest.log` 则把 CRLF、孤立 CR 统一成 LF；exact-line marker、SHA256、CSV 行号和 release manifest 一律绑定这份 canonical LF transcript。监控循环每轮最多读取一个 64 KiB 块，随后重新检查 case timeout 和 marker grace，持续 stdout 洪泛不能饿死 deadline。每 case 最多接受 16 MiB 总输出，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；总量/记录越界 fail closed，诊断副本截断。case deadline 优先于完成判断，并在 scanner feed 和 runner notice 后重新核对，迟到 marker 不能通过。普通 case 必须自然 `rc=0`；stdout/stderr pipe 先到 EOF 时仍在原 deadline 内等待真实退出状态。checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`。powercut profile 另由专用 supervisor 隔离被测树，以随机 nonce 和稳定 PID/starttime 认证控制请求；它只在向 QEMU leader 发送 `SIGKILL`、回收跨 `setsid()` 的全部后代并取得一致镜像退出码后提交完成证明。supervisor/leader 被 workload 提前杀死、控制通道 EOF、残留后代、超时、非零退出或后置 panic 均失败。该 profile 建模突然 VM 终止，`SIGKILL` 不清空宿主页缓存，不能等同于整机物理断电。预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，不固化易过时数量。
 
@@ -169,7 +169,7 @@ make fs-allocator-fault-test TOOLPREFIX=riscv64-linux-gnu-
 
 `physical-resource` 在 tiny policy 下动态覆盖普通域隔离、系统保留、reserved promise 生命周期/公平、teardown 退款；仅 policy 非法组合与生产对象不得包含 test hook 两项使用编译期负向门。`metadata-recovery` 的每个新镜像先由 mkfs 安装并由 Host parser 验证 canonical 双 bank genesis，再对 primary/mirror 各八个 COW phase 动态确认 baseline、显式 arm 下一代事务并受控中止。powercut runner 只在完整 phase marker 后强制中止；case 随后还必须由 host 日志验证器确认 quiet baseline、armed/bound/fire/phase 的唯一有序链，以及一致的 scope、generation、token、job、bank 与 phase。normal kernel 启动前，host raw parser 要求至少一份完整有效 bank、无同代异 hash，并按 payload/header 发布边界只接受完整 baseline 或 updated。恢复后两 bank 必须相同且旧 scope 已清理。启动重探分别对全部 bank 和较新 bank 注入三轮 `BUSY/EIO/INTERRUPTED`，要求 fail-closed、动态 `retries=N`、连续 deferred attempt 与同启动恢复；超过 background burst 的 32-record bank 还对 `ABSENT/UNCOMMITTED/CORRUPT` peer 分别复测可恢复 cursor、terminal cache、selected confirm、catalog plan 和最终副本一致性，并在 seed Guest 内要求前台 live reload 单次完成。单次暂态 header-flush EIO 继续要求显式不确定结果和副本修复。`observe-recovery` 先用 host probe 直接编译生产 durable owner，动态覆盖 SYSTEM sink=0、commit 后重新通知失败再成功、lifecycle 槽之外的系统保留 dirty 位，以及 section serial 耗尽时保留最后 pending 状态并拒绝新分配；容量状态机 probe 直接包含生产 `agent_observe_capacity.c`，动态覆盖三个普通槽和一个 Recovery 保留槽、sticky 槽类别、同 workflow admission/abort、跨 scope 隔离、serial/target/source-generation token 绑定、DONE admission race、REAP response 丢失后的同 token 重发、STATUS delivery failure 保留、scope/generation cookie 与单次消费、授权 reload 推进，以及同身份恢复幂等与冲突身份 fail closed。对应 production validator mutation 必须能拒绝弱 token、恢复 token 缺 generation、类别升级、admission 清除 DONE、reload 停滞、冲突恢复、scope/generation cookie 绕过、copyout 前消费和已擦除 scope lookup 先于 token 重发。第一启动在 audit/span/event/control/agent 和一个空闲 lifecycle 槽完成分配后的首个 kernel marker 立即 `SIGKILL`，且不允许先发生后续 audit/checkpoint。下一启动从同一镜像分配 successor，Host 必须逐字段证明五组 ID 严格增大、同一 lifecycle 槽 generation 严格增大；之后再完成 checkpoint、reap 双副本确认和最终擦除三阶段。receipt 回归要求初始 `PENDING` 明确不是证据，伪 id 为 `STALE`，当前 lifecycle 的 exact entry 经 active durable section 重读后才为 `DURABLE`，在持久前挤出 checkpoint 窗口的 entry 即使 scope target 已复制也必须为 `FAILED`；普通进程、Recovery 与 teardown 后旧 lifecycle 都不能查询成功。最后一阶段使用只存在于测试 profile 的注入点耗尽 event ID，动态断言 IPC 返回 `NO_SPACE`、队列长度不变且生产对象不含该 hook；timeline profile 通过真实 publish owner 连续推进两次 epoch，独立 exact marker 必须证明第一次触发 final retry、第二次在到期边界被有界 timeout 截止；并发 profile 还建立不同 filter/deadline 的两个 waiter，要求一次 Context 记录只定向唤醒匹配线程、另一线程独立超时且退出后 sidecar 全清。`virtio-disk` 动态核对 lost IRQ、delayed progress、descriptor pressure、设备 status error、flush-disabled、timeout reset 和 stuck reset 的有序请求 identity/tick/result。
 
-checkpoint runner 的单次 `SIGTERM` 只发生在完整 marker 后，用来建立受控重启边界；metadata 与 observation powercut runner 则使用同一个认证 supervisor 首次发送 `SIGKILL`。metadata case 在恢复前保存 raw-bank 解析结果；observation case 在 boot2 启动前先由独立 Host verifier 解析原始 uCore 镜像中的双 bank、durable arena 和 observation section，复算所有格式与哈希层，并把 scope、lifecycle generation、agent 和 receipt 身份精确绑定到 boot1 marker，恢复后再比较 cut/successor 身份 marker。它们证明进程级突然中止边界，不声称复现整机物理断电。profile v5 与 GitLab 分别保存每项 runner stdout 和逐次 canonical LF Guest 日志的合并产物，缺 Guest 日志即失败；allocator fault 还必须保存通过同一 verifier 复验的 `fs-allocator-evidence.tar`。
+checkpoint runner 的单次 `SIGTERM` 只发生在完整 marker 后，用来建立受控重启边界；metadata 与 observation powercut runner 则使用同一个认证 supervisor 首次发送 `SIGKILL`。metadata case 在恢复前保存 raw-bank 解析结果；observation case 在 boot2 启动前先由独立 Host verifier 解析原始 uCore 镜像中的双 bank、durable arena 和 observation section，复算所有格式与哈希层，并把 scope、lifecycle generation、agent 和 receipt 身份精确绑定到 boot1 marker，恢复后再比较 cut/successor 身份 marker。它们证明进程级突然中止边界，不声称复现整机物理断电。profile v5 保存每项 runner stdout 和逐次 canonical LF Guest 日志的合并产物，缺 Guest 日志即失败；allocator fault 还必须保存通过同一 verifier 复验的 `fs-allocator-evidence.tar`。
 
 filesystem allocator fault profile 由每个 case 的实际 ELF 与 flat binary 配对构造镜像，mkfs 会复算 RX/RW 分段和 W^X 边界；缺失、错位或内容不一致会在 Guest 启动前 fail closed。三阶段 raw-image verifier 只允许目标 inode/dirent/bitmap/qmap、阶段 receipt 和固定映射的 metadata COW 数据区变化；metadata bank 的 inode、间接表和 owner map 仍必须逐字节稳定。被允许推进的双 bank 还会逐阶段复算 header、durable arena、record 和 payload hash，要求至少一份有效副本、同代不得分叉、双有效代数相同或相邻且跨阶段不得回退，避免把合法观测日志推进误报为 allocator 越界，也避免用宽泛掩码隐藏私有 journal 损坏。
 
@@ -180,7 +180,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`make full-verify` 当前先执行 `agent-test-policy`；provisional 在任何 profile/QEMU 步骤前 fail closed。校准有效后，profile v5 依次串联结构检查、`make ci-check`、Host/Reader、独立 Context-sync/WAIT_ATOMIC prelude、18-case Agent、双目标、proc、syscall、file、thread、physical、metadata recovery、observation recovery、VirtIO、workflow teardown race、ENOSPC 和 filesystem allocator fault。GitLab 保留原机制 job，并把 physical、metadata recovery、observation recovery、VirtIO、filesystem allocator fault 拆成五个独立、同一 `resource_group` 串行的 QEMU job；metadata 的 45 次启动使用独立 `60m` job，allocator fault 使用独立 `45m` job 并交付 canonical archive。是否通过必须以 C 对应 release bundle 的完整日志为准。
+`make full-verify` 先执行 `agent-test-policy`；校准有效后，以资源自适应多核策略串联结构检查、`make local-check`、Host/Reader、Agent、双目标及各机制回归。每项 runner stdout、canonical Guest 日志和 allocator archive 都进入同一 C 对应的 release bundle。
 
 ## 覆盖关系
 
@@ -253,14 +253,14 @@ results/latest/
 
 ## 发布判定与历史状态
 
-发布判定必须区分冻结 checkpoint、代码提交 C、证据提交 E 和远端 attestation：
+发布判定区分冻结 checkpoint、代码提交 C 和证据提交 E：
 
-- `13824/16384`、`371.5s`、`126.1s`、曾经的 `sizeof(struct proc)=25640/25936` B 及相邻 H-17 模块体积都是历史快照，不是待发布 C 的最终指标；最终源码、镜像、运行段、`struct proc`、栈和 metadata 聚合数值由 C 上的 `make ci-check` 原始日志、包内 `metrics/measurements.csv` 与版本化 JSON 共同绑定。schema v8 固定收集 `metadata_control_plane` 的 source lines/source bytes/loaded text/BSS，并在离线验证时从严格日志块和配置重算；
+- `13824/16384`、`371.5s`、`126.1s`、曾经的 `sizeof(struct proc)=25640/25936` B 及相邻 H-17 模块体积都是历史快照，不是待发布 C 的最终指标；最终源码、镜像、运行段、`struct proc`、栈和 metadata 聚合数值由 C 上的 `make local-check` 原始日志、包内 `metrics/measurements.csv` 与版本化 JSON 共同绑定。schema v8 固定收集 `metadata_control_plane` 的 source lines/source bytes/loaded text/BSS，并在离线验证时从严格日志块和配置重算；
 - 完整 Agent 状态的机制口径仍是每 Agent 21 页/`86016` B 原子计费，legacy mail 两页 sidecar 按需另计；这类固定布局事实不能替代发布时的全局容量实测；
 - `31d4ddf53695`、`814021ab9dac` 的三轮 18-case duration 和更早 16-case 结果都只作各自源码的历史记录；任何新候选都不得复用不匹配的 fingerprint、baseline、limit 或 samples，当前门禁结果见 [正式证据索引](../../evidence/releases/INDEX.md)；
 - 2026-07-26 的 `75d0dfde716453af90d7310c6a1521968fcf7167` 曾在 clean 环境完成一次旧 profile `make full-verify`，墙钟 `19:45.97`；`14a9450` 后也有具名定向复测。这些都是明确提交上的 checkpoint，不证明其他 HEAD；
 - profile v5 已把 physical、metadata recovery、observation recovery、VirtIO 和 filesystem allocator fault runner 纳入本地聚合。是否实际通过由 [正式证据索引](../../evidence/releases/INDEX.md) 的候选记录和最终 `INDEX.md` 指向的 C/E bundle 分级判定；
-- 干净 C 的完整本地 bundle 经提交 E 绑定后可达到 E3。远程必选集合仍是同一 C 的 1 个 Host-class 和 8 个 QEMU-class job；没有可用 Runner 时 `remote_ci.status=not-attached`，仅 E4 不可用，不否定已校验的本地 E3。
+- 干净 C 的完整本地 bundle 经提交 E 绑定后形成正式 E3；`remote_ci.status=not-attached` 是固定兼容值。
 
 详细命令、关键输出和覆盖边界见 [正式证据索引](../../evidence/releases/INDEX.md)。
 

@@ -971,26 +971,23 @@ class SourceClosureContractTest(unittest.TestCase):
             (repository / "Makefile").read_text(encoding="utf-8"),
         )
         self.assertIn(
-            "/bin/bash --noprofile --norc -p scripts/run-ci-mechanism.sh fs-allocator-fault",
-            (repository / ".gitlab-ci.yml").read_text(encoding="utf-8"),
+            "runner_shell=(/bin/bash --noprofile --norc -p)",
+            (repository / "scripts/run-full-verification.sh").read_text(
+                encoding="utf-8"
+            ),
         )
-        for relative in (
-            "scripts/run-ci-mechanism.sh",
-            "scripts/run-full-verification.sh",
-        ):
-            self.assertIn(
-                "runner_shell=(/bin/bash --noprofile --norc -p)",
-                (repository / relative).read_text(encoding="utf-8"),
-            )
 
     def test_source_inventory_keeps_metadata_and_observation_tcb(self) -> None:
         required = {
             "agent_observe_test_phase_abi.h",
+            "agent_performance_abi.h",
             "nfs/fs.h",
             "nfs/types.h",
             "os/agent_durable_section.c",
             "os/agent_identity_lease.c",
             "os/agent_metadata_disk.h",
+            "os/agent_metadata_journal.c",
+            "os/agent_metadata_journal.h",
             "os/agent_metadata_probe.c",
             "os/agent_metadata_probe.h",
             "os/agent_metadata_recovery.c",
@@ -1009,11 +1006,19 @@ class SourceClosureContractTest(unittest.TestCase):
             "os/agent_observe_recovery_store.h",
             "os/agent_observe_store.c",
             "os/agent_observe_store.h",
+            "os/fs_epoch.c",
+            "os/fs_epoch.h",
+            "os/open_file_io_lease.c",
+            "os/open_file_io_lease.h",
+            "os/performance_stats.c",
+            "os/performance_stats.h",
             "os/workflow_lifecycle.c",
             "os/workflow_lifecycle.h",
             "user/include/agent_observe_test_phase_abi.h",
             "user/include/fs_allocator_test_abi.h",
+            "user/include/labdemo_workload.h",
             "host_tools/agent_metadata_disk_format.py",
+            "host_tools/agent_metadata_journal.py",
             "host_tools/agent_observe_disk_acceptance.py",
             "host_tools/plain_ucore_fs_extract.py",
         }

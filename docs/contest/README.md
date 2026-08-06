@@ -45,7 +45,7 @@ make contest-demo-check
 
 ```bash
 make target-readiness
-make ci-check
+make local-check
 AGENT_TEST_DURATION_PROFILE=none make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 

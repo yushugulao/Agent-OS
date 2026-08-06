@@ -138,7 +138,7 @@ evidence_step_begin
 echo "[full-verify] kernel growth budgets"
 (
 	cd "${ROOT_DIR}"
-	make ci-check \
+	make local-check \
 		TOOLPREFIX="${TOOLPREFIX}" \
 		PYTHON_BIN="${PYTHON_BIN}" \
 		LOG=warn \

@@ -1575,12 +1575,6 @@
       "blocking_semantics_ucore"
     ],
     "calibration_status": "provisional_requires_full_suite",
-    "runner_tag": "agentos-qemu-calibrated",
-    "runner_profile": {
-      "cpu": "ordinary GitLab Runner; not a local timing authority",
-      "virtualization": "Ubuntu 26.04; QEMU TCG",
-      "qemu_version": "10.2.1"
-    },
     "local_calibration_profile": {
       "schema_version": 1,
       "profile_id": "local-e3-msys2-xpack-qemu11-v1",

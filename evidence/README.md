@@ -15,9 +15,9 @@ C..E 只新增该包普通文件并精确追加 INDEX。后续 D 只允许修改
 [要求追踪表](../docs/agentos/requirements-traceability.md)和
 [验证说明](../docs/agentos/verification.md)。代码提交 C 本身
 不得预置声称由 C 生成的发布包；实际发布状态以 append-only `releases/INDEX.md` 和各包内
-manifest 为准。通过 C→E committed delivery 合同及完整离线复验的本地包可以独立达到 E3，
-不依赖远程 Runner；没有可用
-Runner 时，包内必须保持 `remote_ci.status=not-attached`，这只阻塞 E4，不得把本地验证写成 E4。
+manifest 为准。通过 C→E committed delivery 合同及完整离线复验的本地包是唯一
+正式交付。GitLab 只托管源码和已提交证据，不配置 Runner；包内兼容字段
+`remote_ci.status` 固定为 `not-attached`。
 
 ## 评价包存储合同
 
@@ -42,8 +42,7 @@ formal 评价包携带版本化 `measurement-source-receipt.json` 和策略清�
 并在 portable 复验时重放微基准、任务六源码合同和评价控制面清单；committed verifier
 再要求 receipt、快照和源码提交 C 中相应 Git blob 一致。formal run id 固定为
 `formal-<C 的完整 40 位提交号>`，challenge 和执行顺序由 C 确定性派生；同一输出根保留
-失败目录且拒绝覆盖。本地机制不冒充可信远端 Runner，也不声称能证明其他 clone 从未
-执行或丢弃一次尝试。题面必做的 Task 4 性能门由 suite 的
+失败目录且拒绝覆盖。本地机制不声称能证明操作者或其他 clone 的诚实性。题面必做的 Task 4 性能门由 suite 的
 `competition_claims.task4` 显式绑定到 `file_query_path_index`：它必须有完整有效数据，
 claim 可以诚实地是 `supported` 或 `not_supported`，但 `unavailable`、`failed` 或缺失状态
 不能发布为 formal 证据。`file_query_table_ablation` 只作机制消融，不能替代这项逐路径对照。
@@ -51,7 +50,7 @@ claim 可以诚实地是 `supported` 或 `not_supported`，但 `unavailable`、`
 
 ## 信任边界
 
-默认产物只是绑定已提交 Git 对象的本地验收包，不声称已经过远程 CI。采集器只接受干净
+默认产物是绑定已提交 Git 对象的本地验收包。采集器只接受干净
 工作区，在 detached `HEAD` worktree 中执行唯一生产入口 `make full-verify`；它不试图防御
 已经控制本机、Git 配置或工具链的攻击者。各测试 runner 继续负责 Guest 故障识别、完整行
 成功标记和 profile 验证；采集和离线复验还会通过共享语义注册表重放同一批日志 validator，
@@ -73,22 +72,8 @@ schema v8 的 `verification-summary.json`。summary 内的步骤契约使用规�
 离线验证不依赖未交付的临时文件。summary 不存在就没有 ready 证据；发布失败只会留下
 旁路 `.failed` 诊断目录，不会留下目标 release 目录。
 
-远程 CI 是独立、可选的 provenance。必选集合恰好是 1 个 Host-class job
-`kernel-budgets` 和 8 个 QEMU-class jobs：Reader E2E、Agent suite、组合机制回归、physical、
-metadata recovery、observation recovery、VirtIO 和 filesystem allocator fault。每个 job 在
-受控 tag 上完成目标命令后，从与 `CI_COMMIT_SHA` 一致且 tracked 文件干净的 checkout 生成
-canonical `remote-ci-attestation.json`；attestation 绑定 project/pipeline/job、commit/ref、
-runner id/tag、来源合同、精确 artifact 清单及哈希，并向 trace 输出唯一完整的摘要 marker。
-
-`bind-remote-ci` 通过 GitLab API 现场读取同一 C 的 project、最终 `main` push pipeline、九个
-job/runner、trace 和 artifact。下载端把 artifact ZIP 当作不可信输入：拒绝路径逃逸、重复路径、
-symlink/特殊文件、加密或不支持的压缩及超出数量、大小、展开量和压缩比预算的成员；随后要求
-唯一 trace marker 绑定 canonical attestation，attestation 身份与 API 身份逐字段一致，清单与
-逐字节 SHA256 一致，并在本地同一 C checkout 上再次执行 job 语义验证。QEMU job 的投影复用
-schema v8 发布包的共享语义注册表；Host job 复验其精确清单和具名预算完成标记。
-
-组合包的 manifest 仍只标为 `provenance-attached`，不声称 GitLab provider 的密码学签名、
-artifact 永久不可变或对已控制 Runner 的防护；未绑定的本地包固定标为 `not-attached`。
+GitLab 不执行验收、不产生 pipeline 证明或第三方签名。正式信任链止于本地干净 C 上的
+运行日志、内容寻址包、离线语义复验与 C→E Git 交付关系。
 
 ## 采集与验证
 
@@ -111,7 +96,7 @@ python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py 
 ```
 
 当前校准状态若仍为 `provisional_requires_full_suite`，`local-e3` 必须在 QEMU 前 fail closed，
-不得借用历史 baseline/limit。普通 Linux、WSL 和普通 Runner 应显式选择
+不得借用历史 baseline/limit。普通 Linux 或 WSL 本地环境应显式选择
 `--agent-test-duration-profile none`；它仍保存完整 18-case、语义、Guest 日志和 timing 行清单，
 但 manifest 中的本地 duration baseline/limit/ratio 明确为不适用，不构成本地 E3 时长证明。
 
@@ -131,14 +116,13 @@ worktree 上串行执行三轮完整 18-case。样本为 `287.9945528s`、`283.0
 `52c5a80d5fc5e3c230922e1cbbd6fc3522cdabe3dfac443f71e4a4c429fbc788`，受管源码指纹为
 `58bc32576b47f776ec49325b71bb7c5c04e1c8c6a8ccd44a446becee57bf458d`。timing 从 commit/tree、随机 nonce、可执行文件身份、
 镜像/Guest 日志哈希、真实 monotonic 区间和退出结果绑定的 attestations 重建。校准包只标记为未签名本地 E3 复现证据，
-不是 release bundle，更不是 GitLab CI 或 E4 attestation；它证明包内字节可重放和来源绑定，不能
+不是 release bundle，也不是第三方执行证明；它证明包内字节可重放和来源绑定，不能
 证明掌控本机 checkout、工具与输出的操作者诚实。production collector 没有公式/fixture 通道，
 测试 fixture 也不得进入正式证据。采集会逐 blob 核对 clean detached worktree，并严格匹配独立的
 `local-e3-msys2-xpack-qemu11-v1` 工具与主机 profile；更换 case、提交、硬件、虚拟化层、QEMU
 或工具链可执行文件后必须重新校准。当前预算配置为 `provisional_requires_full_suite`，不复用该历史包的
 baseline、limit、samples 或源码指纹；最终冻结提交必须重新完成三轮完整校准。`ef0f77edee83`、`814021ab9dac`
-等旧包也只保留为历史记录。Ubuntu/QEMU 10.2.1 GitLab job 只交付另一 profile 的完整
-18-case 语义与原始日志，不适用本地 wall-time 阈值。
+等旧包也只保留为历史记录。
 
 离线验证文件集合、引用和 SHA256：
 
@@ -162,18 +146,6 @@ python3 -I -S scripts/trusted-python-entry.py \
 格式执行严格字段与 Git 关系校验。浮点、布尔、字符串版本以及未发布版本一律拒绝，避免生产
 入口和复验入口再次发生版本漂移。
 
-远程 CI 完成后，现场抓取并绑定到一个新目录，不改写本地原包，也不保存 token：
-
-```bash
-python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py \
-  bind-remote-ci \
-  --bundle evidence/releases/<local-bundle> \
-  --output evidence/releases/<combined-bundle> \
-  --gitlab-url https://gitlab.example \
-  --project-id <project-id> --pipeline-id <pipeline-id> \
-  --token-file /secure/path/gitlab-token.txt --contract-root <clean-checkout-of-C>
-```
-
 无 QEMU 自测入口：
 
 ```bash
@@ -183,7 +155,7 @@ make evidence-capture-selftest
 Agent suite 的迟发故障观察窗口固定为 `2s`；proc、syscall fairness、file、thread、
 physical page、observation recovery、VirtIO fault、workflow teardown 和 ENOSPC 等自然完成的
 机制回归使用 `5s` 观察窗口；metadata powercut 在完整 marker 后立即执行信号合约，grace
-固定为 `0s`。普通执行、证据执行和 GitLab QEMU job 对同一 profile 使用相同设置。
+固定为 `0s`。普通执行和证据执行对同一 profile 使用相同设置。
 metadata recovery 的完整 suite 计划执行 45 次 Guest 启动：primary/mirror 各八个 COW phase 的
 powercut/recovery 配对、authority 基线、双目标 `BUSY/EIO/INTERRUPTED` 同启动重探、
 header-flush EIO，以及超过 background burst 的 32-record bank 在三类 terminal peer 下的
@@ -243,8 +215,5 @@ powercut 是认证 supervisor 以 `SIGKILL` 突然终止 VM 的模型。两者�
 自动换行转换破坏证据包内逐字节 SHA256。
 
 E3 由 `releases/INDEX.md` 的有效记录、对应包内 manifest、C→E committed delivery 验证及
-本地离线语义复验共同决定；它不要求远程 Runner。E4 必须在此基础上，让上述 1 个 Host-class
-和 8 个 QEMU-class job 在同一 C
-上使用规定 tag 全部成功，并交付可通过 API 身份、trace marker、artifact attestation、安全 ZIP
-和离线语义复验的完整材料。没有可用 Runner 时，manifest 的
-`remote_ci.status=not-attached` 只表示 E4 未成立，不能写成“远程 CI 已通过”，也不否定 E3。
+本地离线语义复验共同决定。这是仓库的最高且唯一正式证据等级；
+`remote_ci.status=not-attached` 是固定的兼容值，不表示存在待完成的远程升级。

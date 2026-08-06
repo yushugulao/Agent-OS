@@ -581,10 +581,25 @@ printf '%s\n' "${core_tick}" | grep -q -F 'agent_observe_tick_proc(p, now)' ||
 # Resource ownership survives credential-dropping exec. VFS scope controls
 # access only; the immutable lifecycle key remains the accounting principal.
 bio_source="${ROOT_DIR}/os/bio.c"
-io_owner="$(sed -n '/^static uint io_owner_from_proc(/,/^}/p' \
+bio_header="${ROOT_DIR}/os/bio.h"
+if [ "$(grep -c -x -F 'uint bio_process_owner(const struct proc *p)' \
+	"${bio_source}" || true)" -ne 1 ] || \
+	! grep -q -x -F 'uint bio_process_owner(const struct proc *);' \
+		"${bio_header}"; then
+	fail "I/O lifecycle owner API is not public or has drifted"
+fi
+if grep -n -E '(^|[^A-Za-z0-9_])io_owner_from_proc([^A-Za-z0-9_]|$)|^[[:space:]]*static[[:space:]]+uint[[:space:]]+bio_process_owner([^A-Za-z0-9_]|$)' \
+	"${bio_source}" "${bio_header}" >"${TMP_FILE}"; then
+	fail "I/O ownership restored a private credential-derived helper"
+fi
+: >"${TMP_FILE}"
+io_owner="$(sed -n \
+	'/^uint bio_process_owner(const struct proc \*p)$/,/^}$/p' \
 	"${bio_source}")"
 for operation in 'vfs_proc_lifecycle(p)' \
-	'workflow_lifecycle_scope(lifecycle, &scope_id)'; do
+	'workflow_lifecycle_key_valid(lifecycle)' \
+	'workflow_lifecycle_scope(lifecycle, &scope_id)' \
+	'return FS_OWNER_SCOPE(scope_id)'; do
 	printf '%s\n' "${io_owner}" | grep -q -F "${operation}" ||
 		fail "I/O owner lost lifecycle identity: ${operation}"
 done

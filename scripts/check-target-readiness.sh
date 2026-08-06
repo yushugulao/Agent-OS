@@ -21,7 +21,6 @@ echo "[target-readiness] runtime comparison contracts"
 (
 	cd "${ROOT_DIR}"
 	"${PYTHON_BIN}" host_tools/test_gitlab_ci_contract.py
-	"${PYTHON_BIN}" host_tools/test_remote_ci_evidence.py
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_action_runner.py
 	"${PYTHON_BIN}" -m unittest discover -s . -p test_research_state_manifest.py
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_fs_extract.py

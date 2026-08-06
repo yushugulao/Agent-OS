@@ -14,13 +14,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 import zipfile
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from gitlab_ci_contract import validate_repository_ci
 from evidence_semantic_registry import (
     RAW_ARTIFACT_REGISTRY,
     EvidenceSemanticError,
@@ -52,14 +49,12 @@ from dual_state_evidence_contract import (
 )
 from reference_catalog_contract import expected_reference_identities
 from research_state_manifest import load_manifest, target_state_names
-from remote_ci_test_fixture import JOB_SPECS, build_remote_job_payloads
 from evidence_toolchain_attestation import (
     decode_external_output, resolve_bash_executable, resolve_executable,
 )
 REPO = Path(__file__).resolve().parents[1]
 BACKING_PYTHON = getattr(sys, "_agentos_backing_executable", sys.executable)
 COLLECTOR = REPO / "scripts" / "capture-final-evidence.py"
-CI_MECHANISM = REPO / "scripts" / "run-ci-mechanism.sh"
 MEASUREMENT_MODULE = REPO / "host_tools" / "measured_experiments.py"
 FULL_VERIFICATION_METRICS = REPO / "host_tools" / "full_verification_metrics.py"
 BENCHMARK_SOURCE_CONTRACT = REPO / "host_tools" / "benchmark_source_contract.py"
@@ -101,13 +96,6 @@ KERNEL_LOG_VALIDATOR = REPO / "scripts" / "validate-kernel-test-log.py"
 METADATA_LOG_VALIDATOR = REPO / "scripts" / "validate-metadata-crash-log.py"
 METADATA_REPROBE_VALIDATOR = REPO / "scripts" / "validate-metadata-reprobe-log.py"
 VIRTIO_LOG_VALIDATOR = REPO / "scripts" / "validate-virtio-disk-log.py"
-REMOTE_CI_MODULES = tuple(
-    REPO / "host_tools" / name
-    for name in (
-        "gitlab_ci_contract.py", "remote_ci_archive.py", "remote_ci_bundle.py",
-        "remote_ci_evidence.py", "remote_ci_job_semantics.py",
-    )
-)
 FS_ALLOCATOR_IMAGE = REPO / "scripts" / "fs-allocator-image.py"
 BENCHMARK_SOURCE = REPO / "user" / "src" / "agentbench_ucore.c"
 FS_EVIDENCE_TEST = REPO / "scripts" / "test-fs-allocator-evidence.py"
@@ -919,7 +907,7 @@ def collector_command(root: Path, *arguments: str) -> list[str]:
         "scripts/capture-final-evidence.py",
         *arguments,
     ]
-    if arguments and arguments[0] in {"verify", "bind-remote-ci"}:
+    if arguments and arguments[0] == "verify":
         command.extend(("--contract-root", str(root)))
     return command
 def populate_summary_stage(stage: Path) -> Path:
@@ -1021,8 +1009,6 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
     ):
         shutil.copyfile(module, root / "host_tools" / module.name)
     for module in OBSERVE_EVIDENCE_MODULES:
-        shutil.copyfile(module, root / "host_tools" / module.name)
-    for module in REMOTE_CI_MODULES:
         shutil.copyfile(module, root / "host_tools" / module.name)
     shutil.copyfile(BACKEND_EVIDENCE_CONTRACT,
                     root / "host_tools" / BACKEND_EVIDENCE_CONTRACT.name)
@@ -1199,74 +1185,6 @@ def collect_args(repo: Path, output: Path, tools: dict[str, Path]) -> list[str]:
             "--agent-test-duration-profile", "none",
             "--bash", str(resolve_bash_executable("bash", resolve_executable("git"))),
             "--command-timeout", "30"]
-def start_gitlab_fixture(commit: str, pipeline_sha: str | None = None,
-                         missing_trace: bool = False, redirect_artifact_url: str | None = None,
-                         job_payloads: dict[int, tuple[bytes, bytes]] | None = None
-                         ) -> tuple[ThreadingHTTPServer, threading.Thread, str]:
-    specs = JOB_SPECS
-    actual_sha = pipeline_sha or commit
-    project = {"id": 39809, "path_with_namespace": "contest/agentos",
-               "web_url": "https://gitlab.example/contest/agentos"}
-    pipeline = {"id": 701, "sha": actual_sha, "ref": "main", "source": "push",
-                "status": "success", "web_url": "https://gitlab.example/pipelines/701"}
-    jobs = [{"id": job_id, "name": name, "status": "success"}
-            for name, job_id, _, _ in specs]
-    details = {job_id: {"id": job_id, "name": name, "status": "success",
-                        "runner": {"id": runner_id}, "tag_list": [tag],
-                        "pipeline": {"id": 701, "sha": actual_sha}}
-               for name, job_id, runner_id, tag in specs}
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            if self.headers.get("PRIVATE-TOKEN") != "fixture-token":
-                self.send_error(401); return
-            path = self.path.split("?", 1)[0]
-            if path == "/api/v4/projects/39809/jobs/804/artifacts" and redirect_artifact_url:
-                self.send_response(302); self.send_header("Location", redirect_artifact_url)
-                self.end_headers(); return
-            value: object | None = None
-            content_type = "application/json"
-            if path == "/api/v4/projects/39809": value = project
-            elif path == "/api/v4/projects/39809/pipelines/701": value = pipeline
-            elif path == "/api/v4/projects/39809/pipelines/701/jobs": value = jobs
-            else:
-                match = __import__("re").fullmatch(r"/api/v4/projects/39809/jobs/(\d+)(?:/(trace|artifacts))?", path)
-                if match:
-                    job_id, kind = int(match.group(1)), match.group(2)
-                    if kind is None: value = details.get(job_id)
-                    elif kind == "trace" and not (missing_trace and job_id == 804):
-                        value = (job_payloads or {}).get(
-                            job_id, (f"job {job_id} trace passed\n".encode(), b"")
-                        )[0]; content_type = "text/plain"
-                    elif kind == "artifacts":
-                        value = (job_payloads or {}).get(
-                            job_id, (b"", f"PK fixture artifact {job_id}".encode())
-                        )[1]; content_type = "application/zip"
-            if value is None:
-                self.send_error(404); return
-            data = value if isinstance(value, bytes) else json.dumps(value).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(data)))
-            if path.endswith("/jobs"): self.send_header("X-Next-Page", "")
-            self.end_headers(); self.wfile.write(data)
-        def log_message(self, format: str, *args: object) -> None:
-            return
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-    return server, thread, f"http://127.0.0.1:{server.server_address[1]}"
-def start_redirect_sink(payload: bytes) -> tuple[ThreadingHTTPServer, threading.Thread, str, list[str | None]]:
-    observed: list[str | None] = []
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            observed.append(self.headers.get("PRIVATE-TOKEN"))
-            data = payload
-            self.send_response(200); self.send_header("Content-Length", str(len(data)))
-            self.end_headers(); self.wfile.write(data)
-        def log_message(self, format: str, *args: object) -> None:
-            return
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-    return server, thread, f"http://127.0.0.1:{server.server_address[1]}/artifact.zip", observed
 class FinalEvidenceTests(unittest.TestCase):
     def test_bash_resolution_selects_an_executable_gnu_bash(self) -> None:
         bash = resolve_bash_executable("bash", resolve_executable("git"))
@@ -1735,42 +1653,6 @@ test "${{status}}" -eq 74
 """
             result = run(["bash", "-c", script], REPO, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-    @unittest.skipUnless(os.name == "posix", "CI mechanism fixture is POSIX-only")
-    def test_ci_mechanism_preserves_runner_and_multiboot_guest_logs(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            base = Path(temp)
-            runner = base / "runner.sh"
-            executable(runner, """#!/usr/bin/env bash
-set -eu
-printf 'runner phase one\nrunner phase two\n'
-printf '===== guest:boot1 =====\nboot1 marker\n===== end-guest:boot1 =====\n' >"${EVIDENCE_GUEST_LOG_FILE}"
-printf '===== guest:boot2 =====\nboot2 marker\n===== end-guest:boot2 =====\n' >>"${EVIDENCE_GUEST_LOG_FILE}"
-""")
-            artifacts = base / "artifacts"
-            result = run(
-                ["bash", str(CI_MECHANISM), "multiboot", str(runner)],
-                REPO,
-                check=False,
-                env={**os.environ, "CI_ARTIFACT_DIR": str(artifacts)},
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            combined = (artifacts / "multiboot-combined.log").read_text()
-            for token in ("runner-stdout:multiboot", "runner phase two",
-                          "runner-guest-logs:multiboot", "guest:boot1", "guest:boot2"):
-                self.assertIn(token, combined)
-            runner.write_text(runner.read_text() + "exit 9\n")
-            failed = run(
-                ["bash", str(CI_MECHANISM), "failed", str(runner)],
-                REPO,
-                check=False,
-                env={**os.environ, "CI_ARTIFACT_DIR": str(artifacts)},
-            )
-            self.assertEqual(failed.returncode, 9, failed.stdout + failed.stderr)
-            failed_combined = (artifacts / "failed-combined.log").read_text()
-            for token in ("runner-stdout:failed", "runner phase two",
-                          "runner-guest-logs:failed", "guest:boot1", "guest:boot2"):
-                self.assertIn(token, failed_combined)
-
     @unittest.skipUnless(os.name == "posix", "Agent policy fixture is POSIX-only")
     def test_agent_duration_policy_fails_before_build_with_bounded_exceptions(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2549,8 +2431,15 @@ procreap_ucore: parent passed
             reader_path.write_bytes(reader_original)
             (output / "environment/versions/git.txt").unlink()
             self.assert_verify_rejected(output, repo, "environment version record")
-    @unittest.skipUnless(os.name == "posix", "remote provenance binding is POSIX-only")
-    def test_remote_ci_provenance_is_explicit_and_composable(self) -> None:
+    def test_bind_remote_ci_cli_is_absent(self) -> None:
+        help_result = run(collector_command(REPO, "--help"), REPO)
+        self.assertNotIn("bind-remote-ci", help_result.stdout)
+        rejected = run(collector_command(REPO, "bind-remote-ci"), REPO, check=False)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("invalid choice", rejected.stderr)
+
+    @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
+    def test_remote_ci_boundary_is_fixed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             repo = base / "repo"; repo.mkdir()
@@ -2558,109 +2447,24 @@ procreap_ucore: parent passed
             local = base / "local"
             run(collect_args(repo, local, tools), repo)
             manifest = json.loads((local / "manifest.json").read_text())
-            commit = manifest["commit"]
             self.assertEqual(manifest["authenticity"]["remote_ci"], {"status": "not-attached"})
             manifest_path = local / "manifest.json"
             original_manifest = manifest_path.read_bytes()
-            forged_manifest = dict(manifest); forged_manifest["ci_artifact"] = True
-            manifest_path.write_text(json.dumps(forged_manifest) + "\n")
-            self.assert_verify_rejected(local, repo, "manifest is not ready")
+            mutations = (
+                {"status": "provenance-attached"},
+                {"status": "not-attached", "provenance": {}},
+            )
+            for remote in mutations:
+                with self.subTest(remote=remote):
+                    mutated = json.loads(original_manifest)
+                    mutated["authenticity"]["remote_ci"] = remote
+                    manifest_path.write_text(json.dumps(mutated) + "\n")
+                    rewrite_checksums(local)
+                    self.assert_verify_rejected(
+                        local, repo, "remote CI boundary must remain not-attached"
+                    )
             manifest_path.write_bytes(original_manifest)
             rewrite_checksums(local)
-            token_path = base / "gitlab-token.txt"
-            token_path.write_text("fixture-token\n")
-            combined = base / "combined"
-            job_payloads = build_remote_job_payloads(repo, local, commit)
-            sink, sink_thread, redirect_url, observed_tokens = start_redirect_sink(
-                job_payloads[804][1]
-            )
-            server, thread, gitlab_url = start_gitlab_fixture(
-                commit, redirect_artifact_url=redirect_url, job_payloads=job_payloads)
-            try:
-                run([*collector_command(repo, "bind-remote-ci"), "--bundle", str(local),
-                     "--output", str(combined), "--gitlab-url", gitlab_url,
-                     "--project-id", "39809", "--pipeline-id", "701",
-                     "--token-file", str(token_path)], repo)
-            finally:
-                server.shutdown(); server.server_close(); thread.join(timeout=5)
-                sink.shutdown(); sink.server_close(); sink_thread.join(timeout=5)
-            self.assertEqual(observed_tokens, [None])
-            combined_manifest = json.loads((combined / "manifest.json").read_text())
-            remote = combined_manifest["authenticity"]["remote_ci"]
-            self.assertEqual((remote["status"], remote["pipeline_sha"]),
-                             ("provenance-attached", commit))
-            for relative in ("remote-ci/provenance.json", "remote-ci/api/project.json",
-                             "remote-ci/api/pipeline.json", "remote-ci/api/pipeline-jobs.json",
-                              "remote-ci/jobs/kernel-budgets.trace.log",
-                              "remote-ci/jobs/kernel-budgets.artifacts.zip",
-                              "remote-ci/jobs/kernel-mechanism-regression.trace.log",
-                              "remote-ci/jobs/physical-resource-regression.trace.log",
-                              "remote-ci/jobs/metadata-recovery-regression.trace.log",
-                              "remote-ci/jobs/observe-recovery-regression.trace.log",
-                              "remote-ci/jobs/virtio-disk-regression.trace.log",
-                              "remote-ci/jobs/fs-allocator-fault-regression.trace.log"):
-                self.assertTrue((combined / relative).is_file(), relative)
-            self.assertNotIn("fixture-token", "".join(
-                path.read_text(encoding="utf-8", errors="ignore")
-                for path in combined.rglob("*") if path.is_file()))
-            verified = json.loads(run(collector_command(repo, "verify", str(combined)),
-                                      repo).stdout)
-            self.assertEqual((verified["status"], verified["remote_ci"]),
-                             ("ready", "provenance-attached"))
-            proof_path = combined / "remote-ci/provenance.json"
-            manifest_path = combined / "manifest.json"
-            original_proof, original_manifest = proof_path.read_bytes(), manifest_path.read_bytes()
-            bad_timestamp = json.loads(original_proof)
-            bad_timestamp["capture"]["fetched_at_utc"] = "2026-13-01T00:00:00Z"
-            proof_path.write_text(json.dumps(bad_timestamp) + "\n")
-            rebound_manifest = json.loads(original_manifest)
-            rebound_manifest["authenticity"]["remote_ci"]["provenance"]["sha256"] = \
-                __import__("hashlib").sha256(proof_path.read_bytes()).hexdigest()
-            manifest_path.write_text(json.dumps(rebound_manifest) + "\n")
-            self.assert_verify_rejected(combined, repo, "capture provenance is invalid")
-            proof_path.write_bytes(original_proof); manifest_path.write_bytes(original_manifest)
-            rewrite_checksums(combined)
-            for label, options, message in (
-                ("wrong-sha", {"pipeline_sha": "f" * 40}, "final main push"),
-                ("missing-trace", {"missing_trace": True}, "API request failed"),
-            ):
-                rejected_output = base / label
-                server, thread, gitlab_url = start_gitlab_fixture(
-                    commit, job_payloads=job_payloads, **options)
-                try:
-                    result = run([*collector_command(repo, "bind-remote-ci"),
-                                  "--bundle", str(local), "--output", str(rejected_output),
-                                  "--gitlab-url", gitlab_url, "--project-id", "39809",
-                                  "--pipeline-id", "701", "--token-file", str(token_path)],
-                                 repo, check=False)
-                finally:
-                    server.shutdown(); server.server_close(); thread.join(timeout=5)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(message, result.stderr)
-                self.assertFalse(rejected_output.exists())
-            forged_payloads = build_remote_job_payloads(
-                repo, local, commit, forge_semantic_job="physical-resource-regression"
-            )
-            server, thread, gitlab_url = start_gitlab_fixture(
-                commit, job_payloads=forged_payloads
-            )
-            forged_output = base / "self-consistent-fake"
-            try:
-                forged_result = run(
-                    [*collector_command(repo, "bind-remote-ci"),
-                     "--bundle", str(local), "--output", str(forged_output),
-                     "--gitlab-url", gitlab_url, "--project-id", "39809",
-                     "--pipeline-id", "701", "--token-file", str(token_path)],
-                    repo, check=False,
-                )
-            finally:
-                server.shutdown(); server.server_close(); thread.join(timeout=5)
-            self.assertEqual(forged_result.returncode, 1, forged_result.stdout + forged_result.stderr)
-            self.assertIn("execution attestation is invalid", forged_result.stderr)
-            self.assertFalse(forged_output.exists())
-            trace = combined / "remote-ci/jobs/kernel-budgets.trace.log"
-            trace.write_text("forged trace\n")
-            self.assert_verify_rejected(combined, repo, "manifest file hash differs")
     @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
     def test_capture_rejects_info_exclude_wildcard_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2818,10 +2622,6 @@ procreap_ucore: parent passed
         full = (REPO / "scripts" / "run-full-verification.sh").read_text(encoding="utf-8")
         structure = (REPO / "scripts" / "verify-dual-target-structure.sh").read_text(encoding="utf-8")
         evidence_readme = (REPO / "evidence" / "README.md").read_text(encoding="utf-8")
-        ci = (REPO / ".gitlab-ci.yml").read_text(encoding="utf-8")
-        effective_ci = validate_repository_ci(
-            REPO / ".gitlab-ci.yml", REPO / "ci" / "kernel-budgets.json"
-        )
         host_start = makefile.index("override HOST_CONTRACT_TESTS :=")
         host_end = makefile.index("\nhost-contract-selftest:", host_start)
         host_inventory = set(__import__("re").findall(
@@ -2836,8 +2636,6 @@ procreap_ucore: parent passed
             "host_tools/test_evidence_delivery_contract.py",
             "host_tools/test_plain_ucore_reader_e2e.py",
         })
-        # Provenance extraction lives in a separate module; the collector only
-        # gained the fail-closed wiring and verification boundary.
         self.assertLessEqual(len(collector.splitlines()), 1450)
         for module, limit in (
             (SEMANTIC_COMMON, 250), (SEMANTIC_PROFILES, 650),
@@ -2904,14 +2702,12 @@ procreap_ucore: parent passed
                       "--check agent-test-policy"):
             self.assertIn(token, full)
         self.assertLess(full.index("write-summary"), full.index("[full-verify] all checks passed"))
-        for once in ("host_tools/test_gitlab_ci_contract.py",
-                     "host_tools/test_measured_experiments.py",
+        for once in ("host_tools/test_measured_experiments.py",
                      "host_tools/test_dual_measurement_source_contract.py"):
             self.assertEqual(makefile.count(once), 1)
         self.assertNotIn("hash-tree", collector + full)
         self.assertNotIn("immutable CI artifact", collector)
-        for contract in ("'^SCHEMA_VERSION = 8$'", "'^FULL_VERIFY_PROFILE_VERSION = 5$'",
-                         "'^REMOTE_CI_SCHEMA_VERSION = 1$'"):
+        for contract in ("'^SCHEMA_VERSION = 8$'", "'^FULL_VERIFY_PROFILE_VERSION = 5$'"):
             self.assertIn(contract, structure)
         self.assertNotIn("'^SCHEMA_VERSION = 1$'", structure)
         public_docs = {
@@ -2927,15 +2723,15 @@ procreap_ucore: parent passed
             self.assertNotRegex(content, r"schema v5 的 `?verification-summary")
         self.assertIn("scenario plan schema v5", public_docs[REPO / "README.md"])
         self.assertNotIn("依赖已提交的 Git 对象和不可变的 CI artifact", evidence_readme)
-        for token in ("bind-remote-ci", "not-attached", "provenance-attached", "GitLab API",
-                      "trace", "artifact"):
-            self.assertIn(token, evidence_readme)
         for token in ("FULL_VERIFY_PROFILE_VERSION", "STEP_CONTRACT", "validate_settings",
                       "step_contract_sha256",
-                      "bind-remote-ci", "agent_marker_grace_seconds",
+                      "agent_marker_grace_seconds",
                       "mechanism_marker_grace_seconds", "workflow_stability_runs",
                       "FULL_VERIFY_TIMEOUT_SECONDS"):
             self.assertIn(token, collector)
+        self.assertIn('"remote_ci": {"status": "not-attached"}', collector)
+        self.assertNotIn("bind-remote-ci", collector)
+        self.assertNotIn("provenance-attached", collector)
         for name in ("reader-e2e.log", "dual-plain-qemu.log", "dual-agentos-qemu.log",
                      "dual-targeted-agentbench-guest.log",
                      "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
@@ -2950,21 +2746,6 @@ procreap_ucore: parent passed
                      "workflow-teardown-race", "fs-enospc", "fs-allocator-fault"):
             runner = (REPO / "scripts" / f"run-{name}-tests.sh").read_text()
             self.assertIn('MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"', runner)
-        for token in ("MARKER_GRACE_SECONDS=2s", "MARKER_GRACE_SECONDS: 5s",
-                      "make ci-check", "stages:\n  - budget\n  - reader\n  - test"):
-            self.assertIn(token, ci)
-        for token in ("physical-resource-regression", "metadata-recovery-regression",
-                      "observe-recovery-regression", "virtio-disk-regression",
-                      "fs-allocator-fault-regression", "run-ci-mechanism.sh",
-                      "ci-artifacts/"):
-            self.assertIn(token, ci)
-        for job, timeout in (("physical-resource-regression", "20m"),
-                             ("metadata-recovery-regression", "60m"),
-                             ("observe-recovery-regression", "25m"),
-                             ("virtio-disk-regression", "20m"),
-                             ("fs-allocator-fault-regression", "45m")):
-            self.assertEqual(effective_ci.definitions[job].parents(), (".agentos-mechanism",))
-            self.assertEqual(effective_ci.effective(job).field("timeout").scalar(), timeout)
         statuses = tuple(run(["git", "check-ignore", "-q", "--no-index", path], REPO, check=False).returncode
                          for path in ("probe.log", "evidence/releases/probe/logs/raw/probe.log"))
         self.assertEqual(statuses, (0, 1))
