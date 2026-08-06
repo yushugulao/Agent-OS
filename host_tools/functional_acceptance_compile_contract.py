@@ -320,7 +320,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # translation phase input exact prevents line splices, directives, assembly,
 # or linker syntax from disappearing during normalization.
 COMPILE_CLOSURE_FINGERPRINT = (
-    "d5445c0155f2b83f2d5660505a66cc524be5f1f814dd64b680d5306763148433"
+    "6c420ae652ac86b744e8acbe7819ac28ef7c6035213fc77f7ef6decd240e9ecb"
 )
 
 USER_TRANSLATION_UNITS = (

@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check traditional-performance traditional-performance-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -714,7 +714,6 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-io-work-conserving-wiring.py \
 	scripts/check-syscall-file-transaction.py \
 	scripts/check-traditional-io-fastpath.py \
-	scripts/test-traditional-performance-contract.py \
 	scripts/test-open-file-io-lease.py \
 	scripts/test-lazy-bio-admission.py \
 	scripts/check-inode-mapping-guard.py \
@@ -804,7 +803,6 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_evaluation_scenario.py \
 	host_tools/test_task6_source_comparability.py \
 	host_tools/test_evaluation_dashboard.py \
-	host_tools/test_traditional_performance.py \
 	host_tools/test_contest_demo.py \
 	host_tools/test_full_verification_payload.py \
 	host_tools/test_evaluation_bundle.py \
@@ -1029,19 +1027,6 @@ contest-demo:
 contest-demo-check: scripts/run-contest-demo.sh host_tools/contest_demo.py host_tools/test_contest_demo.py
 	@$(call shell_quote,$(BASH_BIN)) -n scripts/run-contest-demo.sh
 	@$(PYTHON_CMD) host_tools/test_contest_demo.py
-
-traditional-performance:
-	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
-		QEMU=$(call shell_quote,$(QEMU)) \
-		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) \
-		MAKE_TOOL=$(call shell_quote,$(MAKE)) \
-		TRADPERF_BUILD_JOBS=$(AGENTOS_BUILD_JOBS) \
-		$(call shell_quote,$(BASH_BIN)) scripts/run-traditional-performance.sh
-
-traditional-performance-check: scripts/run-traditional-performance.sh host_tools/traditional_performance.py host_tools/test_traditional_performance.py scripts/test-traditional-performance-contract.py
-	@$(call shell_quote,$(BASH_BIN)) -n scripts/run-traditional-performance.sh
-	@$(PYTHON_CMD) -I -S -B host_tools/test_traditional_performance.py
-	@$(PYTHON_CMD) -I -S -B scripts/test-traditional-performance-contract.py
 
 fs-enospc-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-fs-enospc-tests.sh

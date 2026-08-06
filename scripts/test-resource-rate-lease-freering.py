@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused source and behavior tests for the rate-lease free ring."""
+"""Focused source and behavior tests for the intrusive rate-lease freelist."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def compiler_command() -> list[str] | None:
     return [compiler] if compiler else None
 
 
-class ResourceRateLeaseFreeRingTests(unittest.TestCase):
+class ResourceRateLeaseFreelistTests(unittest.TestCase):
     def test_allocator_and_release_paths_are_constant_time(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
         header = HEADER.read_text(encoding="utf-8")
@@ -85,13 +85,19 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
             "RESOURCE_RATE_LEASE_FREE",
             "RESOURCE_RATE_LEASE_LIVE",
             "RESOURCE_RATE_LEASE_RETIRED",
-            "uint16 free_ring[RESOURCE_RATE_LEASE_CAP];",
-            "uint free_head;",
-            "uint free_tail;",
-            "uint free_count;",
+            "uint16 next_free;",
+            "RESOURCE_RATE_LEASE_INDEX_NONE",
+            "static uint16 resource_rate_lease_free_head;",
             "sizeof(struct resource_rate_lease) == 128U",
         ):
             self.assertIn(token, source)
+        for token in (
+            "struct resource_rate_lease_allocator",
+            "free_ring[",
+            "free_tail",
+            "free_count",
+        ):
+            self.assertNotIn(token, source)
         self.assertNotIn("resource_rate_lease_generations", source)
         self.assertNotIn("resource_rate_lease_generation_exhausted", source)
 
@@ -100,9 +106,8 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
         self.assertNotRegex(allocate, r"\b(?:for|while)\s*\(")
         self.assertNotRegex(release, r"\b(?:for|while)\s*\(")
         for token in (
-            "free_ring[",
-            "free_head",
-            "free_count--",
+            "index = resource_rate_lease_free_head",
+            "resource_rate_lease_free_head = lease->next_free",
             "RESOURCE_RATE_LEASE_FREE",
             "RESOURCE_RATE_LEASE_LIVE",
             "lease->generation + 1",
@@ -112,9 +117,8 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
             "lease - resource_rate_leases",
             "generation == (uint)-1",
             "RESOURCE_RATE_LEASE_RETIRED",
-            "free_ring[",
-            "free_tail",
-            "free_count++",
+            "lease->next_free = resource_rate_lease_free_head",
+            "resource_rate_lease_free_head = (uint16)index",
         ):
             self.assertIn(token, release)
 
@@ -160,6 +164,24 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
                 return resource_rate_reserve_many(&endpoint, 1, handle);
             }
 
+            static uint freelist_count(void)
+            {
+                unsigned char seen[RESOURCE_RATE_LEASE_CAP] = {0};
+                uint16 index = resource_rate_lease_free_head;
+                uint count = 0;
+
+                while (index != RESOURCE_RATE_LEASE_INDEX_NONE) {
+                    if (index >= RESOURCE_RATE_LEASE_CAP || seen[index] ||
+                        resource_rate_leases[index].tag !=
+                            RESOURCE_RATE_LEASE_FREE)
+                        return (uint)-1;
+                    seen[index] = 1;
+                    count++;
+                    index = resource_rate_leases[index].next_free;
+                }
+                return count;
+            }
+
             static int check_capacity_and_stale_handles(void)
             {
                 struct resource_rate_lease_handle handles[RESOURCE_RATE_LEASE_CAP];
@@ -170,12 +192,16 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
                 uint victim = RESOURCE_RATE_LEASE_CAP / 2;
 
                 resource_controller_init();
-                CHECK(resource_rate_lease_allocator.free_count ==
-                      RESOURCE_RATE_LEASE_CAP);
+                CHECK(sizeof(resource_rate_lease_free_head) == sizeof(uint16));
+                CHECK(resource_rate_lease_free_head == 0);
+                CHECK(freelist_count() == RESOURCE_RATE_LEASE_CAP);
                 for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP; i++) {
-                    CHECK(resource_rate_lease_allocator.free_ring[i] == i);
                     CHECK(resource_rate_leases[i].tag == RESOURCE_RATE_LEASE_FREE);
                     CHECK(resource_rate_leases[i].generation == 0);
+                    CHECK(resource_rate_leases[i].next_free ==
+                          (i + 1 < RESOURCE_RATE_LEASE_CAP ?
+                           (uint16)(i + 1) :
+                           RESOURCE_RATE_LEASE_INDEX_NONE));
                 }
                 CHECK(configure_global() == 0);
                 for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP; i++) {
@@ -183,7 +209,9 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
                     CHECK(handles[i].slot == i + 1);
                     CHECK(handles[i].generation == 1);
                 }
-                CHECK(resource_rate_lease_allocator.free_count == 0);
+                CHECK(resource_rate_lease_free_head ==
+                      RESOURCE_RATE_LEASE_INDEX_NONE);
+                CHECK(freelist_count() == 0);
                 overflow.slot = 99;
                 overflow.generation = 99;
                 CHECK(reserve_one(&overflow) < 0);
@@ -192,7 +220,7 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
                 stale = handles[victim];
                 resource_rate_lease_cancel(stale);
                 CHECK(!resource_rate_lease_valid(stale));
-                CHECK(resource_rate_lease_allocator.free_count == 1);
+                CHECK(freelist_count() == 1);
                 CHECK(reserve_one(&replacement) == 0);
                 CHECK(replacement.slot == stale.slot);
                 CHECK(replacement.generation == stale.generation + 1);
@@ -203,14 +231,12 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
                 for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP; i++)
                     if (i != victim)
                         resource_rate_lease_cancel(handles[i]);
-                CHECK(resource_rate_lease_allocator.free_count ==
-                      RESOURCE_RATE_LEASE_CAP);
+                CHECK(freelist_count() == RESOURCE_RATE_LEASE_CAP);
 
                 CHECK(reserve_one(&replacement) == 0);
                 CHECK(resource_rate_lease_commit(replacement) == 0);
                 CHECK(!resource_rate_lease_valid(replacement));
-                CHECK(resource_rate_lease_allocator.free_count ==
-                      RESOURCE_RATE_LEASE_CAP);
+                CHECK(freelist_count() == RESOURCE_RATE_LEASE_CAP);
                 CHECK(resource_rate_global_refill(0, &applied) == 0);
                 CHECK(applied == 1);
 
@@ -224,8 +250,40 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
                 CHECK(reserve_one(&overflow) < 0);
                 for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP; i++)
                     resource_rate_lease_cancel(recycled[i]);
-                CHECK(resource_rate_lease_allocator.free_count ==
-                      RESOURCE_RATE_LEASE_CAP);
+                CHECK(freelist_count() == RESOURCE_RATE_LEASE_CAP);
+                return 0;
+            }
+
+            static int check_out_of_order_reuse(void)
+            {
+                struct resource_rate_lease_handle live[5], reused[3];
+
+                resource_controller_init();
+                CHECK(configure_global() == 0);
+                for (uint i = 0; i < 5; i++)
+                    CHECK(reserve_one(&live[i]) == 0);
+
+                resource_rate_lease_cancel(live[1]);
+                resource_rate_lease_cancel(live[4]);
+                resource_rate_lease_cancel(live[2]);
+                CHECK(freelist_count() == RESOURCE_RATE_LEASE_CAP - 2);
+
+                CHECK(reserve_one(&reused[0]) == 0);
+                CHECK(reserve_one(&reused[1]) == 0);
+                CHECK(reserve_one(&reused[2]) == 0);
+                CHECK(reused[0].slot == live[2].slot);
+                CHECK(reused[1].slot == live[4].slot);
+                CHECK(reused[2].slot == live[1].slot);
+                for (uint i = 0; i < 3; i++)
+                    CHECK(reused[i].generation == 2);
+                CHECK(resource_rate_lease_commit(live[2]) < 0);
+
+                CHECK(resource_rate_lease_commit(reused[0]) == 0);
+                resource_rate_lease_cancel(reused[1]);
+                resource_rate_lease_cancel(reused[2]);
+                resource_rate_lease_cancel(live[0]);
+                resource_rate_lease_cancel(live[3]);
+                CHECK(freelist_count() == RESOURCE_RATE_LEASE_CAP);
                 return 0;
             }
 
@@ -245,8 +303,7 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
                 CHECK(!resource_rate_lease_valid(retired));
                 CHECK(resource_rate_leases[0].tag ==
                       RESOURCE_RATE_LEASE_RETIRED);
-                CHECK(resource_rate_lease_allocator.free_count ==
-                      RESOURCE_RATE_LEASE_CAP - 1);
+                CHECK(freelist_count() == RESOURCE_RATE_LEASE_CAP - 1);
 
                 for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP - 1; i++) {
                     CHECK(reserve_one(&live[i]) == 0);
@@ -256,8 +313,7 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
                 CHECK(resource_rate_lease_commit(retired) < 0);
                 for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP - 1; i++)
                     resource_rate_lease_cancel(live[i]);
-                CHECK(resource_rate_lease_allocator.free_count ==
-                      RESOURCE_RATE_LEASE_CAP - 1);
+                CHECK(freelist_count() == RESOURCE_RATE_LEASE_CAP - 1);
                 CHECK(resource_rate_leases[0].tag ==
                       RESOURCE_RATE_LEASE_RETIRED);
                 return 0;
@@ -266,6 +322,7 @@ class ResourceRateLeaseFreeRingTests(unittest.TestCase):
             int main(void)
             {
                 CHECK(check_capacity_and_stale_handles() == 0);
+                CHECK(check_out_of_order_reuse() == 0);
                 CHECK(check_generation_retirement() == 0);
                 return 0;
             }

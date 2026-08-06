@@ -49,16 +49,12 @@ struct resource_rate_lease {
 	enum resource_rate_lease_tag tag;
 	uint generation;
 	uint count;
+	uint16 next_free;
 	struct resource_rate_lease_entry entries[RESOURCE_RATE_BUNDLE_CAP];
 };
-struct resource_rate_lease_allocator {
-	uint16 free_ring[RESOURCE_RATE_LEASE_CAP];
-	uint free_head;
-	uint free_tail;
-	uint free_count;
-};
-_Static_assert(RESOURCE_RATE_LEASE_CAP <= 0xffffU,
-	       "rate lease free-ring index budget");
+#define RESOURCE_RATE_LEASE_INDEX_NONE ((uint16)-1)
+_Static_assert(RESOURCE_RATE_LEASE_CAP < RESOURCE_RATE_LEASE_INDEX_NONE,
+	       "rate lease freelist index budget");
 _Static_assert(sizeof(struct resource_rate_lease) == 128U,
 	       "rate lease slot budget");
 static struct resource_policy resource_policies[RESOURCE_KIND_COUNT];
@@ -69,7 +65,7 @@ static struct resource_rate_state
 	resource_rate_globals[RESOURCE_RATE_GLOBAL_CAP];
 static struct resource_rate_lease
 	resource_rate_leases[RESOURCE_RATE_LEASE_CAP];
-static struct resource_rate_lease_allocator resource_rate_lease_allocator;
+static uint16 resource_rate_lease_free_head;
 static const uint resource_kind_attribute_table[RESOURCE_KIND_COUNT] = {
 	[RESOURCE_PROCESS] = RESOURCE_KIND_COUNT_TRANSFERABLE,
 	[RESOURCE_THREAD] = RESOURCE_KIND_COUNT_TRANSFERABLE,
@@ -207,11 +203,13 @@ void resource_controller_init(void)
 	       sizeof(resource_account_generation_exhausted));
 	memset(resource_rate_globals, 0, sizeof(resource_rate_globals));
 	memset(resource_rate_leases, 0, sizeof(resource_rate_leases));
-	memset(&resource_rate_lease_allocator, 0,
-	       sizeof(resource_rate_lease_allocator));
-	for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP; i++)
-		resource_rate_lease_allocator.free_ring[i] = (uint16)i;
-	resource_rate_lease_allocator.free_count = RESOURCE_RATE_LEASE_CAP;
+	for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP; i++) {
+		resource_rate_leases[i].tag = RESOURCE_RATE_LEASE_FREE;
+		resource_rate_leases[i].next_free =
+			i + 1 < RESOURCE_RATE_LEASE_CAP ?
+			(uint16)(i + 1) : RESOURCE_RATE_LEASE_INDEX_NONE;
+	}
+	resource_rate_lease_free_head = 0;
 }
 int resource_policy_configure(enum resource_kind kind, uint64 capacity,
 			      uint64 ordinary_limit,
@@ -1293,25 +1291,16 @@ static int resource_rate_lease_allocate(
 	struct resource_rate_lease *lease;
 	uint generation, index;
 
-	if (resource_rate_lease_allocator.free_count == 0)
+	index = resource_rate_lease_free_head;
+	if (index == RESOURCE_RATE_LEASE_INDEX_NONE)
 		return -1;
-	if (resource_rate_lease_allocator.free_count >
-		    RESOURCE_RATE_LEASE_CAP ||
-	    resource_rate_lease_allocator.free_head >=
-		    RESOURCE_RATE_LEASE_CAP)
-		panic("rate lease free ring");
-	index = resource_rate_lease_allocator.free_ring[
-		resource_rate_lease_allocator.free_head];
 	if (index >= RESOURCE_RATE_LEASE_CAP)
-		panic("rate lease free ring");
+		panic("rate lease freelist");
 	lease = &resource_rate_leases[index];
 	if (lease->tag != RESOURCE_RATE_LEASE_FREE ||
 	    lease->generation == (uint)-1)
-		panic("rate lease free ring");
-	if (++resource_rate_lease_allocator.free_head ==
-	    RESOURCE_RATE_LEASE_CAP)
-		resource_rate_lease_allocator.free_head = 0;
-	resource_rate_lease_allocator.free_count--;
+		panic("rate lease freelist");
+	resource_rate_lease_free_head = lease->next_free;
 	generation = lease->generation + 1;
 	memset(lease, 0, sizeof(*lease));
 	lease->tag = RESOURCE_RATE_LEASE_LIVE;
@@ -1330,27 +1319,18 @@ static void resource_rate_lease_release(
 
 	if (index >= RESOURCE_RATE_LEASE_CAP ||
 	    lease->tag != RESOURCE_RATE_LEASE_LIVE ||
-	    resource_rate_lease_allocator.free_count >
-		    RESOURCE_RATE_LEASE_CAP ||
-	    resource_rate_lease_allocator.free_tail >=
-		    RESOURCE_RATE_LEASE_CAP)
-		panic("rate lease release ring");
+	    (resource_rate_lease_free_head != RESOURCE_RATE_LEASE_INDEX_NONE &&
+	     resource_rate_lease_free_head >= RESOURCE_RATE_LEASE_CAP))
+		panic("rate lease release freelist");
 	memset(lease, 0, sizeof(*lease));
 	lease->generation = generation;
 	if (generation == (uint)-1) {
 		lease->tag = RESOURCE_RATE_LEASE_RETIRED;
 		return;
 	}
-	if (resource_rate_lease_allocator.free_count ==
-	    RESOURCE_RATE_LEASE_CAP)
-		panic("rate lease release ring");
 	lease->tag = RESOURCE_RATE_LEASE_FREE;
-	resource_rate_lease_allocator.free_ring[
-		resource_rate_lease_allocator.free_tail] = (uint16)index;
-	if (++resource_rate_lease_allocator.free_tail ==
-	    RESOURCE_RATE_LEASE_CAP)
-		resource_rate_lease_allocator.free_tail = 0;
-	resource_rate_lease_allocator.free_count++;
+	lease->next_free = resource_rate_lease_free_head;
+	resource_rate_lease_free_head = (uint16)index;
 }
 
 int resource_rate_reserve_many(
