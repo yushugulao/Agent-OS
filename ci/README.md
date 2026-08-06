@@ -103,9 +103,8 @@ immutable lifecycle id and generation.
 The current candidate's full-suite duration gate is
 `provisional_requires_full_suite`. Resource-adaptive local build parallelism and the runtime fast-path
 changes invalidate the previous source fingerprint before any QEMU timing is
-accepted. Commit `14607e825f06c5ffe4a69dd992dbe79b210ab8a4` and its three-run
-calibration under `evidence/calibrations/14607e825f06/` remain historical
-evidence only. A new `calibrated_full_suite` threshold requires three complete
+accepted. Historical calibration artifacts are kept in Git history rather than
+the current contest tree. A new `calibrated_full_suite` threshold requires three complete
 18-case runs from the final clean commit on the recorded
 `local-e3-msys2-xpack-qemu11-v1` profile. Until then, local E3 timing claims
 remain disabled; the `none` profile may execute functional local coverage but

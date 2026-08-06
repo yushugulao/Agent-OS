@@ -1,6 +1,6 @@
 # 赛题要求追踪表
 
-本文按 ISO/IEC/IEEE 29148 的需求可追踪思想裁剪编写。每条需求都给出来源、实现状态、验证证据和剩余缺口。表中的 `已验证` 只描述机制曾有对应历史证据，不是对可变工作树或任意 HEAD 的发布背书；带日期或提交号的输出只能归属于该历史提交。`14607e825f06` 的三轮 18-case 校准只属于该历史提交；当前配置为 `provisional_requires_full_suite`。统一状态是“机制/静态验收完成，候选动态复验待生成”，直至同一冻结提交 C 完成全量动态验收、三轮重校准和 C→E 证据绑定。
+本文按赛题任务追踪实现、验证证据和剩余缺口。表中的 `已验证` 描述机制已有对应测试，不代表任意工作树已经发布。当前时长配置为 `provisional_requires_full_suite`；同一冻结提交 C 完成全量动态验收、三轮重校准和 C→E 证据绑定后，才形成正式结果。
 
 发布状态只从 append-only `evidence/releases/INDEX.md` 及其指向 bundle 的 `manifest.json` 读取。代码提交 C 先冻结，采集器在干净 C 上执行 `make full-verify`，证据提交 E 再作为 C 的直接子提交只加入 bundle 和索引行。完成本地 C→E 合同即形成正式 E3。GitLab 只托管源码与证据，不配置 Runner；`remote_ci.status=not-attached` 是固定兼容值。
 
