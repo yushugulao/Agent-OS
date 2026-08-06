@@ -15,6 +15,10 @@
 #define IO_OWNER_SLOTS (VFS_SCOPE_LIFECYCLE_CAP + 2)
 _Static_assert(IO_OWNER_SLOTS >= VFS_SCOPE_MAX_ACTIVE + 2,
 	       "I/O owner table must cover every active workflow");
+#define IO_ADMISSION_READY_SLOTS \
+	(IO_OWNER_SLOTS * IO_POLICY_CLASS_COUNT)
+_Static_assert(IO_ADMISSION_READY_SLOTS <= 64,
+	       "I/O admission ready set must fit one machine bitmap");
 #define IO_RESERVATION_NONE 0U
 #define IO_RESERVATION_SHARED (1U << 31)
 #define IO_RESERVATION_SLOT_MASK (~IO_RESERVATION_SHARED)
@@ -210,6 +214,7 @@ static struct {
 	struct io_device_wait_state device;
 	struct io_background_context background;
 	struct io_deferred_sponsor deferred;
+	uint64 ready_bitmap;
 	uint shared_cursor;
 	uint cache_donor_cursor;
 	uint64 physical_reads;
@@ -492,10 +497,88 @@ static int io_principal_prepare(
 	return 0;
 }
 
+static uint io_ready_index(const struct io_owner_state *state, uint io_class)
+{
+	return (uint)(state - io_policy.owners) * IO_POLICY_CLASS_COUNT +
+	       io_class;
+}
+
+static uint64 io_ready_bit(const struct io_owner_state *state, uint io_class)
+{
+	return 1ULL << io_ready_index(state, io_class);
+}
+
+static void io_ready_set(const struct io_owner_state *state, uint io_class)
+{
+	io_policy.ready_bitmap |= io_ready_bit(state, io_class);
+}
+
+static void io_ready_clear(const struct io_owner_state *state, uint io_class)
+{
+	io_policy.ready_bitmap &= ~io_ready_bit(state, io_class);
+}
+
+static void io_ready_clear_owner(const struct io_owner_state *state)
+{
+	uint shift = io_ready_index(state, 0);
+	uint64 lanes = (1ULL << IO_POLICY_CLASS_COUNT) - 1;
+
+	io_policy.ready_bitmap &= ~(lanes << shift);
+}
+
+static void io_ready_refresh(const struct io_owner_state *state,
+			     uint io_class)
+{
+	const struct io_bucket *bucket = &state->buckets[io_class];
+
+	if (state->used && !state->retiring &&
+	    (!state->quiesced || io_class == IO_POLICY_CLASS_BACKGROUND) &&
+	    bucket->grantee == 0 && bucket->admission_waiters != 0 &&
+	    bucket->admission_queue.head != 0)
+		io_ready_set(state, io_class);
+	else
+		io_ready_clear(state, io_class);
+}
+
+static uint io_ready_first(uint64 pending)
+{
+	uint index = 0;
+
+	if ((pending & 0xffffffffULL) == 0) {
+		index += 32;
+		pending >>= 32;
+	}
+	if ((pending & 0xffffULL) == 0) {
+		index += 16;
+		pending >>= 16;
+	}
+	if ((pending & 0xffULL) == 0) {
+		index += 8;
+		pending >>= 8;
+	}
+	if ((pending & 0xfULL) == 0) {
+		index += 4;
+		pending >>= 4;
+	}
+	if ((pending & 0x3ULL) == 0) {
+		index += 2;
+		pending >>= 2;
+	}
+	return index + ((pending & 1) == 0);
+}
+
+static uint io_ready_next(uint64 pending, uint cursor)
+{
+	uint64 tail = pending & (~0ULL << cursor);
+
+	return io_ready_first(tail != 0 ? tail : pending);
+}
+
 static void io_owner_init(struct io_owner_state *state, uint owner,
 			  struct resource_account_handle principal,
 			  int principal_member)
 {
+	io_ready_clear_owner(state);
 	memset(state, 0, sizeof(*state));
 	state->owner = owner;
 	state->principal = principal;
@@ -557,6 +640,7 @@ static void io_owner_reap_retired(void)
 			    resource_account_member_release(
 				    state->principal, 0) < 0)
 				panic("I/O principal member release");
+			io_ready_clear_owner(state);
 			memset(state, 0, sizeof(*state));
 		}
 	}
@@ -1108,11 +1192,15 @@ static int io_grant_waiter(struct io_owner_state *state, uint io_class,
 		resource_rate_lease_none();
 	struct resource_rate_snapshot lane;
 
-	if (state->retiring ||
-	    (state->quiesced && io_class != IO_POLICY_CLASS_BACKGROUND) ||
-	    bucket->grantee != 0 ||
-	    bucket->admission_queue.head == 0)
+	if (!state->used || state->retiring ||
+	    (state->quiesced && io_class != IO_POLICY_CLASS_BACKGROUND)) {
+		io_ready_clear(state, io_class);
 		return 0;
+	}
+	if (bucket->grantee != 0 || bucket->admission_queue.head == 0) {
+		io_ready_clear(state, io_class);
+		return 0;
+	}
 	if (shared) {
 		if (io_class == IO_POLICY_CLASS_BACKGROUND ||
 		    io_rate_snapshot(state, io_class, &lane) < 0 ||
@@ -1131,6 +1219,7 @@ static int io_grant_waiter(struct io_owner_state *state, uint io_class,
 	grantee = wait_queue_wake_one_thread(&bucket->admission_queue);
 	if (grantee == 0) {
 		resource_rate_lease_cancel(lease);
+		io_ready_refresh(state, io_class);
 		return 0;
 	}
 	if (!shared)
@@ -1139,49 +1228,55 @@ static int io_grant_waiter(struct io_owner_state *state, uint io_class,
 	io_rate_lease_store(
 		lease, shared, &bucket->grant_source,
 		&bucket->grant_device_source);
+	io_ready_clear(state, io_class);
 	return 1;
 }
 
 static void io_schedule_grants(void)
 {
-	uint slots = IO_OWNER_SLOTS * IO_POLICY_CLASS_COUNT;
+	uint64 pending;
 	int enabled = intr_save();
 
-	for (uint i = 0; i < IO_OWNER_SLOTS; i++) {
-		struct io_owner_state *state = &io_policy.owners[i];
+	/* Dispatch only lanes with published backlog. */
+	pending = io_policy.ready_bitmap;
+	while (pending != 0) {
+		uint index = io_ready_first(pending);
+		uint owner_slot = index / IO_POLICY_CLASS_COUNT;
+		uint io_class = index % IO_POLICY_CLASS_COUNT;
 
-		if (!state->used || state->retiring)
-			continue;
-		for (uint c = 0; c < IO_POLICY_CLASS_COUNT; c++)
-			(void)io_grant_waiter(state, c, 0);
+		pending &= pending - 1;
+		(void)io_grant_waiter(
+			&io_policy.owners[owner_slot], io_class, 0);
 	}
-	while (slots != 0) {
+	{
 		struct resource_rate_snapshot shared;
-		int granted = 0;
 
 		if (io_rate_global_snapshot(
 			    IO_RATE_GLOBAL_SHARED, &shared) < 0 ||
 		    shared.tokens == 0 || shared.debt != 0)
-			break;
-		for (uint scanned = 0; scanned < slots; scanned++) {
-			uint index = (io_policy.shared_cursor + scanned) % slots;
+			goto out;
+		pending = io_policy.ready_bitmap;
+		while (pending != 0) {
+			uint index = io_ready_next(
+				pending, io_policy.shared_cursor);
 			uint owner_slot = index / IO_POLICY_CLASS_COUNT;
 			uint io_class = index % IO_POLICY_CLASS_COUNT;
 			struct io_owner_state *state =
 				&io_policy.owners[owner_slot];
 
-			if (!state->used || state->retiring ||
-			    io_class == IO_POLICY_CLASS_BACKGROUND)
+			pending &= ~((uint64)1 << index);
+			/* Background guarantees remain ready for the reserved pass. */
+			if (io_class == IO_POLICY_CLASS_BACKGROUND)
 				continue;
 			if (io_grant_waiter(state, io_class, 1)) {
-				io_policy.shared_cursor = (index + 1) % slots;
-				granted = 1;
-				break;
+				io_policy.shared_cursor =
+					(index + 1) % IO_ADMISSION_READY_SLOTS;
+				if (--shared.tokens == 0)
+					break;
 			}
 		}
-		if (!granted)
-			break;
 	}
+out:
 	intr_restore(enabled);
 }
 
@@ -1209,6 +1304,8 @@ static int io_wait_until_admitted(struct io_owner_state *state,
 	state->waits++;
 	bucket->admission_waiters++;
 	for (;;) {
+		/* Publish demand before the IRQ-atomic queue-and-sleep transition. */
+		io_ready_set(state, io_class);
 		int sleep_status = cleanup ?
 			wait_queue_sleep_irq_uninterruptible(
 				&bucket->admission_queue) :
@@ -1224,6 +1321,7 @@ static int io_wait_until_admitted(struct io_owner_state *state,
 			if (bucket->admission_waiters == 0)
 				panic("I/O admission waiter underflow");
 			bucket->admission_waiters--;
+			io_ready_refresh(state, io_class);
 			if (sleep_status != WAIT_QUEUE_OK || state->retiring ||
 			    (state->quiesced &&
 			     io_class != IO_POLICY_CLASS_BACKGROUND)) {
@@ -1246,6 +1344,7 @@ static int io_wait_until_admitted(struct io_owner_state *state,
 			if (bucket->admission_waiters == 0)
 				panic("I/O admission waiter underflow");
 			bucket->admission_waiters--;
+			io_ready_refresh(state, io_class);
 			io_schedule_grants();
 			intr_restore(enabled);
 			return -1;
@@ -4217,6 +4316,7 @@ void bio_scope_quiesce(uint scope_id)
 			state->cache_live = 0;
 			for (uint c = 0; c < IO_POLICY_CLASS_COUNT; c++) {
 				if (c != IO_POLICY_CLASS_BACKGROUND) {
+					io_ready_clear(state, c);
 					wait_queue_wake_all(
 						&state->buckets[c].admission_queue);
 					wait_queue_wake_all(
@@ -4244,6 +4344,7 @@ void bio_scope_retire(uint scope_id)
 			continue;
 		state->retiring = 1;
 		state->cache_live = 0;
+		io_ready_clear_owner(state);
 		for (uint c = 0; c < IO_POLICY_CLASS_COUNT; c++) {
 			wait_queue_wake_all(
 				&state->buckets[c].admission_queue);

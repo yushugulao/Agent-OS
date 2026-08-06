@@ -525,6 +525,8 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 
 ## 9. 架构决策
 
+块设备准入使用单字就绪位图，只遍历有积压的通道；保留通道优先，共享通道在成功授权后轮转。
+
 | 决策 | 选择 | 理由 | 取舍 |
 | --- | --- | --- | --- |
 | Agent 创建方式 | 使用 `agent_create()` 兼容创建 sentinel，使用 `agent_create_role()` 创建指定角色 Agent | 与 uCore 现有进程模型结合直接，且能把 role/capability 绑定到内核 PCB | 暂未支持用户态自定义配额或任意 capability 组合 |

@@ -160,6 +160,8 @@ def validate(bio: str, policy: str, iobudget: str) -> None:
 
     direct = compact(function_body(bio, "io_reserve_direct"))
     waiter = compact(function_body(bio, "io_grant_waiter"))
+    ready_first = compact(function_body(bio, "io_ready_first"))
+    admission = compact(function_body(bio, "io_wait_until_admitted"))
     scheduler_definition = bio.rfind("static void io_schedule_grants(void)")
     if scheduler_definition < 0:
         raise ContractError("missing admission grant scheduler")
@@ -176,18 +178,86 @@ def validate(bio: str, policy: str, iobudget: str) -> None:
         "grantee = wait_queue_wake_one_thread(&bucket->admission_queue);",
         "if (grantee == 0)",
         "resource_rate_lease_cancel(lease);",
+        "io_ready_refresh(state, io_class);",
         "bucket->grantee = grantee;",
         "io_rate_lease_store(",
     ):
         raise ContractError("admission lease is not bound to the actual waiter")
+    success = waiter[waiter.find("bucket->grantee = grantee;"):]
+    if not ordered(success, "bucket->grantee = grantee;",
+                   "io_rate_lease_store(",
+                   "io_ready_clear(state, io_class);"):
+        raise ContractError("successful grant leaves its ready bit published")
+    if not all(token in bio for token in (
+            "_Static_assert(IO_ADMISSION_READY_SLOTS <= 64,",
+            "uint64 ready_bitmap;", "1ULL << io_ready_index(state, io_class)")):
+        raise ContractError("admission demand is not represented by one bounded bitmap")
+    if ("for (" in ready_first or "while (" in ready_first or
+            "__builtin_ctz" in bio or "0xffffffffULL" not in ready_first or
+            "0x3ULL" not in ready_first):
+        raise ContractError("ready-bit selection is not bounded and freestanding")
+    shared_reject = waiter[waiter.find("if (shared)"):
+                           waiter.find("(void)io_rate_bundle")]
+    reserve_failure = waiter[waiter.find("(void)io_rate_bundle"):
+                             waiter.find("grantee = wait_queue_wake_one_thread")]
+    if ("io_class == IO_POLICY_CLASS_BACKGROUND" not in shared_reject or
+            "io_ready_clear" in shared_reject or
+            "io_ready_clear" in reserve_failure):
+        raise ContractError("temporary token/debt/shared rejection loses backlog")
     if not ordered(
-        scheduler,
+        admission,
+        "bucket->admission_waiters++;",
+        "io_ready_set(state, io_class);",
+        "wait_queue_sleep_irq",
+        "bucket->grantee = 0;",
+        "bucket->admission_waiters--;",
+        "io_ready_refresh(state, io_class);",
+        "io_rate_lease_refund(",
+    ):
+        raise ContractError("admission sleep/refund does not publish demand atomically")
+    if admission.count("io_ready_refresh(state, io_class);") != 2:
+        raise ContractError("admission completion and cancellation do not refresh demand")
+    shared_pass = scheduler[scheduler.find("IO_RATE_GLOBAL_SHARED"):]
+    if not ordered(
+        scheduler[:scheduler.find("IO_RATE_GLOBAL_SHARED")],
         "int enabled = intr_save();",
-        "io_grant_waiter(state, c, 0)",
+        "pending = io_policy.ready_bitmap;",
+        "io_ready_first(pending)",
+        "pending &= pending - 1;",
+        "io_grant_waiter( &io_policy.owners[owner_slot], io_class, 0)",
+    ) or not ordered(
+        shared_pass,
+        "IO_RATE_GLOBAL_SHARED, &shared",
+        "pending = io_policy.ready_bitmap;",
+        "io_ready_next( pending, io_policy.shared_cursor)",
+        "pending &= ~((uint64)1 << index);",
+        "if (io_class == IO_POLICY_CLASS_BACKGROUND) continue;",
         "io_grant_waiter(state, io_class, 1)",
+        "io_policy.shared_cursor = (index + 1) % IO_ADMISSION_READY_SLOTS;",
         "intr_restore(enabled);",
     ):
-        raise ContractError("admission grant scheduling is not IRQ-atomic")
+        raise ContractError("ready-bit grant scheduling is not IRQ-atomic or fair")
+    if ("for (" in scheduler or scheduler.count("while (pending != 0)") != 2 or
+            scheduler.count("io_policy.ready_bitmap") != 2):
+        raise ContractError("grant scheduling scans idle owner/class slots")
+    background_gate = shared_pass[
+        shared_pass.find("if (io_class == IO_POLICY_CLASS_BACKGROUND)"):
+        shared_pass.find("if (io_grant_waiter")]
+    if (not background_gate or "io_ready_clear" in background_gate):
+        raise ContractError("shared pass removes a background reserved waiter")
+    owner_init = compact(function_body(bio, "io_owner_init"))
+    quiesce = compact(function_body(bio, "bio_scope_quiesce"))
+    retire = compact(function_body(bio, "bio_scope_retire"))
+    if not ordered(owner_init, "io_ready_clear_owner(state);",
+                   "memset(state, 0, sizeof(*state));"):
+        raise ContractError("owner reuse can inherit admission readiness")
+    if not ordered(quiesce, "state->quiesced = 1;",
+                   "if (c != IO_POLICY_CLASS_BACKGROUND)",
+                   "io_ready_clear(state, c);", "wait_queue_wake_all("):
+        raise ContractError("quiesce does not remove non-background admissions")
+    if not ordered(retire, "state->retiring = 1;",
+                   "io_ready_clear_owner(state);", "wait_queue_wake_all("):
+        raise ContractError("retire does not remove all admissions")
 
     account = compact(function_body(bio, "bio_account_transfers"))
     request_path = account[account.find("else if (request_flags != 0)"):]
@@ -383,6 +453,36 @@ MUTATIONS = (
                  "\tgrantee = wait_queue_wake_one_thread("
                  "&bucket->admission_queue);",
                  "\tgrantee = bucket->admission_queue.head;"),
+     POLICY, IOBUDGET),
+    (mutate_once(BIO,
+                 "\tif (resource_rate_reserve_many(endpoints, 2, &lease) < 0)\n"
+                 "\t\treturn 0;",
+                 "\tif (resource_rate_reserve_many(endpoints, 2, &lease) < 0) {\n"
+                 "\t\tio_ready_clear(state, io_class);\n"
+                 "\t\treturn 0;\n\t}"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "\twhile (pending != 0) {",
+                 "\tfor (uint scan = 0; scan < IO_ADMISSION_READY_SLOTS; "
+                 "scan++) {"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "% IO_ADMISSION_READY_SLOTS;",
+                 "% IO_POLICY_CLASS_COUNT;"), POLICY, IOBUDGET),
+    (mutate_once(BIO,
+                 "\t\t\tif (io_class == IO_POLICY_CLASS_BACKGROUND)\n"
+                 "\t\t\t\tcontinue;",
+                 "\t\t\tif (io_class == IO_POLICY_CLASS_BACKGROUND) {\n"
+                 "\t\t\t\tio_ready_clear(state, io_class);\n"
+                 "\t\t\t\tcontinue;\n\t\t\t}"), POLICY, IOBUDGET),
+    (mutate_once(BIO,
+                 "\t\tstate->cache_live = 0;\n"
+                 "\t\tio_ready_clear_owner(state);\n"
+                 "\t\tfor (uint c = 0;",
+                 "\t\tstate->cache_live = 0;\n"
+                 "\t\tfor (uint c = 0;"), POLICY, IOBUDGET),
+    (mutate_once(BIO,
+                 "\t\t\tbucket->admission_waiters--;\n"
+                 "\t\t\tio_ready_refresh(state, io_class);\n"
+                 "\t\t\tif (sleep_status != WAIT_QUEUE_OK",
+                 "\t\t\tbucket->admission_waiters--;\n"
+                 "\t\t\tif (sleep_status != WAIT_QUEUE_OK"),
      POLICY, IOBUDGET),
     (mutate_once(BIO, "*request_flags |= BIO_REQUEST_TRANSFERRED;",
                  "*request_flags |= BIO_REQUEST_ACTIVE;"), POLICY, IOBUDGET),
