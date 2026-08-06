@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation contracts for deferred I/O class and lease preservation."""
+"""Mutation contracts for deferred I/O class and receipt preservation."""
 
 from pathlib import Path
 
@@ -161,8 +161,8 @@ def validate(bio: str, bio_h: str) -> None:
         "if (bio_deferred_sponsor_current()",
         "io_policy.deferred.independent_lease",
         "transfers = &io_policy.deferred.transfers",
-        "reservation = io_policy.deferred.reservation",
-        "device_reservation = io_policy.deferred.device_reservation",
+        "reservation = &io_policy.deferred.reservation",
+        "device_reservation = &io_policy.deferred.device_reservation",
         "unreserved = 0",
         "else if (bio_deferred_sponsor_current()",
         "io_policy.deferred.reuse_request_lease",
@@ -174,8 +174,8 @@ def validate(bio: str, bio_h: str) -> None:
         "owner == io_policy.deferred.owner",
         "io_class == io_policy.deferred.io_class",
         "transfers = &thread->io_request_transfers",
-        "reservation = thread->io_request_reservation",
-        "device_reservation = thread->io_request_device_reservation",
+        "reservation = &thread->io_request_reservation",
+        "device_reservation = &thread->io_request_device_reservation",
         "unreserved = 0",
         "else if (bio_background_current()",
     )
@@ -188,7 +188,7 @@ def validate(bio: str, bio_h: str) -> None:
         "independent = io_policy.deferred.independent_lease",
         "transfers = io_policy.deferred.transfers",
         "if (transfers == 0)",
-        "io_rate_lease_refund( reservation, device_reservation)",
+        "io_rate_reservation_refund( state, io_class, &reservation, &device_reservation)",
         "io_wait_for_debt_mode( state, io_class, 1, 1, polling)",
         "io_wait_for_device_debt_mode( owner, io_class, 1, polling)",
     ):
@@ -265,7 +265,7 @@ MUTATIONS = (
      "closing cache release omitted"),
     (replace_in_function(BIO, "bio_account_transfers",
                          "bio_deferred_sponsor_current()", "0"), BIO_H,
-     "deferred lease reuse disabled"),
+     "deferred receipt reuse disabled"),
     (replace_in_function(BIO, "bio_deferred_sponsor_begin",
                          "effective_class = IO_POLICY_CLASS_BACKGROUND;",
                          "effective_class = io_class;"), BIO_H,
@@ -281,7 +281,7 @@ MUTATIONS = (
      "invalid retained class washed into fallback"),
     (replace_in_function(BIO, "bio_deferred_sponsor_begin",
                          "io_policy.deferred.reuse_request_lease = reuse_request_lease;", ""), BIO_H,
-     "lease reuse receipt removed"),
+     "receipt reuse state removed"),
     (replace_in_function(BIO, "bio_account_transfers",
                          "thread->io_request_class == io_policy.deferred.io_class", "1"), BIO_H,
      "deferred class match removed"),
@@ -289,7 +289,7 @@ MUTATIONS = (
                          "thread->io_request_id == io_policy.deferred.origin_request_id", "1"), BIO_H,
      "transfer request identity match removed"),
     (replace_in_function(BIO, "bio_account_transfers",
-                         "reservation = thread->io_request_reservation;", ""), BIO_H,
+                         "reservation = &thread->io_request_reservation;", ""), BIO_H,
      "deferred reservation reuse removed"),
     (replace_in_function(BIO, "bio_request_begin_current_mode",
                          "thread->io_request_id = bio_request_identity_allocate();", ""), BIO_H,

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -150,16 +151,35 @@ class HostProbeToolchainTests(unittest.TestCase):
                 self.assertIn("probe_mode(sanitizer_flags)", text)
 
     def test_formal_shell_harness_inventory_uses_shared_policy(self) -> None:
-        full_verify = (SCRIPT_DIR / "run-full-verification.sh").read_text(
-            encoding="utf-8"
+        parallel_runner = ast.parse(
+            (SCRIPT_DIR / "run-parallel-qemu-regressions.py").read_text(
+                encoding="utf-8"
+            )
         )
-        resource_runners = set(
-            re.findall(r'"scripts/(run-[a-z0-9-]+-tests\.sh)"', full_verify)
+        resource_cases = next(
+            node.value
+            for node in parallel_runner.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "RESOURCE_CASES"
+                for target in node.targets
+            )
         )
+        resource_runners = {
+            Path(node.args[1].value).name
+            for node in ast.walk(resource_cases)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "RegressionCase"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        }
         expected_runners = {
             "run-file-resource-tests.sh",
             "run-fs-allocator-fault-tests.sh",
             "run-fs-enospc-tests.sh",
+            "run-fs-epoch-tests.sh",
             "run-metadata-recovery-tests.sh",
             "run-observe-recovery-tests.sh",
             "run-physical-resource-tests.sh",

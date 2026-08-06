@@ -8,6 +8,7 @@ import copy
 import csv
 import hashlib
 import html
+import io
 import json
 import math
 import os
@@ -30,18 +31,27 @@ from evaluation_kernel_cost import (
 from evaluation_campaign import CampaignError, validate_campaign
 from evaluation_contract import (
     CONCURRENCY_PUBLIC_FIELDS,
+    EVALUATION_SCHEMA_VERSION,
+    EVALUATION_SUITE_ID,
     EvaluationError as EvaluationContractError,
     QOS_REGISTRATION_FIELDS,
-    SUITE_IDS,
     derive_acceptance_gates,
     load_run_plan,
     verify as verify_evaluation_contract,
 )
 from strict_json import read_strict_json, strict_json_loads
+from agenteval_measurement_source_policy import measurement_source_policy_inventory
 from safe_host_paths import (
+    absolute_lexical_path,
+    atomic_write_bytes as safe_atomic_write_bytes,
+    ensure_safe_directory,
     path_is_link,
+    read_regular_file,
+    reject_link_components,
+    require_private_directory,
     require_regular_file,
     require_safe_directory,
+    walk_directory_tree_no_links,
     walk_regular_files_no_links,
 )
 from compatibility_overhead import (
@@ -1534,16 +1544,11 @@ def _validate_diagnostics(
 
 def _validate_supplementary_evaluations(
     methodology: dict[str, Any], evidence: dict[str, dict[str, Any]],
-    summary_schema: int,
 ) -> None:
     raw = methodology.get("supplementary_evaluations")
-    if summary_schema < 4:
-        if raw is not None:
-            _fail("legacy summary cannot contain supplementary evaluations")
-        return
     evaluations = _require_list(raw, "methodology.supplementary_evaluations")
     if len(evaluations) != 1:
-        _fail("suite v4 must contain one supplementary evaluation")
+        _fail("evaluation summary must contain one supplementary evaluation")
     item = _require_object(evaluations[0], "methodology.supplementary_evaluations[0]")
     fields = {
         "id", "label", "task", "status", "performance_gate",
@@ -1551,8 +1556,7 @@ def _validate_supplementary_evaluations(
         "latency_unit", "throughput_unit", "percentile_method",
         "interpretation", "boots",
     }
-    if summary_schema >= 5:
-        fields.update(QOS_REGISTRATION_FIELDS)
+    fields.update(QOS_REGISTRATION_FIELDS)
     if set(item) != fields:
         _fail("supplementary evaluation fields differ from schema")
     _require_string(item["id"], "supplementary.id")
@@ -1580,15 +1584,14 @@ def _validate_supplementary_evaluations(
         _fail("supplementary rounds_per_level must be positive")
     for key in ("latency_unit", "throughput_unit", "percentile_method", "interpretation"):
         _require_string(item[key], f"supplementary.{key}")
-    qos_schema = item.get("qos_schema_version", 1)
-    if summary_schema >= 5:
-        if qos_schema != 2:
-            _fail("supplementary QoS schema must be 2")
-        for key in QOS_REGISTRATION_FIELDS:
-            if key not in {"qos_schema_version", "latency_metrics"}:
-                _require_string(item[key], f"supplementary.{key}")
-        if item["latency_metrics"] != ["wait", "service", "turnaround"]:
-            _fail("supplementary latency metrics differ from schema")
+    qos_schema = item["qos_schema_version"]
+    if qos_schema != 2:
+        _fail("supplementary QoS schema must be 2")
+    for key in QOS_REGISTRATION_FIELDS:
+        if key not in {"qos_schema_version", "latency_metrics"}:
+            _require_string(item[key], f"supplementary.{key}")
+    if item["latency_metrics"] != ["wait", "service", "turnaround"]:
+        _fail("supplementary latency metrics differ from schema")
     boots = _require_list(item["boots"], "supplementary.boots")
     if (item["status"] == "measured") != bool(boots):
         _fail("supplementary status differs from its boot inventory")
@@ -1600,18 +1603,16 @@ def _validate_supplementary_evaluations(
             "boot_id", "evidence_id", "correct", "contamination",
             "return_visit", "fallback", "concurrency",
         }
-        if summary_schema >= 5:
-            boot_fields.update({"qos_schema_version", "result_fingerprint"})
+        boot_fields.update({"qos_schema_version", "result_fingerprint"})
         if set(boot) != boot_fields:
             _fail(f"{path} fields differ from schema")
-        if summary_schema >= 5:
-            if boot["qos_schema_version"] != qos_schema:
-                _fail(f"{path} QoS schema differs from registration")
-            if (
-                type(boot["result_fingerprint"]) is not str
-                or not re.fullmatch(r"[0-9a-f]{16}", boot["result_fingerprint"])
-            ):
-                _fail(f"{path}.result_fingerprint must be lowercase hex16")
+        if boot["qos_schema_version"] != qos_schema:
+            _fail(f"{path} QoS schema differs from registration")
+        if (
+            type(boot["result_fingerprint"]) is not str
+            or not re.fullmatch(r"[0-9a-f]{16}", boot["result_fingerprint"])
+        ):
+            _fail(f"{path}.result_fingerprint must be lowercase hex16")
         boot_id = _require_string(boot["boot_id"], f"{path}.boot_id")
         if boot_id in seen_boots:
             _fail("supplementary boot ids must be unique")
@@ -1652,7 +1653,7 @@ def _validate_supplementary_evaluations(
                 or entry["correct"] + entry["fallback"] != requests
             ):
                 _fail(f"{entry_path} aggregate counts differ from raw coverage")
-            if qos_schema == 2 and (
+            if (
                 entry["goodput_milli_rps"] > entry["throughput_milli_rps"]
                 or entry["isolated"] > entry["completed"]
                 or entry["fairness_jain_ppm"] > 1_000_000
@@ -1665,7 +1666,7 @@ def _validate_supplementary_evaluations(
 
 
 def validate_summary(raw: Any) -> dict[str, Any]:
-    """Validate a versioned summary and every evidence-bearing relation."""
+    """Validate the current summary and every evidence-bearing relation."""
 
     root = _require_object(raw, "summary")
     fields = set(root)
@@ -1675,13 +1676,13 @@ def validate_summary(raw: Any) -> dict[str, Any]:
             f"missing={sorted(TOP_LEVEL_FIELDS - fields)} extra={sorted(fields - TOP_LEVEL_FIELDS)}"
         )
     summary_schema = root["schema_version"]
-    if type(summary_schema) is not int or summary_schema not in SUITE_IDS:
-        _fail(f"schema_version must be one of {sorted(SUITE_IDS)}")
+    if type(summary_schema) is not int or summary_schema != EVALUATION_SCHEMA_VERSION:
+        _fail(f"schema_version must be {EVALUATION_SCHEMA_VERSION}")
     if root["kind"] != "agentos-evaluation-summary":
         _fail("kind must be 'agentos-evaluation-summary'")
 
     run = _require_object(root["run"], "run")
-    if run.get("suite_id") != SUITE_IDS[summary_schema]:
+    if run.get("suite_id") != EVALUATION_SUITE_ID:
         _fail("run.suite_id does not match the summary acceptance policy")
     _require_string(run.get("id"), "run.id")
     run_status = _require_string(run.get("status"), "run.status")
@@ -1731,7 +1732,7 @@ def validate_summary(raw: Any) -> dict[str, Any]:
         _fail("run.run_plan_sha256 must match verified run-plan evidence")
 
     methodology = _require_object(root["methodology"], "methodology")
-    _validate_supplementary_evaluations(methodology, evidence, summary_schema)
+    _validate_supplementary_evaluations(methodology, evidence)
     raw_claims = _require_list(root["claims"], "claims")
     claim_benchmark_ids = {
         _require_string(claim.get("benchmark_id"), f"claims[{index}].benchmark_id")
@@ -2100,7 +2101,6 @@ def validate_summary(raw: Any) -> dict[str, Any]:
             scenarios_list,
             claims_list,
             competition_claims,
-            suite_schema_version=summary_schema,
         )
     except EvaluationContractError as error:
         _fail(f"methodology.competition_claims is invalid: {error}")
@@ -2147,22 +2147,10 @@ def _evidence_href(reference: str) -> str:
 
 
 def _atomic_write_bytes(path: Path, value: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(value)
-        os.replace(temp_name, path)
-    except BaseException:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-def _atomic_write(path: Path, value: str) -> None:
-    _atomic_write_bytes(path, value.encode("utf-8"))
+        safe_atomic_write_bytes(path, value)
+    except (OSError, ValueError) as error:
+        _fail(f"Dashboard output cannot be written safely: {path}: {error}")
 
 
 def _canonical_evidence_reference(value: Any, path: str) -> tuple[str, ...]:
@@ -2253,7 +2241,7 @@ def _ensure_plain_directory(path: Path, label: str) -> None:
 
 def _write_portable_evidence(
     evidence_root: Path, output_dir: Path, summary: dict[str, Any]
-) -> None:
+) -> dict[str, tuple[str, int]]:
     """Copy the small, Dashboard-linked evidence into the offline site."""
     portable_root = output_dir / "evidence"
     _ensure_plain_directory(portable_root, "portable evidence root")
@@ -2317,6 +2305,10 @@ def _write_portable_evidence(
             actual.add(candidate.relative_to(portable_root).as_posix())
     if actual != set(expected):
         _fail("portable Dashboard evidence inventory differs from the summary")
+    return {
+        f"evidence/{relative}": (digest, len(payloads[relative][1]))
+        for relative, digest in expected.items()
+    }
 
 
 def _scenario_string(value: Any, path: str, *, maximum: int = 256) -> str:
@@ -5142,7 +5134,6 @@ def _supplementary_evaluations_html(methodology: dict[str, Any]) -> str:
         return ""
     blocks: list[str] = []
     for evaluation in evaluations:
-        qos_schema = evaluation.get("qos_schema_version", 1)
         rows: list[str] = []
         visit_rows: list[str] = []
         for boot in evaluation["boots"]:
@@ -5159,50 +5150,29 @@ def _supplementary_evaluations_html(methodology: dict[str, Any]) -> str:
             )
             for sample in boot["concurrency"]:
                 throughput = sample["throughput_milli_rps"] / 1000
-                if qos_schema == 2:
-                    rows.append(
-                        "<tr>"
-                        f'<th scope="row"><code>{_h(boot["boot_id"])}</code></th>'
-                        f'<td>{_h(sample["concurrency"])}</td>'
-                        f'<td>{_h(sample["completed"])} / {_h(sample["requests"])}</td>'
-                        f'<td>{_h(_value(throughput))}</td>'
-                        f'<td>{_h(_value(sample["goodput_milli_rps"] / 1000))}</td>'
-                        f'<td>{_h(sample["p90_us"])}</td>'
-                        f'<td>{_h(sample["wait_p90_us"])}</td>'
-                        f'<td>{_h(_value(sample["fairness_jain_ppm"] / 1_000_000))}</td>'
-                        f'<td>{_h(_value(sample["max_min_fairness_ppm"] / 1_000_000))}</td>'
-                        f'<td>{_h(sample["isolated"])} / {_h(sample["requests"])}</td>'
-                        f'<td>{_h(sample["contamination"])}</td>'
-                        f'<td>{_h(sample["fallback"])}</td>'
-                        f'<td><code>{_h(sample["workload_digest"])}</code></td>'
-                        "</tr>"
-                    )
-                else:
-                    average = sample["avg_milli_us"] / 1000
-                    rows.append(
-                        "<tr>"
-                        f'<th scope="row"><code>{_h(boot["boot_id"])}</code></th>'
-                        f'<td>{_h(sample["concurrency"])}</td>'
-                        f'<td>{_h(sample["completed"])} / {_h(sample["requests"])}</td>'
-                        f'<td>{_h(_value(throughput))}</td>'
-                        f'<td>{_h(_value(average))}</td>'
-                        f'<td>{_h(sample["p50_us"])}</td>'
-                        f'<td>{_h(sample["p90_us"])}</td>'
-                        f'<td>{_h(sample["p99_us"])}</td>'
-                        f'<td>{_h(sample["contamination"])}</td>'
-                        f'<td>{_h(sample["fallback"])}</td>'
-                        "</tr>"
-                    )
+                rows.append(
+                    "<tr>"
+                    f'<th scope="row"><code>{_h(boot["boot_id"])}</code></th>'
+                    f'<td>{_h(sample["concurrency"])}</td>'
+                    f'<td>{_h(sample["completed"])} / {_h(sample["requests"])}</td>'
+                    f'<td>{_h(_value(throughput))}</td>'
+                    f'<td>{_h(_value(sample["goodput_milli_rps"] / 1000))}</td>'
+                    f'<td>{_h(sample["p90_us"])}</td>'
+                    f'<td>{_h(sample["wait_p90_us"])}</td>'
+                    f'<td>{_h(_value(sample["fairness_jain_ppm"] / 1_000_000))}</td>'
+                    f'<td>{_h(_value(sample["max_min_fairness_ppm"] / 1_000_000))}</td>'
+                    f'<td>{_h(sample["isolated"])} / {_h(sample["requests"])}</td>'
+                    f'<td>{_h(sample["contamination"])}</td>'
+                    f'<td>{_h(sample["fallback"])}</td>'
+                    f'<td><code>{_h(sample["workload_digest"])}</code></td>'
+                    "</tr>"
+                )
         sequence = " → ".join(evaluation["visit_sequence"])
         concurrency_head = (
             '<th>Guest boot</th><th>并发度</th><th>完成请求</th>'
             '<th>吞吐率 req/s</th><th>Goodput req/s</th><th>周转 p90 us</th>'
             '<th>等待 p90 us</th><th>Jain 公平度</th><th>Min/max 公平度</th>'
             '<th>隔离完成</th><th>污染记录</th><th>回退</th><th>工作负载摘要</th>'
-            if qos_schema == 2 else
-            '<th>Guest boot</th><th>并发度</th><th>完成请求</th>'
-            '<th>吞吐率 req/s</th><th>平均延迟 us</th><th>p50 us</th>'
-            '<th>p90 us</th><th>p99 us</th><th>污染记录</th><th>回退</th>'
         )
         blocks.append(
             '<article class="benchmark-block supplementary-evaluation">'
@@ -5652,25 +5622,16 @@ def _csv_rows(summary: dict[str, Any]) -> Iterable[dict[str, Any]]:
             evidence_ids = [boot["evidence_id"]]
             for sample in boot["concurrency"]:
                 load = f'boot={boot["boot_id"]};concurrency={sample["concurrency"]}'
-                if evaluation.get("qos_schema_version") == 2:
-                    load += f';digest={sample["workload_digest"]}'
-                    metrics = (
-                        ("throughput", sample["throughput_milli_rps"] / 1000, "requests/s"),
-                        ("goodput", sample["goodput_milli_rps"] / 1000, "requests/s"),
-                        ("p90_turnaround", sample["p90_us"], "us"),
-                        ("p90_wait", sample["wait_p90_us"], "us"),
-                        ("jain_fairness", sample["fairness_jain_ppm"] / 1_000_000, "ratio"),
-                        ("max_min_fairness", sample["max_min_fairness_ppm"] / 1_000_000, "ratio"),
-                        ("isolation_rate", sample["isolated"] / sample["requests"], "ratio"),
-                    )
-                else:
-                    metrics = (
-                        ("throughput", sample["throughput_milli_rps"] / 1000, "requests/s"),
-                        ("average_latency", sample["avg_milli_us"] / 1000, "us"),
-                        ("p50_latency", sample["p50_us"], "us"),
-                        ("p90_latency", sample["p90_us"], "us"),
-                        ("p99_latency", sample["p99_us"], "us"),
-                    )
+                load += f';digest={sample["workload_digest"]}'
+                metrics = (
+                    ("throughput", sample["throughput_milli_rps"] / 1000, "requests/s"),
+                    ("goodput", sample["goodput_milli_rps"] / 1000, "requests/s"),
+                    ("p90_turnaround", sample["p90_us"], "us"),
+                    ("p90_wait", sample["wait_p90_us"], "us"),
+                    ("jain_fairness", sample["fairness_jain_ppm"] / 1_000_000, "ratio"),
+                    ("max_min_fairness", sample["max_min_fairness_ppm"] / 1_000_000, "ratio"),
+                    ("isolation_rate", sample["isolated"] / sample["requests"], "ratio"),
+                )
                 for metric, value, unit in metrics:
                     yield {
                         "benchmark_id": f'{evaluation["id"]}.{metric}',
@@ -5691,21 +5652,287 @@ def _csv_rows(summary: dict[str, Any]) -> Iterable[dict[str, Any]]:
                     }
 
 
-def _write_csv(path: Path, summary: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+def _csv_bytes(summary: dict[str, Any]) -> bytes:
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=CSV_FIELDS, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(_csv_rows(summary))
+    return output.getvalue().encode("utf-8")
+
+
+def _path_entry_exists(path: Path) -> bool:
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(_csv_rows(summary))
-        os.replace(temp_name, path)
-    except BaseException:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _safe_output_directory(path: Path) -> tuple[Path, Path]:
+    output = absolute_lexical_path(path)
+    if output == output.parent:
+        _fail("Dashboard output cannot replace a filesystem root")
+    try:
+        parent = ensure_safe_directory(output.parent)
+        reject_link_components(output)
+    except (OSError, ValueError) as error:
+        _fail(
+            "Dashboard output path is missing, unsafe, or traverses a symlink "
+            f"or junction: {error}"
+        )
+    try:
+        info = output.lstat()
+    except FileNotFoundError:
+        return output, parent
+    except OSError as error:
+        _fail(f"Dashboard output cannot be inspected safely: {error}")
+    if path_is_link(output, info.st_mode, file_info=info):
+        _fail("Dashboard output must not be a symlink or junction")
+    if not stat.S_ISDIR(info.st_mode):
+        _fail("Dashboard output path must be a directory")
+    return output, parent
+
+
+def _verify_directory_tree(path: Path, label: str) -> None:
+    try:
+        walk_regular_files_no_links(path)
+    except (OSError, ValueError) as error:
+        _fail(f"{label} is not a bounded link-free directory tree: {error}")
+
+
+def _require_existing_dashboard_site(path: Path) -> None:
+    _verify_directory_tree(path, "existing Dashboard output")
+    required = (
+        "index.html",
+        "evaluation-summary.json",
+        "dashboard-verification.json",
+        "metrics.csv",
+        "assets/evaluation-dashboard.css",
+        "assets/evaluation-dashboard.js",
+    )
+    try:
+        payloads: dict[str, bytes] = {}
+        for relative in required:
+            payloads[relative] = read_regular_file(
+                path.joinpath(*relative.split("/")),
+                nonempty=True,
+                maximum_bytes=MAX_PORTABLE_EVIDENCE_FILE_BYTES,
+            )
+        summary = strict_json_loads(payloads["evaluation-summary.json"])
+        verification = strict_json_loads(
+            payloads["dashboard-verification.json"]
+        )
+    except (OSError, UnicodeError, ValueError) as error:
+        _fail(f"existing output is not an AgentOS Dashboard site: {error}")
+    if (
+        not isinstance(summary, dict)
+        or summary.get("kind") != "agentos-evaluation-summary"
+        or not isinstance(verification, dict)
+        or verification.get("kind") != "agentos-dashboard-evidence-verification"
+    ):
+        _fail("existing output is not an AgentOS Dashboard site")
+
+
+def _directory_is_empty(path: Path) -> bool:
+    try:
+        require_safe_directory(path)
+        with os.scandir(path) as entries:
+            return next(entries, None) is None
+    except (OSError, ValueError) as error:
+        _fail(f"existing Dashboard output cannot be inspected safely: {error}")
+
+
+def _new_private_staging_directory(parent: Path, output_name: str) -> Path:
+    try:
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{output_name}.staging-", dir=parent)
+        )
+        os.chmod(staging, 0o700)
+        return require_private_directory(staging)
+    except (OSError, ValueError) as error:
+        _fail(f"Dashboard staging directory cannot be created safely: {error}")
+
+
+def _reject_output_containing_input(
+    output: Path, protected: Path, label: str
+) -> None:
+    if _path_entry_exists(output):
+        comparison_root = output.resolve(strict=True)
+    else:
+        comparison_root = output.parent.resolve(strict=True) / output.name
+    try:
+        if _path_entry_exists(protected):
+            reject_link_components(protected)
+            protected = protected.resolve(strict=True)
+    except (OSError, ValueError) as error:
+        _fail(f"{label} cannot be inspected before Dashboard publication: {error}")
+    try:
+        protected.relative_to(comparison_root)
+    except ValueError:
+        return
+    _fail(f"Dashboard output must not contain the {label}")
+
+
+def _reject_output_containing_sources(
+    output: Path,
+    summary_path: Path,
+    summary: dict[str, Any],
+    contract_root: Path,
+    measurement_source_tree: Path,
+) -> None:
+    evidence_root = summary_path.parent
+    protected: list[tuple[Path, str]] = [
+        (summary_path, "summary input"),
+        (contract_root / "ci" / "evaluation-suite.json", "evaluation contract"),
+        (
+            contract_root / "host_tools" / "assets" / "evaluation-dashboard.css",
+            "Dashboard stylesheet",
+        ),
+        (
+            contract_root / "host_tools" / "assets" / "evaluation-dashboard.js",
+            "Dashboard script",
+        ),
+    ]
+    for index, item in enumerate(summary["evidence"]):
+        parts = _canonical_evidence_reference(
+            item["path"], f"evidence[{index}].path"
+        )
+        protected.append(
+            (evidence_root.joinpath(*parts), f"evidence[{index}] input")
+        )
+    for relative in (
+        "campaign.json",
+        "measurement-source-receipt.json",
+        "suite.json",
+        "run-plan.json",
+        "metrics.jsonl",
+        "raw",
+        "scenario/report.json",
+        "scenario/scenario-plan.json",
+        "compatibility",
+        *KERNEL_COST_FILES,
+    ):
+        protected.append(
+            (
+                evidence_root.joinpath(*relative.split("/")),
+                f"evaluation sidecar {relative}",
+            )
+        )
+    policy = measurement_source_policy_inventory()
+    for entry in policy["entries"]:
+        relative = entry["path"]
+        protected.append(
+            (
+                measurement_source_tree.joinpath(*relative.split("/")),
+                f"measurement source {relative}",
+            )
+        )
+    for path, label in protected:
+        _reject_output_containing_input(output, path, label)
+
+
+def _remove_site_tree(path: Path) -> None:
+    if not _path_entry_exists(path):
+        return
+    require_safe_directory(path)
+    walk_regular_files_no_links(path)
+    shutil.rmtree(path)
+
+
+def _prepare_staged_site_permissions(staging: Path) -> None:
+    if os.name == "nt":
+        return
+    try:
+        directories, files = walk_directory_tree_no_links(staging)
+        for path in files:
+            os.chmod(path, 0o644)
+        for path in directories:
+            if path != staging:
+                os.chmod(path, 0o755)
+    except (OSError, ValueError) as error:
+        _fail(f"staged Dashboard permissions cannot be prepared safely: {error}")
+
+
+def _replace_site_directory(source: Path, destination: Path) -> None:
+    """Rename one verified sibling directory without copying partial contents."""
+
+    os.replace(source, destination)
+
+
+def _publish_staged_site(staging: Path, output: Path, parent: Path) -> None:
+    """Publish a complete sibling tree, restoring the old tree on failure."""
+
+    backup = staging.with_name(f"{staging.name}.previous")
+    had_previous = False
+    try:
+        require_private_directory(staging)
+        require_safe_directory(parent)
+        reject_link_components(output)
+        if _path_entry_exists(backup):
+            _fail("Dashboard publication backup path is unexpectedly occupied")
+        if _path_entry_exists(output):
+            had_previous = True
+            require_safe_directory(output)
+            if not _directory_is_empty(output):
+                _require_existing_dashboard_site(output)
+        if os.name != "nt":
+            os.chmod(staging, 0o755)
+        if had_previous:
+            _replace_site_directory(output, backup)
+        _replace_site_directory(staging, output)
+    except BaseException as error:
+        rollback_error: BaseException | None = None
+        previous_moved = had_previous and _path_entry_exists(backup)
+        if previous_moved:
+            try:
+                if _path_entry_exists(output):
+                    if _path_entry_exists(staging):
+                        raise OSError(
+                            "publication destination changed while staging still exists"
+                        )
+                    _replace_site_directory(output, staging)
+                _replace_site_directory(backup, output)
+            except BaseException as restore_error:
+                rollback_error = restore_error
+        if isinstance(error, (OSError, ValueError, DashboardError)):
+            if rollback_error is not None:
+                _fail(
+                    "Dashboard publication failed and the previous site could not be "
+                    f"restored: publish={error}; rollback={rollback_error}"
+                )
+            suffix = "; previous site restored" if previous_moved else ""
+            _fail(f"Dashboard publication failed{suffix}: {error}")
         raise
+    if had_previous:
+        try:
+            _remove_site_tree(backup)
+        except (OSError, ValueError) as error:
+            _fail(f"published Dashboard is complete but old-site cleanup failed: {error}")
+
+
+def _verify_staged_site(
+    staging: Path, expected: dict[str, tuple[str, int]]
+) -> None:
+    try:
+        files = walk_regular_files_no_links(
+            staging,
+            max_files=len(expected),
+            max_directories=MAX_PORTABLE_EVIDENCE_FILES * 64 + 8,
+            max_total_bytes=sum(size for _digest, size in expected.values()),
+            max_depth=64,
+        )
+    except (OSError, ValueError) as error:
+        _fail(f"staged Dashboard cannot be verified safely: {error}")
+    actual = {path.relative_to(staging).as_posix(): path for path in files}
+    if set(actual) != set(expected):
+        _fail("staged Dashboard inventory is incomplete or contains extra files")
+    for relative, (digest, size) in expected.items():
+        try:
+            data = read_regular_file(actual[relative], maximum_bytes=size)
+        except (OSError, ValueError) as error:
+            _fail(f"staged Dashboard file cannot be re-read safely: {relative}: {error}")
+        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+            _fail(f"staged Dashboard file changed before publication: {relative}")
 
 
 def render(
@@ -5715,6 +5942,7 @@ def render(
     contract_root: Path,
     measurement_source_tree: Path | None = None,
 ) -> None:
+    output_dir, output_parent = _safe_output_directory(output_dir)
     try:
         contract_root = require_safe_directory(contract_root).resolve(strict=True)
     except (OSError, ValueError) as error:
@@ -5728,8 +5956,19 @@ def render(
     summary_path = summary_path.resolve(strict=True)
     if not summary_path.is_file():
         _fail("summary input must be a regular file")
+    _reject_output_containing_input(output_dir, contract_root, "trusted contract root")
+    _reject_output_containing_input(
+        output_dir, measurement_source_tree, "measurement source tree"
+    )
     source_summary = summary_path.read_bytes()
     validated = validate_summary(read_strict_json(summary_path))
+    _reject_output_containing_sources(
+        output_dir,
+        summary_path,
+        validated,
+        contract_root,
+        measurement_source_tree,
+    )
     if summary_path.read_bytes() != source_summary:
         _fail("summary input changed while it was being validated")
     verification, scenario_details, kernel_cost, campaign_environment = _verify_evidence_files(
@@ -5747,42 +5986,69 @@ def render(
         measurement_source_tree=measurement_source_tree,
     )
     summary = _canonical_dashboard_summary(validated, kernel_cost)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if not output_dir.is_dir():
-        _fail("output path must be a directory")
+    staging = _new_private_staging_directory(output_parent, output_dir.name)
+    try:
+        expected: dict[str, tuple[str, int]] = {}
 
-    assets_source = contract_root / "host_tools" / "assets"
-    assets_output = output_dir / "assets"
-    assets_output.mkdir(exist_ok=True)
-    for name in ("evaluation-dashboard.css", "evaluation-dashboard.js"):
-        source = assets_source / name
+        def write_expected(relative: str, data: bytes) -> None:
+            _atomic_write_bytes(staging.joinpath(*relative.split("/")), data)
+            expected[relative] = (hashlib.sha256(data).hexdigest(), len(data))
+
+        assets_source = contract_root / "host_tools" / "assets"
+        ensure_safe_directory(staging / "assets")
+        for name in ("evaluation-dashboard.css", "evaluation-dashboard.js"):
+            source = assets_source / name
+            try:
+                data = read_regular_file(
+                    source,
+                    nonempty=True,
+                    maximum_bytes=MAX_PORTABLE_EVIDENCE_FILE_BYTES,
+                )
+            except (OSError, ValueError) as error:
+                _fail(f"dashboard asset missing or unsafe: {source}: {error}")
+            write_expected(f"assets/{name}", data)
+
+        expected.update(
+            _write_portable_evidence(summary_path.parent, staging, validated)
+        )
+        write_expected(
+            "index.html",
+            _page(
+                summary,
+                verification,
+                scenario_details,
+                kernel_cost,
+                campaign_environment,
+            ).encode("utf-8"),
+        )
+        write_expected(
+            "evaluation-summary.json",
+            (
+                json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n"
+            ).encode("utf-8"),
+        )
+        write_expected(
+            "dashboard-verification.json",
+            (
+                json.dumps(
+                    verification, ensure_ascii=False, indent=2, sort_keys=True
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )
+        write_expected("metrics.csv", _csv_bytes(summary))
+        _prepare_staged_site_permissions(staging)
+        _verify_staged_site(staging, expected)
+        _publish_staged_site(staging, output_dir, output_parent)
+    except BaseException:
         try:
-            require_regular_file(source)
-        except (OSError, ValueError) as error:
-            _fail(f"dashboard asset missing or unsafe: {source}: {error}")
-        shutil.copyfile(source, assets_output / name)
-
-    _write_portable_evidence(summary_path.parent, output_dir, validated)
-
-    _atomic_write(
-        output_dir / "index.html",
-        _page(
-            summary,
-            verification,
-            scenario_details,
-            kernel_cost,
-            campaign_environment,
-        ),
-    )
-    _atomic_write(
-        output_dir / "evaluation-summary.json",
-        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-    )
-    _atomic_write(
-        output_dir / "dashboard-verification.json",
-        json.dumps(verification, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-    )
-    _write_csv(output_dir / "metrics.csv", summary)
+            _remove_site_tree(staging)
+        except (OSError, ValueError):
+            pass
+        raise
+    if _path_entry_exists(staging):
+        _remove_site_tree(staging)
 
 
 def main(argv: list[str] | None = None) -> int:

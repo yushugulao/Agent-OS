@@ -98,53 +98,6 @@ struct resource_reservation {
 
 #define RESOURCE_RESERVE_ALLOW_CLOSING (1U << 0)
 
-/*
- * Replenishing budgets are a separate facet from durable resources.  Lanes
- * are account-local policy dimensions; global pools can be composed with a
- * lane in one atomic lease to model hierarchical admission.
- */
-#define RESOURCE_RATE_LANE_CAP 4U
-#define RESOURCE_RATE_GLOBAL_CAP 2U
-#define RESOURCE_RATE_BUNDLE_CAP 2U
-#define RESOURCE_RATE_LEASE_CAP 2049U
-
-#define RESOURCE_RATE_PROFILE_ALLOW_CLOSING (1U << 0)
-#define RESOURCE_RATE_ENDPOINT_ALLOW_DEBT (1U << 0)
-
-enum resource_rate_endpoint_scope {
-	RESOURCE_RATE_ACCOUNT = 1,
-	RESOURCE_RATE_GLOBAL,
-};
-
-struct resource_rate_profile {
-	uint64 burst;
-	uint64 refill;
-	uint flags;
-};
-
-struct resource_rate_endpoint {
-	enum resource_rate_endpoint_scope scope;
-	struct resource_account_handle account;
-	uint index;
-	uint flags;
-	uint64 amount;
-};
-
-struct resource_rate_lease_handle {
-	uint slot;
-	uint generation;
-};
-
-struct resource_rate_snapshot {
-	uint64 tokens;
-	uint64 leased;
-	uint64 debt;
-	uint64 pending_debt;
-	uint64 burst;
-	uint64 refill;
-	uint flags;
-};
-
 void resource_controller_init(void);
 uint resource_kind_attributes(enum resource_kind);
 int resource_policy_configure(enum resource_kind, uint64, uint64, uint64);
@@ -209,29 +162,5 @@ uint64 resource_account_class_usage(struct resource_account_handle,
 int resource_account_kind_snapshot(struct resource_account_handle,
 				   enum resource_kind,
 				   struct resource_account_kind_snapshot *);
-
-struct resource_rate_lease_handle resource_rate_lease_none(void);
-int resource_rate_lease_valid(struct resource_rate_lease_handle);
-int resource_rate_account_configure(
-	struct resource_account_handle,
-	const struct resource_rate_profile *, uint);
-int resource_rate_global_configure(
-	uint, const struct resource_rate_profile *);
-int resource_rate_reserve_many(
-	const struct resource_rate_endpoint *, uint,
-	struct resource_rate_lease_handle *);
-int resource_rate_lease_commit(struct resource_rate_lease_handle);
-void resource_rate_lease_cancel(struct resource_rate_lease_handle);
-int resource_rate_charge_many(
-	const struct resource_rate_endpoint *, uint);
-int resource_rate_account_refill(
-	struct resource_account_handle, uint, uint64 *);
-int resource_rate_global_refill(uint, uint64 *);
-int resource_rate_account_snapshot(
-	struct resource_account_handle, uint,
-	struct resource_rate_snapshot *);
-int resource_rate_global_snapshot(
-	uint, struct resource_rate_snapshot *);
-int resource_rate_account_idle(struct resource_account_handle);
 
 #endif

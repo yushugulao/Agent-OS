@@ -6,6 +6,8 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -133,6 +135,7 @@ class ResourceJobsTests(unittest.TestCase):
         for name, value in (
             ("AGENTOS_MAX_JOBS", "many"),
             ("AGENTOS_MAX_JOBS", "0"),
+            ("AGENTOS_MAX_JOBS", "-2"),
             ("AGENTOS_OUTER_JOBS", "0"),
         ):
             with self.subTest(name=name, value=value), patch.dict(
@@ -140,6 +143,33 @@ class ResourceJobsTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "positive integer"):
                     MODULE.choose_jobs("build", cpus=8)
+
+    def test_cli_rejects_a_nonpositive_operator_cap(self) -> None:
+        environment = os.environ.copy()
+        environment["AGENTOS_MAX_JOBS"] = "0"
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-B", str(SCRIPT), "--kind", "host"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            env=environment,
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("AGENTOS_MAX_JOBS must be a positive integer", result.stdout)
+
+    def test_makefile_rejects_invalid_global_caps_before_auto_detection(self) -> None:
+        makefile = SCRIPT.parent.parent.joinpath("Makefile").read_text(
+            encoding="utf-8"
+        )
+        validation = "ifneq ($(origin AGENTOS_MAX_JOBS),undefined)"
+        auto_detection = "AGENTOS_BUILD_JOBS ?="
+        self.assertEqual(makefile.count(validation), 1)
+        self.assertLess(makefile.index(validation), makefile.index(auto_detection))
+        self.assertIn(
+            "$(error AGENTOS_MAX_JOBS must be an integer between 1 and 24)",
+            makefile,
+        )
 
     def test_makefile_uses_one_adaptive_qemu_budget(self) -> None:
         makefile = SCRIPT.parent.parent.joinpath("Makefile").read_text(

@@ -1743,24 +1743,16 @@ def main() -> int:
         assert formal_summary["acceptance"]["competition_ready"]
         assert formal_summary["acceptance"]["tasks"]["task6"] == "pass"
         bundle._verify_formal_summary(formal_summary)
-        legacy_formal_summary = copy.deepcopy(formal_summary)
-        legacy_formal_summary["schema_version"] = 2
-        legacy_formal_summary["run"]["suite_id"] = "agentos-evaluation-v2"
-        legacy_formal_summary["acceptance"] = derive_acceptance_gates(
-            legacy_formal_summary["scenarios"],
-            legacy_formal_summary["claims"],
-            legacy_formal_summary["methodology"]["competition_claims"],
-            suite_schema_version=2,
-        )
-        assert not legacy_formal_summary["acceptance"]["competition_ready"]
-        assert legacy_formal_summary["acceptance"]["tasks"]["task6"] == "not_ready"
-        bundle._verify_formal_summary(legacy_formal_summary)
-        mixed_policy_summary = copy.deepcopy(legacy_formal_summary)
-        mixed_policy_summary["run"]["suite_id"] = "agentos-evaluation-v3"
-        expect_rejected(
-            lambda: bundle._verify_formal_summary(mixed_policy_summary),
-            "acceptance policy binding is invalid",
-        )
+        for retired_version in (2, 3, 4):
+            retired_summary = copy.deepcopy(formal_summary)
+            retired_summary["schema_version"] = retired_version
+            retired_summary["run"]["suite_id"] = (
+                f"agentos-evaluation-v{retired_version}"
+            )
+            expect_rejected(
+                lambda: bundle._verify_formal_summary(retired_summary),
+                "acceptance policy binding is invalid",
+            )
         missing_task6_performance = copy.deepcopy(formal_summary)
         missing_task6 = next(
             item for item in missing_task6_performance["scenarios"]
@@ -2133,7 +2125,6 @@ def main() -> int:
             unsupported_task4["scenarios"],
             unsupported_task4["claims"],
             unsupported_task4["methodology"]["competition_claims"],
-            suite_schema_version=unsupported_task4["schema_version"],
         )
         bundle._verify_formal_summary(unsupported_task4)
         assert unsupported_task4["acceptance"]["scientific_evidence"]["status"] == "publishable"
@@ -2147,7 +2138,6 @@ def main() -> int:
             unsupported_task4["scenarios"],
             unsupported_task4["claims"],
             unsupported_task4["methodology"]["competition_claims"],
-            suite_schema_version=unsupported_task4["schema_version"],
         )
         expect_rejected(
             lambda: bundle._verify_formal_summary(unsupported_task4),

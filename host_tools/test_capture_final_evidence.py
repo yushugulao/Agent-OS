@@ -66,7 +66,6 @@ SEMANTIC_METADATA = REPO / "host_tools" / "evidence_semantic_metadata.py"
 SEMANTIC_DUAL = REPO / "host_tools" / "evidence_semantic_dual.py"
 DUAL_STATE_CONTRACT = REPO / "host_tools" / "dual_state_evidence_contract.py"
 DUAL_STATE_ARCHIVE = REPO / "host_tools" / "dual_state_archive.py"
-RESULT_PUBLICATION = REPO / "host_tools" / "result_bundle_publication.py"
 REFERENCE_CATALOG_CONTRACT = REPO / "host_tools" / "reference_catalog_contract.py"
 COMPARE_DUAL_STATE = REPO / "host_tools" / "compare_dual_platform_state.py"
 CHECK_HOST_PLATFORM = REPO / "host_tools" / "check_host_platform_alignment.py"
@@ -509,7 +508,7 @@ write("dual-agentos-qemu.log", "\n".join([
 }) + "\n", encoding="utf-8", newline="\n")
 stages = ("structure-check", "seeded-dual-run", "qemu-log-marker-check",
           "state-extract-copy", "host-alignment", "state-compare",
-          "measured-file-query", "result-report-chart")
+          "measured-file-query")
 write("dual-stage-timings.csv", "stage,start_epoch,end_epoch,duration_seconds,status\n" +
       "\n".join("%s,%d,%d,1,ready" % (stage, index, index + 1)
                   for index, stage in enumerate(stages, 1)))
@@ -959,7 +958,6 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
     for module in (
         SEMANTIC_REGISTRY, SEMANTIC_COMMON, SEMANTIC_PROFILES,
         SEMANTIC_METADATA, SEMANTIC_DUAL, DUAL_STATE_ARCHIVE,
-        RESULT_PUBLICATION,
         DUAL_STATE_CONTRACT, REFERENCE_CATALOG_CONTRACT, COMPARE_DUAL_STATE,
         CHECK_HOST_PLATFORM, CHECK_HOST_TEST, COMPARE_DUAL_TEST,
     ):
@@ -2665,6 +2663,7 @@ procreap_ucore: parent passed
             for name in ("agent_observe_disk_contract.py", "agent_observe_disk_evidence.py")
         )
         self.assertLessEqual(observe_host_lines, 980)
+
         observe_acceptance_lines = observe_host_lines + len(
             (REPO / "host_tools" / "agent_observe_disk_acceptance.py")
             .read_text(encoding="utf-8").splitlines()
@@ -2763,5 +2762,18 @@ procreap_ucore: parent passed
         statuses = tuple(run(["git", "check-ignore", "-q", "--no-index", path], REPO, check=False).returncode
                          for path in ("probe.log", "evidence/releases/probe/logs/raw/probe.log"))
         self.assertEqual(statuses, (0, 1))
+
+    def test_workspace_cleanup_targets_only_retired_result_preview(self) -> None:
+        makefile = (REPO / "Makefile").read_text(encoding="utf-8")
+        start = makefile.index("WORKSPACE_GENERATED_PATHS =")
+        end = makefile.index("\n\nTOOLPREFIX", start)
+        tokens = makefile[start:end].replace("\\\n", " ").split()[2:]
+        self.assertEqual(
+            [token for token in tokens if token.startswith("results")],
+            ["results/latest"],
+        )
+        self.assertIn("git clean -ndX -- $(WORKSPACE_GENERATED_PATHS)", makefile)
+        self.assertIn("git clean -fdX -- $(WORKSPACE_GENERATED_PATHS)", makefile)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

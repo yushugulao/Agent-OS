@@ -201,8 +201,7 @@ echo "[full-verify] dual platforms"
 	cd "${ROOT_DIR}"
 	if evidence_enabled; then
 		dual_dir="${EVIDENCE_WORK_DIR}/dual"
-		result_dir="${EVIDENCE_WORK_DIR}/result"
-		DUAL_LOG_DIR="${dual_dir}" RESULT_DIR="${result_dir}" \
+		DUAL_LOG_DIR="${dual_dir}" \
 			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
 			PYTHON_BIN="${PYTHON_BIN}" bash scripts/run-dual-platforms.sh
 		PYTHONPATH="${ROOT_DIR}/host_tools" "${PYTHON_BIN}" \
@@ -235,13 +234,13 @@ echo "[full-verify] dual platforms"
 				"${dual_dir}/${source}" "${artifact}"
 		done
 		evidence_publish_file \
-			"${result_dir}/experiments/dual-targeted-agentbench-guest.log" \
+			"${dual_dir}/dual-targeted-agentbench-guest.log" \
 			"dual-targeted-agentbench-guest.log"
 		evidence_publish_file \
-			"${result_dir}/experiments/measured-experiments.json" \
+			"${dual_dir}/measured-experiments.json" \
 			"dual-measured-experiments.json"
 		evidence_publish_file \
-			"${result_dir}/experiments/raw/file-query-benchmark.csv" \
+			"${dual_dir}/file-query-benchmark.csv" \
 			"dual-file-query-benchmark.csv"
 	else
 		TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \

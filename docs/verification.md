@@ -239,46 +239,37 @@ ASan/UBSan 下的追加行为。
 
 ## 结果产物和实测边界
 
-`make dual-platform-run` 会把原始日志、纯 Guest 提取状态和独立 Host run receipt 保存在 `/tmp/agentos-dual-platform/`，并把状态对照和诊断汇总写入 `results/latest/`。普通运行不生成最终 complete-state ZIP。这些文件证明两个目标执行了哪些功能路径，但状态计数、模板记录和页面汇总不能自动视为原始性能实验。
+`make dual-platform-run` 默认在系统临时目录新建 `agentos-dual-platform-g-<random>/`，并将权限收紧到当前用户；`DUAL_LOG_DIR` 只接受尚不存在且所有路径分量均非符号链接或 junction 的目录。每个目录只对应一个 run generation，旧目录不会被覆盖或续写。普通运行不生成最终 complete-state ZIP，也不再生成另一套 HTML/SVG 预览。这些原始文件证明两个目标执行了哪些功能路径，但状态计数和功能记录不能自动视为原始性能实验。
 
 当前仓库只承认一组 provenance-bound Guest 实测：`agentbench_ucore` 的文件查询 benchmark。它在真实 Guest 中输出强制遍历、包含索引重建的冷索引和索引已就绪后的热索引测量。热索引每次都实际遍历候选链，不使用内核查询结果缓存。提取器同时要求后续存在完整的 `agentbench_ucore: parent passed` 行，任何字段、顺序或来源检查失败都会拒绝整组数据。
 
 可信测量产物如下：
 
 ```text
-results/latest/experiments/status.json
-results/latest/experiments/measured-experiments.json
-results/latest/experiments/dual-targeted-agentbench-guest.log
-results/latest/experiments/raw/file-query-benchmark.csv
-results/latest/experiments/experiment-stats.csv
-results/latest/charts/experiment-file-query-bar.svg
+$DUAL_LOG_DIR/dual-targeted-agentbench-guest.log
+$DUAL_LOG_DIR/measured-experiments.json
+$DUAL_LOG_DIR/file-query-benchmark.csv
+$DUAL_LOG_DIR/measurement-set.json
 
 evidence/releases/<bundle>/metrics/file-query-benchmark.csv
 evidence/releases/<bundle>/metrics/file-query-benchmark.json
 evidence/releases/<bundle>/logs/raw/agent-suite-guest.log
+evidence/releases/<bundle>/logs/raw/dual-targeted-agentbench-guest.log
+evidence/releases/<bundle>/logs/raw/dual-measured-experiments.json
+evidence/releases/<bundle>/logs/raw/dual-file-query-benchmark.csv
 evidence/releases/<bundle>/logs/raw/dual-plain-complete-state.zip
 evidence/releases/<bundle>/logs/raw/dual-agentos-complete-state.zip
 evidence/releases/<bundle>/logs/raw/dual-plain-host-run-result.state
 evidence/releases/<bundle>/logs/raw/dual-agentos-host-run-result.state
 ```
 
-其中 `results/latest/` 只是可覆盖的本地预览。`measured-experiments.json` 不存在时，`experiments/status.json` 必须标记 `unavailable`，原始 CSV、统计和图表不得由公式、固定常量或功能状态推导。正式发布只引用 clean、已提交 HEAD 对应的 `evidence/releases/<bundle>/`；CSV 每行都保存来源日志 SHA256、marker SHA256、行号、命令、commit 和 run id，JSON manifest 再绑定完整来源文件。
+双目标脚本先生成 Guest 日志，再原子写入 manifest 和 CSV，逐项回读验证后最后原子发布 `measurement-set.json`。可捕获的失败会删除测量三件套；`SIGKILL` 等不可捕获终止即使留下片段，也因缺少完成 receipt 而一律无效。`full-verify` evidence mode 不读取普通 run，而是在 `${FINAL_EVIDENCE_STAGE}/runtime/full-verify/dual` 这一新建私有目录重新执行双目标阶段，成功后才封存对应的 `dual-*` raw artifacts。移交时先验证私有目录 receipt，正式包再由 verification summary、逐文件 hash 和语义重放接管完成性，不把临时 receipt 当作发布证据。正式发布只引用 clean、已提交 HEAD 对应的 `evidence/releases/<bundle>/`；CSV 每行都保存来源日志 SHA256、marker SHA256、行号、命令、commit 和 run id，JSON manifest 再绑定完整来源文件。任何一项缺失或不一致都会使正式采集失败，不得由公式、固定常量或功能状态补齐。
 
 Context/timeline、事件等待、并发写入、LLM Relay 和恢复流程仍由专项 Guest 测试验证功能和安全语义。它们在补充同等级的真实 Guest marker、来源哈希和重复测量前，不再宣称拥有独立 raw CSV、性能曲线或“六组原始实验数据”。仓库也不再提交由旧公式数据绘制的示例 `experiment-*.svg`。
 
 已移除硬编码布局的运行时示例，避免将演示图误读为性能证据。运行时性能只接受由可信动态测量生成、并与原始日志及 commit/run 身份绑定的数据。
 
-文件查询图只在 provenance-bound 测量可用时生成。阅读时必须同时打开 `file-query-benchmark.csv` 和 JSON manifest，核对三条路径的 `operations`、`primary_value`、`duration_unit=us`、`duration_value`、`rebuild_records` 以及来源绑定。时间来自 Guest `gettimeofday` 的原始微秒差值，允许真实的零差值，禁止 floor 或公式补值。图表只是同一 CSV 的可视化，不是额外证据，也不能用来外推 Context、事件、并发写入、LLM Relay 或恢复路径的性能。
-
-报告生成由 `host_tools/summarize_dual_platform_results.py` 完成。该脚本只读取已有运行产物，不重新启动 QEMU，因此可以单独重跑：
-
-```bash
-python3 host_tools/summarize_dual_platform_results.py \
-  --work-dir /tmp/agentos-dual-platform \
-  --out-dir results/latest
-```
-
-汇总器每次都会先清除旧的 `experiments/`、`experiment-*.svg` 和已停用的模板/监控页面，防止重跑继续暴露旧公式或静态说明文件。它会把已经验签的 manifest 和 Guest 源日志复制进结果目录；缺少 manifest 时只生成 `unavailable` 状态。
+阅读文件查询测量时必须同时打开 `file-query-benchmark.csv` 和 JSON manifest，核对三条路径的 `operations`、`primary_value`、`duration_unit=us`、`duration_value`、`rebuild_records` 以及来源绑定。时间来自 Guest `gettimeofday` 的原始微秒差值，允许真实的零差值，禁止 floor 或公式补值。这组测量不能用来外推 Context、事件、并发写入、LLM Relay 或恢复路径的性能。
 
 现场说明使用 `make contest-demo` 生成静态实测 Dashboard；正式评审使用 `make evaluation-dashboard` 生成 release bundle 内的 `dashboard/index.html`。两者都直接读取已校验数据，不启动独立页面服务。
 
@@ -469,7 +460,3 @@ Agent suite 的时长数据必须与 `ci/kernel-budgets.json` 中的源码 finge
 - AgentOS target 能运行等价科研流程，并让关键阶段依赖内核 Agent 服务。
 - 状态查看入口能呈现两个目标的差异。
 - 文档能把功能呈现对应到内核机制，而不是只描述用户态应用。
-
-## 暂停验证说明
-
-如果当前有其他编辑者正在修改根目录 AgentOS 源码，可以先暂停构建和 QEMU 运行，只做静态文档和状态渲染对齐。提交前仍需要重新运行双目标构建、QEMU 路径和状态渲染检查。

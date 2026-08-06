@@ -76,7 +76,7 @@
 
 ### 5.3 通用资源账户与系统保留
 
-`os/resource_controller.[ch]` 是资源计费唯一事实源。账户句柄为 `{slot,generation}`，种类分为 EXEC 与 STORAGE，状态为 FREE/ACTIVE/CLOSING/DRAINING；资源种类覆盖 PROCESS、THREAD、FILE_OBJECT、FS_BLOCK、FS_INODE、BUFFER_CACHE 和 AGENT_STATE_PAGE。每项 charge 还区分 ordinary/reserved，账户上限、普通全局水位、系统保留和总容量在同一次 admission 中检查。成员、durable usage、pending reservation 或 rate lease/debt 尚未归零时，CLOSING/DRAINING 账户不能复用。
+`os/resource_controller.[ch]` 是通用资源计费唯一事实源。账户句柄为 `{slot,generation}`，种类分为 EXEC 与 STORAGE，状态为 FREE/ACTIVE/CLOSING/DRAINING；资源种类覆盖 PROCESS、THREAD、FILE_OBJECT、FS_BLOCK、FS_INODE、BUFFER_CACHE 和 AGENT_STATE_PAGE。每项 charge 还区分 ordinary/reserved，账户上限、普通全局水位、系统保留和总容量在同一次 admission 中检查。成员、durable usage 或 pending reservation 尚未归零时，CLOSING/DRAINING 账户不能复用；I/O 速率状态由 BIO owner 生命周期单独管理。
 
 `resource_reserve_many()` 把复合资源视为一个向量：进程与主线程、pipe 两端等要么全部预留并提交，要么完整取消，避免半接纳对象。挂载恢复使用 `resource_reconcile_usage()` 将 qmap/dinode 事实写回 STORAGE account；对象所有权变化使用 transfer，不能通过退出或句柄槽复用刷新账本。普通 fork 后代继承 EXEC account，一个账户的进程上限和全局 ordinary 水位限制长存活 fork bomb；可信 boot/workflow admission 只能通过内核授予 reserved class。
 
@@ -114,9 +114,9 @@ pipe 创建先预留两个进程 FD，再用一个资源向量预留两个 FILE_
 
 ### 5.8 块 I/O 速率预算与 buffer cache 保留
 
-块设备服务使用与持久存储一致的 STORAGE account：安装级 PUBLIC、SYSTEM，以及每个内核签发的 active 或正在清理的 workflow。BIO 的 owner/class bucket、设备根 bucket、lease 与 debt 由资源控制器的 rate lane/global pool/bundle lease 承载；syscall 在进入可能触盘的实现前捕获账户与 class。PUBLIC 使用 `NORMAL`，workflow 的 Orchestrator/Recovery 使用 `CONTROL`，其他 workflow 使用 `NORMAL`；metadata、scanner 和 scope reclaim 显式建立 SYSTEM 或触发 workflow 的 `BACKGROUND` job。
+块设备服务使用与持久存储一致的稳定 owner：安装级 PUBLIC、SYSTEM，以及每个内核签发的 active 或正在清理的 workflow。BIO 自己持有 owner/class、shared 和 device bucket；两级 reservation 在同一关中断窗口扣款，commit/cancel 各恰好一次，`last_refill_tick` 在访问时惰性补充信用。通用 `resource_account` 不再为所有账户携带 I/O lane 或全局 lease 表。PUBLIC 使用 `NORMAL`，workflow 的 Orchestrator/Recovery 使用 `CONTROL`，其他 workflow 使用 `NORMAL`；metadata、scanner 和 scope reclaim 显式建立 SYSTEM 或触发 workflow 的 `BACKGROUND` job。
 
-每个 owner/class 有受保护的 burst/refill bucket。PUBLIC NORMAL 为 32/16；每个 active workflow 的 NORMAL/CONTROL/BACKGROUND 为 24/12、48/24、8/4；每个 retiring workflow 只保留 BACKGROUND 8/4；SYSTEM SYSTEM/BACKGROUND 为 96/48、16/8。ABI v6 的前台 shared gate 与设备根同为 560/280，它不是额外保证：每次借用必须同时取得设备根信用。无竞争传输依次消费 reserved、shared；异域 owner 活动、排队、retire/quiesce 或已有 lane debt 时停止直接借用。准入 account endpoint 不带债；reserved lane 只有取得真实 account lease 后，设备端才可为保证份额形成 debt，shared 永不带债。完成首笔 reservation 后，请求内真实物理传输批量结算；有界原子多传输若随后耗尽 reserved/shared，后续真实提交可形成受请求上界约束的 owner lane debt；owner lease/debt 必须在 checkpoint、退出/撤销 settlement 或 owner 释放前清偿，未获准请求不得裸透支。global device debt 不属于 owner 生命周期：NORMAL/BACKGROUND 非保护 lane 等待它清零，SYSTEM/CONTROL 保护 lane可以跨越；设备根 tick refill 优先偿还它，有界 request 与 protected aggregate envelope 限制上界。只有真实 `disk_submit` 才发布物理计费；volatile overlay 命中不计，写回块和最终 FLUSH 逐次计费。admission/debt 使用对象私有队列，排队 shared grant 按 owner/class cursor 轮转；`BACKGROUND` 不能借 shared。
+每个活跃 owner/class 有受保护的 burst/refill bucket，另有 shared 与 device 根。无竞争传输依次消费 reserved、shared；异域 owner 活动、排队、retire/quiesce 或已有 debt 时停止借用，`BACKGROUND` 不借 shared。一次 admission 同时预留来源 bucket 和 device bucket，提交/取消各恰好一次；shared 永不带债，有界原子请求只在请求上界内形成 owner/device debt。bucket 通过 `last_refill_tick` 惰性补充，debt bitmap 只推进实际有债务的 lane，空闲系统不再周期扫描所有通用账户。只有真实 `disk_submit` 发布物理计费；volatile overlay 命中不计，写回块和最终 FLUSH 逐次计费。具体 burst、refill 与保护上界以 `io_policy.h` 为准，文档不复制易漂移的数字。
 
 设备根 bucket 的 burst/refill 为 560/280。编译期分别验证所有 reserved lane 的最坏总和 528/264 和 shared gate 各自不超过设备 envelope；二者不能相加，因为 shared 每次同时扣根。reserved 根透支由真实 account token 背书并由后续 refill 先偿还。8 槽 lifecycle ledger 的静态 cleanup 预算不表示运行时可同时 admission 8 个 workflow；冻结期 ACTIVE/CLOSING/RETIRING 合计最多 4 个。
 
@@ -204,7 +204,7 @@ scope 编号由内核定义：0 是 PUBLIC，1 是只读可信 SYSTEM，3 及以
 
 syscall 546 只允许进程取得自己的 lifecycle/runtime 快照或比较自己的 expected key。它没有 PID、scope 或任意 ledger 查询参数，并采用版本化 sized-prefix copyout；坏指针、非法 flags/key 在写输出前失败。合法 `STALE/NOT_FOUND` 可以同时返回 self snapshot，便于测试识别重用而不扩大权限。`(id,generation)` 仍只是不可变身份/比较值，不能替代根 control id、factory authority、capability 或对象 owner。
 
-显式关闭与根进程正常退出、fault 退出及 terminal credential clear 走同一个幂等 controller-departure 路径。ACTIVE 原子转换为 CLOSING 后形成不可逆的授权与发布屏障；scope acquire、storage reserve、spawn 和 pending exec commit 均拒绝。成员扫描匹配不可变 lifecycle key，而不是可清除的当前凭据，故 PUBLIC 降权子孙不能逃逸。扫描调用统一 teardown request，不覆盖已经取得 `teardown_owner_tid` 的进程；成员在自身上下文关闭 FD、释放 inode/VM/sidecar、结算 resource account 与 I/O lease/debt。exec 的 `prepare/commit/abort` 在发布边界再次核对 lifecycle 状态。
+显式关闭与根进程正常退出、fault 退出及 terminal credential clear 走同一个幂等 controller-departure 路径。ACTIVE 原子转换为 CLOSING 后形成不可逆的授权与发布屏障；scope acquire、storage reserve、spawn 和 pending exec commit 均拒绝。成员扫描匹配不可变 lifecycle key，而不是可清除的当前凭据，故 PUBLIC 降权子孙不能逃逸。扫描调用统一 teardown request，不覆盖已经取得 `teardown_owner_tid` 的进程；成员在自身上下文关闭 FD、释放 inode/VM/sidecar，并结算 resource account、BIO 在途请求与 debt。exec 的 `prepare/commit/abort` 在发布边界再次核对 lifecycle 状态。
 
 最后成员释放引用后才进入 RETIRING 并撤销 active cache floor。ledger 在该 generation 的退休工作完成前保留 key；轮转 reaper 使用 BACKGROUND 预算清理 metadata、dependency、action history、edit lease/version、query/digest cache、audit、span prefetch、IPC 和普通文件，再释放 STORAGE account 与槽。下一 workflow 即使复用相同 slot/id，也具有更高 generation，不能重新解释旧状态。
 
@@ -329,6 +329,6 @@ make local-check
 - `agent.c` 必须保持薄 facade；状态和实现归属版本化 owner 集合。metadata 的 transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）只能通过命名空间化窄接口连接，directory bridge 不得持有可写全局状态或形成反向依赖。
 - 通用安全机制若同步到 `baseline_ucore/`，必须保持两侧行为契约一致；当前 resource controller、workflow lifecycle、统一 teardown 和 lazy stack 尚不是 baseline 的共享实现。
 - 新的可恢复资源不足路径必须返回错误并回滚，不能把普通用户可触发的条件写成 `panic()`。
-- 调整 `io_policy.h` 的 budget 或 cache floor/cap 时，必须同时保持 4 active + 8 retiring BACKGROUND 的保守静态 envelope、reserved 528/264 与 shared 560/280 分别不超过设备根、shared 每次与设备根同步扣减且永不带债、准入 account endpoint 不带债、reserved 设备端只由真实 account lease 背书带 debt，以及已接纳请求的 owner lane debt 上界与生命周期 settlement、不受 owner lifecycle 约束但由设备根 refill 清偿的 global device debt、protected aggregate envelope 和 `NBUF` 静态断言；还须复测 PUBLIC 压力、多 workflow、SYSTEM/workflow BACKGROUND、retiring 3/8、shared 排队轮转和 `disk_submit` 物理计费。
+- 调整 `io_policy.h` 的 budget 或 cache floor/cap 时，必须保持 owner 保留总和和 shared gate 分别不超过 device envelope、shared 不带债、有界请求的 owner/device debt 上界、protected aggregate envelope 与 `NBUF` 静态断言；同时复测 PUBLIC 压力、多 workflow、SYSTEM/workflow BACKGROUND、retiring cleanup、shared 排队轮转和 `disk_submit` 物理计费。
 - 修改内核或 Agent 模块边界时必须更新并运行 `make local-check`。源码、镜像、text/data/BSS/total、PCB、legacy mail 两页 sidecar、Agent Context sidecar 与完整 Agent 状态容量、线程与 64 KiB boot stack 调用图、32 MiB 虚拟容量、8 MiB 物理保留池、owner/bridge 注册集合、模块阈值和 Agent case 清单以 `ci/kernel-budgets.json` 为准；受控符号用户必须登记，SCC 硬上限不能仅改 JSON 放宽。metadata 拆分单元、IPC 及 contract headers 必须同时纳入聚合 source/text/BSS 预算，禁止靠跨文件迁移绕过 no-growth 约束。完整套件耗时只在受管且已校准的本地环境中作为硬门，独立 teardown race 另行验证。
 - 文档不得把共享加固 baseline 描述为未修改的上游 uCore，也不得把通过结构扫描解释为完整运行验证。

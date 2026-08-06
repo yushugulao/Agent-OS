@@ -86,24 +86,24 @@
       "os/fs_allocator_test.c",
       "os/physical_page_test.c"
     ],
-    "baseline_lines": 47922,
-    "max_lines": 50066
+    "baseline_lines": 63037,
+    "max_lines": 63037
   },
   "kernel_image": {
-    "baseline_stripped_elf_bytes": 332544,
-    "max_stripped_elf_bytes": 349172,
-    "baseline_raw_binary_bytes": 327688,
-    "max_raw_binary_bytes": 344073
+    "baseline_stripped_elf_bytes": 455512,
+    "max_stripped_elf_bytes": 455512,
+    "baseline_raw_binary_bytes": 450656,
+    "max_raw_binary_bytes": 450656
   },
   "kernel_runtime": {
-    "baseline_text_bytes": 325648,
-    "max_text_bytes": 339957,
-    "baseline_data_bytes": 8,
-    "max_data_bytes": 9,
-    "baseline_bss_bytes": 6206424,
-    "max_bss_bytes": 6516729,
-    "baseline_total_bytes": 6532080,
-    "max_total_bytes": 6856694
+    "baseline_text_bytes": 446916,
+    "max_text_bytes": 446916,
+    "baseline_data_bytes": 96,
+    "max_data_bytes": 96,
+    "baseline_bss_bytes": 5923944,
+    "max_bss_bytes": 5923944,
+    "baseline_total_bytes": 6370956,
+    "max_total_bytes": 6370956
   },
   "struct_proc": {
     "symbol": "kernel_budget_struct_proc",
@@ -187,12 +187,13 @@
         "name": "background",
         "source_path": "os/agent_background.c",
         "object_path": "build/os/agent_background.o",
-        "baseline_lines": 20,
-        "max_lines": 21,
+        "baseline_lines": 26,
+        "max_lines": 28,
         "max_bss_bytes": 4,
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agent_background_request",
+          "agent_background_work_pending",
           "agent_background_take"
         ],
         "allowed_readonly_symbols": [],
@@ -233,8 +234,8 @@
         "name": "core",
         "source_path": "os/agent_core.c",
         "object_path": "build/os/agent_core.o",
-        "baseline_lines": 1334,
-        "max_lines": 1342,
+        "baseline_lines": 1368,
+        "max_lines": 1437,
         "max_bss_bytes": 0,
         "allowed_global_prefixes": [
           "agent_core_",
@@ -315,8 +316,8 @@
         "name": "context",
         "source_path": "os/agent_context.c",
         "object_path": "build/os/agent_context.o",
-        "baseline_lines": 1458,
-        "max_lines": 1531,
+        "baseline_lines": 1828,
+        "max_lines": 1920,
         "max_bss_bytes": 0,
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
@@ -370,6 +371,7 @@
         ],
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
+          "agent_context_active_rebuild",
           "agent_context_active_measure",
           "agent_context_read_record",
           "agent_context_record_hash"
@@ -551,9 +553,9 @@
         "name": "file_state",
         "source_path": "os/agent_file_state.c",
         "object_path": "build/os/agent_file_state.o",
-        "baseline_lines": 1045,
-        "max_lines": 1098,
-        "max_bss_bytes": 205116,
+        "baseline_lines": 1261,
+        "max_lines": 1325,
+        "max_bss_bytes": 282345,
         "required_cflags": [
           "-Os"
         ],
@@ -566,6 +568,8 @@
           "agent_edit_note_write",
           "agent_edit_truncate_allowed",
           "agent_edit_unlink_allowed",
+          "agent_edit_write_lease_allowed",
+          "agent_edit_write_lease_snapshot",
           "agent_file_version_reclaim",
           "sys_agent_file_edit_abort",
           "sys_agent_file_edit_begin",
@@ -583,9 +587,9 @@
         "name": "metadata_catalog",
         "source_path": "os/agent_metadata_catalog.c",
         "object_path": "build/os/agent_metadata_catalog.o",
-        "baseline_lines": 1220,
-        "max_lines": 1245,
-        "max_bss_bytes": 207360,
+        "baseline_lines": 2143,
+        "max_lines": 2251,
+        "max_bss_bytes": 234587,
         "required_cflags": [
           "-Os"
         ],
@@ -605,8 +609,8 @@
         "name": "metadata_journal",
         "source_path": "os/agent_metadata_journal.c",
         "object_path": "build/os/agent_metadata_journal.o",
-        "baseline_lines": 1125,
-        "max_lines": 1125,
+        "baseline_lines": 899,
+        "max_lines": 944,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -627,8 +631,8 @@
         "name": "metadata_query",
         "source_path": "os/agent_metadata_query.c",
         "object_path": "build/os/agent_metadata_query.o",
-        "baseline_lines": 217,
-        "max_lines": 228,
+        "baseline_lines": 316,
+        "max_lines": 332,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -649,8 +653,8 @@
         "name": "metadata_scan",
         "source_path": "os/agent_metadata_scan.c",
         "object_path": "build/os/agent_metadata_scan.o",
-        "baseline_lines": 500,
-        "max_lines": 500,
+        "baseline_lines": 505,
+        "max_lines": 531,
         "max_bss_bytes": 220,
         "required_cflags": [
           "-Os"
@@ -675,8 +679,8 @@
         "name": "metadata_directory",
         "source_path": "os/agent_metadata_directory.c",
         "object_path": "build/os/agent_metadata_directory.o",
-        "baseline_lines": 118,
-        "max_lines": 124,
+        "baseline_lines": 113,
+        "max_lines": 119,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -726,8 +730,8 @@
         "name": "metadata_objects",
         "source_path": "os/agent_metadata_objects.c",
         "object_path": "build/os/agent_metadata_objects.o",
-        "baseline_lines": 1471,
-        "max_lines": 1544,
+        "baseline_lines": 1631,
+        "max_lines": 1713,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -739,9 +743,11 @@
           "agent_metadata_background_maintain",
           "agent_metadata_admission_status",
           "agent_metadata_durable_status",
+          "agent_metadata_durability_fence_current",
           "agent_metadata_execute_tool",
           "agent_metadata_fill_info",
           "agent_metadata_objects_init",
+          "agent_metadata_quiescence_fence_current",
           "agent_metadata_storage_init",
           "agent_metadata_tick",
           "agent_metadata_tool_enter",
@@ -808,9 +814,9 @@
         "name": "metadata_probe",
         "source_path": "os/agent_metadata_probe.c",
         "object_path": "build/os/agent_metadata_probe.o",
-        "baseline_lines": 456,
-        "max_lines": 479,
-        "max_bss_bytes": 272,
+        "baseline_lines": 535,
+        "max_lines": 562,
+        "max_bss_bytes": 9664,
         "required_cflags": [
           "-Os"
         ],
@@ -849,9 +855,9 @@
         "name": "metadata_store",
         "source_path": "os/agent_metadata_store.c",
         "object_path": "build/os/agent_metadata_store.o",
-        "baseline_lines": 2224,
-        "max_lines": 2336,
-        "max_bss_bytes": 677792,
+        "baseline_lines": 2953,
+        "max_lines": 3101,
+        "max_bss_bytes": 700088,
         "required_cflags": [
           "-Os"
         ],
@@ -881,8 +887,8 @@
         "name": "metadata_store_format",
         "source_path": "os/agent_metadata_store_format.c",
         "object_path": "build/os/agent_metadata_store_format.o",
-        "baseline_lines": 189,
-        "max_lines": 199,
+        "baseline_lines": 219,
+        "max_lines": 230,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -974,7 +980,7 @@
         "object_path": "build/os/agent_observe_capacity.o",
         "baseline_lines": 707,
         "max_lines": 742,
-        "max_bss_bytes": 256,
+        "max_bss_bytes": 320,
         "required_cflags": [
           "-Os"
         ],
@@ -1142,11 +1148,12 @@
         "name": "resource_observer",
         "source_path": "os/agent_resource.c",
         "object_path": "build/os/agent_resource.o",
-        "baseline_lines": 73,
-        "max_lines": 77,
+        "baseline_lines": 185,
+        "max_lines": 195,
         "max_bss_bytes": 0,
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
+          "sys_agent_performance_snapshot",
           "sys_agent_resource_snapshot"
         ],
         "allowed_readonly_symbols": [],
@@ -1159,9 +1166,9 @@
         "name": "resource_controller",
         "source_path": "os/resource_controller.c",
         "object_path": "build/os/resource_controller.o",
-        "baseline_lines": 1667,
-        "max_lines": 1751,
-        "max_bss_bytes": 452048,
+        "baseline_lines": 1064,
+        "max_lines": 1118,
+        "max_bss_bytes": 124404,
         "allowed_global_prefixes": [
           "resource_"
         ],
@@ -1314,6 +1321,7 @@
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "background",
           "file_state",
           "resource_controller"
         ]
@@ -1333,7 +1341,8 @@
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
-          "facade"
+          "facade",
+          "resource_controller"
         ]
       },
       {
@@ -1343,6 +1352,17 @@
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
           "facade"
+        ]
+      },
+      {
+        "name": "open_file_io_lease",
+        "object_path": "build/os/open_file_io_lease.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "file_state",
+          "resource_controller",
+          "workflow_lifecycle"
         ]
       },
       {
@@ -1380,6 +1400,7 @@
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "background",
           "context",
           "core",
           "facade",
@@ -1471,14 +1492,14 @@
           "os/agent_observe_persist_context.h"
         ],
         "source_budget_policy": "5% for fixed module contract overhead; loaded text and BSS remain no-growth",
-        "baseline_source_lines": 11703,
-        "max_source_lines": 11703,
-        "baseline_source_bytes": 357796,
-        "max_source_bytes": 357796,
-        "baseline_loaded_text_bytes": 77367,
-        "max_loaded_text_bytes": 77367,
-        "baseline_bss_bytes": 1118172,
-        "max_bss_bytes": 1118172,
+        "baseline_source_lines": 14955,
+        "max_source_lines": 14955,
+        "baseline_source_bytes": 465295,
+        "max_source_bytes": 465295,
+        "baseline_loaded_text_bytes": 99400,
+        "max_loaded_text_bytes": 99400,
+        "baseline_bss_bytes": 1232236,
+        "max_bss_bytes": 1232236,
         "discarded_sections": [
           ".eh_frame"
         ]

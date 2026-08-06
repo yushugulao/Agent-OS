@@ -78,6 +78,15 @@ except ValueError:
 else:
     raise SystemExit("mutation survived: granted interruption was conflated")
 
+if "static int wait_queue_wake(" not in WAIT:
+    raise SystemExit("wait queue lacks a common wake traversal")
+for repeated_scan in (
+    "while (wait_queue_wake_one_thread(q) != 0)",
+    "while (wait_queue_wake_thread(q, 1, key) != 0)",
+):
+    if repeated_scan in WAIT:
+        raise SystemExit("wait-all still rescans the queue")
+
 for wrapper in (
     "wait_queue_sleep_irq",
     "wait_queue_sleep_key_irq",

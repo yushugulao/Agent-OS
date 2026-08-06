@@ -1243,15 +1243,6 @@ def main() -> int:
     )
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        legacy_suite = copy.deepcopy(suite)
-        legacy_suite["schema_version"] = 2
-        legacy_suite["suite_id"] = "agentos-evaluation-v2"
-        legacy_suite.pop("supplementary_scenarios")
-        legacy_suite_path = root / "legacy-suite.json"
-        legacy_suite_path.write_text(
-            json.dumps(legacy_suite), encoding="utf-8"
-        )
-        assert load_suite(legacy_suite_path) == legacy_suite
         plan_path = write_campaign(root, suite)
         loaded_plan, _ = load_run_plan(plan_path)
         assert loaded_plan["schema_version"] == 2
@@ -2786,16 +2777,22 @@ def main() -> int:
                 "differs from its registered workload contract",
             )
 
+        for retired_version in (2, 3, 4):
+            retired_suite = copy.deepcopy(suite)
+            retired_suite["schema_version"] = retired_version
+            retired_suite["suite_id"] = f"agentos-evaluation-v{retired_version}"
+            retired_path = root / f"retired-suite-v{retired_version}.json"
+            retired_path.write_text(json.dumps(retired_suite), encoding="utf-8")
+            expect_rejected(
+                lambda path=retired_path: load_suite(path),
+                "suite schema version is invalid",
+            )
+
         for name, mutate, message in (
             (
-                "mixed-acceptance-policy",
-                lambda value: value.__setitem__("schema_version", 2),
-                "suite id is invalid",
-            ),
-            (
-                "legacy-suite-id",
+                "invalid-suite-id",
                 lambda value: value.__setitem__(
-                    "suite_id", "agentos-evaluation-v2"
+                    "suite_id", "agentos-evaluation-retired"
                 ),
                 "suite id is invalid",
             ),

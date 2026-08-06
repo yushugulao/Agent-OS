@@ -17,7 +17,7 @@ WORKSPACE_GENERATED_PATHS = \
 	baseline_ucore/user/asm baseline_ucore/user/asm-* \
 	nfs/*.img nfs/fs nfs/*.exe os/initproc.S \
 	baseline_ucore/nfs/*.img baseline_ucore/nfs/fs baseline_ucore/nfs/*.exe \
-	baseline_ucore/os/initproc.S .pytest_cache \
+	baseline_ucore/os/initproc.S results/latest .pytest_cache \
 	host_tools/__pycache__ scripts/__pycache__
 
 TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then echo riscv64-unknown-elf-; else echo riscv64-linux-gnu-; fi)
@@ -51,13 +51,21 @@ AGENT_TEST_DURATION_PROFILE_ORIGIN := $(origin AGENT_TEST_DURATION_PROFILE)
 AGENT_TEST_DURATION_PROFILE ?= none
 FULL_VERIFY_AGENT_TEST_DURATION_PROFILE ?= $(if $(filter undefined,$(AGENT_TEST_DURATION_PROFILE_ORIGIN)),local-e3,$(AGENT_TEST_DURATION_PROFILE))
 COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
-AGENTOS_BUILD_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind build 2>/dev/null),1)
-AGENTOS_TEST_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind host 2>/dev/null),1)
-AGENTOS_QEMU_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind qemu 2>/dev/null),1)
 override AGENTOS_JOB_VALUES := \
 	1 2 3 4 5 6 7 8 9 10 11 12 \
 	13 14 15 16 17 18 19 20 21 22 23 24
 override AGENTOS_QEMU_JOB_VALUES := 1 2 3 4 5 6 7 8
+ifneq ($(origin AGENTOS_MAX_JOBS),undefined)
+ifneq ($(words $(AGENTOS_MAX_JOBS)),1)
+$(error AGENTOS_MAX_JOBS must be an integer between 1 and 24)
+endif
+ifeq ($(filter $(AGENTOS_MAX_JOBS),$(AGENTOS_JOB_VALUES)),)
+$(error AGENTOS_MAX_JOBS must be an integer between 1 and 24)
+endif
+endif
+AGENTOS_BUILD_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind build 2>/dev/null),1)
+AGENTOS_TEST_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind host 2>/dev/null),1)
+AGENTOS_QEMU_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind qemu 2>/dev/null),1)
 ifneq ($(words $(AGENTOS_BUILD_JOBS)),1)
 $(error AGENTOS_BUILD_JOBS must be an integer between 1 and 24)
 endif
@@ -733,11 +741,9 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-fs-epoch-regression.py \
 	scripts/test-mkfs-host-snapshot.py \
 	scripts/test-observe-recovery-contract.py \
-	scripts/test-physical-brk-wiring.py \
 	scripts/test-printf-format-contract.py \
 	scripts/test-rp-evidence-file-field.py \
 	scripts/test-rp-state-append.py \
-	scripts/test-resource-kind-policy.py \
 	scripts/test-sync-owner-wiring.py \
 	scripts/test-validate-virtio-disk-log.py \
 	scripts/check-sequential-read-batch.py \
@@ -745,7 +751,7 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-parallel-qemu-regressions.py \
 	scripts/test-parallel-test-runner.py \
 	scripts/test-resource-jobs.py \
-	scripts/test-resource-rate-lease-freering.py
+	scripts/test-bio-rate-controller.py
 
 kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh agent-observe-disk-format-check printf-format-static-check
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
@@ -787,9 +793,6 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_reference_catalog_contract.py \
 	host_tools/test_measured_experiments.py \
 	host_tools/test_dual_measurement_source_contract.py \
-	host_tools/test_summarize_dual_platform_results.py \
-	host_tools/test_result_bundle_contract.py \
-	host_tools/test_chart_svg_layout_contract.py \
 	host_tools/test_evaluation_platform.py \
 	host_tools/test_evaluation_campaign.py \
 	host_tools/test_agenteval_measurement_source.py \
@@ -843,7 +846,7 @@ override EVIDENCE_CAPTURE_TESTS := \
 	host_tools/test_evidence_delivery_contract.py
 
 evidence-capture-selftest: scripts/trusted-python-entry.py scripts/trusted-python-child.py host_tools/evaluation_source_gate.py host_tools/formal_python_runtime.py
-evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/result_bundle_publication.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py $(EVIDENCE_CAPTURE_TESTS)
+evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/safe_host_paths.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py $(EVIDENCE_CAPTURE_TESTS)
 	@$(PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(PYTHON_BIN)) \

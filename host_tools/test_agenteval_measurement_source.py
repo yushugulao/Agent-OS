@@ -634,6 +634,7 @@ def main() -> int:
     commit = "a" * 40
     receipt = build_measurement_source_receipt(ROOT, source_commit=commit)
     assert CONTRACT_VERSION == "agenteval-measurement-source-v11"
+    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v4"
     assert FORMAL_BOOT_COUNT == 7
     assert receipt["formal_boot_count"] == FORMAL_BOOT_COUNT
     assert receipt["contract_versions"]["functional"] == (
@@ -667,6 +668,14 @@ def main() -> int:
     assert "host_tools/functional_acceptance_source_contract.py" in policy_paths
     assert "scripts/capture-final-evidence.py" in policy_paths
     assert "scripts/run-full-verification.sh" in policy_paths
+    measurement_execution_policy = {
+        ("dual-platform-runner", "scripts/run-dual-platforms.sh"),
+        (
+            "measurement-set-publisher",
+            "host_tools/extract_measured_experiments.py",
+        ),
+    }
+    assert measurement_execution_policy <= policy_entries
     assert "host_tools/evidence_toolchain_attestation.py" in policy_paths
     assert "host_tools/formal_temp_binding.py" in policy_paths
     semantic_replay_dependencies = {
@@ -747,7 +756,7 @@ def main() -> int:
         raise AssertionError("accepted forged measurement source receipt")
     for _role, path in (
         micro_execution_policy | compatibility_execution_policy
-        | split_source_policy
+        | measurement_execution_policy | split_source_policy
     ):
         forged_source = json.loads(json.dumps(receipt))
         matches = [

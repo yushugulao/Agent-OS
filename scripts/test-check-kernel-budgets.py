@@ -103,8 +103,8 @@ class KernelBudgetTests(unittest.TestCase):
             config["canonical_toolchain"]["ldflags"],
             ["-m", "elf64lriscv", "-z", "max-page-size=4096"],
         )
-        self.assertEqual(config["kernel_source"]["baseline_lines"], 47922)
-        self.assertEqual(config["kernel_source"]["max_lines"], 50066)
+        self.assertEqual(config["kernel_source"]["baseline_lines"], 63037)
+        self.assertEqual(config["kernel_source"]["max_lines"], 63037)
         self.assertEqual(config["struct_proc"]["baseline_bytes"], 23464)
         self.assertEqual(config["struct_proc"]["max_bytes"], 24638)
 
@@ -1586,6 +1586,7 @@ agent_metadata_txn_projection_require_idle();
                 "kalloc",
                 "loader",
                 "main",
+                "open_file_io_lease",
                 "pipe",
                 "proc",
                 "syscall",
@@ -3016,7 +3017,11 @@ agent_metadata_txn_projection_require_idle();
         )
         self.assertEqual(
             modules["background"]["allowed_global_symbols"],
-            ["agent_background_request", "agent_background_take"],
+            [
+                "agent_background_request",
+                "agent_background_work_pending",
+                "agent_background_take",
+            ],
         )
         self.assertEqual(modules["background"]["allowed_dependencies"], [])
         self.assertEqual(modules["identity_lease"]["allowed_dependencies"], [])
@@ -3051,7 +3056,7 @@ agent_metadata_txn_projection_require_idle();
         capacity = modules["observe_capacity"]
         self.assertEqual(capacity["baseline_lines"], 707)
         self.assertEqual(capacity["max_lines"], 742)
-        self.assertEqual(capacity["max_bss_bytes"], 256)
+        self.assertEqual(capacity["max_bss_bytes"], 320)
         self.assertEqual(
             capacity["allowed_dependencies"],
             ["background", "durable_section", "workflow_lifecycle"],

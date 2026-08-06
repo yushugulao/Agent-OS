@@ -6,8 +6,14 @@ from __future__ import annotations
 import copy
 import json
 import re
+import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import extract_measured_experiments as extractor
 
 from benchmark_source_contract import (
     FIELD_BINDINGS,
@@ -428,6 +434,90 @@ def main() -> int:
         assert verify_measurement_artifact_set(
             manifest, csv_path, root, commit, "logs/guest.log"
         ) == value
+
+        publication = root / "private-publication"
+        publication.mkdir(mode=0o700)
+        publication_log = publication / "dual-targeted-agentbench-guest.log"
+        publication_log.write_text(
+            MARKER + "\nagentbench_ucore: parent passed\n", encoding="utf-8"
+        )
+        publication_args = SimpleNamespace(
+            guest_log=publication_log,
+            source_ref=publication_log.name,
+            commit=commit,
+            run_id="dual-aaaaaaaaaaaa-g-0123456789abcdef01234567",
+            generation="g-0123456789abcdef01234567",
+            command_json=json.dumps(command),
+            manifest_out=publication / "measured-experiments.json",
+            csv_out=publication / "file-query-benchmark.csv",
+            receipt_out=publication / "measurement-set.json",
+        )
+        published = extractor.publish_measurement_set(publication_args)
+        assert published["run_id"] == publication_args.run_id
+        receipt = json.loads(
+            publication_args.receipt_out.read_text(encoding="utf-8")
+        )
+        assert receipt["status"] == "complete", receipt
+        assert receipt["generation"] == publication_args.generation, receipt
+        assert receipt["commit"] == commit, receipt
+        assert [item["role"] for item in receipt["files"]] == [
+            "guest_log",
+            "measurement_manifest",
+            "measurement_csv",
+        ], receipt
+
+        interrupted = root / "interrupted-publication"
+        interrupted.mkdir(mode=0o700)
+        interrupted_log = interrupted / publication_log.name
+        interrupted_log.write_text(
+            MARKER + "\nagentbench_ucore: parent passed\n", encoding="utf-8"
+        )
+        interrupted_args = copy.copy(publication_args)
+        interrupted_args.guest_log = interrupted_log
+        interrupted_args.manifest_out = interrupted / "measured-experiments.json"
+        interrupted_args.csv_out = interrupted / "file-query-benchmark.csv"
+        interrupted_args.receipt_out = interrupted / "measurement-set.json"
+        original_write_csv = extractor.write_csv
+        try:
+            def fail_csv(*_args, **_kwargs):
+                raise OSError("injected CSV publication failure")
+
+            extractor.write_csv = fail_csv
+            try:
+                extractor.publish_measurement_set(interrupted_args)
+            except OSError as error:
+                assert "injected CSV" in str(error), error
+            else:
+                raise AssertionError("accepted an interrupted measurement publication")
+        finally:
+            extractor.write_csv = original_write_csv
+        assert interrupted_log.is_file()
+        assert not interrupted_args.manifest_out.exists()
+        assert not interrupted_args.csv_out.exists()
+        assert not interrupted_args.receipt_out.exists()
+
+        target_parent = root / "linked-publication-target"
+        target_parent.mkdir(mode=0o700)
+        linked_parent = root / "linked-publication"
+        try:
+            linked_parent.symlink_to(target_parent, target_is_directory=True)
+        except (NotImplementedError, OSError):
+            pass
+        else:
+            linked_log = target_parent / publication_log.name
+            linked_log.write_text(
+                MARKER + "\nagentbench_ucore: parent passed\n", encoding="utf-8"
+            )
+            expect_rejected(
+                lambda: extract_file_query_measurements(
+                    linked_parent / publication_log.name,
+                    publication_log.name,
+                    command,
+                    commit,
+                    "run-linked",
+                ),
+                "missing or unsafe",
+            )
         original_csv = csv_path.read_text(encoding="utf-8")
         csv_path.write_text(original_csv.splitlines()[0] + "\n", encoding="utf-8")
         expect_rejected(

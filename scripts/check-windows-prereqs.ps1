@@ -47,21 +47,11 @@ foreach ($cmd in $checks) {
     }
 }
 
-$pythonModules = @("pandas", "seaborn", "matplotlib")
-foreach ($module in $pythonModules) {
-    & wsl.exe bash -lc "python3 -c 'import $module' >/dev/null 2>&1" 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        Report-Ok "python module" $module
-    } else {
-        Write-Host "[windows-deps] recommended missing: python module $module"
-    }
-}
-
 if ($script:Missing) {
     Write-Host ""
     Write-Host "[windows-deps] Open Ubuntu/WSL and run:"
     Write-Host "sudo apt update"
-    Write-Host "sudo apt install -y git build-essential make python3 qemu-system-misc gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu python3-pandas python3-seaborn python3-matplotlib"
+    Write-Host "sudo apt install -y git build-essential make python3 qemu-system-misc gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu"
     exit 1
 }
 

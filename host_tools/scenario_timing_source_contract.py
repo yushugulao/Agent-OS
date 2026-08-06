@@ -1321,25 +1321,47 @@ def _validate_performance_producers(
     _ordered(
         rate_batch,
         (
-            ("reserved", "=", "MIN", "(", "amount", ",", "lane", ".", "tokens", ")", ";"),
             (
-                "io_rate_bundle_amount", "(", "state", ",", "io_class", ",",
-                "0", ",", "reserved", ",", "endpoints", ")", ";",
+                "lane", "=", "io_rate_owner_refresh", "(", "state", ",",
+                "io_class", ")", ";",
+            ),
+            (
+                "reserved", "=", "MIN", "(", "amount", ",", "lane", "->",
+                "tokens", ")", ";",
+            ),
+            (
+                "io_rate_charge_pair", "(", "state", ",", "io_class", ",",
+                "0", ",", "0", ",", "1", ",", "reserved", ")",
             ),
             ("state", "->", "reserved_grants", "+", "=", "reserved", ";"),
             ("amount", "-", "=", "reserved", ";"),
-            ("shared", "=", "MIN", "(", "amount", ",", "capacity", ".", "tokens", ")", ";"),
             (
-                "io_rate_bundle_amount", "(", "state", ",", "io_class", ",",
-                "1", ",", "shared", ",", "endpoints", ")", ";",
+                "capacity", "=", "io_rate_shared_refresh", "(", ")", ";",
+            ),
+            (
+                "shared", "=", "MIN", "(", "amount", ",", "capacity", "->",
+                "tokens", ")", ";",
+            ),
+            (
+                "io_rate_charge_pair", "(", "state", ",", "io_class", ",",
+                "1", ",", "0", ",", "0", ",", "shared", ")",
             ),
             ("state", "->", "shared_grants", "+", "=", "shared", ";"),
             ("amount", "-", "=", "shared", ";"),
+            (
+                "for", "(", "uint64", "i", "=", "0", ";", "i", "<",
+                "amount", ";", "i", "++", ")",
+            ),
+            (
+                "io_rate_charge_pair", "(", "state", ",", "io_class", ",",
+                "0", ",", "1", ",", "1", ",", "1", ")",
+            ),
+            ("state", "->", "throttles", "+", "=", "amount", ";"),
         ),
-        "bulk resource-controller charge",
+        "BIO-local batched rate charge",
     )
-    if rate_batch.count("io_rate_bundle_amount") != 2:
-        raise ValueError("resource-controller fast path no longer charges by batch")
+    if rate_batch.count("io_rate_charge_pair") != 4:
+        raise ValueError("BIO-local fast path no longer charges by bounded batches")
 
     producer_assignments = (
         "io_policy.physical_reads += count;",

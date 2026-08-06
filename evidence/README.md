@@ -5,9 +5,10 @@
 ## 发布入口
 
 - `releases/INDEX.md`：正式证据包索引。索引为空表示当前提交还没有发布数据。
-- `results/latest/`：本地可覆盖的预览，不属于正式证据，也不提交到仓库。
 
-正式包由干净的源码提交 C 生成，再由紧随其后的证据提交 E 加入 `releases/` 和索引。包内保存源码提交、工具版本、原始 Guest 日志、测试命令、指标和离线 Dashboard。GitLab 只负责托管；远端没有 Runner，验收在本地完成。
+`make dual-platform-run` 默认新建一个仅当前用户可访问的随机临时目录；也可通过 `DUAL_LOG_DIR` 指定一个尚不存在、且路径中不含符号链接或 junction 的目录。该目录只属于一次 run generation，`measurement-set.json` 最后发布并绑定 Guest 日志、manifest 和 CSV；缺少该 receipt 的目录不是完整测量。
+
+正式包由干净的源码提交 C 生成，再由紧随其后的证据提交 E 加入 `releases/` 和索引。正式采集会在自己的私有 staging 目录重新运行双目标测试，不复用普通调试 run；只有完整退出后才封存原始文件。包内保存源码提交、工具版本、原始 Guest 日志、测试命令、指标和离线 Dashboard。GitLab 只负责托管；远端没有 Runner，验收在本地完成。
 
 ## 生成与复核
 

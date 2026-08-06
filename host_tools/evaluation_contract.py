@@ -50,12 +50,8 @@ except ImportError:
 
 
 SCHEMA_VERSION = 1
-SUITE_IDS = {
-    2: "agentos-evaluation-v2",
-    3: "agentos-evaluation-v3",
-    4: "agentos-evaluation-v4",
-    5: "agentos-evaluation-v5",
-}
+EVALUATION_SCHEMA_VERSION = 5
+EVALUATION_SUITE_ID = "agentos-evaluation-v5"
 MARKER_PREFIX = "agenteval_ucore: sample "
 DIAGNOSTIC_PREFIX = "agenteval_ucore: diagnostic "
 LAUNCHER_PREFIX = "agenteval_ucore: launcher "
@@ -96,11 +92,6 @@ REVISIT_SUMMARY_FIELDS = (
     "fallback", "result_fingerprint", "status",
 )
 CONCURRENCY_SAMPLE_FIELDS = {
-    1: (
-        "schema", "concurrency", "round", "slot", "identity", "request_id",
-        "correct", "contamination", "fallback", "duration_us",
-        "result_fingerprint", "status",
-    ),
     2: (
         "schema", "concurrency", "round", "slot", "identity", "request_id",
         "submitted_us", "started_us", "completed_us", "received_us",
@@ -109,12 +100,6 @@ CONCURRENCY_SAMPLE_FIELDS = {
     ),
 }
 CONCURRENCY_FIELDS = {
-    1: (
-        "schema", "concurrency", "rounds", "requests", "completed", "start_us",
-        "end_us", "duration_us", "throughput_milli_rps", "avg_milli_us",
-        "p50_us", "p90_us", "p99_us", "correct", "contamination", "fallback",
-        "result_fingerprint", "status",
-    ),
     2: (
         "schema", "concurrency", "rounds", "requests", "completed", "start_us",
         "end_us", "duration_us", "throughput_milli_rps", "goodput_milli_rps",
@@ -127,11 +112,6 @@ CONCURRENCY_FIELDS = {
     ),
 }
 CONCURRENCY_PUBLIC_FIELDS = {
-    1: (
-        "concurrency", "rounds", "requests", "completed", "duration_us",
-        "throughput_milli_rps", "avg_milli_us", "p50_us", "p90_us", "p99_us",
-        "correct", "contamination", "fallback",
-    ),
     2: (
         "concurrency", "rounds", "requests", "completed", "duration_us",
         "throughput_milli_rps", "goodput_milli_rps", "avg_milli_us", "p50_us",
@@ -240,23 +220,8 @@ def derive_acceptance_gates(
     scenarios: list[dict[str, Any]],
     claims: list[dict[str, Any]],
     competition_claims: dict[str, Any],
-    *,
-    suite_schema_version: int,
 ) -> dict[str, Any]:
-    """Derive scientific-publication and competition-acceptance gates.
-
-    A measured negative result remains scientifically publishable and is never
-    relabelled as missing evidence.  Suite v2 conservatively made every
-    scenario regression block its task.  Suite v3 applies performance gates
-    only to tasks explicitly registered in ``competition_claims``;
-    unregistered full-stack measurements remain visible diagnostics.  This
-    versioned derivation preserves old evidence while preventing the packager
-    or dashboard from silently turning publication success into a performance
-    claim or an unregistered diagnostic into a rubric requirement.
-    """
-
-    if type(suite_schema_version) is not int or suite_schema_version not in SUITE_IDS:
-        raise EvaluationError("acceptance policy version is unsupported")
+    """Derive scientific-publication and competition-acceptance gates."""
 
     functional: dict[str, bool] = {}
     functional_status: dict[str, str] = {}
@@ -299,14 +264,7 @@ def derive_acceptance_gates(
         for item in scenarios
         if isinstance(item, dict) and item.get("performance_status") == "regressed"
     }
-    competition_tasks = {
-        task: (
-            "not_ready"
-            if suite_schema_version == 2 and task in regressed_tasks
-            else status
-        )
-        for task, status in functional_status.items()
-    }
+    competition_tasks = dict(functional_status)
     competition_tasks["task4"] = (
         "pass"
         if (
@@ -457,81 +415,60 @@ def load_suite(path: Path) -> dict[str, Any]:
     if not isinstance(raw_suite, dict):
         raise EvaluationError("suite must be an object")
     schema_version = raw_suite.get("schema_version")
-    if type(schema_version) is not int or schema_version not in SUITE_IDS:
+    if type(schema_version) is not int or schema_version != EVALUATION_SCHEMA_VERSION:
         raise EvaluationError("suite schema version is invalid")
-    if raw_suite.get("suite_id") != SUITE_IDS[schema_version]:
+    if raw_suite.get("suite_id") != EVALUATION_SUITE_ID:
         raise EvaluationError("suite id is invalid")
-    suite_fields = {
-        "schema_version", "kind", "suite_id", "pairing", "experiments",
-        "execution_schedule", "claim_family", "competition_claims",
-    }
-    if schema_version >= 4:
-        suite_fields.add("supplementary_scenarios")
     suite = _exact(
         raw_suite,
-        suite_fields,
+        {
+            "schema_version", "kind", "suite_id", "pairing", "experiments",
+            "execution_schedule", "claim_family", "competition_claims",
+            "supplementary_scenarios",
+        },
         "suite",
     )
-    if (
-        type(suite["schema_version"]) is not int
-        or suite["schema_version"] not in SUITE_IDS
-        or suite["kind"] != "agentos-evaluation-suite"
-    ):
+    if suite["kind"] != "agentos-evaluation-suite":
         raise EvaluationError("suite header is invalid")
-    if suite["suite_id"] != SUITE_IDS[suite["schema_version"]]:
-        raise EvaluationError("suite id is invalid")
-    if suite["schema_version"] >= 4:
-        supplementary = suite["supplementary_scenarios"]
-        if not isinstance(supplementary, list) or len(supplementary) != 1:
-            raise EvaluationError("supplementary scenario registration is invalid")
-        revisit_fields = {
+    supplementary = suite["supplementary_scenarios"]
+    if not isinstance(supplementary, list) or len(supplementary) != 1:
+        raise EvaluationError("supplementary scenario registration is invalid")
+    revisit = _exact(
+        supplementary[0],
+        {
             "id", "label", "task", "identity_order", "visit_sequence",
             "concurrency_levels", "rounds_per_level", "latency_unit",
             "throughput_unit", "percentile_method", "performance_gate",
-        }
-        if suite["schema_version"] >= 5:
-            revisit_fields.update(QOS_REGISTRATION_FIELDS)
-        revisit = _exact(
-            supplementary[0], revisit_fields, "supplementary revisit scenario"
-        )
-        if (
-            revisit["id"] != "multi_identity_revisit_isolation"
-            or revisit["task"] != "task1"
-            or revisit["identity_order"] != ["A", "B", "C", "D"]
-            or revisit["visit_sequence"] != ["A", "B", "C", "D", "A"]
-            or revisit["concurrency_levels"] != [1, 2, 4]
-            or revisit["rounds_per_level"] != 16
-            or revisit["latency_unit"] != "us"
-            or revisit["throughput_unit"] != "milli_requests_per_second"
-            or revisit["percentile_method"] != "nearest_rank"
-            or revisit["performance_gate"] is not None
-            or (
-                suite["schema_version"] >= 5
-                and (
-                    revisit["qos_schema_version"] != 2
-                    or revisit["latency_metrics"]
-                    != ["wait", "service", "turnaround"]
-                    or revisit["turnaround_definition"]
-                    != "worker_completed_minus_parent_submitted"
-                    or revisit["goodput_unit"]
-                    != "milli_requests_per_second"
-                    or revisit["fairness_scale"] != "parts_per_million"
-                    or revisit["fairness_basis"]
-                    != "per_identity_isolated_completions"
-                    or revisit["isolation_definition"]
-                    != "correct_and_zero_contamination_and_no_fallback"
-                    or revisit["digest"] != "fnv1a64_challenge_bound"
-                )
-            )
-        ):
-            raise EvaluationError(
-                "supplementary revisit scenario differs from its contract"
-            )
-        _label(revisit["label"], "supplementary revisit scenario label")
-    elif "supplementary_scenarios" in suite:
+            *QOS_REGISTRATION_FIELDS,
+        },
+        "supplementary revisit scenario",
+    )
+    if (
+        revisit["id"] != "multi_identity_revisit_isolation"
+        or revisit["task"] != "task1"
+        or revisit["identity_order"] != ["A", "B", "C", "D"]
+        or revisit["visit_sequence"] != ["A", "B", "C", "D", "A"]
+        or revisit["concurrency_levels"] != [1, 2, 4]
+        or revisit["rounds_per_level"] != 16
+        or revisit["latency_unit"] != "us"
+        or revisit["throughput_unit"] != "milli_requests_per_second"
+        or revisit["percentile_method"] != "nearest_rank"
+        or revisit["performance_gate"] is not None
+        or revisit["qos_schema_version"] != 2
+        or revisit["latency_metrics"] != ["wait", "service", "turnaround"]
+        or revisit["turnaround_definition"]
+        != "worker_completed_minus_parent_submitted"
+        or revisit["goodput_unit"] != "milli_requests_per_second"
+        or revisit["fairness_scale"] != "parts_per_million"
+        or revisit["fairness_basis"] != "per_identity_isolated_completions"
+        or revisit["isolation_definition"]
+        != "correct_and_zero_contamination_and_no_fallback"
+        or revisit["digest"] != "fnv1a64_challenge_bound"
+    ):
         raise EvaluationError(
-            "legacy suite cannot register supplementary scenarios"
+            "supplementary revisit scenario differs from its contract"
         )
+    _label(revisit["label"], "supplementary revisit scenario label")
     pairing = _exact(
         suite["pairing"],
         {
@@ -1681,7 +1618,7 @@ def _parse_revisit_evaluation(
 ) -> dict[str, Any]:
     identities = config["identity_order"]
     identity_indexes = {identity: index for index, identity in enumerate(identities)}
-    qos_schema = config.get("qos_schema_version", 1)
+    qos_schema = config["qos_schema_version"]
     sample_field_names = CONCURRENCY_SAMPLE_FIELDS[qos_schema]
     summary_field_names = CONCURRENCY_FIELDS[qos_schema]
     visit_lines = [
@@ -1851,14 +1788,10 @@ def _parse_revisit_evaluation(
             )
         numeric_fields = [
             "concurrency", "round", "slot", "correct", "contamination",
-            "fallback",
+            "fallback", "submitted_us", "started_us", "completed_us",
+            "received_us", "wait_us", "service_us", "turnaround_us",
+            "isolation_ok",
         ]
-        numeric_fields.extend(
-            ["duration_us"] if qos_schema == 1 else [
-                "submitted_us", "started_us", "completed_us", "received_us",
-                "wait_us", "service_us", "turnaround_us", "isolation_ok",
-            ]
-        )
         for key in numeric_fields:
             _supplementary_uint(fields, key, line_number)
         level = fields["concurrency"]
@@ -1880,10 +1813,7 @@ def _parse_revisit_evaluation(
             raise EvaluationError(
                 f"revisit concurrency schedule differs at line {line_number}"
             )
-        for key in (
-            ("correct", "fallback") if qos_schema == 1
-            else ("correct", "fallback", "isolation_ok")
-        ):
+        for key in ("correct", "fallback", "isolation_ok"):
             if fields[key] not in {0, 1}:
                 raise EvaluationError(
                     f"revisit concurrency {key} is not binary at line {line_number}"
@@ -1891,14 +1821,11 @@ def _parse_revisit_evaluation(
         if (
             fields["fallback"] != 1 - fields["correct"]
             or (fields["contamination"] > 0 and fields["correct"] != 0)
-            or (
-                qos_schema == 2
-                and fields["isolation_ok"]
-                != int(
-                    fields["correct"] == 1
-                    and fields["contamination"] == 0
-                    and fields["fallback"] == 0
-                )
+            or fields["isolation_ok"]
+            != int(
+                fields["correct"] == 1
+                and fields["contamination"] == 0
+                and fields["fallback"] == 0
             )
         ):
             raise EvaluationError(
@@ -1908,10 +1835,7 @@ def _parse_revisit_evaluation(
             fields["request_id"], "revisit concurrency request id", HEX16
         )
         expected_request_id = _semantic_token(
-            (
-                "aios-concurrency-request-v1" if qos_schema == 1
-                else "agentos-qos-request-v2"
-            ),
+            "agentos-qos-request-v2",
             level, expected_round,
             expected_slot * len(identities) + expected_identity_index,
             challenge,
@@ -1924,39 +1848,30 @@ def _parse_revisit_evaluation(
             fields["result_fingerprint"],
             "revisit concurrency result fingerprint", HEX16,
         )
-        if qos_schema == 2:
-            if not (
-                fields["submitted_us"] <= fields["started_us"]
-                <= fields["completed_us"] <= fields["received_us"]
-                and fields["wait_us"]
-                == fields["started_us"] - fields["submitted_us"]
-                and fields["service_us"]
-                == fields["completed_us"] - fields["started_us"]
-                and fields["turnaround_us"]
-                == fields["completed_us"] - fields["submitted_us"]
-                == fields["wait_us"] + fields["service_us"]
-            ):
-                raise EvaluationError(
-                    f"revisit QoS timestamps differ at line {line_number}"
-                )
-            fingerprint_domain = "agentos-qos-sample-v2"
-            fingerprint_values = [
-                level, expected_round, expected_slot, expected_identity_index,
-                expected_request_id, fields["correct"], fields["contamination"],
-                fields["fallback"], fields["isolation_ok"],
-                fields["submitted_us"], fields["started_us"],
-                fields["completed_us"], fields["received_us"], fields["wait_us"],
-                fields["service_us"], fields["turnaround_us"],
-            ]
-        else:
-            fingerprint_domain = "aios-revisit-concurrency-sample-v1"
-            fingerprint_values = [
-                level, expected_round, expected_slot, expected_identity_index,
-                expected_request_id, fields["correct"], fields["contamination"],
-                fields["fallback"], fields["duration_us"],
-            ]
+        if not (
+            fields["submitted_us"] <= fields["started_us"]
+            <= fields["completed_us"] <= fields["received_us"]
+            and fields["wait_us"]
+            == fields["started_us"] - fields["submitted_us"]
+            and fields["service_us"]
+            == fields["completed_us"] - fields["started_us"]
+            and fields["turnaround_us"]
+            == fields["completed_us"] - fields["submitted_us"]
+            == fields["wait_us"] + fields["service_us"]
+        ):
+            raise EvaluationError(
+                f"revisit QoS timestamps differ at line {line_number}"
+            )
+        fingerprint_values = [
+            level, expected_round, expected_slot, expected_identity_index,
+            expected_request_id, fields["correct"], fields["contamination"],
+            fields["fallback"], fields["isolation_ok"],
+            fields["submitted_us"], fields["started_us"],
+            fields["completed_us"], fields["received_us"], fields["wait_us"],
+            fields["service_us"], fields["turnaround_us"],
+        ]
         expected_fingerprint = _supplementary_hash(
-            fingerprint_domain, challenge, fingerprint_values
+            "agentos-qos-sample-v2", challenge, fingerprint_values
         )
         if result_fingerprint != expected_fingerprint:
             raise EvaluationError(
@@ -1984,10 +1899,7 @@ def _parse_revisit_evaluation(
         if fields["concurrency"] != expected_level:
             raise EvaluationError("revisit concurrency summary order differs")
         samples = samples_by_level[expected_level]
-        durations = [
-            item["duration_us" if qos_schema == 1 else "turnaround_us"]
-            for item in samples
-        ]
+        durations = [item["turnaround_us"] for item in samples]
         requests = config["rounds_per_level"] * expected_level
         expected_values = {
             "rounds": config["rounds_per_level"],
@@ -2006,48 +1918,47 @@ def _parse_revisit_evaluation(
             "contamination": sum(item["contamination"] for item in samples),
             "fallback": sum(item["fallback"] for item in samples),
         }
-        if qos_schema == 2:
-            wait_values = [item["wait_us"] for item in samples]
-            service_values = [item["service_us"] for item in samples]
-            isolated = sum(item["isolation_ok"] for item in samples)
-            identity_good = [
-                sum(
-                    item["isolation_ok"] for item in samples
-                    if item["identity"] == identity
-                )
-                for identity in identities
-            ]
-            squares = sum(value * value for value in identity_good)
-            maximum = max(identity_good)
-            expected_values.update({
-                "goodput_milli_rps": (
-                    isolated * 1_000_000_000 // fields["duration_us"]
-                    if fields["duration_us"] > 0 else -1
-                ),
-                "wait_avg_milli_us": sum(wait_values) * 1000 // requests,
-                "wait_p50_us": _nearest_rank_int(wait_values, 50),
-                "wait_p90_us": _nearest_rank_int(wait_values, 90),
-                "wait_p99_us": _nearest_rank_int(wait_values, 99),
-                "service_avg_milli_us": sum(service_values) * 1000 // requests,
-                "service_p50_us": _nearest_rank_int(service_values, 50),
-                "service_p90_us": _nearest_rank_int(service_values, 90),
-                "service_p99_us": _nearest_rank_int(service_values, 99),
-                "fairness_jain_ppm": (
-                    isolated * isolated * 1_000_000
-                    // (len(identities) * squares) if squares else 0
-                ),
-                "max_min_fairness_ppm": (
-                    min(identity_good) * 1_000_000 // maximum if maximum else 0
-                ),
-                "isolated": isolated,
-            })
-            if (
-                fields["start_us"] > min(item["submitted_us"] for item in samples)
-                or fields["end_us"] < max(item["received_us"] for item in samples)
-            ):
-                raise EvaluationError(
-                    f"revisit QoS interval differs at line {line_number}"
-                )
+        wait_values = [item["wait_us"] for item in samples]
+        service_values = [item["service_us"] for item in samples]
+        isolated = sum(item["isolation_ok"] for item in samples)
+        identity_good = [
+            sum(
+                item["isolation_ok"] for item in samples
+                if item["identity"] == identity
+            )
+            for identity in identities
+        ]
+        squares = sum(value * value for value in identity_good)
+        maximum = max(identity_good)
+        expected_values.update({
+            "goodput_milli_rps": (
+                isolated * 1_000_000_000 // fields["duration_us"]
+                if fields["duration_us"] > 0 else -1
+            ),
+            "wait_avg_milli_us": sum(wait_values) * 1000 // requests,
+            "wait_p50_us": _nearest_rank_int(wait_values, 50),
+            "wait_p90_us": _nearest_rank_int(wait_values, 90),
+            "wait_p99_us": _nearest_rank_int(wait_values, 99),
+            "service_avg_milli_us": sum(service_values) * 1000 // requests,
+            "service_p50_us": _nearest_rank_int(service_values, 50),
+            "service_p90_us": _nearest_rank_int(service_values, 90),
+            "service_p99_us": _nearest_rank_int(service_values, 99),
+            "fairness_jain_ppm": (
+                isolated * isolated * 1_000_000
+                // (len(identities) * squares) if squares else 0
+            ),
+            "max_min_fairness_ppm": (
+                min(identity_good) * 1_000_000 // maximum if maximum else 0
+            ),
+            "isolated": isolated,
+        })
+        if (
+            fields["start_us"] > min(item["submitted_us"] for item in samples)
+            or fields["end_us"] < max(item["received_us"] for item in samples)
+        ):
+            raise EvaluationError(
+                f"revisit QoS interval differs at line {line_number}"
+            )
         if (
             fields["end_us"] < fields["start_us"]
             or fields["duration_us"] <= 0
@@ -2060,42 +1971,35 @@ def _parse_revisit_evaluation(
             fields["result_fingerprint"],
             "revisit concurrency summary fingerprint", HEX16,
         )
-        if qos_schema == 2:
-            workload_digest = _text(
-                fields["workload_digest"], "revisit workload digest", HEX16
+        workload_digest = _text(
+            fields["workload_digest"], "revisit workload digest", HEX16
+        )
+        expected_workload_digest = _supplementary_hash(
+            "agentos-qos-workload-v2", challenge,
+            [
+                fields["concurrency"],
+                *(
+                    value
+                    for item in samples
+                    for value in (
+                        item["round"], item["slot"],
+                        identity_indexes[item["identity"]],
+                        int(item["request_id"], 16),
+                    )
+                ),
+            ],
+        )
+        if workload_digest != expected_workload_digest:
+            raise EvaluationError(
+                f"revisit workload digest differs at line {line_number}"
             )
-            expected_workload_digest = _supplementary_hash(
-                "agentos-qos-workload-v2", challenge,
-                [
-                    fields["concurrency"],
-                    *(
-                        value
-                        for item in samples
-                        for value in (
-                            item["round"], item["slot"],
-                            identity_indexes[item["identity"]],
-                            int(item["request_id"], 16),
-                        )
-                    ),
-                ],
-            )
-            if workload_digest != expected_workload_digest:
-                raise EvaluationError(
-                    f"revisit workload digest differs at line {line_number}"
-                )
-            fingerprint_domain = "agentos-qos-summary-v2"
-            summary_values = [
-                fields[key] for key in summary_field_names[1:]
-                if key not in {"workload_digest", "result_fingerprint", "status"}
-            ]
-            summary_values.append(int(workload_digest, 16))
-        else:
-            fingerprint_domain = "aios-revisit-concurrency-summary-v1"
-            summary_values = [
-                fields[key] for key in summary_field_names[1:-2]
-            ]
+        summary_values = [
+            fields[key] for key in summary_field_names[1:]
+            if key not in {"workload_digest", "result_fingerprint", "status"}
+        ]
+        summary_values.append(int(workload_digest, 16))
         expected_fingerprint = _supplementary_hash(
-            fingerprint_domain,
+            "agentos-qos-summary-v2",
             challenge,
             [
                 *summary_values,
@@ -3050,23 +2954,9 @@ def validate_functional_log(
     if list(receipts) != list(FUNCTIONAL_TASKS):
         raise EvaluationError("Task1-5 functional receipts are missing or out of order")
     catalog = _parse_tool_catalog(lines, challenge)
-    supplementary_prefixes = (
-        REVISIT_PREFIX, REVISIT_SUMMARY_PREFIX,
-        CONCURRENCY_SAMPLE_PREFIX, CONCURRENCY_PREFIX,
+    revisit = _parse_revisit_evaluation(
+        lines, challenge, suite["supplementary_scenarios"][0]
     )
-    if suite["schema_version"] >= 4:
-        revisit = _parse_revisit_evaluation(
-            lines, challenge, suite["supplementary_scenarios"][0]
-        )
-    else:
-        if any(
-            line.startswith(prefix)
-            for line in lines for prefix in supplementary_prefixes
-        ):
-            raise EvaluationError(
-                "legacy suite contains an unregistered supplementary scenario"
-            )
-        revisit = None
     measurement_lines = [
         row.get("source_line", row.get("line")) for row in sample_rows
     ]
@@ -3091,7 +2981,7 @@ def validate_functional_log(
         raise EvaluationError("functional probes are not outside the measured interval")
     if receipts["task5"]["line"] >= worker_lines[0]:
         raise EvaluationError("business marker order differs from Guest lifecycle")
-    if revisit is not None and (
+    if (
         worker_lines[0] >= revisit["line_numbers"][0]
         or revisit["line_numbers"][-1] >= parent_lines[0]
     ):
@@ -3113,10 +3003,7 @@ def validate_functional_log(
             (receipts[task]["line"], receipts[task]["marker_sha256"])
             for task in FUNCTIONAL_TASKS[1:]
         ),
-        *(
-            zip(revisit["line_numbers"], revisit["marker_sha256s"])
-            if revisit is not None else ()
-        ),
+        *zip(revisit["line_numbers"], revisit["marker_sha256s"]),
     ]
     ordered_lines.sort()
     return {
@@ -3361,10 +3248,7 @@ def extract_log(
     functional = validate_functional_log(
         lines, log_plan["challenge"], rows, suite
     )
-    supplementary_lines = set(
-        functional["supplementary"]["line_numbers"]
-        if functional["supplementary"] is not None else ()
-    )
+    supplementary_lines = set(functional["supplementary"]["line_numbers"])
     headline_business_lines = {
         *(row["source_line"] for row in rows),
         *(item["line"] for item in diagnostics.values()),
@@ -3479,32 +3363,29 @@ def validate_guest_log(
         ),
         "functional_receipts": 1 + len(functional["tasks"]),
         "catalog_descriptors": functional["catalog"]["total"],
-        "revisit_isolation": (
-            {
-                "id": functional["supplementary"]["id"],
-                "qos_schema_version": functional["supplementary"]
-                ["qos_schema_version"],
-                "performance_gate": None,
-                "correct": functional["supplementary"]["summary"]["correct"],
-                "contamination": functional["supplementary"]["summary"]
-                ["contamination"],
-                "return_visit": functional["supplementary"]["summary"]
-                ["return_visit"],
-                "fallback": functional["supplementary"]["summary"]["fallback"],
-                "result_fingerprint": functional["supplementary"]["summary"]
-                ["result_fingerprint"],
-                "concurrency": [
-                    {
-                        key: item[key]
-                        for key in CONCURRENCY_PUBLIC_FIELDS[
-                            functional["supplementary"]["qos_schema_version"]
-                        ]
-                    }
-                    for item in functional["supplementary"]["concurrency"]
-                ],
-            }
-            if functional["supplementary"] is not None else None
-        ),
+        "revisit_isolation": {
+            "id": functional["supplementary"]["id"],
+            "qos_schema_version": functional["supplementary"]
+            ["qos_schema_version"],
+            "performance_gate": None,
+            "correct": functional["supplementary"]["summary"]["correct"],
+            "contamination": functional["supplementary"]["summary"]
+            ["contamination"],
+            "return_visit": functional["supplementary"]["summary"]
+            ["return_visit"],
+            "fallback": functional["supplementary"]["summary"]["fallback"],
+            "result_fingerprint": functional["supplementary"]["summary"]
+            ["result_fingerprint"],
+            "concurrency": [
+                {
+                    key: item[key]
+                    for key in CONCURRENCY_PUBLIC_FIELDS[
+                        functional["supplementary"]["qos_schema_version"]
+                    ]
+                }
+                for item in functional["supplementary"]["concurrency"]
+            ],
+        },
         "status": "supported",
     }
 
@@ -3846,17 +3727,11 @@ def evaluate(
             or catalog_total < len(TASK2_REQUIRED_TOOLS)
             or not isinstance(catalog, dict)
             or catalog.get("total") != catalog_total
-            or (
-                suite["schema_version"] >= 4
-                and (
-                    not isinstance(supplementary, dict)
-                    or supplementary.get("id")
-                    != suite["supplementary_scenarios"][0]["id"]
-                    or supplementary.get("performance_gate") is not None
-                    or supplementary_markers == 0
-                )
-            )
-            or (suite["schema_version"] < 4 and supplementary is not None)
+            or not isinstance(supplementary, dict)
+            or supplementary.get("id")
+            != suite["supplementary_scenarios"][0]["id"]
+            or supplementary.get("performance_gate") is not None
+            or supplementary_markers == 0
             or len(boot_receipt.get("line_numbers", [])) != expected_markers
             or len(boot_receipt.get("marker_sha256s", [])) != expected_markers
         ):
@@ -4360,56 +4235,48 @@ def evaluate(
     functional_evidence = [
         evidence_ids[item["path"]] for item in supported_logs
     ]
-    supplementary_evaluations: list[dict[str, Any]] = []
-    if suite["schema_version"] >= 4:
-        registration = suite["supplementary_scenarios"][0]
-        boot_results = []
-        for log in supported_logs:
-            measured = functional_boots[log["path"]]["supplementary"]
-            boot_results.append({
-                "boot_id": log["boot_id"],
-                "evidence_id": evidence_ids[log["path"]],
-                "qos_schema_version": measured["qos_schema_version"],
-                "correct": measured["summary"]["correct"],
-                "contamination": measured["summary"]["contamination"],
-                "return_visit": measured["summary"]["return_visit"],
-                "fallback": measured["summary"]["fallback"],
-                "result_fingerprint": measured["summary"]["result_fingerprint"],
-                "concurrency": [
-                    {
-                        key: item[key]
-                        for key in CONCURRENCY_PUBLIC_FIELDS[
-                            measured["qos_schema_version"]
-                        ]
-                    }
-                    for item in measured["concurrency"]
-                ],
-            })
-        supplementary_evaluations.append({
-            "id": registration["id"],
-            "label": registration["label"],
-            "task": registration["task"],
-            "status": "measured" if boot_results else "unavailable",
-            "performance_gate": None,
-            "visit_sequence": registration["visit_sequence"],
-            "concurrency_levels": registration["concurrency_levels"],
-            "rounds_per_level": registration["rounds_per_level"],
-            "latency_unit": registration["latency_unit"],
-            "throughput_unit": registration["throughput_unit"],
-            "percentile_method": registration["percentile_method"],
-            **(
+    registration = suite["supplementary_scenarios"][0]
+    boot_results = []
+    for log in supported_logs:
+        measured = functional_boots[log["path"]]["supplementary"]
+        boot_results.append({
+            "boot_id": log["boot_id"],
+            "evidence_id": evidence_ids[log["path"]],
+            "qos_schema_version": measured["qos_schema_version"],
+            "correct": measured["summary"]["correct"],
+            "contamination": measured["summary"]["contamination"],
+            "return_visit": measured["summary"]["return_visit"],
+            "fallback": measured["summary"]["fallback"],
+            "result_fingerprint": measured["summary"]["result_fingerprint"],
+            "concurrency": [
                 {
-                    key: registration[key]
-                    for key in QOS_REGISTRATION_FIELDS
+                    key: item[key]
+                    for key in CONCURRENCY_PUBLIC_FIELDS[
+                        measured["qos_schema_version"]
+                    ]
                 }
-                if suite["schema_version"] >= 5 else {}
-            ),
-            "interpretation": (
-                "Descriptive clean-room revisit/isolation measurement; no "
-                "performance pass threshold is registered."
-            ),
-            "boots": boot_results,
+                for item in measured["concurrency"]
+            ],
         })
+    supplementary_evaluations = [{
+        "id": registration["id"],
+        "label": registration["label"],
+        "task": registration["task"],
+        "status": "measured" if boot_results else "unavailable",
+        "performance_gate": None,
+        "visit_sequence": registration["visit_sequence"],
+        "concurrency_levels": registration["concurrency_levels"],
+        "rounds_per_level": registration["rounds_per_level"],
+        "latency_unit": registration["latency_unit"],
+        "throughput_unit": registration["throughput_unit"],
+        "percentile_method": registration["percentile_method"],
+        **{key: registration[key] for key in QOS_REGISTRATION_FIELDS},
+        "interpretation": (
+            "Descriptive clean-room revisit/isolation measurement; no "
+            "performance pass threshold is registered."
+        ),
+        "boots": boot_results,
+    }]
     task_labels = {
         "task1": "Agent process and mapped Context acceptance",
         "task2": "Versioned structured-tool acceptance",
@@ -4478,7 +4345,6 @@ def evaluate(
         scenarios,
         claims,
         suite["competition_claims"],
-        suite_schema_version=suite["schema_version"],
     )
     return {
         "schema_version": suite["schema_version"],
@@ -4508,10 +4374,7 @@ def evaluate(
         "benchmarks": benchmarks,
         "scenarios": scenarios,
         "methodology": {
-            **(
-                {"supplementary_evaluations": supplementary_evaluations}
-                if suite["schema_version"] >= 4 else {}
-            ),
+            "supplementary_evaluations": supplementary_evaluations,
             "competition_claims": suite["competition_claims"],
             "design": "paired AB/BA within each independent Guest boot",
             "independent_unit": "guest_boot",

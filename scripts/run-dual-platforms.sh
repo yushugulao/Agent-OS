@@ -5,22 +5,18 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-DUAL_LOG_DIR="${DUAL_LOG_DIR:-/tmp/agentos-dual-platform}"
-RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/results/latest}"
+DUAL_LOG_DIR_REQUESTED="${DUAL_LOG_DIR:-}"
+DUAL_LOG_DIR=""
+DUAL_RUN_GENERATION=""
 BACKEND_CONTRACT="${ROOT_DIR}/host_tools/backend_evidence_contract.py"
-RESULT_BUNDLE_CONTRACT="${ROOT_DIR}/host_tools/result_bundle_contract.py"
-RESULT_PUBLICATION="${ROOT_DIR}/host_tools/result_bundle_publication.py"
 export TOOLPREFIX QEMU PYTHON_BIN
 
 current_stage=""
 current_stage_start=0
-result_stage=""
-result_published=0
-publication_args=(
-	--result-dir "${RESULT_DIR}"
-	--protected-path "${ROOT_DIR}"
-	--protected-path "${DUAL_LOG_DIR}"
-)
+measurement_guest_log=""
+measurement_manifest=""
+measurement_csv=""
+measurement_receipt=""
 
 cleanup_dual_run() {
 	local code="$?"
@@ -29,21 +25,13 @@ cleanup_dual_run() {
 	if [ "${code}" -ne 0 ] && [ -n "${current_stage:-}" ]; then
 		stage_finish failed
 	fi
-	if [ "${result_published:-0}" -eq 0 ] && [ -n "${result_stage:-}" ]; then
-		if ! "${PYTHON_BIN}" "${RESULT_PUBLICATION}" abort \
-			"${publication_args[@]}" --stage-dir "${result_stage}"; then
-			echo "[dual-platform] failed to discard private result staging directory" >&2
-		fi
-		if [ "${code}" -eq 0 ]; then
-			code=1
-		fi
+	if [ "${code}" -ne 0 ]; then
+		rm -f -- "${measurement_receipt:-}" "${measurement_manifest:-}" \
+			"${measurement_csv:-}" "${measurement_guest_log:-}" 2>/dev/null || true
 	fi
 	exit "${code}"
 }
 
-# Invalidate the mutable result before any acceptance stage starts. The helper
-# rejects destructive targets and creates a private sibling on the same volume.
-result_stage="$("${PYTHON_BIN}" "${RESULT_PUBLICATION}" begin "${publication_args[@]}")"
 trap cleanup_dual_run EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -56,7 +44,35 @@ if [ -n "${MEASURED_AGENT_GUEST_LOG:-}" ] || \
 	exit 1
 fi
 
-mkdir -p "${DUAL_LOG_DIR}"
+claim="$("${PYTHON_BIN}" -I -S -B -c '
+import secrets
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(sys.argv[1]) / "host_tools"))
+from safe_host_paths import create_private_directory
+
+requested = sys.argv[2]
+if any(character in requested for character in "\r\n\t"):
+    raise SystemExit("DUAL_LOG_DIR contains a control character")
+generation = "g-" + secrets.token_hex(12)
+if requested:
+    output = create_private_directory(Path(requested))
+else:
+    output = create_private_directory(
+        Path(tempfile.gettempdir()) / ("agentos-dual-platform-" + generation)
+    )
+print(output, generation, sep="\t")
+' "${ROOT_DIR}" "${DUAL_LOG_DIR_REQUESTED}")"
+IFS=$'\t' read -r DUAL_LOG_DIR DUAL_RUN_GENERATION extra <<<"${claim}"
+if [ -z "${DUAL_LOG_DIR}" ] || [ -z "${DUAL_RUN_GENERATION}" ] || \
+   [ -n "${extra:-}" ]; then
+	echo "[dual-platform] cannot claim a private run directory" >&2
+	exit 1
+fi
+export DUAL_LOG_DIR DUAL_RUN_GENERATION
+umask 077
 stage_timings="${DUAL_LOG_DIR}/stage-timings.csv"
 printf "stage,start_epoch,end_epoch,duration_seconds,status\n" > "${stage_timings}"
 
@@ -312,11 +328,9 @@ stage_finish ready
 
 stage_begin "measured-file-query"
 measurement_guest_log="${DUAL_LOG_DIR}/dual-targeted-agentbench-guest.log"
-if [ -L "${measurement_guest_log}" ]; then
-	echo "[dual-platform] targeted Agent Guest log destination is unsafe" >&2
-	exit 1
-fi
-rm -f "${measurement_guest_log}"
+measurement_manifest="${DUAL_LOG_DIR}/measured-experiments.json"
+measurement_csv="${DUAL_LOG_DIR}/file-query-benchmark.csv"
+measurement_receipt="${DUAL_LOG_DIR}/measurement-set.json"
 : >"${measurement_guest_log}"
 measurement_command_json="$("${PYTHON_BIN}" -c 'import json,sys; print(json.dumps(["env", "AGENT_TEST_CASE=agentbench_ucore", "AGENT_TEST_CALIBRATE=0", "AGENT_TEST_GUEST_LOG_FILE=" + sys.argv[1], "TOOLPREFIX=" + sys.argv[2], "QEMU=" + sys.argv[3], "PYTHON_BIN=" + sys.argv[4], "bash", "scripts/run-agent-tests.sh"], separators=(",", ":")))' "${measurement_guest_log}" "${TOOLPREFIX}" "${QEMU}" "${PYTHON_BIN}")"
 (
@@ -327,38 +341,31 @@ measurement_command_json="$("${PYTHON_BIN}" -c 'import json,sys; print(json.dump
 		PYTHON_BIN="${PYTHON_BIN}" \
 		bash scripts/run-agent-tests.sh
 )
-if [ ! -f "${measurement_guest_log}" ] || [ -L "${measurement_guest_log}" ]; then
+if [ ! -s "${measurement_guest_log}" ] || [ -L "${measurement_guest_log}" ]; then
 	echo "[dual-platform] measured Agent Guest log is missing or unsafe" >&2
 	exit 1
 fi
 measurement_commit="$(git -C "${ROOT_DIR}" rev-parse --verify HEAD)"
-measurement_run_id="dual-${measurement_commit%${measurement_commit#????????????}}-$$"
+measurement_run_id="dual-${measurement_commit%${measurement_commit#????????????}}-${DUAL_RUN_GENERATION}"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/extract_measured_experiments.py" \
 	--guest-log "${measurement_guest_log}" \
 	--source-ref "dual-targeted-agentbench-guest.log" \
 	--commit "${measurement_commit}" \
 	--run-id "${measurement_run_id}" \
+	--generation "${DUAL_RUN_GENERATION}" \
 	--command-json "${measurement_command_json}" \
-	--manifest-out "${DUAL_LOG_DIR}/measured-experiments.json" \
-	--csv-out "${DUAL_LOG_DIR}/file-query-benchmark.csv"
+	--manifest-out "${measurement_manifest}" \
+	--csv-out "${measurement_csv}" \
+	--receipt-out "${measurement_receipt}"
+if [ ! -s "${measurement_receipt}" ] || [ -L "${measurement_receipt}" ]; then
+	echo "[dual-platform] complete measurement receipt is missing or unsafe" >&2
+	exit 1
+fi
 stage_finish ready
-
-stage_begin "result-report-chart"
-"${PYTHON_BIN}" "${ROOT_DIR}/host_tools/summarize_dual_platform_results.py" \
-	--work-dir "${DUAL_LOG_DIR}" \
-	--out-dir "${result_stage}" \
-	--published-dir "${RESULT_DIR}" \
-	--require-measured-experiments
-"${PYTHON_BIN}" "${RESULT_BUNDLE_CONTRACT}" \
-	--result-dir "${result_stage}" \
-	--published-dir "${RESULT_DIR}"
-stage_finish ready
-"${PYTHON_BIN}" "${RESULT_PUBLICATION}" publish \
-	"${publication_args[@]}" --stage-dir "${result_stage}" >/dev/null
-result_published=1
 
 echo "[dual-platform] plain and AgentOS platforms both passed"
 echo "[dual-platform] research platform programs: ${expected_programs}"
 echo "[dual-platform] ${plain_backend_summary}"
 echo "[dual-platform] ${agentos_backend_summary}"
-echo "[dual-platform] result report: ${RESULT_DIR}/report.md"
+echo "[dual-platform] run generation: ${DUAL_RUN_GENERATION}"
+echo "[dual-platform] raw artifacts: ${DUAL_LOG_DIR}"

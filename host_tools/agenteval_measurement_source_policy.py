@@ -12,7 +12,7 @@ else:
 
 SOURCE_RELATIVE = "user/src/agenteval_ucore.c"
 EVALUATION_SUITE_SOURCE_PATH = "ci/evaluation-suite.json"
-POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v3"
+POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v4"
 
 # This is deliberately an allowlist, not a recursive source-tree snapshot.
 # Each entry participates in selecting, executing, interpreting, rendering, or
@@ -38,6 +38,8 @@ CONTROL_PLANE_POLICY = (
     ("full-verification-metrics", "host_tools/full_verification_metrics_render.py"),
     ("full-verification-collector", "scripts/capture-final-evidence.py"),
     ("full-verification-runner", "scripts/run-full-verification.sh"),
+    ("dual-platform-runner", "scripts/run-dual-platforms.sh"),
+    ("measurement-set-publisher", "host_tools/extract_measured_experiments.py"),
     ("tool-attestation", "host_tools/evidence_toolchain_attestation.py"),
     ("semantic-replay", "host_tools/agent_metadata_disk_format.py"),
     ("semantic-replay", "host_tools/agent_metadata_journal.py"),
@@ -57,7 +59,6 @@ CONTROL_PLANE_POLICY = (
     ("semantic-replay", "host_tools/evidence_semantic_registry.py"),
     ("semantic-replay", "host_tools/measured_experiments.py"),
     ("semantic-replay", "host_tools/reference_catalog_contract.py"),
-    ("semantic-replay", "host_tools/result_bundle_publication.py"),
     ("semantic-replay", "scripts/fs-allocator-evidence.py"),
     ("semantic-replay", "scripts/fs-allocator-image.py"),
     ("semantic-replay", "scripts/validate-kernel-test-log.py"),

@@ -816,11 +816,11 @@ def fixture() -> dict:
             }
         )
     result = {
-        "schema_version": 3,
+        "schema_version": 5,
         "kind": "agentos-evaluation-summary",
         "run": {
             "id": "evaluation-20260730",
-            "suite_id": "agentos-evaluation-v3",
+            "suite_id": "agentos-evaluation-v5",
             "status": "unavailable",
             "run_plan_sha256": TEST_RUN_PLAN_SHA256,
             "label": "竞赛候选版本",
@@ -934,6 +934,31 @@ def fixture() -> dict:
                 ],
                 "load_gate": "intersection (every preregistered load must pass)",
             },
+            "supplementary_evaluations": [{
+                "id": "multi_identity_revisit_isolation",
+                "label": "Multi-identity workflow revisit isolation",
+                "task": "task1",
+                "status": "unavailable",
+                "performance_gate": None,
+                "visit_sequence": ["A", "B", "C", "D", "A"],
+                "concurrency_levels": [1, 2, 4],
+                "rounds_per_level": 16,
+                "latency_unit": "us",
+                "throughput_unit": "milli_requests_per_second",
+                "percentile_method": "nearest_rank",
+                "qos_schema_version": 2,
+                "latency_metrics": ["wait", "service", "turnaround"],
+                "turnaround_definition": "worker_completed_minus_parent_submitted",
+                "goodput_unit": "milli_requests_per_second",
+                "fairness_scale": "parts_per_million",
+                "fairness_basis": "per_identity_isolated_completions",
+                "isolation_definition": (
+                    "correct_and_zero_contamination_and_no_fallback"
+                ),
+                "digest": "fnv1a64_challenge_bound",
+                "interpretation": "Descriptive current-schema fixture.",
+                "boots": [],
+            }],
             "limitations": ["单机实验", "任务 6 负结果 fixture"],
         },
         "evidence": evidence,
@@ -953,7 +978,6 @@ def fixture() -> dict:
         result["scenarios"],
         result["claims"],
         COMPETITION_CLAIMS,
-        suite_schema_version=result["schema_version"],
     )
     return result
 
@@ -1171,7 +1195,6 @@ def attach_scenario(
         summary["scenarios"],
         summary["claims"],
         COMPETITION_CLAIMS,
-        suite_schema_version=summary["schema_version"],
     )
     return scenario
 
@@ -1238,6 +1261,11 @@ class DashboardContractTests(unittest.TestCase):
             }
             actual = {str(path.relative_to(output)).replace("\\", "/") for path in output.rglob("*") if path.is_file()}
             self.assertEqual(actual, expected)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o755)
+                for path in output.rglob("*"):
+                    expected_mode = 0o755 if path.is_dir() else 0o644
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), expected_mode)
             page = (output / "index.html").read_text(encoding="utf-8")
             self.assertNotIn("https://", page)
             self.assertNotIn("http://", page)
@@ -1349,6 +1377,236 @@ class DashboardContractTests(unittest.TestCase):
             self.assertEqual(rows[0]["unit"], "us/query")
             self.assertEqual(rows[0]["n"], "7")
             self.assertEqual(rows[0]["evidence_ids"], "raw-perf")
+
+    def test_render_replaces_existing_empty_output_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, fixture())
+            output = root / "site"
+            output.mkdir()
+            render(source, output)
+            self.assertTrue((output / "index.html").is_file())
+            self.assertTrue((output / "dashboard-verification.json").is_file())
+
+    def test_render_rejects_symlinked_output_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, fixture())
+            target = root / "site-target"
+            target.mkdir()
+            sentinel = target / "keep.txt"
+            sentinel.write_text("old site\n", encoding="utf-8")
+            output = root / "site"
+            try:
+                os.symlink(target, output, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"directory symlink creation unavailable: {error}")
+
+            if safe_host_paths.path_is_link(output):
+                with self.assertRaisesRegex(
+                    DashboardError, "symlink or junction"
+                ):
+                    render(source, output)
+            else:
+                with mock.patch(
+                    "safe_host_paths._msys_native_file_attributes",
+                    side_effect=lambda candidate: (
+                        safe_host_paths._FILE_ATTRIBUTE_REPARSE_POINT
+                        if candidate == output
+                        else None
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        DashboardError, "symlink or junction"
+                    ):
+                        render(source, output)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "old site\n")
+
+    def test_render_rejects_output_that_contains_its_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, fixture())
+            before = source.read_bytes()
+            with self.assertRaisesRegex(DashboardError, "summary input"):
+                render(source, root)
+            self.assertEqual(source.read_bytes(), before)
+
+    def test_render_converts_missing_output_parent_to_contract_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, fixture())
+            with mock.patch(
+                "render_evaluation_dashboard.ensure_safe_directory",
+                side_effect=FileNotFoundError("missing output volume"),
+            ):
+                with self.assertRaisesRegex(DashboardError, "missing output volume"):
+                    render(source, root / "site")
+
+    def test_render_rejects_real_windows_junction_output(self) -> None:
+        with tempfile.TemporaryDirectory(dir=HOST_TOOLS) as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, fixture())
+            target = root / "site-target"
+            target.mkdir()
+            sentinel = target / "keep.txt"
+            sentinel.write_text("old site\n", encoding="utf-8")
+            output = root / "site"
+            if not create_directory_junction(target, output):
+                self.skipTest("runtime cannot create a detectable Windows junction")
+            try:
+                with self.assertRaisesRegex(
+                    DashboardError, "symlink or junction"
+                ):
+                    render(source, output)
+            finally:
+                remove_directory_junction(output)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "old site\n")
+
+    def test_publish_failure_restores_complete_previous_site(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, fixture())
+            output = root / "site"
+            render(source, output)
+            (output / "old-only.txt").write_text("keep me\n", encoding="utf-8")
+            before = {
+                path.relative_to(output).as_posix(): path.read_bytes()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
+            real_replace = os.replace
+
+            def fail_new_site(source_path: Path, destination_path: Path) -> None:
+                source_path = Path(source_path)
+                destination_path = Path(destination_path)
+                if (
+                    ".staging-" in source_path.name
+                    and not source_path.name.endswith(".previous")
+                    and destination_path == output
+                ):
+                    raise OSError("simulated directory publication failure")
+                real_replace(source_path, destination_path)
+
+            with mock.patch(
+                "render_evaluation_dashboard._replace_site_directory",
+                side_effect=fail_new_site,
+            ):
+                with self.assertRaisesRegex(
+                    DashboardError, "previous site restored"
+                ):
+                    render(source, output)
+
+            after = {
+                path.relative_to(output).as_posix(): path.read_bytes()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual(after, before)
+            self.assertEqual(list(root.glob(".site.staging-*")), [])
+
+    def test_post_rename_failure_restores_complete_previous_site(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, fixture())
+            output = root / "site"
+            render(source, output)
+            before = {
+                path.relative_to(output).as_posix(): path.read_bytes()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
+            real_replace = os.replace
+
+            def fail_after_old_site_move(
+                source_path: Path, destination_path: Path
+            ) -> None:
+                source_path = Path(source_path)
+                real_replace(source_path, destination_path)
+                if source_path == output:
+                    raise OSError("simulated post-rename interruption")
+
+            with mock.patch(
+                "render_evaluation_dashboard._replace_site_directory",
+                side_effect=fail_after_old_site_move,
+            ):
+                with self.assertRaisesRegex(
+                    DashboardError, "previous site restored"
+                ):
+                    render(source, output)
+
+            after = {
+                path.relative_to(output).as_posix(): path.read_bytes()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual(after, before)
+            self.assertEqual(list(root.glob(".site.staging-*")), [])
+
+    def test_render_refuses_to_replace_unowned_non_dashboard_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_render_input(root, fixture())
+            output = root / "site"
+            output.mkdir()
+            sentinel = output / "important.txt"
+            sentinel.write_text("do not delete\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                DashboardError, "not an AgentOS Dashboard"
+            ):
+                render(source, output)
+            self.assertEqual(
+                sentinel.read_text(encoding="utf-8"), "do not delete\n"
+            )
+
+    def test_render_refuses_evidence_source_inside_existing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = fixture()
+            source = write_render_input(root, summary)
+            output = root / "site"
+            render(source, output)
+
+            item = next(
+                entry for entry in summary["evidence"]
+                if entry["id"] == "missing-task6"
+            )
+            original = root.joinpath(*item["path"].split("/"))
+            protected = output / "source-preflight.json"
+            protected.write_bytes(original.read_bytes())
+            item["path"] = "site/source-preflight.json"
+            item["sha256"] = hashlib.sha256(protected.read_bytes()).hexdigest()
+            item["receipt"]["bytes"] = protected.stat().st_size
+            rewrite_summary(source, summary)
+
+            with self.assertRaisesRegex(DashboardError, r"evidence\[2\] input"):
+                render(source, output)
+            self.assertEqual(protected.read_bytes(), original.read_bytes())
+            self.assertTrue((output / "index.html").is_file())
+
+    @unittest.skipUnless(os.name == "nt", "Windows path alias regression")
+    def test_render_rejects_windows_tail_dot_evidence_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = fixture()
+            source = write_render_input(root, summary)
+            output = root / "site"
+            render(source, output)
+
+            item = next(
+                entry for entry in summary["evidence"]
+                if entry["id"] == "missing-task6"
+            )
+            original = root.joinpath(*item["path"].split("/"))
+            protected = output / "source-preflight.json"
+            protected.write_bytes(original.read_bytes())
+            item["path"] = "site./source-preflight.json"
+            item["sha256"] = hashlib.sha256(protected.read_bytes()).hexdigest()
+            item["receipt"]["bytes"] = protected.stat().st_size
+            rewrite_summary(source, summary)
+
+            with self.assertRaisesRegex(DashboardError, r"evidence\[2\] input"):
+                render(source, output)
+            self.assertEqual(protected.read_bytes(), original.read_bytes())
 
     def test_render_uses_explicit_contract_root_for_suite_and_assets(self) -> None:
         summary = fixture()
@@ -1798,7 +2056,6 @@ class DashboardContractTests(unittest.TestCase):
                 summary["scenarios"],
                 summary["claims"],
                 COMPETITION_CLAIMS,
-                suite_schema_version=summary["schema_version"],
             )
             rewrite_summary(source, summary)
             with self.assertRaisesRegex(
@@ -2024,7 +2281,9 @@ class DashboardContractTests(unittest.TestCase):
             except OSError as error:
                 self.skipTest(f"symlink creation unavailable: {error}")
             if safe_host_paths.path_is_link(evidence):
-                with self.assertRaisesRegex(DashboardError, "symlink or junction"):
+                with self.assertRaisesRegex(
+                    DashboardError, "(?:symbolic link|symlink) or junction"
+                ):
                     render(source, root / "site")
                 return
 
@@ -2039,7 +2298,9 @@ class DashboardContractTests(unittest.TestCase):
                     else None
                 ),
             ):
-                with self.assertRaisesRegex(DashboardError, "symlink or junction"):
+                with self.assertRaisesRegex(
+                    DashboardError, "(?:symbolic link|symlink) or junction"
+                ):
                     render(source, root / "site")
 
     def test_render_rejects_real_windows_junction_ancestor(self) -> None:
@@ -2059,7 +2320,9 @@ class DashboardContractTests(unittest.TestCase):
                     self.fail("native MSYS test could not create a verified junction")
                 self.skipTest("runtime cannot create a detectable Windows junction")
             try:
-                with self.assertRaisesRegex(DashboardError, "symlink or junction"):
+                with self.assertRaisesRegex(
+                    DashboardError, "(?:symbolic link|symlink) or junction"
+                ):
                     render(source, root / "site")
             finally:
                 remove_directory_junction(raw)
@@ -2408,7 +2671,6 @@ class DashboardContractTests(unittest.TestCase):
             summary["scenarios"],
             summary["claims"],
             COMPETITION_CLAIMS,
-            suite_schema_version=summary["schema_version"],
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2431,7 +2693,6 @@ class DashboardContractTests(unittest.TestCase):
             summary["scenarios"],
             summary["claims"],
             COMPETITION_CLAIMS,
-            suite_schema_version=summary["schema_version"],
         )
 
         validate_summary(summary)
@@ -2563,7 +2824,6 @@ class DashboardContractTests(unittest.TestCase):
             unavailable["scenarios"],
             unavailable["claims"],
             COMPETITION_CLAIMS,
-            suite_schema_version=unavailable["schema_version"],
         )
         validate_summary(unavailable)
         with tempfile.TemporaryDirectory() as temporary:
@@ -3115,37 +3375,14 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("Plain p50 103.000 ms", page)
         self.assertIn("AgentOS p50 123.000 ms", page)
         self.assertNotIn("竞赛整体验收", page)
-        self.assertIn("Schema evaluation-summary-v3", page)
+        self.assertIn("Schema evaluation-summary-v5", page)
 
-        legacy = copy.deepcopy(summary)
-        legacy["schema_version"] = 2
-        legacy["run"]["suite_id"] = "agentos-evaluation-v2"
-        legacy["acceptance"] = derive_acceptance_gates(
-            legacy["scenarios"],
-            legacy["claims"],
-            COMPETITION_CLAIMS,
-            suite_schema_version=2,
-        )
-        self.assertFalse(legacy["acceptance"]["competition_ready"])
-        self.assertEqual(legacy["acceptance"]["tasks"]["task6"], "not_ready")
-        validate_summary(legacy)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, legacy)
-            render(source, root / "site")
-            legacy_page = (root / "site" / "index.html").read_text(
-                encoding="utf-8"
-            )
-        self.assertNotIn("竞赛整体验收", legacy_page)
-        self.assertNotIn("科学证据发布", legacy_page)
-        self.assertIn("Schema evaluation-summary-v2", legacy_page)
-
-        mixed = copy.deepcopy(legacy)
-        mixed["run"]["suite_id"] = "agentos-evaluation-v3"
-        with self.assertRaisesRegex(
-            DashboardError, "suite_id does not match"
-        ):
-            validate_summary(mixed)
+        for retired_version in (2, 3, 4):
+            retired = copy.deepcopy(summary)
+            retired["schema_version"] = retired_version
+            retired["run"]["suite_id"] = f"agentos-evaluation-v{retired_version}"
+            with self.assertRaisesRegex(DashboardError, "schema_version must be 5"):
+                validate_summary(retired)
 
     def test_scenario_statistics_cannot_be_forged(self) -> None:
         mutations = (

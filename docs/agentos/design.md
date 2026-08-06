@@ -30,6 +30,15 @@ AgentOS-uCore 把 Agent 进程、工具调用、Context、文件对象、事件�
 | 4 | 性能 | 批量工具调用、用户态直接读 Context、批量 Context Snapshot、文件索引查询 |
 | 5 | 可扩展性 | 文件对象字段、`agentos:event`、Context Path、Loop 状态、工具表、cause/span 因果链、统一 timeline、Run Ledger 摘要和 LLM Relay 事件可继续扩展到科研 Agent、代码 Agent、运维 Agent、写作 Agent 等不同负载 |
 
+### 1.4 成熟机制参考
+
+实现采用干净室方式借鉴 Linux 的机制边界，而不复制实现代码：资源账户遵循
+[cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html) 的稳定域、分层约束和
+仅对活跃竞争者工作守恒；BIO 将共享预算、提交和完成拆开，参考
+[blk-mq](https://docs.kernel.org/block/blk-mq.html) 的分层队列思路；等待队列在一次锁定
+和一次遍历中完成选择，参考 Linux [wait queue](https://github.com/torvalds/linux/blob/master/kernel/sched/wait.c)
+的共同唤醒路径。uCore 的单核、固定容量和 workflow 安全边界仍由本项目自行实现。
+
 ## 2. 约束
 
 | 类型 | 约束 |
@@ -105,16 +114,16 @@ flowchart LR
 | 内核角色与能力绑定 | `struct proc` 保存真实 role/capability/scope/control；敏感操作必须同时满足 capability、active scope 和精确对象 owner，不信任用户 role、PID 或公开 span |
 | 可信执行与 VFS 安全域 | 构建清单把角色、bootstrap、RX/RW+NX 和 VFS profile 写入不可变 SYSTEM inode；loader 将有效能力绑定到动态 workflow scope，普通文件操作逐次校验 inode scope |
 | Workflow lifecycle | 8 槽 ledger 为每次 admission 签发不可变 `(id, generation)`；ACTIVE+CLOSING+RETIRING 合计最多 4 个，槽仅在彻底回收后以更高 generation 复用；PUBLIC 降权、fork 和 exec 都不释放谱系引用，撤销按完整 key 扫描 |
-| 通用资源控制器 | EXEC/STORAGE account 以 `{slot,generation}` 标识，统一核算进程、线程、file object、FS block/inode、buffer cache 和 Agent state page；ordinary/reserved、原子向量 reservation、CLOSING/DRAINING 与 rate lease 防止半发布和错账 |
+| 通用资源控制器 | EXEC/STORAGE account 以 `{slot,generation}` 标识，统一核算进程、线程、file object、FS block/inode、buffer cache 和 Agent state page；ordinary/reserved、原子向量 reservation 与 CLOSING/DRAINING 防止半发布和错账 |
 | 统一 teardown | 正常 exit、主线程 fault、workflow revoke 和未发布构造回滚都进入同一个正向状态机；Agent 私有清理只通过 phase-aware、幂等的 `agent_proc_teardown()` 推进，REQUESTED 后禁止新对象发布，scheduler 在 idle stack 上完成最后栈页回收后才复用槽与账户 |
 | 存储配额与保留量 | mkfs 与内核共享容量策略；按完成镜像空闲量计算后把 version/slots/PUBLIC principal/G/S/checksum 持久化到 superblock，挂载从 qmap/dinode 重建 PUBLIC 用量，workflow owner 只恢复 scope ID 下界，SYSTEM credit 由空闲量与 G/S 推导；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block；当前平台镜像的存储保证为每 scope 342 inode/1195 block、SYSTEM 64/512。workflow inode 账户使用该独立 STORAGE domain limit，不受每 scope 112 条 metadata catalog 容量钳制 |
-| 块 I/O 与 buffer cache 分域 | syscall 入口捕获稳定 owner/class；每次真实 `disk_submit` 是唯一物理计费边界，shared 560/280 与设备根同时扣减而不是额外容量；准入 account endpoint 不带债，reserved 设备端只由真实 account lease 背书带债；已接纳的有界原子多传输可在后续提交形成有上界的 owner lane debt，由 checkpoint/teardown settlement 清偿；global device debt 对非保护 lane 是 gate，SYSTEM/CONTROL 保护 lane可跨 owner lifecycle并由设备根 refill 清偿；syscall 544 使用 `version + struct_size + user_size` 的可扩展前缀 ABI；cache 为 SYSTEM、PUBLIC 和各 active workflow 维护 floor/cap，退役清理仅在轮到时取得 3/8 临时分区 |
+| 块 I/O 与 buffer cache 分域 | syscall 入口捕获稳定 owner/class；真实 `disk_submit` 是物理计费边界，BIO 对 owner/shared/device 两级原子预留并惰性 refill，shared 不叠加额外容量；syscall 544 使用可扩展 sized-prefix ABI；cache 为 SYSTEM、PUBLIC 和 active workflow 维护 floor/cap |
 | 可恢复资源耗尽 | inode、inode cache、数据块、文件表和线程分配失败返回错误并回滚；计费走 generation-safe resource account，`resource_domain_id` 仅用于 CPU 调度分区；每线程 16 KiB 虚拟栈按需取得物理页，保留 guard、canary 和调用图预算 |
 | 增长预算 | `make local-check` 在固定 profile 下检查源码、镜像、运行段、PCB、9 页 sidecar、完整 21 页 Agent 状态、栈虚拟/物理容量及 `ci/kernel-budgets.json` 登记的 owner/bridge 集合；metadata control plane 另受聚合 source/text/BSS 预算，防止靠跨文件迁移绕过单模块门；facade 不持有可写状态，受控符号图的 SCC 硬限由 checker 强制 |
 | 通用动作和工件更新 | `action_commit` 与 `artifact_update` 作为核心对象状态更新工具，`rerun_stage` 和 `write_report` 只作为旧示例兼容别名；记录、事件 action 和重复请求判断都归入通用类别 |
 | LLM Relay 支持 | 内核提供 `llm_request`、`llm_response`、`LLM_RELAY` capability 和 `AGENT_EVENT_LLM_DONE`；prompt/response 摘要进入 Context、timeline 和审计记录；云端 API、secret、HTTP/TLS 留在用户态 |
 | 结构化事件 | `labdemo_ucore` 输出 `agentos:event type=... key=value`，为页面工具和 LLM Relay 保留解析契约 |
-| 测试驱动验收 | 功能测试之外，以 `agentscope_ucore`、`iobudget_ucore`、资源专项和增长预算验证 scope、授权、资源耗尽及生命周期机制；371.5s、126.1s 与 13824/16384 均为重构前历史快照，generation/public-lineage、资源控制器、统一 teardown、lazy stack 和模块拆分必须以当前源码的新日志为准 |
+| 测试驱动验收 | 功能测试之外，以 `agentscope_ucore`、`iobudget_ucore`、资源专项和增长预算验证 scope、授权、资源耗尽及生命周期机制；性能、体积和栈结论只读取当前提交生成的 evidence bundle |
 
 ## 5. 构件视图
 
@@ -183,12 +192,12 @@ flowchart TB
 | Metadata prefetch owner | `os/agent_metadata_prefetch.c/.h` | 预取选择、可信 handoff 与 snapshot syscall |
 | 观测 owner | `os/agent_observe.c`、`os/agent_observe_ledger.c`、`os/agent_observe_audit_query.c`、`os/agent_observe_timeline.c`、`os/agent_observe_store.c`、`os/agent_observe_capacity.c`、`os/agent_observe_recovery.c` | facade 只协调写入顺序；ledger 独占可写 audit/index/high-water，查询与 timeline 消费不可变 scope view，store 负责磁盘格式，capacity 负责准入与两阶段清除，recovery 负责可信绑定和 UAPI 授权 |
 | PCB、teardown 与按需栈 | `os/proc.h`、`os/proc.c` | 保存热路径句柄，处理进程/线程 admission、统一 teardown 和 scheduler 侧内核栈回收 |
-| 通用资源账户 | `os/resource_controller.c`、`os/resource_controller.h` | EXEC/STORAGE account、ordinary/reserved 配额、向量 reservation、usage reconcile 与 rate lease |
+| 通用资源账户 | `os/resource_controller.c`、`os/resource_controller.h` | EXEC/STORAGE account、ordinary/reserved 配额、向量 reservation 与 usage reconcile |
 | Workflow lifecycle | `os/workflow_lifecycle.c`、`os/workflow_lifecycle.h` | generation-safe 8 槽 ledger、controller 绑定、关闭、成员引用和回收 |
 | 可信执行与文件授权 | `os/exec_policy.c`、`os/vfs_security.c`、`os/loader.c` | 校验可信映像、W^X 布局、角色上限、bootstrap grant、文件安全域和有效能力 |
 | 时钟事件 | `os/trap.c`、`os/timer.c` | 定时调用 `agent_tick()`，支持 heartbeat 和 timeout |
 | 文件写入入口 | `os/file.c` | 在真实 `write`、`O_TRUNC`、`unlink` 路径调用 Agent 文件编辑租约检查 |
-| 块 I/O 与缓存策略 | `os/bio.c`、`os/virtio_disk.c`、`os/proc.c`、`io_policy.h` | 管理稳定 owner/class 的 lease/token/debt；单 owner 通过与设备根同时扣减且不叠加容量的 shared gate 借用空闲容量，异域活动或排队时恢复保留份额；准入 account endpoint 不带债，reserved 设备端只由真实 account lease 背书带债；已接纳的有界原子多传输可形成有上界的 owner lane debt，shared 永不带债，生命周期 settlement 只清 owner lease/lane debt；global device debt 可跨 request/owner lifecycle，由设备根 refill 清偿，非保护 lane在此期间被 gate；真实 `disk_submit` 是唯一物理计费边界；scheduler 每轮提供 idle kerneltrap 中断交付窗口，避免内核态 yield loop 阻断 refill/设备完成；buffer cache sponsor 使用哈希命中索引、floor/cap、exclusive holder 和私有等待 |
+| 块 I/O 与缓存策略 | `os/bio.c`、`os/virtio_disk.c`、`os/proc.c`、`io_policy.h` | 管理稳定 owner/class、shared/device bucket 与 debt；两级 reservation 原子扣款并在访问时惰性 refill，异域活动或排队时恢复保留份额；真实 `disk_submit` 是唯一物理计费边界；buffer cache sponsor 使用哈希命中索引、floor/cap、exclusive holder 和私有等待 |
 | 最终功能验收 | `user/src/agentfinal_ucore.c` | Agent 创建、6 页 Context、批量工具调用、短文本历史、`context_detail()`、v8 active-path rollback/不可变 archive、完整性链、运行轨迹、统一 timeline、timeline wait、Run Ledger、provenance graph、用户自管 cache、名称协议、FIFO、事件 |
 | 文件系统测试 | `user/src/agentfs_ucore.c` | 真实文件 inode 绑定、字段清空、删除清理、metadata 双 bank 重新加载、scan/index 差异和一致性、query plan、truncated 标志、不存在 selector |
 | 自动扫描测试 | `user/src/agentscan_ucore.c` | 根目录自动扫描、真实文件自动建元数据、索引查询和删除清理 |
@@ -201,7 +210,7 @@ flowchart TB
 | 权限限制测试 | `user/src/agentsecurity_ucore.c` | 普通/低权限调用拒绝、可信 cause/span、audit authority 分区、role 与 route 边界 |
 | workflow scope 测试 | `user/src/agentscope_ucore.c` | 新 scope factory、同名对象隔离、同 scope 协作、并发 metadata 提交、微小写入合并与跨 scope 查询进展、跨 scope IPC/租约/audit 拒绝、观测查询线性上界与跨 scope 进展、配额保证、一次性 pipe fd 委派，以及关闭权拒绝、根退出/factory 关闭、阻塞成员清理、9 轮强制撤销和 replacement admission |
 | Workflow teardown 组合测试 | `user/src/workflow_teardown_race_ucore.c`、`scripts/run-workflow-teardown-race-tests.sh` | syscall 546 ABI、factory close/自然退出、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 lifecycle generation 重用；独立于版本化 Agent 套件 |
-| 块 I/O 分域测试 | `user/src/iobudget_ucore.c` | PUBLIC 冷缓存/速率压力、owner/device lease 上界、请求内物理传输批量结算、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出的清理 I/O 归因/debt 结算，以及 workflow cache floor、CONTROL 预算和压力下有界进展；ABI v6 定向结果只作阶段性回归，当前发布状态以冻结提交日志为准 |
+| 块 I/O 分域测试 | `user/src/iobudget_ucore.c` | PUBLIC 冷缓存/速率压力、owner/device lease 上界、请求内物理传输批量结算、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出的清理 I/O 归因/debt 结算，以及 workflow cache floor、CONTROL 预算和压力下有界进展 |
 | 可信执行测试 | `user/src/agenttrust_ucore.c` | RX/RW+NX 布局、映像不可变、bootstrap 授权范围和角色映像绑定 |
 | VFS 安全域测试 | `user/src/agentvfs_ucore.c` | public/workflow 隔离、worker 能力衰减、跨 scope inode fd 撤销、worker pipe 单跳委派和受保护路径 |
 | 系统稳健性测试 | `user/src/usersafety_ucore.c`、`user/src/fsenospc_ucore.c`、`user/src/fsquota_ucore.c`、`user/src/fspquota_ucore.c`、`user/src/procreap_ucore.c` | 用户地址、对象私有等待、真实 ENOSPC、持久 PUBLIC principal、存储配额与系统保留量、退出回收和进程域配额 |
@@ -494,7 +503,7 @@ Agent 的真实角色保存在 `agent_role`，业务能力在 `agent_capability_
 
 两个目标共享用户输入复制、对象私有等待、可恢复 ENOSPC、块 owner map、稳定 PUBLIC 存储主体、孤儿回收和 child record 等行为目标，但实现并非完全相同。当前 generation-safe `resource_controller`、workflow lifecycle、统一 teardown 与按需物理内核栈位于根目录 AgentOS 目标；`baseline_ucore/` 仍保留旧的分域计数和固定栈实现。因此文档和测试只能比较共同安全性质，不能把根目标的新控制器描述为 baseline 的共享实现。
 
-AgentOS 中 `resource_account` 才是计费身份。EXEC account 统一核算进程、线程、唯一 file object 和完整 Agent 状态页；STORAGE account 由稳定 `storage_principal_id` 或 workflow owner 映射，核算 block、inode、buffer cache 和 I/O rate lease。账户句柄包含 generation，进入 CLOSING/DRAINING 后必须等成员、用量、pending reservation 和 lease/debt 全清才可复用。一个 Agent 的 9 sidecar + 6 mirror + 6 shadow 以 21 页/84 KiB 整体接纳；六项总预算为每进程/全局/ordinary 池/reserved 池/ordinary 域/reserved 域 `86016/11010048/8257536/2752512/5505024/688128` B。`resource_domain_id` 只保留为调度分区索引，外层 active-domain 轮转防止线程数放大 CPU 份额。PUBLIC principal 固定为 2，并在挂载时从 qmap/dinode 重建用量，不随短命进程退出或重启变化。
+AgentOS 中 `resource_account` 是通用计费身份。EXEC account 核算进程、线程、唯一 file object 和完整 Agent 状态页；STORAGE account 由稳定 `storage_principal_id` 或 workflow owner 映射，核算 block、inode 和 buffer cache。账户句柄包含 generation，进入 CLOSING/DRAINING 后必须等成员、用量和 pending reservation 全清才可复用。BIO 只保存活跃 owner 的 class bucket、shared/device 根与在途 receipt，避免每个空闲通用账户常驻 I/O lane。Agent Context mirror、shadow 与 sidecar 作为一个按需资源整体接纳；准确页数和字节预算以 `ci/kernel-budgets.json` 为准。`resource_domain_id` 只保留为调度分区索引，外层 active-domain 轮转防止线程数放大 CPU 份额。PUBLIC principal 在挂载时从 qmap/dinode 重建用量，不随短命进程退出或重启变化。
 
 AgentOS 专属路径在此基础上增加可信映像、role grant、capability 和动态 VFS scope。PUBLIC=0、SYSTEM=1、workflow>=3，数值 2 只保留为 PUBLIC 存储 principal；不同 workflow 的文件数据命名空间彼此隔离，`open/read/write/truncate/unlink` 均按 inode scope、真实身份和当前有效能力检查，同 scope 继承的 inode fd 也会逐操作重新鉴权。pipe 不依赖环境继承：任何新 Agent、worker、workflow 或降权普通主体都只接收其创建线程通过 syscall 542 当次显式委派的端点，且授权不随子进程继续传播。文件身份使用 `scope + dev + inum + incarnation`，防止同名对象、inode 重用或另一个 workflow 的旧 metadata/cache/lease 命中。存储保证由完成镜像的实际空闲量决定，并受每 scope 320 inode/512 block 与 SYSTEM 8 inode/512 block 的显式硬下限约束；当前平台镜像写入 superblock 的每 scope 342 inode/1195 block 是文件系统 STORAGE 保证。metadata catalog 的每 scope 112 条只是索引容量，不再限制 workflow inode；catalog 饱和也不会解除 VFS scope 标签或降低逐操作鉴权。
 
@@ -537,10 +546,10 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | W^X 装载 | 配套 ELF 决定 `exec_rw_offset`，代码 RX，数据、bss、栈和 Agent Context RW+NX | 阻止普通写入直接修改可执行代码，并让角色授权绑定到不可变映像 | 当前仍是受控 flat image，不是通用动态 ELF loader |
 | VFS 文件域 | PUBLIC=0、SYSTEM=1、动态 workflow>=3；2 保留为 PUBLIC 存储 principal；逐操作同时校验 capability 和精确 inode scope | 普通路径、同名文件和继承 fd 均不能跨 workflow | SYSTEM 仅作为显式只读共享/可信映像来源 |
 | 退出与等待 | 对象私有等待队列、child record 与执行槽分离，以及 `LIVE` 到 `RECYCLED` 的单一正向 teardown；Agent 侧只公开 phase-aware `agent_proc_teardown()` | 阻塞 syscall、fault、显式 exit、workflow revoke 和构造失败复用同一资源结算顺序；QUIESCING 撤权、RECLAIMING 释放/清身份、SETTLING 验空，REQUESTED 后不能再发布对象 | 只有 scheduler 切回 idle stack 后才能释放最后物理栈页并发布回收 |
-| 资源账户与调度域 | `resource_account` 统一核算 process/thread/file/block/inode/cache/Agent page，原子向量 admission 防半发布；`resource_domain_id` 仅用于 active-domain CPU 轮转 | 同时限制 fork/thread/file/storage/I/O 压力，又不把计费身份和调度策略耦合 | `RESOURCE_AGENT_STATE_PAGE` 是逻辑配额；页面仍来自通用 `kalloc`，不是全局物理内存 OOM 下的硬保留 |
+| 资源账户与调度域 | `resource_account` 统一核算 process/thread/file/block/inode/cache/Agent page，BIO owner bucket 管理 I/O rate/debt；`resource_domain_id` 仅用于 active-domain CPU 轮转 | 同时限制 fork/thread/file/storage/I/O 压力，又不把通用计费、I/O 调度和 CPU 策略堆进同一状态 | `RESOURCE_AGENT_STATE_PAGE` 是逻辑配额；页面仍来自通用 `kalloc`，不是全局物理内存 OOM 下的硬保留 |
 | 按需内核栈 | 保留 16 KiB stack + 4 KiB guard 的全部虚拟槽，线程 admission 时映射物理页，scheduler 回收；64 KiB boot stack 另做 linker-span 与调用图预算 | 32 MiB 虚拟容量不再等于启动物理占用；8 MiB 为受信/保留线程物理池 | 当前单 hart 使用本地 TLB fence；未来 SMP 需要远端 shootdown |
 | 文件系统存储主体 | 稳定 owner、逐块 map 和共享容量策略；mkfs 持久化 PUBLIC principal 与容量契约，挂载重建 PUBLIC 用量并恢复 workflow scope ID 下界，启动与 admission 使用固定 G/S；可变 SYSTEM 赞助文件在首次用户修改前由 claim gate 一次预留，排序后按 qmap block 分组，以 qmap-first、inode-last 前向提交；每 scope 下限 320 inode/512 block，SYSTEM 下限 8 inode/512 block | 限制单个稳定主体/scope 的块、inode 及版本状态，并为所有 admitted/future workflow 与 SYSTEM 保留可兑现容量，避免进程域退出清零、覆盖预装块绕过计费或 SYSTEM 信用消耗后重启重复预留 | 平台实际保证随镜像构建结果变化并由 mkfs 输出；变更 FS 配置会强制重编 mkfs；旧磁盘格式拒绝挂载，教学文件系统无 journal；当前 ENOSPC 全流程已复测，grouped claim 中点掉电仍缺专门注入 |
-| 块设备 I/O 公平策略 | PUBLIC 32/16；每 active workflow 的 normal/control/background 为 24/12、48/24、8/4；每 retiring workflow 只保留 background 8/4；SYSTEM system/background 为 96/48、16/8。reserved 最坏总和 528/264；shared 是与 560/280 设备根同尺寸、同时扣根且不叠加容量的机会流量门。每次真实 `disk_submit` 是唯一物理计费边界 | PID 退出、重新 fork 或低权限微写不能刷新速率身份；无竞争可借空闲带宽，异域竞争时仍兑现各 lane 保证，volatile overlay 不能伪装物理 I/O | 固定策略以 1 KiB 设备提交和 policy tick 为单位；准入 account endpoint 不带债，reserved 设备端只由真实 account lease 背书带债；请求内物理传输批量结算，已接纳的有界原子请求后续可形成有上界的 owner lane debt，shared 不带债，checkpoint/teardown settlement 清理 owner lease/lane debt；global device debt 可跨 lifecycle，由设备根 refill 清偿，保护 lane可跨越且总量受 request/aggregate envelope 约束；ABI v6 的 `version/struct_size` 固定在前 8 字节 |
+| 块设备 I/O 公平策略 | 稳定 PUBLIC/SYSTEM/workflow owner 的 class bucket，加 shared/device 根；真实 `disk_submit` 才计费 | PID 退出、重新 fork 或低权限微写不能刷新速率身份；无竞争借空闲带宽，异域竞争恢复保留份额，volatile overlay 不伪装物理 I/O | 策略以设备提交和 tick 为单位；shared 不带债，有界原子请求的 owner/device debt 在 checkpoint/teardown 结算；具体参数以 `io_policy.h` 为准 |
 | scheduler 中断交付边界 | 每轮在 idle context 安装 kernel trap 向量并短暂打开中断，再运行后台维护和选择线程 | 唯一 runnable 线程即使反复在内核 pipe 条件路径 yield、长期不返回用户态，timer/device 中断仍能推进 token refill、I/O debt 和设备完成 | 这是所有调度轮次共享的机制，不按 PID、文件或 syscall 特判；`iobudget_ucore: scheduler_interrupt_progress=1` 覆盖该回归 |
 | terminal teardown 账本 | `LIVE -> REQUESTED -> QUIESCING -> DETACHED -> RECLAIMING -> SETTLING -> HANDOFF -> PUBLISHED -> RECYCLED`；唯一 `teardown_owner_tid` 和首次 exit code；凭据清除、lifecycle release、resource account 结算和栈发布按固定顺序执行 | 所有进程级退出原因共享机制，不能借 fault、revoke 或构造失败跳过账目；非主 sibling 仍只退出线程 | proc-reap、agentscope 与资源专项保留历史/定向合同；`fault_exit_cleanup=1` 只证明 fault 分支，不能单独代表所有内部阶段；本发布聚合状态以 release bundle 为准 |
 | Buffer cache 赞助与持有 | `NBUF=256`；SYSTEM/PUBLIC/每个 active workflow 按稳定 owner 记录 sponsor并使用 40/24/36 floor 与 96/48/64 cap；退役清理 job 临时使用 3/8；跨域命中不刷新 sponsor LRU，空闲 donor 只有高于自身 floor 才可被驱逐，超 cap transient 释放即失效；每块另有 exclusive holder、递归深度和私有等待队列 | 保留关键 metadata 和其他 workflow 的可用缓存，限制 PUBLIC 以冷工作集长期占满全局 LRU；禁止预算睡眠发生在仍持有 buffer 的中间状态 | floor 是 active principal 的缓存服务保证，不是数据机密边界；对象可见性仍由 VFS 授权决定 |

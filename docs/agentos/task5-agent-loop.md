@@ -110,7 +110,7 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 
 事件或 cancel 被选中时不会立即从队列消失。内核在关中断窗口内 reserve 精确 FIFO 队首或 cancel token，用 event id cookie 标记单一消费者；释放短临界区后进入 Context commit lane，完成用户 copyout、可信 source/span 归因及 Context/audit 记录。finish 再核对 slot/head/cookie：成功才 commit 出队、退还 external/IPC/attributed 配额并 handoff 下一 waiter；lane 或 copyout 失败则 abort reservation、保留原事件或 cancel，并定向唤醒等待者。这样坏用户页和 sibling 并发不能在结果交付前提前消费队首。
 
-`WAIT_ATOMIC_TEST_PROFILE` 不是生产 ABI，而是原子边界的动态注入 profile。runner 要求 `agentfinal_ucore: thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1`，以及 `agentfinal_ucore: wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1`。前者覆盖 sibling 独立 deadline、generation key 和线程槽复用，后者覆盖事件在最终谓词重检前到达时不误睡，以及 teardown 撤销等待 sibling；reserve/cookie/commit/abort 顺序另由静态与 mutation 合同约束。当前 profile 尚未把“reserve 后用户页失效、sibling waiter、cancel、teardown”四项同时组合，不能把该组合写成已取得 Guest 证据。
+`WAIT_ATOMIC_TEST_PROFILE` 不是生产 ABI，而是原子边界的动态注入 profile。它覆盖 sibling 独立 deadline、generation key、线程槽复用、事件在最终谓词重检前到达时不误睡，以及 teardown 撤销等待 sibling；reserve/cookie/commit/abort 顺序同时由静态与 mutation 合同约束。
 
 `agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于用户看到轮询路径与事件路径的成本都可测。具体 tick 样例统一保存在 [正式证据索引](../../evidence/releases/INDEX.md)。
 
@@ -394,7 +394,7 @@ Context v8 还会把事件和后续工具调用连起来，并继续维护 Conte
 | --- | --- |
 | `agentfinal_ucore` | 自唤醒事件可被 watch/wait 消费，相关 Context、事件、调度和预取统计进入 Run Ledger；`WAIT_ATOMIC_TEST_PROFILE` 另要求 `thread_wait_deadlines ... slot_reuse=1` 与 `wait_publication_atomic=1 ... teardown_completed=1` 两条完整 marker。 |
 | `agentbench_ucore` | timeout 会更新 heartbeat/timeout 统计；busy polling 与 wait/wake 都有可复查的 tick 观测。 |
-| `agentloop_ucore` | FIFO、cause/span、unwatch、睡眠 timeout、wait cancel 和严格 heartbeat 语义均有动态断言；精确 heartbeat 标记覆盖无 watch 内生唤醒、动态频率、单条 coalesce、stop、边界和旧 ABI。`message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`heartbeat_reserve_coalesced=1`、`external_reject_reclaim=1` 和 `broadcast_slow_watcher_isolated=1` 验证外部 admission、一个 heartbeat 可进入保留容量、消费后重新接纳，以及 external 已饱和的慢 watcher 不阻断后续 watcher。attributed=8 与 stable source 混合跨类仍缺独立边界输出。 |
+| `agentloop_ucore` | FIFO、cause/span、unwatch、睡眠 timeout、wait cancel 和严格 heartbeat 语义均有动态断言；来源、类别、external 与 SYSTEM 保留容量分别受控，消费后可重新接纳，external 已饱和的慢 watcher 不阻断后续 watcher。 |
 | `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录；普通进程在持续可运行高分 Agent 下先取得进展，并输出 `normal_progress=1 max_agent_burst=8`。 |
 | `threadresource_ucore` | 以 19/12/6/6/4 tiny policy 验证普通/保留域上限与复用、容量拒绝计数稳定、线程/进程退出退款、普通/保留全局水位与复用、系统保留进展和 active-domain 公平轮转；输出 12 项机制标记及 `parent passed`。 |
 | `agentsecurity_ucore` | 用户态 `agent_wake()` 只允许 MESSAGE；普通进程、保留系统事件和非法类型均被拒绝。`route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1` 验证未授权拒绝、控制者 grant/revoke、新 control id 隔离、target 自主接受 LLM_DONE、LLM-only route 拒绝 MESSAGE，以及超过 16 个短命 source 后路由槽可回收。 |

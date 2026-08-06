@@ -13,10 +13,29 @@ RUNNER = ROOT / "scripts" / "run-dual-platforms.sh"
 def validate_source(source: str) -> None:
     guard = "external measured Agent log injection is forbidden"
     guard_at = source.find(guard)
-    first_work_at = source.find('mkdir -p "${DUAL_LOG_DIR}"')
+    claim_at = source.find("create_private_directory")
+    first_work_at = source.find('stage_begin "structure-check"')
     stage_at = source.find('stage_begin "measured-file-query"')
-    if guard_at < 0 or first_work_at < 0 or guard_at > first_work_at:
+    if (
+        guard_at < 0
+        or claim_at < 0
+        or first_work_at < 0
+        or guard_at > claim_at
+        or claim_at > first_work_at
+    ):
         raise ValueError("external evidence is not rejected before runner work")
+    if "/tmp/agentos-dual-platform" in source:
+        raise ValueError("runner uses a predictable shared temporary directory")
+    for required in (
+        'DUAL_LOG_DIR_REQUESTED="${DUAL_LOG_DIR:-}"',
+        "secrets.token_hex(12)",
+        "create_private_directory(Path(requested))",
+        "umask 077",
+        'measurement_run_id="dual-${measurement_commit%${measurement_commit#????????????}}-${DUAL_RUN_GENERATION}"',
+        'rm -f -- "${measurement_receipt:-}" "${measurement_manifest:-}"',
+    ):
+        if required not in source:
+            raise ValueError(f"private run generation is incomplete: {required}")
     if stage_at < 0:
         raise ValueError("targeted measurement stage is missing")
     stage = source[stage_at:]
@@ -28,6 +47,8 @@ def validate_source(source: str) -> None:
         "bash scripts/run-agent-tests.sh",
         '--guest-log "${measurement_guest_log}"',
         '--command-json "${measurement_command_json}"',
+        '--generation "${DUAL_RUN_GENERATION}"',
+        '--receipt-out "${measurement_receipt}"',
     ):
         if required not in stage:
             raise ValueError(f"targeted measurement stage is incomplete: {required}")
@@ -48,6 +69,13 @@ def main() -> int:
             'stage_begin "measured-file-query"\nMEASURED_AGENT_COMMAND_JSON="${MEASURED_AGENT_COMMAND_JSON:-[]}"',
             1,
         ),
+        source.replace("secrets.token_hex(12)", '"fixed-generation"', 1),
+        source.replace(
+            "create_private_directory(Path(requested))",
+            "Path(requested).mkdir(parents=True, exist_ok=True)",
+            1,
+        ),
+        source.replace('--receipt-out "${measurement_receipt}"', "", 1),
     )
     for mutated in mutations:
         try:

@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import re
 from pathlib import Path
 
-from strict_json import read_strict_json
+from safe_host_paths import atomic_write_bytes, read_regular_file
+from strict_json import strict_json_loads
 
 from benchmark_source_contract import (
     BENCHMARK_SOURCE,
@@ -23,6 +25,8 @@ PASS_MARKER = "agentbench_ucore: parent passed"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+MAX_GUEST_LOG_BYTES = 128 << 20
+MAX_SMALL_ARTIFACT_BYTES = 16 << 20
 EXPECTED_KEYS = {
     "schema",
     "unit",
@@ -78,12 +82,13 @@ def sha256_bytes(value: bytes) -> str:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_bytes(read_regular_file(path, maximum_bytes=MAX_GUEST_LOG_BYTES))
 
+def _read_artifact(path: Path, maximum: int, message: str) -> bytes:
+    try:
+        return read_regular_file(path, nonempty=True, maximum_bytes=maximum)
+    except (OSError, ValueError) as error:
+        raise MeasurementError(message) from error
 
 def _parse_tokens(line: str, line_number: int) -> dict[str, str]:
     if not line.startswith(MARKER_PREFIX):
@@ -205,8 +210,6 @@ def extract_file_query_measurements(
     benchmark_source: Path = BENCHMARK_SOURCE,
 ) -> dict[str, object]:
     validate_benchmark_source(benchmark_source)
-    if not source_log.is_file() or source_log.is_symlink():
-        raise MeasurementError("Guest source log is missing or unsafe")
     if not COMMIT.fullmatch(commit):
         raise MeasurementError("measurement commit is invalid")
     if not RUN_ID.fullmatch(run_id):
@@ -216,7 +219,8 @@ def extract_file_query_measurements(
     if not source_ref or Path(source_ref).is_absolute() or ".." in Path(source_ref).parts:
         raise MeasurementError("measurement source reference is invalid")
 
-    raw = source_log.read_bytes()
+    raw = _read_artifact(source_log, MAX_GUEST_LOG_BYTES,
+                         "Guest source log is missing or unsafe")
     try:
         lines = raw.decode("utf-8").splitlines()
     except UnicodeDecodeError as error:
@@ -267,27 +271,24 @@ def extract_file_query_measurements(
         "rows": rows,
     }
 
+def write_manifest(path: Path, value: dict[str, object], *, replace: bool = True) -> None:
+    payload = (json.dumps(value, indent=2, sort_keys=True,
+                          ensure_ascii=False) + "\n").encode("utf-8")
+    atomic_write_bytes(path, payload, replace=replace)
 
-def write_manifest(path: Path, value: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-
-def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in CSV_FIELDS})
-
+def write_csv(path: Path, rows: list[dict[str, object]], *, replace: bool = True) -> None:
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=CSV_FIELDS)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({field: row.get(field, "") for field in CSV_FIELDS})
+    atomic_write_bytes(path, output.getvalue().encode("utf-8"), replace=replace)
 
 def verify_manifest(path: Path, source_root: Path) -> dict[str, object]:
+    raw = _read_artifact(path, MAX_SMALL_ARTIFACT_BYTES,
+                         "measurement manifest is invalid")
     try:
-        value = read_strict_json(path)
+        value = strict_json_loads(raw)
     except (OSError, UnicodeDecodeError, ValueError) as error:
         raise MeasurementError(f"measurement manifest is invalid: {error}") from error
     expected_top = {
@@ -315,12 +316,10 @@ def verify_manifest(path: Path, source_root: Path) -> dict[str, object]:
     if relative.is_absolute() or ".." in relative.parts:
         raise MeasurementError("measurement source path is unsafe")
     source_log = source_root / relative
-    if (
-        not source_log.is_file()
-        or source_log.is_symlink()
-        or source_log.stat().st_size != source.get("bytes")
-        or sha256_file(source_log) != source.get("sha256")
-    ):
+    source_bytes = _read_artifact(source_log, MAX_GUEST_LOG_BYTES,
+                                  "measurement source log differs from manifest")
+    if (len(source_bytes) != source.get("bytes") or
+            sha256_bytes(source_bytes) != source.get("sha256")):
         raise MeasurementError("measurement source log differs from manifest")
     rebuilt = extract_file_query_measurements(
         source_log,
@@ -332,7 +331,6 @@ def verify_manifest(path: Path, source_root: Path) -> dict[str, object]:
     if rebuilt != value:
         raise MeasurementError("measurement rows do not match the Guest log")
     return value
-
 
 def capture_bundle_artifacts(
     stage: Path,
@@ -365,7 +363,6 @@ def capture_bundle_artifacts(
         },
     }
 
-
 def _require_bundle_ref(
     root: Path, reference: object, expected_path: str
 ) -> Path:
@@ -381,7 +378,6 @@ def _require_bundle_ref(
         raise MeasurementError(f"measurement artifact differs: {expected_path}")
     return path
 
-
 def verify_measurement_artifact_set(
     manifest_path: Path,
     csv_path: Path,
@@ -390,25 +386,29 @@ def verify_measurement_artifact_set(
     source_ref: str,
 ) -> dict[str, object]:
     value = verify_manifest(manifest_path, source_root)
+    csv_bytes = _read_artifact(csv_path, MAX_SMALL_ARTIFACT_BYTES,
+                               "file-query benchmark CSV is invalid")
     try:
-        with csv_path.open(encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            rows = list(reader)
-    except (OSError, csv.Error) as error:
+        csv_text = csv_bytes.decode("utf-8")
+        reader = csv.DictReader(io.StringIO(csv_text, newline=""))
+        rows = list(reader)
+    except (OSError, UnicodeDecodeError, ValueError, csv.Error) as error:
         raise MeasurementError(f"file-query benchmark CSV is invalid: {error}") from error
     expected_rows = [
         {field: str(row.get(field, "")) for field in CSV_FIELDS}
         for row in value["rows"]
     ]
     source_log = source_root / source_ref
+    source_bytes = _read_artifact(source_log, MAX_GUEST_LOG_BYTES,
+                                  "file-query benchmark source is unsafe")
     if rows != expected_rows or reader.fieldnames != CSV_FIELDS:
         raise MeasurementError("file-query benchmark CSV differs from its manifest")
     if (
         value["commit"] != commit
         or value["source"] != {
             "path": source_ref,
-            "bytes": source_log.stat().st_size,
-            "sha256": sha256_file(source_log),
+            "bytes": len(source_bytes),
+            "sha256": sha256_bytes(source_bytes),
         }
         or any(
             row["source_log"] != source_ref

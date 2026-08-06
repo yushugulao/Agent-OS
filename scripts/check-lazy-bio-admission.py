@@ -74,7 +74,7 @@ def check(root: Path) -> None:
     for forbidden in (
         "io_wait_until_admitted(",
         "io_active_request_acquire(",
-        "resource_rate_reserve_many(",
+        "io_rate_reserve_pair(",
     ):
         reject(begin, forbidden, "lazy begin still reserves I/O capacity")
     require(begin, "thread->io_request_flags=BIO_REQUEST_LAZY|",
@@ -100,7 +100,7 @@ def check(root: Path) -> None:
     end = function(bio, "bio_request_end_current_mode")
     inactive = end.find("if((flags&BIO_REQUEST_ACTIVE)==0)")
     cache_only = end.find("io_policy.cache_only++", inactive)
-    refund = end.find("io_rate_lease_refund", inactive)
+    refund = end.find("io_rate_reservation_refund", inactive)
     if inactive < 0 or cache_only < 0 or (refund >= 0 and refund < cache_only):
         raise ValueError("cache-only end is not an O(1) no-refund path")
 

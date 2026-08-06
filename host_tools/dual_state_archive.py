@@ -24,7 +24,7 @@ from dual_state_evidence_contract import (
 )
 from evidence_semantic_common import EvidenceSemanticError, ValidationContext, _regular_bytes
 from research_state_manifest import StateManifestError, load_manifest, validate_archive_state_inventory
-from result_bundle_publication import ResultPublicationError, atomic_write_bytes
+from safe_host_paths import atomic_write_bytes
 
 MAX_FILES = 1024
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -121,7 +121,7 @@ def pack_state(state_dir: Path, output: Path) -> None:
 
     try:
         atomic_write_bytes(output, archive_bytes)
-    except ResultPublicationError as error:
+    except ValueError as error:
         raise ValueError(f"state archive output is unsafe: {error}") from error
 
 

@@ -93,13 +93,13 @@ scope 回归核对：PUBLIC=0、SYSTEM=1、动态 workflow>=3，数值 2 是安�
 
 Workflow 根把不复用的 `agent_control_id` 绑定到当次 `(lifecycle id,generation)`。根离开或 factory 关闭时先进入 CLOSING，再按完整 key 撤销；Agent/VFS 凭据已清零的 PUBLIC child/grandchild 仍必须终止。exec prepare/commit/abort 在同一发布边界复核 lifecycle。成员进入统一 teardown，自行清理 FD、inode、sidecar、VM 和 resource/I/O 账目；最后成员释放引用后才进入 RETIRING。`public_lineage=1` 和最终通过标记属于测试合同，发布结论以 C 对应 bundle 为准。
 
-块 I/O policy ABI v6 的设备根 burst/refill 为 560/280，PUBLIC NORMAL 为 32/16；每个 active workflow 的 NORMAL/CONTROL/BACKGROUND 为 24/12、48/24、8/4，每个 retiring workflow 只保留 BACKGROUND 8/4；SYSTEM SYSTEM/BACKGROUND 为 96/48、16/8。reserved 最坏总和 528/264，shared 是与设备根同尺寸、同时扣根且不叠加容量的机会流量门。无竞争前台传输依次消费 reserved、shared；异域活动或排队时停止直接借用。准入 account endpoint 不带债，reserved 的设备端只可由真实 account lease 背书带 debt，shared 永不带债。完成首笔 reservation 后，请求内真实物理传输批量结算；已接纳的有界原子多传输可在后续真实提交中形成受请求上界约束的 owner lane debt，并在 checkpoint、退出/撤销 settlement 或 owner 释放前清偿。global device debt 不属于 owner 生命周期：NORMAL/BACKGROUND 非保护 lane 在其存在时被 gate，SYSTEM/CONTROL 保护 lane可以跨越；设备根 tick refill 优先偿还它，有界 request 与 protected aggregate envelope 限制上界。每次实际 `disk_submit` 是唯一物理计费边界，volatile overlay 命中不计物理传输。cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，`NBUF=256`；当前轮转退役清理 job 临时使用 3/8，cap 是稳态驻留边界而非瞬时硬上限。
+块 I/O policy ABI 使用稳定 owner/class、shared/device bucket 和 cache floor/cap。无竞争前台传输依次消费 reserved、shared；异域活动或排队时恢复保留份额，shared 永不带债。两级 reservation 原子预留并在真实 `disk_submit` 处结算，有界请求的 owner/device debt 在 checkpoint、退出/撤销 settlement 或 refill 中清偿。信用按 `last_refill_tick` 惰性补充，debt bitmap 只推进有债务的 lane；volatile overlay 命中不计物理传输。具体参数与静态 envelope 以 `io_policy.h` 为准。
 
 buffer cache 以 exclusive holder、递归深度和私有等待队列串行化同块访问；持有 buffer 时 I/O/CPU checkpoint 均不能睡眠或 yield。复合文件系统原语另有 FS atomic depth；只有释放全部 buffer、且调用者已提交对象状态的 quiescent checkpoint 才可等待。loader 与 metadata exact-read 从正数短读前缀继续。PUBLIC 赞助对象接管使用固定工作区收集/排序块，按 qmap block 分组，并在唯一 claim gate 下完成 qmap-first、inode-last 前向提交。metadata COW 先验证新 primary 再更新旧 mirror；同步管理请求使用 FIFO ticket 接纳并建立不可替换 job，失败条件检查到 condition queue 入队保持关中断原子，不把 syscall 返回描述成 primary 已完成验证的持久化屏障。
 
 scheduler 每轮在 idle context 安装 kernel trap 向量并短暂开启中断，再进入后台维护和线程选择。该机制为所有调度轮提供 timer/device 中断交付边界，防止唯一 runnable 线程在内核 pipe 条件路径反复 `yield()`、长期不返回用户态时锁死 I/O debt 与后台 token refill；`scheduler_interrupt_progress=1` 对此作动态回归。线程选择本身再分两级：外层 active-domain FIFO 严格轮转，内层才执行普通 FIFO 或 Agent 软评分；Agent/score burst 按域维护。
 
-正常退出、主线程 fault、workflow revoke 和构造回滚共用 `LIVE -> REQUESTED -> QUIESCING -> DETACHED -> RECLAIMING -> SETTLING -> HANDOFF -> PUBLISHED -> RECYCLED`。进程的 Agent 侧清理只通过 phase-aware、幂等的 `agent_proc_teardown()` 推进：它负责撤销控制权、释放 Context/身份，并在 SETTLING 验证 Agent 私有状态与 Agent 页账为空。REQUESTED 后禁止发布新对象；唯一 teardown owner 继续由外层阶段结算通用 resource account 与 I/O lease/debt、清除 terminal 凭据和 lifecycle，scheduler 切回 idle stack 后才释放最后物理栈页。旧 `fault_exit_cleanup=1` 是历史问题证据，不能替代重构后状态机的当前回归。
+正常退出、主线程 fault、workflow revoke 和构造回滚共用 `LIVE -> REQUESTED -> QUIESCING -> DETACHED -> RECLAIMING -> SETTLING -> HANDOFF -> PUBLISHED -> RECYCLED`。进程的 Agent 侧清理只通过 phase-aware、幂等的 `agent_proc_teardown()` 推进：它负责撤销控制权、释放 Context/身份，并在 SETTLING 验证 Agent 私有状态与 Agent 页账为空。REQUESTED 后禁止发布新对象；唯一 teardown owner 继续由外层阶段结算通用 resource account 与 BIO owner 的在途请求/debt、清除 terminal 凭据和 lifecycle，scheduler 切回 idle stack 后才释放最后物理栈页。
 
 账本验证不得假设当前可见窗口 sequence 连续：系统 sequence 跨 scope 单调，low/high/principal 分区独立滚动。测试仅对无 gap 的相邻记录核验直接 `prev_hash`，并用 `dropped_records=total_records-visible_records` 解释窗口外记录。非活跃 principal 的旧 high 证据是可观测但有界的历史窗口。
 
@@ -183,16 +183,13 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 
 `agentbench_ucore` 还会输出 scalar/batch、digest cache、prefetch 和 event wait/wake 等诊断 telemetry。这些值用于本轮调试和功能回归，但在获得同等级的来源绑定与重复测量前，不列为独立原始实验。
 
-双目标运行后的本地预览包含：
+普通双目标运行在新建的私有随机 `$DUAL_LOG_DIR` 中生成以下 provenance-bound 原件，并以 `measurement-set.json` 标记完整 generation：
 
 | 文件 | 内容 |
 | --- | --- |
-| `summary.csv` | 双目标总体状态、状态文件数量和关键对照项。 |
-| `summary.json` | Runner tick 只保留 `unavailable/plain_runtime_cases_zero` 状态与原因，不生成恒定 CSV 或性能图。恢复测量必须发布新协议并绑定非 reference 源、逐字段 receipt、日志和 commit/run。 |
-| `experiments/status.json` | 当前实测是 `measured` 还是 `unavailable`；缺少可信 manifest 时必须不可用。 |
-| `experiments/raw/file-query-benchmark.csv` | 当前唯一的 provenance-bound Guest 原始实验数据。 |
-| `experiments/experiment-stats.csv` | 只从上述实测行聚合 min、avg、max、P50、P95。 |
-| `charts/experiment-file-query-bar.svg` | 只从上述 CSV 生成的可视化，不是独立证据。 |
+| `dual-targeted-agentbench-guest.log` | 定向运行 `agentbench_ucore` 的原始 Guest 输出。 |
+| `measured-experiments.json` | 绑定 Guest 日志、命令、commit、run id 和逐行 marker 的 manifest。 |
+| `file-query-benchmark.csv` | 当前唯一的 provenance-bound Guest 原始实验数据。 |
 
 QEMU tick 会受到宿主机调度、终端输出和文件系统缓存影响，因此文件查询报告同时保留 operations 和实际触达记录数，并明确区分冷索引重建与热索引查询。Context/timeline、事件等待、并发写入、LLM Relay 和恢复流程目前只有动态功能证据，不宣称拥有独立 raw CSV 或性能曲线。
 
@@ -211,21 +208,21 @@ Test trace OK!
 专项测试通过后，QEMU 日志保留在对应脚本输出目录。双目标运行通过后，结果主要位于：
 
 ```text
-/tmp/agentos-dual-platform/
-results/latest/
+$DUAL_LOG_DIR/
+evidence/releases/<bundle>/
 ```
 
-`/tmp/agentos-dual-platform/` 保存 QEMU 日志、纯 Guest 状态目录、独立 Host run receipt 和状态对照；普通运行不生成 complete-state ZIP。`results/latest/` 保存本地汇总、Markdown 报告和图表，默认不提交，也不能替代最终证据。正式发布使用与 clean、已提交 HEAD 绑定的 `evidence/releases/<bundle>/`；其中 `logs/raw/dual-{plain,agentos}-complete-state.zip` 保存完整 Guest 状态，`logs/raw/dual-{plain,agentos}-host-run-result.state` 保存独立 Host receipt，`metrics/file-query-benchmark.{csv,json}` 必须能回溯到 `logs/raw/agent-suite-guest.log`。
+`$DUAL_LOG_DIR` 保存本次调试 run 的 QEMU 日志、纯 Guest 状态、Host receipt、状态对照和文件查询测量；普通运行不生成 complete-state ZIP 或 HTML/SVG 预览。正式采集不复用该目录，而由 `full-verify` 在自己的私有 staging 目录重新运行，再发布与 clean、已提交 HEAD 绑定的 `evidence/releases/<bundle>/`。私有目录的 `measurement-set.json` 在移交前完成原子性验证；进入正式包后由 verification summary、逐文件 hash 和语义重放接管完成性。其中 `logs/raw/dual-{plain,agentos}-complete-state.zip` 保存完整 Guest 状态，`logs/raw/dual-{plain,agentos}-host-run-result.state` 保存独立 Host receipt，`logs/raw/dual-{targeted-agentbench-guest.log,measured-experiments.json,file-query-benchmark.csv}` 保存双目标原始测量，`metrics/file-query-benchmark.{csv,json}` 必须能回溯到 `logs/raw/agent-suite-guest.log`。
 
 ## 失败定位
 
 | 现象 | 优先查看 |
 | --- | --- |
-| QEMU 长时间无输出 | `/tmp/agentos-dual-platform/seeded-action-state/*/ucore-run.log` |
+| QEMU 长时间无输出 | `$DUAL_LOG_DIR/seeded-action-state/*/ucore-run.log` |
 | 构建失败 | `make agentos-user` 或 `make agentos-build` 的编译输出 |
 | 某个专项测试失败 | [要求追踪表](requirements-traceability.md)、对应 runner validator 与 Guest 日志 |
 | 双目标状态不一致 | [../verification.md](../verification.md) 的双目标验证章节 |
-| 页面或图表缺失 | `host_tools/test_*.py` 和 `results/latest/` |
+| 文件查询测量缺失 | `$DUAL_LOG_DIR/{dual-targeted-agentbench-guest.log,measured-experiments.json,file-query-benchmark.csv,measurement-set.json}` |
 
 ## 发布判定
 

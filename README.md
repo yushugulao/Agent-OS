@@ -22,7 +22,7 @@ AgentOS-uCore 是面向 AI Agent 工作流的 RISC-V uCore 内核扩展，也是
 | Context Path | 内核可信历史、用户只读 mirror、快照、查询与 rollback。 |
 | 结构化工具调用 | 名称和编号协议、类型校验、批处理与稳定错误码。 |
 | 生命周期与 IPC | 不可变 lifecycle id/generation、端点授权、撤销和统一 teardown。 |
-| 通用资源控制 | 进程、线程、文件、存储、物理内存和 I/O 的账户、配额及系统保留。 |
+| 资源与块 I/O | 通用账户管理进程、线程、文件、存储和物理内存；BIO 专属惰性 bucket 管理 I/O 公平、债务与系统保留。 |
 | 持久化与观测 | 文件 metadata、audit、timeline、provenance、恢复和有界查询。 |
 
 内核按职责拆为身份授权、Context、IPC、metadata、观测、生命周期、资源控制和块 I/O 模块。普通文件路径和传统 uCore syscall 保留兼容；可信文件引用热路径使用缓存授权和批量结算，避免每次小操作重复支付完整安全检查成本。

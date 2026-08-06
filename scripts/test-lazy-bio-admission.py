@@ -132,7 +132,7 @@ class LazyBioAdmissionTests(unittest.TestCase):
         )
         self.assert_rejected("runtime I/O admission starts before")
 
-    def test_rejects_guest_without_lease_assertion(self) -> None:
+    def test_rejects_guest_without_reservation_assertion(self) -> None:
         self.mutate(
             "user/src/iobudget_ucore.c",
             "after.leased == before.leased",

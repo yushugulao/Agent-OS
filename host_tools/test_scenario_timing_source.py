@@ -778,8 +778,15 @@ def main() -> int:
         sources,
         "os/bio.c",
         "io_rate_charge_transfers",
-        "state, io_class, 0, reserved, endpoints);",
-        "state, io_class, 0, 1, endpoints);",
+        "state, io_class, 0, 0, 1, reserved) < 0",
+        "state, io_class, 0, 0, 1, 1) < 0",
+    ))
+    _reject(_case(
+        sources,
+        "os/bio.c",
+        "io_rate_charge_transfers",
+        "state, io_class, 1, 0, 0, shared) < 0",
+        "state, io_class, 1, 0, 0, 1) < 0",
     ))
     _reject(_case(
         sources,

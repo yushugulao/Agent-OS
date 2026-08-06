@@ -34,8 +34,6 @@ host_probe_setup "${TMPDIR_PHYSICAL}"
 
 policy_probe="scripts/probes/physical-page-policy.c"
 capacity_probe="scripts/probes/physical-page-capacity.c"
-"${PYTHON_BIN}" scripts/test-physical-brk-wiring.py
-"${PYTHON_BIN}" scripts/test-resource-kind-policy.py
 "${TOOLPREFIX}gcc" -std=gnu11 -ffreestanding -fsyntax-only \
 	"${capacity_probe}"
 if "${TOOLPREFIX}gcc" -std=gnu11 -ffreestanding -fsyntax-only \

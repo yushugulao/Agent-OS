@@ -13,7 +13,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 560；其中 543、544�
 | `agent_create` | 500 | `int agent_create(void)` | 创建 Agent 子进程 |
 | `agent_info` | 501 | `int agent_info(struct agent_info *)` | 查询当前进程 Agent 元信息 |
 | `agent_run` | 502 | `int agent_run(struct agent_op *, struct agent_result *, int, uint64)` | 高性能批量工具调用入口 |
-| `agent_call` | 503 | `int agent_call(struct agent_request *, struct agent_response *)` | 正式名称协议入口，使用工具名称和参数键值列表 |
+| `agent_call` | 503 | `int agent_call(struct agent_request *, struct agent_response *)` | V1 兼容名称协议入口，使用工具名称和参数键值列表 |
 | `agent_tool_list` | 504 | `int agent_tool_list(struct agent_tool_desc *, int)` | 查询工具列表 |
 | `context_push` | 505 | `int context_push(struct agent_context_record *)` | 手动追加 Context Path 节点 |
 | `context_query` | 506 | `int context_query(uint64, struct agent_context_record *, int)` | 按 sequence 查询当前 active Context Path |
@@ -73,7 +73,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 560；其中 543、544�
 `struct_size`，较旧调用者可以传入较小但不低于 8 字节的缓冲区。`measured_mask` 明确
 区分策略已配置、具有全局计数器的资源种类与零值占位；每一类同时返回 capacity、used、
 pending 以及 ordinary/reserved 分类。`measured_mask` 不代表逐 resource account 的用量
-覆盖，也不覆盖 rate lease/debt，更不是全局无泄漏声明。入口只接受内核 bootstrap 策略
+覆盖，也不覆盖 BIO 专属速率 bucket/debt，更不是全局无泄漏声明。入口只接受内核 bootstrap 策略
 绑定、持有资源域管理权且尚未成为 Agent 的进程，用于 Task 6 验收和可信诊断，不是面向
 workflow Agent 的全局信息查询能力。
 
@@ -160,13 +160,13 @@ int io_policy_info(struct io_policy_info *info);
 | 前台机会流量门 | 560 | 280 |
 | 设备根 bucket | 560 | 280 |
 
-每个可能触盘的 syscall 先取得 reserved 或 shared account lease。每次真实 `disk_submit` 是唯一物理计费边界：所选 account lane 与设备根同步扣减，shared 不叠加额外物理容量。无竞争时，前台 owner 在自身 reserved lane 后可通过与设备根同尺寸的 shared gate 借用空闲容量；出现异域活动、排队、retire/quiesce 或既有 lane debt 后停止直接借用。排队 shared grant 按 owner/class cursor 轮转，`BACKGROUND` 不能借 shared。准入时 account endpoint 不带债；reserved lane 只有取得真实 account lease 后，设备端才可为保证份额形成 debt，shared 永不带债。已接纳的有界原子多传输若耗尽 reserved/shared，后续真实提交可形成受请求上界约束的 owner lane debt；owner lease/debt 由 quiescent checkpoint 或 teardown settlement 清偿，未获准请求不得裸透支。全局 device debt 不属于 owner 生命周期：NORMAL/BACKGROUND 非保护 lane 在其存在时被 gate，SYSTEM/CONTROL 保护 lane可以跨越；设备根 tick refill 优先偿还它，有界 request 与 protected aggregate envelope 共同限制上界。没有物理提交的请求退款；掉电测试的 volatile overlay 命中不进入物理计数，写回的每个块和最终 FLUSH 均在统一提交边界独立计费。
+每个可能触盘的 syscall 先在 BIO 内取得 owner/shared 与 device 两级 reservation。每次真实 `disk_submit` 是唯一物理计费边界：两级 credit 在同一关中断窗口预留，提交或取消恰好一次。无竞争时，前台 owner 在自身 reserved bucket 后可借 shared；出现异域活动、排队、retire/quiesce 或既有 debt 后停止直接借用，`BACKGROUND` 不能借 shared。shared 永不带债；已接纳的有界原子请求可以在请求上界内形成 owner/device debt，由 quiescent checkpoint 或 teardown settlement 清偿。SYSTEM/CONTROL 保留进展仍受 protected aggregate envelope 约束。bucket 按 `last_refill_tick` 惰性补充，不再由周期 tick 扫描所有账户；没有物理提交的 reservation 退款，volatile overlay 命中不计费，写回块和最终 FLUSH 在统一提交边界分别计费。
 
-设备根是物理机会容量的 560/280 envelope；各 owner/class 保留承诺的最坏总和分别为 528/264，编译期独立验证其不超过设备根，shared gate 也单独不超过设备根，二者不相加，因为 shared 每次与设备根同步扣减。准入 reservation 的 account endpoint 永不带债；reserved lane 的设备端只可由真实 account lease 背书带债。完成首笔 reservation 的有界原子请求可在后续真实传输中产生有界 owner lane debt 和 global device debt：前者由 checkpoint/settlement 清偿，后者可跨 owner lifecycle，并由设备根 refill 优先偿还。冻结期 ACTIVE/CLOSING/RETIRING 身份合计不超过 4；静态断言为 8 槽 ledger 保留全部 cleanup lane，不表示可同时 admission 8 个 workflow。
+设备根定义物理机会容量，owner/class 的保留总和和 shared gate 分别受编译期 envelope 约束。两级 reservation 只在 BIO 内保存紧凑来源/device receipt；shared 不带债，已接纳的有界原子请求可以形成有上界的 owner/device debt，由 checkpoint、teardown 和后续 refill 清偿。具体 burst/refill、active/retiring owner 上界与 cache floor/cap 以 `io_policy.h` 为准。
 
 scheduler 每轮先把 `current_thread` 指向 idle context，安装 kernel trap 向量，短暂开启中断后再执行后台维护和选择下一线程。这个固定交付窗口不是按进程或 syscall 加白名单；它保证唯一 runnable 线程反复在内核态 pipe 条件路径 `yield()`、长期不返回用户态时，pending timer/device 中断仍能推进 I/O debt、token refill 和设备完成。中断窗口结束后 scheduler 再关中断进入两级选择：先严格轮转 active `resource_domain_id`，再从选中域的线程队列选择一个候选。这里的 `resource_domain_id` 仅是 CPU 调度分区索引，不是配额账户。
 
-资源控制器是内核 admission 契约，不新增用户态 syscall。进程和线程保存 generation-safe EXEC `resource_account`；文件系统和 BIO 根据稳定 `storage_principal_id`/workflow owner 取得 STORAGE account。PROCESS、THREAD、FILE_OBJECT、FS_BLOCK、FS_INODE、BUFFER_CACHE 和 AGENT_STATE_PAGE 统一使用 ordinary/reserved 计费。进程 + t0 与 pipe 两端通过一个向量 reservation 原子预留；失败取消，成功提交，账户进入 CLOSING/DRAINING 后要等成员、usage、pending reservation 和 rate lease/debt 全清才可复用。线程仍保存 `resource_domain_id` 供 scheduler 分区，但该字段不参与配额退款。
+资源控制器是内核 admission 契约，不新增用户态 syscall。进程和线程保存 generation-safe EXEC `resource_account`；文件系统根据稳定 `storage_principal_id`/workflow owner 取得 STORAGE account。PROCESS、THREAD、FILE_OBJECT、FS_BLOCK、FS_INODE、BUFFER_CACHE 和 AGENT_STATE_PAGE 统一使用 ordinary/reserved 计费。进程 + t0 与 pipe 两端通过一个向量 reservation 原子预留；失败取消，成功提交，账户进入 CLOSING/DRAINING 后要等成员、usage 和 pending reservation 全清才可复用。BIO 速率、债务和在途请求由 I/O owner 专属 bucket 结算，不再嵌入每个通用账户。线程仍保存 `resource_domain_id` 供 scheduler 分区，但该字段不参与配额退款。
 
 由主线程触发的正常退出、用户 fault/非法指令、workflow revoke 和未发布构造失败进入同一状态机：`LIVE -> REQUESTED -> QUIESCING -> DETACHED -> RECLAIMING -> SETTLING -> HANDOFF -> PUBLISHED -> RECYCLED`。进程生命周期只调用 phase-aware、幂等的 `agent_proc_teardown()` 处理 Agent 私有状态：QUIESCING 撤销控制权，RECLAIMING 释放 Context 状态并清除身份，SETTLING 验证 Agent 私有状态与 Agent state page 计费为空；通用 process/thread/file/I/O 账目由外层 teardown 继续结算，原始 Context 清理函数不再是进程析构 API。唯一 `teardown_owner_tid` 推进状态，第一次退出码生效；REQUESTED 后不得发布新进程所有对象。它依次展开 sibling、分离 child/FD、释放文件/Context 状态/VM、结算 cleanup I/O 与 resource account、清除 terminal 凭据并释放 lifecycle。scheduler 已切至 idle stack 后才释放最后物理栈页、发布退出并复用槽。非主 sibling 的正常退出或 fault 仍只走 `thread_exit_current()`。
 
@@ -182,7 +182,7 @@ scheduler 每轮先把 `current_thread` 指向 idle context，安装 kernel trap
 | `tokens` / `leased` / `debt` | 当前 class 可用信用、尚未在真实 `disk_submit` 边界结算的 lease 和待偿还超额传输 |
 | `class_burst` / `class_refill` | 当前 class 配置 |
 | `shared_tokens` / `shared_leased` | 前台机会流量门的可用与已租信用；它与设备根同时扣减，不是额外物理容量 |
-| `device_burst` / `device_refill` | 设备根 bucket 的 560/280 配置；reserved 准入只允许设备端由真实 account lease 背书形成 debt；已接纳的有界原子请求可形成受请求上界约束的 owner lane debt 与可跨 owner lifecycle、由设备根 refill 清偿的 global device debt |
+| `device_burst` / `device_refill` | 设备根 bucket 配置；已接纳的有界原子请求可形成受请求上界约束、由 checkpoint/teardown/refill 清偿的 owner/device debt |
 | `device_tokens` / `device_leased` / `device_debt` | 设备根可用信用、未提交 lease 和累计待偿还传输；每次真实 `disk_submit` 是唯一计费边界，shared 与设备根同步扣减且不叠加容量 |
 | `waiters` | admission 与 debt waiter 总数 |
 | `admission_waiters` / `debt_waiters` / `admission_granted` | 两阶段等待队列及当前 FIFO baton 状态 |
@@ -398,7 +398,7 @@ Agent 业务 capability 与 VFS effective capability 是两套独立凭据，但
 
 `exec` 是命名空间隔离中的显式例外。内核可在调用者所在域未命中后查找另一域的布局有效映像，但仅执行该映像不会安装 workflow 凭据：普通进程仍保持 public/无能力状态。只有 `agent_worker_create()` 预先绑定的精确委派可以为非 Agent worker 安装能力；已有 Agent 则还要通过可信 role-image 校验才能保留身份和能力。
 
-统一映像安装入口要求调用方显式选择 `PROC_IMAGE_INSTALL_BOOTSTRAP` 或 `PROC_IMAGE_INSTALL_LIVE_EXEC`，不会再从 PID、线程字段或调用位置猜测模式。不可逆凭据发布前，内核在关中断临界区调用 `proc_image_install_state_valid_locked()`：bootstrap 目标的主线程必须尚未发布，所有线程槽均为 `T_UNUSED`、`tid=-1`、generation 0 且不在运行队列；live exec 的主线程必须就是当前 `RUNNING` 的 t0、generation 非零且不在运行队列，其他槽只能是 `T_UNUSED`/`EXITED` 且均不在队列。两种模式都逐槽核对 `thread.process` 所属进程。状态不符时凭据和 VM 所有权都不移动；提交凭据后，进程级 IPC/wait 临时状态会在同步对象 reset 和 VM 交换之前统一清理。当前定向 Guest 路径已经经过 bootstrap 安装，既有 exec 回归经过 live 路径；mode/state 细节由静态与 mutation 合同约束，尚无单独的 Guest marker 直接断言每个 precommit 分支。
+统一映像安装入口要求调用方显式选择 `PROC_IMAGE_INSTALL_BOOTSTRAP` 或 `PROC_IMAGE_INSTALL_LIVE_EXEC`，不会再从 PID、线程字段或调用位置猜测模式。不可逆凭据发布前，内核在关中断临界区调用 `proc_image_install_state_valid_locked()`：bootstrap 目标的主线程必须尚未发布，所有线程槽均为 `T_UNUSED`、`tid=-1`、generation 0 且不在运行队列；live exec 的主线程必须就是当前 `RUNNING` 的 t0、generation 非零且不在运行队列，其他槽只能是 `T_UNUSED`/`EXITED` 且均不在队列。两种模式都逐槽核对 `thread.process` 所属进程。状态不符时凭据和 VM 所有权都不移动；提交凭据后，进程级 IPC/wait 临时状态会在同步对象 reset 和 VM 交换之前统一清理。
 
 `agent_worker_create(image, requested_caps)` 只允许具备 `ORCHESTRATE` 且处于 active workflow scope 的 Agent 调用。`requested_caps` 必须非零，只能包含 `CONTENT_READ` / `ARTIFACT_WRITE`，同时必须是调用者业务能力、调用者 VFS 能力和目标映像 profile 上限的子集。成功时返回与 `fork()` 相同的父子返回值，但子进程仍是非 Agent、没有 Agent Context；授权先以 pending 状态绑定到目标 inode 的 `dev + inum + incarnation` 和父 scope，子进程只有随后成功 `exec()` 完全相同的 immutable、domain-safe SYSTEM worker 映像才取得父 workflow 的凭据。执行其他映像会清除 pending 授权。
 
@@ -763,7 +763,7 @@ metadata 可见代数按 workflow scope 维护；某域的普通变化只推进�
 
 Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合计上限为 12；directed IPC 与 attributed system notification 各自上限为 8；同一 stable source 跨两类合计上限为 4。directed 投递达到任一 admission 边界时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。attributed 广播遇到某个目标超配额或总队列已满时只对该目标记 drop 并继续扫描，不把 `NO_SPACE` 透传给已经提交状态的源操作。只有显式 `KERNEL` origin 可以越过 external=12 的 admission 边界，继续使用总容量中保留的至少 4 个名额；它仍受 16 槽总容量约束。heartbeat 使用明确的 intrinsic delivery policy 产生 SYSTEM `AGENT_EVENT_TIMER`，不经过 watch 过滤，并按事件类别最多保留一条未消费记录。每个 Agent 最多注册 8 条 watch；相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch，但不会关闭或抑制 heartbeat。有限 timeout 的 `agent_wait()` 会进入睡眠，由事件入队、heartbeat 到期、deadline 到期或 wait cancel 令牌唤醒；`agent_info.wait_loop_count` 用于观察该路径没有反复轮询。
 
-`agent_wait()` 选择事件不等于立即出队。内核在关中断窗口内为精确 FIFO 队首或 cancel token 建立单消费者 reservation，以 event id 作为 cookie；随后进入 Context commit lane，完成用户 copyout、可信 source/span 归因和 Context/audit 记录。finish 阶段重新核对 slot/head/cookie：只有全部成功才 commit 消费、退还事件类别配额并唤醒下一 waiter；lane 或 copyout 失败会 abort reservation、保留事件或 cancel，并定向唤醒等待者。静态与 mutation 合同约束 reserve/cookie/commit/abort 顺序。`WAIT_ATOMIC_TEST_PROFILE` 的动态门要求 `thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1` 和 `wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1`，覆盖谓词重检到 waiter 发布、逐线程 deadline/generation 以及 teardown 展开；它尚未组合注入“reserve 后用户页失效 + sibling waiter + cancel + teardown”，因此不能把该四方竞争称为已有 Guest 证据。
+`agent_wait()` 选择事件不等于立即出队。内核在关中断窗口内为精确 FIFO 队首或 cancel token 建立单消费者 reservation，以 event id 作为 cookie；随后进入 Context commit lane，完成用户 copyout、可信 source/span 归因和 Context/audit 记录。finish 阶段重新核对 slot/head/cookie：只有全部成功才 commit 消费、退还事件类别配额并唤醒下一 waiter；lane 或 copyout 失败会 abort reservation、保留事件或 cancel，并定向唤醒等待者。静态、mutation 和 `WAIT_ATOMIC_TEST_PROFILE` 共同约束 reserve/cookie/commit/abort、逐线程 deadline/generation、谓词重检与 teardown 展开。
 
 所有 runnable 线程先进入所属资源域的私有队列；外层 active-domain FIFO 中每个非空域至多有一个节点。每次调度只从队首域取一个线程，域仍非空时把它放回外层队尾，因此线程数量不能换取更多跨域 dispatch。纯普通域在本域按 FIFO 选择；本域存在 Agent 时才读取 Agent 状态并允许 orchestrator 配置 weight、priority 和 budget。角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量只影响该域内分数。
 

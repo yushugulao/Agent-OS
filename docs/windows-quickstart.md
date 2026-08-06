@@ -10,7 +10,6 @@
 - WSL2 Ubuntu。
 - Git。
 - Ubuntu 内的 `bash`、`make`、`python3`。
-- Ubuntu 内的绘图 Python 包：`pandas`、`seaborn`、`matplotlib`。缺少这些包时结果生成器仍能走内置 SVG 路径，但推荐安装它们以使用主绘图路径。
 - Ubuntu 内的 RISC-V 交叉工具链：`riscv64-linux-gnu-gcc`、`riscv64-linux-gnu-ld`、`riscv64-linux-gnu-objcopy`、`riscv64-linux-gnu-objdump`。
 - Ubuntu 内的 QEMU：`qemu-system-riscv64`。
 
@@ -19,8 +18,7 @@ Ubuntu 中可以用以下命令安装主要依赖：
 ```bash
 sudo apt update
 sudo apt install -y git build-essential make python3 qemu-system-misc \
-  gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-  python3-pandas python3-seaborn python3-matplotlib
+  gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
 ```
 
 仓库不放置 QEMU 和交叉编译器。这些内容体积大、和本机环境绑定，放进仓库会增加克隆成本，也不利于复现实验环境复现。仓库内置可运行源码、测试脚本、依赖检查脚本和离线评价工具。
@@ -38,7 +36,6 @@ sudo apt install -y git build-essential make python3 qemu-system-misc \
 - Windows 是否能调用 `wsl.exe`。
 - 是否存在可用 WSL 发行版。
 - WSL 内是否能找到 `bash`、`git`、`make`、`python3`、QEMU 和 RISC-V 工具链。
-- WSL 内是否已安装推荐绘图包 `pandas`、`seaborn`、`matplotlib`。
 
 如果缺少依赖，脚本会打印 Ubuntu 中需要执行的安装命令。
 

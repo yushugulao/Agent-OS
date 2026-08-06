@@ -94,15 +94,17 @@ int wait_queue_sleep_irq_uninterruptible(struct wait_queue *q)
 	return wait_queue_sleep_mode(q, 0, 0);
 }
 
-static struct thread *wait_queue_wake_thread(struct wait_queue *q,
-					     int keyed, uint64 key)
+static int wait_queue_wake(struct wait_queue *q, int keyed, uint64 key,
+			   int maximum, struct thread **first_woken)
 {
 	struct thread *t;
 	struct thread *next;
 	struct thread *previous;
 	int enabled = intr_save();
-	struct thread *woken = 0;
+	int woken = 0;
 
+	if (first_woken)
+		*first_woken = 0;
 	previous = 0;
 	for (t = q != 0 ? q->head : 0; t != 0; t = next) {
 		next = t->wait_next;
@@ -127,8 +129,11 @@ static struct thread *wait_queue_wake_thread(struct wait_queue *q,
 			continue;
 		t->state = RUNNABLE;
 		add_task(t);
-		woken = t;
-		break;
+		if (first_woken && *first_woken == 0)
+			*first_woken = t;
+		woken++;
+		if (maximum > 0 && woken >= maximum)
+			break;
 	}
 	intr_restore(enabled);
 	return woken;
@@ -136,7 +141,10 @@ static struct thread *wait_queue_wake_thread(struct wait_queue *q,
 
 struct thread *wait_queue_wake_one_thread(struct wait_queue *q)
 {
-	return wait_queue_wake_thread(q, 0, 0);
+	struct thread *woken;
+
+	wait_queue_wake(q, 0, 0, 1, &woken);
+	return woken;
 }
 
 int wait_queue_wake_one(struct wait_queue *q)
@@ -146,24 +154,12 @@ int wait_queue_wake_one(struct wait_queue *q)
 
 int wait_queue_wake_all(struct wait_queue *q)
 {
-	int woken = 0;
-	int enabled = intr_save();
-
-	while (wait_queue_wake_one_thread(q) != 0)
-		woken++;
-	intr_restore(enabled);
-	return woken;
+	return wait_queue_wake(q, 0, 0, 0, 0);
 }
 
 int wait_queue_wake_key_all(struct wait_queue *q, uint64 key)
 {
-	int woken = 0;
-	int enabled = intr_save();
-
-	while (wait_queue_wake_thread(q, 1, key) != 0)
-		woken++;
-	intr_restore(enabled);
-	return woken;
+	return wait_queue_wake(q, 1, key, 0, 0);
 }
 
 void wait_queue_cancel(struct thread *t)

@@ -87,7 +87,7 @@ def _validate_agent_suite(ctx: ValidationContext) -> None:
 DUAL_STAGES = (
     "structure-check", "seeded-dual-run", "qemu-log-marker-check",
     "state-extract-copy", "host-alignment", "state-compare",
-    "measured-file-query", "result-report-chart",
+    "measured-file-query",
 )
 
 

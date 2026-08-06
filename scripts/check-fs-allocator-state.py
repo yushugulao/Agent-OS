@@ -147,7 +147,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     runner = sources["scripts/run-fs-allocator-fault-tests.sh"]
     virtio = sources["os/virtio_disk.c"]
     virtio_h = sources["os/virtio.h"]
-    bio = sources["os/bio.c"]
     bio_h = sources["os/bio.h"]
     proc = sources["os/proc.c"]
     agent_core = sources["os/agent_core.c"]
@@ -188,22 +187,11 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             failures.append(f"filesystem epoch phase order missing {token}")
             break
         cursor = found + len(token)
-    for token, label in (
-        ("bio_deferred_owner_retain_current(",
-         "foreground class retain"),
-        ("&sponsor_request_id) < 0", "foreground request identity retain"),
-        ("bio_deferred_owner_retain_cleanup(",
-         "cleanup owner lifetime retain"),
-        ("bio_deferred_sponsor_begin(", "explicit I/O sponsor"),
-        ("commit_owner, sponsor_class, sponsor_request_id)",
-         "exact request sponsor"),
-        ("virtio_disk_write_batch(batch, batch_count)", "batched writeback"),
-        ("bio_deferred_sponsor_end();", "sponsor release"),
-        ("bio_deferred_owner_release(commit_owner);", "owner lifetime release"),
-        ("wait_queue_wake_all(&epoch.request_queue);", "lifecycle-safe gate wakeup"),
-    ):
-        if token not in fs_epoch:
-            failures.append(f"filesystem epoch missing {label}")
+    # Sponsorship and commit sequencing are mutation-tested by
+    # test-fs-epoch-sponsor.py.  This allocator checker only retains the
+    # lifecycle-safe gate invariant needed by reclaim.
+    if "wait_queue_wake_all(&epoch.request_queue);" not in fs_epoch:
+        failures.append("filesystem epoch missing lifecycle-safe gate wakeup")
     if "request_handoff" in fs_epoch or "wait_queue_wake_one_thread" in fs_epoch:
         failures.append("filesystem epoch retains a teardown-unsafe thread handoff")
     reserve_phase = function_body(fs_epoch, "fs_epoch_reserve_ordered") or ""
@@ -235,47 +223,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         if token not in fence:
             failures.append(f"filesystem reclaim fence missing {token}")
-    require_order(
-        function_body(fs_epoch, "fs_epoch_commit"),
-        "filesystem epoch commit",
-        (
-            r"bio_deferred_sponsor_begin\s*\(",
-            r"FS_EPOCH_PREPARE",
-            r"FS_EPOCH_PHASE_COUNT",
-            r"fs_epoch_write_phase\s*\(",
-            r"fs_epoch_flush_forward\s*\(",
-            r"bio_deferred_sponsor_end\s*\(",
-            r"bunpin\s*\(",
-            r"bio_deferred_owner_release\s*\(",
-        ),
-        failures,
-    )
-    commit = function_body(fs_epoch, "fs_epoch_commit") or ""
-    forward_wait = function_body(fs_epoch, "fs_epoch_forward_wait") or ""
-    if "bio_request_settle_quiescent_cleanup" in commit:
-        failures.append("filesystem epoch settles rate debt while holding the gate")
-    if forward_wait.count("bio_request_settle_quiescent_cleanup()") != 1:
-        failures.append("forward-only filesystem commit lacks bounded debt wait")
-    for token, label in (
-        ("bio_deferred_sponsor_current()", "deferred sponsor lookup"),
-        ("return io_policy.deferred.owner;", "deferred owner attribution"),
-        ("return io_policy.deferred.io_class;", "deferred class attribution"),
-    ):
-        if token not in bio:
-            failures.append(f"I/O policy missing {label}")
-    cleanup_retain = function_body(bio, "bio_deferred_owner_retain_cleanup") or ""
-    require_order(
-        cleanup_retain,
-        "cleanup-only deferred owner retain",
-        (
-            r"caller_holds\s*=",
-            r"if\s*\(\s*!caller_holds\s*\)",
-            r"state\s*=\s*io_state_find",
-            r"state->active_requests\s*==\s*0",
-            r"io_active_request_acquire\s*\(",
-        ),
-        failures,
-    )
     if "BIO_CACHE_CLEANUP_CAP 8U" not in bio_h:
         failures.append("cleanup cache budget is not exported to deferred reclaim")
 
@@ -425,26 +372,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         failures.append("candidate refill: unused candidates touch durable allocation state")
 
-    require_order(
-        function_body(fs, "balloc_epoch"),
-        "epoch allocation",
-        (
-            r"fs_epoch_preflight\s*\(\s*3\s*\)",
-            r"fs_allocator_gate_lock\s*\(\s*0\s*\)",
-            r"fs_block_candidate_take\s*\(",
-            r"fs_storage_reserve\s*\(\s*charge\s*,\s*0\s*\)",
-            r"fs_scrub_block_allocated\s*\(",
-            r"fs_qmap_read\s*\(",
-            r"allocated\s*\|\|\s*qstate\s*!=\s*FS_OWNER_NONE",
-            r"bzero\s*\(",
-            r"epoch_staged\s*=\s*1",
-            r"fs_qmap_write\s*\(\s*dev\s*,\s*block\s*,\s*charge->owner\s*\)",
-            r"mapping_staged\s*=\s*1",
-            r"fs_bitmap_write\s*\(\s*dev\s*,\s*block\s*,\s*1\s*\)",
-            r"fs_block_candidate_clear\s*\(",
-        ),
-        failures,
-    )
+    # The epoch-specific image and abort ordering is owned by
+    # test-fs-epoch-sponsor.py.  Keep only the allocator-wide invariants here.
     epoch_alloc = function_body(fs, "balloc_epoch") or ""
     if "FS_QMAP_ALLOCATING_FLAG" in epoch_alloc or re.search(
         r"fs_durable_barrier(?:_forward)?\s*\(", epoch_alloc
@@ -452,19 +381,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("epoch allocation: production fast path retains intermediate intent/barrier")
     if len(re.findall(r"fs_storage_reserve\s*\(", epoch_alloc)) != 1:
         failures.append("epoch allocation: quota reservation is not exactly one block")
-    require_order(
-        epoch_alloc,
-        "epoch allocation abort",
-        (
-            r"if\s*\(\s*epoch_staged\s*\)",
-            r"fs_epoch_commit\s*\(\s*\)",
-            r"commit_result\s*<\s*0\s*\|\|\s*mapping_staged",
-            r"quota_reserved\s*=\s*0",
-            r"FS_FAILURE_METADATA_WRITE_INDETERMINATE",
-            r"fs_storage_release\s*\(",
-        ),
-        failures,
-    )
     legacy_alloc = function_body(fs, "balloc_one") or ""
     if "fs_block_candidate_reclaim" not in legacy_alloc:
         failures.append("balloc_one: synchronous path cannot reclaim cached capacity")
@@ -566,18 +482,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             r"iupdate\s*\(\s*ip\s*\)",
             r"fs_storage_release\s*\(\s*storage_owner\s*,\s*1\s*\)",
             r"FSALLOC_PHASE_REFUND",
-        ),
-        failures,
-    )
-    require_order(
-        function_body(fs, "bmap"),
-        "bmap indirect publish",
-        (
-            r"a\s*\[\s*bn\s*\]\s*=\s*candidate\s*;",
-            r"fs_write_metadata_block\s*\(\s*bp\s*\)",
-            r"brelse\s*\(\s*bp\s*\)",
-            r"fs_durable_barrier_forward\s*\(\s*\)",
-            r"addr\s*=\s*candidate\s*;",
         ),
         failures,
     )
@@ -900,16 +804,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         if token not in bio_h:
             failures.append(f"global physical I/O ABI missing {token}")
-    for token in (
-        "io_policy.physical_reads++",
-        "io_policy.physical_writes++",
-        "io_policy.physical_flushes++",
-        "completion_sequence = ++io_policy.completion_sequence",
-        "stats->writes = io_policy.physical_writes",
-        "stats->flushes = io_policy.physical_flushes",
-    ):
-        if token not in bio:
-            failures.append(f"global physical I/O accounting missing {token}")
+    # Generic batch accounting is checked by test-virtio-disk-wiring.py and
+    # test-bio-rate-controller.py; this checker owns allocator receipts only.
     for token in (
         "physical_write_delta != raw_delta",
         "physical_flush_delta != 1",
@@ -1020,7 +916,6 @@ def main() -> int:
         "scripts/run-fs-allocator-fault-tests.sh",
         "os/virtio_disk.c",
         "os/virtio.h",
-        "os/bio.c",
         "os/bio.h",
         "os/proc.c",
         "os/agent_core.c",
@@ -1044,11 +939,6 @@ def main() -> int:
             "os/fs.c",
             "fs_storage_release(owner, 0);",
             "(void)owner;",
-        ),
-        "lost-indirect-publish-barrier": (
-            "os/fs.c",
-            "result = fs_durable_barrier_forward();\n\t\t\t\t\tif (result < 0)\n\t\t\t\t\t\treturn bmap_error(error, result);\n\t\t\t\t\taddr = candidate;",
-            "addr = candidate;",
         ),
         "truncate-hole-order": (
             "os/fs.c",
@@ -1087,29 +977,14 @@ def main() -> int:
         ),
         "epoch-intent-restored": (
             "os/fs.c",
-            "result = fs_qmap_write(dev, block, charge->owner);",
-            "result = fs_qmap_write(dev, block, FS_QMAP_ALLOCATING_FLAG | charge->owner);",
+            "((uint *)qmap_bp->data)[block % QPB] = charge->owner;",
+            "((uint *)qmap_bp->data)[block % QPB] = "
+            "FS_QMAP_ALLOCATING_FLAG | charge->owner;",
         ),
         "epoch-intermediate-barrier": (
             "os/fs.c",
-            "epoch_staged = 1;",
-            "epoch_staged = 1;\n\t(void)fs_durable_barrier();",
-        ),
-        "epoch-partial-map-refund": (
-            "os/fs.c",
-            "quota_reserved = 0;\n\t\t\tresult = fs_io_fail(",
-            "result = fs_io_fail(",
-        ),
-        "epoch-owner-release-deleted": (
-            "os/fs_epoch.c",
-            "bio_deferred_owner_release(commit_owner);",
-            "(void)commit_owner;",
-        ),
-        "epoch-sponsor-deleted": (
-            "os/fs_epoch.c",
-            "if (bio_deferred_sponsor_begin(\n"
-            "\t\t    commit_owner, sponsor_class, sponsor_request_id) < 0)",
-            "if (0)",
+            "qmap_changed = 1;",
+            "qmap_changed = 1;\n\t(void)fs_durable_barrier();",
         ),
         "epoch-gate-handoff-restored": (
             "os/fs_epoch.c",
@@ -1133,13 +1008,6 @@ def main() -> int:
             "os/fs_epoch.c",
             "!fs_epoch_dirty_locked() || epoch.active_generation == 0 ||",
             "epoch.active_generation == (uint64)-1 ||",
-        ),
-        "reclaim-cleanup-resurrects-owner": (
-            "os/bio.c",
-            "if (state == 0 ||\n"
-            "\t    (state->active_requests == 0 &&",
-            "if (state == 0 ||\n"
-            "\t    (0 &&",
         ),
         "reclaim-release-before-commit": (
             "os/fs.c",

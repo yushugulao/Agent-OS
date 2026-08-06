@@ -15,9 +15,6 @@ sudo apt install -y \
 	build-essential \
 	make \
 	python3 \
-	python3-pandas \
-	python3-seaborn \
-	python3-matplotlib \
 	qemu-system-misc \
 	gcc-riscv64-linux-gnu \
 	binutils-riscv64-linux-gnu
