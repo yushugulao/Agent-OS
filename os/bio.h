@@ -112,9 +112,11 @@ void bio_request_abort_thread(struct thread *);
 void bio_fs_atomic_enter(void);
 void bio_fs_atomic_leave(void);
 int bio_io_quiescent_current(void);
+void bio_cache_retry_notify(void);
 int bio_background_begin(uint);
 void bio_background_end(void);
 int bio_background_active(uint);
+uint bio_process_owner(const struct proc *);
 void bio_current_sponsor(uint *, uint *);
 int bio_deferred_owner_retain(uint, uint *);
 int bio_deferred_owner_retain_current(uint, uint *, uint64 *);
@@ -130,8 +132,11 @@ struct bio_cleanup_token {
 #define BIO_CLEANUP_TOKEN_INIT { 0 }
 
 int bio_cleanup_token_prepare(uint, struct bio_cleanup_token *);
+/* Cleanup tokens are asynchronous identities and never borrow a request. */
+int bio_cleanup_token_sponsor(const struct bio_cleanup_token *, uint *, uint *);
 int bio_cleanup_token_begin(struct bio_cleanup_token *);
 int bio_cleanup_token_end(struct bio_cleanup_token *);
+int bio_cleanup_sponsor_covers(uint, uint, uint64);
 /*
  * An independent lease returns NEED_SETTLEMENT while the filesystem gate is
  * held.  Request/background reuse owns no lease and may release in the gate.

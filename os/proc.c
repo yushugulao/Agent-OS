@@ -2779,15 +2779,31 @@ static void proc_teardown_advance(struct proc *p,
 	intr_restore(enabled);
 }
 
+static void proc_teardown_file_progress(
+	struct file_close_batch *batch)
+{
+	if (batch == 0)
+		panic("process teardown file progress");
+	if (!fs_epoch_request_held())
+		panic("process teardown settlement gate");
+	fs_epoch_request_end();
+	if (fileclose_batch_settle(batch) < 0)
+		panic("process teardown file settlement");
+	(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_OPERATION_UNITS);
+	if (fs_epoch_request_begin() < 0)
+		panic("process teardown settlement reentry");
+}
+
 /*
  * The caller is the sole teardown owner. Pointer publication is removed before
- * any destructor can sleep; workflow and resource identities remain live until
- * all reclaim I/O has settled.
+ * any destructor can sleep. Deferred inode reclaims retain their own principal
+ * after process teardown.
  */
 static int proc_teardown_run(struct proc *p, struct thread *owner,
 			     int terminal_current)
 {
 	struct file *files[FD_BUFFER_SIZE];
+	struct file_close_batch close_batch = FILE_CLOSE_BATCH_INIT;
 	int enabled;
 
 	if (p == 0 || p->teardown_state != PROC_TEARDOWN_QUIESCING)
@@ -2834,9 +2850,19 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 			      PROC_TEARDOWN_DETACHED);
 	proc_teardown_advance(p, PROC_TEARDOWN_DETACHED,
 			      PROC_TEARDOWN_RECLAIMING);
-	for (int i = 0; i < FD_BUFFER_SIZE; i++)
-		if (files[i] != 0 && !fd_is_reserved(files[i]))
-			fileclose(files[i]);
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+		int close_result;
+
+		if (files[i] == 0 || fd_is_reserved(files[i]))
+			continue;
+		while ((close_result = fileclose_batch_add(
+				&close_batch, files[i])) > 0)
+			proc_teardown_file_progress(&close_batch);
+		if (close_result < 0)
+			panic("process teardown file batch");
+		if (close_batch.count != 0)
+			proc_teardown_file_progress(&close_batch);
+	}
 	agent_proc_teardown(p);
 	if (owner != 0)
 		thread_user_vm_release(owner);
@@ -2860,13 +2886,15 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 	if (!agent_ipc_legacy_mailbox_empty(p))
 		panic("process teardown legacy mailbox");
 	/*
-	 * File and VM reclaim are complete. Drop the global filesystem gate before
-	 * settling the terminal lease, but finish settlement before lifecycle
-	 * release can quiesce its BIO principal. Foreign unpublished rollback keeps
-	 * both resources under caller control.
+	 * File receipts and VM teardown are complete. Drop the filesystem gate
+	 * before settling the terminal request and releasing its lifecycle.
 	 */
+	if (!terminal_current && close_batch.count != 0)
+		proc_teardown_file_progress(&close_batch);
 	if (terminal_current) {
 		fs_epoch_request_end();
+		if (fileclose_batch_settle(&close_batch) < 0)
+			panic("process teardown file settlement");
 		if (bio_request_end_current_cleanup() < 0)
 			panic("process teardown I/O settlement");
 		kernel_work_end_cleanup();

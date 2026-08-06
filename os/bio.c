@@ -16,11 +16,16 @@
 _Static_assert(IO_OWNER_SLOTS >= VFS_SCOPE_MAX_ACTIVE + 2,
 	       "I/O owner table must cover every active workflow");
 #define IO_RESERVATION_NONE 0U
+#define IO_RESERVATION_SHARED (1U << 31)
+#define IO_RESERVATION_SLOT_MASK (~IO_RESERVATION_SHARED)
+#define IO_RATE_LOCAL_BATCH 32U
 #define BIO_REQUEST_ACTIVE (1U << 0)
 #define BIO_REQUEST_LAZY (1U << 1)
 #define BIO_REQUEST_CLEANUP (1U << 2)
+#define BIO_REQUEST_TRANSFERRED (1U << 3)
 #define BIO_REQUEST_KNOWN_FLAGS \
-	(BIO_REQUEST_ACTIVE | BIO_REQUEST_LAZY | BIO_REQUEST_CLEANUP)
+	(BIO_REQUEST_ACTIVE | BIO_REQUEST_LAZY | BIO_REQUEST_CLEANUP | \
+	 BIO_REQUEST_TRANSFERRED)
 #define IO_RATE_GLOBAL_SHARED 0U
 #define IO_RATE_GLOBAL_DEVICE 1U
 #define IO_CACHE_CLEANUP_FLOOR 3U
@@ -30,6 +35,8 @@ _Static_assert(RESOURCE_RATE_GLOBAL_CAP >= 2,
 	       "I/O policy needs shared and device rate pools");
 _Static_assert(RESOURCE_RATE_LEASE_CAP >= NPROC * NTHREAD + 1,
 	       "every live thread plus background cleanup needs a rate lease");
+_Static_assert(RESOURCE_RATE_LEASE_CAP < IO_RESERVATION_SHARED,
+	       "I/O lease slot must leave room for the shared-source tag");
 _Static_assert(IO_CACHE_PUBLIC_FLOOR >= 3 &&
 	       IO_CACHE_WORKFLOW_FLOOR >= 3,
 	       "each untrusted cache partition must support nested FS buffers");
@@ -149,12 +156,11 @@ struct io_deferred_sponsor {
 	struct bio_cleanup_token token;
 };
 
-#define BIO_CLEANUP_TOKEN_REUSE_REQUEST (1U << 0)
-#define BIO_CLEANUP_TOKEN_INDEPENDENT (1U << 1)
-#define BIO_CLEANUP_TOKEN_BACKGROUND (1U << 2)
-#define BIO_CLEANUP_TOKEN_POLLING (1U << 3)
-#define BIO_CLEANUP_TOKEN_SETTLING (1U << 4)
-#define BIO_CLEANUP_TOKEN_TRANSFERRED (1U << 5)
+#define BIO_CLEANUP_TOKEN_INDEPENDENT (1U << 0)
+#define BIO_CLEANUP_TOKEN_BACKGROUND (1U << 1)
+#define BIO_CLEANUP_TOKEN_POLLING (1U << 2)
+#define BIO_CLEANUP_TOKEN_SETTLING (1U << 3)
+#define BIO_CLEANUP_TOKEN_TRANSFERRED (1U << 4)
 
 enum bio_cleanup_token_state {
 	BIO_CLEANUP_TOKEN_EMPTY = 0,
@@ -168,7 +174,6 @@ enum bio_cleanup_token_state {
 #define BIO_CLEANUP_SLOT_NONE ((uint16)0xffffU)
 
 struct bio_cleanup_record {
-	uint64 origin_request_id;
 	uint64 principal_generation;
 	uint owner;
 	uint reservation;
@@ -210,7 +215,6 @@ static struct {
 	struct io_deferred_sponsor deferred;
 	uint shared_cursor;
 	uint cache_donor_cursor;
-	uint active_owner_states;
 	uint64 physical_reads;
 	uint64 physical_writes;
 	uint64 physical_flushes;
@@ -227,6 +231,7 @@ static struct {
 } io_policy;
 
 static struct wait_queue cache_waiters;
+static struct wait_queue background_cache_waiter;
 static uint64 cache_progress_sequence;
 static char bio_boot_holder_token;
 static uint bio_boot_buffer_holds;
@@ -350,14 +355,31 @@ int bio_deferred_polling_current(void)
 	       thread->identity_generation == 0;
 }
 
+static void bio_cache_advance_progress_locked(void)
+{
+	cache_progress_sequence++;
+	if (cache_progress_sequence == 0)
+		cache_progress_sequence = 1;
+}
+
 static void bio_cache_note_progress(void)
 {
 	int enabled = intr_save();
 
-	cache_progress_sequence++;
-	if (cache_progress_sequence == 0)
-		cache_progress_sequence = 1;
+	bio_cache_advance_progress_locked();
 	wait_queue_wake_all(&cache_waiters);
+	wait_queue_wake_one(&background_cache_waiter);
+	intr_restore(enabled);
+}
+
+void bio_cache_retry_notify(void)
+{
+	int enabled = intr_save();
+
+	if (io_policy.background.cache_wait_pending) {
+		bio_cache_advance_progress_locked();
+		wait_queue_wake_one(&background_cache_waiter);
+	}
 	intr_restore(enabled);
 }
 
@@ -386,7 +408,8 @@ static int bio_background_wait_for_cache_progress(void)
 	while (io_policy.background.cache_wait_pending &&
 	       io_policy.background.cache_wait_sequence ==
 		       cache_progress_sequence) {
-		if (wait_queue_sleep_irq_uninterruptible(&cache_waiters) !=
+		if (wait_queue_sleep_irq_uninterruptible(
+			    &background_cache_waiter) !=
 		    WAIT_QUEUE_OK) {
 			intr_restore(enabled);
 			return -1;
@@ -505,22 +528,14 @@ static void io_active_request_acquire(struct io_owner_state *state)
 {
 	if (state->active_requests == (uint)-1)
 		panic("I/O active request overflow");
-	if (state->active_requests++ == 0) {
-		if (io_policy.active_owner_states == (uint)-1)
-			panic("I/O active owner overflow");
-		io_policy.active_owner_states++;
-	}
+	state->active_requests++;
 }
 
 static void io_active_request_release(struct io_owner_state *state)
 {
 	if (state->active_requests == 0)
 		panic("I/O active request underflow");
-	if (--state->active_requests == 0) {
-		if (io_policy.active_owner_states == 0)
-			panic("I/O active owner underflow");
-		io_policy.active_owner_states--;
-	}
+	state->active_requests--;
 }
 
 static void io_owner_reap_retired(void)
@@ -827,7 +842,7 @@ static struct io_owner_state *io_state_find(uint owner, int create)
 	return free_state;
 }
 
-static uint io_owner_from_proc(const struct proc *p)
+uint bio_process_owner(const struct proc *p)
 {
 	struct workflow_lifecycle_key lifecycle;
 	uint scope_id;
@@ -864,7 +879,7 @@ static struct resource_rate_lease_handle
 io_rate_lease(uint slot, uint generation)
 {
 	struct resource_rate_lease_handle lease = {
-		.slot = slot,
+		.slot = slot & IO_RESERVATION_SLOT_MASK,
 		.generation = generation,
 	};
 
@@ -878,8 +893,9 @@ static int io_device_protected(uint owner, uint io_class)
 	       io_class == IO_POLICY_CLASS_SYSTEM;
 }
 
-static uint io_rate_bundle(
+static uint io_rate_bundle_amount(
 	const struct io_owner_state *state, uint io_class, int shared,
+	uint64 amount,
 	struct resource_rate_endpoint
 		endpoints[RESOURCE_RATE_BUNDLE_CAP])
 {
@@ -893,10 +909,10 @@ static uint io_rate_bundle(
 		endpoints[0].account = state->principal;
 		endpoints[0].index = io_class;
 	}
-	endpoints[0].amount = 1;
+	endpoints[0].amount = amount;
 	endpoints[1].scope = RESOURCE_RATE_GLOBAL;
 	endpoints[1].index = IO_RATE_GLOBAL_DEVICE;
-	endpoints[1].amount = 1;
+	endpoints[1].amount = amount;
 	/*
 	 * A reserved lane is a guarantee, so a previous opportunistic borrower
 	 * cannot block it by draining the device root. Shared traffic is always
@@ -906,6 +922,14 @@ static uint io_rate_bundle(
 		endpoints[1].flags =
 			RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;
 	return 2;
+}
+
+static uint io_rate_bundle(
+	const struct io_owner_state *state, uint io_class, int shared,
+	struct resource_rate_endpoint
+		endpoints[RESOURCE_RATE_BUNDLE_CAP])
+{
+	return io_rate_bundle_amount(state, io_class, shared, 1, endpoints);
 }
 
 static int io_rate_snapshot(
@@ -923,11 +947,16 @@ static int io_rate_global_snapshot(
 }
 
 static void io_rate_lease_store(
-	struct resource_rate_lease_handle lease,
+	struct resource_rate_lease_handle lease, int shared,
 	uint *slot, uint *generation)
 {
-	*slot = lease.slot;
+	*slot = lease.slot | (shared ? IO_RESERVATION_SHARED : 0);
 	*generation = lease.generation;
+}
+
+static int io_rate_lease_shared(uint slot)
+{
+	return (slot & IO_RESERVATION_SHARED) != 0;
 }
 
 static void io_rate_lease_commit(uint slot, uint generation)
@@ -947,68 +976,94 @@ static void io_rate_lease_refund(uint slot, uint generation)
 	io_schedule_grants();
 }
 
-static int io_any_admission_waiters(void)
-{
-	for (uint i = 0; i < IO_OWNER_SLOTS; i++) {
-		struct io_owner_state *state = &io_policy.owners[i];
-
-		if (!state->used)
-			continue;
-		for (uint c = 0; c < IO_POLICY_CLASS_COUNT; c++)
-			if (state->buckets[c].admission_waiters != 0)
-				return 1;
-	}
-	return 0;
-}
-
-static int io_has_competing_owner(
-	const struct io_owner_state *requester)
-{
-	if (io_policy.active_owner_states == 0)
-		return 0;
-	return requester->active_requests == 0 ||
-	       io_policy.active_owner_states != 1;
-}
-
-static int io_can_borrow_idle_capacity(
+static int io_can_use_shared_capacity(
 	const struct io_owner_state *state, uint io_class)
 {
 	return io_class != IO_POLICY_CLASS_BACKGROUND &&
-	       !state->retiring && !state->quiesced &&
-	       !io_any_admission_waiters() &&
-	       !io_has_competing_owner(state);
+	       !state->retiring && !state->quiesced;
+}
+
+static void io_rate_charge_transfers(
+	struct io_owner_state *state, uint io_class, uint64 amount)
+{
+	struct resource_rate_endpoint
+		endpoints[RESOURCE_RATE_BUNDLE_CAP];
+	struct resource_rate_snapshot lane;
+	uint64 reserved = 0;
+	uint64 shared = 0;
+
+	if (amount == 0)
+		return;
+	if (io_rate_snapshot(state, io_class, &lane) < 0)
+		panic("I/O rate snapshot");
+	if (lane.debt == 0)
+		reserved = MIN(amount, lane.tokens);
+	if (reserved != 0) {
+		struct resource_rate_snapshot device;
+
+		/* The common case charges an entire completed device batch once. */
+		if (io_rate_global_snapshot(
+			    IO_RATE_GLOBAL_DEVICE, &device) == 0 &&
+		    device.debt == 0 && device.tokens >= reserved) {
+			(void)io_rate_bundle_amount(
+				state, io_class, 0, reserved, endpoints);
+			if (resource_rate_charge_many(endpoints, 2) < 0)
+				panic("I/O reserved batch charge");
+		} else {
+			/* Preserve token-before-debt semantics at a device boundary. */
+			for (uint64 i = 0; i < reserved; i++) {
+				(void)io_rate_bundle(
+					state, io_class, 0, endpoints);
+				if (resource_rate_charge_many(endpoints, 2) < 0)
+					panic("I/O reserved charge");
+			}
+		}
+		state->reserved_grants += reserved;
+		amount -= reserved;
+	}
+	if (amount != 0 && lane.debt == 0 && lane.pending_debt == 0 &&
+	    io_can_use_shared_capacity(state, io_class)) {
+		struct resource_rate_snapshot capacity;
+
+		if (io_rate_global_snapshot(
+			    IO_RATE_GLOBAL_SHARED, &capacity) == 0 &&
+		    capacity.debt == 0) {
+			shared = MIN(amount, capacity.tokens);
+			if (shared != 0) {
+				if (io_rate_global_snapshot(
+					    IO_RATE_GLOBAL_DEVICE,
+					    &capacity) < 0 ||
+				    capacity.debt != 0)
+					shared = 0;
+				else if (shared > capacity.tokens)
+					shared = capacity.tokens;
+			}
+		}
+		if (shared != 0) {
+			(void)io_rate_bundle_amount(
+				state, io_class, 1, shared, endpoints);
+			if (resource_rate_charge_many(endpoints, 2) < 0)
+				panic("I/O shared batch charge");
+			state->shared_grants += shared;
+			amount -= shared;
+		}
+	}
+	/* Debt is an already-issued slow path, so exact per-credit splitting is
+	 * preferable to making the resource controller's atomic API ambiguous. */
+	for (uint64 i = 0; i < amount; i++) {
+		(void)io_rate_bundle(state, io_class, 0, endpoints);
+		endpoints[0].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;
+		endpoints[1].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;
+		if (resource_rate_charge_many(endpoints, 2) < 0)
+			panic("I/O rate charge");
+	}
+	state->throttles += amount;
 }
 
 static void io_rate_charge_transfer(
 	struct io_owner_state *state, uint io_class)
 {
-	struct resource_rate_endpoint
-		endpoints[RESOURCE_RATE_BUNDLE_CAP];
-	struct resource_rate_snapshot lane;
-
-	/* Consume the caller's protected lane before borrowing idle capacity. */
-	(void)io_rate_bundle(state, io_class, 0, endpoints);
-	if (resource_rate_charge_many(endpoints, 2) == 0) {
-		state->reserved_grants++;
-		return;
-	}
-	if (io_rate_snapshot(state, io_class, &lane) == 0 &&
-	    lane.debt == 0 && lane.pending_debt == 0 &&
-	    io_can_borrow_idle_capacity(state, io_class)) {
-		(void)io_rate_bundle(state, io_class, 1, endpoints);
-		if (resource_rate_charge_many(endpoints, 2) == 0) {
-			state->shared_grants++;
-			return;
-		}
-	}
-
-	/* A bounded request may finish its atomic I/O before settling its debt. */
-	(void)io_rate_bundle(state, io_class, 0, endpoints);
-	endpoints[0].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;
-	endpoints[1].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;
-	state->throttles++;
-	if (resource_rate_charge_many(endpoints, 2) < 0)
-		panic("I/O rate charge");
+	io_rate_charge_transfers(state, io_class, 1);
 }
 
 static int io_reserve_direct(struct io_owner_state *state, uint io_class,
@@ -1027,19 +1082,18 @@ static int io_reserve_direct(struct io_owner_state *state, uint io_class,
 	(void)io_rate_bundle(state, io_class, 0, endpoints);
 	if (resource_rate_reserve_many(endpoints, 2, &lease) == 0) {
 		state->reserved_grants++;
-		io_rate_lease_store(lease, source, device_source);
+		io_rate_lease_store(lease, 0, source, device_source);
 		return 1;
 	}
 	if (io_rate_snapshot(state, io_class, &lane) == 0 &&
 	    lane.debt == 0 && lane.pending_debt == 0 &&
 	    io_class != IO_POLICY_CLASS_BACKGROUND &&
-	    io_can_borrow_idle_capacity(state, io_class)) {
+	    io_can_use_shared_capacity(state, io_class)) {
 		(void)io_rate_bundle(state, io_class, 1, endpoints);
 		if (resource_rate_reserve_many(
 			    endpoints, 2, &lease) == 0) {
-			state->shared_grants++;
 			io_rate_lease_store(
-				lease, source, device_source);
+				lease, 1, source, device_source);
 			return 1;
 		}
 	}
@@ -1071,13 +1125,11 @@ static int io_grant_waiter(struct io_owner_state *state, uint io_class,
 	(void)io_rate_bundle(state, io_class, shared, endpoints);
 	if (resource_rate_reserve_many(endpoints, 2, &lease) < 0)
 		return 0;
-	if (shared)
-		state->shared_grants++;
-	else
+	if (!shared)
 		state->reserved_grants++;
 	bucket->grantee = head;
 	io_rate_lease_store(
-		lease, &bucket->grant_source,
+		lease, shared, &bucket->grant_source,
 		&bucket->grant_device_source);
 	if (!wait_queue_wake_one(&bucket->admission_queue))
 		panic("I/O admission grant lost waiter");
@@ -1441,6 +1493,9 @@ static int bio_thread_request_flags_valid(const struct thread *thread)
 		return flags == 0 && thread->io_request_id == 0;
 	if (thread->io_request_id == 0)
 		return 0;
+	if ((flags & BIO_REQUEST_TRANSFERRED) != 0 &&
+	    (flags & BIO_REQUEST_ACTIVE) == 0)
+		return 0;
 	return (flags & (BIO_REQUEST_ACTIVE | BIO_REQUEST_LAZY)) != 0;
 }
 
@@ -1493,7 +1548,7 @@ static int bio_request_begin_current_mode(int cleanup)
 	}
 	if (!bio_thread_request_flags_valid(thread))
 		panic("idle I/O request identity");
-	owner = io_owner_from_proc(thread->process);
+	owner = bio_process_owner(thread->process);
 	io_class = io_class_from_proc(thread->process, owner);
 	state = io_state_find(owner, 0);
 	if (state == 0)
@@ -1544,7 +1599,7 @@ static int bio_request_begin_current_lazy_mode(int cleanup)
 	}
 	if (!bio_thread_request_flags_valid(thread))
 		panic("idle lazy I/O request identity");
-	owner = io_owner_from_proc(thread->process);
+	owner = bio_process_owner(thread->process);
 	io_class = io_class_from_proc(thread->process, owner);
 	enabled = intr_save();
 	state = io_state_find(owner, 0);
@@ -1842,6 +1897,8 @@ struct bio_checkpoint_result bio_request_checkpoint_quiescent(void)
 
 int bio_request_settle_quiescent_cleanup(void)
 {
+	if (!bio_io_quiescent_current())
+		return -1;
 	struct bio_checkpoint_result result =
 		bio_request_checkpoint_mode(1, 1);
 
@@ -1937,6 +1994,7 @@ static int bio_request_end_current_mode(int wait_for_budget, int cleanup,
 	flags = thread->io_request_flags;
 	if ((flags & BIO_REQUEST_ACTIVE) == 0) {
 		if ((flags & BIO_REQUEST_LAZY) == 0 || transfers != 0 ||
+		    (flags & BIO_REQUEST_TRANSFERRED) != 0 ||
 		    source != IO_RESERVATION_NONE ||
 		    device_source != IO_RESERVATION_NONE)
 			panic("inactive lazy I/O request state");
@@ -1954,16 +2012,25 @@ static int bio_request_end_current_mode(int wait_for_budget, int cleanup,
 	bio_thread_request_clear(thread);
 	if (state == 0)
 		return -1;
-	if (transfers == 0) {
+	if ((flags & BIO_REQUEST_TRANSFERRED) == 0) {
 		int enabled = intr_save();
 
+		if (transfers != 0)
+			panic("uncommitted I/O request batch");
 		if (source != IO_RESERVATION_NONE)
 			io_rate_lease_refund(source, device_source);
 		intr_restore(enabled);
-	} else if (wait_for_budget && io_policy.runtime_ready) {
-		result = io_wait_for_debt(state, io_class, cleanup);
-		if (result == 0)
-			result = io_wait_for_device_debt(owner, io_class, cleanup);
+	} else {
+		int enabled = intr_save();
+
+		io_rate_charge_transfers(state, io_class, transfers);
+		intr_restore(enabled);
+		if (wait_for_budget && io_policy.runtime_ready) {
+			result = io_wait_for_debt(state, io_class, cleanup);
+			if (result == 0)
+				result = io_wait_for_device_debt(
+					owner, io_class, cleanup);
+		}
 	}
 	int enabled = intr_save();
 
@@ -2013,6 +2080,8 @@ void bio_request_abort_thread(struct thread *thread)
 	if ((thread->io_request_flags & BIO_REQUEST_ACTIVE) == 0) {
 		if ((thread->io_request_flags & BIO_REQUEST_LAZY) == 0 ||
 		    thread->io_request_transfers != 0 ||
+		    (thread->io_request_flags &
+		     BIO_REQUEST_TRANSFERRED) != 0 ||
 		    thread->io_request_reservation != IO_RESERVATION_NONE ||
 		    thread->io_request_device_reservation != IO_RESERVATION_NONE)
 			panic("aborted inactive lazy I/O request");
@@ -2022,12 +2091,18 @@ void bio_request_abort_thread(struct thread *thread)
 	}
 	state = io_state_find(thread->io_request_owner, 0);
 	if (state != 0) {
-		if (thread->io_request_transfers == 0 &&
+		if ((thread->io_request_flags &
+		     BIO_REQUEST_TRANSFERRED) == 0 &&
 		    thread->io_request_reservation !=
 			    IO_RESERVATION_NONE)
 			io_rate_lease_refund(
 				thread->io_request_reservation,
 				thread->io_request_device_reservation);
+		else if ((thread->io_request_flags &
+			  BIO_REQUEST_TRANSFERRED) != 0)
+			io_rate_charge_transfers(
+				state, thread->io_request_class,
+				thread->io_request_transfers);
 		io_active_request_release(state);
 	}
 	bio_thread_request_clear(thread);
@@ -2152,7 +2227,7 @@ int bio_background_begin(uint owner)
 			return 0;
 		}
 		io_rate_lease_store(
-			lease, &source, &device_source);
+			lease, 0, &source, &device_source);
 		state->reserved_grants++;
 	}
 	state->admissions++;
@@ -2224,7 +2299,7 @@ uint bio_current_owner(void)
 	    thread->io_request_depth != 0)
 		return thread->io_request_owner;
 	if (thread != 0 && thread->state == RUNNING && thread->process != 0)
-		return io_owner_from_proc(thread->process);
+		return bio_process_owner(thread->process);
 	return FS_OWNER_SYSTEM;
 }
 
@@ -2416,7 +2491,7 @@ bio_cleanup_lease_reserve_locked(struct io_owner_state *state, uint io_class,
 	endpoints[1].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;
 	if (resource_rate_reserve_many(endpoints, 2, &lease) < 0)
 		return -1;
-	io_rate_lease_store(lease, reservation, device_reservation);
+	io_rate_lease_store(lease, 0, reservation, device_reservation);
 	state->reserved_grants++;
 	state->admissions++;
 	return 0;
@@ -2426,6 +2501,21 @@ static int
 bio_cleanup_handle_empty(const struct bio_cleanup_token *token)
 {
 	return token != 0 && token->slot == 0 && token->generation == 0;
+}
+
+int
+bio_cleanup_sponsor_covers(uint owner, uint io_class,
+			   uint64 origin_request_id)
+{
+	int enabled = intr_save();
+	int covered = origin_request_id == 0 &&
+		bio_deferred_sponsor_current() &&
+		!bio_cleanup_handle_empty(&io_policy.deferred.token) &&
+		io_policy.deferred.owner == owner &&
+		io_policy.deferred.io_class == io_class;
+
+	intr_restore(enabled);
+	return covered;
 }
 
 static int
@@ -2446,6 +2536,26 @@ bio_cleanup_record_principal(const struct bio_cleanup_record *record)
 		principal.generation = record->principal_generation;
 	}
 	return principal;
+}
+
+static int
+bio_cleanup_resolve_sponsor_locked(const struct bio_cleanup_record *record,
+				   uint *effective_class,
+				   uint *execution_flag)
+{
+	int background_executor = bio_background_current() &&
+		io_policy.background.owner == record->owner;
+
+	*effective_class = record->retained_class;
+	if (io_bucket_burst(record->owner, *effective_class) == 0)
+		return -1;
+	if (background_executor &&
+	    *effective_class == IO_POLICY_CLASS_BACKGROUND) {
+		*execution_flag = BIO_CLEANUP_TOKEN_BACKGROUND;
+		return 0;
+	}
+	*execution_flag = BIO_CLEANUP_TOKEN_INDEPENDENT;
+	return 0;
 }
 
 static struct bio_cleanup_record *
@@ -2525,12 +2635,10 @@ bio_cleanup_record_free_locked(struct bio_cleanup_record *record,
 int
 bio_cleanup_token_prepare(uint owner, struct bio_cleanup_token *token)
 {
-	struct thread *thread = curr_thread();
 	struct io_owner_state *state;
 	struct bio_cleanup_record *record;
 	enum resource_account_state principal_state;
 	uint retained_class;
-	uint64 origin_request_id = 0;
 	int enabled;
 
 	if (!bio_cleanup_handle_empty(token) ||
@@ -2553,14 +2661,7 @@ bio_cleanup_token_prepare(uint owner, struct bio_cleanup_token *token)
 		intr_restore(enabled);
 		return -1;
 	}
-	if (thread != 0 && thread->state == RUNNING &&
-	    thread->io_request_depth != 0 && thread->io_request_id != 0 &&
-	    thread->io_request_owner == owner &&
-	    thread->io_request_class < IO_POLICY_CLASS_COUNT &&
-	    io_bucket_burst(owner, thread->io_request_class) != 0) {
-		retained_class = thread->io_request_class;
-		origin_request_id = thread->io_request_id;
-	} else if (bio_cleanup_class_select(owner, &retained_class) < 0) {
+	if (bio_cleanup_class_select(owner, &retained_class) < 0) {
 		intr_restore(enabled);
 		return -1;
 	}
@@ -2575,12 +2676,48 @@ bio_cleanup_token_prepare(uint owner, struct bio_cleanup_token *token)
 	}
 	io_active_request_acquire(state);
 	state->deferred_references++;
-	record->origin_request_id = origin_request_id;
 	record->principal_slot = (uint16)state->principal.slot;
 	record->principal_generation = state->principal.generation;
 	record->owner = owner;
 	record->retained_class = retained_class;
 	record->effective_class = retained_class;
+	intr_restore(enabled);
+	return 0;
+}
+
+int
+bio_cleanup_token_sponsor(const struct bio_cleanup_token *token,
+			  uint *owner, uint *io_class)
+{
+	struct thread *thread = curr_thread();
+	struct io_owner_state *state;
+	struct bio_cleanup_record *record;
+	uint execution_flag;
+	int polling_executor;
+	int enabled;
+
+	if (token == 0 || owner == 0 || io_class == 0 || thread == 0)
+		return -1;
+	polling_executor = thread->tid < 0 && thread->identity_generation == 0;
+	if ((!polling_executor && thread->state != RUNNING) ||
+	    !bio_io_quiescent_current())
+		return -1;
+	enabled = intr_save();
+	record = bio_cleanup_record_lookup_locked(token);
+	state = record == 0 ? 0 : io_state_find(record->owner, 0);
+	if (record == 0 || record->state != BIO_CLEANUP_TOKEN_PREPARED ||
+	    io_policy.deferred.active || state == 0 ||
+	    state->active_requests == 0 || state->deferred_references == 0 ||
+	    !resource_account_handle_equal(state->principal,
+					   bio_cleanup_record_principal(record)) ||
+	    !resource_account_matches(bio_cleanup_record_principal(record),
+				RESOURCE_ACCOUNT_STORAGE, record->owner) ||
+	    bio_cleanup_resolve_sponsor_locked(
+		    record, io_class, &execution_flag) < 0) {
+		intr_restore(enabled);
+		return -1;
+	}
+	*owner = record->owner;
 	intr_restore(enabled);
 	return 0;
 }
@@ -2592,9 +2729,8 @@ bio_cleanup_token_begin(struct bio_cleanup_token *token)
 	struct io_owner_state *state;
 	struct bio_cleanup_record *record;
 	uint effective_class;
-	int background_executor;
+	uint execution_flag;
 	int polling_executor;
-	int reuse_request = 0;
 	int enabled;
 
 	if (token == 0 || thread == 0)
@@ -2632,51 +2768,32 @@ bio_cleanup_token_begin(struct bio_cleanup_token *token)
 		intr_restore(enabled);
 		return -1;
 	}
-	background_executor = bio_background_current() &&
-		io_policy.background.owner == record->owner;
-	if (record->origin_request_id != 0 && !background_executor &&
-	    !polling_executor && thread->state == RUNNING &&
-	    thread->io_request_depth != 0 &&
-	    thread->io_request_id == record->origin_request_id &&
-	    thread->io_request_owner == record->owner &&
-	    thread->io_request_class == record->retained_class &&
-	    bio_thread_request_active(thread)) {
-		effective_class = record->retained_class;
-		reuse_request = 1;
-	} else if (background_executor) {
-		effective_class = IO_POLICY_CLASS_BACKGROUND;
-		if (io_bucket_burst(record->owner, effective_class) == 0) {
-			intr_restore(enabled);
-			return -1;
-		}
-		record->flags = BIO_CLEANUP_TOKEN_BACKGROUND;
-	} else {
-		if (bio_cleanup_class_select(
-			    record->owner, &effective_class) < 0 ||
-		    bio_cleanup_lease_reserve_locked(
-			    state, effective_class, &record->reservation,
-			    &record->device_reservation) < 0) {
-			intr_restore(enabled);
-			return -1;
-		}
-		record->flags = BIO_CLEANUP_TOKEN_INDEPENDENT;
+	if (bio_cleanup_resolve_sponsor_locked(
+		    record, &effective_class, &execution_flag) < 0) {
+		intr_restore(enabled);
+		return -1;
 	}
-	if (reuse_request)
-		record->flags = BIO_CLEANUP_TOKEN_REUSE_REQUEST;
+	if (execution_flag == BIO_CLEANUP_TOKEN_INDEPENDENT &&
+	    bio_cleanup_lease_reserve_locked(
+		    state, effective_class, &record->reservation,
+		    &record->device_reservation) < 0) {
+		intr_restore(enabled);
+		return -1;
+	}
+	record->flags = execution_flag;
 	if (polling_executor)
 		record->flags |= BIO_CLEANUP_TOKEN_POLLING;
 	record->effective_class = effective_class;
 	record->flags &= ~BIO_CLEANUP_TOKEN_TRANSFERRED;
 	record->state = BIO_CLEANUP_TOKEN_ACTIVE;
 	io_policy.deferred.active = 1;
-	io_policy.deferred.reuse_request_lease = reuse_request;
+	io_policy.deferred.reuse_request_lease = 0;
 	io_policy.deferred.independent_lease =
 		(record->flags & BIO_CLEANUP_TOKEN_INDEPENDENT) != 0;
 	io_policy.deferred.depth = 1;
 	io_policy.deferred.executor = thread;
 	io_policy.deferred.executor_generation = thread->identity_generation;
-	io_policy.deferred.origin_request_id =
-		record->origin_request_id;
+	io_policy.deferred.origin_request_id = 0;
 	io_policy.deferred.owner = record->owner;
 	io_policy.deferred.retained_class = record->retained_class;
 	io_policy.deferred.io_class = effective_class;
@@ -2822,7 +2939,7 @@ int bio_deferred_sponsor_begin(uint owner, uint io_class,
 	if (io_policy.deferred.active) {
 		if (bio_deferred_sponsor_current() &&
 		    io_policy.deferred.owner == owner &&
-		    io_policy.deferred.retained_class == io_class &&
+		    io_policy.deferred.io_class == io_class &&
 		    io_policy.deferred.origin_request_id == origin_request_id &&
 		    bio_cleanup_handle_empty(&io_policy.deferred.token) &&
 		    io_policy.deferred.depth != (uint)-1) {
@@ -2940,40 +3057,49 @@ void bio_deferred_sponsor_end(void)
 	intr_restore(enabled);
 }
 
-void bio_account_transfer(uint owner, uint io_class,
-			  enum bio_transfer_type transfer, int result)
+static void bio_account_transfers(uint owner, uint io_class,
+			  enum bio_transfer_type transfer,
+			  const int *results, uint count)
 {
 	struct thread *thread = curr_thread();
 	struct io_owner_state *state;
 	uint64 completion_sequence;
 	uint *transfers = 0;
+	uint *request_flags = 0;
 	uint reservation = IO_RESERVATION_NONE;
 	uint device_reservation = IO_RESERVATION_NONE;
+	uint failed = 0;
+	uint successful;
 	int unreserved = 1;
-	int enabled = intr_save();
+	int enabled;
 
-	if (transfer == BIO_TRANSFER_READ)
-		io_policy.physical_reads++;
-	else if (transfer == BIO_TRANSFER_WRITE)
-		io_policy.physical_writes++;
-	else if (transfer == BIO_TRANSFER_FLUSH)
-		io_policy.physical_flushes++;
-	else {
-		intr_restore(enabled);
+	if (results == 0 || count == 0 ||
+	    (transfer != BIO_TRANSFER_READ &&
+	     transfer != BIO_TRANSFER_WRITE &&
+	     transfer != BIO_TRANSFER_FLUSH))
 		return;
-	}
-	if (result < 0)
-		io_policy.failed_transfers++;
+	for (uint i = 0; i < count; i++)
+		if (results[i] < 0)
+			failed++;
+	successful = count - failed;
+	enabled = intr_save();
+	if (transfer == BIO_TRANSFER_READ)
+		io_policy.physical_reads += count;
 	else if (transfer == BIO_TRANSFER_WRITE)
-		io_policy.successful_writes++;
+		io_policy.physical_writes += count;
+	else
+		io_policy.physical_flushes += count;
+	io_policy.failed_transfers += failed;
+	if (transfer == BIO_TRANSFER_WRITE)
+		io_policy.successful_writes += successful;
 	else if (transfer == BIO_TRANSFER_FLUSH)
-		io_policy.successful_flushes++;
-	completion_sequence = ++io_policy.completion_sequence;
+		io_policy.successful_flushes += successful;
+	io_policy.completion_sequence += count;
+	completion_sequence = io_policy.completion_sequence;
 
 	state = io_state_find(owner, 0);
 	if (state == 0) {
-		// A lifecycle race must fail closed into the untrusted aggregate;
-		// it must never borrow the protected SYSTEM reserve.
+		/* A lifecycle race stays in the untrusted aggregate. */
 		state = io_state_find(FS_OWNER_PUBLIC, 0);
 		owner = FS_OWNER_PUBLIC;
 		io_class = IO_POLICY_CLASS_NORMAL;
@@ -2983,17 +3109,16 @@ void bio_account_transfer(uint owner, uint io_class,
 		return;
 	}
 	if (transfer == BIO_TRANSFER_READ)
-		state->physical_reads++;
+		state->physical_reads += count;
 	else if (transfer == BIO_TRANSFER_WRITE)
-		state->physical_writes++;
+		state->physical_writes += count;
+	else
+		state->physical_flushes += count;
+	state->failed_transfers += failed;
+	if (transfer == BIO_TRANSFER_WRITE)
+		state->successful_writes += successful;
 	else if (transfer == BIO_TRANSFER_FLUSH)
-		state->physical_flushes++;
-	if (result < 0)
-		state->failed_transfers++;
-	else if (transfer == BIO_TRANSFER_WRITE)
-		state->successful_writes++;
-	else if (transfer == BIO_TRANSFER_FLUSH)
-		state->successful_flushes++;
+		state->successful_flushes += successful;
 	state->completion_sequence = completion_sequence;
 	if (bio_deferred_sponsor_current() &&
 	    io_policy.deferred.independent_lease &&
@@ -3015,6 +3140,7 @@ void bio_account_transfer(uint owner, uint io_class,
 	    owner == io_policy.deferred.owner &&
 	    io_class == io_policy.deferred.io_class) {
 		transfers = &thread->io_request_transfers;
+		request_flags = &thread->io_request_flags;
 		reservation = thread->io_request_reservation;
 		device_reservation =
 			thread->io_request_device_reservation;
@@ -3034,46 +3160,78 @@ void bio_account_transfer(uint owner, uint io_class,
 	    thread->io_request_class == io_class &&
 	    bio_thread_request_active(thread)) {
 		transfers = &thread->io_request_transfers;
+		request_flags = &thread->io_request_flags;
 		reservation = thread->io_request_reservation;
 		device_reservation =
 			thread->io_request_device_reservation;
 		unreserved = 0;
 	}
 	if (!io_policy.runtime_ready) {
-		if (transfers != 0)
-			(*transfers)++;
+		if (transfers != 0) {
+			if (count > (uint)-1 - *transfers)
+				panic("I/O transfer count overflow");
+			*transfers += count;
+		}
 		intr_restore(enabled);
 		return;
 	}
 	if (unreserved) {
-		state->unreserved_transfers++;
-		io_rate_charge_transfer(state, io_class);
-	} else {
-		(*transfers)++;
-		if (*transfers == 1) {
+		state->unreserved_transfers += count;
+		io_rate_charge_transfers(state, io_class, count);
+	} else if (request_flags != 0) {
+		if ((*request_flags & BIO_REQUEST_TRANSFERRED) == 0) {
 			if (reservation != IO_RESERVATION_NONE)
 				io_rate_lease_commit(
 					reservation,
 					device_reservation);
 			else
-				io_rate_charge_transfer(
-					state, io_class);
-			intr_restore(enabled);
-			return;
+				io_rate_charge_transfer(state, io_class);
+			if (io_rate_lease_shared(reservation))
+				state->shared_grants++;
+			*request_flags |= BIO_REQUEST_TRANSFERRED;
+			count--;
 		}
-		io_rate_charge_transfer(state, io_class);
+		if (count > (uint)-1 - *transfers)
+			panic("I/O request batch overflow");
+		*transfers += count;
+		if (*transfers >= IO_RATE_LOCAL_BATCH) {
+			io_rate_charge_transfers(
+				state, io_class, *transfers);
+			*transfers = 0;
+		}
+	} else {
+		uint previous = *transfers;
+
+		if (count > (uint)-1 - previous)
+			panic("I/O sponsor transfer overflow");
+		*transfers = previous + count;
+		if (previous == 0) {
+			if (reservation != IO_RESERVATION_NONE)
+				io_rate_lease_commit(
+					reservation,
+					device_reservation);
+			else
+				io_rate_charge_transfer(state, io_class);
+			if (io_rate_lease_shared(reservation))
+				state->shared_grants++;
+			count--;
+		}
+		io_rate_charge_transfers(state, io_class, count);
 	}
 	intr_restore(enabled);
+}
+
+void bio_account_transfer(uint owner, uint io_class,
+			  enum bio_transfer_type transfer, int result)
+{
+	bio_account_transfers(owner, io_class, transfer, &result, 1);
 }
 
 void bio_account_transfer_batch(uint owner, uint io_class,
 				enum bio_transfer_type transfer,
 				const int *results, uint count)
 {
-	if (results == 0)
-		return;
-	for (uint i = 0; i < count; i++)
-		bio_account_transfer(owner, io_class, transfer, results[i]);
+	bio_account_transfers(owner, io_class, transfer, results, count);
 }
 
 int bio_physical_snapshot(struct bio_physical_stats *stats)
@@ -3629,6 +3787,8 @@ void binit(void)
 	wait_queue_init(&io_policy.device.debt_queue,
 			WAIT_REASON_IO_BUDGET);
 	wait_queue_init(&cache_waiters, WAIT_REASON_BUFFER_CACHE);
+	wait_queue_init(&background_cache_waiter,
+			WAIT_REASON_BUFFER_CACHE);
 	memset(&bcache.free_idle, 0, sizeof(bcache.free_idle));
 	memset(&bcache.reserved_idle, 0, sizeof(bcache.reserved_idle));
 	for (b = bcache.buf; b < bcache.buf + NBUF; b++) {
@@ -4111,7 +4271,7 @@ int bio_policy_snapshot(const struct proc *p, struct io_policy_info *info)
 
 	if (p == 0 || info == 0)
 		return -1;
-	owner = io_owner_from_proc(p);
+	owner = bio_process_owner(p);
 	io_class = io_class_from_proc(p, owner);
 	enabled = intr_save();
 	state = io_state_find(owner, 0);

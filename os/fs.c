@@ -534,13 +534,21 @@ static int fs_durable_barrier(void)
  */
 static int fs_forward_checkpoint(void)
 {
+	int result;
+
+	if (!bio_io_quiescent_current())
+		return fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 	if (fs_epoch_request_held() && fs_epoch_dirty() &&
 	    !fs_epoch_bypass_active()) {
-		int result = fs_epoch_commit();
-
+		result = fs_epoch_commit();
+		if (result == VIRTIO_DISK_ERR_BUSY) {
+			if (bio_request_settle_quiescent_cleanup() < 0)
+				return fs_io_fail(
+					FS_FAILURE_METADATA_WRITE_INDETERMINATE);
+			result = fs_epoch_commit();
+		}
 		if (result < 0)
-			return fs_io_fail(result == VIRTIO_DISK_ERR_BUSY ?
-				FS_FAILURE_SCHEDULING_UNAVAILABLE :
+			return fs_io_fail(
 				FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 	}
 	if (bio_request_settle_quiescent_cleanup() == 0)

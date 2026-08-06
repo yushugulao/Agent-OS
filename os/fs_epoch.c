@@ -571,9 +571,10 @@ fs_epoch_commit_fail(int result)
 }
 
 static int
-fs_epoch_commit_sponsored_fail(int result)
+fs_epoch_commit_sponsored_fail(int result, int sponsor_started)
 {
-	bio_deferred_sponsor_end();
+	if (sponsor_started)
+		bio_deferred_sponsor_end();
 	return fs_epoch_commit_fail(result);
 }
 
@@ -583,6 +584,7 @@ fs_epoch_commit(void)
 	uint commit_owner;
 	uint64 sponsor_request_id;
 	uint sponsor_class;
+	int sponsor_started = 0;
 	int enabled = intr_save();
 
 	if (!fs_epoch_request_held_locked())
@@ -609,9 +611,14 @@ fs_epoch_commit(void)
 	sponsor_class = epoch.sponsor_class;
 	sponsor_request_id = epoch.sponsor_request_id;
 	intr_restore(enabled);
-	if (bio_deferred_sponsor_begin(
-		    commit_owner, sponsor_class, sponsor_request_id) < 0)
-		return fs_epoch_commit_fail(FS_EPOCH_ERROR);
+	if (!bio_cleanup_sponsor_covers(
+		    commit_owner, sponsor_class, sponsor_request_id)) {
+		if (bio_deferred_sponsor_begin(
+			    commit_owner, sponsor_class,
+			    sponsor_request_id) < 0)
+			return fs_epoch_commit_fail(FS_EPOCH_ERROR);
+		sponsor_started = 1;
+	}
 
 	for (uint phase = FS_EPOCH_PREPARE;
 	     phase < FS_EPOCH_PHASE_COUNT; phase++) {
@@ -623,18 +630,21 @@ fs_epoch_commit(void)
 			phase_dirty = 1;
 		result = fs_epoch_write_phase((enum fs_epoch_phase)phase);
 		if (result < 0)
-			return fs_epoch_commit_sponsored_fail(result);
+			return fs_epoch_commit_sponsored_fail(
+				result, sponsor_started);
 		if (phase_dirty) {
 			result = fs_epoch_flush_forward();
 
 			if (result < 0)
-				return fs_epoch_commit_sponsored_fail(result);
+				return fs_epoch_commit_sponsored_fail(
+					result, sponsor_started);
 			enabled = intr_save();
 			epoch.totals.durable_flushes++;
 			intr_restore(enabled);
 		}
 	}
-	bio_deferred_sponsor_end();
+	if (sponsor_started)
+		bio_deferred_sponsor_end();
 
 	for (uint i = 0; i < epoch.count; i++)
 		bunpin(epoch.entries[i].buf);
@@ -658,6 +668,29 @@ fs_epoch_commit(void)
 	intr_restore(enabled);
 	bio_deferred_owner_release(commit_owner);
 	return 0;
+}
+
+int
+fs_epoch_prepare_cleanup_sponsor(uint owner, uint io_class)
+{
+	int compatible;
+	int dirty;
+	int enabled = intr_save();
+
+	if (!fs_epoch_request_held_locked() || epoch.bypass_depth != 0 ||
+	    epoch.committing || owner == 0 ||
+	    io_class >= IO_POLICY_CLASS_COUNT) {
+		intr_restore(enabled);
+		return FS_EPOCH_ERROR;
+	}
+	dirty = fs_epoch_dirty_locked();
+	compatible = dirty && epoch.owner == owner &&
+		epoch.sponsor_class == io_class &&
+		epoch.sponsor_request_id == 0;
+	intr_restore(enabled);
+	if (!dirty || compatible)
+		return 0;
+	return fs_epoch_commit();
 }
 
 int

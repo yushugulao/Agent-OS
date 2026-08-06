@@ -258,26 +258,37 @@ struct file *stdio_init(int fd, struct proc *owner)
 	return f;
 }
 
-static uint fileclose_inode_cleanup_owner(const struct inode *ip)
+static int fileclose_cleanup_owner_valid(uint owner)
 {
-	uint owner;
-
-	if (ip == 0 || !ip->valid ||
-	    ip->fs_owner_version != FS_OWNER_VERSION)
-		return FS_OWNER_SYSTEM;
-	owner = ip->fs_owner_domain;
 	if (owner == FS_OWNER_SYSTEM || owner == FS_OWNER_PUBLIC)
-		return owner;
+		return 1;
 	if (FS_OWNER_IS_SCOPE(owner) &&
 	    FS_OWNER_SCOPE_ID(owner) >= VFS_SCOPE_FIRST_DYNAMIC &&
 	    FS_OWNER_SCOPE_ID(owner) <= FS_OWNER_MAX_PERSISTENT_ID)
-		return owner;
-	return FS_OWNER_SYSTEM;
+		return 1;
+	return 0;
+}
+
+static int fileclose_cleanup_token_empty(
+	const struct bio_cleanup_token *token)
+{
+	return token->slot == 0 && token->generation == 0;
+}
+
+static int fileclose_cleanup_token_prepare(
+	uint owner, struct bio_cleanup_token *token)
+{
+	if (!fileclose_cleanup_token_empty(token))
+		return 0;
+	if (!fileclose_cleanup_owner_valid(owner))
+		panic("fileclose cleanup owner");
+	return bio_cleanup_token_prepare(owner, token);
 }
 
 /*
- * Drop one reference and atomically detach a final file-table slot.  A final
- * receipt must be consumed exactly once; a non-final drop leaves it empty.
+ * Drop one file reference and atomically detach a final file-table slot.
+ * Inode references remain in the receipt until unified settlement.  Only a
+ * known destructive close retains cleanup ownership before publication.
  */
 int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 {
@@ -293,6 +304,7 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 	receipt->ip = 0;
 	receipt->resource_account = resource_account_none();
 	receipt->resource_reserved = 0;
+	receipt->cleanup_owner = FS_OWNER_NONE;
 	receipt->result = 0;
 	receipt->cleanup_token =
 		(struct bio_cleanup_token)BIO_CLEANUP_TOKEN_INIT;
@@ -310,17 +322,12 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 		intr_restore(enabled);
 		return 0;
 	}
-	if (f->type == FD_INODE) {
-		uint owner = fileclose_inode_cleanup_owner(f->ip);
-
-		if (bio_cleanup_token_prepare(owner,
-					      &receipt->cleanup_token) < 0 &&
-		    (owner == FS_OWNER_SYSTEM ||
-		     bio_cleanup_token_prepare(FS_OWNER_SYSTEM,
-					       &receipt->cleanup_token) < 0)) {
-			intr_restore(enabled);
-			return -1;
-		}
+	if (f->type == FD_INODE && f->ip->ref == 1 &&
+	    f->ip->valid && f->ip->removed &&
+	    fileclose_cleanup_token_prepare(
+		    f->cleanup_owner, &receipt->cleanup_token) < 0) {
+		intr_restore(enabled);
+		return -1;
 	}
 	open_file_io_lease_file_retire(f);
 	f->ref = 0;
@@ -332,6 +339,7 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 	receipt->ip = f->ip;
 	receipt->resource_account = f->resource_account;
 	receipt->resource_reserved = f->resource_reserved;
+	receipt->cleanup_owner = f->cleanup_owner;
 	receipt->state = FILE_CLOSE_RECEIPT_PREPARED;
 	f->off = 0;
 	f->readable = 0;
@@ -343,6 +351,7 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 	f->inherit_class = FD_INHERIT_DENY;
 	f->resource_account = resource_account_none();
 	f->resource_reserved = 0;
+	f->cleanup_owner = FS_OWNER_NONE;
 	filepool_push_locked(index);
 	filepool_assert_locked();
 	intr_restore(enabled);
@@ -400,8 +409,10 @@ int fileclose_finish_drop_only(struct file_close_receipt *receipt)
 		receipt->state = FILE_CLOSE_RECEIPT_PREPARED;
 		return dropped;
 	}
-	if (bio_cleanup_token_release(&receipt->cleanup_token, 1) !=
-	    BIO_CLEANUP_RELEASED)
+	bio_cache_retry_notify();
+	if (!fileclose_cleanup_token_empty(&receipt->cleanup_token) &&
+	    bio_cleanup_token_release(&receipt->cleanup_token, 1) !=
+		    BIO_CLEANUP_RELEASED)
 		panic("fileclose drop token release");
 	fileclose_receipt_complete(receipt);
 	return 1;
@@ -409,10 +420,22 @@ int fileclose_finish_drop_only(struct file_close_receipt *receipt)
 
 int fileclose_finish_epoch(struct file_close_receipt *receipt)
 {
+	uint sponsor_class;
+	uint sponsor_owner;
 	int release_result;
 
 	if (!fileclose_receipt_is_inode(receipt) ||
 	    !fs_epoch_request_held())
+		return -1;
+	if (fileclose_cleanup_token_prepare(
+		    receipt->cleanup_owner, &receipt->cleanup_token) < 0)
+		return -1;
+	/* Compatible asynchronous cleanup work shares an epoch. Foreground or
+	 * foreign work is committed before this token becomes authoritative. */
+	if (bio_cleanup_token_sponsor(
+		    &receipt->cleanup_token, &sponsor_owner, &sponsor_class) < 0 ||
+	    fs_epoch_prepare_cleanup_sponsor(
+		    sponsor_owner, sponsor_class) < 0)
 		return -1;
 	if (bio_cleanup_token_begin(&receipt->cleanup_token) < 0)
 		return -1;
@@ -450,6 +473,78 @@ int fileclose_finish_result(const struct file_close_receipt *receipt)
 	if (receipt == 0 || receipt->state != FILE_CLOSE_RECEIPT_CONSUMED)
 		return -1;
 	return receipt->result;
+}
+
+static void fileclose_batch_transfer(
+	struct file_close_batch *batch, struct file_close_receipt *receipt)
+{
+	if (batch == 0 || receipt == 0 ||
+	    receipt->state != FILE_CLOSE_RECEIPT_SETTLEMENT ||
+	    fileclose_cleanup_token_empty(&receipt->cleanup_token) ||
+	    batch->count >= FILE_CLOSE_BATCH_CAP)
+		panic("fileclose batch transfer");
+	batch->pending[batch->count++] = receipt->cleanup_token;
+	receipt->cleanup_token =
+		(struct bio_cleanup_token)BIO_CLEANUP_TOKEN_INIT;
+	fileclose_receipt_complete(receipt);
+}
+
+int fileclose_batch_add(struct file_close_batch *batch, struct file *f)
+{
+	struct file_close_receipt receipt = FILE_CLOSE_RECEIPT_INIT;
+	int prepared;
+	int result;
+
+	if (batch == 0 || f == 0 ||
+	    batch->count > FILE_CLOSE_BATCH_CAP)
+		return -1;
+	if (batch->count != 0)
+		return 1;
+	prepared = fileclose_prepare(f, &receipt);
+	if (prepared < 0)
+		return 1;
+	if (prepared == 0)
+		return 0;
+	if (receipt.type != FD_INODE) {
+		fileclose_finish_direct(&receipt);
+		return 0;
+	}
+	result = fileclose_finish_drop_only(&receipt);
+	if (result < 0)
+		panic("fileclose batch drop-only");
+	if (result > 0)
+		return 0;
+	if (!fs_epoch_request_held())
+		panic("fileclose batch without epoch");
+	while (fileclose_finish_epoch(&receipt) < 0 &&
+	       receipt.state == FILE_CLOSE_RECEIPT_PREPARED)
+		(void)kernel_work_checkpoint_cleanup(
+			KERNEL_WORK_OPERATION_UNITS);
+	if (receipt.state == FILE_CLOSE_RECEIPT_SETTLEMENT)
+		fileclose_batch_transfer(batch, &receipt);
+	if (receipt.state != FILE_CLOSE_RECEIPT_CONSUMED)
+		panic("fileclose batch incomplete");
+	return 0;
+}
+
+int fileclose_batch_settle(struct file_close_batch *batch)
+{
+	if (batch == 0 || batch->count > FILE_CLOSE_BATCH_CAP ||
+	    fs_epoch_request_held())
+		return -1;
+	while (batch->count != 0) {
+		struct bio_cleanup_token *token =
+			&batch->pending[batch->count - 1];
+
+		if (bio_cleanup_token_release(token, 1) ==
+		    BIO_CLEANUP_RELEASED) {
+			batch->count--;
+			continue;
+		}
+		(void)kernel_work_checkpoint_cleanup(
+			KERNEL_WORK_OPERATION_UNITS);
+	}
+	return 0;
 }
 
 void fileclose_finish(struct file_close_receipt *receipt)
@@ -556,6 +651,7 @@ int filealloc_many(struct proc *owner, struct file **files, uint count)
 		f->off = 0;
 		f->resource_account = account;
 		f->resource_reserved = reserved;
+		f->cleanup_owner = bio_process_owner(owner);
 		open_file_io_lease_file_init(f);
 	}
 	filepool_assert_locked();

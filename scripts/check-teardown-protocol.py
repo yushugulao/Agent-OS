@@ -1146,12 +1146,14 @@ def validate_terminal_teardown(proc):
     teardown = function_body(proc, "proc_teardown_run")
     compact = normalize(teardown)
     gate = "fs_epoch_request_end();"
+    file_settle = "fileclose_batch_settle(&close_batch)"
     settle = "bio_request_end_current_cleanup()"
     work = "kernel_work_end_cleanup();"
     clear = "vfs_proc_terminal_clear(p);"
     release = "vfs_proc_lifecycle_release(p);"
     for token, label in (
         (gate, "filesystem gate release"),
+        (file_settle, "deferred file settlement"),
         (settle, "terminal I/O settlement"),
         (work, "terminal work settlement"),
         (clear, "terminal identity clear"),
@@ -1159,11 +1161,18 @@ def validate_terminal_teardown(proc):
     ):
         if compact.count(token) != 1:
             raise ProtocolError(f"process teardown needs one {label}")
-    positions = [compact.index(token) for token in (gate, settle, work, clear, release)]
+    positions = [
+        compact.index(token)
+        for token in (gate, file_settle, settle, work, clear, release)
+    ]
     if positions != sorted(positions):
         raise ProtocolError(
-            "terminal teardown must release FS gate, settle BIO/work, then release lifecycle"
+            "terminal teardown must release FS gate, settle files/BIO/work, then release lifecycle"
         )
+    if "fileclose_batch_add(&close_batch,files[i])" not in compact or (
+        "fileclose(files[i])" in compact
+    ):
+        raise ProtocolError("process teardown bypasses batched file settlement")
     terminal_blocks = [
         normalize(branch["statement"])
         for branch in parsed_ifs(teardown)
@@ -1171,9 +1180,28 @@ def validate_terminal_teardown(proc):
     ]
     settlement_blocks = [body for body in terminal_blocks if gate in body]
     if len(settlement_blocks) != 1 or not all(
-        token in settlement_blocks[0] for token in (gate, settle, work)
+        token in settlement_blocks[0]
+        for token in (gate, file_settle, settle, work)
     ):
         raise ProtocolError("terminal settlement is not one guarded ownership transfer")
+
+    progress = normalize(function_body(proc, "proc_teardown_file_progress"))
+    progress_tokens = (
+        "fs_epoch_request_end();",
+        "fileclose_batch_settle(batch)",
+        "kernel_work_checkpoint_cleanup(KERNEL_WORK_OPERATION_UNITS)",
+        "fs_epoch_request_begin()",
+    )
+    if any(token not in progress for token in progress_tokens) or [
+        progress.index(token) for token in progress_tokens
+    ] != sorted(progress.index(token) for token in progress_tokens):
+        raise ProtocolError(
+            "teardown progress must release the FS gate, settle and yield, then reacquire"
+        )
+    if compact.count("proc_teardown_file_progress(&close_batch)") < 2:
+        raise ProtocolError(
+            "teardown does not incrementally settle or retry file cleanup"
+        )
 
     exit_body = normalize(function_body(proc, "exit"))
     if gate in exit_body:

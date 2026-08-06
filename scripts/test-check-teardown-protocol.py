@@ -40,24 +40,59 @@ class TeardownProtocolTests(unittest.TestCase):
         sources = self.changed(
             "proc",
             "\t\tfs_epoch_request_end();\n"
+            "\t\tif (fileclose_batch_settle(&close_batch) < 0)\n"
+            "\t\t\tpanic(\"process teardown file settlement\");\n"
             "\t\tif (bio_request_end_current_cleanup() < 0)",
-            "\t\tif (bio_request_end_current_cleanup() < 0)\n"
-            "\t\tfs_epoch_request_end();",
+            "\t\tif (fileclose_batch_settle(&close_batch) < 0)\n"
+            "\t\t\tpanic(\"process teardown file settlement\");\n"
+            "\t\tfs_epoch_request_end();\n"
+            "\t\tif (bio_request_end_current_cleanup() < 0)",
         )
-        self.assert_terminal_rejected(sources, "release FS gate, settle BIO")
+        self.assert_terminal_rejected(sources, "release FS gate, settle files")
 
     def test_terminal_teardown_cannot_drop_gate_release(self):
         before = (
             "\tif (terminal_current) {\n"
             "\t\tfs_epoch_request_end();\n"
+            "\t\tif (fileclose_batch_settle(&close_batch) < 0)\n"
+            "\t\t\tpanic(\"process teardown file settlement\");\n"
             "\t\tif (bio_request_end_current_cleanup() < 0)"
         )
         after = (
             "\tif (terminal_current) {\n"
+            "\t\tif (fileclose_batch_settle(&close_batch) < 0)\n"
+            "\t\t\tpanic(\"process teardown file settlement\");\n"
             "\t\tif (bio_request_end_current_cleanup() < 0)"
         )
         sources = self.changed("proc", before, after)
         self.assert_terminal_rejected(sources, "filesystem gate release")
+
+    def test_terminal_teardown_cannot_drop_file_settlement(self):
+        sources = self.changed(
+            "proc",
+            "\t\tif (fileclose_batch_settle(&close_batch) < 0)\n"
+            "\t\t\tpanic(\"process teardown file settlement\");\n",
+            "",
+        )
+        self.assert_terminal_rejected(sources, "deferred file settlement")
+
+    def test_teardown_progress_settles_outside_gate(self):
+        sources = self.changed(
+            "proc",
+            "\tfs_epoch_request_end();\n"
+            "\tif (fileclose_batch_settle(batch) < 0)",
+            "\tif (fileclose_batch_settle(batch) < 0)\n"
+            "\tfs_epoch_request_end();",
+        )
+        self.assert_terminal_rejected(sources, "release the FS gate")
+
+    def test_teardown_progress_must_yield_outside_gate(self):
+        sources = self.changed(
+            "proc",
+            "\t(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_OPERATION_UNITS);\n",
+            "",
+        )
+        self.assert_terminal_rejected(sources, "settle and yield")
 
     def test_terminal_teardown_settles_before_lifecycle_release(self):
         before = (
@@ -69,7 +104,7 @@ class TeardownProtocolTests(unittest.TestCase):
             "\tvfs_proc_terminal_clear(p);"
         )
         sources = self.changed("proc", before, after)
-        self.assert_terminal_rejected(sources, "release FS gate, settle BIO")
+        self.assert_terminal_rejected(sources, "release FS gate, settle files")
 
     def test_exit_cannot_release_gate_after_terminal_teardown(self):
         sources = self.changed(

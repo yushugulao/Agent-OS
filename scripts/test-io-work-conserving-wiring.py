@@ -49,6 +49,12 @@ def define(source: str, name: str) -> int:
     return int(match.group(1))
 
 
+def mutate_once(source: str, old: str, new: str) -> str:
+    if old not in source:
+        raise RuntimeError(f"mutation anchor disappeared: {old!r}")
+    return source.replace(old, new, 1)
+
+
 def validate(bio: str, policy: str, iobudget: str) -> None:
     if define(policy, "IO_POLICY_VERSION") != 6:
         raise ContractError("work-conserving policy version is not published")
@@ -59,128 +65,347 @@ def validate(bio: str, policy: str, iobudget: str) -> None:
             policy, "IO_POLICY_DEVICE_REFILL"):
         raise ContractError("shared refill does not mirror the device envelope")
 
-    bundle = compact(function_body(bio, "io_rate_bundle"))
-    reserved_device_debt = (
-        "if (!shared) endpoints[1].flags = "
-        "RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;"
-    )
-    if (reserved_device_debt not in bundle or
-            bundle.count("RESOURCE_RATE_ENDPOINT_ALLOW_DEBT") != 1 or
+    if define(bio, "IO_RATE_LOCAL_BATCH") <= 1:
+        raise ContractError("physical transfers are not locally batched")
+    for token in (
+        "#define IO_RESERVATION_SHARED (1U << 31)",
+        "#define IO_RESERVATION_SLOT_MASK (~IO_RESERVATION_SHARED)",
+        "#define BIO_REQUEST_TRANSFERRED (1U << 3)",
+        "BIO_REQUEST_TRANSFERRED)",
+        "RESOURCE_RATE_LEASE_CAP < IO_RESERVATION_SHARED",
+    ):
+        if token not in bio:
+            raise ContractError(f"batched lease state is missing {token}")
+
+    bundle = compact(function_body(bio, "io_rate_bundle_amount"))
+    if not ordered(
+        bundle,
+        "if (shared)",
+        "endpoints[0].scope = RESOURCE_RATE_GLOBAL;",
+        "endpoints[0].index = IO_RATE_GLOBAL_SHARED;",
+        "else",
+        "endpoints[0].scope = RESOURCE_RATE_ACCOUNT;",
+        "endpoints[0].account = state->principal;",
+        "endpoints[0].index = io_class;",
+        "endpoints[0].amount = amount;",
+        "endpoints[1].scope = RESOURCE_RATE_GLOBAL;",
+        "endpoints[1].index = IO_RATE_GLOBAL_DEVICE;",
+        "endpoints[1].amount = amount;",
+        "if (!shared)",
+        "endpoints[1].flags = RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;",
+    ):
+        raise ContractError("rate bundle does not preserve shared/reserved semantics")
+    if (bundle.count("RESOURCE_RATE_ENDPOINT_ALLOW_DEBT") != 1 or
             "endpoints[0].flags" in bundle or
             "io_device_protected" in bundle):
-        raise ContractError(
-            "shared bundle can acquire debt or reserved device debt is missing"
-        )
+        raise ContractError("shared traffic can acquire debt")
+    scalar_bundle = compact(function_body(bio, "io_rate_bundle"))
+    if scalar_bundle != (
+            "return io_rate_bundle_amount(state, io_class, shared, 1, "
+            "endpoints);"):
+        raise ContractError("single-credit bundle bypasses the amount primitive")
 
-    competing = compact(function_body(bio, "io_has_competing_owner"))
-    if "for (" in competing or "active_owner_states" not in competing:
-        raise ContractError("per-transfer competition detection is not constant-time")
-    borrow = compact(function_body(bio, "io_can_borrow_idle_capacity"))
+    lease = compact(function_body(bio, "io_rate_lease"))
+    store = compact(function_body(bio, "io_rate_lease_store"))
+    shared_lease = compact(function_body(bio, "io_rate_lease_shared"))
+    if "slot & IO_RESERVATION_SLOT_MASK" not in lease:
+        raise ContractError("tagged lease slot reaches the resource controller")
+    if "lease.slot | (shared ? IO_RESERVATION_SHARED : 0)" not in store:
+        raise ContractError("shared admission does not retain its lease source")
+    if "(slot & IO_RESERVATION_SHARED) != 0" not in shared_lease:
+        raise ContractError("shared lease source cannot be recovered at commit")
+
+    borrow = compact(function_body(bio, "io_can_use_shared_capacity"))
     for token in (
         "io_class != IO_POLICY_CLASS_BACKGROUND",
         "!state->retiring && !state->quiesced",
-        "!io_any_admission_waiters()",
-        "!io_has_competing_owner(state)",
     ):
         if token not in borrow:
             raise ContractError(f"idle-capacity gate missing {token}")
+    if ("active_owner_states" in bio or "io_has_competing_owner" in bio or
+            "io_any_admission_waiters" in bio):
+        raise ContractError("fast-path lending still performs global demand scans")
 
-    charge = compact(function_body(bio, "io_rate_charge_transfer"))
-    reserved_bundle = "io_rate_bundle(state, io_class, 0, endpoints)"
-    shared_bundle = "io_rate_bundle(state, io_class, 1, endpoints)"
+    charge = compact(function_body(bio, "io_rate_charge_transfers"))
     if not ordered(
         charge,
-        reserved_bundle,
-        "resource_rate_charge_many(endpoints, 2) == 0",
-        "state->reserved_grants++",
-        "lane.debt == 0 && lane.pending_debt == 0",
-        "io_can_borrow_idle_capacity(state, io_class)",
-        shared_bundle,
-        "state->shared_grants++",
-        "endpoints[0].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT",
-        "endpoints[1].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT",
-        "state->throttles++",
+        "if (lane.debt == 0) reserved = MIN(amount, lane.tokens);",
+        "if (reserved != 0)",
+        "device.debt == 0 && device.tokens >= reserved",
+        "io_rate_bundle_amount( state, io_class, 0, reserved, endpoints);",
+        "panic(\"I/O reserved batch charge\");",
+        "state->reserved_grants += reserved;",
+        "amount -= reserved;",
+        "if (amount != 0 && lane.debt == 0 && lane.pending_debt == 0",
+        "io_can_use_shared_capacity(state, io_class)",
+        "shared = MIN(amount, capacity.tokens);",
+        "io_rate_bundle_amount( state, io_class, 1, shared, endpoints);",
+        "panic(\"I/O shared batch charge\");",
+        "state->shared_grants += shared;",
+        "amount -= shared;",
+        "for (uint64 i = 0; i < amount; i++)",
+        "io_rate_bundle(state, io_class, 0, endpoints);",
+        "endpoints[0].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;",
+        "endpoints[1].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;",
+        "panic(\"I/O rate charge\");",
+        "state->throttles += amount;",
     ):
-        raise ContractError("transfer charge order is not reserved/shared/debt")
-    if charge.count(reserved_bundle) != 2 or charge.count(shared_bundle) != 1:
-        raise ContractError("transfer fallback does not rebuild a reserved bundle")
-    fallback = charge.rsplit(reserved_bundle, 1)[1]
-    if not ordered(
-        fallback,
-        "endpoints[0].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT",
-        "endpoints[1].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT",
-        "state->throttles++",
-        "resource_rate_charge_many(endpoints, 2)",
+        raise ContractError("batch charge is not split into reserved/shared/debt")
+    for token in (
+        "capacity.debt != 0) shared = 0;",
+        "else if (shared > capacity.tokens) shared = capacity.tokens;",
     ):
-        raise ContractError("bounded fallback debt is not owner plus device")
+        if token not in charge:
+            raise ContractError("shared batch ignores the device envelope")
 
     direct = compact(function_body(bio, "io_reserve_direct"))
+    waiter = compact(function_body(bio, "io_grant_waiter"))
     if ("lane.debt == 0 && lane.pending_debt == 0" not in direct or
-            "io_can_borrow_idle_capacity(state, io_class)" not in direct):
-        raise ContractError("admission can borrow while indebted or contended")
+            "io_can_use_shared_capacity(state, io_class)" not in direct):
+        raise ContractError("admission can borrow while indebted or quiesced")
+    if "state->shared_grants" in direct or "state->shared_grants" in waiter:
+        raise ContractError("an unused shared reservation is counted as work")
 
-    acquire = compact(function_body(bio, "io_active_request_acquire"))
-    release = compact(function_body(bio, "io_active_request_release"))
-    if ("state->active_requests++ == 0" not in acquire or
-            "io_policy.active_owner_states++" not in acquire or
-            "--state->active_requests == 0" not in release or
-            "io_policy.active_owner_states--" not in release):
-        raise ContractError("active-owner accounting is not transition based")
-    begin = compact(function_body(bio, "bio_request_begin_current_mode"))
-    upgrade = compact(function_body(bio, "bio_request_upgrade_current_mode"))
+    account = compact(function_body(bio, "bio_account_transfers"))
+    request_path = account[account.find("else if (request_flags != 0)"):]
+    if not ordered(
+        request_path,
+        "if ((*request_flags & BIO_REQUEST_TRANSFERRED) == 0)",
+        "io_rate_lease_commit(",
+        "if (io_rate_lease_shared(reservation))",
+        "state->shared_grants++;",
+        "*request_flags |= BIO_REQUEST_TRANSFERRED;",
+        "count--;",
+        "if (count > (uint)-1 - *transfers)",
+        "*transfers += count;",
+        "if (*transfers >= IO_RATE_LOCAL_BATCH)",
+        "io_rate_charge_transfers(",
+        "*transfers = 0;",
+    ):
+        raise ContractError("request lease is not committed and batched on transfer")
+    if account.count("state->shared_grants++;") != 2:
+        raise ContractError("shared lease commits are not counted exactly once")
+    if (bio.count("state->shared_grants++;") != 2 or
+            bio.count("state->shared_grants += shared;") != 1):
+        raise ContractError("shared work is counted outside transfer commit")
+    valid_flags = compact(function_body(bio, "bio_thread_request_flags_valid"))
+    transferred_validity = valid_flags[valid_flags.find(
+        "if ((flags & BIO_REQUEST_TRANSFERRED) != 0"):]
+    if not ordered(
+        transferred_validity,
+        "if ((flags & BIO_REQUEST_TRANSFERRED) != 0",
+        "(flags & BIO_REQUEST_ACTIVE) == 0",
+        "return 0;",
+    ):
+        raise ContractError("transferred requests can exist without an active lease")
     end = compact(function_body(bio, "bio_request_end_current_mode"))
     abort = compact(function_body(bio, "bio_request_abort_thread"))
-    if "io_active_request_acquire(state);" not in begin:
-        raise ContractError("eager I/O begin bypasses active-owner accounting")
-    if ("io_active_request_acquire(state);" not in upgrade or
-            "io_active_request_release(state);" not in upgrade):
-        raise ContractError("lazy I/O upgrade does not pin and unwind its owner")
-    if "io_active_request_release(state);" not in end:
-        raise ContractError("normal I/O end bypasses active-owner accounting")
-    if "io_active_request_release(state);" not in abort:
-        raise ContractError("aborted I/O request bypasses active-owner accounting")
-    if ("state->active_requests++;" in bio or
-            "state->active_requests--;" in bio):
-        raise ContractError("request lifecycle updates active owners directly")
-
-    if "IO_POLICY_SHARED_BURST + 1" in iobudget:
-        raise ContractError("dynamic pressure scales with the elastic envelope")
-    pressure = compact(function_body(iobudget, "run_lineage_attacker"))
-    for token in (
-        "borrowed = shared_decisions > 0;",
-        "refill_covered = after.refills > before.refills && throttle_decisions == 0;",
-        "check(borrowed || refill_covered,",
+    if not ordered(
+        end,
+        "if ((flags & BIO_REQUEST_TRANSFERRED) == 0)",
+        "io_rate_lease_refund(source, device_source);",
+        "else",
+        "io_rate_charge_transfers(state, io_class, transfers);",
     ):
-        if token not in pressure:
-            raise ContractError(
-                "dynamic probe does not distinguish idle loans from sustained refill"
-            )
+        raise ContractError("request end does not refund-or-flush by transfer state")
+    abort_settlement = abort[abort.find(
+        "state = io_state_find(thread->io_request_owner, 0);"):]
+    if not ordered(
+        abort_settlement,
+        "BIO_REQUEST_TRANSFERRED) == 0",
+        "io_rate_lease_refund(",
+        "BIO_REQUEST_TRANSFERRED) != 0",
+        "io_rate_charge_transfers(",
+    ):
+        raise ContractError("request abort does not refund-or-flush by transfer state")
+
+    batch = compact(function_body(bio, "bio_account_transfer_batch"))
+    if (batch != "bio_account_transfers(owner, io_class, transfer, results, count);" or
+            "for (" in batch or "bio_account_transfer(" in batch):
+        raise ContractError("driver batch accounting re-enters the scalar path")
+
+    if not re.search(
+            r"#define\s+COLD_RATE_BLOCKS\s*\\\s*"
+            r"\(IO_POLICY_WORKFLOW_NORMAL_BURST\s*\+\s*1\)",
+            iobudget):
+        raise ContractError("cold-read extent does not cross the owner burst")
+    if not re.search(
+            r"#define\s+COLD_PRESSURE_BLOCKS\s*\\\s*"
+            r"\(COLD_CACHE_BLOCKS\s*>\s*COLD_RATE_BLOCKS\s*\?\s*\\\s*"
+            r"COLD_CACHE_BLOCKS\s*:\s*COLD_RATE_BLOCKS\)",
+            iobudget):
+        raise ContractError("cold-read extent does not cover cache and rate limits")
+    for token in (
+        "#define COLD_PRESSURE_BYTES "
+        "(COLD_PRESSURE_BLOCKS * IO_BLOCK_SIZE)",
+        "static char cold_pressure_data[COLD_PRESSURE_BYTES];",
+    ):
+        if token not in iobudget:
+            raise ContractError("cold-read buffer is detached from its extent")
+    setup = compact(function_body(iobudget, "setup_lineage_pressure"))
+    if not ordered(
+        setup,
+        "memset(cold_pressure_data, 'C', sizeof(cold_pressure_data));",
+        'create_file("iocold", cold_pressure_data, sizeof(cold_pressure_data));',
+        "memset(cold_pressure_data, 'E', sizeof(cold_pressure_data));",
+        'create_file("ioevict", cold_pressure_data, sizeof(cold_pressure_data));',
+    ):
+        raise ContractError("dynamic probe does not prepare and evict a cold file")
+
+    idle = compact(function_body(iobudget, "wait_for_idle_loan_window"))
+    for token in (
+        "snapshot->tokens == snapshot->class_burst",
+        "snapshot->shared_tokens == IO_POLICY_SHARED_BURST",
+        "snapshot->device_tokens == snapshot->device_burst",
+        "snapshot->leased == 0 && snapshot->shared_leased == 0",
+        "snapshot->device_leased == 0 && snapshot->debt == 0",
+        "snapshot->device_debt == 0 && snapshot->waiters == 0",
+    ):
+        if token not in idle:
+            raise ContractError("dynamic probe lacks a clean idle-loan baseline")
+
+    pressure = compact(function_body(iobudget, "run_lineage_attacker"))
+    if not ordered(
+        pressure,
+        "setup_lineage_pressure();",
+        "wait_for_idle_loan_window(&before);",
+        "memset(cold_pressure_data, 0, sizeof(cold_pressure_data));",
+        'cold_fd = open("iocold", O_RDONLY);',
+        "read_exact(cold_fd, cold_pressure_data, sizeof(cold_pressure_data),",
+        "check(close(cold_fd) == 0",
+        "cold_pressure_data[0] == 'C'",
+        "check(io_policy_info(&after) == 0",
+        "read_transfers = after.physical_reads - before.physical_reads;",
+        "shared_decisions = after.shared_grants - before.shared_grants;",
+        "throttle_decisions = after.throttles - before.throttles;",
+        "check(read_transfers > (unsigned long long)before.class_burst,",
+        "borrowed = shared_decisions > 0;",
+        "check(borrowed,",
+        "check(throttle_decisions == 0,",
+    ):
+        raise ContractError("dynamic evidence is not a cold shared-capacity read")
+    if "refill_covered" in pressure or "borrowed = 1;" in pressure:
+        raise ContractError("dynamic evidence can be satisfied without shared work")
+
+    main = compact(function_body(iobudget, "main"))
+    if not ordered(
+        main,
+        "attacker = fork();",
+        "read_exact(attacker_ready[0], &signal, sizeof(signal),",
+        "workflow = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);",
+        "read_exact(workflow_report[0], &report, sizeof(report),",
+        "check(report.cache_isolated,",
+        "waitpid(attacker, &status)",
+        "waitpid(workflow, &status)",
+        "check_lazy_cache_admission();",
+        "check_thread_exit_lease_cleanup();",
+        "check_scheduler_interrupt_progress();",
+        "check_fault_exit_cleanup(lineage.owner);",
+    ):
+        raise ContractError("attacker/workflow proof is not isolated from late probes")
 
 
 validate(BIO, POLICY, IOBUDGET)
 
 MUTATIONS = (
-    (BIO, POLICY.replace("#define IO_POLICY_VERSION 6U", "#define IO_POLICY_VERSION 5U", 1), IOBUDGET),
-    (BIO, POLICY.replace("#define IO_POLICY_SHARED_REFILL 280U", "#define IO_POLICY_SHARED_REFILL 16U", 1), IOBUDGET),
-    (BIO.replace("if (!shared)", "if (!shared || io_device_protected(state->owner, io_class))", 1), POLICY, IOBUDGET),
-    (BIO.replace("if (!shared)", "if (shared)", 1), POLICY, IOBUDGET),
-    (BIO.replace("endpoints[1].flags =", "endpoints[0].flags =", 1), POLICY, IOBUDGET),
-    (BIO.replace("\t(void)io_rate_bundle(state, io_class, 0, endpoints);\n\tendpoints[0].flags", "\tendpoints[0].flags", 1), POLICY, IOBUDGET),
-    (BIO.replace("endpoints[1].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;", "", 1), POLICY, IOBUDGET),
-    (BIO.replace("!io_any_admission_waiters()", "1", 1), POLICY, IOBUDGET),
-    (BIO.replace("!io_has_competing_owner(state)", "1", 1), POLICY, IOBUDGET),
-    (BIO.replace("lane.debt == 0 && lane.pending_debt == 0", "lane.debt == 0", 1), POLICY, IOBUDGET),
-    (BIO.replace("state->shared_grants++;", "state->reserved_grants++;", 1), POLICY, IOBUDGET),
-    (BIO.replace("io_active_request_acquire(state);", "state->active_requests++;", 1), POLICY, IOBUDGET),
-    (BIO.replace("io_active_request_release(state);", "state->active_requests--;", 1), POLICY, IOBUDGET),
-    (BIO, POLICY, IOBUDGET.replace(
-        "borrowed = shared_decisions > 0;", "borrowed = 1;", 1)),
-    (BIO, POLICY, IOBUDGET.replace(
-        "after.refills > before.refills &&\n\t\t\t throttle_decisions == 0",
-        "1", 1)),
-    (BIO, POLICY, IOBUDGET.replace(
-        "check(borrowed || refill_covered,", "check(1,", 1)),
+    (BIO, mutate_once(POLICY, "#define IO_POLICY_VERSION 6U",
+                      "#define IO_POLICY_VERSION 5U"), IOBUDGET),
+    (BIO, mutate_once(POLICY, "#define IO_POLICY_SHARED_REFILL 280U",
+                      "#define IO_POLICY_SHARED_REFILL 16U"), IOBUDGET),
+    (mutate_once(BIO, "#define IO_RATE_LOCAL_BATCH 32U",
+                 "#define IO_RATE_LOCAL_BATCH 1U"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "endpoints[0].amount = amount;",
+                 "endpoints[0].amount = 1;"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "if (!shared)\n\t\tendpoints[1].flags =",
+                 "if (shared)\n\t\tendpoints[1].flags ="), POLICY, IOBUDGET),
+    (mutate_once(BIO, "endpoints[1].flags =",
+                 "endpoints[0].flags ="), POLICY, IOBUDGET),
+    (mutate_once(BIO, "if (!shared)",
+                 "if (!shared || io_device_protected(state->owner, io_class))"),
+     POLICY, IOBUDGET),
+    (mutate_once(BIO, "lease.slot | (shared ? IO_RESERVATION_SHARED : 0)",
+                 "lease.slot"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "slot & IO_RESERVATION_SLOT_MASK", "slot"),
+     POLICY, IOBUDGET),
+    (mutate_once(BIO, "(slot & IO_RESERVATION_SHARED) != 0", "slot != 0"),
+     POLICY, IOBUDGET),
+    (mutate_once(BIO, "lane.debt == 0 && lane.pending_debt == 0",
+                 "lane.debt == 0"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "state->shared_grants += shared;",
+                 "state->reserved_grants += shared;"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "state, io_class, 1, shared, endpoints",
+                 "state, io_class, 0, shared, endpoints"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "for (uint64 i = 0; i < amount; i++)",
+                 "if (amount != 0)"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "endpoints[0].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;",
+                 ""), POLICY, IOBUDGET),
+    (mutate_once(BIO, "endpoints[1].flags |= RESOURCE_RATE_ENDPOINT_ALLOW_DEBT;",
+                 ""), POLICY, IOBUDGET),
+    (mutate_once(BIO, "!state->retiring && !state->quiesced",
+                 "!state->retiring && !state->quiesced && "
+                 "!io_any_admission_waiters()"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "uint cache_donor_cursor;",
+                 "uint cache_donor_cursor;\n\tuint active_owner_states;"),
+     POLICY, IOBUDGET),
+    (mutate_once(BIO, "io_rate_lease_store(\n\t\t\t\tlease, 1, source, device_source);",
+                 "state->shared_grants++;\n\t\t\tio_rate_lease_store(\n"
+                 "\t\t\t\tlease, 1, source, device_source);"), POLICY, IOBUDGET),
+    (mutate_once(BIO,
+                 "\tif (!shared)\n\t\tstate->reserved_grants++;\n"
+                 "\tbucket->grantee = head;",
+                 "\tif (!shared)\n\t\tstate->reserved_grants++;\n"
+                 "\telse\n\t\tstate->shared_grants++;\n"
+                 "\tbucket->grantee = head;"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "*request_flags |= BIO_REQUEST_TRANSFERRED;",
+                 "*request_flags |= BIO_REQUEST_ACTIVE;"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "if (*transfers >= IO_RATE_LOCAL_BATCH)",
+                 "if (*transfers >= 1)"), POLICY, IOBUDGET),
+    (mutate_once(BIO,
+                 "bio_account_transfers(owner, io_class, transfer, results, count);",
+                 "for (uint i = 0; i < count; i++)\n\t\tbio_account_transfer("
+                 "owner, io_class, transfer, results[i]);"), POLICY, IOBUDGET),
+    (mutate_once(BIO, "io_rate_charge_transfers(state, io_class, transfers);",
+                 "io_rate_charge_transfers(state, io_class, 0);"),
+     POLICY, IOBUDGET),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        'create_file("iocold", cold_pressure_data,\n\t\t    sizeof(cold_pressure_data));',
+        'create_file("iohot", cold_pressure_data,\n\t\t    sizeof(cold_pressure_data));')),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        "(COLD_CACHE_BLOCKS > COLD_RATE_BLOCKS ? \\\n\t COLD_CACHE_BLOCKS : COLD_RATE_BLOCKS)",
+        "COLD_CACHE_BLOCKS")),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        'create_file("ioevict", cold_pressure_data,\n\t\t    sizeof(cold_pressure_data));',
+        'create_file("iocold", cold_pressure_data,\n\t\t    sizeof(cold_pressure_data));')),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        "wait_for_idle_loan_window(&before);", "io_policy_info(&before);")),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        'cold_fd = open("iocold", O_RDONLY);',
+        'cold_fd = open("ioevict", O_RDONLY);')),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        "check(read_transfers > (unsigned long long)before.class_burst,",
+        "check(read_transfers > 0,")),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        "borrowed = shared_decisions > 0;", "borrowed = 1;")),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        "check(borrowed,", "check(1,")),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        "check(throttle_decisions == 0,", "check(1,")),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        "snapshot->shared_tokens == IO_POLICY_SHARED_BURST", "1")),
+    (BIO, POLICY, mutate_once(IOBUDGET,
+        "read_exact(attacker_ready[0], &signal, sizeof(signal),",
+        "read_exact_disabled(attacker_ready[0], &signal, sizeof(signal),")),
 )
+
+fault_block = (
+    "\tcheck_fault_exit_cleanup(lineage.owner);\n"
+    "\tprintf(\"iobudget_ucore: fault_exit_cleanup=1\\n\");\n"
+)
+fault_early = mutate_once(IOBUDGET, fault_block, "")
+fault_early = mutate_once(
+    fault_early, "\tcheck_lazy_cache_admission();\n",
+    fault_block + "\tcheck_lazy_cache_admission();\n")
+MUTATIONS += ((BIO, POLICY, fault_early),)
 
 for mutated_bio, mutated_policy, mutated_iobudget in MUTATIONS:
     try:

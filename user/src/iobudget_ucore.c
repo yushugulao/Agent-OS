@@ -18,6 +18,7 @@
 	 COLD_CACHE_BLOCKS : COLD_RATE_BLOCKS)
 #define COLD_PRESSURE_BYTES (COLD_PRESSURE_BLOCKS * IO_BLOCK_SIZE)
 #define ATTACKER_MAX_MS 30000
+#define IO_QUIESCE_TIMEOUT_MS 5000
 #define EXIT_LEASE_ROUNDS 72
 #define LAZY_CACHE_ROUNDS 8
 
@@ -139,7 +140,6 @@ static void check_scheduler_interrupt_progress(void)
 	      "reap kernel pipe waiter");
 	check(close(gate[1]) == 0 && close(ready_pipe[0]) == 0,
 	      "close scheduler progress endpoints");
-	check(unlink("iotick") == 0, "remove scheduler progress file");
 }
 
 static void run_fault_exit_child(int report_fd)
@@ -164,12 +164,29 @@ static void run_fault_exit_child(int report_fd)
 	exit(99);
 }
 
-static void run_lineage_snapshot_child(int report_fd)
+static void run_lineage_snapshot_child(int report_fd,
+				       unsigned long long prior_writes)
 {
 	struct io_policy_info after;
+	int64 deadline = get_mtime() + IO_QUIESCE_TIMEOUT_MS;
 
+	do {
+		check(io_policy_info(&after) == 0,
+		      "snapshot lineage state after fault exit");
+		if (after.physical_writes > prior_writes)
+			break;
+		check(sched_yield() == 0,
+		      "yield for asynchronous fault cleanup");
+	} while (get_mtime() < deadline);
+	check(after.physical_writes > prior_writes,
+	      "background fault cleanup reaches durable I/O");
+	check(sync() == 0, "fence asynchronous fault cleanup");
 	check(io_policy_info(&after) == 0,
-	      "snapshot lineage state after fault exit");
+	      "snapshot settled fault cleanup state");
+	check(after.leased == 0 && after.shared_leased == 0 &&
+	      after.device_leased == 0 && after.debt == 0 &&
+	      after.device_debt == 0,
+	      "fault cleanup settles owner and device debt");
 	write_exact(report_fd, &after, sizeof(after),
 		    "report post-fault lineage state");
 	check(close(report_fd) == 0, "close post-fault report");
@@ -206,7 +223,8 @@ static void check_fault_exit_cleanup(uint expected_owner)
 	observer = fork();
 	check(observer >= 0, "create post-fault lineage observer");
 	if (observer == 0)
-		run_lineage_snapshot_child(after_pipe[1]);
+		run_lineage_snapshot_child(after_pipe[1],
+					   before.physical_writes);
 	check(close(after_pipe[1]) == 0, "close post-fault child endpoint");
 	read_exact(after_pipe[0], &after, sizeof(after),
 		   "receive post-fault lineage state");
@@ -298,13 +316,47 @@ static void check_lazy_cache_admission(void)
 	       after.lazy_started - before.lazy_started,
 	       after.upgraded - before.upgraded,
 	       after.cache_only - before.cache_only);
-	check(unlink("iolazy") == 0, "remove lazy I/O probe");
 }
 
 static void setup_lineage_pressure(void)
 {
 	memset(pressure_data, 'P', sizeof(pressure_data));
 	create_file("iopress", pressure_data, sizeof(pressure_data));
+	memset(cold_pressure_data, 'C', sizeof(cold_pressure_data));
+	create_file("iocold", cold_pressure_data,
+		    sizeof(cold_pressure_data));
+	memset(cold_pressure_data, 'E', sizeof(cold_pressure_data));
+	create_file("ioevict", cold_pressure_data,
+		    sizeof(cold_pressure_data));
+}
+
+static void wait_for_idle_loan_window(struct io_policy_info *snapshot)
+{
+	unsigned long long completion = 0;
+	int stable = 0;
+	int64 deadline = get_mtime() + IO_QUIESCE_TIMEOUT_MS;
+
+	check(sync() == 0, "fence prior lineage I/O");
+	do {
+		check(io_policy_info(snapshot) == 0,
+		      "read idle I/O loan window");
+		if (snapshot->tokens == snapshot->class_burst &&
+		    snapshot->shared_tokens == IO_POLICY_SHARED_BURST &&
+		    snapshot->device_tokens == snapshot->device_burst &&
+		    snapshot->leased == 0 && snapshot->shared_leased == 0 &&
+		    snapshot->device_leased == 0 && snapshot->debt == 0 &&
+		    snapshot->device_debt == 0 && snapshot->waiters == 0) {
+			if (stable &&
+			    snapshot->completion_sequence == completion)
+				return;
+			completion = snapshot->completion_sequence;
+			stable = 1;
+		} else {
+			stable = 0;
+		}
+		check(sleep(1) == 0, "wait for idle I/O loan window");
+	} while (get_mtime() < deadline);
+	check(0, "I/O controller reaches an idle loan window");
 }
 
 static void attacker_stop_listener(void *arg)
@@ -338,10 +390,10 @@ static void run_lineage_attacker(int ready_fd, int stop_fd,
 	unsigned long long throttle_decisions;
 	unsigned long long budget_decisions;
 	int borrowed;
-	int refill_covered;
+	int cold_fd;
 
 	setup_lineage_pressure();
-	check(io_policy_info(&before) == 0, "read initial lineage I/O state");
+	wait_for_idle_loan_window(&before);
 	check(before.version == IO_POLICY_VERSION,
 	      "lineage process observes current I/O policy ABI");
 	check(before.struct_size == sizeof(before),
@@ -353,8 +405,15 @@ static void run_lineage_attacker(int ready_fd, int stop_fd,
 	check(before.class_burst == IO_POLICY_WORKFLOW_NORMAL_BURST &&
 	      before.class_refill == IO_POLICY_WORKFLOW_NORMAL_REFILL,
 	      "lineage attacker uses the workflow normal profile");
-	memset(cold_pressure_data, 'C', sizeof(cold_pressure_data));
-	create_file("iocold", cold_pressure_data, sizeof(cold_pressure_data));
+	memset(cold_pressure_data, 0, sizeof(cold_pressure_data));
+	cold_fd = open("iocold", O_RDONLY);
+	check(cold_fd >= 0, "open cold pressure file");
+	read_exact(cold_fd, cold_pressure_data, sizeof(cold_pressure_data),
+		   "read cold pressure file");
+	check(close(cold_fd) == 0, "close cold pressure file");
+	check(cold_pressure_data[0] == 'C' &&
+	      cold_pressure_data[sizeof(cold_pressure_data) - 1] == 'C',
+	      "verify cold pressure contents");
 	check(io_policy_info(&after) == 0, "read cold-pressure I/O state");
 	check(after.owner == expected_owner &&
 	      after.io_class == IO_POLICY_CLASS_NORMAL,
@@ -385,18 +444,18 @@ static void run_lineage_attacker(int ready_fd, int stop_fd,
 	check(budget_decisions <= ~0ULL - throttle_decisions,
 	      "rate decision total fits the accounting type");
 	budget_decisions += throttle_decisions;
-	check(write_transfers > (unsigned long long)before.class_burst,
+	check(read_transfers > (unsigned long long)before.class_burst,
 	      "cold pressure crosses the owner credit envelope");
 	borrowed = shared_decisions > 0;
-	refill_covered = after.refills > before.refills &&
-			 throttle_decisions == 0;
-	check(borrowed || refill_covered,
-	      "single-owner pressure uses idle loan or sustained refill");
+	printf("iobudget_ucore: work_conserving=shared-loan shared=%llu refills=%llu throttles=%llu\n",
+	       shared_decisions,
+	       after.refills - before.refills, throttle_decisions);
+	check(borrowed,
+	      "single-owner pressure borrows idle shared capacity");
+	check(throttle_decisions == 0,
+	      "idle shared capacity prevents owner throttling");
 	check(transfers <= budget_decisions,
 	      "aggregate rate decisions cover physical transfers");
-	printf("iobudget_ucore: work_conserving=%s shared=%llu refills=%llu throttles=%llu\n",
-	       borrowed ? "shared-loan" : "owner-refill", shared_decisions,
-	       after.refills - before.refills, throttle_decisions);
 	check(after.cache_evictions > before.cache_evictions,
 	      "fresh working set reaches the lineage cache cap");
 	check(after.leased <= after.class_burst &&
@@ -450,8 +509,6 @@ static void run_lineage_attacker(int ready_fd, int stop_fd,
 	check(waittid(stop_tid) >= 0, "join attacker stop listener");
 	check(close(ready_fd) == 0 && close(stop_fd) == 0,
 	      "close attacker controls");
-	check(unlink("iocold") == 0, "remove cold pressure file");
-	check(unlink("iopress") == 0, "remove pressure file");
 	exit(0);
 }
 
@@ -498,9 +555,11 @@ static void run_workflow(int command_fd, int report_fd)
 	check(close(fd) == 0, "close workflow probe reader");
 	check(io_policy_info(&after_read) == 0,
 	      "snapshot workflow after read");
+	value = 'X';
 	fd = open("wfhot", O_WRONLY);
 	check(fd >= 0, "open workflow progress writer");
 	check(write(fd, &value, 1) == 1, "complete workflow control write");
+	check(fsync(fd) == 0, "persist workflow control write");
 	check(close(fd) == 0, "close workflow progress writer");
 	check(io_policy_info(&after_write) == 0,
 	      "snapshot workflow after write");
@@ -545,13 +604,23 @@ int main(void)
 	      "snapshot boot workflow I/O identity");
 	check((lineage.owner & IO_POLICY_OWNER_SCOPE_FLAG) != 0,
 	      "boot workload has an immutable workflow owner");
-	check_lazy_cache_admission();
-	check_thread_exit_lease_cleanup();
-	printf("iobudget_ucore: thread_exit_lease_cleanup=1\n");
-	check_scheduler_interrupt_progress();
-	printf("iobudget_ucore: scheduler_interrupt_progress=1\n");
-	check_fault_exit_cleanup(lineage.owner);
-	printf("iobudget_ucore: fault_exit_cleanup=1\n");
+	check(pipe(attacker_ready) == 0 && pipe(attacker_stop_pipe) == 0,
+	      "create attacker control pipes");
+	check(agent_scope_delegate_fd(attacker_ready[1]) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(attacker_stop_pipe[0]) == AGENT_STATUS_OK,
+	      "delegate lineage attacker controls");
+	attacker = fork();
+	check(attacker >= 0, "create lineage attacker");
+	if (attacker == 0)
+		run_lineage_attacker(attacker_ready[1], attacker_stop_pipe[0],
+				     lineage.owner);
+	check(close(attacker_ready[1]) == 0 && close(attacker_stop_pipe[0]) == 0,
+	      "close parent copies of attacker endpoints");
+	read_exact(attacker_ready[0], &signal, sizeof(signal),
+		   "wait for lineage pressure");
+	printf("iobudget_ucore: lineage_rate_accounting=1 immutable_owner=1\n");
+	printf("iobudget_ucore: nested_io_attribution=1\n");
+
 	check(pipe(workflow_command) == 0 && pipe(workflow_report) == 0,
 	      "create workflow control pipes");
 	printf("iobudget_ucore: workflow_pipes=1\n");
@@ -573,23 +642,6 @@ int main(void)
 	      report.owner != lineage.owner,
 	      "workflow has a persistent scoped owner");
 	workflow_owner = report.owner;
-
-	check(pipe(attacker_ready) == 0 && pipe(attacker_stop_pipe) == 0,
-	      "create attacker control pipes");
-	check(agent_scope_delegate_fd(attacker_ready[1]) == AGENT_STATUS_OK &&
-	      agent_scope_delegate_fd(attacker_stop_pipe[0]) == AGENT_STATUS_OK,
-	      "delegate lineage attacker controls");
-	attacker = fork();
-	check(attacker >= 0, "create lineage attacker");
-	if (attacker == 0)
-		run_lineage_attacker(attacker_ready[1], attacker_stop_pipe[0],
-				     lineage.owner);
-	check(close(attacker_ready[1]) == 0 && close(attacker_stop_pipe[0]) == 0,
-	      "close parent copies of attacker endpoints");
-	read_exact(attacker_ready[0], &signal, sizeof(signal),
-		   "wait for lineage pressure");
-	printf("iobudget_ucore: lineage_rate_accounting=1 immutable_owner=1\n");
-	printf("iobudget_ucore: nested_io_attribution=1\n");
 	write_exact(workflow_command[1], &signal, sizeof(signal),
 		    "start workflow probe");
 	read_exact(workflow_report[0], &report, sizeof(report),
@@ -614,6 +666,13 @@ int main(void)
 	      close(workflow_report[0]) == 0 && close(attacker_ready[0]) == 0 &&
 	      close(attacker_stop_pipe[1]) == 0,
 	      "close parent controls");
+	check_lazy_cache_admission();
+	check_thread_exit_lease_cleanup();
+	printf("iobudget_ucore: thread_exit_lease_cleanup=1\n");
+	check_scheduler_interrupt_progress();
+	printf("iobudget_ucore: scheduler_interrupt_progress=1\n");
+	check_fault_exit_cleanup(lineage.owner);
+	printf("iobudget_ucore: fault_exit_cleanup=1\n");
 	printf("iobudget_ucore: parent passed\n");
 	return 0;
 }

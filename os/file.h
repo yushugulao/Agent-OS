@@ -78,6 +78,7 @@ struct file {
 	// This charge follows the unique object until its final reference closes.
 	struct resource_account_handle resource_account;
 	int resource_reserved;
+	uint cleanup_owner;
 };
 
 /*
@@ -101,11 +102,26 @@ struct file_close_receipt {
 	struct inode *ip;
 	struct resource_account_handle resource_account;
 	int resource_reserved;
+	uint cleanup_owner;
 	int result;
 	struct bio_cleanup_token cleanup_token;
 };
 
 #define FILE_CLOSE_RECEIPT_INIT { 0 }
+
+/*
+ * Teardown transfers at most one cleanup lease across the filesystem gate.
+ * Settling each destructive close incrementally bounds stack use and prevents
+ * a teardown from hoarding global cleanup admission.
+ */
+#define FILE_CLOSE_BATCH_CAP 1U
+
+struct file_close_batch {
+	struct bio_cleanup_token pending[FILE_CLOSE_BATCH_CAP];
+	uint count;
+};
+
+#define FILE_CLOSE_BATCH_INIT { 0 }
 
 //A few specific fd
 enum {
@@ -128,6 +144,8 @@ int fileclose_finish_epoch(struct file_close_receipt *);
 int fileclose_finish_settle(struct file_close_receipt *);
 int fileclose_finish_result(const struct file_close_receipt *);
 void fileclose_finish(struct file_close_receipt *);
+int fileclose_batch_add(struct file_close_batch *, struct file *);
+int fileclose_batch_settle(struct file_close_batch *);
 void fileclose(struct file *);
 struct file *filedup(struct file *);
 struct file *filealloc(struct proc *);

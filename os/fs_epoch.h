@@ -85,6 +85,7 @@ int fs_epoch_note_data(uint owner);
  * end that lease only after releasing the epoch request gate.
  */
 int fs_epoch_commit(void);
+int fs_epoch_prepare_cleanup_sponsor(uint, uint);
 int fs_epoch_should_commit(void);
 int fs_epoch_dirty(void);
 int fs_epoch_buffer_dirty(uint dev, uint blockno);

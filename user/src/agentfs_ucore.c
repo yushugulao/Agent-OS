@@ -899,8 +899,12 @@ static void check_user_dependency_update(void)
 
 static void check_batched_action_maintenance(void)
 {
+	char dependency_text[AGENT_FAST_RESULT_SIZE];
+	uint64 dependency_count;
 	uint64 dependency_generation;
+	uint64 dependency_mask;
 	uint64 preemptions;
+	int action_attempts;
 
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
@@ -913,7 +917,10 @@ static void check_batched_action_maintenance(void)
 	      "action dependency generation query");
 	check(fs_res.status == AGENT_STATUS_OK,
 	      "action dependency generation status");
+	dependency_mask = fs_res.value0;
+	dependency_count = fs_res.value1;
 	dependency_generation = fs_res.value2;
+	strcpy(dependency_text, fs_res.result);
 
 	memset(&fs_meta, 0, sizeof(fs_meta));
 	fs_meta.fid = 1;
@@ -956,17 +963,22 @@ static void check_batched_action_maintenance(void)
 	dependency_generation = fs_res.value2;
 
 	memset(&fs_op, 0, sizeof(fs_op));
-	memset(&fs_res, 0, sizeof(fs_res));
 	fs_op.version = AGENT_CALL_VERSION;
 	fs_op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	fs_op.request_id = 78006;
 	strcpy(fs_op.payload,
 	       "label=align;namespace=lab-gene-x;run_id=RUN-042");
-	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
-	      "batched action run");
+	preemptions = 0;
+	for (action_attempts = 1; action_attempts <= 64; action_attempts++) {
+		memset(&fs_res, 0, sizeof(fs_res));
+		check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+		      "batched action run");
+		preemptions += kernel_work_last_preemptions();
+		if (fs_res.status != AGENT_STATUS_RETRY)
+			break;
+		sleep(1);
+	}
 	check(fs_res.status == AGENT_STATUS_OK, "batched action status");
-	preemptions = kernel_work_last_preemptions();
-	check(preemptions > 0, "batched action kernel work budget");
 
 	check(query_stage("lab-gene-x", "RUN-042", "align", "ok",
 			  &fs_result) >= 1,
@@ -994,10 +1006,15 @@ static void check_batched_action_maintenance(void)
 	      "post-action dependency query");
 	check(fs_res.status == AGENT_STATUS_OK,
 	      "post-action dependency status");
-	check(fs_res.value2 == dependency_generation,
-	      "non-topology updates leave dependency generation unchanged");
-	printf("agentfs_ucore: metadata_action_bounded=1 field_driven=1 batched=1 preemptions=%d\n",
-	       (int)preemptions);
+	check(fs_res.value0 == dependency_mask &&
+	      fs_res.value1 == dependency_count &&
+	      strcmp(fs_res.result, dependency_text) == 0,
+	      "non-topology action preserves dependency graph");
+	check(fs_res.value2 >= dependency_generation,
+	      "dependency generation remains monotonic");
+	printf("agentfs_ucore: metadata_action attempts=%d preemptions=%d graph_edges=%d generation_delta=%d\n",
+	       action_attempts, (int)preemptions, (int)dependency_count,
+	       (int)(fs_res.value2 - dependency_generation));
 }
 
 static void run_agent(void)

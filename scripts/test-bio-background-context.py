@@ -54,6 +54,15 @@ def compact(text: str) -> str:
     return " ".join(text.split())
 
 
+def require_order(body: str, *tokens: str) -> None:
+    cursor = 0
+    for token in tokens:
+        position = body.find(token, cursor)
+        if position < 0:
+            raise ContractError(f"ordering contract missing {tokens}")
+        cursor = position + len(token)
+
+
 def replace_in_function(source: str, name: str, old: str, new: str) -> str:
     body = function_body(source, name)
     if old not in body:
@@ -142,7 +151,8 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         raise ContractError("background quiescent checkpoint can retain a buffer")
 
     settle = compact(function_body(bio, "bio_request_settle_quiescent_cleanup"))
-    if ("bio_request_checkpoint_mode(1, 1)" not in settle or
+    if ("if (!bio_io_quiescent_current())" not in settle or
+            "bio_request_checkpoint_mode(1, 1)" not in settle or
             "if (result.state == BIO_CHECKPOINT_DEFERRED) panic(" not in settle):
         raise ContractError("forward-only public API can expose DEFERRED")
 
@@ -169,7 +179,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
     cache_wait = compact(function_body(bio, "bio_background_wait_for_cache_progress"))
     for token in (
         "cache_wait_sequence == cache_progress_sequence",
-        "wait_queue_sleep_irq_uninterruptible(&cache_waiters)",
+        "wait_queue_sleep_irq_uninterruptible( &background_cache_waiter)",
         "cache_wait_pending = 0",
     ):
         if token not in cache_wait:
@@ -189,7 +199,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         "bio_background_end": 1,
         "bio_current_owner": 1,
         "bio_current_class": 1,
-        "bio_account_transfer": 1,
+        "bio_account_transfers": 1,
         "bio_current_cache_owner": 1,
         "bio_cache_holder_token": 1,
         "bget": 5,
@@ -200,6 +210,11 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         if actual != expected:
             raise ContractError(
                 f"{name} has {actual} executor checks, expected {expected}"
+            )
+    for wrapper in ("bio_account_transfer", "bio_account_transfer_batch"):
+        if "bio_background_current()" in function_body(bio, wrapper):
+            raise ContractError(
+                f"{wrapper} duplicates executor selection outside batch core"
             )
 
     bget = compact(function_body(bio, "bget"))
@@ -297,10 +312,26 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
             raise ContractError(f"preallocation continuation missing {token}")
 
     forward = compact(function_body(fs, "fs_forward_checkpoint"))
-    if "bio_request_settle_quiescent_cleanup() == 0" not in forward:
-        raise ContractError("forward checkpoint still exposes resumable deferral")
-    if "BIO_CHECKPOINT_DEFERRED" in forward or "VIRTIO_DISK_ERR_BUSY" in forward:
-        raise ContractError("forward-only allocator publication can return BUSY")
+    require_order(
+        forward,
+        "if (!bio_io_quiescent_current())",
+        "result = fs_epoch_commit();",
+        "if (result == VIRTIO_DISK_ERR_BUSY)",
+        "if (bio_request_settle_quiescent_cleanup() < 0)",
+        "result = fs_epoch_commit();",
+        "if (result < 0)",
+        "if (bio_request_settle_quiescent_cleanup() == 0)",
+    )
+    if forward.count("fs_epoch_commit();") != 2:
+        raise ContractError("forward checkpoint retry is not bounded to one")
+    if forward.count("bio_request_settle_quiescent_cleanup()") != 2:
+        raise ContractError("forward checkpoint settlement count drifted")
+    if ("BIO_CHECKPOINT_DEFERRED" in forward or
+            "FS_FAILURE_SCHEDULING_UNAVAILABLE" in forward or
+            "return VIRTIO_DISK_ERR_BUSY" in forward or
+            any(backedge in forward for backedge in
+                ("for (", "while (", "do {", "goto "))):
+        raise ContractError("forward-only allocator publication can loop or return BUSY")
 
     bzero = compact(function_body(fs, "bzero"))
     for token in (
@@ -323,6 +354,9 @@ def validate_iobudget_probe(source: str) -> None:
         'io_policy_info(&pressured) == 0',
         'check(read(fd, &value, 1) == 1 && value == \'W\'',
         'io_policy_info(&after_read) == 0',
+        "value = 'X'",
+        'check(fsync(fd) == 0, "persist workflow control write")',
+        'io_policy_info(&after_write) == 0',
     )
     positions = [workflow.index(token) for token in ordered]
     if positions != sorted(positions):
@@ -393,8 +427,24 @@ MUTATIONS = (
      "inode continuation cursor removed"),
     (BIO, BIO_H, replace_in_function(
         FS, "fs_forward_checkpoint",
+        "if (result == VIRTIO_DISK_ERR_BUSY)", "if (0)"),
+     "forward BUSY retry bypassed"),
+    (BIO, BIO_H, replace_in_function(
+        FS, "fs_forward_checkpoint",
+        "if (!bio_io_quiescent_current())", "if (0)"),
+     "forward quiescence guard bypassed"),
+    (BIO, BIO_H, replace_in_function(
+        FS, "fs_forward_checkpoint",
+        "\t\t\tresult = fs_epoch_commit();", "\t\t\tresult = 0;"),
+     "forward BUSY retry removed"),
+    (BIO, BIO_H, replace_in_function(
+        FS, "fs_forward_checkpoint",
         "bio_request_settle_quiescent_cleanup() == 0", "0"),
-     "forward settlement bypassed"),
+     "forward final settlement bypassed"),
+    (replace_in_function(
+        BIO, "bio_request_settle_quiescent_cleanup",
+        "if (!bio_io_quiescent_current())", "if (0)"), BIO_H, FS,
+     "public cleanup settlement accepts transient state"),
     (replace_in_function(
         BIO, "io_wait_for_debt_mode", "!closing_background", "1"), BIO_H, FS,
      "closing background debt settlement removed"),
@@ -445,6 +495,10 @@ IOBUDGET_MUTATIONS = (
      "cache floor comparison removed"),
     ("initial.cache_resident : initial.cache_floor", "initial.cache_resident",
      "cache floor clamp removed"),
+    ("value = 'X';", "value = 'W';",
+     "workflow progress write made idempotent"),
+    ('\tcheck(fsync(fd) == 0, "persist workflow control write");\n', "",
+     "workflow progress is no longer durable"),
 )
 for old, new, label in IOBUDGET_MUTATIONS:
     try:

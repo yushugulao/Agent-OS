@@ -71,7 +71,8 @@ def replace_in_function(source: str, name: str, old: str, new: str) -> str:
     return source.replace(body, body.replace(old, new, 1), 1)
 
 
-def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str) -> None:
+def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str,
+             fs: str = FS) -> None:
     if not all(token in fs_epoch for token in (
         "uint sponsor_class;", "uint64 sponsor_request_id;", "uint forward_only;"
     )):
@@ -204,7 +205,7 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str) -> None:
         "reuse_request_lease = 1",
         "effective_class = IO_POLICY_CLASS_BACKGROUND",
     )
-    transfer = compact(function_body(bio, "bio_account_transfer"))
+    transfer = compact(function_body(bio, "bio_account_transfers"))
     ordered(
         transfer,
         "bio_deferred_sponsor_current()",
@@ -292,12 +293,30 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str) -> None:
     destructive = compact(function_body(FS, "fs_epoch_destructive_begin"))
     if "result == VIRTIO_DISK_ERR_BUSY ? FS_FAILURE_SCHEDULING_UNAVAILABLE" not in destructive:
         raise ContractError("destructive path converts retryable BUSY to fail-closed")
-    forward_checkpoint = compact(function_body(FS, "fs_forward_checkpoint"))
-    if "result == VIRTIO_DISK_ERR_BUSY ? FS_FAILURE_SCHEDULING_UNAVAILABLE" not in forward_checkpoint:
-        raise ContractError("forward checkpoint converts pre-publication BUSY to fail-closed")
+    forward_checkpoint = compact(function_body(fs, "fs_forward_checkpoint"))
+    ordered(
+        forward_checkpoint,
+        "if (!bio_io_quiescent_current())",
+        "result = fs_epoch_commit();",
+        "if (result == VIRTIO_DISK_ERR_BUSY)",
+        "if (bio_request_settle_quiescent_cleanup() < 0)",
+        "result = fs_epoch_commit();",
+        "if (result < 0)",
+        "if (bio_request_settle_quiescent_cleanup() == 0)",
+    )
+    if forward_checkpoint.count("fs_epoch_commit();") != 2:
+        raise ContractError("forward checkpoint retry is not bounded to one")
+    if forward_checkpoint.count(
+            "bio_request_settle_quiescent_cleanup()") != 2:
+        raise ContractError("forward checkpoint settlement count drifted")
+    if ("FS_FAILURE_SCHEDULING_UNAVAILABLE" in forward_checkpoint or
+            "return VIRTIO_DISK_ERR_BUSY" in forward_checkpoint or
+            any(backedge in forward_checkpoint for backedge in
+                ("for (", "while (", "do {", "goto "))):
+        raise ContractError("forward checkpoint can escape or loop on BUSY")
 
 
-validate(FS_EPOCH, FS_EPOCH_H, BIO, SYSCALL)
+validate(FS_EPOCH, FS_EPOCH_H, BIO, SYSCALL, FS)
 
 MUTATIONS = (
     (
@@ -525,4 +544,40 @@ for mutated_epoch, mutated_bio, mutated_syscall, label in MUTATIONS:
         continue
     raise SystemExit(f"fs epoch sponsor mutation survived: {label}")
 
-print(f"[fs-epoch-sponsor] {len(MUTATIONS)} mutations passed")
+FS_MUTATIONS = (
+    (
+        replace_in_function(
+            FS, "fs_forward_checkpoint",
+            "if (!bio_io_quiescent_current())", "if (0)"),
+        "forward checkpoint quiescence removed",
+    ),
+    (
+        replace_in_function(
+            FS, "fs_forward_checkpoint",
+            "if (bio_request_settle_quiescent_cleanup() < 0)", "if (0)"),
+        "forward checkpoint BUSY settlement removed",
+    ),
+    (
+        replace_in_function(
+            FS, "fs_forward_checkpoint",
+            "\t\t\tresult = fs_epoch_commit();", "\t\t\tresult = 0;"),
+        "forward checkpoint retry removed",
+    ),
+    (
+        replace_in_function(
+            FS, "fs_forward_checkpoint",
+            "bio_request_settle_quiescent_cleanup() == 0", "0"),
+        "forward checkpoint final settlement removed",
+    ),
+)
+
+for mutated_fs, label in FS_MUTATIONS:
+    try:
+        validate(FS_EPOCH, FS_EPOCH_H, BIO, SYSCALL, mutated_fs)
+    except ContractError:
+        continue
+    raise SystemExit(f"fs epoch sponsor mutation survived: {label}")
+
+print(
+    f"[fs-epoch-sponsor] {len(MUTATIONS) + len(FS_MUTATIONS)} mutations passed"
+)
