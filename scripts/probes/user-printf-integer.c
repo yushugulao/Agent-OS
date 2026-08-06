@@ -158,9 +158,9 @@ int main(void)
 #endif
 
 	reset();
-	user_printf("%u|%llu|%d|%x|%s", 17U, 4294967296ULL, -3,
-		    0xfeedU, (char *)0);
-	if (!same("17|4294967296|-3|feed|(null)"))
+	user_printf("%u|%llu|%d|%x|%c|%s", 17U, 4294967296ULL, -3,
+		    0xfeedU, 'U', (char *)0);
+	if (!same("17|4294967296|-3|feed|U|(null)"))
 		return 2;
 
 	reset();

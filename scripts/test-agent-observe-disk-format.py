@@ -26,7 +26,7 @@ class ObservationLayoutContractTests(unittest.TestCase):
         source = PROBE.read_text(encoding="utf-8")
         self.assertEqual(contract["schema"], 2)
         self.assertEqual(contract["descriptor"]["version"], 2)
-        self.assertEqual(contract["observation"]["version"], 7)
+        self.assertEqual(contract["observation"]["version"], 8)
         self.assertIn("LAYOUT_DESCRIPTOR_VERSION 2U", source)
         self.assertIn(".agent_observe_layout", source)
 

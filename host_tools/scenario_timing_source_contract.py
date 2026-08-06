@@ -1255,13 +1255,6 @@ def _validate_performance_producers(
         "physical_writes", "+", "=", "count", ";", "else", "state", "->",
         "physical_flushes", "+", "=", "count", ";",
     )
-    owner_results = (
-        "state", "->", "failed_transfers", "+", "=", "failed", ";", "if",
-        "(", "transfer", "==", "BIO_TRANSFER_WRITE", ")", "state", "->",
-        "successful_writes", "+", "=", "successful", ";", "else", "if",
-        "(", "transfer", "==", "BIO_TRANSFER_FLUSH", ")", "state", "->",
-        "successful_flushes", "+", "=", "successful", ";",
-    )
     _ordered(
         transfers,
         (
@@ -1276,7 +1269,7 @@ def _validate_performance_producers(
                 ";",
             ),
             owner_requests,
-            owner_results,
+            ("state", "->", "failed_transfers", "+", "=", "failed", ";"),
             (
                 "state", "->", "completion_sequence", "=",
                 "completion_sequence", ";",
@@ -1290,7 +1283,8 @@ def _validate_performance_producers(
         (global_requests, "global physical request totals"),
         (global_results, "global physical outcome totals"),
         (owner_requests, "owner physical request totals"),
-        (owner_results, "owner physical outcome totals"),
+        (("state", "->", "failed_transfers", "+", "=", "failed", ";"),
+         "owner physical failure totals"),
     ):
         _require_top_level(transfers, sequence, label)
     if transfers.count("for") != 1:

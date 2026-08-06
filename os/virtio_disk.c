@@ -34,6 +34,10 @@ enum virtio_disk_state {
 	VIRTIO_DISK_REINIT,
 };
 
+enum disk_internal_result {
+	DISK_DESC_RETRY_STATE = 1,
+};
+
 static struct disk {
 	// Legacy queues require two contiguous, page-aligned DMA pages.
 	char pages[2][2 * PGSIZE];
@@ -619,6 +623,34 @@ static int disk_can_sleep(void)
 	return t != 0 && t->state == RUNNING && t->tid >= 0;
 }
 
+static int disk_desc_acquire(int *descriptors, int count)
+{
+	int enabled = intr_save();
+
+	for (;;) {
+		if (disk.state != VIRTIO_DISK_ONLINE) {
+			intr_restore(enabled);
+			return DISK_DESC_RETRY_STATE;
+		}
+		if (alloc_desc_chain(descriptors, count) == 0) {
+			intr_restore(enabled);
+			return VIRTIO_DISK_OK;
+		}
+		if (!disk_can_sleep()) {
+			if (disk.runtime) {
+				intr_restore(enabled);
+				return VIRTIO_DISK_ERR_BUSY;
+			}
+			disk_process_used(0);
+			continue;
+		}
+#ifdef VIRTIO_DISK_FAULT_INJECTION
+		disk.test_stats.descriptor_waits++;
+#endif
+		(void)wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters);
+	}
+}
+
 #ifdef DURABILITY_POWERCUT_TEST_PROFILE
 static int disk_durability_overlay_enter(void)
 {
@@ -912,16 +944,12 @@ static int disk_submit(struct buf *b, uint type, int test_direct,
 			(void)wait_queue_sleep_irq_uninterruptible(
 				&disk.desc_waiters);
 		}
-		if (alloc_desc_chain(idx, count) == 0)
-			break;
-		if (!disk_can_sleep()) {
-			disk_process_used(0);
+		status = disk_desc_acquire(idx, count);
+		if (status == DISK_DESC_RETRY_STATE)
 			continue;
-		}
-#ifdef VIRTIO_DISK_FAULT_INJECTION
-		disk.test_stats.descriptor_waits++;
-#endif
-		(void)wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters);
+		if (status != VIRTIO_DISK_OK)
+			goto out;
+		break;
 	}
 	head = disk_prepare_request(b, type, sector, idx, count, request_id,
 				    owner, io_class, test_direct);
@@ -1022,16 +1050,12 @@ static int disk_submit_write_pair(struct buf *buffers[2])
 			(void)wait_queue_sleep_irq_uninterruptible(
 				&disk.desc_waiters);
 		}
-		if (alloc_desc_chain(all_idx, 6) == 0)
-			break;
-		if (!disk_can_sleep()) {
-			disk_process_used(0);
+		status = disk_desc_acquire(all_idx, 6);
+		if (status == DISK_DESC_RETRY_STATE)
 			continue;
-		}
-#ifdef VIRTIO_DISK_FAULT_INJECTION
-		disk.test_stats.descriptor_waits++;
-#endif
-		(void)wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters);
+		if (status != VIRTIO_DISK_OK)
+			goto out;
+		break;
 	}
 	for (uint i = 0; i < 2; i++)
 		for (uint d = 0; d < 3; d++)
@@ -1137,16 +1161,12 @@ static int disk_submit_indirect(struct buf **buffers, uint count, uint type)
 			(void)wait_queue_sleep_irq_uninterruptible(
 				&disk.desc_waiters);
 		}
-		if (alloc_desc_chain(heads, count) == 0)
-			break;
-		if (!disk_can_sleep()) {
-			disk_process_used(0);
+		status = disk_desc_acquire(heads, count);
+		if (status == DISK_DESC_RETRY_STATE)
 			continue;
-		}
-#ifdef VIRTIO_DISK_FAULT_INJECTION
-		disk.test_stats.descriptor_waits++;
-#endif
-		(void)wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters);
+		if (status != VIRTIO_DISK_OK)
+			goto out;
+		break;
 	}
 	for (uint i = 0; i < count; i++) {
 		uint64 request_id;

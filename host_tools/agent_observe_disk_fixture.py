@@ -98,8 +98,8 @@ def _build_observation(layout, full_acceptance: bool) -> tuple[bytes, dict[str, 
     identity = dict(FIXTURE_IDENTITY)
     if full_acceptance and (
         layout.records_per_scope, layout.latest_tail, layout.diversity_anchors
-    ) != (8, 4, 4):
-        raise AssertionError("fixture requires the Observation v7 8/4/4 geometry")
+    ) != (6, 4, 2):
+        raise AssertionError("fixture requires the Observation v8 6/4/2 geometry")
     raw = bytearray(layout.observe_bytes)
     f = layout.observe_fields
     _put(raw, f["magic"], 8, layout.observe_magic)
@@ -135,7 +135,7 @@ def _build_observation(layout, full_acceptance: bool) -> tuple[bytes, dict[str, 
 
     classes = (
         ("causal", "authority", "telemetry", "causal",
-         "telemetry", "causal", "telemetry", "authority")
+         "telemetry", "authority")
         if full_acceptance else ("authority",)
     )
     prior_hash = 0xA11CE if full_acceptance else 0

@@ -103,10 +103,10 @@ _Static_assert(sizeof(struct agent_observe_checkpoint) <=
 _Static_assert(AGENT_OBSERVE_CHECKPOINT_SCOPES >=
 	       AGENT_OBSERVE_RECOVERY_MAX_SCOPES,
 	       "checkpoint must cover the recovery ABI window");
-_Static_assert(sizeof(struct agent_observe_checkpoint) == 8024 &&
-	       sizeof(struct agent_observe_checkpoint_scope) == 1968 &&
+_Static_assert(sizeof(struct agent_observe_checkpoint) == 7592 &&
+	       sizeof(struct agent_observe_checkpoint_scope) == 1488 &&
 	       sizeof(struct agent_observe_checkpoint_entry) == 240,
-	       "observation checkpoint v7 disk geometry");
+	       "observation checkpoint v8 disk geometry");
 
 static uint64
 agent_observe_store_hash(const struct agent_observe_checkpoint *image)

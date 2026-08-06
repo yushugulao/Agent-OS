@@ -71,14 +71,14 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 
 这条命令会按顺序执行：
 
-- 先检查 18-case 时长预算已经过当前 case 集合的有效校准；provisional 会在 profile/QEMU 前失败；
+- 先检查 `ci/kernel-budgets.json` 登记的 Agent case 集合已经过有效校准；provisional 会在 profile/QEMU 前失败；
 - 双目标结构检查；
 - 内核增长、PCB、栈容量和 Agent 模块边界门；
 - 宿主机科研 Agent 平台能力对齐检查；
 - 宿主机科研 Agent 平台测试主题对齐检查；
 - 宿主机 Web/API/action 规模检查；
 - 状态渲染与 API JSON 检查；
-- 先运行与普通套件分离的 Context-sync/WAIT_ATOMIC `agentfinal_ucore` profile，再运行 18-case AgentOS 内核专项；prelude 使用独立 timing file，不计入 18-case 校准，并保存完整 canonical LF Guest 日志供后续实测提取；
+- 先运行与普通套件分离的 Context-sync/WAIT_ATOMIC `agentfinal_ucore` profile，再运行版本化 AgentOS 内核专项；prelude 使用独立 timing file，不计入 Agent suite 校准，并保存完整 canonical LF Guest 日志供后续实测提取；
 - 共享基础安全加固、不含 AgentOS 扩展的 uCore 对照平台和 AgentOS-uCore 平台的 QEMU 运行；
 - 主目标、Agent 对抗场景和 baseline 的进程生命周期复测；
 - 双目标 syscall 公平性和全局文件对象表资源配额复测；
@@ -267,10 +267,6 @@ evidence/releases/<bundle>/logs/raw/dual-agentos-host-run-result.state
 
 Context/timeline、事件等待、并发写入、LLM Relay 和恢复流程仍由专项 Guest 测试验证功能和安全语义。它们在补充同等级的真实 Guest marker、来源哈希和重复测量前，不再宣称拥有独立 raw CSV、性能曲线或“六组原始实验数据”。仓库也不再提交由旧公式数据绘制的示例 `experiment-*.svg`。
 
-![用户态成本项与 AgentOS 替代机制](assets/verification-charts/cost-replacement.svg)
-
-这张图只是 `rp_backend_exec` 演示目录的架构示意：左侧列出普通用户态平台可能承担的成本，右侧列出 AgentOS 对应机制。它没有 provenance-bound Guest 原始测量，不能用于声称某项机制已动态通过，也不能给出性能收益。
-
 已移除硬编码布局的运行时示例，避免将演示图误读为性能证据。运行时性能只接受由可信动态测量生成、并与原始日志及 commit/run 身份绑定的数据。
 
 文件查询图只在 provenance-bound 测量可用时生成。阅读时必须同时打开 `file-query-benchmark.csv` 和 JSON manifest，核对三条路径的 `operations`、`primary_value`、`duration_unit=us`、`duration_value`、`rebuild_records` 以及来源绑定。时间来自 Guest `gettimeofday` 的原始微秒差值，允许真实的零差值，禁止 floor 或公式补值。图表只是同一 CSV 的可视化，不是额外证据，也不能用来外推 Context、事件、并发写入、LLM Relay 或恢复路径的性能。
@@ -363,15 +359,15 @@ TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf- \
   --case-timeout 240s
 ```
 
-该 harness 预声明并串行执行严格三轮 18-case，为 campaign、round、session 和 execution 生成互不
+该 harness 预声明并串行执行严格三轮版本化 Agent case 集合，为 campaign、round、session 和 execution 生成互不
 重复的 256-bit nonce。每个 QEMU 执行由 runner 独占创建 attestation，绑定源码 commit/tree、
 runner 与 QEMU/编译器/Python 路径和哈希、内核及文件系统镜像、Guest 日志、真实 monotonic
-区间和退出结果；18 行 timing 只能由完整 attestation 集合重建。输出明确标记为未签名的本地 E3
+区间和退出结果；timing inventory 只能由与 `agent_test_suite.expected_cases` 完整一致的 attestation 集合重建。输出明确标记为未签名的本地 E3
 复现证据，不是第三方执行或签名证明，也不能证明控制本机和工具的操作者没有主动伪造。
 采集器逐字节核对 tracked tree，并把版本化 profile 中的 GCC/ld/objcopy/objdump/as、Host CC、
 QEMU、Python、Bash、Make 与 Git 身份回灌给子进程；production 路径没有公式或 fixture 输入。单元测试中的合成
 fixture 只验证拒绝逻辑，不能成为校准事实。未校准的本地环境仍验完整
-18-case 语义、日志和 timing inventory，但以 `duration-profile profile=none` 回执明确跳过
+Agent suite 语义、日志和 timing inventory，但以 `duration-profile profile=none` 回执明确跳过
 墙钟阈值。旧 schema-2 timing/log 包只能作为历史记录。
 
 校准子进程不继承任意开发环境：只保留最小 OS/runtime 变量，并固定 locale、临时目录、
@@ -380,46 +376,7 @@ fixture 只验证拒绝逻辑，不能成为校准事实。未校准的本地环
 条目；每轮 clean 后重验零额外条目，结束后只允许版本化清单中的 build、用户目标、镜像和
 `initproc.S` 输出。大小写等价路径、空目录、symlink 和 NTFS junction 同样 fail closed。
 
-期望关键标记：
-
-```text
-agentfinal_ucore: parent passed
-agentfs_ucore: parent passed
-agentscan_ucore: parent passed
-agentloop_ucore: parent passed
-agentsched_ucore: parent passed
-agentconflict_ucore: parent passed
-agentllm_ucore: parent passed
-agentbench_ucore: parent passed
-labbench_ucore: parent passed
-labdemo_ucore: parent passed
-agentsecurity_ucore: parent passed
-agenttoolabi_ucore: parent passed
-agentscope_ucore: pipe_redelegation_isolation=1
-agentscope_ucore: scope_storage_isolation=1 catalog_limit=112 autoscan_limit=96 explicit_reserve=16 workflow_created=97 peer_created=97 public_created=70 overflow_unindexed=1 autoscan_flag_no_space=1 explicit_no_space=1 reusable=1
-agentscope_ucore: metadata_write_coalescing=1 writes=<at-least-128> commits=<bounded>
-agentscope_ucore: metadata_cross_scope_progress=1 queries=32 latency_ms=<at-most-5000>
-agentscope_ucore: metadata_final_consistency=1
-agentscope_ucore: metadata_volatile_reload_isolation=1 writes=32
-agentscope_ucore: observe_query_bounded=1 ...
-agentscope_ucore: observe_index_ordered=1
-agentscope_ucore: observe_cross_scope_progress=1 ...
-agentscope_ucore: scope_close_authority=1
-agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1
-agentscope_ucore: scope_forced_cleanup=1
-agentscope_ucore: scope_replacement_admitted=1
-agentscope_ucore: parent passed
-agenttrust_ucore: parent passed
-agentvfs_ucore: parent passed
-iobudget_ucore: parent passed
-usersafety_ucore: parent passed
-blocking_semantics_ucore: mutex_owner=1 nonowner_rejected=1 recursive_rejected=1 owner_exit_handoff=1
-blocking_semantics_ucore: waittid_sleep=1 pipe_wait_queue=1 close_wake_all=1
-blocking_semantics_ucore: parent passed
-[agent-tests] all Agent-OS uCore checks passed
-```
-
-这组测试覆盖 Agent Context、结构化工具调用、metadata/观测、可信 workflow 关闭和资源回收。lifecycle 回归要求 PUBLIC child 与 grandchild 分别确认 Agent/VFS 凭据清零、独立发送 `P`/`G` ready，之后仍随原 `(id,generation)` 谱系撤销。历史独立 `agentscope_ucore` 曾取得 `public_lineage=1` 和 `parent passed`；发布 C 的完整套件仍必须在固定 runner 上按上述严格退出契约验收并进入 bundle。
+各 case 的完整 marker 与负向条件由 runner validator 维护，本文不复制容易与实现分叉的 marker 清单。套件覆盖 Agent Context、结构化工具调用、metadata/观测、可信 workflow 关闭和资源回收；只有 `ci/kernel-budgets.json` 登记的全部 case 通过严格退出契约并进入同一 release bundle，才能形成当前发布结论。
 
 ## 状态渲染验证
 
@@ -471,7 +428,7 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make local-check
 ```
 
-旧提交的计时只证明对应源码，不能外推到当前 case 清单。独立 Context-sync/WAIT_ATOMIC prelude 不计入 Agent suite 时长。`make full-verify` 会串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner，并保存原始 runner/Guest 日志。发布状态由 `INDEX.md` 和 bundle manifest 判定；完整边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
+Agent suite 的时长数据必须与 `ci/kernel-budgets.json` 中的源码 fingerprint、profile 和 case 清单完全匹配。独立 Context-sync/WAIT_ATOMIC prelude 不计入 suite 时长。`make full-verify` 会串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner，并保存原始 runner/Guest 日志。发布状态由 `INDEX.md` 和 bundle manifest 判定；完整边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
 
 ## 内核机制说明
 

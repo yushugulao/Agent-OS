@@ -11,7 +11,7 @@
 #define PHASE_MAGIC AGENT_OBSERVE_TEST_PHASE_MAGIC
 #define AUDIT_READ_MAX 16
 #define AUDIT_READ_BATCH 8
-#define RECOVERY_RECORD_MAX 8
+#define RECOVERY_RECORD_MAX 6
 /* Covers two bounded full-bank scans plus catalog publication. */
 #define PHASE_OPEN_ATTEMPTS 256
 #define WORKFLOW_CREATE_ATTEMPTS 256
@@ -886,7 +886,7 @@ verify_recovery_records(
 	check(matched, "READ preserves stable actor and lifecycle identity");
 	check(receipt_matched,
 	      "READ re-verifies the exact durable receipt after reboot");
-	printf("agentobsreboot_ucore: checkpoint_v7_recovered=1 records=%u\n",
+	printf("agentobsreboot_ucore: checkpoint_v8_recovered=1 records=%u\n",
 	       request.returned);
 }
 

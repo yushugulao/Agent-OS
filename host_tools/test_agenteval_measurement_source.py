@@ -425,7 +425,7 @@ def main() -> int:
         1,
     ))
     for directive, replacement in (
-        ("#define EVAL_PATH_LOADS 4", "#define EVAL_PATH_LOADS 3"),
+        ("#define EVAL_PATH_LOADS 4", "#define EVAL_PATH_LOADS 2"),
         ("#define EVAL_PATH_MAX_QUERIES 8", "#define EVAL_PATH_MAX_QUERIES 7"),
         ("#define EVAL_UNION_LOADS 5", "#define EVAL_UNION_LOADS 4"),
         (
@@ -433,10 +433,7 @@ def main() -> int:
             "#define EVAL_FILE_RECORD_SCHEMA 2",
         ),
         ("#define TASK5_DELAY_TICKS 8", "#define TASK5_DELAY_TICKS 1"),
-        (
-            "#define TASK5_MAX_IDLE_DISPATCHES 4",
-            "#define TASK5_MAX_IDLE_DISPATCHES 64",
-        ),
+        ("#define TASK5_TICK_MSEC 10", "#define TASK5_TICK_MSEC 1"),
         ("#define TASK5_MAX_WAIT_LOOPS 3", "#define TASK5_MAX_WAIT_LOOPS 30"),
         ("#define TASK5_RECEIPT_VALUES 28", "#define TASK5_RECEIPT_VALUES 19"),
     ):
@@ -636,14 +633,14 @@ def main() -> int:
 
     commit = "a" * 40
     receipt = build_measurement_source_receipt(ROOT, source_commit=commit)
-    assert CONTRACT_VERSION == "agenteval-measurement-source-v9"
+    assert CONTRACT_VERSION == "agenteval-measurement-source-v11"
     assert FORMAL_BOOT_COUNT == 7
     assert receipt["formal_boot_count"] == FORMAL_BOOT_COUNT
     assert receipt["contract_versions"]["functional"] == (
-        "agentos-functional-acceptance-source-v2"
+        "agentos-functional-acceptance-source-v4"
     )
     assert receipt["contract_versions"]["functional_compile"] == (
-        "agentos-functional-compile-closure-v2"
+        "agentos-functional-compile-closure-v3"
     )
     assert receipt["stop_rule"] == "fixed_7_boots_per_source_commit"
     validate_measurement_source_receipt_shape(receipt, expected_commit=commit)
@@ -735,7 +732,6 @@ def main() -> int:
     assert "nfs/Makefile" in policy_paths
     assert "baseline_ucore/nfs/Makefile" in policy_paths
     assert "host_tools/agent_metadata_journal.py" in policy_paths
-    assert "host_tools/same_kernel_performance.py" in policy_paths
     assert "user/include/research_platform_state.h" in policy_paths
     assert "baseline_ucore/user/include/research_platform_state.h" in policy_paths
     forged = json.loads(json.dumps(receipt))

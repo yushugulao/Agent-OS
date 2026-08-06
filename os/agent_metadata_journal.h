@@ -56,16 +56,6 @@ uint64 agent_meta_journal_slot_hash(const amd_journal_slot *);
 uint64 agent_meta_journal_base_hash(uint64, uint64);
 int agent_meta_journal_cursor_init(struct agent_meta_journal_cursor *,
 				   uint64, uint64);
-int agent_meta_journal_plan_build(struct agent_meta_journal_plan *,
-				  const struct agent_meta_journal_cursor *,
-				  uint, struct workflow_lifecycle_key,
-				  const struct agent_meta_journal_change *,
-				  uint);
-int agent_meta_journal_plan_diff(struct agent_meta_journal_plan *,
-				 const struct agent_meta_journal_cursor *,
-				 const struct agent_meta_store *,
-				 const struct agent_meta_store *, uint,
-				 struct workflow_lifecycle_key);
 int agent_meta_journal_plan_delta(
 	struct agent_meta_journal_plan *,
 	const struct agent_meta_journal_cursor *, uint,

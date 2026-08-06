@@ -278,7 +278,6 @@ struct proc {
 	uint64 agent_control_id;
 	uint64 agent_controller_id;
 	uint64 agent_ctx_base;
-	uint64 agent_ctx_size;
 	uint64 agent_call_count;
 	uint64 agent_meta_txn_wait_count;
 	int heartbeat_interval;
@@ -294,11 +293,7 @@ struct proc {
 	uint64 context_active_path_oldest;
 	uint64 context_branch_generation;
 	uint64 context_cause_branch_generation;
-	uint64 context_path_dropped;
 	uint64 context_path_rollback_count;
-	int context_eviction_policy;
-	uint64 latest_response_offset;
-	uint64 records_offset;
 	uint64 agent_ctx_kva[AGENT_CONTEXT_PAGES];
 	uint64 agent_shadow_kva[AGENT_CONTEXT_PAGES];
 	int agent_mailbox_valid;
@@ -433,14 +428,11 @@ struct file *fdget(int);
 /* -1 invalid, 0 detached/non-final, 1 detached with a prepared receipt. */
 int fdclose_prepare(int, struct file_close_receipt *);
 int fdclose(int);
-int proc_file_slot_reserve(struct proc *,
-			   struct resource_account_handle *, int *);
 int proc_file_slots_reserve(struct proc *, uint,
 			    struct resource_account_handle *, int *);
 void proc_file_slot_release(struct resource_account_handle, int);
 void proc_resource_account_reap(struct resource_account_handle);
 int init_stdio(struct proc *);
-int push_argv(struct proc *, char **);
 int push_argv_image(pagetable_t, uint64, struct trapframe *, char **);
 enum proc_image_install_mode {
 	PROC_IMAGE_INSTALL_BOOTSTRAP = 1,

@@ -54,6 +54,20 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     RUNNER.parse_args(["--output-dir", "unused"])
 
+    def test_default_lane_and_build_budgets_are_resource_adaptive(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("AGENTOS_QEMU_JOBS", None)
+        environment.pop("AGENTOS_BUILD_JOBS", None)
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
+            RUNNER,
+            "adaptive_jobs",
+            side_effect=lambda kind: {"qemu": 3, "build": 7}[kind],
+        ):
+            args = RUNNER.parse_args(["--output-dir", "unused"])
+        self.assertEqual(args.jobs, 3)
+        self.assertEqual(args.build_jobs, 7)
+        self.assertNotIn("labbench_ucore", RUNNER.AGENT_CASE_NAMES)
+
     def test_child_environment_drops_nested_make_and_parent_evidence(self) -> None:
         case = RUNNER.CASE_BY_LABEL["observe-recovery"]
         with tempfile.TemporaryDirectory() as temp_name, mock.patch.dict(
@@ -80,6 +94,9 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             self.assertNotIn(key, environment)
         self.assertEqual(environment["AGENTOS_BUILD_JOBS"], "2")
         self.assertEqual(environment["AGENTOS_TEST_JOBS"], "1")
+        self.assertEqual(environment["AGENTOS_QEMU_JOBS"], "1")
+        self.assertEqual(environment["AGENTOS_OUTER_JOBS"], "1")
+        self.assertEqual(environment["AGENTOS_PARALLEL_DEPTH"], "1")
         self.assertEqual(environment["TMPDIR"], str(temporary_root))
         self.assertEqual(environment["TEMP"], str(temporary_root))
         self.assertEqual(environment["TMP"], str(temporary_root))
@@ -94,9 +111,11 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             str(output / "observe-recovery-before-reap.img"),
         )
         self.assertEqual(RUNNER.execution_jobs(4, False), 4)
-        self.assertEqual(RUNNER.execution_jobs(4, True), 1)
+        self.assertEqual(RUNNER.execution_jobs(4, True), 4)
         self.assertEqual(RUNNER.build_jobs_per_lane(24, 4), 6)
         self.assertEqual(RUNNER.build_jobs_per_lane(3, 4), 1)
+        self.assertEqual(RUNNER.allocate_build_jobs(10, 4), (3, 3, 2, 2))
+        self.assertEqual(sum(RUNNER.allocate_build_jobs(11, 4)), 11)
 
     def test_agent_suite_uses_isolated_targeted_runs_and_merges_receipts(self) -> None:
         case = RUNNER.AGENT_CASES[0]
@@ -333,6 +352,41 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             self.assertEqual(empty_result.status, 65)
             self.assertIn("missing or empty artifacts", empty_result.detail)
 
+    def test_whole_case_timeout_terminates_the_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            root = Path(temp_name)
+            lane = root / "lane"
+            output = root / "output"
+            (lane / "scripts").mkdir(parents=True)
+            output.mkdir()
+            runner = lane / "scripts" / "slow.py"
+            survivor = root / "survivor"
+            child = (
+                "import pathlib,time;time.sleep(2);"
+                f"pathlib.Path({str(survivor)!r}).touch()"
+            )
+            runner.write_text(
+                "import subprocess,sys,time\n"
+                f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+                "time.sleep(10)\n",
+                encoding="ascii",
+            )
+            case = RUNNER.RegressionCase("slow", "scripts/slow.py", 1)
+            started = time.monotonic()
+            result = RUNNER.run_case(
+                1,
+                lane,
+                case,
+                output,
+                sys.executable,
+                timeout=1,
+            )
+            self.assertEqual(result.status, 124)
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertIn("timeout after 1s", result.detail)
+            time.sleep(1.5)
+            self.assertFalse(survivor.exists())
+
     def test_lane_layout_is_trusted_by_formal_python_child(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             root = Path(temp_name) / "repo"
@@ -456,7 +510,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                     "--jobs",
                     "2",
                     "--build-jobs",
-                    "8",
+                    "9",
                     "--bash",
                     sys.executable,
                     "--case",
@@ -476,6 +530,9 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             )
             self.assertEqual(summary["effective_jobs"], 2)
             self.assertEqual(summary["lane_build_jobs"], 4)
+            self.assertEqual(summary["lane_build_job_slots"], [5, 4])
+            self.assertEqual(summary["allocated_build_jobs"], 9)
+            self.assertEqual(summary["case_timeout_seconds"], 3600)
             self.assertEqual(
                 summary["case_order"], [case.label for case in RUNNER.CASES[:2]]
             )
@@ -526,7 +583,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                     "--jobs",
                     "2",
                     "--build-jobs",
-                    "8",
+                    "9",
                     "--bash",
                     sys.executable,
                     "--case",
@@ -545,7 +602,10 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 (evidence_output / "run-summary.json").read_text(encoding="ascii")
             )
             self.assertEqual(evidence_summary["requested_jobs"], 2)
-            self.assertEqual(evidence_summary["effective_jobs"], 1)
+            self.assertEqual(evidence_summary["effective_jobs"], 2)
+            self.assertEqual(
+                evidence_summary["lane_build_job_slots"], [5, 4]
+            )
             evidence_intervals = [
                 (float(fields[1]), float(fields[2]))
                 for fields in (
@@ -555,8 +615,9 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                     .splitlines()
                 )
             ]
-            self.assertGreaterEqual(
-                evidence_intervals[1][0], evidence_intervals[0][1]
+            self.assertLess(
+                max(start for start, _ in evidence_intervals),
+                min(end for _, end in evidence_intervals),
             )
             worktrees = subprocess.run(
                 ["git", "-C", str(root), "worktree", "list", "--porcelain"],

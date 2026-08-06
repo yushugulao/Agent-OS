@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict Observation v7 acceptance policy layered over the disk parser."""
+"""Strict Observation v8 acceptance policy layered over the disk parser."""
 from __future__ import annotations
 
 import argparse
@@ -7,18 +7,16 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable
-
 if __package__:
     from . import agent_observe_disk_contract as _contract
 else:
     import agent_observe_disk_contract as _contract
-
 DEFAULT_OBSERVE_CONTRACT = _contract.DEFAULT_OBSERVE_CONTRACT
 ObservationEvidenceError = _contract.ObservationEvidenceError
 ObservationLayout = _contract.ObservationLayout
 load_observation_contract = _contract.load_observation_contract
 DEFAULT_METADATA_CONTRACT = Path(__file__).resolve().parents[1] / "ci" / "agent-metadata-disk-format.json"
-ACCEPTANCE_GEOMETRY = (8, 4, 4)
+ACCEPTANCE_GEOMETRY = (6, 4, 2)
 Verifier = Callable[..., dict[str, Any]]
 IDENTITY_MARKER = re.compile(
     r"^agentobsreboot_ucore: boot1_durable_identity "
@@ -54,10 +52,10 @@ def parse_boot1_identity(guest_log: str | bytes) -> dict[str, int]:
 def validate_observation_acceptance(
     result: dict[str, Any], layout: ObservationLayout
 ) -> dict[str, Any]:
-    """Require the v7 full-retention workload selected by the Guest identity."""
+    """Require the v8 full-retention workload selected by the Guest identity."""
     geometry = (layout.records_per_scope, layout.latest_tail, layout.diversity_anchors)
     if geometry != ACCEPTANCE_GEOMETRY:
-        raise ObservationEvidenceError("observation v7 acceptance geometry differs from 8/4/4")
+        raise ObservationEvidenceError("observation v8 acceptance geometry differs from 6/4/2")
     try:
         matched = result["arena"]["observation"]["matched_scope"]
         actual = (
@@ -77,7 +75,7 @@ def validate_observation_acceptance(
         if value != wanted
     ]
     if successful <= ACCEPTANCE_GEOMETRY[0]:
-        failures.append(f"successful_records={successful}, expected more than 8")
+        failures.append(f"successful_records={successful}, expected more than 6")
     failures.extend(
         f"anchor lacks {name} identity"
         for name in ("causal", "authority") if name not in classes
@@ -86,11 +84,11 @@ def validate_observation_acceptance(
         failures.append("anchor audit kind is not diverse")
     if failures:
         raise ObservationEvidenceError(
-            "observation v7 acceptance failed: " + "; ".join(failures)
+            "observation v8 acceptance failed: " + "; ".join(failures)
         )
     accepted = dict(result)
     accepted["acceptance"] = {
-        "profile": "observation-v7-tail-diversity", "matched_scope": matched["scope"],
+        "profile": "observation-v8-tail-diversity", "matched_scope": matched["scope"],
         "record_count": actual[0], "successful_records": successful,
         "tail_count": actual[1], "anchor_count": actual[2],
         "anchor_has_causal": "causal" in classes,

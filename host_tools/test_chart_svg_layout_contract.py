@@ -110,22 +110,13 @@ def main() -> int:
         fixture(work_dir, measured=True)
         summary.summarize(work_dir, out_dir, require_measured_experiments=True)
         charts = sorted((out_dir / "charts").glob("*.svg"))
-        assert len(charts) == 3, charts
+        assert len(charts) == 2, charts
         for chart in charts:
             validate_chart(chart)
-    doc_charts = [
-        repo_root / "docs" / "assets" / "verification-charts" / name
-        for name in (
-            "cost-replacement.svg",
-        )
-    ]
     static_runtime_chart = (
         repo_root / "docs" / "assets" / "verification-charts" / "runtime-observation.svg"
     )
     assert not static_runtime_chart.exists(), static_runtime_chart
-    assert all(chart.is_file() for chart in doc_charts), doc_charts
-    for chart in doc_charts:
-        validate_chart(chart)
     print("test_chart_svg_layout_contract: passed")
     return 0
 

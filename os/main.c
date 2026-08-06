@@ -38,10 +38,7 @@ void main()
 	fs_epoch_runtime_enable();
 	load_init_app();
 	infof("start scheduler!");
-	/* Boot-only callers may poll because no schedulable thread exists yet. */
-	show_all_files();
-	/* Runtime I/O admission may sleep, so enable it only after the first
-	 * runnable process and all polling-only boot I/O have been prepared. */
+	/* Runtime I/O admission starts after boot-only image loading completes. */
 	bio_policy_start();
 	virtio_disk_runtime_start();
 	scheduler();

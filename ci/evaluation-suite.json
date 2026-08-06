@@ -6,7 +6,7 @@
       "id": "file_query_path_index",
       "label": "Task 4 file-path query comparison",
       "loads": [8, 24, 48, 96],
-      "operation_counts": [8, 6, 4, 4],
+      "operation_counts": [8, 6, 4, 1],
       "claim_gate": {
         "minimum_absolute_improvement_us": 5,
         "minimum_baseline_duration_us": 20,
@@ -97,6 +97,29 @@
       "required_status": "supported"
     }
   },
+  "supplementary_scenarios": [
+    {
+      "concurrency_levels": [1, 2, 4],
+      "identity_order": ["A", "B", "C", "D"],
+      "id": "multi_identity_revisit_isolation",
+      "digest": "fnv1a64_challenge_bound",
+      "fairness_basis": "per_identity_isolated_completions",
+      "fairness_scale": "parts_per_million",
+      "goodput_unit": "milli_requests_per_second",
+      "label": "Multi-identity workflow revisit isolation",
+      "latency_unit": "us",
+      "latency_metrics": ["wait", "service", "turnaround"],
+      "isolation_definition": "correct_and_zero_contamination_and_no_fallback",
+      "percentile_method": "nearest_rank",
+      "performance_gate": null,
+      "qos_schema_version": 2,
+      "rounds_per_level": 16,
+      "task": "task1",
+      "throughput_unit": "milli_requests_per_second",
+      "turnaround_definition": "worker_completed_minus_parent_submitted",
+      "visit_sequence": ["A", "B", "C", "D", "A"]
+    }
+  ],
   "kind": "agentos-evaluation-suite",
   "pairing": {
     "independent_unit": "guest_boot",
@@ -105,6 +128,6 @@
     "minimum_inner_pairs": 7,
     "orders": ["AB", "BA"]
   },
-  "schema_version": 3,
-  "suite_id": "agentos-evaluation-v3"
+  "schema_version": 5,
+  "suite_id": "agentos-evaluation-v5"
 }

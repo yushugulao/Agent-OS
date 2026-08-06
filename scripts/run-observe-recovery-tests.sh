@@ -147,7 +147,7 @@ run_boot boot2 \
 	"agentobsreboot_ucore: boot2_reap_replicated=1" checkpoint
 grep -Fxq "agentobsreboot_ucore: audit_drop_recovered=1" \
 	"${TMPDIR_OBSERVE}/boot2.log"
-grep -Fxq "agentobsreboot_ucore: checkpoint_v7_recovered=1 records=8" \
+grep -Fxq "agentobsreboot_ucore: checkpoint_v8_recovered=1 records=6" \
 	"${TMPDIR_OBSERVE}/boot2.log"
 "${PYTHON_BIN}" host_tools/agent_observe_phase_control.py advance \
 	--image "${image}" --from phase1 --to phase2 \

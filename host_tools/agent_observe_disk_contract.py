@@ -320,14 +320,14 @@ def load_observation_contract(
     )
     if (
         layout.arena_bytes != 8192
-        or layout.observe_version != 7
-        or layout.observe_bytes != 8024
-        or layout.scope_slots != 4
-        or layout.scope_bytes != 1968
-        or layout.records_per_scope != 8
+        or layout.observe_version != 8
+        or layout.observe_bytes != 7592
+        or layout.scope_slots != 5
+        or layout.scope_bytes != 1488
+        or layout.records_per_scope != 6
         or layout.entry_bytes != 240
         or layout.latest_tail != 4
-        or layout.diversity_anchors != 4
+        or layout.diversity_anchors != 2
         or layout.latest_tail + layout.diversity_anchors != layout.records_per_scope
         or layout.retention_policy != 3
         or layout.arena_fields["image_hash"] + 8 != layout.arena_bytes
@@ -354,6 +354,8 @@ def load_observation_contract(
         or layout.uint_bytes != 4
         or layout.recovery_scope_slot >= layout.scope_slots
         or layout.reserved_scope_slots >= layout.scope_slots
+        or layout.scope_slots - layout.reserved_scope_slots != 4
+        or layout.recovery_scope_slot != 4
     ):
         raise ObservationEvidenceError("observation contract geometry is inconsistent")
     return layout

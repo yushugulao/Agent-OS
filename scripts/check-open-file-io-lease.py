@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the inode grant cache and syscall-scoped open-file token."""
+"""Check the trusted open-file authorization context and its cache."""
 
 from __future__ import annotations
 
@@ -40,106 +40,140 @@ def check(root: Path) -> None:
     header = compact((root / "os/open_file_io_lease.h").read_text())
     source_text = (root / "os/open_file_io_lease.c").read_text()
     source = compact(source_text)
-    file_source = compact((root / "os/file.c").read_text())
+    file_text = (root / "os/file.c").read_text()
+    file_source = compact(file_text)
     fs_source = compact((root / "os/fs.c").read_text())
     edit_source = compact((root / "os/agent_file_state.c").read_text())
 
-    require("structopen_file_io_token{uint64opaque[4];};" in header,
-            "I/O token must stay four words")
-    require("uintfile_generations[FILEPOOLSIZE];" in source,
-            "file-slot ABA generation is missing")
-    require("subject_generations" not in source,
-            "duplicated process-generation table returned")
+    for field in (
+        "structfile*file;", "structinode*inode;", "structproc*subject;",
+        "structresource_account_handleaccount;",
+        "structworkflow_lifecycle_keylifecycle;",
+        "conststructvfs_cred*cred;",
+        "uint64edit_authority_generation;", "uint64edit_deadline_tick;",
+        "uint64thread_generation;", "uint64receipt_generation;",
+        "uintinode_incarnation;", "uintinode_checksum;",
+        "uintinode_policy_generation;", "uintinode_exec_size;",
+        "uintinode_exec_flags;", "uintinode_exec_generation;",
+        "uintinode_exec_role_mask;", "uintinode_exec_layout_version;",
+        "uintinode_exec_rw_offset;", "uintinode_exec_profile;",
+        "enumvfs_operationoperation;", "ucharvalid;",
+    ):
+        require(field in header, "typed syscall authority is incomplete")
+    require("opaque[" not in header and "token_secret" not in source and
+            "token_seal" not in source and "security_stamp" not in source,
+            "kernel-private authority still pays a cryptographic sealing tax")
+    require("file_generations" not in source and
+            "open_file_io_lease_file_init" not in source and
+            "open_file_io_lease_file_retire" not in source,
+            "pinned file references still carry a duplicate lifetime protocol")
     require("OPEN_FILE_IO_CACHE_CAP64U" in source,
-            "bounded grant cache changed")
-    require("structopen_file_io_grant{structinode*inode;structproc*subject;" in source,
-            "authorization grant is still bound to one open-file instance")
-    require("generationexhausted" not in source and
-            source.count("memset(open_file_io_state.grants,0,") >= 1,
-            "generation rollover is not fail-closed")
-
-    init = function(source_text, "open_file_io_lease_file_init")
-    retire = function(source_text, "open_file_io_lease_file_retire")
-    for body in (init, retire):
-        require("open_file_io_next32(" in body,
-                "file-slot generation is not advanced")
-        require("for(" not in body and "while(" not in body,
-                "file lifetime hook is no longer O(1)")
+            "bounded authorization cache changed")
+    require("structopen_file_io_grant{structfile*file;structinode*inode;"
+            "structproc*subject;" in source,
+            "authorization cache is not bound to the trusted file object")
 
     acquire = function(source_text, "open_file_io_lease_acquire")
     validate = function(source_text, "open_file_io_token_validate")
     seed = function(source_text, "open_file_io_lease_seed_authorized")
-    grant_match = function(source_text, "open_file_io_grant_matches_locked")
+    grant_match = function(source_text, "open_file_io_grant_matches")
+    subject_match = function(source_text, "open_file_io_subject_matches")
     inode_match = function(source_text, "open_file_io_inode_matches")
-    file_match = function(source_text, "open_file_io_file_matches_locked")
-    issue = function(source_text, "open_file_io_token_issue_locked")
-    cache_slot_fn = function(source_text, "open_file_io_cache_slot")
-    grant_stamp = function(source_text, "open_file_io_grant_stamp_locked")
+    file_match = function(source_text, "open_file_io_file_matches")
+    edit_match = function(source_text, "open_file_io_edit_matches")
+    issue = function(source_text, "open_file_io_token_issue")
+    cache_slot = function(source_text, "open_file_io_cache_slot")
+
     require(acquire.count("vfs_inode_authorize(") == 1,
             "acquire must have exactly one full VFS authorization")
     require("agent_edit_write_lease_allowed(" in acquire,
-            "workflow edit expiry is not captured")
-    require(acquire.index("open_file_io_grant_matches_locked(") <
+            "write acquisition does not capture edit authority")
+    require(acquire.index("open_file_io_grant_matches(") <
             acquire.index("vfs_inode_authorize("),
             "full authorization precedes the cache fast path")
-    require("cache_slot=open_file_io_cache_slot(file->ip,proc,operation)" in acquire,
-            "grant cache is still keyed by short-lived file slots")
-    require("open_file_io_operation_mask(operation)*0x9e3779b97f4a7c15ULL" in
-            cache_slot_fn,
-            "read and write grants collide in the same cache slot")
-    require("file_generations[file_slot]" in acquire and
-            "edit_authority_generation" in acquire,
-            "slow-path publication lacks generation revalidation")
-    require("grant->file" not in grant_match,
-            "reusable authorization grant retains an open-file pointer")
-    for fragment in (
-        "grant->inode_dev==inode->dev",
-        "grant->inode_inum==inode->inum",
-        "grant->inode_incarnation==inode->vfs_incarnation",
-        "grant->inode_policy_generation==inode->vfs_policy_generation",
-    ):
-        require(fragment in inode_match,
-                "reusable grant lacks stable inode security identity")
-    require("generation==open_file_io_state.file_generations[slot]" in file_match,
-            "syscall token does not reject file-slot ABA")
-    require("token->opaque[0]=((uint64)file_slot<<32)|(uint)operation" in issue and
-            "token->opaque[1]=file_generation" in issue,
-            "syscall token does not carry its file-slot generation")
-    require("token->opaque[2]=grant->edit_deadline_tick" in issue and
-            "grant->security_stamp" in issue,
-            "syscall token does not carry its self-authenticating stamp")
-    require("open_file_io_token_seal_locked(token,current.security_stamp,thread)" in validate and
-            "open_file_io_grant_capture_locked(&current,inode,proc,operation,edit_authority_generation,edit_deadline_tick)" in validate and
-            "open_file_io_grant_matches_locked(&current,inode,proc,operation)" in validate and
-            "file=&filepool[file_slot]" in validate and
-            "open_file_io_file_matches_locked(" in validate,
-            "filesystem token validation is incomplete")
-    require("kernel_receipt_generation" in source and
-            "vfs_inode_authorize(" not in validate,
-            "filesystem hand-off repeats full VFS authorization")
-    require("open_file_io_state.grants" not in validate and
-            "grant->sequence" not in source,
-            "syscall token still depends on grant-cache residency")
-    for fragment in (
-        "grant->account.generation", "grant->lifecycle.generation",
-        "grant->cred.capabilities", "grant->edit_authority_generation",
-        "grant->inode_incarnation", "grant->inode_policy_generation",
-        "grant->inode_checksum", "grant->allowed",
-    ):
-        require(fragment in grant_stamp,
-                "self-authenticating stamp omits revocable security state")
-    require("open_file_io_cred_equal(authorized_cred,&current_cred)" in seed and
-            "open_file_io_file_matches_locked(" in seed and
-            "agent_edit_write_lease_allowed(" in seed and
-            "open_file_io_grant_capture_locked(" in seed,
-            "open-time authorization proof is not safely published")
-    require("cache_slot=open_file_io_cache_slot(file->ip,proc,operation)" in seed,
-            "open seed is keyed by short-lived file slots")
+    require(acquire.count("open_file_io_grant_matches(") >= 2,
+            "slow-path authorization is not revalidated before publication")
+    require("slot=open_file_io_cache_slot(file,proc,operation)" in acquire and
+            "open_file_io_operation_mask(operation)*0x9e3779b97f4a7c15ULL" in
+            cache_slot,
+            "cache key does not separate trusted file, subject and operation")
 
-    require("open_file_io_lease_file_init(f);" in file_source and
-            "open_file_io_lease_file_retire(f);" in file_source,
-            "filepool lifetime is not wired")
-    fileopen = function((root / "os/file.c").read_text(), "fileopen")
+    for fragment in (
+        "token->file=grant->file", "token->inode=grant->inode",
+        "token->subject=grant->subject", "token->account=grant->account",
+        "token->lifecycle=grant->lifecycle", "token->cred=authorized_cred",
+        "token->thread_generation=thread->identity_generation",
+        "token->receipt_generation=thread->kernel_receipt_generation",
+        "token->inode_incarnation=grant->inode_incarnation",
+        "token->inode_checksum=grant->inode_checksum",
+        "token->inode_policy_generation=grant->inode_policy_generation",
+        "token->inode_exec_generation=grant->inode_exec_generation",
+        "token->inode_exec_profile=grant->inode_exec_profile",
+        "token->operation=operation", "token->valid=1",
+    ):
+        require(fragment in issue, "typed syscall authority is not fully issued")
+
+    require("vfs_inode_authorize(" not in validate,
+            "filesystem hand-off repeats full VFS authorization")
+    require("open_file_io_state.grants" not in validate,
+            "in-flight syscall authority still depends on cache residency")
+    for fragment in (
+        "token->subject==proc", "token->inode==inode",
+        "thread->identity_generation==token->thread_generation",
+        "thread->kernel_receipt_generation==token->receipt_generation",
+        "open_file_io_file_matches(token->file,inode,operation)",
+        "open_file_io_subject_matches(proc,token->account,token->lifecycle,"
+        "token->cred)",
+        "open_file_io_inode_matches(token->inode_incarnation,"
+        "token->inode_checksum,token->inode_policy_generation,"
+        "token->inode_exec_size,token->inode_exec_flags,"
+        "token->inode_exec_generation,token->inode_exec_role_mask,"
+        "token->inode_exec_layout_version,token->inode_exec_rw_offset,"
+        "token->inode_exec_profile,inode)",
+        "open_file_io_edit_matches(inode,token->cred,operation,"
+        "token->edit_authority_generation,token->edit_deadline_tick)",
+    ):
+        require(fragment in validate,
+                "blocking-boundary revocation validation is incomplete")
+
+    for fragment in (
+        "proc->teardown_state!=PROC_TEARDOWN_LIVE",
+        "resource_account_handle_equal(account,proc->resource_account)",
+        "resource_account_active(account)",
+        "workflow_lifecycle_key_equal(lifecycle,current_lifecycle)",
+        "open_file_io_lifecycle_live(current_lifecycle)",
+        "open_file_io_cred_equal(cred,&current_cred)",
+    ):
+        require(fragment in subject_match, "subject generation checks are incomplete")
+    require("file->ref>=1" in file_match and "file->ip==inode" in file_match and
+            "file->readable" in file_match and "file->writable" in file_match,
+            "pinned file authority checks are incomplete")
+    require("incarnation==inode->vfs_incarnation" in inode_match and
+            "checksum==inode->vfs_checksum" in inode_match and
+            "policy_generation==inode->vfs_policy_generation" in inode_match and
+            "exec_generation==inode->exec_generation" in inode_match and
+            "exec_profile==inode->vfs_exec_profile" in inode_match,
+            "inode security identity is incomplete")
+    require("agent_edit_write_lease_snapshot(" in edit_match and
+            "authority_generation==current_generation" in edit_match and
+            "deadline_tick==current_deadline" in edit_match and
+            "authority_generation==0&&deadline_tick==0" in edit_match,
+            "edit revocation generation is not checked precisely")
+    require("open_file_io_file_matches(" in grant_match and
+            "open_file_io_subject_matches(" in grant_match and
+            "open_file_io_inode_matches(" in grant_match and
+            "open_file_io_edit_matches(" in grant_match,
+            "cache hit bypasses a revocable security axis")
+
+    require("open_file_io_cred_equal(authorized_cred,&current_cred)" in seed and
+            "agent_edit_write_lease_allowed(" in seed and
+            "open_file_io_grant_capture(" in seed and
+            "open_file_io_grant_matches(" in seed,
+            "open-time authorization proof is not safely published")
+    require("open_file_io_lease_file_init" not in file_source and
+            "open_file_io_lease_file_retire" not in file_source,
+            "filepool still wires the removed duplicate lifetime hooks")
+    fileopen = function(file_text, "fileopen")
     require(fileopen.count("open_file_io_lease_seed_authorized(") == 2 and
             fileopen.index("vfs_inode_authorize(") <
             fileopen.index("open_file_io_lease_seed_authorized("),
@@ -153,18 +187,14 @@ def check(root: Path) -> None:
             edit_source.count(
                 "agent_file_counter_next(&version->edit_authority_generation)") >= 2 and
             "agent_file_counter_next(&version_entry->edit_authority_generation)" in
-            edit_source and
-            "agent_edit_write_lease_snapshot(" in edit_source,
+            edit_source and "agent_edit_write_lease_snapshot(" in edit_source,
             "edit authority lacks an inode-scoped revocation generation")
-    require("open_file_io_lease_edit_changed" not in source and
-            "open_file_io_lease_edit_changed" not in edit_source and
-            "grant->edit_authority_generation!=0" in grant_match,
-            "global edit invalidation still affects unrelated I/O")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--root", type=Path,
+                        default=Path(__file__).resolve().parents[1])
     args = parser.parse_args()
     try:
         check(args.root.resolve())

@@ -6,49 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本运行 `ci/kernel-budgets.json` 登记的 Agent case 清单。当前配置为 `provisional_requires_full_suite`，不能复用旧 fingerprint、基线或上限；最终提交完成三轮重校准后才恢复本地时长门。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 单独记账；预算 checker、通用 runner 和生产 profile validator 的自测集合以当前源码为准：
-
-```bash
-agentfinal_ucore
-agentfs_ucore
-agentscan_ucore
-agentloop_ucore
-agentsched_ucore
-agentconflict_ucore
-agentllm_ucore
-agentbench_ucore
-labbench_ucore
-labdemo_ucore
-agentsecurity_ucore
-agenttoolabi_ucore
-agentscope_ucore
-agenttrust_ucore
-agentvfs_ucore
-iobudget_ucore
-usersafety_ucore
-blocking_semantics_ucore
-```
-
-各程序分工：
-
-| 程序 | 作用 |
-| --- | --- |
-| `agentfinal_ucore` | 覆盖任务一至三核心功能，同时检查文件索引和事件自唤醒 |
-| `agentfs_ucore` | 检查真实 inode 绑定、私有 `.agentmeta` 重载、字段驱动 action、依赖按需解析、metadata 工作预算和稳定 handoff 端点 |
-| `agentscan_ucore` | 检查任务四的根目录自动扫描、真实文件元数据建立和索引维护 |
-| `agentloop_ucore` | 检查任务五的 FIFO 事件队列、stable source 上限、SYSTEM TIMER 共存、unwatch、有限 timeout 睡眠、wait cancel，以及 heartbeat 的内生唤醒、调频、合并、停止、边界和旧 ABI |
-| `agentsched_ucore` | 检查任务五的 Agent 感知调度、受权配置、事件状态、调度原因和公平性计数 |
-| `agentconflict_ucore` | 检查真实文件编辑租约、版本提交和非持有者写入拒绝 |
-| `agentllm_ucore` | 检查结构化 LLM 请求、Relay 响应、完成事件和 timeline 记录 |
-| `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引候选记录数的性能证据，并验证 timeout/heartbeat、busy polling 与 wait/wake 计时 |
-| `labbench_ucore` | 综合场景中的性能入口，当前包装运行 `agentbench_ucore` |
-| `labdemo_ucore` | 呈现一个由 orchestrator 控制的多 Agent 实验恢复场景 |
-| `agentsecurity_ucore` | 呈现普通进程和低权限 Agent 无法越权，并验证普通 mail 与多 run 精确恢复 |
-| `agentscope_ucore` | 检查动态 workflow scope、跨域对象/IPC 隔离、事务竞争、微写合并、观测双索引与预算化查询、跨域进展、配额、fd 委派，以及可信关闭权、根退出强制撤销、阻塞成员清理和生命周期回收 |
-| `agenttrust_ucore` | 检查代码 RX、数据 RW+NX、可信映像不可变及 Agent 角色与可执行 inode 绑定 |
-| `agentvfs_ucore` | 检查 public/workflow 文件隔离、非 Agent worker 能力衰减、跨 scope fd 撤销及 pipe 单跳委派 |
-| `iobudget_ucore` | 检查稳定 PUBLIC/workflow owner、真实提交归因、请求内物理传输批量结算、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出清理的归因/debt 结算、buffer cache floor/cap 和 CONTROL 保留预算下的有界进展；ABI v6 定向结果只作阶段性回归，当前发布结果以冻结提交原始日志为准 |
-| `usersafety_ucore` | 检查用户指针范围、exec 参数、pipe/file 失败回滚和定向等待队列 |
+完整专项脚本运行 `ci/kernel-budgets.json` 中 `agent_test_suite.expected_cases` 登记的 Agent case，并由同一配置判定时长 profile。文档不复制成员或顺序。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 单独记账。各 case 的能力映射见 [要求追踪表](requirements-traceability.md)，动态结论只从 [正式证据索引](../../evidence/releases/INDEX.md) 读取。
 
 ## 2. 环境和运行方式
 
@@ -65,24 +23,11 @@ blocking_semantics_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-如果需要分步示例，可以分别运行：
+如果需要分步定位，从版本化清单选择一个 case：
 
 ```bash
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentscan_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsched_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentconflict_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentllm_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labbench_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentscope_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agenttrust_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentvfs_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAPTER=agent
+AGENT_TEST_CASE=<case> TOOLPREFIX=riscv64-linux-gnu- \
+  QEMU=qemu-system-riscv64 bash scripts/run-agent-tests.sh
 ```
 
 ## 3. 正确性示例
@@ -330,7 +275,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAP
 
 `agentsecurity_ucore` 覆盖普通进程 mail 最小路径；普通进程不能直接投递事件、取消 Agent 等待或修改 Agent 文件元数据；usershell 等价的普通 `fork/exec` 路径不能创建任何 Agent；低权限 Agent 不能继续委派。普通 exec 会撤销 bootstrap grant，之后执行同名或清单中的 bootstrap 映像也不会恢复启动授权。初始化前索引查询不会卡住；legacy 工具 ID/名称不一致会失败；sentinel 不能通过伪造 `AGENT_ROLE_RECOVERY` 获得动作权限；recovery 只会更新 selector 指定的 run。
 
-`agentscope_ucore` 同时建立多个由可信 factory 签发的 workflow scope，验证 capability 只有在 active scope 和精确 owner 同时命中时才生效；同名文件、metadata、action、audit、lease 和 IPC 不能跨域。配额阶段让 scope A/B 各创建 97 个普通文件：前 96 个进入 AUTOSCAN 物化视图，第 97 个仍由独立 STORAGE policy 接纳但保持未索引；显式 syscall 携带 AUTOSCAN 标志也不能越过 96 条边界，每域随后还能建立 16 个非 AUTOSCAN 显式 metadata，第 17 个显式请求才返回 `NO_SPACE`。catalog 满后新增普通 VFS 文件仍可创建且不能被 peer scope 打开，PUBLIC 主体另行创建并删除 70 个对象，清理后存储与 catalog 槽均可复用。ACTIVE/CLOSING/RETIRING 最多合计 4 个 scope，RETIRING 在 catalog 回收完成前保持原准入槽。每 scope STORAGE inode 硬下限为 320，当前镜像保证约 342；catalog 每 scope 112 由 AUTOSCAN 96 与显式保留 16 组成，不再充当 inode 上限。随后低权限 Artifact 才在 guest pipe 存活屏障后持续微写一个已绑定 `PERSIST` 对象，另一 scope 必须在 5 秒内完成 32 次查询；测试同时检查写回批次数、dirty/durable 最终一致和强制重载后的 size/generation。另一个 Artifact 对 volatile 文件执行 32 次微写，request/commit 计数不得增长且 reload 不能清除内存态对象。事务门、存储/进程保留量、单跳 pipe fd 委派及 scope retirement 均有实际 QEMU 回归入口；当前候选是否通过仍以 release bundle 为准。
+`agentscope_ucore` 同时建立多个由可信 factory 签发的 workflow scope，验证 capability 只有在 active scope 和精确 owner 同时命中时才生效；同名文件、metadata、action、audit、lease 和 IPC 不能跨域。配额阶段让 scope A/B 各创建 97 个普通文件：前 96 个进入 AUTOSCAN 物化视图，第 97 个仍由独立 STORAGE policy 接纳但保持未索引；显式 syscall 携带 AUTOSCAN 标志也不能越过 96 条边界，每域随后还能建立 16 个非 AUTOSCAN 显式 metadata，第 17 个显式请求才返回 `NO_SPACE`。catalog 满后新增普通 VFS 文件仍可创建且不能被 peer scope 打开，PUBLIC 主体另行创建并删除 70 个对象，清理后存储与 catalog 槽均可复用。ACTIVE/CLOSING/RETIRING 最多合计 4 个 scope，RETIRING 在 catalog 回收完成前保持原准入槽。每 scope STORAGE inode 硬下限为 320，当前镜像保证约 342；catalog 每 scope 112 由 AUTOSCAN 96 与显式保留 16 组成，不再充当 inode 上限。随后低权限 Artifact 才在 guest pipe 存活屏障后持续微写一个已绑定 `PERSIST` 对象，另一 scope 必须在 5 秒内完成 32 次查询；测试同时检查写回批次数、dirty/durable 最终一致和强制重载后的 size/generation。另一个 Artifact 对 volatile 文件执行 32 次微写，request/commit 计数不得增长且 reload 不能清除内存态对象。事务门、存储/进程保留量、单跳 pipe fd 委派及 scope retirement 均有 QEMU 回归入口；发布状态以 release bundle 为准。
 
 同一程序还验证 workflow 的可信终止协议。低权限 Sentinel 和后创建的 Orchestrator 调用 `agent_workflow_close()` 必须返回 `AGENT_STATUS_DENIED`，带高位别名的 64 位 scope id 必须返回 `AGENT_STATUS_BAD_PARAM`；只有创建时绑定的根 controller 或仍运行可信 bootstrap 的 factory 可以发起关闭。显式关闭和根自然退出都会先把 scope 置为 CLOSING、撤销授权，再让一个阻塞在 `agent_wait()` 且持有 pipe 的低权限成员沿正常退出路径释放端点。测试在 pipe EOF 前设置返回后 poison 写入，避免把“等待意外返回”误判为成功清理；自动根退出重复 9 轮，超过 `VFS_SCOPE_LIFECYCLE_CAP=8` 后仍能接纳 replacement workflow。
 

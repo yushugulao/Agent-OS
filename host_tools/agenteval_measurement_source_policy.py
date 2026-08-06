@@ -32,7 +32,6 @@ CONTROL_PLANE_POLICY = (
     ("compatibility-guest-source", "evaluation_guest/compatbench.c"),
     ("bundle", "host_tools/evaluation_bundle.py"),
     ("contest-demo", "host_tools/contest_demo.py"),
-    ("contest-demo-normalizer", "host_tools/same_kernel_performance.py"),
     ("committed-source-identity", "host_tools/committed_source_identity.py"),
     ("full-verification-stage", "host_tools/full_verification_payload.py"),
     ("full-verification-metrics", "host_tools/full_verification_metrics.py"),

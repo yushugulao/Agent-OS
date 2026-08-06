@@ -4,55 +4,6 @@
 #include "kernel_work.h"
 #include "proc.h"
 
-static struct agent_context_path_stats context_path_stats;
-
-static void
-context_path_note_walk(uint64 records_examined)
-{
-	int enabled = intr_save();
-
-	context_path_stats.history_walks++;
-	context_path_stats.history_records_examined += records_examined;
-	intr_restore(enabled);
-}
-
-void
-agent_context_path_note_append(uint64 records_examined)
-{
-	int enabled = intr_save();
-
-	context_path_stats.append_fast_commits++;
-	context_path_stats.append_history_records_examined += records_examined;
-	intr_restore(enabled);
-}
-
-void
-agent_context_path_note_forward_query(uint64 records_examined,
-				      uint64 active_records)
-{
-	int enabled;
-
-	if (records_examined > active_records)
-		panic("Agent context forward query accounting");
-	enabled = intr_save();
-	context_path_stats.forward_query_calls++;
-	context_path_stats.forward_query_active_records += active_records;
-	context_path_stats.forward_query_records_examined += records_examined;
-	intr_restore(enabled);
-}
-
-void
-agent_context_path_stats_snapshot(struct agent_context_path_stats *out)
-{
-	int enabled;
-
-	if (out == 0)
-		return;
-	enabled = intr_save();
-	memmove(out, &context_path_stats, sizeof(*out));
-	intr_restore(enabled);
-}
-
 static uint64
 context_hash_mix(uint64 hash, uint64 value)
 {
@@ -132,7 +83,7 @@ agent_context_read_record(struct proc *p, uint64 slot,
 
 	if (p == 0 || record == 0 || slot >= p->context_path_capacity)
 		return -1;
-	offset = p->records_offset + slot * sizeof(*record);
+	offset = AGENT_CONTEXT_RECORDS_OFFSET + slot * sizeof(*record);
 	return context_shadow_read(p, offset, (char *)record, sizeof(*record));
 }
 
@@ -209,7 +160,6 @@ context_active_walk(struct proc *p, uint64 head, uint64 target,
 		}
 	}
 out:
-	context_path_note_walk(seen);
 	return status;
 }
 
@@ -238,25 +188,4 @@ agent_context_active_rebuild(struct proc *p, uint64 head, uint64 *successors,
 	memset(successors, 0, successor_capacity * sizeof(*successors));
 	return context_active_walk(p, head, ~0ULL, 0, count, oldest, 0,
 				   successors, successor_capacity);
-}
-
-int
-agent_context_active_record(struct proc *p, uint64 index,
-			    struct agent_context_record *record)
-{
-	int status;
-
-	if (p == 0 || record == 0 || index >= p->context_active_path_count ||
-	    p->context_path_visible_head == 0)
-		return -1;
-	status = context_active_walk(
-		p, p->context_path_visible_head,
-		p->context_active_path_count - index - 1, record, 0, 0, 1, 0, 0);
-	if (status < 0)
-		return status;
-	if ((index == 0 && record->sequence != p->context_active_path_oldest) ||
-	    (index + 1 == p->context_active_path_count &&
-	     record->sequence != p->context_path_visible_head))
-		return -1;
-	return 0;
 }

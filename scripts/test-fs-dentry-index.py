@@ -143,6 +143,14 @@ def validate(source: str) -> None:
     )
     require(source, "fs_dentry_boot_token", "boot-safe dentry gate")
     require(source, "state->overflow ? 0 : 1", "overflow authoritative fallback")
+    for gate in ("fs_dentry_waiters", "fs_namespace_waiters"):
+        require(
+            source,
+            f"wait_queue_wake_all(&{gate});",
+            "cancellable gate release",
+        )
+        if f"wait_queue_wake_one(&{gate});" in source:
+            raise ContractError(f"{gate} retains single-waiter handoff")
 
 
 def mutation_self_test(source: str) -> None:
@@ -152,6 +160,8 @@ def mutation_self_test(source: str) -> None:
         "fs_directory_index_occupied_set(state, offset, 0);",
         "kernel_performance_directory_probe(1);",
         "fs_namespace_gate_lock()",
+        "wait_queue_wake_all(&fs_dentry_waiters);",
+        "wait_queue_wake_all(&fs_namespace_waiters);",
     )
     for token in mutations:
         if token not in source:

@@ -10,17 +10,34 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 
 
-DEFAULT_JOBS = 4
 MAX_JOBS = 8
 LANE_BUILD_JOBS = 2
 MAX_BUILD_JOBS = 24
+DEFAULT_CASE_TIMEOUT_SECONDS = 3600
+MAX_CASE_TIMEOUT_SECONDS = 14400
+
+
+def adaptive_jobs(kind: str) -> int:
+    resource_jobs = runpy.run_path(
+        str(Path(__file__).with_name("resource-jobs.py"))
+    )
+    return resource_jobs["choose_jobs"](
+        kind, memory=resource_jobs["available_memory"]()
+    )
+
+
+def environment_or_adaptive_jobs(name: str, kind: str) -> str:
+    value = os.environ.get(name)
+    return value if value is not None else str(adaptive_jobs(kind))
 
 
 @dataclass(frozen=True)
@@ -64,7 +81,6 @@ AGENT_CASE_NAMES = (
     "agentllm_ucore",
     "agentbench_ucore",
     "ch8_cow_ucore",
-    "labbench_ucore",
     "labdemo_ucore",
     "agentsecurity_ucore",
     "agenttoolabi_ucore",
@@ -95,6 +111,9 @@ SANITIZED_KEYS = {
     "MAKEOVERRIDES",
     "GNUMAKEFLAGS",
     "AGENTOS_BUILD_JOBS",
+    "AGENTOS_OUTER_JOBS",
+    "AGENTOS_PARALLEL_DEPTH",
+    "AGENTOS_QEMU_JOBS",
     "AGENTOS_TEST_JOBS",
     "AGENT_TEST_CASE",
     "AGENT_TEST_TIMING_FILE",
@@ -376,6 +395,7 @@ def write_replay_manifest(
     suite: str,
     jobs: int,
     build_jobs: int,
+    timeout: int,
     bash: str,
     failed_cases: list[str],
 ) -> Path:
@@ -393,6 +413,8 @@ def write_replay_manifest(
         str(jobs),
         "--build-jobs",
         str(build_jobs),
+        "--timeout",
+        str(timeout),
         "--bash",
         bash,
     ]
@@ -469,6 +491,8 @@ def child_environment(
     output: Path,
     temporary_root: Path,
     build_jobs: int = LANE_BUILD_JOBS,
+    outer_jobs: int = 1,
+    parallel_depth: int = 1,
 ) -> dict[str, str]:
     environment = os.environ.copy()
     for key in SANITIZED_KEYS:
@@ -492,6 +516,9 @@ def child_environment(
             "TEMP": str(temporary_root),
             "TMP": str(temporary_root),
             "AGENTOS_BUILD_JOBS": str(build_jobs),
+            "AGENTOS_OUTER_JOBS": str(outer_jobs),
+            "AGENTOS_PARALLEL_DEPTH": str(parallel_depth),
+            "AGENTOS_QEMU_JOBS": "1",
             "AGENTOS_TEST_JOBS": "1",
         }
     )
@@ -546,6 +573,9 @@ def run_case(
     output_root: Path,
     bash: str,
     build_jobs: int = LANE_BUILD_JOBS,
+    timeout: int = DEFAULT_CASE_TIMEOUT_SECONDS,
+    outer_jobs: int = 1,
+    parallel_depth: int = 1,
 ) -> CaseResult:
     output = output_root / case.label
     output.mkdir(exist_ok=True)
@@ -562,23 +592,41 @@ def run_case(
         if not runner.is_file():
             raise RegressionError(f"runner is missing from lane: {case.runner}")
         with stdout_file.open("wb") as stream:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [bash, *case.shell_flags, case.runner],
                 cwd=lane,
-                env=child_environment(case, output, temporary_root, build_jobs),
+                env=child_environment(
+                    case,
+                    output,
+                    temporary_root,
+                    build_jobs,
+                    outer_jobs,
+                    parallel_depth,
+                ),
                 stdin=subprocess.DEVNULL,
                 stdout=stream,
                 stderr=subprocess.STDOUT,
-                check=False,
+                start_new_session=os.name != "nt",
+                creationflags=(
+                    subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+                ),
             )
-        status = result.returncode
+            try:
+                status = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                detail = f"timeout after {timeout}s"
+                stream.write(f"parallel-qemu: {detail}\n".encode("ascii"))
+                stream.flush()
+                terminate_process_tree(process)
+                status = 124
         missing = [
             path.name
             for path in expected_artifacts(case, output)
             if not path.is_file() or path.stat().st_size == 0
         ]
         if missing:
-            detail = "missing or empty artifacts: " + ", ".join(missing)
+            missing_detail = "missing or empty artifacts: " + ", ".join(missing)
+            detail = f"{detail}; {missing_detail}" if detail else missing_detail
             status = status or 65
     except (OSError, RegressionError) as error:
         detail = str(error)
@@ -622,12 +670,25 @@ def run_lane(
     output: Path,
     bash: str,
     build_jobs: int = LANE_BUILD_JOBS,
+    timeout: int = DEFAULT_CASE_TIMEOUT_SECONDS,
+    outer_jobs: int = 1,
+    parallel_depth: int = 1,
 ) -> list[CaseResult]:
     results = []
+    # A case is the isolation atom: ordered reboot chains stay in one worktree.
+    # Formal single-slot AB/BA campaigns remain outside this coordinator.
     for case in cases:
         try:
             result = run_case(
-                lane_number, lane, case, output, bash, build_jobs
+                lane_number,
+                lane,
+                case,
+                output,
+                bash,
+                build_jobs,
+                timeout,
+                outer_jobs,
+                parallel_depth,
             )
         except Exception as error:
             detail = f"internal runner failure: {type(error).__name__}: {error}"
@@ -688,9 +749,16 @@ def write_reports(
     cleanup_errors: list[str],
     cases: tuple[RegressionCase, ...] = CASES,
     suite: str = "resource",
-    lane_build_jobs: int = LANE_BUILD_JOBS,
+    lane_build_jobs: int | tuple[int, ...] = LANE_BUILD_JOBS,
     replay_manifest: str = "",
+    case_timeout_seconds: int = DEFAULT_CASE_TIMEOUT_SECONDS,
 ) -> None:
+    if isinstance(lane_build_jobs, int):
+        lane_build_job_slots = (lane_build_jobs,) * len(lanes)
+    else:
+        lane_build_job_slots = lane_build_jobs
+    if len(lane_build_job_slots) != len(lanes):
+        raise RegressionError("build slot inventory differs from execution lanes")
     ordered = [results[case.label] for case in cases if case.label in results]
     with (output / "combined.log").open("wb") as combined:
         for result in ordered:
@@ -741,7 +809,11 @@ def write_reports(
         },
         "requested_jobs": jobs,
         "effective_jobs": len(lanes),
-        "lane_build_jobs": lane_build_jobs,
+        # Keep the historic scalar as the minimum guaranteed lane budget.
+        "lane_build_jobs": min(lane_build_job_slots),
+        "lane_build_job_slots": list(lane_build_job_slots),
+        "allocated_build_jobs": sum(lane_build_job_slots),
+        "case_timeout_seconds": case_timeout_seconds,
         "case_order": [result.case.label for result in ordered],
         "lanes": [[case.label for case in lane] for lane in lanes],
         "results": [
@@ -815,8 +887,69 @@ def build_jobs_per_lane(total_jobs: int, lane_count: int) -> int:
     return max(1, total_jobs // lane_count)
 
 
+def allocate_build_jobs(total_jobs: int, lane_count: int) -> tuple[int, ...]:
+    if lane_count < 1:
+        raise RegressionError("at least one execution lane is required")
+    if total_jobs < lane_count:
+        raise RegressionError("build job budget is smaller than execution lanes")
+    base, remainder = divmod(total_jobs, lane_count)
+    return tuple(base + (index < remainder) for index in range(lane_count))
+
+
 def execution_jobs(requested: int, evidence_mode: bool) -> int:
-    return 1 if evidence_mode else requested
+    del evidence_mode
+    return requested
+
+
+def timeout_value(value: str) -> int:
+    try:
+        timeout = int(value, 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("timeout must be an integer") from error
+    if not 1 <= timeout <= MAX_CASE_TIMEOUT_SECONDS:
+        raise argparse.ArgumentTypeError(
+            f"timeout must be between 1 and {MAX_CASE_TIMEOUT_SECONDS} seconds"
+        )
+    return timeout
+
+
+def environment_job_value(name: str, minimum: int = 1) -> int | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    try:
+        parsed = int(value, 10)
+    except ValueError as error:
+        raise RegressionError(f"{name} must be an integer") from error
+    if parsed < minimum:
+        qualifier = "positive " if minimum == 1 else "non-negative "
+        raise RegressionError(f"{name} must be a {qualifier}integer")
+    return parsed
+
+
+def terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=2)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    if process.poll() is None:
+        process.kill()
+    process.wait()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -827,14 +960,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--jobs",
         type=jobs_value,
-        default=os.environ.get("AGENTOS_QEMU_JOBS", str(DEFAULT_JOBS)),
+        default=environment_or_adaptive_jobs("AGENTOS_QEMU_JOBS", "qemu"),
     )
     parser.add_argument(
         "--build-jobs",
         type=build_jobs_value,
+        default=environment_or_adaptive_jobs("AGENTOS_BUILD_JOBS", "build"),
+    )
+    parser.add_argument(
+        "--timeout",
+        type=timeout_value,
         default=os.environ.get(
-            "AGENTOS_BUILD_JOBS", str(DEFAULT_JOBS * LANE_BUILD_JOBS)
+            "AGENTOS_QEMU_CASE_TIMEOUT", str(DEFAULT_CASE_TIMEOUT_SECONDS)
         ),
+        help="whole shell-case timeout in seconds",
     )
     parser.add_argument("--bash", default=os.environ.get("BASH_BIN", "bash"))
     parser.add_argument("--keep-worktrees", action="store_true")
@@ -882,7 +1021,11 @@ def main(argv: list[str] | None = None) -> int:
             execution_jobs(args.jobs, evidence_mode), args.build_jobs
         )
         lanes = assign_lanes(cases, execution_lane_limit)
-        lane_build_jobs = build_jobs_per_lane(args.build_jobs, len(lanes))
+        lane_build_jobs = allocate_build_jobs(args.build_jobs, len(lanes))
+        parent_outer_jobs = environment_job_value("AGENTOS_OUTER_JOBS") or 1
+        parent_depth = environment_job_value(
+            "AGENTOS_PARALLEL_DEPTH", minimum=0
+        ) or 0
         lane_paths = tuple(
             run_root / f"lane-{index + 1:02d}" / "source"
             for index in range(len(lanes))
@@ -896,7 +1039,8 @@ def main(argv: list[str] | None = None) -> int:
                 created.append(lane)
             print(
                 f"[parallel-qemu] cases={len(cases)} jobs={len(lanes)} "
-                f"build_jobs_per_lane={lane_build_jobs} "
+                f"build_jobs_by_lane="
+                f"{','.join(str(value) for value in lane_build_jobs)} "
                 f"source={source.commit[:12]} dirty={int(source.dirty)} "
                 f"evidence={int(evidence_mode)}",
                 flush=True,
@@ -916,7 +1060,10 @@ def main(argv: list[str] | None = None) -> int:
                         lane_cases,
                         output,
                         args.bash,
-                        lane_build_jobs,
+                        lane_build_jobs[index],
+                        args.timeout,
+                        parent_outer_jobs * len(lanes),
+                        parent_depth + 1,
                     ): index
                     for index, lane_cases in enumerate(lanes)
                 }
@@ -974,6 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.suite,
                     args.jobs,
                     args.build_jobs,
+                    args.timeout,
                     args.bash,
                     failed_cases,
                 ).name
@@ -990,6 +1138,7 @@ def main(argv: list[str] | None = None) -> int:
             args.suite,
             lane_build_jobs,
             replay_manifest,
+            args.timeout,
         )
         failed = 0
         for case in cases:

@@ -61,6 +61,12 @@ def validate(sources: dict[str, str]) -> None:
 
     context = sources["context"]
     path = sources["path"]
+    for removed in (
+        "agent_context_active_record(", "agent_context_path_note_",
+        "agent_context_path_stats", "context_path_stats",
+    ):
+        if removed in path or removed in sources["path_h"] or removed in context:
+            raise ValueError(f"retired Context proof surface returned: {removed}")
     hash_body = body(path, "agent_context_record_hash(")
     if "record->path_parent_sequence" not in hash_body:
         raise ValueError("path parent is not hash-bound")
@@ -84,7 +90,6 @@ def validate(sources: dict[str, str]) -> None:
         "active_count--;",
         "active_oldest = receipt->evicted_successor;",
         "index->summary.head_hash = record->record_hash;",
-        "agent_context_path_note_append(0);",
     ):
         if token not in receipt:
             raise ValueError(f"incremental receipt missing {token}")
@@ -116,6 +121,7 @@ def validate(sources: dict[str, str]) -> None:
         "agent_context_path_summary_capture(p, &query_summary)",
         "cursor = query_summary.oldest_sequence;",
         "records_examined < query_summary.count",
+        "records_examined >= query_summary.count",
         "records_examined++;",
         "agent_context_read_record(",
         "record.path_parent_sequence != previous_sequence",
@@ -124,7 +130,6 @@ def validate(sources: dict[str, str]) -> None:
         "record.record_hash != query_summary.head_hash",
         "agent_context_path_summary_matches(p, &query_summary)",
         "kernel_work_checkpoint(1)",
-        "agent_context_path_note_forward_query(records_examined",
     ):
         if token not in query:
             raise ValueError(f"active query missing {token}")
@@ -134,9 +139,6 @@ def validate(sources: dict[str, str]) -> None:
         raise ValueError("forward query no longer charges one record per step")
     if "while (seq <= p->context_path_latest" in query:
         raise ValueError("query returned to physical archive scanning")
-    forward_stats = body(path, "agent_context_path_note_forward_query(")
-    if "records_examined > active_records" not in forward_stats:
-        raise ValueError("forward query accounting lost its linear bound")
     rollback = body(context, "sys_context_rollback(")
     ordered(
         rollback,
@@ -154,20 +156,6 @@ def validate(sources: dict[str, str]) -> None:
         ),
         "rollback active projection",
     )
-    for token in (
-        "append_fast_commits",
-        "append_history_records_examined",
-        "history_walks",
-        "history_records_examined",
-        "forward_query_calls",
-        "forward_query_active_records",
-        "forward_query_records_examined",
-        "agent_context_path_note_forward_query",
-        "agent_context_path_stats_snapshot",
-    ):
-        if token not in sources["path_h"] or token not in path:
-            raise ValueError(f"context path statistics missing {token}")
-
     helper = body(sources["user_lib"], "context_mirror_active_query(")
     for token in (
         "header->active_path_count > header->count",
@@ -218,7 +206,6 @@ MUTATIONS = (
     ("context", "agent_context_append_receipt_commit(p, &record, &receipt)"),
     ("context", "active_count--;"),
     ("context", "active_oldest = receipt->evicted_successor;"),
-    ("context", "agent_context_path_note_append(0);"),
     ("context", "Agent context path index must fit sidecar slack"),
     ("path", "record.path_parent_sequence >= cursor"),
     ("path", "record.prev_hash == 0"),
@@ -227,20 +214,18 @@ MUTATIONS = (
     ("path", "kernel_work_checkpoint(1)"),
     ("context", "cursor = query_summary.oldest_sequence;"),
     ("context", "records_examined < query_summary.count"),
+    ("context", "records_examined >= query_summary.count"),
     ("context", "records_examined++;"),
     ("context", "record.path_parent_sequence != previous_sequence"),
     ("context", "record.prev_hash != previous_hash"),
     ("context", "path_index->successors["),
     ("context", "record.record_hash != query_summary.head_hash"),
-    ("context", "agent_context_path_note_forward_query(records_examined"),
-    ("path", "records_examined > active_records"),
     ("context", "agent_context_path_summary_capture(p, &source_summary)"),
     ("context", "branch_generation <= source_summary.branch_generation"),
     ("context", "path_index->magic = 0;"),
     ("context", "agent_context_active_rebuild("),
     ("context", "path_index->summary.head_hash = record.record_hash;"),
     ("context", "path_index->magic = AGENT_CONTEXT_PATH_INDEX_MAGIC;"),
-    ("path_h", "append_history_records_examined"),
     ("user_lib", "header->active_path_count > header->count"),
     ("user_lib", "path_parent_sequence >= sequence"),
     ("user_lib", "record->record_hash != context_mirror_record_hash(record)"),

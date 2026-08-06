@@ -47,8 +47,8 @@
       "event_enqueue": 2,
       "max": 5
     },
-    "bytes": 8024,
-    "diversity_anchors": 4,
+    "bytes": 7592,
+    "diversity_anchors": 2,
     "entry": {
       "bytes": 240,
       "fields": {
@@ -73,7 +73,7 @@
       "control_lease_end": 48,
       "event_lease_end": 40,
       "generation": 16,
-      "image_hash": 8016,
+      "image_hash": 7584,
       "lifecycle_lease_ends": 80,
       "magic": 0,
       "reserved_scope_slots": 72,
@@ -137,12 +137,12 @@
       "uint64_bytes": 8,
       "uint_bytes": 4
     },
-    "records_per_scope": 8,
-    "recovery_scope_slot": 3,
+    "records_per_scope": 6,
+    "recovery_scope_slot": 4,
     "reserved_scope_slots": 1,
     "retention_policy": 3,
     "scope": {
-      "bytes": 1968,
+      "bytes": 1488,
       "fields": {
         "admission_drops": 32,
         "ledger_hash": 40,
@@ -161,9 +161,9 @@
       "recovery_successor": 2,
       "used": 1
     },
-    "scope_slots": 4,
+    "scope_slots": 5,
     "section_kind": 1,
-    "version": 7
+    "version": 8
   },
   "schema": 2
 }

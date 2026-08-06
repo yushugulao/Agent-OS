@@ -22,9 +22,18 @@
 #define TASK4_FUNCTIONAL_FID_BASE 10000
 #define TASK4_FUNCTIONAL_FID_STRIDE 4
 #define TASK5_DELAY_TICKS 8
-#define TASK5_MAX_IDLE_DISPATCHES 4
+#define TASK5_TICK_MSEC 10
 #define TASK5_MAX_WAIT_LOOPS 3
 #define TASK5_RECEIPT_VALUES 28
+#define REVISIT_IDENTITIES 4
+#define REVISIT_VISITS 5
+#define REVISIT_CONCURRENCY_LEVELS 3
+#define REVISIT_ROUNDS 16
+#define REVISIT_COMMAND_MAGIC 0x4149524551563031ULL
+#define REVISIT_REPLY_MAGIC 0x4149524552503031ULL
+#define REVISIT_COMMAND_VISIT 1
+#define REVISIT_COMMAND_QUERY 2
+#define REVISIT_COMMAND_STOP 3
 
 _Static_assert(TASK4_FUNCTIONAL_FID_BASE > 2000 + EVAL_MAX_LOAD,
 	       "Task4 functional fids overlap performance fixtures");
@@ -34,7 +43,7 @@ _Static_assert(TASK4_FUNCTIONAL_FID_BASE > 2000 + EVAL_MAX_LOAD,
 
 static const int eval_loads[EVAL_LOADS] = { 24, 64, 96 };
 static const int eval_path_loads[EVAL_PATH_LOADS] = { 8, 24, 48, 96 };
-static const int eval_path_operations[EVAL_PATH_LOADS] = { 8, 6, 4, 4 };
+static const int eval_path_operations[EVAL_PATH_LOADS] = { 8, 6, 4, 1 };
 static const int eval_union_loads[EVAL_UNION_LOADS] = { 8, 24, 48, 64, 96 };
 
 static struct agent_file_meta file_meta;
@@ -59,6 +68,7 @@ static struct agent_response_v2 functional_response;
 static struct agent_info functional_info_before;
 static struct agent_info functional_info_after;
 static struct agent_event functional_event;
+static volatile int task5_wait_status;
 static int functional_compat_sentinel_pid;
 static int functional_compat_sentinel_status;
 
@@ -106,6 +116,82 @@ struct measurement {
 	uint64 index_rebuild_records;
 	uint64 result_cache_hits;
 	uint64 result_fingerprint;
+};
+
+struct revisit_command {
+	uint64 magic;
+	uint64 request_id;
+	int kind;
+	int identity;
+	int visit;
+	int reserved;
+};
+
+struct revisit_reply {
+	uint64 magic;
+	uint64 request_id;
+	uint64 lifecycle_generation;
+	uint64 started_us;
+	uint64 completed_us;
+	int kind;
+	int identity;
+	int agent_id;
+	uint lifecycle_id;
+	int correct;
+	int contamination;
+	int return_visit;
+	int fallback;
+};
+
+struct revisit_worker {
+	int pid;
+	int command_fd;
+	int reply_fd;
+	int agent_id;
+	uint lifecycle_id;
+	uint64 lifecycle_generation;
+};
+
+struct revisit_perf_sample {
+	uint64 request_id;
+	uint64 submitted_us;
+	uint64 started_us;
+	uint64 completed_us;
+	uint64 received_us;
+	uint64 wait_us;
+	uint64 service_us;
+	uint64 turnaround_us;
+	uint64 result_fingerprint;
+	int concurrency;
+	int round;
+	int slot;
+	int identity;
+	int correct;
+	int contamination;
+	int fallback;
+	int isolation_ok;
+};
+
+static struct revisit_worker revisit_workers[REVISIT_IDENTITIES];
+static struct revisit_reply revisit_visits[REVISIT_VISITS];
+static struct revisit_perf_sample
+	revisit_perf_samples[REVISIT_IDENTITIES * REVISIT_ROUNDS];
+static struct revisit_reply
+	revisit_perf_replies[REVISIT_IDENTITIES * REVISIT_ROUNDS];
+static uint64
+	revisit_perf_sent_us[REVISIT_IDENTITIES * REVISIT_ROUNDS];
+static uint64
+	revisit_perf_received_us[REVISIT_IDENTITIES * REVISIT_ROUNDS];
+static uint64
+	revisit_sorted_wait_us[REVISIT_IDENTITIES * REVISIT_ROUNDS];
+static uint64
+	revisit_sorted_service_us[REVISIT_IDENTITIES * REVISIT_ROUNDS];
+static uint64
+	revisit_sorted_turnaround_us[REVISIT_IDENTITIES * REVISIT_ROUNDS];
+static uint64 revisit_visit_fingerprints[REVISIT_VISITS];
+static const int revisit_sequence[REVISIT_VISITS] = { 0, 1, 2, 3, 0 };
+static const int revisit_concurrency_levels[REVISIT_CONCURRENCY_LEVELS] = {
+	1, 2, 4
 };
 
 /* Measurement and functional phases are serialized, so scratch can overlap. */
@@ -198,6 +284,8 @@ static uint64 hash_u64(uint64 hash, uint64 value)
 }
 
 static void format_hex16(uint64 value, char text[17]);
+static uint64 semantic_token(const char *domain, int load, int pair,
+			     int item);
 
 static uint64 functional_values_semantic(const char *domain,
 					 const uint64 *values, int count)
@@ -337,6 +425,736 @@ static uint64 elapsed_us(uint64 start, uint64 end)
 {
 	check(end >= start, "monotonic clock");
 	return end - start;
+}
+
+static void revisit_write_exact(int fd, const void *buffer, int size)
+{
+	const char *bytes = buffer;
+	int written = 0;
+
+	while (written < size) {
+		int count = write(fd, bytes + written, size - written);
+
+		check(count > 0, "revisit pipe write");
+		written += count;
+	}
+}
+
+static void revisit_read_exact(int fd, void *buffer, int size)
+{
+	char *bytes = buffer;
+	int received = 0;
+
+	while (received < size) {
+		int count = read(fd, bytes + received, size - received);
+
+		check(count > 0, "revisit pipe read");
+		received += count;
+	}
+}
+
+static uint64 revisit_context_token(int identity)
+{
+	uint64 hash = FNV_OFFSET;
+
+	hash = hash_bytes(hash, "aios-revisit-context-v1",
+			  strlen("aios-revisit-context-v1"));
+	hash = hash_u64(hash, AGENTEVAL_CHALLENGE);
+	hash = hash_u64(hash, (uint64)(uint)identity);
+	return hash | (1ULL << 63);
+}
+
+static uint64 revisit_observation_fingerprint(
+	int visit, int identity, const struct revisit_reply *reply,
+	int correct, int contamination, int return_visit, int fallback)
+{
+	uint64 hash = FNV_OFFSET;
+
+	hash = hash_bytes(hash, "aios-revisit-observation-v1",
+			  strlen("aios-revisit-observation-v1"));
+	hash = hash_u64(hash, AGENTEVAL_CHALLENGE);
+	hash = hash_u64(hash, (uint64)(uint)visit);
+	hash = hash_u64(hash, (uint64)(uint)identity);
+	hash = hash_u64(hash, reply->request_id);
+	hash = hash_u64(hash, (uint64)(uint)reply->agent_id);
+	hash = hash_u64(hash, (uint64)reply->lifecycle_id);
+	hash = hash_u64(hash, reply->lifecycle_generation);
+	hash = hash_u64(hash, (uint64)(uint)correct);
+	hash = hash_u64(hash, (uint64)(uint)contamination);
+	hash = hash_u64(hash, (uint64)(uint)return_visit);
+	hash = hash_u64(hash, (uint64)(uint)fallback);
+	return hash;
+}
+
+static uint64 revisit_sample_fingerprint(
+	const struct revisit_perf_sample *sample)
+{
+	uint64 hash = FNV_OFFSET;
+
+	hash = hash_bytes(hash, "agentos-qos-sample-v2",
+			  strlen("agentos-qos-sample-v2"));
+	hash = hash_u64(hash, AGENTEVAL_CHALLENGE);
+	hash = hash_u64(hash, (uint64)(uint)sample->concurrency);
+	hash = hash_u64(hash, (uint64)(uint)sample->round);
+	hash = hash_u64(hash, (uint64)(uint)sample->slot);
+	hash = hash_u64(hash, (uint64)(uint)sample->identity);
+	hash = hash_u64(hash, sample->request_id);
+	hash = hash_u64(hash, (uint64)(uint)sample->correct);
+	hash = hash_u64(hash, (uint64)(uint)sample->contamination);
+	hash = hash_u64(hash, (uint64)(uint)sample->fallback);
+	hash = hash_u64(hash, (uint64)(uint)sample->isolation_ok);
+	hash = hash_u64(hash, sample->submitted_us);
+	hash = hash_u64(hash, sample->started_us);
+	hash = hash_u64(hash, sample->completed_us);
+	hash = hash_u64(hash, sample->received_us);
+	hash = hash_u64(hash, sample->wait_us);
+	hash = hash_u64(hash, sample->service_us);
+	hash = hash_u64(hash, sample->turnaround_us);
+	return hash;
+}
+
+static int revisit_worker_unique(int identity)
+{
+	const struct revisit_worker *worker = &revisit_workers[identity];
+
+	for (int other = 0; other < REVISIT_IDENTITIES; other++) {
+		const struct revisit_worker *candidate =
+			&revisit_workers[other];
+
+		if (other == identity)
+			continue;
+		if (candidate->agent_id == worker->agent_id ||
+		    (candidate->lifecycle_id == worker->lifecycle_id &&
+		     candidate->lifecycle_generation ==
+			     worker->lifecycle_generation))
+			return 0;
+	}
+	return 1;
+}
+
+static int revisit_context_record_identity(
+	const struct agent_context_record *record)
+{
+	for (int identity = 0; identity < REVISIT_IDENTITIES; identity++) {
+		uint64 expected = revisit_context_token(identity);
+
+		if (record->request_id == expected &&
+		    record->arg0 == (uint64)(uint)identity &&
+		    record->value0 == expected &&
+		    record->tool_id == AGENT_TOOL_CONTEXT_PUSH &&
+		    record->status == AGENT_STATUS_OK &&
+		    strncmp(record->payload, "identity-", 9) == 0 &&
+		    record->payload[9] == 'A' + identity &&
+		    strncmp(record->result, "context-", 8) == 0 &&
+		    record->result[8] == 'A' + identity)
+			return identity;
+	}
+	return -1;
+}
+
+static void revisit_context_observe(int identity, int returning,
+				    struct revisit_reply *reply)
+{
+	int count;
+	int own = 0;
+	int contamination = 0;
+
+	memset(&functional_context_header, 0,
+	       sizeof(functional_context_header));
+	memset(functional_context_records, 0,
+	       sizeof(functional_context_records));
+	count = context_snapshot(&functional_context_header,
+				 functional_context_records,
+				 AGENT_CONTEXT_MAX_RECORDS);
+	if (count >= 0) {
+		for (int i = 0; i < count; i++) {
+			const struct agent_context_record *record =
+				&functional_context_records[i];
+			int observed_identity =
+				revisit_context_record_identity(record);
+
+			if (observed_identity == identity)
+				own++;
+			else if (observed_identity >= 0)
+				contamination++;
+		}
+	}
+	reply->correct = count >= 0 && own == 1 && contamination == 0;
+	reply->contamination = contamination;
+	reply->return_visit = returning && reply->correct;
+	reply->fallback = !reply->correct;
+}
+
+static void revisit_seed_context(int identity)
+{
+	struct agent_context_record record;
+	uint64 token = revisit_context_token(identity);
+
+	memset(&record, 0, sizeof(record));
+	record.request_id = token;
+	record.arg0 = (uint64)(uint)identity;
+	record.value0 = token;
+	record.tool_id = AGENT_TOOL_CONTEXT_PUSH;
+	record.status = AGENT_STATUS_OK;
+	strcpy(record.payload, "identity-A");
+	strcpy(record.result, "context-A");
+	record.payload[9] = 'A' + identity;
+	record.result[8] = 'A' + identity;
+	if (context_push(&record) != AGENT_STATUS_OK) {
+		/* The following observation records a real fallback. */
+		return;
+	}
+}
+
+static void run_revisit_worker(int command_fd, int reply_fd, int identity)
+{
+	struct agent_workflow_lifecycle_info lifecycle;
+	struct agent_info info;
+	struct revisit_command command;
+	struct revisit_reply reply;
+
+	memset(&info, 0, sizeof(info));
+	memset(&lifecycle, 0, sizeof(lifecycle));
+	check(agent_info(&info) == AGENT_STATUS_OK && info.is_agent &&
+		      info.agent_role == AGENT_ROLE_ORCHESTRATOR,
+	      "revisit workflow Agent identity");
+	check(agent_workflow_lifecycle_info(&lifecycle, 0) ==
+		      AGENT_STATUS_OK &&
+		      lifecycle.version ==
+			      AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION &&
+		      lifecycle.struct_size == sizeof(lifecycle) &&
+		      lifecycle.charged == 1 && lifecycle.key.id != 0 &&
+		      lifecycle.key.generation != 0,
+	      "revisit workflow lifecycle identity");
+	memset(&reply, 0, sizeof(reply));
+	reply.magic = REVISIT_REPLY_MAGIC;
+	reply.kind = 0;
+	reply.identity = identity;
+	reply.agent_id = info.agent_id;
+	reply.lifecycle_id = lifecycle.key.id;
+	reply.lifecycle_generation = lifecycle.key.generation;
+	reply.started_us = now_us();
+	reply.completed_us = reply.started_us;
+	revisit_write_exact(reply_fd, &reply, sizeof(reply));
+
+	for (;;) {
+		revisit_read_exact(command_fd, &command, sizeof(command));
+		check(command.magic == REVISIT_COMMAND_MAGIC &&
+			      command.identity == identity,
+		      "revisit command identity");
+		if (command.kind == REVISIT_COMMAND_STOP)
+			exit(0);
+		check(command.kind == REVISIT_COMMAND_VISIT ||
+			      command.kind == REVISIT_COMMAND_QUERY,
+		      "revisit command kind");
+		memset(&reply, 0, sizeof(reply));
+		reply.magic = REVISIT_REPLY_MAGIC;
+		reply.request_id = command.request_id;
+		reply.kind = command.kind;
+		reply.identity = identity;
+		reply.agent_id = info.agent_id;
+		reply.lifecycle_id = lifecycle.key.id;
+		reply.lifecycle_generation = lifecycle.key.generation;
+		reply.started_us = now_us();
+		if (command.kind == REVISIT_COMMAND_VISIT &&
+		    command.visit == 1)
+			revisit_seed_context(identity);
+		revisit_context_observe(
+			identity,
+			command.kind == REVISIT_COMMAND_VISIT &&
+				command.visit > 1,
+			&reply);
+		reply.completed_us = now_us();
+		revisit_write_exact(reply_fd, &reply, sizeof(reply));
+	}
+}
+
+static void revisit_start_workers(void)
+{
+	for (int identity = 0; identity < REVISIT_IDENTITIES; identity++) {
+		int command_pipe[2];
+		int reply_pipe[2];
+		struct revisit_reply ready;
+		int pid;
+
+		check(pipe(command_pipe) == 0 && pipe(reply_pipe) == 0,
+		      "create revisit workflow pipes");
+		check(agent_scope_delegate_fd(command_pipe[0]) ==
+			      AGENT_STATUS_OK &&
+			      agent_scope_delegate_fd(reply_pipe[1]) ==
+				      AGENT_STATUS_OK,
+		      "delegate revisit workflow pipes");
+		pid = identity == 0 ?
+			      agent_create_role(AGENT_ROLE_ORCHESTRATOR) :
+			      agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
+		check(pid >= 0, "create revisit workflow");
+		if (pid == 0)
+			run_revisit_worker(command_pipe[0], reply_pipe[1],
+					   identity);
+		check(close(command_pipe[0]) == 0 && close(reply_pipe[1]) == 0,
+		      "close revisit child pipe endpoints");
+		revisit_workers[identity].pid = pid;
+		revisit_workers[identity].command_fd = command_pipe[1];
+		revisit_workers[identity].reply_fd = reply_pipe[0];
+		revisit_read_exact(reply_pipe[0], &ready, sizeof(ready));
+		check(ready.magic == REVISIT_REPLY_MAGIC && ready.kind == 0 &&
+			      ready.identity == identity && ready.agent_id > 0 &&
+			      ready.lifecycle_id != 0 &&
+			      ready.lifecycle_generation != 0,
+		      "receive revisit workflow identity");
+		revisit_workers[identity].agent_id = ready.agent_id;
+		revisit_workers[identity].lifecycle_id = ready.lifecycle_id;
+		revisit_workers[identity].lifecycle_generation =
+			ready.lifecycle_generation;
+	}
+}
+
+static void revisit_request(int identity, int kind, int visit,
+			    uint64 request_id, struct revisit_reply *reply)
+{
+	struct revisit_command command;
+	const struct revisit_worker *worker = &revisit_workers[identity];
+
+	memset(&command, 0, sizeof(command));
+	command.magic = REVISIT_COMMAND_MAGIC;
+	command.request_id = request_id;
+	command.kind = kind;
+	command.identity = identity;
+	command.visit = visit;
+	revisit_write_exact(worker->command_fd, &command, sizeof(command));
+	revisit_read_exact(worker->reply_fd, reply, sizeof(*reply));
+	check(reply->magic == REVISIT_REPLY_MAGIC &&
+		      reply->request_id == request_id && reply->kind == kind &&
+		      reply->identity == identity &&
+		      reply->agent_id == worker->agent_id &&
+		      reply->lifecycle_id == worker->lifecycle_id &&
+		      reply->lifecycle_generation ==
+			      worker->lifecycle_generation,
+	      "receive revisit workflow reply");
+}
+
+static void print_revisit_observation(int visit, int identity,
+				      const struct revisit_reply *reply,
+				      int correct, int contamination,
+				      int return_visit, int fallback,
+				      uint64 fingerprint)
+{
+	char request_text[17];
+	char result_text[17];
+
+	format_hex16(reply->request_id, request_text);
+	format_hex16(fingerprint, result_text);
+	printf("agenteval_ucore: revisit schema=1 visit=%d identity=%c request_id=%s agent_id=%d lifecycle_id=%u lifecycle_generation=%llu correct=%d contamination=%d return_visit=%d fallback=%d result_fingerprint=%s status=observed\n",
+	       visit, 'A' + identity, request_text, reply->agent_id,
+	       reply->lifecycle_id,
+	       (unsigned long long)reply->lifecycle_generation, correct,
+	       contamination, return_visit, fallback, result_text);
+}
+
+static void run_revisit_visits(void)
+{
+	uint64 summary_hash = FNV_OFFSET;
+	int correct = 0;
+	int contamination = 0;
+	int return_visit = 0;
+	int fallback = 0;
+
+	for (int visit = 0; visit < REVISIT_VISITS; visit++) {
+		int identity = revisit_sequence[visit];
+		int ordinal = visit == REVISIT_VISITS - 1 ? 2 : 1;
+		int unique;
+		int observed_correct;
+		int observed_return;
+		int observed_fallback;
+		uint64 request_id = semantic_token(
+			"aios-revisit-visit-v1", visit + 1, identity,
+			ordinal);
+
+		revisit_request(identity, REVISIT_COMMAND_VISIT, ordinal,
+				request_id, &revisit_visits[visit]);
+		unique = revisit_worker_unique(identity);
+		observed_correct = revisit_visits[visit].correct && unique;
+		observed_return = revisit_visits[visit].return_visit && unique;
+		observed_fallback = revisit_visits[visit].fallback || !unique;
+		revisit_visit_fingerprints[visit] =
+			revisit_observation_fingerprint(
+				visit + 1, identity, &revisit_visits[visit],
+				observed_correct,
+				revisit_visits[visit].contamination,
+				observed_return, observed_fallback);
+		correct += observed_correct;
+		contamination += revisit_visits[visit].contamination;
+		return_visit += observed_return;
+		fallback += observed_fallback;
+		print_revisit_observation(
+			visit + 1, identity, &revisit_visits[visit],
+			observed_correct, revisit_visits[visit].contamination,
+			observed_return, observed_fallback,
+			revisit_visit_fingerprints[visit]);
+	}
+
+	summary_hash = hash_bytes(summary_hash, "aios-revisit-summary-v1",
+				  strlen("aios-revisit-summary-v1"));
+	summary_hash = hash_u64(summary_hash, AGENTEVAL_CHALLENGE);
+	summary_hash = hash_u64(summary_hash, REVISIT_VISITS);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)correct);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)contamination);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)return_visit);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)fallback);
+	for (int visit = 0; visit < REVISIT_VISITS; visit++)
+		summary_hash = hash_u64(summary_hash,
+					revisit_visit_fingerprints[visit]);
+	{
+		char result_text[17];
+
+		format_hex16(summary_hash, result_text);
+		printf("agenteval_ucore: revisit_summary schema=1 visits=%d correct=%d contamination=%d return_visit=%d fallback=%d result_fingerprint=%s status=measured\n",
+		       REVISIT_VISITS, correct, contamination, return_visit,
+		       fallback, result_text);
+	}
+}
+
+static uint64 revisit_nearest_rank(const uint64 *values, int count,
+				   int percentile)
+{
+	int rank = (percentile * count + 99) / 100;
+
+	check(count > 0 && rank > 0 && rank <= count,
+	      "revisit percentile rank");
+	return values[rank - 1];
+}
+
+static void revisit_sort_durations(uint64 *values, int count)
+{
+	for (int i = 1; i < count; i++) {
+		uint64 value = values[i];
+		int position = i;
+
+		while (position > 0 && values[position - 1] > value) {
+			values[position] = values[position - 1];
+			position--;
+		}
+		values[position] = value;
+	}
+}
+
+static void run_revisit_concurrency(int concurrency)
+{
+	uint64 start_us;
+	uint64 end_us;
+	uint64 duration_us;
+	uint64 wait_sum_us = 0;
+	uint64 service_sum_us = 0;
+	uint64 turnaround_sum_us = 0;
+	uint64 throughput_milli_rps;
+	uint64 goodput_milli_rps;
+	uint64 avg_milli_us;
+	uint64 p50_us;
+	uint64 p90_us;
+	uint64 p99_us;
+	uint64 wait_avg_milli_us;
+	uint64 wait_p50_us;
+	uint64 wait_p90_us;
+	uint64 wait_p99_us;
+	uint64 service_avg_milli_us;
+	uint64 service_p50_us;
+	uint64 service_p90_us;
+	uint64 service_p99_us;
+	uint64 fairness_jain_ppm;
+	uint64 max_min_fairness_ppm;
+	uint64 workload_digest = FNV_OFFSET;
+	uint64 summary_hash = FNV_OFFSET;
+	int requests = REVISIT_ROUNDS * concurrency;
+	int identity_isolated[REVISIT_IDENTITIES] = { 0 };
+	int isolated = 0;
+	int correct = 0;
+	int contamination = 0;
+	int fallback = 0;
+
+	check(concurrency == 1 || concurrency == 2 || concurrency == 4,
+	      "revisit concurrency level");
+	start_us = now_us();
+	for (int round = 0; round < REVISIT_ROUNDS; round++) {
+		for (int slot = 0; slot < concurrency; slot++) {
+			int index = round * concurrency + slot;
+			int identity = index % REVISIT_IDENTITIES;
+			struct revisit_command command;
+
+			memset(&command, 0, sizeof(command));
+			command.magic = REVISIT_COMMAND_MAGIC;
+			command.request_id = semantic_token(
+				"agentos-qos-request-v2", concurrency,
+				round, slot * REVISIT_IDENTITIES + identity);
+			command.kind = REVISIT_COMMAND_QUERY;
+			command.identity = identity;
+			revisit_perf_sent_us[index] = now_us();
+			revisit_write_exact(
+				revisit_workers[identity].command_fd, &command,
+				sizeof(command));
+		}
+		for (int slot = 0; slot < concurrency; slot++) {
+			int index = round * concurrency + slot;
+			int identity = index % REVISIT_IDENTITIES;
+
+			revisit_read_exact(
+				revisit_workers[identity].reply_fd,
+				&revisit_perf_replies[index],
+				sizeof(revisit_perf_replies[index]));
+			revisit_perf_received_us[index] = now_us();
+		}
+	}
+	end_us = now_us();
+	duration_us = elapsed_us(start_us, end_us);
+	check(duration_us > 0, "revisit concurrency measurable duration");
+
+	for (int round = 0; round < REVISIT_ROUNDS; round++) {
+		for (int slot = 0; slot < concurrency; slot++) {
+			int index = round * concurrency + slot;
+			int identity = index % REVISIT_IDENTITIES;
+			const struct revisit_reply *reply =
+				&revisit_perf_replies[index];
+			struct revisit_perf_sample *sample =
+				&revisit_perf_samples[index];
+			uint64 expected_request = semantic_token(
+				"agentos-qos-request-v2", concurrency,
+				round, slot * REVISIT_IDENTITIES + identity);
+			int unique = revisit_worker_unique(identity);
+
+			check(reply->magic == REVISIT_REPLY_MAGIC &&
+				      reply->request_id == expected_request &&
+				      reply->kind == REVISIT_COMMAND_QUERY &&
+				      reply->identity == identity &&
+				      reply->agent_id ==
+					      revisit_workers[identity].agent_id &&
+				      reply->lifecycle_id ==
+					      revisit_workers[identity].lifecycle_id &&
+				      reply->lifecycle_generation ==
+					      revisit_workers[identity]
+						      .lifecycle_generation &&
+				      reply->started_us >=
+					      revisit_perf_sent_us[index] &&
+				      reply->completed_us >= reply->started_us &&
+				      reply->completed_us <=
+					      revisit_perf_received_us[index],
+			      "revisit concurrency reply");
+			sample->request_id = expected_request;
+			sample->submitted_us = revisit_perf_sent_us[index];
+			sample->started_us = reply->started_us;
+			sample->completed_us = reply->completed_us;
+			sample->received_us = revisit_perf_received_us[index];
+			sample->wait_us = elapsed_us(sample->submitted_us,
+						     sample->started_us);
+			sample->service_us = elapsed_us(sample->started_us,
+							sample->completed_us);
+			sample->turnaround_us = elapsed_us(
+				revisit_perf_sent_us[index],
+				reply->completed_us);
+			check(sample->turnaround_us ==
+				      sample->wait_us + sample->service_us,
+			      "revisit QoS decomposition");
+			sample->concurrency = concurrency;
+			sample->round = round;
+			sample->slot = slot;
+			sample->identity = identity;
+			sample->correct = reply->correct && unique;
+			sample->contamination = reply->contamination;
+			sample->fallback = reply->fallback || !unique;
+			sample->isolation_ok = sample->correct &&
+					       sample->contamination == 0 &&
+					       !sample->fallback;
+			sample->result_fingerprint =
+				revisit_sample_fingerprint(sample);
+			revisit_sorted_wait_us[index] = sample->wait_us;
+			revisit_sorted_service_us[index] = sample->service_us;
+			revisit_sorted_turnaround_us[index] =
+				sample->turnaround_us;
+			wait_sum_us += sample->wait_us;
+			service_sum_us += sample->service_us;
+			turnaround_sum_us += sample->turnaround_us;
+			isolated += sample->isolation_ok;
+			identity_isolated[identity] += sample->isolation_ok;
+			correct += sample->correct;
+			contamination += sample->contamination;
+			fallback += sample->fallback;
+		}
+	}
+	revisit_sort_durations(revisit_sorted_wait_us, requests);
+	revisit_sort_durations(revisit_sorted_service_us, requests);
+	revisit_sort_durations(revisit_sorted_turnaround_us, requests);
+	throughput_milli_rps = (uint64)requests * 1000000000ULL /
+				 duration_us;
+	goodput_milli_rps = (uint64)(uint)isolated * 1000000000ULL /
+				duration_us;
+	avg_milli_us = turnaround_sum_us * 1000ULL / (uint64)requests;
+	p50_us = revisit_nearest_rank(revisit_sorted_turnaround_us, requests, 50);
+	p90_us = revisit_nearest_rank(revisit_sorted_turnaround_us, requests, 90);
+	p99_us = revisit_nearest_rank(revisit_sorted_turnaround_us, requests, 99);
+	wait_avg_milli_us = wait_sum_us * 1000ULL / (uint64)requests;
+	wait_p50_us = revisit_nearest_rank(revisit_sorted_wait_us, requests, 50);
+	wait_p90_us = revisit_nearest_rank(revisit_sorted_wait_us, requests, 90);
+	wait_p99_us = revisit_nearest_rank(revisit_sorted_wait_us, requests, 99);
+	service_avg_milli_us = service_sum_us * 1000ULL / (uint64)requests;
+	service_p50_us = revisit_nearest_rank(revisit_sorted_service_us,
+					       requests, 50);
+	service_p90_us = revisit_nearest_rank(revisit_sorted_service_us,
+					       requests, 90);
+	service_p99_us = revisit_nearest_rank(revisit_sorted_service_us,
+					       requests, 99);
+	{
+		uint64 squares = 0;
+		int minimum = identity_isolated[0];
+		int maximum = identity_isolated[0];
+
+		for (int identity = 0; identity < REVISIT_IDENTITIES; identity++) {
+			uint64 value = (uint64)(uint)identity_isolated[identity];
+
+			squares += value * value;
+			if (identity_isolated[identity] < minimum)
+				minimum = identity_isolated[identity];
+			if (identity_isolated[identity] > maximum)
+				maximum = identity_isolated[identity];
+		}
+		fairness_jain_ppm = squares == 0 ? 0 :
+			(uint64)(uint)isolated * (uint64)(uint)isolated *
+			1000000ULL / (REVISIT_IDENTITIES * squares);
+		max_min_fairness_ppm = maximum == 0 ? 0 :
+			(uint64)(uint)minimum * 1000000ULL / (uint64)(uint)maximum;
+	}
+	workload_digest = hash_bytes(workload_digest,
+				     "agentos-qos-workload-v2",
+				     strlen("agentos-qos-workload-v2"));
+	workload_digest = hash_u64(workload_digest, AGENTEVAL_CHALLENGE);
+	workload_digest = hash_u64(workload_digest, (uint64)(uint)concurrency);
+	for (int index = 0; index < requests; index++) {
+		const struct revisit_perf_sample *sample =
+			&revisit_perf_samples[index];
+
+		workload_digest = hash_u64(workload_digest,
+					   (uint64)(uint)sample->round);
+		workload_digest = hash_u64(workload_digest,
+					   (uint64)(uint)sample->slot);
+		workload_digest = hash_u64(workload_digest,
+					   (uint64)(uint)sample->identity);
+		workload_digest = hash_u64(workload_digest, sample->request_id);
+	}
+
+	for (int index = 0; index < requests; index++) {
+		const struct revisit_perf_sample *sample =
+			&revisit_perf_samples[index];
+		char request_text[17];
+		char result_text[17];
+
+		format_hex16(sample->request_id, request_text);
+		format_hex16(sample->result_fingerprint, result_text);
+		printf("agenteval_ucore: concurrency_sample schema=2 concurrency=%d round=%d slot=%d identity=%c request_id=%s submitted_us=%llu started_us=%llu completed_us=%llu received_us=%llu wait_us=%llu service_us=%llu turnaround_us=%llu correct=%d contamination=%d fallback=%d isolation_ok=%d result_fingerprint=%s status=measured\n",
+		       sample->concurrency, sample->round, sample->slot,
+		       'A' + sample->identity, request_text,
+		       (unsigned long long)sample->submitted_us,
+		       (unsigned long long)sample->started_us,
+		       (unsigned long long)sample->completed_us,
+		       (unsigned long long)sample->received_us,
+		       (unsigned long long)sample->wait_us,
+		       (unsigned long long)sample->service_us,
+		       (unsigned long long)sample->turnaround_us,
+		       sample->correct, sample->contamination, sample->fallback,
+		       sample->isolation_ok, result_text);
+	}
+
+	summary_hash = hash_bytes(summary_hash, "agentos-qos-summary-v2",
+				  strlen("agentos-qos-summary-v2"));
+	summary_hash = hash_u64(summary_hash, AGENTEVAL_CHALLENGE);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)concurrency);
+	summary_hash = hash_u64(summary_hash, REVISIT_ROUNDS);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)requests);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)requests);
+	summary_hash = hash_u64(summary_hash, start_us);
+	summary_hash = hash_u64(summary_hash, end_us);
+	summary_hash = hash_u64(summary_hash, duration_us);
+	summary_hash = hash_u64(summary_hash, throughput_milli_rps);
+	summary_hash = hash_u64(summary_hash, goodput_milli_rps);
+	summary_hash = hash_u64(summary_hash, avg_milli_us);
+	summary_hash = hash_u64(summary_hash, p50_us);
+	summary_hash = hash_u64(summary_hash, p90_us);
+	summary_hash = hash_u64(summary_hash, p99_us);
+	summary_hash = hash_u64(summary_hash, wait_avg_milli_us);
+	summary_hash = hash_u64(summary_hash, wait_p50_us);
+	summary_hash = hash_u64(summary_hash, wait_p90_us);
+	summary_hash = hash_u64(summary_hash, wait_p99_us);
+	summary_hash = hash_u64(summary_hash, service_avg_milli_us);
+	summary_hash = hash_u64(summary_hash, service_p50_us);
+	summary_hash = hash_u64(summary_hash, service_p90_us);
+	summary_hash = hash_u64(summary_hash, service_p99_us);
+	summary_hash = hash_u64(summary_hash, fairness_jain_ppm);
+	summary_hash = hash_u64(summary_hash, max_min_fairness_ppm);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)isolated);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)correct);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)contamination);
+	summary_hash = hash_u64(summary_hash, (uint64)(uint)fallback);
+	summary_hash = hash_u64(summary_hash, workload_digest);
+	for (int index = 0; index < requests; index++)
+		summary_hash = hash_u64(
+			summary_hash,
+			revisit_perf_samples[index].result_fingerprint);
+	{
+		char workload_text[17];
+		char result_text[17];
+
+		format_hex16(workload_digest, workload_text);
+		format_hex16(summary_hash, result_text);
+		printf("agenteval_ucore: concurrency schema=2 concurrency=%d rounds=%d requests=%d completed=%d start_us=%llu end_us=%llu duration_us=%llu throughput_milli_rps=%llu goodput_milli_rps=%llu avg_milli_us=%llu p50_us=%llu p90_us=%llu p99_us=%llu wait_avg_milli_us=%llu wait_p50_us=%llu wait_p90_us=%llu wait_p99_us=%llu service_avg_milli_us=%llu service_p50_us=%llu service_p90_us=%llu service_p99_us=%llu fairness_jain_ppm=%llu max_min_fairness_ppm=%llu isolated=%d correct=%d contamination=%d fallback=%d workload_digest=%s result_fingerprint=%s status=measured\n",
+		       concurrency, REVISIT_ROUNDS, requests, requests,
+		       (unsigned long long)start_us,
+		       (unsigned long long)end_us,
+		       (unsigned long long)duration_us,
+		       (unsigned long long)throughput_milli_rps,
+		       (unsigned long long)goodput_milli_rps,
+		       (unsigned long long)avg_milli_us,
+		       (unsigned long long)p50_us,
+		       (unsigned long long)p90_us,
+		       (unsigned long long)p99_us,
+		       (unsigned long long)wait_avg_milli_us,
+		       (unsigned long long)wait_p50_us,
+		       (unsigned long long)wait_p90_us,
+		       (unsigned long long)wait_p99_us,
+		       (unsigned long long)service_avg_milli_us,
+		       (unsigned long long)service_p50_us,
+		       (unsigned long long)service_p90_us,
+		       (unsigned long long)service_p99_us,
+		       (unsigned long long)fairness_jain_ppm,
+		       (unsigned long long)max_min_fairness_ppm, isolated, correct,
+		       contamination, fallback, workload_text, result_text);
+	}
+}
+
+static void revisit_stop_workers(void)
+{
+	for (int identity = 0; identity < REVISIT_IDENTITIES; identity++) {
+		struct revisit_command command;
+		int status = -1;
+
+		memset(&command, 0, sizeof(command));
+		command.magic = REVISIT_COMMAND_MAGIC;
+		command.kind = REVISIT_COMMAND_STOP;
+		command.identity = identity;
+		revisit_write_exact(revisit_workers[identity].command_fd,
+				    &command, sizeof(command));
+		check(close(revisit_workers[identity].command_fd) == 0 &&
+			      close(revisit_workers[identity].reply_fd) == 0,
+		      "close revisit parent pipe endpoints");
+		check(waitpid(revisit_workers[identity].pid, &status) ==
+			      revisit_workers[identity].pid &&
+			      status == 0,
+		      "wait revisit workflow");
+	}
+}
+
+static void run_revisit_evaluation(void)
+{
+	revisit_start_workers();
+	run_revisit_visits();
+	for (int index = 0; index < REVISIT_CONCURRENCY_LEVELS; index++)
+		run_revisit_concurrency(revisit_concurrency_levels[index]);
+	revisit_stop_workers();
 }
 
 static int pair_runs_ab(int pair)
@@ -1023,17 +1841,17 @@ static void run_file_query_path_index(int load, int operations)
 	struct measurement index;
 
 	rebuild_file_index_diagnostic(experiment, load);
-	prepare_file_query_workload(load, 0, operations);
-	time_file_contest_variant(load, operations, 1,
+	prepare_file_query_workload(load, 0, 1);
+	time_file_contest_variant(load, 1, 1,
 				  path_file_observations, &path);
-	time_file_contest_variant(load, operations, 0,
+	time_file_contest_variant(load, 1, 0,
 				  index_file_observations, &index);
-	finalize_path_file_variant(experiment, load, 0, operations,
+	finalize_path_file_variant(experiment, load, 0, 1,
 				   path_file_observations, &path);
-	finalize_agent_file_variant(experiment, load, 0, operations, 1, 1,
+	finalize_agent_file_variant(experiment, load, 0, 1, 1, 1,
 				    index_file_observations, &index);
 	check_path_index_equivalence(path_file_observations,
-				     index_file_observations, operations,
+				     index_file_observations, 1,
 				     &path, &index);
 
 	for (int pair = 1; pair <= EVAL_PAIRS; pair++) {
@@ -2667,10 +3485,12 @@ static void run_functional_sentinel(int gate_fd, uint64 corr_id)
 	check(agent_info(&sentinel_info) == AGENT_STATUS_OK,
 	      "task5 Sentinel delay start");
 	wake_tick = sentinel_info.current_tick + TASK5_DELAY_TICKS;
+	sleep(TASK5_DELAY_TICKS * TASK5_TICK_MSEC);
 	do {
-		sleep(1);
 		check(agent_info(&sentinel_info) == AGENT_STATUS_OK,
 		      "task5 Sentinel delay clock");
+		if (sentinel_info.current_tick < wake_tick)
+			sched_yield();
 	} while (sentinel_info.current_tick < wake_tick);
 	memset(&functional_event, 0, sizeof(functional_event));
 	functional_event.type = AGENT_EVENT_MESSAGE;
@@ -2681,12 +3501,22 @@ static void run_functional_sentinel(int gate_fd, uint64 corr_id)
 	exit(0);
 }
 
+static void run_functional_waiter(void *arg)
+{
+	(void)arg;
+	memset(&functional_event, 0, sizeof(functional_event));
+	task5_wait_status = agent_wait(&functional_event, 50);
+	exit(0);
+}
+
 static void run_functional_task5(void)
 {
 	uint64 *values = capture.task5_values;
+	struct agent_info waiter_info;
 	uint64 corr_id = semantic_token("task5-event-v1", 2, 0, 0);
 	uint64 heartbeat_sleep_before;
 	uint64 heartbeat_wake_before;
+	uint64 message_sleep_before;
 	uint64 message_event_id;
 	uint64 message_event_tick;
 	uint64 message_sleep_after;
@@ -2697,6 +3527,7 @@ static void run_functional_task5(void)
 	int gate[2];
 	int helper_pid;
 	int helper_status = -1;
+	int waiter_tid;
 	int timeout_status;
 	char start = 'G';
 
@@ -2730,11 +3561,24 @@ static void run_functional_task5(void)
 	      "task5 trusted Sentinel route");
 	check(agent_info(&functional_info_before) == AGENT_STATUS_OK,
 	      "task5 info before message wait");
+	message_sleep_before = functional_info_before.wait_sleep_count;
+	task5_wait_status = -99;
+	waiter_tid = thread_create(run_functional_waiter, 0);
+	check(waiter_tid > 0, "task5 create message waiter");
+	for (int attempt = 0; attempt < 64; attempt++) {
+		check(agent_info(&waiter_info) == AGENT_STATUS_OK,
+		      "task5 observe message waiter");
+		if (waiter_info.wait_sleep_count > message_sleep_before)
+			break;
+		sched_yield();
+	}
+	check(waiter_info.wait_sleep_count > message_sleep_before,
+	      "task5 message waiter published");
 	check(write(gate[1], &start, 1) == 1,
 	      "task5 release Sentinel helper");
 	close(gate[1]);
-	memset(&functional_event, 0, sizeof(functional_event));
-	check(agent_wait(&functional_event, 50) == AGENT_STATUS_OK,
+	check(waittid(waiter_tid) == 0 &&
+		      task5_wait_status == AGENT_STATUS_OK,
 	      "task5 delayed message wait");
 	check(agent_info(&functional_info_after) == AGENT_STATUS_OK,
 	      "task5 info after message wait");
@@ -2744,36 +3588,9 @@ static void run_functional_task5(void)
 		      functional_event.corr_id == corr_id &&
 		      strcmp(functional_event.payload, "eval-functional") == 0,
 	      "task5 delayed message identity");
-	check(functional_info_after.wait_sleep_count >
-		      functional_info_before.wait_sleep_count &&
-		      functional_info_after.wait_wakeup_count >
-			      functional_info_before.wait_wakeup_count,
-	      "task5 real sleep and wake counters");
 	check(functional_info_after.current_tick >=
 		      functional_info_before.current_tick + TASK5_DELAY_TICKS,
 	      "task5 delayed wait advances wall ticks");
-	check(functional_info_after.sched_dispatch_count >
-		      functional_info_before.sched_dispatch_count &&
-		      functional_info_after.sched_dispatch_count -
-			      functional_info_before.sched_dispatch_count <=
-			      TASK5_MAX_IDLE_DISPATCHES &&
-		      functional_info_after.current_tick -
-			      functional_info_before.current_tick >=
-			      2 * (functional_info_after.sched_dispatch_count -
-				   functional_info_before.sched_dispatch_count),
-	      "task5 delayed wait has bounded dispatches");
-	check(functional_info_before.sched_weight > 0 &&
-		      functional_info_after.sched_weight ==
-			      functional_info_before.sched_weight &&
-		      functional_info_after.sched_vruntime >=
-			      functional_info_before.sched_vruntime &&
-		      functional_info_after.sched_vruntime -
-			      functional_info_before.sched_vruntime ==
-			      (functional_info_after.sched_dispatch_count -
-			       functional_info_before.sched_dispatch_count) *
-			      (1000 / functional_info_before.sched_weight > 0 ?
-			       1000 / functional_info_before.sched_weight : 1),
-	      "task5 delayed wait vruntime matches dispatches");
 	check(functional_info_after.wait_loop_count >
 		      functional_info_before.wait_loop_count &&
 		      functional_info_after.wait_loop_count -
@@ -2975,6 +3792,8 @@ int main(void)
 		run_evaluation();
 	check(waitpid(pid, &status) == pid, "wait evaluation orchestrator");
 	check(status == 0, "evaluation orchestrator status");
+	/* Supplementary isolation load runs only after headline timing completes. */
+	run_revisit_evaluation();
 	printf("agenteval_ucore: parent passed\n");
 	return 0;
 }

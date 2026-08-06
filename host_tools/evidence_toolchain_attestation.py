@@ -90,9 +90,6 @@ except ImportError:
     )
 
 
-CONTROLLED_PATH = ":".join(POSIX_SYSTEM_PATHS)
-
-
 def decode_external_output(payload: bytes | None) -> str:
     """Decode human-facing tool output without depending on the host locale."""
 

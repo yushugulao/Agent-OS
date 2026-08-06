@@ -5974,7 +5974,7 @@ fs_dentry_gate_unlock(void)
 		panic("dentry gate owner");
 	fs_dentry_owner = 0;
 	fs_dentry_owner_generation = 0;
-	wait_queue_wake_one(&fs_dentry_waiters);
+	wait_queue_wake_all(&fs_dentry_waiters);
 	intr_restore(enabled);
 }
 
@@ -6080,7 +6080,7 @@ fs_namespace_gate_unlock(void)
 		panic("namespace gate owner");
 	fs_namespace_owner = 0;
 	fs_namespace_owner_generation = 0;
-	wait_queue_wake_one(&fs_namespace_waiters);
+	wait_queue_wake_all(&fs_namespace_waiters);
 	intr_restore(enabled);
 }
 
@@ -6975,60 +6975,6 @@ fail:
 	if (found)
 		iput(found);
 	return 0;
-}
-
-//Show the filenames of all files in the directory
-int dirls(struct inode *dp, const struct vfs_cred *cred)
-{
-	uint count = 0;
-	uint off = 0;
-	struct dirent de;
-	struct dir_scan_batch batch;
-	struct inode *target;
-	char name[DIRSIZ + 1];
-	int result;
-
-	if (dp == 0 || dp->type != T_DIR)
-		return -1;
-	if (!vfs_inode_authorize(dp, cred, VFS_OP_READ))
-		return -1;
-
-	while (off < dp->size) {
-		if (!vfs_inode_authorize(dp, cred, VFS_OP_READ))
-			return -1;
-		result = dir_scan_fill(dp, 0, off, 0, &batch);
-		if (result < 0)
-			return result;
-		off = batch.next_offset;
-		for (uint i = 0; i < batch.count; i++) {
-			de = batch.candidates[i].entry;
-			target = inode_get(dp->dev, de.inum);
-			if (target == 0)
-				return -1;
-			result = ivalid(target);
-			if (result < 0) {
-				iput(target);
-				return result;
-			}
-			if (!vfs_inode_label_valid(target)) {
-				iput(target);
-				return -1;
-			}
-			if (!vfs_inode_authorize(target, cred, VFS_OP_LOOKUP)) {
-				iput(target);
-				continue;
-			}
-			iput(target);
-			memmove(name, de.name, DIRSIZ);
-			name[DIRSIZ] = 0;
-			printf("%s\n", name);
-			count++;
-		}
-		result = dir_scan_checkpoint(batch.scanned);
-		if (result < 0)
-			return result;
-	}
-	return count;
 }
 
 // Write a new directory entry (name, inum) into the directory dp.

@@ -14,7 +14,7 @@ CALL_RE = re.compile(r"\b(" + "|".join(CALL_NAMES) + r")\s*\(\s*")
 STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"', re.DOTALL)
 SUPPORTED = {
     "%d", "%u", "%x", "%ld", "%lu", "%lx",
-    "%lld", "%llu", "%llx", "%p", "%s", "%%",
+    "%lld", "%llu", "%llx", "%p", "%c", "%s", "%%",
 }
 
 
@@ -61,6 +61,7 @@ def validate_implementation(source: str, owner: str) -> None:
                 "integer_conversion(fmt[i + 2] & 0xff)",
                 "integer_conversion(fmt[i + 1] & 0xff)",
                 "printptr(va_arg(ap, uint64));",
+                "case 'c':\n\t\t\tconsputc(va_arg(ap, int));",
                 "case '%':\n\t\t\tconsputc('%');",
             ),
             owner,
@@ -72,6 +73,8 @@ def validate_implementation(source: str, owner: str) -> None:
                 "s[1] == 'l' && integer_conversion(s[2])",
                 "integer_conversion(s[1])",
                 "printptr(va_arg(ap, uint64));",
+                "char byte = (char)va_arg(ap, int);",
+                "out(f, &byte, 1);",
                 "case '%':\n\t\t\tout(f, percent, 1);",
                 "while (buffer_len > 0)",
                 "if (r <= 0)",

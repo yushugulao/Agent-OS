@@ -26,7 +26,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -473,33 +472,6 @@ CASE_FILES = (
     "fault.execution.json",
     "reboot.execution.json",
 )
-SNAPSHOT_FIELDS = {
-    "format",
-    "geometry",
-    "allocated_blocks",
-    "owned_blocks",
-    "qmap_entries",
-    "qmap_state_counts",
-    "qmap_top_state_counts",
-    "canonical_violations",
-    "allocated_unowned",
-    "owner_without_bitmap",
-    "inodes",
-    "free_inode_owners",
-    "inode_owner_entries",
-    "inode_owner_state_counts",
-    "root_names",
-    "reachable_inodes",
-    "reachable_blocks",
-    "inode_blocks",
-    "payload_sha256",
-    "block_sha256",
-    "orphan_inodes",
-    "orphan_blocks",
-    "image",
-    "generator",
-    "state_sha256",
-}
 SNAPSHOT_LIST_FIELDS = {
     "allocated_blocks",
     "canonical_violations",

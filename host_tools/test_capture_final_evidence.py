@@ -31,17 +31,14 @@ from dual_state_archive import _canonical_zip
 from dual_state_evidence_contract import (
     AGENTOS_REQUIRED_AGENT_ROLES,
     AGENT_TO_PLAIN_CASE,
-    BACKEND_REPORT_ARTIFACTS,
     BACKEND_REPORT_CASES,
     DUAL_STATE_RAW_ARTIFACTS,
-    MAIN_FLOW_RAW_ARTIFACTS,
     MAIN_FLOW_SOURCE_ARTIFACTS,
     MAIN_FLOW_SOURCE_SPECS,
     MAIN_FLOW_TELEMETRY_ARTIFACT,
     PLATFORM_PROGRAMS,
     PROGRAM_LEDGER_ARTIFACTS,
     RUN_RESULT_ARTIFACTS,
-    SEEDED_ACTION_SUMMARY_ARTIFACT,
     STATE_ARCHIVE_ARTIFACTS,
     evidence_check_count,
     expected_scenario_rows,
@@ -110,7 +107,7 @@ BENCHMARK_MARKER = (
 FIXTURE_AGENT_CASES = (
     "agentfinal_ucore", "agentfs_ucore", "agentscan_ucore", "agentloop_ucore",
     "agentsched_ucore", "agentconflict_ucore", "agentllm_ucore", "agentbench_ucore",
-    "labbench_ucore", "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
+    "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
     "agentscope_ucore", "agenttrust_ucore", "agentvfs_ucore", "iobudget_ucore",
     "usersafety_ucore", "blocking_semantics_ucore",
 )
@@ -305,7 +302,7 @@ virtio = load("validate-virtio-disk-log.py")
 agent_cases = (
     "agentfinal_ucore", "agentfs_ucore", "agentscan_ucore", "agentloop_ucore",
     "agentsched_ucore", "agentconflict_ucore", "agentllm_ucore", "agentbench_ucore",
-    "labbench_ucore", "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
+    "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
     "agentscope_ucore", "agenttrust_ucore", "agentvfs_ucore", "iobudget_ucore",
     "usersafety_ucore", "blocking_semantics_ucore",
 )
@@ -890,11 +887,6 @@ combined("fs-allocator-fault", [("fs-allocator:fixture:prepare",
                                  ["fsallocfault_ucore: case=alloc phase=intent action=busy prepared=1"])],
          "[fs-allocator-fault] dynamic matrix, negative mutant, and raw evidence passed")
 ''')
-def fixture_collector(root: Path) -> Path:
-    candidate = root / "scripts" / COLLECTOR.name
-    return candidate if candidate.is_file() else COLLECTOR
-
-
 def collector_command(root: Path, *arguments: str) -> list[str]:
     launcher = root / "scripts" / "trusted-python-entry.py"
     if not launcher.is_file():
@@ -2721,7 +2713,8 @@ procreap_ucore: parent passed
         for content in public_docs.values():
             self.assertNotRegex(content, r"full-evidence(?: bundle)? schema v5")
             self.assertNotRegex(content, r"schema v5 的 `?verification-summary")
-        self.assertIn("scenario plan schema v5", public_docs[REPO / "README.md"])
+        self.assertIn("正式证据索引", public_docs[REPO / "README.md"])
+        self.assertIn("不依赖 Runner", public_docs[REPO / "README.md"])
         self.assertNotIn("依赖已提交的 Git 对象和不可变的 CI artifact", evidence_readme)
         for token in ("FULL_VERIFY_PROFILE_VERSION", "STEP_CONTRACT", "validate_settings",
                       "step_contract_sha256",

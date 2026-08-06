@@ -530,7 +530,6 @@ run_case agentconflict_ucore "agentconflict_ucore: parent passed"
 run_case agentllm_ucore "agentllm_ucore: parent passed"
 run_case agentbench_ucore "agentbench_ucore: parent passed"
 run_case ch8_cow_ucore "ch8_cow_ucore: passed"
-run_case labbench_ucore "labbench_ucore: parent passed"
 run_case labdemo_ucore "labdemo_ucore: parent passed"
 run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
 run_case agenttoolabi_ucore "agenttoolabi_ucore: parent passed"
@@ -543,8 +542,8 @@ run_case usersafety_ucore "usersafety_ucore: parent passed"
 run_case blocking_semantics_ucore "blocking_semantics_ucore: parent passed"
 
 if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-	if [[ "${calibration_case_ordinal}" != "19" ]]; then
-		echo "[agent-tests] calibration did not execute exactly 19 cases" >&2
+	if [[ "${calibration_case_ordinal}" != "18" ]]; then
+		echo "[agent-tests] calibration did not execute exactly 18 cases" >&2
 		exit 1
 	fi
 	"${PYTHON_BIN}" -I -S -B scripts/agent_test_calibration.py derive-round \

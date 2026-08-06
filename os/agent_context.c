@@ -95,7 +95,6 @@ agent_context_proc_activate(struct proc *p)
 	if (p == 0)
 		return;
 	p->agent_ctx_base = AGENT_CONTEXT_BASE;
-	p->agent_ctx_size = AGENT_CONTEXT_SIZE;
 }
 
 void
@@ -106,7 +105,6 @@ agent_context_proc_reset(struct proc *p)
 	if (!agent_context_is_empty(p))
 		panic("Agent context reset with live state");
 	p->agent_ctx_base = 0;
-	p->agent_ctx_size = 0;
 	p->agent_call_count = 0;
 	p->context_path_count = 0;
 	p->context_path_capacity = 0;
@@ -118,11 +116,7 @@ agent_context_proc_reset(struct proc *p)
 	p->context_active_path_oldest = 0;
 	p->context_branch_generation = 0;
 	p->context_cause_branch_generation = 0;
-	p->context_path_dropped = 0;
 	p->context_path_rollback_count = 0;
-	p->context_eviction_policy = 0;
-	p->latest_response_offset = 0;
-	p->records_offset = 0;
 	p->agent_current_span_id = 0;
 	p->agent_current_span_owner = 0;
 	p->agent_current_cause_sequence = 0;
@@ -401,7 +395,6 @@ agent_context_append_receipt_commit(
 	p->context_path_visible_head = receipt->sequence;
 	p->context_active_path_count = active_count;
 	p->context_active_path_oldest = active_oldest;
-	agent_context_path_note_append(0);
 	return 0;
 }
 
@@ -892,9 +885,10 @@ agent_context_latest_ptr(struct proc *p)
 }
 
 static uint64
-agent_context_record_offset(struct proc *p, uint64 slot)
+agent_context_record_offset(uint64 slot)
 {
-	return p->records_offset + slot * sizeof(struct agent_context_record);
+	return AGENT_CONTEXT_RECORDS_OFFSET +
+	       slot * sizeof(struct agent_context_record);
 }
 
 static void
@@ -903,7 +897,7 @@ agent_context_append_ranges(struct proc *p,
 {
 	uint64 slot = p->context_path_head % p->context_path_capacity;
 
-	ranges[0].offset = agent_context_record_offset(p, slot);
+	ranges[0].offset = agent_context_record_offset(slot);
 	ranges[0].length = sizeof(struct agent_context_record);
 	ranges[1].offset = AGENT_CONTEXT_LATEST_RESPONSE_OFFSET;
 	ranges[1].length = sizeof(struct agent_result);
@@ -944,7 +938,7 @@ agent_context_write_record_shadow(struct proc *p, uint64 slot,
 {
 	if (p == 0 || record == 0 || slot >= p->context_path_capacity ||
 	    agent_context_array_write(p->agent_shadow_kva,
-				      agent_context_record_offset(p, slot),
+				      agent_context_record_offset(slot),
 				      (char *)record, sizeof(*record)) < 0)
 		panic("Agent context prepared record");
 }
@@ -966,10 +960,10 @@ agent_context_fill_header(struct proc *p,
 	header->active_path_count = p->context_active_path_count;
 	header->active_path_oldest_sequence =
 		p->context_active_path_oldest;
-	header->dropped_records = p->context_path_dropped;
+	header->dropped_records = p->agent_call_count - p->context_path_count;
 	header->rollback_count = p->context_path_rollback_count;
-	header->latest_response_offset = p->latest_response_offset;
-	header->records_offset = p->records_offset;
+	header->latest_response_offset = AGENT_CONTEXT_LATEST_RESPONSE_OFFSET;
+	header->records_offset = AGENT_CONTEXT_RECORDS_OFFSET;
 	header->user_cache_offset = agent_context_user_cache_offset();
 	header->user_cache_size = agent_context_user_cache_size();
 	header->current_span_id = p->agent_current_span_id;
@@ -980,7 +974,7 @@ agent_context_fill_header(struct proc *p,
 	header->workflow_lifecycle_generation =
 		p->workflow_lifecycle_generation;
 	header->branch_generation = p->context_branch_generation;
-	header->eviction_policy = p->context_eviction_policy;
+	header->eviction_policy = AGENT_CONTEXT_EVICT_FIFO;
 }
 
 static int
@@ -1083,11 +1077,7 @@ agent_context_init(struct proc *p)
 	p->context_active_path_oldest = 0;
 	p->context_branch_generation = branch_generation;
 	p->context_cause_branch_generation = 0;
-	p->context_path_dropped = 0;
 	p->context_path_rollback_count = 0;
-	p->context_eviction_policy = AGENT_CONTEXT_EVICT_FIFO;
-	p->latest_response_offset = AGENT_CONTEXT_LATEST_RESPONSE_OFFSET;
-	p->records_offset = AGENT_CONTEXT_RECORDS_OFFSET;
 	p->agent_current_span_id = span_id;
 	p->agent_current_span_owner = p->agent_control_id;
 	p->agent_current_cause_sequence = 0;
@@ -1295,7 +1285,6 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 			p->context_path_oldest = latest->sequence;
 		p->context_path_count++;
 	} else {
-		p->context_path_dropped++;
 		p->context_path_oldest =
 			latest->sequence - p->context_path_capacity + 1;
 	}
@@ -1469,7 +1458,6 @@ sys_context_query(uint64 start_sequence, uint64 outaddr, int max)
 	int copied = 0;
 	int first = 1;
 	int finished = 0;
-	int account_query = 0;
 	int terminal;
 	int result;
 
@@ -1488,7 +1476,6 @@ sys_context_query(uint64 start_sequence, uint64 outaddr, int max)
 		goto out;
 	}
 	path_index = agent_context_path_index(p);
-	account_query = 1;
 	if (start_sequence > query_summary.head_sequence) {
 		result = 0;
 		goto out;
@@ -1575,9 +1562,6 @@ sys_context_query(uint64 start_sequence, uint64 outaddr, int max)
 	}
 	result = copied;
 out:
-	if (account_query)
-		agent_context_path_note_forward_query(records_examined,
-					      query_summary.count);
 	agent_lifecycle_context_lane_leave(p);
 	return result;
 }
@@ -1822,7 +1806,6 @@ sys_context_clear(void)
 	p->context_active_path_oldest = 0;
 	p->context_branch_generation = branch_generation;
 	p->context_cause_branch_generation = 0;
-	p->context_path_dropped = 0;
 	p->context_path_rollback_count = 0;
 	p->agent_current_span_id = span_id;
 	p->agent_current_span_owner = p->agent_control_id;

@@ -1406,20 +1406,6 @@ def run_command(command: list[str], log_path: Path, timeout_seconds: int, append
     return 124 if timed_out else int(proc.returncode)
 
 
-def parse_seconds(value: str | int | float) -> float:
-    text = str(value)
-    unit = text[-1:]
-    number = text[:-1] if unit.isalpha() else text
-    seconds = float(number)
-    if unit in ("s", "S") or not unit.isalpha():
-        return seconds
-    if unit in ("m", "M"):
-        return seconds * 60
-    if unit in ("h", "H"):
-        return seconds * 3600
-    raise ValueError(f"unsupported duration: {text}")
-
-
 def seeded_ucore_deadline_contract(timeout_seconds: int) -> dict[str, object]:
     if (
         type(timeout_seconds) is not int

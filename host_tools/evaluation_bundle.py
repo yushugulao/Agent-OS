@@ -142,9 +142,6 @@ FIXED_RUN_FILES = {
     "summary.json",
     "preflight.log",
 }
-OPTIONAL_RUN_FILES = {
-    "scenario-preflight.log",
-}
 KERNEL_COST_FILES = {
     "kernel-cost-config.json",
     "kernel-cost-report.json",

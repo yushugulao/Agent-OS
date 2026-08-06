@@ -305,10 +305,6 @@ def rewrite_environment_and_receipt(
     payload._write_checksums(root)
 
 
-def rewrite_environment(root: Path, mutate) -> None:
-    rewrite_environment_and_receipt(root, mutate)
-
-
 def refresh_shim_hash(environment: dict[str, object]) -> None:
     launch = environment["python_launch"]
     shim = launch["shim"]

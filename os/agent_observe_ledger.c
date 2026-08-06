@@ -95,10 +95,7 @@ static uint64 next_span_id;
 static uint64 next_event_id;
 static uint64 agent_audit_next_sequence;
 static uint64 agent_audit_head;
-static uint64 agent_audit_count;
-static uint64 agent_audit_ledger_hash;
 static uint64 agent_observe_checkpoint_generation;
-static uint64 agent_audit_kind_counts[AGENT_AUDIT_KIND_PREFETCH + 1];
 static struct agent_audit_record agent_audit_records[AGENT_AUDIT_MAX_RECORDS];
 static uint agent_audit_scopes[AGENT_AUDIT_MAX_RECORDS];
 static uint64 agent_audit_principals[AGENT_AUDIT_MAX_RECORDS];
@@ -109,7 +106,6 @@ static struct agent_audit_receipt_state agent_audit_receipts[AGENT_AUDIT_MAX_REC
 static struct agent_audit_scope_state agent_audit_scope_states[NPROC];
 static uint64 agent_span_prefetch_next_sequence;
 static uint64 agent_span_prefetch_head;
-static uint64 agent_span_prefetch_count;
 static struct agent_file_prefetch_hint agent_span_prefetch_hints[AGENT_FILE_PREFETCH_SPAN_MAX];
 static uint agent_span_prefetch_scopes[AGENT_FILE_PREFETCH_SPAN_MAX];
 static uint64 agent_span_prefetch_owners[AGENT_FILE_PREFETCH_SPAN_MAX];
@@ -197,10 +193,7 @@ agent_observe_ledger_init(void)
 	next_event_id = 1;
 	agent_audit_next_sequence = 1;
 	agent_audit_head = 0;
-	agent_audit_count = 0;
-	agent_audit_ledger_hash = 0;
 	agent_observe_checkpoint_generation = 1;
-	memset(agent_audit_kind_counts, 0, sizeof(agent_audit_kind_counts));
 	memset(agent_audit_records, 0, sizeof(agent_audit_records));
 	memset(agent_audit_scopes, 0, sizeof(agent_audit_scopes));
 	memset(agent_audit_principals, 0, sizeof(agent_audit_principals));
@@ -213,7 +206,6 @@ agent_observe_ledger_init(void)
 	       sizeof(agent_audit_scope_states));
 	agent_span_prefetch_next_sequence = 1;
 	agent_span_prefetch_head = 0;
-	agent_span_prefetch_count = 0;
 	memset(agent_span_prefetch_hints, 0,
 	       sizeof(agent_span_prefetch_hints));
 	memset(agent_span_prefetch_scopes, 0,
@@ -1620,7 +1612,6 @@ agent_observe_checkpoint_restore_scope(
 	int restore_slots[AGENT_OBSERVE_CHECKPOINT_PER_SCOPE];
 	uint64 successful_records;
 	uint64 largest_sequence = 0;
-	uint64 largest_hash = 0;
 	uint64 old_head;
 	uint restored = 0;
 	int enabled;
@@ -1717,13 +1708,10 @@ agent_observe_checkpoint_restore_scope(
 		if (entry->record.kind >= 0 &&
 		    entry->record.kind <= AGENT_AUDIT_KIND_PREFETCH) {
 			state->kind_counts[entry->record.kind]++;
-			agent_audit_kind_counts[entry->record.kind]++;
 		}
 		if (entry->record.sequence > largest_sequence) {
 			largest_sequence = entry->record.sequence;
-			largest_hash = entry->record.record_hash;
 		}
-		agent_audit_count++;
 		agent_audit_head = (slot + 1) % AGENT_AUDIT_MAX_RECORDS;
 		restored++;
 	}
@@ -1736,7 +1724,6 @@ agent_observe_checkpoint_restore_scope(
 		agent_audit_next_sequence = 0;
 	} else if (largest_sequence >= agent_audit_next_sequence) {
 		agent_audit_next_sequence = largest_sequence + 1;
-		agent_audit_ledger_hash = largest_hash;
 	}
 	result = 0;
 	goto out;
@@ -1750,12 +1737,8 @@ rollback:
 		if (kind >= 0 && kind <= AGENT_AUDIT_KIND_PREFETCH) {
 			if (state->kind_counts[kind] > 0)
 				state->kind_counts[kind]--;
-			if (agent_audit_kind_counts[kind] > 0)
-				agent_audit_kind_counts[kind]--;
 		}
 		agent_audit_slot_clear(slot);
-		if (agent_audit_count > 0)
-			agent_audit_count--;
 	}
 	memset(state->sequence_slots, 0, sizeof(state->sequence_slots));
 	memset(state->timeline_slots, 0, sizeof(state->timeline_slots));
@@ -1969,13 +1952,10 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	scope_state->total_records++;
 	if (agent_observe_checkpoint_generation != ~0ULL)
 		agent_observe_checkpoint_generation++;
-	agent_audit_ledger_hash = record->record_hash;
 	if (kind >= 0 && kind <= AGENT_AUDIT_KIND_PREFETCH) {
 		scope_state->kind_counts[kind]++;
-		agent_audit_kind_counts[kind]++;
 	}
 	agent_audit_head = (slot + 1) % AGENT_AUDIT_MAX_RECORDS;
-	agent_audit_count++;
 	agent_observe_timeline_record_audit(scope_id, record, span_owner);
 }
 
@@ -2082,7 +2062,6 @@ agent_observe_prefetch_bus_store_commit(
 	int start;
 	int owned = 0;
 	int oldest_slot = -1;
-	int was_free;
 	uint64 oldest_sequence = ~0ULL;
 
 	if (hint == 0 || hint->span_id == 0 || span_owner == 0 || hint->fid == 0 ||
@@ -2133,12 +2112,8 @@ agent_observe_prefetch_bus_store_commit(
 	}
 	if (slot < 0)
 		return;
-	was_free = agent_span_prefetch_scopes[slot] == VFS_SCOPE_NONE;
 	agent_span_prefetch_head =
 		(slot + 1) % AGENT_FILE_PREFETCH_SPAN_MAX;
-	if (was_free &&
-	    agent_span_prefetch_count < AGENT_FILE_PREFETCH_SPAN_MAX)
-		agent_span_prefetch_count++;
 
 fill:
 	memmove(&copy, hint, sizeof(copy));
@@ -2204,8 +2179,6 @@ agent_observe_scope_reclaim(uint scope_id)
 		agent_span_prefetch_owners[i] = 0;
 		memset(&agent_span_prefetch_hints[i], 0,
 		       sizeof(agent_span_prefetch_hints[i]));
-		if (agent_span_prefetch_count > 0)
-			agent_span_prefetch_count--;
 	}
 	{
 		struct agent_audit_scope_state *state =

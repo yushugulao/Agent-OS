@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check ci-host-selftests ci-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check traditional-performance traditional-performance-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check traditional-performance traditional-performance-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -49,11 +49,13 @@ override PY = $(PYTHON_BIN)
 HOST_CC ?= $(if $(strip $(HOSTCC)),$(HOSTCC),cc)
 AGENT_TEST_DURATION_PROFILE ?= local-e3
 COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
-AGENTOS_BUILD_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind build 2>/dev/null),8)
-AGENTOS_TEST_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind host 2>/dev/null),8)
+AGENTOS_BUILD_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind build 2>/dev/null),1)
+AGENTOS_TEST_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind host 2>/dev/null),1)
+AGENTOS_QEMU_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind qemu 2>/dev/null),1)
 override AGENTOS_JOB_VALUES := \
 	1 2 3 4 5 6 7 8 9 10 11 12 \
 	13 14 15 16 17 18 19 20 21 22 23 24
+override AGENTOS_QEMU_JOB_VALUES := 1 2 3 4 5 6 7 8
 ifneq ($(words $(AGENTOS_BUILD_JOBS)),1)
 $(error AGENTOS_BUILD_JOBS must be an integer between 1 and 24)
 endif
@@ -65,6 +67,12 @@ $(error AGENTOS_TEST_JOBS must be an integer between 1 and 24)
 endif
 ifeq ($(filter $(AGENTOS_TEST_JOBS),$(AGENTOS_JOB_VALUES)),)
 $(error AGENTOS_TEST_JOBS must be an integer between 1 and 24)
+endif
+ifneq ($(words $(AGENTOS_QEMU_JOBS)),1)
+$(error AGENTOS_QEMU_JOBS must be an integer between 1 and 8)
+endif
+ifeq ($(filter $(AGENTOS_QEMU_JOBS),$(AGENTOS_QEMU_JOB_VALUES)),)
+$(error AGENTOS_QEMU_JOBS must be an integer between 1 and 8)
 endif
 # Reuse an outer GNU make jobserver when one exists.  A serial top-level make
 # gives each independent recursive build the configured bounded worker pool.
@@ -675,7 +683,7 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-check-agent-uapi-layout.py \
 	scripts/test-context-active-path-wiring.py \
 	scripts/test-exec-image-policy.py \
-	scripts/test-kernel-work-receipt.py \
+	scripts/check-kernel-work-receipt.py \
 	scripts/test-agent-metadata-disk-format.py \
 	scripts/test-agent-observe-disk-format.py \
 	scripts/test-host-probe-toolchain.py \
@@ -697,24 +705,24 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-bio-deferred-sponsor.py \
 	scripts/test-bio-overwrite-cache.py \
 	scripts/test-fs-epoch-sponsor.py \
-	scripts/test-fs-epoch-index.py \
+	scripts/check-fs-epoch-index.py \
 	scripts/test-fs-overwrite-fastpath.py \
-	scripts/test-copyoutv-window.py \
-	scripts/test-agent-metadata-content-fastpath.py \
+	scripts/check-copyoutv-window.py \
+	scripts/check-agent-metadata-content-fastpath.py \
 	scripts/test-agent-metadata-journal.py \
-	scripts/test-agent-metadata-read-view.py \
+	scripts/check-agent-metadata-read-view.py \
 	scripts/test-io-work-conserving-wiring.py \
-	scripts/test-syscall-file-transaction.py \
-	scripts/test-traditional-io-fastpath.py \
+	scripts/check-syscall-file-transaction.py \
+	scripts/check-traditional-io-fastpath.py \
 	scripts/test-traditional-performance-contract.py \
 	scripts/test-open-file-io-lease.py \
 	scripts/test-lazy-bio-admission.py \
-	scripts/test-inode-mapping-guard.py \
-	scripts/test-read-epoch-lazy-finalizer.py \
-	scripts/test-close-lazy-finalizer.py \
-	scripts/test-background-dispatch-fastpath.py \
-	scripts/test-filepool-freelist.py \
-	scripts/test-vm-page-table-fastpath.py \
+	scripts/check-inode-mapping-guard.py \
+	scripts/check-read-epoch-lazy-finalizer.py \
+	scripts/check-close-lazy-finalizer.py \
+	scripts/check-background-dispatch-fastpath.py \
+	scripts/check-filepool-freelist.py \
+	scripts/check-vm-page-table-fastpath.py \
 	scripts/test-audit-lease-admission.py \
 	scripts/test-observe-span-retention.py \
 	scripts/check-fs-allocator-state.py \
@@ -731,11 +739,12 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-resource-kind-policy.py \
 	scripts/test-sync-owner-wiring.py \
 	scripts/test-validate-virtio-disk-log.py \
-	scripts/test-sequential-read-batch.py \
+	scripts/check-sequential-read-batch.py \
 	scripts/test-virtio-disk-wiring.py \
 	scripts/test-parallel-qemu-regressions.py \
 	scripts/test-parallel-test-runner.py \
-	scripts/test-resource-jobs.py
+	scripts/test-resource-jobs.py \
+	scripts/test-resource-rate-lease-freering.py
 
 kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh agent-observe-disk-format-check printf-format-static-check
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
@@ -768,7 +777,6 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_check_seeded_action_state.py \
 	host_tools/test_check_host_surface_alignment.py \
 	host_tools/test_check_host_test_alignment.py \
-	host_tools/test_gitlab_ci_contract.py \
 	host_tools/test_agent_observe_disk_evidence.py \
 	host_tools/test_plain_ucore_action_runner.py \
 	host_tools/test_research_state_manifest.py \
@@ -784,7 +792,6 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_dual_measurement_source_contract.py \
 	host_tools/test_summarize_dual_platform_results.py \
 	host_tools/test_result_bundle_contract.py \
-	host_tools/test_chart_type_data_contract.py \
 	host_tools/test_chart_svg_layout_contract.py \
 	host_tools/test_evaluation_platform.py \
 	host_tools/test_evaluation_campaign.py \
@@ -797,7 +804,6 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_evaluation_scenario.py \
 	host_tools/test_task6_source_comparability.py \
 	host_tools/test_evaluation_dashboard.py \
-	host_tools/test_same_kernel_performance.py \
 	host_tools/test_traditional_performance.py \
 	host_tools/test_contest_demo.py \
 	host_tools/test_full_verification_payload.py \
@@ -853,7 +859,7 @@ override LOCAL_HOST_SELFTESTS := \
 	$(filter-out $(HOST_CONTRACT_TESTS),$(EVIDENCE_CAPTURE_TESTS)) \
 	$(filter-out $(HOST_CONTRACT_TESTS) $(EVIDENCE_CAPTURE_TESTS),$(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS))
 
-# Expensive evidence mutation suites remain mandatory in ci-check/full-verify,
+# Expensive evidence mutation suites remain mandatory in local-check/full-verify,
 # but do not make every development checkpoint wait for package-scale replay.
 override STAGE_EXPENSIVE_HOST_SELFTESTS := \
 	$(EVIDENCE_CAPTURE_TESTS) \
@@ -872,7 +878,7 @@ stage-host-selftests: $(STAGE_HOST_SELFTESTS) scripts/run-parallel-tests.py
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
 		$(STAGE_HOST_SELFTESTS)
 
-local-host-selftests: $(LOCAL_HOST_SELFTESTS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh host_tools/gitlab_ci_contract.py agent-observe-disk-format-check printf-format-static-check
+local-host-selftests: $(LOCAL_HOST_SELFTESTS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh agent-observe-disk-format-check printf-format-static-check
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
@@ -894,11 +900,6 @@ local-check:
 	+@$(MAKE) --no-print-directory local-host-selftests
 	+@$(MAKE) --no-print-directory kernel-budget-check
 	+@$(MAKE) --no-print-directory user-stack-check
-
-# Backward-compatible local alias. GitLab never schedules this target.
-ci-host-selftests: local-host-selftests
-
-ci-check: local-check
 
 stage-check:
 	+@$(MAKE) --no-print-directory stage-host-selftests
@@ -1106,6 +1107,9 @@ target-readiness:
 
 full-verify:
 	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
+		AGENTOS_BUILD_JOBS=$(call shell_quote,$(AGENTOS_BUILD_JOBS)) \
+		AGENTOS_TEST_JOBS=$(call shell_quote,$(AGENTOS_TEST_JOBS)) \
+		AGENTOS_QEMU_JOBS=$(call shell_quote,$(AGENTOS_QEMU_JOBS)) \
 		HOST_CC=$(call shell_quote,$(HOST_CC)) \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-full-verification.sh
 

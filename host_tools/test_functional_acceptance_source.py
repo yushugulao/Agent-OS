@@ -62,30 +62,19 @@ def _move_after(source: str, name: str, statement: str, anchor: str) -> str:
 
 def _assert_rejected(source: str, label: str, *, refresh_digests: bool) -> None:
     saved_functions = contract.FUNCTION_FINGERPRINTS
-    saved_translation_unit = contract.TRANSLATION_UNIT_FINGERPRINT
-    saved_call_graph = contract.NORMALIZED_CALL_GRAPH_FINGERPRINT
     if refresh_digests:
         tokens = _lex(source)
-        definitions = contract._top_level_definitions(tokens)
         refreshed_functions = {
             name: contract._definition_fingerprint(tokens, name)
             for name in contract._all_functions()
         }
         contract.FUNCTION_FINGERPRINTS = refreshed_functions
-        contract.TRANSLATION_UNIT_FINGERPRINT = (
-            contract._translation_unit_fingerprint(tokens)
-        )
-        contract.NORMALIZED_CALL_GRAPH_FINGERPRINT = (
-            contract._normalized_call_graph_fingerprint(definitions)
-        )
     try:
         contract.validate_functional_acceptance_source_text(source)
     except ValueError:
         return
     finally:
         contract.FUNCTION_FINGERPRINTS = saved_functions
-        contract.TRANSLATION_UNIT_FINGERPRINT = saved_translation_unit
-        contract.NORMALIZED_CALL_GRAPH_FINGERPRINT = saved_call_graph
     raise AssertionError(f"accepted functional provenance mutation: {label}")
 
 

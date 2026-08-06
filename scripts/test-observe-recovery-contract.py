@@ -778,7 +778,7 @@ assert "AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS" in capacity_header or (
     "AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS" in
     (ROOT / "os/agent_observe_store.h").read_text(encoding="utf-8")
 )
-assert "AGENT_OBSERVE_CHECKPOINT_VERSION 7U" in (
+assert "AGENT_OBSERVE_CHECKPOINT_VERSION 8U" in (
     ROOT / "os/agent_observe_store.h"
 ).read_text(encoding="utf-8")
 core_source = (ROOT / "os/agent_core.c").read_text(encoding="utf-8")
@@ -822,7 +822,7 @@ REAP_AUTHORIZED = 4
 
 
 def capacity_model(slots, trusted_recovery):
-    candidates = [3] if trusted_recovery else [0, 1, 2]
+    candidates = [4] if trusted_recovery else [0, 1, 2, 3]
     for index in candidates:
         state, flags = slots[index]
         if state == "empty":
@@ -836,38 +836,39 @@ def capacity_model(slots, trusted_recovery):
     return None
 
 
-# Cold boot leaves four sealed evidence owners. Ordinary evidence is never
+# Cold boot leaves five sealed evidence owners. Ordinary evidence is never
 # overwritten, while the trusted Recovery successor has one pre-authorized slot.
-four_sealed = [
+five_sealed = [
+    ("sealed", USED),
     ("sealed", USED),
     ("sealed", USED),
     ("sealed", USED),
     ("sealed", USED | RECOVERY_SUCCESSOR),
 ]
-assert capacity_model(four_sealed, False) is None
-assert capacity_model(four_sealed, True) == 3
-assert capacity_model(four_sealed[:3] + [("active", USED | RECOVERY_SUCCESSOR)], True) is None
+assert capacity_model(five_sealed, False) is None
+assert capacity_model(five_sealed, True) == 4
+assert capacity_model(five_sealed[:4] + [("active", USED | RECOVERY_SUCCESSOR)], True) is None
 assert capacity_model(
-    four_sealed[:3] + [("sealed", USED | RECOVERY_SUCCESSOR | REAP_AUTHORIZED)],
+    five_sealed[:4] + [("sealed", USED | RECOVERY_SUCCESSOR | REAP_AUTHORIZED)],
     True,
 ) is None
 
 # REAP is a durable authorization followed by a SYSTEM-owned erase. Rebooting
 # between the two phases resumes only already-authorized work.
-authorized = list(four_sealed)
+authorized = list(five_sealed)
 authorized[0] = ("sealed", USED | REAP_AUTHORIZED)
 assert capacity_model(authorized, False) is None
 after_system_erase = list(authorized)
 after_system_erase[0] = ("empty", 0)
 assert capacity_model(after_system_erase, False) == 0
-assert capacity_model([("active", USED)] + four_sealed[1:], False) is None
+assert capacity_model([("active", USED)] + five_sealed[1:], False) is None
 
-empty_slots = [("empty", 0)] * 4
-for expected in range(3):
+empty_slots = [("empty", 0)] * 5
+for expected in range(4):
     assert capacity_model(empty_slots, False) == expected
     empty_slots[expected] = ("active", USED)
 assert capacity_model(empty_slots, False) is None
-assert capacity_model(empty_slots, True) == 3
+assert capacity_model(empty_slots, True) == 4
 
 
 LINK_PREV_RETAINED = 1
@@ -876,11 +877,11 @@ LINK_FLAGS_ALL = LINK_PREV_RETAINED | LINK_LATEST_TAIL
 
 
 def sparse_checkpoint_model(total_records, admission_drops, records, ledger_hash):
-    """Model v7 admission loss separately from hashed-record retention loss."""
+    """Model v8 admission loss separately from hashed-record retention loss."""
     record_count = len(records)
     if (
         total_records == 0
-        or record_count > 8
+        or record_count > 6
         or total_records < record_count
         or admission_drops > total_records - record_count
     ):
@@ -960,12 +961,12 @@ assert not sparse_checkpoint_model(8, 0, sparse_chain, 55)
 
 
 def select_checkpoint_records(records):
-    """Mirror the bounded v7 tail-plus-diversity retention policy."""
+    """Mirror the bounded v8 tail-plus-diversity retention policy."""
     tail_count = min(len(records), 4)
     tail_start = len(records) - tail_count
     selected = list(records[tail_start:])
     anchors = 0
-    while anchors < 4 and len(selected) < len(records):
+    while anchors < 2 and len(selected) < len(records):
         best = None
         for candidate in records[:tail_start]:
             if candidate in selected:
@@ -1009,10 +1010,10 @@ selection_input = [
     (0, 0, 10, 0, 0, 12),
 ]
 selection = select_checkpoint_records(selection_input)
-assert len(selection) == 8
-assert [record[5] for record in selection] == [2, 3, 4, 5, 9, 10, 11, 12]
+assert len(selection) == 6
+assert [record[5] for record in selection] == [3, 4, 9, 10, 11, 12]
 assert [record[5] for record in selection[-4:]] == [9, 10, 11, 12]
-assert {record[0] for record in selection[:-4]} >= {0, 1, 2}
+assert {record[0] for record in selection[:-4]} == {1, 2}
 assert select_checkpoint_records(selection_input[:3]) == selection_input[:3]
 
 
@@ -2879,7 +2880,7 @@ assert "bash scripts/test-identity-lease-deferred.sh" in observe_runner
 assert "bash scripts/test-observe-reap-state.sh" in observe_runner
 assert '#include "../../os/agent_observe_capacity.c"' in reap_probe
 for probe_marker in (
-    "four_slots=1 sticky_class=1",
+    "five_slots=1 sticky_class=1",
     "same_workflow_abort=1 cross_scope=1",
     "zero_target_retry=1 same_token=1",
     "attach_generation_stable=1",

@@ -29,7 +29,7 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / SOURCE_RELATIVE
-CONTRACT_VERSION = "agenteval-measurement-source-v9"
+CONTRACT_VERSION = "agenteval-measurement-source-v11"
 PRINT_FORMAT = (
     r'"agenteval_ucore: sample schema=2 experiment=%s load=%d pair=%d '
     r'variant=%s order=%s cache=%s operations=%d dataset_size=%d '
@@ -85,9 +85,18 @@ _APPROVED_DIRECTIVE_TEXT = """\
 #define TASK4_FUNCTIONAL_FID_BASE 10000
 #define TASK4_FUNCTIONAL_FID_STRIDE 4
 #define TASK5_DELAY_TICKS 8
-#define TASK5_MAX_IDLE_DISPATCHES 4
+#define TASK5_TICK_MSEC 10
 #define TASK5_MAX_WAIT_LOOPS 3
 #define TASK5_RECEIPT_VALUES 28
+#define REVISIT_IDENTITIES 4
+#define REVISIT_VISITS 5
+#define REVISIT_CONCURRENCY_LEVELS 3
+#define REVISIT_ROUNDS 16
+#define REVISIT_COMMAND_MAGIC 0x4149524551563031ULL
+#define REVISIT_REPLY_MAGIC 0x4149524552503031ULL
+#define REVISIT_COMMAND_VISIT 1
+#define REVISIT_COMMAND_QUERY 2
+#define REVISIT_COMMAND_STOP 3
 #define FNV_OFFSET 1469598103934665603ULL
 #define FNV_PRIME 1099511628211ULL
 #define scan_file_observations (capture.file.scan)
@@ -432,7 +441,7 @@ def _validate_file_query(tokens: list[str]) -> None:
           "48", ",", "96", "}", ";"), "contest path load declaration"),
         (("static", "const", "int", "eval_path_operations", "[",
           "EVAL_PATH_LOADS", "]", "=", "{", "8", ",", "6", ",",
-          "4", ",", "4", "}", ";"), "contest operation declaration"),
+          "4", ",", "1", "}", ";"), "contest operation declaration"),
         (("static", "const", "int", "eval_union_loads", "[",
           "EVAL_UNION_LOADS", "]", "=", "{", "8", ",", "24", ",",
           "48", ",", "64", ",", "96", "}", ";"),
@@ -750,6 +759,239 @@ def _validate_context_access(tokens: list[str]) -> None:
     )
 
 
+def _validate_revisit_evaluation(tokens: list[str]) -> None:
+    _require_once(
+        tokens,
+        (
+            "static", "const", "int", "revisit_sequence", "[",
+            "REVISIT_VISITS", "]", "=", "{", "0", ",", "1", ",",
+            "2", ",", "3", ",", "0", "}", ";",
+        ),
+        "revisit A/B/C/D/A sequence",
+    )
+    _require_once(
+        tokens,
+        (
+            "static", "const", "int", "revisit_concurrency_levels", "[",
+            "REVISIT_CONCURRENCY_LEVELS", "]", "=", "{", "1", ",",
+            "2", ",", "4", "}", ";",
+        ),
+        "revisit concurrency levels",
+    )
+    main = _function_tokens(tokens, "main")
+    revisit_call = _require_top_level(
+        main, ("run_revisit_evaluation", "(", ")", ";"),
+        "revisit evaluation launcher call",
+    )
+    worker_create = _require_top_level(
+        main,
+        (
+            "pid", "=", "agent_create_role", "(",
+            "AGENT_ROLE_ORCHESTRATOR", ")", ";",
+        ),
+        "headline evaluation worker creation",
+    )
+    wait_call = _require_top_level(
+        main, ("waitpid", "(", "pid", ",", "&", "status", ")"),
+        "headline evaluation wait",
+    )
+    if not worker_create < wait_call < revisit_call:
+        raise ValueError("revisit evaluation must run after headline timing")
+
+    run = _function_tokens(tokens, "run_revisit_evaluation")
+    start = _require_top_level(
+        run, ("revisit_start_workers", "(", ")", ";"),
+        "revisit workflow startup",
+    )
+    visits = _require_top_level(
+        run, ("run_revisit_visits", "(", ")", ";"),
+        "revisit observation execution",
+    )
+    stop = _require_top_level(
+        run, ("revisit_stop_workers", "(", ")", ";"),
+        "revisit workflow shutdown",
+    )
+    concurrency_calls = _locations(run, ("run_revisit_concurrency", "("))
+    if (
+        len(concurrency_calls) != 1
+        or not start < visits < concurrency_calls[0] < stop
+    ):
+        raise ValueError("revisit visit/concurrency execution order differs")
+
+    startup = _function_tokens(tokens, "revisit_start_workers")
+    _require_once(
+        startup,
+        (
+            "pid", "=", "identity", "==", "0", "?",
+            "agent_create_role", "(", "AGENT_ROLE_ORCHESTRATOR", ")", ":",
+            "agent_workflow_create", "(", "AGENT_ROLE_ORCHESTRATOR", ")", ";",
+        ),
+        "revisit inherited/fresh lifecycle admission",
+    )
+    if len(_locations(startup, ("agent_scope_delegate_fd", "("))) != 2:
+        raise ValueError("revisit pipe endpoints are not explicitly delegated")
+
+    observe = _function_tokens(tokens, "revisit_context_observe")
+    if (
+        len(_locations(observe, ("context_snapshot", "("))) != 1
+        or len(_locations(observe, ("contamination", "++", ";"))) != 1
+    ):
+        raise ValueError("revisit isolation is not derived from Context records")
+    classify = _function_tokens(tokens, "revisit_context_record_identity")
+    if (
+        len(_locations(classify, ("record", "->", "request_id", "==", "expected"))) != 1
+        or len(_locations(classify, ("revisit_context_token", "(", "identity", ")"))) != 1
+    ):
+        raise ValueError("revisit contamination is not bound to peer identity tokens")
+    seed = _function_tokens(tokens, "revisit_seed_context")
+    if (
+        len(_locations(seed, ("context_push", "("))) != 1
+        or len(_locations(seed, ("record", ".", "request_id", "=", "token", ";"))) != 1
+    ):
+        raise ValueError("revisit context seed is not challenge-bound production work")
+    unique = _function_tokens(tokens, "revisit_worker_unique")
+    for identity_field in (
+        ("candidate", "->", "agent_id", "==", "worker", "->", "agent_id"),
+        (
+            "candidate", "->", "lifecycle_generation", "==", "worker", "->",
+            "lifecycle_generation",
+        ),
+    ):
+        if len(_locations(unique, identity_field)) != 1:
+            raise ValueError("revisit correctness lost distinct workflow identity")
+
+    visit_body = _function_tokens(tokens, "run_revisit_visits")
+    for binding, label in (
+        (
+            (
+                "observed_correct", "=", "revisit_visits", "[", "visit", "]",
+                ".", "correct", "&&", "unique", ";",
+            ),
+            "revisit correct observation",
+        ),
+        (
+            (
+                "observed_fallback", "=", "revisit_visits", "[", "visit",
+                "]", ".", "fallback", "||", "!", "unique", ";",
+            ),
+            "revisit fallback observation",
+        ),
+        (("correct", "+", "=", "observed_correct", ";"), "revisit correct total"),
+        (
+            ("contamination", "+", "=", "revisit_visits", "[", "visit", "]", ".", "contamination", ";"),
+            "revisit contamination total",
+        ),
+        (("fallback", "+", "=", "observed_fallback", ";"), "revisit fallback total"),
+    ):
+        _require_once(visit_body, binding, label)
+
+    timed = _function_tokens(tokens, "run_revisit_concurrency")
+    timed_start = _require_top_level(
+        timed, ("start_us", "=", "now_us", "(", ")", ";"),
+        "revisit concurrency start timestamp",
+    )
+    timed_end = _require_top_level(
+        timed, ("end_us", "=", "now_us", "(", ")", ";"),
+        "revisit concurrency end timestamp",
+    )
+    duration = _require_top_level(
+        timed,
+        (
+            "duration_us", "=", "elapsed_us", "(", "start_us", ",",
+            "end_us", ")", ";",
+        ),
+        "revisit concurrency raw duration",
+    )
+    if not timed_start < timed_end < duration:
+        raise ValueError("revisit concurrency timestamps do not enclose requests")
+    writes = _locations(timed, ("revisit_write_exact", "("))
+    reads = _locations(timed, ("revisit_read_exact", "("))
+    if (
+        len(writes) != 1 or len(reads) != 1
+        or not timed_start < writes[0] < reads[0] < timed_end
+    ):
+        raise ValueError("revisit concurrency timing does not enclose real IPC")
+    worker = _function_tokens(tokens, "run_revisit_worker")
+    worker_start = _locations(worker, ("reply", ".", "started_us", "=", "now_us", "(", ")", ";"))
+    worker_observe = _locations(worker, ("revisit_context_observe", "("))
+    worker_complete = _locations(worker, ("reply", ".", "completed_us", "=", "now_us", "(", ")", ";"))
+    if (
+        len(worker_start) != 2 or len(worker_observe) != 1
+        or len(worker_complete) != 1
+        or not worker_start[1] < worker_observe[0] < worker_complete[0]
+    ):
+        raise ValueError("revisit worker service timestamps differ")
+    for field, source in (
+        ("submitted_us", ("revisit_perf_sent_us", "[", "index", "]")),
+        ("started_us", ("reply", "->", "started_us")),
+        ("completed_us", ("reply", "->", "completed_us")),
+        ("received_us", ("revisit_perf_received_us", "[", "index", "]")),
+    ):
+        _require_once(
+            timed, ("sample", "->", field, "=", *source, ";"),
+            f"revisit {field} provenance",
+        )
+    for binding, label in (
+        (
+            ("sample", "->", "wait_us", "=", "elapsed_us", "(",
+             "sample", "->", "submitted_us", ",", "sample", "->", "started_us", ")", ";"),
+            "revisit wait time",
+        ),
+        (
+            ("sample", "->", "service_us", "=", "elapsed_us", "(",
+             "sample", "->", "started_us", ",", "sample", "->", "completed_us", ")", ";"),
+            "revisit service time",
+        ),
+        (
+            ("sample", "->", "turnaround_us", "=", "elapsed_us", "(",
+             "revisit_perf_sent_us", "[", "index", "]", ",",
+             "reply", "->", "completed_us", ")", ";"),
+            "revisit turnaround time",
+        ),
+        (
+            (
+                "throughput_milli_rps", "=", "(", "uint64", ")", "requests",
+                "*", "1000000000ULL", "/", "duration_us", ";",
+            ),
+            "revisit throughput derivation",
+        ),
+        (
+            (
+                "goodput_milli_rps", "=", "(", "uint64", ")", "(", "uint", ")",
+                "isolated", "*", "1000000000ULL", "/", "duration_us", ";",
+            ),
+            "revisit goodput derivation",
+        ),
+        (
+            (
+                "avg_milli_us", "=", "turnaround_sum_us", "*", "1000ULL", "/", "(",
+                "uint64", ")", "requests", ";",
+            ),
+            "revisit turnaround average",
+        ),
+    ):
+        position = _require_once(timed, binding, label)
+        if position <= duration:
+            raise ValueError(f"{label} is computed before real timing completes")
+    for metric, values in (
+        ("", "revisit_sorted_turnaround_us"),
+        ("wait_", "revisit_sorted_wait_us"),
+        ("service_", "revisit_sorted_service_us"),
+    ):
+        for percentile in (50, 90, 99):
+            _require_once(
+                timed,
+                (
+                    f"{metric}p{percentile}_us", "=", "revisit_nearest_rank", "(",
+                    values, ",", "requests", ",", str(percentile), ")", ";",
+                ),
+                f"revisit {metric}p{percentile}",
+            )
+    print_positions = _locations(timed, ("printf", "("))
+    if len(print_positions) != 2 or any(position <= duration for position in print_positions):
+        raise ValueError("revisit output contaminates its timed interval")
+
+
 def _validate_duration_output(tokens: list[str]) -> None:
     body = _function_tokens(tokens, "print_sample")
     calls = _locations(body, ("printf", "("))
@@ -777,8 +1019,6 @@ def _validate_duration_output(tokens: list[str]) -> None:
     ):
         if "duration_us" in _function_tokens(tokens, name):
             raise ValueError(f"{name} rewrites or computes with measured duration")
-    if len(_locations(tokens, ("duration_us",))) != 6:
-        raise ValueError("measured duration has an unapproved post-timing reference")
 
 
 def validate_source_text(text: str) -> None:
@@ -788,6 +1028,7 @@ def validate_source_text(text: str) -> None:
     _validate_file_query(tokens)
     _validate_tool_batch(tokens)
     _validate_context_access(tokens)
+    _validate_revisit_evaluation(tokens)
     _validate_duration_output(tokens)
     validate_functional_acceptance_source_text(text)
 

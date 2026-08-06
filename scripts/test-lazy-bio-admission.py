@@ -122,12 +122,13 @@ class LazyBioAdmissionTests(unittest.TestCase):
     def test_rejects_runtime_policy_before_boot_io(self) -> None:
         self.mutate(
             "os/main.c",
-            "\tshow_all_files();\n"
-            "\t/* Runtime I/O admission may sleep, so enable it only after the first\n"
-            "\t * runnable process and all polling-only boot I/O have been prepared. */\n"
+            "\tload_init_app();\n"
+            "\tinfof(\"start scheduler!\");\n"
+            "\t/* Runtime I/O admission starts after boot-only image loading completes. */\n"
             "\tbio_policy_start();",
             "\tbio_policy_start();\n"
-            "\tshow_all_files();",
+            "\tload_init_app();\n"
+            "\tinfof(\"start scheduler!\");",
         )
         self.assert_rejected("runtime I/O admission starts before")
 

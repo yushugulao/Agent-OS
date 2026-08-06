@@ -332,7 +332,6 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 		intr_restore(enabled);
 		return -1;
 	}
-	open_file_io_lease_file_retire(f);
 	f->ref = 0;
 
 	// Publish the free slot before cleanup, which may cross safe points.
@@ -655,7 +654,6 @@ int filealloc_many(struct proc *owner, struct file **files, uint count)
 		f->resource_account = account;
 		f->resource_reserved = reserved;
 		f->cleanup_owner = bio_process_owner(owner);
-		open_file_io_lease_file_init(f);
 	}
 	filepool_assert_locked();
 	intr_restore(enabled);
@@ -674,25 +672,6 @@ struct file *filealloc(struct proc *owner)
 	struct file *file = 0;
 
 	return filealloc_many(owner, &file, 1) == 0 ? file : 0;
-}
-
-//Show names of all files in the root_dir.
-int show_all_files()
-{
-	int root_status;
-	struct inode *root = root_dir_status(&root_status);
-	struct vfs_cred cred;
-	int result;
-
-	if (root == 0 || root_status != FS_LOOKUP_FOUND) {
-		if (root)
-			iput(root);
-		return -1;
-	}
-	vfs_cred_from_proc(curr_proc(), &cred);
-	result = dirls(root, &cred);
-	iput(root);
-	return result;
 }
 
 static int filetruncate(struct inode *ip, const struct vfs_cred *cred)

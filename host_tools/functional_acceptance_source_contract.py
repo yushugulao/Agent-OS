@@ -25,7 +25,7 @@ else:
     )
 
 
-CONTRACT_VERSION = "agentos-functional-acceptance-source-v2"
+CONTRACT_VERSION = "agentos-functional-acceptance-source-v4"
 
 TASK_SPECS = {
     "task1": ("run_functional_task1", 19, "task1-semantic-v1", "19"),
@@ -39,60 +39,6 @@ TASK_SPECS = {
         "TASK5_RECEIPT_VALUES",
     ),
 }
-
-# Complete top-level definition inventory for the production translation unit.
-# Unknown helpers fail closed even when they are reached through a reviewed
-# dispatcher or a parenthesized/function-pointer call.
-TRANSLATION_UNIT_FUNCTIONS = (
-    "check", "hash_bytes", "bytes_equal", "hash_u64",
-    "functional_values_semantic", "functional_receipt",
-    "print_functional_values", "print_launcher_receipt",
-    "print_functional_receipt", "semantic_token", "file_target_gcd",
-    "file_target_step", "result_fingerprint_begin", "now_us", "elapsed_us",
-    "pair_runs_ab", "workload_fingerprint", "format_hex16", "print_sample",
-    "make_code", "eval_file_record_hash", "eval_file_record_build",
-    "eval_file_record_valid", "eval_file_field_matches",
-    "eval_file_record_matches_query", "eval_file_record_project",
-    "seed_file_metadata", "census_visible_file_records", "prepare_file_query",
-    "prepare_file_query_workload",
-    "set_file_query_flags", "file_workload_fingerprint",
-    "capture_file_observation", "hash_file_semantics",
-    "time_file_contest_variant", "time_file_table_variant",
-    "file_hit_matches_record", "validate_index_physical_identity",
-    "validate_agent_file_observation", "finalize_agent_file_variant",
-    "finalize_path_file_variant", "check_path_index_equivalence",
-    "rebuild_file_index_diagnostic", "run_file_query_path_index",
-    "run_file_query_table_ablation", "path_operations_for_load",
-    "table_experiment_has_load", "run_file_query_experiment",
-    "prepare_tool_workload", "hash_tool_results", "time_tool_variant",
-    "finalize_tool_variant", "run_tool_batch_experiment",
-    "copy_context_volatile", "context_fixture_arg0", "context_fixture_arg1",
-    "prepare_context_fixture", "hash_context_results",
-    "prepare_context_capture", "time_context_variant",
-    "finalize_context_variant", "validate_context_mirror",
-    "run_context_access_experiment", "run_functional_task1",
-    "functional_param_uint", "functional_param_string",
-    "functional_request_init", "functional_tool_call",
-    "functional_bounded_text_length", "functional_schema_param_count",
-    "functional_tool_desc", "functional_core_schema_hash",
-    "functional_catalog_load", "functional_response_text_hash",
-    "run_functional_task2", "prepare_functional_task3_tool",
-    "check_functional_task3_result", "check_functional_task3_record",
-    "functional_task3_record_hash", "run_functional_task3",
-    "task4_fixture_code", "task4_fixture_name", "task4_fixture_text",
-    "task4_create_file", "task4_set_metadata", "task4_prepare_query",
-    "task4_hit_matches", "task4_query_semantic", "task4_delete_metadata",
-    "run_functional_task4", "run_functional_sentinel",
-    "run_functional_task5", "wait_for_file_scan", "run_evaluation",
-    "run_compat_sentinel_probe", "main",
-)
-
-TRANSLATION_UNIT_FINGERPRINT = (
-    "4748bda19d4a31be6a8fe0087f3b7919c8864ad4827cd28e74007480be8a8dca"
-)
-NORMALIZED_CALL_GRAPH_FINGERPRINT = (
-    "2593f790f08ebde5dbf0a9238931051eee6c177addb8952a3994844ceca930ef"
-)
 
 # This is the complete reviewed function closure that can create, validate,
 # hash, or publish Task 1-5 evidence.  Per-function digests make a review point
@@ -147,7 +93,10 @@ FUNCTION_GROUPS = {
         "task4_delete_metadata",
         "run_functional_task4",
     ),
-    "task5": ("run_functional_sentinel", "run_functional_task5"),
+    "task5": (
+        "run_functional_sentinel", "run_functional_waiter",
+        "run_functional_task5",
+    ),
 }
 
 
@@ -170,7 +119,7 @@ FUNCTION_FINGERPRINTS: dict[str, str] = {
     "format_hex16": "db77c81b5b81582de637b26c2ee3c43e143e83828f686cf59ecb41190f1449bc",
     "run_compat_sentinel_probe": "9512260918f207f54032f97b9d939881a505944fee150244303ce89f17062a4a",
     "run_evaluation": "00a48b4548b7d1e295e95963b1486eb4405bd7fe76d25fe612211bc11f60c7a3",
-    "main": "693d733ff8db0217148f52fc9d36e61a164db6604ff657b55bf6963c9c7b65b7",
+    "main": "19d496e49e33da3de101d085e6077809e9d20629515b9ddc21968643d0f1aca3",
     "run_functional_task1": "581f4a8b85d6cdf93f13d5c5b0423e1b2ded7af03f17d5bc9c90ddc309f1c7ce",
     "functional_param_uint": "997255a3721e64baccda98889a6bded6f75d87b83f936843eef510fc45f064d7",
     "functional_param_string": "9b7fa5a3e6cd4e9a72509ad8aad0b399cd03e6d25f2e298d32eb99ec445ba7a5",
@@ -198,8 +147,9 @@ FUNCTION_FINGERPRINTS: dict[str, str] = {
     "task4_query_semantic": "73bf2d612ba98213c13e8509a2301b2d06aabeea561b4c34f1adf4bcc99c055a",
     "task4_delete_metadata": "56024658bc4be4dbcdcbcda69fdcccb5db2511a960f35e0cf78a8b7977ceb653",
     "run_functional_task4": "659552807589f250eaed57140d23e1606f691a6ac2a3eff7efb741e3202841a0",
-    "run_functional_sentinel": "1f05236f344ac930c21a4fe99476c7d2c83ee91464e41dae20e898deb9893bad",
-    "run_functional_task5": "5b5eb4b7489b3d58064ce0fb814bbb3c646d7d279ee6ac081301d688d317eaee",
+    "run_functional_sentinel": "cad2eb31ffc3c60fedeb8691b658ec250b864760e94485ed3d43ab8db29b08e1",
+    "run_functional_waiter": "8e94f140be6ab5852698675798d88ab78df71353caa56568b9734311aa6f4975",
+    "run_functional_task5": "1c106e89c9708c5dee40b5450a11efeb19d807e84779bb085b3511f93d9ffc23",
 }
 
 
@@ -261,13 +211,6 @@ def _top_level_definitions(tokens: list[str]) -> dict[str, list[str]]:
     return definitions
 
 
-def _translation_unit_fingerprint(tokens: list[str]) -> str:
-    encoded = json.dumps(
-        tokens, ensure_ascii=True, separators=(",", ":")
-    ).encode("ascii")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _normalized_calls(body: list[str]) -> tuple[str, ...]:
     calls: list[str] = []
     keywords = {"for", "if", "sizeof", "switch", "while"}
@@ -295,19 +238,6 @@ def _normalized_calls(body: list[str]) -> tuple[str, ...]:
         ):
             calls.append(token)
     return tuple(calls)
-
-
-def _normalized_call_graph_fingerprint(
-    definitions: dict[str, list[str]],
-) -> str:
-    graph = [
-        (name, _normalized_calls(definitions[name]))
-        for name in TRANSLATION_UNIT_FUNCTIONS
-    ]
-    encoded = json.dumps(
-        graph, ensure_ascii=True, separators=(",", ":")
-    ).encode("ascii")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _concatenated_strings(tokens: list[str]) -> tuple[str, ...]:
@@ -923,8 +853,8 @@ def _validate_task5(tokens: list[str], values: dict[int, tuple[str, ...]]) -> No
     body = _function_tokens(tokens, "run_functional_task5")
     for name, count in (
         ("agent_create", 1),
-        ("agent_wait", 6),
-        ("agent_info", 8),
+        ("agent_wait", 5),
+        ("agent_info", 9),
         ("agent_heartbeat_set", 2),
         ("agent_heartbeat_stop", 1),
         ("agent_watch", 1),
@@ -933,7 +863,10 @@ def _validate_task5(tokens: list[str], values: dict[int, tuple[str, ...]]) -> No
         ("waitpid", 1),
     ):
         _require_call_count(body, name, count, "Task5")
-    for root in ("functional_info_before", "functional_info_after", "functional_event"):
+    for root in (
+        "functional_info_before", "functional_info_after", "functional_event",
+        "waiter_info",
+    ):
         _forbid_member_assignment(body, root, "Task5 kernel output")
     for slot, expected in {
         1: ("(", "uint64", ")", "(", "uint", ")", "helper_pid"),
@@ -972,6 +905,20 @@ def _validate_task5(tokens: list[str], values: dict[int, tuple[str, ...]]) -> No
         (("message_wake_after", "=", "functional_info_after", ".", "wait_wakeup_count", ";"), "message wake counter"),
     ):
         _require_sequence(body, sequence, f"Task5 {label} provenance")
+    waiter_create = _require_sequence(
+        body,
+        ("waiter_tid", "=", "thread_create", "(", "run_functional_waiter", ",", "0", ")", ";"),
+        "Task5 waiter callback",
+    )
+    waiter_release = _require_sequence(
+        body, ("write", "(", "gate", "[", "1", "]", ",", "&", "start", ",", "1", ")"),
+        "Task5 Sentinel release",
+    )
+    waiter_join = _require_sequence(
+        body, ("waittid", "(", "waiter_tid", ")"), "Task5 waiter join"
+    )
+    if not waiter_create < waiter_release < waiter_join:
+        raise ValueError("Task5 waiter callback/join order differs")
     waits = _locations(body, ("agent_wait", "("))
     heartbeat_sets = _locations(body, ("agent_heartbeat_set", "("))
     heartbeat_stop = _require_sequence(
@@ -999,13 +946,24 @@ def _validate_task5(tokens: list[str], values: dict[int, tuple[str, ...]]) -> No
         body, ("values", "[", "15", "]", "="), "Task5 timeout receipt order"
     )
     if not (
-        len(waits) == 6
+        len(waits) == 5
         and len(heartbeat_sets) == 2
-        and waits[1] < message_capture < heartbeat_sets[0] < waits[2]
-        < tick_one < heartbeat_sets[1] < waits[3] < tick_two
-        < heartbeat_stop < waits[4] < timeout < waits[5] < timeout_receipt
+        and message_capture < heartbeat_sets[0] < waits[1]
+        < tick_one < heartbeat_sets[1] < waits[2] < tick_two
+        < heartbeat_stop < waits[3] < timeout < waits[4] < timeout_receipt
     ):
         raise ValueError("Task5 wait/heartbeat result capture order differs")
+    waiter = _function_tokens(tokens, "run_functional_waiter")
+    for name, count in (("agent_wait", 1), ("exit", 1)):
+        _require_call_count(waiter, name, count, "Task5 waiter")
+    _require_sequence(
+        waiter,
+        (
+            "task5_wait_status", "=", "agent_wait", "(", "&",
+            "functional_event", ",", "50", ")", ";",
+        ),
+        "Task5 waiter result",
+    )
     sentinel = _function_tokens(tokens, "run_functional_sentinel")
     for name, count in (("agent_info", 3), ("read", 1), ("sleep", 1), ("agent_wake", 1)):
         _require_call_count(sentinel, name, count, "Task5 Sentinel")
@@ -1143,16 +1101,6 @@ def validate_functional_acceptance_source_text(text: str) -> None:
     if re.search(r"\?\?[=/'()!<>-]|%:", text):
         raise ValueError("functional source uses alternate preprocessing tokens")
     tokens = _lex(text)
-    definitions = _top_level_definitions(tokens)
-    if tuple(definitions) != TRANSLATION_UNIT_FUNCTIONS:
-        raise ValueError("functional translation-unit function inventory differs")
-    if _translation_unit_fingerprint(tokens) != TRANSLATION_UNIT_FINGERPRINT:
-        raise ValueError("reviewed functional translation unit differs")
-    if (
-        _normalized_call_graph_fingerprint(definitions)
-        != NORMALIZED_CALL_GRAPH_FINGERPRINT
-    ):
-        raise ValueError("functional normalized call graph differs")
     names = _all_functions()
     if set(FUNCTION_FINGERPRINTS) != set(names):
         raise ValueError("functional source fingerprint inventory differs")

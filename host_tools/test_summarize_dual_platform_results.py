@@ -136,12 +136,11 @@ def main() -> int:
         assert "runner_tick_pairs" not in result, result
         assert "runner_tick_expected_pairs" not in result, result
         assert len(result["experiment_raw_csvs"]) == 1, result
-        assert len(result["charts"]) == 3, result
+        assert len(result["charts"]) == 2, result
         served = validate_result_bundle(out_dir)
         assert served["status"] == "valid" and served["rows"] == 6, served
         assert {Path(path).name for path in result["charts"]} == {
             "runtime-observation.svg",
-            "cost-replacement.svg",
             "experiment-file-query-bar.svg",
         }, result
         for artifact in (
@@ -194,7 +193,13 @@ def main() -> int:
         evidence = (out_dir / "evidence-manifest.csv").read_text(encoding="utf-8")
         assert "file-query-benchmark.csv" in evidence and "Guest log SHA256" in evidence
         generated = "\n".join(path.read_text(encoding="utf-8") for path in out_dir.glob("*.html"))
-        for obsolete in ("experiment-context-line.svg", "experiment-monitor-area.svg", "file-metadata.csv"):
+        for obsolete in (
+            "cost-replacement.svg",
+            "用户态成本项与 AgentOS 替代机制",
+            "experiment-context-line.svg",
+            "experiment-monitor-area.svg",
+            "file-metadata.csv",
+        ):
             assert obsolete not in generated, obsolete
 
     with tempfile.TemporaryDirectory() as work_tmp, tempfile.TemporaryDirectory() as out_tmp:
@@ -213,6 +218,7 @@ def main() -> int:
             (legacy_raw / name).write_text("formula,generated\n", encoding="utf-8")
         charts = out_dir / "charts"
         charts.mkdir()
+        (charts / "cost-replacement.svg").write_text("<svg>stale costs</svg>\n", encoding="utf-8")
         (charts / "experiment-context-line.svg").write_text("<svg/>\n", encoding="utf-8")
         (charts / "runner-ticks.svg").write_text("<svg>stale ticks</svg>\n", encoding="utf-8")
         (charts / "runner-speedup.svg").write_text("<svg>stale speedup</svg>\n", encoding="utf-8")
@@ -223,14 +229,14 @@ def main() -> int:
         assert result["runner_tick_reason"] == "plain_runtime_cases_zero", result
         assert "runner_tick_pairs" not in result, result
         assert "runner_tick_expected_pairs" not in result, result
-        assert len(result["charts"]) == 2, result
+        assert len(result["charts"]) == 1, result
         assert {Path(path).name for path in result["charts"]} == {
             "runtime-observation.svg",
-            "cost-replacement.svg",
         }, result
         assert not (out_dir / "experiments" / "raw").exists()
         assert not (out_dir / "experiments" / "experiment-stats.csv").exists()
         assert not (out_dir / "charts" / "experiment-context-line.svg").exists()
+        assert not (out_dir / "charts" / "cost-replacement.svg").exists()
         assert not (out_dir / "charts" / "runner-ticks.svg").exists()
         assert not (out_dir / "charts" / "runner-speedup.svg").exists()
         sweep_rows = read_csv(out_dir / "runner-sweep.csv")
@@ -267,7 +273,6 @@ def main() -> int:
         assert result["runner_tick_status"] == "unavailable", result
         assert {Path(path).name for path in result["charts"]} == {
             "runtime-observation.svg",
-            "cost-replacement.svg",
             "experiment-file-query-bar.svg",
         }, result
 

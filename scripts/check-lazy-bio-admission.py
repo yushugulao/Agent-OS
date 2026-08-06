@@ -144,7 +144,6 @@ def check(root: Path) -> None:
         boot.find(fragment)
         for fragment in (
             "load_init_app();",
-            "show_all_files();",
             "bio_policy_start();",
             "virtio_disk_runtime_start();",
             "scheduler();",

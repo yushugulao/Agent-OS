@@ -13,6 +13,12 @@ agent_background_request(void)
 }
 
 int
+agent_background_work_pending(void)
+{
+	return __atomic_load_n(&agent_background_pending, __ATOMIC_ACQUIRE);
+}
+
+int
 agent_background_take(void)
 {
 	return __atomic_exchange_n(&agent_background_pending, 0,

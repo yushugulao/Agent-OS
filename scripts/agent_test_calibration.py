@@ -47,21 +47,6 @@ PRELUDE_KEY = "agent-mechanism:context-sync-atomicity"
 FILE_ATTRIBUTE_REPARSE_POINT = getattr(
     stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400
 )
-GIT_REDIRECT_ENVIRONMENT = frozenset(
-    {
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_SYSTEM",
-        "GIT_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_NAMESPACE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_WORK_TREE",
-    }
-)
 GIT_REPOSITORY_REDIRECT_ENVIRONMENT = frozenset(
     {
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",

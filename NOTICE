@@ -16,3 +16,5 @@ Reference URLs:
 - LearningOS/uCore-Tutorial-Code-2025S: https://github.com/LearningOS/uCore-Tutorial-Code-2025S
 - LearningOS/uCore-Tutorial-Test-2025S: https://github.com/LearningOS/uCore-Tutorial-Test-2025S
 - Linux kernel `.clang-format`: https://github.com/torvalds/linux/blob/master/.clang-format
+- AIOS paper (evaluation-method reference only): https://openreview.net/attachment?id=L4HHkCDz2x&name=pdf
+- AIOS repository (project reference only; no source or data redistributed): https://github.com/agiresearch/AIOS

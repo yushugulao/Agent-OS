@@ -74,7 +74,7 @@ Agent Context 共 6 页：
 | `op` | 完整 `struct agent_op` |
 | `result` | 完整 `struct agent_result` |
 
-Context detail 迁移时的静态探针曾测得 `sizeof(struct proc)` 从 62072 字节降到 28808 字节，`NPROC=128` 的固定 PCB BSS 减少约 4.061 MiB；后续把 legacy mail 迁为按需两页 sidecar 后曾降至 25640 字节，加入 lifecycle/resource 所有权字段及两个 active-path 水位后的当前冻结探针为 25936 字节，CI 上限为 27233 字节。仅比较该次从 PCB 移出的 detail 数据，每个活跃 Agent 的 9 页 sidecar 为 36 KiB：少于约 116 个活跃 Agent 时仍低于旧嵌入布局；理论上 128 槽全是 Agent 时，页粒度碎片约多 450 KiB。完整运行状态仍是 21 页/84 KiB，因为 v8 在既有 6 页 mirror/shadow 内重排 record 与 cache，没有新增物理页。六项总状态预算为每进程 `86016` B、全局 `11010048` B、ordinary 池 `8257536` B、reserved 池 `2752512` B、ordinary 域 `5505024` B、reserved 域 `688128` B。CI 同时保留 sidecar-only 的 1152 页全局上限，ordinary/reserved 池 864/288 页、单 ordinary/reserved account 576/72 页，用于阻止 detail 结构单独膨胀；它不是另一份运行时 charge。idle 普通进程不分配这些页，所有配额仍使用通用 `kalloc`，不是全局物理内存 OOM 下的硬页保留。
+Context detail 位于按活跃 Agent 分配的私有 sidecar；完整 Agent 状态由 detail/attribution sidecar、用户 mirror 和可信 shadow 一次性原子接纳，idle 普通进程不承担这些页。sidecar-only 指标用于约束 detail 结构增长，不是第二份运行时 charge。`struct proc`、单实例/全局/分类/账户容量及页数阈值以 `ci/kernel-budgets.json` 和当前 `make local-check` 输出为准，文档不保留迁移过程中的探针数值。
 
 ## 权威历史：shadow
 

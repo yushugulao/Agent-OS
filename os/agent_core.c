@@ -590,7 +590,7 @@ static void agent_info_fill(struct proc *p, struct agent_info *info)
 	info->agent_id = p->agent_id;
 	info->agent_role = p->agent_role;
 	info->context_base = p->agent_ctx_base;
-	info->context_size = p->agent_ctx_size;
+	info->context_size = p->agent_ctx_base == 0 ? 0 : AGENT_CONTEXT_SIZE;
 	info->agent_type = p->agent_type;
 	info->heartbeat_interval = p->heartbeat_interval;
 	info->resource_quota = p->resource_quota;
@@ -603,10 +603,11 @@ static void agent_info_fill(struct proc *p, struct agent_info *info)
 	info->context_path_head = p->context_path_head;
 	info->context_path_oldest = p->context_path_oldest;
 	info->context_path_latest = p->context_path_latest;
-	info->context_path_dropped = p->context_path_dropped;
+	info->context_path_dropped =
+		p->agent_call_count - p->context_path_count;
 	info->context_path_rollback_count = p->context_path_rollback_count;
-	info->latest_response_offset = p->latest_response_offset;
-	info->records_offset = p->records_offset;
+	info->latest_response_offset = AGENT_CONTEXT_LATEST_RESPONSE_OFFSET;
+	info->records_offset = AGENT_CONTEXT_RECORDS_OFFSET;
 	info->event_count = p->agent_event_count;
 	info->event_dropped = p->agent_event_dropped;
 	info->event_queue_count = p->agent_event_count_queued;
@@ -739,7 +740,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		break;
 	case AGENT_TOOL_CTX_STAT:
 		res->value0 = p->agent_ctx_base;
-		res->value1 = p->agent_ctx_size;
+		res->value1 = p->agent_ctx_base == 0 ? 0 : AGENT_CONTEXT_SIZE;
 		res->value2 = p->agent_call_count;
 		agent_result_text(res, "ctx_stat");
 		break;

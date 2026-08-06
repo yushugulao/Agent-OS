@@ -176,15 +176,16 @@ python3 -I -S -B scripts/agent_test_calibration.py collect \
 ```
 
 An uncalibrated local environment explicitly sets
-`AGENT_TEST_DURATION_PROFILE=none`: all 18 cases, semantic checks, Guest logs,
-and the exact timing-row inventory remain mandatory, but the calibrated
-wall-time limit is not applied. Targeted `AGENT_TEST_CASE` development runs
-likewise do not claim it.
+`AGENT_TEST_DURATION_PROFILE=none`: every case registered by
+`ci/kernel-budgets.json`, its semantic checks, Guest logs, and the exact
+timing-row inventory remain mandatory, but the calibrated wall-time limit is
+not applied. Targeted `AGENT_TEST_CASE` development runs likewise do not claim
+it.
 
 The duration checker rejects the summary-only `--agent-test-seconds` and
 `--agent-test-start-ns` inputs. A normal gate accepts only
-`--agent-test-timing-file`, whose positive finite rows must exactly match all
-18 expected cases in order. For calibration, that file is accepted only after
+`--agent-test-timing-file`, whose positive finite rows must exactly match the
+registered case inventory in order. For calibration, that file is accepted only after
 the schema-3 verifier has independently reconstructed the same bytes and totals
 from the per-execution attestations.
 
@@ -199,8 +200,7 @@ compilation use the same bounded build setting and reuse an outer GNU make
 jobserver instead of creating nested worker pools. The top-level `local-check`
 phases remain serial because they share build and evidence artifacts. Formal
 collection starts from its closed environment, so the computed worker limit
-cannot be replaced by ambient variables. `make ci-check` remains only
-as a compatibility alias.
+cannot be replaced by ambient variables.
 The local E3 identity uses the versioned MSYS2 xPack profile only when the six
 direct build/measurement tools plus GCC's `cc1` and
 assembler subprogram match the committed SHA-256 inventory and the duration-

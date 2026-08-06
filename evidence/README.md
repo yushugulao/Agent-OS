@@ -1,6 +1,6 @@
 # 验收证据
 
-本目录只保存与当前参赛版本直接关联的正式证据。历史校准包不再随主分支交付，避免旧提交的日志、时长和结论与当前实现混在一起。
+本目录只保存与当前参赛版本直接关联的正式证据。`releases/INDEX.md` 当前没有 release 记录，因此本工作树没有已发布的最终动态结果或性能数据。
 
 ## 发布入口
 
@@ -39,6 +39,6 @@ development 包不会进入正式索引，也不能作为性能结论。
 - 从同一份数据生成的 CSV、图表和离线 Dashboard；
 - 包内文件校验清单。
 
-Dashboard 展示实际数值和样本，不用“通过”卡片代替测量结果。旧提交的校准包可从 Git 历史恢复，但不会进入当前主分支的发布口径。
+Dashboard 展示实际数值和样本，不用“通过”卡片代替测量结果。Agent case 与时长 profile 以 [`ci/kernel-budgets.json`](../ci/kernel-budgets.json) 为准，正式实验与 claim 映射以 [`ci/evaluation-suite.json`](../ci/evaluation-suite.json) 为准；证据包必须封存与其源码提交一致的版本。
 
 详细方法见 [评价方法](../docs/evaluation.md) 和 [验证说明](../docs/agentos/verification.md)。

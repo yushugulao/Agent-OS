@@ -242,7 +242,7 @@ def validate_batch_submission(source):
         if token not in public_body:
             raise ContractError(f"batch API lost fallback or chunking: {token}")
     required_pair = (
-        "alloc_desc_chain(all_idx, 6)",
+        "disk_desc_acquire(all_idx, 6)",
         "disk.avail->idx += 2;",
         "*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;",
         "KERNEL_PERFORMANCE_VIRTIO_WRITE_BATCH, 0);",
@@ -270,7 +270,7 @@ def validate_batch_submission(source):
     if restore < 0 or restore > account_call[0]["start"]:
         raise ContractError("batch accounting runs with interrupts disabled")
     required_indirect = (
-        "alloc_desc_chain(heads, count)",
+        "disk_desc_acquire(heads, count)",
         "disk_prepare_indirect_request(",
         "disk.avail->idx += count;",
         "*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;",
@@ -332,9 +332,64 @@ def validate_batch_submission(source):
     _, _, accounting = function_region(
         bio_source, "void bio_account_transfer_batch("
     )
-    if (len(function_calls(accounting, "bio_account_transfer")) != 1 or
-            "for (uint i = 0; i < count; i++)" not in accounting):
-        raise ContractError("batch accounting does not preserve per-transfer semantics")
+    calls = function_calls(accounting, "bio_account_transfers")
+    if len(calls) != 1 or "results, count" not in accounting:
+        raise ContractError("batch accounting bypasses the vector accounting core")
+    _, _, single = function_region(bio_source, "void bio_account_transfer(")
+    calls = function_calls(single, "bio_account_transfers")
+    if len(calls) != 1 or "&result, 1" not in single:
+        raise ContractError("single-transfer accounting diverges from the vector core")
+    _, _, vector = function_region(
+        bio_source, "static void bio_account_transfers("
+    )
+    for token in (
+            "for (uint i = 0; i < count; i++)",
+            "successful = count - failed;",
+            "io_policy.failed_transfers += failed;",
+            "io_policy.completion_sequence += count;",
+            "state->failed_transfers += failed;",
+            "io_rate_charge_transfers(state, io_class, count);"):
+        if token not in vector:
+            raise ContractError(
+                f"vector accounting loses aggregate transfer semantics: {token}"
+            )
+
+
+def validate_descriptor_admission(source):
+    _, _, acquire = function_region(source, "static int disk_desc_acquire(")
+    ordered = (
+        "if (disk.state != VIRTIO_DISK_ONLINE)",
+        "return DISK_DESC_RETRY_STATE;",
+        "alloc_desc_chain(descriptors, count)",
+        "if (!disk_can_sleep())",
+        "if (disk.runtime)",
+        "return VIRTIO_DISK_ERR_BUSY;",
+        "disk_process_used(0);",
+        "wait_queue_sleep_irq_uninterruptible(&disk.desc_waiters)",
+    )
+    positions = [acquire.find(token) for token in ordered]
+    if min(positions) < 0 or positions != sorted(positions):
+        raise ContractError("descriptor admission can spin in a runtime idle context")
+    callers = (
+        ("static int disk_submit(", "disk_desc_acquire(idx, count)"),
+        ("static int disk_submit_write_pair(",
+         "disk_desc_acquire(all_idx, 6)"),
+        ("static int disk_submit_indirect(",
+         "disk_desc_acquire(heads, count)"),
+    )
+    for signature, call in callers:
+        if source.count(call) != 1:
+            raise ContractError(f"descriptor admission path diverged: {call}")
+        _, _, caller = function_region(source, signature)
+        call_at = caller.find(call)
+        retry_at = caller.find("if (status == DISK_DESC_RETRY_STATE)", call_at)
+        continue_at = caller.find("continue;", retry_at)
+        error_at = caller.find("if (status != VIRTIO_DISK_OK)", continue_at)
+        if min(call_at, retry_at, continue_at, error_at) < 0 or not (
+                call_at < retry_at < continue_at < error_at):
+            raise ContractError(
+                f"descriptor state transition bypasses caller retry: {call}"
+            )
 
 
 def validate_dirty_overlay_protection():
@@ -510,7 +565,7 @@ if 'panic("virtio_disk_intr status")' in driver:
 
 submit = driver.find("static int disk_submit(")
 range_check = driver.find("status = VIRTIO_DISK_ERR_RANGE;", submit)
-descriptor_allocation = driver.find("alloc_desc_chain(idx, count)", submit)
+descriptor_allocation = driver.find("disk_desc_acquire(idx, count)", submit)
 queue_notify = driver.find("*R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0;", submit)
 if min(submit, range_check, descriptor_allocation, queue_notify) < 0 or not (
     submit < range_check < descriptor_allocation < queue_notify
@@ -522,6 +577,7 @@ try:
     if driver.count("kernel_performance_virtio_notify(") != 3:
         raise ContractError("every production queue notify needs one performance receipt")
     validate_batch_submission(driver)
+    validate_descriptor_admission(driver)
     validate_dirty_overlay_protection()
     validate_batch_cache_fill()
     validate_overlay_accounting(driver)
@@ -619,13 +675,13 @@ if "source \"${SCRIPT_DIR}/evidence-wiring.sh\"" not in runner or \
         "scripts/test-validate-virtio-disk-log.py" not in runner:
     raise SystemExit("runner is not wired into final evidence")
 
-boot_listing = main.find("show_all_files();")
+boot_listing = main.find("load_init_app();")
 runtime_start = main.find("virtio_disk_runtime_start();")
 scheduler_start = main.find("scheduler();")
 if min(boot_listing, runtime_start, scheduler_start) < 0 or not (
     boot_listing < runtime_start < scheduler_start
 ):
-    raise SystemExit("runtime disk mode starts before boot-only filesystem I/O ends")
+    raise SystemExit("runtime disk mode starts before boot-only image loading ends")
 
 for token in (
     "FS_IO_UNAVAILABLE",

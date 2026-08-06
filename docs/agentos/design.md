@@ -126,7 +126,7 @@ flowchart TB
         U1["agentfinal_ucore"]
         U2["agentfs_ucore / agentscan_ucore"]
         U3["agentloop_ucore / agentsched_ucore"]
-        U4["agentbench_ucore / labbench_ucore"]
+        U4["agentbench_ucore"]
         U5["labdemo_ucore / agentsecurity_ucore"]
         U6["agenttrust / agentvfs / usersafety"]
         U7["usershell"]
@@ -196,11 +196,11 @@ flowchart TB
 | Agent 调度测试 | `user/src/agentsched_ucore.c` | 角色权重、受权调度配置、事件优先、调度原因记录、调度次数、让出处理器次数和虚拟运行量公平性计数 |
 | 线程资源域测试 | `user/src/threadresource_ucore.c` | 普通/保留域上限与复用、容量拒绝计数稳定、退出退款、普通/保留全局水位与复用、系统保留进展和跨域调度公平 |
 | 文件编辑冲突测试 | `user/src/agentconflict_ucore.c` | 两个 Agent 同时编辑同一文件、非持有者真实写入拒绝、旧版本提交拒绝 |
-| 性能基准 | `user/src/agentbench_ucore.c`、`user/src/labbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、timeline、timeline wait-ready、provenance、文件查询候选记录数、timeout/heartbeat、busy polling、wait/wake 计时 |
+| 性能基准 | `user/src/agentbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、timeline、timeline wait-ready、provenance、文件查询候选记录数、timeout/heartbeat、busy polling、wait/wake 计时 |
 | 综合示例 | `user/src/labdemo_ucore.c` | 同 workflow 三 Agent 故障诊断、scope audit、可信 span、timeline 和 provenance |
 | 权限限制测试 | `user/src/agentsecurity_ucore.c` | 普通/低权限调用拒绝、可信 cause/span、audit authority 分区、role 与 route 边界 |
 | workflow scope 测试 | `user/src/agentscope_ucore.c` | 新 scope factory、同名对象隔离、同 scope 协作、并发 metadata 提交、微小写入合并与跨 scope 查询进展、跨 scope IPC/租约/audit 拒绝、观测查询线性上界与跨 scope 进展、配额保证、一次性 pipe fd 委派，以及关闭权拒绝、根退出/factory 关闭、阻塞成员清理、9 轮强制撤销和 replacement admission |
-| Workflow teardown 组合测试 | `user/src/workflow_teardown_race_ucore.c`、`scripts/run-workflow-teardown-race-tests.sh` | syscall 546 ABI、factory close/自然退出、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 lifecycle generation 重用；默认三轮，独立于 18-case Agent 套件 |
+| Workflow teardown 组合测试 | `user/src/workflow_teardown_race_ucore.c`、`scripts/run-workflow-teardown-race-tests.sh` | syscall 546 ABI、factory close/自然退出、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 lifecycle generation 重用；独立于版本化 Agent 套件 |
 | 块 I/O 分域测试 | `user/src/iobudget_ucore.c` | PUBLIC 冷缓存/速率压力、owner/device lease 上界、请求内物理传输批量结算、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出的清理 I/O 归因/debt 结算，以及 workflow cache floor、CONTROL 预算和压力下有界进展；ABI v6 定向结果只作阶段性回归，当前发布状态以冻结提交日志为准 |
 | 可信执行测试 | `user/src/agenttrust_ucore.c` | RX/RW+NX 布局、映像不可变、bootstrap 授权范围和角色映像绑定 |
 | VFS 安全域测试 | `user/src/agentvfs_ucore.c` | public/workflow 隔离、worker 能力衰减、跨 scope inode fd 撤销、worker pipe 单跳委派和受保护路径 |
@@ -214,7 +214,7 @@ flowchart TB
 
 运行时材料按“内核事实 -> 统一记录 -> 用户态消费 -> 宿主机呈现”组织。测试程序和科研平台不会只贴一段无结构日志，而是输出可被文档和 Web UI 直接读取的 `key=value` 记录：例如 `tool=query_file`、`used_index=1`、`prefetch_handoff=analyze`、`stale_commit=1`。这使同一条运行事实可以同时出现在 QEMU 输出、测试记录、验证表和结果页面中。
 
-科研平台的 `exact-field-v1` receipt 不把状态文件截断到固定字段缓冲区。`rp_evidence_measure_file_field()` 以 128 B 分块流式读取完整文件，并跨块精确匹配唯一的 `key=value` 字段；长无关字段和长 key 都合法，空 key/value、CR、NUL、重复目标或仅前后缀相似的字段一律 fail closed。完整文件的 bytes、hash 和 line count 与字段断言一起进入 receipt。Host ASan/UBSan probe 已纳入 `ci-check` 的自测清单；该静态/Host 结果不代表当前 Reader、双目标或 `full-verify` 已经运行通过。
+科研平台的 `exact-field-v1` receipt 不把状态文件截断到固定字段缓冲区。`rp_evidence_measure_file_field()` 以 128 B 分块流式读取完整文件，并跨块精确匹配唯一的 `key=value` 字段；长无关字段和长 key 都合法，空 key/value、CR、NUL、重复目标或仅前后缀相似的字段一律 fail closed。完整文件的 bytes、hash 和 line count 与字段断言一起进入 receipt。Host ASan/UBSan probe 已纳入 `local-check` 的自测清单；该静态/Host 结果不代表当前 Reader、双目标或 `full-verify` 已经运行通过。
 
 ### 6.1 Agent 创建
 
@@ -317,7 +317,7 @@ sequenceDiagram
 
 每个 scope 独立维护 `prev_hash/record_hash/ledger_hash` 逻辑链，而 `sequence` 在整个系统单调递增。跨 scope 写入会产生 sequence 跳号，low/high/per-principal 独立滚动会让可见窗口缺少某些前驱；`dropped_records=total_records-visible_records` 用于解释这些窗口外记录。只有当前后两条可见记录实际连续时才要求 `prev_hash` 直接等于上一条可见记录的 hash，不能把合法稀疏窗口误报为破坏。
 
-`agent_audit_query()` 先按调用者 scope 裁剪，再应用 span、kind、pid/source/target、role、tool、event、status 和 sequence filter。`agent_span_trace_snapshot()` 进一步同时匹配 scope、公开 `current_span_id` 与内核私有 span owner，不接受用户态任意 span id。`labdemo_ucore` 展示同一 workflow 的综合观测；`agentscope_ucore` 和 `agentsecurity_ucore` 已在 2026-07-22 完整 Agent QEMU 回归中通过跨 scope 与伪造 span/cause 的负向断言。
+`agent_audit_query()` 先按调用者 scope 裁剪，再应用 span、kind、pid/source/target、role、tool、event、status 和 sequence filter。`agent_span_trace_snapshot()` 进一步同时匹配 scope、公开 `current_span_id` 与内核私有 span owner，不接受用户态任意 span id。`labdemo_ucore` 展示同一 workflow 的综合观测；`agentscope_ucore` 和 `agentsecurity_ucore` 定义跨 scope 与伪造 span/cause 的负向合同，当前动态状态以 release bundle 为准。
 
 审计物理表不再作为查询索引使用。每个 workflow scope 在自己的 128 条窗口中维护 sequence 和 `(tick, sequence)` 两个有序槽数组；覆盖旧记录时先从两份索引统一 unlink，再发布新记录。Run Ledger 的 `visible_records`、`oldest_sequence` 和 `latest_sequence` 直接由 scope 状态与 sequence 索引首尾得到。audit/span/provenance 只需单遍读取 sequence 索引，查询复杂度与本 scope 可见记录数线性相关，不再乘以全局 512 槽。
 
@@ -355,7 +355,7 @@ SCHED 可见状态也遵循单一发布顺序。`agent_core.c` 只构造调度�
 
 观测权威状态同时作为 metadata 双 bank 中的版本化 durable section 持久化。section 保存 bounded audit checkpoint、lifecycle key、账本 hash 及 sequence/span/event/control/agent ID 高水位；lifecycle 表的每个物理槽还独立保存 generation 下界，即使该槽对应的最后一条证据已被安全擦除也不能在重启后复用旧 generation。显式 allocator-exhausted 位区分“没有下界”和“编号空间已经耗尽”，恢复只允许提高下界或保持耗尽，不能用零值让稳定身份回退或复用；event ID 耗尽时所有 IPC 发布路径统一 fail closed，不能把 `event_id=0` 放入队列。启动时先验证整个 arena，再发布只读 descriptor snapshot，Recovery 逐条读取不再在关中断区反复校验 8 KiB arena。活跃 workflow 仍走原 scope/span 查询规则，只有生命周期已封存的证据才进入 bootstrap-bound Recovery 的 LIST/READ/REAP 流程；擦除完成令牌绑定全局单调 section serial、发起时 bank generation 与在该 serial 发布后分配的持久提交目标，双 bank 完整复制后才能报告完成。section serial 到达 `UINT64_MAX` 后不回绕；后续分配拒绝且不覆盖最后一个 pending serial、目标或通知状态，因此已有写回仍可结算，新 durable intent 则 fail closed。dirty 表为所有 lifecycle 槽之外另留 SYSTEM 写回位；持久目标暂时拒绝时保留 `used + unnotified` intent，由有界后台扫描重新通知。scope retirement 使用统一 settled barrier，必须同时满足目标代已复制、`dirty == durable == replicated`、该 scope 的持久 lane 空闲且 durable section 不再 pending；`target == 0` 只表示没有外部 token，不能跳过内部 dirty 状态。
 
-观测 checkpoint 的磁盘 ABI 为 v7。每个 scope 的 8 个持久槽固定选择最新 tail 4 条，再从更早的可见记录中按 identity class、kind、principal 和可信 span 选取最多 4 个 causal diversity anchor，最后按 sequence 重排；因此 v7 明确允许 anchor 与 tail 之间存在链间隙，不再把窗口描述成“最新连续后缀”。每条 entry 的磁盘 sidecar 显式保存 `identity_class`、`link_flags`、`principal`、`span_owner` 和 `receipt_id`，其中 `PREV_RETAINED` 只声明前一条已保留记录确为直接 hash 前驱，`LATEST_TAIL` 标识固定 tail。scope 的 `admission_drops` 单独记录在 sequence/hash 分配前被准入拒绝的尝试；成功进入 hash 链但未被 8 槽选择的数量则由 `total_records - admission_drops - record_count` 推导，公共 `dropped_records` 仍兼容地聚合两者。加载时先全量验证 v7 header、保留字节、scope/entry、全局 sequence/receipt 唯一性、sidecar 约束、链间隙和 lease 高水位；随后每个空 live scope 在同一关中断窗口预检槽位并原子发布，任何插入失败都回滚本轮恢复，已有 live 证据不会被 reload 覆盖。
+观测 checkpoint 的磁盘 ABI 为 v8。每个 scope 的 6 个持久槽固定选择最新 tail 4 条，再从更早的可见记录中按 identity class、kind、principal 和可信 span 选取最多 2 个 causal diversity anchor，最后按 sequence 重排；因此 v8 明确允许 anchor 与 tail 之间存在链间隙，不再把窗口描述成“最新连续后缀”。每条 entry 的磁盘 sidecar 显式保存 `identity_class`、`link_flags`、`principal`、`span_owner` 和 `receipt_id`，其中 `PREV_RETAINED` 只声明前一条已保留记录确为直接 hash 前驱，`LATEST_TAIL` 标识固定 tail。scope 的 `admission_drops` 单独记录在 sequence/hash 分配前被准入拒绝的尝试；成功进入 hash 链但未被 6 槽选择的数量则由 `total_records - admission_drops - record_count` 推导，公共 `dropped_records` 仍兼容地聚合两者。加载时先全量验证 v8 header、保留字节、scope/entry、全局 sequence/receipt 唯一性、sidecar 约束、链间隙和 lease 高水位；随后每个空 live scope 在同一关中断窗口预检槽位并原子发布，任何插入失败都回滚本轮恢复，已有 live 证据不会被 reload 覆盖。
 
 live low 分区采用“保证份额 + 可借突发”而不是固定 16 槽独占：每个 active stable principal 保证 8 条，在同 scope 其他份额空闲时最多突发到 16 条；新 active principal 到来且 low 64 已满时，先回收已离开主体，再只从其他主体高于 8 条的借用溢出中选择符合因果保留规则的 victim，不会偷走其保证份额。causal victim 的 scratch 容量与完整 burst 16 对齐，重复 span/kind 检测会覆盖该主体第 9 到 16 条借用记录，不会把后半窗口中的冗余误判为不可替换的唯一 anchor。REAP 的授权和擦除控制写仍走通用 durable section 状态机，但以 `AGENT_DURABLE_DIRTY_URGENT` 触发 store provider 的 `expedite`，把既有待办的 due tick 提前；失败重试继续经过同一 notify 路径。普通 record receipt 不被顺带升级为 URGENT，仍按既有 serial fence 和合并窗口策略提交。
 
@@ -427,7 +427,7 @@ flowchart TB
     QEMU["QEMU virt machine + OpenSBI"]
     Kernel["uCore kernel build/kernel"]
     FS["nfs/fs.img"]
-    Tests["agentfinal_ucore / agentfs_ucore / agentscan_ucore / agentloop_ucore / agentsched_ucore / agentconflict_ucore / agentbench_ucore / labdemo_ucore / agentsecurity_ucore"]
+    Tests["versioned Agent suite + mechanism profiles"]
     Host --> WSL --> Toolchain --> QEMU --> Kernel
     FS --> QEMU
     QEMU --> Tests
@@ -550,7 +550,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 当前 span 短记录接口 | `agent_span_trace_snapshot()` 匹配 scope + span id + private owner | 参与 Agent 可解释本 workflow 链路，公开 span 不能扩大权限 | 不提供任意跨 scope 过滤 |
 | Scope 审计接口 | 物理 512 槽按 4 scope 各 128；scope 内 low/high 各64。low principal 保证 8 条，可借空闲份额突发到 16 条，满载时只回收已离开主体或其他主体高于 8 条的溢出；high principal 为 8 条；filter 只缩小可见集 | 遥测不能淘汰 active principal 的保证证据，也不能影响其他 workflow；空闲容量仍可被有界利用 | inactive principal 的旧证据和被回收溢出仍是由 dropped 可见的有界窗口 |
 | Run Ledger 摘要 | `agent_ledger_snapshot()` 返回本 scope 逻辑链尾、稀疏 sequence 窗口和 dropped 分类计数 | 状态页面可区别合法淘汰/跳号与当前链尾破坏 | 当前不是跨重启持久化保证，也不带签名 |
-| 持久观测窗口 | checkpoint v7 的 durable section 固定四槽：普通 workflow 使用前三槽，成功绑定的 bootstrap Recovery 独占 successor 槽；每 scope 固定保留 latest tail 4 + causal diversity anchor 4，并用 identity/link/principal/span owner sidecar 与 `admission_drops` 区分身份、稀疏链接和拒绝原因；恢复先全量验证再原子发布 | 普通容量压力不能覆盖其他 workflow 的 active 或未授权证据；四槽全满时仍保留 Recovery 进展；REAP 先持久授权、再由 SYSTEM 清除，控制写通过通用 URGENT/expedite 提前服务，普通 receipt 保持原合并策略；无 target 的淘汰 receipt 还必须通过 active generation 双副本 fence | 这是允许显式链间隙的有界恢复窗口而非永久日志；primary-only generation 不构成 `DURABLE`，三个普通槽满时新普通 workflow 会 fail closed，必须由可信 Recovery 明确授权回收 |
+| 持久观测窗口 | checkpoint v8 的 durable section 固定五槽：普通 workflow 使用前四槽，成功绑定的 bootstrap Recovery 独占 successor 槽；普通槽数直接覆盖 `WORKFLOW_LIFECYCLE_MAX_ACTIVE`。每 scope 固定保留 latest tail 4 + causal diversity anchor 2，并用 identity/link/principal/span owner sidecar 与 `admission_drops` 区分身份、稀疏链接和拒绝原因；恢复先全量验证再原子发布 | 普通容量压力不能覆盖其他 workflow 的 active 或未授权证据；五槽全满时仍保留 Recovery 进展；REAP 先持久授权、再由 SYSTEM 清除，控制写通过通用 URGENT/expedite 提前服务，普通 receipt 保持原合并策略；无 target 的淘汰 receipt 还必须通过 active generation 双副本 fence | 这是允许显式链间隙的有界恢复窗口而非永久日志；primary-only generation 不构成 `DURABLE`，四个普通槽满时新普通 workflow 会 fail closed，必须由可信 Recovery 明确授权回收 |
 | 统一 timeline 接口 | `agent_timeline_snapshot()` 把 Context、调度、可见审计和预取提示导出为同一结构，`agent_timeline_query()` 在可见集合上做内核侧过滤和 after-cursor 增量读取，`agent_timeline_wait()` 让调用者等待匹配记录出现 | 让 Web UI 和科研平台运行详情直接消费一个规范化记录流，减少无关记录复制和主动轮询 | 不保存完整 raw 请求/响应，长文本仍需专门文件或详情接口 |
 | 因果图接口 | `agent_provenance_snapshot()` 把可见 Context、审计和预取提示转换成因果边 | 让 Web UI 可以直接画出跨 Agent 触发关系，减少用户态日志拼接 | 当前是短摘要内存图，不是持久化 provenance 数据库 |
 | 工具查找 | ID 直接定位，legacy name 兼容 | 最终性能路径避免字符串扫描 | 工具 ID 需要保持稳定 |
@@ -568,7 +568,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 
 ## 10. 质量要求与验证
 
-下表定义质量要求、预期 marker 和仍保留的边界；不带 release bundle 引用的 marker 名称是验收合同，不是对可变工作树的通过声明。2026-07-25 的 generation-safe lifecycle、统一 resource controller/teardown、lazy physical stack 和 Context sidecar 版本曾在固定 runner 连续三轮完成 16/16；2026-07-26 的 checkpoint 提交 `75d0dfd` 又在干净环境完成过一次聚合 `make full-verify`，包含 Reader E2E 和独立三轮 workflow teardown race，二者都只是历史事实。当前发布的动态状态只读取 `evidence/releases/INDEX.md` 选中的 bundle：manifest 必须绑定代码提交 C、命令、原始/规范化日志及校验结果；未绑定或未验证的项目一律不能从本表推断为通过。静态 deterministic 指标同样取自该 bundle 对 C 的构建结果，并由 C 中的 `ci/kernel-budgets.json` 判定。
+下表定义质量要求、预期 marker 和仍保留的边界。marker 名称是验收合同，不是当前工作树的通过声明；动态状态只读取 `evidence/releases/INDEX.md` 指向的 bundle，静态指标由同一源码提交上的 `ci/kernel-budgets.json` 与构建日志判定。当前索引没有 release 记录，因此表中的动态 marker 尚未形成正式发布结论。
 
 | 质量要求 | 证据与当前边界 |
 | --- | --- |
@@ -589,7 +589,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 用户自管 Context cache 不被 snapshot 覆盖 | `agentfinal_ucore: user_cache_preserved=1` |
 | 名称协议结构化工具调用可用 | V1 `agentfinal_ucore: legacy_name_protocol=1`；V2 `agenttoolabi_ucore: tool_list_v1_v2=1 v2_typed_reordered=1 strict_negative_matrix=1` |
 | 路径超长自动淘汰 | `agentfinal_ucore` 验证 128 容量 FIFO |
-| 有性能数据 | `agentbench_ucore` 输出吞吐表，`labbench_ucore` 提供示例规划入口 |
+| 性能采集合同 | `agentbench_ucore` 输出测量 marker；正式数据只从 release bundle 读取 |
 | 文件属性查询、inode 关联、私有 metadata 双 bank、索引、真实执行查询和查询计划 | `agentfinal_ucore`、`agentfs_ucore: .agentmeta_reload=1`、`agentbench_ucore: file_query_benchmark ... status=measured`、`labdemo_ucore`；重复热索引断言 `CACHE_HIT=0` |
 | 两个 Agent 同时编辑同一文件时由内核拒绝非持有者真实写入 | `agentconflict_ucore: conflict_denied=1 direct_write_denied=1` |
 | 文件提交使用版本检查，旧版本不能覆盖新版本 | `agentconflict_ucore: stale_commit=1 versioned_commit=1` |
@@ -600,22 +600,22 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 跨 Agent 消息使用 stable control id 路由，支持 grant/revoke 和退出回收 | 验收要求 `agentsecurity_ucore: route_source_enforced=1 route_target_isolated=1 ipc_route_authorization=1 message_route_lifecycle=1 target_route_consent=1 route_slot_reclaimed=1`，并由 `agentllm_ucore`、`agentbench_ucore`、`labdemo_ucore` 复测；合同包含 target 自主接受 LLM_DONE、LLM-only route 拒绝 MESSAGE 和超过 16 个短命 source 后槽回收 |
 | 外部事件三层配额保留内核 origin 位置，慢 watcher 不阻断广播 | `agentloop_ucore: message_source_limit=4 ipc_class_limit=8 external_limit=12 system_event_reserved=4 heartbeat_reserve_coalesced=1 external_reject_reclaim=1 broadcast_slow_watcher_isolated=1`；动态覆盖第 13 条 external 拒绝、一条 heartbeat 越过 external 边界且多周期不累积、drain 后重新接纳，以及 external 已饱和 watcher 的逐目标广播隔离；attributed=8 与同一来源混合跨类仍缺独立边界输出 |
 | Agent 感知调度 | `agentsched_ucore: role_weights ...`、`agentsched_ucore: configurable_policy=1`、`agentsched_ucore: event_priority=1`、`agentsched_ucore: reason_trace=1`、`agentsched_ucore: fairness=1` |
-| 综合场景 | `labdemo_ucore: passed` |
-| 权限不能由用户态伪造 | `agentsecurity_ucore: passed` |
+| 综合场景 | runner 合同要求 `labdemo_ucore: passed`；当前状态以 release bundle 为准 |
+| 权限不能由用户态伪造 | runner 合同要求 `agentsecurity_ucore: passed`；当前状态以 release bundle 为准 |
 | 可信映像使用 W^X、不可变 inode 和角色绑定 | `agenttrust_ucore: wx_image=1 immutable_image=1 role_image_binding=1` |
 | 普通 VFS 路径和跨 scope 旧 fd 不能绕过文件能力 | `agentvfs_ucore: cross_scope_fd_revoked=1 worker_pipe_delegation=1 protected_paths=1` |
 | 不同 workflow 的同名文件、动作、租约、审计和 IPC 互相隔离 | `agentscope_ucore` 必须输出 `cross_scope_isolation`、`action_scope_isolation`、`lease_scope_isolation`、`audit_event_scope_isolation`、`ipc_scope_isolation` 标记 |
 | Scope admission、存储保证、一次性 pipe 委派和 retirement 回收 | `agentscope_ucore` 必须输出 `scope_capacity_reservation`、`scope_storage_isolation`、`transactional_fd_delegation`、`lifecycle_reclamation` 标记 |
 | 用户 cause/span 不能伪造可信 ancestry，低权限遥测不能淘汰 active principal 的 high evidence | `agentsecurity_ucore` 合同覆盖 forged context、trusted cause attribution 和 audit authority partition |
 | syscall 坏地址和超长输入可恢复 | `usersafety_ucore: parent passed` |
-| inode、inode cache 和 block 耗尽不触发 panic | `make fs-enospc-test`，两个目标均出现 `fsenospc_ucore: parent passed` |
+| inode、inode cache 和 block 耗尽不触发 panic | `make fs-enospc-test` 合同要求两个目标均出现 `fsenospc_ucore: parent passed`；当前状态以 release bundle 为准 |
 | PUBLIC 存储主体不能吃掉 Agent/内核保留量或借进程域退出、重启清零 | `fsquota_ucore` 合同覆盖版本回收、运行期上限与分级保留；双目标 `fspquota_ucore` 要求同一镜像 crash/seed/verify 三次启动依次产生 `crash_orphan_ready=1`、`durable_fixture=1`、`reboot_charge_persisted=1`、`deletion_reuse=1`、`relaunch_charge_persisted=1` 和 `cleanup_reuse=1` |
-| PUBLIC 块 I/O/cache 压力不能消耗 workflow 控制与缓存保留，内核态 yield loop 与 fault teardown 不能阻断 refill/完成或绕过归因 | 历史三轮 16-case 曾包含 `iobudget_ucore` 的八项具名 marker 与 `parent passed`；当前发布合同另要求 VirtIO runner 覆盖 lost IRQ、delay、descriptor pressure、status error、flush-disabled 与 timeout/stuck reset，实际状态看 bundle。多 workflow、SYSTEM/BACKGROUND、retiring 3/8 和 shared 排队 grant 轮转仍不在独立场景覆盖内 |
+| PUBLIC 块 I/O/cache 压力不能消耗 workflow 控制与缓存保留，内核态 yield loop 与 fault teardown 不能阻断 refill/完成或绕过归因 | `iobudget_ucore` 与 VirtIO runner 合同覆盖归因、refill/完成、lost IRQ、delay、descriptor pressure、status error、flush-disabled 与 timeout/stuck reset；实际状态看 bundle。多 workflow、SYSTEM/BACKGROUND、retiring 3/8 和 shared 排队 grant 轮转仍不在独立场景覆盖内 |
 | 阻塞退出、孤儿/僵尸和 fork bomb 受生命周期与资源域约束 | `make proc-reap-test` 合同覆盖 `detached-wait`、`unreaped-parent-isolated`、`live-domain-limit` 和 `reserved-agent-slot` |
-| 撤销、自然退出和跨资源结算竞争不会遗留旧 lifecycle 或临时资源 | checkpoint 的 `make workflow-teardown-race-test` 连续三轮通过；覆盖 syscall 546 sized-prefix/self-only 比较、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 generation 重用；该专项独立于 18-case Agent 套件 |
+| 撤销、自然退出和跨资源结算竞争不会遗留旧 lifecycle 或临时资源 | `make workflow-teardown-race-test` 的合同覆盖 syscall 546 sized-prefix/self-only 比较、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 generation 重用；该专项独立于版本化 Agent 套件，动态状态以 bundle 为准 |
 | thread bomb 不能耗尽普通/保留线程池或垄断跨域 CPU | `make thread-resource-test` 合同要求同一镜像 50/50 轮压力，并覆盖普通/保留域上限与复用、全局水位、退出退款、系统保留进展和 `domain_fairness` |
-| 内核栈有 guard、按需物理映射和构建期预算 | 发布 bundle 必须包含 Agent 与线程/退出专项对应的栈检查；具体调用图和容量阈值以代码提交 C 的 `ci/kernel-budgets.json` 为准，旧 `13824 < 16384` 只作为历史快照 |
-| 内核增长和模块所有权受预算约束 | `make local-check`；`make ci-check` 仅作兼容别名。检查项和 deterministic 阈值以 `ci/kernel-budgets.json` 为准 |
+| 内核栈有 guard、按需物理映射和构建期预算 | 发布 bundle 必须包含 Agent 与线程/退出专项对应的栈检查；具体调用图和容量阈值以代码提交 C 的 `ci/kernel-budgets.json` 为准 |
+| 内核增长和模块所有权受预算约束 | `make local-check`。检查项和 deterministic 阈值以 `ci/kernel-budgets.json` 为准 |
 | 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |
 
 详细验证见 [verification.md](verification.md) 和 [正式证据索引](../../evidence/releases/INDEX.md)。
@@ -631,7 +631,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 因果链和 Run Ledger | 每 Agent 最近 128 条 Context；物理 512 audit 槽按 4 scope 各 128，维护 scope-local 逻辑 hash 链和稀疏窗口 | 该能力是运行期轻量追踪，不替代跨重启审计数据库。 |
 | LLM Relay | 内核提供结构化请求、响应事件、Context 和审计记录 | 云端访问、密钥和 HTTP/TLS 保持在用户态或宿主机侧。 |
 | 页面和图表 | 内核输出结构化事件、状态文件、timeline、audit 和 provenance | 宿主机工具负责渲染页面、生成 SVG 和汇总 CSV。 |
-| Agent Context 状态 | 每个活跃 Agent 原子计费 21 页：9 页 detail/attribution sidecar + 6 页用户 mirror + 6 页可信 shadow | Context detail 与 legacy mail 先后迁出 PCB 后，`struct proc` 曾从 62072 字节降至 25640 字节；25936 字节及 25936/27233 字节 baseline/max 都是后续历史 probe。当前 candidate 的最终 PCB 和容量指标必须由重新运行的 canonical budget log 与 release bundle 给出。完整状态的机制口径仍为 84 KiB/Agent，legacy mail 的两页按需 sidecar 另行计费。 |
+| Agent Context 状态 | 每个活跃 Agent 原子计费 21 页：9 页 detail/attribution sidecar + 6 页用户 mirror + 6 页可信 shadow | 最终 PCB、全局容量和阈值必须由当前源码的 canonical budget log 与 release bundle 给出；完整状态的机制口径为 84 KiB/Agent，legacy mail 的两页按需 sidecar 另行计费。 |
 | CI 模块与 runner 门 | owner、bridge、依赖和 aggregate budget 以版本化注册集合为准；受控 integration graph 的 SCC=3 为 checker 硬约束；metadata 聚合 source/text/BSS 防止跨文件迁移；各 fail-closed 自测集合随源码演进 | integration graph 不是完整 uCore 调用图；通用 runner 全量 drain 并要求普通 case 自然 `rc=0`。Reader action runner 则只在 guest 阶段按完整日志行识别故障，构建阶段仅看退出码。输出洪泛、迟到 marker、普通 marker grace、非零退出或后置 panic 都不能成功；显式 checkpoint 只接受 marker 后 runner 发出的单次 `SIGTERM`，显式 powercut 只接受认证 supervisor 对稳定 QEMU leader 发出的单次 `SIGKILL` 及完整证明。powercut 是突然 VM 终止模型，不等同于整机物理断电。 |
 | 本地时间预算 | 只统计版本化 Agent case 清单的 monotonic 运行时，不含编译 | 当前配置为 `provisional_requires_full_suite`，最终提交三轮重校准前不启用时长门。发布状态只由本地 C→E release bundle 判定。 |
 

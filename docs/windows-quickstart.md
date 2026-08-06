@@ -127,7 +127,7 @@ make evaluation-dashboard
 make evaluation-package
 ```
 
-`none` 仍强制完整 18-case、语义、Guest 日志和 timing 行清单，只把本地 wall-time
+`none` 仍强制 `ci/kernel-budgets.json` 登记的完整 Agent case、语义、Guest 日志和 timing inventory，只把本地 wall-time
 baseline/limit/ratio 记为不适用。受信且已完成当前校准的 MSYS2 E3 改用
 `export AGENT_TEST_DURATION_PROFILE=local-e3` 后执行同一组命令；不得让 Makefile 默认值替代
 这两个显式选择。

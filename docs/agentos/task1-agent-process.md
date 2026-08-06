@@ -207,4 +207,4 @@ worker 映像不使用 Agent 的 `TRUSTED` role-image 身份。mkfs 为布局有
 | `labdemo_ucore` | orchestrator、recovery、investigator、sentinel 多个 Agent 能同时创建；它们使用相同虚拟 Context 地址，但对应不同物理页和角色能力。 |
 | `agenttrust_ucore` | 代码 RX、数据 RW+NX，可信映像不可改写，Agent exec 的角色与可信 inode 绑定，普通复制映像不能继承信任。 |
 | `agentvfs_ucore` | 非 Agent worker 只取得显式委派且不超过映像 profile 的文件能力，普通 fork/exec 和继承 fd 不能扩权。 |
-| `agentscope_ucore` | 历史专项约 `93.7s` 并曾输出 `scope_controller_exit_revoke=1 public_lineage=1` 与 `parent passed`，验证低权限/子 Orchestrator 关闭拒绝、根/factory 关闭、generation 回收和 PUBLIC child/grandchild 降权后仍可撤销；最终 HEAD 待复跑。 |
+| `agentscope_ucore` | 合同覆盖低权限/子 Orchestrator 关闭拒绝、根/factory 关闭、generation 回收和 PUBLIC child/grandchild 降权后仍可撤销；当前动态状态以 release bundle 为准。 |

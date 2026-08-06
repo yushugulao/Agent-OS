@@ -13,7 +13,7 @@
 | 3 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
 | 4 | [api.md](api.md) | 系统调用、Agent ABI、self-only workflow lifecycle 观测、工具协议和错误语义 |
 | 5 | [security-hardening.md](security-hardening.md) | 安全威胁、可信执行、文件安全域、统一 teardown、生命周期和资源韧性设计 |
-| 6 | [verification.md](verification.md) | 验证计划、18-case Agent 套件、持久化/故障/teardown 专项与证据边界 |
+| 6 | [verification.md](verification.md) | 验证计划、版本化 Agent 套件、持久化/故障/teardown 专项与证据边界 |
 | 7 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
 
 ## 详细附录
@@ -28,7 +28,6 @@
 | [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/unwatch、FIFO 事件队列、wait/timeout 睡眠、事件因果继承、heartbeat、Agent 感知调度、受权调度配置、调度原因记录、运行轨迹、当前 span 短记录、全局审计短记录、过滤查询、统一 timeline、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
 | [assets/agentos_arch.svg](assets/agentos_arch.svg) | 用户态/内核态总架构图 |
 | [assets/agentos_telemetry_pipeline.svg](assets/agentos_telemetry_pipeline.svg) | 内核记录到平台页面的数据路径图 |
-| [assets/agentos_test_evidence.svg](assets/agentos_test_evidence.svg) | 测试证据组织图 |
 | [../../LICENSE](../../LICENSE) | 源代码 GPL-3.0 |
 | [../../DOCUMENTATION_LICENSE.md](../../DOCUMENTATION_LICENSE.md) | 文档与结果材料 CC BY-SA 4.0 |
 | [../../NOTICE](../../NOTICE) | 第三方来源和许可声明 |
@@ -42,4 +41,5 @@
 - 新增功能需要同步更新对应设计说明、API/ABI、验证记录和示例脚本。
 - 发布测试结果只从 `evidence/releases/INDEX.md` 指向的冻结 bundle 读取。
 - 模块列表、自测集合和增长阈值以 `ci/kernel-budgets.json` 及对应 checker 的版本化注册集合为准；文档不复制会随拆分变化的固定计数。
-- 18-case Agent 套件与 physical/metadata recovery/observation recovery/VirtIO/workflow teardown 等独立专项分别记账，不把这些机制 runner 混入 Agent case 数量。
+- Agent case 的唯一清单是 [`ci/kernel-budgets.json`](../../ci/kernel-budgets.json) 中的 `agent_test_suite.expected_cases`；正式实验顺序和声明映射以 [`ci/evaluation-suite.json`](../../ci/evaluation-suite.json) 为准。文档不复制数量或成员列表。
+- Agent 套件与 physical/metadata recovery/observation recovery/VirtIO/workflow teardown 等独立专项分别记账，不把机制 runner 混入 Agent case 清单。

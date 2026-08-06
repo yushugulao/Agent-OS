@@ -24,13 +24,13 @@ typedef uint64_t uint64;
 #define AGENT_DURABLE_DIRTY_URGENT (1U << 0)
 
 #define AGENT_OBSERVE_CHECKPOINT_MAGIC 0x41474f4253323031ULL
-#define AGENT_OBSERVE_CHECKPOINT_VERSION 7U
-#define AGENT_OBSERVE_CHECKPOINT_SCOPES 4U
-#define AGENT_OBSERVE_CHECKPOINT_PER_SCOPE 8U
+#define AGENT_OBSERVE_CHECKPOINT_VERSION 8U
+#define AGENT_OBSERVE_CHECKPOINT_SCOPES 5U
+#define AGENT_OBSERVE_CHECKPOINT_PER_SCOPE 6U
 #define AGENT_OBSERVE_RETENTION_CAUSAL_DIVERSITY 3U
 #define AGENT_OBSERVE_RESERVED_SCOPE_SLOTS 1U
-#define AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS 3U
-#define AGENT_OBSERVE_RECOVERY_SCOPE_SLOT 3U
+#define AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS 4U
+#define AGENT_OBSERVE_RECOVERY_SCOPE_SLOT 4U
 #define AGENT_OBSERVE_SCOPE_USED               (1U << 0)
 #define AGENT_OBSERVE_SCOPE_RECOVERY_SUCCESSOR (1U << 1)
 #define AGENT_OBSERVE_SCOPE_REAP_AUTHORIZED    (1U << 2)
@@ -83,7 +83,7 @@ struct agent_observe_checkpoint_scope {
 	uint64 total_records;
 	uint64 admission_drops;
 	uint64 ledger_hash;
-	uchar records[8];
+	uchar records[6];
 };
 
 struct agent_observe_checkpoint {
@@ -237,16 +237,17 @@ static void set_disk_slot(uint slot, uint flags, uint scope_id,
 	}
 }
 
-static void verify_four_slots_and_sticky_class(void)
+static void verify_five_slots_and_sticky_class(void)
 {
 	struct agent_observe_capacity_claim claim;
-	struct workflow_lifecycle_key ordinary[4] = {
+	struct workflow_lifecycle_key ordinary[5] = {
 		key(1, 11), key(2, 12), key(3, 13), key(4, 14),
+		key(5, 15),
 	};
-	struct workflow_lifecycle_key recovery = key(5, 15);
+	struct workflow_lifecycle_key recovery = key(6, 16);
 
 	reset_state();
-	for (uint i = 0; i < 3; i++) {
+	for (uint i = 0; i < AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS; i++) {
 		assert(agent_observe_capacity_admit(
 			       10 + i, ordinary[i],
 			       AGENT_OBSERVE_CAPACITY_ORDINARY) == 1);
@@ -255,7 +256,7 @@ static void verify_four_slots_and_sticky_class(void)
 		       claim.slot == i && !claim.recovery);
 	}
 	assert(agent_observe_capacity_admit(
-		       13, ordinary[3], AGENT_OBSERVE_CAPACITY_ORDINARY) < 0);
+		       14, ordinary[4], AGENT_OBSERVE_CAPACITY_ORDINARY) < 0);
 	assert(agent_observe_capacity_admit(
 		       20, recovery, AGENT_OBSERVE_CAPACITY_RECOVERY) == 1);
 	assert(agent_observe_capacity_claim(20, recovery, &claim) == 0 &&
@@ -267,7 +268,7 @@ static void verify_four_slots_and_sticky_class(void)
 	agent_observe_slots[0].flags |= AGENT_OBSERVE_SLOT_RECOVERY;
 	assert(agent_observe_capacity_admit(
 		       10, ordinary[0], AGENT_OBSERVE_CAPACITY_ORDINARY) < 0);
-	puts("observe_reap_state: four_slots=1 sticky_class=1");
+	puts("observe_reap_state: five_slots=1 sticky_class=1");
 }
 
 static void verify_abort_and_scope_binding(void)
@@ -299,9 +300,10 @@ static void prepare_full_reap_disk(struct workflow_lifecycle_key victim)
 	set_disk_slot(0, AGENT_OBSERVE_SCOPE_USED, 40, victim);
 	set_disk_slot(1, AGENT_OBSERVE_SCOPE_USED, 41, key(8, 31));
 	set_disk_slot(2, AGENT_OBSERVE_SCOPE_USED, 42, key(9, 32));
-	set_disk_slot(3, AGENT_OBSERVE_SCOPE_USED |
+	set_disk_slot(3, AGENT_OBSERVE_SCOPE_USED, 43, key(10, 33));
+	set_disk_slot(4, AGENT_OBSERVE_SCOPE_USED |
 			 AGENT_OBSERVE_SCOPE_RECOVERY_SUCCESSOR,
-		      43, key(10, 33));
+		      44, key(11, 34));
 }
 
 static uint64 finish_explicit_reap(struct workflow_lifecycle_key victim)
@@ -515,7 +517,7 @@ static void verify_recover_idempotence(void)
 
 int main(void)
 {
-	verify_four_slots_and_sticky_class();
+	verify_five_slots_and_sticky_class();
 	verify_abort_and_scope_binding();
 	verify_zero_target_retry();
 	verify_attach_generation_stable();

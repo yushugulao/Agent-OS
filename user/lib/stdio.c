@@ -253,6 +253,12 @@ void printf(const char *fmt, ...)
 		case 'p':
 			printptr(va_arg(ap, uint64));
 			break;
+		case 'c': {
+			char byte = (char)va_arg(ap, int);
+
+			out(f, &byte, 1);
+			break;
+		}
 		case 's':
 			if ((text = va_arg(ap, char *)) == 0)
 				text = "(null)";

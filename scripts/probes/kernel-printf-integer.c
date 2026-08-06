@@ -76,9 +76,9 @@ int main(void)
 #endif
 
 	reset();
-	kernel_printf("%u|%llu|%d|%x|%s", 17U, 4294967296ULL, -3,
-		      0xfeedU, (char *)0);
-	if (!same("17|4294967296|-3|feed|(null)"))
+	kernel_printf("%u|%llu|%d|%x|%c|%s", 17U, 4294967296ULL, -3,
+		      0xfeedU, 'K', (char *)0);
+	if (!same("17|4294967296|-3|feed|K|(null)"))
 		return 2;
 
 	reset();

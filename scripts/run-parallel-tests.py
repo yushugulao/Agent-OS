@@ -31,6 +31,11 @@ CHILD_ENV_DROP = frozenset(
         "FS_ALLOCATOR_ARTIFACT_DIR",
         "FS_ALLOCATOR_EVIDENCE_ARCHIVE",
         "GNUMAKEFLAGS",
+        "AGENTOS_BUILD_JOBS",
+        "AGENTOS_OUTER_JOBS",
+        "AGENTOS_PARALLEL_DEPTH",
+        "AGENTOS_QEMU_JOBS",
+        "AGENTOS_TEST_JOBS",
         "MAKEFILES",
         "MAKEFLAGS",
         "MAKEOVERRIDES",
@@ -63,6 +68,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--failure-root", type=Path)
     parser.add_argument("--no-keep-failures", action="store_true")
+    parser.add_argument(
+        "--exclusive-test",
+        "--exclusive",
+        action="append",
+        default=[],
+        help="test path that must not overlap any other test",
+    )
     parser.add_argument("tests", nargs="+")
     args = parser.parse_args(argv)
     if args.jobs < 1 or args.jobs > MAX_JOBS:
@@ -90,6 +102,62 @@ def validate_tests(root: Path, tests: list[str]) -> list[Path]:
         seen.add(candidate)
         resolved.append(candidate)
     return resolved
+
+
+def validate_exclusive_tests(
+    root: Path, tests: list[Path], names: list[str]
+) -> frozenset[Path]:
+    resolved: set[Path] = set()
+    inventory = set(tests)
+    for name in names:
+        candidate = (root / name).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"exclusive test escapes repository: {name}") from exc
+        if candidate in resolved:
+            raise ValueError(f"duplicate exclusive test: {name}")
+        if candidate not in inventory:
+            raise ValueError(f"exclusive test is not in the test inventory: {name}")
+        resolved.add(candidate)
+    return frozenset(resolved)
+
+
+def execution_batches(
+    tests: list[Path], exclusive: frozenset[Path]
+) -> tuple[tuple[int, ...], ...]:
+    """Keep exclusive tests as inventory-ordered barriers between shared batches."""
+    batches: list[tuple[int, ...]] = []
+    shared: list[int] = []
+    for index, test in enumerate(tests):
+        if test in exclusive:
+            if shared:
+                batches.append(tuple(shared))
+                shared = []
+            batches.append((index,))
+        else:
+            shared.append(index)
+    if shared:
+        batches.append(tuple(shared))
+    return tuple(batches)
+
+
+def environment_job_value(
+    name: str, minimum: int = 1, maximum: int | None = None
+) -> int | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    try:
+        parsed = int(value, 10)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if parsed < minimum:
+        qualifier = "positive " if minimum == 1 else "non-negative "
+        raise ValueError(f"{name} must be a {qualifier}integer")
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f"{name} must not exceed {maximum}")
+    return parsed
 
 
 def terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
@@ -124,6 +192,10 @@ def run_one(
     log: Path,
     temporary: Path,
     timeout: int,
+    parallel_jobs: int = 1,
+    parent_outer_jobs: int = 1,
+    parent_depth: int = 0,
+    build_budget: int | None = None,
 ) -> TestResult:
     env = os.environ.copy()
     for name in CHILD_ENV_DROP:
@@ -133,12 +205,18 @@ def run_one(
             env.pop(name, None)
     env.update(
         {
+            "AGENTOS_OUTER_JOBS": str(parent_outer_jobs * parallel_jobs),
+            "AGENTOS_PARALLEL_DEPTH": str(parent_depth + 1),
+            "AGENTOS_QEMU_JOBS": "1",
+            "AGENTOS_TEST_JOBS": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONHASHSEED": "0",
             "PYTHONNOUSERSITE": "1",
             "TMPDIR": str(temporary),
         }
     )
+    if build_budget is not None:
+        env["AGENTOS_BUILD_JOBS"] = str(max(1, build_budget // parallel_jobs))
     if os.name == "nt":
         env.update({"TEMP": str(temporary), "TMP": str(temporary)})
     started = time.monotonic_ns()
@@ -220,6 +298,8 @@ def retain_failures(
     tests: list[Path],
     results: list[TestResult],
     logs: list[Path],
+    effective_jobs: int,
+    exclusive: frozenset[Path],
 ) -> Path:
     stage = os.environ.get("EVIDENCE_WORK_DIR") or os.environ.get(
         "FINAL_EVIDENCE_STAGE"
@@ -260,16 +340,24 @@ def retain_failures(
         args.python,
         "--timeout",
         str(args.timeout),
-        *failed_tests,
     ]
+    failed_set = set(failed_tests)
+    for test in tests:
+        relative = test.relative_to(root).as_posix()
+        if relative in failed_set and test in exclusive:
+            replay.extend(("--exclusive-test", relative))
+    replay.extend(failed_tests)
     manifest = {
         "schema": 1,
         "source": source_receipt(root),
         "cwd": str(root),
         "requested_jobs": args.jobs,
-        "effective_jobs": 1
-        if os.environ.get("FINAL_EVIDENCE_STAGE")
-        else min(args.jobs, len(tests)),
+        "effective_jobs": effective_jobs,
+        "exclusive_tests": [
+            test.relative_to(root).as_posix()
+            for test in tests
+            if test in exclusive
+        ],
         "timeout_seconds": args.timeout,
         "tests": entries,
         "replay_argv": replay,
@@ -287,56 +375,78 @@ def main() -> int:
     root = Path.cwd().resolve()
     try:
         tests = validate_tests(root, args.tests)
+        exclusive = validate_exclusive_tests(
+            root, tests, args.exclusive_test
+        )
+        parent_outer_jobs = environment_job_value("AGENTOS_OUTER_JOBS") or 1
+        parent_depth = environment_job_value(
+            "AGENTOS_PARALLEL_DEPTH", minimum=0
+        ) or 0
+        build_budget = environment_job_value(
+            "AGENTOS_BUILD_JOBS", maximum=MAX_JOBS
+        )
     except ValueError as exc:
         print(f"parallel-tests: {exc}", file=sys.stderr)
         return 2
 
     evidence_mode = bool(os.environ.get("FINAL_EVIDENCE_STAGE"))
-    effective_jobs = min(1 if evidence_mode else args.jobs, len(tests))
+    job_limit = min(args.jobs, len(tests))
+    if build_budget is not None:
+        job_limit = min(job_limit, build_budget)
+    batches = execution_batches(tests, exclusive)
+    effective_jobs = max(min(job_limit, len(batch)) for batch in batches)
     print(
-        f"[parallel-tests] start total={len(tests)} jobs={effective_jobs}",
+        f"[parallel-tests] start total={len(tests)} jobs={effective_jobs} "
+        f"exclusive={len(exclusive)} evidence={int(evidence_mode)}",
         flush=True,
     )
     results: list[TestResult | None] = [None] * len(tests)
     with tempfile.TemporaryDirectory(prefix="agentos-host-tests-") as temp_name:
         temp = Path(temp_name)
         logs = [temp / f"{index:03d}.log" for index in range(len(tests))]
-        with ThreadPoolExecutor(max_workers=effective_jobs) as pool:
-            futures = {}
-            for index, test in enumerate(tests):
-                temporary = temp / f"{index:03d}.tmp"
-                temporary.mkdir()
-                future = pool.submit(
-                    run_one,
-                    root,
-                    args.python,
-                    test,
-                    logs[index],
-                    temporary,
-                    args.timeout,
-                )
-                futures[future] = index
-            finished = 0
-            for future in as_completed(futures):
-                index = futures[future]
-                try:
-                    results[index] = future.result()
-                except Exception as exc:
-                    detail = f"runner failure: {type(exc).__name__}: {exc}"
-                    logs[index].write_text(
-                        f"parallel-tests: {detail}\n", encoding="utf-8"
+        finished = 0
+        for batch in batches:
+            batch_jobs = min(effective_jobs, len(batch))
+            with ThreadPoolExecutor(max_workers=batch_jobs) as pool:
+                futures = {}
+                for index in batch:
+                    test = tests[index]
+                    temporary = temp / f"{index:03d}.tmp"
+                    temporary.mkdir()
+                    future = pool.submit(
+                        run_one,
+                        root,
+                        args.python,
+                        test,
+                        logs[index],
+                        temporary,
+                        args.timeout,
+                        batch_jobs,
+                        parent_outer_jobs,
+                        parent_depth,
+                        build_budget,
                     )
-                    results[index] = TestResult(125, 0, detail)
-                completed = results[index]
-                assert completed is not None
-                finished += 1
-                print(
-                    f"[parallel-tests] progress={finished}/{len(tests)} "
-                    f"test={tests[index].relative_to(root).as_posix()} "
-                    f"result={'ok' if completed.returncode == 0 else 'failed'} "
-                    f"elapsed_ms={completed.elapsed_ms}",
-                    flush=True,
-                )
+                    futures[future] = index
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        results[index] = future.result()
+                    except Exception as exc:
+                        detail = f"runner failure: {type(exc).__name__}: {exc}"
+                        logs[index].write_text(
+                            f"parallel-tests: {detail}\n", encoding="utf-8"
+                        )
+                        results[index] = TestResult(125, 0, detail)
+                    completed = results[index]
+                    assert completed is not None
+                    finished += 1
+                    print(
+                        f"[parallel-tests] progress={finished}/{len(tests)} "
+                        f"test={tests[index].relative_to(root).as_posix()} "
+                        f"result={'ok' if completed.returncode == 0 else 'failed'} "
+                        f"elapsed_ms={completed.elapsed_ms}",
+                        flush=True,
+                    )
 
         failed = 0
         completed_results: list[TestResult] = []
@@ -367,7 +477,13 @@ def main() -> int:
         if failed and not args.no_keep_failures:
             try:
                 retained = retain_failures(
-                    root, args, tests, completed_results, logs
+                    root,
+                    args,
+                    tests,
+                    completed_results,
+                    logs,
+                    effective_jobs,
+                    exclusive,
                 )
                 print(f"[parallel-tests] replay={retained / 'replay.json'}")
             except OSError as exc:

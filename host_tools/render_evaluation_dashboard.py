@@ -29,7 +29,9 @@ from evaluation_kernel_cost import (
 )
 from evaluation_campaign import CampaignError, validate_campaign
 from evaluation_contract import (
+    CONCURRENCY_PUBLIC_FIELDS,
     EvaluationError as EvaluationContractError,
+    QOS_REGISTRATION_FIELDS,
     SUITE_IDS,
     derive_acceptance_gates,
     load_run_plan,
@@ -160,11 +162,6 @@ DIAGNOSTIC_SAMPLE_FIELDS = {
     "source_line",
     "source_log_sha256",
     "source_marker_sha256",
-}
-CLAIM_GATE_FIELDS = {
-    "minimum_absolute_improvement_us",
-    "minimum_baseline_duration_us",
-    "minimum_relative_improvement_percent",
 }
 CLAIM_FIELDS = {
     "id",
@@ -1535,30 +1532,136 @@ def _validate_diagnostics(
         _fail(f"{path} must cover every benchmark load when diagnostics are present")
 
 
-def _validate_methodology(raw: Any) -> tuple[dict[str, Any], float, int]:
-    methodology = _require_object(raw, "methodology")
-    multiple = _require_object(methodology.get("multiple_testing"), "methodology.multiple_testing")
-    if multiple.get("method") != "Bonferroni" or multiple.get("load_gate") != "intersection (every preregistered load must pass)":
-        _fail("methodology.multiple_testing must use Bonferroni and the intersection load gate")
-    familywise = _require_number(multiple.get("familywise_alpha"), "methodology.multiple_testing.familywise_alpha")
-    per_claim = _require_number(multiple.get("per_claim_alpha"), "methodology.multiple_testing.per_claim_alpha")
-    count = multiple.get("hypothesis_count")
-    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
-        _fail("methodology.multiple_testing.hypothesis_count must be positive")
-    headlines = _require_list(multiple.get("headline_claims"), "methodology.multiple_testing.headline_claims")
-    headline_ids = [
-        _require_string(value, f"methodology.multiple_testing.headline_claims[{index}]")
-        for index, value in enumerate(headlines)
-    ]
-    if len(headline_ids) != count or len(set(headline_ids)) != count:
-        _fail("methodology.multiple_testing headline claim family is inconsistent")
-    if not 0 < familywise <= 1 or not math.isclose(per_claim, familywise / count, rel_tol=0, abs_tol=1e-15):
-        _fail("methodology.multiple_testing per-claim alpha is inconsistent")
-    repetitions = _require_object(methodology.get("repetitions"), "methodology.repetitions")
-    minimum_inner_pairs = repetitions.get("minimum_inner_pairs")
-    if isinstance(minimum_inner_pairs, bool) or not isinstance(minimum_inner_pairs, int) or minimum_inner_pairs <= 0:
-        _fail("methodology.repetitions.minimum_inner_pairs must be positive")
-    return methodology, per_claim, minimum_inner_pairs
+def _validate_supplementary_evaluations(
+    methodology: dict[str, Any], evidence: dict[str, dict[str, Any]],
+    summary_schema: int,
+) -> None:
+    raw = methodology.get("supplementary_evaluations")
+    if summary_schema < 4:
+        if raw is not None:
+            _fail("legacy summary cannot contain supplementary evaluations")
+        return
+    evaluations = _require_list(raw, "methodology.supplementary_evaluations")
+    if len(evaluations) != 1:
+        _fail("suite v4 must contain one supplementary evaluation")
+    item = _require_object(evaluations[0], "methodology.supplementary_evaluations[0]")
+    fields = {
+        "id", "label", "task", "status", "performance_gate",
+        "visit_sequence", "concurrency_levels", "rounds_per_level",
+        "latency_unit", "throughput_unit", "percentile_method",
+        "interpretation", "boots",
+    }
+    if summary_schema >= 5:
+        fields.update(QOS_REGISTRATION_FIELDS)
+    if set(item) != fields:
+        _fail("supplementary evaluation fields differ from schema")
+    _require_string(item["id"], "supplementary.id")
+    _require_string(item["label"], "supplementary.label")
+    _task_id(item["task"], "supplementary.task")
+    if item["status"] not in {"measured", "unavailable"}:
+        _fail("supplementary status must be measured or unavailable")
+    if item["performance_gate"] is not None:
+        _fail("supplementary measurement cannot declare a performance gate")
+    sequence = _require_list(item["visit_sequence"], "supplementary.visit_sequence")
+    if (
+        len(sequence) != 5 or sequence[0] != sequence[-1]
+        or len(set(sequence[:-1])) != 4
+        or any(type(identity) is not str or len(identity) != 1 for identity in sequence)
+    ):
+        _fail("supplementary visit sequence must be a four-identity revisit")
+    levels = _require_list(item["concurrency_levels"], "supplementary.concurrency_levels")
+    if (
+        not levels or any(type(level) is not int or level < 1 for level in levels)
+        or levels != sorted(set(levels))
+    ):
+        _fail("supplementary concurrency levels must be ordered unique integers")
+    rounds = item["rounds_per_level"]
+    if type(rounds) is not int or rounds < 1:
+        _fail("supplementary rounds_per_level must be positive")
+    for key in ("latency_unit", "throughput_unit", "percentile_method", "interpretation"):
+        _require_string(item[key], f"supplementary.{key}")
+    qos_schema = item.get("qos_schema_version", 1)
+    if summary_schema >= 5:
+        if qos_schema != 2:
+            _fail("supplementary QoS schema must be 2")
+        for key in QOS_REGISTRATION_FIELDS:
+            if key not in {"qos_schema_version", "latency_metrics"}:
+                _require_string(item[key], f"supplementary.{key}")
+        if item["latency_metrics"] != ["wait", "service", "turnaround"]:
+            _fail("supplementary latency metrics differ from schema")
+    boots = _require_list(item["boots"], "supplementary.boots")
+    if (item["status"] == "measured") != bool(boots):
+        _fail("supplementary status differs from its boot inventory")
+    seen_boots: set[str] = set()
+    for index, raw_boot in enumerate(boots):
+        path = f"supplementary.boots[{index}]"
+        boot = _require_object(raw_boot, path)
+        boot_fields = {
+            "boot_id", "evidence_id", "correct", "contamination",
+            "return_visit", "fallback", "concurrency",
+        }
+        if summary_schema >= 5:
+            boot_fields.update({"qos_schema_version", "result_fingerprint"})
+        if set(boot) != boot_fields:
+            _fail(f"{path} fields differ from schema")
+        if summary_schema >= 5:
+            if boot["qos_schema_version"] != qos_schema:
+                _fail(f"{path} QoS schema differs from registration")
+            if (
+                type(boot["result_fingerprint"]) is not str
+                or not re.fullmatch(r"[0-9a-f]{16}", boot["result_fingerprint"])
+            ):
+                _fail(f"{path}.result_fingerprint must be lowercase hex16")
+        boot_id = _require_string(boot["boot_id"], f"{path}.boot_id")
+        if boot_id in seen_boots:
+            _fail("supplementary boot ids must be unique")
+        seen_boots.add(boot_id)
+        evidence_id = _require_string(boot["evidence_id"], f"{path}.evidence_id")
+        if evidence_id not in evidence or evidence[evidence_id]["status"] != "verified":
+            _fail(f"{path} must bind verified raw-log evidence")
+        for key in ("correct", "contamination", "return_visit", "fallback"):
+            if type(boot[key]) is not int or boot[key] < 0:
+                _fail(f"{path}.{key} must be a non-negative integer")
+        if boot["correct"] + boot["fallback"] != len(sequence):
+            _fail(f"{path} visit totals differ from the registered sequence")
+        concurrency = _require_list(boot["concurrency"], f"{path}.concurrency")
+        if [entry.get("concurrency") for entry in concurrency if isinstance(entry, dict)] != levels:
+            _fail(f"{path} concurrency levels differ from the registration")
+        for entry_index, raw_entry in enumerate(concurrency):
+            entry_path = f"{path}.concurrency[{entry_index}]"
+            entry = _require_object(raw_entry, entry_path)
+            expected_fields = set(CONCURRENCY_PUBLIC_FIELDS[qos_schema])
+            if set(entry) != expected_fields:
+                _fail(f"{entry_path} fields differ from schema")
+            digest_fields = {"workload_digest", "result_fingerprint"}
+            if any(
+                type(entry[key]) is not int or entry[key] < 0
+                for key in expected_fields - digest_fields
+            ):
+                _fail(f"{entry_path} values must be non-negative integers")
+            if any(
+                type(entry[key]) is not str
+                or not re.fullmatch(r"[0-9a-f]{16}", entry[key])
+                for key in expected_fields & digest_fields
+            ):
+                _fail(f"{entry_path} digests must be lowercase hex16")
+            requests = rounds * entry["concurrency"]
+            if (
+                entry["rounds"] != rounds or entry["requests"] != requests
+                or entry["completed"] != requests or entry["duration_us"] < 1
+                or entry["correct"] + entry["fallback"] != requests
+            ):
+                _fail(f"{entry_path} aggregate counts differ from raw coverage")
+            if qos_schema == 2 and (
+                entry["goodput_milli_rps"] > entry["throughput_milli_rps"]
+                or entry["isolated"] > entry["completed"]
+                or entry["fairness_jain_ppm"] > 1_000_000
+                or entry["max_min_fairness_ppm"] > 1_000_000
+                or not entry["p50_us"] <= entry["p90_us"] <= entry["p99_us"]
+                or not entry["wait_p50_us"] <= entry["wait_p90_us"] <= entry["wait_p99_us"]
+                or not entry["service_p50_us"] <= entry["service_p90_us"] <= entry["service_p99_us"]
+            ):
+                _fail(f"{entry_path} QoS metrics are inconsistent")
 
 
 def validate_summary(raw: Any) -> dict[str, Any]:
@@ -1628,6 +1731,7 @@ def validate_summary(raw: Any) -> dict[str, Any]:
         _fail("run.run_plan_sha256 must match verified run-plan evidence")
 
     methodology = _require_object(root["methodology"], "methodology")
+    _validate_supplementary_evaluations(methodology, evidence, summary_schema)
     raw_claims = _require_list(root["claims"], "claims")
     claim_benchmark_ids = {
         _require_string(claim.get("benchmark_id"), f"claims[{index}].benchmark_id")
@@ -3787,6 +3891,11 @@ def _has_scientific_result(summary: dict[str, Any]) -> bool:
         item["kind"] == "research-platform-scenario"
         and item["status"] == "verified"
         for item in summary["evidence"]
+    ) or any(
+        item.get("status") == "measured" and bool(item.get("boots"))
+        for item in summary["methodology"].get(
+            "supplementary_evaluations", []
+        )
     )
 
 
@@ -5027,6 +5136,101 @@ def _scenario_details_html(details: list[dict[str, Any]]) -> str:
     return "".join(blocks)
 
 
+def _supplementary_evaluations_html(methodology: dict[str, Any]) -> str:
+    evaluations = methodology.get("supplementary_evaluations", [])
+    if not evaluations:
+        return ""
+    blocks: list[str] = []
+    for evaluation in evaluations:
+        qos_schema = evaluation.get("qos_schema_version", 1)
+        rows: list[str] = []
+        visit_rows: list[str] = []
+        for boot in evaluation["boots"]:
+            visit_rows.append(
+                "<tr>"
+                f'<th scope="row"><code>{_h(boot["boot_id"])}</code></th>'
+                f'<td>{_h(boot["correct"])} / {_h(len(evaluation["visit_sequence"]))}</td>'
+                f'<td>{_h(boot["contamination"])}</td>'
+                f'<td>{_h(boot["return_visit"])}</td>'
+                f'<td>{_h(boot["fallback"])}</td>'
+                f'<td><button class="evidence-link" type="button" '
+                f'data-evidence-ref="{_h(boot["evidence_id"])}">原始日志</button></td>'
+                "</tr>"
+            )
+            for sample in boot["concurrency"]:
+                throughput = sample["throughput_milli_rps"] / 1000
+                if qos_schema == 2:
+                    rows.append(
+                        "<tr>"
+                        f'<th scope="row"><code>{_h(boot["boot_id"])}</code></th>'
+                        f'<td>{_h(sample["concurrency"])}</td>'
+                        f'<td>{_h(sample["completed"])} / {_h(sample["requests"])}</td>'
+                        f'<td>{_h(_value(throughput))}</td>'
+                        f'<td>{_h(_value(sample["goodput_milli_rps"] / 1000))}</td>'
+                        f'<td>{_h(sample["p90_us"])}</td>'
+                        f'<td>{_h(sample["wait_p90_us"])}</td>'
+                        f'<td>{_h(_value(sample["fairness_jain_ppm"] / 1_000_000))}</td>'
+                        f'<td>{_h(_value(sample["max_min_fairness_ppm"] / 1_000_000))}</td>'
+                        f'<td>{_h(sample["isolated"])} / {_h(sample["requests"])}</td>'
+                        f'<td>{_h(sample["contamination"])}</td>'
+                        f'<td>{_h(sample["fallback"])}</td>'
+                        f'<td><code>{_h(sample["workload_digest"])}</code></td>'
+                        "</tr>"
+                    )
+                else:
+                    average = sample["avg_milli_us"] / 1000
+                    rows.append(
+                        "<tr>"
+                        f'<th scope="row"><code>{_h(boot["boot_id"])}</code></th>'
+                        f'<td>{_h(sample["concurrency"])}</td>'
+                        f'<td>{_h(sample["completed"])} / {_h(sample["requests"])}</td>'
+                        f'<td>{_h(_value(throughput))}</td>'
+                        f'<td>{_h(_value(average))}</td>'
+                        f'<td>{_h(sample["p50_us"])}</td>'
+                        f'<td>{_h(sample["p90_us"])}</td>'
+                        f'<td>{_h(sample["p99_us"])}</td>'
+                        f'<td>{_h(sample["contamination"])}</td>'
+                        f'<td>{_h(sample["fallback"])}</td>'
+                        "</tr>"
+                    )
+        sequence = " → ".join(evaluation["visit_sequence"])
+        concurrency_head = (
+            '<th>Guest boot</th><th>并发度</th><th>完成请求</th>'
+            '<th>吞吐率 req/s</th><th>Goodput req/s</th><th>周转 p90 us</th>'
+            '<th>等待 p90 us</th><th>Jain 公平度</th><th>Min/max 公平度</th>'
+            '<th>隔离完成</th><th>污染记录</th><th>回退</th><th>工作负载摘要</th>'
+            if qos_schema == 2 else
+            '<th>Guest boot</th><th>并发度</th><th>完成请求</th>'
+            '<th>吞吐率 req/s</th><th>平均延迟 us</th><th>p50 us</th>'
+            '<th>p90 us</th><th>p99 us</th><th>污染记录</th><th>回退</th>'
+        )
+        blocks.append(
+            '<article class="benchmark-block supplementary-evaluation">'
+            '<header><div><p class="eyebrow">描述性补充测量</p>'
+            f'<h3>{_h(evaluation["label"])}</h3></div>'
+            f'{_status(evaluation["status"])}</header>'
+            f'<p class="diagnostic-note">回访顺序 {_h(sequence)}；每个并发度 '
+            f'{_h(evaluation["rounds_per_level"])} 轮。无性能通过阈值，负结果原样展示。</p>'
+            '<h4>身份隔离与回访</h4>'
+            '<div class="table-scroll" role="region" tabindex="0" '
+            'aria-label="多身份回访实测表，可横向滚动"><table><thead><tr>'
+            '<th>Guest boot</th><th>正确访问</th><th>污染记录</th>'
+            '<th>返回访问</th><th>回退</th><th>证据</th></tr></thead>'
+            f'<tbody>{"".join(visit_rows)}</tbody></table></div>'
+            '<h4>并发 IPC 数据</h4>'
+            '<div class="table-scroll" role="region" tabindex="0" '
+            'aria-label="多身份并发实测表，可横向滚动"><table><thead><tr>'
+            f'{concurrency_head}'
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+            '</article>'
+        )
+    return (
+        '<section aria-labelledby="supplementary-evaluations-title">'
+        '<h3 id="supplementary-evaluations-title" class="subsection-title">'
+        '多身份回访与并发</h3>' + "".join(blocks) + "</section>"
+    )
+
+
 def _kernel_cost_html(detail: dict[str, Any] | None) -> str:
     if detail is None:
         return (
@@ -5303,7 +5507,10 @@ def _page(
     if not evidence_items:
         evidence_items.append('<div class="unavailable-block"><strong>原始证据 unavailable</strong></div>')
 
-    methodology_rows = "".join(_methodology_rows(summary["methodology"]))
+    methodology_rows = "".join(_methodology_rows({
+        key: value for key, value in summary["methodology"].items()
+        if key != "supplementary_evaluations"
+    }))
     interpretation_boundaries = _interpretation_boundaries_html(summary["methodology"])
     methodology_diagnostics = "".join(
         _diagnostics_table(benchmark, heading_level=3)
@@ -5316,6 +5523,7 @@ def _page(
     marker_count = int(verification["verified_marker_count"])
     evidence_set_sha256 = str(verification["evidence_set_sha256"])
     scenario_detail_blocks = _scenario_details_html(scenario_details)
+    supplementary_evaluations = _supplementary_evaluations_html(summary["methodology"])
     kernel_cost_block = _kernel_cost_html(kernel_cost)
     campaign_environment_block = _campaign_environment_html(campaign_environment)
     return f'''<!doctype html>
@@ -5380,6 +5588,7 @@ def _page(
       <section aria-labelledby="functional-receipts-title"><h3 id="functional-receipts-title" class="subsection-title">任务功能回执</h3>{_task_matrix(summary["scenarios"], evidence)}</section>
       <div class="table-scroll" role="region" tabindex="0" aria-label="科研场景实测表，可横向滚动"><table><thead><tr><th>赛题任务</th><th>能力</th><th>动态复现</th><th>耗时对照</th><th>原始证据</th></tr></thead><tbody>{"".join(scenario_rows)}</tbody></table></div>
       {"".join(scenario_inference)}
+      {supplementary_evaluations}
       <section aria-labelledby="scenario-details-title"><h3 id="scenario-details-title" class="subsection-title">场景明细</h3>{scenario_detail_blocks}</section>
     </section>
     <section role="tabpanel" id="panel-evidence" aria-labelledby="tab-evidence" class="tab-panel" hidden>
@@ -5438,6 +5647,48 @@ def _csv_rows(summary: dict[str, Any]) -> Iterable[dict[str, Any]]:
                 "evidence_ids": ";".join(benchmark["evidence_ids"]),
                 "sources": _evidence_sources(benchmark["evidence_ids"], evidence),
             }
+    for evaluation in summary["methodology"].get("supplementary_evaluations", []):
+        for boot in evaluation["boots"]:
+            evidence_ids = [boot["evidence_id"]]
+            for sample in boot["concurrency"]:
+                load = f'boot={boot["boot_id"]};concurrency={sample["concurrency"]}'
+                if evaluation.get("qos_schema_version") == 2:
+                    load += f';digest={sample["workload_digest"]}'
+                    metrics = (
+                        ("throughput", sample["throughput_milli_rps"] / 1000, "requests/s"),
+                        ("goodput", sample["goodput_milli_rps"] / 1000, "requests/s"),
+                        ("p90_turnaround", sample["p90_us"], "us"),
+                        ("p90_wait", sample["wait_p90_us"], "us"),
+                        ("jain_fairness", sample["fairness_jain_ppm"] / 1_000_000, "ratio"),
+                        ("max_min_fairness", sample["max_min_fairness_ppm"] / 1_000_000, "ratio"),
+                        ("isolation_rate", sample["isolated"] / sample["requests"], "ratio"),
+                    )
+                else:
+                    metrics = (
+                        ("throughput", sample["throughput_milli_rps"] / 1000, "requests/s"),
+                        ("average_latency", sample["avg_milli_us"] / 1000, "us"),
+                        ("p50_latency", sample["p50_us"], "us"),
+                        ("p90_latency", sample["p90_us"], "us"),
+                        ("p99_latency", sample["p99_us"], "us"),
+                    )
+                for metric, value, unit in metrics:
+                    yield {
+                        "benchmark_id": f'{evaluation["id"]}.{metric}',
+                        "benchmark_label": evaluation["label"],
+                        "task": evaluation["task"],
+                        "status": evaluation["status"],
+                        "target_id": "agentos",
+                        "target_label": "AgentOS-uCore",
+                        "load": load,
+                        "estimate": value,
+                        "lower": "",
+                        "upper": "",
+                        "unit": unit,
+                        "n": sample["requests"],
+                        "cache_policy": "not_applicable",
+                        "evidence_ids": boot["evidence_id"],
+                        "sources": _evidence_sources(evidence_ids, evidence),
+                    }
 
 
 def _write_csv(path: Path, summary: dict[str, Any]) -> None:

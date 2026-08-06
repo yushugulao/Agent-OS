@@ -40,12 +40,27 @@ struct resource_rate_lease_entry {
 	uint64 leased_amount;
 	uint64 debt_amount;
 };
+enum resource_rate_lease_tag {
+	RESOURCE_RATE_LEASE_FREE = 0,
+	RESOURCE_RATE_LEASE_LIVE,
+	RESOURCE_RATE_LEASE_RETIRED,
+};
 struct resource_rate_lease {
-	int used;
+	enum resource_rate_lease_tag tag;
 	uint generation;
 	uint count;
 	struct resource_rate_lease_entry entries[RESOURCE_RATE_BUNDLE_CAP];
 };
+struct resource_rate_lease_allocator {
+	uint16 free_ring[RESOURCE_RATE_LEASE_CAP];
+	uint free_head;
+	uint free_tail;
+	uint free_count;
+};
+_Static_assert(RESOURCE_RATE_LEASE_CAP <= 0xffffU,
+	       "rate lease free-ring index budget");
+_Static_assert(sizeof(struct resource_rate_lease) == 128U,
+	       "rate lease slot budget");
 static struct resource_policy resource_policies[RESOURCE_KIND_COUNT];
 static struct resource_account resource_accounts[RESOURCE_ACCOUNT_CAP];
 static uint64 resource_account_generations[RESOURCE_ACCOUNT_CAP];
@@ -54,9 +69,7 @@ static struct resource_rate_state
 	resource_rate_globals[RESOURCE_RATE_GLOBAL_CAP];
 static struct resource_rate_lease
 	resource_rate_leases[RESOURCE_RATE_LEASE_CAP];
-static uint resource_rate_lease_generations[RESOURCE_RATE_LEASE_CAP];
-static uchar resource_rate_lease_generation_exhausted[
-	RESOURCE_RATE_LEASE_CAP];
+static struct resource_rate_lease_allocator resource_rate_lease_allocator;
 static const uint resource_kind_attribute_table[RESOURCE_KIND_COUNT] = {
 	[RESOURCE_PROCESS] = RESOURCE_KIND_COUNT_TRANSFERABLE,
 	[RESOURCE_THREAD] = RESOURCE_KIND_COUNT_TRANSFERABLE,
@@ -194,10 +207,11 @@ void resource_controller_init(void)
 	       sizeof(resource_account_generation_exhausted));
 	memset(resource_rate_globals, 0, sizeof(resource_rate_globals));
 	memset(resource_rate_leases, 0, sizeof(resource_rate_leases));
-	memset(resource_rate_lease_generations, 0,
-	       sizeof(resource_rate_lease_generations));
-	memset(resource_rate_lease_generation_exhausted, 0,
-	       sizeof(resource_rate_lease_generation_exhausted));
+	memset(&resource_rate_lease_allocator, 0,
+	       sizeof(resource_rate_lease_allocator));
+	for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP; i++)
+		resource_rate_lease_allocator.free_ring[i] = (uint16)i;
+	resource_rate_lease_allocator.free_count = RESOURCE_RATE_LEASE_CAP;
 }
 int resource_policy_configure(enum resource_kind kind, uint64 capacity,
 			      uint64 ordinary_limit,
@@ -1142,7 +1156,8 @@ resource_rate_lease_lookup(struct resource_rate_lease_handle handle)
 	    handle.generation == 0)
 		return 0;
 	lease = &resource_rate_leases[handle.slot - 1];
-	if (!lease->used || lease->generation != handle.generation)
+	if (lease->tag != RESOURCE_RATE_LEASE_LIVE ||
+	    lease->generation != handle.generation)
 		return 0;
 	return lease;
 }
@@ -1275,40 +1290,67 @@ static int resource_rate_lease_allocate(
 	struct resource_rate_lease_handle *out,
 	struct resource_rate_lease **lease_out)
 {
-	for (uint i = 0; i < RESOURCE_RATE_LEASE_CAP; i++) {
-		struct resource_rate_lease *lease =
-			&resource_rate_leases[i];
-		uint generation;
+	struct resource_rate_lease *lease;
+	uint generation, index;
 
-		if (lease->used ||
-		    resource_rate_lease_generation_exhausted[i])
-			continue;
-		generation = resource_rate_lease_generations[i] + 1;
-		if (generation == 0) {
-			resource_rate_lease_generation_exhausted[i] = 1;
-			continue;
-		}
-		resource_rate_lease_generations[i] = generation;
-		if (generation == (uint)-1)
-			resource_rate_lease_generation_exhausted[i] = 1;
-		memset(lease, 0, sizeof(*lease));
-		lease->used = 1;
-		lease->generation = generation;
-		out->slot = i + 1;
-		out->generation = generation;
-		*lease_out = lease;
-		return 0;
-	}
-	return -1;
+	if (resource_rate_lease_allocator.free_count == 0)
+		return -1;
+	if (resource_rate_lease_allocator.free_count >
+		    RESOURCE_RATE_LEASE_CAP ||
+	    resource_rate_lease_allocator.free_head >=
+		    RESOURCE_RATE_LEASE_CAP)
+		panic("rate lease free ring");
+	index = resource_rate_lease_allocator.free_ring[
+		resource_rate_lease_allocator.free_head];
+	if (index >= RESOURCE_RATE_LEASE_CAP)
+		panic("rate lease free ring");
+	lease = &resource_rate_leases[index];
+	if (lease->tag != RESOURCE_RATE_LEASE_FREE ||
+	    lease->generation == (uint)-1)
+		panic("rate lease free ring");
+	if (++resource_rate_lease_allocator.free_head ==
+	    RESOURCE_RATE_LEASE_CAP)
+		resource_rate_lease_allocator.free_head = 0;
+	resource_rate_lease_allocator.free_count--;
+	generation = lease->generation + 1;
+	memset(lease, 0, sizeof(*lease));
+	lease->tag = RESOURCE_RATE_LEASE_LIVE;
+	lease->generation = generation;
+	out->slot = index + 1;
+	out->generation = generation;
+	*lease_out = lease;
+	return 0;
 }
 
-static void resource_rate_lease_clear(
+static void resource_rate_lease_release(
 	struct resource_rate_lease *lease)
 {
+	uint index = (uint)(lease - resource_rate_leases);
 	uint generation = lease->generation;
 
+	if (index >= RESOURCE_RATE_LEASE_CAP ||
+	    lease->tag != RESOURCE_RATE_LEASE_LIVE ||
+	    resource_rate_lease_allocator.free_count >
+		    RESOURCE_RATE_LEASE_CAP ||
+	    resource_rate_lease_allocator.free_tail >=
+		    RESOURCE_RATE_LEASE_CAP)
+		panic("rate lease release ring");
 	memset(lease, 0, sizeof(*lease));
 	lease->generation = generation;
+	if (generation == (uint)-1) {
+		lease->tag = RESOURCE_RATE_LEASE_RETIRED;
+		return;
+	}
+	if (resource_rate_lease_allocator.free_count ==
+	    RESOURCE_RATE_LEASE_CAP)
+		panic("rate lease release ring");
+	lease->tag = RESOURCE_RATE_LEASE_FREE;
+	resource_rate_lease_allocator.free_ring[
+		resource_rate_lease_allocator.free_tail] = (uint16)index;
+	if (++resource_rate_lease_allocator.free_tail ==
+	    RESOURCE_RATE_LEASE_CAP)
+		resource_rate_lease_allocator.free_tail = 0;
+	resource_rate_lease_allocator.free_count++;
 }
 
 int resource_rate_reserve_many(
@@ -1428,7 +1470,7 @@ int resource_rate_lease_commit(
 		if (account != 0)
 			resource_account_advance(account);
 	}
-	resource_rate_lease_clear(lease);
+	resource_rate_lease_release(lease);
 	intr_restore(enabled);
 	return 0;
 }
@@ -1471,7 +1513,7 @@ void resource_rate_lease_cancel(
 		if (account != 0)
 			resource_account_advance(account);
 	}
-	resource_rate_lease_clear(lease);
+	resource_rate_lease_release(lease);
 	intr_restore(enabled);
 }
 

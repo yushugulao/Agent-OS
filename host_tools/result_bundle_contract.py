@@ -33,7 +33,6 @@ LEGACY_EXPERIMENT_CHARTS = {
 }
 CURRENT_RAW_FILES = {"file-query-benchmark.csv"}
 CURRENT_CHART_FILES = {
-    "cost-replacement.svg",
     "experiment-file-query-bar.svg",
     "runtime-observation.svg",
 }
@@ -60,7 +59,6 @@ SUMMARY_ARTIFACT_FIELDS = {
 }
 SUMMARY_CHART_PATHS = (
     Path("charts") / "runtime-observation.svg",
-    Path("charts") / "cost-replacement.svg",
     Path("charts") / "experiment-file-query-bar.svg",
 )
 SUMMARY_RAW_PATHS = (Path("experiments") / "raw" / "file-query-benchmark.csv",)

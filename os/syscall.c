@@ -1527,9 +1527,13 @@ void syscall()
 	}
 syscall_out:
 	syscall_transaction_finish(&transaction, &ret);
-	/* Timer delivery owns periodic maintenance.  A voluntary yield is the
-	 * only syscall-tail assist, so unrelated calls never inherit writeback. */
-	if (id == SYS_sched_yield)
+	/*
+	 * Like Linux task_work, producers publish a cheap pending edge and the
+	 * returning task consumes it only after syscall resources are settled.
+	 * This keeps maintenance off interrupt and idle stacks without charging
+	 * every traditional syscall for a full background scan.
+	 */
+	if (agent_background_work_pending() || id == SYS_sched_yield)
 		agent_background_checkpoint();
 	kernel_work_end();
 	if (proc_thread_exit_requested())

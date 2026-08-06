@@ -199,22 +199,6 @@ def parse_evidence_fields(line: str, location: str) -> dict[str, str]:
     return fields
 
 
-def parse_key_value_file(state_dir: Path, file_name: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for raw in require_file_text(state_dir, file_name).splitlines():
-        line = raw.strip()
-        if not line or "=" not in line:
-            continue
-        if ";" in line:
-            values.update(parse_fields(line))
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if key:
-            values[key] = value.strip()
-    return values
-
-
 def parse_key_value_path(path: Path, label: str) -> dict[str, str]:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} is missing or unsafe")

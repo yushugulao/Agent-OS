@@ -74,7 +74,6 @@ struct agent_legacy_mailbox {
 	uint64 next_read_token;
 	uint64 read_token;
 	int len[MAILBOX_SLOT_COUNT];
-	int from[MAILBOX_SLOT_COUNT];
 	int head;
 	int tail;
 	int count;
@@ -441,7 +440,6 @@ agent_ipc_legacy_public_send(struct proc *source, int pid, char *payload,
 	memmove(mailbox->payload_page + slot * MAILBOX_PAYLOAD_SIZE,
 		payload, len);
 	mailbox->len[slot] = len;
-	mailbox->from[slot] = source->pid;
 	mailbox->tail = (mailbox->tail + 1) % MAILBOX_SLOT_COUNT;
 	mailbox->count++;
 	result = len;
@@ -518,7 +516,6 @@ agent_ipc_legacy_public_read_finish(
 			       receipt->slot * MAILBOX_PAYLOAD_SIZE,
 		       0, MAILBOX_PAYLOAD_SIZE);
 		mailbox->len[receipt->slot] = 0;
-		mailbox->from[receipt->slot] = 0;
 		mailbox->head = (mailbox->head + 1) % MAILBOX_SLOT_COUNT;
 		mailbox->count--;
 	}

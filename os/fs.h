@@ -300,5 +300,4 @@ int fs_deferred_reclaim_drain_current(void);
 int fs_deferred_reclaim_drain_all(void);
 int itruncate(struct inode *, const struct vfs_cred *, uint);
 int itrunc(struct inode *, const struct vfs_cred *);
-int dirls(struct inode *, const struct vfs_cred *);
 #endif //!__FS_H__

@@ -10,6 +10,7 @@
 | LearningOS/uCore-Tutorial-Code-2025S | 教学内核和基础用户态代码 | 本仓库衍生修改 | GPL-3.0；见根目录 `NOTICE`、`LICENSE` |
 | LearningOS/uCore-Tutorial-Test-2025S | 教学测试基础 | 本仓库衍生修改 | GPL-3.0；见根目录 `NOTICE` |
 | QEMU、RISC-V GCC/binutils、GNU Make、Bash、Python | 构建和运行环境 | 不随仓库捆绑，由复现环境安装 | 各自上游许可；其绝对路径、版本和哈希由正式证据清单记录 |
+| AIOS 论文与项目 | 吞吐率、提交到完成延迟、活跃 Agent 数评价维度的参考 | 仅引用公开论文和仓库；不复制代码、数据或结果 | 见根目录 `NOTICE` 与 `docs/evaluation.md` |
 
 根目录源码许可证为 GPL-3.0，技术文档和展示材料采用 CC BY-SA 4.0。当前 `NOTICE` 给出了已知
 上游链接。仓库的 `.clang-format`、`user/.clang-format` 和
@@ -45,4 +46,4 @@
 
 Git 历史中的 `9e8338a61ee73da12462dc8d8433e9e2f7dbbc4b` 是本仓库的导入起点，不冒充上游项目的原始 commit。上游名称、链接和许可证以根目录 `NOTICE` 为准；最终源码提交、证据提交和 tag 由 `evidence/releases/INDEX.md` 及 release manifest 记录，本文不复制易漂移的发布身份。
 
-除 `NOTICE` 已列项目和构建运行环境外，仓库当前没有声明其他已知的直接 vendored 第三方代码。答辩材料若再引入图片、字体、数据集或代码片段，必须在交付前同步更新 `NOTICE` 和本页。
+除 `NOTICE` 已列项目和构建运行环境外，仓库当前没有声明其他已知的直接 vendored 第三方代码。AIOS 只作为评价方法参考，不属于 vendored 内容。答辩材料若再引入图片、字体、数据集或代码片段，必须在交付前同步更新 `NOTICE` 和本页。

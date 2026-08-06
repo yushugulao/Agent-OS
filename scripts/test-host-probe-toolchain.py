@@ -205,9 +205,7 @@ class HostProbeToolchainTests(unittest.TestCase):
         full_verify = (SCRIPT_DIR / "run-full-verification.sh").read_text(
             encoding="utf-8"
         )
-        gitlab = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
         self.assertIn("export AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES=0", full_verify)
-        self.assertIn("AGENTOS_ALLOW_UNSANITIZED_HOST_PROBES=0", gitlab)
 
 
 if __name__ == "__main__":

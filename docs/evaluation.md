@@ -8,17 +8,9 @@
 3. 引入机制后，内核 ELF、text、data 和 BSS 成本是多少。
 
 评价结论只由本次运行的原始 Guest 日志、严格验证后的样本和配对统计产生。
-页面、固定文本、历史截图和公式生成的数据均不能成为性能证据。
-`agenteval_measurement_source_contract.py` 还以 token/control-flow 合同锁定四个 headline
-的八条路径：`now_us()` 起点必须先于真实 file query、逐路径文件检查、tool call 或
-Context 访问循环，`elapsed_us(start, now_us())` 必须位于循环之后；
-path-traversal/index、metadata-scan/index、scalar/batch 和 syscall/direct 两个 variant
-都在计时区内。常量、负载公式、移出真实调用或删去任一
-variant 的 mutation 回归都会失败。每对 variant 使用彼此独立、预分配的结果缓冲和
-measurement；两条计时路径全部结束后才允许遍历结果、校验语义、计算 hash 或打印
-marker，避免第一条路径的后处理污染第二条计时窗口。源码 mutation 合同同时锁定这一
-顺序、AB/BA 的真实调用顺序，以及 `print_sample()` 对 `duration_us` 的直接序列化；
-计时后复合改写、常量替换和伪造 marker 顺序都会失败。
+页面、固定文本、历史截图和公式生成的数据均不能成为性能证据。实验成员、variant、负载、执行顺序、配对要求、假设族和竞赛 claim 以 [`ci/evaluation-suite.json`](../ci/evaluation-suite.json) 的 `suite_id` 与 `schema_version` 为唯一事实源，本文不复制完整 schedule。
+
+`agenteval_measurement_source_contract.py` 以 token/control-flow 合同锁定 suite 登记的计时路径：`now_us()` 起点必须先于真实 workload，`elapsed_us(start, now_us())` 必须位于循环之后；每对 variant 使用彼此独立、预分配的结果缓冲和 measurement。两条计时路径全部结束后才允许校验语义、计算 hash 或打印 marker，避免第一条路径的后处理污染第二条计时窗口。源码 mutation 合同同时锁定 AB/BA 真实调用顺序和 `duration_us` 的直接序列化；常量替换、移出真实调用、删去 variant 或伪造 marker 都会失败。
 任务一至五的功能证据另由 `functional_acceptance_source_contract.py` 约束。该合同以
 忽略空白和注释的 C token 为单位，版本化封闭从 launcher、五个任务实现到
 semantic/hash/打印出口的已审查函数图；同时独立核对各任务关键 `agent_info`、
@@ -98,15 +90,7 @@ run selector、summary、内容和 digest request，不复用旧对象身份。H
 
 ### 2.1 同内核机制消融
 
-主要因果结论来自同一个 AgentOS 内核、同一个 Guest 程序和同一份数据：
-
-- Task 4 主对照：逐一打开并检查 N 个预注册真实文件路径与已就绪索引；
-- 解释性消融：固定容量 metadata 全表扫描与已就绪索引；
-- scalar tool call 与 batch tool call；
-- `context_query` 与 Context 映射直接读取。
-
-busy poll/事件等待以及生命周期恢复仍是候选实验，不在当前预注册 suite 中。没有对应
-原始样本时，它们只能显示为 `unavailable`，不能借用其他 benchmark 的结果。
+主要因果结论来自同一个 AgentOS 内核、同一个 Guest 程序和同一份数据。每个同内核消融的实验身份、baseline/treatment variant 和负载都由 `ci/evaluation-suite.json` 登记；未登记或没有对应原始样本的对照只能显示为 `unavailable`，不能借用其他 benchmark 的结果。
 
 每对样本必须具有相同的 workload fingerprint、operation count 和 result fingerprint。
 Task 4 的两个实现消费同一份 challenge 绑定 fixture manifest 和同一有序目标序列；
@@ -222,6 +206,25 @@ resource kind；它不声明逐 account 覆盖、rate/lease/debt 覆盖，也不
 全局种类计数器的有界回收；它也不覆盖真实掉电后的介质状态。把稳定性阶段放在性能窗口
 之外，可以避免为了证明回收而污染 Task 6 的 workflow 时间。
 
+### 2.6 多身份回访与并发测量
+
+`agenteval_ucore` 在 headline 计时结束后执行一组补充测量。launcher 自身的可信
+lifecycle 承载身份 A，并创建 B、C、D 三个新 workflow；四个 Agent ID 和 lifecycle key
+彼此不同，但 A 与 launcher 共用资源域，因此这是一组混合拓扑，而不是四个同构租户。
+测量按 `A/B/C/D/A` 回访各自的 Context，再以 1、2、4 并发度发送真实 pipe 请求。Guest
+逐请求输出身份、lifecycle、污染计数和耗时；Host 从原始样本重新计算完成数、吞吐率、
+平均延迟及 p50/p90/p99。
+
+吞吐率、提交到完成延迟和活跃 Agent 数三个观察维度参考 AIOS 论文的 RQ2/RQ3；
+`A/B/C/D/A` 的 Context 隔离与回访场景是本项目针对内核 ABI 独立设计的 clean-room
+评价，不复制 AIOS 代码、数据或结果，也不把混合资源域数据解释为线性伸缩证明。方法来源见
+[AIOS 论文](https://openreview.net/attachment?id=L4HHkCDz2x&name=pdf)与
+[项目仓库](https://github.com/agiresearch/AIOS)。
+
+这组数据只作描述性诊断：suite 不设置性能通过阈值，失败、污染或回退也必须原样保留，
+不能被转换成“测试通过”数量。Dashboard 在“负载与流程”页直接展示各 boot、各并发度的
+请求数、吞吐率和延迟分位数。
+
 ## 3. 实验纪律
 
 ### 3.1 独立样本
@@ -243,14 +246,13 @@ resource kind；它不声明逐 account 覆盖、rate/lease/debt 覆盖，也不
   `result cache hit` 分开记录；
 - 每个 N-file corpus 先在计时外完整预热传统路径，并单独记录索引准备；热索引计时前的
   重建属于 warmup，计时样本必须确认没有重建和结果缓存命中；
+- N=96 仍保留在主对照中，但每个 pair 只执行一次完整的 96 文件查询；这保留最大 corpus
+  的真实传统路径，同时避免把重复缓存置换和 I/O 限流误当成路径算法成本。N=8/24/48
+  继续使用 8/6/4 次查询，所有操作数由 suite 固定；
 - 当前不控制宿主页缓存，只声明 fresh Guest 与索引状态，不把结果写成物理冷盘性能；
 - 计时使用 Guest 单调微秒时钟，不把真实 0 修改为 1，不事后减去估算开销。
 
-Task 4 主对照预注册 `N=8/24/48/96`，每个 inner pair 分别执行 `8/6/4/4`
-次逻辑查询；操作数随 N 下降只用于约束正式 QEMU 总成本，并在首个 boot 前由 suite
-冻结，不能依据中间结果调整。固定表消融继续使用 `N=24/64/96`、每 pair 16 次查询。
-两者都保留 7 个 inner pair 和 7 个独立 boot，因此减少的是单次 boot 内重复 I/O，
-不是统计独立样本数。
+Task 4 主对照的 corpus 规模、每个 inner pair 的逻辑查询数、pair 数和独立 boot 下限均由版本化 suite 冻结。操作数只用于约束正式 QEMU 总成本，不能依据中间结果或文档示例调整。
 
 Guest 性能 `sample`/`diagnostic` marker schema v2 已冻结，字段必须按下列顺序出现；缺字段、增字段、重排、
 重复键或空值都会被 Host 拒绝：
@@ -280,10 +282,7 @@ fingerprint，以及原始日志路径、行号、日志 SHA256 和 marker SHA25
 `cold-rebuild` 或 `ready`，但不参与
 headline 的统计门，也不改变任务一至五的功能 receipt 语义。
 
-suite 的 `execution_schedule` 另预注册同一 boot 内的物理 marker 顺序。文件 fixture 按
-`8/24/48/64/96` 递增构造，因此主对照与消融在共享负载处交错执行；工具批量与 Context
-实验随后执行。Host 直接按该清单重放顺序，清单必须覆盖每个实验/负载恰好一次并与
-Guest dispatcher 一致，避免测试 fixture 按另一种顺序生成后掩盖真实验收失败。
+suite 的 `execution_schedule` 预注册同一 boot 内的物理 marker 顺序。Host 直接按该清单重放，要求每个登记的实验/负载恰好出现一次并与 Guest dispatcher 一致；文档不复制具体负载序列。
 
 ### 3.3 配对与统计
 
@@ -296,15 +295,9 @@ Host 先计算每个 inner pair 的改善率，再在每个独立 boot 内取这
 bootstrap 区间不作为 headline 推断门。每个 boot 只有在绝对改善严格大于 5 us 且相对
 改善严格大于 5% 时才记为 joint-MCID win，等于阈值、缺失相对值或任一阈值未超过都
 保守记为 non-win。headline 使用完整 boot 数上的精确单侧二项尾检验。
-四个微基准 headline claim 在 suite 中预注册为同一假设族，使用 Bonferroni 控制
-family-wise error rate `0.05`，所以每个 claim 的单侧阈值是 `0.05 / 4`。其中
-`file_query_path_index` 是 Task 4 竞赛主 claim，`file_query_table_ablation` 是解释性
-机制 claim；suite 的 `competition_claims` 显式绑定二者的不同职责。每个
-claim 又是其全部预注册 load 的交集，任一 load 未过门就不能发布该机制优势。
-任务六场景是独立的预注册主指标，不与四个机制 claim 重复计数。
-每个实验还预注册最小基线计时窗口 20 us。只有样本数达标、结果等价、每个 load 的
-joint-MCID 精确检验通过且全部 load 取交集时，claim 才是 `supported`。七个 boot 时
-7/7 win 的单侧 p 值为 `1/128`，6/7 为 `1/16`，后者不能通过 `0.05/4`。
+headline claim 由 suite 的 `claim_family.hypotheses` 预注册，并按 `claim_family.method` 控制 family-wise error rate。使用 Bonferroni 时，若假设数为 `m`，每项阈值为 `familywise_alpha / m`；`load_gate` 决定一个 claim 如何汇总其预注册负载。竞赛必做 claim 与解释性机制 claim 的职责由 `competition_claims` 显式绑定，Task 6 场景使用独立主指标。
+
+只有样本数达标、结果等价、每个 load 的 joint-MCID 精确检验通过且满足 suite 的 load gate 时，claim 才是 `supported`。检验使用实际完整 boot 数计算，不在文档固化特定样本数的 p 值表。
 否则显示 `not_supported`、`unavailable` 或 `failed`，绝不补零、删除
 失败样本或生成综合加权分数。
 
@@ -331,10 +324,8 @@ QEMU 进程观测时间只做上界；QEMU/Host 启动时间不进入 Guest 指�
 `Plain - AgentOS`。每个 boot 只有在差值严格大于 10 ms 且相对差值严格大于 5% 时才记为
 正向 joint-MCID win；严格小于 -10 ms 且相对差值严格小于 -5% 时才记为反向
 joint-MCID loss。等于阈值、缺失相对值或任一阈值未越过都分别记为 non-win/non-loss。
-正反两个方向组成同一个 Task6 directional family，族错误率为 `0.05`，Bonferroni 后
-每方向阈值为 `0.025`；两边都使用完整 boot 数上的精确二项上尾。七个 boot 时 7/7 的
-单方向 p 值为 `1/128`，6/7 为 `1/16`，所以只有前者通过。七次均成功和顺序平衡只证明
-功能数据有效；还必须满足 Plain 基线窗口至少 50 ms。正向门通过时状态为 `supported`，
+正反两个方向组成同一个 Task 6 directional family，并按版本化方法控制族错误率；两边都使用实际完整 boot 数上的精确二项上尾，不在文档固化特定样本数的通过组合。boot 完整且顺序平衡只证明
+功能数据有效；还必须满足预注册的 Plain 基线窗口。正向门通过时状态为 `supported`，
 反向门通过时状态为 `regressed`，两边都未通过时才是 `inconclusive`。统计结构缺失、
 自相矛盾或被篡改属于 `failed`，不得软化为证据不足。`regressed` 仍保留并允许打包完整
 负结果，也始终禁止宣称 Task 6 全栈性能优势。竞赛性能门只适用于 suite
@@ -404,7 +395,7 @@ make evaluation-package-development EVALUATION_RUN_DIR=<run-dir> EVALUATION_BUND
 make evaluation-package-verify EVALUATION_BUNDLE_DIR=evidence/releases/evaluation-<run-id>
 ```
 
-`none` 不缩减验收：18 个 Agent case、Guest 语义、原始日志和精确 timing 行清单仍必须
+`none` 不缩减验收：`ci/kernel-budgets.json` 登记的 Agent case、Guest 语义、原始日志和精确 timing inventory 仍必须
 完整，只是不把不同机器的 wall-time 与本地 E3 阈值比较，duration baseline/limit/ratio
 明确记为不适用。只有与记录的硬件、MSYS2 runtime、工具文件和配置完全一致的原生 MSYS2
 E3 才能使用：
@@ -698,17 +689,16 @@ build log 中唯一的 canonical checker 行重新解析，不能只信 report �
 
 ## 6. Dashboard
 
-评价页面与原有 40 页科研 Reader 分离，避免继续扩大巨型页面生成器。单页包含：
+评价页面与科研 Reader 分离。单页包含：
 
-1. 总览：commit、run、证据等级，并按预注册顺序固定并列四个机制 claim 与 Task6；
+1. 总览：commit、run、证据等级，并按 suite 预注册顺序并列机制 claim 与 Task 6；
 2. 性能：多负载下每个独立 boot 的原始配对点/连线、汇总区间、单位、`n`、cache mode 与原始证据链接；
 3. 科研场景：cold-start workflow、有符号差值、正反 MCID、胜负数、统计结论、逐程序时间、四类功能模块和预注册关键 outcome；
 4. 系统成本：可搬运复验后的 ELF、text、data、BSS 与差值，不混入 CPU 性能 claim；
 5. 可信证据：claim 到 raw log 行、SHA256、命令、环境和可点击原件的完整链；
 6. 方法学：对照、warmup、顺序、样本数、统计规则和一键复现命令。
 
-总览不再从 `supported` 结果中挑选一条作为唯一 headline。四个机制槽严格跟随
-`methodology.multiple_testing.headline_claims`；Task 4 主卡必须标明“逐路径检查 vs 索引”，
+总览不从 `supported` 结果中挑选一条作为唯一 headline。机制槽严格跟随 suite 的 `claim_family.hypotheses`；Task 4 主卡必须标明“逐路径检查 vs 索引”，
 固定表扫描卡必须标明“机制消融，不替代题面对照”。Task6 使用独立的 full-stack 槽；
 `supported`、`regressed` 与 `inconclusive` 均按原始配对重算后显式展示，缺失项留在原位
 显示 `unavailable`，不能由别的 benchmark 补位。资源稳定性与传统兼容路径

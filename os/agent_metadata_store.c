@@ -111,7 +111,6 @@ struct agent_meta_persist_state {
 	uint64 durable_serial;
 	int catalog_settle;
 	uint64 retry_tick;
-	uint retry_failures;
 	int error_cause;
 	uchar dirty_blocks[AGENT_META_PERSIST_DIRTY_BYTES];
 	char verify_block[BSIZE];
@@ -2033,7 +2032,6 @@ static int agent_meta_persist_begin_mirror_locked(int force_full)
 	}
 	// Bind the mirror before publishing its phase.
 	agent_meta_persist.mirroring = 1;
-	agent_meta_persist.retry_failures = 0;
 	agent_meta_persist.retry_tick = 0;
 	return 0;
 }
@@ -2060,7 +2058,6 @@ static int agent_meta_persist_note_failure_locked(void)
 		agent_meta_store_require_mirror(agent_meta_persist.target_bank, 1);
 		agent_meta_persist.owner = FS_OWNER_SYSTEM;
 		agent_meta_persist.restart_target = 1;
-		agent_meta_persist.retry_failures = 0;
 		agent_metadata_test_eio_cancel(agent_meta_persist.scope_id,
 					       agent_meta_persist.job_id);
 		agent_background_request();
@@ -2495,7 +2492,6 @@ static int agent_meta_persist_background_step_locked(uint owner,
 	} else if (step < 0) {
 		agent_meta_persist_note_failure_locked();
 	} else {
-		agent_meta_persist.retry_failures = 0;
 		agent_meta_persist.retry_tick = 0;
 	}
 	return step;
@@ -2605,7 +2601,6 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 				agent_meta_persist_retry_next_tick();
 			break;
 		}
-		agent_meta_persist.retry_failures = 0;
 		// job_id detects replacement across the checkpoint.
 		checkpoint = agent_meta_persist_checkpoint_unlocked(
 			job_id, &same_job);
@@ -2707,7 +2702,6 @@ agent_meta_persist_fence_owner(uint owner, uint scope_id, uint64 target,
 			(void)agent_meta_persist_note_failure_locked();
 			break;
 		}
-		agent_meta_persist.retry_failures = 0;
 		checkpoint = agent_meta_persist_checkpoint_unlocked(
 			job_id, &same_job);
 		if (scope_fence_reached(scope_id, target, require_replication,

@@ -125,12 +125,6 @@ agent_identity_alloc_id(void)
 	return 0;
 }
 
-uint
-agent_identity_next_id_get(void)
-{
-	return next_agent_id > 0 ? (uint)next_agent_id : 0;
-}
-
 void
 agent_identity_id_floor(uint floor)
 {

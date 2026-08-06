@@ -160,11 +160,34 @@ def validate(bio: str, policy: str, iobudget: str) -> None:
 
     direct = compact(function_body(bio, "io_reserve_direct"))
     waiter = compact(function_body(bio, "io_grant_waiter"))
+    scheduler_definition = bio.rfind("static void io_schedule_grants(void)")
+    if scheduler_definition < 0:
+        raise ContractError("missing admission grant scheduler")
+    scheduler = compact(function_body(
+        bio[scheduler_definition:], "io_schedule_grants"))
     if ("lane.debt == 0 && lane.pending_debt == 0" not in direct or
             "io_can_use_shared_capacity(state, io_class)" not in direct):
         raise ContractError("admission can borrow while indebted or quiesced")
     if "state->shared_grants" in direct or "state->shared_grants" in waiter:
         raise ContractError("an unused shared reservation is counted as work")
+    if not ordered(
+        waiter,
+        "resource_rate_reserve_many(endpoints, 2, &lease)",
+        "grantee = wait_queue_wake_one_thread(&bucket->admission_queue);",
+        "if (grantee == 0)",
+        "resource_rate_lease_cancel(lease);",
+        "bucket->grantee = grantee;",
+        "io_rate_lease_store(",
+    ):
+        raise ContractError("admission lease is not bound to the actual waiter")
+    if not ordered(
+        scheduler,
+        "int enabled = intr_save();",
+        "io_grant_waiter(state, c, 0)",
+        "io_grant_waiter(state, io_class, 1)",
+        "intr_restore(enabled);",
+    ):
+        raise ContractError("admission grant scheduling is not IRQ-atomic")
 
     account = compact(function_body(bio, "bio_account_transfers"))
     request_path = account[account.find("else if (request_flags != 0)"):]
@@ -352,10 +375,15 @@ MUTATIONS = (
                  "\t\t\t\tlease, 1, source, device_source);"), POLICY, IOBUDGET),
     (mutate_once(BIO,
                  "\tif (!shared)\n\t\tstate->reserved_grants++;\n"
-                 "\tbucket->grantee = head;",
+                 "\tbucket->grantee = grantee;",
                  "\tif (!shared)\n\t\tstate->reserved_grants++;\n"
                  "\telse\n\t\tstate->shared_grants++;\n"
-                 "\tbucket->grantee = head;"), POLICY, IOBUDGET),
+                 "\tbucket->grantee = grantee;"), POLICY, IOBUDGET),
+    (mutate_once(BIO,
+                 "\tgrantee = wait_queue_wake_one_thread("
+                 "&bucket->admission_queue);",
+                 "\tgrantee = bucket->admission_queue.head;"),
+     POLICY, IOBUDGET),
     (mutate_once(BIO, "*request_flags |= BIO_REQUEST_TRANSFERRED;",
                  "*request_flags |= BIO_REQUEST_ACTIVE;"), POLICY, IOBUDGET),
     (mutate_once(BIO, "if (*transfers >= IO_RATE_LOCAL_BATCH)",

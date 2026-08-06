@@ -155,6 +155,5 @@ int fileunlink(char *);
 uint64 inodewrite(struct file *, uint64, uint64);
 uint64 inoderead(struct file *, uint64, uint64);
 struct file *stdio_init(int, struct proc *);
-int show_all_files();
 
 #endif // FILE_H

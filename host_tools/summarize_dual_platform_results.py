@@ -498,65 +498,6 @@ def grouped_bar_svg(
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def stacked_bar_svg(title: str, subtitle: str, groups: list[tuple[str, float, float]], out_path: Path) -> None:
-    width, height = 920, 430
-    margin_left, margin_right, margin_top, margin_bottom = 160, 80, 86, 64
-    plot_w = width - margin_left - margin_right
-    row_h = 58
-    max_total = max([1.0] + [a + b for _, a, b in groups])
-    lines = svg_header(width, height)
-    lines.append(f'<text x="34" y="34" class="title">{escape(title)}</text>')
-    lines.append(f'<text x="34" y="58" class="subtitle">{escape(subtitle)}</text>')
-    for index, (label, first, second) in enumerate(groups):
-        y = margin_top + index * row_h
-        total = first + second
-        first_w = (first / max_total) * plot_w
-        second_w = (second / max_total) * plot_w
-        lines.append(f'<text x="{margin_left - 14}" y="{y + 24}" text-anchor="end" class="label">{escape(label)}</text>')
-        lines.append(f'<rect x="{margin_left}" y="{y}" width="{first_w:.1f}" height="30" fill="{PALETTE["neutral"]}" rx="2"/>')
-        lines.append(f'<rect x="{margin_left + first_w:.1f}" y="{y}" width="{second_w:.1f}" height="30" fill="{PALETTE["agentos"]}" rx="2"/>')
-        lines.append(f'<text x="{margin_left + first_w + second_w + 10:.1f}" y="{y + 21}" class="value">{fmt_number(total)}</text>')
-        if first_w > 34:
-            lines.append(f'<text x="{margin_left + first_w / 2:.1f}" y="{y + 21}" text-anchor="middle" class="label" fill="#fff">{fmt_number(first)}</text>')
-        if second_w > 34:
-            lines.append(f'<text x="{margin_left + first_w + second_w / 2:.1f}" y="{y + 21}" text-anchor="middle" class="label" fill="#fff">{fmt_number(second)}</text>')
-    legend_y = height - 28
-    lines.append(f'<rect x="{margin_left}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["neutral"]}"/>')
-    lines.append(f'<text x="{margin_left + 22}" y="{legend_y}" class="label">普通进程或共有项</text>')
-    lines.append(f'<rect x="{margin_left + 160}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
-    lines.append(f'<text x="{margin_left + 182}" y="{legend_y}" class="label">AgentOS 专有项</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def stage_timing_svg(stage_rows: list[dict[str, str]], out_path: Path) -> None:
-    width, height = 1040, 520
-    margin_left, margin_right, margin_top, margin_bottom = 240, 80, 80, 50
-    usable = [row for row in stage_rows if row.get("stage")]
-    if not usable:
-        usable = [{"stage": "未记录阶段耗时", "duration_seconds": "0", "status": "unknown"}]
-    values = [as_number(row.get("duration_seconds")) for row in usable]
-    max_value = max([1.0] + values)
-    plot_w = width - margin_left - margin_right
-    row_h = min(40, (height - margin_top - margin_bottom) / max(1, len(usable)))
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">双目标运行阶段耗时</text>')
-    lines.append('<text x="34" y="58" class="subtitle">用于定位构建、QEMU 运行、镜像提取、本地页面渲染或结果对照中的异常停顿。</text>')
-    for index, row in enumerate(usable):
-        y = margin_top + index * row_h
-        value = values[index]
-        w = (value / max_value) * plot_w if max_value else 0
-        color = PALETTE["agentos"] if row.get("status") == "ready" else PALETTE["extra"]
-        label = stage_label(row.get("stage", ""))
-        lines.append(f'<text x="{margin_left - 14}" y="{y + 21:.1f}" text-anchor="end" class="label">{escape(label[:28])}</text>')
-        lines.append(f'<rect x="{margin_left}" y="{y:.1f}" width="{w:.1f}" height="{max(18, row_h - 10):.1f}" fill="{color}" rx="2"/>')
-        lines.append(f'<text x="{margin_left + w + 8:.1f}" y="{y + 21:.1f}" class="value">{fmt_number(value)}s</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_path: Path) -> None:
     by_metric = {row.metric: row for row in rows}
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
@@ -676,93 +617,6 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
         552,
         "读图方法：先确认运行结果和 QEMU 健康，再看 AgentOS 多出的状态、API、Agent 启动与内核事实；异常时回到 stage-timings.csv 和 ucore-run.log。",
         max_chars=58,
-    )
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def scenario_evidence_svg(meta: dict[str, object], out_path: Path) -> None:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    raw_rows = state.get("scenario_evidence", [])
-    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
-    if not rows:
-        rows = [{"label": "未记录场景证据", "expected": 1, "matched": 0, "status": "partial"}]
-
-    width, height = 1080, max(420, 118 + len(rows) * 44)
-    margin_left, margin_right, margin_top = 210, 120, 88
-    plot_w = width - margin_left - margin_right
-    max_value = max([1.0] + [as_number(row.get("expected")) for row in rows] + [as_number(row.get("matched")) for row in rows])
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">AgentOS 多场景机制证据</text>')
-    lines.append('<text x="34" y="58" class="subtitle">每一行对应一个 Agent 工作流场景；浅色条是应检查证据数，深色条是本次运行实际命中的证据数。</text>')
-    for tick in range(0, int(max_value) + 1):
-        if max_value <= 8 or tick % max(1, int(max_value // 5)) == 0:
-            x = margin_left + (tick / max_value) * plot_w
-            lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 10}" x2="{x:.1f}" y2="{height - 42}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-            lines.append(f'<text x="{x:.1f}" y="{height - 22}" text-anchor="middle" class="axis">{tick}</text>')
-    for index, row in enumerate(rows):
-        y = margin_top + index * 44
-        label = str(row.get("label") or row.get("scenario") or "")
-        expected = as_number(row.get("expected"))
-        matched = as_number(row.get("matched"))
-        expected_w = (expected / max_value) * plot_w if max_value else 0
-        matched_w = (matched / max_value) * plot_w if max_value else 0
-        color = PALETTE["agentos"] if str(row.get("status")) == "ready" else PALETTE["extra"]
-        lines.append(f'<text x="{margin_left - 14}" y="{y + 22}" text-anchor="end" class="label">{escape(label[:20])}</text>')
-        lines.append(f'<rect x="{margin_left}" y="{y + 4}" width="{expected_w:.1f}" height="28" fill="#eef3f8" stroke="{PALETTE["grid"]}" rx="2"/>')
-        lines.append(f'<rect x="{margin_left}" y="{y + 9}" width="{matched_w:.1f}" height="18" fill="{color}" rx="2"/>')
-        lines.append(f'<text x="{margin_left + max(expected_w, matched_w) + 10:.1f}" y="{y + 23}" class="value">{fmt_number(matched)}/{fmt_number(expected)}</text>')
-    legend_y = height - 22
-    lines.append(f'<rect x="{width - 360}" y="{legend_y - 12}" width="14" height="14" fill="#eef3f8" stroke="{PALETTE["grid"]}"/>')
-    lines.append(f'<text x="{width - 338}" y="{legend_y}" class="axis">应检查证据</text>')
-    lines.append(f'<rect x="{width - 230}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
-    lines.append(f'<text x="{width - 208}" y="{legend_y}" class="axis">已命中证据</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def cost_replacement_svg(meta: dict[str, object], out_path: Path) -> None:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    raw_rows = state.get("cost_replacements", [])
-    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
-    if not rows:
-        rows = [{"plain_cost": "未记录用户态成本项", "agentos_replace": "未记录替代机制", "risk": "unknown", "preserved_from_plain": 0}]
-    rows = rows[:10]
-
-    width, height = 1180, max(452, 136 + len(rows) * 48)
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">用户态成本项与 AgentOS 替代机制</text>')
-    append_wrapped_text(
-        lines,
-        34,
-        58,
-        "每行来自 runner_report：左侧是用户态成本，右侧是 AgentOS 内核替代机制。",
-        max_chars=90,
-    )
-    x_cost, x_arrow, x_replace, x_risk = 52, 438, 520, 920
-    lines.append(f'<text x="{x_cost}" y="88" class="value">普通用户态成本项</text>')
-    lines.append(f'<text x="{x_replace}" y="88" class="value">AgentOS 替代机制</text>')
-    lines.append(f'<text x="{x_risk}" y="88" class="value">对应风险</text>')
-    for index, row in enumerate(rows):
-        y = 112 + index * 48
-        preserved = as_number(row.get("preserved_from_plain")) == 1
-        color = PALETTE["agentos"] if preserved else PALETTE["extra"]
-        bg = "#ffffff" if index % 2 == 0 else "#f8fafc"
-        lines.append(f'<rect x="34" y="{y - 24}" width="{width - 68}" height="38" fill="{bg}" stroke="{PALETTE["grid"]}"/>')
-        lines.append(f'<circle cx="{x_cost - 18}" cy="{y - 5}" r="5" fill="{color}"/>')
-        lines.append(f'<text x="{x_cost}" y="{y}" class="label">{escape(str(row.get("plain_cost", ""))[:46])}</text>')
-        lines.append(f'<line x1="{x_arrow}" y1="{y - 5}" x2="{x_replace - 20}" y2="{y - 5}" stroke="{color}" stroke-width="2"/>')
-        lines.append(f'<polygon points="{x_replace - 20},{y - 10} {x_replace - 8},{y - 5} {x_replace - 20},{y}" fill="{color}"/>')
-        lines.append(f'<text x="{x_replace}" y="{y}" class="label">{escape(str(row.get("agentos_replace", ""))[:44])}</text>')
-        lines.append(f'<text x="{x_risk}" y="{y}" class="axis">{escape(str(row.get("risk", ""))[:32])}</text>')
-    append_wrapped_text(
-        lines,
-        52,
-        height - 46,
-        "读图方法：同一行两端必须同时存在；左侧说明普通用户态成本，右侧说明同一负载下的内核机制替代。",
-        max_chars=62,
     )
     lines.append("</svg>")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1215,13 +1069,13 @@ def delivery_readiness_rows() -> list[dict[str, str]]:
             "requirement": "带数据的测试结果图表化",
             "status": "已覆盖",
             "evidence": "index.html; charts/*.svg; experiments/status.json",
-            "verification": "test_chart_type_data_contract.py",
+            "verification": "test_summarize_dual_platform_results.py",
             "note": "实验数据仅从可追溯 Guest marker 提取；缺失时明确标记 unavailable，不生成填充数据。",
         },
         {
             "requirement": "图表文字不互相遮挡",
             "status": "已覆盖",
-            "evidence": "charts/*.svg; docs/assets/verification-charts/*.svg",
+            "evidence": "charts/*.svg",
             "verification": "test_chart_svg_layout_contract.py",
             "note": "测试解析 SVG 文本框，检查画布范围和明显相交问题。",
         },
@@ -1263,8 +1117,8 @@ def delivery_readiness_rows() -> list[dict[str, str]]:
         {
             "requirement": "同时覆盖功能状态和性能观测",
             "status": "已覆盖",
-            "evidence": "runtime-observation.svg; cost-replacement.svg; runner-sweep.csv; experiments/status.json",
-            "verification": "test_chart_type_data_contract.py",
+            "evidence": "runtime-observation.svg; runner-sweep.csv; experiments/status.json",
+            "verification": "test_summarize_dual_platform_results.py",
             "note": "runner 只披露 unavailable 状态；文件查询仅在可信测量可用时生成图，不生成零值占位图。",
         },
         {
@@ -1347,7 +1201,6 @@ def write_delivery_readiness_page(out_path: Path) -> None:
 def chart_evidence_description(chart_name: str) -> tuple[str, str]:
     descriptions = {
         "runtime-observation.svg": ("summary.csv, stage-timings.csv", "运行健康、状态产物、内核事实和 QEMU 诊断"),
-        "cost-replacement.svg": ("state-compare-summary.json:cost_replacements", "普通用户态成本项与 AgentOS 替代机制的配对"),
         "experiment-file-query-bar.svg": ("experiments/raw/file-query-benchmark.csv", "同一真实 Guest 运行中的强制遍历、冷索引重建和热索引查询"),
     }
     return descriptions.get(chart_name, ("summary.csv", "双目标运行派生图表"))
@@ -1576,7 +1429,6 @@ def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir:
     runner_status, runner_reason = runner_tick_evidence(meta)
     required_charts = {
         "runtime-observation.svg",
-        "cost-replacement.svg",
     }
     if experiment_rows(meta):
         required_charts.add("experiment-file-query-bar.svg")
@@ -1625,7 +1477,7 @@ def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir:
             "核心图表",
             required_charts.issubset(chart_names),
             f"required={len(required_charts)}; generated={len(required_charts & chart_names)}; total_charts={len(chart_names)}",
-            "复查时至少查看运行观测和成本替代；文件查询图只在可信测量可用时出现。",
+            "复查时至少查看运行观测；文件查询图只在可信测量可用时出现。",
         ),
         row(
             "Runner tick 证据状态",
@@ -1748,12 +1600,12 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     runtime_observation_svg(rows, meta, observation_chart)
     paths.append(observation_chart)
 
-    cost_chart = charts_dir / "cost-replacement.svg"
-    cost_replacement_svg(meta, cost_chart)
-    paths.append(cost_chart)
-
     runner_tick_evidence(meta)
-    for stale in (charts_dir / "runner-ticks.svg", charts_dir / "runner-speedup.svg"):
+    for stale in (
+        charts_dir / "cost-replacement.svg",
+        charts_dir / "runner-ticks.svg",
+        charts_dir / "runner-speedup.svg",
+    ):
         if stale.is_symlink() or stale.is_file():
             stale.unlink()
         elif stale.exists():
@@ -1843,28 +1695,6 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
                         status=row.get("status", ""),
                     )
                 )
-    replacement_rows = state.get("cost_replacements", []) if isinstance(state, dict) else []
-    if isinstance(replacement_rows, list) and replacement_rows:
-        lines.extend(
-            [
-                "",
-                "## 用户态成本项与 AgentOS 替代机制",
-                "",
-                "| 用户态成本项 | AgentOS 替代机制 | 风险说明 | 普通目标中存在 |",
-                "| --- | --- | --- | ---: |",
-            ]
-        )
-        for row in replacement_rows:
-            if isinstance(row, dict):
-                preserved = "是" if as_number(row.get("preserved_from_plain")) == 1 else "否"
-                lines.append(
-                    "| {plain_cost} | {agentos_replace} | {risk} | {preserved} |".format(
-                        plain_cost=row.get("plain_cost", ""),
-                        agentos_replace=row.get("agentos_replace", ""),
-                        risk=row.get("risk", ""),
-                        preserved=preserved,
-                    )
-                )
     lines.extend(
         [
             "",
@@ -1921,7 +1751,6 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
     chart_cards = []
     chart_titles = {
         "runtime-observation.svg": "双目标运行观测面板",
-        "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
         "experiment-file-query-bar.svg": "文件对象查询实验",
     }
     for chart in charts:
@@ -2034,7 +1863,6 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="experiment-design.html">打开实验场景说明</a>
       <a href="experiment-design.csv">下载实验场景说明</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
-      <a href="charts/cost-replacement.svg">打开成本替代图</a>
       {runner_links}
       {experiment_links}
     </div>
@@ -2143,7 +1971,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="reader-guide.html">运行导览页</a>、<a href="reader-checklist.html">结果核验表</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 状态</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>{runner_links}{experiment_links}</p>
+      <p><a href="reader-guide.html">运行导览页</a>、<a href="reader-checklist.html">结果核验表</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 状态</a>、<a href="charts/runtime-observation.svg">运行观测图</a>{runner_links}{experiment_links}</p>
     </section>
   </main>
 </body>
@@ -2159,7 +1987,6 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
     seeded = meta.get("seeded", {}) if isinstance(meta.get("seeded"), dict) else {}
     _, runner_reason = runner_tick_evidence(meta)
     scenario_count = len(state.get("scenario_evidence", [])) if isinstance(state.get("scenario_evidence"), list) else 0
-    cost_count = as_number(state.get("cost_replacement_count"))
     chart_links = {
         chart.name: chart.relative_to(out_path.parent).as_posix()
         for chart in charts
@@ -2252,7 +2079,7 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
     </section>
     <section class="panel">
       <h2>关键数据</h2>
-      <p>本次结果包含 {fmt_number(cost_count)} 项 reference 成本替代目录、{fmt_number(as_number(state.get("checked_compatibility_records")))} 条非证据状态兼容记录；Guest 来源绑定运行记录为 {fmt_number(as_number(state.get("guest_source_bound_runtime_records")))}，仅作观测计数，Host 独立复验 {fmt_number(as_number(state.get("host_derived_mainflow_stages")))} 个有序阶段。{runner_summary}{experiment_summary}</p>
+      <p>本次结果包含 {fmt_number(as_number(state.get("checked_compatibility_records")))} 条非证据状态兼容记录；Guest 来源绑定运行记录为 {fmt_number(as_number(state.get("guest_source_bound_runtime_records")))}，仅作观测计数，Host 独立复验 {fmt_number(as_number(state.get("host_derived_mainflow_stages")))} 个有序阶段。{runner_summary}{experiment_summary}</p>
       <div class="links">
         <a href="delivery-readiness.html">结果材料核对</a>
         <a href="delivery-readiness.csv">结果核对 CSV</a>

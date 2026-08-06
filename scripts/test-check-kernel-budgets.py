@@ -2127,6 +2127,20 @@ agent_metadata_txn_projection_require_idle();
             "scripts/check-wait-queue-contract.py",
             "scripts/check-bio-fs-must-check.py",
             "scripts/check-fs-allocator-state.py",
+            "scripts/check-agent-metadata-content-fastpath.py",
+            "scripts/check-agent-metadata-read-view.py",
+            "scripts/check-background-dispatch-fastpath.py",
+            "scripts/check-close-lazy-finalizer.py",
+            "scripts/check-copyoutv-window.py",
+            "scripts/check-filepool-freelist.py",
+            "scripts/check-fs-epoch-index.py",
+            "scripts/check-inode-mapping-guard.py",
+            "scripts/check-kernel-work-receipt.py",
+            "scripts/check-read-epoch-lazy-finalizer.py",
+            "scripts/check-sequential-read-batch.py",
+            "scripts/check-syscall-file-transaction.py",
+            "scripts/check-traditional-io-fastpath.py",
+            "scripts/check-vm-page-table-fastpath.py",
         }
         self.assertEqual(actual, expected)
         self.assertRegex(makefile, r"(?m)^kernel-budget-selftest:.*printf-format-static-check$")
@@ -2146,7 +2160,7 @@ agent_metadata_txn_projection_require_idle();
         for name, kind in adaptive.items():
             declaration = (
                 f"{name} ?= $(or $(shell $(PYTHON_BIN) -I -S -B "
-                f"scripts/resource-jobs.py --kind {kind} 2>/dev/null),8)"
+                f"scripts/resource-jobs.py --kind {kind} 2>/dev/null),1)"
             )
             self.assertEqual(makefile.count(declaration), 1)
             self.assertIn(f"ifneq ($(words $({name})),1)", makefile)
@@ -2162,7 +2176,6 @@ agent_metadata_txn_projection_require_idle();
             "\t+@$(MAKE) --no-print-directory user-stack-check\n"
         )
         self.assertEqual(makefile.count(local_check), 1)
-        self.assertEqual(makefile.count("ci-check: local-check\n"), 1)
         self.assertIn(
             "override LOCAL_HOST_SELFTESTS := \\\n"
             "\t$(HOST_CONTRACT_TESTS) \\\n"
@@ -2555,7 +2568,7 @@ agent_metadata_txn_projection_require_idle();
                 ]["profile_id"],
                 "calibration_samples": [
                     {
-                        "sample_id": "agent19-0123456789ab-01",
+                        "sample_id": "agent18-0123456789ab-01",
                         "total_seconds": 261.343281873,
                         "timing_file": (
                             "evidence/calibrations/0123456789ab/01.timing"
@@ -2564,7 +2577,7 @@ agent_metadata_txn_projection_require_idle();
                         "attestation_digest_sha256": "4" * 64,
                     },
                     {
-                        "sample_id": "agent19-0123456789ab-02",
+                        "sample_id": "agent18-0123456789ab-02",
                         "total_seconds": 237.948978492,
                         "timing_file": (
                             "evidence/calibrations/0123456789ab/02.timing"
@@ -2573,7 +2586,7 @@ agent_metadata_txn_projection_require_idle();
                         "attestation_digest_sha256": "5" * 64,
                     },
                     {
-                        "sample_id": "agent19-0123456789ab-03",
+                        "sample_id": "agent18-0123456789ab-03",
                         "total_seconds": 255.370930671,
                         "timing_file": (
                             "evidence/calibrations/0123456789ab/03.timing"

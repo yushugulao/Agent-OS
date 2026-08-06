@@ -16,19 +16,17 @@ import math
 import random
 import re
 import statistics
-import sys
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Iterable, Sequence
 
 try:
     from .strict_json import strict_json_loads
     from .safe_host_paths import (
         atomic_write_bytes,
         read_regular_file,
-        reject_link_components as reject_host_link_components,
         require_regular_file,
         require_safe_directory,
         walk_directory_tree_no_links,
@@ -54,7 +52,6 @@ except ImportError:  # Direct execution from host_tools/.
     from safe_host_paths import (
         atomic_write_bytes,
         read_regular_file,
-        reject_link_components as reject_host_link_components,
         require_regular_file,
         require_safe_directory,
         walk_directory_tree_no_links,
@@ -110,7 +107,6 @@ PROGRAM_MANIFEST_BINDING_SCHEMA = "task6-program-manifest-binding-v1"
 PROGRAM_MANIFEST_BINDING_DOMAIN = "task6-program-manifest-binding-v1"
 PROGRAM_ORDER_DOMAIN = "task6-program-order-v1"
 MAX_PROGRAM_SOURCE_BYTES = 1 << 20
-VALID_STATUSES = frozenset({"supported", "regressed", "inconclusive", "failed"})
 STATE_NAME_RE = re.compile(r"rp_[a-z0-9_]+\Z")
 PROGRAM_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -395,15 +391,6 @@ def _canonical_json(value: object) -> bytes:
 
 def _binding_sha256(value: object, domain: str) -> str:
     return _sha256(domain.encode("ascii") + b"\0" + _canonical_json(value))
-
-
-def _reject_link_components(path: Path, label: str) -> None:
-    try:
-        reject_host_link_components(path)
-    except (OSError, ValueError) as error:
-        raise ScenarioEvidenceError(
-            f"{label} has a link-backed path component: {path}"
-        ) from error
 
 
 def _require_directory(path: Path, label: str) -> Path:
@@ -731,20 +718,6 @@ def _program_manifest_binding_from_records(
         binding, PROGRAM_MANIFEST_BINDING_DOMAIN
     )
     return binding
-
-
-def _program_manifest_binding(
-    source_tree: Path,
-    source_commit: str,
-    expected_programs: tuple[str, ...],
-) -> dict[str, object]:
-    records, _ = _committed_source_records(
-        source_tree,
-        source_commit,
-        PROGRAM_MANIFEST_PATHS,
-        "Task 6 program manifest",
-    )
-    return _program_manifest_binding_from_records(records, expected_programs)
 
 
 def _assemble_program_source_comparability_receipt(

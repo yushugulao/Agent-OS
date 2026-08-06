@@ -469,7 +469,7 @@ def _validate_observe(ctx: ValidationContext) -> None:
     )
     disk_result = _call(
         acceptance, "validate_observation_acceptance",
-        "observation v7 retention acceptance", disk_result, layout,
+        "observation v8 retention acceptance", disk_result, layout,
     )
     if not isinstance(disk_result, dict) or disk_result.get("status") != "verified":
         raise EvidenceSemanticError("observation durable disk result is invalid")

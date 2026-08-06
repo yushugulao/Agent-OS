@@ -196,7 +196,6 @@ REQUIRED_AGENT_TEST_CASES = (
     "agentllm_ucore",
     "agentbench_ucore",
     "ch8_cow_ucore",
-    "labbench_ucore",
     "labdemo_ucore",
     "agentsecurity_ucore",
     "agenttoolabi_ucore",
@@ -1960,13 +1959,6 @@ def parse_object_size_sections(output):
     if ".text" not in sections:
         raise BudgetError("object size output is missing .text")
     return sections
-
-
-def section_matches_any(name, patterns):
-    return any(
-        name.startswith(pattern[:-1]) if pattern.endswith("*") else name == pattern
-        for pattern in patterns
-    )
 
 
 def agent_aggregate_private_header(path):

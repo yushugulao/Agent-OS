@@ -1334,13 +1334,6 @@ out:
 	return result;
 }
 
-int proc_file_slot_reserve(struct proc *owner,
-			   struct resource_account_handle *account,
-			   int *reserved)
-{
-	return proc_file_slots_reserve(owner, 1, account, reserved);
-}
-
 void proc_file_slot_release(struct resource_account_handle account,
 			    int reserved)
 {
@@ -1655,15 +1648,6 @@ int allocpid()
 		pid = (int)next_pid++;
 	intr_restore(enabled);
 	return pid;
-}
-
-int alloctid(const struct proc *process)
-{
-	for (int i = 0; i < NTHREAD; ++i) {
-		if (process->threads[i].state == T_UNUSED)
-			return i;
-	}
-	return -1;
 }
 
 // get task by unique task id
@@ -2328,7 +2312,6 @@ void scheduler()
 		intr_on();
 		asm volatile("nop");
 		intr_off();
-		agent_background_maintain();
 		t = fetch_task();
 		/* Polling writeback runs only when no user thread is runnable. */
 		if (t == NULL && fs_epoch_should_commit() &&
@@ -2408,14 +2391,6 @@ void yield()
 	current_thread->state = RUNNABLE;
 	add_task(current_thread);
 	sched();
-}
-
-// Free a process's page table, and free the
-// physical memory it refers to.
-void freepagetable(pagetable_t pagetable, uint64 max_page)
-{
-	uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-	uvmfree(pagetable, max_page);
 }
 
 static void freepagetable_cleanup(pagetable_t pagetable, uint64 max_page)
@@ -3328,13 +3303,6 @@ int push_argv_image(pagetable_t pagetable, uint64 stack_base,
 	staged->a1 = argv_sp;
 	staged->sp = argv_sp;
 	return argc; // this ends up in a0, the first argument to main(argc, argv)
-}
-
-int push_argv(struct proc *p, char **argv)
-{
-	struct thread *t = &p->threads[0];
-
-	return push_argv_image(p->pagetable, t->ustack, t->trapframe, argv);
 }
 
 static int exec_thread_ready(struct proc *p)

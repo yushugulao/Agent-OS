@@ -14,7 +14,7 @@ host_probe_run "${TMPDIR_REAP}/observe-reap-state" \
 	>"${TMPDIR_REAP}/output.log"
 
 for marker in \
-	"observe_reap_state: four_slots=1 sticky_class=1" \
+	"observe_reap_state: five_slots=1 sticky_class=1" \
 	"observe_reap_state: same_workflow_abort=1 cross_scope=1" \
 	"observe_reap_state: zero_target_retry=1 same_token=1" \
 	"observe_reap_state: attach_generation_stable=1" \

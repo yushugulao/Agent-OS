@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep deferred maintenance off unrelated syscall return paths."""
+"""Keep deferred maintenance behind a cheap syscall-return pending edge."""
 
 from __future__ import annotations
 
@@ -30,11 +30,12 @@ def check(root: Path) -> None:
         raise ValueError("syscall path has an unbounded maintenance trigger")
     require(
         syscall,
-        "if(id==SYS_sched_yield)agent_background_checkpoint();",
-        "voluntary yield no longer provides an explicit maintenance assist",
+        "if(agent_background_work_pending()||id==SYS_sched_yield)"
+        "agent_background_checkpoint();",
+        "syscall return lost its pending-only maintenance safe point",
     )
     if "id!=SYS_agent_performance_snapshot" in syscall:
-        raise ValueError("ordinary syscall returns still trigger maintenance")
+        raise ValueError("observer syscall policy bypasses the pending edge")
     if "!transaction.fs_epoch_admitted&&fs_epoch_should_commit()" in syscall:
         raise ValueError("unrelated syscalls can still inherit an aged commit")
 

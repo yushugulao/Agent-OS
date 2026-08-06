@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the open-file authorization lease."""
+"""Mutation tests for the trusted open-file authorization context."""
 
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ class OpenFileIoLeaseTests(unittest.TestCase):
 
     def run_check(self) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, "-I", "-S", "-B", str(CHECKER), "--root", str(self.root)],
+            [sys.executable, "-I", "-S", "-B", str(CHECKER),
+             "--root", str(self.root)],
             text=True, capture_output=True, check=False,
         )
 
@@ -51,75 +52,101 @@ class OpenFileIoLeaseTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_rejects_large_token(self) -> None:
-        self.mutate("os/open_file_io_lease.h", "opaque[4]", "opaque[8]")
-        self.assert_rejected("four words")
+    def test_rejects_opaque_token(self) -> None:
+        self.mutate("os/open_file_io_lease.h", "struct file *file;",
+                    "uint64 opaque[2];")
+        self.assert_rejected("typed syscall authority")
 
-    def test_rejects_slot_aba(self) -> None:
+    def test_rejects_crypto_tax(self) -> None:
         self.mutate("os/open_file_io_lease.c",
-                    "open_file_io_next32(&open_file_io_state.file_generations[slot]);",
-                    "open_file_io_state.file_generations[slot];")
-        self.assert_rejected("generation is not advanced")
+                    "static struct open_file_io_state open_file_io_state;",
+                    "static struct open_file_io_state open_file_io_state;\n"
+                    "static uint64 token_secret;")
+        self.assert_rejected("cryptographic sealing tax")
+
+    def test_rejects_duplicate_file_generation(self) -> None:
+        self.mutate("os/open_file_io_lease.c",
+                    "struct open_file_io_lease_stats stats;",
+                    "uint file_generations[FILEPOOLSIZE];\n\t"
+                    "struct open_file_io_lease_stats stats;")
+        self.assert_rejected("duplicate lifetime protocol")
 
     def test_rejects_full_auth_before_fast_path(self) -> None:
-        path = self.root / "os/open_file_io_lease.c"
-        source = path.read_text()
-        source = source.replace("vfs_inode_authorize(candidate.inode, &candidate.cred,\n\t\t\t\t\t operation)",
-                                "vfs_inode_authorize(candidate.inode, &candidate.cred, operation) &&\n\t\tvfs_inode_authorize(candidate.inode, &candidate.cred, operation)", 1)
-        path.write_text(source)
-        self.assert_rejected("exactly one full VFS authorization")
-
-    def test_rejects_missing_fs_validation(self) -> None:
-        self.mutate("os/fs.c", "open_file_io_token_validate(lease, ip, VFS_OP_READ)", "1")
-        self.assert_rejected("filesystem does not verify")
-
-    def test_rejects_full_authorization_walk_at_fs_boundary(self) -> None:
         self.mutate(
             "os/open_file_io_lease.c",
-            "if (open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
-            "if (vfs_inode_authorize(inode, &current.cred, operation) &&\n\t    open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
+            "authorized = vfs_inode_authorize(candidate.inode, &candidate.cred,\n"
+            "\t\t\t\t\t operation);",
+            "authorized = vfs_inode_authorize(candidate.inode, &candidate.cred, operation) &&\n"
+            "\t\tvfs_inode_authorize(candidate.inode, &candidate.cred, operation);",
+        )
+        self.assert_rejected("exactly one full VFS authorization")
+
+    def test_rejects_missing_slow_revalidation(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "if (!authorized ||\n\t    !open_file_io_grant_matches(&candidate, file, proc, operation))",
+            "if (!authorized)",
+        )
+        self.assert_rejected("not revalidated")
+
+    def test_rejects_missing_fs_validation(self) -> None:
+        self.mutate("os/fs.c",
+                    "open_file_io_token_validate(lease, ip, VFS_OP_READ)", "1")
+        self.assert_rejected("filesystem does not verify")
+
+    def test_rejects_full_authorization_at_fs_boundary(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "valid = token->subject == proc && token->inode == inode &&",
+            "valid = vfs_inode_authorize(inode, &token->cred, operation) &&\n"
+            "\t\ttoken->subject == proc && token->inode == inode &&",
         )
         self.assert_rejected("repeats full VFS authorization")
 
-    def test_rejects_missing_revocation_check_after_blocking(self) -> None:
+    def test_rejects_cache_residency_dependency(self) -> None:
         self.mutate(
             "os/open_file_io_lease.c",
-            "open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
-            "current.valid &&",
+            "valid = token->subject == proc && token->inode == inode &&",
+            "valid = open_file_io_state.grants[0].valid &&\n"
+            "\t\ttoken->subject == proc && token->inode == inode &&",
         )
-        self.assert_rejected("filesystem token validation is incomplete")
+        self.assert_rejected("cache residency")
 
-    def test_rejects_token_dependency_on_cache_residency(self) -> None:
+    def test_rejects_thread_generation_bypass(self) -> None:
         self.mutate(
             "os/open_file_io_lease.c",
-            "if (open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
-            "if (open_file_io_state.grants[0].valid &&\n\t    open_file_io_grant_matches_locked(\n\t\t    &current, inode, proc, operation) &&",
+            "thread->identity_generation == token->thread_generation &&",
+            "token->thread_generation != 0 &&",
         )
-        self.assert_rejected("grant-cache residency")
+        self.assert_rejected("revocation validation")
+
+    def test_rejects_lifecycle_bypass(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "!open_file_io_lifecycle_live(current_lifecycle)", "0")
+        self.assert_rejected("subject generation checks")
+
+    def test_rejects_inode_generation_bypass(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "incarnation == inode->vfs_incarnation",
+            "incarnation == incarnation",
+        )
+        self.assert_rejected("inode security identity")
+
+    def test_rejects_edit_generation_bypass(self) -> None:
+        self.mutate(
+            "os/open_file_io_lease.c",
+            "authority_generation == current_generation &&",
+            "authority_generation != 0 &&",
+        )
+        self.assert_rejected("edit revocation generation")
 
     def test_rejects_missing_open_authorization_seed(self) -> None:
-        self.mutate(
-            "os/file.c",
-            "open_file_io_lease_seed_authorized(f, VFS_OP_READ, &cred);",
-            "(void)f;",
-        )
+        self.mutate("os/file.c",
+                    "open_file_io_lease_seed_authorized(f, VFS_OP_READ, &cred);",
+                    "(void)f;")
         self.assert_rejected("publish its completed read/write authorization")
-
-    def test_rejects_file_slot_aba_bypass(self) -> None:
-        self.mutate(
-            "os/open_file_io_lease.c",
-            "generation == open_file_io_state.file_generations[slot]",
-            "generation == generation",
-        )
-        self.assert_rejected("file-slot ABA")
-
-    def test_rejects_short_lived_file_slot_cache_key(self) -> None:
-        self.mutate(
-            "os/open_file_io_lease.c",
-            "cache_slot = open_file_io_cache_slot(file->ip, proc, operation);",
-            "cache_slot = file_slot & (OPEN_FILE_IO_CACHE_CAP - 1);",
-        )
-        self.assert_rejected("short-lived file slots")
 
     def test_rejects_read_write_cache_alias(self) -> None:
         self.mutate(
@@ -127,36 +154,12 @@ class OpenFileIoLeaseTests(unittest.TestCase):
             "open_file_io_operation_mask(operation) *\n\t       0x9e3779b97f4a7c15ULL",
             "open_file_io_operation_mask(operation) << 8",
         )
-        self.assert_rejected("read and write grants collide")
+        self.assert_rejected("cache key")
 
-    def test_rejects_missing_stable_inode_identity(self) -> None:
-        self.mutate(
-            "os/open_file_io_lease.c",
-            "grant->inode_inum == inode->inum",
-            "grant->inode_inum == grant->inode_inum",
-        )
-        self.assert_rejected("stable inode security identity")
-
-    def test_rejects_global_edit_authority_generation(self) -> None:
-        self.mutate(
-            "os/agent_file_state.c",
-            "uint64 edit_authority_generation;",
-            "uint64 unrelated_generation;",
-        )
+    def test_rejects_global_edit_generation(self) -> None:
+        self.mutate("os/agent_file_state.c", "uint64 edit_authority_generation;",
+                    "uint64 unrelated_generation;")
         self.assert_rejected("inode-scoped revocation generation")
-
-    def test_rejects_edit_generation_on_read_grants(self) -> None:
-        self.mutate(
-            "os/open_file_io_lease.c",
-            "grant->edit_authority_generation != 0 ||",
-            "0 ||",
-        )
-        self.assert_rejected("global edit invalidation")
-
-    def test_rejects_unbounded_lifetime_hook(self) -> None:
-        self.mutate("os/open_file_io_lease.c", "\topen_file_io_next32(&open_file_io_state.file_generations[slot]);",
-                    "\tfor (;;) break;\n\topen_file_io_next32(&open_file_io_state.file_generations[slot]);")
-        self.assert_rejected("no longer O(1)")
 
 
 if __name__ == "__main__":

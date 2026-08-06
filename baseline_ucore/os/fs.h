@@ -118,5 +118,4 @@ struct inode *root_dir();
 int readi(struct inode *, int, uint64, uint, uint);
 int writei(struct inode *, int, uint64, uint, uint, uint);
 int itrunc(struct inode *, uint);
-int dirls(struct inode *);
 #endif //!__FS_H__

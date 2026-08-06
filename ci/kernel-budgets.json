@@ -371,7 +371,6 @@
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agent_context_active_measure",
-          "agent_context_active_record",
           "agent_context_read_record",
           "agent_context_record_hash"
         ],
@@ -403,7 +402,6 @@
           "agent_identity_id_floor",
           "agent_identity_init",
           "agent_identity_loop_refresh_locked",
-          "agent_identity_next_id_get",
           "agent_identity_proc_reset",
           "agent_identity_proc_scope",
           "agent_identity_role_policy",
@@ -568,7 +566,6 @@
           "agent_edit_note_write",
           "agent_edit_truncate_allowed",
           "agent_edit_unlink_allowed",
-          "agent_edit_write_allowed",
           "agent_file_version_reclaim",
           "sys_agent_file_edit_abort",
           "sys_agent_file_edit_begin",
@@ -1563,7 +1560,6 @@
       "agentllm_ucore",
       "agentbench_ucore",
       "ch8_cow_ucore",
-      "labbench_ucore",
       "labdemo_ucore",
       "agentsecurity_ucore",
       "agenttoolabi_ucore",

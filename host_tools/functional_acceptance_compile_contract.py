@@ -13,7 +13,7 @@ else:
     from benchmark_source_contract import _function_tokens, _lex
 
 
-CONTRACT_VERSION = "agentos-functional-compile-closure-v2"
+CONTRACT_VERSION = "agentos-functional-compile-closure-v3"
 
 EXPECTED_FUNCTIONAL_CPP_DEFINES = frozenset({
     "AGENT_CONTEXT_SYNC_TEST_PROFILE",
@@ -320,7 +320,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # translation phase input exact prevents line splices, directives, assembly,
 # or linker syntax from disappearing during normalization.
 COMPILE_CLOSURE_FINGERPRINT = (
-    "0431542b172875abbd2bfee34f854f93d504fb9edc3081e6ff7d5868c48e7348"
+    "d5445c0155f2b83f2d5660505a66cc524be5f1f814dd64b680d5306763148433"
 )
 
 USER_TRANSLATION_UNITS = (

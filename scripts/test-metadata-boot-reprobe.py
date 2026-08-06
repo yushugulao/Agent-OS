@@ -97,37 +97,6 @@ def require_order(source: str, tokens: tuple[str, ...], label: str) -> None:
         position = next_position
 
 
-def require_guarded(source: str, needle: str, macro: str) -> None:
-    """Require every source-level reference to be under a named #ifdef."""
-    stack: list[str] = []
-    found = 0
-    for line in source.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#ifdef "):
-            stack.append(stripped.removeprefix("#ifdef ").strip())
-        elif stripped.startswith("#ifndef "):
-            stack.append("!" + stripped.removeprefix("#ifndef ").strip())
-        elif stripped.startswith("#if defined(") and stripped.endswith(")"):
-            stack.append(stripped[len("#if defined(") : -1].strip())
-        elif stripped.startswith("#if"):
-            stack.append(stripped)
-        elif stripped.startswith("#elif"):
-            require(bool(stack), "unbalanced preprocessor elif")
-            stack[-1] = stripped
-        elif stripped.startswith("#else"):
-            require(bool(stack), "unbalanced preprocessor else")
-            stack[-1] = (
-                stack[-1][1:] if stack[-1].startswith("!") else "!" + stack[-1]
-            )
-        elif stripped.startswith("#endif"):
-            require(bool(stack), "unbalanced preprocessor guard")
-            stack.pop()
-        if needle in line:
-            found += 1
-            require(macro in stack, f"unguarded production test reference: {needle}")
-    require(found > 0, f"missing guarded reference: {needle}")
-
-
 def validate(sources: dict[str, str]) -> None:
     bio_h = sources["bio_h"]
     internal = sources["internal"]

@@ -106,8 +106,6 @@ static inline void exec_manifest_worker_image(const char *source,
 	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR) | \
 	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_SENTINEL), 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
-	X("labbench_ucore", "labbench_ucore", EXEC_MANIFEST_F_BOOT_SEALED, \
-	  EXEC_MANIFEST_ROLE_ALL, 0, EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("labdemo_ucore", "labdemo_ucore", EXEC_MANIFEST_F_BOOT_SEALED, \
 	  EXEC_MANIFEST_ROLE_ALL, 0, EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("labdemo_execprobe_ucore", "ldexecprobe", \

@@ -20,9 +20,9 @@ _Static_assert(AGENT_DURABLE_SECTION_OBSERVE == 1,
 _Static_assert(sizeof(struct agent_durable_arena) ==
 	       AGENT_DURABLE_ARENA_BYTES,
 	       "durable arena disk ABI drift");
-_Static_assert(sizeof(struct agent_observe_checkpoint) == 8024U,
+_Static_assert(sizeof(struct agent_observe_checkpoint) == 7592U,
 	       "observation checkpoint disk ABI drift");
-_Static_assert(sizeof(struct agent_observe_checkpoint_scope) == 1968U,
+_Static_assert(sizeof(struct agent_observe_checkpoint_scope) == 1488U,
 	       "observation scope disk ABI drift");
 _Static_assert(sizeof(struct agent_observe_checkpoint_entry) == 240U,
 	       "observation entry disk ABI drift");

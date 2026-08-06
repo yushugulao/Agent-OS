@@ -728,7 +728,6 @@ agent_edit_modify_allowed(struct inode *ip, char *action,
 	int agent_edit_##operation##_allowed(struct inode *ip) \
 	{ return agent_edit_modify_allowed(ip, event, 0, 0); }
 
-DEFINE_AGENT_EDIT_ALLOWED(write, "edit_write_conflict")
 DEFINE_AGENT_EDIT_ALLOWED(truncate, "edit_trunc_conflict")
 DEFINE_AGENT_EDIT_ALLOWED(unlink, "edit_unlink_conflict")
 #undef DEFINE_AGENT_EDIT_ALLOWED

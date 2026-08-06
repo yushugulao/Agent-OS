@@ -1234,30 +1234,6 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff)
 	return 0;
 }
 
-//Show the filenames of all files in the directory
-int dirls(struct inode *dp)
-{
-	uint64 off, count;
-	struct dirent de;
-	char name[DIRSIZ + 1];
-
-	if (dp == 0 || dp->type != T_DIR)
-		return -1;
-
-	count = 0;
-	for (off = 0; off < dp->size; off += sizeof(de)) {
-		if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-			return -1;
-		if (de.inum == 0)
-			continue;
-		memmove(name, de.name, DIRSIZ);
-		name[DIRSIZ] = 0;
-		printf("%s\n", name);
-		count++;
-	}
-	return count;
-}
-
 // Write a new directory entry (name, inum) into the directory dp.
 int dirlink(struct inode *dp, char *name, uint inum, uint owner)
 {

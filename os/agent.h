@@ -776,6 +776,7 @@ int agent_create_role_proc(int role);
 int agent_workflow_create_proc(int role);
 void agent_tick(void);
 void agent_background_request(void);
+int agent_background_work_pending(void);
 void agent_background_maintain(void);
 void agent_background_checkpoint(void);
 int agent_metadata_durability_fence_current(void);
@@ -786,7 +787,6 @@ int agent_scope_reclaim_begin(
 int agent_scope_reclaim_metadata_done(
 	uint scope_id, struct workflow_lifecycle_key, uint64 metadata_target);
 void agent_file_version_reclaim(struct inode *ip);
-int agent_edit_write_allowed(struct inode *ip);
 int agent_edit_write_lease_allowed(struct inode *, uint64 *, uint64 *);
 int agent_edit_write_lease_snapshot(struct inode *, uint64 *, uint64 *);
 int agent_edit_truncate_allowed(struct inode *ip);

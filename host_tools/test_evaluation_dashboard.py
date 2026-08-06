@@ -43,6 +43,7 @@ from render_evaluation_dashboard import (
     _overview_task6_slot,
     _read_evidence_file,
     _relative_effect_label,
+    _supplementary_evaluations_html,
     _task_matrix,
     main as dashboard_main,
     render as render_dashboard,
@@ -1183,6 +1184,38 @@ class DashboardContractTests(unittest.TestCase):
         )
         self.contract_replay_mock = self.contract_replay.start()
         self.addCleanup(self.contract_replay.stop)
+
+    def test_v5_qos_table_renders_measured_metrics_and_digest(self) -> None:
+        evaluation = {
+            "qos_schema_version": 2,
+            "label": "Multi-identity workflow revisit isolation",
+            "status": "measured",
+            "visit_sequence": ["A", "B", "C", "D", "A"],
+            "rounds_per_level": 16,
+            "boots": [{
+                "boot_id": "boot-01", "evidence_id": "raw-perf",
+                "correct": 5, "contamination": 0, "return_visit": 1,
+                "fallback": 0, "concurrency": [{
+                    "concurrency": 4, "completed": 64, "requests": 64,
+                    "throughput_milli_rps": 2_000_000,
+                    "goodput_milli_rps": 1_875_000,
+                    "p90_us": 37, "wait_p90_us": 11,
+                    "fairness_jain_ppm": 987_654,
+                    "max_min_fairness_ppm": 875_000, "isolated": 60,
+                    "contamination": 0, "fallback": 4,
+                    "workload_digest": "0123456789abcdef",
+                }],
+            }],
+        }
+        rendered = _supplementary_evaluations_html({
+            "supplementary_evaluations": [evaluation]
+        })
+        for expected in (
+            "Goodput req/s", "周转 p90 us", "等待 p90 us", "Jain 公平度",
+            "Min/max 公平度", "1875", "37", "11", "0.987654", "0.875",
+            "60 / 64", "0123456789abcdef",
+        ):
+            self.assertIn(expected, rendered)
 
     def test_render_writes_offline_dashboard_and_machine_outputs(self) -> None:
         summary = fixture()

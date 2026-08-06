@@ -70,7 +70,6 @@ int agent_background_take(void);
 /* Identity and authorization policy. */
 void agent_identity_init(void);
 int agent_identity_alloc_id(void);
-uint agent_identity_next_id_get(void);
 void agent_identity_id_floor(uint);
 const struct agent_role_policy *agent_identity_role_policy(int);
 int agent_identity_role_valid(int);

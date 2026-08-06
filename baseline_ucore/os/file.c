@@ -124,19 +124,6 @@ struct file *filealloc(struct proc *owner)
 	return result;
 }
 
-//Show names of all files in the root_dir.
-int show_all_files()
-{
-	struct inode *root = root_dir();
-	int result;
-
-	if (root == 0)
-		return -1;
-	result = dirls(root);
-	iput(root);
-	return result;
-}
-
 //A process creates or opens a file according to its path, returning the file descriptor of the created or opened file.
 //If omode is O_CREATE, create a new file
 //if omode if the others,open a created file.

@@ -34,7 +34,7 @@ _Static_assert(sizeof(struct agent_observe_test_identity_ids) == 48,
 #endif
 
 #define AGENT_OBSERVE_RECOVERY_F_NONE 0U
-#define AGENT_OBSERVE_RECOVERY_MAX_SCOPES 4U
+#define AGENT_OBSERVE_RECOVERY_MAX_SCOPES 5U
 #define AGENT_AUDIT_LOW_PRINCIPAL_MAX 16U
 
 #define AGENT_AUDIT_RECEIPT_VERSION 1U

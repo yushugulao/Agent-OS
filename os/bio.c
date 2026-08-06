@@ -110,8 +110,6 @@ struct io_owner_state {
 	uint64 physical_reads;
 	uint64 physical_writes;
 	uint64 physical_flushes;
-	uint64 successful_writes;
-	uint64 successful_flushes;
 	uint64 failed_transfers;
 	uint64 cache_hits;
 	uint64 cache_misses;
@@ -190,7 +188,6 @@ struct bio_cleanup_record {
 static struct {
 	struct bio_cleanup_record records[BIO_CLEANUP_TOKEN_CAP];
 	uint16 free_head;
-	uint free_count;
 	int initialized;
 } bio_cleanup_pool;
 
@@ -1104,7 +1101,7 @@ static int io_grant_waiter(struct io_owner_state *state, uint io_class,
 			   int shared)
 {
 	struct io_bucket *bucket = &state->buckets[io_class];
-	struct thread *head;
+	struct thread *grantee;
 	struct resource_rate_endpoint
 		endpoints[RESOURCE_RATE_BUNDLE_CAP];
 	struct resource_rate_lease_handle lease =
@@ -1114,7 +1111,7 @@ static int io_grant_waiter(struct io_owner_state *state, uint io_class,
 	if (state->retiring ||
 	    (state->quiesced && io_class != IO_POLICY_CLASS_BACKGROUND) ||
 	    bucket->grantee != 0 ||
-	    (head = bucket->admission_queue.head) == 0)
+	    bucket->admission_queue.head == 0)
 		return 0;
 	if (shared) {
 		if (io_class == IO_POLICY_CLASS_BACKGROUND ||
@@ -1125,20 +1122,30 @@ static int io_grant_waiter(struct io_owner_state *state, uint io_class,
 	(void)io_rate_bundle(state, io_class, shared, endpoints);
 	if (resource_rate_reserve_many(endpoints, 2, &lease) < 0)
 		return 0;
+	/*
+	 * Bind the lease to the thread actually removed from the wait queue.
+	 * A canceled or otherwise stale queue head may be skipped by the generic
+	 * wake primitive; binding to a raw head would then strand the real waiter
+	 * behind a grantee that can never consume the reservation.
+	 */
+	grantee = wait_queue_wake_one_thread(&bucket->admission_queue);
+	if (grantee == 0) {
+		resource_rate_lease_cancel(lease);
+		return 0;
+	}
 	if (!shared)
 		state->reserved_grants++;
-	bucket->grantee = head;
+	bucket->grantee = grantee;
 	io_rate_lease_store(
 		lease, shared, &bucket->grant_source,
 		&bucket->grant_device_source);
-	if (!wait_queue_wake_one(&bucket->admission_queue))
-		panic("I/O admission grant lost waiter");
 	return 1;
 }
 
 static void io_schedule_grants(void)
 {
 	uint slots = IO_OWNER_SLOTS * IO_POLICY_CLASS_COUNT;
+	int enabled = intr_save();
 
 	for (uint i = 0; i < IO_OWNER_SLOTS; i++) {
 		struct io_owner_state *state = &io_policy.owners[i];
@@ -1175,6 +1182,7 @@ static void io_schedule_grants(void)
 		if (!granted)
 			break;
 	}
+	intr_restore(enabled);
 }
 
 static int io_wait_until_admitted(struct io_owner_state *state,
@@ -2583,7 +2591,7 @@ bio_cleanup_record_allocate_locked(struct bio_cleanup_token *token)
 
 	if (!bio_cleanup_pool.initialized ||
 	    !bio_cleanup_handle_empty(token) ||
-	    bio_cleanup_pool.free_count == 0)
+	    bio_cleanup_pool.free_head == BIO_CLEANUP_SLOT_NONE)
 		return 0;
 	index = bio_cleanup_pool.free_head;
 	if (index == BIO_CLEANUP_SLOT_NONE ||
@@ -2603,7 +2611,6 @@ bio_cleanup_record_allocate_locked(struct bio_cleanup_token *token)
 	record->next_free = BIO_CLEANUP_SLOT_NONE;
 	record->state = BIO_CLEANUP_TOKEN_PREPARED;
 	bio_cleanup_pool.free_head = next;
-	bio_cleanup_pool.free_count--;
 	token->slot = index + 1;
 	token->generation = generation;
 	return record;
@@ -2618,8 +2625,7 @@ bio_cleanup_record_free_locked(struct bio_cleanup_record *record,
 
 	if (record == 0 || token == 0 ||
 	    record != bio_cleanup_record_lookup_locked(token) ||
-	    record->state != BIO_CLEANUP_TOKEN_PREPARED ||
-	    bio_cleanup_pool.free_count >= BIO_CLEANUP_TOKEN_CAP)
+	    record->state != BIO_CLEANUP_TOKEN_PREPARED)
 		panic("cleanup token free");
 	index = token->slot - 1;
 	generation = record->generation;
@@ -2627,7 +2633,6 @@ bio_cleanup_record_free_locked(struct bio_cleanup_record *record,
 	record->generation = generation;
 	record->next_free = bio_cleanup_pool.free_head;
 	bio_cleanup_pool.free_head = (uint16)index;
-	bio_cleanup_pool.free_count++;
 	token->slot = 0;
 	token->generation = 0;
 }
@@ -3115,10 +3120,6 @@ static void bio_account_transfers(uint owner, uint io_class,
 	else
 		state->physical_flushes += count;
 	state->failed_transfers += failed;
-	if (transfer == BIO_TRANSFER_WRITE)
-		state->successful_writes += successful;
-	else if (transfer == BIO_TRANSFER_FLUSH)
-		state->successful_flushes += successful;
 	state->completion_sequence = completion_sequence;
 	if (bio_deferred_sponsor_current() &&
 	    io_policy.deferred.independent_lease &&
@@ -3769,7 +3770,6 @@ void binit(void)
 			i + 1 < BIO_CLEANUP_TOKEN_CAP ?
 				(uint16)(i + 1) : BIO_CLEANUP_SLOT_NONE;
 	bio_cleanup_pool.free_head = 0;
-	bio_cleanup_pool.free_count = BIO_CLEANUP_TOKEN_CAP;
 	bio_cleanup_pool.initialized = 1;
 	memset(bcache.hash_head, 0, sizeof(bcache.hash_head));
 	if (resource_policy_configure(

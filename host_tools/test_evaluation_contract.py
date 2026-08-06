@@ -34,6 +34,7 @@ from evaluation_contract import (
     _load_supports_headline_claim,
     _operations_for,
     _semantic_token,
+    _supplementary_hash,
     _task2_schema_fingerprint,
     _task3_semantic,
     _task3_tool_semantic,
@@ -401,11 +402,12 @@ def assert_functional_acceptance_source_contract() -> None:
     assert "context_rollback(rollback_sequence)" in guest
     assert "helper_pid = agent_create();" in guest
     assert "TASK5_DELAY_TICKS" in guest
+    assert "TASK5_TICK_MSEC" in guest
     assert "functional_info_before.current_tick" in guest
     assert "functional_info_after.sched_dispatch_count" in guest
-    assert "task5 delayed wait has bounded dispatches" in guest
+    assert "task5 message waiter published" in guest
     assert '"task5-semantic-v2"' in guest
-    assert "wait_ticks < 2 * wait_dispatches" in host
+    assert "wait_dispatches < 1" in host
     assert "functional_compat_sentinel_pid = agent_create();" in guest
     assert "agent_create_role(AGENT_ROLE_SENTINEL)" not in guest
     assert "tool_count != 25" not in host
@@ -723,6 +725,181 @@ def functional_lines(challenge: str, boot_number: int) -> tuple[str, list[str]]:
     ]
 
 
+def revisit_lines(
+    challenge: str, boot_number: int, suite: dict
+) -> list[str]:
+    config = suite["supplementary_scenarios"][0]
+    identities = config["identity_order"]
+    visit_markers: list[str] = []
+    visit_fingerprints: list[int] = []
+    for visit, identity in enumerate(config["visit_sequence"], 1):
+        identity_index = identities.index(identity)
+        ordinal = 2 if visit == len(config["visit_sequence"]) else 1
+        request_id = _semantic_token(
+            "aios-revisit-visit-v1", visit, identity_index, ordinal, challenge
+        )
+        agent_id = 10_000 + boot_number * 10 + identity_index
+        lifecycle_id = identity_index + 1
+        lifecycle_generation = 1000 + boot_number * 10 + identity_index
+        values = [
+            visit, identity_index, request_id, agent_id, lifecycle_id,
+            lifecycle_generation, 1, 0, 1 if ordinal == 2 else 0, 0,
+        ]
+        fingerprint = _supplementary_hash(
+            "aios-revisit-observation-v1", challenge, values
+        )
+        visit_fingerprints.append(int(fingerprint, 16))
+        visit_markers.append(
+            "agenteval_ucore: revisit schema=1 "
+            f"visit={visit} identity={identity} request_id={request_id:016x} "
+            f"agent_id={agent_id} lifecycle_id={lifecycle_id} "
+            f"lifecycle_generation={lifecycle_generation} correct=1 "
+            f"contamination=0 return_visit={1 if ordinal == 2 else 0} "
+            f"fallback=0 result_fingerprint={fingerprint} status=observed"
+        )
+    summary_values = [len(visit_markers), len(visit_markers), 0, 1, 0]
+    summary_fingerprint = _supplementary_hash(
+        "aios-revisit-summary-v1",
+        challenge,
+        [*summary_values, *visit_fingerprints],
+    )
+    lines = [
+        *visit_markers,
+        (
+            "agenteval_ucore: revisit_summary schema=1 "
+            f"visits={len(visit_markers)} correct={len(visit_markers)} "
+            "contamination=0 return_visit=1 fallback=0 "
+            f"result_fingerprint={summary_fingerprint} status=measured"
+        ),
+    ]
+    for level in config["concurrency_levels"]:
+        samples: list[dict[str, int | str]] = []
+        base_us = 1_000_000 + boot_number * 100_000 + level * 10_000
+        for round_number in range(config["rounds_per_level"]):
+            for slot in range(level):
+                index = round_number * level + slot
+                identity_index = index % len(identities)
+                identity = identities[identity_index]
+                request_id = _semantic_token(
+                    "agentos-qos-request-v2", level, round_number,
+                    slot * len(identities) + identity_index, challenge,
+                )
+                submitted_us = base_us + index * 100
+                wait_us = 1 + (level + round_number + slot) % 4
+                service_us = 5 + boot_number + identity_index
+                started_us = submitted_us + wait_us
+                completed_us = started_us + service_us
+                received_us = completed_us + 2
+                turnaround_us = wait_us + service_us
+                fingerprint = _supplementary_hash(
+                    "agentos-qos-sample-v2",
+                    challenge,
+                    [
+                        level, round_number, slot, identity_index, request_id,
+                        1, 0, 0, 1, submitted_us, started_us, completed_us,
+                        received_us, wait_us, service_us, turnaround_us,
+                    ],
+                )
+                samples.append({
+                    "round": round_number,
+                    "slot": slot,
+                    "identity": identity,
+                    "request_id": request_id,
+                    "submitted_us": submitted_us,
+                    "started_us": started_us,
+                    "completed_us": completed_us,
+                    "received_us": received_us,
+                    "wait_us": wait_us,
+                    "service_us": service_us,
+                    "turnaround_us": turnaround_us,
+                    "fingerprint": fingerprint,
+                })
+                lines.append(
+                    "agenteval_ucore: concurrency_sample schema=2 "
+                    f"concurrency={level} round={round_number} slot={slot} "
+                    f"identity={identity} request_id={request_id:016x} "
+                    f"submitted_us={submitted_us} started_us={started_us} "
+                    f"completed_us={completed_us} received_us={received_us} "
+                    f"wait_us={wait_us} service_us={service_us} "
+                    f"turnaround_us={turnaround_us} correct=1 contamination=0 "
+                    "fallback=0 isolation_ok=1 "
+                    f"result_fingerprint={fingerprint} status=measured"
+                )
+        waits = sorted(int(item["wait_us"]) for item in samples)
+        services = sorted(int(item["service_us"]) for item in samples)
+        durations = sorted(int(item["turnaround_us"]) for item in samples)
+        requests = len(samples)
+        start_us = base_us - 1
+        end_us = int(samples[-1]["received_us"]) + 1
+        duration_us = end_us - start_us
+        throughput = requests * 1_000_000_000 // duration_us
+        goodput = throughput
+        average = sum(durations) * 1000 // requests
+
+        def nearest(values: list[int], percentile: int) -> int:
+            rank = (percentile * requests + 99) // 100
+            return values[rank - 1]
+
+        identity_good = [
+            sum(item["identity"] == identity for item in samples)
+            for identity in identities
+        ]
+        squares = sum(value * value for value in identity_good)
+        fairness = requests * requests * 1_000_000 // (len(identities) * squares)
+        max_min = min(identity_good) * 1_000_000 // max(identity_good)
+        workload_values = [
+            level,
+            *(
+                value
+                for item in samples
+                for value in (
+                    int(item["round"]), int(item["slot"]),
+                    identities.index(str(item["identity"])),
+                    int(item["request_id"]),
+                )
+            ),
+        ]
+        workload_digest = _supplementary_hash(
+            "agentos-qos-workload-v2", challenge, workload_values
+        )
+
+        summary_values = [
+            level, config["rounds_per_level"], requests, requests,
+            start_us, end_us, duration_us, throughput, goodput, average,
+            nearest(durations, 50), nearest(durations, 90),
+            nearest(durations, 99), sum(waits) * 1000 // requests,
+            nearest(waits, 50), nearest(waits, 90), nearest(waits, 99),
+            sum(services) * 1000 // requests, nearest(services, 50),
+            nearest(services, 90), nearest(services, 99), fairness, max_min,
+            requests, requests, 0, 0, int(workload_digest, 16),
+            *(int(item["fingerprint"], 16) for item in samples),
+        ]
+        fingerprint = _supplementary_hash(
+            "agentos-qos-summary-v2", challenge, summary_values
+        )
+        lines.append(
+            "agenteval_ucore: concurrency schema=2 "
+            f"concurrency={level} rounds={config['rounds_per_level']} "
+            f"requests={requests} completed={requests} start_us={start_us} "
+            f"end_us={end_us} duration_us={duration_us} "
+            f"throughput_milli_rps={throughput} goodput_milli_rps={goodput} "
+            f"avg_milli_us={average} p50_us={nearest(durations, 50)} "
+            f"p90_us={nearest(durations, 90)} p99_us={nearest(durations, 99)} "
+            f"wait_avg_milli_us={sum(waits) * 1000 // requests} "
+            f"wait_p50_us={nearest(waits, 50)} wait_p90_us={nearest(waits, 90)} "
+            f"wait_p99_us={nearest(waits, 99)} "
+            f"service_avg_milli_us={sum(services) * 1000 // requests} "
+            f"service_p50_us={nearest(services, 50)} "
+            f"service_p90_us={nearest(services, 90)} "
+            f"service_p99_us={nearest(services, 99)} "
+            f"fairness_jain_ppm={fairness} max_min_fairness_ppm={max_min} "
+            f"isolated={requests} correct={requests} contamination=0 fallback=0 "
+            f"workload_digest={workload_digest} "
+            f"result_fingerprint={fingerprint} status=measured"
+        )
+    return lines
+
+
 def rewrite_task4_receipt(lines: list[str], challenge: str, mutate) -> list[str]:
     rewritten = list(lines)
     for index, line in enumerate(rewritten):
@@ -762,7 +939,9 @@ def rewrite_task5_receipt(lines: list[str], challenge: str, mutate) -> list[str]
 def make_log(suite: dict, boot_number: int, improvement: int = 100, same_order: bool = False) -> tuple[str, str]:
     challenge = f"{boot_number + 1:016x}"
     launcher, receipts = functional_lines(challenge, boot_number)
-    lines = ["boot", f"agenteval_ucore: challenge={challenge}", launcher]
+    lines = [
+        "boot", f"agenteval_ucore: challenge={challenge}", launcher,
+    ]
     experiments = {
         experiment["id"]: experiment for experiment in suite["experiments"]
     }
@@ -784,7 +963,9 @@ def make_log(suite: dict, boot_number: int, improvement: int = 100, same_order: 
                     expected = "AB" if (pair & 1) == (int(challenge, 16) & 1) else "BA"
                     value = value.replace(f"order={expected}", "order=AB")
                 lines.append(value)
-    lines.extend((*receipts, "agenteval_ucore: worker passed", "agenteval_ucore: parent passed"))
+    lines.extend((*receipts, "agenteval_ucore: worker passed"))
+    lines.extend(revisit_lines(challenge, boot_number, suite))
+    lines.append("agenteval_ucore: parent passed")
     return challenge, "\n".join(lines) + "\n"
 
 
@@ -905,8 +1086,38 @@ def main() -> int:
     assert_evaluation_image_role_contract()
     assert_targeted_runner_uses_canonical_contract()
     suite = load_suite(SUITE_PATH)
-    assert suite["schema_version"] == 3
-    assert suite["suite_id"] == "agentos-evaluation-v3"
+    assert suite["schema_version"] == 5
+    assert suite["suite_id"] == "agentos-evaluation-v5"
+    assert suite["supplementary_scenarios"] == [{
+        "concurrency_levels": [1, 2, 4],
+        "digest": "fnv1a64_challenge_bound",
+        "fairness_basis": "per_identity_isolated_completions",
+        "fairness_scale": "parts_per_million",
+        "goodput_unit": "milli_requests_per_second",
+        "identity_order": ["A", "B", "C", "D"],
+        "id": "multi_identity_revisit_isolation",
+        "isolation_definition": "correct_and_zero_contamination_and_no_fallback",
+        "label": "Multi-identity workflow revisit isolation",
+        "latency_unit": "us",
+        "latency_metrics": ["wait", "service", "turnaround"],
+        "percentile_method": "nearest_rank",
+        "performance_gate": None,
+        "qos_schema_version": 2,
+        "rounds_per_level": 16,
+        "task": "task1",
+        "throughput_unit": "milli_requests_per_second",
+        "turnaround_definition": "worker_completed_minus_parent_submitted",
+        "visit_sequence": ["A", "B", "C", "D", "A"],
+    }]
+    with tempfile.TemporaryDirectory() as malformed_name:
+        malformed_path = Path(malformed_name) / "suite.json"
+        malformed_suite = copy.deepcopy(suite)
+        malformed_suite.pop("supplementary_scenarios")
+        malformed_path.write_text(json.dumps(malformed_suite), encoding="utf-8")
+        expect_rejected(
+            lambda: load_suite(malformed_path),
+            "suite fields differ",
+        )
     assert suite["claim_family"] == {
         "familywise_alpha": 0.05,
         "hypotheses": [
@@ -950,7 +1161,7 @@ def main() -> int:
         8, 24, 48, 96,
     ]
     assert file_experiments["file_query_path_index"]["operation_counts"] == [
-        8, 6, 4, 4,
+        8, 6, 4, 1,
     ]
     assert file_experiments["file_query_table_ablation"]["loads"] == [
         24, 64, 96,
@@ -1035,6 +1246,7 @@ def main() -> int:
         legacy_suite = copy.deepcopy(suite)
         legacy_suite["schema_version"] = 2
         legacy_suite["suite_id"] = "agentos-evaluation-v2"
+        legacy_suite.pop("supplementary_scenarios")
         legacy_suite_path = root / "legacy-suite.json"
         legacy_suite_path.write_text(
             json.dumps(legacy_suite), encoding="utf-8"
@@ -1071,7 +1283,8 @@ def main() -> int:
         targeted = validate_guest_log(
             targeted_log, suite, "0000000000000001"
         )
-        assert targeted == {
+        assert {key: value for key, value in targeted.items()
+                if key != "revisit_isolation"} == {
             "schema_version": 1,
             "kind": "agentos-evaluation-guest-validation",
             "challenge": "0000000000000001",
@@ -1081,6 +1294,33 @@ def main() -> int:
             "catalog_descriptors": 4,
             "status": "supported",
         }
+        revisit = targeted["revisit_isolation"]
+        assert revisit is not None
+        assert revisit["qos_schema_version"] == 2
+        assert revisit["performance_gate"] is None
+        assert {
+            key: revisit[key]
+            for key in ("correct", "contamination", "return_visit", "fallback")
+        } == {
+            "correct": 5,
+            "contamination": 0,
+            "return_visit": 1,
+            "fallback": 0,
+        }
+        assert [item["concurrency"] for item in revisit["concurrency"]] == [1, 2, 4]
+        assert all(
+            item["completed"] == item["requests"]
+            and item["throughput_milli_rps"] > 0
+            and item["goodput_milli_rps"] == item["throughput_milli_rps"]
+            and item["avg_milli_us"] > 0
+            and item["p50_us"] <= item["p90_us"] <= item["p99_us"]
+            and item["wait_p50_us"] <= item["wait_p90_us"] <= item["wait_p99_us"]
+            and item["service_p50_us"] <= item["service_p90_us"] <= item["service_p99_us"]
+            and item["fairness_jain_ppm"] == 1_000_000
+            and item["max_min_fairness_ppm"] == 1_000_000
+            and item["isolated"] == item["requests"]
+            for item in revisit["concurrency"]
+        )
         stdout = io.StringIO()
         with redirect_stdout(stdout):
             assert evaluation_contract_main([
@@ -1095,6 +1335,55 @@ def main() -> int:
                 targeted_log, suite, "0000000000000002"
             ),
             "challenge differs",
+        )
+        original_targeted = targeted_log.read_text(encoding="utf-8").splitlines()
+        revisit_index = next(
+            index for index, line in enumerate(original_targeted)
+            if line.startswith("agenteval_ucore: revisit ")
+        )
+        missing_revisit = root / "missing-revisit.log"
+        missing_revisit.write_text(
+            "\n".join(
+                original_targeted[:revisit_index]
+                + original_targeted[revisit_index + 1:]
+            ) + "\n",
+            encoding="utf-8",
+        )
+        expect_rejected(
+            lambda: validate_guest_log(
+                missing_revisit, suite, "0000000000000001"
+            ),
+            "revisit observation coverage is incomplete",
+        )
+        sample_indexes = [
+            index for index, line in enumerate(original_targeted)
+            if line.startswith("agenteval_ucore: concurrency_sample ")
+        ]
+        reordered = list(original_targeted)
+        reordered[sample_indexes[0]], reordered[sample_indexes[1]] = (
+            reordered[sample_indexes[1]], reordered[sample_indexes[0]]
+        )
+        reordered_path = root / "reordered-concurrency.log"
+        reordered_path.write_text("\n".join(reordered) + "\n", encoding="utf-8")
+        expect_rejected(
+            lambda: validate_guest_log(
+                reordered_path, suite, "0000000000000001"
+            ),
+            "revisit concurrency schedule differs",
+        )
+        bad_qos = list(original_targeted)
+        wait_match = re.search(r" wait_us=(\d+) ", bad_qos[sample_indexes[0]])
+        assert wait_match is not None
+        bad_qos[sample_indexes[0]] = bad_qos[sample_indexes[0]].replace(
+            wait_match.group(0), f" wait_us={int(wait_match.group(1)) + 1} ", 1
+        )
+        bad_qos_path = root / "bad-qos.log"
+        bad_qos_path.write_text("\n".join(bad_qos) + "\n", encoding="utf-8")
+        expect_rejected(
+            lambda: validate_guest_log(
+                bad_qos_path, suite, "0000000000000001"
+            ),
+            "revisit QoS timestamps differ",
         )
         summary, rows = build(SUITE_PATH, plan_path, root)
         validate_summary(summary)
@@ -2463,14 +2752,14 @@ def main() -> int:
                 "wrong-contest-loads",
                 0,
                 lambda experiment: experiment.__setitem__(
-                    "loads", [8, 24, 48, 95]
+                    "loads", [8, 24, 47, 96]
                 ),
             ),
             (
                 "wrong-contest-operations",
                 0,
                 lambda experiment: experiment.__setitem__(
-                    "operation_counts", [8, 6, 4, 3]
+                    "operation_counts", [8, 6, 3, 1]
                 ),
             ),
             (
@@ -2625,8 +2914,8 @@ def main() -> int:
         fingerprint_log = fingerprint / "boot-01/guest.log"
         fingerprint_log.write_text(
             re.sub(
-                r"result_fingerprint=[0-9a-f]{16}",
-                "result_fingerprint=ffffffffffffffff",
+                r"(agenteval_ucore: sample [^\n]*result_fingerprint=)[0-9a-f]{16}",
+                r"\1ffffffffffffffff",
                 fingerprint_log.read_text(encoding="utf-8"),
                 count=1,
             ),

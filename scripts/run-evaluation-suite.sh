@@ -39,9 +39,25 @@ SCENARIO_SOURCE_TOOL="host_tools/scenario_timing_source_contract.py"
 COMPATIBILITY_TOOL="host_tools/compatibility_overhead.py"
 MEASUREMENT_SOURCE_RECEIPT_NAME="measurement-source-receipt.json"
 TRUSTED_PYTHON_ENTRY="scripts/trusted-python-entry.py"
+RESOURCE_JOBS_TOOL="scripts/resource-jobs.py"
+PARALLEL_TEST_RUNNER="scripts/run-parallel-tests.py"
 
 run_repo_python() {
 	"${PYTHON_BIN}" -I -S "${TRUSTED_PYTHON_ENTRY}" "$@"
+}
+
+evaluation_jobs() {
+	local kind="$1" variable="$2" maximum="$3" value
+	value="${!variable:-}"
+	if [[ -z "${value}" ]]; then
+		require_file "${RESOURCE_JOBS_TOOL}"
+		value="$("${PYTHON_BIN}" -I -S -B "${RESOURCE_JOBS_TOOL}" --kind "${kind}")"
+	fi
+	[[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= maximum )) || {
+		echo "[evaluation] ${variable} must be between 1 and ${maximum}" >&2
+		return 2
+	}
+	printf '%s\n' "${value}"
 }
 
 usage() {
@@ -62,6 +78,7 @@ Environment:
   MAKE_TOOL, SIZE_TOOL   explicit build and GNU size executables for kernel-cost
   TOOLPREFIX, QEMU       RISC-V toolchain prefix and QEMU executable
   PYTHON_BIN, BASH_BIN, HOST_CC  exact host Python, Bash and C compiler
+  AGENTOS_BUILD_JOBS, AGENTOS_TEST_JOBS  bounded overrides; defaults are resource-adaptive
   AGENT_TEST_DURATION_PROFILE    local-e3 only on its bound machine, otherwise none
   EVALUATION_WSL_DISTRO  exact WSL distribution used for every formal stage on Windows
   EVALUATION_WSL_TOOLPREFIX, EVALUATION_WSL_QEMU  tools inside that WSL distribution
@@ -198,7 +215,8 @@ pipeline_status_selftest() {
 
 preflight_scenario_builders() {
 	[[ "${EVALUATION_INCLUDE_SCENARIO}" == "1" ]] || return 0
-	local make_tool="${MAKE_TOOL:-make}"
+	local make_tool="${MAKE_TOOL:-make}" build_jobs
+	build_jobs="$(evaluation_jobs build AGENTOS_BUILD_JOBS 24)"
 	require_file baseline_ucore/nfs/Makefile
 	(
 		cleanup_scenario_builder() {
@@ -215,6 +233,7 @@ preflight_scenario_builders() {
 		trap cleanup_scenario_builder EXIT
 		"${make_tool}" -rR -C baseline_ucore/nfs -f Makefile clean
 		"${make_tool}" -rR -C baseline_ucore/nfs -f Makefile fs \
+			-j "${build_jobs}" \
 			HOSTCC="${HOST_CC}"
 	)
 }
@@ -411,11 +430,14 @@ run_smoke() {
 		host_tools/test_evaluation_bundle.py
 		host_tools/test_compatibility_overhead.py
 	)
-	local test
+	local test test_jobs
 	for test in "${tests[@]}"; do
 		require_file "${test}"
-		"${PYTHON_BIN}" "${test}"
 	done
+	require_file "${PARALLEL_TEST_RUNNER}"
+	test_jobs="$(evaluation_jobs host AGENTOS_TEST_JOBS 24)"
+	"${PYTHON_BIN}" -I -S -B "${PARALLEL_TEST_RUNNER}" \
+		--jobs "${test_jobs}" --python "${PYTHON_BIN}" "${tests[@]}"
 	"${PYTHON_BIN}" -m py_compile \
 		"${CAMPAIGN_TOOL}" "${CONTRACT_TOOL}" "${PLATFORM_TOOL}" \
 		"${KERNEL_BUILD_TOOL}" "${KERNEL_COST_TOOL}" \

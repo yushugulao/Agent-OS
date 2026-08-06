@@ -313,7 +313,9 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
                 bank[offset] = identity_class
                 offset = entry + layout.entry_fields["link_flags"]
                 bank[offset] = (
-                    (layout.link_flags["latest_tail"] if index >= 4 else 0)
+                    (layout.link_flags["latest_tail"]
+                     if index >= layout.records_per_scope - layout.latest_tail
+                     else 0)
                     | (layout.link_flags["prev_retained"] if index != 0 else 0)
                 )
                 offset = entry + layout.entry_fields["principal"]
@@ -353,43 +355,43 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
             self.layout.link_flags["latest_tail"],
         )
 
-    def test_short_format_fixture_is_not_full_v7_acceptance(self) -> None:
+    def test_short_format_fixture_is_not_full_v8_acceptance(self) -> None:
         self.assertEqual(self.verify()["status"], "verified")
         with self.assertRaisesRegex(
-            ObservationEvidenceError, "observation v7 acceptance failed"
+            ObservationEvidenceError, "observation v8 acceptance failed"
         ):
             verify_observation_acceptance(self.image, self.marker)
 
-    def test_full_v7_acceptance_reports_decidable_scope_fields(self) -> None:
+    def test_full_v8_acceptance_reports_decidable_scope_fields(self) -> None:
         self._install_acceptance_scope()
         result = verify_observation_acceptance(self.image, self.marker)
         matched = result["arena"]["observation"]["matched_scope"]
-        self.assertEqual(matched["record_count"], 8)
+        self.assertEqual(matched["record_count"], 6)
         self.assertEqual(matched["successful_records"], 12)
         self.assertEqual(matched["retained_tail_count"], 4)
-        self.assertEqual(matched["retained_anchor_count"], 4)
+        self.assertEqual(matched["retained_anchor_count"], 2)
         self.assertEqual(
             matched["anchor_identity_classes"],
-            ["authority", "causal", "telemetry"],
+            ["authority", "causal"],
         )
-        self.assertEqual(matched["anchor_kinds"], [2, 3, 4, 5])
+        self.assertEqual(matched["anchor_kinds"], [2, 3])
         self.assertEqual(
             result["acceptance"],
             {
-                "profile": "observation-v7-tail-diversity",
+                "profile": "observation-v8-tail-diversity",
                 "matched_scope": 3,
-                "record_count": 8,
+                "record_count": 6,
                 "successful_records": 12,
                 "tail_count": 4,
-                "anchor_count": 4,
+                "anchor_count": 2,
                 "anchor_has_causal": True,
                 "anchor_has_authority": True,
-                "anchor_kind_count": 4,
+                "anchor_kind_count": 2,
                 "status": "verified",
             },
         )
 
-    def test_full_v7_acceptance_cli_emits_json(self) -> None:
+    def test_full_v8_acceptance_cli_emits_json(self) -> None:
         self._install_acceptance_scope()
         guest_log = self.root / "boot1.log"
         guest_log.write_text(self.marker + "\n", encoding="utf-8")
@@ -411,9 +413,9 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
         self.assertTrue(completed.stdout.startswith(prefix), completed.stdout)
         payload = json.loads(completed.stdout[len(prefix) :])
         self.assertEqual(payload["acceptance"]["status"], "verified")
-        self.assertEqual(payload["acceptance"]["anchor_count"], 4)
+        self.assertEqual(payload["acceptance"]["anchor_count"], 2)
 
-    def test_full_v7_acceptance_rejects_missing_anchor_identity_class(self) -> None:
+    def test_full_v8_acceptance_rejects_missing_anchor_identity_class(self) -> None:
         for name, index, replacement in (
             ("causal", 0, "telemetry"),
             ("authority", 1, "telemetry"),
@@ -437,12 +439,12 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
                 ):
                     verify_observation_acceptance(self.image, self.marker)
 
-    def test_full_v7_acceptance_rejects_single_anchor_kind(self) -> None:
+    def test_full_v8_acceptance_rejects_single_anchor_kind(self) -> None:
         self._install_acceptance_scope()
         selected: dict[str, int] = {}
 
         def mutate(bank: bytearray) -> None:
-            for index in range(4):
+            for index in range(self.layout.diversity_anchors):
                 offset = (
                     self._record_offset(index)
                     + self.layout.record_fields["kind"]
@@ -458,7 +460,7 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
         ):
             verify_observation_acceptance(self.image, self.marker)
 
-    def test_full_v7_acceptance_rejects_no_retention_pressure(self) -> None:
+    def test_full_v8_acceptance_rejects_no_retention_pressure(self) -> None:
         self._install_acceptance_scope()
         selected: dict[str, int] = {}
 
@@ -468,32 +470,32 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
             bank[offset : offset + 8] = b"\0" * 8
             scope = self._first_scope_offset()
             offset = scope + self.layout.scope_fields["total_records"]
-            bank[offset : offset + 8] = (8).to_bytes(8, "little")
+            bank[offset : offset + 8] = (6).to_bytes(8, "little")
             selected["receipt_record_hash"] = self._rehash_record_chain(bank)
             self._refresh_outer(bank)
 
         self._mutate_banks(mutate)
         self._replace_marker_fields(**selected)
         with self.assertRaisesRegex(
-            ObservationEvidenceError, "successful_records=8"
+            ObservationEvidenceError, "successful_records=6"
         ):
             verify_observation_acceptance(self.image, self.marker)
 
-    def test_full_v7_acceptance_rejects_short_retained_set(self) -> None:
+    def test_full_v8_acceptance_rejects_short_retained_set(self) -> None:
         self._install_acceptance_scope()
         selected: dict[str, int] = {}
 
         def mutate(bank: bytearray) -> None:
             layout = self.layout
             bank[
-                self._entry_offset(7) : self._entry_offset(7) + layout.entry_bytes
+                self._entry_offset(5) : self._entry_offset(5) + layout.entry_bytes
             ] = b"\0" * layout.entry_bytes
             scope = self._first_scope_offset()
             offset = scope + layout.scope_fields["record_count"]
-            bank[offset : offset + 4] = (7).to_bytes(4, "little")
-            offset = self._entry_offset(3) + layout.entry_fields["link_flags"]
+            bank[offset : offset + 4] = (5).to_bytes(4, "little")
+            offset = self._entry_offset(1) + layout.entry_fields["link_flags"]
             bank[offset] |= layout.link_flags["latest_tail"]
-            record = self._record_offset(6)
+            record = self._record_offset(4)
             hash_offset = record + layout.record_fields["record_hash"]
             record_hash = int.from_bytes(
                 bank[hash_offset : hash_offset + 8], "little"
@@ -501,9 +503,9 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
             offset = scope + layout.scope_fields["ledger_hash"]
             bank[offset : offset + 8] = record_hash.to_bytes(8, "little")
             selected.update(
-                receipt_sequence=106,
+                receipt_sequence=104,
                 receipt_record_hash=record_hash,
-                receipt_id=9007,
+                receipt_id=9005,
             )
             self._refresh_outer(bank)
 
@@ -511,7 +513,7 @@ class ObservationDiskEvidenceTests(unittest.TestCase):
         self._replace_marker_fields(**selected)
         self.assertEqual(self.verify()["status"], "verified")
         with self.assertRaisesRegex(
-            ObservationEvidenceError, "record_count=7"
+            ObservationEvidenceError, "record_count=5"
         ):
             verify_observation_acceptance(self.image, self.marker)
 
