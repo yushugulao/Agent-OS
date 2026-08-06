@@ -48,6 +48,18 @@ RUNNER_TICK_STATUS_UNAVAILABLE = "unavailable"
 RUNNER_TICK_REASON_PLAIN_ZERO = "plain_runtime_cases_zero"
 MAIN_FLOW_VERIFICATION_ORIGIN = "host_inventory"
 MAIN_FLOW_STAGE_COUNT = len(MAIN_FLOW_SOURCE_SPECS)
+REMOVED_RESULT_ARTIFACTS = (
+    "runner-sweep.csv",
+    "monitor.html",
+    "delivery-readiness.csv",
+    "delivery-readiness.html",
+    "test-suite.csv",
+    "test-suite.html",
+    "experiment-design.csv",
+    "experiment-design.html",
+    "evidence-manifest.csv",
+    "evidence-map.html",
+)
 
 
 @dataclass(frozen=True)
@@ -600,15 +612,6 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_runner_sweep_csv(meta: dict[str, object], out_path: Path) -> None:
-    status, reason = runner_tick_evidence(meta)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["evidence_status", "evidence_reason"])
-        writer.writerow([status, reason])
-
-
 EXPERIMENT_SPECS = {
     "file_metadata": {
         "title": "文件查询真实路径对照",
@@ -722,31 +725,12 @@ def write_experiment_stats_csv(rows: list[dict[str, object]], out_path: Path) ->
             writer.writerow({column: row.get(column, "") for column in columns})
 
 
-def write_experiment_mechanism_csv(out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["experiment", "title", "plain_path", "agentos_path", "mechanism", "raw_csv"])
-        for experiment, spec in EXPERIMENT_SPECS.items():
-            writer.writerow(
-                [
-                    experiment,
-                    spec["title"],
-                    spec["plain_path"],
-                    spec["agentos_path"],
-                    spec["mechanism"],
-                    f"experiments/raw/{spec['raw_file']}",
-                ]
-            )
-
-
 def write_experiment_outputs(meta: dict[str, object], out_dir: Path) -> list[dict[str, object]]:
     rows = experiment_rows(meta)
     if not rows:
         return []
     write_experiment_raw_csvs(rows, out_dir)
     write_experiment_stats_csv(rows, out_dir / "experiments" / "experiment-stats.csv")
-    write_experiment_mechanism_csv(out_dir / "experiments" / "mechanism-notes.csv")
     return rows
 
 
@@ -810,550 +794,6 @@ def experiment_file_bar_svg(rows: list[dict[str, object]], out_path: Path) -> No
     )
 
 
-def experiment_design_rows(meta: dict[str, object]) -> list[dict[str, str]]:
-    measured = experiment_rows(meta)
-    trials = len({int(as_number(row.get("trial"))) for row in measured})
-    loads = sorted({int(as_number(row.get("load"))) for row in measured})
-    return [
-        {
-            "scenario": "文件对象查询实测",
-            "workload": "同一次 Guest 运行分别执行强制遍历、冷索引和热索引；不使用内核查询结果缓存。",
-            "plain_path": EXPERIMENT_SPECS["file_metadata"]["plain_path"],
-            "agentos_path": EXPERIMENT_SPECS["file_metadata"]["agentos_path"],
-            "parameter": f"observed_loads={loads or 'none'}; measured_trials={trials}。",
-            "metric": "每次查询实际触达记录、操作次数、Guest 原始微秒差值；冷索引另列内核实际报告的重建记录数。",
-            "source": "experiments/raw/file-query-benchmark.csv, measured-experiments.json",
-            "artifact": "charts/experiment-file-query-bar.svg" if measured else "not-measured",
-        }
-    ]
-
-
-def write_experiment_design_csv(meta: dict[str, object], out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["scenario", "workload", "plain_path", "agentos_path", "parameter", "metric", "source", "artifact"])
-        for row in experiment_design_rows(meta):
-            writer.writerow(
-                [
-                    row["scenario"],
-                    row["workload"],
-                    row["plain_path"],
-                    row["agentos_path"],
-                    row["parameter"],
-                    row["metric"],
-                    row["source"],
-                    row["artifact"],
-                ]
-            )
-
-
-def write_experiment_design_page(meta: dict[str, object], out_path: Path) -> None:
-    rows_html = []
-    for row in experiment_design_rows(meta):
-        artifact = row["artifact"]
-        artifact_html = f'<a href="{escape(artifact)}">{escape(artifact)}</a>'
-        rows_html.append(
-            "<tr><td>{scenario}</td><td>{workload}</td><td>{plain_path}</td><td>{agentos_path}</td><td>{parameter}</td><td>{metric}</td><td>{source}</td><td>{artifact}</td></tr>".format(
-                scenario=escape(row["scenario"]),
-                workload=escape(row["workload"]),
-                plain_path=escape(row["plain_path"]),
-                agentos_path=escape(row["agentos_path"]),
-                parameter=escape(row["parameter"]),
-                metric=escape(row["metric"]),
-                source=escape(row["source"]),
-                artifact=artifact_html,
-            )
-        )
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 实验场景说明</title>
-  <style>
-    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; }}
-    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
-    main {{ max-width:1240px; margin:0 auto; padding:24px 42px 42px; }}
-    h1 {{ margin:0 0 10px; font-size:28px; }}
-    p {{ line-height:1.75; color:var(--muted); }}
-    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }}
-    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff; font-size:14px; }}
-    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
-    th {{ background:#eef3f8; }}
-    a {{ color:#075985; text-decoration:none; }}
-    @media (max-width:900px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>AgentOS 实验场景说明</h1>
-    <p>本页说明本次双目标测试中每类场景的负载、对照路径、参数、指标和数据来源。它用于解释图表数字从何而来，以及为什么这些测试能说明 AgentOS 主流程效果。</p>
-  </header>
-  <main>
-    <div class="links">
-      <a href="experiment-design.csv">下载 CSV</a>
-      <a href="index.html">图表索引页</a>
-    </div>
-    <table>
-      <thead><tr><th>场景</th><th>负载设计</th><th>普通目标路径</th><th>AgentOS 目标路径</th><th>参数</th><th>指标</th><th>数据来源</th><th>关联产物</th></tr></thead>
-      <tbody>{"".join(rows_html)}</tbody>
-    </table>
-  </main>
-</body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
-
-
-def test_suite_rows() -> list[dict[str, str]]:
-    return [
-        {
-            "level": "主运行路径",
-            "command": "make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-",
-            "qemu": "是",
-            "purpose": "运行 plain uCore 与 AgentOS-uCore 两个目标，生成状态文件、CSV、HTML 和 SVG 图表。",
-            "when_to_use": "完整复查前必须运行。",
-            "main_output": "results/latest/",
-        },
-        {
-            "level": "日常快速检查",
-            "command": "make target-readiness",
-            "qemu": "否",
-            "purpose": "检查目录职责、双目标结构、Host 工具契约和图表生成逻辑。",
-            "when_to_use": "修改文档、Host 工具、结果页或脚本后运行。",
-            "main_output": "终端通过标记",
-        },
-        {
-            "level": "完整验证",
-            "command": "make full-verify TOOLPREFIX=riscv64-linux-gnu-",
-            "qemu": "是",
-            "purpose": "串联结构检查、Host 工具检查、双目标 QEMU 和 AgentOS 内核专项测试。",
-            "when_to_use": "最终审查前运行。",
-            "main_output": "终端输出和 results/latest/",
-        },
-        {
-            "level": "AgentOS 内核专项",
-            "command": "TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 CASE_TIMEOUT=240s bash scripts/run-agent-tests.sh",
-            "qemu": "是",
-            "purpose": "在 AgentOS-uCore 目标中运行 Agent Context、文件对象、事件队列、权限、LLM relay 等专项程序。",
-            "when_to_use": "内核、用户程序或 syscall ABI 改动后运行。",
-            "main_output": "AgentOS 专项测试通过标记",
-        },
-        {
-            "level": "图表可读性检查",
-            "command": "bash -lc 'python3 host_tools/test_chart_svg_layout_contract.py'",
-            "qemu": "否",
-            "purpose": "解析生成后的 SVG 和文档示例图，检查文字是否在画布内以及是否明显互相压住。",
-            "when_to_use": "修改图表生成逻辑或文档示例图后运行。",
-            "main_output": "test_chart_svg_layout_contract: passed",
-        },
-    ]
-
-
-def write_test_suite_csv(out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["level", "command", "qemu", "purpose", "when_to_use", "main_output"])
-        for row in test_suite_rows():
-            writer.writerow([row["level"], row["command"], row["qemu"], row["purpose"], row["when_to_use"], row["main_output"]])
-
-
-def write_test_suite_page(out_path: Path) -> None:
-    rows_html = []
-    for row in test_suite_rows():
-        rows_html.append(
-            "<tr><td>{level}</td><td><code>{command}</code></td><td>{qemu}</td><td>{purpose}</td><td>{when_to_use}</td><td>{main_output}</td></tr>".format(
-                level=escape(row["level"]),
-                command=escape(row["command"]),
-                qemu=escape(row["qemu"]),
-                purpose=escape(row["purpose"]),
-                when_to_use=escape(row["when_to_use"]),
-                main_output=escape(row["main_output"]),
-            )
-        )
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 测试入口说明</title>
-  <style>
-    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; }}
-    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
-    main {{ max-width:1240px; margin:0 auto; padding:24px 42px 42px; }}
-    h1 {{ margin:0 0 10px; font-size:28px; }}
-    p {{ line-height:1.75; color:var(--muted); }}
-    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }}
-    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff; font-size:14px; }}
-    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
-    th {{ background:#eef3f8; }}
-    code {{ white-space:normal; overflow-wrap:anywhere; }}
-    @media (max-width:900px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>AgentOS 测试入口说明</h1>
-    <p>本页把主运行路径、快速检查、完整验证和专项测试分开说明。日常复查优先使用前两条命令；深入检查时再运行完整验证和专项测试。</p>
-  </header>
-  <main>
-    <div class="links">
-      <a href="test-suite.csv">下载 CSV</a>
-      <a href="experiment-design.html">实验场景说明</a>
-    </div>
-    <table>
-      <thead><tr><th>用途层级</th><th>命令</th><th>启动 QEMU</th><th>检查内容</th><th>使用时机</th><th>主要输出</th></tr></thead>
-      <tbody>{"".join(rows_html)}</tbody>
-    </table>
-  </main>
-</body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
-
-
-def delivery_readiness_rows() -> list[dict[str, str]]:
-    return [
-        {
-            "requirement": "带数据的测试结果图表化",
-            "status": "已覆盖",
-            "evidence": "index.html; charts/*.svg; experiments/status.json",
-            "verification": "test_summarize_dual_platform_results.py",
-            "note": "实验数据仅从可追溯 Guest marker 提取；缺失时明确标记 unavailable，不生成填充数据。",
-        },
-        {
-            "requirement": "图表文字不互相遮挡",
-            "status": "已覆盖",
-            "evidence": "charts/*.svg",
-            "verification": "test_chart_svg_layout_contract.py",
-            "note": "测试解析 SVG 文本框，检查画布范围和明显相交问题。",
-        },
-        {
-            "requirement": "测试入口清晰，不堆叠旧测试",
-            "status": "已覆盖",
-            "evidence": "test-suite.html; test-suite.csv",
-            "verification": "test_summarize_dual_platform_results.py",
-            "note": "主运行路径、快速检查、完整验证和专项测试分开说明。",
-        },
-        {
-            "requirement": "实验场景、负载、对照和指标清楚",
-            "status": "已覆盖",
-            "evidence": "experiment-design.html; experiment-design.csv; experiments/mechanism-notes.csv",
-            "verification": "test_summarize_dual_platform_results.py",
-            "note": "每组实验都列出普通路径、AgentOS 路径、参数、指标、原始数据和机制解释。",
-        },
-        {
-            "requirement": "结果能追溯到原始数据",
-            "status": "已覆盖",
-            "evidence": "evidence-map.html; evidence-manifest.csv",
-            "verification": "test_summarize_dual_platform_results.py",
-            "note": "图表、CSV、报告和复查用途都有索引。",
-        },
-        {
-            "requirement": "同时覆盖功能状态和性能观测",
-            "status": "已覆盖",
-            "evidence": "runtime-observation.svg; runner-sweep.csv; experiments/status.json",
-            "verification": "test_summarize_dual_platform_results.py",
-            "note": "runner 只披露 unavailable 状态；文件查询仅在可信测量可用时生成图，不生成零值占位图。",
-        },
-        {
-            "requirement": "文档避免空泛待办描述",
-            "status": "已覆盖",
-            "evidence": "README.md; docs/; docs/agentos/",
-            "verification": "verify-dual-target-structure.sh",
-            "note": "结构检查包含文档措辞扫描，不把开发过程写入仓库文档。",
-        },
-    ]
-
-
-def write_delivery_readiness_csv(out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["requirement", "status", "evidence", "verification", "note"])
-        for row in delivery_readiness_rows():
-            writer.writerow([row["requirement"], row["status"], row["evidence"], row["verification"], row["note"]])
-
-
-def write_delivery_readiness_page(out_path: Path) -> None:
-    rows_html = []
-    for row in delivery_readiness_rows():
-        rows_html.append(
-            "<tr><td>{requirement}</td><td>{status}</td><td>{evidence}</td><td>{verification}</td><td>{note}</td></tr>".format(
-                requirement=escape(row["requirement"]),
-                status=escape(row["status"]),
-                evidence=escape(row["evidence"]),
-                verification=escape(row["verification"]),
-                note=escape(row["note"]),
-            )
-        )
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 结果材料核对</title>
-  <style>
-    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --ok:#166534; }}
-    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
-    main {{ max-width:1240px; margin:0 auto; padding:24px 42px 42px; }}
-    h1 {{ margin:0 0 10px; font-size:28px; }}
-    p {{ line-height:1.75; color:var(--muted); }}
-    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }}
-    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff; font-size:14px; }}
-    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
-    th {{ background:#eef3f8; }}
-    td:nth-child(2) {{ color:var(--ok); font-weight:700; white-space:nowrap; }}
-    @media (max-width:900px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>AgentOS 结果材料核对</h1>
-    <p>本页把测试、图表、文档和结果材料的关键要求对应到当前结果产物和验证脚本。它用于运行结束后快速确认结果是否齐全。</p>
-  </header>
-  <main>
-    <div class="links">
-      <a href="delivery-readiness.csv">下载 CSV</a>
-      <a href="test-suite.html">测试入口说明</a>
-      <a href="evidence-map.html">证据索引页</a>
-    </div>
-    <table>
-      <thead><tr><th>要求</th><th>状态</th><th>证据产物</th><th>验证脚本</th><th>说明</th></tr></thead>
-      <tbody>{"".join(rows_html)}</tbody>
-    </table>
-  </main>
-</body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
-
-
-def chart_evidence_description(chart_name: str) -> tuple[str, str]:
-    descriptions = {
-        "runtime-observation.svg": ("summary.csv, stage-timings.csv", "运行健康、状态产物、内核事实和 QEMU 诊断"),
-        "experiment-file-query-bar.svg": ("experiments/raw/file-query-benchmark.csv", "同一真实 Guest 运行中的强制遍历、冷索引重建和热索引查询"),
-    }
-    return descriptions.get(chart_name, ("summary.csv", "双目标运行派生图表"))
-
-
-def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
-    rows = [
-        {
-            "artifact": "test-suite.html",
-            "kind": "说明页面",
-            "source": "Makefile, scripts, host_tools tests",
-            "proves": "主运行路径、快速检查、完整验证和专项测试入口已经区分清楚",
-            "review_use": "说明应该运行哪些命令",
-        },
-        {
-            "artifact": "delivery-readiness.html",
-            "kind": "核对页面",
-            "source": "delivery_readiness_rows",
-            "proves": "结果材料要求已经对应到证据产物和验证脚本",
-            "review_use": "运行结束后快速核对结果完整性",
-        },
-        {
-            "artifact": "delivery-readiness.csv",
-            "kind": "数据表",
-            "source": "delivery_readiness_rows",
-            "proves": "结果材料核对结果可以复制和脚本复查",
-            "review_use": "结果材料核对表",
-        },
-        {
-            "artifact": "test-suite.csv",
-            "kind": "数据表",
-            "source": "test_suite_rows",
-            "proves": "测试入口说明可以被脚本复查和复制",
-            "review_use": "测试入口表",
-        },
-        {
-            "artifact": "experiment-design.html",
-            "kind": "说明页面",
-            "source": "state-compare-summary.json, runner-sweep.csv, stage-timings.csv",
-            "proves": "每类测试场景都有负载、对照路径、参数、指标和数据来源",
-            "review_use": "解释测试为什么这样设计",
-        },
-        {
-            "artifact": "experiment-design.csv",
-            "kind": "数据表",
-            "source": "experiment_design_rows",
-            "proves": "实验场景说明可以被脚本复查和复制",
-            "review_use": "测试设计表",
-        },
-        {
-            "artifact": "monitor.html",
-            "kind": "观测页面",
-            "source": "summary.csv, stage-timings.csv, Host run receipts",
-            "proves": "本次运行是否健康、AgentOS 是否有额外内核事实",
-            "review_use": "先确认运行可信度",
-        },
-        {
-            "artifact": "index.html",
-            "kind": "图表页面",
-            "source": "summary.csv, runner-sweep.csv, experiments/status.json",
-            "proves": "测试数据已生成图表并可集中查看",
-            "review_use": "查看图表总览",
-        },
-        {
-            "artifact": "report.md",
-            "kind": "文字报告",
-            "source": "summary.csv, state-compare-summary.json",
-            "proves": "关键结论、明细表和机制说明可文字复查",
-            "review_use": "复查材料",
-        },
-        {
-            "artifact": "summary.csv",
-            "kind": "数据表",
-            "source": "QEMU 状态文件、状态对照摘要",
-            "proves": "双目标状态与 QEMU 诊断等基础指标",
-            "review_use": "复查图表基础数字",
-        },
-        {
-            "artifact": "runner-sweep.csv",
-            "kind": "数据表",
-            "source": "state-compare-summary.json:runner_tick_status,runner_tick_reason",
-            "proves": "普通目标没有动态 runner 样本，且没有从参考数据合成性能数值",
-            "review_use": "核对 unavailable 状态与原因",
-        },
-        {
-            "artifact": "experiments/status.json",
-            "kind": "测量状态",
-            "source": "measured-experiments.json",
-            "proves": "真实 Guest 测量是否可用；缺 marker 时不会生成填充数据",
-            "review_use": "先确认性能数据是否可用于结论",
-        },
-        {
-            "artifact": "summary.json",
-            "kind": "机器摘要",
-            "source": "summarize_dual_platform_results.py",
-            "proves": "生成器返回的核心产物路径和状态",
-            "review_use": "脚本复查入口",
-        },
-    ]
-    if any(chart.name == "experiment-file-query-bar.svg" for chart in charts):
-        rows.extend([
-            {
-                "artifact": "experiments/experiment-stats.csv",
-                "kind": "数据表",
-                "source": "experiments/raw/file-query-benchmark.csv",
-                "proves": "真实文件查询测量的 min、avg、max、P50、P95 和 tick 统计",
-                "review_use": "复查统计聚合",
-            },
-            {
-                "artifact": "experiments/mechanism-notes.csv",
-                "kind": "数据表",
-                "source": "EXPERIMENT_SPECS",
-                "proves": "强制遍历、冷索引和热索引的测量边界",
-                "review_use": "解释对照路径",
-            },
-            {
-                "artifact": "experiments/raw/file-query-benchmark.csv",
-                "kind": "原始数据表",
-                "source": "measured-experiments.json + Guest log SHA256",
-                "proves": "逐行绑定 Guest 日志、提交、命令和运行标识的原始测量",
-                "review_use": "复查图表输入和来源",
-            },
-        ])
-    for chart in charts:
-        source, proves = chart_evidence_description(chart.name)
-        rows.append(
-            {
-                "artifact": f"charts/{chart.name}",
-                "kind": "SVG 图表",
-                "source": source,
-                "proves": proves,
-                "review_use": "图表页查看",
-            }
-        )
-    return rows
-
-
-def write_evidence_manifest_csv(charts: list[Path], out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["artifact", "kind", "source", "proves", "review_use"])
-        for row in evidence_manifest_rows(charts):
-            writer.writerow([row["artifact"], row["kind"], row["source"], row["proves"], row["review_use"]])
-
-
-def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
-    display_names = {
-        "delivery-readiness.html": "结果材料核对",
-        "delivery-readiness.csv": "结果核对 CSV",
-        "test-suite.html": "测试入口说明",
-        "experiment-design.html": "实验场景说明",
-        "evidence-map.html": "证据索引页",
-        "index.html": "图表索引页",
-        "monitor.html": "运行观测面板",
-    }
-    rows_html = []
-    for row in evidence_manifest_rows(charts):
-        artifact = row["artifact"]
-        link = artifact if artifact.endswith((".html", ".md", ".csv", ".json", ".svg")) else ""
-        display_name = display_names.get(artifact, artifact)
-        artifact_html = f'<a href="{escape(link)}">{escape(display_name)}</a>' if link else escape(display_name)
-        rows_html.append(
-            "<tr><td>{artifact}</td><td>{kind}</td><td>{source}</td><td>{proves}</td><td>{review_use}</td></tr>".format(
-                artifact=artifact_html,
-                kind=escape(row["kind"]),
-                source=escape(row["source"]),
-                proves=escape(row["proves"]),
-                review_use=escape(row["review_use"]),
-            )
-        )
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 证据索引</title>
-  <style>
-    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; }}
-    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
-    main {{ max-width:1180px; margin:0 auto; padding:24px 42px 42px; }}
-    h1 {{ margin:0 0 10px; font-size:28px; }}
-    p {{ line-height:1.75; color:var(--muted); }}
-    table {{ width:100%; border-collapse:collapse; background:#fff; }}
-    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
-    th {{ background:#eef3f8; }}
-    a {{ color:#075985; text-decoration:none; }}
-    @media (max-width:860px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>AgentOS 证据索引</h1>
-    <p>本页列出本次双目标结果目录中的主要产物、数据来源、说明内容和复查用途。每个可打开的文件都保留为相对链接。</p>
-  </header>
-  <main>
-    <table>
-      <thead><tr><th>产物</th><th>类型</th><th>数据来源</th><th>说明内容</th><th>复查用途</th></tr></thead>
-      <tbody>{"".join(rows_html)}</tbody>
-    </table>
-  </main>
-</body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
-
-
-
-
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
     charts_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
@@ -1406,21 +846,11 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     ]
     for chart in charts:
         lines.append(f"- `{chart.relative_to(out_path.parent.parent).as_posix()}`")
-    lines.append("- `runner-sweep.csv`")
     lines.append("- `experiments/status.json`")
     if experiment_rows(meta):
         lines.append("- `experiments/experiment-stats.csv`")
-        lines.append("- `experiments/mechanism-notes.csv`")
         for spec in EXPERIMENT_SPECS.values():
             lines.append(f"- `experiments/raw/{spec['raw_file']}`")
-    lines.append("- `delivery-readiness.csv`")
-    lines.append("- `delivery-readiness.html`")
-    lines.append("- `test-suite.csv`")
-    lines.append("- `test-suite.html`")
-    lines.append("- `evidence-manifest.csv`")
-    lines.append("- `evidence-map.html`")
-    lines.append("- `experiment-design.csv`")
-    lines.append("- `experiment-design.html`")
     lines.extend(
         [
             "",
@@ -1504,7 +934,6 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
-    _, runner_reason = runner_tick_evidence(meta)
     chart_cards = []
     chart_titles = {
         "runtime-observation.svg": "双目标运行观测面板",
@@ -1546,14 +975,9 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
     )
     experiment_links = (
         '<a href="experiments/experiment-stats.csv">下载真实实验统计</a>'
-        '<a href="experiments/mechanism-notes.csv">下载测量边界说明</a>'
         '<a href="charts/experiment-file-query-bar.svg">打开文件查询实测图</a>'
         if experiment_rows(meta)
         else '<a href="experiments/status.json">实验测量 unavailable</a>'
-    )
-    runner_links = (
-        '<a href="runner-sweep.csv">Runner tick unavailable：'
-        f'{escape(runner_reason)}</a>'
     )
     runner_summary = escape(runner_tick_summary_text(meta))
     html = f"""<!doctype html>
@@ -1604,20 +1028,9 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
   </header>
   <main>
     <div class="links">
-      <a href="monitor.html">打开运行观测面板</a>
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
-      <a href="runner-sweep.csv">下载 runner 状态</a>
-      <a href="delivery-readiness.html">打开结果材料核对</a>
-      <a href="delivery-readiness.csv">下载结果材料核对</a>
-      <a href="test-suite.html">打开测试入口说明</a>
-      <a href="test-suite.csv">下载测试入口说明</a>
-      <a href="evidence-map.html">打开证据索引页</a>
-      <a href="evidence-manifest.csv">下载证据索引表</a>
-      <a href="experiment-design.html">打开实验场景说明</a>
-      <a href="experiment-design.csv">下载实验场景说明</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
-      {runner_links}
       {experiment_links}
     </div>
     <p>{runner_summary}</p>
@@ -1648,105 +1061,19 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
     out_path.write_text(html, encoding="utf-8")
 
 
-def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
-    agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
-    _, runner_reason = runner_tick_evidence(meta)
-    observation = next((chart for chart in charts if chart.name == "runtime-observation.svg"), None)
-    observation_rel = observation.relative_to(out_path.parent).as_posix() if observation is not None else ""
-    eval_rows = "".join(
-        f"<tr><td>{escape(status)}</td><td>{escape(text)}</td></tr>" for status, text in evaluation_items(meta)
-    )
-    experiment_links = (
-        '、<a href="experiments/experiment-stats.csv">真实实验统计</a>'
-        '、<a href="charts/experiment-file-query-bar.svg">文件查询实测图</a>'
-        if experiment_rows(meta)
-        else '、<a href="experiments/status.json">实验测量 unavailable</a>'
-    )
-    runner_links = (
-        '、<a href="runner-sweep.csv">runner tick unavailable：'
-        f'{escape(runner_reason)}</a>'
-    )
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 运行观测面板</title>
-  <style>
-    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --accent:#f58518; }}
-    * {{ box-sizing:border-box; }}
-    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
-    h1 {{ margin:0 0 10px; font-size:28px; }}
-    p {{ line-height:1.7; }}
-    main {{ max-width:1180px; margin:0 auto; padding:24px 42px 42px; }}
-    .grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }}
-    .card {{ background:var(--panel); border:1px solid var(--line); padding:14px; min-height:92px; }}
-    .card strong {{ display:block; font-size:23px; margin-bottom:6px; }}
-    .card span {{ color:var(--muted); font-size:13px; }}
-    .panel {{ background:#fff; border:1px solid var(--line); padding:18px; margin-top:18px; }}
-    .panel img {{ display:block; width:100%; height:auto; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff; margin-top:12px; }}
-    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
-    th {{ background:#eef3f8; }}
-    a {{ color:#075985; text-decoration:none; }}
-    code {{ background:#eef3f8; padding:2px 5px; }}
-    @media (max-width:860px) {{ .grid {{ grid-template-columns:1fr 1fr; }} main,header {{ padding-left:18px; padding-right:18px; }} }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>AgentOS 运行观测面板</h1>
-    <p>这个页面面向运行复查，集中展示本次双目标运行健康度、状态兼容性和 AgentOS 内核证据。</p>
-  </header>
-  <main>
-    <div class="grid">
-      <div class="card"><strong>{fmt_number(as_number(state.get("checked_compatibility_records")))}</strong><span>非证据状态兼容记录</span></div>
-      <div class="card"><strong>{fmt_number(as_number(state.get("guest_source_bound_runtime_records")))}</strong><span>Guest 运行记录（非通过门）</span></div>
-      <div class="card"><strong>{fmt_number(as_number(state.get("agentos_extra_files")))}</strong><span>AgentOS 额外状态文件</span></div>
-      <div class="card"><strong>{fmt_number(as_number(state.get("agentos_evidence_checks")))}</strong><span>内核证据检查项</span></div>
-    </div>
-    <section class="panel">
-      <h2>一张图看本次运行</h2>
-      <img src="{escape(observation_rel)}" alt="双目标运行观测面板">
-    </section>
-    <section class="panel">
-      <h2>复查建议</h2>
-      <p>先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code> 生成结果，再从本页查看运行观测图、状态对照和原始数据索引。</p>
-      <p>如果双目标运行异常，本页会优先提示状态文件、QEMU 超时、无输出提示和阶段耗时。普通目标耗时 {escape(str(plain_result.get("qemu_elapsed_seconds", "0")))} 秒，AgentOS 目标耗时 {escape(str(agentos_result.get("qemu_elapsed_seconds", "0")))} 秒。</p>
-    </section>
-    <section class="panel">
-      <h2>自动判读</h2>
-      <table><thead><tr><th>状态</th><th>说明</th></tr></thead><tbody>{eval_rows}</tbody></table>
-    </section>
-    <section class="panel">
-      <h2>相关结果</h2>
-      <p><a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 状态</a>、<a href="charts/runtime-observation.svg">运行观测图</a>{runner_links}{experiment_links}</p>
-    </section>
-  </main>
-</body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
-
-
-
-
-def copy_docs_assets(charts: list[Path], docs_assets_dir: Path) -> None:
-    docs_assets_dir.mkdir(parents=True, exist_ok=True)
-    for old_chart in docs_assets_dir.glob("*.svg"):
-        old_chart.unlink()
-    for chart in charts:
-        shutil.copy2(chart, docs_assets_dir / chart.name)
-
-
-def reset_generated_experiment_surfaces(out_dir: Path) -> None:
-    """Remove generated experiment surfaces before rebuilding a result in-place."""
+def reset_generated_result_surfaces(out_dir: Path) -> None:
+    """Remove obsolete and replaceable surfaces before rebuilding a result."""
+    if out_dir.is_symlink() or getattr(out_dir, "is_junction", lambda: False)():
+        raise ValueError("result output directory is a link")
     out_dir.mkdir(parents=True, exist_ok=True)
     root = out_dir.resolve(strict=True)
+    for name in REMOVED_RESULT_ARTIFACTS:
+        obsolete = root / name
+        if obsolete.is_symlink() or obsolete.is_file():
+            obsolete.unlink()
+        elif obsolete.exists():
+            raise ValueError(f"obsolete result artifact is unsafe: {name}")
+
     experiments = root / "experiments"
     if experiments.is_symlink():
         raise ValueError("experiment output directory is a symlink")
@@ -1827,7 +1154,6 @@ def _published_artifact_path(
 def summarize(
     work_dir: Path,
     out_dir: Path,
-    docs_assets_dir: Path | None = None,
     require_measured_experiments: bool = False,
     published_dir: Path | None = None,
 ) -> dict[str, object]:
@@ -1846,29 +1172,17 @@ def summarize(
         meta["measured_experiment_rows"] = []
         if require_measured_experiments:
             raise ValueError("measured experiment evidence is unavailable: measured-experiments.json is missing")
-    reset_generated_experiment_surfaces(out_dir)
+    reset_generated_result_surfaces(out_dir)
     if measurement_manifest.is_file():
         bundled = persist_verified_measurement(measured, work_dir, out_dir)
         meta["measured_experiment_manifest"] = bundled
         meta["measured_experiment_rows"] = bundled["rows"]
     write_csv(rows, out_dir / "summary.csv")
-    write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
     experiment_data = write_experiment_outputs(meta, out_dir)
     experiment_status = write_experiment_status(meta, out_dir)
-    write_delivery_readiness_csv(out_dir / "delivery-readiness.csv")
-    write_delivery_readiness_page(out_dir / "delivery-readiness.html")
-    write_test_suite_csv(out_dir / "test-suite.csv")
-    write_test_suite_page(out_dir / "test-suite.html")
-    write_experiment_design_csv(meta, out_dir / "experiment-design.csv")
-    write_experiment_design_page(meta, out_dir / "experiment-design.html")
     charts = write_charts(rows, meta, out_dir / "charts")
-    write_evidence_manifest_csv(charts, out_dir / "evidence-manifest.csv")
-    write_evidence_map_page(charts, out_dir / "evidence-map.html")
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
-    write_monitor_page(rows, meta, charts, out_dir / "monitor.html")
-    if docs_assets_dir is not None:
-        copy_docs_assets(charts, docs_assets_dir)
     logical_root = published_dir if published_dir is not None else out_dir
 
     def published(relative: str) -> str:
@@ -1882,27 +1196,16 @@ def summarize(
         ],
         "report": published("report.md"),
         "index": published("index.html"),
-        "monitor": published("monitor.html"),
         "csv": published("summary.csv"),
-        "runner_sweep_csv": published("runner-sweep.csv"),
         "runner_tick_status": runner_status,
         "runner_tick_reason": runner_reason,
         "experiment_status": experiment_status["status"],
         "experiment_status_json": published("experiments/status.json"),
         "experiment_stats_csv": published("experiments/experiment-stats.csv") if experiment_data else None,
-        "experiment_mechanism_csv": published("experiments/mechanism-notes.csv") if experiment_data else None,
         "experiment_raw_csvs": [
             published("experiments/raw/" + str(spec["raw_file"]))
             for spec in EXPERIMENT_SPECS.values() if experiment_data
         ],
-        "delivery_readiness_csv": published("delivery-readiness.csv"),
-        "delivery_readiness": published("delivery-readiness.html"),
-        "test_suite_csv": published("test-suite.csv"),
-        "test_suite": published("test-suite.html"),
-        "experiment_design_csv": published("experiment-design.csv"),
-        "experiment_design": published("experiment-design.html"),
-        "evidence_manifest_csv": published("evidence-manifest.csv"),
-        "evidence_map": published("evidence-map.html"),
         "experiment_rows": len(experiment_data),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -1914,24 +1217,21 @@ def main() -> int:
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--published-dir", type=Path, default=None)
-    parser.add_argument("--docs-assets-dir", type=Path, default=None)
     parser.add_argument("--require-measured-experiments", action="store_true")
     args = parser.parse_args()
 
     summary = summarize(
         args.work_dir,
         args.out_dir,
-        args.docs_assets_dir,
         require_measured_experiments=args.require_measured_experiments,
         published_dir=args.published_dir,
     )
     print(
-        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} status={status}".format(
+        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} status={status}".format(
             rows=summary["rows"],
             charts=len(summary["charts"]),
             report=summary["report"],
             index=summary["index"],
-            monitor=summary["monitor"],
             status=summary["status"],
         )
     )

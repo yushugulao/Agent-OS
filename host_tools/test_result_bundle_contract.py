@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import csv
 import json
 import os
 import tempfile
@@ -18,7 +17,6 @@ from result_bundle_publication import (
     publish_result,
 )
 from result_bundle_contract import (
-    RUNNER_SWEEP_FIELDS,
     SUMMARY_ARTIFACT_FIELDS,
     SUMMARY_CHART_PATHS,
     SUMMARY_RAW_PATHS,
@@ -45,7 +43,6 @@ def make_bundle(root: Path) -> dict[str, object]:
     experiments = root / "experiments"
     source = experiments / "agent-suite-guest.log"
     experiments.mkdir(parents=True)
-    (root / "monitor.html").write_text("<!doctype html><title>results</title>\n", encoding="utf-8")
     source.write_text(MARKER + "\nagentbench_ucore: parent passed\n", encoding="utf-8")
     manifest = extract_file_query_measurements(
         source,
@@ -71,10 +68,6 @@ def make_bundle(root: Path) -> dict[str, object]:
     charts.mkdir()
     for relative in SUMMARY_CHART_PATHS:
         (root / relative).write_text("<svg/>\n", encoding="utf-8")
-    with (root / "runner-sweep.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(RUNNER_SWEEP_FIELDS)
-        writer.writerow(["unavailable", "plain_runtime_cases_zero"])
     for relative in SUMMARY_ARTIFACT_FIELDS.values():
         path = root / relative
         if not path.exists():
@@ -258,6 +251,20 @@ def main() -> int:
         (root / "formula-pass.csv").write_text("status,passed\n", encoding="utf-8")
         expect_rejected(root, "file inventory differs")
 
+    for obsolete in (
+        "runner-sweep.csv",
+        "monitor.html",
+        "evidence-map.html",
+        "experiments/mechanism-notes.csv",
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "obsolete-result-artifact"
+            make_bundle(root)
+            path = root / obsolete
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("obsolete\n", encoding="utf-8")
+            expect_rejected(root, "file inventory differs")
+
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp) / "missing-manifest"
         make_bundle(root)
@@ -265,9 +272,7 @@ def main() -> int:
         expect_rejected(root, "measurement manifest is missing")
 
     missing_cases = (
-        ("monitor.html", "monitor page is missing"),
         ("summary.json", "result summary is missing"),
-        ("runner-sweep.csv", "runner sweep CSV is missing"),
         ("experiments/status.json", "experiment status is missing"),
         ("experiments/agent-suite-guest.log", "measurement source log is missing"),
         (
@@ -327,15 +332,18 @@ def main() -> int:
         write_json(summary_path, summary)
         expect_rejected(root, "removed runner measurement fields")
 
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp) / "tampered-runner-sweep"
-        make_bundle(root)
-        sweep = root / "runner-sweep.csv"
-        sweep.write_text(
-            "evidence_status,evidence_reason\nmeasured,source_bound_complete\n",
-            encoding="utf-8",
-        )
-        expect_rejected(root, "runner availability sweep differs")
+    for field, value in (
+        ("runner_tick_status", "measured"),
+        ("runner_tick_reason", "source_bound_complete"),
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "tampered-runner-summary"
+            make_bundle(root)
+            summary_path = root / "summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary[field] = value
+            write_json(summary_path, summary)
+            expect_rejected(root, "runner availability summary differs")
 
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp) / "nonfinite-status"

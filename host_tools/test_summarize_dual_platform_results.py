@@ -130,20 +130,22 @@ def main() -> int:
             "runtime-observation.svg",
             "experiment-file-query-bar.svg",
         }, result
-        for artifact in (
-            "runner-sweep.csv",
-            "experiments/mechanism-notes.csv",
-            "monitor.html",
-            "evidence-manifest.csv",
-            "evidence-map.html",
-            "delivery-readiness.csv",
-            "delivery-readiness.html",
-            "test-suite.csv",
-            "test-suite.html",
-            "experiment-design.csv",
-            "experiment-design.html",
-        ):
-            assert (out_dir / artifact).is_file(), artifact
+        assert all(field not in result for field in (
+            "runner_sweep_csv",
+            "monitor",
+            "experiment_mechanism_csv",
+            "delivery_readiness_csv",
+            "delivery_readiness",
+            "test_suite_csv",
+            "test_suite",
+            "experiment_design_csv",
+            "experiment_design",
+            "evidence_manifest_csv",
+            "evidence_map",
+        )), result
+        assert all(not (out_dir / artifact).exists()
+                   for artifact in summary.REMOVED_RESULT_ARTIFACTS)
+        assert not (out_dir / "experiments" / "mechanism-notes.csv").exists()
 
         raw = read_csv(out_dir / "experiments" / "raw" / "file-query-benchmark.csv")
         assert len(raw) == 6, raw
@@ -151,12 +153,6 @@ def main() -> int:
         assert all(row["source_log_sha256"] and row["source_marker_sha256"] for row in raw), raw
         assert all(row["source_command_json"] == '["make","run-agent-tests"]' for row in raw), raw
         assert {row["measurement_kind"] for row in raw} == {"guest-syscall"}, raw
-        sweep_rows = read_csv(out_dir / "runner-sweep.csv")
-        assert sweep_rows == [{
-            "evidence_status": "unavailable",
-            "evidence_reason": "plain_runtime_cases_zero",
-        }], sweep_rows
-
         status = json.loads((out_dir / "experiments" / "status.json").read_text(encoding="utf-8"))
         assert status["status"] == "measured" and status["rows"] == 6, status
         assert status["source_log"] == "agent-suite-guest.log", status
@@ -174,10 +170,6 @@ def main() -> int:
         report = (out_dir / "report.md").read_text(encoding="utf-8")
         assert "真实 Guest 文件查询统计" in report
         assert "非证据状态兼容记录" in report
-        evidence = (out_dir / "evidence-manifest.csv").read_text(encoding="utf-8")
-        assert "file-query-benchmark.csv" in evidence and "Guest log SHA256" in evidence
-        assert evidence.splitlines()[0] == "artifact,kind,source,proves,review_use"
-        assert "reader_use" not in evidence
         generated = "\n".join(path.read_text(encoding="utf-8") for path in out_dir.glob("*.html"))
         for obsolete in (
             "cost-replacement.svg",
@@ -193,6 +185,9 @@ def main() -> int:
         fixture(work_dir, measured=False)
         legacy_raw = out_dir / "experiments" / "raw"
         legacy_raw.mkdir(parents=True)
+        (out_dir / "experiments" / "mechanism-notes.csv").write_text(
+            "stale,template\n", encoding="utf-8"
+        )
         for name in (
             "agent-concurrency.csv",
             "context-timeline.csv",
@@ -202,6 +197,8 @@ def main() -> int:
             "recovery-flow.csv",
         ):
             (legacy_raw / name).write_text("formula,generated\n", encoding="utf-8")
+        for artifact in summary.REMOVED_RESULT_ARTIFACTS:
+            (out_dir / artifact).write_text("stale\n", encoding="utf-8")
         charts = out_dir / "charts"
         charts.mkdir()
         (charts / "cost-replacement.svg").write_text("<svg>stale costs</svg>\n", encoding="utf-8")
@@ -221,15 +218,13 @@ def main() -> int:
         }, result
         assert not (out_dir / "experiments" / "raw").exists()
         assert not (out_dir / "experiments" / "experiment-stats.csv").exists()
+        assert not (out_dir / "experiments" / "mechanism-notes.csv").exists()
+        assert all(not (out_dir / artifact).exists()
+                   for artifact in summary.REMOVED_RESULT_ARTIFACTS)
         assert not (out_dir / "charts" / "experiment-context-line.svg").exists()
         assert not (out_dir / "charts" / "cost-replacement.svg").exists()
         assert not (out_dir / "charts" / "runner-ticks.svg").exists()
         assert not (out_dir / "charts" / "runner-speedup.svg").exists()
-        sweep_rows = read_csv(out_dir / "runner-sweep.csv")
-        assert sweep_rows == [{
-            "evidence_status": "unavailable",
-            "evidence_reason": "plain_runtime_cases_zero",
-        }], sweep_rows
         status = json.loads((out_dir / "experiments" / "status.json").read_text(encoding="utf-8"))
         assert status == {
             "schema_version": 1,
@@ -237,30 +232,16 @@ def main() -> int:
             "rows": 0,
             "reason": "measured-experiments.json is missing",
         }, status
-        for artifact in ("report.md", "index.html", "monitor.html"):
+        for artifact in ("report.md", "index.html"):
             rendered = (out_dir / artifact).read_text(encoding="utf-8")
             assert "unavailable" in rendered and "plain_runtime_cases_zero" in rendered, artifact
             assert "charts/runner-" not in rendered, artifact
-        manifest_rows = read_csv(out_dir / "evidence-manifest.csv")
-        assert any(row["artifact"] == "runner-sweep.csv" for row in manifest_rows), manifest_rows
-        assert not any(row["artifact"].startswith("charts/runner-") for row in manifest_rows), manifest_rows
         try:
             summary.summarize(work_dir, out_dir, require_measured_experiments=True)
         except ValueError as error:
             assert "unavailable" in str(error), error
         else:
             raise AssertionError("required measured evidence was silently accepted")
-
-    with tempfile.TemporaryDirectory() as work_tmp, tempfile.TemporaryDirectory() as out_tmp:
-        work_dir, out_dir = Path(work_tmp), Path(out_tmp)
-        fixture(work_dir, measured=True)
-        result = summary.summarize(work_dir, out_dir, require_measured_experiments=True)
-        assert result["experiment_status"] == "measured", result
-        assert result["runner_tick_status"] == "unavailable", result
-        assert {Path(path).name for path in result["charts"]} == {
-            "runtime-observation.svg",
-            "experiment-file-query-bar.svg",
-        }, result
 
     def bad_unavailable_reason(state: dict[str, object]) -> None:
         state["runner_tick_reason"] = "unknown"
@@ -323,6 +304,23 @@ def main() -> int:
         assert result["status"] == "ready", result
         report = (out_dir / "report.md").read_text(encoding="utf-8")
         assert "Guest 来源绑定运行记录为 3，仅作观测计数" in report, report
+
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        target = root / "target"
+        output = root / "output"
+        target.mkdir()
+        try:
+            output.symlink_to(target, target_is_directory=True)
+        except OSError:
+            pass
+        else:
+            try:
+                summary.reset_generated_result_surfaces(output)
+            except ValueError as error:
+                assert "directory is a link" in str(error), error
+            else:
+                raise AssertionError("linked result output was silently accepted")
 
     print("test_summarize_dual_platform_results: passed")
     return 0

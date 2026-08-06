@@ -188,7 +188,7 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 | 文件 | 内容 |
 | --- | --- |
 | `summary.csv` | 双目标总体状态、状态文件数量和关键对照项。 |
-| `runner-sweep.csv` | Runner tick 可用性记录。当前没有可信的独立 runtime producer，只允许 `unavailable/plain_runtime_cases_zero` 和零数据行；旧 measured collector 与两张推导图已删除。恢复测量必须发布新协议并绑定非 reference 源、逐字段 receipt、日志和 commit/run。 |
+| `summary.json` | Runner tick 只保留 `unavailable/plain_runtime_cases_zero` 状态与原因，不生成恒定 CSV 或性能图。恢复测量必须发布新协议并绑定非 reference 源、逐字段 receipt、日志和 commit/run。 |
 | `experiments/status.json` | 当前实测是 `measured` 还是 `unavailable`；缺少可信 manifest 时必须不可用。 |
 | `experiments/raw/file-query-benchmark.csv` | 当前唯一的 provenance-bound Guest 原始实验数据。 |
 | `experiments/experiment-stats.csv` | 只从上述实测行聚合 min、avg、max、P50、P95。 |

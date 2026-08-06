@@ -21,6 +21,7 @@
 #define IO_QUIESCE_TIMEOUT_MS 5000
 #define EXIT_LEASE_ROUNDS 72
 #define LAZY_CACHE_ROUNDS 8
+#define LAZY_CACHE_WARMUP_LIMIT 4
 
 static char block_data[IO_BLOCK_SIZE];
 static char pressure_data[PRESSURE_BYTES];
@@ -289,13 +290,25 @@ static void check_lazy_cache_admission(void)
 	struct io_policy_info after;
 	char value;
 	int fd;
+	int cache_ready = 0;
 
 	memset(block_data, 'L', sizeof(block_data));
 	create_file("iolazy", block_data, sizeof(block_data));
-	fd = open("iolazy", O_RDONLY);
-	check(fd >= 0 && read(fd, &value, 1) == 1 && value == 'L',
-	      "warm lazy I/O cache line");
-	check(close(fd) == 0, "close lazy I/O warmup");
+	for (int warm = 0; warm < LAZY_CACHE_WARMUP_LIMIT; warm++) {
+		check(io_policy_info(&before) == 0,
+		      "snapshot lazy I/O warmup");
+		fd = open("iolazy", O_RDONLY);
+		check(fd >= 0 && read(fd, &value, 1) == 1 && value == 'L',
+		      "warm lazy I/O cache line");
+		check(close(fd) == 0, "close lazy I/O warmup");
+		check(io_policy_info(&after) == 0,
+		      "snapshot lazy I/O warmup result");
+		if (after.upgraded == before.upgraded) {
+			cache_ready = 1;
+			break;
+		}
+	}
+	check(cache_ready, "establish lazy I/O cache-hit precondition");
 	check(io_policy_info(&before) == 0, "snapshot lazy I/O counters");
 	for (int i = 0; i < LAZY_CACHE_ROUNDS; i++) {
 		fd = open("iolazy", O_RDONLY);
@@ -304,6 +317,11 @@ static void check_lazy_cache_admission(void)
 		check(close(fd) == 0, "close lazy I/O reader");
 	}
 	check(io_policy_info(&after) == 0, "snapshot lazy I/O result");
+	printf("iobudget_ucore: lazy_started=%llu upgraded=%llu cache_only=%llu leased=%llu\n",
+	       after.lazy_started - before.lazy_started,
+	       after.upgraded - before.upgraded,
+	       after.cache_only - before.cache_only,
+	       after.leased - before.leased);
 	check(after.lazy_started - before.lazy_started ==
 		      2 * LAZY_CACHE_ROUNDS &&
 	      after.cache_only - before.cache_only ==
@@ -312,10 +330,6 @@ static void check_lazy_cache_admission(void)
 	check(after.upgraded == before.upgraded &&
 	      after.leased == before.leased,
 	      "cache-hit open/read consumes no rate or device lease");
-	printf("iobudget_ucore: lazy_started=%llu upgraded=%llu cache_only=%llu\n",
-	       after.lazy_started - before.lazy_started,
-	       after.upgraded - before.upgraded,
-	       after.cache_only - before.cache_only);
 }
 
 static void setup_lineage_pressure(void)

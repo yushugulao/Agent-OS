@@ -153,6 +153,8 @@ def check(root: Path) -> None:
         raise ValueError("runtime I/O admission starts before polling-only boot I/O completes")
     guest_probe = function(guest, "check_lazy_cache_admission")
     for fragment in (
+        "cache_ready=1",
+        "check(cache_ready,\"establishlazyI/Ocache-hitprecondition\")",
         "after.lazy_started-before.lazy_started==2*LAZY_CACHE_ROUNDS",
         "after.cache_only-before.cache_only==2*LAZY_CACHE_ROUNDS",
         "after.upgraded==before.upgraded",

@@ -414,10 +414,12 @@ def test_showcase_parser_and_product_outputs() -> None:
         assert [row["offset_us"] for row in report["timeline"]] == [0, 100, 200, 300, 500]
 
         output = root / "output"
+        output.mkdir()
+        for obsolete in contest_demo.REMOVED_PUBLISHED_FILES:
+            (output / obsolete).write_text("stale\n", encoding="utf-8")
         contest_demo.publish(report, output)
         assert json.loads((output / "summary.json").read_text("utf-8")) == report
-        assert json.loads((output / "dashboard-data.json").read_text("utf-8")) == report
-        assert json.loads((output / "timeline.json").read_text("utf-8")) == report["timeline"]
+        assert all(not (output / name).exists() for name in contest_demo.REMOVED_PUBLISHED_FILES)
         page = (output / "index.html").read_text("utf-8")
         assert "8 boot 中位数" in page
         assert "400 us" in page and "80 us" in page and "5.00x" in page

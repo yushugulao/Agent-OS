@@ -140,6 +140,14 @@ class LazyBioAdmissionTests(unittest.TestCase):
         )
         self.assert_rejected("Guest regression does not prove")
 
+    def test_rejects_guest_without_cache_ready_precondition(self) -> None:
+        self.mutate(
+            "user/src/iobudget_ucore.c",
+            "cache_ready = 1;",
+            "cache_ready = 0;",
+        )
+        self.assert_rejected("Guest regression does not prove")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -249,7 +249,6 @@ results/latest/experiments/measured-experiments.json
 results/latest/experiments/dual-targeted-agentbench-guest.log
 results/latest/experiments/raw/file-query-benchmark.csv
 results/latest/experiments/experiment-stats.csv
-results/latest/experiments/mechanism-notes.csv
 results/latest/charts/experiment-file-query-bar.svg
 
 evidence/releases/<bundle>/metrics/file-query-benchmark.csv
@@ -277,7 +276,7 @@ python3 host_tools/summarize_dual_platform_results.py \
   --out-dir results/latest
 ```
 
-汇总器每次都会先清除旧的 `experiments/` 和 `experiment-*.svg` 生成面，防止无测量重跑继续暴露旧公式文件。它会把已经验签的 manifest 和 Guest 源日志复制进结果目录；缺少 manifest 时只生成 `unavailable` 状态。
+汇总器每次都会先清除旧的 `experiments/`、`experiment-*.svg` 和已停用的模板/监控页面，防止重跑继续暴露旧公式或静态说明文件。它会把已经验签的 manifest 和 Guest 源日志复制进结果目录；缺少 manifest 时只生成 `unavailable` 状态。
 
 现场说明使用 `make contest-demo` 生成静态实测 Dashboard；正式评审使用 `make evaluation-dashboard` 生成 release bundle 内的 `dashboard/index.html`。两者都直接读取已校验数据，不启动独立页面服务。
 

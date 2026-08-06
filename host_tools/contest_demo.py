@@ -225,6 +225,7 @@ COUNTER_SCOPES = {
     "default": "global",
     "workload_syscalls": "observer_process",
 }
+REMOVED_PUBLISHED_FILES = ("dashboard-data.json", "timeline.json")
 
 
 def _load_guest_failure_classifier() -> Any:
@@ -1876,15 +1877,14 @@ def publish(report: dict[str, Any], output_dir: Path) -> None:
     if output_dir.is_symlink():
         raise ContestDemoError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
+    for name in REMOVED_PUBLISHED_FILES:
+        obsolete = output_dir / name
+        if obsolete.is_symlink() or obsolete.is_file():
+            obsolete.unlink()
+        elif obsolete.exists():
+            raise ContestDemoError(f"obsolete output is unsafe: {name}")
     serialized = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     _atomic_write(output_dir / "summary.json", serialized.encode("utf-8"))
-    _atomic_write(output_dir / "dashboard-data.json", serialized.encode("utf-8"))
-    _atomic_write(
-        output_dir / "timeline.json",
-        (json.dumps(report["timeline"], ensure_ascii=False, indent=2) + "\n").encode(
-            "utf-8"
-        ),
-    )
     _atomic_write(output_dir / "report.md", render_markdown(report).encode("utf-8"))
     _atomic_write(output_dir / "index.html", render_html(report).encode("utf-8"))
 

@@ -39,20 +39,9 @@ CURRENT_CHART_FILES = {
 SUMMARY_ARTIFACT_FIELDS = {
     "report": Path("report.md"),
     "index": Path("index.html"),
-    "monitor": Path("monitor.html"),
     "csv": Path("summary.csv"),
-    "runner_sweep_csv": Path("runner-sweep.csv"),
     "experiment_status_json": Path("experiments") / "status.json",
     "experiment_stats_csv": Path("experiments") / "experiment-stats.csv",
-    "experiment_mechanism_csv": Path("experiments") / "mechanism-notes.csv",
-    "delivery_readiness_csv": Path("delivery-readiness.csv"),
-    "delivery_readiness": Path("delivery-readiness.html"),
-    "test_suite_csv": Path("test-suite.csv"),
-    "test_suite": Path("test-suite.html"),
-    "experiment_design_csv": Path("experiment-design.csv"),
-    "experiment_design": Path("experiment-design.html"),
-    "evidence_manifest_csv": Path("evidence-manifest.csv"),
-    "evidence_map": Path("evidence-map.html"),
 }
 SUMMARY_CHART_PATHS = (
     Path("charts") / "runtime-observation.svg",
@@ -72,7 +61,6 @@ SUMMARY_FIELDS = frozenset(
         *SUMMARY_ARTIFACT_FIELDS,
     }
 )
-RUNNER_SWEEP_FIELDS = ["evidence_status", "evidence_reason"]
 REMOVED_RUNNER_SUMMARY_FIELDS = {
     "runner_tick_comparison",
     "runner_tick_pairs",
@@ -221,30 +209,11 @@ def _validate_measurement_csv(path: Path, rows: list[object]) -> None:
         raise ResultBundleError("measurement raw CSV rows do not match the manifest")
 
 
-def _validate_runner_evidence(root: Path, summary: dict[str, Any]) -> None:
-    sweep_path = _safe_regular_file(root, Path("runner-sweep.csv"), "runner sweep CSV")
-    try:
-        with sweep_path.open(encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if reader.fieldnames != RUNNER_SWEEP_FIELDS:
-                raise ResultBundleError("runner sweep CSV fields differ")
-            rows = list(reader)
-    except ResultBundleError:
-        raise
-    except (OSError, UnicodeError, csv.Error) as error:
-        raise ResultBundleError(f"runner sweep CSV is invalid: {error}") from error
-
+def _validate_runner_evidence(summary: dict[str, Any]) -> None:
     status = summary.get("runner_tick_status")
     reason = summary.get("runner_tick_reason")
     if status != "unavailable" or reason != "plain_runtime_cases_zero":
         raise ResultBundleError("runner availability summary differs")
-    if rows != [
-        {
-            "evidence_status": "unavailable",
-            "evidence_reason": "plain_runtime_cases_zero",
-        }
-    ]:
-        raise ResultBundleError("runner availability sweep differs")
 
 
 def _validate_summary_artifact_path(
@@ -351,7 +320,6 @@ def validate_result_bundle(
     _reject_symlinks(root)
     _reject_legacy_products(root)
     _enforce_generated_product_allowlists(root)
-    _safe_regular_file(root, Path("monitor.html"), "monitor page")
     summary_path = _safe_regular_file(root, Path("summary.json"), "result summary")
     status_path = _safe_regular_file(
         root, Path("experiments") / "status.json", "experiment status"
@@ -369,7 +337,7 @@ def validate_result_bundle(
         raise ResultBundleError("removed runner measurement fields are present")
     if set(summary) != SUMMARY_FIELDS:
         raise ResultBundleError("result summary fields do not match the closed contract")
-    _validate_runner_evidence(root, summary)
+    _validate_runner_evidence(summary)
     _validate_summary_artifacts(root, published_root, summary)
 
     source = manifest_json.get("source")
