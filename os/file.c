@@ -298,16 +298,6 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 	if (receipt == 0 ||
 	    receipt->state != FILE_CLOSE_RECEIPT_EMPTY)
 		panic("fileclose receipt prepare");
-	receipt->type = FD_NONE;
-	receipt->writable = 0;
-	receipt->pipe = 0;
-	receipt->ip = 0;
-	receipt->resource_account = resource_account_none();
-	receipt->resource_reserved = 0;
-	receipt->cleanup_owner = FS_OWNER_NONE;
-	receipt->result = 0;
-	receipt->cleanup_token =
-		(struct bio_cleanup_token)BIO_CLEANUP_TOKEN_INIT;
 	if (fd_is_reserved(f))
 		return 0;
 	enabled = intr_save();
@@ -322,6 +312,19 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 		intr_restore(enabled);
 		return 0;
 	}
+	/* Like fput(), the common reference drop stays separate from the
+	 * last-reference destructor.  Cold receipt state is initialized only for
+	 * the owner that actually inherits destruction. */
+	receipt->type = FD_NONE;
+	receipt->writable = 0;
+	receipt->pipe = 0;
+	receipt->ip = 0;
+	receipt->resource_account = resource_account_none();
+	receipt->resource_reserved = 0;
+	receipt->cleanup_owner = FS_OWNER_NONE;
+	receipt->result = 0;
+	receipt->cleanup_token =
+		(struct bio_cleanup_token)BIO_CLEANUP_TOKEN_INIT;
 	if (f->type == FD_INODE && f->ip->ref == 1 &&
 	    f->ip->valid && f->ip->removed &&
 	    fileclose_cleanup_token_prepare(

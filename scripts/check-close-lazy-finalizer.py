@@ -55,9 +55,24 @@ def ordered(source: str, fragments: tuple[str, ...], message: str) -> None:
 
 
 def check(root: Path) -> None:
+    file_source = compact(root / "os/file.c")
     proc_header = compact(root / "os/proc.h")
     proc_source = compact(root / "os/proc.c")
     syscall_source = compact(root / "os/syscall.c")
+
+    refdrop = function(file_source, "fileclose_prepare")
+    if refdrop.find("receipt->type=FD_NONE") < refdrop.find("if(f->ref>1)"):
+        raise ContractError("non-final reference drop initializes cold receipt state")
+    ordered(
+        refdrop,
+        (
+            "if(f->ref>1){f->ref--;intr_restore(enabled);return0;}",
+            "receipt->type=FD_NONE",
+            "receipt->cleanup_token=(structbio_cleanup_token)"
+            "BIO_CLEANUP_TOKEN_INIT",
+        ),
+        "non-final reference drop initializes cold receipt state",
+    )
 
     require(
         proc_header,

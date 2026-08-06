@@ -83,6 +83,16 @@ def check(root: Path) -> None:
     reject(classify, "p->files", "I/O classification reads a replaceable fd slot")
 
     prepare = function(source, "syscall_transaction_prepare")
+    reject(
+        prepare,
+        "memset(transaction,0,sizeof(*transaction))",
+        "hot syscall setup clears the cold close receipt",
+    )
+    require(
+        prepare,
+        "transaction->close_receipt.state=FILE_CLOSE_RECEIPT_EMPTY",
+        "syscall setup does not initialize the lazy close receipt",
+    )
     require_order(
         prepare,
         (

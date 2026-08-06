@@ -1007,7 +1007,6 @@ static void syscall_transaction_prepare(
 	struct syscall_transaction_context *transaction,
 	const struct trapframe *trapframe)
 {
-	memset(transaction, 0, sizeof(*transaction));
 	transaction->id = trapframe->a7;
 	transaction->args[0] = trapframe->a0;
 	transaction->args[1] = trapframe->a1;
@@ -1015,6 +1014,15 @@ static void syscall_transaction_prepare(
 	transaction->args[3] = trapframe->a3;
 	transaction->args[4] = trapframe->a4;
 	transaction->args[5] = trapframe->a5;
+	transaction->file = 0;
+	transaction->close_receipt.state = FILE_CLOSE_RECEIPT_EMPTY;
+	transaction->fd_uses_disk = 0;
+	transaction->close_attempted = 0;
+	transaction->close_result = 0;
+	transaction->close_final = 0;
+	transaction->io_admitted = 0;
+	transaction->io_cleanup_admitted = 0;
+	transaction->fs_epoch_admitted = 0;
 	switch (transaction->id) {
 	case SYS_read:
 	case SYS_write:

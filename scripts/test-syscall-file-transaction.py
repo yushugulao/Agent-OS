@@ -47,6 +47,14 @@ class SyscallFileTransactionTests(unittest.TestCase):
         result = self.run_checker()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_hot_setup_cannot_clear_the_cold_receipt(self):
+        self.mutate(
+            "\ttransaction->id = trapframe->a7;",
+            "\tmemset(transaction, 0, sizeof(*transaction));\n"
+            "\ttransaction->id = trapframe->a7;",
+        )
+        self.assert_rejected("clears the cold close receipt")
+
     def test_reopen_cannot_redirect_classification(self):
         self.mutate(
             "syscall_file_uses_disk(transaction->file);",

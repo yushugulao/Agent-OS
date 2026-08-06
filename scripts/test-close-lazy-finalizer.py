@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts/check-close-lazy-finalizer.py"
-FILES = ("os/proc.c", "os/proc.h", "os/syscall.c")
+FILES = ("os/file.c", "os/proc.c", "os/proc.h", "os/syscall.c")
 
 
 class CloseLazyFinalizerTests(unittest.TestCase):
@@ -50,6 +50,14 @@ class CloseLazyFinalizerTests(unittest.TestCase):
     def test_current_tree_passes(self) -> None:
         result = self.run_checker()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_nonfinal_drop_must_not_initialize_receipt(self) -> None:
+        self.mutate(
+            "os/file.c",
+            "\tif (f->ref > 1) {",
+            "\treceipt->type = FD_NONE;\n\tif (f->ref > 1) {",
+        )
+        self.assert_rejected("initializes cold receipt state")
 
     def test_fd_detach_must_release_the_captured_identity(self) -> None:
         self.mutate(
