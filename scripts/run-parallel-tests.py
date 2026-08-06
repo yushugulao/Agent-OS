@@ -385,6 +385,9 @@ def main() -> int:
         build_budget = environment_job_value(
             "AGENTOS_BUILD_JOBS", maximum=MAX_JOBS
         )
+        test_budget = environment_job_value(
+            "AGENTOS_TEST_JOBS", maximum=MAX_JOBS
+        )
     except ValueError as exc:
         print(f"parallel-tests: {exc}", file=sys.stderr)
         return 2
@@ -393,6 +396,10 @@ def main() -> int:
     job_limit = min(args.jobs, len(tests))
     if build_budget is not None:
         job_limit = min(job_limit, build_budget)
+    # Child tests inherit AGENTOS_TEST_JOBS=1. Honor that budget when a test
+    # starts another runner instead of recursively opening a full-width pool.
+    if test_budget is not None:
+        job_limit = min(job_limit, test_budget)
     batches = execution_batches(tests, exclusive)
     effective_jobs = max(min(job_limit, len(batch)) for batch in batches)
     print(

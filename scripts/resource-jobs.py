@@ -17,6 +17,7 @@ POLICY = {
 }
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 PROC_CGROUP = Path("/proc/self/cgroup")
+PROC_MEMINFO = Path("/proc/meminfo")
 
 
 def _read(path: Path) -> str | None:
@@ -153,9 +154,13 @@ def available_cpu_count() -> int:
     return max(1, min(limits))
 
 
-def available_memory() -> int | None:
+def available_memory(
+    root: Path = CGROUP_ROOT,
+    proc_cgroup: Path = PROC_CGROUP,
+    meminfo: Path = PROC_MEMINFO,
+) -> int | None:
     host_available = None
-    payload = _read(Path("/proc/meminfo"))
+    payload = _read(meminfo)
     if payload is not None:
         try:
             host_available = next(
@@ -181,7 +186,7 @@ def available_memory() -> int | None:
         status.length = ctypes.sizeof(status)
         if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
             host_available = int(status.avail_phys)
-    cgroup_available = cgroup_available_memory()
+    cgroup_available = cgroup_available_memory(root, proc_cgroup)
     available = [value for value in (host_available, cgroup_available)
                  if value is not None]
     return min(available) if available else None

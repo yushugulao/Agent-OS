@@ -146,6 +146,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
                 "AGENTOS_BUILD_JOBS",
                 "AGENTOS_OUTER_JOBS",
                 "AGENTOS_PARALLEL_DEPTH",
+                "AGENTOS_TEST_JOBS",
             ):
                 environment.pop(name, None)
             environment.update(
@@ -234,6 +235,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
                 "AGENTOS_BUILD_JOBS",
                 "AGENTOS_OUTER_JOBS",
                 "AGENTOS_PARALLEL_DEPTH",
+                "AGENTOS_TEST_JOBS",
             ):
                 environment.pop(name, None)
             environment["FINAL_EVIDENCE_STAGE"] = str(root / "stage")
@@ -305,11 +307,36 @@ class ParallelTestRunnerTests(unittest.TestCase):
                     "AGENTOS_BUILD_JOBS": "8",
                     "AGENTOS_OUTER_JOBS": "3",
                     "AGENTOS_PARALLEL_DEPTH": "2",
+                    "AGENTOS_TEST_JOBS": "2",
                 }
             )
             result = self.invoke(
                 root, 2, "one.py", "two.py", env=environment
             )
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_nested_runner_honors_single_child_test_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            root = Path(temp_name)
+            (root / "runner.py").write_bytes(RUNNER.read_bytes())
+            self.make_test(root, "one.py", "pass\n")
+            self.make_test(root, "two.py", "pass\n")
+            self.make_test(
+                root,
+                "nested.py",
+                "import subprocess\n"
+                "import sys\n"
+                "result = subprocess.run(\n"
+                "    [sys.executable, 'runner.py', '--jobs', '2', "
+                "'one.py', 'two.py'],\n"
+                "    text=True, stdout=subprocess.PIPE, "
+                "stderr=subprocess.STDOUT, check=False,\n"
+                ")\n"
+                "assert result.returncode == 0, result.stdout\n"
+                "assert 'start total=2 jobs=1' in result.stdout, result.stdout\n"
+                "assert 'total=2 failed=0 jobs=1' in result.stdout, result.stdout\n",
+            )
+            result = self.invoke(root, 1, "nested.py")
             self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_exclusive_selection_must_reference_the_inventory(self) -> None:

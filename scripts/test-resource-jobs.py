@@ -74,6 +74,9 @@ class ResourceJobsTests(unittest.TestCase):
             (current / "cpu.max").write_text(
                 "250000 100000\n", encoding="ascii"
             )
+            (parent / "cpu.max").write_text(
+                "100000 100000\n", encoding="ascii"
+            )
             (current / "cpuset.cpus.effective").write_text(
                 "0-1,4,6-7\n", encoding="ascii"
             )
@@ -81,9 +84,28 @@ class ResourceJobsTests(unittest.TestCase):
             (current / "memory.current").write_text("1024\n", encoding="ascii")
             (parent / "memory.max").write_text("8192\n", encoding="ascii")
             (parent / "memory.current").write_text("4096\n", encoding="ascii")
-            self.assertEqual(MODULE.cgroup_cpu_count(root, proc), 2)
+            self.assertEqual(MODULE.cgroup_cpu_count(root, proc), 1)
             self.assertEqual(MODULE.cgroup_cpuset_count(root, proc), 5)
             self.assertEqual(MODULE.cgroup_available_memory(root, proc), 4096)
+
+    def test_available_memory_takes_host_and_cgroup_minimum(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            root = Path(temp_name) / "cgroup"
+            current = root / "worker"
+            current.mkdir(parents=True)
+            proc = Path(temp_name) / "self.cgroup"
+            proc.write_text("0::/worker\n", encoding="ascii")
+            (current / "memory.max").write_text(
+                str(6 * MODULE.MIB), encoding="ascii"
+            )
+            (current / "memory.current").write_text(
+                str(2 * MODULE.MIB), encoding="ascii"
+            )
+            meminfo = Path(temp_name) / "meminfo"
+            meminfo.write_text("MemAvailable: 8192 kB\n", encoding="ascii")
+            self.assertEqual(
+                MODULE.available_memory(root, proc, meminfo), 4 * MODULE.MIB
+            )
 
     def test_windows_process_affinity_mask_is_honored(self) -> None:
         class Kernel32:
