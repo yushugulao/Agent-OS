@@ -689,7 +689,7 @@ build log 中唯一的 canonical checker 行重新解析，不能只信 report �
 
 ## 6. Dashboard
 
-评价页面与科研 Reader 分离。单页包含：
+正式评价生成一个可离线打开的静态页面，包含：
 
 1. 总览：commit、run、证据等级，并按 suite 预注册顺序并列机制 claim 与 Task 6；
 2. 性能：多负载下每个独立 boot 的原始配对点/连线、汇总区间、单位、`n`、cache mode 与原始证据链接；

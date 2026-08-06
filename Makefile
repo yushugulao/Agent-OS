@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -780,10 +780,6 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_plain_ucore_action_runner.py \
 	host_tools/test_research_state_manifest.py \
 	host_tools/test_plain_ucore_fs_extract.py \
-	host_tools/test_plain_ucore_llm_relay.py \
-	host_tools/test_llm_relay_mode_contract.py \
-	host_tools/test_check_reader_output.py \
-	host_tools/test_compare_dual_platform_reader.py \
 	host_tools/test_compare_dual_platform_state.py \
 	host_tools/test_backend_evidence_contract.py \
 	host_tools/test_reference_catalog_contract.py \
@@ -809,8 +805,7 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_compatibility_overhead.py \
 	host_tools/test_evidence_toolchain_attestation.py \
 	host_tools/test_formal_python_runtime.py \
-	host_tools/test_safe_host_paths.py \
-	host_tools/test_plain_ucore_reader.py
+	host_tools/test_safe_host_paths.py
 
 override LONG_HOST_SELFTESTS := \
 	host_tools/test_evaluation_campaign.py \
@@ -1083,9 +1078,6 @@ agentos-platform-run:
 
 dual-platform-run:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-dual-platforms.sh
-
-reader:
-	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/serve-reader.sh
 
 target-readiness:
 	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/check-target-readiness.sh

@@ -114,15 +114,11 @@ FIXTURE_AGENT_CASES = (
 PROFILE_ARTIFACTS = {
     "target-structure": [],
     "kernel-budgets": [],
-    "reader-e2e": ["reader-e2e.log", "reader-e2e-log-manifest.json",
-                   "reader-e2e-run-fixture-ucore-build.log",
-                   "reader-e2e-run-fixture-ucore-run.log",
-                   "reader-e2e-run-fixture-ucore-run-summary.json"],
     "host-platform-alignment": [],
     "agent-suite": ["agent-suite-timings.log", "agent-suite-guest.log"],
     "dual-platforms": ["dual-plain-qemu.log", "dual-agentos-qemu.log",
                         "dual-stage-timings.csv", "dual-state-compare.json",
-                        "dual-reader-compare.json", "host-platform-alignment.json",
+                        "host-platform-alignment.json",
                         *DUAL_STATE_RAW_ARTIFACTS,
                         "dual-targeted-agentbench-guest.log",
                         "dual-measured-experiments.json",
@@ -439,21 +435,6 @@ def virtio_lines():
         virtio.MARKERS[11], virtio.MARKERS[12],
     ]
 
-reader = (OUT / "reader-e2e.log").read_text(encoding="utf-8")
-write("reader-e2e.log", reader + "\ntest_plain_ucore_reader_e2e: passed")
-write("reader-e2e-run-fixture-ucore-build.log", "fixture build command\nfixture build complete")
-write("reader-e2e-run-fixture-ucore-run.log", "rp_orch: passed")
-(OUT / "reader-e2e-run-fixture-ucore-run-summary.json").write_text(json.dumps({
-    "commands": ["clean", "seed", "make", "qemu"], "returncode": 0, "build_returncode": 0,
-    "guest_returncode": 0, "guest_raw_returncode": 0, "marker_seen": True,
-    "failure_seen": False, "failure_line": "", "failure_reason": "",
-    "failure_phase": "", "timed_out": False, "runner_terminated": False,
-    "runner_signals": [], "output_eof": True, "idle_notices": 0,
-    "elapsed_seconds": 1.0, "embedded_action_records": 1,
-    "extracted_state_files": 300, "extract_status": "ready", "passed": True,
-    "build_log": "ucore-build.log", "log": "ucore-run.log", "status": "ready",
-}, sort_keys=True) + "\n", encoding="utf-8")
-
 benchmark = "agentbench_ucore: file_query_benchmark schema=2 unit=us load=143 traversal_ops=64 traversal_records=143 traversal_duration_us=36 cold_index_ops=1 cold_index_records=6 cold_index_duration_us=2 cold_rebuild_records=512 cold_rebuild_included=1 warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 status=measured"
 mechanism = list(dict.fromkeys([
     "agentfinal_ucore: context_sync_atomic=1 append=1 rollback=1 clear=1 recovery=1",
@@ -527,7 +508,7 @@ write("dual-agentos-qemu.log", "\n".join([
 }) + "\n", encoding="utf-8", newline="\n")
 stages = ("structure-check", "seeded-dual-run", "qemu-log-marker-check",
           "state-extract-copy", "host-alignment", "state-compare",
-          "reader-render-check", "measured-file-query", "result-report-chart")
+          "measured-file-query", "result-report-chart")
 write("dual-stage-timings.csv", "stage,start_epoch,end_epoch,duration_seconds,status\n" +
       "\n".join("%s,%d,%d,1,ready" % (stage, index, index + 1)
                   for index, stage in enumerate(stages, 1)))
@@ -725,9 +706,8 @@ for group in CAPABILITY_GROUPS:
         "name": group.name, "host_modules": len(group.host_modules),
         "plain_sources": len(group.plain_sources),
         "agentos_sources": len(group.agentos_sources),
-        "reader_keywords": len(group.reader_keywords), "status": "ok",
-        "missing_host": [], "missing_plain": [], "missing_agentos": [],
-        "missing_reader": [],
+        "status": "ok", "missing_host": [], "missing_plain": [],
+        "missing_agentos": [],
         "plain_runtime_hits": [
             name for name in runtime_candidates(group, group.plain_sources)
             if name in plain_inventory
@@ -763,15 +743,6 @@ tracked_host_modules = {
     "groups": alignment_groups,
     "failures": [], "untracked_host_module_sample": [],
 }) + "\n", encoding="utf-8")
-(OUT / "dual-reader-compare.json").write_text(json.dumps({
-    "plain_pages": 10, "agentos_pages": 10,
-    "plain_state_files": len(plain_inventory),
-    "agentos_state_files": len(agentos_inventory),
-    "agentos_extra_state_files": len(agentos_inventory - plain_inventory),
-    "plain_api_json": 20, "agentos_api_json": 25, "agentos_extra_api_json": 5,
-    "checked_pages": 10, "checked_api_json": 20, "status": "ready",
-}) + "\n", encoding="utf-8")
-
 proc = [
     "procreap_ucore: process lifecycle verification", "procreap_ucore: child-first=160",
     "procreap_ucore: parent-first=160", "procreap_ucore: orphan-resource=136",
@@ -909,14 +880,6 @@ def populate_summary_stage(stage: Path) -> Path:
     for artifacts in PROFILE_ARTIFACTS.values():
         for name in artifacts:
             (incoming / name).write_text(f"{name} passed\n", encoding="utf-8")
-    reader_manifest = {"schema_version": 1,
-                       "required_files": ["ucore-build.log", "ucore-run.log",
-                                          "ucore-run-summary.json"],
-                       "runs": [{"run": "run-fixture",
-                                 "files": ["ucore-build.log", "ucore-run.log",
-                                           "ucore-run-summary.json"], "missing": []}]}
-    (incoming / "reader-e2e-log-manifest.json").write_text(
-        json.dumps(reader_manifest) + "\n", encoding="utf-8")
     (incoming / "agent-suite-timings.log").write_text(
         "case_one 1.250000000\ncase_two 1.500000000\n", encoding="utf-8")
     (incoming / "agent-suite-guest.log").write_text(
@@ -1075,14 +1038,9 @@ if [[ ${1:-} == --version ]]; then echo 'fixture make 1.0'; exit 0; fi
 incoming="${FINAL_EVIDENCE_STAGE}/incoming"
 runtime="${FINAL_EVIDENCE_STAGE}/runtime/full-verify"
 mkdir -p "${incoming}" "${runtime}"
-env | sort >"${incoming}/reader-e2e.log"
-cat >"${incoming}/reader-e2e-log-manifest.json" <<'EOF'
-{"schema_version":1,"required_files":["ucore-build.log","ucore-run.log","ucore-run-summary.json"],"runs":[{"run":"run-fixture","files":["ucore-build.log","ucore-run.log","ucore-run-summary.json"],"missing":[]}]}
-EOF
 for artifact in \
-  reader-e2e-run-fixture-ucore-build.log reader-e2e-run-fixture-ucore-run.log \
-  reader-e2e-run-fixture-ucore-run-summary.json dual-plain-qemu.log dual-agentos-qemu.log \
-  dual-stage-timings.csv dual-state-compare.json dual-reader-compare.json agent-suite-guest.log \
+  dual-plain-qemu.log dual-agentos-qemu.log dual-stage-timings.csv \
+  dual-state-compare.json agent-suite-guest.log \
   proc-reap.log syscall-fairness.log file-resource.log thread-resource.log \
   physical-resource.log metadata-recovery.log observe-recovery.log observe-recovery-before-reap.img virtio-disk.log \
   workflow-teardown-race.log fs-enospc.log fs-allocator-fault.log; do
@@ -1120,7 +1078,7 @@ write_csv(incoming / "dual-file-query-benchmark.csv", manifest["rows"])
 PY
 mainflow_artifacts="$(PYTHONPATH=host_tools python3 -c \
   'from dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS; print("\t".join(DUAL_STATE_RAW_ARTIFACTS))')"
-printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nreader-e2e\t3\t4\treader-e2e.log\treader-e2e-log-manifest.json\treader-e2e-run-fixture-ucore-build.log\treader-e2e-run-fixture-ucore-run.log\treader-e2e-run-fixture-ucore-run-summary.json\nhost-platform-alignment\t4\t5\nagent-suite\t5\t6\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t6\t7\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\tdual-reader-compare.json\thost-platform-alignment.json\t%s\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t7\t8\tproc-reap.log\nsyscall-fairness\t8\t9\tsyscall-fairness.log\nfile-resource\t9\t10\tfile-resource.log\nthread-resource\t10\t11\tthread-resource.log\nphysical-resource\t11\t12\tphysical-resource.log\nmetadata-recovery\t12\t13\tmetadata-recovery.log\nobserve-recovery\t13\t14\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t14\t15\tvirtio-disk.log\nworkflow-teardown-race\t15\t16\tworkflow-teardown-race.log\nfs-enospc\t16\t17\tfs-enospc.log\nfs-allocator-fault\t17\t18\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' \
+printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nhost-platform-alignment\t3\t4\nagent-suite\t4\t5\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t5\t6\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\thost-platform-alignment.json\t%s\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t6\t7\tproc-reap.log\nsyscall-fairness\t7\t8\tsyscall-fairness.log\nfile-resource\t8\t9\tfile-resource.log\nthread-resource\t9\t10\tthread-resource.log\nphysical-resource\t10\t11\tphysical-resource.log\nmetadata-recovery\t11\t12\tmetadata-recovery.log\nobserve-recovery\t12\t13\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t13\t14\tvirtio-disk.log\nworkflow-teardown-race\t14\t15\tworkflow-teardown-race.log\nfs-enospc\t15\t16\tfs-enospc.log\nfs-allocator-fault\t16\t17\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' \
   "${mainflow_artifacts}" >"${runtime}/steps.tsv"
 python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py write-summary \
   --stage "${FINAL_EVIDENCE_STAGE}" --steps "${runtime}/steps.tsv" \
@@ -1397,7 +1355,6 @@ class FinalEvidenceTests(unittest.TestCase):
         registered = [artifact for rule in RAW_ARTIFACT_REGISTRY for artifact in rule.artifacts]
         expected = {
             artifact for artifacts in PROFILE_ARTIFACTS.values() for artifact in artifacts
-            if not artifact.startswith("reader-e2e-run-")
         }
         self.assertEqual(set(registered), expected)
         self.assertEqual(len(registered), len(set(registered)))
@@ -1566,7 +1523,7 @@ class FinalEvidenceTests(unittest.TestCase):
             run([*collector_command(REPO, "write-summary"), "--stage", str(stage),
                  "--steps", str(steps), "--commit", commit], REPO)
             summary = json.loads((incoming / "verification-summary.json").read_text())
-            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (8, 5))
+            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (8, 6))
             canonical_steps = json.dumps(summary["steps"], ensure_ascii=True,
                                          sort_keys=True, separators=(",", ":"))
             self.assertEqual(summary["step_contract_sha256"],
@@ -1584,7 +1541,7 @@ class FinalEvidenceTests(unittest.TestCase):
             replaced = base / "replaced-artifact"; replaced_steps = populate_summary_stage(replaced)
             (replaced / "incoming/proc-reap.log").rename(replaced / "incoming/wrong.log")
             replaced_steps.write_text(replaced_steps.read_text().replace(
-                "proc-reap\t7\t8\tproc-reap.log", "proc-reap\t7\t8\twrong.log"))
+                "proc-reap\t6\t7\tproc-reap.log", "proc-reap\t6\t7\twrong.log"))
             cases.append((replaced, replaced_steps, [], "artifact contract"))
             for label, options in (("agent-setting", ["--agent-grace", "3s"]),
                                    ("mechanism-setting", ["--mechanism-grace", "4s"]),
@@ -1836,7 +1793,7 @@ exit 91
                              {item for items in PROFILE_ARTIFACTS.values() for item in items})
             self.assertEqual(manifest["authenticity"]["remote_ci"], {"status": "not-attached"})
             self.assertNotIn("CI artifact", json.dumps(manifest))
-            observed_env = (output / "logs/raw/reader-e2e.log").read_text()
+            observed_env = (output / "logs/raw/dual-plain-qemu.log").read_text()
             for secret in ("BASH_ENV", "DEEPSEEK_API_KEY", "GIT_DIR", "MAKEFLAGS", "MAKEFILES",
                            "LD_LIBRARY_PATH", "PYTHONPATH", "secret-"):
                 self.assertNotIn(secret, observed_env)
@@ -2413,14 +2370,14 @@ procreap_ucore: parent passed
                 self.assert_verify_rejected(output, repo, "CSV schema or data")
                 csv_path.write_text(original, encoding="utf-8")
             rewrite_checksums(output)
-            reader_path = output / "logs/raw/reader-e2e.log"
-            reader_original = reader_path.read_bytes()
-            reader_path.write_text("tampered\n")
+            raw_path = output / "logs/raw/dual-plain-qemu.log"
+            raw_original = raw_path.read_bytes()
+            raw_path.write_text("tampered\n")
             rejected = run(collector_command(repo, "verify", str(output)), repo,
                            check=False)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("checksum mismatch", rejected.stderr)
-            reader_path.write_bytes(reader_original)
+            raw_path.write_bytes(raw_original)
             (output / "environment/versions/git.txt").unlink()
             self.assert_verify_rejected(output, repo, "environment version record")
     def test_bind_remote_ci_cli_is_absent(self) -> None:
@@ -2626,7 +2583,6 @@ procreap_ucore: parent passed
         self.assertEqual(host_inventory, all_host_tests - {
             "host_tools/test_capture_final_evidence.py",
             "host_tools/test_evidence_delivery_contract.py",
-            "host_tools/test_plain_ucore_reader_e2e.py",
         })
         self.assertLessEqual(len(collector.splitlines()), 1450)
         for module, limit in (
@@ -2689,17 +2645,18 @@ procreap_ucore: parent passed
             400,
         )
         self.assertLessEqual(len(wiring.splitlines()), 80)
-        for token in ("write-summary", "PLAIN_UCORE_READER_E2E_LOG_DIR", "reader-e2e-log-manifest.json",
+        for token in ("write-summary",
                       'MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"',
                       "--check agent-test-policy"):
             self.assertIn(token, full)
+        self.assertNotIn("reader-e2e", full)
         self.assertLess(full.index("write-summary"), full.index("[full-verify] all checks passed"))
         for once in ("host_tools/test_measured_experiments.py",
                      "host_tools/test_dual_measurement_source_contract.py"):
             self.assertEqual(makefile.count(once), 1)
         self.assertNotIn("hash-tree", collector + full)
         self.assertNotIn("immutable CI artifact", collector)
-        for contract in ("'^SCHEMA_VERSION = 8$'", "'^FULL_VERIFY_PROFILE_VERSION = 5$'"):
+        for contract in ("'^SCHEMA_VERSION = 8$'", "'^FULL_VERIFY_PROFILE_VERSION = 6$'"):
             self.assertIn(contract, structure)
         self.assertNotIn("'^SCHEMA_VERSION = 1$'", structure)
         public_docs = {
@@ -2725,7 +2682,7 @@ procreap_ucore: parent passed
         self.assertIn('"remote_ci": {"status": "not-attached"}', collector)
         self.assertNotIn("bind-remote-ci", collector)
         self.assertNotIn("provenance-attached", collector)
-        for name in ("reader-e2e.log", "dual-plain-qemu.log", "dual-agentos-qemu.log",
+        for name in ("dual-plain-qemu.log", "dual-agentos-qemu.log",
                      "dual-targeted-agentbench-guest.log",
                      "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
                      "proc-reap.log", "syscall-fairness.log", "file-resource.log",

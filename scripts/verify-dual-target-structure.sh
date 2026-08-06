@@ -53,7 +53,7 @@ for path in \
 	scripts/run-agent-tests.sh scripts/run-dual-platforms.sh \
 	scripts/run-full-verification.sh scripts/check-target-readiness.sh \
 	scripts/run-parallel-tests.py scripts/run-parallel-qemu-regressions.py \
-	host_tools/plain_ucore_reader.py host_tools/render_evaluation_dashboard.py \
+	host_tools/render_evaluation_dashboard.py \
 	evidence/README.md docs/verification.md docs/agentos/verification.md
 do
 	require_path "${path}" "required contest surface is missing"
@@ -83,7 +83,7 @@ reject_text "baseline_ucore/user/lib" "${plain_kernel_pattern}" \
 	"baseline user library contains AgentOS-specific symbols"
 
 for target in plain-platform-run agentos-platform-run dual-platform-run \
-	reader target-readiness full-verify local-check kernel-budget-check \
+	target-readiness full-verify local-check kernel-budget-check \
 	agent-module-check agentos-test evaluation-smoke
 do
 	require_text "Makefile" "^${target}:" "Make target is missing"
@@ -95,17 +95,17 @@ require_text "scripts/run-dual-platforms.sh" "verify-dual-target-structure" \
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" \
 	"full verification bypasses the topology gate"
 # Public evidence contracts: '^SCHEMA_VERSION = 8$' and
-# '^FULL_VERIFY_PROFILE_VERSION = 5$'.
+# '^FULL_VERIFY_PROFILE_VERSION = 6$'.
 require_text "scripts/capture-final-evidence.py" "^SCHEMA_VERSION = 8$" \
 	"final evidence schema drifted"
-require_text "scripts/capture-final-evidence.py" "^FULL_VERIFY_PROFILE_VERSION = 5$" \
+require_text "scripts/capture-final-evidence.py" "^FULL_VERIFY_PROFILE_VERSION = 6$" \
 	"full verification profile drifted"
 
 agent_step="$(grep -n 'AgentOS kernel tests' "${ROOT_DIR}/scripts/run-full-verification.sh" | head -1 | cut -d: -f1)"
 dual_step="$(grep -n '\[full-verify\] dual platforms' "${ROOT_DIR}/scripts/run-full-verification.sh" | head -1 | cut -d: -f1)"
 if [ -z "${agent_step}" ] || [ -z "${dual_step}" ] ||
    [ "${agent_step}" -ge "${dual_step}" ]; then
-	fail "Agent Guest measurements must precede dual-platform rendering"
+	fail "Agent Guest measurements must precede dual-platform evaluation"
 fi
 
 plain_platform_tests="$(make_var_words "${ROOT_DIR}/baseline_ucore/user/Makefile" PLATFORM_TESTS)"

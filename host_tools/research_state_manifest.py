@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Derive the Reader and filesystem state inventory from one strict manifest."""
+"""Derive the Guest and filesystem state inventory from one strict manifest."""
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -23,7 +22,6 @@ TOP_LEVEL_KEYS = {
     "targets",
     "state_file_calls",
     "host_state_files",
-    "reader_optional_state_files",
     "archive_optional_state_files",
     "opaque_guest_state_files",
 }
@@ -188,7 +186,6 @@ class ResearchStateManifest:
     source_roots: dict[str, tuple[Path, ...]]
     state_file_calls: tuple[str, ...]
     host_state_files: tuple[str, ...]
-    reader_optional_state_files: tuple[str, ...]
     archive_optional_state_files: tuple[str, ...]
     opaque_guest_state_files: tuple[str, ...]
 
@@ -249,8 +246,8 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
     if not isinstance(raw, dict):
         raise StateManifestError("state manifest root must be an object")
     _require_exact_keys(raw, TOP_LEVEL_KEYS, "state manifest")
-    if raw["schema_version"] != 3:
-        raise StateManifestError("state manifest schema_version must be 3")
+    if raw["schema_version"] != 4:
+        raise StateManifestError("state manifest schema_version must be 4")
 
     raw_targets = raw["targets"]
     if not isinstance(raw_targets, dict):
@@ -286,9 +283,6 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
             "state_file_calls is missing core operations: " + ", ".join(missing_calls)
         )
     host_files = _require_state_names(raw["host_state_files"], "host_state_files")
-    reader_optional_files = _require_state_names(
-        raw["reader_optional_state_files"], "reader_optional_state_files"
-    )
     archive_optional_files = _require_state_names(
         raw["archive_optional_state_files"], "archive_optional_state_files"
     )
@@ -297,7 +291,6 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
     )
     inventories = (
         ("host", set(host_files)),
-        ("reader optional", set(reader_optional_files)),
         ("archive optional", set(archive_optional_files)),
     )
     for index, (left_label, left) in enumerate(inventories):
@@ -315,8 +308,7 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
             + ", ".join(opaque_host_overlap)
         )
     return ResearchStateManifest(
-        source_roots, calls, host_files, reader_optional_files,
-        archive_optional_files, opaque_guest_files,
+        source_roots, calls, host_files, archive_optional_files, opaque_guest_files,
     )
 
 
@@ -442,7 +434,7 @@ def repository_state_inventory(
     root: Path, manifest: ResearchStateManifest | None = None
 ) -> set[str]:
     contract = manifest or load_manifest(root)
-    names = set(contract.host_state_files) | set(contract.reader_optional_state_files)
+    names = set(contract.host_state_files)
     for target in TARGET_NAMES:
         names.update(target_state_names(root, contract, target))
     return names
@@ -475,32 +467,6 @@ def short_name_map(
     return {short: values[0] for short, values in grouped.items()}
 
 
-def reader_state_names(reader_path: Path) -> set[str]:
-    if not reader_path.is_file():
-        raise StateManifestError(f"Reader source is missing: {reader_path}")
-    text = reader_path.read_text(encoding="utf-8", errors="strict")
-    return set(re.findall(r"[\"'](rp_[A-Za-z0-9_]+)[\"']", text))
-
-
-def fixture_state_names(fixture_path: Path) -> set[str]:
-    if not fixture_path.is_file():
-        raise StateManifestError(f"Reader fixture is missing: {fixture_path}")
-    tree = ast.parse(fixture_path.read_text(encoding="utf-8", errors="strict"))
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "STATE_FILES"
-            for target in node.targets
-        ):
-            value = ast.literal_eval(node.value)
-            if not isinstance(value, dict) or not value:
-                break
-            names = set(value)
-            if any(not isinstance(name, str) for name in names):
-                break
-            return names
-    raise StateManifestError("Reader STATE_FILES fixture is missing or not literal")
-
-
 def validate_repository_state_contract(root: Path) -> dict[str, object]:
     manifest = load_manifest(root)
     plain = target_state_names(root, manifest, "plain")
@@ -523,32 +489,11 @@ def validate_repository_state_contract(root: Path) -> dict[str, object]:
             names,
             excluded_names=manifest.host_state_files,
         )
-    allowed = (
-        plain
-        | agentos
-        | set(manifest.host_state_files)
-        | set(manifest.reader_optional_state_files)
-    )
-    reader = reader_state_names(root / "host_tools/plain_ucore_reader.py")
-    fixture = fixture_state_names(root / "host_tools/test_plain_ucore_reader.py")
-    missing_reader = sorted(reader - allowed)
-    missing_fixture = sorted(fixture - allowed)
-    if missing_reader:
-        raise StateManifestError(
-            "Reader references unmanifested state files: " + ", ".join(missing_reader)
-        )
-    if missing_fixture:
-        raise StateManifestError(
-            "Reader fixture contains unmanifested state files: "
-            + ", ".join(missing_fixture)
-        )
     return {
         "plain_state_names": len(plain),
         "agentos_state_names": len(agentos),
         "agentos_only_state_names": len(agentos - plain),
-        "reader_state_names": len(reader),
-        "fixture_state_names": len(fixture),
-        "api_allowlist_names": len(allowed),
+        "repository_state_names": len(repository_state_inventory(root, manifest)),
         "plain_archive_state_names": len(plain_archive),
         "agentos_archive_state_names": len(agentos_archive),
         "archive_optional_state_files": len(manifest.archive_optional_state_files),

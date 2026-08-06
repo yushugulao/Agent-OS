@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and optionally run plain uCore work from host reader action records."""
+"""Prepare and optionally run plain uCore work from host action records."""
 
 from __future__ import annotations
 
@@ -69,11 +69,6 @@ else:
 
 UCORE_FS_BLOCK_SIZE = 1024
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-READER_E2E_LOG_FILENAMES = (
-    "ucore-build.log",
-    "ucore-run.log",
-    "ucore-run-summary.json",
-)
 SEEDED_ACTION_PHASES = ("clean", "build", "guest")
 SEEDED_ACTION_PHASE_TIMEOUT_MARGIN_SECONDS = 30
 SEEDED_ACTION_OBSERVER_CLEANUP_ALLOWANCE_SECONDS = 10
@@ -903,104 +898,6 @@ def write_json(path: Path, data: object) -> None:
     atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
-def prepare_reader_e2e_log_dir(path: Path) -> Path:
-    destination = ensure_safe_directory(_absolute_lexical_path(path))
-    if any(destination.iterdir()):
-        raise ValueError(f"Reader E2E log directory must start empty: {destination}")
-    return destination
-
-
-def persist_reader_e2e_logs(run_root: Path, destination: Path) -> dict[str, object]:
-    source_root = require_safe_directory(run_root).resolve(strict=True)
-    target_root = require_safe_directory(destination).resolve(strict=True)
-    try:
-        target_root.relative_to(source_root)
-    except ValueError:
-        pass
-    else:
-        raise ValueError("Reader E2E log directory cannot be inside the temporary run tree")
-
-    runs: list[dict[str, object]] = []
-    if source_root.is_dir():
-        for run_dir in sorted(source_root.iterdir(), key=lambda item: item.name):
-            if not run_dir.name.startswith("run-") or not run_dir.is_dir():
-                continue
-            if _is_link_component(run_dir):
-                raise ValueError(f"Reader E2E run directory cannot be a symlink: {run_dir}")
-            copied: list[str] = []
-            missing: list[str] = []
-            for filename in READER_E2E_LOG_FILENAMES:
-                source = run_dir / filename
-                if not source.exists():
-                    missing.append(filename)
-                    continue
-                try:
-                    source = require_regular_file(source)
-                except (OSError, ValueError) as error:
-                    raise ValueError(f"Reader E2E log is not a regular file: {source}")
-                target = target_root / run_dir.name / filename
-                ensure_safe_directory(target.parent)
-                partial = target.with_name(f".{target.name}.partial-{os.getpid()}")
-                try:
-                    shutil.copy2(source, partial)
-                    partial.replace(target)
-                finally:
-                    partial.unlink(missing_ok=True)
-                copied.append(filename)
-            runs.append({"run": run_dir.name, "files": copied, "missing": missing})
-
-    manifest = {
-        "schema_version": 1,
-        "required_files": list(READER_E2E_LOG_FILENAMES),
-        "runs": runs,
-    }
-    manifest_path = target_root / "reader-e2e-log-manifest.json"
-    manifest_partial = manifest_path.with_name(
-        f".{manifest_path.name}.partial-{os.getpid()}"
-    )
-    try:
-        manifest_partial.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        manifest_partial.replace(manifest_path)
-    finally:
-        manifest_partial.unlink(missing_ok=True)
-    return manifest
-
-
-def validate_reader_e2e_logs(
-    destination: Path, manifest: dict[str, object]
-) -> None:
-    required = list(READER_E2E_LOG_FILENAMES)
-    if manifest.get("schema_version") != 1:
-        raise ValueError("Reader E2E log manifest has an unsupported schema")
-    if manifest.get("required_files") != required:
-        raise ValueError("Reader E2E log manifest has an unexpected file contract")
-    runs = manifest.get("runs")
-    if not isinstance(runs, list) or not runs:
-        raise ValueError("Reader E2E produced no persistent run logs")
-    destination = require_safe_directory(destination).resolve(strict=True)
-    for record in runs:
-        if not isinstance(record, dict):
-            raise ValueError("Reader E2E log manifest contains an invalid run")
-        run_name = record.get("run")
-        if (
-            not isinstance(run_name, str)
-            or not run_name.startswith("run-")
-            or Path(run_name).name != run_name
-        ):
-            raise ValueError("Reader E2E log manifest contains an unsafe run name")
-        if record.get("files") != required or record.get("missing") != []:
-            raise ValueError(f"Reader E2E run logs are incomplete: {run_name}")
-        for filename in required:
-            path = destination / run_name / filename
-            try:
-                require_regular_file(path)
-            except (OSError, ValueError) as error:
-                raise ValueError(f"Reader E2E persistent log is missing: {path}")
-
-
 def write_fs_aligned_seed(path: Path, seed_text: str) -> None:
     data = seed_text.encode("utf-8")
     remainder = len(data) % UCORE_FS_BLOCK_SIZE
@@ -1026,7 +923,7 @@ def pad_state_files_for_ucore_fs(state_dir: Path) -> None:
 
 
 def prepare_action_state(actions: list[dict[str, object]], state_dir: Path, run_dir: Path) -> dict[str, object]:
-    # Reader run names are deterministic, so claiming the directory must fail
+    # Host action run names are deterministic, so claiming the directory must fail
     # rather than reuse a path planted before this action was accepted.
     run_dir = create_private_directory(run_dir)
     next_state = run_dir / "state-next"
@@ -2683,8 +2580,8 @@ def append_records(existing: Iterable[dict[str, object]], extra: Iterable[dict[s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Prepare plain uCore input from host reader actions.")
-    parser.add_argument("--actions", type=Path, required=True, help="host-actions.jsonl from plain_ucore_reader.")
+    parser = argparse.ArgumentParser(description="Prepare plain uCore input from host actions.")
+    parser.add_argument("--actions", type=Path, required=True, help="Host action JSONL input.")
     parser.add_argument("--state-dir", type=Path, required=True, help="Current rp_* state directory.")
     parser.add_argument("--run-dir", type=Path, required=True, help="Directory for prepared action package and logs.")
     parser.add_argument("--add-action", action="append", default=[], help="Add an action path, for example /actions/research/run.")

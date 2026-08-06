@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed validation for result bundles served by the local Reader."""
+"""Fail-closed validation for published dual-platform result bundles."""
 
 from __future__ import annotations
 
@@ -40,7 +40,6 @@ SUMMARY_ARTIFACT_FIELDS = {
     "report": Path("report.md"),
     "index": Path("index.html"),
     "monitor": Path("monitor.html"),
-    "reader_guide": Path("reader-guide.html"),
     "csv": Path("summary.csv"),
     "runner_sweep_csv": Path("runner-sweep.csv"),
     "experiment_status_json": Path("experiments") / "status.json",
@@ -54,8 +53,6 @@ SUMMARY_ARTIFACT_FIELDS = {
     "experiment_design": Path("experiment-design.html"),
     "evidence_manifest_csv": Path("evidence-manifest.csv"),
     "evidence_map": Path("evidence-map.html"),
-    "reader_checklist_csv": Path("reader-checklist.csv"),
-    "reader_checklist": Path("reader-checklist.html"),
 }
 SUMMARY_CHART_PATHS = (
     Path("charts") / "runtime-observation.svg",
@@ -435,7 +432,7 @@ def validate_result_bundle(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate a provenance-bound Reader result bundle before serving it."
+        description="Validate a provenance-bound dual-platform result bundle before publication."
     )
     parser.add_argument("--result-dir", type=Path, required=True)
     parser.add_argument("--published-dir", type=Path, default=None)

@@ -37,96 +37,6 @@ from dual_state_evidence_contract import (
 from reference_catalog_contract import expected_reference_identities
 
 
-def _validate_reader(ctx: ValidationContext) -> None:
-    _require_line(
-        _text(ctx.raw_dir / "reader-e2e.log", "Reader E2E output"),
-        "test_plain_ucore_reader_e2e: passed",
-        "Reader E2E output",
-    )
-    manifest = _json(
-        ctx.raw_dir / "reader-e2e-log-manifest.json", "Reader E2E log manifest"
-    )
-    required = ["ucore-build.log", "ucore-run.log", "ucore-run-summary.json"]
-    if (
-        not isinstance(manifest, dict)
-        or set(manifest) != {"schema_version", "required_files", "runs"}
-        or manifest.get("schema_version") != 1
-        or manifest.get("required_files") != required
-        or not isinstance(manifest.get("runs"), list)
-        or not manifest["runs"]
-    ):
-        raise EvidenceSemanticError("Reader E2E log manifest contract is invalid")
-    seen: set[str] = set()
-    summary_fields = {
-        "commands", "returncode", "build_returncode", "guest_returncode",
-        "guest_raw_returncode", "marker_seen", "failure_seen", "failure_line",
-        "failure_reason", "failure_phase", "timed_out", "runner_terminated",
-        "runner_signals", "output_eof", "idle_notices", "elapsed_seconds",
-        "embedded_action_records", "extracted_state_files", "extract_status",
-        "passed", "build_log", "log", "status",
-    }
-    for record in manifest["runs"]:
-        if not isinstance(record, dict) or set(record) != {"run", "files", "missing"}:
-            raise EvidenceSemanticError("Reader E2E manifest run is invalid")
-        run = record.get("run")
-        if (
-            not isinstance(run, str)
-            or run in seen
-            or not run.startswith("run-")
-            or not SAFE_TAG.fullmatch(run)
-            or record.get("files") != required
-            or record.get("missing") != []
-        ):
-            raise EvidenceSemanticError("Reader E2E manifest run contract is invalid")
-        seen.add(run)
-        names = {kind: f"reader-e2e-{run}-{kind}" for kind in required}
-        ctx.allowed_files.update(names.values())
-        build = ctx.raw_dir / names["ucore-build.log"]
-        guest = ctx.raw_dir / names["ucore-run.log"]
-        summary_path = ctx.raw_dir / names["ucore-run-summary.json"]
-        _regular_bytes(build, f"Reader E2E {run} build log")
-        guest_text = _text(guest, f"Reader E2E {run} Guest log")
-        _require_line(guest_text, "rp_orch: passed", f"Reader E2E {run} Guest log")
-        _reject_tokens(
-            guest_text,
-            ("child_failed", "IllegalInstruction", "unknown syscall", "rp_orch: failed", "status=failed"),
-            f"Reader E2E {run} Guest log",
-        )
-        summary = _json(summary_path, f"Reader E2E {run} run summary")
-        if not isinstance(summary, dict) or set(summary) != summary_fields:
-            raise EvidenceSemanticError(f"Reader E2E {run} summary schema is invalid")
-        elapsed = summary.get("elapsed_seconds")
-        commands = summary.get("commands")
-        if (
-            summary.get("returncode") != 0
-            or summary.get("build_returncode") != 0
-            or summary.get("guest_returncode") != 0
-            or summary.get("marker_seen") is not True
-            or summary.get("failure_seen") is not False
-            or summary.get("timed_out") is not False
-            or summary.get("output_eof") is not True
-            or summary.get("passed") is not True
-            or summary.get("status") != "ready"
-            or summary.get("extract_status") != "ready"
-            or summary.get("failure_line") != ""
-            or summary.get("failure_reason") != ""
-            or summary.get("failure_phase") != ""
-            or not _nonnegative_int(summary.get("idle_notices"))
-            or not _positive_int(summary.get("embedded_action_records"))
-            or not _positive_int(summary.get("extracted_state_files"))
-            or not isinstance(elapsed, (int, float))
-            or isinstance(elapsed, bool)
-            or not math.isfinite(float(elapsed))
-            or float(elapsed) < 0
-            or not isinstance(commands, list)
-            or len(commands) != 4
-            or not all(isinstance(item, str) and item for item in commands)
-            or Path(str(summary.get("build_log", ""))).name != "ucore-build.log"
-            or Path(str(summary.get("log", ""))).name != "ucore-run.log"
-        ):
-            raise EvidenceSemanticError(f"Reader E2E {run} did not complete successfully")
-
-
 def _validate_agent_suite(ctx: ValidationContext) -> None:
     config = _json(ctx.repo_root / "ci/kernel-budgets.json", "kernel budget configuration")
     expected_cases = (
@@ -177,14 +87,8 @@ def _validate_agent_suite(ctx: ValidationContext) -> None:
 DUAL_STAGES = (
     "structure-check", "seeded-dual-run", "qemu-log-marker-check",
     "state-extract-copy", "host-alignment", "state-compare",
-    "reader-render-check", "measured-file-query", "result-report-chart",
+    "measured-file-query", "result-report-chart",
 )
-
-DUAL_READER_FIELDS = {
-    "plain_pages", "agentos_pages", "plain_state_files", "agentos_state_files",
-    "agentos_extra_state_files", "plain_api_json", "agentos_api_json",
-    "agentos_extra_api_json", "checked_pages", "checked_api_json", "status",
-}
 
 
 def _validate_dual_stage_csv(path: Path) -> None:
@@ -225,31 +129,6 @@ def _validate_dual_state(
         return validate_dual_state(value, references, plain_programs, agentos_programs)
     except DualStateContractError as error:
         raise EvidenceSemanticError(str(error)) from error
-
-
-def _validate_dual_reader(path: Path) -> dict[str, object]:
-    value = _json(path, "dual reader comparison")
-    if not isinstance(value, dict) or set(value) != DUAL_READER_FIELDS or value.get("status") != "ready":
-        raise EvidenceSemanticError("dual reader comparison schema or status differs")
-    fields = DUAL_READER_FIELDS - {"status"}
-    if any(not _nonnegative_int(value.get(name)) for name in fields):
-        raise EvidenceSemanticError("dual reader comparison counters are invalid")
-    if (
-        value["plain_pages"] <= 0
-        or value["agentos_pages"] != value["plain_pages"]
-        or value["plain_state_files"] <= 0
-        or value["agentos_state_files"] < value["plain_state_files"]
-        or value["agentos_extra_state_files"]
-        != value["agentos_state_files"] - value["plain_state_files"]
-        or value["plain_api_json"] <= 0
-        or value["agentos_api_json"] < value["plain_api_json"]
-        or value["agentos_extra_api_json"]
-        != value["agentos_api_json"] - value["plain_api_json"]
-        or value["checked_pages"] != value["plain_pages"]
-        or value["checked_api_json"] != value["plain_api_json"]
-    ):
-        raise EvidenceSemanticError("dual reader comparison claims are inconsistent")
-    return value
 
 
 def _validate_dual(ctx: ValidationContext) -> None:
@@ -338,12 +217,9 @@ def _validate_dual(ctx: ValidationContext) -> None:
     state = _validate_dual_state(
         ctx.raw_dir / "dual-state-compare.json", plain_count, agent_count
     )
-    reader = _validate_dual_reader(ctx.raw_dir / "dual-reader-compare.json")
     inventories = validate_complete_dual_state(ctx, state)
     validate_program_ledgers(ctx, state, plain_receipt, agent_receipt)
-    validate_dual_alignment(
-        ctx, state, reader, plain_count, agent_count, inventories
-    )
+    validate_dual_alignment(ctx, state, plain_count, agent_count, inventories)
     targeted = _parse_guest_stream(
         ctx.raw_dir / "dual-targeted-agentbench-guest.log",
         "dual targeted Agent benchmark Guest log",

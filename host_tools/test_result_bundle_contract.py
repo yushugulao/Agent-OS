@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Regression checks for the fail-closed Reader result bundle contract."""
+"""Regression checks for the fail-closed result bundle contract."""
 
 from __future__ import annotations
 
 import csv
 import json
 import os
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -386,47 +384,6 @@ def main() -> int:
         else:
             expect_rejected(root, "symlink")
 
-    script = (Path(__file__).resolve().parents[1] / "scripts" / "serve-reader.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "result_bundle_contract.py" in script, "serve-reader does not validate result bundles"
-    assert "exit 1" in script, "serve-reader does not fail closed"
-    assert 'LLM_RELAY_MODE="${LLM_RELAY_MODE:-template}"' in script, (
-        "serve-reader must default to the deterministic offline relay"
-    )
-    if os.name != "nt":
-        with tempfile.TemporaryDirectory() as temp:
-            base = Path(temp)
-            state = base / "state"
-            result = base / "result"
-            output = base / "output"
-            host_run_result = base / "agentos-host-run-result.state"
-            state.mkdir()
-            result.mkdir()
-            (state / "rp_agentos_mainflow").write_text("status=ready\n", encoding="utf-8")
-            (result / "monitor.html").write_text("stale\n", encoding="utf-8")
-            host_run_result.write_text("status=ready\n", encoding="utf-8")
-            environment = dict(os.environ)
-            environment.update(
-                {
-                    "PYTHON_BIN": sys.executable,
-                    "STATE_DIR": str(state),
-                    "RESULT_DIR": str(result),
-                    "OUT_DIR": str(output),
-                    "HOST_RUN_RESULT": str(host_run_result),
-                }
-            )
-            completed = subprocess.run(
-                ["bash", str(Path(__file__).resolve().parents[1] / "scripts" / "serve-reader.sh")],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=environment,
-            )
-            assert completed.returncode != 0, completed.stdout + completed.stderr
-            assert not (output / "dual-results").exists(), "invalid bundle was copied"
-            assert "拒绝" in completed.stderr, completed.stderr
     print("result_bundle_contract_test: passed")
     return 0
 

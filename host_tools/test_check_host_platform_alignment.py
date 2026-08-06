@@ -54,10 +54,6 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             (root / "baseline_ucore" / "user" / "src" / source).write_text("int main(void) { return 0; }\n", encoding="utf-8")
         for source in agentos_sources:
             (root / "user" / "src" / source).write_text("int main(void) { return 0; }\n", encoding="utf-8")
-        (root / "host_tools").mkdir()
-        reader_keywords = sorted({keyword for group in CAPABILITY_GROUPS for keyword in group.reader_keywords})
-        (root / "host_tools" / "plain_ucore_reader.py").write_text("\n".join(reader_keywords), encoding="utf-8")
-
     def _write_backend_runtime_state(self, state_dir: Path) -> None:
         source_fields: dict[str, list[tuple[str, str]]] = {}
         for source, key, value in manifest_checker.BACKEND_RUNTIME_CASES.values():

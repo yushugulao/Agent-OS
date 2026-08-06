@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for the shared Reader/guest state manifest."""
+"""Regression checks for the shared Guest state manifest."""
 
 from __future__ import annotations
 
@@ -11,12 +11,10 @@ import unittest
 from pathlib import Path
 
 if __package__:
-    from . import plain_ucore_reader
     from .research_state_manifest import (
         MANIFEST_RELATIVE_PATH,
         StateManifestError,
         archive_state_names,
-        fixture_state_names,
         guest_state_inventory_sha256,
         load_manifest,
         parse_manifest_text,
@@ -27,12 +25,10 @@ if __package__:
         validate_repository_state_contract,
     )
 else:
-    import plain_ucore_reader
     from research_state_manifest import (
         MANIFEST_RELATIVE_PATH,
         StateManifestError,
         archive_state_names,
-        fixture_state_names,
         guest_state_inventory_sha256,
         load_manifest,
         parse_manifest_text,
@@ -118,12 +114,12 @@ def test_manifest_mutations() -> None:
     expect_error(json.dumps(host_opaque), "opaque Guest and Host")
 
     duplicate_key = text.replace(
-        '"schema_version": 3,',
-        '"schema_version": 3,\n  "schema_version": 3,',
+        '"schema_version": 4,',
+        '"schema_version": 4,\n  "schema_version": 4,',
         1,
     )
     expect_error(duplicate_key, "duplicate manifest key")
-    assert raw["schema_version"] == 3
+    assert raw["schema_version"] == 4
 
 
 def test_repository_contract() -> None:
@@ -138,11 +134,13 @@ def test_repository_contract() -> None:
     plain_archive = archive_state_names(ROOT, manifest, "plain")
     agentos_archive = archive_state_names(ROOT, manifest, "agentos")
     inventory = repository_state_inventory(ROOT, manifest)
-    fixture = fixture_state_names(ROOT / "host_tools/test_plain_ucore_reader.py")
+    retired_reader_state = {"rp_llm_conclusions", "rp_metrics", "rp_review_pack"}
     assert plain <= agentos
-    assert fixture <= inventory
     assert "rp_evidence_packet" in plain
-    assert "rp_evidence_packet" in fixture
+    assert "rp_evidence_packet" in inventory
+    assert not retired_reader_state & inventory
+    assert not retired_reader_state & plain_archive
+    assert not retired_reader_state & agentos_archive
     assert set(manifest.archive_optional_state_files) == {
         "rp_input_fastq", "rp_object_records"
     }
@@ -158,8 +156,6 @@ def test_repository_contract() -> None:
             - set(manifest.archive_optional_state_files)
         ), target
         assert not set(manifest.archive_optional_state_files) & archive, target
-    assert plain_ucore_reader.STATE_API_ALLOWLIST == frozenset(inventory)
-
     plain_map = short_name_map(
         plain,
         excluded_names=manifest.host_state_files,
@@ -251,13 +247,13 @@ def test_import_modes() -> None:
     cases = (
         (
             ROOT,
-            "from host_tools import plain_ucore_fs_extract, plain_ucore_reader; "
+            "from host_tools import plain_ucore_fs_extract; "
             "from host_tools.agent_metadata_disk_format import load_contract; "
             "load_contract()",
         ),
         (
             ROOT / "host_tools",
-            "import plain_ucore_fs_extract, plain_ucore_reader; "
+            "import plain_ucore_fs_extract; "
             "import research_state_manifest; from pathlib import Path; "
             "research_state_manifest.validate_repository_state_contract("
             "Path.cwd().parent)",

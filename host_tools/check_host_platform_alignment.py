@@ -23,7 +23,6 @@ class CapabilityGroup:
     host_modules: tuple[str, ...]
     plain_sources: tuple[str, ...]
     agentos_sources: tuple[str, ...]
-    reader_keywords: tuple[str, ...]
     runtime_state_names: tuple[str, ...] = ()
 
 
@@ -48,7 +47,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_state_catalog.c", "rp_startup_doctor.c", "rp_catalog.c", "rp_mature.c", "rp_test_suite.c"),
         ("rp_state_catalog.c", "rp_startup_doctor.c", "rp_catalog.c", "rp_mature.c", "rp_test_suite.c"),
-        ("Overview", "Catalog", "Status"),
         ("rp_state_catalog", "rp_objects", "rp_services", "rp_agentcmp", "rp_status", "rp_ack"),
     ),
     CapabilityGroup(
@@ -67,7 +65,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_workflow_runner.c", "rp_invoke.c", "rp_complete.c", "rp_portability.c"),
         ("rp_workflow_runner.c", "rp_invoke.c", "rp_complete.c", "rp_portability.c"),
-        ("Workflow", "Invocations", "Portability"),
         (
             "rp_stage_state",
             "rp_cache_index",
@@ -96,7 +93,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_workbench.c", "rp_usable.c", "rp_usableproject.c", "rp_projectrel.c", "rp_runbooks.c"),
         ("rp_workbench.c", "rp_usable.c", "rp_usableproject.c", "rp_projectrel.c", "rp_runbooks.c"),
-        ("Workbench", "Project", "Runbook"),
     ),
     CapabilityGroup(
         "artifacts_objects_packages",
@@ -110,7 +106,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_catalog.c", "rp_artifact_ops.c", "rp_object_store.c", "rp_object_query.c", "rp_package.c"),
         ("rp_catalog.c", "rp_artifact_ops.c", "rp_object_store.c", "rp_object_query.c", "rp_package.c"),
-        ("Artifacts", "Object", "Package"),
     ),
     CapabilityGroup(
         "data_lab_analysis",
@@ -179,7 +174,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
             "rp_service_surface.c",
             "rp_publication.c",
         ),
-        ("Data", "Lab", "Analysis", "Statistical"),
     ),
     CapabilityGroup(
         "llm_prompt_model",
@@ -194,7 +188,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_llm_bridge.c", "rp_llm_relay.c", "rp_modelreg.c"),
         ("rp_llm_bridge.c", "rp_llm_relay.c", "rp_modelreg.c"),
-        ("LLM", "Prompt", "Model"),
     ),
     CapabilityGroup(
         "multi_agent_work",
@@ -223,7 +216,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
             "rp_writer.c",
             "rp_auditor.c",
         ),
-        ("Agent", "Collaboration", "Worker"),
         (
             "rp_agents",
             "rp_decisions",
@@ -255,7 +247,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_prov_query.c", "rp_prov_view.c", "rp_lineage.c", "rp_evidence.c", "rp_query.c", "rp_sysreview.c"),
         ("rp_prov_query.c", "rp_prov_view.c", "rp_lineage.c", "rp_evidence.c", "rp_query.c", "rp_sysreview.c"),
-        ("Provenance", "Evidence", "Search", "Timeline"),
     ),
     CapabilityGroup(
         "governance_privacy_security",
@@ -272,7 +263,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_governance.c", "rp_privacy.c", "rp_sysreview.c", "rp_integrityplane.c", "rp_coherenceplane.c"),
         ("rp_governance.c", "rp_privacy.c", "rp_sysreview.c", "rp_integrityplane.c", "rp_coherenceplane.c"),
-        ("Governance", "Privacy", "Quality"),
     ),
     CapabilityGroup(
         "operations_runtime",
@@ -313,7 +303,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
             "rp_consistency.c",
             "rp_mature.c",
         ),
-        ("Execution", "Queue", "Telemetry", "Metrics"),
     ),
     CapabilityGroup(
         "review_release_delivery",
@@ -359,7 +348,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
             "rp_repair.c",
             "rp_dossier.c",
         ),
-        ("Review", "Release", "Publication", "Delivery"),
     ),
     CapabilityGroup(
         "ui_api_export",
@@ -372,7 +360,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_web_export.c", "rp_ui_export.c", "rp_site_export.c", "rp_service_surface.c"),
         ("rp_web_export.c", "rp_ui_export.c", "rp_site_export.c", "rp_service_surface.c"),
-        ("Dashboard", "API", "Site", "Cards"),
         (
             "rp_ui_home",
             "rp_ui_run",
@@ -401,7 +388,6 @@ CAPABILITY_GROUPS: tuple[CapabilityGroup, ...] = (
         ),
         ("rp_backend.c", "rp_compare_plain.c", "rp_test_suite.c", "rp_mature.c"),
         ("rp_backend.c", "rp_compare_plain.c", "rp_test_suite.c", "rp_mature.c", "rp_agentos_orch.c"),
-        ("AgentOS", "Compare", "Backend"),
     ),
 )
 
@@ -1108,18 +1094,6 @@ def validate_mainflow_runtime_evidence(
 
 
 
-def read_reader_text(root: Path) -> str:
-    chunks: list[str] = []
-    for path in [
-        root / "host_tools" / "plain_ucore_reader.py",
-        root / "docs" / "dual-targets.md",
-        root / "docs" / "verification.md",
-    ]:
-        if path.exists():
-            chunks.append(path.read_text(encoding="utf-8"))
-    return "\n".join(chunks)
-
-
 def missing_items(items: tuple[str, ...], available: set[str]) -> list[str]:
     return [item for item in items if item not in available]
 
@@ -1151,7 +1125,6 @@ def run_check(
     check_runtime_state = plain_state_dir is not None or agentos_state_dir is not None
     if check_runtime_state and (plain_state_dir is None or agentos_state_dir is None):
         raise ValueError("plain and AgentOS state directories must be supplied together")
-    reader_text = read_reader_text(root)
     groups: list[dict[str, object]] = []
     failures: list[str] = []
     runtime_manifest_errors: list[str] = []
@@ -1180,9 +1153,6 @@ def run_check(
         missing_host = missing_items(group.host_modules, host_modules)
         missing_plain = missing_items(group.plain_sources, plain_sources)
         missing_agentos = missing_items(group.agentos_sources, agentos_sources)
-        missing_reader = []
-        if group.reader_keywords and not any(keyword in reader_text for keyword in group.reader_keywords):
-            missing_reader = list(group.reader_keywords)
         plain_runtime_candidates = runtime_candidates(group, group.plain_sources)
         agentos_runtime_candidates = runtime_candidates(group, group.agentos_sources)
         plain_runtime_hits = [
@@ -1202,8 +1172,6 @@ def run_check(
             failures.append(f"{group.name}: missing plain sources: {', '.join(missing_plain)}")
         if missing_agentos:
             failures.append(f"{group.name}: missing AgentOS sources: {', '.join(missing_agentos)}")
-        if missing_reader:
-            failures.append(f"{group.name}: missing Reader/doc keywords: {', '.join(missing_reader)}")
         if check_runtime_state and not plain_runtime_hits:
             failures.append(f"{group.name}: no plain reference state file was produced")
         if check_runtime_state and not agentos_runtime_hits:
@@ -1212,7 +1180,6 @@ def run_check(
             missing_host
             or missing_plain
             or missing_agentos
-            or missing_reader
             or (check_runtime_state and not plain_runtime_hits)
             or (check_runtime_state and not agentos_runtime_hits)
         )
@@ -1223,12 +1190,10 @@ def run_check(
                 "host_modules": len(group.host_modules),
                 "plain_sources": len(group.plain_sources),
                 "agentos_sources": len(group.agentos_sources),
-                "reader_keywords": len(group.reader_keywords),
                 "status": "failed" if group_failed else "ok",
                 "missing_host": missing_host,
                 "missing_plain": missing_plain,
                 "missing_agentos": missing_agentos,
-                "missing_reader": missing_reader,
                 "plain_runtime_hits": plain_runtime_hits,
                 "agentos_runtime_hits": agentos_runtime_hits,
             }

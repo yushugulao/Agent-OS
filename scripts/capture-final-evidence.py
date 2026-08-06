@@ -77,7 +77,7 @@ from host_tools.evidence_toolchain_attestation import (  # noqa: E402
     verify_tool_attestations, verify_tracked_worktree_bytes,
 )
 SCHEMA_VERSION = 8
-FULL_VERIFY_PROFILE_VERSION = 5
+FULL_VERIFY_PROFILE_VERSION = 6
 FULL_VERIFY_TIMEOUT_SECONDS = 5 * 60 * 60
 SUMMARY_NAME = "verification-summary.json"
 SUCCESS_MARKER = "[full-verify] all checks passed"
@@ -85,20 +85,13 @@ SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SUMMARY_FIELDS = {"schema_version", "full_verify_profile_version", "kind", "status", "commit", "completed_at_utc", "settings", "steps", "artifacts", "step_contract_sha256"}
 MANIFEST_FIELDS = {"schema_version", "status", "commit", "collected_at_utc", "authenticity", "delivery", "command", "verification_summary", "raw_artifacts", "environment", "configuration", "metrics", "duration_attestation"}
-READER_RUN_ARTIFACTS = (
-    re.compile(r"^reader-e2e-run-[a-z0-9._-]+-ucore-build\.log$"),
-    re.compile(r"^reader-e2e-run-[a-z0-9._-]+-ucore-run\.log$"),
-    re.compile(r"^reader-e2e-run-[a-z0-9._-]+-ucore-run-summary\.json$"),
-)
-READER_LOG_FILENAMES = ("ucore-build.log", "ucore-run.log", "ucore-run-summary.json")
 STEP_CONTRACT = (
     ("target-structure", (), ()),
     ("kernel-budgets", (), ()),
-    ("reader-e2e", ("reader-e2e.log", "reader-e2e-log-manifest.json"), READER_RUN_ARTIFACTS),
     ("host-platform-alignment", (), ()),
     ("agent-suite", ("agent-suite-timings.log", "agent-suite-guest.log"), ()),
     ("dual-platforms", ("dual-plain-qemu.log", "dual-agentos-qemu.log",
-                         "dual-stage-timings.csv", "dual-state-compare.json", "dual-reader-compare.json", "host-platform-alignment.json", *DUAL_STATE_RAW_ARTIFACTS,
+                         "dual-stage-timings.csv", "dual-state-compare.json", "host-platform-alignment.json", *DUAL_STATE_RAW_ARTIFACTS,
                          "dual-targeted-agentbench-guest.log", "dual-measured-experiments.json", "dual-file-query-benchmark.csv"), ()),
     ("proc-reap", ("proc-reap.log",), ()),
     ("syscall-fairness", ("syscall-fairness.log",), ()),
@@ -113,9 +106,8 @@ STEP_CONTRACT = (
     ("fs-allocator-fault", ("fs-allocator-fault.log", "fs-allocator-evidence.tar"), ()),
 )
 REQUIRED_RAW_FILES = {
-    "reader-e2e.log", "reader-e2e-log-manifest.json", "dual-plain-qemu.log",
-    "dual-agentos-qemu.log", "dual-stage-timings.csv", "dual-state-compare.json",
-    "dual-reader-compare.json", "host-platform-alignment.json",
+    "dual-plain-qemu.log", "dual-agentos-qemu.log", "dual-stage-timings.csv",
+    "dual-state-compare.json", "host-platform-alignment.json",
     *DUAL_STATE_RAW_ARTIFACTS, "dual-targeted-agentbench-guest.log",
     "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
     "agent-suite-timings.log", "agent-suite-guest.log",
@@ -324,31 +316,6 @@ def validate_settings(settings: object) -> dict[str, object]:
             or not isinstance(runs, int) or isinstance(runs, bool) or runs < 3):
         raise EvidenceError("verification summary settings contract is invalid")
     return settings
-def validate_reader_inventory(directory: Path, steps: list[dict[str, object]]) -> None:
-    reader_step = next(step for step in steps if step["name"] == "reader-e2e")
-    try:
-        manifest = read_strict_json(directory / "reader-e2e-log-manifest.json")
-    except (OSError, UnicodeDecodeError, ValueError) as error:
-        raise EvidenceError(f"Reader E2E artifact manifest is invalid: {error}") from error
-    runs = manifest.get("runs") if isinstance(manifest, dict) else None
-    if (set(manifest) != {"schema_version", "required_files", "runs"}
-            or manifest.get("schema_version") != 1
-            or manifest.get("required_files") != list(READER_LOG_FILENAMES)
-            or not isinstance(runs, list) or not runs):
-        raise EvidenceError("Reader E2E artifact manifest contract is invalid")
-    expected = {"reader-e2e.log", "reader-e2e-log-manifest.json"}
-    seen_runs: set[str] = set()
-    for record in runs:
-        run = record.get("run") if isinstance(record, dict) else None
-        if (not isinstance(record, dict) or set(record) != {"run", "files", "missing"}
-                or not isinstance(run, str) or run in seen_runs
-                or not SAFE_NAME.fullmatch(run) or not run.startswith("run-")
-                or record.get("files") != list(READER_LOG_FILENAMES) or record.get("missing") != []):
-            raise EvidenceError("Reader E2E artifact manifest run is invalid")
-        seen_runs.add(run)
-        expected.update(f"reader-e2e-{run}-{name}" for name in READER_LOG_FILENAMES)
-    if set(reader_step["artifacts"]) != expected:
-        raise EvidenceError("Reader E2E manifest and artifact inventory differ")
 def validate_summary(value: object) -> dict[str, object]:
     if (not isinstance(value, dict) or set(value) != SUMMARY_FIELDS
             or value.get("schema_version") != SCHEMA_VERSION):
@@ -434,7 +401,6 @@ def write_summary(args: argparse.Namespace) -> int:
         "step_contract_sha256": step_contract_sha256(steps),
     }
     validate_summary(summary)
-    validate_reader_inventory(incoming, steps)
     atomic_json(incoming / SUMMARY_NAME, summary)
     print(f"[evidence] wrote {SUMMARY_NAME}")
     return 0
@@ -533,7 +499,6 @@ def replay_raw_contract(
             raise EvidenceError(
                 f"raw replay artifact differs from summary: {record['name']}"
             )
-    validate_reader_inventory(raw_dir, summary["steps"])
     validate_dual_measurement_inventory(raw_dir, expected_commit)
     validate_raw_artifacts(
         raw_dir,
@@ -644,7 +609,6 @@ def verify_bundle(root: Path, contract_root: Path) -> dict[str, object]:
                 or record.get("sha256") != summary_record["sha256"]
                 or record.get("bytes") != summary_record["bytes"]):
             raise EvidenceError(f"raw artifact differs: {record.get('name')}")
-    validate_reader_inventory(root / "logs/raw", summary["steps"])
     validate_dual_measurement_inventory(root / "logs/raw", str(summary["commit"]))
     validate_raw_artifacts(root / "logs/raw", contract_root)
     validate_fs_allocator_archive(root / "logs/raw" / "fs-allocator-evidence.tar")
@@ -951,7 +915,6 @@ def collect(args: argparse.Namespace) -> int:
             raise EvidenceError(f"full-verify did not publish a valid summary: {error}") from error
         if summary["commit"] != commit:
             raise EvidenceError("full-verify summary is not bound to detached HEAD")
-        validate_reader_inventory(evidence_stage / "incoming", summary["steps"])
         validate_dual_measurement_inventory(evidence_stage / "incoming", commit)
         validate_raw_artifacts(evidence_stage / "incoming", worktree, False)
         validate_fs_allocator_archive(evidence_stage / "incoming" / "fs-allocator-evidence.tar")

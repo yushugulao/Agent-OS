@@ -15,7 +15,6 @@ from pathlib import Path
 from unittest import mock
 
 import plain_ucore_action_runner as runner
-import test_plain_ucore_reader_e2e as reader_e2e
 from safe_host_paths import path_is_link
 
 
@@ -813,15 +812,6 @@ def main() -> int:
             "observer_cleanup_allowance_seconds": 10,
             "server_deadline_seconds": 640,
         }
-        assert reader_e2e.action_client_timeout_seconds(deadline_contract) == 655
-        invalid_deadline_contract = dict(deadline_contract)
-        invalid_deadline_contract["server_deadline_seconds"] = 639
-        try:
-            reader_e2e.action_client_timeout_seconds(invalid_deadline_contract)
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError("short Reader E2E server deadline was accepted")
         for invalid_timeout in (0, -1, True, 1.5, 3601):
             try:
                 runner.seeded_ucore_deadline_contract(invalid_timeout)
@@ -1217,50 +1207,6 @@ def main() -> int:
         assert marker_then_wait["failure_reason"] == ""
         assert marker_then_wait["runner_signals"] == (int(signal.SIGTERM),)
         assert marker_then_wait["output_eof"] is True
-
-        persisted_source = root / "reader-runs"
-        persisted_run = persisted_source / "run-0001"
-        persisted_run.mkdir(parents=True)
-        for filename in runner.READER_E2E_LOG_FILENAMES:
-            (persisted_run / filename).write_text(
-                f"original:{filename}\n", encoding="utf-8"
-            )
-        (persisted_run / "not-evidence.tmp").write_text("ignore\n", encoding="utf-8")
-        persisted_target = runner.prepare_reader_e2e_log_dir(root / "reader-e2e-logs")
-        persisted_manifest = runner.persist_reader_e2e_logs(
-            persisted_source, persisted_target
-        )
-        assert persisted_manifest["runs"] == [
-            {
-                "run": "run-0001",
-                "files": list(runner.READER_E2E_LOG_FILENAMES),
-                "missing": [],
-            }
-        ]
-        for filename in runner.READER_E2E_LOG_FILENAMES:
-            assert read(persisted_target / "run-0001" / filename) == (
-                f"original:{filename}\n"
-            )
-        assert not (persisted_target / "run-0001" / "not-evidence.tmp").exists()
-        persisted_manifest_file = json.loads(
-            read(persisted_target / "reader-e2e-log-manifest.json")
-        )
-        assert persisted_manifest_file == persisted_manifest
-        runner.validate_reader_e2e_logs(persisted_target, persisted_manifest)
-        incomplete_manifest = dict(persisted_manifest)
-        incomplete_manifest["runs"] = []
-        try:
-            runner.validate_reader_e2e_logs(persisted_target, incomplete_manifest)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("empty Reader E2E manifest was accepted")
-        try:
-            runner.prepare_reader_e2e_log_dir(persisted_target)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("non-empty Reader E2E log directory was accepted")
 
         state_dir = root / "state"
         run_dir = root / "run"

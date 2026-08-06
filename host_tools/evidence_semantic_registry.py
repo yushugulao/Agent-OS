@@ -23,7 +23,6 @@ from evidence_semantic_profiles import (
     _validate_observe,
     _validate_physical_resource,
     _validate_proc,
-    _validate_reader,
     _validate_syscall,
     _validate_thread_resource,
     _validate_virtio,
@@ -40,11 +39,6 @@ class RawArtifactRule:
 
 RAW_ARTIFACT_REGISTRY = (
     RawArtifactRule(
-        "reader-e2e",
-        ("reader-e2e.log", "reader-e2e-log-manifest.json"),
-        _validate_reader,
-    ),
-    RawArtifactRule(
         "agent-suite",
         ("agent-suite-timings.log", "agent-suite-guest.log"),
         _validate_agent_suite,
@@ -53,7 +47,7 @@ RAW_ARTIFACT_REGISTRY = (
         "dual-platforms",
         (
             "dual-plain-qemu.log", "dual-agentos-qemu.log", "dual-stage-timings.csv",
-            "dual-state-compare.json", "dual-reader-compare.json",
+            "dual-state-compare.json",
             "host-platform-alignment.json", *DUAL_STATE_RAW_ARTIFACTS,
             "dual-targeted-agentbench-guest.log", "dual-measured-experiments.json",
             "dual-file-query-benchmark.csv",

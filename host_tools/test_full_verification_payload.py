@@ -48,18 +48,11 @@ def make_payload(
     root.mkdir()
     raw = root / payload.RAW_ROOT
     raw.mkdir(parents=True)
-    dynamic = {
-        "reader-e2e": [
-            "reader-e2e-run-fixture-ucore-build.log",
-            "reader-e2e-run-fixture-ucore-run.log",
-            "reader-e2e-run-fixture-ucore-run-summary.json",
-        ]
-    }
     steps: list[dict[str, object]] = []
     artifacts: list[dict[str, object]] = []
     seen: set[str] = set()
     for index, (name, fixed, _patterns) in enumerate(collector.STEP_CONTRACT, 1):
-        names = [*fixed, *dynamic.get(name, [])]
+        names = list(fixed)
         for artifact in names:
             if artifact in seen:
                 continue

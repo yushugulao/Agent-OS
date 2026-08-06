@@ -148,42 +148,6 @@ echo "[full-verify] kernel growth budgets"
 evidence_step_end "kernel-budgets"
 
 evidence_step_begin
-echo "[full-verify] 本地结果阅读器"
-(
-	cd "${ROOT_DIR}"
-	if evidence_enabled; then
-		reader_raw_dir="${EVIDENCE_WORK_DIR}/reader-e2e-raw"
-		reader_artifact_list="${EVIDENCE_WORK_DIR}/reader-e2e-artifacts.txt"
-		: >"${reader_artifact_list}"
-		evidence_capture_stdout \
-			"reader-e2e.log" \
-			env PLAIN_UCORE_READER_E2E_LOG_DIR="${reader_raw_dir}" \
-			"${PYTHON_BIN}" host_tools/test_plain_ucore_reader_e2e.py
-		printf '%s\n' "reader-e2e.log" >>"${reader_artifact_list}"
-		[[ -s "${reader_raw_dir}/reader-e2e-log-manifest.json" ]]
-		evidence_publish_file "${reader_raw_dir}/reader-e2e-log-manifest.json" \
-			"reader-e2e-log-manifest.json"
-		printf '%s\n' "reader-e2e-log-manifest.json" >>"${reader_artifact_list}"
-		[[ -z "$(find "${reader_raw_dir}" -type l -print -quit)" ]]
-		while IFS= read -r -d '' reader_log; do
-			relative="${reader_log#"${reader_raw_dir}/"}"
-			artifact="reader-e2e-${relative//\//-}"
-			evidence_publish_file "${reader_log}" "${artifact}"
-			printf '%s\n' "${artifact}" >>"${reader_artifact_list}"
-		done < <(find "${reader_raw_dir}" -mindepth 2 -maxdepth 2 -type f -print0 | sort -z)
-		[[ "$(wc -l <"${reader_artifact_list}")" -gt 2 ]]
-	else
-		"${PYTHON_BIN}" host_tools/test_plain_ucore_reader_e2e.py
-	fi
-)
-if evidence_enabled; then
-	mapfile -t reader_artifacts <"${EVIDENCE_WORK_DIR}/reader-e2e-artifacts.txt"
-	evidence_step_end "reader-e2e" "${reader_artifacts[@]}"
-else
-	evidence_step_end "reader-e2e"
-fi
-
-evidence_step_begin
 echo "[full-verify] host platform alignment"
 (
 	cd "${ROOT_DIR}"
@@ -331,9 +295,6 @@ echo "[full-verify] dual platforms"
 			"${dual_dir}/state-compare-summary.json" \
 			"dual-state-compare.json"
 		evidence_publish_file \
-			"${dual_dir}/reader-compare-summary.json" \
-			"dual-reader-compare.json"
-		evidence_publish_file \
 			"${dual_dir}/host-platform-alignment.json" \
 			"host-platform-alignment.json"
 		for pair in "${mainflow_artifact_specs[@]}"; do
@@ -359,7 +320,7 @@ echo "[full-verify] dual platforms"
 evidence_step_end "dual-platforms" \
 	"dual-plain-qemu.log" "dual-agentos-qemu.log" \
 	"dual-stage-timings.csv" "dual-state-compare.json" \
-	"dual-reader-compare.json" "host-platform-alignment.json" \
+	"host-platform-alignment.json" \
 	"${mainflow_artifacts[@]}" "dual-targeted-agentbench-guest.log" \
 	"dual-measured-experiments.json" "dual-file-query-benchmark.csv"
 

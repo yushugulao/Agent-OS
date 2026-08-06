@@ -23,7 +23,7 @@ sudo apt install -y git build-essential make python3 qemu-system-misc \
   python3-pandas python3-seaborn python3-matplotlib
 ```
 
-仓库不放置 QEMU、交叉编译器和云端模型密钥。这些内容体积大、和本机环境绑定，放进仓库会增加克隆成本，也不利于复现实验环境复现。仓库内置的是可运行源码、测试脚本、状态查看工具、依赖检查脚本和默认的离线 LLM Relay 路径。
+仓库不放置 QEMU 和交叉编译器。这些内容体积大、和本机环境绑定，放进仓库会增加克隆成本，也不利于复现实验环境复现。仓库内置可运行源码、测试脚本、依赖检查脚本和离线评价工具。
 
 ## Windows 侧检查
 
@@ -146,23 +146,17 @@ package 中的全部策略快照还要与 C 的 Git blob 一致。
 `README.md`、`docs/**` 与 `evidence/README.md`，不得改包或 INDEX。当前仓库尚未随本文
 预先声明任何未产生的正式结果。
 
-## 可选的旧版演示页面
+## 现场演示
 
-旧入口适合交互演示，不是上述 formal 评价和证据交付的替代品：
+现场快速演示使用同一套 Guest 测量合同，并生成可直接打开的静态 Dashboard：
 
 ```bash
-make dual-platform-run TOOLPREFIX=<你的 RISC-V 工具链前缀>
-make reader
+make contest-demo TOOLPREFIX=<你的 RISC-V 工具链前缀>
+make contest-demo-check
 ```
 
-第一条命令运行普通 uCore 对照目标和 AgentOS-uCore 目标并生成预览材料；第二条命令启动
-本地页面服务。查看时可打开：
-
-- `http://127.0.0.1:8767/`
-- `http://127.0.0.1:8767/dual-results.html`
-- `http://127.0.0.1:8767/dual-results/monitor.html`
-- `http://127.0.0.1:8767/dual-results/reader-guide.html`
-- `http://127.0.0.1:8767/reader-url-list.txt`
+正式数据仍由 `evaluation-run`、`evaluation-verify`、`evaluation-dashboard` 和
+`evaluation-package` 生成与封装；本地预览不能替代 release bundle。
 
 ## 快速检查命令
 
@@ -173,19 +167,3 @@ make target-readiness
 ```
 
 构建、专项测试和双目标验证的完整命令见 [verification.md](verification.md) 与 [agentos/verification.md](agentos/verification.md)。
-
-## LLM Relay 运行方式
-
-默认测试不访问云端模型。Host LLM Relay 会使用模板模式生成稳定输出，适合复现实验环境复现。
-
-本机示例可以使用 cloud 模式访问 DeepSeek。密钥文件放在仓库外，通过环境变量传入，例如：
-
-```bash
-AGENT_PLATFORM_LLM_API_KEY_FILE=/path/to/local/key-file \
-python3 host_tools/plain_ucore_llm_relay.py \
-  --state-dir /tmp/agentos-dual-platform/agentos-state \
-  --out-dir /tmp/agentos-dual-platform/agentos-state \
-  --mode cloud
-```
-
-`make reader` 默认带上 `--auto-run-llm-relay --llm-relay-mode template`，因此现场演示不依赖网络或密钥。需要验证云端适配时，可显式设置 `LLM_RELAY_MODE=cloud`；LLM 相关 action 会生成复核摘要、方法检查、恢复说明、写作摘要、项目复核意见和最终报告摘要，并刷新相关状态文件。密钥文件不要放入仓库目录，运行脚本和结果文件不会写入密钥内容。

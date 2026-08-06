@@ -40,7 +40,7 @@ AgentOS-uCore 把 Agent 进程、工具调用、Context、文件对象、事件�
 | 编译工具链 | 已验证 `riscv64-linux-gnu-`；Makefile 可接受 `riscv64-unknown-elf-` |
 | 兼容性 | Agent 交付以 `CHAPTER=agent` 为验收主路径；补充验证 `trace` 和普通进程 mail 等代表性基础 syscall；Agent syscall 使用 500 起的扩展编号 |
 | 当前范围 | 任务一至五增强实现；任务六提供可运行综合示例 |
-| 当前范围说明 | 文件扫描覆盖 uCore 根目录短文件名；云端模型访问由用户态或宿主机 Relay 完成；页面和图表由宿主机工具生成 |
+| 当前范围说明 | 文件扫描覆盖 uCore 根目录短文件名；Guest 模板 relay 可离线运行，在线模型接入不属于竞赛交付；页面和图表由宿主机工具生成 |
 
 ## 3. 上下文与范围
 
@@ -83,7 +83,7 @@ flowchart LR
 | 安全与资源韧性 | 已实现 dynamic workflow scope、generation-safe lifecycle key、PUBLIC 降权后代撤销、唯一根 controller、capability + exact scope/owner、可信映像、W^X、VFS 隔离、统一 teardown、EXEC/STORAGE 资源账户、资源域两级调度、持久存储主体配额、块 I/O/cache 分域、分级保留量和 scope retirement 回收 |
 | 代表性 uCore 基础 syscall | 已实现 `trace`、`mailread`、`mailwrite`；mail 保持 FIFO/16 槽接口但不再是全局裸 PID 通道 |
 | 综合场景 | 已实现 `labdemo_ucore` 综合示例 |
-| LLM 友好路径 | 已实现 `llm_request`、`llm_response`、`AGENT_EVENT_LLM_DONE`、Context 记录和事件唤醒；真实云端 relay 保持在用户态或宿主机桥接层 |
+| LLM 友好路径 | 已实现 `llm_request`、`llm_response`、`AGENT_EVENT_LLM_DONE`、Context 记录和事件唤醒；Guest 测试使用确定性模板 relay |
 | 页面和图表 | 由宿主机工具读取结构化事件、状态文件和 CSV 生成 |
 
 ## 4. 解决方案策略
@@ -205,7 +205,7 @@ flowchart TB
 | 可信执行测试 | `user/src/agenttrust_ucore.c` | RX/RW+NX 布局、映像不可变、bootstrap 授权范围和角色映像绑定 |
 | VFS 安全域测试 | `user/src/agentvfs_ucore.c` | public/workflow 隔离、worker 能力衰减、跨 scope inode fd 撤销、worker pipe 单跳委派和受保护路径 |
 | 系统稳健性测试 | `user/src/usersafety_ucore.c`、`user/src/fsenospc_ucore.c`、`user/src/fsquota_ucore.c`、`user/src/fspquota_ucore.c`、`user/src/procreap_ucore.c` | 用户地址、对象私有等待、真实 ENOSPC、持久 PUBLIC principal、存储配额与系统保留量、退出回收和进程域配额 |
-| 构建与 QEMU runner | `scripts/run-agent-tests.sh`、`scripts/agent_test_runner.py`、`host_tools/plain_ucore_action_runner.py` | Agent case runner 二进制全量 drain 并 fail closed；Reader action runner 把 clean/build/guest 分阶段，构建只看退出码，Guest 启动后才按完整日志行识别 panic/fault |
+| 构建与 QEMU runner | `scripts/run-agent-tests.sh`、`scripts/agent_test_runner.py`、`host_tools/plain_ucore_action_runner.py` | Agent case runner 二进制全量 drain 并 fail closed；seeded action runner 分离 clean/build/guest 阶段；独立测试并行运行，每个 QEMU lane 使用隔离的构建、镜像和日志目录。 |
 | 线程资源脚本 | `scripts/run-thread-resource-tests.sh` | 以 19/12/6/6/4 tiny policy 构建并检查线程域 12 项机制标记 |
 
 ## 6. 运行视图
@@ -214,7 +214,7 @@ flowchart TB
 
 运行时材料按“内核事实 -> 统一记录 -> 用户态消费 -> 宿主机呈现”组织。测试程序和科研平台不会只贴一段无结构日志，而是输出可被文档和 Web UI 直接读取的 `key=value` 记录：例如 `tool=query_file`、`used_index=1`、`prefetch_handoff=analyze`、`stale_commit=1`。这使同一条运行事实可以同时出现在 QEMU 输出、测试记录、验证表和结果页面中。
 
-科研平台的 `exact-field-v1` receipt 不把状态文件截断到固定字段缓冲区。`rp_evidence_measure_file_field()` 以 128 B 分块流式读取完整文件，并跨块精确匹配唯一的 `key=value` 字段；长无关字段和长 key 都合法，空 key/value、CR、NUL、重复目标或仅前后缀相似的字段一律 fail closed。完整文件的 bytes、hash 和 line count 与字段断言一起进入 receipt。Host ASan/UBSan probe 已纳入 `local-check` 的自测清单；该静态/Host 结果不代表当前 Reader、双目标或 `full-verify` 已经运行通过。
+科研平台的 `exact-field-v1` receipt 不把状态文件截断到固定字段缓冲区。`rp_evidence_measure_file_field()` 以 128 B 分块流式读取完整文件，并跨块精确匹配唯一的 `key=value` 字段；长无关字段和长 key 都合法，空 key/value、CR、NUL、重复目标或仅前后缀相似的字段一律 fail closed。完整文件的 bytes、hash 和 line count 与字段断言一起进入 receipt。Host ASan/UBSan probe 已纳入 `local-check` 的自测清单；该静态/Host 结果不代表当前双目标或 `full-verify` 已经运行通过。
 
 ### 6.1 Agent 创建
 
@@ -560,7 +560,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 文件内容摘要 | `read_file_digest` 受 `CONTENT_READ` capability 控制，按 selector 读取真实文件短预览、最多 4096 字节内容和 FNV-1a 指纹；绑定 Agent metadata 的真实文件进入 8 槽内容版本感知 digest cache | 让 Agent 在 metadata 命中后取得轻量内容证据，重复读取同一文件证据时复用结果，并自动进入 Context/timeline | 不是全文搜索，不建立内容倒排索引；未绑定 Agent metadata 的普通文件不缓存 |
 | 文件编辑冲突处理 | 使用 `scope + dev + inum + incarnation` 租约和版本检查，并接入真实 VFS 修改路径 | 防止同 scope 无序覆盖，也拒绝跨 scope 租约号复用 | 不做内容自动合并 |
 | 对象预取提示 | 查询/缓存携带精确 hit slot；scope 配额内依赖选择器经精确核验后只扫描一次文件表，以槽位位图去重并最多发布 8 条；物理 span 表 32 条按 4 scope 各8，并核对 private owner | 单次查询副作用有固定上限，同 scope 因果链可交接提示，跨 scope 不能借公开 span 查询 | 当前只提示 metadata，提示本身不预读文件内容 |
-| LLM 友好路径 | 内核记录 `llm_request`/`llm_response`，使用 `LLM_RELAY` capability 限制结果投递，并用 `AGENT_EVENT_LLM_DONE` 唤醒请求 Agent | 让 LLM 驱动 Agent 的请求、结果、Context、事件和审计进入 OS 管理视野，同时不让内核持有 secret 或访问网络 | 真实云端模型调用由用户态或宿主机 relay 实现 |
+| LLM 友好路径 | 内核记录 `llm_request`/`llm_response`，使用 `LLM_RELAY` capability 限制结果投递，并用 `AGENT_EVENT_LLM_DONE` 唤醒请求 Agent | 让 LLM 驱动 Agent 的请求、结果、Context、事件和审计进入 OS 管理视野，同时不让内核持有 secret 或访问网络 | Guest `rp_llm_relay` 提供确定性模板，在线模型接入不属于竞赛交付 |
 | Agent Loop | watch/unwatch/wait/wake/route_config/wait_cancel、heartbeat set/stop、sched_snapshot/sched_config 独立 syscall，并让调度器感知 Agent 状态；旧 heartbeat 512 ABI 保留 | 等待事件不放进 batch 热路径；心跳由 intrinsic SYSTEM TIMER 唤醒并单条 coalesce；跨 Agent 数据面显式授权；调度原因由内核记录，orchestrator 可受权调整目标 Agent 参数 | 路由当前只覆盖 `MESSAGE` / `LLM_DONE`；调度策略字段为 weight、priority 和 budget |
 | 基础 syscall 兼容 | 实现 `SYS_trace=410`、`SYS_mailread=401`、`SYS_mailwrite=402` | 满足代表性 uCore 基础测试和普通进程消息接口 | 不把当前工作扩大成全部 chapter 的完整兼容验收 |
 | 示例日志契约 | 输出 `agentos:event type=... key=value`，包含 plan、corr_id、模板 LLM refs 和 report 字段 | 页面工具和 LLM Relay 可以直接解析核心示例程序输出 | 当前图表和页面由宿主机工具生成 |
@@ -629,10 +629,10 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 文件扫描范围 | 自动扫描 uCore 根目录并维护自动元数据和索引 | 当前 uCore 文件系统以根目录短文件名为主要示例对象，复杂目录策略留给用户态。 |
 | Agent 调度策略 | 验证角色权重、受权配置、事件优先、deadline、heartbeat、等待时长和虚拟运行量 | 内核提供稳定字段和记录，策略组合由 orchestrator 控制。 |
 | 因果链和 Run Ledger | 每 Agent 最近 128 条 Context；物理 512 audit 槽按 4 scope 各 128，维护 scope-local 逻辑 hash 链和稀疏窗口 | 该能力是运行期轻量追踪，不替代跨重启审计数据库。 |
-| LLM Relay | 内核提供结构化请求、响应事件、Context 和审计记录 | 云端访问、密钥和 HTTP/TLS 保持在用户态或宿主机侧。 |
+| LLM Relay | 内核提供结构化请求、响应事件、Context 和审计记录 | Guest `rp_llm_relay` 提供确定性模板；云端模型接入不属于竞赛交付。 |
 | 页面和图表 | 内核输出结构化事件、状态文件、timeline、audit 和 provenance | 宿主机工具负责渲染页面、生成 SVG 和汇总 CSV。 |
 | Agent Context 状态 | 每个活跃 Agent 原子计费 21 页：9 页 detail/attribution sidecar + 6 页用户 mirror + 6 页可信 shadow | 最终 PCB、全局容量和阈值必须由当前源码的 canonical budget log 与 release bundle 给出；完整状态的机制口径为 84 KiB/Agent，legacy mail 的两页按需 sidecar 另行计费。 |
-| CI 模块与 runner 门 | owner、bridge、依赖和 aggregate budget 以版本化注册集合为准；受控 integration graph 的 SCC=3 为 checker 硬约束；metadata 聚合 source/text/BSS 防止跨文件迁移；各 fail-closed 自测集合随源码演进 | integration graph 不是完整 uCore 调用图；通用 runner 全量 drain 并要求普通 case 自然 `rc=0`。Reader action runner 则只在 guest 阶段按完整日志行识别故障，构建阶段仅看退出码。输出洪泛、迟到 marker、普通 marker grace、非零退出或后置 panic 都不能成功；显式 checkpoint 只接受 marker 后 runner 发出的单次 `SIGTERM`，显式 powercut 只接受认证 supervisor 对稳定 QEMU leader 发出的单次 `SIGKILL` 及完整证明。powercut 是突然 VM 终止模型，不等同于整机物理断电。 |
+| CI 模块与 runner 门 | owner、bridge、依赖和 aggregate budget 以版本化注册集合为准；受控 integration graph 的 SCC=3 为 checker 硬约束；metadata 聚合 source/text/BSS 防止跨文件迁移；各 fail-closed 自测集合随源码演进 | integration graph 不是完整 uCore 调用图；通用 runner 全量 drain 并要求普通 case 自然 `rc=0`。输出洪泛、迟到 marker、普通 marker grace、非零退出或后置 panic 都不能成功；显式 checkpoint 只接受 marker 后 runner 发出的单次 `SIGTERM`，显式 powercut 只接受认证 supervisor 对稳定 QEMU leader 发出的单次 `SIGKILL` 及完整证明。powercut 是突然 VM 终止模型，不等同于整机物理断电。 |
 | 本地时间预算 | 只统计版本化 Agent case 清单的 monotonic 运行时，不含编译 | 当前配置为 `provisional_requires_full_suite`，最终提交三轮重校准前不启用时长门。发布状态只由本地 C→E release bundle 判定。 |
 
 ## 12. 术语表

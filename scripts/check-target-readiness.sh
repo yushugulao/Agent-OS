@@ -23,10 +23,7 @@ echo "[target-readiness] runtime comparison contracts"
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_action_runner.py
 	"${PYTHON_BIN}" -m unittest discover -s . -p test_research_state_manifest.py
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_fs_extract.py
-	"${PYTHON_BIN}" host_tools/test_plain_ucore_llm_relay.py
-	"${PYTHON_BIN}" host_tools/test_llm_relay_mode_contract.py
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_state.py
-	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_reader.py
 	"${PYTHON_BIN}" host_tools/test_backend_evidence_contract.py
 	"${PYTHON_BIN}" host_tools/test_reference_catalog_contract.py
 	"${PYTHON_BIN}" host_tools/test_measured_experiments.py
@@ -34,14 +31,6 @@ echo "[target-readiness] runtime comparison contracts"
 	"${PYTHON_BIN}" host_tools/test_summarize_dual_platform_results.py
 	"${PYTHON_BIN}" host_tools/test_result_bundle_contract.py
 	"${PYTHON_BIN}" host_tools/test_chart_svg_layout_contract.py
-)
-
-echo "[target-readiness] reader contracts"
-(
-	cd "${ROOT_DIR}"
-	"${PYTHON_BIN}" host_tools/test_check_reader_output.py
-	"${PYTHON_BIN}" host_tools/test_plain_ucore_reader.py
-	"${PYTHON_BIN}" host_tools/test_plain_ucore_reader_e2e.py
 )
 
 echo "[target-readiness] quick target checks passed"

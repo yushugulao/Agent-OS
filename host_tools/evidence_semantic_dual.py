@@ -53,8 +53,7 @@ SOURCE_FIELDS = {
 }
 GROUP_FIELDS = {
     "name", "host_modules", "plain_sources", "agentos_sources",
-    "reader_keywords", "status", "missing_host", "missing_plain",
-    "missing_agentos", "missing_reader", "plain_runtime_hits",
+    "status", "missing_host", "missing_plain", "missing_agentos", "plain_runtime_hits",
     "agentos_runtime_hits",
 }
 FIELD_NAME = re.compile(r"[a-z][a-z0-9_]*\Z")
@@ -220,7 +219,7 @@ def _validate_groups(
     for group, contract in zip(groups, CAPABILITY_GROUPS):
         if not isinstance(group, dict) or set(group) != GROUP_FIELDS:
             raise EvidenceSemanticError("Host alignment group schema differs")
-        missing = ("missing_host", "missing_plain", "missing_agentos", "missing_reader")
+        missing = ("missing_host", "missing_plain", "missing_agentos")
         plain_hits = [
             name for name in runtime_candidates(contract, contract.plain_sources)
             if name in inventories["plain"]
@@ -234,7 +233,6 @@ def _validate_groups(
             or group.get("host_modules") != len(contract.host_modules)
             or group.get("plain_sources") != len(contract.plain_sources)
             or group.get("agentos_sources") != len(contract.agentos_sources)
-            or group.get("reader_keywords") != len(contract.reader_keywords)
             or any(group.get(field) != [] for field in missing)
             or not plain_hits or group.get("plain_runtime_hits") != plain_hits
             or not agentos_hits or group.get("agentos_runtime_hits") != agentos_hits
@@ -342,7 +340,6 @@ def validate_program_ledgers(
 def validate_dual_alignment(
     ctx: ValidationContext,
     state: dict[str, object],
-    reader: dict[str, object],
     plain_programs: int,
     agentos_programs: int,
     inventories: dict[str, set[str]],
@@ -364,8 +361,6 @@ def validate_dual_alignment(
         or value.get("plain_evidence_role") != "demo_reference"
         or value.get("plain_state_files") != state["plain_files"]
         or value.get("agentos_state_files") != state["agentos_files"]
-        or reader["plain_state_files"] != state["plain_files"]
-        or reader["agentos_state_files"] != state["agentos_files"]
         or value.get("plain_programs_observed") != plain_programs
         or value.get("agentos_programs_observed") != agentos_programs
         or value.get("mainflow_host_stages") != len(MAIN_FLOW_SOURCE_SPECS)

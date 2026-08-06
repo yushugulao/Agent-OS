@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "targets": {
     "plain": {
       "source_roots": [
@@ -39,11 +39,6 @@
     "rp_host_action_queue",
     "rp_host_action_seed",
     "rp_host_run_result"
-  ],
-  "reader_optional_state_files": [
-    "rp_llm_conclusions",
-    "rp_metrics",
-    "rp_review_pack"
   ],
   "archive_optional_state_files": [
     "rp_input_fastq",

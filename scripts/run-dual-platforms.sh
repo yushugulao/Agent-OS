@@ -310,38 +310,6 @@ stage_begin "state-compare"
 	--json-out "${DUAL_LOG_DIR}/state-compare-summary.json"
 stage_finish ready
 
-stage_begin "reader-render-check"
-rm -rf "${DUAL_LOG_DIR}/plain-reader" "${DUAL_LOG_DIR}/agentos-reader"
-"${PYTHON_BIN}" "${ROOT_DIR}/host_tools/plain_ucore_reader.py" \
-	--state-dir "${DUAL_LOG_DIR}/plain-state" \
-	--out-dir "${DUAL_LOG_DIR}/plain-reader" \
-	--host-platform-alignment "${DUAL_LOG_DIR}/host-platform-alignment.json" \
-	--host-test-alignment "${DUAL_LOG_DIR}/host-test-alignment.json" \
-	--host-surface-alignment "${DUAL_LOG_DIR}/host-surface-alignment.json" \
-	--seeded-action-state "${DUAL_LOG_DIR}/seeded-action-state.json" \
-	--host-run-result "${plain_run_result}" \
-	--expected-target plain
-"${PYTHON_BIN}" "${ROOT_DIR}/host_tools/plain_ucore_reader.py" \
-	--state-dir "${DUAL_LOG_DIR}/agentos-state" \
-	--out-dir "${DUAL_LOG_DIR}/agentos-reader" \
-	--host-platform-alignment "${DUAL_LOG_DIR}/host-platform-alignment.json" \
-	--host-test-alignment "${DUAL_LOG_DIR}/host-test-alignment.json" \
-	--host-surface-alignment "${DUAL_LOG_DIR}/host-surface-alignment.json" \
-	--seeded-action-state "${DUAL_LOG_DIR}/seeded-action-state.json" \
-	--host-run-result "${agentos_run_result}" \
-	--expected-target agentos
-"${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_reader_output.py" \
-	--reader-dir "${DUAL_LOG_DIR}/plain-reader" \
-	--json-out "${DUAL_LOG_DIR}/plain-reader-check.json"
-"${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_reader_output.py" \
-	--reader-dir "${DUAL_LOG_DIR}/agentos-reader" \
-	--json-out "${DUAL_LOG_DIR}/agentos-reader-check.json"
-"${PYTHON_BIN}" "${ROOT_DIR}/host_tools/compare_dual_platform_reader.py" \
-	--plain-summary "${DUAL_LOG_DIR}/plain-reader/reader-summary.json" \
-	--agentos-summary "${DUAL_LOG_DIR}/agentos-reader/reader-summary.json" \
-	--json-out "${DUAL_LOG_DIR}/reader-compare-summary.json"
-stage_finish ready
-
 stage_begin "measured-file-query"
 measurement_guest_log="${DUAL_LOG_DIR}/dual-targeted-agentbench-guest.log"
 if [ -L "${measurement_guest_log}" ]; then

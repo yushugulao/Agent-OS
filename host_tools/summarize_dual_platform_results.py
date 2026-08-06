@@ -20,6 +20,7 @@ from measured_experiments import (
     write_manifest,
 )
 from dual_state_evidence_contract import MAIN_FLOW_SOURCE_SPECS, RUN_RESULT_WORK_FILES
+from evidence_semantic_profiles import DUAL_STAGES
 
 
 PALETTE = {
@@ -39,7 +40,7 @@ STAGE_LABELS = {
     "state-extract-copy": "状态文件提取整理",
     "host-alignment": "宿主平台能力对照",
     "state-compare": "状态文件结果对照",
-    "reader-render-check": "本地页面渲染与检查",
+    "measured-file-query": "文件查询实测",
     "result-report-chart": "结果报告与图表生成",
 }
 
@@ -119,7 +120,6 @@ def stage_label(stage: object) -> str:
 
 def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
     state = read_json(work_dir / "state-compare-summary.json")
-    reader = read_json(work_dir / "reader-compare-summary.json")
     seeded = read_json(work_dir / "seeded-action-state.json")
     platform = read_json(work_dir / "host-platform-alignment.json")
     tests = read_json(work_dir / "host-test-alignment.json")
@@ -144,22 +144,6 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
             as_number(state.get("common_files")),
             0,
             "共有文件用于检查同一科研流程在两个目标中是否保持结果一致。",
-        ),
-        MetricRow(
-            "本地阅读器输出",
-            "HTML 页面",
-            as_number(reader.get("plain_pages")),
-            as_number(reader.get("agentos_pages")),
-            as_number(reader.get("agentos_pages")) - as_number(reader.get("plain_pages")),
-            "页面集合应保持一致，避免增强目标缺少流程页面。",
-        ),
-        MetricRow(
-            "本地阅读器输出",
-            "API JSON",
-            as_number(reader.get("plain_api_json")),
-            as_number(reader.get("agentos_api_json")),
-            as_number(reader.get("agentos_extra_api_json")),
-            "AgentOS 目标可增加内核证据 API，但不能少于普通目标。",
         ),
         MetricRow(
             "主流程证据",
@@ -253,7 +237,6 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
 
     meta = {
         "state": state,
-        "reader": reader,
         "seeded": seeded,
         "platform": platform,
         "tests": tests,
@@ -330,7 +313,6 @@ def mainflow_evidence(meta: dict[str, object]) -> tuple[int, int]:
 
 def evaluation_items(meta: dict[str, object]) -> list[tuple[str, str]]:
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     tests = meta.get("tests", {}) if isinstance(meta.get("tests"), dict) else {}
@@ -359,10 +341,6 @@ def evaluation_items(meta: dict[str, object]) -> list[tuple[str, str]]:
         items.append(("通过", "Host 已从安全状态清单复验全部有序 AgentOS 主流程阶段。"))
     else:
         items.append(("关注", "AgentOS 主流程阶段数量偏少，需要检查 rp_agentos_mainflow。"))
-    if reader.get("status") == "ready" and as_number(reader.get("plain_pages")) == as_number(reader.get("agentos_pages")):
-        items.append(("通过", "本地结果阅读器为两个目标生成同一套页面，增强目标保留完整页面集合。"))
-    else:
-        items.append(("关注", "本地结果阅读器页面集合或状态异常，需要查看 reader-summary.json。"))
     if as_number(plain_result.get("qemu_timed_out")) == 0 and as_number(agentos_result.get("qemu_timed_out")) == 0:
         items.append(("通过", "两个 QEMU 目标均未报告超时。"))
     else:
@@ -501,14 +479,13 @@ def grouped_bar_svg(
 def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_path: Path) -> None:
     by_metric = {row.metric: row for row in rows}
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     stage_rows = meta.get("stage_rows", [])
     stages = [row for row in stage_rows if isinstance(row, dict) and row.get("stage")] if isinstance(stage_rows, list) else []
     if not stages:
         stages = [{"stage": "未记录阶段耗时", "duration_seconds": "0", "status": "unknown"}]
-    stages = stages[:8]
+    stages = stages[:len(DUAL_STAGES)]
 
     width, height = 1120, 650
     lines = svg_header(width, height)
@@ -556,12 +533,12 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
     card(
         395,
         202,
-        "状态与页面",
+        "状态产物",
         [
             ("普通状态文件", fmt_number(as_number(state.get("plain_files")))),
             ("AgentOS状态文件", fmt_number(as_number(state.get("agentos_files")))),
-            ("本地页面", fmt_number(as_number(reader.get("agentos_pages")))),
-            ("额外API JSON", fmt_number(as_number(reader.get("agentos_extra_api_json")))),
+            ("AgentOS额外状态", fmt_number(as_number(state.get("agentos_extra_files")))),
+            ("共有状态文件", fmt_number(as_number(state.get("common_files")))),
         ],
         PALETTE["plain"],
     )
@@ -918,8 +895,6 @@ def write_experiment_design_page(meta: dict[str, object], out_path: Path) -> Non
   <main>
     <div class="links">
       <a href="experiment-design.csv">下载 CSV</a>
-      <a href="reader-guide.html">运行导览页</a>
-      <a href="reader-checklist.html">结果核验表</a>
       <a href="index.html">图表索引页</a>
     </div>
     <table>
@@ -945,18 +920,10 @@ def test_suite_rows() -> list[dict[str, str]]:
             "main_output": "results/latest/",
         },
         {
-            "level": "主运行路径",
-            "command": "make reader",
-            "qemu": "否",
-            "purpose": "启动本地结果阅读器，把科研平台页面、双目标结果页和运行导览页放在一个浏览器服务里。",
-            "when_to_use": "双目标结果生成后立即运行。",
-            "main_output": "http://127.0.0.1:8767/",
-        },
-        {
             "level": "日常快速检查",
             "command": "make target-readiness",
             "qemu": "否",
-            "purpose": "检查目录职责、双目标结构、Host 工具契约、本地阅读器输出和图表生成逻辑。",
+            "purpose": "检查目录职责、双目标结构、Host 工具契约和图表生成逻辑。",
             "when_to_use": "修改文档、Host 工具、结果页或脚本后运行。",
             "main_output": "终端通过标记",
         },
@@ -964,7 +931,7 @@ def test_suite_rows() -> list[dict[str, str]]:
             "level": "完整验证",
             "command": "make full-verify TOOLPREFIX=riscv64-linux-gnu-",
             "qemu": "是",
-            "purpose": "串联结构检查、Host 工具检查、双目标 QEMU、本地页面渲染和 AgentOS 内核专项测试。",
+            "purpose": "串联结构检查、Host 工具检查、双目标 QEMU 和 AgentOS 内核专项测试。",
             "when_to_use": "最终审查前运行。",
             "main_output": "终端输出和 results/latest/",
         },
@@ -975,14 +942,6 @@ def test_suite_rows() -> list[dict[str, str]]:
             "purpose": "在 AgentOS-uCore 目标中运行 Agent Context、文件对象、事件队列、权限、LLM relay 等专项程序。",
             "when_to_use": "内核、用户程序或 syscall ABI 改动后运行。",
             "main_output": "AgentOS 专项测试通过标记",
-        },
-        {
-            "level": "LLM 模式契约",
-            "command": "bash -lc 'python3 host_tools/test_llm_relay_mode_contract.py'",
-            "qemu": "否",
-            "purpose": "验证无密钥 default 模式和外部 DeepSeek key 文件模式，不把密钥写入仓库或结果文件。",
-            "when_to_use": "修改 LLM Relay、环境变量或密钥读取逻辑后运行。",
-            "main_output": "test_llm_relay_mode_contract: passed",
         },
         {
             "level": "图表可读性检查",
@@ -1047,8 +1006,6 @@ def write_test_suite_page(out_path: Path) -> None:
   <main>
     <div class="links">
       <a href="test-suite.csv">下载 CSV</a>
-      <a href="reader-guide.html">运行导览页</a>
-      <a href="reader-checklist.html">结果核验表</a>
       <a href="experiment-design.html">实验场景说明</a>
     </div>
     <table>
@@ -1078,20 +1035,6 @@ def delivery_readiness_rows() -> list[dict[str, str]]:
             "evidence": "charts/*.svg",
             "verification": "test_chart_svg_layout_contract.py",
             "note": "测试解析 SVG 文本框，检查画布范围和明显相交问题。",
-        },
-        {
-            "requirement": "DeepSeek v4 pro 优先且默认不访问云端",
-            "status": "已覆盖",
-            "evidence": "test-suite.html; README.md",
-            "verification": "test_llm_relay_mode_contract.py",
-            "note": "无外部密钥时走 template 模式；外部 key 文件只由宿主机 Relay 读取。",
-        },
-        {
-            "requirement": "常用运行只需要少量命令",
-            "status": "已覆盖",
-            "evidence": "reader-guide.html; reader-url-list.txt; dual-results.html",
-            "verification": "test_plain_ucore_reader.py",
-            "note": "推荐路径仍是 make dual-platform-run 与 make reader。",
         },
         {
             "requirement": "测试入口清晰，不堆叠旧测试",
@@ -1177,12 +1120,11 @@ def write_delivery_readiness_page(out_path: Path) -> None:
 <body>
   <header>
     <h1>AgentOS 结果材料核对</h1>
-    <p>本页把测试、图表、LLM Relay、文档和结果材料的关键要求对应到当前结果产物和验证脚本。它用于运行结束后快速确认结果是否齐全。</p>
+    <p>本页把测试、图表、文档和结果材料的关键要求对应到当前结果产物和验证脚本。它用于运行结束后快速确认结果是否齐全。</p>
   </header>
   <main>
     <div class="links">
       <a href="delivery-readiness.csv">下载 CSV</a>
-      <a href="reader-guide.html">运行导览页</a>
       <a href="test-suite.html">测试入口说明</a>
       <a href="evidence-map.html">证据索引页</a>
     </div>
@@ -1209,102 +1151,95 @@ def chart_evidence_description(chart_name: str) -> tuple[str, str]:
 def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
     rows = [
         {
-            "artifact": "reader-guide.html",
-            "kind": "运行页面",
-            "source": "summary.json, charts/*.svg",
-            "proves": "两条命令和建议查看顺序已经整理为一个可打开页面",
-            "reader_use": "复查时从这里开始",
-        },
-        {
             "artifact": "test-suite.html",
             "kind": "说明页面",
             "source": "Makefile, scripts, host_tools tests",
             "proves": "主运行路径、快速检查、完整验证和专项测试入口已经区分清楚",
-            "reader_use": "说明应该运行哪些命令",
+            "review_use": "说明应该运行哪些命令",
         },
         {
             "artifact": "delivery-readiness.html",
             "kind": "核对页面",
             "source": "delivery_readiness_rows",
             "proves": "结果材料要求已经对应到证据产物和验证脚本",
-            "reader_use": "运行结束后快速核对结果完整性",
+            "review_use": "运行结束后快速核对结果完整性",
         },
         {
             "artifact": "delivery-readiness.csv",
             "kind": "数据表",
             "source": "delivery_readiness_rows",
             "proves": "结果材料核对结果可以复制和脚本复查",
-            "reader_use": "结果材料核对表",
+            "review_use": "结果材料核对表",
         },
         {
             "artifact": "test-suite.csv",
             "kind": "数据表",
             "source": "test_suite_rows",
             "proves": "测试入口说明可以被脚本复查和复制",
-            "reader_use": "测试入口表",
+            "review_use": "测试入口表",
         },
         {
             "artifact": "experiment-design.html",
             "kind": "说明页面",
-            "source": "state-compare-summary.json, reader-compare-summary.json, runner-sweep.csv, stage-timings.csv",
+            "source": "state-compare-summary.json, runner-sweep.csv, stage-timings.csv",
             "proves": "每类测试场景都有负载、对照路径、参数、指标和数据来源",
-            "reader_use": "解释测试为什么这样设计",
+            "review_use": "解释测试为什么这样设计",
         },
         {
             "artifact": "experiment-design.csv",
             "kind": "数据表",
             "source": "experiment_design_rows",
             "proves": "实验场景说明可以被脚本复查和复制",
-            "reader_use": "测试设计表",
+            "review_use": "测试设计表",
         },
         {
             "artifact": "monitor.html",
             "kind": "观测页面",
             "source": "summary.csv, stage-timings.csv, Host run receipts",
             "proves": "本次运行是否健康、AgentOS 是否有额外内核事实",
-            "reader_use": "先确认运行可信度",
+            "review_use": "先确认运行可信度",
         },
         {
             "artifact": "index.html",
             "kind": "图表页面",
             "source": "summary.csv, runner-sweep.csv, experiments/status.json",
             "proves": "测试数据已生成图表并可集中查看",
-            "reader_use": "查看图表总览",
+            "review_use": "查看图表总览",
         },
         {
             "artifact": "report.md",
             "kind": "文字报告",
-            "source": "summary.csv, state-compare-summary.json, reader-compare-summary.json",
+            "source": "summary.csv, state-compare-summary.json",
             "proves": "关键结论、明细表和机制说明可文字复查",
-            "reader_use": "复查材料",
+            "review_use": "复查材料",
         },
         {
             "artifact": "summary.csv",
             "kind": "数据表",
-            "source": "QEMU 状态文件、本地页面摘要、状态对照摘要",
-            "proves": "双目标状态、页面、API、QEMU 诊断等基础指标",
-            "reader_use": "复查图表基础数字",
+            "source": "QEMU 状态文件、状态对照摘要",
+            "proves": "双目标状态与 QEMU 诊断等基础指标",
+            "review_use": "复查图表基础数字",
         },
         {
             "artifact": "runner-sweep.csv",
             "kind": "数据表",
             "source": "state-compare-summary.json:runner_tick_status,runner_tick_reason",
             "proves": "普通目标没有动态 runner 样本，且没有从参考数据合成性能数值",
-            "reader_use": "核对 unavailable 状态与原因",
+            "review_use": "核对 unavailable 状态与原因",
         },
         {
             "artifact": "experiments/status.json",
             "kind": "测量状态",
             "source": "measured-experiments.json",
             "proves": "真实 Guest 测量是否可用；缺 marker 时不会生成填充数据",
-            "reader_use": "先确认性能数据是否可用于结论",
+            "review_use": "先确认性能数据是否可用于结论",
         },
         {
             "artifact": "summary.json",
             "kind": "机器摘要",
             "source": "summarize_dual_platform_results.py",
             "proves": "生成器返回的核心产物路径和状态",
-            "reader_use": "脚本复查入口",
+            "review_use": "脚本复查入口",
         },
     ]
     if any(chart.name == "experiment-file-query-bar.svg" for chart in charts):
@@ -1314,21 +1249,21 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
                 "kind": "数据表",
                 "source": "experiments/raw/file-query-benchmark.csv",
                 "proves": "真实文件查询测量的 min、avg、max、P50、P95 和 tick 统计",
-                "reader_use": "复查统计聚合",
+                "review_use": "复查统计聚合",
             },
             {
                 "artifact": "experiments/mechanism-notes.csv",
                 "kind": "数据表",
                 "source": "EXPERIMENT_SPECS",
                 "proves": "强制遍历、冷索引和热索引的测量边界",
-                "reader_use": "解释对照路径",
+                "review_use": "解释对照路径",
             },
             {
                 "artifact": "experiments/raw/file-query-benchmark.csv",
                 "kind": "原始数据表",
                 "source": "measured-experiments.json + Guest log SHA256",
                 "proves": "逐行绑定 Guest 日志、提交、命令和运行标识的原始测量",
-                "reader_use": "复查图表输入和来源",
+                "review_use": "复查图表输入和来源",
             },
         ])
     for chart in charts:
@@ -1339,7 +1274,7 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
                 "kind": "SVG 图表",
                 "source": source,
                 "proves": proves,
-                "reader_use": "图表页和导览页查看",
+                "review_use": "图表页查看",
             }
         )
     return rows
@@ -1349,16 +1284,13 @@ def write_evidence_manifest_csv(charts: list[Path], out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["artifact", "kind", "source", "proves", "reader_use"])
+        writer.writerow(["artifact", "kind", "source", "proves", "review_use"])
         for row in evidence_manifest_rows(charts):
-            writer.writerow([row["artifact"], row["kind"], row["source"], row["proves"], row["reader_use"]])
+            writer.writerow([row["artifact"], row["kind"], row["source"], row["proves"], row["review_use"]])
 
 
 def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
     display_names = {
-        "reader-guide.html": "运行导览页",
-        "reader-checklist.html": "结果核验表",
-        "reader-checklist.csv": "结果核验 CSV",
         "delivery-readiness.html": "结果材料核对",
         "delivery-readiness.csv": "结果核对 CSV",
         "test-suite.html": "测试入口说明",
@@ -1374,12 +1306,12 @@ def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
         display_name = display_names.get(artifact, artifact)
         artifact_html = f'<a href="{escape(link)}">{escape(display_name)}</a>' if link else escape(display_name)
         rows_html.append(
-            "<tr><td>{artifact}</td><td>{kind}</td><td>{source}</td><td>{proves}</td><td>{reader_use}</td></tr>".format(
+            "<tr><td>{artifact}</td><td>{kind}</td><td>{source}</td><td>{proves}</td><td>{review_use}</td></tr>".format(
                 artifact=artifact_html,
                 kind=escape(row["kind"]),
                 source=escape(row["source"]),
                 proves=escape(row["proves"]),
-                reader_use=escape(row["reader_use"]),
+                review_use=escape(row["review_use"]),
             )
         )
     html = f"""<!doctype html>
@@ -1420,176 +1352,6 @@ def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
     out_path.write_text(html, encoding="utf-8")
 
 
-def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: Path) -> list[dict[str, str]]:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
-    plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
-    agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
-    chart_names = {chart.name for chart in charts}
-    runner_status, runner_reason = runner_tick_evidence(meta)
-    required_charts = {
-        "runtime-observation.svg",
-    }
-    if experiment_rows(meta):
-        required_charts.add("experiment-file-query-bar.svg")
-
-    def row(item: str, status: bool, evidence: str, action: str) -> dict[str, str]:
-        return {
-            "item": item,
-            "status": "通过" if status else "关注",
-            "evidence": evidence,
-            "action": action,
-        }
-
-    return [
-        row(
-            "双目标结果",
-            state.get("status") == "ready" and as_number(state.get("run_result_match")) == 1,
-            f"state_status={state.get('status', '')}; run_result_match={fmt_number(as_number(state.get('run_result_match')))}",
-            "先确认两个目标使用同一批输入，且普通目标成功记录在 AgentOS 目标中保留。",
-        ),
-        row(
-            "本地阅读器页面与 API",
-            reader.get("status") == "ready"
-            and as_number(reader.get("plain_pages")) == as_number(reader.get("agentos_pages"))
-            and as_number(reader.get("agentos_api_json")) >= as_number(reader.get("plain_api_json")),
-            "plain_pages={}; agentos_pages={}; plain_api={}; agentos_api={}".format(
-                fmt_number(as_number(reader.get("plain_pages"))),
-                fmt_number(as_number(reader.get("agentos_pages"))),
-                fmt_number(as_number(reader.get("plain_api_json"))),
-                fmt_number(as_number(reader.get("agentos_api_json"))),
-            ),
-            "打开 本地阅读器页面时先看两个目标页面集合是否一致，再看 AgentOS 额外 API 证据。",
-        ),
-        row(
-            "QEMU 运行状态",
-            as_number(plain_result.get("qemu_timed_out")) == 0
-            and as_number(agentos_result.get("qemu_timed_out")) == 0
-            and as_number(agentos_result.get("qemu_idle_notices")) <= 1,
-            "plain_timeout={}; agentos_timeout={}; agentos_idle_notices={}".format(
-                fmt_number(as_number(plain_result.get("qemu_timed_out"))),
-                fmt_number(as_number(agentos_result.get("qemu_timed_out"))),
-                fmt_number(as_number(agentos_result.get("qemu_idle_notices"))),
-            ),
-            "如果这里需要关注，先查看两个 ucore-run.log 和 stage-timings.csv。",
-        ),
-        row(
-            "核心图表",
-            required_charts.issubset(chart_names),
-            f"required={len(required_charts)}; generated={len(required_charts & chart_names)}; total_charts={len(chart_names)}",
-            "复查时至少查看运行观测；文件查询图只在可信测量可用时出现。",
-        ),
-        row(
-            "Runner tick 证据状态",
-            runner_status == RUNNER_TICK_STATUS_UNAVAILABLE,
-            f"status={runner_status}; reason={runner_reason}",
-            "查看 runner-sweep.csv 的 unavailable 原因；本轮不得给出 runner 性能结论。",
-        ),
-        row(
-            "证据索引",
-            True,
-            "evidence-map.html; evidence-manifest.csv",
-            "从证据索引页返回每个图表和 CSV 的数据来源。",
-        ),
-        row(
-            "运行入口",
-            True,
-            "reader-guide.html; monitor.html; index.html",
-            "复查建议先打开运行导览页，再进入观测面板和图表页。",
-        ),
-        row(
-            "原始运行状态",
-            (work_dir / RUN_RESULT_WORK_FILES["plain"]).is_file()
-            and (work_dir / RUN_RESULT_WORK_FILES["agentos"]).is_file()
-            and (work_dir / "stage-timings.csv").is_file(),
-            f"{RUN_RESULT_WORK_FILES['plain']}; {RUN_RESULT_WORK_FILES['agentos']}; stage-timings.csv",
-            "出现争议时直接回到原始状态文件和阶段耗时表。",
-        ),
-        row(
-            "AgentOS 主流程证据",
-            as_number(state.get("agentos_evidence_checks")) >= 20
-            and as_number(state.get("host_derived_mainflow_stages")) == MAIN_FLOW_STAGE_COUNT
-            and state.get("agentos_mainflow_verification_origin") == MAIN_FLOW_VERIFICATION_ORIGIN,
-            "agentos_evidence_checks={}; host_derived_mainflow_stages={}; origin={}".format(
-                fmt_number(as_number(state.get("agentos_evidence_checks"))),
-                fmt_number(as_number(state.get("host_derived_mainflow_stages"))),
-                state.get("agentos_mainflow_verification_origin", "missing"),
-            ),
-            "Host 从原始 telemetry 和安全来源清单独立复验主流程，Guest 不签发通过结论。",
-        ),
-    ]
-
-
-def write_reader_checklist_csv(meta: dict[str, object], charts: list[Path], work_dir: Path, out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["item", "status", "evidence", "action"])
-        for row in reader_checklist_rows(meta, charts, work_dir):
-            writer.writerow([row["item"], row["status"], row["evidence"], row["action"]])
-
-
-def write_reader_checklist_page(meta: dict[str, object], charts: list[Path], work_dir: Path, out_path: Path) -> None:
-    rows = reader_checklist_rows(meta, charts, work_dir)
-    ready_count = sum(1 for row in rows if row["status"] == "通过")
-    row_html = []
-    for row in rows:
-        class_name = "ok" if row["status"] == "通过" else "warn"
-        row_html.append(
-            "<tr class=\"{class_name}\"><td>{item}</td><td>{status}</td><td>{evidence}</td><td>{action}</td></tr>".format(
-                class_name=class_name,
-                item=escape(row["item"]),
-                status=escape(row["status"]),
-                evidence=escape(row["evidence"]),
-                action=escape(row["action"]),
-            )
-        )
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 结果核验表</title>
-  <style>
-    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --ok:#166534; --warn:#9a3412; }}
-    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
-    main {{ max-width:1180px; margin:0 auto; padding:24px 42px 42px; }}
-    h1 {{ margin:0 0 10px; font-size:28px; }}
-    p {{ line-height:1.75; color:var(--muted); }}
-    .summary {{ display:flex; gap:12px; flex-wrap:wrap; margin:18px 0; }}
-    .pill {{ border:1px solid var(--line); background:#fff; padding:10px 14px; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff; }}
-    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
-    th {{ background:#eef3f8; }}
-    tr.ok td:nth-child(2) {{ color:var(--ok); font-weight:700; }}
-    tr.warn td:nth-child(2) {{ color:var(--warn); font-weight:700; }}
-    a {{ color:#075985; text-decoration:none; }}
-    @media (max-width:860px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>AgentOS 结果核验表</h1>
-    <p>本页用于确认本次双目标结果是否完整可复查。它只读取本次运行生成的数据，不替代原始日志和测试脚本。</p>
-  </header>
-  <main>
-    <div class="summary">
-      <div class="pill">通过项：{ready_count} / {len(rows)}</div>
-      <div class="pill"><a href="reader-guide.html">运行导览页</a></div>
-      <div class="pill"><a href="evidence-map.html">证据索引页</a></div>
-      <div class="pill"><a href="reader-checklist.csv">下载 CSV</a></div>
-    </div>
-    <table>
-      <thead><tr><th>检查项</th><th>状态</th><th>证据</th><th>查看动作</th></tr></thead>
-      <tbody>{"".join(row_html)}</tbody>
-    </table>
-  </main>
-</body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
 
 
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
@@ -1622,7 +1384,6 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
 
 def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     runner_status, runner_reason = runner_tick_evidence(meta)
@@ -1630,12 +1391,11 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines = [
         "# 双目标运行结果摘要",
         "",
-        "本报告由双目标运行脚本在验证结束后生成，数据来自 QEMU 运行日志、文件系统镜像提取结果、本地页面渲染摘要和状态文件对照结果。",
+        "本报告由双目标运行脚本在验证结束后生成，数据来自 QEMU 运行日志、文件系统镜像提取结果和状态文件对照结果。",
         "",
         "## 关键结论",
         "",
         f"- 普通 uCore 提取状态文件 {fmt_number(as_number(state.get('plain_files')))} 个，AgentOS-uCore 提取 {fmt_number(as_number(state.get('agentos_files')))} 个，其中 AgentOS 额外状态文件 {fmt_number(as_number(state.get('agentos_extra_files')))} 个。",
-        f"- 本地结果阅读器生成页面 {fmt_number(as_number(reader.get('plain_pages')))} 个，两个目标页面集合一致；AgentOS API JSON 比普通目标多 {fmt_number(as_number(reader.get('agentos_extra_api_json')))} 个。",
         f"- 同一批预置 action 请求数为 {fmt_number(as_number(state.get('embedded_action_records')))}；另核对 {fmt_number(as_number(state.get('checked_compatibility_records')))} 条非证据状态兼容记录；Guest 来源绑定运行记录为 {fmt_number(as_number(state.get('guest_source_bound_runtime_records')))}，仅作观测计数。",
         f"- Host 从安全状态清单独立复验 {fmt_number(as_number(state.get('host_derived_mainflow_stages')))} 个有序 AgentOS 主流程阶段和 {fmt_number(as_number(state.get('agentos_mainflow_facts')))} 条主流程事实。",
         f"- QEMU 诊断：普通目标耗时 {plain_result.get('qemu_elapsed_seconds', '0')} 秒、无输出提示 {plain_result.get('qemu_idle_notices', '0')} 次；AgentOS 目标耗时 {agentos_result.get('qemu_elapsed_seconds', '0')} 秒、无输出提示 {agentos_result.get('qemu_idle_notices', '0')} 次。",
@@ -1659,8 +1419,6 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines.append("- `test-suite.html`")
     lines.append("- `evidence-manifest.csv`")
     lines.append("- `evidence-map.html`")
-    lines.append("- `reader-checklist.csv`")
-    lines.append("- `reader-checklist.html`")
     lines.append("- `experiment-design.csv`")
     lines.append("- `experiment-design.html`")
     lines.extend(
@@ -1744,7 +1502,6 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
 
 def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     _, runner_reason = runner_tick_evidence(meta)
@@ -1837,17 +1594,16 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
 <body>
   <header>
     <h1>AgentOS 双目标测试结果</h1>
-    <p>本页由双目标运行结果自动生成。它把 QEMU 运行、状态文件对照、本地阅读器输出和阶段耗时整理成便于复查的图表页面。</p>
+    <p>本页由双目标运行结果自动生成。它把 QEMU 运行、状态文件对照和阶段耗时整理成便于复查的图表页面。</p>
     <div class="summary">
       <div class="metric"><strong>{fmt_number(as_number(state.get("plain_files")))}</strong><span>普通 uCore 状态文件</span></div>
       <div class="metric"><strong>{fmt_number(as_number(state.get("agentos_files")))}</strong><span>AgentOS 状态文件</span></div>
-      <div class="metric"><strong>{fmt_number(as_number(reader.get("agentos_extra_api_json")))}</strong><span>AgentOS 额外 API JSON</span></div>
+      <div class="metric"><strong>{fmt_number(as_number(state.get("agentos_extra_files")))}</strong><span>AgentOS 额外状态文件</span></div>
       <div class="metric"><strong>{agentos_result.get("qemu_idle_notices", "0")}</strong><span>AgentOS QEMU 无输出提示</span></div>
     </div>
   </header>
   <main>
     <div class="links">
-      <a href="reader-guide.html">打开运行导览页</a>
       <a href="monitor.html">打开运行观测面板</a>
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
@@ -1858,8 +1614,6 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="test-suite.csv">下载测试入口说明</a>
       <a href="evidence-map.html">打开证据索引页</a>
       <a href="evidence-manifest.csv">下载证据索引表</a>
-      <a href="reader-checklist.html">打开结果核验表</a>
-      <a href="reader-checklist.csv">下载结果核验表</a>
       <a href="experiment-design.html">打开实验场景说明</a>
       <a href="experiment-design.csv">下载实验场景说明</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
@@ -1867,7 +1621,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       {experiment_links}
     </div>
     <p>{runner_summary}</p>
-    <p>建议先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code>，再运行 <code>make reader</code> 打开交互页面。需要按顺序查看时，先打开 <a href="reader-guide.html">运行导览页</a>；本页用于快速查看测试数据图表，本地阅读器页面用于查看完整运行对象和 AgentOS 主流程细节。</p>
+    <p>运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code> 后，可直接打开本页查看测试数据图表和 AgentOS 主流程摘要。</p>
     <section class="eval">
       <h2>自动判读</h2>
       <ul>{eval_html}</ul>
@@ -1896,7 +1650,6 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
 
 def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     _, runner_reason = runner_tick_evidence(meta)
@@ -1946,7 +1699,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
 <body>
   <header>
     <h1>AgentOS 运行观测面板</h1>
-    <p>这个页面面向运行复查：它不替代完整本地页面，而是先把本次双目标运行是否健康、增强目标是否真的产生内核证据、页面/API 是否保留完整输出讲清楚。</p>
+    <p>这个页面面向运行复查，集中展示本次双目标运行健康度、状态兼容性和 AgentOS 内核证据。</p>
   </header>
   <main>
     <div class="grid">
@@ -1954,7 +1707,6 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
       <div class="card"><strong>{fmt_number(as_number(state.get("guest_source_bound_runtime_records")))}</strong><span>Guest 运行记录（非通过门）</span></div>
       <div class="card"><strong>{fmt_number(as_number(state.get("agentos_extra_files")))}</strong><span>AgentOS 额外状态文件</span></div>
       <div class="card"><strong>{fmt_number(as_number(state.get("agentos_evidence_checks")))}</strong><span>内核证据检查项</span></div>
-      <div class="card"><strong>{fmt_number(as_number(reader.get("agentos_extra_api_json")))}</strong><span>AgentOS 额外 API JSON</span></div>
     </div>
     <section class="panel">
       <h2>一张图看本次运行</h2>
@@ -1962,7 +1714,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>复查建议</h2>
-      <p>先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code> 生成结果，再运行 <code>make reader</code> 打开完整交互页面。复查时可以先查看本页的运行观测图，再切到 本地页面中的 AgentOS Compare、LLM Relay、运行详情和证据页面。</p>
+      <p>先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code> 生成结果，再从本页查看运行观测图、状态对照和原始数据索引。</p>
       <p>如果双目标运行异常，本页会优先提示状态文件、QEMU 超时、无输出提示和阶段耗时。普通目标耗时 {escape(str(plain_result.get("qemu_elapsed_seconds", "0")))} 秒，AgentOS 目标耗时 {escape(str(agentos_result.get("qemu_elapsed_seconds", "0")))} 秒。</p>
     </section>
     <section class="panel">
@@ -1971,7 +1723,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="reader-guide.html">运行导览页</a>、<a href="reader-checklist.html">结果核验表</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 状态</a>、<a href="charts/runtime-observation.svg">运行观测图</a>{runner_links}{experiment_links}</p>
+      <p><a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 状态</a>、<a href="charts/runtime-observation.svg">运行观测图</a>{runner_links}{experiment_links}</p>
     </section>
   </main>
 </body>
@@ -1981,128 +1733,6 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     out_path.write_text(html, encoding="utf-8")
 
 
-def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
-    seeded = meta.get("seeded", {}) if isinstance(meta.get("seeded"), dict) else {}
-    _, runner_reason = runner_tick_evidence(meta)
-    scenario_count = len(state.get("scenario_evidence", [])) if isinstance(state.get("scenario_evidence"), list) else 0
-    chart_links = {
-        chart.name: chart.relative_to(out_path.parent).as_posix()
-        for chart in charts
-    }
-    if experiment_rows(meta):
-        experiment_guide_row = (
-            '<tr><td>3</td><td><a href="charts/experiment-file-query-bar.svg">文件查询实测图</a></td>'
-            '<td>对照同一 Guest 运行中的强制遍历、含重建冷索引和无缓存热索引。</td></tr>'
-        )
-        experiment_file_links = (
-            '<a href="experiments/experiment-stats.csv">真实实验统计 CSV</a>'
-            '<a href="experiments/mechanism-notes.csv">测量边界说明</a>'
-        )
-        experiment_summary = "真实文件查询数据已通过 Guest 日志 SHA256 和 marker 行号校验。"
-    else:
-        experiment_guide_row = (
-            '<tr><td>3</td><td><a href="experiments/status.json">实验测量状态</a></td>'
-            '<td>当前没有可验证 Guest marker，状态明确为 unavailable，未生成替代数据。</td></tr>'
-        )
-        experiment_file_links = '<a href="experiments/status.json">实验测量 unavailable</a>'
-        experiment_summary = "本次没有可验证的 Guest 性能 marker，不提供性能结论。"
-    runner_guide_row = (
-        '<tr><td>4</td><td><a href="runner-sweep.csv">Runner tick 状态</a></td>'
-        f'<td>状态为 unavailable，原因码为 {escape(runner_reason)}；本轮不提供 runner 性能结论。</td></tr>'
-    )
-    runner_file_links = '<a href="runner-sweep.csv">Runner tick unavailable</a>'
-    runner_index_summary = "查看本轮可用图表；runner tick 只保留 unavailable 状态，不显示占位性能图。"
-    runner_summary = escape(runner_tick_summary_text(meta))
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 运行导览</title>
-  <style>
-    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --accent:#f58518; }}
-    * {{ box-sizing:border-box; }}
-    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
-    main {{ max-width:1180px; margin:0 auto; padding:24px 42px 42px; }}
-    h1 {{ margin:0 0 10px; font-size:28px; }}
-    h2 {{ margin:0 0 12px; font-size:20px; }}
-    p, li {{ line-height:1.75; }}
-    code {{ background:#eef3f8; padding:2px 5px; }}
-    .grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:16px; }}
-    .metric,.panel {{ background:var(--panel); border:1px solid var(--line); padding:16px; }}
-    .metric strong {{ display:block; font-size:23px; margin-bottom:6px; }}
-    .metric span {{ color:var(--muted); font-size:13px; }}
-    .panel {{ margin-top:18px; }}
-    .steps {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }}
-    .step {{ background:#fff; border:1px solid var(--line); padding:14px; }}
-    .links a {{ display:inline-block; margin:6px 8px 6px 0; color:#075985; text-decoration:none; border:1px solid var(--line); padding:7px 10px; background:#fff; }}
-    table {{ width:100%; border-collapse:collapse; margin-top:10px; background:#fff; }}
-    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
-    th {{ background:#eef3f8; }}
-    @media (max-width:860px) {{ .grid,.steps {{ grid-template-columns:1fr; }} main,header {{ padding-left:18px; padding-right:18px; }} }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>AgentOS 运行导览</h1>
-    <p>这个页面把双目标运行结果、本地阅读器页面和关键图表组织成一条复查路径。它只读取本次运行产物，不重新执行 QEMU。</p>
-    <div class="grid">
-      <div class="metric"><strong>{fmt_number(as_number(seeded.get("action_count")))}</strong><span>预置请求</span></div>
-      <div class="metric"><strong>{fmt_number(as_number(state.get("agentos_evidence_checks")))}</strong><span>内核证据检查项</span></div>
-      <div class="metric"><strong>{fmt_number(scenario_count)}</strong><span>机制场景</span></div>
-      <div class="metric"><strong>{fmt_number(as_number(reader.get("agentos_extra_api_json")))}</strong><span>AgentOS 额外 API JSON</span></div>
-    </div>
-  </header>
-  <main>
-    <section class="panel">
-      <h2>常用运行只需要两条命令</h2>
-      <div class="steps">
-        <div class="step"><strong>第一条：生成双目标结果</strong><p><code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code></p><p>它会运行普通 uCore 和 AgentOS-uCore，提取状态文件，生成 CSV、报告和图表。</p></div>
-        <div class="step"><strong>第二条：打开本地页面</strong><p><code>make reader</code></p><p>它会启动 本地结果阅读器，并把本页、观测面板和完整科研平台页面放在同一个本地服务里。</p></div>
-      </div>
-    </section>
-    <section class="panel">
-      <h2>建议查看顺序</h2>
-      <table>
-        <thead><tr><th>顺序</th><th>打开内容</th><th>要讲清楚的点</th></tr></thead>
-        <tbody>
-          <tr><td>1</td><td><a href="monitor.html">运行观测面板</a></td><td>先确认本次运行健康：QEMU 状态、状态产物、API 输出、AgentOS 额外证据都来自本次运行。</td></tr>
-          <tr><td>2</td><td><a href="index.html">图表索引页</a></td><td>{runner_index_summary}</td></tr>
-          {experiment_guide_row}
-          {runner_guide_row}
-          <tr><td>5</td><td><a href="../index.html">本地结果阅读器首页</a></td><td>进入完整科研平台页面查看运行对象和内核证据。</td></tr>
-        </tbody>
-      </table>
-    </section>
-    <section class="panel">
-      <h2>关键数据</h2>
-      <p>本次结果包含 {fmt_number(as_number(state.get("checked_compatibility_records")))} 条非证据状态兼容记录；Guest 来源绑定运行记录为 {fmt_number(as_number(state.get("guest_source_bound_runtime_records")))}，仅作观测计数，Host 独立复验 {fmt_number(as_number(state.get("host_derived_mainflow_stages")))} 个有序阶段。{runner_summary}{experiment_summary}</p>
-      <div class="links">
-        <a href="delivery-readiness.html">结果材料核对</a>
-        <a href="delivery-readiness.csv">结果核对 CSV</a>
-        <a href="test-suite.html">测试入口说明</a>
-        <a href="test-suite.csv">测试入口 CSV</a>
-        <a href="experiment-design.html">实验场景说明</a>
-        <a href="experiment-design.csv">实验说明 CSV</a>
-        {experiment_file_links}
-        <a href="reader-checklist.html">结果核验表</a>
-        <a href="reader-checklist.csv">检查表 CSV</a>
-        <a href="evidence-manifest.csv">证据索引 CSV</a>
-        <a href="report.md">Markdown 报告</a>
-        <a href="summary.json">JSON 摘要</a>
-        <a href="{escape(chart_links.get("runtime-observation.svg", "charts/runtime-observation.svg"))}">运行观测图</a>
-        {runner_file_links}
-      </div>
-    </section>
-  </main>
-</body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
 
 
 def copy_docs_assets(charts: list[Path], docs_assets_dir: Path) -> None:
@@ -2234,12 +1864,9 @@ def summarize(
     charts = write_charts(rows, meta, out_dir / "charts")
     write_evidence_manifest_csv(charts, out_dir / "evidence-manifest.csv")
     write_evidence_map_page(charts, out_dir / "evidence-map.html")
-    write_reader_checklist_csv(meta, charts, work_dir, out_dir / "reader-checklist.csv")
-    write_reader_checklist_page(meta, charts, work_dir, out_dir / "reader-checklist.html")
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
     write_monitor_page(rows, meta, charts, out_dir / "monitor.html")
-    write_reader_guide_page(rows, meta, charts, out_dir / "reader-guide.html")
     if docs_assets_dir is not None:
         copy_docs_assets(charts, docs_assets_dir)
     logical_root = published_dir if published_dir is not None else out_dir
@@ -2256,7 +1883,6 @@ def summarize(
         "report": published("report.md"),
         "index": published("index.html"),
         "monitor": published("monitor.html"),
-        "reader_guide": published("reader-guide.html"),
         "csv": published("summary.csv"),
         "runner_sweep_csv": published("runner-sweep.csv"),
         "runner_tick_status": runner_status,
@@ -2277,8 +1903,6 @@ def summarize(
         "experiment_design": published("experiment-design.html"),
         "evidence_manifest_csv": published("evidence-manifest.csv"),
         "evidence_map": published("evidence-map.html"),
-        "reader_checklist_csv": published("reader-checklist.csv"),
-        "reader_checklist": published("reader-checklist.html"),
         "experiment_rows": len(experiment_data),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -2302,13 +1926,12 @@ def main() -> int:
         published_dir=args.published_dir,
     )
     print(
-        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} reader_guide={reader_guide} status={status}".format(
+        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} status={status}".format(
             rows=summary["rows"],
             charts=len(summary["charts"]),
             report=summary["report"],
             index=summary["index"],
             monitor=summary["monitor"],
-            reader_guide=summary["reader_guide"],
             status=summary["status"],
         )
     )

@@ -62,19 +62,6 @@ def fixture(work_dir: Path, measured: bool) -> None:
             "status": "ready",
         },
     )
-    write_json(
-        work_dir / "reader-compare-summary.json",
-        {
-            "plain_pages": 40,
-            "agentos_pages": 40,
-            "plain_state_files": 260,
-            "agentos_state_files": 273,
-            "plain_api_json": 267,
-            "agentos_api_json": 280,
-            "agentos_extra_api_json": 13,
-            "status": "ready",
-        },
-    )
     for name in ("seeded-action-state", "host-surface-alignment"):
         write_json(work_dir / f"{name}.json", {"action_count": 44, "status": "ready"})
     write_json(
@@ -147,11 +134,8 @@ def main() -> int:
             "runner-sweep.csv",
             "experiments/mechanism-notes.csv",
             "monitor.html",
-            "reader-guide.html",
             "evidence-manifest.csv",
             "evidence-map.html",
-            "reader-checklist.csv",
-            "reader-checklist.html",
             "delivery-readiness.csv",
             "delivery-readiness.html",
             "test-suite.csv",
@@ -192,6 +176,8 @@ def main() -> int:
         assert "非证据状态兼容记录" in report
         evidence = (out_dir / "evidence-manifest.csv").read_text(encoding="utf-8")
         assert "file-query-benchmark.csv" in evidence and "Guest log SHA256" in evidence
+        assert evidence.splitlines()[0] == "artifact,kind,source,proves,review_use"
+        assert "reader_use" not in evidence
         generated = "\n".join(path.read_text(encoding="utf-8") for path in out_dir.glob("*.html"))
         for obsolete in (
             "cost-replacement.svg",
@@ -251,7 +237,7 @@ def main() -> int:
             "rows": 0,
             "reason": "measured-experiments.json is missing",
         }, status
-        for artifact in ("report.md", "index.html", "monitor.html", "reader-guide.html"):
+        for artifact in ("report.md", "index.html", "monitor.html"):
             rendered = (out_dir / artifact).read_text(encoding="utf-8")
             assert "unavailable" in rendered and "plain_runtime_cases_zero" in rendered, artifact
             assert "charts/runner-" not in rendered, artifact
