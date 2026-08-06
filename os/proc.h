@@ -20,7 +20,7 @@
 #define MAILBOX_SIDECAR_PAGE_COUNT (2)
 
 struct agent_legacy_mailbox;
-#define CHILD_RECORD_CAP (NPROC)
+#define CHILD_EXIT_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_LIMIT (NPROC / 2)
 #define PROC_RESERVED_SLOTS (NPROC / 4)
@@ -61,15 +61,13 @@ struct proc;
 struct user_image;
 struct agent_timeline_wait_state;
 
-enum childstate { CHILD_FREE, CHILD_LIVE, CHILD_EXITED };
-
-struct child_record {
-	enum childstate state;
+struct child_exit {
 	int pid;
 	int exit_code;
-	struct proc *child;
-	uint64 exit_sequence;
 };
+
+_Static_assert(sizeof(struct child_exit) == 2 * sizeof(int),
+	       "child completions must stay compact");
 
 // Saved registers for kernel context switches.
 struct context {
@@ -216,7 +214,7 @@ struct proc {
 	uint64 heap_base; // First byte controlled by brk/sbrk
 	uint64 heap_break; // Published byte-granular program break
 	struct proc *parent; // Parent process; NULL means kernel-owned
-	int parent_record_index;
+	uint live_child_count;
 	struct resource_account_handle resource_account;
 	// Scheduler partition index; accounting identity is resource_account.
 	int resource_domain_id;
@@ -228,8 +226,9 @@ struct proc {
 	int teardown_owner_tid;
 	uint vm_snapshot_depth;
 	int vm_snapshot_owner_tid;
-	struct child_record child_records[CHILD_RECORD_CAP];
-	uint64 child_exit_sequence;
+	uint child_exit_head;
+	uint child_exit_count;
+	struct child_exit child_exits[CHILD_EXIT_CAP];
 	uint exec_dev;
 	uint exec_inum;
 	uint exec_flags;

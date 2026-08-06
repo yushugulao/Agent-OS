@@ -90,7 +90,9 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 - 双目标 ENOSPC、持久 PUBLIC principal 与 AgentOS 存储保留复测；
 - 文件系统块/inode 分配与释放事务的 busy、EIO 和突然终止一致性复测。
 
-`make full-verify` 的 profile v6 严格约束上述步骤顺序和逐项原始日志。QEMU runner 控制台可转发原始字节，但落盘 `.guest.log` 将 CRLF 和孤立 CR 统一为 LF；exact-line marker、SHA256、CSV 行号和 manifest 一律绑定这份 canonical transcript。各项仍可用
+普通 `make agentos-test` 默认使用 `none` profile，并按主机资源为 Agent case 分配隔离 QEMU lane；显式 `local-e3` 与正式校准保持串行，避免把并行争用下的计时套入三轮串行阈值。`make full-verify` 未显式指定时仍选择 `local-e3`，显式 `AGENT_TEST_DURATION_PROFILE=none` 才并行运行 Agent case。并行 Agent 结果只检查 case timing inventory。相互独立的资源回归始终使用隔离 lane；正式采集先校验 `run-summary.json`、`steps.tsv` 和 `artifacts.tsv`，再从一次性 verified import plan 按 profile v6 的固定 16 步顺序发布原始工件，receipt 保留各 lane 的真实起止时间和重叠关系。双目标 AB/BA 测量和文件系统 epoch 掉电序列仍独占执行。
+
+profile v6 严格约束步骤清单和逐项原始日志。QEMU runner 控制台可转发原始字节，但落盘 `.guest.log` 将 CRLF 和孤立 CR 统一为 LF；exact-line marker、SHA256、CSV 行号和 manifest 一律绑定这份 canonical transcript。各项仍可用
 `make physical-resource-test`、`make metadata-recovery-test`、`make observe-recovery-test`、
 `make virtio-disk-test`、`make fs-enospc-test`、`make fs-allocator-fault-test` 等入口单独复现。多启动 runner 会把 runner stdout
 和每次 Guest 启动日志合并保存；checkpoint mode 使用单次 `SIGTERM` 建立受控边界，metadata

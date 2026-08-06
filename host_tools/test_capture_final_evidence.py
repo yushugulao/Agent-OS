@@ -3,6 +3,7 @@
 from __future__ import annotations
 import csv
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -1532,6 +1533,22 @@ class FinalEvidenceTests(unittest.TestCase):
             self.assertEqual({item["name"] for item in summary["artifacts"]},
                              {item for items in PROFILE_ARTIFACTS.values() for item in items})
             self.assertEqual(summary["settings"]["mechanism_marker_grace_seconds"], "5s")
+            overlap = base / "overlap"
+            overlap_steps = populate_summary_stage(overlap)
+            overlap_steps.write_text(
+                overlap_steps.read_text().replace(
+                    "syscall-fairness\t7\t8\t",
+                    "syscall-fairness\t6.250000000\t7.500000000\t",
+                )
+            )
+            run(
+                [
+                    *collector_command(REPO, "write-summary"),
+                    "--stage", str(overlap), "--steps", str(overlap_steps),
+                    "--commit", commit,
+                ],
+                REPO,
+            )
             cases = []
             missing = base / "missing-step"; missing_steps = populate_summary_stage(missing)
             missing_steps.write_text("\n".join(line for line in missing_steps.read_text().splitlines()
@@ -1557,50 +1574,92 @@ class FinalEvidenceTests(unittest.TestCase):
                 self.assertFalse((bad / "incoming/verification-summary.json").exists())
                 self.assertFalse(any("partial" in item.name for item in (bad / "incoming").iterdir()))
     @unittest.skipUnless(os.name == "posix", "shell wiring test is POSIX-only")
-    def test_wiring_and_full_modes_are_fail_closed_and_equivalent(self) -> None:
+    def test_parallel_evidence_import_records_verified_runner_time(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
-            sed = shutil.which("sed")
-            self.assertIsNotNone(sed, "GNU sed is required by the POSIX wiring fixture")
             stage = base / "stage"
             (stage / "incoming").mkdir(parents=True)
-            runner = base / "runner.sh"
-            executable(runner, """#!/usr/bin/env bash
-set -eu
-printf '%s,%s\n' "${WORKFLOW_TEARDOWN_STABILITY_RUNS}" "${MARKER_GRACE_SECONDS}" >"${CAPTURE_OUT}"
-[[ -z "${EVIDENCE_GUEST_LOG_FILE:-}" ]] || printf 'guest\n' >"${EVIDENCE_GUEST_LOG_FILE}"
-printf 'runner passed\n'
-""")
+            report = base / "report"
+            (report / "race").mkdir(parents=True)
+            artifact = report / "race" / "race.combined"
+            payload = b"runner and guest\n"
+            artifact.write_bytes(payload)
+            (report / "verified-import.tsv").write_text(
+                "race\t10.250000000\t12.750000000\trace.log\t"
+                f"race/race.combined\t{len(payload)}\t"
+                f"{hashlib.sha256(payload).hexdigest()}\n",
+                encoding="ascii",
+            )
             wiring = REPO / "scripts" / "evidence-wiring.sh"
-            full = REPO / "scripts" / "run-full-verification.sh"
             script = f"""
 set -euo pipefail
 source {shlex.quote(str(wiring))}
-eval "$({shlex.quote(str(sed))} -n '/^run_resource_regression() {{$/,/^}}$/p' {shlex.quote(str(full))})"
-TOOLPREFIX=x QEMU=x PYTHON_BIN={shlex.quote(sys.executable)} CASE_TIMEOUT=1s
-IDLE_NOTICE_SECONDS=1 MECHANISM_MARKER_GRACE_SECONDS=5s
-unset FINAL_EVIDENCE_STAGE
-CAPTURE_OUT={shlex.quote(str(base / 'normal'))} run_resource_regression \
-  race race.log {shlex.quote(str(runner))} WORKFLOW_TEARDOWN_STABILITY_RUNS=3
+ROOT_DIR={shlex.quote(str(REPO))}
+PYTHON_BIN={shlex.quote(sys.executable)}
 FINAL_EVIDENCE_STAGE={shlex.quote(str(stage))}; evidence_initialize
-CAPTURE_OUT={shlex.quote(str(base / 'evidence'))} run_resource_regression \
-  race race.log {shlex.quote(str(runner))} WORKFLOW_TEARDOWN_STABILITY_RUNS=3
-test "$(cat {shlex.quote(str(base / 'normal'))})" = 3,5s
-test "$(cat {shlex.quote(str(base / 'evidence'))})" = 3,5s
+EVIDENCE_PARALLEL_PLAN={shlex.quote(str(report / 'verified-import.tsv'))}
+evidence_record_parallel_case {shlex.quote(str(report))} race
 test -s "${{EVIDENCE_INCOMING_DIR}}/race.log"
-grep -Fq '===== runner-stdout:race =====' "${{EVIDENCE_INCOMING_DIR}}/race.log"
-grep -Fq 'runner passed' "${{EVIDENCE_INCOMING_DIR}}/race.log"
-grep -Fq '===== runner-guest-logs:race =====' "${{EVIDENCE_INCOMING_DIR}}/race.log"
-grep -Fq 'guest' "${{EVIDENCE_INCOMING_DIR}}/race.log"
-tee() {{ command cat >/dev/null; return 9; }}
-if evidence_capture "${{EVIDENCE_WORK_DIR}}/tee.log" bash -c 'echo x'; then
-  exit 20
-else
-  status=$?
-fi
-test "${{status}}" -eq 74
+test "$(cat "${{EVIDENCE_INCOMING_DIR}}/race.log")" = 'runner and guest'
+test "$(cat "${{EVIDENCE_STEPS_FILE}}")" = $'race\t10.250000000\t12.750000000\trace.log'
 """
             result = run(["bash", "-c", script], REPO, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            aggregate_stage = base / "aggregate-stage"
+            (aggregate_stage / "incoming").mkdir(parents=True)
+            timings = report / "agent-suite-timings.log"
+            guest = report / "agent-suite-guest.log"
+            timings.write_bytes(b"case\t1.250000000\n")
+            guest.write_bytes(b"guest marker\n")
+            with (report / "verified-import.tsv").open("a", encoding="ascii") as stream:
+                for item in (timings, guest):
+                    payload = item.read_bytes()
+                    stream.write(
+                        f"agent-suite\t10.250000000\t12.750000000\t{item.name}\t"
+                        f"{item.name}\t{len(payload)}\t{hashlib.sha256(payload).hexdigest()}\n"
+                    )
+            aggregate_script = f"""
+set -euo pipefail
+source {shlex.quote(str(wiring))}
+PYTHON_BIN={shlex.quote(sys.executable)}
+FINAL_EVIDENCE_STAGE={shlex.quote(str(aggregate_stage))}; evidence_initialize
+EVIDENCE_PARALLEL_PLAN={shlex.quote(str(report / 'verified-import.tsv'))}
+evidence_import_parallel_agent_suite {shlex.quote(str(report))}
+cmp {shlex.quote(str(timings))} "${{EVIDENCE_INCOMING_DIR}}/agent-suite-timings.log"
+cmp {shlex.quote(str(guest))} "${{EVIDENCE_INCOMING_DIR}}/agent-suite-guest.log"
+"""
+            result = run(["bash", "-c", aggregate_script], REPO, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            guest.write_text("changed after verification\n", encoding="ascii")
+            aggregate_tampered = base / "aggregate-tampered"
+            (aggregate_tampered / "incoming").mkdir(parents=True)
+            aggregate_tampered_script = f"""
+set -euo pipefail
+source {shlex.quote(str(wiring))}
+PYTHON_BIN={shlex.quote(sys.executable)}
+FINAL_EVIDENCE_STAGE={shlex.quote(str(aggregate_tampered))}; evidence_initialize
+EVIDENCE_PARALLEL_PLAN={shlex.quote(str(report / 'verified-import.tsv'))}
+! evidence_import_parallel_agent_suite {shlex.quote(str(report))}
+test ! -e "${{EVIDENCE_INCOMING_DIR}}/agent-suite-guest.log"
+"""
+            result = run(["bash", "-c", aggregate_tampered_script], REPO, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            tampered_stage = base / "tampered-stage"
+            (tampered_stage / "incoming").mkdir(parents=True)
+            artifact.write_text("changed after verification\n", encoding="ascii")
+            tampered_script = f"""
+set -euo pipefail
+source {shlex.quote(str(wiring))}
+PYTHON_BIN={shlex.quote(sys.executable)}
+FINAL_EVIDENCE_STAGE={shlex.quote(str(tampered_stage))}; evidence_initialize
+EVIDENCE_PARALLEL_PLAN={shlex.quote(str(report / 'verified-import.tsv'))}
+! evidence_record_parallel_case {shlex.quote(str(report))} race
+test ! -e "${{EVIDENCE_INCOMING_DIR}}/race.log"
+"""
+            result = run(["bash", "-c", tampered_script], REPO, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
     @unittest.skipUnless(os.name == "posix", "Agent policy fixture is POSIX-only")
     def test_agent_duration_policy_fails_before_build_with_bounded_exceptions(self) -> None:
@@ -1640,6 +1699,9 @@ exit 91
                 "AGENT_TEST_CALIBRATE": "0",
                 "REQUIRE_FULL_SUITE": "1",
                 "MAKE_TOOL": str(base / "make"),
+                "AGENTOS_BUILD_JOBS": "1",
+                "AGENTOS_TEST_JOBS": "1",
+                "AGENTOS_QEMU_JOBS": "1",
             })
             for name in ("AGENT_TEST_CASE", "FINAL_EVIDENCE_STAGE"):
                 env.pop(name, None)
@@ -2644,11 +2706,13 @@ procreap_ucore: parent passed
             len(BENCHMARK_SOURCE_CONTRACT.read_text(encoding="utf-8").splitlines()),
             400,
         )
-        self.assertLessEqual(len(wiring.splitlines()), 80)
+        self.assertLessEqual(len(wiring.splitlines()), 150)
         for token in ("write-summary",
                       'MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"',
-                      "--check agent-test-policy"):
+                      "evidence_verify_parallel_run", "evidence_record_parallel_case"):
             self.assertIn(token, full)
+        self.assertIn("--verify-report --emit-import-plan", wiring)
+        self.assertNotIn("run_resource_regression", full)
         self.assertNotIn("reader-e2e", full)
         self.assertLess(full.index("write-summary"), full.index("[full-verify] all checks passed"))
         for once in ("host_tools/test_measured_experiments.py",

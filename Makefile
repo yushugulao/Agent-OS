@@ -47,7 +47,9 @@ PYTHON_BIN ?= python3
 BASH_BIN ?= bash
 override PY = $(PYTHON_BIN)
 HOST_CC ?= $(if $(strip $(HOSTCC)),$(HOSTCC),cc)
-AGENT_TEST_DURATION_PROFILE ?= local-e3
+AGENT_TEST_DURATION_PROFILE_ORIGIN := $(origin AGENT_TEST_DURATION_PROFILE)
+AGENT_TEST_DURATION_PROFILE ?= none
+FULL_VERIFY_AGENT_TEST_DURATION_PROFILE ?= $(if $(filter undefined,$(AGENT_TEST_DURATION_PROFILE_ORIGIN)),local-e3,$(AGENT_TEST_DURATION_PROFILE))
 COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 AGENTOS_BUILD_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind build 2>/dev/null),1)
 AGENTOS_TEST_JOBS ?= $(or $(shell $(PYTHON_BIN) -I -S -B scripts/resource-jobs.py --kind host 2>/dev/null),1)
@@ -1005,10 +1007,40 @@ agentos-build:
 	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) build TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) LOG=warn INIT_PROC=agentfinal_ucore
 
 agentos-test:
-	rm -f $(F)/fs.img $(F)/fs-copy.img
-	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
-		HOST_CC=$(call shell_quote,$(HOST_CC)) \
-		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-agent-tests.sh
+	@set -eu; \
+		duration_profile=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)); \
+		case "$$duration_profile" in local-e3|none) ;; \
+			*) echo "agentos-test: AGENT_TEST_DURATION_PROFILE must be local-e3 or none" >&2; exit 2 ;; \
+		esac; \
+		if [ "$$duration_profile" = local-e3 ] || \
+		   [ -n "$${AGENT_TEST_CASE:-}" ] || \
+		   [ "$${AGENT_TEST_CALIBRATE:-0}" != 0 ] || \
+		   [ "$${REQUIRE_FULL_SUITE:-0}" != 0 ] || \
+		   [ -n "$${FINAL_EVIDENCE_STAGE:-}" ]; then \
+			rm -f $(F)/fs.img $(F)/fs-copy.img; \
+			AGENT_TEST_DURATION_PROFILE="$$duration_profile" \
+				HOST_CC=$(call shell_quote,$(HOST_CC)) \
+				TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+				$(call shell_quote,$(BASH_BIN)) scripts/run-agent-tests.sh; \
+		else \
+			output="build/agent-qemu-lanes-$$(date +%s)-$$$$"; \
+			echo "[agentos-test] parallel lanes=$(AGENTOS_QEMU_JOBS) output=$$output"; \
+			TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+				QEMU=$(call shell_quote,$(QEMU)) \
+				PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) \
+				BASH_BIN=$(call shell_quote,$(BASH_BIN)) \
+				HOST_CC=$(call shell_quote,$(HOST_CC)) \
+				$(PYTHON_CMD) -I -S -B scripts/run-parallel-qemu-regressions.py \
+					--root . --output-dir "$$output" --suite agent \
+					--jobs $(AGENTOS_QEMU_JOBS) \
+					--build-jobs $(AGENTOS_BUILD_JOBS) \
+					--bash $(call shell_quote,$(BASH_BIN)); \
+			$(PYTHON_CMD) -I -S -B scripts/check-kernel-budgets.py \
+				--check agent-test-timing-inventory \
+				--config ci/kernel-budgets.json \
+				--agent-test-timing-file "$$output/agent-suite-timings.log"; \
+			echo "[agentos-test] results=$$output"; \
+		fi
 
 # Two isolated Guest boots: challenge-bound Task 1-5 plus the path/index
 # comparison, then the short Task 6 workflow. No cloud API or prior result is read.
@@ -1080,10 +1112,11 @@ dual-platform-run:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-dual-platforms.sh
 
 target-readiness:
-	PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) bash scripts/check-target-readiness.sh
+	@$(call shell_quote,$(BASH_BIN)) scripts/check-target-readiness.sh
+	+@$(MAKE) --no-print-directory stage-host-selftests
 
 full-verify:
-	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
+	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(FULL_VERIFY_AGENT_TEST_DURATION_PROFILE)) \
 		AGENTOS_BUILD_JOBS=$(call shell_quote,$(AGENTOS_BUILD_JOBS)) \
 		AGENTOS_TEST_JOBS=$(call shell_quote,$(AGENTOS_TEST_JOBS)) \
 		AGENTOS_QEMU_JOBS=$(call shell_quote,$(AGENTOS_QEMU_JOBS)) \

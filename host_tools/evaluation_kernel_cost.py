@@ -254,6 +254,7 @@ TRUSTED_ENVIRONMENT_REQUIRED = {
 }
 TRUSTED_ENVIRONMENT_OPTIONAL = {
     "PATH", "SystemRoot", "COMSPEC", "PATHEXT", "HOME", "TMP", "TEMP", "TMPDIR",
+    "AGENTOS_BUILD_JOBS",
 }
 TRUSTED_BUILD_LOCALES = frozenset(("C", "C.UTF-8"))
 
@@ -1069,6 +1070,12 @@ def validate_trusted_build_config(
         or not environment["SOURCE_DATE_EPOCH"].isdigit()
     ):
         raise KernelCostError("trusted build deterministic environment is invalid")
+    raw_build_jobs = environment.get("AGENTOS_BUILD_JOBS")
+    if raw_build_jobs is not None and re.fullmatch(
+        r"(?:[1-9]|1[0-9]|2[0-4])", raw_build_jobs
+    ) is None:
+        raise KernelCostError("trusted build job budget is invalid")
+    build_jobs_argument = [] if raw_build_jobs is None else [f"-j{raw_build_jobs}"]
     environment_sha = _bytes_sha(_canonical_json(environment))
     if _sha(root["environment_sha256"], "trusted build environment SHA-256") != environment_sha:
         raise KernelCostError("trusted build environment SHA-256 differs")
@@ -1102,13 +1109,19 @@ def validate_trusted_build_config(
         expected_build = (
             [
                 make_path,
+                *build_jobs_argument,
                 "-C",
                 "baseline_ucore",
                 f"TOOLPREFIX={prefix}",
                 "build/kernel",
             ]
             if expected_role == "baseline"
-            else [make_path, f"TOOLPREFIX={prefix}", "build/kernel"]
+            else [
+                make_path,
+                *build_jobs_argument,
+                f"TOOLPREFIX={prefix}",
+                "build/kernel",
+            ]
         )
         if (
             _trusted_argv(target["clean_argv"], f"{label}.clean_argv") != expected_clean
@@ -1125,12 +1138,22 @@ def validate_trusted_build_config(
         (
             "struct_proc_bytes",
             "kernel_budget",
-            [make_path, f"TOOLPREFIX={prefix}", "kernel-budget-check"],
+            [
+                make_path,
+                *build_jobs_argument,
+                f"TOOLPREFIX={prefix}",
+                "kernel-budget-check",
+            ],
         ),
         (
             "user_stack_call_path_bytes",
             "user_stack",
-            [make_path, f"TOOLPREFIX={prefix}", "user-stack-check"],
+            [
+                make_path,
+                *build_jobs_argument,
+                f"TOOLPREFIX={prefix}",
+                "user-stack-check",
+            ],
         ),
     )
     treatment_id = configured_targets[1]["id"]
@@ -1289,11 +1312,15 @@ def validate_trusted_build_environment(
         "make_sha256", "platform", "python", "source_date_epoch",
         "toolchain_identity_sha256", "toolchain_prefix",
     }
+    build_jobs = trusted_config["environment"].get("AGENTOS_BUILD_JOBS")
+    if build_jobs is not None:
+        expected_names.add("build_jobs")
     if set(facts) != expected_names:
         raise KernelCostError("trusted build environment fact set is invalid")
     make_tool = trusted_config["make_tool"]
     expected = {
         "build_environment_sha256": trusted_config["environment_sha256"],
+        **({"build_jobs": build_jobs} if build_jobs is not None else {}),
         "builder": f"evaluation_kernel_build.py/{TRUSTED_BUILD_SCHEMA_VERSION}",
         "make": make_tool["version"],
         "make_path": make_tool["path"],

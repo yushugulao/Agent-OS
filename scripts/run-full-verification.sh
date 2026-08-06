@@ -52,7 +52,7 @@ evidence_initialize
 
 case "${AGENT_TEST_DURATION_PROFILE}" in
 local-e3)
-	echo "[full-verify] Agent duration policy profile=local-e3 status=enforced"
+	echo "[full-verify] Agent duration policy profile=local-e3 status=enforced runner=serial"
 	"${PYTHON_BIN}" "${ROOT_DIR}/scripts/check-kernel-budgets.py" \
 		--check agent-test-policy \
 		--config "${ROOT_DIR}/ci/kernel-budgets.json"
@@ -61,16 +61,6 @@ none)
 	echo "[full-verify] Agent duration policy profile=none status=skipped-different-runner"
 	;;
 esac
-
-agent_suite_guest_log=""
-agent_suite_guest_log_owned=0
-cleanup_full_verify() {
-	if [[ "${agent_suite_guest_log_owned}" == "1" &&
-	      -n "${agent_suite_guest_log}" ]]; then
-		rm -f "${agent_suite_guest_log}"
-	fi
-}
-trap cleanup_full_verify EXIT
 
 evidence_step_begin() {
 	evidence_enabled && EVIDENCE_STEP_START="$(date +%s.%N)"
@@ -88,45 +78,6 @@ evidence_step_end() {
 		printf '\t%s' "$@" >>"${EVIDENCE_STEPS_FILE}"
 	fi
 	printf '\n' >>"${EVIDENCE_STEPS_FILE}"
-}
-
-run_resource_regression() {
-	local label="$1"
-	local filename="$2"
-	local runner="$3"
-	shift 3
-	local common_env=(
-		TOOLPREFIX="${TOOLPREFIX}"
-		QEMU="${QEMU}"
-		PYTHON_BIN="${PYTHON_BIN}"
-		CASE_TIMEOUT="${CASE_TIMEOUT}"
-		IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}"
-		MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS}"
-	)
-	local runner_shell=(bash)
-	if [[ "${label}" == "fs-allocator-fault" ]]; then
-		runner_shell=(/bin/bash --noprofile --norc -p)
-	fi
-
-	if evidence_enabled; then
-		local stdout_file="${EVIDENCE_WORK_DIR}/${label}.stdout"
-		local guest_file="${EVIDENCE_WORK_DIR}/${label}.guest"
-		local combined_file="${EVIDENCE_WORK_DIR}/${label}.combined"
-		: >"${guest_file}"
-		evidence_capture "${stdout_file}" env \
-			EVIDENCE_GUEST_LOG_FILE="${guest_file}" \
-			"${common_env[@]}" "$@" "${runner_shell[@]}" "${runner}"
-		[[ -s "${guest_file}" ]]
-		{
-			printf '===== runner-stdout:%s =====\n' "${label}"
-			cat "${stdout_file}"
-			printf '\n===== runner-guest-logs:%s =====\n' "${label}"
-			cat "${guest_file}"
-		} >"${combined_file}"
-		evidence_publish_file "${combined_file}" "${filename}"
-	else
-		env "${common_env[@]}" "$@" "${runner_shell[@]}" "${runner}"
-	fi
 }
 
 evidence_step_begin
@@ -161,78 +112,58 @@ echo "[full-verify] host platform alignment"
 )
 evidence_step_end "host-platform-alignment"
 
-if evidence_enabled; then
-	agent_suite_guest_log="${EVIDENCE_WORK_DIR}/agent-suite-guest.log"
-else
-	agent_suite_guest_log="${TMPDIR:-/tmp}/agent-suite-guest.$$"
-	agent_suite_guest_log_owned=1
-fi
 evidence_step_begin
 echo "[full-verify] AgentOS kernel tests"
-
-if ! evidence_enabled; then
-	parallel_agent_output="${ROOT_DIR}/build/agent-qemu-lanes-$(date +%s)-$$"
-	echo "[full-verify] AgentOS kernel test lanes=${AGENTOS_QEMU_JOBS}"
-	"${PYTHON_BIN}" -I -S -B \
-		"${ROOT_DIR}/scripts/run-parallel-qemu-regressions.py" \
-		--root "${ROOT_DIR}" \
-		--output-dir "${parallel_agent_output}" \
-		--suite agent \
-		--jobs "${AGENTOS_QEMU_JOBS}" \
-		--build-jobs "${AGENTOS_BUILD_JOBS}"
-	cp "${parallel_agent_output}/agent-suite-guest.log" \
-		"${agent_suite_guest_log}"
-	if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ]]; then
-		"${PYTHON_BIN}" -I -S -B \
-			"${ROOT_DIR}/scripts/check-kernel-budgets.py" \
-			--check agent-tests \
-			--config "${ROOT_DIR}/ci/kernel-budgets.json" \
-			--agent-test-timing-file \
-			"${parallel_agent_output}/agent-suite-timings.log"
-	else
-		"${PYTHON_BIN}" -I -S -B \
-			"${ROOT_DIR}/scripts/check-kernel-budgets.py" \
-			--check agent-test-timing-inventory \
-			--config "${ROOT_DIR}/ci/kernel-budgets.json" \
-			--agent-test-timing-file \
-			"${parallel_agent_output}/agent-suite-timings.log"
-	fi
-else
-(
-	cd "${ROOT_DIR}"
+if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ]]; then
 	if evidence_enabled; then
-		timing_file="${EVIDENCE_WORK_DIR}/agent-suite-timings.log"
-		: >"${agent_suite_guest_log}"
+		agent_output="${EVIDENCE_WORK_DIR}/agent-serial"
+	else
+		agent_output="${ROOT_DIR}/build/agent-serial-$(date +%s)-$$"
+	fi
+	mkdir -p "${agent_output}"
+	: >"${agent_output}/agent-suite-guest.log"
+	(
+		cd "${ROOT_DIR}"
 		env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
 			-u AGENT_TEST_GUEST_LOG_FILE \
 			AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
-			AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE}" \
-			AGENT_TEST_TIMING_FILE="${timing_file}" \
-			AGENT_TEST_GUEST_LOG_FILE="${agent_suite_guest_log}" \
+			AGENT_TEST_DURATION_PROFILE=local-e3 \
+			AGENT_TEST_TIMING_FILE="${agent_output}/agent-suite-timings.log" \
+			AGENT_TEST_GUEST_LOG_FILE="${agent_output}/agent-suite-guest.log" \
 			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
-			PYTHON_BIN="${PYTHON_BIN}" \
-			CASE_TIMEOUT="${CASE_TIMEOUT}" \
+			PYTHON_BIN="${PYTHON_BIN}" CASE_TIMEOUT="${CASE_TIMEOUT}" \
 			IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
 			MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS}" \
 			bash scripts/run-agent-tests.sh
-		evidence_publish_file \
-			"${timing_file}" "agent-suite-timings.log"
-		evidence_publish_file \
-			"${agent_suite_guest_log}" "agent-suite-guest.log"
-	else
-		: >"${agent_suite_guest_log}"
-		env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
-			AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
-			AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE}" \
-			AGENT_TEST_GUEST_LOG_FILE="${agent_suite_guest_log}" \
-			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
-			PYTHON_BIN="${PYTHON_BIN}" \
-			CASE_TIMEOUT="${CASE_TIMEOUT}" \
-			IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
-			MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS}" \
-			bash scripts/run-agent-tests.sh
+	)
+	if evidence_enabled; then
+		evidence_publish_file "${agent_output}/agent-suite-timings.log" \
+			"agent-suite-timings.log"
+		evidence_publish_file "${agent_output}/agent-suite-guest.log" \
+			"agent-suite-guest.log"
 	fi
-)
+else
+	if evidence_enabled; then
+		parallel_agent_output="${EVIDENCE_WORK_DIR}/agent-qemu-lanes"
+	else
+		parallel_agent_output="${ROOT_DIR}/build/agent-qemu-lanes-$(date +%s)-$$"
+	fi
+	echo "[full-verify] AgentOS kernel test lanes=${AGENTOS_QEMU_JOBS}"
+	"${PYTHON_BIN}" -I -S -B \
+		"${ROOT_DIR}/scripts/run-parallel-qemu-regressions.py" \
+		--root "${ROOT_DIR}" --output-dir "${parallel_agent_output}" \
+		--suite agent --jobs "${AGENTOS_QEMU_JOBS}" \
+		--build-jobs "${AGENTOS_BUILD_JOBS}"
+	"${PYTHON_BIN}" -I -S -B \
+		"${ROOT_DIR}/scripts/check-kernel-budgets.py" \
+		--check agent-test-timing-inventory \
+		--config "${ROOT_DIR}/ci/kernel-budgets.json" \
+		--agent-test-timing-file \
+		"${parallel_agent_output}/agent-suite-timings.log"
+	if evidence_enabled; then
+		evidence_verify_parallel_run "${parallel_agent_output}" agent
+		evidence_import_parallel_agent_suite "${parallel_agent_output}"
+	fi
 fi
 evidence_step_end "agent-suite" "agent-suite-timings.log" "agent-suite-guest.log"
 
@@ -324,149 +255,35 @@ evidence_step_end "dual-platforms" \
 	"${mainflow_artifacts[@]}" "dual-targeted-agentbench-guest.log" \
 	"dual-measured-experiments.json" "dual-file-query-benchmark.csv"
 
-parallel_resource_regressions=0
-if ! evidence_enabled; then
-	parallel_output="${ROOT_DIR}/build/qemu-regressions-$(date +%s)-$$"
-	echo "[full-verify] resource regressions lanes=${AGENTOS_QEMU_JOBS}"
-	"${PYTHON_BIN}" -I -S -B \
-		"${ROOT_DIR}/scripts/run-parallel-qemu-regressions.py" \
-		--root "${ROOT_DIR}" \
-		--output-dir "${parallel_output}" \
-		--jobs "${AGENTOS_QEMU_JOBS}" \
-		--build-jobs "${AGENTOS_BUILD_JOBS}"
-	parallel_resource_regressions=1
-fi
-
-if [[ "${parallel_resource_regressions}" == "0" ]]; then
-evidence_step_begin
-echo "[full-verify] process reaper tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"proc-reap" "proc-reap.log" \
-		"scripts/run-proc-reap-tests.sh"
+resource_regression_cases=(
+	proc-reap syscall-fairness file-resource thread-resource
+	physical-resource metadata-recovery observe-recovery virtio-disk
+	workflow-teardown-race fs-enospc fs-allocator-fault
 )
-evidence_step_end "proc-reap" "proc-reap.log"
-
-evidence_step_begin
-echo "[full-verify] syscall fairness tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"syscall-fairness" "syscall-fairness.log" \
-		"scripts/run-syscall-fairness-tests.sh"
-)
-evidence_step_end "syscall-fairness" "syscall-fairness.log"
-
-evidence_step_begin
-echo "[full-verify] file resource tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"file-resource" "file-resource.log" \
-		"scripts/run-file-resource-tests.sh"
-)
-evidence_step_end "file-resource" "file-resource.log"
-
-evidence_step_begin
-echo "[full-verify] thread resource tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"thread-resource" "thread-resource.log" \
-		"scripts/run-thread-resource-tests.sh"
-)
-evidence_step_end "thread-resource" "thread-resource.log"
-
-evidence_step_begin
-echo "[full-verify] physical memory resource tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"physical-resource" "physical-resource.log" \
-		"scripts/run-physical-resource-tests.sh"
-)
-evidence_step_end "physical-resource" "physical-resource.log"
-
-evidence_step_begin
-echo "[full-verify] metadata crash recovery tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"metadata-recovery" "metadata-recovery.log" \
-		"scripts/run-metadata-recovery-tests.sh"
-)
-evidence_step_end "metadata-recovery" "metadata-recovery.log"
-
-evidence_step_begin
-echo "[full-verify] observation durability recovery tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"observe-recovery" "observe-recovery.log" \
-		"scripts/run-observe-recovery-tests.sh"
-)
-evidence_step_end "observe-recovery" "observe-recovery.log" \
-	"observe-recovery-before-reap.img"
-
-evidence_step_begin
-echo "[full-verify] VirtIO disk fault tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"virtio-disk" "virtio-disk.log" \
-		"scripts/run-virtio-disk-tests.sh"
-)
-evidence_step_end "virtio-disk" "virtio-disk.log"
-
-evidence_step_begin
-echo "[full-verify] workflow teardown race tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"workflow-teardown-race" "workflow-teardown-race.log" \
-		"scripts/run-workflow-teardown-race-tests.sh" \
-		WORKFLOW_TEARDOWN_STABILITY_RUNS=3
-)
-evidence_step_end "workflow-teardown-race" "workflow-teardown-race.log"
-
-evidence_step_begin
-echo "[full-verify] filesystem ENOSPC tests"
-(
-	cd "${ROOT_DIR}"
-	run_resource_regression \
-		"fs-enospc" "fs-enospc.log" \
-		"scripts/run-fs-enospc-tests.sh"
-)
-evidence_step_end "fs-enospc" "fs-enospc.log"
-
-evidence_step_begin
-echo "[full-verify] filesystem allocator consistency fault tests"
-(
-	cd "${ROOT_DIR}"
-	if evidence_enabled; then
-		fs_allocator_dir="${EVIDENCE_WORK_DIR}/fs-allocator-evidence"
-		fs_allocator_archive="${EVIDENCE_WORK_DIR}/fs-allocator-evidence.tar"
-		run_resource_regression \
-			"fs-allocator-fault" "fs-allocator-fault.log" \
-			"scripts/run-fs-allocator-fault-tests.sh" \
-			FS_ALLOCATOR_ARTIFACT_DIR="${fs_allocator_dir}" \
-			FS_ALLOCATOR_EVIDENCE_ARCHIVE="${fs_allocator_archive}"
-		"${PYTHON_BIN}" scripts/fs-allocator-evidence.py verify-archive \
-			--archive "${fs_allocator_archive}"
-		evidence_publish_file "${fs_allocator_archive}" \
-			"fs-allocator-evidence.tar"
-	else
-		run_resource_regression \
-			"fs-allocator-fault" "fs-allocator-fault.log" \
-			"scripts/run-fs-allocator-fault-tests.sh"
-	fi
-)
+resource_case_args=()
+for case_name in "${resource_regression_cases[@]}"; do
+	resource_case_args+=(--case "${case_name}")
+done
 if evidence_enabled; then
-	evidence_step_end "fs-allocator-fault" \
-		"fs-allocator-fault.log" "fs-allocator-evidence.tar"
+	parallel_resource_output="${EVIDENCE_WORK_DIR}/resource-qemu-lanes"
 else
-	evidence_step_end "fs-allocator-fault"
+	parallel_resource_output="${ROOT_DIR}/build/qemu-regressions-$(date +%s)-$$"
+fi
+echo "[full-verify] resource regressions lanes=${AGENTOS_QEMU_JOBS}"
+"${PYTHON_BIN}" -I -S -B \
+	"${ROOT_DIR}/scripts/run-parallel-qemu-regressions.py" \
+	--root "${ROOT_DIR}" \
+	--output-dir "${parallel_resource_output}" \
+	--jobs "${AGENTOS_QEMU_JOBS}" \
+	--build-jobs "${AGENTOS_BUILD_JOBS}" \
+	"${resource_case_args[@]}"
+if evidence_enabled; then
+	evidence_verify_parallel_run "${parallel_resource_output}" resource \
+		"${resource_regression_cases[@]}"
+	for case_name in "${resource_regression_cases[@]}"; do
+		evidence_record_parallel_case \
+			"${parallel_resource_output}" "${case_name}"
+	done
 fi
 
 # This campaign is a hard acceptance gate. Its raw-image receipts remain in
@@ -483,7 +300,6 @@ echo "[full-verify] filesystem ordered epoch power-cut tests"
 		FSEPOCH_QEMU_JOBS="${fs_epoch_jobs}" \
 		bash scripts/run-fs-epoch-tests.sh
 )
-fi
 
 if evidence_enabled; then
 	"${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/trusted-python-entry.py" \

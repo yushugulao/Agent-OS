@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -116,6 +117,23 @@ class ParallelQemuRegressionTests(unittest.TestCase):
         self.assertEqual(RUNNER.build_jobs_per_lane(3, 4), 1)
         self.assertEqual(RUNNER.allocate_build_jobs(10, 4), (3, 3, 2, 2))
         self.assertEqual(sum(RUNNER.allocate_build_jobs(11, 4)), 11)
+        self.assertEqual(
+            RUNNER.bounded_build_jobs(
+                12,
+                {"MAKEFLAGS": "-j4 --jobserver-auth=3,4", "MFLAGS": ""},
+            ),
+            (3, 4),
+        )
+        self.assertEqual(
+            RUNNER.bounded_build_jobs(
+                12, {"MAKEFLAGS": "--jobs=7", "MFLAGS": "-j 5"}
+            ),
+            (4, 5),
+        )
+        self.assertEqual(
+            RUNNER.bounded_build_jobs(6, {"MAKEFLAGS": "--jobserver-auth=3,4"}),
+            (6, None),
+        )
 
     def test_agent_suite_uses_isolated_targeted_runs_and_merges_receipts(self) -> None:
         case = RUNNER.AGENT_CASES[0]
@@ -128,6 +146,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             )
             self.assertEqual(environment["AGENT_TEST_CASE"], case.label)
             self.assertEqual(environment["AGENT_TEST_DURATION_PROFILE"], "none")
+            self.assertEqual(environment["MARKER_GRACE_SECONDS"], "2s")
             self.assertEqual(environment["REQUIRE_FULL_SUITE"], "0")
             self.assertEqual(
                 environment["AGENT_TEST_GUEST_LOG_FILE"],
@@ -155,7 +174,12 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 guest_file=guest,
                 combined_file=combined,
             )
-            source = RUNNER.SourceIdentity(commit="a" * 40, tree="b" * 40)
+            source = RUNNER.SourceIdentity(
+                commit="a" * 40,
+                tree="b" * 40,
+                manifest_sha256="c" * 64,
+                manifest_files=1,
+            )
             RUNNER.write_reports(
                 output,
                 source,
@@ -178,6 +202,25 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 (output / "run-summary.json").read_text(encoding="ascii")
             )
             self.assertEqual(summary["suite"], "agent")
+            def fake_git(_root, *arguments, **_kwargs):
+                value = source.tree if arguments[-1] == "HEAD^{tree}" else source.commit
+                return value.encode("ascii")
+
+            with mock.patch.object(RUNNER, "git", side_effect=fake_git):
+                verified = RUNNER.verify_reports(
+                    Path(temp_name), output, "agent", (case,)
+                )
+            plan = RUNNER.write_import_plan(output, verified, "agent")
+            rows = [line.split("\t") for line in plan.read_text().splitlines()]
+            aggregate = [row for row in rows if row[0] == "agent-suite"]
+            self.assertEqual(
+                [row[3] for row in aggregate],
+                ["agent-suite-timings.log", "agent-suite-guest.log"],
+            )
+            for row in aggregate:
+                payload = (output / row[4]).read_bytes()
+                self.assertEqual(int(row[5]), len(payload))
+                self.assertEqual(row[6], hashlib.sha256(payload).hexdigest())
 
     @unittest.skipUnless(shutil.which("git"), "git is required")
     def test_clean_commit_materializes_independent_worktrees(self) -> None:
@@ -463,6 +506,149 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             self.assertIn("\tsyscall-fairness.log\n", steps)
             self.assertNotIn("/", steps)
 
+    def test_report_verifier_rejects_tampering_and_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            base = Path(temp_name)
+            output = base / "output"
+            output.mkdir()
+            source = RUNNER.SourceIdentity(
+                commit="a" * 40,
+                tree="b" * 40,
+                manifest_sha256="c" * 64,
+                manifest_files=1,
+            )
+            selected = (RUNNER.CASES[0], RUNNER.CASES[1])
+            results = {}
+            now = time.time_ns()
+            for index, case in enumerate(selected):
+                directory = output / case.label
+                directory.mkdir()
+                stdout = directory / f"{case.label}.stdout"
+                guest = directory / f"{case.label}.guest"
+                combined = directory / f"{case.label}.combined"
+                stdout.write_text("stdout\n", encoding="ascii")
+                guest.write_text("guest\n", encoding="ascii")
+                combined.write_text(case.label + "\n", encoding="ascii")
+                results[case.label] = RUNNER.CaseResult(
+                    case=case,
+                    lane=index + 1,
+                    status=0,
+                    started_ns=now + index,
+                    ended_ns=now + index + 1,
+                    stdout_file=stdout,
+                    guest_file=guest,
+                    combined_file=combined,
+                )
+            RUNNER.write_reports(
+                output, source, 2, ((selected[0],), (selected[1],)), results, []
+            )
+
+            def fake_git(_root, *arguments, **_kwargs):
+                value = source.tree if arguments[-1] == "HEAD^{tree}" else source.commit
+                return value.encode("ascii")
+
+            with mock.patch.object(RUNNER, "git", side_effect=fake_git):
+                verified = RUNNER.verify_reports(base, output, "resource", selected)
+                plan = RUNNER.write_import_plan(output, verified)
+                plan_rows = [line.split("\t") for line in plan.read_text().splitlines()]
+                self.assertEqual(
+                    [row[0] for row in plan_rows],
+                    [case.label for case in selected],
+                )
+                self.assertTrue(all(len(row) == 7 for row in plan_rows))
+                self.assertTrue(all(row[5].isdecimal() for row in plan_rows))
+                self.assertTrue(all(len(row[6]) == 64 for row in plan_rows))
+                summary_path = output / "run-summary.json"
+                summary = json.loads(summary_path.read_text(encoding="ascii"))
+                summary["requested_build_jobs"] = 1
+                summary_path.write_text(json.dumps(summary), encoding="ascii")
+                with self.assertRaisesRegex(RUNNER.RegressionError, "lane inventory"):
+                    RUNNER.verify_reports(base, output, "resource", selected)
+                summary["requested_build_jobs"] = 4
+                summary_path.write_text(json.dumps(summary), encoding="ascii")
+                artifact_manifest = output / "artifacts.tsv"
+                original = artifact_manifest.read_text(encoding="ascii")
+                rows = original.splitlines()
+                rows[1] = rows[1].split("\t", 1)[0] + "\t" + rows[0].split("\t", 1)[1]
+                artifact_manifest.write_text("\n".join(rows) + "\n", encoding="ascii")
+                with self.assertRaisesRegex(RUNNER.RegressionError, "artifact inventory"):
+                    RUNNER.verify_reports(base, output, "resource", selected)
+                artifact_manifest.write_text(original, encoding="ascii")
+
+                combined = output / selected[0].label / f"{selected[0].label}.combined"
+                outside = base / "outside.log"
+                outside.write_text("outside\n", encoding="ascii")
+                combined.unlink()
+                try:
+                    combined.symlink_to(outside)
+                except OSError:
+                    pass
+                else:
+                    # Some MSYS filesystems emulate symlinks as ordinary files;
+                    # only require link rejection when Python would follow it.
+                    if RUNNER.is_link_or_junction(combined):
+                        with self.assertRaisesRegex(
+                            RUNNER.RegressionError, "contains a link"
+                        ):
+                            RUNNER.verify_reports(base, output, "resource", selected)
+
+            alias = base / "report-link"
+            try:
+                alias.symlink_to(output, target_is_directory=True)
+            except OSError:
+                pass
+            else:
+                if (
+                    RUNNER.is_link_or_junction(alias)
+                    or alias.resolve(strict=True) != alias.absolute()
+                ):
+                    with self.assertRaisesRegex(
+                        RUNNER.RegressionError, "directory is invalid"
+                    ):
+                        RUNNER.report_output_directory(alias)
+
+    def test_formal_wiring_keeps_profile_v6_steps_and_serial_epoch(self) -> None:
+        full = Path(__file__).with_name("run-full-verification.sh").read_text(
+            encoding="utf-8"
+        )
+        capture = Path(__file__).with_name("capture-final-evidence.py").read_text(
+            encoding="utf-8"
+        )
+        expected_resources = [
+            case.label for case in RUNNER.RESOURCE_CASES if case.label != "fs-epoch"
+        ]
+        block = full.split("resource_regression_cases=(", 1)[1].split(")", 1)[0]
+        self.assertEqual(block.split(), expected_resources)
+        contract_block = capture.split("STEP_CONTRACT = (", 1)[1].split("\n)", 1)[0]
+        contract_steps = [
+            line.split('"', 2)[1]
+            for line in contract_block.splitlines()
+            if line.lstrip().startswith('("')
+        ]
+        self.assertEqual(
+            contract_steps,
+            [
+                "target-structure",
+                "kernel-budgets",
+                "host-platform-alignment",
+                "agent-suite",
+                "dual-platforms",
+                *expected_resources,
+            ],
+        )
+        self.assertIn("evidence_verify_parallel_run", full)
+        self.assertIn("evidence_record_parallel_case", full)
+        self.assertGreater(
+            full.index("filesystem ordered epoch"),
+            full.index("evidence_record_parallel_case"),
+        )
+        wiring = Path(__file__).with_name("evidence-wiring.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn('read -r -a fields', wiring)
+        self.assertNotIn('artifacts.tsv"', wiring)
+        self.assertNotIn('done <"${run_dir}/steps.tsv"', wiring)
+
     @unittest.skipUnless(shutil.which("git"), "git is required")
     def test_cli_runs_isolated_lanes_and_returns_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
@@ -497,7 +683,8 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             )
             output = base / "output"
             environment = os.environ.copy()
-            environment["MAKEFLAGS"] = "-j99 --eval=bad"
+            environment["MAKEFLAGS"] = "-j5 --jobserver-auth=3,4"
+            environment.pop("MFLAGS", None)
             environment.pop("FINAL_EVIDENCE_STAGE", None)
             completed = subprocess.run(
                 [
@@ -529,9 +716,12 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 (output / "run-summary.json").read_text(encoding="ascii")
             )
             self.assertEqual(summary["effective_jobs"], 2)
-            self.assertEqual(summary["lane_build_jobs"], 4)
-            self.assertEqual(summary["lane_build_job_slots"], [5, 4])
-            self.assertEqual(summary["allocated_build_jobs"], 9)
+            self.assertEqual(summary["requested_build_jobs"], 9)
+            self.assertEqual(summary["effective_build_jobs"], 4)
+            self.assertEqual(summary["outer_make_job_limit"], 5)
+            self.assertEqual(summary["lane_build_jobs"], 2)
+            self.assertEqual(summary["lane_build_job_slots"], [2, 2])
+            self.assertEqual(summary["allocated_build_jobs"], 4)
             self.assertEqual(summary["case_timeout_seconds"], 3600)
             self.assertEqual(
                 summary["case_order"], [case.label for case in RUNNER.CASES[:2]]
@@ -604,7 +794,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             self.assertEqual(evidence_summary["requested_jobs"], 2)
             self.assertEqual(evidence_summary["effective_jobs"], 2)
             self.assertEqual(
-                evidence_summary["lane_build_job_slots"], [5, 4]
+                evidence_summary["lane_build_job_slots"], [2, 2]
             )
             evidence_intervals = [
                 (float(fields[1]), float(fields[2]))

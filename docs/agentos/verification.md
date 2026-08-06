@@ -12,7 +12,7 @@ AgentOS-uCore 的验证分五层：
 | --- | --- | --- |
 | 构建检查 | `make agentos-user`、`make agentos-build`、`make kernel-stack-check` | 确认内核、用户态 ABI 和文件系统镜像能从当前源码构建。 |
 | 增长与边界门 | `make local-check` | 固定 profile 下检查源码、镜像、运行段、PCB、栈深/容量、完整 Agent 状态、版本化 owner/bridge 集合及 metadata 聚合 source/text/BSS；不启动 QEMU。 |
-| AgentOS 专项测试 | `make agentos-test` 或 `bash scripts/run-agent-tests.sh` | 在 QEMU 中逐项运行 Agent 功能、权限和用户输入检查。 |
+| AgentOS 专项测试 | `make agentos-test` | 在隔离的 QEMU lane 中并行运行 Agent 功能、权限和用户输入检查。 |
 | 资源与持久化复测 | `make fs-enospc-test`、`make fs-allocator-fault-test`、`make proc-reap-test`、`make thread-resource-test`、`make file-resource-test`、`make physical-resource-test`、`make metadata-recovery-test`、`make observe-recovery-test`、`make virtio-disk-test`、`make syscall-fairness-test`、`make workflow-teardown-race-test` | 动态验证存储/物理页资源边界、统一 teardown、metadata/观测重启恢复、VirtIO 故障矩阵、文件系统分配事务一致性和跨资源竞态。 |
 | 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标负载；profile v6 串联 Host 合同、版本化 Agent 套件、双目标及独立机制专项。 |
 
@@ -77,13 +77,13 @@ make agentos-user TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-等价脚本入口：
+校准、`local-e3` 正式证据采集和单 case 调试使用串行脚本入口：
 
 ```bash
 bash scripts/run-agent-tests.sh
 ```
 
-脚本按 `ci/kernel-budgets.json` 中 `agent_test_suite.expected_cases` 的顺序启动 QEMU。case 成员、顺序和时长 profile 只以该字段为准；每项完整 marker 和负向条件由 runner validator 维护，本文不复制程序表或 marker 清单。
+串行脚本按 `ci/kernel-budgets.json` 中 `agent_test_suite.expected_cases` 的顺序启动 QEMU。普通 Make 入口将同一套 case 分配给 `scripts/resource-jobs.py` 选定的并行 lane，并按规范顺序合并 Guest 日志和计时清单；并行结果不套用串行 suite 的 wall-time 阈值。case 成员、顺序和时长 profile 只以版本化配置为准。每项完整 marker 和负向条件由 runner validator 维护，本文不复制程序表或 marker 清单。
 
 进入普通套件前，脚本以独立镜像运行 Context-sync/WAIT_ATOMIC `agentfinal_ucore` profile。它有独立 timing file，不计入 Agent suite 校准。裸 marker 只是测试合同的一部分，只有完整退出条件、canonical Guest 日志和同一冻结源码的 bundle 共同通过，才能支持发布结论。
 
@@ -156,7 +156,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`make full-verify` 先执行 `agent-test-policy`；校准有效后，以资源自适应多核策略串联结构检查、`make local-check`、Host 合同、Agent、双目标及各机制回归。每项 runner stdout、canonical Guest 日志和 allocator archive 都进入同一 C 对应的 release bundle。
+`make full-verify` 的 `local-e3` Agent suite 先执行 `agent-test-policy` 并沿用串行时长门；`profile=none` 才使用资源自适应 Agent lane，并只检查 timing inventory。独立资源回归使用自适应 lane，双目标测量和文件系统 epoch 保持独占。每项 runner stdout、canonical Guest 日志和 allocator archive 都进入同一 C 对应的 release bundle。
 
 ## 覆盖关系
 

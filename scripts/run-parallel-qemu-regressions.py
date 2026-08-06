@@ -4,19 +4,28 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from ctypes import wintypes
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import runpy
 import shutil
+import shlex
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+
+HOST_TOOLS = Path(__file__).resolve().parents[1] / "host_tools"
+sys.path.insert(0, str(HOST_TOOLS))
+from plain_ucore_action_runner import RepoRunBusy, exclusive_repo_run_lock
 
 
 MAX_JOBS = 8
@@ -24,6 +33,14 @@ LANE_BUILD_JOBS = 2
 MAX_BUILD_JOBS = 24
 DEFAULT_CASE_TIMEOUT_SECONDS = 3600
 MAX_CASE_TIMEOUT_SECONDS = 14400
+REPORT_FIELDS = {
+    "schema", "suite", "source", "requested_jobs", "effective_jobs",
+    "requested_build_jobs", "effective_build_jobs", "outer_make_job_limit",
+    "lane_build_jobs", "lane_build_job_slots", "allocated_build_jobs",
+    "case_timeout_seconds", "case_order", "lanes", "results",
+    "cleanup_errors", "replay_manifest",
+}
+RESULT_FIELDS = {"case", "lane", "status", "elapsed_ms", "detail", "artifacts"}
 
 
 def adaptive_jobs(kind: str) -> int:
@@ -38,6 +55,43 @@ def adaptive_jobs(kind: str) -> int:
 def environment_or_adaptive_jobs(name: str, kind: str) -> str:
     value = os.environ.get(name)
     return value if value is not None else str(adaptive_jobs(kind))
+
+
+def outer_make_job_limit(environment: dict[str, str] | None = None) -> int | None:
+    values = environment if environment is not None else os.environ
+    limits = []
+    for variable in ("MAKEFLAGS", "MFLAGS"):
+        try:
+            tokens = shlex.split(values.get(variable, ""))
+        except ValueError as error:
+            raise RegressionError(f"{variable} is malformed") from error
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            value = ""
+            if token.startswith("-j") and token != "-j":
+                value = token[2:]
+            elif token.startswith("--jobs="):
+                value = token.split("=", 1)[1]
+            elif token in {"-j", "--jobs"} and index + 1 < len(tokens):
+                candidate = tokens[index + 1]
+                if candidate.isdecimal():
+                    value = candidate
+                    index += 1
+            if value:
+                if not value.isdecimal() or int(value, 10) < 1:
+                    raise RegressionError(f"{variable} has an invalid job limit")
+                limits.append(int(value, 10))
+            index += 1
+    return min(limits) if limits else None
+
+
+def bounded_build_jobs(
+    requested: int, environment: dict[str, str] | None = None
+) -> tuple[int, int | None]:
+    limit = outer_make_job_limit(environment)
+    available = max(1, limit - 1) if limit is not None else requested
+    return min(requested, available), limit
 
 
 @dataclass(frozen=True)
@@ -508,7 +562,12 @@ def child_environment(
             "CASE_TIMEOUT": os.environ.get("CASE_TIMEOUT", "240s"),
             "IDLE_NOTICE_SECONDS": os.environ.get("IDLE_NOTICE_SECONDS", "20s"),
             "MARKER_GRACE_SECONDS": os.environ.get(
-                "MECHANISM_MARKER_GRACE_SECONDS", "5s"
+                (
+                    "MARKER_GRACE_SECONDS"
+                    if case.agent_case is not None
+                    else "MECHANISM_MARKER_GRACE_SECONDS"
+                ),
+                "2s" if case.agent_case is not None else "5s",
             ),
             "EVIDENCE_GUEST_LOG_FILE": str(output / f"{case.label}.guest"),
             "PYTHONDONTWRITEBYTECODE": "1",
@@ -566,6 +625,12 @@ def expected_artifacts(case: RegressionCase, output: Path) -> tuple[Path, ...]:
     return tuple(artifacts)
 
 
+def windows_job_launcher(command: list[str]) -> int:
+    if os.name != "nt" or not command or sys.stdin.buffer.read(1) != b"1":
+        return 125
+    return subprocess.call(command, stdin=subprocess.DEVNULL)
+
+
 def run_case(
     lane_number: int,
     lane: Path,
@@ -592,8 +657,21 @@ def run_case(
         if not runner.is_file():
             raise RegressionError(f"runner is missing from lane: {case.runner}")
         with stdout_file.open("wb") as stream:
+            command = [bash, *case.shell_flags, case.runner]
+            process_stdin = subprocess.DEVNULL
+            if os.name == "nt":
+                command = [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-B",
+                    str(Path(__file__).resolve()),
+                    "--windows-job-launch",
+                    *command,
+                ]
+                process_stdin = subprocess.PIPE
             process = subprocess.Popen(
-                [bash, *case.shell_flags, case.runner],
+                command,
                 cwd=lane,
                 env=child_environment(
                     case,
@@ -603,7 +681,7 @@ def run_case(
                     outer_jobs,
                     parallel_depth,
                 ),
-                stdin=subprocess.DEVNULL,
+                stdin=process_stdin,
                 stdout=stream,
                 stderr=subprocess.STDOUT,
                 start_new_session=os.name != "nt",
@@ -611,14 +689,26 @@ def run_case(
                     subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
                 ),
             )
+            windows_job = windows_kill_job(process)
+            if os.name == "nt":
+                if windows_job is None or process.stdin is None:
+                    process.kill()
+                    process.wait()
+                    raise RegressionError("could not contain the Windows runner process")
+                process.stdin.write(b"1")
+                process.stdin.close()
+                process.stdin = None
             try:
                 status = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 detail = f"timeout after {timeout}s"
                 stream.write(f"parallel-qemu: {detail}\n".encode("ascii"))
                 stream.flush()
-                terminate_process_tree(process)
+                terminate_process_tree(process, windows_job)
+                windows_job = None
                 status = 124
+            finally:
+                close_windows_kill_job(windows_job)
         missing = [
             path.name
             for path in expected_artifacts(case, output)
@@ -740,6 +830,288 @@ def published_artifacts(result: CaseResult, output: Path) -> tuple[tuple[Path, s
     return tuple(artifacts)
 
 
+def case_artifact_names(case: RegressionCase) -> tuple[str, ...]:
+    names = [f"{case.label}.log"]
+    if case.label == "observe-recovery":
+        names.append("observe-recovery-before-reap.img")
+    elif case.label == "fs-allocator-fault":
+        names.append("fs-allocator-evidence.tar")
+    return tuple(names)
+
+
+def is_link_or_junction(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    return bool(is_junction and is_junction())
+
+
+def report_output_directory(path: Path) -> Path:
+    output = path.absolute()
+    try:
+        canonical = output.resolve(strict=True)
+    except OSError as error:
+        raise RegressionError(f"report directory is invalid: {output}") from error
+    if (
+        not output.is_dir()
+        or is_link_or_junction(output)
+        or (
+            os.name != "nt"
+            and os.path.normcase(str(canonical)) != os.path.normcase(str(output))
+        )
+    ):
+        raise RegressionError(f"report directory is invalid: {output}")
+    return output
+
+
+def report_file(output: Path, relative: str) -> Path:
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts or path.as_posix() != relative:
+        raise RegressionError(f"unsafe report artifact path: {relative}")
+    resolved = output
+    for part in path.parts:
+        resolved /= part
+        if is_link_or_junction(resolved):
+            raise RegressionError(f"report artifact path contains a link: {relative}")
+    try:
+        mode = resolved.lstat().st_mode
+        canonical = resolved.resolve(strict=True)
+    except OSError as error:
+        raise RegressionError(f"report artifact is missing: {relative}") from error
+    if (
+        os.name != "nt"
+        and os.path.normcase(str(canonical))
+        != os.path.normcase(str(resolved.absolute()))
+    ):
+        raise RegressionError(f"report artifact path contains a link: {relative}")
+    if not stat.S_ISREG(mode) or resolved.stat().st_size == 0:
+        raise RegressionError(f"report artifact is not a nonempty regular file: {relative}")
+    return resolved
+
+
+def read_tsv(path: Path, fields: int) -> list[tuple[str, ...]]:
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise RegressionError(f"could not read report file: {path.name}") from error
+    rows = []
+    for number, line in enumerate(lines, 1):
+        row = tuple(line.split("\t"))
+        if len(row) < fields or any(not value for value in row):
+            raise RegressionError(f"invalid {path.name} row {number}")
+        rows.append(row)
+    return rows
+
+
+def verify_reports(
+    root: Path,
+    output: Path,
+    suite: str,
+    cases: tuple[RegressionCase, ...],
+) -> tuple[tuple[str, str, str, tuple[tuple[str, str], ...]], ...]:
+    output = report_output_directory(output)
+    try:
+        summary = json.loads(
+            report_file(output, "run-summary.json").read_text(encoding="ascii")
+        )
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise RegressionError("parallel QEMU run summary is invalid") from error
+    expected_order = [case.label for case in cases]
+    if (
+        not isinstance(summary, dict)
+        or set(summary) != REPORT_FIELDS
+        or summary.get("schema") != 1
+        or summary.get("suite") != suite
+        or summary.get("case_order") != expected_order
+        or summary.get("cleanup_errors") != []
+        or summary.get("replay_manifest") != ""
+    ):
+        raise RegressionError("parallel QEMU run summary contract differs")
+    results = summary.get("results")
+    if (
+        not isinstance(results, list)
+        or [item.get("case") if isinstance(item, dict) else None for item in results]
+        != expected_order
+        or any(item.get("status") != 0 for item in results)
+    ):
+        raise RegressionError("parallel QEMU run did not complete every selected case")
+    lanes = summary.get("lanes")
+    requested_jobs = summary.get("requested_jobs")
+    requested_build_jobs = summary.get("requested_build_jobs")
+    effective_build_jobs = summary.get("effective_build_jobs")
+    outer_job_limit = summary.get("outer_make_job_limit")
+    lane_build_slots = summary.get("lane_build_job_slots")
+    if (
+        not isinstance(lanes, list)
+        or not lanes
+        or any(not isinstance(lane, list) or not lane for lane in lanes)
+        or any(not isinstance(case_name, str) for lane in lanes for case_name in lane)
+        or sorted(
+            case_name
+            for lane in lanes
+            if isinstance(lane, list)
+            for case_name in lane
+        )
+        != sorted(expected_order)
+        or summary.get("effective_jobs") != len(lanes)
+        or type(requested_jobs) is not int
+        or not 1 <= requested_jobs <= MAX_JOBS
+        or type(requested_build_jobs) is not int
+        or not 1 <= requested_build_jobs <= MAX_BUILD_JOBS
+        or type(effective_build_jobs) is not int
+        or not 1 <= effective_build_jobs <= requested_build_jobs
+        or (outer_job_limit is not None and type(outer_job_limit) is not int)
+        or (type(outer_job_limit) is int and effective_build_jobs > outer_job_limit)
+        or len(lanes) != min(requested_jobs, effective_build_jobs, len(cases))
+        or lane_build_slots != list(allocate_build_jobs(effective_build_jobs, len(lanes)))
+        or summary.get("lane_build_jobs") != min(lane_build_slots)
+        or summary.get("allocated_build_jobs") != effective_build_jobs
+        or type(summary.get("case_timeout_seconds")) is not int
+        or not 1 <= summary["case_timeout_seconds"] <= MAX_CASE_TIMEOUT_SECONDS
+    ):
+        raise RegressionError("parallel QEMU lane inventory differs")
+    expected_result_artifacts: list[tuple[str, str]] = []
+    for case in cases:
+        expected_result_artifacts.append(
+            (f"{case.label}.log", f"{case.label}/{case.label}.combined")
+        )
+        if case.label == "observe-recovery":
+            expected_result_artifacts.append(
+                (
+                    "observe-recovery-before-reap.img",
+                    "observe-recovery/observe-recovery-before-reap.img",
+                )
+            )
+        elif case.label == "fs-allocator-fault":
+            expected_result_artifacts.append(
+                (
+                    "fs-allocator-evidence.tar",
+                    "fs-allocator-fault/fs-allocator-evidence.tar",
+                )
+            )
+    for case, result in zip(cases, results):
+        lane = result.get("lane")
+        artifacts = result.get("artifacts")
+        expected = [
+            {"name": name, "source": relative}
+            for name, relative in expected_result_artifacts
+            if name in case_artifact_names(case)
+        ]
+        if (
+            set(result) != RESULT_FIELDS
+            or
+            not isinstance(lane, int)
+            or isinstance(lane, bool)
+            or not 1 <= lane <= len(lanes)
+            or case.label not in lanes[lane - 1]
+            or result.get("detail") != ""
+            or not isinstance(result.get("elapsed_ms"), int)
+            or isinstance(result.get("elapsed_ms"), bool)
+            or result["elapsed_ms"] < 0
+            or artifacts != expected
+        ):
+            raise RegressionError(f"parallel QEMU result contract differs: {case.label}")
+    source = summary.get("source")
+    head_commit = git(root, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii").strip()
+    head_tree = git(root, "rev-parse", "--verify", "HEAD^{tree}").decode("ascii").strip()
+    if (
+        not isinstance(source, dict)
+        or set(source) != {
+            "commit", "tree", "base_commit", "dirty_snapshot",
+            "manifest_sha256", "manifest_files",
+        }
+        or source.get("commit") != head_commit
+        or source.get("tree") != head_tree
+        or source.get("base_commit") != head_commit
+        or source.get("dirty_snapshot") is not False
+        or not isinstance(source.get("manifest_sha256"), str)
+        or len(source["manifest_sha256"]) != 64
+        or type(source.get("manifest_files")) is not int
+        or source["manifest_files"] < 1
+    ):
+        raise RegressionError("parallel QEMU report source differs from the committed checkout")
+
+    step_rows = read_tsv(report_file(output, "steps.tsv"), 3)
+    if [row[0] for row in step_rows] != expected_order:
+        raise RegressionError("parallel QEMU step inventory differs")
+    for case, row in zip(cases, step_rows):
+        try:
+            started, ended = float(row[1]), float(row[2])
+        except ValueError as error:
+            raise RegressionError(f"invalid timing for {case.label}") from error
+        if (
+            not math.isfinite(started)
+            or not math.isfinite(ended)
+            or started <= 0
+            or ended < started
+            or tuple(row[3:]) != case_artifact_names(case)
+        ):
+            raise RegressionError(f"parallel QEMU step contract differs: {case.label}")
+
+    artifact_rows = read_tsv(report_file(output, "artifacts.tsv"), 2)
+    if artifact_rows != expected_result_artifacts:
+        raise RegressionError("parallel QEMU artifact inventory differs")
+    for name, relative in artifact_rows:
+        report_file(output, relative)
+
+    if suite == "agent":
+        for aggregate_name, suffix in (
+            ("agent-suite-timings.log", ".timing"),
+            ("agent-suite-guest.log", ".guest"),
+        ):
+            expected = b""
+            for case in cases:
+                payload = report_file(
+                    output, f"{case.label}/{case.label}{suffix}"
+                ).read_bytes()
+                expected += payload
+                if payload and not payload.endswith(b"\n"):
+                    expected += b"\n"
+            if report_file(output, aggregate_name).read_bytes() != expected:
+                raise RegressionError(f"parallel QEMU aggregate differs: {aggregate_name}")
+    artifact_paths = dict(artifact_rows)
+    return tuple(
+        (
+            case.label,
+            row[1],
+            row[2],
+            tuple((name, artifact_paths[name]) for name in case_artifact_names(case)),
+        )
+        for case, row in zip(cases, step_rows)
+    )
+
+
+def write_import_plan(
+    output: Path,
+    steps: tuple[tuple[str, str, str, tuple[tuple[str, str], ...]], ...],
+    suite: str = "resource",
+) -> Path:
+    destination = output / "verified-import.tsv"
+    temporary = output / ".verified-import.tsv.partial"
+    if destination.exists() or temporary.exists():
+        raise RegressionError("parallel QEMU import plan already exists")
+    with temporary.open("x", encoding="ascii") as stream:
+        for label, started, ended, artifacts in steps:
+            for name, relative in artifacts:
+                artifact = report_file(output, relative)
+                payload = artifact.read_bytes()
+                stream.write(
+                    f"{label}\t{started}\t{ended}\t{name}\t{relative}\t"
+                    f"{len(payload)}\t{hashlib.sha256(payload).hexdigest()}\n"
+                )
+        if suite == "agent":
+            started = min(steps, key=lambda step: float(step[1]))[1]
+            ended = max(steps, key=lambda step: float(step[2]))[2]
+            for name in ("agent-suite-timings.log", "agent-suite-guest.log"):
+                payload = report_file(output, name).read_bytes()
+                stream.write(
+                    f"agent-suite\t{started}\t{ended}\t{name}\t{name}\t"
+                    f"{len(payload)}\t{hashlib.sha256(payload).hexdigest()}\n"
+                )
+    temporary.replace(destination)
+    return destination
+
+
 def write_reports(
     output: Path,
     source: SourceIdentity,
@@ -752,6 +1124,8 @@ def write_reports(
     lane_build_jobs: int | tuple[int, ...] = LANE_BUILD_JOBS,
     replay_manifest: str = "",
     case_timeout_seconds: int = DEFAULT_CASE_TIMEOUT_SECONDS,
+    requested_build_jobs: int | None = None,
+    outer_job_limit: int | None = None,
 ) -> None:
     if isinstance(lane_build_jobs, int):
         lane_build_job_slots = (lane_build_jobs,) * len(lanes)
@@ -759,6 +1133,9 @@ def write_reports(
         lane_build_job_slots = lane_build_jobs
     if len(lane_build_job_slots) != len(lanes):
         raise RegressionError("build slot inventory differs from execution lanes")
+    effective_build_jobs = sum(lane_build_job_slots)
+    if requested_build_jobs is None:
+        requested_build_jobs = effective_build_jobs
     ordered = [results[case.label] for case in cases if case.label in results]
     with (output / "combined.log").open("wb") as combined:
         for result in ordered:
@@ -809,10 +1186,13 @@ def write_reports(
         },
         "requested_jobs": jobs,
         "effective_jobs": len(lanes),
+        "requested_build_jobs": requested_build_jobs,
+        "effective_build_jobs": effective_build_jobs,
+        "outer_make_job_limit": outer_job_limit,
         # Keep the historic scalar as the minimum guaranteed lane budget.
         "lane_build_jobs": min(lane_build_job_slots),
         "lane_build_job_slots": list(lane_build_job_slots),
-        "allocated_build_jobs": sum(lane_build_job_slots),
+        "allocated_build_jobs": effective_build_jobs,
         "case_timeout_seconds": case_timeout_seconds,
         "case_order": [result.case.label for result in ordered],
         "lanes": [[case.label for case in lane] for lane in lanes],
@@ -927,17 +1307,99 @@ def environment_job_value(name: str, minimum: int = 1) -> int | None:
     return parsed
 
 
-def terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+def windows_kill_job(process: subprocess.Popen[bytes]) -> int | None:
+    if os.name != "nt":
+        return None
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("process_time", ctypes.c_longlong),
+            ("job_time", ctypes.c_longlong),
+            ("flags", wintypes.DWORD),
+            ("minimum_working_set", ctypes.c_size_t),
+            ("maximum_working_set", ctypes.c_size_t),
+            ("active_processes", wintypes.DWORD),
+            ("affinity", ctypes.c_size_t),
+            ("priority", wintypes.DWORD),
+            ("scheduling", wintypes.DWORD),
+        ]
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("read_operations", ctypes.c_ulonglong),
+            ("write_operations", ctypes.c_ulonglong),
+            ("other_operations", ctypes.c_ulonglong),
+            ("read_bytes", ctypes.c_ulonglong),
+            ("write_bytes", ctypes.c_ulonglong),
+            ("other_bytes", ctypes.c_ulonglong),
+        ]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ("basic", BasicLimits),
+            ("io", IoCounters),
+            ("process_memory", ctypes.c_size_t),
+            ("job_memory", ctypes.c_size_t),
+            ("peak_process_memory", ctypes.c_size_t),
+            ("peak_job_memory", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = (
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD
+    )
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    limits = ExtendedLimits()
+    limits.basic.flags = 0x00002000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    configured = kernel32.SetInformationJobObject(
+        job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
+    )
+    assigned = configured and kernel32.AssignProcessToJobObject(
+        job, wintypes.HANDLE(process._handle)
+    )
+    if not assigned:
+        kernel32.CloseHandle(job)
+        return None
+    return int(job)
+
+
+def close_windows_kill_job(job: int | None) -> None:
+    if job is not None:
+        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(
+            wintypes.HANDLE(job)
+        )
+
+
+def terminate_process_tree(
+    process: subprocess.Popen[bytes], windows_job: int | None = None
+) -> None:
     if process.poll() is not None:
         return
     if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+        if windows_job is not None:
+            close_windows_kill_job(windows_job)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
     else:
         try:
             os.killpg(process.pid, signal.SIGTERM)
@@ -980,11 +1442,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--suite", choices=("resource", "agent"), default="resource")
     parser.add_argument("--case", action="append")
     parser.add_argument("--list-cases", action="store_true")
+    parser.add_argument(
+        "--verify-report",
+        action="store_true",
+        help="validate an existing successful report without starting QEMU",
+    )
+    parser.add_argument("--emit-import-plan", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    run_lock = None
     available = AGENT_CASES if args.suite == "agent" else RESOURCE_CASES
     if args.list_cases:
         print(*(case.label for case in available), sep="\n")
@@ -999,6 +1468,19 @@ def main(argv: list[str] | None = None) -> int:
             .decode("utf-8", errors="surrogateescape")
             .strip()
         ).resolve()
+        if args.verify_report:
+            output = report_output_directory(args.output_dir)
+            verified_steps = verify_reports(root, output, args.suite, cases)
+            if args.emit_import_plan:
+                write_import_plan(output, verified_steps, args.suite)
+            print(
+                f"[parallel-qemu] verified suite={args.suite} "
+                f"cases={len(cases)} output={output}",
+                flush=True,
+            )
+            return 0
+        if args.emit_import_plan:
+            raise RegressionError("--emit-import-plan requires --verify-report")
         output = args.output_dir.resolve()
         if output.exists():
             raise RegressionError(f"output directory already exists: {output}")
@@ -1014,14 +1496,21 @@ def main(argv: list[str] | None = None) -> int:
                 raise RegressionError("evidence mode does not permit --work-root")
         work_parent = args.work_root.resolve() if args.work_root else root / "build"
         work_parent.mkdir(parents=True, exist_ok=True)
+        candidate_lock = exclusive_repo_run_lock(root)
+        try:
+            candidate_lock.__enter__()
+        except (OSError, RepoRunBusy, ValueError) as error:
+            raise RegressionError(f"parallel QEMU repository is busy: {error}") from error
+        run_lock = candidate_lock
         source = snapshot_source(root, evidence_mode)
         run_root = Path(tempfile.mkdtemp(prefix="agentos-qemu-lanes-", dir=work_parent))
         output.mkdir(parents=True)
+        effective_build_jobs, parent_make_limit = bounded_build_jobs(args.build_jobs)
         execution_lane_limit = min(
-            execution_jobs(args.jobs, evidence_mode), args.build_jobs
+            execution_jobs(args.jobs, evidence_mode), effective_build_jobs
         )
         lanes = assign_lanes(cases, execution_lane_limit)
-        lane_build_jobs = allocate_build_jobs(args.build_jobs, len(lanes))
+        lane_build_jobs = allocate_build_jobs(effective_build_jobs, len(lanes))
         parent_outer_jobs = environment_job_value("AGENTOS_OUTER_JOBS") or 1
         parent_depth = environment_job_value(
             "AGENTOS_PARALLEL_DEPTH", minimum=0
@@ -1120,7 +1609,7 @@ def main(argv: list[str] | None = None) -> int:
                     source,
                     args.suite,
                     args.jobs,
-                    args.build_jobs,
+                    effective_build_jobs,
                     args.timeout,
                     args.bash,
                     failed_cases,
@@ -1139,6 +1628,8 @@ def main(argv: list[str] | None = None) -> int:
             lane_build_jobs,
             replay_manifest,
             args.timeout,
+            args.build_jobs,
+            parent_make_limit,
         )
         failed = 0
         for case in cases:
@@ -1168,7 +1659,12 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RegressionError) as error:
         print(f"parallel-qemu: {error}", file=sys.stderr)
         return 2
+    finally:
+        if run_lock is not None:
+            run_lock.__exit__(None, None, None)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--windows-job-launch":
+        raise SystemExit(windows_job_launcher(sys.argv[2:]))
     raise SystemExit(main())

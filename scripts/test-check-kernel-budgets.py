@@ -105,6 +105,8 @@ class KernelBudgetTests(unittest.TestCase):
         )
         self.assertEqual(config["kernel_source"]["baseline_lines"], 47922)
         self.assertEqual(config["kernel_source"]["max_lines"], 50066)
+        self.assertEqual(config["struct_proc"]["baseline_bytes"], 23464)
+        self.assertEqual(config["struct_proc"]["max_bytes"], 24638)
 
         missing_hash = copy.deepcopy(config)
         del missing_hash["local_kernel_budget_toolchains"][0][

@@ -53,6 +53,7 @@ from compatibility_overhead import (  # noqa: E402
     FORMAL_SHELL_ENVIRONMENT_KEYS,
     _formal_shell_command,
     _formal_shell_environment,
+    _make_arguments,
     _source_gate,
     _verify_gzip_archive,
     verify_campaign_artifacts,
@@ -602,6 +603,19 @@ class CompatibilityOverheadTests(unittest.TestCase):
         )
         self.assertIn("SYSTEMDRIVE=C:", assignments)
         self.assertNotIn("SYSTEMDRIVE=%SystemDrive%", assignments)
+
+    def test_build_arguments_bind_the_adaptive_budget(self) -> None:
+        arguments = _make_arguments(
+            "1234567890abcdef", formal_shell_campaign("native-linux"), 7
+        )
+        self.assertIn("AGENTOS_BUILD_JOBS='7'", arguments)
+        for invalid in (True, 0, 25):
+            with self.assertRaisesRegex(CompatibilityRunError, "build jobs"):
+                _make_arguments(
+                    "1234567890abcdef",
+                    formal_shell_campaign("native-linux"),
+                    invalid,
+                )
 
     def test_formal_shell_environment_rejects_untrusted_drive_and_paths(self) -> None:
         for system_drive in ("", "c:", "%SystemDrive%", "C:\\"):

@@ -212,6 +212,8 @@ class Fixture:
             "scripts/check-kernel-budgets.py",
             "scripts/probes/struct-proc-size.c",
             "scripts/check-user-stack-usage.py",
+            "scripts/resource-jobs.py",
+            "host_tools/resource_job_budget.py",
             "user_stack_policy.h",
             "user/Makefile",
         ):
@@ -325,7 +327,7 @@ class TrustedKernelBuildTests(unittest.TestCase):
             for platform_name in ("cygwin", "msys"):
                 with mock.patch.object(builder.sys, "platform", platform_name):
                     environment = builder._fixed_environment(
-                        "1700000000", "/tools/riscv-"
+                        "1700000000", "/tools/riscv-", 6
                     )
                 self.assertEqual(environment["LANG"], "C.UTF-8")
                 self.assertEqual(environment["LC_ALL"], "C.UTF-8")
@@ -335,11 +337,15 @@ class TrustedKernelBuildTests(unittest.TestCase):
             builder.sys, "platform", "linux"
         ):
             environment = builder._fixed_environment(
-                "1700000000", "/tools/riscv-"
+                "1700000000", "/tools/riscv-", 6
             )
         self.assertEqual(environment["LANG"], "C")
         self.assertEqual(environment["LC_ALL"], "C")
+        self.assertEqual(environment["AGENTOS_BUILD_JOBS"], "6")
         self.assertNotIn("TMPDIR", environment)
+        for invalid in (True, 0, 25):
+            with self.assertRaisesRegex(builder.KernelBuildError, "build jobs"):
+                builder._fixed_environment("1700000000", "/tools/riscv-", invalid)
 
     def setUp(self) -> None:
         self.fixture = Fixture()
@@ -399,6 +405,10 @@ class TrustedKernelBuildTests(unittest.TestCase):
             else str(Path(self.fixture.toolprefix).resolve())
         )
         self.assertEqual(environments[0]["TOOLPREFIX"], expected_prefix)
+        build_jobs = int(environments[0]["AGENTOS_BUILD_JOBS"])
+        self.assertGreaterEqual(build_jobs, 1)
+        self.assertLessEqual(build_jobs, 24)
+        self.assertNotIn("MAKEFLAGS", environments[0])
         status = _run(
             self.fixture.root, "status", "--porcelain=v1", "--untracked-files=all"
         ).stdout
@@ -413,6 +423,7 @@ class TrustedKernelBuildTests(unittest.TestCase):
             if os.name == "nt"
             else str(Path(self.fixture.toolprefix).resolve())
         )
+        jobs = self.fixture.runner.calls[0][1]["AGENTOS_BUILD_JOBS"]
         tool_versions = [
             [
                 (
@@ -429,12 +440,12 @@ class TrustedKernelBuildTests(unittest.TestCase):
             [
                 [make, "--version"],
                 *tool_versions,
-                [make, f"TOOLPREFIX={prefix}", "kernel-budget-check"],
-                [make, f"TOOLPREFIX={prefix}", "user-stack-check"],
+                [make, f"-j{jobs}", f"TOOLPREFIX={prefix}", "kernel-budget-check"],
+                [make, f"-j{jobs}", f"TOOLPREFIX={prefix}", "user-stack-check"],
                 [make, "-C", "baseline_ucore", f"TOOLPREFIX={prefix}", "clean"],
-                [make, "-C", "baseline_ucore", f"TOOLPREFIX={prefix}", "build/kernel"],
+                [make, f"-j{jobs}", "-C", "baseline_ucore", f"TOOLPREFIX={prefix}", "build/kernel"],
                 [make, f"TOOLPREFIX={prefix}", "clean"],
-                [make, f"TOOLPREFIX={prefix}", "build/kernel"],
+                [make, f"-j{jobs}", f"TOOLPREFIX={prefix}", "build/kernel"],
             ],
         )
 

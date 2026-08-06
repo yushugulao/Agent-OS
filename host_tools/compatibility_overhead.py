@@ -102,6 +102,7 @@ try:
         verify_source_identity,
     )
     from .plain_ucore_fs_extract import T_FILE, read_file, read_inode, read_superblock, root_entries
+    from .resource_job_budget import adaptive_build_jobs
     from .safe_host_paths import (
         absolute_lexical_path,
         atomic_write_bytes,
@@ -152,6 +153,7 @@ except ImportError:  # Direct execution from host_tools/.
         verify_source_identity,
     )
     from plain_ucore_fs_extract import T_FILE, read_file, read_inode, read_superblock, root_entries
+    from resource_job_budget import adaptive_build_jobs
     from safe_host_paths import (
         absolute_lexical_path,
         atomic_write_bytes,
@@ -580,9 +582,13 @@ def _target_root(repo: Path, target: str) -> Path:
     raise CompatibilityRunError(f"unknown target: {target}")
 
 
-def _make_arguments(challenge: str, campaign: dict[str, Any]) -> str:
+def _make_arguments(
+    challenge: str, campaign: dict[str, Any], build_jobs: int
+) -> str:
     if CHALLENGE_RE.fullmatch(challenge) is None or int(challenge, 16) == 0:
         raise CompatibilityRunError("challenge is malformed")
+    if type(build_jobs) is not int or not 1 <= build_jobs <= 24:
+        raise CompatibilityRunError("build jobs must be an integer between 1 and 24")
     platform = campaign["platform"]
     tools = platform["tools"]
     return " ".join(
@@ -590,6 +596,7 @@ def _make_arguments(challenge: str, campaign: dict[str, Any]) -> str:
             make_var_arg("TOOLPREFIX", str(platform["toolprefix"])),
             make_var_arg("PYTHON_BIN", str(tools["python"]["path"])),
             make_var_arg("QEMU", str(tools["qemu"]["path"])),
+            make_var_arg("AGENTOS_BUILD_JOBS", str(build_jobs)),
             make_var_arg("CHAPTER", "compat_eval"),
             make_var_arg("COMPAT_BENCH_CHALLENGE_HEX", challenge),
         )
@@ -691,6 +698,7 @@ def run_target(
     source_identity: dict[str, object],
     source: dict[str, object],
     formal_campaign: dict[str, Any],
+    build_jobs: int,
 ) -> dict[str, object]:
     target_root = _target_root(repo, target)
     artifact_root = str(formal_campaign["run"]["artifact_root"])
@@ -701,13 +709,13 @@ def run_target(
     build_log = target_dir / "build.log"
     guest_log = target_dir / "guest.log"
     make = shell_quote(str(formal_campaign["platform"]["tools"]["make"]["path"]))
-    arguments = _make_arguments(challenge, formal_campaign)
+    arguments = _make_arguments(challenge, formal_campaign, build_jobs)
     root_bash = str(target_root)
     build_command = (
         f"cd {shell_quote(root_bash)} && "
         f"{make} clean && "
-        f"{make} nfs/fs-copy.img {arguments} && "
-        f"{make} build {arguments} LOG=warn INIT_PROC=compatbench"
+        f"{make} -j{build_jobs} nfs/fs-copy.img {arguments} && "
+        f"{make} -j{build_jobs} build {arguments} LOG=warn INIT_PROC=compatbench"
     )
     phase_timeout = timeout_seconds + 30
     _verify_formal_tools(formal_campaign)
@@ -873,6 +881,7 @@ def run_campaign(
             _source_gate(
                 repo, source_commit, artifact_root, "after compatibility initial purge"
             )
+            build_jobs = adaptive_build_jobs(repo)
             source = source_receipt(repo)
             _archive_source_snapshot(repo, work_dir, source)
             if source_identity["source_commit"] != formal_context["source_commit"]:
@@ -902,6 +911,7 @@ def run_campaign(
                         source_identity,
                         source,
                         formal_campaign,
+                        build_jobs,
                     )
                 boot_results.append(
                     {

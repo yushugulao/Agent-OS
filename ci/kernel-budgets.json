@@ -107,8 +107,8 @@
   },
   "struct_proc": {
     "symbol": "kernel_budget_struct_proc",
-    "baseline_bytes": 25936,
-    "max_bytes": 27233
+    "baseline_bytes": 23464,
+    "max_bytes": 24638
   },
   "trapframe_pages": {
     "per_thread_symbol": "kernel_budget_trapframe_per_thread",

@@ -613,7 +613,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | inode、inode cache 和 block 耗尽不触发 panic | `make fs-enospc-test` 合同要求两个目标均出现 `fsenospc_ucore: parent passed`；当前状态以 release bundle 为准 |
 | PUBLIC 存储主体不能吃掉 Agent/内核保留量或借进程域退出、重启清零 | `fsquota_ucore` 合同覆盖版本回收、运行期上限与分级保留；双目标 `fspquota_ucore` 要求同一镜像 crash/seed/verify 三次启动依次产生 `crash_orphan_ready=1`、`durable_fixture=1`、`reboot_charge_persisted=1`、`deletion_reuse=1`、`relaunch_charge_persisted=1` 和 `cleanup_reuse=1` |
 | PUBLIC 块 I/O/cache 压力不能消耗 workflow 控制与缓存保留，内核态 yield loop 与 fault teardown 不能阻断 refill/完成或绕过归因 | `iobudget_ucore` 与 VirtIO runner 合同覆盖归因、refill/完成、lost IRQ、delay、descriptor pressure、status error、flush-disabled 与 timeout/stuck reset；实际状态看 bundle。多 workflow、SYSTEM/BACKGROUND、retiring 3/8 和 shared 排队 grant 轮转仍不在独立场景覆盖内 |
-| 阻塞退出、孤儿/僵尸和 fork bomb 受生命周期与资源域约束 | `make proc-reap-test` 合同覆盖 `detached-wait`、`unreaped-parent-isolated`、`live-domain-limit` 和 `reserved-agent-slot` |
+| 阻塞退出、孤儿/僵尸和 fork bomb 受生命周期与资源域约束 | 父进程用紧凑完成 FIFO 与活子计数共享私有配额，`child->parent` 是唯一活关系；`make proc-reap-test` 合同覆盖 `detached-wait`、`unreaped-parent-isolated`、`live-domain-limit` 和 `reserved-agent-slot` |
 | 撤销、自然退出和跨资源结算竞争不会遗留旧 lifecycle 或临时资源 | `make workflow-teardown-race-test` 的合同覆盖 syscall 546 sized-prefix/self-only 比较、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 generation 重用；该专项独立于版本化 Agent 套件，动态状态以 bundle 为准 |
 | thread bomb 不能耗尽普通/保留线程池或垄断跨域 CPU | `make thread-resource-test` 合同要求同一镜像 50/50 轮压力，并覆盖普通/保留域上限与复用、全局水位、退出退款、系统保留进展和 `domain_fairness` |
 | 内核栈有 guard、按需物理映射和构建期预算 | 发布 bundle 必须包含 Agent 与线程/退出专项对应的栈检查；具体调用图和容量阈值以代码提交 C 的 `ci/kernel-budgets.json` 为准 |

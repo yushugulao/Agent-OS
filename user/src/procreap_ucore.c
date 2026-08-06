@@ -306,11 +306,20 @@ static void delayed_wait_probe(void)
 	child = wait(&status);
 	check(child == children[0], "wait oldest delayed child");
 	check(status == 70, "oldest delayed child exit status");
-	for (int i = DELAYED_WAIT_CHILDREN - 1; i > 0; i--) {
+	for (int i = 4; i <= 6; i += 2) {
 		status = -1;
 		check(waitpid(children[i], &status) == children[i],
-		      "wait delayed child by pid");
-		check(status == 70 + i, "delayed child exit status");
+		      "delete middle delayed child by pid");
+		check(status == 70 + i, "middle delayed child exit status");
+	}
+	int remaining[] = { 1, 2, 3, 5, 7 };
+	for (uint i = 0; i < sizeof(remaining) / sizeof(remaining[0]); i++) {
+		status = -1;
+		child = wait(&status);
+		check(child == children[remaining[i]],
+		      "preserve delayed completion FIFO");
+		check(status == 70 + remaining[i],
+		      "FIFO delayed child exit status");
 	}
 	check(waitpid(children[0], &status) == -1,
 	      "consume delayed status once");

@@ -34,6 +34,7 @@ if __package__:
         guest_state_inventory_sha256,
         load_manifest,
     )
+    from .resource_job_budget import adaptive_build_jobs
     from .safe_host_paths import (
         absolute_lexical_path as _absolute_lexical_path,
         create_private_directory,
@@ -56,6 +57,7 @@ else:
         guest_state_inventory_sha256,
         load_manifest,
     )
+    from resource_job_budget import adaptive_build_jobs
     from safe_host_paths import (
         absolute_lexical_path as _absolute_lexical_path,
         create_private_directory,
@@ -2307,6 +2309,8 @@ def _run_seeded_ucore_locked(
         write_json(run_dir / "ucore-run-summary.json", summary)
         return summary
     repo_bash = bash_path(repo_dir)
+    build_jobs = adaptive_build_jobs(repo_dir)
+    build_jobs_argument = make_var_arg("AGENTOS_BUILD_JOBS", str(build_jobs))
     make_executable = shell_quote(os.environ.get("AGENTOS_WSL_MAKE", "make"))
     clean_command = (
         f"cd {shell_quote(repo_bash)} && "
@@ -2321,6 +2325,7 @@ def _run_seeded_ucore_locked(
     if clean_code != 0:
         summary = {
             "commands": [clean_command],
+            "build_jobs": build_jobs,
             "returncode": clean_code,
             "build_returncode": clean_code,
             "guest_returncode": None,
@@ -2347,13 +2352,16 @@ def _run_seeded_ucore_locked(
     toolprefix = toolprefix_arg()
     build_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        f"{make_executable} user {toolprefix} CHAPTER={chapter}"
+        f"{make_executable} -j{build_jobs} user {toolprefix} "
+        f"{build_jobs_argument} CHAPTER={chapter}"
         " && "
         f"cp {shell_quote(seed_file_bash)} user/target/bin/rp_host_action_seed"
         " && "
         "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
-        f"{make_executable} nfs/fs-copy.img {toolprefix} CHAPTER={chapter} && "
-        f"{make_executable} build {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
+        f"{make_executable} -j{build_jobs} nfs/fs-copy.img {toolprefix} "
+        f"{build_jobs_argument} CHAPTER={chapter} && "
+        f"{make_executable} -j{build_jobs} build {toolprefix} "
+        f"{build_jobs_argument} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
     build_code = run_command(
         make_wsl_command(build_command_text, wsl_distro, phase_timeout_seconds),
@@ -2364,6 +2372,7 @@ def _run_seeded_ucore_locked(
     if build_code != 0:
         summary = {
             "commands": [clean_command, f"embedded_action_records={embedded_records}", build_command_text],
+            "build_jobs": build_jobs,
             "returncode": build_code,
             "build_returncode": build_code,
             "guest_returncode": None,
@@ -2385,7 +2394,8 @@ def _run_seeded_ucore_locked(
         return summary
     run_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        f"{make_executable} run-prebuilt {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
+        f"{make_executable} run-prebuilt {toolprefix} {build_jobs_argument} "
+        f"CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
     observed = run_observed_command(
         make_wsl_command(run_command_text, wsl_distro, phase_timeout_seconds),
@@ -2460,6 +2470,7 @@ def _run_seeded_ucore_locked(
             build_command_text,
             run_command_text,
         ],
+        "build_jobs": build_jobs,
         "returncode": code if passed or code != 0 else 1,
         "build_returncode": build_code,
         "guest_returncode": code,

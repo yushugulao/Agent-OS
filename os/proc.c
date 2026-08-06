@@ -1353,136 +1353,107 @@ void proc_file_slot_release(struct resource_account_handle account,
 	intr_restore(enabled);
 }
 
-static void child_record_clear(struct child_record *record)
+static void proc_child_state_reset(struct proc *p)
 {
-	record->state = CHILD_FREE;
-	record->pid = 0;
-	record->exit_code = 0;
-	record->child = 0;
-	record->exit_sequence = 0;
+	p->live_child_count = 0;
+	p->child_exit_head = 0;
+	p->child_exit_count = 0;
 }
 
-static void child_records_reset(struct proc *p)
+// Child relationships and completion records reserve one private quota.
+// Call only with interrupts disabled once the process table is live.
+static void proc_child_counts_validate(struct proc *parent)
 {
-	for (int i = 0; i < CHILD_RECORD_CAP; i++)
-		child_record_clear(&p->child_records[i]);
-	p->child_exit_sequence = 0;
+	if (parent->live_child_count > CHILD_EXIT_CAP ||
+	    parent->child_exit_count >
+		    CHILD_EXIT_CAP - parent->live_child_count)
+		panic("child completion quota");
+}
+
+static uint proc_child_exit_index(struct proc *parent, uint offset)
+{
+	uint index = parent->child_exit_head + offset;
+
+	if (index >= CHILD_EXIT_CAP)
+		index -= CHILD_EXIT_CAP;
+	return index;
 }
 
 static int proc_child_has_capacity(struct proc *parent)
 {
 	int enabled = intr_save();
-	int available = 0;
+	int available;
 
-	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
-		if (parent->child_records[i].state == CHILD_FREE) {
-			available = 1;
-			break;
-		}
-	}
+	proc_child_counts_validate(parent);
+	available = parent->live_child_count + parent->child_exit_count <
+		    CHILD_EXIT_CAP;
 	intr_restore(enabled);
 	return available;
 }
 
-// Call with interrupts disabled. The pointer check prevents a recycled proc
-// slot from ever being mistaken for the original child.
-static int proc_child_find_live(struct proc *parent, struct proc *child,
-				int hint)
-{
-	if (hint >= 0 && hint < CHILD_RECORD_CAP) {
-		struct child_record *record = &parent->child_records[hint];
-
-		if (record->state == CHILD_LIVE && record->child == child &&
-		    record->pid == child->pid)
-			return hint;
-	}
-	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
-		struct child_record *record = &parent->child_records[i];
-
-		if (record->state == CHILD_LIVE && record->child == child &&
-		    record->pid == child->pid)
-			return i;
-	}
-	return -1;
-}
-
 // Bind child ownership only after fork has completed every fallible step.
-// The per-parent table is both the wait contract and a private child quota.
+// The live relationship reserves its eventual completion-ring slot.
 static int proc_child_bind(struct proc *parent, struct proc *child)
 {
 	int enabled = intr_save();
-	int slot = -1;
+	int bound = -1;
 
 	if (!proc_teardown_live(parent) || !proc_teardown_live(child) ||
 	    child->parent != 0)
 		goto out;
-	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
-		struct child_record *record = &parent->child_records[i];
-
-		if (record->state != CHILD_FREE)
-			continue;
-		record->pid = child->pid;
-		record->exit_code = 0;
-		record->child = child;
-		record->exit_sequence = 0;
-		child->parent = parent;
-		child->parent_record_index = i;
-		record->state = CHILD_LIVE;
-		slot = i;
-		break;
-	}
+	proc_child_counts_validate(parent);
+	if (parent->live_child_count + parent->child_exit_count >=
+	    CHILD_EXIT_CAP)
+		goto out;
+	parent->live_child_count++;
+	child->parent = parent;
+	bound = 0;
 out:
 	intr_restore(enabled);
-	return slot;
+	return bound;
 }
 
 // Publish the wait result before recycling the executable proc slot.
-static int proc_child_publish_exit(struct proc *child)
+static void proc_child_publish_exit(struct proc *child)
 {
 	struct proc *parent;
-	struct child_record *record;
+	struct child_exit *completion;
 	int enabled = intr_save();
-	int slot;
-	int published = 0;
+	uint tail;
 
-	if (child == 0 || (parent = child->parent) == 0)
+	if (child == 0)
+		panic("null child publication");
+	if ((parent = child->parent) == 0)
 		goto out;
-	slot = proc_child_find_live(parent, child,
-				    child->parent_record_index);
-	if (slot < 0)
-		goto detach;
-	record = &parent->child_records[slot];
-	record->exit_code = (int)child->exit_code;
-	record->child = 0;
-	record->exit_sequence = ++parent->child_exit_sequence;
-	record->state = CHILD_EXITED;
-	published = 1;
-detach:
+	proc_child_counts_validate(parent);
+	if (parent->live_child_count == 0 ||
+	    parent->child_exit_count >= CHILD_EXIT_CAP)
+		panic("child completion publication");
+	tail = proc_child_exit_index(parent, parent->child_exit_count);
+	completion = &parent->child_exits[tail];
+	completion->pid = child->pid;
+	completion->exit_code = (int)child->exit_code;
+	parent->live_child_count--;
+	parent->child_exit_count++;
 	child->parent = 0;
-	child->parent_record_index = -1;
-	if (published)
-		wait_queue_wake_all(&parent->child_waiters);
+	wait_queue_wake_all(&parent->child_waiters);
 out:
 	intr_restore(enabled);
-	return published;
 }
 
-// Roll back an unpublished child relationship without leaving a LIVE record
-// pointing at a proc slot that is about to be recycled.
+// Roll back an unpublished child relationship before recycling its proc slot.
 static void proc_child_unbind(struct proc *child)
 {
 	struct proc *parent;
 	int enabled = intr_save();
-	int slot;
 
 	if (child == 0 || (parent = child->parent) == 0)
 		goto out;
-	slot = proc_child_find_live(parent, child,
-				    child->parent_record_index);
-	if (slot >= 0)
-		child_record_clear(&parent->child_records[slot]);
+	proc_child_counts_validate(parent);
+	if (parent->live_child_count == 0)
+		panic("child relationship rollback");
+	parent->live_child_count--;
 	child->parent = 0;
-	child->parent_record_index = -1;
 	wait_queue_wake_all(&parent->child_waiters);
 out:
 	intr_restore(enabled);
@@ -1493,58 +1464,68 @@ out:
 static int proc_child_wait_result(struct proc *parent, int pid,
 				  int *child_pid, int *exit_code)
 {
-	int selected = -1;
-	uint64 oldest = ~0ULL;
+	struct child_exit completion;
+	uint selected = 0;
 
-	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
-		struct child_record *record = &parent->child_records[i];
+	proc_child_counts_validate(parent);
+	if (pid <= 0) {
+		if (parent->child_exit_count == 0)
+			return parent->live_child_count > 0 ? 0 : -1;
+		completion = parent->child_exits[parent->child_exit_head];
+		parent->child_exit_head++;
+		if (parent->child_exit_head == CHILD_EXIT_CAP)
+			parent->child_exit_head = 0;
+		parent->child_exit_count--;
+		if (parent->child_exit_count == 0)
+			parent->child_exit_head = 0;
+	} else {
+		for (; selected < parent->child_exit_count; selected++) {
+			uint index = proc_child_exit_index(parent, selected);
 
-		if (record->state != CHILD_EXITED ||
-		    (pid > 0 && record->pid != pid))
-			continue;
-		if (pid > 0 || record->exit_sequence < oldest) {
-			selected = i;
-			oldest = record->exit_sequence;
-			if (pid > 0)
+			if (parent->child_exits[index].pid == pid)
 				break;
 		}
-	}
-	if (selected >= 0) {
-		struct child_record *record = &parent->child_records[selected];
+		if (selected == parent->child_exit_count) {
+			for (struct proc *child = pool;
+			     child < &pool[NPROC]; child++)
+				if (child->parent == parent && child->pid == pid)
+					return 0;
+			return -1;
+		}
+		completion = parent->child_exits[
+			proc_child_exit_index(parent, selected)];
+		for (; selected + 1 < parent->child_exit_count; selected++) {
+			uint current = proc_child_exit_index(parent, selected);
+			uint next = proc_child_exit_index(parent, selected + 1);
 
-		*child_pid = record->pid;
-		*exit_code = record->exit_code;
-		child_record_clear(record);
-		return 1;
+			parent->child_exits[current] = parent->child_exits[next];
+		}
+		parent->child_exit_count--;
+		if (parent->child_exit_count == 0)
+			parent->child_exit_head = 0;
 	}
-	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
-		struct child_record *record = &parent->child_records[i];
-
-		if (record->state == CHILD_LIVE &&
-		    (pid <= 0 || record->pid == pid))
-			return 0;
-	}
-	return -1;
+	*child_pid = completion.pid;
+	*exit_code = completion.exit_code;
+	return 1;
 }
 
-// A parent's completion table owns every child relationship. Dropping the
-// table on parent exit atomically transfers live children to the kernel.
+// child->parent is the unique live relationship. Parent exit settles every
+// such edge and discards its private completions in one interrupt-off step.
 static void proc_orphan_children(struct proc *parent)
 {
 	int enabled = intr_save();
+	uint detached = 0;
 
-	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
-		struct child_record *record = &parent->child_records[i];
-		struct proc *child = record->child;
-
-		if (record->state == CHILD_LIVE && child != 0 &&
-		    child->parent == parent && child->parent_record_index == i) {
-			child->parent = 0;
-			child->parent_record_index = -1;
-		}
-		child_record_clear(record);
+	proc_child_counts_validate(parent);
+	for (struct proc *child = pool; child < &pool[NPROC]; child++) {
+		if (child == parent || child->parent != parent)
+			continue;
+		child->parent = 0;
+		detached++;
 	}
-	parent->child_exit_sequence = 0;
+	if (detached != parent->live_child_count)
+		panic("orphan child relationship");
+	proc_child_state_reset(parent);
 	intr_restore(enabled);
 }
 
@@ -1562,7 +1543,6 @@ void proc_init()
 	for (p = pool; p < &pool[NPROC]; p++) {
 		p->state = P_UNUSED;
 		p->parent = 0;
-		p->parent_record_index = -1;
 		p->resource_account = resource_account_none();
 		p->resource_domain_id = -1;
 		p->storage_principal_id = FS_OWNER_NONE;
@@ -1577,7 +1557,7 @@ void proc_init()
 		p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
 		p->vm_snapshot_depth = 0;
 		p->vm_snapshot_owner_tid = -1;
-		child_records_reset(p);
+		proc_child_state_reset(p);
 		for (int tid = 0; tid < NTHREAD; ++tid) {
 			struct thread *t = &p->threads[tid];
 			kernel_work_reset(t);
@@ -2000,14 +1980,13 @@ static struct proc *allocproc_admit(struct proc *parent,
 	p->heap_base = 0;
 	p->heap_break = 0;
 	p->parent = NULL;
-	p->parent_record_index = -1;
 	p->exit_code = 0;
 	p->teardown_state = PROC_TEARDOWN_LIVE;
 	p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
 	p->agent_control_state = AGENT_CONTROL_OPEN;
 	p->vm_snapshot_depth = 0;
 	p->vm_snapshot_owner_tid = -1;
-	child_records_reset(p);
+	proc_child_state_reset(p);
 	p->exec_dev = 0;
 	p->exec_inum = 0;
 	p->exec_flags = 0;
@@ -2917,19 +2896,18 @@ static void proc_reset_slot(struct proc *p)
 	p->workflow_lifecycle_charged = 0;
 	proc_resource_release(p);
 	p->parent = NULL;
-	p->parent_record_index = -1;
 	p->pid = 0;
 	p->exit_code = 0;
 	p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
 	p->agent_control_state = AGENT_CONTROL_OPEN;
 	p->vm_snapshot_depth = 0;
 	p->vm_snapshot_owner_tid = -1;
-	child_records_reset(p);
+	proc_child_state_reset(p);
 	p->state = P_UNUSED;
 }
 
-// Exit credentials live in the parent's child table, so an execution slot can
-// be recycled as soon as all kernel stacks and resources have quiesced.
+// Exit credentials live in the parent's completion ring, so an execution slot
+// can be recycled as soon as all kernel stacks and resources have quiesced.
 static void proc_recycle(struct proc *p)
 {
 	if (p == 0)

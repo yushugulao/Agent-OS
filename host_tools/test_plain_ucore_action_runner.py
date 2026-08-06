@@ -89,6 +89,11 @@ def symlinks_available(root: Path) -> bool:
 
 
 def main() -> int:
+    repository_root = Path(__file__).resolve().parents[1]
+    with mock.patch.dict(os.environ, {"MAKEFLAGS": "-j99"}, clear=False):
+        build_jobs = runner.adaptive_build_jobs(repository_root / "baseline_ucore")
+    assert 1 <= build_jobs <= 16
+
     original_toolprefix = os.environ.get("TOOLPREFIX")
     try:
         os.environ.pop("TOOLPREFIX", None)
@@ -629,10 +634,15 @@ def main() -> int:
             mock.patch.object(
                 runner, "verify_source_identity", return_value=bound_identity
             ) as source_verify,
-            mock.patch.object(runner, "run_command", side_effect=[0, 0]),
+            mock.patch.object(runner, "adaptive_build_jobs", return_value=4),
+            mock.patch.object(
+                runner, "run_command", side_effect=[0, 0]
+            ) as build_commands,
             mock.patch.object(runner, "write_seed_header", return_value=0),
             mock.patch.object(runner, "pad_state_files_for_ucore_fs"),
-            mock.patch.object(runner, "run_observed_command", side_effect=fake_observed),
+            mock.patch.object(
+                runner, "run_observed_command", side_effect=fake_observed
+            ) as observed_command,
             mock.patch.object(runner, "extract_state_files", side_effect=fake_extract),
             mock.patch.object(
                 runner,
@@ -649,6 +659,12 @@ def main() -> int:
         assert bound_summary["source_tracked_sha256"] == bound_identity[
             "source_tracked_sha256"
         ]
+        assert bound_summary["build_jobs"] == 4
+        build_script = build_commands.call_args_list[1].args[0][-1]
+        assert "-j4 user" in build_script
+        assert "AGENTOS_BUILD_JOBS=" in build_script
+        guest_script = observed_command.call_args.args[0][-1]
+        assert "run-prebuilt" in guest_script and " -j4 " not in guest_script
         source_capture.assert_called_once_with(bound_repo.resolve())
         source_verify.assert_called_once_with(bound_repo.resolve(), bound_identity)
         persisted_bound_summary = json.loads(

@@ -659,6 +659,8 @@ def main() -> int:
     assert "host_tools/committed_source_identity.py" in policy_paths
     assert "host_tools/full_verification_payload.py" in policy_paths
     assert "host_tools/full_verification_metrics.py" in policy_paths
+    assert "host_tools/resource_job_budget.py" in policy_paths
+    assert "scripts/resource-jobs.py" in policy_paths
     assert "host_tools/agenteval_measurement_source_policy.py" in policy_paths
     assert "host_tools/agenteval_measurement_source_receipt.py" in policy_paths
     assert "host_tools/agenteval_measurement_source_validator.py" in policy_paths
@@ -700,6 +702,7 @@ def main() -> int:
     assert compatibility_execution_policy <= policy_entries
     micro_execution_policy = {
         ("micro-runner", "scripts/run-agent-tests.sh"),
+        ("micro-parallel-qemu-runner", "scripts/run-parallel-qemu-regressions.py"),
         ("micro-evidence-wiring", "scripts/evidence-wiring.sh"),
         ("micro-qemu-runner", "scripts/agent_test_runner.py"),
         ("micro-guest-failure-classifier", "scripts/guest_failure_classifier.py"),

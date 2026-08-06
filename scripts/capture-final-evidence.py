@@ -276,7 +276,6 @@ def validate_step_contract(steps: object) -> list[dict[str, object]]:
     expected_names = [record[0] for record in STEP_CONTRACT]
     if [step.get("name") if isinstance(step, dict) else None for step in steps] != expected_names:
         raise EvidenceError("verification summary step order differs from the full-verify profile")
-    previous_end = 0.0
     for step, (name, fixed, patterns) in zip(steps, STEP_CONTRACT):
         artifacts = step.get("artifacts")
         duration = step.get("duration_seconds")
@@ -286,11 +285,10 @@ def validate_step_contract(steps: object) -> list[dict[str, object]]:
                 or not isinstance(started, (int, float)) or isinstance(started, bool)
                 or not isinstance(ended, (int, float)) or isinstance(ended, bool)
                 or not all(math.isfinite(float(item)) for item in (duration, started, ended))
-                or float(started) <= 0 or float(started) < previous_end
+                or float(started) <= 0
                 or float(duration) < 0 or float(ended) < float(started)
                 or abs(float(duration) - (float(ended) - float(started))) > 1e-6):
             raise EvidenceError(f"verification summary step timing is invalid: {name}")
-        previous_end = float(ended)
         remaining = list(artifacts)
         if any(item not in remaining for item in fixed):
             raise EvidenceError(f"verification summary artifact contract differs: {name}")

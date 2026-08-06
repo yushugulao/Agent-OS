@@ -91,6 +91,7 @@ try:
         require_regular_file,
         require_safe_directory,
     )
+    from .resource_job_budget import adaptive_build_jobs
 except ImportError:
     import evaluation_kernel_cost as cost
     from evidence_delivery_contract import (
@@ -114,6 +115,7 @@ except ImportError:
         require_regular_file,
         require_safe_directory,
     )
+    from resource_job_budget import adaptive_build_jobs
 
 
 BUILDER_VERSION = cost.TRUSTED_BUILD_SCHEMA_VERSION
@@ -606,11 +608,16 @@ def _run_command(
         )
 
 
-def _fixed_environment(commit_epoch: str, toolprefix: str) -> dict[str, str]:
+def _fixed_environment(
+    commit_epoch: str, toolprefix: str, build_jobs: int
+) -> dict[str, str]:
     # MSYS/Cygwin tools need a UTF-8 C locale to preserve non-ASCII Win32
     # paths when a compiler subprogram is normalized through cygpath.
     build_locale = "C.UTF-8" if sys.platform in {"cygwin", "msys"} else "C"
+    if type(build_jobs) is not int or not 1 <= build_jobs <= 24:
+        raise KernelBuildError("build jobs must be an integer between 1 and 24")
     environment: dict[str, str] = {
+        "AGENTOS_BUILD_JOBS": str(build_jobs),
         "LANG": build_locale,
         "LC_ALL": build_locale,
         "PYTHONHASHSEED": "0",
@@ -748,6 +755,8 @@ def build_evidence(
         "scripts/check-kernel-budgets.py",
         "scripts/probes/struct-proc-size.c",
         "scripts/check-user-stack-usage.py",
+        "scripts/resource-jobs.py",
+        "host_tools/resource_job_budget.py",
         "user_stack_policy.h",
         "user/Makefile",
     ):
@@ -760,13 +769,16 @@ def build_evidence(
         _source_gate(root, commit, evidence_gate_root, "before trusted purge")
         _purge_build_outputs(root, commit)
         _source_gate(root, commit, evidence_gate_root, "after trusted purge")
+        build_jobs = adaptive_build_jobs(root)
         commit_epoch = _git(root, ["show", "-s", "--format=%ct", commit], 4096).decode(
             "ascii", errors="strict"
         ).strip()
         if not commit_epoch.isdigit():
             raise KernelBuildError("commit timestamp is invalid")
         _require_tool_hashes(tool, make_sha256, toolchain_identities)
-        environment = _fixed_environment(commit_epoch, recorded_toolprefix)
+        environment = _fixed_environment(
+            commit_epoch, recorded_toolprefix, build_jobs
+        )
         environment_sha = _bytes_sha(cost._canonical_json(environment))
         commands: list[dict[str, Any]] = []
 
@@ -842,6 +854,7 @@ def build_evidence(
                 "phase": "kernel_budget",
                 "argv": [
                     str(tool),
+                    f"-j{build_jobs}",
                     f"TOOLPREFIX={recorded_toolprefix}",
                     "kernel-budget-check",
                 ],
@@ -852,6 +865,7 @@ def build_evidence(
                 "phase": "user_stack",
                 "argv": [
                     str(tool),
+                    f"-j{build_jobs}",
                     f"TOOLPREFIX={recorded_toolprefix}",
                     "user-stack-check",
                 ],
@@ -915,6 +929,8 @@ def build_evidence(
                 else:
                     command_cwd = cwd
                 argv.append(f"TOOLPREFIX={recorded_toolprefix}")
+                if phase == "build":
+                    argv.insert(1, f"-j{build_jobs}")
                 argv.append(make_target)
                 execution = runner(
                     argv,
@@ -978,6 +994,7 @@ def build_evidence(
         ).strip()
         facts = {
             "build_environment_sha256": environment_sha,
+            "build_jobs": str(build_jobs),
             "builder": f"evaluation_kernel_build.py/{BUILDER_VERSION}",
             "git": git_version,
             "make": make_version,
@@ -1041,12 +1058,13 @@ def build_evidence(
                     ),
                     "build_argv": (
                         [
-                            str(tool), "-C", "baseline_ucore",
+                            str(tool), f"-j{build_jobs}", "-C", "baseline_ucore",
                             f"TOOLPREFIX={recorded_toolprefix}", "build/kernel",
                         ]
                         if target["role"] == "baseline"
                         else [
-                            str(tool), f"TOOLPREFIX={recorded_toolprefix}",
+                            str(tool), f"-j{build_jobs}",
+                            f"TOOLPREFIX={recorded_toolprefix}",
                             "build/kernel",
                         ]
                     ),

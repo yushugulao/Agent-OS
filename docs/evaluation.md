@@ -543,8 +543,8 @@ Plain 与 AgentOS 串行执行，外层配对硬期限由同一代码严格派�
 `env -i` 清空环境，再显式设置 `HOME=/tmp`、固定 `PATH`、`LANG=C`、`LC_ALL=C`、
 `TZ=UTC`、空 `MAKEFLAGS/CFLAGS` 以及绑定工具身份的 `MAKE_TOOL`、`TOOLPREFIX`、
 `QEMU` 和 `SHELL`，最后通过 `bash --noprofile --norc -c` 执行。环境字典、launcher
-argv 和每个 boot 的 Host 环境都进入 manifest 摘要；加入 login flag、注入并行编译
-参数或额外 Host 变量即 fail closed。Linux、WSL 与已证明的 native-msys2 使用同一
+argv 和每个 boot 的 Host 环境都进入 manifest 摘要；加入 login flag、篡改已绑定的
+并行编译参数或额外 Host 变量即 fail closed。Linux、WSL 与已证明的 native-msys2 使用同一
 受控 shell 原则；未证明的 Windows 原生域不属于正式采集路径。科研场景命令还携带每阶段随机身份；Host 在返回后只清理
 该身份的后代，并以独立 `/proc` 扫描证明没有残留。清理无法验证时整轮 fail closed。
 
@@ -557,6 +557,8 @@ stack guardrail，再依次清理并构建两个最终测量目标。这样 guar
 transcript 内，且 ELF 字节回执形成后不再运行会覆盖目标的检查命令。构建者逐命令复检
 source commit/clean 状态，验证 RISC-V ELF，绑定固定命令、真实退出码和有界原始输出，
 再原子保存 environment manifest 和 build manifest。构建者还要求绝对 `TOOLPREFIX`，
+并只从 `scripts/resource-jobs.py` 取得资源自适应的构建预算；`-jN` 与
+`AGENTOS_BUILD_JOBS=N` 同时进入命令和环境回执，QEMU 采样及 AB/BA 次序仍串行。
 在 Windows 接受
 `C:/.../riscv64-unknown-elf-`，在 Linux 接受
 `/usr/bin/riscv64-linux-gnu-`。它逐一解析并绑定 `gcc`、`ld`、`objcopy`、

@@ -62,8 +62,7 @@ make contest-demo-check
 
 ```bash
 # AgentOS 专项 Guest 测试
-AGENT_TEST_DURATION_PROFILE=none \
-  make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 
 # 对照与 AgentOS 综合科研工作流
 make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
@@ -86,7 +85,7 @@ make evaluation-dashboard
 make evaluation-package
 ```
 
-`evaluation-run` 需要干净提交。开发环境通常使用 `AGENT_TEST_DURATION_PROFILE=none`；只有与版本化校准记录完全匹配的机器才能使用本地时长门。具体参数见 [评价方法](docs/evaluation.md)。
+`agentos-test` 默认使用不套用串行时长阈值的并行开发 profile；`full-verify` 未显式指定时仍使用 `local-e3`。只有与版本化校准记录完全匹配的机器才能使用本地时长门。`evaluation-run` 需要干净提交，具体参数见 [评价方法](docs/evaluation.md)。
 
 ## 并行策略
 
@@ -98,9 +97,9 @@ export AGENTOS_TEST_JOBS=8
 export AGENTOS_QEMU_JOBS=4
 ```
 
-每个 QEMU lane 使用独立工作树、构建目录、文件系统镜像和日志。当前 uCore 内核是单 Hart，因此 Guest 保持 `-smp 1`；多核用于并行运行独立虚拟机，而不是伪装成尚未实现的 SMP 内核。
+普通 `make agentos-test` 也使用这些隔离 lane，并合并各 case 的 Guest 日志和计时清单；串行时长阈值只用于校准和正式采集。当前 uCore 内核是单 Hart，因此 Guest 保持 `-smp 1`；多核用于并行运行独立虚拟机，而不是伪装成尚未实现的 SMP 内核。
 
-正式证据 campaign 为保证提交、计划和原始材料的原子绑定而串行记录；这条一致性边界不与普通回归测试的多核执行混用。
+正式证据 campaign 串行冻结源码并独占执行双目标 AB/BA 与掉电序列；彼此独立的资源回归仍在隔离 lane 中并行，最终按固定步骤合同绑定原始材料。
 
 ## 结果阅读
 
