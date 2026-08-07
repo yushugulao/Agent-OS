@@ -1,10 +1,8 @@
 #ifndef __STDDEF_H__
 #define __STDDEF_H__
 
-/* Represents true-or-false values */
 typedef int bool;
 
-/* Explicitly-sized versions of integer types */
 typedef char int8;
 typedef unsigned char uint8;
 typedef short int16;
@@ -23,11 +21,7 @@ typedef unsigned int uint;
 #define UCHAR_MAX (0xffU)
 #define CHAR_MAX (0x7f)
 
-/* *
- * Pointers and addresses are 32 bits long.
- * We use pointer types to represent addresses,
- * uintptr_t to represent the numerical values of addresses.
- * */
+/* 指针宽度由 __riscv_xlen 决定；uintptr_t 保存地址的无符号整数值。 */
 #if __riscv_xlen == 64
 typedef int64 intptr_t;
 typedef uint64 uintptr_t;
@@ -36,7 +30,6 @@ typedef int32_t intptr_t;
 typedef uint32_t uintptr_t;
 #endif
 
-/* size_t is used for memory object sizes */
 typedef uintptr_t size_t;
 typedef intptr_t ssize_t;
 

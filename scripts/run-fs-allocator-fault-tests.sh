@@ -175,7 +175,7 @@ read_unsigned_define() {
 import re
 import sys
 
-text = open(sys.argv[1], encoding="ascii").read()
+text = open(sys.argv[1], encoding="utf-8").read()
 matches = re.findall(rf"^#define[ \t]+{re.escape(sys.argv[2])}[ \t]+([0-9]+)U?[ \t]*$", text, re.MULTILINE)
 if len(matches) != 1:
     raise SystemExit(f"expected one unsigned define for {sys.argv[2]}")
@@ -192,7 +192,7 @@ import sys
 
 source_path, output_path = sys.argv[1:]
 raw = open(source_path, "rb").read()
-text = raw.decode("ascii")
+text = raw.decode("utf-8")
 guard = """#ifdef FS_ALLOCATOR_DELETE_BARRIER_MUTANT
 	/* Negative acceptance profile: the volatile overlay must expose this. */
 	result = 0;

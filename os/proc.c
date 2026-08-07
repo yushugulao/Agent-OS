@@ -72,7 +72,7 @@ static uint kernel_stack_live_ordinary;
 static uint kernel_stack_live_reserved;
 static uint64 thread_identity_next_generation;
 
-/* Every live thread receives one non-reusable incarnation, including boot. */
+/* 包括启动线程在内，每个存活线程都获得不可复用的 incarnation。 */
 static void thread_identity_activate(struct thread *t)
 {
 	int enabled = intr_save();
@@ -313,7 +313,7 @@ static int kernel_stack_acquire(struct thread *t)
 		panic("kernel stack acquire state");
 	reserved = t->resource_slot_reserved != 0;
 	page_charge_class = thread_physical_charge_class(t);
-	/* Reserved stacks use the THREAD-backed stack pool, not page reserve. */
+	/* 预留栈使用 THREAD 计费栈池，不占页保留。 */
 	if (!reserved) {
 		if (resource_reserve_many(t->resource_account,
 					  page_charge_class, &page_request, 1,
@@ -570,8 +570,7 @@ int proc_thread_exit_requested(void)
 	       t->tid != p->teardown_owner_tid;
 }
 
-// Call with interrupts disabled. The first request fixes the exit status;
-// later revocations may wake non-owners but can never steal teardown ownership.
+// 关中断调用；首次请求确定退出状态，后续撤销仅唤醒且不转移清理所有权。
 static int proc_teardown_request_locked(struct proc *p, int code)
 {
 	if (p == 0 || p->state != P_USED)
@@ -588,8 +587,7 @@ static int proc_teardown_request_locked(struct proc *p, int code)
 	return -1;
 }
 
-// Call with interrupts disabled. Only the main thread or the unpublished
-// rollback executor can claim a process, and ownership never changes later.
+// 关中断调用；仅主线程或未发布回滚执行者可认领进程，所有权一经确定不再转移。
 static int proc_teardown_claim_locked(struct proc *p, int owner)
 {
 	if (p == 0 || p->state != P_USED ||
@@ -633,11 +631,8 @@ int proc_request_workflow_exit(struct workflow_lifecycle_key lifecycle,
 	return requested;
 }
 
-/*
- * Submit an abandoned control subtree to the ordinary teardown state machine.
- * The bounded control graph is closed before interrupts resume; destructors
- * still run only through the ordinary per-process teardown state machine.
- */
+/* 将遗弃的控制子树交给常规清理状态机；恢复中断前先闭合有界控制图，
+ * 析构仍只经逐进程清理路径执行。 */
 int proc_request_controller_exit(struct workflow_lifecycle_key lifecycle,
 				 uint64 controller_id, int code)
 {
@@ -746,11 +741,8 @@ void proc_vm_snapshot_end(struct proc *p)
 	intr_restore(enabled);
 }
 
-/*
- * The heap lives above every fixed thread-stack slot, with a guard page on
- * each side. A VM snapshot parks sibling threads while page-by-page work may
- * yield, making brk atomic with fork and exec-visible address-space state.
- */
+/* 堆位于全部固定线程栈槽上方且两侧有保护页；逐页 VM 快照时暂停兄弟线程，
+ * 使 brk 与 fork 及 exec 可见的地址空间状态保持原子。 */
 int proc_sbrk(long delta)
 {
 	struct proc *p = curr_proc();
@@ -786,7 +778,7 @@ int proc_sbrk(long delta)
 			goto out;
 		new_break = old_break + magnitude;
 	} else {
-		/* Unsigned subtraction also handles LONG_MIN without negating it. */
+		/* 无符号减法无需对 LONG_MIN 取负。 */
 		magnitude = 0 - (uint64)delta;
 		if (magnitude > old_break - p->heap_base)
 			goto out;
@@ -816,7 +808,7 @@ int proc_sbrk(long delta)
 		p->max_page = MAX(p->max_page, new_end / PGSIZE);
 		intr_restore(enabled);
 	} else {
-		/* Shrink is irreversible after the first leaf refund; finish fairly. */
+		/* 首个叶页退款后收缩不可逆，后续须公平完成。 */
 		if (old_end > new_end)
 			uvm_unmap_reclaim(pagetable, new_end,
 					  (old_end - new_end) / PGSIZE);
@@ -832,7 +824,7 @@ int proc_sbrk(long delta)
 	goto out;
 
 rollback_growth:
-	/* Also prunes an empty page-table page left by a failed mappages(). */
+	/* 同时清理 mappages() 失败遗留的空页表页。 */
 	uvm_unmap_reclaim(pagetable, old_end, mapped_pages);
 out:
 	proc_vm_snapshot_end(p);
@@ -1028,8 +1020,7 @@ out:
 	intr_restore(enabled);
 }
 
-// The file system raises this floor after scanning persistent workflow owners.
-// Scope identifiers never wrap or get reused while their objects may exist.
+// 文件系统扫描持久工作流属主后抬高该下界；对象可能存活期间 scope 标识不回绕、不复用。
 void proc_scope_set_id_floor(uint floor)
 {
 	int enabled = intr_save();
@@ -1109,9 +1100,7 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 				goto fail;
 			new_domain = 1;
 		} else {
-			// Every process launched inside a workflow shares one immutable
-			// resource domain. Agent creation authority must not mint fresh
-			// process or PUBLIC-storage quota domains.
+			// 工作流内启动的进程共享同一固定资源域；Agent 创建权不得铸造新的进程或 PUBLIC 存储配额域。
 			domain_id = parent->resource_domain_id;
 		}
 	}
@@ -1288,9 +1277,8 @@ out:
 	intr_restore(enabled);
 }
 
-// Charge one unique open-file object to its creator's immutable admission
-// class. References inherited by fork or held by a blocking syscall share this
-// charge; the final fileclose refunds it.
+// 唯一打开文件对象计费到创建者的固定准入类；fork 继承及阻塞调用引用共享该计费，
+// 最后一次 fileclose 退款。
 int proc_file_slots_reserve(struct proc *owner, uint count,
 			    struct resource_account_handle *account,
 			    int *reserved)
@@ -1360,8 +1348,7 @@ static void proc_child_state_reset(struct proc *p)
 	p->child_exit_count = 0;
 }
 
-// Child relationships and completion records reserve one private quota.
-// Call only with interrupts disabled once the process table is live.
+// 子进程关系和完成记录共用一个私有配额；进程表启用后仅可在关中断状态调用。
 static void proc_child_counts_validate(struct proc *parent)
 {
 	if (parent->live_child_count > CHILD_EXIT_CAP ||
@@ -1392,7 +1379,7 @@ static int proc_child_has_capacity(struct proc *parent)
 }
 
 // Bind child ownership only after fork has completed every fallible step.
-// The live relationship reserves its eventual completion-ring slot.
+// 存活关系预留对应的完成环槽。
 static int proc_child_bind(struct proc *parent, struct proc *child)
 {
 	int enabled = intr_save();
@@ -1441,7 +1428,7 @@ out:
 	intr_restore(enabled);
 }
 
-// Roll back an unpublished child relationship before recycling its proc slot.
+// 复用 proc 槽前回滚未发布的子进程关系。
 static void proc_child_unbind(struct proc *child)
 {
 	struct proc *parent;
@@ -1509,8 +1496,7 @@ static int proc_child_wait_result(struct proc *parent, int pid,
 	return 1;
 }
 
-// child->parent is the unique live relationship. Parent exit settles every
-// such edge and discards its private completions in one interrupt-off step.
+// child->parent 是唯一存活关系；父进程退出时在一次关中断操作中结算全部边并丢弃私有完成项。
 static void proc_orphan_children(struct proc *parent)
 {
 	int enabled = intr_save();
@@ -1623,7 +1609,7 @@ int allocpid()
 	int enabled = intr_save();
 	int pid = -1;
 
-	/* Legacy PID ABIs stay non-reusing; exhaustion denies new processes. */
+	/* 传统 PID ABI 保持不复用；耗尽后拒绝新进程。 */
 	if (next_pid <= 0x7fffffffULL)
 		pid = (int)next_pid++;
 	intr_restore(enabled);
@@ -1776,11 +1762,7 @@ static struct thread *fetch_domain_best(int domain_id)
 			first_normal = index;
 		}
 	}
-	/*
-	 * The outer queue is the hard resource-domain boundary. Agent scoring is
-	 * deliberately confined to the selected domain, where the existing burst
-	 * limit still protects ordinary workers in that same workflow.
-	 */
+	/* 外层队列是资源域硬边界；Agent 评分仅在选中域内进行，原突发上限仍保护同域普通 worker。 */
 	if (best_agent < 0) {
 		selected = first_normal;
 	} else if (first_normal >= 0 &&
@@ -2049,19 +2031,16 @@ static uint64 get_thread_ustack_base_va(struct thread *t)
 	return t->ustack;
 }
 
-// Thread IDs name kernel-owned slots, not user-stack virtual addresses.  This
-// distinction matters after a non-main thread forks: the child must resume on
-// the issuer's stack at the same virtual address because saved frame pointers
-// and stack contents may refer to that address.
+// 线程 ID 标识内核槽而非用户栈虚址；非主线程 fork 后，子进程须在发起者栈的原虚址恢复，
+// 因为已保存帧指针和栈内容可能引用该地址。
 static uint64 proc_alloc_thread_ustack(struct proc *p, struct thread *owner)
 {
 	for (int slot = 0; slot < NTHREAD; slot++) {
 		uint64 candidate = p->ustack_base + slot * USTACK_SIZE;
 		int in_use = 0;
 
-		// A fork child retains every page of the parent's address space.
-		// Unowned sibling stacks may still contain objects referenced by the
-		// surviving thread, so only an entirely unmapped slot may be reused.
+		// fork 子进程保留父地址空间全部页面；无属主的兄弟栈仍可能被存活线程引用，
+		// 因此仅可复用完全未映射的槽。
 		for (uint64 offset = 0; offset < USTACK_SIZE; offset += PGSIZE)
 			if (walkaddr(p->pagetable, candidate + offset) != 0) {
 				in_use = 1;
@@ -2279,16 +2258,13 @@ void scheduler()
 {
 	struct thread *t;
 	for (;;) {
-		/*
-		 * 内核中的可运行线程可能连续让出而不返回用户态（如轮询管道）。
-		 * 每轮调度先投递设备和时钟 IRQ，避免 I/O 等待者依赖的时钟被
-		 * 关中断的内核循环永久遮蔽。
-		 */
+		/* 可运行内核线程可能反复 yield 而不回用户态；每轮调度先投递设备和时钟 IRQ，
+		 * 避免内核轮询循环饿死 I/O 等待者。 */
 		current_thread = &idle;
 		set_kerneltrap();
 		intr_delivery_window();
 		t = fetch_task();
-		/* Polling writeback runs only when no user thread is runnable. */
+		/* 仅在无可运行用户线程时轮询回写。 */
 		if (t == NULL && fs_epoch_should_commit() &&
 		    fs_epoch_request_begin() == 0) {
 			if (fs_epoch_should_commit())
@@ -2384,9 +2360,8 @@ static void freepagetable_cleanup(pagetable_t pagetable, uint64 max_page)
 	uvmfree_cleanup(pagetable, max_page);
 }
 
-// The descriptor table is process-wide, while delegation intent belongs to a
-// thread. Replacing or closing a slot invalidates every thread's intent for
-// that slot so a later object cannot inherit a stale ticket.
+// 描述符表属于进程，委派意图属于线程；替换或关闭槽时清除全部线程的对应意图，
+// 防止后续对象继承陈旧票据。
 static void proc_clear_fd_delegate_tickets(struct proc *p, int fd)
 {
 	if (p == 0 || fd < 0 || fd >= FD_BUFFER_SIZE)
@@ -2403,10 +2378,8 @@ static void proc_clear_all_fd_delegate_tickets(struct proc *p)
 		proc_clear_fd_delegate_tickets(p, fd);
 }
 
-// Open objects are part of a workflow credential, not ambient POSIX state.
-// Reset and exec share this detachment mechanism; exec detaches under its VM
-// publication guard and closes the captured references only after interrupts
-// are restored. A successful pending-to-active exec keeps delegated pipes.
+// 打开对象属于工作流凭据而非环境 POSIX 状态；reset 与 exec 共用摘除机制，exec 在 VM 发布门下摘除，
+// 恢复中断后才关闭固定引用；成功激活的 exec 保留已委派 pipe。
 static void
 proc_detach_vfs_scope_fds_locked(struct proc *p,
 				 struct file **detached)
@@ -2535,15 +2508,12 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 	    mode != PROC_IMAGE_INSTALL_LIVE_EXEC)
 		return -1;
 	live_exec = mode == PROC_IMAGE_INSTALL_LIVE_EXEC;
-	/* Reject a malformed image before credentials or VM ownership move. */
+	/* 凭据或 VM 所有权转移前拒绝畸形镜像。 */
 	if (!proc_user_image_trapframe_valid(p, image) ||
 	    vfs_proc_exec_prepare(p, image, live_exec, &transition) < 0)
 		return -1;
-	/*
-	 * Context may enter the replacement page table only after policy has
-	 * explicitly selected a trusted Agent-preserving transition.  Abort owns
-	 * the alias through user_image_discard(); PUBLIC images never see it.
-	 */
+	/* 仅策略明确选择保留可信 Agent 的转换后，Context 才可进入替换页表；
+	 * 中止路径经 user_image_discard() 持有别名，PUBLIC 镜像不可见。 */
 	if (transition.identity_policy ==
 	    VFS_EXEC_IDENTITY_PRESERVE_AGENT) {
 		if (agent_alias_exec_context(p, image->pagetable) < 0) {
@@ -2553,12 +2523,8 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 		image->shared_base = p->agent_ctx_base;
 		image->shared_pages = AGENT_CONTEXT_PAGES;
 	}
-	/*
-	 * Image construction and credential preparation may yield. Credential
-	 * validation, authority revocation, Context teardown, FD detachment and
-	 * the VM pointer swap form one publication boundary. Once teardown is
-	 * requested, neither half of the new identity is visible.
-	 */
+	/* 镜像构造和凭据准备可 yield；凭据校验、权力撤销、Context 清理、FD 摘除及 VM 指针交换
+	 * 组成同一发布边界，清理请求后新身份的任一部分均不可见。 */
 	enabled = intr_save();
 	if (!proc_teardown_live(p) ||
 	    !proc_image_install_state_valid_locked(p, mode) ||
@@ -2569,7 +2535,7 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 		return -1;
 	}
 	if (transition.lifecycle_reserved) {
-		/* Reservation publication may still fail without changing identity. */
+		/* 保留量发布仍可能失败，但不会改变身份。 */
 		if (vfs_proc_exec_commit(p, &transition) < 0) {
 			intr_restore(enabled);
 			vfs_proc_exec_abort(&transition);
@@ -2584,7 +2550,7 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 		}
 		if (transition.drop_to_public)
 			proc_detach_vfs_scope_fds_locked(p, revoked_files);
-		/* Every irreversible revocation shares this interrupt guard. */
+		/* 所有不可逆撤销共用该中断保护区。 */
 		if (vfs_proc_exec_commit(p, &transition) < 0)
 			panic("validated exec credential commit");
 	}
@@ -2754,11 +2720,7 @@ static void proc_teardown_file_progress(
 		panic("process teardown settlement reentry");
 }
 
-/*
- * The caller is the sole teardown owner. Pointer publication is removed before
- * any destructor can sleep. Deferred inode reclaims retain their own principal
- * after process teardown.
- */
+/* 调用方独占清理所有权；任何析构睡眠前先撤销指针发布，延迟 inode 回收在进程退出后保留自身主体。 */
 static int proc_teardown_run(struct proc *p, struct thread *owner,
 			     int terminal_current)
 {
@@ -2845,10 +2807,7 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 	agent_proc_teardown(p);
 	if (!agent_ipc_legacy_mailbox_empty(p))
 		panic("process teardown legacy mailbox");
-	/*
-	 * File receipts and VM teardown are complete. Drop the filesystem gate
-	 * before settling the terminal request and releasing its lifecycle.
-	 */
+	/* 文件收据和 VM 清理完成后，先释放文件系统门，再结算终止请求及其生命周期。 */
 	if (!terminal_current && close_batch.count != 0)
 		proc_teardown_file_progress(&close_batch);
 	if (terminal_current) {
@@ -2912,8 +2871,7 @@ static void proc_reset_slot(struct proc *p)
 	p->state = P_UNUSED;
 }
 
-// Exit credentials live in the parent's completion ring, so an execution slot
-// can be recycled as soon as all kernel stacks and resources have quiesced.
+// 退出凭据保存在父进程完成环；内核栈和资源静止后即可复用执行槽。
 static void proc_recycle(struct proc *p)
 {
 	if (p == 0)
@@ -2997,10 +2955,8 @@ static void fd_spawn_snapshot_release(struct fd_spawn_snapshot *snapshot)
 	}
 }
 
-// A process fork has one surviving thread. Its stack stays at the original
-// virtual address because saved frames can contain absolute stack pointers.
-// Other copied stacks remain ordinary address-space contents; the stack-slot
-// allocator will not overwrite them while they are still mapped.
+// fork 后仅一条线程存活，其栈保留原虚址以兼容已保存的绝对栈指针；其他复制栈只是普通地址空间内容，
+// 映射存在时栈槽分配器不会覆盖它们。
 static int fork_child_validate_issuer_stack(struct proc *child,
 					     struct thread *issuer)
 {
@@ -3051,7 +3007,6 @@ static int fork_common(int make_agent, int agent_role,
 	fd_spawn_snapshot_take(p, issuer, authority_boundary, &fds);
 	if (!proc_teardown_live(p) || !proc_child_has_capacity(p))
 		goto fail;
-	// 分配进程。
 	if ((np = allocproc_admit(p, admission)) == 0)
 		goto fail;
 	copy_status = uvmcopy(p->pagetable, np->pagetable, p->max_page);
@@ -3135,9 +3090,8 @@ static int fork_common(int make_agent, int agent_role,
 		freeproc(np);
 		goto fail;
 	}
-	// Final publication is serialized by the local interrupt-off boundary and
-	// rechecks the lifecycle barrier. A child marked for exit, or a pending
-	// credential whose scope ceased to be ACTIVE, must never become runnable.
+	// 最终发布在局部关中断边界内串行并复核生命周期门；已标记退出的子进程，
+	// 或 scope 不再 ACTIVE 的待定凭据，均不得变为可运行。
 	publish_enabled = intr_save();
 	if (!proc_teardown_live(np) || !vfs_proc_scope_publishable(np) ||
 	    agent_lifecycle_spawn_publish_locked(p, np) < 0) {
@@ -3194,9 +3148,8 @@ int agent_workflow_create_proc(int role)
 
 	if (status != AGENT_STATUS_OK)
 		return status;
-	// Creating a security namespace is a distinct, non-inheritable authority.
-	// A role grant lets an Orchestrator populate its own workflow, but it does
-	// not let that Agent mint fresh quota and object domains.
+	// 创建安全名字空间是独立且不可继承的权力；角色授权允许 Orchestrator 填充自身工作流，
+	// 但不得让 Agent 铸造新配额和对象域。
 	if (p == 0 || p->is_agent || !p->resource_domain_admin ||
 	    !exec_policy_process_bootstrap(p))
 		return AGENT_STATUS_DENIED;
@@ -3265,7 +3218,7 @@ int push_argv_image(pagetable_t pagetable, uint64 stack_base,
 	argp[argc] = 0;
 	if (user_range_check(pagetable, argv_sp, layout_bytes, PTE_W) < 0)
 		return -1;
-	// The layout is now valid in full; only now may the new stack be changed.
+	// 布局完整有效后才可修改新栈。
 	for (uint64 index = 0; index < argc; index++) {
 		uint64 n = strlen(argv[index]) + 1;
 
@@ -3503,11 +3456,8 @@ void exit(int code)
 			if (injected) {
 				if (proc_siblings_quiescent(p, t))
 					panic("teardown wait injection without sibling");
-				/*
-				 * Let the final sibling publish EXITED and wake an empty
-				 * queue. The production recheck below must observe that
-				 * publication instead of sleeping after the consumed wake.
-				 */
+				/* 让最后一个兄弟线程发布 EXITED 并唤醒空队列；下方复核须观察该发布，
+				 * 避免消费唤醒后再次睡眠。 */
 				while (!proc_siblings_quiescent(p, t))
 					yield();
 				wait_atomic_test_complete(

@@ -65,14 +65,11 @@ static void hidden_reader(void *arg)
 		fail_child(20);
 	if (read(hidden_pipe[0], &byte, 1) != -1)
 		fail_child(21);
-	// The owning process exits while this syscall is blocked. Returning here
-	// before teardown would mean that the writer was closed too early.
+	// 所属进程在系统调用阻塞时退出；若在清理前返回，说明写端关闭过早。
 	fail_child(22);
 }
 
-// A closed descriptor must not make a file object disappear while a blocked
-// read still owns a temporary reference. The worker has spare FD slots and
-// observes the domain limit with that hidden reference included.
+// 阻塞 read 持有临时引用时，关闭描述符不能销毁文件对象；worker 的空闲 FD 槽应仍受该隐藏引用计费。
 static void blocking_exit_phase(void)
 {
 	int report[2];
@@ -130,8 +127,7 @@ static void blocking_exit_phase(void)
 		if (write(gate[1], &token, 1) != 1 || close(gate[1]) < 0)
 			fail_child(33);
 		wait_success(worker, "wait blocking worker");
-		// Leave the writer, the source descriptors, and the blocked thread to
-		// process teardown. Their final references must refund atomically.
+		// 写端、源描述符和阻塞线程留给进程清理，其最终引用必须原子退款。
 		exit(0);
 	}
 	close(report[1]);
@@ -144,11 +140,8 @@ static void blocking_exit_phase(void)
 	printf("fileresource_ucore: blocking_pin_bounded=1\n");
 }
 
-// The holder keeps fourteen objects alive. Its same-domain child drops the
-// inherited descriptor references, leaving many local FD slots while the
-// domain has only one object slot left. Repeated two-ended pipe failures must
-// roll back both FD reservations and the first endpoint before a full pipe can
-// succeed after one charge is released.
+// holder 保持 14 个对象；同域子进程关闭继承描述符后，本地 FD 充足但资源域仅余一个对象槽。
+// 双端 pipe 失败须回滚两个 FD 预留和首端点，释放一个计费后完整 pipe 才能成功。
 static void domain_and_rollback_phase(void)
 {
 	int report[2];
@@ -183,9 +176,7 @@ static void domain_and_rollback_phase(void)
 					fail_child(44);
 			if (close(first) < 0)
 				fail_child(45);
-			// Repeated failures consume every remaining FD if either
-			// reservation leaked. Freeing one object charge must make a full
-			// two-ended pipe possible again.
+			// 任一预留泄漏都会耗尽剩余 FD；释放一个对象计费后，双端 pipe 必须恢复可用。
 			if (pipe(pipe_fds) < 0)
 				fail_child(46);
 			if (close(pipe_fds[0]) < 0 || close(pipe_fds[1]) < 0)
@@ -251,8 +242,7 @@ static void global_holder(int ready[2], int release[2], int probe[2],
 	exit(0);
 }
 
-// Three independent ordinary domains consume the complete ordinary waterline.
-// A fourth domain is denied while the bootstrap reserve remains operational.
+// 三个普通域耗尽普通水位；第四个域应被拒绝，同时启动保留仍可用。
 static void global_waterline_phase(void)
 {
 	int ready[2];

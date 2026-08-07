@@ -35,12 +35,7 @@
 #define PENDING_EXEC_ESCAPE_DELAY 500
 #define PENDING_EXEC_VERIFY_DELAY (4 * PENDING_EXEC_ESCAPE_DELAY)
 
-/*
- * A workflow child starts before its creating helper returns, so it inherits
- * every live caller frame.  Keep process-phase entry points as real call-graph
- * boundaries; this makes the fixed user-stack budget compositional and
- * independently measurable instead of depending on optimizer inlining.
- */
+/* 工作流子进程会继承创建辅助函数的活动栈帧；保留进程阶段调用边界，使固定用户栈预算可组合测量。 */
 #define TEST_PHASE_NOINLINE __attribute__((noinline))
 
 #if WORKFLOW_TEARDOWN_DOMAIN_FILE_CAP <= PRIMARY_PIN_BASE_OBJECTS
@@ -797,7 +792,7 @@ static void metadata_direct_waiter(void *unused)
 		exit(76);
 	}
 	for (;;) {
-		/* Initialization takes the metadata ticket gate without Context. */
+		/* 初始化时在无 Context 状态下获取元数据票据门。 */
 		if (agent_file_meta_init() < 0) {
 			metadata_direct_failed = 1;
 			exit(77);
@@ -1099,11 +1094,7 @@ static void hidden_reader(void *unused)
 	}
 	if (semaphore_up(hidden_second_ready) < 0)
 		exit(62);
-	/*
-	 * Returning means this attempt did not retain the fdget reference.  The
-	 * capacity acknowledgement below classifies it as a retry; the reader
-	 * never emits an unscoped event that could contaminate the next attempt.
-	 */
+	/* 本轮返回表示未保留 fdget 引用；容量确认将其视为重试，不发出污染下一轮的无域事件。 */
 	(void)read(hidden_pipe[0], &token, 1);
 	hidden_reader_missed = 1;
 	exit(0);
@@ -1180,16 +1171,8 @@ static TEST_PHASE_NOINLINE void arm_hidden_file_pin(int pin_release_fd,
 	hidden_second_ready = semaphore_create(0);
 	check(hidden_first_ready >= 0 && hidden_second_ready >= 0,
 	      "create hidden file barriers");
-	/*
-	 * The runner supplies the same capacity to this oracle and the kernel
-	 * resource controller. Internal pipes account for base_objects; the
-	 * remaining opens reach the domain boundary without an embedded limit.
-	 */
-	/*
-	 * Console objects are not charged to this workflow, but their descriptors
-	 * still consume the per-process FD table. Failure details travel over the
-	 * already charged report pipe, so all inherited console slots can be freed.
-	 */
+	/* runner 与内核控制器使用同一容量；内部管道占 base_objects，剩余 open 应触及资源域边界。 */
+	/* 控制台对象不计入资源域但仍占 FD 表；错误经已计费报告管道传递，可关闭全部继承槽。 */
 	check(close(0) == 0 && close(1) == 0 && close(2) == 0,
 	      "release console descriptors for file pin oracle");
 	while (!confirmed) {
@@ -1213,13 +1196,8 @@ static TEST_PHASE_NOINLINE void arm_hidden_file_pin(int pin_release_fd,
 		}
 		parent_semaphore_down(hidden_second_ready,
 				      "wait second hidden blocking read");
-		/*
-		 * Fill while the descriptor is still installed, then yield a complete
-		 * scheduler turn before closing it.  The role probe is the second half
-		 * of the handshake: failure is a positive acknowledgement that fdget
-		 * still owns the otherwise released object.  A miss is fully drained
-		 * and retried, so scheduling can delay an attempt but cannot fake a pin.
-		 */
+		/* 描述符仍安装时填满对象，再完整 yield 一轮；角色探测失败即确认 fdget 仍持有已释放对象。
+		 * 未命中时彻底排空并重试，调度延迟不能伪造引用固定。 */
 		for (uint i = 0; i < filler_count; i++) {
 			fillers[i] = open("racedirty", O_RDONLY);
 			check(fillers[i] >= 0,
@@ -1351,7 +1329,7 @@ static TEST_PHASE_NOINLINE void arm_context_window(
 			context_window_fail(CONTEXT_FAILURE_OWNER_NOT_ACTIVE,
 					    &info, report_fd, report);
 	}
-	/* Publish both contenders only after the owner holds both real gates. */
+	/* 所有者持有两个真实门后，才发布双方竞争者。 */
 	check(semaphore_up(metadata_direct_go) == 0,
 	      "release metadata transaction contender");
 	check(semaphore_up(context_waiter_go) == 0,
@@ -1727,7 +1705,7 @@ prove_lifecycle_reclaimed(
 		int found = 0;
 
 		memset(&replacement, 0, sizeof(replacement));
-		/* Keep earlier candidates live so lowest-slot allocation advances. */
+		/* 保持先前候选存活，使最低槽分配继续推进。 */
 		while (count < WORKFLOW_TEARDOWN_DOMAIN_FILE_CAP &&
 		       try_launch_lifecycle_probe(&guards[count])) {
 			if (guards[count].lifecycle_key.id == retired.id) {
@@ -1811,11 +1789,7 @@ static TEST_PHASE_NOINLINE void recycle_workflow_root(
 	check(unlink("racedirty") == 0,
 	      "remove recycle file pin object before teardown");
 	report.scope_id = current_scope();
-	/*
-	 * STALE is a semantic comparison result, not a malformed-call failure.
-	 * Do not depend on its output buffer: successful snapshots on both sides
-	 * prove that comparing the old key did not change the current generation.
-	 */
+	/* STALE 是语义比较结果而非调用错误；用两侧成功快照证明旧键比较未改动当前 generation。 */
 	for (int i = 0; i < RECLAIM_TARGET_COUNT; i++) {
 		memset(&matched, 0, sizeof(matched));
 		report.stale_status[i] = agent_workflow_lifecycle_info(
@@ -2447,7 +2421,7 @@ static __attribute__((noreturn)) void controller_public_exec_rejection_member(
 		      (IO_POLICY_OWNER_SCOPE_FLAG | scope_id) &&
 	      exec_transition_io.io_class == IO_POLICY_CLASS_CONTROL,
 	      "rejected PUBLIC exec preserves controller state and lineage");
-	/* Both exec transitions belong to the same trusted workflow root. */
+	/* 两次 exec 转换属于同一可信工作流根。 */
 	run_agent_public_exec_transition();
 	write_exact(report_fd, &ready, 1,
 		    "rejected PUBLIC exec preserves delegated endpoint");
@@ -2523,7 +2497,7 @@ static __attribute__((noreturn)) void sentinel_public_exec_member(
 	strcpy(exec_transition_event.payload, "exec-downgrade");
 	check(agent_wake(getpid(), &exec_transition_event) == AGENT_STATUS_OK,
 	      "seed queued event before PUBLIC exec");
-	/* A valid image plus an overfull argv exercises image rollback. */
+	/* 以合法镜像和超限 argv 验证镜像回滚。 */
 	memset(io_pressure, 'X', AGENT_PAGE_SIZE);
 	io_pressure[AGENT_PAGE_SIZE - 1] = 0;
 	check(exec(EXEC_PUBLIC_IMAGE, failed_argv) < 0,

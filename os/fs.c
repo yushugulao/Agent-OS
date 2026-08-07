@@ -91,12 +91,7 @@ static void *fs_dentry_owner;
 static uint64 fs_dentry_owner_generation;
 static char fs_dentry_boot_token;
 
-/*
- * File contents use an inode-local mapping guard rather than the filesystem
- * request gate.  Readers may therefore proceed in parallel across unrelated
- * inodes while truncate, allocation and detach publish one mapping image at a
- * time.  The wait queue is shared; the indexed state remains compact.
- */
+/* 文件内容使用 inode 局部映射门；无关 inode 可并行读取，映射发布仍保持串行。 */
 struct inode_mapping_guard {
 	uint readers;
 	uint reader_waiters;
@@ -111,7 +106,7 @@ static struct inode_mapping_guard
 static struct wait_queue inode_mapping_waiters;
 static char inode_mapping_boot_token;
 
-/* Free-block candidates amortize bitmap scans without allocating ahead. */
+/* 空闲块候选缓存摊薄位图扫描，但不提前分配。 */
 #define FS_BLOCK_MAGAZINE_SLOTS (VFS_SCOPE_MAX_ACTIVE + 2U)
 #define FS_BLOCK_MAGAZINE_CAP 24U
 #define FS_BLOCK_CANDIDATE_BYTES ((FSSIZE + 7U) / 8U)
@@ -126,10 +121,7 @@ static struct fs_block_magazine
 	fs_block_magazines[FS_BLOCK_MAGAZINE_SLOTS];
 static uchar fs_block_candidate_reserved[FS_BLOCK_CANDIDATE_BYTES];
 
-/*
- * 前台 unlink/truncate 只发布已经不可达的映射镜像。该有界队列持有
- * 分离令牌，待 generation fence 生效后再批量回收分配位图。
- */
+/* unlink/truncate 仅发布已不可达映射；分离令牌待 generation fence 后批量回收。 */
 #define FS_DEFERRED_RECLAIM_CAP 128U
 #define FS_DEFERRED_RECLAIM_BATCH_UNITS 64U
 #define FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS 6U
@@ -209,16 +201,14 @@ static uint fs_dentry_index_used;
 static uint fs_dentry_index_tombstones;
 static uint fs_directory_index_cursor;
 static uint64 fs_dentry_index_generation;
-// The claim gate serializes this bounded workspace after mount recovery.
-// Keeping it in BSS avoids adding a full indirect map to the syscall stack.
+// 认领门在挂载恢复后串行化固定工作区，常驻 BSS 以免占用系统调用栈。
 static uint fs_claim_blocks[MAXFILE + 1];
 _Static_assert(MAXFILE + 1 == NDIRECT + 1 + NINDIRECT,
 	       "claim workspace must include data and indirect-map blocks");
 
 #define FS_SCRUB_BITMAP_BYTES(limit) (((limit) + 7U) / 8U)
 
-// Mount recovery runs before the allocator is ready.  Keep its reachability
-// maps in BSS rather than spending several KiB of the small kernel stack.
+// 挂载恢复早于分配器，故将可达性位图放在 BSS，避免挤占内核栈。
 static uchar fs_scrub_reachable_blocks[FS_SCRUB_BITMAP_BYTES(FSSIZE)];
 static uchar fs_scrub_reachable_inodes[FS_SCRUB_BITMAP_BYTES(NINODE)];
 
@@ -300,7 +290,7 @@ static int fs_io_fail(enum fs_failure_class failure)
 	return -1;
 }
 
-/* Reads and pre-submit BUSY failures do not make persistent state ambiguous. */
+/* 只读及提交前 BUSY 不会造成持久状态歧义。 */
 static int fs_read_block(uint dev, uint blockno, struct buf **out)
 {
 	struct buf *bp;
@@ -435,7 +425,7 @@ static void fs_epoch_destructive_end(int entered)
 		fs_epoch_bypass_end();
 }
 
-/* Allocation maps, directories, indirect maps and dinodes are FS metadata. */
+/* 分配图、目录、间接映射和 dinode 均为文件系统元数据。 */
 static int fs_write_ordered_block(struct buf *bp,
 				  enum fs_epoch_phase phase, int data)
 {
@@ -473,7 +463,7 @@ static int fs_write_ordered_block(struct buf *bp,
 	return fs_io_fail(fs_write_failure(result));
 }
 
-/* Allocation maps, zeroed blocks and indirect maps precede inode publish. */
+/* 先持久化分配图、清零块和间接映射，再发布 inode。 */
 static int fs_write_metadata_block(struct buf *bp)
 {
 	return fs_write_ordered_block(bp, FS_EPOCH_PREPARE, 0);
@@ -493,13 +483,13 @@ static int fs_write_namespace_block(struct buf *bp,
 	return fs_write_ordered_block(bp, phase, 0);
 }
 
-/* File payload failures are contained by the owning object/protocol. */
+/* 文件载荷失败由所属对象或协议收敛。 */
 static int fs_write_data_block(struct buf *bp)
 {
 	return fs_write_ordered_block(bp, FS_EPOCH_PREPARE, 1);
 }
 
-/* A completed metadata write is not a power-loss ordering point by itself. */
+/* 单次元数据写完成不构成掉电顺序点。 */
 static int fs_durable_barrier(void)
 {
 	int result;
@@ -519,11 +509,7 @@ static int fs_durable_barrier(void)
 	return fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 }
 
-/*
- * Once an allocator intent is durable it must run forward.  The cleanup
- * checkpoint pays I/O debt without allowing thread teardown to strand a
- * half-published block state.
- */
+/* 分配意图一旦持久化便只能向前提交；清理检查点承担 I/O 债务，避免线程退出遗留半发布状态。 */
 static int fs_forward_checkpoint(void)
 {
 	int result;
@@ -784,10 +770,7 @@ static int fs_scrub_mark_block(int dev, uint block, uint expected_owner)
 		return 0;
 	}
 
-	/*
-	 * Reachability is authoritative at mount.  Replay the same ordered
-	 * allocator protocol so a second reset at any point remains recoverable.
-	 */
+	/* 挂载时以可达性为准并重放有序分配协议，使任意二次复位仍可恢复。 */
 	allocating = fs_qmap_transition(FS_QMAP_ALLOCATING_FLAG,
 					expected_owner);
 	if (allocating == FS_OWNER_NONE ||
@@ -801,12 +784,7 @@ static int fs_scrub_mark_block(int dev, uint block, uint expected_owner)
 	return 0;
 }
 
-/*
- * Clear an indirect-map suffix by replaying the write after a pre-submit BUSY.
- * The caller has already published a shorter EOF, so the suffix is no longer
- * part of the file.  Its blocks deliberately remain unmarked and the orphan
- * sweep can reclaim them only after this map update reaches stable storage.
- */
+/* EOF 已先缩短；提交前 BUSY 后重放间接表后缀清零，映射稳定后再由孤儿扫描回收块。 */
 static int fs_scrub_clear_indirect_suffix_forward(int dev, uint block,
 						   uint first)
 {
@@ -848,9 +826,7 @@ static int fs_scrub_clear_indirect_suffix_forward(int dev, uint block,
 	}
 }
 
-// EOF is the commit record for the separately persisted indirect map.  Mark
-// only its required prefix; mount recovery removes a stale suffix before the
-// orphan sweep is allowed to release those blocks.
+// EOF 是间接映射的提交记录；只标记所需前缀，挂载恢复先移除陈旧后缀，再允许孤儿回收。
 static int fs_scrub_mark_inode_blocks(int dev, const struct dinode *dip)
 {
 	struct buf *bp;
@@ -1063,9 +1039,7 @@ static int fs_scrub_retire_inode_forward(int dev, uint inum, int *changed)
 	}
 }
 
-// The filesystem has one flat, fixed-size root namespace.  Reconstructing
-// reachability from that root makes interrupted unlink/allocation cleanup
-// independent of process lifetime and keeps persistent quota usage bounded.
+// 单层固定根名字空间可从根重建可达性，使中断清理脱离进程生命周期并限制持久配额。
 static int fs_mount_scrub(int dev)
 {
 	struct dinode root;
@@ -1084,8 +1058,7 @@ static int fs_mount_scrub(int dev)
 	    fs_scrub_mark_root_entries(dev, &root) < 0)
 		return -1;
 
-	// Publish every orphan inode as a valid FREE object before releasing its
-	// blocks.  A reset during either pass is therefore safe to retry.
+	// 先将孤儿 inode 发布为合法 FREE 对象，再释放块；两阶段复位均可重试。
 	for (uint inum = 1; inum < sb.ninodes; inum++) {
 		if (fs_scrub_bit_test(fs_scrub_reachable_inodes, inum))
 			continue;
@@ -1110,7 +1083,7 @@ static int fs_mount_scrub(int dev)
 		if (!allocated && qstate == FS_OWNER_NONE)
 			continue;
 
-		/* Canonicalize every orphan or interrupted allocator state. */
+		/* 将孤儿及中断的分配状态统一规范化。 */
 		if (fs_storage_owner_valid(qstate))
 			owner = qstate;
 		else if (fs_qmap_transition_owner(
@@ -1245,12 +1218,8 @@ static int fs_storage_accounts_sync(uint public_blocks,
 		},
 	};
 
-	/*
-	 * Mount scans are authoritative.  Recovery and boot-lease reaping may
-	 * change persistent ownership without going through the live allocator,
-	 * so replace both counters as one bounded controller transaction instead
-	 * of asserting against a stale first-pass import.
-	 */
+	/* 恢复和旧租约清理可绕过在线分配器修改持久属主；以一次有界事务替换两类计数，
+	 * 避免校验陈旧的首次扫描导入值。 */
 	if (resource_reconcile_usage(
 		    fs_system_account, RESOURCE_CHARGE_RESERVED,
 		    system_usage, 2) < 0 ||
@@ -1425,12 +1394,7 @@ static int fs_storage_rebuild(int dev, int enforce_policy)
 	fs_storage.inode_domain_limit = FS_DOMAIN_INODE_LIMIT ?
 		FS_DOMAIN_INODE_LIMIT :
 		fs_div_round_up(public_inode_capacity, 4);
-	/*
-	 * A configured tenant ceiling is an upper bound, not a promise that can
-	 * exceed this filesystem's ordinary allocation pool.  Tiny images and
-	 * deliberately large "unlimited" test profiles must therefore converge
-	 * on the same effective limit used by the global controller.
-	 */
+	/* 租户上限不得超过普通分配池；小镜像与“无限”测试配置均收敛到全局控制器的有效上限。 */
 	if (fs_storage.block_domain_limit > public_block_capacity)
 		fs_storage.block_domain_limit = public_block_capacity;
 	if (fs_storage.inode_domain_limit > public_inode_capacity)
@@ -1650,9 +1614,7 @@ static int fs_storage_reserve_many(const struct fs_storage_charge *charge,
 		reserve += vfs_scope_storage_guarantee(scope_id, inode,
 						       guarantee);
 	} else {
-		// SYSTEM consumes a fungible reserve credit only after shared
-		// capacity is gone. Lower tiers then stop reserving that spent
-		// credit while every workflow guarantee remains intact.
+		// 共享容量耗尽后 SYSTEM 才消耗可互换保留额度；低优先级据此调整保留量。
 		reserve = vfs_scope_storage_guarantee(VFS_SCOPE_NONE, inode,
 						      guarantee);
 	}
@@ -1716,9 +1678,7 @@ static void fs_storage_release_many_accounted(
 
 	if (owner < FS_OWNER_SYSTEM || amount == 0)
 		panic("storage release invariant");
-	// Another I/O may have closed the filesystem while this free was in
-	// flight.  Persistent recovery will rebuild the counters; do not turn a
-	// fail-closed transition into a kernel panic.
+	// 释放途中文件系统可能已关闭；恢复会重建计数，不应让 fail-closed 状态触发 panic。
 	if (!fs_storage.ready)
 		return;
 	enabled = intr_save();
@@ -1741,10 +1701,7 @@ static void fs_storage_release_many_accounted(
 	} else if (FS_OWNER_IS_SCOPE(owner)) {
 		if (FS_OWNER_SCOPE_ID(owner) < VFS_SCOPE_FIRST_DYNAMIC)
 			panic("workflow storage release invariant");
-		/*
-		 * Previous-boot workflow objects are imported into the reserved
-		 * cleanup account. A live generation has its own exact principal.
-		 */
+		/* 上次启动遗留对象计入保留清理账户；当前 generation 使用精确主体。 */
 		if (fs_storage_owner_account(owner, &account) < 0)
 			account = fs_system_account;
 		charge_class = RESOURCE_CHARGE_RESERVED;
@@ -1829,8 +1786,7 @@ static void fs_claim_gate_unlock(void)
 	intr_restore(enabled);
 }
 
-// Claiming already allocated storage changes only its billing principal.  It
-// must not consume free-space or SYSTEM reserve credits a second time.
+// 认领已分配存储只变更计费主体，不得再次消耗空闲量或 SYSTEM 保留额。
 static int fs_storage_claim_public_existing(uint blocks, uint inodes)
 {
 	int enabled;
@@ -1874,10 +1830,8 @@ static struct bio_checkpoint_result fs_claim_checkpoint(int transfer)
 	return status;
 }
 
-// 返回仍待转换的 SYSTEM 块数。间接映射块也属于存储配额，并与其条目
-// 一起结算。条目排序后按 qmap 块分批处理，每轮只读写一次物理 metadata
-// 块；检查点均在 brelse() 之后执行，可睡眠的认领门在向前转移期间保留
-// 唯一配额预留。
+// 返回待转换的 SYSTEM 块数；间接块与条目一并计入配额，排序后按 qmap 块批处理。
+// 检查点位于 brelse() 之后，认领门在转移期间独占配额预留。
 static int fs_claim_inode_blocks(int dev, const uint addrs[NDIRECT + 1],
 				 int transfer, int *public_seen,
 				 uint *system_count)
@@ -1922,8 +1876,7 @@ static int fs_claim_inode_blocks(int dev, const uint addrs[NDIRECT + 1],
 	if (block_count > MAXFILE + 1)
 		return -1;
 
-	// Allocation is normally sequential, making insertion sort linear in the
-	// common case while keeping the fixed workspace and implementation small.
+	// 分配通常连续，插入排序在固定工作区中接近线性。
 	for (uint i = 1; i < block_count; i++) {
 		uint block = fs_claim_blocks[i];
 		uint j = i;
@@ -2011,8 +1964,7 @@ static int fs_dinode_is_mutable_public(const struct dinode *dip, uint inum)
 		       dip->fs_owner_version);
 }
 
-// A crash during a claim can leave PUBLIC qmap entries below a still-SYSTEM
-// inode.  qmap-first ordering makes that state unambiguous and forward-only.
+// 崩溃可能留下 SYSTEM inode 下的 PUBLIC qmap；qmap 优先使该状态单向且无歧义。
 static int fs_recover_public_claims(int dev)
 {
 	for (uint inum = 1; inum < sb.ninodes; inum++) {
@@ -2227,10 +2179,7 @@ static int fs_reap_scope_inode_forward(int dev, uint inum, int *changed)
 	}
 }
 
-// Dynamic workflow namespaces are boot leases. No persistent recovery token
-// exists yet, so a reboot revokes every old lease before a new workflow can
-// be admitted. The three passes are idempotent across power loss: names are
-// detached first, dinodes are then retired, and tagged orphan blocks last.
+// 动态工作流名字空间是启动租约；重启时依次摘名、退役 dinode、回收带标签孤儿块，三阶段掉电幂等。
 static int fs_reap_boot_workflow_objects(int dev)
 {
 	struct fs_storage_charge system_charge = {
@@ -2339,7 +2288,6 @@ static int fs_reap_boot_workflow_objects(int dev)
 	return 0;
 }
 
-// 初始化文件系统
 void fsinit()
 {
 	int dev = ROOTDEV;
@@ -2535,7 +2483,7 @@ static int fs_bitmap_write_forward(int dev, uint block, int allocated)
 
 // Blocks.
 
-// Allocate a zeroed disk block through the recoverable qmap state machine.
+// 通过可恢复 qmap 状态机分配并清零磁盘块。
 static uint balloc_one(uint dev, const struct fs_storage_charge *charge,
 		       int *error)
 {
@@ -2616,7 +2564,7 @@ static uint balloc_one(uint dev, const struct fs_storage_charge *charge,
 		goto out;
 	}
 
-	/* Zero is durable before any allocation metadata can become reachable. */
+	/* 新分配元数据可达前，清零必须已持久化。 */
 	result = bzero(dev, block);
 	if (result < 0)
 		goto out;
@@ -2629,7 +2577,7 @@ static uint balloc_one(uint dev, const struct fs_storage_charge *charge,
 		result = fs_io_fail(FS_FAILURE_OPERATION);
 		goto out;
 	}
-	/* Before intent publication a pre-submit BUSY is fully abortable. */
+	/* 意图发布前的提交前 BUSY 可完整回滚。 */
 	result = fs_allocator_fault_before(
 		FSALLOC_OP_ALLOC, FSALLOC_PHASE_INTENT, 0);
 	if (result < 0)
@@ -2922,9 +2870,7 @@ static uint balloc_epoch(int dev, const struct fs_storage_charge *charge,
 	return block;
 
 out:
-	/* Epoch buffers retain their final image by reference.  Restore both maps
-	 * before releasing them so an aborted allocation commits only a harmless
-	 * zeroed free block, never a half-owned resource. */
+	/* epoch 缓冲区按引用保留最终镜像；释放前恢复两张图，使中止仅提交无害的已清零空闲块。 */
 	if (bitmap_changed)
 		bitmap_bp->data[bit / 8] &= ~(1U << (bit % 8));
 	if (qmap_changed)
@@ -2954,7 +2900,7 @@ static uint balloc(uint dev, const struct fs_storage_charge *charge, int *error)
 #endif
 }
 
-// Free is idempotent and retains its owner in qmap until refund is safe.
+// 释放幂等；退款安全前，qmap 保留原属主。
 static int bfree(int dev, uint block)
 {
 	uint freeing;
@@ -3061,9 +3007,7 @@ out_bypass:
 	return result;
 }
 
-/* Undo an allocation that is still owned by the current, unpublished epoch.
- * The allocation receipt is the authority for using this path; ordinary frees
- * continue through the crash-recoverable destructive protocol above. */
+/* 仅按当前未发布 epoch 的分配收据撤销；普通释放仍走可恢复的破坏性协议。 */
 static int
 bfree_epoch_allocation(int dev, uint block, uint owner)
 {
@@ -3097,8 +3041,7 @@ bfree_epoch_allocation(int dev, uint block, uint owner)
 		bitmap_bp->data[bit / 8] &= ~(1U << (bit % 8));
 		if (fs_write_metadata_block(qmap_bp) < 0 ||
 		    fs_write_metadata_block(bitmap_bp) < 0) {
-			/* Epoch entries pin these buffers by reference.  Restoring the
-			 * bytes also restores the image a later commit will publish. */
+			/* epoch 条目按引用固定缓冲区；恢复字节也会恢复后续提交镜像。 */
 			qmap[block % QPB] = owner;
 			bitmap_bp->data[bit / 8] |= 1U << (bit % 8);
 			goto fail;
@@ -3734,7 +3677,7 @@ static int fs_block_candidate_drain(uint owner)
 	return 0;
 }
 
-// The inode table is capacity-sized, so key lookup must not scan every slot.
+// inode 表按容量配置，键查找不能遍历所有槽。
 #define FS_ICACHE_HASH_BUCKETS 256U
 #define FS_ICACHE_INDEX_NONE (-1)
 _Static_assert((FS_ICACHE_HASH_BUCKETS & (FS_ICACHE_HASH_BUCKETS - 1)) == 0,
@@ -4151,9 +4094,7 @@ out:
 	return 0;
 }
 
-// Copy a modified in-memory inode to disk.
-// Must be called after every change to an on-disk inode field
-// that lives on disk.
+// 将内存 inode 的修改写回磁盘；每次修改持久字段后均须调用。
 int iupdate(struct inode *ip)
 {
 	struct buf *bp;
@@ -4262,7 +4203,7 @@ int ivalid(struct inode *ip)
 	if (ip->valid == 0) {
 		if (inode_mapping_write_lock(ip, 0) < 0)
 			return -1;
-		/* Another loader may have published the image while we waited. */
+		/* 等待期间其他加载者可能已发布镜像。 */
 		if (ip->valid != 0) {
 			inode_mapping_write_unlock(ip);
 			return 0;
@@ -4313,9 +4254,8 @@ int ivalid(struct inode *ip)
 	return 0;
 }
 
-// Publish a removed inode as free before releasing its detached block token.
-// The token can be drained synchronously by iput() or incrementally by a
-// background reclaimer without keeping an inode or buffer pinned.
+// 释放分离块令牌前先将已删除 inode 发布为空闲；令牌可由 iput() 同步排空，
+// 或由后台回收器增量处理，无需固定 inode 或缓冲区。
 int inode_remove_detach(struct inode *ip, struct inode_reclaim *reclaim)
 {
 #ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
@@ -4354,8 +4294,7 @@ int inode_remove_detach(struct inode *ip, struct inode_reclaim *reclaim)
 		if (result < 0)
 			goto deferred_fail;
 	} else {
-		/* Stage an explicit inode image so the reclaim fence cannot refer
-		 * to an older, unrelated committed generation. */
+		/* 暂存明确的 inode 镜像，避免回收 fence 引用无关的旧提交 generation。 */
 		reclaim->mode = INODE_RECLAIM_NONE;
 		result = iupdate(ip);
 		if (result < 0)
@@ -4518,8 +4457,7 @@ publish_fail:
 #endif
 }
 
-// Drop a reference to an in-memory inode. Removed objects first publish a
-// detached, free inode and then reclaim the private block token.
+// 释放内存 inode 引用；删除对象先发布已分离的空闲 inode，再回收私有块令牌。
 int iput_drop_only(struct inode *ip)
 {
 	int enabled;
@@ -4690,12 +4628,8 @@ static uint bmap(struct inode *ip, uint bn, int alloc,
 				return bmap_error(error, result);
 			}
 			if (candidate != 0) {
-				/*
-				 * Allocation may cross a budget checkpoint. Reacquire the
-				 * indirect block and publish only after revalidating the
-				 * entry; a concurrent winner keeps its mapping and this
-				 * candidate is returned to the same quota domain.
-				 */
+				/* 分配可跨越预算检查点；重新获取间接块并复核条目后才发布。
+				 * 并发胜者保留映射，本候选退还原配额域。 */
 				result = fs_read_block(ip->dev, indirect, &bp);
 				if (result < 0) {
 					int cleanup = bfree_epoch_allocation(
@@ -4839,9 +4773,7 @@ static uint bmap_read_batch(struct inode *ip, uint bn, uint count,
 	return mapped;
 }
 
-// Roll back only the blocks named by the allocation receipt.  Existing inode
-// mappings are never inferred from mutable state and therefore cannot be freed
-// by an aborting write.
+// 仅回滚分配收据列出的块；不从可变状态推断既有 inode 映射，避免中止写误释放。
 static int
 bmap_abort_allocation(struct inode *ip, uint bn,
 		      struct bmap_allocation_receipt *receipt)
@@ -5025,11 +4957,8 @@ static int itruncate_detach_partial(struct inode *ip, uint size,
 		brelse(bp);
 	}
 
-	/*
-	 * Publish the shorter EOF before clearing retained indirect entries.
-	 * A reset can therefore leave harmless mappings beyond EOF, never a hole
-	 * inside the durable file size.
-	 */
+	/* 清理保留的间接条目前先发布较短 EOF；复位最多留下 EOF 外的无害映射，
+	 * 不会在持久文件大小内形成空洞。 */
 	ip->size = size;
 	result = iupdate(ip);
 	if (result < 0)
@@ -5066,7 +4995,7 @@ static int itruncate_detach_partial(struct inode *ip, uint size,
 	return 0;
 
 fail_published:
-	/* The durable shorter EOF remains valid even if tail cleanup failed. */
+	/* 即使尾部清理失败，已持久化的较短 EOF 仍有效。 */
 	(void)kfree_account_page((char *)reclaim->block_list,
 				 reclaim->page_account,
 				 reclaim->page_charge_class);
@@ -5083,8 +5012,7 @@ fail:
 	return fs_io_fail(FS_FAILURE_OPERATION);
 }
 
-// Atomically remove discarded mappings. The caller owns reclaim after success
-// and must release it even if process teardown is requested.
+// 原子移除废弃映射；成功后回收由调用方负责，即使进程请求清理也必须释放。
 int itruncate_detach(struct inode *ip, const struct vfs_cred *cred, uint size,
 			 struct inode_reclaim *reclaim)
 {
@@ -5146,9 +5074,8 @@ static void itruncate_reclaim_finish(struct inode_reclaim *reclaim)
 	memset(reclaim, 0, sizeof(*reclaim));
 }
 
-// Drain at most max_units detached block-map entries. No inode or buffer is
-// retained between calls, so a scheduler-owned cleanup job can yield on I/O
-// debt and resume without replaying a destructive operation.
+// 每次最多排空 max_units 个分离映射项，调用间不保留 inode 或缓冲区；
+// 调度器清理任务可因 I/O 债务 yield，恢复时无需重放破坏性操作。
 int itruncate_reclaim_step(struct inode_reclaim *reclaim, uint max_units)
 {
 	uint units = 0;
@@ -5395,9 +5322,8 @@ int readi_device(struct inode *ip, const struct vfs_cred *cred, int user_dst,
 	return result;
 }
 
-// 向 inode 写入数据；调用方必须持有映射写锁。
-// user_src 为 1 时 src 是用户地址，否则是内核地址。
-// 返回成功写入的字节数，短写表示本次事务需要停止或发生错误。
+// 写 inode 数据时须持有映射写锁；user_src 为 1 表示 src 是用户地址，否则为内核地址。
+// 返回实际写入字节数；短写表示事务停止或错误。
 #define FS_WRITE_EPOCH_CREDITS 9U
 #define FS_OVERWRITE_EPOCH_CREDITS 1U
 #define FS_EXTEND_EPOCH_CREDITS 2U
@@ -5407,10 +5333,7 @@ _Static_assert(FS_OVERWRITE_EPOCH_CREDITS <= FS_EXTEND_EPOCH_CREDITS &&
 	       FS_EXTEND_EPOCH_CREDITS < FS_WRITE_EPOCH_CREDITS,
 	       "overwrite credits must remain below allocation credits");
 
-/*
- * 先只读探测映射，再按真实脏块上界预留 epoch。已有块覆盖不应为
- * bitmap、qmap 和间接块支付新分配的九份额度。
- */
+/* 只读探测映射后按实际脏块预留 epoch；覆盖已有块不承担 bitmap、qmap 和间接块的新分配额度。 */
 struct writei_map_plan {
 	uint off;
 	uint bytes;
@@ -5737,11 +5660,8 @@ int writei_lease(struct inode *ip, const struct vfs_cred *cred,
 	return writei_with_auth(ip, cred, lease, user_src, src, off, n);
 }
 
-/*
- * 预先把 inode 扩展为完整映射的零填充区间，不依赖后续数据写入再分配
- * metadata。每次同时发布新映射块和对应大小，使中断后的准备过程可在
- * 下次启动续跑，而不会留下看似稀疏的 inode。
- */
+/* 提前将 inode 扩展为完整映射的零填充区间，不依赖数据写再分配元数据；
+ * 映射块与大小同步发布，使中断后可续跑且不会形成伪稀疏 inode。 */
 int
 fs_preallocate_inode(struct inode *ip, const struct vfs_cred *cred, uint size)
 {
@@ -5864,11 +5784,7 @@ _Static_assert(BSIZE % sizeof(struct dirent) == 0,
 _Static_assert(sizeof(struct dir_scan_batch) <= 256,
 	       "directory scan batch must stay stack bounded");
 
-/*
- * Copy only the interesting entries from one directory block.  Target inode
- * validation happens after the buffer is released, so a cache holder is never
- * carried across an operation that may issue another disk request.
- */
+/* 仅复制目录块中的目标项；释放缓冲区后再校验 inode，避免持缓存跨越新的磁盘请求。 */
 static int dir_scan_fill(struct inode *dp, const char *key, uint start,
 			 int *first_empty, struct dir_scan_batch *batch)
 {
@@ -6834,11 +6750,8 @@ fs_dentry_index_invalidate_directory(struct inode *dp)
 	fs_dentry_gate_unlock();
 }
 
-/*
- * Prebuilt images historically use a fixed DIRSIZ dirent as their lookup key.
- * Canonicalize every operation to that on-disk key. Target inode policy and
- * scope are still checked after the name match, so aliases cannot widen access.
- */
+/* 预制镜像以固定 DIRSIZ dirent 为查找键；操作统一使用该磁盘键，
+ * 名称匹配后仍校验目标 inode 策略与 scope，别名不能扩大访问。 */
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
 struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
@@ -7072,9 +6985,7 @@ int dirlink(struct inode *dp, char *name, uint inum,
 		}
 		goto write_entry;
 	}
-	// Validate namespace uniqueness, immutable SYSTEM-name reservation, and
-	// free-slot selection with one bounded block walker.  Inode validation is
-	// deliberately outside the buffer lifetime.
+	// 一次有界块遍历完成名字唯一性、固定 SYSTEM 名预留和空槽选择；inode 校验不跨越缓冲区生命周期。
 	while (off < dp->size) {
 		if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE) ||
 		    !vfs_inode_authorize(dp, &kernel_cred, VFS_OP_READ)) {
@@ -7313,9 +7224,8 @@ fs_scope_reclaim_cursor_get(uint scope_id)
 	return free_cursor;
 }
 
-// 名字空间摘除与 inode/块回收是两个可续扫阶段。第二阶段直接遍历稳定的
-// 磁盘 inode 编号，不保存 NINODE 快照；提交过的目录清空不会藏住孤儿，
-// 预算检查点之间也不持有 VFS 对象。
+// 名字空间摘除与 inode/块回收分两阶段续扫；第二阶段直接遍历稳定的磁盘 inode 编号，
+// 不保存 NINODE 快照，预算检查点间也不持有 VFS 对象。
 int fs_reclaim_scope_files(uint scope_id)
 {
 	struct fs_storage_charge system_charge = {
@@ -7343,11 +7253,8 @@ int fs_reclaim_scope_files(uint scope_id)
 			struct dirent de;
 			uint64 off = cursor->dir_offset;
 
-			/* Empty preallocated directory slots are cheap to inspect and
-			 * must not consume the destructive-work budget. Keep independent
-			 * scan, inode lookup, and mutation bounds so sparse namespaces
-			 * reclaim promptly without turning one checkpoint into an
-			 * unbounded syscall. */
+			/* 空预分配目录槽检查成本低，不计入破坏性工作预算；扫描、inode 查找和修改各自限界，
+			 * 使稀疏名字空间及时回收且单次检查点仍有界。 */
 			if (scans >= FS_SCOPE_RECLAIM_SCAN_STEP)
 				return FS_RECLAIM_PENDING;
 
@@ -7519,7 +7426,6 @@ int fs_reclaim_scope_files(uint scope_id)
 	}
 }
 
-// 返回根目录 inode。
 struct inode *root_dir_status(int *status)
 {
 	struct inode *r = iget(ROOTDEV, ROOTINO);
@@ -7689,7 +7595,6 @@ fail_allocated:
 	return 0;
 }
 
-// Find the corresponding inode in one security namespace.
 struct inode *namei_scope_status(char *path, uint policy, uint scope_id,
 				 int *status)
 {

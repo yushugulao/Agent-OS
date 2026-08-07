@@ -14,13 +14,8 @@
 //This is a system-level open file table that holds open files of all process.
 struct file filepool[FILEPOOLSIZE];
 
-/*
- * A traditional read/write syscall carries one immutable subject credential
- * across a bounded series of filesystem batches.  The filesystem still
- * revalidates the credential at each batch boundary, so workflow revocation
- * cannot be hidden by a long syscall, while per-block credential construction
- * and admission overhead disappear from file.c.
- */
+/* 一次 read/write 在有界文件系统批次间携带固定主体凭据；每批仍复核凭据，
+ * 既能及时发现工作流撤销，又免去逐块构造与准入开销。 */
 struct inode_io_transaction {
 	struct file *file;
 	struct inode *inode;
@@ -70,7 +65,7 @@ static uint filepool_index_locked(struct file *f)
 	return (uint)(offset / sizeof(struct file));
 }
 
-/* Serialize the shared open-file description offset without a global VFS gate. */
+/* 仅串行化共享打开文件的偏移，不使用全局 VFS 门。 */
 static int file_offset_lock(struct file *f)
 {
 	uint index;
@@ -131,8 +126,7 @@ static void file_offset_unlock(struct file *f)
 	    f->ref < 1 || !filepool_allocator.offset_busy[index])
 		panic("file offset unlock");
 	filepool_allocator.offset_busy[index] = 0;
-	/* One queue serves compact per-slot predicates; the uncontended fast path
-	 * performs no scheduler scan. */
+	/* 单队列承载紧凑的逐槽条件；无竞争快路不扫描调度器。 */
 	if (filepool_allocator.offset_waiters[index] != 0)
 		wait_queue_wake_all(&filepool_allocator.offset_wait_queue);
 	intr_restore(enabled);
@@ -285,11 +279,8 @@ static int fileclose_cleanup_token_prepare(
 	return bio_cleanup_token_prepare(owner, token);
 }
 
-/*
- * Drop one file reference and atomically detach a final file-table slot.
- * Inode references remain in the receipt until unified settlement.  Only a
- * known destructive close retains cleanup ownership before publication.
- */
+/* 释放文件引用并原子摘除最后一个文件表槽；inode 引用保留在收据中统一结算，
+ * 仅已确认的破坏性关闭会在发布前保留清理所有权。 */
 int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 {
 	uint index;
@@ -312,9 +303,7 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 		intr_restore(enabled);
 		return 0;
 	}
-	/* Like fput(), the common reference drop stays separate from the
-	 * last-reference destructor.  Cold receipt state is initialized only for
-	 * the owner that actually inherits destruction. */
+	/* 普通减引用与末引用析构分离；仅继承析构的所有者初始化冷收据状态。 */
 	receipt->type = FD_NONE;
 	receipt->writable = 0;
 	receipt->pipe = 0;
@@ -334,7 +323,7 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 	}
 	f->ref = 0;
 
-	// Publish the free slot before cleanup, which may cross safe points.
+	// 清理可能跨越安全点，因此先发布空闲槽。
 	receipt->type = f->type;
 	receipt->writable = f->writable;
 	receipt->pipe = f->pipe;
@@ -380,7 +369,7 @@ static void fileclose_finish_direct(struct file_close_receipt *receipt)
 	    receipt->state != FILE_CLOSE_RECEIPT_PREPARED ||
 	    receipt->type == FD_INODE)
 		panic("fileclose direct receipt");
-	/* Publish exactly-once consumption before a pipe destructor can yield. */
+	/* pipe 析构可能 yield，须先发布一次性消费。 */
 	receipt->state = FILE_CLOSE_RECEIPT_FINALIZING;
 
 	switch (receipt->type) {
@@ -432,8 +421,7 @@ int fileclose_finish_epoch(struct file_close_receipt *receipt)
 	if (fileclose_cleanup_token_prepare(
 		    receipt->cleanup_owner, &receipt->cleanup_token) < 0)
 		return -1;
-	/* Compatible asynchronous cleanup work shares an epoch. Foreground or
-	 * foreign work is committed before this token becomes authoritative. */
+	/* 兼容的异步清理共享 epoch；前台或外来工作须在令牌生效前提交。 */
 	if (bio_cleanup_token_sponsor(
 		    &receipt->cleanup_token, &sponsor_owner, &sponsor_class) < 0 ||
 	    fs_epoch_prepare_cleanup_sponsor(
@@ -591,7 +579,7 @@ void fileclose_finish(struct file_close_receipt *receipt)
 		panic("fileclose receipt incomplete");
 }
 
-// Drop and, if necessary, synchronously destroy one file reference.
+// 释放一个文件引用，必要时同步析构。
 void fileclose(struct file *f)
 {
 	struct file_close_receipt receipt = FILE_CLOSE_RECEIPT_INIT;
@@ -666,7 +654,6 @@ fail:
 	return -1;
 }
 
-// Add one unique object to the system-wide open-file table.
 struct file *filealloc(struct proc *owner)
 {
 	struct file *file = 0;
@@ -681,7 +668,7 @@ static int filetruncate(struct inode *ip, const struct vfs_cred *cred)
 	if (!agent_edit_truncate_allowed(ip) ||
 	    itruncate_detach(ip, cred, 0, &reclaim) < 0)
 		return -1;
-	// Commit both version domains before reclaim or persistence may yield.
+	// 回收或持久化可能 yield，须先提交两个版本域。
 	agent_edit_note_truncate(ip);
 	agent_fs_note_truncate(ip);
 	return itruncate_reclaim(&reclaim);

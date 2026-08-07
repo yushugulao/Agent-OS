@@ -42,8 +42,7 @@ static void wait_success(int pid, const char *message)
 	check(status == 0, "direct child exit status");
 }
 
-// The pipe reaches EOF only after the leaf has closed its last write reference
-// in exit. The intermediate parent then exits without waiting for that zombie.
+// 叶进程在 exit 中关闭最后一个写端后，管道才到 EOF；中间父进程不等待僵尸子进程便退出。
 static void child_first_round(void)
 {
 	int helper = fork();
@@ -72,8 +71,7 @@ static void child_first_round(void)
 	wait_success(helper, "child-first parent created");
 }
 
-// A live child becomes kernel-owned when its parent exits. It reports after
-// getppid() exposes that ownership, then exits without a user-space reaper.
+// 父进程退出后，存活子进程由内核接管；它在 getppid() 显示该归属后报告并退出。
 static void parent_first_round(void)
 {
 	int report_pipe[2];
@@ -113,9 +111,7 @@ static void parent_first_round(void)
 	check(close(report_pipe[0]) == 0, "close parent-first report pipe");
 }
 
-// The leaf wakes its parent immediately before exit. The kernel teardown
-// checkpoint lets that parent transfer ownership after exit has begun, while
-// descriptor order lets the root observe resource release before continuing.
+// 叶进程退出前唤醒父进程；清理检查点允许随后转移归属，描述符顺序保证根进程先观察资源释放。
 static void orphan_resource_round(void)
 {
 	int done_pipe[2];
@@ -176,9 +172,7 @@ static void blocked_reader(void *arg)
 	exit(read(pipe_fds[0], &byte, 1) == -1 ? 0 : 40);
 }
 
-// Every reader owns a temporary file reference while blocked in read(). The
-// main thread exits without joining them, so the kernel must cancel and unwind
-// those syscalls before releasing process-wide descriptors and memory.
+// 每个阻塞 read() 都持有临时文件引用；主线程不 join，内核须先取消并展开系统调用再释放共享资源。
 static void blocked_syscall_round(void)
 {
 	int helper = fork();
@@ -286,8 +280,7 @@ static void direct_wait_probe(void)
 	wait_success(child, "final probe created");
 }
 
-// Exit credentials must survive proc-slot reuse and support out-of-order
-// waitpid without keeping the dead processes resident in the global table.
+// 退出凭据须跨 proc 槽复用保存，并支持乱序 waitpid，无需让死进程常驻进程表。
 static void delayed_wait_probe(void)
 {
 	int children[DELAYED_WAIT_CHILDREN];
@@ -299,8 +292,7 @@ static void delayed_wait_probe(void)
 		check(children[i] >= 0, "fork delayed-wait child");
 		if (children[i] == 0)
 			exit(70 + i);
-		// The child was queued before this yield, so its proc slot can be
-		// recycled before the next child is allocated.
+		// 子进程已在 yield 前入队，下一次分配前可复用其 proc 槽。
 		sched_yield();
 	}
 	child = wait(&status);
@@ -326,8 +318,7 @@ static void delayed_wait_probe(void)
 	check(wait(&status) == -1, "all delayed statuses consumed");
 }
 
-// A child-status quota may stop the offending parent, but its retained wait
-// results must never consume executable slots needed by an unrelated process.
+// 子状态配额可停止违规父进程，但已保留结果不得占用无关进程所需的可执行槽。
 static void unreaped_parent_pressure(void)
 {
 	int ready_pipe[2];
@@ -389,9 +380,7 @@ static void unreaped_parent_pressure(void)
 	      "reap pressure parent");
 }
 
-// The holder and every descendant stay in one immutable resource domain.
-// Keeping all leaves alive proves that another generation cannot escape the
-// domain quota, while the bootstrap process can still start an isolated job.
+// 所有后代固定在同一资源域；保持叶进程存活可验证配额无法跨代逃逸，启动进程仍能创建隔离任务。
 static void live_domain_pressure(void)
 {
 	int ready_pipe[2];

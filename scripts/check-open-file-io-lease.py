@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the trusted open-file authorization context and its cache."""
+"""检查打开文件的可信授权上下文及其缓存。"""
 
 from __future__ import annotations
 
@@ -37,13 +37,13 @@ def require(condition: bool, message: str) -> None:
 
 
 def check(root: Path) -> None:
-    header = compact((root / "os/open_file_io_lease.h").read_text())
-    source_text = (root / "os/open_file_io_lease.c").read_text()
+    header = compact((root / "os/open_file_io_lease.h").read_text(encoding="utf-8"))
+    source_text = (root / "os/open_file_io_lease.c").read_text(encoding="utf-8")
     source = compact(source_text)
-    file_text = (root / "os/file.c").read_text()
+    file_text = (root / "os/file.c").read_text(encoding="utf-8")
     file_source = compact(file_text)
-    fs_source = compact((root / "os/fs.c").read_text())
-    edit_text = (root / "os/agent_file_state.c").read_text()
+    fs_source = compact((root / "os/fs.c").read_text(encoding="utf-8"))
+    edit_text = (root / "os/agent_file_state.c").read_text(encoding="utf-8")
     edit_source = compact(edit_text)
 
     for field in (

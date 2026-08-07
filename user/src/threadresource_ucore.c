@@ -122,10 +122,7 @@ static void exit_reuse_holder(void)
 		for (int i = 0; i < TEST_DOMAIN_LIMIT - 2; i++)
 			if (thread_create(exit_worker, 0) < 0)
 				exit(31);
-		/*
-		 * Process teardown must interrupt and refund all sibling slots; the
-		 * holder deliberately never joins these threads.
-		 */
+		/* holder 故意不 join；进程清理必须中断并退还全部兄弟线程槽。 */
 		exit(0);
 	}
 	wait_success(worker, "wait exit-reuse worker");
@@ -252,12 +249,8 @@ static void reserved_global_child(void)
 			exit(71);
 	}
 	wait_reserved_workers(RESERVED_GLOBAL_CHILD_WORKERS);
-	/*
-	 * The child domain owns only three of its four allowed slots here.
-	 * Ordinary pressure consumes 12 slots and the root reserved domain owns
-	 * three more, so this denial can only come from the reserved global
-	 * waterline; the physical pool deliberately retains one spare slot.
-	 */
+	/* 子域仅占 4 个额度中的 3 个；普通压力占 12 槽，根保留域再占 3 槽。
+	 * 此处拒绝只能来自全局保留水位，物理池仍特意留有一槽。 */
 	if (thread_create(reserved_probe, 0) != -1)
 		exit(72);
 	reserved_stop = 1;
@@ -276,11 +269,8 @@ static void global_limit_probe(int ready_fd, int release_fd)
 {
 	char token = 0;
 
-	/*
-	 * This third ordinary domain owns only its precharged main thread. The
-	 * other holders consume 11 slots, so thread_create() reaches the global
-	 * ordinary waterline while remaining well below this domain's ceiling.
-	 */
+	/* 第三个普通域仅占预计费主线程，其他 holder 占 11 槽；thread_create() 触及全局普通水位，
+	 * 但仍显著低于本域上限。 */
 	if (thread_create(quota_worker, 0) != -1)
 		exit(75);
 	if (write(ready_fd, "G", 1) != 1)
@@ -315,12 +305,8 @@ static void global_waterline_phase(void)
 			global_holder(ready[1], release[0], 'A' + i,
 				      TEST_DOMAIN_LIMIT - 1 - i);
 	}
-	/*
-	 * Establish the ordinary waterline before admitting the probe domain.
-	 * Domain-fair scheduling may otherwise run the probe between the two
-	 * holders: its speculative worker can steal the last slot from a holder,
-	 * or be admitted before the waterline exists.
-	 */
+	/* 接纳探测域前先建立普通水位；否则域公平调度可能让探测 worker 抢走 holder 的末槽，
+	 * 或在水位形成前错误获准。 */
 	read_exact(ready[0], markers, sizeof(markers));
 	check((markers[0] == 'A' || markers[0] == 'B') &&
 		      (markers[1] == 'A' || markers[1] == 'B') &&
