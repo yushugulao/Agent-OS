@@ -507,12 +507,14 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 
 ### 8.9 性能
 
-性能优化集中在四个方面：
+性能优化集中在六个方面：
 
 1. `agent_run()` 将最多 64 个工具操作合并为一次 syscall。
 2. 工具 ID 查找避免热路径字符串扫描。
 3. 用户态以 seqlock acquire/retry 直接读取单拷贝 Context；active path 用 O(n) 位图扫描，不再逐索引反向重走。
 4. `context_snapshot()` 一次返回多条有序历史，避免逐条 query。
+5. 每个 live thread 复用已有 supervisor-only trapframe 页保存切换上下文、内核工作状态和 syscall 事务 scratch；静态线程池只保留调度热字段，普通 syscall 不再把大事务回执压入内核栈。
+6. 打开文件项采用紧凑标签与 `pipe/inode` union；调度域采用普通/Agent 双 lane，普通热路径不再为 Agent 评分排空并重排整域队列。
 
 Metadata catalog 的 512 个物理槽采用固定分区：SYSTEM 独占 64 个，普通区 448 个由最多 4 个 workflow 各自独占 112 个。ACTIVE、CLOSING 和 RETIRING 共同计入这 4 个准入槽；RETIRING 在目录回收完成前继续占住原分区，新 workflow 不得复用它的份额。每个 workflow 的 live AUTOSCAN 新增记录最多 96 条，余下 16 条为显式 metadata 保留；这个物化视图边界与 STORAGE inode 账户相互独立。catalog 饱和时普通 VFS 文件只要通过 STORAGE admission 仍可发布，并继续由 inode scope 强制隔离；未物化对象在 inode sidecar 中持久标记 deferred，避免后续写入重复触发全目录扫描。所有 `agent_meta_slot/flags/version` 更新统一通过 `agent_file_state_set_index()` 校验、持久化并在失败时恢复旧值；write/sync/truncate/delete 统一通过 `agent_fs_apply_inode_event()` 发布，create 只在 VFS 创建成功后进入目录协调。扫描已记录 scope 饱和且 catalog slot 实际清除时触发 scoped urgent full restart；metadata gate busy 的 delete 未释放容量，只登记普通协调扫描，lifecycle 等其他变化也遵守普通 cooldown。该设计不计算跨 scope 的全局 union/max，不新增 catalog resource kind、backing lease 或 metadata envelope 账本。权威 alloc/edit 先重验 SYSTEM 64、scope 112、ordinary 448 与唯一键，再只对 old/new class 的 AUTOSCAN 净增长执行 96 条软边界；已有 AUTOSCAN 的 count-neutral edit 和降额转换不会被拒绝。精确 receipt restore 使用独立硬准入，避免后来收紧的软策略破坏失败事务回滚。edit 不能改换 scope，删除必须走统一 clear 路径。显式容量耗尽返回 `NO_SPACE`，lifecycle 改变返回可重试状态，键冲突和持久化不确定分别保留 `CONFLICT` 与 `INDETERMINATE`，不能塌缩成通用 I/O 错误。action status batch 也独立限制为 112 条，选择溢出会在 mutation 前返回 `NO_SPACE`。
 

@@ -227,7 +227,7 @@ buffer cache 固定为 256 个 1 KiB buffer。SYSTEM 的 floor/cap 为 40/96，P
 
 Context ABI v9 在 header 中公开不可变 workflow lifecycle key、当前 `branch_generation`、`visible_head_sequence`、`active_path_count`、`active_path_oldest_sequence` 和 `eviction_policy`。每条 record 保存自己的 `branch_generation` 以及独立的 `path_parent_sequence`；后者描述本地分支父子关系，不复用可能来自跨 Agent IPC 的 provenance `cause_sequence`。初始化和 `context_clear()` 都从 lifecycle ledger 取得新的 branch generation；`context_rollback()` 同样创建新 branch，而不是重写旧 record 或复用旧 sequence。
 
-内核和用户态共享同一组 Context 物理页。header、latest result 和 128 条 record 位于前 6 页，用户页表不授予写权限；内核直接更新这些页，不再维护 shadow、镜像副本或同步复制。第 7 页完整留给用户 cache，不参与可信历史。完整 detail 及 source/span attribution 位于 9 页 Context sidecar；IPC、事件来源归因、调度轨迹和观测状态共用一个 4 KiB 冷页。PCB 只保存页指针，当前 `struct proc` 基线为 `10008` B，最终值由 `ci/kernel-budgets.json` 约束。
+内核和用户态共享同一组 Context 物理页。header、latest result 和 128 条 record 位于前 6 页，用户页表不授予写权限；内核直接更新这些页，不再维护 shadow、镜像副本或同步复制。第 7 页完整留给用户 cache，不参与可信历史。完整 detail 及 source/span attribution 位于 9 页 Context sidecar；IPC、事件来源归因、调度轨迹和观测状态共用一个 4 KiB 冷页。PCB 只保存页指针；线程切换上下文和 syscall/BIO 冷态复用已有 supervisor-only trapframe 页，精确 PCB 与线程池体积由 `ci/kernel-budgets.json` 约束。
 
 运行时把 9 Context sidecar + 1 cold sidecar + 7 mapped pages 作为一次 17 页 `RESOURCE_AGENT_STATE_PAGE` 请求计入 EXEC account，共 `69632` B（68 KiB）。原子预留后才逐页分配，任一失败都统一释放和退款，普通进程不承担这些页。当前每进程/全局池/ordinary 池/reserved 池/ordinary 域/reserved 域基线为 `69632/8912896/6684672/2228224/4456448/557056` B，上限为 `73114/9358541/7018906/2339636/4679271/584909` B；实际门禁以 `ci/kernel-budgets.json` 为准。
 
@@ -732,7 +732,7 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合�
 
 `agent_wait()` 选择事件不等于立即出队。内核在关中断窗口内为精确 FIFO 队首或 cancel token 建立单消费者 reservation，以 event id 作为 cookie；随后进入 Context commit lane，完成用户 copyout、可信 source/span 归因和 Context/audit 记录。finish 阶段重新核对 slot/head/cookie：只有全部成功才 commit 消费、退还事件类别配额并唤醒下一 waiter；lane 或 copyout 失败会 abort reservation、保留事件或 cancel，并定向唤醒等待者。静态、mutation 和 `WAIT_ATOMIC_TEST_PROFILE` 共同约束 reserve/cookie/commit/abort、逐线程 deadline/generation、谓词重检与 teardown 展开。
 
-所有 runnable 线程先进入所属资源域的私有队列；外层 active-domain FIFO 中每个非空域至多有一个节点。每次调度只从队首域取一个线程，域仍非空时把它放回外层队尾，因此线程数量不能换取更多跨域 dispatch。纯普通域在本域按 FIFO 选择；本域存在 Agent 时才读取 Agent 状态并允许 orchestrator 配置 weight、priority 和 budget。角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量只影响该域内分数。
+所有 runnable 线程先进入所属资源域；外层 active-domain FIFO 中每个非空域至多有一个节点。域内分为普通 FIFO lane 与 Agent lane：无 Agent 的普通热路径直接取队首，混合域只扫描 Agent lane 评分，不再排空、重排普通线程。每次调度后非空域回到外层队尾，因此线程数量不能换取更多跨域 dispatch。角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量只影响本域 Agent 分数。
 
 每个域独立维护不可配置的 Agent/score burst。当选中域内同时有 Agent 和普通线程时，连续调度 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 次后必须选择本域普通 FIFO 候选；连续按分值绕过队首达到同一上限后必须选择本域 FIFO 队首。域内任一线程运行后，外层仍轮转到下一个 active 域。`agentsched_ucore` 验证既有角色权重、受权配置、事件优先、原因记录和域内普通进展；`threadresource_ucore` 验证多线程 PUBLIC 域不能阻断另一资源域完成 512 次让出。
 

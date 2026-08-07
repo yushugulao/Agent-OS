@@ -1777,7 +1777,7 @@ def reorder_apply_before_recovery(sources: dict[str, str]) -> None:
         "\t\tapply_plan, store->header.count, reload_one_scope,\n"
         "\t\treload_scope, candidate_epoch, apply);\n"
     )
-    marker = "\t/* Identifier recovery publishes monotonic floors only on first load. */\n"
+    marker = "\t/* 标识符恢复只在首次加载时发布单调水位。 */\n"
     require(source.count(call) == 1 and source.count(marker) == 1,
             "reorder mutation anchor is not unique")
     source = source.replace(call, "", 1)

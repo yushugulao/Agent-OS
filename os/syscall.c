@@ -825,6 +825,10 @@ struct syscall_transaction_context {
 	uint policy;
 };
 
+_Static_assert(sizeof(struct syscall_transaction_context) <=
+	       sizeof(((struct thread_trap_cold *)0)->syscall_transaction),
+	       "syscall transaction must fit in thread trap cold state");
+
 static struct file *syscall_fd_pin(uint64 fd)
 {
 	if (fd >= FD_BUFFER_SIZE)
@@ -1394,17 +1398,19 @@ static __attribute__((noinline)) int syscall_dispatch(
 	return ret;
 }
 
-/* 事务对象只存在于慢路径栈帧，传统无事务调用不再支付初始化和栈成本。 */
+/* 事务对象复用当前线程的陷阱页，传统无事务调用不支付初始化和栈成本。 */
 static __attribute__((noinline)) int syscall_slow_path(
 	struct trapframe *trapframe, int id, uint policy)
 {
-	struct syscall_transaction_context transaction;
+	struct syscall_transaction_context *transaction =
+		(struct syscall_transaction_context *)
+			thread_trap_cold(curr_thread())->syscall_transaction;
 	int ret = -1;
 
-	syscall_transaction_prepare(&transaction, trapframe, id, policy);
-	if (syscall_transaction_begin(&transaction, trapframe) == 0)
-		ret = syscall_dispatch(id, trapframe, &transaction);
-	syscall_transaction_finish(&transaction, &ret);
+	syscall_transaction_prepare(transaction, trapframe, id, policy);
+	if (syscall_transaction_begin(transaction, trapframe) == 0)
+		ret = syscall_dispatch(id, trapframe, transaction);
+	syscall_transaction_finish(transaction, &ret);
 	return ret;
 }
 

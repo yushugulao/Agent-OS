@@ -3,6 +3,7 @@
 
 #include "const.h"
 #include "riscv.h"
+#include "trap.h"
 #include "types.h"
 #include "sync.h"
 #include "agent.h"
@@ -84,6 +85,40 @@ struct context {
 	uint64 s11;
 };
 
+/* 仅在陷阱、系统调用和上下文切换路径访问，放在线程陷阱帧后的冷区。 */
+struct thread_trap_cold {
+	uint kernel_work_depth;
+	uint kernel_work_resumed;
+	uint kernel_resched_pending;
+	uint kernel_work_units;
+	uint64 kernel_work_redispatches;
+	uint64 kernel_syscall_preemptions_start;
+	uint64 kernel_last_syscall_preemptions;
+	uint64 kernel_work_generation;
+	int kernel_work_target_syscall_id;
+	uint kernel_work_measure_preemptions;
+	uint io_request_flags;
+	uint64 io_request_id;
+	uint io_request_depth;
+	uint io_request_owner;
+	uint io_request_class;
+	uint io_request_reservation;
+	uint io_request_device_reservation;
+	uint io_request_transfers;
+	uint bio_buffer_holds;
+	uint bio_fs_atomic_depth;
+	struct context context;
+	/* 系统调用慢路径独占使用，避免把大事务回执压在内核栈上。 */
+	uint64 syscall_transaction[16];
+};
+
+_Static_assert(sizeof(struct thread_trap_cold) == 344,
+	       "thread trap cold state layout changed");
+#define THREAD_TRAP_COLD_OFFSET \
+	((sizeof(struct trapframe) + 15) & ~(uint64)15)
+_Static_assert(THREAD_TRAP_COLD_OFFSET + sizeof(struct thread_trap_cold) <=
+	       PAGE_SIZE, "thread trap cold state must fit after trapframe");
+
 enum threadstate {
 	T_UNUSED,
 	T_USED,
@@ -109,7 +144,6 @@ struct thread {
 	uint64 ustack; // 用户栈虚拟地址
 	uint64 kstack; // 内核栈虚拟地址
 	struct trapframe *trapframe; // trampoline.S 使用的数据页
-	struct context context; // swtch() 从这里恢复执行
 	uint64 exit_code;
 	struct wait_queue *wait_channel;
 	struct thread *wait_next;
@@ -125,27 +159,6 @@ struct thread {
 	int resource_domain_id;
 	int resource_slot_reserved;
 	int resource_slot_charged;
-	uint kernel_work_depth;
-	uint kernel_work_resumed;
-	uint kernel_resched_pending;
-	uint kernel_work_units;
-	uint64 kernel_work_redispatches;
-	uint64 kernel_syscall_preemptions_start;
-	uint64 kernel_last_syscall_preemptions;
-	uint64 kernel_work_generation;
-	int kernel_work_target_syscall_id;
-	uint kernel_work_measure_preemptions;
-	/* BIO 请求状态复用 64 位身份字段前的对齐空隙。 */
-	uint io_request_flags;
-	uint64 io_request_id;
-	uint io_request_depth;
-	uint io_request_owner;
-	uint io_request_class;
-	uint io_request_reservation;
-	uint io_request_device_reservation;
-	uint io_request_transfers;
-	uint bio_buffer_holds;
-	uint bio_fs_atomic_depth;
 	/* 事件等待的所有权跟随可复用线程的当前代数。 */
 	uint64 agent_wait_deadline;
 	uchar agent_wait_deadline_valid;
@@ -159,6 +172,19 @@ struct thread {
 	// 委派票据属于调用线程下一次创建的主体。
 	uchar fd_delegate_ticket[FD_BUFFER_SIZE];
 };
+
+static inline struct thread_trap_cold *thread_trap_cold(struct thread *t)
+{
+	return (struct thread_trap_cold *)((uchar *)t->trapframe +
+					  THREAD_TRAP_COLD_OFFSET);
+}
+
+static inline const struct thread_trap_cold *
+thread_trap_cold_const(const struct thread *t)
+{
+	return (const struct thread_trap_cold *)((const uchar *)t->trapframe +
+						THREAD_TRAP_COLD_OFFSET);
+}
 
 enum procstate { P_UNUSED, P_USED };
 

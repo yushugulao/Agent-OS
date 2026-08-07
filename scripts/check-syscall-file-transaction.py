@@ -148,13 +148,20 @@ def check(root: Path) -> None:
         require(dispatch, fragment, message)
 
     slow = function(source, "syscall_slow_path")
+    require(
+        slow,
+        "structsyscall_transaction_context*transaction="
+        "(structsyscall_transaction_context*)"
+        "thread_trap_cold(curr_thread())->syscall_transaction",
+        "slow path does not use the current thread's trap-page scratch",
+    )
     require_order(
         slow,
         (
-            "syscall_transaction_prepare(&transaction,trapframe,id,policy)",
-            "syscall_transaction_begin(&transaction,trapframe)",
-            "syscall_dispatch(id,trapframe,&transaction)",
-            "syscall_transaction_finish(&transaction,&ret)",
+            "syscall_transaction_prepare(transaction,trapframe,id,policy)",
+            "syscall_transaction_begin(transaction,trapframe)",
+            "syscall_dispatch(id,trapframe,transaction)",
+            "syscall_transaction_finish(transaction,&ret)",
         ),
         "slow path can bypass transaction setup or settlement",
     )

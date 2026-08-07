@@ -63,22 +63,36 @@ enum fd_inherit_class {
 	FD_INHERIT_DELEGATE,
 };
 
+enum file_type {
+	FD_NONE = 0,
+	FD_PIPE,
+	FD_INODE,
+	FD_STDIO,
+};
+
 // file.h
 // 文件的内存表示，记录当前使用状态和对应索引节点位置。
 struct file {
-	enum { FD_NONE = 0, FD_PIPE, FD_INODE, FD_STDIO } type;
-	enum fd_inherit_class inherit_class;
-	int ref; // reference count
-	char readable;
-	char writable;
-	struct pipe *pipe; // FD_PIPE
-	struct inode *ip; // FD_INODE
-	uint off;
+	union {
+		struct pipe *pipe; // FD_PIPE
+		struct inode *ip; // FD_INODE
+	};
 	// 该计费随唯一对象保持，直到最后一个引用关闭。
 	struct resource_account_handle resource_account;
-	int resource_reserved;
+	uint off;
 	uint cleanup_owner;
+	uint16 ref; // reference count
+	uchar type;
+	uchar inherit_class;
+	uchar readable;
+	uchar writable;
+	uchar resource_reserved;
 };
+
+_Static_assert(FD_STDIO <= 0xff && FD_INHERIT_DELEGATE <= 0xff,
+	       "file tags must fit compact fields");
+_Static_assert(sizeof(struct file) == 40,
+	       "open-file entries must remain cache compact");
 
 /*
  * 最后一个引用在关中断区内撤销发布，但析构过程可以休眠。预备收据持有

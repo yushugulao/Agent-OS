@@ -278,7 +278,7 @@ metadata set 允许自动创建真实 workflow 文件时，创建来源不是一
 
 scanner 的绑定回退使用 catalog 的单一 resolver，而不是另一套全表 name scan。selector 同时携带从 `DIRSIZ + 1` 有界缓冲区取得的 physical/logical path 和完整 `dev + inum + incarnation`；不同 key 落到不同槽、或 identity 只命中另一条路径时，scanner 不作猜测并安排重试。路径仍命中但 incarnation 已变化表示同名新对象：旧记录先被撤销，新对象取得新 FID。VFS 的 lookup、create、link、unlink 和创建回滚共用唯一 `fs_dirent_canonicalize()`：非空输入只取磁盘可表示的前 `DIRSIZ` 字节并补 NUL。因此历史长名和同一 14 字节前缀继续是同一 legacy dirent alias，但命中后仍必须通过目标 inode 的 policy、scope 和逐操作授权，alias 不扩大权限。create hook 只把这个真实 canonical key 交给 metadata resolver，不再将 raw 长名写入物理/逻辑索引而使 reload 或 rollback fail closed。
 
-全局文件对象表进一步由 EXEC resource account 和 ordinary/reserved 水位约束。普通 PCB 只保留一个 IPC/观测冷状态指针；Context detail/attribution 使用 9 页 sidecar，冷状态使用 1 页，另有 6 页用户只读可信视图和 1 页用户 cache。17 页作为一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子预留、提交和退款，共 `69632` B（68 KiB）；冷状态与其余 Agent 状态一样只在 Agent admission 时分配，普通进程不承担。当前 `struct proc` 基线为 `10008` B，最终值由内核预算约束。
+全局文件对象表进一步由 EXEC resource account 和 ordinary/reserved 水位约束。打开文件项使用紧凑标签和对象 union；普通 PCB 只保留一个 IPC/观测冷状态指针。Context detail/attribution 使用 9 页 sidecar，冷状态使用 1 页，另有 6 页用户只读可信视图和 1 页用户 cache。17 页作为一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子预留、提交和退款，共 `69632` B（68 KiB）；冷状态与其余 Agent 状态一样只在 Agent admission 时分配，普通进程不承担。线程切换上下文与 syscall/BIO 冷态复用已有 supervisor-only trapframe 页，最终 PCB、线程池和文件池体积由内核预算约束。
 
 当前六项总状态基线为每进程/全局池/ordinary 池/reserved 池/ordinary 域/reserved 域 `69632/8912896/6684672/2228224/4456448/557056` B；对应 CI 上限为 `73114/9358541/7018906/2339636/4679271/584909` B。9 页 Context sidecar 仍以独立指标观察，但不代表第二份运行时 reserve。逻辑 admission 也不是总内存 OOM 下的硬页保留，数值以 `ci/kernel-budgets.json` 为唯一门禁来源。
 

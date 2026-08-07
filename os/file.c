@@ -50,6 +50,9 @@ static struct filepool_allocator_state filepool_allocator;
 
 _Static_assert(FILEPOOLSIZE < 0xffffU,
 	       "filepool index must fit in the freelist link");
+_Static_assert((uint64)NPROC *
+	       (FD_BUFFER_SIZE + NTHREAD * (FD_BUFFER_SIZE + 1U)) < 0xffffU,
+	       "all possible pinned file references must fit uint16");
 
 static uint filepool_index_locked(struct file *f)
 {
@@ -336,7 +339,6 @@ int fileclose_prepare(struct file *f, struct file_close_receipt *receipt)
 	f->readable = 0;
 	f->writable = 0;
 	f->pipe = 0;
-	f->ip = 0;
 	f->ref = 0;
 	f->type = FD_NONE;
 	f->inherit_class = FD_INHERIT_DENY;
@@ -605,6 +607,8 @@ struct file *filedup(struct file *f)
 		intr_restore(enabled);
 		return 0;
 	}
+	if (f->ref == (uint16)0xffffU)
+		panic("file reference overflow");
 	f->ref++;
 	intr_restore(enabled);
 	return f;
@@ -637,7 +641,6 @@ int filealloc_many(struct proc *owner, struct file **files, uint count)
 		f->readable = 0;
 		f->writable = 0;
 		f->pipe = 0;
-		f->ip = 0;
 		f->off = 0;
 		f->resource_account = account;
 		f->resource_reserved = reserved;

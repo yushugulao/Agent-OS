@@ -1827,14 +1827,15 @@ static int bio_thread_request_flags_valid(const struct thread *thread)
 {
 	uint flags;
 
-	if (thread == 0)
+	if (thread == 0 || thread->trapframe == 0)
 		return 0;
-	flags = thread->io_request_flags;
+	flags = thread_trap_cold_const(thread)->io_request_flags;
 	if ((flags & ~BIO_REQUEST_KNOWN_FLAGS) != 0)
 		return 0;
-	if (thread->io_request_depth == 0)
-		return flags == 0 && thread->io_request_id == 0;
-	if (thread->io_request_id == 0)
+	if (thread_trap_cold_const(thread)->io_request_depth == 0)
+		return flags == 0 &&
+		       thread_trap_cold_const(thread)->io_request_id == 0;
+	if (thread_trap_cold_const(thread)->io_request_id == 0)
 		return 0;
 	if ((flags & BIO_REQUEST_TRANSFERRED) != 0 &&
 	    (flags & BIO_REQUEST_ACTIVE) == 0)
@@ -1844,20 +1845,22 @@ static int bio_thread_request_flags_valid(const struct thread *thread)
 
 static int bio_thread_request_active(const struct thread *thread)
 {
-	return thread != 0 && thread->io_request_depth != 0 &&
-	       (thread->io_request_flags & BIO_REQUEST_ACTIVE) != 0;
+	return thread != 0 && thread->trapframe != 0 &&
+	       thread_trap_cold_const(thread)->io_request_depth != 0 &&
+	       (thread_trap_cold_const(thread)->io_request_flags &
+		BIO_REQUEST_ACTIVE) != 0;
 }
 
 static void bio_thread_request_clear(struct thread *thread)
 {
-	thread->io_request_flags = 0;
-	thread->io_request_id = 0;
-	thread->io_request_depth = 0;
-	thread->io_request_owner = FS_OWNER_NONE;
-	thread->io_request_class = IO_POLICY_CLASS_NORMAL;
-	thread->io_request_reservation = IO_RESERVATION_NONE;
-	thread->io_request_device_reservation = IO_RESERVATION_NONE;
-	thread->io_request_transfers = 0;
+	thread_trap_cold(thread)->io_request_flags = 0;
+	thread_trap_cold(thread)->io_request_id = 0;
+	thread_trap_cold(thread)->io_request_depth = 0;
+	thread_trap_cold(thread)->io_request_owner = FS_OWNER_NONE;
+	thread_trap_cold(thread)->io_request_class = IO_POLICY_CLASS_NORMAL;
+	thread_trap_cold(thread)->io_request_reservation = IO_RESERVATION_NONE;
+	thread_trap_cold(thread)->io_request_device_reservation = IO_RESERVATION_NONE;
+	thread_trap_cold(thread)->io_request_transfers = 0;
 }
 
 static uint64 bio_request_identity_allocate(void)
@@ -1879,14 +1882,15 @@ static int bio_request_begin_current_mode(int cleanup)
 	uint source = IO_RESERVATION_NONE;
 	uint device_source = IO_RESERVATION_NONE;
 
-	if (thread == 0 || thread->process == 0 || thread->state != RUNNING)
+	if (thread == 0 || thread->trapframe == 0 ||
+	    thread->process == 0 || thread->state != RUNNING)
 		return -1;
-	if (thread->io_request_depth != 0) {
+	if (thread_trap_cold(thread)->io_request_depth != 0) {
 		if (!bio_thread_request_flags_valid(thread))
 			panic("nested I/O request identity");
-		if (thread->io_request_depth == (uint)-1)
+		if (thread_trap_cold(thread)->io_request_depth == (uint)-1)
 			panic("I/O request depth overflow");
-		thread->io_request_depth++;
+		thread_trap_cold(thread)->io_request_depth++;
 		return 0;
 	}
 	if (!bio_thread_request_flags_valid(thread))
@@ -1911,15 +1915,15 @@ static int bio_request_begin_current_mode(int cleanup)
 		return -1;
 	}
 	io_active_request_acquire(state);
-	thread->io_request_flags = BIO_REQUEST_ACTIVE |
+	thread_trap_cold(thread)->io_request_flags = BIO_REQUEST_ACTIVE |
 		(cleanup ? BIO_REQUEST_CLEANUP : 0);
-	thread->io_request_id = bio_request_identity_allocate();
-	thread->io_request_owner = owner;
-	thread->io_request_class = io_class;
-	thread->io_request_reservation = source;
-	thread->io_request_device_reservation = device_source;
-	thread->io_request_transfers = 0;
-	thread->io_request_depth = 1;
+	thread_trap_cold(thread)->io_request_id = bio_request_identity_allocate();
+	thread_trap_cold(thread)->io_request_owner = owner;
+	thread_trap_cold(thread)->io_request_class = io_class;
+	thread_trap_cold(thread)->io_request_reservation = source;
+	thread_trap_cold(thread)->io_request_device_reservation = device_source;
+	thread_trap_cold(thread)->io_request_transfers = 0;
+	thread_trap_cold(thread)->io_request_depth = 1;
 	intr_restore(enabled);
 	return 0;
 }
@@ -1932,14 +1936,15 @@ int bio_request_begin_current_lazy(void)
 	uint io_class;
 	int enabled;
 
-	if (thread == 0 || thread->process == 0 || thread->state != RUNNING)
+	if (thread == 0 || thread->trapframe == 0 ||
+	    thread->process == 0 || thread->state != RUNNING)
 		return -1;
-	if (thread->io_request_depth != 0) {
+	if (thread_trap_cold(thread)->io_request_depth != 0) {
 		if (!bio_thread_request_flags_valid(thread))
 			panic("nested lazy I/O request identity");
-		if (thread->io_request_depth == (uint)-1)
+		if (thread_trap_cold(thread)->io_request_depth == (uint)-1)
 			panic("lazy I/O request depth overflow");
-		thread->io_request_depth++;
+		thread_trap_cold(thread)->io_request_depth++;
 		return 0;
 	}
 	if (!bio_thread_request_flags_valid(thread))
@@ -1953,14 +1958,14 @@ int bio_request_begin_current_lazy(void)
 		intr_restore(enabled);
 		return -1;
 	}
-	thread->io_request_flags = BIO_REQUEST_LAZY;
-	thread->io_request_id = bio_request_identity_allocate();
-	thread->io_request_owner = owner;
-	thread->io_request_class = io_class;
-	thread->io_request_reservation = IO_RESERVATION_NONE;
-	thread->io_request_device_reservation = IO_RESERVATION_NONE;
-	thread->io_request_transfers = 0;
-	thread->io_request_depth = 1;
+	thread_trap_cold(thread)->io_request_flags = BIO_REQUEST_LAZY;
+	thread_trap_cold(thread)->io_request_id = bio_request_identity_allocate();
+	thread_trap_cold(thread)->io_request_owner = owner;
+	thread_trap_cold(thread)->io_request_class = io_class;
+	thread_trap_cold(thread)->io_request_reservation = IO_RESERVATION_NONE;
+	thread_trap_cold(thread)->io_request_device_reservation = IO_RESERVATION_NONE;
+	thread_trap_cold(thread)->io_request_transfers = 0;
+	thread_trap_cold(thread)->io_request_depth = 1;
 	state->lazy_started++;
 	io_policy.lazy_started++;
 	intr_restore(enabled);
@@ -1977,10 +1982,11 @@ int bio_request_begin_current_cleanup(void)
 	struct thread *thread = curr_thread();
 
 	/* exit() 不会返回，复用现有 syscall 租约而非嵌套。 */
-	if (thread != 0 && thread->io_request_depth != 0) {
-		if (thread->io_request_id == 0)
+	if (thread != 0 && thread->trapframe != 0 &&
+	    thread_trap_cold(thread)->io_request_depth != 0) {
+		if (thread_trap_cold(thread)->io_request_id == 0)
 			panic("cleanup I/O request identity");
-		thread->io_request_flags |= BIO_REQUEST_CLEANUP;
+		thread_trap_cold(thread)->io_request_flags |= BIO_REQUEST_CLEANUP;
 		return 0;
 	}
 	return bio_request_begin_current_mode(1);
@@ -2003,19 +2009,19 @@ int bio_request_upgrade_current(void)
 		return bio_request_active_current() ? 0 : -1;
 	if (thread == 0 || thread->process == 0 || thread->state != RUNNING ||
 	    !bio_thread_request_flags_valid(thread) ||
-	    (thread->io_request_flags & BIO_REQUEST_LAZY) == 0)
+	    (thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_LAZY) == 0)
 		return -1;
-	if ((thread->io_request_flags & BIO_REQUEST_ACTIVE) != 0)
+	if ((thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_ACTIVE) != 0)
 		return 0;
-	if (thread->bio_buffer_holds != 0 || thread->bio_fs_atomic_depth != 0)
+	if (thread_trap_cold(thread)->bio_buffer_holds != 0 || thread_trap_cold(thread)->bio_fs_atomic_depth != 0)
 		return -1;
-	request_id = thread->io_request_id;
-	cleanup = (thread->io_request_flags & BIO_REQUEST_CLEANUP) != 0;
+	request_id = thread_trap_cold(thread)->io_request_id;
+	cleanup = (thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_CLEANUP) != 0;
 	enabled = intr_save();
-	state = io_state_find(thread->io_request_owner, 0);
+	state = io_state_find(thread_trap_cold(thread)->io_request_owner, 0);
 	if (state == 0 || state->retiring || state->quiesced ||
-	    io_bucket_burst(thread->io_request_owner,
-			    thread->io_request_class) == 0) {
+	    io_bucket_burst(thread_trap_cold(thread)->io_request_owner,
+			    thread_trap_cold(thread)->io_request_class) == 0) {
 		intr_restore(enabled);
 		return -1;
 	}
@@ -2023,24 +2029,24 @@ int bio_request_upgrade_current(void)
 	io_active_request_acquire(state);
 	intr_restore(enabled);
 	result = io_wait_until_admitted(
-		state, thread->io_request_class, &source, &device_source, cleanup);
+		state, thread_trap_cold(thread)->io_request_class, &source, &device_source, cleanup);
 	enabled = intr_save();
-	if (result < 0 || thread->io_request_id != request_id ||
-	    (thread->io_request_flags & BIO_REQUEST_LAZY) == 0 ||
-	    (thread->io_request_flags & BIO_REQUEST_ACTIVE) != 0 ||
+	if (result < 0 || thread_trap_cold(thread)->io_request_id != request_id ||
+	    (thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_LAZY) == 0 ||
+	    (thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_ACTIVE) != 0 ||
 	    state->retiring || state->quiesced) {
 		if (result == 0 && source != IO_RESERVATION_NONE)
 			io_rate_reservation_refund(
-				state, thread->io_request_class,
+				state, thread_trap_cold(thread)->io_request_class,
 				&source, &device_source);
 		io_active_request_release(state);
 		io_owner_reap_retired();
 		intr_restore(enabled);
 		return -1;
 	}
-	thread->io_request_reservation = source;
-	thread->io_request_device_reservation = device_source;
-	thread->io_request_flags |= BIO_REQUEST_ACTIVE;
+	thread_trap_cold(thread)->io_request_reservation = source;
+	thread_trap_cold(thread)->io_request_device_reservation = device_source;
+	thread_trap_cold(thread)->io_request_flags |= BIO_REQUEST_ACTIVE;
 	state->upgraded++;
 	io_policy.upgraded++;
 	intr_restore(enabled);
@@ -2131,27 +2137,28 @@ bio_request_checkpoint_mode(int cleanup, int quiescent)
 		return bio_checkpoint_make(ready ? BIO_CHECKPOINT_READY :
 						 BIO_CHECKPOINT_DEFERRED);
 	}
-	if (thread == 0 || thread->io_request_depth == 0)
+	if (thread == 0 || thread->trapframe == 0 ||
+	    thread_trap_cold(thread)->io_request_depth == 0)
 		return bio_checkpoint_make(BIO_CHECKPOINT_READY);
 	if (!bio_thread_request_flags_valid(thread))
 		panic("checkpoint I/O request identity");
 	if (!cleanup && proc_thread_exit_requested())
 		return bio_checkpoint_make(BIO_CHECKPOINT_INTERRUPTED);
 	enabled = intr_save();
-	state = io_state_find(thread->io_request_owner, 0);
+	state = io_state_find(thread_trap_cold(thread)->io_request_owner, 0);
 	if (state == 0 || state->retiring || state->quiesced) {
 		intr_restore(enabled);
 		return bio_checkpoint_make(BIO_CHECKPOINT_INTERRUPTED);
 	}
-	if ((thread->io_request_flags & BIO_REQUEST_ACTIVE) == 0) {
+	if ((thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_ACTIVE) == 0) {
 		intr_restore(enabled);
 		return bio_checkpoint_make(BIO_CHECKPOINT_READY);
 	}
 	struct io_rate_state *lane = io_rate_owner_refresh(
-		state, thread->io_request_class);
+		state, thread_trap_cold(thread)->io_request_class);
 	int ready = lane != 0 && lane->debt == 0 &&
-		(io_device_protected(thread->io_request_owner,
-				     thread->io_request_class) ||
+		(io_device_protected(thread_trap_cold(thread)->io_request_owner,
+				     thread_trap_cold(thread)->io_request_class) ||
 		 io_rate_device_refresh()->debt == 0);
 
 	intr_restore(enabled);
@@ -2161,18 +2168,18 @@ bio_request_checkpoint_mode(int cleanup, int quiescent)
 	 * 文件系统原语把多项关联的内存与磁盘状态作为单核事务发布，中途不可
 	 * 休眠。短操作先上报，释放全部缓冲区后由外层请求边界结算累计债务。
 	 */
-	if (thread->bio_buffer_holds != 0) {
+	if (thread_trap_cold(thread)->bio_buffer_holds != 0) {
 		if (quiescent)
 			panic("I/O quiescent checkpoint holds buffer");
 		return bio_checkpoint_make(BIO_CHECKPOINT_DEFERRED);
 	}
-	if (!quiescent && thread->bio_fs_atomic_depth != 0)
+	if (!quiescent && thread_trap_cold(thread)->bio_fs_atomic_depth != 0)
 		return bio_checkpoint_make(BIO_CHECKPOINT_DEFERRED);
-	if (io_wait_for_debt(state, thread->io_request_class, cleanup) < 0)
+	if (io_wait_for_debt(state, thread_trap_cold(thread)->io_request_class, cleanup) < 0)
 		return bio_checkpoint_make(BIO_CHECKPOINT_INTERRUPTED);
 	return bio_checkpoint_make(
-		io_wait_for_device_debt(thread->io_request_owner,
-					thread->io_request_class, cleanup) < 0 ?
+		io_wait_for_device_debt(thread_trap_cold(thread)->io_request_owner,
+					thread_trap_cold(thread)->io_request_class, cleanup) < 0 ?
 			BIO_CHECKPOINT_INTERRUPTED : BIO_CHECKPOINT_READY);
 }
 
@@ -2218,7 +2225,7 @@ void bio_fs_atomic_enter(void)
 		struct thread *thread = curr_thread();
 
 		depth = thread != 0 && thread->state == RUNNING ?
-			&thread->bio_fs_atomic_depth : &bio_boot_fs_atomic_depth;
+			&thread_trap_cold(thread)->bio_fs_atomic_depth : &bio_boot_fs_atomic_depth;
 	}
 	if (*depth == (uint)-1)
 		panic("filesystem atomic depth overflow");
@@ -2235,7 +2242,7 @@ void bio_fs_atomic_leave(void)
 		struct thread *thread = curr_thread();
 
 		depth = thread != 0 && thread->state == RUNNING ?
-			&thread->bio_fs_atomic_depth : &bio_boot_fs_atomic_depth;
+			&thread_trap_cold(thread)->bio_fs_atomic_depth : &bio_boot_fs_atomic_depth;
 	}
 	if (*depth == 0)
 		panic("filesystem atomic depth underflow");
@@ -2252,8 +2259,8 @@ int bio_io_quiescent_current(void)
 		quiescent = io_policy.background.buffer_holds == 0 &&
 			io_policy.background.fs_atomic_depth == 0;
 	else if (thread != 0 && thread->state == RUNNING)
-		quiescent = thread->bio_buffer_holds == 0 &&
-			thread->bio_fs_atomic_depth == 0;
+		quiescent = thread_trap_cold(thread)->bio_buffer_holds == 0 &&
+			thread_trap_cold(thread)->bio_fs_atomic_depth == 0;
 	else
 		quiescent = bio_boot_buffer_holds == 0 &&
 			bio_boot_fs_atomic_depth == 0;
@@ -2274,25 +2281,25 @@ static int bio_request_end_current_mode(int wait_for_budget, int cleanup,
 	uint flags;
 	int result = 0;
 
-	if (thread == 0)
+	if (thread == 0 || thread->trapframe == 0)
 		return 0;
-	if (thread->io_request_depth == 0) {
+	if (thread_trap_cold(thread)->io_request_depth == 0) {
 		if (!bio_thread_request_flags_valid(thread))
 			panic("idle I/O request identity");
 		return 0;
 	}
 	if (!bio_thread_request_flags_valid(thread))
 		panic("active I/O request identity");
-	if (thread->io_request_depth > 1 && !terminal) {
-		thread->io_request_depth--;
+	if (thread_trap_cold(thread)->io_request_depth > 1 && !terminal) {
+		thread_trap_cold(thread)->io_request_depth--;
 		return 0;
 	}
-	owner = thread->io_request_owner;
-	io_class = thread->io_request_class;
-	source = thread->io_request_reservation;
-	device_source = thread->io_request_device_reservation;
-	transfers = thread->io_request_transfers;
-	flags = thread->io_request_flags;
+	owner = thread_trap_cold(thread)->io_request_owner;
+	io_class = thread_trap_cold(thread)->io_request_class;
+	source = thread_trap_cold(thread)->io_request_reservation;
+	device_source = thread_trap_cold(thread)->io_request_device_reservation;
+	transfers = thread_trap_cold(thread)->io_request_transfers;
+	flags = thread_trap_cold(thread)->io_request_flags;
 	if ((flags & BIO_REQUEST_ACTIVE) == 0) {
 		if ((flags & BIO_REQUEST_LAZY) == 0 || transfers != 0 ||
 		    (flags & BIO_REQUEST_TRANSFERRED) != 0 ||
@@ -2371,7 +2378,11 @@ void bio_request_abort_thread(struct thread *thread)
 	    io_policy.background.executor_generation ==
 		    thread->identity_generation)
 		panic("abort active background I/O executor");
-	if (thread->io_request_depth == 0) {
+	if (thread->trapframe == 0) {
+		intr_restore(enabled);
+		return;
+	}
+	if (thread_trap_cold(thread)->io_request_depth == 0) {
 		if (!bio_thread_request_flags_valid(thread))
 			panic("aborted I/O request identity");
 		intr_restore(enabled);
@@ -2379,33 +2390,33 @@ void bio_request_abort_thread(struct thread *thread)
 	}
 	if (!bio_thread_request_flags_valid(thread))
 		panic("active I/O request identity");
-	if ((thread->io_request_flags & BIO_REQUEST_ACTIVE) == 0) {
-		if ((thread->io_request_flags & BIO_REQUEST_LAZY) == 0 ||
-		    thread->io_request_transfers != 0 ||
-		    (thread->io_request_flags &
+	if ((thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_ACTIVE) == 0) {
+		if ((thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_LAZY) == 0 ||
+		    thread_trap_cold(thread)->io_request_transfers != 0 ||
+		    (thread_trap_cold(thread)->io_request_flags &
 		     BIO_REQUEST_TRANSFERRED) != 0 ||
-		    thread->io_request_reservation != IO_RESERVATION_NONE ||
-		    thread->io_request_device_reservation != IO_RESERVATION_NONE)
+		    thread_trap_cold(thread)->io_request_reservation != IO_RESERVATION_NONE ||
+		    thread_trap_cold(thread)->io_request_device_reservation != IO_RESERVATION_NONE)
 			panic("aborted inactive lazy I/O request");
 		bio_thread_request_clear(thread);
 		intr_restore(enabled);
 		return;
 	}
-	state = io_state_find(thread->io_request_owner, 0);
+	state = io_state_find(thread_trap_cold(thread)->io_request_owner, 0);
 	if (state != 0) {
-		if ((thread->io_request_flags &
+		if ((thread_trap_cold(thread)->io_request_flags &
 		     BIO_REQUEST_TRANSFERRED) == 0 &&
-		    thread->io_request_reservation !=
+		    thread_trap_cold(thread)->io_request_reservation !=
 			    IO_RESERVATION_NONE)
 			io_rate_reservation_refund(
-				state, thread->io_request_class,
-				&thread->io_request_reservation,
-				&thread->io_request_device_reservation);
-		else if ((thread->io_request_flags &
+				state, thread_trap_cold(thread)->io_request_class,
+				&thread_trap_cold(thread)->io_request_reservation,
+				&thread_trap_cold(thread)->io_request_device_reservation);
+		else if ((thread_trap_cold(thread)->io_request_flags &
 			  BIO_REQUEST_TRANSFERRED) != 0)
 			io_rate_charge_transfers(
-				state, thread->io_request_class,
-				thread->io_request_transfers);
+				state, thread_trap_cold(thread)->io_request_class,
+				thread_trap_cold(thread)->io_request_transfers);
 		io_active_request_release(state);
 	}
 	bio_thread_request_clear(thread);
@@ -2480,8 +2491,8 @@ int bio_background_begin(uint owner)
 	    (io_policy.runtime_ready &&
 	     (executor->state != RUNNING || executor->tid < 0 ||
 	      executor->process == 0 || executor->identity_generation == 0 ||
-	      executor->bio_buffer_holds != 0 ||
-	      executor->bio_fs_atomic_depth != 0))) {
+	      thread_trap_cold(executor)->bio_buffer_holds != 0 ||
+	      thread_trap_cold(executor)->bio_fs_atomic_depth != 0))) {
 		intr_restore(enabled);
 		return 0;
 	}
@@ -2590,8 +2601,8 @@ uint bio_current_owner(void)
 	if (bio_background_current())
 		return io_policy.background.owner;
 	if (thread != 0 && thread->state == RUNNING &&
-	    thread->io_request_depth != 0)
-		return thread->io_request_owner;
+	    thread_trap_cold(thread)->io_request_depth != 0)
+		return thread_trap_cold(thread)->io_request_owner;
 	if (thread != 0 && thread->state == RUNNING && thread->process != 0)
 		return bio_process_owner(thread->process);
 	return FS_OWNER_SYSTEM;
@@ -2606,8 +2617,8 @@ static uint bio_current_class(uint owner)
 	if (bio_background_current())
 		return IO_POLICY_CLASS_BACKGROUND;
 	if (thread != 0 && thread->state == RUNNING &&
-	    thread->io_request_depth != 0)
-		return thread->io_request_class;
+	    thread_trap_cold(thread)->io_request_depth != 0)
+		return thread_trap_cold(thread)->io_request_class;
 	if (thread != 0 && thread->state == RUNNING && thread->process != 0)
 		return io_class_from_proc(thread->process, owner);
 	return IO_POLICY_CLASS_SYSTEM;
@@ -2632,11 +2643,11 @@ int bio_deferred_owner_retain_current(uint owner, uint *io_class,
 	if (thread == 0 || io_class == 0 || origin_request_id == 0 ||
 	    thread->state != RUNNING ||
 	    bio_deferred_sponsor_current() || bio_background_current() ||
-	    thread->io_request_depth == 0 ||
-	    thread->io_request_id == 0 ||
-	    thread->io_request_owner != owner)
+	    thread_trap_cold(thread)->io_request_depth == 0 ||
+	    thread_trap_cold(thread)->io_request_id == 0 ||
+	    thread_trap_cold(thread)->io_request_owner != owner)
 		return -1;
-	selected = thread->io_request_class;
+	selected = thread_trap_cold(thread)->io_request_class;
 	if (selected >= IO_POLICY_CLASS_COUNT ||
 	    io_bucket_burst(owner, selected) == 0)
 		return -1;
@@ -2653,7 +2664,7 @@ int bio_deferred_owner_retain_current(uint owner, uint *io_class,
 		panic("deferred I/O owner overflow");
 	state->deferred_references++;
 	*io_class = selected;
-	*origin_request_id = thread->io_request_id;
+	*origin_request_id = thread_trap_cold(thread)->io_request_id;
 	intr_restore(enabled);
 	return 0;
 }
@@ -2673,13 +2684,16 @@ bio_deferred_owner_retain_cleanup(uint owner, uint *io_class)
 	struct io_owner_state *state;
 	uint selected;
 	int caller_holds;
+	int request_holds;
 	int enabled;
 
 	if (thread == 0 || io_class == 0)
 		return -1;
-	caller_holds = (thread->io_request_depth != 0 &&
-			thread->io_request_id != 0 &&
-			thread->io_request_owner == owner) ||
+	request_holds = thread->trapframe != 0 &&
+			thread_trap_cold(thread)->io_request_depth != 0 &&
+			thread_trap_cold(thread)->io_request_id != 0 &&
+			thread_trap_cold(thread)->io_request_owner == owner;
+	caller_holds = request_holds ||
 			(bio_deferred_sponsor_current() &&
 			 io_policy.deferred.owner == owner) ||
 			(bio_background_current() &&
@@ -2691,10 +2705,8 @@ bio_deferred_owner_retain_cleanup(uint owner, uint *io_class)
 	/* 懒请求身份已生效，但直到本次转移才固定主体。 */
 	if (state == 0 ||
 	    (state->active_requests == 0 &&
-	     !(thread->io_request_depth != 0 &&
-	       thread->io_request_id != 0 &&
-	       thread->io_request_owner == owner &&
-	       (thread->io_request_flags & BIO_REQUEST_LAZY) != 0 &&
+	     !(request_holds &&
+	       (thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_LAZY) != 0 &&
 	       !state->retiring && !state->quiesced))) {
 		intr_restore(enabled);
 		return -1;
@@ -2708,13 +2720,11 @@ bio_deferred_owner_retain_cleanup(uint owner, uint *io_class)
 	else
 		selected = IO_POLICY_CLASS_BACKGROUND;
 	if (io_bucket_burst(owner, selected) == 0) {
-		if (thread->io_request_depth == 0 ||
-		    thread->io_request_id == 0 ||
-		    thread->io_request_owner != owner) {
+		if (!request_holds) {
 			intr_restore(enabled);
 			return -1;
 		}
-		selected = thread->io_request_class;
+		selected = thread_trap_cold(thread)->io_request_class;
 	}
 	if (selected >= IO_POLICY_CLASS_COUNT ||
 	    io_bucket_burst(owner, selected) == 0) {
@@ -3250,10 +3260,10 @@ int bio_deferred_sponsor_begin(uint owner, uint io_class,
 	if (origin_request_id != 0 &&
 	    !background_executor && !polling_executor &&
 	    thread->state == RUNNING &&
-	    thread->io_request_depth != 0 &&
-	    thread->io_request_id == origin_request_id &&
-	    thread->io_request_owner == owner &&
-	    thread->io_request_class == io_class &&
+	    thread_trap_cold(thread)->io_request_depth != 0 &&
+	    thread_trap_cold(thread)->io_request_id == origin_request_id &&
+	    thread_trap_cold(thread)->io_request_owner == owner &&
+	    thread_trap_cold(thread)->io_request_class == io_class &&
 	    bio_thread_request_active(thread)) {
 		effective_class = io_class;
 		reuse_request_lease = 1;
@@ -3418,18 +3428,18 @@ void bio_account_transfer_batch(uint owner, uint io_class,
 	} else if (bio_deferred_sponsor_current() &&
 	    io_policy.deferred.reuse_request_lease && thread != 0 &&
 	    thread->state == RUNNING &&
-	    thread->io_request_depth != 0 &&
+	    thread_trap_cold(thread)->io_request_depth != 0 &&
 	    io_policy.deferred.origin_request_id != 0 &&
-	    thread->io_request_id == io_policy.deferred.origin_request_id &&
-	    thread->io_request_owner == io_policy.deferred.owner &&
-	    thread->io_request_class == io_policy.deferred.io_class &&
+	    thread_trap_cold(thread)->io_request_id == io_policy.deferred.origin_request_id &&
+	    thread_trap_cold(thread)->io_request_owner == io_policy.deferred.owner &&
+	    thread_trap_cold(thread)->io_request_class == io_policy.deferred.io_class &&
 	    owner == io_policy.deferred.owner &&
 	    io_class == io_policy.deferred.io_class) {
-		transfers = &thread->io_request_transfers;
-		request_flags = &thread->io_request_flags;
-		reservation = &thread->io_request_reservation;
+		transfers = &thread_trap_cold(thread)->io_request_transfers;
+		request_flags = &thread_trap_cold(thread)->io_request_flags;
+		reservation = &thread_trap_cold(thread)->io_request_reservation;
 		device_reservation =
-			&thread->io_request_device_reservation;
+			&thread_trap_cold(thread)->io_request_device_reservation;
 		unreserved = 0;
 	} else if (bio_background_current() &&
 	    io_policy.background.owner == owner &&
@@ -3440,16 +3450,16 @@ void bio_account_transfer_batch(uint owner, uint io_class,
 			&io_policy.background.device_reservation;
 		unreserved = 0;
 	} else if (thread != 0 && thread->state == RUNNING &&
-	    thread->io_request_depth != 0 &&
-	    thread->io_request_id != 0 &&
-	    thread->io_request_owner == owner &&
-	    thread->io_request_class == io_class &&
+	    thread_trap_cold(thread)->io_request_depth != 0 &&
+	    thread_trap_cold(thread)->io_request_id != 0 &&
+	    thread_trap_cold(thread)->io_request_owner == owner &&
+	    thread_trap_cold(thread)->io_request_class == io_class &&
 	    bio_thread_request_active(thread)) {
-		transfers = &thread->io_request_transfers;
-		request_flags = &thread->io_request_flags;
-		reservation = &thread->io_request_reservation;
+		transfers = &thread_trap_cold(thread)->io_request_transfers;
+		request_flags = &thread_trap_cold(thread)->io_request_flags;
+		reservation = &thread_trap_cold(thread)->io_request_reservation;
 		device_reservation =
-			&thread->io_request_device_reservation;
+			&thread_trap_cold(thread)->io_request_device_reservation;
 		unreserved = 0;
 	}
 	if (!io_policy.runtime_ready) {
@@ -3815,7 +3825,7 @@ static void bio_cache_hold_acquire(void *token)
 	else if (token == &bio_boot_holder_token)
 		bio_boot_buffer_holds++;
 	else
-		((struct thread *)token)->bio_buffer_holds++;
+		thread_trap_cold((struct thread *)token)->bio_buffer_holds++;
 }
 
 static void bio_cache_hold_release(void *token)
@@ -3827,7 +3837,7 @@ static void bio_cache_hold_release(void *token)
 	else if (token == &bio_boot_holder_token)
 		holds = &bio_boot_buffer_holds;
 	else
-		holds = &((struct thread *)token)->bio_buffer_holds;
+		holds = &thread_trap_cold((struct thread *)token)->bio_buffer_holds;
 	if (*holds == 0)
 		panic("buffer holder underflow");
 	(*holds)--;
@@ -3841,9 +3851,9 @@ static int bio_cache_lazy_owner_live(uint owner)
 	if (!io_policy.runtime_ready || bio_request_active_current())
 		return 1;
 	if (thread == 0 || thread->state != RUNNING ||
-	    thread->io_request_depth == 0 ||
-	    (thread->io_request_flags & BIO_REQUEST_LAZY) == 0 ||
-	    thread->io_request_owner != owner)
+	    thread_trap_cold(thread)->io_request_depth == 0 ||
+	    (thread_trap_cold(thread)->io_request_flags & BIO_REQUEST_LAZY) == 0 ||
+	    thread_trap_cold(thread)->io_request_owner != owner)
 		return 0;
 	state = io_state_find(owner, 0);
 	return state != 0 && !state->retiring && !state->quiesced &&

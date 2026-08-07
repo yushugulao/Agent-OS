@@ -3482,10 +3482,11 @@ def validate_receipt_persist_context_contract(
     assert token_count(persist, ("intr_get", "(")) == 0
     for pattern in (
         ("t", "=", "curr_thread", "(", ")"),
-        ("context", ".", "kernel_work_depth", "=", "t", "->", "kernel_work_depth"),
-        ("context", ".", "io_request_depth", "=", "t", "->", "io_request_depth"),
-        ("context", ".", "buffer_holds", "=", "t", "->", "bio_buffer_holds"),
-        ("context", ".", "fs_atomic_depth", "=", "t", "->", "bio_fs_atomic_depth"),
+        ("cold", "=", "thread_trap_cold", "(", "t", ")"),
+        ("context", ".", "kernel_work_depth", "=", "cold", "->", "kernel_work_depth"),
+        ("context", ".", "io_request_depth", "=", "cold", "->", "io_request_depth"),
+        ("context", ".", "buffer_holds", "=", "cold", "->", "bio_buffer_holds"),
+        ("context", ".", "fs_atomic_depth", "=", "cold", "->", "bio_fs_atomic_depth"),
         ("context", ".", "sstatus", "=", "r_sstatus", "(", ")"),
         ("context", ".", "supervisor_previous_mask", "=", "SSTATUS_SPP"),
         ("context", ".", "metadata_txn_owned", "=", "agent_metadata_txn_owned", "("),
@@ -3517,7 +3518,7 @@ expect_rejected(
         mutated, receipt_context_source
     ),
     store.replace(
-        "context.io_request_depth = t->io_request_depth;",
+        "context.io_request_depth = cold->io_request_depth;",
         "context.io_request_depth = 1;",
         1,
     ),
@@ -4318,11 +4319,11 @@ assert "sys_agent_audit_receipt(trapframe->a0)" in syscall_source
 assert "X(agent_audit_receipt, BLOCK_IO, ALWAYS)" in syscall_registry
 transaction_begin = token_index(
     syscall_slow,
-    ("syscall_transaction_begin", "(", "&", "transaction", ",", "trapframe", ")"),
+    ("syscall_transaction_begin", "(", "transaction", ",", "trapframe", ")"),
 )
 dispatch_call = token_index(
     syscall_slow,
-    ("syscall_dispatch", "(", "id", ",", "trapframe", ",", "&", "transaction", ")"),
+    ("syscall_dispatch", "(", "id", ",", "trapframe", ",", "transaction", ")"),
 )
 assert transaction_begin < dispatch_call
 io_begin = token_index(syscall_begin, ("bio_request_begin_current", "(", ")"))

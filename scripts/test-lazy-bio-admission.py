@@ -63,17 +63,19 @@ class LazyBioAdmissionTests(unittest.TestCase):
     def test_rejects_eager_lazy_begin(self) -> None:
         self.mutate(
             "os/bio.c",
-            "thread->io_request_flags = BIO_REQUEST_LAZY;",
+            "thread_trap_cold(thread)->io_request_flags = BIO_REQUEST_LAZY;",
             "io_active_request_acquire(state);\n"
-            "\tthread->io_request_flags = BIO_REQUEST_LAZY;",
+            "\tthread_trap_cold(thread)->io_request_flags = BIO_REQUEST_LAZY;",
         )
         self.assert_rejected("lazy begin still reserves")
 
     def test_rejects_upgrade_with_buffer_hold(self) -> None:
         self.mutate(
             "os/bio.c",
-            "thread->bio_buffer_holds != 0 || thread->bio_fs_atomic_depth != 0",
-            "thread->bio_buffer_holds == 0 || thread->bio_fs_atomic_depth != 0",
+            "thread_trap_cold(thread)->bio_buffer_holds != 0 || "
+            "thread_trap_cold(thread)->bio_fs_atomic_depth != 0",
+            "thread_trap_cold(thread)->bio_buffer_holds == 0 || "
+            "thread_trap_cold(thread)->bio_fs_atomic_depth != 0",
         )
         self.assert_rejected("not atomic and fail closed")
 
@@ -122,13 +124,9 @@ class LazyBioAdmissionTests(unittest.TestCase):
     def test_rejects_runtime_policy_before_boot_io(self) -> None:
         self.mutate(
             "os/main.c",
-            "\tload_init_app();\n"
-            "\tinfof(\"start scheduler!\");\n"
-            "\t/* Runtime I/O admission starts after boot-only image loading completes. */\n"
-            "\tbio_policy_start();",
+            "\tload_init_app();",
             "\tbio_policy_start();\n"
-            "\tload_init_app();\n"
-            "\tinfof(\"start scheduler!\");",
+            "\tload_init_app();",
         )
         self.assert_rejected("runtime I/O admission starts before")
 

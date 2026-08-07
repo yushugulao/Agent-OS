@@ -9,68 +9,60 @@ _Static_assert(KERNEL_WORK_IO_BATCH_BYTES / KERNEL_WORK_BYTES_PER_UNIT <
 
 static int kernel_work_running(struct thread *t)
 {
-	return t != 0 && t->process != 0 && t->state == RUNNING &&
+	return t != 0 && t->trapframe != 0 && t->process != 0 &&
+	       t->state == RUNNING &&
 	       t->tid >= 0;
 }
 
 void kernel_work_reset(struct thread *t)
 {
-	if (t == 0)
+	struct thread_trap_cold *cold;
+
+	if (t == 0 || t->trapframe == 0)
 		return;
 	bio_request_abort_thread(t);
-	t->kernel_work_depth = 0;
-	t->kernel_work_resumed = 0;
-	t->kernel_resched_pending = 0;
-	t->kernel_work_units = 0;
-	t->kernel_work_redispatches = 0;
-	t->kernel_syscall_preemptions_start = 0;
-	t->kernel_last_syscall_preemptions = 0;
-	t->kernel_work_generation = 0;
-	t->kernel_work_target_syscall_id = -1;
-	t->kernel_work_measure_preemptions = 0;
-	t->io_request_flags = 0;
-	t->io_request_depth = 0;
-	t->io_request_owner = 0;
-	t->io_request_class = 0;
-	t->io_request_reservation = 0;
-	t->io_request_device_reservation = 0;
-	t->io_request_transfers = 0;
-	t->bio_buffer_holds = 0;
-	t->bio_fs_atomic_depth = 0;
+	cold = thread_trap_cold(t);
+	memset(cold, 0, __builtin_offsetof(struct thread_trap_cold, context));
+	cold->kernel_work_target_syscall_id = -1;
 }
 
 // 时间片在调度时开始，而不是在系统调用入口刷新，避免短调用流无限续期。
 void kernel_work_on_dispatch(struct thread *t)
 {
-	if (t == 0)
+	struct thread_trap_cold *cold;
+
+	if (t == 0 || t->trapframe == 0)
 		return;
-	t->kernel_work_resumed = t->kernel_work_depth != 0;
-	if (t->kernel_work_resumed)
-		t->kernel_work_redispatches++;
-	t->kernel_resched_pending = 0;
-	t->kernel_work_units = 0;
+	cold = thread_trap_cold(t);
+	cold->kernel_work_resumed = cold->kernel_work_depth != 0;
+	if (cold->kernel_work_resumed)
+		cold->kernel_work_redispatches++;
+	cold->kernel_resched_pending = 0;
+	cold->kernel_work_units = 0;
 }
 
 static void kernel_work_begin_scope(int syscall_id, int measure_preemptions)
 {
 	struct thread *t = curr_thread();
+	struct thread_trap_cold *cold;
 
 	if (!kernel_work_running(t))
 		return;
-	if (t->kernel_work_depth == (uint)-1)
+	cold = thread_trap_cold(t);
+	if (cold->kernel_work_depth == (uint)-1)
 		panic("kernel work depth overflow");
-	if (t->kernel_work_depth == 0) {
-		if (t->kernel_work_generation == (uint64)-1)
+	if (cold->kernel_work_depth == 0) {
+		if (cold->kernel_work_generation == (uint64)-1)
 			panic("kernel work generation exhausted");
-		t->kernel_work_generation++;
-		t->kernel_syscall_preemptions_start =
-			t->kernel_work_redispatches;
-		t->kernel_work_target_syscall_id = syscall_id;
-		t->kernel_work_measure_preemptions = measure_preemptions;
+		cold->kernel_work_generation++;
+		cold->kernel_syscall_preemptions_start =
+			cold->kernel_work_redispatches;
+		cold->kernel_work_target_syscall_id = syscall_id;
+		cold->kernel_work_measure_preemptions = measure_preemptions;
 		if (measure_preemptions)
-			t->kernel_last_syscall_preemptions = 0;
+			cold->kernel_last_syscall_preemptions = 0;
 	}
-	t->kernel_work_depth++;
+	cold->kernel_work_depth++;
 }
 
 void kernel_work_begin_syscall(int syscall_id, uint syscall_class)
@@ -92,7 +84,8 @@ void kernel_work_begin_cleanup(void)
 	struct thread *t = curr_thread();
 
 	/* 终止退出优先复用外层系统调用的内核工作时间片。 */
-	if (!kernel_work_running(t) || t->kernel_work_depth != 0)
+	if (!kernel_work_running(t) ||
+	    thread_trap_cold(t)->kernel_work_depth != 0)
 		return;
 	kernel_work_begin_scope(-1, 0);
 }
@@ -101,8 +94,9 @@ void kernel_work_request_resched(void)
 {
 	struct thread *t = curr_thread();
 
-	if (kernel_work_running(t) && t->kernel_work_depth != 0)
-		t->kernel_resched_pending = 1;
+	if (kernel_work_running(t) &&
+	    thread_trap_cold(t)->kernel_work_depth != 0)
+		thread_trap_cold(t)->kernel_resched_pending = 1;
 }
 
 /*
@@ -112,7 +106,7 @@ void kernel_work_request_resched(void)
  */
 static void kernel_work_irq_window(struct thread *t)
 {
-	if (t->kernel_work_target_syscall_id < 0)
+	if (thread_trap_cold(t)->kernel_work_target_syscall_id < 0)
 		return;
 	/* SPP=1 表示正在处理内核陷阱，禁止在中断上下文中再次开放 SIE。 */
 	if ((r_sstatus() & (SSTATUS_SPP | SSTATUS_SIE)) != 0)
@@ -123,37 +117,41 @@ static void kernel_work_irq_window(struct thread *t)
 static int kernel_work_checkpoint_mode(uint work_units, int cleanup)
 {
 	struct thread *t = curr_thread();
+	struct thread_trap_cold *cold;
 	int exit_requested;
 
-	if (!kernel_work_running(t) || t->kernel_work_depth == 0)
+	if (!kernel_work_running(t))
 		return 0;
-	if (work_units >= KERNEL_WORK_BUDGET_UNITS - t->kernel_work_units)
-		t->kernel_work_units = KERNEL_WORK_BUDGET_UNITS;
+	cold = thread_trap_cold(t);
+	if (cold->kernel_work_depth == 0)
+		return 0;
+	if (work_units >= KERNEL_WORK_BUDGET_UNITS - cold->kernel_work_units)
+		cold->kernel_work_units = KERNEL_WORK_BUDGET_UNITS;
 	else
-		t->kernel_work_units += work_units;
+		cold->kernel_work_units += work_units;
 	exit_requested = !cleanup && proc_thread_exit_requested();
 	// 缓冲区持有者须先完成短临界区；bget 只提供互斥，并非可睡眠锁。
-	if (t->bio_buffer_holds != 0 || t->bio_fs_atomic_depth != 0)
+	if (cold->bio_buffer_holds != 0 || cold->bio_fs_atomic_depth != 0)
 		return exit_requested ? -1 : 0;
-	if (!cleanup && t->kernel_work_resumed) {
-		t->kernel_work_resumed = 0;
+	if (!cleanup && cold->kernel_work_resumed) {
+		cold->kernel_work_resumed = 0;
 		return exit_requested ? -1 : 1;
 	}
-	if (!t->kernel_resched_pending &&
-	    t->kernel_work_units < KERNEL_WORK_BUDGET_UNITS)
+	if (!cold->kernel_resched_pending &&
+	    cold->kernel_work_units < KERNEL_WORK_BUDGET_UNITS)
 		return exit_requested ? -1 : 0;
 	/* 先投递中断，设备等待者才有机会进入运行队列。 */
 	kernel_work_irq_window(t);
 	/* 没有竞争者时只开启下一批预算，避免把长调用切换给自己。 */
 	if (!scheduler_has_runnable_peer()) {
-		t->kernel_resched_pending = 0;
-		t->kernel_work_units = 0;
+		cold->kernel_resched_pending = 0;
+		cold->kernel_work_units = 0;
 		return exit_requested ? -1 : 0;
 	}
-	t->kernel_resched_pending = 0;
+	cold->kernel_resched_pending = 0;
 	yield();
 	if (!cleanup)
-		t->kernel_work_resumed = 0;
+		cold->kernel_work_resumed = 0;
 	return !cleanup && proc_thread_exit_requested() ? -1 : 1;
 }
 
@@ -191,37 +189,40 @@ int kernel_work_checkpoint_cleanup(uint work_units)
 
 uint64 kernel_work_last_preemptions(struct thread *t)
 {
-	return t != 0 ? t->kernel_last_syscall_preemptions : 0;
+	return t != 0 && t->trapframe != 0 ?
+		       thread_trap_cold(t)->kernel_last_syscall_preemptions : 0;
 }
 
 static void kernel_work_end_mode(int cleanup, int terminal)
 {
 	struct thread *t = curr_thread();
+	struct thread_trap_cold *cold;
 	int outer;
 
 	if (!kernel_work_running(t))
 		return;
-	if (t->kernel_work_depth == 0)
+	cold = thread_trap_cold(t);
+	if (cold->kernel_work_depth == 0)
 		panic("kernel work depth underflow");
-	outer = t->kernel_work_depth == 1;
+	outer = cold->kernel_work_depth == 1;
 	if (terminal || outer) {
 		/* 时钟中断只发布待调度位；短系统调用不反复读取周期计数，
 		 * 仅积累足够工作或收到调度请求时进入慢路径。 */
-		if (t->kernel_resched_pending || t->kernel_work_resumed ||
-		    t->kernel_work_units >= KERNEL_WORK_BUDGET_UNITS)
+		if (cold->kernel_resched_pending || cold->kernel_work_resumed ||
+		    cold->kernel_work_units >= KERNEL_WORK_BUDGET_UNITS)
 			(void)kernel_work_checkpoint_mode(0, cleanup);
-		if (t->kernel_work_measure_preemptions)
-			t->kernel_last_syscall_preemptions =
-				t->kernel_work_redispatches -
-				t->kernel_syscall_preemptions_start;
+		if (cold->kernel_work_measure_preemptions)
+			cold->kernel_last_syscall_preemptions =
+				cold->kernel_work_redispatches -
+				cold->kernel_syscall_preemptions_start;
 	}
 	if (terminal)
-		t->kernel_work_depth = 0;
+		cold->kernel_work_depth = 0;
 	else
-		t->kernel_work_depth--;
+		cold->kernel_work_depth--;
 	if (terminal || outer) {
-		t->kernel_work_target_syscall_id = -1;
-		t->kernel_work_measure_preemptions = 0;
+		cold->kernel_work_target_syscall_id = -1;
+		cold->kernel_work_measure_preemptions = 0;
 	}
 }
 

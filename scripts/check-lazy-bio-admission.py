@@ -8,11 +8,15 @@ import re
 import sys
 from pathlib import Path
 
+from thread_cold_source import (
+    normalize_thread_cold_access,
+    verify_thread_cold_contract,
+)
+
 
 def compact(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    text = re.sub(r"//[^\n]*", "", text)
+    text = normalize_thread_cold_access(text, str(path))
     return re.sub(r"\s+", "", text)
 
 
@@ -43,6 +47,11 @@ def reject(text: str, fragment: str, message: str) -> None:
 
 
 def check(root: Path) -> None:
+    proc_raw = (root / "os/proc.h").read_text(encoding="utf-8")
+    verify_thread_cold_contract(proc_raw, (
+        (root / "os/bio.c").read_text(encoding="utf-8"),
+        (root / "os/syscall.c").read_text(encoding="utf-8"),
+    ))
     bio_h = compact(root / "os/bio.h")
     bio = compact(root / "os/bio.c")
     main = compact(root / "os/main.c")
@@ -77,18 +86,19 @@ def check(root: Path) -> None:
         "io_rate_reserve_pair(",
     ):
         reject(begin, forbidden, "lazy begin still reserves I/O capacity")
-    require(begin, "thread->io_request_flags=BIO_REQUEST_LAZY;",
+    require(begin, "thread_cold(thread)->io_request_flags=BIO_REQUEST_LAZY;",
             "lazy begin does not publish a lightweight identity")
     require(begin, "state->lazy_started++;io_policy.lazy_started++;",
             "lazy begin counters are incomplete")
 
     upgrade = function(bio, "bio_request_upgrade_current")
     for fragment in (
-        "thread->bio_buffer_holds!=0||thread->bio_fs_atomic_depth!=0",
+        "thread_cold(thread)->bio_buffer_holds!=0||"
+        "thread_cold(thread)->bio_fs_atomic_depth!=0",
         "io_active_request_acquire(state);",
         "result=io_wait_until_admitted(",
         "state->retiring||state->quiesced",
-        "thread->io_request_flags|=BIO_REQUEST_ACTIVE;",
+        "thread_cold(thread)->io_request_flags|=BIO_REQUEST_ACTIVE;",
         "state->upgraded++;io_policy.upgraded++;",
     ):
         require(upgrade, fragment, "lazy upgrade is not atomic and fail closed")
@@ -154,7 +164,7 @@ def check(root: Path) -> None:
     guest_probe = function(guest, "check_lazy_cache_admission")
     for fragment in (
         "cache_ready=1",
-        "check(cache_ready,\"establishlazyI/Ocache-hitprecondition\")",
+        "check(cache_ready,)",
         "after.lazy_started-before.lazy_started==2*LAZY_CACHE_ROUNDS",
         "after.cache_only-before.cache_only==2*LAZY_CACHE_ROUNDS",
         "after.upgraded==before.upgraded",

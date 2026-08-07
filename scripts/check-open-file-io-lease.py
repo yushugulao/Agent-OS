@@ -13,6 +13,15 @@ class ContractError(RuntimeError):
     pass
 
 
+THREAD_COLD_ACCESS = re.compile(
+    r"thread_trap_cold(?:_const)?\(\s*([A-Za-z_]\w*)\s*\)->"
+)
+
+
+def normalize_thread_cold_access(text: str) -> str:
+    return THREAD_COLD_ACCESS.sub(r"\1->", text)
+
+
 def compact(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
@@ -38,7 +47,9 @@ def require(condition: bool, message: str) -> None:
 
 def check(root: Path) -> None:
     header = compact((root / "os/open_file_io_lease.h").read_text(encoding="utf-8"))
-    source_text = (root / "os/open_file_io_lease.c").read_text(encoding="utf-8")
+    source_text = normalize_thread_cold_access(
+        (root / "os/open_file_io_lease.c").read_text(encoding="utf-8")
+    )
     source = compact(source_text)
     file_text = (root / "os/file.c").read_text(encoding="utf-8")
     file_source = compact(file_text)

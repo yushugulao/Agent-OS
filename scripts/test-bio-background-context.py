@@ -3,9 +3,17 @@
 
 from pathlib import Path
 
+from thread_cold_source import (
+    normalize_thread_cold_access,
+    verify_thread_cold_contract,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
-BIO = (ROOT / "os/bio.c").read_text(encoding="utf-8")
+BIO_RAW = (ROOT / "os/bio.c").read_text(encoding="utf-8")
+PROC_H_RAW = (ROOT / "os/proc.h").read_text(encoding="utf-8")
+verify_thread_cold_contract(PROC_H_RAW, (BIO_RAW,))
+BIO = normalize_thread_cold_access(BIO_RAW, "os/bio.c")
 BIO_H = (ROOT / "os/bio.h").read_text(encoding="utf-8")
 FS = (ROOT / "os/fs.c").read_text(encoding="utf-8")
 IOBUDGET = (ROOT / "user/src/iobudget_ucore.c").read_text(encoding="utf-8")
@@ -104,8 +112,8 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         "!io_policy.runtime_ready && executor->identity_generation != 0",
         "executor->state != RUNNING || executor->tid < 0",
         "executor->process == 0 || executor->identity_generation == 0",
-        "executor->bio_buffer_holds != 0",
-        "executor->bio_fs_atomic_depth != 0",
+        "thread_cold(executor)->bio_buffer_holds != 0",
+        "thread_cold(executor)->bio_fs_atomic_depth != 0",
         "io_policy.background.executor = executor;",
         "io_policy.background.executor_generation = executor->identity_generation;",
         "io_policy.background.boot_executor = !io_policy.runtime_ready;",
@@ -142,12 +150,12 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         "io_wait_for_debt( state, IO_POLICY_CLASS_BACKGROUND, 1)",
         "io_wait_for_device_debt( owner, IO_POLICY_CLASS_BACKGROUND, 1)",
         "bio_background_wait_for_cache_progress()",
-        "if (state == 0) panic(\"background I/O owner vanished\")",
+        "if (state == 0) panic(",
         "return bio_checkpoint_make(BIO_CHECKPOINT_READY)",
     ):
         if token not in checkpoint:
             raise ContractError(f"forward cleanup settlement missing {token}")
-    if "if (quiescent) panic(\"background quiescent checkpoint holds buffer\")" not in checkpoint:
+    if "if (quiescent) panic(" not in checkpoint:
         raise ContractError("background quiescent checkpoint can retain a buffer")
 
     settle = compact(function_body(bio, "bio_request_settle_quiescent_cleanup"))
@@ -167,7 +175,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         if "bio_cache_release_closed_owner(owner)" not in release:
             raise ContractError(f"{name} can strand or destroy cleanup cache state")
     background_end = compact(function_body(bio, "bio_background_end"))
-    if "if (state == 0) panic(\"background I/O owner vanished at end\")" not in background_end:
+    if "if (state == 0) panic(" not in background_end:
         raise ContractError("background end can silently leak a vanished owner")
     if background_end.index("memset(&io_policy.background") > background_end.index(
             "bio_cache_release_closed_owner(owner)"):
@@ -224,7 +232,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
     hash_find = bget.find("b = bio_cache_hash_find(dev, blockno);")
     hit = bget.find("if (b != 0) {", hash_find)
     reserved_guard = bget.find(
-        "if (b->background_reserved) panic(\"reserved buffer in hash\")",
+        "if (b->background_reserved) panic(",
         hit,
     )
     if hash_find < 0 or hit < 0 or reserved_guard < 0:
@@ -257,12 +265,13 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         raise ContractError("background cache contention is not a retry result")
     if bget.count("intr_restore(enabled); return 0;") != 4:
         raise ContractError("background cache retry returns with IRQs disabled")
+    raw_bget = function_body(BIO_RAW, "bget")
     for panic_text in (
         "background hit busy buffer",
         "background buffer-cache reservation invariant",
         "background buffer-cache controller admission",
     ):
-        if panic_text in bget:
+        if panic_text in raw_bget:
             raise ContractError(f"ordinary background contention can panic: {panic_text}")
     for name in ("bread", "bread_device"):
         read = compact(function_body(bio, name))

@@ -4,9 +4,17 @@
 import re
 from pathlib import Path
 
+from thread_cold_source import (
+    normalize_thread_cold_access,
+    verify_thread_cold_contract,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
-BIO = (ROOT / "os/bio.c").read_text(encoding="utf-8")
+BIO_RAW = (ROOT / "os/bio.c").read_text(encoding="utf-8")
+PROC_H_RAW = (ROOT / "os/proc.h").read_text(encoding="utf-8")
+verify_thread_cold_contract(PROC_H_RAW, (BIO_RAW,))
+BIO = normalize_thread_cold_access(BIO_RAW, "os/bio.c")
 RESOURCE = (ROOT / "os/resource_controller.c").read_text(encoding="utf-8")
 POLICY = (ROOT / "io_policy.h").read_text(encoding="utf-8")
 IOBUDGET = (ROOT / "user/src/iobudget_ucore.c").read_text(encoding="utf-8")
@@ -115,7 +123,7 @@ def validate(bio: str, resource: str, policy: str, iobudget: str) -> None:
         "if (lane->debt == 0) reserved = MIN(amount, lane->tokens);",
         "if (reserved != 0)",
         "device->debt == 0 && device->tokens >= reserved",
-        "panic(\"I/O reserved batch charge\");",
+        "state, io_class, 0, 0, 1, reserved) < 0) panic(",
         "state->reserved_grants += reserved;",
         "amount -= reserved;",
         "if (amount != 0 && lane->debt == 0",
@@ -276,7 +284,7 @@ def validate(bio: str, resource: str, policy: str, iobudget: str) -> None:
     ):
         raise ContractError("request end does not refund-or-flush")
     abort_settlement = abort[abort.find(
-        "state = io_state_find(thread->io_request_owner, 0);"):]
+        "state = io_state_find(thread_cold(thread)->io_request_owner, 0);"):]
     if not ordered(
         abort_settlement,
         "BIO_REQUEST_TRANSFERRED) == 0",

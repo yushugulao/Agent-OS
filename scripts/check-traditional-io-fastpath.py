@@ -9,8 +9,14 @@ import sys
 from pathlib import Path
 
 
+THREAD_COLD_ACCESS = re.compile(
+    r"thread_trap_cold(?:_const)?\(\s*([A-Za-z_]\w*)\s*\)->"
+)
+
+
 def compact(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
+    text = THREAD_COLD_ACCESS.sub(r"\1->", text)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     text = re.sub(r"//[^\n]*", "", text)
     return re.sub(r"\s+", "", text)
@@ -82,6 +88,11 @@ def check(root: Path) -> None:
         "byte checkpoint bypasses canonical work accounting",
     )
     checkpoint = function(work, "kernel_work_checkpoint_mode")
+    require(
+        checkpoint,
+        "cold=thread_trap_cold(t);",
+        "work checkpoint is not bound to the current thread's cold state",
+    )
     reject(
         checkpoint,
         "get_cycle()",
@@ -89,8 +100,8 @@ def check(root: Path) -> None:
     )
     require(
         checkpoint,
-        "!t->kernel_resched_pending&&"
-        "t->kernel_work_units<KERNEL_WORK_BUDGET_UNITS",
+        "!cold->kernel_resched_pending&&"
+        "cold->kernel_work_units<KERNEL_WORK_BUDGET_UNITS",
         "work checkpoint does not use the tick-published reschedule edge",
     )
     irq_window = function(work, "kernel_work_irq_window")
@@ -116,7 +127,7 @@ def check(root: Path) -> None:
         "architecture IRQ window does not restore the masked state",
     )
     budget_edge = checkpoint.find(
-        "t->kernel_work_units<KERNEL_WORK_BUDGET_UNITS"
+        "cold->kernel_work_units<KERNEL_WORK_BUDGET_UNITS"
     )
     delivery = checkpoint.find("kernel_work_irq_window(t);")
     peer_query = checkpoint.find("if(!scheduler_has_runnable_peer())")
@@ -130,7 +141,7 @@ def check(root: Path) -> None:
     require(
         checkpoint,
         "if(!scheduler_has_runnable_peer()){"
-        "t->kernel_resched_pending=0;t->kernel_work_units=0;",
+        "cold->kernel_resched_pending=0;cold->kernel_work_units=0;",
         "uncontended kernel work still context-switches to itself",
     )
     peer = function(proc, "scheduler_has_runnable_peer")
@@ -347,12 +358,14 @@ def check(root: Path) -> None:
     slow = function(syscall, "syscall_slow_path")
     require(
         slow,
-        "structsyscall_transaction_contexttransaction;",
-        "slow path does not own its transaction frame",
+        "structsyscall_transaction_context*transaction="
+        "(structsyscall_transaction_context*)"
+        "thread_trap_cold(curr_thread())->syscall_transaction;",
+        "slow path does not reuse the current thread's trap-page scratch",
     )
     require(
         slow,
-        "syscall_transaction_finish(&transaction,&ret);",
+        "syscall_transaction_finish(transaction,&ret);",
         "slow path can return without settling the transaction",
     )
     dispatch = function(syscall, "syscall_dispatch")

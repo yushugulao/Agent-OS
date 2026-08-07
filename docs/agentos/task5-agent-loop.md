@@ -226,7 +226,7 @@ int agent_heartbeat_stop(void);
 
 ## 感知调度：资源域与 Agent
 
-AgentOS-uCore 的运行队列采用两级结构。`scheduler_active_domains` 是 active `resource_domain_id` 的 FIFO，每个有可运行线程的域最多出现一次；调度器每轮弹出一个域、只从该域选择一个线程，再把仍有 runnable 线程的域放回队尾。每域的线程保存在独立 `scheduler_domain_tasks[]` 中，因此一个 PUBLIC 进程创建更多线程不会在外层队列取得更多节点，也不能按线程数放大跨域 CPU 份额。
+AgentOS-uCore 的运行队列采用两级结构。`scheduler_active_domains` 是 active `resource_domain_id` 的 FIFO，每个有可运行线程的域最多出现一次；调度器每轮弹出一个域、只从该域选择一个线程，再把仍有 runnable 线程的域放回队尾。每域拆为普通 FIFO lane 与 Agent lane，因此一个 PUBLIC 进程创建更多线程不会在外层队列取得更多节点，也不能按线程数放大跨域 CPU 份额；Agent 评分也不会重排普通 lane。
 
 进入选中域后，如果本域没有 runnable Agent，直接按域内 FIFO 取队；存在 Agent 时，调度器在本域短时扫描候选，用 `agent_sched_better()` 比较软优先级，选出一个线程后把其余候选放回同一域队列。VM snapshot 暂停的 sibling 也只在原域内保留，不会迁移到其他域或破坏外层轮转。
 

@@ -89,8 +89,8 @@
       "os/fs_allocator_test.c",
       "os/physical_page_test.c"
     ],
-    "baseline_lines": 61386,
-    "max_lines": 61386
+    "baseline_lines": 61601,
+    "max_lines": 61601
   },
   "kernel_image": {
     "baseline_stripped_elf_bytes": 443416,
@@ -99,19 +99,19 @@
     "max_raw_binary_bytes": 438368
   },
   "kernel_runtime": {
-    "baseline_text_bytes": 434639,
-    "max_text_bytes": 434639,
+    "baseline_text_bytes": 434759,
+    "max_text_bytes": 434759,
     "baseline_data_bytes": 96,
     "max_data_bytes": 96,
-    "baseline_bss_bytes": 3855456,
-    "max_bss_bytes": 3855456,
-    "baseline_total_bytes": 4290191,
-    "max_total_bytes": 4290191
+    "baseline_bss_bytes": 3265632,
+    "max_bss_bytes": 3265632,
+    "baseline_total_bytes": 3700487,
+    "max_total_bytes": 3700487
   },
   "struct_proc": {
     "symbol": "kernel_budget_struct_proc",
-    "baseline_bytes": 10008,
-    "max_bytes": 10509
+    "baseline_bytes": 6552,
+    "max_bytes": 6552
   },
   "trapframe_pages": {
     "per_thread_symbol": "kernel_budget_trapframe_per_thread",
@@ -1064,8 +1064,8 @@
         "name": "observe_store",
         "source_path": "os/agent_observe_store.c",
         "object_path": "build/os/agent_observe_store.o",
-        "baseline_lines": 896,
-        "max_lines": 896,
+        "baseline_lines": 898,
+        "max_lines": 898,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -1544,14 +1544,14 @@
     }
   },
   "kernel_stack": {
-    "baseline_required_bytes": 15568,
-    "max_required_bytes": 15607,
+    "baseline_required_bytes": 15424,
+    "max_required_bytes": 15424,
     "boot_root": "main",
     "boot_stack_start_symbol": "boot_stack",
     "boot_stack_end_symbol": "boot_stack_top",
     "boot_stack_size_bytes": 65536,
-    "baseline_boot_required_bytes": 10912,
-    "max_boot_required_bytes": 10912,
+    "baseline_boot_required_bytes": 10880,
+    "max_boot_required_bytes": 10880,
     "virtual_capacity_symbol": "kernel_budget_kernel_stack_virtual_capacity",
     "baseline_virtual_capacity_bytes": 33554432,
     "max_virtual_capacity_bytes": 35232154,

@@ -277,8 +277,8 @@ static void run_truncate_phase(void)
 	      "truncate observer progressed before syscall returned");
 	check(preemptions > 0,
 	      "truncate crossed a kernel scheduling boundary");
-	printf("syscallfair_ucore: truncate_preemptions=%lld peer_progress=%d\n",
-	       (long long)preemptions, peer_progress);
+	printf("syscallfair_ucore: truncate_preemptions=%d peer_progress=%d\n",
+	       (int)preemptions, peer_progress);
 	write_stdout(trunc_end, sizeof(trunc_end) - 1);
 	check(close(fd) == 0, "close truncated file");
 	check(unlink(path) == 0, "remove truncated file");

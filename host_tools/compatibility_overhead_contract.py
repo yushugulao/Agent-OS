@@ -667,7 +667,7 @@ def source_receipt(repo: Path) -> dict[str, object]:
             }
         )
 
-    source_text = source_data.decode("ascii")
+    source_text = source_data.decode("utf-8")
     source_requirements = (
         "#define BENCH_SCHEMA 2",
         "#define BENCH_ROUNDS 3",

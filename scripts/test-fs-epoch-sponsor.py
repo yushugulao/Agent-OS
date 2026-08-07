@@ -3,11 +3,19 @@
 
 from pathlib import Path
 
+from thread_cold_source import (
+    normalize_thread_cold_access,
+    verify_thread_cold_contract,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FS_EPOCH = (ROOT / "os/fs_epoch.c").read_text(encoding="utf-8")
 FS_EPOCH_H = (ROOT / "os/fs_epoch.h").read_text(encoding="utf-8")
-BIO = (ROOT / "os/bio.c").read_text(encoding="utf-8")
+BIO_RAW = (ROOT / "os/bio.c").read_text(encoding="utf-8")
+PROC_H_RAW = (ROOT / "os/proc.h").read_text(encoding="utf-8")
+verify_thread_cold_contract(PROC_H_RAW, (BIO_RAW,))
+BIO = normalize_thread_cold_access(BIO_RAW, "os/bio.c")
 FS = (ROOT / "os/fs.c").read_text(encoding="utf-8")
 SYSCALL = (ROOT / "os/syscall.c").read_text(encoding="utf-8")
 
@@ -141,8 +149,8 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str,
     for token in (
         "io_policy.background.buffer_holds == 0",
         "io_policy.background.fs_atomic_depth == 0",
-        "thread->bio_buffer_holds == 0",
-        "thread->bio_fs_atomic_depth == 0",
+        "thread_cold(thread)->bio_buffer_holds == 0",
+        "thread_cold(thread)->bio_fs_atomic_depth == 0",
         "bio_boot_buffer_holds == 0",
         "bio_boot_fs_atomic_depth == 0",
     ):
@@ -198,9 +206,9 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str,
     ordered(
         sponsor,
         "origin_request_id != 0",
-        "thread->io_request_id == origin_request_id",
-        "thread->io_request_owner == owner",
-        "thread->io_request_class == io_class",
+        "thread_cold(thread)->io_request_id == origin_request_id",
+        "thread_cold(thread)->io_request_owner == owner",
+        "thread_cold(thread)->io_request_class == io_class",
         "effective_class = io_class",
         "reuse_request_lease = 1",
         "effective_class = IO_POLICY_CLASS_BACKGROUND",
@@ -210,10 +218,10 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str,
         transfer,
         "bio_deferred_sponsor_current()",
         "io_policy.deferred.reuse_request_lease",
-        "thread->io_request_id == io_policy.deferred.origin_request_id",
-        "thread->io_request_owner == io_policy.deferred.owner",
-        "thread->io_request_class == io_policy.deferred.io_class",
-        "transfers = &thread->io_request_transfers",
+        "thread_cold(thread)->io_request_id == io_policy.deferred.origin_request_id",
+        "thread_cold(thread)->io_request_owner == io_policy.deferred.owner",
+        "thread_cold(thread)->io_request_class == io_policy.deferred.io_class",
+        "transfers = &thread_cold(thread)->io_request_transfers",
     )
 
     finish = compact(function_body(syscall, "syscall_transaction_finish"))
@@ -516,7 +524,7 @@ MUTATIONS = (
         replace_in_function(
             BIO,
             "bio_deferred_sponsor_begin",
-            "thread->io_request_id == origin_request_id",
+            "thread_cold(thread)->io_request_id == origin_request_id",
             "1",
         ),
         SYSCALL,
@@ -527,7 +535,7 @@ MUTATIONS = (
         replace_in_function(
             BIO,
             "bio_deferred_sponsor_begin",
-            "thread->io_request_class == io_class",
+            "thread_cold(thread)->io_request_class == io_class",
             "1",
         ),
         SYSCALL,

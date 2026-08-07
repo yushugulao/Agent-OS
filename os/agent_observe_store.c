@@ -593,16 +593,18 @@ int
 agent_obsstore_receipt_persist(uint scope_id)
 {
 	struct thread *t = curr_thread();
+	struct thread_trap_cold *cold;
 	struct agent_observe_persist_context context;
 
-	if (t == 0)
+	if (t == 0 || t->trapframe == 0)
 		return -1;
+	cold = thread_trap_cold(t);
 	context.running = t->tid >= 0 && t->state == RUNNING &&
 			  t->process != 0;
-	context.kernel_work_depth = t->kernel_work_depth;
-	context.io_request_depth = t->io_request_depth;
-	context.buffer_holds = t->bio_buffer_holds;
-	context.fs_atomic_depth = t->bio_fs_atomic_depth;
+	context.kernel_work_depth = cold->kernel_work_depth;
+	context.io_request_depth = cold->io_request_depth;
+	context.buffer_holds = cold->bio_buffer_holds;
+	context.fs_atomic_depth = cold->bio_fs_atomic_depth;
 	context.sstatus = r_sstatus();
 	context.supervisor_previous_mask = SSTATUS_SPP;
 	context.metadata_txn_owned = agent_metadata_txn_owned(0);

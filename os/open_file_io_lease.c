@@ -223,9 +223,10 @@ static int open_file_io_syscall_context(enum vfs_operation operation,
 
 	if (open_file_io_operation_mask(operation) == 0 || proc == 0 ||
 	    thread == 0 || thread->process != proc ||
+	    thread->trapframe == 0 ||
 	    thread->identity_generation == 0 ||
-	    thread->kernel_work_depth == 0 ||
-	    thread->kernel_work_target_syscall_id !=
+	    thread_trap_cold(thread)->kernel_work_depth == 0 ||
+	    thread_trap_cold(thread)->kernel_work_target_syscall_id !=
 		    (operation == VFS_OP_READ ? SYS_read : SYS_write))
 		return 0;
 	*proc_out = proc;
@@ -249,7 +250,8 @@ static void open_file_io_token_issue(
 	token->edit_authority_generation = grant->edit_authority_generation;
 	token->edit_deadline_tick = grant->edit_deadline_tick;
 	token->thread_generation = thread->identity_generation;
-	token->syscall_generation = thread->kernel_work_generation;
+	token->syscall_generation =
+		thread_trap_cold_const(thread)->kernel_work_generation;
 	token->inode_incarnation = grant->inode_incarnation;
 	token->inode_checksum = grant->inode_checksum;
 	token->inode_policy_generation = grant->inode_policy_generation;
@@ -381,7 +383,8 @@ int open_file_io_token_validate(const struct open_file_io_token *token,
 	enabled = intr_save();
 	valid = token->subject == proc && token->inode == inode &&
 		thread->identity_generation == token->thread_generation &&
-		thread->kernel_work_generation == token->syscall_generation &&
+		thread_trap_cold(thread)->kernel_work_generation ==
+			token->syscall_generation &&
 		open_file_io_file_matches(token->file, inode, operation) &&
 		open_file_io_subject_matches(proc, token->account,
 					     token->lifecycle, token->cred) &&
