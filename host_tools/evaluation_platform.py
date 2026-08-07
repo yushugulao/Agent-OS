@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Fail-closed execution-domain preflight for formal AgentOS evaluation.
+"""正式评测执行域的闭锁式预检。
 
-Formal collection has one execution domain.  Linux runs natively; a Windows
-Host normally proves a named WSL distribution and then re-executes the complete
-evaluation command there.  A deliberately provisioned MSYS2 environment is
-also accepted as one native POSIX domain, but only after its runtime, namespace,
-Python implementation and complete tool set have been bound.  Native Windows
-Python and mixed Windows/WSL collection remain forbidden.
+Linux 原生运行；Windows 通常在验证指定 WSL 发行版后重启完整评测命令。
+MSYS2 仅在运行时、命名空间、Python 和工具集全部绑定后作为独立 POSIX 域接纳。
+禁止原生 Windows Python 及 Windows/WSL 混合采集。
 """
 
 from __future__ import annotations
@@ -15,7 +12,7 @@ import sys as _entry_sys
 
 
 def _isolate_direct_entry_imports() -> None:
-    """Use only interpreter-owned paths for top-level import resolution."""
+    """顶层导入仅使用解释器自有路径。"""
 
     if __name__ != "__main__":
         return
@@ -144,7 +141,7 @@ FORWARDED_ENVIRONMENT_NAMES = (
 
 
 class PlatformPreflightError(ValueError):
-    """Raised when no trustworthy formal execution domain is available."""
+    """没有可信正式执行域。"""
 
 
 def _safe_directory(path: Path, label: str) -> Path:
@@ -181,7 +178,7 @@ def _normalized_hardware_text(value: str, label: str, *, limit: int = 512) -> st
 
 
 def _validate_hardware_identity(value: object) -> dict[str, Any]:
-    """Validate the stable, public subset of Host hardware identity."""
+    """校验 Host 硬件身份中的稳定公开字段。"""
 
     expected = {
         "cpu_model", "logical_cpu_count", "memory_total_bytes", "source",
@@ -223,7 +220,7 @@ def _validate_hardware_identity(value: object) -> dict[str, Any]:
 def _parse_proc_hardware_identity(
     cpuinfo_text: str, meminfo_text: str
 ) -> dict[str, Any]:
-    """Derive stable hardware fields while deliberately ignoring dynamic MHz."""
+    """提取稳定硬件字段，忽略动态 MHz。"""
 
     if not cpuinfo_text or not meminfo_text or "\x00" in cpuinfo_text + meminfo_text:
         raise PlatformPreflightError("procfs hardware identity is unavailable")
@@ -310,11 +307,8 @@ def _parse_proc_hardware_identity(
 
 
 def _read_bounded_proc_file(path: Path, label: str) -> str:
-    # ``/proc`` is a trusted kernel/runtime namespace rather than an evidence
-    # tree.  In native MSYS2 it is virtual and has no Win32 file attributes, so
-    # the general reparse-point checker cannot inspect it.  Bind the two exact
-    # procfs inputs and use O_NOFOLLOW plus fstat instead of weakening the
-    # link-safe rules used for repository and evidence paths.
+    # /proc 是可信的内核运行时命名空间；MSYS2 中的虚拟文件没有 Win32 属性。
+    # 因此只绑定这两个 procfs 输入，并以 O_NOFOLLOW 和 fstat 防止链接替换。
     expected_paths = {
         "/proc/cpuinfo": "/proc/cpuinfo",
         "/proc/meminfo": "/proc/meminfo",
@@ -356,7 +350,7 @@ def _probe_proc_hardware_identity(
     cpuinfo_path: Path = Path("/proc/cpuinfo"),
     meminfo_path: Path = Path("/proc/meminfo"),
 ) -> dict[str, Any]:
-    """Collect hardware identity only from the controlled procfs namespace."""
+    """仅从受控 procfs 命名空间采集硬件身份。"""
 
     return _parse_proc_hardware_identity(
         _read_bounded_proc_file(cpuinfo_path, "/proc/cpuinfo"),
@@ -381,7 +375,7 @@ def _sha256(path: Path) -> str:
 def _decode_output(raw: bytes) -> str:
     if not raw:
         return ""
-    # Console programs such as wsl.exe use UTF-16 on some Windows releases.
+    # 部分 Windows 版本的 wsl.exe 等控制台程序使用 UTF-16。
     if raw.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw[:64]:
         for encoding in ("utf-16", "utf-16-le"):
             try:
@@ -563,12 +557,10 @@ def _canonical_posix_path(value: str, label: str) -> PurePosixPath:
 def _current_msys2_identity(
     environment: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Prove this is MSYS2, not native Windows or a Cygwin installation.
+    """确认当前环境是 MSYS2，而非原生 Windows 或 Cygwin。
 
-    Upstream MSYS2 Python reports ``sys.platform == 'cygwin'``.  The runtime
-    identity therefore comes from the conjunction of that value, ``os.name``,
-    ``MSYSTEM`` and the kernel name.  A real Cygwin kernel reports
-    ``CYGWIN_NT-*`` and is rejected by the strict ``MSYS_NT-*`` match.
+    MSYS2 Python 同样报告 ``sys.platform == 'cygwin'``，故需联合检查
+    ``os.name``、``MSYSTEM`` 和内核名，并严格匹配 ``MSYS_NT-*``。
     """
 
     values = os.environ if environment is None else environment
@@ -755,7 +747,7 @@ def _validate_msys_clean_entry(
     windows_temporary_directory: str,
     windows_system_drive: str,
 ) -> None:
-    """Reject a forged re-entry marker or inherited host build settings."""
+    """拒绝伪造的重入标记或继承的 Host 构建设置。"""
 
     if os.environ.get("AGENTOS_EVALUATION_EXECUTION_DOMAIN") != MSYS_REENTRY_MARKER:
         raise PlatformPreflightError("formal MSYS2 collection did not use clean re-entry")
@@ -1000,7 +992,7 @@ def _recorded_duration_profile(
 def validate_duration_profile_binding(
     preflight: Mapping[str, Any], *, repository: Path | None = None
 ) -> str:
-    """Validate the profile against its execution domain and recorded tool profile."""
+    """按执行域及已记录工具配置校验时长配置。"""
 
     binding = preflight.get("duration_profile")
     none = {
@@ -1123,7 +1115,7 @@ def probe_native_linux_domain(
     duration_profile: str,
     shell_bin: str = "bash",
 ) -> dict[str, Any]:
-    """Probe the exact native Linux domain used by formal collection."""
+    """探测正式采集所用的原生 Linux 域。"""
 
     if not sys.platform.startswith("linux") or os.name != "posix":
         raise PlatformPreflightError(
@@ -1218,7 +1210,7 @@ def probe_native_msys2_domain(
     duration_profile: str,
     shell_bin: str = "bash",
 ) -> dict[str, Any]:
-    """Probe a complete formal domain hosted by one native MSYS2 runtime."""
+    """探测单一原生 MSYS2 运行时承载的完整正式域。"""
 
     uname_identity = _current_msys2_identity()
     windows_system_drive = _canonical_windows_system_drive()
@@ -1281,8 +1273,7 @@ def probe_native_msys2_domain(
         )
 
     host_objdump = Path(tools["host_objdump"]["path"])
-    # Build payload tools may be native PE; only the MSYS2 control plane must
-    # import the single bound POSIX runtime.
+    # 构建工具可为原生 PE；仅要求 MSYS2 控制面导入唯一绑定的 POSIX 运行时。
     for label in (
         "bash", "cygpath", "env", "git", "host_objdump", "make", "python",
         "readlink", "sha256sum", "timeout", "uname",
@@ -1332,10 +1323,8 @@ def probe_native_msys2_domain(
         "windows_system_drive": windows_system_drive,
         "windows_temporary_directory": windows_temporary_directory,
         "uname": {**uname_identity, "command": uname_text},
-        # Caller-selected prefix invocation is intentional: PATH below contains
-        # only the individually hashed compiler/binutils directories.  This
-        # supports a GCC wrapper and native PE binutils living in separate
-        # directories without admitting any unbound executable.
+        # PATH 仅含逐一哈希的编译器/binutils 目录；保留调用方前缀以兼容
+        # 分处不同目录的 GCC 包装器和原生 PE binutils，不放入未绑定程序。
         "toolprefix": toolprefix,
         "tools": {label: tools[label] for label in MSYS_TOOL_LABELS},
     }
@@ -1350,7 +1339,7 @@ def probe_native_msys2_domain(
 def _validate_posix_clean_entry(
     proof: Mapping[str, Any], *, repository: Path
 ) -> None:
-    """Require a native/WSL collector to match the env -i launch contract."""
+    """要求原生或 WSL 采集器符合 env -i 启动约定。"""
 
     tools = proof.get("tools")
     marker = os.environ.get("AGENTOS_EVALUATION_EXECUTION_DOMAIN", "")
@@ -1419,7 +1408,7 @@ def probe_native_collection_domain(
     duration_profile: str,
     shell_bin: str = "bash",
 ) -> dict[str, Any]:
-    """Probe a domain already entered by the formal collection process."""
+    """探测正式采集进程已进入的执行域。"""
 
     if os.name == "posix" and sys.platform == "cygwin":
         proof = probe_native_msys2_domain(
@@ -1581,8 +1570,8 @@ def _wsl_launcher_identity(wsl: Path, *, cwd: Path) -> dict[str, str]:
         except PlatformPreflightError:
             version = "unavailable; executable identity bound by SHA256"
     else:
-        # Old inbox WSL has no --version.  Successful distro execution below is
-        # the usability proof; the launcher file hash remains its identity.
+        # 旧版系统内置 WSL 没有 --version；以发行版执行成功证明可用性，
+        # 启动器身份仍由文件哈希绑定。
         version = "unavailable; executable identity bound by SHA256"
     return {
         "argv0": "wsl.exe",
@@ -1928,7 +1917,7 @@ def _convert_msys_forwarded_path(value: str) -> str:
 
 
 def _bootstrap_environment(host_environment: Mapping[str, str]) -> dict[str, str]:
-    """Clear loader/startup injection before the attested env tool begins."""
+    """在可信 env 工具启动前清除加载器和启动注入。"""
 
     if os.name != "nt" and sys.platform != "cygwin":
         return {}
@@ -1947,7 +1936,7 @@ def execute_in_msys2(
     mode: str,
     host_environment: Mapping[str, str],
 ) -> int:
-    """Re-enter every formal stage through the bound MSYS2 clean environment."""
+    """通过绑定的 MSYS2 纯净环境重入各正式阶段。"""
 
     if mode not in FORMAL_MODES:
         raise PlatformPreflightError(f"unsupported MSYS2 formal mode: {mode}")
@@ -2029,7 +2018,7 @@ def execute_in_native_linux(
     mode: str,
     host_environment: Mapping[str, str],
 ) -> int:
-    """Enter a hash-bound native Linux Bash through an empty environment."""
+    """从空环境进入哈希绑定的原生 Linux Bash。"""
 
     if mode not in FORMAL_MODES or preflight.get("domain") != "native-linux":
         raise PlatformPreflightError("unsupported native Linux formal execution")

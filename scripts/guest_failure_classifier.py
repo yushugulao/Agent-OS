@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage-aware classification of structured AgentOS Guest failure lines."""
+"""按执行阶段分类结构化 AgentOS Guest 故障行。"""
 
 from __future__ import annotations
 
@@ -56,11 +56,10 @@ LEGACY_FAILURE_LINE_RE = re.compile(
 
 
 def classify_output_line(line: str, *, phase: str) -> str | None:
-    """Return a failure category for one output line in its execution phase.
+    """按执行阶段返回单行输出的故障类别。
 
-    Build output is deliberately not interpreted as Guest output.  This keeps
-    target names such as ``build/riscv64/ch6b_panic`` from becoming failures,
-    while every line observed after QEMU starts is checked by one shared rule.
+    构建输出不按 Guest 输出解释，以免 ``build/riscv64/ch6b_panic`` 等目标名
+    误报；QEMU 启动后的每一行统一按共享规则检查。
     """
 
     if not isinstance(line, str):

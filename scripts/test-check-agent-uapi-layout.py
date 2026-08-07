@@ -77,8 +77,6 @@ class AgentUapiLayoutTests(unittest.TestCase):
             ],
             225,
         )
-        agent_uapi_layout.compare_golden(self.golden, self.golden)
-
     def test_retired_syscall_numbers_remain_unassigned(self):
         id_paths = (
             ROOT / "os" / "syscall_ids.h",

@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
-"""Versioned source contract for the Task 1-5 functional receipts.
-
-The functional receipts are useful only when their values still flow from the
-production kernel operations.  This contract closes the reviewed functional
-call graph with token-normalized fingerprints and then checks the important
-source-to-receipt edges independently.  Formatting and comments may change,
-but executable tokens require an explicit contract-version review.
-"""
+"""任务 1-5 功能回执的版本化源码合同；可执行 token 变更必须复审合同版本。"""
 from __future__ import annotations
 
 import ast
 import hashlib
 import json
 import re
-from pathlib import Path
 
 if __package__:
     from .benchmark_source_contract import (
@@ -40,9 +32,8 @@ TASK_SPECS = {
     ),
 }
 
-# This is the complete reviewed function closure that can create, validate,
-# hash, or publish Task 1-5 evidence.  Per-function digests make a review point
-# precise without making whitespace or comments part of the security policy.
+# 这是能创建、验证、哈希或发布任务 1-5 证据的完整受审函数闭包；
+# 分函数摘要不把空白和注释纳入安全策略。
 FUNCTION_GROUPS = {
     "common": (
         "check",
@@ -99,18 +90,12 @@ FUNCTION_GROUPS = {
     ),
 }
 
-# Task3's runner deliberately follows the public direct-query helper instead
-# of duplicating its mapped-Context implementation.  Keep the security-relevant
-# flow below under semantic validation so helper implementation changes do not
-# require copying a new whole-function digest into this contract.
+# 任务 3 复用公开直查 helper；以下语义检查约束关键数据流，避免复制整函数摘要。
 SEMANTIC_ONLY_FUNCTIONS = frozenset({"run_functional_task3"})
 
 
-# Filled from the reviewed source below.  The digest covers each function's
-# name, parameter list, and body after lexical normalization.  The producer's
-# closed preprocessor contract and compiler type checking cover declarations;
-# excluding text before the name prevents a preceding #define line from being
-# mistaken for part of the function signature.
+# 摘要覆盖词法归一化后的函数名、参数与函数体；声明由闭合预处理合同和编译器检查，
+# 排除函数名前文本以免把前置 #define 误当作签名。
 FUNCTION_FINGERPRINTS: dict[str, str] = {
     "check": "1f294c748d60c411d1d4083b9d4d5fd7627051a1db02d8161ec1662b8401e376",
     "hash_bytes": "0b8ff7cd400ce7517ed36f015b2e6dba4b3d940074c121d805cb0f9ba82f6428",
@@ -1150,10 +1135,7 @@ def _validate_execution_control(tokens: list[str]) -> None:
 
 
 def validate_functional_acceptance_source_text(text: str) -> None:
-    # Validate translation phases that the token lexer intentionally erases.
-    # Otherwise a reviewed-looking comment or identifier can be joined to live
-    # code by phase-2 line splicing, or a directive can be hidden behind an
-    # alternate preprocessing token.
+    # 先校验词法器会擦除的翻译阶段，阻止续行拼接代码或用替代 token 隐藏指令。
     try:
         text.encode("ascii")
     except UnicodeEncodeError as error:
@@ -1188,7 +1170,3 @@ def validate_functional_acceptance_source_text(text: str) -> None:
     _validate_task4(tokens, assignments["task4"])
     _validate_task5(tokens, assignments["task5"])
     _validate_execution_control(tokens)
-
-
-def validate_functional_acceptance_source(path: Path) -> None:
-    validate_functional_acceptance_source_text(path.read_text(encoding="utf-8"))

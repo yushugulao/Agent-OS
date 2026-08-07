@@ -163,7 +163,7 @@ FIXED_DASHBOARD_FILES = {
 
 
 class BundleError(ValueError):
-    """Raised when an evaluation package is incomplete or has been modified."""
+    pass
 
 
 def _compression_record() -> dict[str, object]:
@@ -185,7 +185,7 @@ def _compression_record() -> dict[str, object]:
 
 
 def _reject_link_chain(path: Path, label: str) -> None:
-    """Reject a link at the leaf or at any existing lexical ancestor."""
+    """拒绝叶子或任一已有词法祖先中的链接。"""
     try:
         reject_link_components(path)
     except (OSError, ValueError) as error:
@@ -200,8 +200,6 @@ def _safe_directory(path: Path, label: str) -> Path:
 
 
 def _require_same_directory(left: Path, right: Path, label: str) -> None:
-    """Require two already-canonical roots to name the same directory."""
-
     try:
         same = os.path.samefile(left, right)
     except OSError as error:
@@ -225,7 +223,7 @@ def _ensure_directory(path: Path, label: str) -> Path:
 
 
 def _new_file_path(path: Path, label: str) -> Path:
-    """Return a missing file path below a verified ordinary directory."""
+    """返回已验证普通目录下尚不存在的文件路径。"""
     absolute = absolute_lexical_path(path)
     _ensure_directory(absolute.parent, f"{label} parent")
     try:
@@ -324,7 +322,7 @@ def _regular_files(root: Path) -> list[Path]:
 
 
 def _stored_files(root: Path) -> list[Path]:
-    """Inventory a delivery tree using the public, Git-delivery budgets."""
+    """按公开 Git 交付预算清点交付树。"""
     files = _regular_files(root)
     total = 0
     for path in files:
@@ -355,7 +353,7 @@ class _HashingReader:
 def _write_canonical_ustar(
     source_root: Path, logical_paths: list[str], output: Any
 ) -> list[dict[str, object]]:
-    """Write the compressor-independent canonical USTAR member stream."""
+    """写入与压缩器无关的规范 USTAR 成员流。"""
     if not logical_paths or logical_paths != sorted(set(logical_paths)):
         raise BundleError("archive member inventory is empty, duplicated, or unsorted")
     members: list[dict[str, object]] = []
@@ -394,7 +392,7 @@ def _write_deterministic_archive(
     logical_paths: list[str],
     destination: Path,
 ) -> list[dict[str, object]]:
-    """Write a canonical-header gzip containing canonical USTAR members."""
+    """把规范 USTAR 成员写入规范头 gzip。"""
     destination = _new_file_path(destination, "archive output")
     with destination.open("xb") as raw:
         with gzip.GzipFile(
@@ -471,7 +469,6 @@ def _archive_summary(archives: list[dict[str, object]]) -> dict[str, object]:
 
 
 def _dashboard_evidence_inventory(run_dir: Path) -> set[str]:
-    """Return and verify the loose evidence copies used by offline links."""
     summary = _strict_json(run_dir / "summary.json")
     evidence = summary.get("evidence")
     if not isinstance(evidence, list) or not evidence:
@@ -576,7 +573,7 @@ def _verify_full_verification(
     run_dir: Path, *, expected_commit: str, profile: str,
     expected_duration_platform: dict[str, object], contract_root: Path,
 ) -> tuple[dict[str, object], set[str]]:
-    """Replay the detached-C full-verify stage and expose its exact inventory."""
+    """重放脱离 C 的 full-verify 阶段并给出精确清单。"""
 
     root = run_dir / "full-verification"
     present = root.exists() or path_is_link(root)
@@ -694,7 +691,7 @@ def _verify_measurement_source_receipt(
     source_tree: Path,
     suite_path: Path,
 ) -> tuple[dict[str, object], dict[str, Any]]:
-    """Bind the receipt and replay its source contracts from a local snapshot."""
+    """绑定回执，并从本地快照重放源码合同。"""
     relative = "measurement-source-receipt.json"
     try:
         receipt = _strict_json(run_root / relative)
@@ -799,7 +796,7 @@ def _git_capture(repo: Path, *arguments: str) -> bytes:
 def _verify_committed_measurement_sources(
     repo: Path, source_commit: str, receipt: dict[str, Any]
 ) -> None:
-    """Authenticate receipt hashes against blobs in the immutable source C."""
+    """用不可变源码 C 的 blob 认证回执哈希。"""
     repo = _safe_directory(absolute_lexical_path(repo), "source repository")
     if COMMIT_RE.fullmatch(source_commit) is None:
         raise BundleError("measurement source commit is invalid")
@@ -1014,7 +1011,7 @@ def _verify_compatibility_campaign(
 def _scenario_target_inventory(
     report: dict[str, Any], boot_id: str, target: str
 ) -> dict[str, tuple[int, str]]:
-    """Return the exact target files explicitly bound by a scenario receipt."""
+    """返回场景回执显式绑定的精确目标文件。"""
     samples = report.get("samples")
     if not isinstance(samples, list):
         raise BundleError("scenario report has no sample inventory")
@@ -1689,8 +1686,7 @@ def _verify_formal_summary(summary: dict[str, Any]) -> None:
             "publishable negative evidence and "
             "cannot be competition-ready"
         )
-    # A negative result for the preregistered Task 4 claim is a complete
-    # scientific result.  It remains publishable but cannot pass the rubric.
+    # 任务 4 预注册主张的负结果仍可发布，但不能通过竞赛评分门槛。
     expected_task4 = (
         "pass"
         if task4_claims[0]["status"] == "supported"
@@ -1816,19 +1812,6 @@ def _archive_members(record: object) -> list[dict[str, object]]:
     return members
 
 
-def _files_equal(left: Path, right: Path) -> bool:
-    if left.stat().st_size != right.stat().st_size:
-        return False
-    with left.open("rb") as one, right.open("rb") as two:
-        while True:
-            first = one.read(1024 * 1024)
-            second = two.read(1024 * 1024)
-            if first != second:
-                return False
-            if not first:
-                return True
-
-
 def _canonical_ustar_size(members: list[dict[str, object]]) -> int:
     blocks = 2
     for member in members:
@@ -1843,7 +1826,7 @@ def _canonical_ustar_size(members: list[dict[str, object]]) -> int:
 def _decompress_single_gzip(
     archive_path: Path, output_path: Path, expected_bytes: int
 ) -> None:
-    """Decode exactly one bounded gzip member without accepting concatenation."""
+    """只解码一个有界 gzip 成员，不接受拼接流。"""
     decoder = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
     count = 0
     with archive_path.open("rb") as raw, output_path.open("xb") as output:
@@ -1894,7 +1877,7 @@ def _extract_archive(
     record: dict[str, object],
     expansion: dict[str, int] | None = None,
 ) -> None:
-    """Safely materialize one untrusted shard and prove canonical USTAR bytes."""
+    """安全落盘一个不可信分片，并证明其 USTAR 字节规范。"""
     members = _archive_members(record)
     try:
         archive_path = _safe_regular_file(archive_path, "stored archive")
@@ -2015,7 +1998,7 @@ def _extract_archive(
         canonical = _new_file_path(canonical, "canonical USTAR replay")
         with canonical.open("xb") as output:
             _write_canonical_ustar(destination_root, observed, output)
-        if not _files_equal(tar_stream, canonical):
+        if not _same_file_bytes(tar_stream, canonical):
             raise BundleError("archive USTAR member stream is not canonical")
 
 
@@ -2331,7 +2314,7 @@ def create_bundle(
 
 
 def verify_bundle(root: Path, *, contract_root: Path) -> dict[str, Any]:
-    """Replay portable evidence; Git authenticity requires verify_committed_bundle."""
+    """重放可移植证据；Git 真实性另由 verify_committed_bundle 验证。"""
     contract_root = _safe_directory(
         absolute_lexical_path(contract_root), "trusted verifier contract root"
     ).resolve(strict=True)
@@ -2568,8 +2551,7 @@ def verify_bundle(root: Path, *, contract_root: Path) -> dict[str, Any]:
             raise BundleError("packaged summary differs from manifest")
         snapshot_root = payload / MEASUREMENT_SOURCE_SNAPSHOT_ROOT
         campaign_data = _strict_json(payload / "campaign.json")
-        # Authenticate every snapshot byte with the current pure-data receipt
-        # validator before any semantic replay reads snapshot content.
+        # 语义重放读取快照前，先用当前纯数据回执验证器认证全部字节。
         measurement_source_receipt, measurement_receipt = _verify_measurement_source_receipt(
             payload,
             campaign_data,
@@ -2653,7 +2635,7 @@ def verify_bundle(root: Path, *, contract_root: Path) -> dict[str, Any]:
 def _preauthenticate_committed_bundle(
     root: Path, repo_root: Path
 ) -> dict[str, Any]:
-    """Authenticate source-C and delivery using data-only parsing."""
+    """仅用数据解析认证源码 C 与交付物。"""
 
     root = _safe_directory(absolute_lexical_path(root), "bundle root").resolve(
         strict=True
@@ -2704,7 +2686,7 @@ def _preauthenticate_committed_bundle(
 def verify_committed_bundle(
     root: Path, repo_root: Path, *, contract_root: Path
 ) -> dict[str, Any]:
-    """Authenticate Git delivery before replaying portable bundle semantics."""
+    """重放可移植证据包语义前先认证 Git 交付。"""
 
     repo_root = _safe_directory(
         absolute_lexical_path(repo_root), "evidence repository root"

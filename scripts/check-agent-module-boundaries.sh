@@ -60,8 +60,7 @@ for module in ${modules}; do
 	[ -f "${path}" ] ||
 		fail "missing subsystem implementation: os/${module}.c"
 
-	# Private modules may reference the kernel proc pool, but never publish
-	# writable AgentOS data for another module to mutate.
+	# 私有模块可引用内核 proc 池，但不得发布可由其他模块修改的 AgentOS 数据。
 	if grep -n -E '^[[:space:]]*extern[[:space:]]+' "${path}" |
 		grep -v -E 'extern struct proc pool\[NPROC\];' >"${TMP_FILE}"; then
 		fail "os/${module}.c exports or imports writable data"
@@ -69,8 +68,7 @@ for module in ${modules}; do
 	: >"${TMP_FILE}"
 done
 
-# The ownership splits have exactly twenty reviewed size-optimized translation
-# units. Keep the build rule target-local and reject silent policy expansion.
+# 所有权拆分固定为 20 个已审查的尺寸优化编译单元；构建规则须局部生效。
 makefile="${ROOT_DIR}/Makefile"
 size_optimized_modules="$(sed -n \
 	's/^AGENT_SIZE_OPTIMIZED_MODULES[[:space:]]*:=[[:space:]]*//p' \
@@ -85,9 +83,8 @@ if [ "$(grep -c -E -- '(^|[[:space:]])-Os([[:space:]]|$)' \
 	fail "size optimization escaped the reviewed Agent owners"
 fi
 
-# Scheduler-context maintenance must execute the bounded core coordinator.
-# Turning it back into a request silently strands a foreground submitter
-# behind the primary-to-mirror phase once that submitter has gone to sleep.
+# 调度器上下文维护必须执行有界 core 协调器，否则休眠的前台提交者会卡在
+# primary-to-mirror 阶段之后。
 facade_source="${ROOT_DIR}/os/agent.c"
 core_source="${ROOT_DIR}/os/agent_core.c"
 background_maintain="$(sed -n \
@@ -103,8 +100,7 @@ if grep -n -E '^agent_background_(maintain|checkpoint)\(void\)' \
 fi
 : >"${TMP_FILE}"
 
-# Producers publish an edge into a neutral latch.  They must never call back
-# through the facade/core, which would join the control-plane owner graph.
+# 生产者只向中性 latch 发布边，不得回调 facade/core 并接入控制面所有权图。
 background_source="${ROOT_DIR}/os/agent_background.c"
 grep -q -F 'static int agent_background_pending;' "${background_source}" ||
 	fail "neutral Agent background latch is missing"
@@ -170,9 +166,8 @@ if grep -R -n -E 'agent_(metadata_)?prefetch|AGENT_FILE_PREFETCH|SYS_agent_file_
 fi
 : >"${TMP_FILE}"
 
-# Lifecycle identity retirement returns an immutable endpoint key to the core
-# coordinator.  IPC remains the sole route-table owner and is called while the
-# coordinator's interrupt boundary is still held.
+# 生命周期身份回收向 core 协调器返回不可变端点键；IPC 独占路由表，并在
+# 协调器仍持有中断边界时调用。
 lifecycle_source="${ROOT_DIR}/os/agent_lifecycle.c"
 if grep -n -E '\bagent_ipc_[A-Za-z0-9_]*[[:space:]]*\(' \
 	"${lifecycle_source}" >"${TMP_FILE}"; then
@@ -198,8 +193,7 @@ if grep -R -n -F 'agent_lifecycle_controller_departing_locked(p)' \
 fi
 : >"${TMP_FILE}"
 
-# Observation sections request persistence only through the durable-section
-# provider; direct calls would reverse the metadata-store ownership edge.
+# 观察段只能经 durable-section provider 请求持久化，禁止反转 metadata-store 所有权边。
 observe_store_source="${ROOT_DIR}/os/agent_observe_store.c"
 observe_recovery_source="${ROOT_DIR}/os/agent_observe_recovery.c"
 if grep -n -E '\bagent_metadata_store_[A-Za-z0-9_]*[[:space:]]*\(' \
@@ -246,8 +240,7 @@ for member in '.mark_dirty = agent_meta_durable_dirty' \
 		fail "durable persistence provider lost member: ${member}"
 done
 
-# Metadata crash attestation is compiled only in its explicit profile. Keep the
-# production graph free of the object and limit the bridge to the store owner.
+# 元数据崩溃证明仅在显式 profile 中编译；生产图不得含该对象，桥接限于 store 所有者。
 test_support="${ROOT_DIR}/os/agent_metadata_test.c"
 test_header="${ROOT_DIR}/os/metadata_crash_test.h"
 grep -q -F 'C_SRCS := $(filter-out $K/agent_metadata_test.c,$(C_SRCS))' \
@@ -513,8 +506,7 @@ if grep -R -n -E '#include[[:space:]]+"agent_metadata_store_io\.h"' \
 fi
 : >"${TMP_FILE}"
 
-# The shared facade may retain its existing lifecycle entry points, but owner
-# internals must stay in budgeted private headers rather than escaping here.
+# 共享 facade 可保留生命周期入口，所有者内部结构须留在受预算约束的私有头文件中。
 shared_contract="${ROOT_DIR}/os/agent_internal.h"
 if grep -n -E 'agent_(metadata_(actions|catalog|store|query|scan|directory)|file_(state|query|scan|directory)|query|scan|directory)_' \
 	"${shared_contract}" >"${TMP_FILE}"; then
@@ -527,9 +519,8 @@ if grep -n -E '#include[[:space:]]+"agent_(metadata_(actions|catalog|internal|pr
 fi
 : >"${TMP_FILE}"
 
-# Core may coordinate owner operations, but it must not reset proc-local state
-# by reaching through another owner's fields. Keep the lifecycle boundaries as
-# operations so future sidecars do not require another cross-module rewrite.
+# Core 可协调所有者操作，但不得越过字段重置其他所有者的 proc 局部状态；
+# 生命周期边界保持为操作接口，避免新增 sidecar 时再次跨模块改写。
 core_source="${ROOT_DIR}/os/agent_core.c"
 core_clear="$(sed -n '/^void agent_core_clear_metadata(/,/^}/p' \
 	"${core_source}")"
@@ -587,8 +578,7 @@ done
 printf '%s\n' "${core_tick}" | grep -q -F 'agent_observe_tick_proc(p, now)' ||
 	fail "Agent core tick bypassed the observe owner"
 
-# Resource ownership survives credential-dropping exec. VFS scope controls
-# access only; the immutable lifecycle key remains the accounting principal.
+# 降权 exec 后资源所有权仍保留；VFS scope 只控制访问，不可变生命周期键仍是记账主体。
 bio_source="${ROOT_DIR}/os/bio.c"
 bio_header="${ROOT_DIR}/os/bio.h"
 if [ "$(grep -c -x -F 'uint bio_process_owner(const struct proc *p)' \
@@ -617,8 +607,7 @@ if printf '%s\n' "${io_owner}" | grep -n -F -- 'p->vfs_scope_id' >"${TMP_FILE}";
 fi
 : >"${TMP_FILE}"
 
-# Catalog commits return deltas to the objects owner. A callback here creates
-# an indirect stack edge and a hidden reverse dependency into projections.
+# 目录提交向 objects 所有者返回增量；此处回调会形成间接栈边和指向 projection 的反向依赖。
 catalog_source="${ROOT_DIR}/os/agent_metadata_catalog.c"
 metadata_source="${ROOT_DIR}/os/agent_metadata.c"
 actions_source="${ROOT_DIR}/os/agent_metadata_actions.c"
@@ -701,9 +690,8 @@ for directory_operation in 'agent_metadata_txn_try_external()' \
 		fail "metadata directory lost owner operation: ${directory_operation}"
 done
 
-# A pending catalog projection is a hard persistence barrier. Keep the guard
-# at the shared finish boundary and at both physical writeback transitions so
-# ordinary, repair, and background paths cannot depend on wrapper ordering.
+# 待处理目录 projection 是硬持久化屏障；共享完成边界和两次物理回写转换均须守卫，
+# 使普通、修复和后台路径不依赖包装层顺序。
 projection_idle="$(sed -n \
 	'/agent_metadata_txn_projection_require_idle(void)/,/^}/p' \
 	"${metadata_source}" | tr -d '[:space:]')"
@@ -744,9 +732,8 @@ for persist_function in agent_meta_persist_start_locked \
 	fi
 done
 
-# Scope teardown is a forward-only cross-owner protocol. Keep the expensive
-# metadata sweep in BEGIN, resumable namespace work in FILES, and generation
-# polling in METADATA; an immutable lifecycle key guards every publication.
+# Scope 拆除是只前进的跨所有者协议：BEGIN 扫描元数据，FILES 执行可恢复命名空间工作，
+# METADATA 轮询代际；每次发布均由不可变生命周期键保护。
 vfs_source="${ROOT_DIR}/os/vfs_security.c"
 fs_source="${ROOT_DIR}/os/fs.c"
 reclaim_begin="$(sed -n '/^int agent_scope_reclaim_begin(/,/^}/p' \

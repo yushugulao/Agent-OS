@@ -374,13 +374,10 @@ build_kernel recovery agentmetarecover_ucore
 require_crash_hook_absent "${TMPDIR_META}/kernel-recovery"
 authority_image="${TMPDIR_META}/disk-authority-newer.img"
 
-# mkfs supplies a fully mirrored generation-1 authority. The guest advances
-# that relative generation before entering the selected update checkpoint.
-# The host sends SIGKILL as its first signal only after an exact phase marker.
-# Raw banks are inspected before any recovery boot can repair them.
+# mkfs 提供完整镜像的第 1 代权威；Guest 先推进相对代际再进入指定检查点。
+# Host 仅在精确阶段标记后首发 SIGKILL，并在恢复启动修复前检查原始 bank。
 for interrupted_leg in "${matrix_legs[@]}"; do
-	# Phase 6 yields the verified reference used to prove that the merged
-	# INVALIDATE+payload epoch in phases 3/4 contains the complete new image.
+	# 阶段 6 生成已验证参考，证明阶段 3/4 合并的 INVALIDATE+payload epoch 完整。
 	for phase in "${matrix_phases[@]}"; do
 		tag="${interrupted_leg}-${phase}"
 		image="${TMPDIR_META}/disk-${tag}.img"
@@ -425,7 +422,7 @@ if [[ "${METADATA_MATRIX_ONLY}" -eq 1 ]]; then
 	exit 0
 fi
 
-# Build an unfaulted, fully replicated image for the simultaneous-fault cases.
+# 为并发故障用例构建无故障且完整复制的镜像。
 select_image="${TMPDIR_META}/disk-select-fault.img"
 make_image "${select_image}"
 run_guest agentmetarecover_ucore-select-baseline \
@@ -436,9 +433,7 @@ require_line_once "agentmetarecover_ucore: query_found=0 returned=0" \
 validate_banks "${select_image}" baseline | tee \
 	"${TMPDIR_META}/bank-select-baseline.log"
 
-# Authority remains unresolved when the readable bank is older and the newer
-# peer is temporarily unreadable. Test that stronger case as well as both-bank
-# unavailability for BUSY and EIO.
+# 可读 bank 较旧且新 peer 暂不可读时权威仍未决；同时测试 BUSY/EIO 下双 bank 不可用。
 read -r newer_bank authority_generation < <(
 	newer_bank_for_image "${authority_image}"
 )
@@ -493,9 +488,8 @@ for fault_kind in busy io interrupted; do
 	done
 done
 
-# Seed a bank larger than the SYSTEM_BACKGROUND burst.  The seed performs a
-# foreground live reload before the power cut, proving that the non-resumable
-# syscall path waits for its I/O debt and completes in one invocation.
+# 播种大于 SYSTEM_BACKGROUND burst 的 bank；断电前执行前台在线重载，证明
+# 不可恢复 syscall 路径会偿还 I/O debt 并在一次调用内完成。
 large_image="${TMPDIR_META}/disk-large-seed.img"
 make_image "${large_image}"
 build_kernel large-seed agentmetalarge_ucore
@@ -507,9 +501,8 @@ require_line_once "agentmetalarge_ucore: runtime_reload_completed=1" \
 	"${TMPDIR_META}/agentmetalarge_ucore-large-seed.log"
 validate_large_terminal "${large_image}" valid
 
-# A cached terminal peer must not evict a resumable scan of the large valid
-# bank.  Each case also exercises selected-bank confirmation and catalog-plan
-# continuation under the bounded background budget.
+# 已缓存的终态 peer 不得逐出大型有效 bank 的可恢复扫描；各用例也覆盖有界后台
+# 预算下的选定 bank 确认和 catalog-plan 续跑。
 build_kernel boot-large-terminal agentmetatransient_ucore \
 	AGENT_METADATA_BOOT_READ_FAULT=busy \
 	AGENT_METADATA_BOOT_READ_FAULT_BANK=bank1 \
@@ -529,9 +522,8 @@ for terminal in absent uncommitted corrupt; do
 		"${TMPDIR_META}/bank-large-${terminal}-recovered.log"
 done
 
-# One transient header-flush EIO reaches an explicit indeterminate result and
-# repairs from the verified peer. An unfaulted two-bank baseline prevents a
-# boot-installation false pass.
+# 一次瞬态头部 flush EIO 应得到明确未决结果并从已验证 peer 修复；无故障双 bank
+# 基线用于防止启动安装误通过。
 eio_image="${TMPDIR_META}/disk-eio.img"
 make_image "${eio_image}"
 run_guest agentmetarecover_ucore-eio-baseline \

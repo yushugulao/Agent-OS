@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract plain uCore rp_* text state files from an xv6-style fs image."""
+"""从 xv6 风格文件系统镜像抽取 plain uCore 的 rp_* 文本状态。"""
 
 from __future__ import annotations
 
@@ -97,10 +97,10 @@ VFS_LABEL_F_KERNEL_PRIVATE = 0x4
 VFS_LABEL_F_ROOT = 0x8
 VFS_LABEL_F_FREE = 0x10
 VFS_LABEL_F_KNOWN = 0x1F
-# Magics through 0x10203044 stored a two-value domain in this word.
+# 截至 0x10203044 的旧格式在此字段保存二值域。
 VFS_DOMAIN_PUBLIC = 0
 VFS_DOMAIN_WORKFLOW = 1
-# Scoped formats store a namespace scope identifier in the same word.
+# scoped 格式改在同一字段保存命名空间 scope 标识。
 VFS_SCOPE_NONE = 0
 VFS_SCOPE_SYSTEM = 1
 VFS_SCOPE_FIRST_DYNAMIC_LEGACY = 2
@@ -845,11 +845,6 @@ def discover_state_inventory(
         ),
         names,
     )
-
-
-def discover_name_map(repo_dir: Path | None) -> dict[str, str]:
-    name_map, _ = discover_state_inventory(repo_dir)
-    return name_map
 
 
 def looks_like_state_text(data: bytes) -> bool:

@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Collect paired research-platform measurements from independent QEMU boots.
-
-Guest ``rp_orch_timing`` records are diagnostic decomposition. The separate,
-strict ``rp_workflow_timing`` record supplies the end-to-end makespan from
-workflow entry through final inventory validation. The Host run duration is an
-independent upper bound; run summaries and logs are not alternative timings.
-"""
+"""从独立 QEMU 启动采集成对平台测量；严格工作流记录提供端到端耗时。"""
 
 from __future__ import annotations
 
@@ -47,7 +41,7 @@ try:
     from .agenteval_measurement_source_contract import (
         validate_measurement_source_receipt_shape,
     )
-except ImportError:  # Direct execution from host_tools/.
+except ImportError:  # 从 host_tools/ 直接执行。
     from strict_json import strict_json_loads
     from safe_host_paths import (
         atomic_write_bytes,
@@ -355,7 +349,7 @@ LLM_OUTCOME_KEYS = (
 
 
 class ScenarioEvidenceError(ValueError):
-    """Raised when a boot cannot be accepted as measurement evidence."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -540,7 +534,7 @@ def _parse_program_manifest(path: Path) -> tuple[tuple[str, ...], dict[str, str]
 def read_expected_programs(
     source_tree: Path | None = None,
 ) -> tuple[tuple[str, ...], dict[str, str]]:
-    """Read and cross-check the two target manifests used by this adapter."""
+    """读取并交叉校验适配器使用的两个目标清单。"""
 
     root = source_tree or Path(__file__).resolve().parents[1]
     agentos = _parse_program_manifest(root / "user" / "include" / "rp_program_manifest.h")
@@ -661,7 +655,7 @@ def read_committed_expected_programs(
     source_tree: Path,
     source_commit: str,
 ) -> tuple[tuple[str, ...], dict[str, str]]:
-    """Read the two Task 6 manifests only after binding them to commit blobs."""
+    """绑定到提交 blob 后读取两个任务 6 清单。"""
 
     _committed_source_records(
         source_tree,
@@ -683,7 +677,7 @@ def read_snapshot_expected_programs(
     source_commit: str,
     measurement_source_receipt: object,
 ) -> tuple[tuple[str, ...], dict[str, str]]:
-    """Read the fixed Task 6 inventory from a v6-bound portable snapshot."""
+    """从 v6 绑定的可移植快照读取固定任务 6 清单。"""
 
     _snapshot_source_records(
         source_tree,
@@ -790,7 +784,7 @@ def _program_source_comparability_receipt(
     source_commit: str,
     expected_programs: tuple[str, ...],
 ) -> dict[str, object]:
-    """Collect Task 6 source identity from exact Git commit blobs."""
+    """从精确 Git 提交 blob 收集任务 6 源码身份。"""
 
     if COMMIT_RE.fullmatch(source_commit) is None:
         raise ScenarioEvidenceError("program source receipt commit is invalid")
@@ -829,7 +823,7 @@ def _program_source_comparability_receipt_from_snapshot(
     expected_programs: tuple[str, ...],
     measurement_source_receipt: object,
 ) -> dict[str, object]:
-    """Rebuild Task 6 source identity from a portable v6 source snapshot."""
+    """从可移植 v6 源码快照重建任务 6 源码身份。"""
 
     snapshot_programs, _ = read_snapshot_expected_programs(
         source_tree, source_commit, measurement_source_receipt
@@ -1322,7 +1316,7 @@ def _state_inventory(state_dir: Path) -> tuple[dict[str, object], dict[str, byte
 def _sealed_target_inventory(
     target_dir: Path, state_inventory: dict[str, object]
 ) -> dict[str, object]:
-    """Bind every publishable target file and reject scratch/unknown paths."""
+    """绑定全部可发布目标文件，并拒绝临时或未知路径。"""
     entries = state_inventory.get("files")
     if not isinstance(entries, list):
         raise ScenarioEvidenceError("state inventory cannot seed the sealed inventory")
@@ -1448,7 +1442,7 @@ def _agentos_challenge_oracle(challenge: str) -> dict[str, object]:
 
 
 def _resource_stability_mix(hash_value: int, value: int) -> int:
-    """Mirror the Guest's fixed-width, little-endian report hash step."""
+    """复现 Guest 的定宽小端报告哈希步骤。"""
 
     for _ in range(8):
         hash_value ^= value & 0xFF
@@ -1532,7 +1526,7 @@ def _resource_stability_positive_growth(
     reserved_before: int,
     reserved_after: int,
 ) -> int:
-    """Sum class-local positive deltas without hiding growth behind reclamation."""
+    """仅按类累加正增量，避免回收量掩盖增长。"""
     return max(0, ordinary_after - ordinary_before) + max(
         0, reserved_after - reserved_before
     )
@@ -2553,7 +2547,7 @@ def _normalized_outcome(contents: dict[str, bytes]) -> tuple[dict[str, object], 
 def _task6_artifact_provenance(
     contents: dict[str, bytes], challenge: str
 ) -> dict[str, object]:
-    """Bind Guest-reported provenance to the extracted artifact bytes."""
+    """把 Guest 报告的来源绑定到已抽取工件字节。"""
 
     values = derive_challenge(challenge)
     expected_input, expected_output = task6_artifact_payloads(challenge)
@@ -2641,7 +2635,7 @@ def _task6_artifact_provenance(
 def validate_task6_artifact_provenance(
     value: object, challenge: str, corpus_path: Path
 ) -> None:
-    """Replay a sealed Task6 receipt against an explicitly supplied C snapshot."""
+    """用显式 C 快照重放密封的任务 6 回执。"""
 
     try:
         input_data, output_data = task6_artifact_payloads(
@@ -3237,7 +3231,7 @@ def _joint_mcid_sign_test(
     improvements: Sequence[float | int],
     relative_improvements: Sequence[float | None],
 ) -> dict[str, object]:
-    """Return the exact full-n test for joint per-boot MCID exceedance."""
+    """对每次启动联合超过 MCID 执行精确全样本检验。"""
     if len(improvements) != len(relative_improvements):
         raise ScenarioEvidenceError("joint-MCID inputs must align one-for-one")
     n = len(improvements)
@@ -3270,7 +3264,7 @@ def _reverse_joint_mcid_sign_test(
     improvements: Sequence[float | int],
     relative_improvements: Sequence[float | None],
 ) -> dict[str, object]:
-    """Mirror the registered MCID test for material AgentOS regressions."""
+    """复现已注册的 AgentOS 实质回归 MCID 检验。"""
     if len(improvements) != len(relative_improvements):
         raise ScenarioEvidenceError("reverse joint-MCID inputs must align one-for-one")
     n = len(improvements)
@@ -3976,7 +3970,7 @@ def _summarize(samples: Sequence[dict[str, object]]) -> dict[str, object]:
 
 
 def _classify_claim(summary: dict[str, object]) -> str:
-    """Apply the same preregistered eligibility and MCID gate in both directions."""
+    """对两个方向应用同一预注册资格与 MCID 门槛。"""
     try:
         paired = summary["paired_improvement"]
         samples = paired["samples"]
@@ -4027,11 +4021,6 @@ def _classify_claim(summary: dict[str, object]) -> str:
         ) from error
 
 
-def _supports_claim(summary: dict[str, object]) -> bool:
-    """Compatibility predicate for callers that only need the positive claim."""
-    return _classify_claim(summary) == "supported"
-
-
 def collect_scenario(
     boot_dirs: Sequence[Path],
     *,
@@ -4040,7 +4029,7 @@ def collect_scenario(
     target_orders: Sequence[object | None] | None = None,
     source_tree: Path | None = None,
 ) -> dict[str, object]:
-    """Return a fail-closed scenario report without fabricating missing samples."""
+    """失败关闭地生成场景报告，不伪造缺失样本。"""
 
     base = {
         "schema_version": SCHEMA_VERSION,

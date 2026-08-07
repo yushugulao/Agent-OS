@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Build and verify the complete filesystem allocator fault evidence package.
+"""构建并校验完整的文件系统分配器故障证据包。
 
-The package contract is intentionally closed: all 36 cases, their exact files,
-the volatile-cache backend identity, flush receipts, and the delete-FLUSH
-negative mutation result must be present.  The generated manifest is a
-deterministic function of those inputs and binds every artifact by size and
-SHA-256.
+证据包必须包含全部 36 个用例及其精确文件、易失缓存后端身份、flush 回执和
+删除 FLUSH 的反向变异结果；清单由这些输入确定，并以大小和 SHA-256 绑定产物。
 """
 
 from __future__ import annotations
@@ -79,9 +76,8 @@ MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024
 RUN_ID = re.compile(r"[0-9a-f]{64}\Z")
 GIT_OBJECT_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 
-# Formal allocator children receive only platform plumbing plus deterministic
-# locale/Git policy.  In particular, Python startup hooks, Make include flags,
-# compiler search paths, and every caller-supplied FS_* knob are absent.
+# 正式子进程仅继承平台必需项及确定性的 locale/Git 策略，排除 Python 启动钩子、
+# Make include、编译器搜索路径和调用方提供的 FS_* 设置。
 CONTROLLED_ENV_PASSTHROUGH = frozenset(
     {
         "HOME",
@@ -137,9 +133,8 @@ ROOT_BUILD_SOURCE_PATHS = (
     "wait_atomic_test_abi.h",
 )
 
-# The profile kernel is selected from Makefile's os/*.c and os/*.S wildcards.
-# Snapshot the complete checked-in input set, including inactive test owners,
-# rather than trying to maintain a fragile hand-picked allocator call graph.
+# profile 内核由 Makefile 的 os/*.c、os/*.S 通配符选取，因此快照全部已提交输入，
+# 包括未激活的测试所有者，不手工维护脆弱的分配器调用图。
 KERNEL_BUILD_SOURCE_PATHS = (
     "os/agent_background.c",
     "os/agent_context_path.c",
@@ -593,7 +588,7 @@ def _require_argv(value: object, label: str) -> list[str]:
 def _normalize_profile_compile_argv(
     argv: list[str], label: str, *, mutant: bool, run: dict[str, Any] | None = None
 ) -> list[str]:
-    """Bind profile builds while ignoring only their private output directory."""
+    """绑定 profile 构建，仅忽略其私有输出目录。"""
     normalized: list[str] = []
     profile_count = 0
     mutant_count = 0
@@ -673,7 +668,7 @@ def _bytes_identity(raw: bytes) -> dict[str, Any]:
 
 
 def controlled_environment(source: dict[str, str]) -> dict[str, str]:
-    """Return the complete environment admitted to a formal runner child."""
+    """返回正式 runner 子进程获准使用的完整环境。"""
 
     environment = {
         name: value
@@ -769,7 +764,7 @@ def _git_source_state(source_root: Path, git: Path | None = None) -> tuple[str, 
 def _git_head_source_payloads(
     source_root: Path, git: Path, commit: str
 ) -> dict[str, bytes]:
-    """Read the selected source closure from the captured commit, not the index."""
+    """从已捕获提交而非索引读取选定源码闭包。"""
 
     command = [
         str(git),
@@ -2763,7 +2758,7 @@ def _normalize_case_build_argv(
 
 
 def _elf_image_shape(program_raw: bytes, elf_raw: bytes, label: str) -> dict[str, Any]:
-    """Validate the mkfs ELF/flat pair and return its durable inode shape."""
+    """校验 mkfs ELF/flat 文件对并返回其持久 inode 形态。"""
     elf_header = struct.Struct("<16sHHIQQQIHHHHHH")
     program_header = struct.Struct("<IIQQQQQQ")
     if len(elf_raw) < elf_header.size:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict parser and recovery invariants for Agent metadata COW banks."""
+"""Agent 元数据 COW bank 的严格解析与恢复约束。"""
 
 from __future__ import annotations
 
@@ -557,14 +557,11 @@ def _validate_interrupted_bank_set(
     phase: int,
     reference_updated: dict[str, Any] | None,
 ) -> None:
-    """Validate the exact raw-media state at every COW crash checkpoint.
+    """校验每个 COW 崩溃检查点的精确介质状态。
 
-    The primary leg replaces one bank of a replicated generation-B baseline
-    with generation B+1.  The mirror leg then replaces the remaining baseline
-    bank with that verified image. Phase 1 is before the epoch can write back.
-    Capacity or age pressure may commit a partial, still-invalid target during
-    phase 2. Phase 3 is the prepared-image fence, phase 5 only stages the valid
-    header, and phases 6..8 follow its fence, verification and commit.
+    primary 先以 B+1 替换 B 代基线的一侧，mirror 再复制已验证镜像。
+    阶段 1 尚未回写；阶段 2 可能留下无效半成品；阶段 3 为镜像栅栏，
+    阶段 5 仅暂存有效头，阶段 6..8 依次完成栅栏、校验和提交。
     """
     if len(banks) != 2 or len({bank.get("name") for bank in banks}) != 2:
         raise RecoveryInvariantError(

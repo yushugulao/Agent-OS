@@ -686,7 +686,7 @@ def _state_short_name(repo_dir: Path, full_name: str) -> str:
     canonical_repo = repo_dir.resolve(strict=True)
     name_map = _STATE_NAME_MAP_CACHE.get(canonical_repo)
     if name_map is None:
-        name_map = fs_extract.discover_name_map(canonical_repo)
+        name_map, _ = fs_extract.discover_state_inventory(canonical_repo)
         _STATE_NAME_MAP_CACHE[canonical_repo] = name_map
     matches = [
         short_name

@@ -210,8 +210,6 @@ def _git_path(git: str | os.PathLike[str]) -> str:
 
 
 def controlled_git_environment() -> dict[str, str]:
-    """Return the minimal process environment trusted by Git verification."""
-
     environment = {
         name: value
         for name in GIT_SYSTEM_ENVIRONMENT_KEYS
@@ -250,12 +248,7 @@ def _git_blob_oid(raw: bytes, oid_length: int) -> str:
 def tracked_worktree_identity(
     git: str, repo: Path
 ) -> tuple[bool, str]:
-    """Compare real tracked bytes with HEAD without trusting index stat hints.
-
-    Git's normal status and diff commands intentionally honor ``assume-unchanged``
-    and ``skip-worktree``.  Formal source binding must not: both flags are
-    rejected, and every HEAD blob is hashed from the link-free worktree path.
-    """
+    """逐个哈希无链接工作树文件，并拒绝会绕过检查的索引标记。"""
 
     flags_raw = _bytes(git, repo, "ls-files", "-v", "-z", "--")
     flagged_paths: set[str] = set()
@@ -409,8 +402,7 @@ def _discover_repo(git: str, bundle: Path) -> Path | None:
     if not candidate.is_absolute() and PureWindowsPath(reported).is_absolute():
         cygpath = shutil.which("cygpath")
         if cygpath is None and Path("/usr/bin/cygpath").is_file():
-            # A deliberately sparse MSYS2 environment can omit /usr/bin from
-            # PATH even though Python and Git still execute in that namespace.
+            # 稀疏 MSYS2 环境可能漏掉 /usr/bin，但 Python 与 Git 仍在该命名空间中。
             cygpath = "/usr/bin/cygpath"
         if cygpath is None:
             raise DeliveryContractError(
@@ -524,7 +516,6 @@ def _tree_entries(
 def _verify_committed_tree_limits(
     tree: dict[str, tuple[str, str, str, int | None]],
 ) -> None:
-    """Enforce delivery limits using only sizes recorded in the Git tree."""
     if len(tree) > MAX_COMMITTED_FILES:
         raise DeliveryContractError("committed evidence contains too many tracked files")
     total = 0
@@ -580,15 +571,11 @@ def prepare_index_update(
     repo: Path, output: Path, source_commit: str, release: dict[str, str],
     git: str | os.PathLike[str] = "git",
 ) -> tuple[Path, bytes] | None:
-    """Return an exact append-only index update for in-repository collection."""
     repo = _safe_directory(
         absolute_lexical_path(repo), "evidence repository"
     ).resolve(strict=True)
-    # Canonicalize both sides before the containment check.  On Windows a
-    # temporary path may use an 8.3 component while resolve() expands the
-    # repository path, and lexical ``..`` components have the same issue on
-    # every platform.  The release directory does not exist yet, so keep the
-    # non-strict resolution semantics.
+    # 包含性检查前统一规范路径，以兼容 Windows 8.3 路径和词法 ``..``。
+    # 发布目录尚不存在，因此保留非严格解析。
     lexical_output = _reject_link_chain(
         absolute_lexical_path(output), "evidence output"
     )
@@ -626,7 +613,7 @@ def publish_bundle_and_index(
     repo: Path, stage: Path, output: Path, source_commit: str,
     release: dict[str, str], git: str | os.PathLike[str] = "git",
 ) -> None:
-    """Publish a ready bundle and its append-only index update as one transaction."""
+    """以单次事务发布证据包及其追加式索引。"""
     stage = _safe_directory(absolute_lexical_path(stage), "staged evidence bundle")
     output = absolute_lexical_path(output)
     _reject_link_chain(output, "evidence output")
@@ -800,36 +787,6 @@ def _verify_delivery_commit(
     }
 
 
-def verify_committed_delivery(
-    bundle: Path,
-    source_commit: str,
-    evidence_commit: dict[str, object],
-    release: dict[str, str],
-    *,
-    git: str | os.PathLike[str] = "git",
-    repo_root: Path | None = None,
-    require_committed: bool = False,
-) -> dict[str, object]:
-    """Resolve symbolic SELF to current HEAD E and prove C..E is evidence-only."""
-    validate_manifest_binding(source_commit, evidence_commit, release)
-    executable = _git_path(git)
-    resolved = _resolve_delivery_repo(
-        bundle, release, executable, repo_root, require_committed
-    )
-    if resolved is None:
-        return {
-            "status": "detached-uncommitted",
-            "source_commit": source_commit,
-            "evidence_commit": None,
-            "policy_version": POLICY_VERSION,
-        }
-    repo, bundle = resolved
-    evidence = _text(executable, repo, "rev-parse", "--verify", "HEAD^{commit}")
-    return _verify_delivery_commit(
-        bundle, repo, executable, source_commit, release, evidence
-    )
-
-
 def _verify_documentation_descendants(
     executable: str,
     repo: Path,
@@ -839,7 +796,7 @@ def _verify_documentation_descendants(
     head_ancestry: dict[str, list[str]] | None = None,
     budget: _git_history.HistoryBudget | None = None,
 ) -> None:
-    """Require every commit after E to be documentation-only, not just net-clean."""
+    """要求 E 之后的每个提交都仅改文档，而非只验证最终净差异。"""
 
     history_budget = budget or _git_history.HistoryBudget()
     head_graph = (
@@ -881,7 +838,7 @@ def verify_historical_committed_delivery(
     repo_root: Path | None = None,
     require_committed: bool = False,
 ) -> dict[str, object]:
-    """Prove the unique immutable introduction E from any clean descendant HEAD."""
+    """从任一干净后代 HEAD 证明唯一且不可变的引入提交 E。"""
     validate_manifest_binding(source_commit, evidence_commit, release)
     executable = _git_path(git)
     resolved = _resolve_delivery_repo(

@@ -1548,7 +1548,7 @@ class EvaluationScenarioTests(unittest.TestCase):
         supported["paired_improvement"]["ci_low"] = -1
         supported["paired_improvement"]["relative_ci_low"] = -1
         supported["paired_improvement"]["sign_test"]["p_value"] = 1.0
-        self.assertTrue(scenario._supports_claim(supported))
+        self.assertEqual(scenario._classify_claim(supported), "supported")
 
         boundary = self.collect(
             [
@@ -1564,7 +1564,7 @@ class EvaluationScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(
             scenario.ScenarioEvidenceError, "directional MCID statistics"
         ):
-            scenario._supports_claim(boundary)
+            scenario._classify_claim(boundary)
 
     def test_paired_bootstrap_is_deterministic(self) -> None:
         orders = ["AB", "BA", "AB", "BA", "AB", "BA", "AB"]

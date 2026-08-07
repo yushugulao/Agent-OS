@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Mutation-test the bounded, fail-closed metadata re-probe mechanism."""
-
 from __future__ import annotations
 
 import re
@@ -98,8 +96,7 @@ def require_order(source: str, tokens: tuple[str, ...], label: str) -> None:
 
 
 def validate_work_conserving_probe_model() -> None:
-    """Prove compatible scopes share one cursor without depending on its owner."""
-    # authority, store epoch, scope, lifecycle id, lifecycle generation, force
+    # authority、store epoch、scope、lifecycle id、lifecycle generation、force
     owner = (7, 11, 20, 1, 101, 1)
     peers = [(7, 11, 20 + i, i + 1, 101 + i, 1) for i in range(1, 4)]
     active: tuple[int, int, int, int, int, int] | None = None
@@ -140,8 +137,7 @@ def validate_work_conserving_probe_model() -> None:
             reset()
             active, epoch = key, 1
             return True
-        # Different compatible scopes change logical ownership only. The raw
-        # scan cursor, summaries, and the external store buffer remain shared.
+        # 兼容 scope 仅切换逻辑所有者；扫描游标、摘要和外部 store 缓冲区仍共享。
         active, epoch = key, epoch + 1 if epoch != 0 else 1
         return True
 
@@ -149,7 +145,7 @@ def validate_work_conserving_probe_model() -> None:
         nonlocal terminal_cache, epoch
         terminal_cache, epoch = True, 0
 
-    # The original owner gets one bounded turn and then never runs again.
+    # 原所有者只运行一个有界轮次，之后不再调度。
     require(bind(owner), "the initial ordinary probe could not bind")
     cursor += 1
     require(cursor == 1, "the abandoned owner did not publish one PROGRESS")
@@ -184,7 +180,7 @@ def validate_work_conserving_probe_model() -> None:
                 for values in observed.values()),
             "a compatible scope observed regressing physical progress")
 
-    # Ordinary callers cannot take an in-flight trusted recovery cursor.
+    # 普通调用方不能接管正在使用的可信恢复游标。
     trusted_key = (7, 11, 0, 0, 0, 1)
     reset()
     require(bind(trusted_key), "trusted recovery could not bind an idle probe")
@@ -194,8 +190,7 @@ def validate_work_conserving_probe_model() -> None:
     require(blocked and active == trusted_key and cursor == 19,
             "ordinary takeover displaced trusted recovery")
 
-    # Same-scope lifecycle reuse and physical authority changes are reset
-    # boundaries; successful completion alone is not.
+    # 同 scope 生命周期复用和物理权威变更会重置；仅成功完成不会重置。
     old = (7, 11, 20, 1, 101, 1)
     lifecycle_reuse = (7, 11, 20, 1, 102, 1)
     authority_change = (8, 11, 21, 2, 202, 1)
@@ -248,8 +243,7 @@ def validate(sources: dict[str, str]) -> None:
     large_program = sources["large_program"]
     runner = sources["runner"]
 
-    # The public load-result vocabulary must distinguish bounded progress from
-    # device/scheduler failures and from confirmed corruption.
+    # 公共加载结果必须区分有界进度、设备/调度失败和已确认损坏。
     for token in (
         "AGENT_METADATA_LOAD_CORRUPT = -1",
         "AGENT_METADATA_LOAD_INTERRUPTED = -2",
@@ -259,8 +253,7 @@ def validate(sources: dict[str, str]) -> None:
     ):
         require(token in internal, f"load status lost: {token}")
 
-    # Kernel load outcomes have one Agent ABI mapping. Callers may still use
-    # NO_SPACE for transaction admission, but never as a catch-all load error.
+    # 内核加载结果只有一套 Agent ABI 映射；NO_SPACE 仅用于事务准入。
     load_mapping = compact(
         function_body(objects, "agent_metadata_load_agent_status(")
     )
@@ -363,8 +356,7 @@ def validate(sources: dict[str, str]) -> None:
         "FILE_META_INIT load failure is collapsed into NO_SPACE",
     )
 
-    # Every foreground catalog lookup must classify a failed load before it
-    # can inspect the old in-memory catalog or reinterpret absence as success.
+    # 前台目录查询必须先分类加载失败，不能转查旧内存目录或把缺失解释为成功。
     require(
         objects.count("agent_file_store_load()") == 9,
         "metadata load call inventory changed without classification review",
@@ -515,8 +507,7 @@ def validate(sources: dict[str, str]) -> None:
     require("resumable" not in probe_key,
             "probe still has an unsafe caller-selected resumability mode")
 
-    # Probe, rather than the generic store-I/O lock owner, owns resumable bank
-    # reads. This keeps cursor lifetime and the bytes it validates together.
+    # 可恢复 bank 读取归 probe 而非通用 store-I/O 锁所有者，游标与受检字节同寿命。
     require(
         "agent_meta_store_io_read_bank" not in io_h + io,
         "legacy store_io bank reader still owns recovery policy",
@@ -531,9 +522,7 @@ def validate(sources: dict[str, str]) -> None:
     ):
         require(token in cursor, f"probe cursor binding lost: {token}")
 
-    # Scheduling checkpoints use a typed result so they cannot alias device or
-    # filesystem integer errors.  The shared predicate deliberately treats
-    # every state except READY as a stop; this keeps future states fail-closed.
+    # 调度检查点用类型化结果避免混同设备/文件系统整数错误；除 READY 外均停止。
     checkpoint_result = compact(
         declaration_body(bio_h, "struct bio_checkpoint_result")
     )
@@ -903,8 +892,7 @@ def validate(sources: dict[str, str]) -> None:
         "confirmed generation/hash/migration mismatch is retryable",
     )
 
-    # Selection is read-only, rejects incomplete authority, compares the two
-    # generations in the correct direction, then confirms the chosen bank.
+    # 选择过程只读：拒绝不完整权威，正确比较两代，再确认所选 bank。
     select = compact(function_body(store, "agent_meta_store_select("))
     require(
         "agent_meta_store_probe_key(force,reload_scope,&key)" in select,
@@ -1007,8 +995,7 @@ def validate(sources: dict[str, str]) -> None:
         "selected authority confirmation",
     )
 
-    # Catalog admission works on a mutable copy in the inactive shadow. The
-    # raw, twice-read store buffer remains immutable until final publication.
+    # 目录准入在非活动影子副本上修改；两次读取的原始 store 缓冲区在发布前不变。
     workspace = compact(store[store.find("static union {") : store.find(
         "#define agent_meta_sort_record"
     )])
@@ -1089,9 +1076,8 @@ def validate(sources: dict[str, str]) -> None:
     ):
         require(token in compact_catalog, f"fixed catalog bound lost: {token}")
 
-    # Same-version history is governed by representation and hard partition
-    # bounds. The newer AUTOSCAN reserve is a live growth policy, not a reason
-    # to classify an otherwise valid v7 bank as corrupt.
+    # 同版本历史只受表示和硬分区上限约束；新 AUTOSCAN 预留是在线增长策略，
+    # 不能据此把原本有效的 v7 bank 判为损坏。
     catalog_plan_count = compact(
         function_body(catalog, "static int agent_catalog_plan_count(")
     )
@@ -1129,8 +1115,7 @@ def validate(sources: dict[str, str]) -> None:
             "agent_catalog_admission(" not in restore,
             "receipt rollback is constrained by a newer soft policy")
 
-    # A catalog miss may leave a positive but stale inode sidecar. The scanner
-    # must verify that mismatch before using the stale-only converter.
+    # 目录未命中可能留下正值但过期的 inode sidecar；扫描器须先验证再转换。
     compact_file_state_h = compact(file_state_h)
     require("intagent_file_state_set_index(structinode*,short,short,int)"
             in compact_file_state_h, "shared sidecar updater is not declared")
@@ -1381,8 +1366,7 @@ def validate(sources: dict[str, str]) -> None:
         "metadata init can bypass a failed durable reload",
     )
 
-    # Progress is a cooperative yield, not a failed retry. Real transient
-    # failures retain bounded exponential backoff.
+    # PROGRESS 是协作让出而非失败重试；真实瞬态失败仍采用有界指数退避。
     retryable = compact(
         function_body(recovery, "agent_metadata_recovery_retryable(")
     )
@@ -1565,8 +1549,7 @@ def validate(sources: dict[str, str]) -> None:
                 "worker creation does not return the failed admission result",
             )
 
-    # Test fault state lives only in excluded profile owners. Production code
-    # sees typed, stateless hooks that compile to local no-ops.
+    # 测试故障状态仅存在于排除的 profile 所有者；生产代码只见无状态类型化空钩子。
     make_compact = compact(makefile)
     require(
         "ifeq($(strip$(AGENT_METADATA_BOOT_READ_FAULT)"
@@ -1730,8 +1713,7 @@ def validate(sources: dict[str, str]) -> None:
             f"kernel build fingerprint omits {variable}",
         )
 
-    # Dynamic evidence covers all transient causes, both-bank and newer-bank
-    # authority, an over-burst foreground reload, and three cached peer states.
+    # 动态证据覆盖全部瞬态原因、双 bank/新 bank 权威、超 burst 前台重载及三种 peer 缓存态。
     require("agentmetatransient_ucore" in user_make, "transient program not built")
     require("agentmetalarge_ucore" in user_make, "large-bank program not built")
     for token in (

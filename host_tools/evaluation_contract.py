@@ -210,7 +210,7 @@ INTERPRETATION_BOUNDARIES = {
 
 
 class EvaluationError(RuntimeError):
-    """Raised when evaluation evidence fails closed."""
+    pass
 
 
 COMPETITION_TASKS = tuple(f"task{number}" for number in range(1, 7))
@@ -221,8 +221,6 @@ def derive_acceptance_gates(
     claims: list[dict[str, Any]],
     competition_claims: dict[str, Any],
 ) -> dict[str, Any]:
-    """Derive scientific-publication and competition-acceptance gates."""
-
     functional: dict[str, bool] = {}
     functional_status: dict[str, str] = {}
     for task in COMPETITION_TASKS:
@@ -1597,14 +1595,6 @@ def _supplementary_uint(
     return number
 
 
-def _supplementary_hash(domain: str, challenge: str, values: list[int]) -> str:
-    value = _fnv_bytes(1469598103934665603, domain.encode("ascii"))
-    value = _fnv_u64(value, int(challenge, 16))
-    for item in values:
-        value = _fnv_u64(value, item)
-    return f"{value:016x}"
-
-
 def _nearest_rank_int(values: list[int], percentile: int) -> int:
     if not values or percentile <= 0 or percentile > 100:
         raise EvaluationError("supplementary percentile input is invalid")
@@ -1701,7 +1691,7 @@ def _parse_revisit_evaluation(
         result_fingerprint = _text(
             fields["result_fingerprint"], "revisit result fingerprint", HEX16
         )
-        expected_fingerprint = _supplementary_hash(
+        expected_fingerprint = _functional_semantic(
             "aios-revisit-observation-v1",
             challenge,
             [
@@ -1752,7 +1742,7 @@ def _parse_revisit_evaluation(
     summary_fingerprint = _text(
         summary["result_fingerprint"], "revisit summary fingerprint", HEX16
     )
-    expected_summary_fingerprint = _supplementary_hash(
+    expected_summary_fingerprint = _functional_semantic(
         "aios-revisit-summary-v1",
         challenge,
         [
@@ -1870,7 +1860,7 @@ def _parse_revisit_evaluation(
             fields["completed_us"], fields["received_us"], fields["wait_us"],
             fields["service_us"], fields["turnaround_us"],
         ]
-        expected_fingerprint = _supplementary_hash(
+        expected_fingerprint = _functional_semantic(
             "agentos-qos-sample-v2", challenge, fingerprint_values
         )
         if result_fingerprint != expected_fingerprint:
@@ -1974,7 +1964,7 @@ def _parse_revisit_evaluation(
         workload_digest = _text(
             fields["workload_digest"], "revisit workload digest", HEX16
         )
-        expected_workload_digest = _supplementary_hash(
+        expected_workload_digest = _functional_semantic(
             "agentos-qos-workload-v2", challenge,
             [
                 fields["concurrency"],
@@ -1998,7 +1988,7 @@ def _parse_revisit_evaluation(
             if key not in {"workload_digest", "result_fingerprint", "status"}
         ]
         summary_values.append(int(workload_digest, 16))
-        expected_fingerprint = _supplementary_hash(
+        expected_fingerprint = _functional_semantic(
             "agentos-qos-summary-v2",
             challenge,
             [
@@ -2418,12 +2408,12 @@ def _task3_tool_semantic(challenge: str) -> int:
 
 
 def _task3_semantic(challenge: str, values: list[int]) -> str:
-    """Bind the complete Task3 receipt to the fresh Host challenge."""
+    """把完整任务 3 回执绑定到新的 Host challenge。"""
     return _functional_semantic("task3-semantic-v2", challenge, values)
 
 
 def _task4_fixture(challenge: str) -> dict[str, Any]:
-    """Return the challenge-derived Task4 attributes and file contents."""
+    """返回由 challenge 派生的任务 4 属性和文件内容。"""
     challenge_value = int(challenge, 16)
     code = (challenge_value ^ (challenge_value >> 32)) % 1000
     suffix = f"{code:03d}"
@@ -2454,7 +2444,7 @@ def _task4_query_semantic(
     result: dict[str, Any],
     hits: list[dict[str, Any]],
 ) -> int:
-    """Recompute one Task4 structured-query result from semantic fields."""
+    """从语义字段重算一次任务 4 结构化查询结果。"""
     value = _fnv_bytes(1469598103934665603, domain.encode("ascii"))
     value = _fnv_u64(value, int(challenge, 16))
     value = _fnv_u64(value, query["flags"])
@@ -2926,7 +2916,7 @@ def validate_functional_log(
     sample_rows: list[dict[str, Any]],
     suite: dict[str, Any],
 ) -> dict[str, Any]:
-    """Validate Task1-5 receipts and return their raw marker bindings."""
+    """校验任务 1-5 回执并返回其原始标记绑定。"""
     launcher_lines = [
         (number, line) for number, line in enumerate(lines, 1)
         if line.startswith(LAUNCHER_PREFIX)
@@ -3178,7 +3168,7 @@ def extract_log(
             "command_sha256": log_plan["command_sha256"],
             "suite_sha256": suite_sha256,
         })
-        # Position is checked again with physical marker ordering below.
+        # 下方还会按物理标记顺序复核位置。
         rows[-1]["_position"] = position
     actual_physical_order: list[tuple[Any, ...]] = []
     for row in rows:
@@ -3318,7 +3308,7 @@ def validate_guest_log(
     suite: dict[str, Any],
     challenge: str,
 ) -> dict[str, Any]:
-    """Validate one targeted Guest boot with the canonical extraction core."""
+    """用规范抽取核心校验一次指定 Guest 启动。"""
     if not isinstance(challenge, str) or not HEX16.fullmatch(challenge):
         raise EvaluationError("targeted Guest challenge is invalid")
     if int(challenge, 16) == 0:
@@ -4325,9 +4315,7 @@ def evaluate(
             for benchmark in task_benchmarks
             for evidence_id in benchmark["evidence_ids"]
         }) or ["run-plan"]
-        # Functional status is derived only from the strictly verified
-        # per-boot receipts.  Microbenchmarks remain benchmark evidence and
-        # never masquerade as functional or research-scenario performance.
+        # 功能状态只来自严格校验的逐启动回执；微基准不得冒充功能或研究场景性能证据。
         scenarios.append({
             "id": f"{task}-functional",
             "label": task_labels[task],

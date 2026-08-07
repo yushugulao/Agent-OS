@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Recovery model for the immutable Agent metadata v8 delta journal.
+"""不可变 Agent 元数据 v8 增量日志的恢复模型。
 
-The journal occupies the block-aligned tail of one metadata bank.  A writer
-may append complete blocks, but it may never modify a block after exposing it
-to the disk.  Recovery therefore accepts a contiguous prefix of committed
-transactions and treats only the final, uncommitted suffix as a power-loss
-tail.  A valid transaction after that suffix is an integrity failure rather
-than a second recovery candidate.
+日志位于 metadata bank 的块对齐尾部，只允许追加完整块。恢复仅接纳连续的
+已提交事务前缀，并把末尾未提交段视为断电残尾；残尾之后若再有有效事务，
+则判为完整性错误。
 """
 
 from __future__ import annotations
@@ -47,7 +44,7 @@ OP_UPSERT = 1
 OP_DELETE = 2
 OP_ARENA_PATCH = 3
 
-# The field order and widths are part of the v8 disk ABI.
+# 字段顺序和宽度属于 v8 磁盘 ABI。
 SLOT_HEADER = struct.Struct("<QIIQQIIQIIIIQQQQ")
 assert SLOT_HEADER.size == SLOT_HEADER_BYTES
 ARENA_PATCH = struct.Struct(f"<IIQ{ARENA_PATCH_DATA_BYTES}s")
@@ -55,27 +52,27 @@ assert ARENA_PATCH.size == SLOT_PAYLOAD_BYTES
 
 
 class JournalError(ValueError):
-    """Base class for v8 journal errors."""
+    """v8 日志错误基类。"""
 
 
 class JournalFormatError(JournalError):
-    """A slot or transaction violates the fixed disk format."""
+    """槽位或事务违反固定磁盘格式。"""
 
 
 class JournalIntegrityError(JournalError):
-    """The append-only generation/hash chain cannot be recovered safely."""
+    """只追加的代际/哈希链无法安全恢复。"""
 
 
 class JournalCapacityError(JournalError):
-    """The fixed journal has no room for another transaction."""
+    """固定日志已容不下新事务。"""
 
 
 class JournalRewriteError(JournalError):
-    """A model writer attempted to modify a physical journal block."""
+    """模型写入器试图修改物理日志块。"""
 
 
 class JournalDowngradeError(JournalError):
-    """A v7 header was found after valid v8 media became visible."""
+    """有效 v8 介质出现后又发现 v7 头。"""
 
 
 @dataclass(frozen=True)
@@ -277,7 +274,7 @@ def encode_transaction(
     previous_commit_hash: int,
     deltas: Sequence[JournalDelta],
 ) -> tuple[bytes, int]:
-    """Encode one block-aligned immutable transaction and its commit hash."""
+    """编码块对齐的不可变事务及其提交哈希。"""
 
     identity.validate()
     if not 1 <= len(deltas) <= MAX_DATA_SLOTS:
@@ -521,12 +518,10 @@ def _later_complete_transaction(
 def recover_journal(
     raw: bytes, *, base_generation: int, base_payload_hash: int
 ) -> JournalRecovery:
-    """Recover the longest trustworthy committed transaction prefix.
+    """恢复最长的可信已提交事务前缀。
 
-    A malformed final transaction is a legal power-loss tail.  It is ignored
-    only when no later, fully verifiable higher-generation transaction exists.
-    Complete groups with a broken base/generation/previous-hash chain fail
-    closed even when they are the last group.
+    末尾畸形事务仅在其后没有可完整验证的更高代事务时才视为断电残尾。
+    完整事务组若破坏基线、代际或前序哈希链，即使位于末尾也闭锁失败。
     """
 
     if len(raw) != JOURNAL_BYTES:
@@ -615,7 +610,7 @@ def recover_journal(
 
 
 def contains_valid_v8_slot(raw: bytes) -> bool:
-    """Return whether media contains any checksum-valid v8 slot evidence."""
+    """判断介质是否含校验和有效的 v8 槽位。"""
 
     if len(raw) != JOURNAL_BYTES:
         raise JournalFormatError(
@@ -637,7 +632,7 @@ def recover_versioned_store(
     base_generation: int,
     base_payload_hash: int,
 ) -> VersionedRecovery:
-    """Apply the one-way v7-to-v8 migration and downgrade rule."""
+    """应用 v7 到 v8 的单向迁移及防降级规则。"""
 
     if store_version == STORE_VERSION_V7:
         if contains_valid_v8_slot(journal_raw):
@@ -665,7 +660,7 @@ def extract_journal(bank_image: bytes) -> bytes:
 
 
 def metadata_record_fid(payload: bytes) -> int:
-    """Return the stable fid from one 416-byte metadata record image."""
+    """提取 416 字节元数据记录的稳定 fid。"""
 
     if len(payload) != SLOT_PAYLOAD_BYTES:
         raise JournalFormatError("metadata record has the wrong size")
@@ -676,7 +671,7 @@ def metadata_record_fid(payload: bytes) -> int:
 
 
 def metadata_record_slot(payload: bytes) -> int:
-    """Return the catalog slot used for canonical materialized ordering."""
+    """提取规范化物化排序所用的目录槽位。"""
 
     if len(payload) != SLOT_PAYLOAD_BYTES:
         raise JournalFormatError("metadata record has the wrong size")
@@ -690,7 +685,7 @@ def metadata_record_slot(payload: bytes) -> int:
 
 
 def encode_arena_patch(base_arena: bytes, next_arena: bytes, offset: int) -> bytes:
-    """Encode one canonical durable-arena window with a baseline guard."""
+    """编码带基线保护的规范持久区窗口。"""
 
     if len(base_arena) != ARENA_BYTES or len(next_arena) != ARENA_BYTES:
         raise JournalFormatError(f"durable arena must be exactly {ARENA_BYTES} bytes")
@@ -704,7 +699,7 @@ def encode_arena_patch(base_arena: bytes, next_arena: bytes, offset: int) -> byt
 
 
 def decode_arena_patch(payload: bytes) -> tuple[int, int, int, bytes]:
-    """Decode and validate one canonical durable-arena window."""
+    """解码并校验规范持久区窗口。"""
 
     if len(payload) != SLOT_PAYLOAD_BYTES:
         raise JournalFormatError("arena patch has the wrong physical size")
@@ -721,7 +716,7 @@ def materialize_records(
     base_records: Iterable[bytes] | Mapping[int, bytes],
     recovery: JournalRecovery,
 ) -> dict[int, bytes]:
-    """Apply recovered UPSERT/DELETE records to a fid-keyed base snapshot."""
+    """把恢复出的 UPSERT/DELETE 记录应用到 fid 索引的基线快照。"""
 
     source = base_records.values() if isinstance(base_records, Mapping) else base_records
     records: dict[int, bytes] = {}
@@ -741,7 +736,7 @@ def materialize_records(
                         f"DELETE tombstone does not match current fid {fid}"
                     )
                 records.pop(fid, None)
-            else:  # Decoding already rejects this; retain a defensive boundary.
+            else:  # 解码阶段已拒绝该值，此处保留防御边界。
                 raise JournalFormatError(
                     f"unsupported recovered operation {delta.operation}"
                 )
@@ -749,7 +744,7 @@ def materialize_records(
 
 
 def materialize_arena(base_arena: bytes, recovery: JournalRecovery) -> bytes:
-    """Replay checksummed arena windows against their exact prior bytes."""
+    """依据精确前态重放带校验和的持久区窗口。"""
 
     if len(base_arena) != ARENA_BYTES:
         raise JournalFormatError(f"durable arena must be exactly {ARENA_BYTES} bytes")
@@ -772,7 +767,7 @@ def materialize_arena(base_arena: bytes, recovery: JournalRecovery) -> bytes:
 
 
 class ImmutableJournalMedia:
-    """Small host model that makes the physical no-rewrite rule explicit."""
+    """显式执行物理块不可重写规则的 Host 小模型。"""
 
     def __init__(self, raw: bytes | None = None):
         initial = bytes(JOURNAL_BYTES) if raw is None else bytes(raw)
@@ -802,7 +797,7 @@ class ImmutableJournalMedia:
 
 
 class JournalAppender:
-    """Append complete transactions to immutable host-model media."""
+    """向不可变 Host 模型介质追加完整事务。"""
 
     def __init__(
         self,

@@ -18,6 +18,114 @@ import plain_ucore_action_runner as runner
 from safe_host_paths import path_is_link
 
 
+EXPECTED_ACTION_KIND_BY_PATH = {
+    "/actions/research/run": "research_run",
+    "/actions/agentcompare/run": "agentcompare",
+    "/actions/research/rerun": "research_rerun",
+    "/actions/research/dataset": "dataset",
+    "/actions/research/studio-launch": "studio_launch",
+    "/actions/research/library-source": "library_source",
+    "/actions/research/template": "template",
+    "/actions/research/inspect-workspace": "workspace_inspect",
+    "/actions/research/import-workspace": "workspace_import",
+    "/actions/research/literature-search": "literature_search",
+    "/actions/research/evidence-review": "evidence_review",
+    "/actions/research/evidence-protocol": "evidence_protocol",
+    "/actions/research/workbench": "workbench",
+    "/actions/research/workbench-complete": "workbench_complete",
+    "/actions/research/workbench-advance": "workbench_advance",
+    "/actions/research/workbench-auto-advance": "workbench_auto_advance",
+    "/actions/research/workbench-answer": "workbench_answer",
+    "/actions/research/workbench-answer-audit": "workbench_answer_audit",
+    "/actions/research/workbench-evidence-search": "workbench_evidence_search",
+    "/actions/research/workbench-task": "workbench_task",
+    "/actions/research/workbench-note": "workbench_note",
+    "/actions/research/workbench-notes": "workbench_notes",
+    "/actions/research/workbench-handoff-package": "workbench_handoff_package",
+    "/actions/research/workbench-readiness": "workbench_readiness",
+    "/actions/research/workbench-brief": "workbench_brief",
+    "/actions/research/workbench-evidence-dossier": "workbench_evidence_dossier",
+    "/actions/research/workbench-evidence-graph": "workbench_evidence_graph",
+    "/actions/research/workbench-citations": "workbench_citations",
+    "/actions/research/workbench-manuscript": "workbench_manuscript",
+    "/actions/research/workbench-manuscript-audit": "workbench_manuscript_audit",
+    "/actions/research/workbench-manuscript-revision-plan": "workbench_manuscript_revision_plan",
+    "/actions/research/workbench-manuscript-revision-task": "workbench_manuscript_revision_task",
+    "/actions/research/workbench-task-board": "workbench_task_board",
+    "/actions/research/workbench-task-board-row": "workbench_task_board_row",
+    "/actions/research/workbench-runbook": "workbench_runbook",
+    "/actions/research/workbench-timeline": "workbench_timeline",
+    "/actions/research/workbench-file-manifest": "workbench_file_manifest",
+    "/actions/research/workbench-file-verify": "workbench_file_verify",
+    "/actions/research/export-workbench": "workbench_export",
+    "/actions/research/operations-report": "operations_report",
+    "/actions/research/operations-advance-next": "operations_advance_next",
+    "/actions/research/operations-execute-next-plan": "operations_execute_next_plan",
+    "/actions/research/workbench-delivery-dashboard": "workbench_delivery_dashboard",
+    "/actions/research/workbench-delivery-execute-next": "workbench_delivery_execute_next",
+    "/actions/research/workbench-quality-gate": "workbench_quality_gate",
+    "/actions/research/workbench-quality-repair-plan": "workbench_quality_repair_plan",
+    "/actions/research/workbench-quality-repair-execute": "workbench_quality_repair_execute",
+    "/actions/research/workbench-plan-queue-row": "workbench_plan_queue_row",
+    "/actions/research/workbench-plan-queue-execute": "workbench_plan_queue_execute",
+    "/actions/research/workbench-action-item": "workbench_action_item",
+    "/actions/research/project-space": "project_space",
+    "/actions/research/project-space-note": "project_space_note",
+    "/actions/research/project-space-action-item": "project_space_action_item",
+    "/actions/research/project-space-answer": "project_space_answer",
+    "/actions/research/project-space-repair-execute": "project_space_repair_execute",
+    "/actions/research/project-handoff-audit": "project_handoff_audit",
+    "/actions/research/project-release-gate": "project_release_gate",
+    "/actions/research/project-snapshot": "project_snapshot",
+    "/actions/research/project-snapshot-comparison": "project_snapshot_comparison",
+    "/actions/research/project-reproducibility-audit": "project_reproducibility_audit",
+    "/actions/research/project-provenance-graph": "project_provenance_graph",
+    "/actions/research/project-delivery": "project_delivery",
+    "/actions/research/package-intake": "package_intake",
+    "/actions/research-search/save": "research_search_save",
+    "/actions/research-search/export": "research_search_export",
+    "/actions/research-search/note": "research_search_note",
+    "/actions/research-search/action-item": "research_search_action_item",
+    "/actions/host-workflow/run": "host_workflow",
+    "/actions/host-workflow/export": "host_workflow_export",
+    "/actions/host-workflow/stage-attempt": "host_workflow_stage",
+    "/actions/host-workflow/cache-decision": "host_workflow_cache",
+    "/actions/host-workflow/retry-decision": "host_workflow_retry",
+    "/actions/host-workflow/artifact-manifest": "host_workflow_artifact",
+    "/actions/host-workflow/report-export": "host_workflow_report",
+    "/actions/research/artifact-input": "artifact_input",
+    "/actions/research/artifact-derive": "artifact_derive",
+    "/actions/research/artifact-log": "artifact_log",
+    "/actions/research/artifact-chart": "artifact_chart",
+    "/actions/research/artifact-package": "artifact_package",
+    "/actions/workflow-portability/run": "workflow_portability",
+    "/actions/workflow-portability/import": "workflow_portability_import",
+    "/actions/workflow-portability/plan": "workflow_portability_plan",
+    "/actions/workflow-portability/bind": "workflow_portability_bind",
+    "/actions/workflow-portability/rehearse": "workflow_portability_rehearse",
+    "/actions/workflow-portability/review": "workflow_portability_review",
+    "/actions/workflow-portability/package": "workflow_portability_package",
+    "/actions/research/llm-relay-request": "llm_relay_request",
+    "/actions/research/llm-relay-response": "llm_relay_response",
+    "/actions/research/llm-relay-fallback": "llm_relay_fallback",
+    "/actions/research/review": "human_review",
+    "/actions/research/revision-task": "revision_task",
+    "/actions/research/export-notebook": "notebook_export",
+    "/actions/research/export-bundle": "bundle_export",
+}
+
+
+def leading_record_fields(text: str, keys: tuple[str, ...]) -> list[tuple[str, ...]]:
+    records = []
+    for line in text.splitlines():
+        fields = [field.partition("=") for field in line.split(";")]
+        assert len(fields) >= len(keys), line
+        assert all(separator for _, separator, _ in fields), line
+        assert tuple(key for key, _, _ in fields[: len(keys)]) == keys, line
+        records.append(tuple(value for _, _, value in fields[: len(keys)]))
+    return records
+
+
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -1623,102 +1731,16 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 93
+        expected_action_pairs = list(EXPECTED_ACTION_KIND_BY_PATH.items())
+        expected_action_kinds = list(EXPECTED_ACTION_KIND_BY_PATH.values())
+        expected_actions = len(expected_action_pairs)
 
+        assert [str(record["path"]) for record in loaded] == list(
+            EXPECTED_ACTION_KIND_BY_PATH
+        )
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
-        assert "research_run" in summary["kinds"]
-        assert "dataset" in summary["kinds"]
-        assert "studio_launch" in summary["kinds"]
-        assert "library_source" in summary["kinds"]
-        assert "template" in summary["kinds"]
-        assert "workspace_inspect" in summary["kinds"]
-        assert "workspace_import" in summary["kinds"]
-        assert "literature_search" in summary["kinds"]
-        assert "evidence_review" in summary["kinds"]
-        assert "evidence_protocol" in summary["kinds"]
-        assert "agentcompare" in summary["kinds"]
-        assert "workbench" in summary["kinds"]
-        assert "workbench_complete" in summary["kinds"]
-        assert "workbench_advance" in summary["kinds"]
-        assert "workbench_auto_advance" in summary["kinds"]
-        assert "workbench_answer" in summary["kinds"]
-        assert "workbench_answer_audit" in summary["kinds"]
-        assert "workbench_evidence_search" in summary["kinds"]
-        assert "workbench_task" in summary["kinds"]
-        assert "workbench_note" in summary["kinds"]
-        assert "workbench_notes" in summary["kinds"]
-        assert "workbench_handoff_package" in summary["kinds"]
-        assert "workbench_readiness" in summary["kinds"]
-        assert "workbench_brief" in summary["kinds"]
-        assert "workbench_evidence_dossier" in summary["kinds"]
-        assert "workbench_evidence_graph" in summary["kinds"]
-        assert "workbench_citations" in summary["kinds"]
-        assert "workbench_manuscript" in summary["kinds"]
-        assert "workbench_manuscript_audit" in summary["kinds"]
-        assert "workbench_manuscript_revision_plan" in summary["kinds"]
-        assert "workbench_manuscript_revision_task" in summary["kinds"]
-        assert "workbench_task_board" in summary["kinds"]
-        assert "workbench_task_board_row" in summary["kinds"]
-        assert "workbench_runbook" in summary["kinds"]
-        assert "workbench_timeline" in summary["kinds"]
-        assert "workbench_file_manifest" in summary["kinds"]
-        assert "workbench_file_verify" in summary["kinds"]
-        assert "workbench_export" in summary["kinds"]
-        assert "operations_report" in summary["kinds"]
-        assert "operations_advance_next" in summary["kinds"]
-        assert "operations_execute_next_plan" in summary["kinds"]
-        assert "workbench_delivery_dashboard" in summary["kinds"]
-        assert "workbench_delivery_execute_next" in summary["kinds"]
-        assert "workbench_quality_gate" in summary["kinds"]
-        assert "workbench_quality_repair_plan" in summary["kinds"]
-        assert "workbench_quality_repair_execute" in summary["kinds"]
-        assert "workbench_plan_queue_row" in summary["kinds"]
-        assert "workbench_plan_queue_execute" in summary["kinds"]
-        assert "workbench_action_item" in summary["kinds"]
-        assert "project_space" in summary["kinds"]
-        assert "project_space_note" in summary["kinds"]
-        assert "project_space_action_item" in summary["kinds"]
-        assert "project_space_answer" in summary["kinds"]
-        assert "project_space_repair_execute" in summary["kinds"]
-        assert "project_handoff_audit" in summary["kinds"]
-        assert "project_release_gate" in summary["kinds"]
-        assert "project_snapshot" in summary["kinds"]
-        assert "project_snapshot_comparison" in summary["kinds"]
-        assert "project_reproducibility_audit" in summary["kinds"]
-        assert "project_provenance_graph" in summary["kinds"]
-        assert "project_delivery" in summary["kinds"]
-        assert "package_intake" in summary["kinds"]
-        assert "research_search_save" in summary["kinds"]
-        assert "research_search_export" in summary["kinds"]
-        assert "research_search_note" in summary["kinds"]
-        assert "research_search_action_item" in summary["kinds"]
-        assert "host_workflow" in summary["kinds"]
-        assert "host_workflow_export" in summary["kinds"]
-        assert "host_workflow_stage" in summary["kinds"]
-        assert "host_workflow_cache" in summary["kinds"]
-        assert "host_workflow_retry" in summary["kinds"]
-        assert "host_workflow_artifact" in summary["kinds"]
-        assert "host_workflow_report" in summary["kinds"]
-        assert "artifact_input" in summary["kinds"]
-        assert "artifact_derive" in summary["kinds"]
-        assert "artifact_log" in summary["kinds"]
-        assert "artifact_chart" in summary["kinds"]
-        assert "artifact_package" in summary["kinds"]
-        assert "workflow_portability" in summary["kinds"]
-        assert "workflow_portability_import" in summary["kinds"]
-        assert "workflow_portability_plan" in summary["kinds"]
-        assert "workflow_portability_bind" in summary["kinds"]
-        assert "workflow_portability_rehearse" in summary["kinds"]
-        assert "workflow_portability_review" in summary["kinds"]
-        assert "workflow_portability_package" in summary["kinds"]
-        assert "llm_relay_request" in summary["kinds"]
-        assert "llm_relay_response" in summary["kinds"]
-        assert "llm_relay_fallback" in summary["kinds"]
-        assert "human_review" in summary["kinds"]
-        assert "revision_task" in summary["kinds"]
-        assert "notebook_export" in summary["kinds"]
-        assert "bundle_export" in summary["kinds"]
+        assert summary["kinds"] == sorted(set(expected_action_kinds))
 
         next_state = run_dir / "state-next"
         assert (next_state / "rp_input").exists()
@@ -1727,95 +1749,14 @@ def main() -> int:
         assert not (next_state / "ignore.txt").exists()
 
         queue = read(next_state / "rp_host_action_queue")
-        assert "kind=research_run" in queue
-        assert "kind=research_rerun" in queue
-        assert "parent_run=RUN-999" in queue
-        assert "kind=dataset" in queue
-        assert "kind=studio_launch" in queue
-        assert "kind=library_source" in queue
-        assert "kind=template" in queue
-        assert "kind=workspace_inspect" in queue
-        assert "kind=workspace_import" in queue
-        assert "kind=literature_search" in queue
-        assert "kind=evidence_review" in queue
-        assert "kind=evidence_protocol" in queue
-        assert "kind=agentcompare" in queue
-        assert "kind=workbench" in queue
-        assert "kind=workbench_complete" in queue
-        assert "kind=workbench_advance" in queue
-        assert "kind=workbench_auto_advance" in queue
-        assert "kind=workbench_answer" in queue
-        assert "kind=workbench_answer_audit" in queue
-        assert "kind=workbench_evidence_search" in queue
-        assert "kind=workbench_task" in queue
-        assert "kind=workbench_note" in queue
-        assert "kind=workbench_notes" in queue
-        assert "kind=workbench_handoff_package" in queue
-        assert "kind=workbench_readiness" in queue
-        assert "kind=workbench_brief" in queue
-        assert "kind=workbench_evidence_dossier" in queue
-        assert "kind=workbench_evidence_graph" in queue
-        assert "kind=workbench_citations" in queue
-        assert "kind=workbench_manuscript" in queue
-        assert "kind=workbench_manuscript_audit" in queue
-        assert "kind=workbench_manuscript_revision_plan" in queue
-        assert "kind=workbench_manuscript_revision_task" in queue
-        assert "kind=workbench_task_board" in queue
-        assert "kind=workbench_task_board_row" in queue
-        assert "kind=workbench_runbook" in queue
-        assert "kind=workbench_timeline" in queue
-        assert "kind=workbench_file_manifest" in queue
-        assert "kind=workbench_file_verify" in queue
-        assert "sha_records=9" in queue
-        assert "verified=9" in queue
-        assert "missing=0" in queue
-        assert "kind=workbench_export" in queue
-        assert "kind=operations_report" in queue
-        assert "kind=operations_advance_next" in queue
-        assert "kind=operations_execute_next_plan" in queue
-        assert "kind=workbench_delivery_dashboard" in queue
-        assert "kind=workbench_delivery_execute_next" in queue
-        assert "kind=workbench_quality_gate" in queue
-        assert "kind=workbench_quality_repair_plan" in queue
-        assert "kind=workbench_quality_repair_execute" in queue
-        assert "kind=workbench_plan_queue_row" in queue
-        assert "kind=workbench_plan_queue_execute" in queue
-        assert "kind=workbench_action_item" in queue
-        assert "kind=project_space" in queue
-        assert "kind=project_space_note" in queue
-        assert "kind=project_space_action_item" in queue
-        assert "kind=project_space_answer" in queue
-        assert "kind=project_space_repair_execute" in queue
-        assert "kind=project_handoff_audit" in queue
-        assert "kind=project_release_gate" in queue
-        assert "kind=project_snapshot" in queue
-        assert "kind=project_snapshot_comparison" in queue
-        assert "kind=project_reproducibility_audit" in queue
-        assert "kind=project_provenance_graph" in queue
-        assert "kind=project_delivery" in queue
-        assert "kind=package_intake" in queue
-        assert "kind=research_search_save" in queue
-        assert "kind=research_search_export" in queue
-        assert "kind=research_search_note" in queue
-        assert "kind=research_search_action_item" in queue
-        assert "kind=host_workflow" in queue
-        assert "kind=host_workflow_export" in queue
-        assert "kind=host_workflow_stage" in queue
-        assert "kind=host_workflow_cache" in queue
-        assert "kind=host_workflow_retry" in queue
-        assert "kind=host_workflow_artifact" in queue
-        assert "kind=host_workflow_report" in queue
-        assert "kind=workflow_portability" in queue
-        assert "kind=workflow_portability_import" in queue
-        assert "kind=workflow_portability_plan" in queue
-        assert "kind=workflow_portability_bind" in queue
-        assert "kind=workflow_portability_rehearse" in queue
-        assert "kind=workflow_portability_review" in queue
-        assert "kind=workflow_portability_package" in queue
-        assert "kind=human_review" in queue
-        assert "kind=revision_task" in queue
-        assert "kind=notebook_export" in queue
-        assert "kind=bundle_export" in queue
+        queue_lines = queue.splitlines()
+        assert queue_lines[-1] == "status=ready"
+        queue_records = leading_record_fields(
+            "\n".join(queue_lines[:-1]), ("action", "path", "kind", "status")
+        )
+        assert [(path, kind) for _, path, kind, _ in queue_records] == (
+            expected_action_pairs
+        )
         assert "run_id=RUN-999" in queue
         assert "title=Host reusable response table" in queue
         assert "title=Studio cytokine evidence" in queue
@@ -1899,232 +1840,27 @@ def main() -> int:
         assert "readiness_decision=ready_for_agentos" in queue
         assert "export_format=zip" in queue
         assert "package=wf-portability.zip" in queue
-        assert "status=ready" in queue
 
         plan = read(next_state / "rp_host_action_plan")
         assert "collect=rp_web_bundle" in plan
         assert "collect=rp_compare_plain" in plan
-        assert "kind=dataset" in plan
-        assert "kind=research_rerun" in plan
-        assert "kind=studio_launch" in plan
-        assert "kind=library_source" in plan
-        assert "kind=template" in plan
-        assert "kind=workspace_inspect" in plan
-        assert "kind=workspace_import" in plan
-        assert "kind=literature_search" in plan
-        assert "kind=evidence_review" in plan
-        assert "kind=evidence_protocol" in plan
-        assert "kind=workbench" in plan
-        assert "kind=workbench_complete" in plan
-        assert "kind=workbench_advance" in plan
-        assert "kind=workbench_auto_advance" in plan
-        assert "kind=workbench_answer" in plan
-        assert "kind=workbench_answer_audit" in plan
-        assert "kind=workbench_evidence_search" in plan
-        assert "kind=workbench_task" in plan
-        assert "kind=workbench_note" in plan
-        assert "kind=workbench_notes" in plan
-        assert "kind=workbench_handoff_package" in plan
-        assert "kind=workbench_readiness" in plan
-        assert "kind=workbench_brief" in plan
-        assert "kind=workbench_evidence_dossier" in plan
-        assert "kind=workbench_evidence_graph" in plan
-        assert "kind=workbench_citations" in plan
-        assert "kind=workbench_manuscript" in plan
-        assert "kind=workbench_manuscript_audit" in plan
-        assert "kind=workbench_manuscript_revision_plan" in plan
-        assert "kind=workbench_manuscript_revision_task" in plan
-        assert "kind=workbench_task_board" in plan
-        assert "kind=workbench_task_board_row" in plan
-        assert "kind=workbench_runbook" in plan
-        assert "kind=workbench_timeline" in plan
-        assert "kind=workbench_file_manifest" in plan
-        assert "kind=workbench_file_verify" in plan
-        assert "kind=workbench_export" in plan
-        assert "kind=operations_report" in plan
-        assert "kind=project_space" in plan
-        assert "kind=project_release_gate" in plan
-        assert "kind=research_search_export" in plan
-        assert "kind=host_workflow" in plan
-        assert "kind=host_workflow_export" in plan
-        assert "kind=host_workflow_stage" in plan
-        assert "kind=host_workflow_cache" in plan
-        assert "kind=host_workflow_retry" in plan
-        assert "kind=host_workflow_artifact" in plan
-        assert "kind=host_workflow_report" in plan
-        assert "kind=artifact_input" in plan
-        assert "kind=artifact_derive" in plan
-        assert "kind=artifact_log" in plan
-        assert "kind=artifact_chart" in plan
-        assert "kind=artifact_package" in plan
-        assert "kind=workflow_portability" in plan
-        assert "kind=workflow_portability_import" in plan
-        assert "kind=workflow_portability_plan" in plan
-        assert "kind=workflow_portability_bind" in plan
-        assert "kind=workflow_portability_rehearse" in plan
-        assert "kind=workflow_portability_review" in plan
-        assert "kind=workflow_portability_package" in plan
-        assert "kind=llm_relay_request" in plan
-        assert "kind=llm_relay_response" in plan
-        assert "kind=llm_relay_fallback" in plan
+        plan_lines = plan.splitlines()
+        assert plan_lines[-1] == "status=ready"
+        plan_records = leading_record_fields(
+            "\n".join(plan_lines[:-1]), ("plan", "kind")
+        )
+        assert [kind for _, kind in plan_records] == expected_action_kinds
 
         inbox = read(next_state / "rp_host_action_inbox")
-        assert "/actions/research/run" in inbox
-        assert "/actions/research/rerun" in inbox
-        assert "/actions/research/dataset" in inbox
-        assert "/actions/research/studio-launch" in inbox
-        assert "/actions/research/library-source" in inbox
-        assert "/actions/research/template" in inbox
-        assert "/actions/research/inspect-workspace" in inbox
-        assert "/actions/research/import-workspace" in inbox
-        assert "/actions/research/literature-search" in inbox
-        assert "/actions/research/evidence-review" in inbox
-        assert "/actions/research/evidence-protocol" in inbox
-        assert "/actions/agentcompare/run" in inbox
-        assert "/actions/research/workbench" in inbox
-        assert "/actions/research/workbench-answer" in inbox
-        assert "/actions/research/workbench-answer-audit" in inbox
-        assert "/actions/research/workbench-evidence-search" in inbox
-        assert "/actions/research/workbench-task" in inbox
-        assert "/actions/research/workbench-note" in inbox
-        assert "/actions/research/workbench-notes" in inbox
-        assert "/actions/research/workbench-handoff-package" in inbox
-        assert "/actions/research/workbench-readiness" in inbox
-        assert "/actions/research/workbench-brief" in inbox
-        assert "/actions/research/workbench-evidence-dossier" in inbox
-        assert "/actions/research/workbench-evidence-graph" in inbox
-        assert "/actions/research/workbench-citations" in inbox
-        assert "/actions/research/workbench-manuscript" in inbox
-        assert "/actions/research/workbench-manuscript-audit" in inbox
-        assert "/actions/research/workbench-manuscript-revision-plan" in inbox
-        assert "/actions/research/workbench-manuscript-revision-task" in inbox
-        assert "/actions/research/workbench-task-board" in inbox
-        assert "/actions/research/workbench-task-board-row" in inbox
-        assert "/actions/research/workbench-runbook" in inbox
-        assert "/actions/research/workbench-timeline" in inbox
-        assert "/actions/research/workbench-file-manifest" in inbox
-        assert "/actions/research/workbench-file-verify" in inbox
-        assert "/actions/research/export-workbench" in inbox
-        assert "/actions/research/operations-report" in inbox
-        assert "/actions/research/workbench-quality-gate" in inbox
-        assert "/actions/research/workbench-plan-queue-execute" in inbox
-        assert "/actions/research/project-space" in inbox
-        assert "/actions/research-search/export" in inbox
-        assert "/actions/host-workflow/run" in inbox
-        assert "/actions/host-workflow/export" in inbox
-        assert "/actions/host-workflow/stage-attempt" in inbox
-        assert "/actions/host-workflow/cache-decision" in inbox
-        assert "/actions/host-workflow/retry-decision" in inbox
-        assert "/actions/host-workflow/artifact-manifest" in inbox
-        assert "/actions/host-workflow/report-export" in inbox
-        assert "/actions/research/artifact-input" in inbox
-        assert "/actions/research/artifact-derive" in inbox
-        assert "/actions/research/artifact-log" in inbox
-        assert "/actions/research/artifact-chart" in inbox
-        assert "/actions/research/artifact-package" in inbox
-        assert "/actions/workflow-portability/run" in inbox
-        assert "/actions/workflow-portability/import" in inbox
-        assert "/actions/workflow-portability/plan" in inbox
-        assert "/actions/workflow-portability/bind" in inbox
-        assert "/actions/workflow-portability/rehearse" in inbox
-        assert "/actions/workflow-portability/review" in inbox
-        assert "/actions/workflow-portability/package" in inbox
-        assert "/actions/research/llm-relay-request" in inbox
-        assert "/actions/research/llm-relay-response" in inbox
-        assert "/actions/research/llm-relay-fallback" in inbox
+        assert inbox.splitlines() == queue_lines[:-1]
 
         assert (run_dir / "actions.json").exists()
         assert (run_dir / "runner-summary.json").exists()
 
-        assert runner.action_kind("/actions/research/rerun") == "research_rerun"
+        for path, kind in expected_action_pairs:
+            assert runner.action_kind(path) == kind
         assert runner.action_kind("/actions/research/run-revision") == "revision_run"
-        assert runner.action_kind("/actions/research/dataset") == "dataset"
-        assert runner.action_kind("/actions/research/studio-launch") == "studio_launch"
-        assert runner.action_kind("/actions/research/library-source") == "library_source"
-        assert runner.action_kind("/actions/research/template") == "template"
-        assert runner.action_kind("/actions/research/inspect-workspace") == "workspace_inspect"
-        assert runner.action_kind("/actions/research/import-workspace") == "workspace_import"
         assert runner.action_kind("/actions/research/import-and-run") == "workspace_import_run"
-        assert runner.action_kind("/actions/research/literature-search") == "literature_search"
-        assert runner.action_kind("/actions/research/evidence-review") == "evidence_review"
-        assert runner.action_kind("/actions/research/evidence-protocol") == "evidence_protocol"
-        assert runner.action_kind("/actions/research/workbench") == "workbench"
-        assert runner.action_kind("/actions/research/workbench-advance") == "workbench_advance"
-        assert runner.action_kind("/actions/research/workbench-auto-advance") == "workbench_auto_advance"
-        assert runner.action_kind("/actions/research/workbench-answer") == "workbench_answer"
-        assert runner.action_kind("/actions/research/workbench-answer-audit") == "workbench_answer_audit"
-        assert runner.action_kind("/actions/research/workbench-evidence-search") == "workbench_evidence_search"
-        assert runner.action_kind("/actions/research/workbench-task") == "workbench_task"
-        assert runner.action_kind("/actions/research/workbench-note") == "workbench_note"
-        assert runner.action_kind("/actions/research/workbench-notes") == "workbench_notes"
-        assert runner.action_kind("/actions/research/workbench-handoff-package") == "workbench_handoff_package"
-        assert runner.action_kind("/actions/research/workbench-readiness") == "workbench_readiness"
-        assert runner.action_kind("/actions/research/workbench-brief") == "workbench_brief"
-        assert runner.action_kind("/actions/research/workbench-evidence-dossier") == "workbench_evidence_dossier"
-        assert runner.action_kind("/actions/research/workbench-evidence-graph") == "workbench_evidence_graph"
-        assert runner.action_kind("/actions/research/workbench-citations") == "workbench_citations"
-        assert runner.action_kind("/actions/research/workbench-manuscript") == "workbench_manuscript"
-        assert runner.action_kind("/actions/research/workbench-manuscript-audit") == "workbench_manuscript_audit"
-        assert runner.action_kind("/actions/research/workbench-manuscript-revision-plan") == "workbench_manuscript_revision_plan"
-        assert runner.action_kind("/actions/research/workbench-manuscript-revision-task") == "workbench_manuscript_revision_task"
-        assert runner.action_kind("/actions/research/workbench-task-board") == "workbench_task_board"
-        assert runner.action_kind("/actions/research/workbench-task-board-row") == "workbench_task_board_row"
-        assert runner.action_kind("/actions/research/workbench-runbook") == "workbench_runbook"
-        assert runner.action_kind("/actions/research/workbench-timeline") == "workbench_timeline"
-        assert runner.action_kind("/actions/research/workbench-file-manifest") == "workbench_file_manifest"
-        assert runner.action_kind("/actions/research/workbench-file-verify") == "workbench_file_verify"
-        assert runner.action_kind("/actions/research/export-workbench") == "workbench_export"
-        assert runner.action_kind("/actions/research/operations-report") == "operations_report"
-        assert runner.action_kind("/actions/research/operations-advance-next") == "operations_advance_next"
-        assert runner.action_kind("/actions/research/operations-execute-next-plan") == "operations_execute_next_plan"
-        assert runner.action_kind("/actions/research/workbench-delivery-dashboard") == "workbench_delivery_dashboard"
-        assert runner.action_kind("/actions/research/workbench-delivery-execute-next") == "workbench_delivery_execute_next"
-        assert runner.action_kind("/actions/research/workbench-quality-gate") == "workbench_quality_gate"
-        assert runner.action_kind("/actions/research/workbench-quality-repair-plan") == "workbench_quality_repair_plan"
-        assert runner.action_kind("/actions/research/workbench-quality-repair-execute") == "workbench_quality_repair_execute"
-        assert runner.action_kind("/actions/research/workbench-plan-queue-row") == "workbench_plan_queue_row"
-        assert runner.action_kind("/actions/research/workbench-plan-queue-execute") == "workbench_plan_queue_execute"
-        assert runner.action_kind("/actions/research/workbench-action-item") == "workbench_action_item"
-        assert runner.action_kind("/actions/research/project-space") == "project_space"
-        assert runner.action_kind("/actions/research/project-space-note") == "project_space_note"
-        assert runner.action_kind("/actions/research/project-space-action-item") == "project_space_action_item"
-        assert runner.action_kind("/actions/research/project-space-answer") == "project_space_answer"
-        assert runner.action_kind("/actions/research/project-space-repair-execute") == "project_space_repair_execute"
-        assert runner.action_kind("/actions/research/project-handoff-audit") == "project_handoff_audit"
-        assert runner.action_kind("/actions/research/project-release-gate") == "project_release_gate"
-        assert runner.action_kind("/actions/research/project-snapshot") == "project_snapshot"
-        assert runner.action_kind("/actions/research/project-snapshot-comparison") == "project_snapshot_comparison"
-        assert runner.action_kind("/actions/research/project-reproducibility-audit") == "project_reproducibility_audit"
-        assert runner.action_kind("/actions/research/project-provenance-graph") == "project_provenance_graph"
-        assert runner.action_kind("/actions/research/project-delivery") == "project_delivery"
-        assert runner.action_kind("/actions/research/package-intake") == "package_intake"
-        assert runner.action_kind("/actions/research-search/save") == "research_search_save"
-        assert runner.action_kind("/actions/research-search/export") == "research_search_export"
-        assert runner.action_kind("/actions/research-search/note") == "research_search_note"
-        assert runner.action_kind("/actions/research-search/action-item") == "research_search_action_item"
-        assert runner.action_kind("/actions/host-workflow/run") == "host_workflow"
-        assert runner.action_kind("/actions/host-workflow/export") == "host_workflow_export"
-        assert runner.action_kind("/actions/host-workflow/stage-attempt") == "host_workflow_stage"
-        assert runner.action_kind("/actions/host-workflow/cache-decision") == "host_workflow_cache"
-        assert runner.action_kind("/actions/host-workflow/retry-decision") == "host_workflow_retry"
-        assert runner.action_kind("/actions/host-workflow/artifact-manifest") == "host_workflow_artifact"
-        assert runner.action_kind("/actions/host-workflow/report-export") == "host_workflow_report"
-        assert runner.action_kind("/actions/research/artifact-input") == "artifact_input"
-        assert runner.action_kind("/actions/research/artifact-derive") == "artifact_derive"
-        assert runner.action_kind("/actions/research/artifact-log") == "artifact_log"
-        assert runner.action_kind("/actions/research/artifact-chart") == "artifact_chart"
-        assert runner.action_kind("/actions/research/artifact-package") == "artifact_package"
-        assert runner.action_kind("/actions/workflow-portability/run") == "workflow_portability"
-        assert runner.action_kind("/actions/workflow-portability/import") == "workflow_portability_import"
-        assert runner.action_kind("/actions/workflow-portability/plan") == "workflow_portability_plan"
-        assert runner.action_kind("/actions/workflow-portability/bind") == "workflow_portability_bind"
-        assert runner.action_kind("/actions/workflow-portability/rehearse") == "workflow_portability_rehearse"
-        assert runner.action_kind("/actions/workflow-portability/review") == "workflow_portability_review"
-        assert runner.action_kind("/actions/workflow-portability/package") == "workflow_portability_package"
-        assert runner.action_kind("/actions/research/llm-relay-request") == "llm_relay_request"
-        assert runner.action_kind("/actions/research/llm-relay-response") == "llm_relay_response"
-        assert runner.action_kind("/actions/research/llm-relay-fallback") == "llm_relay_fallback"
-        assert runner.action_kind("/actions/research/export-notebook") == "notebook_export"
         assert runner.action_kind("/actions/unknown") == "generic"
 
         seed_path = run_dir / "host-input" / "rp_host_action_seed"
@@ -2135,65 +1871,21 @@ def main() -> int:
         assert not (next_state / "rp_host_action_seed").exists()
         assert records == expected_actions
         assert "#define RP_HOST_ACTION_SEED" in header
-        assert "kind=research_run" in seed_file
-        assert "kind=research_rerun" in seed_file
+        seed_lines = seed_file.rstrip("\0").splitlines()
+        assert len(seed_lines) == expected_actions
+        for line, kind in zip(seed_lines, expected_action_kinds):
+            assert line.split(";").count(f"kind={kind}") == 1, line
         assert "parent_run=RUN-999" in seed_file
-        assert "kind=dataset" in seed_file
-        assert "kind=studio_launch" in seed_file
         assert "title=Studio cytokine evidence" in seed_file
         assert "goal=Determine whether recovery evidence is ready" in seed_file
         assert "workbench_id=W1" in seed_file
         assert "material_notes=Small demonstration table for the studio workflow." not in seed_file
         assert "latest_answer_id=answer1" not in seed_file
-        assert "kind=library_source" in seed_file
-        assert "kind=template" in seed_file
-        assert "kind=workspace_inspect" in seed_file
-        assert "kind=workspace_import" in seed_file
-        assert "kind=literature_search" in seed_file
-        assert "kind=evidence_review" in seed_file
-        assert "kind=evidence_protocol" in seed_file
-        assert "kind=workbench" in seed_file
-        assert "kind=workbench_answer" in seed_file
-        assert "kind=workbench_answer_audit" in seed_file
-        assert "kind=workbench_evidence_search" in seed_file
-        assert "kind=workbench_task" in seed_file
-        assert "kind=workbench_note" in seed_file
-        assert "kind=workbench_manuscript" in seed_file
-        assert "kind=workbench_task_board_row" in seed_file
-        assert "kind=workbench_file_verify" in seed_file
         assert "sha_records=9" in seed_file
         assert "verified=9" in seed_file
         assert "missing=0" in seed_file
-        assert "kind=operations_report" in seed_file
-        assert "kind=workbench_quality_gate" in seed_file
-        assert "kind=project_space" in seed_file
-        assert "kind=project_release_gate" in seed_file
-        assert "kind=project_provenance_graph" in seed_file
         assert "project-provenance.dot" in seed_file
         assert "project-bundle.zip" in seed_file
-        assert "kind=research_search_export" in seed_file
-        assert "kind=host_workflow" in seed_file
-        assert "kind=host_workflow_export" in seed_file
-        assert "kind=host_workflow_stage" in seed_file
-        assert "kind=host_workflow_cache" in seed_file
-        assert "kind=host_workflow_retry" in seed_file
-        assert "kind=host_workflow_artifact" in seed_file
-        assert "kind=host_workflow_report" in seed_file
-        assert "kind=artifact_input" in seed_file
-        assert "kind=artifact_derive" in seed_file
-        assert "kind=artifact_log" in seed_file
-        assert "kind=artifact_chart" in seed_file
-        assert "kind=artifact_package" in seed_file
-        assert "kind=workflow_portability" in seed_file
-        assert "kind=workflow_portability_import" in seed_file
-        assert "kind=workflow_portability_plan" in seed_file
-        assert "kind=workflow_portability_bind" in seed_file
-        assert "kind=workflow_portability_rehearse" in seed_file
-        assert "kind=workflow_portability_review" in seed_file
-        assert "kind=workflow_portability_package" in seed_file
-        assert "kind=llm_relay_request" in seed_file
-        assert "kind=llm_relay_response" in seed_file
-        assert "kind=llm_relay_fallback" in seed_file
         assert "workflow_id=WF1" in seed_file
         assert "engine=plain-c-runner" in seed_file
         assert "retry_reason=checksum_mismatch" in seed_file

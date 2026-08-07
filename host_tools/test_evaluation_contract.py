@@ -34,7 +34,6 @@ from evaluation_contract import (
     _load_supports_headline_claim,
     _operations_for,
     _semantic_token,
-    _supplementary_hash,
     _task2_schema_fingerprint,
     _task3_semantic,
     _task3_tool_semantic,
@@ -745,7 +744,7 @@ def revisit_lines(
             visit, identity_index, request_id, agent_id, lifecycle_id,
             lifecycle_generation, 1, 0, 1 if ordinal == 2 else 0, 0,
         ]
-        fingerprint = _supplementary_hash(
+        fingerprint = _functional_semantic(
             "aios-revisit-observation-v1", challenge, values
         )
         visit_fingerprints.append(int(fingerprint, 16))
@@ -758,7 +757,7 @@ def revisit_lines(
             f"fallback=0 result_fingerprint={fingerprint} status=observed"
         )
     summary_values = [len(visit_markers), len(visit_markers), 0, 1, 0]
-    summary_fingerprint = _supplementary_hash(
+    summary_fingerprint = _functional_semantic(
         "aios-revisit-summary-v1",
         challenge,
         [*summary_values, *visit_fingerprints],
@@ -791,7 +790,7 @@ def revisit_lines(
                 completed_us = started_us + service_us
                 received_us = completed_us + 2
                 turnaround_us = wait_us + service_us
-                fingerprint = _supplementary_hash(
+                fingerprint = _functional_semantic(
                     "agentos-qos-sample-v2",
                     challenge,
                     [
@@ -859,7 +858,7 @@ def revisit_lines(
                 )
             ),
         ]
-        workload_digest = _supplementary_hash(
+        workload_digest = _functional_semantic(
             "agentos-qos-workload-v2", challenge, workload_values
         )
 
@@ -874,7 +873,7 @@ def revisit_lines(
             requests, requests, 0, 0, int(workload_digest, 16),
             *(int(item["fingerprint"], 16) for item in samples),
         ]
-        fingerprint = _supplementary_hash(
+        fingerprint = _functional_semantic(
             "agentos-qos-summary-v2", challenge, summary_values
         )
         lines.append(

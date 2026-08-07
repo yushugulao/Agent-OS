@@ -52,7 +52,7 @@ def expect_error(text: str, fragment: str) -> None:
         raise AssertionError(f"invalid state manifest accepted: {fragment}")
 
 
-def test_manifest_mutations() -> None:
+def check_manifest_mutations() -> None:
     path = ROOT / MANIFEST_RELATIVE_PATH
     text = path.read_text(encoding="utf-8")
     raw = json.loads(text)
@@ -122,7 +122,7 @@ def test_manifest_mutations() -> None:
     assert raw["schema_version"] == 4
 
 
-def test_repository_contract() -> None:
+def check_repository_contract() -> None:
     summary = validate_repository_state_contract(ROOT)
     assert summary["status"] == "ready", summary
     assert summary["plain_state_names"] >= 250, summary
@@ -163,7 +163,7 @@ def test_repository_contract() -> None:
     assert plain_map["rp_evidence_pa"] == "rp_evidence_packet"
 
 
-def test_only_state_file_operands_enter_inventory() -> None:
+def check_only_state_file_operands_enter_inventory() -> None:
     with tempfile.TemporaryDirectory(prefix="state-manifest-source-") as tmp:
         repo = Path(tmp)
         source = repo / "user/src"
@@ -183,7 +183,7 @@ def test_only_state_file_operands_enter_inventory() -> None:
         assert mapping == {"rp_evidence_pa": "rp_evidence_packet"}, mapping
 
 
-def test_ambiguous_guest_names_fail_closed() -> None:
+def check_ambiguous_guest_names_fail_closed() -> None:
     try:
         short_name_map(
             {"rp_manifest_collision_one", "rp_manifest_collision_two"}
@@ -194,7 +194,7 @@ def test_ambiguous_guest_names_fail_closed() -> None:
         raise AssertionError("ambiguous guest state filenames were accepted")
 
 
-def test_guest_state_digest_binds_inventory_and_contents() -> None:
+def check_guest_state_digest_binds_inventory_and_contents() -> None:
     with tempfile.TemporaryDirectory(prefix="guest-state-digest-") as tmp:
         state_dir = Path(tmp)
         (state_dir / "rp_alpha").write_bytes(b"alpha\n")
@@ -243,7 +243,7 @@ def test_guest_state_digest_binds_inventory_and_contents() -> None:
             raise AssertionError("Guest state digest followed a symlink")
 
 
-def test_import_modes() -> None:
+def check_import_modes() -> None:
     cases = (
         (
             ROOT,
@@ -275,22 +275,22 @@ def test_import_modes() -> None:
 
 class ResearchStateManifestTests(unittest.TestCase):
     def test_manifest_mutations(self) -> None:
-        test_manifest_mutations()
+        check_manifest_mutations()
 
     def test_repository_contract(self) -> None:
-        test_repository_contract()
+        check_repository_contract()
 
     def test_only_state_file_operands_enter_inventory(self) -> None:
-        test_only_state_file_operands_enter_inventory()
+        check_only_state_file_operands_enter_inventory()
 
     def test_ambiguous_guest_names_fail_closed(self) -> None:
-        test_ambiguous_guest_names_fail_closed()
+        check_ambiguous_guest_names_fail_closed()
 
     def test_guest_state_digest_binds_inventory_and_contents(self) -> None:
-        test_guest_state_digest_binds_inventory_and_contents()
+        check_guest_state_digest_binds_inventory_and_contents()
 
     def test_import_modes(self) -> None:
-        test_import_modes()
+        check_import_modes()
 
 
 if __name__ == "__main__":

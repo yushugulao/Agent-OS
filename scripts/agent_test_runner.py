@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one AgentOS QEMU case with fail-closed output monitoring."""
+"""以闭锁式输出监控运行单个 AgentOS QEMU 用例。"""
 
 import argparse
 import codecs
@@ -276,12 +276,12 @@ class MonitorResult:
 
     @property
     def completion_leader_signaled(self):
-        """Whether the mode-specific first signal reached the leader."""
+        """指定模式的首个信号是否送达主进程。"""
         return self.checkpoint_leader_signaled
 
 
 class OutputScanner:
-    """Incrementally decode one binary stream and recognize complete records."""
+    """增量解码二进制流并识别完整记录。"""
 
     def __init__(
         self,
@@ -484,7 +484,7 @@ def _write_notice(stream, message):
 
 
 def _read_available_chunk(fd, scanner):
-    """Read at most one chunk so timeout checks cannot be starved by output."""
+    """每次最多读一块，避免持续输出饿死超时检查。"""
     try:
         data = os.read(fd, READ_SIZE)
     except (BlockingIOError, InterruptedError):
@@ -510,13 +510,13 @@ def _drain_until(proc, fd, scanner, deadline):
         wait = min(POLL_SECONDS, deadline - now)
         ready, _, _ = select.select([fd], [], [], wait)
         if not ready and proc.poll() is not None and not received:
-            # A closed pipe becomes readable as EOF; allow one short turn for it.
+            # 关闭的管道会以 EOF 就绪，再给它一个短轮次。
             continue
     return eof
 
 
 def _leader_exited(proc):
-    """Observe leader exit without reaping its PID on Linux/WSL."""
+    """在 Linux/WSL 上观察主进程退出但不回收 PID。"""
     if isinstance(proc, _SupervisedProcess):
         return proc.leader_exited()
     if proc.returncode is not None:
@@ -589,7 +589,7 @@ def _linux_process_snapshot():
 
 
 def _linux_process_group_has_live_member(pgid):
-    """Return None off procfs, otherwise ignore exited group zombies."""
+    """无 procfs 时返回 None，否则忽略进程组内已退出的僵尸进程。"""
     processes = _linux_process_snapshot()
     if processes is None:
         return None
@@ -603,7 +603,7 @@ def _linux_process_group_has_live_member(pgid):
 
 
 def _enable_linux_child_subreaper():
-    """Contain daemonizing descendants so they remain attributable to us."""
+    """收容守护化后代，使其仍可归因于当前进程。"""
     if not sys.platform.startswith("linux"):
         return False
     try:
@@ -641,12 +641,12 @@ def _set_linux_dumpability(value):
 
 
 def _disable_linux_dumpability():
-    """Prevent an untrusted same-UID child from reopening control FDs."""
+    """阻止同 UID 的不可信子进程重新打开控制 FD。"""
     return _set_linux_dumpability(0)
 
 
 def _acquire_linux_control_endpoint_hardening():
-    """Join one process-wide hardening session for concurrent monitors."""
+    """让并发监控器加入同一进程级加固会话。"""
     global _DUMPABILITY_SESSION
     with _DUMPABILITY_CONDITION:
         if _DUMPABILITY_POISONED:
@@ -661,7 +661,7 @@ def _acquire_linux_control_endpoint_hardening():
 
 
 def _release_linux_control_endpoint_hardening(lease):
-    """Return one shared restore result to every concurrent lifecycle."""
+    """向所有并发生命周期返回同一恢复结果。"""
     global _DUMPABILITY_POISONED, _DUMPABILITY_SESSION
     with _DUMPABILITY_CONDITION:
         session = lease.session
@@ -694,7 +694,7 @@ def _release_linux_control_endpoint_hardening(lease):
 
 
 def _signal_stable_linux_pid(pid, start_time, sig):
-    """Signal one tracked PID without crossing a PID-reuse boundary."""
+    """向已跟踪 PID 发信号，避免跨越 PID 复用边界。"""
     pidfd = None
     try:
         if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
@@ -736,7 +736,7 @@ def _linux_descendants(parent_pid, processes):
 
 
 def _kill_supervised_descendants(reserved_leader, timeout=TERMINATE_SECONDS):
-    """Kill and reap every child in a dedicated subreaper process."""
+    """在专用 subreaper 中终止并回收所有子进程。"""
     deadline = time.monotonic() + timeout
     while True:
         processes = _linux_process_snapshot()
@@ -768,7 +768,7 @@ def _kill_supervised_descendants(reserved_leader, timeout=TERMINATE_SECONDS):
 
 
 def _wait_for_supervised_leader_exit(child, timeout=TERMINATE_SECONDS):
-    """Wait for exit without reaping, preserving the leader PID and PGID."""
+    """等待退出但不回收，以保留主进程 PID 和 PGID。"""
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -788,7 +788,7 @@ def _wait_for_supervised_leader_exit(child, timeout=TERMINATE_SECONDS):
 
 
 def _force_cleanup_supervised_tree(child, leader_info):
-    """Fail closed while retaining the leader until descendants are gone."""
+    """保留主进程直至后代消失，否则闭锁失败。"""
     if leader_info is None:
         try:
             child.kill()
@@ -820,11 +820,10 @@ def _supervisor_signal_leader(child, leader_info, sig):
 
 
 def _run_powercut_supervisor(control_fd, request_fd, nonce, command):
-    """Own one trusted host workload and attest its Guest-facing powercut.
+    """持有可信 Host 工作负载并证明面向 Guest 的断电。
 
-    Same-UID hostile host programs require an external UID/PID-namespace/
-    cgroup boundary; this protocol only prevents Guest-controlled QEMU state
-    from forging successful completion.
+    同 UID 的恶意 Host 程序仍需外部 UID/PID 命名空间或 cgroup 隔离；
+    本协议只防止 Guest 控制的 QEMU 状态伪造成功完成。
     """
     try:
         os.set_inheritable(control_fd, False)
@@ -988,7 +987,7 @@ def _powercut_supervisor_command(control_fd, request_fd, nonce, command):
 
 
 class _SupervisedProcess:
-    """Expose a supervised workload leader through the Popen subset we use."""
+    """通过所需的 Popen 子集封装受监督工作负载主进程。"""
 
     def __init__(
         self,
@@ -1277,7 +1276,7 @@ def _open_pidfd(proc):
 
 
 def _signal_leader(proc, pidfd, sig):
-    """Return (sent, identity_confirmed) for the QEMU leader itself."""
+    """返回 QEMU 主进程的 (sent, identity_confirmed)。"""
     if _leader_exited(proc):
         return False, False
     try:
@@ -1307,18 +1306,16 @@ def _signal_process_group(proc, sig):
 
 
 def _signal_process_tree(proc, pidfd, sig):
-    """Signal the stable leader and its still-reserved process group."""
+    """向稳定主进程及仍保留的进程组发信号。"""
     if isinstance(proc, _SupervisedProcess):
         tree_sent, leader_sent, leader_confirmed = proc.request_signal(sig)
         if tree_sent or leader_sent:
             return tree_sent, leader_sent, leader_confirmed
         if not proc.control_healthy:
-            # The owner may be SIGSTOPed. Resume it so a queued authenticated
-            # request can still drive best-effort descendant cleanup, while
-            # permanently invalidating completion attestation.
+            # 所有者可能已被 SIGSTOP；恢复它以处理已认证的排队清理请求，
+            # 同时永久作废完成证明。
             proc.resume_owner()
-        # A dead supervisor cannot attest completion, but still kill the
-        # stable leader and its original group as emergency cleanup.
+        # 监督器死亡后无法证明完成，仍终止稳定主进程及原进程组作应急清理。
         group_liveness = _linux_process_group_has_live_member(proc.pid)
         leader_sent, leader_confirmed = _signal_leader(proc, pidfd, sig)
         group_sent = _signal_process_group(proc, sig)
@@ -1329,10 +1326,8 @@ def _signal_process_tree(proc, pidfd, sig):
             leader_confirmed,
         )
     if sys.platform == "cygwin":
-        # start_new_session gives every MSYS workload an exclusive PGID.
-        # Cygwin has no pidfd, while signaling the leader and then its group
-        # delivers the same signal twice. One successful group delivery is
-        # therefore the strongest atomic leader/tree operation available.
+        # start_new_session 为每个 MSYS 工作负载分配独占 PGID。Cygwin 无 pidfd，
+        # 分别向主进程和组发送会重复投递，故一次组投递是最强的原子树操作。
         leader_exited = _leader_exited(proc)
         try:
             os.killpg(proc.pid, sig)
@@ -1349,8 +1344,7 @@ def _signal_process_tree(proc, pidfd, sig):
     leader_sent, leader_confirmed = _signal_leader(proc, pidfd, sig)
     group_sent = False
     if os.name == "posix":
-        # The unreaped leader reserves its PID and PGID. Always attempt the
-        # group signal so a procfs observation race cannot orphan a child.
+        # 未回收主进程保留 PID/PGID；始终尝试组信号，避免 procfs 观察竞争遗留子进程。
         group_sent = _signal_process_group(proc, sig)
     elif os.name == "nt" and not leader_sent and not _leader_exited(proc):
         try:
@@ -1378,7 +1372,7 @@ def _wait_for_tree_exit_and_eof(
     deadline,
     initial_eof=False,
 ):
-    """Wait for tree/EOF and return when natural completion was observed."""
+    """等待进程树退出和 EOF，并在观察到自然完成时返回。"""
     eof = initial_eof
     while True:
         if not eof:
@@ -1404,8 +1398,7 @@ def _wait_for_tree_exit_and_eof(
         if readers:
             select.select(readers, [], [], wait)
         else:
-            # Do not reap the leader until group teardown is complete. Keeping
-            # its PID reserved prevents a recycled PGID from being signaled.
+            # 组清理完成前不回收主进程，保留 PID 以免误信号复用的 PGID。
             time.sleep(wait)
 
 
@@ -1533,7 +1526,7 @@ def _force_stop_process_tree(
     pidfd,
     first_signal=signal.SIGTERM,
 ):
-    """Exception-path teardown that cannot depend on output decoding."""
+    """不依赖输出解码的异常路径清理。"""
     if proc is None:
         return
     try:
@@ -1662,7 +1655,7 @@ def _read_supervisor_handshake(fd, owner, nonce):
 
 
 class _ProcessLifecycle:
-    """Own a spawned QEMU process until its full output tree is drained."""
+    """持有已启动的 QEMU，直至完整输出树排空。"""
 
     def __init__(self):
         self.proc = None
@@ -1695,9 +1688,8 @@ class _ProcessLifecycle:
                 "start_new_session": os.name == "posix",
             }
             if maskable:
-                # The parent blocks cancellation across Popen so it cannot
-                # lose ownership between fork and attach. Do not leak that
-                # mask into QEMU.
+                # 父进程在 Popen 期间屏蔽取消，避免 fork 到接管间丢失所有权；
+                # 不把该信号掩码泄漏给 QEMU。
                 popen_options["preexec_fn"] = _unblock_child_control_signals
             if os.name == "nt":
                 popen_options["creationflags"] = (
@@ -1872,7 +1864,7 @@ class _ReceivedSignal(BaseException):
 
 
 class _SignalRelay:
-    """Turn cancellation into an exception until child cleanup completes."""
+    """子进程清理完成前把取消转为异常。"""
 
     def __init__(self):
         self.previous = {}
@@ -1897,7 +1889,7 @@ class _SignalRelay:
         if self.received is None:
             self.received = _ReceivedSignal(signum, frame)
             raise self.received
-        # A repeated cancellation must not interrupt TERM -> KILL cleanup.
+        # 重复取消不得中断 TERM -> KILL 清理。
 
     def redispatch(self, received):
         previous = self.previous.get(received.signum, signal.SIG_DFL)
@@ -1934,7 +1926,7 @@ def _monitor_command_impl(
     max_pending_chars=MAX_PENDING_CHARS,
     _lifecycle=None,
 ):
-    """Monitor a command through one non-buffered binary read path."""
+    """经单一无缓冲二进制读取路径监控命令。"""
 
     if completion_mode not in (
         COMPLETION_NATURAL,
@@ -2248,7 +2240,7 @@ def _monitor_command_impl(
 
 
 def monitor_command(command, **options):
-    """Monitor QEMU while making cancellation and exceptions teardown-safe."""
+    """监控 QEMU，并确保取消和异常路径可靠清理。"""
     lifecycle = _ProcessLifecycle()
     relay = _SignalRelay()
     try:

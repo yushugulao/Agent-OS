@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Link-safe host path primitives shared by acceptance tools."""
+"""验收工具共享的无链接主机路径原语。"""
 
 from __future__ import annotations
 
@@ -21,14 +21,8 @@ DEFAULT_MAX_WALK_DEPTH = 64
 
 
 def _regular_file_identity(file_info: os.stat_result) -> tuple[int, int, int]:
-    """Return a stable path/descriptor identity on the current host."""
-
-    # CPython 3.12+ exposes Windows creation time as st_birthtime.  On some
-    # Windows releases Path.lstat() reports that value through st_ctime while
-    # os.fstat() reports the last-write time through st_ctime.  Comparing the
-    # two ctime values therefore rejects an unchanged file.  Creation time is
-    # the stable replacement marker on Windows; POSIX keeps the stronger ctime
-    # marker, which also changes when an inode is relinked.
+    # Windows 的 lstat/fstat 对 st_ctime 含义可能不同，改用稳定的创建时间；
+    # POSIX 仍保留能识别 inode 重链接的 ctime。
     identity_time = (
         file_info.st_birthtime_ns
         if os.name == "nt" and hasattr(file_info, "st_birthtime_ns")
@@ -38,17 +32,12 @@ def _regular_file_identity(file_info: os.stat_result) -> tuple[int, int, int]:
 
 
 def _regular_file_content_stamp(file_info: os.stat_result) -> tuple[int, int]:
-    """Return metadata that changes when an opened file is rewritten."""
-
     return (file_info.st_size, file_info.st_mtime_ns)
 
 
 def absolute_lexical_path(path: Path) -> Path:
-    """Return an absolute path without resolving a link component."""
-
     expanded = path.expanduser()
-    # Preserve the caller's concrete path flavour.  Platform probes may mock
-    # ``os.name`` while still handling an already-created POSIX path.
+    # 平台探针可能模拟 ``os.name``，因此保留调用方已创建路径的具体风格。
     return type(expanded)(os.path.abspath(os.fspath(expanded)))
 
 
@@ -64,8 +53,6 @@ def path_components(path: Path) -> list[Path]:
 
 @lru_cache(maxsize=1)
 def loaded_msys_path_api():
-    """Return MSYS path conversion and Win32 attribute functions, if applicable."""
-
     if os.name != "posix" or sys.platform != "cygwin":
         return None
 
@@ -99,8 +86,6 @@ def loaded_msys_path_api():
 
 
 def _msys_native_file_attributes(path: Path) -> int | None:
-    """Inspect a lexical MSYS path through Win32 without opening its target."""
-
     api = loaded_msys_path_api()
     if api is None:
         return None
@@ -125,8 +110,6 @@ def path_is_link(
     *,
     file_info: os.stat_result | None = None,
 ) -> bool:
-    """Detect POSIX links, Windows junctions, and otherwise-hidden reparse points."""
-
     if file_info is None:
         try:
             file_info = path.lstat()
@@ -152,8 +135,6 @@ def path_is_link(
 
 
 def reject_link_components(path: Path) -> Path:
-    """Reject every existing symlink or junction in a lexical path."""
-
     absolute = absolute_lexical_path(path)
     for component in path_components(absolute):
         try:
@@ -166,8 +147,6 @@ def reject_link_components(path: Path) -> Path:
 
 
 def ensure_safe_directory(path: Path, mode: int = 0o700) -> Path:
-    """Create a directory tree without accepting a link component."""
-
     absolute = absolute_lexical_path(path)
     for component in path_components(absolute):
         try:
@@ -187,8 +166,6 @@ def ensure_safe_directory(path: Path, mode: int = 0o700) -> Path:
 
 
 def require_safe_directory(path: Path) -> Path:
-    """Require one existing, ordinary directory with no link-backed component."""
-
     absolute = reject_link_components(path)
     try:
         info = absolute.lstat()
@@ -204,8 +181,6 @@ def require_safe_directory(path: Path) -> Path:
 def require_regular_file(
     path: Path, *, nonempty: bool = False, maximum_bytes: int | None = None
 ) -> Path:
-    """Require one ordinary file whose complete lexical path is link-free."""
-
     absolute = reject_link_components(path)
     try:
         info = absolute.lstat()
@@ -227,8 +202,6 @@ def require_regular_file(
 def read_regular_file(
     path: Path, *, nonempty: bool = False, maximum_bytes: int | None = None
 ) -> bytes:
-    """Read a bounded regular file after validating its complete lexical path."""
-
     absolute = require_regular_file(
         path, nonempty=nonempty, maximum_bytes=maximum_bytes
     )
@@ -285,8 +258,6 @@ def atomic_write_bytes(
     replace: bool = True,
     mode: int = 0o600,
 ) -> Path:
-    """Atomically publish bytes below a verified, link-free parent directory."""
-
     absolute = absolute_lexical_path(path)
     parent = ensure_safe_directory(absolute.parent)
     try:
@@ -336,8 +307,6 @@ def walk_directory_tree_no_links(
     max_total_bytes: int = DEFAULT_MAX_WALK_BYTES,
     max_depth: int = DEFAULT_MAX_WALK_DEPTH,
 ) -> tuple[list[Path], list[Path]]:
-    """Return bounded directory and file inventories without following links."""
-
     budgets = (max_files, max_directories, max_total_bytes, max_depth)
     if any(type(value) is not int or value < 0 for value in budgets):
         raise ValueError("Recursive path budgets must be nonnegative integers")
@@ -405,8 +374,6 @@ def walk_regular_files_no_links(
     max_total_bytes: int = DEFAULT_MAX_WALK_BYTES,
     max_depth: int = DEFAULT_MAX_WALK_DEPTH,
 ) -> list[Path]:
-    """Return only files from a bounded, link-free recursive inventory."""
-
     _directories, files = walk_directory_tree_no_links(
         root,
         max_files=max_files,
@@ -431,8 +398,6 @@ def _require_owned_directory(path: Path) -> Path:
 
 
 def create_private_directory(path: Path) -> Path:
-    """Atomically claim a new owner-only directory at an unlinked path."""
-
     absolute = absolute_lexical_path(path)
     ensure_safe_directory(absolute.parent)
     try:
@@ -452,15 +417,4 @@ def create_private_directory(path: Path) -> Path:
 
 
 def require_private_directory(path: Path) -> Path:
-    """Validate an existing owner-controlled directory."""
-
     return _require_owned_directory(path)
-
-
-def ensure_private_directory(path: Path) -> Path:
-    """Create or tighten an owner-controlled directory without following links."""
-
-    absolute = ensure_safe_directory(path, 0o700)
-    absolute = _require_owned_directory(absolute)
-    os.chmod(absolute, 0o700)
-    return _require_owned_directory(absolute)

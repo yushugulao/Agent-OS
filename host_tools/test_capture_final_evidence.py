@@ -2704,8 +2704,8 @@ procreap_ucore: parent passed
         )
         self.assertLessEqual(observe_acceptance_lines, 1120)
         semantic_registry = SEMANTIC_REGISTRY.read_text(encoding="utf-8")
-        for token in ("RAW_ARTIFACT_REGISTRY", "validate_artifact",
-                      "validate_selected_artifacts", "validate_raw_artifacts"):
+        for token in ("RAW_ARTIFACT_REGISTRY", "validate_selected_artifacts",
+                      "validate_raw_artifacts"):
             self.assertIn(token, semantic_registry)
         # Delivery now proves raw Git ancestry and hashes real tracked bytes;
         # keep that security boundary bounded independently from the collector.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline semantic registry for raw final-evidence artifacts."""
+"""最终原始证据的离线语义注册表。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -142,7 +142,6 @@ def validate_selected_artifacts(
     names: tuple[str, ...] | list[str] | set[str], raw_dir: Path, repo_root: Path,
     require_exact_inventory: bool = False,
 ) -> None:
-    """Validate selected registry rules, allowing unrelated files in ``raw_dir``."""
     if isinstance(names, (str, bytes)) or not names:
         raise EvidenceSemanticError("semantic artifact selection is empty or invalid")
     requested = tuple(names)
@@ -160,19 +159,9 @@ def validate_selected_artifacts(
         _require_exact_inventory(context)
 
 
-def validate_artifact(
-    name: str, raw_dir: Path, repo_root: Path, require_exact_inventory: bool = False
-) -> None:
-    """Validate the registry rule owning one artifact or rule name."""
-    validate_selected_artifacts(
-        (name,), raw_dir, repo_root, require_exact_inventory=require_exact_inventory
-    )
-
-
 def validate_raw_artifacts(
     raw_dir: Path, repo_root: Path, require_exact_inventory: bool = True
 ) -> None:
-    """Validate every registered artifact, optionally enforcing exact inventory."""
     context = _validation_context(raw_dir, repo_root)
     _, artifact_names = _registry_index()
     _run_rules(context, RAW_ARTIFACT_REGISTRY)
@@ -185,7 +174,6 @@ __all__ = [
     "EvidenceSemanticError",
     "RAW_ARTIFACT_REGISTRY",
     "RawArtifactRule",
-    "validate_artifact",
     "validate_raw_artifacts",
     "validate_selected_artifacts",
 ]
