@@ -111,10 +111,12 @@ FIXTURE_AGENT_CASES = (
     "agentscope_ucore", "agenttrust_ucore", "agentvfs_ucore", "iobudget_ucore",
     "usersafety_ucore", "blocking_semantics_ucore",
 )
+FIXTURE_AGENT_TOTAL_SECONDS = (len(FIXTURE_AGENT_CASES) - 1) * 0.1 + 1.05
 PROFILE_ARTIFACTS = {
     "target-structure": [],
     "kernel-budgets": [],
     "host-platform-alignment": [],
+    "ch3-trace": ["ch3-trace-guest.log"],
     "agent-suite": ["agent-suite-timings.log", "agent-suite-guest.log"],
     "dual-platforms": ["dual-plain-qemu.log", "dual-agentos-qemu.log",
                         "dual-stage-timings.csv", "dual-state-compare.json",
@@ -352,6 +354,11 @@ def syscall_lines():
         result.extend((begin, peer))
         if name == "inode":
             result.append("SYSCALLFAIR_INODE_SHORT")
+        elif name == "trunc":
+            result.append(
+                "syscallfair_ucore: "
+                "truncate_preemptions=3 peer_progress=1"
+            )
         result.append(end)
     result.append("syscallfair_ucore: parent passed")
     return result
@@ -436,6 +443,7 @@ def virtio_lines():
     ]
 
 benchmark = "agentbench_ucore: file_query_benchmark schema=2 unit=us load=143 traversal_ops=64 traversal_records=143 traversal_duration_us=36 cold_index_ops=1 cold_index_records=6 cold_index_duration_us=2 cold_rebuild_records=512 cold_rebuild_included=1 warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 status=measured"
+write("ch3-trace-guest.log", "\n".join(kernel.CH3_TRACE_MARKERS))
 mechanism = list(dict.fromkeys([
     "agentfinal_ucore: context_sync_atomic=1 append=1 rollback=1 clear=1 recovery=1",
     *kernel.WAIT_ATOMIC_MARKERS,
@@ -577,7 +585,7 @@ producer_source_lines = {
         "dependency_update=generic_record",
         "dependency_query=generic_record",
         "metadata_query=stage_index",
-        "prefetch_hint=dependency_driven",
+        "metadata_index=stage_query",
     ),
     "rp_agentos_collab_ack": (
         "agent=sentinel",
@@ -786,7 +794,7 @@ metadata.extend([
        reprobe_lines(kind, None if target == "all" else 1))
       for kind in ("busy", "io", "interrupted") for target in ("all", "newer")],
     ("metadata-agentmetalarge_ucore-large-seed",
-     ["agentmetalarge_ucore: runtime_reload_once=1",
+     ["agentmetalarge_ucore: runtime_reload_completed=1",
       "agentmetalarge_ucore: seed_ready=1 records=32"]),
     *[(f"metadata-agentmetatransient_ucore-large-{terminal}",
        reprobe_lines("busy", 1, True))
@@ -1039,7 +1047,7 @@ runtime="${FINAL_EVIDENCE_STAGE}/runtime/full-verify"
 mkdir -p "${incoming}" "${runtime}"
 for artifact in \
   dual-plain-qemu.log dual-agentos-qemu.log dual-stage-timings.csv \
-  dual-state-compare.json agent-suite-guest.log \
+  dual-state-compare.json ch3-trace-guest.log agent-suite-guest.log \
   proc-reap.log syscall-fairness.log file-resource.log thread-resource.log \
   physical-resource.log metadata-recovery.log observe-recovery.log observe-recovery-before-reap.img virtio-disk.log \
   workflow-teardown-race.log fs-enospc.log fs-allocator-fault.log; do
@@ -1077,7 +1085,7 @@ write_csv(incoming / "dual-file-query-benchmark.csv", manifest["rows"])
 PY
 mainflow_artifacts="$(PYTHONPATH=host_tools python3 -c \
   'from dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS; print("\t".join(DUAL_STATE_RAW_ARTIFACTS))')"
-printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nhost-platform-alignment\t3\t4\nagent-suite\t4\t5\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t5\t6\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\thost-platform-alignment.json\t%s\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t6\t7\tproc-reap.log\nsyscall-fairness\t7\t8\tsyscall-fairness.log\nfile-resource\t8\t9\tfile-resource.log\nthread-resource\t9\t10\tthread-resource.log\nphysical-resource\t10\t11\tphysical-resource.log\nmetadata-recovery\t11\t12\tmetadata-recovery.log\nobserve-recovery\t12\t13\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t13\t14\tvirtio-disk.log\nworkflow-teardown-race\t14\t15\tworkflow-teardown-race.log\nfs-enospc\t15\t16\tfs-enospc.log\nfs-allocator-fault\t16\t17\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' \
+printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nhost-platform-alignment\t3\t4\nch3-trace\t4\t5\tch3-trace-guest.log\nagent-suite\t5\t6\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t6\t7\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\thost-platform-alignment.json\t%s\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t7\t8\tproc-reap.log\nsyscall-fairness\t8\t9\tsyscall-fairness.log\nfile-resource\t9\t10\tfile-resource.log\nthread-resource\t10\t11\tthread-resource.log\nphysical-resource\t11\t12\tphysical-resource.log\nmetadata-recovery\t12\t13\tmetadata-recovery.log\nobserve-recovery\t13\t14\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t14\t15\tvirtio-disk.log\nworkflow-teardown-race\t15\t16\tworkflow-teardown-race.log\nfs-enospc\t16\t17\tfs-enospc.log\nfs-allocator-fault\t17\t18\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' \
   "${mainflow_artifacts}" >"${runtime}/steps.tsv"
 python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py write-summary \
   --stage "${FINAL_EVIDENCE_STAGE}" --steps "${runtime}/steps.tsv" \
@@ -1358,12 +1366,38 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assertEqual(set(registered), expected)
         self.assertEqual(len(registered), len(set(registered)))
         for name in (
-            "proc-reap.log", "syscall-fairness.log", "file-resource.log",
+            "ch3-trace-guest.log", "proc-reap.log", "syscall-fairness.log", "file-resource.log",
             "thread-resource.log", "physical-resource.log", "metadata-recovery.log",
             "observe-recovery.log", "virtio-disk.log", "workflow-teardown-race.log",
             "fs-enospc.log", "fs-allocator-fault.log",
         ):
             self.assertEqual(sum(name in rule.artifacts for rule in RAW_ARTIFACT_REGISTRY), 1)
+
+    def test_ch3_raw_evidence_rejects_missing_and_forged_lines(self) -> None:
+        markers = ("string from task trace test", "Test trace OK!")
+        valid = "boot noise\n" + "\n".join(markers) + "\nshutdown noise\n"
+        mutations = {
+            "missing-prefix": valid.replace(markers[0] + "\n", "", 1),
+            "missing-completion": valid.replace(markers[1] + "\n", "", 1),
+            "forged-prefix": valid.replace(markers[0], "forged " + markers[0], 1),
+            "forged-suffix": valid.replace(markers[1], markers[1] + " forged", 1),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp)
+            artifact = raw / "ch3-trace-guest.log"
+            artifact.write_text(valid, encoding="utf-8")
+            validate_selected_artifacts(
+                ("ch3-trace",), raw, REPO, require_exact_inventory=True
+            )
+            for label, payload in mutations.items():
+                with self.subTest(label=label), self.assertRaisesRegex(
+                    EvidenceSemanticError, "complete line"
+                ):
+                    artifact.write_text(payload, encoding="utf-8")
+                    validate_selected_artifacts(
+                        ("ch3-trace",), raw, REPO, require_exact_inventory=True
+                    )
+            artifact.write_text(valid, encoding="utf-8")
     def test_kernel_budget_metrics_are_bound_to_unique_block(self) -> None:
         namespace = __import__("runpy").run_path(str(COLLECTOR))
         parse_measurements = namespace["parse_measurements"]
@@ -1522,7 +1556,7 @@ class FinalEvidenceTests(unittest.TestCase):
             run([*collector_command(REPO, "write-summary"), "--stage", str(stage),
                  "--steps", str(steps), "--commit", commit], REPO)
             summary = json.loads((incoming / "verification-summary.json").read_text())
-            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (8, 6))
+            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (8, 7))
             canonical_steps = json.dumps(summary["steps"], ensure_ascii=True,
                                          sort_keys=True, separators=(",", ":"))
             self.assertEqual(summary["step_contract_sha256"],
@@ -1535,8 +1569,8 @@ class FinalEvidenceTests(unittest.TestCase):
             overlap_steps = populate_summary_stage(overlap)
             overlap_steps.write_text(
                 overlap_steps.read_text().replace(
-                    "syscall-fairness\t7\t8\t",
-                    "syscall-fairness\t6.250000000\t7.500000000\t",
+                    "syscall-fairness\t8\t9\t",
+                    "syscall-fairness\t7.250000000\t8.500000000\t",
                 )
             )
             run(
@@ -1556,7 +1590,7 @@ class FinalEvidenceTests(unittest.TestCase):
             replaced = base / "replaced-artifact"; replaced_steps = populate_summary_stage(replaced)
             (replaced / "incoming/proc-reap.log").rename(replaced / "incoming/wrong.log")
             replaced_steps.write_text(replaced_steps.read_text().replace(
-                "proc-reap\t6\t7\tproc-reap.log", "proc-reap\t6\t7\twrong.log"))
+                "proc-reap\t7\t8\tproc-reap.log", "proc-reap\t7\t8\twrong.log"))
             cases.append((replaced, replaced_steps, [], "artifact contract"))
             for label, options in (("agent-setting", ["--agent-grace", "3s"]),
                                    ("mechanism-setting", ["--mechanism-grace", "4s"]),
@@ -1861,7 +1895,7 @@ exit 91
             with (output / "metrics" / "measurements.csv").open(newline="") as handle:
                 metrics = {row["metric"]: row for row in csv.DictReader(handle)}
             agent = metrics["agent_suite_total_seconds"]
-            self.assertEqual(float(agent["actual"]), 2.75)
+            self.assertAlmostEqual(float(agent["actual"]), FIXTURE_AGENT_TOTAL_SECONDS)
             self.assertEqual(
                 tuple(agent[key] for key in ("baseline", "limit", "usage_ratio")),
                 ("not-applicable", "not-applicable", "not-applicable"),
@@ -1937,7 +1971,7 @@ exit 91
                 restore_raw_artifact(output, alignment_name, alignment_originals)
                 restore_raw_artifact(output, source_name, source_originals)
             source_payload = (output / "logs/raw" / source_name).read_bytes().replace(
-                b"prefetch_hint=dependency_driven", b"prefetch_hint=dependency_forged", 1
+                b"dependency_query=generic_record", b"dependency_query=forged_record", 1
             )
             source_originals = rebind_raw_artifact(output, source_name, source_payload)
             alignment = json.loads(
@@ -2719,7 +2753,7 @@ procreap_ucore: parent passed
             self.assertEqual(makefile.count(once), 1)
         self.assertNotIn("hash-tree", collector + full)
         self.assertNotIn("immutable CI artifact", collector)
-        for contract in ("'^SCHEMA_VERSION = 8$'", "'^FULL_VERIFY_PROFILE_VERSION = 6$'"):
+        for contract in ("'^SCHEMA_VERSION = 8$'", "'^FULL_VERIFY_PROFILE_VERSION = 7$'"):
             self.assertIn(contract, structure)
         self.assertNotIn("'^SCHEMA_VERSION = 1$'", structure)
         public_docs = {
@@ -2746,6 +2780,7 @@ procreap_ucore: parent passed
         self.assertNotIn("bind-remote-ci", collector)
         self.assertNotIn("provenance-attached", collector)
         for name in ("dual-plain-qemu.log", "dual-agentos-qemu.log",
+                     "ch3-trace-guest.log",
                      "dual-targeted-agentbench-guest.log",
                      "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
                      "proc-reap.log", "syscall-fairness.log", "file-resource.log",

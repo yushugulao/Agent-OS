@@ -2,10 +2,9 @@
 
 This project is based on LearningOS/uCore-Tutorial-Code-2025S and LearningOS/uCore-Tutorial-Test-2025S. These upstream projects are GPL-3.0 projects.
 
-The identical `.clang-format`, `user/.clang-format`, and
-`baseline_ucore/user/.clang-format` files originate from the Linux kernel
-formatting configuration and retain their embedded `GPL-2.0` SPDX identifier.
-They are distributed as formatting data and are not relicensed as GPL-3.0.
+The root `.clang-format` originates from the Linux kernel formatting
+configuration and retains its embedded `GPL-2.0` SPDX identifier. It is
+distributed as formatting data and is not relicensed as GPL-3.0.
 
 Source code license: GPL-3.0.
 

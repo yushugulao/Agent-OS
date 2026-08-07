@@ -226,6 +226,36 @@ def validate_submission_accounting(source):
     return body_start + condition_start, body_start + condition_end
 
 
+def validate_bio_accounting_contract(source, header):
+    if "void bio_account_transfer_batch(uint, uint, enum bio_transfer_type," \
+            not in header:
+        raise ContractError("batch physical accounting API is not exported")
+
+    _, _, vector = function_region(
+        source, "void bio_account_transfer_batch("
+    )
+    for token in (
+            "for (uint i = 0; i < count; i++)",
+            "successful = count - failed;",
+            "io_policy.failed_transfers += failed;",
+            "io_policy.completion_sequence += count;",
+            "state->failed_transfers += failed;",
+            "io_rate_charge_transfers(state, io_class, count);"):
+        if token not in vector:
+            raise ContractError(
+                f"vector accounting loses aggregate transfer semantics: {token}"
+            )
+
+    _, _, single = function_region(source, "void bio_account_transfer(")
+    calls = function_calls(single, "bio_account_transfer_batch")
+    expected = ["owner", "io_class", "transfer", "&result", "1"]
+    if len(calls) != 1 or [arg[2] for arg in calls[0]["arguments"]] != expected:
+        raise ContractError("single-transfer accounting diverges from batch core")
+    outside = single[:calls[0]["start"]] + single[calls[0]["closing"] + 1:]
+    if re.sub(r"[\s;]+", "", outside):
+        raise ContractError("single-transfer wrapper performs accounting of its own")
+
+
 def validate_batch_submission(source):
     _, _, public_body = function_region(source, "int virtio_disk_write_batch(")
     _, _, pair = function_region(source, "static int disk_submit_write_pair(")
@@ -326,33 +356,6 @@ def validate_batch_submission(source):
             "result = virtio_disk_rw(buffers[offset], 0);"):
         if token not in read_batch:
             raise ContractError(f"batch read API lost queue or fallback path: {token}")
-    if "void bio_account_transfer_batch(uint, uint, enum bio_transfer_type," \
-            not in bio_header:
-        raise ContractError("batch physical accounting API is not exported")
-    _, _, accounting = function_region(
-        bio_source, "void bio_account_transfer_batch("
-    )
-    calls = function_calls(accounting, "bio_account_transfers")
-    if len(calls) != 1 or "results, count" not in accounting:
-        raise ContractError("batch accounting bypasses the vector accounting core")
-    _, _, single = function_region(bio_source, "void bio_account_transfer(")
-    calls = function_calls(single, "bio_account_transfers")
-    if len(calls) != 1 or "&result, 1" not in single:
-        raise ContractError("single-transfer accounting diverges from the vector core")
-    _, _, vector = function_region(
-        bio_source, "static void bio_account_transfers("
-    )
-    for token in (
-            "for (uint i = 0; i < count; i++)",
-            "successful = count - failed;",
-            "io_policy.failed_transfers += failed;",
-            "io_policy.completion_sequence += count;",
-            "state->failed_transfers += failed;",
-            "io_rate_charge_transfers(state, io_class, count);"):
-        if token not in vector:
-            raise ContractError(
-                f"vector accounting loses aggregate transfer semantics: {token}"
-            )
 
 
 def validate_descriptor_admission(source):
@@ -576,6 +579,7 @@ try:
     guard_start, guard_end = validate_submission_accounting(driver)
     if driver.count("kernel_performance_virtio_notify(") != 3:
         raise ContractError("every production queue notify needs one performance receipt")
+    validate_bio_accounting_contract(bio_source, bio_header)
     validate_batch_submission(driver)
     validate_descriptor_admission(driver)
     validate_dirty_overlay_protection()
@@ -707,6 +711,27 @@ expect_accounting_rejected(
     driver[:guard_start] + "1" + driver[guard_end:],
     "submitted predicate removed",
 )
+for old, new, label in (
+    (
+        "bio_account_transfer_batch(owner, io_class, transfer, &result, 1);",
+        "bio_account_transfer_batch(owner, io_class, transfer, &result, 2);",
+        "single wrapper stopped delegating exactly one transfer",
+    ),
+    (
+        "io_policy.completion_sequence += count;",
+        "io_policy.completion_sequence++;",
+        "batch completion sequence stopped using vector width",
+    ),
+):
+    if old not in bio_source:
+        raise SystemExit(f"BIO accounting mutation anchor drifted: {label}")
+    try:
+        validate_bio_accounting_contract(
+            bio_source.replace(old, new, 1), bio_header
+        )
+    except ContractError:
+        continue
+    raise SystemExit(f"BIO accounting mutation survived: {label}")
 for old, new, label in (
     (
         "\tif (overlay_acquired)\n\t\tdisk_durability_overlay_leave();\n"

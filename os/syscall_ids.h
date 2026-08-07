@@ -335,8 +335,6 @@
 #define SYS_agent_audit_snapshot 523
 #define SYS_agent_audit_query 524
 #define SYS_agent_sched_config 525
-#define SYS_agent_file_prefetch_snapshot 526
-#define SYS_agent_file_prefetch_span_snapshot 527
 #define SYS_agent_span_trace_snapshot 528
 #define SYS_agent_timeline_snapshot 529
 #define SYS_agent_timeline_query 530
@@ -367,6 +365,5 @@
 #define SYS_wait_atomic_test 555
 #define SYS_fs_allocator_fault_test 556
 #define SYS_agent_audit_receipt 557
-#define SYS_kernel_work_receipt_snapshot 558
 #define SYS_agent_resource_snapshot 559
 #define SYS_agent_performance_snapshot 560

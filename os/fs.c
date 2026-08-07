@@ -1,13 +1,5 @@
-// File system implementation.  Five layers:
-//   + Blocks: allocator for raw disk blocks.
-//   + Log: crash recovery for multi-step updates.
-//   + Files: inode allocator, reading, writing, metadata.
-//   + Directories: inode with special contents (list of other inodes!)
-//   + Names: paths like /usr/rtm/kernel/fs.c for convenient naming.
-//
-// This file contains the low-level file system manipulation
-// routines.  The (higher-level) system call implementations
-// are in sysfile.c.
+// 文件系统分为五层：块分配、事务恢复、inode 与文件、目录、路径名。
+// 本文件实现底层文件系统操作，上层系统调用位于 sysfile.c。
 
 #include "fs.h"
 #include "agent.h"
@@ -21,6 +13,7 @@
 #include "performance_stats.h"
 #include "proc.h"
 #include "riscv.h"
+#include "timer.h"
 #include "types.h"
 #include "virtio.h"
 #include "../fs_allocator_test_abi.h"
@@ -134,9 +127,8 @@ static struct fs_block_magazine
 static uchar fs_block_candidate_reserved[FS_BLOCK_CANDIDATE_BYTES];
 
 /*
- * Foreground unlink/truncate publishes only the unreachable mapping image.
- * This bounded queue owns the detached token until a generation fence makes
- * batched allocator-map reclamation safe.
+ * 前台 unlink/truncate 只发布已经不可达的映射镜像。该有界队列持有
+ * 分离令牌，待 generation fence 生效后再批量回收分配位图。
  */
 #define FS_DEFERRED_RECLAIM_CAP 128U
 #define FS_DEFERRED_RECLAIM_BATCH_UNITS 64U
@@ -170,9 +162,9 @@ static uint fs_deferred_reclaim_unique[
 	FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS];
 static uint fs_deferred_reclaim_count;
 static uint fs_deferred_reclaim_cursor;
+static uint64 fs_deferred_reclaim_next_tick;
 
-/* Derived namespace indexes never authorize an object; they only locate the
- * dirent that the normal inode/label path must revalidate. */
+/* 派生目录索引只负责定位 dirent，授权仍由正常的 inode/label 路径复核。 */
 #define FS_DENTRY_INDEX_CAP 512U
 #define FS_DIRECTORY_INDEX_CAP 8U
 #define FS_DIRECTORY_INDEX_MAX_ENTRIES NINODE
@@ -280,7 +272,7 @@ static int fs_block_candidate_reclaim(uint block);
 #ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
 static int fs_deferred_reclaim_reserve(uint, struct inode_reclaim *);
 static void fs_deferred_reclaim_cancel(struct inode_reclaim *);
-static int fs_deferred_reclaim_maintain_owner(uint, int);
+static int fs_deferred_reclaim_maintain_owner(uint, int, int);
 #endif
 static void itruncate_reclaim_finish(struct inode_reclaim *);
 static int itruncate_detach_all(struct inode *, struct inode_reclaim *);
@@ -1871,9 +1863,8 @@ static struct bio_checkpoint_result fs_claim_checkpoint(int transfer)
 {
 	struct bio_checkpoint_result status;
 
-	// Once qmap-first publication starts, rollback is neither crash-safe nor
-	// quota-safe. The cleanup checkpoint defers thread exit until the bounded
-	// forward commit reaches the inode publication point.
+	// qmap 首发后回滚不再满足掉电一致性和配额一致性；清理检查点必须
+	// 推迟线程退出，直到有界的向前提交抵达 inode 发布点。
 	if (transfer) {
 		if (bio_request_settle_quiescent_cleanup() < 0)
 			panic("storage claim commit checkpoint");
@@ -1883,12 +1874,10 @@ static struct bio_checkpoint_result fs_claim_checkpoint(int transfer)
 	return status;
 }
 
-// Return the number of SYSTEM-owned blocks that still need conversion.  The
-// indirect map block is storage too and is charged together with its entries.
-// Entries are sorted and processed one qmap block at a time, so each physical
-// metadata block is read/written once per pass. Every checkpoint runs after
-// brelse(); the sleepable claim gate deliberately retains the unique quota
-// reservation across the forward-only transfer pass.
+// 返回仍待转换的 SYSTEM 块数。间接映射块也属于存储配额，并与其条目
+// 一起结算。条目排序后按 qmap 块分批处理，每轮只读写一次物理 metadata
+// 块；检查点均在 brelse() 之后执行，可睡眠的认领门在向前转移期间保留
+// 唯一配额预留。
 static int fs_claim_inode_blocks(int dev, const uint addrs[NDIRECT + 1],
 				 int transfer, int *public_seen,
 				 uint *system_count)
@@ -2113,9 +2102,8 @@ static int fs_storage_charge_from_owner(uint owner,
 	return -1;
 }
 
-// Mutable PUBLIC files installed by mkfs begin as SYSTEM-sponsored objects.
-// Their first user mutation atomically adopts the whole persistent object so
-// overwriting existing blocks cannot bypass the stable PUBLIC quota.
+// mkfs 安装的可变 PUBLIC 文件最初由 SYSTEM 代付；首次用户写入必须原子
+// 接管完整持久对象，避免覆盖已有块绕过稳定的 PUBLIC 配额。
 static int fs_claim_sponsored_public_inode(struct inode *ip,
 					   const struct vfs_cred *cred)
 {
@@ -2351,7 +2339,7 @@ static int fs_reap_boot_workflow_objects(int dev)
 	return 0;
 }
 
-// Init fs
+// 初始化文件系统
 void fsinit()
 {
 	int dev = ROOTDEV;
@@ -2365,6 +2353,7 @@ void fsinit()
 	       sizeof(fs_deferred_reclaim_plan));
 	fs_deferred_reclaim_count = 0;
 	fs_deferred_reclaim_cursor = 0;
+	fs_deferred_reclaim_next_tick = 0;
 	memset(fs_dentry_index, 0, sizeof(fs_dentry_index));
 	memset(fs_directory_indexes, 0, sizeof(fs_directory_indexes));
 	fs_dentry_index_used = 0;
@@ -3185,7 +3174,7 @@ fs_deferred_reclaim_reserve(uint sponsor_owner,
 		if (fs_epoch_dirty() && fs_epoch_commit() < 0)
 			return -1;
 		if (fs_deferred_reclaim_maintain_owner(
-			    FS_OWNER_NONE, 0) <= 0)
+			    FS_OWNER_NONE, 0, 0) <= 0)
 			return -1;
 	}
 	if (bio_deferred_owner_retain(sponsor_owner, &sponsor_class) < 0 &&
@@ -3225,6 +3214,8 @@ fs_deferred_reclaim_cancel(struct inode_reclaim *reclaim)
 	sponsor_owner = entry->sponsor_owner;
 	memset(entry, 0, sizeof(*entry));
 	fs_deferred_reclaim_count--;
+	if (fs_deferred_reclaim_count == 0)
+		fs_deferred_reclaim_next_tick = 0;
 	reclaim->deferred_reserved = 0;
 	reclaim->deferred_slot = 0;
 	bio_deferred_owner_release(sponsor_owner);
@@ -3250,7 +3241,8 @@ fs_deferred_reclaim_publish(struct inode_reclaim *reclaim)
 	entry->fence_generation = generation;
 	entry->published = 1;
 	memset(reclaim, 0, sizeof(*reclaim));
-	agent_background_request();
+	if (fs_deferred_reclaim_next_tick == 0)
+		agent_background_request();
 	return 0;
 }
 
@@ -3517,21 +3509,8 @@ fs_deferred_reclaim_pop_complete(void)
 	}
 }
 
-int
-fs_deferred_reclaim_pending(void)
-{
-	return fs_deferred_reclaim_count != 0;
-}
-
-int
-fs_deferred_reclaim_owner_pending(uint owner)
-{
-	return owner != FS_OWNER_NONE &&
-	       fs_deferred_reclaim_owner_count(owner) != 0;
-}
-
 static int
-fs_deferred_reclaim_maintain_owner(uint owner_filter, int filtered)
+fs_deferred_reclaim_maintain_owner(uint owner_filter, int filtered, int paced)
 {
 	uint unique_count = 0;
 	uint plan_count = 0;
@@ -3539,12 +3518,22 @@ fs_deferred_reclaim_maintain_owner(uint owner_filter, int filtered)
 	uint sponsor_class;
 	uint selected = FS_DEFERRED_RECLAIM_CAP;
 	int result = -1;
+	uint64 now = get_cycle() / (CPU_FREQ / TICKS_PER_SEC);
 
 	if (!fs_epoch_request_held())
 		return -1;
+	if (paced) {
+		if (fs_deferred_reclaim_next_tick != 0 &&
+		    now < fs_deferred_reclaim_next_tick)
+			return 0;
+		/* 回收批次由时钟定速，不能在同一滴答被多个 syscall 连续触发。 */
+		fs_deferred_reclaim_next_tick = now + 1;
+	}
 	fs_deferred_reclaim_pop_complete();
-	if (fs_deferred_reclaim_count == 0)
+	if (fs_deferred_reclaim_count == 0) {
+		fs_deferred_reclaim_next_tick = 0;
 		return 0;
+	}
 	for (uint scanned = 0; scanned < FS_DEFERRED_RECLAIM_CAP;
 	     scanned++) {
 		uint slot = (fs_deferred_reclaim_cursor + scanned) %
@@ -3560,7 +3549,6 @@ fs_deferred_reclaim_maintain_owner(uint owner_filter, int filtered)
 		break;
 	}
 	if (selected == FS_DEFERRED_RECLAIM_CAP) {
-		agent_background_request();
 		return 0;
 	}
 	fs_deferred_reclaim_cursor =
@@ -3664,16 +3652,25 @@ out:
 	bio_deferred_sponsor_end();
 	if (result > 0)
 		fs_deferred_reclaim_pop_complete();
-	if (fs_deferred_reclaim_count != 0)
-		agent_background_request();
+	if (fs_deferred_reclaim_count == 0)
+		fs_deferred_reclaim_next_tick = 0;
 	return result;
 }
 
 int
 fs_deferred_reclaim_maintain(void)
 {
-	return fs_deferred_reclaim_maintain_owner(FS_OWNER_NONE, 0) < 0 ?
+	return fs_deferred_reclaim_maintain_owner(FS_OWNER_NONE, 0, 1) < 0 ?
 		-1 : 0;
+}
+
+void
+fs_deferred_reclaim_tick(uint64 now)
+{
+	if (fs_deferred_reclaim_count != 0 &&
+	    (fs_deferred_reclaim_next_tick == 0 ||
+	     now >= fs_deferred_reclaim_next_tick))
+		agent_background_request();
 }
 
 static int
@@ -3686,7 +3683,7 @@ fs_deferred_reclaim_drain_owner(uint owner)
 
 		if (fs_epoch_dirty() && fs_epoch_commit() < 0)
 			return -1;
-		result = fs_deferred_reclaim_maintain_owner(owner, 1);
+		result = fs_deferred_reclaim_maintain_owner(owner, 1, 0);
 		if (result <= 0)
 			return -1;
 	}
@@ -3699,47 +3696,19 @@ fs_deferred_reclaim_drain_current(void)
 	return fs_deferred_reclaim_drain_owner(bio_current_owner());
 }
 
-int
-fs_deferred_reclaim_drain_all(void)
-{
-	if (!fs_epoch_request_held() || bio_current_owner() != FS_OWNER_SYSTEM)
-		return -1;
-	while (fs_deferred_reclaim_count != 0) {
-		int result;
-
-		if (fs_epoch_dirty() && fs_epoch_commit() < 0)
-			return -1;
-		result = fs_deferred_reclaim_maintain_owner(FS_OWNER_NONE, 0);
-		if (result <= 0)
-			return -1;
-	}
-	return 0;
-}
-
 #else
-
-int fs_deferred_reclaim_pending(void)
-{
-	return 0;
-}
-
-int fs_deferred_reclaim_owner_pending(uint owner)
-{
-	(void)owner;
-	return 0;
-}
 
 int fs_deferred_reclaim_maintain(void)
 {
 	return 0;
 }
 
-int fs_deferred_reclaim_drain_current(void)
+void fs_deferred_reclaim_tick(uint64 now)
 {
-	return 0;
+	(void)now;
 }
 
-int fs_deferred_reclaim_drain_all(void)
+int fs_deferred_reclaim_drain_current(void)
 {
 	return 0;
 }
@@ -3973,6 +3942,8 @@ inode_mapping_write_unlock(struct inode *ip)
 	intr_restore(enabled);
 }
 
+/* 映射锁检查等同于 lockdep：调试构建保留，生产快路不读共享状态。 */
+#if defined(LOG_LEVEL_DEBUG) || defined(LOG_LEVEL_TRACE)
 static void
 inode_mapping_require(struct inode *ip, int write)
 {
@@ -3994,6 +3965,13 @@ inode_mapping_require(struct inode *ip, int write)
 		panic("inode mapping read guard");
 	}
 }
+#else
+#define inode_mapping_require(ip, write)                                      \
+	do {                                                                   \
+		(void)(ip);                                                   \
+		(void)(write);                                                \
+	} while (0)
+#endif
 
 static void inode_cache_init_once(void)
 {
@@ -4270,14 +4248,6 @@ struct inode *inode_get(uint dev, uint inum)
 	if (inum == 0 || inum >= sb.ninodes)
 		return 0;
 	return iget(dev, inum);
-}
-
-// Increment reference count for ip.
-// Returns ip to enable ip = idup(ip1) idiom.
-struct inode *idup(struct inode *ip)
-{
-	ip->ref++;
-	return ip;
 }
 
 // Reads the inode from disk if necessary.
@@ -4603,14 +4573,6 @@ static int fs_create_failure_status(int result)
 {
 	return fs_io_health == FS_IO_INDETERMINATE ?
 		FS_LOOKUP_INDETERMINATE : (result < 0 ? result : FS_LOOKUP_ERROR);
-}
-
-void iabort(struct inode *ip)
-{
-	if (ip == 0)
-		return;
-	ip->removed = 1;
-	iput(ip);
 }
 
 // Inode content
@@ -5271,22 +5233,6 @@ int itruncate_reclaim(struct inode_reclaim *reclaim)
 	return 0;
 }
 
-// Shrink an inode and release every whole block beyond the new end.
-int itruncate(struct inode *ip, const struct vfs_cred *cred, uint size)
-{
-	struct inode_reclaim reclaim;
-
-	if (itruncate_detach(ip, cred, size, &reclaim) < 0)
-		return -1;
-	return itruncate_reclaim(&reclaim);
-}
-
-// Truncate inode (discard contents).
-int itrunc(struct inode *ip, const struct vfs_cred *cred)
-{
-	return itruncate(ip, cred, 0);
-}
-
 // Read data from inode.
 // If user_dst==1, then dst is a user virtual address;
 // otherwise, dst is a kernel address.
@@ -5449,35 +5395,67 @@ int readi_device(struct inode *ip, const struct vfs_cred *cred, int user_dst,
 	return result;
 }
 
-// Write data to inode.
-// Caller must hold ip->lock.
-// If user_src==1, then src is a user virtual address;
-// otherwise, src is a kernel address.
-// Returns the number of bytes successfully written.
-// If the return value is less than the requested n,
-// there was an error of some kind.
+// 向 inode 写入数据；调用方必须持有映射写锁。
+// user_src 为 1 时 src 是用户地址，否则是内核地址。
+// 返回成功写入的字节数，短写表示本次事务需要停止或发生错误。
 #define FS_WRITE_EPOCH_CREDITS 9U
+#define FS_OVERWRITE_EPOCH_CREDITS 1U
+#define FS_EXTEND_EPOCH_CREDITS 2U
 _Static_assert(FS_WRITE_EPOCH_CREDITS <= FS_EPOCH_HIGH_WATER,
 	       "write mutation credits must fit one epoch");
+_Static_assert(FS_OVERWRITE_EPOCH_CREDITS <= FS_EXTEND_EPOCH_CREDITS &&
+	       FS_EXTEND_EPOCH_CREDITS < FS_WRITE_EPOCH_CREDITS,
+	       "overwrite credits must remain below allocation credits");
 
-static int writei_charged_locked(struct inode *ip,
-				 const struct vfs_cred *cred,
-				 const struct fs_storage_charge *charge,
-				 const struct open_file_io_token *lease,
-				 int user_src, uint64 src, uint off, uint n,
-				 enum fs_epoch_phase namespace_phase)
+/*
+ * 先只读探测映射，再按真实脏块上界预留 epoch。已有块覆盖不应为
+ * bitmap、qmap 和间接块支付新分配的九份额度。
+ */
+struct writei_map_plan {
+	uint off;
+	uint bytes;
+	uint bn;
+	uint addr;
+	int valid;
+};
+
+static int
+writei_plan_prepare(struct inode *ip, uint off, uint n,
+		    enum fs_epoch_phase namespace_phase,
+		    struct writei_map_plan *plan)
 {
-	struct fs_storage_charge object_charge;
-	const struct fs_storage_charge *allocation_charge = charge;
-	uint tot, m, addr, bn;
-	struct buf *bp;
-	struct bio_checkpoint_result checkpoint;
-	int failed = 0;
-	int failure_result = -1;
+	uint addr;
+	uint credits;
+	int map_error = 0;
 
+	if (plan == 0 || n == 0)
+		return -1;
+	addr = bmap(ip, off / BSIZE, 0, 0, &map_error, 0);
+	if (addr == 0 && map_error < 0)
+		return map_error;
+	credits = addr == 0 ? FS_WRITE_EPOCH_CREDITS :
+		  off + n > ip->size ? FS_EXTEND_EPOCH_CREDITS :
+				       FS_OVERWRITE_EPOCH_CREDITS;
+	plan->off = off;
+	plan->bytes = n;
+	plan->bn = off / BSIZE;
+	plan->addr = addr;
+	plan->valid = 1;
+	return ip->type == T_DIR ?
+		fs_epoch_preflight_phase(credits, namespace_phase) :
+		fs_epoch_preflight(credits);
+}
+
+static int
+writei_prepare_locked(struct inode *ip, const struct vfs_cred *cred,
+		      const struct fs_storage_charge *charge,
+		      const struct open_file_io_token *lease, uint off, uint n,
+		      struct fs_storage_charge *object_charge,
+		      const struct fs_storage_charge **allocation_charge)
+{
 	inode_mapping_require(ip, 1);
-
-	if (fs_io_health != FS_IO_HEALTHY ||
+	if (ip == 0 || cred == 0 || charge == 0 || object_charge == 0 ||
+	    allocation_charge == 0 || fs_io_health != FS_IO_HEALTHY ||
 	    (lease != 0 ?
 	     !open_file_io_token_validate(lease, ip, VFS_OP_WRITE) :
 	     !vfs_inode_authorize(ip, cred, VFS_OP_WRITE)))
@@ -5488,13 +5466,29 @@ static int writei_charged_locked(struct inode *ip,
 		return -1;
 	if (off + n > MAXFILE * BSIZE)
 		return -1;
+	*allocation_charge = charge;
 	if (n != 0 && ip->type == T_FILE) {
 		if (fs_claim_sponsored_public_inode(ip, cred) < 0 ||
 		    fs_storage_charge_from_owner(ip->fs_owner_domain,
-						 &object_charge) < 0)
+						 object_charge) < 0)
 			return -1;
-		allocation_charge = &object_charge;
+		*allocation_charge = object_charge;
 	}
+	return 0;
+}
+
+static int writei_charged_locked(
+	struct inode *ip, const struct fs_storage_charge *allocation_charge,
+	struct writei_map_plan *first_plan, int user_src, uint64 src, uint off,
+	uint n, enum fs_epoch_phase namespace_phase)
+{
+	uint tot, m, addr, bn;
+	struct buf *bp;
+	struct bio_checkpoint_result checkpoint;
+	int failed = 0;
+	int failure_result = -1;
+
+	inode_mapping_require(ip, 1);
 
 	for (tot = 0; tot < n; tot += m, off += m, src += m) {
 		struct bmap_allocation_receipt allocation = {0};
@@ -5508,17 +5502,28 @@ static int writei_charged_locked(struct inode *ip,
 		m = MIN(n - tot, BSIZE - off % BSIZE);
 		full_overwrite = ip->type != T_DIR && (off % BSIZE) == 0 &&
 				 m == BSIZE;
-		preflight_result = ip->type == T_DIR ?
-			fs_epoch_preflight_phase(FS_WRITE_EPOCH_CREDITS,
-						 namespace_phase) :
-			fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS);
-		if (preflight_result < 0) {
-			failure_result = preflight_result;
-			failed = 1;
-			break;
+		if (first_plan != 0 && first_plan->valid) {
+			if (first_plan->off != off || first_plan->bytes != m) {
+				failure_result = -1;
+				failed = 1;
+				break;
+			}
+			bn = first_plan->bn;
+			addr = first_plan->addr;
+			first_plan->valid = 0;
+		} else {
+			struct writei_map_plan plan;
+
+			preflight_result = writei_plan_prepare(
+				ip, off, m, namespace_phase, &plan);
+			if (preflight_result < 0) {
+				failure_result = preflight_result;
+				failed = 1;
+				break;
+			}
+			bn = plan.bn;
+			addr = plan.addr;
 		}
-		bn = off / BSIZE;
-		addr = bmap(ip, bn, 0, 0, &failure_result, 0);
 		if (addr == 0) {
 			addr = bmap(ip, bn, 1, allocation_charge,
 				    &failure_result, &allocation);
@@ -5638,12 +5643,28 @@ static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
 			  int user_src, uint64 src, uint off, uint n,
 			  enum fs_epoch_phase namespace_phase)
 {
-	int result;
+	struct fs_storage_charge object_charge;
+	const struct fs_storage_charge *allocation_charge;
+	struct writei_map_plan first_plan;
+	int result = -1;
 
 	if (inode_mapping_write_lock(ip, 0) < 0)
 		return -1;
-	result = writei_charged_locked(ip, cred, charge, 0, user_src, src, off,
-				       n, namespace_phase);
+	if (writei_prepare_locked(ip, cred, charge, 0, off, n,
+				  &object_charge, &allocation_charge) < 0)
+		goto out;
+	if (n != 0) {
+		uint first = MIN(n, BSIZE - off % BSIZE);
+
+		result = writei_plan_prepare(ip, off, first, namespace_phase,
+					     &first_plan);
+		if (result < 0)
+			goto out;
+	}
+	result = writei_charged_locked(ip, allocation_charge,
+				       n != 0 ? &first_plan : 0, user_src, src,
+				       off, n, namespace_phase);
+out:
 	inode_mapping_write_unlock(ip);
 	return result;
 }
@@ -5653,22 +5674,16 @@ static int writei_with_auth(struct inode *ip, const struct vfs_cred *cred,
 			    int user_src, uint64 src, uint off, uint n)
 {
 	struct fs_storage_charge charge;
+	struct fs_storage_charge object_charge;
+	const struct fs_storage_charge *allocation_charge;
+	struct writei_map_plan first_plan;
 	int namespace_locked = 0;
-	int preflight_result;
-	int result;
+	int result = -1;
 
 	if (ip == 0)
 		return -1;
 	if (fs_storage_charge_from_vfs(cred, &charge) < 0)
 		return -1;
-	if (n != 0) {
-		preflight_result = ip->type == T_DIR ?
-			fs_epoch_preflight_phase(FS_WRITE_EPOCH_CREDITS,
-						 FS_EPOCH_NAMESPACE_ATTACH) :
-			fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS);
-		if (preflight_result < 0)
-			return preflight_result;
-	}
 	if (ip != 0 && ip->type == T_DIR) {
 		if (fs_namespace_gate_lock() < 0)
 			return -1;
@@ -5679,10 +5694,25 @@ static int writei_with_auth(struct inode *ip, const struct vfs_cred *cred,
 			fs_namespace_gate_unlock();
 		return -1;
 	}
+	/* 所有可阻塞的授权转移都在原子 I/O 区间之前完成。 */
+	if (writei_prepare_locked(ip, cred, &charge, lease, off, n,
+				  &object_charge, &allocation_charge) < 0)
+		goto out_mapping;
+	if (n != 0) {
+		uint first = MIN(n, BSIZE - off % BSIZE);
+
+		result = writei_plan_prepare(ip, off, first,
+					     FS_EPOCH_NAMESPACE_ATTACH,
+					     &first_plan);
+		if (result < 0)
+			goto out_mapping;
+	}
 	bio_fs_atomic_enter();
-	result = writei_charged_locked(ip, cred, &charge, lease, user_src, src, off,
-				       n, FS_EPOCH_NAMESPACE_ATTACH);
+	result = writei_charged_locked(
+		ip, allocation_charge, n != 0 ? &first_plan : 0, user_src, src,
+		off, n, FS_EPOCH_NAMESPACE_ATTACH);
 	bio_fs_atomic_leave();
+out_mapping:
 	inode_mapping_write_unlock(ip);
 	if (namespace_locked) {
 		if (n != 0)
@@ -5708,10 +5738,9 @@ int writei_lease(struct inode *ip, const struct vfs_cred *cred,
 }
 
 /*
- * Grow an inode into a fully mapped, zero-filled extent without depending on
- * later data writes to allocate filesystem metadata.  Publishing each newly
- * mapped block with the corresponding size makes an interrupted preparation
- * resumable on the next boot instead of leaving a sparse-looking inode.
+ * 预先把 inode 扩展为完整映射的零填充区间，不依赖后续数据写入再分配
+ * metadata。每次同时发布新映射块和对应大小，使中断后的准备过程可在
+ * 下次启动续跑，而不会留下看似稀疏的 inode。
  */
 int
 fs_preallocate_inode(struct inode *ip, const struct vfs_cred *cred, uint size)
@@ -7253,8 +7282,6 @@ struct fs_scope_reclaim_cursor {
 	uint phase;
 	uint64 dir_offset;
 	uint inode_cursor;
-	uint inode_count;
-	uint inodes[NINODE];
 	int reclaimed;
 	int failed;
 	struct inode_reclaim blocks;
@@ -7286,9 +7313,9 @@ fs_scope_reclaim_cursor_get(uint scope_id)
 	return free_cursor;
 }
 
-// Namespace detach and inode/block reclamation are separate, resumable
-// phases. A committed directory clear can therefore never hide an orphan
-// from the second phase, and no VFS object is held across a budget checkpoint.
+// 名字空间摘除与 inode/块回收是两个可续扫阶段。第二阶段直接遍历稳定的
+// 磁盘 inode 编号，不保存 NINODE 快照；提交过的目录清空不会藏住孤儿，
+// 预算检查点之间也不持有 VFS 对象。
 int fs_reclaim_scope_files(uint scope_id)
 {
 	struct fs_storage_charge system_charge = {
@@ -7333,6 +7360,7 @@ int fs_reclaim_scope_files(uint scope_id)
 			if (off >= dp->size) {
 				iput(dp);
 				cursor->phase = FS_SCOPE_RECLAIM_INODE;
+				cursor->inode_cursor = 1;
 				continue;
 			}
 			if (readi(dp, &kernel_cred, 0, (uint64)&de, off,
@@ -7394,13 +7422,6 @@ int fs_reclaim_scope_files(uint scope_id)
 							}
 							fs_dentry_index_invalidate_directory(dp);
 							fs_namespace_gate_unlock();
-							if (cursor->inode_count >= NINODE) {
-								iput(target);
-								iput(dp);
-								return -1;
-							}
-							cursor->inodes[cursor->inode_count++] =
-								target->inum;
 						}
 					}
 					iput(target);
@@ -7410,6 +7431,7 @@ int fs_reclaim_scope_files(uint scope_id)
 			iput(dp);
 		} else if (cursor->phase == FS_SCOPE_RECLAIM_INODE) {
 			struct inode *target;
+			int claims_owner, claims_label;
 
 			if (mutations >= FS_SCOPE_RECLAIM_MUTATION_STEP)
 				return FS_RECLAIM_PENDING;
@@ -7428,14 +7450,13 @@ int fs_reclaim_scope_files(uint scope_id)
 				cursor->reclaimed++;
 				continue;
 			}
-			if (cursor->inode_cursor >= cursor->inode_count) {
+			if (cursor->inode_cursor >= sb.ninodes) {
 				int result = cursor->failed ? -1 : cursor->reclaimed;
 
 				memset(cursor, 0, sizeof(*cursor));
 				return result;
 			}
-			target = inode_get(ROOTDEV,
-					   cursor->inodes[cursor->inode_cursor]);
+			target = inode_get(ROOTDEV, cursor->inode_cursor);
 			if (target == 0) {
 				cursor->failed = 1;
 				cursor->inode_cursor++;
@@ -7450,11 +7471,19 @@ int fs_reclaim_scope_files(uint scope_id)
 				cursor->inode_cursor++;
 				continue;
 			}
-			if (target->fs_owner_domain != FS_OWNER_SCOPE(scope_id) ||
+			claims_owner = target->fs_owner_domain ==
+				FS_OWNER_SCOPE(scope_id);
+			claims_label = target->vfs_scope_id == scope_id;
+			if (!claims_owner && !claims_label) {
+				iput(target);
+				cursor->inode_cursor++;
+				continue;
+			}
+			if (!claims_owner ||
 			    target->type != T_FILE ||
 			    !vfs_inode_label_valid(target) ||
 			    target->vfs_policy != VFS_POLICY_WORKFLOW ||
-			    target->vfs_scope_id != scope_id ||
+			    !claims_label ||
 			    !exec_policy_inode_mutable(target)) {
 				iput(target);
 				cursor->failed = 1;
@@ -7490,7 +7519,7 @@ int fs_reclaim_scope_files(uint scope_id)
 	}
 }
 
-//Return the inode of the root directory
+// 返回根目录 inode。
 struct inode *root_dir_status(int *status)
 {
 	struct inode *r = iget(ROOTDEV, ROOTINO);

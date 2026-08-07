@@ -6,10 +6,9 @@
 struct buf;
 
 /*
- * An epoch publishes ordinary filesystem mutations in durable order.  A
- * caller stages the final image of every modified buffer after binding the
- * persistent storage owner with fs_epoch_note_data().  Foreground I/O may be
- * reused only by the exact top-level request that opened the epoch.
+ * epoch 按持久化顺序发布文件系统修改。调用者先用
+ * fs_epoch_note_data() 绑定存储主体，再登记各缓冲区的最终镜像。
+ * 前台 I/O 只能由开启 epoch 的同一顶层请求复用。
  */
 enum fs_epoch_phase {
 	FS_EPOCH_PREPARE = 0,
@@ -69,20 +68,18 @@ void fs_epoch_runtime_enable(void);
 int fs_epoch_runtime_enabled(void);
 
 /*
- * stage returns CACHED when the epoch owns a pin, SYNC_REQUIRED before
- * runtime enable or in a bypass section, and a negative status on failure.
- * A later mutation of the same buffer must be staged again.
+ * epoch 持有缓冲区引用时返回 CACHED；运行期启用前或旁路区间返回
+ * SYNC_REQUIRED；失败返回负值。同一缓冲区再次修改后必须重新登记。
  */
 int fs_epoch_stage(struct buf *, enum fs_epoch_phase);
 
-/* Binds the single persistent owner and records data ordered before INODE. */
+/* 绑定唯一持久化主体，并记录必须先于 INODE 落盘的数据。 */
 int fs_epoch_note_data(uint owner);
 
 /*
- * BUSY before the first published write is returned without settling debt.
- * After publication starts, BUSY is settled forward and every pin is retained
- * on failure.  Request debt remains with the outer I/O lease, so callers must
- * end that lease only after releasing the epoch request gate.
+ * 首次写入发布前遇到 BUSY 可直接返回，不结算债务；发布开始后只能向前
+ * 完成，失败时保留全部引用。请求债务归外层 I/O 租约，调用者应先释放
+ * epoch 请求门，再结束租约。
  */
 int fs_epoch_commit(void);
 int fs_epoch_prepare_cleanup_sponsor(uint, uint);
@@ -90,28 +87,27 @@ int fs_epoch_should_commit(void);
 int fs_epoch_dirty(void);
 int fs_epoch_buffer_dirty(uint dev, uint blockno);
 
-/* Commit before a mutation would cross owner, capacity, or age bounds. */
+/* 修改即将跨主体、容量或时限边界时先提交。 */
 int fs_epoch_reserve(uint owner, uint worst_case_buffers);
 
 /*
- * Directory detach and attach images cannot share an epoch: the buffer cache
- * only retains the newest image, while their crash-safe publish order is
- * opposite.  Reserve the namespace class before changing the directory
- * buffer so an incompatible epoch is committed before that image exists.
+ * 目录解绑与挂接镜像不能共用 epoch：缓存只保留最新镜像，而两者的
+ * 崩溃安全发布顺序相反。修改目录缓冲区前先预留命名空间阶段，迫使
+ * 不兼容的 epoch 提前提交。
  */
 int fs_epoch_reserve_phase(uint owner, uint worst_case_buffers,
 			   enum fs_epoch_phase);
 
-/* Fence deferred reclaim behind the epoch that detached its last reference. */
+/* 延迟回收必须晚于解除最后一个引用的 epoch。 */
 int fs_epoch_generation_fence(uint owner, uint64 *generation);
 int fs_epoch_generation_committed(uint64 generation);
 
-/* Fair, sleepable global serialization for filesystem mutators. */
+/* 文件系统修改者使用可休眠的公平全局串行门。 */
 int fs_epoch_request_begin(void);
 void fs_epoch_request_end(void);
 int fs_epoch_request_held(void);
 
-/* Destructive paths commit first, then use a nested raw-write section. */
+/* 破坏性路径先提交，再进入可嵌套的原始写区间。 */
 int fs_epoch_bypass_begin(void);
 void fs_epoch_bypass_end(void);
 int fs_epoch_bypass_active(void);

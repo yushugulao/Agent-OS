@@ -140,41 +140,47 @@ class TeardownProtocolTests(unittest.TestCase):
         sources = self.changed("vfs", before, after)
         self.assert_rejected(sources, "exactly one maintenance edge|quiesce")
 
-    def test_unfinished_reaper_phase_must_rearm(self):
+    def test_unfinished_reaper_phase_must_wait_for_timer(self):
         sources = self.changed(
             "vfs",
-            "\tif (vfs_scope_reap_work_pending())\n"
-            "\t\tagent_background_request();\n",
+            "\t\tregistry->reap_next_tick = now + 1;\n",
             "",
         )
-        self.assert_rejected(sources, "level-rearm|exactly 1")
+        self.assert_rejected(sources, "one-bounded-phase-per-tick")
 
-    def test_reaper_rearm_must_be_level_guarded(self):
+    def test_reaper_timer_must_be_level_guarded(self):
         sources = self.changed(
             "vfs",
-            "\tif (vfs_scope_reap_work_pending())\n"
+            "\tif (__atomic_load_n(&registry->retiring_count, "
+            "__ATOMIC_ACQUIRE) != 0 &&\n"
+            "\t    (next == 0 || now >= next))\n"
             "\t\tagent_background_request();",
             "\tagent_background_request();",
         )
-        self.assert_rejected(sources, "level-rearm|exactly 1")
+        self.assert_rejected(sources, "timer lost pending")
 
     def test_reaper_cannot_busy_loop(self):
         sources = self.changed(
             "vfs",
-            "\tif (vfs_scope_reap_work_pending())\n"
+            "\tif (__atomic_load_n(&registry->retiring_count, "
+            "__ATOMIC_ACQUIRE) != 0 &&\n"
+            "\t    (next == 0 || now >= next))\n"
             "\t\tagent_background_request();",
-            "\twhile (vfs_scope_reap_work_pending())\n"
+            "\twhile (__atomic_load_n(&registry->retiring_count,\n"
+            "\t\t\t       __ATOMIC_ACQUIRE) != 0)\n"
             "\t\tagent_background_request();",
         )
-        self.assert_rejected(sources, "level-rearm|busy-loop")
+        self.assert_rejected(sources, "timer lost|must remain O\\(1\\)")
 
     def test_reaper_pending_must_use_retiring_counter(self):
         sources = self.changed(
             "vfs",
-            "\tpending = registry->retiring_count != 0;",
-            "\tpending = registry->used_count != 0;",
+            "\tif (registry->retiring_count == 0)\n"
+            "\t\tregistry->reap_next_tick = 0;",
+            "\tif (registry->used_count == 0)\n"
+            "\t\tregistry->reap_next_tick = 0;",
         )
-        self.assert_rejected(sources, "level predicate")
+        self.assert_rejected(sources, "one-bounded-phase-per-tick")
 
     def test_scope_lookup_must_use_scope_hash(self):
         sources = self.changed(
@@ -238,7 +244,7 @@ class TeardownProtocolTests(unittest.TestCase):
 
     def test_same_pass_metadata_commit_cannot_consume_reaper_edge(self):
         sources = copy.deepcopy(self.good)
-        reap = "vfs_scope_reap_pending();"
+        reap = "vfs_scope_reap_pending(now);"
         store = "agent_metadata_store_background_maintain();"
         self.assertEqual(sources["objects"].count(reap), 1)
         self.assertEqual(sources["objects"].count(store), 1)
@@ -370,10 +376,19 @@ class TeardownProtocolTests(unittest.TestCase):
     def test_metadata_background_retries_unnotified_durable_state(self):
         sources = self.changed(
             "store",
-            "\tint durable_pending = agent_durable_section_retry_pending();",
-            "\tint durable_pending = 0;",
+            "\t\t(void)agent_durable_section_retry_pending();",
+            "\t\t(void)0;",
         )
-        self.assert_rejected(sources, "retry unnotified durable state")
+        self.assert_rejected(sources, "timer no longer .*publishes due durable work")
+
+    def test_metadata_timer_wakes_fifo_continuation(self):
+        sources = self.changed(
+            "store",
+            "\t\twait_queue_wake_all(&waiters);\n"
+            "\t\tagent_background_request();",
+            "\t\tagent_background_request();",
+        )
+        self.assert_rejected(sources, "timer no longer .*publishes due durable work")
 
     def test_metadata_state_cannot_retire_before_settlement(self):
         guard = (

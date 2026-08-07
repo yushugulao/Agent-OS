@@ -482,17 +482,20 @@ def check(root: Path) -> None:
     reject(iput_fast, "inode_remove_detach(",
            "drop-only fast path can perform destructive reclamation")
 
-    may_io = function(syscall_source, "syscall_may_issue_block_io")
-    epoch = function(syscall_source, "syscall_needs_fs_epoch")
+    prepare = function(syscall_source, "syscall_transaction_prepare")
+    registry = compact(root / "os/syscall_counter.h")
+    for name in ("read", "write"):
+        require(
+            registry,
+            f"X({name},DESCRIPTOR,ALWAYS)",
+            "read/write policy is not deferred to the pinned file identity",
+        )
     require(
-        may_io,
-        "caseSYS_read:caseSYS_write:returntransaction->fd_uses_disk",
-        "inode reads bypass block-I/O admission",
-    )
-    require(
-        epoch,
-        "caseSYS_read:return0;caseSYS_write:returntransaction->fd_uses_disk",
-        "pure inode reads still acquire the mutation epoch",
+        prepare,
+        "transaction->policy|=SYSCALL_POLICY_BLOCK_IO;"
+        "if(transaction->id==SYS_write)"
+        "transaction->policy|=SYSCALL_POLICY_FS_EPOCH",
+        "pinned inode classification does not separate read and write policy",
     )
 
     transaction_finish = function(syscall_source, "syscall_transaction_finish")

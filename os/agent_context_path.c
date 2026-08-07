@@ -51,23 +51,24 @@ agent_context_record_hash(const struct agent_context_record *record)
 }
 
 static int
-context_shadow_read(struct proc *p, uint64 offset, char *destination,
+context_kernel_read(struct proc *p, uint64 offset, char *destination,
 		    uint64 length)
 {
 	uint64 page, page_offset, chunk;
 
-	if (offset + length < offset || offset + length > AGENT_CONTEXT_SIZE)
+	if (offset + length < offset ||
+	    offset + length > AGENT_CONTEXT_KERNEL_PAGES * PAGE_SIZE)
 		return -1;
 	while (length > 0) {
 		page = offset / PAGE_SIZE;
 		page_offset = offset % PAGE_SIZE;
-		if (page >= AGENT_CONTEXT_PAGES || p->agent_shadow_kva[page] == 0)
+		if (page >= AGENT_CONTEXT_KERNEL_PAGES || p->agent_ctx_kva[page] == 0)
 			return -1;
 		chunk = PAGE_SIZE - page_offset;
 		if (chunk > length)
 			chunk = length;
 		memmove(destination,
-			(char *)(p->agent_shadow_kva[page] + page_offset), chunk);
+			(char *)(p->agent_ctx_kva[page] + page_offset), chunk);
 		destination += chunk;
 		offset += chunk;
 		length -= chunk;
@@ -84,7 +85,7 @@ agent_context_read_record(struct proc *p, uint64 slot,
 	if (p == 0 || record == 0 || slot >= p->context_path_capacity)
 		return -1;
 	offset = AGENT_CONTEXT_RECORDS_OFFSET + slot * sizeof(*record);
-	return context_shadow_read(p, offset, (char *)record, sizeof(*record));
+	return context_kernel_read(p, offset, (char *)record, sizeof(*record));
 }
 
 static int

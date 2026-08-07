@@ -220,7 +220,6 @@ REQUIRED_AGENT_ALLOWED_SCCS = frozenset(
     (
         frozenset(("context", "observe", "observe_timeline")),
         frozenset(("observe_ledger", "observe_store")),
-        frozenset(("ipc", "metadata_prefetch")),
     )
 )
 REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS = frozenset(
@@ -228,7 +227,6 @@ REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS = frozenset(
         frozenset(("context", "observe", "observe_timeline")),
         frozenset(("observe_ledger", "observe_store")),
         frozenset(("core", "facade", "proc")),
-        frozenset(("ipc", "metadata_prefetch")),
     )
 )
 REQUIRED_AGENT_AGGREGATES = {
@@ -238,7 +236,6 @@ REQUIRED_AGENT_AGGREGATES = {
             "file_state",
             "metadata_actions",
             "metadata_objects",
-            "metadata_prefetch",
             "metadata_catalog",
             "metadata_directory",
             "metadata_journal",
@@ -272,7 +269,6 @@ REQUIRED_AGENT_AGGREGATE_HEADERS = {
             "os/agent_metadata_store_io.h",
             "os/agent_metadata_query.h",
             "os/agent_metadata_scan.h",
-            "os/agent_metadata_prefetch.h",
             "os/agent_observe_persist_context.h",
         )
     )
@@ -307,7 +303,6 @@ REQUIRED_AGENT_MODULE_CFLAGS = {
     "metadata_directory": ("-Os",),
     "metadata_journal": ("-Os",),
     "metadata_objects": ("-Os",),
-    "metadata_prefetch": ("-Os",),
     "metadata_probe": ("-Os",),
     "metadata_query": ("-Os",),
     "metadata_recovery": ("-Os",),
@@ -325,7 +320,7 @@ REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS = frozenset(
     ("agent_metadata_store_loaded", "agent_metadata_store_mark_dirty")
 )
 REQUIRED_AGENT_SOURCE_BUDGET_POLICY = (
-    "5% for fixed module contract overhead; loaded text and BSS remain no-growth"
+    "严格锁定当前模块边界；总体 text/BSS 由内核总预算同步约束"
 )
 
 
@@ -568,7 +563,7 @@ def validate_agent_aggregate_budgets(modules, module_names):
         if header_globs != REQUIRED_AGENT_AGGREGATE_HEADER_GLOBS.get(name):
             raise BudgetError(f"{label}.contract_header_globs inventory drift")
         if group.get("source_budget_policy") != REQUIRED_AGENT_SOURCE_BUDGET_POLICY:
-            raise BudgetError(f"{label}.source_budget_policy must explain the 5% source allowance")
+            raise BudgetError(f"{label}.source_budget_policy must match the strict aggregate policy")
         for metric in (
             "source_lines",
             "source_bytes",
@@ -1368,7 +1363,6 @@ def validate_config(config):
         "metadata_directory",
         "metadata_journal",
         "metadata_objects",
-        "metadata_prefetch",
         "metadata_query",
         "metadata_probe",
         "metadata_recovery",
@@ -1423,7 +1417,6 @@ def validate_config(config):
         "metadata_directory": "os/agent_metadata_directory.c",
         "metadata_journal": "os/agent_metadata_journal.c",
         "metadata_objects": "os/agent_metadata_objects.c",
-        "metadata_prefetch": "os/agent_metadata_prefetch.c",
         "metadata_query": "os/agent_metadata_query.c",
         "metadata_probe": "os/agent_metadata_probe.c",
         "metadata_recovery": "os/agent_metadata_recovery.c",

@@ -111,27 +111,6 @@ size_t strnlen(const char *s, size_t n)
 	return p ? p - s : n;
 }
 
-char *stpcpy(char *restrict d, const char *s)
-{
-	typedef size_t __attribute__((__may_alias__)) word;
-	word *wd;
-	const word *ws;
-	if ((uintptr_t)s % SS == (uintptr_t)d % SS) {
-		for (; (uintptr_t)s % SS; s++, d++)
-			if (!(*d = *s))
-				return d;
-		wd = (void *)d;
-		ws = (const void *)s;
-		for (; !HASZERO(*ws); *wd++ = *ws++)
-			;
-		d = (void *)wd;
-		s = (const void *)ws;
-	}
-	for (; (*d = *s); s++, d++)
-		;
-	return d;
-}
-
 char *stpncpy(char *restrict d, const char *s, size_t n)
 {
 	typedef size_t __attribute__((__may_alias__)) word;

@@ -37,6 +37,12 @@ from dual_state_evidence_contract import (
 from reference_catalog_contract import expected_reference_identities
 
 
+def _validate_ch3_trace(ctx: ValidationContext) -> None:
+    text = _text(ctx.raw_dir / "ch3-trace-guest.log", "ch3 trace Guest log")
+    kernel = _load_module(ctx, "scripts/validate-kernel-test-log.py")
+    _call(kernel, "validate_ch3_trace", "ch3 trace Guest log", text)
+
+
 def _validate_agent_suite(ctx: ValidationContext) -> None:
     config = _json(ctx.repo_root / "ci/kernel-budgets.json", "kernel budget configuration")
     expected_cases = (

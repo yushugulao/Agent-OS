@@ -2280,17 +2280,13 @@ void scheduler()
 	struct thread *t;
 	for (;;) {
 		/*
-		 * A runnable thread may yield repeatedly without returning to user
-		 * space (for example while polling a pipe condition).  Give pending
-		 * device and timer interrupts a scheduler-context delivery window on
-		 * every round, otherwise I/O debt waiters can depend on a timer that
-		 * the runnable kernel loop permanently masks.
+		 * 内核中的可运行线程可能连续让出而不返回用户态（如轮询管道）。
+		 * 每轮调度先投递设备和时钟 IRQ，避免 I/O 等待者依赖的时钟被
+		 * 关中断的内核循环永久遮蔽。
 		 */
 		current_thread = &idle;
 		set_kerneltrap();
-		intr_on();
-		asm volatile("nop");
-		intr_off();
+		intr_delivery_window();
 		t = fetch_task();
 		/* Polling writeback runs only when no user thread is runnable. */
 		if (t == NULL && fs_epoch_should_commit() &&
@@ -2370,6 +2366,16 @@ void yield()
 	current_thread->state = RUNNABLE;
 	add_task(current_thread);
 	sched();
+}
+
+int scheduler_has_runnable_peer(void)
+{
+	int enabled = intr_save();
+	int present = scheduler_active_domains.count != 0;
+
+	/* 正在运行的线程不在队列内，因此任一活动域都代表真正的竞争者。 */
+	intr_restore(enabled);
+	return present;
 }
 
 static void freepagetable_cleanup(pagetable_t pagetable, uint64 max_page)
@@ -2952,10 +2958,8 @@ struct fd_spawn_snapshot {
 	uchar delegated[FD_BUFFER_SIZE];
 };
 
-// Pin the exact descriptor objects before VM copying can yield. Principal
-// creation consumes the issuing thread's one-shot tickets in the same critical
-// section, so another thread cannot steal them and slot reuse cannot retarget
-// them.
+// 在可能退让的地址空间复制前固定精确的文件对象。创建安全主体时，在同一
+// 临界区消费发起线程的一次性委派票据，避免兄弟线程窃取或槽复用后改指。
 static void fd_spawn_snapshot_take(struct proc *p, struct thread *issuer,
 				   int consume_tickets,
 				   struct fd_spawn_snapshot *snapshot)
@@ -3033,26 +3037,23 @@ static int fork_common(int make_agent, int agent_role,
 
 	parent_scope = p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
 			       p->vfs_scope_id : p->vfs_pending_scope_id;
-	// Resource-domain admin controls accounting admission only; changing that
-	// domain does not create an Agent/VFS principal or revoke POSIX FD state.
+	// 资源域管理权只控制记账准入；切换资源域不会创建 Agent/VFS 主体，
+	// 也不会撤销 POSIX 文件描述符状态。
 	authority_boundary = admission != PROC_ADMIT_NORMAL ||
 		make_agent || delegated_image != 0 ||
 		scope_mode == VFS_SPAWN_SCOPE_FRESH ||
 		(parent_scope >= VFS_SCOPE_FIRST_DYNAMIC &&
 		 scope_mode == VFS_SPAWN_SCOPE_DROP);
+	// VM 与 FD 共用一个父进程快照窗口。这样清理固定引用时，兄弟线程不能
+	// 并发关闭并删除同一 inode，也就不会在借用的 FS epoch 内产生结算债务。
+	if (proc_vm_snapshot_begin(p) < 0)
+		return -1;
 	fd_spawn_snapshot_take(p, issuer, authority_boundary, &fds);
 	if (!proc_teardown_live(p) || !proc_child_has_capacity(p))
 		goto fail;
-	// Allocate process.
+	// 分配进程。
 	if ((np = allocproc_admit(p, admission)) == 0)
 		goto fail;
-	// Keep this thread as the process's sole dispatchable thread while the
-	// page-by-page snapshot yields to unrelated processes.
-	if (proc_vm_snapshot_begin(p) < 0) {
-		freeproc(np);
-		np = 0;
-		goto fail;
-	}
 	copy_status = uvmcopy(p->pagetable, np->pagetable, p->max_page);
 	if (copy_status == 0) {
 		np->max_page = p->max_page;
@@ -3069,7 +3070,6 @@ static int fork_common(int make_agent, int agent_role,
 		if (fork_child_validate_issuer_stack(np, issuer) < 0)
 			copy_status = -1;
 	}
-	proc_vm_snapshot_end(p);
 	if (copy_status < 0) {
 		freeproc(np);
 		np = 0;
@@ -3086,9 +3086,8 @@ static int fork_common(int make_agent, int agent_role,
 		np = 0;
 		goto fail;
 	}
-	// Pipes are held capabilities. Every new Agent/worker principal receives
-	// one only through a ticket consumed by this spawn; PUBLIC fork within the
-	// same credential retains ordinary POSIX inheritance.
+	// pipe 是持有型能力。新 Agent/worker 主体只能通过本次创建消费的票据
+	// 获得端点；同一凭据内的 PUBLIC fork 仍保持普通 POSIX 继承语义。
 	uint inherited_scope = np->vfs_scope_id != VFS_SCOPE_NONE ?
 			       np->vfs_scope_id : np->vfs_pending_scope_id;
 	int scope_changed = parent_scope != inherited_scope;
@@ -3116,19 +3115,17 @@ static int fork_common(int make_agent, int agent_role,
 		}
 		if (!allowed)
 			continue;
-		// Transfer the pinned reference. The creating resource domain remains
-		// accountable until the final holder closes it.
+		// 转移固定引用；创建它的资源域持续记账，直到最后持有者关闭。
 		np->files[i] = f;
 		fds.files[i] = 0;
 	}
 	fd_spawn_snapshot_release(&fds);
-	// A new process contains one thread, but it resumes the thread that issued
-	// the spawn. Using thread 0 here would redirect a sibling's spawn into the
-	// main thread's syscall continuation and break thread-bound delegation.
+	// 新进程只有一个线程，但必须恢复真正发起创建的线程。固定使用线程 0
+	// 会把兄弟线程的创建操作错误接回主线程，并破坏线程绑定的委派语义。
 	int tid = allocthread(np, 0, 0);
 	if (tid < 0) {
 		freeproc(np);
-		return -1;
+		goto fail;
 	}
 	struct thread *nt = &np->threads[tid], *t = issuer;
 	int publish_enabled;
@@ -3136,7 +3133,7 @@ static int fork_common(int make_agent, int agent_role,
 	nt->ustack = t->ustack;
 	if (make_agent && agent_make_role(np, agent_role) < 0) {
 		freeproc(np);
-		return -1;
+		goto fail;
 	}
 	// Final publication is serialized by the local interrupt-off boundary and
 	// rechecks the lifecycle barrier. A child marked for exit, or a pending
@@ -3146,12 +3143,12 @@ static int fork_common(int make_agent, int agent_role,
 	    agent_lifecycle_spawn_publish_locked(p, np) < 0) {
 		intr_restore(publish_enabled);
 		freeproc(np);
-		return -1;
+		goto fail;
 	}
 	if (proc_child_bind(p, np) < 0) {
 		intr_restore(publish_enabled);
 		freeproc(np);
-		return -1;
+		goto fail;
 	}
 	// copy saved user registers.
 	*(nt->trapframe) = *(t->trapframe);
@@ -3159,11 +3156,13 @@ static int fork_common(int make_agent, int agent_role,
 	nt->trapframe->a0 = 0;
 	nt->state = RUNNABLE;
 	add_task(nt);
+	proc_vm_snapshot_end(p);
 	intr_restore(publish_enabled);
 	return np->pid;
 
 fail:
 	fd_spawn_snapshot_release(&fds);
+	proc_vm_snapshot_end(p);
 	return -1;
 }
 

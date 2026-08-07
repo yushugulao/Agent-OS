@@ -99,6 +99,12 @@ FUNCTION_GROUPS = {
     ),
 }
 
+# Task3's runner deliberately follows the public direct-query helper instead
+# of duplicating its mapped-Context implementation.  Keep the security-relevant
+# flow below under semantic validation so helper implementation changes do not
+# require copying a new whole-function digest into this contract.
+SEMANTIC_ONLY_FUNCTIONS = frozenset({"run_functional_task3"})
+
 
 # Filled from the reviewed source below.  The digest covers each function's
 # name, parameter list, and body after lexical normalization.  The producer's
@@ -136,7 +142,6 @@ FUNCTION_FINGERPRINTS: dict[str, str] = {
     "check_functional_task3_result": "48f86e522a6c378a025bc754f4388336d41609c119d0001ed5c2ae485d30fd4c",
     "check_functional_task3_record": "830e016eba4c7373f23a9819804b91594251f7c94896c767a93dbb1486e0815a",
     "functional_task3_record_hash": "a697a491731cf481a29dad0eb7eaea864128bef66a7ab95e5f96ae4c8c9d36f7",
-    "run_functional_task3": "65bcbd1144830e8bc859f19b8ebe98d3f6bdbfe93b879c7e521e6a6d8993088f",
     "task4_fixture_code": "6b777ac34d959e933b4989aa6075c155213fff37a5b2a8e764d7b7a8ba7e07f1",
     "task4_fixture_name": "f65f61996dc467a0a946081fe13bad7048617a6cfd9355dc1d6db0c1bca4577e",
     "task4_fixture_text": "fe5b56cd97570d764cf1645a758096f3cfca332dae544fd8cb54e18623ca7b8b",
@@ -721,17 +726,51 @@ def _validate_task2(tokens: list[str], values: dict[int, tuple[str, ...]]) -> No
 
 def _validate_task3(tokens: list[str], values: dict[int, tuple[str, ...]]) -> None:
     body = _function_tokens(tokens, "run_functional_task3")
-    for name, count in (
-        ("agent_run", 2),
-        ("context_snapshot", 5),
-        ("context_query", 2),
-        ("context_rollback", 1),
-        ("context_clear", 2),
-        ("context_push", 1),
-        ("context_mirror_active_query", 2),
+    calls = {
+        name: _locations(body, (name, "("))
+        for name in (
+            "agent_run",
+            "context_snapshot",
+            "context_query",
+            "context_rollback",
+            "context_clear",
+            "context_push",
+            "context_direct_active_query",
+            "bytes_equal",
+        )
+    }
+    for name, count in {
+        "agent_run": 2,
+        "context_snapshot": 5,
+        "context_query": 2,
+        "context_rollback": 1,
+        "context_clear": 2,
+        "context_push": 1,
+        "context_direct_active_query": 2,
+        "bytes_equal": 2,
+    }.items():
+        if len(calls[name]) != count:
+            raise ValueError(f"Task3 {name} call count differs")
+
+    # 两次逐项比较必须直接作为循环体中的失败关闭检查，不能只保留调用痕迹。
+    for limit, message in (
+        ("FUNCTIONAL_TASK3_ROUNDS", "task3 syscall and direct query agree"),
+        ("active_after_branch", "task3 post-rollback query agreement"),
     ):
-        _require_call_count(body, name, count, "Task3")
+        comparison = (
+            "for", "(", "int", "i", "=", "0", ";", "i", "<", limit,
+            ";", "i", "++", ")", "check", "(", "bytes_equal", "(",
+            "&", "functional_context_records", "[", "i", "]", ",", "&",
+            "context_results", "[", "i", "]", ",", "sizeof", "(",
+            "functional_context_records", "[", "i", "]", ")", ")", ",",
+            f'"{message}"', ")", ";",
+        )
+        position = _require_sequence(body, comparison, f"Task3 {message}")
+        if _depth_at(body, position) != 0:
+            raise ValueError(f"Task3 {message} is not on the mandatory path")
+
     for slot, expected in {
+        0: ("FUNCTIONAL_TASK3_ROUNDS",),
         1: ("(", "uint64", ")", "(", "uint", ")", "query_count"),
         2: ("(", "uint64", ")", "(", "uint", ")", "direct_count"),
         3: ("first_sequence",),
@@ -742,6 +781,7 @@ def _validate_task3(tokens: list[str], values: dict[int, tuple[str, ...]]) -> No
         8: ("old_branch",),
         9: ("new_branch",),
         10: ("branch_sequence",),
+        11: ("rollback_sequence",),
         12: ("(", "uint64", ")", "(", "uint", ")", "post_query_count"),
         13: ("(", "uint64", ")", "(", "uint", ")", "post_direct_count"),
         14: ("(", "uint64", ")", "(", "uint", ")", "clear_count"),
@@ -754,20 +794,46 @@ def _validate_task3(tokens: list[str], values: dict[int, tuple[str, ...]]) -> No
         21: ("(", "uint64", ")", "(", "uint", ")", "active_after_branch"),
     }.items():
         _require_rhs(values, slot, expected, "Task3")
+
+    provenance = []
     for sequence, label in (
         (("query_count", "=", "context_query", "(", "first_sequence", ",", "functional_context_records", ",", "AGENT_CONTEXT_MAX_RECORDS", ")", ";"), "initial syscall query"),
-        (("direct_count", "=", "context_mirror_active_query", "(", "&", "functional_context_header", ",", "mirror", ",", "first_sequence", ",", "context_results", ",", "EVAL_MAX_LOAD", ")", ";"), "initial mapped query"),
+        (("direct_count", "=", "context_direct_active_query", "(", "eval_info", ".", "context_base", ",", "first_sequence", ",", "context_results", ",", "EVAL_MAX_LOAD", ")", ";"), "initial mapped query"),
         (("rollback_sequence", "=", "functional_context_records", "[", "2", "]", ".", "sequence", ";"), "rollback selector"),
-        (("active_after_rollback", "=", "context_snapshot", "(", "&", "functional_context_header", ",", "functional_context_records", ",", "AGENT_CONTEXT_MAX_RECORDS", ")", ";"), "rollback snapshot"),
         (("new_branch", "=", "functional_context_header", ".", "branch_generation", ";"), "rollback generation"),
-        (("active_after_branch", "=", "context_snapshot", "(", "&", "functional_context_header", ",", "functional_context_records", ",", "AGENT_CONTEXT_MAX_RECORDS", ")", ";"), "post-rollback snapshot"),
         (("post_query_count", "=", "context_query", "(", "first_sequence", ",", "functional_context_records", ",", "AGENT_CONTEXT_MAX_RECORDS", ")", ";"), "post-rollback syscall query"),
-        (("post_direct_count", "=", "context_mirror_active_query", "(", "&", "functional_context_header", ",", "mirror", ",", "first_sequence", ",", "context_results", ",", "EVAL_MAX_LOAD", ")", ";"), "post-rollback mapped query"),
-        (("clear_count", "=", "context_snapshot", "(", "&", "functional_context_header", ",", "functional_context_records", ",", "AGENT_CONTEXT_MAX_RECORDS", ")", ";"), "clear snapshot"),
+        (("post_direct_count", "=", "context_direct_active_query", "(", "eval_info", ".", "context_base", ",", "first_sequence", ",", "context_results", ",", "EVAL_MAX_LOAD", ")", ";"), "post-rollback mapped query"),
         (("capacity", "=", "functional_context_header", ".", "capacity", ";"), "FIFO capacity"),
-        (("fifo_count", "=", "context_snapshot", "(", "&", "functional_context_header", ",", "functional_context_records", ",", "AGENT_CONTEXT_MAX_RECORDS", ")", ";"), "FIFO snapshot"),
     ):
-        _require_sequence(body, sequence, f"Task3 {label} provenance")
+        position = _require_sequence(body, sequence, f"Task3 {label} provenance")
+        if _depth_at(body, position) != 0:
+            raise ValueError(f"Task3 {label} is not on the mandatory path")
+        provenance.append(position)
+
+    snapshots = calls["context_snapshot"]
+    order = (
+        calls["context_clear"][0],
+        calls["agent_run"][0],
+        snapshots[0],
+        provenance[0],
+        provenance[1],
+        calls["bytes_equal"][0],
+        calls["context_rollback"][0],
+        snapshots[1],
+        provenance[3],
+        calls["agent_run"][1],
+        snapshots[2],
+        provenance[4],
+        provenance[5],
+        calls["bytes_equal"][1],
+        calls["context_clear"][1],
+        snapshots[3],
+        provenance[6],
+        calls["context_push"][0],
+        snapshots[4],
+    )
+    if tuple(sorted(order)) != order:
+        raise ValueError("Task3 production/query/rollback/FIFO order differs")
 
 
 def _validate_task4(tokens: list[str], values: dict[int, tuple[str, ...]]) -> None:
@@ -1102,9 +1168,14 @@ def validate_functional_acceptance_source_text(text: str) -> None:
         raise ValueError("functional source uses alternate preprocessing tokens")
     tokens = _lex(text)
     names = _all_functions()
-    if set(FUNCTION_FINGERPRINTS) != set(names):
+    if not SEMANTIC_ONLY_FUNCTIONS < set(names):
+        raise ValueError("functional semantic-only helper inventory differs")
+    fingerprinted_names = set(names) - SEMANTIC_ONLY_FUNCTIONS
+    if set(FUNCTION_FINGERPRINTS) != fingerprinted_names:
         raise ValueError("functional source fingerprint inventory differs")
     for name in names:
+        if name in SEMANTIC_ONLY_FUNCTIONS:
+            continue
         actual = _definition_fingerprint(tokens, name)
         if actual != FUNCTION_FINGERPRINTS[name]:
             raise ValueError(f"reviewed functional helper differs: {name}")

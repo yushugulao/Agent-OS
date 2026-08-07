@@ -3,7 +3,6 @@
 
 #include "stddef.h"
 #include "io_policy.h"
-#include "kernel_work_abi.h"
 
 int open(const char *, int);
 ssize_t read(int, void *, size_t);
@@ -16,7 +15,6 @@ pid_t getpid();
 pid_t getppid();
 int sched_yield();
 long kernel_work_last_preemptions(void);
-int kernel_work_receipt_snapshot(struct kernel_work_receipt *receipt);
 int io_policy_info(struct io_policy_info *);
 void exit(int);
 int fork();

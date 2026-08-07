@@ -95,10 +95,10 @@ require_text "scripts/run-dual-platforms.sh" "verify-dual-target-structure" \
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" \
 	"full verification bypasses the topology gate"
 # Public evidence contracts: '^SCHEMA_VERSION = 8$' and
-# '^FULL_VERIFY_PROFILE_VERSION = 6$'.
+# '^FULL_VERIFY_PROFILE_VERSION = 7$'.
 require_text "scripts/capture-final-evidence.py" "^SCHEMA_VERSION = 8$" \
 	"final evidence schema drifted"
-require_text "scripts/capture-final-evidence.py" "^FULL_VERIFY_PROFILE_VERSION = 6$" \
+require_text "scripts/capture-final-evidence.py" "^FULL_VERIFY_PROFILE_VERSION = 7$" \
 	"full verification profile drifted"
 
 agent_step="$(grep -n 'AgentOS kernel tests' "${ROOT_DIR}/scripts/run-full-verification.sh" | head -1 | cut -d: -f1)"

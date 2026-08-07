@@ -9,6 +9,8 @@ IPC = (ROOT / "os/agent_ipc.c").read_text(encoding="utf-8")
 PROC = (ROOT / "os/proc.c").read_text(encoding="utf-8")
 WAIT_TEST = (ROOT / "os/wait_atomic_test.c").read_text(encoding="utf-8")
 WAIT_HEADER = (ROOT / "os/wait_atomic_test.h").read_text(encoding="utf-8")
+WAIT_QUEUE = (ROOT / "os/wait.c").read_text(encoding="utf-8")
+WAIT_QUEUE_HEADER = (ROOT / "os/wait.h").read_text(encoding="utf-8")
 CORE = (ROOT / "os/agent_core.c").read_text(encoding="utf-8")
 IDENTITY = (ROOT / "os/agent_identity.c").read_text(encoding="utf-8")
 SYSCALL = (ROOT / "os/syscall.c").read_text(encoding="utf-8")
@@ -22,6 +24,9 @@ BOUNDARY_CHECKER = (ROOT / "scripts/check-agent-module-boundaries.sh").read_text
 )
 GUEST = (ROOT / "user/src/agentfinal_ucore.c").read_text(encoding="utf-8")
 RUNNER = (ROOT / "scripts/run-agent-tests.sh").read_text(encoding="utf-8")
+LOG_VALIDATOR = (ROOT / "scripts/validate-kernel-test-log.py").read_text(
+    encoding="utf-8"
+)
 
 MARKER = (
     "agentfinal_ucore: wait_publication_atomic=1 event_wake_none=1 "
@@ -30,6 +35,14 @@ MARKER = (
 DEADLINE_MARKER = (
     "agentfinal_ucore: thread_wait_deadlines finite_infinite=1 "
     "distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1"
+)
+HANDOFF_MARKER = (
+    "agentfinal_ucore: event_wake_handoff waiters=1,4,8,15 "
+    "wakeups=28 herd=0"
+)
+BATON_MARKER = (
+    "agentfinal_ucore: event_baton_identity timeline_waiter=1 "
+    "event_waiter=1 event_wakeups=1"
 )
 
 
@@ -69,6 +82,20 @@ def mutate_function(source: str, signature: str, old: str, new: str) -> str:
     return source.replace(body, body.replace(old, new, 1), 1)
 
 
+def validate_wait_pointer_api(wait_source: str, wait_header: str) -> None:
+    for forbidden in (
+        "struct wait_queue_wake_identity",
+        "wait_queue_wake_one_identity",
+    ):
+        if forbidden in wait_header or forbidden in wait_source:
+            raise ValueError(f"obsolete copied wake identity remains: {forbidden}")
+    if "struct thread *wait_queue_wake_one_thread(struct wait_queue *)" not in wait_header:
+        raise ValueError("wake-one pointer API declaration missing")
+    wake = function_body(wait_source, "struct thread *wait_queue_wake_one_thread(")
+    if "wait_queue_wake(q, 0, 0, 1, &woken)" not in wake or "return woken;" not in wake:
+        raise ValueError("wake-one pointer is not returned from the atomic dequeue")
+
+
 def validate(ipc: str, proc: str, wait_test: str) -> None:
     inject = function_body(wait_test, "wait_atomic_test_agent_wait(")
     inject_guard = inject.index("enabled = intr_save()")
@@ -91,14 +118,106 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
         raise ValueError("profile publisher escaped the narrow timer boundary")
     queue = function_body(ipc, "agent_ipc_queue_event_locked(")
     queue_publish = queue.index("target->agent_event_count_queued++;")
-    queue_wake = queue.index("agent_ipc_wake_event_waiters(target);", queue_publish)
+    queue_wake = queue.index("agent_ipc_handoff_event_locked(target);", queue_publish)
     if queue_wake < queue_publish:
         raise ValueError("agent event publication does not execute wake")
 
+    consumable = function_body(ipc, "agent_ipc_event_consumable_locked(")
+    consumable_lock = consumable.index("if (intr_get())")
+    consumable_reserved = consumable.index("AGENT_EVENT_ACCOUNT_RESERVED")
+    consumable_reserved_return = consumable.index("return 0;", consumable_reserved)
+    consumable_cancel = consumable.index(
+        "p->agent_wait_cancel_pending != 0", consumable_reserved_return
+    )
+    consumable_pending = consumable.index(
+        "p->agent_wait_cancel_pending == AGENT_WAIT_CANCEL_PENDING",
+        consumable_cancel,
+    )
+    consumable_queue = consumable.index(
+        "p->agent_event_count_queued > 0", consumable_pending
+    )
+    if not (
+        consumable_lock
+        < consumable_reserved
+        < consumable_reserved_return
+        < consumable_cancel
+        < consumable_pending
+        < consumable_queue
+    ):
+        raise ValueError("event handoff predicate lost reservation ordering")
+
+    if "agent_ipc_event_wake_inflight_locked" in ipc:
+        raise ValueError("event baton returned to WAITING-state inference")
+    if "agent_ipc_event_batons[NPROC]" in ipc:
+        raise ValueError("event baton returned to a process-sized side table")
+    owner_lookup = function_body(ipc, "agent_ipc_event_baton_owner_locked(")
+    for token in (
+        "for (int tid = 0; tid < NTHREAD; tid++)",
+        "if (!t->agent_event_baton)",
+        "t->process != p",
+        "t->tid != tid",
+        "t->identity_generation == 0",
+        "panic(\"Agent event baton duplicate\")",
+    ):
+        if token not in owner_lookup:
+            raise ValueError(f"explicit event baton identity missing: {token}")
+    for forbidden in (
+        "agent_loop_state",
+        "wait_channel",
+        "wait_interrupted",
+        "RUNNABLE",
+        "RUNNING",
+    ):
+        if forbidden in owner_lookup:
+            raise ValueError("event baton identity depends on inferred wait state")
+
+    handoff = function_body(ipc, "static int\nagent_ipc_handoff_event_locked(")
+    empty_fast = handoff.index("p->agent_event_waiters.head == 0")
+    predicate = handoff.index("agent_ipc_event_consumable_locked(p)", empty_fast)
+    active_gate = handoff.index("agent_ipc_event_baton_active_locked(p)", predicate)
+    wake_one = handoff.index(
+        "wait_queue_wake_one_thread(&p->agent_event_waiters)",
+        active_gate,
+    )
+    selected_identity = handoff.index(
+        "selected->identity_generation == 0", wake_one
+    )
+    selected_owner = handoff.index(
+        "selected != &p->threads[selected->tid]", selected_identity
+    )
+    selected_baton = handoff.index("selected->agent_event_baton = 1", selected_owner)
+    account = handoff.index("p->agent_wait_wakeup_count += woken", selected_baton)
+    if not (
+        empty_fast < predicate < active_gate < wake_one < selected_identity
+        < selected_owner < selected_baton < account
+    ):
+        raise ValueError("event wake-one handoff or accounting order changed")
+    if (
+        "wait_queue_wake_all" in handoff
+        or "wait_queue_wake_one(&p->agent_event_waiters)" in handoff
+        or "agent_wait_wakeup_count++" in handoff
+    ):
+        raise ValueError("event handoff returned to broadcast or call accounting")
+
+    broadcast = function_body(ipc, "agent_ipc_broadcast_event_teardown_locked(")
+    broadcast_clear = broadcast.index("agent_ipc_event_baton_clear_locked(p)")
+    broadcast_wake = broadcast.index(
+        "wait_queue_wake_all(&p->agent_event_waiters)", broadcast_clear
+    )
+    broadcast_account = broadcast.index(
+        "p->agent_wait_wakeup_count += woken", broadcast_wake
+    )
+    if not broadcast_clear < broadcast_wake < broadcast_account:
+        raise ValueError("teardown broadcast does not account actual wakes")
+
     reserve = function_body(ipc, "agent_ipc_wait_reserve_locked(")
-    head_count = reserve.index("p->agent_event_count_queued > 0")
+    owner = reserve.index("agent_ipc_event_baton_owned_locked(p, t)")
+    active_gate = reserve.index("agent_ipc_event_baton_active_locked(p)", owner)
+    owner_gate = reserve.index("!owns_baton", active_gate)
+    owner_return = reserve.index("return 0;", owner_gate)
+    head_count = reserve.index("p->agent_event_count_queued > 0", owner_return)
     head_reserved = reserve.index(
-        "p->agent_event_accounting[p->agent_event_head] &", head_count
+        "cold->event_accounting[p->agent_event_head] &", head_count
     )
     head_marker = reserve.index(
         "AGENT_EVENT_ACCOUNT_RESERVED) != 0", head_reserved
@@ -127,30 +246,40 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
     cancel_cookie = reserve.index(
         "reservation->cookie = event->event_id", cancel_slot
     )
-    queue_empty = reserve.index("p->agent_event_count_queued <= 0", cancel_cookie)
-    event_valid = reserve.index("p->agent_events[slot].event_id == 0", queue_empty)
-    event_copy = reserve.index("*event = p->agent_events[slot]", event_valid)
+    cancel_baton = reserve.index(
+        "agent_ipc_event_baton_release_locked(p, t)", cancel_cookie
+    )
+    queue_empty = reserve.index("p->agent_event_count_queued <= 0", cancel_baton)
+    event_valid = reserve.index("cold->events[slot].event_id == 0", queue_empty)
+    event_copy = reserve.index("*event = cold->events[slot]", event_valid)
     event_span = reserve.index(
-        "reservation->span_owner = p->agent_event_span_owner[slot]", event_copy
+        "reservation->span_owner = cold->event_span_owner[slot]", event_copy
     )
     event_source = reserve.index(
-        "reservation->source_control = p->agent_event_source_control[slot]",
+        "reservation->source_control = cold->event_source_control[slot]",
         event_span,
     )
     event_principal = reserve.index(
-        "reservation->audit_principal = p->agent_event_audit_principal[slot]",
+        "reservation->audit_principal = cold->event_audit_principal[slot]",
         event_source,
     )
     queue_mark = reserve.index(
-        "p->agent_event_accounting[slot] |= AGENT_EVENT_ACCOUNT_RESERVED",
+        "cold->event_accounting[slot] |= AGENT_EVENT_ACCOUNT_RESERVED",
         event_principal,
     )
     event_slot = reserve.index("reservation->slot = slot", queue_mark)
     event_cookie = reserve.index(
         "reservation->cookie = event->event_id", event_slot
     )
+    event_baton = reserve.index(
+        "agent_ipc_event_baton_release_locked(p, t)", event_cookie
+    )
     if not (
-        head_count
+        owner
+        < active_gate
+        < owner_gate
+        < owner_return
+        < head_count
         < head_reserved
         < head_marker
         < head_return
@@ -163,6 +292,7 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
         < cancel_mark
         < cancel_slot
         < cancel_cookie
+        < cancel_baton
         < queue_empty
         < event_valid
         < event_copy
@@ -172,6 +302,7 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
         < queue_mark
         < event_slot
         < event_cookie
+        < event_baton
     ):
         raise ValueError("wait reservation lost exclusion, priority, or cookie")
     for forbidden in (
@@ -205,7 +336,7 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
     event_count = finish.index("p->agent_event_count_queued <= 0", event_bounds)
     event_head = finish.index("p->agent_event_head != slot", event_count)
     event_cookie = finish.index(
-        "p->agent_events[slot].event_id != reservation->cookie", event_head
+        "cold->events[slot].event_id != reservation->cookie", event_head
     )
     event_reserved = finish.index("AGENT_EVENT_ACCOUNT_RESERVED) == 0", event_cookie)
     abort = finish.index("if (!commit)", event_reserved)
@@ -215,7 +346,7 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
     event_abort = finish.index(
         "~AGENT_EVENT_ACCOUNT_RESERVED", cancel_abort
     )
-    abort_wake = finish.index("agent_ipc_wake_event_waiters(p);", event_abort)
+    abort_wake = finish.index("agent_ipc_handoff_event_locked(p);", event_abort)
     cancel_commit = finish.index("p->agent_wait_cancel_pending = 0", abort_wake)
     queue_commit = finish.index("p->agent_event_count_queued--;", cancel_commit)
     queue_refund = finish.index(
@@ -225,7 +356,7 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
     attributed_refund = finish.index(
         "&p->agent_attributed_event_count_queued", ipc_refund
     )
-    final_wake = finish.index("agent_ipc_wake_event_waiters(p);", attributed_refund)
+    final_wake = finish.index("agent_ipc_handoff_event_locked(p);", attributed_refund)
     if not (
         slot
         < cancel_branch
@@ -257,7 +388,7 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
         if forbidden in abort_region:
             raise ValueError("wait abort consumes or refunds its reservation")
     if finish.count("agent_ipc_event_account_refund(") != 3 or (
-        finish.count("agent_ipc_wake_event_waiters(p);") != 2
+        finish.count("agent_ipc_handoff_event_locked(p);") != 2
     ):
         raise ValueError("wait abort/commit cannot hand off the retained queue")
 
@@ -265,24 +396,54 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
     loop = wait.index("for (;;)")
     injection = wait.index("wait_atomic_test_agent_wait(", loop)
     guard = wait.index("\n\t\tenabled = intr_save();", loop)
-    reservation = wait.index("agent_ipc_wait_reserve_locked(", guard)
+    baton_owner = wait.index(
+        "owns_baton = agent_ipc_event_baton_owned_locked(p, t)", guard
+    )
+    reservation = wait.index("agent_ipc_wait_reserve_locked(p, t,", baton_owner)
     cancel_status = wait.index(
         "reservation.slot == AGENT_WAIT_CANCEL_SLOT", reservation
+    )
+    recheck_empty = wait.index(
+        "owns_baton && status == AGENT_STATUS_NOT_FOUND", cancel_status
+    )
+    recheck_release = wait.index(
+        "agent_ipc_event_baton_release_locked(p, t)", recheck_empty
+    )
+    recheck_handoff = wait.index(
+        "agent_ipc_handoff_event_locked(p);", recheck_release
     )
     heartbeat = wait.index("agent_ipc_queue_heartbeat_if_due", cancel_status)
     timeout = wait.index("if (timeout_ticks >= 0", heartbeat)
     waiting = wait.index("t->agent_loop_state = AGENT_LOOP_WAITING", timeout)
     sleep = wait.index("wait_queue_sleep_key_irq(", waiting)
     key = wait.index("t->identity_generation", sleep)
+    direct_recheck = wait.index("goto recheck_locked;", sleep)
+    failed_wake = wait.index("if (wait_status != WAIT_QUEUE_OK)", direct_recheck)
+    failed_release = wait.index(
+        "agent_ipc_event_baton_release_locked(p, t)", failed_wake
+    )
+    failed_live = wait.index("proc_teardown_live(p)", failed_release)
+    failed_handoff = wait.index(
+        "agent_ipc_handoff_event_locked(p);", failed_live
+    )
     if not (
         injection
         < guard
+        < baton_owner
         < reservation
         < cancel_status
+        < recheck_empty
+        < recheck_release
+        < recheck_handoff
         < heartbeat
         < timeout
         < waiting
         < sleep
+        < direct_recheck
+        < failed_wake
+        < failed_release
+        < failed_live
+        < failed_handoff
     ):
         raise ValueError("agent wait final predicate order is not atomic")
     if key < sleep:
@@ -291,6 +452,18 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
         raise ValueError("agent wait reopens interrupts before queue publication")
     if "wait_queue_sleep(&p->agent_event_waiters)" in wait:
         raise ValueError("agent wait uses an unlocked queue publication API")
+    if "t->agent_loop_state = AGENT_LOOP_RUNNING;" in wait[sleep:direct_recheck]:
+        raise ValueError("selected event waiter drops its handoff before recheck")
+
+    ipc_teardown = function_body(ipc, "agent_ipc_proc_teardown(")
+    teardown_guard = ipc_teardown.index("enabled = intr_save()")
+    teardown_broadcast = ipc_teardown.index(
+        "agent_ipc_broadcast_event_teardown_locked(p)", teardown_guard
+    )
+    teardown_reset = ipc_teardown.index("agent_ipc_proc_reset(p)", teardown_broadcast)
+    teardown_restore = ipc_teardown.index("intr_restore(enabled)", teardown_reset)
+    if not teardown_guard < teardown_broadcast < teardown_reset < teardown_restore:
+        raise ValueError("Agent teardown lost IRQ-atomic event broadcast")
 
     lane = wait.index("agent_lifecycle_context_lane_enter(p)", sleep)
     lane_abort = wait.index("agent_ipc_wait_finish(p, &reservation, 0)", lane)
@@ -501,6 +674,10 @@ def validate_thread_deadlines(
     ):
         if token not in tick:
             raise ValueError(f"keyed timer scan missing: {token}")
+    if "p->agent_wait_wakeup_count += woken;" not in tick or (
+        "p->agent_wait_wakeup_count++;" in tick
+    ):
+        raise ValueError("keyed timer does not account actual woken threads")
     if "agent_wait_deadline_valid = 0" in tick:
         raise ValueError("timer consumed thread-owned deadline")
     cancel = function_body(ipc, "int sys_agent_wait_cancel(")
@@ -702,6 +879,84 @@ def validate_deadline_guest(guest: str) -> None:
         raise ValueError("infinite waiter route filter or cleanup drifted")
 
 
+def validate_handoff_guest(guest: str) -> None:
+    worker = function_body(guest, "static void wait_handoff_worker(")
+    wait = worker.index("agent_wait(&event, -1)")
+    done = worker.index("wait_handoff_done[slot] = 1", wait)
+    if done < wait:
+        raise ValueError("handoff worker publishes completion before wait")
+
+    timeline_worker = function_body(guest, "static void timeline_handoff_worker(")
+    timeline_wait = timeline_worker.index(
+        "agent_timeline_wait(&timeline_handoff_filter, -1)"
+    )
+    timeline_done = timeline_worker.index("timeline_handoff_done = 1", timeline_wait)
+    if timeline_done < timeline_wait:
+        raise ValueError("timeline waiter publishes completion before wait")
+
+    phase = function_body(guest, "check_event_wake_handoff_phase(int count)")
+    before = phase.index("check(agent_info(&wait_handoff_before) == 0")
+    create = phase.index("thread_create(wait_handoff_worker", before)
+    sleeping = phase.index(
+        "wait_handoff_until_sleeping(wait_handoff_before.wait_sleep_count + count)",
+        create,
+    )
+    publish = phase.index(
+        "check(agent_wake(getpid(), &wait_handoff_event) == 0", sleeping
+    )
+    completion = phase.index("wait_handoff_until(count, i + 1)", publish)
+    first = phase.index(
+        "wait_handoff_before.wait_wakeup_count + 1", completion
+    )
+    join = phase.index("waittid(wait_handoff_tids[i])", first)
+    exact = phase.index(
+        "wait_handoff_before.wait_wakeup_count + count", join
+    )
+    if not before < create < sleeping < publish < completion < first < join < exact:
+        raise ValueError("dynamic event handoff evidence order changed")
+
+    campaign = function_body(guest, "check_event_wake_handoff(void)")
+    for token in (
+        "{1, 4, 8, WAIT_HANDOFF_MAX}",
+        'agent_watch(AGENT_EVENT_MESSAGE, "wait-handoff")',
+        "check_event_wake_handoff_phase(counts[i])",
+        "check_event_timeline_waiter_isolation()",
+        'agent_unwatch(AGENT_EVENT_MESSAGE, "wait-handoff")',
+        HANDOFF_MARKER,
+    ):
+        if token not in campaign:
+            raise ValueError(f"dynamic event handoff campaign missing: {token}")
+
+    mixed = function_body(guest, "check_event_timeline_waiter_isolation(void)")
+    before = mixed.index("check(agent_info(&before) == 0")
+    audit_filter = mixed.index("AGENT_TIMELINE_SOURCE_MASK_AUDIT", before)
+    enqueue_filter = mixed.index("AGENT_AUDIT_KIND_EVENT_ENQUEUE", audit_filter)
+    target_filter = mixed.index("timeline_handoff_filter.target_pid = getpid()", enqueue_filter)
+    event_filter = mixed.index("AGENT_EVENT_MESSAGE", target_filter)
+    timeline_create = mixed.index("thread_create(timeline_handoff_worker", event_filter)
+    event_create = mixed.index("thread_create(wait_handoff_worker", timeline_create)
+    both_sleep = mixed.index("wait_handoff_until_mixed_sleeping(", event_create)
+    future_tick = mixed.index("wait_handoff_until_tick(", both_sleep)
+    publish = mixed.index("check(agent_wake(getpid(), &wait_handoff_event) == 0", future_tick)
+    event_done = mixed.index("wait_handoff_until(1, 1)", publish)
+    timeline_done = mixed.index("timeline_handoff_done", event_done)
+    event_account = mixed.index(
+        "after.wait_wakeup_count == before.wait_wakeup_count + 1", timeline_done
+    )
+    timeline_account = mixed.index(
+        "after.timeline_wait_wakeup_count ==", event_account
+    )
+    marker = mixed.index(BATON_MARKER, timeline_account)
+    if not (
+        before < audit_filter < enqueue_filter < target_filter < event_filter
+        < timeline_create < event_create
+        < both_sleep < future_tick < publish < event_done < timeline_done
+        < event_account < timeline_account < marker
+    ):
+        raise ValueError("timeline/event baton isolation evidence order changed")
+
+
+validate_wait_pointer_api(WAIT_QUEUE, WAIT_QUEUE_HEADER)
 validate(IPC, PROC, WAIT_TEST)
 validate_thread_deadlines(IPC, PROC, CORE, IDENTITY, SYSCALL)
 validate_watch_syscalls(IPC, CORE)
@@ -716,6 +971,7 @@ validate_profile_isolation(
 )
 validate_runner_profile_image(RUNNER, MAKEFILE)
 validate_deadline_guest(GUEST)
+validate_handoff_guest(GUEST)
 
 mutations = (
     (mutate_function(IPC, "int sys_agent_wait(", "\t\tenabled = intr_save();", ""), PROC, WAIT_TEST),
@@ -725,17 +981,24 @@ mutations = (
     (IPC, mutate_function(PROC, "void exit(int code)", "wait_queue_sleep_irq(&p->thread_exit_waiters)", "wait_queue_sleep(&p->thread_exit_waiters)"), WAIT_TEST),
     (IPC, mutate_function(PROC, "void exit(int code)", "\t\t/*\n\t\t * The last sibling", "\t\tintr_restore(enabled);\n\t\t/*\n\t\t * The last sibling"), WAIT_TEST),
     (IPC, mutate_function(PROC, "static void scheduler_finish_dying_thread(", "\t\twait_queue_wake_key_all(&p->thread_exit_waiters, 0);", ""), WAIT_TEST),
-    (mutate_function(IPC, "agent_ipc_queue_event_locked(", "\tagent_ipc_wake_event_waiters(target);", ""), PROC, WAIT_TEST),
+    (mutate_function(IPC, "agent_ipc_queue_event_locked(", "\tagent_ipc_handoff_event_locked(target);", ""), PROC, WAIT_TEST),
+    (mutate_function(IPC, "static int\nagent_ipc_handoff_event_locked(", "wait_queue_wake_one_thread(&p->agent_event_waiters)", "wait_queue_wake_one(&p->agent_event_waiters)"), PROC, WAIT_TEST),
+    (mutate_function(IPC, "static int\nagent_ipc_handoff_event_locked(", "\tp->agent_wait_wakeup_count += woken;", "\tp->agent_wait_wakeup_count++;"), PROC, WAIT_TEST),
+    (mutate_function(IPC, "static int\nagent_ipc_handoff_event_locked(", "p->agent_event_waiters.head == 0 ||\n\t    ", ""), PROC, WAIT_TEST),
+    (mutate_function(IPC, "static int\nagent_ipc_handoff_event_locked(", " ||\n\t    agent_ipc_event_baton_active_locked(p)", ""), PROC, WAIT_TEST),
+    (mutate_function(IPC, "agent_ipc_event_consumable_locked(", "\t\treturn 0;\n\tif (p->agent_wait_cancel_pending != 0)", "\tif (p->agent_wait_cancel_pending != 0)"), PROC, WAIT_TEST),
+    (mutate_function(IPC, "int sys_agent_wait(", "\t\t\tif (agent_ipc_event_baton_release_locked(p, t) &&\n\t\t\t    proc_teardown_live(p))\n\t\t\t\tagent_ipc_handoff_event_locked(p);", ""), PROC, WAIT_TEST),
+    (mutate_function(IPC, "agent_ipc_proc_teardown(", "\tagent_ipc_broadcast_event_teardown_locked(p);", ""), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_wait_reserve_locked(", "AGENT_EVENT_ACCOUNT_RESERVED) != 0", "0) != 0"), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_wait_reserve_locked(", "\t\tif (p->agent_wait_cancel_pending == AGENT_WAIT_CANCEL_RESERVED)\n\t\t\treturn 0;", "\t\tif (0)\n\t\t\treturn 0;"), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_wait_reserve_locked(", "\t\treservation->source_control = p->agent_wait_cancel_source_control;", "\t\treservation->source_control = 0;"), PROC, WAIT_TEST),
-    (mutate_function(IPC, "agent_ipc_wait_reserve_locked(", "\tp->agent_event_accounting[slot] |= AGENT_EVENT_ACCOUNT_RESERVED;", ""), PROC, WAIT_TEST),
-    (mutate_function(IPC, "agent_ipc_wait_reserve_locked(", "\treservation->audit_principal = p->agent_event_audit_principal[slot];", "\treservation->audit_principal = 0;"), PROC, WAIT_TEST),
+    (mutate_function(IPC, "agent_ipc_wait_reserve_locked(", "\tcold->event_accounting[slot] |= AGENT_EVENT_ACCOUNT_RESERVED;", ""), PROC, WAIT_TEST),
+    (mutate_function(IPC, "agent_ipc_wait_reserve_locked(", "\treservation->audit_principal = cold->event_audit_principal[slot];", "\treservation->audit_principal = 0;"), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_wait_reserve_locked(", "\treservation->slot = slot;", "\tp->agent_event_count_queued--;\n\treservation->slot = slot;"), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_wait_finish(", "p->agent_wait_cancel_pending != AGENT_WAIT_CANCEL_RESERVED", "0"), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_wait_finish(", "\t\t    p->agent_wait_cancel_event_id != reservation->cookie)", "\t\t    0)"), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_wait_finish(", "\t\t    p->agent_event_head != slot ||\n", ""), PROC, WAIT_TEST),
-    (mutate_function(IPC, "agent_ipc_wait_finish(", "\t\t    p->agent_events[slot].event_id != reservation->cookie ||", ""), PROC, WAIT_TEST),
+    (mutate_function(IPC, "agent_ipc_wait_finish(", "\t\t    cold->events[slot].event_id != reservation->cookie ||", ""), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_wait_finish(", "\tif (!commit) {", "\tif (commit) {"), PROC, WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_event_account_refund(", "\t(*count)--;", ""), PROC, WAIT_TEST),
     (mutate_function(IPC, "int sys_agent_wait(", "reservation.source_control != 0 ?", "0 ?"), PROC, WAIT_TEST),
@@ -862,10 +1125,11 @@ deadline_guest_mutations = (
         'strcpy(event.payload, "unmatched-release");',
         1,
     ),
-    GUEST.replace(
+    mutate_function(
+        GUEST,
+        "static void check_thread_wait_deadlines(",
         "check(agent_wake(getpid(), &event) == 0",
         "check(agent_wake(getpid(), &event) == AGENT_STATUS_NOT_FOUND",
-        1,
     ),
     GUEST.replace(
         "\tcheck(agent_unwatch(AGENT_EVENT_MESSAGE,\n"
@@ -888,11 +1152,37 @@ for mutated_guest in deadline_guest_mutations:
     else:
         raise SystemExit("deadline guest route mutation survived")
 
+handoff_guest_mutations = (
+    GUEST.replace(
+        "wait_handoff_until_sleeping(wait_handoff_before.wait_sleep_count + count);",
+        "wait_handoff_until_sleeping(wait_handoff_before.wait_sleep_count + 1);",
+        1,
+    ),
+    GUEST.replace(
+        "wait_handoff_before.wait_wakeup_count + 1,",
+        "wait_handoff_before.wait_wakeup_count + count,",
+        1,
+    ),
+    GUEST.replace(
+        "wait_handoff_before.wait_wakeup_count + count,",
+        "wait_handoff_before.wait_wakeup_count + 1,",
+        1,
+    ),
+    GUEST.replace("{1, 4, 8, WAIT_HANDOFF_MAX}", "{1}", 1),
+)
+for mutated_guest in handoff_guest_mutations:
+    try:
+        validate_handoff_guest(mutated_guest)
+    except (ValueError, IndexError):
+        pass
+    else:
+        raise SystemExit("event handoff guest mutation survived")
+
 deadline_mutations = (
     (mutate_function(IPC, "agent_ipc_tick_proc(", "for (int tid = 0; tid < NTHREAD; tid++)", "for (int tid = 0; tid < 1; tid++)"), PROC, CORE, IDENTITY, SYSCALL),
-    (mutate_function(IPC, "agent_ipc_tick_proc(", "wait_queue_wake_key_all(&p->agent_event_waiters,", "agent_ipc_wake_event_waiters(p); /* "), PROC, CORE, IDENTITY, SYSCALL),
-    (mutate_function(IPC, "agent_ipc_tick_proc(", "\t\tif (wait_queue_wake_key_all", "\t\tt->agent_wait_deadline_valid = 0;\n\t\tif (wait_queue_wake_key_all"), PROC, CORE, IDENTITY, SYSCALL),
-    (mutate_function(IPC, "int sys_agent_wait_cancel(", "\t\tagent_ipc_wake_event_waiters(target);", "\t\ttarget->agent_wait_deadline_valid = 0;\n\t\tagent_ipc_wake_event_waiters(target);"), PROC, CORE, IDENTITY, SYSCALL),
+    (mutate_function(IPC, "agent_ipc_tick_proc(", "wait_queue_wake_key_all(&p->agent_event_waiters,", "wait_queue_wake_all(&p->agent_event_waiters); /* "), PROC, CORE, IDENTITY, SYSCALL),
+    (mutate_function(IPC, "agent_ipc_tick_proc(", "\t\twoken = wait_queue_wake_key_all", "\t\tt->agent_wait_deadline_valid = 0;\n\t\twoken = wait_queue_wake_key_all"), PROC, CORE, IDENTITY, SYSCALL),
+    (mutate_function(IPC, "int sys_agent_wait_cancel(", "\t\t\tagent_ipc_handoff_event_locked(target);", "\t\t\ttarget->agent_wait_deadline_valid = 0;\n\t\t\tagent_ipc_handoff_event_locked(target);"), PROC, CORE, IDENTITY, SYSCALL),
     (
         IPC,
         mutate_function(
@@ -1090,6 +1380,14 @@ if MARKER not in GUEST or MARKER not in RUNNER:
     raise SystemExit("wait-publication exact dynamic marker is not enforced")
 if DEADLINE_MARKER not in GUEST or DEADLINE_MARKER not in RUNNER:
     raise SystemExit("thread-deadline exact dynamic marker is not enforced")
+if HANDOFF_MARKER not in GUEST or HANDOFF_MARKER not in RUNNER:
+    raise SystemExit("event wake-one handoff marker is not enforced")
+if (
+    BATON_MARKER not in GUEST
+    or BATON_MARKER not in RUNNER
+    or BATON_MARKER not in LOG_VALIDATOR
+):
+    raise SystemExit("event identity baton marker is not enforced")
 for token in (
     "wait_atomic_test_query(WAIT_ATOMIC_TEST_AGENT_WAIT",
     "before.event_queue_count == 0",

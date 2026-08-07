@@ -77,7 +77,7 @@ from host_tools.evidence_toolchain_attestation import (  # noqa: E402
     verify_tool_attestations, verify_tracked_worktree_bytes,
 )
 SCHEMA_VERSION = 8
-FULL_VERIFY_PROFILE_VERSION = 6
+FULL_VERIFY_PROFILE_VERSION = 7
 FULL_VERIFY_TIMEOUT_SECONDS = 5 * 60 * 60
 SUMMARY_NAME = "verification-summary.json"
 SUCCESS_MARKER = "[full-verify] all checks passed"
@@ -89,6 +89,7 @@ STEP_CONTRACT = (
     ("target-structure", (), ()),
     ("kernel-budgets", (), ()),
     ("host-platform-alignment", (), ()),
+    ("ch3-trace", ("ch3-trace-guest.log",), ()),
     ("agent-suite", ("agent-suite-timings.log", "agent-suite-guest.log"), ()),
     ("dual-platforms", ("dual-plain-qemu.log", "dual-agentos-qemu.log",
                          "dual-stage-timings.csv", "dual-state-compare.json", "host-platform-alignment.json", *DUAL_STATE_RAW_ARTIFACTS,
@@ -111,6 +112,7 @@ REQUIRED_RAW_FILES = {
     *DUAL_STATE_RAW_ARTIFACTS, "dual-targeted-agentbench-guest.log",
     "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
     "agent-suite-timings.log", "agent-suite-guest.log",
+    "ch3-trace-guest.log",
     "proc-reap.log", "syscall-fairness.log", "file-resource.log", "thread-resource.log",
     "physical-resource.log", "metadata-recovery.log", "observe-recovery.log", "observe-recovery-before-reap.img",
     "virtio-disk.log",

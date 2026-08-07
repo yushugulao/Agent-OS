@@ -71,15 +71,15 @@ LEGACY_PATTERNS = {
     ),
     "audit": re.compile(
         r"^labdemo_ucore: global_audit=1 records=([1-9][0-9]*) "
-        r"agents=3 context=1 event=1 sched=1 prefetch=1$"
+        r"agents=3 context=1 event=1 sched=1 message=1$"
     ),
     "timeline": re.compile(
         r"^labdemo_ucore: unified_timeline records=([1-9][0-9]*) "
-        r"context=1 event=1 sched=1 prefetch=1$"
+        r"context=1 event=1 sched=1 message=1$"
     ),
     "provenance": re.compile(
         r"^labdemo_ucore: provenance_graph edges=([1-9][0-9]*) "
-        r"message=1 prefetch=1$"
+        r"message=1 context=1$"
     ),
     "scenario": re.compile(r"^labdemo_ucore: passed$"),
     "parent": re.compile(r"^labdemo_ucore: parent passed$"),

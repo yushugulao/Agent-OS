@@ -96,9 +96,7 @@ void bio_policy_tick(void);
 int bio_request_begin_current(void);
 int bio_request_begin_current_cleanup(void);
 int bio_request_begin_current_lazy(void);
-int bio_request_begin_current_lazy_cleanup(void);
 int bio_request_upgrade_current(void);
-int bio_request_upgrade_current_cleanup(void);
 int bio_request_active_current(void);
 struct bio_checkpoint_result bio_request_checkpoint(void) BIO_MUST_CHECK;
 struct bio_checkpoint_result bio_request_checkpoint_cleanup(void)

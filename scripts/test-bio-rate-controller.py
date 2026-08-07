@@ -313,7 +313,7 @@ def validate(bio: str, resource_c: str, resource_h: str) -> None:
     ):
         raise ContractError("direct admission retire race does not reap after refund")
 
-    account = compact(function_body(bio, "bio_account_transfers"))
+    account = compact(function_body(bio, "bio_account_transfer_batch"))
     if not ordered(
         account,
         "if ((*request_flags & BIO_REQUEST_TRANSFERRED) == 0)",

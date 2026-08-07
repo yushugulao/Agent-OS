@@ -20,7 +20,7 @@
 #include "vfs_security.h"
 #include "virtio.h"
 
-/* Durable COW coordinator. */
+/* 持久化 COW 协调器。 */
 
 #define AGENT_META_WRITEBACK_COALESCE_TICKS TICKS_PER_SEC
 #define AGENT_META_WRITEBACK_SCOPE_MAX (VFS_SCOPE_LIFECYCLE_CAP + 1U)
@@ -39,11 +39,17 @@
 #define AGENT_META_PERSIST_JOURNAL_COMMIT 12U
 #define AGENT_META_PERSIST_DIRTY_BYTES ((MAXFILE + 7) / 8)
 #define AGENT_META_PERSIST_DEFERRED (-4096)
+#define AGENT_META_DRAIN_RETRY (-4095)
 #define AGENT_META_REPAIR_NONE 0
 #define AGENT_META_REPAIR_MIRROR 1
 #define AGENT_META_PRIMARY_STEP_LIMIT (2U * MAXFILE + 16U)
 #define AGENT_META_REPLICATED_STEP_LIMIT \
 	(AGENT_META_STORE_BANKS * (2U * MAXFILE + 10U) + 2U)
+#define AGENT_META_SUBMIT_DRAIN_BUDGET (4U * AGENT_META_STORE_BANKS)
+#define AGENT_META_OWNER_DRAIN_STEP_BUDGET AGENT_META_REPLICATED_STEP_LIMIT
+
+_Static_assert(AGENT_META_SUBMIT_DRAIN_BUDGET < AGENT_META_OWNER_DRAIN_STEP_BUDGET,
+	       "foreground metadata drain must remain bounded");
 
 _Static_assert(AGENT_META_WRITEBACK_SCOPE_MAX >=
 	       VFS_SCOPE_LIFECYCLE_CAP + 1,
@@ -54,7 +60,7 @@ agent_meta_durable_flush(void)
 {
 	if (fs_epoch_request_held())
 		return fs_epoch_commit();
-	/* Boot preparation runs before ordered runtime writeback is enabled. */
+	/* 启动准备先于运行时回写。 */
 	if (fs_epoch_dirty())
 		return VIRTIO_DISK_ERR_BUSY;
 	return bio_durable_flush();
@@ -137,6 +143,7 @@ _Static_assert(FS_STORAGE_TINY_TEST_PROFILE ||
 static struct agent_file_scope_state
 	scope_states[AGENT_META_WRITEBACK_SCOPE_MAX];
 static struct agent_meta_store store_buf;
+static uint64 store_buf_epoch;
 static struct agent_meta_persist_state agent_meta_persist;
 static struct agent_meta_store
 	agent_meta_bank_shadow[AGENT_META_STORE_BANKS];
@@ -182,6 +189,7 @@ static int pending_repair_bank;
 static int agent_meta_reconcile_required;
 static int banks_prepared;
 static uint64 next_write_tick;
+static uint64 last_durable_retry_tick;
 static uint owner_cursor;
 
 _Static_assert(AGENT_CATALOG_JOURNAL_RECEIPT_MAX ==
@@ -199,7 +207,7 @@ agent_meta_store_set_replicated_generation(uint64 generation)
 
 static int agent_file_persist(struct agent_metadata_persist_result *);
 static int agent_file_persist_system(void);
-static int agent_meta_persist_drain_owner(uint owner);
+static int agent_meta_persist_drain_owner(uint owner, uint step_budget);
 static int agent_meta_persist_note_failure_locked(void);
 static void agent_meta_persist_fail_closed_locked(void);
 static uint64 agent_meta_durable_dirty(uint scope_id);
@@ -266,6 +274,7 @@ agent_metadata_store_init(void)
 {
 	memset(scope_states, 0, sizeof(scope_states));
 	memset(&store_buf, 0, sizeof(store_buf));
+	store_buf_epoch = 1;
 	memset(&agent_meta_persist, 0, sizeof(agent_meta_persist));
 	memset(&agent_meta_workspace, 0, sizeof(agent_meta_workspace));
 	agent_meta_workspace.load.scratch_bank = -1;
@@ -304,6 +313,7 @@ agent_metadata_store_init(void)
 	agent_metadata_recovery_init();
 	agent_metadata_test_init();
 	next_write_tick = 0;
+	last_durable_retry_tick = ~0ULL;
 	owner_cursor = 0;
 	agent_durable_section_set_store_provider(&agent_meta_durable_store);
 }
@@ -316,7 +326,7 @@ uint64 agent_metadata_store_mark_dirty(uint scope_id)
 
 	state = agent_file_scope_state_locked(scope_id, 1);
 	if (state == 0) {
-		/* Edge-triggered catalog reconciliation. */
+		/* 目录协调只发布一次边沿。 */
 		agent_meta_reconcile_required = 1;
 		intr_restore(enabled);
 		agent_background_request();
@@ -332,7 +342,6 @@ uint64 agent_metadata_store_mark_dirty(uint scope_id)
 	state->request_count++;
 	target = state->dirty_generation;
 	intr_restore(enabled);
-	agent_background_request();
 	return target;
 }
 
@@ -444,6 +453,25 @@ static int agent_file_writeback_pending(void)
 				scope_states[i].durable_generation;
 	intr_restore(enabled);
 	return pending;
+}
+
+static int agent_file_writeback_ready(uint64 now)
+{
+	int active;
+	int retry_ready;
+	int enabled;
+
+	/* pending 只描述未完成状态；只有到期任务才能再次发布执行边。 */
+	if (!agent_file_writeback_pending() || !agent_file_loaded ||
+	    agent_meta_store_failed_closed || agent_metadata_recovery_pending())
+		return 0;
+	enabled = intr_save();
+	active = agent_meta_persist.phase != AGENT_META_PERSIST_IDLE;
+	retry_ready = !active || now >= agent_meta_persist.retry_tick;
+	if (submitter != 0)
+		retry_ready = 0;
+	intr_restore(enabled);
+	return retry_ready && (active || agent_file_writeback_due(now));
 }
 
 static uint64 scope_target(uint scope_id)
@@ -563,7 +591,7 @@ agent_meta_durable_active_replicated(uint64 generation)
 	return result;
 }
 
-// Rotate coalesced writeback sponsorship across scopes.
+// 回写主体按 scope 轮转。
 static uint agent_file_writeback_owner(uint64 now)
 {
 	uint owner = FS_OWNER_SYSTEM;
@@ -633,7 +661,7 @@ static void agent_file_writeback_advance(int replicated)
 		if (advanced && !replicated &&
 		    state->dirty_generation == state->durable_generation) {
 			state->due_tick = 0;
-			// Count only a coalescing batch that reached its current head.
+			// 仅统计推进到队首的合并批次。
 			state->commit_count++;
 		}
 	}
@@ -753,62 +781,76 @@ void agent_metadata_store_fill_info(uint scope_id, struct agent_info *info)
 	}
 }
 
-/* Serialize mutation behind the immutable COW image. */
+/* COW 快照冻结期间串行化修改。 */
 int agent_metadata_store_submit_wait_locked(void)
 {
 	void *token = agent_metadata_txn_token();
-	uint64 ticket;
+	uint64 ticket = next_ticket++;
+	int result, enabled;
 
 	agent_metadata_txn_require_owned(1, "Agent metadata submit invariant");
-	ticket = next_ticket++;
 	for (;;) {
-		int enabled = intr_save();
-
-		if (ticket == serving_ticket &&
-		    (agent_meta_store_failed_closed ||
-		     agent_metadata_recovery_pending())) {
-			serving_ticket++;
-			wait_queue_wake_all(&waiters);
-			intr_restore(enabled);
-			return 0;
+		enabled = intr_save();
+		if (ticket != serving_ticket)
+			goto wait;
+		if (agent_meta_store_failed_closed ||
+		    agent_metadata_recovery_pending()) {
+			result = 0;
+			goto complete;
 		}
-		if (ticket == serving_ticket &&
+		if (!agent_meta_store_recovery_required &&
 		    (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE ||
 		     (agent_meta_persist.snapshot_sealed &&
-		      !agent_meta_store_recovery_required &&
 		      !agent_meta_persist.restart_target)) &&
 		    (submitter == 0 || submitter == token) &&
 		    agent_metadata_reload_available()) {
-			serving_ticket++;
-			wait_queue_wake_all(&waiters);
-			intr_restore(enabled);
-			return 1;
+			result = 1;
+			goto complete;
 		}
-		if (ticket == serving_ticket &&
-		    agent_meta_persist.phase != AGENT_META_PERSIST_IDLE &&
+		if ((agent_meta_persist.phase != AGENT_META_PERSIST_IDLE ||
+		     agent_meta_store_recovery_required) &&
 		    submitter == 0 &&
 		    agent_metadata_reload_available()) {
-			uint owner = agent_meta_persist.owner;
+			uint owner = agent_meta_persist.phase == AGENT_META_PERSIST_IDLE ?
+				FS_OWNER_SYSTEM : agent_meta_persist.owner;
+			int drain_status;
 
-			// The FIFO head assists under the inducing owner's I/O charge.
+			/* FIFO 队首用原事务主体结算；镜像修复统一由系统主体承担。 */
 			intr_restore(enabled);
 			agent_metadata_txn_unlock();
-			(void)agent_meta_persist_drain_owner(owner);
-			(void)kernel_work_checkpoint_cleanup(
-				KERNEL_WORK_OPERATION_UNITS);
+			drain_status = agent_meta_persist_drain_owner(
+				owner, AGENT_META_SUBMIT_DRAIN_BUDGET);
 			agent_metadata_txn_relock_uninterruptible();
+			if (drain_status < 0 && drain_status != AGENT_META_DRAIN_RETRY) {
+				enabled = intr_save();
+				if (ticket != serving_ticket)
+					panic("metadata submit ticket changed");
+				result = 0;
+				goto complete;
+			}
+			if (drain_status == AGENT_META_DRAIN_RETRY) {
+				enabled = intr_save();
+				if (ticket != serving_ticket)
+					panic("metadata submit ticket changed");
+				/* 队首在内核等待续跑边，不能用用户态重试抢占一个 tick。 */
+				goto wait;
+			}
 			continue;
 		}
-		// Hold IRQ state through unlock-and-sleep.
+		// 关中断状态必须覆盖解锁与入睡，避免丢失唤醒。
+	wait:
 		agent_metadata_txn_unlock();
-		// Tickets cannot be abandoned.
-		if (wait_queue_sleep_irq_uninterruptible(
-			    &waiters) !=
-		    WAIT_QUEUE_OK)
+		// 已领取的 FIFO 票据不能被放弃。
+		if (wait_queue_sleep_irq_uninterruptible(&waiters) != WAIT_QUEUE_OK)
 			panic("metadata submit wait failed");
 		intr_restore(enabled);
 		agent_metadata_txn_relock_uninterruptible();
 	}
+complete:
+	serving_ticket++;
+	wait_queue_wake_all(&waiters);
+	intr_restore(enabled);
+	return result;
 }
 
 static int
@@ -846,7 +888,7 @@ int agent_metadata_store_reload_wait_locked(void)
 			intr_restore(enabled);
 			return 1;
 		}
-		// Publish the waiter before clearing the gate.
+		// 先发布等待者，再释放事务门。
 		agent_metadata_txn_unlock();
 		wait_result =
 			wait_queue_sleep_irq(&waiters);
@@ -858,7 +900,7 @@ int agent_metadata_store_reload_wait_locked(void)
 	}
 }
 
-/* Restore transaction depth after servicing I/O debt. */
+/* I/O 结算后恢复事务深度。 */
 static struct bio_checkpoint_result
 agent_meta_persist_checkpoint_unlocked(uint64 job_id, int *same_job)
 {
@@ -1004,6 +1046,7 @@ store_authority_cookie(void)
 	cookie = agent_meta_format_hash_mix(
 		cookie, (uint64)(agent_meta_store_active_bank + 2));
 	cookie = agent_meta_format_hash_mix(cookie, agent_meta_store_generation);
+	cookie = agent_meta_format_hash_mix(cookie, store_buf_epoch);
 	if (agent_meta_store_active_bank >= 0 &&
 	    agent_meta_store_active_bank < AGENT_META_STORE_BANKS &&
 	    agent_meta_bank_shadow_valid[agent_meta_store_active_bank])
@@ -1011,6 +1054,45 @@ store_authority_cookie(void)
 			cookie, agent_meta_bank_shadow[
 				agent_meta_store_active_bank].header.payload_hash);
 	return cookie;
+}
+
+static void
+agent_meta_store_buffer_repurpose(void)
+{
+	/* 缓冲区即将被覆盖，先主动撤销仍引用旧内容的 probe 状态。 */
+	agent_metadata_probe_reset();
+	store_buf_epoch++;
+	if (store_buf_epoch == 0)
+		store_buf_epoch++;
+}
+
+static int
+agent_meta_store_probe_key(int force, uint reload_scope,
+			   struct agent_metadata_probe_key *key)
+{
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
+
+	if (key == 0)
+		return AGENT_META_BANK_CORRUPT;
+	memset(key, 0, sizeof(*key));
+	key->authority_cookie = store_authority_cookie();
+	key->store_epoch = store_buf_epoch;
+	key->reload_scope = reload_scope;
+	key->force = force;
+	if (!force || !agent_file_loaded)
+		return AGENT_META_BANK_VALID;
+	/* SYSTEM 没有 workflow 实例，scope 本身配合 NONE/0 形成稳定键。 */
+	if (reload_scope == VFS_SCOPE_SYSTEM)
+		return AGENT_META_BANK_VALID;
+	if (!agent_scope_valid(reload_scope) ||
+	    vfs_scope_lifecycle(reload_scope, &lifecycle) < 0 ||
+	    !workflow_lifecycle_key_valid(lifecycle)) {
+		agent_metadata_probe_invalidate(key);
+		return AGENT_META_BANK_INTERRUPTED;
+	}
+	key->workflow_lifecycle_id = lifecycle.id;
+	key->workflow_lifecycle_generation = lifecycle.generation;
+	return AGENT_META_BANK_VALID;
 }
 
 static int agent_meta_store_select(struct agent_meta_store *store,
@@ -1022,12 +1104,7 @@ static int agent_meta_store_select(struct agent_meta_store *store,
 				   int *selected_migrated,
 				   struct agent_meta_journal_cursor *selected_cursor)
 {
-	struct agent_metadata_probe_key key = {
-		.authority_cookie = store_authority_cookie(),
-		.reload_scope = reload_scope,
-		.force = force,
-		.resumable = !agent_file_loaded,
-	};
+	struct agent_metadata_probe_key key;
 	uint64 generations[AGENT_META_STORE_BANKS];
 	uint64 hashes[AGENT_META_STORE_BANKS];
 	int status[AGENT_META_STORE_BANKS];
@@ -1041,6 +1118,10 @@ static int agent_meta_store_select(struct agent_meta_store *store,
 	    repair_mode == 0 || repair_bank == 0 || candidate_epoch == 0 ||
 	    selected_migrated == 0 || selected_cursor == 0)
 		return -1;
+	int key_status = agent_meta_store_probe_key(force, reload_scope, &key);
+
+	if (key_status != AGENT_META_BANK_VALID)
+		return key_status;
 	memset(generations, 0, sizeof(generations));
 	memset(hashes, 0, sizeof(hashes));
 	memset(migration, 0, sizeof(migration));
@@ -1240,7 +1321,7 @@ agent_file_load_snapshot(int force, uint reload_scope,
 		result = agent_metadata_catalog_live_count();
 		goto out_txn;
 	}
-	if (agent_file_loaded) {
+	if (agent_file_loaded && agent_metadata_probe_epoch() == 0) {
 		memset(&agent_meta_workspace.load, 0, sizeof(agent_meta_workspace.load));
 		agent_meta_workspace.load.scratch_bank = -1;
 	}
@@ -1252,13 +1333,15 @@ agent_file_load_snapshot(int force, uint reload_scope,
 		goto out_txn;
 	}
 	store_locked = 1;
-	// Classify both banks before creating either one.
+	// 创建前先判定双 bank 状态。
 	select_status = agent_meta_store_select(
 		store, &selected_bank, &selected_generation, &repair_mode,
 		&repair_bank, force, reload_scope, &candidate_epoch,
 		&selected_migrated, &selected_cursor);
 	if (select_status != AGENT_META_BANK_VALID) {
-		if (apply->plan_active)
+		if (apply->plan_active &&
+		    (!agent_metadata_recovery_retryable(select_status) ||
+		     agent_metadata_probe_epoch() == 0))
 			agent_meta_store_apply_abort();
 		agent_meta_store_io_leave();
 		store_locked = 0;
@@ -1363,7 +1446,7 @@ out_store:
 		agent_meta_store_apply_abort();
 	if (store_locked)
 		agent_meta_store_io_leave();
-	if (agent_file_loaded || !agent_metadata_recovery_retryable(result))
+	if (result != AGENT_METADATA_LOAD_PROGRESS)
 		agent_metadata_probe_reset();
 out_txn:
 	agent_metadata_txn_unlock();
@@ -1396,8 +1479,6 @@ agent_metadata_store_finish(struct agent_metadata_store_commit *commit,
 		if (agent_meta_store_failed_closed ||
 		    agent_meta_store_active_bank < 0)
 			result = -1;
-		else
-			agent_background_request();
 	}
 	if (commit->reload_owned) {
 		agent_metadata_reload_release();
@@ -1435,7 +1516,6 @@ agent_metadata_store_defer_boot_reprobe(int status)
 	agent_meta_store_failed_closed = 1;
 	agent_meta_store_recovery_required = 1;
 	agent_meta_boot_reprobe_cause(status);
-	agent_background_request();
 	errorf("Agent metadata storage temporarily unreadable; admission closed pending reprobe\n");
 }
 
@@ -1517,7 +1597,7 @@ static void store_sort(struct agent_meta_store *store)
 	}
 }
 
-// Replace one scope; leave other dirty scopes pending.
+// 只替换目标 scope，保留其他脏 scope。
 static int agent_meta_store_build_scope(struct agent_meta_store *store,
 					uint scope_id,
 					uint64 *size_sequence,
@@ -1696,8 +1776,7 @@ static int agent_meta_persist_target_locked(int target_bank, int force_full)
 		agent_meta_persist.verify_hash, store->header.count);
 	agent_meta_persist.verify_hash = agent_meta_format_hash_mix(
 		agent_meta_persist.verify_hash, store->header.generation);
-	/* Binding an overwrite target ends the two-bank proof for the active
-	 * generation before INVALIDATE can make that fact externally visible. */
+	/* 覆盖目标绑定后，先撤销旧代际的双副本证明。 */
 	agent_meta_store_set_replicated_generation(0);
 	agent_meta_persist.phase = AGENT_META_PERSIST_INVALIDATE;
 	return 0;
@@ -1867,6 +1946,7 @@ static int agent_meta_persist_start_locked(uint owner)
 	!defined(AGENT_METADATA_EIO_PHASE)
 	if (scope_id != VFS_SCOPE_SYSTEM &&
 	    agent_meta_bank_journal_valid[agent_meta_store_active_bank]) {
+		agent_metadata_probe_reset();
 		journal_status = agent_meta_store_prepare_journal(
 			scope_id, lifecycle, &size_sequence, &durable_serial);
 		if (journal_status == AGENT_META_JOURNAL_CORRUPT)
@@ -1875,6 +1955,8 @@ static int agent_meta_persist_start_locked(uint owner)
 	}
 #endif
 	if (!use_journal) {
+		/* 共享缓冲区改作持久化快照后，旧 reload 游标必须失效。 */
+		agent_meta_store_buffer_repurpose();
 		if (agent_metadata_catalog_journal_settle_capture(
 			    scope_id, lifecycle,
 			    &agent_meta_journal_settle) < 0)
@@ -1953,7 +2035,6 @@ static int agent_meta_persist_journal_abort_locked(void)
 	agent_metadata_store_mark_dirty(VFS_SCOPE_SYSTEM);
 	agent_metadata_store_expedite(VFS_SCOPE_SYSTEM);
 	agent_meta_persist_release_locked(1);
-	agent_background_request();
 	return 0;
 }
 
@@ -1969,13 +2050,13 @@ static void agent_meta_persist_abort_locked(void)
 		agent_meta_persist.target_bank,
 		!agent_meta_persist.published ||
 		agent_meta_persist.target_bank != agent_meta_store_active_bank);
-	// Repair the peer under the SYSTEM budget.
+	// 镜像修复由 SYSTEM 预算结算。
 	agent_metadata_store_mark_dirty(VFS_SCOPE_SYSTEM);
 	agent_metadata_store_expedite(VFS_SCOPE_SYSTEM);
 	agent_meta_persist_release_locked(1);
 }
 
-/* Post-publication errors fail closed. */
+/* 发布后的错误必须关闭准入。 */
 static void agent_meta_persist_fail_closed_locked(void)
 {
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
@@ -2009,15 +2090,13 @@ static void agent_meta_persist_primary_publish_locked(void)
 		&agent_meta_bank_shadow[agent_meta_store_active_bank].durable,
 		agent_meta_store_generation);
 	agent_meta_persist.published = 1;
-	agent_file_state_sizes_persisted(
+	agent_metadata_catalog_sizes_persisted(
 		agent_meta_persist.scope_id,
 		agent_meta_persist.size_sequence);
 	agent_file_writeback_advance(0);
 	agent_durable_section_commit_scope(
 		agent_meta_persist.scope_id,
 		agent_meta_persist.durable_serial);
-	/* One verified copy ends the foreground contract. */
-	agent_background_request();
 }
 
 static int agent_meta_persist_begin_mirror_locked(int force_full)
@@ -2030,13 +2109,13 @@ static int agent_meta_persist_begin_mirror_locked(int force_full)
 		agent_meta_bank_shadow_invalidate(mirror_bank);
 		return result;
 	}
-	// Bind the mirror before publishing its phase.
+	// 先绑定镜像，再发布阶段。
 	agent_meta_persist.mirroring = 1;
 	agent_meta_persist.retry_tick = 0;
 	return 0;
 }
 
-// Irrevocable jobs become SYSTEM repair; earlier jobs abort.
+// 不可撤销任务转为 SYSTEM 修复，其余任务中止。
 static int agent_meta_persist_note_failure_locked(void)
 {
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
@@ -2060,7 +2139,6 @@ static int agent_meta_persist_note_failure_locked(void)
 		agent_meta_persist.restart_target = 1;
 		agent_metadata_test_eio_cancel(agent_meta_persist.scope_id,
 					       agent_meta_persist.job_id);
-		agent_background_request();
 		return 0;
 	}
 	agent_meta_persist_fail_closed_locked();
@@ -2099,7 +2177,6 @@ agent_meta_journal_primary_publish_locked(void)
 	agent_durable_section_commit_scope(
 		agent_meta_persist.scope_id,
 		agent_meta_persist.durable_serial);
-	agent_background_request();
 }
 
 static int
@@ -2159,8 +2236,7 @@ agent_meta_persist_journal_step_locked(void)
 				agent_meta_journal_plan.block_count, 0);
 			state->payload_durable = 1;
 			state->irrevocable = 1;
-			/* The flush-completed COMMIT slot is the authority.  Scrub and
-			 * mirror verification run outside the inducing scope. */
+			/* 已刷新的 COMMIT 槽是权威；校验交给系统续体。 */
 			state->phase = AGENT_META_PERSIST_JOURNAL_COMMIT;
 		}
 		break;
@@ -2192,9 +2268,7 @@ agent_meta_persist_journal_step_locked(void)
 			if (state->mirroring)
 				panic("foreground journal mirror invariant");
 			agent_meta_journal_primary_publish_locked();
-			/* Do not charge peer replay/readback to the mutating workflow.
-			 * Block another append until the SYSTEM repair re-establishes a
-			 * current fallback bank. */
+			/* 镜像回放由系统结算，修复完成前禁止继续追加。 */
 			agent_meta_store_require_mirror(mirror, 0);
 			agent_metadata_store_mark_dirty(VFS_SCOPE_SYSTEM);
 			agent_metadata_store_expedite(VFS_SCOPE_SYSTEM);
@@ -2212,7 +2286,7 @@ agent_meta_persist_journal_step_locked(void)
 	return result;
 }
 
-// Only a verified header publishes a bank.
+// 只有校验成功的头部才能发布 bank。
 static int agent_meta_persist_step_locked(void)
 {
 	struct agent_meta_store *store = &store_buf;
@@ -2269,7 +2343,7 @@ static int agent_meta_persist_step_locked(void)
 
 		agent_meta_store_set_replicated_generation(replicated_generation);
 		agent_meta_persist_release_locked(0);
-		/* Completion requires replication and an idle lane. */
+		/* 双副本完成且通道空闲后才算结束。 */
 		agent_durable_section_mirror_scope(scope_id);
 		return 1;
 	}
@@ -2394,7 +2468,7 @@ static int agent_meta_persist_step_locked(void)
 	case AGENT_META_PERSIST_PUBLISH:
 		if (!state->payload_durable || state->header_durable)
 			panic("metadata publish ordering invariant");
-		/* A valid header can make the new generation externally visible. */
+		/* 有效头部发布新代际。 */
 		state->irrevocable = 1;
 		agent_meta_eio_checkpoint(5);
 		n = writei(ip, &kernel_cred, 0, (uint64)&store->header, 0,
@@ -2477,8 +2551,7 @@ invalid_target:
 	return agent_meta_persist_device_error(VIRTIO_DISK_ERR_IO);
 }
 
-static int agent_meta_persist_background_step_locked(uint owner,
-						     int defer_retry)
+static inline __attribute__((always_inline)) int agent_meta_persist_background_step_locked(uint owner)
 {
 	int step = 0;
 
@@ -2486,12 +2559,11 @@ static int agent_meta_persist_background_step_locked(uint owner,
 		step = agent_meta_persist_start_locked(owner);
 	if (step >= 0)
 		step = agent_meta_persist_step_locked();
-	if (step == AGENT_META_PERSIST_DEFERRED) {
-		if (defer_retry)
-			agent_meta_persist_retry_next_tick();
-	} else if (step < 0) {
-		agent_meta_persist_note_failure_locked();
-	} else {
+	if (step < 0 && step != AGENT_META_PERSIST_DEFERRED) {
+		/* 已切换到可信修复任务时是暂缓，不是永久故障。 */
+		if (agent_meta_persist_note_failure_locked() == 0)
+			step = AGENT_META_DRAIN_RETRY;
+	} else if (step >= 0) {
 		agent_meta_persist.retry_tick = 0;
 	}
 	return step;
@@ -2568,7 +2640,7 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 			}
 			started_here = 1;
 		} else if (!started_here) {
-			/* Enter the physical lane before mutation. */
+			/* 修改前先进入物理 I/O 通道。 */
 			break;
 		} else if (agent_meta_persist.owner != owner) {
 			break;
@@ -2601,7 +2673,7 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 				agent_meta_persist_retry_next_tick();
 			break;
 		}
-		// job_id detects replacement across the checkpoint.
+		// job_id 防止检查点跨越替换任务。
 		checkpoint = agent_meta_persist_checkpoint_unlocked(
 			job_id, &same_job);
 		if (scope_reached(scope_id, target_generation, 0)) {
@@ -2723,28 +2795,25 @@ out:
 	return status;
 }
 
-static int agent_meta_persist_drain_owner(uint owner)
+static int agent_meta_persist_drain_owner(uint owner, uint step_budget)
 {
-	uint limit = AGENT_META_REPLICATED_STEP_LIMIT;
-	int result = -1;
-
-	for (uint steps = 0; steps < limit; steps++) {
-		int started_background = 0;
-		int step;
-
+	uint64 job_id = 0;
+	int result = AGENT_META_DRAIN_RETRY;
+	for (uint steps = 0; steps < step_budget;) {
+		uint batch_limit = MIN(AGENT_META_SUBMIT_DRAIN_BUDGET, step_budget - steps);
+		uint progressed = 0;
+		int started_background = 0, step = 0;
 		if (!agent_metadata_txn_lock(1))
 			break;
 		if (agent_meta_store_failed_closed ||
 		    agent_metadata_recovery_pending() ||
-		    (submitter != 0 &&
-		     submitter != agent_metadata_txn_token())) {
+		    (submitter != 0 && submitter != agent_metadata_txn_token())) {
 			agent_metadata_txn_unlock();
 			break;
 		}
 		if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
-			uint scope_id = FS_OWNER_IS_SCOPE(owner) ?
-				FS_OWNER_SCOPE_ID(owner) : VFS_SCOPE_SYSTEM;
-
+			uint scope_id = FS_OWNER_IS_SCOPE(owner) ? FS_OWNER_SCOPE_ID(owner) :
+				VFS_SCOPE_SYSTEM;
 			if (scope_target(scope_id) == 0) {
 				result = agent_meta_store_recovery_required ? -1 : 0;
 				agent_metadata_txn_unlock();
@@ -2755,25 +2824,54 @@ static int agent_meta_persist_drain_owner(uint owner)
 			agent_metadata_txn_unlock();
 			break;
 		}
+		if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE) {
+			if (job_id != 0 && job_id != agent_meta_persist.job_id) {
+				agent_metadata_txn_unlock();
+				break;
+			}
+			job_id = agent_meta_persist.job_id;
+		}
 		if (!bio_background_active(owner)) {
 			if (!bio_background_begin(owner)) {
 				agent_metadata_txn_unlock();
 				break;
 			}
 			started_background = 1;
+		} else {
+			/* 调用者持有的租约只允许推进一个不可分割步骤。 */
+			batch_limit = 1;
 		}
-		step = agent_meta_persist_background_step_locked(owner, 0);
+		while (progressed < batch_limit) {
+			step = agent_meta_persist_background_step_locked(owner);
+			progressed++;
+			steps++;
+			if (job_id == 0 &&
+			    agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
+				job_id = agent_meta_persist.job_id;
+			if (step < 0) {
+				if (step == AGENT_META_PERSIST_DEFERRED ||
+				    step == AGENT_META_DRAIN_RETRY) {
+					if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
+						agent_meta_persist_retry_next_tick();
+				} else {
+					result = -1;
+				}
+				break;
+			}
+			if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
+				result = 0;
+				break;
+			}
+		}
 		if (started_background)
 			bio_background_end();
 		agent_metadata_txn_unlock();
-		if (step == AGENT_META_PERSIST_DEFERRED || step < 0)
+		/* 固定批次摊销事务门；退让前释放租约，之后不再读全局阶段。 */
+		if (started_background &&
+		    kernel_work_checkpoint_cleanup(MIN(KERNEL_WORK_BUDGET_UNITS,
+			progressed * KERNEL_WORK_OPERATION_UNITS)) != 0)
 			break;
-		if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
-			result = 0;
-			break;
-		}
-		// A caller-owned lease is one scheduler quantum.
-		if (!started_background)
+		if (result != AGENT_META_DRAIN_RETRY || step < 0 || !started_background)
 			break;
 	}
 	return result;
@@ -2781,7 +2879,8 @@ static int agent_meta_persist_drain_owner(uint owner)
 
 static int agent_file_persist_system(void)
 {
-	return agent_meta_persist_drain_owner(FS_OWNER_SYSTEM);
+	return agent_meta_persist_drain_owner(FS_OWNER_SYSTEM,
+					      AGENT_META_OWNER_DRAIN_STEP_BUDGET);
 }
 
 static int
@@ -2792,7 +2891,8 @@ agent_meta_durable_persist_scope(uint scope_id)
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    scope_id >= FS_OWNER_SCOPE_FLAG)
 		return -1;
-	return agent_meta_persist_drain_owner(FS_OWNER_SCOPE(scope_id));
+	return agent_meta_persist_drain_owner(FS_OWNER_SCOPE(scope_id),
+					      AGENT_META_OWNER_DRAIN_STEP_BUDGET);
 }
 
 static void agent_file_writeback_maintain(void)
@@ -2815,14 +2915,26 @@ static void agent_file_writeback_maintain(void)
 	owner = agent_meta_persist.phase == AGENT_META_PERSIST_IDLE ?
 		(agent_meta_store_recovery_required ? FS_OWNER_SYSTEM :
 		 agent_file_writeback_owner(now)) : agent_meta_persist.owner;
-	if (!bio_background_begin(owner))
+	if (!bio_background_begin(owner)) {
+		if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
+			agent_meta_persist_retry_next_tick();
+		else
+			agent_file_writeback_defer();
 		return;
-	if (!agent_metadata_txn_try_external())
+	}
+	if (!agent_metadata_txn_try_external()) {
+		if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
+			agent_meta_persist_retry_next_tick();
+		else
+			agent_file_writeback_defer();
 		goto out_io;
+	}
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
 		step = agent_meta_persist_start_locked(owner);
 	if (step >= 0)
-		step = agent_meta_persist_background_step_locked(owner, 1);
+		step = agent_meta_persist_background_step_locked(owner);
+	if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
+		agent_meta_persist_retry_next_tick();
 	agent_metadata_txn_unlock();
 	if (step == AGENT_META_PERSIST_DEFERRED &&
 	    agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
@@ -2903,8 +3015,6 @@ int agent_metadata_store_durability_fence(uint scope_id)
 		return -1;
 	result = agent_meta_persist_fence_owner(
 		owner, scope_id, scope_target(scope_id), 0, 0);
-	if (result < 0)
-		agent_background_request();
 	return result;
 }
 
@@ -2925,8 +3035,6 @@ int agent_metadata_store_quiescence_fence(uint scope_id)
 		return -1;
 	result = agent_meta_persist_fence_owner(
 		owner, scope_id, scope_fence_target(scope_id), 1, 1);
-	if (result < 0)
-		agent_background_request();
 	return result;
 }
 
@@ -2945,9 +3053,29 @@ agent_metadata_store_scope_target_done(uint scope_id, uint64 target)
 void
 agent_metadata_store_background_maintain(void)
 {
-	int durable_pending = agent_durable_section_retry_pending();
-
 	agent_file_writeback_maintain();
-	if (durable_pending || agent_file_writeback_pending())
+}
+
+void
+agent_metadata_store_tick(uint64 now)
+{
+	int retry_durable = 0;
+	int enabled;
+
+	if (!agent_file_loaded || !agent_metadata_store_available())
+		return;
+	/* 未通知的 durable intent 每个 tick 只重试一次，不能借 syscall 热循环。 */
+	enabled = intr_save();
+	if (last_durable_retry_tick != now) {
+		last_durable_retry_tick = now;
+		retry_durable = 1;
+	}
+	intr_restore(enabled);
+	if (retry_durable)
+		(void)agent_durable_section_retry_pending();
+	if (agent_file_writeback_ready(now)) {
+		/* 到期边同时唤醒 FIFO 队首并合并后台任务。 */
+		wait_queue_wake_all(&waiters);
 		agent_background_request();
+	}
 }

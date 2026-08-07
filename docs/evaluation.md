@@ -38,7 +38,7 @@ workload。没有复制 AIOS 当前仓库中许可不明确的代码或结果，
 ### 机制消融
 
 同一个 AgentOS Guest、同一个输入和同一个结果检查器，对比 scalar/batch、
-scan/index、syscall/mirror、busy-poll/blocking-wait 等成对路径。每对样本必须具有
+scan/index、syscall/安全只读映射、busy-poll/blocking-wait 等成对路径。每对样本必须具有
 相同 operation count、workload fingerprint 和 result fingerprint。
 
 这种对照用来回答机制是否减少工作量。例如索引优势同时报告耗时和
@@ -56,6 +56,12 @@ Plain 目标只实现完成同一科研任务所需的传统进程、文件和 p
 传统 `open/read/write/close`、pipe 和进程操作单独测量。结果同时给出绝对耗时、
 操作数和相对开销，防止 Agent 功能改善掩盖传统接口退化。冷缓存与热缓存分栏，
 缓存效果不混入机制对照。
+
+传统项目选择对齐系统能力赛官方测试中的
+[lmbench syscall/进程延迟](https://github.com/oscomp/testsuits-for-oskernel/blob/2371216841401172a535765b9541b629c99081c4/scripts/lmbench/lmbench_testcode.sh)、
+[UnixBench 1/8/16 并发](https://github.com/oscomp/testsuits-for-oskernel/blob/2371216841401172a535765b9541b629c99081c4/scripts/unixbench/unixbench_testcode.sh)
+和 [IOzone I/O 组合](https://github.com/oscomp/testsuits-for-oskernel/blob/2371216841401172a535765b9541b629c99081c4/scripts/iozone/iozone_testcode.sh)。
+当前内核仍是单 Hart，Host 并行 QEMU 只用于缩短验收时间，不作为 Guest SMP 加速证据。
 
 ### 内核成本
 
@@ -77,6 +83,26 @@ Plain 目标只实现完成同一科研任务所需的传统进程、文件和 p
 吞吐和延迟必须来自 Guest 单调时钟围住的真实 workload。结果校验、hash 和 marker
 打印发生在计时区间外。提交到开始、开始到完成、提交到接收分别形成 wait、service
 和 turnaround，避免把服务时间误写成排队时间。
+
+## 竞赛性能门槛
+
+这些门槛是项目的工程目标，不是题面给出的统一分数线。每项都在相同工具链、QEMU、
+Guest vCPU、输入和操作数下比较；冷缓存与热缓存分别判定，不能用平均值掩盖单项退化。
+
+| 场景 | 采样点 | 主要数据 | 项目门槛 |
+| --- | --- | --- | --- |
+| 传统接口 | `fork/exec/wait`、pipe 往返、`open/read/close`、4 KiB `write` | cycles/op、ops/s、p50、p99 | AgentOS 相对 Plain uCore：每项 p50 退化不超过 5%，p99 不超过 10% |
+| 工具批量 | batch 1/8/64，scalar 与 batch 成对 | cycles/op、syscall/op、p50、p99 | batch=1 退化不超过 5%；batch=64 的 cycles/op 至少降低 50% |
+| Context | 5/20/50 轮 push/query/rollback；带 seqlock 的只读映射与 syscall 成对 | p50/p99、重试次数、copy 次数、峰值页数、结果 fingerprint | 安全直接读取快于 syscall 路径，历史与 active path 错误数为 0 |
+| 文件查询 | 64/256/512 条 metadata，scan/index，冷/热缓存分栏 | p50/p99、records examined、块 I/O | index 的耗时和检查记录数都低于同组 scan |
+| 多 Agent | 1/4/16 个确定性 workflow | makespan、goodput、wait/turnaround p50/p90/p99、Jain fairness | 所有 workflow 有界进展；16 Agent 时 Jain fairness 不低于 0.95 |
+| 空闲与唤醒 | 无事件窗口、消息、heartbeat | polling iterations、dispatch 增量、唤醒 p50/p99 | 无事件时 polling 与 Agent runnable dispatch 增量均为 0；唤醒延迟报告实测值 |
+| 内核成本 | production ELF 与预算探针 | text/data/BSS、raw image、`struct proc`、栈、Agent 按需页 | 每项同时报告相对 Plain 和上一提交的绝对值与增量，不允许无说明增长 |
+
+传统路径门槛按 workload 逐项执行，不用一个总分抵消回退。Agent 场景只有在结果
+fingerprint 一致时才计算加速比；fallback、超时或污染样本仍进入完成率和尾延迟。
+所有表格只读取原始 CSV，缺少 Guest 日志、环境指纹或样本 hash 时显示“无数据”，
+不得用公式、常量或插值补齐。
 
 ## 采样纪律
 

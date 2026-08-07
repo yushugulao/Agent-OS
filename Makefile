@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -153,6 +153,8 @@ CFLAGS += -MD
 CFLAGS += -march=rv64imac_zicsr_zifencei -mabi=lp64
 CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
+# 每个符号独立成节，最终镜像只保留从内核入口可达的实现。
+CFLAGS += -ffunction-sections -fdata-sections
 CFLAGS += -I$K
 CFLAGS += $(shell $(CC_CMD) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
@@ -436,7 +438,7 @@ override CFLAGS += $(KSTACK_REQUIRED_CFLAGS)
 
 # These bounded control/persistence owners favor size after ownership splits.
 # Keep this allowlist exact; the module checker rejects any expansion.
-AGENT_SIZE_OPTIMIZED_MODULES := agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_prefetch agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store
+AGENT_SIZE_OPTIMIZED_MODULES := agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store
 AGENT_SIZE_OPTIMIZED_OBJS := $(addprefix $(BUILDDIR)/$(K)/,$(addsuffix .o,$(AGENT_SIZE_OPTIMIZED_MODULES)))
 $(AGENT_SIZE_OPTIMIZED_OBJS): private CFLAGS += -Os
 
@@ -486,7 +488,7 @@ $(KSTACK_BUILD_CONFIG): .FORCE
 # empty target
 .FORCE:
 
-LDFLAGS = -m elf64lriscv -z max-page-size=4096
+LDFLAGS = -m elf64lriscv -z max-page-size=4096 --gc-sections
 
 $(AS_OBJS): $(BUILDDIR)/$K/%.o : $K/%.S
 	@mkdir -p $(@D)
@@ -683,21 +685,23 @@ kernel-budget-check: agent-uapi-check scripts/check-agent-module-boundaries.sh s
 
 override KERNEL_BUDGET_STATIC_CHECKS := \
 	scripts/check-agent-file-generation-index.py \
+	scripts/check-agent-file-version-sparse.py \
 	scripts/check-vfs-scope-registry.py
 
 override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-check-kernel-budgets.py \
+	scripts/test-agent-file-generation-index.py \
 	scripts/test-check-user-stack-usage.py \
 	scripts/test-check-user-stack-contract.py \
 	scripts/test-check-teardown-protocol.py \
 	scripts/test-check-agent-uapi-layout.py \
 	scripts/test-context-active-path-wiring.py \
 	scripts/test-exec-image-policy.py \
-	scripts/check-kernel-work-receipt.py \
 	scripts/test-agent-metadata-disk-format.py \
 	scripts/test-agent-observe-disk-format.py \
 	scripts/test-host-probe-toolchain.py \
 	scripts/test-agent-test-runner.py \
+	scripts/test-ch3-trace-acceptance.py \
 	scripts/test-agent-test-calibration.py \
 	scripts/test-validate-kernel-test-log.py \
 	scripts/test-validate-metadata-crash-log.py \
@@ -1057,6 +1061,14 @@ contest-demo:
 contest-demo-check: scripts/run-contest-demo.sh host_tools/contest_demo.py host_tools/test_contest_demo.py
 	@$(call shell_quote,$(BASH_BIN)) -n scripts/run-contest-demo.sh
 	@$(PYTHON_CMD) host_tools/test_contest_demo.py
+
+ch3-trace-test:
+	AGENTOS_BUILD_JOBS=$(call shell_quote,$(AGENTOS_BUILD_JOBS)) \
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+		QEMU=$(call shell_quote,$(QEMU)) \
+		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) \
+		HOST_CC=$(call shell_quote,$(HOST_CC)) \
+		$(call shell_quote,$(BASH_BIN)) scripts/run-ch3-trace-test.sh
 
 fs-enospc-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-fs-enospc-tests.sh

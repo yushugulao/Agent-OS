@@ -43,7 +43,8 @@ def check(root: Path) -> None:
     file_text = (root / "os/file.c").read_text()
     file_source = compact(file_text)
     fs_source = compact((root / "os/fs.c").read_text())
-    edit_source = compact((root / "os/agent_file_state.c").read_text())
+    edit_text = (root / "os/agent_file_state.c").read_text()
+    edit_source = compact(edit_text)
 
     for field in (
         "structfile*file;", "structinode*inode;", "structproc*subject;",
@@ -51,7 +52,7 @@ def check(root: Path) -> None:
         "structworkflow_lifecycle_keylifecycle;",
         "conststructvfs_cred*cred;",
         "uint64edit_authority_generation;", "uint64edit_deadline_tick;",
-        "uint64thread_generation;", "uint64receipt_generation;",
+        "uint64thread_generation;", "uint64syscall_generation;",
         "uintinode_incarnation;", "uintinode_checksum;",
         "uintinode_policy_generation;", "uintinode_exec_size;",
         "uintinode_exec_flags;", "uintinode_exec_generation;",
@@ -81,8 +82,38 @@ def check(root: Path) -> None:
     inode_match = function(source_text, "open_file_io_inode_matches")
     file_match = function(source_text, "open_file_io_file_matches")
     edit_match = function(source_text, "open_file_io_edit_matches")
+    edit_modify = function(edit_text, "agent_edit_modify_allowed")
+    edit_snapshot = function(edit_text, "agent_edit_write_lease_snapshot")
     issue = function(source_text, "open_file_io_token_issue")
     cache_slot = function(source_text, "open_file_io_cache_slot")
+
+    require(
+        edit_snapshot.endswith(
+            "{returnagent_edit_modify_allowed("
+            "ip,0,authority_generation,valid_until_tick);}")
+        and edit_snapshot.count("agent_edit_modify_allowed(") == 1,
+        "write lease snapshot is not a side-effect-free delegation",
+    )
+    for fragment in (
+        "if(authority_generation)*authority_generation=0;",
+        "if(valid_until_tick)*valid_until_tick=0;",
+        "enabled=agent_edit_lock();",
+        "agent_edit_cleanup_expired_locked(now);",
+        "version=file_version_inode_locked(ip,0);",
+        "edit=agent_edit_find_locked(ip->vfs_scope_id,0,ip);",
+        "edit&&!agent_edit_owner(edit,p)",
+        "*valid_until_tick=edit->deadline_tick;",
+        "agent_edit_unlock(enabled);",
+    ):
+        require(
+            fragment in edit_modify,
+            "write lease snapshot common authorization path is incomplete",
+        )
+    require(
+        "if(action){edit->conflict_count++;" in edit_modify
+        and "if(!allowed&&action)agent_edit_audit(" in edit_modify,
+        "write lease snapshot common path no longer suppresses audit side effects",
+    )
 
     require(acquire.count("vfs_inode_authorize(") == 1,
             "acquire must have exactly one full VFS authorization")
@@ -103,7 +134,7 @@ def check(root: Path) -> None:
         "token->subject=grant->subject", "token->account=grant->account",
         "token->lifecycle=grant->lifecycle", "token->cred=authorized_cred",
         "token->thread_generation=thread->identity_generation",
-        "token->receipt_generation=thread->kernel_receipt_generation",
+        "token->syscall_generation=thread->kernel_work_generation",
         "token->inode_incarnation=grant->inode_incarnation",
         "token->inode_checksum=grant->inode_checksum",
         "token->inode_policy_generation=grant->inode_policy_generation",
@@ -120,7 +151,7 @@ def check(root: Path) -> None:
     for fragment in (
         "token->subject==proc", "token->inode==inode",
         "thread->identity_generation==token->thread_generation",
-        "thread->kernel_receipt_generation==token->receipt_generation",
+        "thread->kernel_work_generation==token->syscall_generation",
         "open_file_io_file_matches(token->file,inode,operation)",
         "open_file_io_subject_matches(proc,token->account,token->lifecycle,"
         "token->cred)",
@@ -184,11 +215,16 @@ def check(root: Path) -> None:
             "open_file_io_token_validate(lease,ip,VFS_OP_WRITE)" in fs_source,
             "filesystem does not verify the kernel token")
     require("uint64edit_authority_generation;" in edit_source and
-            edit_source.count(
-                "agent_file_counter_next(&version->edit_authority_generation)") >= 2 and
-            "agent_file_counter_next(&version_entry->edit_authority_generation)" in
-            edit_source and "agent_edit_write_lease_snapshot(" in edit_source,
-            "edit authority lacks an inode-scoped revocation generation")
+            "staticuint64agent_file_edit_authority_generation;" in edit_source and
+            "entry->edit_authority_generation="
+            "agent_file_edit_authority_generation;" in edit_source and
+             edit_source.count(
+                 "edit_authority_generation=agent_file_counter_next("
+                 "&agent_file_edit_authority_generation)") >= 3 and
+             "*authority_generation=version->edit_authority_generation" in
+             edit_modify and
+             "agent_file_edit_authority_generation" not in source,
+             "edit authority lacks an inode-scoped revocation generation")
 
 
 def main() -> int:

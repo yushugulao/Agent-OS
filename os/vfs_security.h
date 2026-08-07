@@ -102,7 +102,8 @@ int vfs_scope_close_trusted(uint scope_id,
 			    struct workflow_lifecycle_key *closed);
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode,
 				 uint guarantee);
-void vfs_scope_reap_pending(void);
+void vfs_scope_reap_pending(uint64 now);
+void vfs_scope_reap_tick(uint64 now);
 int vfs_proc_spawn_scope(const struct proc *, struct proc *,
 			 enum vfs_spawn_scope_mode);
 struct workflow_lifecycle_key vfs_proc_lifecycle(const struct proc *);

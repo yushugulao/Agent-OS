@@ -28,8 +28,6 @@ void agent_metadata_actions_clear_history(uint);
 void agent_metadata_actions_format_file_event(
 	const struct agent_file_meta *, char *, int);
 uint64 agent_metadata_actions_label_bit(const char *);
-const struct agent_metadata_dependency_view *
-agent_metadata_actions_dependency_borrow(int);
 int agent_metadata_actions_dependency_mask(
 	uint, char *, char *, char *, uint64 *);
 int agent_metadata_actions_dependency_query(

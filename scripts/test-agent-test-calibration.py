@@ -674,7 +674,18 @@ class CalibrationTests(unittest.TestCase):
         guest_parts = []
         cases = calibration.expected_attestation_cases(plan["expected_cases"])
         for _, tag, init_proc in cases:
-            raw = f"{init_proc}: parent passed\n".encode()
+            if init_proc == "agentfinal_ucore":
+                raw = (
+                    "agentfinal_ucore: context_ro_store_fault_armed=1\n"
+                    "[ERROR 3-0]15 in application, bad addr = 0x1, "
+                    "bad instruction = 0x2, core dumped.\n"
+                    "agentfinal_ucore: context_public_unmapped_fault_armed=1\n"
+                    "[ERROR 4-0]13 in application, bad addr = 0x1, "
+                    "bad instruction = 0x2, core dumped.\n"
+                    "agentfinal_ucore: parent passed\n"
+                ).encode()
+            else:
+                raw = f"{init_proc}: parent passed\n".encode()
             guest_parts.extend(
                 (
                     f"===== guest:{tag} =====\n".encode(),
@@ -687,6 +698,14 @@ class CalibrationTests(unittest.TestCase):
             guest_path, plan["expected_cases"]
         )
         for index, (case_key, tag, init_proc) in enumerate(cases):
+            expected_fault_markers = (
+                [
+                    "agentfinal_ucore: context_ro_store_fault_armed=1",
+                    "agentfinal_ucore: context_public_unmapped_fault_armed=1",
+                ]
+                if init_proc == "agentfinal_ucore"
+                else []
+            )
             session_nonce = f"{4 + index * 2:x}" * 64
             execution_nonce = f"{5 + index * 2:x}" * 64
             start = 1_000_000_000 + index * 2_000_000_000
@@ -759,6 +778,8 @@ class CalibrationTests(unittest.TestCase):
                 "--toolchain-cc",
                 tools["toolchain_cc"]["requested_path"],
             ]
+            for fault_marker in expected_fault_markers:
+                argv.extend(("--expected-bad-addr-after", fault_marker))
             attestation = {
                 "schema_version": 2,
                 "format": calibration.ATTESTATION_FORMAT,
@@ -799,7 +820,7 @@ class CalibrationTests(unittest.TestCase):
                     "init_proc": init_proc,
                     "marker": f"{init_proc}: parent passed",
                     "marker_mode": "exact-line",
-                    "expected_bad_addr_markers": [],
+                    "expected_bad_addr_markers": expected_fault_markers,
                     "expected_fault_marker_mode": "exact-line",
                     "completion_mode": "natural",
                     "case_timeout_seconds": 300,

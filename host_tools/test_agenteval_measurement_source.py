@@ -214,8 +214,9 @@ def main() -> int:
     context_mirror_forge = dict(dependency_texts)
     context_mirror_forge["user/lib/syscall.c"] = _replace_once(
         context_mirror_forge["user/lib/syscall.c"],
-        "\treturn copied;\n}\n\nint context_detail",
-        "\treturn 0;\n}\n\nint context_detail",
+        "\treturn active_seen == header->active_path_count ? copied : -1;\n"
+        "}\n\nint context_direct_active_query",
+        "\treturn 0;\n}\n\nint context_direct_active_query",
     )
     _reject_compile(context_mirror_forge)
     _reject_compile(context_mirror_forge, refresh_fingerprint=True)
@@ -413,7 +414,7 @@ def main() -> int:
                 alternate_make.unlink()
     for binding in (
         "now_us", "elapsed_us", "sys_get_time", "agent_file_query",
-        "agent_run", "context_query", "copy_context_volatile", "printf",
+        "agent_run", "context_query", "context_direct_active_query", "printf",
         "pair_runs_ab", "open", "read", "fstat", "close",
     ):
         _reject(_inject_directive(source, f"#define {binding} forged_{binding}"))
@@ -547,7 +548,7 @@ def main() -> int:
         )
     )
     for old, new in (
-        ("copy_context_volatile(&results[i]", "forged_context_read(&results[i]"),
+        ("context_direct_active_query(", "forged_context_read("),
         ("context_query(target_sequence", "forged_context_query(target_sequence"),
     ):
         _reject(_mutate(source, "time_context_variant", old, new))

@@ -15,6 +15,7 @@ from evidence_semantic_common import (
 )
 from evidence_semantic_profiles import (
     _validate_agent_suite,
+    _validate_ch3_trace,
     _validate_dual,
     _validate_file_resource,
     _validate_fs_allocator,
@@ -38,6 +39,7 @@ class RawArtifactRule:
 
 
 RAW_ARTIFACT_REGISTRY = (
+    RawArtifactRule("ch3-trace", ("ch3-trace-guest.log",), _validate_ch3_trace),
     RawArtifactRule(
         "agent-suite",
         ("agent-suite-timings.log", "agent-suite-guest.log"),

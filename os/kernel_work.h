@@ -2,17 +2,15 @@
 #define KERNEL_WORK_H
 
 #include "types.h"
-#include "../kernel_work_abi.h"
 
 struct thread;
 
-// Long kernel paths may only reschedule after committing an atomic chunk and
-// releasing transient state. Byte-moving paths normalize copied bytes into an
-// approximate CPU-work unit instead of treating one byte as one unit.
+// 长内核路径只能在提交原子批次并释放临时状态后让出 CPU。
+// 搬运数据的路径按 64 字节折算工作量，避免把每个字节都当成一个调度单位。
 #define KERNEL_WORK_STREAM_GRANULE 64U
 #define KERNEL_WORK_BYTES_PER_UNIT 64U
 #define KERNEL_WORK_IO_BATCH_BYTES (16U * 1024U)
-#define KERNEL_WORK_BUDGET_UNITS 1024U
+#define KERNEL_WORK_BUDGET_UNITS 512U
 #define KERNEL_WORK_OPERATION_UNITS 256U
 #define KERNEL_WORK_PAGE_UNITS 64U
 
@@ -21,16 +19,12 @@ struct thread;
 
 void kernel_work_reset(struct thread *);
 void kernel_work_on_dispatch(struct thread *);
-void kernel_work_begin(void);
 void kernel_work_begin_syscall(int syscall_id, uint syscall_class);
 void kernel_work_begin_background(void);
 void kernel_work_end(void);
 void kernel_work_end_background(void);
 void kernel_work_begin_cleanup(void);
 void kernel_work_end_cleanup(void);
-void kernel_work_timer_advance(void);
-int kernel_work_receipt_snapshot(struct thread *,
-				 struct kernel_work_receipt *);
 uint64 kernel_work_last_preemptions(struct thread *);
 void kernel_work_request_resched(void);
 uint kernel_work_units_from_bytes(uint64);

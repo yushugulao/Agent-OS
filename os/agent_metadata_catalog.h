@@ -257,8 +257,11 @@ int agent_metadata_catalog_journal_capture(
 	struct agent_catalog_journal_receipt *, uint64 *);
 int agent_metadata_catalog_journal_note_content(
 	const struct agent_file_content_receipt *);
+int agent_metadata_catalog_content_commit(
+	const struct agent_file_content_receipt *);
 void agent_metadata_catalog_journal_commit(
 	const struct agent_catalog_journal_receipt *);
+void agent_metadata_catalog_sizes_persisted(uint, uint64);
 int agent_metadata_catalog_journal_settle_capture(
 	uint, struct workflow_lifecycle_key,
 	struct agent_catalog_journal_settle *);

@@ -2166,32 +2166,6 @@ static void run_tool_batch_experiment(void)
 	}
 }
 
-static void copy_context_volatile(
-	struct agent_context_record *destination,
-	const volatile struct agent_context_record *source)
-{
-	destination->sequence = source->sequence;
-	destination->request_id = source->request_id;
-	destination->cause_sequence = source->cause_sequence;
-	destination->span_id = source->span_id;
-	destination->branch_generation = source->branch_generation;
-	destination->path_parent_sequence = source->path_parent_sequence;
-	destination->arg0 = source->arg0;
-	destination->value0 = source->value0;
-	destination->value1 = source->value1;
-	destination->value2 = source->value2;
-	destination->tick = source->tick;
-	destination->flags = source->flags;
-	destination->prev_hash = source->prev_hash;
-	destination->record_hash = source->record_hash;
-	destination->tool_id = source->tool_id;
-	destination->status = source->status;
-	for (int i = 0; i < AGENT_CONTEXT_TEXT_SIZE; i++) {
-		destination->payload[i] = source->payload[i];
-		destination->result[i] = source->result[i];
-	}
-}
-
 static uint64 context_fixture_arg0(int load, int pair)
 {
 	return AGENTEVAL_CHALLENGE ^ ((uint64)(uint)load << 32) ^
@@ -2207,8 +2181,7 @@ static uint64 prepare_context_fixture(int load, int pair)
 {
 	struct agent_op op;
 	struct agent_result result;
-	volatile struct agent_context_header *header =
-		(volatile struct agent_context_header *)eval_info.context_base;
+	struct agent_context_header header;
 
 	memset(&op, 0, sizeof(op));
 	memset(&result, 0, sizeof(result));
@@ -2226,7 +2199,9 @@ static uint64 prepare_context_fixture(int load, int pair)
 		      result.value1 == op.arg0 && result.value2 == op.arg1 &&
 		      strcmp(result.result, op.payload) == 0,
 	      "context fixture semantic result");
-	check(result.sequence != 0 && header->latest_sequence == result.sequence,
+	check(context_direct_header_snapshot(eval_info.context_base, &header) == 0 &&
+		      result.sequence != 0 &&
+		      header.latest_sequence == result.sequence,
 	      "context fixture is the visible latest record");
 	return result.sequence;
 }
@@ -2283,20 +2258,15 @@ static void time_context_variant(
 	struct agent_context_record *results, int *query_results,
 	struct measurement *measurement)
 {
-	volatile struct agent_context_header *header =
-		(volatile struct agent_context_header *)eval_info.context_base;
-	const volatile struct agent_context_record *records =
-		(const volatile struct agent_context_record *)(
-			eval_info.context_base + header->records_offset);
-	uint64 slot = (target_sequence - 1) % header->capacity;
 	uint64 start;
 
 	memset(measurement, 0, sizeof(*measurement));
 	start = now_us();
 	for (int i = 0; i < load; i++) {
 		if (direct) {
-			copy_context_volatile(&results[i], &records[slot]);
-			query_results[i] = 1;
+			query_results[i] = context_direct_active_query(
+				eval_info.context_base, target_sequence,
+				&results[i], 1);
 		} else {
 			query_results[i] = context_query(target_sequence,
 							 &results[i], 1);
@@ -2325,16 +2295,10 @@ static void finalize_context_variant(
 
 static void validate_context_mirror(uint64 target_sequence)
 {
-	const struct agent_context_header *header =
-		(const struct agent_context_header *)eval_info.context_base;
-	const struct agent_context_record *records =
-		(const struct agent_context_record *)(
-			eval_info.context_base + header->records_offset);
-
 	memset(context_results, 0, sizeof(context_results));
 	check(context_query(target_sequence, &context_results[0], 1) == 1,
 	      "validated context syscall query");
-	check(context_mirror_active_query(header, records, target_sequence,
+	check(context_direct_active_query(eval_info.context_base, target_sequence,
 					  &context_results[1], 1) == 1,
 	      "validated mapped context query");
 	check(bytes_equal(&context_results[0], &context_results[1],
@@ -2943,7 +2907,6 @@ static uint64 functional_task3_record_hash(
 
 static void run_functional_task3(void)
 {
-	const struct agent_context_record *mirror;
 	uint64 values[22];
 	uint64 first_sequence;
 	uint64 last_sequence;
@@ -3002,11 +2965,9 @@ static void run_functional_task3(void)
 				    AGENT_CONTEXT_MAX_RECORDS);
 	check(query_count == FUNCTIONAL_TASK3_ROUNDS,
 	      "task3 syscall query count");
-	mirror = (const struct agent_context_record *)(
-		eval_info.context_base + functional_context_header.records_offset);
-	direct_count = context_mirror_active_query(
-		&functional_context_header, mirror, first_sequence,
-		context_results, EVAL_MAX_LOAD);
+	direct_count = context_direct_active_query(
+		eval_info.context_base, first_sequence, context_results,
+		EVAL_MAX_LOAD);
 	check(direct_count == FUNCTIONAL_TASK3_ROUNDS,
 	      "task3 direct query count");
 	for (int i = 0; i < FUNCTIONAL_TASK3_ROUNDS; i++)
@@ -3059,11 +3020,9 @@ static void run_functional_task3(void)
 					 AGENT_CONTEXT_MAX_RECORDS);
 	check(post_query_count == active_after_branch,
 	      "task3 post-rollback syscall query");
-	mirror = (const struct agent_context_record *)(
-		eval_info.context_base + functional_context_header.records_offset);
-	post_direct_count = context_mirror_active_query(
-		&functional_context_header, mirror, first_sequence,
-		context_results, EVAL_MAX_LOAD);
+	post_direct_count = context_direct_active_query(
+		eval_info.context_base, first_sequence, context_results,
+		EVAL_MAX_LOAD);
 	check(post_direct_count == active_after_branch,
 	      "task3 post-rollback direct query");
 	for (int i = 0; i < active_after_branch; i++)

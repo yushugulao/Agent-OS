@@ -5,6 +5,8 @@
 #define ABI_OFFSET(type, field, name) \
 	unsigned char agent_uapi_layout_offset_##name##_##field \
 		[__builtin_offsetof(type, field) + 1]
+#define ABI_VALUE(value, name) \
+	unsigned char agent_uapi_layout_value_##name[(value)]
 
 #define ABI_RECORD(type, name, first, last) \
 	ABI_SIZE(type, name); \
@@ -67,6 +69,7 @@ ABI_RECORD(struct agent_sched_config, sched_config, update_mask, budget);
 ABI_RECORD(struct agent_trace_record, trace_record, tick, text);
 ABI_RECORD(struct agent_audit_record, audit_record, sequence, text);
 ABI_RECORD(struct agent_ledger_summary, ledger_summary, version, observe_epoch);
+ABI_VALUE(AGENT_LEDGER_VERSION, ledger_version);
 ABI_RECORD(struct agent_audit_filter, audit_filter, flags, status);
 ABI_RECORD(struct agent_audit_receipt_request, audit_receipt_request,
 	   version, reserved);
@@ -95,7 +98,6 @@ ABI_RECORD(struct agent_context_detail, context_detail, sequence, result);
 ABI_RECORD(struct agent_event, event, type, payload);
 ABI_RECORD(struct agent_file_meta, file_meta, used, update_mask);
 ABI_RECORD(struct agent_file_hit, file_hit, fid, fs_generation);
-ABI_RECORD(struct agent_file_prefetch_hint, file_prefetch_hint, sequence, hit);
 ABI_RECORD(struct agent_file_query, file_query, flags, summary_contains);
 ABI_RECORD(struct agent_file_query_result, file_query_result, total_hits, hits);
 ABI_RECORD(struct agent_file_edit_state, file_edit_state, active, path);

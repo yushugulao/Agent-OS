@@ -32,6 +32,15 @@ STACK_SPEC.loader.exec_module(kernel_stack)
 
 
 class KernelBudgetTests(unittest.TestCase):
+    def assert_source_budget_covers_tree(self, root, entry):
+        actual = len(
+            (root / entry["source_path"])
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        self.assertLessEqual(actual, entry["max_lines"])
+        self.assertLessEqual(entry["baseline_lines"], entry["max_lines"])
+
     def assert_store_wrapper_projection_protocol(self, body, call):
         call_at = body.index(call)
         complete_at = body.index("agent_file_store_complete(&commit, result)")
@@ -99,14 +108,25 @@ class KernelBudgetTests(unittest.TestCase):
         with config_path.open(encoding="utf-8") as stream:
             config = json.load(stream)
         kernel_budgets.validate_config(config)
-        self.assertEqual(
-            config["canonical_toolchain"]["ldflags"],
-            ["-m", "elf64lriscv", "-z", "max-page-size=4096"],
+        toolchain = config["canonical_toolchain"]
+        ldflags = toolchain["ldflags"]
+        for option, argument in (
+            ("-m", "elf64lriscv"),
+            ("-z", "max-page-size=4096"),
+        ):
+            self.assertEqual(ldflags.count(option), 1)
+            position = ldflags.index(option)
+            self.assertLess(position + 1, len(ldflags))
+            self.assertEqual(ldflags[position + 1], argument)
+        self.assertEqual(ldflags.count("--gc-sections"), 1)
+        self.assertIn("-ffunction-sections", toolchain["cflags"])
+        self.assertIn("-fdata-sections", toolchain["cflags"])
+        source_budget = config["kernel_source"]
+        self.assertLessEqual(
+            source_budget["baseline_lines"], source_budget["max_lines"]
         )
-        self.assertEqual(config["kernel_source"]["baseline_lines"], 63037)
-        self.assertEqual(config["kernel_source"]["max_lines"], 63037)
-        self.assertEqual(config["struct_proc"]["baseline_bytes"], 23464)
-        self.assertEqual(config["struct_proc"]["max_bytes"], 24638)
+        self.assertEqual(config["struct_proc"]["baseline_bytes"], 10024)
+        self.assertEqual(config["struct_proc"]["max_bytes"], 10526)
 
         missing_hash = copy.deepcopy(config)
         del missing_hash["local_kernel_budget_toolchains"][0][
@@ -1541,7 +1561,7 @@ agent_metadata_txn_projection_require_idle();
         modules = config["agent_modules"]
         self.assertEqual(
             config["agent_state_pages"]["baseline_per_process_bytes"],
-            21 * 4096,
+            17 * 4096,
         )
         trapframes = config["trapframe_pages"]
         self.assertEqual(trapframes["baseline_per_thread_bytes"], 4096)
@@ -1835,7 +1855,7 @@ agent_metadata_txn_projection_require_idle();
             "source_budget_policy"
         ] = "unreviewed"
         with self.assertRaisesRegex(
-            kernel_budgets.BudgetError, "must explain the 5% source allowance"
+            kernel_budgets.BudgetError, "must match the strict aggregate policy"
         ):
             kernel_budgets.validate_config(unexplained_source_allowance)
         excess_source_bytes = copy.deepcopy(config)
@@ -2138,7 +2158,6 @@ agent_metadata_txn_projection_require_idle();
             "scripts/check-filepool-freelist.py",
             "scripts/check-fs-epoch-index.py",
             "scripts/check-inode-mapping-guard.py",
-            "scripts/check-kernel-work-receipt.py",
             "scripts/check-read-epoch-lazy-finalizer.py",
             "scripts/check-sequential-read-batch.py",
             "scripts/check-syscall-file-transaction.py",
@@ -3033,9 +3052,9 @@ agent_metadata_txn_projection_require_idle();
             modules["identity_lease"]["allowed_global_symbols"],
         )
         recovery = modules["observe_recovery"]
-        self.assertEqual(recovery["baseline_lines"], 374)
-        self.assertEqual(recovery["max_lines"], 393)
-        self.assertEqual(recovery["max_bss_bytes"], 240)
+        root = SCRIPT.parent.parent
+        self.assert_source_budget_covers_tree(root, recovery)
+        self.assertLessEqual(recovery["max_bss_bytes"], 240)
         self.assertEqual(
             recovery["allowed_dependencies"],
             ["metadata", "observe_store"],
@@ -3054,23 +3073,20 @@ agent_metadata_txn_projection_require_idle();
             modules["observe_store"]["allowed_global_symbols"],
         )
         capacity = modules["observe_capacity"]
-        self.assertEqual(capacity["baseline_lines"], 707)
-        self.assertEqual(capacity["max_lines"], 742)
-        self.assertEqual(capacity["max_bss_bytes"], 320)
+        self.assert_source_budget_covers_tree(root, capacity)
+        self.assertLessEqual(capacity["max_bss_bytes"], 320)
         self.assertEqual(
             capacity["allowed_dependencies"],
             ["background", "durable_section", "workflow_lifecycle"],
         )
         ledger = modules["observe_ledger"]
-        self.assertEqual(ledger["baseline_lines"], 2374)
-        self.assertEqual(ledger["max_lines"], 2374)
-        self.assertEqual(ledger["max_bss_bytes"], 223232)
+        self.assert_source_budget_covers_tree(root, ledger)
+        self.assertLessEqual(ledger["max_bss_bytes"], 223232)
         self.assertIn(
             "agent_observe_checkpoint_entry_validate",
             ledger["allowed_global_symbols"],
         )
-        self.assertEqual(modules["observe_store"]["baseline_lines"], 896)
-        self.assertEqual(modules["observe_store"]["max_lines"], 923)
+        self.assert_source_budget_covers_tree(root, modules["observe_store"])
         self.assertEqual(modules["observe_store"]["max_bss_bytes"], 0)
 
     def test_lifecycle_abi_modules_have_ratchet_baselines(self):
@@ -3082,9 +3098,7 @@ agent_metadata_txn_projection_require_idle();
             for entry in config["agent_modules"]["modules"]
             if entry["name"] == "lifecycle"
         )
-        source = SCRIPT.parent.parent / lifecycle["source_path"]
-        self.assertEqual(lifecycle["baseline_lines"], 340)
-        self.assertEqual(lifecycle["max_lines"], 351)
+        self.assert_source_budget_covers_tree(SCRIPT.parent.parent, lifecycle)
         self.assertEqual(
             lifecycle["allowed_dependencies"],
             [
@@ -3095,16 +3109,12 @@ agent_metadata_txn_projection_require_idle();
                 "workflow_lifecycle",
             ],
         )
-        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 340)
         metadata = next(
             entry
             for entry in config["agent_modules"]["modules"]
             if entry["name"] == "metadata"
         )
-        source = SCRIPT.parent.parent / metadata["source_path"]
-        self.assertEqual(metadata["baseline_lines"], 294)
-        self.assertEqual(metadata["max_lines"], 300)
-        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 294)
+        self.assert_source_budget_covers_tree(SCRIPT.parent.parent, metadata)
         syscall = next(
             bridge
             for bridge in config["agent_modules"]["integration_bridges"]

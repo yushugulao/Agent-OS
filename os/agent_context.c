@@ -14,6 +14,9 @@ struct agent_context_private_slot {
 	uint64 actor_identity;
 };
 
+#define AGENT_PRIVATE_STATE_PAGE_COUNT \
+	(AGENT_CONTEXT_SIDECAR_PAGE_COUNT + AGENT_COLD_STATE_PAGE_COUNT)
+
 #define AGENT_CONTEXT_SLOTS_PER_PAGE \
 	(PAGE_SIZE / sizeof(struct agent_context_private_slot))
 #define AGENT_CONTEXT_LAST_PAGE_RECORDS \
@@ -76,14 +79,18 @@ _Static_assert(AGENT_CONTEXT_LAST_PAGE_RECORDS *
 	       "Agent context path index must fit sidecar slack");
 _Static_assert(AGENT_STATE_PAGE_COUNT ==
 		       AGENT_CONTEXT_SIDECAR_PAGE_COUNT +
-			       2U * AGENT_CONTEXT_PAGES,
-	       "Agent state accounting must cover sidecar, user, and shadow pages");
+			       AGENT_COLD_STATE_PAGE_COUNT +
+			       AGENT_CONTEXT_PAGES,
+	       "Agent state accounting must cover private and mapped pages");
+_Static_assert(AGENT_COLD_STATE_PAGE_COUNT == 1U,
+	       "冷状态页绑定必须与固定的 IPC/观测页一致");
 
 static void
 agent_context_metadata_reset(struct proc *p)
 {
 	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
 		p->agent_context_sidecar_kva[page] = 0;
+	p->agent_ipc_observe_cold = 0;
 	p->agent_state_account = resource_account_none();
 	p->agent_state_charge_class = RESOURCE_CHARGE_CLASS_COUNT;
 	p->agent_state_charged_pages = 0;
@@ -134,9 +141,10 @@ agent_context_is_empty(const struct proc *p)
 	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
 		if (p->agent_context_sidecar_kva[page] != 0)
 			return 0;
+	if (p->agent_ipc_observe_cold != 0)
+		return 0;
 	for (uint page = 0; page < AGENT_CONTEXT_PAGES; page++)
-		if (p->agent_ctx_kva[page] != 0 ||
-		    p->agent_shadow_kva[page] != 0)
+		if (p->agent_ctx_kva[page] != 0)
 			return 0;
 	return 1;
 }
@@ -153,6 +161,8 @@ agent_state_reservation_ready(struct proc *p)
 	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
 		if (p->agent_context_sidecar_kva[page] == 0)
 			return 0;
+	if (p->agent_ipc_observe_cold == 0)
+		return 0;
 	return 1;
 }
 
@@ -162,8 +172,7 @@ agent_context_ready(struct proc *p)
 	if (!agent_state_reservation_ready(p))
 		return 0;
 	for (uint page = 0; page < AGENT_CONTEXT_PAGES; page++)
-		if (p->agent_ctx_kva[page] == 0 ||
-		    p->agent_shadow_kva[page] == 0)
+		if (p->agent_ctx_kva[page] == 0)
 			return 0;
 	return 1;
 }
@@ -401,7 +410,7 @@ agent_context_append_receipt_commit(
 int
 agent_context_alloc(struct proc *p)
 {
-	void *pages[AGENT_CONTEXT_SIDECAR_PAGE_COUNT];
+	void *pages[AGENT_PRIVATE_STATE_PAGE_COUNT];
 	struct resource_account_handle account;
 	enum resource_charge_class charge_class;
 	struct resource_reservation reservation;
@@ -431,7 +440,7 @@ agent_context_alloc(struct proc *p)
 		return -1;
 	}
 	intr_restore(enabled);
-	while (allocated < AGENT_CONTEXT_SIDECAR_PAGE_COUNT) {
+	while (allocated < AGENT_PRIVATE_STATE_PAGE_COUNT) {
 		pages[allocated] =
 			kalloc_account_page(account, charge_class);
 		if (pages[allocated] == 0)
@@ -455,6 +464,7 @@ agent_context_alloc(struct proc *p)
 	}
 	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
 		p->agent_context_sidecar_kva[page] = (uint64)pages[page];
+	p->agent_ipc_observe_cold = pages[AGENT_CONTEXT_SIDECAR_PAGE_COUNT];
 	p->agent_state_account = account;
 	p->agent_state_charge_class = charge_class;
 	p->agent_state_charged_pages = AGENT_STATE_PAGE_COUNT;
@@ -472,7 +482,7 @@ fail:
 void
 agent_context_free(struct proc *p)
 {
-	void *pages[AGENT_CONTEXT_SIDECAR_PAGE_COUNT];
+	void *pages[AGENT_PRIVATE_STATE_PAGE_COUNT];
 	struct resource_account_handle account;
 	enum resource_charge_class charge_class;
 	struct resource_request request = {
@@ -497,8 +507,9 @@ agent_context_free(struct proc *p)
 	charge_class = p->agent_state_charge_class;
 	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
 		pages[page] = (void *)p->agent_context_sidecar_kva[page];
+	pages[AGENT_CONTEXT_SIDECAR_PAGE_COUNT] = p->agent_ipc_observe_cold;
 	agent_context_metadata_reset(p);
-	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
+	for (uint page = 0; page < AGENT_PRIVATE_STATE_PAGE_COUNT; page++)
 		(void)kfree_account_page(pages[page], account,
 					 charge_class);
 	if (resource_release_many(account, charge_class, &request, 1) < 0)
@@ -633,18 +644,22 @@ agent_context_layout_ok(void)
 		return 0;
 	if (AGENT_CONTEXT_RECORDS_OFFSET != PAGE_SIZE)
 		return 0;
+	if (AGENT_CONTEXT_LATEST_RESPONSE_OFFSET + sizeof(struct agent_result) >
+		    AGENT_CONTEXT_PUBLISH_SEQUENCE_OFFSET ||
+	    AGENT_CONTEXT_PUBLISH_SEQUENCE_OFFSET + sizeof(uint64) !=
+		    AGENT_CONTEXT_RECORDS_OFFSET)
+		return 0;
 	cache_offset = AGENT_CONTEXT_RECORDS_OFFSET +
 		       AGENT_CONTEXT_MAX_RECORDS *
 			       sizeof(struct agent_context_record);
-	return cache_offset < AGENT_CONTEXT_SIZE;
+	return cache_offset <= AGENT_CONTEXT_KERNEL_PAGES * PAGE_SIZE &&
+	       AGENT_CONTEXT_KERNEL_PAGES + 1 == AGENT_CONTEXT_PAGES;
 }
 
 static uint64
 agent_context_user_cache_offset(void)
 {
-	return AGENT_CONTEXT_RECORDS_OFFSET +
-	       AGENT_CONTEXT_MAX_RECORDS *
-		       sizeof(struct agent_context_record);
+	return AGENT_CONTEXT_KERNEL_PAGES * PAGE_SIZE;
 }
 
 static uint64
@@ -653,20 +668,6 @@ agent_context_user_cache_size(void)
 	uint64 offset = agent_context_user_cache_offset();
 
 	return offset < AGENT_CONTEXT_SIZE ? AGENT_CONTEXT_SIZE - offset : 0;
-}
-
-static void
-agent_context_free_shadow(uint64 *kva,
-			  struct resource_account_handle account,
-			  enum resource_charge_class charge_class)
-{
-	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
-		if (kva[i] != 0) {
-			(void)kfree_account_page((void *)kva[i], account,
-						 charge_class);
-			kva[i] = 0;
-		}
-	}
 }
 
 static char *
@@ -685,6 +686,7 @@ agent_context_array_ptr(uint64 *kva, uint64 offset, uint64 len)
 	return (char *)(kva[page] + page_offset);
 }
 
+#ifdef AGENT_CONTEXT_SYNC_TEST_PROFILE
 static int
 agent_context_array_read(uint64 *kva, uint64 offset, char *dst, uint64 len)
 {
@@ -709,6 +711,7 @@ agent_context_array_read(uint64 *kva, uint64 offset, char *dst, uint64 len)
 	}
 	return 0;
 }
+#endif
 
 static int
 agent_context_array_write(uint64 *kva, uint64 offset, char *src, uint64 len)
@@ -735,34 +738,6 @@ agent_context_array_write(uint64 *kva, uint64 offset, char *src, uint64 len)
 	return 0;
 }
 
-struct agent_context_publish_range {
-	uint64 offset;
-	uint64 length;
-};
-
-static int
-agent_context_array_range_ready(uint64 *kva, uint64 offset, uint64 len)
-{
-	uint64 page;
-	uint64 page_offset;
-	uint64 n;
-
-	if (offset + len < offset || offset + len > AGENT_CONTEXT_SIZE)
-		return 0;
-	while (len > 0) {
-		page = offset / PAGE_SIZE;
-		page_offset = offset % PAGE_SIZE;
-		if (page >= AGENT_CONTEXT_PAGES || kva[page] == 0)
-			return 0;
-		n = PAGE_SIZE - page_offset;
-		if (n > len)
-			n = len;
-		offset += n;
-		len -= n;
-	}
-	return 1;
-}
-
 #ifdef AGENT_CONTEXT_SYNC_TEST_PROFILE
 static int
 agent_context_test_sync_failure(struct proc *p)
@@ -784,27 +759,11 @@ agent_context_test_sync_failure(struct proc *p)
 }
 #endif
 
-/*
- * Validate every fixed mapping before changing the trusted shadow.  The
- * Context lane prevents teardown or remapping between prepare and commit, so
- * the later mirror copies are infallible unless a kernel invariant is broken.
- */
 static int
-agent_context_publish_prepare(struct proc *p,
-			      const struct agent_context_publish_range *ranges,
-			      uint count)
+agent_context_publish_prepare(struct proc *p)
 {
-	if (!agent_context_ready(p) || ranges == 0 || count == 0)
+	if (!agent_context_ready(p))
 		return -1;
-	for (uint i = 0; i < count; i++)
-		if (ranges[i].length == 0 ||
-		    !agent_context_array_range_ready(p->agent_shadow_kva,
-					     ranges[i].offset,
-					     ranges[i].length) ||
-		    !agent_context_array_range_ready(p->agent_ctx_kva,
-					     ranges[i].offset,
-					     ranges[i].length))
-			return -1;
 #ifdef AGENT_CONTEXT_SYNC_TEST_PROFILE
 	if (agent_context_test_sync_failure(p) != 0)
 		return -1;
@@ -812,47 +771,42 @@ agent_context_publish_prepare(struct proc *p,
 	return 0;
 }
 
-static int
-agent_context_sync_range(struct proc *p, uint64 offset, uint64 len)
+static uint64 *
+agent_context_publish_sequence(struct proc *p)
 {
-	char buf[128];
-	uint64 n;
-
-	if (offset + len < offset || offset + len > AGENT_CONTEXT_SIZE)
-		return -1;
-	while (len > 0) {
-		n = len > sizeof(buf) ? sizeof(buf) : len;
-		if (agent_context_array_read(p->agent_shadow_kva, offset, buf, n) <
-			    0 ||
-		    agent_context_array_write(p->agent_ctx_kva, offset, buf, n) <
-			    0)
-			return -1;
-		offset += n;
-		len -= n;
-	}
-	return 0;
+	return (uint64 *)agent_context_array_ptr(
+		p->agent_ctx_kva, AGENT_CONTEXT_PUBLISH_SEQUENCE_OFFSET,
+		sizeof(uint64));
 }
 
 static void
-agent_context_publish_commit(struct proc *p,
-			     const struct agent_context_publish_range *ranges,
-			     uint count)
+agent_context_publish_begin(struct proc *p)
 {
-	for (uint i = 0; i < count; i++) {
-		if (!agent_context_array_range_ready(p->agent_shadow_kva,
-					      ranges[i].offset,
-					      ranges[i].length) ||
-		    !agent_context_array_range_ready(p->agent_ctx_kva,
-					      ranges[i].offset,
-					      ranges[i].length) ||
-		    agent_context_sync_range(p, ranges[i].offset,
-					 ranges[i].length) < 0)
-			panic("Agent context prepared commit");
-	}
+	uint64 *sequence = agent_context_publish_sequence(p);
+	uint64 previous;
+
+	if (sequence == 0)
+		panic("Agent context publish sequence");
+	previous = __atomic_fetch_add(sequence, 1, __ATOMIC_ACQ_REL);
+	if ((previous & 1) != 0 || previous >= ~0ULL - 1)
+		panic("Agent context overlapping publish");
 }
 
 static void
-agent_context_shadow_zero(struct proc *p, uint64 offset, uint64 len)
+agent_context_publish_end(struct proc *p)
+{
+	uint64 *sequence = agent_context_publish_sequence(p);
+	uint64 previous;
+
+	if (sequence == 0)
+		panic("Agent context publish sequence");
+	previous = __atomic_fetch_add(sequence, 1, __ATOMIC_RELEASE);
+	if ((previous & 1) == 0)
+		panic("Agent context publish completion");
+}
+
+static void
+agent_context_managed_zero_range(struct proc *p, uint64 offset, uint64 len)
 {
 	char zero[128];
 	uint64 n;
@@ -860,19 +814,34 @@ agent_context_shadow_zero(struct proc *p, uint64 offset, uint64 len)
 	memset(zero, 0, sizeof(zero));
 	while (len > 0) {
 		n = len > sizeof(zero) ? sizeof(zero) : len;
-		if (agent_context_array_write(p->agent_shadow_kva, offset,
+		if (agent_context_array_write(p->agent_ctx_kva, offset,
 					      zero, n) < 0)
-			panic("Agent context prepared zero");
+			panic("Agent context managed zero");
 		offset += n;
 		len -= n;
 	}
+}
+
+static void
+agent_context_managed_zero(struct proc *p)
+{
+	uint64 after_sequence = AGENT_CONTEXT_PUBLISH_SEQUENCE_OFFSET +
+				sizeof(uint64);
+
+	agent_context_managed_zero_range(
+		p, AGENT_CONTEXT_HEADER_OFFSET,
+		AGENT_CONTEXT_PUBLISH_SEQUENCE_OFFSET -
+			AGENT_CONTEXT_HEADER_OFFSET);
+	agent_context_managed_zero_range(
+		p, after_sequence,
+		agent_context_user_cache_offset() - after_sequence);
 }
 
 static struct agent_context_header *
 agent_context_header_ptr(struct proc *p)
 {
 	return (struct agent_context_header *)agent_context_array_ptr(
-		p->agent_shadow_kva, AGENT_CONTEXT_HEADER_OFFSET,
+		p->agent_ctx_kva, AGENT_CONTEXT_HEADER_OFFSET,
 		sizeof(struct agent_context_header));
 }
 
@@ -880,7 +849,7 @@ static struct agent_result *
 agent_context_latest_ptr(struct proc *p)
 {
 	return (struct agent_result *)agent_context_array_ptr(
-		p->agent_shadow_kva, AGENT_CONTEXT_LATEST_RESPONSE_OFFSET,
+		p->agent_ctx_kva, AGENT_CONTEXT_LATEST_RESPONSE_OFFSET,
 		sizeof(struct agent_result));
 }
 
@@ -891,33 +860,9 @@ agent_context_record_offset(uint64 slot)
 	       slot * sizeof(struct agent_context_record);
 }
 
-static void
-agent_context_append_ranges(struct proc *p,
-			    struct agent_context_publish_range ranges[3])
-{
-	uint64 slot = p->context_path_head % p->context_path_capacity;
-
-	ranges[0].offset = agent_context_record_offset(slot);
-	ranges[0].length = sizeof(struct agent_context_record);
-	ranges[1].offset = AGENT_CONTEXT_LATEST_RESPONSE_OFFSET;
-	ranges[1].length = sizeof(struct agent_result);
-	ranges[2].offset = AGENT_CONTEXT_HEADER_OFFSET;
-	ranges[2].length = sizeof(struct agent_context_header);
-}
-
-static void
-agent_context_full_ranges(struct agent_context_publish_range ranges[2])
-{
-	ranges[0].offset = sizeof(struct agent_context_header);
-	ranges[0].length = agent_context_user_cache_offset() - ranges[0].offset;
-	ranges[1].offset = AGENT_CONTEXT_HEADER_OFFSET;
-	ranges[1].length = sizeof(struct agent_context_header);
-}
-
 int
 agent_context_append_prepare(struct proc *p, uint64 sequence)
 {
-	struct agent_context_publish_range ranges[3];
 	struct thread *t = curr_thread();
 
 	if (p == 0 || p->agent_ctx_base == 0 ||
@@ -928,16 +873,15 @@ agent_context_append_prepare(struct proc *p, uint64 sequence)
 	    p->agent_context_lane_depth == 0 ||
 	    sequence != p->agent_call_count + 1)
 		return -1;
-	agent_context_append_ranges(p, ranges);
-	return agent_context_publish_prepare(p, ranges, 3);
+	return agent_context_publish_prepare(p);
 }
 
 static void
-agent_context_write_record_shadow(struct proc *p, uint64 slot,
-				  struct agent_context_record *record)
+agent_context_write_record(struct proc *p, uint64 slot,
+			   struct agent_context_record *record)
 {
 	if (p == 0 || record == 0 || slot >= p->context_path_capacity ||
-	    agent_context_array_write(p->agent_shadow_kva,
+	    agent_context_array_write(p->agent_ctx_kva,
 				      agent_context_record_offset(slot),
 				      (char *)record, sizeof(*record)) < 0)
 		panic("Agent context prepared record");
@@ -1000,19 +944,7 @@ agent_context_write_header_locked(struct proc *p)
 	if (header == 0)
 		return -1;
 	agent_context_fill_header(p, header);
-	return agent_context_sync_range(p, AGENT_CONTEXT_HEADER_OFFSET,
-					sizeof(*header));
-}
-
-static void
-agent_context_write_header_shadow(struct proc *p)
-{
-	struct agent_context_header *header;
-
-	header = agent_context_header_ptr(p);
-	if (header == 0)
-		panic("Agent context prepared header");
-	agent_context_fill_header(p, header);
+	return 0;
 }
 
 static int
@@ -1028,24 +960,7 @@ agent_context_write_latest(struct proc *p, struct agent_result *latest)
 		memset(dst, 0, sizeof(*dst));
 		dst->version = AGENT_CALL_VERSION;
 	}
-	return agent_context_sync_range(p, AGENT_CONTEXT_LATEST_RESPONSE_OFFSET,
-					sizeof(*dst));
-}
-
-static void
-agent_context_write_latest_shadow(struct proc *p,
-				  const struct agent_result *latest)
-{
-	struct agent_result *dst = agent_context_latest_ptr(p);
-
-	if (dst == 0)
-		panic("Agent context prepared latest");
-	if (latest != 0)
-		memmove(dst, latest, sizeof(*dst));
-	else {
-		memset(dst, 0, sizeof(*dst));
-		dst->version = AGENT_CALL_VERSION;
-	}
+	return 0;
 }
 
 int
@@ -1061,9 +976,8 @@ agent_context_init(struct proc *p)
 	    agent_context_clear(p) < 0)
 		return -1;
 	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
-		if (p->agent_shadow_kva[i] == 0 || p->agent_ctx_kva[i] == 0)
+		if (p->agent_ctx_kva[i] == 0)
 			return -1;
-		memset((void *)p->agent_shadow_kva[i], 0, PAGE_SIZE);
 		memset((void *)p->agent_ctx_kva[i], 0, PAGE_SIZE);
 	}
 	p->agent_call_count = 0;
@@ -1087,18 +1001,19 @@ agent_context_init(struct proc *p)
 	p->agent_provenance_edges = 0;
 	if (agent_context_path_index_reset(p, branch_generation) < 0)
 		return -1;
-	if (agent_context_write_header_locked(p) < 0)
-		return -1;
-	return agent_context_write_latest(p, 0);
+	agent_context_publish_begin(p);
+	if (agent_context_write_latest(p, 0) < 0 ||
+	    agent_context_write_header_locked(p) < 0)
+		panic("Agent context initial publish");
+	agent_context_publish_end(p);
+	return 0;
 }
 
 int
 agent_context_map(struct proc *p)
 {
 	char *mem;
-	char *shadow;
 	uint64 ctx_kva[AGENT_CONTEXT_PAGES];
-	uint64 shadow_kva[AGENT_CONTEXT_PAGES];
 	uint64 va;
 	int mapped = 0;
 
@@ -1106,10 +1021,9 @@ agent_context_map(struct proc *p)
 	    !agent_state_reservation_ready(p))
 		return -1;
 	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++)
-		if (p->agent_ctx_kva[i] != 0 || p->agent_shadow_kva[i] != 0)
+		if (p->agent_ctx_kva[i] != 0)
 			return -1;
 	memset(ctx_kva, 0, sizeof(ctx_kva));
-	memset(shadow_kva, 0, sizeof(shadow_kva));
 	for (va = AGENT_CONTEXT_BASE;
 	     va < AGENT_CONTEXT_BASE + AGENT_CONTEXT_SIZE;
 	     va += PAGE_SIZE) {
@@ -1117,36 +1031,23 @@ agent_context_map(struct proc *p)
 					  p->agent_state_charge_class);
 		if (mem == 0)
 			goto bad;
-		shadow = kalloc_account_page(p->agent_state_account,
-					     p->agent_state_charge_class);
-		if (shadow == 0) {
-			(void)kfree_account_page(mem, p->agent_state_account,
-						 p->agent_state_charge_class);
-			goto bad;
-		}
 		memset(mem, 0, PAGE_SIZE);
-		memset(shadow, 0, PAGE_SIZE);
 		if (mappages(p->pagetable, va, PAGE_SIZE, (uint64)mem,
-			     PTE_R | PTE_W | PTE_U) != 0) {
+			     PTE_R | PTE_U |
+			     (mapped < AGENT_CONTEXT_KERNEL_PAGES ? 0 : PTE_W)) != 0) {
 			(void)kfree_account_page(mem, p->agent_state_account,
-						 p->agent_state_charge_class);
-			(void)kfree_account_page(shadow, p->agent_state_account,
 						 p->agent_state_charge_class);
 			goto bad;
 		}
 		ctx_kva[mapped] = (uint64)mem;
-		shadow_kva[mapped] = (uint64)shadow;
 		mapped++;
 	}
 	memmove(p->agent_ctx_kva, ctx_kva, sizeof(ctx_kva));
-	memmove(p->agent_shadow_kva, shadow_kva, sizeof(shadow_kva));
 	return 0;
 
 bad:
 	if (mapped > 0)
 		uvmunmap(p->pagetable, AGENT_CONTEXT_BASE, mapped, 1);
-	agent_context_free_shadow(shadow_kva, p->agent_state_account,
-				  p->agent_state_charge_class);
 	return -1;
 }
 
@@ -1166,7 +1067,8 @@ agent_alias_exec_context(struct proc *p, pagetable_t pagetable)
 		if (p->agent_ctx_kva[i] == 0 ||
 		    mappages(pagetable, p->agent_ctx_base + i * PAGE_SIZE,
 			     PAGE_SIZE, p->agent_ctx_kva[i],
-			     PTE_U | PTE_R | PTE_W) < 0)
+			     PTE_U | PTE_R |
+			     (i < AGENT_CONTEXT_KERNEL_PAGES ? 0 : PTE_W)) < 0)
 			goto fail;
 		mapped++;
 	}
@@ -1181,7 +1083,7 @@ fail:
 void
 agent_unmap_exec_context(struct proc *p, pagetable_t pagetable)
 {
-	/* Mapping ownership follows Context state, not the mutable role bit. */
+	/* 映射所有权跟随 Context 状态，不跟随可变角色位。 */
 	if (p != 0 && pagetable != 0 && p->agent_ctx_base != 0)
 		uvmunmap(pagetable, p->agent_ctx_base, AGENT_CONTEXT_PAGES, 0);
 }
@@ -1214,9 +1116,6 @@ agent_free_proc_context(struct proc *p)
 	}
 	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++)
 		p->agent_ctx_kva[i] = 0;
-	agent_context_free_shadow(p->agent_shadow_kva,
-				  p->agent_state_account,
-				  p->agent_state_charge_class);
 	agent_context_free(p);
 }
 
@@ -1228,7 +1127,6 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 {
 	struct agent_context_append_receipt receipt;
 	struct agent_context_detail detail;
-	struct agent_context_publish_range ranges[3];
 	struct agent_context_record record;
 	struct thread *t = curr_thread();
 	uint64 slot;
@@ -1242,7 +1140,6 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 	    latest->sequence != p->agent_call_count)
 		return -1;
 	slot = p->context_path_head % p->context_path_capacity;
-	agent_context_append_ranges(p, ranges);
 
 	memset(&record, 0, sizeof(record));
 	record.sequence = latest->sequence;
@@ -1279,7 +1176,8 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 				p->agent_current_cause_pid,
 				p->agent_current_cause_control) < 0)
 		return -1;
-	agent_context_write_record_shadow(p, slot, &record);
+	agent_context_publish_begin(p);
+	agent_context_write_record(p, slot, &record);
 	if (p->context_path_count < p->context_path_capacity) {
 		if (p->context_path_count == 0)
 			p->context_path_oldest = latest->sequence;
@@ -1300,9 +1198,10 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 	p->agent_current_cause_pid = p->pid;
 	p->agent_current_cause_control = p->agent_control_id;
 	p->agent_current_span_id = record.span_id;
-	agent_context_write_latest_shadow(p, latest);
-	agent_context_write_header_shadow(p);
-	agent_context_publish_commit(p, ranges, 3);
+	if (agent_context_write_latest(p, latest) < 0 ||
+	    agent_context_write_header_locked(p) < 0)
+		panic("Agent context direct publish");
+	agent_context_publish_end(p);
 	agent_observe_record_context(p, &record, authority_effect, causal_audit);
 	return 0;
 }
@@ -1570,7 +1469,6 @@ int
 sys_context_snapshot(uint64 headeraddr, uint64 recordsaddr, int max)
 {
 	struct proc *p = curr_proc();
-	struct agent_context_publish_range ranges[2];
 	struct agent_context_header *header;
 	int result;
 
@@ -1580,13 +1478,10 @@ sys_context_snapshot(uint64 headeraddr, uint64 recordsaddr, int max)
 		return -1;
 	if (agent_lifecycle_context_lane_enter(p) < 0)
 		return -1;
-	agent_context_full_ranges(ranges);
-	if (agent_context_publish_prepare(p, ranges, 2) < 0) {
+	if (agent_context_publish_prepare(p) < 0) {
 		result = AGENT_STATUS_NO_SPACE;
 		goto out;
 	}
-	agent_context_write_header_shadow(p);
-	agent_context_publish_commit(p, ranges, 2);
 	header = agent_context_header_ptr(p);
 	if (header == 0) {
 		result = AGENT_STATUS_NO_SPACE;
@@ -1649,12 +1544,6 @@ int
 sys_context_rollback(uint64 sequence)
 {
 	struct proc *p = curr_proc();
-	struct agent_context_publish_range ranges[2] = {
-		{ AGENT_CONTEXT_LATEST_RESPONSE_OFFSET,
-		  sizeof(struct agent_result) },
-		{ AGENT_CONTEXT_HEADER_OFFSET,
-		  sizeof(struct agent_context_header) },
-	};
 	struct agent_context_path_summary source_summary;
 	struct agent_context_path_index *path_index;
 	struct agent_context_record record;
@@ -1707,7 +1596,7 @@ sys_context_rollback(uint64 sequence)
 		result = AGENT_STATUS_NOT_FOUND;
 		goto out;
 	}
-	if (agent_context_publish_prepare(p, ranges, 2) < 0) {
+	if (agent_context_publish_prepare(p) < 0) {
 		result = AGENT_STATUS_NO_SPACE;
 		goto out;
 	}
@@ -1723,6 +1612,7 @@ sys_context_rollback(uint64 sequence)
 	path_index = agent_context_path_index(p);
 	if (path_index == 0)
 		panic("Agent context rollback path index");
+	agent_context_publish_begin(p);
 	path_index->magic = 0;
 	if (agent_context_active_rebuild(
 		    p, sequence, path_index->successors,
@@ -1765,9 +1655,10 @@ sys_context_rollback(uint64 sequence)
 	path_index->magic = AGENT_CONTEXT_PATH_INDEX_MAGIC;
 	if (!agent_context_path_index_matches(p, path_index))
 		panic("Agent context rollback summary");
-	agent_context_write_latest_shadow(p, &latest);
-	agent_context_write_header_shadow(p);
-	agent_context_publish_commit(p, ranges, 2);
+	if (agent_context_write_latest(p, &latest) < 0 ||
+	    agent_context_write_header_locked(p) < 0)
+		panic("Agent context rollback publish");
+	agent_context_publish_end(p);
 	result = 0;
 out:
 	agent_lifecycle_context_lane_leave(p);
@@ -1778,7 +1669,6 @@ int
 sys_context_clear(void)
 {
 	struct proc *p = curr_proc();
-	struct agent_context_publish_range ranges[2];
 	uint64 span_id;
 	uint64 branch_generation;
 	int result;
@@ -1787,9 +1677,8 @@ sys_context_clear(void)
 		return -1;
 	if (agent_lifecycle_context_lane_enter(p) < 0)
 		return -1;
-	agent_context_full_ranges(ranges);
 	if (p->agent_control_id == 0 ||
-	    agent_context_publish_prepare(p, ranges, 2) < 0 ||
+	    agent_context_publish_prepare(p) < 0 ||
 	    (span_id = agent_observe_alloc_span_id()) == 0 ||
 	    agent_context_new_branch(p, &branch_generation) < 0 ||
 	    agent_context_clear(p) < 0) {
@@ -1816,11 +1705,12 @@ sys_context_clear(void)
 	p->agent_provenance_edges = 0;
 	if (agent_context_path_index_reset(p, branch_generation) < 0)
 		panic("Agent context cleared path index");
-	agent_context_shadow_zero(p, AGENT_CONTEXT_HEADER_OFFSET,
-				  agent_context_user_cache_offset());
-	agent_context_write_latest_shadow(p, 0);
-	agent_context_write_header_shadow(p);
-	agent_context_publish_commit(p, ranges, 2);
+	agent_context_publish_begin(p);
+	agent_context_managed_zero(p);
+	if (agent_context_write_latest(p, 0) < 0 ||
+	    agent_context_write_header_locked(p) < 0)
+		panic("Agent context clear publish");
+	agent_context_publish_end(p);
 	result = 0;
 out:
 	agent_lifecycle_context_lane_leave(p);

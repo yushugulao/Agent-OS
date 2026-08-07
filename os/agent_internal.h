@@ -19,13 +19,6 @@ struct agent_role_policy {
 	int sched_weight;
 };
 
-struct agent_endpoint_handle {
-	int slot;
-	int pid;
-	uint scope_id;
-	uint64 control_id;
-};
-
 struct agent_controller_departure {
 	struct workflow_lifecycle_key lifecycle;
 	uint scope_id;
@@ -95,12 +88,7 @@ int agent_identity_controller_close_commit(
 	struct proc *, const struct agent_controller_departure *);
 
 /* Workflow-controller lifetime and generation-safe control identities. */
-/* Trusted endpoint routing; callers hold the process-table interrupt guard. */
 void agent_ipc_init(void);
-void agent_ipc_endpoint_capture_locked(struct agent_endpoint_handle *,
-				       struct proc *);
-struct proc *agent_ipc_endpoint_resolve_locked(
-	struct agent_endpoint_handle *);
 void agent_ipc_remove_source(uint64);
 void agent_ipc_proc_prepare(struct proc *);
 void agent_ipc_proc_reset(struct proc *);
@@ -165,9 +153,6 @@ int agent_metadata_tool_enter(int);
 void agent_metadata_tool_exit(int);
 int agent_metadata_execute_tool(struct proc *, struct agent_op *,
 				struct agent_result *);
-int agent_metadata_prefetch_handoff(struct agent_endpoint_handle *,
-				    struct agent_endpoint_handle *);
-
 /* Observation identities and bounded-query scheduling. */
 void agent_observe_init(void);
 void agent_observe_proc_init(struct proc *, int, uint64);
@@ -189,12 +174,4 @@ void agent_observe_record_event(int, struct proc *, struct agent_event *,
 				uint64, uint64);
 void agent_observe_record_effect(struct proc *, int, int, char *, uint64,
 				 uint64, uint64, uint64, int);
-void agent_observe_record_prefetch(struct proc *,
-				   struct agent_file_prefetch_hint *,
-				   uint64, char *, int);
-void agent_observe_record_prefetch_handoff_locked(
-	int, uint64, struct proc *, struct agent_file_prefetch_hint *,
-	uint64, char *, uint64);
-int agent_observe_prefetch_span_snapshot(struct proc *, uint64, int);
-
 #endif

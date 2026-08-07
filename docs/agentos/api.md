@@ -31,17 +31,15 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 560；其中 543、544�
 | `agent_unwatch` | 518 | `int agent_unwatch(int, const char *)` | 删除匹配 watch；`AGENT_EVENT_NONE` 加空 filter 表示清空全部 watch |
 | `context_detail` | 519 | `int context_detail(uint64, struct agent_context_detail *)` | 按 sequence 查询完整工具调用详情 |
 | `agent_wait_cancel` | 520 | `int agent_wait_cancel(int pid, const char *reason)` | 给目标 Agent 设置一次性等待取消令牌，并唤醒目标 |
-| `agent_sched_snapshot` | 521 | `int agent_sched_snapshot(struct agent_sched_record *, int)` | 查询当前 Agent 最近 16 次调度原因记录 |
+| `agent_sched_snapshot` | 521 | `int agent_sched_snapshot(struct agent_sched_record *, int)` | 查询当前 Agent 最近 8 次调度原因记录 |
 | `agent_trace_snapshot` | 522 | `int agent_trace_snapshot(struct agent_trace_record *, int)` | 合并返回当前 Agent 的 Context 摘要和调度原因短记录 |
 | `agent_audit_snapshot` | 523 | `int agent_audit_snapshot(struct agent_audit_record *, int)` | orchestrator 查询当前 workflow scope 的审计短记录 |
 | `agent_audit_query` | 524 | `int agent_audit_query(struct agent_audit_filter *, struct agent_audit_record *, int)` | 在当前 scope 可见审计窗口内过滤查询 |
 | `agent_sched_config` | 525 | `int agent_sched_config(struct agent_sched_config *)` | orchestrator 配置目标 Agent 的调度 policy、weight、priority 和 budget |
-| `agent_file_prefetch_snapshot` | 526 | `int agent_file_prefetch_snapshot(struct agent_file_prefetch_hint *, int)` | 查询当前 Agent 的文件 metadata 预取提示 |
-| `agent_file_prefetch_span_snapshot` | 527 | `int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *, int)` | 查询当前 scope/private-owner span 的文件 metadata 预取提示 |
 | `agent_span_trace_snapshot` | 528 | `int agent_span_trace_snapshot(struct agent_audit_record *, int)` | 当前 Agent 查询当前 span 的系统级短记录 |
-| `agent_timeline_snapshot` | 529 | `int agent_timeline_snapshot(struct agent_timeline_record *, int)` | 统一导出当前 Agent 可见的 Context、调度、审计和预取提示短记录 |
+| `agent_timeline_snapshot` | 529 | `int agent_timeline_snapshot(struct agent_timeline_record *, int)` | 统一导出当前 Agent 可见的 Context、调度和审计短记录 |
 | `agent_timeline_query` | 530 | `int agent_timeline_query(struct agent_timeline_filter *, struct agent_timeline_record *, int)` | 在统一 timeline 上执行内核侧过滤查询 |
-| `agent_provenance_snapshot` | 531 | `int agent_provenance_snapshot(struct agent_provenance_edge *, int)` | 导出当前 Agent 可见的 Context、审计和预取因果边 |
+| `agent_provenance_snapshot` | 531 | `int agent_provenance_snapshot(struct agent_provenance_edge *, int)` | 导出当前 Agent 可见的 Context 和审计因果边 |
 | `agent_timeline_wait` | 532 | `int agent_timeline_wait(struct agent_timeline_filter *, int)` | 等待当前可见 timeline 出现匹配记录或 timeout |
 | `agent_timeline_read` | 533 | `int agent_timeline_read(struct agent_timeline_filter *, struct agent_timeline_record *, int, int)` | 等待匹配 timeline 记录并在同一次 syscall 中复制记录 |
 | `agent_ledger_snapshot` | 534 | `int agent_ledger_snapshot(struct agent_ledger_summary *)` | orchestrator 读取当前 workflow scope 的运行账本摘要和链尾 hash |
@@ -53,7 +51,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 560；其中 543、544�
 | `agent_route_config` | 540 | `int agent_route_config(int, int, uint64, int)` | 为指定 source/target Agent 授予或撤销 `MESSAGE` / `LLM_DONE` 定向 IPC 路由 |
 | `agent_workflow_create` | 541 | `int agent_workflow_create(int role)` | 由可信 bootstrap factory 创建新的、内核签发的 workflow scope，并在其中创建根 Agent |
 | `agent_scope_delegate_fd` | 542 | `int agent_scope_delegate_fd(int fd)` | 为调用线程的下一次安全主体创建授予一个一次性 pipe fd 继承票据 |
-| `kernel_work_last_preemptions` | 543 | `long kernel_work_last_preemptions(void)` | 读取当前线程上一 syscall 的内核工作重调度次数 |
+| `kernel_work_last_preemptions` | 543 | `long kernel_work_last_preemptions(void)` | 读取当前线程上一 syscall 的内核工作重调度次数；短调用稳定返回 0 |
 | `io_policy_info` | 544 | `int io_policy_info(struct io_policy_info *)` | 读取当前持久 owner 和前台 I/O class 的预算、等待、物理传输及 cache 观测，不修改策略状态 |
 | `agent_workflow_close` | 545 | `int agent_workflow_close(uint64 scope_id)` | 由绑定根 controller 或可信 bootstrap factory 使 workflow 进入 CLOSING，并协作终止其全部成员 |
 | `agent_workflow_lifecycle_info` | 546 | `int agent_workflow_lifecycle_info(struct agent_workflow_lifecycle_info *, const struct agent_workflow_lifecycle_key *)` | 读取调用进程自身的 lifecycle/runtime 快照，并可精确比较 expected key；不查询其他进程，也不授予关闭权 |
@@ -63,11 +61,10 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 560；其中 543、544�
 | `sys_agent_heartbeat_set` / `agent_heartbeat_set` | 552 | `int sys_agent_heartbeat_set(uint64)` | 独立心跳设置入口；从调用时 tick 重新计算周期 |
 | `sys_agent_heartbeat_stop` / `agent_heartbeat_stop` | 553 | `int sys_agent_heartbeat_stop(void)` | 独立且幂等的心跳停止入口 |
 | `agent_audit_receipt` | 557 | `int agent_audit_receipt(struct agent_audit_receipt_request *)` | orchestrator 为当前 lifecycle 中的精确审计记录取得或等待持久性回执；结果区分 `PENDING`、`DURABLE`、`FAILED`，并拒绝陈旧 lifecycle 或伪造 receipt id |
-| `kernel_work_receipt_snapshot` | 558 | `int kernel_work_receipt_snapshot(struct kernel_work_receipt *)` | 读取当前线程上一 syscall 的有界内核工作回执 |
 | `agent_resource_snapshot` | 559 | `int agent_resource_snapshot(struct agent_resource_snapshot *)` | 仅允许 bootstrap 绑定的非 Agent 资源域管理员读取版本化全局资源计数和空闲页快照；普通 Agent 与普通进程均被拒绝 |
 | `agent_performance_snapshot` | 560 | `int agent_performance_snapshot(struct agent_performance_snapshot *)` | 仅允许由签名 bootstrap 策略建立的资源域观测 authority 读取版本化的全局累计性能计数；scope-local Agent capability 不能授予该全局权限 |
 
-`agent_run` 和 `context_snapshot` 是性能主路径。syscall 503/504 保持 V1 名称协议二进制兼容；新程序应优先使用 syscall 547/548 的 V2 sized typed KV 协议。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一可信 scope 和 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在可信 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者和精确 scope。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 在自己的 scope 内显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_workflow_create` 是唯一创建新 workflow security boundary 的用户 ABI，角色委派接口本身不能铸造新 scope；`agent_workflow_close` 是对应的可信终止 ABI，关闭权由生命周期账本中的唯一根 control id 或可信 factory 身份决定。`agent_workflow_lifecycle_info` 只是 self-only 观测/比较接口，其返回 key 不是可转移权限。`agent_scope_delegate_fd` 只让调用线程的下一次 workflow、Agent、worker 或降权普通子主体显式携带选中的 pipe 端点。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的 scope 内系统级观测入口；底层物理表共 512 槽，但调用者最多看到自己的 128 槽配额窗口。`agent_ledger_snapshot` 在同一 scope 的逻辑账本上返回可见范围、总量、已淘汰数、分类计数和账本 hash。
+`agent_run` 和 `context_snapshot` 是性能主路径。syscall 503/504 保持 V1 名称协议二进制兼容；新程序应优先使用 syscall 547/548 的 V2 sized typed KV 协议。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在可信 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context 和事件来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度和审计转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者和精确 scope。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 在自己的 scope 内显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_workflow_create` 是唯一创建新 workflow security boundary 的用户 ABI，角色委派接口本身不能铸造新 scope；`agent_workflow_close` 是对应的可信终止 ABI，关闭权由生命周期账本中的唯一根 control id 或可信 factory 身份决定。`agent_workflow_lifecycle_info` 只是 self-only 观测/比较接口，其返回 key 不是可转移权限。`agent_scope_delegate_fd` 只让调用线程的下一次 workflow、Agent、worker 或降权普通子主体显式携带选中的 pipe 端点。`agent_provenance_snapshot` 导出同一可见范围内的 Context 和审计因果边，用于页面绘制可信动作之间的来源关系。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的 scope 内系统级观测入口；底层物理表共 512 槽，但调用者最多看到自己的 128 槽配额窗口。`agent_ledger_snapshot` 在同一 scope 的逻辑账本上返回可见范围、总量、已淘汰数、分类计数和账本 hash。
 
 `agent_resource_snapshot()` 使用 sized-prefix 输出：前两个字段始终是 `version` 与完整
 `struct_size`，较旧调用者可以传入较小但不低于 8 字节的缓冲区。`measured_mask` 明确
@@ -134,7 +131,7 @@ workflow 的 before 和最后一个 terminal after 执行一次全序列增长�
 
 `mailread` / `mailwrite` 保留 16 槽、每条最多 256 字节的 legacy PUBLIC 接口。普通 PUBLIC 仅能与同一 ACTIVE、generation-safe EXEC account 内的 PUBLIC 互通；workflow 内 PUBLIC 还必须命中相同 ACTIVE lifecycle key、动态 scope 和非零 OPEN controller lineage。每次进程发布和 PUBLIC exec 都获得新的 endpoint generation，PID 或 PCB 槽不能把旧队列授权带给新端点。Agent 端点、不同账户、缺失或失效 controller、跨 lifecycle/scope/lineage 均返回 `-1`。队列首次合法写入时按目标 EXEC account 分配两页 sidecar，空读不分配，排空后保留至 teardown 并在账户释放前退款。读取先在内核中保留队首，只有用户态 `copyout` 成功后才提交出队；失败会撤销读取保留而不丢消息。`mailread` 无消息时返回 0，成功时返回读取字节数；目标不存在、长度非法、队列满或用户指针错误也返回 `-1`。
 
-`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回对应 syscall ID 的累计进入次数，查询 `SYS_trace` 时本次 `trace` 调用也计入。AgentOS-uCore 的镜像构建器从配套 ELF 提取只读可执行段与可写段的页对齐分界点，loader 校验该布局后把代码页映射为 RX，把数据、bss、用户栈和 Agent Context 映射为 RW+NX；用户页不会同时拥有写和执行权限。
+`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回已登记 syscall ID 的累计进入次数，未登记编号返回 0，超出 ABI 范围返回 -1；查询 `SYS_trace` 时本次 `trace` 调用也计入。计数使用紧凑内部槽并在 `INT_MAX` 饱和，不会按稀疏 ABI 编号放大每个进程的常驻空间。AgentOS-uCore 的镜像构建器从配套 ELF 提取只读可执行段与可写段的页对齐分界点，loader 校验该布局后把代码页映射为 RX，把数据、bss、用户栈和 Agent Context 映射为 RW+NX；用户页不会同时拥有写和执行权限。
 
 ### 块 I/O 策略观测
 
@@ -160,7 +157,9 @@ int io_policy_info(struct io_policy_info *info);
 | 前台机会流量门 | 560 | 280 |
 | 设备根 bucket | 560 | 280 |
 
-每个可能触盘的 syscall 先在 BIO 内取得 owner/shared 与 device 两级 reservation。每次真实 `disk_submit` 是唯一物理计费边界：两级 credit 在同一关中断窗口预留，提交或取消恰好一次。无竞争时，前台 owner 在自身 reserved bucket 后可借 shared；出现异域活动、排队、retire/quiesce 或既有 debt 后停止直接借用，`BACKGROUND` 不能借 shared。shared 永不带债；已接纳的有界原子请求可以在请求上界内形成 owner/device debt，由 quiescent checkpoint 或 teardown settlement 清偿。SYSTEM/CONTROL 保留进展仍受 protected aggregate envelope 约束。bucket 按 `last_refill_tick` 惰性补充，不再由周期 tick 扫描所有账户；没有物理提交的 reservation 退款，volatile overlay 命中不计费，写回块和最终 FLUSH 在统一提交边界分别计费。
+syscall 入口只计算一次策略位图，分别表示是否可能触盘、是否需要文件系统 epoch。普通短 syscall 的策略为零；`read`/`write` 只固定一次文件对象并按 inode 类型补位，`openat` 只在 create/truncate 时补充 epoch。BIO 准入、失败回滚和结算从同一事务上下文读取该策略，未知 syscall 保守进入慢路径。这样传统接口不再重复执行两套 syscall switch 和 FD 分类。
+
+每个可能触盘的 syscall 再在 BIO 内取得 owner/shared 与 device 两级 reservation。每次真实 `disk_submit` 是唯一物理计费边界：两级 credit 在同一关中断窗口预留，提交或取消恰好一次。无竞争时，前台 owner 在自身 reserved bucket 后可借 shared；出现异域活动、排队、retire/quiesce 或既有 debt 后停止直接借用，`BACKGROUND` 不能借 shared。shared 永不带债；已接纳的有界原子请求可以在请求上界内形成 owner/device debt，由 quiescent checkpoint 或 teardown settlement 清偿。SYSTEM/CONTROL 保留进展仍受 protected aggregate envelope 约束。bucket 按 `last_refill_tick` 惰性补充，不再由周期 tick 扫描所有账户；没有物理提交的 reservation 退款，volatile overlay 命中不计费，写回块和最终 FLUSH 在统一提交边界分别计费。
 
 设备根定义物理机会容量，owner/class 的保留总和和 shared gate 分别受编译期 envelope 约束。两级 reservation 只在 BIO 内保存紧凑来源/device receipt；shared 不带债，已接纳的有界原子请求可以形成有上界的 owner/device debt，由 checkpoint、teardown 和后续 refill 清偿。具体 burst/refill、active/retiring owner 上界与 cache floor/cap 以 `io_policy.h` 为准。
 
@@ -207,13 +206,13 @@ buffer cache 固定为 256 个 1 KiB buffer。SYSTEM 的 floor/cap 为 40/96，P
 | --- | --- |
 | 起始地址 | `AGENT_CONTEXT_BASE` |
 | 用户态计算 | `AGENT_TRAPFRAME - (16 + AGENT_CONTEXT_PAGES) * AGENT_PAGE_SIZE` |
-| 大小 | `AGENT_CONTEXT_SIZE = 6 * 4096` |
-| 当前大小 | 24576 字节 |
+| 大小 | `AGENT_CONTEXT_SIZE = 7 * 4096` |
+| 当前大小 | 28672 字节 |
 | 记录容量 | `AGENT_CONTEXT_MAX_RECORDS = 128` |
-| Context 版本 | `AGENT_CONTEXT_VERSION = 8` |
-| 权限 | Agent Context 用户镜像页可读写、不可执行；内核 shadow 副本不可被用户态访问 |
+| Context 版本 | `AGENT_CONTEXT_VERSION = 9` |
+| 权限 | 前 6 页用户只读、内核可写；末页用户可读写；全部不可执行 |
 
-说明：用户程序仍以 flat binary 内容装入，但镜像中的 `exec_layout_version` 和 `exec_rw_offset` 来自配套 ELF 并由 loader 重新校验。分界点之前的程序页为 RX，之后的数据和 bss 页为 RW+NX；Agent Context、用户栈同样为 RW+NX。布局缺失、超出有效范围或要求 W+X 的映像不会被装载。
+说明：用户程序仍以 flat binary 内容装入，但镜像中的 `exec_layout_version` 和 `exec_rw_offset` 来自配套 ELF 并由 loader 重新校验。分界点之前的程序页为 RX，之后的数据、bss 和用户栈为 RW+NX。Agent Context 前 6 页为 R+NX，末页 cache 为 RW+NX。布局缺失、超出有效范围或要求 W+X 的映像不会被装载。
 
 布局：
 
@@ -221,19 +220,22 @@ buffer cache 固定为 256 个 1 KiB buffer。SYSTEM 的 floor/cap 为 40/96，P
 | --- | --- |
 | `0` | `struct agent_context_header` |
 | `sizeof(struct agent_context_header)` | `struct agent_result` |
+| `4088` | 只读 publication sequence，偶数表示稳定，奇数表示正在发布 |
 | `AGENT_CONTEXT_RECORDS_OFFSET = 4096` | `struct agent_context_record[128]` |
-| `header.user_cache_offset` | 用户自管 cache 起点，Context v8 为 23552 |
-| `header.user_cache_size` | 用户自管 cache 大小，Context v8 为 1024 |
+| `header.user_cache_offset` | 用户自管 cache 起点，Context v9 为 24576 |
+| `header.user_cache_size` | 用户自管 cache 大小，Context v9 为 4096 |
 
-Context ABI v8 在 header 中公开不可变 workflow lifecycle key、当前 `branch_generation`、`visible_head_sequence`、`active_path_count`、`active_path_oldest_sequence` 和 `eviction_policy`。每条 record 保存自己的 `branch_generation` 以及独立的 `path_parent_sequence`；后者描述本地分支父子关系，不复用可能来自跨 Agent IPC 的 provenance `cause_sequence`。初始化和 `context_clear()` 都从 lifecycle ledger 取得新的 branch generation；`context_rollback()` 同样创建新 branch，而不是重写旧 record 或复用旧 sequence。
+Context ABI v9 在 header 中公开不可变 workflow lifecycle key、当前 `branch_generation`、`visible_head_sequence`、`active_path_count`、`active_path_oldest_sequence` 和 `eviction_policy`。每条 record 保存自己的 `branch_generation` 以及独立的 `path_parent_sequence`；后者描述本地分支父子关系，不复用可能来自跨 Agent IPC 的 provenance `cause_sequence`。初始化和 `context_clear()` 都从 lifecycle ledger 取得新的 branch generation；`context_rollback()` 同样创建新 branch，而不是重写旧 record 或复用旧 sequence。
 
-内核在 `struct proc` 中保存 6 个用户镜像页和 6 个内核私有 shadow 页的映射句柄。header、latest result 和 record 的权威数据先写入 shadow 页，再同步到用户镜像页。最近 128 条完整 detail 及 source/span attribution 位于按活跃 Agent 分配的 9 页内核私有 sidecar。运行时把 9 sidecar + 6 mirror + 6 shadow 作为一次 21 页 `RESOURCE_AGENT_STATE_PAGE` 请求计入 EXEC account：原子预留后才逐页分配，任一失败都统一释放和退款，普通进程不承担这部分状态页。六项总状态预算为每进程/全局/ordinary 池/reserved 池/ordinary 域/reserved 域 `86016/11010048/8257536/2752512/5505024/688128` B；sidecar-only 的 36 KiB/Agent 与 4.5 MiB 全局指标只用于单独约束 detail 结构。用户态直接写镜像页不会改变 `context_query()`、`context_snapshot()` 或 `context_detail()` 返回的权威历史。
+内核和用户态共享同一组 Context 物理页。header、latest result 和 128 条 record 位于前 6 页，用户页表不授予写权限；内核直接更新这些页，不再维护 shadow、镜像副本或同步复制。第 7 页完整留给用户 cache，不参与可信历史。完整 detail 及 source/span attribution 位于 9 页 Context sidecar；IPC、事件来源归因、调度轨迹和观测状态共用一个 4 KiB 冷页。PCB 只保存页指针，使 `struct proc` 从 `23464` B 降为 `10024` B。
 
-同一进程的 sequence 接纳、工具执行、Context header/record、`sys_context_*`、IPC 记录、文件查询和 wait 归因通过可睡眠、FIFO、可重入的 Context commit lane 串行提交；同时需要 metadata 时固定按 `lane -> metadata` 加锁。append、rollback、clear 和 snapshot 在改变 shadow、sidecar 或 PCB 字段前一次预检所有待发布的 shadow/mirror 页；预检成功后固定映射由 commit lane 保持，提交阶段不再返回可恢复错误。append 按 record、latest、header 顺序复制，clear/snapshot 按 managed body、header 顺序复制，header 始终最后发布。`agent_call_count`/header `total_calls` 表示已经接纳并保留的调用序号，可在慢调用执行期间暂时领先；`latest_sequence` 是 result、record、hash 与 mirror 均发布后的已提交水位。
+运行时把 9 Context sidecar + 1 cold sidecar + 7 mapped pages 作为一次 17 页 `RESOURCE_AGENT_STATE_PAGE` 请求计入 EXEC account，共 `69632` B（68 KiB）。原子预留后才逐页分配，任一失败都统一释放和退款，普通进程不承担这些页。当前每进程/全局池/ordinary 池/reserved 池/ordinary 域/reserved 域基线为 `69632/8912896/6684672/2228224/4456448/557056` B，上限为 `73114/9358541/7018906/2339636/4679271/584909` B；实际门禁以 `ci/kernel-budgets.json` 为准。
 
-这里的“事务提交”只指 Context 自身的 shadow、sidecar、PCB 字段和 mirror 发布。事件投递、watch 配置、文件/metadata 更新等外部效果不是与 Context 记录组成的跨子系统事务；这些接口的返回语义以其主操作为准，Context system record 是同一 lane 内的运行归因。生产配置中固定映射预检后发布不应失败，若映射不变量在 commit 中破坏则内核 fail-stop，而不是在外部效果已发生后伪造回滚。
+同一进程的 sequence 接纳、工具执行、Context header/record、`sys_context_*`、IPC 记录、文件查询和 wait 归因通过可睡眠、FIFO、可重入的 Context commit lane 串行提交；同时需要 metadata 时固定按 `lane -> metadata` 加锁。append 按 record、latest、header 顺序直接写入只读视图的物理页，并以 4088 偏移处的奇偶序列包围整次发布；clear 跳过该序列且只清内核管理区，不覆盖用户 cache。`agent_call_count`/header `total_calls` 表示已经接纳并保留的调用序号，可在慢调用执行期间暂时领先；`latest_sequence` 是 result、record、hash 与 header 全部发布后的已提交水位。
 
-用户自管 cache 区位于 Context 尾部，不进入 shadow 权威历史，也不会被 `context_snapshot()` 刷新覆盖。它只用于 Agent 自己保存策略缓存、文件查询结构化结果或短期状态，不能作为内核可信历史。mirror 的 header-last 顺序方便低成本单线程读取，但当前 ABI 没有 publication epoch/seqlock；另一个线程在发布中直接读取 mirror 时，不保证得到原子多字段快照。需要并发一致或可信历史时必须调用 `context_snapshot()`；需要完整请求和完整响应时使用 `context_detail(sequence, out)`，不要把 16 字节短摘要 record 当作完整日志。
+这里的“事务提交”只指 Context 自身的可信页、sidecar 和 PCB 字段。事件投递、watch 配置、文件/metadata 更新等外部效果不是与 Context 记录组成的跨子系统事务；这些接口的返回语义以其主操作为准，Context system record 是同一 lane 内的运行归因。固定映射在提交前验证，若映射不变量在 commit 中破坏则内核 fail-stop，而不是在外部效果已发生后伪造回滚。
+
+用户自管 cache 独占末页，不进入权威历史，也不会被 `context_snapshot()` 覆盖。它只用于 Agent 保存策略缓存、文件查询结构化结果或短期状态，不能作为内核可信历史。发布顺序采用 Linux perf ring 的“先写数据、后 release 发布 head”原则，并增加奇偶序列处理 clear、rollback 和 FIFO 重用造成的 ABA。`context_direct_header_snapshot()` 和 `context_direct_active_query()` 以 acquire 读取 publication sequence，复制后再次核对同一偶数；发布竞争时最多重试 8 次，随后返回错误供调用者退回 syscall。active query 以 16 字节 slot 位图完成一次反向链校验和一次正向窗口扫描，复杂度从逐索引反向重走的 O(n²) 收敛为 O(n)。需要完整请求和完整响应时使用 `context_detail(sequence, out)`，不要把 16 字节短摘要 record 当作完整日志。
 
 固定容量达到 128 条后，内核按 `AGENT_CONTEXT_EVICT_FIFO` 淘汰最早物理记录，并通过 `oldest_sequence`、`dropped_records` 和 `eviction_policy` 明示 archive 窗口边界。FIFO 淘汰与 rollback 是两种不同机制：rollback 只移动当前分支的可见 head 和因果锚点，旧分支记录仍保持原 hash、sequence 与 branch identity，直到日后按统一 FIFO 容量规则自然离开窗口。`context_query()`/`context_snapshot()` 从 visible head 沿 path parent 返回 active path；若祖先已被 FIFO 淘汰，则 header 的 active count/oldest 收敛到仍保留的 suffix。`context_detail(sequence)` 继续提供 retained archive 的精确历史访问。
 
@@ -266,7 +268,7 @@ Context ABI v8 在 header 中公开不可变 workflow lifecycle key、当前 `br
 | `current_span_id` | 当前 Agent 因果链 span；同一链路中的记录和事件共享该值 |
 | `current_cause_sequence` | 当前记录或事件默认指向的前序 Context sequence |
 | `provenance_edges` | 已写入的非 root 因果关系数量 |
-| `observe_epoch` | 当前内核观测 epoch；Context、审计、调度和预取提示写入时递增 |
+| `observe_epoch` | 当前内核观测 epoch；Context、审计和调度写入时递增 |
 | `latest_response_offset` | latest result 在 Agent Context 中的偏移 |
 | `records_offset` | record 区在 Agent Context 中的偏移 |
 | `event_queue_count` / `event_count` / `event_dropped` | 当前队列长度、累计事件数和丢弃计数 |
@@ -304,7 +306,7 @@ Context ABI v8 在 header 中公开不可变 workflow lifecycle key、当前 `br
 
 数值 2 不属于 `filesystem_domain` 的可用 scope。它是磁盘容量契约中的安装级匿名 PUBLIC principal：当前系统没有 uid/tenant ABI，所以所有普通进程都用该稳定主体累计持久块和 inode，不随进程资源域退出或系统重启变化。对象授权仍由上表 scope 和 capability 决定，存储计费使用 VFS 凭据中独立的 `storage_principal_id`，不能相互替代。
 
-业务 capability 只回答“允许做哪类操作”，scope/owner 继续回答“允许操作哪个对象”。有效授权必须同时满足：调用进程属于仍 active 的内核签发 scope、capability 包含所需位、对象 scope 与主体 scope 精确相等；显式标为只读共享的 SYSTEM 对象只在对应读取路径上作为例外。Agent metadata、dependency、action history、编辑租约、版本状态、audit、span prefetch、IPC route 和 wait cancel 均使用该组合，不再把同一角色或同一 capability 解释为跨 workflow 权限。
+业务 capability 只回答“允许做哪类操作”，scope/owner 继续回答“允许操作哪个对象”。有效授权必须同时满足：调用进程属于仍 active 的内核签发 scope、capability 包含所需位、对象 scope 与主体 scope 精确相等；显式标为只读共享的 SYSTEM 对象只在对应读取路径上作为例外。Agent metadata、dependency、action history、编辑租约、版本状态、audit、IPC route 和 wait cancel 均使用该组合，不再把同一角色或同一 capability 解释为跨 workflow 权限。
 
 ### 创建和继承
 
@@ -347,9 +349,9 @@ raw syscall 使用 sized-prefix：`user_size` 至少为 8 字节，内核只复�
 
 ### 生命周期和配额
 
-scope 状态序列是 ACTIVE -> CLOSING -> RETIRING -> FREE。权威 `workflow_lifecycle` ledger 固定 8 槽，key 为 `(id,generation)`；自然耗尽可以从 ACTIVE 进入 RETIRING，强制关闭先进入 CLOSING。成员数降为 0 后，reaper 清理 metadata、dependency、action history、edit lease/version、digest cache、audit、span prefetch、IPC route 和普通文件。文件查询没有内核结果 cache；用户 Context cache 随所属 Agent 地址空间 teardown。只有 lifecycle 成员、退休工作、STORAGE usage 与 owner-scoped I/O request/lease/lane debt 全部归零，槽才回到 FREE，并在下一次使用时递增 generation；global device debt 不属于该槽，允许跨 owner lifecycle 并由设备根 refill 偿还；generation 耗尽时拒绝复用。`vfs_scope_refs[NPROC]` 仅用于 VFS 引用/清理，不是身份 ledger。
+scope 状态序列是 ACTIVE -> CLOSING -> RETIRING -> FREE。权威 `workflow_lifecycle` ledger 固定 8 槽，key 为 `(id,generation)`；自然耗尽可以从 ACTIVE 进入 RETIRING，强制关闭先进入 CLOSING。成员数降为 0 后，reaper 清理 metadata、dependency、action history、edit lease/version、digest cache、audit、IPC route 和普通文件。文件查询没有内核结果 cache；用户 Context cache 随所属 Agent 地址空间 teardown。只有 lifecycle 成员、退休工作、STORAGE usage 与 owner-scoped I/O request/lease/lane debt 全部归零，槽才回到 FREE，并在下一次使用时递增 generation；global device debt 不属于该槽，允许跨 owner lifecycle 并由设备根 refill 偿还；generation 耗尽时拒绝复用。`vfs_scope_refs[NPROC]` 仅用于 VFS 引用/清理，不是身份 ledger。
 
-当前固定 workflow 边界为 ACTIVE+CLOSING+RETIRING 最多 4 个、lifecycle ledger 8 槽。RETIRING 在 catalog 回收完成前继续占用这 4 个准入槽之一，不能由新 generation 提前复用。进程、线程、file object、block/inode、buffer cache 与 Agent state page 的容量由 generation-safe EXEC/STORAGE account 和 ordinary/reserved policy 控制。metadata catalog 总计 512 条：SYSTEM 固定 64 条，4 个 workflow 分区各固定 112 条；每个 workflow 的自动扫描物化视图最多占 96 条，余下 16 条保留给显式 metadata。catalog 是有界索引而不是文件系统 inode 的 backing lease，workflow inode 账户使用独立的 STORAGE policy 上限。该设计不允许 catalog 跨 scope 借用，不计算全局 union/max，也不增加 catalog resource kind 或 metadata envelope 账本。dependency 仍为每 scope 16 条、action history 8 条、edit lease 8 条、span prefetch 8 条、audit 128 条；action status 一次原子批次独立限制为 112 条，超出时在修改任何记录前返回可恢复的 `NO_SPACE`。lifecycle 改变、键冲突与不可确定提交分别保留可重试、`CONFLICT` 与 `INDETERMINATE` 状态。
+当前固定 workflow 边界为 ACTIVE+CLOSING+RETIRING 最多 4 个、lifecycle ledger 8 槽。RETIRING 在 catalog 回收完成前继续占用这 4 个准入槽之一，不能由新 generation 提前复用。进程、线程、file object、block/inode、buffer cache 与 Agent state page 的容量由 generation-safe EXEC/STORAGE account 和 ordinary/reserved policy 控制。metadata catalog 总计 512 条：SYSTEM 固定 64 条，4 个 workflow 分区各固定 112 条；每个 workflow 的自动扫描物化视图最多占 96 条，余下 16 条保留给显式 metadata。catalog 是有界索引而不是文件系统 inode 的 backing lease，workflow inode 账户使用独立的 STORAGE policy 上限。该设计不允许 catalog 跨 scope 借用，不计算全局 union/max，也不增加 catalog resource kind 或 metadata envelope 账本。dependency 仍为每 scope 16 条、action history 8 条、edit lease 8 条、audit 128 条；action status 一次原子批次独立限制为 112 条，超出时在修改任何记录前返回可恢复的 `NO_SPACE`。lifecycle 改变、键冲突与不可确定提交分别保留可重试、`CONFLICT` 与 `INDETERMINATE` 状态。
 
 文件系统使用 `NINODE=2048`。workflow 的持久存储保证由 mkfs 与内核共享的容量策略根据“完成镜像后”的空闲量计算，并把最多四个 workflow 的总目标限制在扣除 SYSTEM 后空闲量的四分之三。每个 admitted/future scope 的硬下限为 320 个 inode 和 512 个 block，SYSTEM 的硬下限为 8 个 inode 和 512 个 block；当前 `platform_agentos` 镜像写入 superblock 的每 scope 保证为 342 个 inode、1195 个 block，SYSTEM 保留为 64 个 inode、512 个 block。workflow inode 账户直接采用该 STORAGE policy 的 domain limit，不再被 112 条 metadata catalog 容量钳制；112 只描述索引记录容量。mkfs 无法同时兑现硬下限时直接拒绝生成镜像，并把 policy version、scope 数、PUBLIC principal、实际保证、系统保留量和 checksum 作为容量契约写入 superblock。挂载从 qmap 和 dinode 的持久 owner 重建 PUBLIC block/inode 用量，再按契约回收旧 boot lease、验证四份固定保证并重建 SYSTEM 剩余信用；workflow admission 还会原子检查当时的实际余量。PUBLIC 分配必须留下所有尚未消费的 workflow 存储保证和 SYSTEM 剩余量；SYSTEM 维护分配可以消耗自己的信用，但不能侵占 workflow 的最低保证。缺少稳定 PUBLIC principal 的旧格式镜像会被版本检查明确拒绝，不会用空账本继续运行。
 
@@ -418,8 +420,6 @@ Agent-only 直接 syscall 的权限要求：
 | `agent_file_edit_commit` | 返回 `-1` | 租约持有者；orchestrator 可释放卡住的租约 |
 | `agent_file_edit_abort` | 返回 `-1` | 租约持有者；orchestrator 可释放卡住的租约 |
 | `agent_file_edit_state` | 返回 `-1` | Agent 身份 |
-| `agent_file_prefetch_snapshot` | 返回 `-1` | `META_READ` |
-| `agent_file_prefetch_span_snapshot` | 返回 `-1` | `META_READ` |
 | `agent_span_trace_snapshot` | 返回 `-1` | `AUDIT_WRITE` |
 | `agent_timeline_snapshot` | 返回 `-1` | Agent 身份；审计记录按 role/capability 自动裁剪 |
 | `agent_timeline_query` | 返回 `-1` | Agent 身份；只在当前 Agent 已可见的 timeline 记录上过滤 |
@@ -449,7 +449,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 内核把 PID 解析、存活检查、控制关系检查和路由更新放在同一临界区中。路由表保存 source 的内核私有 64 位 `agent_control_id`，不把 PID、PCB 槽、父指针、角色或资源域当作授权身份。source 退出时，其所有入站授权会从各目标回收；target 退出时清空自己的路由表，所以 PID 或 PCB 槽复用不会继承旧通道。重复 grant/revoke 是幂等操作；revoke 或 source 退出只阻止后续入队，之前已经成功入队的事件仍按 FIFO 消费。
 
-消息投递先完成路由授权，再匹配目标 watch 并占用队列资源。未授权返回 `AGENT_STATUS_DENIED`；目标不存在、正在退出或 watch/filter 不匹配返回 `AGENT_STATUS_NOT_FOUND`；路由表或队列配额耗尽返回 `AGENT_STATUS_NO_SPACE`。兼容 mailbox 镜像在授权事件成功入队后于同一临界区更新。metadata 预取交接随后使用内核捕获的 `slot + pid + control_id + scope` 稳定端点句柄；长阶段不保存目标 PCB 指针，发布前完整重校验身份，退出或槽复用只会丢弃派生提示。拒绝路径不会留下旁路副作用。
+消息投递先完成路由授权，再匹配目标 watch 并占用队列资源。未授权返回 `AGENT_STATUS_DENIED`；目标不存在、正在退出或 watch/filter 不匹配返回 `AGENT_STATUS_NOT_FOUND`；路由表或队列配额耗尽返回 `AGENT_STATUS_NO_SPACE`。兼容 mailbox 镜像在授权事件成功入队后于同一临界区更新，拒绝路径不会留下旁路副作用。
 
 ## 高性能请求结构
 
@@ -498,7 +498,7 @@ V2 使用 syscall 547 `sys_tool_call()`。`struct agent_request_v2` 的前两个
 
 参数数组由 `struct agent_param_v2` 组成。每项独立携带 `version`、`size`、`type`、`value_size`、`key` 和 tagged value；当前类型是 `AGENT_PARAM_UINT64` 或 `AGENT_PARAM_STRING`。参数按 key 匹配，与数组顺序无关。内核拒绝未知 key、同一 key 重复、类型不匹配、缺失必选参数、非终止字符串、错误 value size、错误结构 size 和错误 version，不会静默忽略或截断为另一种含义。
 
-syscall 548 `sys_tool_list()` 返回 `struct agent_tool_desc_v2`。用户态 wrapper 隐式传入当前 descriptor size 和 V2 version；内核要求精确匹配并返回工具总数。每个 descriptor 同样带 `version + size` 和 `param_count`。将来扩展协议时应定义新 version 或兼容的 sized-prefix 规则，不能复用旧 version 改变既有字段含义。V1 syscall 503/504 和 V2 syscall 547/548 的 decoder、param count 和可见 schema 都由同一 typed rule table 派生；内核初始化会验证全表结构，避免手写 schema/count 与实际解码规则漂移。
+syscall 548 `sys_tool_list()` 返回 `struct agent_tool_desc_v2`。用户态 wrapper 隐式传入当前 descriptor size 和 V2 version；内核要求精确匹配并返回工具总数。每个 descriptor 同样带 `version + size` 和 `param_count`。将来扩展协议时应定义新 version 或兼容的 sized-prefix 规则，不能复用旧 version 改变既有字段含义。V1 syscall 503/504 和 V2 syscall 547/548 的 decoder、param count 和可见 schema 都由同一 CSR 参数规则派生：每个工具以 offset 指向紧凑规则流，键名通过注册表偏移引用，type/target/required 压入一个字节。没有参数的工具不再占固定空槽，初始化仍验证 offset 单调、键和目标唯一、类型匹配及容量边界。
 
 所有参数键由共享 `agent_tool_abi.h` 的 `AGENT_PARAM_KEY_REGISTRY` 集中登记。`AGENT_PARAM_KEY_SIZE=16` 包含结尾 NUL，所以最多容纳 15 个可见 ASCII 字符；每个注册字面量都有 `_Static_assert`，typed rule 只能引用登记符号。Host UAPI checker 还独立拒绝空键、非 ASCII、重复、超长、未登记引用和未使用旧键，强制编译期容量断言继续接入注册表，并复核工具 ID/name、rule target/type、参数数量与生成 schema 容量。`agenttoolabi_ucore: key_capacity=1 llm_response_v1_v2=1 buffer_sentinel=1` 动态覆盖 15 字符容量边界、16 字节无 NUL 的 V1/V2 拒绝、`reply_summary` 在两版 `llm_response` 中的一致解码，以及内核 copyout 不越过用户响应缓冲区。
 
@@ -594,7 +594,7 @@ syscall 548 `sys_tool_list()` 返回 `struct agent_tool_desc_v2`。用户态 wra
 
 可信 bank 还是用户进程发布的启动依赖。`main()` 在 `fsinit()` 和 `timer_init()` 之后调用 `agent_storage_init()`，在启动继续前完成可信加载判定：成功时选择、校验、绑定并按需恢复 bank，失败时设置 fail-closed；随后才执行 `bio_policy_start()` 和 `load_init_app()`。单个 bank 损坏时选择另一份可验证副本并标记恢复；不存在可验证有效 bank 或选择失败时设置 `agent_meta_store_failed_closed`，系统继续启动，但后续 metadata load/persist/init API 返回失败，不能用空表冒充可信状态。这个 fail-closed 状态不阻断 scope 的 VFS 生命周期回收：`agent_scope_reclaim()` 仍清理 scope 的依赖、动作、缓存、审计、租约和真实 VFS-labelled 文件，并在成功后退休 scope 身份；它不会声称已恢复损坏 bank 中不可读的 metadata。
 
-内存 metadata、索引、依赖表、inode sidecar 与双 bank 提交属于同一个可睡眠、可重入的内核事务域。进程 syscall 在竞争时原子领取单调 ticket，并在对象私有等待队列中不可中断地等待 serving ticket；最外层 owner 清空后只唤醒队首。退出请求不能遗弃 ticket：线程先取得并传递事务门，再由 syscall 边界退出。真实 VFS callback、scope retirement 等进程态外部路径只使用不插队的 try-lock。scheduler 可在事务门恰好空闲时取得一个硬有界维护轮次；若 serving waiter 已由前任唤醒，该保留轮次解锁时抑制第二次 wake-one，保持 ticket 与睡眠队列一一对应。进程态可扩展扫描每 128 条记录计入 kernel-work 预算；scheduler 只执行固定 16 目录项扫描或单个持久化步骤。依赖表只存放每 scope 最多 16 条显式用户边；兼容 `dependency_mask` 始终留在文件记录中，由依赖查询、action 和预取在固定表的线性遍历中按需解释，不再建立全局派生依赖图。
+内存 metadata、索引、依赖表、inode sidecar 与双 bank 提交属于同一个可睡眠、可重入的内核事务域。进程 syscall 在竞争时原子领取单调 ticket，并在对象私有等待队列中不可中断地等待 serving ticket；最外层 owner 清空后只唤醒队首。退出请求不能遗弃 ticket：线程先取得并传递事务门，再由 syscall 边界退出。真实 VFS callback、scope retirement 等进程态外部路径只使用不插队的 try-lock。scheduler 可在事务门恰好空闲时取得一个硬有界维护轮次；若 serving waiter 已由前任唤醒，该保留轮次解锁时抑制第二次 wake-one，保持 ticket 与睡眠队列一一对应。进程态可扩展扫描每 128 条记录计入 kernel-work 预算；scheduler 只执行固定 16 目录项扫描或单个持久化步骤。依赖表只存放每 scope 最多 16 条显式用户边；兼容 `dependency_mask` 始终留在文件记录中，由依赖查询和 action 在固定表的线性遍历中按需解释，不再建立全局派生依赖图。
 
 所有可能替换物理 COW job 的同步 set/delete/init/reload 还必须进入单独的 FIFO submit lane。调用者先领取单调 ticket，只有 serving ticket、persist idle、sync owner 和 reload owner 条件同时满足时才能进入；若条件不满足，内核从失败检查开始一直保持中断关闭，依次释放 metadata 事务门、把当前线程插入 submit condition queue，再恢复中断。完成检查到入队之间不存在可丢失 wake 的窗口。ticket 不允许在线程退出时放弃，否则会卡住全部后继；退出请求在该有界 COW lane 完成后由 syscall 边界处理。持久化跨预算等待时 immutable job 保持同一 `job_id`，同步调用者临时释放全局事务门，维护线程只能推进该 job，不能让后来提交者替换它。
 
@@ -608,9 +608,9 @@ catalog 或 96 条 AUTOSCAN 物化上限耗尽时，只要独立 STORAGE inode/b
 
 metadata 可见代数按 workflow scope 维护；某域的普通变化只推进该域代数，SYSTEM 对象变化才影响所有已存在 scope。它用于标识一次查询所观察的对象版本，不代表内核保存查询结果。这样低权限 Agent 的微小写入既不能逐次触发全 bank I/O，也不能借另一 workflow 的脏状态迫使其同步提交；每次查询仍通过 sidecar 和当前 catalog/index 实际读取本域已经提交到文件系统的数据。
 
-字符串 selector 支持两组字段名：兼容字段 `project/run_id/stage/kind/status`，以及通用字段 `namespace/object_id/label/type/state`。内核按这些字段执行同一套查询、状态更新、依赖查询和预取提示生成。科研平台中的设定的模拟流程数据由用户态 orchestrator 写入；内核不会预置项目名、run id 或固定阶段顺序。该流程的用户态环节包括数据准备、比对处理、结果分析、报告生成和归档交付。
+字符串 selector 支持两组字段名：兼容字段 `project/run_id/stage/kind/status`，以及通用字段 `namespace/object_id/label/type/state`。内核按这些字段执行同一套查询、状态更新和依赖查询。科研平台中的设定的模拟流程数据由用户态 orchestrator 写入；内核不会预置项目名、run id 或固定阶段顺序。该流程的用户态环节包括数据准备、比对处理、结果分析、报告生成和归档交付。
 
-对象依赖关系不再由内核固定解释某几个阶段名称。用户态可以通过 `dependency_update` 显式注册 `source/target/namespace/run_id/relation/summary` 形式的通用依赖记录，也可以继续通过 `agent_file_meta_set()` 写入对象 label 和 `dependency_mask` 作为紧凑兼容输入。每条显式记录包含源对象 label、目标对象 label、关系、namespace、run_id 和摘要；`dependency_query` 可用 `label=...;namespace=...;run_id=...` 缩小查询范围，文件查询后的预取提示和 provenance 也优先读取这些通用记录。旧的 `dependency_mask` 不复制进全局依赖表；没有匹配显式边时，消费者直接在同 scope、namespace、workflow 和 run 的文件记录上解释位图。这既保留兼容 ABI，也避免文件拓扑变化触发全局派生重建。
+对象依赖关系不再由内核固定解释某几个阶段名称。用户态可以通过 `dependency_update` 显式注册 `source/target/namespace/run_id/relation/summary` 形式的通用依赖记录，也可以继续通过 `agent_file_meta_set()` 写入对象 label 和 `dependency_mask` 作为紧凑兼容输入。每条显式记录包含源对象 label、目标对象 label、关系、namespace、run_id 和摘要；`dependency_query` 可用 `label=...;namespace=...;run_id=...` 缩小查询范围。旧的 `dependency_mask` 不复制进全局依赖表；没有匹配显式边时，依赖查询和 action 直接在同 scope、namespace、workflow 和 run 的文件记录上解释位图。这既保留兼容 ABI，也避免文件拓扑变化触发全局派生重建。
 
 `update_mask` 用于精确更新字段，也允许清空字段。例如只清空 status 时传入 `AGENT_FILE_META_UPDATE_STATUS` 并让 `status` 为空字符串。
 
@@ -666,7 +666,9 @@ metadata 可见代数按 workflow scope 维护；某域的普通变化只推进�
 
 ### 文件编辑租约 ABI
 
-文件编辑租约用于处理同一 workflow scope 内两个 Agent 同时希望修改同一真实文件的情况。内核用 `scope_id + dev + inum + incarnation` 识别文件，不依赖用户态传入的逻辑路径或全局裸租约号。普通进程不能申请租约；Agent 需要具备内容读取、工件写入、元数据写入或编排能力之一，同时普通 VFS 路径仍要求当前 workflow 凭据具备相应文件能力。租约存在时，真实 `write`、`O_TRUNC` 和 `unlink` 路径会先按当前凭据重新鉴权，再检查当前进程是否是本 scope 的租约持有者；另一个 scope 不能查询、提交、终止或复用该租约。
+编辑版本、内容版本和已发布大小保存在 512 槽稀疏 sidecar 中。哈希键为 `dev + inum + incarnation + scope + lifecycle generation`；开放寻址探测使用空槽和 tombstone 回收槽位，inode 最终回收或 scope retirement 时清除对应项。版本表不再按磁盘 `NINODE` 常驻展开，旧 generation 也不能命中新 workflow 的同号 inode。
+
+文件编辑租约用于处理同一 workflow scope 内两个 Agent 同时希望修改同一真实文件的情况。内核用 `scope_id + lifecycle generation + dev + inum + incarnation` 识别文件，不依赖用户态传入的逻辑路径或全局裸租约号。普通进程不能申请租约；Agent 需要具备内容读取、工件写入、元数据写入或编排能力之一，同时普通 VFS 路径仍要求当前 workflow 凭据具备相应文件能力。租约存在时，真实 `write`、`O_TRUNC` 和 `unlink` 路径会先按当前凭据重新鉴权，再检查当前进程是否是本 scope 的租约持有者；另一个 scope 不能查询、提交、终止或复用该租约。
 
 调用方式如下：
 
@@ -718,46 +720,11 @@ metadata 可见代数按 workflow scope 维护；某域的普通变化只推进�
 
 该工具不是全文搜索接口，也不建立内容倒排索引。它的用途是让 Agent 在拿到 metadata 命中后，能用受权工具取得轻量内容证据，例如报告页面呈现 preview、复核脚本校验 artifact 是否真的存在、或者对照不含 AgentOS 专属服务的 plain uCore 目标中用户态读取文件的成本。
 
-### 文件预取提示 ABI
+### 文件查询、索引与显式依赖
 
-文件查询成功写入 Context 后，内核会根据本次查询命中的 source 文件、同一 namespace/workflow/run 的对象标签依赖和当前索引信息，生成 metadata 预取提示。本次调用在有界局部状态中保留精确 hit slot；预取先验证 slot 身份，再在当前 scope 的依赖配额内收集选择器，不依赖跨调用的查询结果缓存。label hash 只作预筛，label、namespace、run 和 workflow 仍作精确比较；目标通过一次文件表扫描和槽位位图全局去重，单次查询最多发布 `AGENT_FILE_PREFETCH_MAX_HINTS = 8` 个唯一目标。相关依赖、文件表、提示总线和 handoff 遍历统一计入 metadata 工作预算。提示首先保存在当前 Agent 的 PCB 中，容量为 8。同时，带有可信 span 的提示会写入物理容量为 `AGENT_FILE_PREFETCH_SPAN_MAX = 32` 的 scope 分区提示表；最多 4 个 workflow 各保留 8 条，查询还必须同时匹配调用者 scope 和内核私有 span owner。它只提示“后续可能需要哪些文件 metadata”，预取提示本身不读取文件内容，也不替代 `agent_file_query()`；需要内容级证据时使用 `read_file_digest` 工具读取短预览和内容指纹。
+`agent_file_query()` 每次都对当前 scope 的 metadata 快照执行真实扫描或 status/stage/kind 索引候选遍历，并把 `plan`、`plan_reason`、`candidate_records`、`scanned_records`、`index_bucket` 和 `fs_generation` 随结果返回。成功查询会追加一条 `AGENT_TOOL_QUERY_FILE` Context 记录；内核不保存跨调用查询结果，也不会从查询历史隐式生成另一类内核对象。
 
-当 Agent 通过 message 事件唤醒另一个 Agent 时，内核会把发送者当前可见的 metadata 预取提示复制到接收者的预取提示 ring，并给复制后的提示增加 `AGENT_FILE_PREFETCH_REASON_HANDOFF`。这样接收者可以直接调用 `agent_file_prefetch_snapshot()` 得到上游 Agent 的下一步候选，不需要从消息文本中解析策略字段。复制后的提示也会写入 span 预取提示总线，保留 source pid、target pid 和 span id，便于同一因果链上的 Agent 用统一接口查询本轮协作中的候选工件。依赖/FID 查找、总线选择和审计预留先纳入 metadata 工作预算；最终只在重新解析稳定接收端点成功后，以固定上界、不可调度的短提交同时发布本地 hint、span bus 和观测记录。
-
-`agent_file_prefetch_snapshot(hints, max)` 返回当前可见提示数量，普通进程调用返回 `-1`，无 `META_READ` 能力的 Agent 返回 `AGENT_STATUS_DENIED`。`max=0` 时只返回数量，不复制记录；`max>0` 时按产生顺序复制最多 `max` 条。
-
-`agent_file_prefetch_span_snapshot(hints, max)` 返回当前 Agent 的 `current_span_id` 对应的 scope 内提示数量或记录。它只返回 `scope_id + public span_id + private span_owner` 全部匹配的提示；仅猜中公开 span 数字不能读取其他 workflow 或另一条已回收链。当前 Agent 尚未进入任何可信 span 时返回 0。普通进程调用返回 `-1`，无 `META_READ` 能力的 Agent 返回 `AGENT_STATUS_DENIED`。`max=0` 时只返回匹配数量；`max>0` 时按 sequence 复制最多 `max` 条。
-
-`struct agent_file_prefetch_hint` 字段如下：
-
-| 字段 | 含义 |
-| --- | --- |
-| `sequence` | 预取提示自身的递增序号 |
-| `source_sequence` | 触发本提示的 Context sequence |
-| `span_id` | 触发本提示的因果链 span |
-| `reason` | 生成原因 flags |
-| `score` | 内核给出的简单排序分数 |
-| `tick` | 生成提示时的 tick |
-| `fs_generation` | 生成提示时的文件元数据代数 |
-| `fid` | 建议后续关注的目标元数据 ID |
-| `source_fid` | 触发提示的源元数据 ID |
-| `source_pid` | 触发提示的 Agent pid |
-| `target_pid` | 当前应该消费提示的 Agent pid |
-| `plan` | 建议使用的查询计划，当前为 stage 索引 |
-| `candidate_records` | 目标 stage 在同一 run 下的候选记录数 |
-| `total_hits` | 当前可用于提示的目标记录数量 |
-| `hit` | 目标文件的 `agent_file_hit` 快照 |
-
-`reason` 使用以下 flags：
-
-| flag | 含义 |
-| --- | --- |
-| `AGENT_FILE_PREFETCH_REASON_DEPENDENCY` | 由对象标签依赖关系产生 |
-| `AGENT_FILE_PREFETCH_REASON_SAME_RUN` | source 和 target 属于同一 project/workflow/run |
-| `AGENT_FILE_PREFETCH_REASON_PENDING` | target 当前状态为 pending |
-| `AGENT_FILE_PREFETCH_REASON_STAGE_INDEX` | target 可通过 stage 索引定位 |
-| `AGENT_FILE_PREFETCH_REASON_HANDOFF` | 由另一个 Agent 的 message 事件交接而来 |
-| `AGENT_FILE_PREFETCH_REASON_SPAN_BUS` | 已写入同 scope/private-owner span 的分区提示表 |
+对象关系由 `dependency_update` 显式登记，并由 `dependency_query` 在调用者 scope 内按 label、project 和 run 查询。每个 scope 最多保留 16 条显式依赖；兼容 `dependency_mask` 也只在 dependency/action 路径中按需解释。跨 Agent 协作通过经过 route 授权的事件与其 Context/audit 归因完成，不把文件查询副作用暗中附加到 message 投递。需要内容级证据时，调用者在 metadata 命中后显式使用 `read_file_digest`。
 
 ## 任务五 Agent Loop ABI
 
@@ -769,15 +736,15 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合�
 
 每个域独立维护不可配置的 Agent/score burst。当选中域内同时有 Agent 和普通线程时，连续调度 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 次后必须选择本域普通 FIFO 候选；连续按分值绕过队首达到同一上限后必须选择本域 FIFO 队首。域内任一线程运行后，外层仍轮转到下一个 active 域。`agentsched_ucore` 验证既有角色权重、受权配置、事件优先、原因记录和域内普通进展；`threadresource_ucore` 验证多线程 PUBLIC 域不能阻断另一资源域完成 512 次让出。
 
-`agent_sched_snapshot(records, max)` 返回当前 Agent 最近最多 16 次被调度时的原因记录。`max=0` 时不复制记录，只返回当前可见记录数。普通进程调用返回 `-1`。
+`agent_sched_snapshot(records, max)` 返回当前 Agent 最近最多 8 次被调度时的原因记录。`max=0` 时不复制记录，只返回当前可见记录数。普通进程调用返回 `-1`。
 
-`agent_trace_snapshot(records, max)` 返回当前 Agent 的运行轨迹短记录。它会把 Context Path 中最近最多 128 条摘要记录和调度器中最近最多 16 条调度原因记录按 tick 合并，最多返回 `AGENT_TRACE_MAX_RECORDS = 144` 条。`max=0` 时不复制记录，只返回当前可见记录数。普通进程调用返回 `-1`。该接口只整理当前 Agent 自己已经拥有的 Context 和调度数据，不创建新的全局日志，也不改变事件队列。
+`agent_trace_snapshot(records, max)` 返回当前 Agent 的运行轨迹短记录。它会把 Context Path 中最近最多 128 条摘要记录和调度器中最近最多 8 条调度原因记录按 tick 合并，最多返回 `AGENT_TRACE_MAX_RECORDS = 136` 条。`max=0` 时不复制记录，只返回当前可见记录数。普通进程调用返回 `-1`。该接口只整理当前 Agent 自己已经拥有的 Context 和调度数据，不创建新的全局日志，也不改变事件队列。
 
 `agent_span_trace_snapshot(records, max)` 返回当前 Agent 所在可信 span 的系统级短记录。它读取共享物理表，但只返回调用者 scope、`current_span_id` 和内核私有 `current_span_owner` 全部匹配的记录；当前 Agent 尚未进入 span 时返回 0。普通进程调用返回 `-1`；缺少 `AUDIT_WRITE` 能力的 Agent 返回 `AGENT_STATUS_DENIED`；`max=0` 返回匹配数量；`max>0` 时按 sequence 顺序复制最多 `max` 条。该接口不接受调用者传入 span id，公开 span 字段也不构成跨 scope 或跨 owner 的查询票据。
 
 该接口按调用者 scope 的 sequence 索引单遍检查，`max=0` 的计数模式不会绕过工作计费。内核在扫描前按每 16 条候选记录换算预算，按不超过一个 `kernel_work` 量子的批次分段预付，并在让出后重计和补足增长差额。该机制不增加公共 ABI，也不公开内部扫描量。
 
-`agent_audit_snapshot(records, max)` 返回调用者 workflow scope 的系统级 Agent 审计短记录。内核物理表固定为 `AGENT_AUDIT_MAX_RECORDS = 512`，按最多 4 个 admitted workflow 划分为每 scope 128 条保证；每个 scope 再独立划分 general/low 64 条和 protected/high 64 条。low 对每个 stable principal 最多保留 16 条；high 按每 scope 8 个保留进程份额均分为每 active principal 8 条。Context、事件入队/消费、调度、预取和用户手动记录等遥测始终进入 low；只有工具或 syscall 成功后由内核确认的特权状态效果才进入 high，用户 flags、公开 span 或委派来的 cause 不能把遥测提升为 protected evidence。high 满时只滚动当前 principal 自己的 8 条，或回收已经退出/inactive principal 的最旧记录，绝不淘汰另一 active principal 的 protected evidence；inactive 历史仍是由 `dropped_records` 明示的有界窗口。低权限主体持续制造遥测也不能占用其他 workflow 的 128 条份额。
+`agent_audit_snapshot(records, max)` 返回调用者 workflow scope 的系统级 Agent 审计短记录。内核物理表固定为 `AGENT_AUDIT_MAX_RECORDS = 512`，按最多 4 个 admitted workflow 划分为每 scope 128 条保证；每个 scope 再独立划分 general/low 64 条和 protected/high 64 条。low 对每个 stable principal 最多保留 16 条；high 按每 scope 8 个保留进程份额均分为每 active principal 8 条。Context、事件入队/消费、调度和用户手动记录等遥测始终进入 low；只有工具或 syscall 成功后由内核确认的特权状态效果才进入 high，用户 flags、公开 span 或委派来的 cause 不能把遥测提升为 protected evidence。high 满时只滚动当前 principal 自己的 8 条，或回收已经退出/inactive principal 的最旧记录，绝不淘汰另一 active principal 的 protected evidence；inactive 历史仍是由 `dropped_records` 明示的有界窗口。低权限主体持续制造遥测也不能占用其他 workflow 的 128 条份额。
 
 每个 scope 维护自己的逻辑 hash 链。物理 `sequence` 仍为系统单调序号，所以同一 scope 可见 sequence 可以因其他 scope 写入而跳号；low/high 与 per-principal 独立滚动还会使当前 128 条窗口缺少早期前驱。每条新记录的 `prev_hash` 指向本 scope 上一条逻辑记录的 hash，即使该前驱已被淘汰。因而只在两条相邻可见记录的 sequence/prev-hash 连续时逐条核验；`dropped_records = total_records - visible_records` 说明窗口外记录数量，sequence/hash 间隙不等同于链损坏。`ledger_hash` 始终是本 scope 最新逻辑记录的 hash。
 
@@ -787,20 +754,19 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合�
 
 `agent_audit_query(filter, records, max)` 在调用者 scope 的同一组可见短记录上执行过滤查询。`filter=NULL` 表示不过滤；`filter->flags` 决定哪些字段参与匹配，可按 `start_sequence`、`span_id`、`kind`、`pid`、`source_pid`、`target_pid`、`role`、`tool_id`、`event_type` 和 `status` 过滤。filter 只能缩小 scope/owner 裁剪后的集合，不能用公开 PID 或 span 扩大可见范围。`max=0` 返回匹配数量，不复制记录；`max>0` 时复制最多 `max` 条匹配记录。权限和错误语义与 `agent_audit_snapshot()` 相同。
 
-`agent_ledger_snapshot(summary)` 返回当前 workflow scope 的运行账本摘要。它不复制审计明细，只返回 `oldest_sequence`、`latest_sequence`、`visible_records`、`total_records`、`dropped_records`、`ledger_hash`、Context/event/sched/prefetch 分类计数、`timeline_total` 和 `observe_epoch`。其中 `ledger_hash` 等于本 scope 最新逻辑审计记录的 `record_hash`，而不是物理 512 槽中其他 scope 的最后记录。普通进程调用返回 `-1`，非 orchestrator Agent 返回 `AGENT_STATUS_DENIED`，空指针返回 `AGENT_STATUS_BAD_PARAM`。该接口适合状态页面或示例脚本确认当前 scope 的稀疏可见窗口仍锚定在同一条内核维护的运行事实链。
+`agent_ledger_snapshot(summary)` 返回当前 workflow scope 的运行账本摘要。它不复制审计明细，只返回 `oldest_sequence`、`latest_sequence`、`visible_records`、`total_records`、`dropped_records`、`ledger_hash`、Context/event/sched 分类计数、保留计数槽、`timeline_total` 和 `observe_epoch`。其中 `ledger_hash` 等于本 scope 最新逻辑审计记录的 `record_hash`，而不是物理 512 槽中其他 scope 的最后记录。普通进程调用返回 `-1`，非 orchestrator Agent 返回 `AGENT_STATUS_DENIED`，空指针返回 `AGENT_STATUS_BAD_PARAM`。该接口适合状态页面或示例脚本确认当前 scope 的稀疏可见窗口仍锚定在同一条内核维护的运行事实链。
 
-`agent_timeline_snapshot(records, max)` 返回统一 timeline 记录。该接口把当前 Agent 可见的四类短记录规范化为 `struct agent_timeline_record`：
+`agent_timeline_snapshot(records, max)` 返回统一 timeline 记录。该接口把当前 Agent 可见的三类短记录规范化为 `struct agent_timeline_record`：
 
 - 当前 Agent 的 Context Path 摘要；
-- 当前 Agent 最近 16 次调度原因；
-- 当前 Agent 可见的审计记录：orchestrator 可见本 workflow scope 的审计，其他具备 `AUDIT_WRITE` 的 Agent 只可见同 scope 的当前可信 span；
-- 当前 Agent 自己的 metadata 预取提示。
+- 当前 Agent 最近 8 次调度原因；
+- 当前 Agent 可见的审计记录：orchestrator 可见本 workflow scope 的审计，其他具备 `AUDIT_WRITE` 的 Agent 只可见同 scope 的当前可信 span。
 
 普通进程调用返回 `-1`。`max=0` 返回当前可见记录总数，不复制记录；`max>0` 时按 tick 输出最多 `max` 条。共享物理审计表中的记录按系统 sequence 排序，导出前先按 scope/owner 裁剪，再按 tick 选择，避免多 Agent 并发记录导致页面时间线乱序。该接口不替代 `context_detail()`，也不保存完整 raw 请求/响应；它面向结果页面和研究平台运行详情。
 
 `agent_timeline_query(filter, records, max)` 在同一组当前可见记录上执行内核侧过滤。`filter=NULL` 表示不过滤，语义等同于 `agent_timeline_snapshot()`。`max=0` 返回匹配数量，不复制记录；`max>0` 时按 tick 复制最多 `max` 条匹配记录。普通进程调用返回 `-1`。过滤只能缩小当前 Agent 已经有权看到的记录集合：普通 Agent 不能通过 filter 读取其他 scope/span 的审计记录，非 orchestrator Agent 也不能把 source mask 设为 audit 后获得整个 scope 的审计。
 
-timeline 将 Context、Sched、Audit 和 Prefetch 四个有序来源按 `(tick, source, sequence)` 四路归并；Audit 来源使用当前 scope 的 `(tick, sequence)` 索引。每个来源记录至多被检查一次，需要过滤扫描的计数查询与复制查询采用相同预算规则。等待路径的匹配查询先按来源上界预付预算；若预付产生 yield，则重新读取来源上界并重新采样 epoch，只有最后一次可能的预算 yield 已结束且预留足够时才保存 `scan_epoch`。导出本身保持开中断；未命中后在关中断窗口最终比较当前 epoch 与该 `scan_epoch`，再原子发布 filter、waiting 状态和等待队列节点，因此预算安全点和 scan-to-publish 窗口都不会造成丢失唤醒。
+timeline 将 Context、Sched 和 Audit 三个有序来源按 `(tick, source, sequence)` 三路归并；Audit 来源使用当前 scope 的 `(tick, sequence)` 索引。每个来源记录至多被检查一次，需要过滤扫描的计数查询与复制查询采用相同预算规则。等待路径的匹配查询先按来源上界预付预算；若预付产生 yield，则重新读取来源上界并重新采样 epoch，只有最后一次可能的预算 yield 已结束且预留足够时才保存 `scan_epoch`。导出本身保持开中断；未命中后在关中断窗口最终比较当前 epoch 与该 `scan_epoch`，再原子发布 filter、waiting 状态和等待队列节点，因此预算安全点和 scan-to-publish 窗口都不会造成丢失唤醒。
 
 SCHED ring 由 timeline owner 持有。调度 core 只生成采样，观测 facade 先检查当前线程的 suppression；未被抑制时，发布顺序固定为提交 SCHED ring、规范化同一记录并推进 epoch/定向唤醒、最后写入 scope audit。被抑制的采样不会只留下 ring 或 audit 的一半状态。
 
@@ -814,17 +780,17 @@ SCHED ring 由 timeline owner 持有。调度 core 只生成采样，观测 faca
 
 | 字段 | 含义 |
 | --- | --- |
-| `source` | 规范化来源：`CONTEXT`、`SCHED`、`AUDIT`、`PREFETCH` |
-| `kind` | 来源内部类型；Context/Sched 使用 trace kind，Audit 使用 audit kind，Prefetch 使用 query plan |
+| `source` | 规范化来源：`CONTEXT`、`SCHED`、`AUDIT` |
+| `kind` | 来源内部类型；Context/Sched 使用 trace kind，Audit 使用 audit kind |
 | `tick` | 产生该条记录时的 tick 计数值 |
-| `sequence` | 来源内部序号：Context sequence、dispatch count、audit sequence 或 prefetch sequence |
+| `sequence` | 来源内部序号：Context sequence、dispatch count 或 audit sequence |
 | `cause_sequence` / `span_id` | 因果字段 |
 | `pid` / `tid` | 产生记录时的原始进程/线程数值；`tid=0` 也是合法主线程，不能据此判断“无线程信息” |
 | `source_pid` / `target_pid` | 事件或提示的来源与目标；单 Agent 记录中通常等于 `pid` |
 | `role` / `loop_state` | 记录产生时的 Agent 角色和 Loop 状态 |
 | `tool_id` / `event_type` / `status` | 工具、事件类型和状态码 |
 | `value0` / `value1` / `value2` | 来源相关的数值槽，例如调度分数、事件 ID、source fid、target fid、候选记录数 |
-| `flags` | Context flags、调度 reason flags、审计 flags 或预取 reason flags |
+| `flags` | Context flags、调度 reason flags或审计 flags |
 | `text` | 32 字节短摘要 |
 
 timeline、trace 和调度历史中的 `tid` 当前没有同时保存 `thread.identity_generation`。因此 `tid=0` 既可能表示主线程，也可能出现在没有独立线程归因的规范化来源中；任意 raw tid 都不是 incarnation-safe 历史身份，线程槽回收后不能用它连接新旧记录。wait queue、mutex owner 和 timeline waiter 在内核内部使用 generation-safe key，Agent 授权则使用 lifecycle/control identity；公开 pid/tid 只用于显示与过滤，不能作为授权或跨槽归因依据。
@@ -834,7 +800,7 @@ timeline、trace 和调度历史中的 `tid` 当前没有同时保存 `thread.id
 | 字段 | 含义 |
 | --- | --- |
 | `flags` | 使用 `AGENT_TIMELINE_FILTER_*` 位选择参与匹配的字段 |
-| `source_mask` | 配合 `AGENT_TIMELINE_FILTER_SOURCE_MASK`，可选择 Context、Sched、Audit、Prefetch 来源 |
+| `source_mask` | 配合 `AGENT_TIMELINE_FILTER_SOURCE_MASK`，可选择 Context、Sched、Audit 来源 |
 | `start_tick` | 配合 `AGENT_TIMELINE_FILTER_START_TICK`，只返回 `tick >= start_tick` 的记录 |
 | `span_id` | 配合 `AGENT_TIMELINE_FILTER_SPAN_ID`，只返回指定 span 的记录 |
 | `require_flags` | 配合 `AGENT_TIMELINE_FILTER_FLAGS_ALL`，要求记录 flags 至少包含这些位 |
@@ -846,16 +812,16 @@ timeline、trace 和调度历史中的 `tid` 当前没有同时保存 `thread.id
 | `event_type` | 匹配事件类型 |
 | `status` | 匹配状态码 |
 
-`agent_provenance_snapshot(edges, max)` 返回当前 Agent 可见的因果边。`max=0` 返回匹配到的边数量，不复制记录；`max>0` 时复制最多 `max` 条。普通进程调用返回 `-1`。该接口不扩大权限：每个 Agent 都能看到自己的 Context 因果边和本地预取提示边；审计边遵循与 timeline 相同的可见规则，orchestrator 可见本 scope 审计边，其他具备审计能力的 Agent 只可见当前可信 span 内的审计边。跨 Agent cause 的 source pid/control 来自内核 sidecar，不把 source 本地 sequence 误解释为 target 本地 Context。
+`agent_provenance_snapshot(edges, max)` 返回当前 Agent 可见的因果边。`max=0` 返回匹配到的边数量，不复制记录；`max>0` 时复制最多 `max` 条。普通进程调用返回 `-1`。该接口不扩大权限：每个 Agent 都能看到自己的 Context 因果边；审计边遵循与 timeline 相同的可见规则，orchestrator 可见本 scope 审计边，其他具备审计能力的 Agent 只可见当前可信 span 内的审计边。跨 Agent cause 的 source pid/control 来自内核 sidecar，不把 source 本地 sequence 误解释为 target 本地 Context。
 
-provenance 对 Context、scope audit 和本地 prefetch 各执行一次有界扫描；被过滤掉的候选仍计入 kernel-work 预算，`max=0` 不形成免计费旁路。
+provenance 对 Context 和 scope audit 各执行一次有界扫描；被过滤掉的候选仍计入 kernel-work 预算，`max=0` 不形成免计费旁路。
 
 `struct agent_provenance_edge` 字段如下：
 
 | 字段 | 含义 |
 | --- | --- |
-| `kind` | 边来源：`CONTEXT`、`AUDIT` 或 `PREFETCH` |
-| `source_type` / `target_type` | 源节点和目标节点类型：Context、Audit 或 Prefetch |
+| `kind` | 边来源：`CONTEXT` 或 `AUDIT` |
+| `source_type` / `target_type` | 源节点和目标节点类型：Context 或 Audit |
 | `source_sequence` / `target_sequence` | 源节点和目标节点在对应来源中的 sequence |
 | `span_id` | 该因果边所属 span |
 | `tick` | 目标节点产生时的 tick |
@@ -863,7 +829,7 @@ provenance 对 Context、scope audit 和本地 prefetch 各执行一次有界扫
 | `role` | 目标记录产生时的 Agent 角色 |
 | `tool_id` / `event_type` / `status` | 关联工具、事件类型和状态码 |
 | `value0` / `value1` / `value2` | 来源相关数值，例如文件 fid、候选记录数或线程 id |
-| `flags` | Context flags、audit flags 或 prefetch reason flags |
+| `flags` | Context flags 或 audit flags |
 | `text` | 32 字节短摘要 |
 
 `struct agent_sched_record` 字段如下：
@@ -931,7 +897,7 @@ provenance 对 Context、scope audit 和本地 prefetch 各执行一次有界扫
 | 字段 | 含义 |
 | --- | --- |
 | `sequence` | 系统审计序号，单调递增；某个 scope 的可见序列允许跳号 |
-| `kind` | 记录来源：Context 追加、事件入队、事件消费、调度 dispatch 或预取提示交接 |
+| `kind` | 记录来源：Context 追加、事件入队、事件消费或调度 dispatch |
 | `tick` | 记录产生时的 tick |
 | `prev_hash` | 追加本条审计记录前的同 scope 逻辑账本链尾 hash |
 | `record_hash` | 由 prev_hash、sequence、tick、cause/span、角色、来源、状态、数值槽和短文本计算得到的本条记录 hash |
@@ -939,9 +905,9 @@ provenance 对 Context、scope audit 和本地 prefetch 各执行一次有界扫
 | `agent_id` / `role` / `loop_state` | 记录产生时的 Agent 身份、角色和 Loop 状态 |
 | `tool_id` / `event_type` / `status` | 工具 ID、事件类型和状态码 |
 | `cause_sequence` / `span_id` | 对应 Context 或事件的公开因果字段；可信来源还由内核私有 source control/span owner sidecar 约束 |
-| `value0` / `value1` / `value2` | 按来源解释的数值槽；Context 记录保留工具结果数值槽，事件记录保留事件 ID/corr ID/目标 pid，调度记录保留分数和队列信息，预取交接记录中分别是 source sequence、source fid、target fid |
-| `flags` | Context record flags、调度 reason flags 或预取 reason flags |
-| `text` | 32 字节短摘要，例如工具结果、事件 payload、`sched` 或预取目标 stage |
+| `value0` / `value1` / `value2` | 按来源解释的数值槽；Context 记录保留工具结果数值槽，事件记录保留事件 ID/corr ID/目标 pid，调度记录保留分数和队列信息 |
+| `flags` | Context record flags 或调度 reason flags |
+| `text` | 32 字节短摘要，例如工具结果、事件 payload 或 `sched` |
 
 当前 `kind` 取值如下：
 
@@ -951,7 +917,6 @@ provenance 对 Context、scope audit 和本地 prefetch 各执行一次有界扫
 | `AGENT_AUDIT_KIND_EVENT_ENQUEUE` | 事件入队 |
 | `AGENT_AUDIT_KIND_EVENT_CONSUME` | 事件消费 |
 | `AGENT_AUDIT_KIND_SCHED` | Agent 调度 dispatch |
-| `AGENT_AUDIT_KIND_PREFETCH` | message 事件触发的预取提示交接 |
 
 `struct agent_audit_filter` 字段如下：
 
@@ -969,15 +934,16 @@ provenance 对 Context、scope audit 和本地 prefetch 各执行一次有界扫
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 当前为 `AGENT_LEDGER_VERSION = 1` |
+| `version` | 当前为 `AGENT_LEDGER_VERSION = 3`；v3 将同偏移字段定义为未分类记录数 |
 | `oldest_sequence` / `latest_sequence` | 当前 scope 可见审计窗口的最早和最新系统 sequence；中间允许因跨 scope 写入和分区滚动而稀疏 |
 | `visible_records` | 当前 scope 可复制的审计记录数，最多 128 |
 | `total_records` | 当前 scope 建立后累计写入的审计记录数 |
 | `dropped_records` | 当前 scope 逻辑记录中已不在可见窗口的数量，即 `total_records - visible_records` |
 | `ledger_hash` | 当前 scope 逻辑审计链尾 hash，等于该 scope 最新记录的 `record_hash` |
-| `context_records` / `event_records` / `sched_records` / `prefetch_records` | 按来源累计的记录数 |
+| `context_records` / `event_records` / `sched_records` | 按来源累计的记录数 |
+| `other_records` | 准入拒绝数与从 v8 检查点恢复的停产 prefetch 记录数之和；新内核不再生成 prefetch |
 | `timeline_total` | 可作为当前 scope timeline 候选来源的记录总量 |
-| `observe_epoch` | 观测 epoch，Context、审计、调度或预取提示写入时递增 |
+| `observe_epoch` | 观测 epoch，Context、审计或调度写入时递增 |
 
 `struct agent_event` 是事件等待和唤醒结构：
 
@@ -1026,7 +992,7 @@ heartbeat 到期时内核投递 payload 为 `timer=heartbeat` 的 SYSTEM `AGENT_
 
 `struct agent_context_record` 保存工具 ID、状态码、sequence、request_id、cause_sequence、span_id、`branch_generation`、数值槽、tick、flags、`prev_hash`、`record_hash`，以及 16 字节 payload/result 短文本摘要；工具名称可通过 `agent_tool_list()` 或 `sys_tool_list()` 按 `tool_id` 解释。它不是完整 raw 请求/响应日志。最近 128 条完整详情保存在按活跃 Agent 分配的内核私有 Context sidecar 中，通过 `context_detail()` 查询，不放在用户 Context 页或固定 PCB 大数组内。超过 128 条记录时，Context Path 按 header 明示的 `AGENT_CONTEXT_EVICT_FIFO` 覆盖旧记录。
 
-Context v8 保留轻量因果链与完整性链，并把 branch/lifecycle identity 及本地 active-path parent 纳入可信绑定：
+Context v9 保留轻量因果链与完整性链，并把 branch/lifecycle identity 及本地 active-path parent 纳入可信绑定：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -1038,7 +1004,7 @@ Context v8 保留轻量因果链与完整性链，并把 branch/lifecycle identi
 
 `struct agent_context_header.latest_record_hash` 暴露当前分支的链尾 hash，`visible_head_sequence` 暴露 rollback 选择的历史锚点，`active_path_count/active_path_oldest_sequence` 则界定当前仍在 FIFO archive 内的活跃 suffix。`context_rollback(sequence)` 要求目标仍在物理 FIFO 窗口内，并为后续提交分配新的 `branch_generation`；它把当前因果锚点设为目标 record，但不删除、覆盖或重编号旧分支记录。后续记录取得新的全局 sequence，以 `path_parent_sequence` 指向 rollback 锚点，并在 record/provenance 中同时绑定旧 source branch 与新 target branch。`context_clear()` 同样开始新分支，而不是使旧 branch identity 可复用。该语义保证 provenance 指向的历史不因 rollback 被改写。
 
-内核写入自动工具记录时，会使用当前 Agent 的 `current_cause_sequence` 和 `current_span_id`，并在 Context owner 管理的私有 sidecar 中保存真实 source pid/control id 与 span owner；写入完成后，当前 cause 更新为新记录的 sequence。sidecar 自身共 9 页，但它与 6 页用户 mirror、6 页可信 shadow 一起按 21 页 Agent 状态通过 EXEC resource account 精确预留、提交和退款。`context_push(record)` 只能提交本地手动内容，调用者必须把 `cause_sequence` 和 `span_id` 都设为 0；内核再把记录接到当前可信链。该机制用于内核内可信审计和示例追踪，不等同于持久化密码学保证。
+内核写入自动工具记录时，会使用当前 Agent 的 `current_cause_sequence` 和 `current_span_id`，并在 Context owner 管理的私有 sidecar 中保存真实 source pid/control id 与 span owner；写入完成后，当前 cause 更新为新记录的 sequence。9 页 Context sidecar、1 页 IPC/观测冷 sidecar 与 7 页单拷贝 Context 一起按 17 页 Agent 状态通过 EXEC resource account 精确预留、提交和退款。`context_push(record)` 只能提交本地手动内容，调用者必须把 `cause_sequence` 和 `span_id` 都设为 0；内核再把记录接到当前可信链。该机制用于内核内可信审计和示例追踪，不等同于持久化密码学保证。
 
 Context record flags：
 

@@ -29,8 +29,10 @@ void agent_fs_note_create(struct inode *ip, char *path) {
 	changes = agent_metadata_scan_index_inode(ip, key, &failed);
 	if (changes)
 		agent_metadata_note_catalog_changes(changes);
-	if (failed || agent_file_state_index_deferred(ip))
+	if (failed || agent_file_state_index_deferred(ip)) {
+		agent_file_version_reclaim(ip);
 		goto rescan;
+	}
 	goto out;
 rescan:
 	agent_file_request_scan();
@@ -44,9 +46,9 @@ static void agent_fs_publish_content(struct inode *ip) {
 
 	if (!agent_metadata_inode_trackable(ip))
 		return;
-	if (!agent_file_state_content_publish(ip, &receipt) ||
-	    ip->agent_meta_slot <= 0 ||
-	    ip->agent_meta_version != AGENT_INODE_META_VERSION) {
+	if (ip->agent_meta_slot <= 0 ||
+	    ip->agent_meta_version != AGENT_INODE_META_VERSION ||
+	    !agent_file_state_content_publish(ip, &receipt)) {
 		agent_file_request_scan();
 		return;
 	}
@@ -54,7 +56,8 @@ static void agent_fs_publish_content(struct inode *ip) {
 		if (agent_metadata_catalog_journal_note_content(&receipt) < 0)
 			reconcile = 1;
 		agent_metadata_store_mark_dirty(ip->vfs_scope_id);
-	}
+	} else
+		reconcile = 1;
 	if (reconcile ||
 	    (ip->agent_meta_flags & AGENT_FILE_META_F_AUTOSCAN))
 		agent_file_request_scan();
@@ -67,12 +70,14 @@ static void agent_fs_remove_inode(struct inode *ip) {
 
 	if (!agent_metadata_inode_trackable(ip))
 		return;
-	agent_file_state_content_bump(ip);
 	scope_id = ip->vfs_scope_id;
-	if (agent_file_state_index_deferred(ip)) {
+	if (ip->agent_meta_slot <= 0 ||
+	    ip->agent_meta_version != AGENT_INODE_META_VERSION) {
+		agent_file_version_reclaim(ip);
 		agent_file_request_scan();
 		return;
 	}
+	agent_file_state_content_bump(ip);
 	if (!agent_metadata_txn_try_external()) {
 		agent_file_request_scan();
 		return;

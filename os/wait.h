@@ -39,6 +39,7 @@ struct wait_queue {
 	enum wait_reason reason;
 };
 
+	/* 选中等待者时仍处于关中断区间，在此捕获其稳定身份。 */
 void wait_queue_init(struct wait_queue *, enum wait_reason);
 /*
  * wait_queue_sleep() owns its interrupt transition and is only suitable when

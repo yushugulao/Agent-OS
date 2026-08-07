@@ -109,6 +109,43 @@ def _only_references(
         raise ValueError(f"{label} has {observed} references, expected {expected}")
 
 
+def _validate_snapshot_dispatch(
+    syscall_source: str, syscall_id: str, callee: str, label: str
+) -> None:
+    """Validate one observer case without mirroring the dispatcher layout."""
+
+    dispatch = _function_tokens(_tokens(syscall_source), "syscall_dispatch")
+    case_at = _require_once(
+        dispatch, ("case", syscall_id, ":"), f"{label} case"
+    )
+    case_depth = _depth_at(dispatch, case_at)
+    case_end = next(
+        (
+            position
+            for position in range(case_at + 3, len(dispatch))
+            if dispatch[position] in {"case", "default"}
+            and _depth_at(dispatch, position) == case_depth
+        ),
+        len(dispatch),
+    )
+    case_body = dispatch[case_at + 3:case_end]
+    call_at = _require_once(
+        case_body,
+        (
+            "ret", "=", callee, "(", "trapframe", "->", "a0", ",",
+            "trapframe", "->", "a1", ")", ";",
+        ),
+        f"{label} call",
+    )
+    break_at = _require_once(case_body, ("break", ";"), f"{label} break")
+    if call_at >= break_at:
+        raise ValueError(f"{label} does not return through its own case")
+    if _depth_at(case_body, call_at) != 0:
+        raise ValueError(f"{label} call is conditional or nested")
+    if _depth_at(case_body, break_at) != 0:
+        raise ValueError(f"{label} break is conditional or nested")
+
+
 def _validate_clock_source(text: str, label: str) -> None:
     tokens = _tokens(text)
     get_mtime = _function_tokens(tokens, "get_mtime")
@@ -887,14 +924,10 @@ def _validate_resource_observer(
     for ids, label in ((kernel_ids, "kernel"), (user_ids, "AgentOS user")):
         if ids.count("agent_resource_snapshot 559") != 1:
             raise ValueError(f"{label} resource snapshot syscall ID differs")
-    dispatch = _function_tokens(_tokens(syscall_source), "syscall")
-    _require_once(
-        dispatch,
-        (
-            "case", "SYS_agent_resource_snapshot", ":", "ret", "=",
-            "sys_agent_resource_snapshot", "(", "args", "[", "0", "]", ",",
-            "args", "[", "1", "]", ")", ";", "break", ";",
-        ),
+    _validate_snapshot_dispatch(
+        syscall_source,
+        "SYS_agent_resource_snapshot",
+        "sys_agent_resource_snapshot",
         "resource snapshot syscall dispatch",
     )
     wrapper = _function_tokens(_tokens(user_syscall), "agent_resource_snapshot")
@@ -1156,14 +1189,10 @@ def _validate_performance_observer(
             raise ValueError(f"{label} performance snapshot syscall ID differs")
     if arch_ids.count("__NR_agent_performance_snapshot 560") != 1:
         raise ValueError("RISC-V performance snapshot syscall ID differs")
-    dispatch = _function_tokens(_tokens(syscall_source), "syscall")
-    _require_once(
-        dispatch,
-        (
-            "case", "SYS_agent_performance_snapshot", ":", "ret", "=",
-            "sys_agent_performance_snapshot", "(", "args", "[", "0", "]",
-            ",", "args", "[", "1", "]", ")", ";", "break", ";",
-        ),
+    _validate_snapshot_dispatch(
+        syscall_source,
+        "SYS_agent_performance_snapshot",
+        "sys_agent_performance_snapshot",
         "performance snapshot syscall dispatch",
     )
     wrapper = _function_tokens(_tokens(user_syscall), "agent_performance_snapshot")
@@ -1220,7 +1249,7 @@ def _validate_performance_producers(
     )
 
     bio_tokens = _tokens(bio_source)
-    transfers = _function_tokens(bio_tokens, "bio_account_transfers")
+    transfers = _function_tokens(bio_tokens, "bio_account_transfer_batch")
     input_guard = (
         "if", "(", "results", "==", "0", "||", "count", "==", "0",
         "||", "(", "transfer", "!=", "BIO_TRANSFER_READ", "&&",
@@ -1292,16 +1321,10 @@ def _validate_performance_producers(
 
     single_transfer = _function_tokens(bio_tokens, "bio_account_transfer")
     if single_transfer != [
-        "bio_account_transfers", "(", "owner", ",", "io_class", ",",
+        "bio_account_transfer_batch", "(", "owner", ",", "io_class", ",",
         "transfer", ",", "&", "result", ",", "1", ")", ";",
     ]:
         raise ValueError("single physical transfer is not a batch-of-one adapter")
-    transfer_batch = _function_tokens(bio_tokens, "bio_account_transfer_batch")
-    if transfer_batch != [
-        "bio_account_transfers", "(", "owner", ",", "io_class", ",",
-        "transfer", ",", "results", ",", "count", ")", ";",
-    ]:
-        raise ValueError("physical transfer batch expands into per-request accounting")
 
     request_batch = (
         "*", "transfers", "+", "=", "count", ";", "if", "(", "*",

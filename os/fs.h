@@ -12,7 +12,6 @@
 // On-disk file system format.
 // Both the kernel and user programs use this header file.
 
-#define NFILE 100 // open files per system
 #define NINODE 2048 // maximum number of active i-nodes
 #ifndef FS_ICACHE_SIZE
 #define FS_ICACHE_SIZE NINODE
@@ -128,7 +127,6 @@ _Static_assert(sizeof(struct superblock) == 64,
 #define FS_QMAP_STATE_MASK 0xc0000000U
 #define FS_QMAP_OWNER_PAYLOAD_MASK 0x3fffffffU
 #define FS_QMAP_ALLOCATING_FLAG 0x40000000U
-#define FS_QMAP_WORKFLOW_LIVE_FLAG FS_OWNER_SCOPE_FLAG
 #define FS_QMAP_FREEING_FLAG 0xc0000000U
 #define FS_OWNER_MAX_PERSISTENT_ID FS_QMAP_OWNER_PAYLOAD_MASK
 // Trusted mkfs images may sponsor immutable PUBLIC objects as SYSTEM;
@@ -265,15 +263,10 @@ struct inode *fs_create(char *, short, int *, const struct vfs_cred *, uint,
 			int *);
 struct inode *ialloc(uint, short, const struct fs_storage_charge *, int *);
 struct inode *inode_get(uint, uint);
-void iabort(struct inode *);
-struct inode *idup(struct inode *);
-void iinit();
 int ivalid(struct inode *) FS_MUST_CHECK;
 void iput(struct inode *);
 int iput_drop_only(struct inode *);
 int inode_remove_detach(struct inode *, struct inode_reclaim *);
-void iunlock(struct inode *);
-void iunlockput(struct inode *);
 int iupdate(struct inode *) FS_MUST_CHECK;
 struct inode *namei_scope_status(char *, uint, uint, int *);
 struct inode *root_dir_status(int *);
@@ -290,14 +283,8 @@ int itruncate_detach(struct inode *, const struct vfs_cred *, uint,
 			 struct inode_reclaim *);
 int itruncate_reclaim(struct inode_reclaim *) FS_MUST_CHECK;
 int itruncate_reclaim_step(struct inode_reclaim *, uint);
-/* Pending tokens retain their original owner and exact storage account. */
-int fs_deferred_reclaim_pending(void);
-int fs_deferred_reclaim_owner_pending(uint);
 int fs_deferred_reclaim_maintain(void);
+void fs_deferred_reclaim_tick(uint64 now);
 /* A caller may synchronously settle only its admitted owner. */
 int fs_deferred_reclaim_drain_current(void);
-/* Global settlement is reserved for an admitted SYSTEM cleanup request. */
-int fs_deferred_reclaim_drain_all(void);
-int itruncate(struct inode *, const struct vfs_cred *, uint);
-int itrunc(struct inode *, const struct vfs_cred *);
 #endif //!__FS_H__

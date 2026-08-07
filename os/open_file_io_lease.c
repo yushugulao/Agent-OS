@@ -14,9 +14,8 @@
 #define OPEN_FILE_IO_CACHE_CAP 64U
 
 /*
- * The cache accelerates authorization, but never carries authority itself.
- * A successful acquisition copies this kernel-owned context into the syscall
- * token, so a cache collision while the syscall sleeps cannot redirect it.
+ * 缓存只加速鉴权，不承载权限。获取成功后，内核将上下文复制到 syscall
+ * 令牌，避免 syscall 休眠期间的缓存碰撞改变其授权对象。
  */
 struct open_file_io_grant {
 	struct file *file;
@@ -250,7 +249,7 @@ static void open_file_io_token_issue(
 	token->edit_authority_generation = grant->edit_authority_generation;
 	token->edit_deadline_tick = grant->edit_deadline_tick;
 	token->thread_generation = thread->identity_generation;
-	token->receipt_generation = thread->kernel_receipt_generation;
+	token->syscall_generation = thread->kernel_work_generation;
 	token->inode_incarnation = grant->inode_incarnation;
 	token->inode_checksum = grant->inode_checksum;
 	token->inode_policy_generation = grant->inode_policy_generation;
@@ -382,7 +381,7 @@ int open_file_io_token_validate(const struct open_file_io_token *token,
 	enabled = intr_save();
 	valid = token->subject == proc && token->inode == inode &&
 		thread->identity_generation == token->thread_generation &&
-		thread->kernel_receipt_generation == token->receipt_generation &&
+		thread->kernel_work_generation == token->syscall_generation &&
 		open_file_io_file_matches(token->file, inode, operation) &&
 		open_file_io_subject_matches(proc, token->account,
 					     token->lifecycle, token->cred) &&

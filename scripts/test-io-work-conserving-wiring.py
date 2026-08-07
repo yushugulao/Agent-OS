@@ -245,7 +245,7 @@ def validate(bio: str, resource: str, policy: str, iobudget: str) -> None:
             admission.count("io_owner_reap_retired();") != 2:
         raise ContractError("retirement does not reap both waiter release paths")
 
-    account = compact(function_body(bio, "bio_account_transfers"))
+    account = compact(function_body(bio, "bio_account_transfer_batch"))
     request_path = account[account.find("else if (request_flags != 0)"):]
     if not ordered(
         request_path,

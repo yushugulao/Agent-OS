@@ -12,18 +12,80 @@ extern struct proc pool[NPROC];
 
 static uint64 next_legacy_endpoint_generation;
 
+static int agent_ipc_handoff_event_locked(struct proc *p);
+
+static struct thread *
+agent_ipc_event_baton_owner_locked(struct proc *p)
+{
+	struct thread *owner = 0;
+
+	if (intr_get())
+		panic("Agent event baton unlocked");
+	if (p == 0 || p < pool || p >= &pool[NPROC])
+		panic("Agent event baton process");
+	for (int tid = 0; tid < NTHREAD; tid++) {
+		struct thread *t = &p->threads[tid];
+
+		if (!t->agent_event_baton)
+			continue;
+		if (t->process != p || t->tid != tid ||
+		    t->identity_generation == 0) {
+			t->agent_event_baton = 0;
+			continue;
+		}
+		if (owner != 0)
+			panic("Agent event baton duplicate");
+		owner = t;
+	}
+	return owner;
+}
+
+static void
+agent_ipc_event_baton_clear_locked(struct proc *p)
+{
+	if (intr_get())
+		panic("Agent event baton unlocked");
+	if (p == 0 || p < pool || p >= &pool[NPROC])
+		panic("Agent event baton process");
+	for (int tid = 0; tid < NTHREAD; tid++)
+		p->threads[tid].agent_event_baton = 0;
+}
+
+static int
+agent_ipc_event_baton_active_locked(struct proc *p)
+{
+	return agent_ipc_event_baton_owner_locked(p) != 0;
+}
+
+static int
+agent_ipc_event_baton_owned_locked(struct proc *p, struct thread *t)
+{
+	return t != 0 && agent_ipc_event_baton_owner_locked(p) == t;
+}
+
+static int
+agent_ipc_event_baton_release_locked(struct proc *p, struct thread *t)
+{
+	if (!agent_ipc_event_baton_owned_locked(p, t))
+		return 0;
+	t->agent_event_baton = 0;
+	return 1;
+}
+
 static void
 agent_ipc_thread_state_clear_locked(struct thread *t, int state)
 {
 	t->agent_wait_deadline = 0;
 	t->agent_wait_deadline_valid = 0;
 	t->agent_loop_state = state;
+	t->agent_event_baton = 0;
 }
 
 void
 agent_ipc_thread_runtime_transition(struct thread *t, int transition)
 {
 	struct proc *p;
+	int pass_baton = 0;
 	int enabled = intr_save();
 
 	if (t == 0 || (p = t->process) == 0)
@@ -34,10 +96,14 @@ agent_ipc_thread_runtime_transition(struct thread *t, int transition)
 	if (transition == AGENT_THREAD_RUNTIME_ACTIVATE &&
 	    t->identity_generation == 0)
 		panic("Agent thread activation state");
+	if (transition == AGENT_THREAD_RUNTIME_RELEASE)
+		pass_baton = agent_ipc_event_baton_release_locked(p, t);
 	agent_ipc_thread_state_clear_locked(
 		t, transition != AGENT_THREAD_RUNTIME_RELEASE && p->is_agent ?
 			AGENT_LOOP_IDLE : AGENT_LOOP_NONE);
 	agent_identity_loop_refresh_locked(p);
+	if (pass_baton && p->is_agent && proc_teardown_live(p))
+		agent_ipc_handoff_event_locked(p);
 out:
 	intr_restore(enabled);
 }
@@ -47,6 +113,7 @@ agent_ipc_process_image_install_locked(struct proc *p)
 {
 	if (intr_get())
 		panic("Agent image install unlocked");
+	agent_ipc_event_baton_clear_locked(p);
 	for (int tid = 0; tid < NTHREAD; tid++)
 		agent_ipc_thread_state_clear_locked(&p->threads[tid],
 						    AGENT_LOOP_NONE);
@@ -175,7 +242,7 @@ agent_ipc_legacy_domain_locked(const struct proc *p,
 			return -1;
 		domain->scope_id = scope_id;
 		if (p->agent_controller_id != 0) {
-			/* The nearest signed control edge defines IPC lineage. */
+			/* 最近的签名控制边确定 IPC 血缘。 */
 			if (!agent_identity_controller_active_locked(
 				p->agent_controller_id, domain->lifecycle,
 				scope_id))
@@ -184,7 +251,7 @@ agent_ipc_legacy_domain_locked(const struct proc *p,
 			   p->storage_principal_id != FS_OWNER_PUBLIC ||
 			   p->vfs_scope_id != VFS_SCOPE_NONE ||
 			   p->vfs_pending_scope_id != VFS_SCOPE_NONE) {
-			/* Controller-free system lifecycles host ordinary mail. */
+			/* 无控制者的系统生命周期承载普通邮件。 */
 			return -1;
 		}
 	}
@@ -315,44 +382,16 @@ agent_ipc_legacy_mailbox_current_locked(
 	return mailbox;
 }
 
-void
-agent_ipc_endpoint_capture_locked(struct agent_endpoint_handle *handle,
-				  struct proc *p)
-{
-	memset(handle, 0, sizeof(*handle));
-	if (p == 0 || p < pool || p >= &pool[NPROC])
-		return;
-	handle->slot = p - pool;
-	handle->pid = p->pid;
-	handle->scope_id = agent_identity_proc_scope(p);
-	handle->control_id = p->agent_control_id;
-}
-
-struct proc *
-agent_ipc_endpoint_resolve_locked(struct agent_endpoint_handle *handle)
-{
-	struct proc *p;
-
-	if (handle == 0 || handle->slot < 0 || handle->slot >= NPROC ||
-	    handle->pid <= 0 || handle->control_id == 0 ||
-	    handle->scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
-	    handle->scope_id >= FS_OWNER_SCOPE_FLAG)
-		return 0;
-	p = &pool[handle->slot];
-	if (!proc_teardown_live(p) || p->pid != handle->pid || !p->is_agent ||
-	    p->agent_control_id != handle->control_id ||
-	    agent_identity_proc_scope(p) != handle->scope_id)
-		return 0;
-	return p;
-}
-
 static int
 agent_ipc_route_find(struct proc *target, uint64 source_control_id)
 {
-	if (target == 0 || source_control_id == 0)
+	struct agent_ipc_observe_cold_state *cold;
+
+	if (target == 0 || source_control_id == 0 ||
+	    (cold = target->agent_ipc_observe_cold) == 0)
 		return -1;
 	for (int i = 0; i < AGENT_IPC_ROUTE_MAX; i++)
-		if (target->agent_ipc_route_source[i] == source_control_id)
+		if (cold->ipc_route_source[i] == source_control_id)
 			return i;
 	return -1;
 }
@@ -361,6 +400,7 @@ static int
 agent_ipc_route_allows(struct proc *source, struct proc *target,
 		       int event_type)
 {
+	struct agent_ipc_observe_cold_state *cold;
 	int slot;
 
 	if (source == 0 || target == 0 || source->agent_control_id == 0 ||
@@ -370,9 +410,9 @@ agent_ipc_route_allows(struct proc *source, struct proc *target,
 	if (source == target)
 		return 1;
 	slot = agent_ipc_route_find(target, source->agent_control_id);
-	return slot >= 0 &&
-	       (target->agent_ipc_route_events[slot] &
-		AGENT_EVENT_MASK(event_type)) != 0;
+	cold = target->agent_ipc_observe_cold;
+	return slot >= 0 && (cold->ipc_route_events[slot] &
+			     AGENT_EVENT_MASK(event_type)) != 0;
 }
 
 static void
@@ -381,12 +421,16 @@ agent_ipc_remove_source_locked(uint64 source_control_id)
 	if (source_control_id == 0)
 		return;
 	for (struct proc *target = pool; target < &pool[NPROC]; target++) {
+		struct agent_ipc_observe_cold_state *cold =
+			target->agent_ipc_observe_cold;
+
+		if (cold == 0)
+			continue;
 		for (int i = 0; i < AGENT_IPC_ROUTE_MAX; i++) {
-			if (target->agent_ipc_route_source[i] !=
-			    source_control_id)
+			if (cold->ipc_route_source[i] != source_control_id)
 				continue;
-			target->agent_ipc_route_source[i] = 0;
-			target->agent_ipc_route_events[i] = 0;
+			cold->ipc_route_source[i] = 0;
+			cold->ipc_route_events[i] = 0;
 			if (target->agent_ipc_route_count > 0)
 				target->agent_ipc_route_count--;
 		}
@@ -405,7 +449,7 @@ agent_ipc_remove_source(uint64 source_control_id)
 	intr_restore(enabled);
 }
 
-/* Legacy mail is PUBLIC-only; Agent IPC uses scoped, quota-bound routes. */
+/* 旧邮件仅供 PUBLIC；Agent IPC 使用受限路由。 */
 int
 agent_ipc_legacy_public_send(struct proc *source, int pid, char *payload,
 			     int len)
@@ -559,38 +603,40 @@ static int
 agent_ipc_route_update(struct proc *target, uint64 source_control_id,
 		       uint64 event_mask, int operation)
 {
+	struct agent_ipc_observe_cold_state *cold =
+		target->agent_ipc_observe_cold;
 	int free_slot = -1;
 	int slot = agent_ipc_route_find(target, source_control_id);
 
 	if (operation == AGENT_IPC_ROUTE_REVOKE) {
 		if (slot < 0)
 			return AGENT_STATUS_OK;
-		target->agent_ipc_route_events[slot] &= ~event_mask;
-		if (target->agent_ipc_route_events[slot] == 0) {
-			target->agent_ipc_route_source[slot] = 0;
+		cold->ipc_route_events[slot] &= ~event_mask;
+		if (cold->ipc_route_events[slot] == 0) {
+			cold->ipc_route_source[slot] = 0;
 			if (target->agent_ipc_route_count > 0)
 				target->agent_ipc_route_count--;
 		}
 		return AGENT_STATUS_OK;
 	}
 	if (slot >= 0) {
-		target->agent_ipc_route_events[slot] |= event_mask;
+		cold->ipc_route_events[slot] |= event_mask;
 		return AGENT_STATUS_OK;
 	}
 	for (int i = 0; i < AGENT_IPC_ROUTE_MAX; i++)
-		if (target->agent_ipc_route_source[i] == 0) {
+		if (cold->ipc_route_source[i] == 0) {
 			free_slot = i;
 			break;
 		}
 	if (free_slot < 0)
 		return AGENT_STATUS_NO_SPACE;
-	target->agent_ipc_route_source[free_slot] = source_control_id;
-	target->agent_ipc_route_events[free_slot] = event_mask;
+	cold->ipc_route_source[free_slot] = source_control_id;
+	cold->ipc_route_events[free_slot] = event_mask;
 	target->agent_ipc_route_count++;
 	return AGENT_STATUS_OK;
 }
 
-/* Event endpoints, queues, delivery, and wait operations. */
+/* 事件端点、队列、投递与等待。 */
 
 static uint64
 agent_ipc_ticks(void)
@@ -614,80 +660,6 @@ agent_ipc_contains(char *haystack, char *needle)
 	return 0;
 }
 
-static void agent_ipc_wake_event_waiters(struct proc *p)
-{
-	wait_queue_wake_all(&p->agent_event_waiters);
-	p->agent_wait_wakeup_count++;
-}
-
-static int agent_ipc_filter_matches(struct proc *target, int type, char *payload)
-{
-	for (int i = 0; i < AGENT_WATCH_MAX; i++) {
-		if (!target->agent_watch_valid[i])
-			continue;
-		if (target->agent_watch_event_type[i] != AGENT_EVENT_NONE &&
-		    target->agent_watch_event_type[i] != type)
-			continue;
-		if (target->agent_watch_filter[i][0] &&
-		    !agent_ipc_contains(payload, target->agent_watch_filter[i]))
-			continue;
-		return 1;
-	}
-	return 0;
-}
-
-int agent_ipc_watch_set(struct proc *p, int event_type, char *filter)
-{
-	int free_slot = -1;
-
-	for (int i = 0; i < AGENT_WATCH_MAX; i++) {
-		if (p->agent_watch_valid[i] &&
-		    p->agent_watch_event_type[i] == event_type &&
-		    strncmp(p->agent_watch_filter[i], filter,
-			    AGENT_WATCH_FILTER_SIZE) == 0)
-			return 0;
-		if (!p->agent_watch_valid[i] && free_slot < 0)
-			free_slot = i;
-	}
-	if (free_slot < 0)
-		return AGENT_STATUS_NO_SPACE;
-	p->agent_watch_valid[free_slot] = 1;
-	p->agent_watch_event_type[free_slot] = event_type;
-	safestrcpy(p->agent_watch_filter[free_slot], filter,
-		   sizeof(p->agent_watch_filter[free_slot]));
-	p->agent_watch_count++;
-	return 0;
-}
-
-static int agent_ipc_watch_clear(struct proc *p, int event_type, char *filter)
-{
-	int removed = 0;
-	int clear_all = event_type == AGENT_EVENT_NONE && filter[0] == 0;
-
-	for (int i = 0; i < AGENT_WATCH_MAX; i++) {
-		if (!p->agent_watch_valid[i])
-			continue;
-		if (!clear_all) {
-			if (event_type != AGENT_EVENT_NONE &&
-			    p->agent_watch_event_type[i] != event_type)
-				continue;
-			if (filter[0] &&
-			    strncmp(p->agent_watch_filter[i], filter,
-				    AGENT_WATCH_FILTER_SIZE) != 0)
-				continue;
-		}
-		p->agent_watch_valid[i] = 0;
-		p->agent_watch_event_type[i] = AGENT_EVENT_NONE;
-		memset(p->agent_watch_filter[i], 0,
-		       sizeof(p->agent_watch_filter[i]));
-		removed++;
-	}
-	p->agent_watch_count -= removed;
-	if (p->agent_watch_count < 0)
-		p->agent_watch_count = 0;
-	return removed;
-}
-
 #define AGENT_EVENT_ACCOUNT_EXTERNAL   (1ULL << 0)
 #define AGENT_EVENT_ACCOUNT_IPC        (1ULL << 1)
 #define AGENT_EVENT_ACCOUNT_ATTRIBUTED (1ULL << 2)
@@ -699,6 +671,137 @@ static int agent_ipc_watch_clear(struct proc *p, int event_type, char *filter)
 
 #define AGENT_WAIT_CANCEL_SLOT (-1)
 
+static int
+agent_ipc_event_consumable_locked(struct proc *p)
+{
+	struct agent_ipc_observe_cold_state *cold = p->agent_ipc_observe_cold;
+
+	if (intr_get())
+		panic("Agent event predicate unlocked");
+	if (cold == 0)
+		return 0;
+	/* 队首或取消事件已被保留时，必须等持有者提交或回滚后再传棒。 */
+	if (p->agent_event_count_queued > 0 &&
+	    (cold->event_accounting[p->agent_event_head] &
+	     AGENT_EVENT_ACCOUNT_RESERVED) != 0)
+		return 0;
+	if (p->agent_wait_cancel_pending != 0)
+		return p->agent_wait_cancel_pending == AGENT_WAIT_CANCEL_PENDING;
+	return p->agent_event_count_queued > 0;
+}
+
+static int
+agent_ipc_handoff_event_locked(struct proc *p)
+{
+	struct thread *selected;
+	int woken;
+
+	if (intr_get())
+		panic("Agent event handoff unlocked");
+	/* 等待队列决定接收者；不得从无关的 WAITING 线程推断所有者。 */
+	if (p->agent_event_waiters.head == 0 ||
+	    !agent_ipc_event_consumable_locked(p) ||
+	    agent_ipc_event_baton_active_locked(p))
+		return 0;
+	selected = wait_queue_wake_one_thread(&p->agent_event_waiters);
+	woken = selected != 0;
+	if (selected != 0) {
+		if (selected->tid < 0 || selected->tid >= NTHREAD ||
+		    selected->identity_generation == 0)
+			panic("Agent event wake identity");
+		if (selected != &p->threads[selected->tid] ||
+		    selected->process != p || selected->agent_event_baton)
+			panic("Agent event wake owner");
+		selected->agent_event_baton = 1;
+	}
+	p->agent_wait_wakeup_count += woken;
+	return woken;
+}
+
+static void
+agent_ipc_broadcast_event_teardown_locked(struct proc *p)
+{
+	int woken;
+
+	if (intr_get())
+		panic("Agent event teardown unlocked");
+	agent_ipc_event_baton_clear_locked(p);
+	woken = wait_queue_wake_all(&p->agent_event_waiters);
+	p->agent_wait_wakeup_count += woken;
+}
+
+static int agent_ipc_filter_matches(struct proc *target, int type, char *payload)
+{
+	struct agent_ipc_observe_cold_state *cold =
+		target->agent_ipc_observe_cold;
+
+	for (int i = 0; i < AGENT_WATCH_MAX; i++) {
+		if (!cold->watch_valid[i])
+			continue;
+		if (cold->watch_event_type[i] != AGENT_EVENT_NONE &&
+		    cold->watch_event_type[i] != type)
+			continue;
+		if (cold->watch_filter[i][0] &&
+		    !agent_ipc_contains(payload, cold->watch_filter[i]))
+			continue;
+		return 1;
+	}
+	return 0;
+}
+
+int agent_ipc_watch_set(struct proc *p, int event_type, char *filter)
+{
+	struct agent_ipc_observe_cold_state *cold = p->agent_ipc_observe_cold;
+	int free_slot = -1;
+
+	for (int i = 0; i < AGENT_WATCH_MAX; i++) {
+		if (cold->watch_valid[i] &&
+		    cold->watch_event_type[i] == event_type &&
+		    strncmp(cold->watch_filter[i], filter,
+			    AGENT_WATCH_FILTER_SIZE) == 0)
+			return 0;
+		if (!cold->watch_valid[i] && free_slot < 0)
+			free_slot = i;
+	}
+	if (free_slot < 0)
+		return AGENT_STATUS_NO_SPACE;
+	cold->watch_valid[free_slot] = 1;
+	cold->watch_event_type[free_slot] = event_type;
+	safestrcpy(cold->watch_filter[free_slot], filter,
+		   sizeof(cold->watch_filter[free_slot]));
+	p->agent_watch_count++;
+	return 0;
+}
+
+static int agent_ipc_watch_clear(struct proc *p, int event_type, char *filter)
+{
+	struct agent_ipc_observe_cold_state *cold = p->agent_ipc_observe_cold;
+	int removed = 0;
+	int clear_all = event_type == AGENT_EVENT_NONE && filter[0] == 0;
+
+	for (int i = 0; i < AGENT_WATCH_MAX; i++) {
+		if (!cold->watch_valid[i])
+			continue;
+		if (!clear_all) {
+			if (event_type != AGENT_EVENT_NONE &&
+			    cold->watch_event_type[i] != event_type)
+				continue;
+			if (filter[0] &&
+			    strncmp(cold->watch_filter[i], filter,
+				    AGENT_WATCH_FILTER_SIZE) != 0)
+				continue;
+		}
+		cold->watch_valid[i] = 0;
+		cold->watch_event_type[i] = AGENT_EVENT_NONE;
+		memset(cold->watch_filter[i], 0, sizeof(cold->watch_filter[i]));
+		removed++;
+	}
+	p->agent_watch_count -= removed;
+	if (p->agent_watch_count < 0)
+		p->agent_watch_count = 0;
+	return removed;
+}
+
 struct agent_ipc_wait_reservation {
 	int slot;
 	uint64 cookie;
@@ -708,15 +811,20 @@ struct agent_ipc_wait_reservation {
 };
 
 static int
-agent_ipc_wait_reserve_locked(struct proc *p, struct agent_event *event,
+agent_ipc_wait_reserve_locked(struct proc *p, struct thread *t,
+			      struct agent_event *event,
 			      struct agent_ipc_wait_reservation *reservation)
 {
+	struct agent_ipc_observe_cold_state *cold = p->agent_ipc_observe_cold;
+	int owns_baton = agent_ipc_event_baton_owned_locked(p, t);
 	int slot;
 
 	if (intr_get())
 		panic("Agent wait reservation unlocked");
+	if (agent_ipc_event_baton_active_locked(p) && !owns_baton)
+		return 0;
 	if (p->agent_event_count_queued > 0 &&
-	    (p->agent_event_accounting[p->agent_event_head] &
+	    (cold->event_accounting[p->agent_event_head] &
 	     AGENT_EVENT_ACCOUNT_RESERVED) != 0)
 		return 0;
 	if (p->agent_wait_cancel_pending != 0) {
@@ -743,20 +851,24 @@ agent_ipc_wait_reserve_locked(struct proc *p, struct agent_event *event,
 		p->agent_wait_cancel_pending = AGENT_WAIT_CANCEL_RESERVED;
 		reservation->slot = AGENT_WAIT_CANCEL_SLOT;
 		reservation->cookie = event->event_id;
+		if (owns_baton && !agent_ipc_event_baton_release_locked(p, t))
+			panic("Agent cancel baton release");
 		return 1;
 	}
 	if (p->agent_event_count_queued <= 0)
 		return 0;
 	slot = p->agent_event_head;
-	if (p->agent_events[slot].event_id == 0)
+	if (cold->events[slot].event_id == 0)
 		panic("Agent event reservation state");
-	*event = p->agent_events[slot];
-	reservation->span_owner = p->agent_event_span_owner[slot];
-	reservation->source_control = p->agent_event_source_control[slot];
-	reservation->audit_principal = p->agent_event_audit_principal[slot];
-	p->agent_event_accounting[slot] |= AGENT_EVENT_ACCOUNT_RESERVED;
+	*event = cold->events[slot];
+	reservation->span_owner = cold->event_span_owner[slot];
+	reservation->source_control = cold->event_source_control[slot];
+	reservation->audit_principal = cold->event_audit_principal[slot];
+	cold->event_accounting[slot] |= AGENT_EVENT_ACCOUNT_RESERVED;
 	reservation->slot = slot;
 	reservation->cookie = event->event_id;
+	if (owns_baton && !agent_ipc_event_baton_release_locked(p, t))
+		panic("Agent event baton release");
 	return 1;
 }
 
@@ -774,6 +886,7 @@ static void
 agent_ipc_wait_finish(struct proc *p,
 		      struct agent_ipc_wait_reservation *reservation, int commit)
 {
+	struct agent_ipc_observe_cold_state *cold = p->agent_ipc_observe_cold;
 	uint64 accounting;
 	int enabled = intr_save();
 	int slot = reservation->slot;
@@ -786,8 +899,8 @@ agent_ipc_wait_finish(struct proc *p,
 		if (slot < 0 || slot >= AGENT_EVENT_QUEUE_CAP ||
 		    p->agent_event_count_queued <= 0 ||
 		    p->agent_event_head != slot ||
-		    p->agent_events[slot].event_id != reservation->cookie ||
-		    (p->agent_event_accounting[slot] &
+		    cold->events[slot].event_id != reservation->cookie ||
+		    (cold->event_accounting[slot] &
 		     AGENT_EVENT_ACCOUNT_RESERVED) == 0)
 			panic("Agent event reservation changed");
 	}
@@ -795,9 +908,9 @@ agent_ipc_wait_finish(struct proc *p,
 		if (slot == AGENT_WAIT_CANCEL_SLOT)
 			p->agent_wait_cancel_pending = AGENT_WAIT_CANCEL_PENDING;
 		else
-			p->agent_event_accounting[slot] &=
+			cold->event_accounting[slot] &=
 				~AGENT_EVENT_ACCOUNT_RESERVED;
-		agent_ipc_wake_event_waiters(p);
+		agent_ipc_handoff_event_locked(p);
 		goto out;
 	}
 	if (slot == AGENT_WAIT_CANCEL_SLOT) {
@@ -807,13 +920,13 @@ agent_ipc_wait_finish(struct proc *p,
 		p->agent_wait_cancel_source_control = 0;
 		p->agent_wait_cancel_audit_principal = 0;
 	} else {
-		accounting = p->agent_event_accounting[slot] &
+		accounting = cold->event_accounting[slot] &
 			     ~AGENT_EVENT_ACCOUNT_RESERVED;
-		memset(&p->agent_events[slot], 0, sizeof(p->agent_events[slot]));
-		p->agent_event_source_control[slot] = 0;
-		p->agent_event_span_owner[slot] = 0;
-		p->agent_event_audit_principal[slot] = 0;
-		p->agent_event_accounting[slot] = 0;
+		memset(&cold->events[slot], 0, sizeof(cold->events[slot]));
+		cold->event_source_control[slot] = 0;
+		cold->event_span_owner[slot] = 0;
+		cold->event_audit_principal[slot] = 0;
+		cold->event_accounting[slot] = 0;
 		p->agent_event_head = (slot + 1) % AGENT_EVENT_QUEUE_CAP;
 		p->agent_event_count_queued--;
 		agent_ipc_event_account_refund(
@@ -827,7 +940,7 @@ agent_ipc_wait_finish(struct proc *p,
 	}
 	if (p->agent_wait_cancel_pending == AGENT_WAIT_CANCEL_PENDING ||
 	    p->agent_event_count_queued > 0)
-		agent_ipc_wake_event_waiters(p);
+		agent_ipc_handoff_event_locked(p);
 out:
 	intr_restore(enabled);
 }
@@ -871,15 +984,17 @@ static const struct agent_ipc_origin_policy agent_ipc_origin_policy[] = {
 static int agent_ipc_queued_event_count(struct proc *target, int type,
 					uint64 source_control_id)
 {
+	struct agent_ipc_observe_cold_state *cold =
+		target->agent_ipc_observe_cold;
 	int count = 0;
 	int slot = target->agent_event_head;
 
 	for (int i = 0; i < target->agent_event_count_queued; i++) {
 		if ((source_control_id != 0 &&
-		     target->agent_event_source_control[slot] == source_control_id) ||
+		     cold->event_source_control[slot] == source_control_id) ||
 		    (source_control_id == 0 &&
-		     target->agent_events[slot].type == type &&
-		     (target->agent_event_accounting[slot] &
+		     cold->events[slot].type == type &&
+		     (cold->event_accounting[slot] &
 		      AGENT_EVENT_ACCOUNT_COALESCED) != 0))
 			count++;
 		slot = (slot + 1) % AGENT_EVENT_QUEUE_CAP;
@@ -901,6 +1016,7 @@ static int agent_ipc_queue_event_locked(struct proc *target, struct proc *source
 				    uint64 cause_sequence, char *payload,
 				    int delivery)
 {
+	struct agent_ipc_observe_cold_state *cold;
 	struct agent_event *event;
 	uint64 accounting = 0;
 	uint64 event_id;
@@ -912,6 +1028,9 @@ static int agent_ipc_queue_event_locked(struct proc *target, struct proc *source
 
 	if (!proc_teardown_live(target) || !target->is_agent)
 		return 0;
+	cold = target->agent_ipc_observe_cold;
+	if (cold == 0)
+		panic("Agent event cold state");
 	if (origin == AGENT_EVENT_ORIGIN_DIRECTED ||
 	    origin == AGENT_EVENT_ORIGIN_ATTRIBUTED) {
 		if (!proc_teardown_live(source) || !source->is_agent ||
@@ -970,7 +1089,7 @@ static int agent_ipc_queue_event_locked(struct proc *target, struct proc *source
 		return -1;
 	}
 	slot = target->agent_event_tail;
-	event = &target->agent_events[slot];
+	event = &cold->events[slot];
 	memset(event, 0, sizeof(*event));
 	event->type = type;
 	event->source_pid = source_pid;
@@ -982,12 +1101,12 @@ static int agent_ipc_queue_event_locked(struct proc *target, struct proc *source
 	event->cause_sequence = cause_sequence;
 	event->span_id = span_id;
 	safestrcpy(event->payload, payload, sizeof(event->payload));
-	target->agent_event_source_control[slot] = source_control_id;
-	target->agent_event_span_owner[slot] = span_owner;
-	target->agent_event_audit_principal[slot] = source_control_id != 0 ?
-						 source_control_id :
-						 target->agent_control_id;
-	target->agent_event_accounting[slot] = accounting;
+	cold->event_source_control[slot] = source_control_id;
+	cold->event_span_owner[slot] = span_owner;
+	cold->event_audit_principal[slot] = source_control_id != 0 ?
+					     source_control_id :
+					     target->agent_control_id;
+	cold->event_accounting[slot] = accounting;
 	target->agent_event_tail =
 		(target->agent_event_tail + 1) % AGENT_EVENT_QUEUE_CAP;
 	target->agent_event_count_queued++;
@@ -1000,8 +1119,8 @@ static int agent_ipc_queue_event_locked(struct proc *target, struct proc *source
 	target->agent_event_count++;
 	agent_observe_record_event(
 		AGENT_AUDIT_KIND_EVENT_ENQUEUE, target, event, span_owner,
-		target->agent_event_audit_principal[slot]);
-	agent_ipc_wake_event_waiters(target);
+		cold->event_audit_principal[slot]);
+	agent_ipc_handoff_event_locked(target);
 	return 1;
 }
 
@@ -1048,10 +1167,7 @@ int agent_ipc_deliver_pid(int pid, struct proc *source, int type,
 			  char *payload, int mirror_mailbox,
 			  int *delivered)
 {
-	struct agent_endpoint_handle source_handle;
-	struct agent_endpoint_handle target_handle;
 	struct proc *target;
-	int handoff_ready = 0;
 	int enabled;
 	int queued;
 	int status;
@@ -1088,18 +1204,10 @@ int agent_ipc_deliver_pid(int pid, struct proc *source, int type,
 		safestrcpy(target->agent_mailbox, payload,
 			   sizeof(target->agent_mailbox));
 	}
-	if (type == AGENT_EVENT_MESSAGE && target != source) {
-		agent_ipc_endpoint_capture_locked(&source_handle, source);
-		agent_ipc_endpoint_capture_locked(&target_handle, target);
-		handoff_ready = source_handle.control_id != 0 &&
-				target_handle.control_id != 0;
-	}
 	if (delivered)
 		*delivered = 1;
 out:
 	intr_restore(enabled);
-	if (handoff_ready)
-		agent_metadata_prefetch_handoff(&target_handle, &source_handle);
 	return status;
 }
 
@@ -1140,6 +1248,7 @@ agent_ipc_proc_prepare(struct proc *p)
 	if (p == 0)
 		return;
 	enabled = intr_save();
+	agent_ipc_event_baton_clear_locked(p);
 	if (p->mail_sidecar != 0 || p->legacy_mail_endpoint_generation != 0)
 		panic("legacy endpoint prepare state");
 	p->legacy_mail_endpoint_generation =
@@ -1159,11 +1268,16 @@ agent_ipc_proc_reset(struct proc *p)
 	enabled = intr_save();
 	agent_ipc_legacy_mailbox_release_locked(p);
 	intr_restore(enabled);
-	/* The event plane is initialized only when an Agent role is activated. */
-	if (!inactive)
+	/* 仅在激活 Agent 角色时初始化事件面。 */
+	if (!inactive) {
 		memset(&p->agent_mailbox_valid, 0, AGENT_IPC_PROC_STATE_BYTES);
+		if (p->agent_ipc_observe_cold != 0)
+			memset(p->agent_ipc_observe_cold, 0,
+			       sizeof(*p->agent_ipc_observe_cold));
+	}
 	p->heartbeat_interval = 0;
 	enabled = intr_save();
+	agent_ipc_event_baton_clear_locked(p);
 	for (int tid = 0; tid < NTHREAD; tid++)
 		agent_ipc_thread_state_clear_locked(&p->threads[tid], AGENT_LOOP_NONE);
 	agent_identity_loop_refresh_locked(p);
@@ -1199,8 +1313,10 @@ agent_ipc_proc_teardown(struct proc *p)
 	if (p == 0)
 		return;
 	agent_ipc_remove_source(p->agent_control_id);
-	agent_ipc_proc_reset(p);
 	enabled = intr_save();
+	/* 撤销必须广播；普通事件只走单接收者传棒。 */
+	agent_ipc_broadcast_event_teardown_locked(p);
+	agent_ipc_proc_reset(p);
 	p->legacy_mail_endpoint_generation = 0;
 	intr_restore(enabled);
 }
@@ -1308,6 +1424,8 @@ agent_ipc_heartbeat_configure(struct proc *p, uint64 interval, uint64 *tick_out)
 void
 agent_ipc_tick_proc(struct proc *p, uint64 now)
 {
+	int woken;
+
 	if (p == 0 || p->state == P_UNUSED || !p->is_agent ||
 	    !proc_teardown_live(p))
 		return;
@@ -1321,16 +1439,17 @@ agent_ipc_tick_proc(struct proc *p, uint64 now)
 		    t->wait_reason != WAIT_REASON_EVENT ||
 		    t->wait_key != t->identity_generation)
 			continue;
-		if (wait_queue_wake_key_all(&p->agent_event_waiters,
-					    t->identity_generation) != 1)
+		woken = wait_queue_wake_key_all(&p->agent_event_waiters,
+					 t->identity_generation);
+		if (woken != 1)
 			panic("Agent deadline keyed wake");
-		p->agent_wait_wakeup_count++;
+		p->agent_wait_wakeup_count += woken;
 	}
 	(void)agent_ipc_queue_heartbeat_if_due(p, now);
 }
 
 
-/* IPC-facing system calls. */
+/* IPC 系统调用。 */
 
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 int agent_ipc_wait_test_publish(struct proc *p) { return agent_ipc_queue_intrinsic_timer_locked(p, 0, "wait=atomic-injected"); }
@@ -1369,6 +1488,7 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 	uint64 start = agent_ipc_ticks();
 	uint64 now;
 	int enabled;
+	int owns_baton;
 	int wait_status;
 	int status;
 
@@ -1391,13 +1511,20 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 			break;
 		}
 #endif
-		/* Keep predicate recheck and waiter publication in one IRQ-off window. */
+		/* 谓词复查与等待者发布必须处在同一个关中断窗口。 */
 		enabled = intr_save();
+recheck_locked:
 		p->agent_wait_loop_count++;
+		owns_baton = agent_ipc_event_baton_owned_locked(p, t);
 		status = AGENT_STATUS_NOT_FOUND;
-		if (agent_ipc_wait_reserve_locked(p, &event, &reservation))
+		if (agent_ipc_wait_reserve_locked(p, t, &event, &reservation))
 			status = reservation.slot == AGENT_WAIT_CANCEL_SLOT ?
 				 AGENT_STATUS_CANCELLED : AGENT_STATUS_OK;
+		if (owns_baton && status == AGENT_STATUS_NOT_FOUND) {
+			if (!agent_ipc_event_baton_release_locked(p, t))
+				panic("Agent event recheck baton");
+			agent_ipc_handoff_event_locked(p);
+		}
 		if (status != AGENT_STATUS_NOT_FOUND) {
 			agent_ipc_wait_state_locked(t, AGENT_LOOP_RUNNING);
 			intr_restore(enabled);
@@ -1433,15 +1560,17 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 		p->agent_wait_sleep_count++;
 		wait_status = wait_queue_sleep_key_irq(
 			&p->agent_event_waiters, t->identity_generation);
-		t->agent_loop_state = AGENT_LOOP_RUNNING;
-		agent_identity_loop_refresh_locked(p);
+		if (wait_status == WAIT_QUEUE_OK)
+			goto recheck_locked;
 		if (wait_status != WAIT_QUEUE_OK) {
+			if (agent_ipc_event_baton_release_locked(p, t) &&
+			    proc_teardown_live(p))
+				agent_ipc_handoff_event_locked(p);
 			agent_ipc_wait_state_locked(t, AGENT_LOOP_RUNNING);
 			status = -1;
 			intr_restore(enabled);
 			break;
 		}
-		intr_restore(enabled);
 	}
 	enabled = intr_save();
 	agent_ipc_wait_state_locked(t,
@@ -1449,7 +1578,7 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 			AGENT_LOOP_RUNNING : AGENT_LOOP_IDLE);
 	intr_restore(enabled);
 	if (status == AGENT_STATUS_OK || status == AGENT_STATUS_CANCELLED) {
-		/* Commit only after copyout and serialized attribution succeed. */
+		/* 仅在 copyout 与串行归因都成功后提交保留项。 */
 		if (agent_lifecycle_context_lane_enter(p) < 0) {
 			agent_ipc_wait_finish(p, &reservation, 0);
 			status = -1;
@@ -1542,7 +1671,7 @@ int sys_agent_wait_cancel(int pid, uint64 reasonaddr)
 			safestrcpy(target->agent_wait_cancel_reason, reason,
 				   sizeof(target->agent_wait_cancel_reason));
 			target->agent_wait_cancel_count++;
-			agent_ipc_wake_event_waiters(target);
+			agent_ipc_handoff_event_locked(target);
 			status = AGENT_STATUS_OK;
 		}
 	}
@@ -1645,11 +1774,8 @@ int sys_agent_wake(int pid, uint64 eventaddr)
 	if (event.type != AGENT_EVENT_MESSAGE)
 		return AGENT_STATUS_DENIED;
 	event.payload[sizeof(event.payload) - 1] = 0;
-	if (!agent_metadata_txn_lock(1))
-		return AGENT_STATUS_NO_SPACE;
 	status = agent_ipc_deliver_pid(pid, p, event.type, event.corr_id,
 				   p->context_path_latest, event.payload, 0,
 				   0);
-	agent_metadata_txn_unlock();
 	return status;
 }

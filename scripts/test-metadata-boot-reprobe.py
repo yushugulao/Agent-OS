@@ -97,6 +97,128 @@ def require_order(source: str, tokens: tuple[str, ...], label: str) -> None:
         position = next_position
 
 
+def validate_work_conserving_probe_model() -> None:
+    """Prove compatible scopes share one cursor without depending on its owner."""
+    # authority, store epoch, scope, lifecycle id, lifecycle generation, force
+    owner = (7, 11, 20, 1, 101, 1)
+    peers = [(7, 11, 20 + i, i + 1, 101 + i, 1) for i in range(1, 4)]
+    active: tuple[int, int, int, int, int, int] | None = None
+    cursor = 0
+    terminal_cache = False
+    epoch = 0
+    calls = {key: 0 for key in peers}
+    observed = {key: [0] for key in peers}
+
+    def is_trusted(key: tuple[int, int, int, int, int, int]) -> bool:
+        return key[2] in (0, 1)
+
+    def same_base(left: tuple[int, int, int, int, int, int],
+                  right: tuple[int, int, int, int, int, int]) -> bool:
+        return left[0] == right[0] and left[1] == right[1] and \
+            left[5] == right[5]
+
+    def reset() -> None:
+        nonlocal active, cursor, terminal_cache, epoch
+        active, cursor, terminal_cache, epoch = None, 0, False, 0
+
+    def bind(key: tuple[int, int, int, int, int, int]) -> bool:
+        nonlocal active, cursor, terminal_cache, epoch
+        if active is None:
+            active, epoch = key, 1
+            return True
+        exact = epoch != 0 and active == key
+        base = same_base(active, key)
+        if exact:
+            return True
+        if (epoch != 0 or terminal_cache) and not base:
+            reset()
+            active, epoch = key, 1
+            return True
+        if epoch != 0 and is_trusted(active) and not is_trusted(key):
+            return False
+        if epoch != 0 and active[2] == key[2] and active[3:5] != key[3:5]:
+            reset()
+            active, epoch = key, 1
+            return True
+        # Different compatible scopes change logical ownership only. The raw
+        # scan cursor, summaries, and the external store buffer remain shared.
+        active, epoch = key, epoch + 1 if epoch != 0 else 1
+        return True
+
+    def finish() -> None:
+        nonlocal terminal_cache, epoch
+        terminal_cache, epoch = True, 0
+
+    # The original owner gets one bounded turn and then never runs again.
+    require(bind(owner), "the initial ordinary probe could not bind")
+    cursor += 1
+    require(cursor == 1, "the abandoned owner did not publish one PROGRESS")
+    completed: set[tuple[int, int, int, int, int, int]] = set()
+    for turn in range(1024 * len(peers)):
+        key = peers[turn % len(peers)]
+        if key in completed:
+            continue
+        calls[key] += 1
+        before = cursor
+        require(bind(key), "a compatible ordinary takeover returned BUSY")
+        if terminal_cache:
+            completed.add(key)
+        else:
+            cursor += 1
+            if cursor >= 753:
+                terminal_cache = True
+                completed.add(key)
+                finish()
+        observed[key].append(cursor)
+        require(terminal_cache or cursor > before,
+                "a compatible takeover returned without useful progress")
+        if len(completed) == len(peers):
+            break
+    require(owner not in completed and active != owner,
+            "completion still depends on the abandoned owner")
+    require(len(completed) == len(peers),
+            "compatible scopes did not finish through shared-cursor handoff")
+    require(all(count < 1024 for count in calls.values()),
+            "a work-conserving probe exhausted the public retry cap")
+    require(all(all(a <= b for a, b in zip(values, values[1:]))
+                for values in observed.values()),
+            "a compatible scope observed regressing physical progress")
+
+    # Ordinary callers cannot take an in-flight trusted recovery cursor.
+    trusted_key = (7, 11, 0, 0, 0, 1)
+    reset()
+    require(bind(trusted_key), "trusted recovery could not bind an idle probe")
+    cursor = 19
+    ordinary = peers[0]
+    blocked = not bind(ordinary)
+    require(blocked and active == trusted_key and cursor == 19,
+            "ordinary takeover displaced trusted recovery")
+
+    # Same-scope lifecycle reuse and physical authority changes are reset
+    # boundaries; successful completion alone is not.
+    old = (7, 11, 20, 1, 101, 1)
+    lifecycle_reuse = (7, 11, 20, 1, 102, 1)
+    authority_change = (8, 11, 21, 2, 202, 1)
+    store_repurpose = (7, 12, 21, 2, 202, 1)
+    reset()
+    require(bind(old), "old lifecycle could not bind")
+    cursor = 37
+    require(bind(lifecycle_reuse) and cursor == 0,
+            "same-scope lifecycle ABA retained a stale cursor")
+    cursor = 41
+    terminal_cache, epoch = True, 0
+    require(bind(authority_change) and cursor == 0 and not terminal_cache,
+            "authority change retained a stale terminal cache")
+    cursor = 43
+    terminal_cache, epoch = True, 0
+    require(bind(store_repurpose) and cursor == 0 and not terminal_cache,
+            "store-buffer repurpose retained a stale terminal cache")
+    cursor = 753
+    finish()
+    require(terminal_cache and cursor == 753,
+            "successful finish discarded the terminal summary cache")
+
+
 def validate(sources: dict[str, str]) -> None:
     bio_h = sources["bio_h"]
     internal = sources["internal"]
@@ -380,6 +502,19 @@ def validate(sources: dict[str, str]) -> None:
     ):
         require(token in probe_h, f"probe status mapping lost: {token}")
 
+    probe_key = compact(declaration_body(probe_h, "struct agent_metadata_probe_key"))
+    for token in (
+        "uint64authority_cookie;",
+        "uint64store_epoch;",
+        "uintreload_scope;",
+        "uintworkflow_lifecycle_id;",
+        "uint64workflow_lifecycle_generation;",
+        "intforce;",
+    ):
+        require(token in probe_key, f"probe continuation key lost: {token}")
+    require("resumable" not in probe_key,
+            "probe still has an unsafe caller-selected resumability mode")
+
     # Probe, rather than the generic store-I/O lock owner, owns resumable bank
     # reads. This keeps cursor lifetime and the bytes it validates together.
     require(
@@ -388,17 +523,10 @@ def validate(sources: dict[str, str]) -> None:
     )
     cursor = compact(declaration_body(probe, "struct agent_metadata_probe_cursor"))
     for token in (
-        "intactive;",
-        "intbank;",
-        "intconfirm;",
-        "uintphase;",
-        "uintoffset;",
-        "uintstore_bytes;",
-        "uint64dev;",
-        "uint64inum;",
-        "uint64incarnation;",
-        "uint64inode_size;",
-        "structagent_meta_store_headerheader;",
+        "signedcharactive,bank,confirm;",
+        "ucharphase;",
+        "uintoffset,store_bytes,journal_block;",
+        "uintdev,inum,inode_size;uint64incarnation;",
         "structagent_meta_store_headerverify_header;",
     ):
         require(token in cursor, f"probe cursor binding lost: {token}")
@@ -450,26 +578,150 @@ def validate(sources: dict[str, str]) -> None:
     require(
         "if(probe.epoch!=0&&"
         "probe.key.authority_cookie==key->authority_cookie&&"
+        "probe.key.store_epoch==key->store_epoch&&"
         "probe.key.reload_scope==key->reload_scope&&"
-        "probe.key.force==key->force&&"
-        "probe.key.resumable==key->resumable)return;" in bind,
+        "probe.key.workflow_lifecycle_id==key->workflow_lifecycle_id&&"
+        "probe.key.workflow_lifecycle_generation=="
+        "key->workflow_lifecycle_generation&&"
+        "probe.key.force==key->force)"
+        "returnAGENT_META_BANK_VALID;" in bind,
         "probe operation-key equality guard is weakened",
     )
     for token in (
         "probe.key.authority_cookie==key->authority_cookie",
+        "probe.key.store_epoch==key->store_epoch",
         "probe.key.reload_scope==key->reload_scope",
+        "probe.key.workflow_lifecycle_id==key->workflow_lifecycle_id",
+        "probe.key.workflow_lifecycle_generation==key->workflow_lifecycle_generation",
         "probe.key.force==key->force",
-        "probe.key.resumable==key->resumable",
         "probe.key=*key",
-        "agent_metadata_probe_new_epoch()",
+        "agent_metadata_probe_new_epoch(reuse)",
     ):
         require(token in bind, f"probe operation-key binding lost: {token}")
+    state = compact(declaration_body(probe, "static struct"))
+    require(
+        "cache_ready" in state and "wait_generation" not in state and
+        "wait_mask" not in state and "wait_cursor" not in state,
+        "probe retained a queue that can strand work behind an abandoned owner",
+    )
+    require(
+        "agent_metadata_probe_wait_add(" not in probe and
+        "agent_metadata_probe_wait_next(" not in probe,
+        "probe retained owner-dependent waiter helpers",
+    )
+    new_epoch = compact(
+        function_body(probe, "agent_metadata_probe_new_epoch("))
+    require(
+        "if(!reuse){" in new_epoch and
+        "memset(probe.summary,0,sizeof(probe.summary))" in new_epoch and
+        "memset(&probe.cursor,0,sizeof(probe.cursor))" in new_epoch and
+        "probe.confirmed_bank=-1" in new_epoch,
+        "compatible epoch handoff does not preserve the physical cursor/cache",
+    )
+    require(
+        new_epoch.find("if(!reuse){") <
+        new_epoch.find("memset(&probe.cursor,0,sizeof(probe.cursor))") <
+        new_epoch.find("probe.confirmed_bank=-1") <
+        new_epoch.find("}", new_epoch.find("probe.confirmed_bank=-1")),
+        "cursor reset escaped the non-reuse epoch branch",
+    )
+    for token in (
+        "intbase=probe.key.authority_cookie==key->authority_cookie",
+        "probe.key.store_epoch==key->store_epoch",
+        "probe.key.force==key->force",
+        "!base",
+        "agent_metadata_probe_reset()",
+    ):
+        require(token in bind, f"physical probe base invalidation lost: {token}")
+    require(
+        "if((probe.epoch!=0||probe.cache_ready)&&!base)"
+        "agent_metadata_probe_reset();" in bind,
+        "authority or store-buffer epoch change retains physical probe state",
+    )
+    require_order(
+        bind,
+        (
+            "if(probe.epoch!=0&&!agent_metadata_probe_trusted(&probe.key))",
+            ".id=probe.key.workflow_lifecycle_id",
+            ".generation=probe.key.workflow_lifecycle_generation",
+            "workflow_lifecycle_scope(lifecycle,&scope)<0",
+            "scope!=probe.key.reload_scope",
+            "agent_metadata_probe_reset()",
+            "probe.key.authority_cookie==key->authority_cookie",
+        ),
+        "stale ordinary owner lifecycle invalidation",
+    )
+    require_order(
+        bind,
+        (
+            "probe.key.reload_scope==key->reload_scope",
+            "probe.key.workflow_lifecycle_id!=key->workflow_lifecycle_id",
+            "probe.key.workflow_lifecycle_generation!=key->workflow_lifecycle_generation",
+            "agent_metadata_probe_reset()",
+            "probe.key=*key",
+        ),
+        "same-scope lifecycle ABA invalidation",
+    )
+    require(
+        "if(probe.epoch!=0&&"
+        "probe.key.reload_scope==key->reload_scope&&"
+        "(probe.key.workflow_lifecycle_id!=key->workflow_lifecycle_id||"
+        "probe.key.workflow_lifecycle_generation!="
+        "key->workflow_lifecycle_generation))"
+        "agent_metadata_probe_reset();" in bind,
+        "same-scope lifecycle reuse retains stale physical probe state",
+    )
+    require(
+        "if(probe.epoch!=0&&"
+        "agent_metadata_probe_trusted(&probe.key)&&"
+        "!agent_metadata_probe_trusted(key))"
+        "returnAGENT_META_BANK_BUSY;" in bind,
+        "an ordinary scope can take over active trusted recovery",
+    )
+    require(
+        bind.count("returnAGENT_META_BANK_BUSY") == 1 and
+        "reuse=probe.epoch!=0||probe.cache_ready" in bind and
+        "probe.key=*key;agent_metadata_probe_new_epoch(reuse);"
+        in bind,
+        "compatible ordinary scope takeover is not work-conserving",
+    )
+    release = compact(function_body(probe, "agent_metadata_probe_release("))
+    require(
+        "if(!reusable)" in release and
+        "agent_metadata_probe_reset()" in release and
+        "memset(&probe.cursor,0,sizeof(probe.cursor))" in release and
+        "probe.cache_ready=1" in release and "probe.epoch=0" in release,
+        "successful finish does not retain only the verified terminal cache",
+    )
+    require("memset(probe.summary" not in release,
+            "successful finish clears reusable terminal summaries")
+    finish = compact(function_body(probe, "agent_metadata_probe_finish("))
+    require("agent_metadata_probe_release(1)" in finish,
+            "successful scope completion discards the shared verified cache")
+    invalidate = compact(
+        function_body(probe, "agent_metadata_probe_invalidate("))
+    for token in (
+        "probe.key.authority_cookie==key->authority_cookie",
+        "probe.key.store_epoch==key->store_epoch",
+        "probe.key.reload_scope==key->reload_scope",
+        "probe.key.force==key->force",
+        "agent_metadata_probe_release(0)",
+    ):
+        require(token in invalidate,
+                f"targeted continuation invalidation lost: {token}")
 
     read = compact(function_body(probe, "agent_metadata_probe_read("))
+    require(
+        "status=agent_metadata_probe_fault(bank,allow_fault&&!confirm);"
+        "if(status!=AGENT_META_BANK_VALID){agent_metadata_probe_release(0);"
+        "returnstatus;}" in read,
+        "faulted probe retains a continuation lease",
+    )
     require_order(
         read,
         (
-            "agent_metadata_probe_bind(key)",
+            "status=agent_metadata_probe_bind(key)",
+            "if(status!=AGENT_META_BANK_VALID)returnstatus",
             "if(!confirm&&probe.summary[bank].classified)",
             "returnprobe.summary[bank].status",
             "agent_metadata_probe_open(bank,&ip)",
@@ -500,6 +752,22 @@ def validate(sources: dict[str, str]) -> None:
         "probe.cursor.inode_size!=ip->size)" in read,
         "probe cursor identity mismatch guard is weakened",
     )
+    require_order(
+        read,
+        (
+            "agent_metadata_probe_open(bank,&ip)",
+            "if(probe.cursor.active&&status!=AGENT_META_BANK_BUSY&&status!=AGENT_META_BANK_IO)",
+            "if(probe.cursor.active)",
+            "agent_metadata_probe_release(0)",
+            "returnstatus",
+        ),
+        "open error cursor invalidation",
+    )
+    require(
+        "if(probe.cursor.active){agent_metadata_probe_release(0);"
+        "returnstatus;}" in read,
+        "open BUSY/IO retains a stale cursor",
+    )
     require(
         read.count("(status>=0||status==AGENT_META_BANK_CORRUPT)") >= 2,
         "terminal absent/uncommitted/corrupt results are not cached",
@@ -520,6 +788,22 @@ def validate(sources: dict[str, str]) -> None:
     require_order(
         read,
         (
+            "if(status==AGENT_META_BANK_BUSY&&probe.progress_sequence!=progress_before)",
+            "status=AGENT_META_BANK_PROGRESS",
+            "if(status!=AGENT_META_BANK_PROGRESS)",
+            "agent_metadata_probe_release(0)",
+            "returnstatus",
+        ),
+        "progress-only cursor continuation",
+    )
+    require(
+        "if(status!=AGENT_META_BANK_PROGRESS)"
+        "agent_metadata_probe_release(0);" in read,
+        "a non-progress read outcome retains the sticky lease",
+    )
+    require_order(
+        read,
+        (
             "probe.cursor.phase=AGENT_META_PROBE_HEADER",
             "agent_metadata_probe_header_valid(store,ip->size)",
             "probe.cursor.phase=AGENT_META_PROBE_PAYLOAD",
@@ -534,13 +818,13 @@ def validate(sources: dict[str, str]) -> None:
     )
     require_order(
         header_valid,
-        ("probe.cursor.store_bytes=store_bytes", "probe.cursor.header=store->header"),
-        "captured header",
+        ("probe.cursor.store_bytes=store_bytes", "returnAGENT_META_BANK_VALID"),
+        "validated header size",
     )
     validate_bank = compact(function_body(probe, "agent_metadata_probe_validate("))
     require(
-        "if(memcmp(&probe.cursor.header,&probe.cursor.verify_header,"
-        "sizeof(probe.cursor.header))!=0||"
+        "if(memcmp(&store->header,&probe.cursor.verify_header,"
+        "sizeof(store->header))!=0||"
         "store->header.payload_hash!=agent_meta_format_payload_hash("
         in validate_bank,
         "final-header mismatch no longer independently rejects the bank",
@@ -548,7 +832,7 @@ def validate(sources: dict[str, str]) -> None:
     require_order(
         validate_bank,
         (
-            "if(memcmp(&probe.cursor.header,&probe.cursor.verify_header,sizeof(probe.cursor.header))!=0",
+            "if(memcmp(&store->header,&probe.cursor.verify_header,sizeof(store->header))!=0",
             "store->header.payload_hash!=agent_meta_format_payload_hash(",
             "agent_meta_format_records_valid(store)",
             "*generation=store->header.generation",
@@ -578,15 +862,16 @@ def validate(sources: dict[str, str]) -> None:
 
     summary = compact(function_body(probe, "agent_metadata_probe_summary("))
     require(
-        "if(!key->resumable&&status<0){agent_metadata_probe_reset();"
-        "if(status==AGENT_META_BANK_PROGRESS)status=AGENT_META_BANK_BUSY;}"
-        in summary,
-        "non-resumable summary can retain a partial or confirmed cache",
+        "returnagent_metadata_probe_read(key,bank,0,store,generation,"
+        "payload_hash,migration,allow_fault);" in summary,
+        "summary wrapper no longer preserves bounded progress",
     )
+    require("resumable" not in summary,
+            "summary retained caller-selected continuation policy")
     confirm = compact(function_body(probe, "agent_metadata_probe_confirm("))
     require(
-        "if(key->resumable&&probe.confirmed_bank==bank" in confirm,
-        "non-resumable reload can reuse selected-bank confirmation",
+        "if(probe.confirmed_bank==bank" in confirm,
+        "bounded confirmation cannot resume",
     )
     for token in (
         "probe.summary[bank].status==AGENT_META_BANK_VALID",
@@ -596,22 +881,22 @@ def validate(sources: dict[str, str]) -> None:
     ):
         require(token in confirm, f"confirmed candidate cache is under-bound: {token}")
     require(
-        "if(key->resumable)probe.confirmed_bank=bank" in confirm,
-        "confirmed-bank cache is not restricted to resumable boot loads",
+        "probe.confirmed_bank=bank" in confirm,
+        "confirmed-bank cache is not retained for the bound operation",
     )
     require_order(
         confirm,
         (
             "agent_metadata_probe_read(key,bank,1,store,&generation,&payload_hash,&migration,0)",
             "if(generation!=expected_generation||payload_hash!=expected_hash||migration!=expected_migration)",
-            "agent_metadata_probe_new_epoch()",
+            "agent_metadata_probe_release(0)",
             "returnAGENT_META_BANK_CORRUPT",
         ),
         "selected-bank confirmation mismatch",
     )
     mismatch = confirm[
         confirm.find("if(generation!=expected_generation") :
-        confirm.find("if(key->resumable)probe.confirmed_bank=bank")
+        confirm.find("probe.confirmed_bank=bank")
     ]
     require(
         "AGENT_META_BANK_INTERRUPTED" not in mismatch,
@@ -622,8 +907,57 @@ def validate(sources: dict[str, str]) -> None:
     # generations in the correct direction, then confirms the chosen bank.
     select = compact(function_body(store, "agent_meta_store_select("))
     require(
-        ".resumable=!agent_file_loaded" in select,
-        "runtime loaded reload incorrectly enables resumable cached reads",
+        "agent_meta_store_probe_key(force,reload_scope,&key)" in select,
+        "selector bypasses the stable continuation key",
+    )
+    probe_key_builder = compact(
+        function_body(store, "agent_meta_store_probe_key("))
+    for token in (
+        "key->authority_cookie=store_authority_cookie()",
+        "key->store_epoch=store_buf_epoch",
+        "key->reload_scope=reload_scope",
+        "key->force=force",
+        "if(!force||!agent_file_loaded)returnAGENT_META_BANK_VALID",
+        "if(reload_scope==VFS_SCOPE_SYSTEM)returnAGENT_META_BANK_VALID",
+        "vfs_scope_lifecycle(reload_scope,&lifecycle)<0",
+        "key->workflow_lifecycle_id=lifecycle.id",
+        "key->workflow_lifecycle_generation=lifecycle.generation",
+    ):
+        require(token in probe_key_builder,
+                f"runtime reload key is under-bound: {token}")
+    require_order(
+        probe_key_builder,
+        (
+            "vfs_scope_lifecycle(reload_scope,&lifecycle)",
+            "agent_metadata_probe_invalidate(key)",
+            "returnAGENT_META_BANK_INTERRUPTED",
+        ),
+        "invalid scoped lifecycle discards continuation",
+    )
+    authority_cookie = compact(function_body(store, "store_authority_cookie("))
+    require("agent_meta_format_hash_mix(cookie,store_buf_epoch)" in authority_cookie,
+            "shared store buffer reuse is absent from the probe authority key")
+    require(
+        "if(agent_file_loaded&&agent_metadata_probe_epoch()==0)" in
+        compact(function_body(store, "agent_file_load_snapshot(")),
+        "runtime reload destroys a live sticky continuation",
+    )
+    repurpose = compact(
+        function_body(store, "agent_meta_store_buffer_repurpose("))
+    require("agent_metadata_probe_reset()" in repurpose and
+            "store_buf_epoch++" in repurpose and
+            "if(store_buf_epoch==0)store_buf_epoch++" in repurpose,
+            "store buffer reuse does not revoke an old probe")
+    persist_start = compact(
+        function_body(store, "agent_meta_persist_start_locked("))
+    require_order(
+        persist_start,
+        (
+            "if(!use_journal)",
+            "agent_meta_store_buffer_repurpose()",
+            "agent_meta_store_build_scope(",
+        ),
+        "full-COW buffer reuse invalidation",
     )
     require(
         "agent_meta_bank_shadow_install" not in select
@@ -916,13 +1250,6 @@ def validate(sources: dict[str, str]) -> None:
         "missing snapshot reconciliation",
     )
     require(
-        "reload_one_scope?AGENT_FILE_META_MAX:AGENT_CATALOG_PREPARE_STEP"
-        in catalog_prepare
-        and "reload_one_scope?count:AGENT_CATALOG_PREPARE_STEP"
-        in catalog_prepare,
-        "foreground one-scope reload can yield a partial catalog plan",
-    )
-    require(
         catalog_prepare.count("returnAGENT_METADATA_LOAD_PROGRESS;") == 2
         and catalog_prepare.count("AGENT_METADATA_LOAD_PROGRESS") == 2
         and "if(result->plan_catalog_cursor<AGENT_FILE_META_MAX)returnAGENT_METADATA_LOAD_PROGRESS;"
@@ -953,9 +1280,15 @@ def validate(sources: dict[str, str]) -> None:
 
     load = compact(function_body(store, "agent_file_load_snapshot("))
     require(
-        "if(agent_file_loaded){memset(&agent_meta_workspace.load,0,sizeof(agent_meta_workspace.load));"
-        "agent_meta_workspace.load.scratch_bank=-1;}" in load,
-        "runtime reload is not forced into a fresh, single-call plan",
+        "if(agent_file_loaded&&agent_metadata_probe_epoch()==0)" in load,
+        "a competing runtime scope discards the sticky reload state",
+    )
+    require(
+        "if(apply->plan_active&&"
+        "(!agent_metadata_recovery_retryable(select_status)||"
+        "agent_metadata_probe_epoch()==0))agent_meta_store_apply_abort()"
+        in load,
+        "lease contention discards another scope's catalog progress",
     )
     require_order(
         load,
@@ -999,9 +1332,9 @@ def validate(sources: dict[str, str]) -> None:
         "progress path can bypass the store-owned apply-plan lifetime",
     )
     require(
-        "if(agent_file_loaded||!agent_metadata_recovery_retryable(result))"
+        "if(result!=AGENT_METADATA_LOAD_PROGRESS)"
         "agent_metadata_probe_reset()" in out_store,
-        "boot progress discards its probe candidate",
+        "runtime progress discards its sticky probe candidate",
     )
     require(
         "agent_meta_store_prepare_banks_locked" not in load,
@@ -1138,9 +1471,19 @@ def validate(sources: dict[str, str]) -> None:
     for token in (
         "agent_meta_store_failed_closed=1",
         "agent_metadata_recovery_defer(status,agent_ticks())",
-        "agent_background_request()",
     ):
         require(token in defer, f"deferred boot fail-closed gate lost: {token}")
+    require(
+        "agent_background_request()" not in defer,
+        "boot recovery bypasses its timer deadline",
+    )
+    metadata_tick = compact(function_body(objects, "agent_metadata_tick("))
+    require(
+        "if(agent_metadata_recovery_pending()&&"
+        "agent_metadata_recovery_due(now))agent_background_request();"
+        in metadata_tick,
+        "timer no longer publishes due boot recovery work",
+    )
     boot_reprobe = compact(
         function_body(objects, "agent_file_store_boot_reprobe(void)")
     )
@@ -1405,7 +1748,7 @@ def validate(sources: dict[str, str]) -> None:
             "if(info.metadata_writeback_dirty!=0",
             "info.metadata_writeback_pending==0",
             "agent_file_meta_init()==AGENT_STATUS_OK",
-            "agentmetalarge_ucore:runtime_reload_once=1",
+            "agentmetalarge_ucore:runtime_reload_completed=1",
             "agentmetalarge_ucore:seed_ready=1records=%d",
         ),
         "foreground over-burst reload oracle",
@@ -1424,7 +1767,7 @@ def validate(sources: dict[str, str]) -> None:
         "len(bank[\"store_image\"])<=16*ucore_fs.BSIZE",
         "states!=[expected,\"valid\"]",
         "validate_large_terminal\"${large_image}\"valid",
-        "agentmetalarge_ucore:runtime_reload_once=1",
+        "agentmetalarge_ucore:runtime_reload_completed=1",
         "forterminalinabsentuncommittedcorrupt;do",
         "mutate_large_peer\"${boot_image}\"\"${terminal}\"",
         "--require-progress",
@@ -1472,6 +1815,7 @@ def main() -> int:
     original = {
         name: path.read_text(encoding="utf-8") for name, path in FILES.items()
     }
+    validate_work_conserving_probe_model()
     validate(original)
     mutations: tuple[Mutation, ...] = (
         replacement(
@@ -1658,8 +2002,132 @@ def main() -> int:
         replacement(
             "weaken operation-key equality",
             "probe",
-            "\t    probe.key.reload_scope == key->reload_scope &&",
-            "\t    probe.key.reload_scope == key->reload_scope ||",
+            "\t    probe.key.store_epoch == key->store_epoch &&\n"
+            "\t    probe.key.reload_scope == key->reload_scope &&\n"
+            "\t    probe.key.workflow_lifecycle_id == key->workflow_lifecycle_id &&",
+            "\t    probe.key.store_epoch == key->store_epoch &&\n"
+            "\t    probe.key.reload_scope == key->reload_scope ||\n"
+            "\t    probe.key.workflow_lifecycle_id == key->workflow_lifecycle_id &&",
+        ),
+        replacement(
+            "drop explicit store epoch continuation binding",
+            "probe_h",
+            "\tuint64 store_epoch;",
+            "\tuint64 ignored_epoch;",
+        ),
+        replacement(
+            "clear the physical cursor on a compatible takeover",
+            "probe",
+            "\tif (!reuse) {\n"
+            "\t\tmemset(probe.summary, 0, sizeof(probe.summary));",
+            "\tif (1) {\n"
+            "\t\tmemset(probe.summary, 0, sizeof(probe.summary));",
+        ),
+        replacement(
+            "reuse a stale cursor after a physical base change",
+            "probe",
+            "\tif (!reuse) {\n"
+            "\t\tmemset(probe.summary, 0, sizeof(probe.summary));",
+            "\tif (0) {\n"
+            "\t\tmemset(probe.summary, 0, sizeof(probe.summary));",
+        ),
+        replacement(
+            "retain cache across authority or store epoch change",
+            "probe",
+            "\tif ((probe.epoch != 0 || probe.cache_ready) && !base)\n"
+            "\t\tagent_metadata_probe_reset();",
+            "\tif ((probe.epoch != 0 || probe.cache_ready) && 0 && !base)\n"
+            "\t\tagent_metadata_probe_reset();",
+        ),
+        replacement(
+            "retain cursor after ordinary owner lifecycle expires",
+            "probe",
+            "\t\tif (workflow_lifecycle_scope(lifecycle, &scope) < 0 ||\n"
+            "\t\t    scope != probe.key.reload_scope)\n"
+            "\t\t\tagent_metadata_probe_reset();",
+            "\t\tif (workflow_lifecycle_scope(lifecycle, &scope) < 0 ||\n"
+            "\t\t    scope != probe.key.reload_scope)\n"
+            "\t\t\tprobe.epoch = probe.epoch;",
+        ),
+        replacement(
+            "retain cursor across same-scope lifecycle ABA",
+            "probe",
+            "\tif (probe.epoch != 0 && probe.key.reload_scope == key->reload_scope &&\n"
+            "\t    (probe.key.workflow_lifecycle_id != key->workflow_lifecycle_id ||\n"
+            "\t     probe.key.workflow_lifecycle_generation !=\n"
+            "\t\t     key->workflow_lifecycle_generation))\n"
+            "\t\tagent_metadata_probe_reset();",
+            "\tif (0 && probe.epoch != 0 &&\n"
+            "\t    probe.key.reload_scope == key->reload_scope)\n"
+            "\t\tagent_metadata_probe_reset();",
+        ),
+        replacement(
+            "let an ordinary scope displace trusted recovery",
+            "probe",
+            "\tif (probe.epoch != 0 && agent_metadata_probe_trusted(&probe.key) &&\n"
+            "\t    !agent_metadata_probe_trusted(key))\n"
+            "\t\treturn AGENT_META_BANK_BUSY;",
+            "\tif (0 && agent_metadata_probe_trusted(&probe.key) &&\n"
+            "\t    !agent_metadata_probe_trusted(key))\n"
+            "\t\treturn AGENT_META_BANK_BUSY;",
+        ),
+        replacement(
+            "make compatible ordinary takeover wait for its owner",
+            "probe",
+            "\treuse = probe.epoch != 0 || probe.cache_ready;\n"
+            "\tprobe.key = *key;",
+            "\tif (probe.epoch != 0)\n"
+            "\t\treturn AGENT_META_BANK_BUSY;\n"
+            "\treuse = probe.epoch != 0 || probe.cache_ready;\n"
+            "\tprobe.key = *key;",
+        ),
+        replacement(
+            "force a compatible successor to reread both banks",
+            "probe",
+            "\treuse = probe.epoch != 0 || probe.cache_ready;",
+            "\treuse = 0;",
+        ),
+        replacement(
+            "discard the verified cache on successful finish",
+            "probe",
+            "\tagent_metadata_probe_release(1);",
+            "\tagent_metadata_probe_reset();",
+        ),
+        replacement(
+            "clear terminal summaries on successful finish",
+            "probe",
+            "\tmemset(&probe.cursor, 0, sizeof(probe.cursor));\n"
+            "\tprobe.cache_ready = 1;",
+            "\tmemset(&probe.cursor, 0, sizeof(probe.cursor));\n"
+            "\tmemset(probe.summary, 0, sizeof(probe.summary));\n"
+            "\tprobe.cache_ready = 1;",
+        ),
+        replacement(
+            "drop reusable terminal cache marker",
+            "probe",
+            "\tprobe.cache_ready = 1;",
+            "\tprobe.cache_ready = 0;",
+        ),
+        replacement(
+            "retain a faulted continuation lease",
+            "probe",
+            "\t\tif (status != AGENT_META_BANK_VALID) {\n"
+            "\t\t\tagent_metadata_probe_release(0);\n"
+            "\t\t\treturn status;\n\t\t}",
+            "\t\tif (status != AGENT_META_BANK_VALID)\n"
+            "\t\t\treturn status;",
+        ),
+        replacement(
+            "globally reset another scope on invalid lifecycle",
+            "store",
+            "\t\tagent_metadata_probe_invalidate(key);",
+            "\t\tagent_metadata_probe_reset();",
+        ),
+        replacement(
+            "erase live runtime continuation before retry",
+            "store",
+            "\tif (agent_file_loaded && agent_metadata_probe_epoch() == 0) {",
+            "\tif (agent_file_loaded) {",
         ),
         replacement(
             "erase typed checkpoint result",
@@ -1722,26 +2190,26 @@ def main() -> int:
         replacement(
             "drop final header match",
             "probe",
-            "\tif (memcmp(&probe.cursor.header, &probe.cursor.verify_header,",
-            "\tif (0 && memcmp(&probe.cursor.header, &probe.cursor.verify_header,",
+            "\tif (memcmp(&store->header, &probe.cursor.verify_header,",
+            "\tif (0 && memcmp(&store->header, &probe.cursor.verify_header,",
         ),
         replacement(
             "mask final header mismatch",
             "probe",
-            "\t\t   sizeof(probe.cursor.header)) != 0 ||",
-            "\t\t   sizeof(probe.cursor.header)) != 0 && 0 ||",
+            "\t\t   sizeof(store->header)) != 0 ||",
+            "\t\t   sizeof(store->header)) != 0 && 0 ||",
         ),
         replacement(
             "make confirmation mismatch retryable",
             "probe",
-            "\t\treturn AGENT_META_BANK_CORRUPT;\n\t}\n\tif (key->resumable)\n\t\tprobe.confirmed_bank = bank;",
-            "\t\treturn AGENT_META_BANK_INTERRUPTED;\n\t}\n\tif (key->resumable)\n\t\tprobe.confirmed_bank = bank;",
+            "\t\treturn AGENT_META_BANK_CORRUPT;\n\t}\n\tprobe.confirmed_bank = bank;",
+            "\t\treturn AGENT_META_BANK_INTERRUPTED;\n\t}\n\tprobe.confirmed_bank = bank;",
         ),
         replacement(
-            "enable nonresumable confirmed cache",
+            "bypass confirmed-bank identity",
             "probe",
-            "\tif (key->resumable && probe.confirmed_bank == bank &&",
             "\tif (probe.confirmed_bank == bank &&",
+            "\tif (1 &&",
         ),
         replacement(
             "under-bind confirmed cache",
@@ -1750,10 +2218,57 @@ def main() -> int:
             "\t    1 &&",
         ),
         replacement(
-            "make runtime reload resumable",
+            "drop runtime lifecycle generation binding",
             "store",
-            "\t\t.resumable = !agent_file_loaded,",
-            "\t\t.resumable = 1,",
+            "\tkey->workflow_lifecycle_generation = lifecycle.generation;",
+            "\tkey->workflow_lifecycle_generation = 0;",
+        ),
+        replacement(
+            "drop runtime lifecycle id binding",
+            "store",
+            "\tkey->workflow_lifecycle_id = lifecycle.id;",
+            "\tkey->workflow_lifecycle_id = 0;",
+        ),
+        replacement(
+            "drop lifecycle key equality",
+            "probe",
+            "\t    probe.key.workflow_lifecycle_id == key->workflow_lifecycle_id &&",
+            "\t    1 &&",
+        ),
+        replacement(
+            "drop lifecycle generation equality",
+            "probe",
+            "\t    probe.key.workflow_lifecycle_generation ==\n"
+            "\t\t    key->workflow_lifecycle_generation &&",
+            "\t    1 &&",
+        ),
+        replacement(
+            "drop store buffer authority epoch",
+            "store",
+            "\tcookie = agent_meta_format_hash_mix(cookie, store_buf_epoch);",
+            "\t(void)store_buf_epoch;",
+        ),
+        replacement(
+            "retain probe across store buffer reuse",
+            "store",
+            "\tagent_metadata_probe_reset();\n\tstore_buf_epoch++;",
+            "\tstore_buf_epoch++;",
+        ),
+        replacement(
+            "retain lease after non-progress error",
+            "probe",
+            "\tif (status != AGENT_META_BANK_PROGRESS)\n"
+            "\t\tagent_metadata_probe_release(0);",
+            "\tif (status != AGENT_META_BANK_PROGRESS)\n"
+            "\t\tprobe.cache_ready = 1;",
+        ),
+        replacement(
+            "retain lease after open error",
+            "probe",
+            "\t\tif (probe.cursor.active) {\n"
+            "\t\t\tagent_metadata_probe_release(0);\n"
+            "\t\t\treturn status;\n\t\t}",
+            "\t\tif (probe.cursor.active)\n\t\t\treturn status;",
         ),
         replacement(
             "invert selector generation comparison",
@@ -1973,21 +2488,6 @@ def main() -> int:
             "probe",
             "\tprobe.progress_phase = 4;",
             "\tprobe.progress_phase = 4;\n\tprobe.progress_phase = 3;",
-        ),
-        replacement(
-            "allow foreground catalog progress",
-            "catalog",
-            "(reload_one_scope ? count : AGENT_CATALOG_PREPARE_STEP)",
-            "AGENT_CATALOG_PREPARE_STEP",
-        ),
-        replacement(
-            "return indirect foreground progress",
-            "catalog",
-            "{\n\tuint limit;\n\tstruct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();\n\tstruct agent_catalog_plan_key key;\n\tuint64 binding;\n\n\tagent_catalog_require_txn();",
-            "{\n\tuint limit;\n\tstruct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();\n\tstruct agent_catalog_plan_key key;\n\tuint64 binding;\n"
-            "\tint forced = AGENT_METADATA_LOAD_PROGRESS;\n\n"
-            "\tagent_catalog_require_txn();\n"
-            "\tif (reload_one_scope)\n\t\treturn forced;",
         ),
         replacement(
             "charge progress as retry failure",

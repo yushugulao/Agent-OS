@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include "console.h"
 #include "defs.h"
+#include "sbi.h"
 extern void shutdown(void);
 
 static char digits[] = "0123456789abcdef";
@@ -11,14 +12,14 @@ static void printint(unsigned long long value, int base, int negative)
 	int i;
 
 	if (negative)
-		consputc('-');
+		console_putchar('-');
 	i = 0;
 	do {
 		buf[i++] = digits[value % (unsigned)base];
 	} while ((value /= (unsigned)base) != 0);
 
 	while (--i >= 0)
-		consputc(buf[i]);
+		console_putchar(buf[i]);
 }
 
 static int integer_conversion(int c)
@@ -29,10 +30,10 @@ static int integer_conversion(int c)
 static void printptr(uint64 x)
 {
 	int i;
-	consputc('0');
-	consputc('x');
+	console_putchar('0');
+	console_putchar('x');
 	for (i = 0; i < (sizeof(uint64) * 2); i++, x <<= 4)
-		consputc(digits[x >> (sizeof(uint64) * 8 - 4)]);
+		console_putchar(digits[x >> (sizeof(uint64) * 8 - 4)]);
 }
 
 // Print to the console. Integer formats support the default, l, and ll widths.
@@ -46,7 +47,7 @@ void printf(char *fmt, ...)
 		static const char fatal[] = "[PANIC] null printf format\n";
 
 		for (unsigned int i = 0; i < sizeof(fatal) - 1; i++)
-			consputc(fatal[i]);
+			console_putchar(fatal[i]);
 		shutdown();
 		__builtin_unreachable();
 	}
@@ -54,7 +55,7 @@ void printf(char *fmt, ...)
 	va_start(ap, fmt);
 	for (i = 0; (c = fmt[i] & 0xff) != 0; i++) {
 		if (c != '%') {
-			consputc(c);
+			console_putchar(c);
 			continue;
 		}
 		length = 0;
@@ -105,23 +106,23 @@ void printf(char *fmt, ...)
 			printptr(va_arg(ap, uint64));
 			break;
 		case 'c':
-			consputc(va_arg(ap, int));
+			console_putchar(va_arg(ap, int));
 			break;
 		case 's':
 			if ((s = va_arg(ap, char *)) == 0)
 				s = "(null)";
 			for (; *s; s++)
-				consputc(*s);
+				console_putchar(*s);
 			break;
 		case '%':
-			consputc('%');
+			console_putchar('%');
 			break;
 		default:
 			// Print unknown % sequence to draw attention.
-			consputc('%');
+			console_putchar('%');
 			while (length-- > 0)
-				consputc('l');
-			consputc(c);
+				console_putchar('l');
+			console_putchar(c);
 			break;
 		}
 	}

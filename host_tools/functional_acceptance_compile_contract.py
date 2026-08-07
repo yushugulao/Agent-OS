@@ -94,7 +94,6 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "agent_resource_abi.h",
     "agent_tool_abi.h",
     "io_policy.h",
-    "kernel_work_abi.h",
     "nfs/Makefile",
     "nfs/elf_compat.h",
     "nfs/fs.c",
@@ -121,7 +120,6 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "user/include/fcntl.h",
     "user/include/fs_allocator_test_abi.h",
     "user/include/io_policy.h",
-    "user/include/kernel_work_abi.h",
     "user/include/labdemo_workload.h",
     "user/include/physical_page_test_abi.h",
     "user/include/research_platform_state.h",
@@ -196,8 +194,6 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/agent_metadata_journal.c",
     "os/agent_metadata_journal.h",
     "os/agent_metadata_objects.c",
-    "os/agent_metadata_prefetch.c",
-    "os/agent_metadata_prefetch.h",
     "os/agent_metadata_probe.c",
     "os/agent_metadata_probe.h",
     "os/agent_metadata_query.c",
@@ -290,6 +286,7 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/sync.h",
     "os/syscall.c",
     "os/syscall.h",
+    "os/syscall_counter.h",
     "os/syscall_ids.h",
     "os/timer.c",
     "os/timer.h",
@@ -316,11 +313,10 @@ COMPILE_DEPENDENCY_PATHS = (
     USER_ARTIFACT_DEPENDENCY_PATHS + KERNEL_RUNTIME_DEPENDENCY_PATHS
 )
 
-# Byte-exact Merkle root of the complete reviewed closure above.  Keeping every
-# translation phase input exact prevents line splices, directives, assembly,
-# or linker syntax from disappearing during normalization.
+# 上述完整审查闭包的逐字节指纹。固定各翻译阶段输入，避免续行、预处理、
+# 汇编或链接语法在规范化时被隐藏。
 COMPILE_CLOSURE_FINGERPRINT = (
-    "fa9167d020c417eea57efd10b46c89c51a4f4573aa9206658fcd0721ca2627d1"
+	"7f484bad2389aaf95f05c7b6a5e80868b6b43bb59099a2509689fd93eb741083"
 )
 
 USER_TRANSLATION_UNITS = (
@@ -347,12 +343,10 @@ EXPECTED_INCLUDE_CLOSURE = (
     "agent_resource_abi.h",
     "agent_tool_abi.h",
     "io_policy.h",
-    "kernel_work_abi.h",
     "user/include/agent.h",
     "user/include/agent_metadata_test_abi.h",
     "user/include/fcntl.h",
     "user/include/io_policy.h",
-    "user/include/kernel_work_abi.h",
     "user/include/rp_launch_attestation.h",
     "user/include/stddef.h",
     "user/include/stdio.h",
@@ -388,7 +382,6 @@ EXPECTED_USER_INCLUDE_ROOT_FILES = (
     "user/include/fcntl.h",
     "user/include/fs_allocator_test_abi.h",
     "user/include/io_policy.h",
-    "user/include/kernel_work_abi.h",
     "user/include/labdemo_workload.h",
     "user/include/physical_page_test_abi.h",
     "user/include/research_platform_state.h",
@@ -453,7 +446,6 @@ SIMPLE_SYSCALL_WRAPPERS = {
     "sys_agent_heartbeat_set": ("SYS_agent_heartbeat_set", "interval_ticks"),
     "sys_agent_heartbeat_stop": ("SYS_agent_heartbeat_stop",),
     "agent_wake": ("SYS_agent_wake", "pid", "event"),
-    "agent_file_meta_init": ("SYS_agent_file_meta_init",),
     "agent_file_meta_set": ("SYS_agent_file_meta_set", "meta"),
     "agent_file_query": ("SYS_agent_file_query", "query", "result"),
     "agent_route_config": (
@@ -475,8 +467,9 @@ CRITICAL_LIBRARY_HELPER_FINGERPRINTS = {
     "context_mirror_hash_bytes": "9406ede880c01e3a985538016deb4dee226a39e0e2026184fd712b078f82f392",
     "context_mirror_record_hash": "26b8dcc17795eb689d69a61840d52b9162ccb4142edf21b1e87e14316a6fbca9",
     "context_mirror_record": "2c269ae66429dd7c786b9c7891dc7bc38f948c81be59cd09060a020f1872867d",
-    "context_mirror_active_record": "b8226c4f02c662fc8c4fd2f0b9923d61032d7239c6edc9af7ea2409a07d01998",
-    "context_mirror_active_query": "9bf294d9e5e207bbaa0106ba489286643e12339120ec648b25fdce5cd6c5126f",
+    "context_mirror_active_query": "f53b5b51659f4c5c2df2c230d422c20422f1642b236f1f2d46a783c5b664125f",
+    "context_direct_active_query": "43dc2dd80790f733be0708135a4595d3a2acf8a8aef74039e5c5db05aecb7065",
+    "context_direct_header_snapshot": "f47a61dcfd2b2baabcb94230557da12396233bf44028ec851950fad05a46cc1f",
 }
 
 CRITICAL_PUBLIC_NAMES = frozenset(
@@ -485,7 +478,8 @@ CRITICAL_PUBLIC_NAMES = frozenset(
     + (
         "agent_create", "agent_create_role", "close", "exit", "get_mtime",
         "printf", "process_spawn_finish", "sleep", "sys_tool_list",
-        "context_mirror_active_query",
+        "context_mirror_active_query", "context_direct_active_query",
+        "context_direct_header_snapshot",
     )
 )
 
@@ -742,6 +736,15 @@ def _validate_wrappers(texts: dict[str, str]) -> None:
         raise ValueError("functional syscall wrapper differs: sys_tool_list")
 
     exceptional = {
+        "agent_file_meta_init": (
+            "int", "status", "=", "AGENT_STATUS_RETRY", ";", "for", "(",
+            "int", "attempt", "=", "0", ";", "attempt", "<",
+            "AGENT_META_INIT_RESTART_LIMIT", ";", "attempt", "++", ")", "{",
+            "status", "=", "syscall", "(", "SYS_agent_file_meta_init", ")",
+            ";", "if", "(", "status", "!=", "AGENT_STATUS_RETRY", ")",
+            "return", "status", ";", "if", "(", "sched_yield", "(", ")",
+            "<", "0", ")", "break", ";", "}", "return", "status", ";",
+        ),
         "process_spawn_finish": (
             "return", "__stdio_process_spawn_finish", "(", "locked", ",",
             "result", ")", ";",
@@ -983,7 +986,7 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
     _require_single_assignment(
         root_make,
         "LDFLAGS",
-        "LDFLAGS = -m elf64lriscv -z max-page-size=4096",
+        "LDFLAGS = -m elf64lriscv -z max-page-size=4096 --gc-sections",
         "kernel linker flags",
     )
     for fragment, label in (

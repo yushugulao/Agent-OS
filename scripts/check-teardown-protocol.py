@@ -382,15 +382,21 @@ def validate_metadata_poll(objects, store):
     maintain = normalize(
         function_body(store, "agent_metadata_store_background_maintain")
     )
-    expected_maintain = (
-        "intdurable_pending=agent_durable_section_retry_pending();"
-        "agent_file_writeback_maintain();"
-        "if(durable_pending||agent_file_writeback_pending())"
-        "agent_background_request();"
-    )
+    expected_maintain = "agent_file_writeback_maintain();"
     if maintain != expected_maintain:
         raise ProtocolError(
-            "metadata background maintenance must retry unnotified durable state"
+            "metadata background maintenance must not hot-requeue pending state"
+        )
+    tick = normalize(function_body(store, "agent_metadata_store_tick"))
+    ready = tick.find("if(agent_file_writeback_ready(now)){")
+    wake = tick.find("wait_queue_wake_all(&waiters);", ready)
+    request = tick.find("agent_background_request();", wake)
+    if (
+        "agent_durable_section_retry_pending();" not in tick
+        or not 0 <= ready < wake < request
+    ):
+        raise ProtocolError(
+            "metadata timer no longer wakes and publishes due durable work"
         )
 
 
@@ -647,45 +653,22 @@ def validate_reaper_liveness(vfs, objects, background, agent_core):
             "last workflow reference maintenance edge escaped its common boundary"
         )
 
-    pending = function_body(vfs, "vfs_scope_reap_work_pending")
-    pending_compact = normalize(pending)
-    for invariant in (
-        "vfs_scope_registry_init_locked();",
-        "pending=registry->retiring_count!=0;",
-        "intr_save()",
-        "intr_restore(enabled)",
-    ):
-        if pending_compact.count(invariant) != 1:
-            raise ProtocolError(
-                f"workflow reaper level predicate lost invariant: {invariant}"
-            )
-    if (
-        "agent_background_request(" in pending_compact
-        or "registry->refs[" in pending_compact
-        or "vfs_scope_find_locked(" in pending_compact
-        or re.search(r"\b(?:for|while|goto)\b", pending)
-    ):
-        raise ProtocolError(
-            "workflow reaper level predicate must use the O(1) retiring counter"
-        )
-
     reap = function_body(vfs, "vfs_scope_reap_pending")
     reap_compact = normalize(reap)
     require_calls(reap, "vfs_scope_reclaim_complete", 2, "workflow reaper")
-    require_calls(reap, "vfs_scope_reap_work_pending", 1, "workflow reaper")
-    require_calls(reap, "agent_background_request", 1, "workflow reaper")
-    rearm = (
-        "if(vfs_scope_reap_work_pending())agent_background_request();"
-    )
-    if reap_compact.count(rearm) != 1:
+    if call_positions(reap, "agent_background_request"):
         raise ProtocolError(
-            "workflow reaper must level-rearm every unfinished bounded phase"
+            "workflow reaper must leave continuation publication to the timer"
         )
-    last_phase_at = max(call_positions(reap, "vfs_scope_reclaim_complete"))
-    pending_at = call_positions(reap, "vfs_scope_reap_work_pending")[0]
-    request_at = call_positions(reap, "agent_background_request")[0]
-    if not (last_phase_at < pending_at < request_at):
-        raise ProtocolError("workflow reaper re-armed before completing its phase")
+    for invariant in (
+        "now<registry->reap_next_tick",
+        "registry->reap_next_tick=now+1;",
+        "if(registry->retiring_count==0)registry->reap_next_tick=0;",
+    ):
+        if invariant not in reap_compact:
+            raise ProtocolError(
+                "workflow reaper lost its one-bounded-phase-per-tick deadline"
+            )
     if re.search(r"\b(?:while|goto)\b", reap):
         raise ProtocolError("workflow reaper must not busy-loop")
     for forbidden in (
@@ -695,6 +678,20 @@ def validate_reaper_liveness(vfs, objects, background, agent_core):
     ):
         if call_positions(reap, forbidden):
             raise ProtocolError("workflow reaper must return after one bounded pass")
+
+    tick = function_body(vfs, "vfs_scope_reap_tick")
+    tick_compact = normalize(tick)
+    for invariant in (
+        "__atomic_load_n(&registry->retiring_count,__ATOMIC_ACQUIRE)!=0",
+        "now>=next",
+        "agent_background_request();",
+    ):
+        if invariant not in tick_compact:
+            raise ProtocolError(
+                "workflow reaper timer lost pending, deadline, or publication"
+            )
+    if re.search(r"\b(?:for|while|goto)\b", tick):
+        raise ProtocolError("workflow reaper timer must remain O(1)")
 
     metadata_maintain = function_body(
         objects, "agent_metadata_background_maintain"

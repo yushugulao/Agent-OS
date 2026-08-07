@@ -503,7 +503,7 @@ require_crash_hook_absent "${TMPDIR_META}/kernel-large-seed"
 run_guest agentmetalarge_ucore-large-seed \
 	"agentmetalarge_ucore: seed_ready=1 records=32" powercut \
 	"${TMPDIR_META}/kernel-large-seed" "${large_image}"
-require_line_once "agentmetalarge_ucore: runtime_reload_once=1" \
+require_line_once "agentmetalarge_ucore: runtime_reload_completed=1" \
 	"${TMPDIR_META}/agentmetalarge_ucore-large-seed.log"
 validate_large_terminal "${large_image}" valid
 

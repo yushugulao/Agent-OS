@@ -23,7 +23,10 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 187)
+        self.assertEqual(len(self.golden), 185)
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_ledger_version"], 3
+        )
         self.assertEqual(
             self.golden["agent_uapi_layout_offset_info_file_scan_deferred"],
             577,
@@ -75,6 +78,44 @@ class AgentUapiLayoutTests(unittest.TestCase):
             225,
         )
         agent_uapi_layout.compare_golden(self.golden, self.golden)
+
+    def test_retired_syscall_numbers_remain_unassigned(self):
+        id_paths = (
+            ROOT / "os" / "syscall_ids.h",
+            ROOT / "user" / "lib" / "syscall_ids.h",
+            ROOT / "user" / "lib" / "arch" / "riscv" / "syscall_ids.h.in",
+        )
+        for path in id_paths:
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn("file_prefetch", source)
+            self.assertNotRegex(source, r"\b(?:SYS_|__NR_)\w+\s+52[67]\b")
+            self.assertRegex(source, r"\b(?:SYS_|__NR_)agent_sched_config\s+525\b")
+            self.assertRegex(source, r"\b(?:SYS_|__NR_)agent_span_trace_snapshot\s+528\b")
+
+        for path in (
+            ROOT / "os" / "syscall.c",
+            ROOT / "os" / "syscall_counter.h",
+            ROOT / "user" / "lib" / "syscall.c",
+            ROOT / "user" / "include" / "agent.h",
+        ):
+            self.assertNotIn(
+                "file_prefetch", path.read_text(encoding="utf-8")
+            )
+
+    def test_ledger_v3_accounts_restored_v8_kinds(self):
+        for relative in ("os/agent.h", "user/include/agent.h"):
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("#define AGENT_LEDGER_VERSION           3", source)
+            self.assertIn("#define AGENT_AUDIT_KIND_PREFETCH      5", source)
+            self.assertIn("uint64 other_records;", source)
+        query = (ROOT / "os/agent_observe_audit_query.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "summary.other_records = view.admission_drops +\n"
+            "\t\tview.kind_counts[AGENT_AUDIT_KIND_PREFETCH];",
+            query,
+        )
 
     def test_size_drift_is_rejected(self):
         actual = copy.deepcopy(self.golden)
@@ -155,6 +196,21 @@ class AgentUapiLayoutTests(unittest.TestCase):
             path.write_text(source, encoding="utf-8")
             with self.assertRaisesRegex(
                 agent_uapi_layout.LayoutError, "bypasses"
+            ):
+                agent_uapi_layout.validate_tool_protocol_schema(root)
+
+    def test_tool_schema_rejects_a_non_monotonic_csr_index(self):
+        temporary, root = self.schema_fixture(
+            'X(REPLY_SUMMARY, "reply_summary")'
+        )
+        with temporary:
+            path = root / "os" / "agent_tool_protocol.c"
+            source = path.read_text(encoding="utf-8").replace(
+                "0, 3, 3, 3, 4, 4, 4,", "0, 3, 2, 3, 4, 4, 4,"
+            )
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "offsets do not cover"
             ):
                 agent_uapi_layout.validate_tool_protocol_schema(root)
 

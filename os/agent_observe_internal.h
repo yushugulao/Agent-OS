@@ -4,14 +4,16 @@
 #include "agent_internal.h"
 
 #define AGENT_OBSERVE_AUDIT_SCOPE_LIMIT 128
+#define AGENT_AUDIT_KIND_SLOT_COUNT 6U
 
-/* Immutable copy of one scope's ordered audit indexes. */
+/* 单个 scope 的有序审计索引只读快照。 */
 struct agent_observe_audit_view {
 	uint scope_id;
 	uint visible_records;
 	uint64 total_records;
+	uint64 admission_drops;
 	uint64 ledger_hash;
-	uint64 kind_counts[AGENT_AUDIT_KIND_PREFETCH + 1];
+	uint64 kind_counts[AGENT_AUDIT_KIND_SLOT_COUNT];
 	uint64 observe_epoch;
 	ushort sequence_slots[AGENT_OBSERVE_AUDIT_SCOPE_LIMIT];
 	ushort timeline_slots[AGENT_OBSERVE_AUDIT_SCOPE_LIMIT];
@@ -48,9 +50,6 @@ int agent_observe_recording_suppress_begin(struct proc *);
 void agent_observe_recording_suppress_end(struct proc *);
 int agent_observe_recording_suppressed(struct proc *);
 uint64 agent_observe_scope_epoch_advance_locked(uint);
-uint64 agent_observe_prefetch_scope_count_locked(uint);
-int agent_observe_prefetch_scope_next_locked(
-	uint, uint64, struct agent_file_prefetch_hint *, uint64 *);
 
 void agent_observe_ledger_record_context(
 	struct proc *, struct agent_context_record *, uint64, int, uint64, int,
@@ -61,11 +60,6 @@ void agent_observe_ledger_record_event(
 	int, struct proc *, struct agent_event *, uint64, uint64);
 void agent_observe_ledger_record_effect(
 	struct proc *, int, int, char *, uint64, uint64, uint64, uint64, int);
-int agent_observe_ledger_record_prefetch(
-	struct proc *, struct agent_file_prefetch_hint *, uint64, char *, int);
-int agent_observe_ledger_record_prefetch_handoff_locked(
-	int, uint64, struct proc *, struct agent_file_prefetch_hint *,
-	uint64, char *, uint64);
 
 int agent_observe_timeline_waiter_publish(
 	struct thread *, struct agent_timeline_wait_state *);
@@ -84,8 +78,6 @@ void agent_observe_timeline_record_context(
 	struct proc *, struct agent_context_record *);
 void agent_observe_timeline_record_sched(
 	struct proc *, struct agent_sched_record *);
-void agent_observe_timeline_record_prefetch(
-	struct proc *, struct agent_file_prefetch_hint *, uint64);
 void agent_observe_timeline_record_audit(
 	uint, struct agent_audit_record *, uint64);
 

@@ -48,7 +48,6 @@ void devintr(uint64 cause)
 	int irq;
 	switch (cause) {
 	case SupervisorTimer:
-		kernel_work_timer_advance();
 		set_next_timer();
 		console_input_tick();
 		virtio_disk_tick();
@@ -95,10 +94,9 @@ void usertrap()
 	if (cause & (1ULL << 63)) {
 		devintr(cause & 0xff);
 		/*
-		 * Timer-driven metadata work must enter I/O from a real, dispatched
-		 * thread. One pending checkpoint per user interrupt also guarantees
-		 * progress for CPU-bound processes without running I/O on the idle
-		 * scheduler stack.
+		 * 时钟驱动的维护 I/O 必须借用真实的已调度线程。每次用户态时钟
+		 * 中断最多执行一个检查点，使 CPU 密集进程也能推进后台任务，
+		 * 同时避免在调度器空闲栈上发起 I/O。
 		 */
 		kernel_work_begin_background();
 		agent_background_checkpoint();

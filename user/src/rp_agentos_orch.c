@@ -23,7 +23,6 @@ static struct agent_ledger_summary orch_ledger;
 static struct agent_file_query orch_file_query;
 static struct agent_file_query_result orch_file_query_result;
 static struct agent_file_hit orch_metadata_hit;
-static struct agent_file_prefetch_hint orch_prefetch_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
 static char orch_acceptance_body[4096];
 static char orch_stability_body[32768];
 static char orch_check_token[160];
@@ -585,7 +584,6 @@ static int seed_challenge_research_metadata(
 static int verify_kernel_dependency_path(
 	const struct rp_challenge_workflow *workflow)
 {
-	int hint_count;
 	int target_hits = 0;
 	char payload[AGENT_OP_PAYLOAD_SIZE];
 
@@ -652,14 +650,10 @@ static int verify_kernel_dependency_path(
 		       target_hits);
 		return -1;
 	}
-
-	hint_count = agent_file_prefetch_snapshot(
-		orch_prefetch_hints, AGENT_FILE_PREFETCH_MAX_HINTS);
-	if (hint_count < 1 ||
-	    (orch_prefetch_hints[0].reason &
-	     AGENT_FILE_PREFETCH_REASON_DEPENDENCY) == 0) {
-		printf("rp_agentos_orch: prefetch_hint_failed count=%d reason=%d\n",
-		       hint_count, (int)orch_prefetch_hints[0].reason);
+	if ((orch_metadata_hit.dependency_mask &
+	     agent_dependency_label_bit("report")) == 0) {
+		printf("rp_agentos_orch: metadata_dependency_failed mask=%p\n",
+		       orch_metadata_hit.dependency_mask);
 		return -1;
 	}
 
@@ -667,7 +661,7 @@ static int verify_kernel_dependency_path(
 		return -1;
 	if (!rp_append_file("rp_tool", "tool=agentos.dependency_query"))
 		return -1;
-	if (!rp_append_file("rp_tool", "tool=agentos.file_prefetch"))
+	if (!rp_append_file("rp_tool", "tool=agentos.file_query"))
 		return -1;
 	return 0;
 }
@@ -880,7 +874,7 @@ static int record_agentos_prerequisites(void)
 		     "dependency_update=generic_record\n"
 		     "dependency_query=generic_record\n"
 		     "metadata_query=stage_index\n"
-		     "prefetch_hint=dependency_driven\n"
+		     "metadata_index=stage_query\n"
 		     "status=ready\n"))
 		return 0;
 	return rp_write_file(

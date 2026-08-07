@@ -1,4 +1,4 @@
-// Legacy virtio-mmio block driver with schedulable completion waits.
+// 支持可调度完成等待的传统 virtio-mmio 块驱动。
 
 #include "bio.h"
 #include "defs.h"
@@ -39,7 +39,7 @@ enum disk_internal_result {
 };
 
 static struct disk {
-	// Legacy queues require two contiguous, page-aligned DMA pages.
+	// 传统队列需要两块连续且按页对齐的 DMA 内存。
 	char pages[2][2 * PGSIZE];
 	struct virtq_desc *desc;
 	struct virtq_avail *avail;
@@ -72,7 +72,7 @@ static struct disk {
 
 	struct virtio_blk_req ops[2][NUM];
 	struct virtq_desc indirect[2][NUM][3] __attribute__((aligned(16)));
-	/* DMA never targets a caller-owned buffer. Reset quarantine stays static. */
+	/* DMA 只访问驱动缓冲区；重置隔离区保持静态。 */
 	uchar bounce[2][NUM][BSIZE];
 	uchar device_status[2][NUM];
 	uint active_bank;
@@ -105,8 +105,8 @@ static struct disk {
 #endif
 #ifdef DURABILITY_POWERCUT_TEST_PROFILE
 	/*
-	 * A test-only volatile write-back device.  No cached WRITE reaches the
-	 * host image until a real device FLUSH commits the whole overlay epoch.
+	 * 仅用于测试的易失写回层；真实 FLUSH 提交整个覆盖 epoch 前，缓存写
+	 * 不会进入宿主镜像。
 	 */
 	struct {
 		uint blockno;
@@ -349,7 +349,7 @@ static void disk_complete_quarantined(int id, int result)
 		disk.info[id].b->disk = 0;
 		disk.info[id].b->disk_result = result;
 	}
-	/* The controller did not acknowledge reset: descriptors stay quarantined. */
+	/* 控制器未确认重置，描述符继续隔离。 */
 	wait_queue_wake_all(&disk.info[id].waiters);
 }
 
@@ -359,7 +359,7 @@ static void disk_complete_all(int result, int dma_fenced)
 		if (!disk.info[i].active)
 			continue;
 		if (dma_fenced) {
-			/* Queue reset, not the old descriptor chain, owns reclamation. */
+			/* 队列重置负责回收，旧描述符链不再拥有回收权。 */
 			disk.info[i].descriptors_freed = 1;
 			disk_complete(i, result);
 		} else {
@@ -369,9 +369,8 @@ static void disk_complete_all(int result, int dma_fenced)
 }
 
 /*
- * Completion publishes only the result. Descriptor ownership stays with the
- * submitting thread until it consumes that result, so a head cannot be
- * advertised to waiters while alloc_desc() still rejects it as active.
+ * 完成路径只发布结果；提交线程读取结果前仍持有描述符，避免
+ * alloc_desc() 尚视队首为活动项时就唤醒等待者。
  */
 static void disk_release_request(int id)
 {
@@ -388,7 +387,7 @@ static void disk_release_request(int id)
 		descriptors_available = 1;
 	} else if (disk.info[id].descriptors_freed &&
 		   disk.state == VIRTIO_DISK_ONLINE && disk.free[id]) {
-		/* An acknowledged reset rebuilt the queue while this result waited. */
+		/* 等待结果期间，已确认的重置重建了队列。 */
 		descriptors_available = 1;
 	}
 	disk.info[id].active = 0;
@@ -457,7 +456,7 @@ static void disk_reset_step(void)
 	}
 #endif
 	if (*R(VIRTIO_MMIO_STATUS) == 0) {
-		/* A read-back reset acknowledgement is the DMA ownership fence. */
+		/* 回读到重置确认后，DMA 所有权才完成隔离。 */
 		__sync_synchronize();
 		disk.state = VIRTIO_DISK_REINIT;
 		disk_complete_all(disk.reset_result, 1);
@@ -504,7 +503,7 @@ static void disk_test_forge_used_index(void)
 	      VIRTIO_DISK_TEST_FORGE_USED_INDEX))
 		return;
 	disk.info[id].test_flags &= ~VIRTIO_DISK_TEST_FORGE_USED_INDEX;
-	/* Simulate a device attempting to make more progress than this queue owns. */
+	/* 模拟设备上报超出本队列所有权的完成进度。 */
 	disk.used->idx = (uint16)(disk.used_idx + NUM + 1);
 	__sync_synchronize();
 }
@@ -533,7 +532,7 @@ static void disk_process_used(int from_irq)
 	uint outstanding;
 	uint processed = 0;
 
-	/* The argument is only consumed by compile-time fault injection. */
+	/* 仅编译期故障注入会读取此参数。 */
 	(void)from_irq;
 	if (disk.state != VIRTIO_DISK_ONLINE)
 		return;
@@ -1271,7 +1270,7 @@ int virtio_disk_write_batch(struct buf **buffers, uint count)
 		return VIRTIO_DISK_OK;
 	if (buffers == 0)
 		return VIRTIO_DISK_ERR_IO;
-	/* Keep the established single-request path bit-for-bit authoritative. */
+	/* 单请求继续走既有权威路径。 */
 	if (count == 1)
 		return virtio_disk_rw(buffers[0], 1);
 
@@ -1379,11 +1378,6 @@ static int disk_durability_capability(int test_direct)
 		VIRTIO_DISK_DURABILITY_FLUSH : VIRTIO_DISK_DURABILITY_NONE;
 }
 
-int virtio_disk_durability_capability(void)
-{
-	return disk_durability_capability(0);
-}
-
 static int disk_durability_barrier(int test_direct)
 {
 	int capability = disk_durability_capability(test_direct);
@@ -1467,7 +1461,7 @@ static int disk_durability_barrier(int test_direct)
 		disk.durability_stats.epoch++;
 		disk.durability_stats.successful_flushes++;
 	} else {
-		/* Keep every slot so a later flush can replay the full epoch. */
+		/* 保留全部槽位，供后续 FLUSH 重放完整 epoch。 */
 		disk.durability_stats.last_flush_pending_after =
 			disk.durability_count;
 		disk.durability_stats.failed_flushes++;
@@ -1489,7 +1483,7 @@ void virtio_disk_tick(void)
 	int enabled = intr_save();
 	disk.tick++;
 	if (disk.state == VIRTIO_DISK_ONLINE)
-		disk_process_used(0); /* recovers a lost device interrupt */
+		disk_process_used(0); /* 补偿丢失的设备中断 */
 #ifdef VIRTIO_DISK_FAULT_INJECTION
 	for (int i = 0; i < NUM; i++)
 		if (disk.info[i].active && disk.info[i].device_done &&

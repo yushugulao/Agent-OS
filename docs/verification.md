@@ -77,6 +77,7 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 - 宿主机科研 Agent 平台能力对齐检查；
 - 宿主机科研 Agent 平台测试主题对齐检查；
 - 宿主机 Web/API/action 规模检查；
+- 独占启动一次 AgentOS-uCore 的 `ch3_trace`，动态核对 trace 计数、用户地址读写和基础写路径；
 - 先运行与普通套件分离的 Context-sync/WAIT_ATOMIC `agentfinal_ucore` profile，再运行版本化 AgentOS 内核专项；prelude 使用独立 timing file，不计入 Agent suite 校准，并保存完整 canonical LF Guest 日志供后续实测提取；
 - 共享基础安全加固、不含 AgentOS 扩展的 uCore 对照平台和 AgentOS-uCore 平台的 QEMU 运行；
 - 主目标、Agent 对抗场景和 baseline 的进程生命周期复测；
@@ -90,11 +91,11 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 - 双目标 ENOSPC、持久 PUBLIC principal 与 AgentOS 存储保留复测；
 - 文件系统块/inode 分配与释放事务的 busy、EIO 和突然终止一致性复测。
 
-普通 `make agentos-test` 默认使用 `none` profile，并按主机资源为 Agent case 分配隔离 QEMU lane；显式 `local-e3` 与正式校准保持串行，避免把并行争用下的计时套入三轮串行阈值。`make full-verify` 未显式指定时仍选择 `local-e3`，显式 `AGENT_TEST_DURATION_PROFILE=none` 才并行运行 Agent case。并行 Agent 结果只检查 case timing inventory。相互独立的资源回归始终使用隔离 lane；正式采集先校验 `run-summary.json`、`steps.tsv` 和 `artifacts.tsv`，再从一次性 verified import plan 按 profile v6 的固定 16 步顺序发布原始工件，receipt 保留各 lane 的真实起止时间和重叠关系。双目标 AB/BA 测量和文件系统 epoch 掉电序列仍独占执行。
+普通 `make agentos-test` 默认使用 `none` profile，并按主机资源为 Agent case 分配隔离 QEMU lane；显式 `local-e3` 与正式校准保持串行，避免把并行争用下的计时套入三轮串行阈值。`make full-verify` 未显式指定时仍选择 `local-e3`，显式 `AGENT_TEST_DURATION_PROFILE=none` 才并行运行 Agent case。并行 Agent 结果只检查 case timing inventory。`ch3_trace` 始终使用私有内核和磁盘副本独占运行，编译仍采用资源探测得到的 worker 数；相互独立的资源回归继续使用隔离 lane。正式采集先校验 `run-summary.json`、`steps.tsv` 和 `artifacts.tsv`，再从一次性 verified import plan 按 profile v7 的固定 17 步顺序发布原始工件，receipt 保留各 lane 的真实起止时间和重叠关系。双目标 AB/BA 测量和文件系统 epoch 掉电序列仍独占执行。
 
-profile v6 严格约束步骤清单和逐项原始日志。QEMU runner 控制台可转发原始字节，但落盘 `.guest.log` 将 CRLF 和孤立 CR 统一为 LF；exact-line marker、SHA256、CSV 行号和 manifest 一律绑定这份 canonical transcript。各项仍可用
+profile v7 严格约束步骤清单和逐项原始日志。QEMU runner 控制台可转发原始字节，但落盘 `.guest.log` 将 CRLF 和孤立 CR 统一为 LF；exact-line marker、SHA256、CSV 行号和 manifest 一律绑定这份 canonical transcript。各项仍可用
 `make physical-resource-test`、`make metadata-recovery-test`、`make observe-recovery-test`、
-`make virtio-disk-test`、`make fs-enospc-test`、`make fs-allocator-fault-test` 等入口单独复现。多启动 runner 会把 runner stdout
+`make ch3-trace-test`、`make virtio-disk-test`、`make fs-enospc-test`、`make fs-allocator-fault-test` 等入口单独复现。多启动 runner 会把 runner stdout
 和每次 Guest 启动日志合并保存；checkpoint mode 使用单次 `SIGTERM` 建立受控边界，metadata
 powercut mode 通过认证 supervisor 向 QEMU leader 发送 `SIGKILL`，并在恢复前检查原始 bank。
 两者都不等同于整机物理断电。聚合是否通过只以本次完整命令日志为准。
@@ -114,7 +115,7 @@ powercut runner 的 host 威胁边界是“受信 QEMU、非受信 Guest”：�
 
 如果需要指定工具，可以设置 `PYTHON_BIN=...`、`QEMU=...`、`CASE_TIMEOUT=...`。本机 WSL 环境下可直接使用默认 `python3`、`qemu-system-riscv64` 和 `240s` 单项超时时间。
 
-正式评价还必须对同一 run 显式执行 `make evaluation-full-verify`。该入口不会只记录一个通过布尔值，也不会修改 `evidence/releases/INDEX.md`；它在源码提交 C 的 clean detached worktree 中运行上述真实命令，并把原始 `full-verify.log`、严格 16 步 summary、全部 raw artifact、工具版本和双层校验和封存在 run 的 `full-verification/`。采集器从 C 的 Git blob 提取 child dispatcher 到私有 runtime，并把 `PATH` 中的 `python`/`python3`、`sys.executable` 和 `sys._base_executable` 统一绑定到 shim；backing CPython 固定使用 `-I -S -B -u`，嵌套 dispatch 恢复精确标准库路径后只开放当前 detached worktree 与受控临时目录。环境记录交叉绑定 backing Python、Bash、dispatcher、shim、精确环境、PATH 解析及执行前后 hash。它防止 Host 环境注入和普通递归 Python 调用漂移，但不是隔离提交 C 内恶意源码、显式绕过 launcher 的命令或执行期敌对 Host 的安全沙箱。formal package 创建和可搬运验证先检查包内 measurement-source 快照，再由快照内版本化 verifier 重放双目标测量、全 raw semantic registry 与 allocator archive，同时检查命令退出状态、唯一完成 marker、step/raw 一一对应和逐文件内容。无快照、回退审计机 live checkout、自洽重签伪 raw、失败、删除或篡改 raw 均 fail closed。可搬运验证只证明包内快照、receipt 和 raw evidence 的内部完整性及语义可重放性，不认证声明的提交 C；只有 `verify --require-committed --repo-root <仓库>` 将快照核对到 C 的 Git blob 并验证 C→E 历史后，才达到本地 E3。development package 固定将该证明标记为 `unavailable`，不能携带 formal payload。
+正式评价还必须对同一 run 显式执行 `make evaluation-full-verify`。该入口不会只记录一个通过布尔值，也不会修改 `evidence/releases/INDEX.md`；它在源码提交 C 的 clean detached worktree 中运行上述真实命令，并把原始 `full-verify.log`、严格 17 步 summary、全部 raw artifact、工具版本和双层校验和封存在 run 的 `full-verification/`。采集器从 C 的 Git blob 提取 child dispatcher 到私有 runtime，并把 `PATH` 中的 `python`/`python3`、`sys.executable` 和 `sys._base_executable` 统一绑定到 shim；backing CPython 固定使用 `-I -S -B -u`，嵌套 dispatch 恢复精确标准库路径后只开放当前 detached worktree 与受控临时目录。环境记录交叉绑定 backing Python、Bash、dispatcher、shim、精确环境、PATH 解析及执行前后 hash。它防止 Host 环境注入和普通递归 Python 调用漂移，但不是隔离提交 C 内恶意源码、显式绕过 launcher 的命令或执行期敌对 Host 的安全沙箱。formal package 创建和可搬运验证先检查包内 measurement-source 快照，再由快照内版本化 verifier 重放双目标测量、全 raw semantic registry 与 allocator archive，同时检查命令退出状态、唯一完成 marker、step/raw 一一对应和逐文件内容。无快照、回退审计机 live checkout、自洽重签伪 raw、失败、删除或篡改 raw 均 fail closed。可搬运验证只证明包内快照、receipt 和 raw evidence 的内部完整性及语义可重放性，不认证声明的提交 C；只有 `verify --require-committed --repo-root <仓库>` 将快照核对到 C 的 Git blob 并验证 C→E 历史后，才达到本地 E3。development package 固定将该证明标记为 `unavailable`，不能携带 formal payload。
 
 快速目标检查：
 
@@ -424,7 +425,7 @@ Agent suite 的时长数据必须与 `ci/kernel-budgets.json` 中的源码 finge
 
    代码位置：`baseline_ucore/os/vm.c`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/loader.c`、`baseline_ucore/os/trap.c`；增强目标的 `os/vm.c`、`os/proc.c`、`os/agent_context.c`、`os/workflow_lifecycle.c`。
 
-   相关处理：syscall 访问用户地址时使用 `copyin()`、`copyout()`、`copyinstr()`；`uvmcopy()` 服务 `fork()`；exec 用 prepare/commit/abort 把身份与地址空间原子发布。Agent Context 的 9 页 detail sidecar、6 页用户 mirror 和 6 页可信 shadow 由 Context owner 管理，并作为 21 页整体通过 `RESOURCE_AGENT_STATE_PAGE` 原子计费；4.5 MiB 是 sidecar-only 的独立细节预算，完整状态全局预算为 10.5 MiB。每线程物理内核栈按 live admission 映射，32 MiB 是虚拟容量，8 MiB 是受信/保留物理池；启动/调度另使用 64 KiB boot stack。
+   相关处理：syscall 访问用户地址时使用 `copyin()`、`copyout()`、`copyinstr()`；`uvmcopy()` 服务 `fork()`；exec 用 prepare/commit/abort 把身份与地址空间原子发布。Agent Context 的 9 页 detail sidecar、2 页冷状态、6 页只读可信视图和 1 页用户 cache 由 Context owner 管理，并作为 18 页整体通过 `RESOURCE_AGENT_STATE_PAGE` 原子计费；4.5 MiB 是 sidecar-only 的独立细节预算，完整状态全局基线为 9 MiB。每线程物理内核栈按 live admission 映射，32 MiB 是虚拟容量，8 MiB 是受信/保留物理池；启动/调度另使用 64 KiB boot stack。
 
 4. 文件系统、目录、文件描述符、pipe、设备文件和文件抽象。
 

@@ -63,8 +63,6 @@ int workflow_lifecycle_scope(struct workflow_lifecycle_key key,
 int workflow_lifecycle_controller(struct workflow_lifecycle_key key,
 				  uint scope_id, uint64 *control_id);
 int workflow_lifecycle_generation_floor(struct workflow_lifecycle_key key);
-void workflow_lifecycle_generation_snapshot(
-	uint64 generations[WORKFLOW_LIFECYCLE_CAP]);
 int workflow_lifecycle_generation_lease_floor(uint, uint64);
 #ifdef AGENT_OBSERVE_TEST_PROFILE
 int workflow_lifecycle_test_consume_generation(uint *, uint64 *);

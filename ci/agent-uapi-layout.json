@@ -36,8 +36,6 @@
     "agent_uapi_layout_offset_file_meta_dependency_mask": 321,
     "agent_uapi_layout_offset_file_meta_update_mask": 385,
     "agent_uapi_layout_offset_file_meta_used": 1,
-    "agent_uapi_layout_offset_file_prefetch_hint_hit": 153,
-    "agent_uapi_layout_offset_file_prefetch_hint_sequence": 1,
     "agent_uapi_layout_offset_file_query_flags": 1,
     "agent_uapi_layout_offset_file_query_result_fs_generation": 57,
     "agent_uapi_layout_offset_file_query_result_hits": 65,
@@ -163,7 +161,6 @@
     "agent_uapi_layout_size_file_edit_state": 168,
     "agent_uapi_layout_size_file_hit": 312,
     "agent_uapi_layout_size_file_meta": 392,
-    "agent_uapi_layout_size_file_prefetch_hint": 464,
     "agent_uapi_layout_size_file_query": 328,
     "agent_uapi_layout_size_file_query_result": 2560,
     "agent_uapi_layout_size_info": 624,
@@ -188,6 +185,7 @@
     "agent_uapi_layout_size_timeline_record": 192,
     "agent_uapi_layout_size_tool_desc": 208,
     "agent_uapi_layout_size_tool_desc_v2": 216,
-    "agent_uapi_layout_size_trace_record": 112
+    "agent_uapi_layout_size_trace_record": 112,
+    "agent_uapi_layout_value_ledger_version": 3
   }
 }

@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #define STRESS_BYTES (64 * 1024)
+#define TRUNCATE_BYTES (192 * 1024)
 #define OFFSET_BLOCK_BYTES 1024
 #define OFFSET_BLOCKS 32
 #define OFFSET_READERS 2
@@ -195,8 +196,10 @@ static void fill_file(const char *path)
 	unlink(path);
 	fd = open(path, O_CREATE | O_WRONLY | O_TRUNC);
 	check(fd >= 0, "create truncate data file");
-	while (total < sizeof(stress)) {
-		int n = write(fd, stress + total, sizeof(stress) - total);
+	while (total < TRUNCATE_BYTES) {
+		int remaining = TRUNCATE_BYTES - total;
+		int chunk = remaining < STRESS_BYTES ? remaining : STRESS_BYTES;
+		int n = write(fd, stress, chunk);
 
 		check(n > 0, "fill truncate data file");
 		total += n;
@@ -246,6 +249,9 @@ static void run_truncate_phase(void)
 {
 	static const char path[] = "fairtrunc";
 	int fd;
+	long preemptions;
+	int peer_progress;
+	int status;
 	int tid;
 
 	fill_file(path);
@@ -258,14 +264,21 @@ static void run_truncate_phase(void)
 	while (!trunc_observer_ready)
 		check(sched_yield() == 0, "start truncate observer");
 	write_stdout(trunc_begin, sizeof(trunc_begin) - 1);
+	/* 对照内核同步回收文件块，观察窗口直接覆盖 truncate syscall。 */
 	trunc_started = 1;
 	fd = open(path, O_WRONLY | O_TRUNC);
 	check(fd >= 0, "truncate populated file");
-	check(kernel_work_last_preemptions() > 0,
-	      "truncate crossed a kernel scheduling boundary");
-	check(waittid(tid) == 0, "truncate observer completed");
-	check(trunc_observed, "truncate observer saw committed EOF");
 	trunc_done = 1;
+	peer_progress = trunc_observed;
+	preemptions = kernel_work_last_preemptions();
+	status = waittid(tid);
+	check(status == 0, "truncate observer completed during syscall");
+	check(peer_progress > 0,
+	      "truncate observer progressed before syscall returned");
+	check(preemptions > 0,
+	      "truncate crossed a kernel scheduling boundary");
+	printf("syscallfair_ucore: truncate_preemptions=%lld peer_progress=%d\n",
+	       (long long)preemptions, peer_progress);
 	write_stdout(trunc_end, sizeof(trunc_end) - 1);
 	check(close(fd) == 0, "close truncated file");
 	check(unlink(path) == 0, "remove truncated file");
@@ -284,10 +297,11 @@ static void offset_reader(void *arg)
 
 		if (n != sizeof(block)) {
 			offset_error = 1;
-			return;
+			exit(9);
 		}
 		offset_tags[reader][i] = (unsigned char)block[0];
 	}
+	exit(0);
 }
 
 static void run_shared_offset_phase(void)
@@ -310,7 +324,7 @@ static void run_shared_offset_phase(void)
 	}
 	check(close(offset_fd) == 0, "close shared-offset writer");
 
-	/* Evict target blocks so competing reads exercise cold-cache behavior. */
+	/* 驱逐目标块，确保并发读取覆盖冷缓存路径。 */
 	pressure = open(pressure_path, O_CREATE | O_WRONLY | O_TRUNC);
 	check(pressure >= 0, "create offset cache pressure file");
 	memset(block, 0x5a, sizeof(block));

@@ -20,7 +20,7 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 - 等待、唤醒和事件消费会写入 Context Path；公开 cause/span 的 source control 与 span owner 由内核私有 sidecar 认证；
 - 调度器先严格轮转 active 进程资源域，再按选中域内的 FIFO 或 Agent 软评分选择线程，并记录最近 16 次 Agent 调度原因；
 - 调度分值只表达域内软优先级；连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST=8` 后，本域强制回到普通线程或 FIFO 队首；线程数、角色、事件积压和 orchestrator 配置都不能越过外层资源域轮转；
-- 参与 Agent 可按当前 span 查询 Context、事件、调度和预取交接短记录；
+- 参与 Agent 可按当前 span 查询 Context、事件、调度和审计短记录；
 - 内核物理审计表 512 槽按最多 4 个 workflow 各保证 128，orchestrator 只能查询自己的 scope；
 - 每 scope low/high 各64，low principal 上限16、high active principal 上限8，并维护独立逻辑 hash 链和稀疏窗口；
 - 综合场景用三个 Agent 串联事件流程。
@@ -140,7 +140,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 grant/revoke 支持按事件位图增量更新并保持幂等。revoke 只阻止后续事件入队，已经通过授权并进入 FIFO 的事件仍可消费。PID 只用于当次定位；内核在同一关中断临界区内解析两个 PID、核对 stable control id、控制关系并更新路由。source 退出会从所有目标删除对应来源项，target 退出会清空自身路由表，因此 PID 或 PCB 槽复用不会继承旧授权。
 
-`agent_wake()`、`send_message`、`llm_request` 和 `llm_response` 都经过“解析存活对象 -> same-scope -> route -> watch -> quota -> 入队”。只有成功入队后才更新 mailbox 和同 scope metadata 预取交接。
+`agent_wake()`、`send_message`、`llm_request` 和 `llm_response` 都经过“解析存活对象 -> same-scope -> route -> watch -> quota -> 入队”。只有成功入队后才更新 mailbox。
 
 ## 唤醒：Wake
 
@@ -335,7 +335,7 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 
 `AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送 MESSAGE 事件。消息事件用于多 Agent 协作。`agent_wake()` 是 Agent-only syscall，调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`；普通进程直接调用会返回 `-1`。MESSAGE 是该用户态 syscall 唯一允许的事件类型：即使调用者是 Agent 或 orchestrator，也不能通过它把用户提供的类型伪装成 `FILE_STATUS`、`TIMER`、`LLM_DONE` 等系统事件。
 
-能力检查之后还必须 source/target 同 active workflow scope并命中 route；target consent、相同角色/controller/resource domain 都不能越过 scope。只有成功入队才执行 mailbox 和同 scope prefetch handoff。
+能力检查之后还必须 source/target 同 active workflow scope并命中 route；target consent、相同角色/controller/resource domain 都不能越过 scope。只有成功入队才更新 mailbox。
 
 `labdemo_ucore` 中两段消息：
 
@@ -361,7 +361,7 @@ Agent Loop 行为会写入 Context Path：
 
 这使得示例不仅能看到最终结果，也能回放 Agent 做出判断的过程。
 
-Context v8 还会把事件和后续工具调用连起来，并继续维护 Context 完整性链：
+Context v9 还会把事件和后续工具调用连起来，并继续维护 Context 完整性链：
 
 1. 事件入队时，内核写公开 cause/span，同时私存 source control/pid 和 span owner。
 2. `agent_wait()` 只消费本 scope 已认证事件，并继承公开 span 与私有 owner/source。
@@ -392,7 +392,7 @@ Context v8 还会把事件和后续工具调用连起来，并继续维护 Conte
 
 | 程序 | 检查项 |
 | --- | --- |
-| `agentfinal_ucore` | 自唤醒事件可被 watch/wait 消费，相关 Context、事件、调度和预取统计进入 Run Ledger；`WAIT_ATOMIC_TEST_PROFILE` 另要求 `thread_wait_deadlines ... slot_reuse=1` 与 `wait_publication_atomic=1 ... teardown_completed=1` 两条完整 marker。 |
+| `agentfinal_ucore` | 自唤醒事件可被 watch/wait 消费，相关 Context、事件和调度统计进入 Run Ledger；`WAIT_ATOMIC_TEST_PROFILE` 另要求 `thread_wait_deadlines ... slot_reuse=1` 与 `wait_publication_atomic=1 ... teardown_completed=1` 两条完整 marker。 |
 | `agentbench_ucore` | timeout 会更新 heartbeat/timeout 统计；busy polling 与 wait/wake 都有可复查的 tick 观测。 |
 | `agentloop_ucore` | FIFO、cause/span、unwatch、睡眠 timeout、wait cancel 和严格 heartbeat 语义均有动态断言；来源、类别、external 与 SYSTEM 保留容量分别受控，消费后可重新接纳，external 已饱和的慢 watcher 不阻断后续 watcher。 |
 | `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录；普通进程在持续可运行高分 Agent 下先取得进展，并输出 `normal_progress=1 max_agent_burst=8`。 |

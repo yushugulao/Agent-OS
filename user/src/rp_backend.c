@@ -300,7 +300,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_kernel", "context_snapshot=present");
 	ok = ok && rp_file_contains("rp_agentos_kernel", "file_meta_service=initialized");
 	ok = ok && rp_file_contains("rp_agentos_kernel", "dependency_update=generic_record");
-	ok = ok && rp_file_contains("rp_agentos_kernel", "prefetch_hint=dependency_driven");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "dependency_query=generic_record");
 	ok = ok && rp_file_contains("rp_agentos_roles", "stage_launch=agent_create_role");
 	ok = ok && rp_file_contains("rp_agentos_recovery", "kernel_tool=action_commit,artifact_update");
 	ok = ok && rp_file_contains("rp_agentos_query", "metadata_source=kernel_file_index");
@@ -313,7 +313,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "dependency_graph=kernel_records");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index");
-	ok = ok && rp_file_contains("rp_agentos_kernel", "prefetch_hint=dependency_driven");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "metadata_index=stage_query");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=generic_action");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");

@@ -11,6 +11,7 @@ STORE = (ROOT / "os/agent_observe_store.c").read_text(encoding="utf-8")
 EVIDENCE = (ROOT / "host_tools/agent_observe_disk_evidence.py").read_text(
     encoding="utf-8"
 )
+INTERNAL = (ROOT / "os/agent_observe_internal.h").read_text(encoding="utf-8")
 
 
 class ContractError(RuntimeError):
@@ -68,10 +69,15 @@ def validate(ledger: str, store: str, evidence: str) -> None:
         "(2 * AGENT_AUDIT_LOW_PRINCIPAL_RESERVE)",
         "#define AGENT_AUDIT_PRINCIPAL_SCAN_LIMIT AGENT_AUDIT_LOW_PRINCIPAL_LIMIT",
         "AGENT_AUDIT_LOW_SCOPE_LIMIT % AGENT_AUDIT_SCOPE_PRINCIPALS == 0",
-        "AGENT_AUDIT_LOW_PRINCIPAL_RESERVE > AGENT_AUDIT_KIND_PREFETCH",
+        "AGENT_AUDIT_LOW_PRINCIPAL_RESERVE > AGENT_AUDIT_KIND_SCHED",
         "AGENT_AUDIT_LOW_PRINCIPAL_LIMIT > AGENT_OBSERVE_CHECKPOINT_PER_SCOPE",
     ):
         require(compact_ledger, token, "derived low-principal capacity")
+    require(
+        compact(INTERNAL),
+        "#define AGENT_AUDIT_KIND_SLOT_COUNT 6U",
+        "persisted audit kind compatibility",
+    )
 
     principal = compact(
         function_body(ledger, "agent_observe_audit_principal_victim")
@@ -366,28 +372,28 @@ class RetentionModel:
 
 
 def model_tests() -> None:
-    event_enqueue, event_consume, context, prefetch, sched = range(1, 6)
+    context, event_enqueue, event_consume, sched, persisted_reserved = range(1, 6)
     model = RetentionModel()
     model.live.add(1)
     anchors = (
         Record(1, 10, 100, event_enqueue),
         Record(1, 10, 100, event_consume),
         Record(1, 10, 100, context),
-        Record(1, 10, 100, prefetch),
+        Record(1, 10, 100, persisted_reserved),
     )
     for record in anchors + (Record(1, 10, 100, context),) * 4:
         assert model.add(record)
     for _ in range(40):
         assert model.add(Record(1, 10, 100, context))
     kinds = {record.kind for record in model.records}
-    assert {event_enqueue, event_consume, context, prefetch} <= kinds
+    assert {context, event_enqueue, event_consume, persisted_reserved} <= kinds
     assert len(model.records) == model.principal_limit
 
     for _ in range(40):
         assert not model.add(Record(1, 0, 0, sched))
     assert all(RetentionModel.correlated(record) for record in model.records)
 
-    for kind in (event_enqueue, event_consume, context, prefetch):
+    for kind in (context, event_enqueue, event_consume, persisted_reserved):
         assert model.add(Record(1, 11, 101, kind))
     assert sum(record.span == 11 for record in model.records) == 4
     assert sum(record.span == 10 for record in model.records) == 12
@@ -396,7 +402,7 @@ def model_tests() -> None:
     old_kinds = {record.kind for record in model.records if record.span == 10}
     new_kinds = {record.kind for record in model.records if record.span == 11}
     assert {event_enqueue, event_consume} <= old_kinds
-    assert {event_enqueue, event_consume, context, prefetch} <= new_kinds
+    assert {context, event_enqueue, event_consume, persisted_reserved} <= new_kinds
 
     burst = RetentionModel()
     burst.live.add(1)

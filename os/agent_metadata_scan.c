@@ -54,6 +54,7 @@ static const char *const rules[][3] = {
 
 void agent_metadata_scan_init(void) {
 	memset(&scan, 0, sizeof(scan)); memset(&scan_ctl, 0, sizeof(scan_ctl));
+	scan.last_step_tick = ~0ULL;
 }
 
 static void scan_infer(char *name, char *out, int n, uint first, uint count,
@@ -191,7 +192,8 @@ static void scan_pause(int retry, int resume) {
 void agent_file_request_scan(void) {
 	uint64 now = agent_file_state_now();
 	int irq = intr_save();
-	if (!scan_ctl.on || !scan_ctl.pending) {
+	/* cooldown 中的新显式请求把 resume 升级为 full，但不提前原 deadline。 */
+	if (!scan_ctl.on || !scan_ctl.pending || scan_ctl.pending < 0) {
 		if (!scan_ctl.on) {
 			scan_ctl.on = 1;
 			scan.next_tick = now;
@@ -203,10 +205,12 @@ void agent_file_request_scan(void) {
 		scan_ctl.pending = 1;
 	}
 	intr_restore(irq);
-	agent_background_request();
+	if (agent_metadata_scan_plan(now) != AGENT_METADATA_SCAN_IDLE)
+		agent_background_request();
 }
 
 void agent_metadata_scan_slot_freed(uint scope) {
+	uint64 now;
 	int irq = intr_save();
 	if (!scan_scope_full(scope, 0)) {
 		intr_restore(irq);
@@ -215,15 +219,10 @@ void agent_metadata_scan_slot_freed(uint scope) {
 	scan_ctl.on = 1;
 	scan_ctl.pending = SCAN_URGENT;
 	scan.next_tick = agent_file_state_now();
+	now = scan.next_tick;
 	intr_restore(irq);
-	agent_background_request();
-}
-
-int agent_metadata_scan_work_pending(void) {
-	int irq = intr_save();
-	int pending = scan_ctl.pending || scan_ctl.active;
-	intr_restore(irq);
-	return pending;
+	if (agent_metadata_scan_plan(now) != AGENT_METADATA_SCAN_IDLE)
+		agent_background_request();
 }
 
 int agent_metadata_scan_plan(uint64 now) {
@@ -233,11 +232,12 @@ int agent_metadata_scan_plan(uint64 now) {
 		if (!scan_ctl.active && !scan_ctl.pending &&
 		    now >= scan.next_tick)
 			scan_ctl.pending = 1;
-		if (scan_ctl.active && scan.last_step_tick != now)
-			plan = AGENT_METADATA_SCAN_CONTINUE;
-		else if (!scan_ctl.active && scan_ctl.pending &&
-			 now >= scan.next_tick)
-			plan = AGENT_METADATA_SCAN_START;
+		if (scan.last_step_tick != now) {
+			if (scan_ctl.active)
+				plan = AGENT_METADATA_SCAN_CONTINUE;
+			else if (scan_ctl.pending && now >= scan.next_tick)
+				plan = AGENT_METADATA_SCAN_START;
+		}
 	}
 	intr_restore(irq);
 	return plan;
@@ -379,6 +379,9 @@ uint agent_metadata_scan_index_inode(struct inode *ip, char *path, int *failed) 
 			goto retry;
 		changes |= AGENT_FILE_CHANGE_MEMBERSHIP;
 	}
+	/* 易失目录已吸收当前 inode 大小，版本覆盖可以立即转为冷缓存。 */
+	if (!persist)
+		agent_file_state_content_absorb_volatile(ip, slot);
 	return changes;
 retry:
 	*failed = SCAN_BIND_RETRY;

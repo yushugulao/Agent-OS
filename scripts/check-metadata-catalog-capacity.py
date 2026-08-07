@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 from pathlib import Path
 import re
 
@@ -12,25 +13,115 @@ class ContractError(RuntimeError):
     pass
 
 
-def function_body(source: str, signature: str) -> str:
-    start = source.find(signature)
-    while start >= 0:
-        brace = source.find("{", start)
-        semicolon = source.find(";", start)
-        if brace >= 0 and (semicolon < 0 or brace < semicolon):
-            break
-        start = source.find(signature, start + len(signature))
-    if start < 0:
-        raise ContractError(f"missing function: {signature}")
+@functools.lru_cache(maxsize=32)
+def _code_mask(source: str) -> str:
+    """遮蔽注释和字符串，同时保留源码下标。"""
+    masked = list(source)
+    index = 0
+    state = "code"
+    while index < len(source):
+        char = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if char == "/" and following == "/":
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                state = "line_comment"
+                continue
+            if char == "/" and following == "*":
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                state = "block_comment"
+                continue
+            if char == '"':
+                masked[index] = " "
+                state = "string"
+            elif char == "'":
+                masked[index] = " "
+                state = "character"
+        elif state == "line_comment":
+            if char == "\n":
+                state = "code"
+            else:
+                masked[index] = " "
+        elif state == "block_comment":
+            if char == "*" and following == "/":
+                masked[index] = masked[index + 1] = " "
+                index += 2
+                state = "code"
+                continue
+            if char != "\n":
+                masked[index] = " "
+        else:
+            if char == "\\" and following:
+                masked[index] = " "
+                if following != "\n":
+                    masked[index + 1] = " "
+                index += 2
+                continue
+            if ((state == "string" and char == '"') or
+                    (state == "character" and char == "'")):
+                masked[index] = " "
+                state = "code"
+            elif char != "\n":
+                masked[index] = " "
+        index += 1
+    return "".join(masked)
+
+
+def _balanced_end(source: str, start: int, opening: str, closing: str) -> int:
     depth = 0
-    for pos in range(brace, len(source)):
-        if source[pos] == "{":
+    for pos in range(start, len(source)):
+        if source[pos] == opening:
             depth += 1
-        elif source[pos] == "}":
+        elif source[pos] == closing:
             depth -= 1
             if depth == 0:
-                return source[start : pos + 1]
-    raise ContractError(f"unterminated body: {signature}")
+                return pos
+    return -1
+
+
+def function_body(source: str, signature: str) -> str:
+    """按函数名提取定义，允许声明限定符和 GCC 属性发生变化。"""
+    name_match = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", signature)
+    if name_match is None:
+        raise ContractError(f"invalid function signature: {signature}")
+    name = name_match.group(1)
+    masked = _code_mask(source)
+    candidate = re.compile(rf"\b{re.escape(name)}\s*\(")
+    for match in candidate.finditer(masked):
+        line_start = masked.rfind("\n", 0, match.start()) + 1
+        if masked[line_start:match.start()].lstrip().startswith("#"):
+            continue
+        paren = masked.find("(", match.start())
+        params_end = _balanced_end(masked, paren, "(", ")")
+        if params_end < 0:
+            continue
+        pos = params_end + 1
+        while True:
+            while pos < len(masked) and masked[pos].isspace():
+                pos += 1
+            attribute = re.match(r"__attribute__?\b", masked[pos:])
+            if attribute is None:
+                break
+            pos += attribute.end()
+            while pos < len(masked) and masked[pos].isspace():
+                pos += 1
+            if pos >= len(masked) or masked[pos] != "(":
+                break
+            attribute_end = _balanced_end(masked, pos, "(", ")")
+            if attribute_end < 0:
+                break
+            pos = attribute_end + 1
+        while pos < len(masked) and masked[pos].isspace():
+            pos += 1
+        if pos >= len(masked) or masked[pos] != "{":
+            continue
+        body_end = _balanced_end(masked, pos, "{", "}")
+        if body_end < 0:
+            raise ContractError(f"unterminated body: {signature}")
+        return source[match.start():body_end + 1]
+    raise ContractError(f"missing function: {signature}")
 
 
 def require(source: str, token: str, label: str) -> None:
@@ -703,10 +794,16 @@ def validate_sources(sources: dict[str, str]) -> None:
         require(publish_content, token, "content overlay fast path")
 
     remove_inode = function_body(directory, "agent_fs_remove_inode(")
-    deferred_pos = remove_inode.find("agent_file_state_index_deferred(ip)")
+    # 稀疏版本表把 deferred 归入所有未发布的 slot；删除路径必须先按
+    # 完整 inode 身份回收版本项，再请求重扫，不能进入 catalog 事务。
+    deferred_pos = remove_inode.find("ip->agent_meta_slot <= 0")
+    reclaim_pos = remove_inode.find("agent_file_version_reclaim(ip)", deferred_pos)
     txn_pos = remove_inode.find("agent_metadata_txn_try_external()")
-    rescan_pos = remove_inode.find("agent_file_request_scan()", deferred_pos)
-    if not (0 <= deferred_pos < rescan_pos < txn_pos):
+    rescan_pos = remove_inode.find("agent_file_request_scan()", reclaim_pos)
+    return_pos = remove_inode.find("return;", rescan_pos)
+    if not (
+        0 <= deferred_pos < reclaim_pos < rescan_pos < return_pos < txn_pos
+    ):
         raise ContractError("deferred delete does not reconcile before catalog work")
     busy_scan_pos = remove_inode.find("agent_file_request_scan()", txn_pos)
     busy_return_pos = remove_inode.find("return;", busy_scan_pos)

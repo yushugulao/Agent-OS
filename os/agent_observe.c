@@ -67,31 +67,3 @@ agent_observe_record_effect(struct proc *p, int tool_id, int status,
 						 value1, value2, flags,
 						 authority_effect);
 }
-
-void
-agent_observe_record_prefetch(struct proc *p,
-			      struct agent_file_prefetch_hint *hint,
-			      uint64 span_owner, char *target_stage,
-			      int publish_audit)
-{
-	if (p == 0 || hint == 0 || agent_observe_recording_suppressed(p) ||
-	    !agent_observe_ledger_record_prefetch(
-		    p, hint, span_owner, target_stage, publish_audit))
-		return;
-	agent_observe_timeline_record_prefetch(p, hint, span_owner);
-}
-
-void
-agent_observe_record_prefetch_handoff_locked(
-	int source_pid, uint64 source_control_id, struct proc *target,
-	struct agent_file_prefetch_hint *hint, uint64 span_owner,
-	char *target_stage, uint64 reason)
-{
-	if (target == 0 || hint == 0 ||
-	    agent_observe_recording_suppressed(target) ||
-	    !agent_observe_ledger_record_prefetch_handoff_locked(
-		    source_pid, source_control_id, target, hint, span_owner,
-		    target_stage, reason))
-		return;
-	agent_observe_timeline_record_prefetch(target, hint, span_owner);
-}

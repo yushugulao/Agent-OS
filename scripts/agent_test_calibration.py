@@ -1347,11 +1347,15 @@ def validate_attestation(
         },
         f"attestation {case_key}.request",
     )
-    expected_fault_markers = (
-        ["iobudget_ucore: fault_exit_armed=1"]
-        if init_proc == "iobudget_ucore"
-        else []
-    )
+    if init_proc == "agentfinal_ucore":
+        expected_fault_markers = [
+            "agentfinal_ucore: context_ro_store_fault_armed=1",
+            "agentfinal_ucore: context_public_unmapped_fault_armed=1",
+        ]
+    elif init_proc == "iobudget_ucore":
+        expected_fault_markers = ["iobudget_ucore: fault_exit_armed=1"]
+    else:
+        expected_fault_markers = []
     invocation_fault_markers = repeated_option_values(
         argv, "--expected-bad-addr-after", f"attestation {case_key}"
     )

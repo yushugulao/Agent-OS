@@ -42,6 +42,15 @@ def reject(source: str, token: str, message: str) -> None:
         raise ValueError(message)
 
 
+def require_scrubbed_returns(source: str, status: str, scrub: str) -> None:
+    returns = list(re.finditer(rf"return{re.escape(status)};", source))
+    if not returns:
+        raise ValueError(f"missing {status} failure exit")
+    for match in returns:
+        if not source[: match.start()].endswith(scrub):
+            raise ValueError("failed read views can expose a partial snapshot")
+
+
 def check(root: Path) -> None:
     header = compact(root / "os/agent_metadata_catalog.h")
     catalog = compact(root / "os/agent_metadata_catalog.c")
@@ -102,6 +111,13 @@ def check(root: Path) -> None:
     reject(execute, "agent_metadata_txn_", "snapshot query entered metadata gate")
     reject(execute, "for(intslot=0;slot<AGENT_FILE_META_MAX",
            "snapshot query returned to a full table cursor")
+    query_reset = function(query, "agent_query_result_reset")
+    require(query_reset, "memset(r,0,sizeof(*r));",
+            "snapshot reset does not clear the complete public result")
+    reset = execute.find("agent_query_result_reset(r);")
+    begin_read = execute.find("agent_metadata_catalog_read_begin(")
+    if reset < 0 or begin_read < 0 or reset >= begin_read:
+        raise ValueError("each snapshot attempt can inherit a partial result")
 
     internal = function(objects, "agent_file_query_internal")
     fast = internal.find("agent_metadata_query_execute_snapshot(")
@@ -112,8 +128,18 @@ def check(root: Path) -> None:
             "snapshot retry count is not bounded")
     require(internal, "returnAGENT_STATUS_RETRY;",
             "unstable read view does not fail retryably")
-    if internal.count("agent_file_query_reset(r,hit_slots);") < 4:
-        raise ValueError("failed read views can expose a partial snapshot")
+    initial_reset = internal.find("agent_file_query_reset(r);")
+    snapshot_call = internal.find("agent_metadata_query_execute_snapshot(")
+    if initial_reset < 0 or snapshot_call < 0 or initial_reset >= snapshot_call:
+        raise ValueError("snapshot query does not begin with an empty result")
+    require_scrubbed_returns(
+        internal, "AGENT_STATUS_RETRY", "agent_file_query_reset(r);"
+    )
+    require(
+        internal,
+        "if(result<0)agent_file_query_reset(r);returnresult;",
+        "failed locked recovery can expose a partial result",
+    )
 
     syscall = function(objects, "sys_agent_file_query")
     reject(syscall, "agent_metadata_txn_lock(",

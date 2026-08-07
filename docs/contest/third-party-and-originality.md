@@ -13,9 +13,8 @@
 | AIOS 论文与项目 | 吞吐率、提交到完成延迟、活跃 Agent 数评价维度的参考 | 仅引用公开论文和仓库；不复制代码、数据或结果 | 见根目录 `NOTICE` 与 `docs/evaluation.md` |
 
 根目录源码许可证为 GPL-3.0，技术文档和展示材料采用 CC BY-SA 4.0。当前 `NOTICE` 给出了已知
-上游链接。仓库的 `.clang-format`、`user/.clang-format` 和
-`baseline_ucore/user/.clang-format` 来自 Linux 内核格式配置并保留
-`SPDX-License-Identifier: GPL-2.0` 标记；它们作为独立格式数据分发，不改写为 GPL-3.0。
+上游链接。仓库根目录的 `.clang-format` 来自 Linux 内核格式配置并保留
+`SPDX-License-Identifier: GPL-2.0` 标记；它作为独立格式数据分发，不改写为 GPL-3.0。
 
 ## 相对上游的主要项目增量
 

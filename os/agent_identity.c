@@ -334,11 +334,9 @@ agent_identity_controller_active_locked(
 }
 
 /*
- * Bind every process published inside an Agent-controlled workflow to its
- * nearest controller, including pending workers and PUBLIC descendants.  The
- * caller holds the same interrupt-off boundary that publishes the child into
- * its parent table and scheduler, so retirement can neither miss the child
- * nor race it runnable.
+ * workflow 内发布的进程均绑定最近控制器，包括待激活 worker 与 PUBLIC
+ * 后代。子进程写入父表和调度器时保持同一关中断边界，避免退出漏掉
+ * 子进程或与其进入可运行态竞争。
  */
 int
 agent_identity_spawn_publish_locked(struct proc *parent, struct proc *child)
@@ -355,14 +353,14 @@ agent_identity_spawn_publish_locked(struct proc *parent, struct proc *child)
 	child_lifecycle = vfs_proc_lifecycle(child);
 	if (!workflow_lifecycle_key_valid(child_lifecycle))
 		return child->agent_controller_id == 0 ? 0 : -1;
-	/* PUBLIC descendants may carry the key without a raw VFS scope field. */
+	/* PUBLIC 后代可保留生命周期 key，而不暴露 VFS scope 字段。 */
 	if (workflow_lifecycle_scope(child_lifecycle, &scope_id) < 0 ||
 	    scope_id < VFS_SCOPE_FIRST_DYNAMIC)
 		return -1;
 	parent_lifecycle = vfs_proc_lifecycle(parent);
 	if (!workflow_lifecycle_key_equal(parent_lifecycle,
 					 child_lifecycle)) {
-		/* Fresh workflow roots own, rather than inherit, their edge. */
+		/* 新 workflow 根节点自行持有控制边，不从父进程继承。 */
 		return child->is_agent && child->vfs_scope_controller &&
 		       child->agent_control_state == AGENT_CONTROL_OPEN &&
 		       child->agent_control_id != 0 &&
@@ -370,7 +368,7 @@ agent_identity_spawn_publish_locked(struct proc *parent, struct proc *child)
 	}
 	controller_id = parent->is_agent ? parent->agent_control_id :
 					 parent->agent_controller_id;
-	/* The trusted boot lifecycle is system-owned and has no Agent edge. */
+	/* 可信启动生命周期归系统所有，不含 Agent 控制边。 */
 	if (controller_id == 0)
 		return child->agent_controller_id == 0 ? 0 : -1;
 	if (agent_identity_controller_find_locked(controller_id,
@@ -383,11 +381,10 @@ agent_identity_spawn_publish_locked(struct proc *parent, struct proc *child)
 }
 
 /*
- * OPEN -> QUIESCING closes authority and child publication. In the same
- * interrupt-off boundary, live trusted child controllers move to an active
- * successor; non-transferable descendants retain the old edge for subtree
- * cancellation. RETIRED waits until sibling Context and metadata commits are
- * quiescent. Exec downgrade is single-threaded and completes both phases.
+ * OPEN -> QUIESCING 同时关闭权限与子进程发布。在同一关中断边界内，
+ * 存活的可信子控制器转交给有效继任者；不可转交后代保留旧边以便整棵
+ * 子树撤销。Context 与 metadata 提交静默后才进入 RETIRED；exec 降权
+ * 串行完成两个阶段。
  */
 int
 agent_identity_controller_depart(
@@ -463,7 +460,7 @@ agent_identity_controller_depart(
 	return 1;
 }
 
-/* Commit root retirement only after lifecycle ACTIVE -> CLOSING succeeded. */
+/* 仅在生命周期 ACTIVE -> CLOSING 成功后提交根控制器退出。 */
 int
 agent_identity_controller_close_commit(
 	struct proc *p, const struct agent_controller_departure *departure)

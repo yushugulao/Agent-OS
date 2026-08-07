@@ -11,6 +11,7 @@
 #include "proc.h"
 #include "resource_controller.h"
 #include "syscall_ids.h"
+#include "syscall.h"
 #include "timer.h"
 #include "vm.h"
 
@@ -42,21 +43,21 @@ static int agent_resource_snapshot_authorized(const struct proc *p)
 
 static int agent_performance_snapshot_authorized(struct proc *p)
 {
-	/* Global counters are restricted to the signed bootstrap authority. */
+	/* 全局计数器只向签名引导主体开放。 */
 	return p != 0 && p->resource_domain_admin &&
 	       exec_policy_process_bootstrap(p);
 }
 
 static uint64 agent_performance_workload_syscalls(const struct proc *p)
 {
-	return p->syscall_count[SYS_openat] +
-	       p->syscall_count[SYS_read] +
-	       p->syscall_count[SYS_write] +
-	       p->syscall_count[SYS_close] +
-	       p->syscall_count[SYS_unlinkat] +
-	       p->syscall_count[SYS_fsync] +
-	       p->syscall_count[SYS_agent_file_meta_set] +
-	       p->syscall_count[SYS_agent_file_query];
+	return (uint64)syscall_count_read(p, SYS_openat) +
+	       syscall_count_read(p, SYS_read) +
+	       syscall_count_read(p, SYS_write) +
+	       syscall_count_read(p, SYS_close) +
+	       syscall_count_read(p, SYS_unlinkat) +
+	       syscall_count_read(p, SYS_fsync) +
+	       syscall_count_read(p, SYS_agent_file_meta_set) +
+	       syscall_count_read(p, SYS_agent_file_query);
 }
 
 int sys_agent_resource_snapshot(uint64 addr, uint64 user_size)

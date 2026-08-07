@@ -22,18 +22,16 @@
 	(AGENT_AUDIT_HIGH_SCOPE_LIMIT / AGENT_AUDIT_SCOPE_PRINCIPALS)
 #define AGENT_AUDIT_PRINCIPAL_SCAN_LIMIT AGENT_AUDIT_LOW_PRINCIPAL_LIMIT
 #define AGENT_AUDIT_CAUSAL_ID_RESERVE AGENT_AUDIT_LOW_SCOPE_LIMIT
-#define AGENT_PREFETCH_SCOPE_LIMIT (AGENT_FILE_PREFETCH_SPAN_MAX / 4)
-
 extern struct proc pool[NPROC];
 
 _Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_AUDIT_SCOPE_LIMIT <=
 	       AGENT_AUDIT_MAX_RECORDS,
 	       "audit table must reserve every workflow partition");
 _Static_assert(AGENT_AUDIT_LOW_PRINCIPAL_LIMIT <=
-		       AGENT_AUDIT_LOW_SCOPE_LIMIT &&
+	       AGENT_AUDIT_LOW_SCOPE_LIMIT &&
 	       AGENT_AUDIT_LOW_PRINCIPAL_LIMIT ==
 		       AGENT_AUDIT_LOW_PRINCIPAL_MAX &&
-	       AGENT_AUDIT_LOW_PRINCIPAL_RESERVE > AGENT_AUDIT_KIND_PREFETCH &&
+	       AGENT_AUDIT_LOW_PRINCIPAL_RESERVE > AGENT_AUDIT_KIND_SCHED &&
 	       AGENT_AUDIT_LOW_PRINCIPAL_LIMIT >
 		       AGENT_OBSERVE_CHECKPOINT_PER_SCOPE &&
 	       PROC_RESERVED_SLOTS % VFS_SCOPE_MAX_ACTIVE == 0 &&
@@ -51,9 +49,6 @@ _Static_assert(AGENT_AUDIT_CAUSAL_ID_RESERVE <=
 	       AGENT_IDENTITY_LEASE_LOW_WATER &&
 	       AGENT_AUDIT_CAUSAL_ID_RESERVE < AGENT_IDENTITY_LEASE_CHUNK,
 	       "audit lease must reserve one complete causal partition");
-_Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_PREFETCH_SCOPE_LIMIT <=
-	       AGENT_FILE_PREFETCH_SPAN_MAX,
-	       "prefetch table must reserve every workflow partition");
 _Static_assert(sizeof(struct agent_observe_checkpoint) <= 8U * 1024U,
 	       "observation checkpoint must remain a bounded durable section");
 _Static_assert(KERNEL_WORK_OPERATION_UNITS <= KERNEL_WORK_BUDGET_UNITS,
@@ -66,7 +61,7 @@ struct agent_audit_scope_state {
 	uint64 total_records;
 	uint64 admission_drops;
 	uint64 ledger_hash;
-	uint64 kind_counts[AGENT_AUDIT_KIND_PREFETCH + 1];
+	uint64 kind_counts[AGENT_AUDIT_KIND_SLOT_COUNT];
 	uint64 observe_epoch;
 	ushort sequence_slots[AGENT_AUDIT_SCOPE_LIMIT];
 	ushort timeline_slots[AGENT_AUDIT_SCOPE_LIMIT];
@@ -104,11 +99,6 @@ static uchar agent_audit_low_class[AGENT_AUDIT_MAX_RECORDS];
 static uchar agent_audit_identity_classes[AGENT_AUDIT_MAX_RECORDS];
 static struct agent_audit_receipt_state agent_audit_receipts[AGENT_AUDIT_MAX_RECORDS];
 static struct agent_audit_scope_state agent_audit_scope_states[NPROC];
-static uint64 agent_span_prefetch_next_sequence;
-static uint64 agent_span_prefetch_head;
-static struct agent_file_prefetch_hint agent_span_prefetch_hints[AGENT_FILE_PREFETCH_SPAN_MAX];
-static uint agent_span_prefetch_scopes[AGENT_FILE_PREFETCH_SPAN_MAX];
-static uint64 agent_span_prefetch_owners[AGENT_FILE_PREFETCH_SPAN_MAX];
 static int agent_timeline_waiting_threads;
 
 static int
@@ -204,14 +194,6 @@ agent_observe_ledger_init(void)
 	memset(agent_audit_receipts, 0, sizeof(agent_audit_receipts));
 	memset(agent_audit_scope_states, 0,
 	       sizeof(agent_audit_scope_states));
-	agent_span_prefetch_next_sequence = 1;
-	agent_span_prefetch_head = 0;
-	memset(agent_span_prefetch_hints, 0,
-	       sizeof(agent_span_prefetch_hints));
-	memset(agent_span_prefetch_scopes, 0,
-	       sizeof(agent_span_prefetch_scopes));
-	memset(agent_span_prefetch_owners, 0,
-	       sizeof(agent_span_prefetch_owners));
 	agent_timeline_waiting_threads = 0;
 }
 
@@ -381,6 +363,7 @@ agent_observe_audit_view_open_locked(
 	view->scope_id = state->scope_id;
 	view->visible_records = state->visible_records;
 	view->total_records = state->total_records;
+	view->admission_drops = state->admission_drops;
 	view->ledger_hash = state->ledger_hash;
 	view->observe_epoch = state->observe_epoch;
 	memmove(view->kind_counts, state->kind_counts,
@@ -784,9 +767,6 @@ agent_observe_record_visible(struct proc *p,
 	if (record->source == AGENT_TIMELINE_SOURCE_CONTEXT ||
 	    record->source == AGENT_TIMELINE_SOURCE_SCHED)
 		return record->pid == p->pid;
-	if (record->source == AGENT_TIMELINE_SOURCE_PREFETCH)
-		return agent_identity_has_cap(p, AGENT_CAP_META_READ) &&
-		       record->target_pid == p->pid;
 	return 0;
 }
 
@@ -824,17 +804,6 @@ agent_observe_timeline_publish_locked(
 			}
 		}
 	}
-}
-
-uint64
-agent_observe_prefetch_scope_count_locked(uint scope_id)
-{
-	uint64 count = 0;
-
-	for (int i = 0; i < AGENT_FILE_PREFETCH_SPAN_MAX; i++)
-		if (agent_span_prefetch_scopes[i] == scope_id)
-			count++;
-	return count;
 }
 
 uint64 agent_observe_scope_epoch(uint scope_id)
@@ -1340,7 +1309,8 @@ agent_observe_checkpoint_entry_validate(
 	    record->workflow_lifecycle_id != scope->lifecycle_id ||
 	    record->workflow_lifecycle_generation !=
 		    scope->lifecycle_generation ||
-	    record->kind < 0 || record->kind > AGENT_AUDIT_KIND_PREFETCH ||
+	    record->kind < 0 ||
+	    (uint)record->kind >= AGENT_AUDIT_KIND_SLOT_COUNT ||
 	    record->agent_id < 0 ||
 	    record->record_hash != agent_observe_checkpoint_record_hash(record))
 		return -1;
@@ -1706,7 +1676,7 @@ agent_observe_checkpoint_restore_scope(
 			goto rollback;
 		}
 		if (entry->record.kind >= 0 &&
-		    entry->record.kind <= AGENT_AUDIT_KIND_PREFETCH) {
+		    (uint)entry->record.kind < AGENT_AUDIT_KIND_SLOT_COUNT) {
 			state->kind_counts[entry->record.kind]++;
 		}
 		if (entry->record.sequence > largest_sequence) {
@@ -1734,7 +1704,7 @@ rollback:
 		int slot = restore_slots[i];
 		int kind = agent_audit_records[slot].kind;
 
-		if (kind >= 0 && kind <= AGENT_AUDIT_KIND_PREFETCH) {
+		if (kind >= 0 && (uint)kind < AGENT_AUDIT_KIND_SLOT_COUNT) {
 			if (state->kind_counts[kind] > 0)
 				state->kind_counts[kind]--;
 		}
@@ -1807,8 +1777,8 @@ agent_audit_note_drop(struct agent_audit_scope_state *state)
 	state->admission_drops++;
 	if (agent_observe_checkpoint_generation != ~0ULL)
 		agent_observe_checkpoint_generation++;
-	/* Drops have no per-record receipt, but their monotonic counters are part
-	 * of the durable scope checkpoint and must not wait for a later record. */
+	/* 准入丢弃没有逐条回执，但单调计数属于持久 scope 检查点，
+	 * 不能等到下一条记录才落盘。 */
 	agent_obsstore_mark_dirty(state->scope_id);
 }
 
@@ -1849,9 +1819,8 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	principal = authority_effect ? actor->agent_control_id : audit_principal;
 	if (principal == 0 && actor != 0)
 		principal = actor->agent_control_id;
-	// Only an explicit kernel-confirmed privileged state transition enters
-	// the protected partition. Telemetry, IPC and user-written Context are
-	// always general records, irrespective of the public span identifier.
+	// 只有内核确认的特权状态迁移进入保护分区；遥测、IPC 和用户 Context
+	// 始终属于普通记录，不能借公开 span 标识抬高等级。
 	low_class = identity_class != AGENT_AUDIT_ID_AUTHORITY;
 	if (!agent_observe_scope_valid(scope_id) ||
 	    (scope_state =
@@ -1952,7 +1921,7 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	scope_state->total_records++;
 	if (agent_observe_checkpoint_generation != ~0ULL)
 		agent_observe_checkpoint_generation++;
-	if (kind >= 0 && kind <= AGENT_AUDIT_KIND_PREFETCH) {
+	if (kind >= 0 && (uint)kind < AGENT_AUDIT_KIND_SLOT_COUNT) {
 		scope_state->kind_counts[kind]++;
 	}
 	agent_audit_head = (slot + 1) % AGENT_AUDIT_MAX_RECORDS;
@@ -2021,147 +1990,6 @@ static void agent_audit_sched(struct proc *p, struct agent_sched_record *record)
 			 "sched");
 }
 
-static void agent_audit_prefetch_handoff(int source_pid,
-					 uint64 source_control_id,
-					 struct proc *target,
-					 struct agent_file_prefetch_hint *hint,
-					 uint64 span_owner,
-					 char *target_stage,
-					 uint64 reason)
-{
-	if (source_pid <= 0 || source_control_id == 0 || target == 0 ||
-	    hint == 0 || target_stage == 0)
-		return;
-	agent_audit_emit(AGENT_AUDIT_KIND_PREFETCH, agent_observe_ticks(), target,
-			 source_pid, target->pid, AGENT_EVENT_MESSAGE,
-			 AGENT_TOOL_QUERY_FILE, AGENT_STATUS_OK,
-			 hint->source_sequence, hint->span_id,
-			 span_owner, source_control_id,
-			 hint->span_id != 0 && span_owner != 0 ?
-				 AGENT_AUDIT_ID_CAUSAL :
-				 AGENT_AUDIT_ID_TELEMETRY,
-			 0,
-			 hint->source_sequence, hint->source_fid, hint->fid,
-			 reason, target_stage);
-}
-
-
-/* Span-prefetch observation bus. */
-/*
- * The shared span bus has a fixed-size search domain. Callers prepay that
- * bound before entering any endpoint commit, so this helper never schedules.
- */
-static void
-agent_observe_prefetch_bus_store_commit(
-	struct agent_file_prefetch_hint *hint, uint scope_id,
-	uint64 span_owner)
-{
-	struct agent_file_prefetch_hint copy;
-	int slot;
-	int visible;
-	int start;
-	int owned = 0;
-	int oldest_slot = -1;
-	uint64 oldest_sequence = ~0ULL;
-
-	if (hint == 0 || hint->span_id == 0 || span_owner == 0 || hint->fid == 0 ||
-	    !agent_observe_scope_valid(scope_id))
-		return;
-	visible = AGENT_FILE_PREFETCH_SPAN_MAX;
-	start = 0;
-	for (int i = 0; i < visible; i++) {
-		slot = (start + i) % AGENT_FILE_PREFETCH_SPAN_MAX;
-		if (agent_span_prefetch_scopes[slot] == scope_id) {
-			owned++;
-			if (agent_span_prefetch_hints[slot].sequence <
-			    oldest_sequence) {
-				oldest_sequence =
-					agent_span_prefetch_hints[slot].sequence;
-				oldest_slot = slot;
-			}
-		}
-		if (agent_span_prefetch_hints[slot].span_id ==
-			    hint->span_id &&
-		    agent_span_prefetch_owners[slot] == span_owner &&
-		    agent_span_prefetch_scopes[slot] == scope_id &&
-		    agent_span_prefetch_hints[slot].fid == hint->fid &&
-		    agent_span_prefetch_hints[slot].source_fid ==
-			    hint->source_fid &&
-		    agent_span_prefetch_hints[slot].source_pid ==
-			    hint->source_pid &&
-		    agent_span_prefetch_hints[slot].target_pid ==
-			    hint->target_pid)
-			goto fill;
-	}
-	if (owned >= AGENT_PREFETCH_SCOPE_LIMIT) {
-		slot = oldest_slot;
-	} else {
-		slot = -1;
-		for (int i = 0; i < AGENT_FILE_PREFETCH_SPAN_MAX; i++) {
-			int candidate = (agent_span_prefetch_head + i) %
-					AGENT_FILE_PREFETCH_SPAN_MAX;
-
-			if (agent_span_prefetch_scopes[candidate] ==
-			    VFS_SCOPE_NONE) {
-				slot = candidate;
-				break;
-			}
-		}
-		if (slot < 0)
-			slot = oldest_slot;
-	}
-	if (slot < 0)
-		return;
-	agent_span_prefetch_head =
-		(slot + 1) % AGENT_FILE_PREFETCH_SPAN_MAX;
-
-fill:
-	memmove(&copy, hint, sizeof(copy));
-	copy.sequence = agent_span_prefetch_next_sequence++;
-	copy.reason |= AGENT_FILE_PREFETCH_REASON_SPAN_BUS;
-	memmove(&agent_span_prefetch_hints[slot], &copy, sizeof(copy));
-	agent_span_prefetch_scopes[slot] = scope_id;
-	agent_span_prefetch_owners[slot] = span_owner;
-}
-
-static void agent_file_prefetch_bus_store(struct agent_file_prefetch_hint *hint,
-					  uint scope_id,
-					  uint64 span_owner)
-{
-	int enabled;
-
-	agent_metadata_txn_work_charge(2U * AGENT_FILE_PREFETCH_SPAN_MAX);
-	enabled = intr_save();
-	agent_observe_prefetch_bus_store_commit(hint, scope_id, span_owner);
-	intr_restore(enabled);
-}
-
-int agent_observe_prefetch_scope_next_locked(
-	uint scope_id, uint64 after_sequence,
-	struct agent_file_prefetch_hint *out, uint64 *span_owner)
-{
-	uint64 best = ~0ULL;
-	int slot = -1;
-
-	for (int i = 0; i < AGENT_FILE_PREFETCH_SPAN_MAX; i++) {
-		agent_metadata_txn_work_charge(1);
-		if (agent_span_prefetch_scopes[i] != scope_id ||
-		    agent_span_prefetch_hints[i].sequence <= after_sequence ||
-		    agent_span_prefetch_hints[i].sequence >= best)
-			continue;
-		best = agent_span_prefetch_hints[i].sequence;
-		slot = i;
-	}
-	if (slot < 0)
-		return 0;
-	if (out)
-		memmove(out, &agent_span_prefetch_hints[slot], sizeof(*out));
-	if (span_owner)
-		*span_owner = agent_span_prefetch_owners[slot];
-	return 1;
-}
-
-
 int
 agent_observe_scope_reclaim(uint scope_id)
 {
@@ -2171,15 +1999,6 @@ agent_observe_scope_reclaim(uint scope_id)
 	if (!agent_observe_scope_valid(scope_id))
 		return -1;
 	(void)vfs_scope_lifecycle(scope_id, &lifecycle);
-	for (int i = 0; i < AGENT_FILE_PREFETCH_SPAN_MAX; i++) {
-		if (agent_span_prefetch_scopes[i] != scope_id)
-			continue;
-		changed = 1;
-		agent_span_prefetch_scopes[i] = VFS_SCOPE_NONE;
-		agent_span_prefetch_owners[i] = 0;
-		memset(&agent_span_prefetch_hints[i], 0,
-		       sizeof(agent_span_prefetch_hints[i]));
-	}
 	{
 		struct agent_audit_scope_state *state =
 			agent_observe_audit_scope_state_get(scope_id, 0);
@@ -2265,69 +2084,4 @@ agent_observe_ledger_record_effect(struct proc *p, int tool_id, int status,
 			 AGENT_AUDIT_ID_TELEMETRY,
 			 authority_effect, value0, value1, value2, flags,
 			 text);
-}
-
-int
-agent_observe_ledger_record_prefetch(struct proc *p,
-				     struct agent_file_prefetch_hint *hint,
-				     uint64 span_owner, char *target_stage,
-				     int publish_audit)
-{
-	if (p == 0 || hint == 0 || target_stage == 0)
-		return 0;
-	hint->workflow_lifecycle_id = p->workflow_lifecycle_id;
-	hint->workflow_lifecycle_generation = p->workflow_lifecycle_generation;
-	hint->branch_generation = p->context_branch_generation;
-	hint->actor_control_id = p->agent_control_id;
-	hint->cause_branch_generation = p->context_cause_branch_generation;
-	hint->cause_control_id = p->agent_current_cause_control;
-	hint->cause_record_hash = p->agent_context_chain_hash;
-	hint->actor_tid = curr_thread() ? curr_thread()->tid : 0;
-	hint->actor_role = p->agent_role;
-	hint->actor_loop_state = curr_thread() &&
-				 curr_thread()->process == p ?
-				 curr_thread()->agent_loop_state : p->loop_state;
-	agent_file_prefetch_bus_store(
-		hint, agent_identity_proc_scope(p), span_owner);
-	if (publish_audit)
-		agent_audit_emit(
-			AGENT_AUDIT_KIND_PREFETCH, hint->tick, p,
-			hint->source_pid, hint->target_pid, AGENT_EVENT_NONE,
-			AGENT_TOOL_QUERY_FILE, AGENT_STATUS_OK,
-			hint->source_sequence, hint->span_id, span_owner,
-			p->agent_control_id,
-			hint->span_id != 0 && span_owner != 0 ?
-				AGENT_AUDIT_ID_CAUSAL :
-				AGENT_AUDIT_ID_TELEMETRY,
-			0, hint->source_sequence,
-			hint->source_fid, hint->fid, hint->reason, target_stage);
-	return 1;
-}
-
-int
-agent_observe_ledger_record_prefetch_handoff_locked(
-	int source_pid, uint64 source_control_id, struct proc *target,
-	struct agent_file_prefetch_hint *hint, uint64 span_owner,
-	char *target_stage, uint64 reason)
-{
-	uint scope_id;
-
-	if (target == 0 || hint == 0 || target_stage == 0)
-		return 0;
-	hint->workflow_lifecycle_id = target->workflow_lifecycle_id;
-	hint->workflow_lifecycle_generation =
-		target->workflow_lifecycle_generation;
-	hint->branch_generation = target->context_branch_generation;
-	hint->actor_control_id = target->agent_control_id;
-	hint->cause_branch_generation = target->context_cause_branch_generation;
-	hint->cause_control_id = target->agent_current_cause_control;
-	hint->cause_record_hash = target->agent_context_chain_hash;
-	hint->actor_tid = 0;
-	hint->actor_role = target->agent_role;
-	hint->actor_loop_state = target->loop_state;
-	scope_id = agent_identity_proc_scope(target);
-	agent_observe_prefetch_bus_store_commit(hint, scope_id, span_owner);
-	agent_audit_prefetch_handoff(source_pid, source_control_id, target,
-				     hint, span_owner, target_stage, reason);
-	return 1;
 }

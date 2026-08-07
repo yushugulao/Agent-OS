@@ -156,7 +156,7 @@ def validate(bio: str, bio_h: str) -> None:
         "io_owner_reap_retired()",
     )
 
-    transfer = compact(function_body(bio, "bio_account_transfers"))
+    transfer = compact(function_body(bio, "bio_account_transfer_batch"))
     deferred_tokens = (
         "if (bio_deferred_sponsor_current()",
         "io_policy.deferred.independent_lease",
@@ -263,7 +263,7 @@ MUTATIONS = (
     (replace_in_function(BIO, "bio_deferred_owner_release",
                          "bio_cache_release_closed_owner(owner);", ""), BIO_H,
      "closing cache release omitted"),
-    (replace_in_function(BIO, "bio_account_transfers",
+    (replace_in_function(BIO, "bio_account_transfer_batch",
                          "bio_deferred_sponsor_current()", "0"), BIO_H,
      "deferred receipt reuse disabled"),
     (replace_in_function(BIO, "bio_deferred_sponsor_begin",
@@ -282,13 +282,13 @@ MUTATIONS = (
     (replace_in_function(BIO, "bio_deferred_sponsor_begin",
                          "io_policy.deferred.reuse_request_lease = reuse_request_lease;", ""), BIO_H,
      "receipt reuse state removed"),
-    (replace_in_function(BIO, "bio_account_transfers",
+    (replace_in_function(BIO, "bio_account_transfer_batch",
                          "thread->io_request_class == io_policy.deferred.io_class", "1"), BIO_H,
      "deferred class match removed"),
-    (replace_in_function(BIO, "bio_account_transfers",
+    (replace_in_function(BIO, "bio_account_transfer_batch",
                          "thread->io_request_id == io_policy.deferred.origin_request_id", "1"), BIO_H,
      "transfer request identity match removed"),
-    (replace_in_function(BIO, "bio_account_transfers",
+    (replace_in_function(BIO, "bio_account_transfer_batch",
                          "reservation = &thread->io_request_reservation;", ""), BIO_H,
      "deferred reservation reuse removed"),
     (replace_in_function(BIO, "bio_request_begin_current_mode",

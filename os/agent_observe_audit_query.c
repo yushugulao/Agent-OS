@@ -217,7 +217,6 @@ int sys_agent_ledger_snapshot(uint64 summaryaddr)
 	struct agent_audit_record oldest_record;
 	struct agent_audit_record latest_record;
 	uint64 visible;
-	uint64 prefetch_visible = 0;
 	uint scope_id;
 
 	if (!p->is_agent)
@@ -230,10 +229,11 @@ int sys_agent_ledger_snapshot(uint64 summaryaddr)
 	agent_observe_audit_view_open_locked(scope_id, &view);
 	memset(&summary, 0, sizeof(summary));
 	visible = view.visible_records;
-	prefetch_visible = agent_observe_prefetch_scope_count_locked(scope_id);
 	summary.version = AGENT_LEDGER_VERSION;
 	summary.visible_records = visible;
 	summary.total_records = view.total_records;
+	summary.other_records = view.admission_drops +
+		view.kind_counts[AGENT_AUDIT_KIND_PREFETCH];
 	summary.dropped_records =
 		summary.total_records > visible ?
 			summary.total_records - visible :
@@ -253,8 +253,7 @@ int sys_agent_ledger_snapshot(uint64 summaryaddr)
 		view.kind_counts[AGENT_AUDIT_KIND_EVENT_ENQUEUE] +
 		view.kind_counts[AGENT_AUDIT_KIND_EVENT_CONSUME];
 	summary.sched_records = view.kind_counts[AGENT_AUDIT_KIND_SCHED];
-	summary.prefetch_records = view.kind_counts[AGENT_AUDIT_KIND_PREFETCH];
-	summary.timeline_total = summary.total_records + prefetch_visible;
+	summary.timeline_total = summary.total_records;
 	summary.observe_epoch = view.observe_epoch;
 	return copyout(p->pagetable, summaryaddr, (char *)&summary,
 		       sizeof(summary));
@@ -352,7 +351,6 @@ int sys_agent_audit_query(uint64 filteraddr, uint64 recordsaddr, int max)
 		return matched;
 	return copied;
 }
-
 int sys_agent_span_trace_snapshot(uint64 recordsaddr, int max)
 {
 	struct proc *p = curr_proc();
@@ -414,44 +412,4 @@ int sys_agent_span_trace_snapshot(uint64 recordsaddr, int max)
 	if (max == 0)
 		return matched;
 	return copied;
-}
-
-
-int
-agent_observe_prefetch_span_snapshot(struct proc *p, uint64 hintsaddr, int max)
-{
-	struct agent_file_prefetch_hint hint;
-	uint64 span_id;
-	uint64 span_owner;
-	uint64 hint_span_owner;
-	uint64 sequence = 0;
-	int matched = 0;
-	int copied = 0;
-
-	if (p == 0)
-		return -1;
-	span_id = p->agent_current_span_id;
-	span_owner = p->agent_current_span_owner;
-	if (span_id == 0 || span_owner == 0)
-		return 0;
-	while (agent_observe_prefetch_scope_next_locked(
-		agent_identity_proc_scope(p), sequence, &hint,
-		&hint_span_owner)) {
-		sequence = hint.sequence;
-		if (hint.span_id != span_id || hint_span_owner != span_owner)
-			continue;
-		matched++;
-		if (max == 0 || copied >= max)
-			continue;
-		if (hintsaddr == 0)
-			return AGENT_STATUS_BAD_PARAM;
-		if (copyout(p->pagetable,
-			    hintsaddr +
-				    copied *
-					    sizeof(struct agent_file_prefetch_hint),
-			    (char *)&hint, sizeof(hint)) < 0)
-			return -1;
-		copied++;
-	}
-	return max == 0 ? matched : copied;
 }

@@ -66,7 +66,7 @@ def _assert_rejected(source: str, label: str, *, refresh_digests: bool) -> None:
         tokens = _lex(source)
         refreshed_functions = {
             name: contract._definition_fingerprint(tokens, name)
-            for name in contract._all_functions()
+            for name in saved_functions
         }
         contract.FUNCTION_FINGERPRINTS = refreshed_functions
     try:
@@ -189,6 +189,29 @@ def main() -> int:
             "query_count = context_query(first_sequence, functional_context_records,\n"
             "\t\t\t\t    AGENT_CONTEXT_MAX_RECORDS);",
             "query_count = FUNCTIONAL_TASK3_ROUNDS;",
+        ),
+        "task3-ignore-comparison": _mutate(
+            source, "run_functional_task3",
+            "check(bytes_equal(&functional_context_records[i],\n"
+            "\t\t\t\t  &context_results[i],\n"
+            "\t\t\t\t  sizeof(functional_context_records[i])),\n"
+            "\t\t      \"task3 syscall and direct query agree\");",
+            "(void)bytes_equal(&functional_context_records[i],\n"
+            "\t\t\t  &context_results[i],\n"
+            "\t\t\t  sizeof(functional_context_records[i]));",
+        ),
+        "task3-dead-comparison": _mutate(
+            source, "run_functional_task3",
+            "check(bytes_equal(&functional_context_records[i],\n"
+            "\t\t\t\t  &context_results[i],\n"
+            "\t\t\t\t  sizeof(functional_context_records[i])),\n"
+            "\t\t      \"task3 post-rollback query agreement\");",
+            "if (0) {\n"
+            "\t\tcheck(bytes_equal(&functional_context_records[i],\n"
+            "\t\t\t\t  &context_results[i],\n"
+            "\t\t\t\t  sizeof(functional_context_records[i])),\n"
+            "\t\t      \"task3 post-rollback query agreement\");\n"
+            "\t}",
         ),
         "task4-delete-call": _mutate(
             source, "run_functional_task4",

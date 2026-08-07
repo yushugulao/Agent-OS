@@ -142,7 +142,7 @@ def validate_metadata(ctx: ValidationContext) -> None:
 
     seed_tag = "metadata-agentmetalarge_ucore-large-seed"
     for marker in (
-        "agentmetalarge_ucore: runtime_reload_once=1",
+        "agentmetalarge_ucore: runtime_reload_completed=1",
         "agentmetalarge_ucore: seed_ready=1 records=32",
     ):
         _require_line(result.guests[seed_tag], marker, seed_tag)

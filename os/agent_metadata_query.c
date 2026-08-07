@@ -179,20 +179,15 @@ agent_query_plan_build(const struct agent_file_query *q,
 	plan->reason |= AGENT_FILE_QUERY_REASON_NO_INDEX_KEY;
 }
 
-static void
-agent_query_result_reset(struct agent_file_query_result *r,
-			 int slots[AGENT_FILE_QUERY_MAX_HITS])
+static void agent_query_result_reset(struct agent_file_query_result *r)
 {
 	memset(r, 0, sizeof(*r));
-	for (int i = 0; i < AGENT_FILE_QUERY_MAX_HITS; i++)
-		slots[i] = -1;
 }
 
 int
 agent_metadata_query_execute_locked(
 	uint scope, const struct agent_file_query *q,
-	struct agent_file_query_result *r,
-	int slots[AGENT_FILE_QUERY_MAX_HITS], int allow_insert)
+	struct agent_file_query_result *r, int allow_insert)
 {
 	struct agent_catalog_view view;
 	struct agent_query_plan plan;
@@ -234,7 +229,6 @@ agent_metadata_query_execute_locked(
 					       view.meta)) {
 			r->total_hits++;
 			if (r->returned < plan.limit) {
-				slots[r->returned] = i;
 				agent_file_state_project_hit(
 					&r->hits[r->returned++],
 					view.meta, view.scope_id);
@@ -255,8 +249,7 @@ agent_metadata_query_execute_locked(
 int
 agent_metadata_query_execute_snapshot(
 	uint scope, const struct agent_file_query *q,
-	struct agent_file_query_result *r,
-	int slots[AGENT_FILE_QUERY_MAX_HITS])
+	struct agent_file_query_result *r)
 {
 	struct agent_catalog_read_snapshot snapshot;
 	struct agent_file_meta meta;
@@ -267,7 +260,7 @@ agent_metadata_query_execute_snapshot(
 	int copied;
 	uint64 start;
 
-	agent_query_result_reset(r, slots);
+	agent_query_result_reset(r);
 	agent_query_plan_build(q, r, &plan);
 	start = agent_file_state_now();
 	copied = agent_metadata_catalog_read_begin(
@@ -290,7 +283,6 @@ agent_metadata_query_execute_snapshot(
 			if (agent_metadata_query_matches(scope, owner, q, &meta)) {
 				r->total_hits++;
 				if (r->returned < plan.limit) {
-					slots[r->returned] = slot;
 					agent_file_state_project_hit(
 						&r->hits[r->returned++],
 						&meta, owner);

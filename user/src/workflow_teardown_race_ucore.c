@@ -797,8 +797,8 @@ static void metadata_direct_waiter(void *unused)
 		exit(76);
 	}
 	for (;;) {
-		/* This ABI takes the metadata ticket gate without the Context lane. */
-		if (agent_file_prefetch_snapshot(0, 0) < 0) {
+		/* Initialization takes the metadata ticket gate without Context. */
+		if (agent_file_meta_init() < 0) {
 			metadata_direct_failed = 1;
 			exit(77);
 		}

@@ -24,7 +24,7 @@
 | [task1-agent-process.md](task1-agent-process.md) | 任务一 Agent 进程与地址空间设计细节 |
 | [task2-agent-call.md](task2-agent-call.md) | 任务二结构化工具调用设计细节 |
 | [task3-context-path.md](task3-context-path.md) | 任务三 Context Path、运行轨迹、cause/span 因果字段、用户自管 cache、统一 timeline 导出、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
-| [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、真实 inode 关联、私有 `.agentmeta` 元数据文件、根目录自动扫描、索引、查询计划、内容摘要、依赖查询、本地预取提示和 span 预取提示设计细节 |
+| [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、真实 inode 关联、私有 `.agentmeta` 元数据文件、根目录自动扫描、索引、查询计划、内容摘要和依赖查询设计细节 |
 | [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/unwatch、FIFO 事件队列、wait/timeout 睡眠、事件因果继承、heartbeat、Agent 感知调度、受权调度配置、调度原因记录、运行轨迹、当前 span 短记录、全局审计短记录、过滤查询、统一 timeline、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
 | [assets/agentos_arch.svg](assets/agentos_arch.svg) | 用户态/内核态总架构图 |
 | [assets/agentos_telemetry_pipeline.svg](assets/agentos_telemetry_pipeline.svg) | 内核记录到平台页面的数据路径图 |

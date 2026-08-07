@@ -1,4 +1,4 @@
-// Buffer cache and block-I/O admission policy.
+// 缓冲区缓存与块 I/O 准入策略。
 
 #include "bio.h"
 #include "agent.h"
@@ -12,7 +12,7 @@
 #include "vfs_security.h"
 #include "virtio.h"
 
-/* Processes in one workflow share its lifecycle-scoped I/O owner. */
+/* 同一 workflow 的进程共享生命周期范围内的 I/O 主体。 */
 #define IO_OWNER_SLOTS (VFS_SCOPE_LIFECYCLE_CAP + 2)
 _Static_assert(IO_OWNER_SLOTS >= VFS_SCOPE_MAX_ACTIVE + 2,
 	       "I/O owner table must cover every active workflow");
@@ -176,7 +176,7 @@ enum bio_cleanup_token_state {
 	BIO_CLEANUP_TOKEN_ENDED,
 };
 
-/* One transferable receipt per physical thread, plus epoch/kernel executors. */
+/* 每个物理线程一个可转移凭据，并为 epoch 与内核执行器预留。 */
 #define BIO_CLEANUP_TOKEN_CAP (NPROC * NTHREAD + 2U)
 #define BIO_CLEANUP_SLOT_NONE ((uint16)0xffffU)
 
@@ -344,7 +344,7 @@ static int bio_background_current(void)
 	    io_policy.background.executor_generation !=
 		    thread->identity_generation)
 		return 0;
-	/* Generation zero belongs only to the permanent pre-runtime idle token. */
+	/* generation 0 只属于运行期启用前的永久空闲令牌。 */
 	if (io_policy.background.boot_executor)
 		return !io_policy.runtime_ready &&
 		       io_policy.background.executor_generation == 0;
@@ -618,7 +618,7 @@ static void io_owner_debt_resolved(struct io_owner_state *state,
 
 	if (bucket->rate.debt != 0)
 		panic("I/O debt resolved while charged");
-	/* Clear tracking before wakeup so a resumed waiter cannot be stranded. */
+	/* 先清除跟踪状态再唤醒，避免恢复运行的等待者被遗留。 */
 	io_debt_clear(state, io_class);
 	if (tracked && bucket->debt_waiters != 0)
 		wait_queue_wake_all(&bucket->debt_queue);
@@ -719,7 +719,7 @@ static void io_owner_init(struct io_owner_state *state, uint owner,
 		wait_queue_init(&state->buckets[i].debt_queue,
 				WAIT_REASON_IO_BUDGET);
 	}
-	// Publish only after every queue and bucket is initialized.
+	// 所有队列和桶初始化完成后再发布运行状态。
 	state->used = 1;
 }
 
@@ -821,10 +821,9 @@ static struct io_owner_state *bio_cache_owner_state(uint owner)
 	return 0;
 }
 
-// A quiesced workflow normally gives up its cache partition immediately, but
-// admitted background and deferred cleanup references keep a small partition
-// for bounded forward progress. Victim selection and lifecycle release must
-// share this predicate so the advertised cleanup floor is actually retained.
+// workflow 静止后通常立即释放缓存分区；已准入的后台任务和延迟清理引用
+// 仍保留一小块空间，以保证有界前进。淘汰与生命周期释放共用此判定，
+// 确保清理保留量真实可用。
 static int bio_cache_state_retained(const struct io_owner_state *state)
 {
 	if (state == 0)
@@ -1092,10 +1091,8 @@ uint bio_process_owner(const struct proc *p)
 	uint scope_id;
 
 	/*
-	 * I/O accounting follows the immutable workflow membership, not the
-	 * mutable VFS credential.  Exec may intentionally drop all filesystem
-	 * authority while the process remains charged to, and revocable with,
-	 * its original workflow resource domain.
+	 * I/O 计费绑定不可变的 workflow 成员关系，而非可变的 VFS 凭据。
+	 * exec 即使主动放弃文件系统权限，进程仍由原 workflow 资源域计费并撤销。
 	 */
 	lifecycle = vfs_proc_lifecycle(p);
 	if (workflow_lifecycle_key_valid(lifecycle) &&
@@ -1126,7 +1123,7 @@ static int io_device_protected(uint owner, uint io_class)
 	       io_class == IO_POLICY_CLASS_SYSTEM;
 }
 
-static struct io_rate_state *
+static __attribute__((always_inline)) inline struct io_rate_state *
 io_rate_source_refresh(struct io_owner_state *state, uint io_class,
 		       uint source)
 {
@@ -1395,7 +1392,7 @@ static void io_rate_charge_transfers(
 	if (reserved != 0) {
 		struct io_rate_state *device = io_rate_device_refresh();
 
-		/* Keep token-before-debt ordering at the device boundary. */
+		/* 设备边界始终先消耗令牌，再记录债务。 */
 		if (device->debt == 0 && device->tokens >= reserved) {
 			if (io_rate_charge_pair(
 				    state, io_class, 0, 0, 1, reserved) < 0)
@@ -1495,10 +1492,7 @@ static int io_grant_waiter(struct io_owner_state *state, uint io_class,
 		    state, io_class, shared, 0,
 		    &source, &device_source) < 0)
 		return 0;
-	/*
-	 * Bind the reservation to the thread actually removed from the queue. A
-	 * canceled head may be skipped by the wake primitive.
-	 */
+	/* 预留量绑定实际出队线程；唤醒操作可能跳过已取消的队首。 */
 	grantee = wait_queue_wake_one_thread(&bucket->admission_queue);
 	if (grantee == 0) {
 		if (io_rate_reservation_cancel_locked(
@@ -1578,7 +1572,7 @@ static int io_wait_until_admitted(struct io_owner_state *state,
 	state->waits++;
 	bucket->admission_waiters++;
 	for (;;) {
-		/* Publish demand before the IRQ-atomic queue-and-sleep transition. */
+		/* 在关中断的入队休眠转换前发布需求。 */
 		io_ready_set(state, io_class);
 		int sleep_status = cleanup ?
 			wait_queue_sleep_irq_uninterruptible(
@@ -1653,11 +1647,9 @@ static int io_wait_for_debt_mode(struct io_owner_state *state, uint io_class,
 		}
 		io_debt_set(state, io_class);
 		/*
-		 * An admitted cleanup request pins both the owner state and its rate
-		 * account.  Let that request settle debt after lifecycle quiesce (and
-		 * even a concurrent retire) so a forward-only filesystem transaction
-		 * cannot be abandoned halfway through durable publication.  No new
-		 * background request is admitted once the owner is retiring.
+		 * 已准入的清理请求同时固定主体状态和速率账户。即使生命周期静止或
+		 * 并发退出，也允许它结清债务，避免只前进的文件系统事务停在持久化
+		 * 发布中途；主体开始退出后不再准入新的后台请求。
 		 */
 		if ((state->retiring || state->quiesced) &&
 		    !closing_background && !closing_deferred) {
@@ -1932,7 +1924,7 @@ static int bio_request_begin_current_mode(int cleanup)
 	return 0;
 }
 
-static int bio_request_begin_current_lazy_mode(int cleanup)
+int bio_request_begin_current_lazy(void)
 {
 	struct thread *thread = curr_thread();
 	struct io_owner_state *state;
@@ -1961,8 +1953,7 @@ static int bio_request_begin_current_lazy_mode(int cleanup)
 		intr_restore(enabled);
 		return -1;
 	}
-	thread->io_request_flags = BIO_REQUEST_LAZY |
-		(cleanup ? BIO_REQUEST_CLEANUP : 0);
+	thread->io_request_flags = BIO_REQUEST_LAZY;
 	thread->io_request_id = bio_request_identity_allocate();
 	thread->io_request_owner = owner;
 	thread->io_request_class = io_class;
@@ -1985,7 +1976,7 @@ int bio_request_begin_current_cleanup(void)
 {
 	struct thread *thread = curr_thread();
 
-	/* exit() is terminal, so reuse rather than nest a syscall lease. */
+	/* exit() 不会返回，复用现有 syscall 租约而非嵌套。 */
 	if (thread != 0 && thread->io_request_depth != 0) {
 		if (thread->io_request_id == 0)
 			panic("cleanup I/O request identity");
@@ -1995,31 +1986,14 @@ int bio_request_begin_current_cleanup(void)
 	return bio_request_begin_current_mode(1);
 }
 
-int bio_request_begin_current_lazy(void)
-{
-	return bio_request_begin_current_lazy_mode(0);
-}
-
-int bio_request_begin_current_lazy_cleanup(void)
-{
-	struct thread *thread = curr_thread();
-
-	if (thread != 0 && thread->io_request_depth != 0) {
-		if (!bio_thread_request_flags_valid(thread))
-			panic("cleanup lazy I/O request identity");
-		thread->io_request_flags |= BIO_REQUEST_CLEANUP;
-		return 0;
-	}
-	return bio_request_begin_current_lazy_mode(1);
-}
-
-static int bio_request_upgrade_current_mode(int cleanup)
+int bio_request_upgrade_current(void)
 {
 	struct thread *thread = curr_thread();
 	struct io_owner_state *state;
 	uint source = IO_RESERVATION_NONE;
 	uint device_source = IO_RESERVATION_NONE;
 	uint64 request_id;
+	int cleanup;
 	int enabled;
 	int result;
 
@@ -2036,8 +2010,7 @@ static int bio_request_upgrade_current_mode(int cleanup)
 	if (thread->bio_buffer_holds != 0 || thread->bio_fs_atomic_depth != 0)
 		return -1;
 	request_id = thread->io_request_id;
-	cleanup = cleanup ||
-		(thread->io_request_flags & BIO_REQUEST_CLEANUP) != 0;
+	cleanup = (thread->io_request_flags & BIO_REQUEST_CLEANUP) != 0;
 	enabled = intr_save();
 	state = io_state_find(thread->io_request_owner, 0);
 	if (state == 0 || state->retiring || state->quiesced ||
@@ -2046,7 +2019,7 @@ static int bio_request_upgrade_current_mode(int cleanup)
 		intr_restore(enabled);
 		return -1;
 	}
-	/* Pin the owner while admission sleeps; quiesce still wakes the waiter. */
+	/* 准入休眠期间固定主体；进入静止态仍会唤醒等待者。 */
 	io_active_request_acquire(state);
 	intr_restore(enabled);
 	result = io_wait_until_admitted(
@@ -2072,16 +2045,6 @@ static int bio_request_upgrade_current_mode(int cleanup)
 	io_policy.upgraded++;
 	intr_restore(enabled);
 	return 0;
-}
-
-int bio_request_upgrade_current(void)
-{
-	return bio_request_upgrade_current_mode(0);
-}
-
-int bio_request_upgrade_current_cleanup(void)
-{
-	return bio_request_upgrade_current_mode(1);
 }
 
 int bio_request_active_current(void)
@@ -2126,8 +2089,8 @@ bio_request_checkpoint_mode(int cleanup, int quiescent)
 			return bio_checkpoint_make(BIO_CHECKPOINT_INTERRUPTED);
 		return bio_checkpoint_make(BIO_CHECKPOINT_READY);
 	}
-	// Resumable scheduler maintenance returns after its bounded quantum.
-	// Forward-only cleanup is the sole background mode allowed to settle debt.
+	// 可恢复的调度维护在用完有界时间片后返回；只有必须向前完成的清理
+	// 能在后台结算债务。
 	if (bio_background_current()) {
 		uint owner = io_policy.background.owner;
 
@@ -2142,11 +2105,9 @@ bio_request_checkpoint_mode(int cleanup, int quiescent)
 		if (state == 0)
 			panic("background I/O owner vanished");
 		/*
-		 * Resumable background scans never sleep.  A cleanup checkpoint is
-		 * different: its caller has already published an irreversible intent,
-		 * so the admitted executor must finish paying its debt before it can
-		 * continue the forward transaction.  active_requests keeps state alive
-		 * while the executor sleeps, including across lifecycle quiesce.
+		 * 可恢复的后台扫描绝不休眠。清理检查点已发布不可逆意图，执行器必须
+		 * 先结清债务再继续向前事务；休眠期间由 active_requests 保活，跨越
+		 * 生命周期静止也不例外。
 		 */
 		if (cleanup && quiescent) {
 			if (io_wait_for_debt(
@@ -2197,10 +2158,8 @@ bio_request_checkpoint_mode(int cleanup, int quiescent)
 	if (ready)
 		return bio_checkpoint_make(BIO_CHECKPOINT_READY);
 	/*
-	 * Filesystem primitives publish several related in-memory and on-disk
-	 * fields as one single-CPU transaction. Never sleep halfway through that
-	 * transaction; report a short operation and let its outer request boundary
-	 * pay the accumulated debt after every buffer has been released.
+	 * 文件系统原语把多项关联的内存与磁盘状态作为单核事务发布，中途不可
+	 * 休眠。短操作先上报，释放全部缓冲区后由外层请求边界结算累计债务。
 	 */
 	if (thread->bio_buffer_holds != 0) {
 		if (quiescent)
@@ -2228,11 +2187,9 @@ struct bio_checkpoint_result bio_request_checkpoint_cleanup(void)
 }
 
 /*
- * A filesystem transaction may explicitly expose a safe scheduling point
- * while an outer atomic section is still open. The caller must have released
- * every buffer and must not expose an uncommitted in-memory inode/directory
- * mutation. The cleanup variant is for a forward-only durable commit that
- * cannot be rolled back after its first block has been published.
+ * 文件系统事务可在外层原子区间仍开启时显式暴露安全调度点。此时必须已
+ * 释放全部缓冲区，且不能暴露未提交的 inode/目录修改。清理变体用于首块
+ * 发布后不可回滚、只能向前完成的持久化提交。
  */
 struct bio_checkpoint_result bio_request_checkpoint_quiescent(void)
 {
@@ -2392,7 +2349,7 @@ int bio_request_end_current(int wait_for_budget)
 
 int bio_request_end_current_cleanup(void)
 {
-	/* No caller returns past process teardown; settle the entire lease. */
+	/* 进程 teardown 后调用者不会返回，因此完整结算租约。 */
 	return bio_request_end_current_mode(1, 1, 1);
 }
 
@@ -2618,8 +2575,7 @@ void bio_background_end(void)
 	bio_cache_release_closed_owner(owner);
 	bio_cache_assert_integrity();
 	io_active_request_release(state);
-	// Cleanup buffers lose their temporary floor when the background lease
-	// ends. Re-evaluate every foreground cache waiter immediately.
+	// 后台租约结束后，清理缓冲区失去临时保留量，立即重新评估全部前台等待者。
 	bio_cache_note_progress();
 	io_owner_reap_retired();
 	intr_restore(enabled);
@@ -2732,7 +2688,7 @@ bio_deferred_owner_retain_cleanup(uint owner, uint *io_class)
 		return -1;
 	enabled = intr_save();
 	state = io_state_find(owner, 0);
-	/* A lazy identity is live without pinning the owner until this transfer. */
+	/* 懒请求身份已生效，但直到本次转移才固定主体。 */
 	if (state == 0 ||
 	    (state->active_requests == 0 &&
 	     !(thread->io_request_depth != 0 &&
@@ -2820,7 +2776,7 @@ bio_cleanup_lease_reserve_locked(struct io_owner_state *state, uint io_class,
 		*device_reservation = IO_RESERVATION_NONE;
 		return 0;
 	}
-	/* A retained cleanup must finish after lifecycle close or token depletion. */
+	/* 生命周期关闭或令牌耗尽后，已保留的清理仍必须完成。 */
 	if (io_rate_reserve_pair(
 		    state, io_class, 0, 1,
 		    reservation, device_reservation) < 0)
@@ -2979,9 +2935,8 @@ bio_cleanup_token_prepare(uint owner, struct bio_cleanup_token *token)
 	principal_state = state == 0 ? RESOURCE_ACCOUNT_FREE :
 		resource_account_state_get(state->principal);
 	/*
-	 * The owner-state principal generation is the trusted identity.  A final
-	 * destructor may retain it after lifecycle quiesce/retire, but never after
-	 * the state was reaped or rebound to a different storage principal.
+	 * 主体状态中的 principal generation 是可信身份。最终析构可在生命周期
+	 * 静止或退出后暂留它，但状态被回收或改绑存储主体后绝不能继续使用。
 	 */
 	if (state == 0 || !state->principal_member ||
 	    !resource_account_matches(state->principal,
@@ -3392,9 +3347,9 @@ void bio_deferred_sponsor_end(void)
 	intr_restore(enabled);
 }
 
-static void bio_account_transfers(uint owner, uint io_class,
-			  enum bio_transfer_type transfer,
-			  const int *results, uint count)
+void bio_account_transfer_batch(uint owner, uint io_class,
+				enum bio_transfer_type transfer,
+				const int *results, uint count)
 {
 	struct thread *thread = curr_thread();
 	struct io_owner_state *state;
@@ -3434,7 +3389,7 @@ static void bio_account_transfers(uint owner, uint io_class,
 
 	state = io_state_find(owner, 0);
 	if (state == 0) {
-		/* A lifecycle race stays in the untrusted aggregate. */
+		/* 生命周期竞态计入不可信聚合项。 */
 		state = io_state_find(FS_OWNER_PUBLIC, 0);
 		owner = FS_OWNER_PUBLIC;
 		io_class = IO_POLICY_CLASS_NORMAL;
@@ -3567,14 +3522,7 @@ static void bio_account_transfers(uint owner, uint io_class,
 void bio_account_transfer(uint owner, uint io_class,
 			  enum bio_transfer_type transfer, int result)
 {
-	bio_account_transfers(owner, io_class, transfer, &result, 1);
-}
-
-void bio_account_transfer_batch(uint owner, uint io_class,
-				enum bio_transfer_type transfer,
-				const int *results, uint count)
-{
-	bio_account_transfers(owner, io_class, transfer, results, count);
+	bio_account_transfer_batch(owner, io_class, transfer, &result, 1);
 }
 
 int bio_physical_snapshot(struct bio_physical_stats *stats)
@@ -3933,8 +3881,7 @@ static int bio_cache_batch_preflight(uint dev, const uint *blocknos,
 		VIRTIO_DISK_OK : VIRTIO_DISK_ERR_BUSY;
 }
 
-// Look through buffer cache for block on device dev. If not found, select an
-// idle victim without crossing an active principal's guaranteed floor.
+// 在缓冲区缓存中查找块；未命中时，在不侵占活动主体保留量的前提下选择牺牲项。
 static struct buf *bget(uint dev, uint blockno, int *result, int *fresh_line)
 {
 	struct buf *b;
@@ -4245,7 +4192,7 @@ fail:
 	return result;
 }
 
-/* Force a device transfer even when the requested block is cache-resident. */
+/* 即使块已命中缓存，也强制执行设备传输。 */
 int bread_device(uint dev, uint blockno, struct buf **out)
 {
 	struct buf *b;
@@ -4285,7 +4232,7 @@ int bprepare_overwrite(uint dev, uint blockno,
 	if (receipt == 0 || receipt->active || receipt->buf != 0)
 		return VIRTIO_DISK_ERR_IO;
 	memset(receipt, 0, sizeof(*receipt));
-	/* A staged line is authoritative until its epoch publishes. */
+	/* epoch 发布前，已登记的缓存行是权威副本。 */
 	if (fs_epoch_buffer_dirty(dev, blockno))
 		return BIO_OVERWRITE_FALLBACK;
 	b = bget(dev, blockno, &result, &fresh_line);
@@ -4345,7 +4292,7 @@ void bcancel_overwrite(struct bio_overwrite_receipt *receipt)
 	memset(b->data, 0, sizeof(b->data));
 	b->disk_result = VIRTIO_DISK_ERR_IO;
 	memset(receipt, 0, sizeof(*receipt));
-	/* An unpublished miss is removed from the hash before waiters run. */
+	/* 唤醒等待者前，先从哈希表移除未发布的未命中项。 */
 	brelse(b);
 }
 
@@ -4372,9 +4319,8 @@ int bio_durable_flush(void)
 	return virtio_disk_durability_barrier();
 }
 
-// Reallocated data blocks start a new sponsorship lifetime. Metadata callers
-// deliberately do not use this operation, so shared filesystem structures
-// cannot be stolen from their current protected partition by a reader/writer.
+// 重新分配的数据块开启新的赞助生命周期。元数据路径不会调用此操作，
+// 防止读写者把共享文件系统结构从原受保护分区转走。
 int bclaim(struct buf *b)
 {
 	uint owner;
@@ -4426,9 +4372,8 @@ void brelse(struct buf *b)
 			bio_cache_invalidate(b);
 		} else
 			bio_cache_idle_enqueue(b, promote);
-		// Cache eligibility depends on the requester's sponsor and on donor
-		// floors. Wake every waiter so an ineligible head cannot hide a
-		// newly usable buffer from another owner.
+		// 缓存资格取决于请求赞助者和捐赠方保留量。唤醒全部等待者，避免
+		// 无资格的队首挡住其他主体刚可用的缓冲区。
 		wait_queue_wake_all(&cache_waiters);
 		io_owner_reap_retired();
 	}

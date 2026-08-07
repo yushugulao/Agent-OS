@@ -34,7 +34,7 @@ workflow 内的最小消息路由：
 1. Orchestrator 注册运行对象、文件属性和依赖。
 2. Sentinel watch 失败状态，随后进入内核等待队列而不是忙轮询。
 3. Orchestrator 注入 align 失败，文件状态变化发布为结构化事件。
-4. Sentinel 查询索引和预取提示；越权恢复被内核拒绝并留下审计记录。
+4. Sentinel 查询索引和依赖关系；越权恢复被内核拒绝并留下审计记录。
 5. Sentinel 沿授权端点把调查请求交给 Investigator，相关 provenance 一并传播。
 6. Investigator 读取摘要与依赖，形成恢复计划和 Context 记录。
 7. Investigator 唤醒 Recovery；Recovery 在能力与 workflow scope 同时匹配后提交动作。

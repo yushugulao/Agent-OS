@@ -8,19 +8,16 @@
 
 #define PRELOAD_QUERY_FILE "fspreqry"
 #define PRELOAD_PARTIAL_FILE "fspartial"
-#define RECEIPT_OBSERVE_LIMIT 65536
+#define META_SET_RETRY_LIMIT (8U * AGENT_FILE_META_MAX)
+#define VERSION_RESIDENCY_FILES 120
 
 static struct agent_file_meta fs_meta;
 static struct agent_file_query fs_query;
 static struct agent_file_query_result fs_result;
 static struct agent_file_hit stale_before;
 static struct agent_file_hit stale_after;
-static struct agent_file_prefetch_hint fs_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
 static struct agent_op fs_op;
 static struct agent_result fs_res;
-static struct kernel_work_receipt query_receipt_prior;
-static struct kernel_work_receipt query_receipt_before;
-static struct kernel_work_receipt query_receipt_after;
 
 struct digest_counters {
 	uint64 hits;
@@ -33,6 +30,21 @@ static void check(int ok, const char *msg)
 		printf("agentfs_ucore: check failed: %s\n", msg);
 		exit(1);
 	}
+}
+
+/* 持久化队列繁忙是可恢复背压；调用者有界让出 CPU 后重试。 */
+static int metadata_set_bounded(struct agent_file_meta *meta)
+{
+	int status = AGENT_STATUS_RETRY;
+
+	for (uint attempts = 0; attempts < META_SET_RETRY_LIMIT; attempts++) {
+		status = agent_file_meta_set(meta);
+		if (status != AGENT_STATUS_RETRY)
+			return status;
+		if (sched_yield() < 0)
+			break;
+	}
+	return status;
 }
 
 static int query_stage(const char *project, const char *run_id,
@@ -69,7 +81,7 @@ static void set_meta(const char *physical, const char *status, uint64 mask)
 	fs_meta.dependency_mask = agent_dependency_label_bit("ready");
 	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
 	fs_meta.update_mask = mask;
-	check(agent_file_meta_set(&fs_meta) == 0, "meta set");
+	check(metadata_set_bounded(&fs_meta) == 0, "meta set");
 }
 
 static void make_file(const char *name)
@@ -82,6 +94,40 @@ static void make_file(const char *name)
 	check(write(fd, body, strlen(body)) == (ssize_t)strlen(body),
 	      "write file");
 	check(close(fd) == 0, "close file");
+}
+
+static void version_residency_name(char *name, int index)
+{
+	strcpy(name, "vrs000");
+	name[3] = '0' + index / 100;
+	name[4] = '0' + (index / 10) % 10;
+	name[5] = '0' + index % 10;
+}
+
+/* 顺序编辑的活文件数超过单域驻留槽，冷版本必须可回收而不是报满。 */
+static void check_version_residency_reclaim(void)
+{
+	struct agent_file_edit_state state;
+	char name[8];
+
+	for (int i = 0; i < VERSION_RESIDENCY_FILES; i++) {
+		version_residency_name(name, i);
+		make_file(name);
+	}
+	for (int i = 0; i < VERSION_RESIDENCY_FILES; i++) {
+		version_residency_name(name, i);
+		memset(&state, 0, sizeof(state));
+		check(agent_file_edit_begin(name, 0, 20, &state) == 0,
+		      "version residency edit begin");
+		check(agent_file_edit_abort(state.lease_id) == 0,
+		      "version residency edit abort");
+	}
+	for (int i = 0; i < VERSION_RESIDENCY_FILES; i++) {
+		version_residency_name(name, i);
+		check(unlink(name) == 0, "version residency unlink");
+	}
+	printf("agentfs_ucore: version_residency_files=%d evictable=1\n",
+	       VERSION_RESIDENCY_FILES);
 }
 
 static void query_physical(const char *name)
@@ -169,7 +215,7 @@ static void check_partial_update_binding(void)
 	strcpy(fs_meta.status, "partial");
 	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
 	fs_meta.update_mask = AGENT_FILE_META_UPDATE_STATUS;
-	check(agent_file_meta_set(&fs_meta) == 0,
+	check(metadata_set_bounded(&fs_meta) == 0,
 	      "partial update binds existing inode");
 	check(agent_file_meta_init() == 0,
 	      "reload partial update binding");
@@ -198,7 +244,7 @@ static void set_demo_meta(int fid, const char *physical, const char *stage,
 	strcpy(fs_meta.summary, summary);
 	fs_meta.dependency_mask = deps;
 	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
-	check(agent_file_meta_set(&fs_meta) == 0, "demo meta set");
+	check(metadata_set_bounded(&fs_meta) == 0, "demo meta set");
 }
 
 static void seed_demo_metadata(void)
@@ -220,7 +266,7 @@ static void check_selector_consistency(void)
 	fs_meta.fid = 2;
 	strcpy(fs_meta.physical_name, "r42align");
 	fs_meta.flags = AGENT_FILE_META_F_DELETE;
-	check(agent_file_meta_set(&fs_meta) == AGENT_STATUS_CONFLICT,
+	check(metadata_set_bounded(&fs_meta) == AGENT_STATUS_CONFLICT,
 	      "conflicting selectors rejected");
 	query_physical("r42align");
 	query_physical("r42anlz");
@@ -249,7 +295,7 @@ static void check_stale_identity_guard(void)
 	fs_meta.inum = stale_before.inum;
 	fs_meta.incarnation = stale_before.incarnation;
 	fs_meta.flags = AGENT_FILE_META_F_DELETE;
-	check(agent_file_meta_set(&fs_meta) == AGENT_STATUS_CONFLICT,
+	check(metadata_set_bounded(&fs_meta) == AGENT_STATUS_CONFLICT,
 	      "stale inode identity cannot select replacement metadata");
 	query_physical(name);
 	check(fs_result.hits[0].dev == stale_after.dev &&
@@ -271,7 +317,7 @@ static void check_same_name_recreate_persist(void)
 	strcpy(fs_meta.logical_path, "/agentfs/rebind");
 	strcpy(fs_meta.status, "old");
 	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
-	check(agent_file_meta_set(&fs_meta) == 0, "persist rebind source");
+	check(metadata_set_bounded(&fs_meta) == 0, "persist rebind source");
 	query_physical(name);
 	before = fs_result.hits[0];
 	check(unlink(name) == 0, "unlink rebind source");
@@ -282,7 +328,7 @@ static void check_same_name_recreate_persist(void)
 	strcpy(fs_meta.status, "rebuilt");
 	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
 	fs_meta.update_mask = AGENT_FILE_META_UPDATE_STATUS;
-	check(agent_file_meta_set(&fs_meta) == 0, "persist recreated pathname");
+	check(metadata_set_bounded(&fs_meta) == 0, "persist recreated pathname");
 	check(agent_file_meta_init() == 0, "reload recreated pathname");
 	query_physical(name);
 	check((before.dev != fs_result.hits[0].dev ||
@@ -293,7 +339,7 @@ static void check_same_name_recreate_persist(void)
 	memset(&fs_meta, 0, sizeof(fs_meta));
 	fs_meta.fid = 509;
 	fs_meta.flags = AGENT_FILE_META_F_DELETE;
-	check(agent_file_meta_set(&fs_meta) == 0, "delete rebind metadata");
+	check(metadata_set_bounded(&fs_meta) == 0, "delete rebind metadata");
 	check(unlink(name) == 0, "delete rebind file");
 	printf("agentfs_ucore: same_name_recreate_persist=1\n");
 }
@@ -316,7 +362,7 @@ static void set_scoped_meta(const char *run_id, int fid,
 	strcpy(fs_meta.summary, "scoped dependency fixture");
 	fs_meta.dependency_mask = deps;
 	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
-	check(agent_file_meta_set(&fs_meta) == 0, "scoped meta set");
+	check(metadata_set_bounded(&fs_meta) == 0, "scoped meta set");
 }
 
 static void seed_scoped_dependency_metadata(void)
@@ -383,7 +429,7 @@ read_digest_counters(struct digest_counters *counters, const char *msg)
 static __attribute__((noinline)) void check_digest_timeline(const char *text)
 {
 	struct agent_timeline_filter filter;
-	struct agent_timeline_record records[8];
+	static struct agent_timeline_record records[8];
 	int n;
 	int found = 0;
 
@@ -434,8 +480,8 @@ static void set_bulk_meta(int i)
 	strcpy(fs_meta.status, status);
 	strcpy(fs_meta.summary, "bulk metadata file");
 	fs_meta.dependency_mask = agent_dependency_label_bit("ready");
-	check(agent_file_meta_set(&fs_meta) == 0, "bulk meta set");
-	/* Keep the index fixture volatile; durable writeback is tested separately. */
+	check(metadata_set_bounded(&fs_meta) == 0, "bulk meta set");
+	/* 索引夹具保持易失；持久写回由独立用例验证。 */
 	write_file_body(name, "agentfs");
 }
 
@@ -517,120 +563,14 @@ static void check_index_scan_gap(void)
 	       index.total_hits, index.returned, index.truncated);
 }
 
-static uint64 latest_prefetch_sequence(void)
+static uint64 query_preemptions(void)
 {
-	uint64 latest = 0;
-	int n;
-
-	n = agent_file_prefetch_snapshot(fs_hints,
-					 AGENT_FILE_PREFETCH_MAX_HINTS);
-	check(n >= 0 && n <= AGENT_FILE_PREFETCH_MAX_HINTS,
-	      "read prefetch sequence baseline");
-	for (int i = 0; i < n; i++)
-		if (fs_hints[i].sequence > latest)
-			latest = fs_hints[i].sequence;
-	return latest;
-}
-
-static void observe_query_receipt(int owner_tid, int owner_pid)
-{
-	int advanced = 0;
-
-	check(kernel_work_receipt_snapshot(&query_receipt_before) == 0,
-	      "snapshot query work receipt");
-	check(query_receipt_before.version == KERNEL_WORK_RECEIPT_ABI_VERSION &&
-	      query_receipt_before.struct_size == sizeof(query_receipt_before),
-	      "query work receipt ABI");
-	check(query_receipt_before.generation > query_receipt_prior.generation,
-	      "query work receipt generation");
-	check(query_receipt_before.owner_generation != 0 &&
-	      query_receipt_before.owner_tid == owner_tid &&
-	      query_receipt_before.owner_pid == owner_pid &&
-	      query_receipt_before.owner_kind ==
-		      KERNEL_WORK_RECEIPT_OWNER_THREAD,
-	      "query work receipt owner");
-	check(query_receipt_before.kind == KERNEL_WORK_RECEIPT_KIND_SYSCALL &&
-	      query_receipt_before.syscall_id == SYS_agent_file_query,
-	      "query work receipt syscall identity");
-	check(query_receipt_before.preemptions > 0,
-	      "query kernel work budget");
-	check(query_receipt_before.observed_timer_epoch >=
-		      query_receipt_before.completion_timer_epoch,
-	      "query work receipt completion epoch");
-
-	for (int i = 0; i < RECEIPT_OBSERVE_LIMIT; i++) {
-		check(kernel_work_receipt_snapshot(&query_receipt_after) == 0,
-		      "resnapshot query work receipt");
-		if (query_receipt_after.observed_timer_epoch >
-		    query_receipt_before.observed_timer_epoch) {
-			advanced = 1;
-			break;
-		}
-	}
-	check(advanced, "query receipt timer epoch advances");
-	check(query_receipt_after.generation ==
-		      query_receipt_before.generation &&
-	      query_receipt_after.owner_generation ==
-		      query_receipt_before.owner_generation &&
-	      query_receipt_after.preemptions ==
-		      query_receipt_before.preemptions &&
-	      query_receipt_after.completion_timer_epoch ==
-		      query_receipt_before.completion_timer_epoch &&
-	      query_receipt_after.owner_tid == query_receipt_before.owner_tid &&
-	      query_receipt_after.owner_pid == query_receipt_before.owner_pid &&
-	      query_receipt_after.owner_kind ==
-		      query_receipt_before.owner_kind &&
-	      query_receipt_after.kind == query_receipt_before.kind &&
-	      query_receipt_after.syscall_id ==
-		      query_receipt_before.syscall_id,
-	      "query work receipt remains immutable");
-}
-
-static void check_prefetch_hints(uint64 preemptions, uint64 prior_sequence)
-{
-	int n;
-	int found = 0;
-	int fresh = 0;
-
-	n = agent_file_prefetch_snapshot(fs_hints,
-					 AGENT_FILE_PREFETCH_MAX_HINTS);
-	check(n >= 1 && n <= AGENT_FILE_PREFETCH_MAX_HINTS,
-	      "bounded prefetch snapshot");
-	check(preemptions > 0, "query kernel work budget");
-	for (int i = 0; i < n; i++) {
-		if (fs_hints[i].sequence > prior_sequence)
-			fresh = 1;
-		check(fs_hints[i].source_sequence > 0,
-		      "prefetch source sequence");
-		check((fs_hints[i].reason &
-		       AGENT_FILE_PREFETCH_REASON_DEPENDENCY) != 0,
-		      "prefetch dependency reason");
-		check((fs_hints[i].reason &
-		       AGENT_FILE_PREFETCH_REASON_STAGE_INDEX) != 0,
-		      "prefetch stage index reason");
-		check(fs_hints[i].plan == AGENT_FILE_QUERY_PLAN_STAGE_INDEX,
-		      "prefetch plan");
-		check(fs_hints[i].candidate_records > 0,
-		      "prefetch candidates");
-		check(strcmp(fs_hints[i].hit.stage, "archive") != 0,
-		      "prefetch scoped run");
-		for (int j = 0; j < i; j++)
-			check(fs_hints[i].fid != fs_hints[j].fid,
-			      "prefetch target de-duplication");
-		if (strcmp(fs_hints[i].hit.stage, "analyze") == 0 ||
-		    strcmp(fs_hints[i].hit.stage, "report") == 0)
-			found = 1;
-	}
-	check(found, "prefetch dependent stage");
-	check(fresh, "query publishes fresh prefetch hints");
-	printf("agentfs_ucore: prefetch_hints=1 bounded=1 count=%d preemptions=%d first_stage=%s source_seq=%d\n",
-	       n, (int)preemptions, fs_hints[0].hit.stage,
-	       (int)fs_hints[0].source_sequence);
+	return (uint64)kernel_work_last_preemptions();
 }
 
 struct handoff_replacement_result {
 	int pid;
-	int prefetch_count;
+	int event_queue_count;
 	int mailbox_valid;
 };
 
@@ -670,6 +610,7 @@ static void run_handoff_exit_target(int source_pid, int ready_fd,
 static void run_handoff_replacement(int inspect_fd, int report_fd)
 {
 	struct handoff_replacement_result replacement;
+	struct agent_info info;
 	struct agent_op op;
 	struct agent_result result;
 	char inspect = 0;
@@ -678,8 +619,9 @@ static void run_handoff_replacement(int inspect_fd, int report_fd)
 	      "wait handoff replacement inspection");
 	memset(&replacement, 0, sizeof(replacement));
 	replacement.pid = getpid();
-	replacement.prefetch_count = agent_file_prefetch_snapshot(
-		fs_hints, AGENT_FILE_PREFETCH_MAX_HINTS);
+	check(agent_info(&info) == AGENT_STATUS_OK,
+	      "inspect replacement event state");
+	replacement.event_queue_count = info.event_queue_count;
 	memset(&op, 0, sizeof(op));
 	memset(&result, 0, sizeof(result));
 	op.version = AGENT_CALL_VERSION;
@@ -794,7 +736,6 @@ static void check_handoff_target_exit(void)
 	printf("agentfs_ucore: handoff_target_exit_send=%d preemptions=%d\n",
 	       send_status, (int)preemptions);
 	check(send_status == AGENT_STATUS_OK, "send handoff exit message");
-	check(preemptions > 0, "handoff lifecycle kernel work budget");
 	check(read(report_pipe[0], &replacement_pid,
 		   sizeof(replacement_pid)) == (int)sizeof(replacement_pid),
 	      "read handoff replacement pid");
@@ -807,8 +748,8 @@ static void check_handoff_target_exit(void)
 	      "read handoff replacement state");
 	check(replacement.pid == replacement_pid,
 	      "handoff replacement report identity");
-	check(replacement.prefetch_count == 0,
-	      "no stale handoff prefetch");
+	check(replacement.event_queue_count == 0,
+	      "no stale handoff events");
 	check(replacement.mailbox_valid == 0,
 	      "no stale handoff mailbox");
 	check(waitpid(churner_pid, &churner_status) == churner_pid,
@@ -926,7 +867,7 @@ static void check_batched_action_maintenance(void)
 	fs_meta.fid = 1;
 	strcpy(fs_meta.summary, "pre-action summary update");
 	fs_meta.update_mask = AGENT_FILE_META_UPDATE_SUMMARY;
-	check(agent_file_meta_set(&fs_meta) == 0,
+	check(metadata_set_bounded(&fs_meta) == 0,
 	      "summary-only metadata update");
 
 	memset(&fs_op, 0, sizeof(fs_op));
@@ -946,7 +887,7 @@ static void check_batched_action_maintenance(void)
 	fs_meta.fid = 21;
 	fs_meta.dependency_mask = agent_dependency_label_bit("archive");
 	fs_meta.update_mask = AGENT_FILE_META_UPDATE_DEPENDENCY;
-	check(agent_file_meta_set(&fs_meta) == 0,
+	check(metadata_set_bounded(&fs_meta) == 0,
 	      "topology metadata update");
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
@@ -1017,17 +958,14 @@ static void check_batched_action_maintenance(void)
 	       (int)(fs_res.value2 - dependency_generation));
 }
 
-static void run_agent(void)
+static __attribute__((noinline)) void run_agent(void)
 {
 	const char *name = "fsissue4";
-	uint64 prefetch_preemptions;
-	uint64 prefetch_sequence_before;
-	int receipt_owner_tid = gettid();
-	int receipt_owner_pid = getpid();
+	uint64 metadata_query_preemptions;
 	struct digest_counters digest_before;
 	struct digest_counters digest_after;
 
-	/* Create both probes before the first explicit metadata operation. */
+	/* 在第一次显式 metadata 操作前创建两个探针。 */
 	make_file(PRELOAD_QUERY_FILE);
 	make_file(PRELOAD_PARTIAL_FILE);
 	check_partial_update_binding();
@@ -1042,19 +980,27 @@ static void run_agent(void)
 	check_scoped_dependency_query();
 	check_user_dependency_update();
 	check_batched_action_maintenance();
-	prefetch_sequence_before = latest_prefetch_sequence();
-	check(kernel_work_receipt_snapshot(&query_receipt_prior) == 0,
-	      "snapshot prior work receipt");
 	check(query_stage("lab-gene-x", "RUN-042", "align", 0, &fs_result) >= 1,
 	      "default query");
-	observe_query_receipt(receipt_owner_tid, receipt_owner_pid);
-	prefetch_preemptions = query_receipt_before.preemptions;
+	metadata_query_preemptions = query_preemptions();
 	check(fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0,
 	      "default inode binding");
+	check(fs_result.plan == AGENT_FILE_QUERY_PLAN_STAGE_INDEX &&
+	      (fs_result.plan_reason &
+	       AGENT_FILE_QUERY_REASON_STAGE_INDEX) != 0,
+	      "default query stage index evidence");
+	check((fs_result.hits[0].dependency_mask &
+	       (agent_dependency_label_bit("analyze") |
+		agent_dependency_label_bit("report"))) ==
+		      (agent_dependency_label_bit("analyze") |
+		       agent_dependency_label_bit("report")),
+	      "default query dependency metadata");
 	printf("agentfs_ucore: demo_inode dev=%d inum=%d scanned=%d\n",
 	       (int)fs_result.hits[0].dev, (int)fs_result.hits[0].inum,
 	       fs_result.scanned_records);
-	check_prefetch_hints(prefetch_preemptions, prefetch_sequence_before);
+	printf("agentfs_ucore: metadata_dependency_query=1 targets=2 stage_index=1 preemptions=%d uncontended=%d\n",
+	       (int)metadata_query_preemptions,
+	       metadata_query_preemptions == 0);
 	check_handoff_target_exit();
 
 	make_file(name);
@@ -1093,6 +1039,23 @@ static void run_agent(void)
 	       (int)(digest_after.misses - digest_before.misses));
 	printf("agentfs_ucore: digest_timeline=1 tool=%d preview=agentfs2\n",
 	       AGENT_TOOL_READ_FILE_DIGEST);
+
+	/* 文件仍存活时解绑目录，再做同长度改写并重新绑定。旧摘要若没有按
+	 * inode 身份失效，会错误命中相同 size 的缓存项。 */
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	strcpy(fs_meta.physical_name, name);
+	fs_meta.flags = AGENT_FILE_META_F_DELETE;
+	check(metadata_set_bounded(&fs_meta) == 0,
+	      "unbind live file metadata");
+	write_file_body(name, "agentfs3");
+	set_meta(name, "ok", 0);
+	read_digest_counters(&digest_before, "rebind digest info before");
+	check_digest_text(name, "agentfs3");
+	read_digest_counters(&digest_after, "rebind digest info after");
+	check(digest_after.misses > digest_before.misses,
+	      "unbind invalidates digest identity");
+	printf("agentfs_ucore: unbind_rebind_digest=1 same_size=1 misses=%d\n",
+	       (int)(digest_after.misses - digest_before.misses));
 
 	check(agent_file_meta_init() == 0, "meta reload");
 	check(query_stage("issue4", "RUN-FS", "ingest", "ok", &fs_result) >= 1,
@@ -1135,6 +1098,7 @@ static void run_agent(void)
 	check(agent_run(&fs_op, &fs_res, 1, 0) == 1, "action missing");
 	check(fs_res.status == AGENT_STATUS_NOT_FOUND, "action missing status");
 	printf("agentfs_ucore: missing_selector_not_found=1\n");
+	check_version_residency_reclaim();
 
 	printf("agentfs_ucore: passed\n");
 	exit(0);

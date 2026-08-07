@@ -414,7 +414,7 @@ class HostPlatformAlignmentTests(unittest.TestCase):
                 b"dependency_update=generic_record\n"
                 b"dependency_query=generic_record\n"
                 b"metadata_query=stage_index\n"
-                b"prefetch_hint=dependency_driven\n"
+                b"metadata_index=stage_query\n"
             )
             (agentos_state / "rp_agentos_collab_ack").write_bytes(
                 b"agent=sentinel\n"

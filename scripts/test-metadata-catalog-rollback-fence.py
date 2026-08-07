@@ -223,7 +223,8 @@ class CatalogRollbackFenceTests(unittest.TestCase):
              "result = fs_epoch_commit();\n\tif (result < 0)\n"
              "\t\treturn result;\n\tresult = "
              "agent_metadata_durability_fence_current();"),
-            ("syscall", "case SYS_fdatasync:\n\t\tret = sys_fsync(args[0]);",
+            ("syscall",
+             "case SYS_fdatasync:\n\t\tret = sys_fsync(trapframe->a0);",
              "case SYS_fdatasync:\n\t\tret = sys_sync();"),
         )
         for name, old, new in cases:
@@ -453,6 +454,27 @@ class CatalogRollbackFenceTests(unittest.TestCase):
 
         altered = mutate(
             self.sources,
+            "store",
+            "!agent_meta_store_recovery_required &&\n"
+            "\t\t    (agent_meta_persist.phase",
+            "1 &&\n\t\t    (agent_meta_persist.phase",
+        )
+        with self.assertRaises(CONTRACT.ContractError):
+            CONTRACT.validate_sources(altered)
+
+        altered = mutate(
+            self.sources,
+            "store",
+            "agent_meta_persist.phase != AGENT_META_PERSIST_IDLE ||\n"
+            "\t\t     agent_meta_store_recovery_required",
+            "agent_meta_persist.phase != AGENT_META_PERSIST_IDLE ||\n"
+            "\t\t     0",
+        )
+        with self.assertRaises(CONTRACT.ContractError):
+            CONTRACT.validate_sources(altered)
+
+        altered = mutate(
+            self.sources,
             "objects",
             "if (!agent_metadata_store_submit_wait_locked()) {",
             "if (0) {",
@@ -464,7 +486,9 @@ class CatalogRollbackFenceTests(unittest.TestCase):
             "if (!agent_metadata_store_submit_wait_locked()) {\n"
             "\t\tpersist->durable = 0;\n"
             "\t\tpersist->status = -1;\n"
-            "\t\tpersist->cause = AGENT_METADATA_PERSIST_FAIL_CLOSED;\n"
+            "\t\tpersist->cause = agent_metadata_store_available() ?\n"
+            "\t\t\tAGENT_METADATA_PERSIST_RETRY :\n"
+            "\t\t\tAGENT_METADATA_PERSIST_FAIL_CLOSED;\n"
             "\t\treturn 0;\n"
             "\t}"
         )
@@ -499,15 +523,24 @@ class CatalogRollbackFenceTests(unittest.TestCase):
         with self.assertRaises(CONTRACT.ContractError):
             CONTRACT.validate_sources(altered)
 
+        altered = mutate(
+            self.sources,
+            "objects",
+            "persist->cause = agent_metadata_store_available() ?",
+            "persist->cause = 0 ?",
+        )
+        with self.assertRaises(CONTRACT.ContractError):
+            CONTRACT.validate_sources(altered)
+
         for old, new in (
-            ("persist->cause = AGENT_METADATA_PERSIST_FAIL_CLOSED;\n"
-             "\t\treturn 0;",
-             "persist->cause = AGENT_METADATA_PERSIST_RETRY;\n"
-             "\t\treturn 0;"),
-            ("persist->cause = AGENT_METADATA_PERSIST_RETRY;\n"
-             "\t\treturn 0;",
-             "persist->cause = AGENT_METADATA_PERSIST_FAIL_CLOSED;\n"
-             "\t\treturn 0;"),
+            ("agent_metadata_store_available() ?\n"
+             "\t\t\tAGENT_METADATA_PERSIST_RETRY :\n"
+             "\t\t\tAGENT_METADATA_PERSIST_FAIL_CLOSED;",
+             "agent_metadata_store_available() ?\n"
+             "\t\t\tAGENT_METADATA_PERSIST_RETRY :\n"
+             "\t\t\tAGENT_METADATA_PERSIST_RETRY;"),
+            ("\t\t\tAGENT_METADATA_PERSIST_RETRY :",
+             "\t\t\tAGENT_METADATA_PERSIST_FAIL_CLOSED :"),
             ("persist->irrevocable = 1;", "persist->irrevocable = 0;"),
         ):
             altered = mutate(self.sources, "objects", old, new)

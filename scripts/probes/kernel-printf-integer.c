@@ -1,12 +1,13 @@
 #define CONSOLE_H
 #define DEFS_H
+#define SBI_H
 typedef unsigned long long uint64;
 
 static char captured[2048];
 static unsigned captured_count;
 static int failed;
 
-static void consputc(int c)
+static void console_putchar(int c)
 {
 	if (captured_count >= sizeof(captured)) {
 		failed = 1;

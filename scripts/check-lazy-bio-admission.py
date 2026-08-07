@@ -70,19 +70,19 @@ def check(root: Path) -> None:
     ):
         require(policy, fragment, "lazy BIO counters are not observable")
 
-    begin = function(bio, "bio_request_begin_current_lazy_mode")
+    begin = function(bio, "bio_request_begin_current_lazy")
     for forbidden in (
         "io_wait_until_admitted(",
         "io_active_request_acquire(",
         "io_rate_reserve_pair(",
     ):
         reject(begin, forbidden, "lazy begin still reserves I/O capacity")
-    require(begin, "thread->io_request_flags=BIO_REQUEST_LAZY|",
+    require(begin, "thread->io_request_flags=BIO_REQUEST_LAZY;",
             "lazy begin does not publish a lightweight identity")
     require(begin, "state->lazy_started++;io_policy.lazy_started++;",
             "lazy begin counters are incomplete")
 
-    upgrade = function(bio, "bio_request_upgrade_current_mode")
+    upgrade = function(bio, "bio_request_upgrade_current")
     for fragment in (
         "thread->bio_buffer_holds!=0||thread->bio_fs_atomic_depth!=0",
         "io_active_request_acquire(state);",

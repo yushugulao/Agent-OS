@@ -4,8 +4,14 @@
 extern void printf(char *, ...);
 extern int procid();
 extern int threadid();
-extern void dummy(int, ...);
 extern void shutdown();
+
+/* 关闭的日志仍参与语法检查，但编译后不产生调用和参数求值。 */
+#define LOG_DISABLED(fmt, ...)                                                \
+	do {                                                                   \
+		if (0)                                                         \
+			printf(fmt, ##__VA_ARGS__);                             \
+	} while (0)
 
 #if defined(LOG_LEVEL_ERROR)
 
@@ -63,7 +69,7 @@ enum LOG_COLOR {
 		       pid, tid, ##__VA_ARGS__);                               \
 	} while (0)
 #else
-#define errorf(fmt, ...) dummy(0, ##__VA_ARGS__)
+#define errorf(fmt, ...) LOG_DISABLED(fmt, ##__VA_ARGS__)
 #endif // USE_LOG_ERROR
 
 #if defined(USE_LOG_WARN)
@@ -74,7 +80,7 @@ enum LOG_COLOR {
 		       pid, tid, ##__VA_ARGS__);                               \
 	} while (0)
 #else
-#define warnf(fmt, ...) dummy(0, ##__VA_ARGS__)
+#define warnf(fmt, ...) LOG_DISABLED(fmt, ##__VA_ARGS__)
 #endif // USE_LOG_WARN
 
 #if defined(USE_LOG_INFO)
@@ -85,7 +91,7 @@ enum LOG_COLOR {
 		       pid, tid, ##__VA_ARGS__);                               \
 	} while (0)
 #else
-#define infof(fmt, ...) dummy(0, ##__VA_ARGS__)
+#define infof(fmt, ...) LOG_DISABLED(fmt, ##__VA_ARGS__)
 #endif // USE_LOG_INFO
 
 #if defined(USE_LOG_DEBUG)
@@ -96,7 +102,7 @@ enum LOG_COLOR {
 		       pid, tid, ##__VA_ARGS__);                               \
 	} while (0)
 #else
-#define debugf(fmt, ...) dummy(0, ##__VA_ARGS__)
+#define debugf(fmt, ...) LOG_DISABLED(fmt, ##__VA_ARGS__)
 #endif // USE_LOG_DEBUG
 
 #if defined(USE_LOG_TRACE)
@@ -107,7 +113,7 @@ enum LOG_COLOR {
 		       pid, tid, ##__VA_ARGS__);                               \
 	} while (0)
 #else
-#define tracef(fmt, ...) dummy(0, ##__VA_ARGS__)
+#define tracef(fmt, ...) LOG_DISABLED(fmt, ##__VA_ARGS__)
 #endif // USE_LOG_TRACE
 
 #define panic(fmt, ...)                                                        \

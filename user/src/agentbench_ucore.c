@@ -11,7 +11,6 @@
 #define FILE_OPS 64
 #define WAIT_OPS 8
 #define BUSY_POLL_OPS 128
-#define PREFETCH_ROUNDS 64
 #define BENCH_PROVENANCE_MAX 128
 #define FILE_QUERY_MEASUREMENT_SCHEMA 2
 
@@ -31,8 +30,6 @@ union bench_transient_scratch {
 };
 
 static union bench_transient_scratch bench_scratch;
-static struct agent_file_prefetch_hint
-	bench_prefetch_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
 static struct agent_timeline_record
 	bench_timeline_records[AGENT_TIMELINE_MAX_RECORDS];
 static struct agent_timeline_filter bench_timeline_filter;
@@ -275,14 +272,16 @@ static int bench_batch(void)
 
 static int bench_direct(struct agent_info *info)
 {
-	volatile struct agent_context_header *h;
+	struct agent_context_header header;
 	volatile uint64 sum = 0;
 	int start;
 
-	h = (struct agent_context_header *)info->context_base;
 	start = now_ms();
-	for (int i = 0; i < DIRECT_READS; i++)
-		sum += h->latest_sequence;
+	for (int i = 0; i < DIRECT_READS; i++) {
+		check(context_direct_header_snapshot(info->context_base, &header) == 0,
+		      "direct header snapshot");
+		sum += header.latest_sequence;
+	}
 	check(sum > 0, "direct sum");
 	return elapsed(start, now_ms());
 }
@@ -478,8 +477,13 @@ static int bench_file_digest(int *total_bytes)
 	return elapsed(start, now_ms());
 }
 
-static void seed_prefetch_history(void)
+static void check_dependency_query(void)
 {
+	uint64 expected_dependencies =
+		agent_dependency_label_bit("analyze") |
+		agent_dependency_label_bit("report");
+	int found = 0;
+
 	memset(&bench_file_query_arg, 0, sizeof(bench_file_query_arg));
 	bench_file_query_arg.flags = AGENT_FILE_QUERY_USE_INDEX;
 	bench_file_query_arg.max_hits = AGENT_FILE_QUERY_MAX_HITS;
@@ -489,25 +493,26 @@ static void seed_prefetch_history(void)
 	strcpy(bench_file_query_arg.stage, "align");
 	check(agent_file_query(&bench_file_query_arg,
 			       &bench_scratch.file_query_result) >= 1,
-	      "prefetch seed query");
-	check(agent_file_prefetch_snapshot(bench_prefetch_hints,
-					   AGENT_FILE_PREFETCH_MAX_HINTS) >= 1,
-	      "prefetch seed snapshot");
-}
+	      "dependency metadata query");
+	check(bench_scratch.file_query_result.plan ==
+		      AGENT_FILE_QUERY_PLAN_STAGE_INDEX,
+	      "dependency query stage index plan");
+	check((bench_scratch.file_query_result.plan_reason &
+	       AGENT_FILE_QUERY_REASON_STAGE_INDEX) != 0,
+	      "dependency query stage index reason");
+	for (int i = 0; i < bench_scratch.file_query_result.returned; i++) {
+		struct agent_file_hit *hit =
+			&bench_scratch.file_query_result.hits[i];
 
-static int bench_prefetch_snapshot(int *total)
-{
-	int n;
-	int start = now_ms();
-
-	*total = 0;
-	for (int i = 0; i < PREFETCH_ROUNDS; i++) {
-		n = agent_file_prefetch_snapshot(
-			bench_prefetch_hints, AGENT_FILE_PREFETCH_MAX_HINTS);
-		check(n >= 1, "prefetch snapshot");
-		*total += n;
+		if (strcmp(hit->stage, "align") != 0)
+			continue;
+		check((hit->dependency_mask & expected_dependencies) ==
+			      expected_dependencies,
+		      "dependency query target mask");
+		found = 1;
 	}
-	return elapsed(start, now_ms());
+	check(found, "dependency query source stage");
+	printf("agentbench_ucore: metadata_dependency_query=1 targets=2 stage_index=1\n");
 }
 
 static int bench_timeline_snapshot(int *total)
@@ -532,18 +537,18 @@ static int bench_timeline_query(int *total)
 
 	memset(&bench_timeline_filter, 0, sizeof(bench_timeline_filter));
 	bench_timeline_filter.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK;
-	bench_timeline_filter.source_mask = AGENT_TIMELINE_SOURCE_MASK_PREFETCH;
+	bench_timeline_filter.source_mask = AGENT_TIMELINE_SOURCE_MASK_AUDIT;
 	start = now_ms();
 	*total = 0;
 	for (int i = 0; i < SNAPSHOT_ROUNDS; i++) {
 		n = agent_timeline_query(&bench_timeline_filter,
 					 bench_timeline_records,
 					 AGENT_TIMELINE_MAX_RECORDS);
-		check(n >= 1, "timeline query");
+		check(n >= 1, "audit timeline query");
 		for (int j = 0; j < n; j++)
 			check(bench_timeline_records[j].source ==
-				      AGENT_TIMELINE_SOURCE_PREFETCH,
-			      "timeline query source");
+				      AGENT_TIMELINE_SOURCE_AUDIT,
+			      "audit timeline query source");
 		*total += n;
 	}
 	return elapsed(start, now_ms());
@@ -744,8 +749,6 @@ static void run_agent_bench(void)
 	int digest_bytes;
 	int digest_cache_hits;
 	int digest_cache_misses;
-	int prefetch;
-	int prefetch_records;
 	int timeline;
 	int timeline_query;
 	int timeline_cursor;
@@ -793,7 +796,7 @@ static void run_agent_bench(void)
 	snapshot = bench_snapshot(&snapshot_records);
 	const struct file_query_measurement_receipt file_query_receipt =
 		measure_file_query_paths();
-	seed_prefetch_history();
+	check_dependency_query();
 	check(agent_info(&bench_scratch.info) == 0, "digest info before");
 	digest_hits_before = bench_scratch.info.file_digest_cache_hits;
 	digest_misses_before = bench_scratch.info.file_digest_cache_misses;
@@ -807,7 +810,6 @@ static void run_agent_bench(void)
 		      digest_misses_before);
 	check(digest_cache_hits >= FILE_OPS - 1, "digest cache hits");
 	check(digest_cache_misses >= 1, "digest cache miss");
-	prefetch = bench_prefetch_snapshot(&prefetch_records);
 	timeline = bench_timeline_snapshot(&timeline_records);
 	timeline_query = bench_timeline_query(&timeline_query_records);
 	timeline_cursor = bench_timeline_cursor_query(&timeline_cursor_records);
@@ -846,8 +848,6 @@ static void run_agent_bench(void)
 	       digest_bytes, digest, digest_result.result);
 	printf("agentbench_ucore: file_digest_cache hits=%d misses=%d\n",
 	       digest_cache_hits, digest_cache_misses);
-	printf("agentbench_ucore: prefetch_records total=%d first_stage=%s\n",
-	       prefetch_records, bench_prefetch_hints[0].hit.stage);
 	printf("agentbench_ucore: timeline_records snapshot=%d query=%d cursor=%d\n",
 	       timeline_records, timeline_query_records,
 	       timeline_cursor_records);
@@ -867,11 +867,9 @@ static void run_agent_bench(void)
 		   SNAPSHOT_ROUNDS, query);
 	print_perf("file_digest_read", digest_bytes, digest, digest_bytes,
 		   digest);
-	print_perf("file_prefetch_snapshot", prefetch_records, prefetch,
-		   PREFETCH_ROUNDS, prefetch);
 	print_perf("timeline_snapshot", timeline_records, timeline,
 		   SNAPSHOT_ROUNDS, timeline);
-	print_perf("timeline_query_prefetch", timeline_query_records,
+	print_perf("timeline_query_audit", timeline_query_records,
 		   timeline_query, timeline_records, timeline);
 	print_perf("timeline_query_cursor", timeline_cursor_records,
 		   timeline_cursor, timeline_records, timeline);

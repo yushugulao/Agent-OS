@@ -199,7 +199,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         "bio_background_end": 1,
         "bio_current_owner": 1,
         "bio_current_class": 1,
-        "bio_account_transfers": 1,
+        "bio_account_transfer_batch": 1,
         "bio_current_cache_owner": 1,
         "bio_cache_holder_token": 1,
         "bget": 5,
@@ -211,11 +211,14 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
             raise ContractError(
                 f"{name} has {actual} executor checks, expected {expected}"
             )
-    for wrapper in ("bio_account_transfer", "bio_account_transfer_batch"):
-        if "bio_background_current()" in function_body(bio, wrapper):
-            raise ContractError(
-                f"{wrapper} duplicates executor selection outside batch core"
-            )
+    single = compact(function_body(bio, "bio_account_transfer"))
+    if single != (
+            "bio_account_transfer_batch(owner, io_class, transfer, &result, 1);"):
+        raise ContractError("single-transfer wrapper no longer delegates to batch core")
+    if "bio_background_current()" in single:
+        raise ContractError(
+            "single-transfer wrapper duplicates executor selection outside batch core"
+        )
 
     bget = compact(function_body(bio, "bget"))
     hash_find = bget.find("b = bio_cache_hash_find(dev, blockno);")
@@ -407,6 +410,11 @@ MUTATIONS = (
     (replace_in_function(
         BIO, "bio_current_owner", "bio_background_current()",
         "io_policy.background.active"), BIO_H, FS, "owner lookup made ambient"),
+    (replace_in_function(
+        BIO, "bio_account_transfer",
+        "bio_account_transfer_batch(owner, io_class, transfer, &result, 1);",
+        "(void)result;"), BIO_H, FS,
+     "single-transfer wrapper disconnected from batch core"),
     (replace_in_function(
         BIO, "bget", "if (bcache.reserved_idle.tail != 0)", "if (0)"),
      BIO_H, FS,

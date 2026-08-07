@@ -842,6 +842,47 @@ agent_metadata_catalog_journal_note_content(
 	return 0;
 }
 
+int
+agent_metadata_catalog_content_commit(
+	const struct agent_file_content_receipt *receipt)
+{
+	uint slot;
+
+	agent_catalog_require_txn();
+	if (receipt == 0 || receipt->sequence == 0 ||
+	    receipt->slot >= AGENT_FILE_META_MAX)
+		return -1;
+	slot = receipt->slot;
+	if (!agent_catalog_files[slot].used ||
+	    agent_catalog_scopes[slot] != receipt->scope_id ||
+	    !workflow_lifecycle_key_equal(
+		    agent_catalog_slot_lifecycle(slot), receipt->lifecycle) ||
+	    agent_catalog_files[slot].dev != receipt->dev ||
+	    agent_catalog_files[slot].inum != receipt->inum ||
+	    agent_catalog_files[slot].incarnation != receipt->incarnation)
+		return -1;
+	return agent_file_state_content_settle(
+		       receipt, &agent_catalog_files[slot]) ? 0 : -1;
+}
+
+void
+agent_metadata_catalog_sizes_persisted(uint scope_id, uint64 sequence)
+{
+	agent_catalog_require_txn();
+	if (sequence == 0)
+		return;
+	for (uint slot = 0; slot < AGENT_FILE_META_MAX; slot++) {
+		if (!agent_catalog_files[slot].used ||
+		    agent_catalog_scopes[slot] != scope_id ||
+		    (agent_catalog_files[slot].flags &
+		     AGENT_FILE_META_F_PERSIST) == 0)
+			continue;
+		(void)agent_file_state_size_settle(
+			&agent_catalog_files[slot], scope_id, slot,
+			agent_catalog_slot_lifecycle(slot), sequence);
+	}
+}
+
 static void agent_catalog_slot_publish(
 	int slot, const struct agent_file_meta *next, uint next_scope,
 	uint next_state, struct workflow_lifecycle_key next_lifecycle,
@@ -1280,6 +1321,7 @@ static struct inode *agent_catalog_lookup_or_create_status(
 static int agent_catalog_unbind(int slot, struct agent_file_meta *meta,
 				uint scope_id) {
 	struct inode *ip;
+	int identity;
 	int result = 0;
 	int lookup_status = FS_LOOKUP_ERROR;
 	if (!agent_catalog_mutation_allowed())
@@ -1287,17 +1329,21 @@ static int agent_catalog_unbind(int slot, struct agent_file_meta *meta,
 	if (slot < 0 || slot >= AGENT_FILE_META_MAX || meta == 0 ||
 	    !meta->used || meta->physical_name[0] == 0)
 		return 0;
+	identity = agent_metadata_catalog_identity_state(meta);
 	if ((agent_catalog_states[slot] & AGENT_CATALOG_STATE_QUARANTINE) ||
-	    agent_metadata_catalog_identity_state(meta) == 0)
-		return 0;
+	    identity == 0)
+		goto invalidated;
 	ip = meta->dev != 0 && meta->inum != 0 ?
 		inode_get(meta->dev, meta->inum) : 0;
 	if (ip == 0) {
 		ip = namei_scope_status(meta->physical_name,
 					VFS_POLICY_WORKFLOW, scope_id,
 					&lookup_status);
-		if (ip == 0)
-			return lookup_status == FS_LOOKUP_ABSENT ? 0 : -1;
+		if (ip == 0) {
+			if (lookup_status == FS_LOOKUP_ABSENT)
+				goto invalidated;
+			return -1;
+		}
 	}
 	if (ivalid(ip) < 0) {
 		iput(ip);
@@ -1308,7 +1354,13 @@ static int agent_catalog_unbind(int slot, struct agent_file_meta *meta,
 	    ip->vfs_incarnation == meta->incarnation)
 		result = agent_file_state_set_index(ip, 0, 0, 0);
 	iput(ip);
-	return result;
+	if (result < 0)
+		return result;
+invalidated:
+	if (identity > 0)
+		agent_file_state_unbind_catalog_identity(
+			meta->dev, meta->inum, meta->incarnation, scope_id);
+	return 0;
 }
 
 static int agent_catalog_bind_status(
@@ -2065,8 +2117,9 @@ agent_metadata_catalog_journal_commit(
 	}
 	agent_catalog_journal_unlock(enabled);
 	for (uint captured = 0; captured < receipt->count; captured++)
-		agent_file_state_content_settle(
-			&receipt->changes[captured].content);
+		if (receipt->changes[captured].content.sequence != 0)
+			(void)agent_metadata_catalog_content_commit(
+				&receipt->changes[captured].content);
 }
 
 int

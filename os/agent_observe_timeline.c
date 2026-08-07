@@ -109,59 +109,19 @@ static void agent_provenance_from_audit(struct agent_audit_record *record,
 	safestrcpy(edge->text, record->text, sizeof(edge->text));
 }
 
-static void agent_provenance_from_prefetch(
-	struct proc *p, struct agent_file_prefetch_hint *hint,
-	struct agent_provenance_edge *edge)
-{
-	memset(edge, 0, sizeof(*edge));
-	edge->kind = AGENT_PROVENANCE_EDGE_PREFETCH;
-	edge->source_type = AGENT_PROVENANCE_NODE_CONTEXT;
-	edge->target_type = AGENT_PROVENANCE_NODE_PREFETCH;
-	edge->source_pid = hint->source_pid ? hint->source_pid : p->pid;
-	edge->target_pid = hint->target_pid ? hint->target_pid : p->pid;
-	edge->source_sequence = hint->source_sequence;
-	edge->target_sequence = hint->sequence;
-	edge->span_id = hint->span_id;
-	edge->tick = hint->tick;
-	edge->workflow_lifecycle_id = hint->workflow_lifecycle_id;
-	edge->workflow_lifecycle_generation =
-		hint->workflow_lifecycle_generation;
-	edge->target_branch_generation = hint->branch_generation;
-	edge->target_control_id = hint->actor_control_id;
-	edge->source_branch_generation = hint->cause_branch_generation;
-	edge->source_control_id = hint->cause_control_id;
-	edge->source_record_hash = hint->cause_record_hash;
-	edge->flags = hint->reason;
-	edge->value0 = hint->source_fid;
-	edge->value1 = hint->fid;
-	edge->value2 = hint->candidate_records;
-	edge->role = hint->actor_role;
-	edge->loop_state = hint->actor_loop_state;
-	edge->tid = hint->actor_tid;
-	edge->tool_id = AGENT_TOOL_QUERY_FILE;
-	edge->status = AGENT_STATUS_OK;
-	safestrcpy(edge->text,
-		   hint->hit.stage[0] ? hint->hit.stage :
-					hint->hit.physical_name,
-		   sizeof(edge->text));
-}
-
 int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 {
 	struct proc *p = curr_proc();
 	struct agent_observe_audit_view audit_view;
 	struct agent_context_record context_record;
 	struct agent_audit_record audit_record;
-	struct agent_file_prefetch_hint hint;
 	struct agent_provenance_edge edge;
 	uint64 context_visible;
 	uint64 audit_visible;
-	uint64 prefetch_visible;
 	uint64 reserved = 0;
 	uint64 scan_visible;
 	uint64 seq;
 	uint64 slot;
-	uint64 start;
 	uint64 span_id;
 	uint64 span_owner;
 	uint64 audit_span_owner;
@@ -190,15 +150,11 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 		context_visible = p->context_path_count;
 		if (context_visible > p->context_path_capacity)
 			context_visible = p->context_path_capacity;
-		prefetch_visible = p->agent_prefetch_count;
-		if (prefetch_visible > AGENT_FILE_PREFETCH_MAX_HINTS)
-			prefetch_visible = AGENT_FILE_PREFETCH_MAX_HINTS;
 		audit_visible = audit_allowed ?
 					agent_observe_audit_scope_visible_locked(
 						agent_identity_proc_scope(p)) :
 					0;
-		scan_visible = context_visible + audit_visible +
-			       prefetch_visible;
+		scan_visible = context_visible + audit_visible;
 		if (scan_visible <= reserved)
 			break;
 		if (agent_observe_query_reserve_to(scan_visible, &reserved) < 0)
@@ -261,25 +217,6 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 			return -1;
 		if (max > 0 && copied >= max)
 			goto provenance_done;
-	}
-
-	prefetch_visible = p->agent_prefetch_count;
-	if (prefetch_visible > AGENT_FILE_PREFETCH_MAX_HINTS)
-		prefetch_visible = AGENT_FILE_PREFETCH_MAX_HINTS;
-	start = (p->agent_prefetch_head + AGENT_FILE_PREFETCH_MAX_HINTS -
-		 prefetch_visible) %
-		AGENT_FILE_PREFETCH_MAX_HINTS;
-	for (int i = 0; i < (int)prefetch_visible; i++) {
-		slot = (start + i) % AGENT_FILE_PREFETCH_MAX_HINTS;
-		memmove(&hint, &p->agent_prefetch_hints[slot], sizeof(hint));
-		if (hint.source_sequence == 0)
-			continue;
-		agent_provenance_from_prefetch(p, &hint, &edge);
-		if (agent_provenance_emit(p, edgesaddr, max, &matched,
-					  &copied, &edge) < 0)
-			return -1;
-		if (max > 0 && copied >= max)
-			break;
 	}
 
 provenance_done:
@@ -356,42 +293,6 @@ static void agent_timeline_from_sched(struct agent_sched_record *record,
 	safestrcpy(timeline->text, "sched", sizeof(timeline->text));
 }
 
-static void agent_timeline_from_prefetch(struct proc *p,
-					 struct agent_file_prefetch_hint *hint,
-					 struct agent_timeline_record *timeline)
-{
-	memset(timeline, 0, sizeof(*timeline));
-	timeline->source = AGENT_TIMELINE_SOURCE_PREFETCH;
-	timeline->kind = hint->plan;
-	timeline->tick = hint->tick;
-	timeline->sequence = hint->sequence;
-	timeline->cause_sequence = hint->source_sequence;
-	timeline->span_id = hint->span_id;
-	timeline->workflow_lifecycle_id = hint->workflow_lifecycle_id;
-	timeline->workflow_lifecycle_generation =
-		hint->workflow_lifecycle_generation;
-	timeline->branch_generation = hint->branch_generation;
-	timeline->actor_control_id = hint->actor_control_id;
-	timeline->cause_branch_generation = hint->cause_branch_generation;
-	timeline->cause_control_id = hint->cause_control_id;
-	timeline->cause_record_hash = hint->cause_record_hash;
-	timeline->value0 = hint->fid;
-	timeline->value1 = hint->source_fid;
-	timeline->value2 = hint->candidate_records;
-	timeline->flags = hint->reason;
-	timeline->pid = p->pid;
-	timeline->source_pid = hint->source_pid;
-	timeline->target_pid = hint->target_pid;
-	timeline->role = hint->actor_role;
-	timeline->loop_state = hint->actor_loop_state;
-	timeline->tid = hint->actor_tid;
-	timeline->tool_id = AGENT_TOOL_QUERY_FILE;
-	timeline->status = AGENT_STATUS_OK;
-	safestrcpy(timeline->text,
-		   hint->hit.stage[0] ? hint->hit.stage : hint->hit.physical_name,
-		   sizeof(timeline->text));
-}
-
 static int agent_timeline_load_context(struct proc *p, uint64 *cursor,
 				       uint64 visible, uint64 oldest,
 				       struct agent_timeline_record *timeline)
@@ -425,7 +326,8 @@ static int agent_timeline_load_sched(struct proc *p, uint64 *cursor,
 		return 0;
 	slot = (start + *cursor) % AGENT_SCHED_TRACE_CAP;
 	(*cursor)++;
-	memmove(&record, &p->agent_sched_records[slot], sizeof(record));
+	memmove(&record, &p->agent_ipc_observe_cold->sched_records[slot],
+		sizeof(record));
 	agent_timeline_from_sched(&record, timeline);
 	return 1;
 }
@@ -455,22 +357,6 @@ static int agent_timeline_load_audit(
 	return 0;
 }
 
-static int agent_timeline_load_prefetch(struct proc *p, uint64 *cursor,
-					uint64 visible, uint64 start,
-					struct agent_timeline_record *timeline)
-{
-	struct agent_file_prefetch_hint hint;
-	uint64 slot;
-
-	if (*cursor >= visible)
-		return 0;
-	slot = (start + *cursor) % AGENT_FILE_PREFETCH_MAX_HINTS;
-	(*cursor)++;
-	memmove(&hint, &p->agent_prefetch_hints[slot], sizeof(hint));
-	agent_timeline_from_prefetch(p, &hint, timeline);
-	return 1;
-}
-
 void
 agent_observe_timeline_record_context(
 	struct proc *p, struct agent_context_record *record)
@@ -495,27 +381,14 @@ agent_observe_timeline_record_sched(
 	if (p == 0 || record == 0)
 		return;
 	slot = p->agent_sched_trace_head % AGENT_SCHED_TRACE_CAP;
-	memmove(&p->agent_sched_records[slot], record, sizeof(*record));
+	memmove(&p->agent_ipc_observe_cold->sched_records[slot], record,
+		sizeof(*record));
 	p->agent_sched_trace_head =
 		(p->agent_sched_trace_head + 1) % AGENT_SCHED_TRACE_CAP;
 	p->agent_sched_trace_count++;
 	agent_timeline_from_sched(record, &timeline);
 	agent_observe_timeline_publish_locked(
 		agent_identity_proc_scope(p), &timeline, 0);
-}
-
-void
-agent_observe_timeline_record_prefetch(
-	struct proc *p, struct agent_file_prefetch_hint *hint,
-	uint64 span_owner)
-{
-	struct agent_timeline_record timeline;
-
-	if (p == 0 || hint == 0)
-		return;
-	agent_timeline_from_prefetch(p, hint, &timeline);
-	agent_observe_timeline_publish_locked(
-		agent_identity_proc_scope(p), &timeline, span_owner);
 }
 
 static int agent_timeline_export(struct proc *p,
@@ -527,21 +400,17 @@ static int agent_timeline_export(struct proc *p,
 	struct agent_timeline_record context_timeline;
 	struct agent_timeline_record sched_timeline;
 	struct agent_timeline_record audit_timeline;
-	struct agent_timeline_record prefetch_timeline;
 	struct agent_timeline_record *selected;
 	uint64 context_visible;
 	uint64 sched_visible;
 	uint64 audit_scan_visible;
-	uint64 prefetch_visible;
 	uint64 reserved = 0;
 	uint64 scan_visible;
 	uint64 context_oldest;
 	uint64 sched_start;
-	uint64 prefetch_start;
 	uint64 ci = 0;
 	uint64 si = 0;
 	uint64 ai = 0;
-	uint64 pi = 0;
 	uint64 best_tick;
 	uint64 candidate_epoch;
 	uint64 span_id;
@@ -551,7 +420,6 @@ static int agent_timeline_export(struct proc *p,
 	int have_context;
 	int have_sched;
 	int have_audit;
-	int have_prefetch;
 	int copied = 0;
 	int matched = 0;
 	int total;
@@ -569,13 +437,6 @@ static int agent_timeline_export(struct proc *p,
 				0;
 	if (sched_visible > AGENT_SCHED_TRACE_CAP)
 		sched_visible = AGENT_SCHED_TRACE_CAP;
-	prefetch_visible = agent_observe_timeline_source_enabled(
-				   filter, AGENT_TIMELINE_SOURCE_PREFETCH) &&
-				   agent_identity_has_cap(p, AGENT_CAP_META_READ) ?
-				   p->agent_prefetch_count :
-				   0;
-	if (prefetch_visible > AGENT_FILE_PREFETCH_MAX_HINTS)
-		prefetch_visible = AGENT_FILE_PREFETCH_MAX_HINTS;
 	audit_global = agent_identity_has_cap(p, AGENT_CAP_ORCHESTRATE);
 	audit_allowed = agent_observe_timeline_source_enabled(
 				filter, AGENT_TIMELINE_SOURCE_AUDIT) &&
@@ -584,8 +445,7 @@ static int agent_timeline_export(struct proc *p,
 	audit_scan_visible = audit_allowed ?
 		agent_observe_audit_scope_visible_locked(
 			agent_identity_proc_scope(p)) : 0;
-	total = (int)(context_visible + sched_visible + prefetch_visible +
-		      audit_scan_visible);
+	total = (int)(context_visible + sched_visible + audit_scan_visible);
 	if (scan_epoch_out == 0 && max == 0 &&
 	    (filter == 0 || filter->flags == 0) &&
 	    (!audit_allowed || audit_global))
@@ -609,20 +469,11 @@ static int agent_timeline_export(struct proc *p,
 					0;
 		if (sched_visible > AGENT_SCHED_TRACE_CAP)
 			sched_visible = AGENT_SCHED_TRACE_CAP;
-		prefetch_visible = agent_observe_timeline_source_enabled(
-					   filter,
-					   AGENT_TIMELINE_SOURCE_PREFETCH) &&
-					   agent_identity_has_cap(p,
-							 AGENT_CAP_META_READ) ?
-					   p->agent_prefetch_count :
-					   0;
-		if (prefetch_visible > AGENT_FILE_PREFETCH_MAX_HINTS)
-			prefetch_visible = AGENT_FILE_PREFETCH_MAX_HINTS;
 		audit_scan_visible = audit_allowed ?
 			agent_observe_audit_scope_visible_locked(
 				agent_identity_proc_scope(p)) : 0;
 		scan_visible = context_visible + sched_visible +
-			       audit_scan_visible + prefetch_visible;
+			       audit_scan_visible;
 		if (scan_visible <= reserved) {
 			if (scan_epoch_out != 0)
 				*scan_epoch_out = candidate_epoch;
@@ -642,11 +493,6 @@ static int agent_timeline_export(struct proc *p,
 	sched_start = p->agent_sched_trace_count > AGENT_SCHED_TRACE_CAP ?
 			      p->agent_sched_trace_head :
 			      0;
-	prefetch_start =
-		(p->agent_prefetch_head + AGENT_FILE_PREFETCH_MAX_HINTS -
-		 prefetch_visible) %
-		AGENT_FILE_PREFETCH_MAX_HINTS;
-
 	have_context = agent_timeline_load_context(
 		p, &ci, context_visible, context_oldest, &context_timeline);
 	if (have_context < 0)
@@ -660,11 +506,8 @@ static int agent_timeline_export(struct proc *p,
 						       span_id, span_owner,
 						       &audit_timeline) :
 			     0;
-	have_prefetch = agent_timeline_load_prefetch(
-		p, &pi, prefetch_visible, prefetch_start, &prefetch_timeline);
-
 	while ((max == 0 || copied < max) &&
-	       (have_context || have_sched || have_audit || have_prefetch)) {
+	       (have_context || have_sched || have_audit)) {
 		best_tick = (uint64)-1;
 		pick = 0;
 		selected = 0;
@@ -682,10 +525,6 @@ static int agent_timeline_export(struct proc *p,
 			best_tick = audit_timeline.tick;
 			selected = &audit_timeline;
 			pick = AGENT_TIMELINE_SOURCE_AUDIT;
-		}
-		if (have_prefetch && prefetch_timeline.tick < best_tick) {
-			selected = &prefetch_timeline;
-			pick = AGENT_TIMELINE_SOURCE_PREFETCH;
 		}
 		if (selected == 0)
 			break;
@@ -717,10 +556,6 @@ static int agent_timeline_export(struct proc *p,
 				&audit_view, &ai, audit_global, span_id,
 				span_owner,
 				&audit_timeline);
-		} else if (pick == AGENT_TIMELINE_SOURCE_PREFETCH) {
-			have_prefetch = agent_timeline_load_prefetch(
-				p, &pi, prefetch_visible, prefetch_start,
-				&prefetch_timeline);
 		}
 	}
 	return max == 0 ? matched : copied;
@@ -967,7 +802,9 @@ agent_observe_proc_init(struct proc *p, int sched_weight, uint64 now)
 	p->agent_sched_last_reason = 0;
 	p->agent_sched_trace_count = 0;
 	p->agent_sched_trace_head = 0;
-	memset(p->agent_sched_records, 0, sizeof(p->agent_sched_records));
+	if (p->agent_ipc_observe_cold != 0)
+		memset(p->agent_ipc_observe_cold->sched_records, 0,
+		       sizeof(p->agent_ipc_observe_cold->sched_records));
 	for (int tid = 0; tid < NTHREAD; tid++)
 		agent_observe_thread_reset(&p->threads[tid]);
 	p->agent_observe_epoch =
@@ -1000,7 +837,9 @@ agent_observe_proc_reset(struct proc *p)
 	p->agent_sched_last_reason = 0;
 	p->agent_sched_trace_count = 0;
 	p->agent_sched_trace_head = 0;
-	memset(p->agent_sched_records, 0, sizeof(p->agent_sched_records));
+	if (p->agent_ipc_observe_cold != 0)
+		memset(p->agent_ipc_observe_cold->sched_records, 0,
+		       sizeof(p->agent_ipc_observe_cold->sched_records));
 	for (int tid = 0; tid < NTHREAD; tid++)
 		agent_observe_thread_reset(&p->threads[tid]);
 	p->agent_provenance_edges = 0;
@@ -1146,7 +985,8 @@ sys_agent_trace_snapshot(uint64 recordsaddr, int max)
 		}
 		if (si < sched_visible) {
 			slot = (sched_start + si) % AGENT_SCHED_TRACE_CAP;
-			memmove(&sched_record, &p->agent_sched_records[slot],
+			memmove(&sched_record,
+				&p->agent_ipc_observe_cold->sched_records[slot],
 				sizeof(sched_record));
 			have_sched = 1;
 		}
@@ -1198,7 +1038,8 @@ sys_agent_sched_snapshot(uint64 recordsaddr, int max)
 			0;
 	for (int i = 0; i < n; i++) {
 		slot = (start + i) % AGENT_SCHED_TRACE_CAP;
-		memmove(&record, &p->agent_sched_records[slot],
+		memmove(&record,
+			&p->agent_ipc_observe_cold->sched_records[slot],
 			sizeof(record));
 		if (copyout(p->pagetable,
 			    recordsaddr +

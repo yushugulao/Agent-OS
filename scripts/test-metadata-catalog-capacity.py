@@ -280,6 +280,21 @@ def scanner_identity_action(record: tuple[int, int, int],
 
 
 class CatalogCapacityContractTests(unittest.TestCase):
+    def test_function_body_accepts_declaration_attributes(self) -> None:
+        source = """
+static void run_agent(void);
+static __attribute__((noinline)) void
+run_agent(void) __attribute__((used))
+{
+    const char *ignored = "}";
+    /* } 不能提前结束函数体。 */
+    check_dirent_name_boundary();
+}
+"""
+        body = CONTRACT.function_body(source, "static void run_agent(")
+        self.assertIn("check_dirent_name_boundary();", body)
+        self.assertNotIn("static void run_agent(void);", body)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.sources = CONTRACT.load_sources(ROOT)
@@ -806,21 +821,16 @@ class CatalogCapacityContractTests(unittest.TestCase):
             ("directory", "rescan:\n\tagent_file_request_scan();",
              "rescan:\n\t;"),
             ("directory",
-             "if (agent_file_state_index_deferred(ip)) {\n"
-             "\t\tagent_file_request_scan();\n"
-             "\t\treturn;\n\t}",
-             "if (0) {\n\t\tagent_file_request_scan();\n"
-             "\t\treturn;\n\t}"),
+             "scope_id = ip->vfs_scope_id;\n"
+             "\tif (ip->agent_meta_slot <= 0 ||\n"
+             "\t    ip->agent_meta_version != AGENT_INODE_META_VERSION)",
+             "scope_id = ip->vfs_scope_id;\n\tif (0)"),
             ("directory",
-             "if (agent_file_state_index_deferred(ip)) {\n"
-             "\t\tagent_file_request_scan();\n"
-             "\t\treturn;\n\t}\n"
+             "agent_file_state_content_bump(ip);\n"
              "\tif (!agent_metadata_txn_try_external()) {\n"
              "\t\tagent_file_request_scan();\n"
              "\t\treturn;\n\t}",
-             "if (agent_file_state_index_deferred(ip)) {\n"
-             "\t\tagent_file_request_scan();\n"
-             "\t\treturn;\n\t}\n"
+             "agent_file_state_content_bump(ip);\n"
              "\tif (!agent_metadata_txn_try_external()) {\n"
              "\t\tagent_background_request();\n"
              "\t\treturn;\n\t}"),

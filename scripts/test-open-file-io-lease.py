@@ -32,7 +32,7 @@ class OpenFileIoLeaseTests(unittest.TestCase):
 
     def run_check(self) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, "-I", "-S", "-B", str(CHECKER),
+            [sys.executable, "-X", "utf8", "-I", "-S", "-B", str(CHECKER),
              "--root", str(self.root)],
             text=True, capture_output=True, check=False,
         )
@@ -160,6 +160,36 @@ class OpenFileIoLeaseTests(unittest.TestCase):
         self.mutate("os/agent_file_state.c", "uint64 edit_authority_generation;",
                     "uint64 unrelated_generation;")
         self.assert_rejected("inode-scoped revocation generation")
+
+    def test_rejects_cold_rebuild_authority_aba(self) -> None:
+        self.mutate(
+            "os/agent_file_state.c",
+            "entry->edit_authority_generation =\n"
+            "\t\tagent_file_edit_authority_generation;",
+            "entry->edit_authority_generation = 0;",
+        )
+        self.assert_rejected("inode-scoped revocation generation")
+
+    def test_rejects_cross_inode_global_comparison(self) -> None:
+        self.mutate(
+            "os/agent_file_state.c",
+            "\t\t*authority_generation = version->edit_authority_generation;",
+            "\t\t*authority_generation = agent_file_edit_authority_generation;",
+        )
+        self.assert_rejected("inode-scoped revocation generation")
+
+    def test_rejects_snapshot_conflict_side_effects(self) -> None:
+        self.mutate(
+            "os/agent_file_state.c",
+            "\t\tip, 0, authority_generation, valid_until_tick);",
+            "\t\tip, \"edit_snapshot_conflict\", authority_generation,\n"
+            "\t\tvalid_until_tick);",
+        )
+        self.assert_rejected("side-effect-free delegation")
+
+    def test_rejects_unguarded_snapshot_conflict_count(self) -> None:
+        self.mutate("os/agent_file_state.c", "\t\tif (action) {", "\t\tif (1) {")
+        self.assert_rejected("no longer suppresses audit side effects")
 
 
 if __name__ == "__main__":

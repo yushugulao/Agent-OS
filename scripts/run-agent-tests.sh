@@ -63,6 +63,8 @@ readonly -a MAKE_JOB_ARGS
 echo "[agent-tests] build_jobs=${AGENTOS_BUILD_JOBS}"
 CONTEXT_SYNC_TIMING_FILE="${TMPDIR:-/tmp}/agentos-context-sync-timings.$$"
 CONTEXT_SYNC_USER_CFLAGS="-DAGENT_CONTEXT_SYNC_TEST_PROFILE -DWAIT_ATOMIC_TEST_PROFILE"
+CONTEXT_RO_STORE_FAULT_MARKER="agentfinal_ucore: context_ro_store_fault_armed=1"
+CONTEXT_PUBLIC_FAULT_MARKER="agentfinal_ucore: context_public_unmapped_fault_armed=1"
 calibration_case_ordinal=0
 timing_file_owned=0
 if [[ -z "${AGENT_TEST_TIMING_FILE:-}" ]]; then
@@ -259,6 +261,8 @@ check_case_contract() {
 		;;
 	agentfinal_ucore)
 		require_exact_case_marker "${log_file}" \
+			"agentfinal_ucore: context_ro_mapping=1 low_agent_fault=-2 public_unmapped_fault=-2"
+		require_exact_case_marker "${log_file}" \
 			"agentfinal_ucore: context_commit_lane=1 sequence=1..3 hash=1"
 		if [[ "${context_sync_profile}" == "1" ]]; then
 			require_exact_case_marker "${log_file}" \
@@ -267,6 +271,10 @@ check_case_contract() {
 				"agentfinal_ucore: thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1"
 			require_exact_case_marker "${log_file}" \
 				"agentfinal_ucore: wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1"
+			require_exact_case_marker "${log_file}" \
+				"agentfinal_ucore: event_wake_handoff waiters=1,4,8,15 wakeups=28 herd=0"
+			require_exact_case_marker "${log_file}" \
+				"agentfinal_ucore: event_baton_identity timeline_waiter=1 event_waiter=1 event_wakeups=1"
 		fi
 		require_exact_case_marker "${log_file}" \
 			"agentfinal_ucore: context_rollback_branch=1 sequence_reuse=0 provenance_bound=1"
@@ -399,6 +407,12 @@ run_case() {
 	if [[ -n "${expected_bad_addr_marker}" ]]; then
 		expected_fault_args+=(
 			--expected-bad-addr-after "${expected_bad_addr_marker}"
+		)
+	fi
+	if [[ "${init_proc}" == "agentfinal_ucore" ]]; then
+		expected_fault_args+=(
+			--expected-bad-addr-after "${CONTEXT_RO_STORE_FAULT_MARKER}"
+			--expected-bad-addr-after "${CONTEXT_PUBLIC_FAULT_MARKER}"
 		)
 	fi
 	if [[ "${context_sync_profile}" == "1" ]]; then

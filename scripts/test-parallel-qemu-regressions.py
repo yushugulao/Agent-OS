@@ -607,7 +607,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                     ):
                         RUNNER.report_output_directory(alias)
 
-    def test_formal_wiring_keeps_profile_v6_steps_and_serial_epoch(self) -> None:
+    def test_formal_wiring_keeps_profile_v7_steps_and_serial_epoch(self) -> None:
         full = Path(__file__).with_name("run-full-verification.sh").read_text(
             encoding="utf-8"
         )
@@ -631,6 +631,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 "target-structure",
                 "kernel-budgets",
                 "host-platform-alignment",
+                "ch3-trace",
                 "agent-suite",
                 "dual-platforms",
                 *expected_resources,

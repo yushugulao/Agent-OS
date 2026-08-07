@@ -41,8 +41,7 @@ workflow_lifecycle_prepare_create(void)
 	intr_restore(enabled);
 	if (available)
 		return 0;
-	/* Capacity pressure is not a lease shortage. Repeated failed admission
-	 * must leave durable lease maintenance available for lifecycle reclaim. */
+	/* 容量耗尽并非租约不足；反复接纳失败也要保留租约维护能力以便回收。 */
 	if (!needs_lease)
 		return -1;
 	return agent_identity_lease_lifecycle_renew();
@@ -336,7 +335,7 @@ workflow_lifecycle_generation_floor(struct workflow_lifecycle_key key)
 		return -1;
 	slot = key.id - 1;
 	enabled = intr_save();
-	/* Historical checkpoints may legitimately predate the active reuse. */
+	/* 历史检查点可以早于当前槽位复用代次。 */
 	if (workflow_lifecycles[slot].used &&
 	    key.generation > workflow_lifecycles[slot].generation) {
 		intr_restore(enabled);
@@ -346,20 +345,6 @@ workflow_lifecycle_generation_floor(struct workflow_lifecycle_key key)
 		workflow_lifecycle_generations[slot] = key.generation;
 	intr_restore(enabled);
 	return 0;
-}
-
-void
-workflow_lifecycle_generation_snapshot(
-	uint64 generations[WORKFLOW_LIFECYCLE_CAP])
-{
-	int enabled;
-
-	if (generations == 0)
-		return;
-	enabled = intr_save();
-	for (uint i = 0; i < WORKFLOW_LIFECYCLE_CAP; i++)
-		generations[i] = workflow_lifecycle_generations[i];
-	intr_restore(enabled);
 }
 
 int

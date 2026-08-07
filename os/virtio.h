@@ -31,7 +31,6 @@
 #define VIRTIO_MMIO_QUEUE_ALIGN 0x03c // used ring alignment, write-only
 #define VIRTIO_MMIO_QUEUE_PFN                                                  \
 	0x040 // physical page number for queue, read/write
-#define VIRTIO_MMIO_QUEUE_READY 0x044 // ready bit
 #define VIRTIO_MMIO_QUEUE_NOTIFY 0x050 // write-only
 #define VIRTIO_MMIO_INTERRUPT_STATUS 0x060 // read-only
 #define VIRTIO_MMIO_INTERRUPT_ACK 0x064 // write-only
@@ -46,14 +45,8 @@
 #define VIRTIO_CONFIG_S_DEVICE_NEEDS_RESET 64
 
 // device feature bits
-#define VIRTIO_BLK_F_RO 5 /* Disk is read-only */
-#define VIRTIO_BLK_F_SCSI 7 /* Supports scsi command passthru */
 #define VIRTIO_BLK_F_FLUSH 9 /* Supports an explicit cache flush */
-#define VIRTIO_BLK_F_CONFIG_WCE 11 /* Writeback mode available in config */
-#define VIRTIO_BLK_F_MQ 12 /* support more than one vq */
-#define VIRTIO_F_ANY_LAYOUT 27
 #define VIRTIO_RING_F_INDIRECT_DESC 28
-#define VIRTIO_RING_F_EVENT_IDX 29
 
 // this many virtio descriptors.
 // must be a power of two.
@@ -132,7 +125,6 @@ void virtio_disk_runtime_start(void);
 int virtio_disk_rw(struct buf *, int);
 int virtio_disk_read_batch(struct buf **, uint);
 int virtio_disk_write_batch(struct buf **, uint);
-int virtio_disk_durability_capability(void);
 int virtio_disk_durability_barrier(void);
 void virtio_disk_intr();
 void virtio_disk_tick(void);

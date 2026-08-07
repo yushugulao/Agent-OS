@@ -667,7 +667,7 @@ static void timeline_wait_thread(void *arg)
 		       AGENT_TIMELINE_FILTER_TOOL_ID;
 	filter.source_mask = lane == 0 ?
 		AGENT_TIMELINE_SOURCE_MASK_CONTEXT :
-		AGENT_TIMELINE_SOURCE_MASK_PREFETCH;
+		AGENT_TIMELINE_SOURCE_MASK_AUDIT;
 	filter.tool_id = lane == 0 ?
 		TIMELINE_THREADS_TOOL_A : TIMELINE_THREADS_TOOL_B;
 	timeline_thread_results[lane] =

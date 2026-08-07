@@ -535,6 +535,19 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "submitter == 0 || submitter == token",
                   "agent_metadata_reload_available()"):
         require(submit, token, "sealed COW submit fast path")
+    compact_submit = "".join(submit.split())
+    require(compact_submit,
+            "!agent_meta_store_recovery_required&&"
+            "(agent_meta_persist.phase==AGENT_META_PERSIST_IDLE||",
+            "idle submit recovery fence")
+    require(compact_submit,
+            "(agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE||"
+            "agent_meta_store_recovery_required)",
+            "FIFO repair assistance")
+    require(compact_submit,
+            "AGENT_META_PERSIST_IDLE?FS_OWNER_SYSTEM:"
+            "agent_meta_persist.owner",
+            "system-owned mirror repair")
     start = function_body(store, "static int agent_meta_persist_start_locked(")
     require_order(
         start,
@@ -688,7 +701,7 @@ def validate_sources(sources: dict[str, str]) -> None:
     require_order(
         syscall,
         ("case SYS_fsync:", "case SYS_fdatasync:",
-         "ret = sys_fsync(args[0]);"),
+         "ret = sys_fsync(trapframe->a0);"),
         "fsync and fdatasync shared primary fence",
     )
     reclaim = function_body(objects, "int agent_scope_reclaim_begin(")
@@ -749,7 +762,9 @@ def validate_sources(sources: dict[str, str]) -> None:
     require_order(
         batch[submit_start:load_start],
         ("persist->durable = 0", "persist->status = -1",
-         "persist->cause = AGENT_METADATA_PERSIST_FAIL_CLOSED", "return 0;"),
+         "agent_metadata_store_available()",
+         "AGENT_METADATA_PERSIST_RETRY",
+         "AGENT_METADATA_PERSIST_FAIL_CLOSED", "return 0;"),
         "submit failure receipt before catalog load",
     )
     begin_start = batch.find("if (agent_metadata_catalog_mutation_begin(")

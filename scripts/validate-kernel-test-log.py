@@ -97,16 +97,25 @@ WORKFLOW_TEARDOWN_MARKERS = tuple(
 )
 
 WAIT_ATOMIC_MARKERS = (
+    "agentfinal_ucore: context_ro_mapping=1 low_agent_fault=-2 public_unmapped_fault=-2",
     "agentfinal_ucore: context_commit_lane=1 sequence=1..3 hash=1",
-	"agentfinal_ucore: context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1",
-    "agentfinal_ucore: thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1",
+    "agentfinal_ucore: context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1",
     "agentfinal_ucore: wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1",
+    "agentfinal_ucore: thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1",
+    "agentfinal_ucore: event_baton_identity timeline_waiter=1 event_waiter=1 event_wakeups=1",
+    "agentfinal_ucore: event_wake_handoff waiters=1,4,8,15 wakeups=28 herd=0",
     "agentfinal_ucore: passed",
     "agentfinal_ucore: parent passed",
 )
 
+CH3_TRACE_MARKERS = (
+    "string from task trace test",
+    "Test trace OK!",
+)
+
 AGENT_CASE_MARKERS = {
 	"agentfinal_ucore": (
+        "agentfinal_ucore: context_ro_mapping=1 low_agent_fault=-2 public_unmapped_fault=-2",
         "agentfinal_ucore: context_commit_lane=1 sequence=1..3 hash=1",
 		"agentfinal_ucore: context_rollback_branch=1 sequence_reuse=0 provenance_bound=1",
         "agentfinal_ucore: context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1",
@@ -288,7 +297,12 @@ def validate_file(text):
 
 
 def validate_wait_atomic(text):
-    positions = ordered_unique(text, WAIT_ATOMIC_MARKERS)
+    positions = exact_ordered_lines(text, WAIT_ATOMIC_MARKERS)
+    return f"positions={positions}"
+
+
+def validate_ch3_trace(text):
+    positions = exact_ordered_lines(text, CH3_TRACE_MARKERS)
     return f"positions={positions}"
 
 
@@ -494,6 +508,8 @@ def validate_syscall(text):
     summaries = []
     inode_peer = -1
     inode_end = -1
+    trunc_peer = -1
+    trunc_end = -1
     for name, begin, peer, end in SYSCALL_PHASES:
         begin_pos, peer_pos, end_pos = ordered_unique(
             text, (begin, peer, end)
@@ -506,15 +522,44 @@ def validate_syscall(text):
         previous_end = end_pos
         if name == "inode":
             inode_peer, inode_end = peer_pos, end_pos
+        elif name == "trunc":
+            trunc_peer, trunc_end = peer_pos, end_pos
         summaries.append(f"{name}={begin_pos}/{peer_pos}/{end_pos}")
     short = "SYSCALLFAIR_INODE_SHORT"
     short_pos = text.find(short)
     if text.count(short) != 1 or not inode_peer < short_pos < inode_end:
         raise ValidationError(f"inode short marker mismatch: {short_pos}")
+    fairness = re.findall(
+        r"^syscallfair_ucore: truncate_preemptions=(\d+) "
+        r"peer_progress=(\d+)$",
+        text,
+        re.MULTILINE,
+    )
+    if len(fairness) != 1:
+        raise ValidationError(
+            "truncate fairness metrics must occur once as a complete line"
+        )
+    preemptions, peer_progress = map(int, fairness[0])
+    metric_line = (
+        "syscallfair_ucore: "
+        f"truncate_preemptions={preemptions} peer_progress={peer_progress}"
+    )
+    metric_pos = text.find(metric_line)
+    if not trunc_peer < metric_pos < trunc_end:
+        raise ValidationError(
+            f"truncate fairness metric order mismatch: {metric_pos}"
+        )
+    if preemptions <= 0 or peer_progress <= 0:
+        raise ValidationError(
+            "truncate fairness lacked a real scheduling boundary or peer progress"
+        )
     passed = "syscallfair_ucore: parent passed"
     passed_pos = text.find(passed)
     if text.count(passed) != 1 or passed_pos <= previous_end:
         raise ValidationError(f"completion marker mismatch: {passed_pos}")
+    summaries.append(
+        f"truncate_preemptions={preemptions} peer_progress={peer_progress}"
+    )
     return " ".join(summaries)
 
 
@@ -598,6 +643,7 @@ def parse_args():
             "physical-resource",
             "workflow-teardown-race",
             "wait-atomic",
+            "ch3-trace",
             "syscall-fairness",
             "generic",
             "domain",
@@ -642,6 +688,8 @@ def main():
             )
         elif args.profile == "wait-atomic":
             summary = validate_wait_atomic(text)
+        elif args.profile == "ch3-trace":
+            summary = validate_ch3_trace(text)
         elif args.profile == "syscall-fairness":
             summary = validate_syscall(text)
         else:

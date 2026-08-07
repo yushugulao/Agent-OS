@@ -301,9 +301,9 @@ def showcase_log(sample_id: int = 1, order: str = "compat_then_native") -> str:
                 probe_before, probe_after,
             ),
             "labdemo_ucore: startup_barrier ready=3 released=3 chain_receipts=3",
-            "labdemo_ucore: global_audit=1 records=19 agents=3 context=1 event=1 sched=1 prefetch=1",
-            "labdemo_ucore: unified_timeline records=24 context=1 event=1 sched=1 prefetch=1",
-            "labdemo_ucore: provenance_graph edges=9 message=1 prefetch=1",
+            "labdemo_ucore: global_audit=1 records=19 agents=3 context=1 event=1 sched=1 message=1",
+            "labdemo_ucore: unified_timeline records=24 context=1 event=1 sched=1 message=1",
+            "labdemo_ucore: provenance_graph edges=9 message=1 context=1",
             "labdemo_ucore: passed",
             "labdemo_ucore: parent passed",
         ]

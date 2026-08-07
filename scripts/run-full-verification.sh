@@ -10,6 +10,7 @@ IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"
 HOST_CC="${HOST_CC:-${HOSTCC:-${CC:-cc}}}"
+runner_shell=(/bin/bash --noprofile --norc -p)
 adaptive_jobs() {
 	"${PYTHON_BIN}" -I -S -B "${ROOT_DIR}/scripts/resource-jobs.py" --kind "$1"
 }
@@ -82,7 +83,7 @@ evidence_step_end() {
 
 evidence_step_begin
 echo "[full-verify] target structure"
-bash "${ROOT_DIR}/scripts/verify-dual-target-structure.sh"
+"${runner_shell[@]}" "${ROOT_DIR}/scripts/verify-dual-target-structure.sh"
 evidence_step_end "target-structure"
 
 evidence_step_begin
@@ -112,6 +113,32 @@ echo "[full-verify] host platform alignment"
 )
 evidence_step_end "host-platform-alignment"
 
+# 传统 syscall 兼容门独占一次 QEMU，并把原始 Guest 转录作为独立证据。
+if evidence_enabled; then
+	ch3_output="${EVIDENCE_WORK_DIR}/ch3-trace"
+else
+	ch3_output="${ROOT_DIR}/build/ch3-trace"
+fi
+evidence_step_begin
+echo "[full-verify] ch3 trace compatibility"
+(
+	cd "${ROOT_DIR}"
+	CH3_TRACE_OUTPUT_DIR="${ch3_output}" \
+		CASE_TIMEOUT="${CASE_TIMEOUT}" \
+		IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
+		MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS}" \
+		make ch3-trace-test \
+			AGENTOS_BUILD_JOBS="${AGENTOS_BUILD_JOBS}" \
+			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
+			PYTHON_BIN="${PYTHON_BIN}" HOST_CC="${HOST_CC}"
+)
+"${PYTHON_BIN}" -I -S -B "${ROOT_DIR}/scripts/validate-kernel-test-log.py" \
+	--log-file "${ch3_output}/guest.log" --tag ch3-trace --profile ch3-trace
+if evidence_enabled; then
+	evidence_publish_file "${ch3_output}/guest.log" "ch3-trace-guest.log"
+fi
+evidence_step_end "ch3-trace" "ch3-trace-guest.log"
+
 evidence_step_begin
 echo "[full-verify] AgentOS kernel tests"
 if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ]]; then
@@ -134,7 +161,7 @@ if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ]]; then
 			PYTHON_BIN="${PYTHON_BIN}" CASE_TIMEOUT="${CASE_TIMEOUT}" \
 			IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
 			MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS}" \
-			bash scripts/run-agent-tests.sh
+			"${runner_shell[@]}" scripts/run-agent-tests.sh
 	)
 	if evidence_enabled; then
 		evidence_publish_file "${agent_output}/agent-suite-timings.log" \
@@ -203,7 +230,8 @@ echo "[full-verify] dual platforms"
 		dual_dir="${EVIDENCE_WORK_DIR}/dual"
 		DUAL_LOG_DIR="${dual_dir}" \
 			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
-			PYTHON_BIN="${PYTHON_BIN}" bash scripts/run-dual-platforms.sh
+			PYTHON_BIN="${PYTHON_BIN}" \
+			"${runner_shell[@]}" scripts/run-dual-platforms.sh
 		PYTHONPATH="${ROOT_DIR}/host_tools" "${PYTHON_BIN}" \
 			"${ROOT_DIR}/host_tools/dual_state_archive.py" \
 			--state-dir "${dual_dir}/plain-state" \
@@ -244,7 +272,8 @@ echo "[full-verify] dual platforms"
 			"dual-file-query-benchmark.csv"
 	else
 		TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
-			PYTHON_BIN="${PYTHON_BIN}" bash scripts/run-dual-platforms.sh
+			PYTHON_BIN="${PYTHON_BIN}" \
+			"${runner_shell[@]}" scripts/run-dual-platforms.sh
 	fi
 )
 evidence_step_end "dual-platforms" \
@@ -297,7 +326,7 @@ echo "[full-verify] filesystem ordered epoch power-cut tests"
 		PYTHON_BIN="${PYTHON_BIN}" CASE_TIMEOUT="${CASE_TIMEOUT}" \
 		IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
 		FSEPOCH_QEMU_JOBS="${fs_epoch_jobs}" \
-		bash scripts/run-fs-epoch-tests.sh
+		"${runner_shell[@]}" scripts/run-fs-epoch-tests.sh
 )
 
 if evidence_enabled; then

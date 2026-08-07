@@ -45,8 +45,8 @@ static void seed_large_bank(void)
 			stable = 0;
 		if (stable >= 3) {
 			check(agent_file_meta_init() == AGENT_STATUS_OK,
-			      "foreground reload of over-burst metadata bank");
-			printf("agentmetalarge_ucore: runtime_reload_once=1\n");
+			      "restartable reload of over-burst metadata bank");
+			printf("agentmetalarge_ucore: runtime_reload_completed=1\n");
 			printf("agentmetalarge_ucore: seed_ready=1 records=%d\n",
 			       LARGE_RECORDS);
 			for (;;)

@@ -144,7 +144,7 @@ AGENTOS_EVIDENCE_REQUIREMENTS = {
         "mode=kernel_agent_orchestrated",
         "context_snapshot=present",
         "dependency_update=generic_record",
-        "prefetch_hint=dependency_driven",
+        "dependency_query=generic_record",
     ),
     "rp_agentos_mainflow": (
         "context_trusted=kernel_shadow",
@@ -227,7 +227,7 @@ SCENARIO_EVIDENCE_SPECS = (
     ("Permission", "权限控制", ("permission_control=sentinel_action_denied",)),
     ("Timeline", "时间线观察", ("timeline_observe=kernel_snapshot", "timeline_snapshot=ready")),
     ("Edit Lease", "文件编辑租约", ("edit_lease=kernel_exclusive", "holder_write=checked")),
-    ("Dependency", "依赖与预取提示", ("dependency_graph=kernel_records", "dependency_update=generic_record", "prefetch_hint=dependency_driven")),
+    ("Dependency", "依赖查询", ("dependency_graph=kernel_records", "dependency_update=generic_record", "dependency_query=generic_record")),
 )
 
 BACKEND_REPORT_CASES = {

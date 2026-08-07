@@ -4,7 +4,6 @@
 #include "agent_internal.h"
 #include "agent_metadata_actions.h"
 #include "agent_metadata_internal.h"
-#include "agent_metadata_prefetch.h"
 #include "agent_metadata_query.h"
 #include "agent_metadata_recovery.h"
 #include "agent_metadata_scan.h"
@@ -263,8 +262,7 @@ agent_file_finish_mutation(struct proc *p, struct agent_file_meta *request,
 			return result;
 		}
 #if defined(AGENT_METADATA_CRASH_PHASE) || defined(AGENT_METADATA_EIO_PHASE)
-		/* Fault profiles keep an explicit syscall boundary so each injected
-		 * durable phase has one receipted inducing mutation. */
+		/* 故障注入以 syscall 为边界，持久化阶段各自留下回执。 */
 		if (agent_metadata_store_persist_commit(&persistence) < 0) {
 			if (!persistence.irrevocable &&
 			    agent_file_restore_status(fence, undo, previous,
@@ -329,7 +327,8 @@ agent_metadata_background_maintain(void)
 	int plan;
 	int load_ok = 1;
 
-	vfs_scope_reap_pending();
+	now = agent_file_state_now();
+	vfs_scope_reap_pending(now);
 	agent_file_store_boot_reprobe();
 	if (!agent_metadata_store_available())
 		return;
@@ -338,11 +337,8 @@ agent_metadata_background_maintain(void)
 		agent_file_request_scan();
 	now = agent_file_state_now();
 	plan = agent_metadata_scan_plan(now);
-	if (plan == AGENT_METADATA_SCAN_IDLE) {
-		if (agent_metadata_scan_work_pending())
-			agent_background_request();
+	if (plan == AGENT_METADATA_SCAN_IDLE)
 		return;
-	}
 	if (!bio_background_begin(FS_OWNER_SYSTEM))
 		return;
 	if (!agent_metadata_txn_try_external())
@@ -360,8 +356,6 @@ out_txn:
 	agent_metadata_txn_unlock();
 out_io:
 	bio_background_end();
-	if (agent_metadata_scan_work_pending())
-		agent_background_request();
 }
 
 int agent_metadata_inode_trackable(struct inode *ip)
@@ -518,22 +512,18 @@ int agent_scope_reclaim_metadata_done(
 	return agent_metadata_store_scope_target_done(scope_id, metadata_target);
 }
 
-static void
-agent_file_query_reset(struct agent_file_query_result *result, int *hit_slots)
+static void agent_file_query_reset(struct agent_file_query_result *result)
 {
 	memset(result, 0, sizeof(*result));
-	for (int i = 0; i < AGENT_FILE_QUERY_MAX_HITS; i++)
-		hit_slots[i] = -1;
 }
 
 static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
 				     struct agent_file_query *q,
-				     struct agent_file_query_result *r,
-				     int *hit_slots)
+				     struct agent_file_query_result *r)
 {
 	int result;
 
-	agent_file_query_reset(r, hit_slots);
+	agent_file_query_reset(r);
 	if (!agent_scope_valid(scope_id)) {
 		return AGENT_STATUS_DENIED;
 	}
@@ -542,20 +532,20 @@ static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
 		for (int attempt = 0;
 		     attempt < AGENT_QUERY_SNAPSHOT_RETRIES; attempt++) {
 			result = agent_metadata_query_execute_snapshot(
-				scope_id, q, r, hit_slots);
+				scope_id, q, r);
 			if (result >= 0 && agent_metadata_store_available() &&
 			    agent_metadata_store_loaded())
 				return result;
 			if (result == AGENT_CATALOG_CONFLICT) {
-				agent_file_query_reset(r, hit_slots);
+				agent_file_query_reset(r);
 				return AGENT_STATUS_RETRY;
 			}
 			if (result != AGENT_CATALOG_STALE) {
-				agent_file_query_reset(r, hit_slots);
+				agent_file_query_reset(r);
 				return AGENT_STATUS_RETRY;
 			}
 		}
-		agent_file_query_reset(r, hit_slots);
+		agent_file_query_reset(r);
 		return AGENT_STATUS_RETRY;
 	}
 	if (!agent_metadata_txn_lock(1))
@@ -568,11 +558,11 @@ static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
 		goto out_txn;
 	}
 	result = agent_metadata_query_execute_locked(
-		scope_id, q, r, hit_slots, agent_metadata_scan_query_stable());
+		scope_id, q, r, agent_metadata_scan_query_stable());
 out_txn:
 	agent_metadata_txn_unlock();
 	if (result < 0)
-		agent_file_query_reset(r, hit_slots);
+		agent_file_query_reset(r);
 	return result;
 }
 
@@ -835,7 +825,9 @@ agent_file_update_status_batch_locked(
 	if (!agent_metadata_store_submit_wait_locked()) {
 		persist->durable = 0;
 		persist->status = -1;
-		persist->cause = AGENT_METADATA_PERSIST_FAIL_CLOSED;
+		persist->cause = agent_metadata_store_available() ?
+			AGENT_METADATA_PERSIST_RETRY :
+			AGENT_METADATA_PERSIST_FAIL_CLOSED;
 		return 0;
 	}
 	load_status = agent_file_store_load();
@@ -982,7 +974,6 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 	struct agent_file_query query;
 	struct agent_file_query_result query_result;
 	struct agent_object_selector dependency;
-	int query_hit_slots[AGENT_FILE_QUERY_MAX_HITS];
 	int found;
 	int lookup_status;
 
@@ -1009,16 +1000,12 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 				break;
 			}
 			found = agent_file_query_internal(agent_identity_proc_scope(p),
-						       &query, &query_result,
-						       query_hit_slots);
+						       &query, &query_result);
 			if (found < 0) {
 				agent_result_status(res, found,
 						    "metadata_unavailable");
 				break;
 			}
-			agent_metadata_prefetch_update(
-				p, &query, &query_result, query_hit_slots,
-				p->agent_call_count);
 			res->value0 = query_result.total_hits;
 			res->value1 = query_result.scanned_records;
 			res->value2 = (uint64)query_result.used_index |
@@ -1535,7 +1522,6 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 	struct proc *p = curr_proc();
 	struct agent_file_query query;
 	struct agent_file_query_result result;
-	int query_hit_slots[AGENT_FILE_QUERY_MAX_HITS];
 	int returned;
 
 	if (!p->is_agent)
@@ -1565,7 +1551,7 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 	if (agent_lifecycle_context_lane_enter(p) < 0)
 		return -1;
 	returned = agent_file_query_internal(agent_identity_proc_scope(p), &query,
-					     &result, query_hit_slots);
+					     &result);
 	if (copyout(p->pagetable, resultaddr, (char *)&result,
 		    sizeof(result)) < 0) {
 		returned = -1;
@@ -1573,14 +1559,12 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 	}
 	if (returned < 0)
 		goto out_lane;
-	if (agent_context_append_system(
-		    p, AGENT_TOOL_QUERY_FILE, 0, query.flags,
-		    query.status[0] ? query.status : query.stage,
-		    result.returned ? result.hits[0].physical_name : "empty",
-		    AGENT_STATUS_OK, result.total_hits, result.scanned_records,
-		    result.used_index) == 0)
-		agent_metadata_prefetch_update(p, &query, &result,
-				       query_hit_slots, p->agent_call_count);
+	(void)agent_context_append_system(
+		p, AGENT_TOOL_QUERY_FILE, 0, query.flags,
+		query.status[0] ? query.status : query.stage,
+		result.returned ? result.hits[0].physical_name : "empty",
+		AGENT_STATUS_OK, result.total_hits, result.scanned_records,
+		result.used_index);
 out_lane:
 	agent_lifecycle_context_lane_leave(p);
 	return returned;
@@ -1620,12 +1604,12 @@ agent_metadata_fill_info(uint scope_id, struct agent_info *info)
 void
 agent_metadata_tick(uint64 now)
 {
+	agent_metadata_store_tick(now);
 	if (agent_metadata_store_take_reconcile_request())
 		agent_file_request_scan();
 	if (agent_metadata_recovery_pending() &&
 	    agent_metadata_recovery_due(now))
 		agent_background_request();
-	(void)agent_metadata_scan_plan(now);
-	if (agent_metadata_scan_work_pending())
+	if (agent_metadata_scan_plan(now) != AGENT_METADATA_SCAN_IDLE)
 		agent_background_request();
 }

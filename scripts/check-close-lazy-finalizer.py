@@ -121,26 +121,26 @@ def check(root: Path) -> None:
         "legacy fdclose bypasses the shared receipt boundary",
     )
 
-    may_io = function(syscall_source, "syscall_may_issue_block_io")
-    epoch = function(syscall_source, "syscall_needs_fs_epoch")
-    for body, label in ((may_io, "BIO"), (epoch, "FS epoch")):
-        require(
-            body,
-            "caseSYS_close:return0",
-            f"close still takes unconditional {label} admission",
-        )
+    registry = compact(root / "os/syscall_counter.h")
+    require(
+        registry,
+        "X(close,DESCRIPTOR,ALWAYS)",
+        "close still takes unconditional BIO or FS epoch admission",
+    )
 
     begin = function(syscall_source, "syscall_transaction_begin")
     close_start = begin.find("if(transaction->id==SYS_close)")
-    generic_start = begin.find("if(syscall_needs_fs_epoch(transaction))")
+    generic_start = begin.find(
+        "if((transaction->policy&SYSCALL_POLICY_FS_EPOCH)!=0)"
+    )
     if close_start < 0 or generic_start < 0 or close_start >= generic_start:
         raise ContractError("close is not detached before generic admission")
     close_path = begin[close_start:generic_start]
     reject(close_path, "fdget(", "close classifies before descriptor detach")
     for fragment, message in (
-        ("transaction->args[0]>=FD_BUFFER_SIZE",
+        ("trapframe->a0>=FD_BUFFER_SIZE",
          "close narrows an unchecked raw descriptor"),
-        ("fdclose_prepare((int)transaction->args[0],"
+        ("fdclose_prepare((int)trapframe->a0,"
          "&transaction->close_receipt)",
          "close does not detach into its transaction receipt"),
         ("transaction->close_result=close_status<0?-1:0",
@@ -210,11 +210,11 @@ def check(root: Path) -> None:
         "close receipt is consumed outside the unified settlement order",
     )
 
-    dispatch = function(syscall_source, "syscall")
+    dispatch = function(syscall_source, "syscall_dispatch")
     require(
         dispatch,
-        "caseSYS_close:ret=transaction.close_attempted?"
-        "transaction.close_result:-1;",
+        "caseSYS_close:ret=transaction!=0&&transaction->close_attempted?"
+        "transaction->close_result:-1;",
         "close dispatch detaches or classifies a second descriptor",
     )
     reject(dispatch, "fdclose(", "close dispatch repeats descriptor detach")

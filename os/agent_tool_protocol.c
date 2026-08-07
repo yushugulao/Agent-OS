@@ -51,43 +51,99 @@ static const struct agent_tool_definition agent_tools[] = {
 #undef TOOL_ENTRY
 
 enum param_target { PARAM_ARG0, PARAM_ARG1, PARAM_PAYLOAD };
-struct param_rule { const char *key; uint type, target, required; };
-#define DECLARE_PARAM_KEY(symbol, literal) \
-	static const char agent_param_key_##symbol[] = literal;
-AGENT_PARAM_KEY_REGISTRY(DECLARE_PARAM_KEY)
-#undef DECLARE_PARAM_KEY
+enum param_key_index {
+#define PARAM_KEY_INDEX(symbol, literal) PARAM_KEY_##symbol,
+	AGENT_PARAM_KEY_REGISTRY(PARAM_KEY_INDEX)
+#undef PARAM_KEY_INDEX
+	PARAM_KEY_COUNT,
+};
 
+#define PARAM_KEY_FIELD(symbol, literal) char symbol[sizeof(literal)];
+struct param_key_strings {
+	AGENT_PARAM_KEY_REGISTRY(PARAM_KEY_FIELD)
+};
+#undef PARAM_KEY_FIELD
+
+#define PARAM_KEY_VALUE(symbol, literal) .symbol = literal,
+static const struct param_key_strings param_key_strings = {
+	AGENT_PARAM_KEY_REGISTRY(PARAM_KEY_VALUE)
+};
+#undef PARAM_KEY_VALUE
+
+#define PARAM_KEY_OFFSET(symbol, literal) \
+	__builtin_offsetof(struct param_key_strings, symbol),
+static const unsigned short param_key_offsets[] = {
+	AGENT_PARAM_KEY_REGISTRY(PARAM_KEY_OFFSET)
+};
+#undef PARAM_KEY_OFFSET
+
+/*
+ * 参数规则采用 CSR：offsets 标出每个工具在 rules 中的连续区间。
+ * 键名改存一字节索引，属性压入一字节，未声明参数的工具不再占空槽。
+ */
+struct param_rule {
+	unsigned char key;
+	unsigned char attributes;
+};
+
+#define RULE_TYPE_MASK       0x03U
+#define RULE_TARGET_SHIFT    2U
+#define RULE_TARGET_MASK     0x0cU
+#define RULE_REQUIRED_SHIFT  4U
+#define RULE_REQUIRED_MASK   0x10U
+#define RULE_ATTRIBUTE_MASK  0x1fU
+#define RULE_ATTRIBUTES(type, target, required) \
+	((type) | ((target) << RULE_TARGET_SHIFT) | \
+	 ((required) << RULE_REQUIRED_SHIFT))
 #define R(key, type, target, required) \
-	{ agent_param_key_##key, type, target, required }
-static const struct param_rule
-	rules[AGENT_TOOL_COUNT][AGENT_TOOL_PARAM_MAX] = {
-	[AGENT_TOOL_ECHO - 1] = { R(PAYLOAD, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), R(ARG0, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(ARG1, AGENT_PARAM_UINT64, PARAM_ARG1, 1) },
-	[AGENT_TOOL_QUERY_PROCESS - 1] = { R(TYPE, AGENT_PARAM_UINT64, PARAM_ARG0, 0) },
-	[AGENT_TOOL_QUERY_FILE - 1] = { R(PATH, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_SEND_MESSAGE - 1] = { R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(MESSAGE, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_READ_FILE_SUMMARY - 1] = { R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_DEPENDENCY_QUERY - 1] = { R(LABEL, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_CAPABILITY_CHECK - 1] = { R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(ACTION, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_RERUN_STAGE - 1] = { R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), R(STAGE, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_WRITE_REPORT - 1] = { R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), R(PAYLOAD, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_AGENT_WATCH - 1] = { R(EVENT_TYPE, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(FILTER, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_AGENT_WAIT - 1] = { R(TIMEOUT, AGENT_PARAM_UINT64, PARAM_ARG0, 1) },
-	[AGENT_TOOL_AGENT_HEARTBEAT - 1] = { R(INTERVAL, AGENT_PARAM_UINT64, PARAM_ARG0, 1) },
-	[AGENT_TOOL_CONTEXT_PUSH - 1] = { R(RECORD, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_READ_FILE_DIGEST - 1] = { R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_ACTION_COMMIT - 1] = { R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_ARTIFACT_UPDATE - 1] = { R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_LLM_REQUEST - 1] = { R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(PROMPT_SUMMARY, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_LLM_RESPONSE - 1] = { R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(REPLY_SUMMARY, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
-	[AGENT_TOOL_DEPENDENCY_UPDATE - 1] = { R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1) },
+	{ PARAM_KEY_##key, RULE_ATTRIBUTES(type, target, required) }
+
+static const struct param_rule rules[] = {
+	R(PAYLOAD, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 回显 */
+	R(ARG0, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(ARG1, AGENT_PARAM_UINT64, PARAM_ARG1, 1),
+	R(TYPE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), /* 进程查询 */
+	R(PATH, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 文件查询 */
+	R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(MESSAGE, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 消息发送 */
+	R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 文件摘要 */
+	R(LABEL, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 依赖查询 */
+	R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(ACTION, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 能力检查 */
+	R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), R(STAGE, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 阶段重跑 */
+	R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), R(PAYLOAD, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 报告写入 */
+	R(EVENT_TYPE, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(FILTER, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 事件监视 */
+	R(TIMEOUT, AGENT_PARAM_UINT64, PARAM_ARG0, 1), /* 事件等待 */
+	R(INTERVAL, AGENT_PARAM_UINT64, PARAM_ARG0, 1), /* 心跳 */
+	R(RECORD, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 上下文追加 */
+	R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 文件摘要校验 */
+	R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 动作提交 */
+	R(ROLE, AGENT_PARAM_UINT64, PARAM_ARG0, 0), R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 工件更新 */
+	R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(PROMPT_SUMMARY, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 模型请求 */
+	R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(REPLY_SUMMARY, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 模型响应 */
+	R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 依赖更新 */
+};
+
+#define AGENT_TOOL_RULE_COUNT 30U
+static const unsigned char rule_offsets[AGENT_TOOL_COUNT + 1] = {
+	0, 3, 3, 3, 4, 4, 4, 5, 7, 7, 7, 8, 9,
+	11, 13, 15, 17, 18, 19, 20, 21, 23, 25, 27, 29, 30,
 };
 #undef R
 #undef AGENT_TOOL_REGISTRY
 
 _Static_assert(sizeof(agent_tools) / sizeof(agent_tools[0]) ==
 	       AGENT_TOOL_COUNT, "tool descriptor count must match the ABI");
-_Static_assert(sizeof(rules) / sizeof(rules[0]) == AGENT_TOOL_COUNT,
-	       "tool rule count must match the ABI");
+_Static_assert(sizeof(param_key_offsets) / sizeof(param_key_offsets[0]) ==
+	       PARAM_KEY_COUNT,
+	       "parameter key table must match the registry");
+_Static_assert(PARAM_KEY_COUNT <= 0xffU,
+	       "parameter key index must fit in one byte");
+_Static_assert(sizeof(param_key_strings) <= 0xffffU,
+	       "parameter key strings must fit in a 16-bit offset");
+_Static_assert(sizeof(rules) / sizeof(rules[0]) == AGENT_TOOL_RULE_COUNT,
+	       "compact tool rule count must match its CSR index");
+_Static_assert(AGENT_TOOL_RULE_COUNT <= 0xffU,
+	       "compact tool rule offsets must fit in one byte");
+_Static_assert(sizeof(rule_offsets) / sizeof(rule_offsets[0]) ==
+	       AGENT_TOOL_COUNT + 1, "tool rule offsets must match the ABI");
 
 static int string_length(const char *text, uint capacity, uint *length)
 {
@@ -100,15 +156,12 @@ static int string_length(const char *text, uint capacity, uint *length)
 	return -1;
 }
 
-static uint rule_count(int tool_id)
-{
-	uint count = 0;
-
-	while (count < AGENT_TOOL_PARAM_MAX &&
-	       rules[tool_id - 1][count].key != 0)
-		count++;
-	return count;
-}
+static uint rule_count(int tool_id) { return rule_offsets[tool_id] - rule_offsets[tool_id - 1]; }
+static const struct param_rule *rules_for_tool(int tool_id) { return &rules[rule_offsets[tool_id - 1]]; }
+static const char *rule_key(const struct param_rule *rule) { return (const char *)&param_key_strings + param_key_offsets[rule->key]; }
+static uint rule_type(const struct param_rule *rule) { return rule->attributes & RULE_TYPE_MASK; }
+static uint rule_target(const struct param_rule *rule) { return (rule->attributes & RULE_TARGET_MASK) >> RULE_TARGET_SHIFT; }
+static uint rule_required(const struct param_rule *rule) { return (rule->attributes & RULE_REQUIRED_MASK) >> RULE_REQUIRED_SHIFT; }
 
 static int schema_append(char *schema, uint capacity, uint *used,
 			 const char *text)
@@ -126,6 +179,7 @@ static int schema_append(char *schema, uint capacity, uint *used,
 static int agent_tool_schema(int tool_id, char *schema, uint capacity)
 {
 	uint count = rule_count(tool_id);
+	const struct param_rule *tool_rules = rules_for_tool(tool_id);
 	uint used = 0;
 
 	if (schema == 0 || capacity == 0)
@@ -134,13 +188,13 @@ static int agent_tool_schema(int tool_id, char *schema, uint capacity)
 	if (count == 0)
 		return schema_append(schema, capacity, &used, "none");
 	for (uint i = 0; i < count; i++) {
-		const struct param_rule *rule = &rules[tool_id - 1][i];
-		const char *type = rule->type == AGENT_PARAM_UINT64 ?
+		const struct param_rule *rule = &tool_rules[i];
+		const char *type = rule_type(rule) == AGENT_PARAM_UINT64 ?
 					   "uint64" : "string";
 
 		if ((i != 0 && schema_append(schema, capacity, &used, ",") < 0) ||
-		    schema_append(schema, capacity, &used, rule->key) < 0 ||
-		    (!rule->required &&
+		    schema_append(schema, capacity, &used, rule_key(rule)) < 0 ||
+		    (!rule_required(rule) &&
 		     schema_append(schema, capacity, &used, "?") < 0) ||
 		    schema_append(schema, capacity, &used, ":") < 0 ||
 		    schema_append(schema, capacity, &used, type) < 0)
@@ -153,11 +207,18 @@ static int agent_tool_protocol_schema_valid(void)
 {
 	char schema[AGENT_TOOL_PARAMS_SIZE];
 
+	if (rule_offsets[0] != 0 ||
+	    rule_offsets[AGENT_TOOL_COUNT] != AGENT_TOOL_RULE_COUNT)
+		return 0;
+
 	for (uint tool = 0; tool < AGENT_TOOL_COUNT; tool++) {
 		uint count = rule_count(tool + 1);
+		const struct param_rule *tool_rules = rules_for_tool(tool + 1);
 		uint targets = 0;
 
-		if (agent_tools[tool].tool_id != (int)tool + 1 ||
+		if (rule_offsets[tool] > rule_offsets[tool + 1] ||
+		    count > AGENT_TOOL_PARAM_MAX ||
+		    agent_tools[tool].tool_id != (int)tool + 1 ||
 		    agent_tools[tool].name == 0 ||
 		    agent_tools[tool].description == 0 ||
 		    string_length(agent_tools[tool].name,
@@ -173,27 +234,26 @@ static int agent_tool_protocol_schema_valid(void)
 				     agent_tools[other].name,
 				     AGENT_TOOL_NAME_SIZE))
 				return 0;
-		for (uint i = 0; i < AGENT_TOOL_PARAM_MAX; i++) {
-			const struct param_rule *rule = &rules[tool][i];
+		for (uint i = 0; i < count; i++) {
+			const struct param_rule *rule = &tool_rules[i];
+			uint target;
+			uint type;
 
-			if (i >= count) {
-				if (rule->key != 0 || rule->type != 0 ||
-				    rule->target != 0 || rule->required != 0)
-					return 0;
-				continue;
-			}
-			if (string_length(rule->key, AGENT_PARAM_KEY_SIZE, 0) < 0 ||
-			    rule->key[0] == 0 || rule->required > 1 ||
-			    rule->target > PARAM_PAYLOAD ||
-			    (targets & (1U << rule->target)) != 0 ||
-			    (rule->target == PARAM_PAYLOAD &&
-			     rule->type != AGENT_PARAM_STRING) ||
-			    (rule->target != PARAM_PAYLOAD &&
-			     rule->type != AGENT_PARAM_UINT64))
+			if (rule->key >= PARAM_KEY_COUNT ||
+			    (rule->attributes & ~RULE_ATTRIBUTE_MASK) != 0)
 				return 0;
-			targets |= 1U << rule->target;
+			target = rule_target(rule);
+			type = rule_type(rule);
+			if (string_length(rule_key(rule), AGENT_PARAM_KEY_SIZE, 0) < 0 ||
+			    rule_key(rule)[0] == 0 || target > PARAM_PAYLOAD ||
+			    (targets & (1U << target)) != 0 ||
+			    (target == PARAM_PAYLOAD && type != AGENT_PARAM_STRING) ||
+			    (target != PARAM_PAYLOAD && type != AGENT_PARAM_UINT64))
+				return 0;
+			targets |= 1U << target;
 			for (uint other = 0; other < i; other++)
-				if (!strncmp(rule->key, rules[tool][other].key,
+				if (!strncmp(rule_key(rule),
+					     rule_key(&tool_rules[other]),
 					     AGENT_PARAM_KEY_SIZE))
 					return 0;
 		}
@@ -258,10 +318,11 @@ int agent_tool_protocol_resolve(int tool_id, char *name,
 	return AGENT_STATUS_OK;
 }
 
-static int rule_for_target(int tool_id, uint target)
+static int rule_for_target(const struct param_rule *tool_rules, uint count,
+			   uint target)
 {
-	for (uint i = 0; i < rule_count(tool_id); i++)
-		if (rules[tool_id - 1][i].target == target)
+	for (uint i = 0; i < count; i++)
+		if (rule_target(&tool_rules[i]) == target)
 			return i;
 	return -1;
 }
@@ -280,6 +341,8 @@ int agent_tool_protocol_decode_v1(struct agent_request *request,
 		keys[1][0] || types[1] != AGENT_PARAM_NONE,
 		keys[2][0] || types[2] != AGENT_PARAM_NONE || request->payload[0],
 	};
+	uint count = rule_count(match->tool_id);
+	const struct param_rule *tool_rules = rules_for_tool(match->tool_id);
 	uint seen = 0;
 
 	if (string_length(keys[0], sizeof(request->arg0_key), 0) < 0 ||
@@ -298,20 +361,20 @@ int agent_tool_protocol_decode_v1(struct agent_request *request,
 				REJECT(AGENT_STATUS_BAD_PARAM, "untyped_param_value");
 			continue;
 		}
-		index = rule_for_target(match->tool_id, target);
+		index = rule_for_target(tool_rules, count, target);
 		if (index < 0)
 			REJECT(AGENT_STATUS_BAD_PARAM, "unexpected_param");
-		if (strncmp(keys[target], rules[match->tool_id - 1][index].key,
+		if (strncmp(keys[target], rule_key(&tool_rules[index]),
 			    AGENT_PARAM_KEY_SIZE))
 			REJECT(AGENT_STATUS_BAD_PARAM, target == PARAM_PAYLOAD ?
 			       "bad_payload_key" : "bad_arg_key");
-		if (types[target] != (int)rules[match->tool_id - 1][index].type)
+		if (types[target] != (int)rule_type(&tool_rules[index]))
 			REJECT(AGENT_STATUS_BAD_PARAM, target == PARAM_PAYLOAD ?
 			       "bad_payload_type" : "bad_arg_type");
 		seen |= 1U << index;
 	}
-	for (uint i = 0; i < rule_count(match->tool_id); i++)
-		if (rules[match->tool_id - 1][i].required && !(seen & (1U << i)))
+	for (uint i = 0; i < count; i++)
+		if (rule_required(&tool_rules[i]) && !(seen & (1U << i)))
 			REJECT(AGENT_STATUS_BAD_PARAM, "missing_param");
 	memset(op, 0, sizeof(*op));
 	op->version = AGENT_CALL_VERSION_V1;
@@ -330,6 +393,7 @@ int agent_tool_protocol_decode_v2(pagetable_t pagetable,
 				  int error_size)
 {
 	uint seen = 0, count = rule_count(match->tool_id);
+	const struct param_rule *tool_rules = rules_for_tool(match->tool_id);
 
 	memset(op, 0, sizeof(*op));
 	op->version = AGENT_CALL_VERSION_V1;
@@ -350,7 +414,7 @@ int agent_tool_protocol_decode_v2(pagetable_t pagetable,
 		    string_length(param.key, AGENT_PARAM_KEY_SIZE, 0) < 0)
 			REJECT(AGENT_STATUS_BAD_SIZE, "bad_param_size");
 		for (uint j = 0; j < count; j++)
-			if (!strncmp(param.key, rules[match->tool_id - 1][j].key,
+			if (!strncmp(param.key, rule_key(&tool_rules[j]),
 				     AGENT_PARAM_KEY_SIZE)) {
 				index = j;
 				break;
@@ -360,7 +424,7 @@ int agent_tool_protocol_decode_v2(pagetable_t pagetable,
 		if (seen & (1U << index))
 			REJECT(AGENT_STATUS_DUPLICATE, "duplicate_param");
 		seen |= 1U << index;
-		if (param.type != rules[match->tool_id - 1][index].type)
+		if (param.type != rule_type(&tool_rules[index]))
 			REJECT(AGENT_STATUS_BAD_TYPE, "bad_param_type");
 		if (param.type == AGENT_PARAM_UINT64) {
 			if (param.value_size != sizeof(param.value.uint64_value))
@@ -371,7 +435,7 @@ int agent_tool_protocol_decode_v2(pagetable_t pagetable,
 					 &text_length) < 0 ||
 			   text_length + 1 != param.value_size)
 			REJECT(AGENT_STATUS_BAD_SIZE, "bad_value_size");
-		switch (rules[match->tool_id - 1][index].target) {
+		switch (rule_target(&tool_rules[index])) {
 		case PARAM_ARG0: op->arg0 = param.value.uint64_value; break;
 		case PARAM_ARG1: op->arg1 = param.value.uint64_value; break;
 		default: safestrcpy(op->payload, param.value.string_value,
@@ -379,7 +443,7 @@ int agent_tool_protocol_decode_v2(pagetable_t pagetable,
 		}
 	}
 	for (uint i = 0; i < count; i++)
-		if (rules[match->tool_id - 1][i].required && !(seen & (1U << i)))
+		if (rule_required(&tool_rules[i]) && !(seen & (1U << i)))
 			REJECT(AGENT_STATUS_BAD_PARAM, "missing_param");
 	return AGENT_STATUS_OK;
 }

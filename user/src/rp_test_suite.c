@@ -1104,7 +1104,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentos_kernel", "mode=kernel_agent_orchestrated");
 	ok = ok && require_file_token("rp_agentos_kernel", "agent_context=present");
 	ok = ok && require_file_token("rp_agentos_kernel", "dependency_update=generic_record");
-	ok = ok && require_file_token("rp_agentos_kernel", "prefetch_hint=dependency_driven");
+	ok = ok && require_file_token("rp_agentos_kernel", "dependency_query=generic_record");
 	ok = ok && require_file_token("rp_agentos_recovery", "context_snapshot=trusted");
 	ok = ok && require_file_token("rp_agentos_query", "metadata_source=kernel_file_index");
 	ok = ok && require_file_token("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
@@ -1113,7 +1113,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentos_mainflow", "context_trusted=kernel_shadow");
 	ok = ok && require_file_token("rp_agentos_mainflow", "dependency_graph=kernel_records");
 	ok = ok && require_file_token("rp_agentos_mainflow", "metadata_query=used_index");
-	ok = ok && require_file_token("rp_agentos_kernel", "prefetch_hint=dependency_driven");
+	ok = ok && require_file_token("rp_agentos_kernel", "metadata_index=stage_query");
 	ok = ok && require_file_token("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
 	ok = ok && require_file_token("rp_agentos_mainflow", "failure_recovery=generic_action");
 	ok = ok && require_file_token("rp_agentos_mainflow", "provenance_audit=kernel_ledger");

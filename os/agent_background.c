@@ -1,8 +1,8 @@
 #include "agent_internal.h"
 
 /*
- * Edge-triggered wake state for schedulable Agent maintenance.  Producers
- * only publish work here; the core coordinator remains the sole consumer.
+ * 可调度 Agent 维护任务的边沿触发状态。生产者只负责发布，
+ * 由核心协调器统一消费，避免在业务路径内直接执行维护工作。
  */
 static int agent_background_pending;
 

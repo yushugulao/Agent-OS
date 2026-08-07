@@ -9,10 +9,9 @@ static uint64 next_control_id;
 #define AGENT_CONTEXT_LANE_OWNER_NONE (-1)
 
 /*
- * Context commits are process-wide transactions. The lane is sleepable:
- * tool execution may block on metadata or I/O, while contenders sleep in the
- * ordinary FIFO wait queue instead of holding interrupts off. A zero depth
- * means ownership has been handed to a woken thread that has not resumed yet.
+ * Context 提交是进程级事务。通道允许睡眠：工具执行可阻塞于 metadata
+ * 或 I/O，竞争者进入 FIFO 等待队列而非持续关中断。depth 为零表示所有权
+ * 已交给尚未恢复运行的线程。
  */
 void
 agent_lifecycle_context_lane_init(struct proc *p)
@@ -94,18 +93,13 @@ agent_lifecycle_context_lane_enter(struct proc *p)
 			intr_restore(enabled);
 			return 0;
 		}
-		/*
-		 * Keep interrupts disabled from the ownership check through queue
-		 * publication so an unlock cannot miss this waiter.
-		 */
+		/* 从检查所有权到发布入队始终关中断，避免释放方漏唤醒。 */
 		wait_status = wait_queue_sleep_irq(
 			&p->agent_context_lane_waiters);
 		/*
-		 * A direct handoff reserves owner_tid before the target resumes.
-		 * Teardown may make wait_queue_sleep report INTERRUPTED even after
-		 * that wake. Consume or cancel the reservation before returning.
-		 * wait_queue_sleep_irq preserves our outer interrupt-off boundary,
-		 * so the reservation cannot change during this decision.
+		 * 直接移交会在目标恢复前预留 owner_tid。teardown 可能使已唤醒线程
+		 * 仍收到 INTERRUPTED，因此返回前必须接收或取消预留。外层关中断
+		 * 边界保证判断期间预留不变。
 		 */
 		if (p->agent_context_lane_owner_tid == t->tid &&
 		    p->agent_context_lane_depth == 0) {
@@ -297,23 +291,20 @@ agent_lifecycle_controller_departing_locked(struct proc *p)
 		return 0;
 	finish = p->teardown_state == PROC_TEARDOWN_LIVE ||
 		 p->teardown_state >= PROC_TEARDOWN_RECLAIMING;
-	/* Authority is closed; final retirement waits for late lane commits. */
+	/* 权限已关闭，迟到的通道提交静默后才能最终退出。 */
 	if (finish && p->teardown_state != PROC_TEARDOWN_LIVE &&
 	    !agent_lifecycle_context_lane_quiescent(p))
 		panic("controller retired with active Context lane");
 	if (agent_identity_controller_depart(p, finish, &departure) <= 0)
 		return 0;
-	/* Abandoned edges are cancelled when authority first closes. */
+	/* 权限首次关闭时撤销失去控制器的边。 */
 	if (!departure.scope_controller) {
 		proc_request_controller_exit(departure.lifecycle,
 				     departure.control_id,
 				     AGENT_STATUS_CANCELLED);
 		return departure.control_id;
 	}
-	/*
-	 * This one-shot ownership attachment is only a close trigger.  The
-	 * immutable lifecycle key remains authoritative for descendant teardown.
-	 */
+	/* 一次性所有权绑定只负责触发关闭，后代销毁仍以不可变生命周期 key 为准。 */
 	close_status = vfs_scope_close_owned(
 		departure.scope_id, departure.lifecycle,
 		departure.control_id, &closed);
@@ -324,10 +315,10 @@ agent_lifecycle_controller_departing_locked(struct proc *p)
 				   AGENT_STATUS_CANCELLED);
 	else
 		panic("controller retirement without lifecycle close");
-	/* Phase one closes admission; phase two publishes the retired identity. */
+	/* 第一阶段关闭接纳，第二阶段发布已退出身份。 */
 	if (!finish)
 		return departure.control_id;
-	/* Failed close leaves QUIESCING + attachment intact for a retry. */
+	/* 关闭失败时保留 QUIESCING 与绑定，供后续重试。 */
 	if (agent_identity_controller_close_commit(p, &departure) < 0)
 		panic("controller lifecycle close commit");
 	return departure.control_id;

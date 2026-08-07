@@ -7,6 +7,7 @@
 #include "sync.h"
 #include "agent.h"
 #include "resource_controller.h"
+#include "syscall_counter.h"
 #include "workflow_lifecycle.h"
 #include "../physical_page_policy.h"
 
@@ -14,7 +15,6 @@
 #define NTHREAD (16)
 #define FD_BUFFER_SIZE (16)
 #define LOCK_POOL_SIZE (8)
-#define SYSCALL_COUNT_MAX (600)
 #define MAILBOX_SLOT_COUNT (16)
 #define MAILBOX_PAYLOAD_SIZE (256)
 #define MAILBOX_SIDECAR_PAGE_COUNT (2)
@@ -69,12 +69,12 @@ struct child_exit {
 _Static_assert(sizeof(struct child_exit) == 2 * sizeof(int),
 	       "child completions must stay compact");
 
-// Saved registers for kernel context switches.
+// 内核上下文切换时保存的寄存器。
 struct context {
 	uint64 ra;
 	uint64 sp;
 
-	// callee-saved
+	// 被调用者保存寄存器
 	uint64 s0;
 	uint64 s1;
 	uint64 s2;
@@ -106,16 +106,15 @@ enum kernel_stack_state {
 };
 
 struct thread {
-	enum threadstate state; // Thread state
-	int tid; // Thread ID
-	// Slot addresses and tids are reusable; this generation makes ownership
-	// references stable across waittid/recreate cycles.
+	enum threadstate state; // 线程状态
+	int tid; // 线程号
+	// 槽位地址和 tid 都会复用；代数用于跨 waittid/重建周期稳定标识所有者。
 	uint64 identity_generation;
 	struct proc *process;
-	uint64 ustack; // Virtual address of user stack
-	uint64 kstack; // Virtual address of kernel stack
-	struct trapframe *trapframe; // data page for trampoline.S
-	struct context context; // swtch() here to run process
+	uint64 ustack; // 用户栈虚拟地址
+	uint64 kstack; // 内核栈虚拟地址
+	struct trapframe *trapframe; // trampoline.S 使用的数据页
+	struct context context; // swtch() 从这里恢复执行
 	uint64 exit_code;
 	struct wait_queue *wait_channel;
 	struct thread *wait_next;
@@ -127,7 +126,7 @@ struct thread {
 	int run_queue_agent;
 	enum kernel_stack_state kstack_state;
 	struct resource_account_handle resource_account;
-	// Scheduler partition index; accounting identity is resource_account.
+	// 调度分区索引；计费身份由 resource_account 表示。
 	int resource_domain_id;
 	int resource_slot_reserved;
 	int resource_slot_charged;
@@ -135,16 +134,13 @@ struct thread {
 	uint kernel_work_resumed;
 	uint kernel_resched_pending;
 	uint kernel_work_units;
-	uint64 kernel_slice_deadline;
 	uint64 kernel_work_redispatches;
 	uint64 kernel_syscall_preemptions_start;
 	uint64 kernel_last_syscall_preemptions;
-	uint64 kernel_receipt_generation;
-	uint64 kernel_receipt_completion_timer_epoch;
-	int kernel_receipt_syscall_id;
+	uint64 kernel_work_generation;
 	int kernel_work_target_syscall_id;
-	uint kernel_work_publish_receipt;
-	/* BIO request state occupies the padding before the 64-bit identity. */
+	uint kernel_work_measure_preemptions;
+	/* BIO 请求状态复用 64 位身份字段前的对齐空隙。 */
 	uint io_request_flags;
 	uint64 io_request_id;
 	uint io_request_depth;
@@ -155,26 +151,26 @@ struct thread {
 	uint io_request_transfers;
 	uint bio_buffer_holds;
 	uint bio_fs_atomic_depth;
-	/* Event-wait ownership follows this reusable thread generation. */
+	/* 事件等待的所有权跟随可复用线程的当前代数。 */
 	uint64 agent_wait_deadline;
 	uchar agent_wait_deadline_valid;
 	uchar agent_loop_state;
-	/* Observation persistence must not recursively evict its own evidence. */
+	/* 观测持久化不得递归淘汰自身证据。 */
 	uchar agent_observe_suppress_depth;
-	/* Published only while this thread is queued in timeline wait. */
+	/* 精确唤醒令牌随线程槽位存放，复用原有对齐空隙。 */
+	uchar agent_event_baton;
+	/* 仅在线程进入时间线等待队列期间发布。 */
 	struct agent_timeline_wait_state *agent_timeline_wait_state;
-	// Tickets belong to the calling thread's next principal creation.
+	// 委派票据属于调用线程下一次创建的主体。
 	uchar fd_delegate_ticket[FD_BUFFER_SIZE];
 };
 
 enum procstate { P_UNUSED, P_USED };
 
 /*
- * Process teardown is a forward-only protocol.  Once REQUESTED is visible,
- * no new process-owned object may be published.  The main thread owns
- * QUIESCING through HANDOFF; the scheduler alone performs PUBLISHED and slot
- * recycling.  Unpublished construction rollback uses the explicit kernel
- * owner and follows the same detach/reclaim/settle phases.
+ * 进程拆除是单向协议。REQUESTED 可见后不得再发布进程所属对象；主线程
+ * 负责 QUIESCING 到 HANDOFF，只有调度器能执行 PUBLISHED 和槽位回收。
+ * 尚未发布的构造回滚由内核显式持有，并复用分离、回收、结算阶段。
  */
 enum proc_teardown_state {
 	PROC_TEARDOWN_LIVE = 0,
@@ -189,11 +185,9 @@ enum proc_teardown_state {
 };
 
 /*
- * Controller authority has its own one-way publication barrier because an
- * exec downgrade retires authority without necessarily terminating the
- * process. OPEN -> QUIESCING blocks authority and new child publication,
- * then routes trusted children or requests subtree teardown atomically.
- * QUIESCING -> RETIRED waits for sibling commits to quiesce.
+ * 控制权使用独立的单向发布屏障，因为 exec 降权可撤销权限而不终止进程。
+ * OPEN -> QUIESCING 阻止权限和新子进程发布，并原子地转交可信子进程或
+ * 请求拆除子树；QUIESCING -> RETIRED 等待同级提交静默。
  */
 enum agent_control_state {
 	AGENT_CONTROL_OPEN = 0,
@@ -204,19 +198,41 @@ enum agent_control_state {
 #define PROC_TEARDOWN_OWNER_NONE (-1)
 #define PROC_TEARDOWN_OWNER_KERNEL (-2)
 
-// Per-process state
+/*
+ * 普通进程不需要 Agent 的过滤表、路由表和调度轨迹。参考 Linux 以独立对象和
+ * 指针管理可选子系统状态的做法，这两页只在 Agent 激活时分配，使传统
+ * fork/调度路径保持紧凑。
+ */
+struct agent_ipc_observe_cold_state {
+	int watch_valid[AGENT_WATCH_MAX];
+	int watch_event_type[AGENT_WATCH_MAX];
+	char watch_filter[AGENT_WATCH_MAX][AGENT_WATCH_FILTER_SIZE];
+	uint64 ipc_route_source[AGENT_IPC_ROUTE_MAX];
+	uint64 ipc_route_events[AGENT_IPC_ROUTE_MAX];
+	struct agent_event events[AGENT_EVENT_QUEUE_CAP];
+	uint64 event_source_control[AGENT_EVENT_QUEUE_CAP];
+	uint64 event_span_owner[AGENT_EVENT_QUEUE_CAP];
+	uint64 event_audit_principal[AGENT_EVENT_QUEUE_CAP];
+	uint64 event_accounting[AGENT_EVENT_QUEUE_CAP];
+	struct agent_sched_record sched_records[AGENT_SCHED_TRACE_CAP];
+};
+
+_Static_assert(sizeof(struct agent_ipc_observe_cold_state) == PAGE_SIZE,
+	       "Agent IPC/observe cold state must fill one page");
+
+// 每进程状态
 struct proc {
-	enum procstate state; // Process state
-	int pid; // Process ID
-	pagetable_t pagetable; // User page table
+	enum procstate state; // 进程状态
+	int pid; // 进程号
+	pagetable_t pagetable; // 用户页表
 	uint64 max_page;
-	uint64 ustack_base; // Virtual address of user stack base
-	uint64 heap_base; // First byte controlled by brk/sbrk
-	uint64 heap_break; // Published byte-granular program break
-	struct proc *parent; // Parent process; NULL means kernel-owned
+	uint64 ustack_base; // 用户栈基址
+	uint64 heap_base; // brk/sbrk 管理的首字节
+	uint64 heap_break; // 已发布的字节粒度堆边界
+	struct proc *parent; // 父进程；NULL 表示由内核持有
 	uint live_child_count;
 	struct resource_account_handle resource_account;
-	// Scheduler partition index; accounting identity is resource_account.
+	// 调度分区索引；计费身份由 resource_account 表示。
 	int resource_domain_id;
 	uint storage_principal_id;
 	int resource_slot_reserved;
@@ -251,7 +267,7 @@ struct proc {
 	uint vfs_bound_exec_dev;
 	uint vfs_bound_exec_inum;
 	uint vfs_bound_exec_incarnation;
-	//File descriptor table, using to record the files opened by the process
+	// 文件描述符表，记录进程已打开的文件。
 	struct file *files[FD_BUFFER_SIZE];
 	struct thread threads[NTHREAD];
 	struct wait_queue child_waiters;
@@ -261,12 +277,13 @@ struct proc {
 	struct wait_queue agent_context_lane_waiters;
 	int agent_context_lane_owner_tid;
 	uint agent_context_lane_depth;
-	// Use dummy increasing id as index index of lock pool because we don't have destroy method yet
+	// 当前同步对象没有销毁接口，暂用单调递增编号索引固定池。
 	uint next_mutex_id, next_semaphore_id, next_condvar_id;
 	struct mutex mutex_pool[LOCK_POOL_SIZE];
 	struct semaphore semaphore_pool[LOCK_POOL_SIZE];
 	struct condvar condvar_pool[LOCK_POOL_SIZE];
-	uint64 syscall_count[SYSCALL_COUNT_MAX];
+	/* trace() 返回 int；计数饱和而不回绕，保持性能快照单调。 */
+	uint syscall_count[SYSCALL_COUNTER_SLOTS];
 	struct agent_legacy_mailbox *mail_sidecar;
 	uint64 legacy_mail_endpoint_generation;
 	int is_agent;
@@ -294,24 +311,14 @@ struct proc {
 	uint64 context_cause_branch_generation;
 	uint64 context_path_rollback_count;
 	uint64 agent_ctx_kva[AGENT_CONTEXT_PAGES];
-	uint64 agent_shadow_kva[AGENT_CONTEXT_PAGES];
+	struct agent_ipc_observe_cold_state *agent_ipc_observe_cold;
 	int agent_mailbox_valid;
 	int agent_mailbox_from;
 	char agent_mailbox[AGENT_EVENT_PAYLOAD_SIZE];
 	int agent_watch_count;
-	int agent_watch_valid[AGENT_WATCH_MAX];
-	int agent_watch_event_type[AGENT_WATCH_MAX];
-	char agent_watch_filter[AGENT_WATCH_MAX][AGENT_WATCH_FILTER_SIZE];
-	// Inbound routes bind senders to non-reused kernel control IDs.
+	// 入站路由把发送者绑定到不可复用的内核控制标识。
 	int agent_ipc_route_count;
-	uint64 agent_ipc_route_source[AGENT_IPC_ROUTE_MAX];
-	uint64 agent_ipc_route_events[AGENT_IPC_ROUTE_MAX];
-	struct agent_event agent_events[AGENT_EVENT_QUEUE_CAP];
-	// Source identities stay private so the public event ABI cannot forge them.
-	uint64 agent_event_source_control[AGENT_EVENT_QUEUE_CAP];
-	uint64 agent_event_span_owner[AGENT_EVENT_QUEUE_CAP];
-	uint64 agent_event_audit_principal[AGENT_EVENT_QUEUE_CAP];
-	uint64 agent_event_accounting[AGENT_EVENT_QUEUE_CAP];
+	// 事件正文及可信来源身份位于按需冷页，公开 ABI 无法伪造。
 	int agent_event_head;
 	int agent_event_tail;
 	int agent_event_count_queued;
@@ -345,12 +352,6 @@ struct proc {
 	struct resource_account_handle agent_state_account;
 	enum resource_charge_class agent_state_charge_class;
 	uint agent_state_charged_pages;
-	uint64 agent_prefetch_sequence;
-	int agent_prefetch_count;
-	int agent_prefetch_head;
-	struct agent_file_prefetch_hint
-		agent_prefetch_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
-	uint64 agent_prefetch_span_owner[AGENT_FILE_PREFETCH_MAX_HINTS];
 	int agent_sched_policy;
 	int agent_sched_weight;
 	int agent_sched_priority;
@@ -367,7 +368,6 @@ struct proc {
 	uint64 agent_sched_last_reason;
 	uint64 agent_sched_trace_count;
 	uint64 agent_sched_trace_head;
-	struct agent_sched_record agent_sched_records[AGENT_SCHED_TRACE_CAP];
 	uint64 agent_current_span_id;
 	uint64 agent_current_span_owner;
 	uint64 agent_current_cause_sequence;
@@ -411,9 +411,9 @@ void proc_revoke_vfs_scope_fds(struct proc *);
 int exec(char *, char **);
 int wait(int, int *);
 void add_task(struct thread *);
+int scheduler_has_runnable_peer(void);
 struct thread *id_to_task(int);
 int task_to_id(struct thread *);
-struct thread *pop_task();
 struct proc *allocproc();
 void freeproc(struct proc *);
 int allocthread(struct proc *p, uint64 entry, int alloc_user_res);
@@ -424,7 +424,7 @@ int fdinstall(int, struct file *);
 void fdrelease(int);
 int fd_is_reserved(struct file *);
 struct file *fdget(int);
-/* -1 invalid, 0 detached/non-final, 1 detached with a prepared receipt. */
+/* -1 表示无效；0 表示已分离但非末引用；1 表示已分离且回执就绪。 */
 int fdclose_prepare(int, struct file_close_receipt *);
 int fdclose(int);
 int proc_file_slots_reserve(struct proc *, uint,

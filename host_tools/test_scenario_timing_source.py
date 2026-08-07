@@ -597,8 +597,55 @@ def main() -> int:
         1,
     )
     _reject(changed)
+    _reject(_case(
+        sources,
+        "os/syscall.c",
+        "syscall_dispatch",
+        "ret = sys_agent_resource_snapshot(trapframe->a0,",
+        "ret = forged_resource_snapshot(trapframe->a0,",
+    ))
+    _reject(_case(
+        sources,
+        "os/syscall.c",
+        "syscall_dispatch",
+        "sys_agent_resource_snapshot(trapframe->a0,\n\t\t\t\t\t\t  trapframe->a1)",
+        "sys_agent_resource_snapshot(trapframe->a1,\n\t\t\t\t\t\t  trapframe->a0)",
+    ))
+    _reject(_case(
+        sources,
+        "os/syscall.c",
+        "syscall_dispatch",
+        "ret = sys_agent_resource_snapshot(trapframe->a0,\n"
+        "\t\t\t\t\t\t  trapframe->a1);\n"
+        "\t\tbreak;",
+        "if (0) {\n"
+        "\t\t\tret = sys_agent_resource_snapshot(trapframe->a0,\n"
+        "\t\t\t\t\t\t  trapframe->a1);\n"
+        "\t\t}\n"
+        "\t\tbreak;",
+    ))
+    _reject(_case(
+        sources,
+        "os/syscall.c",
+        "syscall_dispatch",
+        "ret = sys_agent_resource_snapshot(trapframe->a0,\n"
+        "\t\t\t\t\t\t  trapframe->a1);\n"
+        "\t\tbreak;",
+        "ret = sys_agent_resource_snapshot(trapframe->a0,\n"
+        "\t\t\t\t\t\t  trapframe->a1);\n"
+        "\t\tif (1) {\n"
+        "\t\t\tbreak;\n"
+        "\t\t}",
+    ))
 
     performance_abi = "agent_performance_abi.h"
+    _reject(_case(
+        sources,
+        "os/syscall.c",
+        "syscall_dispatch",
+        "ret = sys_agent_performance_snapshot(trapframe->a0,",
+        "ret = forged_performance_snapshot(trapframe->a0,",
+    ))
     _reject(_case(
         sources,
         observer,
@@ -685,35 +732,35 @@ def main() -> int:
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfers",
+        "bio_account_transfer_batch",
         "io_policy.physical_reads += count;",
         "io_policy.physical_writes += count;",
     ))
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfers",
+        "bio_account_transfer_batch",
         "io_policy.physical_writes += count;",
         "io_policy.physical_writes += 1;",
     ))
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfers",
+        "bio_account_transfer_batch",
         "io_policy.physical_flushes += count;",
         "io_policy.physical_flushes += 1;",
     ))
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfers",
+        "bio_account_transfer_batch",
         "successful = count - failed;",
         "successful = count;",
     ))
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfers",
+        "bio_account_transfer_batch",
         "io_policy.failed_transfers += failed;",
         "io_policy.failed_transfers += count;",
     ))
@@ -741,14 +788,14 @@ def main() -> int:
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfers",
+        "bio_account_transfer_batch",
         "io_policy.successful_writes += successful;",
         "io_policy.successful_writes += count;",
     ))
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfers",
+        "bio_account_transfer_batch",
         "io_policy.successful_flushes += successful;",
         "io_policy.successful_flushes += count;",
     ))
@@ -763,14 +810,16 @@ def main() -> int:
         sources,
         "os/bio.c",
         "bio_account_transfer_batch",
-        "bio_account_transfers(owner, io_class, transfer, results, count);",
+        "for (uint i = 0; i < count; i++)\n"
+        "\t\tif (results[i] < 0)\n"
+        "\t\t\tfailed++;",
         "for (uint i = 0; i < count; i++)\n"
         "\t\tbio_account_transfer(owner, io_class, transfer, results[i]);",
     ))
     _reject(_case(
         sources,
         "os/bio.c",
-        "bio_account_transfers",
+        "bio_account_transfer_batch",
         "if (*transfers >= IO_RATE_LOCAL_BATCH)",
         "if (*transfers >= 1)",
     ))

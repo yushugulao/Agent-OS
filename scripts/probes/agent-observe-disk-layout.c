@@ -7,6 +7,7 @@
 #define LAYOUT_DESCRIPTOR_MAGIC 0x41474f42534c5931ULL
 #define LAYOUT_DESCRIPTOR_VERSION 2U
 #define LAYOUT_WORDS 129U
+#define AGENT_AUDIT_PERSISTED_KIND_MAX 5U
 
 #define MEMBER_OFFSET(type, member) __builtin_offsetof(type, member)
 #define MEMBER_SIZE(type, member) sizeof(((type *)0)->member)
@@ -195,7 +196,7 @@ const struct agent_observe_disk_layout_descriptor
 		MEMBER_SIZE(struct agent_audit_record, sequence),
 		AGENT_AUDIT_KIND_EVENT_ENQUEUE,
 		AGENT_AUDIT_KIND_EVENT_CONSUME,
-		AGENT_AUDIT_KIND_PREFETCH,
+		AGENT_AUDIT_PERSISTED_KIND_MAX,
 		0x7fffffffU,
 	},
 };

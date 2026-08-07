@@ -48,9 +48,8 @@ struct vfs_scope_ref {
 };
 
 /*
- * Scope admission is bounded by the lifecycle ledger, not the process table.
- * Keep a compact, hashed registry so the VFS authorization path never pays an
- * entire process-table scan. Links encode slot + 1; zero is the null link.
+ * scope 接纳由生命周期账本限流，而非进程表。紧凑哈希表避免 VFS
+ * 鉴权扫描整个进程表；链值为槽号加一，零表示空链。
  */
 struct vfs_scope_registry {
 	struct vfs_scope_ref refs[VFS_SCOPE_LIFECYCLE_CAP];
@@ -63,6 +62,7 @@ struct vfs_scope_registry {
 	uint active_count;
 	uint retiring_count;
 	uint free_count;
+	uint64 reap_next_tick;
 	int initialized;
 };
 
@@ -89,7 +89,7 @@ static uint vfs_scope_slot(uint link)
 
 static uint vfs_scope_hash(uint scope_id)
 {
-	/* Dynamic scope ids are monotonic, so low-bit bucketing is well spread. */
+	/* 动态 scope ID 单调递增，低位取模分布均匀。 */
 	return scope_id % VFS_SCOPE_LIFECYCLE_CAP;
 }
 
@@ -304,7 +304,7 @@ static int vfs_scope_create(uint scope_id,
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC || lifecycle == 0)
 		return -1;
 	*lifecycle = workflow_lifecycle_none();
-	/* Lease renewal may sleep; it must precede the scope allocation lock. */
+	/* 租约续期可能睡眠，必须在获取 scope 分配锁前完成。 */
 	if (workflow_lifecycle_prepare_create() < 0)
 		return -1;
 	enabled = intr_save();
@@ -388,10 +388,8 @@ static int vfs_scope_release(uint scope_id,
 		fs_storage_scope_account_close(storage);
 		bio_scope_quiesce(scope_id);
 		/*
-		 * The last reference is the edge that makes this lifecycle
-		 * reclaimable.  Publish it only after the storage and I/O owners are
-		 * quiesced; every exit, revocation, and rollback path reaches this
-		 * common release boundary.
+		 * 最后一个引用决定生命周期可回收。先静默存储与 I/O 所有者，
+		 * 再发布回收请求；退出、撤销和回滚都汇入此释放边界。
 		 */
 		agent_background_request();
 	}
@@ -406,7 +404,7 @@ vfs_scope_reclaim_advance(uint scope_id,
 	int advanced = 0;
 	int enabled;
 
-	/* Slow phase work runs unlocked; the immutable key guards publication. */
+	/* 慢阶段无锁执行，发布前以不可变 key 重新校验。 */
 	enabled = intr_save();
 	{
 		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
@@ -470,7 +468,7 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 		if (status == FS_RECLAIM_PENDING)
 			return;
 		if (status < 0) {
-			/* A failed labelled cleanup needs a full consistency pass. */
+			/* 标签清理失败后执行完整一致性扫描。 */
 			agent_file_request_scan();
 			return;
 		}
@@ -508,9 +506,8 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 		    workflow_lifecycle_retiring(lifecycle)) {
 			if (preserve_files &&
 			    workflow_lifecycle_reclaim(lifecycle) == 0) {
-				// A completed boot lease remains an admitted, inactive
-				// storage owner until reboot. This keeps its durable
-				// output in the same guarantee calculation.
+				// 已完成的启动租约在重启前仍是已接纳的非活跃存储主体，
+				// 其持久输出继续计入同一保留量。
 				vfs_scope_retiring_remove_locked(ref);
 				ref->lifecycle = workflow_lifecycle_none();
 			} else if (!preserve_files &&
@@ -540,28 +537,23 @@ static int vfs_scope_preserve_on_retire(uint scope_id)
 	return result;
 }
 
-static int vfs_scope_reap_work_pending(void)
-{
-	struct vfs_scope_registry *registry = &vfs_scope_registry;
-	int enabled = intr_save();
-	int pending;
-
-	vfs_scope_registry_init_locked();
-	pending = registry->retiring_count != 0;
-	intr_restore(enabled);
-	return pending;
-}
-
-void vfs_scope_reap_pending(void)
+void vfs_scope_reap_pending(uint64 now)
 {
 	uint scope_id = VFS_SCOPE_NONE;
 	uint reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
 	int enabled = intr_save();
-	struct vfs_scope_ref *ref = vfs_scope_retiring_next_locked();
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	struct vfs_scope_ref *ref;
 
+	vfs_scope_registry_init_locked();
+	ref = registry->reap_next_tick != 0 &&
+		      now < registry->reap_next_tick ?
+		0 : vfs_scope_retiring_next_locked();
 	if (ref != 0) {
 		scope_id = ref->scope_id;
 		reclaim_phase = ref->reclaim_phase;
+		/* 同一时钟滴答只推进一个有界阶段，避免传统 syscall 代偿回收。 */
+		registry->reap_next_tick = now + 1;
 	}
 	intr_restore(enabled);
 	if (scope_id == VFS_SCOPE_NONE)
@@ -572,13 +564,22 @@ void vfs_scope_reap_pending(void)
 		vfs_scope_reclaim_complete(scope_id);
 		bio_background_end();
 	}
-	/*
-	 * One checkpoint performs at most one bounded phase.  Re-arm the neutral
-	 * edge from level state after the phase: requests concurrent with the
-	 * earlier atomic take remain set, while requests coalesced into that take
-	 * cannot strand a still-retiring lifecycle.
-	 */
-	if (vfs_scope_reap_work_pending())
+	enabled = intr_save();
+	if (registry->retiring_count == 0)
+		registry->reap_next_tick = 0;
+	intr_restore(enabled);
+}
+
+void
+vfs_scope_reap_tick(uint64 now)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	uint64 next = __atomic_load_n(&registry->reap_next_tick,
+				      __ATOMIC_ACQUIRE);
+
+	/* 这里只发布幂等边，允许读取到稍旧快照，不能在中断中扫描 registry。 */
+	if (__atomic_load_n(&registry->retiring_count, __ATOMIC_ACQUIRE) != 0 &&
+	    (next == 0 || now >= next))
 		agent_background_request();
 }
 
@@ -712,10 +713,8 @@ int vfs_scope_close_trusted(uint scope_id,
 	return result;
 }
 
-// Return the unconsumed storage guarantee that an allocation must leave for
-// every admitted or future workflow slot. Retiring scopes still occupy an
-// admission slot, so their charged usage offsets that slot's guarantee rather
-// than being counted again as a completely empty future slot.
+// 返回本次分配后必须为已接纳及未来 workflow 槽保留的存储量。退出中的
+// scope 仍占接纳槽，其已用量抵扣本槽保留量，不能再按空槽重复计算。
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 {
 	struct vfs_scope_registry *registry = &vfs_scope_registry;
@@ -827,10 +826,9 @@ void vfs_cred_from_proc(const struct proc *p, struct vfs_cred *cred)
 	if (cred == 0)
 		return;
 	cred->scope_id = p ? p->vfs_scope_id : VFS_SCOPE_NONE;
-	// A provisional boot/workflow principal is not an effective credential.
-	// Until the trusted image install activates its scope, the process has only
-	// PUBLIC filesystem authority.  This also lets delegated workers resolve
-	// their sealed image without exposing the pending workflow principal.
+	// 临时启动或 workflow 主体不是有效凭据。可信映像激活 scope 前，
+	// 进程只有 PUBLIC 文件权限；委派 worker 也可据此解析密封映像，
+	// 而不暴露待激活的 workflow 主体。
 	cred->storage_principal_id = p == 0 ? FS_OWNER_NONE :
 		p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
 		p->storage_principal_id : FS_OWNER_PUBLIC;
@@ -904,8 +902,7 @@ void vfs_proc_lifecycle_release(struct proc *p)
 	if (!workflow_lifecycle_key_valid(lifecycle) ||
 	    workflow_lifecycle_scope(lifecycle, &scope_id) < 0)
 		panic("workflow lifecycle credential");
-	// Clear only at final process teardown. Credential drop and exec must not
-	// let a descendant escape the immutable termination lineage.
+	// 仅在进程最终销毁时清除，降权或 exec 不得逃离不可变终止谱系。
 	p->workflow_lifecycle_charged = 0;
 	p->workflow_lifecycle_id = WORKFLOW_LIFECYCLE_ID_NONE;
 	p->workflow_lifecycle_generation = 0;
@@ -953,9 +950,8 @@ void vfs_proc_reset(struct proc *p)
 	vfs_proc_clear_credentials(p);
 }
 
-// Terminal teardown has already revoked controller authority and detached the
-// complete FD table. It only clears the no-longer-published credential; the
-// immutable lifecycle reference is released by the following settlement phase.
+// 最终销毁已撤销控制权并分离全部 FD；此处只清除不再发布的凭据，
+// 不可变生命周期引用由后续结算阶段释放。
 void vfs_proc_terminal_clear(struct proc *p)
 {
 	vfs_proc_clear_credentials(p);
@@ -1333,7 +1329,7 @@ int vfs_proc_exec_prepare(struct proc *p, const struct user_image *image,
 		vfs_exec_target_public(transition);
 
 prepared:
-	/* Prepare is deliberately side-effect free; revocation belongs to commit. */
+	/* prepare 不产生副作用，撤销只在 commit 阶段执行。 */
 	transition->prepared = 1;
 	return 0;
 }
@@ -1387,7 +1383,7 @@ int vfs_proc_exec_commit(struct proc *p,
 
 	if (vfs_proc_exec_validate_locked(p, transition) < 0)
 		return -1;
-	/* A caller may not publish PUBLIC VFS credentials around stale Agent state. */
+	/* Agent 状态未清空时，不得发布 PUBLIC VFS 凭据。 */
 	if (transition->identity_policy == VFS_EXEC_IDENTITY_PUBLIC &&
 	    (p->is_agent || p->agent_type != AGENT_TYPE_NONE ||
 	     p->agent_role != 0 || p->agent_control_id != 0 ||
@@ -1521,9 +1517,8 @@ int vfs_inode_authorize(struct inode *ip, const struct vfs_cred *cred,
 	if (ip->vfs_policy == VFS_POLICY_ROOT) {
 		if (op == VFS_OP_LOOKUP || op == VFS_OP_READ)
 			return 1;
-		// Raw directory bytes are kernel-private. User credentials receive
-		// only target-aware namespace operations implemented by
-		// fs_create/dirlink/dirunlink.
+		// 原始目录字节仅供内核访问；用户凭据只能调用按目标鉴权的
+		// fs_create、dirlink 和 dirunlink。
 		if (op == VFS_OP_CREATE || op == VFS_OP_DELETE) {
 			if (cred->scope_id == VFS_SCOPE_NONE)
 				return 1;

@@ -11,7 +11,6 @@ struct inode;
 void agent_metadata_scan_init(void);
 void agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *);
 int agent_metadata_scan_plan(uint64);
-int agent_metadata_scan_work_pending(void);
 uint agent_metadata_scan_step(uint64, int, int);
 uint agent_metadata_scan_index_inode(struct inode *, char *, int *);
 uint agent_metadata_scan_apply_defaults(struct agent_file_meta *, char *, int *);

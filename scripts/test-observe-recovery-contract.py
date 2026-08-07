@@ -261,7 +261,8 @@ def validate_checkpoint_sparse_chain_contract(
         "entry->link_flags & AGENT_OBSERVE_LINK_PREV_RETAINED",
         "entry->identity_class == AGENT_OBSERVE_IDENTITY_CAUSAL",
         "entry->identity_class == AGENT_OBSERVE_IDENTITY_AUTHORITY",
-        "record->kind < 0 || record->kind > AGENT_AUDIT_KIND_PREFETCH",
+        "record->kind < 0 ||\n"
+        "\t    (uint)record->kind >= AGENT_AUDIT_KIND_SLOT_COUNT",
         "record->agent_id < 0",
         "record->record_hash != agent_observe_checkpoint_record_hash(record)",
     ):
@@ -1837,14 +1838,18 @@ target_done = function_body(
 background = function_body(
     metadata_store, "agent_metadata_store_background_maintain(void)"
 )
+store_tick = function_body(metadata_store, "agent_metadata_store_tick(uint64 now)")
 assert "agent_durable_section_scope_pending(scope_id)" in retire
 assert "state->dirty_generation != state->durable_generation" in retire
 assert "state->dirty_generation != state->replicated_generation" in retire
 assert "agent_file_writeback_scope_busy(scope_id)" in retire
 assert "agent_metadata_txn_lock(0)" in target_done
 assert "agent_file_scope_state_retire(scope_id, target)" in target_done
-assert "agent_durable_section_retry_pending()" in background
-assert "durable_pending || agent_file_writeback_pending()" in background
+assert "agent_durable_section_retry_pending()" not in background
+assert "agent_background_request()" not in background
+assert "agent_durable_section_retry_pending()" in store_tick
+assert "agent_file_writeback_ready(now)" in store_tick
+assert "agent_background_request()" in store_tick
 
 workload = (ROOT / "user/src/agentobsreboot_ucore.c").read_text(
     encoding="utf-8"
@@ -3963,22 +3968,21 @@ def validate_observation_recursion_suppression(
             ("agent_observe_recording_suppressed", "(", "p", ")"),
             ("agent_observe_ledger_record_effect", "("),
         ),
-        (
-            "agent_observe_record_prefetch",
-            ("agent_observe_recording_suppressed", "(", "p", ")"),
-            ("agent_observe_ledger_record_prefetch", "("),
-        ),
-        (
-            "agent_observe_record_prefetch_handoff_locked",
-            ("agent_observe_recording_suppressed", "(", "target", ")"),
-            ("agent_observe_ledger_record_prefetch_handoff_locked", "("),
-        ),
     )
     for function_name, suppress_pattern, publish_pattern in facade_contracts:
         body = c_tokens(function_body_named(facade_source, function_name))
         suppress = token_index(body, suppress_pattern)
         publish = token_index(body, publish_pattern, suppress)
         assert suppress < publish
+
+    for retired_producer in (
+        "agent_observe_record_prefetch",
+        "agent_observe_record_prefetch_handoff_locked",
+        "agent_observe_ledger_record_prefetch",
+        "agent_observe_ledger_record_prefetch_handoff_locked",
+    ):
+        assert retired_producer not in facade_source
+        assert retired_producer not in ledger_source
 
     sched_facade = c_tokens(
         function_body_named(facade_source, "agent_observe_record_sched")
@@ -4008,7 +4012,7 @@ def validate_observation_recursion_suppression(
         ("agent_observe_record_sched", "(", "t", ",", "&", "record", ")"),
     )
     for ring_field in (
-        "agent_sched_records",
+        "sched_records",
         "agent_sched_trace_head",
         "agent_sched_trace_count",
     ):
@@ -4300,10 +4304,9 @@ assert receipt_workload.index(failed_wait) < receipt_workload.index(positive_tar
 assert receipt_workload.index(positive_target) < receipt_workload.index(positive_identity)
 
 syscall_source = (ROOT / "os/syscall.c").read_text(encoding="utf-8")
-io_admission = c_tokens(
-    function_body_named(syscall_source, "syscall_may_issue_block_io")
-)
-syscall_dispatch = c_tokens(function_body_named(syscall_source, "syscall"))
+syscall_registry = (ROOT / "os/syscall_counter.h").read_text(encoding="utf-8")
+syscall_dispatch = c_tokens(function_body_named(syscall_source, "syscall_dispatch"))
+syscall_slow = c_tokens(function_body_named(syscall_source, "syscall_slow_path"))
 syscall_begin = c_tokens(
     function_body_named(syscall_source, "syscall_transaction_begin")
 )
@@ -4314,13 +4317,17 @@ user_header = (ROOT / "user/include/agent.h").read_text(encoding="utf-8")
 for ids in (kernel_ids, user_ids):
     assert "SYS_agent_audit_receipt 557" in ids
 assert "case SYS_agent_audit_receipt:" in syscall_source
-assert "sys_agent_audit_receipt(args[0])" in syscall_source
-assert token_count(io_admission, ("SYS_agent_audit_receipt",)) == 0
+assert "sys_agent_audit_receipt(trapframe->a0)" in syscall_source
+assert "X(agent_audit_receipt, BLOCK_IO, ALWAYS)" in syscall_registry
 transaction_begin = token_index(
-    syscall_dispatch, ("syscall_transaction_begin", "(", "&", "transaction", ")")
+    syscall_slow,
+    ("syscall_transaction_begin", "(", "&", "transaction", ",", "trapframe", ")"),
 )
-dispatch_switch = token_index(syscall_dispatch, ("switch", "(", "id", ")"))
-assert transaction_begin < dispatch_switch
+dispatch_call = token_index(
+    syscall_slow,
+    ("syscall_dispatch", "(", "id", ",", "trapframe", ",", "&", "transaction", ")"),
+)
+assert transaction_begin < dispatch_call
 io_begin = token_index(syscall_begin, ("bio_request_begin_current", "(", ")"))
 io_marked = token_index(
     syscall_begin, ("io_admitted", "=", "1", ";"), io_begin
@@ -4380,7 +4387,12 @@ def validate_timeline_wait_contract(source: str) -> None:
         ("slot", "=", "p", "->", "agent_sched_trace_head", "AGENT_SCHED_TRACE_CAP"),
     )
     ring_copy = token_index(
-        sched_record, ("memmove", "(", "&", "p", "->", "agent_sched_records"), ring_slot
+        sched_record,
+        (
+            "memmove", "(", "&", "p", "->", "agent_ipc_observe_cold",
+            "->", "sched_records",
+        ),
+        ring_slot,
     )
     ring_head = token_index(
         sched_record,

@@ -45,7 +45,7 @@ void *memmove(void *dst, const void *src, uint n)
 	return dst;
 }
 
-// memcpy exists to placate GCC.  Use memmove.
+// GCC 可能生成 memcpy 调用；本内核统一复用 memmove 语义。
 void *memcpy(void *dst, const void *src, uint n)
 {
 	return memmove(dst, src, n);
@@ -93,8 +93,4 @@ int strlen(const char *s)
 	for (n = 0; s[n]; n++)
 		;
 	return n;
-}
-
-void dummy(int _, ...)
-{
 }

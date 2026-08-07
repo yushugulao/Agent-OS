@@ -12,8 +12,8 @@ static uint input_write;
 static int input_initialized;
 static struct wait_queue input_waiters;
 
-// SBI console input is polled, so the timer moves bytes into a kernel queue
-// and turns an otherwise runnable polling loop into an interruptible sleep.
+// SBI 控制台输入采用轮询，时钟中断把字节搬入内核队列，
+// 将原本持续运行的轮询改为可中断休眠。
 static uint console_poll_locked()
 {
 	uint added = 0;
@@ -38,11 +38,6 @@ static int console_dequeue_locked()
 	if (input_read == input_write)
 		return -1;
 	return (uchar)input_buffer[input_read++ % CONSOLE_INPUT_CAP];
-}
-
-void consputc(int c)
-{
-	console_putchar(c);
 }
 
 void console_init()

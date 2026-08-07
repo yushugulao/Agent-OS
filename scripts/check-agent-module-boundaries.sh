@@ -35,8 +35,7 @@ agent_metadata_catalog
 agent_metadata_directory
 agent_metadata_journal
 agent_metadata_objects
-agent_metadata_prefetch
-agent_metadata_probe
+ agent_metadata_probe
 agent_metadata_query
 agent_metadata_recovery
 agent_metadata_scan
@@ -70,14 +69,14 @@ for module in ${modules}; do
 	: >"${TMP_FILE}"
 done
 
-# The ownership splits have exactly twenty-one reviewed size-optimized translation
+# The ownership splits have exactly twenty reviewed size-optimized translation
 # units. Keep the build rule target-local and reject silent policy expansion.
 makefile="${ROOT_DIR}/Makefile"
 size_optimized_modules="$(sed -n \
 	's/^AGENT_SIZE_OPTIMIZED_MODULES[[:space:]]*:=[[:space:]]*//p' \
 	"${makefile}")"
 [ "${size_optimized_modules}" = \
-	"agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_prefetch agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store" ] ||
+	"agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store" ] ||
 	fail "Agent size-optimization allowlist drifted"
 grep -q -F '$(AGENT_SIZE_OPTIMIZED_OBJS): private CFLAGS += -Os' \
 	"${makefile}" || fail "Agent size optimization is not target-local"
@@ -150,7 +149,7 @@ for path in "${ROOT_DIR}"/os/agent*.c; do
 	agent | agent_background | agent_core | agent_context | agent_context_path | agent_durable_section | agent_file_state | agent_identity | agent_identity_lease | agent_ipc | \
 		agent_lifecycle | agent_metadata | agent_metadata_actions | agent_metadata_objects | \
 	agent_metadata_catalog | agent_metadata_directory | agent_metadata_journal | agent_metadata_probe | agent_metadata_query | agent_metadata_recovery | agent_metadata_recovery_test | agent_metadata_scan | \
-	agent_metadata_prefetch | agent_metadata_store | agent_metadata_store_format | agent_metadata_store_io | agent_metadata_test | agent_observe | agent_observe_audit_query | agent_observe_capacity | \
+	agent_metadata_store | agent_metadata_store_format | agent_metadata_store_io | agent_metadata_test | agent_observe | agent_observe_audit_query | agent_observe_capacity | \
 	agent_observe_ledger | agent_observe_recovery | agent_observe_store | agent_observe_test | agent_observe_timeline | \
 	agent_resource | agent_tool_protocol)
 		;;
@@ -159,6 +158,17 @@ for path in "${ROOT_DIR}"/os/agent*.c; do
 		;;
 	esac
 done
+
+for retired_path in os/agent_metadata_prefetch.c os/agent_metadata_prefetch.h; do
+	[ ! -e "${ROOT_DIR}/${retired_path}" ] ||
+		fail "retired metadata hint owner returned: ${retired_path}"
+done
+if grep -R -n -E 'agent_(metadata_)?prefetch|AGENT_FILE_PREFETCH|SYS_agent_file_prefetch' \
+	"${ROOT_DIR}/os" "${ROOT_DIR}/user/include" "${ROOT_DIR}/user/lib" \
+	--include='*.c' --include='*.h' --include='*.in' >"${TMP_FILE}"; then
+	fail "retired metadata hint mechanism returned"
+fi
+: >"${TMP_FILE}"
 
 # Lifecycle identity retirement returns an immutable endpoint key to the core
 # coordinator.  IPC remains the sole route-table owner and is called while the
@@ -370,7 +380,6 @@ agent_metadata_probe.h
  agent_metadata_store_io.h
 agent_metadata_query.h
 agent_metadata_scan.h
-agent_metadata_prefetch.h
 "
 metadata_disk_abi="${ROOT_DIR}/agent_metadata_disk_abi.h"
 [ -f "${metadata_disk_abi}" ] || fail "shared metadata disk ABI is missing"
@@ -512,7 +521,7 @@ if grep -n -E 'agent_(metadata_(actions|catalog|store|query|scan|directory)|file
 	fail "metadata owner APIs leaked into os/agent_internal.h"
 fi
 : >"${TMP_FILE}"
-if grep -n -E '#include[[:space:]]+"agent_(metadata_(actions|catalog|internal|prefetch|probe|query|scan|directory|store_format|store_io)|file_(state_internal|name_policy)|query|scan|directory).*\.h"' \
+if grep -n -E '#include[[:space:]]+"agent_(metadata_(actions|catalog|internal|probe|query|scan|directory|store_format|store_io)|file_(state_internal|name_policy)|query|scan|directory).*\.h"' \
 	"${shared_contract}" >"${TMP_FILE}"; then
 	fail "metadata private contract included by os/agent_internal.h"
 fi
@@ -530,7 +539,7 @@ core_exec="$(sed -n '/^int agent_core_exec_public_commit(/,/^}/p' \
 	"${core_source}")"
 core_tick="$(sed -n '/^void agent_core_tick(/,/^}/p' \
 	"${core_source}")"
-owner_fields='->(agent_ctx_|agent_shadow_|context_path_|latest_response_offset|records_offset|agent_current_|agent_context_chain_hash|mail_|agent_mailbox|agent_watch_|agent_ipc_|agent_event_|agent_wait_|heartbeat_interval|agent_last_heartbeat_tick|loop_state|agent_sched_|agent_timeline_|agent_observe_|agent_provenance_edges)'
+owner_fields='->(agent_ctx_|context_path_|latest_response_offset|records_offset|agent_current_|agent_context_chain_hash|mail_|agent_mailbox|agent_watch_|agent_ipc_|agent_event_|agent_wait_|heartbeat_interval|agent_last_heartbeat_tick|loop_state|agent_sched_|agent_timeline_|agent_observe_|agent_provenance_edges)'
 for body_name in core_clear core_make core_exec core_tick; do
 	body="$(eval "printf '%s' \"\${${body_name}}\"")"
 	[ -n "${body}" ] || fail "missing Agent core owner boundary: ${body_name}"
@@ -614,7 +623,6 @@ catalog_source="${ROOT_DIR}/os/agent_metadata_catalog.c"
 metadata_source="${ROOT_DIR}/os/agent_metadata.c"
 actions_source="${ROOT_DIR}/os/agent_metadata_actions.c"
 objects_source="${ROOT_DIR}/os/agent_metadata_objects.c"
-prefetch_source="${ROOT_DIR}/os/agent_metadata_prefetch.c"
 directory_source="${ROOT_DIR}/os/agent_metadata_directory.c"
 scan_source="${ROOT_DIR}/os/agent_metadata_scan.c"
 store_source="${ROOT_DIR}/os/agent_metadata_store.c"
@@ -634,9 +642,9 @@ if grep -n -E '\bscan_(ctl|control)\b|\bscan\.(offset|seen|next_tick|last_step_t
 	fail "metadata objects retained scan-owned state or directory traversal"
 fi
 : >"${TMP_FILE}"
-if grep -n -E '\bagent_(action_history|dependencies|dependency_generation|status_batch_undo)\b|agent_file_prefetch_(store|update|handoff)[[:space:]]*\(|^int[[:space:]]+sys_agent_file_prefetch_' \
+if grep -n -E '\bagent_(action_history|dependencies|dependency_generation|status_batch_undo)\b' \
 	"${objects_source}" >"${TMP_FILE}"; then
-	fail "metadata objects retained action/dependency or prefetch ownership"
+	fail "metadata objects retained action/dependency ownership"
 fi
 : >"${TMP_FILE}"
 for actions_owner_operation in 'agent_metadata_actions_reclaim_scope(scope_id)' \
@@ -644,13 +652,6 @@ for actions_owner_operation in 'agent_metadata_actions_reclaim_scope(scope_id)' 
 	'agent_metadata_actions_dependency_update('; do
 	grep -q -F "${actions_owner_operation}" "${objects_source}" ||
 		fail "metadata objects lost actions owner delegation: ${actions_owner_operation}"
-done
-for prefetch_owner_operation in 'agent_metadata_prefetch_update(' \
-	'agent_metadata_prefetch_handoff(' \
-	'sys_agent_file_prefetch_snapshot(' \
-	'sys_agent_file_prefetch_span_snapshot('; do
-	grep -q -F "${prefetch_owner_operation}" "${prefetch_source}" ||
-		fail "metadata prefetch lost owner operation: ${prefetch_owner_operation}"
 done
 if grep -n -E '^static[[:space:]]+struct[[:space:]]+agent_(action_history_entry|dependency_entry|status_batch_undo)' \
 	"${objects_source}" >"${TMP_FILE}"; then
@@ -747,6 +748,7 @@ done
 # metadata sweep in BEGIN, resumable namespace work in FILES, and generation
 # polling in METADATA; an immutable lifecycle key guards every publication.
 vfs_source="${ROOT_DIR}/os/vfs_security.c"
+fs_source="${ROOT_DIR}/os/fs.c"
 reclaim_begin="$(sed -n '/^int agent_scope_reclaim_begin(/,/^}/p' \
 	"${objects_source}")"
 reclaim_done="$(sed -n '/^int agent_scope_reclaim_metadata_done(/,/^}/p' \
@@ -763,13 +765,27 @@ target_retire="$(sed -n '/^agent_file_scope_state_retire(/,/^}/p' \
 	"${store_source}")"
 target_done="$(sed -n '/^agent_metadata_store_scope_target_done(/,/^}/p' \
 	"${store_source}")"
+fs_reclaim="$(sed -n '/^int fs_reclaim_scope_files(/,/^}/p' \
+	"${fs_source}")"
 
 [ -n "${reclaim_begin}" ] && [ -n "${reclaim_done}" ] &&
 	[ -n "${reclaim_advance}" ] &&
 	[ -n "${reclaim_driver}" ] && [ -n "${scope_insert}" ] &&
 	[ -n "${scope_release}" ] && [ -n "${target_retire}" ] &&
-	[ -n "${target_done}" ] ||
+	[ -n "${target_done}" ] && [ -n "${fs_reclaim}" ] ||
 	fail "scope reclaim phases are missing"
+if grep -q -F 'uint inodes[NINODE]' "${fs_source}"; then
+	fail "scope reclaim must not retain a full inode snapshot"
+fi
+for invariant in \
+	'cursor->inode_cursor = 1' \
+	'cursor->inode_cursor >= sb.ninodes' \
+	'inode_get(ROOTDEV, cursor->inode_cursor)' \
+	'if (!claims_owner && !claims_label)' \
+	'if (!claims_owner ||'; do
+	printf '%s\n' "${fs_reclaim}" | grep -q -F "${invariant}" ||
+		fail "scope reclaim lost bounded direct inode scan: ${invariant}"
+done
 mark_count="$(printf '%s\n' "${reclaim_begin}" |
 	grep -c -F 'agent_metadata_store_mark_dirty(scope_id)' || true)"
 [ "${mark_count}" -eq 1 ] ||

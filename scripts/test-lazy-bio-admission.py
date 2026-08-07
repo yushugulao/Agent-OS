@@ -63,9 +63,9 @@ class LazyBioAdmissionTests(unittest.TestCase):
     def test_rejects_eager_lazy_begin(self) -> None:
         self.mutate(
             "os/bio.c",
-            "thread->io_request_flags = BIO_REQUEST_LAZY |",
+            "thread->io_request_flags = BIO_REQUEST_LAZY;",
             "io_active_request_acquire(state);\n"
-            "\tthread->io_request_flags = BIO_REQUEST_LAZY |",
+            "\tthread->io_request_flags = BIO_REQUEST_LAZY;",
         )
         self.assert_rejected("lazy begin still reserves")
 

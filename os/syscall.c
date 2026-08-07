@@ -9,6 +9,7 @@
 #include "loader.h"
 #include "sync.h"
 #include "syscall.h"
+#include "syscall_counter.h"
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
@@ -143,7 +144,59 @@ enum trace_request {
 	TRACE_SYSCALL,
 };
 
-/* Keep the Linux-compatible user Stat layout from user/include/stddef.h. */
+/* 0 表示未登记，其他值为内部槽号加一。固定映射让所有测试配置布局一致。 */
+static const uchar syscall_counter_slot_by_id[SYSCALL_COUNT_MAX] = {
+#define SYSCALL_COUNTER_MAP(name, class, enabled) \
+	[SYS_##name] = SYSCALL_ENABLED_##enabled ? \
+			 (uchar)(SYSCALL_COUNTER_SLOT_##name + 1) : 0,
+	SYSCALL_REGISTERED(SYSCALL_COUNTER_MAP)
+#undef SYSCALL_COUNTER_MAP
+};
+
+/* 类别按紧凑计数槽存放，避免为稀疏 ABI 再复制一张 600 字节表。 */
+static const uchar syscall_class_by_slot[SYSCALL_COUNTER_SLOTS] = {
+#define SYSCALL_CLASS_MAP(name, class, enabled) \
+	[SYSCALL_COUNTER_SLOT_##name] = SYSCALL_CLASS_##class,
+	SYSCALL_REGISTERED(SYSCALL_CLASS_MAP)
+#undef SYSCALL_CLASS_MAP
+};
+
+#define SYSCALL_ID_ASSERT(name, class, enabled) \
+	_Static_assert(SYS_##name < SYSCALL_COUNT_MAX, \
+		       "registered syscall id exceeds lookup table");
+SYSCALL_REGISTERED(SYSCALL_ID_ASSERT)
+#undef SYSCALL_ID_ASSERT
+
+_Static_assert(SYSCALL_COUNTER_SLOTS < 255,
+	       "syscall counter slot must fit in one byte");
+
+static int syscall_counter_slot(int syscall_id)
+{
+	uchar encoded;
+
+	if (syscall_id < 0 || syscall_id >= SYSCALL_COUNT_MAX)
+		return -1;
+	encoded = syscall_counter_slot_by_id[syscall_id];
+	return encoded == 0 ? -1 : encoded - 1;
+}
+
+uint syscall_count_read(const struct proc *p, int syscall_id)
+{
+	int slot = syscall_counter_slot(syscall_id);
+
+	return p == 0 || slot < 0 ? 0 : p->syscall_count[slot];
+}
+
+static void syscall_count_record(struct proc *p, int syscall_id)
+{
+	int slot = syscall_counter_slot(syscall_id);
+
+	/* trace() 的返回类型为 int，避免计数进入错误码的负数区间。 */
+	if (p != 0 && slot >= 0 && p->syscall_count[slot] < 0x7fffffffU)
+		p->syscall_count[slot]++;
+}
+
+/* 保持与 user/include/stddef.h 一致的 Linux 兼容 Stat 布局。 */
 struct user_stat {
 	uint64 dev;
 	uint64 ino;
@@ -275,12 +328,13 @@ uint64 sys_fstat(int fd, uint64 stataddr)
 		return -1;
 	memset(&status, 0, sizeof(status));
 	vfs_cred_from_proc(p, &cred);
-	if (f->type == FD_INODE && ivalid(f->ip) == 0 &&
+	/* 打开文件持有已装载 inode；fstat 只读缓存，不在查询中触盘。 */
+	if (f->type == FD_INODE && f->ip != 0 && f->ip->valid &&
 	    vfs_inode_authorize(f->ip, &cred, VFS_OP_READ)) {
 		status.dev = f->ip->dev;
 		status.ino = f->ip->inum;
 		status.mode = f->ip->type == T_DIR ? 0x040000U : 0x100000U;
-		/* This filesystem has no linkat: a named inode has one link. */
+		/* 文件系统没有 linkat，具名 inode 只有一个链接。 */
 		status.nlink = f->ip->removed ? 0U : 1U;
 		result = copyout(p->pagetable, stataddr, (char *)&status,
 				 sizeof(status));
@@ -309,18 +363,6 @@ static int sys_sbrk(uint64 raw_delta)
 uint64 sys_kernel_work_last_preemptions(void)
 {
 	return kernel_work_last_preemptions(curr_thread());
-}
-
-int sys_kernel_work_receipt_snapshot(uint64 addr, uint64 user_size)
-{
-	struct proc *p = curr_proc();
-	struct kernel_work_receipt receipt;
-
-	if (addr == 0 || user_size != sizeof(receipt) ||
-	    user_range_check(p->pagetable, addr, sizeof(receipt), PTE_W) < 0 ||
-	    kernel_work_receipt_snapshot(curr_thread(), &receipt) < 0)
-		return -1;
-	return copyout(p->pagetable, addr, (char *)&receipt, sizeof(receipt));
 }
 
 int sys_io_policy_info(uint64 addr, uint64 user_size)
@@ -377,7 +419,7 @@ int sys_trace(int req, uint64 id, uint8 data)
 	case TRACE_SYSCALL:
 		if (id >= SYSCALL_COUNT_MAX)
 			return -1;
-		return p->syscall_count[id];
+		return syscall_count_read(p, (int)id);
 	default:
 		return -1;
 	}
@@ -541,8 +583,7 @@ uint64 sys_pipe(uint64 fdarray)
 		goto err0;
 	if (copyout(p->pagetable, fdarray, (char *)fds, sizeof(fds)) < 0)
 		goto err0;
-	// Both sentinels were installed before any operation that can publish
-	// these numbers, so this commit cannot fail without kernel corruption.
+	// 所有描述符哨兵都在编号公开前安装；除非内核损坏，此提交不会失败。
 	if (fdinstall(fds[0], f0) < 0 || fdinstall(fds[1], f1) < 0)
 		panic("pipe descriptor reservation");
 	return 0;
@@ -681,14 +722,7 @@ int sys_waittid(int tid)
 	return exit_code;
 }
 
-/*
-*	LAB5: (3) In the TA's reference implementation, here defines funtion
-*					int deadlock_detect(const int available[LOCK_POOL_SIZE],
-*						const int allocation[NTHREAD][LOCK_POOL_SIZE],
-*						const int request[NTHREAD][LOCK_POOL_SIZE])
-*				for both mutex and semaphore detect, you can also
-*				use this idea or just ignore it.
-*/
+/* LAB5 参考实现可在此为 mutex 和 semaphore 共用死锁检测。 */
 
 int sys_mutex_create(int blocking)
 {
@@ -697,7 +731,7 @@ int sys_mutex_create(int blocking)
 		errorf("fail to create mutex: out of resource");
 		return -1;
 	}
-	// Keep the teaching mutex ABI; AgentOS does not extend deadlock detection here.
+	// 保留教学 mutex ABI，AgentOS 不在此扩展死锁检测。
 	int mutex_id = m - curr_proc()->mutex_pool;
 	debugf("create mutex %d", mutex_id);
 	return mutex_id;
@@ -730,7 +764,7 @@ int sys_semaphore_create(int res_count)
 		errorf("fail to create semaphore: out of resource");
 		return -1;
 	}
-	// Keep the teaching semaphore ABI; AgentOS does not extend deadlock detection here.
+	// 保留教学 semaphore ABI，AgentOS 不在此扩展死锁检测。
 	int sem_id = s - curr_proc()->semaphore_pool;
 	debugf("create semaphore %d", sem_id);
 	return sem_id;
@@ -743,7 +777,7 @@ int sys_semaphore_up(int semaphore_id)
 		errorf("Unexpected semaphore id %d", semaphore_id);
 		return -1;
 	}
-	// Semaphore up keeps the original uCore behavior.
+	// semaphore up 保持原有 uCore 行为。
 	return semaphore_up(&curr_proc()->semaphore_pool[semaphore_id]);
 }
 
@@ -793,23 +827,22 @@ int sys_condvar_wait(int cond_id, int mutex_id)
 			 &curr_proc()->mutex_pool[mutex_id]);
 }
 
-// LAB5: (2) you may need to define function enable_deadlock_detect here
+// LAB5：可在此定义 enable_deadlock_detect。
 
 extern char trap_page[];
 
-/* Admission and execution share one pinned file-table identity. */
+/* 准入与执行共用同一个已固定的文件表身份。 */
 struct syscall_transaction_context {
 	int id;
-	uint64 args[6];
 	struct file *file;
 	struct file_close_receipt close_receipt;
-	int fd_uses_disk;
 	int close_attempted;
 	int close_result;
 	int close_final;
 	int io_admitted;
 	int io_cleanup_admitted;
 	int fs_epoch_admitted;
+	uint policy;
 };
 
 static struct file *syscall_fd_pin(uint64 fd)
@@ -824,199 +857,42 @@ static int syscall_file_uses_disk(const struct file *file)
 	return file != 0 && file->type == FD_INODE;
 }
 
-// New syscalls are admitted by default. A syscall may bypass the block-I/O
-// governor only when its implementation is known not to reach the filesystem.
-static int syscall_may_issue_block_io(
-	const struct syscall_transaction_context *transaction)
-{
-	int id = transaction->id;
 
-	switch (id) {
-	case SYS_read:
-	case SYS_write:
-		return transaction->fd_uses_disk;
-	case SYS_close:
-		return 0;
-	case SYS_sched_yield:
-	case SYS_gettimeofday:
-	case SYS_getpid:
-	case SYS_getppid:
-	case SYS_brk:
-	case SYS_mailread:
-	case SYS_mailwrite:
-	case SYS_trace:
-	case SYS_clone:
-	case SYS_wait4:
-	case SYS_pipe2:
-	case SYS_thread_create:
-	case SYS_gettid:
-	case SYS_waittid:
-	case SYS_mutex_create:
-	case SYS_mutex_lock:
-	case SYS_mutex_unlock:
-	case SYS_semaphore_create:
-	case SYS_semaphore_up:
-	case SYS_semaphore_down:
-	case SYS_condvar_create:
-	case SYS_condvar_signal:
-	case SYS_condvar_wait:
-	case SYS_kernel_work_last_preemptions:
-	case SYS_kernel_work_receipt_snapshot:
-	case SYS_io_policy_info:
-	case SYS_agent_scope_delegate_fd:
-	case SYS_agent_workflow_close:
-	case SYS_agent_workflow_lifecycle_info:
-	case SYS_agent_resource_snapshot:
-	case SYS_agent_performance_snapshot:
-	case SYS_agent_info:
-	case SYS_agent_sched_snapshot:
-	case SYS_agent_sched_config:
-	case SYS_agent_trace_snapshot:
-	case SYS_agent_audit_snapshot:
-	case SYS_agent_audit_query:
-	case SYS_agent_span_trace_snapshot:
-	case SYS_agent_timeline_snapshot:
-	case SYS_agent_timeline_query:
-	case SYS_agent_timeline_wait:
-	case SYS_agent_timeline_read:
-	case SYS_agent_provenance_snapshot:
-	case SYS_agent_ledger_snapshot:
-	case SYS_agent_file_prefetch_snapshot:
-	case SYS_agent_file_prefetch_span_snapshot:
-	case SYS_agent_tool_list:
-	case SYS_tool_list:
-	case SYS_agent_watch:
-	case SYS_agent_unwatch:
-	case SYS_agent_wait:
-	case SYS_agent_wait_cancel:
-	case SYS_agent_heartbeat:
-	case SYS_agent_heartbeat_set:
-	case SYS_agent_heartbeat_stop:
-	case SYS_agent_wake:
-	case SYS_agent_route_config:
-	case SYS_agent_observe_recovery:
-	case SYS_exit:
-#ifdef AGENT_METADATA_CRASH_PHASE
-	case SYS_agent_metadata_test:
-#endif
-#ifdef PHYSICAL_PAGE_TEST_HOOKS
-	case SYS_physical_page_test:
-#endif
-#ifdef WAIT_ATOMIC_TEST_PROFILE
-	case SYS_wait_atomic_test:
-#endif
-		return 0;
-	default:
-		return 1;
-	}
+#define SYSCALL_POLICY_BLOCK_IO (1U << 0)
+#define SYSCALL_POLICY_FS_EPOCH (1U << 1)
+
+/* 调度、I/O 和持久化共用注册表中的同一次闭集分类。 */
+static enum syscall_class syscall_classify(int id)
+{
+	int slot = syscall_counter_slot(id);
+
+	if (slot < 0)
+		return SYSCALL_CLASS_INVALID;
+	return (enum syscall_class)syscall_class_by_slot[slot];
 }
 
-/*
- * Filesystem mutation is serialized below the VFS so one ordered epoch can
- * publish allocation, inode and namespace state without per-operation
- * barriers.  Pure reads and non-filesystem teaching calls stay off this path.
- */
-static int syscall_needs_fs_epoch(
-	const struct syscall_transaction_context *transaction)
+static uint syscall_policy_base(enum syscall_class class)
 {
-	int id = transaction->id;
-	const uint64 *args = transaction->args;
-
-	switch (id) {
-	case SYS_read:
-		return 0;
-	case SYS_write:
-		return transaction->fd_uses_disk;
-	case SYS_close:
-		return 0;
-	case SYS_openat:
-		return (args[1] & (O_CREATE | O_TRUNC)) != 0;
-	case SYS_unlinkat:
-	case SYS_sync:
-	case SYS_fsync:
-	case SYS_fdatasync:
-		return 1;
-	case SYS_fstat:
-	case SYS_execve:
-	case SYS_sched_yield:
-	case SYS_gettimeofday:
-	case SYS_getpid:
-	case SYS_getppid:
-	case SYS_brk:
-	case SYS_mailread:
-	case SYS_mailwrite:
-	case SYS_trace:
-	case SYS_clone:
-	case SYS_wait4:
-	case SYS_pipe2:
-	case SYS_thread_create:
-	case SYS_gettid:
-	case SYS_waittid:
-	case SYS_mutex_create:
-	case SYS_mutex_lock:
-	case SYS_mutex_unlock:
-	case SYS_semaphore_create:
-	case SYS_semaphore_up:
-	case SYS_semaphore_down:
-	case SYS_condvar_create:
-	case SYS_condvar_signal:
-	case SYS_condvar_wait:
-	case SYS_kernel_work_last_preemptions:
-	case SYS_kernel_work_receipt_snapshot:
-	case SYS_io_policy_info:
-	case SYS_agent_resource_snapshot:
-	case SYS_agent_performance_snapshot:
-	case SYS_agent_info:
-	case SYS_agent_sched_snapshot:
-	case SYS_agent_trace_snapshot:
-	case SYS_agent_audit_snapshot:
-	case SYS_agent_audit_query:
-	case SYS_agent_audit_receipt:
-	case SYS_agent_span_trace_snapshot:
-	case SYS_agent_timeline_snapshot:
-	case SYS_agent_timeline_query:
-	case SYS_agent_timeline_wait:
-	case SYS_agent_timeline_read:
-	case SYS_agent_provenance_snapshot:
-	case SYS_agent_ledger_snapshot:
-	case SYS_agent_file_prefetch_snapshot:
-	case SYS_agent_file_prefetch_span_snapshot:
-	case SYS_agent_tool_list:
-	case SYS_tool_list:
-	case SYS_agent_watch:
-	case SYS_agent_unwatch:
-	case SYS_agent_wait:
-	case SYS_agent_wait_cancel:
-	case SYS_agent_heartbeat:
-	case SYS_agent_heartbeat_set:
-	case SYS_agent_heartbeat_stop:
-	case SYS_agent_wake:
-	case SYS_agent_route_config:
-	case SYS_exit:
-#ifdef VIRTIO_DISK_TEST_PROFILE
-	case SYS_virtio_disk_test:
-#endif
-		return 0;
+	switch (class) {
+	case SYSCALL_CLASS_BLOCK_IO:
+		return SYSCALL_POLICY_BLOCK_IO;
+	case SYSCALL_CLASS_FS_EPOCH:
+		return SYSCALL_POLICY_FS_EPOCH;
+	case SYSCALL_CLASS_BLOCK_IO_FS_EPOCH:
+		return SYSCALL_POLICY_BLOCK_IO | SYSCALL_POLICY_FS_EPOCH;
 	default:
-		/* New Agent calls fail closed into the ordered mutation path. */
-		return 1;
+		return 0;
 	}
 }
 
 static void syscall_transaction_prepare(
 	struct syscall_transaction_context *transaction,
-	const struct trapframe *trapframe)
+	const struct trapframe *trapframe, int id, uint policy)
 {
-	transaction->id = trapframe->a7;
-	transaction->args[0] = trapframe->a0;
-	transaction->args[1] = trapframe->a1;
-	transaction->args[2] = trapframe->a2;
-	transaction->args[3] = trapframe->a3;
-	transaction->args[4] = trapframe->a4;
-	transaction->args[5] = trapframe->a5;
+	transaction->id = id;
 	transaction->file = 0;
+	transaction->policy = policy;
 	transaction->close_receipt.state = FILE_CLOSE_RECEIPT_EMPTY;
-	transaction->fd_uses_disk = 0;
 	transaction->close_attempted = 0;
 	transaction->close_result = 0;
 	transaction->close_final = 0;
@@ -1026,9 +902,16 @@ static void syscall_transaction_prepare(
 	switch (transaction->id) {
 	case SYS_read:
 	case SYS_write:
-		transaction->file = syscall_fd_pin(transaction->args[0]);
-		transaction->fd_uses_disk =
-			syscall_file_uses_disk(transaction->file);
+		transaction->file = syscall_fd_pin(trapframe->a0);
+		if (syscall_file_uses_disk(transaction->file)) {
+			transaction->policy |= SYSCALL_POLICY_BLOCK_IO;
+			if (transaction->id == SYS_write)
+				transaction->policy |= SYSCALL_POLICY_FS_EPOCH;
+		}
+		break;
+	case SYS_openat:
+		if ((trapframe->a1 & (O_CREATE | O_TRUNC)) != 0)
+			transaction->policy |= SYSCALL_POLICY_FS_EPOCH;
 		break;
 	default:
 		break;
@@ -1036,17 +919,18 @@ static void syscall_transaction_prepare(
 }
 
 static int syscall_transaction_begin(
-	struct syscall_transaction_context *transaction)
+	struct syscall_transaction_context *transaction,
+	const struct trapframe *trapframe)
 {
 	if (transaction->id == SYS_close) {
 		int close_status;
 
 		transaction->close_attempted = 1;
-		if (transaction->args[0] >= FD_BUFFER_SIZE)
+		if (trapframe->a0 >= FD_BUFFER_SIZE)
 			close_status = -1;
 		else
 			close_status = fdclose_prepare(
-				(int)transaction->args[0],
+				(int)trapframe->a0,
 				&transaction->close_receipt);
 		transaction->close_result = close_status < 0 ? -1 : 0;
 		if (close_status <= 0)
@@ -1056,22 +940,22 @@ static int syscall_transaction_begin(
 			return 0;
 		return 0;
 	}
-	/* Serialize mutators before reserving scarce device-rate capacity. */
-	if (syscall_needs_fs_epoch(transaction)) {
+	/* 先串行化修改操作，再预留稀缺的设备速率额度。 */
+	if ((transaction->policy & SYSCALL_POLICY_FS_EPOCH) != 0) {
 		if (fs_epoch_request_begin() < 0)
 			return -1;
 		transaction->fs_epoch_admitted = 1;
 	}
-	if (syscall_may_issue_block_io(transaction)) {
+	if ((transaction->policy & SYSCALL_POLICY_BLOCK_IO) != 0) {
 		int io_begin_result = transaction->fs_epoch_admitted ?
 			bio_request_begin_current() :
 			bio_request_begin_current_lazy();
 
 		if (io_begin_result < 0) {
-			/* A failed admission can race descriptor close. Obtain the
-			 * teardown reservation before dropping a possibly-final pin. */
+			/* 准入失败可能与描述符关闭竞争；释放可能为最后一个的引用前，
+			 * 先取得拆除预留。 */
 			if (transaction->file != 0 &&
-			    transaction->fd_uses_disk &&
+			    (transaction->policy & SYSCALL_POLICY_BLOCK_IO) != 0 &&
 			    bio_request_begin_current_cleanup() == 0) {
 				transaction->io_admitted = 1;
 				transaction->io_cleanup_admitted = 1;
@@ -1120,7 +1004,7 @@ static void syscall_transaction_finish(
 		final = 1;
 		transaction->close_final = 0;
 	}
-	/* A concurrent close/reopen cannot redirect this reference drop. */
+	/* 并发关闭或重开不能改变本次引用释放的目标。 */
 	if (transaction->file != 0) {
 		if (final)
 			panic("syscall duplicate file receipt");
@@ -1145,7 +1029,7 @@ static void syscall_transaction_finish(
 			final = 0;
 	}
 	if (final && !transaction->fs_epoch_admitted) {
-		/* Never acquire the filesystem gate while carrying an I/O lease. */
+		/* 持有 I/O 租约时不得获取文件系统事务门。 */
 		syscall_transaction_end_io(transaction);
 		if (fs_epoch_request_begin() < 0) {
 			fileclose_finish(receipt);
@@ -1181,7 +1065,6 @@ static uint syscall_kernel_work_class(int id)
 {
 	switch (id) {
 	case SYS_kernel_work_last_preemptions:
-	case SYS_kernel_work_receipt_snapshot:
 	case SYS_agent_resource_snapshot:
 	case SYS_agent_performance_snapshot:
 		return KERNEL_WORK_SYSCALL_OBSERVER;
@@ -1190,73 +1073,66 @@ static uint syscall_kernel_work_class(int id)
 	}
 }
 
-void syscall()
+/*
+ * 快慢路径共用调用分派，但不在此分配事务对象。noinline 让传统调用的
+ * 栈帧不会被慢路径的关闭回执和 I/O 状态反向放大。
+ */
+static __attribute__((noinline)) int syscall_dispatch(
+	int id, struct trapframe *trapframe,
+	struct syscall_transaction_context *transaction)
 {
-	struct trapframe *trapframe = curr_thread()->trapframe;
-	struct syscall_transaction_context transaction;
-	uint64 *args;
-	int id;
 	int ret;
 
-	if (proc_thread_exit_requested())
-		exit(curr_proc()->exit_code);
-	syscall_transaction_prepare(&transaction, trapframe);
-	id = transaction.id;
-	args = transaction.args;
-	kernel_work_begin_syscall(id, syscall_kernel_work_class(id));
-	if (syscall_transaction_begin(&transaction) < 0) {
-		ret = -1;
-		goto syscall_out;
-	}
-	if (id >= 0 && id < SYSCALL_COUNT_MAX)
-		curr_proc()->syscall_count[id]++;
+	syscall_count_record(curr_proc(), id);
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
 		debugf("syscall %d args = [%lx, %lx, %lx, %lx, %lx, %lx]", id,
-		       args[0], args[1], args[2], args[3], args[4], args[5]);
+		       trapframe->a0, trapframe->a1, trapframe->a2,
+		       trapframe->a3, trapframe->a4, trapframe->a5);
 	}
 	switch (id) {
 	case SYS_write:
-		ret = sys_write(transaction.file, (int)args[0],
-				args[1], args[2]);
+		ret = sys_write(transaction->file, (int)trapframe->a0,
+				trapframe->a1, trapframe->a2);
 		break;
 	case SYS_read:
-		ret = sys_read(transaction.file, (int)args[0],
-			       args[1], args[2]);
+		ret = sys_read(transaction->file, (int)trapframe->a0,
+			       trapframe->a1, trapframe->a2);
 		break;
 	case SYS_fstat:
-		ret = sys_fstat(args[0], args[1]);
+		ret = sys_fstat(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_openat:
-		ret = sys_openat(args[0], args[1], args[2]);
+		ret = sys_openat(trapframe->a0, trapframe->a1, trapframe->a2);
 		break;
 	case SYS_unlinkat:
-		ret = sys_unlinkat(args[0], args[1], args[2]);
+		ret = sys_unlinkat(trapframe->a0, trapframe->a1,
+				trapframe->a2);
 		break;
 	case SYS_close:
-		ret = transaction.close_attempted ?
-			transaction.close_result : -1;
+		ret = transaction != 0 && transaction->close_attempted ?
+			transaction->close_result : -1;
 		break;
 	case SYS_sync:
 		ret = sys_sync();
 		break;
 	case SYS_fsync:
 	case SYS_fdatasync:
-		ret = sys_fsync(args[0]);
+		ret = sys_fsync(trapframe->a0);
 		break;
 	case SYS_exit:
-		sys_exit(args[0]);
+		sys_exit(trapframe->a0);
 		// __builtin_unreachable();
 	// case SYS_nanosleep:
-	// 	ret = sys_nanosleep(args[0]);
+	// 	ret = sys_nanosleep(trapframe->a0);
 	// 	break;
 	case SYS_sched_yield:
 		ret = sys_sched_yield();
 		break;
 	case SYS_brk:
-		ret = sys_sbrk(args[0]);
+		ret = sys_sbrk(trapframe->a0);
 		break;
 	case SYS_gettimeofday:
-		ret = sys_gettimeofday(args[0], args[1]);
+		ret = sys_gettimeofday(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_getpid:
 		ret = sys_getpid();
@@ -1265,280 +1141,339 @@ void syscall()
 		ret = sys_getppid();
 		break;
 	case SYS_mailread:
-		ret = sys_mailread(args[0], args[1]);
+		ret = sys_mailread(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_mailwrite:
-		ret = sys_mailwrite(args[0], args[1], args[2]);
+		ret = sys_mailwrite(trapframe->a0, trapframe->a1,
+				trapframe->a2);
 		break;
 	case SYS_trace:
-		ret = sys_trace(args[0], args[1], args[2]);
+		ret = sys_trace(trapframe->a0, trapframe->a1, trapframe->a2);
 		break;
 	case SYS_clone: // SYS_fork
 		ret = sys_clone();
 		break;
 	case SYS_execve:
-		ret = sys_exec(args[0], args[1]);
+		ret = sys_exec(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_wait4:
-		ret = sys_wait(args[0], args[1]);
+		ret = sys_wait(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_pipe2:
-		ret = sys_pipe(args[0]);
+		ret = sys_pipe(trapframe->a0);
 		break;
 	case SYS_thread_create:
-		ret = sys_thread_create(args[0], args[1]);
+		ret = sys_thread_create(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_gettid:
 		ret = sys_gettid();
 		break;
 	case SYS_waittid:
-		ret = sys_waittid(args[0]);
+		ret = sys_waittid(trapframe->a0);
 		break;
 	case SYS_mutex_create:
-		ret = sys_mutex_create(args[0]);
+		ret = sys_mutex_create(trapframe->a0);
 		break;
 	case SYS_mutex_lock:
-		ret = sys_mutex_lock(args[0]);
+		ret = sys_mutex_lock(trapframe->a0);
 		break;
 	case SYS_mutex_unlock:
-		ret = sys_mutex_unlock(args[0]);
+		ret = sys_mutex_unlock(trapframe->a0);
 		break;
 	case SYS_semaphore_create:
-		ret = sys_semaphore_create(args[0]);
+		ret = sys_semaphore_create(trapframe->a0);
 		break;
 	case SYS_semaphore_up:
-		ret = sys_semaphore_up(args[0]);
+		ret = sys_semaphore_up(trapframe->a0);
 		break;
 	case SYS_semaphore_down:
-		ret = sys_semaphore_down(args[0]);
+		ret = sys_semaphore_down(trapframe->a0);
 		break;
 	case SYS_condvar_create:
 		ret = sys_condvar_create();
 		break;
 	case SYS_condvar_signal:
-		ret = sys_condvar_signal(args[0]);
+		ret = sys_condvar_signal(trapframe->a0);
 		break;
 	case SYS_condvar_wait:
-		ret = sys_condvar_wait(args[0], args[1]);
+		ret = sys_condvar_wait(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_kernel_work_last_preemptions:
 		ret = sys_kernel_work_last_preemptions();
 		break;
-	case SYS_kernel_work_receipt_snapshot:
-		ret = sys_kernel_work_receipt_snapshot(args[0], args[1]);
-		break;
 	case SYS_io_policy_info:
-		ret = sys_io_policy_info(args[0], args[1]);
+		ret = sys_io_policy_info(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_create:
 		ret = sys_agent_create();
 		break;
 	case SYS_agent_create_role:
-		ret = sys_agent_create_role(args[0]);
+		ret = sys_agent_create_role(trapframe->a0);
 		break;
 	case SYS_agent_workflow_create:
-		ret = sys_agent_workflow_create(args[0]);
+		ret = sys_agent_workflow_create(trapframe->a0);
 		break;
 	case SYS_agent_scope_delegate_fd:
-		ret = sys_agent_scope_delegate_fd(args[0]);
+		ret = sys_agent_scope_delegate_fd(trapframe->a0);
 		break;
 	case SYS_agent_workflow_close:
-		ret = sys_agent_workflow_close(args[0]);
+		ret = sys_agent_workflow_close(trapframe->a0);
 		break;
 	case SYS_agent_workflow_lifecycle_info:
 		ret = sys_agent_workflow_lifecycle_info(
-			args[0], args[1], args[2], args[3], args[4]);
+			trapframe->a0, trapframe->a1, trapframe->a2,
+			trapframe->a3, trapframe->a4);
 		break;
 	case SYS_agent_resource_snapshot:
-		ret = sys_agent_resource_snapshot(args[0], args[1]);
+		ret = sys_agent_resource_snapshot(trapframe->a0,
+						  trapframe->a1);
 		break;
 	case SYS_agent_performance_snapshot:
-		ret = sys_agent_performance_snapshot(args[0], args[1]);
+		ret = sys_agent_performance_snapshot(trapframe->a0,
+						     trapframe->a1);
 		break;
 	case SYS_agent_info:
-		ret = sys_agent_info(args[0]);
+		ret = sys_agent_info(trapframe->a0);
 		break;
 	case SYS_agent_sched_snapshot:
-		ret = sys_agent_sched_snapshot(args[0], args[1]);
+		ret = sys_agent_sched_snapshot(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_sched_config:
-		ret = sys_agent_sched_config(args[0]);
+		ret = sys_agent_sched_config(trapframe->a0);
 		break;
 	case SYS_agent_trace_snapshot:
-		ret = sys_agent_trace_snapshot(args[0], args[1]);
+		ret = sys_agent_trace_snapshot(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_audit_snapshot:
-		ret = sys_agent_audit_snapshot(args[0], args[1]);
+		ret = sys_agent_audit_snapshot(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_audit_query:
-		ret = sys_agent_audit_query(args[0], args[1], args[2]);
+		ret = sys_agent_audit_query(trapframe->a0, trapframe->a1,
+					    trapframe->a2);
 		break;
 	case SYS_agent_audit_receipt:
-		ret = sys_agent_audit_receipt(args[0]);
+		ret = sys_agent_audit_receipt(trapframe->a0);
 		break;
 	case SYS_agent_span_trace_snapshot:
-		ret = sys_agent_span_trace_snapshot(args[0], args[1]);
+		ret = sys_agent_span_trace_snapshot(trapframe->a0,
+						    trapframe->a1);
 		break;
 	case SYS_agent_timeline_snapshot:
-		ret = sys_agent_timeline_snapshot(args[0], args[1]);
+		ret = sys_agent_timeline_snapshot(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_timeline_query:
-		ret = sys_agent_timeline_query(args[0], args[1], args[2]);
+		ret = sys_agent_timeline_query(trapframe->a0, trapframe->a1,
+					       trapframe->a2);
 		break;
 	case SYS_agent_timeline_wait:
-		ret = sys_agent_timeline_wait(args[0], args[1]);
+		ret = sys_agent_timeline_wait(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_timeline_read:
-		ret = sys_agent_timeline_read(args[0], args[1], args[2],
-					      args[3]);
+		ret = sys_agent_timeline_read(trapframe->a0, trapframe->a1,
+					      trapframe->a2, trapframe->a3);
 		break;
 	case SYS_agent_provenance_snapshot:
-		ret = sys_agent_provenance_snapshot(args[0], args[1]);
+		ret = sys_agent_provenance_snapshot(trapframe->a0,
+						     trapframe->a1);
 		break;
 	case SYS_agent_ledger_snapshot:
-		ret = sys_agent_ledger_snapshot(args[0]);
-		break;
-	case SYS_agent_file_prefetch_snapshot:
-		ret = sys_agent_file_prefetch_snapshot(args[0], args[1]);
-		break;
-	case SYS_agent_file_prefetch_span_snapshot:
-		ret = sys_agent_file_prefetch_span_snapshot(args[0], args[1]);
+		ret = sys_agent_ledger_snapshot(trapframe->a0);
 		break;
 	case SYS_agent_run:
-		ret = sys_agent_run(args[0], args[1], args[2], args[3]);
+		ret = sys_agent_run(trapframe->a0, trapframe->a1,
+				    trapframe->a2, trapframe->a3);
 		break;
 	case SYS_agent_call:
-		ret = sys_agent_call(args[0], args[1]);
+		ret = sys_agent_call(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_tool_list:
-		ret = sys_agent_tool_list(args[0], args[1]);
+		ret = sys_agent_tool_list(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_tool_call:
-		ret = sys_tool_call(args[0], args[1]);
+		ret = sys_tool_call(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_tool_list:
-		ret = sys_tool_list(args[0], args[1], args[2], args[3]);
+		ret = sys_tool_list(trapframe->a0, trapframe->a1,
+				    trapframe->a2, trapframe->a3);
 		break;
 	case SYS_agent_observe_recovery:
-		ret = sys_agent_observe_recovery(args[0], args[1]);
+		ret = sys_agent_observe_recovery(trapframe->a0, trapframe->a1);
 		break;
 #ifdef VIRTIO_DISK_TEST_PROFILE
 	case SYS_virtio_disk_test:
-		ret = sys_virtio_disk_test(args[0], args[1], args[2], args[3],
-					   args[4], args[5]);
+		ret = sys_virtio_disk_test(
+			trapframe->a0, trapframe->a1, trapframe->a2,
+			trapframe->a3, trapframe->a4, trapframe->a5);
 		break;
 #endif
 #ifdef PHYSICAL_PAGE_TEST_HOOKS
 	case SYS_physical_page_test:
-		ret = sys_physical_page_test(args[0], args[1], args[2]);
+		ret = sys_physical_page_test(trapframe->a0, trapframe->a1,
+					     trapframe->a2);
 		break;
 #endif
 #ifdef AGENT_METADATA_CRASH_PHASE
 	case SYS_agent_metadata_test:
-		ret = sys_agent_metadata_test(args[0], args[1], args[2]);
+		ret = sys_agent_metadata_test(trapframe->a0, trapframe->a1,
+					      trapframe->a2);
 		break;
 #endif
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 	case SYS_wait_atomic_test:
-		ret = sys_wait_atomic_test(args[0], args[1], args[2], args[3],
-					   args[4], args[5]);
+		ret = sys_wait_atomic_test(
+			trapframe->a0, trapframe->a1, trapframe->a2,
+			trapframe->a3, trapframe->a4, trapframe->a5);
 		break;
 #endif
 #ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
 	case SYS_fs_allocator_fault_test:
 		ret = sys_fs_allocator_fault_test(
-			args[0], args[1], args[2], args[3], args[4], args[5]);
+			trapframe->a0, trapframe->a1, trapframe->a2,
+			trapframe->a3, trapframe->a4, trapframe->a5);
 		break;
 #endif
 	case SYS_context_push:
-		ret = sys_context_push(args[0]);
+		ret = sys_context_push(trapframe->a0);
 		break;
 	case SYS_context_query:
-		ret = sys_context_query(args[0], args[1], args[2]);
+		ret = sys_context_query(trapframe->a0, trapframe->a1,
+					trapframe->a2);
 		break;
 	case SYS_context_snapshot:
-		ret = sys_context_snapshot(args[0], args[1], args[2]);
+		ret = sys_context_snapshot(trapframe->a0, trapframe->a1,
+					   trapframe->a2);
 		break;
 	case SYS_context_detail:
-		ret = sys_context_detail(args[0], args[1]);
+		ret = sys_context_detail(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_context_rollback:
-		ret = sys_context_rollback(args[0]);
+		ret = sys_context_rollback(trapframe->a0);
 		break;
 	case SYS_context_clear:
 		ret = sys_context_clear();
 		break;
 	case SYS_agent_watch:
-		ret = sys_agent_watch(args[0], args[1]);
+		ret = sys_agent_watch(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_unwatch:
-		ret = sys_agent_unwatch(args[0], args[1]);
+		ret = sys_agent_unwatch(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_wait:
-		ret = sys_agent_wait(args[0], args[1]);
+		ret = sys_agent_wait(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_wait_cancel:
-		ret = sys_agent_wait_cancel(args[0], args[1]);
+		ret = sys_agent_wait_cancel(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_heartbeat:
-		ret = sys_agent_heartbeat(args[0]);
+		ret = sys_agent_heartbeat(trapframe->a0);
 		break;
 	case SYS_agent_heartbeat_set:
-		ret = sys_agent_heartbeat_set(args[0]);
+		ret = sys_agent_heartbeat_set(trapframe->a0);
 		break;
 	case SYS_agent_heartbeat_stop:
 		ret = sys_agent_heartbeat_stop();
 		break;
 	case SYS_agent_wake:
-		ret = sys_agent_wake(args[0], args[1]);
+		ret = sys_agent_wake(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_file_meta_init:
 		ret = sys_agent_file_meta_init();
 		break;
 	case SYS_agent_file_meta_set:
-		ret = sys_agent_file_meta_set(args[0]);
+		ret = sys_agent_file_meta_set(trapframe->a0);
 		break;
 	case SYS_agent_file_query:
-		ret = sys_agent_file_query(args[0], args[1]);
+		ret = sys_agent_file_query(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_file_edit_begin:
-		ret = sys_agent_file_edit_begin(args[0], args[1], args[2],
-						args[3]);
+		ret = sys_agent_file_edit_begin(
+			trapframe->a0, trapframe->a1, trapframe->a2,
+			trapframe->a3);
 		break;
 	case SYS_agent_file_edit_commit:
-		ret = sys_agent_file_edit_commit(args[0], args[1], args[2]);
+		ret = sys_agent_file_edit_commit(trapframe->a0, trapframe->a1,
+						 trapframe->a2);
 		break;
 	case SYS_agent_file_edit_abort:
-		ret = sys_agent_file_edit_abort(args[0]);
+		ret = sys_agent_file_edit_abort(trapframe->a0);
 		break;
 	case SYS_agent_file_edit_state:
-		ret = sys_agent_file_edit_state(args[0], args[1]);
+		ret = sys_agent_file_edit_state(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_worker_create:
-		ret = sys_agent_worker_create(args[0], args[1]);
+		ret = sys_agent_worker_create(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_route_config:
-		ret = sys_agent_route_config(args[0], args[1], args[2], args[3]);
+		ret = sys_agent_route_config(trapframe->a0, trapframe->a1,
+					     trapframe->a2, trapframe->a3);
 		break;
-	// LAB5: (2) you may need to add case SYS_enable_deadlock_detect here
+	// LAB5：可在此加入 SYS_enable_deadlock_detect 分支。
 	default:
 		ret = -1;
-		errorf("unknown syscall %d", id);
 	}
-syscall_out:
+	return ret;
+}
+
+/* 事务对象只存在于慢路径栈帧，传统无事务调用不再支付初始化和栈成本。 */
+static __attribute__((noinline)) int syscall_slow_path(
+	struct trapframe *trapframe, int id, uint policy)
+{
+	struct syscall_transaction_context transaction;
+	int ret = -1;
+
+	syscall_transaction_prepare(&transaction, trapframe, id, policy);
+	if (syscall_transaction_begin(&transaction, trapframe) == 0)
+		ret = syscall_dispatch(id, trapframe, &transaction);
 	syscall_transaction_finish(&transaction, &ret);
+	return ret;
+}
+
+static int syscall_needs_transaction(enum syscall_class class)
+{
+	return class != SYSCALL_CLASS_FAST && class != SYSCALL_CLASS_INVALID;
+}
+
+/* 拒绝高位别名，避免超宽 a7 截断成已登记的低编号调用。 */
+static int syscall_decode_id(uint64 raw_id)
+{
+	if (raw_id > 0x7fffffffULL)
+		return -1;
+	return (int)raw_id;
+}
+
+void syscall()
+{
+	struct trapframe *trapframe = curr_thread()->trapframe;
+	int id;
+	int ret;
+	enum syscall_class class;
+
+	if (proc_thread_exit_requested())
+		exit(curr_proc()->exit_code);
+	id = syscall_decode_id(trapframe->a7);
+	class = syscall_classify(id);
+	kernel_work_begin_syscall(id, syscall_kernel_work_class(id));
+	if (class == SYSCALL_CLASS_INVALID)
+		ret = -1;
+	else {
+		uint policy = syscall_policy_base(class);
+
+		if (syscall_needs_transaction(class))
+			ret = syscall_slow_path(trapframe, id, policy);
+		else
+			ret = syscall_dispatch(id, trapframe, 0);
+	}
 	/*
-	 * Like Linux task_work, producers publish a cheap pending edge and the
-	 * returning task consumes it only after syscall resources are settled.
-	 * This keeps maintenance off interrupt and idle stacks without charging
-	 * every traditional syscall for a full background scan.
+	 * 仿照 Linux task_work：生产者只发布低成本待办标记，返回任务在
+	 * syscall 资源结算后再处理。维护工作不占中断或空闲栈，传统调用也
+	 * 无需为每次完整后台扫描付费。
 	 */
 	if (agent_background_work_pending() || id == SYS_sched_yield)
 		agent_background_checkpoint();
 	kernel_work_end();
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
-	curr_thread()->trapframe->a0 = ret;
+	trapframe->a0 = ret;
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
 		debugf("syscall %d ret %d", id, ret);
 	}

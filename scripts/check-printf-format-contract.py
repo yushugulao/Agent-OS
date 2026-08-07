@@ -61,8 +61,8 @@ def validate_implementation(source: str, owner: str) -> None:
                 "integer_conversion(fmt[i + 2] & 0xff)",
                 "integer_conversion(fmt[i + 1] & 0xff)",
                 "printptr(va_arg(ap, uint64));",
-                "case 'c':\n\t\t\tconsputc(va_arg(ap, int));",
-                "case '%':\n\t\t\tconsputc('%');",
+                "case 'c':\n\t\t\tconsole_putchar(va_arg(ap, int));",
+                "case '%':\n\t\t\tconsole_putchar('%');",
             ),
             owner,
         )

@@ -71,11 +71,11 @@ agent_background_maintain(void)
 	struct thread *t = curr_thread();
 	struct proc *p;
 
-	/* Runtime device I/O may sleep and therefore needs a schedulable owner. */
+	/* 设备 I/O 可能休眠，后台维护必须借用可调度线程。 */
 	if (t == 0 || t->tid < 0 || t->state != RUNNING || t->process == 0)
 		return;
 	p = t->process;
-	/* Maintenance I/O must not recursively manufacture observation traffic. */
+	/* 维护 I/O 不得递归地产生新的观测流量。 */
 	if (agent_observe_recording_suppress_begin(p) < 0)
 		return;
 	if (!proc_thread_exit_requested() &&
@@ -163,12 +163,6 @@ static void agent_core_proc_state_reset(struct proc *p)
 {
 	p->agent_meta_txn_wait_count = 0;
 	p->resource_quota = 0;
-	p->agent_prefetch_sequence = 0;
-	p->agent_prefetch_count = 0;
-	p->agent_prefetch_head = 0;
-	memset(p->agent_prefetch_hints, 0, sizeof(p->agent_prefetch_hints));
-	memset(p->agent_prefetch_span_owner, 0,
-	       sizeof(p->agent_prefetch_span_owner));
 }
 
 void agent_core_clear_metadata(struct proc *p)
@@ -1347,8 +1341,7 @@ int sys_tool_call(uint64 reqaddr, uint64 respaddr)
 	safestrcpy(resp.result, result.result, sizeof(resp.result));
 out:
 	resp.status = status;
-	/* Protocol failures use the validator diagnostic. Execution failures
-	 * already carry the tool's stable error text in result.result. */
+	/* 协议错误采用校验器诊断；执行错误沿用工具返回的稳定错误文本。 */
 	if (status != AGENT_STATUS_OK && error[0] != 0)
 		safestrcpy(resp.result, error, sizeof(resp.result));
 	return copyout(p->pagetable, respaddr, (char *)&resp, sizeof(resp));
@@ -1358,6 +1351,8 @@ void agent_core_tick(void)
 {
 	uint64 now = agent_ticks();
 
+	fs_deferred_reclaim_tick(now);
+	vfs_scope_reap_tick(now);
 	agent_metadata_tick(now);
 	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
 		if (p->state == P_UNUSED || !p->is_agent)

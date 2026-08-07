@@ -290,30 +290,60 @@ def validate_tool_protocol_schema(root):
 
     if re.search(r'\bR\(\s*"', protocol):
         raise LayoutError("Agent tool rule bypasses the canonical key registry")
-    rule_rows = re.findall(
-        r"\[(AGENT_TOOL_[A-Z0-9_]+)\s*-\s*1\]\s*=\s*\{([^}]*)\}",
-        protocol,
-    )
-    if len({row[0] for row in rule_rows}) != len(rule_rows):
-        raise LayoutError("Agent tool rule table contains duplicate rows")
-    known_tools = {entry[0] for entry in tool_entries}
-    used_keys = set()
-    for tool_id, body in rule_rows:
-        if tool_id not in known_tools:
-            raise LayoutError(f"Agent tool rules reference unknown {tool_id}")
-        rules = re.findall(
-            r"\bR\(\s*([A-Z][A-Z0-9_]*)\s*,\s*"
-            r"(AGENT_PARAM_(?:STRING|UINT64))\s*,\s*"
-            r"(PARAM_(?:ARG0|ARG1|PAYLOAD))\s*,\s*([01])\s*\)",
-            body,
+    try:
+        rules_start = protocol.index(
+            "static const struct param_rule rules[] = {"
         )
-        if len(rules) != len(re.findall(r"\bR\(", body)):
-            raise LayoutError(f"Agent tool {tool_id} contains an invalid rule")
-        if len(rules) > param_max:
+        rules_end = protocol.index("};", rules_start)
+        offsets_start = protocol.index(
+            "static const unsigned char rule_offsets[AGENT_TOOL_COUNT + 1] = {"
+        )
+        offsets_end = protocol.index("};", offsets_start)
+    except ValueError as error:
+        raise LayoutError("Agent tool schema lacks its compact CSR table") from error
+
+    rules_block = protocol[rules_start:rules_end]
+    rules = re.findall(
+        r"\bR\(\s*([A-Z][A-Z0-9_]*)\s*,\s*"
+        r"(AGENT_PARAM_(?:STRING|UINT64))\s*,\s*"
+        r"(PARAM_(?:ARG0|ARG1|PAYLOAD))\s*,\s*([01])\s*\)",
+        rules_block,
+    )
+    if len(rules) != len(re.findall(r"\bR\(", rules_block)):
+        raise LayoutError("Agent tool compact rule table contains an invalid rule")
+
+    offsets_block = protocol[offsets_start:offsets_end]
+    offsets_body = offsets_block[offsets_block.index("{") + 1 :]
+    offsets_body = re.sub(r"/\*.*?\*/|//[^\n]*", "", offsets_body, flags=re.DOTALL)
+    residue = re.sub(r"\d+|[\s,]", "", offsets_body)
+    if residue:
+        raise LayoutError("Agent tool CSR offsets contain a non-numeric entry")
+    offsets = [int(value) for value in re.findall(r"\d+", offsets_body)]
+    if len(offsets) != tool_count + 1:
+        raise LayoutError("Agent tool CSR offset count does not match the ABI")
+    if (
+        offsets[0] != 0
+        or offsets[-1] != len(rules)
+        or any(left > right for left, right in zip(offsets, offsets[1:]))
+    ):
+        raise LayoutError("Agent tool CSR offsets do not cover the compact rules")
+
+    count_match = re.search(
+        r"^\s*#define\s+AGENT_TOOL_RULE_COUNT\s+(\d+)U?\s*$",
+        protocol,
+        re.MULTILINE,
+    )
+    if not count_match or int(count_match.group(1)) != len(rules):
+        raise LayoutError("Agent tool compact rule count is inconsistent")
+
+    used_keys = set()
+    for index, (tool_id, _flags, _name, _description) in enumerate(tool_entries):
+        tool_rules = rules[offsets[index] : offsets[index + 1]]
+        if len(tool_rules) > param_max:
             raise LayoutError(f"Agent tool {tool_id} exceeds its parameter bound")
         targets = set()
         schema = []
-        for key, value_type, target, required in rules:
+        for key, value_type, target, required in tool_rules:
             if key not in key_map:
                 raise LayoutError(f"Agent tool {tool_id} uses unregistered key {key}")
             if target in targets:

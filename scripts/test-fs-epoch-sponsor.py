@@ -205,7 +205,7 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str,
         "reuse_request_lease = 1",
         "effective_class = IO_POLICY_CLASS_BACKGROUND",
     )
-    transfer = compact(function_body(bio, "bio_account_transfers"))
+    transfer = compact(function_body(bio, "bio_account_transfer_batch"))
     ordered(
         transfer,
         "bio_deferred_sponsor_current()",
@@ -222,29 +222,49 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str,
         "fs_epoch_request_end()",
         "syscall_transaction_end_io(transaction)",
     )
+    if finish.count("fs_epoch_request_end()") != 1:
+        raise ContractError("syscall finalizer must release the epoch gate exactly once")
     end_io = compact(function_body(syscall, "syscall_transaction_end_io"))
-    if "bio_request_end_current(1)" not in end_io:
+    if end_io.count("bio_request_end_current(1)") != 1:
         raise ContractError("syscall I/O lease no longer settles at its finalizer")
-    if "Request debt remains with the outer I/O lease" not in fs_epoch_h:
-        raise ContractError("public epoch contract does not assign debt settlement")
     reclaim = compact(function_body(FS, "fs_deferred_reclaim_maintain_owner"))
     if "bio_deferred_sponsor_begin(sponsor_owner, sponsor_class, 0)" not in reclaim:
         raise ContractError("asynchronous reclaim can borrow a coincidental request")
-    if "#define FS_WRITE_EPOCH_CREDITS 9U" not in FS:
-        raise ContractError("write mutation lacks transitive epoch credits")
+    for token in (
+        "#define FS_WRITE_EPOCH_CREDITS 9U",
+        "#define FS_EXTEND_EPOCH_CREDITS 2U",
+        "#define FS_OVERWRITE_EPOCH_CREDITS 1U",
+    ):
+        if token not in FS:
+            raise ContractError("write mutation credit classes are incomplete")
+    plan = compact(function_body(FS, "writei_plan_prepare"))
+    ordered(
+        plan,
+        "addr = bmap(ip, off / BSIZE, 0, 0, &map_error, 0)",
+        "credits = addr == 0 ? FS_WRITE_EPOCH_CREDITS",
+        "off + n > ip->size ? FS_EXTEND_EPOCH_CREDITS",
+        "FS_OVERWRITE_EPOCH_CREDITS",
+        "fs_epoch_preflight",
+    )
     write_locked = compact(function_body(FS, "writei_charged_locked"))
-    if "fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS)" not in write_locked:
-        raise ContractError("write block does not preserve final inode credit")
+    ordered(
+        write_locked,
+        "if (first_plan != 0 && first_plan->valid)",
+        "first_plan->valid = 0",
+        "writei_plan_prepare(",
+        "failure_result = preflight_result",
+    )
     if "failure_result = preflight_result" not in write_locked:
         raise ContractError("write block discards retryable preflight status")
     write = compact(function_body(FS, "writei_with_auth"))
     ordered(
         write,
-        "fs_epoch_preflight(FS_WRITE_EPOCH_CREDITS)",
+        "writei_prepare_locked(",
+        "writei_plan_prepare(",
         "bio_fs_atomic_enter()",
         "bio_fs_atomic_leave()",
     )
-    if "return preflight_result" not in write:
+    if "if (result < 0) goto out_mapping" not in write:
         raise ContractError("write entry discards retryable preflight status")
     preallocate = compact(function_body(FS, "fs_preallocate_inode"))
     ordered(

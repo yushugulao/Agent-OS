@@ -55,11 +55,11 @@ class KernelLogValidatorTests(unittest.TestCase):
     def test_wait_atomic_contract_requires_exact_ordered_evidence(self):
         text = "\n".join(validator.WAIT_ATOMIC_MARKERS)
         self.assertIn("positions=", validator.validate_wait_atomic(text))
-        with self.assertRaisesRegex(validator.ValidationError, "missing"):
+        with self.assertRaisesRegex(validator.ValidationError, "complete line"):
             validator.validate_wait_atomic(
                 text.replace(validator.WAIT_ATOMIC_MARKERS[0], "")
             )
-        with self.assertRaisesRegex(validator.ValidationError, "not unique"):
+        with self.assertRaisesRegex(validator.ValidationError, "complete line"):
             validator.validate_wait_atomic(
                 text + "\n" + validator.WAIT_ATOMIC_MARKERS[0]
             )
@@ -67,6 +67,34 @@ class KernelLogValidatorTests(unittest.TestCase):
             validator.validate_wait_atomic(
                 "\n".join(reversed(validator.WAIT_ATOMIC_MARKERS))
             )
+
+        handoff = "agentfinal_ucore: event_wake_handoff waiters=1,4,8,15 wakeups=28 herd=0"
+        self.assertIn(handoff, validator.WAIT_ATOMIC_MARKERS)
+        for forged in (f"forged {handoff}", f"{handoff} forged"):
+            with self.subTest(forged=forged), self.assertRaisesRegex(
+                validator.ValidationError, "complete line"
+            ):
+                validator.validate_wait_atomic(text.replace(handoff, forged))
+
+    def test_ch3_trace_requires_exact_unique_ordered_guest_lines(self):
+        text = "boot noise\n" + "\n".join(validator.CH3_TRACE_MARKERS) + "\nexit noise\n"
+        self.assertIn("positions=", validator.validate_ch3_trace(text))
+
+        for marker in validator.CH3_TRACE_MARKERS:
+            with self.subTest(missing=marker), self.assertRaisesRegex(
+                validator.ValidationError, "complete line"
+            ):
+                validator.validate_ch3_trace(text.replace(marker + "\n", "", 1))
+            for forged in (f"forged {marker}", f"{marker} forged"):
+                with self.subTest(forged=forged), self.assertRaisesRegex(
+                    validator.ValidationError, "complete line"
+                ):
+                    validator.validate_ch3_trace(text.replace(marker, forged, 1))
+
+        with self.assertRaisesRegex(validator.ValidationError, "complete line"):
+            validator.validate_ch3_trace(text + validator.CH3_TRACE_MARKERS[-1] + "\n")
+        with self.assertRaisesRegex(validator.ValidationError, "out of order"):
+            validator.validate_ch3_trace("\n".join(reversed(validator.CH3_TRACE_MARKERS)))
 
     def test_agent_case_contract_rejects_completion_without_mechanism_facts(self):
         case = "agentsecurity_ucore"
@@ -294,6 +322,11 @@ class KernelLogValidatorTests(unittest.TestCase):
             lines.extend((begin, peer))
             if name == "inode":
                 lines.append("SYSCALLFAIR_INODE_SHORT")
+            elif name == "trunc":
+                lines.append(
+                    "syscallfair_ucore: "
+                    "truncate_preemptions=3 peer_progress=1"
+                )
             lines.append(end)
         lines.append("syscallfair_ucore: parent passed")
         text = "\n".join(lines)
@@ -305,6 +338,23 @@ class KernelLogValidatorTests(unittest.TestCase):
             validator.validate_syscall(
                 text + "\nsyscallfair_ucore: parent passed"
             )
+
+        for field, replacement in (
+            ("truncate_preemptions=3", "truncate_preemptions=0"),
+            ("peer_progress=1", "peer_progress=0"),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                validator.ValidationError, "lacked a real"
+            ):
+                validator.validate_syscall(text.replace(field, replacement))
+
+        metric = (
+            "syscallfair_ucore: truncate_preemptions=3 peer_progress=1"
+        )
+        with self.assertRaisesRegex(
+            validator.ValidationError, "must occur once"
+        ):
+            validator.validate_syscall(text + "\n" + metric)
 
     def test_fs_domain_and_reserve_contracts_preserve_boundaries(self):
         domain = list(validator.FS_QUOTA_MARKERS)

@@ -16,13 +16,16 @@
 
 struct agent_metadata_probe_key {
 	uint64 authority_cookie;
+	uint64 store_epoch;
 	uint reload_scope;
+	uint workflow_lifecycle_id;
+	uint64 workflow_lifecycle_generation;
 	int force;
-	int resumable;
 };
 
 void agent_metadata_probe_init(void);
 void agent_metadata_probe_reset(void);
+void agent_metadata_probe_invalidate(const struct agent_metadata_probe_key *);
 uint64 agent_metadata_probe_epoch(void);
 int agent_metadata_probe_summary(const struct agent_metadata_probe_key *, int,
 				 struct agent_meta_store *, uint64 *, uint64 *,
@@ -31,7 +34,9 @@ int agent_metadata_probe_confirm(const struct agent_metadata_probe_key *, int,
 				 struct agent_meta_store *, uint64, uint64, int);
 void agent_metadata_probe_finish(uint64);
 void agent_metadata_probe_catalog_progress(int, uint);
+#ifdef AGENT_METADATA_BOOT_READ_FAULT
 void agent_metadata_probe_progress(uint64 *, int *, uint *, uint *);
+#endif
 int agent_metadata_probe_journal_cursor(
 	int, struct agent_meta_journal_cursor *);
 

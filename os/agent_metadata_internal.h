@@ -55,6 +55,7 @@ void agent_metadata_store_fail_closed_at_boot(void);
 void agent_metadata_store_defer_boot_reprobe(int);
 void agent_metadata_store_boot_reprobe_complete(int);
 void agent_metadata_store_background_maintain(void);
+void agent_metadata_store_tick(uint64);
 int agent_metadata_store_take_reconcile_request(void);
 int agent_metadata_store_load(struct agent_metadata_store_commit *);
 int agent_metadata_store_reload(uint, struct agent_metadata_store_commit *);

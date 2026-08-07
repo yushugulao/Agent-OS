@@ -714,10 +714,12 @@ def _validate_context_access(tokens: list[str]) -> None:
     direct = _inside_loop(
         body, loop_open, loop_close,
         (
-            "copy_context_volatile", "(", "&", "results", "[", "i", "]", ",",
-            "&", "records", "[", "slot", "]", ")",
+            "query_results", "[", "i", "]", "=",
+            "context_direct_active_query", "(",
+            "eval_info", ".", "context_base", ",", "target_sequence", ",",
+            "&", "results", "[", "i", "]", ",", "1", ")", ";",
         ),
-        "mapped context production read",
+        "mapped context production query",
     )
     syscall = _inside_loop(
         body, loop_open, loop_close,
@@ -734,7 +736,7 @@ def _validate_context_access(tokens: list[str]) -> None:
     syscall_open = direct_close + 2
     syscall_close = _matching(body, syscall_open, "{", "}")
     if not direct_open < direct < direct_close:
-        raise ValueError("mapped context read is outside the direct variant")
+        raise ValueError("mapped context query is outside the direct variant")
     if not syscall_open < syscall < syscall_close:
         raise ValueError("context syscall is outside the syscall variant")
     _forbid_timed_postprocessing(body, "time_context_variant")

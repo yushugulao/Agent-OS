@@ -56,13 +56,19 @@ def require_order(source: str, fragments: tuple[str, ...], message: str) -> None
 
 def check(root: Path) -> None:
     source = compact(root / "os/syscall.c")
+    proc = compact(root / "os/proc.c")
 
     require(
         source,
-        "structsyscall_transaction_context{intid;uint64args[6];"
-        "structfile*file;structfile_close_receiptclose_receipt;"
-        "intfd_uses_disk;",
+        "structsyscall_transaction_context{intid;structfile*file;"
+        "structfile_close_receiptclose_receipt;"
+        "intclose_attempted;",
         "syscall transaction does not own a stable file reference",
+    )
+    reject(
+        source,
+        "structsyscall_transaction_context{intid;uint64args[6];",
+        "slow transaction still copies all six syscall arguments",
     )
 
     pin = function(source, "syscall_fd_pin")
@@ -96,9 +102,9 @@ def check(root: Path) -> None:
     require_order(
         prepare,
         (
-            "transaction->file=syscall_fd_pin(transaction->args[0])",
-            "transaction->fd_uses_disk="
-            "syscall_file_uses_disk(transaction->file)",
+            "transaction->file=syscall_fd_pin(trapframe->a0)",
+            "if(syscall_file_uses_disk(transaction->file))",
+            "transaction->policy|=SYSCALL_POLICY_BLOCK_IO",
         ),
         "transaction does not pin before classifying the same file",
     )
@@ -126,48 +132,110 @@ def check(root: Path) -> None:
         ):
             require(body, fragment, message)
 
-    dispatch = function(source, "syscall")
+    dispatch = function(source, "syscall_dispatch")
     for fragment, message in (
         (
-            "sys_write(transaction.file,(int)args[0],args[1],args[2])",
+            "sys_write(transaction->file,(int)trapframe->a0,"
+            "trapframe->a1,trapframe->a2)",
             "write execution does not consume the admitted file",
         ),
         (
-            "sys_read(transaction.file,(int)args[0],args[1],args[2])",
+            "sys_read(transaction->file,(int)trapframe->a0,"
+            "trapframe->a1,trapframe->a2)",
             "read execution does not consume the admitted file",
-        ),
-        (
-            "if(syscall_transaction_begin(&transaction)<0){ret=-1;"
-            "gotosyscall_out;}",
-            "admission failure can bypass transaction cleanup",
-        ),
-        (
-            "syscall_out:syscall_transaction_finish(&transaction,&ret)",
-            "return paths bypass stable reference settlement",
         ),
     ):
         require(dispatch, fragment, message)
 
-    may_io = function(source, "syscall_may_issue_block_io")
-    epoch = function(source, "syscall_needs_fs_epoch")
-    require(
-        may_io,
-        "caseSYS_read:caseSYS_write:returntransaction->fd_uses_disk",
-        "read/write I/O admission does not use the stable classification",
+    slow = function(source, "syscall_slow_path")
+    require_order(
+        slow,
+        (
+            "syscall_transaction_prepare(&transaction,trapframe,id,policy)",
+            "syscall_transaction_begin(&transaction,trapframe)",
+            "syscall_dispatch(id,trapframe,&transaction)",
+            "syscall_transaction_finish(&transaction,&ret)",
+        ),
+        "slow path can bypass transaction setup or settlement",
     )
+    route = function(source, "syscall")
+    require_order(
+        route,
+        (
+            "id=syscall_decode_id(trapframe->a7)",
+            "class=syscall_classify(id)",
+            "kernel_work_begin_syscall(id,syscall_kernel_work_class(id))",
+            "if(class==SYSCALL_CLASS_INVALID)",
+            "policy=syscall_policy_base(class)",
+            "if(syscall_needs_transaction(class))",
+            "ret=syscall_slow_path(trapframe,id,policy)",
+            "ret=syscall_dispatch(id,trapframe,0)",
+        ),
+        "syscall entry does not split fast and slow paths from one policy",
+    )
+    decode = function(source, "syscall_decode_id")
     require(
-        epoch,
-        "caseSYS_read:return0;caseSYS_write:"
-        "returntransaction->fd_uses_disk",
+        decode,
+        "if(raw_id>0x7fffffffULL)return-1;return(int)raw_id",
+        "wide unknown syscall IDs can alias a registered low ID",
+    )
+    reject(route, "structsyscall_transaction_context", "fast entry owns a transaction")
+    needs = function(source, "syscall_needs_transaction")
+    require(
+        needs,
+        "class!=SYSCALL_CLASS_FAST&&class!=SYSCALL_CLASS_INVALID",
+        "read/write/close can escape the descriptor transaction path",
+    )
+
+    registry = (root / "os/syscall_counter.h").read_text(encoding="utf-8")
+    for name in ("read", "write", "close"):
+        if not re.search(rf"\bX\({name},\s*DESCRIPTOR,\s*ALWAYS\)", registry):
+            raise ContractError(f"{name} lacks descriptor transaction classification")
+    for name in (
+        "agent_file_edit_begin", "agent_file_edit_state", "agent_worker_create"
+    ):
+        if not re.search(
+            rf"\bX\({name},\s*BLOCK_IO_FS_EPOCH,\s*ALWAYS\)", registry
+        ):
+            raise ContractError(
+                f"{name} can drop a path inode without the filesystem epoch"
+            )
+    fork = function(proc, "fork_common")
+    require_order(
+        fork,
+        (
+            "proc_vm_snapshot_begin(p)",
+            "fd_spawn_snapshot_take(p,issuer,authority_boundary,&fds)",
+            "fd_spawn_snapshot_release(&fds)",
+            "add_task(nt)",
+            "proc_vm_snapshot_end(p)",
+            "intr_restore(publish_enabled)",
+            "fail:fd_spawn_snapshot_release(&fds)",
+            "proc_vm_snapshot_end(p)",
+        ),
+        "fork does not keep the parent snapshot across pinned-FD settlement",
+    )
+    if fork.count("proc_vm_snapshot_begin(p)") != 1 or \
+            fork.count("proc_vm_snapshot_end(p)") != 2:
+        raise ContractError("fork snapshot window has an unbalanced exit path")
+    if fork.count("return-1;") != 2:
+        raise ContractError("fork has a failure exit outside snapshot settlement")
+    policy = function(source, "syscall_policy_base")
+    require(
+        policy,
+        "caseSYSCALL_CLASS_BLOCK_IO:returnSYSCALL_POLICY_BLOCK_IO",
+        "block-I/O class is not translated into admission policy",
+    )
+    prepare = function(source, "syscall_transaction_prepare")
+    require(
+        prepare,
+        "transaction->policy|=SYSCALL_POLICY_BLOCK_IO;"
+        "if(transaction->id==SYS_write)"
+        "transaction->policy|=SYSCALL_POLICY_FS_EPOCH",
         "pure read still acquires the filesystem mutation epoch",
     )
-    for body, label in ((may_io, "I/O admission"), (epoch, "filesystem epoch")):
-        require(
-            body,
-            "caseSYS_close:return0",
-            f"close {label} still reserves before final-reference classification",
-        )
-        reject(body, "p->files", f"{label} reads a raw descriptor table slot")
+    reject(policy, "p->files", "policy reads a raw descriptor table slot")
+    reject(prepare, "p->files", "prepare reads a raw descriptor table slot")
 
     begin = function(source, "syscall_transaction_begin")
     require_order(
@@ -215,7 +283,7 @@ def check(root: Path) -> None:
 
     require(
         begin,
-        "close_status=fdclose_prepare((int)transaction->args[0],"
+        "close_status=fdclose_prepare((int)trapframe->a0,"
         "&transaction->close_receipt)",
         "close does not atomically detach into a release receipt",
     )
@@ -224,14 +292,14 @@ def check(root: Path) -> None:
         "if(transaction->close_receipt.type!=FD_INODE)return0;",
         "close lacks final-inode-only slow-path classification",
     )
-    dispatch = function(source, "syscall")
+    dispatch = function(source, "syscall_dispatch")
     require(
         dispatch,
-        "caseSYS_close:ret=transaction.close_attempted?"
-        "transaction.close_result:-1;",
+        "caseSYS_close:ret=transaction!=0&&transaction->close_attempted?"
+        "transaction->close_result:-1;",
         "close dispatch detaches a second descriptor identity",
     )
-    reject(dispatch, "sys_close(args[0])", "close bypasses its detached receipt")
+    reject(dispatch, "sys_close(trapframe->a0)", "close bypasses its detached receipt")
 
 
 def main() -> int:

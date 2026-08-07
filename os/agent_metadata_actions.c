@@ -265,13 +265,6 @@ agent_metadata_actions_dependency_update(uint scope_id, char *payload,
 	return AGENT_STATUS_OK;
 }
 
-const struct agent_metadata_dependency_view *
-agent_metadata_actions_dependency_borrow(int slot)
-{
-	return slot >= 0 && slot < AGENT_METADATA_DEPENDENCY_MAX &&
-	       agent_dependencies[slot].used ? &agent_dependencies[slot] : 0;
-}
-
 int
 agent_metadata_actions_dependency_mask(uint scope_id, char *label,
 				       char *namespace, char *run_id,

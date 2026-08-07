@@ -23,17 +23,22 @@
 #define AGENT_CONTEXT_TEXT_SIZE 16
 
 #define AGENT_CONTEXT_MAGIC       0x4147435458543031ULL
-#define AGENT_CONTEXT_VERSION     8
-#define AGENT_CONTEXT_PAGES       6
+#define AGENT_CONTEXT_VERSION     9
+#define AGENT_CONTEXT_KERNEL_PAGES 6
+#define AGENT_CONTEXT_PAGES       7
 #define AGENT_CONTEXT_SIDECAR_PAGE_COUNT 9U
+#define AGENT_COLD_STATE_PAGE_COUNT 1U
 #define AGENT_STATE_PAGE_COUNT \
-	(AGENT_CONTEXT_SIDECAR_PAGE_COUNT + 2U * AGENT_CONTEXT_PAGES)
+	(AGENT_CONTEXT_SIDECAR_PAGE_COUNT + AGENT_COLD_STATE_PAGE_COUNT + \
+	 AGENT_CONTEXT_PAGES)
 #define AGENT_CONTEXT_SIZE        (AGENT_CONTEXT_PAGES * PAGE_SIZE)
 #define AGENT_CONTEXT_MAX_RECORDS 128
 #define AGENT_CONTEXT_HEADER_OFFSET 0
 #define AGENT_CONTEXT_LATEST_RESPONSE_OFFSET \
 	(sizeof(struct agent_context_header))
 #define AGENT_CONTEXT_RECORDS_OFFSET PAGE_SIZE
+#define AGENT_CONTEXT_PUBLISH_SEQUENCE_OFFSET \
+	(AGENT_CONTEXT_RECORDS_OFFSET - sizeof(uint64))
 #define AGENT_CONTEXT_BASE \
 	(TRAPFRAME - (16 + AGENT_CONTEXT_PAGES) * PAGE_SIZE)
 
@@ -58,7 +63,7 @@
 #define AGENT_SCHED_POLICY_ADAPTIVE 1
 #define AGENT_SCHED_DEFAULT_BUDGET  8
 #define AGENT_SCHED_MAX_AGENT_BURST 8
-#define AGENT_SCHED_TRACE_CAP       16
+#define AGENT_SCHED_TRACE_CAP        8
 #define AGENT_SCHED_WEIGHT_MIN      10
 #define AGENT_SCHED_WEIGHT_MAX      200
 #define AGENT_SCHED_PRIORITY_MIN    -100
@@ -91,15 +96,15 @@
 #define AGENT_AUDIT_KIND_EVENT_ENQUEUE 2
 #define AGENT_AUDIT_KIND_EVENT_CONSUME 3
 #define AGENT_AUDIT_KIND_SCHED         4
+/* v8 磁盘检查点仍可恢复该停产类型，新代码不再生成。 */
 #define AGENT_AUDIT_KIND_PREFETCH      5
 #define AGENT_AUDIT_MAX_RECORDS        512
 #define AGENT_AUDIT_TEXT_SIZE          32
-#define AGENT_LEDGER_VERSION           2
+#define AGENT_LEDGER_VERSION           3
 
 #define AGENT_TIMELINE_SOURCE_CONTEXT  1
 #define AGENT_TIMELINE_SOURCE_SCHED    2
 #define AGENT_TIMELINE_SOURCE_AUDIT    3
-#define AGENT_TIMELINE_SOURCE_PREFETCH 4
 #define AGENT_TIMELINE_MAX_RECORDS     512
 
 #define AGENT_TIMELINE_SOURCE_MASK_CONTEXT \
@@ -108,13 +113,10 @@
 	(1ULL << AGENT_TIMELINE_SOURCE_SCHED)
 #define AGENT_TIMELINE_SOURCE_MASK_AUDIT \
 	(1ULL << AGENT_TIMELINE_SOURCE_AUDIT)
-#define AGENT_TIMELINE_SOURCE_MASK_PREFETCH \
-	(1ULL << AGENT_TIMELINE_SOURCE_PREFETCH)
 #define AGENT_TIMELINE_SOURCE_MASK_ALL \
 	(AGENT_TIMELINE_SOURCE_MASK_CONTEXT | \
 	 AGENT_TIMELINE_SOURCE_MASK_SCHED | \
-	 AGENT_TIMELINE_SOURCE_MASK_AUDIT | \
-	 AGENT_TIMELINE_SOURCE_MASK_PREFETCH)
+	 AGENT_TIMELINE_SOURCE_MASK_AUDIT)
 
 #define AGENT_TIMELINE_FILTER_SOURCE_MASK (1ULL << 0)
 #define AGENT_TIMELINE_FILTER_START_TICK  (1ULL << 1)
@@ -209,27 +211,15 @@
 #define AGENT_FILE_DIGEST_MAX_BYTES 4096
 #define AGENT_FILE_DIGEST_CHUNK     64
 
-#define AGENT_FILE_PREFETCH_MAX_HINTS 8
-#define AGENT_FILE_PREFETCH_REASON_DEPENDENCY  (1ULL << 0)
-#define AGENT_FILE_PREFETCH_REASON_SAME_RUN    (1ULL << 1)
-#define AGENT_FILE_PREFETCH_REASON_PENDING     (1ULL << 2)
-#define AGENT_FILE_PREFETCH_REASON_STAGE_INDEX (1ULL << 3)
-#define AGENT_FILE_PREFETCH_REASON_HANDOFF     (1ULL << 4)
-#define AGENT_FILE_PREFETCH_REASON_SPAN_BUS    (1ULL << 5)
-#define AGENT_FILE_PREFETCH_SPAN_MAX 32
-
 #define AGENT_DEPENDENCY_F_USER (1ULL << 0)
 
 #define AGENT_PROVENANCE_NODE_CONTEXT  1
 #define AGENT_PROVENANCE_NODE_AUDIT    2
-#define AGENT_PROVENANCE_NODE_PREFETCH 3
 
 #define AGENT_PROVENANCE_EDGE_CONTEXT  1
 #define AGENT_PROVENANCE_EDGE_AUDIT    2
-#define AGENT_PROVENANCE_EDGE_PREFETCH 3
 #define AGENT_PROVENANCE_MAX_EDGES \
-	(AGENT_CONTEXT_MAX_RECORDS + AGENT_AUDIT_MAX_RECORDS + \
-	 AGENT_FILE_PREFETCH_MAX_HINTS)
+	(AGENT_CONTEXT_MAX_RECORDS + AGENT_AUDIT_MAX_RECORDS)
 
 #define AGENT_EVENT_PAYLOAD_SIZE 64
 #define AGENT_WATCH_FILTER_SIZE  64
@@ -466,7 +456,7 @@ struct agent_ledger_summary {
 	uint64 context_records;
 	uint64 event_records;
 	uint64 sched_records;
-	uint64 prefetch_records;
+	uint64 other_records;
 	uint64 timeline_total;
 	uint64 observe_epoch;
 };
@@ -673,34 +663,6 @@ struct agent_file_hit {
 	uint64 fs_generation;
 };
 
-struct agent_file_prefetch_hint {
-	uint64 sequence;
-	uint64 source_sequence;
-	uint64 span_id;
-	uint64 workflow_lifecycle_generation;
-	uint64 branch_generation;
-	uint64 actor_control_id;
-	uint64 cause_branch_generation;
-	uint64 cause_control_id;
-	uint64 cause_record_hash;
-	uint64 reason;
-	uint64 score;
-	uint64 tick;
-	uint64 fs_generation;
-	int fid;
-	uint workflow_lifecycle_id;
-	int actor_tid;
-	int actor_role;
-	int actor_loop_state;
-	int source_fid;
-	int source_pid;
-	int target_pid;
-	int plan;
-	int candidate_records;
-	int total_hits;
-	struct agent_file_hit hit;
-};
-
 struct agent_file_query {
 	uint64 flags;
 	int max_hits;
@@ -860,7 +822,4 @@ int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr);
 int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps);
 int sys_agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 			   int operation);
-int sys_agent_file_prefetch_snapshot(uint64 hintsaddr, int max);
-int sys_agent_file_prefetch_span_snapshot(uint64 hintsaddr, int max);
-
 #endif

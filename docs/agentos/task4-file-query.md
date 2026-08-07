@@ -1,6 +1,6 @@
 # 任务四：面向 Agent 查询优化的文件系统扩展
 
-本文是 [design.md](design.md) 的任务四细节附录，重点说明 AgentOS-uCore 当前实现的文件元数据表、带 incarnation 的真实 inode 关联、VFS public/workflow 安全域、私有 metadata 双 bank、属性查询、索引路径、内容摘要工具、通用依赖注册/查询和查询历史驱动的预取提示。
+本文是 [design.md](design.md) 的任务四细节附录，重点说明 AgentOS-uCore 当前实现的文件元数据表、带 incarnation 的真实 inode 关联、VFS public/workflow 安全域、私有 metadata 双 bank、属性查询、索引路径、内容摘要工具和通用依赖注册/查询。
 
 ## 目标
 
@@ -23,8 +23,6 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 - 支持受权 Agent 读取真实文件短预览和 FNV-1a 内容指纹；
 - 支持同一文件元数据代数下的真实文件内容摘要缓存；
 - 支持依赖关系注册和查询；
-- 支持根据历史查询和对象标签依赖生成 metadata 预取提示；
-- 支持按当前 span 查询跨 Agent 汇总的 metadata 预取提示；
 - 文件状态变化可以触发 Agent 事件；
 - 调度器空隙会按 tick 合并分批扫描 uCore 根目录，自动维护真实文件的元数据和索引；
 - 查询结果会写入 Context Path。
@@ -60,8 +58,6 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
 查询结构 `struct agent_file_query` 以空字符串表示“不限制该字段”。结果结构 `struct agent_file_query_result` 返回命中数、返回数、扫描数、是否使用索引、查询计划、计划原因、候选记录数、索引桶、索引失效时实际访问的重建记录数、是否截断、tick 和最多 8 条命中。`index_rebuild_records` 来自内核 catalog 的真实重建计数，不能用表容量常量代替。
 
-`struct agent_file_prefetch_hint` 表示一条预取提示。它保存触发提示的 Context sequence、span id、source pid、target pid、source fid、target fid、原因 flags、排序分数、文件元数据代数、候选记录数量和一份目标文件 hit 快照。每个 Agent 本地提示容量固定为 8 条，属于当前 Agent 的内核 PCB 状态；全局 span 预取提示总线容量固定为 32 条，用于同一因果链上的跨 Agent 查询。
-
 内核启动时 `agentinit()` 会把 status、stage、kind 三类索引桶初始化为 `-1`。因此即使测试程序在调用 `agent_file_meta_init()` 前先执行带索引查询，也会返回 0 条命中，而不会沿着未初始化链表扫描。
 
 ## 文件节点关联和私有元数据文件
@@ -83,7 +79,7 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
 普通持久文件变化采用写回而不是直写：write/truncate 通过 inode incarnation sidecar 先发布最新 size、更新时间和文件代数，查询及 bank 快照都会覆盖内存主表中的旧值；create/delete 则先完成内存记录变化。带 `PERSIST` 的记录随后让对应 scope 的 `dirty_generation` 进入固定一秒的非滑动合并窗口；不进入快照的 volatile 记录只更新内存/sidecar，不制造空 checkpoint。后台维护在事务门空闲时每轮只推进 COW 状态机的一个步骤；dirty scope 轮转成为整个 job 的稳定 sponsor，物理传输使用该 owner 的硬 `BACKGROUND` burst/refill。checkpoint 成功或失败后的 not-before deadline 都是固定合并窗口，不再按 checkpoint 执行耗时延长；I/O debt 决定何时能推进下一步。到期写回先于扫描获得维护机会，持续 scan pending 不能使其永久饥饿。快照开始时捕获各 scope 的脏代数，提交后只推进期间没有新增变化的 `durable_generation`，所以并发写入不会被错误标成已持久化；失败则保留脏状态等待固定窗口和 budget。
 
-全局 metadata transaction gate 对进程请求使用单调 ticket FIFO，并只唤醒队首。线程取得 ticket 后不可中断地等到自己的 turn；若进程已经请求退出，也会先接过并立即传递事务门，不能遗弃 ticket。scheduler 在门空闲时可取得硬有界维护轮次，以免后台写回和扫描被持续进程请求饿死；该轮次不会重复唤醒已由前任唤醒的 serving ticket，普通进程态 VFS callback 仍不能插队。进程态表扫描、索引维护、显式依赖和预取工作按 128 records 进入统一 kernel-work 安全点；scheduler 每轮最多扫描 16 个目录项，字段变化只发布线性索引。显式用户依赖保存在每 scope 最多 16 条的固定表中；兼容 `dependency_mask` 留在源文件记录，由依赖查询、action 和预取在已有线性扫描中按需解释，不再物化全局派生图。字段变化掩码分别维护 status/stage/kind 索引和依赖代数，纯状态变化不推进依赖 generation。通用 action 先用位图形成目标与依赖选集；status 原子批次独立限制为 112 条，超限会在修改任何槽位前返回 `NO_SPACE`。准入后只更新每个选中槽一次、重建 status 索引一次并合并持久写回，复杂度为固定次数的有界表扫描。
+全局 metadata transaction gate 对进程请求使用单调 ticket FIFO，并只唤醒队首。线程取得 ticket 后不可中断地等到自己的 turn；若进程已经请求退出，也会先接过并立即传递事务门，不能遗弃 ticket。scheduler 在门空闲时可取得硬有界维护轮次，以免后台写回和扫描被持续进程请求饿死；该轮次不会重复唤醒已由前任唤醒的 serving ticket，普通进程态 VFS callback 仍不能插队。进程态表扫描、索引维护和显式依赖工作按 128 records 进入统一 kernel-work 安全点；scheduler 每轮最多扫描 16 个目录项，字段变化只发布线性索引。显式用户依赖保存在每 scope 最多 16 条的固定表中；兼容 `dependency_mask` 留在源文件记录，由依赖查询和 action 在已有线性扫描中按需解释，不再物化全局派生图。字段变化掩码分别维护 status/stage/kind 索引和依赖代数，纯状态变化不推进依赖 generation。通用 action 先用位图形成目标与依赖选集；status 原子批次独立限制为 112 条，超限会在修改任何槽位前返回 `NO_SPACE`。准入后只更新每个选中槽一次、重建 status 索引一次并合并持久写回，复杂度为固定次数的有界表扫描。
 
 显式持久 metadata set/delete、reload 和 scope retirement 还会同步进入单调 ticket 的 FIFO submit lane，并建立不可替换的 COW job；该语义保证有序接纳，不保证调用返回时 primary 已完成回读验证。条件不满足时，中断从失败检查一直保持关闭，直到事务门释放且线程已经进入 submit condition queue，避免 unlock-to-sleep 丢失唤醒。持久化在预算边界暂时释放事务门时，immutable job 保持同一 `job_id`，后来提交者不能替换。metadata exact-read 在文件系统原子段之外偿还 I/O 预算，并从正数短读前缀继续；临时 interruption 不会被记成 bank corruption。scanner 仍独立使用 `max(20 tick, 4 * 扫描耗时)` 自适应 cooldown，不能与 checkpoint 的固定窗口混为一谈。
 
@@ -165,7 +161,7 @@ Agent 工具 capability 只约束 `agent_file_query()`、`read_file_digest` 等 
 
 `fs_generation` 标识本次查询观察到的 metadata 可见代数，不代表内核保存了查询结果。本域文件变化推进本域代数，SYSTEM 对象变化会影响所有能看见它的 scope。`AGENT_FILE_QUERY_REASON_CACHE_HIT` 常量只为已有用户 ABI 和日志解析兼容而保留，当前内核不会设置它。
 
-同一个页面或 Agent worker 若要复用“某 run 的 failed artifact”之类的结构化结果，可以把 `agent_file_query_result` 与 `fs_generation` 写入自己的 Agent Context user cache。用户态在代数变化后重新查询。该区域不会被 snapshot 覆盖，但也不属于内核 shadow 可信历史；安全决策和 provenance 仍必须引用本次真实查询产生的 Context record。
+同一个页面或 Agent worker 若要复用“某 run 的 failed artifact”之类的结构化结果，可以把 `agent_file_query_result` 与 `fs_generation` 写入自己的 Agent Context user cache。用户态在代数变化后重新查询。该区域不会被 snapshot 覆盖，也不属于前 6 页可信历史；安全决策和 provenance 仍必须引用本次真实查询产生的 Context record。
 
 索引路径适合 Agent 常见查询，例如：
 
@@ -203,35 +199,6 @@ metadata 查询说明“哪个文件符合条件”，内容摘要工具说明�
 
 未绑定 Agent metadata 的普通文件不会进入 digest cache。这样做是为了避免普通文件同尺寸改写时，Agent 子系统缺少可靠内容版本信号而返回过期内容证据。缓存计数通过 `agent_info.file_digest_cache_hits` 和 `agent_info.file_digest_cache_misses` 暴露，供测试和性能材料直接引用。
 
-## 查询历史驱动的预取提示
-
-文件查询命中后，内核会把本次查询视为 Agent 当前探索路径的一部分，并根据源文件的对象标签依赖推导后续可能需要关注的文件 metadata。例如科研示例查询设定的模拟流程中的比对处理 label 后，如果用户态注册的依赖关系显示比对处理会影响结果分析、报告生成和归档交付，内核会在同一 namespace/workflow/run 中查找这些后续对象的元数据，并生成预取提示。
-
-预取提示的生成条件：
-
-1. 当前进程必须是 Agent；
-2. 文件查询必须至少命中一条记录；
-3. 命中的 source 文件有 `dependency_mask`；
-4. target 文件与 source 位于同一 namespace/workflow/run；
-5. target label 位于 source 的依赖集合中；
-6. target label 可以通过 label 索引解释候选记录数量。
-
-本次查询在有界局部状态中保存命中项对应的精确 metadata slot。生成预取时，内核先按每 scope 16 条依赖配额收集选择器；label hash 只作预筛，最终仍精确比较 label、namespace、run 和 workflow。随后只扫描一次文件表，以槽位位图对所有 source 的目标全局去重；没有显式目标的 source 才使用兼容 `dependency_mask` 候选。整次查询最多发布 8 个唯一目标，dependency、文件表、提示总线和 handoff 的可扩展遍历都计入 metadata 工作预算。handoff 在事件入队时只捕获稳定端点句柄，预算化阶段只处理一个 hint 的局部副本；固定表扫描预算预付后，再用 `slot + pid + control_id + scope` 重新解析接收者并执行不可调度的有界提交。
-
-每个 Agent 最多保留 8 条本地预取提示。相同 target fid 的提示会被更新；容量满后按 FIFO 方式替换较早提示。带有 span 的提示还会写入全局 span 预取提示总线，最多保留 32 条，并记录 source pid 和 target pid。提示使用 `AGENT_FILE_PREFETCH_REASON_DEPENDENCY`、`AGENT_FILE_PREFETCH_REASON_SAME_RUN`、`AGENT_FILE_PREFETCH_REASON_PENDING`、`AGENT_FILE_PREFETCH_REASON_STAGE_INDEX`、`AGENT_FILE_PREFETCH_REASON_HANDOFF` 和 `AGENT_FILE_PREFETCH_REASON_SPAN_BUS` 说明生成原因。其中 `HANDOFF` 表示提示来自另一个 Agent 的 message 事件交接，`SPAN_BUS` 表示该提示已进入同一 span 的全局提示总线。若接收 Agent 在预算检查点期间退出，端点重校验失败后不会向已回收或复用的 PCB、本地 ring、span bus、timeline 或 audit 发布任何交接副作用。
-
-读取接口：
-
-```c
-int agent_file_prefetch_snapshot(struct agent_file_prefetch_hint *hints, int max);
-int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *hints, int max);
-```
-
-`agent_file_prefetch_snapshot()` 查询当前 Agent 自己可见的提示。`agent_file_prefetch_span_snapshot()` 查询当前 Agent 的可信 span，只有 `scope_id + current_span_id + 内核私有 span_owner` 全部匹配才返回记录；公开 span 数字相同不能跨 workflow 或 owner 读取。当前 Agent 尚未进入可信 span 时返回 0。两者在 `max=0` 时只返回当前提示数量；`max>0` 会按产生顺序复制提示。普通进程调用返回 `-1`；没有 `META_READ` 能力的 Agent 返回 `AGENT_STATUS_DENIED`。
-
-这项能力不是完整文件内容预加载。它的作用是把“Agent 查到一个阶段后，后续大概率会继续查哪些相关工件”提前交给内核表达，减少下一轮 Agent 继续做宽泛扫描或重新拼接依赖关系的成本。Agent 之间通过 message 事件协作时，内核可以把发送者当前可见的提示复制给接收者，让接收者直接从自己的 snapshot 中读取上游提示，而不需要从消息文本中解析策略字段。
-同一 span 的提示总线进一步减少了跨 Agent 协作时的状态拼接成本：接收者不仅能读取自己 PCB 中被交接来的提示，还能用 span 查询看到“这条因果链中是谁产生了提示、提示交给了谁、目标工件是什么”。这为后续宿主机科研 Agent 对比示例提供了更直观的内核级协作证据。
-
 ## 工具接口
 
 任务四能力既可以通过 syscall 直接调用，也可以通过工具调用进入：
@@ -241,8 +208,6 @@ int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *hints, in
 | `agent_file_meta_init()` | 初始化文件元数据表 |
 | `agent_file_meta_set(meta)` | 插入或更新一条元数据 |
 | `agent_file_query(query, result)` | 结构化查询 |
-| `agent_file_prefetch_snapshot(hints, max)` | 读取当前 Agent 的 metadata 预取提示 |
-| `agent_file_prefetch_span_snapshot(hints, max)` | 读取当前 span 的全局 metadata 预取提示 |
 | `AGENT_TOOL_QUERY_FILE` | 工具方式查询文件 |
 | `AGENT_TOOL_READ_FILE_SUMMARY` | 按 selector 读取摘要 |
 | `AGENT_TOOL_READ_FILE_DIGEST` | 按 selector 读取真实文件短预览和内容指纹 |
@@ -280,14 +245,11 @@ label=report;run_id=<另一个模拟流程>;namespace=<示例项目>
 
 在 `labdemo_ucore` 中：
 
-1. sentinel 查询失败文件；
-2. sentinel 读取本次查询产生的 metadata 预取提示；
-3. sentinel 发送普通 investigate 消息，内核在 message 入队时交接预取提示，并写入同一 span 的全局提示总线；
-4. investigator 查询 align 摘要；
-5. investigator 查询依赖；
-6. investigator 从自己的 snapshot 读取带 `HANDOFF` 原因位的 analyze 提示，也从 span snapshot 验证 source/target pid，并据此读取 analyze 摘要；
-7. recovery 查询报告；
-8. 这些工具调用都会进入各自 Agent 的 Context Path。
+1. sentinel 查询失败文件和结构化依赖；
+2. sentinel 通过受权消息通道发送 investigate 事件；
+3. investigator 查询 align 摘要、依赖关系和真实日志 digest；
+4. recovery 查询报告；
+5. 这些工具调用都会进入各自 Agent 的 Context Path。
 
 ## 与 Agent Loop 的关系
 
@@ -319,7 +281,7 @@ label=report;run_id=<另一个模拟流程>;namespace=<示例项目>
 align+analyze+report+archive
 ```
 
-查询可以带 namespace 和 run_id。同一个 namespace 下如果存在多个 run，内核只返回所选 run 的依赖影响范围；不带这些字段时则返回该 label 当前可见的合并结果。这个例子来自科研平台用户态初始化数据，不是内核固定规则。换成代码 Agent、运维 Agent 或写作 Agent 时，用户态可以用 `dependency_update` 写入 `parse -> compile`、`alert -> diagnose`、`outline -> draft` 之类的 label 关系，内核按同一套依赖记录查询和生成预取提示。
+查询可以带 namespace 和 run_id。同一个 namespace 下如果存在多个 run，内核只返回所选 run 的依赖影响范围；不带这些字段时则返回该 label 当前可见的合并结果。这个例子来自科研平台用户态初始化数据，不是内核固定规则。换成代码 Agent、运维 Agent 或写作 Agent 时，用户态可以用 `dependency_update` 写入 `parse -> compile`、`alert -> diagnose`、`outline -> draft` 之类的 label 关系，内核按同一套依赖记录查询。
 
 ## 性能验证
 
@@ -332,7 +294,7 @@ align+analyze+report+archive
 - 可输出 `used_index`、`scanned_records`、`plan`、`plan_reason`、`candidate_records`，并证明热索引仍为 `CACHE_HIT=0`；
 - 可用受权工具读取真实文件短预览和内容指纹；
 - 可用 `agent_info` 观察内容摘要缓存命中和未命中；
-- 可输出由历史查询和对象标签依赖生成的 metadata 预取提示；
+- 可输出实际命中数、扫描数、索引候选数和依赖查询结果；
 - 能用候选记录数和多轮 tick 观测解释索引价值。
 
 ## 综合场景中的证据
@@ -340,12 +302,12 @@ align+analyze+report+archive
 `labdemo_ucore` 中的文件查询证据说明：
 
 - sentinel 能按属性查询失败文件；
-- sentinel 能读取查询历史驱动的预取提示；
-- investigator 能通过内核交接的预取提示读取摘要、真实日志 digest、依赖和后续 label 摘要；
+- sentinel 能查询失败文件并通过受权消息触发调查；
+- investigator 能读取摘要、真实日志 digest、依赖和后续 label 摘要；
 - recovery 后能查询报告文件；
 - 查询路径使用索引。
 
-`agentsecurity_ucore` 说明索引初始化前查询安全，且 recovery 只更新 selector 指定的 run。`agentfs_ucore` 说明真实文件关联、预取提示、自定义 inode、内容摘要、digest cache、`.agentmeta` reload、无内核查询结果 cache、scan/index 一致性、截断查询、字段清空、删除清理和 selector 未命中都可验证。`agentscan_ucore` 说明根目录后台扫描、普通文件创建后的自动元数据和文件删除后的清理都可运行。
+`agentsecurity_ucore` 说明索引初始化前查询安全，且 recovery 只更新 selector 指定的 run。`agentfs_ucore` 说明真实文件关联、结构化依赖、自定义 inode、内容摘要、digest cache、`.agentmeta` reload、无内核查询结果 cache、scan/index 一致性、截断查询、字段清空、删除清理和 selector 未命中都可验证。`agentscan_ucore` 说明根目录后台扫描、普通文件创建后的自动元数据和文件删除后的清理都可运行。
 
 `agentvfs_ucore` 进一步验证 public/workflow 路径隔离、普通进程不能读写或删除 workflow 工件、读写 worker 的映像 profile 上限、错误映像不能取得 pending 委派、普通 fork 不继承文件能力、跨 scope inode fd 被撤销、worker pipe 需单跳委派，以及 public 命名空间仍可由普通进程使用。
 
@@ -361,6 +323,5 @@ align+analyze+report+archive
 | 查询语法 | 当前支持结构体字段查询和简单 `key=value` 字符串 |
 | 查询规模 | catalog 总量 512，其中 SYSTEM 固定 64、最多 4 个 ACTIVE/CLOSING/RETIRING workflow 各固定 112；每 scope 自动扫描物化最多 96 条并保留 16 条显式 metadata，单次最多返回 8 条 hit。workflow inode 账户由独立 STORAGE policy 控制，每 scope 硬下限 320，当前镜像保证约 342；catalog 饱和后的普通 VFS 文件仍受 scope 隔离，但在槽位可用并被扫描重建前不属于 metadata 查询结果 |
 | 内容摘要 | 当前读取最多 4096 字节计算指纹，返回短预览，不做全文索引 |
-| 预取提示 | 当前只生成 metadata 提示，提示本身不预读文件内容，不保存到磁盘 |
 | 文件安全域 | 当前实现 PUBLIC、SYSTEM 和动态 workflow；8 槽 ledger 保存 generation-safe 身份，但冻结期 ACTIVE/CLOSING/RETIRING admission 合计最多 4 个，身份槽只在 `used == 0` 且 catalog 回收完成后复用；尚未提供任意数量的用户命名域或用户可编程动态策略语言 |
 | 故障验证 | 专项 runner 合同覆盖设备 flush/durable-barrier 语义上的 primary/mirror 各八个 metadata COW phase，并以认证 QEMU `SIGKILL` 后重启、恢复前 raw-bank 解析、单 bank 三次读取失败后的降级修复、单次暂态 header-flush EIO，以及 VirtIO 丢中断、延迟完成、描述符压力、设备状态错误、flush 禁用、timeout reset 和 stuck reset 进行验证；当前提交是否取得 E2/E3 以最终证据包为准。该模型不覆盖物理控制器易失缓存、整机供电中断、永久设备故障、启动时双 bank 同时损坏或 grouped qmap claim 中点断电，不据此声称完整物理掉电原子性 |

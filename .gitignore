@@ -29,7 +29,6 @@ baseline_ucore/user/target
 baseline_ucore/user/asm
 link_app.S
 initproc.S
-kernel_app.ld
 *.o
 *.d
 *.asm

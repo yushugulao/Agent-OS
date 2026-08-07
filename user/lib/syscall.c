@@ -5,9 +5,12 @@
 #include <wait_atomic_test_abi.h>
 #endif
 #include <stddef.h>
+#include <string.h>
 #include <unistd.h>
 #include <stdio.h>
 
+/* 双副本探测、目录投影和修复各自都可能按记录分段续跑。 */
+#define AGENT_META_INIT_RESTART_LIMIT (8 * AGENT_FILE_META_MAX)
 
 void __write_buffer();
 void __clear_buffer();
@@ -270,12 +273,6 @@ long kernel_work_last_preemptions(void)
 	return syscall(SYS_kernel_work_last_preemptions);
 }
 
-int kernel_work_receipt_snapshot(struct kernel_work_receipt *receipt)
-{
-	return syscall(SYS_kernel_work_receipt_snapshot, receipt,
-		       sizeof(*receipt));
-}
-
 int enable_deadlock_detect(int enabled)
 {
 	return syscall(SYS_enable_deadlock_detect, enabled);
@@ -462,18 +459,6 @@ int agent_ledger_snapshot(struct agent_ledger_summary *summary)
 	return syscall(SYS_agent_ledger_snapshot, summary);
 }
 
-int agent_file_prefetch_snapshot(struct agent_file_prefetch_hint *hints,
-				 int max)
-{
-	return syscall(SYS_agent_file_prefetch_snapshot, hints, max);
-}
-
-int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *hints,
-				      int max)
-{
-	return syscall(SYS_agent_file_prefetch_span_snapshot, hints, max);
-}
-
 int agent_run(struct agent_op *ops, struct agent_result *results, int count,
 	      uint64 flags)
 {
@@ -601,44 +586,20 @@ static int context_mirror_record(const struct agent_context_header *header,
 	return 0;
 }
 
-static int context_mirror_active_record(
-	const struct agent_context_header *header,
-	const struct agent_context_record *records, uint64 index,
-	struct agent_context_record *record)
-{
-	struct agent_context_record cursor_record;
-	uint64 cursor = header->visible_head_sequence;
-	uint64 expected_hash = 0;
-	uint64 steps;
-
-	if (index >= header->active_path_count)
-		return -1;
-	steps = header->active_path_count - index - 1;
-	while (steps-- > 0) {
-		if (context_mirror_record(header, records, cursor,
-					  &cursor_record) < 0 ||
-		    (expected_hash != 0 &&
-		     cursor_record.record_hash != expected_hash) ||
-		    cursor_record.prev_hash == 0 ||
-		    cursor_record.path_parent_sequence == 0 ||
-		    cursor_record.path_parent_sequence < header->oldest_sequence)
-			return -1;
-		expected_hash = cursor_record.prev_hash;
-		cursor = cursor_record.path_parent_sequence;
-	}
-	if (context_mirror_record(header, records, cursor, record) < 0 ||
-	    (expected_hash != 0 && record->record_hash != expected_hash))
-		return -1;
-	return 0;
-}
-
 int context_mirror_active_query(const struct agent_context_header *header,
 				const struct agent_context_record *mirror_records,
 				uint64 start_sequence,
 				struct agent_context_record *out, int max)
 {
+	uint64 active_slots[(AGENT_CONTEXT_MAX_RECORDS + 63) / 64];
 	struct agent_context_record record;
-	uint64 parent;
+	uint64 cursor;
+	uint64 expected_hash;
+	uint64 sequence;
+	uint64 slot;
+	uint64 word;
+	uint64 mask;
+	uint64 active_seen = 0;
 	int copied = 0;
 
 	if (header == 0 || mirror_records == 0 || max < 0 ||
@@ -663,38 +624,116 @@ int context_mirror_active_query(const struct agent_context_header *header,
 	    header->active_path_oldest_sequence >
 		    header->visible_head_sequence)
 		return -1;
+	memset(active_slots, 0, sizeof(active_slots));
+	cursor = header->visible_head_sequence;
+	expected_hash = header->latest_record_hash;
 	for (uint64 index = 0; index < header->active_path_count; index++) {
-		if (context_mirror_active_record(header, mirror_records, index,
-						 &record) < 0)
+		if (context_mirror_record(header, mirror_records, cursor,
+					  &record) < 0 ||
+		    record.record_hash != expected_hash)
 			return -1;
-		if ((index == 0 && record.sequence !=
-					   header->active_path_oldest_sequence) ||
-		    (index + 1 == header->active_path_count &&
-		     (record.sequence != header->visible_head_sequence ||
-		      record.record_hash != header->latest_record_hash)))
+		slot = (cursor - 1) % header->capacity;
+		word = slot / 64;
+		mask = 1ULL << (slot % 64);
+		if ((active_slots[word] & mask) != 0)
 			return -1;
-		if (index == 0) {
-			parent = record.path_parent_sequence;
-			if ((parent == 0 && record.prev_hash != 0) ||
-			    (parent != 0 &&
-			     (parent >= header->oldest_sequence ||
+		active_slots[word] |= mask;
+		if (index + 1 == header->active_path_count) {
+			if (record.sequence !=
+				    header->active_path_oldest_sequence ||
+			    (record.path_parent_sequence == 0 &&
+			     record.prev_hash != 0) ||
+			    (record.path_parent_sequence != 0 &&
+			     (record.path_parent_sequence >=
+				      header->oldest_sequence ||
 			      record.prev_hash == 0)))
 				return -1;
 		} else {
-			struct agent_context_record previous;
-
-			if (context_mirror_active_record(header, mirror_records,
-						 index - 1, &previous) < 0 ||
-			    record.path_parent_sequence != previous.sequence ||
-			    record.prev_hash != previous.record_hash)
+			if (record.path_parent_sequence == 0 ||
+			    record.path_parent_sequence < header->oldest_sequence ||
+			    record.prev_hash == 0)
 				return -1;
+			expected_hash = record.prev_hash;
+			cursor = record.path_parent_sequence;
 		}
+	}
+	sequence = header->oldest_sequence;
+	for (uint64 scanned = 0; scanned < header->count;
+	     scanned++, sequence++) {
+		slot = (sequence - 1) % header->capacity;
+		word = slot / 64;
+		mask = 1ULL << (slot % 64);
+		if ((active_slots[word] & mask) == 0)
+			continue;
+		if (context_mirror_record(header, mirror_records, sequence,
+					  &record) < 0)
+			return -1;
+		active_seen++;
 		if (start_sequence != 0 && record.sequence < start_sequence)
 			continue;
 		if (copied < max)
 			out[copied++] = record;
 	}
-	return copied;
+	return active_seen == header->active_path_count ? copied : -1;
+}
+
+int context_direct_active_query(uint64 context_base, uint64 start_sequence,
+				struct agent_context_record *out, int max)
+{
+	const struct agent_context_header *shared_header;
+	const struct agent_context_record *shared_records;
+	const uint64 *publish_sequence;
+	struct agent_context_header header;
+	uint64 before;
+	uint64 after;
+	int result;
+
+	if (context_base == 0)
+		return -1;
+	shared_header = (const struct agent_context_header *)context_base;
+	shared_records = (const struct agent_context_record *)(
+		context_base + AGENT_CONTEXT_RECORDS_OFFSET);
+	publish_sequence = (const uint64 *)(
+		context_base + AGENT_CONTEXT_PUBLISH_SEQUENCE_OFFSET);
+	for (int attempt = 0; attempt < 8; attempt++) {
+		before = __atomic_load_n(publish_sequence, __ATOMIC_ACQUIRE);
+		if ((before & 1) != 0)
+			continue;
+		header = *shared_header;
+		result = context_mirror_active_query(
+			&header, shared_records, start_sequence, out, max);
+		after = __atomic_load_n(publish_sequence, __ATOMIC_ACQUIRE);
+		if (before == after && (after & 1) == 0)
+			return result;
+	}
+	return -1;
+}
+
+int context_direct_header_snapshot(uint64 context_base,
+				   struct agent_context_header *header)
+{
+	const struct agent_context_header *shared_header;
+	const uint64 *publish_sequence;
+	uint64 before;
+	uint64 after;
+
+	if (context_base == 0 || header == 0)
+		return -1;
+	shared_header = (const struct agent_context_header *)context_base;
+	publish_sequence = (const uint64 *)(
+		context_base + AGENT_CONTEXT_PUBLISH_SEQUENCE_OFFSET);
+	for (int attempt = 0; attempt < 8; attempt++) {
+		before = __atomic_load_n(publish_sequence, __ATOMIC_ACQUIRE);
+		if ((before & 1) != 0)
+			continue;
+		*header = *shared_header;
+		after = __atomic_load_n(publish_sequence, __ATOMIC_ACQUIRE);
+		if (before == after && (after & 1) == 0 &&
+		    header->magic == AGENT_CONTEXT_MAGIC &&
+		    header->version == AGENT_CONTEXT_VERSION)
+			return 0;
+	}
+	return -1;
 }
 
 int context_detail(uint64 sequence, struct agent_context_detail *detail)
@@ -794,7 +833,18 @@ int agent_wake(int pid, struct agent_event *event)
 
 int agent_file_meta_init(void)
 {
-	return syscall(SYS_agent_file_meta_init);
+	int status = AGENT_STATUS_RETRY;
+
+	/* scoped reload 可跨公平退让续跑，用户库负责有限次自动重启。 */
+	for (int attempt = 0; attempt < AGENT_META_INIT_RESTART_LIMIT;
+	     attempt++) {
+		status = syscall(SYS_agent_file_meta_init);
+		if (status != AGENT_STATUS_RETRY)
+			return status;
+		if (sched_yield() < 0)
+			break;
+	}
+	return status;
 }
 
 int agent_file_meta_set(struct agent_file_meta *meta)

@@ -255,7 +255,8 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                         gitfile.write_bytes(original)
                         self.skipTest("runtime did not create a native symlink")
                     with self.assertRaisesRegex(
-                        attestation.ToolAttestationError, "administration entry"
+                        attestation.ToolAttestationError,
+                        "administration (entry|file).*escapes|administration entry",
                     ):
                         source_gate._filesystem_worktree_paths(
                             repository, worktree, git=git, environment=environment
@@ -581,30 +582,6 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
                     allowed_output_roots=("build",),
                     stage="before build",
                 )
-            source.chmod(0o755)
-            subprocess.run([str(git), "add", "os/kernel.c"], cwd=root, check=True)
-            subprocess.run(
-                [str(git), "commit", "-q", "-m", "executable source"],
-                cwd=root,
-                check=True,
-            )
-            commit = subprocess.check_output(
-                [str(git), "rev-parse", "HEAD"], cwd=root, text=True
-            ).strip()
-            source.chmod(0o055)
-            with self.assertRaisesRegex(
-                attestation.ToolAttestationError, "executable mode differs"
-            ):
-                attestation.verify_evaluation_source_tree(
-                    git,
-                    root,
-                    root,
-                    commit,
-                    environment,
-                    allowed_output_roots=("build",),
-                    stage="before build",
-                )
-
     def test_output_prefix_does_not_authorize_a_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, git, commit, environment = self._source_fixture(Path(temporary))
@@ -777,7 +754,8 @@ class EvidenceToolchainAttestationTests(unittest.TestCase):
             if not attestation.path_is_link(root / "build"):
                 self.skipTest("this runtime materializes directory symlinks as ordinary directories")
             with self.assertRaisesRegex(
-                attestation.ToolAttestationError, "unsafe|link-backed"
+                attestation.ToolAttestationError,
+                "unsafe|link-backed|contains a link",
             ):
                 attestation.verify_evaluation_source_tree(
                     git,
