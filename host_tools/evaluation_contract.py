@@ -160,6 +160,16 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 TOKEN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 BOOTSTRAP_REPETITIONS = 2000
 FILE_META_CAPACITY = 512
+# Task1 schema v1 固定 Context v9 布局；布局升级必须同步升级评测合同。
+TASK1_CONTEXT_CONTRACT = {
+    "base": 0x3FFFFE7000,
+    "size": 7 * 4096,
+    "magic": 0x4147435458543031,
+    "version": 9,
+    "capacity": 128,
+    "user_cache_offset": 6 * 4096,
+    "user_cache_size": 4096,
+}
 FILE_QUERY_PATH_INDEX = "file_query_path_index"
 FILE_QUERY_TABLE_ABLATION = "file_query_table_ablation"
 FILE_QUERY_EXPERIMENTS = frozenset({
@@ -2539,16 +2549,15 @@ def _validate_functional_task1(
         or is_agent != 1
         or role != 4
         or agent_id <= 0
-        or context_base != 0x3FFFFE8000
-        or context_size != 6 * 4096
-        or magic != 0x4147435458543031
-        or version != 8
-        or capacity != 128
+        or context_base != TASK1_CONTEXT_CONTRACT["base"]
+        or context_size != TASK1_CONTEXT_CONTRACT["size"]
+        or magic != TASK1_CONTEXT_CONTRACT["magic"]
+        or version != TASK1_CONTEXT_CONTRACT["version"]
+        or capacity != TASK1_CONTEXT_CONTRACT["capacity"]
         or resource_quota != capacity
         or loop_state not in {1, 2, 3}
-        or user_cache_offset <= 0
-        or user_cache_size < 8
-        or user_cache_offset + user_cache_size > context_size
+        or user_cache_offset != TASK1_CONTEXT_CONTRACT["user_cache_offset"]
+        or user_cache_size != TASK1_CONTEXT_CONTRACT["user_cache_size"]
         or _as_u64(direct_token)
         != (int(challenge, 16) ^ agent_pid ^ context_base)
         or sentinel_pid <= 0

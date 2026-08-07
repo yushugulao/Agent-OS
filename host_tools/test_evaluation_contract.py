@@ -480,10 +480,11 @@ def functional_lines(challenge: str, boot_number: int) -> tuple[str, list[str]]:
         "launcher", challenge, launcher_values, launcher_semantic, launcher=True
     )
 
-    context_base = 0x3FFFFE8000
+    context_base = 0x3FFFFE7000
     task1_values = [
         agent_pid, launcher_pid, 1, 4, 1000 + boot_number, context_base,
-        6 * 4096, 0x4147435458543031, 8, 128, 128, 2, 20480, 4096,
+        7 * 4096, 0x4147435458543031, 9, 128, 128, 2,
+        6 * 4096, 4096,
         int(challenge, 16) ^ agent_pid ^ context_base,
         150 + boot_number, 0, 1, 1,
     ]
@@ -1583,6 +1584,40 @@ def main() -> int:
                 SUITE_PATH, bad_catalog_schema_plan, bad_catalog_schema_root
             ),
             "parameter schema is invalid",
+        )
+
+        legacy_context_root = root / "legacy-task1-context"
+        legacy_context_root.mkdir()
+        legacy_context_plan = write_campaign(legacy_context_root, suite)
+        legacy_context_log = legacy_context_root / "boot-01/guest.log"
+        legacy_lines = legacy_context_log.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(legacy_lines):
+            if not line.startswith(
+                "agenteval_ucore: functional schema=1 task=task1 "
+            ):
+                continue
+            challenge = re.search(r" challenge=([0-9a-f]{16}) ", line).group(1)
+            values = [
+                int(value)
+                for value in re.search(r" values=([^ ]+) ", line).group(1).split(",")
+            ]
+            values[5:15] = [
+                0x3FFFFE8000, 6 * 4096, values[7], 8, 128, 128, values[11],
+                5 * 4096, 4096,
+                int(challenge, 16) ^ values[0] ^ 0x3FFFFE8000,
+            ]
+            legacy_lines[index] = _format_functional_receipt(
+                "task1", challenge, values,
+                _functional_semantic("task1-semantic-v1", challenge, values),
+            )
+            break
+        legacy_context_log.write_text(
+            "\n".join(legacy_lines) + "\n", encoding="utf-8"
+        )
+        refresh_plan_hash(legacy_context_plan, legacy_context_root)
+        expect_rejected(
+            lambda: build(SUITE_PATH, legacy_context_plan, legacy_context_root),
+            "Task1 Agent PCB/context receipt is inconsistent",
         )
 
         distorted_error_root = root / "distorted-tool-error"
