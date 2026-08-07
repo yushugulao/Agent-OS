@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline semantic replay for the 45-leg metadata recovery profile."""
+"""45 路元数据恢复配置的离线语义重放。"""
 
 from __future__ import annotations
 

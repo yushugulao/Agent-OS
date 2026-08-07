@@ -63,12 +63,12 @@ _Static_assert(__builtin_offsetof(struct agent_file_meta, summary) ==
 
 static struct agent_action_history_entry
 	agent_action_history[AGENT_ACTION_HISTORY_MAX];
-/* Explicit user edges only; file dependency masks are resolved on demand. */
+/* 仅保存显式用户边；文件依赖掩码按需解析。 */
 static struct agent_metadata_dependency_view
 	agent_dependencies[AGENT_METADATA_DEPENDENCY_MAX];
 static uint64 agent_action_next_sequence;
 static uint64 agent_dependency_generation;
-/* Serialized by the metadata transaction; selection rejects overflow first. */
+/* 由 metadata 事务串行化；选择前先拒绝溢出。 */
 static struct agent_status_batch_undo
 	agent_status_batch_undo[AGENT_FILE_STATUS_BATCH_LIMIT];
 

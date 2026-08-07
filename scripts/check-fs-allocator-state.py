@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject regressions in the durable filesystem allocator state machine."""
+"""拒绝持久文件系统分配器状态机的回归。"""
 
 from __future__ import annotations
 
@@ -187,9 +187,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             failures.append(f"filesystem epoch phase order missing {token}")
             break
         cursor = found + len(token)
-    # Sponsorship and commit sequencing are mutation-tested by
-    # test-fs-epoch-sponsor.py.  This allocator checker only retains the
-    # lifecycle-safe gate invariant needed by reclaim.
+    # 赞助与提交顺序由 test-fs-epoch-sponsor.py 做变异测试；本分配器检查器仅保留
+    # 回收所需的生命周期安全门控不变量。
     if "wait_queue_wake_all(&epoch.request_queue);" not in fs_epoch:
         failures.append("filesystem epoch missing lifecycle-safe gate wakeup")
     if "request_handoff" in fs_epoch or "wait_queue_wake_one_thread" in fs_epoch:
@@ -372,8 +371,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         failures.append("candidate refill: unused candidates touch durable allocation state")
 
-    # The epoch-specific image and abort ordering is owned by
-    # test-fs-epoch-sponsor.py.  Keep only the allocator-wide invariants here.
+    # epoch 专用镜像与中止顺序由 test-fs-epoch-sponsor.py 负责；此处仅保留
+    # 分配器全局不变量。
     epoch_alloc = function_body(fs, "balloc_epoch") or ""
     if "FS_QMAP_ALLOCATING_FLAG" in epoch_alloc or re.search(
         r"fs_durable_barrier(?:_forward)?\s*\(", epoch_alloc
@@ -804,8 +803,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         if token not in bio_h:
             failures.append(f"global physical I/O ABI missing {token}")
-    # Generic batch accounting is checked by test-virtio-disk-wiring.py and
-    # test-bio-rate-controller.py; this checker owns allocator receipts only.
+    # 通用批量记账由 test-virtio-disk-wiring.py 和 test-bio-rate-controller.py
+    # 检查；本检查器仅负责分配器收据。
     for token in (
         "physical_write_delta != raw_delta",
         "physical_flush_delta != 1",

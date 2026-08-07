@@ -89,8 +89,8 @@
       "os/fs_allocator_test.c",
       "os/physical_page_test.c"
     ],
-    "baseline_lines": 62246,
-    "max_lines": 62246
+    "baseline_lines": 61386,
+    "max_lines": 61386
   },
   "kernel_image": {
     "baseline_stripped_elf_bytes": 443416,
@@ -99,19 +99,19 @@
     "max_raw_binary_bytes": 438368
   },
   "kernel_runtime": {
-    "baseline_text_bytes": 435655,
-    "max_text_bytes": 435655,
+    "baseline_text_bytes": 434639,
+    "max_text_bytes": 434639,
     "baseline_data_bytes": 96,
     "max_data_bytes": 96,
-    "baseline_bss_bytes": 3998792,
-    "max_bss_bytes": 3998792,
-    "baseline_total_bytes": 4434375,
-    "max_total_bytes": 4434375
+    "baseline_bss_bytes": 3855456,
+    "max_bss_bytes": 3855456,
+    "baseline_total_bytes": 4290191,
+    "max_total_bytes": 4290191
   },
   "struct_proc": {
     "symbol": "kernel_budget_struct_proc",
-    "baseline_bytes": 10024,
-    "max_bytes": 10526
+    "baseline_bytes": 10008,
+    "max_bytes": 10509
   },
   "trapframe_pages": {
     "per_thread_symbol": "kernel_budget_trapframe_per_thread",
@@ -123,26 +123,6 @@
     "reserved_pool_symbol": "kernel_budget_trapframe_reserved_pool",
     "baseline_reserved_pool_bytes": 2097152,
     "max_reserved_pool_bytes": 2202010
-  },
-  "legacy_mail_sidecar": {
-    "per_process_symbol": "kernel_budget_legacy_mail_sidecar_per_process",
-    "baseline_per_process_bytes": 8192,
-    "max_per_process_bytes": 8602,
-    "pool_symbol": "kernel_budget_legacy_mail_sidecar_pool",
-    "baseline_pool_bytes": 1048576,
-    "max_pool_bytes": 1101005,
-    "ordinary_pool_symbol": "kernel_budget_legacy_mail_sidecar_ordinary_pool",
-    "baseline_ordinary_pool_bytes": 786432,
-    "max_ordinary_pool_bytes": 825754,
-    "reserved_pool_symbol": "kernel_budget_legacy_mail_sidecar_reserved_pool",
-    "baseline_reserved_pool_bytes": 262144,
-    "max_reserved_pool_bytes": 275252,
-    "domain_ordinary_symbol": "kernel_budget_legacy_mail_sidecar_domain_ordinary",
-    "baseline_domain_ordinary_bytes": 524288,
-    "max_domain_ordinary_bytes": 550503,
-    "domain_reserved_symbol": "kernel_budget_legacy_mail_sidecar_domain_reserved",
-    "baseline_domain_reserved_bytes": 65536,
-    "max_domain_reserved_bytes": 68813
   },
   "agent_context_sidecar": {
     "per_process_symbol": "kernel_budget_agent_context_sidecar_per_process",
@@ -200,7 +180,9 @@
           "agent_background_take"
         ],
         "allowed_readonly_symbols": [],
-        "allowed_dependencies": [],
+        "allowed_dependencies": [
+          "identity_lease"
+        ],
         "allowed_bridge_dependencies": []
       },
       {
@@ -237,8 +219,8 @@
         "name": "core",
         "source_path": "os/agent_core.c",
         "object_path": "build/os/agent_core.o",
-        "baseline_lines": 1368,
-        "max_lines": 1437,
+        "baseline_lines": 1355,
+        "max_lines": 1423,
         "max_bss_bytes": 0,
         "allowed_global_prefixes": [
           "agent_core_",
@@ -305,7 +287,7 @@
         "source_path": "os/agent_durable_section.c",
         "object_path": "build/os/agent_durable_section.o",
         "baseline_lines": 501,
-        "max_lines": 527,
+        "max_lines": 516,
         "max_bss_bytes": 480,
         "allowed_global_prefixes": [
           "agent_durable_"
@@ -457,9 +439,9 @@
         "name": "ipc",
         "source_path": "os/agent_ipc.c",
         "object_path": "build/os/agent_ipc.o",
-        "baseline_lines": 1781,
-        "max_lines": 1781,
-        "max_bss_bytes": 8,
+        "baseline_lines": 1372,
+        "max_lines": 1372,
+        "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
         ],
@@ -483,9 +465,7 @@
           "identity",
           "lifecycle",
           "observe",
-          "observe_ledger",
-          "resource_controller",
-          "workflow_lifecycle"
+          "observe_ledger"
         ],
         "allowed_bridge_dependencies": [
         ]
@@ -945,8 +925,8 @@
         "name": "observe_capacity",
         "source_path": "os/agent_observe_capacity.c",
         "object_path": "build/os/agent_observe_capacity.o",
-        "baseline_lines": 707,
-        "max_lines": 742,
+        "baseline_lines": 676,
+        "max_lines": 676,
         "max_bss_bytes": 320,
         "required_cflags": [
           "-Os"
@@ -967,9 +947,9 @@
         "name": "observe_ledger",
         "source_path": "os/agent_observe_ledger.c",
         "object_path": "build/os/agent_observe_ledger.o",
-        "baseline_lines": 2087,
-        "max_lines": 2087,
-        "max_bss_bytes": 207916,
+        "baseline_lines": 2085,
+        "max_lines": 2085,
+        "max_bss_bytes": 134956,
         "required_cflags": [
           "-Os"
         ],
@@ -1018,7 +998,8 @@
           "identity",
           "identity_lease",
           "lifecycle",
-          "observe_store"
+          "observe_store",
+          "workflow_lifecycle"
         ],
         "allowed_bridge_dependencies": []
       },
@@ -1084,7 +1065,7 @@
         "source_path": "os/agent_observe_store.c",
         "object_path": "build/os/agent_observe_store.o",
         "baseline_lines": 896,
-        "max_lines": 923,
+        "max_lines": 896,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -1127,8 +1108,8 @@
         "name": "resource_controller",
         "source_path": "os/resource_controller.c",
         "object_path": "build/os/resource_controller.o",
-        "baseline_lines": 1064,
-        "max_lines": 1118,
+        "baseline_lines": 1046,
+        "max_lines": 1046,
         "max_bss_bytes": 124404,
         "allowed_global_prefixes": [
           "resource_"
@@ -1349,7 +1330,6 @@
           "context",
           "core",
           "facade",
-          "ipc",
           "lifecycle",
           "observe_ledger",
           "resource_controller"

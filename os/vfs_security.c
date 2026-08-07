@@ -48,7 +48,7 @@ struct vfs_scope_ref {
 };
 
 /*
- * scope 接纳由生命周期账本限流，而非进程表。紧凑哈希表避免 VFS
+ * 作用域接纳由生命周期账本限流，而非进程表。紧凑哈希表避免 VFS
  * 鉴权扫描整个进程表；链值为槽号加一，零表示空链。
  */
 struct vfs_scope_registry {
@@ -89,7 +89,7 @@ static uint vfs_scope_slot(uint link)
 
 static uint vfs_scope_hash(uint scope_id)
 {
-	/* 动态 scope ID 单调递增，低位取模分布均匀。 */
+	/* 动态作用域编号单调递增，低位取模分布均匀。 */
 	return scope_id % VFS_SCOPE_LIFECYCLE_CAP;
 }
 
@@ -304,7 +304,7 @@ static int vfs_scope_create(uint scope_id,
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC || lifecycle == 0)
 		return -1;
 	*lifecycle = workflow_lifecycle_none();
-	/* 租约续期可能睡眠，必须在获取 scope 分配锁前完成。 */
+	/* 租约续期可能睡眠，必须在获取作用域分配锁前完成。 */
 	if (workflow_lifecycle_prepare_create() < 0)
 		return -1;
 	enabled = intr_save();
@@ -388,7 +388,7 @@ static int vfs_scope_release(uint scope_id,
 		fs_storage_scope_account_close(storage);
 		bio_scope_quiesce(scope_id);
 		/*
-		 * 最后一个引用决定生命周期可回收。先静默存储与 I/O 所有者，
+		 * 最后一个引用决定生命周期可回收。先静默存储与输入输出所有者，
 		 * 再发布回收请求；退出、撤销和回滚都汇入此释放边界。
 		 */
 		agent_background_request();
@@ -404,7 +404,7 @@ vfs_scope_reclaim_advance(uint scope_id,
 	int advanced = 0;
 	int enabled;
 
-	/* 慢阶段无锁执行，发布前以不可变 key 重新校验。 */
+	/* 慢阶段无锁执行，发布前以不可变生命周期键重新校验。 */
 	enabled = intr_save();
 	{
 		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
@@ -552,7 +552,7 @@ void vfs_scope_reap_pending(uint64 now)
 	if (ref != 0) {
 		scope_id = ref->scope_id;
 		reclaim_phase = ref->reclaim_phase;
-		/* 同一时钟滴答只推进一个有界阶段，避免传统 syscall 代偿回收。 */
+		/* 同一时钟滴答只推进一个有界阶段，避免传统系统调用代偿回收。 */
 		registry->reap_next_tick = now + 1;
 	}
 	intr_restore(enabled);
@@ -577,7 +577,7 @@ vfs_scope_reap_tick(uint64 now)
 	uint64 next = __atomic_load_n(&registry->reap_next_tick,
 				      __ATOMIC_ACQUIRE);
 
-	/* 这里只发布幂等边，允许读取到稍旧快照，不能在中断中扫描 registry。 */
+	/* 此处只发布幂等边，允许读取到稍旧快照，不能在中断中扫描注册表。 */
 	if (__atomic_load_n(&registry->retiring_count, __ATOMIC_ACQUIRE) != 0 &&
 	    (next == 0 || now >= next))
 		agent_background_request();
@@ -713,8 +713,8 @@ int vfs_scope_close_trusted(uint scope_id,
 	return result;
 }
 
-// 返回本次分配后必须为已接纳及未来 workflow 槽保留的存储量。退出中的
-// scope 仍占接纳槽，其已用量抵扣本槽保留量，不能再按空槽重复计算。
+// 返回本次分配后必须为已接纳及未来工作流槽保留的存储量。退出中的作用域
+// 仍占接纳槽，其已用量抵扣本槽保留量，不能再按空槽重复计算。
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 {
 	struct vfs_scope_registry *registry = &vfs_scope_registry;
@@ -826,9 +826,8 @@ void vfs_cred_from_proc(const struct proc *p, struct vfs_cred *cred)
 	if (cred == 0)
 		return;
 	cred->scope_id = p ? p->vfs_scope_id : VFS_SCOPE_NONE;
-	// 临时启动或 workflow 主体不是有效凭据。可信映像激活 scope 前，
-	// 进程只有 PUBLIC 文件权限；委派 worker 也可据此解析密封映像，
-	// 而不暴露待激活的 workflow 主体。
+	// 临时启动或工作流主体不是有效凭据。可信映像激活作用域前，进程只有
+	// 公共文件权限；委派工作进程也可据此解析密封映像，而不暴露待激活主体。
 	cred->storage_principal_id = p == 0 ? FS_OWNER_NONE :
 		p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
 		p->storage_principal_id : FS_OWNER_PUBLIC;
@@ -902,7 +901,7 @@ void vfs_proc_lifecycle_release(struct proc *p)
 	if (!workflow_lifecycle_key_valid(lifecycle) ||
 	    workflow_lifecycle_scope(lifecycle, &scope_id) < 0)
 		panic("workflow lifecycle credential");
-	// 仅在进程最终销毁时清除，降权或 exec 不得逃离不可变终止谱系。
+	// 仅在进程最终销毁时清除，降权或映像切换不得逃离不可变终止谱系。
 	p->workflow_lifecycle_charged = 0;
 	p->workflow_lifecycle_id = WORKFLOW_LIFECYCLE_ID_NONE;
 	p->workflow_lifecycle_generation = 0;
@@ -950,7 +949,7 @@ void vfs_proc_reset(struct proc *p)
 	vfs_proc_clear_credentials(p);
 }
 
-// 最终销毁已撤销控制权并分离全部 FD；此处只清除不再发布的凭据，
+// 最终销毁已撤销控制权并分离全部文件描述符；此处只清除不再发布的凭据，
 // 不可变生命周期引用由后续结算阶段释放。
 void vfs_proc_terminal_clear(struct proc *p)
 {
@@ -1329,7 +1328,7 @@ int vfs_proc_exec_prepare(struct proc *p, const struct user_image *image,
 		vfs_exec_target_public(transition);
 
 prepared:
-	/* prepare 不产生副作用，撤销只在 commit 阶段执行。 */
+	/* 准备阶段不产生副作用，撤销只在提交阶段执行。 */
 	transition->prepared = 1;
 	return 0;
 }
@@ -1383,7 +1382,7 @@ int vfs_proc_exec_commit(struct proc *p,
 
 	if (vfs_proc_exec_validate_locked(p, transition) < 0)
 		return -1;
-	/* Agent 状态未清空时，不得发布 PUBLIC VFS 凭据。 */
+	/* 智能体状态未清空时，不得发布公共 VFS 凭据。 */
 	if (transition->identity_policy == VFS_EXEC_IDENTITY_PUBLIC &&
 	    (p->is_agent || p->agent_type != AGENT_TYPE_NONE ||
 	     p->agent_role != 0 || p->agent_control_id != 0 ||

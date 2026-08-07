@@ -36,7 +36,7 @@ static void printptr(uint64 x)
 		console_putchar(digits[x >> (sizeof(uint64) * 8 - 4)]);
 }
 
-// Print to the console. Integer formats support the default, l, and ll widths.
+// 输出到控制台；整数格式支持默认、l 和 ll 宽度。
 void printf(char *fmt, ...)
 {
 	va_list ap;

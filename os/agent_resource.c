@@ -77,7 +77,7 @@ int sys_agent_resource_snapshot(uint64 addr, uint64 user_size)
 	if (user_range_check(p->pagetable, addr, copy_size, PTE_W) < 0)
 		return -1;
 	memset(&snapshot, 0, sizeof(snapshot));
-	/* One CPU and IRQ-off accounting mutations make this one coherent cut. */
+	/* 单核且记账修改均在关中断区间内，可取得一致快照。 */
 	enabled = intr_save();
 	measured = resource_policy_snapshot_all(policies, RESOURCE_KIND_COUNT);
 	snapshot.ordinary_free_pages = kalloc_free_pages();
@@ -140,7 +140,7 @@ int sys_agent_performance_snapshot(uint64 addr, uint64 user_size)
 	snapshot.version = AGENT_PERFORMANCE_SNAPSHOT_VERSION;
 	snapshot.struct_size = sizeof(snapshot);
 	snapshot.counter_scope = AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL;
-	/* Ordering token only: keep raw cycle precision for short core intervals. */
+	/* 仅作排序标记；短核心区间保留原始周期精度。 */
 	snapshot.sample_tick = get_cycle();
 	snapshot.observer_lifecycle_id = p->workflow_lifecycle_id;
 	snapshot.observer_lifecycle_generation =

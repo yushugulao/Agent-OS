@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for evidence tool identity and nested resolution."""
+"""证据工具身份与嵌套解析的回归测试。"""
 
 from __future__ import annotations
 

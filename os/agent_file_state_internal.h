@@ -15,13 +15,13 @@ struct agent_file_content_receipt {
 	struct workflow_lifecycle_key lifecycle;
 };
 
-/* 与 incarnation 绑定的文件版本、编辑租约和摘要缓存。 */
+/* 与对象世代绑定的文件版本、编辑租约和摘要缓存。 */
 void agent_file_state_init(void);
 uint64 agent_file_state_now(void);
 void agent_file_state_scope_reclaim(uint);
 uint64 agent_file_state_scope_generation(uint);
 uint64 agent_file_state_generation_next(uint);
-/* begin/end 界定一次关中断快照，覆盖内容只在区间内有效。 */
+/* 起止调用界定一次关中断快照，覆盖内容只在区间内有效。 */
 int agent_file_state_snapshot_begin(uint64 *);
 void agent_file_state_snapshot_overlay_receipt(
 	struct agent_file_meta *, uint, uint,

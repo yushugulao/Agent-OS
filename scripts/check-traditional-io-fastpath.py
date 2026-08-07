@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the bounded traditional-I/O transaction and work-accounting path."""
+"""检查有界传统 I/O 事务与工作记账路径。"""
 
 from __future__ import annotations
 

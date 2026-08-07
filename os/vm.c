@@ -186,7 +186,7 @@ pagetable_t kvmmake()
 	// map kernel data and the physical RAM we'll make use of.
 	kvmmap(kpgtbl, (uint64)e_text, (uint64)e_text, PHYSTOP - (uint64)e_text,
 	       PTE_R | PTE_W);
-	// Each kernel stack has its own virtual mapping and an unmapped guard page.
+	// 每个内核栈拥有独立虚拟映射和未映射保护页。
 	proc_mapstacks(kpgtbl);
 	kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 	return kpgtbl;
@@ -268,7 +268,7 @@ static pte_t *walk_user_leaf(pagetable_t pagetable, uint64 va, int perm)
 	return pte;
 }
 
-// Look up a user leaf and return its page-aligned physical address.
+// 查找用户叶项并返回页对齐物理地址。
 uint64 walkaddr(pagetable_t pagetable, uint64 va)
 {
 	pte_t *pte = walk_user_leaf(pagetable, va, 0);
@@ -276,7 +276,7 @@ uint64 walkaddr(pagetable_t pagetable, uint64 va)
 	return pte == 0 ? 0 : PTE2PA(*pte);
 }
 
-// Validate every page touched by a user range before accessing it.
+// 访问用户区间前校验其涉及的每一页。
 int user_range_check(pagetable_t pagetable, uint64 addr, uint64 len, int perm)
 {
 	uint64 page, last;
@@ -300,7 +300,7 @@ int user_range_check(pagetable_t pagetable, uint64 addr, uint64 len, int perm)
 	return 0;
 }
 
-// Compute base + index * size without wrapping out of user address space.
+// 计算 base + index * size，并禁止绕出用户地址空间。
 int checked_user_offset(uint64 base, uint64 index, uint64 size, uint64 *addr)
 {
 	uint64 offset, result;
@@ -418,9 +418,8 @@ void uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 }
 
 /*
- * Rollback and heap shrink must refund intermediate page-table pages as well
- * as leaves. Generic uvmunmap leaves them for freewalk(), which would let a
- * grow/shrink loop pin physical-account quota until process exit.
+ * 回滚和堆收缩须同时退还中间页表页与叶页。通用 uvmunmap 将中间页留给
+ * freewalk()，会使反复扩缩在进程退出前持续占用物理账户配额。
  */
 static int uvm_prune_empty_walk(
 	pagetable_t pagetable, int level,
@@ -519,10 +518,9 @@ static int freewalk(
 }
 
 /*
- * User mappings are sparse, while max_page is an address-space high-water
- * mark.  Walking every virtual page makes fork/exec teardown proportional to
- * holes.  Traverse the allocated Sv39 tree instead and release only leaves
- * that actually exist below limit.
+ * 用户映射稀疏，而 max_page 只是地址空间高水位。逐虚页扫描会使派生及
+ * 映像替换的拆除成本随空洞增长；应遍历已分配的 Sv39 树，只释放上限内
+ * 实际存在的叶页。
  */
 static void
 uvm_release_range_tree(pagetable_t root, uint64 limit, int cleanup)
@@ -617,9 +615,8 @@ void uvmfree(pagetable_t pagetable, uint64 max_page)
 		panic("uvmfree release");
 }
 
-// Terminal and rollback teardown may own a large sparse address space. Release
-// one leaf at a time so the cleanup owner remains subject to kernel fairness;
-// all other process threads are quiescent before this function is entered.
+// 终止及回滚拆除可能持有大型稀疏地址空间。每次释放一个叶页，使清理属主
+// 仍受内核公平性约束；进入本函数前，进程其他线程均已静止。
 void uvmfree_cleanup(pagetable_t pagetable, uint64 max_page)
 {
 	struct resource_account_handle account;
@@ -826,8 +823,8 @@ uvmcopy_commit_parent(pagetable_t old_table, pagetable_t new_table,
 	}
 }
 
-// Used in fork. Clone only allocated Sv39 branches, then atomically harden
-// writable parent leaves after the unpublished child is complete.
+// 用于派生进程。仅克隆已分配的 Sv39 分支；未发布子进程构造完成后，再
+// 原子收紧父进程可写叶页。
 int uvmcopy(pagetable_t old, pagetable_t new, uint64 max_page)
 {
 	struct uvmcopy_tree_state state;
@@ -1085,10 +1082,9 @@ int fetch_user_u64(pagetable_t pagetable, uint64 addr, uint64 *value)
 	return copyin(pagetable, (char *)value, addr, sizeof(*value));
 }
 
-// Copy a null-terminated string from user to kernel.
-// Copy bytes to dst from virtual address srcva in a given page table,
-// until a '\0', within max bytes (including the terminator).
-// Return the length excluding '\0' on success, -1 on error or truncation.
+// 从用户空间向内核复制空字符结尾的字符串。在指定页表中，从虚址 srcva
+// 复制至 dst，最多 max 字节（含终止符）。成功返回不含终止符的长度，
+// 错误或截断返回 -1。
 int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
 	uint64 n, va0, pa0;

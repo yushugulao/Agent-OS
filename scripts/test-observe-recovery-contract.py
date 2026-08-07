@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static guards for durable-observation exhaustion and test-hook wiring."""
+"""持久观测容量、恢复和测试钩子的静态约束。"""
 
 import ast
 import re
@@ -24,7 +24,7 @@ def function_body(source: str, signature: str) -> str:
 
 
 def function_body_named(source: str, name: str) -> str:
-    """Find a C function definition without depending on its split signature."""
+    """查找 C 函数定义，不依赖签名是否换行。"""
     for match in re.finditer(rf"\b{re.escape(name)}\s*\(", source):
         depth = 1
         cursor = match.end()
@@ -350,6 +350,7 @@ expect_rejected(
 
 def validate_capacity_contract(source: str) -> None:
     snapshot = function_body_named(source, "agent_observe_capacity_snapshot")
+    snapshot_tokens = c_tokens(snapshot)
     admit = function_body_named(source, "agent_observe_capacity_admit")
     token = function_body_named(source, "agent_observe_reap_token")
     start = function_body_named(source, "agent_observe_reap_start")
@@ -361,24 +362,38 @@ def validate_capacity_contract(source: str) -> None:
         assert state_guard in snapshot
     assert "(i == AGENT_OBSERVE_RECOVERY_SCOPE_SLOT) !=" in snapshot
     assert "AGENT_OBSERVE_SCOPE_RECOVERY_SUCCESSOR" in snapshot
-    assert snapshot.count("agent_durable_section_active_read(") == 3
-    assert "confirmed_generation != generation" in snapshot
+    irq_off = token_index(snapshot_tokens, ("enabled", "=", "intr_save", "(", ")"))
+    view = token_index(
+        snapshot_tokens, ("agent_durable_section_active_view", "("), irq_off
+    )
+    irq_restore = token_index(
+        snapshot_tokens, ("intr_restore", "(", "enabled", ")"), view
+    )
+    assert token_count(
+        snapshot_tokens, ("agent_durable_section_active_view", "(")
+    ) == 1
+    assert token_count(
+        snapshot_tokens, ("intr_restore", "(", "enabled", ")")
+    ) == 1
+    assert "agent_durable_section_active_read(" not in snapshot
+    image_check = token_index(snapshot_tokens, ("image", "->", "magic"), view)
+    assert irq_off < view < image_check < irq_restore
     assert (
-        "scope.admission_drops >\n"
-        "\t\t\t    scope.total_records - scope.record_count"
+        "scope->admission_drops >\n"
+        "\t\t\t    scope->total_records - scope->record_count"
     ) in snapshot
     assert (
-        "scope.record_count == 0 &&\n"
-        "\t\t     (scope.admission_drops != scope.total_records ||\n"
-        "\t\t      scope.ledger_hash != 0)"
+        "scope->record_count == 0 &&\n"
+        "\t\t     (scope->admission_drops != scope->total_records ||\n"
+        "\t\t      scope->ledger_hash != 0)"
     ) in snapshot
     assert (
-        "scope.record_count != 0 &&\n"
-        "\t\t     (scope.total_records - scope.admission_drops <\n"
-        "\t\t\t      scope.record_count ||\n"
-        "\t\t      scope.ledger_hash == 0)"
+        "scope->record_count != 0 &&\n"
+        "\t\t     (scope->total_records - scope->admission_drops <\n"
+        "\t\t\t      scope->record_count ||\n"
+        "\t\t      scope->ledger_hash == 0)"
     ) in snapshot
-    assert "scope.record_count == 0 ||" not in snapshot
+    assert "scope->record_count == 0 ||" not in snapshot
     ordinary_end = (
         "end = class == AGENT_OBSERVE_CAPACITY_RECOVERY ?\n"
         "\t\tAGENT_OBSERVE_CHECKPOINT_SCOPES :\n"
@@ -487,8 +502,8 @@ validate_capacity_contract(capacity)
 expect_rejected(
     validate_capacity_contract,
     capacity.replace(
-        "scope.admission_drops != scope.total_records",
-        "scope.admission_drops > scope.total_records",
+        "scope->admission_drops != scope->total_records",
+        "scope->admission_drops > scope->total_records",
         1,
     ),
     "capacity scan rejected or weakened a valid drop-only checkpoint",
@@ -537,11 +552,11 @@ expect_rejected(
 expect_rejected(
     validate_capacity_contract,
     capacity.replace(
-        "confirmed_generation != generation",
-        "confirmed_generation == generation",
+        "intr_restore(enabled);",
+        "enabled = 0;",
         1,
     ),
-    "capacity admission ignored active-bank rollover after its slot scan",
+    "capacity admission leaked its pinned active-bank view",
 )
 expect_rejected(
     validate_capacity_contract,
@@ -837,8 +852,8 @@ def capacity_model(slots, trusted_recovery):
     return None
 
 
-# Cold boot leaves five sealed evidence owners. Ordinary evidence is never
-# overwritten, while the trusted Recovery successor has one pre-authorized slot.
+# 冷启动留下五个密封证据所有者；普通证据不被覆盖，可信 Recovery 继任者
+# 拥有一个预授权槽。
 five_sealed = [
     ("sealed", USED),
     ("sealed", USED),
@@ -854,8 +869,7 @@ assert capacity_model(
     True,
 ) is None
 
-# REAP is a durable authorization followed by a SYSTEM-owned erase. Rebooting
-# between the two phases resumes only already-authorized work.
+# REAP 先持久授权，再由 SYSTEM 擦除；两阶段间重启只恢复已授权工作。
 authorized = list(five_sealed)
 authorized[0] = ("sealed", USED | REAP_AUTHORIZED)
 assert capacity_model(authorized, False) is None
@@ -878,7 +892,7 @@ LINK_FLAGS_ALL = LINK_PREV_RETAINED | LINK_LATEST_TAIL
 
 
 def sparse_checkpoint_model(total_records, admission_drops, records, ledger_hash):
-    """Model v8 admission loss separately from hashed-record retention loss."""
+    """分别建模 v8 的准入丢失与已哈希记录保留丢失。"""
     record_count = len(records)
     if (
         total_records == 0
@@ -926,7 +940,7 @@ full_chain = [
     (22, 33, LINK_PREV_RETAINED | LINK_LATEST_TAIL),
 ]
 assert sparse_checkpoint_model(3, 0, full_chain, 33)
-# Admission failures were never hashed and therefore do not imply a chain gap.
+# 准入失败从未进入哈希，因此不表示链出现缺口。
 assert sparse_checkpoint_model(5, 2, full_chain, 33)
 assert sparse_checkpoint_model(4, 4, [], 0)
 assert not sparse_checkpoint_model(4, 3, [], 0)
@@ -962,7 +976,7 @@ assert not sparse_checkpoint_model(8, 0, sparse_chain, 55)
 
 
 def select_checkpoint_records(records):
-    """Mirror the bounded v8 tail-plus-diversity retention policy."""
+    """镜像 v8 的有界尾部加多样性保留策略。"""
     tail_count = min(len(records), 4)
     tail_start = len(records) - tail_count
     selected = list(records[tail_start:])
@@ -1489,7 +1503,7 @@ def validate_durable_expedite(source: str) -> None:
     )
     assert target < notified < expedite_gate < expedite_call
 
-    # Serial fences are ordinary by default; urgency is an explicit policy bit.
+    # 串行栅栏默认是普通级别，紧急性由显式策略位控制。
     ordinary_tokens = c_tokens(ordinary)
     token_index(
         ordinary_tokens,
@@ -1585,8 +1599,7 @@ def validate_durable_expedite(source: str) -> None:
         mark_tokens, ("state", "->", "urgent_serial", "=", "0", ";")
     ) == 0
 
-    # Both provider installation and background retry reuse the common notify
-    # path, so a failed urgent mark cannot silently lose its expedite action.
+    # 提供者安装和后台重试共用通知路径，紧急标记失败不能悄然丢失加速动作。
     token_index(
         retry_tokens,
         (
@@ -1789,14 +1802,14 @@ def validate_active_replication_model() -> None:
     active_generation = 7
     replicated_generation = 7
     assert active_generation == replicated_generation
-    replicated_generation = 0  # bind overwrite target before INVALIDATE
+    replicated_generation = 0  # 在 INVALIDATE 前绑定覆写目标
     assert active_generation != replicated_generation
-    active_generation = 8  # primary publish is not a replication proof
+    active_generation = 8  # primary 发布不构成复制证明
     assert active_generation != replicated_generation
-    replicated_generation = 8  # verified mirror commit
+    replicated_generation = 8  # 已验证的 mirror 提交
     assert active_generation == replicated_generation
     assert 7 != replicated_generation
-    replicated_generation = 0  # the next overwrite revokes the proof again
+    replicated_generation = 0  # 下一次覆写再次撤销证明
     assert active_generation != replicated_generation
 
 
@@ -2180,9 +2193,9 @@ expect_rejected(
 expect_rejected(
     validate_live_reload_workload,
     workload.replace(
-        "/* Exercise identity fields with fresh records after the retention-heavy reload. */\n"
-        "\tevent_id = emit_identity_activity();",
-        "/* Identity evidence was not refreshed after reload. */",
+        "\tevent_id = emit_identity_activity();\n"
+        "\tmemset(&result, 0, sizeof(result));",
+        "\tevent_id = 0;\n\tmemset(&result, 0, sizeof(result));",
         1,
     ),
     "identity assertion depends on records displaced during live reload",
@@ -2964,7 +2977,7 @@ def validate_recovery_receipt_export(source: str) -> None:
 def validate_recovery_record_view(source: str) -> None:
     body = function_body_named(source, "agent_obsstore_snapshot_record")
     tokens = c_tokens(body)
-    read = token_index(tokens, ("agent_durable_section_active_read", "("))
+    read = token_index(tokens, ("agent_observe_active_copy", "("))
     generation = token_index(
         tokens,
         ("if", "(", "observed_generation", "!=", "bank_generation", ")"),
@@ -3252,9 +3265,9 @@ expect_rejected(
 expect_rejected(
     validate_identity_lease_contract,
     lease_source.replace(
-        "/* Allocation paths never enter the sleeping persistence owner. */\n"
-        "\treturn -1;",
-        "return agent_identity_lease_progress();",
+        "if (kind >= AGENT_IDENTITY_ALLOCATOR_COUNT)\n\t\treturn -1;",
+        "if (kind >= AGENT_IDENTITY_ALLOCATOR_COUNT)\n"
+        "\t\treturn agent_identity_lease_progress();",
         1,
     ),
     "allocator boundary synchronously entered durable persistence",
@@ -3526,8 +3539,13 @@ def validate_receipt_exact_contract(store_source: str, ledger_source: str) -> No
     replicated = token_index(
         durable_status, ("replicated", "=", "agent_obsstore_receipt_replicated", "(")
     )
-    active_header = token_index(
-        durable_status, ("agent_observe_active_header", "("), replicated
+    irq_off = token_index(
+        durable_status, ("enabled", "=", "intr_save", "(", ")"), replicated
+    )
+    view = token_index(
+        durable_status,
+        ("agent_durable_section_active_view", "("),
+        irq_off,
     )
     initial_active_fence = token_index(
         durable_status,
@@ -3535,18 +3553,13 @@ def validate_receipt_exact_contract(store_source: str, ledger_source: str) -> No
             "replicated", "=", "agent_durable_section_active_replicated",
             "(", "generation", ")", ";",
         ),
-        active_header,
-    )
-    active_record = token_index(
-        durable_status,
-        ("agent_durable_section_active_read", "("),
-        initial_active_fence,
+        view,
     )
     exact_lifecycle = token_index(
         durable_status,
         (
             "entry",
-            ".",
+            "->",
             "record",
             ".",
             "workflow_lifecycle_id",
@@ -3555,57 +3568,49 @@ def validate_receipt_exact_contract(store_source: str, ledger_source: str) -> No
             ".",
             "id",
         ),
-        active_record,
+        initial_active_fence,
     )
     exact_sequence = token_index(
         durable_status,
-        ("entry", ".", "record", ".", "sequence", "==", "sequence"),
+        ("entry", "->", "record", ".", "sequence", "==", "sequence"),
         exact_lifecycle,
     )
     exact_hash = token_index(
         durable_status,
-        ("entry", ".", "record", ".", "record_hash", "==", "record_hash"),
+        ("entry", "->", "record", ".", "record_hash", "==", "record_hash"),
         exact_sequence,
     )
     exact_receipt = token_index(
         durable_status,
-        ("entry", ".", "receipt_id", "==", "receipt_id"),
+        ("entry", "->", "receipt_id", "==", "receipt_id"),
         exact_hash,
     )
     exact_found = token_index(
-        durable_status, ("found_record", "=", "1", ";"), exact_receipt
+        durable_status, ("result", "=", "1", ";"), exact_receipt
     )
-    active_confirm = token_index(
+    irq_restore = token_index(
         durable_status,
-        ("agent_observe_active_header", "("),
+        ("intr_restore", "(", "enabled", ")"),
         exact_found,
     )
-    generation_confirm = token_index(
-        durable_status,
-        ("if", "(", "confirmed_generation", "!=", "generation", ")"),
-        active_confirm,
-    )
-    final_active_fence = token_index(
-        durable_status,
-        (
-            "replicated", "=", "agent_durable_section_active_replicated", "(",
-            "generation", ")", ";",
-        ),
-        generation_confirm,
-    )
     durable_return = token_index(
-        durable_status, ("return", "1", ";"), final_active_fence
+        durable_status, ("return", "result", ";"), irq_restore
     )
-    assert token_count(durable_status, ("return", "1", ";")) == 1
+    assert token_count(
+        durable_status,
+        ("agent_durable_section_active_view", "("),
+    ) == 1
+    assert token_count(
+        durable_status, ("intr_restore", "(", "enabled", ")")
+    ) == 1
     assert token_count(
         durable_status,
         ("agent_durable_section_active_replicated", "(", "generation", ")"),
-    ) == 2
-    assert replicated < active_header < initial_active_fence < active_record
-    assert active_record < exact_lifecycle
+    ) == 1
+    assert token_count(durable_status, ("agent_durable_section_active_read", "(")) == 0
+    assert replicated < irq_off < view < initial_active_fence < exact_lifecycle
     assert exact_lifecycle < exact_sequence < exact_hash < exact_receipt < exact_found
-    assert exact_found < active_confirm < generation_confirm
-    assert generation_confirm < final_active_fence < durable_return
+    assert exact_found < irq_restore < durable_return
 
     receipt_status = c_tokens(
         function_body_named(ledger_source, "agent_observe_receipt_status")
@@ -3704,8 +3709,8 @@ validate_receipt_exact_contract(store, ledger)
 expect_rejected(
     lambda mutated: validate_receipt_exact_contract(mutated, ledger),
     store.replace(
-        "entry.record.record_hash == record_hash",
-        "entry.record.record_hash != record_hash",
+        "entry->record.record_hash == record_hash",
+        "entry->record.record_hash != record_hash",
         1,
     ),
     "receipt accepted a different durable record hash",
@@ -3741,11 +3746,13 @@ expect_rejected(
 expect_rejected(
     lambda mutated: validate_receipt_exact_contract(mutated, ledger),
     store.replace(
-        "if (confirmed_generation != generation)",
-        "if (0 && confirmed_generation != generation)",
+        "out:\n\tintr_restore(enabled);\n\treturn result;\n}\n\nstatic int\n"
+        "agent_observe_scope_sealed",
+        "out:\n\tenabled = 0;\n\treturn result;\n}\n\nstatic int\n"
+        "agent_observe_scope_sealed",
         1,
     ),
-    "receipt positive result ignored active-bank rollover",
+    "receipt positive result leaked its pinned active-bank view",
 )
 expect_rejected(
     lambda mutated: validate_receipt_exact_contract(mutated, ledger),
@@ -3755,16 +3762,6 @@ expect_rejected(
         1,
     ),
     "targetless receipt scanned an unreplicated primary generation",
-)
-expect_rejected(
-    lambda mutated: validate_receipt_exact_contract(mutated, ledger),
-    store.replace(
-        "replicated = agent_durable_section_active_replicated(\n"
-        "\t\t\t\t\tgeneration);",
-        "replicated = 1;",
-        1,
-    ),
-    "targetless receipt returned after its mirror fence was invalidated",
 )
 
 
@@ -4724,7 +4721,7 @@ def wait_attempt(publish_phase: str) -> str:
         return "retry"
     queued = True
     if publish_phase in ("atomic_window", "after_enqueue"):
-        # An interrupt in the atomic window is deferred until publication.
+        # 原子窗口内的中断延迟到发布后处理。
         publish()
     return "woken" if woken else "sleeping"
 

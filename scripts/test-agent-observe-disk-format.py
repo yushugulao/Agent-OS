@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""No-QEMU checks for the compiled observation layout contract."""
+"""已编译观察布局契约的无 QEMU 检查。"""
 
 from __future__ import annotations
 

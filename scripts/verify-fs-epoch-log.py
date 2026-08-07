@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate measured fs_epoch guest receipts and power-cut marker ordering."""
+"""校验测得的 fs_epoch Guest 收据与断电标记顺序。"""
 
 import argparse
 import re

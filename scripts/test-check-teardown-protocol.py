@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Negative regression tests for the workflow teardown source contract."""
+"""工作流拆除源码契约的负向回归测试。"""
 
 import copy
 import importlib.util
@@ -675,178 +675,114 @@ class TeardownProtocolTests(unittest.TestCase):
         sources = self.changed("proc", before, after)
         self.assert_rejected(sources, "Context alias failure must abort")
 
-    def test_process_prepare_requires_complete_recycled_clean_guard(self):
-        guard = (
-            "\tif (p == 0 || !proc_teardown_live(p) || p->is_agent ||\n"
-            "\t    p->agent_control_id != 0 || p->agent_controller_id != 0 ||\n"
-            "\t    !agent_context_is_empty(p) ||\n"
-            "\t    !agent_ipc_legacy_mailbox_empty(p) ||\n"
-            "\t    p->legacy_mail_endpoint_generation != 0)\n"
-            "\t\tpanic(\"Agent prepare outside live process\");"
-        )
-        predicates = (
-            "p == 0",
-            "!proc_teardown_live(p)",
-            "p->is_agent",
-            "p->agent_control_id != 0",
-            "p->agent_controller_id != 0",
-            "!agent_context_is_empty(p)",
-            "!agent_ipc_legacy_mailbox_empty(p)",
-            "p->legacy_mail_endpoint_generation != 0",
-        )
-        for predicate in predicates:
-            with self.subTest(predicate=predicate):
-                sources = self.changed(
-                    "agent_core", guard, guard.replace(predicate, "0", 1)
-                )
-                self.assert_rejected(
-                    sources, "RECYCLED_CLEAN process prepare guard"
-                )
-
-    def test_process_prepare_cannot_repeat_full_clear(self):
+    def test_process_prepare_requires_recycled_clean_guard(self):
         sources = self.changed(
             "agent_core",
-            "\tagent_ipc_proc_prepare(p);",
-            "\tagent_core_clear_metadata(p);\n\tagent_ipc_proc_prepare(p);",
+            "p->agent_controller_id != 0 ||",
+            "0 ||",
         )
-        self.assert_rejected(sources, "must not clear or reset")
+        self.assert_rejected(sources, "RECYCLED_CLEAN process prepare")
 
-    def test_process_prepare_cannot_repeat_subsystem_reset(self):
+    def test_process_prepare_cannot_repeat_reset(self):
         sources = self.changed(
             "agent_core",
             "\tagent_ipc_proc_prepare(p);",
             "\tagent_observe_proc_reset(p);\n\tagent_ipc_proc_prepare(p);",
         )
-        self.assert_rejected(sources, "must not clear or reset")
+        self.assert_rejected(sources, "RECYCLED_CLEAN process prepare")
 
-    def test_process_prepare_cannot_zero_recycled_fields(self):
+    def test_process_prepare_cannot_rewrite_state(self):
         sources = self.changed(
             "agent_core",
             "\tagent_ipc_proc_prepare(p);",
             "\tp->agent_id = 0;\n\tagent_ipc_proc_prepare(p);",
         )
-        self.assert_rejected(sources, "must not zero recycled process fields")
+        self.assert_rejected(sources, "must not rewrite recycled process state")
 
-    def test_process_prepare_must_issue_endpoint_incarnation(self):
-        sources = self.changed(
-            "agent_core", "\tagent_ipc_proc_prepare(p);", "\t(void)p;"
-        )
-        self.assert_rejected(sources, "must call agent_ipc_proc_prepare")
-
-    def test_endpoint_prepare_requires_recycled_clean_guard(self):
-        guard = (
-            "\tif (p->mail_sidecar != 0 || "
-            "p->legacy_mail_endpoint_generation != 0)\n"
-            "\t\tpanic(\"legacy endpoint prepare state\");"
-        )
-        for predicate in (
-            "p->mail_sidecar != 0",
-            "p->legacy_mail_endpoint_generation != 0",
-        ):
-            with self.subTest(predicate=predicate):
-                sources = self.changed(
-                    "agent_ipc", guard, guard.replace(predicate, "0", 1)
-                )
-                self.assert_rejected(
-                    sources, "legacy endpoint RECYCLED_CLEAN guard"
-                )
-
-    def test_endpoint_prepare_must_allocate_fresh_generation(self):
-        block = (
-            "\tif (p->mail_sidecar != 0 || "
-            "p->legacy_mail_endpoint_generation != 0)\n"
-            "\t\tpanic(\"legacy endpoint prepare state\");\n"
-            "\tp->legacy_mail_endpoint_generation =\n"
-            "\t\tagent_ipc_legacy_endpoint_alloc_locked();"
-        )
-        sources = self.changed(
-            "agent_ipc",
-            block,
-            block.replace("agent_ipc_legacy_endpoint_alloc_locked()", "1", 1),
-        )
-        self.assert_rejected(
-            sources, "must call agent_ipc_legacy_endpoint_alloc_locked"
-        )
-
-    def test_endpoint_prepare_rotation_must_remain_locked(self):
-        before = (
-            "\tif (p->mail_sidecar != 0 || "
-            "p->legacy_mail_endpoint_generation != 0)\n"
-            "\t\tpanic(\"legacy endpoint prepare state\");\n"
-            "\tp->legacy_mail_endpoint_generation =\n"
-            "\t\tagent_ipc_legacy_endpoint_alloc_locked();\n"
-            "\tintr_restore(enabled);"
-        )
-        after = (
-            "\tif (p->mail_sidecar != 0 || "
-            "p->legacy_mail_endpoint_generation != 0)\n"
-            "\t\tpanic(\"legacy endpoint prepare state\");\n"
-            "\tintr_restore(enabled);\n"
-            "\tp->legacy_mail_endpoint_generation =\n"
-            "\t\tagent_ipc_legacy_endpoint_alloc_locked();"
-        )
-        sources = self.changed("agent_ipc", before, after)
-        self.assert_rejected(sources, "rotate under one locked boundary")
-
-    def test_public_exec_cannot_use_teardown_endpoint_operation(self):
-        before = "\t\tagent_ipc_exec_public(p);\n\t\treturn 0;"
-        after = "\t\tagent_ipc_proc_teardown(p);\n\t\treturn 0;"
-        sources = self.changed("agent_core", before, after)
-        self.assert_rejected(sources, "legacy mail endpoint lifecycle")
-
-    def test_process_clear_cannot_rotate_live_endpoint(self):
+    def test_process_prepare_rejects_unowned_call(self):
         sources = self.changed(
             "agent_core",
-            "\tagent_ipc_proc_teardown(p);",
-            "\tagent_ipc_exec_public(p);",
+            "\tagent_ipc_proc_prepare(p);",
+            "\t(void)kalloc();\n\tagent_ipc_proc_prepare(p);",
         )
-        self.assert_rejected(sources, "legacy mail endpoint lifecycle")
+        self.assert_rejected(sources, "unowned calls")
 
-    def test_legacy_mail_copyout_failure_requires_abort(self):
-        sources = self.changed(
-            "syscall",
-            "\t\t(void)agent_ipc_legacy_public_read_finish(p, &receipt, 0);\n",
-            "",
-        )
-        self.assert_rejected(
-            sources, "exactly 2|one abort and one commit|copyout failure must abort"
-        )
-
-    def test_legacy_mail_cannot_commit_before_copyout(self):
-        before = (
-            "\tif (copyout(p->pagetable, buf, payload, n) < 0) {\n"
-            "\t\t(void)agent_ipc_legacy_public_read_finish(p, &receipt, 0);\n"
-            "\t\treturn -1;\n\t}\n"
-            "\tif (agent_ipc_legacy_public_read_finish(p, &receipt, 1) < 0)\n"
-            "\t\treturn -1;"
-        )
-        after = (
-            "\tif (agent_ipc_legacy_public_read_finish(p, &receipt, 1) < 0)\n"
-            "\t\treturn -1;\n"
-            "\tif (copyout(p->pagetable, buf, payload, n) < 0) {\n"
-            "\t\t(void)agent_ipc_legacy_public_read_finish(p, &receipt, 0);\n"
-            "\t\treturn -1;\n\t}"
-        )
-        sources = self.changed("syscall", before, after)
-        self.assert_rejected(sources, "begin, copyout, then commit")
-
-    def test_legacy_mail_read_begin_cannot_dequeue(self):
-        before = "\treceipt->slot = slot;\nout:"
-        after = (
-            "\treceipt->slot = slot;\n"
-            "\tmailbox->head = (mailbox->head + 1) % MAILBOX_SLOT_COUNT;\n"
-            "out:"
-        )
-        sources = self.changed("agent_ipc", before, after)
-        self.assert_rejected(sources, "read begin must not dequeue")
-
-    def test_legacy_mail_snapshot_requires_endpoint_generation(self):
+    def test_ipc_prepare_cannot_run_full_reset(self):
         sources = self.changed(
             "agent_ipc",
-            "\t       snapshot->endpoint_generation == current->endpoint_generation;",
-            "\t       1;",
+            "\tenabled = intr_save();\n"
+            "\tagent_ipc_event_baton_clear_locked(p);\n"
+            "\tintr_restore(enabled);\n"
+            "}\n\nvoid\nagent_ipc_proc_reset",
+            "\tenabled = intr_save();\n"
+            "\tagent_ipc_proc_reset(p);\n"
+            "\tintr_restore(enabled);\n"
+            "}\n\nvoid\nagent_ipc_proc_reset",
         )
-        self.assert_rejected(sources, "mailbox snapshot lost invariant")
+        self.assert_rejected(sources, "IPC process prepare")
+
+    def test_ipc_teardown_must_broadcast_before_reset(self):
+        sources = self.changed(
+            "agent_ipc",
+            "\tagent_ipc_broadcast_event_teardown_locked(p);\n"
+            "\tagent_ipc_proc_reset(p);",
+            "\tagent_ipc_proc_reset(p);\n"
+            "\tagent_ipc_broadcast_event_teardown_locked(p);",
+        )
+        self.assert_rejected(sources, "IPC process teardown call order")
+
+
+
+    def test_retired_mailread_must_fail_closed(self):
+        sources = self.changed(
+            "syscall",
+            "int sys_mailread(uint64 buf, int len)\n{\n\t(void)buf;\n\t(void)len;\n\treturn -1;\n}",
+            "int sys_mailread(uint64 buf, int len)\n{\n\t(void)buf;\n\t(void)len;\n\treturn 0;\n}",
+        )
+        self.assert_rejected(
+            sources, "sys_mailread must only discard arguments and return -1"
+        )
+
+    def test_retired_mailwrite_cannot_touch_user_memory(self):
+        before = (
+            "int sys_mailwrite(int pid, uint64 buf, int len)\n"
+            "{\n"
+            "\t(void)pid;\n"
+            "\t(void)buf;\n"
+            "\t(void)len;\n"
+            "\treturn -1;\n"
+            "}"
+        )
+        after = (
+            "int sys_mailwrite(int pid, uint64 buf, int len)\n"
+            "{\n"
+            "\tchar byte;\n"
+            "\tif (copyin(curr_proc()->pagetable, &byte, buf, 1) < 0)\n"
+            "\t\treturn -1;\n"
+            "\treturn -1;\n"
+            "}"
+        )
+        sources = self.changed("syscall", before, after)
+        self.assert_rejected(sources, "retired legacy mail syscalls")
+
+    def test_retired_mailwrite_cannot_have_hidden_side_effect(self):
+        before = (
+            "int sys_mailwrite(int pid, uint64 buf, int len)\n"
+            "{\n"
+            "\t(void)pid;\n"
+            "\t(void)buf;\n"
+            "\t(void)len;\n"
+            "\treturn -1;\n"
+            "}"
+        )
+        sources = self.changed(
+            "syscall",
+            before,
+            before.replace(
+                "\treturn -1;", "\t(void)kalloc();\n\treturn -1;", 1
+            ),
+        )
+        self.assert_rejected(sources, "must only discard arguments")
 
 
 if __name__ == "__main__":

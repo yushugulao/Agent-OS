@@ -955,10 +955,7 @@ static TEST_PHASE_NOINLINE void sentinel_public_exec_probe(
 	      exec_transition_info.event_queue_count == 0 &&
 	      exec_transition_info.watch_count == 0 &&
 	      exec_transition_info.heartbeat_interval == 0 &&
-	      exec_transition_info.loop_state == AGENT_LOOP_NONE &&
-	      exec_transition_info.legacy_mailbox_allocated == 0 &&
-	      exec_transition_info.legacy_mailbox_pages == 0 &&
-	      exec_transition_info.legacy_mailbox_queue_count == 0,
+	      exec_transition_info.loop_state == AGENT_LOOP_NONE,
 	      "PUBLIC exec clears Agent identity and endpoints");
 	memset(&exec_transition_io, 0, sizeof(exec_transition_io));
 	check(io_policy_info(&exec_transition_io) == 0 &&

@@ -9,13 +9,13 @@
 #define PIPESIZE (512)
 #define FILEPOOLSIZE FILE_RESOURCE_POOL_SIZE
 
-// in-memory copy of an inode,it can be used to quickly locate file entities on disk
+// 索引节点的内存副本，用于快速定位磁盘文件实体。
 struct inode {
 	uint dev; // Device number
 	uint inum; // Inode number
 	int ref; // Reference count
 	int valid; // inode has been read from disk?
-	int removed; // directory entry is gone; reclaim after the last reference
+	int removed; // 目录项已移除；最后一个引用释放后回收
 	short type; // copy of disk inode
 	short agent_meta_slot;
 	short agent_meta_flags;
@@ -54,9 +54,8 @@ struct pipe {
 	struct wait_queue write_waiters;
 };
 
-// Descriptor inheritance is deny-by-default at a security-principal boundary.
-// Reauthorizing objects are checked against the child credential on every use;
-// held capabilities require an explicit one-shot delegation ticket.
+// 描述符跨安全主体时默认禁止继承。需重新授权的对象每次使用都校验子进程
+// 凭据；持有型能力必须提供明确的一次性委派票据。
 enum fd_inherit_class {
 	FD_INHERIT_DENY = 0,
 	FD_INHERIT_STDIO,
@@ -65,7 +64,7 @@ enum fd_inherit_class {
 };
 
 // file.h
-// Defines a file in memory that provides information about the current use of the file and the corresponding inode location
+// 文件的内存表示，记录当前使用状态和对应索引节点位置。
 struct file {
 	enum { FD_NONE = 0, FD_PIPE, FD_INODE, FD_STDIO } type;
 	enum fd_inherit_class inherit_class;
@@ -75,16 +74,15 @@ struct file {
 	struct pipe *pipe; // FD_PIPE
 	struct inode *ip; // FD_INODE
 	uint off;
-	// This charge follows the unique object until its final reference closes.
+	// 该计费随唯一对象保持，直到最后一个引用关闭。
 	struct resource_account_handle resource_account;
 	int resource_reserved;
 	uint cleanup_owner;
 };
 
 /*
- * The final reference is unpublished with interrupts disabled, but its
- * destructor may sleep.  A prepared receipt owns every field needed to finish
- * that destructor after the caller has entered the appropriate slow path.
+ * 最后一个引用在关中断区内撤销发布，但析构过程可以休眠。预备收据持有
+ * 所需全部字段，供调用方进入对应慢路径后完成析构。
  */
 enum file_close_receipt_state {
 	FILE_CLOSE_RECEIPT_EMPTY = 0,
@@ -110,9 +108,8 @@ struct file_close_receipt {
 #define FILE_CLOSE_RECEIPT_INIT { 0 }
 
 /*
- * Teardown transfers at most one cleanup lease across the filesystem gate.
- * Settling each destructive close incrementally bounds stack use and prevents
- * a teardown from hoarding global cleanup admission.
+ * 拆除过程跨文件系统门锁最多传递一个清理租约。逐次结算破坏性关闭可限制
+ * 栈用量，并防止单次拆除长期占用全局清理准入。
  */
 #define FILE_CLOSE_BATCH_CAP 1U
 

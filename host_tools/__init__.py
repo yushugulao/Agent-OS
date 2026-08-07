@@ -1,1 +1,1 @@
-"""Repository-local host verification tools."""
+"""仓库内使用的 Host 验证工具。"""

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the kernel disk-layout probe and compare it with the host contract."""
+"""编译内核磁盘布局探针并与 Host 契约比较。"""
 
 from __future__ import annotations
 

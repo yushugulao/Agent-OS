@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for the kernel budget checker."""
+"""内核预算检查器的单元测试。"""
 
 import importlib.util
 import gzip
@@ -125,8 +125,8 @@ class KernelBudgetTests(unittest.TestCase):
         self.assertLessEqual(
             source_budget["baseline_lines"], source_budget["max_lines"]
         )
-        self.assertEqual(config["struct_proc"]["baseline_bytes"], 10024)
-        self.assertEqual(config["struct_proc"]["max_bytes"], 10526)
+        self.assertEqual(config["struct_proc"]["baseline_bytes"], 10008)
+        self.assertEqual(config["struct_proc"]["max_bytes"], 10509)
 
         missing_hash = copy.deepcopy(config)
         del missing_hash["local_kernel_budget_toolchains"][0][
@@ -1571,23 +1571,6 @@ agent_metadata_txn_projection_require_idle();
         self.assertEqual(
             trapframes["baseline_reserved_pool_bytes"], 32 * 16 * 4096
         )
-        legacy_mail = config["legacy_mail_sidecar"]
-        self.assertEqual(
-            legacy_mail["baseline_per_process_bytes"], 2 * 4096
-        )
-        self.assertEqual(
-            legacy_mail["baseline_pool_bytes"], 128 * 2 * 4096
-        )
-        self.assertEqual(
-            legacy_mail["baseline_ordinary_pool_bytes"], 96 * 2 * 4096
-        )
-        self.assertEqual(
-            legacy_mail["baseline_reserved_pool_bytes"], 32 * 2 * 4096
-        )
-        missing_legacy_mail = copy.deepcopy(config)
-        del missing_legacy_mail["legacy_mail_sidecar"]
-        with self.assertRaises(kernel_budgets.BudgetError):
-            kernel_budgets.validate_config(missing_legacy_mail)
         missing_trapframes = copy.deepcopy(config)
         del missing_trapframes["trapframe_pages"]
         with self.assertRaises(kernel_budgets.BudgetError):
@@ -2512,26 +2495,6 @@ agent_metadata_txn_projection_require_idle();
         self.assertEqual(canonical_match.group(1).split(), expected)
         self.assertEqual(configured_bounds, expected)
 
-    def test_legacy_mail_sidecar_schema_is_fail_closed(self):
-        config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
-        with config_path.open(encoding="utf-8") as stream:
-            config = json.load(stream)
-
-        legacy_mail = config["legacy_mail_sidecar"]
-        self.assertEqual(legacy_mail["baseline_per_process_bytes"], 8192)
-        self.assertEqual(legacy_mail["baseline_pool_bytes"], 128 * 8192)
-        kernel_budgets.validate_config(config)
-
-        missing = copy.deepcopy(config)
-        del missing["legacy_mail_sidecar"]
-        with self.assertRaises(kernel_budgets.BudgetError):
-            kernel_budgets.validate_config(missing)
-
-        bad_symbol = copy.deepcopy(config)
-        bad_symbol["legacy_mail_sidecar"]["per_process_symbol"] = ""
-        with self.assertRaises(kernel_budgets.BudgetError):
-            kernel_budgets.validate_config(bad_symbol)
-
     def test_duration_calibration_state_schema_is_fail_closed(self):
         config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
         with config_path.open(encoding="utf-8") as stream:
@@ -3042,7 +3005,9 @@ agent_metadata_txn_projection_require_idle();
                 "agent_background_take",
             ],
         )
-        self.assertEqual(modules["background"]["allowed_dependencies"], [])
+        self.assertEqual(
+            modules["background"]["allowed_dependencies"], ["identity_lease"]
+        )
         self.assertEqual(modules["identity_lease"]["allowed_dependencies"], [])
         self.assertEqual(
             modules["identity_lease"]["allowed_global_prefixes"], []
@@ -3228,7 +3193,7 @@ agent_metadata_txn_projection_require_idle();
                 "members": ["one", "two", "three"],
                 "contract_headers": ["contract.h"],
                 "contract_header_globs": ["contract.h"],
-                # Source gets 5% for contracts; binary residency gets no growth.
+                # 源码为契约预留 5%；二进制驻留量不允许增长。
                 "baseline_source_lines": 4,
                 "max_source_lines": 4,
                 "baseline_source_bytes": 24,

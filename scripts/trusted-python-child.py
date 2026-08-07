@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run formal child Python commands without site or path startup injection."""
+"""运行正式 Python 子命令，并阻止 site 或路径启动注入。"""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def _append_import_paths(repository: Path, temporary: Path) -> None:
 
 
 def _reset_import_paths() -> None:
-    """Restore the exact isolated startup path across nested dispatchers."""
+    """跨嵌套调度器恢复精确的隔离启动路径。"""
 
     retained = getattr(sys, "_agentos_stdlib_path", None)
     if retained is None:

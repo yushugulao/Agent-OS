@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""No-QEMU regressions for the shared dual-platform backend contract."""
+"""共享双平台后端契约的无 QEMU 回归测试。"""
 from __future__ import annotations
 
 import tempfile

@@ -2,9 +2,8 @@
 #define EXEC_POLICY_MANIFEST_H
 
 /*
- * Build-time executable trust policy. The host mkfs tool consumes every row
- * to provision immutable inode metadata. User-space launchers consume the
- * same rows so executable aliases, roles, and security profiles cannot drift.
+ * 构建期可执行文件信任策略。主机 mkfs 按全部条目配置不可变 inode 元数据，
+ * 用户态启动器复用同表，避免可执行别名、角色和安全配置漂移。
  */
 #define EXEC_MANIFEST_VERSION 2U
 
@@ -27,22 +26,21 @@
 #define EXEC_MANIFEST_ROLE_BIT(role) (1U << (role))
 #define EXEC_MANIFEST_ROLE_ALL 0x3eU
 
-/* Executable security profiles are ceilings, never sources of authority. */
+/* 可执行文件安全配置只设上限，不产生权限。 */
 #define EXEC_MANIFEST_VFS_PROFILE_NONE     0U
 #define EXEC_MANIFEST_VFS_PROFILE_WORKFLOW 1U
 #define EXEC_MANIFEST_VFS_PROFILE_CONTENT_READ 2U
 #define EXEC_MANIFEST_VFS_PROFILE_ARTIFACT_WRITE 3U
 
-/* Keep these values aligned with the Agent capability namespace. */
+/* 与 Agent 能力命名空间保持一致。 */
 #define EXEC_MANIFEST_VFS_CONTENT_READ   (1ULL << 1)
 #define EXEC_MANIFEST_VFS_ARTIFACT_WRITE (1ULL << 6)
 #define EXEC_MANIFEST_VFS_WORKFLOW_CAPS \
 	(EXEC_MANIFEST_VFS_CONTENT_READ | EXEC_MANIFEST_VFS_ARTIFACT_WRITE)
 
 /*
- * Every non-Agent worker gets a deterministic sealed alias. The alias is
- * derived from the complete source name and mkfs rejects the unlikely hash
- * collision, so DIRSIZ truncation cannot silently select another image.
+ * 非 Agent 工作进程使用完整源码名派生的确定性封装别名；mkfs 拒绝哈希冲突，
+ * 避免 DIRSIZ 截断误选映像。
  */
 static inline unsigned int exec_manifest_name_hash(const char *name)
 {
@@ -69,12 +67,9 @@ static inline void exec_manifest_worker_image(const char *source,
 }
 
 /*
- * X(source binary, installed image, flags, allowed role mask, launch role,
- *   executable security profile)
- *
- * A differing installed image creates a sealed code alias while preserving
- * the source name as a public compatibility image. launch role is zero for
- * entries that are not dispatched as Agents by rp_orch.
+ * X(源二进制、安装映像、标志、允许角色掩码、启动角色、可执行安全配置)
+ * 安装映像不同时创建封装代码别名，并保留源码名作为公开兼容映像；
+ * 不由 rp_orch 以 Agent 启动的条目，其启动角色为零。
  */
 #define EXEC_POLICY_ENTRIES(X) \
 	X("usershell", "usershell", EXEC_MANIFEST_F_SEALED, 0, 0, \

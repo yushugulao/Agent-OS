@@ -454,7 +454,7 @@ static int run_child(const struct program_launch_policy *launch,
 		pid = fork();
 	}
 	if (pid == 0) {
-		/* Agent constructors inherit only explicitly delegated descriptors. */
+	/* Agent 构造器仅继承显式委派的描述符。 */
 		if (!in_orchestrator)
 			close(attest_pipe[0]);
 		rp_copy_text(attest_arg, sizeof(attest_arg),

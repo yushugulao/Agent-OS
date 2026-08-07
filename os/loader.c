@@ -203,9 +203,8 @@ static char *user_image_rx_cache_lookup(
 }
 
 /*
- * Publish after the disk read. A competing loader may have filled the same
- * slot while this one yielded; in that case its page wins and the caller
- * releases the redundant private copy.
+ * 磁盘读取后再发布。本加载器让出期间，竞争者可能已填充同一槽位；此时
+ * 保留竞争者页面，调用方释放重复的私有副本。
  */
 static char *user_image_rx_cache_publish(
 	const struct user_image_rx_cache_key *key, char *candidate,
@@ -371,10 +370,9 @@ static void user_image_rx_cache_key_init(
 }
 
 /*
- * readi() may commit a positive prefix when the I/O governor asks it to
- * leave the filesystem atomic section. Pay that debt outside the section,
- * then resume from the committed offset instead of rejecting a valid short
- * read as a corrupt executable.
+ * 输入输出调度器要求 readi() 离开文件系统原子区时，函数可能已提交正长度
+ * 前缀。应在区外偿还债务，再从已提交偏移继续，不能把有效短读误判为损坏
+ * 的可执行文件。
  */
 static enum user_image_read_status
 user_image_read_exact(struct inode *ip, const struct vfs_cred *cred,
@@ -468,10 +466,7 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 		ip->exec_role_mask != 0 ?
 			USER_IMAGE_AGENT_TRUSTED :
 			USER_IMAGE_AGENT_FORBIDDEN;
-	/*
-	 * Only immutable manifests enter; generation/incarnation reject stale
-	 * inode aliases.
-	 */
+	/* 只接收不可变清单；代际和对象世代拒绝陈旧索引节点别名。 */
 	cacheable = trusted;
 	length = ip->size;
 	if (length == 0 || length > MAXVA - BASE_ADDRESS)
@@ -618,7 +613,7 @@ int load_init_app()
 	if (exec_policy_process_bootstrap(p))
 		agent_authority_bootstrap(p);
 #ifdef VIRTIO_DISK_TEST_PROFILE
-	/* Only the kernel-loaded, boot-sealed init identity controls test faults. */
+	/* 仅由内核加载且启动时封存的初始身份可控制测试故障。 */
 	virtio_disk_test_bind_boot_init(p, INIT_PROC);
 #endif
 #ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE

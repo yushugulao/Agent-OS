@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded, graft-resistant Git history inspection for evidence contracts."""
+"""证据合同使用的有界、抗 graft Git 历史检查。"""
 from __future__ import annotations
 
 import os
@@ -24,7 +24,7 @@ class GitHistoryError(RuntimeError):
     pass
 
 class HistoryBudget:
-    """One wall-clock/process/byte budget shared by a historical verification."""
+    """一次历史验证共享同一墙钟、进程和字节预算。"""
 
     def __init__(self) -> None:
         self.deadline = time.monotonic() + MAX_SECONDS
@@ -48,7 +48,7 @@ def _bounded_git_bytes(
     maximum_bytes: int, budget: HistoryBudget,
     environment: Mapping[str, str], label: str,
 ) -> bytes:
-    """Run Git with one shared deadline and a live output-size guard."""
+    """在共享截止时间和实时输出大小护栏下运行 Git。"""
     budget.reserve_process()
     with (tempfile.TemporaryFile() as stdin_file,
           tempfile.TemporaryFile() as stdout_file,
@@ -106,7 +106,7 @@ def raw_commit_ancestry(
     git: str, repo: Path, head: str, environment: Mapping[str, str], *,
     budget: HistoryBudget | None = None,
 ) -> dict[str, list[str]]:
-    """Rebuild a DAG from bounded raw commit bytes, rejecting grafted views."""
+    """从有界原始提交字节重建 DAG，并拒绝 graft 视图。"""
     if FULL_COMMIT.fullmatch(head) is None:
         raise GitHistoryError("raw ancestry head is invalid")
     active = budget or HistoryBudget()
@@ -172,7 +172,7 @@ def commits_containing_path(
     git: str, repo: Path, commits: list[str], path: str,
     environment: Mapping[str, str], budget: HistoryBudget,
 ) -> set[str]:
-    """Resolve one path for every candidate commit in a single bounded query."""
+    """在一次有界查询中解析每个候选提交的一个路径。"""
 
     try:
         path_bytes = path.encode("utf-8")
@@ -227,7 +227,7 @@ def documentation_changed_paths(
     git: str, repo: Path, evidence: str, graph: dict[str, list[str]],
     environment: Mapping[str, str], budget: HistoryBudget,
 ) -> set[str]:
-    """Return all E..HEAD changed paths using one explicit-pair diff process."""
+    """通过一次显式成对 diff 返回 E..HEAD 的全部变更路径。"""
 
     ancestors: set[str] = set()
     pending = [evidence]

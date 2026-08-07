@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the stage-only full-verification evidence contract."""
+"""仅阶段完整验证证据契约的回归测试。"""
 
 from __future__ import annotations
 
@@ -362,8 +362,7 @@ def main() -> None:
 
     make_tool = shutil.which("make")
     if make_tool is not None and os.name == "posix":
-        # A dry run proves the canonical target enters the Python preflight
-        # before any repository Bash script.
+            # 试运行证明规范目标会在任何仓库 Bash 脚本之前进入 Python 预检。
         with tempfile.TemporaryDirectory(dir=test_temporary_root) as make_temporary:
             fake_bin = Path(make_temporary)
             fake_bash = fake_bin / "bash"
@@ -540,9 +539,8 @@ exit 0
         valid = base / "valid"
         make_payload(valid)
 
-        # A verifier contract is executable policy, never payload data.  Both
-        # the exact payload root and a canonical descendant must be rejected
-        # before checksum inventory inspection or semantic replay can run.
+            # 验证器契约是可执行策略，而非载荷数据。必须在检查校验和清单或语义
+            # 重放之前，同时拒绝载荷根目录本身及其规范后代路径。
         guard_cases = [
             ("equal", False, False, False),
             ("nested", True, False, False),
@@ -598,9 +596,8 @@ exit 0
             assert inventory_calls == []
             assert not sentinel.exists()
 
-        # Self-consistent checksum rows do not make an extra payload file
-        # publishable.  Reject the exact inventory before any duration-policy
-        # validation can dynamically load platform/profile code.
+            # 内部自洽的校验和记录并不能让额外载荷文件变得可发布。必须在任何耗时
+            # 策略校验动态加载平台或配置代码前，拒绝这份清单。
         extra_inventory = base / "extra-inventory"
         shutil.copytree(valid, extra_inventory)
         (extra_inventory / "unexpected-policy.py").write_text(
@@ -859,9 +856,8 @@ exit 0
             "verification summary",
         )
 
-        # These cases rewrite the embedded record, its receipt and the outer
-        # checksum inventory.  Portable verification must still reject an
-        # impossible or cross-record-inconsistent execution topology.
+            # 这些用例会重写嵌入记录、对应回执和外层校验和清单。可移植验证仍须
+            # 拒绝不可能或跨记录不一致的执行拓扑。
         self_consistent_cases = base / "binding-tamper-cases"
         self_consistent_cases.mkdir()
 
@@ -1142,10 +1138,9 @@ exit 0
             )
             assert binding["status"] == "verified"
 
-            # Exercise the exact source allowlist and copier used by formal
-            # bundles as data only. Semantic replay must stay rooted in the
-            # explicitly trusted collector checkout and never execute snapshot
-            # Python, even when that snapshot is directly attacker-controlled.
+            # 只把正式证据包使用的精确源码允许列表和复制器作为数据进行测试。
+            # 语义重放必须始终以显式可信的收集器检出目录为根，绝不能执行快照中的
+            # Python，即使该快照直接受攻击者控制。
             import evaluation_bundle
             from agenteval_measurement_source_receipt import (
                 build_measurement_source_receipt,
@@ -1170,11 +1165,9 @@ exit 0
                 destination = policy_source / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(repository / relative, destination)
-            # The detached collector fixture deliberately uses a compact
-            # allocator verifier bound to its synthetic archive.  Keep that
-            # one source in the policy-shaped fixture so the integration test
-            # exercises closure and launch isolation rather than duplicating
-            # the allocator subsystem's own semantic test corpus.
+            # 分离的收集器夹具刻意使用绑定到合成归档的精简分配器验证器。策略形状的
+            # 夹具只保留这一份源码，使集成测试覆盖闭包和启动隔离，而不重复分配器
+            # 子系统自身的语义测试集。
             shutil.copyfile(
                 repo / "scripts/fs-allocator-evidence.py",
                 policy_source / "scripts/fs-allocator-evidence.py",

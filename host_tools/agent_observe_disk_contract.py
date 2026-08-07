@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict loader for the durable observation disk-layout contract."""
+"""持久观测磁盘布局合同的严格加载器。"""
 
 from __future__ import annotations
 

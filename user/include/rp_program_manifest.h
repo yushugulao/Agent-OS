@@ -1,7 +1,7 @@
 #ifndef __RP_PROGRAM_MANIFEST_H__
 #define __RP_PROGRAM_MANIFEST_H__
 
-/* Single source of truth for the ordered research-platform acceptance run. */
+/* 研究平台验收顺序的唯一来源。 */
 #define RP_PLATFORM_PROGRAMS(APPLY) \
 	APPLY("rp_catalog") \
 	APPLY("rp_state_catalog") \
@@ -74,8 +74,8 @@
 	APPLY("rp_compare_plain") \
 	APPLY("rp_test_suite")
 
-/* AgentOS launch identity contract; all unlisted programs are delegated
- * non-Agent workers.  Plain uCore runs the complete ordered list via fork. */
+/* AgentOS 启动身份合同；未列出的程序均为委派的非 Agent 工作进程。
+ * 普通 uCore 通过 fork 依序运行完整清单。 */
 #define RP_AGENTOS_ROLE_PROGRAMS(APPLY) \
 	APPLY("rp_query", "artifact") \
 	APPLY("rp_repair", "recovery") \

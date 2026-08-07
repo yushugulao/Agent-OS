@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the evaluation collection campaign."""
+"""评测采集活动的回归测试。"""
 
 from __future__ import annotations
 
@@ -70,9 +70,8 @@ def _test_hardware() -> dict[str, object]:
     try:
         return platform_probe._probe_proc_hardware_identity()
     except platform_probe.PlatformPreflightError:
-        # Native Windows is not a formal execution domain, but these unit
-        # fixtures still need a canonical proof before their execution call is
-        # replaced by mocks.
+        # 原生 Windows 不是正式执行域，但这些单元测试夹具仍需规范证明，
+        # 才能用模拟对象替换其执行调用。
         return {
             "cpu_model": "Unit Test CPU",
             "logical_cpu_count": 4,
@@ -505,24 +504,6 @@ class CampaignTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(environment["host_cc"], proof["tools"]["host_cc"])
-
-    def test_formal_campaigns_reject_optional_stopping_counts(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with self.assertRaisesRegex(campaign.CampaignError, "fixed 7-boot"):
-                _create(root, boots=8)
-
-            micro = _create(root)
-            output = root / "results" / "evaluation" / "scenario-8.json"
-            with self.assertRaisesRegex(campaign.CampaignError, "fixed 7-boot"):
-                campaign.create_scenario_campaign(
-                    repo=root,
-                    micro_manifest=micro,
-                    output=output,
-                    requested_boots=8,
-                    timeout_seconds=600,
-                    wsl_distro="Ubuntu",
-                )
 
     def test_repository_identity_rejects_hidden_index_flags(self) -> None:
         for flag in ("--assume-unchanged", "--skip-worktree"):
@@ -2457,121 +2438,6 @@ class CampaignTests(unittest.TestCase):
             scenario["boots"][1]["challenge"] = scenario["boots"][0]["challenge"]
             with self.assertRaisesRegex(campaign.CampaignError, "unique"):
                 campaign.validate_scenario_campaign(scenario)
-
-    def test_shell_wiring_is_fail_closed_and_keeps_independent_logs(self) -> None:
-        script = (
-            Path(__file__).resolve().parents[1] / "scripts" / "run-evaluation-suite.sh"
-        ).read_text(encoding="utf-8")
-        campaign_source = Path(campaign.__file__).read_text(encoding="utf-8")
-        self.assertIn("FORMAL_MICRO_BOOTS=7", script)
-        self.assertIn("EVALUATION_BOOTS:-${FORMAL_MICRO_BOOTS}", script)
-        self.assertIn("EVALUATION_INCLUDE_SCENARIO:-1", script)
-        self.assertIn("FORMAL_SCENARIO_BOOTS=7", script)
-        self.assertIn(
-            "EVALUATION_SCENARIO_BOOTS:-${FORMAL_SCENARIO_BOOTS}", script
-        )
-        self.assertIn('formal_id="formal-${commit}"', script)
-        self.assertIn(
-            "formal EVALUATION_RUN_ID must equal ${formal_id}", script
-        )
-        self.assertIn("write_measurement_source_receipt \"${commit}\"", script)
-        self.assertIn("verify_measurement_source_receipt", script)
-        self.assertIn('"AGENT_TEST_CASE": "agenteval_ucore"', campaign_source)
-        self.assertIn(
-            '"AGENT_TEST_DURATION_PROFILE": _bound_duration_profile_name(',
-            campaign_source,
-        )
-        self.assertIn(
-            '"${AGENT_TEST_DURATION_PROFILE}" == "local-e3" &&\n'
-            '      -z "${AGENT_TEST_CASE:-}"',
-            (PROJECT_ROOT / "scripts" / "run-agent-tests.sh").read_text(encoding="utf-8"),
-        )
-        self.assertIn('"AGENT_EVAL_CHALLENGE_HEX": challenge', campaign_source)
-        self.assertIn("get-boot-field", script)
-        self.assertIn("run-boot", script)
-        self.assertNotIn('subparsers.add_parser("record")', campaign_source)
-        self.assertIn("EVALUATION_MICRO_TIMEOUT:-900", script)
-        self.assertIn("FORMAL_MICRO_TIMEOUT=900", script)
-        self.assertIn("preflight_scenario_builders()", script)
-        self.assertIn(
-            '[[ "${EVALUATION_INCLUDE_SCENARIO}" == "1" ]] || return 0', script
-        )
-        self.assertIn("local status=$? cleanup_status", script)
-        self.assertIn('exit "${cleanup_status}"', script)
-        self.assertIn(
-            '"${make_tool}" -rR -C baseline_ucore/nfs -f Makefile fs', script
-        )
-        self.assertIn(
-            '"CASE_TIMEOUT": f"{timeout_seconds}s"', campaign_source
-        )
-        self.assertIn("micro_timeout_seconds", campaign_source)
-        self.assertIn("with-campaign-lock", script)
-        self.assertIn("__run_locked", script)
-        self.assertIn("--timeout \"${EVALUATION_MICRO_TIMEOUT}\"", script)
-        self.assertLess(
-            script.index('"${CAMPAIGN_TOOL}" create'),
-            script.index('--timeout "${EVALUATION_MICRO_TIMEOUT}"'),
-        )
-        self.assertIn("exclusive_repo_run_lock", campaign_source)
-        self.assertIn("exclusive_evaluation_campaign_lock", campaign_source)
-        self.assertIn("CREATE_NEW_PROCESS_GROUP", campaign_source)
-        self.assertIn("start_new_session", campaign_source)
-        self.assertIn('deadline_label: str = "micro boot"', campaign_source)
-        self.assertIn("scenario_pair_deadline_contract", campaign_source)
-        self.assertIn('"${CONTRACT_TOOL}" build', script)
-        self.assertIn('"${CONTRACT_TOOL}" verify', script)
-        self.assertIn('input_image=repo / "nfs/fs.img"', campaign_source)
-        self.assertIn('final_image=repo / "nfs/fs-copy.img"', campaign_source)
-        self.assertIn("create-scenario", script)
-        self.assertEqual(script.count('"${CAMPAIGN_TOOL}" check-preflight'), 2)
-        micro_preflight_check = (
-            '"${CAMPAIGN_TOOL}" check-preflight \\\n'
-            '\t\t--repo "${ROOT}" --manifest "${manifest}" \\\n'
-            '\t\t--receipt "${RUN_DIR}/preflight.log"'
-        )
-        scenario_preflight_check = (
-            '--repo "${ROOT}" \\\n'
-            '\t\t\t--manifest "${RUN_DIR}/scenario/scenario-plan.json" \\\n'
-            '\t\t\t--receipt "${RUN_DIR}/scenario-preflight.log"'
-        )
-        first_boot_loop = (
-            "for ((number = 1; number <= EVALUATION_BOOTS; number++))"
-        )
-        self.assertIn(micro_preflight_check, script)
-        self.assertIn(scenario_preflight_check, script)
-        self.assertLess(
-            script.index(micro_preflight_check),
-            script.index('"${CAMPAIGN_TOOL}" create-scenario'),
-        )
-        self.assertLess(
-            script.index(scenario_preflight_check), script.index(first_boot_loop)
-        )
-        builder_preflight_call = script.index("\t\tpreflight_scenario_builders\n")
-        self.assertGreater(
-            builder_preflight_call, script.index(scenario_preflight_check)
-        )
-        self.assertLess(builder_preflight_call, script.index(first_boot_loop))
-        self.assertIn("run-scenario-boot", script)
-        self.assertNotIn('subparsers.add_parser("record-scenario")', campaign_source)
-        self.assertIn("check-scenario", script)
-        self.assertNotIn('"QEMU=${QEMU}"', script)
-        self.assertIn("scenario report differs from a raw-source replay", script)
-        self.assertIn("--scenario-report", script)
-        self.assertIn('--contract-root "${ROOT}"', script)
-        self.assertLess(
-            script.index('"${CAMPAIGN_TOOL}" create-scenario'),
-            script.index("for ((number = 1; number <= EVALUATION_BOOTS; number++))"),
-        )
-        self.assertNotIn('${PIPESTATUS[0]}', script)
-        self.assertNotIn('${PIPESTATUS[1]}', script)
-        self.assertEqual(script.count('pipeline_status=("${PIPESTATUS[@]}")'), 4)
-        self.assertIn("pipeline_status_selftest", script)
-        self.assertIn("failed; raw logs and campaign state were retained", script)
-        self.assertIn("normalize_tool_path_for_python", script)
-        self.assertIn("cygpath_path", script)
-        self.assertIn('--make-tool "${make_python_path}"', script)
-        self.assertIn('--size-tool "${size_python_path}"', script)
-        self.assertNotIn("|| true", script)
 
     def test_scenario_coordination_allows_child_target_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

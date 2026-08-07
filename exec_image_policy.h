@@ -1,10 +1,7 @@
 #ifndef EXEC_IMAGE_POLICY_H
 #define EXEC_IMAGE_POLICY_H
 
-/*
- * Shared producer/consumer contract for protected SYSTEM executables.
- * Identity trust and delegated capability ceilings are checked separately.
- */
+/* 受保护 SYSTEM 可执行映像的共享生产者/消费者契约；身份信任与委派能力上限分别检查。 */
 static inline int
 exec_image_profile_valid(unsigned int profile)
 {

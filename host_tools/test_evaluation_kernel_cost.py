@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for portable kernel cost evidence."""
+"""可移植内核成本证据的回归测试。"""
 
 from __future__ import annotations
 
@@ -1164,11 +1164,9 @@ class KernelCostTests(unittest.TestCase):
         fragment = cost.build_dashboard_fragment(
             self.fixture.report, self.fixture.config, self.fixture.root
         )
-        # Kernel cost is a separately re-derived sidecar, not an evaluation
-        # summary.  The renderer compares this exact fragment with a fresh
-        # build_dashboard_fragment() result before displaying it; treating its
-        # intentionally smaller methodology as the headline summary contract
-        # would conflate artifact cost with performance inference.
+        # 内核成本是单独重新推导的旁路文件，不是评测摘要。渲染器会先将此片段与
+        # 最新 build_dashboard_fragment() 结果比较再展示；若把其中刻意精简的
+        # 方法描述当作核心摘要契约，就会混淆制品成本与性能推断。
         self.assertEqual(
             set(fragment),
             {

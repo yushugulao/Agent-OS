@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed when predicate waits bypass the interrupt-off contract."""
+"""谓词等待绕过关中断契约时闭锁失败。"""
 
 import re
 from pathlib import Path
@@ -47,7 +47,6 @@ def function_ranges(source: str):
 for token in (
     "wait_queue_require_irq_disabled();",
     'panic("wait queue predicate unlocked")',
-    "no shared predicate must stay atomic with queue publication",
 ):
     if token not in WAIT + WAIT_H:
         raise SystemExit(f"missing wait contract token: {token}")

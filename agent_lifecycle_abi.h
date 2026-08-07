@@ -5,7 +5,7 @@
 
 #define AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT (1U << 0)
 
-/* Identity/comparison data only; this is not a transferable bearer credential. */
+/* 仅含身份与比较数据，不是可转让的持有者凭据。 */
 struct agent_workflow_lifecycle_key {
 	unsigned int id;
 	unsigned int reserved;
@@ -22,7 +22,7 @@ struct agent_workflow_lifecycle_info {
 	unsigned int context_lane_waiters;
 	unsigned int metadata_txn_owned;
 	unsigned int metadata_txn_waiters;
-	/* Self-only identity; no syscall accepts this as authority. */
+	/* 仅用于查询自身身份；系统调用不会把它当作权限。 */
 	unsigned int resource_account_valid;
 	unsigned int resource_account_slot;
 	unsigned long long resource_account_generation;

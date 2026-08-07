@@ -169,11 +169,20 @@ static int physical_page_transfer_receipts(
 		result, target.slot, target.generation);
 	if (result < 0)
 		goto out;
+	bundle[0].kind = RESOURCE_PROCESS;
+	bundle[1].kind = RESOURCE_THREAD;
+	if (resource_reserve_many(source, RESOURCE_CHARGE_ORDINARY,
+		    bundle, 2, &reservation) == 0)
+		goto out;
+	bundle[0].kind = RESOURCE_PHYSICAL_PAGE;
+	bundle[1].kind = RESOURCE_PROCESS;
 	result = resource_reserve_many(source, RESOURCE_CHARGE_ORDINARY,
 		bundle, 2, &reservation);
 	physical_page_receipt(report, PHYSICAL_PAGE_STEP_TRANSFER_RESERVE,
 		result, reservation.active, 0);
-	if (result < 0)
+	if (result < 0 || reservation.kind_mask !=
+			  ((1U << RESOURCE_PHYSICAL_PAGE) |
+			   (1U << RESOURCE_PROCESS)))
 		goto out;
 	result = resource_reservation_commit(&reservation);
 	physical_page_receipt(report, PHYSICAL_PAGE_STEP_TRANSFER_COMMIT,
@@ -264,7 +273,8 @@ static int physical_page_promise_receipts(
 		&pending);
 	physical_page_receipt(report, PHYSICAL_PAGE_STEP_FIRST_RESERVE, result,
 		pending.active, 0);
-	if (result < 0)
+	if (result < 0 || pending.kind_mask !=
+			  (1U << RESOURCE_PHYSICAL_PAGE))
 		goto out;
 	result = resource_reservation_commit(&pending);
 	physical_page_receipt(report, PHYSICAL_PAGE_STEP_FIRST_COMMIT, result,

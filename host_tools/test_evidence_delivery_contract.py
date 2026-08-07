@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the source-C to evidence-E delivery boundary."""
+"""源码 C 到证据 E 交付边界的变异测试。"""
 from __future__ import annotations
 
 import json
@@ -185,8 +185,8 @@ class EvidenceDeliveryContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "path-alias").mkdir()
-            # Preserve a lexical alias until the production containment check.
-            # This reproduces Windows 8.3/long-path disagreement on every OS.
+            # 在生产包含关系检查前保留词法别名，以便在所有操作系统上复现
+            # Windows 8.3 路径与长路径不一致的问题。
             fixture = DeliveryFixture(root / "path-alias" / "..")
             bundle = fixture.publish()
             for index in range(12):
@@ -342,9 +342,8 @@ class EvidenceDeliveryContractTests(unittest.TestCase):
             alias = bundle / "alias.log"
             isjunction = getattr(os.path, "isjunction", None)
             if not alias.is_symlink() and not bool(isjunction and isjunction(alias)):
-                # MSYS may implement os.symlink as a regular-file copy when
-                # Windows link creation is unavailable; there is no link entry
-                # for the delivery contract to reject in that execution mode.
+            # Windows 无法创建链接时，MSYS 可能用普通文件副本实现 os.symlink；
+            # 此执行模式中不存在可供交付契约拒绝的链接项。
                 return
             fixture.commit_evidence()
             with self.assertRaisesRegex(DeliveryContractError, "regular data file"):

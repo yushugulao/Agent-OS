@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify token-first close classification and lazy inode destruction."""
+"""验证 token 优先的 close 分类与 inode 延迟销毁。"""
 
 from __future__ import annotations
 

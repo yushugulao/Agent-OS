@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the fail-closed user stack call-path checker."""
+"""闭锁式用户栈调用路径检查器的变异测试。"""
 
 import subprocess
 import sys

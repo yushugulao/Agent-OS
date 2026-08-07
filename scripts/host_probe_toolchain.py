@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Portable host-compiler setup for dynamic C regression probes."""
+"""为动态 C 回归探针提供可移植的 Host 编译器配置。"""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def probe_mode(sanitizer_flags: list[str]) -> str:
 
 
 def shell_records(directory: Path, configured_compiler: str | None = None) -> list[str]:
-    """Return a data-only record consumed by host-probe-toolchain.sh."""
+    """返回供 host-probe-toolchain.sh 使用的纯数据记录。"""
     compiler = host_compiler(configured_compiler)
     flags = required_sanitizer_flags(compiler, directory)
     environment = probe_environment(flags)

@@ -7,10 +7,10 @@
 #include "vfs_security.h"
 #include "agent_observe_internal.h"
 
-/* One bounded wait can cover a complete two-bank metadata checkpoint. */
+/* 一次有界等待足以覆盖完整的双组元数据检查点。 */
 #define AGENT_AUDIT_RECEIPT_WAIT_ATTEMPTS 128U
 
-/* Audit-ledger queries consume immutable index copies from the writer. */
+/* 审计账本查询读取写入端发布的不可变索引副本。 */
 static uint agent_audit_scope_visible(uint scope_id)
 {
 	return agent_observe_audit_scope_visible_locked(scope_id);
@@ -83,7 +83,7 @@ sys_agent_audit_receipt(uint64 requestaddr)
 	    !vfs_proc_lifecycle_active(p) ||
 	    !workflow_lifecycle_key_equal(requested, current))
 		return AGENT_STATUS_STALE;
-	/* Query work must not create observations that evict its own evidence. */
+	/* 查询过程不得生成观测记录，以免逐出自身证据。 */
 	if (agent_observe_recording_suppress_begin(p) < 0)
 		return AGENT_STATUS_INDETERMINATE;
 	scope_id = agent_identity_proc_scope(p);

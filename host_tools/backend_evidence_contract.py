@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict source and Guest-log contracts for backend evidence roles."""
+"""后端证据角色的严格源码与 Guest 日志合同。"""
 from __future__ import annotations
 
 import argparse

@@ -42,9 +42,8 @@ first_number_after_key() {
 	echo "${value}"
 }
 
-# This gate checks repository topology and target parity only. Mechanism
-# behavior belongs to the executable contract and QEMU suites, not a second
-# inventory of source-code substrings.
+# 本门禁仅检查仓库拓扑与目标对等性。机制行为属于可执行契约与 QEMU 套件，
+# 不应再维护一份源码子串清单。
 for path in \
 	.gitlab-ci.yml Makefile ci/kernel-budgets.json ci/evaluation-suite.json \
 	baseline_ucore/os baseline_ucore/user/Makefile os/agent.c os/agent.h \
@@ -94,8 +93,8 @@ require_text "scripts/run-dual-platforms.sh" "verify-dual-target-structure" \
 	"dual-platform runner bypasses the topology gate"
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" \
 	"full verification bypasses the topology gate"
-# Public evidence contracts: '^SCHEMA_VERSION = 8$' and
-# '^FULL_VERIFY_PROFILE_VERSION = 7$'.
+# 公共证据契约为 '^SCHEMA_VERSION = 8$' 与
+# '^FULL_VERIFY_PROFILE_VERSION = 7$'。
 require_text "scripts/capture-final-evidence.py" "^SCHEMA_VERSION = 8$" \
 	"final evidence schema drifted"
 require_text "scripts/capture-final-evidence.py" "^FULL_VERIFY_PROFILE_VERSION = 7$" \

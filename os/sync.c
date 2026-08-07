@@ -9,8 +9,7 @@ static int mutex_owned_by(const struct mutex *m, const struct thread *t)
 	       m->owner_generation == t->identity_generation;
 }
 
-// Pass ownership directly to the FIFO head so a newly arriving thread cannot
-// steal a blocking mutex before the selected waiter runs.
+// 所有权直接交给先进先出队首，避免新到线程在选中等待者运行前抢走阻塞互斥锁。
 static void mutex_release_locked(struct mutex *m)
 {
 	struct thread *next = wait_queue_wake_one_thread(&m->waiters);
@@ -127,9 +126,8 @@ static int sync_wait_queue_empty(const struct wait_queue *q)
 }
 
 /*
- * exec replaces every user-visible synchronization namespace. Validation is
- * separate from reset so a malformed/stale waiter can still abort before the
- * credential and VM publication boundary becomes irreversible.
+ * 映像替换会更换全部用户可见同步名字空间。校验与复位分离，使畸形或陈旧
+ * 等待者能在凭据和虚拟内存发布不可逆前中止。
  */
 int sync_proc_exec_validate_locked(struct proc *p, struct thread *survivor)
 {
@@ -221,9 +219,8 @@ int semaphore_down(struct semaphore *s)
 		wait_result = wait_queue_sleep_irq(&s->waiters);
 		if (wait_result < 0) {
 			/*
-			 * Undo this waiter's debit. A normal wake followed by teardown
-			 * already consumed an up(); pass that exact grant to the next
-			 * FIFO waiter. Pure queue cancellation has no grant to transfer.
+			 * 撤销本等待者的扣减。正常唤醒后再拆除已消费一次释放操作，须将该
+			 * 授予转交下一个先进先出等待者；单纯取消排队则没有授予可传递。
 			 */
 			s->count++;
 			if (wait_result == WAIT_QUEUE_WOKEN_INTERRUPTED &&
@@ -282,7 +279,7 @@ int cond_wait(struct condvar *cond, struct mutex *m)
 	if (mutex_unlock(m) < 0)
 		goto fail;
 	debugf("wait for cond");
-	/* unlock and queue publication are one single-core atomic transition. */
+/* 解锁与队列发布构成单核原子转换。 */
 	wait_result = wait_queue_sleep_irq(&cond->waiters);
 	debugf("wake up from cond");
 	lock_result = mutex_lock(m);

@@ -1,32 +1,23 @@
 #ifndef PHYSICAL_PAGE_POLICY_H
 #define PHYSICAL_PAGE_POLICY_H
 
-/*
- * Physical pages are admitted by the immutable execution resource account.
- * The allocator carves this reserve out of the ordinary freelist, so the
- * waterline is physical rather than merely an accounting convention.
- */
+/* 物理页按不可变执行资源账户准入；分配器从普通空闲链表切出真实保留水位。 */
 #ifndef PHYSICAL_PAGE_SYSTEM_RESERVE
-/* Fund concurrent controller and endpoint images in every reserved domain. */
+/* 为每个保留域中的并发控制器与端点映像提供资源。 */
 #define PHYSICAL_PAGE_SYSTEM_RESERVE 2048U
 #endif
 
-/*
- * A reserved execution account exists for each admission-counted workflow.
- * Keep this policy-level cardinality tied to the process and VFS admission
- * limits (proc.h supplies the compile-time bridge) instead of letting a
- * caller silently size one account to the whole pool.
- */
+/* 每个计入准入的 workflow 都有保留执行账户；其基数绑定进程和 VFS 准入上限。 */
 #ifndef PHYSICAL_PAGE_RESERVED_DOMAIN_CAP
 #define PHYSICAL_PAGE_RESERVED_DOMAIN_CAP 4U
 #endif
 
-/* Current Sv39 kernel mapping: 0x80200000 through 0x88000000. */
+/* 当前 Sv39 内核映射范围：0x80200000 至 0x88000000。 */
 #ifndef PHYSICAL_PAGE_ADDRESSABLE_LIMIT
 #define PHYSICAL_PAGE_ADDRESSABLE_LIMIT 32256U
 #endif
 
-/* Reserved storage accounts also allocate short-lived reclaim workspaces. */
+/* 保留存储账户也会分配短命回收工作区。 */
 #ifndef PHYSICAL_PAGE_STORAGE_SYSTEM_RESERVED_LIMIT
 #define PHYSICAL_PAGE_STORAGE_SYSTEM_RESERVED_LIMIT 16U
 #endif
@@ -46,7 +37,7 @@
 	 1ULL * PHYSICAL_PAGE_SYSTEM_RESERVE - \
 		 PHYSICAL_PAGE_STORAGE_RESERVED_BUDGET : 0ULL)
 
-/* Zero derives the ordinary waterline from the post-boot freelist. */
+/* 零表示根据启动后的空闲链表推导普通水位线。 */
 #ifndef PHYSICAL_PAGE_ORDINARY_LIMIT
 #define PHYSICAL_PAGE_ORDINARY_LIMIT 0U
 #endif
@@ -64,7 +55,7 @@
 #define PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT_DERIVED 0
 #endif
 
-/* Minimum non-Agent VM working set promised to each reserved domain. */
+/* 向每个保留域承诺的非 Agent VM 最小工作集。 */
 #ifndef PHYSICAL_PAGE_DOMAIN_RESERVED_VM_FLOOR
 #define PHYSICAL_PAGE_DOMAIN_RESERVED_VM_FLOOR 250U
 #endif

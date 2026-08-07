@@ -686,7 +686,7 @@ agent_meta_journal_apply_trusted(
 	    store->header.generation + 1 != plan->generation)
 		return AGENT_META_JOURNAL_CORRUPT;
 	count = store->header.count;
-	/* Validate all old-byte guards before changing the live authority. */
+	/* 更改在线权限前先校验全部旧字节保护条件。 */
 	for (uint i = 0; i < plan->data_count; i++) {
 		uint operation = plan->slots[i].header.operation;
 
@@ -763,8 +763,7 @@ agent_meta_journal_apply_trusted(
 	}
 	store->header.count = count;
 	store->header.generation = plan->generation;
-	/* Runtime journal shadows are authenticated by the commit chain.  A full
-	 * payload hash is regenerated only when the bank is compacted. */
+	/* 运行时日志影子由提交链鉴真；仅在 bank 压实时重新生成完整载荷哈希。 */
 	store->header.payload_hash = plan->commit_hash;
 	return AGENT_META_JOURNAL_OK;
 }

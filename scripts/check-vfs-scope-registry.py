@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the bounded workflow VFS scope registry without booting a guest."""
+"""无需启动 Guest，检查有界工作流 VFS 作用域注册表。"""
 
 from __future__ import annotations
 

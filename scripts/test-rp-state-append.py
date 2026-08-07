@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host regression probe for canonical research-state append boundaries."""
+"""规范研究状态追加边界的 Host 回归探针。"""
 
 from __future__ import annotations
 

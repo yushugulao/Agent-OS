@@ -1,10 +1,7 @@
 #ifndef AGENT_TOOL_ABI_H
 #define AGENT_TOOL_ABI_H
 
-/*
- * Shared, architecture-stable Agent tool ABI.  Keep kernel implementation
- * declarations out of this file: both the kernel and user library include it.
- */
+/* 共享且架构稳定的 Agent 工具 ABI；内核和用户库共同包含，本文件不放实现声明。 */
 #define AGENT_CALL_VERSION_V1 1U
 #define AGENT_CALL_VERSION_V2 2U
 #define AGENT_CALL_VERSION AGENT_CALL_VERSION_V1
@@ -78,11 +75,7 @@
 #define AGENT_TOOL_PARAM_MAX     8U
 #define AGENT_PARAM_STRING_SIZE 64U
 
-/*
- * Canonical wire keys.  The field size includes the terminating NUL, so keep
- * every protocol key in this registry and reject an unencodable key at build
- * time instead of discovering it during kernel boot.
- */
+/* 规范 wire key；字段尺寸包含结尾 NUL，无法编码的 key 必须在构建期拒绝。 */
 #define AGENT_PARAM_KEY_REGISTRY(X) \
 	X(PAYLOAD, "payload") \
 	X(ARG0, "arg0") \
@@ -110,7 +103,7 @@
 AGENT_PARAM_KEY_REGISTRY(AGENT_PARAM_KEY_ASSERT)
 #undef AGENT_PARAM_KEY_ASSERT
 
-/* heartbeat_interval is stored in the signed PCB field on both targets. */
+/* 两个目标都把 heartbeat_interval 存入有符号 PCB 字段。 */
 #define AGENT_HEARTBEAT_MAX_TICKS 0x7fffffffULL
 
 struct agent_op {
@@ -135,7 +128,7 @@ struct agent_result {
 	char result[AGENT_FAST_RESULT_SIZE];
 };
 
-/* Version 1 is kept byte-for-byte compatible with the original ABI. */
+/* 版本 1 与原始 ABI 保持逐字节兼容。 */
 struct agent_request {
 	int version;
 	int tool_id;
@@ -173,11 +166,7 @@ struct agent_tool_desc {
 	char description[AGENT_TOOL_DESC_SIZE];
 };
 
-/*
- * Version 2 carries a bounded variable-length array of typed parameters.
- * Every record is independently sized and versioned so later ABIs can add a
- * new record suffix without changing how old kernels reject it.
- */
+/* 版本 2 携带有界变长类型化参数数组；每条记录独立定长和定版，后续 ABI 可追加后缀。 */
 union agent_param_value_v2 {
 	unsigned long long uint64_value;
 	char string_value[AGENT_PARAM_STRING_SIZE];

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-check the shared C and host Python executable-shape classifiers."""
+"""交叉检查共享 C 与 Host Python 可执行文件形态分类器。"""
 
 from __future__ import annotations
 

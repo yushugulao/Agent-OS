@@ -1370,7 +1370,7 @@ agent_file_load_snapshot(int force, uint reload_scope,
 		agent_metadata_probe_catalog_progress(selected_bank, apply->plan_catalog_cursor + apply->plan_cursor);
 	if (result < 0)
 		goto out_store;
-	/* Identifier recovery publishes monotonic floors only on first load. */
+	/* 标识符恢复只在首次加载时发布单调水位。 */
 	if (!agent_file_loaded && agent_meta_format_recover_identifiers(store) < 0) {
 		result = AGENT_METADATA_LOAD_CORRUPT;
 		agent_meta_store_failed_closed = 1;

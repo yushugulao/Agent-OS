@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for Task 6 Guest makespan source provenance."""
+"""任务 6 Guest 总耗时源码来源的变异测试。"""
 from __future__ import annotations
 
 import re

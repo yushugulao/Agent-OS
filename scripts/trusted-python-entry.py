@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolated launcher for repository-owned formal evaluation entrypoints."""
+"""仓库自有正式评测入口的隔离启动器。"""
 
 from __future__ import annotations
 
@@ -99,9 +99,8 @@ def main() -> None:
     if not stat.S_ISREG(info.st_mode) or target.is_symlink() or resolved != target:
         _fail("repository entrypoint is link-backed or not regular")
 
-    # Default in-tree __pycache__ files are untrusted inputs.  Local modules are
-    # reachable only after the standard library and use a fresh external cache
-    # namespace for this invocation.
+    # 树内默认 __pycache__ 文件是不可信输入。本地模块只能在标准库之后访问，
+    # 且本次调用使用全新的外部缓存命名空间。
     sys.dont_write_bytecode = True
     sys.pycache_prefix = str(
         Path(tempfile.gettempdir()) / f"agentos-pycache-{os.urandom(16).hex()}"

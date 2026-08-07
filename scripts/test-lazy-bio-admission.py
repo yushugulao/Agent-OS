@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for cache-miss-triggered BIO admission."""
+"""缓存未命中触发 BIO 准入的变异测试。"""
 
 from __future__ import annotations
 

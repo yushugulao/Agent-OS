@@ -111,7 +111,7 @@ int agent_obsstore_receipt_record_status(
 	uint, struct workflow_lifecycle_key, uint64, uint64, uint64, uint64);
 int agent_obsstore_mark_reap(uint, struct workflow_lifecycle_key);
 
-/* Accessors implemented by the authoritative in-memory observation owner. */
+/* 访问器由权威内存观测模块实现。 */
 int agent_observe_checkpoint_capture_scope(
 	uint, struct workflow_lifecycle_key,
 	struct agent_observe_checkpoint_scope *);

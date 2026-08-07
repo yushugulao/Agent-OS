@@ -1,4 +1,4 @@
-"""Render replayed full-verification metrics without changing their policy."""
+"""在不改变策略的前提下渲染已重放的完整验证指标。"""
 
 from __future__ import annotations
 

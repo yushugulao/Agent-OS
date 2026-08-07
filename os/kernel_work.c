@@ -39,7 +39,7 @@ void kernel_work_reset(struct thread *t)
 	t->bio_fs_atomic_depth = 0;
 }
 
-// 时间片在调度时开始，而不是在 syscall 入口刷新，避免短调用流无限续期。
+// 时间片在调度时开始，而不是在系统调用入口刷新，避免短调用流无限续期。
 void kernel_work_on_dispatch(struct thread *t)
 {
 	if (t == 0)
@@ -91,7 +91,7 @@ void kernel_work_begin_cleanup(void)
 {
 	struct thread *t = curr_thread();
 
-	/* 终止退出优先复用外层 syscall 的内核工作时间片。 */
+	/* 终止退出优先复用外层系统调用的内核工作时间片。 */
 	if (!kernel_work_running(t) || t->kernel_work_depth != 0)
 		return;
 	kernel_work_begin_scope(-1, 0);
@@ -106,9 +106,9 @@ void kernel_work_request_resched(void)
 }
 
 /*
- * syscall 入口会关闭 SIE。若唯一竞争者正等待设备完成，单纯查询运行队列
- * 永远看不到它。只在已提交原子批次的慢速安全点短暂开放中断，让设备和
- * 时钟处理程序发布唤醒/need_resched；短 syscall 不经过这里，也不多写 CSR。
+ * 系统调用入口会关闭 SIE。若唯一竞争者正等待设备完成，运行队列查询看不到它。
+ * 仅在已提交原子批次的慢速安全点短暂开放中断，让设备和时钟发布唤醒及待调度位；
+ * 短系统调用不经过这里，也不重复写 CSR。
  */
 static void kernel_work_irq_window(struct thread *t)
 {
@@ -142,7 +142,7 @@ static int kernel_work_checkpoint_mode(uint work_units, int cleanup)
 	if (!t->kernel_resched_pending &&
 	    t->kernel_work_units < KERNEL_WORK_BUDGET_UNITS)
 		return exit_requested ? -1 : 0;
-	/* 先投递 IRQ，设备等待者才有机会进入运行队列。 */
+	/* 先投递中断，设备等待者才有机会进入运行队列。 */
 	kernel_work_irq_window(t);
 	/* 没有竞争者时只开启下一批预算，避免把长调用切换给自己。 */
 	if (!scheduler_has_runnable_peer()) {
@@ -205,11 +205,8 @@ static void kernel_work_end_mode(int cleanup, int terminal)
 		panic("kernel work depth underflow");
 	outer = t->kernel_work_depth == 1;
 	if (terminal || outer) {
-		/*
-		 * 仿照 Linux 的 need_resched：时钟中断只发布待调度位，普通
-		 * 短 syscall 不再反复读取 cycle。只有真的积累了工作或收到
-		 * 调度请求时才进入慢路径。
-		 */
+		/* 时钟中断只发布待调度位；短系统调用不反复读取周期计数，
+		 * 仅积累足够工作或收到调度请求时进入慢路径。 */
 		if (t->kernel_resched_pending || t->kernel_work_resumed ||
 		    t->kernel_work_units >= KERNEL_WORK_BUDGET_UNITS)
 			(void)kernel_work_checkpoint_mode(0, cleanup);

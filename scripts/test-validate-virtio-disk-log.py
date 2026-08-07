@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the VirtIO fault-matrix log contract."""
+"""VirtIO 故障矩阵日志契约的变异测试。"""
 
 from __future__ import annotations
 

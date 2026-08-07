@@ -176,7 +176,7 @@ Agent 权限由以下链路共同决定：
 
 路由表保存在 target PCB 中，每项使用 source 的内核私有、单调且不复用的 64 位 `agent_control_id`，并单独记录允许的 `MESSAGE` / `LLM_DONE` 位图。PID 只在 syscall 当次用于定位对象；source/target 解析、存活状态、控制关系、route grant/revoke 和投递鉴权都在关中断临界区中完成。source 退出时内核遍历删除所有对应入站项，target 退出时清空自己的路由表。grant/revoke 幂等，revoke 只影响之后的入队，已通过授权并进入 FIFO 的事件不会被追溯删除。由此 PCB 槽或 PID 复用、reparent 和角色变化都不能复活旧通道。
 
-所有执行直接投递的数据面入口复用同一交付函数：`agent_wake()`、`send_message`、非零 target `llm_request` 和 `llm_response` 均先核对 stable route，再检查 watch、队列预算并入队；`llm_request(target=0)` 只记录摘要。兼容 mailbox 只在成功入队后于同一短临界区更新。未授权、目标不存在、watch 不匹配或资源不足都不会留下旁路副作用。`LLM_RELAY` 仍负责“谁可产生 LLM 结果”，route 负责“结果可发给谁”，两层授权缺一不可。
+所有执行直接投递的数据面入口复用同一交付函数：`agent_wake()`、`send_message`、非零 target `llm_request` 和 `llm_response` 均先核对 stable route，再检查 watch、队列预算并入队；`llm_request(target=0)` 只记录摘要。未授权、目标不存在、watch 不匹配或资源不足都不会留下旁路副作用。`LLM_RELAY` 仍负责“谁可产生 LLM 结果”，route 负责“结果可发给谁”，两层授权缺一不可。
 
 目标事件队列仍是 16 槽 FIFO，但每个槽用内核私有 accounting flags 编码 origin/resource class，并保存 stable source control id。资源边界分三层：所有带 Agent 来源的 external 事件合计最多 12 条；directed IPC（`MESSAGE` / `LLM_DONE`）和 attributed notification（`FILE_STATUS` / `JOB_DONE` / `POLICY_DENIED` / `CONTEXT_LIMIT` / `DASHBOARD_EXPORT`）各自最多 8 条；同一个 stable source 跨两类合计最多 4 条。用户可见 `source_pid` 不参与配额身份判断，攻击者不能换事件类型或利用 PID 复用刷新额度。
 
@@ -184,9 +184,9 @@ external=12 的 admission 上限为显式 `KERNEL` origin 保留至少 4 个容�
 
 `agent_wait()` 采用 reserve-copyout-commit 交付协议，而不是在找到事件时立即出队。内核以 event-id cookie 原子保留精确队首事件或 cancel token，释放短临界区后完成用户 copyout 和 Context attribution，再重新核对 cookie 后提交消费、配额退款及下一 waiter handoff。copyout、lane 或归因失败会 abort 保留并定向唤醒等待者，事件/cancel 继续可见；同一槽同时只能有一个消费者。静态与 mutation 合同覆盖该状态机；“reserve 后用户页失效 + sibling waiter/cancel/teardown”四路 Guest 组合仍是显式验收边界，只有 release bundle 实际包含对应 profile 日志时才能称为动态覆盖。
 
-历史 `mailread/mailwrite` 只保留为 PUBLIC 兼容通道，不是 Agent 路由旁路。Agent 端点始终拒绝。无 workflow controller 的普通 PUBLIC 也不再构成全局通道：两端必须属于同一个 ACTIVE、slot+generation 完全一致的 EXEC account，并持有非零端点代数；携带 workflow lifecycle 的降权 PUBLIC 还必须同时命中同一 ACTIVE `(id,generation)`、同一动态 scope 和同一个非零 OPEN controller control id。缺失、陈旧或跨账户、lifecycle、scope 的 lineage 均拒绝。每个新进程和每次 PUBLIC exec 都轮换 endpoint generation，旧 PID、旧 PCB 槽或 exec 前队列不能授权新端点。
+历史 `mailread/mailwrite` 只保留 syscall 编号和用户态包装，内核恒定返回 `-1`，不解析 PID、不访问用户内存，也不分配队列。这样旧二进制得到稳定失败，而不能绕过 scope、route、watch 与 Agent 事件配额。
 
-邮箱存储由 `agent_ipc` 独占为目标进程按需分配的两页 sidecar：一页 16x256 payload、一页元数据，使用目标 EXEC account 和 admission class 计入 `RESOURCE_PHYSICAL_PAGE`，因此发送者不能把内存账目转嫁给另一个主体。空队列读取不分配；首次合法发送以同一关中断临界区完成授权、两页分配、失败回滚、发布和入队；队列排空后保留到 teardown，最终在 EXEC account 释放前幂等退还两页。`mailread` 使用 reserve/copyout/commit 两阶段事务，用户页校验或 `copyout` 失败只撤销保留，不提前移动队首。需要跨安全域协调的测试和控制路径使用显式一次性委派 pipe，不再借裸 PID mail。
+删除 legacy 两页 sidecar、端点代际和独立资源结算后，消息只由 `agent_ipc` 的可信事件队列承载。需要跨安全域协调的测试和控制路径使用显式一次性委派 pipe，不借裸 PID mail。
 
 广播系统事件逐 watcher 独立尝试。某个慢订阅者的 external admission 已满、总队列已满、watch 不匹配或已经退出时，内核继续投递后续目标；文件 metadata 等权威状态一旦提交，不会因为一个通知接收者资源不足而错误返回 `NO_SPACE`。这种 best-effort 通知语义把控制状态提交与观察者背压分离，避免单个低权限 Agent 阻断全局工作流。
 
@@ -278,7 +278,7 @@ metadata set 允许自动创建真实 workflow 文件时，创建来源不是一
 
 scanner 的绑定回退使用 catalog 的单一 resolver，而不是另一套全表 name scan。selector 同时携带从 `DIRSIZ + 1` 有界缓冲区取得的 physical/logical path 和完整 `dev + inum + incarnation`；不同 key 落到不同槽、或 identity 只命中另一条路径时，scanner 不作猜测并安排重试。路径仍命中但 incarnation 已变化表示同名新对象：旧记录先被撤销，新对象取得新 FID。VFS 的 lookup、create、link、unlink 和创建回滚共用唯一 `fs_dirent_canonicalize()`：非空输入只取磁盘可表示的前 `DIRSIZ` 字节并补 NUL。因此历史长名和同一 14 字节前缀继续是同一 legacy dirent alias，但命中后仍必须通过目标 inode 的 policy、scope 和逐操作授权，alias 不扩大权限。create hook 只把这个真实 canonical key 交给 metadata resolver，不再将 raw 长名写入物理/逻辑索引而使 reload 或 rollback fail closed。
 
-全局文件对象表进一步由 EXEC resource account 和 ordinary/reserved 水位约束。普通 PCB 只保留一个 IPC/观测冷状态指针；Context detail/attribution 使用 9 页 sidecar，冷状态使用 1 页，另有 6 页用户只读可信视图和 1 页用户 cache。17 页作为一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子预留、提交和退款，共 `69632` B（68 KiB）；冷状态与其余 Agent 状态一样只在 Agent admission 时分配，普通进程不承担。当前 `struct proc` 基线为 `10024` B。
+全局文件对象表进一步由 EXEC resource account 和 ordinary/reserved 水位约束。普通 PCB 只保留一个 IPC/观测冷状态指针；Context detail/attribution 使用 9 页 sidecar，冷状态使用 1 页，另有 6 页用户只读可信视图和 1 页用户 cache。17 页作为一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子预留、提交和退款，共 `69632` B（68 KiB）；冷状态与其余 Agent 状态一样只在 Agent admission 时分配，普通进程不承担。当前 `struct proc` 基线为 `10008` B，最终值由内核预算约束。
 
 当前六项总状态基线为每进程/全局池/ordinary 池/reserved 池/ordinary 域/reserved 域 `69632/8912896/6684672/2228224/4456448/557056` B；对应 CI 上限为 `73114/9358541/7018906/2339636/4679271/584909` B。9 页 Context sidecar 仍以独立指标观察，但不代表第二份运行时 reserve。逻辑 admission 也不是总内存 OOM 下的硬页保留，数值以 `ci/kernel-budgets.json` 为唯一门禁来源。
 
@@ -334,5 +334,5 @@ make local-check
 - 通用安全机制若同步到 `baseline_ucore/`，必须保持两侧行为契约一致；当前 resource controller、workflow lifecycle、统一 teardown 和 lazy stack 尚不是 baseline 的共享实现。
 - 新的可恢复资源不足路径必须返回错误并回滚，不能把普通用户可触发的条件写成 `panic()`。
 - 调整 `io_policy.h` 的 budget 或 cache floor/cap 时，必须保持 owner 保留总和和 shared gate 分别不超过 device envelope、shared 不带债、有界请求的 owner/device debt 上界、protected aggregate envelope 与 `NBUF` 静态断言；同时复测 PUBLIC 压力、多 workflow、SYSTEM/workflow BACKGROUND、retiring cleanup、shared 排队轮转和 `disk_submit` 物理计费。
-- 修改内核或 Agent 模块边界时必须更新并运行 `make local-check`。源码、镜像、text/data/BSS/total、PCB、legacy mail 两页 sidecar、Agent Context sidecar 与完整 Agent 状态容量、线程与 64 KiB boot stack 调用图、32 MiB 虚拟容量、8 MiB 物理保留池、owner/bridge 注册集合、模块阈值和 Agent case 清单以 `ci/kernel-budgets.json` 为准；受控符号用户必须登记，SCC 硬上限不能仅改 JSON 放宽。metadata 拆分单元、IPC 及 contract headers 必须同时纳入聚合 source/text/BSS 预算，禁止靠跨文件迁移绕过 no-growth 约束。完整套件耗时只在受管且已校准的本地环境中作为硬门，独立 teardown race 另行验证。
+- 修改内核或 Agent 模块边界时必须更新并运行 `make local-check`。源码、镜像、text/data/BSS/total、PCB、Agent Context sidecar 与完整 Agent 状态容量、线程与 64 KiB boot stack 调用图、32 MiB 虚拟容量、8 MiB 物理保留池、owner/bridge 注册集合、模块阈值和 Agent case 清单以 `ci/kernel-budgets.json` 为准；受控符号用户必须登记，SCC 硬上限不能仅改 JSON 放宽。metadata 拆分单元、IPC 及 contract headers 必须同时纳入聚合 source/text/BSS 预算，禁止靠跨文件迁移绕过 no-growth 约束。完整套件耗时只在受管且已校准的本地环境中作为硬门，独立 teardown race 另行验证。
 - 文档不得把共享加固 baseline 描述为未修改的上游 uCore，也不得把通过结构扫描解释为完整运行验证。

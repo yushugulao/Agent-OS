@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify sparse Sv39 fork and teardown traversal invariants."""
+"""验证稀疏 Sv39 fork 与拆除遍历不变量。"""
 
 from __future__ import annotations
 

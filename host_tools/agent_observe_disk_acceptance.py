@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict Observation v8 acceptance policy layered over the disk parser."""
+"""构建在磁盘解析器之上的严格 Observation v8 验收策略。"""
 from __future__ import annotations
 
 import argparse
@@ -52,7 +52,7 @@ def parse_boot1_identity(guest_log: str | bytes) -> dict[str, int]:
 def validate_observation_acceptance(
     result: dict[str, Any], layout: ObservationLayout
 ) -> dict[str, Any]:
-    """Require the v8 full-retention workload selected by the Guest identity."""
+    """要求 Guest 身份选择 v8 全保留工作负载。"""
     geometry = (layout.records_per_scope, layout.latest_tail, layout.diversity_anchors)
     if geometry != ACCEPTANCE_GEOMETRY:
         raise ObservationEvidenceError("observation v8 acceptance geometry differs from 6/4/2")

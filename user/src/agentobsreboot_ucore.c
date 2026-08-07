@@ -12,7 +12,7 @@
 #define AUDIT_READ_MAX 16
 #define AUDIT_READ_BATCH 8
 #define RECOVERY_RECORD_MAX 6
-/* Covers two bounded full-bank scans plus catalog publication. */
+/* 覆盖两次有界全 bank 扫描及目录发布。 */
 #define PHASE_OPEN_ATTEMPTS 256
 #define WORKFLOW_CREATE_ATTEMPTS 256
 
@@ -22,7 +22,7 @@ struct child_result {
 };
 
 struct observe_record_workspace {
-	/* Recovery phases and live audit snapshots use this buffer serially. */
+	/* 恢复阶段与在线审计快照串行复用此缓冲区。 */
 	union {
 		struct agent_audit_record audit[AUDIT_READ_BATCH];
 		struct agent_observe_recovery_record
@@ -539,7 +539,7 @@ boot2_live_reload(int expected_fd, int report_fd)
 	       after.ledger_hash == before.ledger_hash),
 	      "live reload never rolls back newer audit state");
 	printf("agentobsreboot_ucore: live_reload_ledger_monotonic=1\n");
-	/* Exercise identity fields with fresh records after the retention-heavy reload. */
+	/* 保留量密集重载后，用新记录重新验证身份字段。 */
 	event_id = emit_identity_activity();
 	memset(&result, 0, sizeof(result));
 	snapshot_identity_since(&result.identity, event_id,

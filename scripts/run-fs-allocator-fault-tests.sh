@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Filesystem allocator semantic fault/reboot matrix.
+# 文件系统分配器语义故障与重启矩阵。
 
-# Re-enter before touching the repository or temporary storage. This strips
-# BASH_ENV, exported functions, Make/Python injection variables, and every
-# undeclared caller variable from the formal shell itself.
+# 接触仓库或临时存储前重新进入隔离环境。此举从正式 shell 本身移除 BASH_ENV、
+# 导出函数、Make/Python 注入变量以及所有未声明的调用方变量。
 if [[ "${1:-}" != "--internal-hermetic-shell" ]]; then
 	builtin exec /usr/bin/env -i \
 		PATH=/usr/bin:/bin LC_ALL=C LANG=C TZ=UTC \

@@ -27,9 +27,8 @@ FS_QUOTA_WORKFLOW_BLOCK_RESERVE="${FS_QUOTA_WORKFLOW_BLOCK_RESERVE:-64}"
 FS_QUOTA_SYSTEM_BLOCK_RESERVE="${FS_QUOTA_SYSTEM_BLOCK_RESERVE:-64}"
 FS_QUOTA_WORKFLOW_INODE_RESERVE="${FS_QUOTA_WORKFLOW_INODE_RESERVE:-4}"
 FS_QUOTA_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE:-4}"
-# Two fixed-capacity banks each consume 217 data blocks plus one indirect
-# table. Grow only AgentOS images so the pre-genesis data arena remains the
-# same size as the original pressure fixture.
+# 两个定容 bank 各占用 217 个数据块和一张间接表。仅扩展 AgentOS 镜像，
+# 使 genesis 前的数据区与原始压力 fixture 保持相同大小。
 AGENT_META_GENESIS_BLOCKS=436
 AGENT_META_GENESIS_INODES=2
 

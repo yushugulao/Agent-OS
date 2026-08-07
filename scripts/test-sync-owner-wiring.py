@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static fail-closed checks for owned mutex and exec namespace lifecycle."""
+"""自有 mutex 与 exec 命名空间生命周期的静态闭锁检查。"""
 
 from pathlib import Path
 

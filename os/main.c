@@ -38,7 +38,7 @@ void main()
 	fs_epoch_runtime_enable();
 	load_init_app();
 	infof("start scheduler!");
-	/* Runtime I/O admission starts after boot-only image loading completes. */
+	/* 仅启动期使用的映像加载完成后，才开放运行时输入输出准入。 */
 	bio_policy_start();
 	virtio_disk_runtime_start();
 	scheduler();

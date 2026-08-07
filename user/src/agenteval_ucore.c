@@ -194,7 +194,7 @@ static const int revisit_concurrency_levels[REVISIT_CONCURRENCY_LEVELS] = {
 	1, 2, 4
 };
 
-/* Measurement and functional phases are serialized, so scratch can overlap. */
+/* 测量与功能阶段串行，复用暂存区。 */
 static union evaluation_capture {
 	struct {
 		struct file_observation scan[EVAL_FILE_QUERIES];
@@ -601,7 +601,6 @@ static void revisit_seed_context(int identity)
 	record.payload[9] = 'A' + identity;
 	record.result[8] = 'A' + identity;
 	if (context_push(&record) != AGENT_STATUS_OK) {
-		/* The following observation records a real fallback. */
 		return;
 	}
 }
@@ -3254,7 +3253,7 @@ static void run_functional_task4(void)
 	int query_status;
 
 	format_hex16(AGENTEVAL_CHALLENGE, challenge);
-	/* Reuse three post-measurement slots without sharing their identities. */
+	/* 复用三个测量后槽位，但保持身份独立。 */
 	for (int i = 0; i < 3; i++) {
 		make_code(retired_name, 'e', EVAL_MAX_LOAD - 3 + i);
 		check(task4_delete_metadata(
@@ -3280,7 +3279,7 @@ static void run_functional_task4(void)
 				   summaries[i]);
 	}
 
-	/* Attribute query: six exact fields are combined with AND semantics. */
+	/* 属性查询对六个精确字段取逻辑与。 */
 	task4_prepare_query(challenge + 1, 0);
 	query_status = agent_file_query(&file_query, &file_result);
 	check(query_status == 2 && file_result.total_hits == 2 &&
@@ -3322,7 +3321,7 @@ static void run_functional_task4(void)
 	values[22] = task4_query_semantic(
 		"task4-attributes-v2", &file_query, &file_result);
 
-	/* Content-summary query is fuzzy and remains an independent function probe. */
+	/* 内容摘要查询为模糊匹配，单独验证该功能。 */
 	task4_fixture_text(needle, "needle ", challenge);
 	task4_prepare_query(challenge + 1, needle);
 	query_status = agent_file_query(&file_query, &file_result);
@@ -3351,7 +3350,7 @@ static void run_functional_task4(void)
 	values[35] = task4_query_semantic(
 		"task4-summary-v2", &file_query, &file_result);
 
-	/* The production digest tool binds the keyword hit to real file content. */
+	/* 正式摘要工具把关键字命中绑定到真实文件内容。 */
 	memset(digest_op, 0, sizeof(*digest_op));
 	memset(digest_result, 0, sizeof(*digest_result));
 	digest_op->version = AGENT_CALL_VERSION;
@@ -3490,7 +3489,7 @@ static void run_functional_task5(void)
 	int timeout_status;
 	char start = 'G';
 
-	/* Task3 can leave a reserved CONTEXT_LIMIT event; isolate this wait. */
+	/* 任务 3 可能残留已预留的 CONTEXT_LIMIT 事件，先隔离本次等待。 */
 	for (int pending = 0; pending < AGENT_EVENT_QUEUE_CAP; pending++) {
 		check(agent_info(&eval_info) == AGENT_STATUS_OK,
 		      "task5 preflight queue info");
@@ -3685,7 +3684,7 @@ static void run_evaluation(void)
 	run_file_query_experiment();
 	run_tool_batch_experiment();
 	run_context_access_experiment();
-	/* Functional acceptance is deliberately outside every timed interval. */
+	/* 功能验收不计入任何计时区间。 */
 	run_functional_task1();
 	run_functional_task2();
 	run_functional_task3();
@@ -3751,7 +3750,7 @@ int main(void)
 		run_evaluation();
 	check(waitpid(pid, &status) == pid, "wait evaluation orchestrator");
 	check(status == 0, "evaluation orchestrator status");
-	/* Supplementary isolation load runs only after headline timing completes. */
+	/* 主计时结束后再运行补充隔离负载。 */
 	run_revisit_evaluation();
 	printf("agenteval_ucore: parent passed\n");
 	return 0;

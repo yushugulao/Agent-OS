@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the research-platform scenario collector."""
+"""研究平台场景收集器的回归测试。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 try:
     from . import evaluation_scenario as scenario
     from . import check_seeded_action_state as seeded
-except ImportError:  # Direct execution from host_tools/.
+except ImportError:  # 支持从 host_tools/ 目录直接执行。
     import evaluation_scenario as scenario
     import check_seeded_action_state as seeded
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check stable file identity across read/write syscall admission and use."""
+"""检查读写 syscall 准入与使用期间稳定的文件身份。"""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation contracts for filesystem full-block overwrite integration."""
+"""文件系统整块覆盖集成的变异契约。"""
 
 from pathlib import Path
 

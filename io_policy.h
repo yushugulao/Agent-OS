@@ -16,17 +16,12 @@ enum io_policy_class {
 };
 
 /*
- * Credits represent device-submitted 1 KiB block transfers and durability
- * flushes; submitted attempts are charged even when completion fails.
- * Capability and range rejections never reach the device and remain separate
- * logical-request evidence.  The profile is a
- * hierarchy flattened into protected per-owner slices: PUBLIC has one normal
- * slice, every active workflow has normal/control/background slices, every
- * retiring workflow keeps only its cleanup background slice, and SYSTEM has
- * system/background slices.  Those guarantees fit below the device envelope.
- * The shared pool mirrors that envelope as an opportunistic gate rather than
- * an additional guarantee: every shared charge must also consume the device
- * root, so idle capacity is work-conserving without increasing physical I/O.
+ * credits 计量设备已提交的 1 KiB 块传输与持久性 flush，完成失败也计费；
+ * 能力和范围拒绝未到达设备，单独作为逻辑请求证据。层级 profile 展平为
+ * 受保护的所有者切片：PUBLIC 一个普通切片，活动 workflow 有普通、控制、
+ * 后台切片，退役 workflow 只留清理后台切片，SYSTEM 有系统和后台切片。
+ * 各保障总和低于设备包络；共享池只是机会型门，每次仍消耗设备根额度，
+ * 因而保持工作守恒且不增加物理 I/O。
  */
 #define IO_POLICY_PUBLIC_NORMAL_BURST 32U
 #define IO_POLICY_PUBLIC_NORMAL_REFILL 16U

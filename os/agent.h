@@ -96,7 +96,7 @@
 #define AGENT_AUDIT_KIND_EVENT_ENQUEUE 2
 #define AGENT_AUDIT_KIND_EVENT_CONSUME 3
 #define AGENT_AUDIT_KIND_SCHED         4
-/* v8 磁盘检查点仍可恢复该停产类型，新代码不再生成。 */
+/* 第 8 版磁盘检查点仍可恢复该停产类型，新代码不再生成。 */
 #define AGENT_AUDIT_KIND_PREFETCH      5
 #define AGENT_AUDIT_MAX_RECORDS        512
 #define AGENT_AUDIT_TEXT_SIZE          32
@@ -352,6 +352,7 @@ struct agent_info {
 	uint64 timeline_wait_timeout_count;
 	uint64 filesystem_domain;
 	uint64 filesystem_capability_mask;
+	/* 退役 ABI 字段，内核恒填零。 */
 	uint64 legacy_mailbox_allocated;
 	uint64 legacy_mailbox_pages;
 	uint64 legacy_mailbox_queue_count;
@@ -686,7 +687,7 @@ struct agent_file_query_result {
 	int plan;
 	int index_bucket;
 	int candidate_records;
-	/* Slots actually visited while rebuilding an invalid index. */
+	/* 重建无效索引时实际访问的槽位数。 */
 	int index_rebuild_records;
 	int reserved;
 	uint64 query_ticks;
@@ -725,7 +726,6 @@ void agent_thread_runtime_transition(struct thread *t, int transition);
 void agent_process_image_install_locked(struct proc *p);
 void agent_observe_thread_reset(struct thread *t);
 int agent_exec_public_identity_commit(struct proc *p);
-int agent_ipc_legacy_mailbox_empty(const struct proc *p);
 void agent_scope_controller_departing(struct proc *p);
 void agent_authority_bootstrap(struct proc *p);
 void agent_authority_on_exec(struct proc *p);

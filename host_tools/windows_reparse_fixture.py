@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PATH-independent Windows junction fixtures for host contract tests."""
+"""Host 合同测试使用的 PATH 无关 Windows junction 夹具。"""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def _native_file_attributes(native_path: str) -> int:
 
 
 def create_directory_junction(target: Path, link: Path) -> bool:
-    """Create and independently confirm one native directory junction."""
+    """创建并独立确认一个原生目录 junction。"""
 
     native_target = _native_windows_path(target)
     native_link = _native_windows_path(link)
@@ -108,7 +108,7 @@ def create_directory_junction(target: Path, link: Path) -> bool:
 
 
 def remove_directory_junction(link: Path) -> None:
-    """Remove only a verified junction entry and leave its target untouched."""
+    """仅移除已验证 junction 条目，不触碰其目标。"""
 
     native_link = _native_windows_path(link)
     if native_link is None:

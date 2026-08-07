@@ -179,7 +179,7 @@ agent_durable_section_mark_dirty_evidence(uint kind, uint scope_id,
 		    state->scope_id == scope_id) {
 			uint64 next_serial = agent_durable_serial_alloc();
 
-			/* Exhaustion must not destroy the last pending generation. */
+			/* 序列号耗尽时保留最后一个待提交代次。 */
 			if (next_serial == 0) {
 				intr_restore(enabled);
 				return 0;
@@ -187,12 +187,8 @@ agent_durable_section_mark_dirty_evidence(uint kind, uint scope_id,
 			state->serial = next_serial;
 			if (flags & AGENT_DURABLE_DIRTY_URGENT)
 				state->urgent_serial = next_serial;
-			/*
-			 * A caller requesting evidence needs a writeback target that was
-			 * allocated after this serial became visible.  Reusing an older
-			 * coalesced target could otherwise report replication while an
-			 * in-flight snapshot still predates the requested mutation.
-			 */
+			/* 证据请求必须在序列号可见后分配回写目标，防止旧合并目标
+			 * 为尚未进入快照的变更误报复制完成。 */
 			if ((serial != 0 || !state->notified) &&
 			    agent_durable_store != 0)
 				(void)agent_durable_notify_locked(state);
@@ -323,8 +319,7 @@ agent_durable_arena_update_scope(struct agent_durable_arena *arena,
 			return -1;
 	} else if (agent_durable_arena_validate(arena) < 0)
 		return -1;
-	/* Fence the dirty generation before any provider copies its payload.
-	 * Marks racing with capture then retain a newer serial for another pass. */
+	/* 提供者复制前封存脏代次；与捕获竞争的新标记留待下一轮。 */
 	{
 		int enabled = intr_save();
 
@@ -449,8 +444,7 @@ agent_durable_section_commit_scope(uint scope_id, uint64 captured_serial)
 				memset(state, 0, sizeof(*state));
 			continue;
 		}
-		/* An urgent mutation already present in the committed snapshot must
-		 * not accelerate an unrelated mark that raced with that snapshot. */
+		/* 已进入提交快照的紧急变更不得顺带加速并发的无关标记。 */
 		if (state->urgent_serial != 0 &&
 		    state->urgent_serial <= captured_serial)
 			state->urgent_serial = 0;
@@ -497,30 +491,20 @@ agent_durable_section_active_generation(void)
 	return generation;
 }
 
-int
-agent_durable_section_active_read(uint kind, uint offset, void *dst, uint bytes,
-				  uint64 *generation)
+const uchar *
+agent_durable_section_active_view(uint kind, uint *bytes, uint64 *generation)
 {
-	const struct agent_durable_section_desc *desc = 0;
-	int enabled;
-
-	if (dst == 0 || generation == 0)
-		return -1;
-	enabled = intr_save();
-	if (agent_durable_active == 0)
-		goto fail;
+	if (bytes == 0 || generation == 0 || intr_get() ||
+	    agent_durable_active == 0)
+		return 0;
 	for (uint i = 0; i < agent_durable_active_section_count; i++)
 		if (agent_durable_active_sections[i].kind == kind) {
-			desc = &agent_durable_active_sections[i];
-			break;
+			const struct agent_durable_section_desc *desc =
+				&agent_durable_active_sections[i];
+
+			*bytes = desc->bytes;
+			*generation = agent_durable_active_generation;
+			return &agent_durable_active->payload[desc->offset];
 		}
-	if (desc == 0 || offset > desc->bytes || bytes > desc->bytes - offset)
-		goto fail;
-	memmove(dst, &agent_durable_active->payload[desc->offset + offset], bytes);
-	*generation = agent_durable_active_generation;
-	intr_restore(enabled);
 	return 0;
-fail:
-	intr_restore(enabled);
-	return -1;
 }

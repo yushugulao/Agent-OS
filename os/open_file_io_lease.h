@@ -9,7 +9,7 @@ struct file;
 struct inode;
 struct proc;
 
-/* Kernel-only, typed authority carried by one read/write syscall. */
+/* 单次读写系统调用携带的内核专用强类型权限。 */
 struct open_file_io_token {
 	struct file *file;
 	struct inode *inode;

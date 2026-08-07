@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the only compiler-flag profiles admitted by review builds."""
+"""校验审查构建唯一允许的编译器参数 profile。"""
 from __future__ import annotations
 
 import re

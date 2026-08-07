@@ -123,13 +123,13 @@ workflow 的 before 和最后一个 terminal after 执行一次全序列增长�
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
-| `mailread` | 401 | `int mailread(void *buf, int len)` | 非阻塞读取当前 PUBLIC 进程的 legacy mail 队列；无消息返回 0 |
-| `mailwrite` | 402 | `int mailwrite(int pid, void *buf, int len)` | 向同一授权域内的 PUBLIC 目标写入最多 256 字节 |
+| `mailread` | 401 | `int mailread(void *buf, int len)` | 退役 ABI，恒定返回 `-1`，不读取用户缓冲区 |
+| `mailwrite` | 402 | `int mailwrite(int pid, void *buf, int len)` | 退役 ABI，恒定返回 `-1`，不读取用户缓冲区或定位目标 |
 | `trace` | 410 | `int trace(enum trace_request req, unsigned long id, uint8 data)` | 支持 `TRACE_READ`、`TRACE_WRITE` 和 syscall 计数查询 |
 
-这些接口用于保留代表性基础 uCore 用户测试能力。Agent-OS 的最终验收主路径仍是 `CHAPTER=agent` 下的专项程序。
+`trace` 保留代表性基础 uCore 用户测试能力；两个 mail 编号只用于旧二进制可预测地失败。AgentOS 的通信主路径是 `CHAPTER=agent` 下带 scope、route、watch 和配额的可信 IPC。
 
-`mailread` / `mailwrite` 保留 16 槽、每条最多 256 字节的 legacy PUBLIC 接口。普通 PUBLIC 仅能与同一 ACTIVE、generation-safe EXEC account 内的 PUBLIC 互通；workflow 内 PUBLIC 还必须命中相同 ACTIVE lifecycle key、动态 scope 和非零 OPEN controller lineage。每次进程发布和 PUBLIC exec 都获得新的 endpoint generation，PID 或 PCB 槽不能把旧队列授权带给新端点。Agent 端点、不同账户、缺失或失效 controller、跨 lifecycle/scope/lineage 均返回 `-1`。队列首次合法写入时按目标 EXEC account 分配两页 sidecar，空读不分配，排空后保留至 teardown 并在账户释放前退款。读取先在内核中保留队首，只有用户态 `copyout` 成功后才提交出队；失败会撤销读取保留而不丢消息。`mailread` 无消息时返回 0，成功时返回读取字节数；目标不存在、长度非法、队列满或用户指针错误也返回 `-1`。
+`mailread` / `mailwrite` 的 syscall 编号和用户态原型保持不变，但实现只丢弃参数并返回 `-1`。内核不再维护第二套裸 PID 邮箱、端点代际或邮箱物理页账目，避免与 Agent IPC 的身份、生命周期、路由和队列机制重复。旧调用方需要迁移到 `agent_route_config()`、`agent_watch()`、`agent_wait()` 与消息工具。
 
 `trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回已登记 syscall ID 的累计进入次数，未登记编号返回 0，超出 ABI 范围返回 -1；查询 `SYS_trace` 时本次 `trace` 调用也计入。计数使用紧凑内部槽并在 `INT_MAX` 饱和，不会按稀疏 ABI 编号放大每个进程的常驻空间。AgentOS-uCore 的镜像构建器从配套 ELF 提取只读可执行段与可写段的页对齐分界点，loader 校验该布局后把代码页映射为 RX，把数据、bss、用户栈和 Agent Context 映射为 RW+NX；用户页不会同时拥有写和执行权限。
 
@@ -227,7 +227,7 @@ buffer cache 固定为 256 个 1 KiB buffer。SYSTEM 的 floor/cap 为 40/96，P
 
 Context ABI v9 在 header 中公开不可变 workflow lifecycle key、当前 `branch_generation`、`visible_head_sequence`、`active_path_count`、`active_path_oldest_sequence` 和 `eviction_policy`。每条 record 保存自己的 `branch_generation` 以及独立的 `path_parent_sequence`；后者描述本地分支父子关系，不复用可能来自跨 Agent IPC 的 provenance `cause_sequence`。初始化和 `context_clear()` 都从 lifecycle ledger 取得新的 branch generation；`context_rollback()` 同样创建新 branch，而不是重写旧 record 或复用旧 sequence。
 
-内核和用户态共享同一组 Context 物理页。header、latest result 和 128 条 record 位于前 6 页，用户页表不授予写权限；内核直接更新这些页，不再维护 shadow、镜像副本或同步复制。第 7 页完整留给用户 cache，不参与可信历史。完整 detail 及 source/span attribution 位于 9 页 Context sidecar；IPC、事件来源归因、调度轨迹和观测状态共用一个 4 KiB 冷页。PCB 只保存页指针，使 `struct proc` 从 `23464` B 降为 `10024` B。
+内核和用户态共享同一组 Context 物理页。header、latest result 和 128 条 record 位于前 6 页，用户页表不授予写权限；内核直接更新这些页，不再维护 shadow、镜像副本或同步复制。第 7 页完整留给用户 cache，不参与可信历史。完整 detail 及 source/span attribution 位于 9 页 Context sidecar；IPC、事件来源归因、调度轨迹和观测状态共用一个 4 KiB 冷页。PCB 只保存页指针，当前 `struct proc` 基线为 `10008` B，最终值由 `ci/kernel-budgets.json` 约束。
 
 运行时把 9 Context sidecar + 1 cold sidecar + 7 mapped pages 作为一次 17 页 `RESOURCE_AGENT_STATE_PAGE` 请求计入 EXEC account，共 `69632` B（68 KiB）。原子预留后才逐页分配，任一失败都统一释放和退款，普通进程不承担这些页。当前每进程/全局池/ordinary 池/reserved 池/ordinary 域/reserved 域基线为 `69632/8912896/6684672/2228224/4456448/557056` B，上限为 `73114/9358541/7018906/2339636/4679271/584909` B；实际门禁以 `ci/kernel-budgets.json` 为准。
 
@@ -449,7 +449,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 内核把 PID 解析、存活检查、控制关系检查和路由更新放在同一临界区中。路由表保存 source 的内核私有 64 位 `agent_control_id`，不把 PID、PCB 槽、父指针、角色或资源域当作授权身份。source 退出时，其所有入站授权会从各目标回收；target 退出时清空自己的路由表，所以 PID 或 PCB 槽复用不会继承旧通道。重复 grant/revoke 是幂等操作；revoke 或 source 退出只阻止后续入队，之前已经成功入队的事件仍按 FIFO 消费。
 
-消息投递先完成路由授权，再匹配目标 watch 并占用队列资源。未授权返回 `AGENT_STATUS_DENIED`；目标不存在、正在退出或 watch/filter 不匹配返回 `AGENT_STATUS_NOT_FOUND`；路由表或队列配额耗尽返回 `AGENT_STATUS_NO_SPACE`。兼容 mailbox 镜像在授权事件成功入队后于同一临界区更新，拒绝路径不会留下旁路副作用。
+消息投递先完成路由授权，再匹配目标 watch 并占用队列资源。未授权返回 `AGENT_STATUS_DENIED`；目标不存在、正在退出或 watch/filter 不匹配返回 `AGENT_STATUS_NOT_FOUND`；路由表或队列配额耗尽返回 `AGENT_STATUS_NO_SPACE`。授权事件只进入这一条队列路径，拒绝时不会留下旁路副作用。
 
 ## 高性能请求结构
 

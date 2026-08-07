@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source and identity contract for demo/reference catalog evidence."""
+"""演示/参考目录证据的源码与身份合同。"""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ REFERENCE_SOURCES: dict[str, dict[str, ReferenceSourceSpec]] = {
             ),
             demo_guest_marker=True,
         ),
-        # The exporter must not pre-publish records owned by a later producer.
+# 导出器不得提前发布归后续生产者所有的记录。
         "rp_web_export.c": ReferenceSourceSpec(),
     },
     "plain": {
@@ -195,7 +195,7 @@ REFERENCE_SOURCES: dict[str, dict[str, ReferenceSourceSpec]] = {
         "rp_test_suite.c": ReferenceSourceSpec(
             products=("rp_tests",), demo_guest_marker=True
         ),
-        # The exporter must not pre-publish records owned by a later producer.
+# 导出器不得提前发布归后续生产者所有的记录。
         "rp_web_export.c": ReferenceSourceSpec(),
     },
 }
@@ -315,7 +315,7 @@ def _lex_source(path: Path) -> list[str]:
             f"reference source cannot be read: {path}"
         ) from error
 
-    # C line splicing happens before comments and tokens are recognized.
+    # C 行拼接先于注释和 token 识别执行。
     spliced_source = raw_source.replace("\\\r\n", "").replace("\\\n", "")
     try:
         return _lex(spliced_source)
@@ -386,7 +386,7 @@ def _declares_reference_envelope(tokens: list[str]) -> bool:
 
 
 def validate_reference_source_tree(source_root: Path, target: str) -> None:
-    """Validate every declared producer and reject undeclared producers."""
+    """校验每个已声明生产者，并拒绝未声明生产者。"""
 
     if not source_root.is_dir() or source_root.is_symlink():
         raise ReferenceCatalogError(

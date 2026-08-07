@@ -76,7 +76,7 @@ static void exiting_owner(void *arg)
 	owner_ready = 1;
 	while (!owner_may_exit)
 		sched_yield();
-	// Deliberately leave the mutex held. Thread teardown must hand it off.
+	// 故意保持互斥锁占用；线程拆除必须完成移交。
 	exit(0);
 }
 
@@ -314,7 +314,7 @@ static void test_process_exit_handoff(void)
 		while (!process_exit_sem_ready || !process_exit_cond_ready)
 			sched_yield();
 		sleep(2);
-		/* Teardown hands both locks to threads that are simultaneously revoked. */
+	/* 拆除把两把锁移交给同时被撤销的线程。 */
 		exit(0);
 	}
 	check(waitpid(child, &status) == child && status == 0,
@@ -421,7 +421,7 @@ static void test_fifo_fairness(void)
 			check(tids[i] > 0, "create FIFO waiter");
 			while (fair_ready_count <= i)
 				sched_yield();
-			// Give the ready worker a chance to enter the kernel wait queue.
+	// 让已就绪工作线程有机会进入内核等待队列。
 			sched_yield();
 		}
 		for (int i = 0; i < 16; i++)

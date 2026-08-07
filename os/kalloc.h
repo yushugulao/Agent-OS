@@ -4,7 +4,7 @@
 #include "types.h"
 #include "resource_controller.h"
 
-/* Boot/kernel-infrastructure only; user-owned pages use account APIs below. */
+/* 仅供启动及内核基础设施使用；用户属主页须走下方账户接口。 */
 void *kalloc_system_page(void);
 void kfree_system_page(void *);
 void kinit();

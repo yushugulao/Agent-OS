@@ -14,9 +14,8 @@ struct {
 } kmem;
 
 /*
- * Trusted threads must retain a real stack guarantee even when ordinary user
- * memory exhausts the general allocator. Empty reserved pages carry their own
- * links, so the guarantee costs no pointer array in BSS.
+ * 普通用户内存耗尽通用分配器时，可信线程仍须获得真实栈保障。空闲保留页
+ * 自带链接，无需在未初始化数据区另设指针数组。
  */
 static struct {
 	struct linklist *freelist;
@@ -40,9 +39,8 @@ static struct {
 #define ACCOUNT_PAGE_REF_MAX 0xffU
 
 /*
- * A physical page is charged once, even while several COW mappings refer to
- * it.  The compact owner tag keeps the original account alive until the last
- * mapping disappears, including forks that enter a different resource domain.
+ * 即使多个写时复制映射引用同一物理页，也只计费一次。紧凑属主标签保持
+ * 原账户存活，直到最后一个映射消失，包括派生进程进入其他资源域的情况。
  */
 static ushort account_page_owner_class[ACCOUNT_PAGE_CAP];
 static uchar account_page_refs[ACCOUNT_PAGE_CAP];
@@ -322,7 +320,7 @@ int kalloc_physical_policy_init(uint pages, uint ordinary_limit)
 		physical_reserve.total_pages++;
 		physical_reserve.free_pages++;
 	}
-	/* Reserved kernel stacks are a disjoint THREAD-backed hard pool. */
+	/* 内核保留栈使用独立的线程计费硬池。 */
 	capacity = kmem.free_pages + physical_reserve.total_pages;
 	if (ordinary_limit == 0)
 		ordinary_limit = kmem.free_pages;

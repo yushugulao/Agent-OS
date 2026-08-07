@@ -14,8 +14,8 @@
 #define OPEN_FILE_IO_CACHE_CAP 64U
 
 /*
- * 缓存只加速鉴权，不承载权限。获取成功后，内核将上下文复制到 syscall
- * 令牌，避免 syscall 休眠期间的缓存碰撞改变其授权对象。
+ * 缓存只加速鉴权，不承载权限。获取成功后，内核将上下文复制到系统调用
+ * 令牌，避免系统调用休眠期间的缓存碰撞改变其授权对象。
  */
 struct open_file_io_grant {
 	struct file *file;

@@ -49,11 +49,10 @@ _Static_assert(sizeof(struct agent_observe_test_identity_ids) == 48,
 #define AGENT_AUDIT_RECEIPT_WAIT_MAX_TICKS 1000
 
 /*
- * A positive durability proof is only (OK, DURABLE, supplied receipt).
- * An exact retained binding may report (OK, FAILED, supplied receipt).
- * Once that bounded binding is gone, a nonzero receipt reports
- * (STALE, NOT_FOUND, 0); this does not prove that the token ever existed.
- * Discovery with a zero receipt reports (NOT_FOUND, NOT_FOUND, 0).
+ * 肯定的持久性证明只能是 (OK, DURABLE, supplied receipt)。精确保留绑定可
+ * 报告 (OK, FAILED, supplied receipt)。有界绑定消失后，非零回执返回
+ * (STALE, NOT_FOUND, 0)，但不能证明令牌曾存在；零回执发现返回
+ * (NOT_FOUND, NOT_FOUND, 0)。
  */
 
 struct agent_observe_recovery_scope {
@@ -95,11 +94,7 @@ struct agent_audit_receipt_request {
 	unsigned int reserved;
 };
 
-/*
- * Version 2 READ results bind the exported record to the durable receipt and
- * active-bank generation that supplied it.  Version 1 callers continue to
- * receive a plain agent_audit_record array.
- */
+/* 版本 2 的 READ 结果绑定持久回执与 active-bank 代际；版本 1 仍返回普通 agent_audit_record 数组。 */
 struct agent_observe_recovery_record {
 	struct agent_audit_record record;
 	unsigned long long receipt_id;

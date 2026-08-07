@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host regression probe for streaming runtime-evidence field matching."""
+"""流式运行时证据字段匹配的 Host 回归探针。"""
 
 from __future__ import annotations
 

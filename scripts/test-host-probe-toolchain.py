@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for fail-closed Host sanitizer selection."""
+"""闭锁式 Host sanitizer 选择的回归检查。"""
 
 from __future__ import annotations
 

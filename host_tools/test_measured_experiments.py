@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for provenance-bound Guest experiment extraction."""
+"""来源绑定 Guest 实验提取的回归测试。"""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation contracts for no-preread full-block cache receipts."""
+"""无预读整块缓存收据的变异契约。"""
 
 from pathlib import Path
 

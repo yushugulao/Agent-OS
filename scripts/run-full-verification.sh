@@ -314,9 +314,8 @@ if evidence_enabled; then
 	done
 fi
 
-# This campaign is a hard acceptance gate. Its raw-image receipts remain in
-# the full-verification log until the final evidence schema gains a dedicated
-# fs_epoch artifact without changing an existing profile in place.
+# 本轮活动是硬性验收门。最终证据 schema 在不原地修改现有 profile 的前提下
+# 获得专用 fs_epoch 产物前，其原始镜像收据保留在完整校验日志中。
 echo "[full-verify] filesystem ordered epoch power-cut tests"
 (
 	cd "${ROOT_DIR}"

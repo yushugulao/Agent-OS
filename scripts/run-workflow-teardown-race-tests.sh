@@ -62,8 +62,8 @@ if ((GLOBAL_RESERVED_CAP > SHELL_ARITH_MAX / 2 ||
 fi
 FILE_POOL_SIZE=$((GLOBAL_RESERVED_CAP * 2))
 FILE_ORDINARY_LIMIT=$((FILE_POOL_SIZE - GLOBAL_RESERVED_CAP))
-# Workflow children retain their creator's caller frames until their root exits.
-# Keep every phase frame below one quarter of the fixed 4 KiB user stack.
+# 工作流子进程在根进程退出前保留创建者的调用栈帧。每个阶段栈帧须低于固定
+# 4 KiB 用户栈的四分之一。
 USER_EXTRA_CFLAGS="-Werror -Wframe-larger-than=${MAX_USER_FRAME_BYTES} -Wstack-usage=${MAX_USER_FRAME_BYTES} -DWORKFLOW_TEARDOWN_DOMAIN_FILE_CAP=${DOMAIN_FILE_CAP} -DWORKFLOW_TEARDOWN_GLOBAL_RESERVED_CAP=${GLOBAL_RESERVED_CAP}"
 
 TMPDIR_WORKFLOW_TEARDOWN="$(mktemp -d)"
@@ -92,9 +92,8 @@ run_logged "${SETUP_LOG}" host_probe_run \
 	"${TMPDIR_WORKFLOW_TEARDOWN}/mkfs" \
 	"${TMPDIR_WORKFLOW_TEARDOWN}/master.img" "${USER_BIN}"
 
-# The guest fills the per-workflow boundary in each round, then runs for one
-# more lifecycle than the global reserved class could tolerate if one object
-# leaked per teardown. Both capacities come from the same runner contract.
+# Guest 每轮填满单工作流边界，再多运行一个生命周期；若每次拆除泄漏一个对象，
+# 此轮数将超过全局预留类别可承受值。两个容量均来自同一 runner 契约。
 run_logged "${SETUP_LOG}" make -B build \
 	TOOLPREFIX="${TOOLPREFIX}" \
 	LOG=error \
@@ -106,7 +105,7 @@ run_logged "${SETUP_LOG}" make -B build \
 	FILE_RESOURCE_DOMAIN_RESERVED_LIMIT="${DOMAIN_FILE_CAP}"
 cp build/kernel "${TMPDIR_WORKFLOW_TEARDOWN}/kernel"
 
-# agent_test_runner accepts a QEMU executable but no trailing arguments.
+# agent_test_runner 接受 QEMU 可执行文件，但不接受尾随参数。
 QEMU_WRAPPER="${TMPDIR_WORKFLOW_TEARDOWN}/qemu-single-hart"
 printf '%s\n' \
 	'#!/usr/bin/env bash' \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive the Guest and filesystem state inventory from one strict manifest."""
+"""从一个严格清单派生 Guest 与文件系统状态清单。"""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ _DIGEST_READ_CHUNK_BYTES = 1024 * 1024
 
 
 class StateManifestError(ValueError):
-    """The state inventory cannot be derived without ambiguity."""
+    """无法无歧义地派生状态清单。"""
 
 
 def _path_is_link(path: Path) -> bool:
@@ -63,11 +63,10 @@ def _path_is_link(path: Path) -> bool:
 def guest_state_inventory_sha256(
     state_dir: Path, *, excluded_names: Iterable[str] = ()
 ) -> tuple[int, str]:
-    """Return a canonical count and content digest for one Guest snapshot.
+    """返回一个 Guest 快照的规范数量与内容摘要。
 
-    The digest commits to the sorted filename inventory, each file size, and every
-    content byte. Only canonical ``rp_*`` regular files participate; Host sidecars
-    named by ``excluded_names`` are outside this Guest-state commitment.
+    摘要绑定排序后的文件名清单、各文件大小及全部内容字节。只有规范 ``rp_*``
+    常规文件参与；``excluded_names`` 指定的 Host sidecar 不属于该 Guest 状态承诺。
     """
     try:
         directory_status = state_dir.lstat()

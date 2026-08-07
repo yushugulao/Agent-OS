@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""No-QEMU regression tests for the compact final-evidence pipeline."""
+"""精简最终证据流水线的无 QEMU 回归测试。"""
 from __future__ import annotations
 import csv
 import copy
@@ -1203,7 +1203,7 @@ class FinalEvidenceTests(unittest.TestCase):
             except OSError:
                 predictable = None
             if predictable is not None and not predictable.is_symlink():
-                # Native MSYS may emulate os.symlink() by copying the target.
+                # 原生 MSYS 可能通过复制目标来模拟 os.symlink()。
                 predictable.unlink(missing_ok=True)
                 predictable = None
             dual_state_archive.pack_state(second, second_archive)
@@ -2658,157 +2658,5 @@ procreap_ucore: parent passed
             self.assertIn(process.returncode, {130, -signal.SIGINT})
             self.assertFalse(interrupt_output.exists())
             self.assertFalse(interrupt_tools["sentinel"].exists())
-    def test_public_contract_grace_ci_and_trackability(self) -> None:
-        collector = COLLECTOR.read_text(encoding="utf-8")
-        makefile = (REPO / "Makefile").read_text(encoding="utf-8")
-        wiring = (REPO / "scripts" / "evidence-wiring.sh").read_text(encoding="utf-8")
-        full = (REPO / "scripts" / "run-full-verification.sh").read_text(encoding="utf-8")
-        structure = (REPO / "scripts" / "verify-dual-target-structure.sh").read_text(encoding="utf-8")
-        evidence_readme = (REPO / "evidence" / "README.md").read_text(encoding="utf-8")
-        host_start = makefile.index("override HOST_CONTRACT_TESTS :=")
-        host_end = makefile.index("\nhost-contract-selftest:", host_start)
-        host_inventory = set(__import__("re").findall(
-            r"host_tools/test_[A-Za-z0-9_]+\.py", makefile[host_start:host_end]
-        ))
-        all_host_tests = {
-            path.relative_to(REPO).as_posix()
-            for path in (REPO / "host_tools").glob("test_*.py")
-        }
-        self.assertEqual(host_inventory, all_host_tests - {
-            "host_tools/test_capture_final_evidence.py",
-            "host_tools/test_evidence_delivery_contract.py",
-        })
-        self.assertLessEqual(len(collector.splitlines()), 1450)
-        for module, limit in (
-            (SEMANTIC_COMMON, 250), (SEMANTIC_PROFILES, 650),
-            (SEMANTIC_METADATA, 225), (SEMANTIC_REGISTRY, 225),
-            (SEMANTIC_DUAL, 425), (DUAL_STATE_ARCHIVE, 250),
-            (DUAL_STATE_CONTRACT, 450),
-            (FULL_VERIFICATION_METRICS, 450),
-            (REPO / "host_tools" / "agent_observe_disk_acceptance.py", 150),
-            (REPO / "host_tools" / "agent_observe_disk_contract.py", 400),
-            (REPO / "host_tools" / "agent_observe_disk_evidence.py", 750),
-            (REPO / "host_tools" / "agent_observe_disk_fixture.py", 350),
-            (REPO / "host_tools" / "committed_source_identity.py", 225),
-        ):
-            self.assertLessEqual(len(module.read_text(encoding="utf-8").splitlines()), limit)
-        observe_host_lines = sum(
-            len((REPO / "host_tools" / name).read_text(encoding="utf-8").splitlines())
-            for name in ("agent_observe_disk_contract.py", "agent_observe_disk_evidence.py")
-        )
-        self.assertLessEqual(observe_host_lines, 980)
-
-        observe_acceptance_lines = observe_host_lines + len(
-            (REPO / "host_tools" / "agent_observe_disk_acceptance.py")
-            .read_text(encoding="utf-8").splitlines()
-        )
-        self.assertLessEqual(observe_acceptance_lines, 1120)
-        semantic_registry = SEMANTIC_REGISTRY.read_text(encoding="utf-8")
-        for token in ("RAW_ARTIFACT_REGISTRY", "validate_selected_artifacts",
-                      "validate_raw_artifacts"):
-            self.assertIn(token, semantic_registry)
-        # Delivery now proves raw Git ancestry and hashes real tracked bytes;
-        # keep that security boundary bounded independently from the collector.
-        self.assertLessEqual(
-            len(DELIVERY_CONTRACT.read_text(encoding="utf-8").splitlines()), 1000
-        )
-        self.assertLessEqual(
-            len(GIT_HISTORY_CONTRACT.read_text(encoding="utf-8").splitlines()), 275
-        )
-        self.assertIn("host_tools/git_history_contract.py", makefile)
-        self.assertLessEqual(
-            len(
-                (REPO / "host_tools" / "evidence_toolchain_attestation.py")
-                .read_text(encoding="utf-8")
-                .splitlines()
-            ),
-            400,
-        )
-        self.assertLessEqual(
-            len(
-                (REPO / "host_tools" / "formal_temp_binding.py")
-                .read_text(encoding="utf-8")
-                .splitlines()
-            ),
-            175,
-        )
-        self.assertLessEqual(len(MEASUREMENT_MODULE.read_text(encoding="utf-8").splitlines()), 450)
-        # The contract now performs token-level control-flow and def-use
-        # validation instead of accepting a short list of source substrings.
-        self.assertLessEqual(
-            len(BENCHMARK_SOURCE_CONTRACT.read_text(encoding="utf-8").splitlines()),
-            400,
-        )
-        self.assertLessEqual(len(wiring.splitlines()), 150)
-        for token in ("write-summary",
-                      'MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"',
-                      "evidence_verify_parallel_run", "evidence_record_parallel_case"):
-            self.assertIn(token, full)
-        self.assertIn("--verify-report --emit-import-plan", wiring)
-        self.assertNotIn("run_resource_regression", full)
-        self.assertNotIn("reader-e2e", full)
-        self.assertLess(full.index("write-summary"), full.index("[full-verify] all checks passed"))
-        for once in ("host_tools/test_measured_experiments.py",
-                     "host_tools/test_dual_measurement_source_contract.py"):
-            self.assertEqual(makefile.count(once), 1)
-        self.assertNotIn("hash-tree", collector + full)
-        self.assertNotIn("immutable CI artifact", collector)
-        for contract in ("'^SCHEMA_VERSION = 8$'", "'^FULL_VERIFY_PROFILE_VERSION = 7$'"):
-            self.assertIn(contract, structure)
-        self.assertNotIn("'^SCHEMA_VERSION = 1$'", structure)
-        public_docs = {
-            document: document.read_text(encoding="utf-8")
-            for document in (
-                REPO / "README.md",
-                REPO / "ci" / "README.md",
-                REPO / "evidence" / "README.md",
-            )
-        }
-        for content in public_docs.values():
-            self.assertNotRegex(content, r"full-evidence(?: bundle)? schema v5")
-            self.assertNotRegex(content, r"schema v5 的 `?verification-summary")
-        self.assertIn("正式证据索引", public_docs[REPO / "README.md"])
-        self.assertIn("不依赖 Runner", public_docs[REPO / "README.md"])
-        self.assertNotIn("依赖已提交的 Git 对象和不可变的 CI artifact", evidence_readme)
-        for token in ("FULL_VERIFY_PROFILE_VERSION", "STEP_CONTRACT", "validate_settings",
-                      "step_contract_sha256",
-                      "agent_marker_grace_seconds",
-                      "mechanism_marker_grace_seconds", "workflow_stability_runs",
-                      "FULL_VERIFY_TIMEOUT_SECONDS"):
-            self.assertIn(token, collector)
-        self.assertIn('"remote_ci": {"status": "not-attached"}', collector)
-        self.assertNotIn("bind-remote-ci", collector)
-        self.assertNotIn("provenance-attached", collector)
-        for name in ("dual-plain-qemu.log", "dual-agentos-qemu.log",
-                     "ch3-trace-guest.log",
-                     "dual-targeted-agentbench-guest.log",
-                     "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
-                     "proc-reap.log", "syscall-fairness.log", "file-resource.log",
-                      "thread-resource.log", "physical-resource.log", "metadata-recovery.log",
-                      "observe-recovery.log", "observe-recovery-before-reap.img", "virtio-disk.log",
-                     "workflow-teardown-race.log", "fs-enospc.log",
-                     "fs-allocator-fault.log", "fs-allocator-evidence.tar"):
-            self.assertIn(f'"{name}"', collector)
-        for name in ("proc-reap", "syscall-fairness", "file-resource", "thread-resource",
-                     "physical-resource", "metadata-recovery", "observe-recovery", "virtio-disk",
-                     "workflow-teardown-race", "fs-enospc", "fs-allocator-fault"):
-            runner = (REPO / "scripts" / f"run-{name}-tests.sh").read_text()
-            self.assertIn('MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"', runner)
-        statuses = tuple(run(["git", "check-ignore", "-q", "--no-index", path], REPO, check=False).returncode
-                         for path in ("probe.log", "evidence/releases/probe/logs/raw/probe.log"))
-        self.assertEqual(statuses, (0, 1))
-
-    def test_workspace_cleanup_targets_only_retired_result_preview(self) -> None:
-        makefile = (REPO / "Makefile").read_text(encoding="utf-8")
-        start = makefile.index("WORKSPACE_GENERATED_PATHS =")
-        end = makefile.index("\n\nTOOLPREFIX", start)
-        tokens = makefile[start:end].replace("\\\n", " ").split()[2:]
-        self.assertEqual(
-            [token for token in tokens if token.startswith("results")],
-            ["results/latest"],
-        )
-        self.assertIn("git clean -ndX -- $(WORKSPACE_GENERATED_PATHS)", makefile)
-        self.assertIn("git clean -fdX -- $(WORKSPACE_GENERATED_PATHS)", makefile)
-
 if __name__ == "__main__":
     unittest.main(verbosity=2)

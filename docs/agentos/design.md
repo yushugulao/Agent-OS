@@ -91,9 +91,9 @@ flowchart LR
 | Context Path 手动追加/query/rollback/clear/snapshot | 已实现；公开 cause/span 由内核私有 source control/span owner 认证，手动 push 不得自报非零 cause/span |
 | 文件元数据表、真实 inode 关联、属性查询、索引查询、metadata 双 bank 持久化、根目录自动扫描 | 已实现；所有对象记录按内核签发的 workflow scope 分区，事务使用 FIFO ticket 和 128-record 工作预算；显式依赖表与文件内兼容位图分离，消费者按需解析；普通文件变化按 scope 合并，双 bank 由可恢复分块 COW 状态机后台写回 |
 | Agent Loop 心跳、等待、唤醒和 Agent 感知调度 | 已实现 16 槽事件队列、同 scope stable-control IPC 路由、watch/unwatch、wait cancel、heartbeat、自适应调度、当前可信 span 短记录、scope-local audit/Run Ledger 和统一 timeline |
-| legacy uCore mail 兼容 | 仅 PUBLIC；普通端点须同一 generation-safe EXEC account，workflow 降权 PUBLIC 还须同一 ACTIVE lifecycle/scope 和非零 OPEN controller lineage；Agent、跨账户/跨 scope 拒绝。进程/exec 轮换 endpoint generation；每目标首次合法发送才按目标 account 分配两页 sidecar，read 在 copyout 后提交，teardown 退款 |
+| legacy uCore mail 兼容 | 保留 syscall 编号与用户库包装，内核恒定返回 `-1`；删除重复的两页邮箱、端点代际和资源结算，通信统一使用可信 Agent IPC |
 | 安全与资源韧性 | 已实现 dynamic workflow scope、generation-safe lifecycle key、PUBLIC 降权后代撤销、唯一根 controller、capability + exact scope/owner、可信映像、W^X、VFS 隔离、统一 teardown、EXEC/STORAGE 资源账户、资源域两级调度、持久存储主体配额、块 I/O/cache 分域、分级保留量和 scope retirement 回收 |
-| 代表性 uCore 基础 syscall | 已实现 `trace`、`mailread`、`mailwrite`；mail 保持 FIFO/16 槽接口但不再是全局裸 PID 通道 |
+| 代表性 uCore 基础 syscall | `trace` 保持完整读写与计数语义；`mailread`、`mailwrite` 仅保留安全失败关闭的 ABI tombstone |
 | 综合场景 | 已实现 `labdemo_ucore` 综合示例 |
 | LLM 友好路径 | 已实现 `llm_request`、`llm_response`、`AGENT_EVENT_LLM_DONE`、Context 记录和事件唤醒；Guest 测试使用确定性模板 relay |
 | 页面和图表 | 由宿主机工具读取结构化事件、状态文件和 CSV 生成 |
@@ -485,7 +485,7 @@ Agent-only syscall 对普通进程、非法参数、未知工具、历史节点�
 
 Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、最多 16 条入站 IPC 路由、每个事件槽的私有来源 control id 和 delivery accounting、一次性 wait cancel 令牌、等待次数、超时次数和心跳信息。`agent_wait()` 优先选择取消令牌，再选择队首事件，但选择不等于消费：它先用精确 cookie reserve 槽位，完成用户 copyout 与 Context attribution 后才重新核对并 commit 出队/退款；任一步失败都 abort reservation，保留事件或 cancel 并唤醒下一 waiter。同一槽只有一个消费者，避免坏用户页或 sibling 竞争造成丢事件。没有事件时，有限 timeout 和无限等待都进入对象私有等待队列，由事件入队、deadline 到期、heartbeat 到期或定向取消唤醒。对象队列负责原子睡眠/唤醒，reservation 负责原子消费，两层协议的边界和失败保持语义另见 [security-hardening.md](security-hardening.md) 5.1、6.3。heartbeat 到期直接产生 SYSTEM TIMER，不依赖 watch；stop 只关闭后续生成，已排队事件仍按 FIFO 消费。
 
-公共 `agent_wake()` 只能投递 `AGENT_EVENT_MESSAGE`，文件、定时器和 LLM 完成事件只能由对应内核或专用工具路径产生。跨 Agent 的 `agent_wake`、`send_message`、非零 target `llm_request` 和 `llm_response` 统一要求 source/target 位于同一 active workflow scope，再使用 stable control id 路由鉴权；target consent、共同 controller、相同角色或相同 capability 都不能跨 scope。PID 解析、scope/存活/路由检查、事件入队和兼容 mailbox 更新在同一临界区完成。directed IPC 达到 8 条、外部可归因事件合计达到 12 条，或同一 stable source 跨 directed/attributed 两类达到 4 条时即拒绝；显式内核 origin 可以越过 external 边界使用预留容量。广播只扫描本 scope watcher，且不会因单个订阅者失败而停止后续投递。
+公共 `agent_wake()` 只能投递 `AGENT_EVENT_MESSAGE`，文件、定时器和 LLM 完成事件只能由对应内核或专用工具路径产生。跨 Agent 的 `agent_wake`、`send_message`、非零 target `llm_request` 和 `llm_response` 统一要求 source/target 位于同一 active workflow scope，再使用 stable control id 路由鉴权；target consent、共同 controller、相同角色或相同 capability 都不能跨 scope。PID 解析、scope/存活/路由检查和事件入队在同一临界区完成。directed IPC 达到 8 条、外部可归因事件合计达到 12 条，或同一 stable source 跨 directed/attributed 两类达到 4 条时即拒绝；显式内核 origin 可以越过 external 边界使用预留容量。广播只扫描本 scope watcher，且不会因单个订阅者失败而停止后续投递。
 
 取消是独立控制操作：`WAIT_CANCEL` capability 决定主体能否发起，同一 active scope、内核 control id 和直接 controller 绑定共同决定主体能控制哪个对象；消息路由不授予取消权，取消权也不自动建立消息路由。`agent_sched_config()` 同样只允许 orchestrator 调整本 scope 受控 Agent。调度参数都是域内软策略：外层 active-domain FIFO 严格轮转；选中域内连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST = 8` 后，只要对应普通/FIFO 候选存在，调度器就强制选择该候选。调度器的采样记录写入当前 workflow 的 low 审计分区，不会占用 protected/high 状态效果证据。
 
@@ -570,7 +570,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 文件编辑冲突处理 | 使用 `scope + dev + inum + incarnation` 租约和版本检查，并接入真实 VFS 修改路径 | 防止同 scope 无序覆盖，也拒绝跨 scope 租约号复用 | 不做内容自动合并 |
 | LLM 友好路径 | 内核记录 `llm_request`/`llm_response`，使用 `LLM_RELAY` capability 限制结果投递，并用 `AGENT_EVENT_LLM_DONE` 唤醒请求 Agent | 让 LLM 驱动 Agent 的请求、结果、Context、事件和审计进入 OS 管理视野，同时不让内核持有 secret 或访问网络 | Guest `rp_llm_relay` 提供确定性模板，在线模型接入不属于竞赛交付 |
 | Agent Loop | watch/unwatch/wait/wake/route_config/wait_cancel、heartbeat set/stop、sched_snapshot/sched_config 独立 syscall，并让调度器感知 Agent 状态；旧 heartbeat 512 ABI 保留 | 等待事件不放进 batch 热路径；心跳由 intrinsic SYSTEM TIMER 唤醒并单条 coalesce；跨 Agent 数据面显式授权；调度原因由内核记录，orchestrator 可受权调整目标 Agent 参数 | 路由当前只覆盖 `MESSAGE` / `LLM_DONE`；调度策略字段为 weight、priority 和 budget |
-| 基础 syscall 兼容 | 实现 `SYS_trace=410`、`SYS_mailread=401`、`SYS_mailwrite=402` | 满足代表性 uCore 基础测试和普通进程消息接口 | 不把当前工作扩大成全部 chapter 的完整兼容验收 |
+| 基础 syscall 兼容 | 实现 `SYS_trace=410`；保留 `SYS_mailread=401`、`SYS_mailwrite=402` 编号并安全失败关闭 | 旧二页邮箱不再复制现代 Agent IPC 的端点、授权与资源机制；Agent 通信统一走可信 IPC | 依赖旧 mail 正向语义的实验程序需迁移到 Agent 事件接口；不扩展为全部 chapter 的兼容验收 |
 | 示例日志契约 | 输出 `agentos:event type=... key=value`，包含 plan、corr_id、模板 LLM refs 和 report 字段 | 页面工具和 LLM Relay 可以直接解析核心示例程序输出 | 当前图表和页面由宿主机工具生成 |
 | 文档结构 | 主设计文档 + API/验证/追踪 + 分任务附录 | 满足架构说明、关键决策、测试和运行说明 | 文档数量增加，需要维护一致性 |
 
@@ -623,7 +623,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | thread bomb 不能耗尽普通/保留线程池或垄断跨域 CPU | `make thread-resource-test` 合同要求同一镜像 50/50 轮压力，并覆盖普通/保留域上限与复用、全局水位、退出退款、系统保留进展和 `domain_fairness` |
 | 内核栈有 guard、按需物理映射和构建期预算 | 发布 bundle 必须包含 Agent 与线程/退出专项对应的栈检查；具体调用图和容量阈值以代码提交 C 的 `ci/kernel-budgets.json` 为准 |
 | 内核增长和模块所有权受预算约束 | `make local-check`。检查项和 deterministic 阈值以 `ci/kernel-budgets.json` 为准 |
-| 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |
+| 代表性 uCore 基础 syscall | `ch3_trace`；`agentsecurity_ucore: legacy_mail_fail_closed=1`，并同时验证可信 IPC 路由与槽回收 |
 
 详细验证见 [verification.md](verification.md) 和 [正式证据索引](../../evidence/releases/INDEX.md)。
 
@@ -638,7 +638,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 因果链和 Run Ledger | 每 Agent 最近 128 条 Context；物理 512 audit 槽按 4 scope 各 128，维护 scope-local 逻辑 hash 链和稀疏窗口 | 该能力是运行期轻量追踪，不替代跨重启审计数据库。 |
 | LLM Relay | 内核提供结构化请求、响应事件、Context 和审计记录 | Guest `rp_llm_relay` 提供确定性模板；云端模型接入不属于竞赛交付。 |
 | 页面和图表 | 内核输出结构化事件、状态文件、timeline、audit 和 provenance | 宿主机工具负责渲染页面、生成 SVG 和汇总 CSV。 |
-| Agent Context 状态 | 每个活跃 Agent 原子计费 17 页：9 页 detail/attribution sidecar + 1 页 IPC/观测冷状态 + 6 页只读可信映射 + 1 页用户 cache | 最终 PCB、全局容量和阈值由当前源码的 canonical budget log 与 release bundle 给出；当前机制口径为 68 KiB/Agent，legacy mail 的两页按需 sidecar 另行计费。 |
+| Agent Context 状态 | 每个活跃 Agent 原子计费 17 页：9 页 detail/attribution sidecar + 1 页 IPC/观测冷状态 + 6 页只读可信映射 + 1 页用户 cache | 最终 PCB、全局容量和阈值由当前源码的 canonical budget log 与 release bundle 给出；当前机制口径为 68 KiB/Agent。 |
 | CI 模块与 runner 门 | owner、bridge、依赖和 aggregate budget 以版本化注册集合为准；受控 integration graph 的 SCC=3 为 checker 硬约束；metadata 聚合 source/text/BSS 防止跨文件迁移；各 fail-closed 自测集合随源码演进 | integration graph 不是完整 uCore 调用图；通用 runner 全量 drain 并要求普通 case 自然 `rc=0`。输出洪泛、迟到 marker、普通 marker grace、非零退出或后置 panic 都不能成功；显式 checkpoint 只接受 marker 后 runner 发出的单次 `SIGTERM`，显式 powercut 只接受认证 supervisor 对稳定 QEMU leader 发出的单次 `SIGKILL` 及完整证明。powercut 是突然 VM 终止模型，不等同于整机物理断电。 |
 | 本地时间预算 | 只统计版本化 Agent case 清单的 monotonic 运行时，不含编译 | 当前配置为 `provisional_requires_full_suite`，最终提交三轮重校准前不启用时长门。发布状态只由本地 C→E release bundle 判定。 |
 

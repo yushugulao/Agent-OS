@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Model and mutation tests for catalog rollback fencing."""
+"""catalog 回滚隔离的模型与变异测试。"""
 
 from __future__ import annotations
 
@@ -299,7 +299,7 @@ class CatalogRollbackFenceTests(unittest.TestCase):
         self.assertTrue(catalog.write("A", 0, after))
         token = catalog.capture("A", fence, 0)
         assert token is not None
-        # Simulate a missing guard to exercise the independent undo identity.
+        # 模拟缺失 guard，以覆盖独立撤销身份。
         catalog.records[0] = replacement
         catalog.generation += 1
         self.assertFalse(catalog.restore("A", fence, 0, token, before))
@@ -315,8 +315,7 @@ class CatalogRollbackFenceTests(unittest.TestCase):
         self.assertTrue(catalog.write("A", 0, after))
         token = catalog.capture("A", fence, 0)
         assert token is not None
-        # Again bypass the guard: the slot token remains valid, but admission
-        # must preserve the foreign owner of the old unique keys.
+        # 再次绕过 guard：slot token 仍有效，但准入必须保留旧唯一键的外部所有者。
         catalog.records[1] = before
         catalog.generation += 1
         self.assertFalse(catalog.restore("A", fence, 0, token, before))
@@ -333,8 +332,7 @@ class CatalogRollbackFenceTests(unittest.TestCase):
         self.assertTrue(catalog.write("A", 0, after))
         token = catalog.capture("A", fence, 0)
         assert token is not None
-        # A defensive model of an unrelated mutation: it advances the global
-        # diagnostic generation but must not veto an exact, conflict-free undo.
+        # 无关变更的防御模型：推进全局诊断代际，但不得阻止精确且无冲突的撤销。
         catalog.records[2] = record(9, "unrelated", scope=8)
         catalog.generation += 1
         self.assertTrue(catalog.restore("A", fence, 0, token, before))
@@ -345,8 +343,7 @@ class CatalogRollbackFenceTests(unittest.TestCase):
         previous.update(size=16, fs_generation=40)
         model = RestoreRebindModel(generation=44)
 
-        # The metadata mutation drops its gate for durable I/O. A concurrent
-        # append changes the inode size before the failed mutation rolls back.
+        # 元数据变更为持久 I/O 释放门控；并发 append 在失败变更回滚前改变 inode 大小。
         restored = model.restore(previous, (1, 1, 1), live_size=73)
 
         self.assertEqual(restored["state"], "ready")

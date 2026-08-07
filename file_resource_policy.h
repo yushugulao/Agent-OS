@@ -1,9 +1,8 @@
 #ifndef FILE_RESOURCE_POLICY_H
 #define FILE_RESOURCE_POLICY_H
 
-// The open-file table is partitioned by the same admission classes as the
-// process table. Ordinary admissions may use only the public waterline;
-// kernel-authorized admissions retain the rest for bootstrap and workflows.
+// 打开文件表与进程表使用相同准入类别。普通准入只使用公共水位线，
+// 其余容量保留给内核授权的启动和 workflow。
 #ifndef FILE_RESOURCE_POOL_SIZE
 #define FILE_RESOURCE_POOL_SIZE (NPROC * FD_BUFFER_SIZE)
 #endif

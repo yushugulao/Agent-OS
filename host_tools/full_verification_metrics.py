@@ -1,4 +1,4 @@
-"""Parse and render the bounded metrics emitted by ``make full-verify``."""
+"""解析并渲染 ``make full-verify`` 输出的有界指标。"""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ REQUIRED_EVIDENCE_METRICS = (
 
 
 class FullVerificationEvidenceError(RuntimeError):
-    """Raised when full-verification evidence cannot be replayed exactly."""
+    """完整验证证据无法精确重放时抛出。"""
 
 
 def metric_key(name: str, unit: str) -> str | None:
@@ -341,8 +341,7 @@ def parse_measurements(
         duration_baseline: float | None = float(duration_budget[0])
         duration_limit: float | None = float(duration_budget[1])
     else:
-        # A different runner remains useful for semantic and inventory evidence,
-        # but its wall-clock total is deliberately not compared with local-e3.
+        # 其他 runner 仍可提供语义与清单证据，但其墙钟总时长不与 local-e3 比较。
         duration_baseline = None
         duration_limit = None
     metrics["agent_suite_total_seconds"] = {

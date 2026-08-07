@@ -116,9 +116,8 @@ unavailable:
 }
 
 /*
- * Process threads enter the metadata gate in ticket order.  The scheduler may
- * take one bounded maintenance turn while idle, but process callbacks may not
- * barge ahead of a queued ticket.
+ * 进程线程按票号顺序进入 metadata 门。调度器空闲时可执行一次有界维护，
+ * 进程回调不得越过已排队票号。
  */
 int
 agent_metadata_txn_lock(int wait)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load the repository's single resource-aware worker policy."""
+"""加载仓库唯一的资源感知 worker 策略。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ MAX_BUILD_JOBS = 24
 
 
 def adaptive_build_jobs(repository_root: Path) -> int:
-    """Return a bounded build budget from scripts/resource-jobs.py."""
+    """从 ``scripts/resource-jobs.py`` 返回有界构建预算。"""
 
     root = repository_root.resolve(strict=True)
     candidates = (

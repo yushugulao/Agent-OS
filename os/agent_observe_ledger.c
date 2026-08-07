@@ -55,9 +55,9 @@ _Static_assert(KERNEL_WORK_OPERATION_UNITS <= KERNEL_WORK_BUDGET_UNITS,
 	       "observation query work must fit one scheduling checkpoint");
 
 struct agent_audit_scope_state {
-	int used;
 	uint scope_id;
 	uint visible_records;
+	uint64 lifecycle_generation;
 	uint64 total_records;
 	uint64 admission_drops;
 	uint64 ledger_hash;
@@ -98,7 +98,7 @@ static uint64 agent_audit_span_owners[AGENT_AUDIT_MAX_RECORDS];
 static uchar agent_audit_low_class[AGENT_AUDIT_MAX_RECORDS];
 static uchar agent_audit_identity_classes[AGENT_AUDIT_MAX_RECORDS];
 static struct agent_audit_receipt_state agent_audit_receipts[AGENT_AUDIT_MAX_RECORDS];
-static struct agent_audit_scope_state agent_audit_scope_states[NPROC];
+static struct agent_audit_scope_state agent_audit_scope_states[WORKFLOW_LIFECYCLE_CAP];
 static int agent_timeline_waiting_threads;
 
 static int
@@ -248,7 +248,7 @@ agent_observe_query_reserve(uint64 records)
 
 	if (records == 0)
 		return 0;
-	/* Introspection must yield fairly without evicting the evidence it reads. */
+	/* 内省公平让出处理器，且不驱逐正在读取的证据。 */
 	if (agent_observe_recording_suppress_begin(p) < 0)
 		return -1;
 	batches = (records + AGENT_OBSERVE_QUERY_WORK_GRANULE - 1) /
@@ -279,14 +279,14 @@ agent_observe_query_reserve_to(uint64 records, uint64 *reserved)
 	if (reserved == 0 || records <= *reserved)
 		return 0;
 	additional = records - *reserved;
-	/* Publish before a possible yield; callers recount after checkpointing. */
+	/* 先发布再让出；调用方在检查点后重新计数。 */
 	*reserved = records;
 	return agent_observe_query_reserve(additional);
 }
 
-/* Authoritative observation state and operations. */
+/* 权威观测状态与操作。 */
 
-/* Audit record hashing. */
+/* 审计记录哈希。 */
 static uint64 agent_audit_record_hash(struct agent_audit_record *record)
 {
 	uint64 h = 1469598103934665603ULL;
@@ -321,31 +321,48 @@ static uint64 agent_audit_record_hash(struct agent_audit_record *record)
 	h = agent_observe_hash_bytes(h, record->text, sizeof(record->text));
 	return h ? h : 1;
 }
-
-
-
-/* Audit storage and recording. */
-static struct agent_audit_scope_state *
-agent_observe_audit_scope_state_get(uint scope_id, int create)
+/* 审计存储与记录。 */
+static int agent_observe_audit_lifecycle_matches_scope(
+	uint scope_id, struct workflow_lifecycle_key lifecycle)
 {
-	struct agent_audit_scope_state *free_state = 0;
+	uint bound_scope = VFS_SCOPE_NONE;
+	return agent_observe_scope_valid(scope_id) &&
+	       workflow_lifecycle_key_valid(lifecycle) &&
+	       lifecycle.id <= WORKFLOW_LIFECYCLE_CAP &&
+	       workflow_lifecycle_scope(lifecycle, &bound_scope) == 0 &&
+	       bound_scope == scope_id;
+}
 
-	if (!agent_observe_scope_valid(scope_id))
+static struct agent_audit_scope_state *
+agent_observe_audit_scope_state_get(
+	uint scope_id, struct workflow_lifecycle_key lifecycle, int create)
+{
+	struct agent_audit_scope_state *state;
+	if (!agent_observe_audit_lifecycle_matches_scope(scope_id, lifecycle))
 		return 0;
-	for (int i = 0; i < NPROC; i++) {
-		if (agent_audit_scope_states[i].used &&
-		    agent_audit_scope_states[i].scope_id == scope_id)
-			return &agent_audit_scope_states[i];
-		if (!agent_audit_scope_states[i].used && free_state == 0)
-			free_state = &agent_audit_scope_states[i];
+	state = &agent_audit_scope_states[lifecycle.id - 1];
+	if (state->lifecycle_generation != 0) {
+		if (state->scope_id != scope_id ||
+		    state->lifecycle_generation != lifecycle.generation)
+			return 0;
+		return state;
 	}
-	if (!create || free_state == 0)
+	if (!create || !workflow_lifecycle_active(lifecycle))
 		return 0;
-	memset(free_state, 0, sizeof(*free_state));
-	free_state->used = 1;
-	free_state->scope_id = scope_id;
-	free_state->observe_epoch = 1;
-	return free_state;
+	memset(state, 0, sizeof(*state));
+	state->scope_id = scope_id;
+	state->lifecycle_generation = lifecycle.generation;
+	state->observe_epoch = 1;
+	return state;
+}
+
+static struct agent_audit_scope_state *
+agent_observe_audit_scope_state_current(uint scope_id, int create)
+{
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
+	if (vfs_scope_lifecycle(scope_id, &lifecycle) < 0)
+		return 0;
+	return agent_observe_audit_scope_state_get(scope_id, lifecycle, create);
 }
 
 int
@@ -357,7 +374,7 @@ agent_observe_audit_view_open_locked(
 	if (view == 0)
 		return -1;
 	memset(view, 0, sizeof(*view));
-	state = agent_observe_audit_scope_state_get(scope_id, 0);
+	state = agent_observe_audit_scope_state_current(scope_id, 0);
 	if (state == 0)
 		return 0;
 	view->scope_id = state->scope_id;
@@ -380,7 +397,7 @@ agent_observe_audit_scope_visible_locked(uint scope_id)
 {
 	struct agent_audit_scope_state *state;
 
-	state = agent_observe_audit_scope_state_get(scope_id, 0);
+	state = agent_observe_audit_scope_state_current(scope_id, 0);
 	return state == 0 ? 0 : state->visible_records;
 }
 
@@ -422,7 +439,7 @@ agent_observe_receipt_snapshot(
 		return AGENT_STATUS_BAD_PARAM;
 	memset(view, 0, sizeof(*view));
 	enabled = intr_save();
-	scope = agent_observe_audit_scope_state_get(scope_id, 0);
+	scope = agent_observe_audit_scope_state_get(scope_id, lifecycle, 0);
 	for (uint i = 0; scope != 0 && i < scope->visible_records; i++) {
 		int slot = scope->sequence_slots[i];
 		const struct agent_audit_record *record;
@@ -576,7 +593,7 @@ agent_observe_scope_epoch_advance_locked(uint scope_id)
 {
 	struct agent_audit_scope_state *state;
 
-	state = agent_observe_audit_scope_state_get(scope_id, 1);
+	state = agent_observe_audit_scope_state_current(scope_id, 1);
 	if (state == 0)
 		return 0;
 	state->observe_epoch++;
@@ -810,7 +827,7 @@ uint64 agent_observe_scope_epoch(uint scope_id)
 {
 	struct agent_audit_scope_state *state;
 
-	state = agent_observe_audit_scope_state_get(scope_id, 1);
+	state = agent_observe_audit_scope_state_current(scope_id, 1);
 	return state ? state->observe_epoch : 0;
 }
 
@@ -962,6 +979,7 @@ static void agent_audit_slot_clear(int slot)
 static int agent_audit_slot_unpublish(int slot)
 {
 	struct agent_audit_scope_state *state;
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
 	uint scope_id;
 
 	if (slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS)
@@ -969,21 +987,16 @@ static int agent_audit_slot_unpublish(int slot)
 	scope_id = agent_audit_scopes[slot];
 	if (scope_id == VFS_SCOPE_NONE)
 		return 0;
-	state = agent_observe_audit_scope_state_get(scope_id, 0);
+	lifecycle.id = agent_audit_records[slot].workflow_lifecycle_id;
+	lifecycle.generation = agent_audit_records[slot].workflow_lifecycle_generation;
+	state = agent_observe_audit_scope_state_get(scope_id, lifecycle, 0);
 	if (state == 0 || agent_observe_audit_index_remove(state, slot) < 0)
 		return -1;
 	agent_audit_slot_clear(slot);
 	return 0;
 }
 
-/*
- * A rolling principal partition must not let high-rate telemetry erase the
- * only causal anchor of the span that telemetry describes.  When the
- * partition is full, correlated records replace spanless telemetry first,
- * then refresh the same causal bucket or another redundant bucket before
- * sacrificing a unique anchor.  Spanless records may replace only spanless
- * records.  This keeps the policy bounded while retaining span/kind diversity.
- */
+/* 分区满时先淘汰无 span 遥测；无 span 记录不得抹除唯一因果锚点。 */
 static int
 agent_observe_audit_principal_victim(
 	struct agent_audit_scope_state *state, uint64 principal, int low_class,
@@ -1034,7 +1047,7 @@ agent_observe_audit_principal_victim(
 		if (record->kind == kind && oldest_same_kind < 0)
 			oldest_same_kind = slot;
 	}
-	/* Protected authority effects retain the original per-principal FIFO. */
+	/* 受保护的权限效果仍按主体 FIFO。 */
 	if (!low_class)
 		return oldest_principal;
 	if (!correlated)
@@ -1088,12 +1101,7 @@ agent_observe_audit_principal_victim(
 	return oldest_other_span >= 0 ? oldest_other_span : oldest_same_span;
 }
 
-/*
- * A full scope is not permission to steal a live principal's partition.
- * Existing principals roll only their own records.  A principal entering a
- * full scope may reuse a departed principal's record, but spanless telemetry
- * still cannot erase correlated evidence.
- */
+/* scope 满载时只滚动自身记录；新主体仅复用已离场主体记录。 */
 static int
 agent_observe_audit_departed_principal_victim(
 	struct agent_audit_scope_state *state, uint64 principal, int low_class,
@@ -1142,11 +1150,8 @@ agent_observe_audit_departed_principal_victim(
 		state, departed_principal, low_class, span_id, span_owner, kind);
 }
 
-/*
- * Low-class principals may borrow idle slots above their guaranteed share.
- * A newly active principal can reclaim only that borrowed overflow; the
- * guaranteed partition and the causal-victim policy remain intact.
- */
+/* 普通主体可借用保证份额外的空槽；新活跃主体仅回收借用溢出，
+ * 不动保证分区和因果淘汰策略。 */
 static int
 agent_observe_audit_overflow_principal_victim(
 	struct agent_audit_scope_state *state, uint64 principal,
@@ -1212,9 +1217,7 @@ agent_observe_audit_slot_alloc(struct agent_audit_scope_state *state,
 			principal_owned++;
 		}
 	}
-	// The two authority classes have independent rolling partitions. Every
-	// principal first rolls its own history, so neither telemetry nor a noisy
-	// writer can evict another live principal's workflow evidence.
+	// 两类权限各自滚动；主体先淘汰自身历史，不能挤掉其他活跃主体证据。
 	if (principal_owned >= (low_class ?
 			       AGENT_AUDIT_LOW_PRINCIPAL_LIMIT :
 			       AGENT_AUDIT_HIGH_PRINCIPAL_LIMIT))
@@ -1501,11 +1504,11 @@ agent_observe_checkpoint_capture_scope(
 	uint selected_count = 0;
 	uint tail_start;
 
-	if (saved == 0 || !agent_observe_scope_valid(scope_id) ||
-	    !workflow_lifecycle_key_valid(lifecycle))
+	if (saved == 0 ||
+	    !agent_observe_audit_lifecycle_matches_scope(scope_id, lifecycle))
 		return -1;
 	memset(saved, 0, sizeof(*saved));
-	state = agent_observe_audit_scope_state_get(scope_id, 0);
+	state = agent_observe_audit_scope_state_get(scope_id, lifecycle, 0);
 	if (state == 0)
 		return 0;
 	if (state->visible_records == 0) {
@@ -1579,6 +1582,7 @@ agent_observe_checkpoint_restore_scope(
 	const struct agent_observe_checkpoint_scope *saved)
 {
 	struct agent_audit_scope_state *state;
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
 	int restore_slots[AGENT_OBSERVE_CHECKPOINT_PER_SCOPE];
 	uint64 successful_records;
 	uint64 largest_sequence = 0;
@@ -1591,6 +1595,11 @@ agent_observe_checkpoint_restore_scope(
 	if (saved == 0 ||
 	    !(saved->used & AGENT_OBSERVE_SCOPE_USED))
 		return 0;
+	lifecycle.id = saved->lifecycle_id;
+	lifecycle.generation = saved->lifecycle_generation;
+	if (!agent_observe_audit_lifecycle_matches_scope(saved->scope_id,
+							 lifecycle))
+		return -1;
 	if (saved->total_records == 0 ||
 	    saved->record_count > AGENT_OBSERVE_CHECKPOINT_PER_SCOPE ||
 	    saved->admission_drops >
@@ -1620,12 +1629,13 @@ agent_observe_checkpoint_restore_scope(
 			return -1;
 	}
 
-	/* Validate the whole image before entering one atomic publication window. */
+	/* 整体校验后再进入原子发布窗口。 */
 	enabled = intr_save();
-	state = agent_observe_audit_scope_state_get(saved->scope_id, 1);
+	state = agent_observe_audit_scope_state_get(
+		saved->scope_id, lifecycle, 1);
 	if (state == 0)
 		goto out;
-	/* A live metadata reload must not replace newer in-memory evidence. */
+	/* 在线重载不得覆盖更新的内存证据。 */
 	if (state->visible_records != 0 || state->total_records != 0 ||
 	    state->admission_drops != 0 || state->ledger_hash != 0) {
 		result = 0;
@@ -1699,7 +1709,7 @@ agent_observe_checkpoint_restore_scope(
 	goto out;
 
 rollback:
-	/* The scope was empty on entry, so these are the only published slots. */
+	/* 入口时 scope 为空，故这些是唯一已发布槽。 */
 	for (uint i = 0; i < restored; i++) {
 		int slot = restore_slots[i];
 		int kind = agent_audit_records[slot].kind;
@@ -1800,7 +1810,8 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	uint64 receipt_serial = 0;
 	uint64 receipt_target = 0;
 	uint64 identity_reserve;
-	struct workflow_lifecycle_key receipt_lifecycle;
+	struct workflow_lifecycle_key receipt_lifecycle =
+		vfs_proc_lifecycle(actor);
 	int low_class;
 	int slot;
 
@@ -1824,7 +1835,8 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	low_class = identity_class != AGENT_AUDIT_ID_AUTHORITY;
 	if (!agent_observe_scope_valid(scope_id) ||
 	    (scope_state =
-		     agent_observe_audit_scope_state_get(scope_id, 1)) == 0)
+		     agent_observe_audit_scope_state_get(
+			     scope_id, receipt_lifecycle, 1)) == 0)
 		return;
 	if (scope_state->total_records == ~0ULL)
 		return;
@@ -1866,9 +1878,9 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	record->cause_sequence = cause_sequence;
 	record->span_id = span_id;
 	if (actor) {
-		record->workflow_lifecycle_id = actor->workflow_lifecycle_id;
+		record->workflow_lifecycle_id = receipt_lifecycle.id;
 		record->workflow_lifecycle_generation =
-			actor->workflow_lifecycle_generation;
+			receipt_lifecycle.generation;
 		record->branch_generation = actor->context_branch_generation;
 		record->cause_branch_generation =
 			actor->context_cause_branch_generation;
@@ -1896,9 +1908,6 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	safestrcpy(record->text, text ? text : "", sizeof(record->text));
 	record->prev_hash = scope_state->ledger_hash;
 	record->record_hash = agent_audit_record_hash(record);
-	receipt_lifecycle.id = record->workflow_lifecycle_id;
-	receipt_lifecycle.generation =
-		record->workflow_lifecycle_generation;
 	agent_audit_receipts[slot].state =
 		agent_obsstore_mark_dirty_receipt(
 			scope_id, receipt_lifecycle, &receipt_serial,
@@ -1993,42 +2002,31 @@ static void agent_audit_sched(struct proc *p, struct agent_sched_record *record)
 int
 agent_observe_scope_reclaim(uint scope_id)
 {
+	struct agent_audit_scope_state *state;
 	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
 	int changed = 0;
 
-	if (!agent_observe_scope_valid(scope_id))
+	if (!agent_observe_scope_valid(scope_id) ||
+	    vfs_scope_lifecycle(scope_id, &lifecycle) < 0)
 		return -1;
-	(void)vfs_scope_lifecycle(scope_id, &lifecycle);
-	{
-		struct agent_audit_scope_state *state =
-			agent_observe_audit_scope_state_get(scope_id, 0);
-
-		if (state != 0 && state->visible_records > 0)
-			changed = 1;
-		while (state != 0 && state->visible_records > 0) {
-			int slot = state->sequence_slots[
-				state->visible_records - 1];
-
-			if (agent_audit_slot_unpublish(slot) < 0)
-				break;
-		}
-		/*
-		 * The ordered index is authoritative. The fallback only prevents
-		 * stale evidence from surviving an internal index inconsistency.
-		 */
-		for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++)
-			if (agent_audit_scopes[i] == scope_id) {
-				changed = 1;
-				agent_audit_slot_clear(i);
-			}
+	state = agent_observe_audit_scope_state_get(scope_id, lifecycle, 0);
+	if (state != 0 && state->visible_records > 0)
+		changed = 1;
+	while (state != 0 && state->visible_records > 0) {
+		int slot = state->sequence_slots[state->visible_records - 1];
+		if (agent_audit_slot_unpublish(slot) < 0)
+			break;
 	}
-	for (int i = 0; i < NPROC; i++)
-		if (agent_audit_scope_states[i].used &&
-		    agent_audit_scope_states[i].scope_id == scope_id) {
+	/* 有序索引为准；兜底清除内部索引失配后遗留的证据。 */
+	for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++)
+		if (agent_audit_scopes[i] == scope_id) {
 			changed = 1;
-			memset(&agent_audit_scope_states[i], 0,
-			       sizeof(agent_audit_scope_states[i]));
+			agent_audit_slot_clear(i);
 		}
+	if (state != 0) {
+		changed = 1;
+		memset(state, 0, sizeof(*state));
+	}
 	if (changed && agent_observe_checkpoint_generation != ~0ULL)
 		agent_observe_checkpoint_generation++;
 	return agent_obsstore_mark_reap(scope_id, lifecycle);

@@ -19,7 +19,7 @@
 #define NDEV 10 // maximum major device number
 #define ROOTDEV 1 // device number of file system root disk
 #define MAXOPBLOCKS 10 // max # of blocks any FS op writes
-#define NBUF 256 // size of the partitioned disk block cache
+#define NBUF 256 // 分区磁盘块缓存大小
 #ifndef FSSIZE
 #define FSSIZE 16384 // size of file system in blocks
 #endif
@@ -29,9 +29,9 @@
 #define FS_LOOKUP_ERROR  (-1)
 #define FS_LOOKUP_ABSENT 0
 #define FS_LOOKUP_FOUND  1
-/* Preserved device scheduling failure; callers must not treat it as absent. */
+/* 保留设备调度失败；调用方不得将其视为对象不存在。 */
 #define FS_LOOKUP_BUSY   (-5)
-/* Namespace publication may have completed; callers must fail closed. */
+/* 名字空间可能已发布；调用方必须封闭失败。 */
 #define FS_LOOKUP_INDETERMINATE (-7)
 #define FS_CREATE_INDETERMINATE FS_LOOKUP_INDETERMINATE
 
@@ -50,8 +50,8 @@ struct superblock {
 	uint ninodes; // Number of inodes.
 	uint inodestart; // Block number of first inode block
 	uint bmapstart; // Block number of first free map block
-	uint qmapstart; // Block number of first storage-owner map block
-	uint datastart; // Block number of first allocatable data block
+	uint qmapstart; // 首个存储属主图块号
+	uint datastart; // 首个可分配数据块号
 	uint storage_policy_version;
 	uint storage_scope_slots;
 	uint workflow_block_guarantee;
@@ -119,18 +119,17 @@ _Static_assert(sizeof(struct superblock) == 64,
 #define FS_OWNER_IS_SCOPE(owner) (((owner) & FS_OWNER_SCOPE_FLAG) != 0)
 #define FS_OWNER_SCOPE_ID(owner) ((owner) & FS_OWNER_ID_MASK)
 /*
- * The qmap is also the block allocator's recovery log.  Stable workflow
- * owners use the 10 prefix; 01 and 11 retain the 30-bit owner payload while
- * an allocation or free is being committed.  Stable owner values are kept
- * unchanged, so existing images remain readable.
+ * 属主图同时是块分配器的恢复日志。稳定工作流属主使用 10 前缀；分配或
+ * 释放提交期间，01 和 11 保留 30 位属主载荷。稳定值保持不变，旧镜像
+ * 仍可读取。
  */
 #define FS_QMAP_STATE_MASK 0xc0000000U
 #define FS_QMAP_OWNER_PAYLOAD_MASK 0x3fffffffU
 #define FS_QMAP_ALLOCATING_FLAG 0x40000000U
 #define FS_QMAP_FREEING_FLAG 0xc0000000U
 #define FS_OWNER_MAX_PERSISTENT_ID FS_QMAP_OWNER_PAYLOAD_MASK
-// Trusted mkfs images may sponsor immutable PUBLIC objects as SYSTEM;
-// runtime PUBLIC allocations always use FS_OWNER_PUBLIC.
+// 可信制盘镜像可由 SYSTEM 代付不可变 PUBLIC 对象；运行时 PUBLIC 分配
+// 始终使用 FS_OWNER_PUBLIC。
 #define FS_OWNER_IS_PUBLIC_OBJECT(owner) \
 	((owner) == FS_OWNER_SYSTEM || (owner) == FS_OWNER_PUBLIC)
 
@@ -164,7 +163,7 @@ struct fs_storage_charge {
 // On-disk inode structure
 struct dinode {
 	short type; // File type
-	short agent_meta_slot; // slot plus one; zero=unknown, -1=capacity deferred
+	short agent_meta_slot; // 槽号加一；零表示未知，-1 表示容量延后
 	short agent_meta_flags;
 	short agent_meta_version;
 	uint size; // Size of file (bytes)
@@ -202,7 +201,7 @@ _Static_assert(sizeof(struct dinode) == 128,
 // Block of free map containing bit for block b
 #define BBLOCK(b, sb) ((b) / BPB + sb.bmapstart)
 
-// Storage-owner entries per block and owner-map block for disk block b.
+// 每块的存储属主条目数，以及磁盘块 b 对应的属主图块。
 #define QPB (BSIZE / sizeof(uint))
 #define QBLOCK(b, sb) ((b) / QPB + sb.qmapstart)
 
@@ -219,8 +218,7 @@ struct inode;
 struct open_file_io_token;
 struct vfs_cred;
 
-// A truncate first publishes an inode without the discarded mappings, then
-// carries this private token while the old blocks are reclaimed safely.
+// 截断先发布已移除废弃映射的索引节点，再携带此私有令牌安全回收旧块。
 #define INODE_RECLAIM_NONE 0U
 #define INODE_RECLAIM_DIRECT 1U
 #define INODE_RECLAIM_LIST 2U
@@ -285,6 +283,6 @@ int itruncate_reclaim(struct inode_reclaim *) FS_MUST_CHECK;
 int itruncate_reclaim_step(struct inode_reclaim *, uint);
 int fs_deferred_reclaim_maintain(void);
 void fs_deferred_reclaim_tick(uint64 now);
-/* A caller may synchronously settle only its admitted owner. */
+/* 调用方只能同步结算自己获准的属主。 */
 int fs_deferred_reclaim_drain_current(void);
 #endif //!__FS_H__

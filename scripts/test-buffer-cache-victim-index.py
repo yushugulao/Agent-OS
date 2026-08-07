@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static and mutation contracts for bounded buffer-cache victim selection."""
+"""有界 buffer-cache 牺牲项选择的静态与变异契约。"""
 
 from pathlib import Path
 

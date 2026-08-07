@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for portable AgentOS evaluation evidence bundles."""
+"""可移植 AgentOS 评测证据包的回归测试。"""
 
 from __future__ import annotations
 
@@ -121,7 +121,7 @@ def write_strict(path: Path, value: object) -> None:
 
 
 def reseal_portable_bundle_fixture(root: Path) -> None:
-    """Rebind a deliberately attacker-controlled portable bundle fixture."""
+    """重新绑定一个特意由攻击者控制的可移植证据包夹具。"""
 
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -170,8 +170,8 @@ def assert_packaged_contract_code_is_never_executed(
         newline="\n",
     )
 
-    # Prove the fixture is executable if a verifier ever treats the snapshot as
-    # a Python contract root, then remove the setup sentinel before both APIs.
+        # 先证明当验证器把快照视作 Python 契约根目录时该夹具确实可执行，
+        # 再在调用两个 API 前移除设置阶段的哨兵文件。
     platform_probe._load_profile_component(
         snapshot,
         "scripts/agent_test_calibration.py",
@@ -296,7 +296,7 @@ def _test_archive_record(
 
 
 def _stored_block_deflate(payload: bytes) -> bytes:
-    """Emit RFC 1951 stored blocks without using a compressor library."""
+    """不借助压缩库生成 RFC 1951 存储块。"""
     chunks = [payload[index:index + 65535] for index in range(0, len(payload), 65535)]
     if not chunks:
         chunks = [b""]
@@ -338,9 +338,8 @@ def assert_archive_safety(root: Path) -> None:
     bundle._extract_archive(first, extracted, one)
     assert (extracted / "raw" / "boot-01" / "guest.log").read_bytes() == member.read_bytes()
 
-    # A tiny independent stored-block encoder provides valid DEFLATE without
-    # calling zlib's compressor. Portable verification binds the stored bytes
-    # but canonicalizes USTAR instead of reproducing compressor output.
+    # 一个小型独立存储块编码器无需调用 zlib 压缩器即可生成有效 DEFLATE。
+    # 可移植验证绑定存储字节，但会规范化 USTAR，而非复现压缩器输出。
     tar_payload = gzip.decompress(first.read_bytes())
     deflate = _stored_block_deflate(tar_payload)
     alternate = (
@@ -508,7 +507,7 @@ def assert_isolated_fixture_repository(repo: Path) -> None:
 def materialize_committed_measurement_sources(
     repo: Path, commit: str, source_inventory: list[dict[str, object]]
 ) -> None:
-    """Replace fixture worktree sources with their exact committed blob bytes."""
+    """用提交中精确的 blob 字节替换夹具工作树源码。"""
 
     executable = shutil.which("git")
     assert executable is not None
@@ -934,10 +933,8 @@ def add_formal_scenario(
         source_tree=source_tree,
     )
     assert report["summary"]["functional_acceptance"]["status"] == "passed"
-    # Exercise the collector's real persistence format.  Resource Stability v3
-    # deliberately validates the ordered nested receipt schema, while the
-    # generic fixture writer sorts object keys and therefore cannot faithfully
-    # replay a production scenario report.
+        # 测试收集器的真实持久化格式。Resource Stability v3 会特意校验有序嵌套
+        # 回执结构，而通用夹具写入器会排序对象键，因此无法忠实重放生产场景报告。
     scenario_evidence._write_report(scenario_root / "report.json", report)
 
     micro = json.loads((run / "campaign.json").read_text(encoding="utf-8"))
@@ -1865,11 +1862,9 @@ def main() -> int:
         )
         write_strict(scenario_plan_path, scenario_plan)
         scenario_preflight_path.write_bytes(original_scenario_preflight)
-        # Exercise the real extractor for both filesystem layouts once.  The
-        # mutation case below then proves the image, rather than self-consistent
-        # sidecar hashes, is authoritative.  Remaining bundle tests replace the
-        # expensive image walk with a call recorder; they test unrelated archive
-        # and delivery contracts and would otherwise re-read dozens of images.
+            # 对两种文件系统布局各测试一次真实提取器。随后用下方变异用例证明权威来源
+            # 是镜像，而非内部自洽的旁路哈希。其余证据包测试用调用记录器替代昂贵的
+            # 镜像遍历；它们测试无关的归档和交付契约，否则会重复读取数十个镜像。
         bundle._verify_scenario_image_state(
             formal_run,
             "boot-01",

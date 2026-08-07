@@ -64,7 +64,7 @@ static void wait_for_baseline_replication(void)
 			stable++;
 		else
 			stable = 0;
-		/* A stable idle lane after durable == dirty includes mirror commit. */
+		/* durable == dirty 后的稳定空闲区间包含镜像提交。 */
 		if (stable >= REPLICATION_STABLE_POLLS) {
 			printf("agentmetacrash_ucore: baseline_dirty=%p baseline_durable=%p pending=%d\n",
 			       info.metadata_writeback_dirty,
@@ -107,7 +107,7 @@ static void run_workflow(void)
 	      arm.arm_token != 0,
 	      "validate explicit metadata target");
 
-	/* The test-only kernel hook interrupts only the receipted generation. */
+	/* 测试内核钩子仅中断回执对应的代次。 */
 	fill_metadata(&meta, UPDATED_STATUS, AGENT_FILE_META_UPDATE_STATUS);
 	status = agent_file_meta_set(&meta);
 	printf("agentmetacrash_ucore: unexpected_update_return=%d\n", status);

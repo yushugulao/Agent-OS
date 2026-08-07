@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and portably verify an immutable AgentOS evaluation evidence bundle."""
+"""创建并可移植地验证不可变 AgentOS 评测证据包。"""
 
 from __future__ import annotations
 
@@ -115,9 +115,8 @@ DEVELOPMENT_FULL_VERIFICATION = {
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
-# Source/replay limits cover the complete logical evidence.  Stored delivery
-# limits are deliberately much smaller and are independently rechecked from
-# the committed Git tree by evidence_delivery_contract.py.
+# 源码/重放限额覆盖完整逻辑证据；存储交付限额刻意更小，并由
+# evidence_delivery_contract.py 根据已提交 Git 树独立复核。
 MAX_FILES = 20000
 MAX_FILE_BYTES = 1 << 30
 MAX_TOTAL_BYTES = 1 << 30

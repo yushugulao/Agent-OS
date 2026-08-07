@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract tests for resource-adaptive worker selection."""
+"""资源自适应 worker 选择的契约测试。"""
 
 from __future__ import annotations
 

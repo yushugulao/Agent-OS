@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and verify immutable evaluation-source receipts."""
+"""构建并验证不可变评测源回执。"""
 from __future__ import annotations
 
 import hashlib
@@ -166,7 +166,7 @@ def verify_measurement_source_receipt(
 def verify_measurement_source_files(
     receipt: object, repo: Path = ROOT, *, expected_commit: str | None = None
 ) -> dict[str, Any]:
-    """Verify the immutable source bytes bound by a validated receipt."""
+    """验证已通过校验的回执所绑定的不可变源码字节。"""
     parsed = validate_measurement_source_receipt_shape(
         receipt, expected_commit=expected_commit
     )

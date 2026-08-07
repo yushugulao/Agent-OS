@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect and replay a stage-only, commit-bound ``make full-verify`` payload."""
+"""采集并重放仅含阶段且绑定提交的 ``make full-verify`` 载荷。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys as _entry_sys
 
 
 def _isolate_direct_entry_imports() -> None:
-    """Use only interpreter-owned paths for top-level import resolution."""
+    """顶层导入解析仅使用解释器自身管理的路径。"""
 
     if __name__ != "__main__":
         return
@@ -136,7 +136,7 @@ RECEIPT_FIELDS = {
 
 
 class FullVerificationError(ValueError):
-    """Raised when full-verification evidence is absent, incomplete, or forged."""
+    """完整验证证据缺失、不完整或伪造时抛出。"""
 
 
 _COLLECTOR: ModuleType | None = None
@@ -194,7 +194,7 @@ def _load_collector(path: Path, module_name: str) -> ModuleType:
 
 
 def _collector() -> ModuleType:
-    """Load the canonical full-verify summary contract without duplicating it."""
+    """加载规范完整验证摘要合同，不复制其定义。"""
 
     global _COLLECTOR
     if _COLLECTOR is not None:
@@ -220,7 +220,7 @@ def _contract_root(path: Path) -> Path:
 
 
 def _directory_is_at_or_below(path: Path, root: Path) -> bool:
-    """Compare canonical directories by identity across host path aliases."""
+    """跨 Host 路径别名按身份比较规范目录。"""
 
     current = path
     while True:
@@ -243,7 +243,7 @@ def _replay_semantics(
     commit: str,
     contract_root: Path,
 ) -> None:
-    """Run the complete raw verifier from the authenticated source-C snapshot."""
+    """从已认证源码 C 快照运行完整原始验证器。"""
 
     root = _contract_root(contract_root)
     launcher = root / "scripts" / "trusted-python-entry.py"
@@ -393,7 +393,7 @@ def _run_bounded(
     log_limit: int = MAX_EXECUTION_LOG_BYTES,
     output_limit: int = MAX_EXECUTION_OUTPUT_BYTES,
 ) -> tuple[int, float, bool]:
-    """Run one isolated session with online disk budgets and no surviving children."""
+    """按在线磁盘预算运行一次隔离会话，并确保没有残留子进程。"""
 
     if os.name != "posix":
         raise FullVerificationError(
@@ -664,7 +664,7 @@ def _validate_tools(
 def verify_payload(
     root: Path, *, expected_commit: str | None = None, contract_root: Path
 ) -> tuple[dict[str, object], set[str]]:
-    """Replay a stage payload and return its outer-bundle binding receipt."""
+    """重放阶段载荷并返回其外层证据包绑定回执。"""
 
     lexical = absolute_lexical_path(root)
     try:
@@ -971,7 +971,7 @@ def _seal_payload(
 
 
 def collect(args: argparse.Namespace) -> int:
-    """Execute full-verify once in detached C and atomically seal its raw evidence."""
+    """在独立 C 中执行一次完整验证，并原子密封其原始证据。"""
 
     timeout = float(args.command_timeout)
     if not math.isfinite(timeout) or not 0 < timeout <= 86400:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify raw-image outcomes for the fs_epoch power-cut regression."""
+"""校验 fs_epoch 断电回归的原始镜像结果。"""
 
 import argparse
 import hashlib

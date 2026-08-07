@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the generation-bound metadata query read view."""
+"""验证绑定代际的元数据查询读视图。"""
 
 from __future__ import annotations
 

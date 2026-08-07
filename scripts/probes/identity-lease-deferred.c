@@ -6,13 +6,13 @@
 
 typedef unsigned int uint;
 typedef unsigned char uchar;
-typedef unsigned long uint64;
+typedef uint64_t uint64;
 
 #define TYPES_H
 #include "../../os/agent_observe_persist_context.h"
 
 #define WORKFLOW_LIFECYCLE_CAP 8U
-#define AGENT_IDENTITY_LEASE_CHUNK 256ULL
+#define AGENT_IDENTITY_LEASE_CHUNK 4096ULL
 #define AGENT_IDENTITY_LEASE_LOW_WATER \
 	(AGENT_IDENTITY_LEASE_CHUNK / 2ULL)
 
@@ -83,9 +83,11 @@ static void verify_allocator_deferred_renew(void)
 	reset_lease();
 	assert(agent_identity_lease_storage_ready() == 0);
 	assert(agent_identity_lease_allocator_contains(
-		       AGENT_IDENTITY_ALLOCATOR_AUDIT, 256));
+		       AGENT_IDENTITY_ALLOCATOR_AUDIT,
+		       AGENT_IDENTITY_LEASE_CHUNK));
 	assert(!agent_identity_lease_allocator_contains(
-		       AGENT_IDENTITY_ALLOCATOR_AUDIT, 257));
+		       AGENT_IDENTITY_ALLOCATOR_AUDIT,
+		       AGENT_IDENTITY_LEASE_CHUNK + 1));
 	calls = persist_calls;
 	interrupts_enabled = 0;
 	assert(agent_identity_lease_allocator_renew(
@@ -105,18 +107,23 @@ static void verify_allocator_reserve_and_proactive_renew(void)
 	reset_lease();
 	assert(agent_identity_lease_storage_ready() == 0);
 	assert(agent_identity_lease_allocator_admit(
-		       AGENT_IDENTITY_ALLOCATOR_AUDIT, 192, 64));
+		       AGENT_IDENTITY_ALLOCATOR_AUDIT,
+		       AGENT_IDENTITY_LEASE_CHUNK - 64, 64));
 	assert(!agent_identity_lease_allocator_admit(
-		       AGENT_IDENTITY_ALLOCATOR_AUDIT, 193, 64));
+		       AGENT_IDENTITY_ALLOCATOR_AUDIT,
+		       AGENT_IDENTITY_LEASE_CHUNK - 63, 64));
 	assert(agent_identity_lease_allocator_contains(
-		       AGENT_IDENTITY_ALLOCATOR_AUDIT, 193));
+		       AGENT_IDENTITY_ALLOCATOR_AUDIT,
+		       AGENT_IDENTITY_LEASE_CHUNK - 63));
 	assert(!agent_identity_lease_maintenance_pending());
 	agent_identity_lease_allocator_note_next(
-		AGENT_IDENTITY_ALLOCATOR_AUDIT, 129);
+		AGENT_IDENTITY_ALLOCATOR_AUDIT,
+		AGENT_IDENTITY_LEASE_LOW_WATER + 1);
 	assert(agent_identity_lease_maintenance_pending());
 	agent_identity_lease_maintain();
 	assert(agent_identity_lease_allocator_contains(
-		       AGENT_IDENTITY_ALLOCATOR_AUDIT, 512));
+		       AGENT_IDENTITY_ALLOCATOR_AUDIT,
+		       2 * AGENT_IDENTITY_LEASE_CHUNK));
 	puts("identity_lease_deferred: causal_reserve=64 proactive_half_window=1");
 }
 
@@ -126,7 +133,8 @@ static void verify_lifecycle_deferred_renew(void)
 
 	reset_lease();
 	assert(agent_identity_lease_storage_ready() == 0);
-	assert(!agent_identity_lease_lifecycle_contains(0, 257));
+	assert(!agent_identity_lease_lifecycle_contains(
+		0, AGENT_IDENTITY_LEASE_CHUNK + 1));
 	calls = persist_calls;
 	interrupts_enabled = 0;
 	assert(agent_identity_lease_lifecycle_renew() == -1);
@@ -135,7 +143,8 @@ static void verify_lifecycle_deferred_renew(void)
 	agent_identity_lease_maintain();
 	assert(persist_calls == calls + 1);
 	assert(!agent_identity_lease_maintenance_pending());
-	assert(agent_identity_lease_lifecycle_contains(0, 257));
+	assert(agent_identity_lease_lifecycle_contains(
+		0, AGENT_IDENTITY_LEASE_CHUNK + 1));
 	puts("identity_lease_deferred: lifecycle_maintain_resumed=1");
 }
 
@@ -172,7 +181,7 @@ static void verify_receipt_persist_context(void)
 		.exit_requested = 0,
 	};
 
-	/* User-origin syscall traps have SIE=0 and SPP=0. */
+	/* 用户态系统调用陷入时 SIE=0、SPP=0。 */
 	assert(agent_observe_receipt_persist_context_safe(&context));
 	context.sstatus = context.supervisor_previous_mask;
 	assert(!agent_observe_receipt_persist_context_safe(&context));

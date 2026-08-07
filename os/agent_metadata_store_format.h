@@ -5,7 +5,7 @@
 #include "agent_metadata_catalog.h"
 #include "agent_metadata_disk.h"
 
-/* Private in-memory view of one immutable metadata-bank image. */
+/* 单个不可变元数据存储区镜像的私有内存视图。 */
 struct agent_meta_store {
 	struct agent_meta_store_header header;
 	struct agent_durable_arena durable;

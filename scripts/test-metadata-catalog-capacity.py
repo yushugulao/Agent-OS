@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation and model tests for catalog reserves and durable deferral."""
+"""catalog 预留与持久延迟的变异和模型测试。"""
 
 from __future__ import annotations
 
@@ -179,7 +179,7 @@ def catalog_flag_transaction(
     records[index] = new_autoscan
     if persist:
         return records, "committed"
-    # Receipt-authorized undo applies the old image against hard bounds only.
+    # 收据授权的撤销仅按硬上限应用旧镜像。
     if not catalog_slot_allowed(False, len(records) - 1, len(records) - 1):
         raise AssertionError("hard rollback admission failed")
     return before, "rolled_back"
@@ -343,11 +343,10 @@ run_agent(void) __attribute__((used))
             ("target", "active", 0),
             ("old", "retiring", 112),
         ]
-        # target is exempt from its own allocation. The retiring scope occupies
-        # one slot and its existing usage fully offsets that slot's guarantee;
-        # only the two genuinely empty future slots remain.
+        # 目标免计自身分配。正在退出的 scope 占用一个 slot，其现有用量完全抵消
+        # 该 slot 的保证；只剩两个真正空闲的未来 slot。
         self.assertEqual(storage_guarantee_required(scopes, "target"), 32)
-        # The obsolete skip-retiring model treated old as an empty future slot.
+        # 已废弃的 skip-retiring 模型把 old 错当成空闲的未来 slot。
         legacy_skip_retiring = (4 - 1) * 16
         self.assertEqual(legacy_skip_retiring, 48)
         self.assertNotEqual(storage_guarantee_required(scopes, "target"),
@@ -358,19 +357,18 @@ run_agent(void) __attribute__((used))
             {"a": 111}, {"a"}, "a"))
         self.assertFalse(catalog_workflow_allocation_allowed(
             {"a": 112}, {"a"}, "a"))
-        # A full partition cannot consume B's independent 112-slot partition.
+        # 已满分区不能占用 B 的独立 112-slot 分区。
         self.assertTrue(catalog_workflow_allocation_allowed(
             {"a": 112, "b": 111}, {"a", "b"}, "b"))
         self.assertFalse(catalog_workflow_allocation_allowed(
             {"a": 112, "b": 112}, {"a", "b"}, "b"))
         self.assertFalse(catalog_workflow_allocation_allowed(
             {"retiring": 1}, set(), "retiring"))
-        # All four fixed partitions exactly fill the ordinary table.
+        # 四个固定分区恰好填满普通表。
         self.assertFalse(catalog_workflow_allocation_allowed(
             {"a": 112, "b": 112, "c": 112, "d": 112},
             {"a", "b", "c", "d"}, "a"))
-        # Receipt-bound replacement/undo remains possible without a live owner
-        # when it does not grow the fixed partition.
+        # 若不扩大固定分区，即使没有活动所有者仍可执行绑定收据的替换或撤销。
         self.assertTrue(catalog_admission_allowed(
             False, 111, 447, growth=False, lifecycle_admitted=False))
         self.assertFalse(catalog_admission_allowed(
@@ -385,7 +383,7 @@ run_agent(void) __attribute__((used))
         self.assertFalse(catalog_admission_allowed(
             False, 96, 96, growth=True, lifecycle_admitted=True,
             new_autoscan=True, autoscan_owned=96))
-        # Only a transition into AUTOSCAN consumes the new-growth reserve.
+        # 只有转入 AUTOSCAN 才消耗新增预留。
         self.assertFalse(catalog_admission_allowed(
             False, 96, 96, growth=False, lifecycle_admitted=False,
             new_autoscan=True, autoscan_owned=96))
@@ -403,8 +401,7 @@ run_agent(void) __attribute__((used))
             new_autoscan=False, autoscan_owned=96))
 
     def test_reload_binds_lifecycle_and_fixed_partitions(self) -> None:
-        # Full boot must be able to load bounded retiring history so the reaper
-        # can observe and release it.
+        # 完整启动必须能够加载有界退出历史，以便 reaper 观察并释放它。
         self.assertTrue(retained_scope_plan_allowed([3] * 112))
         self.assertFalse(retained_scope_plan_allowed([3] * 113))
         self.assertFalse(scoped_reload_plan_allowed(
@@ -413,8 +410,7 @@ run_agent(void) __attribute__((used))
             {"a": 112, "b": 112}, {"a", "b"}, "a"))
         self.assertFalse(scoped_reload_plan_allowed(
             {"retiring": 112}, set(), "retiring"))
-        # Disk compatibility is bounded by the v7 representation, not today's
-        # stricter AUTOSCAN growth policy.
+        # 磁盘兼容性受 v7 表示上限约束，而非当前更严格的 AUTOSCAN 增长策略。
         self.assertTrue(scoped_reload_plan_allowed(
             {"a": 112}, {"a"}, "a"))
 
@@ -475,7 +471,7 @@ run_agent(void) __attribute__((used))
         self.assertFalse(workflow_inode_allocation_allowed(320))
         self.assertTrue(workflow_inode_allocation_allowed(0, domain_limit=1))
         self.assertFalse(workflow_inode_allocation_allowed(1, domain_limit=1))
-        # Peer usage is deliberately irrelevant to this account-local bound.
+        # peer 用量刻意不影响此账户局部上限。
         self.assertTrue(workflow_inode_allocation_allowed(0))
 
     def test_full_catalog_defers_index_without_rejecting_vfs_create(self) -> None:
@@ -501,18 +497,18 @@ run_agent(void) __attribute__((used))
         records = [(3, False), (4, False), (5, True)]
         self.assertEqual(stale_sweep(records, {3}, False), [4])
         self.assertEqual(stale_sweep(records, set(), True), [])
-        # Capacity deferral has no failed scope, so stale slots can be reclaimed.
+        # 容量延迟没有失败 scope，因此可以回收过期 slot。
         self.assertEqual(stale_sweep(records, set(), False), [3, 4])
 
     def test_prepare_cadence_covers_over_32_and_full_512(self) -> None:
         self.assertEqual(prepare_rounds(32, False), 1)
         self.assertEqual(prepare_rounds(33, False), 2)
         self.assertEqual(prepare_rounds(512, False), 16)
-        # Foreground scoped reload has a fixed 1024-item memory-only bound.
+        # 前台分 scope 重载具有固定的 1024 项纯内存上限。
         self.assertEqual(prepare_rounds(512, True), 1)
 
     def test_prepare_accounts_for_active_and_retiring_scopes(self) -> None:
-        # Four active plus four retiring generations are a legal retained set.
+        # 四个活动代际加四个退出代际构成合法保留集。
         self.assertTrue(retained_scope_plan_allowed(list(range(3, 11))))
         self.assertFalse(retained_scope_plan_allowed(list(range(3, 12))))
         self.assertTrue(retained_scope_plan_allowed(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the trusted dual-kernel build harness."""
+"""可信双内核构建工具的回归测试。"""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def _run(root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
 
 
 def _create_detectable_file_symlink(target: Path, link: Path) -> bool:
-    """Create a real link even when MSYS2 defaults to its deep-copy fallback."""
+    """即使 MSYS2 默认回退为深拷贝，也要创建真实链接。"""
 
     try:
         os.symlink(target, link)
@@ -82,9 +82,8 @@ def _create_detectable_file_symlink(target: Path, link: Path) -> bool:
     if link.is_symlink():
         return True
 
-    # The default MSYS2 winsymlinks mode may report success after copying the
-    # target.  Such a regular file cannot exercise the anti-link contract.
-    # Retry in a child whose runtime is explicitly configured for MSYS links.
+    # 默认 MSYS2 winsymlinks 模式可能复制目标后仍报告成功；这种普通文件无法
+    # 测试拒绝链接契约，因此在显式配置为 MSYS 链接的子进程中重试。
     if sys.platform != "cygwin":
         link.unlink(missing_ok=True)
         return False
@@ -643,10 +642,9 @@ class TrustedKernelBuildTests(unittest.TestCase):
             if not _create_detectable_file_symlink(real, self.fixture.config):
                 self.skipTest("runtime cannot create a detectable file symlink")
 
-            # Keep the anti-link assertion independent of the clean-worktree
-            # assertion.  On hosts where Git records the mode change, commit
-            # the link; on Windows/MSYS core.symlinks=false already treats the
-            # byte-identical external target as clean.
+            # 保持拒绝链接断言与工作树洁净断言相互独立。在 Git 会记录模式变化的
+            # 主机上提交该链接；Windows/MSYS 的 core.symlinks=false 已将字节相同的
+            # 外部目标视为洁净状态。
             relative = str(self.fixture.config.relative_to(self.fixture.root))
             _run(self.fixture.root, "add", "--", relative)
             staged = subprocess.run(

@@ -1,4 +1,5 @@
 #include "agent_internal.h"
+#include "agent_identity_lease.h"
 
 /*
  * 可调度 Agent 维护任务的边沿触发状态。生产者只负责发布，
@@ -15,7 +16,8 @@ agent_background_request(void)
 int
 agent_background_work_pending(void)
 {
-	return __atomic_load_n(&agent_background_pending, __ATOMIC_ACQUIRE);
+	return __atomic_load_n(&agent_background_pending, __ATOMIC_ACQUIRE) ||
+	       agent_identity_lease_maintenance_pending();
 }
 
 int

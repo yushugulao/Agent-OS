@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation contracts for filesystem epoch I/O sponsorship."""
+"""文件系统 epoch I/O 赞助的变异契约。"""
 
 from pathlib import Path
 

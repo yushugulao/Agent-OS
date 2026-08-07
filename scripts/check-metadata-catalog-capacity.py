@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contract for fixed metadata-catalog partitions and reconciliation."""
+"""固定元数据 catalog 分区与协调的静态契约。"""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation guards for bounded inode and buffer-cache key lookup."""
+"""有界 inode 与 buffer-cache 键查找的变异防护。"""
 
 from pathlib import Path
 

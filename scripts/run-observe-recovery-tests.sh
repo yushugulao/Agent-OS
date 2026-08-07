@@ -62,8 +62,8 @@ if [[ "$("${TOOLPREFIX}size" "${TMPDIR_OBSERVE}/prod-build/os/agent_observe_test
 	echo "[observe-recovery] test owner leaked into production build" >&2
 	exit 1
 fi
-# The crash-test kernel keeps writes in the durability overlay so boot0 can
-# model a real power cut and validate recovery from the last committed image.
+# 崩溃测试内核把写入保留在持久 overlay 中，使 boot0 能模拟真实断电并校验
+# 从最近提交镜像恢复。
 make -B "${TMPDIR_OBSERVE}/kernel-build/kernel" \
 	BUILDDIR="${TMPDIR_OBSERVE}/kernel-build" \
 	TOOLPREFIX="${TOOLPREFIX}" LOG=error \
@@ -120,10 +120,9 @@ snapshot_image_exclusive() {
 	mv "${partial}" "${target}"
 }
 
-# The first boot is killed at the kernel marker printed immediately after all
-# allocator classes consume IDs. Its crash-tested ledger writes persist.
-# Only the Host advances the protected fixed slot. Each transition requires
-# the exact predecessor and, after phase0, exact attested Guest evidence.
+# 第一次启动在所有分配器类别消耗 ID 后立即打印的内核标记处终止；经崩溃测试的
+# ledger 写入会持久化。只有 Host 推进受保护的固定 slot。每次转换都要求精确前驱，
+# phase0 之后还要求精确的已认证 Guest 证据。
 run_boot boot0-cut \
 	"agentobsreboot_ucore: lease_cut_alloc " powercut line-prefix
 "${PYTHON_BIN}" host_tools/agent_observe_phase_control.py advance \

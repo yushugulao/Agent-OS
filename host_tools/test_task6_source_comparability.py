@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the Task 6 paired-program source receipt."""
+"""任务 6 配对程序源码回执的回归测试。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ try:
     from . import evaluation_scenario as scenario
     from . import agenteval_measurement_source_contract as measurement_source
     from . import scenario_timing_source_contract
-except ImportError:  # Direct execution from host_tools/.
+except ImportError:  # 支持从 host_tools/ 目录直接执行。
     import evaluation_scenario as scenario
     import agenteval_measurement_source_contract as measurement_source
     import scenario_timing_source_contract

@@ -1,4 +1,4 @@
-"""Closed-schema, replayable attestation for the formal duration profile."""
+"""正式时长配置的闭合模式可重放认证。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ EXECUTION_TOOL_LABELS = (
 
 
 class DurationAttestationError(ValueError):
-    """Raised when a duration-profile attestation is incomplete or forged."""
+    """时长配置认证不完整或伪造时抛出。"""
 
 
 def _platform_contract() -> tuple[Any, Any, Any]:
@@ -85,7 +85,7 @@ def duration_platform_identity_sha256(platform: object) -> str:
 
 
 def _tool_binary_identity(record: object) -> dict[str, object]:
-    """Return the cross-probe identity; each probe validates its own version log."""
+    """返回跨探针身份；每个探针分别校验自身版本日志。"""
 
     if not isinstance(record, Mapping):
         raise DurationAttestationError("duration execution tool identity is invalid")

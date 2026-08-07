@@ -476,7 +476,7 @@ def parse_canonical_mainflow_telemetry(
     *,
     label: str = "mainflow telemetry",
 ) -> tuple[dict[str, str], ...]:
-    """Parse the complete, closed-schema Mainflow telemetry stream."""
+    """解析完整且模式闭合的 Mainflow 遥测流。"""
     if not data or not data.endswith(b"\n"):
         raise ValueError(f"{label} is empty or has an incomplete final record")
     if b"\r" in data or b"\0" in data:

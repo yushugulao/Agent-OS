@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic complete-state archives for offline dual evidence replay."""
+"""用于离线双平台证据重放的确定性完整状态归档。"""
 from __future__ import annotations
 
 import argparse

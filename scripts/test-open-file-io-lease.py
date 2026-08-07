@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the trusted open-file authorization context."""
+"""可信打开文件授权上下文的变异测试。"""
 
 from __future__ import annotations
 
@@ -39,9 +39,9 @@ class OpenFileIoLeaseTests(unittest.TestCase):
 
     def mutate(self, relative: str, old: str, new: str) -> None:
         path = self.root / relative
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         self.assertIn(old, source)
-        path.write_text(source.replace(old, new, 1))
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
     def assert_rejected(self, message: str) -> None:
         result = self.run_check()

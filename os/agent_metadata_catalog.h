@@ -6,7 +6,7 @@
 #include "fs.h"
 
 #define AGENT_META_STALE_BYTES ((AGENT_FILE_META_MAX + 7) / 8)
-/* A reload can retain both active and retiring workflow generations. */
+/* 重载时可同时保留活动及退役中的工作流代际。 */
 #define AGENT_CATALOG_SCOPE_PLAN_MAX 8
 #define AGENT_FILE_EXPLICIT_RESERVE 16
 #define AGENT_FILE_AUTOSCAN_SCOPE_LIMIT \
@@ -53,7 +53,7 @@ agent_metadata_catalog_identity_state(const struct agent_file_meta *meta) {
 	return present ? 1 : absent ? 0 : -1;
 }
 
-/* Views are transaction-local and must be dropped before a work checkpoint. */
+/* 视图仅属于当前事务，工作检查点前必须释放。 */
 struct agent_catalog_view {
 	const struct agent_file_meta *meta;
 	uint scope_id;
@@ -61,10 +61,9 @@ struct agent_catalog_view {
 };
 
 /*
- * Read-mostly queries snapshot only the bounded candidate bitmap.  Individual
- * records are copied under a short IRQ exclusion and the generation/lifecycle
- * fence is checked before publication, so readers never retain catalog
- * pointers while sleeping or waiting behind durable metadata I/O.
+ * 读多写少查询只快照有界候选位图。单条记录在短暂关中断区内复制，
+ * 发布前校验代际和生命周期栅栏；休眠或等待持久元数据输入输出时不持有
+ * 目录指针。
  */
 struct agent_catalog_read_snapshot {
 	uint64 generation;
@@ -73,7 +72,7 @@ struct agent_catalog_read_snapshot {
 	uint64 candidates[AGENT_CATALOG_READ_WORDS];
 };
 
-/* Edits use catalog-owned scratch; commit is the only mutation boundary. */
+/* 编辑使用目录自有暂存区；提交是唯一变更边界。 */
 struct agent_catalog_edit {
 	struct agent_file_meta *meta;
 	uint scope_id;
@@ -81,15 +80,14 @@ struct agent_catalog_edit {
 };
 
 /*
- * A synchronous durable mutation keeps this catalog-only fence while the
- * metadata transaction temporarily drops its gate for bounded device work.
- * The cookie is issued and verified by the catalog; callers only carry it.
+ * 同步持久变更短暂释放事务门锁执行有界设备操作时，持有此目录专用栅栏。
+ * 令牌由目录签发和校验，调用方仅负责传递。
  */
 struct agent_catalog_mutation_fence {
 	uint64 token;
 };
 
-/* Exact post-mutation identity required before an in-memory rollback. */
+/* 回滚内存状态前必须精确匹配变更后的身份。 */
 struct agent_catalog_undo_token {
 	uint64 fence_token, catalog_generation, slot_binding;
 	int slot;
@@ -102,7 +100,7 @@ struct agent_catalog_resolution {
 	uint provided, matched, states;
 };
 
-/* Immutable values exchanged between the live catalog and durable store. */
+/* 活目录与持久存储之间只交换不可变值。 */
 struct agent_meta_record {
 	struct agent_file_meta meta;
 	uint scope_id, slot;
@@ -110,9 +108,8 @@ struct agent_meta_record {
 };
 
 /*
- * Catalog commits coalesce by stable slot until the durable store consumes
- * them.  Sequence guards let a commit retire only the exact snapshot it
- * wrote while a newer mutation to the same slot remains pending.
+ * 目录提交按稳定槽位合并，直至持久存储消费。序列保护确保提交只清退
+ * 自己写入的精确快照，同槽位的更新版本仍可保持待处理。
  */
 struct agent_catalog_journal_change {
 	uint64 sequence;
@@ -142,7 +139,7 @@ struct agent_catalog_journal_settle {
 		entries[AGENT_CATALOG_JOURNAL_CHANGE_MAX];
 };
 
-/* Store-to-projection commit record; slot bits describe the final snapshot. */
+/* 存储到投影的提交记录；槽位位图描述最终快照。 */
 struct agent_catalog_delta {
 	int full_reset;
 	uint scope_id;

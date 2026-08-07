@@ -342,6 +342,7 @@ struct agent_info {
 	uint64 timeline_wait_timeout_count;
 	uint64 filesystem_domain;
 	uint64 filesystem_capability_mask;
+	/* 退役 ABI 字段，内核恒填零。 */
 	uint64 legacy_mailbox_allocated;
 	uint64 legacy_mailbox_pages;
 	uint64 legacy_mailbox_queue_count;
@@ -676,7 +677,7 @@ struct agent_file_query_result {
 	int plan;
 	int index_bucket;
 	int candidate_records;
-	/* Slots actually visited while rebuilding an invalid index. */
+	/* 重建无效索引时实际访问的槽位数。 */
 	int index_rebuild_records;
 	int reserved;
 	uint64 query_ticks;

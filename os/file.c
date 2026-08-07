@@ -374,7 +374,7 @@ static void fileclose_finish_direct(struct file_close_receipt *receipt)
 
 	switch (receipt->type) {
 	case FD_NONE:
-		// A reserved file slot may be released before it is initialized.
+		// 保留文件槽可能在初始化前释放。
 		break;
 	case FD_STDIO:
 		// Do nothing
@@ -596,7 +596,7 @@ void fileclose(struct file *f)
 		fileclose_finish(&receipt);
 }
 
-// Pin an open-file entry across operations that may yield.
+// 在可能让出处理器的操作之间固定打开文件项。
 struct file *filedup(struct file *f)
 {
 	int enabled = intr_save();

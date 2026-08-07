@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canonical, side-effect-free contracts for dual-platform evidence."""
+"""双平台证据的规范无副作用合同。"""
 from __future__ import annotations
 
 from dataclasses import dataclass

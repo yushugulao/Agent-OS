@@ -584,8 +584,8 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 except OSError:
                     pass
                 else:
-                    # Some MSYS filesystems emulate symlinks as ordinary files;
-                    # only require link rejection when Python would follow it.
+                    # 某些 MSYS 文件系统把符号链接模拟为普通文件；仅当 Python
+                    # 会跟随链接时才要求拒绝。
                     if RUNNER.is_link_or_junction(combined):
                         with self.assertRaisesRegex(
                             RUNNER.RegressionError, "contains a link"

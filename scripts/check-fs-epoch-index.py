@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the generation-stamped filesystem epoch index."""
+"""检查带代际戳的文件系统 epoch 索引。"""
 
 import argparse
 import re

@@ -6,19 +6,6 @@ unsigned char kernel_budget_trapframe_admitted_pool
 	[THREAD_RESOURCE_POOL_SIZE * PAGE_SIZE];
 unsigned char kernel_budget_trapframe_reserved_pool
 	[THREAD_RESOURCE_RESERVED_LIMIT * PAGE_SIZE];
-unsigned char kernel_budget_legacy_mail_sidecar_per_process
-	[MAILBOX_SIDECAR_PAGE_COUNT * PAGE_SIZE];
-unsigned char kernel_budget_legacy_mail_sidecar_pool
-	[NPROC * MAILBOX_SIDECAR_PAGE_COUNT * PAGE_SIZE];
-unsigned char kernel_budget_legacy_mail_sidecar_ordinary_pool
-	[PROC_ORDINARY_SLOTS * MAILBOX_SIDECAR_PAGE_COUNT * PAGE_SIZE];
-unsigned char kernel_budget_legacy_mail_sidecar_reserved_pool
-	[PROC_RESERVED_SLOTS * MAILBOX_SIDECAR_PAGE_COUNT * PAGE_SIZE];
-unsigned char kernel_budget_legacy_mail_sidecar_domain_ordinary
-	[PROC_RESOURCE_DOMAIN_LIMIT * MAILBOX_SIDECAR_PAGE_COUNT * PAGE_SIZE];
-unsigned char kernel_budget_legacy_mail_sidecar_domain_reserved
-	[PROC_RESOURCE_DOMAIN_RESERVED_LIMIT * MAILBOX_SIDECAR_PAGE_COUNT *
-	 PAGE_SIZE];
 unsigned char kernel_budget_kernel_stack_virtual_capacity
 	[KSTACK_VIRTUAL_CAPACITY_BYTES];
 unsigned char kernel_budget_kernel_stack_reserved_physical_pool

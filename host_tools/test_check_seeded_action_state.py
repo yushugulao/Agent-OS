@@ -339,8 +339,8 @@ class SeededActionStateTests(unittest.TestCase):
             forged = b"".join(rows)
             (state / checker.TASK6_ARTIFACT_INPUT_STORAGE).write_bytes(input_data)
             (state / checker.TASK6_ARTIFACT_OUTPUT_STORAGE).write_bytes(forged)
-            # A caller can recompute labels for forged bytes; validation still
-            # anchors the accepted output to the registered transformation.
+        # 调用方可以为伪造字节重新计算标签；校验仍须将接受的输出
+        # 锚定到已注册的转换过程。
             self.assertNotEqual(
                 checker.task6_fnv64(forged),
                 checker.derive_challenge(checker.DEFAULT_CHALLENGE).derived_fnv64,

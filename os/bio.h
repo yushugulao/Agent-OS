@@ -17,7 +17,7 @@ enum bio_checkpoint_state {
 	BIO_CHECKPOINT_INTERRUPTED,
 };
 
-/* Keep scheduling control out of integer device/filesystem error domains. */
+/* 调度控制不混入设备或文件系统的整数错误域。 */
 struct bio_checkpoint_result {
 	enum bio_checkpoint_state state;
 };
@@ -43,7 +43,7 @@ bio_checkpoint_should_stop(struct bio_checkpoint_result result)
 struct buf {
 	int valid; // has data been read from disk?
 	int disk; // does disk "own" buf?
-	int disk_result; // result of the most recent device transfer
+	int disk_result; // 最近一次设备传输结果
 	uint dev;
 	uint blockno;
 	uint refcnt;
@@ -59,7 +59,7 @@ struct buf {
 	uint hold_depth;
 	struct wait_queue holder_waiters;
 	struct buf *hash_next;
-	struct buf *prev; // intrusive idle-queue links
+	struct buf *prev; // 侵入式空闲队列链接
 	struct buf *next;
 	uchar data[BSIZE];
 };
@@ -121,7 +121,7 @@ int bio_deferred_owner_retain_current(uint, uint *, uint64 *);
 int bio_deferred_owner_retain_cleanup(uint, uint *);
 void bio_deferred_owner_release(uint);
 
-/* Eight-byte generation checked handle; the mutable receipt lives in BIO. */
+/* 八字节代际校验句柄；可变收据由块输入输出层持有。 */
 struct bio_cleanup_token {
 	uint slot;
 	uint generation;
@@ -130,20 +130,20 @@ struct bio_cleanup_token {
 #define BIO_CLEANUP_TOKEN_INIT { 0 }
 
 int bio_cleanup_token_prepare(uint, struct bio_cleanup_token *);
-/* Cleanup tokens are asynchronous identities and never borrow a request. */
+/* 清理令牌是异步身份，不借用请求。 */
 int bio_cleanup_token_sponsor(const struct bio_cleanup_token *, uint *, uint *);
 int bio_cleanup_token_begin(struct bio_cleanup_token *);
 int bio_cleanup_token_end(struct bio_cleanup_token *);
 int bio_cleanup_sponsor_covers(uint, uint, uint64);
 /*
- * An independent lease returns NEED_SETTLEMENT while the filesystem gate is
- * held.  Request/background reuse owns no lease and may release in the gate.
+ * 持有文件系统门锁时，独立租约返回 NEED_SETTLEMENT。请求及后台复用
+ * 不持有租约，可在门锁内释放。
  */
 #define BIO_CLEANUP_RELEASED 0
 #define BIO_CLEANUP_NEEDS_SETTLEMENT 1
 int bio_cleanup_token_release(struct bio_cleanup_token *, int);
 
-/* A zero origin request id makes the sponsor strictly asynchronous. */
+/* 来源请求编号为零时，代办者必须完全异步。 */
 int bio_deferred_sponsor_begin(uint, uint, uint64);
 void bio_deferred_sponsor_end(void);
 int bio_deferred_polling_current(void);

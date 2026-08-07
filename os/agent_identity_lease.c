@@ -148,7 +148,7 @@ agent_identity_lease_progress(void)
 	agent_identity_leases.progressing = 0;
 	agent_identity_leases.renew_requested = 1;
 	intr_restore(enabled);
-	/* The dispatched-thread checkpoint polls this latch again. */
+	/* 已分派线程的检查点会再次轮询此锁存位。 */
 	return -1;
 }
 
@@ -212,7 +212,7 @@ agent_identity_lease_maintain(void)
 	int pending;
 	int enabled = intr_save();
 
-	/* Core admits this entry only for a live dispatched thread. */
+	/* 核心仅允许存活的已分派线程进入此处。 */
 	pending = agent_identity_lease_pending_locked();
 	intr_restore(enabled);
 	if (pending)
@@ -275,7 +275,7 @@ agent_identity_lease_allocator_renew(uint kind)
 	    agent_identity_leases.phase != AGENT_IDENTITY_LEASE_FAILED)
 		agent_identity_leases.renew_requested = 1;
 	intr_restore(enabled);
-	/* Allocation paths never enter the sleeping persistence owner. */
+	/* 分配路径绝不进入可能睡眠的持久化所有者。 */
 	return -1;
 }
 
@@ -335,7 +335,7 @@ agent_identity_lease_lifecycle_renew(void)
 	    agent_identity_leases.phase != AGENT_IDENTITY_LEASE_FAILED)
 		agent_identity_leases.renew_requested = 1;
 	intr_restore(enabled);
-	/* Lifecycle admission retries after schedulable background maintenance. */
+	/* 生命周期接纳在可调度后台维护后重试。 */
 	return -1;
 }
 

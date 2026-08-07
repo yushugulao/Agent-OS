@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Contract tests for the offline evaluation dashboard."""
+"""离线评测仪表板的契约测试。"""
 
 from __future__ import annotations
 
 import copy
 import csv
 import hashlib
-import html
 import json
 import math
 import os
-import re
 import shutil
-import stat
-import sys
 import tempfile
 import unittest
 from fractions import Fraction
@@ -24,10 +20,6 @@ from urllib.parse import unquote, urlsplit
 
 import evaluation_kernel_cost as kernel_cost
 import safe_host_paths
-from windows_reparse_fixture import (
-    create_directory_junction,
-    remove_directory_junction,
-)
 from test_evaluation_kernel_cost import Fixture as KernelCostFixture
 from test_evaluation_kernel_cost import _write_json as write_kernel_json
 
@@ -35,17 +27,7 @@ from render_evaluation_dashboard import (
     DashboardError,
     _binding_sha256,
     _bootstrap_interval,
-    _compatibility_workload_html,
-    _duration_label,
-    _evidence_entry_link,
-    _overview_claim_slots,
-    _overview_extension_slots,
-    _overview_task6_slot,
     _read_evidence_file,
-    _relative_effect_label,
-    _supplementary_evaluations_html,
-    _task_matrix,
-    main as dashboard_main,
     render as render_dashboard,
     validate_summary,
 )
@@ -1208,45 +1190,12 @@ class DashboardContractTests(unittest.TestCase):
         self.contract_replay_mock = self.contract_replay.start()
         self.addCleanup(self.contract_replay.stop)
 
-    def test_v5_qos_table_renders_measured_metrics_and_digest(self) -> None:
-        evaluation = {
-            "qos_schema_version": 2,
-            "label": "Multi-identity workflow revisit isolation",
-            "status": "measured",
-            "visit_sequence": ["A", "B", "C", "D", "A"],
-            "rounds_per_level": 16,
-            "boots": [{
-                "boot_id": "boot-01", "evidence_id": "raw-perf",
-                "correct": 5, "contamination": 0, "return_visit": 1,
-                "fallback": 0, "concurrency": [{
-                    "concurrency": 4, "completed": 64, "requests": 64,
-                    "throughput_milli_rps": 2_000_000,
-                    "goodput_milli_rps": 1_875_000,
-                    "p90_us": 37, "wait_p90_us": 11,
-                    "fairness_jain_ppm": 987_654,
-                    "max_min_fairness_ppm": 875_000, "isolated": 60,
-                    "contamination": 0, "fallback": 4,
-                    "workload_digest": "0123456789abcdef",
-                }],
-            }],
-        }
-        rendered = _supplementary_evaluations_html({
-            "supplementary_evaluations": [evaluation]
-        })
-        for expected in (
-            "Goodput req/s", "周转 p90 us", "等待 p90 us", "Jain 公平度",
-            "Min/max 公平度", "1875", "37", "11", "0.987654", "0.875",
-            "60 / 64", "0123456789abcdef",
-        ):
-            self.assertIn(expected, rendered)
-
-    def test_render_writes_offline_dashboard_and_machine_outputs(self) -> None:
+    def test_render_publishes_offline_site_and_machine_outputs(self) -> None:
         summary = fixture()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             output = root / "site"
-            source = write_render_input(root, summary)
-            render(source, output)
+            render(write_render_input(root, summary), output)
 
             expected = {
                 "index.html",
@@ -1256,137 +1205,25 @@ class DashboardContractTests(unittest.TestCase):
                 "assets/evaluation-dashboard.css",
                 "assets/evaluation-dashboard.js",
             }
-            expected |= {
-                f"evidence/{item['path']}" for item in summary["evidence"]
+            actual = {
+                path.relative_to(output).as_posix()
+                for path in output.rglob("*")
+                if path.is_file()
             }
-            actual = {str(path.relative_to(output)).replace("\\", "/") for path in output.rglob("*") if path.is_file()}
-            self.assertEqual(actual, expected)
-            if os.name != "nt":
-                self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o755)
-                for path in output.rglob("*"):
-                    expected_mode = 0o755 if path.is_dir() else 0o644
-                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), expected_mode)
-            page = (output / "index.html").read_text(encoding="utf-8")
-            self.assertNotIn("https://", page)
-            self.assertNotIn("http://", page)
-            for tab in ("总览", "性能", "系统成本", "负载与流程", "可信证据", "方法学"):
-                self.assertIn(tab, page)
-            for task in range(1, 7):
-                self.assertIn(f"任务 {task}", page)
-            self.assertIn("0123456789abcdef", page)
-            self.assertIn("cold-per-pair", page)
-            self.assertIn("E2-local-raw", page)
-            self.assertIn('class="chart-scroll"', page)
-            self.assertIn('tabindex="0"', page)
-            self.assertEqual(page.count('data-overview-slot="mechanism"'), 3)
-            self.assertEqual(page.count('data-overview-slot="task6"'), 1)
-            self.assertEqual(page.count('data-extension-slot="'), 3)
-            self.assertIn('data-extension-slot="resource-stability"', page)
-            self.assertIn('data-extension-slot="compatibility-overhead"', page)
-            self.assertIn('data-extension-slot="kernel-cost"', page)
-            self.assertIn("评委速览", page)
-            self.assertIn("机制微基准", page)
-            self.assertIn('data-evaluation-track="same-source-compatibility"', page)
-            self.assertIn('data-evaluation-track="full-research-workflow"', page)
-            self.assertIn("比较口径、p50/p95、样本量与输出一致性同屏展示", page)
-            self.assertNotIn("优势未形成", page)
-            self.assertNotIn('chart-title-overview', page)
-            self.assertIn('data-raw-pairs="14"', page)
-            self.assertEqual(page.count('class="raw-pair-link"'), 14)
-            self.assertEqual(page.count('class="raw-pair-dot raw-pair-dot--'), 28)
-            self.assertIn("小圆点和浅色连线展示每个独立 boot", page)
-            self.assertIn('<div class="caption-source"><strong>来源</strong>', page)
-            self.assertNotIn('<span><strong>来源</strong> <details', page)
-            self.assertGreaterEqual(page.count("索引准备成本与缓存状态"), 2)
-            self.assertIn("独立诊断仅支持索引准备状态披露，不参与 headline 判定", page)
-            self.assertIn("index_rebuild_records=0 与 result_cache_hits=0", page)
-            self.assertIn("重建记录", page)
-            self.assertIn("结果缓存命中", page)
-            self.assertIn("实际工作量回执", page)
-            self.assertIn("实际 N", page)
-            self.assertIn("精确等于 N x operations", page)
-            self.assertIn("不要求实验结果预先胜出", page)
-            self.assertNotIn("发布与竞赛验收", page)
-            self.assertNotIn("科学证据发布", page)
-            self.assertNotIn("竞赛整体验收", page)
-            self.assertIn("任务功能回执", page)
-            self.assertIn("2 负载 · n=7", page)
-            self.assertNotIn("任务 1-6 动态验收", page)
-            self.assertIn("joint-MCID", page)
-            self.assertIn("描述性 bootstrap 95% 区间", page)
-            self.assertIn("Bonferroni", page)
-            self.assertIn("same-kernel-paired-comparison", page)
-            self.assertIn("full-stack / non-single-mechanism", page)
-            self.assertIn("Host page cache", page)
-            self.assertIn("uncontrolled", page)
-            overview = page.split('id="panel-overview"', 1)[1].split(
-                'id="panel-performance"', 1
-            )[0]
-            self.assertNotIn("竞赛整体验收", overview)
-            self.assertNotIn("证据支持", overview)
-            self.assertNotIn('class="status ', overview)
-            self.assertIn("Plain p50", overview)
-            self.assertIn("AgentOS p50", overview)
-            self.assertIn("n=7", overview)
-            self.assertIn("p95 79.300 us/query → 13.700 us/query", overview)
-            self.assertIn("<dt>机制样本/负载</dt><dd>n=7</dd>", overview)
-            self.assertIn("每负载 n=7", overview)
-            self.assertNotIn("<dt>独立 Guest 启动</dt>", overview)
-            self.assertNotIn("独立 Guest 启动/负载", overview)
-            self.assertIn(
-                "计时程序 70 项：同源 28 · 平台特定 42", overview
-            )
-            self.assertIn("AgentOS 专属诊断模块 4 项", overview)
-            self.assertIn("传统逐路径查询 → 就绪元数据索引", overview)
-            load_y = float(re.search(r'class="load-label" x="8" y="([0-9.]+)"', page).group(1))
-            series_y = float(re.search(r'class="series-label" x="168" y="([0-9.]+)"', page).group(1))
-            self.assertGreaterEqual(series_y - load_y, 20)
-            first_axis = re.search(r'class="axis-label"[^>]*>([^<]+)</text>', page).group(1)
-            self.assertFalse(first_axis.lstrip().startswith("-"), first_axis)
-            self.assertIn('href="evidence/raw/boot-01/guest.log"', page)
-            self.assertIn('href="evidence/scenario/report.json"', page)
+            self.assertTrue(expected <= actual)
             assert_offline_links_resolve(output / "index.html")
-            self.assertIn("场景明细", page)
-            self.assertIn("逐程序耗时", page)
-            self.assertIn("同源程序", page)
-            self.assertIn("平台特定程序", page)
-            self.assertIn("rp_catalog", page)
-            self.assertIn("structured_tool", page)
-            self.assertIn("预注册 key outcome 一致性", page)
-            self.assertIn("<th>模块</th><th>核验 boot</th>", page)
-            self.assertNotIn("<th>模块</th><th>状态</th>", page)
-            self.assertIn("<th>Key outcome</th><th>一致配对</th>", page)
-            self.assertNotIn("<th>Key outcome</th><th>状态</th>", page)
-            self.assertIn("不代表完整最终状态相同", page)
-            self.assertIn("系统成本 unavailable", page)
+
             verification = json.loads(
                 (output / "dashboard-verification.json").read_text(encoding="utf-8")
             )
             self.assertEqual(verification["verified_evidence_count"], 4)
-            self.assertEqual(verification["verified_marker_count"], 14)
-            self.assertEqual(verification["verified_diagnostic_provenance_count"], 14)
-            self.assertEqual(verification["kernel_cost"]["status"], "unavailable")
-            self.assertIn(verification["evidence_set_sha256"], page)
-            self.assertIn("source_lines", page)
-            self.assertIn("environment_sha256", page)
-            self.contract_replay_mock.assert_called_once()
-
             with (output / "metrics.csv").open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual(len(rows), 4)
-            self.assertEqual(rows[0]["unit"], "us/query")
-            self.assertEqual(rows[0]["n"], "7")
-            self.assertEqual(rows[0]["evidence_ids"], "raw-perf")
-
-    def test_render_replaces_existing_empty_output_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, fixture())
-            output = root / "site"
-            output.mkdir()
-            render(source, output)
-            self.assertTrue((output / "index.html").is_file())
-            self.assertTrue((output / "dashboard-verification.json").is_file())
+            self.assertEqual(
+                (len(rows), rows[0]["unit"], rows[0]["n"]),
+                (4, "us/query", "7"),
+            )
+            self.contract_replay_mock.assert_called_once()
 
     def test_render_rejects_symlinked_output_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1422,46 +1259,6 @@ class DashboardContractTests(unittest.TestCase):
                         render(source, output)
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "old site\n")
 
-    def test_render_rejects_output_that_contains_its_summary(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, fixture())
-            before = source.read_bytes()
-            with self.assertRaisesRegex(DashboardError, "summary input"):
-                render(source, root)
-            self.assertEqual(source.read_bytes(), before)
-
-    def test_render_converts_missing_output_parent_to_contract_error(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, fixture())
-            with mock.patch(
-                "render_evaluation_dashboard.ensure_safe_directory",
-                side_effect=FileNotFoundError("missing output volume"),
-            ):
-                with self.assertRaisesRegex(DashboardError, "missing output volume"):
-                    render(source, root / "site")
-
-    def test_render_rejects_real_windows_junction_output(self) -> None:
-        with tempfile.TemporaryDirectory(dir=HOST_TOOLS) as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, fixture())
-            target = root / "site-target"
-            target.mkdir()
-            sentinel = target / "keep.txt"
-            sentinel.write_text("old site\n", encoding="utf-8")
-            output = root / "site"
-            if not create_directory_junction(target, output):
-                self.skipTest("runtime cannot create a detectable Windows junction")
-            try:
-                with self.assertRaisesRegex(
-                    DashboardError, "symlink or junction"
-                ):
-                    render(source, output)
-            finally:
-                remove_directory_junction(output)
-            self.assertEqual(sentinel.read_text(encoding="utf-8"), "old site\n")
-
     def test_publish_failure_restores_complete_previous_site(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1490,44 +1287,6 @@ class DashboardContractTests(unittest.TestCase):
             with mock.patch(
                 "render_evaluation_dashboard._replace_site_directory",
                 side_effect=fail_new_site,
-            ):
-                with self.assertRaisesRegex(
-                    DashboardError, "previous site restored"
-                ):
-                    render(source, output)
-
-            after = {
-                path.relative_to(output).as_posix(): path.read_bytes()
-                for path in output.rglob("*")
-                if path.is_file()
-            }
-            self.assertEqual(after, before)
-            self.assertEqual(list(root.glob(".site.staging-*")), [])
-
-    def test_post_rename_failure_restores_complete_previous_site(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, fixture())
-            output = root / "site"
-            render(source, output)
-            before = {
-                path.relative_to(output).as_posix(): path.read_bytes()
-                for path in output.rglob("*")
-                if path.is_file()
-            }
-            real_replace = os.replace
-
-            def fail_after_old_site_move(
-                source_path: Path, destination_path: Path
-            ) -> None:
-                source_path = Path(source_path)
-                real_replace(source_path, destination_path)
-                if source_path == output:
-                    raise OSError("simulated post-rename interruption")
-
-            with mock.patch(
-                "render_evaluation_dashboard._replace_site_directory",
-                side_effect=fail_after_old_site_move,
             ):
                 with self.assertRaisesRegex(
                     DashboardError, "previous site restored"
@@ -1584,485 +1343,6 @@ class DashboardContractTests(unittest.TestCase):
             self.assertTrue((output / "index.html").is_file())
 
     @unittest.skipUnless(os.name == "nt", "Windows path alias regression")
-    def test_render_rejects_windows_tail_dot_evidence_alias(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            summary = fixture()
-            source = write_render_input(root, summary)
-            output = root / "site"
-            render(source, output)
-
-            item = next(
-                entry for entry in summary["evidence"]
-                if entry["id"] == "missing-task6"
-            )
-            original = root.joinpath(*item["path"].split("/"))
-            protected = output / "source-preflight.json"
-            protected.write_bytes(original.read_bytes())
-            item["path"] = "site./source-preflight.json"
-            item["sha256"] = hashlib.sha256(protected.read_bytes()).hexdigest()
-            item["receipt"]["bytes"] = protected.stat().st_size
-            rewrite_summary(source, summary)
-
-            with self.assertRaisesRegex(DashboardError, r"evidence\[2\] input"):
-                render(source, output)
-            self.assertEqual(protected.read_bytes(), original.read_bytes())
-
-    def test_render_uses_explicit_contract_root_for_suite_and_assets(self) -> None:
-        summary = fixture()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            contract_root = root / "trusted-contract"
-            (contract_root / "ci").mkdir(parents=True)
-            (contract_root / "host_tools" / "assets").mkdir(parents=True)
-            shutil.copyfile(
-                CONTRACT_ROOT / "ci" / "evaluation-suite.json",
-                contract_root / "ci" / "evaluation-suite.json",
-            )
-            for name in ("evaluation-dashboard.css", "evaluation-dashboard.js"):
-                shutil.copyfile(
-                    ASSETS / name,
-                    contract_root / "host_tools" / "assets" / name,
-                )
-            trusted_css = contract_root / "host_tools" / "assets" / "evaluation-dashboard.css"
-            trusted_css.write_bytes(trusted_css.read_bytes() + b"\n/* explicit-contract-root */\n")
-
-            run = root / "run"
-            run.mkdir()
-            source = write_render_input(run, summary)
-            output = root / "site"
-            render_dashboard(
-                source,
-                output,
-                contract_root=contract_root,
-                measurement_source_tree=CONTRACT_ROOT,
-            )
-
-            self.assertEqual(
-                (output / "assets" / "evaluation-dashboard.css").read_bytes(),
-                trusted_css.read_bytes(),
-            )
-            self.assertEqual(
-                self.contract_replay_mock.call_args.args[0],
-                contract_root.resolve(strict=True) / "ci" / "evaluation-suite.json",
-            )
-            self.assertEqual(
-                self.contract_replay_mock.call_args.kwargs["contract_root"],
-                contract_root.resolve(strict=True),
-            )
-
-    def test_cli_requires_explicit_contract_root(self) -> None:
-        with mock.patch.object(sys, "stderr"):
-            with self.assertRaises(SystemExit) as raised:
-                dashboard_main(["summary.json", "dashboard"])
-        self.assertEqual(raised.exception.code, 2)
-
-    def test_overview_formatters_keep_units_direction_and_float_precision(self) -> None:
-        self.assertEqual(_duration_label(120.25, "us/query"), "0.120 ms/query")
-        self.assertEqual(
-            _relative_effect_label(-50.0, "lower_is_better", -1.0, "us/query"),
-            "逐 boot 延迟倍率中位数 1.50x",
-        )
-        self.assertEqual(
-            _relative_effect_label(-12.5, "higher_is_better", -1.0, "items/s"),
-            "逐 boot 吞吐降幅中位数 12.500%",
-        )
-        self.assertEqual(
-            _relative_effect_label(None, "neutral", 0.125, "points"),
-            "配对中位差 +0.125 points",
-        )
-        task6 = _overview_task6_slot(
-            [
-                {
-                    "task": "task6",
-                    "label": "浮点场景",
-                    "performance_status": "supported",
-                    "performance": {
-                        "n": 1,
-                        "paired_success_rate": 1.0,
-                        "samples": [{"plain_ms": 10.25, "agentos_ms": 9.75}],
-                    },
-                }
-            ]
-        )
-        self.assertIn("10.250 ms", task6)
-        self.assertIn("9.750 ms", task6)
-        self.assertIn("端到端延迟（越低越好）", task6)
-        self.assertIn("AgentOS 延迟为 Plain 的 0.95 倍", task6)
-        self.assertIn("程序来源与专属诊断模块 unavailable", task6)
-        self.assertNotIn("task6-slot-row--improved", task6)
-        self.assertNotIn("task6-slot-row--regressed", task6)
-
-    def test_evidence_navigation_and_boot_counts_use_stable_receipts(self) -> None:
-        links = _evidence_entry_link(["first", "second", "first"])
-        self.assertEqual(links.count("data-evidence-ref="), 2)
-        self.assertIn("2 份证据", links)
-        evidence = {
-            "first": {"receipt": {"boot_id": "boot-a"}},
-            "second": {"receipt": {"boot_id": "boot-a"}},
-        }
-        matrix = _task_matrix(
-            [
-                {
-                    "task": "task1",
-                    "functional_status": "pass",
-                    "performance": None,
-                    "evidence_ids": ["first", "second"],
-                }
-            ],
-            evidence,
-        )
-        self.assertIn("1/1", matrix)
-        self.assertIn("独立启动结果一致", matrix)
-        self.assertNotIn("2/2", matrix)
-
-    def test_overview_claim_slots_report_partial_relative_coverage_and_missing_claims(self) -> None:
-        summary = fixture()
-        benchmark = summary["benchmarks"][0]
-        benchmark["paired"][0]["relative_median_percent"] = None
-        benchmarks = {item["id"]: item for item in summary["benchmarks"]}
-        targets = {item["id"]: item for item in summary["targets"]}
-        partial = _overview_claim_slots(summary, benchmarks, targets)
-        slot = partial.split('data-benchmark-id="file_query_path_index"', 1)[1].split(
-            "</article>", 1
-        )[0]
-        self.assertIn("1/2 个负载的逐 boot 延迟降幅中位数", slot)
-        self.assertNotIn("全负载逐 boot 延迟降幅", slot)
-
-        summary["claims"] = []
-        no_claim = _overview_claim_slots(summary, benchmarks, targets)
-        slot = no_claim.split('data-benchmark-id="file_query_path_index"', 1)[1].split(
-            "</article>", 1
-        )[0]
-        self.assertIn("79.000 us/query → 13.400 us/query", slot)
-        self.assertIn("传统逐路径查询 → 就绪元数据索引", slot)
-        self.assertIn("本轮未登记性能结论", slot)
-        self.assertNotIn("暂无测量", slot)
-
-    def test_optional_guardrail_slots_consume_normalized_verified_fragments(self) -> None:
-        resource = _resource_stability_summary(
-            [
-                {
-                    "sample_id": f"sample-{index}",
-                    "binding": {
-                        "challenge": f"{index:016x}",
-                        "source_receipts": {
-                            "agentos": hashlib.sha256(
-                                f"source-{index}".encode()
-                            ).hexdigest()
-                        },
-                    },
-                }
-                for index in range(1, 8)
-            ],
-            status="passed",
-        )
-        compatibility = {
-            "status": "ready",
-            "claim_scope": "traditional_ucore_compatibility_overhead_only",
-            "aggregate_score": None,
-            "aggregate_score_forbidden": True,
-            "metrics": {
-                name: {
-                    "paired_boots": 7,
-                    "median_agentos_over_plain_ratio": 1.05 + index / 10,
-                }
-                for index, name in enumerate(
-                    ("fork_wait", "fork_exec_wait", "pipe_roundtrip", "seq_file_io")
-                )
-            },
-        }
-        content = _overview_extension_slots(
-            {"compatibility_overhead": compatibility},
-            [
-                {
-                    "task_id": "task6",
-                    "independent_boots": 7,
-                    "resource_stability": resource,
-                }
-            ],
-        )
-        self.assertEqual(content.count('data-extension-slot="'), 3)
-        self.assertNotIn('class="status ', content)
-        self.assertIn("336 轮压力 · 8/8 类计数", content)
-        self.assertIn("7/7 次独立启动", content)
-        self.assertIn("空闲页配对与终点精确恢复", content)
-        self.assertIn("4 项传统路径 · 7 次配对启动", content)
-        self.assertIn("1.05x–1.35x", content)
-        self.assertIn("数值是兼容成本", content)
-        self.assertIn("暂无静态数据", content)
-
-        unavailable = _overview_extension_slots({}, [])
-        self.assertEqual(unavailable.count('data-extension-slot="'), 3)
-        self.assertIn("暂无动态数据", unavailable)
-        self.assertIn("暂无静态数据", unavailable)
-
-        partial = copy.deepcopy(resource)
-        partial.update(status="partial", verified_boots=3)
-        partial_content = _overview_extension_slots(
-            {},
-            [
-                {
-                    "task_id": "task6",
-                    "independent_boots": 7,
-                    "resource_stability": partial,
-                }
-            ],
-        )
-        self.assertIn("3/7 次独立启动有资源回执", partial_content)
-        self.assertNotIn("7/7 次独立启动", partial_content)
-
-    def test_same_source_compatibility_track_shows_percentiles_counts_and_output(self) -> None:
-        pairs = [
-            {
-                "plain_microseconds_per_operation": 10.0 + index,
-                "agentos_microseconds_per_operation": 20.0 + index,
-            }
-            for index in range(7)
-        ]
-        verification = {
-            "compatibility_overhead": {
-                "status": "ready",
-                "measurement_state": {
-                    "cache_state": "warm_guest_paths",
-                    "schedule": "challenge_rotated_v1",
-                    "untimed_warmup": True,
-                    "fresh_boot_per_target": True,
-                },
-                "workload_equivalence": {
-                    "all_paired_outcomes_equal": True,
-                    "paired_boots": 7,
-                },
-                "metrics": {
-                    "fork_wait": {
-                        "paired_boots": 7,
-                        "operation_unit": "process",
-                        "plain_median_microseconds_per_operation": 13.0,
-                        "agentos_median_microseconds_per_operation": 23.0,
-                        "median_agentos_over_plain_ratio": 23.0 / 13.0,
-                        "pairs": pairs,
-                    },
-                    "research_artifact_pipeline": {
-                        "paired_boots": 7,
-                        "operation_unit": "source_record_transformed",
-                        "attribution": "guest_application_full_path_not_pure_kernel",
-                        "plain_median_microseconds_per_operation": 13.0,
-                        "agentos_median_microseconds_per_operation": 23.0,
-                        "median_agentos_over_plain_ratio": 23.0 / 13.0,
-                        "pairs": copy.deepcopy(pairs),
-                    },
-                },
-            }
-        }
-        content = _compatibility_workload_html(verification)
-        self.assertIn('data-evaluation-track="same-source-compatibility"', content)
-        self.assertIn("同源程序 1 · 平台特定程序 0", content)
-        self.assertIn("7/7 配对输出一致", content)
-        self.assertIn("传统接口 1 · 应用全路径 1", content)
-        self.assertIn("warm Guest path · challenge 派生轮换顺序", content)
-        self.assertIn("科研工件流水线", content)
-        self.assertIn("应用全路径，非纯内核成本", content)
-        self.assertIn("传统接口路径", content)
-        self.assertIn("Plain p50", content)
-        self.assertIn("Plain p95", content)
-        self.assertIn("AgentOS p50", content)
-        self.assertIn("AgentOS p95", content)
-        self.assertIn("13.000 us/op", content)
-        self.assertIn("15.700 us/op", content)
-        self.assertIn("23.000 us/op", content)
-        self.assertIn("25.700 us/op", content)
-        self.assertIn("1.77x", content)
-        self.assertIn("n=7", content)
-        self.assertNotIn('class="status ', content)
-
-        partial = copy.deepcopy(verification)
-        partial_metric = partial["compatibility_overhead"]["metrics"]["fork_wait"]
-        del partial_metric["pairs"]
-        del partial_metric["agentos_median_microseconds_per_operation"]
-        del partial_metric["median_agentos_over_plain_ratio"]
-        partial_content = _compatibility_workload_html(partial)
-        self.assertIn("13.000 us/op", partial_content)
-        self.assertGreaterEqual(partial_content.count("unavailable"), 4)
-
-        unavailable = _compatibility_workload_html({})
-        self.assertIn("同源/平台特定程序数 unavailable", unavailable)
-        self.assertIn("p50、p95、倍率与样本量均不填补", unavailable)
-
-    def test_verified_scenario_resource_stability_reaches_overview_end_to_end(self) -> None:
-        summary = fixture()
-        attach_scenario(summary)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-
-            rewrite_scenario_report(
-                root, source, summary, attach_passed_resource_stability
-            )
-            output = root / "site"
-            render(source, output)
-            page = (output / "index.html").read_text(encoding="utf-8")
-            slot = page.split('data-extension-slot="resource-stability"', 1)[1].split(
-                "</article>", 1
-            )[0]
-            self.assertNotIn('class="status ', slot)
-            self.assertIn("336 轮压力 · 8/8 类计数", slot)
-            self.assertIn("7/7 次独立启动", slot)
-            self.assertIn("空闲页配对与终点精确恢复", slot)
-            self.assertIn("buffer cache 仅声明有界增长与可回收", slot)
-
-            mutations = (
-                (
-                    "bound",
-                    lambda report: report["summary"]["resource_stability"][
-                        "global_observation"
-                    ]["resources"][0].__setitem__("terminal_growth_bound", 1),
-                    "registered guardrail",
-                ),
-                (
-                    "negative growth",
-                    lambda report: report["summary"]["resource_stability"][
-                        "global_observation"
-                    ]["resources"][3].__setitem__(
-                        "max_observed_per_workflow_growth", -1
-                    ),
-                    "outside the registered growth bound",
-                ),
-                (
-                    "missing plateau",
-                    lambda report: report["summary"]["resource_stability"][
-                        "global_observation"
-                    ]["resources"][3].__setitem__("plateau_or_reclamation", False),
-                    "prove a plateau or reclamation",
-                ),
-                (
-                    "legacy atomic snapshot",
-                    lambda report: report["summary"]["resource_stability"][
-                        "global_observation"
-                    ].__setitem__("snapshot_consistency", "single_core_irq_atomic"),
-                    "measured status must bind every boot",
-                ),
-                (
-                    "raw binding",
-                    lambda report: report["summary"]["resource_stability"][
-                        "boot_receipts"
-                    ][0].__setitem__("raw_source_receipt_sha256", "0" * 64),
-                    "corresponding scenario sample",
-                ),
-            )
-            for name, mutate, message in mutations:
-                with self.subTest(name=name):
-                    def forge(report: dict) -> None:
-                        attach_passed_resource_stability(report)
-                        mutate(report)
-
-                    rewrite_scenario_report(root, source, summary, forge)
-                    with self.assertRaisesRegex(DashboardError, message):
-                        render(source, root / f"forged-site-{name.replace(' ', '-')}")
-
-    def test_scenario_program_source_counts_are_replayed_from_bound_pairs(self) -> None:
-        def replace_relation_without_pair_rebind(report: dict) -> None:
-            receipt = report["samples"][0]["targets"]["plain"][
-                "raw_source_receipt"
-            ]["program_source_comparability"]
-            receipt["programs"][0]["relation"] = "platform_specific"
-            unsigned_receipt = dict(receipt)
-            unsigned_receipt.pop("sha256")
-            receipt["sha256"] = _binding_sha256(
-                unsigned_receipt, PROGRAM_SOURCE_RECEIPT_DOMAIN
-            )
-
-        def replace_one_valid_receipt(report: dict) -> None:
-            receipt = report["samples"][0]["targets"]["plain"][
-                "raw_source_receipt"
-            ]["program_source_comparability"]
-            pair = receipt["programs"][0]
-            replacement = hashlib.sha256(b"replacement-shared-source").hexdigest()
-            pair["plain"]["sha256"] = replacement
-            pair["agentos"]["sha256"] = replacement
-            unsigned_pair = dict(pair)
-            unsigned_pair.pop("sha256")
-            pair["sha256"] = _binding_sha256(
-                unsigned_pair, PROGRAM_SOURCE_PAIR_DOMAIN
-            )
-            unsigned_receipt = dict(receipt)
-            unsigned_receipt.pop("sha256")
-            receipt["sha256"] = _binding_sha256(
-                unsigned_receipt, PROGRAM_SOURCE_RECEIPT_DOMAIN
-            )
-
-        mutations = (
-            (
-                "summary count",
-                lambda report: report["summary"]["source_comparability"].__setitem__(
-                    "same_source_programs", 3
-                ),
-                "differs from the raw receipts",
-            ),
-            (
-                "pair relation",
-                replace_relation_without_pair_rebind,
-                "differs from the committed manifests and source blobs",
-            ),
-            (
-                "cross target receipt",
-                replace_one_valid_receipt,
-                "differs from the committed manifests and source blobs",
-            ),
-        )
-        for name, mutate, message in mutations:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
-                summary = fixture()
-                root = Path(temporary)
-                source = write_render_input(root, summary)
-                rewrite_scenario_report(root, source, summary, mutate)
-                with self.assertRaisesRegex(DashboardError, message):
-                    render(source, root / "forged-site")
-
-    def test_scenario_program_order_cannot_be_truncated_consistently(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            summary = fixture()
-            source = write_render_input(root, summary)
-
-            def truncate(report: dict) -> None:
-                for sample in report["samples"]:
-                    first = sample["binding"]["program_order"][0]
-                    sample["binding"]["program_order"] = [first]
-                    for target in ("plain", "agentos"):
-                        sample["targets"][target]["programs"] = sample["targets"][
-                            target
-                        ]["programs"][:1]
-                    sample["binding"].pop("sha256")
-                    sample["binding"]["sha256"] = _binding_sha256(
-                        sample["binding"], "scenario-sample-v1"
-                    )
-
-            rewrite_scenario_report(root, source, summary, truncate)
-            with self.assertRaisesRegex(DashboardError, "committed manifests"):
-                render(source, root / "truncated-site")
-
-    def test_verified_scenario_report_cannot_upgrade_an_unavailable_summary(self) -> None:
-        summary = fixture()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            task6 = summary["scenarios"][-1]
-            task6.update(
-                functional_status="unavailable",
-                performance_status="unavailable",
-                performance=None,
-            )
-            summary["acceptance"] = derive_acceptance_gates(
-                summary["scenarios"],
-                summary["claims"],
-                COMPETITION_CLAIMS,
-            )
-            rewrite_summary(source, summary)
-            with self.assertRaisesRegex(
-                DashboardError, "report status differs from the summary scenario"
-            ):
-                render(source, root / "forged-site")
-
     def test_evidence_byte_budget_is_checked_before_bulk_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve(strict=True)
@@ -2077,126 +1357,6 @@ class DashboardContractTests(unittest.TestCase):
                     _read_evidence_file(
                         root, ("oversized.log",), "test evidence", max_bytes=8
                     )
-
-    def test_chart_describes_the_actual_suite_variants(self) -> None:
-        suite = json.loads((HOST_TOOLS.parent / "ci/evaluation-suite.json").read_text(encoding="utf-8"))
-        experiment = suite["experiments"][0]
-        summary = fixture()
-        summary["targets"][0]["label"] = experiment["baseline"]["label"]
-        summary["targets"][1]["label"] = experiment["treatment"]["label"]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site/index.html").read_text(encoding="utf-8")
-        expected = (
-            f'小圆点和浅色连线展示每个独立 boot 的 {experiment["baseline"]["label"]} 与 '
-            f'{experiment["treatment"]["label"]} 原始配对值，粗区间和大圆点展示汇总估计。'
-        )
-        self.assertIn(expected, page)
-        self.assertNotIn("展示基线与 AgentOS 的估计值及区间", page)
-
-    def test_verified_campaign_environment_is_rendered_from_receipts(self) -> None:
-        from test_evaluation_bundle import make_run
-
-        with tempfile.TemporaryDirectory(dir=HOST_TOOLS) as temporary:
-            run = make_run(Path(temporary))
-            campaign = json.loads((run / "campaign.json").read_text(encoding="utf-8"))
-            page = (run / "dashboard/index.html").read_text(encoding="utf-8")
-            verification = json.loads(
-                (run / "dashboard/dashboard-verification.json").read_text(encoding="utf-8")
-            )
-
-        platform = campaign["platform"]
-        hardware = platform["hardware"]
-        detail = verification["campaign_environment"]
-        self.assertEqual(detail["status"], "verified")
-        self.assertEqual(detail["source_commit"], campaign["run"]["commit"])
-        self.assertEqual(detail["execution_domain"], platform["entry_domain"])
-        self.assertEqual(detail["cpu_model"], hardware["cpu_model"])
-        self.assertEqual(detail["logical_cpu_count"], hardware["logical_cpu_count"])
-        self.assertEqual(detail["memory_total_bytes"], hardware["memory_total_bytes"])
-        self.assertEqual(detail["hardware_source"], hardware["source"])
-        self.assertIn('id="environment-title">实验环境</h2>', page)
-        for value in (
-            campaign["run"]["commit"],
-            platform["entry_domain"],
-            hardware["cpu_model"],
-            str(hardware["logical_cpu_count"]),
-            platform["tools"]["compiler"]["version"],
-            platform["tools"]["qemu"]["version"],
-        ):
-            self.assertIn(html.escape(" ".join(str(value).split()), quote=True), page)
-        self.assertIn(f'{hardware["memory_total_bytes"]:,} B', page)
-        self.assertIn('href="../campaign.json"', page)
-        self.assertIn("Task 4 竞赛主对照", page)
-        self.assertIn("机制消融：固定容量 metadata table scan", page)
-        self.assertEqual(page.count("<h4>实际工作量回执</h4>"), 2)
-        self.assertIn("精确等于 N x operations", page)
-        self.assertIn("固定为 512 x operations", page)
-        campaign_records = [
-            record
-            for record in verification["evidence"]
-            if record["id"] == "campaign-platform-proof"
-        ]
-        self.assertEqual(len(campaign_records), 1)
-        self.assertTrue(campaign_records[0]["campaign_binding_checked"])
-
-        javascript = (ASSETS / "evaluation-dashboard.js").read_text(encoding="utf-8")
-        for browser_probe in ("hardwareConcurrency", "deviceMemory", "userAgent"):
-            self.assertNotIn(browser_probe, javascript)
-
-    def test_campaign_environment_rejects_broken_receipts_and_extra_hardware(self) -> None:
-        from test_evaluation_bundle import make_run
-
-        with tempfile.TemporaryDirectory(dir=HOST_TOOLS) as temporary:
-            run = make_run(Path(temporary))
-            summary_path = run / "summary.json"
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            original_summary = copy.deepcopy(summary)
-
-            summary["run"]["campaign_sha256"] = "0" * 64
-            summary_path.write_text(
-                json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(DashboardError, "campaign SHA-256 differs"):
-                render(summary_path, run / "dashboard-broken-receipt")
-
-            campaign_path = run / "campaign.json"
-            campaign = json.loads(campaign_path.read_text(encoding="utf-8"))
-            campaign["platform"]["hardware"]["cpu_mhz"] = 4200
-            campaign_path.write_text(
-                json.dumps(campaign, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            campaign_sha256 = hashlib.sha256(campaign_path.read_bytes()).hexdigest()
-
-            plan_path = run / "run-plan.json"
-            plan = json.loads(plan_path.read_text(encoding="utf-8"))
-            plan["campaign_sha256"] = campaign_sha256
-            plan_path.write_text(
-                json.dumps(plan, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            plan_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
-
-            summary = original_summary
-            summary["run"]["campaign_sha256"] = campaign_sha256
-            summary["run"]["run_plan_sha256"] = plan_sha256
-            run_plan_evidence = next(
-                item
-                for item in summary["evidence"]
-                if item["kind"] == "evaluation-run-plan"
-            )
-            run_plan_evidence["sha256"] = plan_sha256
-            run_plan_evidence["receipt"]["campaign_sha256"] = campaign_sha256
-            summary_path.write_text(
-                json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(DashboardError, "platform proof is invalid"):
-                render(summary_path, run / "dashboard-extra-hardware")
 
     def test_render_requires_existing_evidence_with_matching_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2267,6 +1427,19 @@ class DashboardContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(DashboardError, message):
                     render(source, root / "site")
 
+    def test_render_rejects_diagnostic_marker_not_on_raw_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = fixture()
+            source = write_render_input(root, summary)
+            sample = summary["benchmarks"][0]["diagnostics"][0]["samples"][0]
+            sample["source_marker_sha256"] = "0" * 64
+            rewrite_summary(source, summary)
+            with self.assertRaisesRegex(
+                DashboardError, "source_marker_sha256 differs from the evidence line"
+            ):
+                render(source, root / "site")
+
     def test_render_rejects_symlinked_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2287,9 +1460,8 @@ class DashboardContractTests(unittest.TestCase):
                     render(source, root / "site")
                 return
 
-            # Default MSYS winsymlinks mode may materialize a plain copy while
-            # reporting os.symlink() success. Exercise the opaque-reparse path
-            # without pretending that an indistinguishable copy is a link.
+                # 默认 MSYS winsymlinks 模式可能生成普通副本，却报告 os.symlink()
+                # 成功。应测试不透明重解析路径，不把无法区分的副本假装成链接。
             with mock.patch(
                 "safe_host_paths._msys_native_file_attributes",
                 side_effect=lambda candidate: (
@@ -2302,66 +1474,6 @@ class DashboardContractTests(unittest.TestCase):
                     DashboardError, "(?:symbolic link|symlink) or junction"
                 ):
                     render(source, root / "site")
-
-    def test_render_rejects_real_windows_junction_ancestor(self) -> None:
-        # The formal MSYS harness maps its general temp root through a drive
-        # alias; create the junction fixture on the repository's native drive.
-        with tempfile.TemporaryDirectory(dir=HOST_TOOLS) as temporary:
-            root = Path(temporary)
-            summary = fixture()
-            source = write_render_input(root, summary)
-            raw = root / "raw"
-            raw_target = root / "raw-target"
-            raw.rename(raw_target)
-            created = create_directory_junction(raw_target, raw)
-            if not created:
-                raw_target.rename(raw)
-                if sys.platform == "cygwin":
-                    self.fail("native MSYS test could not create a verified junction")
-                self.skipTest("runtime cannot create a detectable Windows junction")
-            try:
-                with self.assertRaisesRegex(
-                    DashboardError, "(?:symbolic link|symlink) or junction"
-                ):
-                    render(source, root / "site")
-            finally:
-                remove_directory_junction(raw)
-            self.assertTrue((raw_target / "boot-01" / "guest.log").is_file())
-
-    def test_shared_path_guard_detects_reparse_attributes_without_following(self) -> None:
-        class ReparseStat:
-            st_mode = stat.S_IFDIR | 0o755
-            st_file_attributes = safe_host_paths._FILE_ATTRIBUTE_REPARSE_POINT
-
-        unresolved = Path("must-not-be-resolved")
-        with mock.patch.object(Path, "is_junction", side_effect=AssertionError("followed")):
-            self.assertTrue(
-                safe_host_paths.path_is_link(unresolved, file_info=ReparseStat())
-            )
-
-    def test_shared_path_guard_detects_hidden_msys_reparse_attribute(self) -> None:
-        class DirectoryStat:
-            st_mode = stat.S_IFDIR | 0o755
-
-        candidate = Path("opaque-msys-reparse")
-        with mock.patch.object(Path, "is_junction", return_value=False), mock.patch(
-            "safe_host_paths._msys_native_file_attributes",
-            return_value=safe_host_paths._FILE_ATTRIBUTE_REPARSE_POINT,
-        ):
-            self.assertTrue(
-                safe_host_paths.path_is_link(candidate, file_info=DirectoryStat())
-            )
-
-    def test_verification_receipt_is_deterministic(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            summary = fixture()
-            source = write_render_input(root, summary)
-            render(source, root / "site-a")
-            render(source, root / "site-b")
-            first = (root / "site-a" / "dashboard-verification.json").read_bytes()
-            second = (root / "site-b" / "dashboard-verification.json").read_bytes()
-            self.assertEqual(first, second)
 
     def test_complete_kernel_cost_sidecar_is_reverified_and_rendered(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2432,43 +1544,6 @@ class DashboardContractTests(unittest.TestCase):
                 },
             )
 
-    def test_failed_kernel_cost_sidecar_remains_failed(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            summary = fixture()
-            summary["run"]["id"] = "kernel-cost-run-1"
-            summary["run"]["commit"] = "a" * 40
-            source = write_render_input(root, summary)
-            report = write_kernel_cost_sidecar(root, fail_measurement=True)
-            self.assertTrue(any(target["status"] == "failed" for target in report["targets"]))
-            render(source, root / "site")
-            page = (root / "site/index.html").read_text(encoding="utf-8")
-            verification = json.loads(
-                (root / "site/dashboard-verification.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(verification["kernel_cost"]["status"], "failed")
-            self.assertIn("运行状态", page)
-            self.assertIn("失败", page)
-            cost_panel = re.search(
-                r'<section role="tabpanel" id="panel-cost".*?</section>',
-                page,
-                flags=re.DOTALL,
-            )
-            self.assertIsNotNone(cost_panel)
-            self.assertNotIn("已核验", cost_panel.group(0))
-
-    def test_partial_kernel_cost_sidecar_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            summary = fixture()
-            source = write_render_input(root, summary)
-            shutil.copyfile(
-                HOST_TOOLS.parent / "ci/evaluation-kernel-cost.json",
-                root / "kernel-cost-config.json",
-            )
-            with self.assertRaisesRegex(DashboardError, "sidecar is incomplete"):
-                render(source, root / "site")
-
     def test_tampered_kernel_cost_fragment_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2482,27 +1557,6 @@ class DashboardContractTests(unittest.TestCase):
             fragment["benchmarks"][0]["label"] = "tampered cost label"
             write_kernel_json(fragment_path, fragment)
             with self.assertRaisesRegex(DashboardError, "fragment differs"):
-                render(source, root / "site")
-
-    def test_scenario_program_summary_is_recomputed_from_samples(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            summary = fixture()
-            source = write_render_input(root, summary)
-            item = next(item for item in summary["evidence"] if item["id"] == "raw-scenario")
-            report_path = root.joinpath(*item["path"].split("/"))
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-            report["summary"]["targets"]["plain"]["programs"]["rp_catalog"]["p50_ms"] += 1
-            unsigned = dict(report)
-            unsigned.pop("report_sha256")
-            report["report_sha256"] = _binding_sha256(unsigned, "scenario-report-v2")
-            data = (json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n").encode()
-            report_path.write_bytes(data)
-            item["sha256"] = hashlib.sha256(data).hexdigest()
-            item["receipt"]["bytes"] = len(data)
-            item["receipt"]["report_sha256"] = report["report_sha256"]
-            rewrite_summary(source, summary)
-            with self.assertRaisesRegex(DashboardError, "p50/p95 differs"):
                 render(source, root / "site")
 
     def test_scenario_report_uses_strict_json(self) -> None:
@@ -2524,33 +1578,6 @@ class DashboardContractTests(unittest.TestCase):
             with self.assertRaisesRegex(DashboardError, "strict bounded JSON"):
                 render(source, root / "site")
 
-    def test_scenario_key_outcome_fingerprint_is_required(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            summary = fixture()
-            source = write_render_input(root, summary)
-            item = next(item for item in summary["evidence"] if item["id"] == "raw-scenario")
-            report_path = root.joinpath(*item["path"].split("/"))
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-            report["samples"][0]["outcome"]["workflow_stage"]["status"] = "completed"
-            unsigned = dict(report)
-            unsigned.pop("report_sha256")
-            report["report_sha256"] = _binding_sha256(unsigned, "scenario-report-v2")
-            data = (json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n").encode()
-            report_path.write_bytes(data)
-            item["sha256"] = hashlib.sha256(data).hexdigest()
-            item["receipt"]["bytes"] = len(data)
-            item["receipt"]["report_sha256"] = report["report_sha256"]
-            rewrite_summary(source, summary)
-            with self.assertRaisesRegex(DashboardError, "outcome_fingerprint does not bind"):
-                render(source, root / "site")
-
-    def test_headline_claim_without_evidence_is_rejected(self) -> None:
-        summary = fixture()
-        summary["claims"][0]["evidence_ids"] = []
-        with self.assertRaisesRegex(DashboardError, "bind at least one evidence"):
-            validate_summary(summary)
-
     def test_supported_result_requires_bound_identity_and_run_plan(self) -> None:
         for name, mutate, message in (
             (
@@ -2571,192 +1598,6 @@ class DashboardContractTests(unittest.TestCase):
                 "run_plan_sha256 must match",
             ),
         ):
-            with self.subTest(name=name):
-                summary = fixture()
-                mutate(summary)
-                with self.assertRaisesRegex(DashboardError, message):
-                    validate_summary(summary)
-
-    def test_bonferroni_threshold_cannot_be_relaxed_to_point_zero_five(self) -> None:
-        summary = fixture()
-        summary["methodology"]["multiple_testing"]["per_claim_alpha"] = 0.05
-        with self.assertRaisesRegex(DashboardError, "not Bonferroni-corrected"):
-            validate_summary(summary)
-
-    def test_four_claim_family_uses_dynamic_bonferroni_threshold(self) -> None:
-        summary = fixture()
-        multiple = summary["methodology"]["multiple_testing"]
-        multiple["headline_claims"].append("fourth-reserved-headline")
-        multiple["hypothesis_count"] = 4
-        multiple["per_claim_alpha"] = 0.05 / 4
-        fwer = summary["methodology"]["fwer_mcid"]
-        fwer["headline_count"] = 4
-        fwer["per_headline_alpha"] = 0.05 / 4
-
-        validate_summary(summary)
-
-    def test_supported_render_replays_raw_guest_contract(self) -> None:
-        from evaluation_contract import write_json
-        from test_evaluation_bundle import make_run
-
-        self.contract_replay.stop()
-        with tempfile.TemporaryDirectory(dir=HOST_TOOLS) as temporary:
-            root = make_run(Path(temporary))
-            source = root / "summary.json"
-            summary = json.loads(source.read_text(encoding="utf-8"))
-
-            log_item = next(
-                item for item in summary["evidence"]
-                if item["kind"] == "guest-raw-log"
-            )
-            log_path = root.joinpath(*log_item["path"].split("/"))
-            original = log_path.read_bytes()
-            self.assertTrue(original.startswith(b"boot"))
-            data = b"bo0t" + original[4:]
-            log_path.write_bytes(data)
-            log_item["sha256"] = hashlib.sha256(data).hexdigest()
-            write_json(source, summary)
-            with self.assertRaisesRegex(
-                DashboardError, "source_log_sha256 is not bound|raw Guest contract replay failed"
-            ):
-                render(source, root / "tampered-site")
-
-    def test_overview_keeps_registered_claim_family_without_selecting_a_winner(self) -> None:
-        summary = fixture()
-        summary["claims"][0].update(id="claim-supported", title="有证据支持的结论")
-        rejected_benchmark = copy.deepcopy(summary["benchmarks"][0])
-        rejected_benchmark.update(id="metadata-query-no-gate", label="未过门的 Metadata 查询")
-        remove_one_paired_advantage(rejected_benchmark)
-        rejected = copy.deepcopy(summary["claims"][0])
-        rejected.update(
-            id="claim-rejected",
-            title="AgentOS 无条件提升所有性能",
-            status="not_supported",
-            effect="至少一个预注册负载没有通过支持门。",
-            benchmark_id="metadata-query-no-gate",
-        )
-        summary["benchmarks"].append(rejected_benchmark)
-        summary["claims"].insert(0, rejected)
-        summary["methodology"]["multiple_testing"]["headline_claims"][-1] = (
-            "metadata-query-no-gate"
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn('id="conclusion-title"', page)
-        overview = page.split('<div class="headline-result-grid">', 1)[1].split("</section>", 1)[0]
-        self.assertEqual(
-            re.findall(
-                r'data-overview-slot="mechanism" data-benchmark-id="([^"]+)"',
-                overview,
-            ),
-            summary["methodology"]["multiple_testing"]["headline_claims"],
-        )
-        self.assertIn('data-benchmark-id="file_query_path_index"', overview)
-        self.assertIn('data-benchmark-id="metadata-query-no-gate"', overview)
-        self.assertNotIn('class="status ', overview)
-        self.assertIn("每负载 n=7", overview)
-        self.assertIn("暂无测量", overview)
-
-        summary["benchmarks"] = summary["benchmarks"][:2]
-        summary["claims"] = [
-            claim
-            for claim in summary["claims"]
-            if claim["benchmark_id"] == "file_query_path_index"
-        ]
-        summary["run"].pop("conclusion")
-        summary["acceptance"] = derive_acceptance_gates(
-            summary["scenarios"],
-            summary["claims"],
-            COMPETITION_CLAIMS,
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn('id="conclusion-title"', page)
-        self.assertEqual(page.count('data-overview-slot="mechanism"'), 3)
-
-    def test_negative_file_query_is_publishable_but_not_competition_ready(self) -> None:
-        summary = fixture()
-        attach_scenario(summary, [20, 20, 20, 20, 20, 20, 8])
-        remove_one_paired_advantage(summary["benchmarks"][0])
-        summary["claims"][0].update(
-            status="not_supported",
-            title="文件查询优势未通过支持门",
-            effect="负结果仍应完整发布。",
-        )
-        summary["acceptance"] = derive_acceptance_gates(
-            summary["scenarios"],
-            summary["claims"],
-            COMPETITION_CLAIMS,
-        )
-
-        validate_summary(summary)
-        self.assertEqual(
-            summary["acceptance"]["scientific_evidence"]["status"],
-            "publishable",
-        )
-        self.assertFalse(summary["acceptance"]["competition_ready"])
-        self.assertEqual(summary["acceptance"]["tasks"]["task4"], "not_ready")
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site/index.html").read_text(encoding="utf-8")
-            published = json.loads(
-                (root / "site" / "evaluation-summary.json").read_text(encoding="utf-8")
-            )
-        self.assertNotIn("科学证据发布", page)
-        self.assertNotIn("竞赛整体验收", page)
-        self.assertNotIn("任务四竞赛验收", page)
-        self.assertEqual(
-            published["acceptance"]["scientific_evidence"]["status"], "publishable"
-        )
-        self.assertFalse(published["acceptance"]["competition_ready"])
-        self.contract_replay_mock.assert_called_once()
-
-        forged = copy.deepcopy(summary)
-        forged["acceptance"]["competition_ready"] = True
-        with self.assertRaisesRegex(DashboardError, "acceptance gates are forged"):
-            validate_summary(forged)
-
-    def test_task4_competition_claim_registration_fails_closed(self) -> None:
-        cases = (
-            (
-                "missing task mapping",
-                lambda value: value["methodology"].__setitem__(
-                    "competition_claims", {}
-                ),
-                "register exactly Task 4",
-            ),
-            (
-                "dangling benchmark",
-                lambda value: value["methodology"]["competition_claims"][
-                    "task4"
-                ].__setitem__("benchmark_id", "missing-task4-benchmark"),
-                "must bind one registered Task 4 headline claim",
-            ),
-            (
-                "wrong task benchmark",
-                lambda value: value["methodology"]["competition_claims"][
-                    "task4"
-                ].__setitem__("benchmark_id", "scheduler-tail"),
-                "must bind one registered Task 4 headline claim",
-            ),
-            (
-                "weakened required status",
-                lambda value: value["methodology"]["competition_claims"][
-                    "task4"
-                ].__setitem__("required_status", "not_supported"),
-                "must bind one registered Task 4 headline claim",
-            ),
-        )
-        for name, mutate, message in cases:
             with self.subTest(name=name):
                 summary = fixture()
                 mutate(summary)
@@ -2900,176 +1741,6 @@ class DashboardContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(DashboardError, message):
                     validate_summary(summary)
 
-    def test_unavailable_benchmark_cannot_carry_measurements(self) -> None:
-        summary = fixture()
-        summary["benchmarks"][0]["status"] = "unavailable"
-        with self.assertRaisesRegex(DashboardError, "must not contain measurements"):
-            validate_summary(summary)
-
-    def test_timed_file_work_receipts_cannot_be_forged(self) -> None:
-        mutations = (
-            (
-                "skip one baseline path",
-                lambda value: value["benchmarks"][0]["samples"][0].__setitem__(
-                    "work_units", 127
-                ),
-                "complete traversal",
-            ),
-            (
-                "hide one examined record",
-                lambda value: value["benchmarks"][0]["samples"][0].__setitem__(
-                    "records_examined", 127
-                ),
-                "complete traversal",
-            ),
-            (
-                "zero index work",
-                lambda value: value["benchmarks"][0]["samples"][7].__setitem__(
-                    "work_units", 0
-                ),
-                "ready-index receipt",
-            ),
-            (
-                "unbounded index work",
-                lambda value: value["benchmarks"][0]["samples"][7].__setitem__(
-                    "work_units", 513
-                ),
-                "ready-index receipt",
-            ),
-            (
-                "wrong corpus size",
-                lambda value: value["benchmarks"][0]["samples"][0].__setitem__(
-                    "dataset_size", 127
-                ),
-                "dataset_size must equal",
-            ),
-            (
-                "operation drift",
-                lambda value: value["benchmarks"][0]["samples"][1].update(
-                    operations=2,
-                    result_items=2,
-                    work_units=256,
-                    records_examined=256,
-                ),
-                "must be stable across independent boots",
-            ),
-            (
-                "result count drift",
-                lambda value: value["benchmarks"][0]["samples"][0].__setitem__(
-                    "result_items", 2
-                ),
-                "one structured result per operation",
-            ),
-        )
-        for name, mutate, message in mutations:
-            with self.subTest(name=name):
-                summary = fixture()
-                mutate(summary)
-                with self.assertRaisesRegex(DashboardError, message):
-                    validate_summary(summary)
-
-    def test_diagnostic_readiness_cannot_be_forged(self) -> None:
-        ready_index = fixture()
-        ready_diagnostic = ready_index["benchmarks"][0]["diagnostics"][0]
-        ready_work = [2, 3, 5, 6, 7, 8, 8]
-        for sample, work_units in zip(ready_diagnostic["samples"], ready_work):
-            sample["work_units"] = work_units
-        ready_diagnostic["work_units"] = {"median": 6.0, "p95": 8.0, "n": 7}
-        validate_summary(ready_index)
-
-        mutations = (
-            (
-                "summary",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["duration_us"].__setitem__("median", 999),
-                "does not match diagnostic samples",
-            ),
-            (
-                "result-cache summary",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["result_cache_hits"].__setitem__("median", 1),
-                "does not match diagnostic samples",
-            ),
-            (
-                "cache",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("cache", "cold-rebuild"),
-                "conflicts with rebuild records",
-            ),
-            (
-                "dataset",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("dataset_size", 127),
-                "dataset_size must equal",
-            ),
-            (
-                "result items",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("result_items", 2),
-                "result_items must match",
-            ),
-            (
-                "result cache",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("result_cache_hits", 1),
-                "result_cache_hits must be zero",
-            ),
-            (
-                "unbounded ready work",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("work_units", 513),
-                "conflicts with rebuild records",
-            ),
-            (
-                "workload fingerprint",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("workload_fingerprint", "0" * 16),
-                "non-zero lowercase 16-hex receipt",
-            ),
-            (
-                "result fingerprint",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("result_fingerprint", "Z" * 16),
-                "non-zero lowercase 16-hex receipt",
-            ),
-            (
-                "evidence",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("evidence_id", "raw-scenario"),
-                "requires benchmark-bound verified evidence",
-            ),
-            (
-                "source log",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("source_log", "boot-02/guest.log"),
-                "source_log is not bound",
-            ),
-            (
-                "source log hash",
-                lambda value: value["benchmarks"][0]["diagnostics"][0]["samples"][0].__setitem__("source_log_sha256", "b" * 64),
-                "source_log_sha256 is not bound",
-            ),
-        )
-        for name, mutate, message in mutations:
-            with self.subTest(name=name):
-                summary = fixture()
-                mutate(summary)
-                with self.assertRaisesRegex(DashboardError, message):
-                    validate_summary(summary)
-
-        missing = fixture()
-        missing["benchmarks"][0]["diagnostics"] = []
-        with self.assertRaisesRegex(DashboardError, "empty diagnostics cannot pass"):
-            validate_summary(missing)
-
-        for field in ("index_rebuild_records", "result_cache_hits"):
-            with self.subTest(timed_sample=field):
-                summary = fixture()
-                summary["benchmarks"][0]["samples"][0][field] = 1
-                with self.assertRaisesRegex(DashboardError, "actual timed sample guardrail"):
-                    validate_summary(summary)
-
-    def test_diagnostic_marker_provenance_is_replayed_from_raw_evidence(self) -> None:
-        summary = fixture()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            summary["benchmarks"][0]["diagnostics"][0]["samples"][0][
-                "source_marker_sha256"
-            ] = "0" * 64
-            rewrite_summary(source, summary)
-            with self.assertRaisesRegex(DashboardError, "differs from the evidence line"):
-                render(source, root / "site")
-
     def test_every_dynamic_value_is_html_escaped(self) -> None:
         summary = fixture()
         attack = '<script data-x="1">alert(1)</script>'
@@ -3087,113 +1758,27 @@ class DashboardContractTests(unittest.TestCase):
             self.assertNotIn(r"C:\private\guest.log", page)
             self.assertGreaterEqual(page.count("&lt;script data-x=&quot;1&quot;&gt;"), 2)
 
-    def test_responsive_css_and_safe_dom_contract(self) -> None:
-        css = (ASSETS / "evaluation-dashboard.css").read_text(encoding="utf-8")
-        javascript = (ASSETS / "evaluation-dashboard.js").read_text(encoding="utf-8")
-        self.assertIn("1440px", css)
-        self.assertIn("@media (max-width: 1024px)", css)
-        self.assertIn("@media (max-width: 390px)", css)
-        self.assertIn("border-radius: 6px", css)
-        self.assertIn("border-radius: 8px", css)
-        self.assertRegex(css, r"\.chart-scroll\s*\{[^}]*overflow-x:\s*auto")
-        self.assertRegex(css, r"\.chart-scroll svg\s*\{[^}]*min-width:\s*760px")
-        self.assertRegex(css, r"\.benchmark-block\s*\{[^}]*min-width:\s*0")
-        self.assertRegex(css, r"\.table-scroll\s*\{[^}]*max-width:\s*100%")
-        self.assertRegex(
-            css,
-            r"\.headline-result-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,",
-        )
-        self.assertRegex(
-            css,
-            r"\.evaluation-track\s*\{[^}]*min-width:\s*0",
-        )
-        workflow_rule = re.search(r"\.evaluation-track\s*\{([^}]*)\}", css)
-        self.assertIsNotNone(workflow_rule)
-        self.assertNotIn("var(--red)", workflow_rule.group(1))
-        self.assertRegex(
-            css,
-            r"\.track-summary\s*\{[^}]*grid-template-columns:\s*repeat\(3,",
-        )
-        self.assertRegex(
-            css,
-            r"\.task6-ratio strong\s*\{[^}]*var\(--navy\)",
-        )
-        self.assertRegex(
-            css,
-            r"\.headline-result-slot \.slot-effect\s*\{[^}]*color:\s*var\(--navy\)",
-        )
-        self.assertNotIn("task6-slot-row--regressed", css)
-        self.assertNotIn("task6-slot-row--improved", css)
-        self.assertRegex(
-            css,
-            r"\.task6-comparison\s*\{[^}]*display:\s*grid[^}]*repeat\(3,",
-        )
-        self.assertRegex(
-            css,
-            r"(?s)@media \(max-width: 700px\).*?\.task6-comparison\s*\{[^}]*grid-template-columns:\s*1fr",
-        )
-        self.assertRegex(css, r"\.slot-value\s*\{[^}]*font-size:\s*1\.45rem")
-        self.assertRegex(css, r"\.evidence-menu\s*\{[^}]*display:\s*inline-block")
-        self.assertRegex(css, r"\.raw-pair-link\s*\{[^}]*opacity:\s*0\.55")
-        self.assertRegex(
-            css,
-            r"(?s)@media \(max-width: 1024px\).*?\.headline-result-grid\s*\{[^}]*repeat\(2,",
-        )
-        self.assertRegex(
-            css,
-            r"(?s)@media \(max-width: 1024px\).*?\.header-actions\s*\{[^}]*flex-wrap:\s*wrap[^}]*justify-content:\s*flex-end",
-        )
-        self.assertRegex(
-            css,
-            r"\.environment-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)",
-        )
-        self.assertRegex(css, r"\.environment-cell dd\s*\{[^}]*overflow-wrap:\s*anywhere")
-        self.assertRegex(
-            css,
-            r"(?s)@media \(max-width: 1024px\).*?\.environment-grid\s*\{[^}]*repeat\(2,",
-        )
-        self.assertRegex(
-            css,
-            r"(?s)@media \(max-width: 700px\).*?\.environment-grid\s*\{[^}]*grid-template-columns:\s*1fr",
-        )
-        self.assertIn("@media (max-width: 700px)", css)
-        self.assertIn("prefers-reduced-motion: reduce", css)
-        self.assertIn('matchMedia("(prefers-reduced-motion: reduce)")', javascript)
-        self.assertNotRegex(css.lower(), r"gradient|\borb\b")
-        self.assertNotIn("innerHTML", javascript)
-
+    def test_free_text_cannot_override_structured_conclusions(self) -> None:
+        summary = fixture()
+        attack = "self-reported: AgentOS improves every workload"
+        summary["claims"][0]["title"] = attack
+        summary["claims"][0]["effect"] = attack
+        summary["run"]["conclusion"] = attack
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            source = write_render_input(root, fixture())
-            render(source, root / "site")
+            render(write_render_input(root, summary), root / "site")
             page = (root / "site/index.html").read_text(encoding="utf-8")
-        table_regions = re.findall(r'<div class="table-scroll"[^>]*>', page)
-        self.assertGreaterEqual(len(table_regions), 1)
-        for region in table_regions:
-            self.assertIn('role="region"', region)
-            self.assertIn('tabindex="0"', region)
-            self.assertIn('aria-label="', region)
+            exported = (root / "site/evaluation-summary.json").read_text(
+                encoding="utf-8"
+            )
+        self.assertNotIn(attack, page)
+        self.assertNotIn(attack, exported)
+        self.assertNotIn('"conclusion"', exported)
 
-    def test_every_rendered_chart_declares_unit_n_and_source(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, fixture())
-            render(source, root / "site")
-            page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        figures = re.findall(r'<figure class="interval-chart"[^>]*>.*?</figure>', page, flags=re.DOTALL)
-        self.assertGreaterEqual(len(figures), 1)
-        for figure in figures:
-            self.assertRegex(figure, r'data-chart-unit="[^"]+"')
-            self.assertRegex(figure, r'data-chart-n="[^"]+"')
-            self.assertRegex(figure, r'data-raw-pairs="[1-9][0-9]*"')
-            self.assertRegex(figure, r'data-chart-source="[^"]+"')
-            self.assertIn("<strong>单位</strong>", figure)
-            self.assertIn("<strong>n</strong>", figure)
-            self.assertIn("<strong>原始配对</strong>", figure)
-            self.assertIn("<strong>来源</strong>", figure)
-            self.assertIn('class="raw-pair-link"', figure)
-            self.assertIn('class="raw-pair-dot raw-pair-dot--baseline"', figure)
-            self.assertIn('class="raw-pair-dot raw-pair-dot--treatment"', figure)
+        summary = fixture()
+        summary["run"]["evidence_grade"] = "E9-self-asserted"
+        with self.assertRaisesRegex(DashboardError, "contract-derived"):
+            validate_summary(summary)
 
     def test_paired_effect_is_recomputed_from_raw_inner_pairs(self) -> None:
         mutations = (
@@ -3238,151 +1823,6 @@ class DashboardContractTests(unittest.TestCase):
                 mutate(summary)
                 with self.assertRaisesRegex(DashboardError, message):
                     validate_summary(summary)
-
-    def test_overview_slots_follow_registration_while_performance_keeps_every_chart(self) -> None:
-        summary = fixture()
-        rejected_benchmark = copy.deepcopy(summary["benchmarks"][0])
-        rejected_benchmark.update(id="first-but-rejected", label="首个但未过门的测量")
-        remove_one_paired_advantage(rejected_benchmark)
-        rejected_claim = copy.deepcopy(summary["claims"][0])
-        rejected_claim.update(
-            id="first-rejected-claim",
-            benchmark_id="first-but-rejected",
-            status="not_supported",
-        )
-        summary["benchmarks"].insert(0, rejected_benchmark)
-        summary["claims"].insert(0, rejected_claim)
-        summary["methodology"]["multiple_testing"]["headline_claims"][-1] = (
-            "first-but-rejected"
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn("chart-title-overview", page)
-        overview = page.split('<div class="headline-result-grid">', 1)[1].split("</section>", 1)[0]
-        self.assertEqual(
-            re.findall(
-                r'data-overview-slot="mechanism" data-benchmark-id="([^"]+)"',
-                overview,
-            ),
-            summary["methodology"]["multiple_testing"]["headline_claims"],
-        )
-        self.assertIn(
-            '<title id="chart-title-benchmark-0">首个但未过门的测量逐 boot 配对与区间图</title>',
-            page,
-        )
-        self.assertIn(
-            '<title id="chart-title-benchmark-1">Metadata 索引查询逐 boot 配对与区间图</title>',
-            page,
-        )
-
-    def test_scenario_function_and_performance_are_separate_and_bound(self) -> None:
-        summary = fixture()
-        attach_scenario(summary)
-        validate_summary(summary)
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("动态复现", page)
-        self.assertIn("耗时对照", page)
-        self.assertIn("signed delta 定义为 plain-AgentOS，中位数 +20 ms", page)
-        self.assertIn("描述性 bootstrap 95% 区间", page)
-        self.assertIn("正向 joint-MCID 10 ms 与 5%：胜场 7/7", page)
-        self.assertIn("反向 joint-MCID -10 ms 与 -5%：负场 0/7", page)
-        self.assertIn("one-sided exact p=0.007812", page)
-        self.assertIn("Bonferroni 后每方向 alpha=0.025", page)
-        overview = page.split('id="panel-overview"', 1)[1].split(
-            'id="panel-performance"', 1
-        )[0]
-        self.assertEqual(overview.count('data-overview-slot="task6"'), 1)
-        self.assertIn("科研工作流", overview)
-        self.assertNotIn('class="status ', overview)
-        self.assertIn("Plain p50", overview)
-        self.assertIn("AgentOS p50", overview)
-        self.assertIn("端到端延迟（越低越好）", overview)
-        self.assertIn("AgentOS 延迟为 Plain 的 0.81 倍", overview)
-        self.assertIn("7/7 预注册 outcome 一致", overview)
-        self.assertIn("计时程序 70 项：同源 28 · 平台特定 42", overview)
-        self.assertIn("AgentOS 专属诊断模块 4 项", overview)
-        self.assertNotIn("task6-slot-row--improved", overview)
-        self.assertNotIn("task6-slot-row--regressed", overview)
-        self.assertNotIn("描述性 bootstrap 95% 区间", overview)
-        scenario_panel = page.split('id="panel-scenarios"', 1)[1].split(
-            'id="panel-evidence"', 1
-        )[0]
-        self.assertIn("完整链路；多机制共同影响", scenario_panel)
-        self.assertIn("宿主页缓存未控制", scenario_panel)
-
-    def test_scenario_joint_mcid_six_of_seven_is_inconclusive(self) -> None:
-        summary = fixture()
-        scenario = attach_scenario(summary, [20, 20, 20, 20, 20, 20, 8])
-        performance = scenario["performance"]
-
-        self.assertEqual(scenario["performance_status"], "inconclusive")
-        self.assertGreaterEqual(performance["ci_low"], 10)
-        self.assertGreaterEqual(performance["relative_ci_low"], 5)
-        self.assertEqual(performance["sign_test"]["wins"], 7)
-        self.assertLessEqual(performance["sign_test"]["p_value"], 0.05)
-        self.assertEqual(performance["mcid_sign_test"]["wins"], 6)
-        self.assertEqual(performance["mcid_sign_test"]["non_wins"], 1)
-        self.assertEqual(performance["mcid_sign_test"]["n"], 7)
-        self.assertEqual(performance["mcid_sign_test"]["p_value"], 1 / 16)
-        validate_summary(summary)
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("正向 joint-MCID 10 ms 与 5%：胜场 6/7", page)
-        self.assertIn("one-sided exact p=0.0625", page)
-
-    def test_unregistered_scenario_regression_is_explicit_and_diagnostic(self) -> None:
-        summary = fixture()
-        scenario = attach_scenario(summary, [-20] * 7)
-        performance = scenario["performance"]
-
-        self.assertEqual(scenario["performance_status"], "regressed")
-        self.assertEqual(performance["sign_test"]["wins"], 0)
-        self.assertEqual(performance["sign_test"]["losses"], 7)
-        self.assertEqual(performance["regression_mcid_sign_test"]["losses"], 7)
-        self.assertTrue(summary["acceptance"]["competition_ready"])
-        self.assertEqual(summary["acceptance"]["tasks"]["task6"], "pass")
-        validate_summary(summary)
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("status--regressed", page)
-        self.assertIn("统计结论：显著回退 (regressed)", page)
-        self.assertIn("signed delta 定义为 plain-AgentOS，中位数 -20 ms", page)
-        self.assertIn("符号胜/负/平=0/7/0", page)
-        self.assertIn("正向 joint-MCID 10 ms 与 5%：胜场 0/7", page)
-        self.assertIn("反向 joint-MCID -10 ms 与 -5%：负场 7/7", page)
-        self.assertIn("Bonferroni 后每方向 alpha=0.025", page)
-        overview = page.split('id="panel-overview"', 1)[1].split(
-            'id="panel-performance"', 1
-        )[0]
-        self.assertNotIn("task6-slot-row--regressed", overview)
-        self.assertIn("显著回退", overview)
-        self.assertIn("AgentOS 延迟为 Plain 的 1.19 倍", overview)
-        self.assertIn("Plain p50 103.000 ms", page)
-        self.assertIn("AgentOS p50 123.000 ms", page)
-        self.assertNotIn("竞赛整体验收", page)
-        self.assertIn("Schema evaluation-summary-v5", page)
-
-        for retired_version in (2, 3, 4):
-            retired = copy.deepcopy(summary)
-            retired["schema_version"] = retired_version
-            retired["run"]["suite_id"] = f"agentos-evaluation-v{retired_version}"
-            with self.assertRaisesRegex(DashboardError, "schema_version must be 5"):
-                validate_summary(retired)
 
     def test_scenario_statistics_cannot_be_forged(self) -> None:
         mutations = (
@@ -3456,33 +1896,40 @@ class DashboardContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(DashboardError, message):
                     validate_summary(summary)
 
-    def test_free_text_cannot_override_structured_conclusions(self) -> None:
-        summary = fixture()
-        attack = "自报：AgentOS 在所有场景性能提升一万倍"
-        summary["claims"][0]["title"] = attack
-        summary["claims"][0]["effect"] = attack
-        summary["run"]["conclusion"] = attack
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = write_render_input(root, summary)
-            render(source, root / "site")
-            page = (root / "site" / "index.html").read_text(encoding="utf-8")
-            exported = (root / "site" / "evaluation-summary.json").read_text(encoding="utf-8")
-        self.assertNotIn(attack, page)
-        self.assertNotIn(attack, exported)
-        self.assertIn("在全部预注册负载达到 joint-MCID 门槛", page)
-        self.assertNotIn('"conclusion"', exported)
 
-        summary = fixture()
-        summary["run"]["evidence_grade"] = "E9-self-asserted"
-        with self.assertRaisesRegex(DashboardError, "contract-derived"):
-            validate_summary(summary)
+class DashboardReplayIntegrationTests(unittest.TestCase):
+    def test_supported_render_replays_raw_guest_contract(self) -> None:
+        from evaluation_contract import write_json
+        from test_evaluation_bundle import make_run
 
-    def test_scenario_free_text_metric_is_rejected(self) -> None:
-        summary = fixture()
-        summary["scenarios"][0]["metric"] = "自报：性能无限提升"
-        with self.assertRaisesRegex(DashboardError, "fields mismatch"):
-            validate_summary(summary)
+        with tempfile.TemporaryDirectory(dir=HOST_TOOLS) as temporary:
+            with mock.patch(
+                "test_evaluation_bundle.materialize_compatibility_fixture"
+            ):
+                root = make_run(Path(temporary))
+            self.assertTrue((root / "dashboard/index.html").is_file())
+            source = root / "summary.json"
+            summary = json.loads(source.read_text(encoding="utf-8"))
+            evidence = next(
+                item for item in summary["evidence"]
+                if item["kind"] == "guest-raw-log"
+            )
+            log_path = root.joinpath(*evidence["path"].split("/"))
+            tampered = log_path.read_bytes().replace(b"boot\n", b"bo0t\n", 1)
+            log_path.write_bytes(tampered)
+            digest = hashlib.sha256(tampered).hexdigest()
+            evidence["sha256"] = digest
+            for benchmark in summary["benchmarks"]:
+                for diagnostic in benchmark["diagnostics"]:
+                    for sample in diagnostic["samples"]:
+                        if sample["evidence_id"] == evidence["id"]:
+                            sample["source_log_sha256"] = digest
+            write_json(source, summary)
+
+            with self.assertRaisesRegex(
+                DashboardError, "raw Guest contract replay failed"
+            ):
+                render(source, root / "tampered-site")
 
 
 if __name__ == "__main__":

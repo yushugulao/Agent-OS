@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a self-contained, evidence-bound AgentOS evaluation dashboard."""
+"""渲染自包含且绑定证据的 AgentOS 评测看板。"""
 
 from __future__ import annotations
 
@@ -406,7 +406,7 @@ CSV_FIELDS = (
 
 
 class DashboardError(RuntimeError):
-    """Raised when an evaluation summary cannot support a dashboard."""
+    """评测摘要不足以支撑看板时抛出。"""
 
 
 def _fail(message: str) -> None:
@@ -1666,7 +1666,7 @@ def _validate_supplementary_evaluations(
 
 
 def validate_summary(raw: Any) -> dict[str, Any]:
-    """Validate the current summary and every evidence-bearing relation."""
+    """校验当前摘要及每条承载证据的关系。"""
 
     root = _require_object(raw, "summary")
     fields = set(root)
@@ -2242,7 +2242,7 @@ def _ensure_plain_directory(path: Path, label: str) -> None:
 def _write_portable_evidence(
     evidence_root: Path, output_dir: Path, summary: dict[str, Any]
 ) -> dict[str, tuple[str, int]]:
-    """Copy the small, Dashboard-linked evidence into the offline site."""
+    """将看板链接的小型证据复制到离线站点。"""
     portable_root = output_dir / "evidence"
     _ensure_plain_directory(portable_root, "portable evidence root")
     expected: dict[str, str] = {}
@@ -3381,7 +3381,7 @@ def _verify_campaign_environment(
     *,
     contract_root: Path,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Recover displayable Host identity only through the sealed campaign chain."""
+    """仅通过密封评测链恢复可展示的 Host 身份。"""
 
     declared_campaign_sha256 = summary["run"].get("campaign_sha256")
     if declared_campaign_sha256 is None:
@@ -3899,7 +3899,7 @@ def _replay_scientific_contract(
     contract_root: Path,
     measurement_source_tree: Path,
 ) -> None:
-    """Rebuild positive and negative measured results before rendering."""
+    """渲染前重建正向与负向实测结果。"""
 
     if not _has_scientific_result(summary):
         return
@@ -4990,7 +4990,7 @@ def _overview_extension_slots(
 def _canonical_dashboard_summary(
     summary: dict[str, Any], kernel_cost: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Remove narrative authority from caller-supplied presentation fields."""
+    """移除调用方展示字段对叙述内容的控制权。"""
 
     canonical = copy.deepcopy(summary)
     canonical["run"].pop("conclusion", None)
@@ -5854,13 +5854,13 @@ def _prepare_staged_site_permissions(staging: Path) -> None:
 
 
 def _replace_site_directory(source: Path, destination: Path) -> None:
-    """Rename one verified sibling directory without copying partial contents."""
+    """重命名一个已验证同级目录，不复制不完整内容。"""
 
     os.replace(source, destination)
 
 
 def _publish_staged_site(staging: Path, output: Path, parent: Path) -> None:
-    """Publish a complete sibling tree, restoring the old tree on failure."""
+    """发布完整同级目录树，失败时恢复旧树。"""
 
     backup = staging.with_name(f"{staging.name}.previous")
     had_previous = False

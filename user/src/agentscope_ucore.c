@@ -71,10 +71,7 @@ static struct agent_info scope_writeback_before;
 static struct agent_info scope_writeback_after;
 static struct agent_context_record observe_context_scratch;
 static struct agent_timeline_filter observe_filter_scratch;
-/*
- * These full-size query results are consumed in separate test phases. Sharing
- * their backing store keeps the W^X flat image below the filesystem file cap.
- */
+/* 各阶段串行消费完整查询结果；共享存储使 W^X 平坦映像不超过文件上限。 */
 static union {
 	struct agent_audit_record audit[AGENT_AUDIT_MAX_RECORDS];
 	struct agent_audit_record span[AGENT_AUDIT_MAX_RECORDS];
@@ -709,9 +706,8 @@ static __attribute__((noinline)) void check_metadata_transactions(void)
 		      "metadata race writer status");
 		contentions += status;
 	}
-	// Coalesced metadata updates may finish without yielding on this
-	// single-core kernel, so contention is telemetry rather than a timing
-	// assertion. The reload/query checks below are the correctness contract.
+	// 单核上合并的元数据更新可能不经让出即完成，因此争用仅作遥测；
+	// 下方重载与查询检查才是正确性合同。
 	printf("agentscope_ucore: metadata_txn_contentions=%d\n", contentions);
 	check(close(start_pipe[0]) == 0 && close(start_pipe[1]) == 0,
 	      "close metadata race pipe");
@@ -1014,7 +1010,7 @@ fill_scope_storage_quota(struct quota_fill_state *state,
 		int created = create_quota_files(
 			'b', PUBLIC_STORAGE_PROBE_COUNT);
 
-		/* The downgraded PUBLIC child owns these names, not its parent. */
+	/* 降权后的 PUBLIC 子进程拥有这些名称，父进程不拥有。 */
 		remove_quota_files('b', created);
 		exit(created);
 	}
@@ -1629,7 +1625,6 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			check_foreign_audit_hidden(peer_pid);
 		} else if (command.operation == 'I') {
 			struct agent_event event;
-			char legacy[] = "cross-scope-legacy";
 
 			check(identity == 'B' && peer_pid > 0,
 			      "cross-scope IPC probe owner");
@@ -1644,8 +1639,6 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			strcpy(event.payload, "cross-scope-message");
 			check(agent_wake(peer_pid, &event) == AGENT_STATUS_DENIED,
 			      "message delivery cannot cross workflow scope");
-			check(mailwrite(peer_pid, legacy, sizeof(legacy)) == -1,
-			      "legacy mail cannot cross Agent workflow scope");
 		} else if (command.operation == 'L') {
 			check(identity == 'A', "lease owner scope");
 			memset(&scope_lease_state, 0, sizeof(scope_lease_state));
@@ -2069,7 +2062,7 @@ int main(void)
 	ready_b = receive_reply(b_reply[0], "scope B ready");
 	check(ready_a.scope_id != ready_b.scope_id,
 	      "fresh workflows have distinct scopes");
-	/* Run before test-owned files so fixtures do not offset the measurement. */
+	/* 在创建测试文件前运行，避免夹具偏移测量值。 */
 	quota_a = run_command(a_command[1], a_reply[0], 'T',
 			      QUOTA_PHASE_FILL, 0,
 			      ready_a.scope_id,

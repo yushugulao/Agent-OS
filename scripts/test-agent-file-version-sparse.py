@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation and behavior tests for the fixed-bank file-version contract."""
+"""固定 bank 文件版本契约的变异与行为测试。"""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ FIXTURES = (
 
 
 class DenseBank:
-    """Small executable model of the C bank insertion and eviction rules."""
+    """C bank 插入与逐出规则的小型可执行模型。"""
 
     def __init__(self, capacity: int) -> None:
         self.capacity = capacity
@@ -74,7 +74,7 @@ class DenseBank:
 
 
 class EditVersionModel:
-    """Per-file clocks plus a high-water seed used only after cold rebuild."""
+    """每文件时钟，以及仅在冷重建后使用的高水位种子。"""
 
     def __init__(self) -> None:
         self.high_water = 0

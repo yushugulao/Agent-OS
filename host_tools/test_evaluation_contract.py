@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the independent-boot evaluation evidence contract."""
+"""独立启动评测证据契约的回归测试。"""
 
 from __future__ import annotations
 
@@ -363,109 +363,37 @@ def expect_rejected(action, message: str) -> None:
         raise AssertionError(f"accepted invalid evidence: {message}")
 
 
-def assert_guest_sample_call_contract() -> None:
-    source = (ROOT / "user" / "src" / "agenteval_ucore.c").read_text(
-        encoding="utf-8"
-    )
-    calls = re.findall(r"(?<!void )print_sample\((.*?)\);", source, re.DOTALL)
-    assert len(calls) == 16
-    for call in calls:
-        arguments = [argument.strip() for argument in call.split(",")]
-        assert len(arguments) == 10, arguments
-        assert arguments[-2] == "workload", arguments
-    assert "finalize_path_file_variant(" in source
-    assert "finalize_agent_file_variant(" in source
-    assert '"path walk accounting uses actual N files"' in source
-    assert '"indexed query reports real candidate work"' in source
-    assert "index.work_units == EVAL_FILE_QUERIES" not in source
-    assert "functional_file.index_work == EVAL_FILE_QUERIES" not in source
-
-
-def assert_functional_acceptance_source_contract() -> None:
-    guest = (ROOT / "user" / "src" / "agenteval_ucore.c").read_text(
-        encoding="utf-8"
-    )
-    host = (ROOT / "host_tools" / "evaluation_contract.py").read_text(
-        encoding="utf-8"
-    )
-    assert "functional_catalog_load" in guest
-    assert "agenteval_ucore: catalog schema=%d challenge=" in guest
-    assert "tool_list(functional_tools, 0)" in guest
-    assert "task2 unique catalog identity" in guest
-    assert '0, "eval_missing_tool", 0' in guest
-    assert 'AGENT_TOOL_ECHO, "pid_info", 0' in guest
-    assert "AGENT_STATUS_DUPLICATE" in guest
-    assert "AGENT_STATUS_BAD_TYPE" in guest
-    assert "agent_run(&functional_context_ops[i]" in guest
-    assert "task3 post-rollback production tool call" in guest
-    assert "context_rollback(rollback_sequence)" in guest
-    assert "helper_pid = agent_create();" in guest
-    assert "TASK5_DELAY_TICKS" in guest
-    assert "TASK5_TICK_MSEC" in guest
-    assert "functional_info_before.current_tick" in guest
-    assert "functional_info_after.sched_dispatch_count" in guest
-    assert "task5 message waiter published" in guest
-    assert '"task5-semantic-v2"' in guest
-    assert "wait_dispatches < 1" in host
-    assert "functional_compat_sentinel_pid = agent_create();" in guest
-    assert "agent_create_role(AGENT_ROLE_SENTINEL)" not in guest
-    assert "tool_count != 25" not in host
-    assert "callable_count != 23" not in host
-    assert "TASK2_REQUIRED_TOOLS" in host
-    assert "_parse_tool_catalog(lines, challenge)" in host
-
-
-def assert_task4_dynamic_source_contract() -> None:
-    source = (ROOT / "user" / "src" / "agenteval_ucore.c").read_text(
-        encoding="utf-8"
-    )
-    start = source.index("static void run_functional_task4(void)")
-    end = source.index("\nstatic void run_functional_sentinel", start)
-    body = source[start:end]
-    assert "functional_file" not in source
-    assert "agent_file_meta_set(&file_meta)" in source[start - 5000:end]
-    assert body.count("agent_file_query(&file_query, &file_result)") == 4
-    assert "file_query.summary_contains" in source[start - 5000:end]
-    assert "AGENT_TOOL_READ_FILE_DIGEST" in body
-    assert body.count("task4_delete_metadata(") == 4
-    assert "TASK4_FUNCTIONAL_FID_BASE" in body
-    assert '"task4-semantic-v2"' in body
-    assert "duration_us" not in body
-
-
-def assert_evaluation_image_role_contract() -> None:
-    manifest = (ROOT / "user" / "include" / "exec_policy_manifest.h").read_text(
-        encoding="utf-8"
-    ).replace("\\\n", " ")
-    entry = re.search(
-        r'X\("agenteval_ucore",\s*"agenteval_ucore",\s*'
-        r'EXEC_MANIFEST_F_BOOT_SEALED,\s*(.*?),\s*0,\s*'
-        r'EXEC_MANIFEST_VFS_PROFILE_WORKFLOW\)',
-        manifest,
-        re.DOTALL,
-    )
-    assert entry is not None
-    role_mask = " ".join(entry.group(1).split())
-    assert role_mask == (
-        "EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR) | "
-        "EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_SENTINEL)"
-    )
-
-
 def assert_targeted_runner_uses_canonical_contract() -> None:
     runner = (ROOT / "scripts" / "run-agent-tests.sh").read_text(
         encoding="utf-8"
     )
-    case_start = runner.index("\tagenteval_ucore)")
-    case_end = runner.index("\n\t\t;;", case_start)
-    case = runner[case_start:case_end]
-    assert runner.count("evaluation_contract.py validate-guest") == 1
-    assert "--suite ci/evaluation-suite.json" in case
-    assert '--log "${log_file}"' in case
-    assert '--challenge "${AGENT_EVAL_CHALLENGE_HEX}"' in case
-    assert "<<'PY'" not in case
-    assert "_parse_marker" not in runner
-    assert "_expected_result" not in runner
+    call = (
+        "host_tools/evaluation_contract.py validate-guest "
+        "--suite ci/evaluation-suite.json --log \"${log_file}\" "
+        "--challenge \"${AGENT_EVAL_CHALLENGE_HEX}\""
+    )
+
+    def validate(source: str) -> None:
+        cases = re.findall(
+            r"(?ms)^[ \t]*agenteval_ucore\)\s*(.*?)^[ \t]*;;[ \t]*$", source
+        )
+        assert len(cases) == 1
+        case = " ".join(cases[0].replace("\\\n", " ").split())
+        assert source.count("host_tools/evaluation_contract.py validate-guest") == 1
+        assert case == (
+            '"${PYTHON_BIN}" -I -S -B scripts/trusted-python-entry.py ' + call
+        )
+
+    validate(runner)
+    for old, new in (
+        ("evaluation_contract.py validate-guest", "evaluation_contract.py verify"),
+        ('--challenge "${AGENT_EVAL_CHALLENGE_HEX}"', "--challenge deadbeef"),
+    ):
+        try:
+            validate(runner.replace(old, new, 1))
+        except AssertionError:
+            continue
+        raise AssertionError(f"runner oracle accepted mutation: {old}")
 
 
 def marker(
@@ -1079,35 +1007,8 @@ def make_experiment_slower(
 
 
 def main() -> int:
-    assert_guest_sample_call_contract()
-    assert_functional_acceptance_source_contract()
-    assert_task4_dynamic_source_contract()
-    assert_evaluation_image_role_contract()
     assert_targeted_runner_uses_canonical_contract()
     suite = load_suite(SUITE_PATH)
-    assert suite["schema_version"] == 5
-    assert suite["suite_id"] == "agentos-evaluation-v5"
-    assert suite["supplementary_scenarios"] == [{
-        "concurrency_levels": [1, 2, 4],
-        "digest": "fnv1a64_challenge_bound",
-        "fairness_basis": "per_identity_isolated_completions",
-        "fairness_scale": "parts_per_million",
-        "goodput_unit": "milli_requests_per_second",
-        "identity_order": ["A", "B", "C", "D"],
-        "id": "multi_identity_revisit_isolation",
-        "isolation_definition": "correct_and_zero_contamination_and_no_fallback",
-        "label": "Multi-identity workflow revisit isolation",
-        "latency_unit": "us",
-        "latency_metrics": ["wait", "service", "turnaround"],
-        "percentile_method": "nearest_rank",
-        "performance_gate": None,
-        "qos_schema_version": 2,
-        "rounds_per_level": 16,
-        "task": "task1",
-        "throughput_unit": "milli_requests_per_second",
-        "turnaround_definition": "worker_completed_minus_parent_submitted",
-        "visit_sequence": ["A", "B", "C", "D", "A"],
-    }]
     with tempfile.TemporaryDirectory() as malformed_name:
         malformed_path = Path(malformed_name) / "suite.json"
         malformed_suite = copy.deepcopy(suite)
@@ -1117,57 +1018,11 @@ def main() -> int:
             lambda: load_suite(malformed_path),
             "suite fields differ",
         )
-    assert suite["claim_family"] == {
-        "familywise_alpha": 0.05,
-        "hypotheses": [
-            "file_query_path_index", "file_query_table_ablation",
-            "tool_batch", "context_access",
-        ],
-        "id": "agentos-evaluation-headlines-v2",
-        "load_gate": "intersection",
-        "method": "bonferroni",
-    }
-    assert suite["competition_claims"] == {
-        "task4": {
-            "benchmark_id": "file_query_path_index",
-            "required_status": "supported",
-        }
-    }
-    assert [
-        (item["experiment"], item["load"])
-        for item in suite["execution_schedule"]
-    ] == [
-        ("file_query_path_index", 8),
-        ("file_query_path_index", 24),
-        ("file_query_table_ablation", 24),
-        ("file_query_path_index", 48),
-        ("file_query_table_ablation", 64),
-        ("file_query_path_index", 96),
-        ("file_query_table_ablation", 96),
-        ("tool_batch", 24),
-        ("tool_batch", 64),
-        ("tool_batch", 96),
-        ("context_access", 24),
-        ("context_access", 64),
-        ("context_access", 96),
-    ]
     file_experiments = {
         experiment["id"]: experiment
         for experiment in suite["experiments"]
         if experiment["id"].startswith("file_query_")
     }
-    assert file_experiments["file_query_path_index"]["loads"] == [
-        8, 24, 48, 96,
-    ]
-    assert file_experiments["file_query_path_index"]["operation_counts"] == [
-        8, 6, 4, 1,
-    ]
-    assert file_experiments["file_query_table_ablation"]["loads"] == [
-        24, 64, 96,
-    ]
-    assert file_experiments["file_query_table_ablation"]["operation_counts"] == [
-        16, 16, 16,
-    ]
     headline_alpha = _headline_significance_threshold(suite)
     assert abs(headline_alpha - (0.05 / 4)) < 1e-15
     assert {

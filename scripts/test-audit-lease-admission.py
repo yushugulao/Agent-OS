@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Model and mutation guards for audit identity admission under lease renewal."""
+"""租约续期下审计身份准入的模型与变异防护。"""
 
 from pathlib import Path
 
@@ -66,6 +66,7 @@ def validate(ledger: str, lease: str, lease_h: str, core: str) -> None:
     compact_ledger = compact(ledger)
     compact_lease_h = compact(lease_h)
     for token in (
+        "#define AGENT_IDENTITY_LEASE_CHUNK 4096ULL",
         "#define AGENT_IDENTITY_LEASE_LOW_WATER",
         "(AGENT_IDENTITY_LEASE_CHUNK / 2ULL)",
     ):
@@ -218,7 +219,7 @@ def validate(ledger: str, lease: str, lease_h: str, core: str) -> None:
 
 
 def model_tests() -> None:
-    end = 257
+    end = 4097
     next_id = 1
     reserve = 64
     telemetry: list[int] = []
@@ -236,14 +237,14 @@ def model_tests() -> None:
         if value == 0:
             break
         telemetry.append(value)
-    assert telemetry == list(range(1, 193))
+    assert telemetry == list(range(1, end - reserve))
     for _ in range(10_000):
         assert allocate(reserve) == 0
-    assert next_id == 193
+    assert next_id == end - reserve
     causal = [allocate(0) for _ in range(64)]
-    assert causal == list(range(193, 257))
+    assert causal == list(range(end - reserve, end))
     assert allocate(0) == 0
-    assert next_id == 257
+    assert next_id == end
 
     sampled = [value for value in range(1, 4097) if value & (value - 1) == 0]
     assert sampled == [1 << shift for shift in range(13)]

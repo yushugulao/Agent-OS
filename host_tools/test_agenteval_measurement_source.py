@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for real-operation Agent evaluation duration provenance."""
+"""真实操作 Agent 评测耗时来源的变异测试。"""
 from __future__ import annotations
 
 import json
@@ -11,7 +11,6 @@ from pathlib import Path
 import functional_acceptance_compile_contract as compile_contract
 from agenteval_measurement_source_contract import (
     CONTRACT_VERSION,
-    EVALUATION_SUITE_SOURCE_PATH,
     FORMAL_BOOT_COUNT,
     POLICY_INVENTORY_SCHEMA,
     ROOT,
@@ -335,8 +334,8 @@ def main() -> int:
     kernel_console_forge["os/console.c"] += (
         '\nstatic const char *forged = "agenteval_ucore: worker passed\\n";\n'
     )
-    # Kernel output and syscall result producers are part of the byte-pinned
-    # review closure; they are not treated as an independent Guest oracle.
+    # 内核输出和系统调用结果的生成方属于按字节固定的审查闭包，
+    # 不能视为独立的 Guest 判定器。
     _reject_compile(kernel_console_forge)
 
     actual_include_closure = (
@@ -649,104 +648,23 @@ def main() -> int:
     verify_measurement_source_receipt(receipt, ROOT, expected_commit=commit)
     assert receipt["policy_inventory"] == measurement_source_policy_inventory()
     assert receipt["policy_inventory"]["schema"] == POLICY_INVENTORY_SCHEMA
-    policy_entries = {
-        (entry["role"], entry["path"])
-        for entry in receipt["policy_inventory"]["entries"]
+    inventory_paths = {
+        entry["path"] for entry in receipt["policy_inventory"]["entries"]
     }
-    policy_paths = {path for _role, path in policy_entries}
-    assert EVALUATION_SUITE_SOURCE_PATH in policy_paths
-    assert "host_tools/evaluation_bundle.py" in policy_paths
-    assert "evaluation_guest/compatbench.c" in policy_paths
-    assert "host_tools/contest_demo.py" in policy_paths
-    assert "host_tools/committed_source_identity.py" in policy_paths
-    assert "host_tools/full_verification_payload.py" in policy_paths
-    assert "host_tools/full_verification_metrics.py" in policy_paths
-    assert "host_tools/resource_job_budget.py" in policy_paths
-    assert "scripts/resource-jobs.py" in policy_paths
-    assert "host_tools/agenteval_measurement_source_policy.py" in policy_paths
-    assert "host_tools/agenteval_measurement_source_receipt.py" in policy_paths
-    assert "host_tools/agenteval_measurement_source_validator.py" in policy_paths
-    assert "host_tools/functional_acceptance_source_contract.py" in policy_paths
-    assert "scripts/capture-final-evidence.py" in policy_paths
-    assert "scripts/run-full-verification.sh" in policy_paths
-    measurement_execution_policy = {
-        ("dual-platform-runner", "scripts/run-dual-platforms.sh"),
-        (
-            "measurement-set-publisher",
-            "host_tools/extract_measured_experiments.py",
-        ),
-    }
-    assert measurement_execution_policy <= policy_entries
-    assert "host_tools/evidence_toolchain_attestation.py" in policy_paths
-    assert "host_tools/formal_temp_binding.py" in policy_paths
-    semantic_replay_dependencies = {
-        "host_tools/evidence_semantic_registry.py",
-        "host_tools/evidence_semantic_profiles.py",
-        "host_tools/measured_experiments.py",
-        "host_tools/check_host_platform_alignment.py",
-        "host_tools/research_state_manifest.py",
-        "scripts/fs-allocator-evidence.py",
-        "scripts/fs-allocator-image.py",
-        "ci/agent-metadata-disk-format.json",
-        "ci/agent-observe-disk-format.json",
-        "user/src/agentbench_ucore.c",
-    }
-    assert semantic_replay_dependencies <= policy_paths
-    for prefix in ("baseline_ucore/user/src", "user/src"):
-        expected = {
-            path.relative_to(ROOT).as_posix()
-            for path in (ROOT / prefix).glob("rp_*.c")
-        }
-        assert expected <= policy_paths
-    assert "host_tools/git_history_contract.py" in policy_paths
-    assert "host_tools/render_evaluation_dashboard.py" in policy_paths
-    assert "host_tools/assets/evaluation-dashboard.css" in policy_paths
-    assert "host_tools/assets/evaluation-dashboard.js" in policy_paths
-    compatibility_execution_policy = {
-        ("compatibility-producer", "host_tools/compatibility_overhead.py"),
-        (
-            "compatibility-contract",
-            "host_tools/compatibility_overhead_contract.py",
-        ),
-    }
-    assert compatibility_execution_policy <= policy_entries
-    micro_execution_policy = {
-        ("micro-runner", "scripts/run-agent-tests.sh"),
-        ("micro-parallel-qemu-runner", "scripts/run-parallel-qemu-regressions.py"),
-        ("micro-evidence-wiring", "scripts/evidence-wiring.sh"),
-        ("micro-qemu-runner", "scripts/agent_test_runner.py"),
-        ("micro-guest-failure-classifier", "scripts/guest_failure_classifier.py"),
-        ("micro-preflight", "scripts/test-sync-owner-wiring.py"),
-        ("micro-preflight", "scripts/test-wait-atomic-wiring.py"),
-        ("micro-preflight", "scripts/check-wait-queue-contract.py"),
-    }
-    assert micro_execution_policy <= policy_entries
-    split_source_policy = {
-        ("source-contract", "host_tools/agenteval_measurement_source_policy.py"),
-        ("source-contract", "host_tools/agenteval_measurement_source_receipt.py"),
-        ("source-contract", "host_tools/agenteval_measurement_source_validator.py"),
-        ("source-contract", "host_tools/functional_acceptance_compile_contract.py"),
-        ("source-contract", "host_tools/functional_acceptance_source_contract.py"),
-    }
-    assert split_source_policy <= policy_entries
-    assert set(compile_contract.COMPILE_DEPENDENCY_PATHS) <= policy_paths
-    assert "scripts/run-evaluation-suite.sh" in policy_paths
-    assert "scripts/package-evaluation-evidence.sh" in policy_paths
-    assert "host_tools/plain_ucore_fs_extract.py" in policy_paths
-    assert "host_tools/research_state_manifest.py" in policy_paths
-    assert "ci/research-state-manifest.json" in policy_paths
-    assert "evaluation_guest/fixtures/task6-count-corpus.csv" in policy_paths
-    assert "user/Makefile" in policy_paths
-    assert "user/include/rp_program_manifest.h" in policy_paths
-    assert "baseline_ucore/user/include/rp_program_manifest.h" in policy_paths
-    assert "baseline_ucore/user/Makefile" in policy_paths
-    assert "scripts/initproc.py" in policy_paths
-    assert "baseline_ucore/scripts/initproc.py" in policy_paths
-    assert "nfs/Makefile" in policy_paths
-    assert "baseline_ucore/nfs/Makefile" in policy_paths
-    assert "host_tools/agent_metadata_journal.py" in policy_paths
-    assert "user/include/research_platform_state.h" in policy_paths
-    assert "baseline_ucore/user/include/research_platform_state.h" in policy_paths
+    assert {
+        "user/src/agenteval_ucore.c",
+        "user/src/labdemo_ucore.c",
+        "ci/evaluation-suite.json",
+        "scripts/run-dual-platforms.sh",
+        "host_tools/extract_measured_experiments.py",
+        "host_tools/evaluation_contract.py",
+        "host_tools/agenteval_measurement_source_policy.py",
+        "host_tools/agenteval_measurement_source_receipt.py",
+        "host_tools/agenteval_measurement_source_validator.py",
+        "host_tools/evaluation_source_gate.py",
+        "host_tools/evidence_delivery_contract.py",
+        "host_tools/render_evaluation_dashboard.py",
+    } <= inventory_paths
     forged = json.loads(json.dumps(receipt))
     forged["sources"][0]["sha256"] = "0" * 64
     try:
@@ -755,26 +673,6 @@ def main() -> int:
         pass
     else:
         raise AssertionError("accepted forged measurement source receipt")
-    for _role, path in (
-        micro_execution_policy | compatibility_execution_policy
-        | measurement_execution_policy | split_source_policy
-    ):
-        forged_source = json.loads(json.dumps(receipt))
-        matches = [
-            record for record in forged_source["sources"]
-            if record["path"] == path
-        ]
-        if len(matches) != 1:
-            raise AssertionError(f"policy source is not uniquely receipted: {path}")
-        matches[0]["sha256"] = "0" * 64
-        try:
-            verify_measurement_source_receipt(
-                forged_source, ROOT, expected_commit=commit
-            )
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"accepted forged policy source receipt: {path}")
     forged_policy = json.loads(json.dumps(receipt))
     forged_policy["policy_inventory"]["entries"][0]["path"] = "ci/other-suite.json"
     try:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract provenance-bound benchmark rows from real Guest log markers."""
+"""从真实 Guest 日志标记抽取绑定来源的基准数据行。"""
 
 from __future__ import annotations
 

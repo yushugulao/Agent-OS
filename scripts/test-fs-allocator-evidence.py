@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the allocator fault evidence package contract."""
+"""分配器故障证据包契约的回归测试。"""
 
 from __future__ import annotations
 

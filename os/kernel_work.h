@@ -5,7 +5,7 @@
 
 struct thread;
 
-// 长内核路径只能在提交原子批次并释放临时状态后让出 CPU。
+// 长内核路径只能在提交原子批次并释放临时状态后让出处理器。
 // 搬运数据的路径按 64 字节折算工作量，避免把每个字节都当成一个调度单位。
 #define KERNEL_WORK_STREAM_GRANULE 64U
 #define KERNEL_WORK_BYTES_PER_UNIT 64U

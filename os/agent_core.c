@@ -38,7 +38,6 @@ void agent_core_init(void)
 	agent_tool_protocol_init();
 	agent_identity_init();
 	agent_lifecycle_init();
-	agent_ipc_init();
 	agent_metadata_init();
 	agent_durable_section_init();
 	agent_identity_lease_init();
@@ -169,9 +168,7 @@ void agent_core_clear_metadata(struct proc *p)
 {
 	int inactive;
 
-	/* PUBLIC slots never activate the Agent state plane.  Their legacy
-	 * mailbox is sidecar-owned, so teardown only has to release that endpoint
-	 * and clear the identity edge. */
+	/* PUBLIC 槽不激活 Agent 状态面，拆除时只需清除身份边。 */
 	inactive = p != 0 && !p->is_agent && p->agent_control_id == 0 &&
 		   agent_context_is_empty(p);
 	if (!inactive) {
@@ -188,12 +185,8 @@ void agent_core_proc_prepare(struct proc *p)
 {
 	if (p == 0 || !proc_teardown_live(p) || p->is_agent ||
 	    p->agent_control_id != 0 || p->agent_controller_id != 0 ||
-	    !agent_context_is_empty(p) ||
-	    !agent_ipc_legacy_mailbox_empty(p) ||
-	    p->legacy_mail_endpoint_generation != 0)
+	    !agent_context_is_empty(p))
 		panic("Agent prepare outside live process");
-	/* RECLAIMING is the sole reset owner.  Admission only rotates the PUBLIC
-	 * endpoint, avoiding a second full-state clear on every fork. */
 	agent_ipc_proc_prepare(p);
 }
 
@@ -230,7 +223,7 @@ int agent_core_exec_public_commit(struct proc *p)
 		agent_ipc_exec_public(p);
 		return 0;
 	}
-	/* A workflow root cannot abandon its non-transferable close authority. */
+	/* workflow 根节点不能放弃不可转移的关闭权限。 */
 	if (p->vfs_scope_controller ||
 	    !agent_lifecycle_context_lane_quiescent(p))
 		return -1;
@@ -644,7 +637,6 @@ static void agent_info_fill(struct proc *p, struct agent_info *info)
 	info->filesystem_domain = p->vfs_scope_id;
 	info->filesystem_capability_mask =
 		vfs_scope_active(p->vfs_scope_id) ? p->vfs_effective_caps : 0;
-	agent_ipc_legacy_fill_info(p, info);
 }
 
 static void agent_result_text(struct agent_result *res, char *text)
@@ -1057,8 +1049,8 @@ int sys_agent_workflow_close(uint64 requested_scope_id)
 	    requested_scope_id >= FS_OWNER_SCOPE_FLAG)
 		return AGENT_STATUS_BAD_PARAM;
 	scope_id = (uint)requested_scope_id;
-	// Non-factory callers are authorized only by the non-reused lifecycle
-	// controller ID bound before their root process becomes runnable.
+	// 非工厂调用者只能由根进程进入可运行态前绑定且不复用的生命周期
+	// 控制器 ID 授权。
 	if (!factory) {
 		if (p == 0 || !p->is_agent || !p->vfs_scope_controller ||
 		    p->vfs_scope_id != scope_id || p->agent_control_id == 0)

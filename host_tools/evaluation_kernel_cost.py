@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Collect portable, read-only kernel cost evidence for AgentOS evaluation.
+"""采集用于 AgentOS 评测的可移植只读内核成本证据。
 
-The collector never builds or transforms a kernel.  A formal run must provide
-separate environment and build manifests, including the exact commit, build
-commands, build log, configuration, artifact paths, and artifact hashes.
+采集器不构建或转换内核。正式运行必须分别提供环境和构建清单，其中包括精确
+提交、构建命令、构建日志、配置、工件路径与工件哈希。
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ import sys as _entry_sys
 
 
 def _isolate_direct_entry_imports() -> None:
-    """Use only interpreter-owned paths for top-level import resolution."""
+    """顶层导入解析仅使用解释器自身管理的路径。"""
 
     if __name__ != "__main__":
         return
@@ -260,7 +259,7 @@ TRUSTED_BUILD_LOCALES = frozenset(("C", "C.UTF-8"))
 
 
 class KernelCostError(ValueError):
-    """Raised when kernel cost evidence is incomplete or inconsistent."""
+    """内核成本证据不完整或不一致时抛出。"""
 
 
 def _safe_directory(path: Path, label: str) -> Path:
@@ -585,7 +584,7 @@ def load_build_manifest(
 
 
 def parse_elf_identity(path: Path) -> dict[str, Any]:
-    """Validate a structurally bounded little-endian RISC-V ELF64 executable."""
+    """校验结构有界的小端 RISC-V ELF64 可执行文件。"""
 
     size = path.stat().st_size
     if size < 64:
@@ -647,9 +646,8 @@ def parse_elf_identity(path: Path) -> dict[str, Any]:
         ) = struct.unpack_from("<IIQQQQQQ", program_headers, index * phentsize)
         if offset > size or file_bytes > size - offset:
             raise KernelCostError("ELF segment escapes the file")
-        # The ELF ABI only requires p_filesz <= p_memsz for PT_LOAD.  Metadata
-        # segments such as PT_RISCV_ATTRIBUTES legitimately have no memory
-        # image even though they carry bytes in the file.
+        # ELF ABI 仅要求 PT_LOAD 满足 p_filesz <= p_memsz。PT_RISCV_ATTRIBUTES
+        # 等元数据段即使在文件中携带字节，也可以合法地没有内存映像。
         if segment_type == 1 and file_bytes > memory_bytes:
             raise KernelCostError("ELF PT_LOAD file size exceeds its memory size")
         if segment_type == 1 and memory_bytes > (1 << 64) - virtual_address:
@@ -675,10 +673,9 @@ def _same_size_filename(observed: str, expected: str) -> bool:
     if observed == expected:
         return True
 
-    # MSYS converts POSIX drive paths in argv when it launches a native Win32
-    # tool. GNU size therefore reports C:/... even though the POSIX Python
-    # producer recorded /c/... in the command. Admit only that exact namespace
-    # translation; the path tail remains byte-for-byte case-sensitive.
+    # MSYS 启动原生 Win32 工具时会转换 argv 中的 POSIX 盘符路径。因此即使
+    # POSIX Python 生产者在命令中记录 /c/...，GNU size 也会报告 C:/...。
+    # 只允许这一精确命名空间转换；路径尾部仍按字节区分大小写。
     def drive_identity(value: str) -> tuple[str, str, str] | None:
         if "\\" in value:
             return None
@@ -742,7 +739,7 @@ def parse_size_output(output: bytes, expected_filename: str) -> dict[str, int]:
 def _run_tool(
     argv: Sequence[str], timeout: int, maximum: int, cwd: Path
 ) -> ToolExecution:
-    """Run a trusted tool with bounded disk-backed stdout and stderr capture."""
+    """运行可信工具，并将有界 stdout 与 stderr 捕获到磁盘。"""
 
     cwd = _resolved_safe_directory(cwd, "tool working directory")
     environment = os.environ.copy()
@@ -851,7 +848,7 @@ def _trusted_text(value: Any, label: str, maximum: int = 4096) -> str:
 
 
 def _trusted_absolute_path(value: Any, label: str) -> str:
-    """Accept canonical POSIX or drive-qualified Windows absolute paths."""
+    """接受规范 POSIX 或带盘符的 Windows 绝对路径。"""
 
     text = _trusted_text(value, label)
     if text.startswith("/"):
@@ -902,7 +899,7 @@ def _trusted_stream(command: dict[str, Any], stream: str, maximum: int, label: s
 def _guardrail_from_command(
     command: dict[str, Any], guardrail_id: str, label: str
 ) -> dict[str, Any]:
-    """Re-derive one guardrail from the canonical checker's captured stdout."""
+    """根据规范检查器捕获的 stdout 重新派生一项护栏结果。"""
 
     stdout = _trusted_stream(
         command, "stdout", TRUSTED_BUILD_MAX_OUTPUT_BYTES, label
@@ -964,7 +961,7 @@ def validate_trusted_build_config(
     kernel_cost_config: dict[str, Any],
     kernel_cost_config_sha256: str,
 ) -> dict[str, Any]:
-    """Validate the public, portable contract emitted by the trusted builder."""
+    """校验可信构建器生成的公开可移植合同。"""
 
     root = _object(value, "trusted build config")
     _expect_keys(root, TRUSTED_BUILD_CONFIG_FIELDS, "trusted build config")
@@ -1179,7 +1176,7 @@ def validate_trusted_build_log(
     trusted_config: dict[str, Any],
     build_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate the fixed build/check transcript and all embedded byte receipts."""
+    """校验固定构建/检查记录及其中所有字节回执。"""
 
     root = _object(value, "trusted build log")
     _expect_keys(root, TRUSTED_BUILD_LOG_FIELDS, "trusted build log")
@@ -1301,7 +1298,7 @@ def validate_trusted_build_environment(
     environment_manifest: dict[str, Any],
     trusted_config: dict[str, Any],
 ) -> dict[str, Any]:
-    """Bind the public environment receipt to deterministic inputs and Make."""
+    """将公开环境回执绑定到确定性输入和 Make。"""
 
     facts = {
         fact["name"]: fact["value"]
@@ -1478,7 +1475,7 @@ def collect_report(
     runner: ToolRunner = _run_tool,
     repository_reader: RepositoryReader = _repository_state,
 ) -> dict[str, Any]:
-    """Collect evidence from prebuilt files bound by strict external manifests."""
+    """从严格外部清单绑定的预构建文件采集证据。"""
 
     root = _resolved_safe_directory(repository_root, "repository root")
     receipt_root = root if evidence_root is None else _resolved_safe_directory(
@@ -1980,7 +1977,7 @@ def _verify_guardrail_binding(
 
 
 def require_complete(report: dict[str, Any]) -> None:
-    """Fail closed unless every formal kernel-cost measurement is present."""
+    """正式内核成本测量不完整时按失败关闭。"""
 
     incomplete = [
         f"{target['id']}/{metric['id']}"
@@ -2010,7 +2007,7 @@ def verify_portable(
     config_path: Path,
     evidence_root: Path,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Verify a relocated evidence package without requiring ELF files or tools."""
+    """无需 ELF 文件或工具即可验证已迁移的证据包。"""
 
     root = _resolved_safe_directory(evidence_root, "evidence root")
     config_path = _resolved_safe_file(config_path, "kernel cost config")
@@ -2065,7 +2062,7 @@ def verify_local(
     runner: ToolRunner = _run_tool,
     repository_reader: RepositoryReader = _repository_state,
 ) -> dict[str, Any]:
-    """Add clean-HEAD, artifact, ELF, tool-hash, and command replay checks."""
+    """增加干净 HEAD、工件、ELF、工具哈希和命令重放检查。"""
 
     repository_root = _resolved_safe_directory(repository_root, "repository root")
     report, _environment, _build = verify_portable(

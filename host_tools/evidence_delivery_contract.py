@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the source-C to evidence-E Git delivery boundary."""
+"""验证源码 C 到证据 E 的 Git 交付边界。"""
 from __future__ import annotations
 
 import argparse

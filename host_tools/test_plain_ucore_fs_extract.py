@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit checks for plain_ucore_fs_extract."""
+"""plain_ucore_fs_extract 的单元测试。"""
 
 from __future__ import annotations
 
@@ -186,7 +186,6 @@ def run_case(
     vfs_format = magic in fsx.VFS_POLICY_MAGICS
     quota_format = magic in fsx.QUOTA_MAGICS
 
-    # superblock
     put_u32(image, fsx.BSIZE, magic)
     put_u32(image, fsx.BSIZE + 4, 1000)
     put_u32(image, fsx.BSIZE + 12, 64)
@@ -670,8 +669,8 @@ def run_case(
         else:
             raise AssertionError("duplicate workflow name accepted")
 
-        # The scoped format permits the same physical name in independent
-        # workflow namespaces and must not overwrite either extracted object.
+        # 作用域格式允许不同工作流命名空间使用相同物理名称，且不得覆盖任一
+        # 已提取对象。
         if is_scoped(magic):
             dynamic_scope = first_dynamic_scope(magic)
             cross_scope = bytearray(image)

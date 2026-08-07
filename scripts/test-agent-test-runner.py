@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast tests for the Agent QEMU output monitor."""
+"""Agent QEMU 输出监控器的快速测试。"""
 
 import io
 import os

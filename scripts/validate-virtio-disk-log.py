@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate complete, ordered VirtIO fault-matrix evidence."""
+"""校验完整且有序的 VirtIO 故障矩阵证据。"""
 
 from __future__ import annotations
 

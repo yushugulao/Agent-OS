@@ -1,11 +1,7 @@
 #ifndef USER_STACK_POLICY_H
 #define USER_STACK_POLICY_H
 
-/*
- * One immutable contract covers the loader, exec argument staging, user-space
- * call-path analysis, and acceptance tests.  The initial argv image grows
- * down from the top of the page; compiled C call paths grow below it.
- */
+/* 单一不可变契约覆盖加载器、exec 参数暂存、用户调用路径分析和验收测试。 */
 #define USER_STACK_SIZE_BYTES 4096ULL
 #define USER_STACK_ARGV_LAYOUT_BYTES 1024ULL
 #define USER_STACK_CALL_PATH_BYTES 3072ULL

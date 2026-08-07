@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host behavior and mutation tests for the two freestanding printf owners."""
+"""两个独立 printf 所有者的 Host 行为与变异测试。"""
 
 from __future__ import annotations
 

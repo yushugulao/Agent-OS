@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation guards for immutable Context archives and active-path views."""
+"""不可变 Context 归档与活动路径视图的变异防护。"""
 
 from pathlib import Path
 

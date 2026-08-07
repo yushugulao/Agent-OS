@@ -6,7 +6,6 @@
 #include <unistd.h>
 
 #define TEST_NOINLINE __attribute__((noinline))
-#define LEGACY_MAIL_TEST_SLOTS 16
 #define LOW_AUDIT_CHURN_COUNT 200
 
 static void check(int ok, const char *msg)
@@ -36,15 +35,6 @@ static struct agent_result security_anchor_result;
 static struct agent_file_query security_file_query;
 static struct agent_file_query_result security_file_result;
 static uint64 security_orchestrator_span;
-
-static void check_plain_mail(void);
-static void check_plain_mail_reclaim_reuse(void);
-
-struct legacy_workflow_report {
-	uint scope_id;
-	int target_pid;
-	int result;
-};
 
 static void make_op(struct agent_op *op, int tool, uint64 id, uint64 arg0,
 		    const char *payload)
@@ -334,8 +324,6 @@ static void check_plain_child_creation_denied(void)
 
 static TEST_NOINLINE void check_orchestrator_plain_fork_denied(void)
 {
-	char legacy[] = "agent-to-public";
-	char empty[4];
 	int pid;
 	int status = 0;
 
@@ -344,223 +332,11 @@ static TEST_NOINLINE void check_orchestrator_plain_fork_denied(void)
 	if (pid == 0) {
 		check_plain_identity();
 		check_creation_authority_denied();
-		sleep(20);
-		check(mailread(empty, sizeof(empty)) == 0,
-		      "public child legacy queue remains empty");
 		exit(0);
 	}
-	check(mailwrite(pid, legacy, sizeof(legacy)) == -1,
-	      "agent cannot use legacy mail to public endpoint");
 	check(waitpid(pid, &status) == pid, "wait orchestrator plain child");
 	check(status == 0, "orchestrator plain child status");
 	printf("agentsecurity_ucore: orchestrator_plain_fork_denied=1\n");
-}
-
-static TEST_NOINLINE void check_orchestrator_scoped_public_mail(void)
-{
-	char msg[] = "same-lineage";
-	int bootstrap_pid = getppid();
-	int source_pid;
-	int target_pid;
-	int status = 0;
-
-	target_pid = fork();
-	check(target_pid >= 0, "fork scoped public mail target");
-	if (target_pid == 0) {
-		char out[32];
-		int n = 0;
-
-		check_plain_identity();
-		memset(out, 0, sizeof(out));
-		for (int attempt = 0; attempt < 100 && n == 0; attempt++) {
-			n = mailread(out, sizeof(out));
-			if (n == 0)
-				sleep(1);
-		}
-		check(n == (int)sizeof(msg) && strcmp(out, msg) == 0,
-		      "same lineage public mail received");
-		exit(0);
-	}
-	source_pid = fork();
-	check(source_pid >= 0, "fork scoped public mail source");
-	if (source_pid == 0) {
-		check_plain_identity();
-		check(mailwrite(target_pid, msg, sizeof(msg)) ==
-			      (int)sizeof(msg),
-		      "same lineage public mail allowed");
-		check(mailwrite(bootstrap_pid, "cross-scope", 12) == -1,
-		      "cross scope public mail denied");
-		exit(0);
-	}
-	check(waitpid(source_pid, &status) == source_pid,
-	      "wait scoped public mail source");
-	check(status == 0, "scoped public mail source status");
-	check(waitpid(target_pid, &status) == target_pid,
-	      "wait scoped public mail target");
-	check(status == 0, "scoped public mail target status");
-	printf("agentsecurity_ucore: mail_scoped_public=1 same_lineage=1\n");
-	printf("agentsecurity_ucore: mail_cross_scope_denied=1\n");
-}
-
-static TEST_NOINLINE void run_legacy_workflow_a(int report_fd, int gate_fd)
-{
-	struct legacy_workflow_report report;
-	struct agent_info info;
-	char token = 0;
-	int target_gate[2];
-	int target_report[2];
-	int target_pid;
-	int status = -1;
-
-	check_role(AGENT_ROLE_ORCHESTRATOR, "legacy-workflow-a");
-	check(agent_info(&info) == AGENT_STATUS_OK,
-	      "read legacy workflow A scope");
-	check(pipe(target_gate) == 0 && pipe(target_report) == 0,
-	      "create workflow A public coordination");
-	check(agent_scope_delegate_fd(target_gate[0]) == AGENT_STATUS_OK &&
-		      agent_scope_delegate_fd(target_report[1]) ==
-			      AGENT_STATUS_OK,
-	      "delegate workflow A public coordination");
-	target_pid = fork();
-	check(target_pid >= 0, "create workflow A public target");
-	if (target_pid == 0) {
-		char out[16];
-		int result;
-
-		check_plain_identity();
-		check(read(target_gate[0], &token, 1) == 1 && token == 'R',
-		      "release workflow A public target");
-		result = mailread(out, sizeof(out));
-		check(write(target_report[1], &result, sizeof(result)) ==
-			      (int)sizeof(result),
-		      "report workflow A public mailbox state");
-		exit(result == 0 ? 0 : 1);
-	}
-	memset(&report, 0, sizeof(report));
-	report.scope_id = info.filesystem_domain;
-	report.target_pid = target_pid;
-	check(write(report_fd, &report, sizeof(report)) == (int)sizeof(report),
-	      "publish workflow A public target");
-	check(read(gate_fd, &token, 1) == 1 && token == 'R',
-	      "wait workflow B legacy send attempt");
-	check(write(target_gate[1], &token, 1) == 1,
-	      "release workflow A target inspection");
-	check(read(target_report[0], &report.result, sizeof(report.result)) ==
-		      (int)sizeof(report.result),
-	      "receive workflow A target inspection");
-	check(waitpid(target_pid, &status) == target_pid && status == 0,
-	      "wait workflow A public target");
-	check(write(report_fd, &report, sizeof(report)) == (int)sizeof(report),
-	      "publish workflow A isolation result");
-	exit(0);
-}
-
-static TEST_NOINLINE void run_legacy_workflow_b(int command_fd, int report_fd)
-{
-	struct legacy_workflow_report report;
-	struct agent_info info;
-	int source_report[2];
-	int source_pid;
-	int target_pid;
-	int status = -1;
-
-	check_role(AGENT_ROLE_ORCHESTRATOR, "legacy-workflow-b");
-	check(read(command_fd, &target_pid, sizeof(target_pid)) ==
-		      (int)sizeof(target_pid) && target_pid > 0,
-	      "receive workflow A public target");
-	check(pipe(source_report) == 0,
-	      "create workflow B public result pipe");
-	check(agent_scope_delegate_fd(source_report[1]) == AGENT_STATUS_OK,
-	      "delegate workflow B public result");
-	source_pid = fork();
-	check(source_pid >= 0, "create workflow B public source");
-	if (source_pid == 0) {
-		int result;
-
-		check_plain_identity();
-		result = mailwrite(target_pid, "cross-workflow", 15);
-		check(write(source_report[1], &result, sizeof(result)) ==
-			      (int)sizeof(result),
-		      "report cross-workflow legacy send");
-		exit(result == -1 ? 0 : 1);
-	}
-	memset(&report, 0, sizeof(report));
-	check(read(source_report[0], &report.result, sizeof(report.result)) ==
-		      (int)sizeof(report.result),
-	      "receive cross-workflow legacy send result");
-	check(waitpid(source_pid, &status) == source_pid && status == 0,
-	      "wait workflow B public source");
-	check(agent_info(&info) == AGENT_STATUS_OK,
-	      "read legacy workflow B scope");
-	report.scope_id = info.filesystem_domain;
-	report.target_pid = target_pid;
-	check(write(report_fd, &report, sizeof(report)) == (int)sizeof(report),
-	      "publish workflow B isolation result");
-	exit(0);
-}
-
-static TEST_NOINLINE void check_active_workflow_mail_isolation(void)
-{
-	struct legacy_workflow_report ready_a;
-	struct legacy_workflow_report done_a;
-	struct legacy_workflow_report done_b;
-	char token = 'R';
-	int a_report[2];
-	int a_gate[2];
-	int b_command[2];
-	int b_report[2];
-	int pid_a;
-	int pid_b;
-	int status = -1;
-
-	check(pipe(a_report) == 0 && pipe(a_gate) == 0 &&
-		      pipe(b_command) == 0 && pipe(b_report) == 0,
-	      "create active workflow legacy mail pipes");
-	check(agent_scope_delegate_fd(a_report[1]) == AGENT_STATUS_OK &&
-		      agent_scope_delegate_fd(a_gate[0]) == AGENT_STATUS_OK,
-	      "delegate workflow A legacy mail endpoints");
-	pid_a = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
-	check(pid_a >= 0, "create active legacy workflow A");
-	if (pid_a == 0)
-		run_legacy_workflow_a(a_report[1], a_gate[0]);
-	check(close(a_report[1]) == 0 && close(a_gate[0]) == 0,
-	      "close workflow A child endpoints");
-	check(agent_scope_delegate_fd(b_command[0]) == AGENT_STATUS_OK &&
-		      agent_scope_delegate_fd(b_report[1]) == AGENT_STATUS_OK,
-	      "delegate workflow B legacy mail endpoints");
-	pid_b = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
-	check(pid_b >= 0, "create active legacy workflow B");
-	if (pid_b == 0)
-		run_legacy_workflow_b(b_command[0], b_report[1]);
-	check(close(b_command[0]) == 0 && close(b_report[1]) == 0,
-	      "close workflow B child endpoints");
-
-	check(read(a_report[0], &ready_a, sizeof(ready_a)) ==
-		      (int)sizeof(ready_a) && ready_a.target_pid > 0,
-	      "receive active workflow A endpoint");
-	check(write(b_command[1], &ready_a.target_pid,
-		    sizeof(ready_a.target_pid)) ==
-		      (int)sizeof(ready_a.target_pid),
-	      "send workflow A endpoint to workflow B");
-	check(read(b_report[0], &done_b, sizeof(done_b)) ==
-		      (int)sizeof(done_b),
-	      "receive active workflow B result");
-	check(done_b.result == -1 && done_b.scope_id != ready_a.scope_id,
-	      "distinct active workflows reject legacy mail");
-	check(write(a_gate[1], &token, 1) == 1,
-	      "release workflow A mailbox inspection");
-	check(read(a_report[0], &done_a, sizeof(done_a)) ==
-		      (int)sizeof(done_a) && done_a.result == 0,
-	      "cross-workflow send leaves target queue empty");
-	check(waitpid(pid_b, &status) == pid_b && status == 0,
-	      "wait active legacy workflow B");
-	status = -1;
-	check(waitpid(pid_a, &status) == pid_a && status == 0,
-	      "wait active legacy workflow A");
-	check(close(a_report[0]) == 0 && close(a_gate[1]) == 0 &&
-		      close(b_command[1]) == 0 && close(b_report[0]) == 0,
-	      "close active workflow legacy mail pipes");
-	printf("agentsecurity_ucore: mail_active_workflow_isolation=1\n");
 }
 
 static void check_reaped_agent_slot_cleared(void)
@@ -814,18 +590,15 @@ static TEST_NOINLINE void run_artifact(void)
 static TEST_NOINLINE void run_orphan_cancel_victim(int ready_fd, int result_fd,
 					   int gate_fd)
 {
-	char legacy[8];
 	char ready = 'R';
 	char gate = 0;
 
 	(void)result_fd;
 	check_role(AGENT_ROLE_SENTINEL, "cancel-victim");
-	check(mailread(legacy, sizeof(legacy)) == -1,
-	      "agent legacy mail receive denied");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "release=controller") == 0,
 	      "watch controller release");
 	check(write(ready_fd, &ready, 1) == 1, "report cancel victim ready");
-	/* No trusted ancestor exists, so controller teardown must interrupt this. */
+	/* 没有可信祖先，必须由控制器拆除来中断。 */
 	(void)read(gate_fd, &gate, 1);
 	exit(99);
 }
@@ -856,8 +629,6 @@ static TEST_NOINLINE void run_retired_cancel_controller(int report_fd,
 				 AGENT_IPC_EVENT_MESSAGE,
 				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
 	      "grant retired controller route");
-	check(mailwrite(victim_pid, "legacy", 7) == -1,
-	      "route does not authorize legacy agent mail");
 	check(write(report_fd, &victim_pid, sizeof(victim_pid)) ==
 		      (int)sizeof(victim_pid),
 	      "report orphan cancel victim");
@@ -918,8 +689,6 @@ static void check_wait_cancel_controller_lifecycle(void)
 		      (int)sizeof(victim_pid),
 	      "read orphan cancel victim");
 	check(victim_pid > 0, "orphan cancel victim pid");
-	check(mailwrite(victim_pid, "public-to-agent", 16) == -1,
-	      "public legacy mail cannot reach controller child");
 	check(close(report_pipe[1]) == 0,
 	      "close bootstrap orphan report writer");
 	check(waitpid(controller_pid, &status) == controller_pid,
@@ -1377,7 +1146,6 @@ static void run_orchestrator(void)
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "orchestrator");
 	check_orchestrator_plain_fork_denied();
-	check_orchestrator_scoped_public_mail();
 	check_ipc_route_authorization();
 	check_target_route_consent();
 	check_route_slot_reclamation();
@@ -1577,231 +1345,24 @@ static void check_plain_process_denied(void)
 	printf("agentsecurity_ucore: .agentmeta_protected=1\n");
 }
 
-static void check_plain_mail(void)
+static void check_legacy_mail_fail_closed(void)
 {
-	char msg[] = "mail-ok";
-	char out[16];
-	int n;
+	char byte = 0;
 
-	check(agent_info(&security_agent_info) == 0,
-	      "empty legacy mailbox info");
-	check(security_agent_info.legacy_mailbox_allocated == 0 &&
-		      security_agent_info.legacy_mailbox_pages == 0 &&
-		      security_agent_info.legacy_mailbox_queue_count == 0,
-	      "legacy mailbox starts unallocated");
-	memset(out, 0, sizeof(out));
-	check(mailread(out, sizeof(out)) == 0, "empty mail");
-	check(agent_info(&security_agent_info) == 0,
-	      "post-empty legacy mailbox info");
-	check(security_agent_info.legacy_mailbox_allocated == 0 &&
-		      security_agent_info.legacy_mailbox_pages == 0,
-	      "empty read does not allocate legacy mailbox");
-	n = strlen(msg) + 1;
-	check(mailwrite(getpid(), msg, n) == n, "mail write");
-	check(agent_info(&security_agent_info) == 0,
-	      "first legacy mailbox allocation info");
-	check(security_agent_info.legacy_mailbox_allocated == 1 &&
-		      security_agent_info.legacy_mailbox_pages == 2 &&
-		      security_agent_info.legacy_mailbox_queue_count == 1,
-	      "first legacy mailbox send allocates two pages");
-	check(mailread((void *)(unsigned long)1, sizeof(out)) == -1,
-	      "invalid legacy mail destination rejected");
-	check(agent_info(&security_agent_info) == 0 &&
-		      security_agent_info.legacy_mailbox_queue_count == 1,
-	      "failed legacy read retains queued message");
-	check(mailread(out, sizeof(out)) == n, "mail read");
-	check(strcmp(out, msg) == 0, "mail text");
-	for (int i = 0; i < LEGACY_MAIL_TEST_SLOTS; i++)
-		check(mailwrite(getpid(), msg, n) == n,
-		      "bounded public mail enqueue");
-	check(mailwrite(getpid(), msg, n) == -1,
-	      "bounded public mail queue rejects flood");
-	check(agent_info(&security_agent_info) == 0,
-	      "full legacy mailbox info");
-	check(security_agent_info.legacy_mailbox_pages == 2 &&
-		      security_agent_info.legacy_mailbox_queue_count ==
-			      LEGACY_MAIL_TEST_SLOTS,
-	      "full legacy mailbox remains a two-page sidecar");
-	for (int i = 0; i < LEGACY_MAIL_TEST_SLOTS; i++) {
-		memset(out, 0, sizeof(out));
-		check(mailread(out, sizeof(out)) == n &&
-			      strcmp(out, msg) == 0,
-		      "bounded public mail dequeue");
-	}
-	check(mailread(out, sizeof(out)) == 0,
-	      "bounded public mail queue drained");
-	check(agent_info(&security_agent_info) == 0,
-	      "drained legacy mailbox info");
-	check(security_agent_info.legacy_mailbox_allocated == 1 &&
-		      security_agent_info.legacy_mailbox_pages == 2 &&
-		      security_agent_info.legacy_mailbox_queue_count == 0,
-	      "drained legacy mailbox stays allocated until teardown");
-	printf("agentsecurity_ucore: mail_basic=1\n");
-	printf("agentsecurity_ucore: mail_public_bounded=1\n");
-	printf("agentsecurity_ucore: mail_lazy_empty=1 first_alloc_pages=2\n");
-	printf("agentsecurity_ucore: mail_queue_full=1 capacity=16\n");
-	printf("agentsecurity_ucore: mail_read_failure_atomic=1\n");
-}
-
-static void check_plain_mail_reclaim_reuse(void)
-{
-	char msg[] = "reclaim";
-	int replacement_pid;
-	int stale_pid;
-	int status = 0;
-
-	stale_pid = fork();
-	check(stale_pid >= 0, "fork legacy mailbox reclaim owner");
-	if (stale_pid == 0) {
-		check(agent_info(&security_agent_info) == 0,
-		      "fresh reclaim owner mailbox info");
-		check(security_agent_info.legacy_mailbox_allocated == 0,
-		      "fresh reclaim owner has no mailbox sidecar");
-		check(mailwrite(getpid(), msg, sizeof(msg)) == (int)sizeof(msg),
-		      "allocate reclaim owner mailbox sidecar");
-		check(agent_info(&security_agent_info) == 0 &&
-			      security_agent_info.legacy_mailbox_pages == 2,
-		      "reclaim owner mailbox sidecar allocated");
-		exit(0);
-	}
-	check(waitpid(stale_pid, &status) == stale_pid,
-	      "wait legacy mailbox reclaim owner");
-	check(status == 0, "legacy mailbox reclaim owner status");
-	check(mailwrite(stale_pid, msg, sizeof(msg)) == -1,
-	      "stale legacy PID is not an endpoint");
-	replacement_pid = fork();
-	check(replacement_pid >= 0, "fork legacy mailbox reused slot");
-	if (replacement_pid == 0) {
-		char out[16];
-
-		check(agent_info(&security_agent_info) == 0,
-		      "reused slot mailbox info");
-		check(security_agent_info.legacy_mailbox_allocated == 0 &&
-			      security_agent_info.legacy_mailbox_pages == 0 &&
-			      security_agent_info.legacy_mailbox_queue_count == 0,
-		      "reused slot has no stale mailbox sidecar");
-		check(mailread(out, sizeof(out)) == 0,
-		      "reused slot has no stale legacy message");
-		exit(0);
-	}
-	check(replacement_pid > stale_pid,
-	      "legacy endpoint PID is never silently reused");
-	check(waitpid(replacement_pid, &status) == replacement_pid,
-	      "wait legacy mailbox reused slot");
-	check(status == 0, "legacy mailbox reused slot status");
-	printf("agentsecurity_ucore: mail_endpoint_reuse_isolated=1 stale_pid_denied=1\n");
-}
-
-static TEST_NOINLINE void check_ordinary_mail_domain_isolation(void)
-{
-	char token = 'R';
-	int target_gate[2];
-	int target_report[2];
-	int target_pid;
-	int source_pid;
-	int target_result = -1;
-	int status = -1;
-
-	check(pipe(target_gate) == 0 && pipe(target_report) == 0,
-	      "create ordinary legacy mail coordination");
-	check(agent_scope_delegate_fd(target_gate[0]) == AGENT_STATUS_OK &&
-		      agent_scope_delegate_fd(target_report[1]) ==
-			      AGENT_STATUS_OK,
-	      "delegate ordinary target coordination");
-	target_pid = fork();
-	check(target_pid >= 0, "create independent ordinary mail target");
-	if (target_pid == 0) {
-		char out[16];
-
-		check_plain_identity();
-		check(read(target_gate[0], &token, 1) == 1 && token == 'R',
-		      "release ordinary target mailbox inspection");
-		target_result = mailread(out, sizeof(out));
-		check(write(target_report[1], &target_result,
-			    sizeof(target_result)) == (int)sizeof(target_result),
-		      "report ordinary target mailbox state");
-		exit(target_result == 0 ? 0 : 1);
-	}
-	check(close(target_gate[0]) == 0 && close(target_report[1]) == 0,
-	      "close ordinary target child endpoints");
-	source_pid = fork();
-	check(source_pid >= 0, "create independent ordinary mail source");
-	if (source_pid == 0) {
-		char same_message[] = "same-account";
-		char *exec_argv[] = {
-			"agentsecurity_ucore", "--legacy-exec-probe", 0
-		};
-		int peer_pid;
-
-		check_plain_identity();
-		peer_pid = fork();
-		check(peer_pid >= 0, "create same-account ordinary peer");
-		if (peer_pid == 0) {
-			char out[16];
-			int n = 0;
-
-			for (int attempt = 0; attempt < 100 && n == 0;
-			     attempt++) {
-				n = mailread(out, sizeof(out));
-				if (n == 0)
-					sleep(1);
-			}
-			check(n == (int)sizeof(same_message) &&
-				      strcmp(out, same_message) == 0,
-			      "same ordinary account receives legacy mail");
-			exit(0);
-		}
-		check(mailwrite(peer_pid, same_message,
-				 sizeof(same_message)) == (int)sizeof(same_message),
-		      "same ordinary account legacy compatibility");
-		check(waitpid(peer_pid, &status) == peer_pid && status == 0,
-		      "wait same-account ordinary peer");
-		check(mailwrite(target_pid, "cross-account", 14) == -1,
-		      "independent ordinary account legacy send denied");
-		check_plain_mail();
-		check_plain_mail_reclaim_reuse();
-		check(mailwrite(getpid(), "pre-exec", 9) == 9,
-		      "queue legacy mail before PUBLIC exec");
-		if (exec("agentsecurity_ucore", exec_argv) < 0)
-			exit(1);
-		exit(1);
-	}
-	check(waitpid(source_pid, &status) == source_pid && status == 0,
-	      "wait independent ordinary source");
-	check(write(target_gate[1], &token, 1) == 1,
-	      "release independent ordinary target");
-	check(read(target_report[0], &target_result, sizeof(target_result)) ==
-		      (int)sizeof(target_result) && target_result == 0,
-	      "cross-account legacy send leaves target queue empty");
-	status = -1;
-	check(waitpid(target_pid, &status) == target_pid && status == 0,
-	      "wait independent ordinary target");
-	check(close(target_gate[1]) == 0 && close(target_report[0]) == 0,
-	      "close ordinary target parent endpoints");
-	printf("agentsecurity_ucore: mail_ordinary_domain_isolation=1 same_account_compat=1\n");
-}
-
-static void check_system_scoped_mail_denied(void)
-{
-	char out[16];
-
-	check(agent_info(&security_agent_info) == 0 &&
-		      security_agent_info.legacy_mailbox_allocated == 0,
-	      "system scoped mailbox starts absent");
-	check(mailread(out, sizeof(out)) == -1,
-	      "system scoped PUBLIC lacks an active Agent controller");
-	check(mailwrite(getpid(), "system-scope", 13) == -1,
-	      "system scoped PUBLIC cannot self-authorize legacy mail");
+	check(mailread(&byte, sizeof(byte)) == -1,
+	      "retired mailread fails closed");
+	check(mailwrite(getpid(), &byte, sizeof(byte)) == -1,
+	      "retired mailwrite fails closed");
 	check(agent_info(&security_agent_info) == 0 &&
 		      security_agent_info.legacy_mailbox_allocated == 0 &&
+		      security_agent_info.legacy_mailbox_pages == 0 &&
 		      security_agent_info.legacy_mailbox_queue_count == 0,
-	      "denied system scoped mail does not allocate");
-	printf("agentsecurity_ucore: mail_missing_controller_denied=1\n");
+	      "retired legacy mailbox metrics stay zero");
+	printf("agentsecurity_ucore: legacy_mail_fail_closed=1\n");
 }
 
 int main(int argc, char **argv)
 {
-	char cross_scope_out[16];
 	int pid;
 	int status = 0;
 	char *exec_probe_argv[] = {
@@ -1814,23 +1375,6 @@ int main(int argc, char **argv)
 		printf("agentsecurity_ucore: untrusted_exec_role_creation_denied=1\n");
 		return 0;
 	}
-	if (argc > 1 && strcmp(argv[1], "--legacy-exec-probe") == 0) {
-		char out[16];
-
-		check_plain_identity();
-		check(agent_info(&security_agent_info) == 0 &&
-			      security_agent_info.legacy_mailbox_allocated == 0 &&
-			      security_agent_info.legacy_mailbox_queue_count == 0,
-		      "PUBLIC exec rotates and clears legacy endpoint");
-		check(mailread(out, sizeof(out)) == 0,
-		      "PUBLIC exec cannot receive pre-exec legacy mail");
-		check(mailwrite(getpid(), "post-exec", 10) == 10 &&
-			      mailread(out, sizeof(out)) == 10 &&
-			      strcmp(out, "post-exec") == 0,
-		      "rotated PUBLIC endpoint remains usable");
-		printf("agentsecurity_ucore: mail_exec_endpoint_rotated=1\n");
-		return 0;
-	}
 	if (argc > 1 && strcmp(argv[1], "--bootstrap-exec-probe") == 0) {
 		check_plain_identity();
 		check_creation_authority_denied();
@@ -1841,9 +1385,7 @@ int main(int argc, char **argv)
 
 	printf("agentsecurity_ucore: Agent permission test\n");
 	check_bootstrap_identity();
-	check_system_scoped_mail_denied();
-	check_ordinary_mail_domain_isolation();
-	check_active_workflow_mail_isolation();
+	check_legacy_mail_fail_closed();
 	check_plain_process_denied();
 	check_plain_child_creation_denied();
 	check_wait_cancel_controller_lifecycle();
@@ -1851,15 +1393,9 @@ int main(int argc, char **argv)
 	check(pid >= 0, "create orchestrator");
 	if (pid == 0)
 		run_orchestrator();
-	check(mailwrite(pid, "public-to-agent", 16) == -1,
-	      "public cannot use legacy mail to agent endpoint");
 	printf("agentsecurity_ucore: bootstrap_orchestrator_create=1\n");
 	check(waitpid(pid, &status) == pid, "wait orchestrator");
 	check(status == 0, "orchestrator status");
-	check(mailread(cross_scope_out, sizeof(cross_scope_out)) == -1 &&
-		      agent_info(&security_agent_info) == 0 &&
-		      security_agent_info.legacy_mailbox_allocated == 0,
-	      "cross scope public mail did not enqueue");
 	check_reaped_agent_slot_cleared();
 	if (exec("agentsecurity_ucore", exec_probe_argv) < 0)
 		check(0, "bootstrap exec probe");

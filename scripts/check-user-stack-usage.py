@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed when compiled user call paths exceed the one-page stack."""
+"""编译后的用户调用路径超过单页栈时闭锁失败。"""
 
 import argparse
 import re
@@ -268,9 +268,8 @@ def read_callgraph(unit, path):
                         raise ValueError(
                             f"invalid inlined callgraph node at {path}:{line_number}: {title}"
                         )
-                    # GCC omits a .su record for a fully inlined function. Its
-                    # locals are already charged to the emitted caller frame;
-                    # retain the call edges with a zero additional frame.
+                    # GCC 不为完全内联函数生成 .su 记录，其局部变量已计入实际生成的
+                    # 调用者栈帧；保留调用边，但附加栈帧记为零。
                     frames[title] = 0
                 continue
             if edge:
@@ -403,8 +402,8 @@ def longest_app_path(
         raise ValueError(f"application has no compiled main entry: {app.unit}")
     if STARTUP_NODE not in frames or "main" not in graph.get(STARTUP_NODE, ()):
         raise ValueError(f"startup chain does not reach {app.unit}:main")
-    # _start tail-calls this C frame. Keep every app function as a potential
-    # callback entry, but also account for the frame retained below main().
+    # _start 尾调用此 C 栈帧。把每个应用函数保留为潜在回调入口，同时计入
+    # main() 下方仍保留的栈帧。
     roots = set(app.frames) | {STARTUP_NODE}
     applied_indirect_callers = set()
     for caller in tuple(frames):

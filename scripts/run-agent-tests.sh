@@ -38,9 +38,8 @@ MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 REQUIRE_FULL_SUITE="${REQUIRE_FULL_SUITE:-0}"
 AGENT_TEST_CALIBRATE="${AGENT_TEST_CALIBRATE:-0}"
 AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-local-e3}"
-# Preserve the resolved Host probe compiler, then remove every ambient GNU
-# make input that a review build deliberately rejects.  Command-line values
-# supplied below remain explicit and auditable.
+# 保留已解析的 Host 探针编译器，再清除审查构建明确拒绝的所有环境 GNU make 输入。
+# 下方提供的命令行值仍然显式且可审计。
 readonly HOST_CC
 readonly -a FUNCTIONAL_REVIEW_SANITIZED_ENV=(
 	MAKEFILES MAKEFLAGS MFLAGS MAKEOVERRIDES GNUMAKEFLAGS
@@ -309,25 +308,15 @@ check_case_contract() {
 		;;
 	agentsecurity_ucore)
 		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_lazy_empty=1 first_alloc_pages=2"
+			"agentsecurity_ucore: legacy_mail_fail_closed=1"
 		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_queue_full=1 capacity=16"
+			"agentsecurity_ucore: message_route_lifecycle=1"
 		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_read_failure_atomic=1"
+			"agentsecurity_ucore: ipc_route_authorization=1"
 		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_endpoint_reuse_isolated=1 stale_pid_denied=1"
+			"agentsecurity_ucore: target_route_consent=1"
 		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_exec_endpoint_rotated=1"
-		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_ordinary_domain_isolation=1 same_account_compat=1"
-		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_active_workflow_isolation=1"
-		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_scoped_public=1 same_lineage=1"
-		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_cross_scope_denied=1"
-		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: mail_missing_controller_denied=1"
+			"agentsecurity_ucore: route_slot_reclaimed=1"
 		;;
 	labdemo_ucore)
 		require_exact_case_marker "${log_file}" \
@@ -379,8 +368,8 @@ check_case_contract() {
 build_user_image() {
 	local user_extra_cflags="${1:-}"
 
-	# nfs/fs.img depends on the user target.  Keep both compilation and image
-	# construction in one make invocation so profile flags cannot be dropped.
+	# nfs/fs.img 依赖 user 目标。编译与镜像构建须置于同一次 make 调用，
+	# 防止 profile 参数丢失。
 	"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile nfs/fs.img \
 		TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}" \
 		FUNCTIONAL_REVIEW_BUILD=1 \

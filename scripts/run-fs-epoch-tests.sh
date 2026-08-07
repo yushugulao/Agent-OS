@@ -154,8 +154,7 @@ build_case() {
 		build_dir="${user_build}" out_dir="${user_target}" \
 		asm_dir="${user_asm}" "${elf}"
 	mkdir -p "${user_target}/bin" "${user_target}/elf"
-	# Reuse the existing trusted bootstrap/public carrier pair so each reboot
-	# enters the same persistent PUBLIC resource domain.
+	# 复用现有可信 bootstrap/public carrier 对，使每次重启进入同一持久 PUBLIC 资源域。
 	cp "${user_build}/bin/fsepoch_ucore" \
 		"${user_target}/bin/${SEALED_INIT_IMAGE}"
 	cp "${elf}" "${user_target}/elf/${SEALED_INIT_IMAGE}"

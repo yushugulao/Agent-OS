@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the attested ordering and identity of a metadata crash trigger."""
+"""校验元数据崩溃触发器经认证的顺序与身份。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ PHASE_NAMES = {
 
 
 class ValidationError(RuntimeError):
-    """The log cannot serve as metadata crash-test evidence."""
+    """该日志不能作为元数据崩溃测试证据。"""
 
 
 MARKERS = {

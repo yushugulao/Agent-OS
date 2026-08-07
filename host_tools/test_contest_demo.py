@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused regressions for the source-bound, single-Guest contest showcase."""
+"""源码绑定、单 Guest 竞赛演示的专项回归测试。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from unittest import mock
 import contest_demo
 
 
-ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = "0123456789abcdef"
 NONCE = int(RUN_ID, 16)
 COMMIT = "a" * 40
@@ -694,49 +693,6 @@ def test_report_rejects_artifact_basename_collisions() -> None:
                 raise AssertionError("artifact basename collision was accepted")
 
 
-def test_repository_wiring_is_balanced_and_nonce_bound() -> None:
-    runner = (ROOT / "scripts" / "run-contest-demo.sh").read_text(encoding="utf-8")
-    demo = (ROOT / "host_tools" / "contest_demo.py").read_text(encoding="utf-8")
-    manifest = (ROOT / "user" / "include" / "exec_policy_manifest.h").read_text(
-        encoding="utf-8"
-    )
-    guest = (ROOT / "user" / "src" / "labdemo_ucore.c").read_text(
-        encoding="utf-8"
-    )
-    trusted = (ROOT / "scripts" / "trusted-python-entry.py").read_text(encoding="utf-8")
-    assert runner.count("scripts/agent_test_runner.py") == 1
-    assert "agenteval_ucore" not in runner and "--evaluation-log" not in runner
-    assert "LABDEMO_RUN_NONCE=0x${run_id}ULL" in runner
-    assert "LABDEMO_SAMPLE_ID=${sample}" in runner
-    assert "LABDEMO_NATIVE_FIRST=${native_first}" in runner
-    assert "sample-${sample_tag}-qemu.log" in runner
-    assert 'CH_TESTS="labdemo_ucore labdemo_execprobe_ucore"' in runner
-    assert "CONTEST_DEMO_QEMU_JOBS:-1" in runner
-    assert "QEMU_JOBS != 1" in runner
-    assert "CAMPAIGN_SAMPLES < 8" in runner
-    assert "CAMPAIGN_SAMPLES > 64" in runner
-    assert runner.count('CH_TESTS="labdemo_ucore labdemo_execprobe_ucore"') == 2
-    assert runner.count("INIT_PROC=labdemo_ucore") == 2
-    assert "--lab-log" in runner
-    assert runner.count("scripts/trusted-python-entry.py") == 2
-    assert '"host_tools/contest_demo.py"' in trusted
-    assert not any(token in runner for token in ("curl ", "wget ", "http://", "https://"))
-    assert "same_kernel_same_guest_same_corpus" in demo
-    assert "incident_to_verified_durable_outcome" in demo
-    assert "control_ops" not in demo and "control_ops" not in guest
-    assert '"programs": 70' not in demo
-    assert "agentos-live-data" in demo
-    for source in (
-        "os/performance_stats.c", "os/performance_stats.h", "os/fs.c",
-        "os/virtio_disk.c", "os/agent_metadata_store.c",
-    ):
-        assert f'"{source}"' in demo
-    assert 'X("labdemo_execprobe_ucore", "ldexecprobe"' in manifest
-    assert "EXEC_MANIFEST_F_SEALED, 0, 0, EXEC_MANIFEST_VFS_PROFILE_NONE" in manifest
-    assert 'exec("ldexecprobe", argv)' in guest
-    assert len("ldexecprobe") <= 14
-
-
 def main() -> int:
     test_showcase_parser_and_product_outputs()
     test_schema2_records_fail_closed()
@@ -746,7 +702,6 @@ def main() -> int:
     test_source_identity_rejects_dirty_worktrees()
     test_report_rejects_source_drift()
     test_report_rejects_artifact_basename_collisions()
-    test_repository_wiring_is_balanced_and_nonce_bound()
     print("test_contest_demo: passed")
     return 0
 

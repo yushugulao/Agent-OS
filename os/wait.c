@@ -41,14 +41,12 @@ static int wait_queue_sleep_mode(struct wait_queue *q, int interruptible,
 	q->tail = t;
 	t->state = SLEEPING;
 	/*
-	 * Switch with interrupts disabled. The scheduler publishes idle as the
-	 * current thread before opening its interrupt window, so an interrupt can
-	 * never be attributed to this sleeping thread on the scheduler stack.
+	 * 在关中断状态切换。调度器打开中断窗口前先将空闲线程发布为当前线程，
+	 * 因而中断不会在调度器栈上误归因于本休眠线程。
 	 */
 	sched();
 	/*
-	 * Queue cancellation and a normal wake followed by teardown are distinct:
-	 * resource waiters may have to pass an already-issued grant onward.
+	 * 取消排队与正常唤醒后拆除不同：资源等待者可能须转交已签发的授予。
 	 */
 	canceled = t->wait_interrupted;
 	exit_requested = interruptible && proc_thread_exit_requested();

@@ -207,7 +207,7 @@ static void verify_commit_receipt(const char *kind,
 	unsigned long long failures = after->failed_transfers -
 		before->failed_transfers;
 
-	/* PREPARE, INODE and NAMESPACE each have one ordering barrier. */
+	/* PREPARE、INODE 和 NAMESPACE 各有一道顺序屏障。 */
 	if (after->physical_writes < before->physical_writes ||
 	    after->physical_flushes < before->physical_flushes ||
 	    after->failed_transfers < before->failed_transfers ||

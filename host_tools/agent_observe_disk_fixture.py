@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Construct a small, format-valid uCore observation image for Host tests."""
+"""为 Host 测试构造小型且格式有效的 uCore 观测镜像。"""
 
 from __future__ import annotations
 

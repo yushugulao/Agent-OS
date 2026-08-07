@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind selected worktree sources to immutable blobs from one Git commit."""
+"""将选定工作树源码绑定到一个 Git 提交中的不可变 blob。"""
 
 from __future__ import annotations
 
@@ -109,7 +109,7 @@ def committed_source_path_sample(
     *,
     snapshot_root: Path | None = None,
 ) -> tuple[tuple[str, int, str, str], ...]:
-    """Sample sources against exact commit blobs and optionally materialize them."""
+    """对照精确提交 blob 抽样源码，并可选择将其物化。"""
 
     if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) is None:
         raise DeliveryContractError("source sample commit is invalid")

@@ -118,7 +118,7 @@ static void test_exec_argv_bounds(void)
 	check(waitpid(pid, &status) == pid && status == 0,
 	      "exact exec argv layout budget");
 
-	/* Raw bytes still fit; per-string alignment and pointers make this 1040B. */
+	/* 原始字节仍可容纳；逐字符串对齐和指针使总量达到 1040 字节。 */
 	memset(exec_layout_overflow_arg, 'x', sizeof(exec_layout_overflow_arg));
 	exec_layout_overflow_arg[sizeof(exec_layout_overflow_arg) - 1] = 0;
 	check(exec("usersafety_ucore", exec_layout_overflow_argv) == -1,

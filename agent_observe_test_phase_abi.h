@@ -7,9 +7,8 @@
 #define AGENT_OBSERVE_TEST_PHASE_STATE_BYTES 168U
 
 /*
- * Host-owned boot control for the observation power-cut profile.  This is
- * test data, not evidence: the Runner advances it only after the preceding
- * boot has satisfied its independently observed completion marker.
+ * 观测断电配置使用的 Host 启动控制。这是测试数据而非证据；仅当前一轮
+ * 启动满足 Runner 独立观测的完成标记后，Runner 才推进它。
  */
 struct agent_observe_test_evidence_identity {
 	unsigned int scope_id;

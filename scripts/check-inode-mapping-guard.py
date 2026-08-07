@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check inode mapping and shared open-offset serialization boundaries."""
+"""检查 inode 映射与共享打开偏移的串行化边界。"""
 
 from __future__ import annotations
 

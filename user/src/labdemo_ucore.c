@@ -21,7 +21,7 @@ static int investigator_pid;
 static int ready_fd = -1;
 static int start_fd = -1;
 static int progress_fd = -1;
-/* Snapshot formats are sequential; one scratch avoids duplicate eager copies. */
+/* 各类快照依次使用，共享暂存区可避免重复预拷贝。 */
 static union {
 	struct agent_audit_record audit[DEMO_OBSERVE_PAGE_RECORDS];
 	struct agent_timeline_record timeline[DEMO_OBSERVE_PAGE_RECORDS];
@@ -385,7 +385,7 @@ static void print_mechanism_delta(
 		      after->observer_lifecycle_generation &&
 	      before->sample_tick < after->sample_tick,
 	      "stable performance observer");
-	/* Validate every raw pair before the Host recomputes its own deltas. */
+	/* 先验证全部原始数据对，再由主机重算差值。 */
 	(void)performance_delta(before->fs_epoch_commits,
 				after->fs_epoch_commits);
 	(void)performance_delta(before->fs_epoch_buffers_staged,

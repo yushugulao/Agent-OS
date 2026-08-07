@@ -5,10 +5,7 @@
 #define AGENT_METADATA_TEST_ARM_NEXT 1U
 #define AGENT_METADATA_TEST_F_ARMED (1U << 0)
 
-/*
- * Test-profile-only receipt for one explicitly armed COW transaction. The
- * kernel fills every field; callers provide a zeroed, exact-sized object.
- */
+/* 仅供测试配置使用的单次显式 COW 事务回执；内核填写全部字段，调用者传入清零且尺寸精确的对象。 */
 struct agent_metadata_test_arm {
 	unsigned int version;
 	unsigned int flags;

@@ -8,10 +8,8 @@
 #include "../user_stack_policy.h"
 
 /*
- * This class is derived while the executable inode is still locked and its
- * manifest and VFS profile have both been validated.  It is evidence about
- * the image, not authority by itself; exec credential preparation still
- * intersects it with the caller's role and inheritable capabilities.
+ * 可执行索引节点仍加锁，且清单与虚拟文件系统配置均通过校验时推导此类别。
+ * 它只是映像证据，并非独立权限；执行凭据仍须与调用方角色及可继承能力取交集。
  */
 enum user_image_agent_class {
 	USER_IMAGE_AGENT_FORBIDDEN = 0,
@@ -67,7 +65,7 @@ _Static_assert(USTACK_SIZE == PAGE_SIZE,
 
 #define USER_IMAGE_LIMIT (AGENT_CONTEXT_BASE)
 
-/* Keep brk results representable by the existing signed scalar ABI. */
+/* 保证堆边界结果可由现有有符号标量接口表示。 */
 #define USER_HEAP_LIMIT_RAW (USER_IMAGE_LIMIT - PAGE_SIZE)
 #define USER_HEAP_LIMIT \
 	(USER_HEAP_LIMIT_RAW < 0x7ffff000ULL ? \

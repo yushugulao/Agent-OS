@@ -10,10 +10,12 @@ import re
 if __package__:
     from .benchmark_source_contract import (
         _depth_at, _function_tokens, _lex, _locations, _matching,
+        _require_ascii_outside_comments,
     )
 else:
     from benchmark_source_contract import (
         _depth_at, _function_tokens, _lex, _locations, _matching,
+        _require_ascii_outside_comments,
     )
 
 
@@ -1136,12 +1138,9 @@ def _validate_execution_control(tokens: list[str]) -> None:
 
 def validate_functional_acceptance_source_text(text: str) -> None:
     # 先校验词法器会擦除的翻译阶段，阻止续行拼接代码或用替代 token 隐藏指令。
-    try:
-        text.encode("ascii")
-    except UnicodeEncodeError as error:
-        raise ValueError(
-            "functional source must use the reviewed ASCII alphabet"
-        ) from error
+    _require_ascii_outside_comments(
+        text, "functional source must use the reviewed ASCII alphabet"
+    )
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", text):
         raise ValueError("functional source contains a control byte")
     if re.search(r"\\[ \t\v\f]*(?:\r\n|\r|\n)", text):

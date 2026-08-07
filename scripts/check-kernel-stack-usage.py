@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed when the compiled kernel can exceed its stack budget."""
+"""编译后的内核可能超过栈预算时闭锁失败。"""
 
 import argparse
 import re

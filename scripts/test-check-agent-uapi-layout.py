@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Negative tests for the frozen Agent UAPI layout contract."""
+"""冻结 Agent UAPI 布局契约的负向测试。"""
 
 import copy
 import importlib.util

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Reject unchecked filesystem block-I/O results.
+"""拒绝未经检查的文件系统块 I/O 结果。
 
-The compiler attributes are the first line of defense.  This repository-wide
-check also rejects casts and legacy API shapes that can silence or sidestep a
-compiler warning, so it is suitable for CI and does not depend on one compiler.
+编译器属性是第一道防线。本仓库级检查还会拒绝可能压制或绕过编译器警告的类型转换
+与旧 API 形态，因此适用于 CI 且不依赖单一编译器。
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ def strip_c_noise(text: str) -> str:
 
 
 def strip_semantic_dead_code(text: str) -> str:
-    """Blank constant-false blocks so contract tokens must be reachable."""
+    """清空恒假代码块，确保契约 token 必须可达。"""
     clean = strip_c_noise(text)
     disabled = re.compile(
         r"^[ \t]*#if\s+0\b.*?^[ \t]*#endif\b[^\n]*",
@@ -184,9 +183,8 @@ def check_lookup_calls(path: pathlib.Path, failures: list[str]) -> None:
         r"\broot_dir_status\s*\(\s*&\s*([A-Za-z_]\w*)\s*\)", text
     ):
         status = re.escape(match.group(1))
-        # The returned pointer and status form one result. Every caller must
-        # reject a non-FOUND status even if a future implementation returns a
-        # diagnostic inode alongside it.
+        # 返回的指针和状态构成同一结果。即使未来实现随附诊断 inode，所有调用者
+        # 仍必须拒绝非 FOUND 状态。
         following = text[match.end() : match.end() + 500]
         if not re.search(rf"\b{status}\s*!=\s*FS_LOOKUP_FOUND\b", following):
             failures.append(

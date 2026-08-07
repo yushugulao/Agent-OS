@@ -149,7 +149,7 @@ static int transient_resource_child(unsigned int workflow_index,
 		    unlink(names[index]) < 0)
 			return 14;
 	}
-	/* Deliberately leave pages and all twelve file objects to exit. */
+	/* 故意把页面和全部十二个文件对象留给退出路径回收。 */
 	return 0;
 }
 

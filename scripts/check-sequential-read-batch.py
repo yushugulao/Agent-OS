@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the bounded inode sequential-read batching contract."""
+"""检查有界 inode 顺序读取批处理契约。"""
 
 from __future__ import annotations
 

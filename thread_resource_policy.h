@@ -1,11 +1,7 @@
 #ifndef THREAD_RESOURCE_POLICY_H
 #define THREAD_RESOURCE_POLICY_H
 
-/*
- * Thread slots use the same immutable admission classes as process slots.
- * Ordinary domains receive a hard per-domain ceiling, while trusted
- * bootstrap/workflow domains retain a separate global reserve.
- */
+/* 线程槽与进程槽使用相同的不可变准入类别；普通域限额严格，可信域保留独立全局份额。 */
 #ifndef THREAD_RESOURCE_POOL_SIZE
 #define THREAD_RESOURCE_POOL_SIZE (NPROC * NTHREAD)
 #endif

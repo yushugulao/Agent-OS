@@ -1,8 +1,6 @@
 /*
- * Filesystem allocator fault/reboot acceptance client.
- *
- * The runner builds this source explicitly for the profile-only kernel ABI.
- * Production kernels do not contain the syscall handler or fault owner.
+ * 文件系统分配器故障与重启验收程序。运行器仅为测试配置专用内核 ABI
+ * 显式编译本源码；生产内核不含相应系统调用处理器和故障所有者。
  */
 #include <fcntl.h>
 #include <fs_allocator_test_abi.h>
@@ -378,7 +376,7 @@ int main(void)
 	}
 	if (crash_stage != 'P')
 		fail("invalid fault boot stage");
-	/* Same inode/block and size: only payload data changes before fault. */
+	/* inode、块和大小不变，仅在故障前修改数据内容。 */
 	write_crash_boot_stage('F', 0);
 	snapshot(&before);
 	if (test_call(FSALLOC_TEST_ARM, FSALLOC_FAULT_OP,
@@ -391,7 +389,7 @@ int main(void)
 	       operation, phase, action);
 	result = exercise_operation();
 
-	/* A CRASH hook prints its kernel checkpoint and never returns. */
+	/* CRASH 钩子打印内核检查点后不返回。 */
 	if (FSALLOC_FAULT_ACTION == FSALLOC_ACTION_CRASH)
 		fail("crash checkpoint returned");
 	snapshot(&after);

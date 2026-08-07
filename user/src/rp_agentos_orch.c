@@ -1377,7 +1377,7 @@ static int run_stability_workflow(uint index, uint mode)
 		return 0;
 	}
 	if (pid == 0) {
-		/* Workflow constructors inherit only explicitly delegated descriptors. */
+	/* 工作流构造器仅继承显式委派的描述符。 */
 		rp_copy_text(report_arg, sizeof(report_arg),
 			     RP_RESOURCE_STABILITY_REPORT_PREFIX);
 		rp_append_uint_text(report_arg, sizeof(report_arg), report_pipe[1]);
@@ -1884,7 +1884,7 @@ int main(void)
 		printf("rp_agentos_orch: workflow_timing_failed\n");
 		return 1;
 	}
-	/* This acceptance probe is deliberately outside the Task 6 makespan. */
+	/* 该验收探针不计入任务 6 的总耗时。 */
 	if (!run_resource_stability_acceptance()) {
 		printf("rp_agentos_orch: resource_stability_failed\n");
 		return 1;

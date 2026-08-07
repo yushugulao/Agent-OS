@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that block-I/O admission starts at a real cache-miss boundary."""
+"""检查块 I/O 准入是否始于真实的缓存未命中边界。"""
 
 from __future__ import annotations
 

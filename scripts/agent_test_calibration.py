@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect and verify one commit-bound Agent test calibration campaign."""
+"""采集并校验一轮绑定提交的 Agent 测试校准活动。"""
 
 import argparse
 import gzip
@@ -26,9 +26,8 @@ from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 
-# The collector dynamically loads the reviewed budget checker before its child
-# environment exists.  Keep every invocation style from modifying the source
-# checkout, including Python -I which ignores PYTHONDONTWRITEBYTECODE.
+# 采集器在子进程环境建立前动态加载已审查的预算检查器。所有调用方式都不得
+# 修改源码检出，包括会忽略 PYTHONDONTWRITEBYTECODE 的 Python -I。
 sys.dont_write_bytecode = True
 
 
@@ -515,9 +514,8 @@ def canonical_toolchain_prefix(profile, tools):
 
 
 def locked_tool_path(tools):
-    # Bare commands belong to the attested MSYS control plane. Build and QEMU
-    # tools are invoked by their captured absolute paths, so their directories
-    # must not shadow control utilities such as objdump.
+    # 裸命令属于已认证的 MSYS 控制面。构建与 QEMU 工具均通过已采集的绝对路径
+    # 调用，因此其目录不得遮蔽 objdump 等控制工具。
     directories = ["/usr/bin", "/bin"]
     for name in CALIBRATION_TOOL_NAMES:
         directory = str(Path(tools[name]["executable"]["path"]).parent)

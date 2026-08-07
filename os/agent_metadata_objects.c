@@ -262,7 +262,7 @@ agent_file_finish_mutation(struct proc *p, struct agent_file_meta *request,
 			return result;
 		}
 #if defined(AGENT_METADATA_CRASH_PHASE) || defined(AGENT_METADATA_EIO_PHASE)
-		/* 故障注入以 syscall 为边界，持久化阶段各自留下回执。 */
+		/* 故障注入以系统调用为边界，持久化阶段各自留下回执。 */
 		if (agent_metadata_store_persist_commit(&persistence) < 0) {
 			if (!persistence.irrevocable &&
 			    agent_file_restore_status(fence, undo, previous,

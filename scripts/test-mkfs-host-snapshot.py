@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-only regression and mutation tests for mkfs input snapshots."""
+"""mkfs 输入快照的纯 Host 回归与变异测试。"""
 
 from __future__ import annotations
 

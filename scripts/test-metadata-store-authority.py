@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation-test metadata job identity and physical delta shadows."""
+"""对元数据任务身份与物理增量影子执行变异测试。"""
 
 from __future__ import annotations
 

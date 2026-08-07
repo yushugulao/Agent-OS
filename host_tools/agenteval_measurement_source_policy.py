@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Closed policy inventory for AgentOS evaluation-source receipts."""
+"""AgentOS 评测源回执的闭合集合策略清单。"""
 from __future__ import annotations
 
 if __package__:
@@ -14,9 +14,8 @@ SOURCE_RELATIVE = "user/src/agenteval_ucore.c"
 EVALUATION_SUITE_SOURCE_PATH = "ci/evaluation-suite.json"
 POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v4"
 
-# This is deliberately an allowlist, not a recursive source-tree snapshot.
-# Each entry participates in selecting, executing, interpreting, rendering, or
-# packaging formal measurements and therefore belongs in the signed receipt.
+# 这里必须使用允许列表，而非递归源码树快照。每个条目都会参与正式测量的
+# 选择、执行、解释、渲染或打包，因此必须纳入签名回执。
 CONTROL_PLANE_POLICY = (
     ("suite", EVALUATION_SUITE_SOURCE_PATH),
     ("trusted-python-entry", "scripts/trusted-python-entry.py"),
@@ -125,8 +124,7 @@ CONTROL_PLANE_POLICY = (
     ("baseline-program-manifest", "baseline_ucore/user/include/rp_program_manifest.h"),
 )
 
-# Portable dual-state replay must not consult an unbound checkout to discover
-# which Guest producers exist.
+# 可移植双状态重放不得查询未绑定的检出内容来发现 Guest 生产者。
 SEMANTIC_REPLAY_COMMON_SOURCES = (
     "rp_agent_collab.c",
     "rp_analysisres.c",

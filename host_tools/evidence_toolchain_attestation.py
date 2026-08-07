@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Facade for formal source closure and executable identity attestation."""
+"""正式源码闭包与可执行文件身份认证的门面。"""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ except ImportError:
 
 
 def decode_external_output(payload: bytes | None) -> str:
-    """Decode human-facing tool output without depending on the host locale."""
+    """不依赖 Host 区域设置解码面向用户的工具输出。"""
 
     return (payload or b"").decode("utf-8", errors="replace")
 
@@ -135,7 +135,7 @@ def create_isolated_detached_worktree(
     root: Path,
     environment: dict[str, str],
 ) -> tuple[Path, Path]:
-    """Checkout ``commit`` without inheriting repository filters or hooks."""
+    """检出 ``commit``，且不继承仓库过滤器或钩子。"""
 
     isolated, worktree = root / "repository", root / "worktree"
     options = _git_isolation_arguments(root)
@@ -205,7 +205,7 @@ def resolve_executable(value: str) -> Path:
 
 
 def resolve_bash_executable(value: str, git: Path | None = None) -> Path:
-    """Resolve a real Bash, preferring the shell beside this POSIX runtime."""
+    """解析真实 Bash，优先选择该 POSIX 运行时旁的 shell。"""
 
     requested = Path(value)
     if requested.is_absolute() or requested.parent != Path(".") or value != "bash":
@@ -307,7 +307,7 @@ def controlled_environment(
 def require_nested_tool_resolution(
     tools: dict[str, Path], environment: dict[str, str]
 ) -> None:
-    """Bind legacy bare tool calls to the executable records in the manifest."""
+    """将旧式裸工具调用绑定到清单中的可执行文件记录。"""
 
     for label, command in (("git", "git"), ("make", "make"), ("bash", "bash")):
         found = shutil.which(command, path=environment.get("PATH", ""))

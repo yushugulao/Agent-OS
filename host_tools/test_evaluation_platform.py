@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the formal evaluation execution-domain preflight."""
+"""正式评测执行域预检的回归测试。"""
 
 from __future__ import annotations
 

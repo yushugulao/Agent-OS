@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed unless the file-query receipt has measured provenance."""
+"""文件查询回执没有测量来源时按失败关闭。"""
 from __future__ import annotations
 
 import re
@@ -104,6 +104,26 @@ def _lex(text: str) -> list[str]:
         if match.lastgroup not in {"space", "comment"}:
             tokens.append(match.group())
     return tokens
+
+
+def _require_ascii_outside_comments(text: str, message: str) -> None:
+    """允许中文注释，但可执行 token 仍限定为已审查的 ASCII。"""
+    position = 0
+    while position < len(text):
+        match = _TOKEN.match(text, position)
+        if match is None:
+            if ord(text[position]) > 0x7f:
+                raise ValueError(message)
+            raise ValueError(
+                f"benchmark source contains an unsupported token at byte {position}"
+            )
+        position = match.end()
+        if match.lastgroup == "comment":
+            continue
+        try:
+            match.group().encode("ascii")
+        except UnicodeEncodeError as error:
+            raise ValueError(message) from error
 
 
 def _matching(tokens: list[str], start: int, opening: str, closing: str) -> int:

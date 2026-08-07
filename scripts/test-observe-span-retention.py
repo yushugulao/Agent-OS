@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation and model guards for causal audit-record retention."""
+"""因果审计记录保留的变异与模型防护。"""
 
 from dataclasses import dataclass
 from pathlib import Path

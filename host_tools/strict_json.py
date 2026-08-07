@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed JSON decoding shared by Host acceptance tools."""
+"""Host 验收工具共享的失败关闭式 JSON 解码。"""
 from __future__ import annotations
 
 import json
@@ -8,11 +8,11 @@ from typing import Any
 
 
 class DuplicateJSONKey(ValueError):
-    """Raised when an object repeats a member name."""
+    """对象成员名重复时抛出。"""
 
 
 class NonFiniteJSONNumber(ValueError):
-    """Raised when JSON uses the non-standard NaN or Infinity tokens."""
+    """JSON 使用非标准 NaN 或 Infinity token 时抛出。"""
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

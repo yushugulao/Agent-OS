@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and verify a compact, commit-bound AgentOS acceptance evidence bundle."""
+"""构建并校验精简且绑定提交的 AgentOS 验收证据包。"""
 from __future__ import annotations
 import sys as _entry_sys
 if __name__ == "__main__" and (not _entry_sys.flags.isolated or not _entry_sys.flags.no_site):
@@ -450,7 +450,7 @@ def validate_fs_allocator_archive(path: Path) -> None:
 def replay_raw_contract(
     raw_dir: Path, summary_path: Path, expected_commit: str
 ) -> dict[str, object]:
-    """Replay every semantic contract from this script's immutable source tree."""
+    """从本脚本的不可变源码树重放全部语义契约。"""
     if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
         raise EvidenceError("raw replay expected commit is invalid")
     try:

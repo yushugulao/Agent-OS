@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind POSIX and native temporary paths for formal evidence execution."""
+"""为正式证据执行绑定 POSIX 与原生临时路径。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _CCP_WIN_W_TO_POSIX = 3
 
 
 def _loaded_cygwin_path_api():
-    """Resolve conversion only from the POSIX runtime already loaded in-process."""
+    """仅通过进程内已加载的 POSIX 运行时解析路径转换。"""
 
     api = loaded_msys_path_api()
     if api is None:
@@ -84,7 +84,7 @@ def cygwin_native_directory(path: Path) -> str:
 def capture_formal_temporary_binding(
     environment: dict[str, str],
 ) -> dict[str, object]:
-    """Record the checked identity shared by POSIX and native temp paths."""
+    """记录 POSIX 与原生临时路径共享的已校验身份。"""
 
     try:
         temporary = require_safe_directory(Path(environment["TMPDIR"]))

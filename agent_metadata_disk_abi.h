@@ -6,7 +6,7 @@
 #error "metadata disk ABI is little endian"
 #endif
 
-/* Shared fixed-width ABI. */
+/* 共享定宽 ABI。 */
 typedef unsigned int amd_u32;
 typedef unsigned long long amd_u64;
 
@@ -26,11 +26,9 @@ typedef unsigned long long amd_u64;
 #define AGENT_META_STORE_MAX_RECORDS 512U
 
 /*
- * Version 8 keeps the canonical full-bank image as a compaction baseline and
- * uses the block-aligned, preallocated tail for ordinary workflow deltas.
- * A journal generation never rewrites a tail block: compaction moves to the
- * peer bank and creates a new baseline generation before the old tail can be
- * reused.
+ * 版本 8 保留规范完整 bank 映像作为压缩基线，并以块对齐的预分配尾部
+ * 记录普通 workflow 增量。日志代际绝不覆写尾块：压缩先切换到对端 bank
+ * 并建立新基线代际，之后才可复用旧尾部。
  */
 #define AGENT_META_JOURNAL_MAGIC 0x41474d4a4e4c3038ULL
 #define AGENT_META_JOURNAL_VERSION 1U
@@ -110,9 +108,8 @@ typedef struct agent_meta_journal_slot {
 } amd_journal_slot;
 
 /*
- * A durable-arena delta is one canonical 400-byte window.  The old-window
- * hash makes replay conditional on the exact baseline produced by the
- * preceding committed generation; the slot checksum protects the new bytes.
+ * durable arena 增量是规范的 400 字节窗口。旧窗口哈希把重放绑定到上一
+ * 已提交代际产生的精确基线，槽校验和保护新字节。
  */
 #define AGENT_META_JOURNAL_PATCH_DATA_BYTES 400U
 typedef struct agent_meta_journal_arena_patch {

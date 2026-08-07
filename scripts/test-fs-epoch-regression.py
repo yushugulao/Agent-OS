@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-only mutation tests for the fs_epoch dynamic regression oracles."""
+"""fs_epoch 动态回归预期的纯 Host 变异测试。"""
 
 import copy
 import importlib.util

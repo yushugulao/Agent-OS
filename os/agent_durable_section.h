@@ -27,10 +27,7 @@ struct agent_durable_section_ops {
 	void (*replicated_scope)(uint);
 };
 
-/*
- * The durable arena owns persistence requests, while the metadata store owns
- * their execution.  A read-only provider keeps that layering one-way.
- */
+/* 持久区只发布回写意图，元数据存储模块负责执行，依赖保持单向。 */
 struct agent_durable_store_ops {
 	uint64 (*mark_dirty)(uint);
 	void (*expedite)(uint);
@@ -62,6 +59,7 @@ void agent_durable_section_mirror_scope(uint);
 void agent_durable_section_active_bind(const struct agent_durable_arena *,
 				       uint64);
 uint64 agent_durable_section_active_generation(void);
-int agent_durable_section_active_read(uint, uint, void *, uint, uint64 *);
+/* 调用者须禁止中断；返回的只读视图不得跨越临界区或发生阻塞。 */
+const uchar *agent_durable_section_active_view(uint, uint *, uint64 *);
 
 #endif

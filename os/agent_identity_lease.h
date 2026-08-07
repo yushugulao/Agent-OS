@@ -4,8 +4,8 @@
 #include "types.h"
 #include "workflow_lifecycle.h"
 
-#define AGENT_IDENTITY_LEASE_CHUNK 256ULL
-/* Leave half of each durable window available while its successor replicates. */
+#define AGENT_IDENTITY_LEASE_CHUNK 4096ULL
+/* 后继镜像复制期间，每个持久窗口保留一半余量。 */
 #define AGENT_IDENTITY_LEASE_LOW_WATER \
 	(AGENT_IDENTITY_LEASE_CHUNK / 2ULL)
 
@@ -23,7 +23,7 @@ struct agent_identity_lease_snapshot {
 	uint64 lifecycle_ends[WORKFLOW_LIFECYCLE_CAP];
 };
 
-/* Return 1 only after the candidate image is replicated, 0 while pending. */
+/* 候选镜像复制完成后才返回 1，等待时返回 0。 */
 typedef int (*agent_identity_lease_persist_fn)(uint64 *, uint64 *);
 
 void agent_identity_lease_init(void);

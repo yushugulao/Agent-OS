@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the fixed-bank, lifecycle-scoped Agent file generation index."""
+"""检查固定 bank、生命周期作用域内的 Agent 文件代际索引。"""
 
 from __future__ import annotations
 
@@ -626,8 +626,7 @@ def check(root: Path) -> None:
         "generation initialization omits the SYSTEM epoch",
     )
 
-    # Cache identity consumes VFS lifecycle truth; authorization must never
-    # consume cache state in the opposite direction.
+    # 缓存身份使用 VFS 生命周期事实；授权绝不能反向依赖缓存状态。
     reject(
         vfs,
         "agent_file_state_scope_generation",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the bounded system-file allocator wiring without booting a guest."""
+"""无需启动 Guest，检查有界系统文件分配器的接线。"""
 
 import argparse
 import re

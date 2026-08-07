@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the shared exec argv/user stack contract."""
+"""共享 exec argv 与用户栈契约的变异测试。"""
 
 import shutil
 import subprocess

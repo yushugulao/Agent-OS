@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Minimal transport only. Test semantics stay in each fail-closed runner.
+# 仅提供最小传输；测试语义保留在各闭锁式 runner 中。
 evidence_enabled() { [[ -n "${FINAL_EVIDENCE_STAGE:-}" ]]; }
 
 evidence_initialize() {

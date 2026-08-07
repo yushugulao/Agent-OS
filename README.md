@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/agentos/assets/agentos_logo.png" alt="AgentOS logo" width="680">
+</p>
+
 # AgentOS-uCore
 
 AgentOS-uCore 是面向 AI Agent 工作流的 RISC-V uCore 内核扩展，也是计算机操作系统能力竞赛系统功能实现赛道作品。项目把身份授权、上下文、结构化工具调用、可信 IPC、工作流生命周期、资源控制和观测能力放入内核；科研 Agent 平台保留在用户态，作为综合负载和现场演示。

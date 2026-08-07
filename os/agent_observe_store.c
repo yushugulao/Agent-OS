@@ -9,6 +9,7 @@
 #include "agent_metadata_internal.h"
 #include "defs.h"
 #include "proc.h"
+#include "riscv.h"
 #include "vfs_security.h"
 
 struct agent_observe_disk_header {
@@ -433,7 +434,7 @@ agent_observe_store_recover(const void *src, uint bytes)
 	const struct agent_observe_checkpoint *image = src;
 	if (agent_observe_store_validate(src, bytes) < 0)
 		return -1;
-	/* Identity allocators only ratchet; they do not make a lifecycle live. */
+	/* 身份分配器只抬高水位，不负责激活生命周期。 */
 	for (uint i = 0; i < WORKFLOW_LIFECYCLE_CAP; i++) {
 		agent_identity_lease_recover_lifecycle(
 			i, image->lifecycle_lease_ends[i]);
@@ -619,12 +620,35 @@ agent_obsstore_mark_reap(uint scope_id, struct workflow_lifecycle_key lifecycle)
 }
 
 static int
+agent_observe_active_copy(uint offset, void *dst, uint bytes,
+			  uint64 *bank_generation)
+{
+	const uchar *data;
+	uint available = 0;
+	uint64 generation = 0;
+	int result = -1;
+	int enabled;
+
+	if (dst == 0 || bank_generation == 0)
+		return -1;
+	enabled = intr_save();
+	data = agent_durable_section_active_view(
+		AGENT_DURABLE_SECTION_OBSERVE, &available, &generation);
+	if (data != 0 && offset <= available && bytes <= available - offset) {
+		memmove(dst, data + offset, bytes);
+		*bank_generation = generation;
+		result = 0;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+static int
 agent_observe_active_header(struct agent_observe_disk_header *header,
 			    uint64 *bank_generation)
 {
-	return agent_durable_section_active_read(
-		AGENT_DURABLE_SECTION_OBSERVE, 0, header, sizeof(*header),
-		bank_generation);
+	return agent_observe_active_copy(
+		0, header, sizeof(*header), bank_generation);
 }
 
 static int
@@ -637,9 +661,8 @@ agent_observe_active_scope(uint slot, struct agent_observe_scope_header *scope,
 		return -1;
 	offset = __builtin_offsetof(struct agent_observe_checkpoint, scopes) +
 		slot * sizeof(struct agent_observe_checkpoint_scope);
-	return agent_durable_section_active_read(
-		AGENT_DURABLE_SECTION_OBSERVE, offset, scope, sizeof(*scope),
-		bank_generation);
+	return agent_observe_active_copy(
+		offset, scope, sizeof(*scope), bank_generation);
 }
 
 int
@@ -647,7 +670,12 @@ agent_obsstore_receipt_record_status(
 	uint scope_id, struct workflow_lifecycle_key lifecycle, uint64 sequence,
 	uint64 record_hash, uint64 receipt_id, uint64 target)
 {
+	const struct agent_observe_checkpoint *image;
+	uint bytes = 0;
+	uint64 generation = 0;
+	int result = -1;
 	int replicated;
+	int enabled;
 
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    scope_id >= FS_OWNER_SCOPE_FLAG ||
@@ -662,107 +690,53 @@ agent_obsstore_receipt_record_status(
 		if (replicated <= 0)
 			return replicated;
 	}
-	for (uint attempt = 0; attempt < 2; attempt++) {
-		struct agent_observe_disk_header header;
-		uint64 generation = 0;
-		int raced = 0;
-		int found_record = 0;
-		int found_scope = 0;
-
-		if (agent_observe_active_header(&header, &generation) < 0 ||
-		    header.magic != AGENT_OBSERVE_CHECKPOINT_MAGIC ||
-		    header.version != AGENT_OBSERVE_CHECKPOINT_VERSION ||
-		    header.bytes != sizeof(struct agent_observe_checkpoint))
-			return -1;
-		if (target == 0) {
-			replicated = agent_durable_section_active_replicated(generation);
-			if (replicated <= 0)
-				return replicated;
+	enabled = intr_save();
+	image = (const struct agent_observe_checkpoint *)
+		agent_durable_section_active_view(
+			AGENT_DURABLE_SECTION_OBSERVE, &bytes, &generation);
+	if (image == 0 || bytes != sizeof(*image) ||
+	    image->magic != AGENT_OBSERVE_CHECKPOINT_MAGIC ||
+	    image->version != AGENT_OBSERVE_CHECKPOINT_VERSION ||
+	    image->bytes != sizeof(*image))
+		goto out;
+	if (target == 0) {
+		replicated = agent_durable_section_active_replicated(generation);
+		if (replicated <= 0) {
+			result = replicated;
+			goto out;
 		}
-		for (uint slot = 0; slot < AGENT_OBSERVE_CHECKPOINT_SCOPES;
-		     slot++) {
-			struct agent_observe_scope_header scope;
-			uint64 observed_generation = 0;
-
-			if (agent_observe_active_scope(
-				    slot, &scope, &observed_generation) < 0)
-				return -1;
-			if (observed_generation != generation) {
-				raced = 1;
-				break;
-			}
-			if (!(scope.used & AGENT_OBSERVE_SCOPE_USED) ||
-			    scope.scope_id != scope_id ||
-			    scope.lifecycle_id != lifecycle.id ||
-			    scope.lifecycle_generation != lifecycle.generation)
-				continue;
-			found_scope = 1;
-			if (scope.record_count > AGENT_OBSERVE_CHECKPOINT_PER_SCOPE)
-				return -1;
-			for (uint i = 0; i < scope.record_count; i++) {
-				struct agent_observe_checkpoint_entry entry;
-				uint64 entry_generation = 0;
-				uint offset = __builtin_offsetof(
-					struct agent_observe_checkpoint, scopes) +
-					slot * sizeof(
-						struct agent_observe_checkpoint_scope) +
-					__builtin_offsetof(
-						struct agent_observe_checkpoint_scope,
-						records) +
-					i * sizeof(entry);
-
-				if (agent_durable_section_active_read(
-					    AGENT_DURABLE_SECTION_OBSERVE, offset,
-					    &entry, sizeof(entry),
-					    &entry_generation) < 0)
-					return -1;
-				if (entry_generation != generation) {
-					raced = 1;
-					break;
-				}
-				if (entry.scope_id == scope_id &&
-				    entry.record.workflow_lifecycle_id == lifecycle.id &&
-				    entry.record.workflow_lifecycle_generation ==
-					    lifecycle.generation &&
-				    entry.record.sequence == sequence &&
-				    entry.record.record_hash == record_hash &&
-				    entry.receipt_id == receipt_id) {
-					found_record = 1;
-					break;
-				}
-			}
-			break;
-		}
-		if (raced)
-			continue;
-		if (found_record) {
-			struct agent_observe_disk_header confirmed;
-			uint64 confirmed_generation = 0;
-
-			/* Linearize the positive result against active-bank rollover. */
-			if (agent_observe_active_header(
-				    &confirmed, &confirmed_generation) < 0)
-				return -1;
-			if (confirmed_generation != generation)
-				continue;
-			if (confirmed.magic != AGENT_OBSERVE_CHECKPOINT_MAGIC ||
-			    confirmed.version != AGENT_OBSERVE_CHECKPOINT_VERSION ||
-			    confirmed.bytes != sizeof(struct agent_observe_checkpoint))
-				return -1;
-			if (target == 0) {
-				replicated = agent_durable_section_active_replicated(
-					generation);
-				if (replicated <= 0)
-					return replicated;
-			}
-			return 1;
-		}
-		if (found_scope)
-			return -1;
-		return -1;
 	}
-	/* A changing active bank is retryable, never positive evidence. */
-	return 0;
+	for (uint slot = 0; slot < AGENT_OBSERVE_CHECKPOINT_SCOPES; slot++) {
+		const struct agent_observe_checkpoint_scope *scope =
+			&image->scopes[slot];
+
+		if (!(scope->used & AGENT_OBSERVE_SCOPE_USED) ||
+		    scope->scope_id != scope_id ||
+		    scope->lifecycle_id != lifecycle.id ||
+		    scope->lifecycle_generation != lifecycle.generation)
+			continue;
+		if (scope->record_count > AGENT_OBSERVE_CHECKPOINT_PER_SCOPE)
+			goto out;
+		for (uint i = 0; i < scope->record_count; i++) {
+			const struct agent_observe_checkpoint_entry *entry =
+				&scope->records[i];
+
+			if (entry->scope_id == scope_id &&
+			    entry->record.workflow_lifecycle_id == lifecycle.id &&
+			    entry->record.workflow_lifecycle_generation ==
+				    lifecycle.generation &&
+			    entry->record.sequence == sequence &&
+			    entry->record.record_hash == record_hash &&
+			    entry->receipt_id == receipt_id) {
+				result = 1;
+				goto out;
+			}
+		}
+		break;
+	}
+out:
+	intr_restore(enabled);
+	return result;
 }
 
 static int
@@ -776,7 +750,7 @@ agent_observe_scope_sealed(const struct agent_observe_scope_header *scope)
 	key.generation = scope->lifecycle_generation;
 	if (workflow_lifecycle_active(key) || workflow_lifecycle_closing(key))
 		return 0;
-	/* RETIRING or a reclaimed/reused key has crossed the quiescent barrier. */
+	/* RETIRING 或已回收代际都越过了静默屏障。 */
 	return 1;
 }
 
@@ -866,9 +840,8 @@ agent_obsstore_snapshot_record(
 		slot * sizeof(struct agent_observe_checkpoint_scope) +
 		__builtin_offsetof(struct agent_observe_checkpoint_scope, records) +
 		index * sizeof(entry);
-	if (agent_durable_section_active_read(
-		    AGENT_DURABLE_SECTION_OBSERVE, offset, &entry,
-		    sizeof(entry), &observed_generation) < 0)
+	if (agent_observe_active_copy(
+		    offset, &entry, sizeof(entry), &observed_generation) < 0)
 		return -1;
 	if (observed_generation != bank_generation)
 		return AGENT_OBSSTORE_SNAPSHOT_RETRY;

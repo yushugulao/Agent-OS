@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate profile-specific markers in a fully drained kernel test log."""
+"""校验已完全排空的内核测试日志中的 profile 专用标记。"""
 
 import argparse
 import re
@@ -59,7 +59,6 @@ FILE_MARKERS = (
 
 PHYSICAL_RESOURCE_MARKERS = (
     "physicalresource_ucore: brk_atomic=1 fork_inherit=1 shrink_refund=1 guard=1",
-    "physicalresource_ucore: legacy_mail_accounting=1 alloc_delta=2 exit_delta=0",
     "physicalresource_ucore: physical_transfer_rejected=1 mixed_atomic=1",
     "physicalresource_ucore: reserved_promise_lifecycle=1",
     "physicalresource_ucore: reserved_domain_fairness=1",
@@ -137,16 +136,11 @@ AGENT_CASE_MARKERS = {
         "agenttoolabi_ucore: strict_negative_matrix=1",
     ),
     "agentsecurity_ucore": (
-        "agentsecurity_ucore: mail_lazy_empty=1 first_alloc_pages=2",
-        "agentsecurity_ucore: mail_queue_full=1 capacity=16",
-        "agentsecurity_ucore: mail_read_failure_atomic=1",
-        "agentsecurity_ucore: mail_endpoint_reuse_isolated=1 stale_pid_denied=1",
-        "agentsecurity_ucore: mail_exec_endpoint_rotated=1",
-        "agentsecurity_ucore: mail_ordinary_domain_isolation=1 same_account_compat=1",
-        "agentsecurity_ucore: mail_active_workflow_isolation=1",
-        "agentsecurity_ucore: mail_scoped_public=1 same_lineage=1",
-        "agentsecurity_ucore: mail_cross_scope_denied=1",
-        "agentsecurity_ucore: mail_missing_controller_denied=1",
+        "agentsecurity_ucore: legacy_mail_fail_closed=1",
+        "agentsecurity_ucore: message_route_lifecycle=1",
+        "agentsecurity_ucore: ipc_route_authorization=1",
+        "agentsecurity_ucore: target_route_consent=1",
+        "agentsecurity_ucore: route_slot_reclaimed=1",
     ),
     "usersafety_ucore": (
         "usersafety_ucore: argv_layout_budget=1024 boundary_accept=1 over_limit_rejected=1 caller_live=1",
@@ -335,20 +329,10 @@ def validate_agent_case(text, case, context_sync=False):
 def validate_physical_resource(text):
     lines = text.splitlines()
     exact_markers = (
-        *PHYSICAL_RESOURCE_MARKERS[:3],
-        *PHYSICAL_RESOURCE_MARKERS[5:],
+        *PHYSICAL_RESOURCE_MARKERS[:2],
+        *PHYSICAL_RESOURCE_MARKERS[4:],
     )
     exact_positions = exact_ordered_lines(text, exact_markers)
-    accounting = re.findall(
-        r"^physicalresource_ucore: legacy_mail_accounting=1 "
-        r"alloc_delta=(\d+) exit_delta=(\d+)$",
-        text,
-        re.MULTILINE,
-    )
-    if accounting != [("2", "0")]:
-        raise ValidationError(
-            f"legacy mail physical accounting mismatch: {accounting!r}"
-        )
     fairness_pattern = re.compile(
         r"physicalresource_ucore: reserved_domain_fairness=1 "
         r"pressure_pages=(\d+) pressure_pipes=(\d+) "
@@ -385,10 +369,9 @@ def validate_physical_resource(text):
     positions = [
         exact_positions[0],
         exact_positions[1],
-        exact_positions[2],
         promise_position,
         fairness_position,
-        *exact_positions[3:],
+        *exact_positions[2:],
     ]
     if positions != sorted(positions):
         raise ValidationError(f"markers out of order: positions={positions}")
@@ -405,11 +388,10 @@ def validate_physical_resource(text):
     raw = [tuple(map(int, match.groups())) for _, match in raw_matches]
     if len(raw) != 30 or [record[0] for record in raw] != list(range(1, 31)):
         raise ValidationError("physical receipt stream is not exact and ordered")
-    expected_raw_positions = list(range(positions[1] + 1, positions[2]))
+    expected_raw_positions = list(range(positions[0] + 1, positions[1]))
     if raw_positions != expected_raw_positions:
         raise ValidationError(
-            "physical receipt block must be contiguous between legacy mail "
-            "accounting and transfer validation"
+            "physical receipt block must be contiguous before transfer validation"
         )
     if raw[0][1:] != (0, 2, 0):
         raise ValidationError("physical page kind lost pool-affine identity")

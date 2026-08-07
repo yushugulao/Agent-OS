@@ -15,11 +15,6 @@
 #define NTHREAD (16)
 #define FD_BUFFER_SIZE (16)
 #define LOCK_POOL_SIZE (8)
-#define MAILBOX_SLOT_COUNT (16)
-#define MAILBOX_PAYLOAD_SIZE (256)
-#define MAILBOX_SIDECAR_PAGE_COUNT (2)
-
-struct agent_legacy_mailbox;
 #define CHILD_EXIT_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_LIMIT (NPROC / 2)
@@ -284,8 +279,6 @@ struct proc {
 	struct condvar condvar_pool[LOCK_POOL_SIZE];
 	/* trace() 返回 int；计数饱和而不回绕，保持性能快照单调。 */
 	uint syscall_count[SYSCALL_COUNTER_SLOTS];
-	struct agent_legacy_mailbox *mail_sidecar;
-	uint64 legacy_mail_endpoint_generation;
 	int is_agent;
 	int agent_type;
 	int agent_id;

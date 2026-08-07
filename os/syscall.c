@@ -427,37 +427,17 @@ int sys_trace(int req, uint64 id, uint8 data)
 
 int sys_mailwrite(int pid, uint64 buf, int len)
 {
-	struct proc *sender = curr_proc();
-	char payload[MAILBOX_PAYLOAD_SIZE];
-
-	if (len <= 0 || len > MAILBOX_PAYLOAD_SIZE)
-		return -1;
-	if (copyin(sender->pagetable, payload, buf, len) < 0)
-		return -1;
-	return agent_ipc_legacy_public_send(sender, pid, payload, len);
+	(void)pid;
+	(void)buf;
+	(void)len;
+	return -1;
 }
 
 int sys_mailread(uint64 buf, int len)
 {
-	struct proc *p = curr_proc();
-	struct agent_legacy_read_receipt receipt;
-	char payload[MAILBOX_PAYLOAD_SIZE];
-	int n;
-
-	if (len <= 0 || len > MAILBOX_PAYLOAD_SIZE)
-		return -1;
-	if (user_range_check(p->pagetable, buf, len, PTE_W) < 0)
-		return -1;
-	n = agent_ipc_legacy_public_read_begin(p, payload, len, &receipt);
-	if (n <= 0)
-		return n;
-	if (copyout(p->pagetable, buf, payload, n) < 0) {
-		(void)agent_ipc_legacy_public_read_finish(p, &receipt, 0);
-		return -1;
-	}
-	if (agent_ipc_legacy_public_read_finish(p, &receipt, 1) < 0)
-		return -1;
-	return n;
+	(void)buf;
+	(void)len;
+	return -1;
 }
 
 uint64 sys_clone()

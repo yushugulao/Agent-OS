@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Choose bounded worker counts from the resources visible to this process."""
+"""根据当前进程可见资源选择有界 worker 数量。"""
 
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def cgroup_cpu_count(
         except ValueError:
             continue
         if quota > 0 and period > 0:
-            # Fractional quotas must not create an extra runnable worker.
+    # 小数配额不得额外产生一个可运行 worker。
             limits.append(max(1, quota // period))
     return min(limits) if limits else None
 

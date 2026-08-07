@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Fail closed unless Task 6 makespan comes from real Guest clock windows."""
+"""任务 6 makespan 并非来自真实 Guest 时钟窗口时按失败关闭。"""
 from __future__ import annotations
 
 import sys as _entry_sys
 
 
 def _isolate_direct_entry_imports() -> None:
-    """Use only interpreter-owned paths for top-level import resolution."""
+    """顶层导入解析仅使用解释器自身管理的路径。"""
 
     if __name__ != "__main__":
         return
@@ -112,7 +112,7 @@ def _only_references(
 def _validate_snapshot_dispatch(
     syscall_source: str, syscall_id: str, callee: str, label: str
 ) -> None:
-    """Validate one observer case without mirroring the dispatcher layout."""
+    """校验一个 observer 用例，不复制调度器布局。"""
 
     dispatch = _function_tokens(_tokens(syscall_source), "syscall_dispatch")
     case_at = _require_once(
@@ -1576,7 +1576,7 @@ def _validate_performance_producers(
 
 
 def _validate_performance_pair_consumer(source: str) -> None:
-    """Bind showcase deltas to raw, same-observer Guest snapshots."""
+    """将展示差值绑定到同一 observer 的原始 Guest 快照。"""
 
     snapshot_pairs = (
         ("fs_epoch_commits", "epoch_commits"),

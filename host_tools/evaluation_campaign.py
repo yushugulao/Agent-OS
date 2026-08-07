@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Create and verify provenance for independent AgentOS evaluation boots.
+"""创建并验证独立 AgentOS 评测启动的来源。
 
-This module deliberately does not calculate benchmark results.  Its only job is
-to bind the collection campaign to a clean commit, the executable environment,
-the exact runner command, and immutable raw logs.  Statistical interpretation
-belongs to ``evaluation_contract.py``.
+本模块不计算基准结果，只将采集活动绑定到干净提交、执行环境、精确运行命令
+和不可变原始日志。统计解释由 ``evaluation_contract.py`` 负责。
 """
 
 from __future__ import annotations
@@ -13,7 +11,7 @@ import sys as _entry_sys
 
 
 def _isolate_direct_entry_imports() -> None:
-    """Use only interpreter-owned paths for top-level import resolution."""
+    """顶层导入解析仅使用解释器自身管理的路径。"""
 
     if __name__ != "__main__":
         return
@@ -209,21 +207,21 @@ SCENARIO_CLEAN_ENVIRONMENT_KEYS = (
 
 
 class CampaignError(ValueError):
-    """Raised when campaign provenance is incomplete or inconsistent."""
+    """评测来源不完整或不一致时抛出。"""
 
 
 class CampaignBusy(CampaignError):
-    """Raised when another formal evaluation owns the campaign lock."""
+    """其他正式评测持有评测锁时抛出。"""
 
 
 class ScenarioBusy(CampaignError):
-    """Raised when another collector owns the scenario manifest lock."""
+    """其他采集器持有场景清单锁时抛出。"""
 
 
 def _derive_micro_challenge(
     source_commit: str, boot_number: int, occupied: set[str] | None = None
 ) -> str:
-    """Derive one parity-balanced challenge from the public source identity."""
+    """从公开源码身份派生一个奇偶平衡的 challenge。"""
 
     if COMMIT_RE.fullmatch(source_commit) is None or boot_number < 1:
         raise CampaignError("micro challenge identity is invalid")
@@ -247,7 +245,7 @@ def _derive_micro_challenge(
 def _derive_scenario_challenge(
     source_commit: str, boot_number: int, occupied: set[str] | None = None
 ) -> str:
-    """Derive one canonical scenario challenge from the public source identity."""
+    """从公开源码身份派生一个规范场景 challenge。"""
 
     if COMMIT_RE.fullmatch(source_commit) is None or boot_number < 1:
         raise CampaignError("scenario challenge identity is invalid")
@@ -409,7 +407,7 @@ def _atomic_copy(source: Path, destination: Path, label: str) -> None:
 
 
 def _campaign_lock_path(repo: Path) -> Path:
-    """Use one lock name per Git repository, distinct from the per-boot lock."""
+    """每个 Git 仓库使用一个锁名，并与单次启动锁区分。"""
 
     from plain_ucore_action_runner import _run_lock_path
 
@@ -425,7 +423,7 @@ def _campaign_lease_path(repo: Path) -> Path:
 
 
 def _scenario_coordination_lock_path(repo: Path) -> Path:
-    """Keep manifest coordination distinct from destructive target locks."""
+    """清单协调锁与破坏性目标锁保持独立。"""
 
     from plain_ucore_action_runner import _run_lock_path
 
@@ -436,7 +434,7 @@ def _scenario_coordination_lock_path(repo: Path) -> Path:
 
 @contextmanager
 def exclusive_evaluation_campaign_lock(repo: Path):
-    """Fail closed when a complete formal campaign is already in progress."""
+    """已有完整正式评测运行时按失败关闭。"""
 
     from plain_ucore_action_runner import _try_lock_file, _unlock_file
 
@@ -459,7 +457,7 @@ def exclusive_evaluation_campaign_lock(repo: Path):
 
 @contextmanager
 def exclusive_scenario_coordination_lock(repo: Path):
-    """Serialize scenario state without holding a lock needed by its child."""
+    """序列化场景状态时不占用子进程所需的锁。"""
 
     from plain_ucore_action_runner import _try_lock_file, _unlock_file
 
@@ -481,7 +479,7 @@ def exclusive_scenario_coordination_lock(repo: Path):
 
 
 def execute_under_campaign_lock(*, repo: Path, command: list[str]) -> int:
-    """Execute the complete collection script while holding the named lock."""
+    """持有指定锁期间执行完整采集脚本。"""
 
     if not command or command[0] == "--":
         command = command[1:]
@@ -530,7 +528,7 @@ def execute_under_campaign_lock(*, repo: Path, command: list[str]) -> int:
 
 
 def verify_campaign_lock_lease(*, repo: Path, token: str) -> None:
-    """Prove that this child was launched by the process holding the lock."""
+    """证明该子进程由持锁进程启动。"""
 
     if CAMPAIGN_LOCK_TOKEN_RE.fullmatch(token) is None:
         raise CampaignError("campaign lock token is missing or malformed")
@@ -610,7 +608,7 @@ def _repo_relative(repo: Path, path: Path) -> str:
 
 
 def _is_portable_absolute_path(value: object) -> bool:
-    """Recognize canonical POSIX or Windows absolute paths on any Host OS."""
+    """在任意 Host 系统上识别规范 POSIX 或 Windows 绝对路径。"""
 
     if not isinstance(value, str) or not value or "\x00" in value or "\n" in value:
         return False
@@ -648,7 +646,7 @@ def _absolute_toolprefix(compiler_path: str) -> tuple[str, str]:
 
 
 def _artifact_root(value: object) -> PurePosixPath:
-    """Parse the repository-relative run root carried by a campaign manifest."""
+    """解析评测清单携带的仓库相对运行根目录。"""
     if not isinstance(value, str):
         raise CampaignError("artifact root must be a canonical relative path")
     root = PurePosixPath(value)
@@ -812,7 +810,7 @@ def _require_measurement_receipt(
 
 
 class _SourceIntegrityMonitor:
-    """Check source identity at the two timing-external boot boundaries."""
+    """在两个计时区间外的启动边界检查源码身份。"""
 
     def __init__(
         self, repo: Path, expected_commit: str, measurement_receipt: object,
@@ -864,7 +862,7 @@ def _trusted_process_path(tools: Iterable[dict[str, str]]) -> str:
 def _verify_bound_host_cc_resolution(
     host_cc: dict[str, str], process_path: str
 ) -> None:
-    """Require the requested Host C compiler to resolve to its attested file."""
+    """要求指定 Host C 编译器解析到其已认证文件。"""
 
     requested = host_cc.get("argv0")
     if not isinstance(requested, str) or not requested:
@@ -946,7 +944,7 @@ def _micro_boot_environment(
 def _verify_platform_execution_binding(
     repo: Path, platform_proof: dict[str, Any]
 ) -> None:
-    """Revalidate the public platform proof in the current execution domain."""
+    """在当前执行域重新校验公开平台证明。"""
 
     if platform_proof["repository"]["execution_path"] != str(repo.resolve()):
         raise CampaignError("platform repository differs before boot")
@@ -1075,7 +1073,7 @@ def require_formal_execution_domain(
     host_cc: str,
     duration_profile: str,
 ) -> dict[str, Any]:
-    """Reject native Windows and incomplete POSIX domains before planning."""
+    """规划前拒绝原生 Windows 和不完整 POSIX 执行域。"""
 
     try:
         from evaluation_platform import (
@@ -1175,9 +1173,8 @@ def create_campaign(
     _require_regular_file(suite_path, "evaluation suite")
     expected_samples_per_boot = _expected_samples_per_boot(suite_path)
 
-    # Calibrated profiles use the platform proof as their single executable
-    # identity provider. Re-probing used a different Python version formatter
-    # and made one valid platform disagree with itself before the first boot.
+    # 校准配置以平台证明作为唯一可执行身份来源。重新探测会采用不同的 Python
+    # 版本格式器，导致有效平台在首次启动前就与自身不一致。
     environment = _campaign_execution_environment(
         repo=repo,
         platform_proof=platform_proof,
@@ -1447,7 +1444,7 @@ def _terminate_micro_process(proc: subprocess.Popen[str]) -> None:
 
 
 def scenario_pair_deadline_contract(runner_timeout_seconds: int) -> dict[str, Any]:
-    """Derive the hard paired-scenario deadline from the target phase contract."""
+    """根据目标阶段合同派生配对场景的硬截止时间。"""
 
     from plain_ucore_action_runner import seeded_ucore_deadline_contract
 
@@ -1523,9 +1520,8 @@ def _run_micro_process(
             remainder = _output_text(cleanup_error.stdout or cleanup_error.output)
             if proc.stdout is not None:
                 proc.stdout.close()
-        # CPython normally returns the complete buffered stream on the second
-        # communicate(); test doubles and alternative runtimes may return only
-        # the tail, so retain the timeout snapshot when it is longer.
+            # CPython 通常在第二次 communicate() 时返回完整缓冲流；测试替身和
+            # 其他运行时可能只返回尾部，因此超时快照更长时保留它。
         output = _output_text(remainder)
         if partial and output and not output.startswith(partial):
             output = partial + output
@@ -1551,15 +1547,14 @@ def execute_and_record_boot(
     boot_id: str,
     timeout_seconds: int,
 ) -> int:
-    """Run one planned boot and archive its artifacts under the repository lock."""
+    """在仓库锁保护下运行一次计划启动并归档其工件。"""
 
     from plain_ucore_action_runner import exclusive_repo_run_lock
 
     repo = _resolved_safe_directory(repo, "repository")
     manifest_path = _resolved_safe_file(manifest_path, "campaign manifest")
     with exclusive_repo_run_lock(repo):
-        # This load is intentionally inside the lock: a contender may have
-        # completed or failed this same manifest while we were acquiring it.
+        # 必须在锁内加载：本进程等锁期间，竞争者可能已完成或写坏同一清单。
         campaign = _strict_json(manifest_path)
         validate_campaign(campaign, contract_root=repo)
         if (
@@ -1648,7 +1643,7 @@ def seal_campaign(
 def export_run_plan(
     manifest_path: Path, output: Path, *, contract_root: Path | None = None
 ) -> dict[str, Any]:
-    """Export the intentionally small input accepted by evaluation_contract.py."""
+    """导出 ``evaluation_contract.py`` 接受的最小输入。"""
     campaign = _strict_json(manifest_path)
     validate_campaign(campaign, contract_root=contract_root)
     if campaign["phase"] != "collected":
@@ -3164,7 +3159,7 @@ def _verify_scenario_execution_binding(
 def execute_and_record_scenario_boot(
     *, repo: Path, manifest_path: Path, boot_id: str
 ) -> int:
-    """Execute one scenario boot from its precommitted absolute command."""
+    """按预提交的绝对命令执行一次场景启动。"""
 
     repo = _resolved_safe_directory(repo, "repository")
     manifest_path = _resolved_safe_file(manifest_path, "scenario campaign manifest")

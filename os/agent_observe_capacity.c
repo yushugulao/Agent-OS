@@ -40,35 +40,6 @@ struct agent_observe_slot_state {
 	} detail;
 };
 
-struct agent_observe_capacity_disk_header {
-	uint64 magic;
-	uint version;
-	uint bytes;
-	uint64 generation;
-	uint64 audit_lease_end;
-	uint64 span_lease_end;
-	uint64 event_lease_end;
-	uint64 control_lease_end;
-	uint agent_lease_end;
-	uint retention_policy;
-	uint scope_count;
-	uint allocator_exhausted;
-	uint reserved_scope_slots;
-	uint reserved;
-	uint64 lifecycle_lease_ends[WORKFLOW_LIFECYCLE_CAP];
-};
-
-struct agent_observe_capacity_scope_header {
-	uint flags;
-	uint scope_id;
-	uint lifecycle_id;
-	uint record_count;
-	uint64 lifecycle_generation;
-	uint64 total_records;
-	uint64 admission_drops;
-	uint64 ledger_hash;
-};
-
 struct agent_observe_capacity_slot {
 	uint flags;
 	uint sealed;
@@ -81,13 +52,6 @@ static struct agent_observe_slot_state
 
 _Static_assert(sizeof(struct agent_observe_slot_state) == 64,
 	       "observation slot state must not grow store accounting");
-_Static_assert(__builtin_offsetof(struct agent_observe_checkpoint, scopes) ==
-	       sizeof(struct agent_observe_capacity_disk_header),
-	       "capacity reader must match observation header");
-_Static_assert(__builtin_offsetof(struct agent_observe_checkpoint_scope,
-				  records) ==
-	       sizeof(struct agent_observe_capacity_scope_header),
-	       "capacity reader must match observation scope header");
 _Static_assert(AGENT_OBSERVE_RESERVED_SCOPE_SLOTS == 1 &&
 	       AGENT_OBSERVE_RECOVERY_SCOPE_SLOT <
 		       AGENT_OBSERVE_CHECKPOINT_SCOPES,
@@ -99,74 +63,67 @@ agent_observe_capacity_snapshot(
 		slots[AGENT_OBSERVE_CHECKPOINT_SCOPES],
 	uint64 *bank_generation)
 {
-	struct agent_observe_capacity_disk_header header;
-	uint64 confirmed_generation = 0;
+	const struct agent_observe_checkpoint *image;
+	uint bytes = 0;
 	uint64 generation = 0;
+	int result = -1;
+	int enabled = intr_save();
 
-	if (agent_durable_section_active_read(
-		    AGENT_DURABLE_SECTION_OBSERVE, 0, &header, sizeof(header),
-		    &generation) < 0 ||
-	    header.magic != AGENT_OBSERVE_CHECKPOINT_MAGIC ||
-	    header.version != AGENT_OBSERVE_CHECKPOINT_VERSION ||
-	    header.bytes != sizeof(struct agent_observe_checkpoint) ||
-	    header.retention_policy !=
+	image = (const struct agent_observe_checkpoint *)
+		agent_durable_section_active_view(
+			AGENT_DURABLE_SECTION_OBSERVE, &bytes, &generation);
+	if (image == 0 || bytes != sizeof(*image) ||
+	    image->magic != AGENT_OBSERVE_CHECKPOINT_MAGIC ||
+	    image->version != AGENT_OBSERVE_CHECKPOINT_VERSION ||
+	    image->bytes != sizeof(*image) ||
+	    image->retention_policy !=
 		    AGENT_OBSERVE_RETENTION_CAUSAL_DIVERSITY ||
-	    header.reserved_scope_slots !=
+	    image->reserved_scope_slots !=
 		    AGENT_OBSERVE_RESERVED_SCOPE_SLOTS ||
-	    header.reserved != 0)
-		return -1;
+	    image->reserved != 0)
+		goto out;
 	memset(slots, 0, sizeof(*slots) * AGENT_OBSERVE_CHECKPOINT_SCOPES);
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
-		struct agent_observe_capacity_scope_header scope;
-		uint64 observed_generation = 0;
-		uint offset = __builtin_offsetof(
-			struct agent_observe_checkpoint, scopes) +
-			i * sizeof(struct agent_observe_checkpoint_scope);
+		const struct agent_observe_checkpoint_scope *scope =
+			&image->scopes[i];
 
-		if (agent_durable_section_active_read(
-			    AGENT_DURABLE_SECTION_OBSERVE, offset, &scope,
-			    sizeof(scope), &observed_generation) < 0 ||
-		    observed_generation != generation)
-			return -1;
-		if (scope.flags == 0)
+		if (scope->used == 0)
 			continue;
-		if ((scope.flags & AGENT_OBSERVE_SCOPE_USED) == 0 ||
-		    (scope.flags & ~AGENT_OBSERVE_SCOPE_FLAGS_ALL) != 0 ||
+		if ((scope->used & AGENT_OBSERVE_SCOPE_USED) == 0 ||
+		    (scope->used & ~AGENT_OBSERVE_SCOPE_FLAGS_ALL) != 0 ||
 		    (i == AGENT_OBSERVE_RECOVERY_SCOPE_SLOT) !=
-			    !!(scope.flags &
+			    !!(scope->used &
 			       AGENT_OBSERVE_SCOPE_RECOVERY_SUCCESSOR) ||
-		    scope.scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
-		    scope.scope_id >= FS_OWNER_SCOPE_FLAG ||
-		    scope.record_count > AGENT_OBSERVE_CHECKPOINT_PER_SCOPE ||
-		    scope.total_records == 0 ||
-		    scope.total_records < scope.record_count ||
-		    scope.admission_drops >
-			    scope.total_records - scope.record_count ||
-		    (scope.record_count == 0 &&
-		     (scope.admission_drops != scope.total_records ||
-		      scope.ledger_hash != 0)) ||
-		    (scope.record_count != 0 &&
-		     (scope.total_records - scope.admission_drops <
-			      scope.record_count ||
-		      scope.ledger_hash == 0)))
-			return -1;
-		slots[i].flags = scope.flags;
-		slots[i].scope_id = scope.scope_id;
-		slots[i].lifecycle.id = scope.lifecycle_id;
-		slots[i].lifecycle.generation = scope.lifecycle_generation;
+		    scope->scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+		    scope->scope_id >= FS_OWNER_SCOPE_FLAG ||
+		    scope->record_count > AGENT_OBSERVE_CHECKPOINT_PER_SCOPE ||
+		    scope->total_records == 0 ||
+		    scope->total_records < scope->record_count ||
+		    scope->admission_drops >
+			    scope->total_records - scope->record_count ||
+		    (scope->record_count == 0 &&
+		     (scope->admission_drops != scope->total_records ||
+		      scope->ledger_hash != 0)) ||
+		    (scope->record_count != 0 &&
+		     (scope->total_records - scope->admission_drops <
+			      scope->record_count ||
+		      scope->ledger_hash == 0)))
+			goto out;
+		slots[i].flags = scope->used;
+		slots[i].scope_id = scope->scope_id;
+		slots[i].lifecycle.id = scope->lifecycle_id;
+		slots[i].lifecycle.generation = scope->lifecycle_generation;
 		slots[i].sealed =
 			!workflow_lifecycle_active(slots[i].lifecycle) &&
 			!workflow_lifecycle_closing(slots[i].lifecycle) &&
 			!workflow_lifecycle_retiring(slots[i].lifecycle);
 	}
-	if (agent_durable_section_active_read(
-		    AGENT_DURABLE_SECTION_OBSERVE, 0, &header, sizeof(header),
-		    &confirmed_generation) < 0 ||
-	    confirmed_generation != generation)
-		return -1;
 	if (bank_generation != 0)
 		*bank_generation = generation;
-	return 0;
+	result = 0;
+out:
+	intr_restore(enabled);
+	return result;
 }
 
 static int

@@ -24,13 +24,6 @@ struct reserve_report {
 	uint64 physical_limit;
 };
 
-struct legacy_mail_account_report {
-	uint64 allocation_delta;
-	uint64 before_fork;
-	uint64 after_reap;
-	int ok;
-};
-
 static void check(int condition, const char *message)
 {
 	if (condition)
@@ -136,12 +129,6 @@ static uint64 physical_class_limit(
 {
 	return snapshot->reserved ? snapshot->reserved_limit :
 				    snapshot->ordinary_limit;
-}
-
-static uint64 physical_account_usage(
-	const struct physical_page_account_snapshot *snapshot)
-{
-	return snapshot->ordinary_usage + snapshot->reserved_usage;
 }
 
 static const struct physical_page_test_receipt *
@@ -317,103 +304,7 @@ static void check_brk_contract(void)
 	printf("physicalresource_ucore: brk_atomic=1 fork_inherit=1 shrink_refund=1 guard=1\n");
 }
 
-static void legacy_mail_account_root(int report_fd)
-{
-	struct legacy_mail_account_report report;
-	struct physical_page_account_snapshot before;
-	struct physical_page_account_snapshot baseline;
-	struct physical_page_account_snapshot peak;
-	struct physical_page_account_snapshot after;
-	char token = 0;
-	int child_ready[2];
-	int child_control[2];
-	int child;
-	int status = -1;
-
-	check(pipe(child_ready) == 0 && pipe(child_control) == 0,
-	      "create legacy mail accounting pipes");
-	check(agent_scope_delegate_fd(child_ready[1]) == AGENT_STATUS_OK &&
-		      agent_scope_delegate_fd(child_control[0]) ==
-			      AGENT_STATUS_OK,
-	      "delegate legacy mail accounting pipes");
-	physical_page_snapshot(&before);
-	child = fork();
-	check(child >= 0, "create legacy mail accounting endpoint");
-	if (child == 0) {
-		token = 'R';
-		check(write(child_ready[1], &token, 1) == 1,
-		      "report legacy mail endpoint ready");
-		check(read(child_control[0], &token, 1) == 1 && token == 'A',
-		      "start legacy mail allocation");
-		check(mailwrite(getpid(), "accounted", 10) == 10,
-		      "allocate legacy mail sidecar");
-		token = 'M';
-		check(write(child_ready[1], &token, 1) == 1,
-		      "report legacy mail sidecar allocated");
-		check(read(child_control[0], &token, 1) == 1 && token == 'X',
-		      "release legacy mail accounting endpoint");
-		exit(0);
-	}
-	check(read(child_ready[0], &token, 1) == 1 && token == 'R',
-	      "wait legacy mail endpoint ready");
-	physical_page_snapshot(&baseline);
-	token = 'A';
-	check(write(child_control[1], &token, 1) == 1,
-	      "request legacy mail sidecar allocation");
-	check(read(child_ready[0], &token, 1) == 1 && token == 'M',
-	      "wait legacy mail sidecar allocation");
-	physical_page_snapshot(&peak);
-	check(physical_account_usage(&peak) ==
-		      physical_account_usage(&baseline) + 2,
-	      "legacy mail sidecar charges exactly two target-account pages");
-	token = 'X';
-	check(write(child_control[1], &token, 1) == 1,
-	      "release legacy mail endpoint");
-	check(waitpid(child, &status) == child && status == 0,
-	      "wait legacy mail accounting endpoint");
-	physical_page_snapshot(&after);
-	check(physical_account_usage(&after) ==
-		      physical_account_usage(&before),
-	      "legacy mail teardown refunds the target account");
-	memset(&report, 0, sizeof(report));
-	report.allocation_delta = physical_account_usage(&peak) -
-				  physical_account_usage(&baseline);
-	report.before_fork = physical_account_usage(&before);
-	report.after_reap = physical_account_usage(&after);
-	report.ok = 1;
-	write_full(report_fd, &report, sizeof(report));
-	exit(0);
-}
-
-static void check_legacy_mail_accounting(void)
-{
-	struct legacy_mail_account_report report;
-	int report_pipe[2];
-	int workflow;
-	int status = -1;
-
-	check(pipe(report_pipe) == 0,
-	      "create legacy mail accounting report pipe");
-	check(agent_scope_delegate_fd(report_pipe[1]) == AGENT_STATUS_OK,
-	      "delegate legacy mail accounting report");
-	workflow = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
-	check(workflow >= 0, "create legacy mail accounting workflow");
-	if (workflow == 0)
-		legacy_mail_account_root(report_pipe[1]);
-	check(close(report_pipe[1]) == 0,
-	      "close legacy mail accounting child report endpoint");
-	read_full(report_pipe[0], &report, sizeof(report));
-	check(report.ok && report.allocation_delta == 2 &&
-		      report.after_reap == report.before_fork,
-	      "validate legacy mail account charge and refund");
-	check(waitpid(workflow, &status) == workflow && status == 0,
-	      "wait legacy mail accounting workflow");
-	check(close(report_pipe[0]) == 0,
-	      "close legacy mail accounting report pipe");
-	printf("physicalresource_ucore: legacy_mail_accounting=1 alloc_delta=2 exit_delta=0\n");
-}
-
-/* Fill one workflow's execution account without consuming another's share. */
+	/* 填满一个工作流的执行账户，不消耗其他工作流的份额。 */
 static void reserved_domain_pressure(int report_fd, int release_fd)
 {
 	struct reserve_report report;
@@ -539,7 +430,7 @@ static void check_reserved_domain_fairness(void)
 	check(pressure.scope_id != 0,
 	      "pressure workflow reports stable scope");
 
-	/* Root + pressure + two probes occupy all four reserved domains. */
+	/* 根域、压力域和两个探针占满四个预留域。 */
 	for (int i = 0; i < 2; i++) {
 		check(pipe(probe_report[i]) == 0 && pipe(probe_release[i]) == 0,
 		      "create reserve probe pipes");
@@ -559,7 +450,7 @@ static void check_reserved_domain_fairness(void)
 	       pressure.page_holders, pressure.pipe_holders,
 	       pressure.physical_usage, pressure.physical_limit);
 
-	/* Drain only the pressured domain; keep both other probes alive. */
+	/* 只排空压力域，保持另外两个探针存活。 */
 	check(write(pressure_release[1], &token, 1) == 1,
 	      "release pressure domain holder");
 	check(waitpid(pressure_pid, &status) == pressure_pid && status == 0,
@@ -643,7 +534,6 @@ int main(void)
 	char token;
 
 	check_brk_contract();
-	check_legacy_mail_accounting();
 	check_physical_promise_lifecycle();
 	check_reserved_domain_fairness();
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation guards for the BIO-local work-conserving I/O governor."""
+"""BIO 局部工作保守型 I/O 调节器的变异防护。"""
 
 import re
 from pathlib import Path

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation guards for predicate recheck and wait-queue publication."""
+"""谓词复查与等待队列发布的变异防护。"""
 
 from pathlib import Path
 
@@ -977,9 +977,9 @@ mutations = (
     (mutate_function(IPC, "int sys_agent_wait(", "\t\tenabled = intr_save();", ""), PROC, WAIT_TEST),
     (mutate_function(IPC, "int sys_agent_wait(", "wait_queue_sleep_key_irq(", "wait_queue_sleep_irq("), PROC, WAIT_TEST),
     (mutate_function(IPC, "int sys_agent_wait(", "\t\tp->agent_wait_loop_count++;", "\t\tintr_restore(enabled);\n\t\tp->agent_wait_loop_count++;"), PROC, WAIT_TEST),
-    (IPC, mutate_function(PROC, "void exit(int code)", "\t\tenabled = intr_save();\n\t\t/*\n\t\t * The last sibling", "\t\t/*\n\t\t * The last sibling"), WAIT_TEST),
+    (IPC, mutate_function(PROC, "void exit(int code)", "#endif\n\t\tenabled = intr_save();", "#endif"), WAIT_TEST),
     (IPC, mutate_function(PROC, "void exit(int code)", "wait_queue_sleep_irq(&p->thread_exit_waiters)", "wait_queue_sleep(&p->thread_exit_waiters)"), WAIT_TEST),
-    (IPC, mutate_function(PROC, "void exit(int code)", "\t\t/*\n\t\t * The last sibling", "\t\tintr_restore(enabled);\n\t\t/*\n\t\t * The last sibling"), WAIT_TEST),
+    (IPC, mutate_function(PROC, "void exit(int code)", "\t\tif (proc_siblings_quiescent(p, t)) {", "\t\tintr_restore(enabled);\n\t\tif (proc_siblings_quiescent(p, t)) {"), WAIT_TEST),
     (IPC, mutate_function(PROC, "static void scheduler_finish_dying_thread(", "\t\twait_queue_wake_key_all(&p->thread_exit_waiters, 0);", ""), WAIT_TEST),
     (mutate_function(IPC, "agent_ipc_queue_event_locked(", "\tagent_ipc_handoff_event_locked(target);", ""), PROC, WAIT_TEST),
     (mutate_function(IPC, "static int\nagent_ipc_handoff_event_locked(", "wait_queue_wake_one_thread(&p->agent_event_waiters)", "wait_queue_wake_one(&p->agent_event_waiters)"), PROC, WAIT_TEST),

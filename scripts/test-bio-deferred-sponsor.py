@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation contracts for deferred I/O class and receipt preservation."""
+"""延迟 I/O 类别与收据保留的变异契约。"""
 
 from pathlib import Path
 

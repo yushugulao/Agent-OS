@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and optionally run plain uCore work from host action records."""
+"""根据 Host 动作记录准备并可选运行 plain uCore 工作。"""
 
 from __future__ import annotations
 
@@ -78,8 +78,8 @@ SEEDED_ACTION_MAX_TIMEOUT_SECONDS = 3600
 WSL_COMMAND_ID_ENV = "AGENTOS_UCORE_RUN_ID"
 WSL_COMMAND_ID_RE = re.compile(r"\bAGENTOS_UCORE_RUN_ID=([0-9a-f]{32})\b")
 WSL_TIMEOUT_KILL_AFTER_SECONDS = 5
-# GNU timeout must finish its KILL escalation before the Host-side deadline.
-# This leaves enough time for an independent /proc scan from a fresh WSL client.
+# GNU timeout 必须在 Host 侧截止时间前完成 KILL 升级，以便新的 WSL 客户端
+# 仍有足够时间独立扫描 /proc。
 WSL_HOST_DEADLINE_MARGIN_SECONDS = 10
 WSL_QUIESCENCE_VERIFY_TIMEOUT_SECONDS = 8
 WSL_CLEANUP_UNVERIFIED_EXIT_CODE = 125
@@ -144,11 +144,11 @@ HOST_STATE_FILES = frozenset(
 
 
 class RepoRunBusy(RuntimeError):
-    """A destructive plain-uCore run is already using this repository."""
+    """已有破坏性 plain-uCore 运行正在使用该仓库。"""
 
 
 def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
-    """Publish bytes through an O_EXCL temporary in the destination directory."""
+    """通过目标目录中的 ``O_EXCL`` 临时文件发布字节。"""
 
     target = _absolute_lexical_path(path)
     parent = reject_link_components(target.parent)
@@ -178,7 +178,7 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        # A raced symlink is replaced as a directory entry, never followed.
+        # 发生竞争的符号链接只作为目录项替换，绝不跟随。
         os.replace(temporary, target)
         if os.name != "nt" and hasattr(os, "O_DIRECTORY"):
             directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -239,7 +239,7 @@ def archive_runtime_artifacts(repo_dir: Path, run_dir: Path) -> dict[str, object
 
 
 def capture_source_identity(repo_dir: Path) -> dict[str, object]:
-    """Capture HEAD, tracked cleanliness, and an exact tracked-state digest."""
+    """捕获 HEAD、已跟踪文件洁净状态及精确状态摘要。"""
 
     repo_dir = require_safe_directory(_absolute_lexical_path(repo_dir)).resolve(strict=True)
     git_name = shutil.which("git")
@@ -338,7 +338,7 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
 
 
 def _normalize_git_toplevel(repo_dir: Path, reported: str) -> Path:
-    """Return Git's link-free worktree root in the active Host namespace."""
+    """在当前 Host 命名空间返回 Git 无链接工作树根目录。"""
 
     lines = reported.splitlines()
     if len(lines) != 1 or not lines[0] or "\0" in lines[0]:
@@ -381,7 +381,7 @@ def _normalize_git_toplevel(repo_dir: Path, reported: str) -> Path:
 def verify_source_identity(
     repo_dir: Path, expected: dict[str, object]
 ) -> dict[str, object]:
-    """Re-probe under the repository lock and reject mid-run source changes."""
+    """持有仓库锁重新探测，并拒绝运行中源码变更。"""
 
     current = capture_source_identity(repo_dir)
     if current != expected:
@@ -390,7 +390,7 @@ def verify_source_identity(
 
 
 def _normalize_git_common_dir(repo_dir: Path, reported: str) -> Path:
-    """Translate Git's common-dir result into the active Host namespace."""
+    """将 Git common-dir 结果转换到当前 Host 命名空间。"""
 
     if not reported or "\0" in reported or "\r" in reported or "\n" in reported:
         raise ValueError("Git common directory is malformed")
@@ -398,10 +398,9 @@ def _normalize_git_common_dir(repo_dir: Path, reported: str) -> Path:
     if candidate.is_absolute():
         return candidate
     if PureWindowsPath(reported).is_absolute():
-        # A worktree created by Windows Git stores an absolute Windows gitdir.
-        # Native MSYS2 Git preserves that spelling even though Python operates
-        # in the POSIX namespace.  Convert it as data through cygpath; never
-        # concatenate a drive path beneath the worktree.
+    # Windows Git 创建的工作树保存绝对 Windows gitdir。原生 MSYS2 Git 会保留
+    # 该拼写，即使 Python 在 POSIX 命名空间运行。必须将其作为数据经 cygpath
+    # 转换，绝不能把盘符路径拼接到工作树下。
         converted = subprocess.run(
             ["cygpath", "-u", reported],
             stdout=subprocess.PIPE,
@@ -492,7 +491,7 @@ def _unlock_file(handle) -> None:
 
 @contextmanager
 def exclusive_repo_run_lock(repo_dir: Path):
-    """Fail closed instead of letting concurrent clean/build/run phases collide."""
+    """按失败关闭，避免并发清理、构建与运行阶段冲突。"""
 
     lock_path = _run_lock_path(repo_dir)
     ensure_safe_directory(lock_path.parent)
@@ -925,8 +924,7 @@ def pad_state_files_for_ucore_fs(state_dir: Path) -> None:
 
 
 def prepare_action_state(actions: list[dict[str, object]], state_dir: Path, run_dir: Path) -> dict[str, object]:
-    # Host action run names are deterministic, so claiming the directory must fail
-    # rather than reuse a path planted before this action was accepted.
+    # Host 动作运行名是确定的，因此占用目录必须失败，不能复用动作获准前预置的路径。
     run_dir = create_private_directory(run_dir)
     next_state = run_dir / "state-next"
     clean_copy_state(state_dir, next_state)
@@ -988,7 +986,7 @@ def bash_path(path: Path, base: Path | None = None) -> str:
 
 
 def wsl_command_identity(command: list[str]) -> str:
-    """Return the unguessable identity embedded by make_wsl_command."""
+    """返回 ``make_wsl_command`` 嵌入的不可猜测身份。"""
 
     matches: list[str] = []
     for argument in command:
@@ -1078,7 +1076,7 @@ printf 'AGENTOS_WSL_CLEANUP initial=%s remaining=%s\\n' \
 
 
 def _controlled_shell_environment() -> dict[str, str]:
-    """Build the only environment visible to a seeded scenario shell."""
+    """构建 seeded 场景 shell 唯一可见的环境。"""
 
     posix_temporary = os.environ.get("AGENTOS_WSL_TMPDIR", "/tmp")
     native_temporary = (
@@ -1172,7 +1170,7 @@ def _wsl_verification_command(command: list[str], script: str) -> list[str]:
 
 
 def verify_wsl_command_quiesced(command: list[str]) -> dict[str, object]:
-    """Reap and independently prove absence of this command's WSL descendants."""
+    """回收并独立证明该命令的 WSL 后代已全部退出。"""
 
     identity = wsl_command_identity(command)
     if not identity:
@@ -1347,7 +1345,7 @@ def process_group_alive(proc: subprocess.Popen[str]) -> bool:
 def signal_process_tree(
     proc: subprocess.Popen[str], sig: signal.Signals
 ) -> tuple[bool, bool]:
-    """Signal the owned leader and group, reporting confirmed leader delivery."""
+    """向所属 leader 和进程组发送信号，并报告已确认的 leader 投递。"""
 
     leader_sent = False
     group_sent = False
@@ -1381,7 +1379,7 @@ def signal_process_tree(
 
 
 def terminate_process(proc: subprocess.Popen[str]) -> dict[str, object]:
-    """Stop an owned process tree without confusing cleanup with natural exit."""
+    """停止所属进程树，且不将清理误判为自然退出。"""
 
     signals_sent: list[int] = []
     term_sent, term_sent_to_leader = signal_process_tree(proc, signal.SIGTERM)
@@ -1415,9 +1413,8 @@ def terminate_process(proc: subprocess.Popen[str]) -> dict[str, object]:
     if os.name == "nt":
         term_leader_confirmed = term_sent_to_leader
     else:
-        # A successful kill(2) can race with a naturally exiting zombie. The
-        # wait status proves that TERM, rather than a natural non-zero exit,
-        # actually completed the leader.
+        # 成功的 kill(2) 可能与自然退出的僵尸进程竞争；wait 状态用于证明实际由
+        # TERM 而非自然的非零退出结束 leader。
         term_leader_confirmed = (
             term_sent_to_leader and raw_returncode == -int(signal.SIGTERM)
         )
@@ -1971,8 +1968,7 @@ def find_exact_guest_log_line(text: str, expected: str) -> str:
 
 
 def write_run_result_state(next_state: Path, run_summary: dict[str, object], log_text: str) -> None:
-    # The summary is an internal typed contract. Treat malformed truthy values
-    # as failure so diagnostic state can never advertise a successful guest.
+    # 摘要是内部类型合同。畸形真值必须按失败处理，避免诊断状态误报 Guest 成功。
     passed = run_summary.get("passed") is True
     guest_state_files, guest_state_sha256 = guest_state_inventory_sha256(
         next_state, excluded_names=HOST_STATE_FILES
@@ -2134,8 +2130,7 @@ def publish_next_state(
         ):
             raise ValueError("Host run result sidecar is unsafe")
 
-    # A receipt is the commit marker for a Guest snapshot. Invalidate every old
-    # marker before inspecting or publishing the candidate generation.
+    # 回执是 Guest 快照的提交标记。检查或发布候选 generation 前先使全部旧标记失效。
     revoke_published_receipt(state_dir, host_run_result_path)
 
     sources: dict[str, Path] = {}
@@ -2426,8 +2421,8 @@ def _run_seeded_ucore_locked(
                 repo_dir,
                 require_single_scope=True,
             )
-            # The build input contains Host-only action files. Replace it with
-            # the exact extracted Guest generation before creating its receipt.
+        # 构建输入包含仅供 Host 使用的动作文件；创建回执前必须以精确抽取的 Guest
+        # generation 替换它。
             clean_copy_state(run_dir / "state-extracted", next_state)
         except (OSError, ValueError) as error:
             passed = False

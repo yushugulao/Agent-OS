@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Closed source-tree inventory and generated-output policy for formal runs."""
+"""正式运行使用的闭合源码树清单与生成输出策略。"""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ except ImportError:
 
 
 class ToolAttestationError(ValueError):
-    """Raised when source closure or a bound tool cannot be trusted."""
+    """源码闭包或绑定工具不可信时抛出。"""
 
 
 EVALUATION_BUILD_OUTPUT_ROOTS = (
@@ -64,10 +64,8 @@ EVALUATION_BUILD_OUTPUT_FILES = (
     "baseline_ucore/nfs/fs-copy.img",
 )
 
-# Local repository configuration is untrusted input.  In particular,
-# core.fsmonitor can execute a hook while a supposedly read-only inventory is
-# being assembled.  Keep these overrides on every Git invocation made by the
-# source gate rather than relying on the caller's environment.
+# 本地仓库配置是不可信输入，尤其 core.fsmonitor 可在看似只读的清单构建期间
+# 执行钩子。源码门的每次 Git 调用都必须显式携带这些覆盖，不能依赖调用方环境。
 SAFE_GIT_CONFIG_ARGUMENTS = (
     "-c", "core.fsmonitor=false",
     "-c", "core.untrackedCache=false",
@@ -125,7 +123,7 @@ def verify_tracked_worktree_bytes(
     *,
     verify_executable_mode: bool | None = None,
 ) -> int:
-    """Compare regular checkout files and executable modes with a commit."""
+    """将检出的常规文件及可执行模式与提交比较。"""
 
     if verify_executable_mode is None:
         verify_executable_mode = _executable_mode_is_reliable(
@@ -185,7 +183,7 @@ def verify_tracked_worktree_bytes(
 def require_clean_head(
     git: Path, repository: Path, environment: dict[str, str]
 ) -> str:
-    """Return HEAD only after the complete checkout matches that commit."""
+    """仅在完整检出内容匹配提交后返回 HEAD。"""
 
     head = _run_git(git, repository, environment, "rev-parse", "--verify", "HEAD^{commit}")
     raw_commit = head.stdout.strip()
@@ -452,7 +450,7 @@ def _validated_worktree_administration(
     worktree: Path,
     environment: dict[str, str],
 ) -> tuple[Path, Path, Path]:
-    """Bind the on-disk .git entry to Git's resolved administration paths."""
+    """将磁盘上的 ``.git`` 条目绑定到 Git 解析出的管理路径。"""
 
     try:
         with os.scandir(worktree) as iterator:
@@ -551,7 +549,7 @@ def resolve_evaluation_git_common_directory(
     worktree: Path,
     environment: dict[str, str],
 ) -> Path:
-    """Return a verified common Git directory for cross-worktree coordination."""
+    """返回经验证的公共 Git 目录，用于跨工作树协调。"""
 
     try:
         repository = require_safe_directory(repository).resolve(strict=True)
@@ -578,7 +576,7 @@ def _filesystem_worktree_paths(
     generated_files: Iterable[PurePosixPath] = (),
     administration_entry: Path | None = None,
 ) -> tuple[tuple[PurePosixPath, bool], ...]:
-    """Inventory every non-administrative path without consulting Git ignores."""
+    """不查询 Git ignore 规则，清点所有非管理路径。"""
 
     generated_roots = tuple(generated_roots)
     generated_files = frozenset(generated_files)
@@ -668,7 +666,7 @@ def verify_evaluation_source_tree(
     allowed_output_files: Iterable[str] = (),
     stage: str,
 ) -> SourceTreeReceipt:
-    """Fail closed on tracked, ordinary-untracked and ignored inputs."""
+    """对已跟踪、普通未跟踪及被忽略的输入执行失败关闭。"""
 
     if not isinstance(stage, str) or not stage.strip():
         raise ToolAttestationError("source-tree verification stage is empty")
@@ -797,7 +795,7 @@ def purge_evaluation_generated_outputs(
     output_roots: Iterable[str],
     output_files: Iterable[str],
 ) -> None:
-    """Remove fixed untracked outputs without parsing a poisoned Makefile."""
+    """无需解析可能被污染的 Makefile，移除固定的未跟踪输出。"""
 
     try:
         repository = require_safe_directory(repository).resolve(strict=True)

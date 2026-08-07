@@ -94,9 +94,9 @@ void usertrap()
 	if (cause & (1ULL << 63)) {
 		devintr(cause & 0xff);
 		/*
-		 * 时钟驱动的维护 I/O 必须借用真实的已调度线程。每次用户态时钟
-		 * 中断最多执行一个检查点，使 CPU 密集进程也能推进后台任务，
-		 * 同时避免在调度器空闲栈上发起 I/O。
+		 * 时钟驱动的维护输入输出必须借用真实的已调度线程。每次用户态时钟
+		 * 中断最多执行一个检查点，使计算密集进程也能推进后台任务，同时
+		 * 避免在调度器空闲栈上发起输入输出。
 		 */
 		kernel_work_begin_background();
 		agent_background_checkpoint();
@@ -110,7 +110,7 @@ void usertrap()
 		case StorePageFault:
 			if (uvm_cow_fault(curr_proc()->pagetable, r_stval()) == 0)
 				break;
-			/* fall through */
+		/* 继续执行后续分支。 */
 		case StoreMisaligned:
 		case InstructionMisaligned:
 		case InstructionPageFault:
@@ -184,9 +184,8 @@ void kerneltrap()
 		errorf("invalid trap from kernel: %p, stval = %p sepc = %p\n",
 		       scause, r_stval(), sepc);
 		/*
-		 * Process teardown may sleep while closing files and settling I/O.
-		 * An arbitrary supervisor fault can hold buffers or kernel locks, so
-		 * it cannot safely enter that state machine.
+		 * 进程拆除可能在关闭文件和结算输入输出时休眠。任意监管态故障可能仍
+		 * 持有缓冲区或内核锁，不能安全进入该状态机。
 		 */
 		panic("invalid supervisor trap");
 	}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contract for catalog rollback isolation across metadata I/O."""
+"""跨元数据 I/O 的 catalog 回滚隔离静态契约。"""
 
 from __future__ import annotations
 

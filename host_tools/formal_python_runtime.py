@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and attest the transitive no-site Python runtime for formal runs."""
+"""创建并认证正式运行使用的传递闭合 no-site Python 运行时。"""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ DISPATCHER_PATH = "scripts/trusted-python-child.py"
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FORMAL_TOOL_ORDER = ("make", "git", "bash", "python", "host_cc", "compiler", "qemu")
-# The C locale is the POSIX producer and historical Cygwin default. New Cygwin
-# producers override the pair with FORMAL_CYGWIN_LOCALE below.
+# C locale 是 POSIX 生产者及旧版 Cygwin 的默认值；新版 Cygwin 生产者通过
+# 下方 FORMAL_CYGWIN_LOCALE 覆盖这对设置。
 FORMAL_ENVIRONMENT_FIXED = {
     "LC_ALL": "C", "LANG": "C", "TZ": "UTC", "PYTHONNOUSERSITE": "1",
     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -54,13 +54,13 @@ POSIX_SYSTEM_PATHS = (
 
 
 class FormalPythonRuntimeError(ValueError):
-    """Raised when the private Python runtime cannot be trusted."""
+    """私有 Python 运行时不可信时抛出。"""
 
 
 def validate_duration_profile_policy_marker(
     environment: object, log_lines: list[str]
 ) -> str:
-    """Bind the formal duration profile to its single named policy decision."""
+    """将正式时长配置绑定到唯一具名策略决策。"""
 
     profile = (
         environment.get("AGENT_TEST_DURATION_PROFILE")
@@ -86,7 +86,7 @@ def validate_duration_profile_policy_marker(
 def controlled_search_path(
     tool_directories: list[Path], separator: str, system_paths: list[str] | tuple[str, ...]
 ) -> str:
-    """Build the canonical nested-tool PATH used by producer and verifier."""
+    """构建生产者与验证器使用的规范嵌套工具 PATH。"""
 
     tools = list(dict.fromkeys(str(path) for path in tool_directories))
     return separator.join((*tools, *system_paths))
@@ -100,7 +100,7 @@ def formal_execution_overrides(
     idle_notice: str,
     duration_profile: str,
 ) -> dict[str, str]:
-    """Build the sole allowlist of dynamic full-verification variables."""
+    """构建完整验证动态变量的唯一允许列表。"""
 
     if duration_profile not in {"local-e3", "none"}:
         raise FormalPythonRuntimeError(
@@ -351,9 +351,8 @@ def _probe_backing(executable: Path, environment: dict[str, str]) -> dict[str, o
     ):
         detail = result.stderr.decode("utf-8", "replace")[-1000:]
         raise FormalPythonRuntimeError(f"backing Python probe failed: {detail}")
-    # Some POSIX compatibility layers expose the same executable both with and
-    # without a platform suffix. Bind the record to the already-attested path
-    # after proving file identity instead of trusting either spelling.
+    # 某些 POSIX 兼容层会同时以带和不带平台后缀的路径暴露同一可执行文件。
+    # 证明文件身份后，将记录绑定到已认证路径，而不信任任一拼写。
     value["executable"] = str(executable)
     value["base_executable"] = str(executable)
     return value
@@ -399,7 +398,7 @@ def create_formal_python_runtime(
     commit: str,
     environment: dict[str, str],
 ) -> FormalPythonRuntime:
-    """Create a private recursive shim from the authenticated commit bytes."""
+    """根据已认证提交字节创建私有递归 shim。"""
 
     real_python = _regular(real_python, "backing Python")
     git = _regular(git, "Git executable")
@@ -459,7 +458,7 @@ def create_formal_python_runtime(
 def validate_formal_python_runtime_record(
     value: object, contract_root: Path
 ) -> None:
-    """Validate the portable fields against the authenticated source snapshot."""
+    """对照已认证源码快照校验可移植字段。"""
 
     if not isinstance(value, dict) or set(value) != {
         "schema_version", "backing_python", "shell", "dispatcher", "shim", "probe"
@@ -587,7 +586,7 @@ def validate_formal_python_tool_binding(
     python_bin: object,
     path_resolution: object,
 ) -> None:
-    """Cross-bind the portable launch record to the executed tool and PATH."""
+    """将可移植启动记录与实际执行工具及 PATH 交叉绑定。"""
 
     backing = value["backing_python"]
     shim = value["shim"]
@@ -611,7 +610,7 @@ def validate_formal_execution_environment(
     tools: dict[str, dict[str, object]],
     temporary_binding: object,
 ) -> None:
-    """Validate the exact POSIX environment used by a formal full verify."""
+    """校验正式完整验证使用的精确 POSIX 环境。"""
 
     expected_keys = set(FORMAL_ENVIRONMENT_FIXED) | FORMAL_ENVIRONMENT_DYNAMIC
     if (
@@ -632,8 +631,8 @@ def validate_formal_execution_environment(
     ) if isinstance(value, dict) else (None, None)
     allowed_locales = {("C", "C")}
     if platform_name == "cygwin":
-        # Historical payloads used C. New Cygwin executions require UTF-8 so
-        # native compiler paths survive argv conversion through POSIX tools.
+# 历史载荷使用 C；新版 Cygwin 执行需要 UTF-8，确保原生编译器路径经过 POSIX
+# 工具的 argv 转换后仍保持完整。
         allowed_locales.add((FORMAL_CYGWIN_LOCALE, FORMAL_CYGWIN_LOCALE))
     if (
         locale not in allowed_locales
@@ -674,7 +673,7 @@ def validate_formal_temporary_binding(
     binding: object,
     environment: dict[str, str],
 ) -> None:
-    """Validate the portable receipt for the POSIX/native temp identity check."""
+    """校验 POSIX/原生临时目录身份检查的可移植回执。"""
 
     expected_keys = {
         "schema_version", "kind", "execution_platform", "conversion_api",
@@ -754,7 +753,7 @@ def validate_formal_evidence_binding(
     contract_root: Path,
     expected_labels: set[str],
 ) -> dict[str, dict[str, object]]:
-    """Validate a portable launch, tool and controlled-environment binding."""
+    """校验可移植启动、工具与受控环境的绑定。"""
 
     if not isinstance(environment_record, dict) or set(environment_record) != {
         "captured_at_utc", "platform", "machine", "python_runtime", "python_launch",

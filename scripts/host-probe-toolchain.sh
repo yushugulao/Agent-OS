@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared fail-closed setup for Host C programs exercised by verification.
+# 为校验所运行的 Host C 程序提供共享闭锁式配置。
 
 host_probe_setup() {
 	local directory="$1"

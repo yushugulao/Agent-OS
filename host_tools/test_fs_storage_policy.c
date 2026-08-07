@@ -52,8 +52,8 @@ int main(void)
 		6890, 1892, workflow_blocks, workflow_inodes,
 		system_blocks, system_inodes));
 
-	// G is persisted by mkfs. After SYSTEM legitimately spends its reserve,
-	// reboot validates the same G and reconstructs a zero remaining credit.
+	// G 由 mkfs 持久化。SYSTEM 合法消耗保留量后，重启校验同一个 G，
+	// 并重建零剩余额度。
 	assert(fs_policy_contract_runtime_funded(
 		FS_WORKFLOW_SCOPE_SLOTS * workflow_blocks,
 		FS_WORKFLOW_SCOPE_SLOTS * workflow_inodes,

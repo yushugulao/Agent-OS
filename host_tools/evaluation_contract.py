@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Strict, provenance-bound evaluation contract for AgentOS Guest runs.
+"""绑定来源的严格 AgentOS Guest 运行评测合同。
 
-The statistical unit is one Guest boot (one raw log), never an inner AB/BA
-pair printed by a single Guest.  Inner pairs are reduced to a per-boot median
-before the exact paired tests are calculated across independent boots.
+统计单位是一次 Guest 启动（一个原始日志），不是单个 Guest 输出的内部 AB/BA
+配对。先将内部配对归约为单次启动中位数，再跨独立启动计算精确配对检验。
 """
 
 from __future__ import annotations
@@ -1518,7 +1517,7 @@ def _format_functional_receipt(
     *,
     launcher: bool = False,
 ) -> str:
-    """Build canonical synthetic receipts for Host regression fixtures."""
+    """为 Host 回归夹具构建规范合成回执。"""
     value_text = ",".join(str(value) for value in values)
     receipt = _functional_receipt_hash(task, challenge, values, semantic)
     if launcher:

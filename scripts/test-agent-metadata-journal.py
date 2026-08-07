@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""No-QEMU recovery and mutation tests for the metadata v8 journal."""
+"""元数据 v8 日志的无 QEMU 恢复与变异测试。"""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def catalog_receipt_contract(source: str) -> bool:
 
 
 class ContentReceiptLedger:
-    """Small executable model of exact slot and overlay settlement."""
+    """精确 slot 与 overlay 结算的小型可执行模型。"""
 
     def __init__(self) -> None:
         self.journal_sequence = 0
@@ -601,9 +601,8 @@ class MetadataJournalTests(unittest.TestCase):
             ),
             deltas=deltas(1),
         )
-        # The COMMIT payload is canonical zero media.  Until its 96-byte
-        # header is complete the slot hash cannot validate; from byte 608 the
-        # complete header intentionally makes the zero-filled slot durable.
+        # COMMIT 载荷是规范零介质。96 字节头完整前 slot 哈希无法通过校验；
+        # 从第 608 字节起，完整头会有意使零填充 slot 持久化。
         for committed_bytes in (513, 577, 607):
             with self.subTest(committed_bytes=committed_bytes):
                 raw = bytearray(journal.JOURNAL_BYTES)
@@ -703,7 +702,7 @@ class MetadataJournalTests(unittest.TestCase):
         appender.append(IDENTITY, deltas(2))
         appender.append(IDENTITY, deltas(1, start_fid=10))
         raw = bytearray(appender.bytes())
-        # Make DATA[1] independently valid but bind it to another lifecycle.
+        # 使 DATA[1] 独立有效，但将其绑定到另一个生命周期。
         mutate_u64_and_rehash_slot(
             raw, 1, 40, IDENTITY.lifecycle_generation + 1
         )

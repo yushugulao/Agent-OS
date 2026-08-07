@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for link-safe host acceptance paths."""
+"""链接安全的主机接受路径回归测试。"""
 
 from __future__ import annotations
 

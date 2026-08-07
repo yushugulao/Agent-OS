@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation guards for the compact BIO-local hierarchical rate controller."""
+"""紧凑 BIO 局部分层速率控制器的变异防护。"""
 
 from __future__ import annotations
 

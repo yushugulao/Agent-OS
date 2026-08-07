@@ -68,7 +68,7 @@ fs_epoch_index_hash(uint dev, uint blockno)
 	return key & (FS_EPOCH_INDEX_CAP - 1);
 }
 
-/* Returns one for a match and zero with a publication slot for a miss. */
+/* 匹配返回一；未命中时返回零并给出发布槽位。 */
 static int
 fs_epoch_index_lookup_locked(uint dev, uint blockno, uint *entry_index,
 			     uint *publication_slot)
@@ -114,7 +114,7 @@ fs_epoch_index_publish_locked(uint slot_index, uint entry_index)
 		panic("filesystem epoch index publication");
 	if (epoch.index_generation[slot_index] == epoch.active_generation)
 		panic("filesystem epoch duplicate index publication");
-	/* Generation is the publication marker for this epoch. */
+/* 代际是本轮次的发布标记。 */
 	epoch.index_entry_plus_one[slot_index] = entry_index + 1;
 	epoch.index_generation[slot_index] = epoch.active_generation;
 }
@@ -285,10 +285,8 @@ fs_epoch_request_end(void)
 	if (epoch.request_depth == 0) {
 		epoch.request_owner = 0;
 		/*
-		 * Do not hand ownership to a raw thread pointer.  A woken
-		 * thread can be torn down before it reacquires the gate, leaving
-		 * a permanent ownerless handoff.  Wake all waiters and let the
-		 * scheduler choose the next live requester instead.
+		 * 不把所有权交给裸线程指针。被唤醒线程可能在重新获取门锁前拆除，
+		 * 造成永久无主的移交；应唤醒全部等待者，由调度器选择下一个存活请求者。
 		 */
 		wait_queue_wake_all(&epoch.request_queue);
 	}
@@ -531,7 +529,7 @@ fs_epoch_write_phase(enum fs_epoch_phase phase)
 			cursor = batch_start;
 			continue;
 		}
-		/* Any non-BUSY result reached the device and cannot be rolled back. */
+/* 任何非 BUSY 结果都已抵达设备，不能回滚。 */
 		epoch.forward_only = 1;
 		if (result < 0)
 			return result;
@@ -597,9 +595,8 @@ fs_epoch_commit(void)
 		intr_restore(enabled);
 		return 0;
 	}
-	/* Device publication and debt settlement may sleep.  A caller holding a
-	 * cache line or an atomic filesystem unit must defer the rollover instead
-	 * of carrying that transient state into the commit sponsor. */
+/* 设备发布和债务结算可以休眠。持有缓存行或文件系统原子单元的调用方必须
+	 * 推迟轮换，不得将瞬态状态带入提交代办者。 */
 	if (!bio_io_quiescent_current()) {
 		epoch.rollover_pending = 1;
 		intr_restore(enabled);
@@ -761,8 +758,8 @@ fs_epoch_reserve_ordered(uint owner, uint worst_case_buffers,
 	intr_restore(enabled);
 	if (!hard_rollover && !soft_rollover)
 		return 0;
-	/* Compatible soft rollovers may wait while absolute capacity still fits.
-	 * Owner, phase and capacity conflicts stop before the next mutation unit. */
+/* 绝对容量仍足够时，兼容的软轮换可以等待；属主、阶段或容量冲突须在
+	 * 下一变更单元前停止。 */
 	if (!quiescent)
 		return hard_rollover ? VIRTIO_DISK_ERR_BUSY : 0;
 	return fs_epoch_commit();

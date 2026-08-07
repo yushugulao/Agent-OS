@@ -15,7 +15,7 @@ from typing import Any
 try:
     from .plain_ucore_action_runner import action_kind, prepare_action_state, run_seeded_ucore
     from .safe_host_paths import read_regular_file
-except ImportError:  # Direct execution from host_tools/.
+except ImportError:  # 支持从 host_tools/ 直接执行。
     from plain_ucore_action_runner import action_kind, prepare_action_state, run_seeded_ucore
     from safe_host_paths import read_regular_file
 
@@ -65,7 +65,7 @@ def task6_fnv64(data: bytes) -> int:
 def task6_artifact_payloads(
     challenge: str, fixture_path: Path = TASK6_ARTIFACT_FIXTURE
 ) -> tuple[bytes, bytes]:
-    """Select a registered raw case and derive challenge-bound normalized bytes."""
+    """选择已登记的原始用例，并派生绑定 challenge 的规范化字节。"""
 
     if not isinstance(challenge, str) or CHALLENGE_RE.fullmatch(challenge) is None:
         raise ValueError("challenge must match ch-[0-9]{12}")
@@ -132,7 +132,7 @@ def task6_artifact_payloads(
 
 
 def derive_challenge(challenge: str) -> ChallengeValues:
-    """Derive bounded Guest identifiers from one canonical Host challenge."""
+    """从一个规范 Host challenge 派生有界 Guest 标识。"""
 
     if not isinstance(challenge, str) or CHALLENGE_RE.fullmatch(challenge) is None:
         raise ValueError("challenge must match ch-[0-9]{12}")
@@ -836,7 +836,7 @@ def validate_task6_artifact_bytes(
     state_dir: Path,
     challenge: str = DEFAULT_CHALLENGE,
 ) -> list[str]:
-    """Validate the extracted byte artifacts independently of Guest labels."""
+    """不依赖 Guest 标签验证抽取出的字节工件。"""
 
     failures: list[str] = []
     values = derive_challenge(challenge)

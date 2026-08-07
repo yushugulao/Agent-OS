@@ -39,9 +39,8 @@ enum vfs_exec_identity_policy {
 };
 
 /*
- * Exec prepares a complete credential replacement without publishing it.
- * The caller commits this state in the same interrupt-off section as the VM
- * pointer swap, or aborts it to release any unpublished lifecycle reservation.
+ * 执行映像先完整准备凭据替换但不发布。调用方须在交换虚拟内存指针的
+ * 同一关中断区内提交，或中止并释放未发布的生命周期预留。
  */
 struct vfs_exec_transition {
 	struct vfs_proc_security_state source;
@@ -73,12 +72,11 @@ enum vfs_operation {
 #define VFS_CAP_WORKFLOW \
 	(VFS_CAP_CONTENT_READ | VFS_CAP_ARTIFACT_WRITE)
 
-// At most four workflows may be active, closing, or still retiring. A retiring
-// identity keeps its fixed catalog partition until reclamation settles it.
+// 最多四个工作流可处于活动、关闭中或退役中；退役身份在回收完成前
+// 保留固定目录分区。
 #define VFS_SCOPE_MAX_ACTIVE WORKFLOW_LIFECYCLE_MAX_ACTIVE
-// The resumable filesystem reclaimer owns one cursor per retiring scope.
-// Admission-counted active/closing and retiring identities share this bounded
-// lifecycle ledger, so a burst of exits cannot overrun the reclaimer.
+// 可恢复文件系统回收器为每个退役作用域保留一个游标。计入准入的活动、
+// 关闭中和退役身份共用此有界生命周期台账，避免退出突发压垮回收器。
 #define VFS_SCOPE_LIFECYCLE_CAP WORKFLOW_LIFECYCLE_CAP
 #define VFS_SCOPE_MAX_RETIRING VFS_SCOPE_LIFECYCLE_CAP
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for fully drained specialized-kernel log contracts."""
+"""已完全排空的专用内核日志契约单元测试。"""
 
 import importlib.util
 import subprocess
@@ -182,7 +182,7 @@ class KernelLogValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "missing"):
             validator.validate_file(text.replace(validator.FILE_MARKERS[2], ""))
 
-    def test_physical_contract_requires_real_legacy_mail_accounting(self):
+    def test_physical_contract_requires_real_receipts(self):
         lines = [
             (
                 marker
@@ -216,15 +216,9 @@ class KernelLogValidatorTests(unittest.TestCase):
             f"step={step} result={result} value0={value0} value1={value1}"
             for step, (result, value0, value1) in enumerate(raw, 1)
         ]
-        lines[2:2] = raw_lines
+        lines[1:1] = raw_lines
         text = "\n".join(lines)
         self.assertIn("usage=48", validator.validate_physical_resource(text))
-        with self.assertRaisesRegex(
-            validator.ValidationError, "accounting mismatch|missing|complete line"
-        ):
-            validator.validate_physical_resource(
-                text.replace("alloc_delta=2", "alloc_delta=1")
-            )
         with self.assertRaisesRegex(validator.ValidationError, "complete line"):
             validator.validate_physical_resource(
                 text.replace(

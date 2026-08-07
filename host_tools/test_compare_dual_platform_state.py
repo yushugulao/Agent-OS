@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit checks for dual-platform state comparison."""
+"""双平台状态比较的单元测试。"""
 
 from __future__ import annotations
 
@@ -883,8 +883,8 @@ def main() -> int:
         except OSError:
             pass
         else:
-            # Some MSYS Python builds emulate symlink_to() with a regular copy.
-            # Exercise link rejection only when the platform made a real link.
+            # 某些 MSYS Python 构建会用普通副本模拟 symlink_to()。
+            # 仅在平台确实创建链接时测试链接拒绝逻辑。
             if link.is_symlink():
                 write_summary(state, ["rp_source", "rp_evidence", "rp_link"])
                 fields = dict(valid, source="rp_link")

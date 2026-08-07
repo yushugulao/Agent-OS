@@ -45,7 +45,7 @@
 #define VIRTIO_CONFIG_S_DEVICE_NEEDS_RESET 64
 
 // device feature bits
-#define VIRTIO_BLK_F_FLUSH 9 /* Supports an explicit cache flush */
+#define VIRTIO_BLK_F_FLUSH 9 /* 支持显式刷新缓存 */
 #define VIRTIO_RING_F_INDIRECT_DESC 28
 
 // this many virtio descriptors.
@@ -61,7 +61,7 @@ struct virtq_desc {
 };
 #define VRING_DESC_F_NEXT 1 // chained with another descriptor
 #define VRING_DESC_F_WRITE 2 // device writes (vs read)
-#define VRING_DESC_F_INDIRECT 4 // descriptor points at an indirect table
+#define VRING_DESC_F_INDIRECT 4 // 描述符指向间接表
 
 // the (entire) avail ring, from the spec.
 struct virtq_avail {
@@ -89,7 +89,7 @@ struct virtq_used {
 
 #define VIRTIO_BLK_T_IN 0 // read the disk
 #define VIRTIO_BLK_T_OUT 1 // write the disk
-#define VIRTIO_BLK_T_FLUSH 4 // commit volatile write cache
+#define VIRTIO_BLK_T_FLUSH 4 // 提交易失写缓存
 
 enum {
 	VIRTIO_BLK_S_OK = 0, VIRTIO_BLK_S_IOERR = 1,
@@ -101,12 +101,12 @@ enum {
 	VIRTIO_DISK_DURABILITY_NONE = 0, VIRTIO_DISK_DURABILITY_FLUSH = 1,
 };
 
-/* Requests that make no progress are isolated after five seconds. */
+/* 请求连续五秒无进展后隔离。 */
 #define VIRTIO_DISK_REQUEST_TIMEOUT_TICKS 500U
-/* Controller reset is bounded independently from a request deadline. */
+/* 控制器复位单独限时，不受请求截止时间影响。 */
 #define VIRTIO_DISK_RESET_TIMEOUT_TICKS 100U
 
-/* Indirect descriptors let every queue entry carry one block request. */
+/* 间接描述符使每个队列项可承载一个块请求。 */
 #define VIRTIO_DISK_WRITE_BATCH_MAX NUM
 #define VIRTIO_DISK_READ_BATCH_MAX NUM
 #define VIRTIO_DISK_DIRECT_WRITE_BATCH_MAX 2U
@@ -149,7 +149,7 @@ struct virtio_durability_test_stats {
 	uint64 failed_flushes;
 	uint64 capacity_failures;
 };
-/* Stable, fail-closed snapshot; callers must not already own the overlay gate. */
+/* 稳定且封闭失败的快照；调用方不得已持有覆盖层门锁。 */
 void virtio_disk_durability_test_stats(
 	struct virtio_durability_test_stats *);
 #endif
@@ -166,7 +166,7 @@ void virtio_disk_durability_test_stats(
 #define VIRTIO_DISK_TEST_DUPLICATE_USED VIRTIO_TEST_DUPLICATE_USED
 #define VIRTIO_DISK_TEST_FULL_RING_RECLAIM VIRTIO_TEST_FULL_RING_RECLAIM
 
-/* Kernel-only fault injection; production builds expose no user control. */
+/* 仅供内核注入故障；生产构建不向用户开放控制。 */
 int virtio_disk_test_configure(uint flags, uint delay_ticks,
 			       int status, uint timeout_ticks,
 			       uint after_requests);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit checks for plain_ucore_action_runner."""
+"""plain_ucore_action_runner 的单元测试。"""
 
 from __future__ import annotations
 
@@ -131,22 +131,22 @@ def read(path: Path) -> str:
 
 
 def unlink_created_test_link(path: Path) -> None:
-    """Remove a link just created by this test without following its target."""
+    """不跟随目标地删除本测试刚创建的链接。"""
 
     try:
         path.unlink()
     except FileNotFoundError:
         return
     except IsADirectoryError:
-        # Default MSYS symlink emulation can create an ordinary directory copy.
-        # Only remove that empty probe artifact; never traverse a real link.
+        # 默认 MSYS 符号链接模拟可能创建普通目录副本。只删除这个空探测制品，
+        # 绝不遍历真实链接。
         if sys.platform != "cygwin" or path_is_link(path):
             raise
         path.rmdir()
 
 
 def unlink_test_link(path: Path) -> None:
-    """Remove a formal test link after the probe confirmed link detection."""
+    """探测确认能识别链接后，删除正式测试链接。"""
 
     if not os.path.lexists(path):
         return
@@ -176,8 +176,8 @@ def symlinks_available(root: Path) -> bool:
         marker_created = True
         file_link.symlink_to(target_file)
         file_created = True
-        # Do not create any formal test links unless this Python runtime can
-        # reliably identify both link kinds it will later have to clean up.
+    # 除非当前 Python 运行时能可靠识别随后需要清理的两类链接，否则不要创建
+    # 任何正式测试链接。
         return directory_supported and file_link.is_symlink()
     except (NotImplementedError, OSError):
         return False
@@ -286,9 +286,8 @@ def main() -> int:
             lock_path = runner._run_lock_path(worktree)
             assert lock_path.parent == common_git.resolve()
 
-        # MSYS2 sees an absolute gitdir written by Windows Git as a relative
-        # POSIX spelling.  It must pass through cygpath rather than being
-        # appended below the worktree.
+    # MSYS2 会把 Windows Git 写入的绝对 gitdir 视作相对 POSIX 路径，必须通过
+    # cygpath 转换，不能直接拼接到工作树下。
         windows_git_dir = "E:/shared/repository/.git"
         if not Path(windows_git_dir).is_absolute():
             windows_git_result = subprocess.CompletedProcess(

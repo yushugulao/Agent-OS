@@ -209,7 +209,7 @@ make ch3-trace-test TOOLPREFIX=riscv64-linux-gnu-
 
 该入口用自适应 worker 构建用户程序和内核，但只启动一个使用私有磁盘副本的 QEMU。runner 除了要求唯一的完整完成行，还要求此前真实出现基础写路径输出；Guest 中的 syscall 计数、用户地址读取和写回断言全部完成后才会打印完成行。`make full-verify` 在 Agent suite 前执行同一入口，因此兼容性不再只靠源码或文档判断。开发日志写入 `build/ch3-trace/guest.log`；profile v7 将其规范化原始转录作为 `ch3-trace-guest.log` 独立交付并离线复验。远端不配置 Runner，也不把缺失的远端流水线当作本地动态执行的替代品。
 
-普通进程消息接口由 `agentsecurity_ucore` 中的 `mail_basic=1` 覆盖。该抽测说明 AgentOS 扩展没有破坏代表性基础 syscall 路径。
+`agentsecurity_ucore` 要求 `legacy_mail_fail_closed=1`，证明两个旧 mail 编号无副作用地返回 `-1`；同一启动还必须出现 route 授权、lifecycle、target consent 与槽回收标记，证明通信功能由可信 Agent IPC 承接。代表性基础 syscall 的正向兼容由独立 `ch3_trace` 验证。
 
 ## 结果产物
 

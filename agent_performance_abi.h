@@ -3,7 +3,7 @@
 
 #define AGENT_PERFORMANCE_SNAPSHOT_VERSION 3U
 
-/* Counters cover the whole kernel; callers derive interval values by diff. */
+/* 计数器覆盖整个内核；调用者用差值计算区间值。 */
 #define AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL 1U
 
 struct agent_performance_snapshot {
@@ -11,7 +11,7 @@ struct agent_performance_snapshot {
 	unsigned int struct_size;
 	unsigned int counter_scope;
 	unsigned int reserved;
-	/* Strict ordering token from the raw cycle counter; not a time unit. */
+	/* 来自原始 cycle counter 的严格有序令牌，不是时间单位。 */
 	unsigned long long sample_tick;
 	unsigned long long observer_lifecycle_id;
 	unsigned long long observer_lifecycle_generation;

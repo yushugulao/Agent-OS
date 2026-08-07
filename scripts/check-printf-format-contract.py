@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed when kernel or user printf drifts from the integer ABI."""
+"""内核或用户态 printf 偏离整数 ABI 时闭锁失败。"""
 
 from __future__ import annotations
 

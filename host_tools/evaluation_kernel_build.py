@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Build both kernel-cost targets from one clean, committed source snapshot.
+"""从同一干净提交源码快照构建两个内核成本目标。
 
-This is the trusted producer for the sidecars consumed by
-``evaluation_kernel_cost.py``.  It deliberately owns the build commands and
-the process environment instead of accepting either from a caller-supplied
-manifest.
+本模块是 ``evaluation_kernel_cost.py`` 所消费 sidecar 的可信生产者；构建命令
+和进程环境由本模块固定，不接受调用方清单提供的值。
 """
 
 from __future__ import annotations
@@ -13,7 +11,7 @@ import sys as _entry_sys
 
 
 def _isolate_direct_entry_imports() -> None:
-    """Use only interpreter-owned paths for top-level import resolution."""
+    """顶层导入解析仅使用解释器自身管理的路径。"""
 
     if __name__ != "__main__":
         return
@@ -140,7 +138,7 @@ EXPECTED_TARGETS = {
 
 
 class KernelBuildError(ValueError):
-    """Raised when a build cannot produce trustworthy evidence."""
+    """构建无法产生可信证据时抛出。"""
 
 
 @dataclass(frozen=True)
@@ -611,8 +609,8 @@ def _run_command(
 def _fixed_environment(
     commit_epoch: str, toolprefix: str, build_jobs: int
 ) -> dict[str, str]:
-    # MSYS/Cygwin tools need a UTF-8 C locale to preserve non-ASCII Win32
-    # paths when a compiler subprogram is normalized through cygpath.
+    # 编译器子程序经 cygpath 规范化时，MSYS/Cygwin 工具需要 UTF-8 C locale
+    # 才能保留含非 ASCII 字符的 Win32 路径。
     build_locale = "C.UTF-8" if sys.platform in {"cygwin", "msys"} else "C"
     if type(build_jobs) is not int or not 1 <= build_jobs <= 24:
         raise KernelBuildError("build jobs must be an integer between 1 and 24")
@@ -625,8 +623,7 @@ def _fixed_environment(
         "TOOLPREFIX": toolprefix,
         "TZ": "UTC",
     }
-    # Only process-discovery and OS bootstrap variables are inherited.  Build
-    # flags and tool overrides must come from the committed Makefiles.
+    # 仅继承进程发现与系统启动变量；构建标志和工具覆盖必须来自已提交 Makefile。
     inherited = (
         "PATH", "SystemRoot", "COMSPEC", "PATHEXT", "HOME", "TMP", "TEMP", "TMPDIR",
     )
@@ -698,7 +695,7 @@ def build_evidence(
     evidence_root: Path | None = None,
     runner: CommandRunner = _run_command,
 ) -> dict[str, Any]:
-    """Run the fixed dual build and atomically publish collector sidecars."""
+    """运行固定双目标构建，并原子发布采集器 sidecar。"""
 
     if cost.ID_RE.fullmatch(run_id) is None:
         raise KernelBuildError("run id is not a canonical identifier")
@@ -871,9 +868,8 @@ def build_evidence(
                 ],
             },
         ]
-        # Guardrails may rebuild the treatment kernel with their own canonical
-        # profile. Run them before the measured builds so no validation command
-        # can overwrite an artifact after its byte receipt has been recorded.
+    # 护栏可能用自身规范配置重建 treatment 内核，必须在测量构建前执行，避免
+    # 工件的字节回执记录后又被验证命令覆盖。
         for guardrail in guardrail_commands:
             execution = runner(
                 guardrail["argv"],
@@ -1101,8 +1097,8 @@ def build_evidence(
         }
         manifest_raw = _canonical_json(manifest)
 
-        # Validate the same public schema used by portable verifiers before
-        # publishing any sidecar. This prevents producer/consumer drift.
+    # 发布任何 sidecar 前校验可移植验证器使用的同一公开模式，防止生产者与
+    # 消费者合同漂移。
         cost.validate_trusted_build_config(
             build_config, config, cost._bytes_sha(config_raw)
         )

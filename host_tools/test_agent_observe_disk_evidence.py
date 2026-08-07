@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for independently replayable observation disk evidence."""
+"""可独立重放的观测磁盘证据变异测试。"""
 
 from __future__ import annotations
 

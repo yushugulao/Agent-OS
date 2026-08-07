@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for fixed lifecycle banks and inode generation invalidation."""
+"""固定生命周期 bank 与 inode 代际失效的变异测试。"""
 
 from __future__ import annotations
 

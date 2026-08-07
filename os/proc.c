@@ -699,9 +699,8 @@ int proc_request_controller_exit(struct workflow_lifecycle_key lifecycle,
 	return requested;
 }
 
-// A VM snapshot may yield between committed pages. While it is active, the
-// scheduler keeps sibling threads parked so the source page table cannot
-// change underneath the snapshot; unrelated processes remain schedulable.
+// 虚拟内存快照可在已提交页面之间让出处理器。快照存续期间，调度器暂停
+// 兄弟线程以保持源页表稳定；无关进程仍可调度。
 int proc_vm_snapshot_begin(struct proc *p)
 {
 	struct thread *t = curr_thread();
@@ -1050,8 +1049,8 @@ static uint proc_scope_alloc_id(void)
 	return scope_id;
 }
 
-// Reserve a proc slot and charge its immutable resource domain atomically.
-// Only a kernel-signed domain admin may create a new domain or use reserve.
+// 原子预留进程槽并计费到其不可变资源域。只有内核签名的资源域管理员
+// 才能创建新资源域或使用保留量。
 static struct proc *proc_resource_reserve(struct proc *parent,
 					 enum proc_admission admission)
 {
@@ -1124,10 +1123,6 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	}
 	if (!agent_context_is_empty(p))
 		panic("stale Agent context state");
-	if (!agent_ipc_legacy_mailbox_empty(p))
-		panic("stale legacy mailbox state");
-	if (p->legacy_mail_endpoint_generation != 0)
-		panic("stale legacy endpoint generation");
 	for (int tid = 0; tid < NTHREAD; tid++)
 		if (p->threads[tid].resource_slot_charged ||
 		    p->threads[tid].kstack_state != KSTACK_NONE ||
@@ -1378,7 +1373,7 @@ static int proc_child_has_capacity(struct proc *parent)
 	return available;
 }
 
-// Bind child ownership only after fork has completed every fallible step.
+// 派生过程完成全部可能失败的步骤后，才绑定子进程所有权。
 // 存活关系预留对应的完成环槽。
 static int proc_child_bind(struct proc *parent, struct proc *child)
 {
@@ -1400,7 +1395,7 @@ out:
 	return bound;
 }
 
-// Publish the wait result before recycling the executable proc slot.
+// 复用可执行进程槽前先发布等待结果。
 static void proc_child_publish_exit(struct proc *child)
 {
 	struct proc *parent;
@@ -1446,8 +1441,7 @@ out:
 	intr_restore(enabled);
 }
 
-// Return 1 with a result, 0 while a matching child is live, or -1 if the
-// caller has no matching child. Call with interrupts disabled.
+// 有结果返回 1，匹配子进程仍存活返回 0，无匹配子进程返回 -1；须关中断调用。
 static int proc_child_wait_result(struct proc *parent, int pid,
 				  int *child_pid, int *exit_code)
 {
@@ -1536,8 +1530,6 @@ void proc_init()
 		p->resource_domain_admin = 0;
 		p->heap_base = 0;
 		p->heap_break = 0;
-		p->mail_sidecar = 0;
-		p->legacy_mail_endpoint_generation = 0;
 		agent_context_free(p);
 		p->teardown_state = PROC_TEARDOWN_RECYCLED;
 		p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
@@ -2008,7 +2000,7 @@ static struct proc *allocproc_admit(struct proc *parent,
 	return p;
 }
 
-// Kernel bootstrap allocation is the root of all signed resource domains.
+// 内核启动分配是全部签名资源域的根。
 struct proc *allocproc()
 {
 	return allocproc_admit(0, PROC_ADMIT_BOOT);
@@ -2805,8 +2797,6 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 	proc_teardown_advance(p, PROC_TEARDOWN_RECLAIMING,
 			      PROC_TEARDOWN_SETTLING);
 	agent_proc_teardown(p);
-	if (!agent_ipc_legacy_mailbox_empty(p))
-		panic("process teardown legacy mailbox");
 	/* 文件收据和 VM 清理完成后，先释放文件系统门，再结算终止请求及其生命周期。 */
 	if (!terminal_current && close_batch.count != 0)
 		proc_teardown_file_progress(&close_batch);
@@ -2850,10 +2840,6 @@ static void proc_reset_slot(struct proc *p)
 	agent_context_free(p);
 	if (!agent_context_is_empty(p))
 		panic("process recycled with Agent context state");
-	if (!agent_ipc_legacy_mailbox_empty(p))
-		panic("process recycled with legacy mailbox");
-	if (p->legacy_mail_endpoint_generation != 0)
-		panic("process recycled with legacy endpoint");
 	proc_teardown_advance(p, PROC_TEARDOWN_PUBLISHED,
 			      PROC_TEARDOWN_RECYCLED);
 	p->workflow_lifecycle_id = WORKFLOW_LIFECYCLE_ID_NONE;
@@ -3201,7 +3187,7 @@ int push_argv_image(pagetable_t pagetable, uint64 stack_base,
 		return -1;
 	stack_top = stack_base + USTACK_SIZE;
 	user_stack_argv_layout_init(&layout);
-	// Validate the complete layout before modifying the new user stack.
+	// 修改新用户栈前校验完整布局。
 	for (argc = 0; argv[argc]; argc++) {
 		uint64 n;
 
@@ -3414,9 +3400,8 @@ static __attribute__((noreturn)) void thread_exit_current(int code)
 	panic("dead thread resumed");
 }
 
-// The main thread coordinates process exit. Siblings are interrupted only at
-// blocking points and must unwind their own kernel stacks before shared state
-// is released.
+// 主线程协调进程退出。兄弟线程仅在阻塞点中断，并须在释放共享状态前
+// 展开各自的内核栈。
 void exit(int code)
 {
 	struct proc *p = curr_proc();
@@ -3468,10 +3453,8 @@ void exit(int code)
 #endif
 		enabled = intr_save();
 		/*
-		 * The last sibling publishes EXITED and wakes this queue with
-		 * interrupts disabled.  Keep the final quiescence check and queue
-		 * publication in the same interrupt-off interval so that completion
-		 * cannot wake an empty queue just before the teardown owner sleeps.
+		 * 最后一个兄弟线程在关中断状态发布 EXITED 并唤醒本队列。最终静止
+		 * 复核与队列发布须处于同一关中断区，避免拆除属主休眠前完成事件唤醒空队列。
 		 */
 		if (proc_siblings_quiescent(p, t)) {
 			intr_restore(enabled);

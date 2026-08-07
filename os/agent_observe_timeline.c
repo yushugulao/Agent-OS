@@ -629,7 +629,7 @@ static int agent_timeline_wait_enqueue_atomic(
 	int expired = timeout_ticks >= 0 &&
 		now - start >= (uint64)timeout_ticks;
 	int wait_status;
-	/* Close only the generation-check-to-queue-publication window. */
+	/* 仅封闭代次校验到入队发布之间的窗口。 */
 	current_epoch = agent_observe_scope_epoch(scope_id);
 	if (current_epoch != scan_epoch) {
 		if (expired && *deadline_rescan_used)

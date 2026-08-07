@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation guards for thread-bound background I/O context."""
+"""线程绑定后台 I/O 上下文的变异防护。"""
 
 from pathlib import Path
 
@@ -121,8 +121,8 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
     if ("io_policy.background.active" not in retained or
             "state->deferred_references != 0" not in retained):
         raise ContractError("active cleanup cache floor is not retained globally")
-    # Direct active state is only lifetime state. Every ambient caller path
-    # must go through the executor-and-generation predicate.
+    # 直接 active 状态仅表示生命周期。所有环境调用路径都必须经过
+    # executor 与 generation 谓词。
     if bio.count("io_policy.background.active") != 8:
         raise ContractError("ambient background-active access escaped its allowlist")
 
@@ -252,8 +252,7 @@ def validate(bio: str, bio_h: str, fs: str) -> None:
         raise ContractError(
             "foreground callers can consume a background-reserved buffer"
         )
-    # Three background-contention exits plus stale-owner and upgrade failures
-    # must all return a retryable cache result.
+    # 三个后台竞争出口以及过期所有者和升级失败都必须返回可重试缓存结果。
     if bget.count("*result = VIRTIO_DISK_ERR_BUSY;") != 5:
         raise ContractError("background cache contention is not a retry result")
     if bget.count("intr_restore(enabled); return 0;") != 4:

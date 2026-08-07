@@ -41,6 +41,7 @@ static const uint resource_kind_attribute_table[RESOURCE_KIND_COUNT] = {
 	[RESOURCE_AGENT_STATE_PAGE] = RESOURCE_KIND_COUNT_TRANSFERABLE,
 	[RESOURCE_PHYSICAL_PAGE] = RESOURCE_KIND_POOL_AFFINE,
 };
+_Static_assert(RESOURCE_KIND_COUNT <= 8, "resource kind mask scan width");
 static int resource_kind_valid(enum resource_kind kind)
 {
 	return kind >= RESOURCE_PROCESS && kind < RESOURCE_KIND_COUNT;
@@ -49,15 +50,31 @@ uint resource_kind_attributes(enum resource_kind kind)
 {
 	return resource_kind_valid(kind) ? resource_kind_attribute_table[kind] : 0;
 }
-
-static int resource_count_only_mutation_allowed(
-	const uint64 amounts[RESOURCE_KIND_COUNT])
+static uint resource_kind_first(uint kind_mask)
 {
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++)
-		if (amounts[kind] != 0 &&
-		    !(resource_kind_attribute_table[kind] &
+	uint kind = 0;
+
+	if ((kind_mask & 0xfU) == 0) {
+		kind += 4;
+		kind_mask >>= 4;
+	}
+	if ((kind_mask & 0x3U) == 0) {
+		kind += 2;
+		kind_mask >>= 2;
+	}
+	return kind + ((kind_mask & 1U) == 0);
+}
+
+static int resource_count_only_mutation_allowed(uint kind_mask)
+{
+	while (kind_mask != 0) {
+		uint kind = resource_kind_first(kind_mask);
+
+		kind_mask &= kind_mask - 1;
+		if (!(resource_kind_attribute_table[kind] &
 		      RESOURCE_KIND_COUNT_TRANSFERABLE))
 			return 0;
+	}
 	return 1;
 }
 static int resource_charge_class_valid(enum resource_charge_class charge_class)
@@ -200,7 +217,7 @@ int resource_policy_guarantee_reserved(enum resource_kind kind)
 	if (!policy->configured || policy->reserved_limit == 0 ||
 	    policy->reserved_guaranteed)
 		goto out;
-	/* The guarantee must precede every account that may claim it. */
+	/* 先建立保证，再允许账户认领。 */
 	for (uint i = 0; i < RESOURCE_ACCOUNT_CAP; i++) {
 		struct resource_account *account = &resource_accounts[i];
 		if (account->state != RESOURCE_ACCOUNT_FREE &&
@@ -456,13 +473,15 @@ int resource_account_close(struct resource_account_handle handle)
 	return 0;
 }
 
-static int resource_requests_normalize(
+static uint resource_requests_normalize(
 	const struct resource_request *requests, uint count,
 	uint64 amounts[RESOURCE_KIND_COUNT])
 {
+	uint kind_mask = 0;
+
 	if (requests == 0 || amounts == 0 || count == 0 ||
 	    count > RESOURCE_KIND_COUNT)
-		return -1;
+		return 0;
 	memset(amounts, 0, sizeof(uint64) * RESOURCE_KIND_COUNT);
 	for (uint i = 0; i < count; i++) {
 		enum resource_kind kind = requests[i].kind;
@@ -470,79 +489,117 @@ static int resource_requests_normalize(
 		if (!resource_kind_valid(kind) || requests[i].amount == 0 ||
 		    resource_u64_add(amounts[kind], requests[i].amount,
 				     &amounts[kind]) < 0)
-			return -1;
-	}
-	return 0;
-}
-
-static int resource_can_add(struct resource_account *account,
-			    enum resource_charge_class charge_class,
-			    const uint64 amounts[RESOURCE_KIND_COUNT])
-{
-	if (!resource_charge_class_valid(charge_class) ||
-	    (account->charge_grants &
-	     RESOURCE_CHARGE_GRANT(charge_class)) == 0)
-		return 0;
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
-		struct resource_policy *policy = &resource_policies[kind];
-		uint64 account_total;
-		uint64 global_total;
-		uint64 class_total;
-
-		if (amounts[kind] == 0)
-			continue;
-		if (!policy->configured ||
-		    resource_u64_add(account->used[charge_class][kind],
-				     account->pending[charge_class][kind],
-				     &account_total) < 0 ||
-		    resource_u64_add(account_total, amounts[kind],
-				     &account_total) < 0 ||
-		    account_total >
-			    account->limits.class_limit[charge_class][kind] ||
-		    resource_u64_add(policy->used, policy->pending,
-				     &global_total) < 0 ||
-		    resource_u64_add(global_total, amounts[kind],
-				     &global_total) < 0 ||
-		    global_total > policy->capacity)
 			return 0;
-		if (charge_class == RESOURCE_CHARGE_ORDINARY) {
-			if (resource_u64_add(policy->ordinary_used,
-					     policy->ordinary_pending,
-					     &class_total) < 0 ||
-			    resource_u64_add(class_total, amounts[kind],
-					     &class_total) < 0 ||
-			    class_total > policy->ordinary_limit)
-				return 0;
-		} else {
-			if (resource_u64_add(policy->reserved_used,
-					     policy->reserved_pending,
-					     &class_total) < 0 ||
-			    resource_u64_add(class_total, amounts[kind],
-					     &class_total) < 0 ||
-			    class_total > policy->reserved_limit)
-				return 0;
-		}
+		kind_mask |= 1U << kind;
 	}
-	return 1;
+	return kind_mask;
 }
 
-static void resource_add_pending(
+static int resource_pair_can_delta(uint64 used, uint64 pending, uint64 amount,
+				   int used_delta, int pending_delta,
+				   uint64 limit, int check_limit)
+{
+	uint64 total;
+
+	if ((used_delta < 0 && used < amount) ||
+	    (pending_delta < 0 && pending < amount))
+		return 0;
+	if (used_delta > 0) {
+		if (resource_u64_add(used, amount, &used) < 0)
+			return 0;
+	} else if (used_delta < 0) {
+		used -= amount;
+	}
+	if (pending_delta > 0) {
+		if (resource_u64_add(pending, amount, &pending) < 0)
+			return 0;
+	} else if (pending_delta < 0) {
+		pending -= amount;
+	}
+	return resource_u64_add(used, pending, &total) == 0 &&
+	       (!check_limit || total <= limit);
+}
+
+static void resource_pair_publish_delta(uint64 *used, uint64 *pending,
+					uint64 amount, int used_delta,
+					int pending_delta)
+{
+	if (used_delta > 0)
+		*used += amount;
+	else if (used_delta < 0)
+		*used -= amount;
+	if (pending_delta > 0)
+		*pending += amount;
+	else if (pending_delta < 0)
+		*pending -= amount;
+}
+
+static int resource_vector_delta(
 	struct resource_account *account,
 	enum resource_charge_class charge_class,
-	const uint64 amounts[RESOURCE_KIND_COUNT])
+	const uint64 amounts[RESOURCE_KIND_COUNT], uint kind_mask,
+	int used_delta, int pending_delta)
 {
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
-		struct resource_policy *policy = &resource_policies[kind];
+	uint selected = kind_mask;
+	int admission = used_delta + pending_delta > 0;
 
-		if (amounts[kind] == 0)
-			continue;
-		account->pending[charge_class][kind] += amounts[kind];
-		policy->pending += amounts[kind];
-		if (charge_class == RESOURCE_CHARGE_ORDINARY)
-			policy->ordinary_pending += amounts[kind];
-		else
-			policy->reserved_pending += amounts[kind];
+	if (account == 0 || amounts == 0 || kind_mask == 0 ||
+	    (kind_mask >> RESOURCE_KIND_COUNT) != 0 ||
+	    !resource_charge_class_valid(charge_class) ||
+	    (admission && (account->charge_grants &
+			  RESOURCE_CHARGE_GRANT(charge_class)) == 0))
+		return 0;
+	while (selected != 0) {
+		uint kind = resource_kind_first(selected);
+		struct resource_policy *policy = &resource_policies[kind];
+		uint64 class_used, class_pending, class_limit;
+
+		selected &= selected - 1;
+		if (charge_class == RESOURCE_CHARGE_ORDINARY) {
+			class_used = policy->ordinary_used;
+			class_pending = policy->ordinary_pending;
+			class_limit = policy->ordinary_limit;
+		} else {
+			class_used = policy->reserved_used;
+			class_pending = policy->reserved_pending;
+			class_limit = policy->reserved_limit;
+		}
+		if ((admission && !policy->configured) || amounts[kind] == 0 ||
+		    !resource_pair_can_delta(
+			    account->used[charge_class][kind],
+			    account->pending[charge_class][kind], amounts[kind],
+			    used_delta, pending_delta,
+			    account->limits.class_limit[charge_class][kind],
+			    admission) ||
+		    !resource_pair_can_delta(policy->used, policy->pending,
+			    amounts[kind], used_delta, pending_delta,
+			    policy->capacity, admission) ||
+		    !resource_pair_can_delta(class_used, class_pending,
+			    amounts[kind], used_delta, pending_delta, class_limit,
+			    admission))
+			return 0;
 	}
+	selected = kind_mask;
+	while (selected != 0) {
+		uint kind = resource_kind_first(selected);
+		struct resource_policy *policy = &resource_policies[kind];
+		uint64 *class_used, *class_pending;
+
+		selected &= selected - 1;
+		class_used = charge_class == RESOURCE_CHARGE_ORDINARY ?
+			&policy->ordinary_used : &policy->reserved_used;
+		class_pending = charge_class == RESOURCE_CHARGE_ORDINARY ?
+			&policy->ordinary_pending : &policy->reserved_pending;
+		resource_pair_publish_delta(
+			&account->used[charge_class][kind],
+			&account->pending[charge_class][kind], amounts[kind],
+			used_delta, pending_delta);
+		resource_pair_publish_delta(&policy->used, &policy->pending,
+			amounts[kind], used_delta, pending_delta);
+		resource_pair_publish_delta(class_used, class_pending,
+			amounts[kind], used_delta, pending_delta);
+	}
+	return 1;
 }
 
 int resource_reserve_many(struct resource_account_handle handle,
@@ -561,13 +618,15 @@ int resource_reserve_many_flags(struct resource_account_handle handle,
 				struct resource_reservation *reservation)
 {
 	uint64 amounts[RESOURCE_KIND_COUNT];
+	uint kind_mask;
 	int enabled;
 	struct resource_account *account;
 
 	if (reservation == 0 ||
 	    (flags & ~RESOURCE_RESERVE_ALLOW_CLOSING) != 0 ||
 	    !resource_charge_class_valid(charge_class) ||
-	    resource_requests_normalize(requests, count, amounts) < 0)
+	    (kind_mask = resource_requests_normalize(
+		     requests, count, amounts)) == 0)
 		return -1;
 	memset(reservation, 0, sizeof(*reservation));
 	reservation->account = resource_account_none();
@@ -577,13 +636,14 @@ int resource_reserve_many_flags(struct resource_account_handle handle,
 	    (account->state != RESOURCE_ACCOUNT_ACTIVE &&
 	     (!(flags & RESOURCE_RESERVE_ALLOW_CLOSING) ||
 	      account->state != RESOURCE_ACCOUNT_CLOSING)) ||
-	    !resource_can_add(account, charge_class, amounts)) {
+	    !resource_vector_delta(
+		    account, charge_class, amounts, kind_mask, 0, 1)) {
 		intr_restore(enabled);
 		return -1;
 	}
-	resource_add_pending(account, charge_class, amounts);
 	reservation->account = handle;
 	reservation->charge_class = charge_class;
+	reservation->kind_mask = kind_mask;
 	memmove(reservation->amounts, amounts,
 		sizeof(reservation->amounts));
 	reservation->active = 1;
@@ -602,34 +662,10 @@ int resource_reservation_commit(struct resource_reservation *reservation)
 	account = resource_account_lookup(reservation->account);
 	if (account == 0)
 		panic("resource reservation account vanished");
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
-		struct resource_policy *policy = &resource_policies[kind];
-		uint64 amount = reservation->amounts[kind];
-		enum resource_charge_class charge_class =
-			reservation->charge_class;
-
-		if (amount == 0)
-			continue;
-		if (!resource_charge_class_valid(charge_class) ||
-		    account->pending[charge_class][kind] < amount ||
-		    policy->pending < amount)
-			panic("resource reservation underflow");
-		account->pending[charge_class][kind] -= amount;
-		account->used[charge_class][kind] += amount;
-		policy->pending -= amount;
-		policy->used += amount;
-		if (charge_class == RESOURCE_CHARGE_ORDINARY) {
-			if (policy->ordinary_pending < amount)
-				panic("ordinary reservation underflow");
-			policy->ordinary_pending -= amount;
-			policy->ordinary_used += amount;
-		} else {
-			if (policy->reserved_pending < amount)
-				panic("reserved reservation underflow");
-			policy->reserved_pending -= amount;
-			policy->reserved_used += amount;
-		}
-	}
+	if (!resource_vector_delta(
+		    account, reservation->charge_class, reservation->amounts,
+		    reservation->kind_mask, 1, -1))
+		panic("resource reservation commit");
 	reservation->active = 0;
 	intr_restore(enabled);
 	return 0;
@@ -646,62 +682,13 @@ void resource_reservation_cancel(struct resource_reservation *reservation)
 	account = resource_account_lookup(reservation->account);
 	if (account == 0)
 		panic("resource cancellation account vanished");
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
-		struct resource_policy *policy = &resource_policies[kind];
-		uint64 amount = reservation->amounts[kind];
-		enum resource_charge_class charge_class =
-			reservation->charge_class;
-
-		if (amount == 0)
-			continue;
-		if (!resource_charge_class_valid(charge_class) ||
-		    account->pending[charge_class][kind] < amount ||
-		    policy->pending < amount)
-			panic("resource cancellation underflow");
-		account->pending[charge_class][kind] -= amount;
-		policy->pending -= amount;
-		if (charge_class == RESOURCE_CHARGE_ORDINARY) {
-			if (policy->ordinary_pending < amount)
-				panic("ordinary cancellation underflow");
-			policy->ordinary_pending -= amount;
-		} else {
-			if (policy->reserved_pending < amount)
-				panic("reserved cancellation underflow");
-			policy->reserved_pending -= amount;
-		}
-	}
+	if (!resource_vector_delta(
+		    account, reservation->charge_class, reservation->amounts,
+		    reservation->kind_mask, 0, -1))
+		panic("resource reservation cancel");
 	reservation->active = 0;
 	resource_account_advance(account);
 	intr_restore(enabled);
-}
-
-static void resource_sub_used(
-	struct resource_account *account,
-	enum resource_charge_class charge_class,
-	const uint64 amounts[RESOURCE_KIND_COUNT])
-{
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
-		struct resource_policy *policy = &resource_policies[kind];
-		uint64 amount = amounts[kind];
-
-		if (amount == 0)
-			continue;
-		if (!resource_charge_class_valid(charge_class) ||
-		    account->used[charge_class][kind] < amount ||
-		    policy->used < amount)
-			panic("resource usage underflow");
-		account->used[charge_class][kind] -= amount;
-		policy->used -= amount;
-		if (charge_class == RESOURCE_CHARGE_ORDINARY) {
-			if (policy->ordinary_used < amount)
-				panic("ordinary usage underflow");
-			policy->ordinary_used -= amount;
-		} else {
-			if (policy->reserved_used < amount)
-				panic("reserved usage underflow");
-			policy->reserved_used -= amount;
-		}
-	}
 }
 
 int resource_release_many(struct resource_account_handle handle,
@@ -709,11 +696,13 @@ int resource_release_many(struct resource_account_handle handle,
 			  const struct resource_request *requests, uint count)
 {
 	uint64 amounts[RESOURCE_KIND_COUNT];
+	uint kind_mask;
 	int enabled;
 	struct resource_account *account;
 
 	if (!resource_charge_class_valid(charge_class) ||
-	    resource_requests_normalize(requests, count, amounts) < 0)
+	    (kind_mask = resource_requests_normalize(
+		     requests, count, amounts)) == 0)
 		return -1;
 	enabled = intr_save();
 	account = resource_account_lookup(handle);
@@ -721,12 +710,11 @@ int resource_release_many(struct resource_account_handle handle,
 		intr_restore(enabled);
 		return -1;
 	}
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++)
-		if (account->used[charge_class][kind] < amounts[kind]) {
-			intr_restore(enabled);
-			return -1;
-		}
-	resource_sub_used(account, charge_class, amounts);
+	if (!resource_vector_delta(
+		    account, charge_class, amounts, kind_mask, -1, 0)) {
+		intr_restore(enabled);
+		return -1;
+	}
 	resource_account_advance(account);
 	intr_restore(enabled);
 	return 0;
@@ -737,32 +725,22 @@ int resource_import_usage(struct resource_account_handle handle,
 			  const struct resource_request *requests, uint count)
 {
 	uint64 amounts[RESOURCE_KIND_COUNT];
+	uint kind_mask;
 	int enabled;
 	struct resource_account *account;
 
 	if (!resource_charge_class_valid(charge_class) ||
-	    resource_requests_normalize(requests, count, amounts) < 0 ||
-	    !resource_count_only_mutation_allowed(amounts))
+	    (kind_mask = resource_requests_normalize(
+		     requests, count, amounts)) == 0 ||
+	    !resource_count_only_mutation_allowed(kind_mask))
 		return -1;
 	enabled = intr_save();
 	account = resource_account_lookup(handle);
 	if (account == 0 || account->state != RESOURCE_ACCOUNT_ACTIVE ||
-	    !resource_can_add(account, charge_class, amounts)) {
+	    !resource_vector_delta(
+		    account, charge_class, amounts, kind_mask, 1, 0)) {
 		intr_restore(enabled);
 		return -1;
-	}
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
-		struct resource_policy *policy = &resource_policies[kind];
-		uint64 amount = amounts[kind];
-
-		if (amount == 0)
-			continue;
-		account->used[charge_class][kind] += amount;
-		policy->used += amount;
-		if (charge_class == RESOURCE_CHARGE_ORDINARY)
-			policy->ordinary_used += amount;
-		else
-			policy->reserved_used += amount;
 	}
 	intr_restore(enabled);
 	return 0;
@@ -787,6 +765,7 @@ int resource_transfer_usage_flags(
 	const struct resource_request *requests, uint count, uint flags)
 {
 	uint64 amounts[RESOURCE_KIND_COUNT];
+	uint kind_mask;
 	int enabled;
 	struct resource_account *source;
 	struct resource_account *target;
@@ -794,8 +773,9 @@ int resource_transfer_usage_flags(
 	if (!resource_charge_class_valid(from_charge_class) ||
 	    !resource_charge_class_valid(to_charge_class) ||
 	    (flags & ~RESOURCE_RESERVE_ALLOW_CLOSING) != 0 ||
-	    resource_requests_normalize(requests, count, amounts) < 0 ||
-	    !resource_count_only_mutation_allowed(amounts))
+	    (kind_mask = resource_requests_normalize(
+		     requests, count, amounts)) == 0 ||
+	    !resource_count_only_mutation_allowed(kind_mask))
 		return -1;
 	enabled = intr_save();
 	source = resource_account_lookup(from);
@@ -809,7 +789,9 @@ int resource_transfer_usage_flags(
 		intr_restore(enabled);
 		return -1;
 	}
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
+	for (uint selected = kind_mask; selected != 0;
+	     selected &= selected - 1) {
+		uint kind = resource_kind_first(selected);
 		struct resource_policy *policy = &resource_policies[kind];
 		uint64 target_account_total;
 		uint64 target_class_total;
@@ -862,8 +844,12 @@ int resource_transfer_usage_flags(
 			return -1;
 		}
 	}
-	resource_sub_used(source, from_charge_class, amounts);
-	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
+	if (!resource_vector_delta(
+		    source, from_charge_class, amounts, kind_mask, -1, 0))
+		panic("resource transfer source");
+	for (uint selected = kind_mask; selected != 0;
+	     selected &= selected - 1) {
+		uint kind = resource_kind_first(selected);
 		struct resource_policy *policy = &resource_policies[kind];
 		uint64 amount = amounts[kind];
 
@@ -881,11 +867,7 @@ int resource_transfer_usage_flags(
 	return 0;
 }
 
-/*
- * Replace selected committed counters with an authoritative external scan.
- * This is intended for bounded recovery/rebuild code: pending reservations
- * make the snapshot unstable and therefore reject reconciliation.
- */
+/* 以外部权威扫描替换已选计数；存在 pending 时拒绝不稳定快照。 */
 int resource_reconcile_usage(struct resource_account_handle handle,
 			     enum resource_charge_class charge_class,
 			     const struct resource_request *requests, uint count)

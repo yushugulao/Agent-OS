@@ -3,14 +3,11 @@
 #include "defs.h"
 #include "timer.h"
 #include "trap.h"
-#include "vfs_security.h"
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 #include "wait_atomic_test.h"
 #endif
 
 extern struct proc pool[NPROC];
-
-static uint64 next_legacy_endpoint_generation;
 
 static int agent_ipc_handoff_event_locked(struct proc *p);
 
@@ -120,63 +117,10 @@ agent_ipc_process_image_install_locked(struct proc *p)
 	agent_identity_loop_refresh_locked(p);
 }
 
-struct agent_legacy_domain {
-	enum agent_legacy_public_kind {
-		AGENT_LEGACY_PUBLIC_INVALID = 0,
-		AGENT_LEGACY_PUBLIC_ORDINARY,
-		AGENT_LEGACY_PUBLIC_WORKFLOW,
-	} kind;
-	struct resource_account_handle account;
-	struct workflow_lifecycle_key lifecycle;
-	uint scope_id;
-	uint64 lineage_id;
-	uint64 endpoint_generation;
-};
-
-struct agent_legacy_mailbox {
-	char *payload_page;
-	struct resource_account_handle account;
-	enum resource_charge_class charge_class;
-	struct agent_legacy_domain domain;
-	uint64 next_read_token;
-	uint64 read_token;
-	int len[MAILBOX_SLOT_COUNT];
-	int head;
-	int tail;
-	int count;
-};
-
-_Static_assert(MAILBOX_SLOT_COUNT * MAILBOX_PAYLOAD_SIZE == PGSIZE,
-	       "legacy mailbox payload must occupy exactly one page");
-_Static_assert(sizeof(struct agent_legacy_mailbox) <= PGSIZE,
-	       "legacy mailbox metadata must fit in one page");
-
 #define AGENT_IPC_PROC_STATE_BYTES \
 	(__builtin_offsetof(struct proc, agent_last_heartbeat_tick) + \
 	 sizeof(((struct proc *)0)->agent_last_heartbeat_tick) - \
 	 __builtin_offsetof(struct proc, agent_mailbox_valid))
-
-void
-agent_ipc_init(void)
-{
-	next_legacy_endpoint_generation = 1;
-}
-
-static uint64
-agent_ipc_legacy_endpoint_alloc_locked(void)
-{
-	uint64 generation;
-
-	if (intr_get())
-		panic("legacy endpoint allocation unlocked");
-	generation = next_legacy_endpoint_generation;
-	if (generation == 0 || generation == ~0ULL) {
-		next_legacy_endpoint_generation = 0;
-		return 0;
-	}
-	next_legacy_endpoint_generation = generation + 1;
-	return generation;
-}
 
 static struct proc *
 agent_ipc_find_live_proc_locked(int pid, int agent_endpoint)
@@ -198,188 +142,6 @@ agent_ipc_same_scope(struct proc *left, struct proc *right)
 	scope = agent_identity_proc_scope(left);
 	return scope != VFS_SCOPE_NONE &&
 	       scope == agent_identity_proc_scope(right);
-}
-
-static int
-agent_ipc_legacy_domain_locked(const struct proc *p,
-			       struct agent_legacy_domain *domain)
-{
-	uint64 root_controller = 0;
-	uint scope_id;
-
-	memset(domain, 0, sizeof(*domain));
-	domain->account = resource_account_none();
-	domain->lifecycle = workflow_lifecycle_none();
-	if (!proc_teardown_live(p) || p->is_agent ||
-	    p->legacy_mail_endpoint_generation == 0 ||
-	    !resource_account_handle_valid(p->resource_account) ||
-	    !resource_account_active(p->resource_account))
-		return -1;
-	domain->account = p->resource_account;
-	domain->endpoint_generation =
-		p->legacy_mail_endpoint_generation;
-	if (!p->workflow_lifecycle_charged) {
-		if (p->workflow_lifecycle_id != WORKFLOW_LIFECYCLE_ID_NONE ||
-		    p->workflow_lifecycle_generation != 0 ||
-		    p->vfs_scope_id != VFS_SCOPE_NONE ||
-		    p->vfs_pending_scope_id != VFS_SCOPE_NONE ||
-		    p->agent_controller_id != 0 ||
-		    p->storage_principal_id != FS_OWNER_PUBLIC)
-			return -1;
-	} else {
-		domain->lifecycle = vfs_proc_lifecycle(p);
-		if (!workflow_lifecycle_key_valid(domain->lifecycle) ||
-		    !workflow_lifecycle_active(domain->lifecycle) ||
-		    workflow_lifecycle_scope(domain->lifecycle, &scope_id) < 0 ||
-		    scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
-		    !vfs_scope_active(scope_id) ||
-		    (p->vfs_scope_id != VFS_SCOPE_NONE &&
-		     p->vfs_scope_id != scope_id) ||
-		    (p->vfs_pending_scope_id != VFS_SCOPE_NONE &&
-		     p->vfs_pending_scope_id != scope_id) ||
-		    workflow_lifecycle_controller(domain->lifecycle, scope_id,
-						  &root_controller) < 0)
-			return -1;
-		domain->scope_id = scope_id;
-		if (p->agent_controller_id != 0) {
-			/* 最近的签名控制边确定 IPC 血缘。 */
-			if (!agent_identity_controller_active_locked(
-				p->agent_controller_id, domain->lifecycle,
-				scope_id))
-				return -1;
-		} else if (root_controller != 0 ||
-			   p->storage_principal_id != FS_OWNER_PUBLIC ||
-			   p->vfs_scope_id != VFS_SCOPE_NONE ||
-			   p->vfs_pending_scope_id != VFS_SCOPE_NONE) {
-			/* 无控制者的系统生命周期承载普通邮件。 */
-			return -1;
-		}
-	}
-	domain->kind = p->agent_controller_id != 0 ?
-		AGENT_LEGACY_PUBLIC_WORKFLOW : AGENT_LEGACY_PUBLIC_ORDINARY;
-	domain->lineage_id = p->agent_controller_id != 0 ?
-		p->agent_controller_id : p->resource_account.generation;
-	return 0;
-}
-
-static int
-agent_ipc_legacy_domain_equal(const struct agent_legacy_domain *left,
-			      const struct agent_legacy_domain *right)
-{
-	return left->kind != AGENT_LEGACY_PUBLIC_INVALID &&
-	       left->kind == right->kind &&
-	       resource_account_handle_equal(left->account, right->account) &&
-	       workflow_lifecycle_key_equal(left->lifecycle,
-					    right->lifecycle) &&
-	       left->scope_id == right->scope_id &&
-	       left->lineage_id != 0 &&
-	       left->lineage_id == right->lineage_id;
-}
-
-static int
-agent_ipc_legacy_mailbox_domain_matches(
-	const struct agent_legacy_domain *snapshot,
-	const struct agent_legacy_domain *current)
-{
-	return agent_ipc_legacy_domain_equal(snapshot, current) &&
-	       snapshot->endpoint_generation != 0 &&
-	       snapshot->endpoint_generation == current->endpoint_generation;
-}
-
-static int
-agent_ipc_legacy_public_pair_locked(const struct proc *source,
-				    const struct proc *target,
-				    struct agent_legacy_domain *target_domain)
-{
-	struct agent_legacy_domain source_domain;
-
-	return agent_ipc_legacy_domain_locked(source, &source_domain) == 0 &&
-	       agent_ipc_legacy_domain_locked(target, target_domain) == 0 &&
-	       agent_ipc_legacy_domain_equal(&source_domain, target_domain);
-}
-
-static struct agent_legacy_mailbox *
-agent_ipc_legacy_mailbox_alloc_locked(
-	struct proc *target, const struct agent_legacy_domain *domain)
-{
-	struct agent_legacy_mailbox *mailbox;
-	struct resource_account_handle account;
-	enum resource_charge_class charge_class;
-	char *payload_page;
-
-	if (target->mail_sidecar != 0)
-		return target->mail_sidecar;
-	if (domain == 0 ||
-	    !resource_account_handle_equal(domain->account,
-					  target->resource_account) ||
-	    domain->endpoint_generation !=
-		    target->legacy_mail_endpoint_generation ||
-	    !resource_account_active(target->resource_account))
-		return 0;
-	account = target->resource_account;
-	charge_class = target->resource_slot_reserved ?
-			       RESOURCE_CHARGE_RESERVED :
-			       RESOURCE_CHARGE_ORDINARY;
-	payload_page = kalloc_account_page(account, charge_class);
-	if (payload_page == 0)
-		return 0;
-	mailbox = kalloc_account_page(account, charge_class);
-	if (mailbox == 0) {
-		(void)kfree_account_page(payload_page, account, charge_class);
-		return 0;
-	}
-	memset(payload_page, 0, PGSIZE);
-	memset(mailbox, 0, PGSIZE);
-	mailbox->payload_page = payload_page;
-	mailbox->account = account;
-	mailbox->charge_class = charge_class;
-	mailbox->domain = *domain;
-	mailbox->next_read_token = 1;
-	target->mail_sidecar = mailbox;
-	return mailbox;
-}
-
-static void
-agent_ipc_legacy_mailbox_release_locked(struct proc *p)
-{
-	struct agent_legacy_mailbox *mailbox;
-	char *payload_page;
-
-	if (p == 0)
-		return;
-	if (intr_get())
-		panic("legacy mailbox release unlocked");
-	mailbox = p->mail_sidecar;
-	if (mailbox == 0)
-		return;
-	payload_page = mailbox->payload_page;
-	if (payload_page == 0 ||
-	    !resource_account_handle_valid(mailbox->account) ||
-	    !resource_account_handle_equal(mailbox->account,
-					   p->resource_account) ||
-	    mailbox->charge_class < RESOURCE_CHARGE_ORDINARY ||
-	    mailbox->charge_class >= RESOURCE_CHARGE_CLASS_COUNT)
-		panic("legacy mailbox state");
-	p->mail_sidecar = 0;
-	mailbox->payload_page = 0;
-	(void)kfree_account_page(payload_page, mailbox->account,
-				 mailbox->charge_class);
-	(void)kfree_account_page(mailbox, mailbox->account,
-				 mailbox->charge_class);
-}
-
-static struct agent_legacy_mailbox *
-agent_ipc_legacy_mailbox_current_locked(
-	struct proc *p, const struct agent_legacy_domain *domain)
-{
-	struct agent_legacy_mailbox *mailbox = p->mail_sidecar;
-
-	if (mailbox != 0 &&
-	    !agent_ipc_legacy_mailbox_domain_matches(&mailbox->domain, domain)) {
-		agent_ipc_legacy_mailbox_release_locked(p);
-		return 0;
-	}
-	return mailbox;
 }
 
 static int
@@ -446,156 +208,6 @@ agent_ipc_remove_source(uint64 source_control_id)
 		return;
 	enabled = intr_save();
 	agent_ipc_remove_source_locked(source_control_id);
-	intr_restore(enabled);
-}
-
-/* 旧邮件仅供 PUBLIC；Agent IPC 使用受限路由。 */
-int
-agent_ipc_legacy_public_send(struct proc *source, int pid, char *payload,
-			     int len)
-{
-	struct agent_legacy_domain target_domain;
-	struct agent_legacy_mailbox *mailbox;
-	struct proc *target;
-	int enabled;
-	int slot;
-	int result = -1;
-
-	if (source == 0 || payload == 0 || pid <= 0 || len <= 0 ||
-	    len > MAILBOX_PAYLOAD_SIZE)
-		return -1;
-	enabled = intr_save();
-	target = agent_ipc_find_live_proc_locked(pid, 0);
-	if (target == 0 ||
-	    !agent_ipc_legacy_public_pair_locked(source, target,
-						 &target_domain))
-		goto out;
-	mailbox = agent_ipc_legacy_mailbox_current_locked(target,
-							  &target_domain);
-	if (mailbox != 0 && mailbox->count >= MAILBOX_SLOT_COUNT)
-		goto out;
-	if (mailbox == 0) {
-		mailbox = agent_ipc_legacy_mailbox_alloc_locked(
-			target, &target_domain);
-		if (mailbox == 0)
-			goto out;
-	}
-	slot = mailbox->tail;
-	memmove(mailbox->payload_page + slot * MAILBOX_PAYLOAD_SIZE,
-		payload, len);
-	mailbox->len[slot] = len;
-	mailbox->tail = (mailbox->tail + 1) % MAILBOX_SLOT_COUNT;
-	mailbox->count++;
-	result = len;
-out:
-	intr_restore(enabled);
-	return result;
-}
-
-int
-agent_ipc_legacy_public_read_begin(
-	struct proc *p, char *payload, int len,
-	struct agent_legacy_read_receipt *receipt)
-{
-	struct agent_legacy_domain domain;
-	struct agent_legacy_mailbox *mailbox;
-	int enabled;
-	int slot;
-	int n;
-
-	if (p == 0 || payload == 0 || receipt == 0 || len <= 0 ||
-	    len > MAILBOX_PAYLOAD_SIZE)
-		return -1;
-	memset(receipt, 0, sizeof(*receipt));
-	enabled = intr_save();
-	if (agent_ipc_legacy_domain_locked(p, &domain) < 0) {
-		n = -1;
-		goto out;
-	}
-	mailbox = agent_ipc_legacy_mailbox_current_locked(p, &domain);
-	if (mailbox == 0 || mailbox->count <= 0) {
-		n = 0;
-		goto out;
-	}
-	if (mailbox->read_token != 0) {
-		n = -1;
-		goto out;
-	}
-	slot = mailbox->head;
-	n = MIN(len, mailbox->len[slot]);
-	memmove(payload,
-		mailbox->payload_page + slot * MAILBOX_PAYLOAD_SIZE, n);
-	mailbox->read_token = mailbox->next_read_token++;
-	if (mailbox->next_read_token == 0)
-		mailbox->next_read_token = 1;
-	receipt->endpoint_generation = domain.endpoint_generation;
-	receipt->token = mailbox->read_token;
-	receipt->pid = p->pid;
-	receipt->slot = slot;
-out:
-	intr_restore(enabled);
-	return n;
-}
-
-int
-agent_ipc_legacy_public_read_finish(
-	struct proc *p, const struct agent_legacy_read_receipt *receipt, int commit)
-{
-	struct agent_legacy_mailbox *mailbox;
-	int enabled;
-	int result = -1;
-
-	if (p == 0 || receipt == 0 || receipt->token == 0)
-		return -1;
-	enabled = intr_save();
-	mailbox = p->mail_sidecar;
-	if (p->pid != receipt->pid ||
-	    p->legacy_mail_endpoint_generation !=
-		    receipt->endpoint_generation ||
-	    mailbox == 0 || mailbox->read_token != receipt->token ||
-	    mailbox->head != receipt->slot || mailbox->count <= 0)
-		goto out;
-	if (commit) {
-		memset(mailbox->payload_page +
-			       receipt->slot * MAILBOX_PAYLOAD_SIZE,
-		       0, MAILBOX_PAYLOAD_SIZE);
-		mailbox->len[receipt->slot] = 0;
-		mailbox->head = (mailbox->head + 1) % MAILBOX_SLOT_COUNT;
-		mailbox->count--;
-	}
-	mailbox->read_token = 0;
-	result = 0;
-out:
-	intr_restore(enabled);
-	return result;
-}
-
-int
-agent_ipc_legacy_mailbox_empty(const struct proc *p)
-{
-	int empty;
-	int enabled = intr_save();
-
-	empty = p == 0 || p->mail_sidecar == 0;
-	intr_restore(enabled);
-	return empty;
-}
-
-void
-agent_ipc_legacy_fill_info(struct proc *p, struct agent_info *info)
-{
-	struct agent_legacy_mailbox *mailbox;
-	int enabled;
-
-	if (p == 0 || info == 0)
-		return;
-	enabled = intr_save();
-	mailbox = p->mail_sidecar;
-	if (mailbox != 0) {
-		info->legacy_mailbox_allocated = 1;
-		info->legacy_mailbox_pages = MAILBOX_SIDECAR_PAGE_COUNT;
-		info->legacy_mailbox_queue_count = mailbox->count;
-	}
 	intr_restore(enabled);
 }
 
@@ -1249,10 +861,6 @@ agent_ipc_proc_prepare(struct proc *p)
 		return;
 	enabled = intr_save();
 	agent_ipc_event_baton_clear_locked(p);
-	if (p->mail_sidecar != 0 || p->legacy_mail_endpoint_generation != 0)
-		panic("legacy endpoint prepare state");
-	p->legacy_mail_endpoint_generation =
-		agent_ipc_legacy_endpoint_alloc_locked();
 	intr_restore(enabled);
 }
 
@@ -1265,9 +873,6 @@ agent_ipc_proc_reset(struct proc *p)
 	if (p == 0)
 		return;
 	inactive = !p->is_agent && p->agent_control_id == 0;
-	enabled = intr_save();
-	agent_ipc_legacy_mailbox_release_locked(p);
-	intr_restore(enabled);
 	/* 仅在激活 Agent 角色时初始化事件面。 */
 	if (!inactive) {
 		memset(&p->agent_mailbox_valid, 0, AGENT_IPC_PROC_STATE_BYTES);
@@ -1287,16 +892,9 @@ agent_ipc_proc_reset(struct proc *p)
 void
 agent_ipc_proc_activate(struct proc *p)
 {
-	int enabled;
-
 	if (p == 0)
 		return;
 	agent_ipc_proc_reset(p);
-	enabled = intr_save();
-	if (p->legacy_mail_endpoint_generation == 0)
-		p->legacy_mail_endpoint_generation =
-			agent_ipc_legacy_endpoint_alloc_locked();
-	intr_restore(enabled);
 	for (int tid = 0; tid < NTHREAD; tid++)
 		if (p->threads[tid].state != T_UNUSED &&
 		    p->threads[tid].identity_generation != 0)
@@ -1317,23 +915,16 @@ agent_ipc_proc_teardown(struct proc *p)
 	/* 撤销必须广播；普通事件只走单接收者传棒。 */
 	agent_ipc_broadcast_event_teardown_locked(p);
 	agent_ipc_proc_reset(p);
-	p->legacy_mail_endpoint_generation = 0;
 	intr_restore(enabled);
 }
 
 void
 agent_ipc_exec_public(struct proc *p)
 {
-	int enabled;
-
 	if (p == 0)
 		return;
 	agent_ipc_remove_source(p->agent_control_id);
 	agent_ipc_proc_reset(p);
-	enabled = intr_save();
-	p->legacy_mail_endpoint_generation =
-		agent_ipc_legacy_endpoint_alloc_locked();
-	intr_restore(enabled);
 }
 
 static void

@@ -9,7 +9,7 @@
 #define AGENT_OBSSTORE_SNAPSHOT_READY 1
 #define AGENT_OBSSTORE_SNAPSHOT_RETRY 2
 
-/* The ABI endpoint sees validated values, never the durable image layout. */
+/* 应用二进制接口端点只接收校验后的值，不接触持久镜像布局。 */
 struct agent_obsstore_scope_view {
 	uint scope_id;
 	uint record_count;

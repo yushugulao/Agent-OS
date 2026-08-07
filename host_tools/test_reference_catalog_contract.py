@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the target-bound demo/reference identity registry."""
+"""目标绑定的演示/参考身份注册表变异测试。"""
 
 from __future__ import annotations
 
@@ -260,7 +260,7 @@ def main() -> int:
                 target,
             )
 
-        # The same source basename cannot borrow the other target's authority.
+        # 相同源码基名不能借用另一个目标的权限。
         expect_rejected(
             SOURCE_ROOTS["agentos"] / "rp_coherenceplane.c", "plain"
         )

@@ -19,9 +19,9 @@ enum resource_kind {
 };
 
 enum resource_kind_attribute {
-	/* Counter ownership may move without moving an allocator-owned object. */
+	/* 计数归属可独立于分配器对象迁移。 */
 	RESOURCE_KIND_COUNT_TRANSFERABLE = 1U << 0,
-	/* The allocator's concrete pool/class provenance must move with the object. */
+	/* 分配器池和类别来源必须随对象迁移。 */
 	RESOURCE_KIND_POOL_AFFINE = 1U << 1,
 };
 
@@ -60,7 +60,7 @@ struct resource_account_limits {
 	uint64 class_limit[RESOURCE_CHARGE_CLASS_COUNT][RESOURCE_KIND_COUNT];
 };
 
-/* One-lock view of one resource kind in an account. */
+/* 账户内单类资源的单锁快照。 */
 struct resource_account_kind_snapshot {
 	struct resource_account_handle handle;
 	enum resource_account_state state;
@@ -83,15 +83,11 @@ struct resource_policy_snapshot {
 	uint64 reserved_pending;
 };
 
-/*
- * A reservation is a short-lived kernel lease. It never crosses a blocking
- * boundary: callers either commit it to durable usage or cancel it before
- * returning. Keeping the complete vector here makes multi-resource admission
- * (process + first thread, or both pipe endpoints) one atomic operation.
- */
+/* 短租约不跨阻塞边界；完整向量保证多资源准入原子提交或撤销。 */
 struct resource_reservation {
 	struct resource_account_handle account;
 	enum resource_charge_class charge_class;
+	uint kind_mask;
 	uint64 amounts[RESOURCE_KIND_COUNT];
 	int active;
 };

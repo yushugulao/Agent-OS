@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create measured experiment artifacts from an actual AgentOS Guest log."""
+"""从真实 AgentOS Guest 日志创建实测实验工件。"""
 
 from __future__ import annotations
 

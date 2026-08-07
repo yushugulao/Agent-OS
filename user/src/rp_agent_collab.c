@@ -85,8 +85,7 @@ static int run_kernel_collaboration(void)
 	if (pid < 0)
 		return -1;
 	if (pid == 0) {
-		// Cross-scope principals receive only explicitly delegated endpoints.
-		// The write end is intentionally absent from this child.
+	// 跨作用域主体仅接收显式委派的端点；该子进程故意不持有写端。
 		exit(collab_waiter(getppid(), route_gate[0]));
 	}
 	close(route_gate[0]);

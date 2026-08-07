@@ -661,11 +661,7 @@ static void run_handoff_churner(int source_pid, int ready_fd,
 	check(waitpid(target_pid, &target_status) == target_pid,
 	      "reap handoff exit target");
 	check(target_status == 0, "handoff exit target status");
-	/*
-	 * waitpid observes the child record only after scheduler-side recycle.
-	 * The first-free allocator must therefore give this lowest free slot to
-	 * the immediately-created replacement.
-	 */
+	/* waitpid 仅在调度器回收后观察子进程记录，随后创建的替代进程必须复用最低空闲槽位。 */
 	check(agent_scope_delegate_fd(inspect_fd) == AGENT_STATUS_OK,
 	      "delegate handoff replacement inspect pipe");
 	check(agent_scope_delegate_fd(report_fd) == AGENT_STATUS_OK,

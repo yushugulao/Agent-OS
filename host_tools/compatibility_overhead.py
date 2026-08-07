@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a symmetric, standalone compatibility-overhead campaign in QEMU."""
+"""在 QEMU 中运行对称且独立的兼容性开销评测。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys as _entry_sys
 
 
 def _isolate_direct_entry_imports() -> None:
-    """Use only interpreter-owned paths for top-level import resolution."""
+    """顶层导入解析仅使用解释器自身管理的路径。"""
 
     if __name__ != "__main__":
         return
@@ -112,7 +112,7 @@ try:
         require_regular_file,
         require_safe_directory,
     )
-except ImportError:  # Direct execution from host_tools/.
+except ImportError:  # 支持从 host_tools/ 直接执行。
     from compatibility_overhead_contract import (
         BUILD_STAMP_SCHEMA,
         EVIDENCE_TIER,
@@ -199,7 +199,7 @@ FORMAL_SHELL_ENVIRONMENT_KEYS = (
 
 
 class CompatibilityRunError(RuntimeError):
-    """Raised when a build, boot, or evidence check fails closed."""
+    """构建、启动或证据检查按失败关闭时抛出。"""
 
 
 def _source_gate(
@@ -368,7 +368,7 @@ def _verify_formal_tools(campaign: dict[str, Any]) -> None:
 
 
 def _formal_shell_environment(campaign: dict[str, Any]) -> dict[str, str]:
-    """Derive the exact env -i payload from the attested micro platform."""
+    """从已认证的微型平台派生精确的 ``env -i`` 环境。"""
 
     platform = campaign.get("platform")
     run = campaign.get("run")
@@ -1154,7 +1154,7 @@ def _verify_cleanup_receipt(guest_text: str, observer: object) -> None:
 def verify_campaign_artifacts(
     summary_path: Path, *, micro_manifest: Path
 ) -> dict[str, object]:
-    """Replay the campaign exclusively from its sealed raw artifact tree."""
+    """仅从密封的原始工件树重放评测。"""
 
     summary_path = require_regular_file(
         absolute_lexical_path(summary_path), nonempty=True, maximum_bytes=32 * 1024 * 1024

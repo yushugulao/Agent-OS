@@ -1,7 +1,7 @@
 #include "agent_metadata_store_format.h"
 #include "string.h"
 
-/* v5 had no lifecycle key. It is decoded only for one-way migration. */
+/* v5 缺少生命周期键，仅供单向迁移解码。 */
 struct agent_meta_record_v5 {
 	struct agent_file_meta meta;
 	uint scope_id, slot;
@@ -188,7 +188,7 @@ agent_meta_format_migrate_v5(struct agent_meta_store *store)
 	uint64 count = store->header.count, out = 0;
 	uint bytes;
 
-	/* Expand backwards so source records cannot be overwritten in place. */
+	/* 逆向展开，避免原地覆盖源记录。 */
 	for (uint64 i = count; i > 0; i--) {
 		struct agent_meta_record_v5 source = legacy[i - 1];
 		struct agent_meta_record *target = &store->records[i - 1];
@@ -199,7 +199,7 @@ agent_meta_format_migrate_v5(struct agent_meta_store *store)
 		target->slot = source.slot;
 		target->lifecycle = workflow_lifecycle_none();
 	}
-	/* Dynamic v5 records have no trusted generation and are quarantined. */
+	/* v5 动态记录缺少可信代次，予以隔离。 */
 	for (uint64 i = 0; i < count; i++) {
 		if (store->records[i].scope_id != VFS_SCOPE_SYSTEM)
 			continue;

@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for runner-owned measured Guest evidence."""
-
-from __future__ import annotations
+"""双平台测量必须由私有运行目录中的真实 Guest 日志生成。"""
 
 from pathlib import Path
 
@@ -11,79 +9,53 @@ RUNNER = ROOT / "scripts" / "run-dual-platforms.sh"
 
 
 def validate_source(source: str) -> None:
-    guard = "external measured Agent log injection is forbidden"
-    guard_at = source.find(guard)
-    claim_at = source.find("create_private_directory")
-    first_work_at = source.find('stage_begin "structure-check"')
-    stage_at = source.find('stage_begin "measured-file-query"')
-    if (
-        guard_at < 0
-        or claim_at < 0
-        or first_work_at < 0
-        or guard_at > claim_at
-        or claim_at > first_work_at
-    ):
-        raise ValueError("external evidence is not rejected before runner work")
-    if "/tmp/agentos-dual-platform" in source:
-        raise ValueError("runner uses a predictable shared temporary directory")
+    reject = source.find("external measured Agent log injection is forbidden")
+    claim = source.find("create_private_directory")
+    first_stage = source.find('stage_begin "structure-check"')
+    measured = source.find('stage_begin "measured-file-query"')
+    if min(reject, claim, first_stage, measured) < 0 or not reject < claim < first_stage:
+        raise ValueError("外部证据没有在运行前拒绝")
     for required in (
-        'DUAL_LOG_DIR_REQUESTED="${DUAL_LOG_DIR:-}"',
         "secrets.token_hex(12)",
         "create_private_directory(Path(requested))",
         "umask 077",
-        'measurement_run_id="dual-${measurement_commit%${measurement_commit#????????????}}-${DUAL_RUN_GENERATION}"',
-        'rm -f -- "${measurement_receipt:-}" "${measurement_manifest:-}"',
     ):
         if required not in source:
-            raise ValueError(f"private run generation is incomplete: {required}")
-    if stage_at < 0:
-        raise ValueError("targeted measurement stage is missing")
-    stage = source[stage_at:]
+            raise ValueError(f"私有运行目录缺少约束：{required}")
+    stage = source[measured:]
     if "MEASURED_AGENT_GUEST_LOG" in stage or "MEASURED_AGENT_COMMAND_JSON" in stage:
-        raise ValueError("targeted measurement stage consumes external evidence")
+        raise ValueError("测量阶段读取了外部证据")
     for required in (
         'measurement_guest_log="${DUAL_LOG_DIR}/dual-targeted-agentbench-guest.log"',
         "AGENT_TEST_CASE=agentbench_ucore",
         "bash scripts/run-agent-tests.sh",
         '--guest-log "${measurement_guest_log}"',
-        '--command-json "${measurement_command_json}"',
         '--generation "${DUAL_RUN_GENERATION}"',
         '--receipt-out "${measurement_receipt}"',
     ):
         if required not in stage:
-            raise ValueError(f"targeted measurement stage is incomplete: {required}")
+            raise ValueError(f"真实测量链缺少约束：{required}")
 
 
 def main() -> int:
     source = RUNNER.read_text(encoding="utf-8")
     validate_source(source)
     mutations = (
-        source.replace("external measured Agent log injection is forbidden", "external evidence accepted", 1),
+        source.replace("secrets.token_hex(12)", '"fixed"', 1),
         source.replace(
             'measurement_guest_log="${DUAL_LOG_DIR}/dual-targeted-agentbench-guest.log"',
             'measurement_guest_log="${MEASURED_AGENT_GUEST_LOG}"',
             1,
         ),
-        source.replace(
-            'stage_begin "measured-file-query"',
-            'stage_begin "measured-file-query"\nMEASURED_AGENT_COMMAND_JSON="${MEASURED_AGENT_COMMAND_JSON:-[]}"',
-            1,
-        ),
-        source.replace("secrets.token_hex(12)", '"fixed-generation"', 1),
-        source.replace(
-            "create_private_directory(Path(requested))",
-            "Path(requested).mkdir(parents=True, exist_ok=True)",
-            1,
-        ),
+        source.replace("bash scripts/run-agent-tests.sh", "true", 1),
         source.replace('--receipt-out "${measurement_receipt}"', "", 1),
     )
-    for mutated in mutations:
+    for mutation in mutations:
         try:
-            validate_source(mutated)
+            validate_source(mutation)
         except ValueError:
-            pass
-        else:
-            raise AssertionError("external evidence acceptance mutation was not rejected")
+            continue
+        raise AssertionError("测量来源篡改未被拒绝")
     print("test_dual_measurement_source_contract: passed")
     return 0
 

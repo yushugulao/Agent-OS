@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare extracted research-platform state from plain uCore and AgentOS-uCore."""
+"""比较从 plain uCore 与 AgentOS-uCore 抽取的研究平台状态。"""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run QEMU resource regressions in isolated, bounded parallel lanes."""
+"""在隔离且有界的并行 lane 中运行 QEMU 资源回归。"""
 
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ AGENT_CASES = tuple(
     for name in AGENT_CASE_NAMES
 )
 
-# Preserve the original import surface used by the runner's contract tests.
+# 保留 runner 契约测试使用的原始导入接口。
 CASES = RESOURCE_CASES
 CASE_BY_LABEL = {case.label: case for case in CASES}
 
@@ -765,8 +765,8 @@ def run_lane(
     parallel_depth: int = 1,
 ) -> list[CaseResult]:
     results = []
-    # A case is the isolation atom: ordered reboot chains stay in one worktree.
-    # Formal single-slot AB/BA campaigns remain outside this coordinator.
+    # 用例是隔离原子：有序重启链始终位于同一 worktree。正式的单槽 AB/BA 活动
+    # 仍由此协调器之外负责。
     for case in cases:
         try:
             result = run_case(
@@ -1189,7 +1189,7 @@ def write_reports(
         "requested_build_jobs": requested_build_jobs,
         "effective_build_jobs": effective_build_jobs,
         "outer_make_job_limit": outer_job_limit,
-        # Keep the historic scalar as the minimum guaranteed lane budget.
+        # 保留历史标量作为 lane 的最低保证预算。
         "lane_build_jobs": min(lane_build_job_slots),
         "lane_build_job_slots": list(lane_build_job_slots),
         "allocated_build_jobs": effective_build_jobs,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the workflow teardown phase protocol from kernel sources."""
+"""根据内核源码校验工作流拆除阶段协议。"""
 
 import argparse
 import json
@@ -26,7 +26,7 @@ class ProtocolError(RuntimeError):
 
 
 def sanitize_c(text):
-    """Blank comments and literals while preserving offsets and newlines."""
+    """在保留偏移与换行的同时清空注释和字面量。"""
     out = list(text)
     state = "code"
     quote = ""
@@ -234,6 +234,19 @@ def forbid_calls(body, names, label):
     present = [name for name in names if call_positions(body, name)]
     if present:
         raise ProtocolError(f"{label} crosses phase ownership: {', '.join(present)}")
+
+
+def require_call_sequence(body, names, label):
+    positions = [require_calls(body, name, 1, label)[0] for name in names]
+    if positions != sorted(positions):
+        raise ProtocolError(f"{label} call order changed")
+    allowed = set(names) | {"if"}
+    actual = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", body))
+    unexpected = sorted(actual - allowed)
+    if unexpected:
+        raise ProtocolError(
+            f"{label} has unowned calls: {', '.join(unexpected)}"
+        )
 
 
 def phase_blocks(driver):
@@ -935,17 +948,26 @@ def validate_exec_publication(proc):
     require_calls(prepublication, "vfs_proc_exec_abort", 4, "exec pre-publication")
 
 
-def validate_legacy_mail_protocol(agent_core, agent_ipc, syscall):
-    label = "legacy mail endpoint lifecycle"
-    core_exec = function_body(agent_core, "agent_core_exec_public_commit")
-    core_clear = function_body(agent_core, "agent_core_clear_metadata")
-    core_prepare = function_body(agent_core, "agent_core_proc_prepare")
-    require_calls(core_exec, "agent_ipc_exec_public", 2, label)
-    forbid_calls(core_exec, ("agent_ipc_proc_teardown",), label)
-    require_calls(core_clear, "agent_ipc_proc_teardown", 1, label)
-    forbid_calls(core_clear, ("agent_ipc_exec_public",), label)
-    prepare_guard = require_if_predicates(
-        core_prepare,
+def validate_legacy_mail_fail_closed(syscall):
+    label = "retired legacy mail syscalls"
+    expected = {
+        "sys_mailread": "(void)buf;(void)len;return-1;",
+        "sys_mailwrite": "(void)pid;(void)buf;(void)len;return-1;",
+    }
+    for name, exact in expected.items():
+        body = function_body(syscall, name)
+        compact = normalize(body)
+        if compact != exact:
+            raise ProtocolError(
+                f"{label}: {name} must only discard arguments and return -1"
+            )
+
+
+def validate_proc_prepare_invariant(agent_core):
+    label = "RECYCLED_CLEAN process prepare"
+    prepare = function_body(agent_core, "agent_core_proc_prepare")
+    guard = require_if_predicates(
+        prepare,
         (
             "p==0",
             "!proc_teardown_live(p)",
@@ -953,183 +975,66 @@ def validate_legacy_mail_protocol(agent_core, agent_ipc, syscall):
             "p->agent_control_id!=0",
             "p->agent_controller_id!=0",
             "!agent_context_is_empty(p)",
-            "!agent_ipc_legacy_mailbox_empty(p)",
-            "p->legacy_mail_endpoint_generation!=0",
         ),
-        "RECYCLED_CLEAN process prepare guard",
+        label,
         top_level=True,
     )
-    require_calls(
-        prepare_guard["statement"], "panic", 1,
-        "RECYCLED_CLEAN process prepare guard",
-    )
-    prepare_at = require_calls(
-        core_prepare, "agent_ipc_proc_prepare", 1, label
-    )[0]
-    if prepare_guard["end"] >= prepare_at:
-        raise ProtocolError(
-            f"{label} must validate RECYCLED_CLEAN before assigning an endpoint"
-        )
-    forbidden_prepare_calls = (
-        "agent_core_clear_metadata",
-        "agent_core_proc_state_reset",
-        "agent_context_proc_reset",
-        "agent_free_proc_context",
-        "agent_observe_proc_reset",
-        "agent_ipc_proc_reset",
-        "agent_ipc_proc_teardown",
-        "agent_ipc_exec_public",
-        "agent_identity_proc_reset",
-        "agent_scope_controller_departing",
-    )
-    if any(call_positions(core_prepare, name) for name in forbidden_prepare_calls):
-        raise ProtocolError(
-            f"{label} prepare must not clear or reset recycled process state"
-        )
-    prepare_calls = {
-        match.group(1)
-        for match in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", core_prepare)
-        if match.group(1) not in {"if", "for", "while", "switch", "sizeof"}
-    }
-    allowed_prepare_calls = {
-        "proc_teardown_live",
-        "agent_context_is_empty",
-        "agent_ipc_legacy_mailbox_empty",
-        "panic",
-        "agent_ipc_proc_prepare",
-    }
-    unexpected_prepare_calls = prepare_calls - allowed_prepare_calls
-    if unexpected_prepare_calls:
-        raise ProtocolError(
-            f"{label} prepare may only validate RECYCLED_CLEAN and assign its "
-            "endpoint: " + ", ".join(sorted(unexpected_prepare_calls))
-        )
-    if re.search(
-        r"\bp\s*->\s*(?:agent_|context_|legacy_mail_|heartbeat_|resource_quota)"
-        r"[A-Za-z0-9_]*\s*(?:=(?!=)|\+=|-=|\*=|/=|&=|\|=|\^=|\+\+|--)",
-        core_prepare,
-    ):
-        raise ProtocolError(
-            f"{label} prepare must not zero recycled process fields"
-        )
-
-    ipc_prepare = function_body(agent_ipc, "agent_ipc_proc_prepare")
-    endpoint_guard = require_if_predicates(
-        ipc_prepare,
+    require_calls(guard["statement"], "panic", 1, label)
+    publish = require_calls(prepare, "agent_ipc_proc_prepare", 1, label)[0]
+    if guard["end"] >= publish:
+        raise ProtocolError(f"{label} must validate before IPC prepare")
+    forbid_calls(
+        prepare,
         (
-            "p->mail_sidecar!=0",
-            "p->legacy_mail_endpoint_generation!=0",
+            "agent_core_clear_metadata",
+            "agent_core_proc_state_reset",
+            "agent_context_proc_reset",
+            "agent_observe_proc_reset",
+            "agent_ipc_proc_reset",
+            "agent_identity_proc_reset",
         ),
-        "legacy endpoint RECYCLED_CLEAN guard",
-        top_level=True,
-    )
-    require_calls(
-        endpoint_guard["statement"], "panic", 1,
-        "legacy endpoint RECYCLED_CLEAN guard",
-    )
-    save_at = require_calls(ipc_prepare, "intr_save", 1, label)[0]
-    alloc_at = require_calls(
-        ipc_prepare, "agent_ipc_legacy_endpoint_alloc_locked", 1, label
-    )[0]
-    restore_at = require_calls(ipc_prepare, "intr_restore", 1, label)[0]
-    if not (save_at < endpoint_guard["start"] < alloc_at < restore_at):
-        raise ProtocolError(
-            f"{label} endpoint generation must rotate under one locked boundary"
-        )
-    if (
-        "p->legacy_mail_endpoint_generation="
-        "agent_ipc_legacy_endpoint_alloc_locked();"
-        not in normalize(ipc_prepare)
-    ):
-        raise ProtocolError(
-            f"{label} prepare must assign one fresh endpoint generation"
-        )
-
-    exec_public = function_body(agent_ipc, "agent_ipc_exec_public")
-    teardown = function_body(agent_ipc, "agent_ipc_proc_teardown")
-    require_calls(exec_public, "agent_ipc_proc_reset", 1, label)
-    require_calls(exec_public, "agent_ipc_legacy_endpoint_alloc_locked", 1, label)
-    require_calls(teardown, "agent_ipc_proc_reset", 1, label)
-    if "p->legacy_mail_endpoint_generation=0;" not in normalize(teardown):
-        raise ProtocolError(f"{label} teardown must invalidate its generation")
-
-    matches = function_body(
-        agent_ipc, "agent_ipc_legacy_mailbox_domain_matches"
-    )
-    match_compact = normalize(matches)
-    for invariant in (
-        "agent_ipc_legacy_domain_equal(snapshot,current)",
-        "snapshot->endpoint_generation!=0",
-        "snapshot->endpoint_generation==current->endpoint_generation",
-    ):
-        if invariant not in match_compact:
-            raise ProtocolError(
-                f"{label} mailbox snapshot lost invariant: {invariant}"
-            )
-
-    read_begin = function_body(
-        agent_ipc, "agent_ipc_legacy_public_read_begin"
+        label,
     )
     if re.search(
-        r"mailbox\s*->\s*(?:head|tail|count|len\s*\[[^]]+\])\s*"
-        r"(?:=|\+\+|--)",
-        read_begin,
+        r"\bp\s*->\s*(?:agent_|context_|heartbeat_|resource_quota)"
+        r"[A-Za-z0-9_]*\s*(?:=(?!=)|\+=|-=|\*=|/=|&=|\|=|\^=|\+\+|--)",
+        prepare,
     ):
-        raise ProtocolError("legacy mail read begin must not dequeue")
-    read_finish = function_body(
-        agent_ipc, "agent_ipc_legacy_public_read_finish"
+        raise ProtocolError(f"{label} must not rewrite recycled process state")
+    require_call_sequence(
+        prepare,
+        (
+            "proc_teardown_live",
+            "agent_context_is_empty",
+            "panic",
+            "agent_ipc_proc_prepare",
+        ),
+        label,
     )
-    commit = require_if(read_finish, "commit", "legacy mail read finish")
-    commit_compact = normalize(commit["statement"])
-    for invariant in (
-        "mailbox->head=(mailbox->head+1)%MAILBOX_SLOT_COUNT;",
-        "mailbox->count--;",
-    ):
-        if invariant not in commit_compact:
-            raise ProtocolError(
-                f"legacy mail read finish lost commit invariant: {invariant}"
-            )
 
-    sys_read = function_body(syscall, "sys_mailread")
-    begin_at = require_calls(
-        sys_read, "agent_ipc_legacy_public_read_begin", 1,
-        "legacy mail syscall",
-    )[0]
-    copyout_at = require_calls(sys_read, "copyout", 1, "legacy mail syscall")[0]
-    finishes = require_calls(
-        sys_read, "agent_ipc_legacy_public_read_finish", 2,
-        "legacy mail syscall",
+
+def validate_ipc_lifecycle(agent_ipc):
+    require_call_sequence(
+        function_body(agent_ipc, "agent_ipc_proc_prepare"),
+        ("intr_save", "agent_ipc_event_baton_clear_locked", "intr_restore"),
+        "IPC process prepare",
     )
-    sys_read_compact = normalize(sys_read)
-    commit_call = "agent_ipc_legacy_public_read_finish(p,&receipt,1)"
-    abort_call = "agent_ipc_legacy_public_read_finish(p,&receipt,0)"
-    if (
-        sys_read_compact.count(commit_call) != 1
-        or sys_read_compact.count(abort_call) != 1
-    ):
-        raise ProtocolError(
-            "legacy mail syscall needs one abort and one commit"
-        )
-    commit_at = sys_read_compact.index(commit_call)
-    compact_begin_at = sys_read_compact.index(
-        "agent_ipc_legacy_public_read_begin"
+    require_call_sequence(
+        function_body(agent_ipc, "agent_ipc_exec_public"),
+        ("agent_ipc_remove_source", "agent_ipc_proc_reset"),
+        "IPC PUBLIC exec",
     )
-    compact_copyout_at = sys_read_compact.index("copyout(")
-    if not compact_begin_at < compact_copyout_at < commit_at:
-        raise ProtocolError(
-            "legacy mail syscall must begin, copyout, then commit"
-        )
-    copyout_failure = require_if(
-        sys_read,
-        "copyout(p->pagetable,buf,payload,n)<0",
-        "legacy mail copyout failure",
+    require_call_sequence(
+        function_body(agent_ipc, "agent_ipc_proc_teardown"),
+        (
+            "agent_ipc_remove_source",
+            "intr_save",
+            "agent_ipc_broadcast_event_teardown_locked",
+            "agent_ipc_proc_reset",
+            "intr_restore",
+        ),
+        "IPC process teardown",
     )
-    failure = normalize(copyout_failure["statement"])
-    abort = abort_call + ";"
-    if failure.count(abort) != 1 or failure.index(abort) > failure.index("return-1;"):
-        raise ProtocolError(
-            "legacy mail copyout failure must abort before returning"
-        )
 
 
 def validate_legacy_absent(os_sources):
@@ -1293,9 +1198,9 @@ def validate_protocol(sources):
     validate_trapframe_lifecycle(sources["proc"])
     validate_exec_publication(sources["proc"])
     validate_terminal_teardown(sources["proc"])
-    validate_legacy_mail_protocol(
-        sources["agent_core"], sources["agent_ipc"], sources["syscall"]
-    )
+    validate_proc_prepare_invariant(sources["agent_core"])
+    validate_ipc_lifecycle(sources["agent_ipc"])
+    validate_legacy_mail_fail_closed(sources["syscall"])
     validate_budget_wiring(sources["budget"])
 
 

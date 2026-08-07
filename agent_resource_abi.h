@@ -27,7 +27,7 @@ struct agent_resource_kind_snapshot {
 struct agent_resource_snapshot {
 	unsigned int version;
 	unsigned int struct_size;
-	/* Configured global kind counters only; not account or rate coverage. */
+	/* 仅表示已配置的全局资源种类计数，不表示账户或速率覆盖范围。 */
 	unsigned int measured_mask;
 	unsigned int kind_count;
 	unsigned long long ordinary_free_pages;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify lock ordering and exactly-once lazy file finalization."""
+"""验证锁顺序与恰好一次的文件延迟终结。"""
 
 from __future__ import annotations
 

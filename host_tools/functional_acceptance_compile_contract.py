@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trusted compile closure for the Task 1-5 Guest evidence producer."""
+"""任务 1-5 Guest 证据生产者的可信编译闭包。"""
 from __future__ import annotations
 
 import hashlib
@@ -81,10 +81,9 @@ EXPECTED_FUNCTIONAL_CPP_DEFINES = frozenset({
     "WORKFLOW_TEARDOWN_GLOBAL_RESERVED_CAP",
 })
 
-# These are the repository inputs that can redirect a reviewed call, fabricate
-# a result before it reaches the Guest, replace the output sink, or bypass main.
-# The generated challenge header is covered by the exact generator in
-# user/Makefile and by the Host challenge check in every raw log.
+# 这些仓库输入可以重定向已审查调用、在结果抵达 Guest 前伪造结果、替换输出端，
+# 或绕过 main。生成的 challenge 头由 user/Makefile 中的精确生成器及每份原始
+# 日志中的 Host challenge 检查共同覆盖。
 USER_ARTIFACT_DEPENDENCY_PATHS = (
     "Makefile",
     "agent_lifecycle_abi.h",
@@ -149,11 +148,10 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "wait_atomic_test_abi.h",
 )
 
-# The Guest is not an independent oracle for kernel behavior: any compiled
-# kernel object can forge syscall results or write a valid-looking receipt to
-# the console.  Pin the complete wildcard-selected kernel source/header/linker
-# closure, not only the Agent syscall implementations.  initproc.S is omitted
-# because Makefile regenerates it unconditionally from the pinned generator.
+# Guest 不是内核行为的独立真值源：任何已编译内核对象都能伪造系统调用结果，
+# 或向控制台写入外观有效的回执。因此必须固定通配选择出的完整内核源码、头文件
+# 与链接器闭包，而不能只固定 Agent 系统调用实现。initproc.S 不纳入，因为
+# Makefile 会无条件通过已固定生成器重建它。
 KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "agent_observe_test_phase_abi.h",
     "file_resource_policy.h",
@@ -316,7 +314,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # 上述完整审查闭包的逐字节指纹。固定各翻译阶段输入，避免续行、预处理、
 # 汇编或链接语法在规范化时被隐藏。
 COMPILE_CLOSURE_FINGERPRINT = (
-	"7f484bad2389aaf95f05c7b6a5e80868b6b43bb59099a2509689fd93eb741083"
+    "93fb181d00d63f98836a654e1c3f43dfb229135cb06131f2d22481b827ce0f1f"
 )
 
 USER_TRANSLATION_UNITS = (
@@ -852,7 +850,7 @@ def _require_single_assignment(
 
 
 def _isolated_python_invocation_lines(runner: str) -> tuple[str, ...]:
-    """Return Python command sites while ignoring explicit --python-bin values."""
+    """返回 Python 命令位置，并忽略显式 ``--python-bin`` 参数值。"""
 
     token = '"${PYTHON_BIN}"'
     invocations: list[str] = []

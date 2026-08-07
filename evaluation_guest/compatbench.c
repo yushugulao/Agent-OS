@@ -7,10 +7,8 @@
 
 #include "compatbench_seed.h"
 
-/*
- * This file is compiled verbatim by baseline uCore and AgentOS-uCore. Keep
- * target-specific APIs out of the workload so the measured work stays equal.
- */
+/* 基线 uCore 和 AgentOS-uCore 原样编译本文件；负载不使用目标专属 API，
+ * 保证两侧测量工作相同。 */
 #define BENCH_SCHEMA 2
 #define BENCH_ROUNDS 3
 #define METRIC_COUNT 5
@@ -548,7 +546,7 @@ int main(int argc, char **argv)
 	       BENCH_SCHEMA, challenge, BENCH_ROUNDS, BENCH_CACHE_STATE,
 	       BENCH_SCHEDULE);
 
-	/* One identical untimed pass removes first-use allocation from both sides. */
+	/* 两侧各做一次相同的非计时预热，排除首次分配影响。 */
 	(void)bench_fork_wait();
 	(void)bench_fork_exec_wait(challenge);
 	unsigned int warmup_elapsed;

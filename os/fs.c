@@ -2586,7 +2586,7 @@ static uint balloc_one(uint dev, const struct fs_storage_charge *charge,
 	if (result < 0)
 		goto out;
 #ifdef FS_ALLOCATOR_DELETE_BARRIER_MUTANT
-	/* Negative acceptance profile: the volatile overlay must expose this. */
+	/* 负向验收配置要求易失覆盖层暴露此状态。 */
 	result = 0;
 #else
 	result = fs_durable_barrier_forward();
@@ -4521,7 +4521,7 @@ static int fs_create_failure_status(int result)
 // listed in block ip->addrs[NDIRECT].
 
 // Return the disk block address of the nth block in inode ip.
-// When alloc is zero, a missing mapping is reported without changing the file.
+// alloc 为零时，仅报告映射缺失，不修改文件。
 struct bmap_allocation_receipt {
 	uint owner;
 	uint data_block;

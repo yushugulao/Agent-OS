@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline replay for Host-derived dual-platform evidence."""
+"""Host 派生双平台证据的离线重放。"""
 from __future__ import annotations
 
 import re

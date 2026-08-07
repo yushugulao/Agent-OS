@@ -121,9 +121,8 @@ static void check_agent_creation_under_unreaped_pressure(void)
 	      "reap ordinary unreaped holder");
 }
 
-// Direct children of the trusted bootstrap process receive independent user
-// domains. Holding them all alive reaches the ordinary global boundary; the
-// Agent allocation must still make progress through the reserved class.
+	// 可信引导进程的直属子进程各有独立用户域。全部保持存活可触及普通类
+	// 全局边界，Agent 分配仍须通过预留类推进。
 static void check_agent_reserve_under_live_pressure(void)
 {
 	int release_pipe[2];
@@ -209,8 +208,7 @@ static void check_high_score_agent_boundary(void)
 	      "wait for high-score agent");
 	check(close(ready_pipe[0]) == 0, "close readiness reader");
 
-	// The pending event gives hog a permanently higher soft score. The
-	// victim must still run, cross the teardown checkpoint, and be reaped.
+	// 待处理事件使 hog 永久具有更高软分数；victim 仍须运行、越过拆除检查点并被回收。
 	victim = agent_create();
 	check(victim >= 0, "create teardown victim");
 	if (victim == 0) {
@@ -256,8 +254,7 @@ static void check_normal_score_boundary(void)
 	      "wait for normal runner");
 	check(close(ready_pipe[0]) == 0, "close normal readiness reader");
 
-	// Repeated dispatches drive the Agent's bounded vruntime penalty below
-	// the ordinary task score. FIFO progress must still carry it through exit.
+	// 重复调度使 Agent 的有界 vruntime 惩罚低于普通任务分数；FIFO 进度仍须推动其退出。
 	victim = agent_create();
 	check(victim >= 0, "create low-score teardown victim");
 	if (victim == 0) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independently verify a durable observation checkpoint in a uCore image."""
+"""独立验证 uCore 镜像中的持久观测检查点。"""
 
 from __future__ import annotations
 
@@ -415,7 +415,7 @@ def _parse_observation(raw: bytes, layout: ObservationLayout, identity: dict[str
 
 
 def validate_observation_payload(raw: bytes, layout: ObservationLayout | None = None) -> dict[str, Any]:
-    """Apply the production observation-provider invariants without a run receipt."""
+    """在没有运行回执时应用生产观测提供方的不变量。"""
     return _parse_observation(raw, layout or load_observation_contract(), None)
 
 

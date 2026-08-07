@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contracts for the symmetric baseline/AgentOS compatibility benchmark."""
+"""对称 baseline/AgentOS 兼容性基准的合同。"""
 
 from __future__ import annotations
 
@@ -129,7 +129,7 @@ PASS_LINE = "compatbench: passed"
 
 
 class CompatibilityContractError(ValueError):
-    """Raised when compatibility evidence does not satisfy its protocol."""
+    """兼容性证据不满足协议时抛出。"""
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -165,7 +165,7 @@ def _fnv_u32(value: int, word: int) -> int:
 
 
 def expected_sample_sequence(challenge: str) -> list[tuple[int, str]]:
-    """Return the precommitted per-boot metric order used by both targets."""
+    """返回两个目标共同使用的预提交单次启动指标顺序。"""
 
     if HEX16_RE.fullmatch(challenge) is None or int(challenge, 16) == 0:
         raise CompatibilityContractError("schedule challenge must be nonzero 64-bit hex")
@@ -183,7 +183,7 @@ def expected_sample_sequence(challenge: str) -> list[tuple[int, str]]:
 
 
 def research_artifact_pipeline_checksum(challenge: str) -> str:
-    """Rebuild the deterministic application artifact result from its challenge."""
+    """根据 challenge 重建确定性的应用工件结果。"""
 
     if HEX16_RE.fullmatch(challenge) is None or int(challenge, 16) == 0:
         raise CompatibilityContractError("pipeline challenge must be nonzero 64-bit hex")
@@ -234,7 +234,7 @@ def research_artifact_pipeline_checksum(challenge: str) -> str:
 
 
 def metric_checksum(challenge: str, metric: str) -> str:
-    """Rebuild a metric's deterministic result without trusting Guest output."""
+    """不信任 Guest 输出，独立重建指标的确定性结果。"""
 
     if HEX16_RE.fullmatch(challenge) is None or int(challenge, 16) == 0:
         raise CompatibilityContractError("metric challenge must be nonzero 64-bit hex")
@@ -300,7 +300,7 @@ def guest_receipt(challenge: str, samples: Sequence[Mapping[str, object]]) -> st
 def workload_outcome_sha256(
     challenge: str, samples: Sequence[Mapping[str, object]]
 ) -> str:
-    """Bind deterministic work outcomes while deliberately excluding timings."""
+    """绑定确定性工作结果，并明确排除计时值。"""
 
     return sha256_bytes(
         canonical_json_bytes(
@@ -321,7 +321,7 @@ def workload_outcome_sha256(
 
 
 def parse_guest_log(text: str, expected_challenge: str) -> dict[str, object]:
-    """Parse only complete, challenge-bound Guest records from a QEMU log."""
+    """仅从 QEMU 日志解析完整且绑定 challenge 的 Guest 记录。"""
 
     if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_GUEST_LOG_BYTES:
         raise CompatibilityContractError("guest log is absent or exceeds its byte limit")
@@ -429,7 +429,7 @@ def parse_guest_log(text: str, expected_challenge: str) -> dict[str, object]:
 
 
 def validate_guest_receipt(value: object, expected_challenge: str) -> dict[str, object]:
-    """Validate the parsed form again when a campaign JSON is consumed."""
+    """消费评测 JSON 时再次校验其解析形式。"""
 
     if (
         not isinstance(value, dict)
@@ -588,7 +588,7 @@ def validate_plan(value: object) -> dict[str, object]:
 def _extract_make_variable(
     text: str, name: str, resolving: tuple[str, ...] = ()
 ) -> str:
-    """Resolve a closed chain of simple ``:=`` path bindings."""
+    """解析由简单 ``:=`` 路径绑定构成的闭合链。"""
 
     if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or name in resolving:
         raise CompatibilityContractError(f"Makefile has an unsafe {name} binding")
@@ -904,7 +904,7 @@ def validate_formal_context(
 
 
 def summarize_boots(boots: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    """Return descriptive per-metric paired results, never a composite score."""
+    """返回各指标的描述性配对结果，不生成综合分数。"""
 
     outcome_pairs: list[dict[str, object]] = []
     for boot in boots:

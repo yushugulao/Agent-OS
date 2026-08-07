@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce reproducible kernel growth and Agent test-suite budgets."""
+"""强制执行可复现的内核增长与 Agent 测试套件预算。"""
 
 import argparse
 import hashlib
@@ -574,7 +574,7 @@ def validate_agent_aggregate_budgets(modules, module_names):
             maximum = require_positive_number(group, f"max_{metric}", integer=True)
             if maximum < baseline:
                 raise BudgetError(f"{label}.max_{metric} is below its baseline")
-            # Module contracts have fixed source cost; runtime footprint may not grow.
+            # 模块契约的源码成本固定；运行时占用不得增长。
             allowed_ratio = 1.05 if metric in ("source_lines", "source_bytes") else 1.0
             if maximum > baseline * allowed_ratio:
                 raise BudgetError(
@@ -750,32 +750,6 @@ def validate_config(config):
             )
         validate_pair(
             trapframes,
-            f"baseline_{name}_bytes",
-            f"max_{name}_bytes",
-            integer=True,
-        )
-
-    legacy_mail = require_mapping(
-        config.get("legacy_mail_sidecar"), "legacy_mail_sidecar"
-    )
-    for name in (
-        "per_process",
-        "pool",
-        "ordinary_pool",
-        "reserved_pool",
-        "domain_ordinary",
-        "domain_reserved",
-    ):
-        symbol_name = f"{name}_symbol"
-        if (
-            not isinstance(legacy_mail.get(symbol_name), str)
-            or not legacy_mail[symbol_name]
-        ):
-            raise BudgetError(
-                f"legacy_mail_sidecar.{symbol_name} must be a string"
-            )
-        validate_pair(
-            legacy_mail,
             f"baseline_{name}_bytes",
             f"max_{name}_bytes",
             integer=True,
@@ -1822,7 +1796,7 @@ def measure_file_source(root, relative_path):
         data = path.read_bytes()
     except OSError as error:
         raise BudgetError(f"cannot read source {path}: {error}") from error
-    # Git content is LF-normalized; checkout policy must not consume budget.
+    # Git 内容已按 LF 规范化；检出策略不得消耗预算。
     normalized = data.replace(b"\r\n", b"\n")
     return physical_line_count(normalized), len(normalized)
 
@@ -3001,29 +2975,6 @@ def check_kernel(args, config):
             ratchet=True,
         )
 
-    legacy_mail = config["legacy_mail_sidecar"]
-    for name, label in (
-        ("per_process", "legacy mail sidecar per process"),
-        ("pool", "legacy mail sidecar global pool"),
-        ("ordinary_pool", "legacy mail sidecar ordinary pool"),
-        ("reserved_pool", "legacy mail sidecar reserved pool"),
-        ("domain_ordinary", "legacy mail sidecar ordinary domain"),
-        ("domain_reserved", "legacy mail sidecar reserved domain"),
-    ):
-        actual = measure_probe_symbol(
-            root / args.struct_probe,
-            str(tools["nm"]),
-            legacy_mail[f"{name}_symbol"],
-        )
-        check_limit(
-            label,
-            actual,
-            legacy_mail[f"baseline_{name}_bytes"],
-            legacy_mail[f"max_{name}_bytes"],
-            " bytes",
-            ratchet=True,
-        )
-
     sidecar = config["agent_context_sidecar"]
     for name, label in (
         ("per_process", "Agent context sidecar per process"),
@@ -3892,8 +3843,8 @@ def main():
             raise BudgetError(
                 f"cannot enter kernel budget root {root}: {error}"
             ) from error
-        # All repository-relative CLI paths and native PE tool arguments now
-        # share one explicit execution root, even when invoked from elsewhere.
+        # 所有仓库相对 CLI 路径与原生 PE 工具参数共享一个显式执行根，
+        # 即使从其他位置调用也不例外。
         args.root = str(root)
         if args.agent_test_calibration and args.check != "agent-tests":
             raise BudgetError(

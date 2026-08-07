@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Token-level validators for AgentOS headline measurement sources."""
+"""AgentOS 核心测量源的 token 级验证器。"""
 from __future__ import annotations
 
 import re
@@ -8,7 +8,7 @@ from pathlib import Path
 if __package__:
     from .benchmark_source_contract import (
         _depth_at, _function_tokens, _lex, _locations, _matching,
-        _require_once, _require_top_level,
+        _require_ascii_outside_comments, _require_once, _require_top_level,
     )
     from .functional_acceptance_source_contract import (
         CONTRACT_VERSION as FUNCTIONAL_CONTRACT_VERSION,
@@ -18,7 +18,7 @@ if __package__:
 else:
     from benchmark_source_contract import (
         _depth_at, _function_tokens, _lex, _locations, _matching,
-        _require_once, _require_top_level,
+        _require_ascii_outside_comments, _require_once, _require_top_level,
     )
     from functional_acceptance_source_contract import (
         CONTRACT_VERSION as FUNCTIONAL_CONTRACT_VERSION,
@@ -56,11 +56,9 @@ POSTPROCESSING_CALLS = (
     "validate_context_mirror",
 )
 
-# C preprocessing happens before the token-level measurement checks below.  If
-# an unreviewed directive were allowed, a macro could make the source spell
-# ``now_us()`` while the compiler executes a different clock (or similarly
-# redirect a production operation).  Keep the complete preprocessing surface
-# of this deliberately small measurement program closed and reviewable.
+# C 预处理先于下方 token 级测量检查执行。若允许未经审查的指令，宏可以让
+# 源码表面写着 ``now_us()``，编译器却执行另一个时钟，或以同样方式重定向
+# 生产操作。因此这个小型测量程序的完整预处理面必须保持闭合且可审查。
 _APPROVED_DIRECTIVE_TEXT = """\
 #include <agent.h>
 #include <fcntl.h>
@@ -120,12 +118,9 @@ APPROVED_PREPROCESSOR_DIRECTIVES = tuple(
 
 
 def _validate_preprocessor_contract(text: str, tokens: list[str]) -> None:
-    try:
-        text.encode("ascii")
-    except UnicodeEncodeError as error:
-        raise ValueError(
-            "Agent evaluation source must use the reviewed ASCII alphabet"
-        ) from error
+    _require_ascii_outside_comments(
+        text, "Agent evaluation source must use the reviewed ASCII alphabet"
+    )
     if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", text):
         raise ValueError("Agent evaluation source contains a control byte")
     if re.search(r"\\[ \t\v\f]*(?:\r\n|\r|\n)", text):

@@ -25,8 +25,8 @@ OBJCOPY := $(TOOLPREFIX)objcopy
 OBJDUMP := $(TOOLPREFIX)objdump
 CP := cp
 PYTHON_BIN ?= python3
-# Preserve raw identities above for build contracts; quote only at the shell
-# boundary after the tool suffix has been joined to TOOLPREFIX.
+# 上方保留构建契约所需的原始身份；工具后缀拼入 TOOLPREFIX 后，
+# 只在 shell 边界整体引用。
 shell_quote = '$(subst ','"'"',$(1))'
 CC_CMD = $(call shell_quote,$(CC))
 OBJCOPY_CMD = $(call shell_quote,$(OBJCOPY))
@@ -67,12 +67,11 @@ COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 USER_BUILD_CONFIG := $(build_dir)/.user-build-config
 USER_STACK_CONTRACT := ../user_stack_policy.h
 USER_STACK_CONTRACT_WRAPPER := include/user_stack_policy.h
-# Compile the teardown test at the runner's maximum admitted capacities so its
-# array-backed frames are measured in the largest supported build profile.
+# 按运行器最大准入容量编译拆除测试，以最大受支持配置测量数组栈帧。
 override USER_STACK_WORKFLOW_DOMAIN_FILE_CAP := 14
 override USER_STACK_WORKFLOW_GLOBAL_RESERVED_CAP := 64
-# This helper invokes one of four fixed child roots through a function pointer;
-# model every target instead of treating the indirect edge as stackless.
+# 此辅助函数通过函数指针调用四个固定子入口之一；须建模全部目标，
+# 不能把间接边视作无栈调用。
 USER_STACK_INDIRECT_CALL_EDGES := \
 	user/src/fspquota_ucore.c:run_child=user/src/fspquota_ucore.c:leave_crash_orphan \
 	user/src/fspquota_ucore.c:run_child=user/src/fspquota_ucore.c:seed_or_verify \
@@ -255,8 +254,7 @@ $(STACK_USAGE_DIR)/user/src/workflow_teardown_race_ucore.o: \
 	-DWORKFLOW_TEARDOWN_DOMAIN_FILE_CAP=$(USER_STACK_WORKFLOW_DOMAIN_FILE_CAP) \
 	-DWORKFLOW_TEARDOWN_GLOBAL_RESERVED_CAP=$(USER_STACK_WORKFLOW_GLOBAL_RESERVED_CAP)
 
-# Measure conditional test code in the same superset profiles used by its
-# QEMU runners; a default-only build would leave those call paths unaudited.
+# 用 QEMU 运行器相同的超集配置测量条件测试代码，避免默认构建漏审调用路径。
 $(STACK_USAGE_DIR)/user/src/agentfinal_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
 	-DAGENT_CONTEXT_SYNC_TEST_PROFILE -DWAIT_ATOMIC_TEST_PROFILE
 $(STACK_USAGE_DIR)/user/lib/syscall.o: STACK_USAGE_PROFILE_CFLAGS := \

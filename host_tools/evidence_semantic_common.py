@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict parsing primitives shared by offline evidence validators."""
+"""离线证据验证器共享的严格解析原语。"""
 from __future__ import annotations
 
 import importlib.util
@@ -12,7 +12,7 @@ from types import ModuleType
 
 
 class EvidenceSemanticError(ValueError):
-    """An artifact is present and hashed, but does not prove its claim."""
+    """工件存在且已哈希，但不能证明其声明。"""
 
 
 SAFE_TAG = re.compile(r"^[A-Za-z0-9:_-]{1,128}$")

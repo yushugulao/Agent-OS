@@ -6,7 +6,7 @@
 #define AGENT_OBSERVE_AUDIT_SCOPE_LIMIT 128
 #define AGENT_AUDIT_KIND_SLOT_COUNT 6U
 
-/* 单个 scope 的有序审计索引只读快照。 */
+/* 单个作用域的有序审计索引只读快照。 */
 struct agent_observe_audit_view {
 	uint scope_id;
 	uint visible_records;
@@ -19,7 +19,7 @@ struct agent_observe_audit_view {
 	ushort timeline_slots[AGENT_OBSERVE_AUDIT_SCOPE_LIMIT];
 };
 
-/* Kernel-stack-backed state, published only while its owning thread sleeps. */
+/* 该状态驻留内核栈，仅在所属线程休眠时发布。 */
 struct agent_timeline_wait_state {
 	struct agent_timeline_filter filter;
 	uint64 thread_generation;

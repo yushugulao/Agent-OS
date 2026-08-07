@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for the shared Guest state manifest."""
+"""共享 Guest 状态清单的回归测试。"""
 
 from __future__ import annotations
 
@@ -229,8 +229,8 @@ def check_guest_state_digest_binds_inventory_and_contents() -> None:
             unsafe.symlink_to(state_dir / "rp_alpha")
         except OSError:
             return
-        # Some MSYS Python builds emulate symlink_to() by copying the target.
-        # A regular copy is not a link traversal fixture, so skip it explicitly.
+            # 某些 MSYS Python 构建通过复制目标来模拟 symlink_to()。普通副本不是
+            # 链接遍历夹具，因此应显式跳过。
         if not unsafe.is_symlink():
             return
         try:

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Stable facade for AgentOS measurement-source policy and receipts."""
+"""AgentOS 测量源策略与回执的稳定门面。"""
 from __future__ import annotations
 
 import sys as _entry_sys
 
 
 def _isolate_direct_entry_imports() -> None:
-    """Use only interpreter-owned paths for top-level import resolution."""
+    """顶层导入解析仅使用解释器自身管理的路径。"""
 
     if __name__ != "__main__":
         return

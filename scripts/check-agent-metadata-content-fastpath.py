@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that tracked content updates stay off the catalog transaction path."""
+"""验证受跟踪内容的更新不会进入 catalog 事务路径。"""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def function(text: str, name: str) -> str:
 
 
 def guarded_block(text: str, conditions: tuple[str, ...]) -> tuple[str, str]:
-    """Return the condition and body of a braced if guarding every token."""
+    """返回用于保护全部 token 的带花括号 if 条件及其主体。"""
     for match in re.finditer(r"(?<![A-Za-z0-9_])if\(", text):
         opening = match.end() - 1
         depth = 0

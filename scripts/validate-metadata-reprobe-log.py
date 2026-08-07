@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate ordering, progress, and backoff evidence for metadata re-probe."""
+"""校验元数据重探测的顺序、进度与退避证据。"""
 
 from __future__ import annotations
 

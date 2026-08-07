@@ -114,8 +114,15 @@ static int dirty_failures;
 static int lifecycle_state[32];
 static int background_requests;
 
-static int intr_save(void) { return 1; }
-static void intr_restore(int enabled) { assert(enabled == 1); }
+static int interrupts_enabled = 1;
+static int intr_save(void)
+{
+	int prior = interrupts_enabled;
+
+	interrupts_enabled = 0;
+	return prior;
+}
+static void intr_restore(int enabled) { interrupts_enabled = enabled; }
 
 static int workflow_lifecycle_key_valid(struct workflow_lifecycle_key key)
 {
@@ -143,27 +150,13 @@ static int workflow_lifecycle_retiring(struct workflow_lifecycle_key key)
 	return lifecycle_state[key.id % 32] == 3;
 }
 
-static int agent_durable_section_active_read(
-	uint kind, uint offset, void *dst, uint bytes, uint64 *generation)
+static const uchar *agent_durable_section_active_view(
+	uint kind, uint *bytes, uint64 *generation)
 {
-	uint scopes = offsetof(struct agent_observe_checkpoint, scopes);
-
-	assert(kind == AGENT_DURABLE_SECTION_OBSERVE);
-	if (offset == 0) {
-		assert(bytes <= scopes);
-		memcpy(dst, &disk, bytes);
-	} else {
-		assert(offset >= scopes);
-		uint relative = offset - scopes;
-		uint slot = relative / sizeof(struct agent_observe_checkpoint_scope);
-
-		assert(slot < AGENT_OBSERVE_CHECKPOINT_SCOPES &&
-		       relative % sizeof(struct agent_observe_checkpoint_scope) == 0 &&
-		       bytes <= offsetof(struct agent_observe_checkpoint_scope, records));
-		memcpy(dst, &disk.scopes[slot], bytes);
-	}
+	assert(kind == AGENT_DURABLE_SECTION_OBSERVE && !interrupts_enabled);
+	*bytes = sizeof(disk);
 	*generation = active_generation;
-	return 0;
+	return (const uchar *)&disk;
 }
 
 static uint64 agent_durable_section_mark_dirty_evidence(
@@ -230,7 +223,7 @@ static void set_disk_slot(uint slot, uint flags, uint scope_id,
 	scope->scope_id = scope_id;
 	scope->lifecycle_id = lifecycle.id;
 	scope->lifecycle_generation = lifecycle.generation;
-	/* A pure admission-drop scope exercises the header-only capacity path. */
+	/* 纯准入丢弃 scope 覆盖仅依赖头部的容量路径。 */
 	if (flags != 0) {
 		scope->total_records = 1;
 		scope->admission_drops = 1;

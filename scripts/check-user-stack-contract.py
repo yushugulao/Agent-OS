@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the shared user stack and exec argv layout contract."""
+"""验证共享用户栈与 exec argv 布局契约。"""
 
 import argparse
 import re

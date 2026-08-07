@@ -114,7 +114,7 @@ static inline void intr_off()
 	w_sstatus(r_sstatus() & ~SSTATUS_SIE);
 }
 
-/* 在调用者声明的安全点投递已挂起 IRQ，随后立即恢复关中断状态。 */
+/* 在调用者声明的安全点投递待处理中断，随后立即恢复关中断状态。 */
 static inline void intr_delivery_window()
 {
 	intr_on();
@@ -134,7 +134,7 @@ static inline int intr_save()
 	uint64 status = r_sstatus();
 	int enabled = (status & SSTATUS_SIE) != 0;
 
-	/* Nested critical sections need no second CSR write. */
+	/* 嵌套临界区无需再次写控制状态寄存器。 */
 	if (enabled)
 		w_sstatus(status & ~SSTATUS_SIE);
 	return enabled;
@@ -177,7 +177,7 @@ static inline void sfence_vma_addr(uint64 va)
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // 1 -> user can access
-#define PTE_COW (1L << 8) // RSW: writable after a private copy
+#define PTE_COW (1L << 8) // 监管软件位：生成私有副本后可写
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Inspect and exactly diff AgentOS filesystem allocator state.
+"""检查并精确比较 AgentOS 文件系统分配器状态。
 
-This is deliberately a host-only tool.  It reads the durable bitmap, owner
-map, inode table, and root reachability without mounting or repairing the
-image, which makes it suitable for inspecting a power-cut checkpoint.
+本工具刻意仅在 Host 运行。它无需挂载或修复镜像即可读取持久位图、所有者映射、
+inode 表与根目录可达性，因此适合检查断电检查点。
 """
 
 from __future__ import annotations
@@ -139,7 +138,7 @@ INODE_CHECKPOINTS: dict[tuple[str, str, str], tuple[str, int]] = {
 
 
 def _build_case_expectations() -> dict[tuple[str, str, str], dict[str, object]]:
-    """Build the closed 36-case oracle consumed by verification and tests."""
+    """构建供校验与测试使用的封闭 36 用例预期集。"""
     table: dict[tuple[str, str, str], dict[str, object]] = {}
     for operation, phases in SUPPORTED_PHASES.items():
         for phase in phases:
@@ -255,8 +254,8 @@ def canonical_owner_entry(
                 f"block {block}: LIVE_WORKFLOW owner has a clear bitmap bit"
             )
     elif state in ("ALLOCATING", "FREEING"):
-        # ALLOCATING and FREEING intentionally admit either bitmap value.  The
-        # bit identifies which half of the transition survived a power cut.
+        # ALLOCATING 与 FREEING 有意允许两种位图值；该位标识状态转换的哪一半
+        # 在断电后留存。
         if payload == 0:
             violations.append(f"block {block}: {state} has a zero payload")
     return entry, violations
@@ -1446,7 +1445,7 @@ def _assert_unaffected_objects(
             mutable_blocks.update(blocks)
             if name == target_name:
                 identity_mutable_blocks.update(blocks)
-    # Root directory contents encode namespace changes and are expected to move.
+    # 根目录内容编码命名空间变化，发生变动符合预期。
     mutable_blocks.update(map(int, dict(before["inode_blocks"])[str(ROOT_INODE)]))
     mutable_blocks.update(map(int, dict(after["inode_blocks"])[str(ROOT_INODE)]))
 
@@ -1460,9 +1459,8 @@ def _assert_unaffected_objects(
             raise ImageError(f"unaffected inode {inum} changed")
         inode = dict(before_inodes[key])
         if _is_kernel_metadata_cow_inode(name, inode):
-            # Kernel-private journals are execution state, not allocator-test
-            # payload. Their identity and fixed block map remain protected,
-            # while canonical validation checks every resulting image.
+            # 内核私有日志属于执行状态，而非分配器测试载荷。其身份与固定块映射
+            # 仍受保护，规范校验则检查每个结果镜像。
             mutable_blocks.update(map(int, dict(before["inode_blocks"])[key]))
             mutable_blocks.update(map(int, dict(after["inode_blocks"])[key]))
             continue
@@ -1500,7 +1498,7 @@ def _verify_case_snapshots(
     phase: str,
     action: str,
 ) -> dict[str, object]:
-    """Verify semantic snapshots; raw-image callers must use verify_case_raw."""
+    """校验语义快照；原始镜像调用者必须使用 verify_case_raw。"""
     for label, snapshot in (
         ("before", before),
         ("fault", fault),
@@ -2061,7 +2059,7 @@ def _inode_payload_from_raw(
 def _canonical_metadata_text_fields(
     fields: dict[str, bytes], label: str, index: int
 ) -> dict[str, bytes]:
-    """Decode the fixed-width disk strings into their C-visible identity."""
+    """把定宽磁盘字符串解码为 C 代码可见的身份。"""
 
     canonical: dict[str, bytes] = {}
     for name, field in fields.items():
@@ -2191,7 +2189,7 @@ def _validate_agent_metadata_records(
                 "dev": dev,
                 "inum": inum,
                 "incarnation": incarnation,
-                # Bind the unpacked ABI even when it has no independent rule.
+                # 即使没有独立规则，也要绑定已解包的 ABI。
                 "dependency_mask": dependency_mask,
                 "updated_tick": updated_tick,
                 "size": size,
@@ -2500,9 +2498,8 @@ def _raw_case_allowlist(
         }
     )
 
-    # Reboots legitimately advance fixed-layout kernel journals. Keep their
-    # inode identity and block map immutable, but declare their data arena as
-    # execution state rather than pretending it is allocator-test payload.
+    # 重启会合法推进固定布局的内核日志。其 inode 身份与块映射保持不可变，
+    # 但其数据区应声明为执行状态，而不能伪装成分配器测试载荷。
     before_names = {str(k): int(v) for k, v in dict(before["root_names"]).items()}
     for name in AGENT_META_STORE_NAMES:
         if name not in before_names:
@@ -2634,7 +2631,7 @@ def verify_case_raw(
     action: str,
     require_metadata_cow: bool = False,
 ) -> dict[str, object]:
-    """Verify a case from raw images and bind every accepted byte transition."""
+    """从原始镜像校验用例，并绑定每个获准的字节变化。"""
     before = read_snapshot(Path(before_path))
     fault = read_snapshot(Path(fault_path))
     reboot = read_snapshot(Path(reboot_path))

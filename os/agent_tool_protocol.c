@@ -78,7 +78,7 @@ static const unsigned short param_key_offsets[] = {
 #undef PARAM_KEY_OFFSET
 
 /*
- * 参数规则采用 CSR：offsets 标出每个工具在 rules 中的连续区间。
+ * 参数规则采用压缩稀疏行布局：偏移表标出每个工具的连续规则区间。
  * 键名改存一字节索引，属性压入一字节，未声明参数的工具不再占空槽。
  */
 struct param_rule {

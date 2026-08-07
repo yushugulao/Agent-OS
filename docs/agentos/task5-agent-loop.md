@@ -140,7 +140,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 grant/revoke 支持按事件位图增量更新并保持幂等。revoke 只阻止后续事件入队，已经通过授权并进入 FIFO 的事件仍可消费。PID 只用于当次定位；内核在同一关中断临界区内解析两个 PID、核对 stable control id、控制关系并更新路由。source 退出会从所有目标删除对应来源项，target 退出会清空自身路由表，因此 PID 或 PCB 槽复用不会继承旧授权。
 
-`agent_wake()`、`send_message`、`llm_request` 和 `llm_response` 都经过“解析存活对象 -> same-scope -> route -> watch -> quota -> 入队”。只有成功入队后才更新 mailbox。
+`agent_wake()`、`send_message`、`llm_request` 和 `llm_response` 都经过“解析存活对象 -> same-scope -> route -> watch -> quota -> 入队”，拒绝路径不发布事件。
 
 ## 唤醒：Wake
 
@@ -335,7 +335,7 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 
 `AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送 MESSAGE 事件。消息事件用于多 Agent 协作。`agent_wake()` 是 Agent-only syscall，调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`；普通进程直接调用会返回 `-1`。MESSAGE 是该用户态 syscall 唯一允许的事件类型：即使调用者是 Agent 或 orchestrator，也不能通过它把用户提供的类型伪装成 `FILE_STATUS`、`TIMER`、`LLM_DONE` 等系统事件。
 
-能力检查之后还必须 source/target 同 active workflow scope并命中 route；target consent、相同角色/controller/resource domain 都不能越过 scope。只有成功入队才更新 mailbox。
+能力检查之后还必须 source/target 同 active workflow scope并命中 route；target consent、相同角色/controller/resource domain 都不能越过 scope。事件只在全部检查成功后入队。
 
 `labdemo_ucore` 中两段消息：
 

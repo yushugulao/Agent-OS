@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify one live AgentOS Guest and render its measured showcase."""
+"""验证一个实时 AgentOS Guest，并渲染其测量展示。"""
 
 from __future__ import annotations
 
@@ -244,7 +244,7 @@ _GUEST_FAILURE_CLASSIFIER = _load_guest_failure_classifier()
 
 
 class ContestDemoError(RuntimeError):
-    """The live Guest record is incomplete, inconsistent, or untrusted."""
+    """实时 Guest 记录不完整、不一致或不可信。"""
 
 
 def _run_git(root: Path, *args: str) -> str:

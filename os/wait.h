@@ -29,10 +29,10 @@ enum wait_reason {
 #define WAIT_QUEUE_OK          0
 #define WAIT_QUEUE_ERROR      -1
 #define WAIT_QUEUE_INTERRUPTED -2
-/* A normal wake won publication, but teardown was visible before resume. */
+/* 正常唤醒已赢得发布，但恢复执行前已观察到拆除。 */
 #define WAIT_QUEUE_WOKEN_INTERRUPTED -3
 
-// Queue identity is the wait channel; a sleeping thread belongs to one queue.
+// 队列身份即等待通道；休眠线程只属于一个队列。
 struct wait_queue {
 	struct thread *head;
 	struct thread *tail;
@@ -42,10 +42,9 @@ struct wait_queue {
 	/* 选中等待者时仍处于关中断区间，在此捕获其稳定身份。 */
 void wait_queue_init(struct wait_queue *, enum wait_reason);
 /*
- * wait_queue_sleep() owns its interrupt transition and is only suitable when
- * no shared predicate must stay atomic with queue publication.  The *_irq
- * entry points require interrupts to be disabled by the caller; they preserve
- * that outer state across sleep so predicate-check-to-enqueue is indivisible.
+ * wait_queue_sleep() 自行管理中断转换，仅适用于共享谓词无需与队列发布保持
+ * 原子的场景。*_irq 入口要求调用方已关中断，并跨休眠保持该外层状态，
+ * 使谓词检查到入队不可分割。
  */
 int wait_queue_sleep(struct wait_queue *);
 int wait_queue_sleep_irq(struct wait_queue *);

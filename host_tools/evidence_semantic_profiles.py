@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Profile validators for offline final-evidence artifacts."""
+"""离线最终证据工件的配置验证器。"""
 from __future__ import annotations
 
 import csv

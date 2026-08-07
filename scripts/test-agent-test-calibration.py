@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for commit-bound Agent duration calibration evidence."""
+"""绑定提交的 Agent 时长校准证据回归测试。"""
 
 import copy
 import gzip

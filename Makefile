@@ -84,13 +84,12 @@ endif
 ifeq ($(filter $(AGENTOS_QEMU_JOBS),$(AGENTOS_QEMU_JOB_VALUES)),)
 $(error AGENTOS_QEMU_JOBS must be an integer between 1 and 8)
 endif
-# Reuse an outer GNU make jobserver when one exists.  A serial top-level make
-# gives each independent recursive build the configured bounded worker pool.
+# 优先复用外层 GNU make jobserver；串行顶层 make 为各独立递归构建
+# 分配配置好的有界工作池。
 AGENTOS_SUBMAKE_JOBS = $(if $(filter -j% --jobs=% --jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS)),,-j$(AGENTOS_BUILD_JOBS))
 GDB = $(TOOLPREFIX)gdb
-# Keep the variables above as raw tool identities.  Recipes and probes must
-# quote the complete executable after suffix expansion so prefixes and host
-# tool paths containing spaces remain a single shell word.
+# 上述变量保留原始工具身份；配方和探针须在拼接后缀后整体引用，
+# 确保带空格的前缀和宿主工具路径仍是一个 shell 参数。
 shell_quote = '$(subst ','"'"',$(1))'
 CC_CMD = $(call shell_quote,$(CC))
 AS_CMD = $(call shell_quote,$(AS))
@@ -105,7 +104,7 @@ CP = cp
 BUILDDIR = build
 C_SRCS = $(wildcard $K/*.c)
 INACTIVE_PROFILE_C_SRCS :=
-# Crash-target attestation is a profile-only owner, not a production object.
+# 崩溃目标证明仅属于测试配置，不进入生产对象。
 ifeq ($(strip $(AGENT_METADATA_CRASH_PHASE)$(AGENT_METADATA_EIO_PHASE)),)
 C_SRCS := $(filter-out $K/agent_metadata_test.c,$(C_SRCS))
 INACTIVE_PROFILE_C_SRCS += $K/agent_metadata_test.c
@@ -165,7 +164,7 @@ KSTACK_GUARD_SIZE_BYTES ?= 4096
 KSTACK_FRAME_BUDGET ?= $(KSTACK_GUARD_SIZE_BYTES)
 KSTACK_SAFETY_MARGIN ?= 4096
 KERNELVEC_FRAME_SIZE_BYTES ?= 256
-# swtch changes stacks; usertrapret's indirect jump is the stackless trampoline.
+# swtch 会切换栈；usertrapret 的间接跳转是无栈蹦床。
 KSTACK_STACK_BOUNDARIES ?= swtch
 KSTACK_INDIRECT_CALLERS ?= usertrapret
 KSTACK_INDIRECT_CALL_EDGES ?= \
@@ -179,7 +178,7 @@ KSTACK_INDIRECT_CALL_EDGES ?= \
 	agent_durable_section_persist_scope=agent_meta_durable_persist_scope \
 	agent_durable_section_mirror_scope=agent_observe_store_replicated_scope \
 	agent_identity_lease_progress=agent_observe_lease_persist_bridge
-# Sv39 walkers visit at most three page-table levels.
+# Sv39 遍历最多访问三级页表。
 KSTACK_RECURSION_BOUNDS ?= freewalk=3 uvm_prune_empty_walk=3
 KSTACK_POLICY_ARGS = \
 	$(foreach fn,$(KSTACK_STACK_BOUNDARIES),--stack-boundary $(fn)) \
@@ -436,8 +435,8 @@ endif
 
 override CFLAGS += $(KSTACK_REQUIRED_CFLAGS)
 
-# These bounded control/persistence owners favor size after ownership splits.
-# Keep this allowlist exact; the module checker rejects any expansion.
+# 控制与持久化所有者拆分后优先按体积优化；白名单必须精确，
+# 模块检查器会拒绝任何扩张。
 AGENT_SIZE_OPTIMIZED_MODULES := agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store
 AGENT_SIZE_OPTIMIZED_OBJS := $(addprefix $(BUILDDIR)/$(K)/,$(addsuffix .o,$(AGENT_SIZE_OPTIMIZED_MODULES)))
 $(AGENT_SIZE_OPTIMIZED_OBJS): private CFLAGS += -Os
@@ -691,6 +690,7 @@ override KERNEL_BUDGET_STATIC_CHECKS := \
 override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-check-kernel-budgets.py \
 	scripts/test-agent-file-generation-index.py \
+	scripts/test-agent-file-version-sparse.py \
 	scripts/test-check-user-stack-usage.py \
 	scripts/test-check-user-stack-contract.py \
 	scripts/test-check-teardown-protocol.py \
@@ -861,8 +861,8 @@ override LOCAL_HOST_SELFTESTS := \
 	$(filter-out $(HOST_CONTRACT_TESTS),$(EVIDENCE_CAPTURE_TESTS)) \
 	$(filter-out $(HOST_CONTRACT_TESTS) $(EVIDENCE_CAPTURE_TESTS),$(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS))
 
-# Expensive evidence mutation suites remain mandatory in local-check/full-verify,
-# but do not make every development checkpoint wait for package-scale replay.
+# 高成本证据变异套件仍是 local-check/full-verify 的必选项，
+# 但普通开发检查点不必等待整包重放。
 override STAGE_EXPENSIVE_HOST_SELFTESTS := \
 	$(EVIDENCE_CAPTURE_TESTS) \
 	scripts/test-fs-allocator-evidence.py \
@@ -940,15 +940,14 @@ $(F)/fs-copy.img: $(F)/fs.img
 run: build/kernel $(F)/fs-copy.img
 	$(QEMU_CMD) $(QEMUOPTS)
 
-# Start only already-built artifacts. Host-side observers use this target so
-# compiler output can never be interpreted as guest runtime output.
+# 只启动已构建产物；宿主观测器使用此目标，避免把编译输出误判为 Guest 日志。
 run-prebuilt:
 	@test -f build/kernel || { echo "missing prebuilt kernel" >&2; exit 1; }
 	@test -f $(F)/fs-copy.img || { echo "missing prebuilt filesystem image" >&2; exit 1; }
 	$(QEMU_CMD) $(QEMUOPTS)
 
-# Reboot the current writable disk explicitly.  Normal `run` always installs
-# the freshly built userspace image so code and manifest updates cannot go stale.
+# 显式重启当前可写磁盘；普通 `run` 始终安装新构建的用户镜像，
+# 防止代码或清单滞后。
 run-persist: build/kernel
 	@if [ ! -f "$(F)/fs-copy.img" ]; then $(MAKE) $(AGENTOS_SUBMAKE_JOBS) $(F)/fs-copy.img; fi
 	$(QEMU_CMD) $(QEMUOPTS)
@@ -1049,8 +1048,8 @@ agentos-test:
 			echo "[agentos-test] results=$$output"; \
 		fi
 
-# Two isolated Guest boots: challenge-bound Task 1-5 plus the path/index
-# comparison, then the short Task 6 workflow. No cloud API or prior result is read.
+# 两次隔离 Guest 启动：先执行绑定挑战的任务 1-5 与路径/索引对照，
+# 再执行短任务 6；不读取云端 API 或历史结果。
 contest-demo:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		QEMU=$(call shell_quote,$(QEMU)) \
@@ -1138,7 +1137,7 @@ full-verify:
 		HOST_CC=$(call shell_quote,$(HOST_CC)) \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-full-verification.sh
 
-# Host evaluation contracts join local-check; QEMU campaigns run locally.
+# 宿主评价契约纳入 local-check；QEMU 活动在本地执行。
 evaluation-doctor:
 	AGENT_TEST_DURATION_PROFILE=$(call shell_quote,$(AGENT_TEST_DURATION_PROFILE)) \
 		HOST_CC=$(call shell_quote,$(HOST_CC)) \
@@ -1192,8 +1191,7 @@ evaluation-package-verify:
 compatibility-overhead-selftest:
 	$(PYTHON_CMD) host_tools/test_compatibility_overhead.py
 
-# The producer is sealed against the collected formal micro campaign. Its
-# per-metric compatibility-tax results remain separate from AgentOS scores.
+# 生产器绑定已采集的正式微型活动；逐指标兼容开销与 AgentOS 得分分开统计。
 compatibility-overhead-run:
 	@test -n "$(COMPATIBILITY_WORK_DIR)" || { \
 		echo "COMPATIBILITY_WORK_DIR is required" >&2; exit 2; \
@@ -1215,7 +1213,7 @@ plain-clean:
 
 dual-clean: clean plain-clean
 
-# Preview or remove only ignored, allowlisted build artifacts.
+# 只预览或删除已忽略且列入白名单的构建产物。
 clean-workspace-dry-run:
 	git clean -ndX -- $(WORKSPACE_GENERATED_PATHS)
 

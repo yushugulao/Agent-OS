@@ -25,7 +25,7 @@ SECTIONS {
     .data : {
         *(.data .data.*)
         *(.sdata .sdata.*)
-	/* Materialize trailing BSS in the flat binary consumed by uCore. */
+	/* 把末尾 BSS 实体化到 uCore 使用的平坦二进制中。 */
 	BYTE(0)
     } :data
 

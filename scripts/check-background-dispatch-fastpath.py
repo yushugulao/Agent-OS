@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep deferred maintenance behind a cheap syscall-return pending edge."""
+"""将延迟维护限制在低成本的 syscall 返回待处理边之后。"""
 
 from __future__ import annotations
 
@@ -66,6 +66,13 @@ def check(root: Path) -> None:
     fs = compact(root / "os/fs.c")
     vfs = compact(root / "os/vfs_security.c")
     core = compact(root / "os/agent_core.c")
+    background = compact(root / "os/agent_background.c")
+
+    require(
+        function_body(background, "agent_background_work_pending"),
+        "agent_identity_lease_maintenance_pending()",
+        "identity lease renewal escaped the unified syscall-return gate",
+    )
 
     if syscall.count("agent_background_checkpoint();") != 1:
         raise ValueError("syscall path has an unbounded maintenance trigger")

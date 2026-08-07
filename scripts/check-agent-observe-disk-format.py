@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the observation disk-layout probe and check its versioned contract."""
+"""编译观察磁盘布局探针并检查其版本化契约。"""
 
 from __future__ import annotations
 

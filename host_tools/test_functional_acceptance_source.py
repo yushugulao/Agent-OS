@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation gates for Task 1-5 syscall-to-receipt provenance."""
+"""任务 1-5 从系统调用到回执来源的变异门禁。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -97,16 +97,21 @@ def _add_reachable_helper(
 
 def main() -> int:
     source = SOURCE.read_text(encoding="utf-8")
-    # The sole positive fixture is the production Guest source.  It executes
-    # the real syscalls; this test never fabricates a formulaic passing trace.
+    # 唯一正向夹具是生产 Guest 源码，它会执行真实系统调用；本测试绝不伪造
+    # 套公式式的通过轨迹。
     contract.validate_functional_acceptance_source_text(source)
     contract.validate_functional_acceptance_source_text(
         source.replace(
             "static void run_functional_task1(void)",
-            "/* formatting-only review note */\n"
+            "/* 中文注释不改变可执行 token。 */\n"
             "static void run_functional_task1(void)",
             1,
         )
+    )
+    _assert_rejected(
+        source.replace('"task1 agent info"', '"任务一 agent info"', 1),
+        "non-ASCII executable string",
+        refresh_digests=False,
     )
 
     forged_helper = (
@@ -354,8 +359,7 @@ def main() -> int:
     }
     for label, mutation in mutations.items():
         _assert_rejected(mutation, label, refresh_digests=False)
-        # Recomputing a token digest is not sufficient to bypass the explicit
-        # syscall-count, slot provenance, sink, and execution-order gates.
+        # 重新计算词元摘要不足以绕过系统调用次数、槽位来源、汇点和顺序门禁。
         _assert_rejected(mutation, label, refresh_digests=True)
 
     print(f"test_functional_acceptance_source: passed ({len(mutations)} mutations)")

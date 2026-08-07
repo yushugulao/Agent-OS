@@ -530,7 +530,7 @@ core_exec="$(sed -n '/^int agent_core_exec_public_commit(/,/^}/p' \
 	"${core_source}")"
 core_tick="$(sed -n '/^void agent_core_tick(/,/^}/p' \
 	"${core_source}")"
-owner_fields='->(agent_ctx_|context_path_|latest_response_offset|records_offset|agent_current_|agent_context_chain_hash|mail_|agent_mailbox|agent_watch_|agent_ipc_|agent_event_|agent_wait_|heartbeat_interval|agent_last_heartbeat_tick|loop_state|agent_sched_|agent_timeline_|agent_observe_|agent_provenance_edges)'
+owner_fields='->(agent_ctx_|context_path_|latest_response_offset|records_offset|agent_current_|agent_context_chain_hash|agent_mailbox|agent_watch_|agent_ipc_|agent_event_|agent_wait_|heartbeat_interval|agent_last_heartbeat_tick|loop_state|agent_sched_|agent_timeline_|agent_observe_|agent_provenance_edges)'
 for body_name in core_clear core_make core_exec core_tick; do
 	body="$(eval "printf '%s' \"\${${body_name}}\"")"
 	[ -n "${body}" ] || fail "missing Agent core owner boundary: ${body_name}"
@@ -553,11 +553,11 @@ for operation in 'agent_scope_controller_departing(p)' \
 done
 if [ "$(printf '%s\n' "${core_exec}" | \
 	grep -c -F 'agent_ipc_exec_public(p)')" -ne 2 ]; then
-	fail "Agent exec must rotate the PUBLIC endpoint in both identity branches"
+	fail "Agent exec must reset IPC state in both identity branches"
 fi
 if printf '%s\n' "${core_exec}" | \
 	grep -q -F 'agent_ipc_proc_teardown(p)'; then
-	fail "Agent exec incorrectly destroyed the live PUBLIC endpoint"
+	fail "Agent exec incorrectly tore down live IPC state"
 fi
 for operation in 'agent_context_proc_reset(p)' \
 	'agent_observe_proc_reset(p)' 'agent_ipc_proc_teardown(p)'; do
@@ -568,7 +568,7 @@ if [ "$(printf '%s\n' "${core_clear}" | \
 	grep -c -F 'agent_ipc_proc_teardown(p)')" -ne 1 ] || \
 	printf '%s\n' "${core_clear}" | \
 	grep -q -F 'agent_ipc_exec_public(p)'; then
-	fail "Agent core clear must destroy, not rotate, its IPC endpoint"
+	fail "Agent core clear must tear down rather than reset IPC state"
 fi
 for operation in 'agent_context_proc_activate(p)' \
 	'agent_ipc_proc_activate(p)' 'agent_observe_proc_init('; do

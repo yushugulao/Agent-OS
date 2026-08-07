@@ -8,9 +8,8 @@
 #include "proc.h"
 
 /*
- * Private contracts between AgentOS implementation modules.  No writable
- * subsystem state is exported: each owner exposes operations over proc-local
- * state or read-only policy records.
+ * AgentOS 实现模块间的私有契约。不导出可写子系统状态；每个所有者
+ * 仅提供针对进程私有状态或只读策略记录的操作。
  */
 struct agent_role_policy {
 	int role;
@@ -40,14 +39,7 @@ struct agent_ipc_sched_snapshot {
 	int loop_state;
 };
 
-struct agent_legacy_read_receipt {
-	uint64 endpoint_generation;
-	uint64 token;
-	int pid;
-	int slot;
-};
-
-/* Thin facade targets implemented by the core owner module. */
+/* 核心所有者模块实现的轻量封装入口。 */
 void agent_core_init(void);
 void agent_core_clear_metadata(struct proc *);
 void agent_core_proc_prepare(struct proc *);
@@ -57,10 +49,10 @@ void agent_core_storage_init(void);
 void agent_core_tick(void);
 void agent_free_proc_context(struct proc *);
 
-/* Edge-triggered publication into the schedulable background coordinator. */
+/* 以边沿触发方式发布给可调度后台协调器。 */
 int agent_background_take(void);
 
-/* Identity and authorization policy. */
+/* 身份与授权策略。 */
 void agent_identity_init(void);
 int agent_identity_alloc_id(void);
 void agent_identity_id_floor(uint);
@@ -87,8 +79,7 @@ int agent_identity_controller_depart(struct proc *, int,
 int agent_identity_controller_close_commit(
 	struct proc *, const struct agent_controller_departure *);
 
-/* Workflow-controller lifetime and generation-safe control identities. */
-void agent_ipc_init(void);
+/* 工作流控制器生命周期与代际安全控制身份。 */
 void agent_ipc_remove_source(uint64);
 void agent_ipc_proc_prepare(struct proc *);
 void agent_ipc_proc_reset(struct proc *);
@@ -99,13 +90,6 @@ void agent_ipc_thread_runtime_transition(struct thread *, int);
 void agent_ipc_process_image_install_locked(struct proc *);
 void agent_ipc_thread_sched_snapshot(struct thread *,
 				     struct agent_ipc_sched_snapshot *);
-int agent_ipc_legacy_public_send(struct proc *, int, char *, int);
-int agent_ipc_legacy_public_read_begin(struct proc *, char *, int,
-				       struct agent_legacy_read_receipt *);
-int agent_ipc_legacy_public_read_finish(
-	struct proc *, const struct agent_legacy_read_receipt *, int);
-int agent_ipc_legacy_mailbox_empty(const struct proc *);
-void agent_ipc_legacy_fill_info(struct proc *, struct agent_info *);
 int agent_ipc_watch_set(struct proc *, int, char *);
 int agent_ipc_deliver_pid(int, struct proc *, int, uint64, uint64, char *,
 			  int, int *);
@@ -114,7 +98,7 @@ int agent_ipc_mailbox_take(struct proc *, int *, char *, int);
 int agent_ipc_heartbeat_configure(struct proc *, uint64, uint64 *);
 void agent_ipc_tick_proc(struct proc *, uint64);
 
-/* Metadata transaction gate. */
+/* 元数据事务门锁。 */
 void agent_metadata_init(void);
 void *agent_metadata_txn_token(void);
 int agent_metadata_txn_lock(int);
@@ -141,7 +125,7 @@ int agent_metadata_reload_is_current(void);
 int agent_metadata_reload_claim(void);
 void agent_metadata_reload_release(void);
 
-/* Authoritative file-object catalog and its durable metadata image. */
+/* 权威文件对象目录及其持久元数据镜像。 */
 void agent_metadata_objects_init(void);
 void agent_metadata_storage_init(void);
 int agent_metadata_durable_status(void);
@@ -153,7 +137,7 @@ int agent_metadata_tool_enter(int);
 void agent_metadata_tool_exit(int);
 int agent_metadata_execute_tool(struct proc *, struct agent_op *,
 				struct agent_result *);
-/* Observation identities and bounded-query scheduling. */
+/* 观测身份与有界查询调度。 */
 void agent_observe_init(void);
 void agent_observe_proc_init(struct proc *, int, uint64);
 void agent_observe_proc_reset(struct proc *);

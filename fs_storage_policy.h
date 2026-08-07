@@ -1,9 +1,8 @@
 #ifndef FS_STORAGE_POLICY_H
 #define FS_STORAGE_POLICY_H
 
-// Storage guarantees are shared by mkfs and the kernel. The configured
-// reserve is an upper target; a completed image may lower it only down to the
-// explicit per-workflow minimum.
+// mkfs 与内核共享存储保障。配置保留量是上限目标，完整镜像只能把它
+// 降到显式的每 workflow 最小值。
 #define FS_WORKFLOW_SCOPE_SLOTS 4U
 #define FS_WORKFLOW_MAX_FREE_NUMERATOR 3U
 #define FS_WORKFLOW_MAX_FREE_DENOMINATOR 4U

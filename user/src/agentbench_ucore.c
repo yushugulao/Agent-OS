@@ -22,7 +22,7 @@ static struct agent_context_record records[AGENT_CONTEXT_MAX_RECORDS];
 static struct agent_file_meta bench_meta;
 static struct agent_file_query bench_file_query_arg;
 
-/* Serialized benchmark phases can share their large syscall buffers. */
+/* 串行基准阶段复用大块系统调用缓冲区。 */
 union bench_transient_scratch {
 	struct agent_info info;
 	struct agent_event event;

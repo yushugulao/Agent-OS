@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the recursive formal Python runtime."""
+"""递归正式 Python 运行时的回归测试。"""
 
 from __future__ import annotations
 
@@ -173,7 +173,7 @@ class FormalPythonRuntimeTests(unittest.TestCase):
             outer_commit = subprocess.check_output(
                 [str(git), "rev-parse", "HEAD"], cwd=outer_repo, text=True
             ).strip()
-            # Recreate the outer runtime so its authenticated dispatcher commit matches.
+            # 重建外层运行时，使其认证的调度器提交保持匹配。
             refreshed_root = outer_base / "refreshed"; refreshed_root.mkdir()
             formal = runtime_module.create_formal_python_runtime(
                 root=refreshed_root, real_python=Path(BACKING_PYTHON), shell=bash,

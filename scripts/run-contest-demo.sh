@@ -33,7 +33,7 @@ if [[ -L "${OUTPUT_DIR}" ]]; then
 	exit 2
 fi
 
-# The report is a source-bound measurement artifact, not a worktree preview.
+# 报告是绑定源码的测量产物，而非 worktree 预览。
 commit="$("${PYTHON_BIN}" -I -S scripts/trusted-python-entry.py \
 	host_tools/contest_demo.py identity --root .)"
 run_id="$("${PYTHON_BIN}" -I -S -c \

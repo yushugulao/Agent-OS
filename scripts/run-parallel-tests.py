@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run independent Python contract tests concurrently with ordered output."""
+"""并发运行独立 Python 契约测试，并按顺序输出结果。"""
 
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ def validate_exclusive_tests(
 def execution_batches(
     tests: list[Path], exclusive: frozenset[Path]
 ) -> tuple[tuple[int, ...], ...]:
-    """Keep exclusive tests as inventory-ordered barriers between shared batches."""
+    """让独占测试按清单顺序成为共享批次之间的屏障。"""
     batches: list[tuple[int, ...]] = []
     shared: list[int] = []
     for index, test in enumerate(tests):
@@ -396,8 +396,8 @@ def main() -> int:
     job_limit = min(args.jobs, len(tests))
     if build_budget is not None:
         job_limit = min(job_limit, build_budget)
-    # Child tests inherit AGENTOS_TEST_JOBS=1. Honor that budget when a test
-    # starts another runner instead of recursively opening a full-width pool.
+    # 子测试继承 AGENTOS_TEST_JOBS=1。测试再启动 runner 时必须遵守该预算，
+    # 不得递归开启满宽度进程池。
     if test_budget is not None:
         job_limit = min(job_limit, test_budget)
     batches = execution_batches(tests, exclusive)

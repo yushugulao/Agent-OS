@@ -3,9 +3,8 @@
 #include "defs.h"
 
 /*
- * Stable AgentOS kernel facade.  Subsystem state and policy live in the
- * implementation modules; this file keeps the historical kernel entry points
- * stable for proc, trap, filesystem, and scheduler integration.
+ * AgentOS 内核稳定门面。子系统状态与策略由各实现模块维护；本文件保持
+ * 面向进程、陷阱、文件系统和调度器的既有内核入口稳定。
  */
 void
 agentinit(void)

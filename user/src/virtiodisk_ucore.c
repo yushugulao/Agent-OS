@@ -185,7 +185,7 @@ static void test_full_ring_reclaim(void)
 		full_ring_result[i] = 99;
 		tids[i] = -1;
 	}
-	/* read3 + read3 + flush2 consumes the complete eight-entry ring. */
+	/* 两组三次读取加两次刷新，恰好占满八项环形队列。 */
 	for (int i = 0; i < 3; i++) {
 		tids[i] = thread_create(full_ring_worker, (void *)(long)i);
 		check(tids[i] > 0, "create full-ring owner");

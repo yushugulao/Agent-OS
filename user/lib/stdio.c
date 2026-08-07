@@ -34,7 +34,7 @@ int __stdio_process_spawn_prepare(void)
 int __stdio_process_spawn_finish(int locked, int result)
 {
 	if (result == 0) {
-		/* A child has a new kernel synchronization namespace. */
+		/* 子进程使用新的内核同步命名空间。 */
 		buffer_lock = -1;
 		buffer_lock_enabled = 0;
 		return 0;
@@ -44,7 +44,7 @@ int __stdio_process_spawn_finish(int locked, int result)
 	return result;
 }
 
-// Returns the bytes drained; an unwritten suffix remains buffered on failure.
+// 返回已排空字节数；失败时未写后缀仍留在缓冲区。
 int __write_buffer()
 {
 	int written = 0;
@@ -64,7 +64,7 @@ int __write_buffer()
 	return written;
 }
 
-// Discard any buffered output.
+// 丢弃缓冲输出。
 void __clear_buffer()
 {
 	buffer_len = 0;
@@ -188,7 +188,7 @@ static void printptr(uint64 x)
 	out(stdout, buf, i);
 }
 
-// Integer formats support the default, l, and ll widths.
+// 整数格式支持默认、l 和 ll 宽度。
 void printf(const char *fmt, ...)
 {
 	va_list ap;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the bounded scatter-copyout VM snapshot contract."""
+"""检查有界分散 copyout 的 VM 快照契约。"""
 
 from __future__ import annotations
 

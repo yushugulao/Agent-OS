@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Own and atomically advance Observe recovery boot control."""
+"""持有并原子推进 Observe 恢复启动控制状态。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ CUT_LINE = re.compile(
 
 
 class PhaseControlError(ValueError):
-    """The image or observed transition violates the phase-control ABI."""
+    """镜像或观测到的转换违反阶段控制 ABI。"""
 
 
 @dataclass(frozen=True)

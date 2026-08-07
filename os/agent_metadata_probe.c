@@ -134,10 +134,7 @@ static int agent_metadata_probe_bind(const struct agent_metadata_probe_key *key)
 		     key->workflow_lifecycle_generation))
 		agent_metadata_probe_reset();
 
-	/*
-	 * bank 游标和摘要只绑定物理 store。兼容的普通 scope 直接接管，
-	 * 并用新 epoch 隔离后续的 scope-specific catalog plan。
-	 */
+	/* 游标和摘要仅绑定物理存储；普通作用域接管后以新纪元隔离目录规划。 */
 	reuse = probe.epoch != 0 || probe.cache_ready;
 	probe.key = *key;
 	agent_metadata_probe_new_epoch(reuse);

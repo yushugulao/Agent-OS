@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile both Agent UAPI views and require identical public layouts."""
+"""编译两种 Agent UAPI 视图并要求公共布局完全一致。"""
 
 import argparse
 import json

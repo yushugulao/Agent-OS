@@ -152,8 +152,8 @@ route_formal_domain() {
 				echo "[evaluation] invalid MSYS2 execution-domain marker" >&2
 				exit 2
 			}
-			# This is not a marker-only shortcut: the inner process rehashes the
-			# runtime and tools and verifies the complete env -i allowlist.
+			# 这不是仅检查标记的捷径：内层进程会重新计算 runtime 与工具哈希，
+			# 并校验完整的 env -i allowlist。
 			run_platform_doctor >/dev/null
 		fi
 		;;

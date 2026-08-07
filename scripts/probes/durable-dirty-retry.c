@@ -3,11 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/*
- * The kernel is LP64, while native Windows compilers use LLP64.  Model the
- * kernel's fixed-width aliases explicitly before compiling the production
- * owner so this probe cannot silently reduce uint64 to 32 bits.
- */
+/* 内核采用 LP64，Windows 原生编译器采用 LLP64；探针显式保持 64 位别名。 */
 #define TYPES_H
 typedef unsigned int uint;
 typedef unsigned short ushort;
@@ -18,11 +14,19 @@ typedef uint32_t uint32;
 typedef uint64_t uint64;
 _Static_assert(sizeof(uint64) == 8, "probe must model RISC-V uint64");
 
-/* Compile the production owner with only its interrupt boundary stubbed. */
+/* 直接编译生产实现，仅替换中断边界。 */
 #define DEFS_H
 #define RISCV_H
-static int intr_save(void) { return 1; }
-static void intr_restore(int enabled) { assert(enabled == 1); }
+static int interrupts_enabled = 1;
+static int intr_save(void)
+{
+	int prior = interrupts_enabled;
+
+	interrupts_enabled = 0;
+	return prior;
+}
+static void intr_restore(int enabled) { interrupts_enabled = enabled; }
+static int intr_get(void) { return interrupts_enabled; }
 
 #include "../../os/agent_durable_section.c"
 
@@ -152,7 +156,7 @@ static void verify_evidence_expedite(void)
 	uint64 committed;
 	uint calls;
 
-	/* Ordinary coalesced dirtiness must retain the background cadence. */
+	/* 普通合并脏标记仍遵循后台节奏。 */
 	reset_contract();
 	agent_durable_section_set_store_provider(&test_store);
 	target = agent_durable_section_mark_dirty(
@@ -165,7 +169,7 @@ static void verify_evidence_expedite(void)
 	agent_durable_section_commit_scope(11, committed);
 	assert(!agent_durable_section_scope_pending(11));
 
-	/* A serial alone is a receipt fence, not an urgency request. */
+	/* 单独序列号只是收据栅栏，不代表紧急请求。 */
 	reset_contract();
 	agent_durable_section_set_store_provider(&test_store);
 	target = agent_durable_section_mark_dirty_evidence(
@@ -177,7 +181,7 @@ static void verify_evidence_expedite(void)
 	agent_durable_section_commit_scope(12, committed);
 	assert(!state->used && !agent_durable_section_scope_pending(12));
 
-	/* Only the explicit flag remains urgent through coalescing and commit. */
+	/* 只有显式标志可在合并和提交期间保持紧急状态。 */
 	reset_contract();
 	agent_durable_section_set_store_provider(&test_store);
 	target = agent_durable_section_mark_dirty_evidence(
@@ -196,7 +200,7 @@ static void verify_evidence_expedite(void)
 	assert(!state->used && state->urgent_serial == 0 &&
 	       !agent_durable_section_scope_pending(12));
 
-	/* Provider installation retries an urgent request without downgrading it. */
+	/* 安装存储提供者后重试紧急请求，不得将其降级。 */
 	reset_contract();
 	target = agent_durable_section_mark_dirty_evidence(
 		AGENT_DURABLE_SECTION_OBSERVE, 13, &serial,
@@ -213,7 +217,7 @@ static void verify_evidence_expedite(void)
 	agent_durable_section_commit_scope(13, committed);
 	assert(!state->used && state->urgent_serial == 0);
 
-	/* A rejected mark stays urgent and expedites after the retry succeeds. */
+	/* 被拒绝的标记保持紧急，并在重试成功后加速。 */
 	reset_contract();
 	agent_durable_section_set_store_provider(&test_store);
 	sink_rejects = 1;
@@ -232,7 +236,7 @@ static void verify_evidence_expedite(void)
 	agent_durable_section_commit_scope(14, committed);
 	assert(!state->used && state->urgent_serial == 0);
 
-	/* Unknown policy bits fail before they can mutate an existing entry. */
+	/* 未知策略位必须在修改已有条目前失败。 */
 	reset_contract();
 	agent_durable_section_set_store_provider(&test_store);
 	target = agent_durable_section_mark_dirty_evidence(
@@ -251,8 +255,7 @@ static void verify_evidence_expedite(void)
 	agent_durable_section_commit_scope(15, unchanged);
 	assert(!state->used);
 
-	/* Committing an urgent snapshot must not accelerate a later ordinary
-	 * generation that raced with capture. */
+	/* 提交紧急快照不得顺带加速与捕获竞争的后续普通代次。 */
 	reset_contract();
 	agent_durable_section_set_store_provider(&test_store);
 	target = agent_durable_section_mark_dirty_evidence(

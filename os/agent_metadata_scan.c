@@ -172,8 +172,7 @@ static void scan_pause(int retry, int resume) {
 		scan_ctl.pending = 1;
 		scan.next_tick = current;
 	} else if (!retry && !resume && scan_ctl.pending == 0) {
-		/* A clean reconciliation is one-shot.  Only an explicit request,
-		 * boot/recovery gap, or retry arms another directory sweep. */
+		/* 完整协调只执行一次；仅显式请求、启动或恢复缺口、重试会再次扫描。 */
 		scan_ctl.on = 0;
 		scan.next_tick = 0;
 	} else {
@@ -192,7 +191,7 @@ static void scan_pause(int retry, int resume) {
 void agent_file_request_scan(void) {
 	uint64 now = agent_file_state_now();
 	int irq = intr_save();
-	/* cooldown 中的新显式请求把 resume 升级为 full，但不提前原 deadline。 */
+	/* 休眠期的新显式请求升级为完整扫描，但不提前原期限。 */
 	if (!scan_ctl.on || !scan_ctl.pending || scan_ctl.pending < 0) {
 		if (!scan_ctl.on) {
 			scan_ctl.on = 1;
@@ -379,7 +378,7 @@ uint agent_metadata_scan_index_inode(struct inode *ip, char *path, int *failed) 
 			goto retry;
 		changes |= AGENT_FILE_CHANGE_MEMBERSHIP;
 	}
-	/* 易失目录已吸收当前 inode 大小，版本覆盖可以立即转为冷缓存。 */
+	/* 易失目录已吸收当前索引节点大小，版本覆盖可立即转为冷缓存。 */
 	if (!persist)
 		agent_file_state_content_absorb_volatile(ip, slot);
 	return changes;
