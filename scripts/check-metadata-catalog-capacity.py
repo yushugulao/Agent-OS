@@ -823,9 +823,16 @@ def validate_sources(sources: dict[str, str]) -> None:
     ):
         require(retry_deferred, token, "urgent deferred retry")
     pause = function_body(scan, "scan_pause(")
+    rest = function_body(scan, "scan_rest_deadline(")
+    step = function_body(scan, "agent_metadata_scan_step(")
+    sync = function_body(scan, "agent_metadata_scan_catalog_sync(")
+    require(rest, "uint64 rest = quanta;", "scan rest must use serviced quanta")
+    require(step, "scan.quanta++;", "scan service quanta must advance")
+    if "scan.quanta" in sync:
+        raise ContractError("catalog reload can erase accrued scan service")
     require_order(
         pause,
-        ("if (scan_ctl.pending == SCAN_URGENT)", "scan.start = 0",
+        ("if (scan_ctl.pending == SCAN_URGENT)", "scan.quanta = 0",
          "scan_ctl.pending = 1", "scan.next_tick = current",
          "} else {", "if (retry) {",
          "if (!resume || scan_ctl.pending > 0)",

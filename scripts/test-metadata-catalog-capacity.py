@@ -846,11 +846,16 @@ run_agent(void) __attribute__((used))
              "if (0) {"),
             ("scan",
              "if (scan_ctl.pending == SCAN_URGENT) {\n"
-             "\t\tscan.start = 0;\n"
+             "\t\tscan.quanta = 0;\n"
              "\t\tscan_ctl.pending = 1;",
              "if (scan_ctl.pending == SCAN_URGENT) {\n"
-             "\t\tscan.start = 0;\n"
+             "\t\tscan.quanta = 0;\n"
              "\t\tscan_ctl.pending = -1;"),
+            ("scan", "\tuint64 rest = quanta;",
+             "\tuint64 rest = now > quanta ? now - quanta : 0;"),
+            ("scan", "\tscan.quanta++;", ""),
+            ("scan", "\t\tscan.offset = 0;",
+             "\t\tscan.offset = 0;\n\t\tscan.quanta = 0;"),
             ("scan", "if (!resume || scan_ctl.pending > 0)",
              "if (!resume)"),
             ("scan",

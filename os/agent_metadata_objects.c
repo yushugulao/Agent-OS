@@ -332,17 +332,17 @@ agent_metadata_background_maintain(void)
 	agent_file_store_boot_reprobe();
 	if (!agent_metadata_store_available())
 		return;
-	agent_metadata_store_background_maintain();
-	if (agent_metadata_store_take_reconcile_request())
-		agent_file_request_scan();
-	now = agent_file_state_now();
+	if (agent_metadata_store_background_maintain(0) > 0)
+		goto reconcile;
 	plan = agent_metadata_scan_plan(now);
 	if (plan == AGENT_METADATA_SCAN_IDLE)
-		return;
+		goto store;
 	if (!bio_background_begin(FS_OWNER_SYSTEM))
-		return;
-	if (!agent_metadata_txn_try_external())
+		goto store;
+	if (!agent_metadata_txn_try_external()) {
+		plan = AGENT_METADATA_SCAN_IDLE;
 		goto out_io;
+	}
 	now = agent_file_state_now();
 	plan = agent_metadata_scan_plan(now);
 	if (plan == AGENT_METADATA_SCAN_IDLE)
@@ -350,12 +350,21 @@ agent_metadata_background_maintain(void)
 	if (plan == AGENT_METADATA_SCAN_START)
 		load_ok = agent_file_store_load() >= 0;
 	changes = agent_metadata_scan_step(now, plan, load_ok);
+	agent_metadata_store_background_scan_served();
 	if (changes)
 		agent_metadata_note_catalog_changes(changes);
 out_txn:
 	agent_metadata_txn_unlock();
 out_io:
 	bio_background_end();
+	if (plan == AGENT_METADATA_SCAN_IDLE)
+		goto store;
+	goto reconcile;
+store:
+	(void)agent_metadata_store_background_maintain(1);
+reconcile:
+	if (agent_metadata_store_take_reconcile_request())
+		agent_file_request_scan();
 }
 
 int agent_metadata_inode_trackable(struct inode *ip)

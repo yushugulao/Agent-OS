@@ -45,7 +45,9 @@
 #define AGENT_META_SUBMIT_DRAIN_BUDGET (4U * AGENT_META_STORE_BANKS)
 #define AGENT_META_OWNER_DRAIN_STEP_BUDGET AGENT_META_REPLICATED_STEP_LIMIT
 #define AGENT_META_DRAIN_EXTERNAL_FLAG (1U << 31)
-#define AGENT_META_DRAIN_BUDGET_MASK (~AGENT_META_DRAIN_EXTERNAL_FLAG)
+#define AGENT_META_DRAIN_PROGRESS_FLAG (1U << 30)
+#define AGENT_META_DRAIN_BUDGET_MASK \
+	(~(AGENT_META_DRAIN_EXTERNAL_FLAG | AGENT_META_DRAIN_PROGRESS_FLAG))
 #define AGENT_META_BACKGROUND_DRAIN_BUDGET \
 	(AGENT_META_DRAIN_EXTERNAL_FLAG | (8U * AGENT_META_SUBMIT_DRAIN_BUDGET))
 
@@ -54,8 +56,8 @@ _Static_assert(AGENT_META_SUBMIT_DRAIN_BUDGET < AGENT_META_OWNER_DRAIN_STEP_BUDG
 _Static_assert((AGENT_META_BACKGROUND_DRAIN_BUDGET & AGENT_META_DRAIN_BUDGET_MASK) <
 	       AGENT_META_OWNER_DRAIN_STEP_BUDGET,
 	       "background metadata drain must remain bounded");
-_Static_assert(AGENT_META_OWNER_DRAIN_STEP_BUDGET < AGENT_META_DRAIN_EXTERNAL_FLAG,
-	       "metadata drain budget must leave room for the mode bit");
+_Static_assert(AGENT_META_OWNER_DRAIN_STEP_BUDGET < AGENT_META_DRAIN_PROGRESS_FLAG,
+	       "metadata drain budget must leave room for mode bits");
 _Static_assert(AGENT_META_WRITEBACK_SCOPE_MAX >=
 	       VFS_SCOPE_LIFECYCLE_CAP + 1,
 	       "metadata writeback must cover every workflow and system scope");
@@ -195,6 +197,7 @@ static int banks_prepared;
 static uint64 last_durable_retry_tick;
 static uint last_background_drain_tick;
 static uint owner_cursor;
+static uchar metadata_background_store_first;
 
 _Static_assert(AGENT_CATALOG_JOURNAL_RECEIPT_MAX ==
 	       AGENT_META_JOURNAL_MAX_DATA_RECORDS,
@@ -318,7 +321,7 @@ agent_metadata_store_init(void)
 	agent_metadata_test_init();
 	last_durable_retry_tick = ~0ULL;
 	last_background_drain_tick = ~0U;
-	owner_cursor = 0;
+	owner_cursor = metadata_background_store_first = 0;
 	agent_durable_section_set_store_provider(&agent_meta_durable_store);
 }
 uint64 agent_metadata_store_mark_dirty(uint scope_id)
@@ -336,9 +339,11 @@ uint64 agent_metadata_store_mark_dirty(uint scope_id)
 		agent_background_request();
 		return 0;
 	}
-	if (state->dirty_generation != state->durable_generation)
+	if (state->dirty_generation != state->durable_generation) {
 		state->coalesced_count++;
-	else
+		if (state->due_tick == 0)
+			state->due_tick = now + AGENT_META_WRITEBACK_COALESCE_TICKS;
+	} else
 		state->due_tick = now + AGENT_META_WRITEBACK_COALESCE_TICKS;
 	state->dirty_generation++;
 	if (state->dirty_generation == 0)
@@ -624,8 +629,11 @@ static uint64 agent_file_writeback_capture_state(uint scope_id)
 	int enabled = intr_save();
 
 	state = agent_file_scope_state_locked(scope_id, 0);
-	if (state && state->scope_id == scope_id)
+	if (state && state->scope_id == scope_id) {
 		generation = state->dirty_generation;
+		/* 当前批次消费旧期限；后续首个变更建立新的合并窗口。 */
+		state->due_tick = 0;
+	}
 	intr_restore(enabled);
 	return generation;
 }
@@ -1974,6 +1982,7 @@ static int agent_meta_persist_start_locked(uint owner)
 		agent_meta_journal_target_locked(target_bank) :
 		agent_meta_persist_target_locked(target_bank, 0);
 	if (operation_status < 0) {
+		agent_metadata_store_expedite(scope_id);
 		agent_meta_store_io_leave();
 		memset(&agent_meta_persist, 0, sizeof(agent_meta_persist));
 		return agent_meta_persist_device_error(operation_status);
@@ -1983,6 +1992,7 @@ static int agent_meta_persist_start_locked(uint owner)
 	agent_metadata_test_eio_start(scope_id, agent_meta_persist.job_id);
 	return 0;
 fail:
+	agent_metadata_store_expedite(scope_id);
 	agent_meta_store_io_leave();
 	return -1;
 }
@@ -2009,6 +2019,7 @@ static int agent_meta_persist_journal_abort_locked(void)
 	}
 	agent_meta_bank_shadow_invalidate(damaged);
 	agent_meta_store_require_mirror(damaged, 0);
+	agent_metadata_store_expedite(agent_meta_persist.scope_id);
 	agent_metadata_store_mark_dirty(VFS_SCOPE_SYSTEM);
 	agent_metadata_store_expedite(VFS_SCOPE_SYSTEM);
 	agent_meta_persist_release_locked(1);
@@ -2027,6 +2038,7 @@ static void agent_meta_persist_abort_locked(void)
 		agent_meta_persist.target_bank,
 		!agent_meta_persist.published ||
 		agent_meta_persist.target_bank != agent_meta_store_active_bank);
+	agent_metadata_store_expedite(agent_meta_persist.scope_id);
 	// 镜像修复由 SYSTEM 预算结算。
 	agent_metadata_store_mark_dirty(VFS_SCOPE_SYSTEM);
 	agent_metadata_store_expedite(VFS_SCOPE_SYSTEM);
@@ -2853,6 +2865,9 @@ static int agent_meta_persist_drain_owner(uint owner, uint encoded_budget)
 		}
 		while (progressed < batch_limit) {
 			int step = agent_meta_persist_background_step_locked(owner);
+			if (encoded_budget & AGENT_META_DRAIN_EXTERNAL_FLAG)
+				metadata_background_store_first = 0;
+			encoded_budget |= AGENT_META_DRAIN_PROGRESS_FLAG;
 			progressed++;
 			steps++;
 			if (job_id == 0 &&
@@ -2885,7 +2900,10 @@ static int agent_meta_persist_drain_owner(uint owner, uint encoded_budget)
 		    !started_background)
 			break;
 	}
-	return result;
+	return (encoded_budget & (AGENT_META_DRAIN_EXTERNAL_FLAG |
+				  AGENT_META_DRAIN_PROGRESS_FLAG)) ==
+		       (AGENT_META_DRAIN_EXTERNAL_FLAG |
+			AGENT_META_DRAIN_PROGRESS_FLAG) ? 1 : result;
 }
 
 static int agent_file_persist_system(void)
@@ -2906,35 +2924,37 @@ agent_meta_durable_persist_scope(uint scope_id)
 		FS_OWNER_SCOPE(scope_id), AGENT_META_OWNER_DRAIN_STEP_BUDGET);
 }
 
-static void agent_file_writeback_maintain(void)
+static int agent_file_writeback_maintain(void)
 {
 	uint64 now = agent_ticks();
 	uint owner;
+	int result;
 	int enabled;
 
 	if (!agent_file_loaded || agent_meta_store_failed_closed ||
 	    agent_metadata_recovery_pending())
-		return;
+		return 0;
 	if (submitter != 0)
-		return;
+		return 0;
 	if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE &&
 	    now < agent_meta_persist.retry_tick)
-		return;
+		return 0;
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE &&
 	    !agent_file_writeback_due(now))
-		return;
+		return 0;
 	enabled = intr_save();
 	if (last_background_drain_tick == (uint)now) {
 		intr_restore(enabled);
-		return;
+		return -1;
 	}
 	last_background_drain_tick = (uint)now;
 	intr_restore(enabled);
 	owner = agent_meta_persist.phase == AGENT_META_PERSIST_IDLE ?
 		(agent_meta_store_recovery_required ? FS_OWNER_SYSTEM :
 		 agent_file_writeback_owner(now)) : agent_meta_persist.owner;
-	(void)agent_meta_persist_drain_owner(
+	result = agent_meta_persist_drain_owner(
 		owner, AGENT_META_BACKGROUND_DRAIN_BUDGET);
+	return result;
 }
 
 int
@@ -3038,10 +3058,18 @@ agent_metadata_store_scope_target_done(uint scope_id, uint64 target)
 	return retired;
 }
 
-void
-agent_metadata_store_background_maintain(void)
+int
+agent_metadata_store_background_maintain(int force)
 {
-	agent_file_writeback_maintain();
+	if (!force && !metadata_background_store_first)
+		return 0;
+	return agent_file_writeback_maintain();
+}
+
+void
+agent_metadata_store_background_scan_served(void)
+{
+	metadata_background_store_first = 1;
 }
 
 void

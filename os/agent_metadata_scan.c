@@ -17,7 +17,7 @@
 #define SCOPE_MAX (VFS_SCOPE_MAX_ACTIVE + 1)
 
 static struct {
-	uint64 offset, next_tick, last_step_tick, start;
+	uint64 offset, next_tick, last_step_tick, quanta;
 	uint64 runs, entries, added, updated, removed, failures, deferred;
 	uint marked[SCOPE_MAX * 2], nmarked;
 	uchar seen[AGENT_META_STALE_BYTES];
@@ -25,7 +25,7 @@ static struct {
 } scan;
 #define SCAN_SEEN(slot) (scan.seen[(slot) / 8] & (1U << ((slot) % 8)))
 #define SCAN_NOTE(slot) (scan.seen[(slot) / 8] |= 1U << ((slot) % 8))
-static struct { int on, pending, active; } scan_ctl;
+static struct { signed char pending; uchar on, active; } scan_ctl;
 
 struct scan_field { ushort offset, size; uint changes; const char *value; };
 #define SCAN_DEFAULT(field, change_bits, default_value) \
@@ -106,7 +106,6 @@ void agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta) {
 		return;
 	if (delta->full_reset) {
 		scan.offset = 0;
-		scan.start = agent_file_state_now();
 		memset(scan.seen, 0, sizeof(scan.seen));
 	}
 	agent_metadata_txn_work_charge(AGENT_META_STALE_BYTES);
@@ -150,8 +149,8 @@ static int scan_matches(const struct agent_file_meta *meta, struct inode *ip) {
 	       meta->incarnation == ip->vfs_incarnation;
 }
 
-static uint64 scan_rest_deadline(uint64 start, uint64 now) {
-	uint64 rest = now > start ? now - start : 0;
+static uint64 scan_rest_deadline(uint64 quanta, uint64 now) {
+	uint64 rest = quanta;
 	if (rest > ~0ULL / SCAN_REST_MULTIPLIER)
 		return ~0ULL;
 	rest *= SCAN_REST_MULTIPLIER;
@@ -163,12 +162,12 @@ static uint64 scan_rest_deadline(uint64 start, uint64 now) {
 static void scan_pause(int retry, int resume) {
 	uint64 current = agent_file_state_now(), now = current;
 	int irq = intr_save();
-	now = scan_rest_deadline(scan_ctl.active ? scan.start : now, now);
+	now = scan_rest_deadline(scan_ctl.active ? scan.quanta : 0, now);
 	scan_ctl.active = 0;
 	if (!retry || !resume)
-		scan.start = 0;
+		scan.quanta = 0;
 	if (scan_ctl.pending == SCAN_URGENT) {
-		scan.start = 0;
+		scan.quanta = 0;
 		scan_ctl.pending = 1;
 		scan.next_tick = current;
 	} else if (!retry && !resume && scan_ctl.pending == 0) {
@@ -197,7 +196,7 @@ void agent_file_request_scan(void) {
 			scan_ctl.on = 1;
 			scan.next_tick = now;
 		} else if (scan_ctl.active) {
-			scan.next_tick = scan_rest_deadline(now, now);
+			scan.next_tick = scan_rest_deadline(0, now);
 		} else if (now >= scan.next_tick) {
 			scan.next_tick = now;
 		}
@@ -403,7 +402,7 @@ uint agent_metadata_scan_step(uint64 now, int plan, int load_ok) {
 		irq = intr_save();
 		scan_ctl.active = 1;
 		if (scan_ctl.pending > 0) {
-			scan.start = now;
+			scan.quanta = 0;
 			scan.offset = 0;
 			scan.nmarked = 0;
 			scan.retry = scan.sweep_uncertain = 0;
@@ -416,6 +415,7 @@ uint agent_metadata_scan_step(uint64 now, int plan, int load_ok) {
 		return 0;
 	}
 	scan.last_step_tick = now;
+	scan.quanta++;
 	vfs_cred_kernel(&cred);
 	root = root_dir_status(&root_status);
 	if (root == 0 || root_status != FS_LOOKUP_FOUND) {

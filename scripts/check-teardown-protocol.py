@@ -395,7 +395,10 @@ def validate_metadata_poll(objects, store):
     maintain = normalize(
         function_body(store, "agent_metadata_store_background_maintain")
     )
-    expected_maintain = "agent_file_writeback_maintain();"
+    expected_maintain = (
+        "if(!force&&!metadata_background_store_first)return0;"
+        "returnagent_file_writeback_maintain();"
+    )
     if maintain != expected_maintain:
         raise ProtocolError(
             "metadata background maintenance must not hot-requeue pending state"
@@ -718,7 +721,7 @@ def validate_reaper_liveness(vfs, objects, background, agent_core):
     store_calls = require_calls(
         metadata_maintain,
         "agent_metadata_store_background_maintain",
-        1,
+        2,
         "metadata background coordinator",
     )
     if reap_calls[0] > store_calls[0]:

@@ -3170,19 +3170,33 @@ def validate_metadata_scan_boundary_text(objects, scan):
     )
     if background.count("agent_metadata_scan_plan(now)") != 2:
         raise BudgetError("metadata background must revalidate its scan plan")
+    if background.count("agent_metadata_store_background_maintain(") != 2:
+        raise BudgetError("metadata background must have two work-conserving edges")
+    require_source_tokens(
+        background,
+        (
+            "agent_metadata_store_background_maintain(0)",
+            "agent_metadata_store_background_scan_served()",
+            "agent_metadata_store_background_maintain(1)",
+        ),
+        "metadata background service turn",
+    )
     require_source_order(
         background,
         (
-            "agent_metadata_store_background_maintain()",
+            "agent_metadata_store_background_maintain(0)",
             "agent_metadata_scan_plan(now)",
             "bio_background_begin(FS_OWNER_SYSTEM)",
             "agent_metadata_txn_try_external()",
             "agent_metadata_scan_plan(now)",
             "agent_file_store_load()",
             "agent_metadata_scan_step(now, plan, load_ok)",
+            "agent_metadata_store_background_scan_served()",
             "agent_metadata_note_catalog_changes(changes)",
             "agent_metadata_txn_unlock()",
             "bio_background_end()",
+            "agent_metadata_store_background_maintain(1)",
+            "agent_metadata_store_take_reconcile_request()",
         ),
         "metadata background coordinator",
     )
@@ -3269,7 +3283,7 @@ def validate_metadata_scan_boundary_text(objects, scan):
     request = source_function_body(scan, "agent_file_request_scan(void)")
     require_source_tokens(
         request,
-        ("!scan_ctl.pending", "scan_rest_deadline(now, now)"),
+        ("!scan_ctl.pending", "scan_rest_deadline(0, now)"),
         "metadata scan request coalescing",
     )
     if "agent_file_request_scan(void)" in objects:

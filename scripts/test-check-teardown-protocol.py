@@ -245,15 +245,17 @@ class TeardownProtocolTests(unittest.TestCase):
     def test_same_pass_metadata_commit_cannot_consume_reaper_edge(self):
         sources = copy.deepcopy(self.good)
         reap = "vfs_scope_reap_pending(now);"
-        store = "agent_metadata_store_background_maintain();"
+        store = "agent_metadata_store_background_maintain(0)"
         self.assertEqual(sources["objects"].count(reap), 1)
         self.assertEqual(sources["objects"].count(store), 1)
         sources["objects"] = sources["objects"].replace(
             reap, "REAPER_ORDER_MUTATION();", 1
         )
-        sources["objects"] = sources["objects"].replace(store, reap, 1)
         sources["objects"] = sources["objects"].replace(
-            "REAPER_ORDER_MUTATION();", store, 1
+            store, "vfs_scope_reap_pending(now)", 1
+        )
+        sources["objects"] = sources["objects"].replace(
+            "REAPER_ORDER_MUTATION();", store + ";", 1
         )
         self.assert_rejected(sources, "same-pass commit")
 

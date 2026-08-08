@@ -110,10 +110,11 @@ def check(root: Path) -> None:
     )
     require(
         mark_dirty,
-        "if(state->dirty_generation!=state->durable_generation)"
-        "state->coalesced_count++;elsestate->due_tick="
+        "if(state->dirty_generation!=state->durable_generation){"
+        "state->coalesced_count++;if(state->due_tick==0)state->due_tick="
+        "now+AGENT_META_WRITEBACK_COALESCE_TICKS;}elsestate->due_tick="
         "now+AGENT_META_WRITEBACK_COALESCE_TICKS;",
-        "metadata coalescing deadline became sliding or disappeared",
+        "metadata coalescing lost its per-generation deadline",
     )
     require(
         mark_dirty,
@@ -130,6 +131,12 @@ def check(root: Path) -> None:
     )
     if "agent_background_request();" in expedite:
         raise ValueError("metadata expedite bypasses timer-driven dispatch")
+    capture = function_body(store, "agent_file_writeback_capture_state")
+    require(
+        capture,
+        "generation=state->dirty_generation;state->due_tick=0;",
+        "metadata capture no longer consumes the current deadline",
+    )
     writeback_ready = function_body(store, "agent_file_writeback_ready")
     writeback_due = function_body(store, "agent_file_writeback_due")
     if "next_write_tick" in store:
@@ -154,8 +161,16 @@ def check(root: Path) -> None:
     store_background = function_body(
         store, "agent_metadata_store_background_maintain"
     )
-    if store_background != "agent_file_writeback_maintain();":
+    if store_background != (
+        "if(!force&&!metadata_background_store_first)return0;"
+        "returnagent_file_writeback_maintain();"
+    ):
         raise ValueError("metadata background completion still self-requeues")
+    scan_served = function_body(
+        store, "agent_metadata_store_background_scan_served"
+    )
+    if scan_served != "metadata_background_store_first=1;":
+        raise ValueError("metadata scan service does not hand priority to writeback")
 
     background_step = function_body(
         store, "agent_meta_persist_background_step_locked"
@@ -167,7 +182,10 @@ def check(root: Path) -> None:
     )
     writeback_maintain = function_body(store, "agent_file_writeback_maintain")
     for fragment in (
-        "if(last_background_drain_tick==(uint)now){intr_restore(enabled);return;}",
+        "if(submitter!=0)return0;",
+        "if(agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE&&"
+        "now<agent_meta_persist.retry_tick)return0;",
+        "if(last_background_drain_tick==(uint)now){intr_restore(enabled);return-1;}",
         "last_background_drain_tick=(uint)now;",
         "agent_meta_persist_drain_owner(owner,"
         "AGENT_META_BACKGROUND_DRAIN_BUDGET)",
@@ -178,6 +196,13 @@ def check(root: Path) -> None:
             "metadata background drain lost its per-tick bounded admission",
         )
     owner_drain = function_body(store, "agent_meta_persist_drain_owner")
+    for fragment in (
+        "#defineAGENT_META_DRAIN_EXTERNAL_FLAG(1U<<31)",
+        "#defineAGENT_META_DRAIN_PROGRESS_FLAG(1U<<30)",
+        "#defineAGENT_META_DRAIN_BUDGET_MASK\\"
+        "(~(AGENT_META_DRAIN_EXTERNAL_FLAG|AGENT_META_DRAIN_PROGRESS_FLAG))",
+    ):
+        require(store, fragment, "metadata drain mode bits overlap or escape the mask")
     require(
         store,
         "AGENT_META_DRAIN_EXTERNAL_FLAG|(8U*AGENT_META_SUBMIT_DRAIN_BUDGET)",
@@ -188,6 +213,12 @@ def check(root: Path) -> None:
         "agent_metadata_txn_try_external():"
         "agent_metadata_txn_lock(1)",
         "agent_meta_store_recovery_required&&owner!=FS_OWNER_SYSTEM",
+        "if(encoded_budget&AGENT_META_DRAIN_EXTERNAL_FLAG)"
+        "metadata_background_store_first=0;"
+        "encoded_budget|=AGENT_META_DRAIN_PROGRESS_FLAG;",
+        "return(encoded_budget&(AGENT_META_DRAIN_EXTERNAL_FLAG|"
+        "AGENT_META_DRAIN_PROGRESS_FLAG))==(AGENT_META_DRAIN_EXTERNAL_FLAG|"
+        "AGENT_META_DRAIN_PROGRESS_FLAG)?1:result;",
     ):
         require(
             owner_drain,
@@ -248,10 +279,22 @@ def check(root: Path) -> None:
         raise ValueError("scan pending state still hot-requeues unrelated syscalls")
     require(
         metadata_background,
-        "plan=agent_metadata_scan_plan(now);"
-        "if(plan==AGENT_METADATA_SCAN_IDLE)return;",
-        "metadata background path enters scan I/O before the deadline",
+        "if(agent_metadata_store_background_maintain(0)>0)gotoreconcile;"
+        "plan=agent_metadata_scan_plan(now);",
+        "metadata scan/writeback priority is not service-driven",
     )
+    if metadata_background.count("agent_metadata_store_background_maintain(") != 2:
+        raise ValueError("metadata writeback must have normal and fallback edges")
+    for fragment in (
+        "if(!bio_background_begin(FS_OWNER_SYSTEM))gotostore;",
+        "agent_metadata_store_background_scan_served();",
+        "store:(void)agent_metadata_store_background_maintain(1);",
+    ):
+        require(
+            metadata_background,
+            fragment,
+            "metadata scan/writeback service turn can starve a shared I/O client",
+        )
     if "agent_background_request();" in metadata_background:
         raise ValueError("metadata scan completion still self-requeues")
     require(

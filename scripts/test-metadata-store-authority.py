@@ -229,13 +229,13 @@ def validate(source: str, metadata_source: str) -> None:
     )
     maintain = body(source, "agent_file_writeback_maintain(")
     require(
-        "(void)agent_meta_persist_drain_owner(owner,"
+        "result=agent_meta_persist_drain_owner(owner,"
         "AGENT_META_BACKGROUND_DRAIN_BUDGET);" in maintain
         and "#defineAGENT_META_BACKGROUND_DRAIN_BUDGET" in all_source
         and "(AGENT_META_DRAIN_EXTERNAL_FLAG|"
         "(8U*AGENT_META_SUBMIT_DRAIN_BUDGET))" in all_source
         and "if(last_background_drain_tick==(uint)now){"
-        "intr_restore(enabled);return;}" in maintain
+        "intr_restore(enabled);return-1;}" in maintain
         and "last_background_drain_tick=(uint)now;" in maintain
         and "agent_meta_persist_start_locked(" not in maintain
         and "agent_meta_persist_background_step_locked(" not in maintain
@@ -243,6 +243,12 @@ def validate(source: str, metadata_source: str) -> None:
         and "agent_metadata_txn_try_external(" not in maintain
         and "next_write_tick" not in all_source,
         "background persist bypasses the bounded shared drain",
+    )
+    require(
+        "if(submitter!=0)return0;" in maintain
+        and "if(agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE&&"
+        "now<agent_meta_persist.retry_tick)return0;" in maintain,
+        "ineligible writeback can pin the scan/writeback service turn",
     )
     replicated = body(source, "agent_file_writeback_replicate_settled(")
     require(
@@ -260,6 +266,12 @@ def validate(source: str, metadata_source: str) -> None:
     )
     drain = body(source, "agent_meta_persist_drain_owner(")
     require(
+        "#defineAGENT_META_DRAIN_EXTERNAL_FLAG(1U<<31)" in all_source
+        and "#defineAGENT_META_DRAIN_PROGRESS_FLAG(1U<<30)" in all_source
+        and "#defineAGENT_META_DRAIN_BUDGET_MASK\\"
+        "(~(AGENT_META_DRAIN_EXTERNAL_FLAG|AGENT_META_DRAIN_PROGRESS_FLAG))"
+        in all_source
+        and
         "#defineAGENT_META_OWNER_DRAIN_STEP_BUDGET"
         "AGENT_META_REPLICATED_STEP_LIMIT" in all_source
         and "steps<(encoded_budget&AGENT_META_DRAIN_BUDGET_MASK)" in drain
@@ -286,6 +298,22 @@ def validate(source: str, metadata_source: str) -> None:
         and "if(agent_meta_persist.phase==AGENT_META_PERSIST_IDLE){"
         "result=0;break;}" in drain,
         "metadata drain lacks bounded batching or a fairness checkpoint",
+    )
+    require(
+        "encoded_budget|=AGENT_META_DRAIN_PROGRESS_FLAG;" in drain
+        and "if(encoded_budget&AGENT_META_DRAIN_EXTERNAL_FLAG)"
+        "metadata_background_store_first=0;" in drain
+        and "return(encoded_budget&(AGENT_META_DRAIN_EXTERNAL_FLAG|"
+        "AGENT_META_DRAIN_PROGRESS_FLAG))==(AGENT_META_DRAIN_EXTERNAL_FLAG|"
+        "AGENT_META_DRAIN_PROGRESS_FLAG)?1:result;" in drain,
+        "metadata drain cannot report an actual background service turn",
+    )
+    step_at = drain.find("intstep=agent_meta_persist_background_step_locked(owner);")
+    turn_at = drain.find("metadata_background_store_first=0;", step_at)
+    progress_at = drain.find("encoded_budget|=AGENT_META_DRAIN_PROGRESS_FLAG;", turn_at)
+    require(
+        0 <= step_at < turn_at < progress_at,
+        "metadata service turn is published before a background step",
     )
     require(
         "if(agent_meta_persist.phase==AGENT_META_PERSIST_IDLE){"
@@ -338,12 +366,17 @@ def validate(source: str, metadata_source: str) -> None:
         "retry exhaustion destroys the inducing owner continuation",
     )
     background = body(source, "agent_metadata_store_background_maintain(")
+    scan_served = body(source, "agent_metadata_store_background_scan_served(")
     tick = body(source, "agent_metadata_store_tick(")
     ready_at = tick.find("if(agent_file_writeback_ready(now)){")
     wake_at = tick.find("wait_queue_wake_all(&waiters);", ready_at)
     request_at = tick.find("agent_background_request();", wake_at)
     require(
-        background == "agent_file_writeback_maintain();"
+        background == (
+            "if(!force&&!metadata_background_store_first)return0;"
+            "returnagent_file_writeback_maintain();"
+        )
+        and scan_served == "metadata_background_store_first=1;"
         and 0 <= ready_at < wake_at < request_at,
         "metadata continuation is not published exclusively by its timer deadline",
     )
@@ -546,16 +579,57 @@ def main() -> int:
         ),
         (
             "background persist loses batch budget",
-            "\t(void)agent_meta_persist_drain_owner(\n"
+		    "\tresult = agent_meta_persist_drain_owner(\n"
 		    "\t\towner, AGENT_META_BACKGROUND_DRAIN_BUDGET);",
-            "\t(void)agent_meta_persist_drain_owner(\n"
+		    "\tresult = agent_meta_persist_drain_owner(\n"
 		    "\t\towner, AGENT_META_DRAIN_EXTERNAL_FLAG | 1U);",
         ),
         (
             "background persist loses tick gate",
             "\tif (last_background_drain_tick == (uint)now) {\n"
-            "\t\tintr_restore(enabled);\n\t\treturn;\n\t}\n",
+		    "\t\tintr_restore(enabled);\n\t\treturn -1;\n\t}\n",
             "",
+        ),
+        (
+            "background persist loses service accounting",
+            "\treturn (encoded_budget & (AGENT_META_DRAIN_EXTERNAL_FLAG |\n"
+            "\t\t\t\t  AGENT_META_DRAIN_PROGRESS_FLAG)) ==\n"
+            "\t\t       (AGENT_META_DRAIN_EXTERNAL_FLAG |\n"
+            "\t\t\tAGENT_META_DRAIN_PROGRESS_FLAG) ? 1 : result;",
+            "\treturn result;",
+        ),
+        (
+            "background service publishes before the step",
+            "\t\t\tint step = agent_meta_persist_background_step_locked(owner);\n"
+            "\t\t\tif (encoded_budget & AGENT_META_DRAIN_EXTERNAL_FLAG)\n"
+            "\t\t\t\tmetadata_background_store_first = 0;\n"
+            "\t\t\tencoded_budget |= AGENT_META_DRAIN_PROGRESS_FLAG;",
+            "\t\t\tif (encoded_budget & AGENT_META_DRAIN_EXTERNAL_FLAG)\n"
+            "\t\t\t\tmetadata_background_store_first = 0;\n"
+            "\t\t\tencoded_budget |= AGENT_META_DRAIN_PROGRESS_FLAG;\n"
+            "\t\t\tint step = agent_meta_persist_background_step_locked(owner);",
+        ),
+        (
+            "background service bit aliases external mode",
+            "#define AGENT_META_DRAIN_PROGRESS_FLAG (1U << 30)",
+            "#define AGENT_META_DRAIN_PROGRESS_FLAG (1U << 31)",
+        ),
+        (
+            "submitter cannot pin metadata background priority",
+            "\tif (submitter != 0)\n\t\treturn 0;",
+            "\tif (submitter != 0)\n\t\treturn -1;",
+        ),
+        (
+            "retry deadline cannot pin metadata background priority",
+            "\tif (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE &&\n"
+            "\t    now < agent_meta_persist.retry_tick)\n\t\treturn 0;",
+            "\tif (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE &&\n"
+            "\t    now < agent_meta_persist.retry_tick)\n\t\treturn -1;",
+        ),
+        (
+            "scan service cannot retain scan priority",
+            "\tmetadata_background_store_first = 1;",
+            "\tmetadata_background_store_first = 0;",
         ),
         (
             "mirror ignores a durable frontier followed by new dirties",
