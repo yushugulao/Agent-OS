@@ -571,6 +571,58 @@ def validate_driver(vfs):
     if not reclaim_positions or min(reclaim_positions) < done_guard["end"]:
         raise ProtocolError("workflow lifecycle reclaimed before DONE")
 
+    done_scope = require_if(
+        driver,
+        "ref!=0&&ref->retiring&&"
+        "workflow_lifecycle_key_equal(ref->lifecycle,lifecycle)&&"
+        "ref->reclaim_phase==VFS_SCOPE_RECLAIM_DONE&&"
+        "workflow_lifecycle_retiring(lifecycle)",
+        "teardown DONE settlement",
+    )
+    done_body = done_scope["statement"]
+    done_compact = normalize(done_body)
+    state_sample = (
+        "storage_state=resource_account_state_get(ref->storage_account);"
+    )
+    if (
+        done_compact.count(state_sample) != 1
+        or len(call_positions(driver, "resource_account_state_get")) != 1
+        or not done_compact.startswith(state_sample)
+    ):
+        raise ProtocolError(
+            "teardown DONE must use one storage state sample inside its exact guard"
+        )
+
+    preserve_condition = (
+        "preserve_files&&"
+        "(storage_state==RESOURCE_ACCOUNT_DRAINING||"
+        "storage_state==RESOURCE_ACCOUNT_FREE)&&"
+        "workflow_lifecycle_reclaim(lifecycle)==0"
+    )
+    preserve = require_if(done_body, preserve_condition, "preserved teardown DONE")
+    if normalize(preserve["statement"]) != (
+        "vfs_scope_retiring_remove_locked(ref);"
+        "ref->lifecycle=workflow_lifecycle_none();"
+    ):
+        raise ProtocolError(
+            "preserved teardown must clear lifecycle only after storage settlement"
+        )
+
+    ordinary_condition = (
+        "!preserve_files&&storage_state==RESOURCE_ACCOUNT_FREE&&"
+        "workflow_lifecycle_reclaim(lifecycle)==0"
+    )
+    ordinary = require_if(done_body, ordinary_condition, "ordinary teardown DONE")
+    if normalize(ordinary["statement"]) != "vfs_scope_registry_remove_locked(ref);":
+        raise ProtocolError("ordinary teardown must wait for FREE before removal")
+    if (
+        done_compact.count("workflow_lifecycle_reclaim(lifecycle)") != 2
+        or ("}elseif(" + ordinary_condition + "){" not in done_compact)
+    ):
+        raise ProtocolError(
+            "preserved and ordinary teardown settlement branches must stay exclusive"
+        )
+
     lookup = function_body(vfs, "vfs_scope_find_locked")
     lookup_compact = normalize(lookup)
     lookup_contract = (
@@ -640,6 +692,92 @@ def validate_driver(vfs):
         > release.index("matched->reclaim_metadata_target=0;")
     ):
         raise ProtocolError("vfs_scope_release must reset teardown phase and target")
+
+
+def validate_retirement_status(vfs, agent_core):
+    trusted = function_body(vfs, "vfs_scope_close_trusted")
+    trusted_compact = normalize(trusted)
+    parameter_guard = require_if(
+        trusted,
+        "scope_id<VFS_SCOPE_FIRST_DYNAMIC||closed==0",
+        "trusted scope close",
+        top_level=True,
+    )
+    if normalize(parameter_guard["statement"]) != "return-1;":
+        raise ProtocolError("trusted scope close must reject invalid parameters")
+
+    ref_guard = require_if(
+        trusted,
+        "ref!=0&&workflow_lifecycle_key_valid(ref->lifecycle)",
+        "trusted scope close",
+        top_level=False,
+    )
+    retained_contract = (
+        "result=1;"
+        "if(!ref->retiring&&"
+        "workflow_lifecycle_close_trusted(scope_id,closed)==0&&"
+        "workflow_lifecycle_key_equal(*closed,ref->lifecycle))"
+        "result=0;"
+        "else*closed=workflow_lifecycle_none();"
+    )
+    if normalize(ref_guard["statement"]) != retained_contract:
+        raise ProtocolError(
+            "trusted scope close lost live, retiring, or lifecycle status guards"
+        )
+
+    assignments = re.findall(r"\bresult\s*=(?!=)", trusted)
+    lookup = "structvfs_scope_ref*ref=vfs_scope_find_locked(scope_id);"
+    if (
+        trusted_compact.count("intresult=-1;") != 1
+        or len(assignments) != 3
+        or trusted_compact.count(lookup) != 1
+        or trusted_compact.count("*closed=workflow_lifecycle_none();") != 2
+        or len(re.findall(r"\breturn\b", trusted)) != 2
+        or not trusted_compact.endswith("intr_restore(enabled);returnresult;")
+    ):
+        raise ProtocolError(
+            "trusted scope close must reserve -1 for an absent lifecycle binding"
+        )
+    require_calls(
+        trusted, "vfs_scope_find_locked", 1, "trusted scope close"
+    )
+    require_calls(
+        trusted, "workflow_lifecycle_close_trusted", 1, "trusted scope close"
+    )
+    require_calls(
+        trusted, "workflow_lifecycle_key_valid", 1, "trusted scope close"
+    )
+    require_calls(
+        trusted, "workflow_lifecycle_key_equal", 1, "trusted scope close"
+    )
+
+    close = function_body(agent_core, "sys_agent_workflow_close")
+    close_compact = normalize(close)
+    factory_tail = (
+        "}else{"
+        "result=vfs_scope_close_trusted(scope_id,&closed);"
+        "if(result<0)returnAGENT_STATUS_NOT_FOUND;"
+        "if(result>0)returnAGENT_STATUS_RETRY;"
+        "}"
+        "proc_request_workflow_exit(closed,AGENT_STATUS_CANCELLED);"
+        "returnAGENT_STATUS_OK;"
+    )
+    if not close_compact.endswith(factory_tail):
+        raise ProtocolError(
+            "factory scope close must map unbound to NOT_FOUND, live to RETRY, "
+            "and request exit only for zero"
+        )
+    require_calls(
+        close, "vfs_scope_close_trusted", 1, "factory scope close"
+    )
+    require_calls(
+        close, "proc_request_workflow_exit", 1, "factory scope close"
+    )
+    if (
+        close_compact.count("returnAGENT_STATUS_NOT_FOUND;") != 1
+        or close_compact.count("returnAGENT_STATUS_RETRY;") != 1
+    ):
+        raise ProtocolError("factory scope close status mapping is ambiguous")
 
 
 def validate_reaper_liveness(vfs, objects, background, agent_core):
@@ -1194,6 +1332,7 @@ def validate_protocol(sources):
     validate_begin(sources["objects"], sources["actions"])
     validate_metadata_poll(sources["objects"], sources["store"])
     validate_driver(sources["vfs"])
+    validate_retirement_status(sources["vfs"], sources["agent_core"])
     validate_reaper_liveness(
         sources["vfs"], sources["objects"], sources["background"],
         sources["agent_core"]

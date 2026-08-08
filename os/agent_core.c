@@ -1084,8 +1084,11 @@ int sys_agent_workflow_close(uint64 requested_scope_id)
 		if (result < 0)
 			return AGENT_STATUS_DENIED;
 	} else {
-		if (vfs_scope_close_trusted(scope_id, &closed) < 0)
+		result = vfs_scope_close_trusted(scope_id, &closed);
+		if (result < 0)
 			return AGENT_STATUS_NOT_FOUND;
+		if (result > 0)
+			return AGENT_STATUS_RETRY;
 	}
 	proc_request_workflow_exit(closed, AGENT_STATUS_CANCELLED);
 	return AGENT_STATUS_OK;

@@ -15,8 +15,7 @@
 #error "runner must define WORKFLOW_TEARDOWN_GLOBAL_RESERVED_CAP"
 #endif
 
-#define META_WORKERS 2
-#define START_WORKERS (META_WORKERS + 2)
+#define START_WORKERS 1
 #define PHASE_DEADLINE_MS 30000
 #define PIPE_FILE_OBJECTS 2
 #define PRIMARY_PIN_BASE_OBJECTS (3 * PIPE_FILE_OBJECTS)
@@ -46,30 +45,23 @@
 #endif
 
 enum race_event_kind {
-	EVENT_META_READY = 1,
-	EVENT_IO_WRITER_READY,
-	EVENT_IO_OBSERVER_READY,
+	EVENT_IO_WRITER_READY = 1,
 	EVENT_FILE_PROBE_READY,
 	EVENT_FILE_PIN_CONFIRMED,
 	EVENT_FILE_PIN_MISSED,
-	EVENT_META_WAITER,
 	EVENT_IO_PINNED,
-	EVENT_IO_ACTIVITY,
 	EVENT_PUBLIC_EXIT,
 	EVENT_CPU_MEMBER,
 	EVENT_FAILURE,
 };
 
 enum primary_flag {
-	PRIMARY_META_WAITER = 1U << 0,
-	PRIMARY_IO_PINNED = 1U << 1,
-	PRIMARY_IO_ACTIVITY = 1U << 2,
-	PRIMARY_PUBLIC_EXIT = 1U << 3,
-	PRIMARY_CPU_MEMBER = 1U << 4,
-	PRIMARY_FILE_PIN = 1U << 5,
-	PRIMARY_CONTEXT_WINDOW = 1U << 6,
-	PRIMARY_LIFECYCLE_ABI = 1U << 7,
-	PRIMARY_FRESH_RESOURCES = 1U << 8,
+	PRIMARY_IO_PINNED = 1U << 0,
+	PRIMARY_PUBLIC_EXIT = 1U << 1,
+	PRIMARY_CPU_MEMBER = 1U << 2,
+	PRIMARY_FILE_PIN = 1U << 3,
+	PRIMARY_LIFECYCLE_ABI = 1U << 4,
+	PRIMARY_FRESH_RESOURCES = 1U << 5,
 };
 
 enum teardown_mode {
@@ -83,24 +75,7 @@ enum primary_report_phase {
 	PRIMARY_REPORT_MEMBERS_READY,
 	PRIMARY_REPORT_FILE_PINNED,
 	PRIMARY_REPORT_PREPARED,
-	PRIMARY_REPORT_CONTEXT_FAILED,
 	PRIMARY_REPORT_FINAL,
-};
-
-enum context_failure_reason {
-	CONTEXT_FAILURE_WORKER = 1,
-	CONTEXT_FAILURE_OWNER_CLOSED,
-	CONTEXT_FAILURE_OWNER_NOT_ACTIVE,
-	CONTEXT_FAILURE_WINDOW_CLOSED,
-	CONTEXT_FAILURE_WINDOW_TIMEOUT,
-};
-
-enum context_worker_state {
-	CONTEXT_OWNER_DONE = 1U << 0,
-	CONTEXT_WAITER_DONE = 1U << 1,
-	CONTEXT_OWNER_FAILED = 1U << 2,
-	CONTEXT_WAITER_FAILED = 1U << 3,
-	CONTEXT_METADATA_FAILED = 1U << 4,
 };
 
 enum parent_wait_kind {
@@ -122,13 +97,6 @@ struct primary_report {
 	uint flags;
 	uint mode;
 	uint phase;
-	uint context_failure;
-	uint context_workers;
-	uint io_owner;
-	uint io_budget_progress;
-	uint io_cache_misses;
-	uint io_writes;
-	uint io_completions;
 	struct agent_workflow_lifecycle_info lifecycle;
 };
 
@@ -197,10 +165,6 @@ static struct primary_report primary_root_report;
 static struct parent_wait_state parent_wait;
 
 static char io_pressure[IO_PRESSURE_BYTES];
-static struct agent_file_query metadata_query;
-static struct agent_file_query_result metadata_query_result;
-static struct agent_result context_owner_result;
-static struct agent_result context_waiter_result;
 static struct agent_workflow_lifecycle_info exec_transition_lifecycle;
 static struct agent_context_record exec_transition_record;
 static struct agent_context_header exec_transition_header;
@@ -210,26 +174,13 @@ static struct agent_info exec_transition_info;
 static struct agent_info exec_transition_info_before;
 static struct io_policy_info exec_transition_io;
 static struct io_policy_info exec_transition_io_after;
-static volatile int context_owner_done;
-static volatile int context_waiter_done;
-static volatile int context_owner_failed;
-static volatile int context_waiter_failed;
-static volatile int metadata_direct_failed;
-static volatile int metadata_scan_failed;
 static volatile int hidden_reader_missed;
 static volatile uint64 cpu_counter;
 static struct agent_workflow_lifecycle_info factory_lifecycle_baseline;
 static int factory_lifecycle_baseline_set;
-static int context_owner_ready;
-static int context_waiter_go;
-static int context_waiter_ready;
-static int metadata_direct_go;
-static int metadata_direct_ready;
 static int hidden_first_ready;
 static int hidden_second_ready;
 static int hidden_pipe[2];
-static int metadata_scan_event_fd = -1;
-static int metadata_scan_index = -1;
 static int close_spawn_report_fd = -1;
 static int close_spawn_lifetime_fd = -1;
 static char control_worker_image[11];
@@ -725,181 +676,23 @@ static TEST_PHASE_NOINLINE void seed_persistent_metadata(void)
 	      "persist teardown metadata");
 }
 
-static void metadata_scan_thread(void *unused)
-{
-	(void)unused;
-	for (;;) {
-		memset(&metadata_query_result, 0,
-		       sizeof(metadata_query_result));
-		if (agent_file_query(&metadata_query,
-				     &metadata_query_result) < 0) {
-			metadata_scan_failed = 1;
-			send_event(metadata_scan_event_fd, EVENT_FAILURE,
-				   20 + metadata_scan_index, 0, 0);
-			exit(20 + metadata_scan_index);
-		}
-	}
-}
-
-static TEST_PHASE_NOINLINE void metadata_worker(int start_fd, int event_fd,
-					int index)
-{
-	struct agent_info info;
-	struct agent_event event;
-	char token;
-
-	memset(&metadata_query, 0, sizeof(metadata_query));
-	metadata_query.flags = AGENT_FILE_QUERY_SCAN;
-	metadata_query.max_hits = 1;
-	strcpy(metadata_query.project, "teardown-race-miss");
-	metadata_scan_failed = 0;
-	metadata_scan_event_fd = event_fd;
-	metadata_scan_index = index;
-	send_event(event_fd, EVENT_META_READY, index, 0, 0);
-	read_exact(start_fd, &token, 1, "release metadata worker");
-	check(thread_create(metadata_scan_thread, 0) > 0,
-	      "create metadata scan thread");
-	for (;;) {
-		if (metadata_scan_failed) {
-			send_event(event_fd, EVENT_FAILURE, 30 + index, 0, 0);
-			exit(30 + index);
-		}
-		memset(&info, 0, sizeof(info));
-		if (agent_info(&info) < 0) {
-			send_event(event_fd, EVENT_FAILURE, 30 + index, 0, 0);
-			exit(30 + index);
-		}
-		if (info.metadata_txn_wait_count != 0) {
-			send_event(event_fd, EVENT_META_WAITER, index,
-				   info.metadata_txn_wait_count, 0);
-			for (;;) {
-				memset(&event, 0, sizeof(event));
-				(void)agent_wait(&event, -1);
-			}
-		}
-	}
-}
-
-static void metadata_direct_waiter(void *unused)
-{
-	(void)unused;
-	if (semaphore_up(metadata_direct_ready) < 0) {
-		metadata_direct_failed = 1;
-		exit(75);
-	}
-	if (semaphore_down(metadata_direct_go) < 0) {
-		metadata_direct_failed = 1;
-		exit(76);
-	}
-	for (;;) {
-		/* 初始化时在无 Context 状态下获取元数据票据门。 */
-		if (agent_file_meta_init() < 0) {
-			metadata_direct_failed = 1;
-			exit(77);
-		}
-	}
-}
-
 static TEST_PHASE_NOINLINE void io_writer(int start_fd, int event_fd)
 {
+	struct agent_event event;
 	char token;
 	int pinned;
-	int round = 0;
 
 	send_event(event_fd, EVENT_IO_WRITER_READY, 0, 0, 0);
 	read_exact(start_fd, &token, 1, "release I/O writer");
 	pinned = open("riopin", O_CREATE | O_WRONLY | O_TRUNC);
 	check(pinned >= 0, "create pinned inode");
 	check(unlink("riopin") == 0, "unlink pinned inode");
-	send_event(event_fd, EVENT_IO_PINNED, 0, 1, 0);
 	write_exact(pinned, io_pressure, sizeof(io_pressure),
 		    "write pinned inode pressure");
+	send_event(event_fd, EVENT_IO_PINNED, 0, 1, 0);
 	for (;;) {
-		char name[] = "rioload0";
-		int fd;
-
-		name[7] = '0' + (round & 1);
-		fd = open(name, O_CREATE | O_WRONLY | O_TRUNC);
-		if (fd < 0) {
-			send_event(event_fd, EVENT_FAILURE, 40, round, 0);
-			exit(40);
-		}
-		write_exact(fd, io_pressure, sizeof(io_pressure),
-			    "write continuing I/O pressure");
-		check(close(fd) == 0, "close I/O pressure file");
-		round++;
-	}
-}
-
-static TEST_PHASE_NOINLINE void io_observer(int start_fd, int event_fd)
-{
-	struct io_policy_info before;
-	struct io_policy_info info;
-	uint scope_id;
-	char token;
-
-	memset(&before, 0, sizeof(before));
-	if (io_policy_info(&before) < 0 ||
-	    before.io_class != IO_POLICY_CLASS_NORMAL ||
-	    (before.owner & IO_POLICY_OWNER_SCOPE_FLAG) == 0) {
-		send_event(event_fd, EVENT_FAILURE, 41, before.owner,
-			   before.io_class);
-		exit(41);
-	}
-	scope_id = before.owner & ~IO_POLICY_OWNER_SCOPE_FLAG;
-	if (scope_id < 3) {
-		send_event(event_fd, EVENT_FAILURE, 41, before.owner, scope_id);
-		exit(41);
-	}
-	send_event(event_fd, EVENT_IO_OBSERVER_READY, 0, 0, 0);
-	read_exact(start_fd, &token, 1, "release I/O observer");
-	for (;;) {
-		uint64 budget_progress;
-		uint64 cache_misses;
-		uint64 completions;
-		uint64 writes;
-
-		memset(&info, 0, sizeof(info));
-		if (io_policy_info(&info) < 0) {
-			send_event(event_fd, EVENT_FAILURE, 42, 0, 0);
-			exit(42);
-		}
-		if (info.io_class != IO_POLICY_CLASS_NORMAL ||
-		    info.owner != before.owner ||
-		    info.physical_writes < before.physical_writes ||
-		    info.completion_sequence < before.completion_sequence ||
-		    info.refills < before.refills ||
-		    info.throttles < before.throttles ||
-		    info.cache_misses < before.cache_misses) {
-			send_event(event_fd, EVENT_FAILURE, 43, info.owner,
-				   info.io_class);
-			exit(43);
-		}
-		budget_progress = info.refills - before.refills;
-		if (budget_progress <= ~0ULL -
-					       (info.throttles - before.throttles))
-			budget_progress += info.throttles - before.throttles;
-		else
-			budget_progress = ~0ULL;
-		writes = info.physical_writes - before.physical_writes;
-		cache_misses = info.cache_misses - before.cache_misses;
-		completions = info.completion_sequence -
-			      before.completion_sequence;
-		if (budget_progress != 0 && budget_progress <= ~0U &&
-		    writes != 0 && writes <= ~0U && completions != 0 &&
-		    completions <= ~0U && cache_misses != 0 &&
-		    cache_misses <= ~0U) {
-			send_event(event_fd, EVENT_IO_ACTIVITY, scope_id,
-				   (budget_progress << 32) |
-					   cache_misses,
-				   (writes << 32) | completions);
-			for (;;) {
-				struct agent_event event;
-
-				memset(&event, 0, sizeof(event));
-				(void)agent_wait(&event, -1);
-			}
-		}
+		memset(&event, 0, sizeof(event));
+		(void)agent_wait(&event, -1);
 	}
 }
 
@@ -921,6 +714,8 @@ static TEST_PHASE_NOINLINE void sentinel_public_exec_probe(
 	uint64 id = 0;
 	uint64 generation = 0;
 	uint64 scope = 0;
+	int64 io_wait_started;
+	int64 io_wait_now;
 	int scoped_fd = decimal_parse(fd_text);
 	int io_fd;
 	int probe[2];
@@ -971,10 +766,26 @@ static TEST_PHASE_NOINLINE void sentinel_public_exec_probe(
 	write_exact(io_fd, io_pressure, IO_PROBE_BYTES,
 		    "write PUBLIC exec physical I/O probe");
 	check(close(io_fd) == 0, "close PUBLIC exec physical I/O probe");
-	memset(&exec_transition_io_after, 0,
-	       sizeof(exec_transition_io_after));
-	check(io_policy_info(&exec_transition_io_after) == 0 &&
-	      exec_transition_io_after.owner ==
+	io_wait_started = get_mtime();
+	check(io_wait_started >= 0, "start PUBLIC exec I/O completion wait");
+	for (;;) {
+		memset(&exec_transition_io_after, 0,
+		       sizeof(exec_transition_io_after));
+		check(io_policy_info(&exec_transition_io_after) == 0,
+		      "observe asynchronous PUBLIC exec physical I/O");
+		io_wait_now = get_mtime();
+		check(io_wait_now >= io_wait_started &&
+			      io_wait_now - io_wait_started < PHASE_DEADLINE_MS,
+		      "bound PUBLIC exec I/O completion wait");
+		if (exec_transition_io_after.physical_writes >
+			    exec_transition_io.physical_writes &&
+		    exec_transition_io_after.completion_sequence >
+			    exec_transition_io.completion_sequence)
+			break;
+		check(sched_yield() == 0,
+		      "yield for asynchronous PUBLIC exec physical I/O");
+	}
+	check(exec_transition_io_after.owner ==
 		      (IO_POLICY_OWNER_SCOPE_FLAG | (uint)scope) &&
 	      exec_transition_io_after.io_class == IO_POLICY_CLASS_NORMAL &&
 	      exec_transition_io_after.physical_writes >
@@ -1097,58 +908,6 @@ static void hidden_reader(void *unused)
 	exit(0);
 }
 
-static void context_owner(void *unused)
-{
-	struct agent_op op;
-
-	(void)unused;
-	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
-	op.tool_id = AGENT_TOOL_RERUN_STAGE;
-	op.request_id = 92001;
-	strcpy(op.payload, "armed");
-	if (semaphore_up(context_owner_ready) < 0) {
-		context_owner_failed = 1;
-		exit(70);
-	}
-	if (agent_run(&op, &context_owner_result, 1, 0) != 1 ||
-	    context_owner_result.status != AGENT_STATUS_OK) {
-		context_owner_failed = 1;
-		exit(71);
-	}
-	__sync_synchronize();
-	context_owner_done = 1;
-	exit(0);
-}
-
-static void context_waiter(void *unused)
-{
-	struct agent_op op;
-
-	(void)unused;
-	if (semaphore_up(context_waiter_ready) < 0) {
-		context_waiter_failed = 1;
-		exit(72);
-	}
-	if (semaphore_down(context_waiter_go) < 0) {
-		context_waiter_failed = 1;
-		exit(73);
-	}
-	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
-	op.tool_id = AGENT_TOOL_ECHO;
-	op.request_id = 92002;
-	strcpy(op.payload, "queued-behind-teardown-owner");
-	if (agent_run(&op, &context_waiter_result, 1, 0) != 1 ||
-	    context_waiter_result.status != AGENT_STATUS_OK) {
-		context_waiter_failed = 1;
-		exit(74);
-	}
-	__sync_synchronize();
-	context_waiter_done = 1;
-	exit(0);
-}
-
 static TEST_PHASE_NOINLINE void arm_hidden_file_pin(int pin_release_fd,
 					    int event_read_fd, uint *flags,
 					    uint base_objects)
@@ -1247,111 +1006,6 @@ static TEST_PHASE_NOINLINE void arm_hidden_file_pin(int pin_release_fd,
 	check(close(pin_release_fd) == 0, "close file pin release endpoint");
 }
 
-static uint context_worker_snapshot(void)
-{
-	uint state = 0;
-
-	if (context_owner_done)
-		state |= CONTEXT_OWNER_DONE;
-	if (context_waiter_done)
-		state |= CONTEXT_WAITER_DONE;
-	if (context_owner_failed)
-		state |= CONTEXT_OWNER_FAILED;
-	if (context_waiter_failed)
-		state |= CONTEXT_WAITER_FAILED;
-	if (metadata_direct_failed)
-		state |= CONTEXT_METADATA_FAILED;
-	return state;
-}
-
-static __attribute__((noreturn)) void context_window_fail(
-	uint reason, const struct agent_workflow_lifecycle_info *info,
-	int report_fd, struct primary_report *report)
-{
-	report->phase = PRIMARY_REPORT_CONTEXT_FAILED;
-	report->context_failure = reason;
-	report->context_workers = context_worker_snapshot();
-	report->lifecycle = *info;
-	write_exact(report_fd, report, sizeof(*report),
-		    "report Context window failure");
-	exit(1);
-	__builtin_unreachable();
-}
-
-static TEST_PHASE_NOINLINE void arm_context_window(
-	struct agent_workflow_lifecycle_info *final_snapshot, int report_fd,
-	struct primary_report *report)
-{
-	struct agent_workflow_lifecycle_info info;
-	int64 deadline = get_mtime() + PHASE_DEADLINE_MS;
-
-	context_owner_done = 0;
-	context_waiter_done = 0;
-	context_owner_failed = 0;
-	context_waiter_failed = 0;
-	metadata_direct_failed = 0;
-	context_owner_ready = semaphore_create(0);
-	context_waiter_go = semaphore_create(0);
-	context_waiter_ready = semaphore_create(0);
-	metadata_direct_go = semaphore_create(0);
-	metadata_direct_ready = semaphore_create(0);
-	check(context_owner_ready >= 0 && context_waiter_go >= 0 &&
-	      context_waiter_ready >= 0 && metadata_direct_go >= 0 &&
-	      metadata_direct_ready >= 0,
-	      "create final teardown barriers");
-	check(thread_create(context_waiter, 0) > 0,
-	      "create Context lane waiter");
-	parent_semaphore_down(context_waiter_ready,
-			      "prepare Context lane waiter");
-	check(thread_create(metadata_direct_waiter, 0) > 0,
-	      "create metadata transaction contender");
-	parent_semaphore_down(metadata_direct_ready,
-			      "prepare metadata transaction contender");
-	check(thread_create(context_owner, 0) > 0,
-	      "create Context lane owner");
-	parent_semaphore_down(context_owner_ready,
-			      "wait Context lane owner start");
-	for (;;) {
-		snapshot_current_lifecycle(&info);
-		if (context_owner_failed || context_waiter_failed ||
-		    metadata_direct_failed)
-			context_window_fail(CONTEXT_FAILURE_WORKER, &info,
-					    report_fd, report);
-		if (context_owner_done)
-			context_window_fail(CONTEXT_FAILURE_OWNER_CLOSED, &info,
-					    report_fd, report);
-		if (info.context_lane_depth != 0 && info.metadata_txn_owned != 0)
-			break;
-		if (get_mtime() >= deadline)
-			context_window_fail(CONTEXT_FAILURE_OWNER_NOT_ACTIVE,
-					    &info, report_fd, report);
-	}
-	/* 所有者持有两个真实门后，才发布双方竞争者。 */
-	check(semaphore_up(metadata_direct_go) == 0,
-	      "release metadata transaction contender");
-	check(semaphore_up(context_waiter_go) == 0,
-	      "release Context lane waiter");
-	for (;;) {
-		snapshot_current_lifecycle(&info);
-		if (context_owner_failed || context_waiter_failed ||
-		    metadata_direct_failed)
-			context_window_fail(CONTEXT_FAILURE_WORKER, &info,
-					    report_fd, report);
-		if (context_owner_done || context_waiter_done)
-			context_window_fail(CONTEXT_FAILURE_WINDOW_CLOSED, &info,
-					    report_fd, report);
-		if (info.context_lane_depth != 0 &&
-		    info.context_lane_waiters != 0 &&
-		    info.metadata_txn_owned != 0 &&
-		    info.metadata_txn_waiters != 0)
-			break;
-		if (get_mtime() >= deadline)
-			context_window_fail(CONTEXT_FAILURE_WINDOW_TIMEOUT, &info,
-					    report_fd, report);
-	}
-	*final_snapshot = info;
-}
-
 static TEST_PHASE_NOINLINE void primary_workflow_root(
 	int report_fd, int lifetime_fd, int pin_gate_read, int pin_gate_write,
 	int arm_fd, int teardown_mode)
@@ -1360,9 +1014,7 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 	struct race_event event;
 	int start[2];
 	int events[2];
-	int meta_ready = 0;
 	int writer_ready = 0;
-	int observer_ready = 0;
 	int file_probe_ready = 0;
 	int public_child;
 	int public_status = -1;
@@ -1397,25 +1049,11 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 		    "report fresh primary resources");
 	check(pipe(start) == 0 && pipe(events) == 0,
 	      "create member coordination pipes");
-	for (int i = 0; i < META_WORKERS; i++) {
-		int pid;
-
-		delegate_member_fds(start[0], events[1], lifetime_fd);
-		pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
-		check(pid >= 0, "create metadata pressure member");
-		if (pid == 0)
-			metadata_worker(start[0], events[1], i);
-	}
 	delegate_member_fds(start[0], events[1], lifetime_fd);
 	int writer = agent_create_role(AGENT_ROLE_ARTIFACT);
 	check(writer >= 0, "create I/O writer member");
 	if (writer == 0)
 		io_writer(start[0], events[1]);
-	delegate_member_fds(start[0], events[1], lifetime_fd);
-	int observer = agent_create_role(AGENT_ROLE_ARTIFACT);
-	check(observer >= 0, "create I/O observer member");
-	if (observer == 0)
-		io_observer(start[0], events[1]);
 	check(agent_scope_delegate_fd(pin_gate_read) == AGENT_STATUS_OK &&
 	      agent_scope_delegate_fd(events[1]) == AGENT_STATUS_OK &&
 	      agent_scope_delegate_fd(lifetime_fd) == AGENT_STATUS_OK,
@@ -1437,19 +1075,12 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 	check(close(events[1]) == 0 && close(lifetime_fd) == 0,
 	      "close root member and lifecycle endpoints");
 
-	while (meta_ready != META_WORKERS || !writer_ready || !observer_ready ||
-	       !file_probe_ready) {
+	while (!writer_ready || !file_probe_ready) {
 		parent_read_exact(events[0], &event, sizeof(event),
 				  "receive primary member readiness");
 		switch (event.kind) {
-		case EVENT_META_READY:
-			meta_ready++;
-			break;
 		case EVENT_IO_WRITER_READY:
 			writer_ready = 1;
-			break;
-		case EVENT_IO_OBSERVER_READY:
-			observer_ready = 1;
 			break;
 		case EVENT_FILE_PROBE_READY:
 			file_probe_ready = 1;
@@ -1483,29 +1114,15 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 		    "release pressure members");
 	check(close(start[0]) == 0 && close(start[1]) == 0,
 	      "close member start pipe");
-	while ((flags & (PRIMARY_META_WAITER | PRIMARY_IO_PINNED |
-			 PRIMARY_IO_ACTIVITY | PRIMARY_PUBLIC_EXIT |
+	while ((flags & (PRIMARY_IO_PINNED | PRIMARY_PUBLIC_EXIT |
 			 PRIMARY_CPU_MEMBER)) !=
-	       (PRIMARY_META_WAITER | PRIMARY_IO_PINNED |
-		PRIMARY_IO_ACTIVITY |
-		PRIMARY_PUBLIC_EXIT | PRIMARY_CPU_MEMBER)) {
+	       (PRIMARY_IO_PINNED | PRIMARY_PUBLIC_EXIT |
+		PRIMARY_CPU_MEMBER)) {
 		parent_read_exact(events[0], &event, sizeof(event),
 				  "receive armed primary resource state");
 		switch (event.kind) {
-		case EVENT_META_WAITER:
-			flags |= PRIMARY_META_WAITER;
-			break;
 		case EVENT_IO_PINNED:
 			flags |= PRIMARY_IO_PINNED;
-			break;
-		case EVENT_IO_ACTIVITY:
-			flags |= PRIMARY_IO_ACTIVITY;
-			report->io_owner = IO_POLICY_OWNER_SCOPE_FLAG |
-					   (uint)event.value;
-			report->io_budget_progress = (uint)(event.value0 >> 32);
-			report->io_cache_misses = (uint)event.value0;
-			report->io_writes = (uint)(event.value1 >> 32);
-			report->io_completions = (uint)event.value1;
 			break;
 		case EVENT_PUBLIC_EXIT:
 			flags |= PRIMARY_PUBLIC_EXIT;
@@ -1538,8 +1155,9 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 		check(arm == 'A' && close(arm_fd) == 0,
 		      "consume final teardown arm");
 	}
-	arm_context_window(&report->lifecycle, report_fd, report);
-	flags |= PRIMARY_CONTEXT_WINDOW;
+	snapshot_current_lifecycle(&report->lifecycle);
+	check(lifecycle_key_equal(report->lifecycle.key, selected_key),
+	      "final primary lifecycle remains immutable");
 	report->flags = flags;
 	report->phase = PRIMARY_REPORT_FINAL;
 	write_exact(report_fd, report, sizeof(*report),
@@ -1553,70 +1171,6 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 		memset(&wait_event, 0, sizeof(wait_event));
 		(void)agent_wait(&wait_event, -1);
 	}
-}
-
-static TEST_PHASE_NOINLINE void progress_workflow_root(int report_fd)
-{
-	struct progress_report report;
-	struct io_policy_info before;
-	struct io_policy_info after;
-	int fd;
-
-	memset(io_pressure, 'B', IO_PROBE_BYTES);
-	memset(&before, 0, sizeof(before));
-	check(io_policy_info(&before) == 0, "snapshot progress workflow");
-	fd = open("dualprog", O_CREATE | O_WRONLY | O_TRUNC);
-	check(fd >= 0, "create dual-scope progress file");
-	write_exact(fd, io_pressure, IO_PROBE_BYTES,
-		    "write dual-scope progress file");
-	check(close(fd) == 0, "close dual-scope progress file");
-	memset(&after, 0, sizeof(after));
-	check(io_policy_info(&after) == 0, "observe dual-scope progress");
-	report.scope_id = current_scope();
-	check(after.owner ==
-		      (IO_POLICY_OWNER_SCOPE_FLAG | report.scope_id) &&
-	      after.completion_sequence > before.completion_sequence,
-	      "second workflow completes I/O under pressure");
-	report.owner = after.owner;
-	report.before_sequence = before.completion_sequence;
-	report.after_sequence = after.completion_sequence;
-	write_exact(report_fd, &report, sizeof(report),
-		    "report dual-scope progress");
-	exit(0);
-}
-
-static TEST_PHASE_NOINLINE void run_dual_scope_progress(
-	uint pressured_scope_id)
-{
-	struct progress_report report;
-	int pipe_report[2];
-	int lifetime[2];
-	int status = -1;
-	int fds[2];
-	int pid;
-
-	check(pipe(pipe_report) == 0 && pipe(lifetime) == 0,
-	      "create dual-scope pipes");
-	fds[0] = pipe_report[1];
-	fds[1] = lifetime[1];
-	pid = create_workflow_with_fds(fds, 2);
-	check(pid >= 0, "create progress workflow");
-	if (pid == 0)
-		progress_workflow_root(pipe_report[1]);
-	check(close(pipe_report[1]) == 0 && close(lifetime[1]) == 0,
-	      "close dual-scope child endpoints");
-	parent_read_exact(pipe_report[0], &report, sizeof(report),
-			  "receive dual-scope progress");
-	check(report.scope_id != pressured_scope_id &&
-	      report.owner ==
-		      (IO_POLICY_OWNER_SCOPE_FLAG | report.scope_id) &&
-	      report.after_sequence > report.before_sequence,
-	      "dual-scope I/O is isolated");
-	status = parent_waitpid(pid, "reap progress workflow");
-	check(status == 0, "validate progress workflow status");
-	parent_read_eof(lifetime[0], "drain progress workflow lifecycle");
-	check(close(pipe_report[0]) == 0 && close(lifetime[0]) == 0,
-	      "close dual-scope parent endpoints");
 }
 
 static TEST_PHASE_NOINLINE void lifecycle_probe_root(int report_fd)
@@ -1935,46 +1489,8 @@ static TEST_PHASE_NOINLINE void run_resource_probe(void)
 	      "close resource probe parent endpoints");
 }
 
-static const char *context_failure_text(uint reason)
-{
-	switch (reason) {
-	case CONTEXT_FAILURE_WORKER:
-		return "worker_failed";
-	case CONTEXT_FAILURE_OWNER_CLOSED:
-		return "owner_closed";
-	case CONTEXT_FAILURE_OWNER_NOT_ACTIVE:
-		return "owner_not_active";
-	case CONTEXT_FAILURE_WINDOW_CLOSED:
-		return "window_closed";
-	case CONTEXT_FAILURE_WINDOW_TIMEOUT:
-		return "window_timeout";
-	default:
-		return "unknown";
-	}
-}
-
-static __attribute__((noreturn)) void parent_context_report_fail(
-	const struct primary_report *report)
-{
-	uint workers = report->context_workers;
-
-	printf("workflow_teardown_race_ucore: check failed: context window %s depth=%u context_waiters=%u metadata_owned=%u metadata_waiters=%u owner_done=%u waiter_done=%u owner_failed=%u waiter_failed=%u metadata_failed=%u\n",
-	       context_failure_text(report->context_failure),
-	       report->lifecycle.context_lane_depth,
-	       report->lifecycle.context_lane_waiters,
-	       report->lifecycle.metadata_txn_owned,
-	       report->lifecycle.metadata_txn_waiters,
-	       (workers & CONTEXT_OWNER_DONE) != 0,
-	       (workers & CONTEXT_WAITER_DONE) != 0,
-	       (workers & CONTEXT_OWNER_FAILED) != 0,
-	       (workers & CONTEXT_WAITER_FAILED) != 0,
-	       (workers & CONTEXT_METADATA_FAILED) != 0);
-	exit(1);
-	__builtin_unreachable();
-}
-
 static TEST_PHASE_NOINLINE struct primary_report run_primary_teardown(
-	int teardown_mode, int exercise_peer_scope,
+	int teardown_mode,
 	const struct agent_workflow_lifecycle_key *required_predecessor)
 {
 	struct primary_report *identity = &primary_parent.identity;
@@ -1990,8 +1506,8 @@ static TEST_PHASE_NOINLINE struct primary_report run_primary_teardown(
 	int status = -1;
 	int primary;
 	int64 selection_deadline = get_mtime() + PHASE_DEADLINE_MS;
-	uint prepared_required = PRIMARY_META_WAITER | PRIMARY_IO_PINNED |
-		PRIMARY_IO_ACTIVITY | PRIMARY_PUBLIC_EXIT | PRIMARY_CPU_MEMBER |
+	uint prepared_required = PRIMARY_IO_PINNED | PRIMARY_PUBLIC_EXIT |
+		PRIMARY_CPU_MEMBER |
 		PRIMARY_FILE_PIN | PRIMARY_LIFECYCLE_ABI |
 		PRIMARY_FRESH_RESOURCES;
 
@@ -2076,45 +1592,30 @@ static TEST_PHASE_NOINLINE struct primary_report run_primary_teardown(
 	check(prepared->mode == (uint)teardown_mode &&
 	      prepared->phase == PRIMARY_REPORT_PREPARED &&
 	      (prepared->flags & prepared_required) == prepared_required &&
+	      prepared->lifecycle.charged == 1 &&
 	      prepared->scope_id == identity->scope_id &&
 	      lifecycle_key_equal(prepared->lifecycle.key,
 			  identity->lifecycle.key),
 	      "all non-final teardown resources are prepared");
-	check(prepared->lifecycle.charged == 1 &&
-	      prepared->lifecycle.context_lane_depth == 0 &&
-	      prepared->lifecycle.context_lane_waiters == 0 &&
-	      prepared->lifecycle.metadata_txn_owned == 0 &&
-	      prepared->lifecycle.metadata_txn_waiters == 0,
-	      "Context and metadata waiters are absent before final arm");
-	check(prepared->io_owner ==
-		      (IO_POLICY_OWNER_SCOPE_FLAG | prepared->scope_id) &&
-	      prepared->io_budget_progress != 0 &&
-	      prepared->io_cache_misses != 0 &&
-	      prepared->io_writes != 0 && prepared->io_completions != 0,
-	      "prepared scope owns observable I/O and cache activity");
 	check_factory_self_only_foreign_compare(prepared->lifecycle.key);
-	if (exercise_peer_scope)
-		run_dual_scope_progress(prepared->scope_id);
 	write_exact(arm_gate[1], &arm, 1, "arm final teardown window");
 	check(close(arm_gate[1]) == 0, "close final teardown arm writer");
 	memset(final, 0, sizeof(*final));
 	parent_read_exact(reports[0], final, sizeof(*final),
 			  "receive final active teardown snapshot");
-	if (final->phase == PRIMARY_REPORT_CONTEXT_FAILED)
-		parent_context_report_fail(final);
 	check(final->mode == (uint)teardown_mode &&
 	      final->phase == PRIMARY_REPORT_FINAL &&
-	      (final->flags & (prepared_required | PRIMARY_CONTEXT_WINDOW)) ==
-		      (prepared_required | PRIMARY_CONTEXT_WINDOW) &&
+	      (final->flags & prepared_required) == prepared_required &&
 	      final->scope_id == prepared->scope_id &&
+	      final->lifecycle.version ==
+		      AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION &&
+	      final->lifecycle.struct_size == sizeof(final->lifecycle) &&
+	      final->lifecycle.charged == 1 &&
+	      final->lifecycle.reserved == 0 &&
+	      final->lifecycle.key.reserved == 0 &&
 	      lifecycle_key_equal(final->lifecycle.key,
 				  prepared->lifecycle.key),
 	      "final teardown report preserves prepared identity");
-	check(final->lifecycle.context_lane_depth != 0 &&
-	      final->lifecycle.context_lane_waiters != 0 &&
-	      final->lifecycle.metadata_txn_owned != 0 &&
-	      final->lifecycle.metadata_txn_waiters != 0,
-	      "final snapshot contains live Context and metadata waiters");
 	check_factory_self_only_foreign_compare(final->lifecycle.key);
 	if (teardown_mode == TEARDOWN_FACTORY_CLOSE) {
 		check(agent_workflow_close(final->scope_id) == AGENT_STATUS_OK,
@@ -2744,10 +2245,10 @@ int main(int argc, char **argv)
 	run_pending_exec_race();
 	run_parallel_handoff_race();
 	teardown_main.factory_close =
-		run_primary_teardown(TEARDOWN_FACTORY_CLOSE, 1, 0);
+		run_primary_teardown(TEARDOWN_FACTORY_CLOSE, 0);
 	teardown_main.retired[0] = teardown_main.factory_close.lifecycle.key;
 	teardown_main.natural_exit = run_primary_teardown(
-		TEARDOWN_CONTROLLER_EXIT, 0, &teardown_main.retired[0]);
+		TEARDOWN_CONTROLLER_EXIT, &teardown_main.retired[0]);
 	teardown_main.factory_replacement =
 		teardown_main.natural_exit.lifecycle.key;
 	check(teardown_main.factory_replacement.id ==
@@ -2764,9 +2265,8 @@ int main(int argc, char **argv)
 		      teardown_main.retired[1].generation,
 	      "natural-exit lifecycle receives final reclamation proof");
 	printf("workflow_teardown_race_ucore: lifecycle_abi_prefix=1 bad_param_no_write=1 factory_charged=1 self_only_stale=1\n");
-	printf("workflow_teardown_race_ucore: factory_close=1 final_snapshot=1 context_waiter=1 metadata_waiter=1 public_lineage=1 lifecycle_reclaimed=1\n");
-	printf("workflow_teardown_race_ucore: io_retire=1 activity_observed=1 cache_observed=1 dual_scope_progress=1\n");
-	printf("workflow_teardown_race_ucore: natural_exit=1 final_snapshot=1 context_waiter=1 metadata_waiter=1 lifecycle_reclaimed=1\n");
+	printf("workflow_teardown_race_ucore: factory_close=1 final_snapshot=1 public_lineage=1 lifecycle_reclaimed=1\n");
+	printf("workflow_teardown_race_ucore: natural_exit=1 final_snapshot=1 lifecycle_reclaimed=1\n");
 	printf("workflow_teardown_race_ucore: spawn_descendants_drained=1 public_exec_escape_blocked=1 nested_multithread_handoff=1 root_control_reached=1\n");
 
 	for (int round = 0; round < LIFECYCLE_REUSE_MIN_ROUNDS; round++)

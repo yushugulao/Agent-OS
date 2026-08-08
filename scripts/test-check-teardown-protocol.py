@@ -182,6 +182,79 @@ class TeardownProtocolTests(unittest.TestCase):
         )
         self.assert_rejected(sources, "one-bounded-phase-per-tick")
 
+    def test_trusted_close_retained_ref_cannot_report_absent(self):
+        sources = self.changed("vfs", "\t\t\tresult = 1;", "\t\t\tresult = -1;")
+        self.assert_rejected(sources, "trusted scope close")
+
+    def test_trusted_close_requires_valid_lifecycle_binding(self):
+        sources = self.changed(
+            "vfs",
+            "\t\tif (ref != 0 && workflow_lifecycle_key_valid(ref->lifecycle)) {\n"
+            "\t\t\tresult = 1;",
+            "\t\tif (ref != 0) {\n\t\t\tresult = 1;",
+        )
+        self.assert_rejected(sources, "trusted scope close")
+
+    def test_trusted_close_requires_retiring_guard(self):
+        sources = self.changed(
+            "vfs",
+            "\t\t\tif (!ref->retiring &&\n"
+            "\t\t\t    workflow_lifecycle_close_trusted(scope_id, closed) == 0 &&",
+            "\t\t\tif (workflow_lifecycle_close_trusted(scope_id, closed) == 0 &&",
+        )
+        self.assert_rejected(sources, "trusted scope close")
+
+    def test_trusted_close_requires_exact_lifecycle_key(self):
+        sources = self.changed(
+            "vfs",
+            " &&\n\t\t\t    workflow_lifecycle_key_equal(*closed, ref->lifecycle))",
+            ")",
+        )
+        self.assert_rejected(sources, "trusted scope close")
+
+    def test_factory_close_cannot_map_retained_ref_to_not_found(self):
+        sources = self.changed(
+            "agent_core",
+            "\t\tif (result > 0)\n\t\t\treturn AGENT_STATUS_RETRY;",
+            "\t\tif (result > 0)\n\t\t\treturn AGENT_STATUS_NOT_FOUND;",
+        )
+        self.assert_rejected(sources, "factory scope close")
+
+    def test_preserved_retirement_requires_draining_state(self):
+        sources = self.changed(
+            "vfs",
+            "\t\t\t    (storage_state == RESOURCE_ACCOUNT_DRAINING ||\n"
+            "\t\t\t     storage_state == RESOURCE_ACCOUNT_FREE) &&",
+            "\t\t\t    storage_state == RESOURCE_ACCOUNT_FREE &&",
+        )
+        self.assert_rejected(sources, "preserved teardown DONE")
+
+    def test_preserved_retirement_accepts_free_state(self):
+        sources = self.changed(
+            "vfs",
+            "\t\t\t    (storage_state == RESOURCE_ACCOUNT_DRAINING ||\n"
+            "\t\t\t     storage_state == RESOURCE_ACCOUNT_FREE) &&",
+            "\t\t\t    storage_state == RESOURCE_ACCOUNT_DRAINING &&",
+        )
+        self.assert_rejected(sources, "preserved teardown DONE")
+
+    def test_preserved_retirement_rejects_closing_state(self):
+        sources = self.changed(
+            "vfs",
+            "\t\t\t     storage_state == RESOURCE_ACCOUNT_FREE) &&",
+            "\t\t\t     storage_state == RESOURCE_ACCOUNT_FREE ||\n"
+            "\t\t\t     storage_state == RESOURCE_ACCOUNT_CLOSING) &&",
+        )
+        self.assert_rejected(sources, "preserved teardown DONE")
+
+    def test_retirement_uses_one_storage_state_sample(self):
+        sources = self.changed(
+            "vfs",
+            "\t\t\tstorage_state = resource_account_state_get(ref->storage_account);\n",
+            "",
+        )
+        self.assert_rejected(sources, "one storage state sample")
+
     def test_scope_lookup_must_use_scope_hash(self):
         sources = self.changed(
             "vfs",

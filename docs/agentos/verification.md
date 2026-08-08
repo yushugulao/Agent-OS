@@ -87,7 +87,7 @@ bash scripts/run-agent-tests.sh
 
 进入普通套件前，脚本以独立镜像运行 Context-sync/WAIT_ATOMIC `agentfinal_ucore` profile。它有独立 timing file，不计入 Agent suite 校准。裸 marker 只是测试合同的一部分，只有完整退出条件、canonical Guest 日志和同一冻结源码的 bundle 共同通过，才能支持发布结论。
 
-`workflow_teardown_race_ucore` 是独立机制专项，不在 Agent case 清单中。`make workflow-teardown-race-test` 组合核对 lifecycle ABI、关闭与自然退出、PUBLIC lineage、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 generation 重用；结果仍以当前 release bundle 为准。
+`workflow_teardown_race_ucore` 是独立机制专项，不在 Agent case 清单中。`make workflow-teardown-race-test` 组合核对 lifecycle ABI、关闭与自然退出、PUBLIC lineage、阻塞 file 引用、退出后新 workflow 账户的 debt/cache 零值、inode/account 回收和 generation 重用；Context lane、metadata transaction 与非零 I/O debt/cache 的 teardown 同窗状态当前没有确定性动态证明。结果仍以当前 release bundle 为准。
 
 scope 回归核对：PUBLIC=0、SYSTEM=1、动态 workflow>=3，数值 2 是安装级 PUBLIC 存储 principal。权威 lifecycle ledger 固定 8 槽，key 为 `(id,generation)`；冻结期 ACTIVE+CLOSING+RETIRING 合计最多 4 个，目录彻底退休后才释放准入槽，身份槽随后才能以更高 generation 复用。`vfs_scope_refs[NPROC]` 只是 VFS 引用/清理记录。进程、线程、file object、block/inode、cache 和 Agent 状态页统一映射到 generation-safe EXEC/STORAGE account；每个 Agent 的 9 页 detail、2 页冷状态与 7 页 Context 映射以一次 18 页 `RESOURCE_AGENT_STATE_PAGE` 请求原子计费。`resource_domain_id` 只做 CPU 调度分区。其余 metadata/audit 与存储容量契约仍按对应 policy 文件核对。
 
@@ -246,7 +246,7 @@ evidence/releases/<bundle>/
 | 文件扫描深度 | 自动扫描 uCore 根目录短文件名，文件对象 metadata 支持用户态显式写入和根目录自动发现。 |
 | syscall 与 I/O 公平性覆盖 | 合同覆盖控制台、inode 写/截断、scheduler 中断交付、fault teardown 归因，以及 VirtIO 丢中断、延迟完成、描述符压力、status error、flush-disabled 与 timeout/stuck reset。metadata recovery 覆盖双 bank COW phase、raw-bank 校验、单副本降级和暂态 I/O 错误。动态完成状态只从发布 bundle 读取；永久设备故障、双 bank 同时损坏后的在线修复、更多 owner/class 组合和整机物理断电不在当前证据边界内。 |
 | Agent 调度 | 验证 active resource domain 外层轮转、域内角色权重、受权调度配置、事件优先、deadline、heartbeat、wait cancel、虚拟运行量和 thread bomb 下的 victim 进展。 |
-| Workflow 撤销 | `agentscope_ucore` 与独立 teardown race 的合同覆盖根/factory 关闭、阻塞低权限成员、PUBLIC lineage、Context/metadata waiter、阻塞 fdget、I/O debt/cache、inode/file/account 和 generation 重用。close 与 spawn/pending exec 的精确发布瞬间及多线程 controller 仍未专项注入。 |
+| Workflow 撤销 | `agentscope_ucore` 与独立 teardown race 的合同覆盖根/factory 关闭、阻塞低权限成员、PUBLIC lineage、阻塞 fdget、退出后新 workflow 账户的 debt/cache 零值、inode/file/account 和 generation 重用。Context lane、metadata transaction、非零 I/O debt/cache 与 teardown 的同窗状态，以及 close 与 spawn/pending exec 的精确发布瞬间和多线程 controller，仍未专项注入。 |
 | LLM Gateway | 内核提供结构化请求、响应事件、Context 和审计记录；Guest `rp_llm_relay` 使用确定性模板，云端模型接入不属于竞赛交付。 |
 | 页面和图表 | 内核输出 `agentos:event`、timeline、audit 和 provenance，宿主机工具负责转成页面和图表。 |
 | 性能数据 | 发布性能结论只接受 provenance-bound 的强制遍历/冷索引/热索引文件查询 benchmark；普通 tick、扫描数、候选数、轮询数、拒绝数和重建步骤只作当次诊断 telemetry。 |

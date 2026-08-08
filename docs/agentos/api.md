@@ -175,7 +175,7 @@ scheduler 每轮先把 `current_thread` 指向 idle context，安装 kernel trap
 
 | 字段 | 说明 |
 | --- | --- |
-| `version` | 当前为 `IO_POLICY_VERSION=5` |
+| `version` | 当前为 `IO_POLICY_VERSION=6` |
 | `struct_size` | 当前内核完整 `struct io_policy_info` 的字节数；调用者收到的前缀长度仍由它传入的 `user_size` 决定 |
 | `owner` / `io_class` | 调用者的稳定 owner 与前台 class |
 | `tokens` / `leased` / `debt` | 当前 class 可用信用、尚未在真实 `disk_submit` 边界结算的 lease 和待偿还超额传输 |
@@ -322,6 +322,8 @@ int agent_scope_delegate_fd(int fd);
 `agent_workflow_create(role)` 仅允许“非 Agent、具有内核 factory/admin 状态、当前执行可信 bootstrap 映像”的 factory 调用。它申请新的动态 VFS scope、generation-safe workflow lifecycle key、EXEC/STORAGE resource account，并用一个原子 admission 建立根进程与 t0；任一步失败都走构造 teardown，不留下半初始化 scope。已在某个 scope 内的 orchestrator 即使具备 `ORCHESTRATE`，也只能用 `agent_create_role()` 在本 scope 内创建角色，不能铸造新安全域。权威 lifecycle ledger 有 8 槽，ACTIVE+CLOSING+RETIRING 合计最多 4 个；RETIRING 完成目录回收前不能让新 workflow 越过该边界。
 
 `agent_workflow_close(scope_id)` 使用 syscall 545 发起可信终止。调用者必须是创建时绑定的唯一根 controller，且 `agent_control_id` 与当前 `(workflow_lifecycle_id,generation)` 都匹配；另一名 Orchestrator、低权限 Agent、PID/父子关系和单独的 `ORCHESTRATE` capability 都不产生关闭权。`agent_control_id` 不复用；lifecycle slot 可在彻底退休后复用，但 generation 必须增长。可信 bootstrap factory 还可以按 scope id 执行恢复性关闭。参数按完整 64 位值校验，非动态范围或高位别名返回 `AGENT_STATUS_BAD_PARAM`。
+
+受严格 bootstrap 映像和 admin 条件约束的可信 factory 还可用该接口判断 scope 是否已经精确退休：对仍可关闭的 ACTIVE/CLOSING scope，关闭请求成功提交并返回 `AGENT_STATUS_OK`；scope ref 仍绑定有效 lifecycle、但该 lifecycle 已在 RETIRING 或暂时不可关闭时返回 `AGENT_STATUS_RETRY`。这里的 `RETRY` 只说明活跃或退休中的 lifecycle 绑定仍存在，不证明后台退休正在推进，也不保证它最终一定完成。`AGENT_STATUS_NOT_FOUND` 表示该 scope 已不再绑定活跃或退休中的 lifecycle：非保留 scope 此时已完成 BIO 退役、STORAGE account 释放和 lifecycle 回收，并移除普通 ref；保留持久文件的 scope 也必须先释放全部 BIO owner/member，并等待 STORAGE account 至少进入 DRAINING（也可已到 FREE），CLOSING 状态不能清除 lifecycle，结算后才可留下 lifecycle 已清空的存储 ref。根 controller 的授权和失败语义不因该 factory 状态探针而改变。
 
 显式关闭与根 controller 的正常退出、异常退出或 terminal credential clear 汇合到同一个幂等生命周期入口。scope 原子从 ACTIVE 进入 CLOSING 后，现有 Agent/VFS capability 立即失效，新成员、pending exec commit 和新存储分配均被拒绝。内核按不可变 lifecycle key 向成员提交进程级 teardown request；即使 fork 子孙已经降权为 `is_agent=0`、`filesystem_domain=0`、capability=0，也仍属于该谱系。CLOSING 在成员完成自身 teardown 前保留完整 I/O/cache 归因，最后成员释放 lifecycle 引用后才进入 RETIRING。
 
@@ -511,7 +513,7 @@ syscall 548 `sys_tool_list()` 返回 `struct agent_tool_desc_v2`。用户态 wra
 | `AGENT_STATUS_UNKNOWN_TOOL` | -2 | 工具不存在 |
 | `AGENT_STATUS_NOT_AGENT` | -3 | 普通进程调用 Agent-only 接口 |
 | `AGENT_STATUS_BAD_PARAM` | -4 | 参数键、类型或必要参数错误 |
-| `AGENT_STATUS_NOT_FOUND` | -5 | 文件、Agent 或历史节点不存在；直接事件投递的目标 watch 不匹配，或 lifecycle compare 时调用者没有有效 lifecycle，也使用该状态 |
+| `AGENT_STATUS_NOT_FOUND` | -5 | 文件、Agent 或历史节点不存在；直接事件投递的目标 watch 不匹配，或 lifecycle compare 时调用者没有有效 lifecycle，也使用该状态；可信 bootstrap factory 重查 workflow 关闭状态时，该状态表示 scope 已不再绑定活跃或退休中的 lifecycle，普通 ref 已移除，保留输出的已结算存储 ref 则可继续存在 |
 | `AGENT_STATUS_NO_SPACE` | -6 | Context、IPC route 表、事件总量/source/class/external 配额或布局空间不可用 |
 | `AGENT_STATUS_TIMEOUT` | -7 | `agent_wait()` 等待超时 |
 | `AGENT_STATUS_DENIED` | -8 | capability 或角色权限拒绝 |
@@ -523,7 +525,7 @@ syscall 548 `sys_tool_list()` 返回 `struct agent_tool_desc_v2`。用户态 wra
 | `AGENT_STATUS_BAD_SIZE` | -14 | sized 结构、value 长度或字符串终止边界不合法 |
 | `AGENT_STATUS_BAD_TYPE` | -15 | V2 typed KV 的参数类型与工具规则不一致 |
 | `AGENT_STATUS_UNKNOWN_PARAM` | -16 | V2 参数 key 不属于该工具 |
-| `AGENT_STATUS_RETRY` | -17 | 操作未提交，调用者可在满足重试条件后再次请求 |
+| `AGENT_STATUS_RETRY` | -17 | 当前条件尚不满足，调用者应按具体接口定义等待后重试，不能笼统解释为“操作未提交”；可信 bootstrap factory 重查 workflow 关闭状态时，该状态只表示 scope ref 仍绑定有效 lifecycle |
 | `AGENT_STATUS_IO_ERROR` | -18 | 底层 I/O 明确失败且未形成成功提交 |
 | `AGENT_STATUS_DURABILITY` | -19 | 操作不能满足所请求的持久性保证 |
 | `AGENT_STATUS_INDETERMINATE` | -20 | 故障发生在不可撤销发布边界后，调用者必须先查询状态再决定是否重试 |

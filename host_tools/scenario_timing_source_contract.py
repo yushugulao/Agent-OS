@@ -58,7 +58,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_VERSION = "scenario-timing-source-v9"
+CONTRACT_VERSION = "scenario-timing-source-v10"
 SOURCE_PATHS = (
     "baseline_ucore/user/src/rp_seed_orch.c",
     "user/src/rp_agentos_orch.c",
@@ -467,6 +467,53 @@ def _validate_resource_stability(
         agentos_tokens, "orch_resource_growth_bounds", 5,
         "resource growth-bound registry",
     )
+    _require_once(
+        agentos_tokens,
+        ("#", "define", "RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS", "30000"),
+        "30-second resource stability retirement deadline",
+    )
+    retirement = _function_tokens(agentos_tokens, "stability_scope_retired")
+    if _token_fingerprint(retirement) != (
+        "0c8edc739bc80fd7b2bf9bbf1bd18b82bff6ad81cd7eb18fd2037ae06eb4b658"
+    ):
+        raise ValueError("resource stability scope-retirement retry body differs")
+    _ordered(
+        retirement,
+        (
+            ("int64", "now", "=", "get_mtime", "(", ")", ";"),
+            (
+                "deadline", "=", "now", "<", "0", "?", "-", "1", ":",
+                "now", "+", "RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS", ";",
+            ),
+            (
+                "status", "=", "agent_workflow_close", "(", "report", "->",
+                "scope_id", ")", ";",
+            ),
+            (
+                "if", "(", "status", "==", "AGENT_STATUS_NOT_FOUND", ")",
+                "return", "1", ";",
+            ),
+            ("return", "1", ";", "now", "=", "get_mtime", "(", ")", ";"),
+            (
+                "if", "(", "status", "!=", "AGENT_STATUS_RETRY", "||",
+                "now", "<", "0", "||", "deadline", "<", "0", "||",
+                "now", ">=", "deadline", "||", "sleep", "(", "10", ")",
+                "<", "0", ")", "return", "0", ";",
+            ),
+        ),
+        "resource stability scope retirement",
+    )
+    if (
+        retirement.count("agent_workflow_close") != 1
+        or retirement.count("get_mtime") != 2
+        or retirement.count("sleep") != 1
+        or retirement.count("return") != 2
+        or retirement.count("break") != 0
+        or retirement.count("goto") != 0
+        or retirement.count("continue") != 0
+    ):
+        raise ValueError("resource stability scope-retirement control flow differs")
+
     launch = _function_tokens(agentos_tokens, "run_stability_workflow")
     _ordered(
         launch,
@@ -497,8 +544,17 @@ def _validate_resource_stability(
             ("read_stability_report", "(", "report_pipe", "[", "0", "]", ",", "report", ")"),
             ("read", "(", "report_pipe", "[", "0", "]", ",", "&", "extra", ",", "1", ")"),
             ("waitpid", "(", "pid", ",", "&", "code", ")"),
+            (
+                "if", "(", "!", "stability_report_valid", "(", "report", ",",
+                "index", ",", "mode", ",", "challenge_nonce", ")", ")",
+                "mismatch", "|", "=", "1U", "<<", "3", ";",
+            ),
+            (
+                "if", "(", "mismatch", "==", "0", "&&", "!",
+                "stability_scope_retired", "(", "report", ")", ")",
+                "mismatch", "|", "=", "1U", "<<", "6", ";",
+            ),
             ("agent_resource_snapshot", "(", "global_after", ")"),
-            ("stability_report_valid", "(", "report", ",", "index", ",", "mode", ",", "challenge_nonce", ")"),
             ("stability_identity_unique", "(", "index", "+", "1", ")"),
             ("verify_global", "&&"),
             ("stability_global_pair_valid", "(", "global_before", ",", "global_after", ",", "mode", ")"),

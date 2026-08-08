@@ -1251,6 +1251,25 @@ static int stability_identity_unique(uint count)
 	return 1;
 }
 
+static int stability_scope_retired(
+	const struct rp_resource_stability_report *report)
+{
+	int64 now = get_mtime();
+	int64 deadline = now < 0 ? -1 :
+		now + RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS;
+	int status;
+
+	for (;;) {
+		status = agent_workflow_close(report->scope_id);
+		if (status == AGENT_STATUS_NOT_FOUND)
+			return 1;
+		now = get_mtime();
+		if (status != AGENT_STATUS_RETRY || now < 0 || deadline < 0 ||
+		    now >= deadline || sleep(10) < 0)
+			return 0;
+	}
+}
+
 static int stability_global_sequence_valid(void)
 {
 	const struct agent_resource_snapshot *first =
@@ -1400,11 +1419,6 @@ static int run_stability_workflow(uint index, uint mode, int verify_global)
 	eof = read(report_pipe[0], &extra, 1) < 0;
 	got = waitpid(pid, &code);
 	close(report_pipe[0]);
-	if (agent_resource_snapshot(global_after) != AGENT_STATUS_OK) {
-		printf("rp_agentos_orch: stability_snapshot_failed index=%u\n",
-		       index);
-		return 0;
-	}
 	if (!complete)
 		mismatch |= 1U << 0;
 	if (got != pid || code != 0)
@@ -1413,6 +1427,13 @@ static int run_stability_workflow(uint index, uint mode, int verify_global)
 		mismatch |= 1U << 2;
 	if (!stability_report_valid(report, index, mode, challenge_nonce))
 		mismatch |= 1U << 3;
+	if (mismatch == 0 && !stability_scope_retired(report))
+		mismatch |= 1U << 6;
+	if (agent_resource_snapshot(global_after) != AGENT_STATUS_OK) {
+		printf("rp_agentos_orch: stability_snapshot_failed index=%u\n",
+		       index);
+		return 0;
+	}
 	if (!stability_identity_unique(index + 1))
 		mismatch |= 1U << 4;
 	if (verify_global &&

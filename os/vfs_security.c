@@ -449,6 +449,7 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 	uint64 metadata_target = 0;
 	int eligible = 0;
 	int enabled;
+	enum resource_account_state storage_state;
 	struct workflow_lifecycle_key lifecycle =
 		workflow_lifecycle_none();
 
@@ -524,16 +525,17 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle) &&
 		    ref->reclaim_phase == VFS_SCOPE_RECLAIM_DONE &&
 		    workflow_lifecycle_retiring(lifecycle)) {
+			storage_state = resource_account_state_get(ref->storage_account);
 			if (preserve_files &&
+			    (storage_state == RESOURCE_ACCOUNT_DRAINING ||
+			     storage_state == RESOURCE_ACCOUNT_FREE) &&
 			    workflow_lifecycle_reclaim(lifecycle) == 0) {
 				// 已完成的启动租约在重启前仍是已接纳的非活跃存储主体，
 				// 其持久输出继续计入同一保留量。
 				vfs_scope_retiring_remove_locked(ref);
 				ref->lifecycle = workflow_lifecycle_none();
 			} else if (!preserve_files &&
-				   resource_account_state_get(
-					   ref->storage_account) ==
-					   RESOURCE_ACCOUNT_FREE &&
+				   storage_state == RESOURCE_ACCOUNT_FREE &&
 				   workflow_lifecycle_reclaim(lifecycle) == 0) {
 				vfs_scope_registry_remove_locked(ref);
 			}
@@ -720,13 +722,14 @@ int vfs_scope_close_trusted(uint scope_id,
 	{
 		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (ref != 0 && !ref->retiring) {
-			result = workflow_lifecycle_close_trusted(scope_id, closed);
-			if (result == 0 && !workflow_lifecycle_key_equal(
-						*closed, ref->lifecycle)) {
+		if (ref != 0 && workflow_lifecycle_key_valid(ref->lifecycle)) {
+			result = 1;
+			if (!ref->retiring &&
+			    workflow_lifecycle_close_trusted(scope_id, closed) == 0 &&
+			    workflow_lifecycle_key_equal(*closed, ref->lifecycle))
+				result = 0;
+			else
 				*closed = workflow_lifecycle_none();
-				result = -1;
-			}
 		}
 	}
 	intr_restore(enabled);

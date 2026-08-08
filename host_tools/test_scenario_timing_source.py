@@ -321,6 +321,59 @@ def main() -> int:
         "if (agent_resource_snapshot(global_after) != AGENT_STATUS_OK) {",
         "if (memset(global_after, 0, sizeof(*global_after)) == 0) {",
     ))
+    _reject(_text_case(
+        sources, agentos,
+        "#define RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS 30000",
+        "#define RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS 1",
+    ))
+    for old, new in (
+        ("int64 now = get_mtime();", "int64 now = 0;"),
+        ("status == AGENT_STATUS_NOT_FOUND", "status == AGENT_STATUS_RETRY"),
+        ("status != AGENT_STATUS_RETRY", "status != AGENT_STATUS_OK"),
+        ("now < 0 || deadline < 0", "deadline < 0"),
+        ("sleep(10) < 0", "sleep(1) < 0"),
+        ("int64 now = get_mtime();", "return 1;\n\tint64 now = get_mtime();"),
+    ):
+        _reject(_case(
+            sources, agentos, "stability_scope_retired", old, new,
+        ))
+    _reject(_case(
+        sources, agentos, "stability_scope_retired",
+        "\t\tnow = get_mtime();",
+        "\t\tnow = 0;",
+    ))
+    _reject(_case(
+        sources, agentos, "run_stability_workflow",
+        "if (!stability_report_valid(report, index, mode, challenge_nonce))",
+        "if (0 && !stability_report_valid(report, index, mode, challenge_nonce))",
+    ))
+    _reject(_case(
+        sources, agentos, "run_stability_workflow",
+        "if (mismatch == 0 && !stability_scope_retired(report))",
+        "if (0 && !stability_scope_retired(report))",
+    ))
+    retirement_then_snapshot = (
+        "if (mismatch == 0 && !stability_scope_retired(report))\n"
+        "\t\tmismatch |= 1U << 6;\n"
+        "\tif (agent_resource_snapshot(global_after) != AGENT_STATUS_OK) {\n"
+        "\t\tprintf(\"rp_agentos_orch: stability_snapshot_failed index=%u\\n\",\n"
+        "\t\t       index);\n"
+        "\t\treturn 0;\n"
+        "\t}"
+    )
+    snapshot_then_retirement = (
+        "if (agent_resource_snapshot(global_after) != AGENT_STATUS_OK) {\n"
+        "\t\tprintf(\"rp_agentos_orch: stability_snapshot_failed index=%u\\n\",\n"
+        "\t\t       index);\n"
+        "\t\treturn 0;\n"
+        "\t}\n"
+        "\tif (mismatch == 0 && !stability_scope_retired(report))\n"
+        "\t\tmismatch |= 1U << 6;"
+    )
+    _reject(_case(
+        sources, agentos, "run_stability_workflow",
+        retirement_then_snapshot, snapshot_then_retirement,
+    ))
     _reject(_case(
         sources, agentos, "stability_positive_delta",
         "return after > before ? after - before : 0;",
