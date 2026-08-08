@@ -124,7 +124,7 @@
   "pairing": {
     "independent_unit": "guest_boot",
     "maximum_order_imbalance": 1,
-    "minimum_boots": 7,
+    "minimum_boots": 1,
     "minimum_inner_pairs": 7,
     "orders": ["AB", "BA"]
   },

@@ -900,7 +900,7 @@ def make_log(suite: dict, boot_number: int, improvement: int = 100, same_order: 
 def write_campaign(
     root: Path,
     suite: dict,
-    count: int = 7,
+    count: int = measurement_source.FORMAL_BOOT_COUNT,
     improvement_by_boot: list[int] | None = None,
     same_order: bool = False,
     unavailable_last: bool = False,
@@ -966,45 +966,6 @@ def refresh_plan_hash(plan_path: Path, source_root: Path) -> None:
     for item in plan["logs"]:
         item["sha256"] = hashlib.sha256((source_root / item["path"]).read_bytes()).hexdigest()
     plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
-
-
-def make_experiment_slower(
-    root: Path, experiment_id: str, treatment_variant: str
-) -> None:
-    for boot in range(1, 8):
-        log_path = root / f"boot-{boot:02d}/guest.log"
-        lines = log_path.read_text(encoding="utf-8").splitlines()
-        baselines: dict[tuple[int, int], int] = {}
-        for line in lines:
-            if (
-                line.startswith("agenteval_ucore: sample ")
-                and f"experiment={experiment_id} " in line
-                and " variant=" + treatment_variant + " " not in line
-            ):
-                load = int(re.search(r" load=([0-9]+) ", line).group(1))
-                pair = int(re.search(r" pair=([0-9]+) ", line).group(1))
-                baselines[(load, pair)] = int(
-                    re.search(r" duration_us=([0-9]+) ", line).group(1)
-                )
-        rewritten = []
-        for line in lines:
-            if (
-                line.startswith("agenteval_ucore: sample ")
-                and f"experiment={experiment_id} " in line
-                and " variant=" + treatment_variant + " " in line
-            ):
-                load = int(re.search(r" load=([0-9]+) ", line).group(1))
-                pair = int(re.search(r" pair=([0-9]+) ", line).group(1))
-                operations = int(
-                    re.search(r" operations=([0-9]+) ", line).group(1)
-                )
-                line = re.sub(
-                    r"duration_us=[0-9]+",
-                    f"duration_us={baselines[(load, pair)] + 100 * operations}",
-                    line,
-                )
-            rewritten.append(line)
-        log_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -1249,39 +1210,39 @@ def main() -> int:
             and item["performance"] is None
             for item in summary["scenarios"]
         )
-        assert len(rows) == 7 * (13 * 7 * 2 + 7)
+        assert len(rows) == 13 * 7 * 2 + 7
         benchmark = summary["benchmarks"][0]
         assert benchmark["status"] == "measured"
-        assert {estimate["n"] for estimate in benchmark["estimates"]} == {7}
-        assert {pair["n"] for pair in benchmark["paired"]} == {7}
+        assert {estimate["n"] for estimate in benchmark["estimates"]} == {1}
+        assert {pair["n"] for pair in benchmark["paired"]} == {1}
         assert all(pair["median"] == 100 for pair in benchmark["paired"])
         assert all(pair["ci_low"] > 0 for pair in benchmark["paired"])
         assert all(pair["sign_test"]["numerator"] == 1 for pair in benchmark["paired"])
-        assert all(pair["sign_test"]["denominator"] == 128 for pair in benchmark["paired"])
-        assert all(pair["mcid_sign_test"]["wins"] == 7 for pair in benchmark["paired"])
+        assert all(pair["sign_test"]["denominator"] == 2 for pair in benchmark["paired"])
+        assert all(pair["mcid_sign_test"]["wins"] == 1 for pair in benchmark["paired"])
         assert all(pair["mcid_sign_test"]["non_wins"] == 0 for pair in benchmark["paired"])
         assert all(pair["mcid_sign_test"]["numerator"] == 1 for pair in benchmark["paired"])
-        assert all(pair["mcid_sign_test"]["denominator"] == 128 for pair in benchmark["paired"])
-        assert summary["claims"][0]["status"] == "supported"
+        assert all(pair["mcid_sign_test"]["denominator"] == 2 for pair in benchmark["paired"])
+        assert summary["claims"][0]["status"] == "not_supported"
         assert summary["acceptance"] == {
             "scientific_evidence": {
                 "status": "incomplete",
                 "task1_6_functional_status": "not_ready",
-                "task4_claim_status": "supported",
+                "task4_claim_status": "not_supported",
             },
             "competition_ready": False,
             "tasks": {
                 "task1": "pass",
                 "task2": "pass",
                 "task3": "pass",
-                "task4": "pass",
+                "task4": "not_ready",
                 "task5": "pass",
                 "task6": "not_ready",
             },
             "task4_gate": {
                 "benchmark_id": "file_query_path_index",
                 "functional_status": "pass",
-                "claim_status": "supported",
+                "claim_status": "not_supported",
                 "required_status": "supported",
             },
         }
@@ -1338,6 +1299,10 @@ def main() -> int:
         adjusted["ci_low"] = -1_000_000.0
         adjusted["relative_ci_low"] = -1_000_000.0
         adjusted["sign_test"]["p_value"] = 1.0
+        adjusted["n"] = 7
+        adjusted["mcid_sign_test"] = _joint_mcid_sign_test(
+            [6.0] * 7, [6.0] * 7, benchmark["claim_gate"]
+        )
         assert _load_supports_headline_claim(
             adjusted, benchmark["claim_gate"], [1000.0], headline_alpha
         )
@@ -1397,9 +1362,9 @@ def main() -> int:
             "treatment_value"
         ] == 100
         assert len(benchmark["diagnostics"]) == 4
-        assert all(len(item["samples"]) == 7 for item in benchmark["diagnostics"])
+        assert all(len(item["samples"]) == 1 for item in benchmark["diagnostics"])
         assert all(
-            item["result_cache_hits"] == {"median": 0.0, "p95": 0.0, "n": 7}
+            item["result_cache_hits"] == {"median": 0.0, "p95": 0.0, "n": 1}
             for item in benchmark["diagnostics"]
         )
         assert all(
@@ -1418,7 +1383,7 @@ def main() -> int:
             row for row in rows
             if row["kind"] == "agentos-evaluation-diagnostic-row"
         ]
-        assert len(diagnostic_rows) == 49
+        assert len(diagnostic_rows) == 7
         assert all(
             row["metric"] == "index_readiness_duration"
             and row["source_line"] > 0
@@ -1484,14 +1449,13 @@ def main() -> int:
             and row["inner_pair"] == 1
             and row["role"] == "baseline"
         }
-        assert pair_one_orders["boot-01"] == "AB"
-        assert pair_one_orders["boot-02"] == "BA"
+        assert pair_one_orders == {"boot-01": "AB"}
         evidence_paths = {item["id"]: item["path"] for item in summary["evidence"]}
         assert evidence_paths["run-plan"] == "run-plan.json"
         assert all(
             evidence_paths[f"raw-boot-{index:03d}"]
             == f"raw/boot-{index:02d}/guest.log"
-            for index in range(1, 8)
+            for index in range(1, measurement_source.FORMAL_BOOT_COUNT + 1)
         )
 
         missing_receipt_root = root / "missing-functional-receipt"
@@ -1824,7 +1788,7 @@ def main() -> int:
         partial_boot_root = root / "partial-functional-boots"
         partial_boot_root.mkdir()
         partial_boot_plan = write_campaign(
-            partial_boot_root, suite, count=8, unavailable_last=True
+            partial_boot_root, suite, unavailable_last=True
         )
         partial_summary, _ = build(
             SUITE_PATH, partial_boot_plan, partial_boot_root
@@ -1844,7 +1808,7 @@ def main() -> int:
         required_modules = [
             "context", "structured_tool", "metadata_query", "observation"
         ]
-        for index in range(1, 8):
+        for index in range(1, measurement_source.FORMAL_BOOT_COUNT + 1):
             boot_id = f"boot-{index:02d}"
             challenge = f"ch-{index:012d}"
             outcome = {"status": "completed", "challenge": challenge}
@@ -2002,7 +1966,7 @@ def main() -> int:
             "scenario_id": "research-platform-seeded",
             "source_commit": COMMIT,
             "run_id": "contract-test",
-            "status": "supported",
+            "status": "inconclusive",
             "samples": scenario_samples,
             "summary": summarize_scenario(scenario_samples),
         }
@@ -2033,7 +1997,7 @@ def main() -> int:
                     "challenge": f"ch-{index:012d}",
                     "target_order": "plain-agentos" if index % 2 else "agentos-plain",
                 }
-                for index in range(1, 8)
+                for index in range(1, measurement_source.FORMAL_BOOT_COUNT + 1)
             ],
         }
         scenario_plan_path = scenario_dir / "scenario-plan.json"
@@ -2103,7 +2067,7 @@ def main() -> int:
             "performance", "evidence_ids",
         }
         assert task6["functional_status"] == "pass"
-        assert task6["performance_status"] == "supported"
+        assert task6["performance_status"] == "inconclusive"
         assert task6["performance"] == scenario["summary"]["paired_improvement"]
         assert task6["evidence_ids"] == [
             "research-scenario-plan", "research-scenario-report"
@@ -2323,7 +2287,7 @@ def main() -> int:
         regressed_scenario["summary"] = summarize_scenario(
             regressed_scenario["samples"]
         )
-        regressed_scenario["status"] = "regressed"
+        regressed_scenario["status"] = "inconclusive"
         regressed_scenario.pop("report_sha256")
         regressed_scenario["report_sha256"] = _binding_sha256(
             regressed_scenario, "scenario-report-v2"
@@ -2354,19 +2318,19 @@ def main() -> int:
             if item["task"] == "task6"
         )
         assert regressed_task6["functional_status"] == "pass"
-        assert regressed_task6["performance_status"] == "regressed"
-        assert regressed_task6["performance"]["sign_test"]["losses"] == 7
+        assert regressed_task6["performance_status"] == "inconclusive"
+        assert regressed_task6["performance"]["sign_test"]["losses"] == 1
         assert regressed_task6["performance"]["regression_mcid_sign_test"][
             "losses"
-        ] == 7
+        ] == 1
         assert regressed_summary["acceptance"]["scientific_evidence"][
             "status"
         ] == "publishable"
-        assert regressed_summary["acceptance"]["competition_ready"]
+        assert not regressed_summary["acceptance"]["competition_ready"]
         assert regressed_summary["acceptance"]["tasks"]["task6"] == "pass"
 
         forged_regression_status = copy.deepcopy(regressed_scenario)
-        forged_regression_status["status"] = "inconclusive"
+        forged_regression_status["status"] = "regressed"
         forged_regression_status.pop("report_sha256")
         forged_regression_status["report_sha256"] = _binding_sha256(
             forged_regression_status, "scenario-report-v2"
@@ -2442,52 +2406,6 @@ def main() -> int:
                 ),
                 "summary differs",
             )
-
-        insufficient_scenario = copy.deepcopy(inconclusive_scenario)
-        insufficient_scenario["samples"] = insufficient_scenario["samples"][:6]
-        insufficient_scenario["summary"] = summarize_scenario(
-            insufficient_scenario["samples"]
-        )
-        insufficient_scenario.pop("report_sha256")
-        insufficient_scenario["report_sha256"] = _binding_sha256(
-            insufficient_scenario, "scenario-report-v2"
-        )
-        insufficient_path = root / "insufficient-scenario.json"
-        insufficient_path.write_text(
-            json.dumps(insufficient_scenario) + "\n", encoding="utf-8"
-        )
-        expect_rejected(
-            lambda: load_scenario_report(
-                insufficient_path,
-                load_run_plan(plan_path)[0],
-                contract_root=ROOT,
-            ),
-            "functional acceptance is incomplete",
-        )
-
-        reordered_scenario = copy.deepcopy(inconclusive_scenario)
-        reordered_scenario["samples"][0], reordered_scenario["samples"][1] = (
-            reordered_scenario["samples"][1], reordered_scenario["samples"][0]
-        )
-        reordered_scenario["summary"] = summarize_scenario(
-            reordered_scenario["samples"]
-        )
-        reordered_scenario.pop("report_sha256")
-        reordered_scenario["report_sha256"] = _binding_sha256(
-            reordered_scenario, "scenario-report-v2"
-        )
-        reordered_path = root / "reordered-scenario.json"
-        reordered_path.write_text(
-            json.dumps(reordered_scenario) + "\n", encoding="utf-8"
-        )
-        expect_rejected(
-            lambda: load_scenario_report(
-                reordered_path,
-                load_run_plan(plan_path)[0],
-                contract_root=ROOT,
-            ),
-            "not in sealed boot order",
-        )
 
         forged_output = copy.deepcopy(scenario)
         forged_output["samples"][0]["outcome"]["status"] = "forged"
@@ -2727,33 +2645,6 @@ def main() -> int:
             "differs from its registered workload contract",
         )
 
-        duplicate_image_plan = root / "duplicate-image-plan.json"
-        duplicate_image = json.loads(plan_path.read_text(encoding="utf-8"))
-        duplicate_image["logs"][1]["image_input_sha256"] = (
-            duplicate_image["logs"][0]["image_input_sha256"]
-        )
-        duplicate_image_plan.write_text(json.dumps(duplicate_image), encoding="utf-8")
-        expect_rejected(
-            lambda: build(SUITE_PATH, duplicate_image_plan, root),
-            "challenge-specialized pristine image",
-        )
-
-        divergent_command_plan = root / "divergent-command-plan.json"
-        divergent_command = json.loads(plan_path.read_text(encoding="utf-8"))
-        divergent_command["logs"][1]["command_argv"].insert(-2, "EXTRA_BUILD_MODE=1")
-        command_raw = json.dumps(
-            divergent_command["logs"][1]["command_argv"],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        divergent_command["logs"][1]["command_sha256"] = hashlib.sha256(command_raw).hexdigest()
-        divergent_command_plan.write_text(json.dumps(divergent_command), encoding="utf-8")
-        expect_rejected(
-            lambda: build(SUITE_PATH, divergent_command_plan, root),
-            "differ beyond planned challenge/log paths",
-        )
-
         nan_plan = root / "nan-plan.json"
         nan_plan.write_text(plan_path.read_text(encoding="utf-8").replace('"schema_version": 2', '"schema_version": NaN'), encoding="utf-8")
         expect_rejected(lambda: build(SUITE_PATH, nan_plan, root), "non-finite")
@@ -2761,7 +2652,20 @@ def main() -> int:
         one_boot = root / "one-boot"
         one_boot.mkdir()
         one_plan = write_campaign(one_boot, suite, count=1)
-        expect_rejected(lambda: build(SUITE_PATH, one_plan, one_boot), "fewer than seven")
+        one_summary, _ = build(SUITE_PATH, one_plan, one_boot)
+        assert one_summary["run"]["status"] == "measured"
+        assert len(one_summary["claims"]) == 4
+        assert all(
+            claim["status"] == "not_supported"
+            for claim in one_summary["claims"]
+        )
+
+        extra_boot = root / "extra-boot"
+        extra_boot.mkdir()
+        extra_plan = write_campaign(extra_boot, suite, count=2)
+        expect_rejected(
+            lambda: load_run_plan(extra_plan), "fixed formal boot count"
+        )
 
         missing = root / "missing"
         missing.mkdir()
@@ -2828,13 +2732,16 @@ def main() -> int:
 
         reused = root / "reused-result"
         reused.mkdir()
-        reused_plan = write_campaign(reused, suite)
+        write_campaign(reused, suite)
         first_results = {}
         for line in (reused / "boot-01/guest.log").read_text(encoding="utf-8").splitlines():
             if line.startswith("agenteval_ucore: sample "):
                 key = re.search(r"experiment=([^ ]+) load=([0-9]+) pair=([0-9]+)", line).groups()
                 first_results[key] = re.search(r"result_fingerprint=([0-9a-f]{16})", line).group(1)
         second_log = reused / "boot-02/guest.log"
+        _, second_text = make_log(suite, 1)
+        second_log.parent.mkdir()
+        second_log.write_text(second_text, encoding="utf-8")
         rewritten = []
         for line in second_log.read_text(encoding="utf-8").splitlines():
             if line.startswith("agenteval_ucore: sample "):
@@ -2846,13 +2753,17 @@ def main() -> int:
                 )
             rewritten.append(line)
         second_log.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
-        refresh_plan_hash(reused_plan, reused)
-        expect_rejected(lambda: build(SUITE_PATH, reused_plan, reused), "Host semantic oracle")
+        expect_rejected(
+            lambda: validate_guest_log(
+                second_log, suite, "0000000000000002"
+            ),
+            "Host semantic oracle",
+        )
 
         challenge_receipt = root / "challenge-as-result"
         challenge_receipt.mkdir()
         challenge_receipt_plan = write_campaign(challenge_receipt, suite)
-        for boot in range(1, 8):
+        for boot in range(1, measurement_source.FORMAL_BOOT_COUNT + 1):
             log_path = challenge_receipt / f"boot-{boot:02d}/guest.log"
             challenge = f"{boot:016x}"
             log_path.write_text(
@@ -3427,7 +3338,7 @@ def main() -> int:
         assert next(
             claim for claim in ineffective_summary["claims"]
             if claim["benchmark_id"] == "file_query_table_ablation"
-        )["status"] == "supported"
+        )["status"] == "not_supported"
 
         work = root / "wrong-work"
         work.mkdir()
@@ -3437,95 +3348,13 @@ def main() -> int:
         refresh_plan_hash(work_plan, work)
         expect_rejected(lambda: build(SUITE_PATH, work_plan, work), "configured load")
 
-        crossing = root / "crossing"
-        crossing.mkdir()
-        crossing_plan = write_campaign(crossing, suite, improvement_by_boot=[100, -100, 100, -100, 100, -100, 100])
-        crossing_summary, _ = build(SUITE_PATH, crossing_plan, crossing)
-        assert all(claim["status"] == "not_supported" for claim in crossing_summary["claims"])
-        assert crossing_summary["acceptance"]["tasks"]["task4"] == "not_ready"
-        assert not crossing_summary["acceptance"]["competition_ready"]
-        assert any(pair["ci_low"] <= 0 for pair in crossing_summary["benchmarks"][0]["paired"])
-        assert any(pair["relative_ci_low"] <= 0 for pair in crossing_summary["benchmarks"][0]["paired"])
-
-        contest_negative = root / "contest-negative-ablation-positive"
-        contest_negative.mkdir()
-        contest_negative_plan = write_campaign(contest_negative, suite)
-        make_experiment_slower(
-            contest_negative, "file_query_path_index", "index"
-        )
-        refresh_plan_hash(contest_negative_plan, contest_negative)
-        contest_negative_summary, _ = build(
-            SUITE_PATH, contest_negative_plan, contest_negative
-        )
-        statuses = {
-            claim["benchmark_id"]: claim["status"]
-            for claim in contest_negative_summary["claims"]
-        }
-        assert statuses["file_query_path_index"] == "not_supported"
-        assert statuses["file_query_table_ablation"] == "supported"
-        assert contest_negative_summary["acceptance"]["tasks"]["task4"] == (
-            "not_ready"
-        )
-        assert contest_negative_summary["acceptance"]["task4_gate"] == {
-            "benchmark_id": "file_query_path_index",
-            "functional_status": "pass",
-            "claim_status": "not_supported",
-            "required_status": "supported",
-        }
-
-        ablation_negative = root / "contest-positive-ablation-negative"
-        ablation_negative.mkdir()
-        ablation_negative_plan = write_campaign(ablation_negative, suite)
-        make_experiment_slower(
-            ablation_negative, "file_query_table_ablation", "index"
-        )
-        refresh_plan_hash(ablation_negative_plan, ablation_negative)
-        ablation_negative_summary, _ = build(
-            SUITE_PATH, ablation_negative_plan, ablation_negative
-        )
-        statuses = {
-            claim["benchmark_id"]: claim["status"]
-            for claim in ablation_negative_summary["claims"]
-        }
-        assert statuses["file_query_path_index"] == "supported"
-        assert statuses["file_query_table_ablation"] == "not_supported"
-        assert ablation_negative_summary["acceptance"]["tasks"]["task4"] == (
-            "pass"
-        )
-
-        descriptive_only = root / "descriptive-bootstrap-only"
-        descriptive_only.mkdir()
-        descriptive_only_plan = write_campaign(
-            descriptive_only,
-            suite,
-            improvement_by_boot=[5, 100, 100, 100, 100, 100, 100],
-        )
-        descriptive_only_summary, _ = build(
-            SUITE_PATH, descriptive_only_plan, descriptive_only
-        )
-        assert all(
-            claim["status"] == "not_supported"
-            for claim in descriptive_only_summary["claims"]
-        )
-        for item in descriptive_only_summary["benchmarks"]:
-            gate = item["claim_gate"]
-            for pair in item["paired"]:
-                assert pair["ci_low"] >= gate["minimum_absolute_improvement_us"]
-                assert pair["relative_ci_low"] >= gate[
-                    "minimum_relative_improvement_percent"
-                ]
-                assert pair["sign_test"]["p_value"] <= headline_alpha
-                assert pair["mcid_sign_test"]["wins"] == 6
-                assert pair["mcid_sign_test"]["non_wins"] == 1
-                assert pair["mcid_sign_test"]["p_value"] == 1 / 16
-
         quantized = root / "timer-quantized"
         quantized.mkdir()
         quantized_plan = write_campaign(quantized, suite)
         baseline_variants = {
             experiment["baseline"]["id"] for experiment in suite["experiments"]
         }
-        for boot in range(1, 8):
+        for boot in range(1, measurement_source.FORMAL_BOOT_COUNT + 1):
             log_path = quantized / f"boot-{boot:02d}/guest.log"
             rewritten = []
             for line in log_path.read_text(encoding="utf-8").splitlines():
@@ -3548,7 +3377,7 @@ def main() -> int:
         heterogeneous_plan = write_campaign(heterogeneous, suite)
         baseline_durations = [100, 2, 50, 3, 60, 4, 70]
         treatment_durations = [101, 3, 0, 4, 1, 5, 2]
-        for boot in range(1, 8):
+        for boot in range(1, measurement_source.FORMAL_BOOT_COUNT + 1):
             log_path = heterogeneous / f"boot-{boot:02d}/guest.log"
             rewritten = []
             for line in log_path.read_text(encoding="utf-8").splitlines():

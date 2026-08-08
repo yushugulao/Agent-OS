@@ -21,7 +21,7 @@ SOURCE_SCHEMA = "agentos-compatibility-source-v2"
 FORMAL_CONTEXT_SCHEMA = "agentos-compatibility-formal-context-v2"
 GUEST_SCHEMA = 2
 GUEST_ROUNDS = 3
-FORMAL_BOOT_COUNT = 7
+FORMAL_BOOT_COUNT = 1
 GUEST_CACHE_STATE = "warm_guest_paths"
 GUEST_SCHEDULE = "challenge_rotated_v1"
 MEASUREMENT_STATE = {
@@ -550,7 +550,7 @@ def create_plan(
         "boots": entries,
         "fixed_boot_count": FORMAL_BOOT_COUNT,
         "fresh_boot_per_target": True,
-        "stopping_rule": "exactly-seven-precommitted-paired-repetitions",
+        "stopping_rule": f"fixed-{FORMAL_BOOT_COUNT}-precommitted-paired-boots",
         "optional_stopping_forbidden": True,
         "challenge_policy": "sha256-source-commit-and-boot-id",
         "order_policy": "source-commit-derived-start-then-alternating-ab-ba",

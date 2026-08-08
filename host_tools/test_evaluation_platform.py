@@ -368,7 +368,7 @@ class EvaluationPlatformTests(unittest.TestCase):
                     script_relative="scripts/run-evaluation-suite.sh",
                     mode="full-verify",
                     host_environment={
-                        "EVALUATION_BOOTS": "7",
+                        "EVALUATION_BOOTS": "1",
                         "EVALUATION_FULL_VERIFY_TIMEOUT": "4321",
                     },
                 )
@@ -378,7 +378,7 @@ class EvaluationPlatformTests(unittest.TestCase):
             self.assertIn("AGENTOS_EVALUATION_EXECUTION_DOMAIN=windows-wsl:Ubuntu", observed)
             for name in ("CC", "HOSTCC", "HOST_CC"):
                 self.assertIn(f"{name}={tools['host_cc']['path']}", observed)
-            self.assertIn("EVALUATION_BOOTS=7", observed)
+            self.assertIn("EVALUATION_BOOTS=1", observed)
             self.assertIn("EVALUATION_FULL_VERIFY_TIMEOUT=4321", observed)
             self.assertIn("AGENT_TEST_DURATION_PROFILE=none", observed)
             self.assertIn("/mnt/e/repo/scripts/run-evaluation-suite.sh", observed)
@@ -653,7 +653,7 @@ cpu MHz : 4900.000
                         "BASH_ENV": "/tmp/injected",
                         "MAKEFLAGS": "-j99",
                         "PYTHONPATH": "/tmp/injected",
-                        "EVALUATION_BOOTS": "7",
+                        "EVALUATION_BOOTS": "1",
                         "EVALUATION_FULL_VERIFY_TIMEOUT": "4321",
                     },
                 )
@@ -664,7 +664,7 @@ cpu MHz : 4900.000
             self.assertIn("SYSTEMDRIVE=C:", observed)
             for name in ("CC", "HOSTCC", "HOST_CC"):
                 self.assertIn(f"{name}={tools['host_cc']['path']}", observed)
-            self.assertIn("EVALUATION_BOOTS=7", observed)
+            self.assertIn("EVALUATION_BOOTS=1", observed)
             self.assertIn("EVALUATION_FULL_VERIFY_TIMEOUT=4321", observed)
             self.assertIn("AGENT_TEST_DURATION_PROFILE=none", observed)
             self.assertIn("--noprofile", observed)

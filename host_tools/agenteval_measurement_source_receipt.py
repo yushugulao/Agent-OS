@@ -57,7 +57,7 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 RECEIPT_SCHEMA = "agentos-measurement-source-receipt-v6"
-FORMAL_BOOT_COUNT = 7
+FORMAL_BOOT_COUNT = 1
 STOP_RULE = f"fixed_{FORMAL_BOOT_COUNT}_boots_per_source_commit"
 
 

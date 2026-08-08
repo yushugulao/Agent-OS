@@ -635,7 +635,7 @@ def main() -> int:
     receipt = build_measurement_source_receipt(ROOT, source_commit=commit)
     assert CONTRACT_VERSION == "agenteval-measurement-source-v11"
     assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v4"
-    assert FORMAL_BOOT_COUNT == 7
+    assert FORMAL_BOOT_COUNT == 1
     assert receipt["formal_boot_count"] == FORMAL_BOOT_COUNT
     assert receipt["contract_versions"]["functional"] == (
         "agentos-functional-acceptance-source-v4"
@@ -643,7 +643,7 @@ def main() -> int:
     assert receipt["contract_versions"]["functional_compile"] == (
         "agentos-functional-compile-closure-v3"
     )
-    assert receipt["stop_rule"] == "fixed_7_boots_per_source_commit"
+    assert receipt["stop_rule"] == "fixed_1_boots_per_source_commit"
     validate_measurement_source_receipt_shape(receipt, expected_commit=commit)
     verify_measurement_source_receipt(receipt, ROOT, expected_commit=commit)
     assert receipt["policy_inventory"] == measurement_source_policy_inventory()
@@ -704,7 +704,7 @@ def main() -> int:
     else:
         raise AssertionError("accepted a missing functional compile-contract version")
     forged_stop_rule = json.loads(json.dumps(receipt))
-    forged_stop_rule["stop_rule"] = "minimum_7_boots_per_source_commit"
+    forged_stop_rule["stop_rule"] = "minimum_1_boots_per_source_commit"
     try:
         validate_measurement_source_receipt_shape(
             forged_stop_rule, expected_commit=commit
@@ -713,7 +713,7 @@ def main() -> int:
         pass
     else:
         raise AssertionError("accepted an open-ended formal stopping rule")
-    for forged_count in (8, True):
+    for forged_count in (FORMAL_BOOT_COUNT + 1, True):
         forged_boot_count = json.loads(json.dumps(receipt))
         forged_boot_count["formal_boot_count"] = forged_count
         try:

@@ -226,7 +226,7 @@ def _bound_scenario_environment(*_args: object, **kwargs: object) -> dict[str, o
 def _create(
     root: Path,
     *,
-    boots: int = 7,
+    boots: int = measurement_source.FORMAL_BOOT_COUNT,
     clean: bool = True,
     artifact_root: str = "results/evaluation/runs/run-1",
     run_id: str = "run-1",
@@ -656,7 +656,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=micro_path,
                     output=output,
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
@@ -813,7 +813,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=micro,
                     output=output,
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
@@ -959,7 +959,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=micro,
                     output=micro.parent / "scenario" / "scenario-plan.json",
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
@@ -1051,11 +1051,11 @@ class CampaignTests(unittest.TestCase):
             with self.assertRaisesRegex(campaign.CampaignError, "between 60 and 3600"):
                 campaign.scenario_pair_deadline_contract(invalid)
 
-    def test_create_requires_seven_clean_boots_and_unique_challenges(self) -> None:
+    def test_create_requires_one_clean_boot_and_unique_challenge(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            with self.assertRaisesRegex(campaign.CampaignError, "fixed 7-boot"):
-                _create(root, boots=6)
+            with self.assertRaisesRegex(campaign.CampaignError, "fixed 1-boot"):
+                _create(root, boots=measurement_source.FORMAL_BOOT_COUNT + 1)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1317,7 +1317,7 @@ class CampaignTests(unittest.TestCase):
                     "--repo", str(root),
                     "--output", str(manifest),
                     "--run-id", "run-1",
-                    "--boots", "7",
+                    "--boots", str(measurement_source.FORMAL_BOOT_COUNT),
                     "--toolprefix", "/tool/riscv-none-elf-",
                     "--qemu", "/tool/qemu-system-riscv64",
                     "--python-bin", "/usr/bin/python3",
@@ -1472,7 +1472,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=manifest,
                     output=manifest.parent / "scenario" / "scenario-plan.json",
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
@@ -1539,7 +1539,7 @@ class CampaignTests(unittest.TestCase):
                     "--repo", str(root),
                     "--micro-manifest", str(manifest),
                     "--output", str(scenario_manifest),
-                    "--boots", "7",
+                    "--boots", str(measurement_source.FORMAL_BOOT_COUNT),
                     "--timeout", "600",
                     "--wsl-distro", "Ubuntu",
                 ])
@@ -1611,7 +1611,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=micro,
                     output=micro.parent / "scenario" / "scenario-plan.json",
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
@@ -2174,7 +2174,7 @@ class CampaignTests(unittest.TestCase):
                 plan["measurement_source_receipt"],
                 value["measurement_source_receipt"],
             )
-            self.assertEqual(len(plan["logs"]), 7)
+            self.assertEqual(len(plan["logs"]), measurement_source.FORMAL_BOOT_COUNT)
             self.assertEqual(plan["logs"][0]["path"], "boot-01/guest.log")
             self.assertEqual(plan["logs"][0]["status"], "supported")
             self.assertIsNone(plan["logs"][0]["detail"])
@@ -2298,7 +2298,7 @@ class CampaignTests(unittest.TestCase):
                         repo=root,
                         micro_manifest=micro,
                         output=scenario_plan,
-                        requested_boots=7,
+                        requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                         timeout_seconds=600,
                         wsl_distro="Ubuntu",
                     )
@@ -2314,7 +2314,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=micro,
                     output=scenario_plan,
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
@@ -2344,12 +2344,12 @@ class CampaignTests(unittest.TestCase):
                 challenges,
                 [
                     campaign._derive_scenario_challenge(COMMIT, number)
-                    for number in range(1, 8)
+                    for number in range(1, measurement_source.FORMAL_BOOT_COUNT + 1)
                 ],
             )
             self.assertEqual(
                 [boot["target_order"] for boot in scenario["boots"]],
-                ["plain-agentos", "agentos-plain", "plain-agentos", "agentos-plain", "plain-agentos", "agentos-plain", "plain-agentos"],
+                ["plain-agentos"],
             )
             self.assertIn("--challenge", scenario["boots"][0]["command_argv"])
             self.assertEqual(
@@ -2396,8 +2396,8 @@ class CampaignTests(unittest.TestCase):
                 "source_commit": COMMIT,
                 "run_id": "run-1",
                 "summary": {
-                    "independent_boots": 7,
-                    "unique_challenges": 7,
+                    "independent_boots": measurement_source.FORMAL_BOOT_COUNT,
+                    "unique_challenges": measurement_source.FORMAL_BOOT_COUNT,
                     "target_order_balanced": True,
                 },
             }
@@ -2435,7 +2435,7 @@ class CampaignTests(unittest.TestCase):
                 first_runner.write_text("tampered\n", encoding="utf-8")
                 with self.assertRaisesRegex(campaign.CampaignError, "changed"):
                     campaign.check_scenario_campaign(root, scenario_plan, micro)
-            scenario["boots"][1]["challenge"] = scenario["boots"][0]["challenge"]
+            scenario["boots"][0]["challenge"] = "0" * 16
             with self.assertRaisesRegex(campaign.CampaignError, "unique"):
                 campaign.validate_scenario_campaign(scenario)
 
@@ -2466,7 +2466,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=micro,
                     output=scenario_path,
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
@@ -2560,7 +2560,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=micro,
                     output=scenario_path,
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )
@@ -2627,7 +2627,7 @@ class CampaignTests(unittest.TestCase):
                     repo=root,
                     micro_manifest=micro,
                     output=scenario_path,
-                    requested_boots=7,
+                    requested_boots=measurement_source.FORMAL_BOOT_COUNT,
                     timeout_seconds=600,
                     wsl_distro="Ubuntu",
                 )

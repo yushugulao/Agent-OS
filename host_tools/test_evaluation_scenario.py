@@ -586,6 +586,8 @@ class EvaluationScenarioTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "inconclusive")
         self.assertEqual(report["summary"]["independent_boots"], 1)
+        self.assertEqual(report["summary"]["minimum_supported_boots"], 1)
+        self.assertEqual(scenario.MIN_SUPPORTED_BOOTS, 1)
         self.assertEqual(report["summary"]["paired_success_rate"], 1.0)
         self.assertEqual(report["summary"]["target_order_counts"], {"AB": 1, "BA": 0})
         source_comparability = report["summary"]["source_comparability"]

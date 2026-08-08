@@ -41,6 +41,7 @@ from evaluation_contract import (
 )
 from strict_json import read_strict_json, strict_json_loads
 from agenteval_measurement_source_policy import measurement_source_policy_inventory
+from agenteval_measurement_source_contract import FORMAL_BOOT_COUNT
 from safe_host_paths import (
     absolute_lexical_path,
     atomic_write_bytes as safe_atomic_write_bytes,
@@ -196,8 +197,8 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FINGERPRINT16 = re.compile(r"^[0-9a-f]{16}$")
 WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 BOOTSTRAP_REPETITIONS = 2_000
-MINIMUM_SCENARIO_BOOTS = 7
-MINIMUM_BENCHMARK_BOOTS = 7
+MINIMUM_SCENARIO_BOOTS = FORMAL_BOOT_COUNT
+MINIMUM_BENCHMARK_BOOTS = FORMAL_BOOT_COUNT
 MINIMUM_INNER_PAIRS = 7
 FILE_META_CAPACITY = 512
 FILE_QUERY_PATH_INDEX = "file_query_path_index"

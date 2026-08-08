@@ -40,7 +40,10 @@ from evaluation_campaign import (
     validate_campaign,
     validate_scenario_campaign,
 )
-from agenteval_measurement_source_contract import build_measurement_source_receipt
+from agenteval_measurement_source_contract import (
+    FORMAL_BOOT_COUNT,
+    build_measurement_source_receipt,
+)
 from evaluation_contract import (
     build,
     derive_acceptance_gates,
@@ -67,7 +70,7 @@ HOST_STATE_NAMES = set(bundle.load_manifest(ROOT).host_state_files)
 _STATE_NAME_MAP_CACHE: dict[Path, dict[str, str]] = {}
 EXPECTED_SCENARIO_IMAGE_CALLS = {
     (f"boot-{number:02d}", target)
-    for number in range(1, 8)
+    for number in range(1, FORMAL_BOOT_COUNT + 1)
     for target in ("plain", "agentos")
 }
 
@@ -575,7 +578,7 @@ def make_run(
     expected_samples = _expected_samples_per_boot(SUITE_PATH)
     boots = []
     prefix = artifact_root
-    for index in range(7):
+    for index in range(FORMAL_BOOT_COUNT):
         number = index + 1
         boot_id = f"boot-{number:02d}"
         challenge, guest_text = make_log(suite, index)
@@ -647,9 +650,9 @@ def make_run(
             "fresh_filesystem_per_boot": True,
             "independent_unit": "fresh-qemu-boot",
             "expected_samples_per_boot": expected_samples,
-            "minimum_boots": 7,
+            "minimum_boots": FORMAL_BOOT_COUNT,
             "micro_timeout_seconds": FORMAL_MICRO_TIMEOUT_SECONDS,
-            "requested_boots": 7,
+            "requested_boots": FORMAL_BOOT_COUNT,
             "sample_order_policy": "guest-paired-alternating-ab-ba",
             "suite_path": "ci/evaluation-suite.json",
             "suite_sha256": digest(SUITE_PATH),
@@ -893,7 +896,7 @@ def add_formal_scenario(
     programs, roles = read_expected_programs()
     boot_dirs = []
     order_codes = []
-    for number in range(1, 8):
+    for number in range(1, FORMAL_BOOT_COUNT + 1):
         boot_id = f"boot-{number:02d}"
         boot_dir = raw_root / boot_id
         challenge = f"ch-{number:012d}"
@@ -954,10 +957,10 @@ def add_formal_scenario(
         "git_sha256": micro["environment"]["git"]["sha256"],
         "input_driver_path": "host_tools/check_seeded_action_state.py",
         "input_driver_sha256": "7" * 64,
-        "minimum_boots": 7,
+        "minimum_boots": FORMAL_BOOT_COUNT,
         "python_bin": python_bin,
         "python_sha256": micro["environment"]["python"]["sha256"],
-        "requested_boots": 7,
+        "requested_boots": FORMAL_BOOT_COUNT,
         "timeout_seconds": 600,
         "toolprefix": toolprefix,
         "wsl_distro": "Ubuntu",
@@ -1663,7 +1666,7 @@ def main() -> int:
         }
         assert manifest["delivery"] is None
         assert manifest["full_verification"] == bundle.DEVELOPMENT_FULL_VERIFICATION
-        assert manifest["archive_summary"]["archive_count"] == 7
+        assert manifest["archive_summary"]["archive_count"] == FORMAL_BOOT_COUNT
         assert not (development / "run" / "raw").exists()
         assert bundle.verify_bundle(
             development, contract_root=ROOT
@@ -1733,11 +1736,11 @@ def main() -> int:
         formal_task6 = next(
             item for item in formal_summary["scenarios"] if item["task"] == "task6"
         )
-        assert formal_task6["performance_status"] == "regressed"
-        assert formal_task6["performance"]["sign_test"]["losses"] == 7
-        assert formal_task6["performance"]["regression_mcid_sign_test"]["losses"] == 7
+        assert formal_task6["performance_status"] == "inconclusive"
+        assert formal_task6["performance"]["sign_test"]["losses"] == 1
+        assert formal_task6["performance"]["regression_mcid_sign_test"]["losses"] == 1
         assert formal_summary["acceptance"]["scientific_evidence"]["status"] == "publishable"
-        assert formal_summary["acceptance"]["competition_ready"]
+        assert not formal_summary["acceptance"]["competition_ready"]
         assert formal_summary["acceptance"]["tasks"]["task6"] == "pass"
         bundle._verify_formal_summary(formal_summary)
         for retired_version in (2, 3, 4):
@@ -2075,7 +2078,9 @@ def main() -> int:
             item["artifact_id"] == "scenario/boot-01/host-summary"
             for item in formal_manifest["artifacts"]
         )
-        assert formal_manifest["archive_summary"]["archive_count"] == 28
+        assert formal_manifest["archive_summary"]["archive_count"] == (
+            4 * FORMAL_BOOT_COUNT
+        )
         assert not (formal / "run" / "raw").exists()
         assert not (formal / "run" / "scenario" / "raw").exists()
         materialized_call_start = len(image_verifier_calls)

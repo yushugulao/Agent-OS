@@ -430,7 +430,7 @@ def _scenario_report_payload(summary: dict, evidence_id: str) -> bytes:
         "samples": samples,
         "summary": {
             "independent_boots": len(samples),
-            "minimum_supported_boots": 7,
+            "minimum_supported_boots": measurement_source.FORMAL_BOOT_COUNT,
             "unique_challenges": len(samples),
             "paired_success_rate": 1.0,
             "target_order_counts": {"AB": 4, "BA": 3},

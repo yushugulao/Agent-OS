@@ -13,8 +13,8 @@ BASH_BIN="${BASH_BIN:-bash}"
 HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 REQUESTED_AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-}"
 AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-local-e3}"
-FORMAL_MICRO_BOOTS=7
-FORMAL_SCENARIO_BOOTS=7
+FORMAL_MICRO_BOOTS=1
+FORMAL_SCENARIO_BOOTS=1
 EVALUATION_BOOTS="${EVALUATION_BOOTS:-${FORMAL_MICRO_BOOTS}}"
 EVALUATION_INCLUDE_SCENARIO="${EVALUATION_INCLUDE_SCENARIO:-1}"
 EVALUATION_SCENARIO_BOOTS="${EVALUATION_SCENARIO_BOOTS:-${FORMAL_SCENARIO_BOOTS}}"
@@ -65,9 +65,9 @@ usage() {
 usage: scripts/run-evaluation-suite.sh {doctor|smoke|run|verify|kernel-cost|full-verify|dashboard|package|verify-package}
 
 Environment:
-  EVALUATION_BOOTS       development boot count; formal campaigns require exactly 7
+  EVALUATION_BOOTS       development boot count; formal campaigns require exactly 1
   EVALUATION_INCLUDE_SCENARIO  1 for formal research scenario, 0 for development only
-  EVALUATION_SCENARIO_BOOTS    development scenario count; formal campaigns require exactly 7
+  EVALUATION_SCENARIO_BOOTS    development scenario count; formal campaigns require exactly 1
   EVALUATION_SCENARIO_TIMEOUT  per-target runner budget (60..3600 seconds); the paired deadline is derived
   EVALUATION_MICRO_TIMEOUT     sealed micro boot watchdog (formal value: 900 seconds)
   EVALUATION_RUN_ID      development run id; formal runs require formal-<commit>

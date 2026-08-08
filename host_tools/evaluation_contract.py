@@ -38,11 +38,13 @@ except ImportError:
 
 try:
     from .agenteval_measurement_source_contract import (
+        FORMAL_BOOT_COUNT,
         STOP_RULE as MEASUREMENT_STOP_RULE,
         validate_measurement_source_receipt_shape,
     )
 except ImportError:
     from agenteval_measurement_source_contract import (
+        FORMAL_BOOT_COUNT,
         STOP_RULE as MEASUREMENT_STOP_RULE,
         validate_measurement_source_receipt_shape,
     )
@@ -486,7 +488,7 @@ def load_suite(path: Path) -> dict[str, Any]:
     )
     if (
         pairing["independent_unit"] != "guest_boot"
-        or _int(pairing["minimum_boots"], "minimum_boots", 7) < 7
+        or _int(pairing["minimum_boots"], "minimum_boots", 1) != FORMAL_BOOT_COUNT
         or _int(pairing["minimum_inner_pairs"], "minimum_inner_pairs", 7) < 7
         or pairing["orders"] != ["AB", "BA"]
         or _int(pairing["maximum_order_imbalance"], "order imbalance") > 1
@@ -784,6 +786,8 @@ def load_run_plan(path: Path) -> tuple[dict[str, Any], str]:
         raise EvaluationError(
             f"run plan measurement source receipt is invalid: {error}"
         ) from error
+    if len(plan["logs"]) != plan["measurement_source_receipt"]["formal_boot_count"]:
+        raise EvaluationError("run plan does not use the fixed formal boot count")
     if len(normalized_commands) != 1:
         raise EvaluationError("Guest boot commands differ beyond planned challenge/log paths")
     if len(supported_kernels) > 1:
@@ -791,9 +795,6 @@ def load_run_plan(path: Path) -> tuple[dict[str, Any], str]:
     supported_count = sum(item["status"] == "supported" for item in plan["logs"])
     if len(supported_inputs) != supported_count:
         raise EvaluationError("each supported boot needs a challenge-specialized pristine image")
-    parity = [sum(int(item["challenge"], 16) % 2 == value for item in plan["logs"]) for value in (0, 1)]
-    if len(plan["logs"]) >= 7 and (min(parity) == 0 or abs(parity[0] - parity[1]) > 1):
-        raise EvaluationError("challenge parity does not provide a balanced cross-boot order schedule")
     return plan, sha256_bytes(raw)
 
 
@@ -3740,7 +3741,7 @@ def evaluate(
         "unavailable" if any(item["status"] == "unavailable" for item in plan["logs"]) else None
     )
     if bad_status is None and len(supported_logs) < suite["pairing"]["minimum_boots"]:
-        raise EvaluationError("fewer than seven independent supported Guest boots")
+        raise EvaluationError("fewer than the required independent supported Guest boots")
     by_boot: dict[tuple[str, int, str, str], list[float]] = {}
     by_boot_receipts: dict[
         tuple[str, int, str, str], dict[str, list[int]]

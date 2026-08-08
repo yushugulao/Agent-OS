@@ -546,6 +546,7 @@ class CompatibilityOverheadTests(unittest.TestCase):
             metric for metric in METRICS
             if metric["id"] == "research_artifact_pipeline"
         )
+        self.assertEqual(GUEST_ROUNDS, 3)
         self.assertEqual(pipeline["operations"], PIPELINE_WORKLOAD["source_records"])
         self.assertEqual(PIPELINE_WORKLOAD, {
             "kind": "bounded_research_artifact_pipeline",
@@ -562,9 +563,9 @@ class CompatibilityOverheadTests(unittest.TestCase):
                 "aggregate_groups",
                 "write_read_verify_artifact",
             ],
-            "samples_per_target_boot": 3,
-            "formal_paired_boots": 7,
-            "formal_samples_per_target": 21,
+            "samples_per_target_boot": GUEST_ROUNDS,
+            "formal_paired_boots": FORMAL_BOOT_COUNT,
+            "formal_samples_per_target": GUEST_ROUNDS * FORMAL_BOOT_COUNT,
             "cache_state": GUEST_CACHE_STATE,
             "schedule": GUEST_SCHEDULE,
         })
@@ -737,11 +738,21 @@ class CompatibilityOverheadTests(unittest.TestCase):
         validate_plan(plan)
         orders = [boot["target_order"] for boot in plan["boots"]]
         self.assertEqual(len(plan["boots"]), FORMAL_BOOT_COUNT)
-        self.assertEqual(len(set(boot["challenge"] for boot in plan["boots"])), 7)
-        self.assertTrue(all(left != right for left, right in zip(orders, orders[1:])))
+        self.assertEqual(
+            len(set(boot["challenge"] for boot in plan["boots"])),
+            FORMAL_BOOT_COUNT,
+        )
+        self.assertIn(orders[0], {"plain-agentos", "agentos-plain"})
         self.assertFalse(plan["target_order_balanced"])
         self.assertEqual(plan["target_order_max_count_difference"], 1)
-        self.assertEqual(sorted(plan["target_order_counts"].values()), [3, 4])
+        self.assertEqual(
+            sorted(plan["target_order_counts"].values()),
+            [0, FORMAL_BOOT_COUNT],
+        )
+        self.assertEqual(
+            plan["stopping_rule"],
+            f"fixed-{FORMAL_BOOT_COUNT}-precommitted-paired-boots",
+        )
         self.assertTrue(plan["optional_stopping_forbidden"])
         self.assertEqual(plan, create_plan(COMMIT))
         self.assertNotEqual(plan, create_plan("b" * 40))
@@ -866,8 +877,11 @@ class CompatibilityOverheadTests(unittest.TestCase):
         self.assertEqual(set(summary["metrics"]), {item["id"] for item in METRICS})
         pipeline_summary = summary["metrics"]["research_artifact_pipeline"]
         self.assertEqual(pipeline_summary["workload"], PIPELINE_WORKLOAD)
-        self.assertEqual(pipeline_summary["samples_per_target_boot"], 3)
-        self.assertEqual(pipeline_summary["samples_per_target"], 21)
+        self.assertEqual(pipeline_summary["samples_per_target_boot"], GUEST_ROUNDS)
+        self.assertEqual(
+            pipeline_summary["samples_per_target"],
+            GUEST_ROUNDS * FORMAL_BOOT_COUNT,
+        )
         self.assertEqual(
             pipeline_summary["attribution"],
             "guest_application_full_path_not_pure_kernel",

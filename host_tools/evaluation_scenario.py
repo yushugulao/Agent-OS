@@ -39,6 +39,7 @@ try:
     from .committed_source_identity import committed_source_path_sample
     from .evidence_delivery_contract import DeliveryContractError
     from .agenteval_measurement_source_contract import (
+        FORMAL_BOOT_COUNT,
         validate_measurement_source_receipt_shape,
     )
 except ImportError:  # 从 host_tools/ 直接执行。
@@ -64,6 +65,7 @@ except ImportError:  # 从 host_tools/ 直接执行。
     from committed_source_identity import committed_source_path_sample
     from evidence_delivery_contract import DeliveryContractError
     from agenteval_measurement_source_contract import (
+        FORMAL_BOOT_COUNT,
         validate_measurement_source_receipt_shape,
     )
 
@@ -71,7 +73,7 @@ except ImportError:  # 从 host_tools/ 直接执行。
 SCHEMA_VERSION = 2
 REPORT_BINDING_DOMAIN = "scenario-report-v2"
 SCENARIO_ID = "research-platform-seeded"
-MIN_SUPPORTED_BOOTS = 7
+MIN_SUPPORTED_BOOTS = FORMAL_BOOT_COUNT
 BOOTSTRAP_REPETITIONS = 2_000
 MIN_ABSOLUTE_IMPROVEMENT_MS = 10
 MIN_BASELINE_MAKESPAN_MS = 50
