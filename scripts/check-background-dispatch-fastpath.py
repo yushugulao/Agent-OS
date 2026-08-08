@@ -125,14 +125,16 @@ def check(root: Path) -> None:
     expedite = function_body(store, "agent_metadata_store_expedite")
     require(
         expedite,
-        "state->due_tick=now;if(next_write_tick>now)next_write_tick=now;",
+        "state->due_tick=now;",
         "urgent metadata writeback no longer advances its deadline",
     )
     if "agent_background_request();" in expedite:
         raise ValueError("metadata expedite bypasses timer-driven dispatch")
     writeback_ready = function_body(store, "agent_file_writeback_ready")
     writeback_due = function_body(store, "agent_file_writeback_due")
-    for fragment in ("now<next_write_tick", "now>=state->due_tick"):
+    if "next_write_tick" in store:
+        raise ValueError("global metadata deadline can starve an unrelated scope")
+    for fragment in ("now>=state->due_tick",):
         require(
             writeback_due,
             fragment,

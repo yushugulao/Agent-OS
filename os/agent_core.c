@@ -567,11 +567,13 @@ int agent_make_role(struct proc *p, int role)
 				      p->agent_control_id) < 0)
 		goto fail;
 	recovery_bound = agent_observe_recovery_bind(p, controller);
-	if (p->agent_role == AGENT_ROLE_RECOVERY && recovery_bound <= 0)
+	// 绑定冲突拒绝；未绑定的工作流内 Recovery 按普通作用域计费，
+	// 只有启动根精确绑定的全局 Recovery 可以消费保留槽。
+	if (recovery_bound < 0)
 		goto fail;
 	capacity_reserved = agent_observe_capacity_admit(
 		p->vfs_scope_id, vfs_proc_lifecycle(p),
-		p->agent_role == AGENT_ROLE_RECOVERY ?
+		recovery_bound > 0 ?
 			AGENT_OBSERVE_CAPACITY_RECOVERY :
 			AGENT_OBSERVE_CAPACITY_ORDINARY);
 	if (capacity_reserved < 0)

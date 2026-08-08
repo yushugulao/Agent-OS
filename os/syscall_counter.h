@@ -95,7 +95,7 @@ enum syscall_class {
 	X(agent_trace_snapshot, FAST, ALWAYS) \
 	X(agent_audit_snapshot, FAST, ALWAYS) \
 	X(agent_audit_query, FAST, ALWAYS) \
-	X(agent_audit_receipt, BLOCK_IO, ALWAYS) \
+	X(agent_audit_receipt, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_span_trace_snapshot, FAST, ALWAYS) \
 	X(agent_timeline_snapshot, FAST, ALWAYS) \
 	X(agent_timeline_query, FAST, ALWAYS) \

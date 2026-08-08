@@ -276,10 +276,10 @@ def validate_recovery_capacity(source: str) -> None:
     token_order(
         body,
         ("recovery_bound", "=", "agent_observe_recovery_bind", "("),
-        ("p", "->", "agent_role", "==", "AGENT_ROLE_RECOVERY", "&&", "recovery_bound", "<=", "0"),
+        ("recovery_bound", "<", "0"),
         ("goto", "fail", ";"),
         ("agent_observe_capacity_admit", "("),
-        ("p", "->", "agent_role", "==", "AGENT_ROLE_RECOVERY", "?", "AGENT_OBSERVE_CAPACITY_RECOVERY"),
+        ("recovery_bound", ">", "0", "?", "AGENT_OBSERVE_CAPACITY_RECOVERY"),
         ("capacity_reserved", "<", "0"),
         ("goto", "fail", ";"),
         ("return", "0", ";"),
@@ -303,6 +303,7 @@ def validate_recovery_binding(source: str) -> None:
         ("!", "exec_policy_process_bootstrap", "(", "p", ")"),
         ("p", "->", "agent_control_id", "==", "0"),
         ("!", "vfs_proc_lifecycle_active", "(", "p", ")"),
+        ("return", "0", ";"),
         ("agent_observe_recovery_binding", ".", "control_id", "!=", "0"),
         ("return", "-", "1", ";"),
         ("agent_observe_recovery_binding", ".", "control_id", "=", "p", "->", "agent_control_id"),
@@ -313,6 +314,7 @@ def validate_recovery_binding(source: str) -> None:
         authorized,
         ("p", "!=", "0", "&&", "proc_teardown_live", "(", "p", ")"),
         ("p", "->", "agent_role", "==", "AGENT_ROLE_RECOVERY"),
+        ("exec_policy_process_bootstrap", "(", "p", ")"),
         ("p", "->", "agent_control_id", "==", "agent_observe_recovery_binding", ".", "control_id"),
         ("workflow_lifecycle_key_equal", "(", "vfs_proc_lifecycle", "(", "p", ")"),
     )
@@ -373,8 +375,10 @@ expect_rejected(
     "普通工作流预检使用 Recovery 容量类别",
 )
 for old, new, label in (
-    ("p->agent_role == AGENT_ROLE_RECOVERY && recovery_bound <= 0", "0", "Recovery 绑定失败仍被接纳"),
-    ("p->agent_role == AGENT_ROLE_RECOVERY ?", "recovery_bound > 0 ?", "Recovery 容量类别依赖失败的绑定结果"),
+    ("if (recovery_bound < 0)\n\t\tgoto fail;", "", "Recovery 绑定冲突仍被接纳"),
+    ("if (recovery_bound < 0)", "if (recovery_bound <= 0)", "未绑定 Recovery 未降级到普通槽"),
+    ("recovery_bound > 0 ?", "p->agent_role == AGENT_ROLE_RECOVERY ?", "未绑定 Recovery 侵占保留槽"),
+    ("recovery_bound > 0 ?", "recovery_bound >= 0 ?", "未绑定 Recovery 被提升到保留槽"),
     ("if (capacity_reserved < 0)\n\t\tgoto fail;", "", "观测容量接纳失败仍发布 Agent"),
 ):
     expect_rejected(validate_recovery_capacity, mutate_function(core_source, "agent_make_role", old, new), label)
@@ -391,6 +395,12 @@ expect_rejected(
 for function, old, new, label in (
     (
         "agent_observe_recovery_bind",
+        "\t\treturn 0;\n\tif (agent_observe_recovery_binding.control_id != 0)",
+        "\t\treturn -1;\n\tif (agent_observe_recovery_binding.control_id != 0)",
+        "无全局资格的 Recovery 未保持未绑定",
+    ),
+    (
+        "agent_observe_recovery_bind",
         "\tif (agent_observe_recovery_binding.control_id != 0)\n\t\treturn -1;\n",
         "",
         "Recovery 绑定覆盖已有控制者",
@@ -400,6 +410,12 @@ for function, old, new, label in (
         "p->agent_control_id == agent_observe_recovery_binding.control_id",
         "p->agent_control_id != 0",
         "Recovery 授权未绑定精确控制者",
+    ),
+    (
+        "agent_observe_recovery_authorized",
+        "exec_policy_process_bootstrap(p)",
+        "1",
+        "未绑定 Recovery 绕过 bootstrap 运行时门",
     ),
 ):
     expect_rejected(validate_recovery_binding, mutate_function(recovery, function, old, new), label)

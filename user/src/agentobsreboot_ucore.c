@@ -250,7 +250,7 @@ static void receipt_wait_for_state(
 	const struct agent_audit_record *record, unsigned long long receipt_id,
 	unsigned int expected)
 {
-	for (int attempt = 0; attempt < 20; attempt++) {
+	for (int attempt = 0; attempt < 128; attempt++) {
 		struct agent_audit_receipt_request request;
 		int status;
 
@@ -276,7 +276,7 @@ static void receipt_wait_for_state(
 		      (status == AGENT_STATUS_OK || status == AGENT_STATUS_RETRY ||
 		       status == AGENT_STATUS_TIMEOUT),
 		      "receipt WAIT remains explicit while pending");
-		sched_yield();
+		check(sleep(1) == 0, "wait for receipt persistence deadline");
 	}
 	check(0, "receipt WAIT reached expected terminal state");
 }
@@ -443,6 +443,8 @@ static unsigned long long emit_checkpoint_evidence(void)
 	      "commit observation with metadata bank");
 	printf("agentobsreboot_ucore: boot1_metadata_ready=1\n");
 #ifdef AGENT_OBSERVE_TEST_PROFILE
+	check(agent_file_meta_init() == AGENT_STATUS_OK,
+	      "finish the queued observation checkpoint");
 	memset(&summary, 0, sizeof(summary));
 	check(agent_ledger_snapshot(&summary) == AGENT_STATUS_OK &&
 	      summary.visible_records == 1 && summary.dropped_records > 0 &&

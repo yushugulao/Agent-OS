@@ -229,7 +229,7 @@ def validate(source: str, metadata_source: str) -> None:
     )
     maintain = body(source, "agent_file_writeback_maintain(")
     require(
-        "status=agent_meta_persist_drain_owner(owner,"
+        "(void)agent_meta_persist_drain_owner(owner,"
         "AGENT_META_BACKGROUND_DRAIN_BUDGET);" in maintain
         and "#defineAGENT_META_BACKGROUND_DRAIN_BUDGET" in all_source
         and "(AGENT_META_DRAIN_EXTERNAL_FLAG|"
@@ -241,9 +241,15 @@ def validate(source: str, metadata_source: str) -> None:
         and "agent_meta_persist_background_step_locked(" not in maintain
         and "bio_background_begin(" not in maintain
         and "agent_metadata_txn_try_external(" not in maintain
-        and "if(status<0&&status!=AGENT_META_DRAIN_RETRY)"
-        "agent_file_writeback_defer();" in maintain,
+        and "next_write_tick" not in all_source,
         "background persist bypasses the bounded shared drain",
+    )
+    replicated = body(source, "agent_file_writeback_replicate_settled(")
+    require(
+        "state->used&&!agent_file_writeback_generation_reached("
+        "state->replicated_generation,state->durable_generation)" in replicated
+        and "state->dirty_generation==state->durable_generation" not in replicated,
+        "mirror completion can strand an older durable frontier",
     )
     background_step = body(source, "agent_meta_persist_background_step_locked(")
     require(
@@ -540,16 +546,27 @@ def main() -> int:
         ),
         (
             "background persist loses batch budget",
-            "\tstatus = agent_meta_persist_drain_owner(owner,\n"
-            "\t\t\t\t\t\tAGENT_META_BACKGROUND_DRAIN_BUDGET);",
-            "\tstatus = agent_meta_persist_drain_owner(owner,\n"
-            "\t\t\t\t\t\tAGENT_META_DRAIN_EXTERNAL_FLAG | 1U);",
+            "\t(void)agent_meta_persist_drain_owner(\n"
+		    "\t\towner, AGENT_META_BACKGROUND_DRAIN_BUDGET);",
+            "\t(void)agent_meta_persist_drain_owner(\n"
+		    "\t\towner, AGENT_META_DRAIN_EXTERNAL_FLAG | 1U);",
         ),
         (
             "background persist loses tick gate",
             "\tif (last_background_drain_tick == (uint)now) {\n"
             "\t\tintr_restore(enabled);\n\t\treturn;\n\t}\n",
             "",
+        ),
+        (
+            "mirror ignores a durable frontier followed by new dirties",
+            "\t\tif (state->used && !agent_file_writeback_generation_reached(\n"
+            "\t\t\t\t   state->replicated_generation,\n"
+            "\t\t\t\t   state->durable_generation))",
+            "\t\tif (state->used && state->dirty_generation ==\n"
+            "\t\t\t\t   state->durable_generation &&\n"
+            "\t\t    !agent_file_writeback_generation_reached(\n"
+            "\t\t\t\t   state->replicated_generation,\n"
+            "\t\t\t\t   state->durable_generation))",
         ),
         (
             "background persist sleeps on transaction gate",

@@ -177,6 +177,7 @@ static void verify_receipt_persist_context(void)
 		.fs_atomic_depth = 0,
 		.sstatus = 0,
 		.supervisor_previous_mask = 1ULL << 8,
+		.fs_epoch_held = 1,
 		.metadata_txn_owned = 0,
 		.exit_requested = 0,
 	};
@@ -192,10 +193,14 @@ static void verify_receipt_persist_context(void)
 	context.metadata_txn_owned = 1;
 	assert(!agent_observe_receipt_persist_context_safe(&context));
 	context.metadata_txn_owned = 0;
+	context.fs_epoch_held = 0;
+	assert(!agent_observe_receipt_persist_context_safe(&context));
+	context.fs_epoch_held = 1;
 	context.io_request_depth = 0;
 	assert(!agent_observe_receipt_persist_context_safe(&context));
 	puts("observe_receipt_context: sie0_safe=1 interrupt_rejected=1 "
-	     "exit_rejected=1 txn_rejected=1 unadmitted_rejected=1");
+	     "exit_rejected=1 txn_rejected=1 epoch_rejected=1 "
+	     "unadmitted_rejected=1");
 }
 
 int main(void)

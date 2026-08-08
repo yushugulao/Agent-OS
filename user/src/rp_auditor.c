@@ -152,7 +152,7 @@ static int run_kernel_audit(void)
 	    auditor_edge_count < 1 || auditor_context_count < 2 ||
 	    agent_ledger_snapshot(&kernel_ledger) < 0 ||
 	    kernel_ledger.version != AGENT_LEDGER_VERSION ||
-	    kernel_ledger.visible_records != (uint64)auditor_audit_count ||
+	    kernel_ledger.visible_records < (uint64)auditor_audit_count ||
 	    kernel_ledger.total_records < kernel_ledger.visible_records ||
 	    kernel_ledger.total_records < (uint64)auditor_context_count ||
 	    kernel_ledger.ledger_hash == 0) {

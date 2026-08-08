@@ -8,6 +8,7 @@
 #include "agent_lifecycle.h"
 #include "agent_metadata_internal.h"
 #include "defs.h"
+#include "fs_epoch.h"
 #include "proc.h"
 #include "riscv.h"
 #include "vfs_security.h"
@@ -599,14 +600,14 @@ agent_obsstore_receipt_persist(uint scope_id)
 	if (t == 0 || t->trapframe == 0)
 		return -1;
 	cold = thread_trap_cold(t);
-	context.running = t->tid >= 0 && t->state == RUNNING &&
-			  t->process != 0;
+	context.running = t->tid >= 0 && t->state == RUNNING && t->process != 0;
 	context.kernel_work_depth = cold->kernel_work_depth;
 	context.io_request_depth = cold->io_request_depth;
 	context.buffer_holds = cold->bio_buffer_holds;
 	context.fs_atomic_depth = cold->bio_fs_atomic_depth;
 	context.sstatus = r_sstatus();
 	context.supervisor_previous_mask = SSTATUS_SPP;
+	context.fs_epoch_held = fs_epoch_request_held();
 	context.metadata_txn_owned = agent_metadata_txn_owned(0);
 	context.exit_requested = proc_thread_exit_requested();
 	if (!agent_observe_receipt_persist_context_safe(&context))
@@ -617,8 +618,7 @@ agent_obsstore_receipt_persist(uint scope_id)
 int
 agent_obsstore_mark_reap(uint scope_id, struct workflow_lifecycle_key lifecycle)
 {
-	return agent_observe_capacity_reap_begin(
-		scope_id, lifecycle, 0);
+	return agent_observe_capacity_reap_begin(scope_id, lifecycle, 0);
 }
 
 static int

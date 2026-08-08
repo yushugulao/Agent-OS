@@ -11,6 +11,7 @@ struct agent_observe_persist_context {
 	uint fs_atomic_depth;
 	uint64 sstatus;
 	uint64 supervisor_previous_mask;
+	int fs_epoch_held;
 	int metadata_txn_owned;
 	int exit_requested;
 };
@@ -25,7 +26,8 @@ agent_observe_receipt_persist_context_safe(
 	       context->fs_atomic_depth == 0 &&
 	       context->supervisor_previous_mask != 0 &&
 	       (context->sstatus & context->supervisor_previous_mask) == 0 &&
-	       !context->metadata_txn_owned && !context->exit_requested;
+	       context->fs_epoch_held && !context->metadata_txn_owned &&
+	       !context->exit_requested;
 }
 
 #endif

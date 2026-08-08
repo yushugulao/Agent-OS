@@ -207,6 +207,10 @@ def check(root: Path) -> None:
             raise ContractError(
                 f"{name} can drop a path inode without the filesystem epoch"
             )
+    if not re.search(
+        r"\bX\(agent_audit_receipt,\s*BLOCK_IO_FS_EPOCH,\s*ALWAYS\)", registry
+    ):
+        raise ContractError("audit receipt persistence lacks the filesystem epoch")
     fork = function(proc, "fork_common")
     require_order(
         fork,

@@ -192,7 +192,6 @@ static int pending_repair_mode;
 static int pending_repair_bank;
 static int agent_meta_reconcile_required;
 static int banks_prepared;
-static uint64 next_write_tick;
 static uint64 last_durable_retry_tick;
 static uint last_background_drain_tick;
 static uint owner_cursor;
@@ -317,7 +316,6 @@ agent_metadata_store_init(void)
 	banks_prepared = 0;
 	agent_metadata_recovery_init();
 	agent_metadata_test_init();
-	next_write_tick = 0;
 	last_durable_retry_tick = ~0ULL;
 	last_background_drain_tick = ~0U;
 	owner_cursor = 0;
@@ -367,8 +365,6 @@ void agent_metadata_store_expedite(uint scope_id)
 	if (state != 0 &&
 	    state->dirty_generation != state->durable_generation) {
 		state->due_tick = now;
-		if (next_write_tick > now)
-			next_write_tick = now;
 	}
 	intr_restore(enabled);
 }
@@ -429,8 +425,6 @@ static int agent_file_writeback_due(uint64 now)
 	int due = 0;
 	int enabled = intr_save();
 
-	if (now < next_write_tick)
-		goto out;
 	for (int i = 0; i < AGENT_META_WRITEBACK_SCOPE_MAX; i++) {
 		struct agent_file_scope_state *state =
 			&scope_states[i];
@@ -442,7 +436,6 @@ static int agent_file_writeback_due(uint64 now)
 			break;
 		}
 	}
-out:
 	intr_restore(enabled);
 	return due;
 }
@@ -637,19 +630,9 @@ static uint64 agent_file_writeback_capture_state(uint scope_id)
 	return generation;
 }
 
-static uint64 agent_file_writeback_rest_deadline(uint64 now)
-{
-	uint64 rest = AGENT_META_WRITEBACK_COALESCE_TICKS;
-
-	if (rest > ~0ULL - now)
-		return ~0ULL;
-	return now + rest;
-}
-
 static void agent_file_writeback_advance(int replicated)
 {
 	struct agent_file_scope_state *state;
-	uint64 now = replicated ? 0 : agent_ticks();
 	uint64 *generation;
 	int advanced = 0;
 	int enabled = intr_save();
@@ -671,9 +654,6 @@ static void agent_file_writeback_advance(int replicated)
 			state->commit_count++;
 		}
 	}
-	if (!replicated)
-		next_write_tick =
-			agent_file_writeback_rest_deadline(now);
 	intr_restore(enabled);
 }
 
@@ -685,8 +665,9 @@ agent_file_writeback_replicate_settled(void)
 	for (uint i = 0; i < AGENT_META_WRITEBACK_SCOPE_MAX; i++) {
 		struct agent_file_scope_state *state = &scope_states[i];
 
-		if (state->used && state->dirty_generation ==
-					 state->durable_generation)
+		if (state->used && !agent_file_writeback_generation_reached(
+				   state->replicated_generation,
+				   state->durable_generation))
 			state->replicated_generation = state->durable_generation;
 	}
 	intr_restore(enabled);
@@ -720,16 +701,6 @@ agent_file_writeback_note_full_cow(uint scope_id, uint blocks,
 		if (compaction)
 			state->compactions++;
 	}
-	intr_restore(enabled);
-}
-
-static void agent_file_writeback_defer(void)
-{
-	uint64 now = agent_ticks();
-	int enabled = intr_save();
-
-	next_write_tick =
-		agent_file_writeback_rest_deadline(now);
 	intr_restore(enabled);
 }
 
@@ -2931,15 +2902,15 @@ agent_meta_durable_persist_scope(uint scope_id)
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    scope_id >= FS_OWNER_SCOPE_FLAG)
 		return -1;
-	return agent_meta_persist_drain_owner(FS_OWNER_SCOPE(scope_id),
-					      AGENT_META_OWNER_DRAIN_STEP_BUDGET);
+	return agent_meta_persist_drain_owner(
+		FS_OWNER_SCOPE(scope_id), AGENT_META_OWNER_DRAIN_STEP_BUDGET);
 }
 
 static void agent_file_writeback_maintain(void)
 {
 	uint64 now = agent_ticks();
 	uint owner;
-	int status, enabled;
+	int enabled;
 
 	if (!agent_file_loaded || agent_meta_store_failed_closed ||
 	    agent_metadata_recovery_pending())
@@ -2962,10 +2933,8 @@ static void agent_file_writeback_maintain(void)
 	owner = agent_meta_persist.phase == AGENT_META_PERSIST_IDLE ?
 		(agent_meta_store_recovery_required ? FS_OWNER_SYSTEM :
 		 agent_file_writeback_owner(now)) : agent_meta_persist.owner;
-	status = agent_meta_persist_drain_owner(owner,
-						AGENT_META_BACKGROUND_DRAIN_BUDGET);
-	if (status < 0 && status != AGENT_META_DRAIN_RETRY)
-		agent_file_writeback_defer();
+	(void)agent_meta_persist_drain_owner(
+		owner, AGENT_META_BACKGROUND_DRAIN_BUDGET);
 }
 
 int
