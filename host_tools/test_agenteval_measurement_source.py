@@ -634,7 +634,7 @@ def main() -> int:
     commit = "a" * 40
     receipt = build_measurement_source_receipt(ROOT, source_commit=commit)
     assert CONTRACT_VERSION == "agenteval-measurement-source-v11"
-    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v4"
+    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v5"
     assert FORMAL_BOOT_COUNT == 1
     assert receipt["formal_boot_count"] == FORMAL_BOOT_COUNT
     assert receipt["contract_versions"]["functional"] == (
@@ -651,6 +651,12 @@ def main() -> int:
     inventory_paths = {
         entry["path"] for entry in receipt["policy_inventory"]["entries"]
     }
+    teardown_paths = {
+        "user/src/workflow_teardown_race_ucore.c",
+        "scripts/run-workflow-teardown-race-tests.sh",
+        "scripts/check-teardown-protocol.py",
+        "scripts/test-check-teardown-protocol.py",
+    }
     assert {
         "user/src/agenteval_ucore.c",
         "user/src/labdemo_ucore.c",
@@ -665,14 +671,18 @@ def main() -> int:
         "host_tools/evidence_delivery_contract.py",
         "host_tools/render_evaluation_dashboard.py",
     } <= inventory_paths
-    forged = json.loads(json.dumps(receipt))
-    forged["sources"][0]["sha256"] = "0" * 64
-    try:
-        verify_measurement_source_receipt(forged, ROOT, expected_commit=commit)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("accepted forged measurement source receipt")
+    assert teardown_paths <= inventory_paths
+    for path in teardown_paths:
+        forged = json.loads(json.dumps(receipt))
+        next(record for record in forged["sources"] if record["path"] == path)[
+            "sha256"
+        ] = "0" * 64
+        try:
+            verify_measurement_source_receipt(forged, ROOT, expected_commit=commit)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted forged policy source receipt: {path}")
     forged_policy = json.loads(json.dumps(receipt))
     forged_policy["policy_inventory"]["entries"][0]["path"] = "ci/other-suite.json"
     try:

@@ -12,7 +12,7 @@ else:
 
 SOURCE_RELATIVE = "user/src/agenteval_ucore.c"
 EVALUATION_SUITE_SOURCE_PATH = "ci/evaluation-suite.json"
-POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v4"
+POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v5"
 
 # 这里必须使用允许列表，而非递归源码树快照。每个条目都会参与正式测量的
 # 选择、执行、解释、渲染或打包，因此必须纳入签名回执。
@@ -37,6 +37,19 @@ CONTROL_PLANE_POLICY = (
     ("full-verification-metrics", "host_tools/full_verification_metrics_render.py"),
     ("full-verification-collector", "scripts/capture-final-evidence.py"),
     ("full-verification-runner", "scripts/run-full-verification.sh"),
+    (
+        "full-verification-workflow-guest",
+        "user/src/workflow_teardown_race_ucore.c",
+    ),
+    (
+        "full-verification-workflow-runner",
+        "scripts/run-workflow-teardown-race-tests.sh",
+    ),
+    ("full-verification-teardown-checker", "scripts/check-teardown-protocol.py"),
+    (
+        "full-verification-teardown-checker-selftest",
+        "scripts/test-check-teardown-protocol.py",
+    ),
     ("dual-platform-runner", "scripts/run-dual-platforms.sh"),
     ("measurement-set-publisher", "host_tools/extract_measured_experiments.py"),
     ("tool-attestation", "host_tools/evidence_toolchain_attestation.py"),
