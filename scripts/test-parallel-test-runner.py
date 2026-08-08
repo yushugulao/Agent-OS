@@ -12,6 +12,14 @@ import unittest
 
 
 RUNNER = Path(__file__).with_name("run-parallel-tests.py")
+FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "build" / "test-fixtures"
+
+
+def fixture_directory() -> tempfile.TemporaryDirectory[str]:
+    """把动态脚本置于正式 Python 始终信任的仓库根内。"""
+
+    FIXTURE_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=FIXTURE_ROOT)
 
 
 class ParallelTestRunnerTests(unittest.TestCase):
@@ -57,7 +65,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
         )
 
     def test_runs_concurrently_and_prints_in_inventory_order(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             for name in ("first.py", "second.py"):
                 self.make_test(
@@ -92,7 +100,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
         self.assertNotIn('"${PYTHON_BIN}" "${test}"', smoke)
 
     def test_reports_every_failure_and_returns_nonzero(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             self.make_test(root, "ok.py", "print('ok payload')\n")
             self.make_test(root, "bad.py", "print('bad payload')\nraise SystemExit(7)\n")
@@ -104,7 +112,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertIn("total=2 failed=1 jobs=2", result.stdout)
 
     def test_selected_python_failure_is_reported_for_every_test(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             self.make_test(root, "one.py", "pass\n")
             self.make_test(root, "two.py", "pass\n")
@@ -117,7 +125,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertEqual(result.stdout.count("cannot start Python"), 2)
 
     def test_child_environment_drops_build_and_python_injection(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             self.make_test(
                 root,
@@ -166,7 +174,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_rejects_invalid_job_count_and_duplicate_tests(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             self.make_test(root, "one.py", "pass\n")
             self.assertEqual(self.invoke(root, 0, "one.py").returncode, 2)
@@ -189,7 +197,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertIn("must not exceed 24", invalid_build_budget.stdout)
 
     def test_timeout_kills_test_and_keeps_replay_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             failure_root = root / "failures"
             self.make_test(root, "slow.py", "import time\ntime.sleep(10)\n")
@@ -215,7 +223,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertEqual(payload["replay_argv"][-1], "slow.py")
 
     def test_formal_evidence_keeps_shared_tests_parallel(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             for name in ("one.py", "two.py"):
                 self.make_test(
@@ -248,7 +256,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertIn("total=2 failed=0 jobs=2", result.stdout)
 
     def test_exclusive_test_is_an_inventory_ordered_barrier(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             self.make_test(
                 root,
@@ -288,7 +296,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertIn("exclusive=1", result.stdout)
 
     def test_nested_job_budgets_are_partitioned(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             for name in ("one.py", "two.py"):
                 self.make_test(
@@ -316,7 +324,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_nested_runner_honors_single_child_test_lane(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             (root / "runner.py").write_bytes(RUNNER.read_bytes())
             self.make_test(root, "one.py", "pass\n")
@@ -340,7 +348,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_exclusive_selection_must_reference_the_inventory(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             self.make_test(root, "one.py", "pass\n")
             result = self.invoke(

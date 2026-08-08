@@ -20,12 +20,20 @@ from unittest import mock
 
 MODULE_PATH = Path(__file__).with_name("run-parallel-qemu-regressions.py")
 TRUSTED_PYTHON_CHILD = Path(__file__).with_name("trusted-python-child.py")
+FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "build" / "test-fixtures"
 SPEC = importlib.util.spec_from_file_location("parallel_qemu_regressions", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load parallel QEMU runner")
 RUNNER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = RUNNER
 SPEC.loader.exec_module(RUNNER)
+
+
+def fixture_directory() -> tempfile.TemporaryDirectory[str]:
+    """把动态脚本置于正式 Python 始终信任的仓库根内。"""
+
+    FIXTURE_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=FIXTURE_ROOT)
 
 
 class ParallelQemuRegressionTests(unittest.TestCase):
@@ -71,7 +79,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
 
     def test_child_environment_drops_nested_make_and_parent_evidence(self) -> None:
         case = RUNNER.CASE_BY_LABEL["observe-recovery"]
-        with tempfile.TemporaryDirectory() as temp_name, mock.patch.dict(
+        with fixture_directory() as temp_name, mock.patch.dict(
             os.environ,
             {
                 "MAKEFLAGS": "-j99 --eval=bad",
@@ -137,7 +145,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
 
     def test_agent_suite_uses_isolated_targeted_runs_and_merges_receipts(self) -> None:
         case = RUNNER.AGENT_CASES[0]
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             output = Path(temp_name) / "output"
             case_output = output / case.label
             case_output.mkdir(parents=True)
@@ -224,7 +232,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("git"), "git is required")
     def test_clean_commit_materializes_independent_worktrees(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             base = Path(temp_name)
             root = base / "repo"
             root.mkdir()
@@ -266,7 +274,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("git"), "git is required")
     def test_dirty_source_is_snapshotted_without_touching_the_real_index(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             base = Path(temp_name)
             root = base / "repo"
             root.mkdir()
@@ -363,7 +371,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 RUNNER.source_manifest(root)
 
     def test_case_status_and_guest_log_are_fail_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             lane = root / "lane"
             output = root / "output"
@@ -396,7 +404,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             self.assertIn("missing or empty artifacts", empty_result.detail)
 
     def test_whole_case_timeout_terminates_the_runner(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name)
             lane = root / "lane"
             output = root / "output"
@@ -412,7 +420,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 "import subprocess,sys,time\n"
                 f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
                 "time.sleep(10)\n",
-                encoding="ascii",
+                encoding="utf-8",
             )
             case = RUNNER.RegressionCase("slow", "scripts/slow.py", 1)
             started = time.monotonic()
@@ -431,7 +439,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             self.assertFalse(survivor.exists())
 
     def test_lane_layout_is_trusted_by_formal_python_child(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             root = Path(temp_name) / "repo"
             root.mkdir()
             root = root.resolve()
@@ -465,7 +473,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             self.assertEqual(completed.stdout.strip(), "trusted-lane")
 
     def test_report_merge_uses_case_inventory_order(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             base = Path(temp_name)
             output = base / "output"
             output.mkdir()
@@ -507,7 +515,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             self.assertNotIn("/", steps)
 
     def test_report_verifier_rejects_tampering_and_links(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        with fixture_directory() as temp_name:
             base = Path(temp_name)
             output = base / "output"
             output.mkdir()
@@ -652,20 +660,23 @@ class ParallelQemuRegressionTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("git"), "git is required")
     def test_cli_runs_isolated_lanes_and_returns_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_name:
+        shell = shutil.which("sh") or shutil.which("bash")
+        if shell is None:
+            self.skipTest("POSIX shell is required")
+        with fixture_directory() as temp_name:
             base = Path(temp_name)
             root = base / "repo"
             scripts = root / "scripts"
             scripts.mkdir(parents=True)
             fixture = (
-                "import os, pathlib, sys, time\n"
-                "assert 'MAKEFLAGS' not in os.environ\n"
-                "assert 'FINAL_EVIDENCE_STAGE' not in os.environ\n"
-                "time.sleep(0.25)\n"
-                "pathlib.Path(os.environ['EVIDENCE_GUEST_LOG_FILE']).write_text("
-                "pathlib.Path(sys.argv[0]).name + '\\n', encoding='ascii')\n"
-                "print(pathlib.Path(sys.argv[0]).name + ' stdout')\n"
-                "raise SystemExit(7 if 'syscall' in pathlib.Path(sys.argv[0]).name else 0)\n"
+                "set -eu\n"
+                "test -z \"${MAKEFLAGS+x}\"\n"
+                "test -z \"${FINAL_EVIDENCE_STAGE+x}\"\n"
+                "sleep 0.25\n"
+                "name=${0##*/}\n"
+                "printf '%s\\n' \"$name\" > \"$EVIDENCE_GUEST_LOG_FILE\"\n"
+                "printf '%s stdout\\n' \"$name\"\n"
+                "case \"$name\" in *syscall*) exit 7 ;; esac\n"
             )
             for case in RUNNER.CASES[:2]:
                 (root / case.runner).write_text(fixture, encoding="ascii")
@@ -700,7 +711,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                     "--build-jobs",
                     "9",
                     "--bash",
-                    sys.executable,
+                    shell,
                     "--case",
                     RUNNER.CASES[0].label,
                     "--case",
@@ -776,7 +787,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                     "--build-jobs",
                     "9",
                     "--bash",
-                    sys.executable,
+                    shell,
                     "--case",
                     RUNNER.CASES[0].label,
                     "--case",

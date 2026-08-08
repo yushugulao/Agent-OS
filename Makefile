@@ -728,7 +728,7 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-io-work-conserving-wiring.py \
 	scripts/check-syscall-file-transaction.py \
 	scripts/check-traditional-io-fastpath.py \
-	scripts/test-open-file-io-lease.py \
+	scripts/check-open-file-io-lease.py \
 	scripts/test-lazy-bio-admission.py \
 	scripts/check-inode-mapping-guard.py \
 	scripts/check-read-epoch-lazy-finalizer.py \
