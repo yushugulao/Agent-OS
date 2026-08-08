@@ -31,6 +31,7 @@ def _isolate_direct_entry_imports() -> None:
 _isolate_direct_entry_imports()
 
 import argparse
+import hashlib
 import os
 import sys
 import tempfile
@@ -87,12 +88,17 @@ SOURCE_PATHS = (
     "user/lib/syscall_ids.h",
     "baseline_ucore/user/lib/syscall.c",
     "user/lib/syscall.c",
+    "user/include/labdemo_workload.h",
     "user/src/labdemo_ucore.c",
 )
 
 
 def _tokens(text: str) -> list[str]:
     return _lex(text.replace("\\\n", " "))
+
+
+def _token_fingerprint(tokens: list[str]) -> str:
+    return hashlib.sha256("\0".join(tokens).encode("ascii")).hexdigest()
 
 
 def _ordered(body: list[str], sequences: tuple[tuple[str, ...], ...], label: str) -> None:
@@ -1035,18 +1041,14 @@ def _validate_performance_observer(
     authorization = _function_tokens(
         observer_tokens, "agent_performance_snapshot_authorized"
     )
-    _require_top_level(
-        authorization,
-        (
-            "return", "p", "!=", "0", "&&", "p", "->",
-            "resource_domain_admin", "&&", "exec_policy_process_bootstrap",
-            "(", "p", ")", ";",
-        ),
-        "performance observer signed bootstrap authorization",
-    )
-    if authorization.count("return") != 1 or any(
-        token in {"if", "goto", "break", "continue"} for token in authorization
-    ):
+    if authorization != [
+        "return", "p", "!=", "0", "&&", "exec_policy_process_bootstrap",
+        "(", "p", ")", "&&", "(", "p", "->",
+        "resource_domain_admin", "||", "(", "p", "->", "agent_role",
+        "==", "AGENT_ROLE_ORCHESTRATOR", "&&", "p", "->",
+        "agent_controller_id", "==", "0", "&&", "agent_identity_has_cap",
+        "(", "p", ",", "AGENT_CAP_ORCHESTRATE", ")", ")", ")", ";",
+    ]:
         raise ValueError("performance observer authorization control flow differs")
 
     snapshot = _function_tokens(observer_tokens, "sys_agent_performance_snapshot")
@@ -1256,8 +1258,18 @@ def _validate_performance_producers(
     vm_source: str,
     loader_source: str,
 ) -> None:
+    identity_tokens = _tokens(identity_source)
+    has_cap = _function_tokens(identity_tokens, "agent_identity_has_cap")
+    if has_cap != [
+        "return", "p", "!=", "0", "&&", "p", "->", "is_agent", "&&",
+        "agent_identity_proc_scope", "(", "p", ")", "!=", "VFS_SCOPE_NONE",
+        "&&", "exec_policy_process_allows_role", "(", "p", ",", "p", "->",
+        "agent_role", ")", "&&", "(", "p", "->", "agent_capability_mask",
+        "&", "cap", ")", "==", "cap", ";",
+    ]:
+        raise ValueError("performance observer capability authority differs")
     identity = _function_tokens(
-        _tokens(identity_source), "agent_identity_authority_bootstrap"
+        identity_tokens, "agent_identity_authority_bootstrap"
     )
     _require_once(
         identity,
@@ -1616,7 +1628,15 @@ def _validate_performance_producers(
             raise ValueError(f"exec cache counter producer differs: {counter}")
 
 
-def _validate_performance_pair_consumer(source: str) -> None:
+def _validate_performance_pair_consumer(source: str, workload_header: str) -> None:
+    workload_tokens = _tokens(workload_header)
+    _require_once(
+        workload_tokens,
+        ("#", "define", "LABDEMO_RETRY_TIMEOUT_MS", "30000"),
+        "showcase retry timeout",
+    )
+    if workload_tokens.count("LABDEMO_RETRY_TIMEOUT_MS") != 1:
+        raise ValueError("showcase retry timeout differs")
     """将展示差值绑定到同一 observer 的原始 Guest 快照。"""
 
     snapshot_pairs = (
@@ -1676,6 +1696,127 @@ def _validate_performance_pair_consumer(source: str) -> None:
     )
     if take.count("agent_performance_snapshot") != 1 or take.count("return") != 0:
         raise ValueError("showcase performance snapshot control flow differs")
+
+    sync_fence = _function_tokens(tokens, "demo_quiescence_flush")
+    if _token_fingerprint(sync_fence) != (
+        "a73e61508aea1a449b09e71eedf7279417c62bb0dc9851c416a77df333f77dbc"
+    ):
+        raise ValueError("showcase quiescence retry body differs")
+    _ordered(
+        sync_fence,
+        (
+            ("deadline", "=", "get_mtime", "(", ")", ";"),
+            ("if", "(", "deadline", "<", "0", ")", "return", "status", ";"),
+            ("deadline", "+", "=", "LABDEMO_RETRY_TIMEOUT_MS", ";"),
+            ("now", "=", "get_mtime", "(", ")", ";"),
+            (
+                "if", "(", "now", "<", "0", "||", "now", ">=", "deadline",
+                "||", "sleep", "(", "10", ")", "<", "0", ")", "return",
+                "status", ";",
+            ),
+        ),
+        "showcase bounded quiescence retry",
+    )
+    flush_call = (
+        "status", "=", "fd", "<", "0", "?", "sync", "(", ")", ":",
+        "fsync", "(", "fd", ")", ";",
+    )
+    flushes = _locations(sync_fence, flush_call)
+    successes = _locations(
+        sync_fence,
+        ("if", "(", "status", ">=", "0", ")", "return", "status", ";"),
+    )
+    deadline_at = _require_once(
+        sync_fence, ("deadline", "=", "get_mtime", "(", ")", ";"),
+        "showcase quiescence deadline",
+    )
+    sleep_at = _require_once(
+        sync_fence, ("sleep", "(", "10", ")", "<", "0"),
+        "showcase quiescence sleep",
+    )
+    status_assignments = _locations(sync_fence, ("status", "="))
+    if (
+        len(flushes) != 2 or len(successes) != 2
+        or not flushes[0] < successes[0] < deadline_at < sleep_at
+        < flushes[1] < successes[1]
+        or sync_fence.count("sync") != 2 or sync_fence.count("fsync") != 2
+        or sync_fence.count("sleep") != 1 or sync_fence.count("return") != 4
+        or sync_fence.count("break") != 0 or sync_fence.count("goto") != 0
+        or sync_fence.count("continue") != 0 or status_assignments != flushes
+    ):
+        raise ValueError("showcase quiescence retry control flow differs")
+    if _function_tokens(tokens, "demo_quiescence_sync") != [
+        "return", "demo_quiescence_flush", "(", "-", "1", ")", ";",
+    ] or _function_tokens(tokens, "demo_quiescence_fsync") != [
+        "return", "demo_quiescence_flush", "(", "fd", ")", ";",
+    ]:
+        raise ValueError("showcase quiescence wrappers differ")
+
+    fence = _function_tokens(tokens, "demo_quiescence_fence")
+    fence_sync_at = _require_once(
+        fence,
+        (
+            "check", "(", "demo_quiescence_sync", "(", ")", "==", "0", ",",
+            '"quiescence sync"', ")", ";",
+        ),
+        "showcase quiescence fence sync",
+    )
+    _require_once(
+        fence,
+        (
+            "memset", "(", "&", "previous", ",", "0", ",", "sizeof", "(",
+            "previous", ")", ")", ";", "for", "(", "int", "attempt", "=", "1",
+            ";", "attempt", "<=", "LABDEMO_FENCE_MAX_ATTEMPTS", ";", "attempt",
+            "++", ")", "{", "check", "(", "demo_quiescence_sync", "(", ")",
+        ),
+        "showcase quiescence fence unconditional loop",
+    )
+    if (
+        fence.count("demo_quiescence_sync") != 1 or fence.count("sync") != 0
+        or _depth_at(fence, fence_sync_at) != 1
+    ):
+        raise ValueError("showcase quiescence fence bypasses bounded sync")
+
+    run_one = _function_tokens(tokens, "run_one")
+    if _token_fingerprint(run_one) != (
+        "c0e4cbcfaf16cfd8049220f0e94cb0feb346f525247ebae55b930ae5f1fae39d"
+    ):
+        raise ValueError("showcase metadata action retry body differs")
+    _ordered(
+        run_one,
+        (
+            ("deadline", "=", "get_mtime", "(", ")", ";"),
+            (
+                "if", "(", "deadline", ">=", "0", ")", "deadline", "+", "=",
+                "LABDEMO_RETRY_TIMEOUT_MS", ";",
+            ),
+            ("n", "=", "agent_run", "(", "op", ",", "res", ",", "1", ",", "0", ")", ";"),
+            (
+                "if", "(", "n", "!=", "1", "||", "status", "!=",
+                "AGENT_STATUS_OK", "||", "res", "->", "status", "!=",
+                "AGENT_STATUS_RETRY", "||", "(", "op", "->", "tool_id", "!=",
+                "AGENT_TOOL_ACTION_COMMIT", "&&", "op", "->", "tool_id", "!=",
+                "AGENT_TOOL_ARTIFACT_UPDATE", ")", ")", "break", ";",
+            ),
+            ("now", "=", "get_mtime", "(", ")", ";"),
+            (
+                "check", "(", "deadline", ">=", "0", "&&", "now", ">=", "0",
+                "&&", "now", "<", "deadline", "&&", "sleep", "(", "10", ")",
+                "==", "0", ",", '"agent run retry wait"', ")", ";",
+            ),
+        ),
+        "showcase metadata action retry",
+    )
+    if (
+        run_one.count("agent_run") != 1 or run_one.count("sleep") != 1
+        or run_one.count("return") != 0 or run_one.count("break") != 1
+        or run_one.count("goto") != 0 or run_one.count("continue") != 0
+        or _locations(run_one, ("status", "="))
+        or _locations(run_one, ("res", "->", "status", "="))
+        or _locations(run_one, ("op", "->", "tool_id", "="))
+        or _locations(run_one, ("op", "->", "request_id", "="))
+    ):
+        raise ValueError("showcase metadata action retry control flow differs")
 
     delta = _function_tokens(tokens, "performance_delta")
     if delta != [
@@ -1806,8 +1947,16 @@ def _validate_performance_pair_consumer(source: str) -> None:
                 ")", ";",
             ),
             (
+                "check", "(", "demo_quiescence_sync", "(", ")", "==", "0", ",",
+                '"workflow setup boundary"', ")", ";",
+            ),
+            (
                 "take_performance_snapshot", "(", "&",
                 "workflow_perf_before", ")", ";",
+            ),
+            (
+                "check", "(", "demo_quiescence_sync", "(", ")", "==", "0", ",",
+                '"workflow durable boundary"', ")", ";",
             ),
             (
                 "take_performance_snapshot", "(", "&",
@@ -1821,6 +1970,30 @@ def _validate_performance_pair_consumer(source: str) -> None:
         ),
         "showcase pre-touched performance interval",
     )
+    if orchestrator.count("demo_quiescence_sync") != 2 or orchestrator.count("sync") != 0:
+        raise ValueError("showcase workflow boundaries bypass bounded sync")
+    setup_at = _require_once(
+        orchestrator,
+        (
+            "seed_demo_metadata", "(", ")", ";", "check", "(",
+            "demo_quiescence_sync", "(", ")", "==", "0", ",",
+            '"workflow setup boundary"', ")", ";", "take_performance_snapshot",
+            "(", "&", "workflow_perf_before", ")", ";",
+        ),
+        "showcase unconditional workflow setup boundary",
+    )
+    durable_at = _require_once(
+        orchestrator,
+        (
+            "check_provenance_graph", "(", "sentinel_pid", ")", ";", "check", "(",
+            "demo_quiescence_sync", "(", ")", "==", "0", ",",
+            '"workflow durable boundary"', ")", ";", "workflow_finished_us", "=",
+            "demo_now_us", "(", ")", ";",
+        ),
+        "showcase unconditional workflow durable boundary",
+    )
+    if _depth_at(orchestrator, setup_at) != 0 or _depth_at(orchestrator, durable_at) != 0:
+        raise ValueError("showcase workflow boundary is conditional")
     for function_name, mode in (
         ("run_compat_workload", "compat"),
         ("run_native_workload", "native"),
@@ -1860,6 +2033,32 @@ def _validate_performance_pair_consumer(source: str) -> None:
             ),
             f"{mode} core performance interval",
         )
+        primary_at = _require_once(
+            lane,
+            (
+                "check", "(", "demo_quiescence_fsync", "(", "fd", ")", "==", "0", ",",
+                f'"{mode} recovery primary ack"', ")", ";",
+            ),
+            f"{mode} bounded primary acknowledgement",
+        )
+        previous = (
+            ('"compat recovery write"', ")", ";") if mode == "compat" else
+            ('"native recovery metadata stage"', ")", ";")
+        )
+        _require_once(
+            lane,
+            previous + (
+                "check", "(", "demo_quiescence_fsync", "(", "fd", ")", "==", "0",
+                ",", f'"{mode} recovery primary ack"', ")", ";", "check", "(",
+                "close", "(", "fd", ")", "==", "0", ",",
+            ),
+            f"{mode} unconditional primary acknowledgement",
+        )
+        if (
+            lane.count("demo_quiescence_fsync") != 1 or lane.count("fsync") != 0
+            or _depth_at(lane, primary_at) != 1
+        ):
+            raise ValueError(f"{mode} primary acknowledgement bypasses bounded fsync")
 
 
 def _validate_lifecycle_identity(abi: str, implementation: str) -> None:
@@ -1965,7 +2164,8 @@ def validate_source_texts(sources: dict[str, str]) -> None:
         sources["os/loader.c"],
     )
     _validate_performance_pair_consumer(
-        sources["user/src/labdemo_ucore.c"]
+        sources["user/src/labdemo_ucore.c"],
+        sources["user/include/labdemo_workload.h"],
     )
     _validate_clock_source(
         sources["baseline_ucore/user/lib/syscall.c"], "plain Guest"

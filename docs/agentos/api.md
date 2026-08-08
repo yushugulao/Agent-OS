@@ -62,7 +62,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 560；其中 543、544�
 | `sys_agent_heartbeat_stop` / `agent_heartbeat_stop` | 553 | `int sys_agent_heartbeat_stop(void)` | 独立且幂等的心跳停止入口 |
 | `agent_audit_receipt` | 557 | `int agent_audit_receipt(struct agent_audit_receipt_request *)` | orchestrator 为当前 lifecycle 中的精确审计记录取得或等待持久性回执；结果区分 `PENDING`、`DURABLE`、`FAILED`，并拒绝陈旧 lifecycle 或伪造 receipt id |
 | `agent_resource_snapshot` | 559 | `int agent_resource_snapshot(struct agent_resource_snapshot *)` | 仅允许 bootstrap 绑定的非 Agent 资源域管理员读取版本化全局资源计数和空闲页快照；普通 Agent 与普通进程均被拒绝 |
-| `agent_performance_snapshot` | 560 | `int agent_performance_snapshot(struct agent_performance_snapshot *)` | 仅允许由签名 bootstrap 策略建立的资源域观测 authority 读取版本化的全局累计性能计数；scope-local Agent capability 不能授予该全局权限 |
+| `agent_performance_snapshot` | 560 | `int agent_performance_snapshot(struct agent_performance_snapshot *)` | 仅允许签名 bootstrap 资源域管理员或其活动根 Orchestrator 读取版本化的全局累计性能计数；普通 scope-local Agent 不能获得该权限 |
 
 `agent_run` 和 `context_snapshot` 是性能主路径。syscall 503/504 保持 V1 名称协议二进制兼容；新程序应优先使用 syscall 547/548 的 V2 sized typed KV 协议。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在可信 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context 和事件来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度和审计转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者和精确 scope。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 在自己的 scope 内显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_workflow_create` 是唯一创建新 workflow security boundary 的用户 ABI，角色委派接口本身不能铸造新 scope；`agent_workflow_close` 是对应的可信终止 ABI，关闭权由生命周期账本中的唯一根 control id 或可信 factory 身份决定。`agent_workflow_lifecycle_info` 只是 self-only 观测/比较接口，其返回 key 不是可转移权限。`agent_scope_delegate_fd` 只让调用线程的下一次 workflow、Agent、worker 或降权普通子主体显式携带选中的 pipe 端点。`agent_provenance_snapshot` 导出同一可见范围内的 Context 和审计因果边，用于页面绘制可信动作之间的来源关系。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的 scope 内系统级观测入口；底层物理表共 512 槽，但调用者最多看到自己的 128 槽配额窗口。`agent_ledger_snapshot` 在同一 scope 的逻辑账本上返回可见范围、总量、已淘汰数、分类计数和账本 hash。
 
@@ -76,10 +76,10 @@ workflow Agent 的全局信息查询能力。
 
 `agent_performance_snapshot()` 同样使用 sized-prefix 输出：调用者至少提供前 8 字节，
 内核填写 `version`、完整 `struct_size`，并只复制调用者容量与当前结构大小中的较小值。
-入口只接受由签名 bootstrap 策略建立且持有资源域管理标记的观测 authority；该 authority
-之后即使进入 Agent 状态也保留观测资格。普通进程以及只具备 scope-local capability 的
-Orchestrator、Recovery 或 worker 均返回 `AGENT_STATUS_DENIED`，不能借
-`AGENT_CAP_ORCHESTRATE` 读取其他 workflow 的活动侧信道。
+入口只接受由签名 bootstrap 策略建立的资源域管理员，或仍运行该签名映像、处于活动
+workflow 且没有上级 Agent 控制边的根 Orchestrator。后者只获得性能观测资格，不继承
+资源域管理权；普通进程、嵌套 Orchestrator、Recovery 或 worker 均返回
+`AGENT_STATUS_DENIED`，不能借 scope-local capability 读取其他 workflow 的活动侧信道。
 
 `counter_scope` 当前固定为 `AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL`，表示快照的默认
 计数口径。`observer_workload_syscalls` 是明确的例外：它只累计当前观察进程在注册工作负载

@@ -698,12 +698,25 @@ def main() -> int:
         "AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL 1U",
         "AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL 2U",
     ))
+    _reject(_text_case(
+        sources,
+        "user/include/labdemo_workload.h",
+        "LABDEMO_RETRY_TIMEOUT_MS 30000",
+        "LABDEMO_RETRY_TIMEOUT_MS 0",
+    ))
+    _reject(_text_case(
+        sources,
+        "user/include/labdemo_workload.h",
+        "#define LABDEMO_RETRY_TIMEOUT_MS 30000",
+        "#define LABDEMO_RETRY_TIMEOUT_MS 0\n"
+        "// #define LABDEMO_RETRY_TIMEOUT_MS 30000",
+    ))
     _reject(_case(
         sources,
         observer,
         "agent_performance_snapshot_authorized",
-        "p->resource_domain_admin",
-        "p->is_agent",
+        "p->agent_role == AGENT_ROLE_ORCHESTRATOR",
+        "p->agent_role != AGENT_ROLE_ORCHESTRATOR",
     ))
     _reject(_case(
         sources,
@@ -716,8 +729,167 @@ def main() -> int:
         sources,
         observer,
         "agent_performance_snapshot_authorized",
-        "return p != 0 && p->resource_domain_admin",
-        "return p != 0 && !p->is_agent && p->resource_domain_admin",
+        "p->agent_controller_id == 0",
+        "p->agent_controller_id != 0",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "agent_performance_snapshot_authorized",
+        "agent_identity_has_cap(p, AGENT_CAP_ORCHESTRATE)",
+        "p->agent_capability_mask != 0",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "agent_performance_snapshot_authorized",
+        "p->resource_domain_admin ||",
+        "1 ||",
+    ))
+    _reject(_case(
+        sources,
+        observer,
+        "agent_performance_snapshot_authorized",
+        "return p != 0 && exec_policy_process_bootstrap(p) &&",
+        "p->resource_domain_admin = 1;\n\t"
+        "return p != 0 && exec_policy_process_bootstrap(p) &&",
+    ))
+    _reject(_case(
+        sources,
+        "os/agent_identity.c",
+        "agent_identity_has_cap",
+        "return p != 0 && p->is_agent &&",
+        "return 1;\n\treturn p != 0 && p->is_agent &&",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "demo_quiescence_flush",
+        "int status = fd < 0 ? sync() : fsync(fd);",
+        "int status = 0;",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "demo_quiescence_flush",
+        "int status = fd < 0 ? sync() : fsync(fd);",
+        "int status = fd < 0 ? sync() : fsync(fd);\n\tstatus = 0;",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "demo_quiescence_flush",
+        "int64 deadline;",
+        "return 0;\n\tint64 deadline;",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "demo_quiescence_flush",
+        "now < 0 || now >= deadline || sleep(10) < 0",
+        "0",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "demo_quiescence_flush",
+        "for (;;) {",
+        "for (;;) {\n\t\tbreak;",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "demo_quiescence_fence",
+        'demo_quiescence_sync() == 0, "quiescence sync"',
+        'sync() == 0, "quiescence sync"',
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "demo_quiescence_fence",
+        'check(demo_quiescence_sync() == 0, "quiescence sync");',
+        'if (0)\n\t\t\tcheck(demo_quiescence_sync() == 0, "quiescence sync");',
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "run_orchestrator",
+        'demo_quiescence_sync() == 0, "workflow durable boundary"',
+        'sync() == 0, "workflow durable boundary"',
+    ))
+    for label in ("workflow setup boundary", "workflow durable boundary"):
+        _reject(_case(
+            sources,
+            "user/src/labdemo_ucore.c",
+            "run_orchestrator",
+            f'check(demo_quiescence_sync() == 0, "{label}");',
+            f'if (0)\n\t\tcheck(demo_quiescence_sync() == 0, "{label}");',
+        ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "run_native_workload",
+        "demo_quiescence_fsync(fd) == 0",
+        "fsync(fd) == 0",
+    ))
+    for function_name, mode in (
+        ("run_compat_workload", "compat"),
+        ("run_native_workload", "native"),
+    ):
+        primary_ack = (
+            "check(demo_quiescence_fsync(fd) == 0,\n"
+            f'\t\t      "{mode} recovery primary ack");'
+        )
+        _reject(_case(
+            sources,
+            "user/src/labdemo_ucore.c",
+            function_name,
+            primary_ack,
+            f"if (0)\n\t\t\t{primary_ack}",
+        ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "run_one",
+        "status != AGENT_STATUS_OK ||",
+        "0 ||",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "run_one",
+        "int64 deadline = get_mtime();",
+        "return;\n\tint64 deadline = get_mtime();",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "run_one",
+        "res->status != AGENT_STATUS_RETRY ||",
+        "0 ||",
+    ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "run_one",
+        "n = agent_run(op, res, 1, 0);",
+        "n = agent_run(op, res, 1, 0);\n\t\tres->status = AGENT_STATUS_OK;",
+    ))
+    for assignment in ("op->request_id = 1;", "op->tool_id = 1;"):
+        _reject(_case(
+            sources,
+            "user/src/labdemo_ucore.c",
+            "run_one",
+            'now = get_mtime();',
+            f'{assignment}\n\t\tnow = get_mtime();',
+        ))
+    _reject(_case(
+        sources,
+        "user/src/labdemo_ucore.c",
+        "run_one",
+        "(op->tool_id != AGENT_TOOL_ACTION_COMMIT &&\n"
+        "\t\t     op->tool_id != AGENT_TOOL_ARTIFACT_UPDATE)",
+        "0",
     ))
     _reject(_case(
         sources,

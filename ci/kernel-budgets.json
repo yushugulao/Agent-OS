@@ -1100,6 +1100,7 @@
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "identity",
           "resource_controller"
         ],
         "allowed_bridge_dependencies": []

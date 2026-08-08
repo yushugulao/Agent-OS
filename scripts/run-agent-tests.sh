@@ -320,7 +320,7 @@ check_case_contract() {
 		;;
 	labdemo_ucore)
 		require_exact_case_marker "${log_file}" \
-			"labdemo_ucore: startup_barrier ready=3 event_queued=1 released=3"
+			"labdemo_ucore: startup_barrier ready=3 released=3 chain_receipts=3"
 		;;
 	usersafety_ucore)
 		require_exact_case_marker "${log_file}" \

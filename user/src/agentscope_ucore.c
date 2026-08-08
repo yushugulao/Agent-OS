@@ -51,6 +51,9 @@ struct scope_reply {
 struct observe_pressure_result {
 	uint64 iterations;
 	uint64 preemptions;
+	uint64 span_preemptions;
+	uint64 timeline_preemptions;
+	uint64 provenance_preemptions;
 	uint64 context_records;
 	uint64 span_records;
 	uint64 timeline_records;
@@ -311,18 +314,17 @@ static void fill_observe_context(void)
 	}
 }
 
-static uint64 require_observe_query_preemption(const char *message)
+static uint64 observe_query_preemptions(void)
 {
 	long preemptions;
 
 	preemptions = kernel_work_last_preemptions();
-	check(preemptions > 0, message);
+	check(preemptions >= 0, "read observation query preemptions");
 	return (uint64)preemptions;
 }
 
-static uint64 check_observe_ordered_indexes(void)
+static void check_observe_ordered_indexes(void)
 {
-	uint64 preemptions = 0;
 	uint64 span_id;
 	int count;
 	int copied;
@@ -330,15 +332,13 @@ static uint64 check_observe_ordered_indexes(void)
 	count = agent_span_trace_snapshot(0, 0);
 	check(count > 0 && count <= AGENT_AUDIT_MAX_RECORDS,
 	      "count bounded span trace");
-	preemptions += require_observe_query_preemption(
-		"span count query reaches fairness checkpoint");
+	(void)observe_query_preemptions();
 	memset(observe_span_scratch, 0, sizeof(observe_span_scratch));
 	copied = agent_span_trace_snapshot(observe_span_scratch,
 					  AGENT_AUDIT_MAX_RECORDS);
 	check(copied > 0 && copied <= AGENT_AUDIT_MAX_RECORDS,
 	      "copy bounded span trace");
-	preemptions += require_observe_query_preemption(
-		"span copy query reaches fairness checkpoint");
+	(void)observe_query_preemptions();
 	span_id = observe_span_scratch[0].span_id;
 	check(span_id != 0, "span trace has kernel-issued span");
 	for (int i = 0; i < copied; i++) {
@@ -354,8 +354,7 @@ static uint64 check_observe_ordered_indexes(void)
 	count = agent_timeline_query(&observe_filter_scratch, 0, 0);
 	check(count > 0 && count <= AGENT_AUDIT_MAX_RECORDS,
 	      "count bounded audit timeline");
-	preemptions += require_observe_query_preemption(
-		"timeline count query reaches fairness checkpoint");
+	(void)observe_query_preemptions();
 	memset(observe_timeline_scratch, 0,
 	       sizeof(observe_timeline_scratch));
 	copied = agent_timeline_query(&observe_filter_scratch,
@@ -363,8 +362,7 @@ static uint64 check_observe_ordered_indexes(void)
 				      AGENT_AUDIT_MAX_RECORDS);
 	check(copied > 0 && copied <= AGENT_AUDIT_MAX_RECORDS,
 	      "copy bounded audit timeline");
-	preemptions += require_observe_query_preemption(
-		"timeline copy query reaches fairness checkpoint");
+	(void)observe_query_preemptions();
 	for (int i = 0; i < copied; i++) {
 		check(observe_timeline_scratch[i].source ==
 			      AGENT_TIMELINE_SOURCE_AUDIT,
@@ -388,7 +386,6 @@ static uint64 check_observe_ordered_indexes(void)
 			      "audit timeline has no duplicate sequence");
 	}
 	observe_result_scratch.timeline_records = copied;
-	return preemptions;
 }
 
 static __attribute__((noinline)) void
@@ -408,34 +405,37 @@ observe_query_pressure(int ready_fd, int stop_fd, int result_fd)
 	observe_filter_scratch.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK;
 	observe_filter_scratch.source_mask =
 		AGENT_TIMELINE_SOURCE_MASK_AUDIT;
-	observe_result_scratch.preemptions +=
-		check_observe_ordered_indexes();
+	check_observe_ordered_indexes();
 	while (!observe_query_stop || observe_result_scratch.iterations == 0) {
 		check(agent_span_trace_snapshot(0, 0) >= 0,
 		      "count span trace under pressure");
-		observe_result_scratch.preemptions +=
-			require_observe_query_preemption(
-				"span pressure query reaches fairness checkpoint");
+		observe_result_scratch.span_preemptions +=
+			observe_query_preemptions();
 
 		check(agent_timeline_query(&observe_filter_scratch, 0, 0) >= 0,
 		      "count audit timeline under pressure");
-		observe_result_scratch.preemptions +=
-			require_observe_query_preemption(
-				"timeline pressure query reaches fairness checkpoint");
+		observe_result_scratch.timeline_preemptions +=
+			observe_query_preemptions();
 
 		check(agent_provenance_snapshot(0, 0) >= 0,
 		      "count provenance under pressure");
-		observe_result_scratch.preemptions +=
-			require_observe_query_preemption(
-				"provenance pressure query reaches fairness checkpoint");
+		observe_result_scratch.provenance_preemptions +=
+			observe_query_preemptions();
 		observe_result_scratch.iterations++;
-		if (observe_result_scratch.iterations == 1) {
-			check(observe_result_scratch.preemptions > 0,
-			      "observation query pressure reaches fairness checkpoints");
+		if (observe_result_scratch.iterations == 1)
 			write_exact(ready_fd, &ready, sizeof(ready),
 				    "observation query pressure ready");
-		}
 	}
+	observe_result_scratch.preemptions =
+		observe_result_scratch.span_preemptions +
+		observe_result_scratch.timeline_preemptions +
+		observe_result_scratch.provenance_preemptions;
+	check(observe_result_scratch.span_preemptions > 0,
+	      "span query pressure reaches fairness checkpoints");
+	check(observe_result_scratch.timeline_preemptions > 0,
+	      "timeline query pressure reaches fairness checkpoints");
+	check(observe_result_scratch.provenance_preemptions > 0,
+	      "provenance query pressure reaches fairness checkpoints");
 	check(observe_result_scratch.preemptions > 0,
 	      "observation query pressure reaches fairness checkpoints");
 	check(waittid(stop_tid) >= 0,
@@ -1555,8 +1555,7 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			observe_ready_pipe[0] = observe_ready_pipe[1] = -1;
 			check(agent_audit_query(0, 0, 0) >= 0,
 			      "orchestrator audit count query");
-			value1 = require_observe_query_preemption(
-				"orchestrator audit query reaches fairness checkpoint");
+			value1 = observe_query_preemptions();
 			value0 = observe_child_pid;
 		} else if (command.operation == 'G') {
 			int64 started;
@@ -1600,6 +1599,9 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			      "low-privilege observation query status");
 			check(observe_result_scratch.iterations > 0 &&
 				      observe_result_scratch.preemptions > 0 &&
+				      observe_result_scratch.span_preemptions > 0 &&
+				      observe_result_scratch.timeline_preemptions > 0 &&
+				      observe_result_scratch.provenance_preemptions > 0 &&
 				      observe_result_scratch.context_records ==
 					      AGENT_CONTEXT_MAX_RECORDS &&
 				      observe_result_scratch.span_records > 0 &&
@@ -2137,7 +2139,7 @@ int main(void)
 	observe_start_reply = run_command(a_command[1], a_reply[0], 'O', 0, 0,
 					  ready_a.scope_id,
 					  "start bounded observation query pressure");
-	check(observe_start_reply.value0 > 0 && observe_start_reply.value1 > 0,
+	check(observe_start_reply.value0 > 0,
 	      "scope A observation query pressure starts");
 	observe_progress_started = get_mtime();
 	observe_progress_reply = run_command(

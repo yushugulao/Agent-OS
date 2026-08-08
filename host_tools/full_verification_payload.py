@@ -41,6 +41,7 @@ import platform
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -333,18 +334,69 @@ def _sha256(path: Path) -> str:
 def _bounded_tree_bytes(roots: tuple[Path, ...], limit: int) -> int:
     total = 0
     for root in roots:
-        if not root.exists():
+        try:
+            root_snapshot = root.lstat()
+        except FileNotFoundError:
             continue
-        for path in root.rglob("*"):
-            if path.is_symlink():
-                raise FullVerificationError(
-                    f"full-verification execution created a link-backed output: {path}"
-                )
-            if path.is_file():
-                total += path.stat().st_size
+        if stat.S_ISLNK(root_snapshot.st_mode):
+            raise FullVerificationError(
+                f"full-verification execution created a link-backed output: {root}"
+            )
+        if not stat.S_ISDIR(root_snapshot.st_mode):
+            raise FullVerificationError(
+                f"full-verification output root is not a directory: {root}"
+            )
+        try:
+            paths = root.rglob("*")
+            for path in paths:
+                try:
+                    snapshot = path.lstat()
+                except FileNotFoundError:
+                    # 并行 lane 收尾时，目录枚举中的条目可能已被另一进程删除。
+                    continue
+                if stat.S_ISLNK(snapshot.st_mode):
+                    raise FullVerificationError(
+                        f"full-verification execution created a link-backed output: {path}"
+                    )
+                if not stat.S_ISREG(snapshot.st_mode):
+                    continue
+                total += snapshot.st_size
                 if total > limit:
                     return total
+        except FileNotFoundError:
+            # 根目录或子目录可在并行 lane 收尾时从枚举器下消失。
+            continue
     return total
+
+
+def _bounded_file_bytes(files: tuple[Path, ...], limit: int) -> int:
+    total = 0
+    for path in files:
+        try:
+            snapshot = path.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(snapshot.st_mode):
+            raise FullVerificationError(
+                f"full-verification execution created a link-backed output: {path}"
+            )
+        if not stat.S_ISREG(snapshot.st_mode):
+            raise FullVerificationError(
+                f"full-verification output file is not regular: {path}"
+            )
+        total += snapshot.st_size
+        if total > limit:
+            return total
+    return total
+
+
+def _bounded_output_bytes(
+    roots: tuple[Path, ...], files: tuple[Path, ...], limit: int
+) -> int:
+    total = _bounded_tree_bytes(roots, limit)
+    if total > limit:
+        return total
+    return total + _bounded_file_bytes(files, limit - total)
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -390,6 +442,7 @@ def _run_bounded(
     timeout: float,
     output_roots: tuple[Path, ...],
     *,
+    output_files: tuple[Path, ...] = (),
     log_limit: int = MAX_EXECUTION_LOG_BYTES,
     output_limit: int = MAX_EXECUTION_OUTPUT_BYTES,
 ) -> tuple[int, float, bool]:
@@ -422,7 +475,10 @@ def _run_bounded(
                 if log_path.stat().st_size > log_limit:
                     reason = "exceeded the online log budget"
                     break
-                if _bounded_tree_bytes(output_roots, output_limit) > output_limit:
+                if (
+                    _bounded_output_bytes(output_roots, output_files, output_limit)
+                    > output_limit
+                ):
                     reason = "exceeded the online output budget"
                     break
                 time.sleep(0.2)
@@ -435,7 +491,8 @@ def _run_bounded(
                 reason = "exceeded the online log budget"
             if (
                 reason is None
-                and _bounded_tree_bytes(output_roots, output_limit) > output_limit
+                and _bounded_output_bytes(output_roots, output_files, output_limit)
+                > output_limit
             ):
                 reason = "exceeded the online output budget"
             if reason is None and _process_group_alive(process.pid):
@@ -1120,7 +1177,10 @@ def collect(args: argparse.Namespace) -> int:
                 *EVALUATION_BUILD_OUTPUT_ROOTS,
                 *EVALUATION_CACHE_OUTPUT_ROOTS,
             )
-        ) + (evidence_stage,)
+        ) + (environment_root, stage)
+        monitored_files = tuple(
+            worktree / relative for relative in EVALUATION_BUILD_OUTPUT_FILES
+        )
         returncode, elapsed, timed_out = _run_bounded(
             command,
             worktree,
@@ -1128,6 +1188,7 @@ def collect(args: argparse.Namespace) -> int:
             full_log,
             timeout,
             monitored_roots,
+            output_files=monitored_files,
         )
         verify_tool_attestations(tools, versions, stage, base_env, "during execution")
         python_runtime.verify("after execution")

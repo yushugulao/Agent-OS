@@ -314,7 +314,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # 上述完整审查闭包的逐字节指纹。固定各翻译阶段输入，避免续行、预处理、
 # 汇编或链接语法在规范化时被隐藏。
 COMPILE_CLOSURE_FINGERPRINT = (
-    "5ab2ad05e1e9e34f3331f593ad01a61ae97345c1d8dc7da7ba3e18a9481b386d"
+    "dd21f678b1df954cbc7ca30cabfd6580502369fbe05db737b02426c02fa08b3e"
 )
 
 USER_TRANSLATION_UNITS = (

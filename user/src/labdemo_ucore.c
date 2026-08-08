@@ -286,6 +286,38 @@ static int metadata_state_equal(
 	       left->metadata_pending == right->metadata_pending;
 }
 
+static int demo_quiescence_flush(int fd)
+{
+	int64 deadline;
+	int64 now;
+	int status = fd < 0 ? sync() : fsync(fd);
+
+	if (status >= 0)
+		return status;
+	deadline = get_mtime();
+	if (deadline < 0)
+		return status;
+	deadline += LABDEMO_RETRY_TIMEOUT_MS;
+	for (;;) {
+		now = get_mtime();
+		if (now < 0 || now >= deadline || sleep(10) < 0)
+			return status;
+		status = fd < 0 ? sync() : fsync(fd);
+		if (status >= 0)
+			return status;
+	}
+}
+
+static int demo_quiescence_sync(void)
+{
+	return demo_quiescence_flush(-1);
+}
+
+static int demo_quiescence_fsync(int fd)
+{
+	return demo_quiescence_flush(fd);
+}
+
 static void demo_quiescence_fence(const char *mode, const char *point,
 				  int sequence,
 				  struct labdemo_fence_receipt *receipt)
@@ -304,7 +336,7 @@ static void demo_quiescence_fence(const char *mode, const char *point,
 	memset(receipt, 0, sizeof(*receipt));
 	memset(&previous, 0, sizeof(previous));
 	for (int attempt = 1; attempt <= LABDEMO_FENCE_MAX_ATTEMPTS; attempt++) {
-		check(sync() == 0, "quiescence sync");
+		check(demo_quiescence_sync() == 0, "quiescence sync");
 		check(sched_yield() == 0, "quiescence maintenance yield");
 		take_performance_snapshot(&current);
 		if (attempt > 1 &&
@@ -689,7 +721,8 @@ static void run_compat_workload(struct labdemo_workload_metrics *metrics)
 			    strlen(DEMO_BENCH_RECOVERED_BODY)) ==
 			      (ssize_t)strlen(DEMO_BENCH_RECOVERED_BODY),
 		      "compat recovery write");
-		check(fsync(fd) == 0, "compat recovery primary ack");
+		check(demo_quiescence_fsync(fd) == 0,
+		      "compat recovery primary ack");
 		check(close(fd) == 0, "compat recovery close");
 	}
 	DEMO_DIAG_END("compat", "recovery_file_write_close");
@@ -817,7 +850,8 @@ static void run_native_workload(struct labdemo_workload_metrics *metrics)
 		strcpy(target.summary, "memory_limit recovered");
 		check(agent_file_meta_set(&target) == 0,
 		      "native recovery metadata stage");
-		check(fsync(fd) == 0, "native recovery primary ack");
+		check(demo_quiescence_fsync(fd) == 0,
+		      "native recovery primary ack");
 		check(close(fd) == 0, "native recovery close");
 	}
 	DEMO_DIAG_END("native", "grouped_recovery_primary_ack");
@@ -875,7 +909,23 @@ static void make_op(struct agent_op *op, int tool, uint64 id, uint64 arg0,
 static void run_one(struct agent_op *op, struct agent_result *res, int status,
 		    const char *msg)
 {
-	int n = agent_run(op, res, 1, 0);
+	int64 deadline = get_mtime();
+	int64 now;
+	int n;
+
+	if (deadline >= 0)
+		deadline += LABDEMO_RETRY_TIMEOUT_MS;
+	for (;;) {
+		n = agent_run(op, res, 1, 0);
+		if (n != 1 || status != AGENT_STATUS_OK ||
+		    res->status != AGENT_STATUS_RETRY ||
+		    (op->tool_id != AGENT_TOOL_ACTION_COMMIT &&
+		     op->tool_id != AGENT_TOOL_ARTIFACT_UPDATE))
+			break;
+		now = get_mtime();
+		check(deadline >= 0 && now >= 0 && now < deadline && sleep(10) == 0,
+		      "agent run retry wait");
+	}
 	if (n != 1) {
 		printf("labdemo_ucore: agent_run failed\n");
 		printf("labdemo_ucore: failed check=%s\n", msg);
@@ -1661,7 +1711,7 @@ static void run_orchestrator(void)
 	       demo_outcome_hash("align", "recovered"),
 	       compat_metrics.outcome_hash, native_metrics.outcome_hash);
 	seed_demo_metadata();
-	check(sync() == 0, "workflow setup boundary");
+	check(demo_quiescence_sync() == 0, "workflow setup boundary");
 	take_performance_snapshot(&workflow_perf_before);
 	check(pipe(ready_pipe) == 0, "pipe");
 	check(pipe(recovery_start) == 0, "recovery start pipe");
@@ -1812,7 +1862,7 @@ static void run_orchestrator(void)
 	check_global_audit(sentinel_pid);
 	check_unified_timeline(sentinel_pid);
 	check_provenance_graph(sentinel_pid);
-	check(sync() == 0, "workflow durable boundary");
+	check(demo_quiescence_sync() == 0, "workflow durable boundary");
 	workflow_finished_us = demo_now_us();
 	take_performance_snapshot(&workflow_perf_after);
 	printf("agentos:demo schema=2 nonce=%llu kind=trace seq=5 tick_us=%llu role=orchestrator event=RECOVERED value0=1 value1=0\n",

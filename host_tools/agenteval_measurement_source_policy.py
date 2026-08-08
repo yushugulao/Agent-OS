@@ -241,6 +241,7 @@ GUEST_POLICY_ROLES = (
     "agentos-syscall-id",
     "baseline-clock-helper",
     "agentos-clock-helper",
+    "agentos-showcase-retry-contract",
     "agentos-showcase-performance-pair",
 )
 

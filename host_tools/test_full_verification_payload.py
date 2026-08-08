@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -513,6 +514,30 @@ exit 0
                 ),
                 "online log budget",
             )
+            generated_image = bounded_root / "generated.img"
+            expect_rejected(
+                lambda: payload._run_bounded(
+                    [
+                        sys.executable,
+                        "-c",
+                        (
+                            "from pathlib import Path;import sys;"
+                            "Path(sys.argv[1]).write_bytes(b'x'*4096)"
+                        ),
+                        str(generated_image),
+                    ],
+                    bounded_root,
+                    dict(os.environ),
+                    bounded_root / "image.log",
+                    10,
+                    (),
+                    output_files=(generated_image,),
+                    log_limit=4096,
+                    output_limit=1024,
+                ),
+                "online output budget",
+            )
+            generated_image.unlink()
             expect_rejected(
                 lambda: payload._run_bounded(
                     [
@@ -533,6 +558,65 @@ exit 0
                 ),
                 "live descendant",
             )
+
+            class ScanPath:
+                def __init__(self, name, mode=None, size=0, children=()):
+                    self.name = name
+                    self.mode = mode
+                    self.size = size
+                    self.children = children
+                    self.calls = 0
+
+                def __str__(self):
+                    return self.name
+
+                def lstat(self):
+                    self.calls += 1
+                    if self.mode is None:
+                        raise FileNotFoundError(self.name)
+                    return os.stat_result(
+                        (self.mode, 0, 0, 0, 0, 0, self.size, 0, 0, 0)
+                    )
+
+                def rglob(self, _pattern):
+                    return iter(self.children)
+
+            stable_lane = ScanPath("stable-lane", stat.S_IFREG, 73)
+            removed_lane = ScanPath("removed-lane")
+            scan_root = ScanPath(
+                "outputs", stat.S_IFDIR, children=(stable_lane, removed_lane)
+            )
+            assert payload._bounded_tree_bytes((scan_root,), 4096) == 73
+            assert (scan_root.calls, stable_lane.calls, removed_lane.calls) == (1, 1, 1)
+
+            regular_root = ScanPath("regular-output-root", stat.S_IFREG, 8192)
+            expect_rejected(
+                lambda: payload._bounded_tree_bytes((regular_root,), 1024),
+                "not a directory",
+            )
+            assert regular_root.calls == 1
+
+            generated_file = ScanPath("generated-file", stat.S_IFREG, 37)
+            missing_file = ScanPath("missing-file")
+            assert payload._bounded_file_bytes(
+                (generated_file, missing_file), 4096
+            ) == 37
+            assert (generated_file.calls, missing_file.calls) == (1, 1)
+            generated_directory = ScanPath("generated-directory", stat.S_IFDIR)
+            expect_rejected(
+                lambda: payload._bounded_file_bytes((generated_directory,), 4096),
+                "not regular",
+            )
+
+            linked_lane = ScanPath("linked-lane", stat.S_IFLNK)
+            linked_root = ScanPath(
+                "linked-outputs", stat.S_IFDIR, children=(linked_lane,)
+            )
+            expect_rejected(
+                lambda: payload._bounded_tree_bytes((linked_root,), 4096),
+                "link-backed output",
+            )
+            assert linked_lane.calls == 1
 
     with tempfile.TemporaryDirectory(dir=test_temporary_root) as temporary:
         base = Path(temporary)

@@ -43,9 +43,12 @@ static int agent_resource_snapshot_authorized(const struct proc *p)
 
 static int agent_performance_snapshot_authorized(struct proc *p)
 {
-	/* 全局计数器只向签名引导主体开放。 */
-	return p != 0 && p->resource_domain_admin &&
-	       exec_policy_process_bootstrap(p);
+	/* 根 Orchestrator 可采样全局验收计数，但不继承资源域管理权。 */
+	return p != 0 && exec_policy_process_bootstrap(p) &&
+	       (p->resource_domain_admin ||
+		(p->agent_role == AGENT_ROLE_ORCHESTRATOR &&
+		 p->agent_controller_id == 0 &&
+		 agent_identity_has_cap(p, AGENT_CAP_ORCHESTRATE)));
 }
 
 static uint64 agent_performance_workload_syscalls(const struct proc *p)
