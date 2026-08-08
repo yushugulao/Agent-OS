@@ -19,9 +19,6 @@
 #include "timer.h"
 #include "vfs_security.h"
 #include "virtio.h"
-
-/* 持久化 COW 协调器。 */
-
 #define AGENT_META_WRITEBACK_COALESCE_TICKS TICKS_PER_SEC
 #define AGENT_META_WRITEBACK_SCOPE_MAX (VFS_SCOPE_LIFECYCLE_CAP + 1U)
 #define AGENT_META_PERSIST_IDLE 0U
@@ -47,14 +44,21 @@
 	(AGENT_META_STORE_BANKS * (2U * MAXFILE + 10U) + 2U)
 #define AGENT_META_SUBMIT_DRAIN_BUDGET (4U * AGENT_META_STORE_BANKS)
 #define AGENT_META_OWNER_DRAIN_STEP_BUDGET AGENT_META_REPLICATED_STEP_LIMIT
+#define AGENT_META_DRAIN_EXTERNAL_FLAG (1U << 31)
+#define AGENT_META_DRAIN_BUDGET_MASK (~AGENT_META_DRAIN_EXTERNAL_FLAG)
+#define AGENT_META_BACKGROUND_DRAIN_BUDGET \
+	(AGENT_META_DRAIN_EXTERNAL_FLAG | (8U * AGENT_META_SUBMIT_DRAIN_BUDGET))
 
 _Static_assert(AGENT_META_SUBMIT_DRAIN_BUDGET < AGENT_META_OWNER_DRAIN_STEP_BUDGET,
 	       "foreground metadata drain must remain bounded");
-
+_Static_assert((AGENT_META_BACKGROUND_DRAIN_BUDGET & AGENT_META_DRAIN_BUDGET_MASK) <
+	       AGENT_META_OWNER_DRAIN_STEP_BUDGET,
+	       "background metadata drain must remain bounded");
+_Static_assert(AGENT_META_OWNER_DRAIN_STEP_BUDGET < AGENT_META_DRAIN_EXTERNAL_FLAG,
+	       "metadata drain budget must leave room for the mode bit");
 _Static_assert(AGENT_META_WRITEBACK_SCOPE_MAX >=
 	       VFS_SCOPE_LIFECYCLE_CAP + 1,
 	       "metadata writeback must cover every workflow and system scope");
-
 static int
 agent_meta_durable_flush(void)
 {
@@ -190,6 +194,7 @@ static int agent_meta_reconcile_required;
 static int banks_prepared;
 static uint64 next_write_tick;
 static uint64 last_durable_retry_tick;
+static uint last_background_drain_tick;
 static uint owner_cursor;
 
 _Static_assert(AGENT_CATALOG_JOURNAL_RECEIPT_MAX ==
@@ -207,7 +212,7 @@ agent_meta_store_set_replicated_generation(uint64 generation)
 
 static int agent_file_persist(struct agent_metadata_persist_result *);
 static int agent_file_persist_system(void);
-static int agent_meta_persist_drain_owner(uint owner, uint step_budget);
+static int agent_meta_persist_drain_owner(uint owner, uint encoded_budget);
 static int agent_meta_persist_note_failure_locked(void);
 static void agent_meta_persist_fail_closed_locked(void);
 static uint64 agent_meta_durable_dirty(uint scope_id);
@@ -314,6 +319,7 @@ agent_metadata_store_init(void)
 	agent_metadata_test_init();
 	next_write_tick = 0;
 	last_durable_retry_tick = ~0ULL;
+	last_background_drain_tick = ~0U;
 	owner_cursor = 0;
 	agent_durable_section_set_store_provider(&agent_meta_durable_store);
 }
@@ -2560,7 +2566,6 @@ static inline __attribute__((always_inline)) int agent_meta_persist_background_s
 	if (step >= 0)
 		step = agent_meta_persist_step_locked();
 	if (step < 0 && step != AGENT_META_PERSIST_DEFERRED) {
-		/* 已切换到可信修复任务时是暂缓，不是永久故障。 */
 		if (agent_meta_persist_note_failure_locked() == 0)
 			step = AGENT_META_DRAIN_RETRY;
 	} else if (step >= 0) {
@@ -2575,8 +2580,7 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 	uint owner;
 	uint scope_id = VFS_SCOPE_SYSTEM;
 	uint64 target_generation = 0;
-	uint step_limit = AGENT_META_PRIMARY_STEP_LIMIT;
-	int started_here = 0;
+	enum { JOB_NONE, JOB_STARTED = 1, JOB_ADOPTED = 2 } job_origin = JOB_NONE;
 	int status = -1;
 	int failure_cause = AGENT_METADATA_PERSIST_RETRY;
 	int failure_irrevocable = 0;
@@ -2613,7 +2617,8 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 		status = 0;
 		goto out;
 	}
-	for (uint steps = 0; steps < step_limit; steps++) {
+	for (uint steps = 0; steps < AGENT_META_PRIMARY_STEP_LIMIT +
+		((job_origin & JOB_ADOPTED) ? AGENT_META_REPLICATED_STEP_LIMIT : 0); steps++) {
 		uint64 job_id;
 		int same_job;
 		struct bio_checkpoint_result checkpoint =
@@ -2638,15 +2643,20 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 				failure_irrevocable = agent_meta_persist.irrevocable;
 				break;
 			}
-			started_here = 1;
-		} else if (!started_here) {
-			/* 修改前先进入物理 I/O 通道。 */
-			break;
+			job_origin |= JOB_STARTED;
+		} else if (!(job_origin & JOB_STARTED)) {
+			if (agent_meta_persist.owner != owner ||
+			    !agent_meta_persist.snapshot_sealed ||
+			    agent_meta_persist.restart_target ||
+			    agent_ticks() < agent_meta_persist.retry_tick)
+				break;
+			if (job_origin == JOB_NONE)
+				job_origin |= JOB_ADOPTED;
 		} else if (agent_meta_persist.owner != owner) {
 			break;
 		}
 		job_id = agent_meta_persist.job_id;
-		if (completion)
+		if (completion && (job_origin & JOB_STARTED))
 			completion->job_id = job_id;
 		int step = agent_meta_persist_step_locked();
 
@@ -2663,7 +2673,8 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 						AGENT_METADATA_PERSIST_NONE ?
 					AGENT_METADATA_PERSIST_IO :
 					agent_meta_persist.error_cause;
-			failure_irrevocable = agent_meta_persist.irrevocable &&
+			failure_irrevocable = (job_origin & JOB_STARTED) &&
+				agent_meta_persist.irrevocable &&
 				agent_meta_persist.scope_id == scope_id;
 			failure = agent_meta_persist_note_failure_locked();
 
@@ -2673,7 +2684,6 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 				agent_meta_persist_retry_next_tick();
 			break;
 		}
-		// job_id 防止检查点跨越替换任务。
 		checkpoint = agent_meta_persist_checkpoint_unlocked(
 			job_id, &same_job);
 		if (scope_reached(scope_id, target_generation, 0)) {
@@ -2681,6 +2691,18 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 			break;
 		}
 		if (!same_job) {
+			if ((job_origin & JOB_ADOPTED) &&
+			    !(job_origin & JOB_STARTED) &&
+			    agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
+				if (bio_checkpoint_should_stop(checkpoint)) {
+					failure_cause =
+						checkpoint.state == BIO_CHECKPOINT_DEFERRED ?
+						AGENT_METADATA_PERSIST_RETRY :
+						AGENT_METADATA_PERSIST_INTERRUPTED;
+					break;
+				}
+				continue;
+			}
 			failure_cause = AGENT_METADATA_PERSIST_RETRY;
 			break;
 		}
@@ -2688,15 +2710,17 @@ static int agent_file_persist(struct agent_metadata_persist_result *completion)
 			failure_cause = checkpoint.state == BIO_CHECKPOINT_DEFERRED ?
 				AGENT_METADATA_PERSIST_RETRY :
 				AGENT_METADATA_PERSIST_INTERRUPTED;
-			failure_irrevocable = agent_meta_persist.irrevocable &&
+			failure_irrevocable = (job_origin & JOB_STARTED) &&
+				agent_meta_persist.irrevocable &&
 				agent_meta_persist.scope_id == scope_id;
-			if (!agent_meta_persist.irrevocable && same_job)
+			if ((job_origin & JOB_STARTED) &&
+			    !agent_meta_persist.irrevocable && same_job)
 				agent_meta_persist_abort_locked();
 			break;
 		}
 	}
 out:
-	if (status < 0 && started_here &&
+	if (status < 0 && (job_origin & JOB_STARTED) &&
 	    agent_meta_persist.phase != AGENT_META_PERSIST_IDLE &&
 	    !agent_meta_persist.irrevocable &&
 	    agent_meta_persist.scope_id == scope_id)
@@ -2707,7 +2731,8 @@ out:
 						 failure_cause;
 		completion->durable = status == 0;
 		completion->irrevocable = failure_irrevocable;
-		if (status < 0 && !completion->irrevocable && started_here &&
+		if (status < 0 && !completion->irrevocable &&
+		    (job_origin & JOB_STARTED) &&
 		    agent_meta_persist.irrevocable &&
 		    agent_meta_persist.scope_id == scope_id)
 			completion->irrevocable = 1;
@@ -2730,7 +2755,9 @@ agent_meta_persist_fence_owner(uint owner, uint scope_id, uint64 target,
 		AGENT_META_REPLICATED_STEP_LIMIT;
 	int status = -1;
 
-	if (target == 0)
+	if (target == 0 &&
+	    scope_fence_reached(scope_id, target, require_replication,
+				require_idle))
 		return 0;
 	if (!agent_metadata_txn_lock(1))
 		return -1;
@@ -2751,6 +2778,8 @@ agent_meta_persist_fence_owner(uint owner, uint scope_id, uint64 target,
 			status = 0;
 			break;
 		}
+		if (agent_ticks() < agent_meta_persist.retry_tick)
+			break;
 		if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
 			step = agent_meta_persist_start_locked(owner);
 			if (step == AGENT_META_PERSIST_DEFERRED) {
@@ -2795,18 +2824,25 @@ out:
 	return status;
 }
 
-static int agent_meta_persist_drain_owner(uint owner, uint step_budget)
+static int agent_meta_persist_drain_owner(uint owner, uint encoded_budget)
 {
 	uint64 job_id = 0;
 	int result = AGENT_META_DRAIN_RETRY;
-	for (uint steps = 0; steps < step_budget;) {
-		uint batch_limit = MIN(AGENT_META_SUBMIT_DRAIN_BUDGET, step_budget - steps);
+	for (uint steps = 0;
+	     steps < (encoded_budget & AGENT_META_DRAIN_BUDGET_MASK);) {
+		uint budget = encoded_budget & AGENT_META_DRAIN_BUDGET_MASK;
+		uint batch_limit = MIN(AGENT_META_SUBMIT_DRAIN_BUDGET,
+				       budget - steps);
 		uint progressed = 0;
-		int started_background = 0, step = 0;
-		if (!agent_metadata_txn_lock(1))
+		int started_background = 0;
+		if (!((encoded_budget & AGENT_META_DRAIN_EXTERNAL_FLAG) ?
+		      agent_metadata_txn_try_external() :
+				    agent_metadata_txn_lock(1)))
 			break;
 		if (agent_meta_store_failed_closed ||
 		    agent_metadata_recovery_pending() ||
+		    (agent_meta_store_recovery_required &&
+		     owner != FS_OWNER_SYSTEM) ||
 		    (submitter != 0 && submitter != agent_metadata_txn_token())) {
 			agent_metadata_txn_unlock();
 			break;
@@ -2814,6 +2850,10 @@ static int agent_meta_persist_drain_owner(uint owner, uint step_budget)
 		if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
 			uint scope_id = FS_OWNER_IS_SCOPE(owner) ? FS_OWNER_SCOPE_ID(owner) :
 				VFS_SCOPE_SYSTEM;
+			if (job_id != 0) {
+				agent_metadata_txn_unlock();
+				break;
+			}
 			if (scope_target(scope_id) == 0) {
 				result = agent_meta_store_recovery_required ? -1 : 0;
 				agent_metadata_txn_unlock();
@@ -2838,11 +2878,10 @@ static int agent_meta_persist_drain_owner(uint owner, uint step_budget)
 			}
 			started_background = 1;
 		} else {
-			/* 调用者持有的租约只允许推进一个不可分割步骤。 */
 			batch_limit = 1;
 		}
 		while (progressed < batch_limit) {
-			step = agent_meta_persist_background_step_locked(owner);
+			int step = agent_meta_persist_background_step_locked(owner);
 			progressed++;
 			steps++;
 			if (job_id == 0 &&
@@ -2856,6 +2895,7 @@ static int agent_meta_persist_drain_owner(uint owner, uint step_budget)
 				} else {
 					result = -1;
 				}
+				batch_limit = 0;
 				break;
 			}
 			if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
@@ -2866,12 +2906,12 @@ static int agent_meta_persist_drain_owner(uint owner, uint step_budget)
 		if (started_background)
 			bio_background_end();
 		agent_metadata_txn_unlock();
-		/* 固定批次摊销事务门；退让前释放租约，之后不再读全局阶段。 */
 		if (started_background &&
 		    kernel_work_checkpoint_cleanup(MIN(KERNEL_WORK_BUDGET_UNITS,
 			progressed * KERNEL_WORK_OPERATION_UNITS)) != 0)
 			break;
-		if (result != AGENT_META_DRAIN_RETRY || step < 0 || !started_background)
+		if (result != AGENT_META_DRAIN_RETRY || batch_limit == 0 ||
+		    !started_background)
 			break;
 	}
 	return result;
@@ -2899,7 +2939,7 @@ static void agent_file_writeback_maintain(void)
 {
 	uint64 now = agent_ticks();
 	uint owner;
-	int step = 0;
+	int status, enabled;
 
 	if (!agent_file_loaded || agent_meta_store_failed_closed ||
 	    agent_metadata_recovery_pending())
@@ -2912,41 +2952,20 @@ static void agent_file_writeback_maintain(void)
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE &&
 	    !agent_file_writeback_due(now))
 		return;
+	enabled = intr_save();
+	if (last_background_drain_tick == (uint)now) {
+		intr_restore(enabled);
+		return;
+	}
+	last_background_drain_tick = (uint)now;
+	intr_restore(enabled);
 	owner = agent_meta_persist.phase == AGENT_META_PERSIST_IDLE ?
 		(agent_meta_store_recovery_required ? FS_OWNER_SYSTEM :
 		 agent_file_writeback_owner(now)) : agent_meta_persist.owner;
-	if (!bio_background_begin(owner)) {
-		if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
-			agent_meta_persist_retry_next_tick();
-		else
-			agent_file_writeback_defer();
-		return;
-	}
-	if (!agent_metadata_txn_try_external()) {
-		if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
-			agent_meta_persist_retry_next_tick();
-		else
-			agent_file_writeback_defer();
-		goto out_io;
-	}
-	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
-		step = agent_meta_persist_start_locked(owner);
-	if (step >= 0)
-		step = agent_meta_persist_background_step_locked(owner);
-	if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
-		agent_meta_persist_retry_next_tick();
-	agent_metadata_txn_unlock();
-	if (step == AGENT_META_PERSIST_DEFERRED &&
-	    agent_meta_persist.phase == AGENT_META_PERSIST_IDLE) {
+	status = agent_meta_persist_drain_owner(owner,
+						AGENT_META_BACKGROUND_DRAIN_BUDGET);
+	if (status < 0 && status != AGENT_META_DRAIN_RETRY)
 		agent_file_writeback_defer();
-	} else if (step < 0) {
-		if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
-			agent_meta_persist.retry_tick =
-				agent_file_writeback_rest_deadline(agent_ticks());
-		agent_file_writeback_defer();
-	}
-out_io:
-	bio_background_end();
 }
 
 int

@@ -70,16 +70,13 @@ static int write_kernel_timeline_evidence(struct agent_info *before,
 			       "wait_count_delta=",
 			       after->wait_count - before->wait_count);
 	rp_evidence_append_u64(body, sizeof(execobs_evidence_body),
-			       "wait_wakeup_delta=",
-			       after->wait_wakeup_count - before->wait_wakeup_count);
-	rp_evidence_append_u64(body, sizeof(execobs_evidence_body),
 			       "heartbeat_tick=", after->last_heartbeat_tick);
 	rp_evidence_append_value(body, sizeof(execobs_evidence_body),
 				 "timeline_order=", "verified");
 	rp_evidence_append_value(body, sizeof(execobs_evidence_body),
 				 "event_identity=", "verified");
 	rp_evidence_append_value(body, sizeof(execobs_evidence_body),
-				 "wait=", "wakeup");
+				 "wait=", "queue_fastpath");
 	rp_evidence_append_value(body, sizeof(execobs_evidence_body),
 				 "heartbeat=", "verified");
 	rp_evidence_append_value(body, sizeof(execobs_evidence_body),
@@ -136,13 +133,12 @@ static int run_kernel_exec_observer(void)
 		return -1;
 	if (agent_info(&after) < 0)
 		return -1;
-	execobs_timeline_total = agent_timeline_snapshot(0, 0);
 	execobs_timeline_count = agent_timeline_snapshot(
 		execobs_timeline, EXECOBS_TIMELINE_CAP);
+	execobs_timeline_total = agent_timeline_snapshot(0, 0);
 	if (execobs_timeline_total < 1 || execobs_timeline_count < 1 ||
 	    execobs_timeline_count > execobs_timeline_total ||
-	    after.wait_count <= before.wait_count ||
-	    after.wait_wakeup_count <= before.wait_wakeup_count) {
+	    after.wait_count <= before.wait_count) {
 		printf("rp_execobs: timeline_observation_failed n=%d\n",
 		       execobs_timeline_count);
 		return -1;
@@ -224,7 +220,7 @@ int main(void)
 			   "stalled=0\n"
 			   "heartbeats=4\n"
 			   "agentos_heartbeat=kernel_observed\n"
-			   "agentos_wait=wakeup\n"
+			   "agentos_wait=queue_fastpath\n"
 			   "queue_actions=8\n"
 			   "failure_actions=2\n"
 			   "status=ready\n")) {

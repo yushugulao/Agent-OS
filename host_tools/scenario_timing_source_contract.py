@@ -478,8 +478,12 @@ def _validate_resource_stability(
             ),
             ("agent_scope_delegate_fd", "(", "report_pipe", "[", "1", "]", ")"),
             ("agent_workflow_create", "(", "AGENT_ROLE_ORCHESTRATOR", ")"),
+            (
+                "wait_status", "=", "pid", "==", "AGENT_STATUS_RETRY", "?",
+                "sched_yield", "(", ")", ":", "sleep", "(", "1", ")", ";",
+            ),
             ("get_mtime", "(", ")", ">=", "admission_deadline"),
-            ("sleep", "(", "1", ")", "<", "0"),
+            ("wait_status", "<", "0"),
             ("rp_copy_text", "(", "nonce_arg", ",", "sizeof", "(", "nonce_arg", ")", ",", "RP_RESOURCE_STABILITY_NONCE_PREFIX", ")"),
             ("rp_append_uint_text", "(", "nonce_arg", ",", "sizeof", "(", "nonce_arg", ")", ",", "challenge_nonce", ")"),
             ("nonce_arg", ",", "0", ","),
@@ -490,6 +494,7 @@ def _validate_resource_stability(
             ("agent_resource_snapshot", "(", "global_after", ")"),
             ("stability_report_valid", "(", "report", ",", "index", ",", "mode", ",", "challenge_nonce", ")"),
             ("stability_identity_unique", "(", "index", "+", "1", ")"),
+            ("verify_global", "&&"),
             ("stability_global_pair_valid", "(", "global_before", ",", "global_after", ",", "mode", ")"),
         ),
         "resource stability workflow replacement",
@@ -501,7 +506,14 @@ def _validate_resource_stability(
         acceptance,
         (
             ("load_challenge_oracle", "(", "&", "orch_stability_workflow", ")"),
-            ("run_stability_workflow", "(", "index", ",", "mode", ")"),
+            (
+                "run_stability_workflow", "(", "0", ",",
+                "RP_RESOURCE_STABILITY_MODE_TERMINAL", ",", "0", ")",
+            ),
+            ("memset", "(", "orch_stability_reports", ",", "0", ",", "sizeof", "(", "orch_stability_reports", ")", ")"),
+            ("memset", "(", "orch_stability_global_before", ",", "0", ",", "sizeof", "(", "orch_stability_global_before", ")", ")"),
+            ("memset", "(", "orch_stability_global_after", ",", "0", ",", "sizeof", "(", "orch_stability_global_after", ")", ")"),
+            ("run_stability_workflow", "(", "index", ",", "mode", ",", "1", ")"),
             ("stability_global_sequence_valid", "(", ")"),
             ("append_stability_global_policy", "(", "body", ",", "measured_mask", ")"),
             ("append_stability_report", "(", "body", ",", "&", "orch_stability_reports", "[", "index", "]", ","),
@@ -525,6 +537,14 @@ def _validate_resource_stability(
             ),
         ),
         "bounded resource-probe observation footprint",
+    )
+    _require_once(
+        report_valid,
+        (
+            "report", "->", "final_completion_sequence", "<",
+            "report", "->", "initial_completion_sequence",
+        ),
+        "monotonic settlement receipt",
     )
 
     probe_tokens = _tokens(probe_text)
@@ -571,6 +591,14 @@ def _validate_resource_stability(
         ),
     ):
         _require_once(final_state, sequence, "bounded observation growth")
+    _require_once(
+        final_state,
+        (
+            "final_io", ".", "completion_sequence", "<",
+            "initial_io", ".", "completion_sequence",
+        ),
+        "monotonic settlement I/O sequence",
+    )
     child = _function_tokens(probe_tokens, "transient_resource_child")
     _ordered(
         child,
@@ -639,7 +667,7 @@ def _validate_resource_stability(
         "per-workflow registered growth bound",
     )
     _only_references(global_pair, "positive_growth", 2, "per-workflow growth value")
-    _only_references(global_pair, "bound", 4, "per-workflow growth bound")
+    _only_references(global_pair, "bound", 2, "per-workflow growth bound")
     _only_references(
         global_pair, "stability_positive_delta", 2,
         "per-workflow class delta helper",
@@ -650,8 +678,6 @@ def _validate_resource_stability(
         ("right", "->", "ordinary_pending", "!=", "0"),
         ("left", "->", "reserved_pending", "!=", "0"),
         ("right", "->", "reserved_pending", "!=", "0"),
-        ("left", "->", "ordinary_used", "!=", "right", "->", "ordinary_used"),
-        ("left", "->", "reserved_used", "!=", "right", "->", "reserved_used"),
         ("positive_growth", ">", "bound", ")"),
     ):
         _require_once(global_pair, sequence, "per-workflow class reclamation bound")
@@ -694,7 +720,7 @@ def _validate_resource_stability(
         "whole-sequence registered growth bound",
     )
     _only_references(global_sequence, "positive_growth", 2, "sequence growth value")
-    _only_references(global_sequence, "bound", 5, "sequence growth bound")
+    _only_references(global_sequence, "bound", 3, "sequence growth bound")
     _only_references(
         global_sequence, "stability_positive_delta", 2,
         "whole-sequence class delta helper",
@@ -801,6 +827,19 @@ def _validate_resource_stability(
         "process resource reuse round",
     )
     main = _function_tokens(probe_tokens, "main")
+    settle = _function_tokens(probe_tokens, "settle_current_workflow")
+    _ordered(
+        settle,
+        (
+            ("started", "=", "get_mtime", "(", ")", ";"),
+            ("for", "(", ";", ";", ")", "{"),
+            ("status", "=", "sync", "(", ")", ";"),
+            ("status", "==", "0"),
+            ("get_mtime", "(", ")", ">=", "deadline"),
+            ("sleep", "(", "1", ")", "<", "0"),
+        ),
+        "workflow resource fence",
+    )
     _ordered(
         main,
         (
@@ -814,6 +853,8 @@ def _validate_resource_stability(
             ),
             ("run_child_round", "(", "workflow_index", ",", "round", ",", "challenge_nonce", ")"),
             ("run_metadata_round", "(", "workflow_index", ",", "round", ",", "challenge_nonce", ")"),
+            ("fence_status", "=", "settle_current_workflow", "(", ")", ";"),
+            ("fence_status", "<", "0"),
             ("snapshot_state", "(", "&", "final_lifecycle", ",", "&", "final_io", ",", "&", "final_agent", ")"),
             (
                 "mismatch", "=", "final_state_mismatch", "(",

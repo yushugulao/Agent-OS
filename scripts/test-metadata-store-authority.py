@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 STORE = Path(__file__).resolve().parents[1] / "os" / "agent_metadata_store.c"
+METADATA = Path(__file__).resolve().parents[1] / "os" / "agent_metadata.c"
 
 
 class ContractError(RuntimeError):
@@ -18,7 +19,7 @@ def compact(source: str) -> str:
     return re.sub(r"\s+", "", source)
 
 
-def body(source: str, signature: str) -> str:
+def function_span(source: str, signature: str) -> tuple[int, int]:
     start = source.find(signature)
     while start >= 0:
         opening = source.find("{", start)
@@ -35,8 +36,23 @@ def body(source: str, signature: str) -> str:
         elif source[index] == "}":
             depth -= 1
             if depth == 0:
-                return compact(source[opening + 1 : index])
+                return opening + 1, index
     raise ContractError(f"unterminated function: {signature}")
+
+
+def body(source: str, signature: str) -> str:
+    start, end = function_span(source, signature)
+    return compact(source[start:end])
+
+
+def replace_in_function(
+    source: str, signature: str, old: str, new: str
+) -> str:
+    start, end = function_span(source, signature)
+    function = source[start:end]
+    if function.count(old) != 1:
+        raise ContractError(f"function mutation anchor drifted: {signature}: {old}")
+    return source[:start] + function.replace(old, new, 1) + source[end:]
 
 
 def require(condition: bool, message: str) -> None:
@@ -44,8 +60,25 @@ def require(condition: bool, message: str) -> None:
         raise ContractError(message)
 
 
-def validate(source: str) -> None:
+def validate(source: str, metadata_source: str) -> None:
     all_source = compact(source)
+    scope_fence = body(source, "scope_fence_reached(")
+    require(
+        scope_fence
+        == "if(!scope_commit_reached(scope_id,target,replicated))return0;"
+        "return!require_idle||!agent_file_writeback_scope_busy(scope_id);",
+        "scope fence can report success before commit and writeback settle",
+    )
+    txn_acquire = body(metadata_source, "agent_metadata_txn_acquire(")
+    require(
+        "if(mode==TXN_EXTERNAL){"
+        "if(txn_owner!=0||reload_owner!=0||"
+        "(!scheduler_context&&txn_next_ticket!=txn_serving_ticket))"
+        "gotounavailable;"
+        "txn_reserved_turn=scheduler_context&&"
+        "txn_next_ticket!=txn_serving_ticket;gototake;}" in txn_acquire,
+        "external metadata work can bypass an already queued process",
+    )
     busy = body(source, "agent_file_writeback_scope_busy(")
     require(
         "agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE" in busy
@@ -108,7 +141,7 @@ def validate(source: str) -> None:
         "agent_meta_bank_shadow_install(store,selected_bank,"
         "agent_meta_persist_segment_end(store_bytes-1),"
         "!selected_migrated&&selected_cursor.slots_used==0)" in load,
-        "migrated v5 authority is published as a skippable v7 delta",
+        "migrated v7 authority is published as a skippable delta",
     )
     require(
         all_source.count(
@@ -148,20 +181,69 @@ def validate(source: str) -> None:
         "AGENT_METADATA_PERSIST_IO:agent_meta_persist.error_cause" in persist,
         "persist start discards the classified failure cause",
     )
-    maintain = body(source, "agent_file_writeback_maintain(")
-    start_at = maintain.find(
-        "step=agent_meta_persist_start_locked(owner)"
-    )
-    continue_at = maintain.find(
-        "if(step>=0)step=agent_meta_persist_background_step_locked(owner)"
-    )
-    classify_at = maintain.find(
-        "if(step==AGENT_META_PERSIST_DEFERRED&&"
+    require(
+        "enum{JOB_NONE,JOB_STARTED=1,JOB_ADOPTED=2}"
+        "job_origin=JOB_NONE;" in persist
+        and "if(job_origin==JOB_NONE)job_origin|=JOB_ADOPTED;" in persist
+        and "((job_origin&JOB_ADOPTED)?"
+        "AGENT_META_REPLICATED_STEP_LIMIT:0)" in persist
+        and "if(agent_meta_persist.owner!=owner||"
+        "!agent_meta_persist.snapshot_sealed||"
+        "agent_meta_persist.restart_target||"
+        "agent_ticks()<agent_meta_persist.retry_tick)break;" in persist,
+        "adjacent metadata writes cannot safely adopt a sealed owner job",
     )
     require(
-        "if(agent_meta_persist.phase==AGENT_META_PERSIST_IDLE)" in maintain
-        and 0 <= start_at < continue_at < classify_at,
-        "background persist does not inspect start status before stepping",
+        "if((job_origin&JOB_ADOPTED)&&!(job_origin&JOB_STARTED)&&"
+        "agent_meta_persist.phase==AGENT_META_PERSIST_IDLE){"
+        "if(bio_checkpoint_should_stop(checkpoint)){failure_cause=" in persist
+        and "AGENT_METADATA_PERSIST_INTERRUPTED;break;}continue;}" in persist
+        and "if(completion&&(job_origin&JOB_STARTED))"
+        "completion->job_id=job_id;" in persist
+        and persist.count(
+            "failure_irrevocable=(job_origin&JOB_STARTED)&&"
+            "agent_meta_persist.irrevocable&&"
+        ) == 2
+        and "if((job_origin&JOB_STARTED)&&"
+        "!agent_meta_persist.irrevocable&&same_job)"
+        "agent_meta_persist_abort_locked();" in persist,
+        "borrowed metadata work can abort or taint the new mutation",
+    )
+    require(
+        "out:if(status<0&&(job_origin&JOB_STARTED)&&"
+        "agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE&&"
+        "!agent_meta_persist.irrevocable&&"
+        "agent_meta_persist.scope_id==scope_id)"
+        "agent_meta_persist_abort_locked();" in persist,
+        "persist cleanup can abort a job it did not start",
+    )
+    fence = body(source, "agent_meta_persist_fence_owner(")
+    require(
+        "if(target==0&&scope_fence_reached(scope_id,target,"
+        "require_replication,require_idle))return0;" in fence,
+        "zero-target quiescence can bypass an active commit",
+    )
+    require(
+        "if(agent_ticks()<agent_meta_persist.retry_tick)break;" in fence,
+        "metadata fence can bypass the device retry deadline",
+    )
+    maintain = body(source, "agent_file_writeback_maintain(")
+    require(
+        "status=agent_meta_persist_drain_owner(owner,"
+        "AGENT_META_BACKGROUND_DRAIN_BUDGET);" in maintain
+        and "#defineAGENT_META_BACKGROUND_DRAIN_BUDGET" in all_source
+        and "(AGENT_META_DRAIN_EXTERNAL_FLAG|"
+        "(8U*AGENT_META_SUBMIT_DRAIN_BUDGET))" in all_source
+        and "if(last_background_drain_tick==(uint)now){"
+        "intr_restore(enabled);return;}" in maintain
+        and "last_background_drain_tick=(uint)now;" in maintain
+        and "agent_meta_persist_start_locked(" not in maintain
+        and "agent_meta_persist_background_step_locked(" not in maintain
+        and "bio_background_begin(" not in maintain
+        and "agent_metadata_txn_try_external(" not in maintain
+        and "if(status<0&&status!=AGENT_META_DRAIN_RETRY)"
+        "agent_file_writeback_defer();" in maintain,
+        "background persist bypasses the bounded shared drain",
     )
     background_step = body(source, "agent_meta_persist_background_step_locked(")
     require(
@@ -174,11 +256,20 @@ def validate(source: str) -> None:
     require(
         "#defineAGENT_META_OWNER_DRAIN_STEP_BUDGET"
         "AGENT_META_REPLICATED_STEP_LIMIT" in all_source
-        and "for(uintsteps=0;steps<step_budget;)" in drain
+        and "steps<(encoded_budget&AGENT_META_DRAIN_BUDGET_MASK)" in drain
+        and "budget=encoded_budget&AGENT_META_DRAIN_BUDGET_MASK" in drain
         and "batch_limit=MIN(AGENT_META_SUBMIT_DRAIN_BUDGET,"
-        "step_budget-steps)" in drain
+        "budget-steps)" in drain
         and "while(progressed<batch_limit)" in drain,
         "metadata owner drain lacks an explicit step budget",
+    )
+    require(
+        "if(!((encoded_budget&AGENT_META_DRAIN_EXTERNAL_FLAG)?"
+        "agent_metadata_txn_try_external():"
+        "agent_metadata_txn_lock(1)))break;" in drain
+        and "agent_meta_store_recovery_required&&"
+        "owner!=FS_OWNER_SYSTEM" in drain,
+        "background drain can sleep under the epoch or bypass recovery ownership",
     )
     require(
         "agent_meta_persist_background_step_locked(owner)" in drain
@@ -191,10 +282,17 @@ def validate(source: str) -> None:
         "metadata drain lacks bounded batching or a fairness checkpoint",
     )
     require(
+        "if(agent_meta_persist.phase==AGENT_META_PERSIST_IDLE){"
+        "uintscope_id=" in drain
+        and "if(job_id!=0){agent_metadata_txn_unlock();break;}" in drain,
+        "metadata drain can cross a completed job at a checkpoint",
+    )
+    require(
         "if(step<0){if(step==AGENT_META_PERSIST_DEFERRED||"
         "step==AGENT_META_DRAIN_RETRY){"
         "if(agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE)"
-        "agent_meta_persist_retry_next_tick();}else{result=-1;}break;}" in drain,
+        "agent_meta_persist_retry_next_tick();}else{result=-1;}"
+        "batch_limit=0;break;}" in drain,
         "metadata drain does not preserve the repair retry state",
     )
     require(
@@ -203,11 +301,6 @@ def validate(source: str) -> None:
         "job_id=agent_meta_persist.job_id;" in drain
         and "batch_limit=1;" in drain,
         "metadata drain can cross a replacement job or expand a borrowed lease",
-    )
-    require(
-        "if(agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE)"
-        "agent_meta_persist_retry_next_tick();" in maintain,
-        "background persist does not defer its continuation to the next tick",
     )
     submit = body(source, "agent_metadata_store_submit_wait_locked(")
     retry_branch = "if(drain_status==AGENT_META_DRAIN_RETRY){"
@@ -321,7 +414,8 @@ def validate_submit_retry_model() -> None:
 
 def main() -> int:
     source = STORE.read_text(encoding="utf-8")
-    validate(source)
+    metadata_source = METADATA.read_text(encoding="utf-8")
+    validate(source, metadata_source)
     mutations = (
         (
             "owner controls busy identity",
@@ -393,17 +487,82 @@ def main() -> int:
             "\t\t\t\tfailure_cause = AGENT_METADATA_PERSIST_IO;",
         ),
         (
+            "adopt metadata job without owner fence",
+            "\t\t\tif (agent_meta_persist.owner != owner ||\n"
+            "\t\t\t    !agent_meta_persist.snapshot_sealed ||\n"
+            "\t\t\t    agent_meta_persist.restart_target ||\n"
+            "\t\t\t    agent_ticks() < agent_meta_persist.retry_tick)\n"
+            "\t\t\t\tbreak;",
+            "\t\t\tif (0)\n\t\t\t\tbreak;",
+        ),
+        (
+            "adopt metadata job before retry deadline",
+            "\t\t\t    agent_ticks() < agent_meta_persist.retry_tick)",
+            "\t\t\t    0)",
+        ),
+        (
+            "zero target bypasses active metadata commit",
+            "\tif (target == 0 &&\n"
+            "\t    scope_fence_reached(scope_id, target, require_replication,\n"
+            "\t\t\t\trequire_idle))",
+            "\tif (target == 0)",
+        ),
+        (
+            "metadata fence bypasses retry deadline",
+            "\t\tif (agent_ticks() < agent_meta_persist.retry_tick)\n"
+            "\t\t\tbreak;",
+            "",
+        ),
+        (
+            "adopt metadata job without full budget",
+            "\t\t((job_origin & JOB_ADOPTED) ? "
+            "AGENT_META_REPLICATED_STEP_LIMIT : 0); steps++) {",
+            "\t\t((job_origin & JOB_ADOPTED) ? 1U : 0); steps++) {",
+        ),
+        (
+            "borrowed metadata job can be aborted",
+            "\t\t\tif ((job_origin & JOB_STARTED) &&\n"
+            "\t\t\t    !agent_meta_persist.irrevocable && same_job)\n"
+            "\t\t\t\tagent_meta_persist_abort_locked();",
+            "\t\t\tif (!agent_meta_persist.irrevocable && same_job)\n"
+            "\t\t\t\tagent_meta_persist_abort_locked();",
+        ),
+        (
+            "borrowed job id binds the new target",
+            "\t\tif (completion && (job_origin & JOB_STARTED))\n"
+            "\t\t\tcompletion->job_id = job_id;",
+            "\t\tif (completion)\n\t\t\tcompletion->job_id = job_id;",
+        ),
+        (
             "misclassify generation exhaustion",
             "\t\tagent_meta_persist.error_cause = AGENT_METADATA_PERSIST_DURABILITY;",
             "\t\tagent_meta_persist.error_cause = AGENT_METADATA_PERSIST_IO;",
         ),
         (
-            "background persist hides start status",
-            "\tif (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)\n"
-            "\t\tstep = agent_meta_persist_start_locked(owner);\n"
-            "\tif (step >= 0)\n"
-            "\t\tstep = agent_meta_persist_background_step_locked(owner);",
-            "\tstep = agent_meta_persist_background_step_locked(owner);",
+            "background persist loses batch budget",
+            "\tstatus = agent_meta_persist_drain_owner(owner,\n"
+            "\t\t\t\t\t\tAGENT_META_BACKGROUND_DRAIN_BUDGET);",
+            "\tstatus = agent_meta_persist_drain_owner(owner,\n"
+            "\t\t\t\t\t\tAGENT_META_DRAIN_EXTERNAL_FLAG | 1U);",
+        ),
+        (
+            "background persist loses tick gate",
+            "\tif (last_background_drain_tick == (uint)now) {\n"
+            "\t\tintr_restore(enabled);\n\t\treturn;\n\t}\n",
+            "",
+        ),
+        (
+            "background persist sleeps on transaction gate",
+            "\t\tif (!((encoded_budget & AGENT_META_DRAIN_EXTERNAL_FLAG) ?\n"
+            "\t\t      agent_metadata_txn_try_external() :\n"
+            "\t\t\t\t    agent_metadata_txn_lock(1)))",
+            "\t\tif (!agent_metadata_txn_lock(1))",
+        ),
+        (
+            "workflow persist bypasses recovery owner",
+            "\t\t    (agent_meta_store_recovery_required &&\n"
+            "\t\t     owner != FS_OWNER_SYSTEM) ||\n",
+            "",
         ),
         (
             "repair retry becomes fatal",
@@ -445,6 +604,14 @@ def main() -> int:
             "",
         ),
         (
+            "drain restarts after checkpoint completion",
+            "\t\t\tif (job_id != 0) {\n"
+            "\t\t\t\tagent_metadata_txn_unlock();\n"
+            "\t\t\t\tbreak;\n"
+            "\t\t\t}\n",
+            "",
+        ),
+        (
             "drain crosses replacement job",
             "\t\t\tif (job_id != 0 && job_id != agent_meta_persist.job_id) {",
             "\t\t\tif (0) {",
@@ -483,12 +650,61 @@ def main() -> int:
     for label, old, new in mutations:
         candidate = replace_once(source, old, new)
         try:
-            validate(candidate)
+            validate(candidate, metadata_source)
+        except ContractError:
+            continue
+        raise ContractError(f"mutation survived: {label}")
+    store_function_mutations = (
+        (
+            "scope fence is always true",
+            "scope_fence_reached(",
+            "\tif (!scope_commit_reached(scope_id, target, replicated))\n"
+            "\t\treturn 0;\n"
+            "\treturn !require_idle || !agent_file_writeback_scope_busy(scope_id);",
+            "\treturn 1;",
+        ),
+        (
+            "persist cleanup aborts an adopted job",
+            "agent_file_persist(",
+            "\tif (status < 0 && (job_origin & JOB_STARTED) &&\n"
+            "\t    agent_meta_persist.phase != AGENT_META_PERSIST_IDLE &&",
+            "\tif (status < 0 &&\n"
+            "\t    agent_meta_persist.phase != AGENT_META_PERSIST_IDLE &&",
+        ),
+    )
+    for label, signature, old, new in store_function_mutations:
+        candidate = replace_in_function(source, signature, old, new)
+        try:
+            validate(candidate, metadata_source)
+        except ContractError:
+            continue
+        raise ContractError(f"mutation survived: {label}")
+    metadata_function_mutations = (
+        (
+            "external transaction bypasses queued tickets",
+            "agent_metadata_txn_acquire(",
+            "\t\tif (txn_owner != 0 || reload_owner != 0 ||\n"
+            "\t\t    (!scheduler_context &&\n"
+            "\t\t     txn_next_ticket != txn_serving_ticket))\n"
+            "\t\t\tgoto unavailable;",
+            "\t\tif (txn_owner != 0 || reload_owner != 0)\n"
+            "\t\t\tgoto unavailable;",
+        ),
+    )
+    for label, signature, old, new in metadata_function_mutations:
+        candidate = replace_in_function(metadata_source, signature, old, new)
+        try:
+            validate(source, candidate)
         except ContractError:
             continue
         raise ContractError(f"mutation survived: {label}")
     validate_submit_retry_model()
-    print(f"metadata store authority contract: ok ({len(mutations)}/{len(mutations)})")
+    total = (
+        len(mutations)
+        + len(store_function_mutations)
+        + len(metadata_function_mutations)
+    )
+    print(f"metadata store authority contract: ok ({total}/{total})")
     return 0
 
 

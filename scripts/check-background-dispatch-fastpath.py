@@ -164,25 +164,33 @@ def check(root: Path) -> None:
         "metadata step no longer hands deadline policy to its caller",
     )
     writeback_maintain = function_body(store, "agent_file_writeback_maintain")
-    require(
-        writeback_maintain,
-        "step=agent_meta_persist_background_step_locked(owner);"
-        "if(agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE)"
-        "agent_meta_persist_retry_next_tick();agent_metadata_txn_unlock();",
-        "successful metadata persist step can rerun in the same tick",
-    )
     for fragment in (
-        "if(!bio_background_begin(owner)){if(agent_meta_persist.phase!="
-        "AGENT_META_PERSIST_IDLE)agent_meta_persist_retry_next_tick();"
-        "elseagent_file_writeback_defer();return;}",
-        "if(!agent_metadata_txn_try_external()){if(agent_meta_persist.phase!="
-        "AGENT_META_PERSIST_IDLE)agent_meta_persist_retry_next_tick();"
-        "elseagent_file_writeback_defer();gotoout_io;}",
+        "if(last_background_drain_tick==(uint)now){intr_restore(enabled);return;}",
+        "last_background_drain_tick=(uint)now;",
+        "agent_meta_persist_drain_owner(owner,"
+        "AGENT_META_BACKGROUND_DRAIN_BUDGET)",
     ):
         require(
             writeback_maintain,
             fragment,
-            "blocked metadata persist can rerun on every syscall in one tick",
+            "metadata background drain lost its per-tick bounded admission",
+        )
+    owner_drain = function_body(store, "agent_meta_persist_drain_owner")
+    require(
+        store,
+        "AGENT_META_DRAIN_EXTERNAL_FLAG|(8U*AGENT_META_SUBMIT_DRAIN_BUDGET)",
+        "metadata background budget lost its nonblocking transaction mode",
+    )
+    for fragment in (
+        "(encoded_budget&AGENT_META_DRAIN_EXTERNAL_FLAG)?"
+        "agent_metadata_txn_try_external():"
+        "agent_metadata_txn_lock(1)",
+        "agent_meta_store_recovery_required&&owner!=FS_OWNER_SYSTEM",
+    ):
+        require(
+            owner_drain,
+            fragment,
+            "metadata background drain can sleep or bypass recovery ownership",
         )
 
     store_tick = function_body(store, "agent_metadata_store_tick")
@@ -297,6 +305,7 @@ def check(root: Path) -> None:
         "fs_deferred_reclaim_tick(now);",
         "vfs_scope_reap_tick(now);",
         "agent_metadata_tick(now);",
+        "agent_observe_capacity_tick();",
     ):
         require(core_tick, call, "Agent timer lost a deferred-work scheduler")
 

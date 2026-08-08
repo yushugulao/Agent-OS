@@ -89,6 +89,7 @@ int vfs_scope_active(uint scope_id);
 int vfs_scope_retiring(uint scope_id);
 int vfs_scope_retained(uint scope_id);
 int vfs_scope_lifecycle(uint scope_id, struct workflow_lifecycle_key *);
+int vfs_scope_fresh_admission_status(void);
 int vfs_scope_bind_controller(uint scope_id,
 			      struct workflow_lifecycle_key lifecycle,
 			      uint64 control_id);

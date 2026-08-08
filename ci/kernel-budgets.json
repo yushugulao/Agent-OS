@@ -764,8 +764,8 @@
         "name": "metadata_probe",
         "source_path": "os/agent_metadata_probe.c",
         "object_path": "build/os/agent_metadata_probe.o",
-        "baseline_lines": 557,
-        "max_lines": 570,
+        "baseline_lines": 534,
+        "max_lines": 547,
         "max_bss_bytes": 9592,
         "required_cflags": [
           "-Os"
@@ -808,7 +808,7 @@
         "object_path": "build/os/agent_metadata_store.o",
         "baseline_lines": 2953,
         "max_lines": 3101,
-        "max_bss_bytes": 700088,
+        "max_bss_bytes": 700092,
         "required_cflags": [
           "-Os"
         ],
@@ -837,8 +837,8 @@
         "name": "metadata_store_format",
         "source_path": "os/agent_metadata_store_format.c",
         "object_path": "build/os/agent_metadata_store_format.o",
-        "baseline_lines": 219,
-        "max_lines": 230,
+        "baseline_lines": 137,
+        "max_lines": 143,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"

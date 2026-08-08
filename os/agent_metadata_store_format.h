@@ -29,13 +29,8 @@ uint64 agent_meta_format_payload_hash(
 	const struct agent_meta_store_header *, const char *, uint);
 uint64 agent_meta_format_store_hash(struct agent_meta_store *);
 int agent_meta_format_store_bytes(uint64, uint *);
-int agent_meta_format_store_v7_bytes(uint64, uint *);
-int agent_meta_format_store_v5_bytes(uint64, uint *);
 int agent_meta_format_records_valid(struct agent_meta_store *);
-int agent_meta_format_v7_records_valid(struct agent_meta_store *);
-int agent_meta_format_v5_records_valid(struct agent_meta_store *);
 int agent_meta_format_migrate_v7(struct agent_meta_store *);
-int agent_meta_format_migrate_v5(struct agent_meta_store *);
 int agent_meta_format_recover_identifiers(const struct agent_meta_store *);
 
 #endif

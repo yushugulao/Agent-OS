@@ -46,6 +46,10 @@ enum agent_observe_capacity_class {
 	AGENT_OBSERVE_CAPACITY_RECOVERY,
 };
 
+#define AGENT_STATUS_OK 0
+#define AGENT_STATUS_NO_SPACE -6
+#define AGENT_STATUS_RETRY -17
+
 struct agent_observe_capacity_claim {
 	uint slot;
 	uint replace;
@@ -264,6 +268,36 @@ static void verify_five_slots_and_sticky_class(void)
 	puts("observe_reap_state: five_slots=1 sticky_class=1");
 }
 
+static void verify_admission_status_class(void)
+{
+	struct workflow_lifecycle_key recovery = key(8, 18);
+
+	reset_state();
+	assert(agent_observe_capacity_admission_status(
+		       AGENT_OBSERVE_CAPACITY_ORDINARY) ==
+	       AGENT_STATUS_OK);
+	for (uint i = 0; i < AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS; i++)
+		assert(agent_observe_capacity_admit(
+			       20 + i, key(9 + i, 30 + i),
+			       AGENT_OBSERVE_CAPACITY_ORDINARY) == 1);
+	assert(agent_observe_capacity_admission_status(
+		       AGENT_OBSERVE_CAPACITY_ORDINARY) ==
+	       AGENT_STATUS_NO_SPACE);
+	assert(agent_observe_capacity_admission_status(
+		       AGENT_OBSERVE_CAPACITY_RECOVERY) ==
+	       AGENT_STATUS_OK);
+	assert(agent_observe_capacity_admit(
+		       30, recovery, AGENT_OBSERVE_CAPACITY_RECOVERY) == 1);
+	assert(agent_observe_capacity_admission_status(
+		       AGENT_OBSERVE_CAPACITY_RECOVERY) ==
+	       AGENT_STATUS_NO_SPACE);
+	agent_observe_slots[0].phase = AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING;
+	assert(agent_observe_capacity_admission_status(
+		       AGENT_OBSERVE_CAPACITY_ORDINARY) ==
+	       AGENT_STATUS_RETRY);
+	puts("observe_reap_state: class_admission=1 active_full=1 pending_retry=1");
+}
+
 static void verify_abort_and_scope_binding(void)
 {
 	struct agent_observe_capacity_claim claim;
@@ -277,11 +311,11 @@ static void verify_abort_and_scope_binding(void)
 		30, workflow, AGENT_OBSERVE_CAPACITY_ORDINARY);
 	assert(reused == 0);
 	if (reused > 0)
-		agent_observe_capacity_abort(30, workflow);
+		agent_observe_capacity_release(30, workflow);
 	assert(agent_observe_capacity_claim(30, workflow, &claim) == 0);
-	agent_observe_capacity_abort(31, workflow);
+	agent_observe_capacity_release(31, workflow);
 	assert(agent_observe_capacity_claim(30, workflow, &claim) == 0);
-	agent_observe_capacity_abort(30, workflow);
+	agent_observe_capacity_release(30, workflow);
 	assert(agent_observe_capacity_claim(30, workflow, &claim) < 0);
 	assert(agent_observe_capacity_admit(
 		       30, workflow, AGENT_OBSERVE_CAPACITY_ORDINARY) == 1);
@@ -348,6 +382,41 @@ static void verify_zero_target_retry(void)
 	puts("observe_reap_state: zero_target_retry=1 same_token=1");
 }
 
+static void verify_maintenance_recovers_lost_callbacks(void)
+{
+	struct workflow_lifecycle_key first = key(15, 61);
+	struct workflow_lifecycle_key second = key(16, 62);
+
+	reset_state();
+	assert(agent_observe_capacity_admit(
+		       70, first, AGENT_OBSERVE_CAPACITY_ORDINARY) == 1);
+	assert(agent_observe_capacity_admit(
+		       71, second, AGENT_OBSERVE_CAPACITY_ORDINARY) == 1);
+	set_disk_slot(0, AGENT_OBSERVE_SCOPE_USED, 70, first);
+	set_disk_slot(1, AGENT_OBSERVE_SCOPE_USED, 71, second);
+	lifecycle_state[first.id % 32] = 3;
+	lifecycle_state[second.id % 32] = 3;
+	assert(agent_observe_capacity_reap_begin(70, first, 0) == 0);
+	assert(agent_observe_capacity_reap_begin(71, second, 0) == 0);
+	assert(agent_observe_slots[0].phase ==
+		       AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING &&
+	       agent_observe_slots[1].phase ==
+		       AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING);
+	background_requests = 0;
+	agent_observe_capacity_tick();
+	assert(background_requests == 1);
+	background_requests = 0;
+	agent_observe_capacity_maintain();
+	for (uint i = 0; i < 2; i++)
+		assert(agent_observe_slots[i].phase ==
+			       AGENT_OBSERVE_SLOT_ERASE_PENDING &&
+		       agent_observe_slots[i].slot_or_persist_scope ==
+			       VFS_SCOPE_SYSTEM &&
+		       agent_observe_slots[i].detail.reap.target == 0);
+	assert(background_requests == 2);
+	puts("observe_reap_state: lost_callback_recovery=2 tick_rearm=1");
+}
+
 static void verify_attach_generation_stable(void)
 {
 	struct workflow_lifecycle_key victim = key(15, 60);
@@ -388,7 +457,7 @@ static void verify_token_and_done_consumption(void)
 	assert(agent_observe_capacity_reap_resume(
 		       victim, &resumed_token, &generation) == 1 &&
 	       resumed_token == token && generation == active_generation);
-	agent_observe_capacity_abort(40, victim);
+	agent_observe_capacity_release(40, victim);
 	assert(agent_observe_slots[0].phase == AGENT_OBSERVE_SLOT_DONE);
 	assert(agent_observe_capacity_admit(
 		       50, key(12, 45), AGENT_OBSERVE_CAPACITY_ORDINARY) < 0);
@@ -511,8 +580,10 @@ static void verify_recover_idempotence(void)
 int main(void)
 {
 	verify_five_slots_and_sticky_class();
+	verify_admission_status_class();
 	verify_abort_and_scope_binding();
 	verify_zero_target_retry();
+	verify_maintenance_recovers_lost_callbacks();
 	verify_attach_generation_stable();
 	verify_token_and_done_consumption();
 	verify_recover_idempotence();

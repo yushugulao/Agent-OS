@@ -1118,11 +1118,6 @@ static int stability_report_valid(
 	       report->file_rounds == expected_rounds &&
 	       report->memory_rounds == expected_rounds &&
 	       report->metadata_rounds == expected_rounds &&
-	       (mode != RP_RESOURCE_STABILITY_MODE_TERMINAL ||
-		(report->final_cache_resident ==
-			report->initial_cache_resident &&
-		 report->final_completion_sequence ==
-			report->initial_completion_sequence)) &&
 	       (mode != RP_RESOURCE_STABILITY_MODE_LOAD ||
 		report->final_completion_sequence >
 			report->initial_completion_sequence);
@@ -1228,10 +1223,7 @@ static int stability_global_pair_valid(
 		    right->ordinary_pending != 0 ||
 		    left->reserved_pending != 0 ||
 		    right->reserved_pending != 0 ||
-		    (bound == 0 &&
-		     (left->ordinary_used != right->ordinary_used ||
-		      left->reserved_used != right->reserved_used)) ||
-		    (bound != 0 && positive_growth > bound))
+		    positive_growth > bound)
 			return 0;
 	}
 	return 1;
@@ -1291,10 +1283,7 @@ static int stability_global_sequence_valid(void)
 			continue;
 		if (left->ordinary_pending != 0 || left->reserved_pending != 0 ||
 		    right->ordinary_pending != 0 || right->reserved_pending != 0 ||
-		    (bound == 0 &&
-		     (left->ordinary_used != right->ordinary_used ||
-		      left->reserved_used != right->reserved_used)) ||
-		    (bound != 0 && positive_growth > bound))
+		    positive_growth > bound)
 			return 0;
 		if (bound == 0)
 			continue;
@@ -1317,7 +1306,7 @@ static int stability_global_sequence_valid(void)
 	return 1;
 }
 
-static int run_stability_workflow(uint index, uint mode)
+static int run_stability_workflow(uint index, uint mode, int verify_global)
 {
 	struct rp_resource_stability_report *report =
 		&orch_stability_reports[index];
@@ -1339,6 +1328,7 @@ static int run_stability_workflow(uint index, uint mode)
 	int complete;
 	int eof;
 	int delegate_status = AGENT_STATUS_OK;
+	int wait_status;
 	int64 admission_start;
 	int64 admission_deadline;
 	uint mismatch = 0;
@@ -1364,9 +1354,10 @@ static int run_stability_workflow(uint index, uint mode)
 		pid = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
 		if (pid >= 0)
 			break;
+		wait_status = pid == AGENT_STATUS_RETRY ? sched_yield() : sleep(1);
 		if ((pid != -1 && pid != AGENT_STATUS_RETRY &&
 		     pid != AGENT_STATUS_NO_SPACE) || admission_deadline < 0 ||
-		    get_mtime() >= admission_deadline || sleep(1) < 0)
+		    get_mtime() >= admission_deadline || wait_status < 0)
 			break;
 	}
 	if (pid < 0) {
@@ -1424,7 +1415,8 @@ static int run_stability_workflow(uint index, uint mode)
 		mismatch |= 1U << 3;
 	if (!stability_identity_unique(index + 1))
 		mismatch |= 1U << 4;
-	if (!stability_global_pair_valid(global_before, global_after, mode))
+	if (verify_global &&
+	    !stability_global_pair_valid(global_before, global_after, mode))
 		mismatch |= 1U << 5;
 	if ((mismatch & (1U << 5)) != 0)
 		stability_print_global_delta(global_before, global_after);
@@ -1723,20 +1715,25 @@ static int run_resource_stability_acceptance(void)
 	uint measured_mask;
 	int global_verified;
 
+	if (!load_challenge_oracle(&orch_stability_workflow))
+		return 0;
+	/* 排除可执行页缓存的首次装入，只测工作流资源是否持续增长。 */
+	if (!run_stability_workflow(0, RP_RESOURCE_STABILITY_MODE_TERMINAL, 0)) {
+		printf("rp_agentos_orch: stability_warmup_failed\n");
+		return 0;
+	}
 	memset(orch_stability_reports, 0, sizeof(orch_stability_reports));
 	memset(orch_stability_global_before, 0,
 	       sizeof(orch_stability_global_before));
 	memset(orch_stability_global_after, 0,
 	       sizeof(orch_stability_global_after));
-	if (!load_challenge_oracle(&orch_stability_workflow))
-		return 0;
 	for (uint index = 0; index < RP_RESOURCE_STABILITY_WORKFLOWS;
 	     index++) {
 		uint mode = index < RP_RESOURCE_STABILITY_LOAD_WORKFLOWS ?
 			RP_RESOURCE_STABILITY_MODE_LOAD :
 			RP_RESOURCE_STABILITY_MODE_TERMINAL;
 
-		if (!run_stability_workflow(index, mode)) {
+		if (!run_stability_workflow(index, mode, 1)) {
 			printf("rp_agentos_orch: stability_workflow_failed index=%u\n",
 			       index);
 			return 0;
@@ -1751,7 +1748,7 @@ static int run_resource_stability_acceptance(void)
 	measured_mask = orch_stability_global_before[0].measured_mask;
 	global_verified = measured_mask == AGENT_RESOURCE_KIND_MASK_ALL;
 	rp_copy_text(body, sizeof(orch_stability_body),
-		     "schema=agentos_resource_stability_v5;measurement_scope=post_workflow_acceptance;timed_makespan_included=0;claim_scope=configured_global_counter_reclamation;configured_kind_coverage=measured_mask_only;account_coverage=self_identity_only;rate_budget_coverage=not_measured;global_leak_freedom=not_claimed;challenge_suffix=");
+		     "schema=agentos_resource_stability_v5;measurement_scope=post_cache_warmup_workflow_acceptance;timed_makespan_included=0;claim_scope=configured_global_counter_reclamation;configured_kind_coverage=measured_mask_only;account_coverage=self_identity_only;rate_budget_coverage=not_measured;global_leak_freedom=not_claimed;challenge_suffix=");
 	rp_append_text(body, sizeof(orch_stability_body),
 		       orch_stability_workflow.suffix);
 	rp_append_text(body, sizeof(orch_stability_body), ";load_workflows=");

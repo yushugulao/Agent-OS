@@ -35,11 +35,10 @@ enum agent_observe_reap_action {
 };
 
 void agent_observe_capacity_init(void);
+int agent_observe_capacity_admission_status(enum agent_observe_capacity_class);
 int agent_observe_capacity_admit(
 	uint, struct workflow_lifecycle_key,
 	enum agent_observe_capacity_class);
-void agent_observe_capacity_abort(
-	uint, struct workflow_lifecycle_key);
 int agent_observe_capacity_claim(
 	uint, struct workflow_lifecycle_key,
 	struct agent_observe_capacity_claim *);
@@ -55,6 +54,7 @@ int agent_observe_capacity_suppresses_capture(
 	uint, struct workflow_lifecycle_key, uint);
 void agent_observe_capacity_replicated(uint);
 void agent_observe_capacity_maintain(void);
+void agent_observe_capacity_tick(void);
 int agent_observe_capacity_reap_query(
 	struct workflow_lifecycle_key, uint64, int *, uint64 *,
 	struct agent_observe_reap_cookie *);

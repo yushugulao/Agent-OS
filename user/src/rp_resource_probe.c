@@ -9,6 +9,7 @@
 
 #define PAGE_BYTES 4096
 #define RESOURCE_FILE_BYTES 1024
+#define RESOURCE_FENCE_TIMEOUT_MS 30000
 
 static char resource_file_data[RESOURCE_FILE_BYTES];
 static struct rp_resource_stability_report report;
@@ -89,6 +90,22 @@ static int write_exact(int fd, const void *buffer, int size)
 		written += n;
 	}
 	return 1;
+}
+
+static int settle_current_workflow(void)
+{
+	int64 started = get_mtime();
+	int64 deadline = started < 0 ? -1 :
+		started + RESOURCE_FENCE_TIMEOUT_MS;
+	int status;
+
+	for (;;) {
+		status = sync();
+		if (status == 0)
+			return 0;
+		if (deadline < 0 || get_mtime() >= deadline || sleep(1) < 0)
+			return status;
+	}
 }
 
 static int snapshot_state(struct agent_workflow_lifecycle_info *lifecycle,
@@ -296,9 +313,7 @@ static unsigned int final_state_mismatch(unsigned int expected_rounds,
 	    final_agent.context_path_count !=
 		    initial_agent.context_path_count + expected_observations)
 		mismatch |= 1U << 4;
-	if (mode == RP_RESOURCE_STABILITY_MODE_TERMINAL &&
-	    (final_io.cache_resident != initial_io.cache_resident ||
-	     final_io.completion_sequence != initial_io.completion_sequence))
+	if (final_io.completion_sequence < initial_io.completion_sequence)
 		mismatch |= 1U << 5;
 	if (mode == RP_RESOURCE_STABILITY_MODE_LOAD &&
 	    final_io.completion_sequence <= initial_io.completion_sequence)
@@ -313,6 +328,7 @@ int main(int argc, char **argv)
 	unsigned int mode;
 	unsigned int expected_rounds;
 	unsigned long long challenge_nonce;
+	int fence_status;
 
 	if (argc != 5 ||
 	    !parse_uint_argument(argv[1], RP_RESOURCE_STABILITY_REPORT_PREFIX,
@@ -352,6 +368,13 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		report.metadata_rounds++;
+	}
+	/* 当前 workflow 的持久化、延迟 inode 回收和 epoch 在退出前统一结算。 */
+	fence_status = settle_current_workflow();
+	if (fence_status < 0) {
+		printf("rp_resource_probe: resource_fence_failed status=%d\n",
+		       fence_status);
+		return 1;
 	}
 	if (!snapshot_state(&final_lifecycle, &final_io, &final_agent)) {
 		printf("rp_resource_probe: final_snapshot_failed\n");

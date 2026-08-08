@@ -335,6 +335,26 @@ static int vfs_scope_create(uint scope_id,
 	return admitted ? 0 : -1;
 }
 
+int vfs_scope_fresh_admission_status(void)
+{
+	struct vfs_scope_registry *registry = &vfs_scope_registry;
+	int ready;
+	int reclaimable;
+	int enabled = intr_save();
+
+	vfs_scope_registry_init_locked();
+	ready = registry->free_count > 0 &&
+		registry->active_count + registry->retiring_count <
+			VFS_SCOPE_MAX_ACTIVE &&
+		registry->active_count + registry->retiring_count <
+			VFS_SCOPE_LIFECYCLE_CAP &&
+		fs_storage_scope_admissible();
+	reclaimable = !ready && registry->retiring_count != 0;
+	intr_restore(enabled);
+	return ready ? AGENT_STATUS_OK :
+	       reclaimable ? AGENT_STATUS_RETRY : AGENT_STATUS_NO_SPACE;
+}
+
 static int vfs_scope_join(uint scope_id,
 			  struct workflow_lifecycle_key lifecycle)
 {

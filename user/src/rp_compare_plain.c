@@ -1047,7 +1047,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_timeline", "agentos_event_delivery=kernel_queue");
 	ok = ok && rp_file_contains("rp_execplan", "scheduled_tasks=21");
 	ok = ok && rp_file_contains("rp_worker", "heartbeats=4");
-	ok = ok && rp_file_contains("rp_worker", "agentos_wait=wakeup");
+	ok = ok && rp_file_contains("rp_worker", "agentos_wait=queue_fastpath");
 	ok = ok && rp_file_contains("rp_runner", "stages=5");
 	ok = ok && rp_file_contains("rp_stage_dag", "failed_stage=align");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");

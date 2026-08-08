@@ -2406,7 +2406,7 @@ void scheduler()
 		if (t == NULL && fs_epoch_should_commit() &&
 		    fs_epoch_request_begin() == 0) {
 			if (fs_epoch_should_commit())
-				(void)fs_epoch_commit();
+				(void)fs_epoch_commit_polling();
 			fs_epoch_request_end();
 			t = fetch_task();
 		}
@@ -3284,8 +3284,7 @@ int agent_workflow_create_proc(int role)
 
 	if (status != AGENT_STATUS_OK)
 		return status;
-	// 创建安全名字空间是独立且不可继承的权力；角色授权允许 Orchestrator 填充自身工作流，
-	// 但不得让 Agent 铸造新配额和对象域。
+	/* 新名字空间及资源域只能由可信 bootstrap 创建。 */
 	if (p == 0 || p->is_agent || !p->resource_domain_admin ||
 	    !exec_policy_process_bootstrap(p))
 		return AGENT_STATUS_DENIED;

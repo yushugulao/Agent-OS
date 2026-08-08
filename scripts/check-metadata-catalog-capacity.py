@@ -530,7 +530,6 @@ def validate_sources(sources: dict[str, str]) -> None:
     )
     for token in (
         "agent_metadata_catalog_record_base_valid(",
-        "if (!legacy) {",
         "workflow_lifecycle_key_equal(",
         "workflow_lifecycle_none()",
         "workflow_lifecycle_key_valid(lifecycle)",
@@ -540,7 +539,7 @@ def validate_sources(sources: dict[str, str]) -> None:
         "prior->slot == record->slot",
         "prior->meta.fid == record->meta.fid",
         "prior->meta.physical_name",
-        "!legacy && record->meta.logical_path[0]",
+        "(record->meta.logical_path[0] &&",
         "prior->meta.logical_path",
         "prior->meta.dev == record->meta.dev",
         "prior->meta.inum == record->meta.inum",
@@ -551,24 +550,18 @@ def validate_sources(sources: dict[str, str]) -> None:
         raise ContractError(
             "raw validation must leave stale-scope filtering to lifecycle projection"
         )
-    if restart_validator.count("* stride)") != 2:
-        raise ContractError("restart validator must stride current and prior records")
+    for token in ("&store->records[i]", "&store->records[j]"):
+        require(restart_validator, token, "current record layout binding")
     current_validator = function_body(
         store_format, "agent_meta_format_records_valid("
     )
     for token in (
         "agent_durable_arena_validate(&store->durable) >= 0",
-        "records_valid(store, sizeof(struct agent_meta_record), 0)",
+        "records_valid(store)",
     ):
-        require(current_validator, token, "v7 restart validation binding")
-    legacy_validator = function_body(
-        store_format, "agent_meta_format_v5_records_valid("
-    )
-    require(
-        legacy_validator,
-        "return records_valid(store, sizeof(struct agent_meta_record_v5), 1);",
-        "v5 restart validation binding",
-    )
+        require(current_validator, token, "current/v7 restart validation binding")
+    if "v5" in store_format:
+        raise ContractError("retired metadata v5 decoder was restored")
 
     account = function_body(fs, "int fs_storage_scope_account_create(")
     for token in (

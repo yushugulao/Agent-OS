@@ -668,6 +668,27 @@ fs_epoch_commit(void)
 }
 
 int
+fs_epoch_commit_polling(void)
+{
+	int result = VIRTIO_DISK_ERR_BUSY;
+	int enabled = intr_save();
+
+	if (!fs_epoch_request_held_locked() ||
+	    fs_epoch_request_token() != &boot_request_token)
+		goto out;
+	/* 空闲执行器不能睡眠；发布前确认固定缓存行均可立即取得。 */
+	for (uint i = 0; i < epoch.count; i++) {
+		if (epoch.entries[i].buf == 0 ||
+		    epoch.entries[i].buf->hold_depth != 0)
+			goto out;
+	}
+	result = fs_epoch_commit();
+out:
+	intr_restore(enabled);
+	return result;
+}
+
+int
 fs_epoch_prepare_cleanup_sponsor(uint owner, uint io_class)
 {
 	int compatible;

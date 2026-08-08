@@ -305,7 +305,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             r"t\s*=\s*fetch_task",
             r"t\s*==\s*NULL\s*&&\s*fs_epoch_should_commit",
             r"fs_epoch_request_begin",
-            r"fs_epoch_commit",
+            r"fs_epoch_commit_polling",
             r"fs_epoch_request_end",
         ),
         failures,

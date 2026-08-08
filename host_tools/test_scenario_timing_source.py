@@ -163,7 +163,11 @@ def _validate_bounded_acceptance_io() -> None:
         )
     if "RP_RESOURCE_STABILITY_ADMISSION_TIMEOUT_MS" not in stability:
         raise AssertionError("resource stability admission lacks a time bound")
-    if "get_mtime() >= admission_deadline" not in stability or "sleep(1)" not in stability:
+    if (
+        "get_mtime() >= admission_deadline" not in stability
+        or "pid == AGENT_STATUS_RETRY ? sched_yield() : sleep(1)" not in stability
+        or "wait_status < 0" not in stability
+    ):
         raise AssertionError("resource stability admission does not await reclamation")
     if "agent_scope_delegate_fd(report_pipe[1])" not in stability:
         raise AssertionError("workflow report descriptor is not explicitly delegated")
@@ -294,7 +298,12 @@ def main() -> int:
     ))
     _reject(_case(
         sources, agentos, "run_stability_workflow",
-        "sleep(1) < 0",
+        "pid == AGENT_STATUS_RETRY ? sched_yield() : sleep(1)",
+        "sleep(1)",
+    ))
+    _reject(_case(
+        sources, agentos, "run_stability_workflow",
+        "wait_status < 0",
         "0",
     ))
     _reject(_case(
@@ -356,6 +365,36 @@ def main() -> int:
         sources, agentos, "run_stability_workflow",
         "stability_report_valid(report, index, mode, challenge_nonce)",
         "stability_report_valid(report, index, mode, challenge_nonce + 1)",
+    ))
+    for old, new in (
+        ("run_stability_workflow(0, RP_RESOURCE_STABILITY_MODE_TERMINAL, 0)",
+         "run_stability_workflow(0, RP_RESOURCE_STABILITY_MODE_TERMINAL, 1)"),
+        ("run_stability_workflow(index, mode, 1)",
+         "run_stability_workflow(index, mode, 0)"),
+        ("memset(orch_stability_reports, 0, sizeof(orch_stability_reports));",
+         "memset(orch_stability_reports, 0, 0);"),
+    ):
+        _reject(_case(sources, agentos, "run_resource_stability_acceptance",
+                      old, new))
+    _reject(_case(
+        sources, "user/src/rp_resource_probe.c", "main",
+        "fence_status = settle_current_workflow();",
+        "fence_status = 0;",
+    ))
+    _reject(_case(
+        sources, "user/src/rp_resource_probe.c", "settle_current_workflow",
+        "status = sync();",
+        "status = 0;",
+    ))
+    _reject(_case(
+        sources, "user/src/rp_resource_probe.c", "final_state_mismatch",
+        "final_io.completion_sequence < initial_io.completion_sequence",
+        "0",
+    ))
+    _reject(_case(
+        sources, agentos, "stability_report_valid",
+        "report->final_completion_sequence <\n\t\t    report->initial_completion_sequence",
+        "0",
     ))
     _reject(_case(
         sources, agentos, "stability_identity_unique",

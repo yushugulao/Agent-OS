@@ -126,16 +126,19 @@ class MetadataDiskFormatTests(unittest.TestCase):
         self.assertEqual(self.layout.disk_version, 8)
         self.assertEqual(self.layout.bank_names, (".agentmeta", ".agentmeta1"))
 
-    def test_unpublished_v6_is_rejected(self):
-        with self.assertRaisesRegex(BankError, "unsupported version"):
-            parse_bank(
-                self.make_bank("baseline", version=6),
-                self.layout.bank_names[0],
-                self.layout,
-            )
+    def test_retired_versions_are_rejected(self):
+        for version in (5, 6):
+            with self.subTest(version=version), self.assertRaisesRegex(
+                BankError, "unsupported version"
+            ):
+                parse_bank(
+                    self.make_bank("baseline", version=version),
+                    self.layout.bank_names[0],
+                    self.layout,
+                )
 
-    def test_kernel_preserves_only_published_v5_migration(self):
-        disk = (ROOT / "os/agent_metadata_disk.h").read_text(encoding="utf-8")
+    def test_kernel_only_migrates_v7(self):
+        abi = (ROOT / "agent_metadata_disk_abi.h").read_text(encoding="utf-8")
         probe = (ROOT / "os/agent_metadata_probe.c").read_text(encoding="utf-8")
         fmt = (ROOT / "os/agent_metadata_store_format.c").read_text(
             encoding="utf-8"
@@ -144,31 +147,33 @@ class MetadataDiskFormatTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        combined = disk + probe + fmt + header
+        combined = abi + probe + fmt + header
         self.assertNotIn("VERSION_LIFECYCLE", combined)
         self.assertNotIn("store_v6", combined)
         self.assertNotIn("migrate_v6", combined)
-        self.assertIn("version != AGENT_META_STORE_VERSION_V5", probe)
-        self.assertIn("agent_meta_format_store_v5_bytes", probe)
-        self.assertIn("agent_meta_format_migrate_v5(store)", probe)
+        for token in ("VERSION_V5", "record_v5", "store_v5", "migrate_v5"):
+            self.assertNotIn(token, combined)
+        self.assertIn("AGENT_META_STORE_VERSION_V7", abi)
+        self.assertIn("version != AGENT_META_STORE_VERSION &&", probe)
+        self.assertIn("version != AGENT_META_STORE_VERSION_V7", probe)
+        self.assertIn("agent_meta_format_migrate_v7(store)", probe)
+        self.assertIn("agent_meta_format_migrate_v7", fmt)
         self.assertIn("store->header.version = AGENT_META_STORE_VERSION;", fmt)
-        self.assertIn(
-            "store->records[i].scope_id != VFS_SCOPE_SYSTEM", fmt
-        )
+        self.assertNotIn("store_v7_bytes", combined)
+        self.assertNotIn("v7_records_valid", combined)
 
-    def test_kernel_size_helpers_share_fail_closed_bounds(self):
+    def test_kernel_size_check_uses_current_and_v7_shared_layout(self):
         fmt = (ROOT / "os/agent_metadata_store_format.c").read_text(
             encoding="utf-8"
         )
 
-        self.assertEqual(fmt.count("return format_bytes("), 3)
+        self.assertNotIn("format_bytes(", fmt)
         for token in (
             "bytes == 0 || count > AGENT_FILE_META_MAX",
-            "prefix + count * stride",
+            "count * sizeof(struct agent_meta_record)",
             "total > sizeof(struct agent_meta_store)",
             "total > MAXFILE * BSIZE",
             "sizeof(struct agent_durable_arena)",
-            "sizeof(struct agent_meta_record_v5)",
         ):
             self.assertIn(token, fmt)
 

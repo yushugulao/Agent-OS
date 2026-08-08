@@ -82,6 +82,7 @@ int fs_epoch_note_data(uint owner);
  * epoch 请求门，再结束租约。
  */
 int fs_epoch_commit(void);
+int fs_epoch_commit_polling(void);
 int fs_epoch_prepare_cleanup_sponsor(uint, uint);
 int fs_epoch_should_commit(void);
 int fs_epoch_dirty(void);

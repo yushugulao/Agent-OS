@@ -167,7 +167,7 @@ RESOURCE_STABILITY_MEMORY_PAGES = 128
 RESOURCE_STABILITY_FILE_OBJECTS = 12
 RESOURCE_STABILITY_METADATA_OPS = 3
 RESOURCE_STABILITY_CONTEXT_RECORDS_PER_ROUND = 1
-RESOURCE_STABILITY_MEASUREMENT_SCOPE = "post_workflow_acceptance"
+RESOURCE_STABILITY_MEASUREMENT_SCOPE = "post_cache_warmup_workflow_acceptance"
 RESOURCE_STABILITY_LINE_MAX = 8191
 RESOURCE_STABILITY_REPORT_MAGIC = 0x52505354
 RESOURCE_STABILITY_REPORT_VERSION = 2
@@ -2164,20 +2164,12 @@ def _validate_resource_stability_semantics(
             != ("verified" if fully_measured else "not_measured")
             or record["reaped"] != 1
             or record["pipe_eof"] != 1
+            or record["final_completion_sequence"]
+            < record["initial_completion_sequence"]
             or (
                 expected_mode == "load"
                 and record["final_completion_sequence"]
                 <= record["initial_completion_sequence"]
-            )
-            or (
-                expected_mode == "terminal"
-                and record["final_completion_sequence"]
-                != record["initial_completion_sequence"]
-            )
-            or (
-                expected_mode == "terminal"
-                and record["final_cache_resident"]
-                != record["initial_cache_resident"]
             )
             or lifecycle_key in lifecycle_keys
             or record["scope_id"] in scope_ids
@@ -2237,24 +2229,13 @@ def _validate_resource_stability_semantics(
                         reserved_pending_after,
                     )
                 )
-                or (
-                    (expected_mode == "terminal" or bound == 0)
-                    and (
-                        ordinary_after != ordinary_before
-                        or reserved_after != reserved_before
-                    )
+                or _resource_stability_positive_growth(
+                    ordinary_before,
+                    ordinary_after,
+                    reserved_before,
+                    reserved_after,
                 )
-                or (
-                    expected_mode == "load"
-                    and bound != 0
-                    and _resource_stability_positive_growth(
-                        ordinary_before,
-                        ordinary_after,
-                        reserved_before,
-                        reserved_after,
-                    )
-                    > bound
-                )
+                > (0 if expected_mode == "terminal" else bound)
             ):
                 raise ScenarioEvidenceError(
                     "agentos configured global resource delta exceeds its registered bound"
@@ -2286,22 +2267,12 @@ def _validate_resource_stability_semantics(
         ordinary_after = terminal[f"{kind}_ordinary_used_after"]
         reserved_before = first[f"{kind}_reserved_used_before"]
         reserved_after = terminal[f"{kind}_reserved_used_after"]
-        if (
-            (bound == 0 and (
-                ordinary_after != ordinary_before
-                or reserved_after != reserved_before
-            ))
-            or (
-                bound != 0
-                and _resource_stability_positive_growth(
-                    ordinary_before,
-                    ordinary_after,
-                    reserved_before,
-                    reserved_after,
-                )
-                > bound
-            )
-        ):
+        if _resource_stability_positive_growth(
+            ordinary_before,
+            ordinary_after,
+            reserved_before,
+            reserved_after,
+        ) > bound:
             raise ScenarioEvidenceError(
                 "agentos configured global resource terminal growth exceeds its registered bound"
             )

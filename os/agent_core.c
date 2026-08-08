@@ -499,6 +499,23 @@ int agent_sched_better(struct thread *a, struct thread *b)
 	return task_to_id(a) < task_to_id(b);
 }
 
+static int agent_workflow_admission_status(struct proc *p, int role)
+{
+	int status = agent_identity_authority_check(p, role);
+
+	if (status != AGENT_STATUS_OK)
+		return status;
+	if (p == 0 || p->is_agent || !p->resource_domain_admin ||
+	    !exec_policy_process_bootstrap(p))
+		return AGENT_STATUS_DENIED;
+	status = vfs_scope_fresh_admission_status();
+	if (status != AGENT_STATUS_OK)
+		return status;
+	return agent_observe_capacity_admission_status(
+		role == AGENT_ROLE_RECOVERY ? AGENT_OBSERVE_CAPACITY_RECOVERY :
+					      AGENT_OBSERVE_CAPACITY_ORDINARY);
+}
+
 int agent_make_role(struct proc *p, int role)
 {
 	const struct agent_role_policy *policy = agent_identity_role_policy(role);
@@ -550,9 +567,11 @@ int agent_make_role(struct proc *p, int role)
 				      p->agent_control_id) < 0)
 		goto fail;
 	recovery_bound = agent_observe_recovery_bind(p, controller);
+	if (p->agent_role == AGENT_ROLE_RECOVERY && recovery_bound <= 0)
+		goto fail;
 	capacity_reserved = agent_observe_capacity_admit(
 		p->vfs_scope_id, vfs_proc_lifecycle(p),
-		recovery_bound > 0 ?
+		p->agent_role == AGENT_ROLE_RECOVERY ?
 			AGENT_OBSERVE_CAPACITY_RECOVERY :
 			AGENT_OBSERVE_CAPACITY_ORDINARY);
 	if (capacity_reserved < 0)
@@ -563,7 +582,7 @@ fail:
 	if (recovery_bound > 0)
 		agent_observe_recovery_unbind_proc(p);
 	if (capacity_reserved > 0)
-		agent_observe_capacity_abort(
+		agent_observe_capacity_release(
 			p->vfs_scope_id, vfs_proc_lifecycle(p));
 	agent_free_proc_context(p);
 	agent_core_clear_metadata(p);
@@ -1026,6 +1045,8 @@ int sys_agent_workflow_create(int role)
 	int result = agent_core_create_admission_status();
 
 	if (result == AGENT_STATUS_OK)
+		result = agent_workflow_admission_status(curr_proc(), role);
+	if (result == AGENT_STATUS_OK)
 		result = agent_workflow_create_proc(role);
 
 	if (result < 0)
@@ -1346,6 +1367,7 @@ void agent_core_tick(void)
 	fs_deferred_reclaim_tick(now);
 	vfs_scope_reap_tick(now);
 	agent_metadata_tick(now);
+	agent_observe_capacity_tick();
 	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
 		if (p->state == P_UNUSED || !p->is_agent)
 			continue;

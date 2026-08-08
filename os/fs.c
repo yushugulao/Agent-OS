@@ -7340,11 +7340,14 @@ int fs_reclaim_scope_files(uint scope_id)
 			struct inode *target;
 			int claims_owner, claims_label;
 
-			if (mutations >= FS_SCOPE_RECLAIM_MUTATION_STEP)
+			if (scans >= FS_SCOPE_RECLAIM_SCAN_STEP)
 				return FS_RECLAIM_PENDING;
-			mutations++;
+			scans++;
 
 			if (cursor->blocks.mode != INODE_RECLAIM_NONE) {
+				if (mutations >= FS_SCOPE_RECLAIM_MUTATION_STEP)
+					return FS_RECLAIM_PENDING;
+				mutations++;
 				int done = itruncate_reclaim_step(&cursor->blocks, 1);
 
 				if (done < 0) {
@@ -7397,6 +7400,11 @@ int fs_reclaim_scope_files(uint scope_id)
 				cursor->inode_cursor++;
 				continue;
 			}
+			if (mutations >= FS_SCOPE_RECLAIM_MUTATION_STEP) {
+				iput(target);
+				return FS_RECLAIM_PENDING;
+			}
+			mutations++;
 			target->removed = 1;
 			if (target->ref == 1) {
 				int detached = inode_remove_detach(

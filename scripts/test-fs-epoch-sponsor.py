@@ -190,6 +190,16 @@ def validate(fs_epoch: str, fs_epoch_h: str, bio: str, syscall: str,
     )
     if "bio_request_settle_quiescent_cleanup" in commit:
         raise ContractError("successful commit settles the outer request inside the gate")
+    polling = compact(function_body(fs_epoch, "fs_epoch_commit_polling"))
+    ordered(
+        polling,
+        "fs_epoch_request_held_locked()",
+        "fs_epoch_request_token() != &boot_request_token",
+        "epoch.entries[i].buf->hold_depth != 0",
+        "result = fs_epoch_commit()",
+    )
+    if "int fs_epoch_commit_polling(void);" not in fs_epoch_h:
+        raise ContractError("idle commit preflight is not exported")
     should_commit = compact(function_body(fs_epoch, "fs_epoch_should_commit"))
     if "epoch.rollover_pending" not in should_commit:
         raise ContractError("hard rollover is not retried at the syscall boundary")
@@ -357,6 +367,17 @@ MUTATIONS = (
         BIO,
         SYSCALL,
         "commit accepts active transient state",
+    ),
+    (
+        replace_in_function(
+            FS_EPOCH,
+            "fs_epoch_commit_polling",
+            "epoch.entries[i].buf->hold_depth != 0",
+            "0",
+        ),
+        BIO,
+        SYSCALL,
+        "idle commit can sleep behind a buffer holder",
     ),
     (
         replace_in_function(

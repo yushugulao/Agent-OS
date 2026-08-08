@@ -229,7 +229,7 @@ def _resource_stability(challenge: str) -> str:
     suffix = str(int(challenge[3:]))
     lines = [
         "schema=agentos_resource_stability_v5;"
-        "measurement_scope=post_workflow_acceptance;"
+        "measurement_scope=post_cache_warmup_workflow_acceptance;"
         "timed_makespan_included=0;"
         "claim_scope=configured_global_counter_reclamation;"
         "configured_kind_coverage=measured_mask_only;"
@@ -922,6 +922,44 @@ class EvaluationScenarioTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertIn("not challenge-bound, fresh, and quiescent", report["errors"][0])
 
+    def test_resource_stability_allows_terminal_settlement_io(self) -> None:
+        boot = self.fixture.boot(87, "AB")
+        path = (
+            boot
+            / "agentos"
+            / "state-extracted"
+            / scenario.RESOURCE_STABILITY_FILE
+        )
+        terminal = scenario.RESOURCE_STABILITY_WORKFLOWS - 1
+        fields = _resource_workflow_fields(path, terminal)
+        _rewrite_resource_workflow(
+            path,
+            terminal,
+            final_completion_sequence=(
+                int(fields["initial_completion_sequence"]) + 314
+            ),
+            final_cache_resident=int(fields["initial_cache_resident"]) + 1,
+        )
+
+        report = self.collect([boot])
+
+        self.assertEqual(report["status"], "inconclusive")
+        receipt = report["samples"][0]["targets"]["agentos"][
+            "raw_source_receipt"
+        ]["resource_stability"]
+        self.assertEqual(receipt["status"], "verified")
+        terminal_record = receipt["acceptance"]["workflows"][-1]
+        self.assertEqual(
+            terminal_record["final_completion_sequence"]
+            - terminal_record["initial_completion_sequence"],
+            314,
+        )
+        self.assertEqual(
+            terminal_record["final_cache_resident"]
+            - terminal_record["initial_cache_resident"],
+            1,
+        )
+
     def test_resource_stability_rejects_observation_delta_drift(self) -> None:
         expected = (
             scenario.RESOURCE_STABILITY_CHILD_ROUNDS
@@ -1164,7 +1202,7 @@ class EvaluationScenarioTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertIn("configured global resource delta exceeds", report["errors"][0])
 
-    def test_resource_stability_allows_bounded_reclamation(self) -> None:
+    def test_resource_stability_allows_terminal_reclamation(self) -> None:
         boot = self.fixture.boot(98, "AB")
         path = (
             boot
@@ -1174,24 +1212,36 @@ class EvaluationScenarioTests(unittest.TestCase):
         )
         _rewrite_resource_workflow(
             path,
-            0,
+            scenario.RESOURCE_STABILITY_WORKFLOWS - 1,
             buffer_cache_reserved_used_before=9,
             buffer_cache_reserved_used_after=6,
         )
 
         report = self.collect([boot])
 
-        self.assertEqual(
-            report["summary"]["resource_stability"]["status"], "passed"
+        self.assertEqual(report["status"], "inconclusive")
+        receipt = report["samples"][0]["targets"]["agentos"][
+            "raw_source_receipt"
+        ]["resource_stability"]
+        self.assertEqual(receipt["status"], "verified")
+        terminal_record = receipt["acceptance"]["workflows"][-1]
+        terminal_growth = max(
+            terminal_record["buffer_cache_ordinary_used_after"]
+            - terminal_record["buffer_cache_ordinary_used_before"],
+            0,
+        ) + max(
+            terminal_record["buffer_cache_reserved_used_after"]
+            - terminal_record["buffer_cache_reserved_used_before"],
+            0,
         )
-        resource = next(
-            item
-            for item in report["summary"]["resource_stability"]
-            ["global_observation"]["resources"]
-            if item["kind"] == "buffer_cache"
+        exact_terminal_recovery = (
+            terminal_record["buffer_cache_ordinary_used_before"]
+            == terminal_record["buffer_cache_ordinary_used_after"]
+            and terminal_record["buffer_cache_reserved_used_before"]
+            == terminal_record["buffer_cache_reserved_used_after"]
         )
-        self.assertEqual(resource["terminal_observed_growth"], 0)
-        self.assertFalse(resource["exact_terminal_recovery"])
+        self.assertEqual(terminal_growth, 0)
+        self.assertFalse(exact_terminal_recovery)
 
     def test_resource_stability_rejects_cumulative_terminal_growth(self) -> None:
         boot = self.fixture.boot(94, "AB")

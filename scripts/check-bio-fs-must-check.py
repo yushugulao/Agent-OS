@@ -339,15 +339,30 @@ def check_metadata_bank_status_contracts(
             f"{location}metadata restart/mirror must preserve device status"
         )
 
-    maintain = function_body(clean_store, "agent_file_writeback_maintain")
-    if maintain is None or not re.search(
+    background = function_body(
+        clean_store, "agent_meta_persist_background_step_locked"
+    )
+    if background is None or not re.search(
         r"step\s*=\s*agent_meta_persist_start_locked\s*\(\s*owner\s*\)",
-        maintain,
+        background,
     ):
         failures.append(
             f"{location}background metadata persist must inspect start status"
         )
-    elif "step == AGENT_META_PERSIST_DEFERRED" not in maintain:
+    elif not re.search(
+        r"if\s*\(\s*step\s*>=\s*0\s*\)\s*"
+        r"step\s*=\s*agent_meta_persist_step_locked\s*\(\s*\)",
+        background,
+    ):
+        failures.append(
+            f"{location}background metadata persist must stop after start failure"
+        )
+    drain = function_body(clean_store, "agent_meta_persist_drain_owner")
+    if drain is None or not re.search(
+        r"step\s*==\s*AGENT_META_PERSIST_DEFERRED\s*\|\|\s*"
+        r"step\s*==\s*AGENT_META_DRAIN_RETRY",
+        drain,
+    ):
         failures.append(
             f"{location}background metadata persist must defer on BUSY"
         )
@@ -608,9 +623,17 @@ static int agent_meta_persist_step_locked(void) {
   if (mirror) return agent_meta_persist_device_error(n);
   return 0;
 }
-static void agent_file_writeback_maintain(void) {
-  step = agent_meta_persist_start_locked(owner);
-  if (step == AGENT_META_PERSIST_DEFERRED) return;
+static int agent_meta_persist_background_step_locked(uint owner) {
+  int step = 0;
+  if (idle) step = agent_meta_persist_start_locked(owner);
+  if (step >= 0) step = agent_meta_persist_step_locked();
+  return step;
+}
+static int agent_meta_persist_drain_owner(uint owner) {
+  step = agent_meta_persist_background_step_locked(owner);
+  if (step == AGENT_META_PERSIST_DEFERRED ||
+      step == AGENT_META_DRAIN_RETRY) return 1;
+  return step;
 }
 """
     metadata_mutations = {

@@ -17,7 +17,6 @@ enum agent_observe_slot_phase {
 #define AGENT_OBSERVE_SLOT_RECOVERY (1U << 0)
 #define AGENT_OBSERVE_SLOT_REPLACE  (1U << 1)
 #define AGENT_OBSERVE_SLOT_TOKEN_ISSUED (1U << 2)
-
 struct agent_observe_slot_state {
 	uint phase;
 	uint flags;
@@ -47,8 +46,8 @@ struct agent_observe_capacity_slot {
 	struct workflow_lifecycle_key lifecycle;
 };
 
-static struct agent_observe_slot_state
-	agent_observe_slots[AGENT_OBSERVE_CHECKPOINT_SCOPES];
+static struct agent_observe_slot_state agent_observe_slots[
+	AGENT_OBSERVE_CHECKPOINT_SCOPES];
 
 _Static_assert(sizeof(struct agent_observe_slot_state) == 64,
 	       "observation slot state must not grow store accounting");
@@ -57,18 +56,30 @@ _Static_assert(AGENT_OBSERVE_RESERVED_SCOPE_SLOTS == 1 &&
 		       AGENT_OBSERVE_CHECKPOINT_SCOPES,
 	       "observation store must reserve one Recovery successor slot");
 
-static int
-agent_observe_capacity_snapshot(
-	struct agent_observe_capacity_slot
-		slots[AGENT_OBSERVE_CHECKPOINT_SCOPES],
-	uint64 *bank_generation)
+static int agent_observe_slot_available(
+	enum agent_observe_capacity_class class, uint slot,
+	const struct agent_observe_capacity_slot *disk)
+{
+	if (class == AGENT_OBSERVE_CAPACITY_ORDINARY)
+		return slot < AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS &&
+		       disk->flags == 0;
+	return class == AGENT_OBSERVE_CAPACITY_RECOVERY &&
+	       slot == AGENT_OBSERVE_RECOVERY_SCOPE_SLOT &&
+	       (disk->flags == 0 ||
+		(disk->sealed &&
+		 (disk->flags & (AGENT_OBSERVE_SCOPE_RECOVERY_SUCCESSOR |
+				 AGENT_OBSERVE_SCOPE_REAP_AUTHORIZED)) ==
+			 AGENT_OBSERVE_SCOPE_RECOVERY_SUCCESSOR));
+}
+
+static int agent_observe_capacity_snapshot(struct agent_observe_capacity_slot
+	slots[AGENT_OBSERVE_CHECKPOINT_SCOPES], uint64 *bank_generation)
 {
 	const struct agent_observe_checkpoint *image;
 	uint bytes = 0;
 	uint64 generation = 0;
 	int result = -1;
 	int enabled = intr_save();
-
 	image = (const struct agent_observe_checkpoint *)
 		agent_durable_section_active_view(
 			AGENT_DURABLE_SECTION_OBSERVE, &bytes, &generation);
@@ -86,7 +97,6 @@ agent_observe_capacity_snapshot(
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
 		const struct agent_observe_checkpoint_scope *scope =
 			&image->scopes[i];
-
 		if (scope->used == 0)
 			continue;
 		if ((scope->used & AGENT_OBSERVE_SCOPE_USED) == 0 ||
@@ -126,18 +136,22 @@ out:
 	return result;
 }
 
-static int
-agent_observe_slot_matches(const struct agent_observe_slot_state *state,
-			   uint scope_id,
-			   struct workflow_lifecycle_key lifecycle)
+static int agent_observe_slot_matches(
+	const struct agent_observe_slot_state *state, uint scope_id,
+	struct workflow_lifecycle_key lifecycle)
 {
 	return state->phase != AGENT_OBSERVE_SLOT_FREE &&
 	       state->scope_id == scope_id &&
 	       workflow_lifecycle_key_equal(state->lifecycle, lifecycle);
 }
 
-static uint64
-agent_observe_reap_token(const struct agent_observe_slot_state *state)
+static int agent_observe_slot_reaping(const struct agent_observe_slot_state *state)
+{
+	return state->phase == AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING ||
+	       state->phase == AGENT_OBSERVE_SLOT_ERASE_PENDING;
+}
+
+static uint64 agent_observe_reap_token(const struct agent_observe_slot_state *state)
 {
 	uint64 fields[] = {
 		state->scope_id, state->lifecycle.id,
@@ -146,7 +160,6 @@ agent_observe_reap_token(const struct agent_observe_slot_state *state)
 		state->detail.reap.serial, state->detail.reap.target,
 	};
 	uint64 token = 1469598103934665603ULL;
-
 	for (uint i = 0; i < sizeof(fields) / sizeof(fields[0]); i++)
 		for (uint byte = 0; byte < sizeof(fields[i]); byte++) {
 			token ^= (fields[i] >> (byte * 8)) & 0xffU;
@@ -155,12 +168,10 @@ agent_observe_reap_token(const struct agent_observe_slot_state *state)
 	return token == 0 ? 1 : token;
 }
 
-static int
-agent_observe_reap_start(struct agent_observe_slot_state *state)
+static int agent_observe_reap_start(struct agent_observe_slot_state *state)
 {
 	uint64 serial = 0;
 	uint64 target;
-
 	target = agent_durable_section_mark_dirty_evidence(
 		AGENT_DURABLE_SECTION_OBSERVE, state->slot_or_persist_scope,
 		&serial, AGENT_DURABLE_DIRTY_URGENT);
@@ -174,22 +185,50 @@ agent_observe_reap_start(struct agent_observe_slot_state *state)
 	return 0;
 }
 
-void
-agent_observe_capacity_init(void)
+void agent_observe_capacity_init(void)
 {
 	memset(agent_observe_slots, 0, sizeof(agent_observe_slots));
 }
 
-int
-agent_observe_capacity_admit(
-	uint scope_id, struct workflow_lifecycle_key lifecycle,
+int agent_observe_capacity_admission_status(enum agent_observe_capacity_class class)
+{
+	struct agent_observe_capacity_slot slots[AGENT_OBSERVE_CHECKPOINT_SCOPES];
+	int pending = 0;
+	int enabled = intr_save();
+	if (class != AGENT_OBSERVE_CAPACITY_ORDINARY &&
+	    class != AGENT_OBSERVE_CAPACITY_RECOVERY) {
+		intr_restore(enabled);
+		return AGENT_STATUS_NO_SPACE;
+	}
+	if (agent_observe_capacity_snapshot(slots, 0) < 0) {
+		intr_restore(enabled);
+		agent_background_request();
+		return AGENT_STATUS_RETRY;
+	}
+	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
+		if (agent_observe_slots[i].phase == AGENT_OBSERVE_SLOT_FREE &&
+		    agent_observe_slot_available(class, i, &slots[i])) {
+			intr_restore(enabled);
+			return AGENT_STATUS_OK;
+		}
+		if ((class == AGENT_OBSERVE_CAPACITY_RECOVERY ?
+		     i == AGENT_OBSERVE_RECOVERY_SCOPE_SLOT :
+		     i < AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS) &&
+		    agent_observe_slot_reaping(&agent_observe_slots[i]))
+			pending = 1;
+	}
+	intr_restore(enabled);
+	if (pending)
+		return AGENT_STATUS_RETRY;
+	return AGENT_STATUS_NO_SPACE;
+}
+
+int agent_observe_capacity_admit(uint scope_id,
+	struct workflow_lifecycle_key lifecycle,
 	enum agent_observe_capacity_class class)
 {
 	struct agent_observe_capacity_slot slots[AGENT_OBSERVE_CHECKPOINT_SCOPES];
-	uint begin;
-	uint end;
 	int enabled;
-
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    scope_id >= FS_OWNER_SCOPE_FLAG ||
 	    !workflow_lifecycle_key_valid(lifecycle) ||
@@ -201,13 +240,11 @@ agent_observe_capacity_admit(
 		goto fail;
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
 		struct agent_observe_slot_state *state = &agent_observe_slots[i];
-
 		if (state->phase == AGENT_OBSERVE_SLOT_ADMITTED &&
 		    agent_observe_slot_matches(state, scope_id, lifecycle)) {
 			int recovery = class == AGENT_OBSERVE_CAPACITY_RECOVERY;
 			int slot_recovery =
 				!!(state->flags & AGENT_OBSERVE_SLOT_RECOVERY);
-
 			if (slot_recovery !=
 				    (i == AGENT_OBSERVE_RECOVERY_SCOPE_SLOT) ||
 			    (recovery && !slot_recovery))
@@ -216,24 +253,11 @@ agent_observe_capacity_admit(
 			return 0;
 		}
 	}
-	begin = class == AGENT_OBSERVE_CAPACITY_RECOVERY ?
-		AGENT_OBSERVE_RECOVERY_SCOPE_SLOT : 0;
-	end = class == AGENT_OBSERVE_CAPACITY_RECOVERY ?
-		AGENT_OBSERVE_CHECKPOINT_SCOPES :
-		AGENT_OBSERVE_ORDINARY_SCOPE_SLOTS;
-	for (uint i = begin; i < end; i++) {
+	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
 		struct agent_observe_slot_state *state = &agent_observe_slots[i];
 		int replace = slots[i].flags != 0;
-
-		if (state->phase != AGENT_OBSERVE_SLOT_FREE)
-			continue;
-		if (replace &&
-		    !(class == AGENT_OBSERVE_CAPACITY_RECOVERY &&
-		      slots[i].sealed &&
-		      (slots[i].flags &
-		       (AGENT_OBSERVE_SCOPE_RECOVERY_SUCCESSOR |
-			AGENT_OBSERVE_SCOPE_REAP_AUTHORIZED)) ==
-		      AGENT_OBSERVE_SCOPE_RECOVERY_SUCCESSOR))
+		if (state->phase != AGENT_OBSERVE_SLOT_FREE ||
+		    !agent_observe_slot_available(class, i, &slots[i]))
 			continue;
 		state->phase = AGENT_OBSERVE_SLOT_ADMITTED;
 		state->flags =
@@ -253,26 +277,16 @@ fail:
 	return -1;
 }
 
-void
-agent_observe_capacity_abort(
-	uint scope_id, struct workflow_lifecycle_key lifecycle)
-{
-	agent_observe_capacity_release(scope_id, lifecycle);
-}
-
-int
-agent_observe_capacity_claim(
-	uint scope_id, struct workflow_lifecycle_key lifecycle,
+int agent_observe_capacity_claim(uint scope_id,
+	struct workflow_lifecycle_key lifecycle,
 	struct agent_observe_capacity_claim *claim)
 {
 	int enabled;
-
 	if (claim == 0)
 		return -1;
 	enabled = intr_save();
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
 		struct agent_observe_slot_state *state = &agent_observe_slots[i];
-
 		if (state->phase != AGENT_OBSERVE_SLOT_ADMITTED ||
 		    !agent_observe_slot_matches(state, scope_id, lifecycle))
 			continue;
@@ -290,12 +304,10 @@ agent_observe_capacity_claim(
 	return -1;
 }
 
-void
-agent_observe_capacity_release(
-	uint scope_id, struct workflow_lifecycle_key lifecycle)
+void agent_observe_capacity_release(uint scope_id,
+	struct workflow_lifecycle_key lifecycle)
 {
 	int enabled = intr_save();
-
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++)
 		if (agent_observe_slots[i].phase ==
 			    AGENT_OBSERVE_SLOT_ADMITTED &&
@@ -308,9 +320,8 @@ agent_observe_capacity_release(
 	intr_restore(enabled);
 }
 
-int
-agent_observe_capacity_reap_begin(
-	uint scope_id, struct workflow_lifecycle_key lifecycle, uint64 *token)
+int agent_observe_capacity_reap_begin(uint scope_id,
+	struct workflow_lifecycle_key lifecycle, uint64 *token)
 {
 	struct agent_observe_capacity_slot slots[AGENT_OBSERVE_CHECKPOINT_SCOPES];
 	struct agent_observe_slot_state *state = 0;
@@ -318,7 +329,6 @@ agent_observe_capacity_reap_begin(
 	int exact_slot = -1;
 	int current_admission = 0;
 	int enabled;
-
 	if (token != 0)
 		*token = 0;
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
@@ -409,15 +419,12 @@ fail:
 	return -1;
 }
 
-int
-agent_observe_capacity_reap_resume(
-	struct workflow_lifecycle_key lifecycle, uint64 *token,
-	uint64 *bank_generation)
+int agent_observe_capacity_reap_resume(struct workflow_lifecycle_key lifecycle,
+	uint64 *token, uint64 *bank_generation)
 {
 	int found = 0;
 	int matched = 0;
 	int enabled;
-
 	if (!workflow_lifecycle_key_valid(lifecycle) || token == 0 ||
 	    bank_generation == 0)
 		return -1;
@@ -426,7 +433,6 @@ agent_observe_capacity_reap_resume(
 	enabled = intr_save();
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
 		struct agent_observe_slot_state *state = &agent_observe_slots[i];
-
 		if (state->phase < AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING ||
 		    state->phase > AGENT_OBSERVE_SLOT_DONE ||
 		    !workflow_lifecycle_key_equal(state->lifecycle, lifecycle))
@@ -450,15 +456,12 @@ fail:
 	return -1;
 }
 
-int
-agent_observe_capacity_reap_action(
-	uint slot, uint scope_id, struct workflow_lifecycle_key lifecycle,
-	uint persist_scope)
+int agent_observe_capacity_reap_action(uint slot, uint scope_id,
+	struct workflow_lifecycle_key lifecycle, uint persist_scope)
 {
 	struct agent_observe_slot_state *state;
 	int action = AGENT_OBSERVE_REAP_NONE;
 	int enabled;
-
 	if (slot >= AGENT_OBSERVE_CHECKPOINT_SCOPES)
 		return AGENT_OBSERVE_REAP_NONE;
 	enabled = intr_save();
@@ -474,19 +477,14 @@ agent_observe_capacity_reap_action(
 	return action;
 }
 
-int
-agent_observe_capacity_suppresses_capture(
-	uint scope_id, struct workflow_lifecycle_key lifecycle,
-	uint persist_scope)
+int agent_observe_capacity_suppresses_capture(uint scope_id,
+	struct workflow_lifecycle_key lifecycle, uint persist_scope)
 {
 	int suppress = 0;
 	int enabled = intr_save();
-
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
 		struct agent_observe_slot_state *state = &agent_observe_slots[i];
-
-		if ((state->phase == AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING ||
-		     state->phase == AGENT_OBSERVE_SLOT_ERASE_PENDING) &&
+		if (agent_observe_slot_reaping(state) &&
 		    state->slot_or_persist_scope == persist_scope &&
 		    agent_observe_slot_matches(state, scope_id, lifecycle)) {
 			suppress = 1;
@@ -497,11 +495,10 @@ agent_observe_capacity_suppresses_capture(
 	return suppress;
 }
 
-static int
-agent_observe_reap_replicated(struct agent_observe_slot_state *state)
+static int agent_observe_reap_replicated(
+	struct agent_observe_slot_state *state)
 {
 	int replicated;
-
 	if (state->detail.reap.target == 0)
 		return 0;
 	replicated = agent_durable_section_replicated(
@@ -525,49 +522,55 @@ agent_observe_reap_replicated(struct agent_observe_slot_state *state)
 	return state->phase == AGENT_OBSERVE_SLOT_DONE;
 }
 
-void
-agent_observe_capacity_replicated(uint scope_id)
+void agent_observe_capacity_replicated(uint scope_id)
 {
 	int enabled = intr_save();
-
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++)
-		if ((agent_observe_slots[i].phase ==
-			     AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING ||
-		     agent_observe_slots[i].phase ==
-			     AGENT_OBSERVE_SLOT_ERASE_PENDING) &&
+		if (agent_observe_slot_reaping(&agent_observe_slots[i]) &&
 		    agent_observe_slots[i].slot_or_persist_scope == scope_id)
 			(void)agent_observe_reap_replicated(
 				&agent_observe_slots[i]);
 	intr_restore(enabled);
 }
 
-void
-agent_observe_capacity_maintain(void)
+void agent_observe_capacity_maintain(void)
 {
+	int started = 0;
 	int enabled = intr_save();
-
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
 		struct agent_observe_slot_state *state = &agent_observe_slots[i];
-
-		if ((state->phase == AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING ||
-		     state->phase == AGENT_OBSERVE_SLOT_ERASE_PENDING) &&
-		    state->detail.reap.target == 0) {
-			if (agent_observe_reap_start(state) < 0)
-				agent_background_request();
-			break;
+		if (!agent_observe_slot_reaping(state))
+			continue;
+		/* 通知只用于提速；维护路径也从持久状态自校准，避免丢边后卡死。 */
+		if (state->detail.reap.target != 0) {
+			(void)agent_observe_reap_replicated(state);
+			continue;
 		}
+		/* 固定五槽都可轮询，但每轮只发布一个新的持久化意图。 */
+		if (!started && agent_observe_reap_start(state) < 0)
+			agent_background_request();
+		started = 1;
 	}
 	intr_restore(enabled);
 }
 
-int
-agent_observe_capacity_reap_query(
-	struct workflow_lifecycle_key lifecycle, uint64 token, int *replicated,
-	uint64 *bank_generation, struct agent_observe_reap_cookie *cookie)
+void agent_observe_capacity_tick(void)
+{
+	int enabled = intr_save();
+	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++)
+		if (agent_observe_slot_reaping(&agent_observe_slots[i])) {
+			agent_background_request();
+			break;
+		}
+	intr_restore(enabled);
+}
+
+int agent_observe_capacity_reap_query(struct workflow_lifecycle_key lifecycle,
+	uint64 token, int *replicated, uint64 *bank_generation,
+	struct agent_observe_reap_cookie *cookie)
 {
 	struct agent_observe_capacity_slot slots[AGENT_OBSERVE_CHECKPOINT_SCOPES];
 	int enabled;
-
 	if (!workflow_lifecycle_key_valid(lifecycle) || token == 0 ||
 	    replicated == 0 || bank_generation == 0 || cookie == 0)
 		return -1;
@@ -575,7 +578,6 @@ agent_observe_capacity_reap_query(
 	enabled = intr_save();
 	for (uint i = 0; i < AGENT_OBSERVE_CHECKPOINT_SCOPES; i++) {
 		struct agent_observe_slot_state *state = &agent_observe_slots[i];
-
 		if (state->phase < AGENT_OBSERVE_SLOT_AUTHORIZE_PENDING ||
 		    !workflow_lifecycle_key_equal(state->lifecycle, lifecycle) ||
 		    state->detail.reap.token != token ||
@@ -604,14 +606,11 @@ agent_observe_capacity_reap_query(
 	return -1;
 }
 
-int
-agent_observe_capacity_reap_consume(
-	const struct agent_observe_reap_cookie *cookie)
+int agent_observe_capacity_reap_consume(const struct agent_observe_reap_cookie *cookie)
 {
 	struct agent_observe_slot_state *state;
 	int result = -1;
 	int enabled;
-
 	if (cookie == 0 || cookie->slot >= AGENT_OBSERVE_CHECKPOINT_SCOPES ||
 	    cookie->scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    cookie->scope_id >= FS_OWNER_SCOPE_FLAG || cookie->reserved != 0 ||
@@ -635,8 +634,7 @@ agent_observe_capacity_reap_consume(
 	return result;
 }
 
-int
-agent_observe_capacity_recover_reap(
+int agent_observe_capacity_recover_reap(
 	uint slot, uint scope_id, struct workflow_lifecycle_key lifecycle)
 {
 	struct agent_observe_slot_state *state;
