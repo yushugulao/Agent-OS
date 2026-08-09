@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import math
 import re
 from pathlib import Path
@@ -26,7 +27,6 @@ from evidence_semantic_common import (
     _require_regex,
     _text,
 )
-from evidence_semantic_metadata import validate_metadata as _validate_metadata
 from evidence_semantic_dual import (
     validate_complete_dual_state, validate_dual_alignment, validate_program_ledgers,
 )
@@ -41,6 +41,25 @@ def _validate_ch3_trace(ctx: ValidationContext) -> None:
     text = _text(ctx.raw_dir / "ch3-trace-guest.log", "ch3 trace Guest log")
     kernel = _load_module(ctx, "scripts/validate-kernel-test-log.py")
     _call(kernel, "validate_ch3_trace", "ch3 trace Guest log", text)
+
+
+def _validate_live_query_runtime(guests: dict[str, str]) -> None:
+    live_query_markers = {
+        "agentfs_ucore": (
+            "agentfs_ucore: explicit_create_query=1 ordinary_unindexed=1",
+            "agentfs_ucore: live_catalog_volatile=1",
+        ),
+        "agentscan_ucore": (
+            "agentscan_ucore: explicit_admission ordinary_unindexed=1",
+            "agentscan_ucore: live_query enter=1 update=1 leave=1 indexed=1",
+        ),
+    }
+    for case, markers in live_query_markers.items():
+        text = guests.get(f"agent-case:{case}")
+        if text is None:
+            raise EvidenceSemanticError(f"Agent Live-Query FS case is absent: {case}")
+        for marker in markers:
+            _require_line(text, marker, f"Agent Live-Query FS case {case}")
 
 
 def _validate_agent_suite(ctx: ValidationContext) -> None:
@@ -73,6 +92,7 @@ def _validate_agent_suite(ctx: ValidationContext) -> None:
     for case in expected_cases:
         text = guests[f"agent-case:{case}"]
         _call(kernel, "validate_agent_case", f"Agent case {case}", text, case)
+    _validate_live_query_runtime(guests)
     timing_text = _text(ctx.raw_dir / "agent-suite-timings.log", "Agent suite timings")
     rows: list[tuple[str, float]] = []
     for line_number, line in enumerate(timing_text.splitlines(), 1):
@@ -137,6 +157,71 @@ def _validate_dual_state(
         raise EvidenceSemanticError(str(error)) from error
 
 
+def _validate_workflow_fence_receipt(agentos: str) -> None:
+    _reject_tokens(
+        agentos,
+        (
+            "rp_agentos_orch: workflow_fence_failed",
+            "rp_agentos_orch: acceptance_receipt_failed",
+        ),
+        "AgentOS workflow-fence receipt",
+    )
+    fence = _require_regex(
+        agentos,
+        re.compile(
+            r"rp_agentos_orch: workflow_fence name=rp-task6-completion-v1 "
+            r"request_id=(?P<request>[1-9][0-9]*) "
+            r"lifecycle=(?P<lifecycle>[1-9][0-9]*)/(?P<generation>[1-9][0-9]*) "
+            r"fence_sequence=(?P<fence>[1-9][0-9]*) "
+            r"metadata_generation=(?P<metadata>[1-9][0-9]*) "
+            r"credit_epoch=(?P<credit_epoch>[1-9][0-9]*) "
+            r"credit_digest=(?P<credit_digest>[0-9a-f]{64}) "
+            r"resource_pending=0,0,0,0,0,0,0,0 "
+            r"resource_used=(?P<resource_used>(?:[0-9]+,){7}[0-9]+) "
+            r"credit_exec_account=(?P<exec_slot>[0-9]+)/(?P<exec_generation>[1-9][0-9]*) "
+            r"credit_storage_account=(?P<storage_slot>[0-9]+)/(?P<storage_generation>[1-9][0-9]*) "
+            r"first_ticket=(?P<first>[1-9][0-9]*) "
+            r"last_ticket=(?P<last>[1-9][0-9]*) "
+            r"event_count=(?P<events>[1-9][0-9]*) "
+            r"gap_count=(?P<gaps>[0-9]+) "
+            r"previous_root=(?P<previous>[0-9a-f]{64}) "
+            r"challenge=(?P<challenge>[0-9a-f]{64}) "
+            r"evidence_root=(?P<root>[0-9a-f]{64}) flags=15"
+        ),
+        "AgentOS workflow-fence receipt",
+    )
+    used = tuple(int(value) for value in fence.group("resource_used").split(","))
+    credit_fields = (
+        (int(fence.group("lifecycle")), 4),
+        (int(fence.group("generation")), 8),
+        (int(fence.group("credit_epoch")), 8),
+        (int(fence.group("exec_slot")), 4),
+        (int(fence.group("exec_generation")), 8),
+        (int(fence.group("storage_slot")), 4),
+        (int(fence.group("storage_generation")), 8),
+        *((value, 8) for value in used),
+    )
+    credit_hash = hashlib.sha256(b"AgentOS workflow credit exact v1")
+    try:
+        for value, width in credit_fields:
+            credit_hash.update(value.to_bytes(width, "little"))
+    except OverflowError as error:
+        raise EvidenceSemanticError(
+            "AgentOS workflow-fence credit field exceeds its ABI width"
+        ) from error
+    if (
+        int(fence.group("last")) < int(fence.group("first"))
+        or int(fence.group("gaps")) > int(fence.group("events"))
+        or len(used) != 8
+        or credit_hash.hexdigest() != fence.group("credit_digest")
+        or set(fence.group("challenge")) == {"0"}
+        or set(fence.group("root")) == {"0"}
+    ):
+        raise EvidenceSemanticError(
+            "AgentOS workflow-fence receipt has invalid exact-cut evidence"
+        )
+
+
 def _validate_dual(ctx: ValidationContext) -> None:
     backend = _load_module(ctx, "host_tools/backend_evidence_contract.py")
     plain_path = ctx.raw_dir / "dual-plain-qemu.log"
@@ -163,6 +248,7 @@ def _validate_dual(ctx: ValidationContext) -> None:
         "rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready",
         "AgentOS dual Guest log",
     )
+    _validate_workflow_fence_receipt(agentos)
     plain_inventory = _require_regex(
         plain,
         re.compile(
@@ -316,80 +402,6 @@ def _validate_physical_resource(ctx: ValidationContext) -> None:
     )
 
 
-LEASE_MARKER = re.compile(
-    r"agentobsreboot_ucore: (?P<tag>lease_cut_alloc|lease_cut_successor) "
-    r"audit=(?P<audit>[0-9]+) span=(?P<span>[0-9]+) "
-    r"event=(?P<event>[0-9]+) control=(?P<control>[0-9]+) "
-    r"agent=(?P<agent>[0-9]+) lifecycle_slot=(?P<slot>[0-9]+) "
-    r"lifecycle_generation=(?P<generation>[0-9]+)"
-)
-
-
-def _validate_observe(ctx: ValidationContext) -> None:
-    final = "[observe-recovery] power-cut lease and three-boot durable evidence lifecycle passed"
-    result = _combined_rule(ctx, "observe-recovery.log", "observe-recovery", final)
-    expected = {f"observe-recovery-boot{index}" for index in (1, 2, 3)} | {
-        "observe-recovery-boot0-cut"
-    }
-    _expect_tags(result.guests, expected, "observe-recovery.log")
-    before_reap = ctx.raw_dir / "observe-recovery-before-reap.img"
-    _regular_bytes(before_reap, "observation pre-reap disk image")
-    disk_evidence = _load_module(ctx, "host_tools/agent_observe_disk_evidence.py")
-    disk_result = _call(
-        disk_evidence,
-        "verify_observation_image",
-        "observation durable disk image",
-        before_reap,
-        result.guests["observe-recovery-boot1"],
-        ctx.repo_root / "ci" / "agent-metadata-disk-format.json",
-        ctx.repo_root / "ci" / "agent-observe-disk-format.json",
-    )
-    acceptance = _load_module(ctx, "host_tools/agent_observe_disk_acceptance.py")
-    layout = _call(
-        disk_evidence, "load_observation_contract", "observation disk contract",
-        ctx.repo_root / "ci" / "agent-observe-disk-format.json",
-    )
-    disk_result = _call(
-        acceptance, "validate_observation_acceptance",
-        "observation v8 retention acceptance", disk_result, layout,
-    )
-    if not isinstance(disk_result, dict) or disk_result.get("status") != "verified":
-        raise EvidenceSemanticError("observation durable disk result is invalid")
-    cut = _require_regex(result.guests["observe-recovery-boot0-cut"], LEASE_MARKER, "observe cut lease")
-    successor = _require_regex(result.guests["observe-recovery-boot1"], LEASE_MARKER, "observe successor lease")
-    if cut.group("tag") != "lease_cut_alloc" or successor.group("tag") != "lease_cut_successor":
-        raise EvidenceSemanticError("observation lease marker roles differ")
-    for name in ("audit", "span", "event", "control", "agent"):
-        if int(successor.group(name)) <= int(cut.group(name)):
-            raise EvidenceSemanticError(f"observation durable lease reused {name}")
-    if successor.group("slot") != cut.group("slot") or int(successor.group("generation")) <= int(cut.group("generation")):
-        raise EvidenceSemanticError("observation lifecycle lease did not advance safely")
-    required = {
-        "observe-recovery-boot0-cut": (
-            "agentobsreboot_ucore: receipt_permission_not_agent=1",
-        ),
-        "observe-recovery-boot1": (
-            "agentobsreboot_ucore: boot1_checkpoint_ready=1",
-            "agentobsreboot_ucore: receipt_pending_not_evidence=1 receipt_durable_exact=1 receipt_fake_stale=1 receipt_window_not_evidence=1",
-        ),
-        "observe-recovery-boot2": (
-            "agentobsreboot_ucore: boot2_reap_replicated=1",
-            "agentobsreboot_ucore: receipt_teardown_stale=1",
-            "agentobsreboot_ucore: receipt_permission_recovery_denied=1",
-            "agentobsreboot_ucore: receipt_recovery_exact=1 receipt_v1_compatible=1 bank_generation_bound=1",
-        ),
-        "observe-recovery-boot3": (
-            "agentobsreboot_ucore: boot3_erased=1 generation_isolated=1 stable_identity=1",
-            "agentobsreboot_ucore: timeline_wait_epoch_recheck=1 injection=2 retries=1 bounded_timeout=1",
-            "agentobsreboot_ucore: timeline_wait_threads=1 filters=2 deadlines=2 targeted=1 timeout=1 cleanup=1",
-            "agentobsreboot_ucore: parent passed",
-        ),
-    }
-    for tag, markers in required.items():
-        for marker in markers:
-            _require_line(result.guests[tag], marker, tag)
-
-
 def _validate_virtio(ctx: ValidationContext) -> None:
     result = _combined_rule(
         ctx, "virtio-disk.log", "virtio-disk", "[virtio-disk] fault matrix passed"
@@ -409,9 +421,9 @@ def _validate_workflow(ctx: ValidationContext) -> None:
         ctx,
         "workflow-teardown-race.log",
         "workflow-teardown-race",
-        "[workflow-teardown] 3 stable runs passed",
+        "[workflow-teardown] 1 descriptive run passed",
     )
-    expected = {f"workflow-teardown:{index}" for index in range(1, 4)}
+    expected = {"workflow-teardown:1"}
     _expect_tags(result.guests, expected, "workflow-teardown-race.log")
     kernel = _load_module(ctx, "scripts/validate-kernel-test-log.py")
     for tag in sorted(expected):

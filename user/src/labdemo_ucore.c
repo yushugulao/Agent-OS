@@ -151,10 +151,7 @@ static uint64 demo_outcome_hash(const char *stage, const char *status)
 static void take_performance_snapshot(
 	struct labdemo_performance_receipt *receipt)
 {
-	struct agent_info info;
-
 	memset(receipt, 0, sizeof(*receipt));
-	memset(&info, 0, sizeof(info));
 	receipt->observer_pid = (uint64)getpid();
 	check(agent_performance_snapshot(&receipt->snapshot) ==
 		      AGENT_STATUS_OK,
@@ -167,13 +164,6 @@ static void take_performance_snapshot(
 	check(receipt->snapshot.counter_scope ==
 		      AGENT_PERFORMANCE_COUNTER_SCOPE_GLOBAL,
 	      "performance counter scope");
-	check(agent_info(&info) == 0, "performance metadata snapshot");
-	receipt->metadata_dirty = info.metadata_writeback_dirty;
-	receipt->metadata_durable = info.metadata_writeback_durable;
-	receipt->metadata_requests = info.metadata_writeback_requests;
-	receipt->metadata_coalesced = info.metadata_writeback_coalesced;
-	receipt->metadata_commits = info.metadata_writeback_commits;
-	receipt->metadata_pending = info.metadata_writeback_pending;
 }
 
 static uint64 performance_delta(uint64 before, uint64 after)
@@ -185,21 +175,19 @@ static uint64 performance_delta(uint64 before, uint64 after)
 #ifdef LABDEMO_DIAGNOSTICS
 struct labdemo_diag_snapshot {
 	struct labdemo_performance_receipt performance;
-	struct agent_info info;
 };
 
 static void demo_diag_take(struct labdemo_diag_snapshot *snapshot)
 {
 	memset(snapshot, 0, sizeof(*snapshot));
 	take_performance_snapshot(&snapshot->performance);
-	check(agent_info(&snapshot->info) == 0, "diagnostic agent info");
 }
 
 static void demo_diag_print(const char *mode, const char *step,
 			    const struct labdemo_diag_snapshot *before,
 			    const struct labdemo_diag_snapshot *after)
 {
-	printf("agentos:diag nonce=%llu mode=%s step=%s epoch_commits=%llu epoch_buffers=%llu writes=%llu flushes=%llu deduplicated=%llu metadata_requests=%llu metadata_coalesced=%llu metadata_commits=%llu metadata_pending_before=%llu metadata_pending_after=%llu metadata_dirty_before=%llu metadata_dirty_after=%llu metadata_durable_before=%llu metadata_durable_after=%llu\n",
+	printf("agentos:diag nonce=%llu mode=%s step=%s epoch_commits=%llu epoch_buffers=%llu writes=%llu flushes=%llu deduplicated=%llu\n",
 	       (uint64)LABDEMO_RUN_NONCE, mode, step,
 	       performance_delta(before->performance.snapshot.fs_epoch_commits,
 				 after->performance.snapshot.fs_epoch_commits),
@@ -214,19 +202,7 @@ static void demo_diag_print(const char *mode, const char *step,
 		       after->performance.snapshot.block_durable_flushes),
 	       performance_delta(
 		       before->performance.snapshot.fs_epoch_deduplicated_stages,
-		       after->performance.snapshot.fs_epoch_deduplicated_stages),
-	       performance_delta(before->info.metadata_writeback_requests,
-				 after->info.metadata_writeback_requests),
-	       performance_delta(before->info.metadata_writeback_coalesced,
-				 after->info.metadata_writeback_coalesced),
-	       performance_delta(before->info.metadata_writeback_commits,
-				 after->info.metadata_writeback_commits),
-	       before->info.metadata_writeback_pending,
-	       after->info.metadata_writeback_pending,
-	       before->info.metadata_writeback_dirty,
-	       after->info.metadata_writeback_dirty,
-	       before->info.metadata_writeback_durable,
-	       after->info.metadata_writeback_durable);
+		       after->performance.snapshot.fs_epoch_deduplicated_stages));
 }
 
 static struct labdemo_diag_snapshot demo_diag_step_before;
@@ -272,18 +248,6 @@ static int performance_storage_equal(
 		       right->virtio_batched_read_requests &&
 	       left->overwrite_prereads_skipped ==
 		       right->overwrite_prereads_skipped;
-}
-
-static int metadata_state_equal(
-	const struct labdemo_performance_receipt *left,
-	const struct labdemo_performance_receipt *right)
-{
-	return left->metadata_dirty == right->metadata_dirty &&
-	       left->metadata_durable == right->metadata_durable &&
-	       left->metadata_requests == right->metadata_requests &&
-	       left->metadata_coalesced == right->metadata_coalesced &&
-	       left->metadata_commits == right->metadata_commits &&
-	       left->metadata_pending == right->metadata_pending;
 }
 
 static int demo_quiescence_flush(int fd)
@@ -347,10 +311,7 @@ static void demo_quiescence_fence(const char *mode, const char *point,
 			    previous.snapshot.observer_lifecycle_generation &&
 		    current.snapshot.sample_tick > previous.snapshot.sample_tick &&
 		    performance_storage_equal(&previous.snapshot,
-				      &current.snapshot) &&
-		    metadata_state_equal(&previous, &current) &&
-		    current.metadata_pending == 0 &&
-		    current.metadata_dirty == current.metadata_durable)
+				      &current.snapshot))
 			stable_rounds++;
 		else
 			stable_rounds = 0;
@@ -360,7 +321,7 @@ static void demo_quiescence_fence(const char *mode, const char *point,
 			receipt->attempts = (uint64)attempt;
 			receipt->stable_rounds = stable_rounds;
 			memcpy(&receipt->performance, &current, sizeof(current));
-			printf("agentos:demo schema=2 nonce=%llu kind=fence mode=%s seq=%d point=%s tick_us=%llu attempts=%llu stable_rounds=%llu observer_pid=%llu observer_tick=%llu observer_lifecycle_id=%llu observer_lifecycle_generation=%llu counter_scope=global epoch_commits=%llu epoch_buffers_staged=%llu physical_writes=%llu physical_reads=%llu durable_flushes=%llu deduplicated_stages=%llu workload_syscalls=%llu directory_block_probes=%llu directory_entries_examined=%llu virtio_notifications=%llu virtio_submitted_requests=%llu virtio_write_batch_calls=%llu virtio_batched_write_requests=%llu virtio_indirect_write_batch_calls=%llu virtio_read_batch_calls=%llu virtio_batched_read_requests=%llu overwrite_prereads_skipped=%llu metadata_dirty=%llu metadata_durable=%llu metadata_requests=%llu metadata_coalesced=%llu metadata_commits=%llu metadata_pending=%llu\n",
+			printf("agentos:demo schema=2 nonce=%llu kind=fence mode=%s seq=%d point=%s tick_us=%llu attempts=%llu stable_rounds=%llu observer_pid=%llu observer_tick=%llu observer_lifecycle_id=%llu observer_lifecycle_generation=%llu counter_scope=global epoch_commits=%llu epoch_buffers_staged=%llu physical_writes=%llu physical_reads=%llu durable_flushes=%llu deduplicated_stages=%llu workload_syscalls=%llu directory_block_probes=%llu directory_entries_examined=%llu virtio_notifications=%llu virtio_submitted_requests=%llu virtio_write_batch_calls=%llu virtio_batched_write_requests=%llu virtio_indirect_write_batch_calls=%llu virtio_read_batch_calls=%llu virtio_batched_read_requests=%llu overwrite_prereads_skipped=%llu\n",
 			       (uint64)LABDEMO_RUN_NONCE, mode, sequence, point,
 			       receipt->tick_us, receipt->attempts,
 			       receipt->stable_rounds, current.observer_pid,
@@ -383,12 +344,7 @@ static void demo_quiescence_fence(const char *mode, const char *point,
 			       current.snapshot.virtio_indirect_write_batch_calls,
 			       current.snapshot.virtio_read_batch_calls,
 			       current.snapshot.virtio_batched_read_requests,
-			       current.snapshot.overwrite_prereads_skipped,
-			       current.metadata_dirty, current.metadata_durable,
-			       current.metadata_requests,
-			       current.metadata_coalesced,
-			       current.metadata_commits,
-			       current.metadata_pending);
+			       current.snapshot.overwrite_prereads_skipped);
 #ifdef LABDEMO_DIAGNOSTICS
 			demo_diag_take(&diag_after);
 			demo_diag_print(mode, point, &diag_before, &diag_after);
@@ -466,17 +422,7 @@ static void print_mechanism_delta(
 				after->virtio_batched_read_requests);
 	(void)performance_delta(before->overwrite_prereads_skipped,
 				after->overwrite_prereads_skipped);
-	(void)performance_delta(before_receipt->metadata_dirty,
-				after_receipt->metadata_dirty);
-	(void)performance_delta(before_receipt->metadata_durable,
-				after_receipt->metadata_durable);
-	(void)performance_delta(before_receipt->metadata_requests,
-				after_receipt->metadata_requests);
-	(void)performance_delta(before_receipt->metadata_coalesced,
-				after_receipt->metadata_coalesced);
-	(void)performance_delta(before_receipt->metadata_commits,
-				after_receipt->metadata_commits);
-	printf("agentos:demo schema=2 nonce=%llu kind=mechanism mode=%s scope=%s observer_pid=%llu before_tick=%llu after_tick=%llu observer_lifecycle_id=%llu observer_lifecycle_generation=%llu counter_scope=global before_epoch_commits=%llu after_epoch_commits=%llu before_epoch_buffers_staged=%llu after_epoch_buffers_staged=%llu before_physical_writes=%llu after_physical_writes=%llu before_physical_reads=%llu after_physical_reads=%llu before_durable_flushes=%llu after_durable_flushes=%llu before_deduplicated_stages=%llu after_deduplicated_stages=%llu before_cow_shared_pages=%llu after_cow_shared_pages=%llu before_cow_copied_pages=%llu after_cow_copied_pages=%llu before_cow_fault_promotions=%llu after_cow_fault_promotions=%llu before_exec_cache_hits=%llu after_exec_cache_hits=%llu before_exec_cache_misses=%llu after_exec_cache_misses=%llu before_exec_cache_shared_pages=%llu after_exec_cache_shared_pages=%llu before_exec_cache_evictions=%llu after_exec_cache_evictions=%llu before_workload_syscalls=%llu after_workload_syscalls=%llu before_directory_block_probes=%llu after_directory_block_probes=%llu before_directory_entries_examined=%llu after_directory_entries_examined=%llu before_virtio_notifications=%llu after_virtio_notifications=%llu before_virtio_submitted_requests=%llu after_virtio_submitted_requests=%llu before_virtio_write_batch_calls=%llu after_virtio_write_batch_calls=%llu before_virtio_batched_write_requests=%llu after_virtio_batched_write_requests=%llu before_virtio_indirect_write_batch_calls=%llu after_virtio_indirect_write_batch_calls=%llu before_virtio_read_batch_calls=%llu after_virtio_read_batch_calls=%llu before_virtio_batched_read_requests=%llu after_virtio_batched_read_requests=%llu before_overwrite_prereads_skipped=%llu after_overwrite_prereads_skipped=%llu before_metadata_dirty=%llu after_metadata_dirty=%llu before_metadata_durable=%llu after_metadata_durable=%llu before_metadata_requests=%llu after_metadata_requests=%llu before_metadata_coalesced=%llu after_metadata_coalesced=%llu before_metadata_commits=%llu after_metadata_commits=%llu before_metadata_pending=%llu after_metadata_pending=%llu\n",
+	printf("agentos:demo schema=2 nonce=%llu kind=mechanism mode=%s scope=%s observer_pid=%llu before_tick=%llu after_tick=%llu observer_lifecycle_id=%llu observer_lifecycle_generation=%llu counter_scope=global before_epoch_commits=%llu after_epoch_commits=%llu before_epoch_buffers_staged=%llu after_epoch_buffers_staged=%llu before_physical_writes=%llu after_physical_writes=%llu before_physical_reads=%llu after_physical_reads=%llu before_durable_flushes=%llu after_durable_flushes=%llu before_deduplicated_stages=%llu after_deduplicated_stages=%llu before_cow_shared_pages=%llu after_cow_shared_pages=%llu before_cow_copied_pages=%llu after_cow_copied_pages=%llu before_cow_fault_promotions=%llu after_cow_fault_promotions=%llu before_exec_cache_hits=%llu after_exec_cache_hits=%llu before_exec_cache_misses=%llu after_exec_cache_misses=%llu before_exec_cache_shared_pages=%llu after_exec_cache_shared_pages=%llu before_exec_cache_evictions=%llu after_exec_cache_evictions=%llu before_workload_syscalls=%llu after_workload_syscalls=%llu before_directory_block_probes=%llu after_directory_block_probes=%llu before_directory_entries_examined=%llu after_directory_entries_examined=%llu before_virtio_notifications=%llu after_virtio_notifications=%llu before_virtio_submitted_requests=%llu after_virtio_submitted_requests=%llu before_virtio_write_batch_calls=%llu after_virtio_write_batch_calls=%llu before_virtio_batched_write_requests=%llu after_virtio_batched_write_requests=%llu before_virtio_indirect_write_batch_calls=%llu after_virtio_indirect_write_batch_calls=%llu before_virtio_read_batch_calls=%llu after_virtio_read_batch_calls=%llu before_virtio_batched_read_requests=%llu after_virtio_batched_read_requests=%llu before_overwrite_prereads_skipped=%llu after_overwrite_prereads_skipped=%llu\n",
 	       (uint64)LABDEMO_RUN_NONCE, mode, scope,
 	       before_receipt->observer_pid, before->sample_tick,
 	       after->sample_tick, before->observer_lifecycle_id,
@@ -516,19 +462,7 @@ static void print_mechanism_delta(
 	       before->virtio_batched_read_requests,
 	       after->virtio_batched_read_requests,
 	       before->overwrite_prereads_skipped,
-	       after->overwrite_prereads_skipped,
-	       before_receipt->metadata_dirty,
-	       after_receipt->metadata_dirty,
-	       before_receipt->metadata_durable,
-	       after_receipt->metadata_durable,
-	       before_receipt->metadata_requests,
-	       after_receipt->metadata_requests,
-	       before_receipt->metadata_coalesced,
-	       after_receipt->metadata_coalesced,
-	       before_receipt->metadata_commits,
-	       after_receipt->metadata_commits,
-	       before_receipt->metadata_pending,
-	       after_receipt->metadata_pending);
+	       after->overwrite_prereads_skipped);
 }
 
 static void demo_corpus_name(char name[6], char prefix, int index)
@@ -1000,6 +934,7 @@ static void report_progress(char stage, uint records_examined,
 static void run_sentinel(void)
 {
 	static struct agent_event event;
+	static struct agent_file_live_watch watch;
 	static struct agent_op op;
 	static struct agent_result res;
 	int matched = 0;
@@ -1009,17 +944,31 @@ static void run_sentinel(void)
 
 	created("sentinel");
 	check(agent_heartbeat(5) == 0, "heartbeat");
-	check(agent_watch(AGENT_EVENT_FILE_STATUS, "status=failed") == 0,
-	      "watch failed");
+	memset(&watch, 0, sizeof(watch));
+	watch.version = AGENT_FILE_LIVE_WATCH_VERSION;
+	watch.query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	watch.query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(watch.query.project, DEMO_PROJECT);
+	strcpy(watch.query.run_id, DEMO_RUN);
+	strcpy(watch.query.status, "failed");
+	check(agent_live_watch(&watch) == AGENT_STATUS_OK,
+	      "watch failed query");
+	check(watch.watch_id != 0 && watch.catalog_generation != 0 &&
+	      (watch.flags & AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED) == 0,
+	      "failed query watch handshake");
 	ready('S');
-	printf("agentos:event type=WATCH_REGISTERED tick=%d role=sentinel event=FILE_STATUS filter=status=failed\n",
-	       event_tick());
+	printf("agentos:event type=WATCH_REGISTERED tick=%d role=sentinel event=FILE_QUERY predicate=project=%s;run_id=%s;status=failed watch_id=%llu initial_generation=%llu\n",
+	       event_tick(), DEMO_PROJECT, DEMO_RUN, watch.watch_id,
+	       watch.initial_generation);
 	printf("agentos:event type=AGENT_STATE tick=%d role=sentinel state=WAITING\n",
 	       event_tick());
 	for (int i = 0; i < 64; i++) {
 		check(agent_wait(&event, 300) == AGENT_STATUS_OK,
 		      "sentinel wait");
-		if (event.type == AGENT_EVENT_FILE_STATUS) {
+		if (event.type == AGENT_EVENT_FILE_QUERY &&
+		    event.status == AGENT_STATUS_OK &&
+		    event.cause_sequence > watch.initial_generation &&
+		    strncmp(event.payload, "change=ENTER;", 13) == 0) {
 			matched = 1;
 			break;
 		}
@@ -1029,6 +978,8 @@ static void run_sentinel(void)
 	}
 	check(matched, "sentinel failed file event");
 	check(agent_heartbeat_stop() == 0, "sentinel heartbeat stop");
+	check(agent_live_unwatch(&watch) == AGENT_STATUS_OK,
+	      "unwatch failed query");
 	printf("labdemo_ucore: sentinel event payload=%s\n", event.payload);
 	printf("agentos:event type=AGENT_STATE tick=%d role=sentinel state=RUNNING event_id=%d corr_id=%d\n",
 	       event_tick(), (int)event.event_id, (int)event.corr_id);
@@ -1281,7 +1232,7 @@ static void set_demo_meta(int fid, const char *physical, const char *stage,
 	strcpy(meta.status, status);
 	strcpy(meta.summary, summary);
 	meta.dependency_mask = deps;
-	meta.flags = AGENT_FILE_META_F_PERSIST;
+	meta.flags = 0;
 	check(agent_file_meta_set(&meta) == 0, "demo meta set");
 }
 
@@ -1375,11 +1326,11 @@ static void check_global_audit(int sentinel_pid)
 		if (r->kind == AGENT_AUDIT_KIND_CONTEXT)
 			has_context = 1;
 		if (r->kind == AGENT_AUDIT_KIND_EVENT_ENQUEUE &&
-		    r->event_type == AGENT_EVENT_FILE_STATUS &&
+		    r->event_type == AGENT_EVENT_FILE_QUERY &&
 		    r->target_pid == sentinel_pid)
 			has_enqueue = 1;
 		if (r->kind == AGENT_AUDIT_KIND_EVENT_CONSUME &&
-		    r->event_type == AGENT_EVENT_FILE_STATUS &&
+		    r->event_type == AGENT_EVENT_FILE_QUERY &&
 		    r->pid == sentinel_pid)
 			has_consume = 1;
 		if (r->kind == AGENT_AUDIT_KIND_SCHED &&
@@ -1426,7 +1377,7 @@ static void check_global_audit(int sentinel_pid)
 	demo_audit_filter.flags =
 		AGENT_AUDIT_FILTER_TARGET_PID | AGENT_AUDIT_FILTER_EVENT_TYPE;
 	demo_audit_filter.target_pid = sentinel_pid;
-	demo_audit_filter.event_type = AGENT_EVENT_FILE_STATUS;
+	demo_audit_filter.event_type = AGENT_EVENT_FILE_QUERY;
 	event_query = agent_audit_query(&demo_audit_filter, demo_audit_records,
 					DEMO_OBSERVE_PAGE_RECORDS);
 	check(event_query >= 2, "audit query event");
@@ -1434,7 +1385,7 @@ static void check_global_audit(int sentinel_pid)
 		check(demo_audit_records[i].target_pid == sentinel_pid,
 		      "audit query event target");
 		check(demo_audit_records[i].event_type ==
-			      AGENT_EVENT_FILE_STATUS,
+			      AGENT_EVENT_FILE_QUERY,
 		      "audit query event type");
 	}
 
@@ -1862,7 +1813,7 @@ static void run_orchestrator(void)
 	check_global_audit(sentinel_pid);
 	check_unified_timeline(sentinel_pid);
 	check_provenance_graph(sentinel_pid);
-	check(demo_quiescence_sync() == 0, "workflow durable boundary");
+	check(demo_quiescence_sync() == 0, "workflow completion sync");
 	workflow_finished_us = demo_now_us();
 	take_performance_snapshot(&workflow_perf_after);
 	printf("agentos:demo schema=2 nonce=%llu kind=trace seq=5 tick_us=%llu role=orchestrator event=RECOVERED value0=1 value1=0\n",

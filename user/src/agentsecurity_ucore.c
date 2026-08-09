@@ -7,6 +7,7 @@
 
 #define TEST_NOINLINE __attribute__((noinline))
 #define LOW_AUDIT_CHURN_COUNT 200
+#define WORKFLOW_EVIDENCE_RECORD_CAP 64
 
 static void check(int ok, const char *msg)
 {
@@ -1228,8 +1229,9 @@ static void run_orchestrator(void)
 	security_audit_filter.kind = AGENT_AUDIT_KIND_CONTEXT;
 	n = agent_audit_query(&security_audit_filter, security_audit_records,
 			      AGENT_AUDIT_MAX_RECORDS);
-	check(n > 0 && n <= AGENT_AUDIT_LOW_PRINCIPAL_MAX,
-	      "low principal audit partition bounded");
+	check(n > 0 && n < LOW_AUDIT_CHURN_COUNT &&
+		      n <= WORKFLOW_EVIDENCE_RECORD_CAP,
+	      "workflow evidence projection bounded");
 	for (int i = 0; i < n; i++)
 		if (strcmp(security_audit_records[i].text,
 			   "low-audit-new") == 0)
@@ -1331,18 +1333,20 @@ static void check_plain_process_denied(void)
 	check(agent_file_meta_init() == -1, "plain meta init denied");
 	check(agent_file_meta_set(&meta) == -1, "plain meta set denied");
 	fd = open(".agentmeta", O_RDONLY);
-	check(fd == -1, "plain open agentmeta denied");
+	check(fd == -1, "retired agentmeta bank is absent");
 	fd = open(".agentmeta", O_CREATE | O_RDWR);
-	check(fd == -1, "plain create agentmeta denied");
-	check(unlink(".agentmeta") == -1, "plain unlink agentmeta denied");
+	check(fd >= 0, "retired agentmeta name is an ordinary file");
+	check(close(fd) == 0, "close ordinary agentmeta file");
+	check(unlink(".agentmeta") == 0, "unlink ordinary agentmeta file");
 	fd = open(".agentmeta1", O_RDONLY);
-	check(fd == -1, "plain open agentmeta1 denied");
+	check(fd == -1, "retired agentmeta1 bank is absent");
 	fd = open(".agentmeta1", O_CREATE | O_RDWR);
-	check(fd == -1, "plain create agentmeta1 denied");
-	check(unlink(".agentmeta1") == -1,
-	      "plain unlink agentmeta1 denied");
+	check(fd >= 0, "retired agentmeta1 name is an ordinary file");
+	check(close(fd) == 0, "close ordinary agentmeta1 file");
+	check(unlink(".agentmeta1") == 0,
+	      "unlink ordinary agentmeta1 file");
 	printf("agentsecurity_ucore: plain_process_denied=1\n");
-	printf("agentsecurity_ucore: .agentmeta_protected=1\n");
+	printf("agentsecurity_ucore: retired_metadata_banks_plain_files=1\n");
 }
 
 static void check_legacy_mail_fail_closed(void)

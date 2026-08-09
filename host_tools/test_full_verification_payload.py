@@ -82,7 +82,7 @@ def make_payload(
         "settings": {
             "agent_marker_grace_seconds": "2s",
             "mechanism_marker_grace_seconds": "5s",
-            "workflow_stability_runs": 3,
+            "workflow_runs": 1,
         },
         "steps": steps,
         "artifacts": artifacts,

@@ -25,7 +25,7 @@
   <text x="82" y="208" class="tiny">报告 / 证据</text>
   <rect x="300" y="82" width="650" height="160" fill="#b8d8a4" class="box"/>
   <text x="326" y="126" class="label">用户态 Agent 程序</text>
-  <text x="326" y="160" class="small">编排 / 哨兵 / 分析 / 恢复 / 中继</text>
+  <text x="326" y="160" class="small">编排 / 哨兵 / 分析 / 复核 / 中继</text>
   <text x="326" y="194" class="tiny">综合示例、最终验收、性能观测、科研平台编排</text>
   <rect x="985" y="105" width="220" height="120" fill="#b7d1e8" class="box"/>
   <text x="1025" y="148" class="label">宿主机工具</text>
@@ -43,16 +43,16 @@
   <rect x="735" y="465" width="175" height="52" fill="#f8fafc" class="box"/>
   <text x="774" y="498" class="small">工具执行</text>
   <rect x="370" y="540" width="160" height="52" fill="#f8fafc" class="box"/>
-  <text x="393" y="573" class="small">文件元数据</text>
+  <text x="384" y="573" class="small">实时属性查询</text>
   <rect x="550" y="540" width="165" height="52" fill="#f8fafc" class="box"/>
   <text x="586" y="573" class="small">事件循环</text>
   <rect x="735" y="540" width="175" height="52" fill="#f8fafc" class="box"/>
-  <text x="756" y="573" class="small">审计时间线</text>
+  <text x="746" y="573" class="small">证据环与 Fence</text>
   <rect x="990" y="420" width="220" height="150" fill="#b7d1e8" class="box"/>
-  <text x="1020" y="462" class="label">内核私有状态</text>
-  <text x="1020" y="496" class="small">.agentmeta</text>
-  <text x="1020" y="526" class="small">上下文影子页</text>
-  <text x="1020" y="556" class="small">事件 / 审计环</text>
+  <text x="1020" y="462" class="label">Workflow 域</text>
+  <text x="1020" y="496" class="small">U / P / F Credit</text>
+  <text x="1020" y="526" class="small">Volatile 索引</text>
+  <text x="1020" y="556" class="small">Evidence Ring</text>
   <path d="M235 165 L300 165" class="line"/>
   <path d="M625 242 L625 330" class="line"/>
   <path d="M625 360 L625 400" class="line"/>

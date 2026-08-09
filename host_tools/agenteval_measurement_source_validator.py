@@ -29,7 +29,7 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / SOURCE_RELATIVE
-CONTRACT_VERSION = "agenteval-measurement-source-v11"
+CONTRACT_VERSION = "agenteval-measurement-source-v12"
 PRINT_FORMAT = (
     r'"agenteval_ucore: sample schema=2 experiment=%s load=%d pair=%d '
     r'variant=%s order=%s cache=%s operations=%d dataset_size=%d '

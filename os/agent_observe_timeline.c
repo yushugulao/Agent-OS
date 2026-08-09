@@ -1,6 +1,5 @@
 #include "agent_context.h"
 #include "agent_internal.h"
-#include "agent_observe_recovery.h"
 #include "defs.h"
 #include "kernel_work.h"
 #include "timer.h"
@@ -128,6 +127,7 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 	uint64 context_span_owner;
 	uint64 context_cause_control;
 	uint64 context_cause_branch;
+	int audit_from_evidence;
 	int audit_global;
 	int audit_allowed;
 	int context_cause_pid;
@@ -201,10 +201,13 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 			agent_identity_proc_scope(p), &audit_view);
 	audit_visible = audit_view.visible_records;
 	for (uint i = 0; i < audit_visible; i++) {
-		if (!agent_observe_audit_view_record_locked(
+		if (!agent_observe_audit_view_record_source_locked(
 			    &audit_view, i, 0, &audit_record,
-			    &audit_span_owner))
+			    &audit_span_owner, &audit_from_evidence))
 			break;
+		/* The context walk above is the provenance projection for ring data. */
+		if (audit_from_evidence)
+			continue;
 		if (!audit_global &&
 		    (audit_record.span_id != span_id ||
 		     audit_span_owner != span_owner))
@@ -293,23 +296,18 @@ static void agent_timeline_from_sched(struct agent_sched_record *record,
 	safestrcpy(timeline->text, "sched", sizeof(timeline->text));
 }
 
-static int agent_timeline_load_context(struct proc *p, uint64 *cursor,
-				       uint64 visible, uint64 oldest,
-				       struct agent_timeline_record *timeline)
+static int agent_timeline_load_context(
+	struct proc *p, const struct agent_evidence_view *view, uint64 *cursor,
+	struct agent_timeline_record *timeline)
 {
-	struct agent_context_record record;
-	uint64 seq;
-	uint64 slot;
+	while (view != 0 && *cursor < view->visible_records) {
+		uint index = (uint)(*cursor)++;
 
-	while (*cursor < visible && p->context_path_capacity > 0) {
-		seq = oldest + *cursor;
-		(*cursor)++;
-		slot = (seq - 1) % p->context_path_capacity;
-		if (agent_context_read_record(p, slot, &record) < 0)
-			return -1;
-		if (record.sequence != seq)
+		if (!agent_evidence_view_timeline(
+			    view, index, timeline, 0))
+			return 0;
+		if (timeline->pid != p->pid)
 			continue;
-		agent_timeline_from_context(p, &record, timeline);
 		return 1;
 	}
 	return 0;
@@ -340,13 +338,18 @@ static int agent_timeline_load_audit(
 {
 	struct agent_audit_record record;
 	uint64 record_span_owner;
+	int from_evidence;
 
 	while (view != 0 && *cursor < view->visible_records) {
 		uint index = (*cursor)++;
 
-		if (!agent_observe_audit_view_record_locked(
-			    view, index, 1, &record, &record_span_owner))
+		if (!agent_observe_audit_view_record_source_locked(
+			    view, index, 1, &record, &record_span_owner,
+			    &from_evidence))
 			return 0;
+		/* Context records are projected once through the canonical ring. */
+		if (from_evidence)
+			continue;
 		if (!global &&
 		    (record.span_id != span_id ||
 		     record_span_owner != span_owner))
@@ -397,6 +400,7 @@ static int agent_timeline_export(struct proc *p,
 				 uint64 *scan_epoch_out)
 {
 	struct agent_observe_audit_view audit_view;
+	struct agent_evidence_view context_view;
 	struct agent_timeline_record context_timeline;
 	struct agent_timeline_record sched_timeline;
 	struct agent_timeline_record audit_timeline;
@@ -406,7 +410,6 @@ static int agent_timeline_export(struct proc *p,
 	uint64 audit_scan_visible;
 	uint64 reserved = 0;
 	uint64 scan_visible;
-	uint64 context_oldest;
 	uint64 sched_start;
 	uint64 ci = 0;
 	uint64 si = 0;
@@ -424,13 +427,14 @@ static int agent_timeline_export(struct proc *p,
 	int matched = 0;
 	int total;
 	int pick;
+	struct workflow_lifecycle_key lifecycle = vfs_proc_lifecycle(p);
 
-	context_visible = agent_observe_timeline_source_enabled(
-				  filter, AGENT_TIMELINE_SOURCE_CONTEXT) ?
-				  p->context_path_count :
-				  0;
-	if (context_visible > p->context_path_capacity)
-		context_visible = p->context_path_capacity;
+	memset(&context_view, 0, sizeof(context_view));
+	memset(&audit_view, 0, sizeof(audit_view));
+	if (agent_observe_timeline_source_enabled(
+		    filter, AGENT_TIMELINE_SOURCE_CONTEXT))
+		(void)agent_evidence_view_open(lifecycle, &context_view);
+	context_visible = context_view.visible_records;
 	sched_visible = agent_observe_timeline_source_enabled(
 				filter, AGENT_TIMELINE_SOURCE_SCHED) ?
 				p->agent_sched_trace_count :
@@ -442,10 +446,13 @@ static int agent_timeline_export(struct proc *p,
 				filter, AGENT_TIMELINE_SOURCE_AUDIT) &&
 				(audit_global ||
 				 agent_identity_has_cap(p, AGENT_CAP_AUDIT_WRITE));
-	audit_scan_visible = audit_allowed ?
-		agent_observe_audit_scope_visible_locked(
-			agent_identity_proc_scope(p)) : 0;
-	total = (int)(context_visible + sched_visible + audit_scan_visible);
+	if (audit_allowed)
+		(void)agent_observe_audit_view_open_locked(
+			agent_identity_proc_scope(p), &audit_view);
+	audit_scan_visible = audit_allowed ? audit_view.visible_records : 0;
+	total = (int)(agent_evidence_view_count_pid(&context_view, p->pid) +
+		      sched_visible +
+		      (audit_allowed ? audit_view.legacy_visible_records : 0));
 	if (scan_epoch_out == 0 && max == 0 &&
 	    (filter == 0 || filter->flags == 0) &&
 	    (!audit_allowed || audit_global))
@@ -456,22 +463,22 @@ static int agent_timeline_export(struct proc *p,
 			agent_observe_scope_epoch(agent_identity_proc_scope(p)) : 0;
 		if (scan_epoch_out != 0 && candidate_epoch == 0)
 			return AGENT_STATUS_NO_SPACE;
-		context_visible = agent_observe_timeline_source_enabled(
-					  filter,
-					  AGENT_TIMELINE_SOURCE_CONTEXT) ?
-					  p->context_path_count :
-					  0;
-		if (context_visible > p->context_path_capacity)
-			context_visible = p->context_path_capacity;
+		memset(&context_view, 0, sizeof(context_view));
+		if (agent_observe_timeline_source_enabled(
+			    filter, AGENT_TIMELINE_SOURCE_CONTEXT))
+			(void)agent_evidence_view_open(lifecycle, &context_view);
+		context_visible = context_view.visible_records;
 		sched_visible = agent_observe_timeline_source_enabled(
 					filter, AGENT_TIMELINE_SOURCE_SCHED) ?
 					p->agent_sched_trace_count :
 					0;
 		if (sched_visible > AGENT_SCHED_TRACE_CAP)
 			sched_visible = AGENT_SCHED_TRACE_CAP;
-		audit_scan_visible = audit_allowed ?
-			agent_observe_audit_scope_visible_locked(
-				agent_identity_proc_scope(p)) : 0;
+		memset(&audit_view, 0, sizeof(audit_view));
+		if (audit_allowed)
+			(void)agent_observe_audit_view_open_locked(
+				agent_identity_proc_scope(p), &audit_view);
+		audit_scan_visible = audit_allowed ? audit_view.visible_records : 0;
 		scan_visible = context_visible + sched_visible +
 			       audit_scan_visible;
 		if (scan_visible <= reserved) {
@@ -485,16 +492,11 @@ static int agent_timeline_export(struct proc *p,
 
 	span_id = p->agent_current_span_id;
 	span_owner = p->agent_current_span_owner;
-	memset(&audit_view, 0, sizeof(audit_view));
-	if (audit_allowed)
-		agent_observe_audit_view_open_locked(
-			agent_identity_proc_scope(p), &audit_view);
-	context_oldest = p->context_path_oldest;
 	sched_start = p->agent_sched_trace_count > AGENT_SCHED_TRACE_CAP ?
 			      p->agent_sched_trace_head :
 			      0;
 	have_context = agent_timeline_load_context(
-		p, &ci, context_visible, context_oldest, &context_timeline);
+		p, &context_view, &ci, &context_timeline);
 	if (have_context < 0)
 		return AGENT_STATUS_NO_SPACE;
 	have_sched = agent_timeline_load_sched(p, &si, sched_visible,
@@ -543,8 +545,7 @@ static int agent_timeline_export(struct proc *p,
 		}
 		if (pick == AGENT_TIMELINE_SOURCE_CONTEXT) {
 			have_context = agent_timeline_load_context(
-				p, &ci, context_visible, context_oldest,
-				&context_timeline);
+				p, &context_view, &ci, &context_timeline);
 			if (have_context < 0)
 				return AGENT_STATUS_NO_SPACE;
 		} else if (pick == AGENT_TIMELINE_SOURCE_SCHED) {
@@ -820,7 +821,6 @@ agent_observe_proc_reset(struct proc *p)
 {
 	if (p == 0)
 		return;
-	agent_observe_recovery_unbind_proc(p);
 	p->agent_sched_policy = 0;
 	p->agent_sched_weight = 0;
 	p->agent_sched_priority = 0;

@@ -6,6 +6,7 @@
 #include "../../agent_performance_abi.h"
 #include "../../agent_resource_abi.h"
 #include "../../agent_tool_abi.h"
+#include "../../agent_workflow_fence_abi.h"
 #define AGENT_TYPE_NONE  0
 #define AGENT_TYPE_AGENT 1
 
@@ -148,8 +149,15 @@
 #define AGENT_AUDIT_FILTER_STATUS         (1ULL << 9)
 
 #define AGENT_FILE_META_F_DELETE  1
+/*
+ * Compatibility tombstones.  Their numeric values remain frozen, but
+ * agent_file_meta_set() rejects both bits: live-query metadata is volatile
+ * and enters the index only through an explicit metadata update.
+ */
 #define AGENT_FILE_META_F_PERSIST 2
 #define AGENT_FILE_META_F_AUTOSCAN 4
+#define AGENT_FILE_META_F_UNSUPPORTED_MASK \
+	(AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN)
 
 #define AGENT_FILE_META_UPDATE_PHYSICAL   (1ULL << 0)
 #define AGENT_FILE_META_UPDATE_LOGICAL    (1ULL << 1)
@@ -216,7 +224,12 @@
 #define AGENT_EVENT_LLM_DONE      7
 #define AGENT_EVENT_DASHBOARD_EXPORT 8
 #define AGENT_EVENT_CANCELLED     9
-#define AGENT_EVENT_MAX           AGENT_EVENT_CANCELLED
+#define AGENT_EVENT_FILE_QUERY   10
+#define AGENT_EVENT_MAX           AGENT_EVENT_FILE_QUERY
+
+#define AGENT_FILE_LIVE_WATCH_VERSION 1U
+#define AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED (1U << 0)
+#define AGENT_FILE_LIVE_WATCH_F_ACK_RESYNC      (1U << 1)
 
 #define AGENT_EVENT_MASK(type) (1ULL << (type))
 #define AGENT_IPC_EVENT_MESSAGE  AGENT_EVENT_MASK(AGENT_EVENT_MESSAGE)
@@ -667,6 +680,16 @@ struct agent_file_query {
 	char summary_contains[AGENT_FILE_SUMMARY_SIZE];
 };
 
+struct agent_file_live_watch {
+	unsigned int version;
+	unsigned int flags;
+	unsigned long long watch_id;
+	unsigned long long initial_generation;
+	unsigned long long catalog_generation;
+	unsigned long long resync_generation;
+	struct agent_file_query query;
+};
+
 struct agent_file_query_result {
 	int total_hits;
 	int returned;
@@ -722,6 +745,7 @@ int agent_audit_snapshot(struct agent_audit_record *records, int max);
 int agent_audit_query(struct agent_audit_filter *filter,
 		      struct agent_audit_record *records, int max);
 int agent_audit_receipt(struct agent_audit_receipt_request *request);
+/* Compatibility tombstone: retained for source ABI; always unsupported. */
 int agent_observe_recovery(struct agent_observe_recovery_request *request,
 			   void *records);
 int agent_span_trace_snapshot(struct agent_audit_record *records, int max);
@@ -735,6 +759,8 @@ int agent_timeline_read(struct agent_timeline_filter *filter,
 int agent_provenance_snapshot(struct agent_provenance_edge *edges, int max);
 int agent_ledger_snapshot(struct agent_ledger_summary *summary);
 int agent_run(struct agent_op *ops, struct agent_result *results, int count, uint64 flags);
+int agent_workflow_fence(const struct agent_workflow_fence_request *request,
+			 struct agent_workflow_fence_receipt *receipt);
 int agent_call(struct agent_request *req, struct agent_response *resp);
 int agent_tool_list(struct agent_tool_desc *out, int max);
 int sys_tool_call(struct agent_request_v2 *req, struct agent_response_v2 *resp);
@@ -757,6 +783,8 @@ int context_rollback(uint64 sequence);
 int context_clear(void);
 int agent_watch(int event_type, const char *filter);
 int agent_unwatch(int event_type, const char *filter);
+int agent_live_watch(struct agent_file_live_watch *watch);
+int agent_live_unwatch(struct agent_file_live_watch *watch);
 int agent_wait(struct agent_event *event, int timeout_ticks);
 int agent_wait_cancel(int pid, const char *reason);
 int agent_heartbeat(int interval_ticks);

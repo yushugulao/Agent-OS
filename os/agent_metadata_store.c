@@ -2730,7 +2730,8 @@ out:
 
 static int
 agent_meta_persist_fence_owner(uint owner, uint scope_id, uint64 target,
-			       int require_replication, int require_idle)
+			       int require_replication, int require_idle,
+			       uint64 *metadata_generation)
 {
 	void *token = agent_metadata_txn_token();
 	uint step_limit = require_replication ?
@@ -2738,10 +2739,14 @@ agent_meta_persist_fence_owner(uint owner, uint scope_id, uint64 target,
 		AGENT_META_REPLICATED_STEP_LIMIT;
 	int status = -1;
 
-	if (target == 0 &&
-	    scope_fence_reached(scope_id, target, require_replication,
-				require_idle))
-		return 0;
+	if (metadata_generation)
+		*metadata_generation = 0;
+	if (metadata_generation == 0) {
+		if (target == 0 &&
+		    scope_fence_reached(scope_id, target, require_replication,
+					require_idle))
+			return 0;
+	}
 	if (!agent_metadata_txn_lock(1))
 		return -1;
 	if ((submitter != 0 && submitter != token) ||
@@ -2799,6 +2804,17 @@ agent_meta_persist_fence_owner(uint owner, uint scope_id, uint64 target,
 			break;
 	}
 out:
+	if (status == 0 && metadata_generation != 0) {
+		int enabled = intr_save();
+
+		if (!scope_fence_reached(scope_id, target,
+					require_replication, require_idle) ||
+		    agent_metadata_catalog_generation_snapshot(
+			    metadata_generation) < 0 ||
+		    *metadata_generation == 0)
+			status = -1;
+		intr_restore(enabled);
+	}
 	if (submitter == token) {
 		submitter = 0;
 		wait_queue_wake_all(&waiters);
@@ -3022,15 +3038,21 @@ int agent_metadata_store_durability_fence(uint scope_id)
 	if (owner != expected_owner)
 		return -1;
 	result = agent_meta_persist_fence_owner(
-		owner, scope_id, scope_target(scope_id), 0, 0);
+		owner, scope_id, scope_target(scope_id), 0, 0, 0);
 	return result;
 }
 
-int agent_metadata_store_quiescence_fence(uint scope_id)
+int
+agent_metadata_store_quiescence_fence_snapshot(
+	uint scope_id, uint64 *metadata_generation)
 {
 	uint owner = bio_current_owner();
 	uint expected_owner;
 	int result;
+
+	if (metadata_generation == 0)
+		return -1;
+	*metadata_generation = 0;
 
 	if (scope_id == VFS_SCOPE_SYSTEM)
 		expected_owner = FS_OWNER_SYSTEM;
@@ -3042,8 +3064,18 @@ int agent_metadata_store_quiescence_fence(uint scope_id)
 	if (owner != expected_owner)
 		return -1;
 	result = agent_meta_persist_fence_owner(
-		owner, scope_id, scope_fence_target(scope_id), 1, 1);
+		owner, scope_id, scope_fence_target(scope_id), 1, 1,
+		metadata_generation);
 	return result;
+}
+
+int
+agent_metadata_store_quiescence_fence(uint scope_id)
+{
+	uint64 metadata_generation;
+
+	return agent_metadata_store_quiescence_fence_snapshot(
+		scope_id, &metadata_generation);
 }
 
 int

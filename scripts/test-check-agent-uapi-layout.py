@@ -23,7 +23,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 185)
+        self.assertEqual(len(self.golden), 248)
         self.assertEqual(
             self.golden["agent_uapi_layout_value_ledger_version"], 3
         )
@@ -77,6 +77,69 @@ class AgentUapiLayoutTests(unittest.TestCase):
             ],
             225,
         )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_workflow_fence_request"],
+            56,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_workflow_fence_receipt"],
+            320,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_offset_workflow_fence_request_reserved"],
+            13,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_workflow_fence_receipt_resource_used"
+            ],
+            97,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_workflow_fence_receipt_credit_digest"
+            ],
+            193,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_workflow_fence_receipt_evidence_root"
+            ],
+            289,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_workflow_fence_receipt_evidence_last_sequence"
+            ],
+            73,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_workflow_fence_version"],
+            1,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_file_live_watch"],
+            368,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_offset_file_live_watch_query"],
+            41,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_event_file_query"],
+            10,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_file_meta_f_unsupported_mask"],
+            6,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_value_observe_recovery_compat_tombstone"
+            ],
+            1,
+        )
+
     def test_retired_syscall_numbers_remain_unassigned(self):
         id_paths = (
             ROOT / "os" / "syscall_ids.h",
@@ -89,6 +152,18 @@ class AgentUapiLayoutTests(unittest.TestCase):
             self.assertNotRegex(source, r"\b(?:SYS_|__NR_)\w+\s+52[67]\b")
             self.assertRegex(source, r"\b(?:SYS_|__NR_)agent_sched_config\s+525\b")
             self.assertRegex(source, r"\b(?:SYS_|__NR_)agent_span_trace_snapshot\s+528\b")
+            self.assertRegex(
+                source,
+                r"\b(?:SYS_|__NR_)agent_observe_recovery\s+550\b",
+            )
+
+        dispatch = (ROOT / "os" / "syscall.c").read_text(encoding="utf-8")
+        recovery_case = dispatch[
+            dispatch.index("case SYS_agent_observe_recovery:") :
+            dispatch.index("break;", dispatch.index("case SYS_agent_observe_recovery:"))
+        ]
+        self.assertIn("AGENT_STATUS_BAD_PARAM", recovery_case)
+        self.assertNotIn("sys_agent_observe_recovery(", recovery_case)
 
         for path in (
             ROOT / "os" / "syscall.c",
@@ -115,6 +190,33 @@ class AgentUapiLayoutTests(unittest.TestCase):
             query,
         )
 
+    def test_compatibility_tombstones_are_explicit(self):
+        agent_uapi_layout.validate_compatibility_tombstones(ROOT)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "os").mkdir()
+            (root / "user" / "include").mkdir(parents=True)
+            for relative in (
+                "agent_observe_abi.h",
+                "os/agent.h",
+                "user/include/agent.h",
+            ):
+                source = (ROOT / relative).read_text(encoding="utf-8")
+                (root / relative).write_text(source, encoding="utf-8")
+            path = root / "agent_observe_abi.h"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "#define AGENT_OBSERVE_RECOVERY_COMPAT_TOMBSTONE 1U",
+                    "/* tombstone removed */",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "explicit ABI tombstone"
+            ):
+                agent_uapi_layout.validate_compatibility_tombstones(root)
+
     def test_size_drift_is_rejected(self):
         actual = copy.deepcopy(self.golden)
         actual["agent_uapi_layout_size_request_v2"] += 8
@@ -131,8 +233,13 @@ class AgentUapiLayoutTests(unittest.TestCase):
         ):
             agent_uapi_layout.compare_golden(actual, self.golden)
 
-    def test_metadata_disk_abi_has_one_kernel_mkfs_owner(self):
-        agent_uapi_layout.validate_metadata_disk_abi_owner(ROOT)
+    def test_workflow_fence_header_owns_its_dependencies(self):
+        source = (ROOT / "agent_workflow_fence_abi.h").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('#include "agent_lifecycle_abi.h"', source)
+        self.assertIn("sizeof(struct agent_workflow_fence_request) == 56", source)
+        self.assertIn("sizeof(struct agent_workflow_fence_receipt) == 320", source)
 
     def schema_fixture(self, key_literal):
         temporary = tempfile.TemporaryDirectory()

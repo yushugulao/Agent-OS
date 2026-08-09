@@ -22,14 +22,14 @@
   <rect x="255" y="205" width="250" height="34" class="tag"/>
   <text x="306" y="229" class="small">规范化记录</text>
   <rect x="160" y="260" width="440" height="92" class="box"/>
-  <text x="245" y="296" class="label">上下文与审计环</text>
-  <text x="190" y="326" class="tiny">影子上下文、链路记录、账本哈希、因果边</text>
+  <text x="218" y="296" class="label">Context 与 Evidence Ring</text>
+  <text x="190" y="326" class="tiny">一次规范事件、关键投影、gap 与 fence 密封根</text>
   <line x1="380" y1="352" x2="380" y2="412" class="arrow"/>
   <rect x="248" y="390" width="264" height="34" class="tag"/>
   <text x="295" y="414" class="small">快照 / 查询 / 等待</text>
   <rect x="130" y="450" width="500" height="92" class="box"/>
   <text x="260" y="486" class="label">用户态 Agent 程序</text>
-  <text x="168" y="516" class="tiny">编排者读取时间线，分析者读取提示，恢复者写入报告</text>
+  <text x="168" y="516" class="tiny">编排者读取时间线，分析者查询属性，复核者写入报告</text>
   <line x1="380" y1="542" x2="380" y2="602" class="arrow"/>
   <rect x="260" y="580" width="240" height="34" class="tag"/>
   <text x="300" y="604" class="small">输出键值日志</text>

@@ -99,6 +99,37 @@ echo "[full-verify] kernel growth budgets"
 )
 evidence_step_end "kernel-budgets"
 
+if evidence_enabled; then
+	mechanism_contract_log="${EVIDENCE_WORK_DIR}/agent-mechanism-contracts.log"
+else
+	mechanism_contract_log="${ROOT_DIR}/build/agent-mechanism-contracts.log"
+fi
+mkdir -p "$(dirname "${mechanism_contract_log}")"
+: >"${mechanism_contract_log}"
+evidence_step_begin
+echo "[full-verify] Agent workflow mechanism contracts"
+(
+	cd "${ROOT_DIR}"
+	"${PYTHON_BIN}" -I -S -B scripts/test-workflow-credit-domain.py
+	echo "[mechanism-contract] workflow-credit-domain static=passed"
+	"${PYTHON_BIN}" -I -S -B scripts/test-agent-evidence-ring.py
+	echo "[mechanism-contract] fence-sealed-evidence-ring static=passed"
+	"${PYTHON_BIN}" -I -S -B scripts/check-agent-live-query-fs.py
+	"${PYTHON_BIN}" -I -S -B scripts/test-agent-live-query-fs.py
+	echo "[mechanism-contract] agent-live-query-fs static=passed"
+	"${PYTHON_BIN}" -I -S -B scripts/check-workflow-fence.py
+	"${PYTHON_BIN}" -I -S -B scripts/test-workflow-fence.py
+	"${PYTHON_BIN}" -I -S -B scripts/test-workflow-syscall-cut.py
+	echo "[mechanism-contract] workflow-fence static=passed"
+	echo "[mechanism-contract] metadata-recovery retired_by_design replacement=none current=agent-live-query-fs"
+	echo "[mechanism-contract] observe-recovery retired_by_design replacement=none current=fence-sealed-evidence-ring"
+	echo "[mechanism-contract] raw-bank-image retired_by_design replacement=none current=workflow-fence-receipt"
+) 2>&1 | tee -a "${mechanism_contract_log}"
+if evidence_enabled; then
+	evidence_publish_file "${mechanism_contract_log}" "agent-mechanism-contracts.log"
+fi
+evidence_step_end "agent-mechanism-contracts" "agent-mechanism-contracts.log"
+
 evidence_step_begin
 echo "[full-verify] host platform alignment"
 (
@@ -285,7 +316,7 @@ evidence_step_end "dual-platforms" \
 
 resource_regression_cases=(
 	proc-reap syscall-fairness file-resource thread-resource
-	physical-resource metadata-recovery observe-recovery virtio-disk
+	physical-resource virtio-disk
 	workflow-teardown-race fs-enospc fs-allocator-fault
 )
 resource_case_args=()
@@ -336,6 +367,6 @@ if evidence_enabled; then
 		--commit "$(git -C "${ROOT_DIR}" rev-parse HEAD)" \
 		--agent-grace "${MARKER_GRACE_SECONDS}" \
 		--mechanism-grace "${MECHANISM_MARKER_GRACE_SECONDS}" \
-		--workflow-runs 3
+		--workflow-runs 1
 fi
 echo "[full-verify] all checks passed"

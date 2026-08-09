@@ -929,8 +929,8 @@ def main() -> int:
     controller = "os/resource_controller.c"
     _reject(_case(
         sources, controller, "resource_policy_snapshot_all",
-        "snapshot->reserved_pending = policy->reserved_pending;",
-        "snapshot->reserved_pending = 0;",
+        "snapshot->reserved_pending +=\n\t\t\t\t\t\tcounter->pending;",
+        "snapshot->reserved_pending +=\n\t\t\t\t\t\t0;",
     ))
     changed = dict(sources)
     kernel_ids = "os/syscall_ids.h"
@@ -1119,10 +1119,10 @@ def main() -> int:
         sources,
         "user/src/labdemo_ucore.c",
         "run_orchestrator",
-        'demo_quiescence_sync() == 0, "workflow durable boundary"',
-        'sync() == 0, "workflow durable boundary"',
+        'demo_quiescence_sync() == 0, "workflow completion sync"',
+        'sync() == 0, "workflow completion sync"',
     ))
-    for label in ("workflow setup boundary", "workflow durable boundary"):
+    for label in ("workflow setup boundary", "workflow completion sync"):
         _reject(_case(
             sources,
             "user/src/labdemo_ucore.c",
@@ -1410,12 +1410,68 @@ def main() -> int:
         "snapshot.sample_tick = 0;",
     ))
     showcase = "user/src/labdemo_ucore.c"
+    showcase_header = "user/include/labdemo_workload.h"
+    for retired_field in (
+        "metadata_dirty",
+        "metadata_durable",
+        "metadata_requests",
+        "metadata_coalesced",
+        "metadata_commits",
+        "metadata_pending",
+    ):
+        _reject(_text_case(
+            sources,
+            showcase_header,
+            "\tstruct agent_performance_snapshot snapshot;\n};",
+            "\tstruct agent_performance_snapshot snapshot;\n"
+            f"\tuint64 {retired_field};\n"
+            "};",
+        ))
     _reject(_case(
         sources,
         showcase,
         "take_performance_snapshot",
         "memset(receipt, 0, sizeof(*receipt));",
         "receipt->observer_pid = 0;",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "take_performance_snapshot",
+        "memset(receipt, 0, sizeof(*receipt));",
+        "struct agent_info info;\n\n"
+        "\tmemset(receipt, 0, sizeof(*receipt));\n"
+        "\tcheck(agent_info(&info) == 0, \"forged metadata snapshot\");",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "performance_storage_equal",
+        "left->block_physical_writes == right->block_physical_writes",
+        "left->block_physical_reads == right->block_physical_reads",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "demo_quiescence_fence",
+        "epoch_commits=%llu epoch_buffers_staged=%llu",
+        "epoch_buffers_staged=%llu epoch_commits=%llu",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "demo_quiescence_fence",
+        "current.snapshot.block_physical_writes,\n"
+        "\t\t\t       current.snapshot.block_physical_reads,",
+        "current.snapshot.block_physical_reads,\n"
+        "\t\t\t       current.snapshot.block_physical_reads,",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "demo_quiescence_fence",
+        "overwrite_prereads_skipped=%llu\\n\"",
+        "overwrite_prereads_skipped=%llu metadata_dirty=%llu\\n\"",
     ))
     _reject(_case(
         sources,
@@ -1465,6 +1521,14 @@ def main() -> int:
         "print_mechanism_delta",
         "before->fs_epoch_commits, after->fs_epoch_commits,",
         "after->fs_epoch_commits, after->fs_epoch_commits,",
+    ))
+    _reject(_case(
+        sources,
+        showcase,
+        "print_mechanism_delta",
+        "after_overwrite_prereads_skipped=%llu\\n\"",
+        "after_overwrite_prereads_skipped=%llu "
+        "before_metadata_pending=%llu after_metadata_pending=%llu\\n\"",
     ))
     _reject(_case(
         sources,

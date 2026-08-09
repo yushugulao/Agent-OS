@@ -113,9 +113,13 @@ def check(root: Path) -> None:
         ("vfs_scope_find_locked(scope_id)==0", "scope admission skips duplicate lookup"),
         ("registry->free_count>0", "scope admission ignores compact capacity"),
         (
+            "registry->active_count<VFS_SCOPE_MAX_ACTIVE",
+            "scope admission ignores the active-domain limit",
+        ),
+        (
             "registry->active_count+registry->retiring_count<"
-            "VFS_SCOPE_MAX_ACTIVE",
-            "scope admission ignores active and retiring counts",
+            "VFS_SCOPE_LIFECYCLE_CAP",
+            "scope admission can reuse a slot held by a closing generation",
         ),
         (
             "vfs_scope_registry_insert_locked(scope_id,created,storage)",
@@ -151,7 +155,8 @@ def check(root: Path) -> None:
     for name in (
         "vfs_scope_join",
         "vfs_scope_release",
-        "vfs_scope_reclaim_advance",
+        "vfs_scope_reclaim_prepare",
+        "vfs_scope_reclaim_finish",
         "vfs_scope_preserve_on_retire",
         "vfs_scope_active",
         "vfs_scope_retiring",
@@ -168,7 +173,8 @@ def check(root: Path) -> None:
     for name in (
         "vfs_scope_join",
         "vfs_scope_release",
-        "vfs_scope_reclaim_advance",
+        "vfs_scope_reclaim_prepare",
+        "vfs_scope_reclaim_finish",
         "vfs_scope_bind_controller",
         "vfs_scope_close_owned",
     ):
@@ -186,8 +192,8 @@ def check(root: Path) -> None:
     )
     require(
         guarantee,
-        "allocated=registry->active_count+registry->retiring_count",
-        "storage guarantee does not preserve admission accounting",
+        "allocated=registry->active_count",
+        "storage guarantee still double-counts closing domains",
     )
     reject(guarantee, "NPROC", "storage guarantee scans the process table")
 
@@ -203,17 +209,42 @@ def check(root: Path) -> None:
         ),
         "scope teardown publication order changed",
     )
-    reclaim = function(source, "vfs_scope_reclaim_complete")
+    reject(
+        source,
+        "VFS_SCOPE_RECLAIM_",
+        "the retired public multi-stage reclaim state machine remains",
+    )
+    prepare = function(source, "vfs_scope_reclaim_prepare")
+    require_order(
+        prepare,
+        (
+            "workflow_lifecycle_retiring(lifecycle)",
+            "agent_scope_reclaim_begin(scope_id,lifecycle,&ignored_target)",
+            "ref->cleanup_started=1",
+        ),
+        "single finalizer does not seal volatile metadata/evidence first",
+    )
+    reclaim = function(source, "vfs_scope_reap_pending")
     require_order(
         reclaim,
         (
-            "agent_scope_reclaim_begin(scope_id,lifecycle,&target)",
+            "vfs_scope_reclaim_prepare(scope_id,&lifecycle,&preserve_files)",
+            "bio_background_begin(FS_OWNER_SCOPE(scope_id))",
             "fs_reclaim_scope_files(scope_id)",
-            "agent_scope_reclaim_metadata_done(scope_id,lifecycle,metadata_target)",
-            "bio_scope_retire(scope_id)",
-            "vfs_scope_registry_remove_locked(ref)",
+            "bio_background_end()",
+            "vfs_scope_reclaim_finish(scope_id,lifecycle,preserve_files)",
         ),
-        "scope reclaim phase order changed",
+        "single finalizer lost its bounded file-drain order",
+    )
+    finish = function(source, "vfs_scope_reclaim_finish")
+    require_order(
+        finish,
+        (
+            "bio_scope_retire(scope_id)",
+            "resource_account_state_get(ref->storage_account)",
+            "workflow_lifecycle_reclaim(lifecycle)",
+        ),
+        "generation can be reclaimed before BIO and storage drain",
     )
 
 

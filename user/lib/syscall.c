@@ -470,6 +470,13 @@ int agent_run(struct agent_op *ops, struct agent_result *results, int count,
 	return syscall(SYS_agent_run, ops, results, count, flags);
 }
 
+int agent_workflow_fence(const struct agent_workflow_fence_request *request,
+			 struct agent_workflow_fence_receipt *receipt)
+{
+	return syscall(SYS_agent_run, request, receipt, 0,
+		       AGENT_RUN_F_FENCE);
+}
+
 int agent_call(struct agent_request *req, struct agent_response *resp)
 {
 	return syscall(SYS_agent_call, req, resp);
@@ -764,6 +771,16 @@ int agent_watch(int event_type, const char *filter)
 int agent_unwatch(int event_type, const char *filter)
 {
 	return syscall(SYS_agent_unwatch, event_type, filter);
+}
+
+int agent_live_watch(struct agent_file_live_watch *watch)
+{
+	return syscall(SYS_agent_watch, AGENT_EVENT_FILE_QUERY, watch);
+}
+
+int agent_live_unwatch(struct agent_file_live_watch *watch)
+{
+	return syscall(SYS_agent_unwatch, AGENT_EVENT_FILE_QUERY, watch);
 }
 
 int agent_wait(struct agent_event *event, int timeout_ticks)

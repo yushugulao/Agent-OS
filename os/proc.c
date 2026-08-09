@@ -13,6 +13,7 @@
 #include "vm.h"
 #include "queue.h"
 #include "vfs_security.h"
+#include "workflow_credit_domain.h"
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 #include "wait_atomic_test.h"
 #endif
@@ -136,6 +137,11 @@ _Static_assert(AGENT_STATE_PAGE_ORDINARY_LIMIT +
 		       AGENT_STATE_PAGE_RESERVED_LIMIT ==
 		       AGENT_STATE_PAGE_POOL_SIZE,
 	       "Agent state page classes must partition the global pool");
+_Static_assert(AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT >=
+		       (uint64)PROC_RESOURCE_DOMAIN_RESERVED_LIMIT *
+			       AGENT_STATE_PAGE_COUNT +
+		       WORKFLOW_EVIDENCE_PAGE_COUNT,
+	       "reserved workflow domains must fund their evidence ring");
 _Static_assert(USER_HEAP_LIMIT <= 0x7fffffffULL,
 	       "program break must fit the signed syscall result ABI");
 _Static_assert(PROC_RESOURCE_DOMAIN_LIMIT > 0 &&
@@ -600,11 +606,20 @@ static int proc_teardown_request_locked(struct proc *p, int code)
 // 关中断调用；仅主线程或未发布回滚执行者可认领进程，所有权一经确定不再转移。
 static int proc_teardown_claim_locked(struct proc *p, int owner)
 {
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
+
 	if (p == 0 || p->state != P_USED ||
 	    p->teardown_state != PROC_TEARDOWN_REQUESTED ||
 	    p->teardown_owner_tid != PROC_TEARDOWN_OWNER_NONE ||
 	    (owner != 0 && owner != PROC_TEARDOWN_OWNER_KERNEL))
 		return -1;
+	if (p->workflow_lifecycle_charged) {
+		lifecycle.id = p->workflow_lifecycle_id;
+		lifecycle.generation = p->workflow_lifecycle_generation;
+		if (!workflow_lifecycle_key_valid(lifecycle) ||
+		    workflow_lifecycle_departure_enter(lifecycle) < 0)
+			return 1;
+	}
 	p->teardown_owner_tid = owner;
 	p->teardown_state = PROC_TEARDOWN_QUIESCING;
 	return 0;
@@ -1035,22 +1050,18 @@ static int proc_thread_resource_charge_locked(struct thread *t,
 		.kind = RESOURCE_THREAD,
 		.amount = 1,
 	};
-	struct resource_reservation reservation;
 
 	if (t == 0 || t->resource_slot_charged ||
 	    domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
 		panic("thread resource charge invariant");
 	domain = &proc_resource_domains[domain_id];
 	if (!domain->used ||
-	    resource_reserve_many(
+	    resource_acquire_many(
 		    domain->account,
 		    reserved ? RESOURCE_CHARGE_RESERVED :
 			       RESOURCE_CHARGE_ORDINARY,
-		    &request, 1,
-				  &reservation) < 0)
+		    &request, 1) < 0)
 		return -1;
-	if (resource_reservation_commit(&reservation) < 0)
-		panic("thread resource commit");
 	t->resource_account = domain->account;
 	t->resource_domain_id = domain_id;
 	t->resource_slot_reserved = reserved;
@@ -1140,7 +1151,6 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	uint storage_principal = FS_OWNER_NONE;
 	struct resource_account_handle account = resource_account_none();
 	struct resource_account_limits limits;
-	struct resource_reservation reservation;
 	struct resource_request requests[] = {
 		{ .kind = RESOURCE_PROCESS, .amount = 1 },
 		{ .kind = RESOURCE_THREAD, .amount = 1 },
@@ -1254,17 +1264,14 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		goto fail;
 	}
 	member_acquired = 1;
-	if (resource_reserve_many(
+	if (resource_acquire_many(
 		    account,
 		    reserved ? RESOURCE_CHARGE_RESERVED :
 			       RESOURCE_CHARGE_ORDINARY,
-		    requests, sizeof(requests) / sizeof(requests[0]),
-		    &reservation) < 0) {
+		    requests, sizeof(requests) / sizeof(requests[0])) < 0) {
 		p = 0;
 		goto fail;
 	}
-	if (resource_reservation_commit(&reservation) < 0)
-		panic("process resource commit");
 	p->resource_account = account;
 	p->resource_domain_id = domain_id;
 	p->storage_principal_id = storage_principal;
@@ -1362,7 +1369,6 @@ int proc_file_slots_reserve(struct proc *owner, uint count,
 		.kind = RESOURCE_FILE_OBJECT,
 		.amount = count,
 	};
-	struct resource_reservation reservation;
 
 	if (!proc_teardown_live(owner) || account == 0 || reserved == 0 ||
 	    count == 0)
@@ -1376,14 +1382,12 @@ int proc_file_slots_reserve(struct proc *owner, uint count,
 		    domain->account, owner->resource_account))
 		goto out;
 	use_reserve = owner->resource_slot_reserved != 0;
-	if (resource_reserve_many(
+	if (resource_acquire_many(
 		    domain->account,
 		    use_reserve ? RESOURCE_CHARGE_RESERVED :
 				  RESOURCE_CHARGE_ORDINARY,
-		    &request, 1, &reservation) < 0)
+		    &request, 1) < 0)
 		goto out;
-	if (resource_reservation_commit(&reservation) < 0)
-		panic("file resource commit");
 	*account = domain->account;
 	*reserved = use_reserve;
 	result = 0;
@@ -2348,10 +2352,12 @@ fail:
 static void scheduler_finish_dying_thread(struct thread *t)
 {
 	struct proc *p;
+	struct workflow_lifecycle_key lifecycle;
 	int tid;
 
 	if (t == 0 || t->state != T_DYING || (p = t->process) == 0)
 		return;
+	lifecycle = vfs_proc_lifecycle(p);
 	tid = t->tid;
 	if (t->kstack_state != KSTACK_REAP)
 		panic("dying thread kernel stack");
@@ -2368,6 +2374,8 @@ static void scheduler_finish_dying_thread(struct thread *t)
 		panic("dying thread trapframe release");
 	t->state = EXITED;
 	proc_thread_resource_release(t);
+	if (workflow_lifecycle_key_valid(lifecycle))
+		workflow_lifecycle_departure_leave(lifecycle);
 	wait_queue_wake_key_all(&p->thread_exit_waiters,
 				 t->identity_generation);
 	if (tid != p->teardown_owner_tid) {
@@ -2385,6 +2393,10 @@ static void scheduler_finish_dying_thread(struct thread *t)
 void scheduler()
 {
 	struct thread *t;
+	struct workflow_lifecycle_key previous_key =
+		workflow_lifecycle_none();
+	struct resource_account_handle previous_exec =
+		resource_account_none();
 	for (;;) {
 		/* 可运行内核线程可能反复 yield 而不回用户态；每轮调度先投递设备和时钟 IRQ，
 		 * 避免内核轮询循环饿死 I/O 等待者。 */
@@ -2434,6 +2446,16 @@ void scheduler()
 			continue;
 		}
 		tracef("swtich to proc %d, thread %d", t->process->pid, t->tid);
+		{
+			struct workflow_lifecycle_key next_key =
+				vfs_proc_lifecycle(t->process);
+
+			(void)workflow_credit_domain_switch(
+				previous_key, previous_exec, next_key,
+				t->resource_account);
+			previous_key = next_key;
+			previous_exec = t->resource_account;
+		}
 		agent_sched_on_dispatch(t);
 		kernel_stack_check(t);
 		t->state = RUNNING;
@@ -3007,7 +3029,7 @@ void freeproc(struct proc *p)
 		return;
 	enabled = intr_save();
 	if (proc_teardown_request_locked(p, -1) < 0 ||
-	    proc_teardown_claim_locked(p, PROC_TEARDOWN_OWNER_KERNEL) < 0) {
+	    proc_teardown_claim_locked(p, PROC_TEARDOWN_OWNER_KERNEL) != 0) {
 		intr_restore(enabled);
 		panic("invalid unpublished process rollback");
 	}
@@ -3108,11 +3130,19 @@ static int fork_common(int make_agent, int agent_role,
 	struct proc *np = 0;
 	struct proc *p = curr_proc();
 	struct thread *issuer = curr_thread();
+	struct workflow_lifecycle_key parent_lifecycle;
 	uint parent_scope;
 	int authority_boundary;
 	int copy_status;
+	int lifecycle_entered = 0;
 	int i;
 
+	parent_lifecycle = vfs_proc_lifecycle(p);
+	if (workflow_lifecycle_key_valid(parent_lifecycle)) {
+		if (workflow_lifecycle_operation_enter(parent_lifecycle) < 0)
+			return -1;
+		lifecycle_entered = 1;
+	}
 	parent_scope = p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
 			       p->vfs_scope_id : p->vfs_pending_scope_id;
 	// 资源域管理权只控制记账准入；切换资源域不会创建 Agent/VFS 主体，
@@ -3124,8 +3154,11 @@ static int fork_common(int make_agent, int agent_role,
 		 scope_mode == VFS_SPAWN_SCOPE_DROP);
 	// VM 与 FD 共用一个父进程快照窗口。这样清理固定引用时，兄弟线程不能
 	// 并发关闭并删除同一 inode，也就不会在借用的 FS epoch 内产生结算债务。
-	if (proc_vm_snapshot_begin(p) < 0)
+	if (proc_vm_snapshot_begin(p) < 0) {
+		if (lifecycle_entered)
+			workflow_lifecycle_operation_leave(parent_lifecycle);
 		return -1;
+	}
 	fd_spawn_snapshot_take(p, issuer, authority_boundary, &fds);
 	if (!proc_teardown_live(p) || !proc_child_has_capacity(p))
 		goto fail;
@@ -3232,11 +3265,15 @@ static int fork_common(int make_agent, int agent_role,
 	add_task(nt);
 	proc_vm_snapshot_end(p);
 	intr_restore(publish_enabled);
+	if (lifecycle_entered)
+		workflow_lifecycle_operation_leave(parent_lifecycle);
 	return np->pid;
 
 fail:
 	fd_spawn_snapshot_release(&fds);
 	proc_vm_snapshot_end(p);
+	if (lifecycle_entered)
+		workflow_lifecycle_operation_leave(parent_lifecycle);
 	return -1;
 }
 
@@ -3524,6 +3561,11 @@ static void proc_interrupt_siblings(struct proc *p, struct thread *owner)
 static __attribute__((noreturn)) void thread_exit_current(int code)
 {
 	struct thread *t = curr_thread();
+	struct workflow_lifecycle_key lifecycle = vfs_proc_lifecycle(t->process);
+
+	while (workflow_lifecycle_key_valid(lifecycle) &&
+	       workflow_lifecycle_departure_enter(lifecycle) < 0)
+		yield();
 
 	t->exit_code = code;
 	freethread(t);
@@ -3545,12 +3587,18 @@ void exit(int code)
 	debugf("thread exit with %d", code);
 	if (t->tid != 0)
 		thread_exit_current(code);
-	enabled = intr_save();
-	claimed = proc_teardown_request_locked(p, code);
-	if (claimed >= 0)
-		claimed = proc_teardown_claim_locked(p, t->tid);
-	code = (int)p->exit_code;
-	intr_restore(enabled);
+	for (;;) {
+		enabled = intr_save();
+		claimed = proc_teardown_request_locked(p, code);
+		if (claimed >= 0)
+			claimed = proc_teardown_claim_locked(p, t->tid);
+		code = (int)p->exit_code;
+		intr_restore(enabled);
+		if (claimed != 1)
+			break;
+		/* A workflow fence owns the cut; retry without beginning teardown. */
+		yield();
+	}
 	if (claimed < 0)
 		panic("process teardown owner");
 	agent_proc_teardown(p);

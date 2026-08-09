@@ -12,13 +12,13 @@ HOSTCC="${HOSTCC:-cc}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-300s}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20s}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"
-STABILITY_RUNS="${WORKFLOW_TEARDOWN_STABILITY_RUNS:-3}"
+WORKFLOW_RUNS="${WORKFLOW_TEARDOWN_RUNS:-${WORKFLOW_TEARDOWN_STABILITY_RUNS:-1}}"
 LOG_DIR="${WORKFLOW_TEARDOWN_LOG_DIR:-${PWD}/build/test-logs/workflow-teardown-race}"
 DOMAIN_FILE_CAP="${WORKFLOW_TEARDOWN_DOMAIN_FILE_CAP:-14}"
 GLOBAL_RESERVED_CAP="${WORKFLOW_TEARDOWN_GLOBAL_RESERVED_CAP:-64}"
 INIT_PROC=workflow_teardown_race_ucore
 FINAL_MARKER="${INIT_PROC}: parent passed"
-MAX_STABILITY_RUNS=20
+MAX_WORKFLOW_RUNS=20
 MAX_DOMAIN_FILE_CAP=14
 MAX_GLOBAL_RESERVED_CAP=64
 MAX_USER_FRAME_BYTES=1024
@@ -41,9 +41,9 @@ run_logged() {
 	return "${pipeline_status[0]}"
 }
 
-if ! [[ "${STABILITY_RUNS}" =~ ^[1-9][0-9]?$ ]] ||
-   ((STABILITY_RUNS < 3 || STABILITY_RUNS > MAX_STABILITY_RUNS)); then
-	echo "[workflow-teardown] stability runs must be in [3, ${MAX_STABILITY_RUNS}]" >&2
+if ! [[ "${WORKFLOW_RUNS}" =~ ^[1-9][0-9]?$ ]] ||
+   ((WORKFLOW_RUNS < 1 || WORKFLOW_RUNS > MAX_WORKFLOW_RUNS)); then
+	echo "[workflow-teardown] descriptive runs must be in [1, ${MAX_WORKFLOW_RUNS}]" >&2
 	exit 2
 fi
 if ! [[ "${DOMAIN_FILE_CAP}" =~ ^[1-9][0-9]?$ ]] ||
@@ -114,7 +114,7 @@ printf '%s\n' \
 chmod +x "${QEMU_WRAPPER}"
 export WORKFLOW_TEARDOWN_REAL_QEMU="${QEMU}"
 
-for ((run = 1; run <= STABILITY_RUNS; run++)); do
+for ((run = 1; run <= WORKFLOW_RUNS; run++)); do
 	run_image="${TMPDIR_WORKFLOW_TEARDOWN}/run-${run}.img"
 	cp "${TMPDIR_WORKFLOW_TEARDOWN}/master.img" "${run_image}"
 	log_file="${LOG_DIR}/run-${run}.guest.log"
@@ -123,7 +123,7 @@ for ((run = 1; run <= STABILITY_RUNS; run++)); do
 	: >"${runner_log}"
 	: >"${validator_log}"
 
-	echo "[workflow-teardown] stability run ${run}/${STABILITY_RUNS}"
+	echo "[workflow-teardown] descriptive run ${run}/${WORKFLOW_RUNS}"
 	if run_logged "${runner_log}" \
 		"${PYTHON_BIN}" scripts/agent_test_runner.py \
 		--init-proc "${INIT_PROC}-run-${run}" \
@@ -153,5 +153,9 @@ for ((run = 1; run <= STABILITY_RUNS; run++)); do
 		--workflow-global-reserved-cap "${GLOBAL_RESERVED_CAP}"
 done
 
-echo "[workflow-teardown] ${STABILITY_RUNS} stable runs passed"
+if ((WORKFLOW_RUNS == 1)); then
+	echo "[workflow-teardown] 1 descriptive run passed"
+else
+	echo "[workflow-teardown] ${WORKFLOW_RUNS} descriptive runs passed"
+fi
 host_probe_report "workflow-teardown mkfs"

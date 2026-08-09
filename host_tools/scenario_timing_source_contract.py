@@ -59,7 +59,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_VERSION = "scenario-timing-source-v12"
+CONTRACT_VERSION = "scenario-timing-source-v14"
 SOURCE_PATHS = (
     "baseline_ucore/user/src/rp_seed_orch.c",
     "user/src/rp_agentos_orch.c",
@@ -2158,14 +2158,23 @@ def _validate_resource_observer(
     _ordered(
         policy,
         (
+            ("memset", "(", "snapshots", ",", "0", ",", "sizeof", "(", "*", "snapshots", ")", "*", "count", ")", ";"),
             ("enabled", "=", "intr_save", "(", ")", ";"),
+            ("resource_account_trim_locked", "(", "account", ")", ";"),
+            ("counter", "=", "resource_account_counter_const", "("),
+            ("snapshot", "->", "used", "+", "=", "counter", "->", "used", ";"),
+            ("snapshot", "->", "pending", "+", "=", "counter", "->", "pending", ";"),
+            ("snapshot", "->", "ordinary_used", "+", "=", "counter", "->", "used", ";"),
+            ("snapshot", "->", "reserved_pending", "+", "=", "counter", "->", "pending", ";"),
             ("snapshot", "->", "capacity", "=", "policy", "->", "capacity", ";"),
-            ("snapshot", "->", "ordinary_used", "=", "policy", "->", "ordinary_used", ";"),
-            ("snapshot", "->", "reserved_pending", "=", "policy", "->", "reserved_pending", ";"),
+            ("policy", "->", "held", "!=", "snapshot", "->", "used", "+", "snapshot", "->", "pending"),
+            ("panic", "(", '"resource exact snapshot invariant"', ")", ";"),
             ("intr_restore", "(", "enabled", ")", ";"),
         ),
-        "one-lock resource controller snapshot",
+        "rstat-style exact resource controller snapshot",
     )
+    _only_references(policy, "intr_save", 1, "resource aggregation IRQ cut")
+    _only_references(policy, "intr_restore", 1, "resource aggregation IRQ cut")
 
     for ids, label in ((kernel_ids, "kernel"), (user_ids, "AgentOS user")):
         if ids.count("agent_resource_snapshot 559") != 1:
@@ -2828,6 +2837,8 @@ def _validate_performance_producers(
 
 
 def _validate_performance_pair_consumer(source: str, workload_header: str) -> None:
+    """Bind showcase receipts to one observer's raw performance snapshot."""
+
     workload_tokens = _tokens(workload_header)
     _require_once(
         workload_tokens,
@@ -2836,7 +2847,6 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
     )
     if workload_tokens.count("LABDEMO_RETRY_TIMEOUT_MS") != 1:
         raise ValueError("showcase retry timeout differs")
-    """将展示差值绑定到同一 observer 的原始 Guest 快照。"""
 
     snapshot_pairs = (
         ("fs_epoch_commits", "epoch_commits"),
@@ -2864,17 +2874,67 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
         ("virtio_batched_read_requests", "virtio_batched_read_requests"),
         ("overwrite_prereads_skipped", "overwrite_prereads_skipped"),
     )
-    metadata_pairs = (
-        ("metadata_dirty", "metadata_dirty"),
-        ("metadata_durable", "metadata_durable"),
-        ("metadata_requests", "metadata_requests"),
-        ("metadata_coalesced", "metadata_coalesced"),
-        ("metadata_commits", "metadata_commits"),
+    fence_pairs = (
+        ("fs_epoch_commits", "epoch_commits"),
+        ("fs_epoch_buffers_staged", "epoch_buffers_staged"),
+        ("block_physical_writes", "physical_writes"),
+        ("block_physical_reads", "physical_reads"),
+        ("block_durable_flushes", "durable_flushes"),
+        ("fs_epoch_deduplicated_stages", "deduplicated_stages"),
+        ("observer_workload_syscalls", "workload_syscalls"),
+        ("directory_block_probes", "directory_block_probes"),
+        ("directory_entries_examined", "directory_entries_examined"),
+        ("virtio_notifications", "virtio_notifications"),
+        ("virtio_submitted_requests", "virtio_submitted_requests"),
+        ("virtio_write_batch_calls", "virtio_write_batch_calls"),
+        ("virtio_batched_write_requests", "virtio_batched_write_requests"),
+        ("virtio_indirect_write_batch_calls", "virtio_indirect_write_batch_calls"),
+        ("virtio_read_batch_calls", "virtio_read_batch_calls"),
+        ("virtio_batched_read_requests", "virtio_batched_read_requests"),
+        ("overwrite_prereads_skipped", "overwrite_prereads_skipped"),
     )
-    raw_names = tuple(name for _field, name in snapshot_pairs + metadata_pairs) + (
+    retired_metadata_fields = (
+        "metadata_dirty",
+        "metadata_durable",
+        "metadata_requests",
+        "metadata_coalesced",
+        "metadata_commits",
         "metadata_pending",
     )
+    raw_names = tuple(name for _field, name in snapshot_pairs)
+    storage_fields = tuple(
+        field for field, _name in fence_pairs
+        if field != "observer_workload_syscalls"
+    )
     tokens = _tokens(source)
+    _require_once(
+        workload_tokens,
+        (
+            "struct", "labdemo_performance_receipt", "{",
+            "uint64", "observer_pid", ";",
+            "struct", "agent_performance_snapshot", "snapshot", ";",
+            "}", ";",
+        ),
+        "showcase snapshot-only performance receipt",
+    )
+    _require_once(
+        workload_tokens,
+        (
+            "struct", "labdemo_fence_receipt", "{",
+            "uint64", "tick_us", ";",
+            "uint64", "attempts", ";",
+            "uint64", "stable_rounds", ";",
+            "struct", "labdemo_performance_receipt", "performance", ";",
+            "}", ";",
+        ),
+        "showcase snapshot-only fence receipt",
+    )
+    for field in retired_metadata_fields:
+        if field in workload_header or field in source:
+            raise ValueError(
+                f"showcase retired synthetic metadata field remains: {field}"
+            )
+
     take = _function_tokens(tokens, "take_performance_snapshot")
     _ordered(
         take,
@@ -2893,8 +2953,24 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
         ),
         "showcase performance snapshot",
     )
-    if take.count("agent_performance_snapshot") != 1 or take.count("return") != 0:
+    if (
+        take.count("agent_performance_snapshot") != 1
+        or take.count("agent_info") != 0
+        or take.count("return") != 0
+    ):
         raise ValueError("showcase performance snapshot control flow differs")
+
+    storage_equal = _function_tokens(tokens, "performance_storage_equal")
+    expected_storage_equal = ["return"]
+    for index, field in enumerate(storage_fields):
+        expected_storage_equal.extend(
+            ("left", "->", field, "==", "right", "->", field)
+        )
+        expected_storage_equal.append(
+            ";" if index + 1 == len(storage_fields) else "&&"
+        )
+    if storage_equal != expected_storage_equal:
+        raise ValueError("showcase storage-only fence stability fields differ")
 
     sync_fence = _function_tokens(tokens, "demo_quiescence_flush")
     if _token_fingerprint(sync_fence) != (
@@ -2975,6 +3051,63 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
         or _depth_at(fence, fence_sync_at) != 1
     ):
         raise ValueError("showcase quiescence fence bypasses bounded sync")
+    _require_once(
+        fence,
+        (
+            "if", "(", "attempt", ">", "1", "&&",
+            "current", ".", "observer_pid", "==", "previous", ".",
+            "observer_pid", "&&", "current", ".", "snapshot", ".",
+            "observer_lifecycle_id", "==", "previous", ".", "snapshot", ".",
+            "observer_lifecycle_id", "&&", "current", ".", "snapshot", ".",
+            "observer_lifecycle_generation", "==", "previous", ".",
+            "snapshot", ".", "observer_lifecycle_generation", "&&",
+            "current", ".", "snapshot", ".", "sample_tick", ">",
+            "previous", ".", "snapshot", ".", "sample_tick", "&&",
+            "performance_storage_equal", "(", "&", "previous", ".",
+            "snapshot", ",", "&", "current", ".", "snapshot", ")", ")",
+            "stable_rounds", "++", ";", "else", "stable_rounds", "=", "0", ";",
+        ),
+        "showcase storage-only fence stability",
+    )
+    if fence.count("performance_storage_equal") != 1:
+        raise ValueError("showcase storage-only fence comparison differs")
+
+    fence_records = tuple(
+        token for token in fence
+        if token.startswith('"') and "kind=fence" in token
+    )
+    if len(fence_records) != 1:
+        raise ValueError("showcase fence record structure differs")
+    expected_fence_record = (
+        '"agentos:demo schema=2 nonce=%llu kind=fence mode=%s seq=%d '
+        "point=%s tick_us=%llu attempts=%llu stable_rounds=%llu "
+        "observer_pid=%llu observer_tick=%llu observer_lifecycle_id=%llu "
+        "observer_lifecycle_generation=%llu counter_scope=global"
+        + "".join(f" {name}=%llu" for _field, name in fence_pairs)
+        + '\\n"'
+    )
+    if fence_records[0] != expected_fence_record:
+        raise ValueError("showcase storage-only fence serialization differs")
+    fence_values = [
+        "(", "uint64", ")", "LABDEMO_RUN_NONCE", ",",
+        "mode", ",", "sequence", ",", "point", ",",
+        "receipt", "->", "tick_us", ",",
+        "receipt", "->", "attempts", ",",
+        "receipt", "->", "stable_rounds", ",",
+        "current", ".", "observer_pid", ",",
+        "current", ".", "snapshot", ".", "sample_tick", ",",
+        "current", ".", "snapshot", ".", "observer_lifecycle_id", ",",
+        "current", ".", "snapshot", ".", "observer_lifecycle_generation", ",",
+    ]
+    for index, (field, _name) in enumerate(fence_pairs):
+        fence_values.extend(("current", ".", "snapshot", ".", field))
+        if index + 1 != len(fence_pairs):
+            fence_values.append(",")
+    _require_once(
+        fence, tuple(fence_values), "showcase storage-only fence value bindings"
+    )
+    if fence.count("printf") != 1:
+        raise ValueError("showcase fence emission control flow differs")
 
     run_one = _function_tokens(tokens, "run_one")
     if _token_fingerprint(run_one) != (
@@ -3075,18 +3208,7 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
         )
         if pair.count(field) != 4:
             raise ValueError(f"showcase raw pair serialization differs: {field}")
-    for field, _raw_name in metadata_pairs:
-        _require_once(
-            pair,
-            (
-                "performance_delta", "(", "before_receipt", "->", field,
-                ",", "after_receipt", "->", field, ")",
-            ),
-            f"showcase metadata pair delta {field}",
-        )
-        if pair.count(field) != 4:
-            raise ValueError(f"showcase metadata serialization differs: {field}")
-    if pair.count("performance_delta") != len(snapshot_pairs) + len(metadata_pairs):
+    if pair.count("performance_delta") != len(snapshot_pairs):
         raise ValueError("showcase performance pair has extra delta producers")
     string_literals = tuple(
         token for token in pair if token.startswith('"') and token.endswith('"')
@@ -3094,6 +3216,19 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
     if len(string_literals) != 3:
         raise ValueError("showcase performance pair record structure differs")
     record = string_literals[-1]
+    expected_record = (
+        '"agentos:demo schema=2 nonce=%llu kind=mechanism mode=%s scope=%s '
+        "observer_pid=%llu before_tick=%llu after_tick=%llu "
+        "observer_lifecycle_id=%llu observer_lifecycle_generation=%llu "
+        "counter_scope=global"
+        + "".join(
+            f" before_{name}=%llu after_{name}=%llu"
+            for _field, name in snapshot_pairs
+        )
+        + '\\n"'
+    )
+    if record != expected_record:
+        raise ValueError("showcase snapshot-only mechanism serialization differs")
     for name in raw_names:
         if record.count(f"before_{name}=%llu") != 1 or record.count(
             f"after_{name}=%llu"
@@ -3115,11 +3250,6 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
     ]
     serialized_pairs = [
         ("before", "after", field) for field, _raw in snapshot_pairs
-    ] + [
-        ("before_receipt", "after_receipt", field)
-        for field, _raw in metadata_pairs
-    ] + [
-        ("before_receipt", "after_receipt", "metadata_pending")
     ]
     for index, (before_name, after_name, field) in enumerate(serialized_pairs):
         serialized_values.extend(
@@ -3155,7 +3285,7 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
             ),
             (
                 "check", "(", "demo_quiescence_sync", "(", ")", "==", "0", ",",
-                '"workflow durable boundary"', ")", ";",
+                '"workflow completion sync"', ")", ";",
             ),
             (
                 "take_performance_snapshot", "(", "&",
@@ -3186,10 +3316,10 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
         (
             "check_provenance_graph", "(", "sentinel_pid", ")", ";", "check", "(",
             "demo_quiescence_sync", "(", ")", "==", "0", ",",
-            '"workflow durable boundary"', ")", ";", "workflow_finished_us", "=",
+            '"workflow completion sync"', ")", ";", "workflow_finished_us", "=",
             "demo_now_us", "(", ")", ";",
         ),
-        "showcase unconditional workflow durable boundary",
+        "showcase unconditional workflow completion boundary",
     )
     if _depth_at(orchestrator, setup_at) != 0 or _depth_at(orchestrator, durable_at) != 0:
         raise ValueError("showcase workflow boundary is conditional")

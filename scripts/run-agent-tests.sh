@@ -288,7 +288,9 @@ check_case_contract() {
 		;;
 	agentscan_ucore)
 		require_exact_case_marker "${log_file}" \
-			"agentscan_ucore: scan_admission trusted=1 worker=0"
+			"agentscan_ucore: explicit_admission ordinary_unindexed=1"
+		require_exact_case_marker "${log_file}" \
+			"agentscan_ucore: live_query enter=1 update=1 leave=1 indexed=1"
 		;;
 	agenttoolabi_ucore)
 		require_exact_case_marker "${log_file}" \
@@ -344,7 +346,7 @@ check_case_contract() {
 		;;
 	agentscope_ucore)
 		require_exact_case_marker "${log_file}" \
-			"agentscope_ucore: scope_storage_isolation=1 catalog_limit=112 autoscan_limit=96 explicit_reserve=16 workflow_created=97 peer_created=97 public_created=70 overflow_unindexed=1 autoscan_flag_no_space=1 explicit_no_space=1 reusable=1"
+			"agentscope_ucore: scope_storage_isolation=1 catalog_limit=112 workflow_created=113 peer_created=113 public_created=70 overflow_unindexed=1 explicit_no_space=1 reusable=1"
 		require_exact_case_marker "${log_file}" \
 			"agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1"
 		require_exact_case_marker "${log_file}" \
@@ -405,7 +407,11 @@ run_case() {
 		)
 	fi
 	if [[ "${context_sync_profile}" == "1" ]]; then
-		build_profile_args+=(AGENT_CONTEXT_SYNC_TEST_PROFILE=1 WAIT_ATOMIC_TEST_PROFILE=1)
+		build_profile_args+=(
+			FUNCTIONAL_REVIEW_PROFILE_CONTEXT=agentfinal-context-sync-atomicity-v1
+			AGENT_CONTEXT_SYNC_TEST_PROFILE=1
+			WAIT_ATOMIC_TEST_PROFILE=1
+		)
 		case_timing_file="${CONTEXT_SYNC_TIMING_FILE}"
 		evidence_key="agent-mechanism:context-sync-atomicity"
 	fi

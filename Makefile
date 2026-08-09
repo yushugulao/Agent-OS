@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest stage-host-selftests stage-check local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -24,7 +24,24 @@ TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; the
 ifeq ($(FUNCTIONAL_REVIEW_BUILD),1)
 override FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS := \
 	K U F BUILDDIR CC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS \
-	C_SRCS AS_SRCS C_OBJS AS_OBJS OBJS HEADER_DEP
+	C_SRCS AS_SRCS C_OBJS AS_OBJS OBJS HEADER_DEP \
+	FUNCTIONAL_REVIEW_PROFILE_CONTEXT \
+	AGENT_CONTEXT_SYNC_TEST_PROFILE AGENT_OBSERVE_TEST_PROFILE \
+	WAIT_ATOMIC_TEST_PROFILE FS_ALLOCATOR_FAULT_TEST_PROFILE \
+	PHYSICAL_PAGE_TEST_HOOKS DURABILITY_POWERCUT_TEST_PROFILE \
+	AGENT_METADATA_CRASH_PHASE AGENT_METADATA_EIO_PHASE \
+	AGENT_METADATA_SELECT_FAULT_BANK AGENT_METADATA_BOOT_READ_FAULT
+# The reviewed Agent runner needs both halves of one kernel-only atomicity
+# profile.  Admit that exact command-line tuple and no independently injected
+# profile: the context selector is inert unless both profiles, init image, and
+# chapter are all the reviewed runner's exact values.
+override FUNCTIONAL_REVIEW_PAIRED_PROFILE_REQUEST := $(strip $(FUNCTIONAL_REVIEW_PROFILE_CONTEXT)|$(AGENT_CONTEXT_SYNC_TEST_PROFILE)|$(WAIT_ATOMIC_TEST_PROFILE)|$(INIT_PROC)|$(CHAPTER)|$(MAKECMDGOALS)|$(USER_EXTRA_CFLAGS))
+override FUNCTIONAL_REVIEW_PAIRED_PROFILE_ORIGINS := $(origin FUNCTIONAL_REVIEW_BUILD)|$(origin FUNCTIONAL_REVIEW_PROFILE_CONTEXT)|$(origin AGENT_CONTEXT_SYNC_TEST_PROFILE)|$(origin WAIT_ATOMIC_TEST_PROFILE)|$(origin INIT_PROC)|$(origin CHAPTER)
+ifeq ($(FUNCTIONAL_REVIEW_PAIRED_PROFILE_REQUEST),agentfinal-context-sync-atomicity-v1|1|1|agentfinal_ucore|agent|build|)
+ifeq ($(FUNCTIONAL_REVIEW_PAIRED_PROFILE_ORIGINS),command line|command line|command line|command line|command line|command line)
+override FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS := $(filter-out FUNCTIONAL_REVIEW_PROFILE_CONTEXT AGENT_CONTEXT_SYNC_TEST_PROFILE WAIT_ATOMIC_TEST_PROFILE,$(FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS))
+endif
+endif
 override FUNCTIONAL_REVIEW_EXTERNAL_BUILD_VARS := $(strip $(foreach variable,$(FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS),$(if $(filter command line environment environment\ override,$(origin $(variable))),$(variable))))
 ifneq ($(FUNCTIONAL_REVIEW_EXTERNAL_BUILD_VARS),)
 $(error FUNCTIONAL_REVIEW_BUILD rejects external build variables: $(FUNCTIONAL_REVIEW_EXTERNAL_BUILD_VARS))
@@ -104,15 +121,31 @@ CP = cp
 BUILDDIR = build
 C_SRCS = $(wildcard $K/*.c)
 INACTIVE_PROFILE_C_SRCS :=
-# 崩溃目标证明仅属于测试配置，不进入生产对象。
-ifeq ($(strip $(AGENT_METADATA_CRASH_PHASE)$(AGENT_METADATA_EIO_PHASE)),)
-C_SRCS := $(filter-out $K/agent_metadata_test.c,$(C_SRCS))
-INACTIVE_PROFILE_C_SRCS += $K/agent_metadata_test.c
-endif
-ifeq ($(strip $(AGENT_METADATA_BOOT_READ_FAULT)$(AGENT_METADATA_SELECT_FAULT_BANK)),)
-C_SRCS := $(filter-out $K/agent_metadata_recovery_test.c,$(C_SRCS))
-INACTIVE_PROFILE_C_SRCS += $K/agent_metadata_recovery_test.c
-endif
+# The live-query metadata catalog is deliberately memory-only.  Keep the
+# superseded disk catalog pipeline available as reference source, but never
+# compile it into a production kernel.
+RETIRED_METADATA_C_SRCS := \
+	$K/agent_metadata_journal.c \
+	$K/agent_metadata_probe.c \
+	$K/agent_metadata_recovery.c \
+	$K/agent_metadata_recovery_test.c \
+	$K/agent_metadata_scan.c \
+	$K/agent_metadata_store.c \
+	$K/agent_metadata_store_format.c \
+	$K/agent_metadata_store_io.c \
+	$K/agent_metadata_test.c
+C_SRCS := $(filter-out $(RETIRED_METADATA_C_SRCS),$(C_SRCS))
+INACTIVE_PROFILE_C_SRCS += $(RETIRED_METADATA_C_SRCS)
+# Fence-sealed evidence is memory resident.  The former shared disk arena,
+# recovery reader, and checkpoint-capacity reservation are not production
+# dependencies of Agent admission or evidence queries.
+RETIRED_OBSERVE_C_SRCS := \
+	$K/agent_durable_section.c \
+	$K/agent_observe_capacity.c \
+	$K/agent_observe_recovery.c \
+	$K/agent_observe_store.c
+C_SRCS := $(filter-out $(RETIRED_OBSERVE_C_SRCS),$(C_SRCS))
+INACTIVE_PROFILE_C_SRCS += $(RETIRED_OBSERVE_C_SRCS)
 ifeq ($(AGENT_OBSERVE_TEST_PROFILE),)
 C_SRCS := $(filter-out $K/agent_observe_test.c,$(C_SRCS))
 INACTIVE_PROFILE_C_SRCS += $K/agent_observe_test.c
@@ -167,17 +200,7 @@ KERNELVEC_FRAME_SIZE_BYTES ?= 256
 # swtch 会切换栈；usertrapret 的间接跳转是无栈蹦床。
 KSTACK_STACK_BOUNDARIES ?= swtch
 KSTACK_INDIRECT_CALLERS ?= usertrapret
-KSTACK_INDIRECT_CALL_EDGES ?= \
-	agent_durable_arena_validate=agent_observe_store_validate \
-	agent_durable_arena_update_scope=agent_observe_store_update_scope \
-	agent_durable_arena_recover=agent_observe_store_recover \
-	agent_durable_arena_has_scope=agent_observe_store_has_scope \
-	agent_durable_notify_locked=agent_meta_durable_dirty \
-	agent_durable_section_replicated=agent_meta_durable_replicated \
-	agent_durable_section_active_replicated=agent_meta_durable_active_replicated \
-	agent_durable_section_persist_scope=agent_meta_durable_persist_scope \
-	agent_durable_section_mirror_scope=agent_observe_store_replicated_scope \
-	agent_identity_lease_progress=agent_observe_lease_persist_bridge
+KSTACK_INDIRECT_CALL_EDGES ?=
 # Sv39 遍历最多访问三级页表。
 KSTACK_RECURSION_BOUNDS ?= freewalk=3 uvm_prune_empty_walk=3
 KSTACK_POLICY_ARGS = \
@@ -341,67 +364,6 @@ ifneq ($(FS_STORAGE_TINY_TEST_PROFILE),)
 CFLAGS += -DFS_STORAGE_TINY_TEST_PROFILE=$(FS_STORAGE_TINY_TEST_PROFILE)
 endif
 
-ifneq ($(AGENT_METADATA_CRASH_PHASE),)
-CFLAGS += -DAGENT_METADATA_CRASH_PHASE=$(AGENT_METADATA_CRASH_PHASE)
-AGENT_METADATA_CRASH_BANK ?= primary
-ifeq ($(AGENT_METADATA_CRASH_BANK),primary)
-CFLAGS += -DAGENT_METADATA_CRASH_BANK=0
-else ifeq ($(AGENT_METADATA_CRASH_BANK),mirror)
-CFLAGS += -DAGENT_METADATA_CRASH_BANK=1
-else
-$(error AGENT_METADATA_CRASH_BANK must be primary or mirror)
-endif
-endif
-ifneq ($(AGENT_METADATA_EIO_PHASE),)
-CFLAGS += -DAGENT_METADATA_EIO_PHASE=$(AGENT_METADATA_EIO_PHASE)
-AGENT_METADATA_EIO_BANK ?= primary
-AGENT_METADATA_EIO_SKIP_SCOPE_COMMITS ?= 0
-ifeq ($(AGENT_METADATA_EIO_BANK),primary)
-CFLAGS += -DAGENT_METADATA_EIO_BANK=0
-else ifeq ($(AGENT_METADATA_EIO_BANK),mirror)
-CFLAGS += -DAGENT_METADATA_EIO_BANK=1
-else
-$(error AGENT_METADATA_EIO_BANK must be primary or mirror)
-endif
-CFLAGS += -DAGENT_METADATA_EIO_SKIP_SCOPE_COMMITS=$(AGENT_METADATA_EIO_SKIP_SCOPE_COMMITS)
-CFLAGS += -DVIRTIO_DISK_FAULT_INJECTION
-endif
-
-ifneq ($(AGENT_METADATA_SELECT_FAULT_BANK),)
-AGENT_METADATA_SELECT_FAULT_COUNT ?= 3
-ifeq ($(AGENT_METADATA_SELECT_FAULT_BANK),bank0)
-CFLAGS += -DAGENT_METADATA_SELECT_FAULT_BANK=0
-else ifeq ($(AGENT_METADATA_SELECT_FAULT_BANK),bank1)
-CFLAGS += -DAGENT_METADATA_SELECT_FAULT_BANK=1
-else
-$(error AGENT_METADATA_SELECT_FAULT_BANK must be bank0 or bank1)
-endif
-CFLAGS += -DAGENT_METADATA_SELECT_FAULT_COUNT=$(AGENT_METADATA_SELECT_FAULT_COUNT)
-endif
-
-ifneq ($(AGENT_METADATA_BOOT_READ_FAULT),)
-AGENT_METADATA_BOOT_READ_FAULT_COUNT ?= 2
-AGENT_METADATA_BOOT_READ_FAULT_BANK ?= all
-ifeq ($(AGENT_METADATA_BOOT_READ_FAULT),busy)
-CFLAGS += -DAGENT_METADATA_BOOT_READ_FAULT=1
-else ifeq ($(AGENT_METADATA_BOOT_READ_FAULT),io)
-CFLAGS += -DAGENT_METADATA_BOOT_READ_FAULT=2
-else ifeq ($(AGENT_METADATA_BOOT_READ_FAULT),interrupted)
-CFLAGS += -DAGENT_METADATA_BOOT_READ_FAULT=3
-else
-$(error AGENT_METADATA_BOOT_READ_FAULT must be busy, io, or interrupted)
-endif
-CFLAGS += -DAGENT_METADATA_BOOT_READ_FAULT_COUNT=$(AGENT_METADATA_BOOT_READ_FAULT_COUNT)
-ifeq ($(AGENT_METADATA_BOOT_READ_FAULT_BANK),all)
-CFLAGS += -DAGENT_METADATA_BOOT_READ_FAULT_BANK=-1
-else ifeq ($(AGENT_METADATA_BOOT_READ_FAULT_BANK),bank0)
-CFLAGS += -DAGENT_METADATA_BOOT_READ_FAULT_BANK=0
-else ifeq ($(AGENT_METADATA_BOOT_READ_FAULT_BANK),bank1)
-CFLAGS += -DAGENT_METADATA_BOOT_READ_FAULT_BANK=1
-else
-$(error AGENT_METADATA_BOOT_READ_FAULT_BANK must be all, bank0, or bank1)
-endif
-endif
 
 ifneq ($(VIRTIO_DISK_TEST),)
 ifneq ($(VIRTIO_DISK_TEST),1)
@@ -435,9 +397,10 @@ endif
 
 override CFLAGS += $(KSTACK_REQUIRED_CFLAGS)
 
-# 控制与持久化所有者拆分后优先按体积优化；白名单必须精确，
+# 冷控制面按体积优化；高频 credit、ring 与 live-query 事件路径保留 -O。
+# 白名单必须精确，
 # 模块检查器会拒绝任何扩张。
-AGENT_SIZE_OPTIMIZED_MODULES := agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store
+AGENT_SIZE_OPTIMIZED_MODULES := agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_objects agent_metadata_query agent_observe_ledger
 AGENT_SIZE_OPTIMIZED_OBJS := $(addprefix $(BUILDDIR)/$(K)/,$(addsuffix .o,$(AGENT_SIZE_OPTIMIZED_MODULES)))
 $(AGENT_SIZE_OPTIMIZED_OBJS): private CFLAGS += -Os
 
@@ -577,8 +540,8 @@ override KERNEL_BUDGET_MAKE_ARGS = \
 	KSTACK_SAFETY_MARGIN=4096 \
 	KERNELVEC_FRAME_SIZE_BYTES=256 \
 	KSTACK_STACK_BOUNDARIES=swtch \
-	KSTACK_INDIRECT_CALLERS=usertrapret \
-	KSTACK_INDIRECT_CALL_EDGES='agent_durable_arena_validate=agent_observe_store_validate agent_durable_arena_update_scope=agent_observe_store_update_scope agent_durable_arena_recover=agent_observe_store_recover agent_durable_arena_has_scope=agent_observe_store_has_scope agent_durable_notify_locked=agent_meta_durable_dirty agent_durable_section_replicated=agent_meta_durable_replicated agent_durable_section_active_replicated=agent_meta_durable_active_replicated agent_durable_section_persist_scope=agent_meta_durable_persist_scope agent_durable_section_mirror_scope=agent_observe_store_replicated_scope agent_identity_lease_progress=agent_observe_lease_persist_bridge' \
+	KSTACK_INDIRECT_CALLERS='usertrapret' \
+	KSTACK_INDIRECT_CALL_EDGES= \
 	KSTACK_RECURSION_BOUNDS='freewalk=3 uvm_prune_empty_walk=3' \
 	FS_ICACHE_SIZE= \
 	FILE_RESOURCE_POOL_SIZE= \
@@ -638,16 +601,16 @@ $(AGENT_CORE_BOUNDARY_PROBE): $(K)/agent_core.c $(wildcard $(K)/*.h) $(wildcard 
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -fno-inline -fkeep-static-functions -c $< -o $@
 
-agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_lifecycle_abi.h agent_tool_abi.h agent_metadata_disk_abi.h agent_performance_abi.h agent_resource_abi.h
+agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_lifecycle_abi.h agent_tool_abi.h agent_workflow_fence_abi.h agent_metadata_disk_abi.h agent_performance_abi.h agent_resource_abi.h
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-uapi-layout.py \
 		--root . --build-dir $(KERNEL_BUDGET_BUILDDIR)/ci \
 		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
 		--nm $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)nm)
 
-agent-module-check: agent-uapi-check scripts/check-agent-module-boundaries.sh scripts/check-teardown-protocol.py scripts/check-metadata-catalog-capacity.py scripts/check-metadata-catalog-rollback-fence.py scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
+agent-module-check: agent-uapi-check scripts/check-agent-module-boundaries.sh scripts/check-agent-live-query-fs.py scripts/check-workflow-fence.py scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
 	@bash scripts/check-agent-module-boundaries.sh
-	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-metadata-catalog-capacity.py --root .
-	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-metadata-catalog-rollback-fence.py --root .
+	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/check-agent-live-query-fs.py
+	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/check-workflow-fence.py
 	+@$(KERNEL_BUDGET_SUBMAKE) $(KERNEL_BUDGET_BUILDDIR)/kernel $(KERNEL_BUDGET_MAKE_ARGS)
 	+@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-kernel-budgets.py \
@@ -659,10 +622,10 @@ agent-module-check: agent-uapi-check scripts/check-agent-module-boundaries.sh sc
 		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
 		$(KERNEL_BUDGET_TOOL_ARGS)
 
-kernel-budget-check: agent-uapi-check scripts/check-agent-module-boundaries.sh scripts/check-teardown-protocol.py scripts/check-metadata-catalog-capacity.py scripts/check-metadata-catalog-rollback-fence.py scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
+kernel-budget-check: agent-uapi-check scripts/check-agent-module-boundaries.sh scripts/check-agent-live-query-fs.py scripts/check-workflow-fence.py scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
 	@bash scripts/check-agent-module-boundaries.sh
-	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-metadata-catalog-capacity.py --root .
-	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-metadata-catalog-rollback-fence.py --root .
+	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/check-agent-live-query-fs.py
+	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/check-workflow-fence.py
 	+@$(KERNEL_BUDGET_SUBMAKE) $(KERNEL_BUDGET_BUILDDIR)/kernel $(KERNEL_BUDGET_MAKE_ARGS)
 	+@$(KERNEL_BUDGET_SUBMAKE) $(STRUCT_PROC_BUDGET_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
 	+@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
@@ -685,7 +648,9 @@ kernel-budget-check: agent-uapi-check scripts/check-agent-module-boundaries.sh s
 override KERNEL_BUDGET_STATIC_CHECKS := \
 	scripts/check-agent-file-generation-index.py \
 	scripts/check-agent-file-version-sparse.py \
-	scripts/check-vfs-scope-registry.py
+	scripts/check-vfs-scope-registry.py \
+	scripts/check-agent-live-query-fs.py \
+	scripts/check-workflow-fence.py
 
 override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-check-kernel-budgets.py \
@@ -697,19 +662,16 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-check-agent-uapi-layout.py \
 	scripts/test-context-active-path-wiring.py \
 	scripts/test-exec-image-policy.py \
-	scripts/test-agent-metadata-disk-format.py \
-	scripts/test-agent-observe-disk-format.py \
+	scripts/test-agent-live-query-fs.py \
+	scripts/test-agent-evidence-ring.py \
+	scripts/test-workflow-credit-domain.py \
+	scripts/test-workflow-fence.py \
+	scripts/test-workflow-syscall-cut.py \
 	scripts/test-host-probe-toolchain.py \
 	scripts/test-agent-test-runner.py \
 	scripts/test-ch3-trace-acceptance.py \
 	scripts/test-agent-test-calibration.py \
 	scripts/test-validate-kernel-test-log.py \
-	scripts/test-validate-metadata-crash-log.py \
-	scripts/test-metadata-boot-reprobe.py \
-	scripts/test-metadata-store-authority.py \
-	scripts/test-metadata-catalog-capacity.py \
-	scripts/test-metadata-catalog-rollback-fence.py \
-	scripts/test-validate-metadata-reprobe-log.py \
 	scripts/check-wait-queue-contract.py \
 	scripts/test-wait-atomic-wiring.py \
 	scripts/check-bio-fs-must-check.py \
@@ -722,9 +684,6 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/check-fs-epoch-index.py \
 	scripts/test-fs-overwrite-fastpath.py \
 	scripts/check-copyoutv-window.py \
-	scripts/check-agent-metadata-content-fastpath.py \
-	scripts/test-agent-metadata-journal.py \
-	scripts/check-agent-metadata-read-view.py \
 	scripts/test-io-work-conserving-wiring.py \
 	scripts/check-syscall-file-transaction.py \
 	scripts/check-traditional-io-fastpath.py \
@@ -736,15 +695,12 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/check-background-dispatch-fastpath.py \
 	scripts/check-filepool-freelist.py \
 	scripts/check-vm-page-table-fastpath.py \
-	scripts/test-audit-lease-admission.py \
-	scripts/test-observe-span-retention.py \
 	scripts/check-fs-allocator-state.py \
 	scripts/test-fs-dentry-index.py \
 	scripts/test-fs-allocator-image.py \
 	scripts/test-fs-allocator-evidence.py \
 	scripts/test-fs-epoch-regression.py \
 	scripts/test-mkfs-host-snapshot.py \
-	scripts/test-observe-recovery-contract.py \
 	scripts/test-printf-format-contract.py \
 	scripts/test-rp-evidence-file-field.py \
 	scripts/test-rp-state-append.py \
@@ -757,18 +713,11 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-resource-jobs.py \
 	scripts/test-bio-rate-controller.py
 
-kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh agent-observe-disk-format-check printf-format-static-check
+kernel-budget-selftest: $(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS) scripts/run-parallel-tests.py printf-format-static-check
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
 		$(KERNEL_BUDGET_PYTHON_SELFTESTS) $(KERNEL_BUDGET_STATIC_CHECKS)
-	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-metadata-disk-format.py \
-		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
-		--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy)
-	@CC=$(call shell_quote,$(HOST_CC)) \
-		HOST_CC=$(call shell_quote,$(HOST_CC)) \
-		HOSTCC=$(call shell_quote,$(HOST_CC)) \
-		bash scripts/test-durable-dirty-retry.sh
 
 agent-observe-disk-format-check: scripts/check-agent-observe-disk-format.py scripts/probes/agent-observe-disk-layout.c ci/agent-observe-disk-format.json
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-observe-disk-format.py \
@@ -788,7 +737,6 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_check_seeded_action_state.py \
 	host_tools/test_check_host_surface_alignment.py \
 	host_tools/test_check_host_test_alignment.py \
-	host_tools/test_agent_observe_disk_evidence.py \
 	host_tools/test_plain_ucore_action_runner.py \
 	host_tools/test_research_state_manifest.py \
 	host_tools/test_plain_ucore_fs_extract.py \
@@ -850,7 +798,7 @@ override EVIDENCE_CAPTURE_TESTS := \
 	host_tools/test_evidence_delivery_contract.py
 
 evidence-capture-selftest: scripts/trusted-python-entry.py scripts/trusted-python-child.py host_tools/evaluation_source_gate.py host_tools/formal_python_runtime.py
-evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/safe_host_paths.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py $(EVIDENCE_CAPTURE_TESTS)
+evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py scripts/check-agent-live-query-fs.py scripts/check-workflow-fence.py scripts/test-workflow-credit-domain.py scripts/test-agent-evidence-ring.py scripts/test-agent-live-query-fs.py scripts/test-workflow-fence.py scripts/test-workflow-syscall-cut.py host_tools/evidence_toolchain_attestation.py host_tools/git_history_contract.py host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/safe_host_paths.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py $(EVIDENCE_CAPTURE_TESTS)
 	@$(PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(PYTHON_BIN)) \
@@ -880,7 +828,7 @@ stage-host-selftests: $(STAGE_HOST_SELFTESTS) scripts/run-parallel-tests.py
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
 		$(STAGE_HOST_SELFTESTS)
 
-local-host-selftests: $(LOCAL_HOST_SELFTESTS) scripts/run-parallel-tests.py scripts/check-agent-metadata-disk-format.py scripts/probes/agent-metadata-disk-layout.c ci/agent-metadata-disk-format.json scripts/test-durable-dirty-retry.sh agent-observe-disk-format-check printf-format-static-check
+local-host-selftests: $(LOCAL_HOST_SELFTESTS) scripts/run-parallel-tests.py printf-format-static-check
 	@$(KERNEL_BUDGET_PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
 		--jobs $(AGENTOS_TEST_JOBS) \
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
@@ -890,13 +838,6 @@ local-host-selftests: $(LOCAL_HOST_SELFTESTS) scripts/run-parallel-tests.py scri
 		--timeout 1800 \
 		--python $(call shell_quote,$(KERNEL_BUDGET_PYTHON)) \
 		$(LOCAL_LONG_HOST_SELFTESTS)
-	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-metadata-disk-format.py \
-		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
-		--objcopy $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)objcopy)
-	@CC=$(call shell_quote,$(HOST_CC)) \
-		HOST_CC=$(call shell_quote,$(HOST_CC)) \
-		HOSTCC=$(call shell_quote,$(HOST_CC)) \
-		bash scripts/test-durable-dirty-retry.sh
 
 local-check:
 	+@$(MAKE) --no-print-directory local-host-selftests
@@ -1095,12 +1036,6 @@ physical-resource-test:
 
 workflow-teardown-race-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-workflow-teardown-race-tests.sh
-
-metadata-recovery-test:
-	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-metadata-recovery-tests.sh
-
-observe-recovery-test:
-	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-observe-recovery-tests.sh
 
 virtio-disk-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-virtio-disk-tests.sh

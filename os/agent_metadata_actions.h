@@ -18,8 +18,6 @@ struct agent_metadata_dependency_view {
 	char summary[AGENT_FILE_SUMMARY_SIZE];
 };
 
-struct agent_metadata_persist_result;
-
 void agent_metadata_actions_init(void);
 void agent_metadata_actions_generation_advance(void);
 void agent_metadata_actions_note_changes(uint);
@@ -39,7 +37,6 @@ int agent_metadata_actions_seen(
 void agent_metadata_actions_remember(
 	uint, int, char *, char *, char *, uint64);
 int agent_metadata_actions_update_status_locked(
-	uint, char *, char *, char *, char *, char *, uint64, int,
-	struct agent_metadata_persist_result *);
+	uint, char *, char *, char *, char *, char *, uint64, int);
 
 #endif

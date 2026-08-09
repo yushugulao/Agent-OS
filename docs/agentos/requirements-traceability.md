@@ -1,190 +1,103 @@
-# 赛题要求追踪表
+# 赛题要求追踪
 
-本文按赛题任务追踪实现、验证合同和剩余缺口。表中的状态描述源码与对应测试覆盖，不代表当前工作树已经取得正式动态结果。同一冻结提交 C 完成全量动态验收、所需校准和 C→E 证据绑定后，才形成正式结果。
+本表把赛题任务映射到当前生产实现、主要验证和诚实边界。源码位置是评审导航，不替代冻结提交与动态证据。
 
-发布状态只从 append-only `evidence/releases/INDEX.md` 及其指向 bundle 的 `manifest.json` 读取。代码提交 C 先冻结，采集器在干净 C 上执行 `make full-verify`，证据提交 E 再作为 C 的直接子提交只加入 bundle 和索引行。完成本地 C→E 合同即形成正式 E3。GitLab 只托管源码与证据，不配置 Runner；`remote_ci.status=not-attached` 是固定兼容值。
+## 1. 总表
 
-## 状态定义
+| 任务 | 赛题能力 | 当前实现 | 主要源码 | 验证入口 | 边界 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Agent 进程与专用地址空间 | 可信映像/role/capability、7 页 Context 区、workflow id+generation、member+closing+gates | `os/agent_core.c`、`os/proc.c`、`os/workflow_lifecycle.c`、`os/vfs_security.c` | Agent create/scope/security Guest tests；fence syscall-cut test | 单 Hart；workflow/slot 有界；无 crash workflow recovery |
+| 2 | 面向 Agent 的系统调用/工具 | name/id 工具目录、typed KV、参数/能力验证、`agent_run()` batch | `os/agent_core.c`、`os/agent_metadata_actions.c`、`agent_tool_abi.h` | tool/agent final/bench Guest tests；UAPI check | 内核不运行 LLM；fence 是 count=0 的独立控制路径 |
+| 3 | Context Path | 内核可信 Context、只读 mirror、query/snapshot/detail/rollback、cause/span/branch | Context 模块、`os/agent_observe.c` | Context/rollback/security Guest tests；Evidence Ring model | user cache 不可信；历史有界 |
+| 4 | 文件属性查询 | 显式 volatile metadata、status/stage/kind 索引、inode incarnation、typed live query/resync | metadata catalog/query/object、`os/agent_live_query_events.c` | live-query checker/model；file-query Guest benchmark | 不 autoscan；不持久化 catalog；重启需重新登记 |
+| 5 | Agent Loop | 有界 event queue、watch/wait、heartbeat、route、调度、Fence-Sealed Evidence Ring | `os/agent_ipc.c`、observe/timeline、evidence ring、scheduler | evidence/fence/live-query model；loop/sched/IPC Guest tests | seal 是内存 partial coverage，不是 disk durable |
+| 6 | 综合 Agent 应用 | plain/AgentOS 运行同一科研工作流合同，Host 提取状态和 paired measurement | `user/src/rp_*`、`baseline_ucore/`、`host_tools/` | seeded action state、dual target、formal verification | 单项机制归因需消融；发布数字只来自 bundle |
 
-| 状态 | 含义 |
+## 2. 任务一细化
+
+| 要求 | 实现/断言 |
 | --- | --- |
-| 已验证 | 已有实现和对应测试合同；当前发布是否动态通过仍以 C 对应 bundle 为准 |
-| 机制/静态验收完成，候选动态复验待生成 | 当前源码和 Host/静态合同已就绪；须在同一冻结 C 上生成新的动态日志、三轮校准和 release bundle |
-| 已验证，保留测试缺口 | 核心机制有对应测试合同，但表中明确列出的极端组合仍缺独立断言 |
-| 已实现，待本次回归 | 机制和对应回归断言已进入源码；只有 C 对应 bundle 中的新 QEMU 输出可以提升发布证据等级 |
-| 部分实现 | 有基础能力，但未覆盖赛题完整语义 |
+| 区分普通进程与 Agent | `is_agent` 只由受控 create/exec 发布，普通 exec 不取得身份 |
+| Agent 角色和权限 | role 映射 capability；父权限、映像 profile 和 scope 继续衰减 |
+| 专用 Context | 固定 ABI 地址，6 页可信区 + 1 页 user cache |
+| fork/exec/exit | operation/departure gate 包围身份和资源转移；失败撤销 |
+| workflow 生命周期 | immutable `id+generation`、members、closing、controller、fence gate |
+| 资源隔离 | exec/storage account；U/P/F hard admission；fence exact U |
 
-## 总体交付要求
+不再把“多阶段 retirement”作为加分能力。当前更小的状态机以最后 member 和 gate quiescence 决定回收。
 
-| ID | 赛题要求 | 状态 | 实现/材料 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| G-1 | 在教学操作系统内核中实现 Agent-OS 功能模块 | 已验证，保留测试缺口 | `os/agent.c` facade；core/context/identity/IPC/lifecycle/observe owner；metadata transaction、`agent_file_state`、catalog/query/scan/directory/objects/actions/store（含 format/I/O）；`resource_controller`、`workflow_lifecycle` 与 `os/proc.c` | owner 边界与定向检查已接线；动态发布状态由 C 对应 bundle 决定 |
-| G-2 | 系统可在 QEMU 上运行 | 已验证 | `Makefile`、`nfs/fs.img` | 当前发布状态由 [正式证据索引](../../evidence/releases/INDEX.md) 指向的 C 对应 bundle 决定，边界见 [verification.md](verification.md) |
-| G-3 | 提供内核代码 | 已验证 | `os/` | Git 仓库源码 |
-| G-4 | 提供用户态测试程序 | 已验证 | Agent case 成员与顺序由 [`ci/kernel-budgets.json`](../../ci/kernel-budgets.json) 的 `agent_test_suite.expected_cases` 唯一定义；机制专项独立运行 | 最终状态以 profile v7 的动态 Guest 日志与强类型原始产物为准，边界见 [verification.md](verification.md) 和 [正式证据索引](../../evidence/releases/INDEX.md) |
-| G-5 | 提供综合示例场景 | 已验证 | `user/src/labdemo_ucore.c` | runner 合同要求 `labdemo_ucore: passed`；当前发布状态以 bundle 为准 |
-| G-6 | 提供设计文档和运行说明 | 已验证 | [../../README.md](../../README.md)、[design.md](design.md)、[scenario-script.md](scenario-script.md) | 本文档、[verification.md](verification.md) |
-| G-7 | 保留代表性的 uCore 基础 syscall，并禁止 legacy mail 绕过 workflow 隔离 | 已接入动态门禁，待正式发布复跑 | `SYS_trace` 保留正向语义；`SYS_mailread`、`SYS_mailwrite` 保留编号并恒定失败关闭；消息统一使用 scope-local route/watch/event IPC | `make ch3-trace-test` 验证基础正向路径；`agentsecurity_ucore` 同时要求 mail fail-closed 与 route 授权、lifecycle、target consent、槽回收标记。profile v7 把精确验证的 Guest 转录作为独立原始工件交付 |
-| G-8 | 内核增长、模块边界和关键运行预算必须可审查并由本地门禁拒绝回退 | 已验证，保留发布缺口 | `ci/kernel-budgets.json`、`scripts/check-kernel-budgets.py`、`scripts/check-agent-module-boundaries.sh`、`scripts/check-kernel-stack-usage.py`、`make local-check` | 版本化 owner/bridge/dependency/SCC 与逐模块 LOC/BSS 之外，还强制全内核 source、ELF/raw image、runtime text/data/BSS、`struct proc`、线程/boot 栈及 metadata aggregate source/text/BSS。当前数值只在 [正式证据索引](../../evidence/releases/INDEX.md) 集中记录，最终指标须由 C 对应 bundle 绑定 |
+## 3. 任务二细化
 
-## 内核安全与稳定性机制
+| 要求 | 实现/断言 |
+| --- | --- |
+| 结构化调用 | v1 兼容请求和 v2 typed KV；版本、size、type、required key 检查 |
+| 工具发现 | 内核 tool list，name/id 映射唯一 |
+| 批处理 | `agent_run()` 对数组逐项执行并返回稳定 status |
+| 权限 | 每个工具检查 role/capability/scope，不信任用户传入 actor 字段 |
+| fence | `agent_run(count=0, AGENT_RUN_F_FENCE)`，controller-only |
 
-这些条目不是对个别测试程序的特判，而是普通进程和 Agent 共用的内核机制。两个目标共享输入检查、等待队列、文件系统失败处理等行为目标，但当前 generation-safe resource controller、workflow lifecycle、统一 teardown 和 lazy physical stack 只在根目录 AgentOS 目标实现；`baseline_ucore/` 仍保留旧计数与固定栈路径。追踪表只把实际共享代码写成共享实现。
+## 4. 任务三细化
 
-| ID | 安全或稳定性要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| S-1 | 所有 syscall 用户指针、字符串、长度、权限和描述符方向在解引用前统一校验，失败路径不留下半完成资源 | 已验证 | `user_range_check()`、`copyin()`、`copyout()`、`copyinstr()`、`os/syscall.c`、`os/loader.c`、`os/file.c`、`os/pipe.c` | `usersafety_ucore` 覆盖 pointer/string/exec argv/thread 范围、pipe buffer、wait/time copyout、fd 方向、文件分配回滚、信号量输入和 exec 事务，并输出 `usersafety_ucore: parent passed` |
-| S-2 | 睡眠线程只挂入所属对象的定向等待队列，唤醒、取消和退出中断不会扫描或破坏其他同步队列 | 已验证 | `struct wait_queue`、`wait_queue_sleep/wake_one/wake_all/interrupt/cancel()`；mutex、semaphore、condvar、child、Agent event、timeline 和 thread-exit 各自持有队列 | `usersafety_ucore: live after directed wakeup`；`procreap_ucore: wait-queue cancellation passed`；`agentfinal_ucore` 验证 timeline filter 不匹配不唤醒 |
-| S-3 | inode、inode cache 和数据块耗尽返回可恢复错误；未提交的创建/扩容状态回滚，短写准确报告已经提交的前缀 | 已验证 | `ialloc()`、`balloc()`、`bmap()`、`writei()`、`create()` 的错误返回、回滚和短写路径 | `fsenospc_ucore: inode exhaustion survived`、`inode cache exhaustion survived`、`block exhaustion survived`、`parent passed` |
-| S-4 | 每线程保留独立虚拟栈、guard 和 canary，物理页按 live thread 分配并在 scheduler handoff 后释放；构建与 CI 限制线程栈、boot stack 和总容量 | 已验证 | `kernel_stack_acquire()`、`kernel_stack_release_inactive()`、`KSTACK_NONE/LIVE/REAP`、`boot_stack` 链接符号、`scripts/check-kernel-stack-usage.py`、budget probe | 发布值必须来自同一 C 的 canonical budget log、版本化 JSON 与 bundle metrics，并由 [正式证据索引](../../evidence/releases/INDEX.md) 绑定 |
-| S-5 | Agent 软调度分值不能越过资源域公平边界，也不能让同域普通任务永久饥饿 | 已验证 | `scheduler_active_domains` 外层严格轮转；每域普通/Agent 双 lane；每域 `scheduler_agent_burst` / `scheduler_score_burst` 与 `AGENT_SCHED_MAX_AGENT_BURST=8`；`fetch_task()` 两级选择 | proc-reap、thread-resource 与 Agent suite 均有对应合同；当前发布结果只从 C 对应 bundle 读取 |
-| S-6 | 用户态事件注入只允许消息类型，系统事件只能由对应内核或受权专用工具产生 | 已验证 | `agent_wake()` 仅接受 `AGENT_EVENT_MESSAGE`；FILE_STATUS、TIMER、LLM_DONE 等走专用投递路径 | `agentsecurity_ucore: wake_event_authorization=1`；普通进程调用拒绝、保留系统类型返回 `AGENT_STATUS_DENIED`、非法类型返回 `AGENT_STATUS_BAD_PARAM` |
-| S-7 | Agent 创建授权、workflow factory 权与业务 capability 分离；只有可信 bootstrap factory 能创建新 scope，scope 内 orchestrator 只能委派本域角色 | 已验证 | `agent_role_grant_mask`、`agent_authority_bootstrap/on_exec/check()`、`agent_create_role_proc()`、`agent_workflow_create_proc()`、动态 scope admission | `agentscope_ucore: cross_scope_isolation=1 same_scope_collaboration=1 scope_capacity_reservation=1` |
-| S-8 | Agent 角色与可信、不可变且角色许可的可执行映像绑定，复制或篡改程序文件不能继承 Agent 权限 | 已验证 | `user/include/exec_policy_manifest.h`、`os/exec_policy.c`、loader 映像身份、不可变 inode 和 role mask 校验 | `agenttrust_ucore: wx_image=1`、`immutable_image=1`、`bootstrap_role_boundary=1`、`trusted_agent_exec=1`、`role_image_binding=1`、`parent passed` |
-| S-9 | 普通 open/read/write/truncate/unlink 服从 capability 与精确 workflow scope；执行委派绑定 `scope + dev + inum + incarnation`，跨 scope inode fd 撤销，同 scope inode fd 每次重新授权 | 已验证 | `os/vfs_security.c`、inode VFS scope/label/checksum/incarnation、`vfs_inode_authorize()`、`vfs_proc_delegate_exec/install_image()`、scope-aware lookup、真实文件 syscall 路径 | `agentvfs_ucore` 负向检查通过；`agentscope_ucore` 的同名文件跨 scope 隔离、租约隔离和一次性 pipe fd 委派断言通过 |
-| S-10 | 父进程先退出时，活子进程转为内核持有；无父退出进程由内核立即回收，不遗留孤儿僵尸 | 已验证 | `proc_orphan_children()`、`proc_child_publish_exit()`、`proc_recycle()` | `procreap_ucore: child-first=...`、`parent-first=...`、`orphan-resource=...`、`parent passed` |
-| S-11 | 所有进程级退出原因采用单一正向 teardown；阻塞 sibling 展开后依次 detach、reclaim、settle、handoff，scheduler 最后发布并回收栈/槽 | 已验证；复合等待态待补 | `enum proc_teardown_state`、`teardown_owner_tid`、`proc_teardown_run()`、terminal clear/lifecycle release、scheduler publish/recycle | teardown race 组合覆盖 factory close/自然退出、阻塞 file 引用、退出后新 workflow 账户的 debt/cache 零值、inode/account 和 lifecycle 结算；Context lane、metadata transaction 与非零 I/O debt/cache 的 teardown 同窗状态没有确定性动态证明 |
-| S-12 | wait 凭据与可执行进程槽解耦；bind 以 `live_child_count` 预留完成容量，退出码发布到父进程紧凑 `child_exit` FIFO 后即可回收进程槽，拒绝 wait 的父进程不能占住全局进程表 | 已验证 | `struct child_exit`、`proc_child_bind/publish_exit/wait_result/unbind()`、`child->parent` 唯一活关系、每父进程共享完成配额 | `procreap_ucore: detached-wait=...`、`unreaped-parent-isolated=1`；延迟 wait 仍按退出顺序取得 pid 和状态 |
-| S-13 | 进程与主线程必须由 generation-safe EXEC account 原子接纳；普通/保留上限及系统保留不能被 fork bomb 或账户槽复用绕过 | 已验证 | `resource_controller.[ch]`、PROCESS+THREAD vector reservation、EXEC account ACTIVE/CLOSING/DRAINING、generation handle | proc-reap、thread-resource 与 Agent suite 均有对应合同；当前发布结果只从 C 对应 bundle 读取 |
-| S-14 | capability 必须与 active kernel-issued workflow scope 和精确对象 owner 共同命中；同能力、同名称、同 PID 或公开 span 都不能跨 scope 访问对象 | 已验证 | `VFS_SCOPE_NONE=0`、`VFS_SCOPE_SYSTEM=1`、动态 scope `>=3`，2 保留为 PUBLIC 存储 principal；metadata/dependency/action/edit/audit/IPC 的 scope 与 stable owner 字段；legacy mail 恒定失败关闭；metadata force reload 只替换调用者 scope | `agentscope_ucore` 覆盖 reload/action/audit/lease/IPC scope 隔离；`agentsecurity_ucore` 覆盖 route 授权、lifecycle、target consent 和槽回收 |
-| S-15 | 物理 512 槽审计表按 4 个 workflow 各保留 128 条；scope 内 low/high 各 64，low principal 上限16、high active principal 上限8，其他主体不能淘汰其 protected evidence | 已验证 | scope ledger state、stable audit principal、private span owner、authority-effect 分类；high 满时仅自滚或回收 inactive principal，稀疏窗口由 `dropped_records` 说明 | `agentsecurity_ucore: trusted_span_authority=1 trusted_cause_attribution=1 audit_authority_partition=1` |
-| S-16 | syscall 不能越过调度公平边界；时间片不能由重复 syscall 刷新，长循环按已提交工作量在安全点延迟抢占 | 已验证 | `os/kernel_work.c` 的 timer-published `need_resched`、work units/pending/resumed 状态和 syscall 统一 begin/end；无待办时不读 cycle；统一 syscall policy 一次分类 block-I/O/FS-epoch 慢路径；console/pipe/exec/fork 分页、Agent batch 和 FD_INODE 块安全点；fork VM snapshot 屏障、inode 短返回、truncate cleanup | 双目标 syscall-fairness 合同覆盖 console、inode write、`O_TRUNC`、observer 和 worker 退出完整性；传统接口另按 [评价方法](../evaluation.md) 的 p50/p99 门槛采集 |
-| S-17 | 单安装、单租户的 PUBLIC 持久存储配额绑定稳定主体，不得因短命进程资源域退出、重新创建或系统重启而清零 | 已验证 | `storage_principal_id` 与 `resource_domain_id`/workflow scope 分离；当前无 uid/tenant ABI，普通进程统一绑定安装级 principal 2；superblock 记录 principal，挂载从 qmap/dinode 重建 PUBLIC block/inode 用量并回收无目录引用的孤儿；可变 SYSTEM 赞助文件在首次修改前整体转移 owner；策略/owner 格式升级并拒绝旧镜像。按认证用户/租户拆分多个稳定 principal 属后续 ABI 扩展 | `fspquota_ucore` 已在 AgentOS 与 baseline 的同一镜像各完成 crash/seed/verify 三次启动，覆盖打开后 unlink 的显式 SIGTERM checkpoint、赞助文件接管、完整域退出、`reboot_charge_persisted`、`deletion_reuse`、`relaunch_charge_persisted` 和 `cleanup_reuse`；不宣称硬掉电注入 |
-| S-18 | 全局 file object 按 EXEC account 与 ordinary/reserved class 计费；阻塞引用不能借关闭 FD 逃账，pipe 两端必须原子 admission | 已验证 | `struct file.resource_account/resource_reserved`、FILE_OBJECT vector reservation、generation-safe final refund；baseline 保留旧实现 | 双目标 file-resource 回归合同已定义；发布结果由 C 对应 bundle 绑定 |
-| S-19 | 块设备 I/O 与 buffer cache 按稳定 STORAGE owner 隔离；普通压力不得消耗控制/系统保留，退出与 retirement 不得遗留 debt、在途请求或 cache 引用 | 已实现，动态结论以正式证据为准 | `os/bio.c` 为活跃 owner 保存 class bucket，并设置 shared/device 根；两级 reserve/commit/cancel 在同一关中断窗口完成，信用按 `last_refill_tick` 惰性补充，debt bitmap 只推进有债务的 lane；通用 resource account 不再常驻 I/O lane/lease 表；真实 `disk_submit` 是物理计费边界，cache sponsor 与 teardown settlement 绑定同一 owner | `iobudget_ucore` 验证 work-conserving、scope 隔离、受保护进展、lazy cache admission 和 owner 回收；`virtiodisk_ucore` 验证丢中断、延迟完成、描述符压力、设备错误、flush-disabled 与 timeout/reset |
-| S-20 | THREAD usage 必须计入 EXEC account，thread bomb 不能耗尽保留容量；CPU 份额只按独立 `resource_domain_id` 调度分区轮转 | 已验证 | `resource_controller` THREAD kind、thread `resource_account`、lazy stack admission/rollback、active-domain FIFO | thread-resource 合同包含容量、退款和调度压力；当前发布状态由 C 对应 bundle 绑定 |
-| S-21 | 观测计数和过滤查询必须服从内核工作预算，不能通过不复制结果或重复选择最小记录绕过域级调度公平 | 已验证 | 每 scope 的 sequence 与 `(tick, sequence)` 双有序索引；audit/span/provenance 单遍读取；timeline 对四个有序来源做四路归并；每 16 个候选预付 kernel-work，预算让出后重新读取边界并补足增长差额 | `agentscope_ucore: observe_query_bounded=1 context=128 loops=12 preemptions=64`、`observe_index_ordered=1`、`observe_cross_scope_progress=1 queries=32 latency_ms=3` |
-| S-22 | workflow 必须以不可变 `(id,generation)` 标识终止谱系；Agent/VFS 降权、fork 和 exec 不能逃离撤销，槽回收不能让旧 key 指向新 workflow | 已验证 | `workflow_lifecycle.[ch]` 8 槽 ledger、proc lifecycle fields、DROP join、exec prepare/commit/abort、按 key 的 `proc_request_workflow_exit()`、terminal release | `agentscope_ucore` 的 PUBLIC lineage 通过；teardown race 进一步验证旧 key 拒绝、同 id 更高 generation 重用、factory/natural 两类退休与 fresh account |
-| S-23 | lifecycle 诊断必须 self-only、版本化且不成为 bearer credential；竞态测试不得依赖裸 PCB 或任意 PID 查询 | 已验证 | syscall 546、`agent_lifecycle_abi.h` v1、sized-prefix copyout、expected-key compare、Context/metadata runtime snapshot | teardown race 三轮输出 `lifecycle_abi_prefix=1 bad_param_no_write=1 factory_charged=1 self_only_stale=1`，并核对 stale key 与 generation advancement |
-| S-24 | audit 证据和 Agent/lifecycle/control/span/event 身份必须跨重启保持单调，安全擦除旧证据不能重置 allocator；耗尽或持久目标拒绝时必须 fail closed；scope 目标已复制不能替代精确记录持久证明 | 实现完成，待发布动态复验 | metadata 双 bank 内的 8 KiB durable section、每槽 lifecycle generation 与五组 allocator 的 exclusive-end durable lease、prepare/persist/publish admission、bootstrap-bound Recovery LIST/READ/REAP/STATUS、与 ledger 槽绑定的 exact receipt、SYSTEM dirty retry、section serial 不回绕和 retirement barrier | Host/mutation 与 prod/profile/UAPI/module 编译门禁已接线；最终 E2/E3 必须由同一 C 的 `make observe-recovery-test` 原始日志和 raw-bank 校验授予 |
+| 要求 | 实现/断言 |
+| --- | --- |
+| 记录调用轨迹 | sequence、request、tool/status、payload/result、tick |
+| 因果关系 | cause/span/branch/control id 由内核归因；跨 Agent 继承受 route/scope 限制 |
+| 查询/快照 | syscall 和只读 mirror；publish sequence 防止 torn read |
+| rollback | 只改变 Context active path，不倒转已发生的外部文件/IPC 事实 |
+| workflow evidence | Context 规范事件进入 Evidence Ring，fence 才生成 challenge root |
 
-S-16 验证的是已识别的可扩展长路径，不表示穷尽任意 syscall。S-13、S-18、S-20 使用通用 `resource_controller`：EXEC account 承载 process/thread/file/Agent page，STORAGE account 承载 block/inode/cache；`resource_domain_id` 只用于 CPU 分区。S-19 则由 BIO 专属 owner/shared/device bucket 处理速率和 debt，借鉴成熟内核把 I/O 策略留在 I/O controller 的边界，避免所有通用账户支付 I/O 状态成本。S-21 的证据不外推到未实现的 SMP；聚合结果由 release bundle 绑定。
+## 5. 任务四细化
 
-## 任务一：Agent 进程创建与地址空间设计
+| 要求 | 当前证据 |
+| --- | --- |
+| 文件属性 | 显式 `agent_file_meta_set()`，绑定真实 incarnation |
+| 属性查询 | scan/index 计划、候选/扫描工作量、最多 8 hits |
+| 实时变化 | typed query 的 `ENTER/UPDATE/LEAVE` 事件进入 Agent Queue |
+| 有界丢失处理 | generation `RESYNC_REQUIRED` + snapshot/query + ACK |
+| 安全隔离 | scope/lifecycle/control id/incarnation 全部重验 |
 
-| ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| T1-1 | Agent 进程能成功创建 | 已验证 | `agent_create()`、`agent_create_role()`、`agent_create_role_proc()`、`agent_make_role()`；创建前校验 role grant 和可信映像 role mask | `agentfinal_ucore` 创建 orchestrator Agent 子进程；`labdemo_ucore` 创建三类角色 Agent；`agenttrust_ucore` 验证可信映像成功、复制映像拒绝 |
-| T1-2 | PCB 热字段、不可变 lifecycle key 和按需 Agent 状态正确初始化并回滚 | 已验证 | `struct proc.workflow_lifecycle_*`、`resource_account`、`agent_state_account`、`agent_context.c` reserve/allocate/revalidate/commit；IPC/观测状态迁入一个冷 sidecar；线程 context/syscall/BIO 冷态复用 trapframe 页 | 9 Context sidecar + 1 cold sidecar + 7 mapped pages共 17 页/`69632` B 原子计费；普通进程不分配 Agent 冷页；PCB 与线程池预算取 `ci/kernel-budgets.json` |
-| T1-3 | Agent Context 区在用户地址空间中正确分配 | 已验证 | `agent_context_map()`、`AGENT_CONTEXT_BASE` | `agentfinal_ucore: context size=28672 capacity=128` |
-| T1-4 | Agent 进程可直接读取 Context | 已验证 | 前 6 页只读可信视图，第 7 页用户 cache | `agentfinal_ucore` 读取 header/latest |
-| T1-5 | 普通进程和 Agent 进程可共存，互不影响 | 已验证；双目标启动身份新证据待复跑 | loader 从可信映像建立启动 grant；普通 fork/exec 不继承；普通进程不安装 Agent metadata/context，且不能创建 Agent 或调用敏感 Agent syscall；orchestrator 显式委派角色；普通与 workflow VFS 域彼此隔离 | 相关回归合同覆盖 Agent 创建、普通进程隔离和 VFS 域隔离；C 对应双目标 ledger 必须由可信 CRT 在子进程 `main()` 前调用 `agent_launch_info()`，精确匹配父进程启动约束并成功退出，随后由精确 `waitpid()` 绑定 `identity_source=trusted_crt_self_check`，分别证明 `agent_create_role` 和 `agent_worker_create` |
-| T1-6 | Agent 退出后 Context 状态、文件、VM、resource account、lifecycle 与内核栈按统一 teardown 顺序释放 | 已验证；复合等待态待补 | `proc_teardown_run()` 对 Agent 私有清理只调用 phase-aware、幂等的 `agent_proc_teardown()`；其 QUIESCING 撤权、RECLAIMING 释放/清身份、SETTLING 只验 Agent 状态/页账为空，通用 process/thread/file/I/O 账目仍由外层状态机结算；scheduler stack publish/recycle | Agent/proc/resource 专项通过；teardown race 补充阻塞 fdget、退出后新 workflow 账户的 debt/cache 零值、inode/file/account 的组合释放证据；Context lane、metadata transaction 与非零 I/O debt/cache 的 teardown 同窗状态尚无确定性动态用例 |
-| T1-7 | 新 workflow 必须通过可信 factory 建立独立 scope；同 scope 子 Agent/worker 协作，普通 fork 不继承安全域 | 已验证 | syscall 541 `agent_workflow_create()`、动态 scope ref/admission、spawn scope mode | `agentscope_ucore: cross_scope_isolation=1 same_scope_collaboration=1` |
-| T1-8 | pipe 端点不得随 scope、角色或并发线程成为环境权限；每个新 Agent/worker/workflow/降权普通主体仅接收创建线程经 syscall 542 显式一次性委派的精确对象 | 已验证 | `agent_scope_delegate_fd()`、线程私有 `fd_delegate_ticket[]`、默认拒绝的 file 继承类别、原子 FD 对象快照与票据消费 | `agentscope_ucore: transactional_fd_delegation=1 pipe_redelegation_isolation=1`、`agentvfs_ucore: worker_pipe_delegation=1` |
-| T1-9 | workflow 根退出或可信控制面终止时，整个 lifecycle 谱系立即失权并最终回收；降权 PUBLIC 后代不能逃逸 | 已验证 | controller control id、generation-safe lifecycle key、ACTIVE/CLOSING/RETIRING、按 key 撤销、exec 原子发布和统一 teardown | `agentscope_ucore` 输出 `scope_controller_exit_revoke=1 public_lineage=1`；teardown race 同时覆盖 factory close、根自然退出、PUBLIC 谱系、退休完成与同 id 更高 generation replacement |
-| T1-10 | 用户态可用版本化 self-only ABI 读取/比较本进程 lifecycle key 与 teardown runtime 状态，返回值不授予权限 | 已验证 | syscall 546、共享 `agent_lifecycle_abi.h`、`agent_workflow_lifecycle_info()` wrapper、sized-prefix 和 bad-param-before-copyout | teardown race 连续三轮验证 ABI 前缀、坏参数不写、factory charged、self-only stale、旧 key 拒绝和 generation 增长 |
+明确不实现：普通目录 autoscan、persistent metadata flag、catalog journal/bank/recovery。`PERSIST/AUTOSCAN` 保留为 legacy 常量并返回 `BAD_PARAM`。
 
-## 任务二：Agent 与内核结构化交互
+## 6. 任务五细化
 
-| ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| T2-1 | 用户态 Agent 测试程序能成功调用至少 3 个内核工具 | 已验证 | `agent_tools[]` 25 个工具、`agent_run()` | `agentfinal_ucore` 批量调用 echo，并验证 `action_commit`、`artifact_update`、`llm_request`、`llm_response`；`agentllm_ucore` 验证请求 Agent 和 Relay Agent 之间的 LLM 事件流；`labdemo_ucore` 调用 query_file、read_file_summary、read_file_digest、dependency、capability、action、artifact、send_message；`agentfs_ucore` 调用 read_file_digest 和 dependency_update |
-| T2-2 | 每个工具请求和响应均为结构化格式 | 实现完成，待发布动态复验 | fast-path `agent_op/result`；V1 `agent_request/response`；V2 sized `agent_request_v2/agent_param_v2/agent_response_v2` typed KV | C 对应 canonical Guest 日志必须包含 `agenttoolabi_ucore: v1_compatible=1 v2_typed_reordered=1` |
-| T2-3 | 提供工具列表及参数说明 | 实现完成，待发布动态复验 | V1 `agent_tool_list()`；syscall 548 `sys_tool_list()` 返回 sized V2 descriptor；两版 schema、`param_count` 和 decoder 共享 CSR 参数规则：每工具 offset 指向紧凑规则流，键名由注册表偏移引用，类型/目标/必填位压入一字节 | C 对应日志必须包含 `agenttoolabi_ucore: schema_generated=1 validated=25`、`tool_list_v1_v2=1 tool_list_contract=1`、`key_capacity=1 llm_response_v1_v2=1 buffer_sentinel=1` 与 `optional_schema=1 heartbeat_zero_stop=1`；[api.md](api.md) 工具表 |
-| T2-4 | 工具调用结果可写入 Agent Context | 已验证 | `agent_append_context()` 直接写单拷贝可信页并最后发布 header | `agentfinal_ucore` 读取 latest 和 snapshot |
-| T2-5 | 错误路径有明确返回 | 已验证 | `AGENT_STATUS_*`、工具执行状态码、真实 role/capability 授权；V2 严格区分 bad version/size/type、unknown/duplicate/missing param | `labdemo_ucore` 验证 denied 和 duplicate；`agentsecurity_ucore` 验证伪造 role 和 V1 mismatch；`agenttoolabi_ucore: strict_negative_matrix=1` |
-| T2-6 | 工具解析性能优化 | 扩展增强 | `agent_run()` 批量执行、ID 分发 | `agentbench_ucore` |
-| T2-7 | 敏感工具授权不信任用户态自报 role | 扩展增强 | `capability_check`、`action_commit`、`artifact_update`、`dependency_update`、`llm_response` 均读取当前 PCB capability；`rerun_stage`、`write_report` 作为兼容别名也走同一授权、事件记录和重复请求判断路径 | `agentsecurity_ucore: sentinel spoof_denied=1` |
-| T2-8 | legacy `tool_id` 和 `tool_name` 不一致时拒绝执行 | 扩展增强 | `sys_agent_call()` 先校验 ID 对应工具名；请求/响应地址有效时 syscall 返回 0，`response.status` 返回 `AGENT_STATUS_BAD_REQUEST`，结果文本为 `tool_mismatch` | `agentsecurity_ucore: legacy_tool_mismatch=1` |
-| T2-9 | legacy 参数键/类型错误被拒绝，syscall-only 工具不能走 batch | 扩展增强 | legacy 参数校验、`AGENT_TOOL_F_SYSCALL_ONLY` | `agentsecurity_ucore: legacy_param_validation=1 syscall_only=1` |
-| T2-10 | 工具名称 + 参数键值列表协议可作为正式入口，并可在不改变 V1 布局时演进 | 实现完成，待发布动态复验 | syscall 503 保持 V1；syscall 547/548 提供 V2 sized typed KV 和 descriptor，最多 8 个顺序无关参数；同一 CSR 规则流驱动两版解析，空参数槽不再占固定矩阵 | C 对应日志必须包含 `agentfinal_ucore: legacy_name_protocol=1` 和 `agenttoolabi_ucore: v1_compatible=1 v2_typed_reordered=1 strict_negative_matrix=1` |
-| T2-11 | LLM 请求和响应能作为结构化工具调用进入内核记录 | 已验证 | `AGENT_TOOL_LLM_REQUEST`、`AGENT_TOOL_LLM_RESPONSE`、`AGENT_EVENT_LLM_DONE`、`AGENT_CAP_LLM_RELAY` | `agentllm_ucore: template_relay=1`、`agentfinal_ucore: llm_template_relay=1` |
+| 要求 | 当前证据 |
+| --- | --- |
+| watch/wait | legacy watch + typed live watch，thread-generation wait |
+| event queue | 总容量、kernel reserve、IPC/source limit，有界失败 |
+| heartbeat | timer 事件，set/stop，不在内核运行 Agent 业务 |
+| Agent IPC | 同 active workflow 的定向 route 和 capability |
+| 感知调度 | weight/priority/event/deadline/heartbeat/budget/vruntime |
+| 观测 | ordinary Context 单次 canonical ring；critical 兼容 ledger 投影 |
+| 可验证 cut | challenge-bound evidence root + exact credit digest + volatile metadata generation |
 
-## 任务三：上下文路径管理
+audit/timeline/provenance/ledger 兼容 API 仍支持；observe crash recovery 不支持，syscall 固定 `BAD_PARAM`。
 
-| ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| T3-1 | Agent 测试程序执行 5 轮以上连续工具调用 | 已验证 | `agentfinal_ucore` 批量调用 | 连续 192 个 op |
-| T3-2 | 系统正确维护多轮上下文路径 | 已验证 | Context ABI v9 的只读可信 `agent_context_record[128]` archive，record 含摘要、cause/span、branch generation、独立 path parent 和 prev/record hash | `agentfinal_ucore: short_text_history=1`、`causal_context=1`、`context_integrity=1` |
-| T3-3 | Agent 可直接从 Context 区高速读取路径数据 | 实现完成，待发布动态复验 | 单拷贝只读映射公开 active head/count/oldest 与 path parent；4088 偏移处的 publication sequence 以 release/acquire 排除混代快照；用户 helper 有界重试并用 16 字节位图 O(n) 重建 | `agentbench_ucore: direct_context`、`agentfinal_ucore: context_active_path=1 ... direct_query=1` |
-| T3-4 | 路径超长时自动淘汰，不导致内核 OOM | 已验证 | v9 header 明示 `AGENT_CONTEXT_EVICT_FIFO`，固定容量环形覆盖，active count/oldest 收敛到 retained suffix | `agentfinal_ucore` 动态核对 FIFO policy、oldest/latest/dropped 与 active suffix |
-| T3-5 | 支持批量上下文快照和 rollback，且 rollback 不改写 provenance 历史 | 实现完成，待发布动态复验 | `context_snapshot/query` 只投影 active path；rollback/clear 从 lifecycle ledger 分配新 branch，旧 record/hash/sequence 留在 archive，`context_detail` 可精确查询，后续 sequence 只增不复用；不存在或已 FIFO 淘汰的 sequence 返回 `NOT_FOUND` 且不改变分支 | C 对应日志必须包含 `agentfinal_ucore: context_rollback_branch=1 sequence_reuse=0 provenance_bound=1`、`context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1` 和负例 marker |
-| T3-6 | 用户态不能篡改 Context 可信历史 | 扩展增强 | 前 6 页 PTE 无 `PTE_W`，用户 cache 单独占第 7 页；静态 mutation test 锁定主映射和 exec alias 权限 | `agentfinal_ucore: tamper_protected=1` 验证损坏副本被拒绝且 snapshot 保持可信内容 |
-| T3-7 | 可区分系统自动记录和手动记录，并能查询完整工具详情 | 已验证 | record flags、按活跃 Agent 分配且由 EXEC account 计费的 Context sidecar、`context_detail()` | `agentfinal_ucore` 合同覆盖 `context_detail=1` 与 record flags；当前发布结果只从 C 对应 bundle 读取 |
-| T3-8 | Agent 有可自管的 Context cache，且不影响内核可信历史 | 扩展增强 | `agent_context_header.user_cache_offset/user_cache_size`，snapshot 只刷新内核管理区 | `agentfinal_ucore: user_cache_preserved=1` |
-| T3-9 | 工具调用、手动记录和事件消费可形成轻量因果链，跨 Agent cause/span 由私有 source control/span owner 认证 | 已验证 | `agent_context_record.cause_sequence/span_id`、私有 cause sidecar、事件消费继承可信 owner；`context_push` 拒绝用户非零 cause/span | `agentsecurity_ucore: trusted_span_authority=1 trusted_cause_attribution=1` |
-| T3-10 | Context 摘要和调度原因可合并为运行轨迹 | 扩展增强 | `agent_trace_snapshot()`、`struct agent_trace_record` | `agentfinal_ucore: runtime_trace=1 records=... context=1 sched=1 wait=1` |
-| T3-11 | 当前 span 的系统级短记录可被参与 Agent 查询 | 扩展增强 | `agent_span_trace_snapshot()`、`struct agent_audit_record`、当前 `span_id` 过滤 | `agentfinal_ucore: span_trace=1 records=... context=1 event=1` |
-| T3-12 | Context、调度和审计可统一导出 | 扩展增强 | `agent_timeline_snapshot()`、`struct agent_timeline_record`、来源字段 `source` | `agentfinal_ucore: unified_timeline=1 records=... context=1 sched=1 audit=1 event=1` |
-| T3-13 | 统一 timeline 可由内核按条件过滤和按游标增量读取 | 扩展增强 | `agent_timeline_query()`、`struct agent_timeline_filter`、source mask、start tick、span/pid/kind/status/flags 过滤、`after_tick/source/sequence` 游标过滤 | `agentfinal_ucore: timeline_query=1 audit=213 recent=281 cursor=177` |
-| T3-14 | Context Path 可验证相邻记录顺序和跨 rollback 分支身份 | 扩展增强 | `prev_hash/record_hash/latest_record_hash`、record/header branch generation、visible head、独立 path parent、provenance source/target branch | `agentfinal_ucore: context_integrity=1`、rollback 与 active-path markers |
-| T3-15 | 每 workflow scope 的稀疏审计窗口可用摘要和逻辑 hash 链校验 | 已验证 | scope-local `prev_hash/record_hash/ledger_hash`、全局单调 sequence、`dropped_records=total-visible`；相邻可见记录只在无 gap 时直连 | `agentfinal_ucore` 用 dropped 解释可见链缺口的回归已通过 |
-| T3-16 | 同一进程的并发工具、Context、IPC、文件和等待归因按单一提交顺序发布 | 已验证 | 可睡眠、FIFO、可重入 Context commit lane；锁序 `lane -> metadata`；`agent_call_count` 为已接纳/保留序号，`latest_sequence` 为已提交水位 | `agentfinal_ucore: context_commit_lane=1 sequence=1..3 hash=1` |
-| T3-17 | `context_push` 同步更新 PCB 元信息与 Context 内容，发布失败不得留下半提交状态 | 实现完成，待发布动态复验 | append/rollback/clear 在 Context lane 内先验证固定映射，commit 先发布 record/body 与 latest，最后发布 header | 独立 Context-sync/WAIT_ATOMIC profile 填满 128 条 FIFO，注入失败后比较整个内核管理区与 oldest detail，再核对 branch/hash/counter 并验证下一次正常 append；必须输出 `context_sync_atomic=1 append=1 rollback=1 clear=1 recovery=1`。该 profile 与普通 Agent suite/timing 分离 |
+## 7. 创新增量与外部思想
 
-## 任务四：面向 Agent 查询优化的文件系统扩展
+| 项目机制 | 公开概念来源 | 本项目特定增量 |
+| --- | --- | --- |
+| Workflow Credit Domain | Linux cpuacct/percpu_counter/rstat 的批量本地计数 | workflow exec/storage 双账户、U/P/F hard admission、context switch trim、fence exact U/digest |
+| Fence-Sealed Evidence Ring | Linux BPF ring buffer 的 ordered reserve/commit/discard | workflow generation、ordinary/critical 分区、Agent 因果事件、gap、challenge fence、compat projection |
+| Agent Live-Query FS | Haiku BFS 属性、选择性索引和 live query | explicit volatile Agent metadata、Context event、scope generation、typed predicate、resync ACK、fence drain |
 
-| ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| T4-1 | Agent 可按文件属性查询实验工件 | 已验证 | `struct agent_file_meta`、`agent_file_query()`、`AGENT_TOOL_QUERY_FILE` 属性 payload | `labdemo_ucore: tool=query_file hits=1 used_index=1` |
-| T4-2 | 支持项目、工作流、运行、阶段、类型、状态、摘要、逻辑路径字段 | 已验证 | `os/agent.h` 中 `agent_file_meta` / `agent_file_query` | [task4-file-query.md](task4-file-query.md)、`labdemo_ucore` |
-| T4-3 | 有扫描路径和索引路径 | 已验证 | `agent_file_query()`、status/stage/kind 索引桶；每次调用实际遍历全表或候选链 | `agentfs_ucore: bulk_index scan=118 index=6 hits=1`、`scan_index_consistent=1`；`agentbench_ucore: file_query_benchmark ... status=measured` |
-| T4-4 | 查询结果包含命中、截断、扫描数、是否使用索引、查询计划、候选数和 tick | 已验证 | `struct agent_file_query_result` | `agentfs_ucore: query_plan ...`、`agentfs_ucore: truncated_query total=100 returned=3 truncated=1`、`agentbench_ucore: file_query_plan ...` |
-| T4-5 | 查询计划能解释索引选择原因 | 扩展增强 | `plan`、`plan_reason`、`index_bucket`、`candidate_records` | `agentfs_ucore: query_plan scan_plan=0 index_plan=1 reason=4 bucket=15 candidates=6` |
-| T4-6 | 支持对象依赖关系注册和查询，服务用户态恢复与规划 | 已验证 | `AGENT_TOOL_DEPENDENCY_UPDATE`、`AGENT_TOOL_DEPENDENCY_QUERY`、内部依赖记录、依赖位图兼容输入、`label/namespace/run_id` 选择条件 | `agentfs_ucore: dependency_update=1`、`agentfs_ucore: scoped_dependency=1`、`labdemo_ucore: affected labels=align+analyze+report+archive` |
-| T4-7 | 查询写入 Context Path，可用于报告回放 | 已验证 | 文件查询和工具调用均追加 Context | `labdemo_ucore`、`context_snapshot` |
-| T4-8 | 文件元数据写入只能由具备权限的 Agent 执行 | 扩展增强 | `agent_file_meta_init()`、`agent_file_meta_set()` 要求 Agent 且具备 `AGENT_CAP_META_WRITE` | `agentsecurity_ucore: plain_process_denied=1`、`sentinel meta write denied` |
-| T4-9 | 索引初始化前查询安全 | 扩展增强 | `agentinit()` 初始化 status/stage/kind 索引桶为 `-1` | `agentsecurity_ucore: preinit_index_query=1` |
-| T4-10 | 多 run 动作提交和工件更新只修改目标 run | 扩展增强 | `action_commit` 和 `artifact_update` 支持 `label=...;run_id=...;namespace=...` selector；旧 `rerun_stage` 和 `write_report` 为兼容别名 | `agentsecurity_ucore: scoped_action=1`、`agentsecurity_ucore: scoped_artifact=1` |
-| T4-11 | 文件元数据绑定真实 uCore 根目录 inode 的当前生命期 | 已验证 | `agent_fs_note_create/write/truncate/delete()`、`dev + inum + incarnation` 主键；inode 重用会生成新 incarnation | `agentfs_ucore: demo_inode`、`agentfs_ucore: custom_inode`；`agentvfs_ucore` 验证执行委派和删除均校验 incarnation |
-| T4-12 | 元数据可事务写入并强制重新加载 | 已验证 | 私有 `.agentmeta` / `.agentmeta1` 双 bank 紧凑快照，以 generation、精确长度和 payload hash 校验后切换 | `agentfs_ucore: .agentmeta_reload=1` |
-| T4-13 | 普通文件 syscall 不能直接访问 Agent 元数据后端 | 已验证 | `fileopen()` / `fileunlink()` 对两个 metadata bank 均返回 `-1` | `agentsecurity_ucore: .agentmeta_protected=1` |
-| T4-14 | 对真实磁盘目录做自动扫描并维护索引 | 部分实现 | `agent_background_maintain()`、`agent_file_request_scan()`、调度器空隙分批扫描 uCore 根目录 | `agentscan_ucore: background_scan usershell=1`、`agentscan_ucore: auto_file_create=1`、`agentscan_ucore: auto_file_delete=1`；当前不做多级目录递归 |
-| T4-18 | Agent 可读取真实文件的轻量内容证据 | 扩展增强 | `AGENT_TOOL_READ_FILE_DIGEST`、`read_file_digest` 工具、真实 inode `readi()`、FNV-1a 内容指纹、短预览、`CONTENT_READ` capability 授权 | `agentfs_ucore: content_digest=1 size=7 bytes=7 ...`、`agentbench_ucore: file_digest ...`、`agentsecurity_ucore` sentinel 拒绝 |
-| T4-19 | 文件查询性能对照不得混入内核结果缓存，用户态可显式缓存结构化结果 | 扩展增强 | 内核每次执行 scan/index；`CACHE_HIT` 只保留 ABI 数值兼容且不设置；结果携带 `fs_generation`，用户态可把结果放入 Context cache 并按代数失效 | `agentbench_ucore` 对冷/热索引均断言 `CACHE_HIT=0`，并输出 provenance-bound `file_query_benchmark`；`agentfinal_ucore: user_cache_preserved=1` |
-| T4-20 | 重复读取同一真实文件内容证据可复用缓存并在文件变化或 inode 重用后失效 | 扩展增强 | 8 槽 digest cache、`dev/inum/incarnation/size/content_generation` key、`agent_info.file_digest_cache_hits/misses` | `agentfs_ucore: digest_cache=1 ...`、`agentfs_ucore: digest_cache_invalidated=1 ...`、`agentbench_ucore: file_digest_cache hits=63 misses=1` |
-| T4-21 | 文件内容证据可进入统一观测流 | 扩展增强 | `read_file_digest` 工具调用自动追加 Context，`agent_timeline_query()` 按 `tool_id=AGENT_TOOL_READ_FILE_DIGEST` 过滤，timeline value/text 保留 size、bytes、hash 和 preview | `agentfs_ucore: digest_timeline=1 tool=20 preview=agentfs2`、`labdemo_ucore: investigator digest_observation timeline=... provenance=... verified=1` |
-| T4-22 | 两个 Agent 同时编辑同一真实文件时，内核能阻止无序覆盖 | 扩展增强 | `agent_file_edit_begin/commit/abort/state` 以 `dev + inum + incarnation` 标识当前文件生命期；真实 `write/O_TRUNC/unlink` 路径调用租约检查和版本提交检查 | `agentconflict_ucore: conflict_denied=1 direct_write_denied=1`、`agentconflict_ucore: stale_commit=1 versioned_commit=1` |
-| T4-23 | 普通文件路径不能绕过 Agent 内容读取和工件写入能力 | 扩展增强 | 持久化 VFS label、安全域 credential、`vfs_inode_authorize()` 覆盖 lookup/open/read/write/truncate/unlink；跨 scope inode fd 撤销，同 scope inode fd 按 `dev + inum + incarnation` 重新校验 | `agentvfs_ucore: protected_paths=1 cross_scope_fd_revoked=1 parent passed` |
-| T4-24 | 普通域短命文件不能耗尽 Agent 文件版本状态 | 扩展增强 | 编辑/内容版本使用 512 槽稀疏哈希 sidecar，键包含 inode identity、scope 与 lifecycle generation；`iput()`/scope retirement 摘桶并归还空闲链，同时回收租约和 digest cache；容量受 catalog 与稳定存储 inode 配额约束 | `fsquota_ucore: public_version_churn=1 cycles=640`、`workflow_version_reserve=1`、`content_version_reserve=1`；新增哈希冲突、满表回收和 generation 重用合同 |
-| T4-25 | 文件系统为 4 个 admitted workflow 各保留独立 inode/block 保证，单个 scope 不能消耗其他 scope 或 SYSTEM 的余量 | 已验证，保留发布复验 | mkfs/内核共享容量算法并将 version/slots/PUBLIC principal/G/S/checksum 持久化；每 scope 硬下限 320 inode/512 block、SYSTEM 下限 8 inode/512 block，当前平台值约 342/1195 与 64/512。workflow inode 账户使用独立 STORAGE domain limit，不再被 metadata catalog 的每 scope 112 条容量钳制；catalog 饱和也不改变 VFS scope 标签或鉴权 | `test_fs_storage_policy`、mkfs 负向容量契约、ENOSPC 配额保留专项；`agentscope_ucore` 定向验证 A/B 各创建 97 个普通文件、第 97 个不索引但仍可访问、满 catalog 后额外 VFS create、peer scope 拒绝及 PUBLIC 70。当前执行结果见 [正式证据索引](../../evidence/releases/INDEX.md)，最终状态由候选 bundle 绑定 |
-| T4-26 | metadata 内存表、索引、inode sidecar、依赖和双 bank 提交形成统一并发事务，查询不得观察半提交状态 | 已验证，保留发布缺口 | `agent_metadata.c` 持 FIFO transaction/projection gate；catalog/query/scan/directory/objects/actions/store 分 owner。catalog 为 SYSTEM 64 与 4 个 workflow 各 112 的固定分区，每 scope live AUTOSCAN 净增长最多 96 并为显式 metadata 保留 16；ACTIVE/CLOSING/RETIRING 共用 4 个准入槽，scoped plan 绑定 `(lifecycle_id,generation)`。sidecar 更新统一经 `agent_file_state_set_index()`，write/sync/truncate/delete 统一经 `agent_fs_apply_inode_event()`，create 只在 VFS 成功后协调；容量型未索引 inode 持久标记 deferred，饱和期间抑制重复扫描，可信快照发布后即使 catalog 为空也安排有界 reconcile，槽位释放后周期重建、写回并在 reload 后保持。v7 快照以表示、总量、SYSTEM/ordinary、每 scope 112、lifecycle 和唯一键为稳定加载合同，97 至 112 条旧 AUTOSCAN 完整保留；加载后只准数量不变或减少，精确 receipt rollback 仅受硬边界和 post-state 约束。scanner 以 physical/logical path 和完整 inode identity 构造 selector，只调用 `agent_metadata_catalog_resolve()` | `check-metadata-catalog-capacity.py` 的当前 mutation 合同检查独立 inode policy、96+16 live 准入、112/113 快照边界、空 catalog 重协调、超额域只减不增、失败事务精确回滚、满 catalog 的 VFS 语义、deferred 抑制/重建及 lifecycle 淘汰顺序，并拒绝软策略进入磁盘损坏判定、跨 scope 借用、全局 union/max、额外 catalog 账本、遗漏 RETIRING 槽和错误状态塌缩；rollback fence 与 boot reprobe 继续检查唯一 resolver、split-key 冲突、PENDING/QUARANTINE 及精确 14 字节目录名。当前执行结果见 [正式证据索引](../../evidence/releases/INDEX.md)，最终发布状态由 C 对应 bundle 绑定 |
-| T4-27 | PUBLIC 持久存储计费必须跨完整进程域退出和磁盘重挂载保持，删除后才能归还并复用容量 | 已验证，保留测试缺口 | 安装级 PUBLIC principal 2、VFS 独立计费凭据、qmap/dinode 持久 owner、挂载孤儿清扫与 PUBLIC 用量重建；SYSTEM 赞助对象先在固定工作区收集/排序全部块，按 qmap block 分组预检，一次预留后由 claim gate 保持 qmap-first、inode-last 前向提交，挂载继续部分 claim | fs-enospc 双目标 generic/domain/reserve/persistent/orphan/reclaim/verify；正式状态由当前提交的 release bundle 绑定，grouped claim 中点掉电仍缺故障注入 |
-| T4-28 | 低权限 workflow 的高频微小文件变化不得同步放大全局 metadata I/O，也不得阻断另一 workflow 的查询服务；可信 metadata 必须在用户进程发布前加载，无可验证有效 bank 时拒绝以空状态继续授权 | 机制与 Host 合同已验证，保留 E2 与双 bank 同损缺口 | mkfs 通过共享纯磁盘 ABI 安装两个字节一致、完整预分配、尾部清零且属于 `KERNEL_PRIVATE/SYSTEM` 的 v8 generation-1 空 bank；运行时不再铸造初始 authority。`timer_init()` 后、`bio_policy_start()`/`load_init_app()` 前调用 `agent_storage_init()`；probe cursor 绑定 authority、bank、inode identity/size 与 header，并在 SYSTEM `BACKGROUND` 预算下推进；terminal 分类缓存、selected bank 最终确认。原始候选不可变，catalog 在 inactive shadow prepare 绑定 epoch/generation/hash 的 plan；plan 完成并取得 owner-token mutation fence 后才执行不再分配的 apply 与 authority publication，foreign fence 在改写前返回 `INTERRUPTED`；运行期 scoped reload 绑定 authority、scope 与 lifecycle key，可在 I/O 公平退让后有限重启续跑。任一有效 v7 bank 仍可迁移和修复；v5 及更旧镜像直接 fail closed，本仓库不提供原地转换，升级时必须重建镜像。稳定状态无有效 bank 则一律 fail closed | `agentscope_ucore` 有历史微写/跨 scope/重载一致性证据；`metadata-recovery` 契约在每个 Guest 前验证 raw genesis，并要求 primary/mirror 各八个 COW phase、raw-bank parser 与 header-flush EIO；Host mutation覆盖双 `ABSENT`、双 `UNCOMMITTED`、双损坏、混合缺失/未提交、标签校验和、尾部、映射、bitmap 与 qmap owner。双目标三轮 `BUSY/EIO/INTERRUPTED` 及超过 burst 的 32-record bank 45-boot 是否完成只由 C 对应 bundle 判定；缺少原始产物时仍为 E1。mkfs 离线临时镜像发布不等同于运行中物理掉电原子性，启动时双 bank 同时损坏仍仅验证 fail-closed 策略 |
-| T4-29 | PUBLIC 冷工作集和持续微写不能挤掉另一 workflow 的 cache 保留或块设备服务；控制 I/O 与后台维护有独立保证；fault teardown 不得绕过归因 | 已实现，动态结论以正式证据为准 | 稳定 owner 的 NORMAL/CONTROL/BACKGROUND bucket、工作保守型 shared gate、FIFO admission 与排队轮转；owner/shared/device 两级 reservation 原子结算，惰性 refill 和 debt bitmap 避免全表 tick；真实 `disk_submit` 是物理计费边界；cache floor/cap 与 `io_policy_info()` sized ABI | `iobudget_ucore` 覆盖借用、异域进展、lazy cache admission、debt 和回收；`virtiodisk_ucore` 覆盖 fault matrix |
+以上为 clean-room、概念级参考。没有复制/vendoring Linux、Haiku 或 AIOS 源码、数据、二进制或磁盘格式，详见 [../../NOTICE](../../NOTICE)。
 
-## 任务五：Agent Loop 内核运行机制
+## 8. 验证矩阵
 
-| ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| T5-1 | Agent 可注册和删除 watch | 已验证 | `agent_watch()`、`agent_unwatch()`、`AGENT_WATCH_MAX=8` | `labdemo_ucore: WATCH_REGISTERED`、`agentloop_ucore: unwatch=1` |
-| T5-2 | Agent 可等待事件并 timeout | 已验证 | `agent_wait()`、`AGENT_STATUS_TIMEOUT`、`timeout_count`、有限 timeout 睡眠等待路径 | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: timeout_sleep_no_poll=1` |
-| T5-3 | 文件状态变化能唤醒目标 Agent | 已验证 | `agent_file_meta_set()` 投递包含 status、stage、run_id、project 的 `AGENT_EVENT_FILE_STATUS` | `labdemo_ucore` sentinel 收到 failed 事件 |
-| T5-4 | 消息能触发 Agent 事件，用户 `agent_wake()` 不能伪造系统事件 | 已验证 | `send_message` 工具；`agent_wake()` 唯一接受 `AGENT_EVENT_MESSAGE`；跨 Agent 消息还需 stable control id 定向路由，系统事件走内核或受权专用工具路径 | `labdemo_ucore: parent passed`；`agentsecurity_ucore: wake_event_authorization=1 route_source_enforced=1 route_target_isolated=1 ipc_route_authorization=1` |
-| T5-5 | 心跳周期可动态设置，周期到达时无条件唤醒 Agent，并可独立停止 | 实现完成，待发布动态复验 | syscall 552 `sys_agent_heartbeat_set()`、553 `sys_agent_heartbeat_stop()`；512 `agent_heartbeat()` 兼容；共享最大值校验；intrinsic/coalesced SYSTEM TIMER | C 对应日志必须包含 `agentloop_ucore: heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1` |
-| T5-6 | busy polling 和 event wait/wake 可计时观测并稳定完成 | 已验证 | `agentbench_ucore` | `agentbench_ucore: busy_poll_query`、`agentbench_ucore: event_wait_wake`、`agentbench_ucore: busy_poll_vs_wait`；不设置固定 tick 阈值 |
-| T5-7 | 事件处理写入 Context Path | 已验证 | `agent_wait()` 成功消费事件后追加 Context，并继承事件 cause/span | `agentloop_ucore: event_causality=1`、`labdemo_ucore` 和 [task5-agent-loop.md](task5-agent-loop.md) |
-| T5-8 | 普通进程或低权限 Agent 不能伪造系统事件或越权取消等待 | 扩展增强 | `agent_wake()` 使用 `MESSAGE_SEND` 且只接受 `AGENT_EVENT_MESSAGE`；`agent_wait_cancel()` 使用独立 `WAIT_CANCEL` capability，并校验内核签发的直接 controller 关系 | `agentsecurity_ucore` 已验证普通进程返回 `-1`、所有低角色取消父 orchestrator 均被拒绝，以及 controller A 退出后 controller B 的新 control id 不继承旧取消权；control id 不复用机制保证 PID/PCB 槽复用不会扩权；消息通信改由 T5-21 的显式路由验证 |
-| T5-9 | 事件队列满时拒绝新事件且不覆盖旧事件，可归因外部压力不能占用内核 origin 保留量 | 实现完成，待发布动态复验；保留测试缺口 | `AGENT_EVENT_QUEUE_CAP=16`、`AGENT_EVENT_EXTERNAL_LIMIT=12`、`AGENT_EVENT_IPC_LIMIT=8`、`AGENT_EVENT_ATTRIBUTED_LIMIT=8`、`AGENT_EVENT_SOURCE_LIMIT=4`；每槽 accounting/stable source 记账、FIFO queue；heartbeat 单条 coalesce | C 对应日志必须包含 `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`heartbeat_reserve_coalesced=1`、`external_reject_reclaim=1`；尚未单测 attributed=8、同一来源混合跨类，或在总容量 16 上再投第 17 条并逐条核对旧内容 |
-| T5-10 | 调度器感知 Agent 角色、事件状态和受权配置，但软分值不能越过资源域外层轮转或域内强制公平上限 | 已验证 | `fetch_task()` 先轮转 `scheduler_active_domains`；普通 lane 直接取 FIFO 队首，Agent lane 才执行 role/priority/budget/event/deadline/heartbeat/vruntime 评分；每域 `AGENT_SCHED_MAX_AGENT_BURST=8` 强制逃逸 | `agentsched_ucore`、thread-resource 与 proc-reap 均有对应合同；当前发布结果只从 C 对应 bundle 读取 |
-| T5-11 | 受权 Agent 可取消其受控 Agent 的等待 | 扩展增强 | 每个 Agent 使用内核私有且不复用的 64 位 control id；创建时绑定直接 controller，合法 `agent_wait_cancel()` 写一次性令牌，目标返回 `AGENT_STATUS_CANCELLED` 并追加 Context | `agentloop_ucore: wait_cancel=1`、`agentsecurity_ucore: wait_cancel_scope=1 wait_cancel_controller_lifecycle=1` |
-| T5-12 | Agent 最近调度原因可查询 | 扩展增强 | `agent_sched_snapshot()`、`struct agent_sched_record`、reason flags | `agentsched_ucore: reason_trace=1` |
-| T5-13 | 调度原因能和 Context 历史一起供 Agent 查询 | 扩展增强 | `agent_trace_snapshot()` 按 tick 合并 Context 与调度记录 | `agentfinal_ucore: runtime_trace=1 ... sched=1` |
-| T5-14 | 同一 workflow 多 Agent 的 Context、事件和调度摘要可由本 scope orchestrator 查询 | 已验证 | 物理 512 条审计表、每 scope 128 条、scope-local ledger；span 查询同时核对公开 id 和私有 owner | `labdemo_ucore: global_audit=1` 和 `agentscope_ucore` 跨 scope 隔离断言均通过 |
-| T5-15 | 多 Agent scope-local 短记录可按条件过滤且 filter 不扩大对象范围 | 已验证 | `agent_audit_query()` 先按 scope/private owner 裁剪，再应用 filter flags | 既有过滤回归与 `agentscope_ucore: audit_event_scope_isolation=1` 均通过 |
-| T5-16 | 非 orchestrator 参与者可读取当前可信 span 的协作短记录 | 已验证 | `agent_span_trace_snapshot()` 匹配 scope + current span id + private span owner，普通进程返回 `-1` | 同 workflow span trace 与 `agentsecurity_ucore` foreign/forged span 负向断言均通过 |
-| T5-17 | 状态页面可读取、过滤并增量刷新统一运行时间线 | 扩展增强 | `agent_timeline_snapshot/query()` 统一 Context、调度和可见审计。SCHED ring 由 timeline owner 在 facade suppression 检查之后提交，并在 ring 可见后发布 epoch/wake；suppressed 事件不留下局部可见状态 | `test-observe-recovery-contract.py` 的 mutation 合同拒绝 core 直接写 SCHED ring、suppression 后仍写记录和 publish-before-commit；既有 `labdemo_ucore`/`agentsecurity_ucore` 验证统一视图与权限。尚无冻结 C 对应的专门 SCHED suppression Guest marker |
-| T5-18 | 状态页面可读取当前可见因果关系 | 扩展增强 | `agent_provenance_snapshot()` 把 Context 和审计转换成 source/target 因果边，并沿用当前 Agent 可见范围；内容摘要工具调用也能作为可见因果边导出 | `agentfinal_ucore: provenance_graph=1 edges=... context=1 audit=1`、`labdemo_ucore: provenance_graph edges=... message=1 context=1`、`agentsecurity_ucore` 普通进程拒绝 |
-| T5-19 | 状态页面或 Agent worker 可等待新 timeline 记录 | 扩展增强 | `agent_timeline_wait()` 在最后一次查询预算让出之后采样 observe epoch；未命中导出后在关中断窗口最终重检，并以 thread generation 原子发布 waiter sidecar 与 keyed queue。发布逐线程匹配 filter/deadline，返回只清调用者，exit/exec/槽复用统一撤销 | Host wait 合同已接线；Observe 动态等级仍由同一冻结 C 的 bundle 决定 |
-| T5-20 | 普通资源域在其他域持续运行任意数量、高软分值 Agent 线程时仍能在有限域轮次内运行 | 已验证 | active-domain FIFO 中每域至多一个节点并严格轮转；域内 `scheduler_agent_burst == 8` 强制选普通线程，`scheduler_score_burst == 8` 强制选 FIFO 队首；这些计数按域保存，weight、priority、budget、事件积压、角色和线程数均不能修改外层轮转 | 历史 `threadresource_ucore` 输出 `domain_fairness ... victim=512 bound=576`，并完成同镜像 50/50 轮压力复测；发布复跑由 C 对应 bundle 绑定 |
-| T5-21 | 低权限 Agent 不能把 `MESSAGE_SEND` 扩大成任意 PID 或跨 workflow 通道 | 已验证 | stable control id route、same-active-scope 强制检查、target consent 同样受 scope 限制；所有直接投递入口统一鉴权 | route grant/revoke/生命周期标记和 `agentscope_ucore: ipc_scope_isolation=1` 跨 scope consent/投递拒绝均通过 |
-| T5-22 | 单个来源、单一外部事件类别或慢 watcher 不能耗尽关键事件资源或阻断其他订阅者 | 实现完成，待发布动态复验；保留测试缺口 | 同一 stable source 跨类 4 条、directed/attributed 各 8 条、external 合计 12 条，并为内核 origin 保留至少 4 个容量名额；heartbeat 最多一条 pending；广播逐 watcher 继续投递，权威 metadata 提交不接收单一通知队列背压 | C 对应日志必须包含 `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`heartbeat_reserve_coalesced=1`、`external_reject_reclaim=1`、`broadcast_slow_watcher_isolated=1`；尚未专项覆盖 attributed=8、同一来源混合跨类、满队列与 wait cancel 组合、LLM_DONE 配额压力和 metadata 提交返回值 |
-| T5-23 | audit/span/timeline/provenance 的计数、过滤和增量读取不能形成无预算全表重扫 | 已验证 | scope-local 双有序索引、单遍 scan、timeline 四路归并和候选预付预算；不增加公共 telemetry ABI，也不暴露其他 scope 的查询负载 | `observe_query_bounded=1`、`observe_index_ordered=1`、`observe_cross_scope_progress=1` |
-| T5-24 | `agent_wait()` 的用户输出失败或并发消费者不能丢失已入队事件、cancel 或对应配额 | 机制与 Host 合同已验证，保留组合 E2 缺口 | event-id/cancel cookie 的 reserve-copyout/Context-attribution-commit；失败 abort reservation 并定向 handoff，同一槽单消费者，退款只在 commit 后发生 | `test-wait-atomic-wiring.py` 与 `check-wait-queue-contract.py` 是 E1；独立 Context-sync/WAIT_ATOMIC profile 必须输出 thread deadline 与 wait publication 原子性完整 marker。该 profile 与普通 Agent suite/计时分离；reserve 后用户页失效、sibling waiter、cancel 和 teardown 的四向组合仍是明确缺口 |
-
-## 任务六：综合示例与创新
-
-| ID | 赛题方向 | 当前状态 | 说明 |
+| 合同 | Host/static | cross build | QEMU/paired |
 | --- | --- | --- | --- |
-| T6-1 | 综合示例程序 | 已验证 | `labdemo_ucore` 以科研 Agent 平台为示例负载，串联任务一至五，输出 `agentos:event`，读取真实 align 日志内容摘要，并查询、过滤本 workflow 的审计短记录和统一 timeline |
-| T6-2 | 性能和计时示例程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及轮询/事件等待计时观测 |
-| T6-3 | 权限与稳定性负向示例程序 | 已验证 | `agentsecurity_ucore` 验证角色、工具和系统事件授权；`agenttrust_ucore` 验证可信映像绑定；`agentvfs_ucore` 验证普通路径不能绕过文件 capability；`usersafety_ucore`、`fsenospc_ucore` 和 `procreap*_ucore` 验证恶意输入与资源耗尽；`workflow_teardown_race_ucore` 独立验证跨资源 teardown/lifecycle 组合竞态 |
-| T6-4 | LLM-friendly template relay | 已验证 | 内核提供 `llm_request` / `llm_response` 工具、`AGENT_EVENT_LLM_DONE`、`LLM_RELAY` capability、Context/timeline/audit 记录；Guest `rp_llm_relay` 使用确定性模板，云端模型接入不属于竞赛交付 | `agentllm_ucore: template_relay=1`、`agentfinal_ucore: llm_template_relay=1` |
-| T6-5 | 页面查看与图表查看 | 已验证，待发布绑定 | `make contest-demo` 生成现场静态实测 Dashboard；正式评价使用 `evaluation-run`、`evaluation-verify`、`evaluation-dashboard` 和 `evaluation-package`。Plain reference 使用去注释的 target-specific source owner、完整 reference envelope 和 seeded timing/log 绑定；AgentOS mainflow 只保存 11 个有序未验证 telemetry stage，Host 从安全状态清单逐 source 复验唯一 claim、成功状态、阶段字段与 bytes/hash，Guest 验证回执一律拒绝 | complete-state ZIP 只含 summary 精确列出的纯 Guest 状态，Host run receipt 作为独立 raw sidecar，并在离线回放时与 seeded summary、Guest 日志显式传入；普通双目标运行不生成 ZIP。当前执行结果见 [正式证据索引](../../evidence/releases/INDEX.md)，clean evidence bundle 仍由 C→E 合同判定 |
+| UAPI layout | `check-agent-uapi-layout.py` | kernel/user 同头编译 | syscall 行为 |
+| Credit U/P/F | `test-workflow-credit-domain.py` | budget/module check | quota/teardown Guest |
+| Evidence Ring | `test-agent-evidence-ring.py` | kernel link/stack | Context/audit/fence Guest |
+| Live Query | checker + `test-agent-live-query-fs.py` | metadata/IPC modules | query/watch/event Guest |
+| Workflow fence | checker + mutation + syscall-cut | ABI/link | controller/retry/receipt Guest |
+| 综合任务 | Host contract selftests | 双目标 build | seeded/dual paired run |
 
-## 追踪结论
+## 9. 发布证据边界
 
-任务一至三已有增强实现；授权凭据与不可变 lifecycle key 分离，PUBLIC 降权、fork 和 exec 不再改变终止谱系。syscall 546 只提供 self-only 身份/运行状态比较，key 不是 bearer credential。进程、线程、文件、存储、缓存、I/O 与 Agent 私有页统一映射到 generation-safe EXEC/STORAGE account，CPU 公平仍由独立调度 domain 实现。`os/agent.c` 已收敛为 facade，metadata 又分为 transaction、file state、catalog、query、scan、directory、objects、actions 与 store（含 format/I/O）。CI 的 owner/bridge/dependency 集合和 fail-closed 自测均以版本化配置/源码为准，metadata control plane 另受 source/text/BSS 聚合预算，防止横向迁移绕过增长门禁。
-
-命令、预算数值和动态结果只在 [正式证据索引](../../evidence/releases/INDEX.md) 指向的 bundle 中记录。校准不得跨受管输入或源码提交传播 baseline、limit、samples 或 fingerprint。正式 E3 只从可重验的本地 C→E bundle 读取。
+- checker 通过不等于动态功能发布；
+- Guest `passed` 行不等于 Host 可复验 receipt；
+- Dashboard 不等于原始证据；
+- fence receipt 不等于磁盘持久证据；
+- paired end-to-end 差异不自动证明某个内核机制贡献；
+- 只有 `evidence/releases/INDEX.md` 指向、manifest/checksum/semantic replay 都成立的 bundle 才是正式发布结果。

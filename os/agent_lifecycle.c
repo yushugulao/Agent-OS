@@ -310,6 +310,9 @@ agent_lifecycle_controller_departing_locked(struct proc *p)
 		departure.control_id, &closed);
 	if (close_status == 0)
 		proc_request_workflow_exit(closed, AGENT_STATUS_CANCELLED);
+	else if (close_status > 0)
+		/* A concurrent fence owns the cut; retain QUIESCING for retry. */
+		return departure.control_id;
 	else if (workflow_lifecycle_closing(departure.lifecycle))
 		proc_request_workflow_exit(departure.lifecycle,
 				   AGENT_STATUS_CANCELLED);

@@ -25,12 +25,6 @@ struct labdemo_workload_metrics {
 struct labdemo_performance_receipt {
 	uint64 observer_pid;
 	struct agent_performance_snapshot snapshot;
-	uint64 metadata_dirty;
-	uint64 metadata_durable;
-	uint64 metadata_requests;
-	uint64 metadata_coalesced;
-	uint64 metadata_commits;
-	uint64 metadata_pending;
 };
 
 struct labdemo_fence_receipt {

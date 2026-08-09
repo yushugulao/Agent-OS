@@ -1290,7 +1290,9 @@ static __attribute__((noinline)) int syscall_dispatch(
 				    trapframe->a2, trapframe->a3);
 		break;
 	case SYS_agent_observe_recovery:
-		ret = sys_agent_observe_recovery(trapframe->a0, trapframe->a1);
+		/* Kept as a reserved ABI number; fence-sealed evidence has no
+		 * crash-recovery catalog to enumerate or reap. */
+		ret = AGENT_STATUS_BAD_PARAM;
 		break;
 #ifdef VIRTIO_DISK_TEST_PROFILE
 	case SYS_virtio_disk_test:
@@ -1428,6 +1430,122 @@ static int syscall_needs_transaction(enum syscall_class class)
 	return class != SYSCALL_CLASS_FAST && class != SYSCALL_CLASS_INVALID;
 }
 
+static int
+syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
+{
+	(void)trapframe;
+	switch (id) {
+	/*
+	 * Ordinary calls own one outer cut from before transaction preparation
+	 * through descriptor/I/O settlement.  This is deliberately an exact
+	 * closed set: adding a syscall requires deciding whether it mutates the
+	 * workflow, is self-gated, or is a genuine observer.
+	 */
+	case SYS_write:
+	case SYS_read:
+	case SYS_fstat:
+	case SYS_openat:
+	case SYS_unlinkat:
+	case SYS_close:
+	case SYS_sync:
+	case SYS_fsync:
+	case SYS_fdatasync:
+	case SYS_brk:
+	case SYS_mailread:
+	case SYS_mailwrite:
+	case SYS_trace:
+	case SYS_execve:
+	case SYS_wait4:
+	case SYS_pipe2:
+	case SYS_thread_create:
+	case SYS_waittid:
+	case SYS_mutex_create:
+	case SYS_mutex_lock:
+	case SYS_mutex_unlock:
+	case SYS_semaphore_create:
+	case SYS_semaphore_up:
+	case SYS_semaphore_down:
+	case SYS_condvar_create:
+	case SYS_condvar_signal:
+	case SYS_condvar_wait:
+	case SYS_agent_scope_delegate_fd:
+	case SYS_agent_sched_config:
+	case SYS_agent_audit_receipt:
+	case SYS_agent_observe_recovery:
+	case SYS_virtio_disk_test:
+	case SYS_physical_page_test:
+	case SYS_agent_metadata_test:
+	case SYS_wait_atomic_test:
+	case SYS_fs_allocator_fault_test:
+	case SYS_context_push:
+	case SYS_context_rollback:
+	case SYS_context_clear:
+	case SYS_agent_watch:
+	case SYS_agent_unwatch:
+	case SYS_agent_wait:
+	case SYS_agent_wait_cancel:
+	case SYS_agent_heartbeat:
+	case SYS_agent_heartbeat_set:
+	case SYS_agent_heartbeat_stop:
+	case SYS_agent_wake:
+	case SYS_agent_file_edit_begin:
+	case SYS_agent_file_edit_commit:
+	case SYS_agent_file_edit_abort:
+	case SYS_agent_file_edit_state:
+	case SYS_agent_route_config:
+		return 1;
+	/* fork/create and Agent execution paths retain their inner cut. */
+	case SYS_clone:
+	case SYS_agent_create:
+	case SYS_agent_create_role:
+	case SYS_agent_workflow_create:
+	case SYS_agent_run:
+	case SYS_agent_call:
+	case SYS_tool_call:
+	case SYS_agent_file_meta_init:
+	case SYS_agent_file_meta_set:
+	case SYS_agent_file_query:
+	case SYS_agent_worker_create:
+		return 0;
+	/* Exit/close drive their own lifecycle protocols; never nest the gate. */
+	case SYS_exit:
+	case SYS_agent_workflow_close:
+		return 0;
+	/* Scheduler control without pending background work and pure observers. */
+	case SYS_sched_yield:
+	case SYS_gettimeofday:
+	case SYS_getpid:
+	case SYS_getppid:
+	case SYS_gettid:
+	case SYS_kernel_work_last_preemptions:
+	case SYS_io_policy_info:
+	case SYS_agent_launch_info:
+	case SYS_agent_workflow_lifecycle_info:
+	case SYS_agent_resource_snapshot:
+	case SYS_agent_performance_snapshot:
+	case SYS_agent_info:
+	case SYS_agent_sched_snapshot:
+	case SYS_agent_trace_snapshot:
+	case SYS_agent_audit_snapshot:
+	case SYS_agent_audit_query:
+	case SYS_agent_span_trace_snapshot:
+	case SYS_agent_timeline_snapshot:
+	case SYS_agent_timeline_query:
+	case SYS_agent_timeline_wait:
+	case SYS_agent_timeline_read:
+	case SYS_agent_provenance_snapshot:
+	case SYS_agent_ledger_snapshot:
+	case SYS_agent_tool_list:
+	case SYS_tool_list:
+	case SYS_context_query:
+	case SYS_context_snapshot:
+	case SYS_context_detail:
+		return 0;
+	default:
+		return 0;
+	}
+}
+
 /* 拒绝高位别名，避免超宽 a7 截断成已登记的低编号调用。 */
 static int syscall_decode_id(uint64 raw_id)
 {
@@ -1439,7 +1557,11 @@ static int syscall_decode_id(uint64 raw_id)
 void syscall()
 {
 	struct trapframe *trapframe = curr_thread()->trapframe;
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
 	int id;
+	int operation_denied = 0;
+	int operation_entered = 0;
+	int background_done = 0;
 	int ret;
 	enum syscall_class class;
 
@@ -1448,23 +1570,51 @@ void syscall()
 	id = syscall_decode_id(trapframe->a7);
 	class = syscall_classify(id);
 	kernel_work_begin_syscall(id, syscall_kernel_work_class(id));
+	lifecycle = vfs_proc_lifecycle(curr_proc());
 	if (class == SYSCALL_CLASS_INVALID)
 		ret = -1;
 	else {
 		uint policy = syscall_policy_base(class);
 
+		if (workflow_lifecycle_key_valid(lifecycle) &&
+		    syscall_mutates_workflow_cut(id, trapframe)) {
+			if (workflow_lifecycle_operation_enter(lifecycle) < 0) {
+				ret = -1;
+				operation_denied = 1;
+				goto operation_done;
+			}
+			operation_entered = 1;
+		}
 		if (syscall_needs_transaction(class))
 			ret = syscall_slow_path(trapframe, id, policy);
 		else
 			ret = syscall_dispatch(id, trapframe, 0);
+	operation_done:
+		if (operation_entered) {
+			/* Current-scope maintenance is part of the same fence cut. */
+			if (agent_background_work_pending() || id == SYS_sched_yield)
+				agent_background_checkpoint();
+			background_done = 1;
+			workflow_lifecycle_operation_leave(lifecycle);
+		}
 	}
 	/*
 	 * 仿照 Linux task_work：生产者只发布低成本待办标记，返回任务在
 	 * syscall 资源结算后再处理。维护工作不占中断或空闲栈，传统调用也
 	 * 无需为每次完整后台扫描付费。
 	 */
-	if (agent_background_work_pending() || id == SYS_sched_yield)
-		agent_background_checkpoint();
+	if (!background_done && !operation_denied &&
+	    !(id == SYS_agent_run && trapframe->a2 == 0 &&
+	      trapframe->a3 == AGENT_RUN_F_FENCE) &&
+	    (agent_background_work_pending() || id == SYS_sched_yield)) {
+		if (!workflow_lifecycle_key_valid(lifecycle)) {
+			agent_background_checkpoint();
+		} else if (workflow_lifecycle_operation_enter(lifecycle) == 0) {
+			/* Observers/self-gated calls only pay this gate when work exists. */
+			agent_background_checkpoint();
+			workflow_lifecycle_operation_leave(lifecycle);
+		}
+	}
 	kernel_work_end();
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);

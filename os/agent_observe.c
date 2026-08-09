@@ -1,15 +1,11 @@
 #include "agent_context.h"
+#include "agent_evidence_ring.h"
 #include "agent_observe_internal.h"
-#include "agent_observe_capacity.h"
-#include "agent_observe_recovery.h"
-#include "agent_observe_store.h"
 #include "defs.h"
 void agent_observe_init(void)
 {
-	agent_observe_capacity_init();
+	agent_evidence_init();
 	agent_observe_ledger_init();
-	agent_obsstore_init();
-	agent_observe_recovery_init();
 }
 
 void
@@ -17,11 +13,11 @@ agent_observe_record_context(struct proc *p,
 			     struct agent_context_record *record,
 			     int authority_effect, int causal_audit)
 {
+	uint64 audit_sequence, evidence_ticket = 0;
 	uint64 span_owner, cause_control, cause_branch, slot;
 	int source_pid;
 	if (p == 0 || record == 0 || agent_observe_recording_suppressed(p))
 		return;
-	agent_observe_timeline_record_context(p, record);
 	if (record->sequence == 0 || p->context_path_capacity == 0)
 		return;
 	slot = (record->sequence - 1) % p->context_path_capacity;
@@ -29,10 +25,28 @@ agent_observe_record_context(struct proc *p,
 		    p, slot, &span_owner, &source_pid, &cause_control,
 		    &cause_branch) < 0)
 		return;
-	(void)cause_branch;
+	audit_sequence = agent_observe_alloc_audit_sequence();
+	if (audit_sequence != 0 && agent_evidence_append_context(
+		    p, record, audit_sequence, span_owner, source_pid,
+		    cause_control, cause_branch, authority_effect, causal_audit,
+		    &evidence_ticket) == 0) {
+		/* The canonical ring owns storage; this call only wakes readers. */
+		agent_observe_timeline_record_context(p, record);
+		/* Migration rare path: deny/authority evidence is immediately
+		 * sealed by one legacy projection. Successful ordinary events never
+		 * pay its durable receipt or hash-chain cost. */
+		if (authority_effect || record->status != AGENT_STATUS_OK)
+			agent_observe_ledger_record_context(
+				p, record, span_owner, source_pid, cause_control,
+				authority_effect, causal_audit,
+				evidence_ticket);
+		return;
+	}
+	/* Fail closed to the legacy protected ledger during migration. */
+	agent_observe_timeline_record_context(p, record);
 	agent_observe_ledger_record_context(
 		p, record, span_owner, source_pid, cause_control,
-		authority_effect, causal_audit);
+		authority_effect, causal_audit, 0);
 }
 
 void

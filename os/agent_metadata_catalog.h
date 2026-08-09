@@ -58,15 +58,17 @@ struct agent_catalog_view {
 	const struct agent_file_meta *meta;
 	uint scope_id;
 	uint state;
+	struct workflow_lifecycle_key lifecycle;
 };
 
 /*
- * 读多写少查询只快照有界候选位图。单条记录在短暂关中断区内复制，
- * 发布前校验代际和生命周期栅栏；休眠或等待持久元数据输入输出时不持有
- * 目录指针。
+ * 读多写少查询只快照有界候选位图。活动变更期间返回重试；单条记录在
+ * 短暂关中断区内复制，发布前校验目录、内容和生命周期代际。休眠或等待
+ * 持久元数据输入输出时不持有目录指针。
  */
 struct agent_catalog_read_snapshot {
 	uint64 generation;
+	uint64 fs_generation;
 	uint scope_id;
 	struct workflow_lifecycle_key lifecycle;
 	uint64 candidates[AGENT_CATALOG_READ_WORDS];
@@ -199,6 +201,7 @@ int agent_metadata_catalog_field_contains(const char *, const char *);
 int agent_metadata_catalog_record_base_valid(
 	const struct agent_file_meta *, uint, uint);
 uint64 agent_metadata_catalog_generation(void);
+int agent_metadata_catalog_generation_snapshot(uint64 *);
 int agent_metadata_catalog_borrow(uint64, int, struct agent_catalog_view *);
 int agent_metadata_catalog_borrow_scan(int, struct agent_catalog_view *);
 int agent_metadata_catalog_read_begin(
@@ -213,6 +216,8 @@ int agent_metadata_catalog_read_end(
 int agent_metadata_catalog_edit_begin(int, uint, struct agent_catalog_edit *);
 int agent_metadata_catalog_edit_begin_scan(int, uint, struct agent_catalog_edit *);
 int agent_metadata_catalog_edit_commit(struct agent_catalog_edit *, uint);
+int agent_metadata_catalog_edit_commit_volatile(
+	struct agent_catalog_edit *, uint);
 void agent_metadata_catalog_edit_abort(struct agent_catalog_edit *);
 int agent_metadata_catalog_mutation_begin(
 	struct agent_catalog_mutation_fence *);
@@ -225,8 +230,18 @@ int agent_metadata_catalog_undo_note_created(
 	const struct agent_catalog_mutation_fence *,
 	struct agent_catalog_undo_token *);
 int agent_metadata_catalog_bind(int, int, struct proc *);
+int agent_metadata_catalog_bind_volatile(int, int, struct proc *);
 int agent_metadata_catalog_clear_slot(int);
+int agent_metadata_catalog_clear_slot_volatile(int);
+int agent_metadata_catalog_remove_inode_exact(struct inode *, int *);
+int agent_metadata_catalog_remove_identity_exact(
+	struct workflow_lifecycle_key, uint, uint, uint, uint,
+	struct agent_file_meta *, uint64 *);
 int agent_metadata_catalog_restore(
+	const struct agent_catalog_mutation_fence *,
+	const struct agent_catalog_undo_token *,
+	const struct agent_file_meta *, uint, int);
+int agent_metadata_catalog_restore_volatile(
 	const struct agent_catalog_mutation_fence *,
 	const struct agent_catalog_undo_token *,
 	const struct agent_file_meta *, uint, int);
@@ -236,10 +251,15 @@ int agent_metadata_catalog_alloc_slot(uint, uint);
 uint64 agent_metadata_catalog_alloc_fid(uint);
 int agent_metadata_catalog_index_seek(uint64, int, char *, int, int *, int *);
 int agent_metadata_catalog_live_seek(uint64, int);
-int agent_metadata_catalog_reclaim_scope(uint);
+int agent_metadata_catalog_reclaim_scope(
+	uint, struct workflow_lifecycle_key);
+int agent_metadata_catalog_fence_generation(
+	uint, struct workflow_lifecycle_key, uint64 *);
 
 int agent_metadata_catalog_live_count(void);
 int agent_metadata_catalog_reconcile_pending(void);
+int agent_metadata_catalog_scope_has_persistent(
+	uint, struct workflow_lifecycle_key);
 int agent_metadata_catalog_reconcile_slot(int);
 int agent_metadata_catalog_prepare_snapshot(struct agent_meta_record *, uint,
 					    int, uint, uint64,
@@ -253,6 +273,8 @@ int agent_metadata_catalog_journal_capture(
 	uint, struct workflow_lifecycle_key,
 	struct agent_catalog_journal_receipt *, uint64 *);
 int agent_metadata_catalog_journal_note_content(
+	const struct agent_file_content_receipt *);
+int agent_metadata_catalog_content_refresh(
 	const struct agent_file_content_receipt *);
 int agent_metadata_catalog_content_commit(
 	const struct agent_file_content_receipt *);

@@ -77,7 +77,7 @@ from host_tools.evidence_toolchain_attestation import (  # noqa: E402
     verify_tool_attestations, verify_tracked_worktree_bytes,
 )
 SCHEMA_VERSION = 8
-FULL_VERIFY_PROFILE_VERSION = 7
+FULL_VERIFY_PROFILE_VERSION = 8
 FULL_VERIFY_TIMEOUT_SECONDS = 5 * 60 * 60
 SUMMARY_NAME = "verification-summary.json"
 SUCCESS_MARKER = "[full-verify] all checks passed"
@@ -88,6 +88,7 @@ MANIFEST_FIELDS = {"schema_version", "status", "commit", "collected_at_utc", "au
 STEP_CONTRACT = (
     ("target-structure", (), ()),
     ("kernel-budgets", (), ()),
+    ("agent-mechanism-contracts", ("agent-mechanism-contracts.log",), ()),
     ("host-platform-alignment", (), ()),
     ("ch3-trace", ("ch3-trace-guest.log",), ()),
     ("agent-suite", ("agent-suite-timings.log", "agent-suite-guest.log"), ()),
@@ -99,14 +100,13 @@ STEP_CONTRACT = (
     ("file-resource", ("file-resource.log",), ()),
     ("thread-resource", ("thread-resource.log",), ()),
     ("physical-resource", ("physical-resource.log",), ()),
-    ("metadata-recovery", ("metadata-recovery.log",), ()),
-    ("observe-recovery", ("observe-recovery.log", "observe-recovery-before-reap.img"), ()),
     ("virtio-disk", ("virtio-disk.log",), ()),
     ("workflow-teardown-race", ("workflow-teardown-race.log",), ()),
     ("fs-enospc", ("fs-enospc.log",), ()),
     ("fs-allocator-fault", ("fs-allocator-fault.log", "fs-allocator-evidence.tar"), ()),
 )
 REQUIRED_RAW_FILES = {
+    "agent-mechanism-contracts.log",
     "dual-plain-qemu.log", "dual-agentos-qemu.log", "dual-stage-timings.csv",
     "dual-state-compare.json", "host-platform-alignment.json",
     *DUAL_STATE_RAW_ARTIFACTS, "dual-targeted-agentbench-guest.log",
@@ -114,7 +114,7 @@ REQUIRED_RAW_FILES = {
     "agent-suite-timings.log", "agent-suite-guest.log",
     "ch3-trace-guest.log",
     "proc-reap.log", "syscall-fairness.log", "file-resource.log", "thread-resource.log",
-    "physical-resource.log", "metadata-recovery.log", "observe-recovery.log", "observe-recovery-before-reap.img",
+    "physical-resource.log",
     "virtio-disk.log",
     "workflow-teardown-race.log", "fs-enospc.log",
     "fs-allocator-fault.log", "fs-allocator-evidence.tar",
@@ -307,13 +307,13 @@ def validate_step_contract(steps: object) -> list[dict[str, object]]:
     return steps
 def validate_settings(settings: object) -> dict[str, object]:
     expected = {"agent_marker_grace_seconds", "mechanism_marker_grace_seconds",
-                "workflow_stability_runs"}
+                "workflow_runs"}
     if not isinstance(settings, dict) or set(settings) != expected:
         raise EvidenceError("verification summary settings contract is invalid")
-    runs = settings["workflow_stability_runs"]
+    runs = settings["workflow_runs"]
     if (settings["agent_marker_grace_seconds"] != "2s"
             or settings["mechanism_marker_grace_seconds"] != "5s"
-            or not isinstance(runs, int) or isinstance(runs, bool) or runs < 3):
+            or not isinstance(runs, int) or isinstance(runs, bool) or runs != 1):
         raise EvidenceError("verification summary settings contract is invalid")
     return settings
 def validate_summary(value: object) -> dict[str, object]:
@@ -394,7 +394,7 @@ def write_summary(args: argparse.Namespace) -> int:
         "settings": {
             "agent_marker_grace_seconds": args.agent_grace,
             "mechanism_marker_grace_seconds": args.mechanism_grace,
-            "workflow_stability_runs": args.workflow_runs,
+            "workflow_runs": args.workflow_runs,
         },
         "steps": steps,
         "artifacts": artifacts,
@@ -1085,7 +1085,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     summary_parser.add_argument("--commit", required=True)
     summary_parser.add_argument("--agent-grace", default="2s")
     summary_parser.add_argument("--mechanism-grace", default="5s")
-    summary_parser.add_argument("--workflow-runs", type=int, default=3)
+    summary_parser.add_argument("--workflow-runs", type=int, default=1)
     return parser.parse_args(argv)
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)

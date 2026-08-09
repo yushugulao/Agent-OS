@@ -1,16 +1,10 @@
 #include "agent.h"
 #include "agent_context.h"
-#include "agent_durable_section.h"
 #include "agent_identity_lease.h"
 #include "agent_internal.h"
 #include "fs_epoch.h"
-#include "agent_observe_capacity.h"
-#include "agent_observe_recovery.h"
-#include "agent_observe_store.h"
-#ifdef AGENT_METADATA_BOOT_READ_FAULT
-#include "agent_metadata_recovery_test.h"
-#endif
 #include "agent_tool_protocol.h"
+#include "agent_workflow_fence.h"
 #include "bio.h"
 #include "defs.h"
 #include "kernel_work.h"
@@ -39,7 +33,6 @@ void agent_core_init(void)
 	agent_identity_init();
 	agent_lifecycle_init();
 	agent_metadata_init();
-	agent_durable_section_init();
 	agent_identity_lease_init();
 	agent_observe_init();
 	agent_metadata_objects_init();
@@ -49,19 +42,7 @@ void agent_core_init(void)
 void
 agent_core_storage_init(void)
 {
-	int status;
-
-	agent_metadata_storage_init();
-	status = agent_metadata_durable_status();
-	if (status != AGENT_STATUS_OK) {
-		if (status == AGENT_STATUS_RETRY)
-			errorf("durable metadata recovery pending; identity lease closed");
-		else
-			errorf("durable metadata unavailable; identity lease closed");
-		return;
-	}
-	if (agent_obsstore_storage_ready() < 0)
-		errorf("durable identity lease unavailable; Agent admission closed");
+	/* Live metadata and identity generations are boot-epoch memory state. */
 }
 
 void
@@ -77,59 +58,41 @@ agent_background_maintain(void)
 	/* 维护 I/O 不得递归地产生新的观测流量。 */
 	if (agent_observe_recording_suppress_begin(p) < 0)
 		return;
-	if (!proc_thread_exit_requested() &&
-	    agent_identity_lease_admission_ready())
-		agent_obsstore_lease_maintain();
 	(void)fs_deferred_reclaim_maintain();
 	agent_metadata_background_maintain();
-	if (agent_metadata_durable_status() == AGENT_STATUS_OK &&
-	    !agent_identity_lease_admission_ready())
-		(void)agent_obsstore_storage_ready();
 	agent_observe_recording_suppress_end(p);
 }
 
 static int
 agent_core_admission_status(void)
 {
-	int status = agent_metadata_admission_status();
-
-	if (status == AGENT_STATUS_OK &&
-	    !agent_identity_lease_admission_ready())
-		return AGENT_STATUS_RETRY;
-	return status;
+	return agent_metadata_admission_status();
 }
 
 static int
 agent_core_create_admission_status(void)
 {
-	int status = agent_core_admission_status();
-
-#ifdef AGENT_METADATA_BOOT_READ_FAULT
-	agent_metadata_recovery_test_admission(status);
-#endif
-	return status;
+	return agent_core_admission_status();
 }
 
 void agent_background_checkpoint(void)
 {
 	struct thread *t = curr_thread();
 	int epoch_due;
-	int lease_pending;
 	int pending;
 
 	if (t == 0 || t->tid < 0 || t->state != RUNNING || t->process == 0)
 		return;
-	lease_pending = agent_identity_lease_maintenance_pending();
 	pending = agent_background_take();
 	epoch_due = fs_epoch_should_commit();
-	if (!pending && !lease_pending && !epoch_due)
+	if (!pending && !epoch_due)
 		return;
 	if (fs_epoch_request_begin() < 0) {
-		if (pending || lease_pending)
+		if (pending)
 			agent_background_request();
 		return;
 	}
-	if (pending || lease_pending)
+	if (pending)
 		agent_background_maintain();
 	if (fs_epoch_should_commit())
 		(void)fs_epoch_commit();
@@ -511,9 +474,7 @@ static int agent_workflow_admission_status(struct proc *p, int role)
 	status = vfs_scope_fresh_admission_status();
 	if (status != AGENT_STATUS_OK)
 		return status;
-	return agent_observe_capacity_admission_status(
-		role == AGENT_ROLE_RECOVERY ? AGENT_OBSERVE_CAPACITY_RECOVERY :
-					      AGENT_OBSERVE_CAPACITY_ORDINARY);
+	return AGENT_STATUS_OK;
 }
 
 int agent_make_role(struct proc *p, int role)
@@ -522,8 +483,6 @@ int agent_make_role(struct proc *p, int role)
 	struct proc *controller = curr_proc();
 	uint64 control_id;
 	uint64 controller_id = 0;
-	int capacity_reserved = 0;
-	int recovery_bound = 0;
 
 	if (policy == 0 || p->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    !exec_policy_process_allows_role(p, role))
@@ -566,26 +525,9 @@ int agent_make_role(struct proc *p, int role)
 				      vfs_proc_lifecycle(p),
 				      p->agent_control_id) < 0)
 		goto fail;
-	recovery_bound = agent_observe_recovery_bind(p, controller);
-	// 绑定冲突拒绝；未绑定的工作流内 Recovery 按普通作用域计费，
-	// 只有启动根精确绑定的全局 Recovery 可以消费保留槽。
-	if (recovery_bound < 0)
-		goto fail;
-	capacity_reserved = agent_observe_capacity_admit(
-		p->vfs_scope_id, vfs_proc_lifecycle(p),
-		recovery_bound > 0 ?
-			AGENT_OBSERVE_CAPACITY_RECOVERY :
-			AGENT_OBSERVE_CAPACITY_ORDINARY);
-	if (capacity_reserved < 0)
-		goto fail;
 	return 0;
 
 fail:
-	if (recovery_bound > 0)
-		agent_observe_recovery_unbind_proc(p);
-	if (capacity_reserved > 0)
-		agent_observe_capacity_release(
-			p->vfs_scope_id, vfs_proc_lifecycle(p));
 	agent_free_proc_context(p);
 	agent_core_clear_metadata(p);
 	return -1;
@@ -1083,6 +1025,8 @@ int sys_agent_workflow_close(uint64 requested_scope_id)
 					       p->agent_control_id, &closed);
 		if (result < 0)
 			return AGENT_STATUS_DENIED;
+		if (result > 0)
+			return AGENT_STATUS_RETRY;
 	} else {
 		result = vfs_scope_close_trusted(scope_id, &closed);
 		if (result < 0)
@@ -1168,15 +1112,52 @@ int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)
 {
 	struct proc *p = curr_proc();
 	struct thread *t = curr_thread();
+	struct workflow_lifecycle_key lifecycle;
 	struct agent_op op;
 	struct agent_result res;
 	uint64 tick;
 	int status = 0;
 
-	(void)flags;
 	if (!p->is_agent)
 		return -1;
 	if (count < 0 || count > AGENT_BATCH_MAX)
+		return -1;
+	if (count == 0 && flags == AGENT_RUN_F_FENCE) {
+		struct agent_workflow_fence_request request;
+		struct agent_workflow_fence_receipt receipt;
+		const struct agent_workflow_fence_request *request_ptr = 0;
+		struct agent_workflow_fence_receipt *receipt_ptr = 0;
+
+		/* Anonymous fences are fire-and-forget; receipts require a retry id. */
+		if (opsaddr == 0 && resultsaddr != 0)
+			return -1;
+		if (opsaddr != 0) {
+			if (user_range_check(p->pagetable, opsaddr,
+					     sizeof(request), PTE_R) < 0 ||
+			    copyin(p->pagetable, (char *)&request, opsaddr,
+				   sizeof(request)) < 0)
+				return -1;
+			request_ptr = &request;
+		}
+		if (resultsaddr != 0) {
+			if (user_range_check(p->pagetable, resultsaddr,
+					     sizeof(receipt), PTE_W) < 0)
+				return -1;
+			receipt_ptr = &receipt;
+		}
+		status = agent_workflow_fence_execute(
+			p, request_ptr, receipt_ptr);
+		if (receipt_ptr != 0 &&
+		    copyout(p->pagetable, resultsaddr, (char *)&receipt,
+			    sizeof(receipt)) < 0)
+			return -1;
+		/* A request without a receipt has no fallible delivery step. */
+		if (status == AGENT_STATUS_OK && request_ptr != 0)
+			agent_workflow_fence_receipt_delivered(
+				vfs_proc_lifecycle(p), request.request_id);
+		return status;
+	}
+	if (flags != 0)
 		return -1;
 	if (count == 0)
 		return 0;
@@ -1186,6 +1167,10 @@ int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)
 	if (user_range_check(p->pagetable, resultsaddr,
 			     (uint64)count * sizeof(struct agent_result),
 			     PTE_W) < 0)
+		return -1;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (workflow_lifecycle_key_valid(lifecycle) &&
+	    workflow_lifecycle_operation_enter(lifecycle) < 0)
 		return -1;
 	tick = agent_ticks();
 	agent_identity_thread_loop_set(t, AGENT_LOOP_RUNNING);
@@ -1213,6 +1198,8 @@ int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)
 			break;
 	}
 	agent_identity_thread_loop_set(t, AGENT_LOOP_IDLE);
+	if (workflow_lifecycle_key_valid(lifecycle))
+		workflow_lifecycle_operation_leave(lifecycle);
 	return status;
 }
 
@@ -1230,6 +1217,7 @@ int sys_tool_list(uint64 addr, int max, uint desc_size, uint version)
 int sys_agent_call(uint64 reqaddr, uint64 respaddr)
 {
 	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle;
 	struct agent_request req;
 	struct agent_response resp;
 	struct agent_op op;
@@ -1285,8 +1273,20 @@ int sys_agent_call(uint64 reqaddr, uint64 respaddr)
 		return copyout(p->pagetable, respaddr, (char *)&resp,
 			       sizeof(resp));
 	}
+	lifecycle = vfs_proc_lifecycle(p);
+	if (workflow_lifecycle_key_valid(lifecycle) &&
+	    workflow_lifecycle_operation_enter(lifecycle) < 0) {
+		resp.status = AGENT_STATUS_RETRY;
+		resp.tool_id = tool.tool_id;
+		safestrcpy(resp.tool_name, tool.name, sizeof(resp.tool_name));
+		safestrcpy(resp.result, "workflow_fenced", sizeof(resp.result));
+		return copyout(p->pagetable, respaddr, (char *)&resp,
+			       sizeof(resp));
+	}
 	if (agent_execute_one(p, &op, &res, agent_ticks()) < 0)
 		res.status = AGENT_STATUS_NO_SPACE;
+	if (workflow_lifecycle_key_valid(lifecycle))
+		workflow_lifecycle_operation_leave(lifecycle);
 	resp.status = res.status;
 	resp.tool_id = res.tool_id;
 	resp.request_id = res.request_id;
@@ -1302,12 +1302,14 @@ int sys_agent_call(uint64 reqaddr, uint64 respaddr)
 int sys_tool_call(uint64 reqaddr, uint64 respaddr)
 {
 	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
 	struct agent_request_v2 req;
 	struct agent_response_v2 resp;
 	struct agent_tool_match tool;
 	struct agent_op op;
 	struct agent_result result;
 	char error[AGENT_RESULT_SIZE];
+	int operation_entered = 0;
 	int status = AGENT_STATUS_OK;
 
 	if (copyin(p->pagetable, (char *)&req, reqaddr, sizeof(req)) < 0 ||
@@ -1363,6 +1365,15 @@ int sys_tool_call(uint64 reqaddr, uint64 respaddr)
 		return -1;
 	if (status != AGENT_STATUS_OK)
 		goto out;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (workflow_lifecycle_key_valid(lifecycle)) {
+		if (workflow_lifecycle_operation_enter(lifecycle) < 0) {
+			status = AGENT_STATUS_RETRY;
+			safestrcpy(error, "workflow_fenced", sizeof(error));
+			goto out;
+		}
+		operation_entered = 1;
+	}
 	if (agent_execute_one(p, &op, &result, agent_ticks()) < 0)
 		result.status = AGENT_STATUS_NO_SPACE;
 	status = result.status;
@@ -1372,6 +1383,8 @@ int sys_tool_call(uint64 reqaddr, uint64 respaddr)
 	resp.value2 = result.value2;
 	safestrcpy(resp.result, result.result, sizeof(resp.result));
 out:
+	if (operation_entered)
+		workflow_lifecycle_operation_leave(lifecycle);
 	resp.status = status;
 	/* 协议错误采用校验器诊断；执行错误沿用工具返回的稳定错误文本。 */
 	if (status != AGENT_STATUS_OK && error[0] != 0)
@@ -1385,8 +1398,6 @@ void agent_core_tick(void)
 
 	fs_deferred_reclaim_tick(now);
 	vfs_scope_reap_tick(now);
-	agent_metadata_tick(now);
-	agent_observe_capacity_tick();
 	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
 		if (p->state == P_UNUSED || !p->is_agent)
 			continue;

@@ -398,17 +398,16 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             r"\.amount\s*=\s*amount",
             r"amount\s*>\s*\*free_count\s*\|\|\s*"
             r"\*free_count\s*-\s*amount\s*<\s*reserve",
-            r"resource_reserve_many\s*\(\s*account\s*,\s*charge_class\s*,\s*"
-            r"&request\s*,\s*1\s*,\s*&reservation\s*\)",
-            r"resource_reservation_commit\s*\(\s*&reservation\s*\)",
+            r"resource_acquire_many\s*\(\s*account\s*,\s*charge_class\s*,\s*"
+            r"&request\s*,\s*1\s*\)",
             r"\*free_count\s*-=\s*amount",
         ),
         failures,
     )
     if reserve_many_body is not None and len(
-        re.findall(r"resource_reserve_many\s*\(", reserve_many_body)
+        re.findall(r"resource_acquire_many\s*\(", reserve_many_body)
     ) != 1:
-        failures.append("fs_storage_reserve_many: quota must use one atomic reservation")
+        failures.append("fs_storage_reserve_many: quota must use one atomic credit acquire")
 
     release_many_body = function_body(fs, "fs_storage_release_many_accounted")
     require_order(

@@ -156,10 +156,34 @@ class UserStackContractTests(unittest.TestCase):
     def test_mutation_compatibility_benchmark_omission_is_rejected(self):
         self.mutate(
             "user/Makefile",
-            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS),$(addprefix user/,$(sort $(SRCS)))) \\\n\t$(COMPAT_BENCH_REPO_SOURCE)",
+            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),$(addprefix user/,$(sort $(SRCS)))) \\\n\t$(COMPAT_BENCH_REPO_SOURCE)",
+            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),$(addprefix user/,$(sort $(SRCS))))",
+        )
+        self.assert_rejected("complete stack application inventory")
+
+    def test_mutation_retired_guest_build_exclusion_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "APPS := $(filter-out $(RETIRED_GUEST_APPS),$(patsubst $(app_dir)/%.c,%,$(SRCS)))",
+            "APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))",
+        )
+        self.assert_rejected("retired recovery Guest build exclusion")
+
+    def test_mutation_retired_guest_stack_exclusion_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),$(addprefix user/,$(sort $(SRCS))))",
             "$(filter-out $(STACK_USAGE_SUPPORT_SRCS),$(addprefix user/,$(sort $(SRCS))))",
         )
         self.assert_rejected("complete stack application inventory")
+
+    def test_mutation_retired_guest_chapter_gate_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "$(filter $(CHAPTER),metadata_recovery observe_recovery)",
+            "$(filter $(CHAPTER),legacy_recovery)",
+        )
+        self.assert_rejected("retired recovery chapter fail-closed gate")
 
     def test_mutation_worker_support_inventory_is_rejected(self):
         self.mutate(

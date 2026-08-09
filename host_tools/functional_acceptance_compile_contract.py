@@ -13,20 +13,10 @@ else:
     from benchmark_source_contract import _function_tokens, _lex
 
 
-CONTRACT_VERSION = "agentos-functional-compile-closure-v3"
+CONTRACT_VERSION = "agentos-functional-compile-closure-v5"
 
 EXPECTED_FUNCTIONAL_CPP_DEFINES = frozenset({
     "AGENT_CONTEXT_SYNC_TEST_PROFILE",
-    "AGENT_METADATA_BOOT_READ_FAULT",
-    "AGENT_METADATA_BOOT_READ_FAULT_BANK",
-    "AGENT_METADATA_BOOT_READ_FAULT_COUNT",
-    "AGENT_METADATA_CRASH_BANK",
-    "AGENT_METADATA_CRASH_PHASE",
-    "AGENT_METADATA_EIO_BANK",
-    "AGENT_METADATA_EIO_PHASE",
-    "AGENT_METADATA_EIO_SKIP_SCOPE_COMMITS",
-    "AGENT_METADATA_SELECT_FAULT_BANK",
-    "AGENT_METADATA_SELECT_FAULT_COUNT",
     "AGENT_OBSERVE_TEST_PROFILE",
     "DURABILITY_POWERCUT_TEST_PROFILE",
     "FILE_RESOURCE_DOMAIN_ORDINARY_LIMIT",
@@ -93,6 +83,7 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "agent_performance_abi.h",
     "agent_resource_abi.h",
     "agent_tool_abi.h",
+    "agent_workflow_fence_abi.h",
     "io_policy.h",
     "nfs/Makefile",
     "nfs/elf_compat.h",
@@ -152,11 +143,11 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
 )
 
 # Guest 不是内核行为的独立真值源：任何已编译内核对象都能伪造系统调用结果，
-# 或向控制台写入外观有效的回执。因此必须固定通配选择出的完整内核源码、头文件
-# 与链接器闭包，而不能只固定 Agent 系统调用实现。initproc.S 不纳入，因为
+# 或向控制台写入外观有效的回执。因此必须固定 Makefile 正式配置实际选择的
+# 完整内核翻译单元、可达头文件与链接器闭包，而不能把磁盘上的退役参考实现误算
+# 为生产输入，也不能只固定 Agent 系统调用实现。initproc.S 不纳入，因为
 # Makefile 会无条件通过已固定生成器重建它。
 KERNEL_RUNTIME_DEPENDENCY_PATHS = (
-    "agent_observe_test_phase_abi.h",
     "file_resource_policy.h",
     "fs_allocator_test_abi.h",
     "physical_page_policy.h",
@@ -171,8 +162,8 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/agent_context_path.c",
     "os/agent_context_path.h",
     "os/agent_core.c",
-    "os/agent_durable_section.c",
-    "os/agent_durable_section.h",
+    "os/agent_evidence_ring.c",
+    "os/agent_evidence_ring.h",
     "os/agent_file_name_policy.h",
     "os/agent_file_state.c",
     "os/agent_file_state_internal.h",
@@ -183,6 +174,9 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/agent_ipc.c",
     "os/agent_lifecycle.c",
     "os/agent_lifecycle.h",
+    "os/agent_live_query_compat.c",
+    "os/agent_live_query_events.c",
+    "os/agent_live_query_events.h",
     "os/agent_metadata.c",
     "os/agent_metadata_actions.c",
     "os/agent_metadata_actions.h",
@@ -190,45 +184,22 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/agent_metadata_catalog.h",
     "os/agent_metadata_directory.c",
     "os/agent_metadata_directory.h",
-    "os/agent_metadata_disk.h",
     "os/agent_metadata_internal.h",
-    "os/agent_metadata_journal.c",
-    "os/agent_metadata_journal.h",
     "os/agent_metadata_objects.c",
-    "os/agent_metadata_probe.c",
-    "os/agent_metadata_probe.h",
     "os/agent_metadata_query.c",
     "os/agent_metadata_query.h",
-    "os/agent_metadata_recovery.c",
-    "os/agent_metadata_recovery.h",
-    "os/agent_metadata_recovery_test.c",
-    "os/agent_metadata_recovery_test.h",
-    "os/agent_metadata_scan.c",
-    "os/agent_metadata_scan.h",
-    "os/agent_metadata_store.c",
-    "os/agent_metadata_store_format.c",
-    "os/agent_metadata_store_format.h",
-    "os/agent_metadata_store_io.c",
-    "os/agent_metadata_store_io.h",
-    "os/agent_metadata_test.c",
     "os/agent_observe.c",
     "os/agent_observe_audit_query.c",
-    "os/agent_observe_capacity.c",
-    "os/agent_observe_capacity.h",
     "os/agent_observe_internal.h",
     "os/agent_observe_ledger.c",
-    "os/agent_observe_persist_context.h",
-    "os/agent_observe_recovery.c",
-    "os/agent_observe_recovery.h",
-    "os/agent_observe_recovery_store.h",
-    "os/agent_observe_store.c",
-    "os/agent_observe_store.h",
-    "os/agent_observe_test.c",
-    "os/agent_observe_test.h",
     "os/agent_observe_timeline.c",
     "os/agent_resource.c",
+    "os/agent_sha256.c",
+    "os/agent_sha256.h",
     "os/agent_tool_protocol.c",
     "os/agent_tool_protocol.h",
+    "os/agent_workflow_fence.c",
+    "os/agent_workflow_fence.h",
     "os/agent.c",
     "os/agent.h",
     "os/bio.c",
@@ -245,7 +216,6 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/file.h",
     "os/fs.c",
     "os/fs.h",
-    "os/fs_allocator_test.c",
     "os/fs_allocator_test.h",
     "os/fs_epoch.c",
     "os/fs_epoch.h",
@@ -259,10 +229,8 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/loader.h",
     "os/log.h",
     "os/main.c",
-    "os/metadata_crash_test.h",
     "os/open_file_io_lease.c",
     "os/open_file_io_lease.h",
-    "os/physical_page_test.c",
     "os/physical_page_test.h",
     "os/performance_stats.c",
     "os/performance_stats.h",
@@ -304,10 +272,55 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/vm.h",
     "os/wait.c",
     "os/wait.h",
-    "os/wait_atomic_test.c",
     "os/wait_atomic_test.h",
+    "os/workflow_credit_domain.c",
+    "os/workflow_credit_domain.h",
     "os/workflow_lifecycle.c",
     "os/workflow_lifecycle.h",
+)
+
+# 这些 C 文件可以保留为历史参考或显式测试配置输入，但正式评测的默认
+# C_SRCS 会在链接前排除它们。它们的字节不属于生产测量源回执；Makefile 中
+# 执行排除的语义本身仍由本合同逐字节和结构化规则共同锁定。
+RETIRED_KERNEL_C_SOURCE_PATHS = frozenset({
+    "os/agent_durable_section.c",
+    "os/agent_metadata_journal.c",
+    "os/agent_metadata_probe.c",
+    "os/agent_metadata_recovery.c",
+    "os/agent_metadata_recovery_test.c",
+    "os/agent_metadata_scan.c",
+    "os/agent_metadata_store.c",
+    "os/agent_metadata_store_format.c",
+    "os/agent_metadata_store_io.c",
+    "os/agent_metadata_test.c",
+    "os/agent_observe_capacity.c",
+    "os/agent_observe_recovery.c",
+    "os/agent_observe_store.c",
+})
+
+DEFAULT_PROFILE_INACTIVE_KERNEL_C_SOURCE_PATHS = frozenset({
+    "os/agent_observe_test.c",
+    "os/fs_allocator_test.c",
+    "os/physical_page_test.c",
+    "os/wait_atomic_test.c",
+})
+
+INACTIVE_KERNEL_C_SOURCE_PATHS = (
+    RETIRED_KERNEL_C_SOURCE_PATHS
+    | DEFAULT_PROFILE_INACTIVE_KERNEL_C_SOURCE_PATHS
+)
+
+RETIRED_GUEST_APPLICATIONS = (
+    "agentmetacrash_ucore",
+    "agentmetarecover_ucore",
+    "agentmetaeio_ucore",
+    "agentmetalarge_ucore",
+    "agentmetatransient_ucore",
+    "agentobsreboot_ucore",
+)
+
+RETIRED_GUEST_SOURCE_PATHS = frozenset(
+    f"user/src/{name}.c" for name in RETIRED_GUEST_APPLICATIONS
 )
 
 COMPILE_DEPENDENCY_PATHS = (
@@ -317,7 +330,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # 上述完整审查闭包的逐字节指纹。固定各翻译阶段输入，避免续行、预处理、
 # 汇编或链接语法在规范化时被隐藏。
 COMPILE_CLOSURE_FINGERPRINT = (
-    "32de473a0f56d145a55eda2d418aeec4048048f6f727694eb8a409d772106ebf"
+    "3c7b5304dc6e33c0c75c42f4cce87a7c044996c54ceda46fdd344e7c0a71cdf5"
 )
 
 USER_TRANSLATION_UNITS = (
@@ -346,6 +359,7 @@ EXPECTED_INCLUDE_CLOSURE = (
     "agent_performance_abi.h",
     "agent_resource_abi.h",
     "agent_tool_abi.h",
+    "agent_workflow_fence_abi.h",
     "io_policy.h",
     "user/include/agent.h",
     "user/include/agent_metadata_test_abi.h",
@@ -420,11 +434,17 @@ EXPECTED_USER_INCLUDE_ROOT_FILES = (
 REQUIRED_KERNEL_RESULT_PATHS = frozenset({
     "os/agent_context.c",
     "os/agent_core.c",
+    "os/agent_evidence_ring.c",
     "os/agent_ipc.c",
+    "os/agent_live_query_compat.c",
+    "os/agent_live_query_events.c",
     "os/agent_metadata_objects.c",
+    "os/agent_sha256.c",
+    "os/agent_workflow_fence.c",
     "os/console.c",
     "os/printf.c",
     "os/syscall.c",
+    "os/workflow_credit_domain.c",
 })
 
 SIMPLE_SYSCALL_WRAPPERS = {
@@ -443,6 +463,9 @@ SIMPLE_SYSCALL_WRAPPERS = {
     "agent_info": ("SYS_agent_info", "info"),
     "agent_launch_info": ("SYS_agent_launch_info", "info"),
     "agent_run": ("SYS_agent_run", "ops", "results", "count", "flags"),
+    "agent_workflow_fence": (
+        "SYS_agent_run", "request", "receipt", "0", "AGENT_RUN_F_FENCE",
+    ),
     "sys_tool_call": ("SYS_tool_call", "req", "resp"),
     "context_push": ("SYS_context_push", "record"),
     "context_query": ("SYS_context_query", "start_sequence", "out", "max"),
@@ -611,14 +634,30 @@ def _validate_source_inventories(repo: Path) -> None:
         )
     if precompiled_candidates:
         raise ValueError("precompiled header can bypass reviewed source headers")
-    actual_kernel = tuple(sorted(
+    disk_kernel_c = frozenset(
         path.relative_to(root).as_posix()
-        for pattern in ("*.c", "*.S")
-        for path in (root / "os").glob(pattern)
+        for path in (root / "os").glob("*.c")
+    )
+    actual_active_kernel_c = tuple(sorted(
+        disk_kernel_c - INACTIVE_KERNEL_C_SOURCE_PATHS
+    ))
+    expected_active_kernel_c = tuple(sorted(
+        path for path in KERNEL_TRANSLATION_UNIT_PATHS
+        if path.endswith(".c")
+    ))
+    if actual_active_kernel_c != expected_active_kernel_c:
+        raise ValueError("kernel active C_SRCS inventory differs")
+    actual_kernel_assembly = tuple(sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "os").glob("*.S")
         if path.name != "initproc.S"
     ))
-    if actual_kernel != tuple(sorted(KERNEL_TRANSLATION_UNIT_PATHS)):
-        raise ValueError("kernel wildcard translation-unit inventory differs")
+    expected_kernel_assembly = tuple(sorted(
+        path for path in KERNEL_TRANSLATION_UNIT_PATHS
+        if path.endswith(".S")
+    ))
+    if actual_kernel_assembly != expected_kernel_assembly:
+        raise ValueError("kernel active AS_SRCS inventory differs")
     actual_libraries = tuple(sorted(
         path.relative_to(root).as_posix()
         for path in (root / "user" / "lib").glob("*.c")
@@ -920,6 +959,50 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
     _require_single_assignment(
         user_make, "SRCS", "SRCS := $(wildcard $(app_dir)/*.c)", "user sources"
     )
+    for fragment, label in (
+        (
+            "RETIRED_GUEST_APPS := agentmetacrash_ucore "
+            "agentmetarecover_ucore \\\n"
+            "\tagentmetaeio_ucore agentmetalarge_ucore "
+            "agentmetatransient_ucore \\\n"
+            "\tagentobsreboot_ucore",
+            "retired Guest application inventory",
+        ),
+        (
+            "RETIRED_GUEST_SRCS := $(addprefix user/$(app_dir)/,"
+            "$(addsuffix .c,$(RETIRED_GUEST_APPS)))",
+            "retired Guest source inventory",
+        ),
+        (
+            "APPS := $(filter-out $(RETIRED_GUEST_APPS),"
+            "$(patsubst $(app_dir)/%.c,%,$(SRCS)))",
+            "retired Guest application exclusion",
+        ),
+        (
+            "ifneq ($(filter $(CHAPTER),metadata_recovery "
+            "observe_recovery),)\n"
+            "$(error CHAPTER=$(CHAPTER) is retired; use the live-query and "
+            "workflow-fence Agent tests)\n"
+            "endif",
+            "retired Guest chapter rejection",
+        ),
+        (
+            "STACK_USAGE_APPLICATION_SRCS := \\\n"
+            "\t$(filter-out $(STACK_USAGE_SUPPORT_SRCS) "
+            "$(RETIRED_GUEST_SRCS),"
+            "$(addprefix user/,$(sort $(SRCS)))) \\\n"
+            "\t$(COMPAT_BENCH_REPO_SOURCE)",
+            "retired Guest stack-source exclusion",
+        ),
+    ):
+        _require_fragment_once(user_make, fragment, label)
+    for retired_name in (
+        "METADATA_RECOVERY_TESTS", "OBSERVE_RECOVERY_TESTS",
+    ):
+        if retired_name in user_make:
+            raise ValueError(
+                f"retired Guest chapter selector remains: {retired_name}"
+            )
     _require_single_assignment(
         user_make,
         "EVALUATION_TESTS",
@@ -989,6 +1072,62 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         _require_fragment_once(user_make, fragment, label)
 
     root_make = texts["Makefile"].replace("\r\n", "\n")
+    for fragment, label in (
+        (
+            "RETIRED_METADATA_C_SRCS := \\\n"
+            "\t$K/agent_metadata_journal.c \\\n"
+            "\t$K/agent_metadata_probe.c \\\n"
+            "\t$K/agent_metadata_recovery.c \\\n"
+            "\t$K/agent_metadata_recovery_test.c \\\n"
+            "\t$K/agent_metadata_scan.c \\\n"
+            "\t$K/agent_metadata_store.c \\\n"
+            "\t$K/agent_metadata_store_format.c \\\n"
+            "\t$K/agent_metadata_store_io.c \\\n"
+            "\t$K/agent_metadata_test.c\n"
+            "C_SRCS := $(filter-out $(RETIRED_METADATA_C_SRCS),$(C_SRCS))\n"
+            "INACTIVE_PROFILE_C_SRCS += $(RETIRED_METADATA_C_SRCS)",
+            "retired metadata source exclusion",
+        ),
+        (
+            "RETIRED_OBSERVE_C_SRCS := \\\n"
+            "\t$K/agent_durable_section.c \\\n"
+            "\t$K/agent_observe_capacity.c \\\n"
+            "\t$K/agent_observe_recovery.c \\\n"
+            "\t$K/agent_observe_store.c\n"
+            "C_SRCS := $(filter-out $(RETIRED_OBSERVE_C_SRCS),$(C_SRCS))\n"
+            "INACTIVE_PROFILE_C_SRCS += $(RETIRED_OBSERVE_C_SRCS)",
+            "retired observe source exclusion",
+        ),
+        (
+            "ifeq ($(AGENT_OBSERVE_TEST_PROFILE),)\n"
+            "C_SRCS := $(filter-out $K/agent_observe_test.c,$(C_SRCS))\n"
+            "INACTIVE_PROFILE_C_SRCS += $K/agent_observe_test.c\n"
+            "endif",
+            "observe profile source exclusion",
+        ),
+        (
+            "ifeq ($(WAIT_ATOMIC_TEST_PROFILE),)\n"
+            "C_SRCS := $(filter-out $K/wait_atomic_test.c,$(C_SRCS))\n"
+            "INACTIVE_PROFILE_C_SRCS += $K/wait_atomic_test.c\n"
+            "endif",
+            "wait profile source exclusion",
+        ),
+        (
+            "ifeq ($(FS_ALLOCATOR_FAULT_TEST_PROFILE),)\n"
+            "C_SRCS := $(filter-out $K/fs_allocator_test.c,$(C_SRCS))\n"
+            "INACTIVE_PROFILE_C_SRCS += $K/fs_allocator_test.c\n"
+            "endif",
+            "allocator profile source exclusion",
+        ),
+        (
+            "ifeq ($(PHYSICAL_PAGE_TEST_HOOKS),)\n"
+            "C_SRCS := $(filter-out $K/physical_page_test.c,$(C_SRCS))\n"
+            "INACTIVE_PROFILE_C_SRCS += $K/physical_page_test.c\n"
+            "endif",
+            "physical-page profile source exclusion",
+        ),
+    ):
+        _require_fragment_once(root_make, fragment, label)
     _require_single_assignment(
         root_make,
         "C_OBJS",
@@ -1080,7 +1219,13 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             root_make,
             "FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS := \\\n"
             "\tK U F BUILDDIR CC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS \\\n"
-            "\tC_SRCS AS_SRCS C_OBJS AS_OBJS OBJS HEADER_DEP",
+            "\tC_SRCS AS_SRCS C_OBJS AS_OBJS OBJS HEADER_DEP \\\n"
+            "\tFUNCTIONAL_REVIEW_PROFILE_CONTEXT \\\n"
+            "\tAGENT_CONTEXT_SYNC_TEST_PROFILE AGENT_OBSERVE_TEST_PROFILE \\\n"
+            "\tWAIT_ATOMIC_TEST_PROFILE FS_ALLOCATOR_FAULT_TEST_PROFILE \\\n"
+            "\tPHYSICAL_PAGE_TEST_HOOKS DURABILITY_POWERCUT_TEST_PROFILE \\\n"
+            "\tAGENT_METADATA_CRASH_PHASE AGENT_METADATA_EIO_PHASE \\\n"
+            "\tAGENT_METADATA_SELECT_FAULT_BANK AGENT_METADATA_BOOT_READ_FAULT",
             "kernel review variable boundary",
         ),
         (
@@ -1089,7 +1234,7 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             "\tARCH CC OBJCOPY OBJDUMP COMMON_CFLAGS CFLAGS CPPFLAGS LDFLAGS "
             "LIB_C LIB_OBJS CRT_OBJ \\\n"
             "\tapp_dir build_dir elf_dir obj_dir bin_dir generated_dir out_dir asm_dir arch_dir \\\n"
-            "\tSRCS APPS SELECTED_APPS",
+            "\tSRCS APPS SELECTED_APPS RETIRED_GUEST_APPS RETIRED_GUEST_SRCS",
             "user review variable boundary",
         ),
         (
@@ -1102,6 +1247,49 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
     )
     for make_text, fragment, label in review_guards:
         _require_fragment_once(make_text, fragment, label)
+
+    _require_fragment_once(
+        root_make,
+        "override FUNCTIONAL_REVIEW_PAIRED_PROFILE_REQUEST := $(strip "
+        "$(FUNCTIONAL_REVIEW_PROFILE_CONTEXT)|"
+        "$(AGENT_CONTEXT_SYNC_TEST_PROFILE)|$(WAIT_ATOMIC_TEST_PROFILE)|"
+        "$(INIT_PROC)|$(CHAPTER)|$(MAKECMDGOALS)|$(USER_EXTRA_CFLAGS))\n"
+        "override FUNCTIONAL_REVIEW_PAIRED_PROFILE_ORIGINS := "
+        "$(origin FUNCTIONAL_REVIEW_BUILD)|"
+        "$(origin FUNCTIONAL_REVIEW_PROFILE_CONTEXT)|"
+        "$(origin AGENT_CONTEXT_SYNC_TEST_PROFILE)|"
+        "$(origin WAIT_ATOMIC_TEST_PROFILE)|$(origin INIT_PROC)|"
+        "$(origin CHAPTER)\n"
+        "ifeq ($(FUNCTIONAL_REVIEW_PAIRED_PROFILE_REQUEST),"
+        "agentfinal-context-sync-atomicity-v1|1|1|"
+        "agentfinal_ucore|agent|build|)\n"
+        "ifeq ($(FUNCTIONAL_REVIEW_PAIRED_PROFILE_ORIGINS),"
+        "command line|command line|command line|command line|"
+        "command line|command line)\n"
+        "override FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS := "
+        "$(filter-out FUNCTIONAL_REVIEW_PROFILE_CONTEXT "
+        "AGENT_CONTEXT_SYNC_TEST_PROFILE WAIT_ATOMIC_TEST_PROFILE,"
+        "$(FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS))\n"
+        "endif\n"
+        "endif",
+        "exact paired Agent profile admission",
+    )
+    forbidden_assignments = re.findall(
+        r"(?m)^override FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS\s*:=",
+        root_make,
+    )
+    if len(forbidden_assignments) != 2:
+        raise ValueError("paired Agent profile denylist must have two assignments")
+    for token, expected_count, label in (
+        ("FUNCTIONAL_REVIEW_PROFILE_CONTEXT", 4,
+         "paired Agent profile selector"),
+        ("FUNCTIONAL_REVIEW_PAIRED_PROFILE_REQUEST", 2,
+         "paired Agent profile request"),
+        ("FUNCTIONAL_REVIEW_PAIRED_PROFILE_ORIGINS", 2,
+         "paired Agent profile origins"),
+    ):
+        if root_make.count(token) != expected_count:
+            raise ValueError(f"{label} escaped its exact review guard")
 
     flag_policy = texts["scripts/validate-functional-review-flags.py"].replace(
         "\r\n", "\n"
@@ -1210,6 +1398,17 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             "functional runner selection",
         ),
         (
+            'if [[ "${context_sync_profile}" == "1" ]]; then\n'
+            '\t\tbuild_profile_args+=(\n'
+            '\t\t\tFUNCTIONAL_REVIEW_PROFILE_CONTEXT='
+            'agentfinal-context-sync-atomicity-v1\n'
+            '\t\t\tAGENT_CONTEXT_SYNC_TEST_PROFILE=1\n'
+            '\t\t\tWAIT_ATOMIC_TEST_PROFILE=1\n'
+            '\t\t)\n'
+            '\t\tcase_timing_file="${CONTEXT_SYNC_TIMING_FILE}"',
+            "functional runner paired Agent profile context",
+        ),
+        (
             '"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile nfs/fs.img \\\n'
             '\t\tTOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}" \\\n'
             '\t\tFUNCTIONAL_REVIEW_BUILD=1 \\\n'
@@ -1265,6 +1464,12 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         'unset "${functional_review_env}"'
     ):
         raise ValueError("Host compiler is captured after review environment cleanup")
+    if (
+        runner.count("FUNCTIONAL_REVIEW_PROFILE_CONTEXT") != 1
+        or runner.count("build_profile_args+=(") != 1
+        or runner.count('"${build_profile_args[@]}"') != 1
+    ):
+        raise ValueError("functional runner paired profile escaped its one build")
     make_lines = [
         line.lstrip() for line in runner.splitlines()
         if '"${MAKE_TOOL}"' in line

@@ -78,7 +78,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
         self.assertNotIn("labbench_ucore", RUNNER.AGENT_CASE_NAMES)
 
     def test_child_environment_drops_nested_make_and_parent_evidence(self) -> None:
-        case = RUNNER.CASE_BY_LABEL["observe-recovery"]
+        case = RUNNER.CASE_BY_LABEL["workflow-teardown-race"]
         with fixture_directory() as temp_name, mock.patch.dict(
             os.environ,
             {
@@ -88,6 +88,8 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                 "FINAL_EVIDENCE_STAGE": "/shared/stage",
                 "EVIDENCE_INCOMING_DIR": "/shared/incoming",
                 "EVIDENCE_GUEST_LOG_FILE": "/shared/guest",
+                "WORKFLOW_TEARDOWN_RUNS": "19",
+                "WORKFLOW_TEARDOWN_STABILITY_RUNS": "20",
                 "BASH_ENV": "/hostile/bash-env",
                 "ENV": "/hostile/env",
                 "CDPATH": "/hostile/cdpath",
@@ -113,12 +115,11 @@ class ParallelQemuRegressionTests(unittest.TestCase):
         self.assertNotIn("EVIDENCE_INCOMING_DIR", environment)
         self.assertEqual(
             environment["EVIDENCE_GUEST_LOG_FILE"],
-            str(output / "observe-recovery.guest"),
+            str(output / "workflow-teardown-race.guest"),
         )
-        self.assertEqual(
-            environment["OBSERVE_RECOVERY_SNAPSHOT_FILE"],
-            str(output / "observe-recovery-before-reap.img"),
-        )
+        self.assertEqual(environment["WORKFLOW_TEARDOWN_RUNS"], "1")
+        self.assertNotIn("WORKFLOW_TEARDOWN_STABILITY_RUNS", environment)
+        self.assertNotIn("OBSERVE_RECOVERY_SNAPSHOT_FILE", environment)
         self.assertEqual(RUNNER.execution_jobs(4, False), 4)
         self.assertEqual(RUNNER.execution_jobs(4, True), 4)
         self.assertEqual(RUNNER.build_jobs_per_lane(24, 4), 6)
@@ -615,7 +616,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
                     ):
                         RUNNER.report_output_directory(alias)
 
-    def test_formal_wiring_keeps_profile_v7_steps_and_serial_epoch(self) -> None:
+    def test_formal_wiring_keeps_profile_v8_steps_and_serial_epoch(self) -> None:
         full = Path(__file__).with_name("run-full-verification.sh").read_text(
             encoding="utf-8"
         )
@@ -638,6 +639,7 @@ class ParallelQemuRegressionTests(unittest.TestCase):
             [
                 "target-structure",
                 "kernel-budgets",
+                "agent-mechanism-contracts",
                 "host-platform-alignment",
                 "ch3-trace",
                 "agent-suite",
@@ -647,6 +649,17 @@ class ParallelQemuRegressionTests(unittest.TestCase):
         )
         self.assertIn("evidence_verify_parallel_run", full)
         self.assertIn("evidence_record_parallel_case", full)
+        self.assertIn('--workflow-runs 1', full)
+        for retired in ("metadata-recovery", "observe-recovery"):
+            self.assertNotIn(retired, block)
+        for contract in (
+            "test-workflow-credit-domain.py",
+            "test-agent-evidence-ring.py",
+            "test-agent-live-query-fs.py",
+            "test-workflow-fence.py",
+            "test-workflow-syscall-cut.py",
+        ):
+            self.assertIn(contract, full)
         self.assertGreater(
             full.index("filesystem ordered epoch"),
             full.index("evidence_record_parallel_case"),

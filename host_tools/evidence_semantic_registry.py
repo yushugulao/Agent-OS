@@ -13,6 +13,10 @@ from evidence_semantic_common import (
     ValidationContext,
     _regular_bytes,
 )
+from evidence_semantic_metadata import (
+    RETIRED_BY_DESIGN,
+    validate_mechanism_contracts,
+)
 from evidence_semantic_profiles import (
     _validate_agent_suite,
     _validate_ch3_trace,
@@ -20,8 +24,6 @@ from evidence_semantic_profiles import (
     _validate_file_resource,
     _validate_fs_allocator,
     _validate_fs_enospc,
-    _validate_metadata,
-    _validate_observe,
     _validate_physical_resource,
     _validate_proc,
     _validate_syscall,
@@ -39,6 +41,11 @@ class RawArtifactRule:
 
 
 RAW_ARTIFACT_REGISTRY = (
+    RawArtifactRule(
+        "agent-mechanism-contracts",
+        ("agent-mechanism-contracts.log",),
+        validate_mechanism_contracts,
+    ),
     RawArtifactRule("ch3-trace", ("ch3-trace-guest.log",), _validate_ch3_trace),
     RawArtifactRule(
         "agent-suite",
@@ -61,12 +68,6 @@ RAW_ARTIFACT_REGISTRY = (
     RawArtifactRule("file-resource", ("file-resource.log",), _validate_file_resource),
     RawArtifactRule("thread-resource", ("thread-resource.log",), _validate_thread_resource),
     RawArtifactRule("physical-resource", ("physical-resource.log",), _validate_physical_resource),
-    RawArtifactRule("metadata-recovery", ("metadata-recovery.log",), _validate_metadata),
-    RawArtifactRule(
-        "observe-recovery",
-        ("observe-recovery.log", "observe-recovery-before-reap.img"),
-        _validate_observe,
-    ),
     RawArtifactRule("virtio-disk", ("virtio-disk.log",), _validate_virtio),
     RawArtifactRule(
         "workflow-teardown-race", ("workflow-teardown-race.log",), _validate_workflow
@@ -138,6 +139,21 @@ def _require_exact_inventory(context: ValidationContext) -> None:
         )
 
 
+def _reject_retired_inventory(context: ValidationContext) -> None:
+    retired = sorted(
+        path.name for path in context.raw_dir.iterdir()
+        if path.name in RETIRED_BY_DESIGN
+    )
+    if retired:
+        current_evidence = {
+            name: RETIRED_BY_DESIGN[name] for name in retired
+        }
+        raise EvidenceSemanticError(
+            f"raw artifact inventory contains retired_by_design assets; "
+            f"current evidence: {current_evidence}"
+        )
+
+
 def validate_selected_artifacts(
     names: tuple[str, ...] | list[str] | set[str], raw_dir: Path, repo_root: Path,
     require_exact_inventory: bool = False,
@@ -147,6 +163,14 @@ def validate_selected_artifacts(
     requested = tuple(names)
     if any(not isinstance(name, str) for name in requested):
         raise EvidenceSemanticError("semantic artifact selection is empty or invalid")
+    retired = sorted(name for name in requested if name in RETIRED_BY_DESIGN)
+    if retired:
+        current_evidence = {
+            name: RETIRED_BY_DESIGN[name] for name in retired
+        }
+        raise EvidenceSemanticError(
+            f"semantic artifact selection is retired_by_design; current evidence: {current_evidence}"
+        )
     selectors, _ = _registry_index()
     unknown = sorted(name for name in requested if name not in selectors)
     if unknown:
@@ -163,6 +187,7 @@ def validate_raw_artifacts(
     raw_dir: Path, repo_root: Path, require_exact_inventory: bool = True
 ) -> None:
     context = _validation_context(raw_dir, repo_root)
+    _reject_retired_inventory(context)
     _, artifact_names = _registry_index()
     _run_rules(context, RAW_ARTIFACT_REGISTRY)
     if not require_exact_inventory:

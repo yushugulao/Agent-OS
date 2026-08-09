@@ -30,13 +30,6 @@ struct agent_action_history_entry {
 	char stage[AGENT_FILE_FIELD_SIZE];
 };
 
-struct agent_status_batch_undo {
-	int slot;
-	char text[AGENT_FILE_FIELD_SIZE + AGENT_FILE_SUMMARY_SIZE];
-	uint64 updated_tick;
-	uint64 fs_generation;
-};
-
 struct agent_text_field {
 	const char *text;
 	ushort offset, size;
@@ -68,10 +61,6 @@ static struct agent_metadata_dependency_view
 	agent_dependencies[AGENT_METADATA_DEPENDENCY_MAX];
 static uint64 agent_action_next_sequence;
 static uint64 agent_dependency_generation;
-/* 由 metadata 事务串行化；选择前先拒绝溢出。 */
-static struct agent_status_batch_undo
-	agent_status_batch_undo[AGENT_FILE_STATUS_BATCH_LIMIT];
-
 static void
 agent_text_append(char *dst, int n, const char *src)
 {
@@ -474,51 +463,19 @@ agent_status_select(uint scope_id, char *project, char *run_id,
 	return count;
 }
 
-static int
-agent_file_status_batch_rollback(uint scope_id, int undo_count)
-{
-	for (int i = undo_count - 1; i >= 0; i--) {
-		struct agent_status_batch_undo *undo =
-			&agent_status_batch_undo[i];
-		struct agent_catalog_edit edit;
-
-		memset(&edit, 0, sizeof(edit));
-		if (agent_metadata_catalog_edit_begin(
-			    undo->slot, scope_id, &edit) < 0)
-			return -1;
-		if (!edit.meta->used || edit.scope_id != scope_id) {
-			agent_metadata_catalog_edit_abort(&edit);
-			return -1;
-		}
-		memmove(edit.meta->status, undo->text, sizeof(undo->text));
-		edit.meta->updated_tick = undo->updated_tick;
-		edit.meta->fs_generation = undo->fs_generation;
-		if (agent_metadata_catalog_edit_commit(
-			    &edit, AGENT_FILE_CHANGE_STATUS) < 0)
-			return -1;
-	}
-	if (undo_count != 0)
-		agent_metadata_actions_note_changes(AGENT_FILE_CHANGE_STATUS);
-	return 0;
-}
-
 int
 agent_metadata_actions_update_status_locked(
 	uint scope_id, char *stage, char *project, char *run_id,
 	char *status, char *summary, uint64 dependency_mask,
-	int propagate_dependencies,
-	struct agent_metadata_persist_result *persist)
+	int propagate_dependencies)
 {
 	uchar selected[(AGENT_FILE_META_MAX + 7) / 8];
 	uchar primary[(AGENT_FILE_META_MAX + 7) / 8];
 	struct agent_catalog_edit edit;
 	struct agent_file_meta *meta;
-	struct agent_status_batch_undo *undo;
-	int persistent_updated = 0;
 	int primary_updated = 0;
 	int selected_count;
 	int updated = 0;
-	int undo_count = 0;
 
 	memset(selected, 0, sizeof(selected));
 	memset(primary, 0, sizeof(primary));
@@ -548,12 +505,6 @@ agent_metadata_actions_update_status_locked(
 			continue;
 		}
 		meta = edit.meta;
-		undo = &agent_status_batch_undo[undo_count];
-		undo->slot = i;
-		memmove(undo->text, meta->status, sizeof(undo->text));
-		undo->updated_tick = meta->updated_tick;
-		undo->fs_generation = meta->fs_generation;
-		int was_persistent = (meta->flags & AGENT_FILE_META_F_PERSIST) != 0;
 		const char *new_summary =
 			primary[i / 8] & (1U << (i % 8)) ? summary :
 			"dependency refreshed";
@@ -564,25 +515,12 @@ agent_metadata_actions_update_status_locked(
 		meta->updated_tick = agent_file_state_now();
 		meta->fs_generation =
 			agent_file_state_generation_next(scope_id);
-		if (agent_metadata_catalog_edit_commit(
+		if (agent_metadata_catalog_edit_commit_volatile(
 			    &edit, AGENT_FILE_CHANGE_STATUS) < 0)
 			continue;
-		undo_count++;
-		if (was_persistent)
-			persistent_updated = 1;
 		updated++;
 	}
 	if (updated)
 		agent_metadata_actions_note_changes(AGENT_FILE_CHANGE_STATUS);
-	if (persistent_updated)
-		agent_metadata_store_mark_dirty(scope_id);
-	if (persistent_updated &&
-	    agent_metadata_store_persist_commit(persist) < 0 &&
-	    !persist->irrevocable &&
-	    agent_file_status_batch_rollback(scope_id, undo_count) < 0) {
-		agent_metadata_store_fail_closed_runtime();
-		persist->cause = AGENT_METADATA_PERSIST_FAIL_CLOSED;
-		persist->irrevocable = 1;
-	}
 	return updated;
 }

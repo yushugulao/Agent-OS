@@ -17,21 +17,16 @@
 #define META_WRITE_READY 16
 #define META_CROSS_QUERY_ROUNDS 32
 #define META_CROSS_QUERY_MAX_MS 5000
-#define META_WRITEBACK_WAIT_ROUNDS 800
+#define META_SET_RETRY_ROUNDS 800
 #define OBSERVE_CROSS_QUERY_ROUNDS 32
 #define OBSERVE_CROSS_QUERY_MAX_MS 15000
 #define WORKFLOW_CATALOG_SCOPE_LIMIT 112
-#define WORKFLOW_AUTOSCAN_SCOPE_LIMIT 96
-#define WORKFLOW_EXPLICIT_RESERVE 16
-#define WORKFLOW_STORAGE_PROBE_COUNT (WORKFLOW_AUTOSCAN_SCOPE_LIMIT + 1)
+#define WORKFLOW_STORAGE_PROBE_COUNT (WORKFLOW_CATALOG_SCOPE_LIMIT + 1)
 #define PUBLIC_STORAGE_PROBE_COUNT 70
 #define QUOTA_PHASE_FILL 0
 #define QUOTA_PHASE_PEER_FILL 1
 #define QUOTA_PHASE_CLEANUP 2
 
-_Static_assert(WORKFLOW_AUTOSCAN_SCOPE_LIMIT + WORKFLOW_EXPLICIT_RESERVE ==
-	       WORKFLOW_CATALOG_SCOPE_LIMIT,
-	       "catalog cache and explicit reserve must cover the partition");
 _Static_assert(PUBLIC_STORAGE_PROBE_COUNT <= 255,
 	       "public quota count must fit the child exit status");
 
@@ -62,7 +57,6 @@ struct observe_pressure_result {
 struct quota_fill_state {
 	int active;
 	int created;
-	int explicit_created;
 	int first_removed;
 };
 
@@ -70,8 +64,6 @@ static struct agent_file_query_result scope_query_result;
 static struct agent_file_query_result volatile_query_result;
 static struct agent_file_query_result meta_race_result;
 static struct agent_file_edit_state scope_lease_state;
-static struct agent_info scope_writeback_before;
-static struct agent_info scope_writeback_after;
 static struct agent_context_record observe_context_scratch;
 static struct agent_timeline_filter observe_filter_scratch;
 /* 各阶段串行消费完整查询结果；共享存储使 W^X 平坦映像不超过文件上限。 */
@@ -87,7 +79,7 @@ static struct observe_pressure_result observe_result_scratch;
 static struct scope_reply observe_start_reply;
 static struct scope_reply observe_progress_reply;
 static struct scope_reply observe_join_reply;
-static struct agent_file_hit scope_before_reload;
+static struct agent_file_hit scope_content_before;
 static volatile int metadata_writer_stop;
 static volatile int observe_query_stop;
 static int observe_ready_pipe[2] = {-1, -1};
@@ -182,6 +174,7 @@ create_scoped_object(const char *contents, const char *summary)
 	strcpy(meta.kind, "artifact");
 	strcpy(meta.status, "ready");
 	strcpy(meta.summary, summary);
+	meta.flags = 0;
 	check(agent_file_meta_set(&meta) == 0, "set scoped metadata");
 }
 
@@ -210,28 +203,6 @@ static void query_scoped_object(const char *summary, const char *status)
 	      "scoped query physical name");
 	check(strcmp(scope_query_result.hits[0].summary, summary) == 0,
 	      "scoped query own summary");
-}
-
-static void wait_metadata_quiet(struct agent_info *snapshot)
-{
-	struct agent_info info;
-	int stable = 0;
-
-	for (int i = 0; i < META_WRITEBACK_WAIT_ROUNDS; i++) {
-		memset(&info, 0, sizeof(info));
-		check(agent_info(&info) == 0, "read metadata writeback state");
-		if (!info.metadata_writeback_pending)
-			stable++;
-		else
-			stable = 0;
-		if (stable >= 3) {
-			if (snapshot)
-				*snapshot = info;
-			return;
-		}
-		sleep(10);
-	}
-	check(0, "metadata writeback did not settle");
 }
 
 static void metadata_stop_listener(void *arg)
@@ -353,7 +324,7 @@ static void check_observe_ordered_indexes(void)
 
 	count = agent_timeline_query(&observe_filter_scratch, 0, 0);
 	check(count > 0 && count <= AGENT_AUDIT_MAX_RECORDS,
-	      "count bounded audit timeline");
+	      "count bounded evidence timeline");
 	(void)observe_query_preemptions();
 	memset(observe_timeline_scratch, 0,
 	       sizeof(observe_timeline_scratch));
@@ -361,14 +332,14 @@ static void check_observe_ordered_indexes(void)
 				      observe_timeline_scratch,
 				      AGENT_AUDIT_MAX_RECORDS);
 	check(copied > 0 && copied <= AGENT_AUDIT_MAX_RECORDS,
-	      "copy bounded audit timeline");
+	      "copy bounded evidence timeline");
 	(void)observe_query_preemptions();
 	for (int i = 0; i < copied; i++) {
 		check(observe_timeline_scratch[i].source ==
-			      AGENT_TIMELINE_SOURCE_AUDIT,
-		      "audit-only timeline excludes other sources");
+			      AGENT_TIMELINE_SOURCE_CONTEXT,
+		      "context-only timeline excludes other sources");
 		check(observe_timeline_scratch[i].span_id == span_id,
-		      "audit timeline excludes foreign span");
+		      "evidence timeline excludes foreign span");
 		if (i > 0) {
 			check(observe_timeline_scratch[i].tick >
 				      observe_timeline_scratch[i - 1].tick ||
@@ -378,12 +349,12 @@ static void check_observe_ordered_indexes(void)
 				       observe_timeline_scratch[i].sequence >
 					       observe_timeline_scratch[i - 1]
 						       .sequence),
-			      "audit timeline order is monotonic");
+			      "evidence timeline order is monotonic");
 		}
 		for (int j = 0; j < i; j++)
 			check(observe_timeline_scratch[i].sequence !=
 				      observe_timeline_scratch[j].sequence,
-			      "audit timeline has no duplicate sequence");
+			      "evidence timeline has no duplicate sequence");
 	}
 	observe_result_scratch.timeline_records = copied;
 }
@@ -404,7 +375,7 @@ observe_query_pressure(int ready_fd, int stop_fd, int result_fd)
 	memset(&observe_filter_scratch, 0, sizeof(observe_filter_scratch));
 	observe_filter_scratch.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK;
 	observe_filter_scratch.source_mask =
-		AGENT_TIMELINE_SOURCE_MASK_AUDIT;
+		AGENT_TIMELINE_SOURCE_MASK_CONTEXT;
 	check_observe_ordered_indexes();
 	while (!observe_query_stop || observe_result_scratch.iterations == 0) {
 		check(agent_span_trace_snapshot(0, 0) >= 0,
@@ -413,7 +384,7 @@ observe_query_pressure(int ready_fd, int stop_fd, int result_fd)
 			observe_query_preemptions();
 
 		check(agent_timeline_query(&observe_filter_scratch, 0, 0) >= 0,
-		      "count audit timeline under pressure");
+		      "count evidence timeline under pressure");
 		observe_result_scratch.timeline_preemptions +=
 			observe_query_preemptions();
 
@@ -485,8 +456,9 @@ static __attribute__((noinline)) void create_volatile_object(void)
 	strcpy(meta.kind, "artifact");
 	strcpy(meta.status, "memory-only");
 	strcpy(meta.summary, "scope-B-volatile");
+	meta.flags = 0;
 	check(agent_file_meta_set(&meta) == 0,
-	      "create non-persistent scoped metadata");
+	      "create explicit volatile scoped metadata");
 }
 
 static __attribute__((noinline)) void query_volatile_object(void)
@@ -505,28 +477,6 @@ static __attribute__((noinline)) void query_volatile_object(void)
 	      "volatile scoped metadata retained");
 }
 
-static __attribute__((noinline)) void query_volatile_object_missing(void)
-{
-	struct agent_file_query query;
-
-	memset(&query, 0, sizeof(query));
-	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-	strcpy(query.physical_name, VOLATILE_FILE);
-	strcpy(query.logical_path, "workflow/volatile");
-	strcpy(query.project, "scope-project");
-	strcpy(query.workflow, "scope-test");
-	strcpy(query.run_id, "volatile-run");
-	strcpy(query.stage, "volatile");
-	strcpy(query.kind, "artifact");
-	strcpy(query.status, "memory-only");
-	strcpy(query.summary_contains, "scope-B-volatile");
-	memset(&volatile_query_result, 0, sizeof(volatile_query_result));
-	check(agent_file_query(&query, &volatile_query_result) == 0 &&
-	      volatile_query_result.total_hits == 0 &&
-	      volatile_query_result.returned == 0,
-	      "volatile custom metadata is absent after owner reload");
-}
-
 static __attribute__((noinline)) void volatile_micro_writer(void)
 {
 	for (int i = 0; i < META_VOLATILE_WRITE_FLOOD; i++) {
@@ -541,11 +491,14 @@ static __attribute__((noinline)) void volatile_micro_writer(void)
 	exit(0);
 }
 
-static __attribute__((noinline)) void check_volatile_reload_isolation(void)
+static __attribute__((noinline)) void check_volatile_live_projection(void)
 {
+	uint64 generation;
 	int child_status = -1;
 	int pid;
 
+	query_volatile_object();
+	generation = volatile_query_result.hits[0].fs_generation;
 	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
 	check(pid >= 0, "create volatile metadata writer");
 	if (pid == 0)
@@ -554,10 +507,10 @@ static __attribute__((noinline)) void check_volatile_reload_isolation(void)
 	      "wait volatile metadata writer");
 	check(child_status == 0, "volatile metadata writer status");
 	query_volatile_object();
-	check(agent_file_meta_init() == 0,
-	      "reload volatile metadata owner scope");
+	check(volatile_query_result.hits[0].size == 1 &&
+	      volatile_query_result.hits[0].fs_generation > generation,
+	      "live catalog projects explicit file changes");
 	query_scoped_object("scope-B", "ready");
-	query_volatile_object_missing();
 }
 
 static __attribute__((noinline)) void query_scoped_object_missing(void)
@@ -647,7 +600,7 @@ metadata_race_writer(char group, int start_fd)
 		strcpy(meta.kind, "artifact");
 		strcpy(meta.status, "committed");
 		strcpy(meta.summary, "serialized metadata writer");
-		meta.flags = AGENT_FILE_META_F_PERSIST;
+		meta.flags = 0;
 		check(agent_file_meta_set(&meta) == 0,
 		      "commit concurrent metadata");
 	}
@@ -711,8 +664,6 @@ static __attribute__((noinline)) void check_metadata_transactions(void)
 	printf("agentscope_ucore: metadata_txn_contentions=%d\n", contentions);
 	check(close(start_pipe[0]) == 0 && close(start_pipe[1]) == 0,
 	      "close metadata race pipe");
-	check(agent_file_meta_init() == 0,
-	      "reload concurrent metadata transactions");
 	metadata_race_query("race-a");
 	metadata_race_query("race-b");
 	metadata_race_query("race-c");
@@ -737,7 +688,7 @@ static void quota_file_name(char *name, char group, int index)
 	name[4] = '0' + index % 10;
 }
 
-static __attribute__((noinline)) int bind_quota_autoscan(const char *name)
+static __attribute__((noinline)) int bind_quota_explicit(const char *name)
 {
 	struct agent_file_meta meta;
 	int status = AGENT_STATUS_RETRY;
@@ -746,9 +697,9 @@ static __attribute__((noinline)) int bind_quota_autoscan(const char *name)
 	strcpy(meta.physical_name, name);
 	strcpy(meta.logical_path, name);
 	strcpy(meta.kind, "file");
-	strcpy(meta.status, "autoscan");
-	meta.flags = AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN;
-	for (int i = 0; i < META_WRITEBACK_WAIT_ROUNDS; i++) {
+	strcpy(meta.status, "explicit");
+	meta.flags = 0;
+	for (int i = 0; i < META_SET_RETRY_ROUNDS; i++) {
 		status = agent_file_meta_set(&meta);
 		if (status != AGENT_STATUS_RETRY)
 			break;
@@ -759,7 +710,7 @@ static __attribute__((noinline)) int bind_quota_autoscan(const char *name)
 }
 
 static __attribute__((noinline)) int
-create_quota_files(char group, int max, int autoscan)
+create_quota_files(char group, int max, int indexed)
 {
 	char name[] = "qs000";
 	int created = 0;
@@ -772,11 +723,11 @@ create_quota_files(char group, int max, int autoscan)
 		if (fd < 0)
 			break;
 		check(close(fd) == 0, "close quota object");
-		if (autoscan)
-			check(bind_quota_autoscan(name) ==
-				      (i < WORKFLOW_AUTOSCAN_SCOPE_LIMIT ?
+		if (indexed)
+			check(bind_quota_explicit(name) ==
+				      (i < WORKFLOW_CATALOG_SCOPE_LIMIT ?
 				       AGENT_STATUS_OK : AGENT_STATUS_NO_SPACE),
-			      "bind explicit autoscan quota object");
+			      "bind explicit quota object");
 		created++;
 	}
 	return created;
@@ -805,39 +756,6 @@ static void explicit_meta_name(char *name, char group, int index)
 	name[2] = '0' + (index / 100) % 10;
 	name[3] = '0' + (index / 10) % 10;
 	name[4] = '0' + index % 10;
-}
-
-static __attribute__((noinline)) int
-create_explicit_metadata(char group, int max)
-{
-	struct agent_file_meta meta;
-	char name[] = "ms000";
-	int created = 0;
-
-	for (int i = 0; i < max; i++) {
-		explicit_meta_name(name, group, i);
-		memset(&meta, 0, sizeof(meta));
-		strcpy(meta.physical_name, name);
-		strcpy(meta.logical_path, name);
-		strcpy(meta.kind, "artifact");
-		strcpy(meta.status, "explicit");
-		meta.flags = AGENT_FILE_META_F_PERSIST;
-		if (agent_file_meta_set(&meta) != AGENT_STATUS_OK)
-			break;
-		created++;
-	}
-	return created;
-}
-
-static __attribute__((noinline)) void
-remove_explicit_metadata(char group, int count)
-{
-	char name[] = "ms000";
-
-	for (int i = count - 1; i >= 0; i--) {
-		explicit_meta_name(name, group, i);
-		check(unlink(name) == 0, "remove explicit metadata object");
-	}
 }
 
 static __attribute__((noinline)) int
@@ -918,31 +836,12 @@ check_scope_catalog_no_space(char group, int index)
 	strcpy(meta.logical_path, name);
 	strcpy(meta.kind, "artifact");
 	strcpy(meta.status, "quota-probe");
+	meta.flags = 0;
 	check(agent_file_meta_set(&meta) == AGENT_STATUS_NO_SPACE,
 	      "scope catalog overflow returns no space");
 	check(open(name, O_RDONLY) < 0,
 	      "rejected scope catalog object was not published");
 	check_scope_catalog_path_count(name, 0);
-}
-
-static __attribute__((noinline)) void
-check_autoscan_flag_no_space(char group)
-{
-	struct agent_file_meta meta;
-	char name[] = "xs000";
-
-	explicit_meta_name(name, group, 0);
-	name[0] = 'x';
-	memset(&meta, 0, sizeof(meta));
-	strcpy(meta.physical_name, name);
-	strcpy(meta.logical_path, name);
-	strcpy(meta.kind, "file");
-	strcpy(meta.status, "autoscan-probe");
-	meta.flags = AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN;
-	check(agent_file_meta_set(&meta) == AGENT_STATUS_NO_SPACE,
-	      "explicit syscall cannot bypass the autoscan bound");
-	check(open(name, O_RDONLY) < 0,
-	      "rejected autoscan record was not published");
 }
 
 static __attribute__((noinline)) void
@@ -960,32 +859,23 @@ fill_scope_storage_quota(struct quota_fill_state *state,
 	check(state->created == WORKFLOW_STORAGE_PROBE_COUNT,
 	      "workflow storage remains independent of catalog capacity");
 	check_quota_catalog_path_count(
-		'a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT - 1, 1);
-	check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 0);
-	check_autoscan_flag_no_space('a');
-	state->explicit_created = create_explicit_metadata(
-		'a', WORKFLOW_EXPLICIT_RESERVE + 1);
-	check(state->explicit_created == WORKFLOW_EXPLICIT_RESERVE,
-	      "explicit metadata reserve remains available");
-	check_scope_catalog_no_space('a', WORKFLOW_EXPLICIT_RESERVE);
+		'a', WORKFLOW_CATALOG_SCOPE_LIMIT - 1, 1);
+	check_quota_catalog_path_count('a', WORKFLOW_CATALOG_SCOPE_LIMIT, 0);
+	check_scope_catalog_no_space('a', 0);
 	check(create_quota_files('c', 1, 0) == 1,
 	      "full catalog does not reject a protected VFS object");
 	check_quota_catalog_path_count('c', 0, 0);
 	remove_quota_files('c', 1);
 	quota_file_name(released_name, 'a', 0);
-	check(unlink(released_name) == 0, "release autoscan catalog slot");
+	check(unlink(released_name) == 0, "release explicit catalog slot");
 	state->first_removed = 1;
-	quota_file_name(released_name, 'a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT);
-	check(bind_quota_autoscan(released_name) == AGENT_STATUS_OK,
-	      "bind autoscan object after catalog release");
+	quota_file_name(released_name, 'a', WORKFLOW_CATALOG_SCOPE_LIMIT);
+	check(bind_quota_explicit(released_name) == AGENT_STATUS_OK,
+	      "bind explicit object after catalog release");
 	check_quota_catalog_path_count('a', 0, 0);
-	check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 1);
-	check(agent_file_meta_init() == 0,
-	      "reload rebound autoscan catalog checkpoint");
-	check_quota_catalog_path_count('a', 0, 0);
-	check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 1);
+	check_quota_catalog_path_count('a', WORKFLOW_CATALOG_SCOPE_LIMIT, 1);
 	printf("agentscope_ucore: catalog_explicit_rebound=1 released=1 "
-	       "durable=1 reload=1\n");
+	       "volatile=1\n");
 
 	pid = fork();
 	check(pid >= 0, "create public quota writer");
@@ -1014,21 +904,16 @@ static __attribute__((noinline)) int probe_peer_storage_partition(void)
 	check(created == WORKFLOW_STORAGE_PROBE_COUNT,
 	      "peer workflow has independent storage capacity");
 	check_quota_catalog_path_count(
-		'e', WORKFLOW_AUTOSCAN_SCOPE_LIMIT - 1, 1);
-	check_quota_catalog_path_count('e', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 0);
-	check(open("qa096", O_RDONLY) < 0,
+		'e', WORKFLOW_CATALOG_SCOPE_LIMIT - 1, 1);
+	check_quota_catalog_path_count('e', WORKFLOW_CATALOG_SCOPE_LIMIT, 0);
+	check(open("qa112", O_RDONLY) < 0,
 	      "unindexed VFS object remains scope isolated");
-	check(create_explicit_metadata(
-		'e', WORKFLOW_EXPLICIT_RESERVE + 1) ==
-	      WORKFLOW_EXPLICIT_RESERVE,
-	      "peer explicit metadata reserve is independent");
-	check_scope_catalog_no_space('e', WORKFLOW_EXPLICIT_RESERVE);
+	check_scope_catalog_no_space('e', 0);
 	check(create_quota_files('f', 1, 0) == 1,
 	      "peer full catalog does not reject VFS storage");
 	check_quota_catalog_path_count('f', 0, 0);
 	remove_quota_files('f', 1);
 	remove_quota_files('e', created);
-	remove_explicit_metadata('e', WORKFLOW_EXPLICIT_RESERVE);
 	check(create_quota_files('g', 1, 0) == 1,
 	      "peer storage partition is reusable after cleanup");
 	remove_quota_files('g', 1);
@@ -1040,7 +925,6 @@ cleanup_scope_storage_quota(struct quota_fill_state *state)
 {
 	check(state != 0 && state->active, "workflow quota cleanup state");
 	remove_quota_files_from('a', state->first_removed, state->created);
-	remove_explicit_metadata('a', state->explicit_created);
 	check(create_quota_files('d', 1, 0) == 1,
 	      "workflow quota is reusable after cleanup");
 	remove_quota_files('d', 1);
@@ -1333,9 +1217,9 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 {
 	const char *contents = identity == 'A' ? "alpha" : "bravo";
 	const char *summary = identity == 'A' ? "scope-A" : "scope-B";
-	int writeback_ready[2] = {-1, -1};
-	int writeback_stop[2] = {-1, -1};
-	int writeback_child = -1;
+	int projection_ready[2] = {-1, -1};
+	int projection_stop[2] = {-1, -1};
+	int projection_child = -1;
 	struct quota_fill_state quota_fill = {0};
 	uint scope_id = current_scope();
 
@@ -1343,7 +1227,6 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 		      AGENT_STATUS_DENIED,
 	      "workflow root cannot mint another workflow");
 	memset(&scope_lease_state, 0, sizeof(scope_lease_state));
-	memset(&scope_writeback_before, 0, sizeof(scope_writeback_before));
 	send_reply(reply_fd, scope_id, 0, 0);
 	for (;;) {
 		struct scope_command command;
@@ -1369,15 +1252,16 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			create_volatile_object();
 			query_volatile_object();
 		} else if (command.operation == 'M') {
-			check(identity == 'A', "scope-local reload owner");
+			check(identity == 'A', "scope-local catalog owner");
 			check(agent_file_meta_init() == 0,
-			      "reload only caller metadata scope");
+			      "refresh caller live metadata view");
+			query_scoped_object("scope-A", "ready");
 		} else if (command.operation == 'E') {
 			check(identity == 'B', "volatile metadata verifier");
 			query_volatile_object();
 		} else if (command.operation == 'Z') {
-			check(identity == 'B', "volatile writeback verifier");
-			check_volatile_reload_isolation();
+			check(identity == 'B', "volatile projection verifier");
+			check_volatile_live_projection();
 			value0 = META_VOLATILE_WRITE_FLOOD;
 		} else if (command.operation == 'S') {
 			int status = 0;
@@ -1410,35 +1294,36 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 		} else if (command.operation == 'F') {
 			char ready;
 
-			check(identity == 'A' && writeback_child < 0,
-			      "metadata write flood owner");
-			wait_metadata_quiet(&scope_writeback_before);
-			check(pipe(writeback_ready) == 0 && pipe(writeback_stop) == 0,
+			check(identity == 'A' && projection_child < 0,
+			      "live metadata write flood owner");
+			query_scoped_object(summary, "ready");
+			scope_content_before = scope_query_result.hits[0];
+			check(pipe(projection_ready) == 0 && pipe(projection_stop) == 0,
 			      "create metadata writer controls");
-			check(agent_scope_delegate_fd(writeback_ready[1]) ==
+			check(agent_scope_delegate_fd(projection_ready[1]) ==
 				      AGENT_STATUS_OK &&
-				      agent_scope_delegate_fd(writeback_stop[0]) ==
+				      agent_scope_delegate_fd(projection_stop[0]) ==
 					      AGENT_STATUS_OK,
 			      "delegate metadata writer controls");
-			writeback_child = agent_create_role(AGENT_ROLE_ARTIFACT);
-			check(writeback_child >= 0,
+			projection_child = agent_create_role(AGENT_ROLE_ARTIFACT);
+			check(projection_child >= 0,
 			      "create low-privilege metadata writer");
-			if (writeback_child == 0) {
-				check(close(writeback_ready[0]) < 0 &&
-					      close(writeback_stop[1]) < 0,
+			if (projection_child == 0) {
+				check(close(projection_ready[0]) < 0 &&
+					      close(projection_stop[1]) < 0,
 				      "unused metadata controls not inherited");
-				metadata_micro_writer(writeback_ready[1],
-						      writeback_stop[0]);
+				metadata_micro_writer(projection_ready[1],
+						      projection_stop[0]);
 			}
-			check(close(writeback_ready[1]) == 0 &&
-				      close(writeback_stop[0]) == 0,
+			check(close(projection_ready[1]) == 0 &&
+				      close(projection_stop[0]) == 0,
 			      "close parent metadata controls");
-			read_exact(writeback_ready[0], &ready, sizeof(ready),
+			read_exact(projection_ready[0], &ready, sizeof(ready),
 				   "metadata writer live barrier");
-			check(close(writeback_ready[0]) == 0,
+			check(close(projection_ready[0]) == 0,
 			      "close metadata writer ready control");
-			writeback_ready[0] = writeback_ready[1] = -1;
-			value0 = writeback_child;
+			projection_ready[0] = projection_ready[1] = -1;
+			value0 = projection_child;
 		} else if (command.operation == 'P') {
 			int64 started;
 			int64 elapsed;
@@ -1452,52 +1337,39 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			value1 = elapsed;
 		} else if (command.operation == 'J') {
 			char stop = 1;
-			uint64 requests;
-			uint64 coalesced;
-			uint64 commits;
+			uint64 generation_delta;
 			int child_status = -1;
 
-			check(identity == 'A' && writeback_child > 0,
+			check(identity == 'A' && projection_child > 0,
 			      "metadata write flood join owner");
-			write_exact(writeback_stop[1], &stop, sizeof(stop),
+			write_exact(projection_stop[1], &stop, sizeof(stop),
 				    "stop metadata writer");
-			check(close(writeback_stop[1]) == 0,
+			check(close(projection_stop[1]) == 0,
 			      "close metadata writer stop control");
-			writeback_stop[0] = writeback_stop[1] = -1;
-			check(waitpid(writeback_child, &child_status) == writeback_child,
+			projection_stop[0] = projection_stop[1] = -1;
+			check(waitpid(projection_child, &child_status) == projection_child,
 			      "wait low-privilege metadata writer");
 			check(child_status == 0,
 			      "low-privilege metadata writer status");
-			writeback_child = -1;
-			wait_metadata_quiet(&scope_writeback_after);
-			requests = scope_writeback_after.metadata_writeback_requests -
-				   scope_writeback_before.metadata_writeback_requests;
-			coalesced = scope_writeback_after.metadata_writeback_coalesced -
-				    scope_writeback_before.metadata_writeback_coalesced;
-			commits = scope_writeback_after.metadata_writeback_commits -
-				  scope_writeback_before.metadata_writeback_commits;
-			check(requests >= META_WRITE_FLOOD,
-			      "every micro-write enters scoped writeback accounting");
-			check(commits > 0 && commits * 8 <= requests,
-			      "micro-writes are bounded into writeback batches");
-			check(coalesced + commits == requests,
-			      "writeback accounting classifies every request");
-			check(scope_writeback_after.metadata_writeback_dirty ==
-				      scope_writeback_after.metadata_writeback_durable &&
-			      !scope_writeback_after.metadata_writeback_pending,
-			      "writeback reaches a durable generation");
-			query_scoped_object(summary, "ready");
-			scope_before_reload = scope_query_result.hits[0];
-			check(agent_file_meta_init() == 0,
-			      "reload coalesced metadata checkpoint");
-			query_scoped_object(summary, "ready");
+			projection_child = -1;
+			for (int i = 0; i < META_SET_RETRY_ROUNDS; i++) {
+				query_scoped_object(summary, "ready");
+				if (scope_query_result.hits[0].fs_generation >
+				    scope_content_before.fs_generation)
+					break;
+				check(sched_yield() == 0,
+				      "yield for live content projection");
+			}
 			check(scope_query_result.hits[0].size ==
-				      scope_before_reload.size &&
-			      scope_query_result.hits[0].fs_generation >=
-				      scope_before_reload.fs_generation,
-			      "coalesced metadata survives forced reload");
-			value0 = requests;
-			value1 = commits;
+				      scope_content_before.size &&
+			      scope_query_result.hits[0].fs_generation >
+				      scope_content_before.fs_generation,
+			      "live catalog projects scoped content writes");
+			generation_delta =
+				scope_query_result.hits[0].fs_generation -
+				scope_content_before.fs_generation;
+			value0 = META_WRITE_FLOOD;
+			value1 = generation_delta;
 		} else if (command.operation == 'O') {
 			check(identity == 'A' && observe_child_pid < 0,
 			      "observation query pressure owner");
@@ -2002,7 +1874,7 @@ int main(void)
 	struct scope_reply ready_a;
 	struct scope_reply ready_b;
 	struct scope_reply lease_a;
-	struct scope_reply writeback_a;
+	struct scope_reply projection_a;
 	struct scope_reply progress_b;
 	struct scope_reply quota_a;
 	struct scope_reply quota_b;
@@ -2074,11 +1946,11 @@ int main(void)
 	run_command(b_command[1], b_reply[0], 'D', 0, 0, ready_b.scope_id,
 		    "scope B creates volatile metadata");
 	run_command(a_command[1], a_reply[0], 'M', 0, 0, ready_a.scope_id,
-		    "scope A reloads own metadata");
+		    "scope A refreshes its live metadata view");
 	run_command(b_command[1], b_reply[0], 'E', 0, 0, ready_b.scope_id,
-		    "scope A reload preserves scope B volatile metadata");
+		    "scope A refresh preserves scope B live metadata");
 	run_command(b_command[1], b_reply[0], 'Z', 0, 0, ready_b.scope_id,
-		    "volatile metadata is excluded from owner reload");
+		    "explicit metadata projects owner file changes");
 	run_command(b_command[1], b_reply[0], 'I', 0, 0, ready_b.scope_id,
 		    "cross-scope IPC isolation");
 	run_command(a_command[1], a_reply[0], 'S', 0, 0, ready_a.scope_id,
@@ -2095,28 +1967,26 @@ int main(void)
 	check(progress_b.value0 == META_CROSS_QUERY_ROUNDS &&
 	      progress_b.value1 <= META_CROSS_QUERY_MAX_MS,
 	      "scope B metadata queries progress during scope A writes");
-	writeback_a = run_command(a_command[1], a_reply[0], 'J', 0, 0,
+	projection_a = run_command(a_command[1], a_reply[0], 'J', 0, 0,
 				  ready_a.scope_id,
-				  "join coalesced metadata writeback");
+				  "join live metadata content projection");
 	printf("agentscope_ucore: cross_scope_isolation=1\n");
 	printf("agentscope_ucore: ipc_scope_isolation=1\n");
 	printf("agentscope_ucore: same_scope_collaboration=1\n");
 	printf("agentscope_ucore: pipe_redelegation_isolation=1\n");
 	printf("agentscope_ucore: metadata_transactions=1\n");
 	printf("agentscope_ucore: scope_storage_isolation=1 catalog_limit=%d "
-	       "autoscan_limit=%d explicit_reserve=%d workflow_created=%d "
-	       "peer_created=%d public_created=%d overflow_unindexed=1 "
-	       "autoscan_flag_no_space=1 explicit_no_space=1 reusable=1\n",
-	       WORKFLOW_CATALOG_SCOPE_LIMIT, WORKFLOW_AUTOSCAN_SCOPE_LIMIT,
-	       WORKFLOW_EXPLICIT_RESERVE, (int)quota_a.value0,
+	       "workflow_created=%d peer_created=%d public_created=%d "
+	       "overflow_unindexed=1 explicit_no_space=1 reusable=1\n",
+	       WORKFLOW_CATALOG_SCOPE_LIMIT, (int)quota_a.value0,
 	       (int)quota_b.value0, (int)quota_a.value1);
-	printf("agentscope_ucore: scope_reload_isolation=1\n");
-	printf("agentscope_ucore: metadata_write_coalescing=1 writes=%d commits=%d\n",
-	       (int)writeback_a.value0, (int)writeback_a.value1);
+	printf("agentscope_ucore: scope_live_catalog_isolation=1\n");
+	printf("agentscope_ucore: metadata_live_projection=1 writes=%d generation_delta=%d\n",
+	       (int)projection_a.value0, (int)projection_a.value1);
 	printf("agentscope_ucore: metadata_cross_scope_progress=1 queries=%d latency_ms=%d\n",
 	       (int)progress_b.value0, (int)progress_b.value1);
 	printf("agentscope_ucore: metadata_final_consistency=1\n");
-	printf("agentscope_ucore: metadata_volatile_reload_isolation=1 writes=%d\n",
+	printf("agentscope_ucore: metadata_volatile_live_projection=1 writes=%d\n",
 	       META_VOLATILE_WRITE_FLOOD);
 
 	observe_start_reply = run_command(a_command[1], a_reply[0], 'O', 0, 0,

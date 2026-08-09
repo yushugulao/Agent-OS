@@ -1,68 +1,58 @@
-# AgentOS-uCore 竞赛评审入口
+# 竞赛评审入口
 
-AgentOS-uCore 面向长时间、多角色的 AI Agent 工作流，在 RISC-V 64 uCore 中提供结构化工具调用、可信 Context、语义文件查询、事件驱动 Agent Loop、workflow 生命周期和统一资源控制。
+AgentOS-uCore 面向 AI Agent workflow 提供内核身份、Context、结构化工具、实时文件属性事件、可信 IPC、批量资源域和可验证 fence。科研业务仍在用户态，plain/AgentOS 两目标运行同一工作流合同。
 
-根目录是 AgentOS-uCore；`baseline_ucore/` 是不含 AgentOS 服务的共享安全基底对照。Task 6 两侧使用相同的 70 项程序顺序、challenge 和结果契约，其中 28 项同源、42 项为目标特定实现。该场景用于观察完整系统行为和成本，不作为单机制性能证明。
+## 赛题映射
 
-## 核心能力
-
-| 赛题任务 | 系统能力 | 演示观察点 |
+| 任务 | 评审重点 | 当前机制 |
 | --- | --- | --- |
-| 任务一 | Agent 身份、角色、Context 映射和生命周期 | 普通进程与 Agent 共存，Context 可直接读取 |
-| 任务二 | 名称协议、typed KV、工具目录和批处理 | 结构化请求、响应、错误和扩展字段 |
-| 任务三 | Context Path、快照、FIFO 淘汰和 rollback | 连续工具调用、分支回溯和可信历史 |
-| 任务四 | inode 绑定 metadata、摘要、索引和租约 | 路径遍历与语义索引实测对照 |
-| 任务五 | watch/wait、heartbeat、IPC 和公平调度 | 无事件休眠、事件唤醒和多 Agent 协作 |
-| 任务六 | 科研 Agent 检索、分析、恢复、写作和审计流程 | 双目标完整场景、28/42 源码关系、结果一致性和阶段耗时 |
+| 任务一 | Agent 进程与地址空间 | 可信 role/capability、Context 映射、immutable lifecycle、members/closing/gates |
+| 任务二 | Agent 系统调用 | typed 工具协议、name/id 目录、batch、稳定错误码 |
+| 任务三 | Context Path | 内核可信记录、cause/span/branch、查询/快照/rollback |
+| 任务四 | 文件属性查询 | explicit volatile metadata、选择性索引、typed `ENTER/UPDATE/LEAVE`、resync |
+| 任务五 | Agent Loop | event/watch/wait/heartbeat、可信 route、Evidence Ring、workflow fence |
+| 任务六 | 综合应用 | plain/AgentOS 同科研工作流、状态一致性和绑定原始材料的 paired measurement |
 
-[赛题要求追踪表](../agentos/requirements-traceability.md)列出每项要求对应的实现、ABI 和动态测试入口。
+完整映射见[要求追踪表](../agentos/requirements-traceability.md)。
 
-## 实测数据
+## 三项重点增量
 
-[正式证据索引](../../evidence/releases/INDEX.md)是评审数据入口。索引存在 release 记录时，请打开最新 bundle 内的 `dashboard/index.html`；索引为空表示正式数据尚未发布，不应引用开发日志或历史结果。正式 Dashboard 展示实际样本，而不是测试状态汇总：
+1. **Workflow Credit Domain**：借鉴 Linux CPU accounting/percpu/rstat 的批量思想，以 U/P/F credit 保持硬额度，并在 context switch、压力和 fence 精确 trim。
+2. **Fence-Sealed Evidence Ring**：借鉴 Linux BPF ring buffer 的有序 reserve/commit/discard，普通成功只写一次 canonical event，critical 独立分区，fence 绑定 challenge/credit/metadata/gap 根。
+3. **Agent Live-Query FS**：借鉴 Haiku BFS 显式属性、索引和 live query，只索引显式 volatile metadata，把 typed transition 直接投递到 Agent Context，并用 generation resync 处理有界丢失。
 
-- 路径遍历与 metadata 索引的各负载耗时、工作量和样本数；
-- metadata 全表扫描消融、工具批处理和 Context 映射读取；
-- 同源兼容负载的 Plain/AgentOS p50、p95、倍率、样本数和输出一致性；
-- Task 6 完整场景的 p50/p95、28/42 源码关系、逐阶段耗时和结果一致性；
-- 两个内核的 ELF、text/data/BSS，以及 `struct proc` 和栈预算。
+三项都是 clean-room、项目特定实现，没有复制/vendoring 上游源码、测试、数据、二进制或磁盘格式。详见 [NOTICE](../../NOTICE) 与[第三方及原创增量说明](third-party-and-originality.md)。
 
-每个数值均可从 Dashboard 回到 bundle 中登记的 Guest/Host 原始材料、源码提交和执行环境。统计方法与比较边界见[评价方法](../evaluation.md)。
+## 必须主动说明的限制
 
-## 三分钟演示
+- metadata 不 autoscan、不写 catalog bank/journal、不支持 crash recovery；
+- `PERSIST/AUTOSCAN` legacy flags 返回 `BAD_PARAM`；
+- Evidence Ring 和 audit receipt 是 fence-sealed memory evidence，不是 disk durable；
+- observe recovery syscall 为 tombstone，固定 `BAD_PARAM`；
+- audit/timeline/provenance/ledger 兼容视图仍保留，不能称为完全删除；
+- lifecycle 使用 members/closing/gates，不宣称多阶段 retirement；
+- fence receipt 明确 partial coverage 与 volatile metadata；
+- 当前 Guest 是单 Hart，Host 多 lane 不等于 SMP。
 
-在已安装 Bash、Python 3.10+、RISC-V GCC/binutils 和 `qemu-system-riscv64` 的 POSIX 环境中：
+## 评审材料顺序
 
-```bash
-make doctor
-make contest-demo TOOLPREFIX=riscv64-linux-gnu-
-make contest-demo-check
-```
+1. [根 README](../../README.md)：定位和快速入口。
+2. [系统设计](../agentos/design.md)：三项机制与 workflow fence。
+3. [ABI](../agentos/api.md)：320 字节 receipt、typed watch 和兼容 tombstone。
+4. [安全加固](../agentos/security-hardening.md)：hard admission、generation、resync、fail closed。
+5. [验证说明](../verification.md)：静态、构建、QEMU、paired 和 release 边界。
+6. [正式证据索引](../../evidence/releases/INDEX.md)：只从冻结 bundle 阅读实测结果。
 
-演示包含任务一至五的结构化功能路径和短版多 Agent 科研恢复场景，不连接云 API。完整科研工作流的讲解顺序见[演示脚本](../agentos/scenario-script.md)。
+索引为空或对应 artifact 缺失时，应显示 unavailable。开发日志、示例 marker、静态测试通过数和 Dashboard 本身都不能替代 raw evidence。
 
-## 完整复现
+## 建议演示顺序
 
-```bash
-make target-readiness
-make local-check
-AGENT_TEST_DURATION_PROFILE=none make full-verify TOOLPREFIX=riscv64-linux-gnu-
-```
-
-正式评价的采集、复验、成本测量、Dashboard 和打包入口见[评价方法](../evaluation.md)；Windows、WSL 和 MSYS2 配置见[Windows 快速开始](../windows-quickstart.md)。同一工作树内不要并发运行多个 QEMU 测试。
-
-## 建议审阅顺序
-
-| 时间 | 内容 | 入口 |
+| 时间 | 内容 | 关键证据 |
 | --- | --- | --- |
-| 3 分钟 | 项目定位与任务一至六 | [根 README](../../README.md)、[要求追踪表](../agentos/requirements-traceability.md) |
-| 8 分钟 | 架构、内核边界与机制/策略分离 | [系统设计](../agentos/design.md)、[系统调用与 ABI](../agentos/api.md) |
-| 5 分钟 | 科研 Agent 综合场景 | [演示脚本](../agentos/scenario-script.md) |
-| 8 分钟 | 实验设计、原始材料和统计口径 | [正式证据索引](../../evidence/releases/INDEX.md)、[评价方法](../evaluation.md) |
+| 0-3 分钟 | 可信 Agent、Context、tool batch | 身份/Context/tool Guest 输出 |
+| 3-6 分钟 | Live Query 显式登记与 typed transition | query plan、ENTER/UPDATE/LEAVE、resync |
+| 6-9 分钟 | Credit U/P/F 与 hard quota | resource snapshot、模型/Guest quota 拒绝 |
+| 9-12 分钟 | Evidence Ring 与 workflow fence | challenge receipt、exact U、gap/root、retry |
+| 12-15 分钟 | plain/AgentOS 同工作流对比 | 两侧原始日志、状态 compare、paired summary |
 
-## 项目材料
-
-- [视频和幻灯片](../../项目介绍视频和ppt网盘链接.txt)
-- [第三方来源与原创增量](third-party-and-originality.md)
-- [AI 工具使用披露](ai-usage-disclosure.md)
-- [源码许可证](../../LICENSE)、[文档许可证](../../DOCUMENTATION_LICENSE.md)、[第三方通知](../../NOTICE)
+答辩时每项机制按“赛题问题、参考思想、AgentOS 特定实现、动态证据、限制”陈述，避免用功能通过数替代性能，也避免把端到端差异直接归因到单一模块。

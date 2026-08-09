@@ -356,13 +356,18 @@ def check(root: Path) -> None:
             "syscall entry does not classify the registered ID once",
         ),
         (
-            "kernel_work_begin_syscall(id,syscall_kernel_work_class(id));"
-            "if(class==SYSCALL_CLASS_INVALID)ret=-1;"
-            "else{uintpolicy=syscall_policy_base(class);"
-            "if(syscall_needs_transaction(class))"
-            "ret=syscall_slow_path(trapframe,id,policy);"
-            "elseret=syscall_dispatch(id,trapframe,0);}",
-            "unknown syscall can enter dispatch or the transaction slow path",
+            "kernel_work_begin_syscall(id,syscall_kernel_work_class(id));",
+            "syscall entry does not begin bounded kernel work",
+        ),
+        (
+            "if(class==SYSCALL_CLASS_INVALID)ret=-1;else{uintpolicy="
+            "syscall_policy_base(class);",
+            "unknown syscall can enter the registered dispatch path",
+        ),
+        (
+            "if(syscall_needs_transaction(class))ret=syscall_slow_path("
+            "trapframe,id,policy);elseret=syscall_dispatch(id,trapframe,0);",
+            "registered syscall can bypass its class-selected dispatch path",
         ),
     ):
         require(route, fragment, message)

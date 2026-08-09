@@ -67,6 +67,47 @@ def compile_probe(root, build_dir, cc, view, include_dir):
     return output
 
 
+def compile_shared_header_probe(root, build_dir, cc):
+    source = build_dir / "agent-workflow-fence-header.c"
+    output = build_dir / "agent-workflow-fence-header.o"
+    try:
+        source_arg = source.relative_to(root).as_posix()
+        output_arg = output.relative_to(root).as_posix()
+        source.write_text(
+            '#include "agent_workflow_fence_abi.h"\n'
+            "int agent_workflow_fence_header_probe(void)\n"
+            "{\n"
+            "\treturn sizeof(struct agent_workflow_fence_receipt);\n"
+            "}\n",
+            encoding="utf-8",
+        )
+    except (OSError, ValueError) as error:
+        raise LayoutError(
+            f"cannot create standalone workflow fence ABI probe: {error}"
+        ) from error
+    command = [
+        cc,
+        "-std=gnu11",
+        "-Wall",
+        "-Werror",
+        "-O",
+        "-ffreestanding",
+        "-fno-common",
+        "-fno-stack-protector",
+        "-nostdlib",
+        "-march=rv64imac_zicsr_zifencei",
+        "-mabi=lp64",
+        "-mcmodel=medany",
+        "-mno-relax",
+        "-I.",
+        "-c",
+        source_arg,
+        "-o",
+        output_arg,
+    ]
+    run(command, "standalone workflow fence ABI header compile", cwd=root)
+
+
 def symbols(nm, obj, root):
     try:
         obj_arg = obj.relative_to(root).as_posix()
@@ -142,47 +183,57 @@ def compare_golden(actual, golden):
         raise LayoutError(f"frozen ABI drift: {error}") from error
 
 
-def validate_metadata_disk_abi_owner(root):
-    abi = root / "agent_metadata_disk_abi.h"
+def validate_compatibility_tombstones(root):
+    paths = (
+        root / "agent_observe_abi.h",
+        root / "os" / "agent.h",
+        root / "user" / "include" / "agent.h",
+    )
     try:
-        source = abi.read_text(encoding="utf-8")
-        kernel = (root / "os" / "agent_metadata_disk.h").read_text(
-            encoding="utf-8"
+        observe, kernel, user = (
+            path.read_text(encoding="utf-8") for path in paths
         )
-        durable = (root / "os" / "agent_durable_section.h").read_text(
-            encoding="utf-8"
-        )
-        durable_source = (root / "os" / "agent_durable_section.c").read_text(
-            encoding="utf-8"
-        )
-        mkfs = (root / "nfs" / "fs.c").read_text(encoding="utf-8")
     except OSError as error:
-        raise LayoutError(f"cannot read metadata disk ABI owner: {error}") from error
-    for token in (
-        "#define AGENT_META_STORE_MAGIC ",
-        "struct agent_meta_store_header {",
-        "struct agent_durable_arena {",
-        "agent_meta_disk_init_genesis(",
+        raise LayoutError(f"cannot read Agent compatibility ABI: {error}") from error
+
+    if not re.search(
+        r"^#define\s+AGENT_OBSERVE_RECOVERY_COMPAT_TOMBSTONE\s+1U$",
+        observe,
+        re.MULTILINE,
+    ) or not re.search(
+        r"Compatibility tombstone:.*recovery endpoint is unsupported",
+        observe,
+        re.DOTALL,
     ):
-        if token not in source:
-            raise LayoutError(f"shared metadata disk ABI lacks {token.strip()}")
-        owners = [
-            path
-            for path in (abi, *sorted((root / "os").glob("*.h")),
-                         *sorted((root / "nfs").glob("*.h")))
-            if token in path.read_text(encoding="utf-8")
-        ]
-        if owners != [abi]:
+        raise LayoutError("observation recovery lacks an explicit ABI tombstone")
+
+    for label, source in (("kernel", kernel), ("user", user)):
+        for name, value in (
+            ("AGENT_FILE_META_F_PERSIST", 2),
+            ("AGENT_FILE_META_F_AUTOSCAN", 4),
+        ):
+            if not re.search(
+                rf"^#define\s+{name}\s+{value}$", source, re.MULTILINE
+            ):
+                raise LayoutError(
+                    f"{label} Agent UAPI changed compatibility value {name}"
+                )
+        if "AGENT_FILE_META_F_UNSUPPORTED_MASK" not in source or not re.search(
+            r"Compatibility tombstones\..*agent_file_meta_set\(\) rejects both bits",
+            source,
+            re.DOTALL,
+        ):
             raise LayoutError(
-                f"metadata disk ABI token has multiple owners: {owners!r}"
+                f"{label} metadata compatibility flags are not explicitly unsupported"
             )
-    include = '#include "../agent_metadata_disk_abi.h"'
-    if include not in kernel or include not in durable or include not in mkfs:
-        raise LayoutError("kernel and mkfs must include the shared metadata disk ABI")
-    if "agent_meta_disk_init_genesis(&genesis)" not in mkfs:
-        raise LayoutError("mkfs bypasses the canonical metadata genesis builder")
-    if "agent_durable_disk_init_empty(arena)" not in durable_source:
-        raise LayoutError("kernel bypasses the canonical durable arena builder")
+
+    if not re.search(
+        r"Compatibility tombstone: retained for source ABI; always unsupported\.\s*\*/"
+        r"\s*int\s+agent_observe_recovery\s*\(",
+        user,
+        re.DOTALL,
+    ):
+        raise LayoutError("user recovery declaration is not marked unsupported")
 
 
 def define_value(source, name):
@@ -370,10 +421,11 @@ def main():
     parser.add_argument("--golden", default="ci/agent-uapi-layout.json")
     args = parser.parse_args()
     root = Path(args.root).resolve()
-    validate_metadata_disk_abi_owner(root)
+    validate_compatibility_tombstones(root)
     validate_tool_protocol_schema(root)
     build_dir = (root / args.build_dir).resolve()
     build_dir.mkdir(parents=True, exist_ok=True)
+    compile_shared_header_probe(root, build_dir, args.cc)
     kernel_obj = compile_probe(root, build_dir, args.cc, "kernel", root / "os")
     user_obj = compile_probe(
         root, build_dir, args.cc, "user", root / "user" / "include"

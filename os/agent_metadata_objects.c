@@ -2,12 +2,10 @@
 #include "agent_context.h"
 #include "agent_file_state_internal.h"
 #include "agent_internal.h"
+#include "agent_live_query_events.h"
 #include "agent_metadata_actions.h"
 #include "agent_metadata_internal.h"
 #include "agent_metadata_query.h"
-#include "agent_metadata_recovery.h"
-#include "agent_metadata_scan.h"
-#include "bio.h"
 #include "defs.h"
 #include "exec_policy.h"
 #include "file.h"
@@ -17,8 +15,6 @@
 #include "vfs_security.h"
 
 static void agent_text_append(char *dst, int n, const char *src);
-static void agent_file_catalog_sync(const struct agent_catalog_delta *);
-static int agent_file_store_complete(struct agent_metadata_store_commit *, int);
 
 #define AGENT_QUERY_SNAPSHOT_RETRIES 2
 #define AGENT_METADATA_TOOL_READ_VIEW 2
@@ -37,119 +33,31 @@ agent_metadata_objects_init(void)
 {
 	agent_file_state_init();
 	agent_metadata_query_init();
-	agent_metadata_scan_init();
+	agent_live_query_events_init();
 	agent_metadata_actions_init();
 	agent_metadata_catalog_init();
-	agent_metadata_store_init();
 }
 
 void
 agent_metadata_storage_init(void)
 {
-	struct agent_metadata_store_commit commit;
-	int result;
-
-	if (!agent_metadata_txn_lock(1))
-		panic("Agent metadata storage transaction invariant");
-	result = agent_metadata_store_load(&commit);
-	result = agent_file_store_complete(&commit, result);
-	if (agent_metadata_recovery_retryable(result))
-		agent_metadata_store_defer_boot_reprobe(result);
-	else if (result < 0)
-		agent_metadata_store_fail_closed_at_boot();
+	/* The live catalog is initialized in memory before storage discovery. */
 }
 
 int
 agent_metadata_durable_status(void)
 {
-	if (agent_metadata_store_available() &&
-	    agent_metadata_store_loaded())
-		return AGENT_STATUS_OK;
-	return agent_metadata_recovery_pending() ?
-		       AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;
+	return AGENT_STATUS_OK;
 }
 
 int
 agent_metadata_admission_status(void)
 {
-	int status = agent_metadata_durable_status();
-
-	if (status != AGENT_STATUS_OK)
-		return status;
-	return agent_metadata_catalog_reconcile_pending() ?
-		       AGENT_STATUS_RETRY : AGENT_STATUS_OK;
+	return AGENT_STATUS_OK;
 }
 
 static int agent_file_read_slot(int slot, struct agent_catalog_view *view) {
 	return agent_metadata_catalog_borrow(0, slot, view);
-}
-
-static void
-agent_file_catalog_sync(const struct agent_catalog_delta *delta)
-{
-	if (delta == 0 ||
-	    (!delta->full_reset && delta->scope_id == VFS_SCOPE_NONE))
-		return;
-	agent_metadata_actions_generation_advance();
-	agent_metadata_query_invalidate_locked(delta->scope_id,
-					       delta->full_reset);
-	agent_metadata_scan_catalog_sync(delta);
-	agent_metadata_txn_projection_ack();
-}
-
-static int
-agent_file_store_complete(struct agent_metadata_store_commit *commit,
-			  int result)
-{
-	agent_file_catalog_sync(&commit->delta);
-	result = agent_metadata_store_finish(commit, result);
-	agent_metadata_txn_unlock();
-	return result;
-}
-
-static int
-agent_file_store_load(void)
-{
-	struct agent_metadata_store_commit commit;
-	int result;
-
-	if (!agent_metadata_txn_lock(1))
-		return -1;
-	result = agent_metadata_store_load(&commit);
-	return agent_file_store_complete(&commit, result);
-}
-
-static int
-agent_file_store_reload(uint scope_id)
-{
-	struct agent_metadata_store_commit commit;
-	int result;
-
-	if (!agent_metadata_txn_lock(1))
-		return -1;
-	result = agent_metadata_store_reload(scope_id, &commit);
-	return agent_file_store_complete(&commit, result);
-}
-
-static void
-agent_file_store_boot_reprobe(void)
-{
-	int result = AGENT_METADATA_LOAD_BUSY;
-
-	if (!agent_metadata_recovery_pending())
-		return;
-	if (!agent_metadata_recovery_due(agent_file_state_now()))
-		return;
-	if (!bio_background_begin(FS_OWNER_SYSTEM))
-		goto complete;
-	if (!agent_metadata_txn_try_external())
-		goto out_io;
-	result = agent_file_store_reload(VFS_SCOPE_NONE);
-	agent_metadata_txn_unlock();
-out_io:
-	bio_background_end();
-complete:
-	agent_metadata_store_boot_reprobe_complete(result);
 }
 
 static void agent_direct_effect_audit(struct proc *p, int tool_id, int status,
@@ -168,9 +76,14 @@ static int agent_file_restore_slot(
 	const struct agent_catalog_undo_token *undo,
 	struct agent_file_meta *previous, uint previous_scope, int had_previous)
 {
-	if (agent_metadata_catalog_restore(
-		    fence, undo, previous, previous_scope, had_previous) < 0)
+	int restored = agent_metadata_catalog_restore_volatile(
+		fence, undo, previous, previous_scope, had_previous);
+
+	if (restored < 0) {
+		if (undo != 0)
+			(void)agent_metadata_catalog_clear_slot_volatile(undo->slot);
 		return -1;
+	}
 	agent_metadata_actions_generation_advance();
 	return 0;
 }
@@ -185,111 +98,25 @@ agent_file_restore_status(
 	if (agent_file_restore_slot(fence, undo, previous, previous_scope,
 				    had_previous) >= 0)
 		return fallback;
-	agent_metadata_store_fail_closed_runtime();
 	return AGENT_STATUS_INDETERMINATE;
 }
 
 static int
-agent_persist_agent_status(const struct agent_metadata_persist_result *persist)
-{
-	if (persist == 0 || persist->durable)
-		return AGENT_STATUS_OK;
-	if (persist->irrevocable)
-		return AGENT_STATUS_INDETERMINATE;
-	switch (persist->cause) {
-	case AGENT_METADATA_PERSIST_DURABILITY:
-		return AGENT_STATUS_DURABILITY;
-	case AGENT_METADATA_PERSIST_IO:
-	case AGENT_METADATA_PERSIST_FAIL_CLOSED:
-		return AGENT_STATUS_IO_ERROR;
-	case AGENT_METADATA_PERSIST_INTERRUPTED:
-	case AGENT_METADATA_PERSIST_RECOVERY:
-	case AGENT_METADATA_PERSIST_RETRY:
-	default:
-		return AGENT_STATUS_RETRY;
-	}
-}
-
-static int
-agent_metadata_load_agent_status(int load_status)
-{
-	return load_status == AGENT_METADATA_LOAD_INTERRUPTED ||
-	       load_status == AGENT_METADATA_LOAD_BUSY ||
-	       load_status == AGENT_METADATA_LOAD_PROGRESS ?
-		       AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;
-}
-
-static char *
-agent_persist_error_text(const struct agent_metadata_persist_result *persist)
-{
-	int status = agent_persist_agent_status(persist);
-
-	if (status == AGENT_STATUS_INDETERMINATE)
-		return "metadata_commit_indeterminate";
-	if (status == AGENT_STATUS_DURABILITY)
-		return "metadata_durability_unsupported";
-	if (status == AGENT_STATUS_IO_ERROR)
-		return "metadata_io_error";
-	return "metadata_retry";
-}
-
-static int
 agent_file_finish_mutation(struct proc *p, struct agent_file_meta *request,
-			   struct agent_file_meta *previous, uint scope_id,
-			   uint previous_scope,
-			   const struct agent_catalog_mutation_fence *fence,
-			   const struct agent_catalog_undo_token *undo,
-			   int had_previous,
-			   int persistent, uint64 audit_fid,
-			   char *success_text, char *event_payload)
+			   const struct agent_file_meta *before,
+			   const struct agent_file_meta *after,
+			   uint scope_id, uint64 audit_fid,
+			   char *success_text, int publish_event)
 {
-	struct agent_metadata_persist_result persistence;
-	int result;
+	struct workflow_lifecycle_key lifecycle = vfs_proc_lifecycle(p);
+	uint64 generation = agent_file_state_scope_generation(scope_id);
 
-	memset(&persistence, 0, sizeof(persistence));
-	if (persistent) {
-		persistence.completion_token =
-			agent_metadata_store_mark_dirty(scope_id);
-		if (persistence.completion_token == 0) {
-			result = agent_file_restore_status(
-				fence, undo, previous, previous_scope,
-				had_previous, AGENT_STATUS_RETRY);
-			agent_direct_effect_audit(
-				p, AGENT_TOOL_FILE_META_INIT, result,
-				"metadata_queue_full", audit_fid,
-				request->update_mask, 0, request->flags, 1);
-			agent_file_request_scan();
-			return result;
-		}
-#if defined(AGENT_METADATA_CRASH_PHASE) || defined(AGENT_METADATA_EIO_PHASE)
-		/* 故障注入以系统调用为边界，持久化阶段各自留下回执。 */
-		if (agent_metadata_store_persist_commit(&persistence) < 0) {
-			if (!persistence.irrevocable &&
-			    agent_file_restore_status(fence, undo, previous,
-					      previous_scope,
-					      had_previous, 0) ==
-				    AGENT_STATUS_INDETERMINATE) {
-				persistence.cause =
-					AGENT_METADATA_PERSIST_FAIL_CLOSED;
-				persistence.irrevocable = 1;
-			}
-			result = agent_persist_agent_status(&persistence);
-			agent_direct_effect_audit(
-				p, AGENT_TOOL_FILE_META_INIT, result,
-				agent_persist_error_text(&persistence),
-				audit_fid, request->update_mask,
-				persistence.completion_token, request->flags, 1);
-			agent_file_request_scan();
-			return result;
-		}
-#endif
-	}
-	if (event_payload)
-		agent_ipc_deliver_watchers(p, AGENT_EVENT_FILE_STATUS,
-			request->fid, p->context_path_latest, event_payload);
+	if (publish_event && workflow_lifecycle_key_valid(lifecycle))
+		(void)agent_live_query_publish_transition(
+			p, lifecycle, scope_id, before, after, generation);
 	agent_direct_effect_audit(p, AGENT_TOOL_FILE_META_INIT, AGENT_STATUS_OK,
 		success_text, audit_fid, request->update_mask,
-		persistence.completion_token, request->flags, 1);
+		0, request->flags, 1);
 	return 0;
 }
 
@@ -322,49 +149,18 @@ agent_catalog_error_status(int catalog_status)
 void
 agent_metadata_background_maintain(void)
 {
-	uint64 now;
-	uint changes;
-	int plan;
-	int load_ok = 1;
+	int content;
+	int tombstones;
 
-	now = agent_file_state_now();
-	vfs_scope_reap_pending(now);
-	agent_file_store_boot_reprobe();
-	if (!agent_metadata_store_available())
+	vfs_scope_reap_pending(agent_file_state_now());
+	if (!agent_metadata_txn_try_external())
 		return;
-	if (agent_metadata_store_background_maintain(0) > 0)
-		goto reconcile;
-	plan = agent_metadata_scan_plan(now);
-	if (plan == AGENT_METADATA_SCAN_IDLE)
-		goto store;
-	if (!bio_background_begin(FS_OWNER_SYSTEM))
-		goto store;
-	if (!agent_metadata_txn_try_external()) {
-		plan = AGENT_METADATA_SCAN_IDLE;
-		goto out_io;
-	}
-	now = agent_file_state_now();
-	plan = agent_metadata_scan_plan(now);
-	if (plan == AGENT_METADATA_SCAN_IDLE)
-		goto out_txn;
-	if (plan == AGENT_METADATA_SCAN_START)
-		load_ok = agent_file_store_load() >= 0;
-	changes = agent_metadata_scan_step(now, plan, load_ok);
-	agent_metadata_store_background_scan_served();
-	if (changes)
-		agent_metadata_note_catalog_changes(changes);
-out_txn:
+	tombstones = agent_live_query_tombstone_drain(8);
+	content = agent_live_query_content_drain(8);
 	agent_metadata_txn_unlock();
-out_io:
-	bio_background_end();
-	if (plan == AGENT_METADATA_SCAN_IDLE)
-		goto store;
-	goto reconcile;
-store:
-	(void)agent_metadata_store_background_maintain(1);
-reconcile:
-	if (agent_metadata_store_take_reconcile_request())
-		agent_file_request_scan();
+	if (tombstones == AGENT_STATUS_RETRY ||
+	    content == AGENT_STATUS_RETRY)
+		agent_background_request();
 }
 
 int agent_metadata_inode_trackable(struct inode *ip)
@@ -381,40 +177,6 @@ int agent_metadata_inode_trackable(struct inode *ip)
 	       agent_object_scope_valid(ip->vfs_scope_id);
 }
 
-static int agent_file_path_autopersist(uint scope_id, char *path,
-				       struct agent_file_meta *binding)
-{
-	struct inode *ip;
-	int eligible;
-	int lookup_status;
-	int result;
-
-	if (!agent_scope_valid(scope_id) || path == 0 || path[0] == 0 ||
-	    agent_file_is_meta_store_name(path))
-		return 0;
-	ip = namei_scope_status(path, VFS_POLICY_WORKFLOW, scope_id,
-			       &lookup_status);
-	if (ip == 0)
-		return lookup_status == FS_LOOKUP_ABSENT ? 0 :
-		       agent_lookup_error_status(lookup_status);
-	result = ivalid(ip);
-	if (result < 0) {
-		iput(ip);
-		return agent_lookup_error_status(result);
-	}
-	eligible = agent_metadata_inode_trackable(ip) &&
-		   ip->vfs_scope_id == scope_id && vfs_scope_active(scope_id) &&
-		   exec_policy_inode_mutable(ip);
-	if (eligible && binding) {
-		binding->dev = ip->dev;
-		binding->inum = ip->inum;
-		binding->incarnation = ip->vfs_incarnation;
-		binding->size = ip->size;
-	}
-	iput(ip);
-	return eligible;
-}
-
 void agent_metadata_note_catalog_changes(uint changes)
 {
 	agent_metadata_actions_note_changes(changes);
@@ -422,28 +184,49 @@ void agent_metadata_note_catalog_changes(uint changes)
 
 int agent_metadata_durability_fence_current(void)
 {
-	struct proc *p = curr_proc();
-	uint scope_id;
+	uint64 generation;
 
-	if (p == 0 || !p->is_agent)
-		return 0;
-	scope_id = agent_identity_proc_scope(p);
-	if (!agent_scope_valid(scope_id))
-		return -1;
-	return agent_metadata_store_durability_fence(scope_id);
+	return agent_metadata_quiescence_fence_snapshot_current(&generation);
 }
 
-int agent_metadata_quiescence_fence_current(void)
+int
+agent_metadata_quiescence_fence_snapshot_current(uint64 *metadata_generation)
 {
 	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle;
 	uint scope_id;
+	int result;
 
+	if (metadata_generation == 0)
+		return -1;
+	*metadata_generation = 0;
 	if (p == 0 || !p->is_agent)
-		return 0;
+		return -1;
 	scope_id = agent_identity_proc_scope(p);
 	if (!agent_scope_valid(scope_id))
 		return -1;
-	return agent_metadata_store_quiescence_fence(scope_id);
+	lifecycle = vfs_proc_lifecycle(p);
+	if (!workflow_lifecycle_key_valid(lifecycle) ||
+	    !agent_metadata_txn_lock(1))
+		return -1;
+	result = agent_live_query_fence_drain(lifecycle, scope_id);
+	if (result == AGENT_STATUS_OK)
+		result = agent_metadata_catalog_fence_generation(
+			scope_id, lifecycle, metadata_generation);
+	agent_metadata_txn_unlock();
+	return result;
+}
+
+int
+agent_metadata_quiescence_fence_current(void)
+{
+	struct proc *p = curr_proc();
+	uint64 metadata_generation;
+
+	if (p == 0 || !p->is_agent)
+		return 0;
+	return agent_metadata_quiescence_fence_snapshot_current(
+		&metadata_generation);
 }
 
 int agent_scope_reclaim_begin(
@@ -452,9 +235,7 @@ int agent_scope_reclaim_begin(
 {
 	struct workflow_lifecycle_key current = workflow_lifecycle_none();
 	int result;
-	int changed;
 	int reclaimed;
-	int metadata_available;
 
 	if (!agent_scope_valid(scope_id) ||
 	    !workflow_lifecycle_key_valid(lifecycle) ||
@@ -465,60 +246,28 @@ int agent_scope_reclaim_begin(
 	*metadata_target = 0;
 	if (!agent_metadata_txn_try_external())
 		return -1;
-	metadata_available = agent_metadata_store_available();
-	if (metadata_available && agent_file_store_load() < 0) {
-		agent_file_request_scan();
+	reclaimed = agent_metadata_catalog_reclaim_scope(scope_id, lifecycle);
+	if (reclaimed < 0) {
 		result = -1;
 		goto out_txn;
 	}
-	changed = metadata_available ?
-		agent_metadata_store_shadow_has_scope(scope_id) : 0;
-	if (metadata_available) {
-		reclaimed = agent_metadata_catalog_reclaim_scope(scope_id);
-		if (reclaimed < 0) {
-			result = -1;
-			goto out_txn;
-		}
-		if (reclaimed > 0)
-			changed = 1;
-	}
 	agent_metadata_actions_reclaim_scope(scope_id);
 	agent_metadata_query_invalidate_locked(scope_id, 0);
+	agent_live_query_reclaim(lifecycle, scope_id);
 	if (agent_observe_scope_reclaim(scope_id) < 0) {
 		result = -1;
 		goto out_txn;
 	}
 	agent_file_state_scope_reclaim(scope_id);
-	if (metadata_available)
+	if (reclaimed > 0)
 		agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_STATUS |
 				    AGENT_FILE_CHANGE_STAGE |
-				    AGENT_FILE_CHANGE_KIND);
-	if (changed) {
-		*metadata_target = agent_metadata_store_mark_dirty(scope_id);
-		if (*metadata_target == 0) {
-			agent_file_request_scan();
-			result = -1;
-			goto out_txn;
-		}
-		agent_metadata_store_expedite(scope_id);
-	}
+				    AGENT_FILE_CHANGE_KIND |
+				    AGENT_FILE_CHANGE_MEMBERSHIP);
 	result = 0;
 out_txn:
 	agent_metadata_txn_unlock();
 	return result;
-}
-
-int agent_scope_reclaim_metadata_done(
-	uint scope_id, struct workflow_lifecycle_key lifecycle,
-	uint64 metadata_target)
-{
-	struct workflow_lifecycle_key current = workflow_lifecycle_none();
-
-	if (!workflow_lifecycle_key_valid(lifecycle) ||
-	    vfs_scope_lifecycle(scope_id, &current) < 0 ||
-	    !workflow_lifecycle_key_equal(current, lifecycle))
-		return 0;
-	return agent_metadata_store_scope_target_done(scope_id, metadata_target);
 }
 
 static void agent_file_query_reset(struct agent_file_query_result *result)
@@ -536,53 +285,22 @@ static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
 	if (!agent_scope_valid(scope_id)) {
 		return AGENT_STATUS_DENIED;
 	}
-	if (agent_metadata_store_available() &&
-	    agent_metadata_store_loaded()) {
-		for (int attempt = 0;
-		     attempt < AGENT_QUERY_SNAPSHOT_RETRIES; attempt++) {
-			result = agent_metadata_query_execute_snapshot(
-				scope_id, q, r);
-			if (result >= 0 && agent_metadata_store_available() &&
-			    agent_metadata_store_loaded())
-				return result;
-			if (result == AGENT_CATALOG_CONFLICT) {
-				agent_file_query_reset(r);
-				return AGENT_STATUS_RETRY;
-			}
-			if (result != AGENT_CATALOG_STALE) {
-				agent_file_query_reset(r);
-				return AGENT_STATUS_RETRY;
-			}
-		}
-		agent_file_query_reset(r);
-		return AGENT_STATUS_RETRY;
+	for (int attempt = 0;
+	     attempt < AGENT_QUERY_SNAPSHOT_RETRIES; attempt++) {
+		result = agent_metadata_query_execute_snapshot(scope_id, q, r);
+		if (result >= 0)
+			return result;
+		if (result != AGENT_CATALOG_STALE &&
+		    result != AGENT_CATALOG_CONFLICT)
+			break;
 	}
-	if (!agent_metadata_txn_lock(1))
-		return AGENT_STATUS_NO_SPACE;
-	r->plan = AGENT_FILE_QUERY_PLAN_SCAN;
-	r->index_bucket = -1;
-	result = agent_file_store_load();
-	if (result < 0) {
-		result = agent_metadata_load_agent_status(result);
-		goto out_txn;
-	}
-	result = agent_metadata_query_execute_locked(
-		scope_id, q, r, agent_metadata_scan_query_stable());
-out_txn:
-	agent_metadata_txn_unlock();
-	if (result < 0)
-		agent_file_query_reset(r);
-	return result;
+	agent_file_query_reset(r);
+	return AGENT_STATUS_RETRY;
 }
 
 static int agent_file_find(uint scope_id, char *selector)
 {
 	struct agent_catalog_view view;
-	int result;
-
-	result = agent_file_store_load();
-	if (result < 0)
-		return agent_metadata_load_agent_status(result);
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 		if (agent_file_read_slot(i, &view) <= 0 ||
 		    view.scope_id != scope_id)
@@ -604,6 +322,7 @@ agent_file_summary_read(uint scope_id, char *selector,
 			struct agent_result *res)
 {
 	struct agent_catalog_view view;
+	struct agent_file_meta meta;
 	int slot = agent_file_find(scope_id, selector);
 
 	if (slot < 0)
@@ -611,10 +330,13 @@ agent_file_summary_read(uint scope_id, char *selector,
 	if (agent_file_read_slot(slot, &view) <= 0 ||
 	    view.scope_id != scope_id)
 		return AGENT_STATUS_IO_ERROR;
-	res->value0 = view.meta->fid;
-	res->value1 = view.meta->dependency_mask;
-	res->value2 = view.meta->updated_tick;
-	agent_result_text(res, view.meta->summary);
+	meta = *view.meta;
+	view.meta = 0;
+	agent_file_state_overlay_published_size(&meta, scope_id);
+	res->value0 = meta.fid;
+	res->value1 = meta.dependency_mask;
+	res->value2 = meta.updated_tick;
+	agent_result_text(res, meta.summary);
 	return 0;
 }
 
@@ -634,9 +356,6 @@ static int agent_file_digest_select(uint scope_id, char *selector,
 			return AGENT_STATUS_BAD_PARAM;
 		if (!agent_metadata_query_has_filter(&query))
 			return AGENT_STATUS_BAD_PARAM;
-		found = agent_file_store_load();
-		if (found < 0)
-			return agent_metadata_load_agent_status(found);
 		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 			if (agent_file_read_slot(i, &view) <= 0 ||
 			    view.scope_id != scope_id)
@@ -820,44 +539,20 @@ static int
 agent_file_update_status_batch_locked(
 	uint scope_id, char *stage, char *project, char *run_id,
 	char *status, char *summary, uint64 dependency_mask,
-	int propagate_dependencies,
-	struct agent_metadata_persist_result *persist)
+	int propagate_dependencies)
 {
 	struct agent_catalog_mutation_fence mutation_fence;
 	int updated = 0;
-	int load_status;
 
 	memset(&mutation_fence, 0, sizeof(mutation_fence));
-	memset(persist, 0, sizeof(*persist));
-	persist->durable = 1;
 	agent_metadata_txn_require_owned(1, "Agent metadata action transaction");
-	if (!agent_metadata_store_submit_wait_locked()) {
-		persist->durable = 0;
-		persist->status = -1;
-		persist->cause = agent_metadata_store_available() ?
-			AGENT_METADATA_PERSIST_RETRY :
-			AGENT_METADATA_PERSIST_FAIL_CLOSED;
-		return 0;
-	}
-	load_status = agent_file_store_load();
-	if (load_status < 0)
-		return agent_metadata_load_agent_status(load_status);
-	if (agent_metadata_catalog_mutation_begin(&mutation_fence) < 0) {
-		persist->durable = 0;
-		persist->status = -1;
-		persist->cause = AGENT_METADATA_PERSIST_RETRY;
-		return 0;
-	}
+	if (agent_metadata_catalog_mutation_begin(&mutation_fence) < 0)
+		return AGENT_STATUS_RETRY;
 	updated = agent_metadata_actions_update_status_locked(
 		scope_id, stage, project, run_id, status, summary,
-		dependency_mask, propagate_dependencies, persist);
-	if (agent_metadata_catalog_mutation_end(&mutation_fence) < 0) {
-		agent_metadata_store_fail_closed_runtime();
-		persist->durable = 0;
-		persist->status = -1;
-		persist->cause = AGENT_METADATA_PERSIST_FAIL_CLOSED;
-		persist->irrevocable = 1;
-	}
+		dependency_mask, propagate_dependencies);
+	if (agent_metadata_catalog_mutation_end(&mutation_fence) < 0)
+		return AGENT_STATUS_INDETERMINATE;
 	return updated;
 }
 static void agent_object_state_update(struct proc *p, struct agent_op *op,
@@ -871,7 +566,6 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 	int action_tool_id;
 	int updated;
 	int delivered;
-	struct agent_metadata_persist_result persistence;
 	struct agent_object_selector selector;
 	char event_payload[AGENT_EVENT_PAYLOAD_SIZE];
 
@@ -904,15 +598,7 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 	}
 	updated = agent_file_update_status_batch_locked(
 		agent_identity_proc_scope(p), selector.label, selector.project,
-		selector.run_id, "ok", summary, deps, propagate_deps,
-		&persistence);
-	if (persistence.status < 0 || !persistence.durable) {
-		res->status = agent_persist_agent_status(&persistence);
-		res->value0 = persistence.completion_token;
-		res->value1 = persistence.job_id;
-		agent_result_text(res, agent_persist_error_text(&persistence));
-		return;
-	}
+		selector.run_id, "ok", summary, deps, propagate_deps);
 	if (updated < 0) {
 		agent_result_status(res, updated,
 			updated == AGENT_STATUS_NO_SPACE ?
@@ -1056,15 +742,7 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 			break;
 		agent_metadata_actions_clear_history(
 			agent_identity_proc_scope(p));
-		res->value0 = agent_file_store_load();
-		if ((long)res->value0 < 0) {
-			agent_result_status(
-				res, agent_metadata_load_agent_status(
-					     (int)(long)res->value0),
-					    "metadata_unavailable");
-			break;
-		}
-		agent_file_request_scan();
+		res->value0 = agent_metadata_catalog_generation();
 		agent_result_text(res, "file_meta_init");
 		break;
 	case AGENT_TOOL_READ_FILE_SUMMARY:
@@ -1090,13 +768,6 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 		if (agent_parse_selector(op->payload, &dependency) < 0) {
 			agent_result_status(res, AGENT_STATUS_BAD_PARAM,
 					    "bad_selector");
-			break;
-		}
-		found = agent_file_store_load();
-		if (found < 0) {
-			agent_result_status(res,
-				agent_metadata_load_agent_status(found),
-				"metadata_unavailable");
 			break;
 		}
 		if (agent_metadata_actions_dependency_query(
@@ -1156,12 +827,10 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 	return 1;
 }
 
-int sys_agent_file_meta_init(void)
+static int agent_file_meta_init_execute(struct proc *p)
 {
-	struct proc *p = curr_proc();
-	struct agent_metadata_persist_result persistence;
-	int loaded;
 	int result = AGENT_STATUS_NO_SPACE;
+	uint scope_id;
 
 	if (!p->is_agent)
 		return -1;
@@ -1170,35 +839,33 @@ int sys_agent_file_meta_init(void)
 		return AGENT_STATUS_DENIED;
 	if (!agent_metadata_txn_lock(1))
 		return AGENT_STATUS_NO_SPACE;
-	if (!agent_metadata_store_submit_wait_locked()) {
-		result = agent_metadata_store_available() ?
-			AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;
-		goto out_txn;
-	}
-	if (agent_metadata_store_loaded() &&
-	    agent_metadata_store_scope_pending(agent_identity_proc_scope(p)) &&
-	    agent_metadata_store_persist_commit(&persistence) != 0) {
-		result = agent_persist_agent_status(&persistence);
-		goto out_txn;
-	}
-	if (!agent_metadata_store_submit_wait_locked()) {
-		result = agent_metadata_store_available() ?
-			AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;
-		goto out_txn;
-	}
-	loaded = agent_file_store_reload(agent_identity_proc_scope(p));
-	if (loaded < 0) {
-		result = agent_metadata_load_agent_status(loaded);
-		goto out_txn;
-	}
-	agent_metadata_actions_clear_history(agent_identity_proc_scope(p));
-	agent_file_request_scan();
+	scope_id = agent_identity_proc_scope(p);
+	agent_metadata_actions_clear_history(scope_id);
+	agent_metadata_query_invalidate_locked(scope_id, 0);
 	agent_direct_effect_audit(p, AGENT_TOOL_FILE_META_INIT,
-				  AGENT_STATUS_OK, "meta_init", 0, 0, 0,
+				  AGENT_STATUS_OK, "meta_init", 0,
+				  agent_metadata_catalog_generation(), 0,
 				  0, 1);
 	result = 0;
-out_txn:
 	agent_metadata_txn_unlock();
+	return result;
+}
+
+int
+sys_agent_file_meta_init(void)
+{
+	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle;
+	int result;
+
+	if (p == 0 || !p->is_agent)
+		return -1;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (!workflow_lifecycle_key_valid(lifecycle) ||
+	    workflow_lifecycle_operation_enter(lifecycle) < 0)
+		return -1;
+	result = agent_file_meta_init_execute(p);
+	workflow_lifecycle_operation_leave(lifecycle);
 	return result;
 }
 
@@ -1232,7 +899,8 @@ static void agent_file_meta_terminate_strings(struct agent_file_meta *meta) {
 }
 
 static uint agent_file_meta_patch_strings(struct agent_file_meta *target,
-		const struct agent_file_meta *source, uint mask, int *status_changed) {
+		const struct agent_file_meta *source, uint mask,
+		int *value_changed) {
 	uint changes = 0;
 
 	for (uint i = 0; i < NELEM(agent_meta_string_fields); i++) {
@@ -1244,20 +912,18 @@ static uint agent_file_meta_patch_strings(struct agent_file_meta *target,
 			continue;
 		if (strncmp(to, from, field->size) != 0) {
 			changes |= field->changes;
-			if (field->update == AGENT_FILE_META_UPDATE_STATUS)
-				*status_changed = 1;
+			*value_changed = 1;
 		}
 		safestrcpy(to, from, field->size);
 	}
 	return changes;
 }
 
-int sys_agent_file_meta_set(uint64 metaaddr)
+static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
 {
-	struct proc *p = curr_proc();
 	struct agent_file_meta meta;
-	struct agent_file_meta auto_binding;
 	struct agent_file_meta previous;
+	struct agent_file_meta current;
 	struct agent_catalog_view view;
 	struct agent_catalog_edit edit;
 	struct agent_catalog_mutation_fence mutation_fence;
@@ -1268,18 +934,14 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	uint previous_scope = VFS_SCOPE_NONE;
 	int slot = -1;
 	int had_previous;
-	int status_changed = 0;
-	int auto_persist;
-	int persistent;
+	int metadata_changed = 0;
 	int commit_status;
 	int bind_status;
-	int identity_rebound = 0;
 	int fence_active = 0;
 	int result = AGENT_STATUS_NO_SPACE;
 	uint changes = 0;
 	uint64 audit_fid = 0;
 	uint64 mask;
-	char event_payload[AGENT_EVENT_PAYLOAD_SIZE];
 
 	memset(&mutation_fence, 0, sizeof(mutation_fence));
 	memset(&undo, 0, sizeof(undo));
@@ -1295,21 +957,16 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	if (copyin(p->pagetable, (char *)&meta, metaaddr, sizeof(meta)) < 0)
 		return -1;
 	agent_file_meta_terminate_strings(&meta);
+	if (meta.flags & (AGENT_FILE_META_F_PERSIST |
+			  AGENT_FILE_META_F_AUTOSCAN))
+		return AGENT_STATUS_BAD_PARAM;
+	if (meta.flags & ~AGENT_FILE_META_F_DELETE)
+		return AGENT_STATUS_BAD_PARAM;
 	if ((meta.dev != 0 || meta.inum != 0 || meta.incarnation != 0) &&
 	    (meta.dev == 0 || meta.inum == 0 || meta.incarnation == 0))
 		return AGENT_STATUS_BAD_PARAM;
 	if (!agent_metadata_txn_lock(1))
 		return AGENT_STATUS_NO_SPACE;
-	if (!agent_metadata_store_submit_wait_locked()) {
-		result = agent_metadata_store_available() ?
-			AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;
-		goto out_txn;
-	}
-	commit_status = agent_file_store_load();
-	if (commit_status < 0) {
-		result = agent_metadata_load_agent_status(commit_status);
-		goto out_txn;
-	}
 	agent_metadata_catalog_resolve(scope_id, &meta, -1, &selector);
 	if (agent_metadata_catalog_mutation_begin(&mutation_fence) < 0) {
 		result = AGENT_STATUS_RETRY;
@@ -1319,13 +976,6 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	if (selector.states != 0) {
 		result = (selector.states & AGENT_CATALOG_STATE_PENDING) ?
 			 AGENT_STATUS_RETRY : AGENT_STATUS_CONFLICT;
-		goto out_txn;
-	}
-	memset(&auto_binding, 0, sizeof(auto_binding));
-	auto_persist = agent_file_path_autopersist(
-		scope_id, meta.physical_name, &auto_binding);
-	if (auto_persist < 0) {
-		result = auto_persist;
 		goto out_txn;
 	}
 	mask = meta.update_mask;
@@ -1359,7 +1009,7 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		previous_scope = view.scope_id;
 		audit_fid = previous.fid;
 		view.meta = 0;
-		commit_status = agent_metadata_catalog_clear_slot(slot);
+		commit_status = agent_metadata_catalog_clear_slot_volatile(slot);
 		if (commit_status < 0) {
 			result = agent_catalog_error_status(commit_status);
 			agent_direct_effect_audit(
@@ -1370,15 +1020,13 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		}
 		if (agent_metadata_catalog_undo_capture(
 			    &mutation_fence, slot, &undo) < 0) {
-			agent_metadata_store_fail_closed_runtime();
 			result = AGENT_STATUS_INDETERMINATE;
 			goto out_txn;
 		}
 		agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);
 		result = agent_file_finish_mutation(
-			p, &meta, &previous, scope_id, previous_scope,
-			&mutation_fence, &undo,
-			had_previous, 1, audit_fid, "meta_delete", 0);
+			p, &meta, &previous, 0, scope_id, audit_fid,
+			"meta_delete", 1);
 		goto out_txn;
 	}
 	if (slot < 0) {
@@ -1413,17 +1061,6 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		working->used = 1;
 		working->fid = audit_fid;
 		edit.scope_id = scope_id;
-		if (auto_persist) {
-			working->flags = AGENT_FILE_META_F_PERSIST |
-					 AGENT_FILE_META_F_AUTOSCAN;
-			(void)agent_metadata_scan_apply_defaults(
-				working, meta.physical_name, 0);
-			working->dev = auto_binding.dev;
-			working->inum = auto_binding.inum;
-			working->incarnation =
-				auto_binding.incarnation;
-			working->size = auto_binding.size;
-		}
 	}
 	if (edit.scope_id != scope_id) {
 		agent_metadata_catalog_edit_abort(&edit);
@@ -1432,36 +1069,25 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	}
 	if (meta.fid > 0)
 		working->fid = meta.fid;
-	if (had_previous && auto_persist &&
-	    (selector.matched & AGENT_CATALOG_KEY_PHYSICAL) &&
-	    meta.dev == 0 &&
-	    (working->dev != auto_binding.dev ||
-	     working->inum != auto_binding.inum ||
-	     working->incarnation != auto_binding.incarnation)) {
-		working->dev = auto_binding.dev;
-		working->inum = auto_binding.inum;
-		working->incarnation = auto_binding.incarnation;
-		working->size = auto_binding.size;
-		identity_rebound = 1;
-	}
 	changes = agent_file_meta_patch_strings(working, &meta, mask,
-						&status_changed);
-	if (identity_rebound)
-		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
+						&metadata_changed);
 	if ((mask & AGENT_FILE_META_UPDATE_DEPENDENCY) ||
-	    (!mask && meta.dependency_mask))
+	    (!mask && meta.dependency_mask)) {
+		if (working->dependency_mask != meta.dependency_mask)
+			metadata_changed = 1;
 		working->dependency_mask = meta.dependency_mask;
-	working->flags &= ~AGENT_FILE_META_F_AUTOSCAN;
-	if (meta.flags & AGENT_FILE_META_F_AUTOSCAN)
-		working->flags |= AGENT_FILE_META_F_AUTOSCAN;
-	if (meta.flags & AGENT_FILE_META_F_PERSIST)
-		working->flags |= AGENT_FILE_META_F_PERSIST;
+	}
+	if (working->flags != 0)
+		metadata_changed = 1;
+	working->flags = 0;
 	working->updated_tick = agent_file_state_now();
-	if (!had_previous)
+	if (!had_previous) {
 		changes = AGENT_FILE_CHANGE_ALL;
-	else if (previous.dependency_mask != working->dependency_mask)
+		metadata_changed = 1;
+	} else if (previous.dependency_mask != working->dependency_mask)
 		changes |= AGENT_FILE_CHANGE_DEPENDENCY;
-	commit_status = agent_metadata_catalog_edit_commit(&edit, changes);
+	commit_status = agent_metadata_catalog_edit_commit_volatile(&edit,
+							 changes);
 	if (commit_status < 0) {
 		result = agent_catalog_error_status(commit_status);
 		goto out_txn;
@@ -1469,26 +1095,24 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	working = 0;
 	if (agent_metadata_catalog_undo_capture(
 		    &mutation_fence, slot, &undo) < 0) {
-		agent_metadata_store_fail_closed_runtime();
+		(void)agent_metadata_catalog_clear_slot_volatile(slot);
 		result = AGENT_STATUS_INDETERMINATE;
 		goto out_txn;
 	}
-	bind_status = agent_metadata_catalog_bind(slot, 1, p);
+	bind_status = agent_metadata_catalog_bind_volatile(slot, 1, p);
 	if (bind_status < 0) {
 		result = agent_file_restore_status(
 			&mutation_fence, &undo, &previous, previous_scope,
 			had_previous,
 			bind_status == AGENT_CATALOG_INDETERMINATE ?
 				AGENT_STATUS_INDETERMINATE : AGENT_STATUS_IO_ERROR);
-		if (bind_status == AGENT_CATALOG_INDETERMINATE)
-			agent_metadata_store_fail_closed_runtime();
 		goto out_txn;
 	}
 	if (agent_metadata_catalog_undo_capture(
 		    &mutation_fence, slot, &undo) < 0 ||
 	    (bind_status > 0 && agent_metadata_catalog_undo_note_created(
 				      &mutation_fence, &undo) < 0)) {
-		agent_metadata_store_fail_closed_runtime();
+		(void)agent_metadata_catalog_clear_slot_volatile(slot);
 		result = AGENT_STATUS_INDETERMINATE;
 		goto out_txn;
 	}
@@ -1499,36 +1123,47 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 			had_previous, AGENT_STATUS_IO_ERROR);
 		goto out_txn;
 	}
-	agent_metadata_scan_note_slot(slot);
 	if (had_previous &&
 	    strncmp(previous.physical_name, view.meta->physical_name,
 		    sizeof(previous.physical_name)) != 0)
 		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-	persistent = view.meta->flags & AGENT_FILE_META_F_PERSIST;
 	audit_fid = view.meta->fid;
-	agent_metadata_actions_format_file_event(
-		view.meta, event_payload, sizeof(event_payload));
+	current = *view.meta;
 	view.meta = 0;
 	if (changes)
 		agent_metadata_note_catalog_changes(changes);
 	result = agent_file_finish_mutation(
-		p, &meta, &previous, scope_id, previous_scope,
-		&mutation_fence, &undo,
-		had_previous, persistent, audit_fid, "meta_set",
-		status_changed && meta.status[0] ? event_payload : 0);
+		p, &meta, had_previous ? &previous : 0, &current,
+		scope_id, audit_fid, "meta_set", metadata_changed);
 out_txn:
 	if (fence_active &&
-	    agent_metadata_catalog_mutation_end(&mutation_fence) < 0) {
-		agent_metadata_store_fail_closed_runtime();
+	    agent_metadata_catalog_mutation_end(&mutation_fence) < 0)
 		result = AGENT_STATUS_INDETERMINATE;
-	}
 	agent_metadata_txn_unlock();
 	return result;
 }
 
-int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
+int
+sys_agent_file_meta_set(uint64 metaaddr)
 {
 	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle;
+	int result;
+
+	if (p == 0 || !p->is_agent)
+		return -1;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (!workflow_lifecycle_key_valid(lifecycle) ||
+	    workflow_lifecycle_operation_enter(lifecycle) < 0)
+		return -1;
+	result = agent_file_meta_set_execute(p, metaaddr);
+	workflow_lifecycle_operation_leave(lifecycle);
+	return result;
+}
+
+static int agent_file_query_execute(struct proc *p, uint64 queryaddr,
+				    uint64 resultaddr)
+{
 	struct agent_file_query query;
 	struct agent_file_query_result result;
 	int returned;
@@ -1580,6 +1215,24 @@ out_lane:
 }
 
 int
+sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
+{
+	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle;
+	int result;
+
+	if (p == 0 || !p->is_agent)
+		return -1;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (!workflow_lifecycle_key_valid(lifecycle) ||
+	    workflow_lifecycle_operation_enter(lifecycle) < 0)
+		return -1;
+	result = agent_file_query_execute(p, queryaddr, resultaddr);
+	workflow_lifecycle_operation_leave(lifecycle);
+	return result;
+}
+
+int
 agent_metadata_tool_enter(int tool_id)
 {
 	if (tool_id == AGENT_TOOL_QUERY_FILE)
@@ -1587,8 +1240,6 @@ agent_metadata_tool_enter(int tool_id)
 	if (!agent_tool_uses_file_metadata(tool_id))
 		return 0;
 	if (!agent_metadata_txn_lock(1))
-		return -1;
-	if (!agent_metadata_store_reload_wait_locked())
 		return -1;
 	return 1;
 }
@@ -1603,22 +1254,33 @@ agent_metadata_tool_exit(int locked)
 void
 agent_metadata_fill_info(uint scope_id, struct agent_info *info)
 {
-	agent_metadata_store_fill_info(scope_id, info);
 	if (info == 0)
 		return;
-	agent_metadata_scan_fill_info(info);
+	(void)scope_id;
+	info->metadata_writeback_dirty = 0;
+	info->metadata_writeback_durable = 0;
+	info->metadata_writeback_requests = 0;
+	info->metadata_writeback_coalesced = 0;
+	info->metadata_writeback_commits = 0;
+	info->metadata_writeback_pending = 0;
+	info->file_scan_runs = 0;
+	info->file_scan_entries = 0;
+	info->file_scan_added = 0;
+	info->file_scan_updated = 0;
+	info->file_scan_removed = 0;
+	info->file_scan_generation = 0;
+	info->file_scan_pending = 0;
+	info->file_scan_deferred = 0;
+	info->file_scan_failures = 0;
+	info->metadata_journal_txns = 0;
+	info->metadata_journal_blocks = 0;
+	info->metadata_compactions = 0;
+	info->metadata_full_cow_blocks = 0;
 	agent_file_state_fill_info(info);
 }
 
 void
 agent_metadata_tick(uint64 now)
 {
-	agent_metadata_store_tick(now);
-	if (agent_metadata_store_take_reconcile_request())
-		agent_file_request_scan();
-	if (agent_metadata_recovery_pending() &&
-	    agent_metadata_recovery_due(now))
-		agent_background_request();
-	if (agent_metadata_scan_plan(now) != AGENT_METADATA_SCAN_IDLE)
-		agent_background_request();
+	(void)now;
 }

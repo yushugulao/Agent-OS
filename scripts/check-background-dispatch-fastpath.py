@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""将延迟维护限制在低成本的 syscall 返回待处理边之后。"""
+"""Validate the bounded task-work style Agent maintenance edge."""
 
 from __future__ import annotations
 
@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 
 
+class ContractError(RuntimeError):
+    pass
+
+
 def compact(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
@@ -16,343 +20,160 @@ def compact(path: Path) -> str:
     return re.sub(r"\s+", "", text)
 
 
-def require(text: str, fragment: str, message: str) -> None:
-    if fragment not in text:
-        raise ValueError(message)
-
-
-def function_body(text: str, name: str) -> str:
+def function(source: str, name: str) -> str:
     marker = f"{name}("
     cursor = 0
     while True:
-        start = text.find(marker, cursor)
+        start = source.find(marker, cursor)
         if start < 0:
-            raise ValueError(f"missing function definition: {name}")
-        paren = start + len(name)
-        depth = 0
-        end = paren
-        while end < len(text):
-            if text[end] == "(":
-                depth += 1
-            elif text[end] == ")":
-                depth -= 1
-                if depth == 0:
-                    break
-            end += 1
-        if end + 1 < len(text) and text[end + 1] == "{":
-            brace = end + 1
-            depth = 1
-            finish = brace + 1
-            while finish < len(text) and depth:
-                if text[finish] == "{":
+            raise ContractError(f"missing function: {name}")
+        opening = source.find("{", start + len(marker))
+        semicolon = source.find(";", start + len(marker), opening + 1)
+        if opening >= 0 and semicolon < 0:
+            depth = 0
+            for index in range(opening, len(source)):
+                if source[index] == "{":
                     depth += 1
-                elif text[finish] == "}":
+                elif source[index] == "}":
                     depth -= 1
-                finish += 1
-            if depth != 0:
-                raise ValueError(f"unterminated function definition: {name}")
-            return text[brace + 1 : finish - 1]
-        cursor = end + 1
+                    if depth == 0:
+                        return source[start : index + 1]
+            raise ContractError(f"unterminated function: {name}")
+        cursor = start + len(marker)
+
+
+def require(source: str, fragment: str, message: str) -> None:
+    if fragment not in source:
+        raise ContractError(message)
+
+
+def reject(source: str, fragment: str, message: str) -> None:
+    if fragment in source:
+        raise ContractError(message)
+
+
+def ordered(source: str, fragments: tuple[str, ...], message: str) -> None:
+    cursor = -1
+    for fragment in fragments:
+        cursor = source.find(fragment, cursor + 1)
+        if cursor < 0:
+            raise ContractError(message)
 
 
 def check(root: Path) -> None:
+    background = compact(root / "os/agent_background.c")
+    core = compact(root / "os/agent_core.c")
+    metadata = compact(root / "os/agent_metadata_objects.c")
     syscall = compact(root / "os/syscall.c")
     trap = compact(root / "os/trap.c")
-    proc = compact(root / "os/proc.c")
-    store = compact(root / "os/agent_metadata_store.c")
-    scan = compact(root / "os/agent_metadata_scan.c")
-    objects = compact(root / "os/agent_metadata_objects.c")
-    metadata_internal = compact(root / "os/agent_metadata_internal.h")
-    fs = compact(root / "os/fs.c")
     vfs = compact(root / "os/vfs_security.c")
-    core = compact(root / "os/agent_core.c")
-    background = compact(root / "os/agent_background.c")
 
-    require(
-        function_body(background, "agent_background_work_pending"),
-        "agent_identity_lease_maintenance_pending()",
-        "identity lease renewal escaped the unified syscall-return gate",
-    )
+    request = function(background, "agent_background_request")
+    pending = function(background, "agent_background_work_pending")
+    take = function(background, "agent_background_take")
+    require(request, "__atomic_store_n(&agent_background_pending,1,__ATOMIC_RELEASE)",
+            "background publication is not a release-store")
+    require(pending, "__atomic_load_n(&agent_background_pending,__ATOMIC_ACQUIRE)",
+            "background observation is not an acquire-load")
+    require(take, "__atomic_exchange_n(&agent_background_pending,0,__ATOMIC_ACQ_REL)",
+            "background edge is not consumed atomically")
+    reject(background, "agent_metadata_store", "retired durable store owns background dispatch")
+    reject(background, "agent_identity_lease", "retired lease persistence owns background dispatch")
 
-    if syscall.count("agent_background_checkpoint();") != 1:
-        raise ValueError("syscall path has an unbounded maintenance trigger")
-    require(
-        syscall,
-        "if(agent_background_work_pending()||id==SYS_sched_yield)"
-        "agent_background_checkpoint();",
-        "syscall return lost its pending-only maintenance safe point",
+    maintain = function(core, "agent_background_maintain")
+    ordered(
+        maintain,
+        (
+            "agent_observe_recording_suppress_begin(p)",
+            "fs_deferred_reclaim_maintain()",
+            "agent_metadata_background_maintain()",
+            "agent_observe_recording_suppress_end(p)",
+        ),
+        "background maintenance lost suppression or bounded owner order",
     )
-    if "id!=SYS_agent_performance_snapshot" in syscall:
-        raise ValueError("observer syscall policy bypasses the pending edge")
-    if "!transaction.fs_epoch_admitted&&fs_epoch_should_commit()" in syscall:
-        raise ValueError("unrelated syscalls can still inherit an aged commit")
+    if maintain.count("agent_metadata_background_maintain()") != 1:
+        raise ContractError("one checkpoint may run metadata maintenance more than once")
 
-    require(
-        trap,
-        "kernel_work_begin_background();agent_background_checkpoint();"
-        "kernel_work_end_background();",
-        "timer-driven maintenance progress is not bounded as background work",
+    checkpoint = function(core, "agent_background_checkpoint")
+    ordered(
+        checkpoint,
+        (
+            "pending=agent_background_take()",
+            "epoch_due=fs_epoch_should_commit()",
+            "fs_epoch_request_begin()",
+            "if(pending)agent_background_maintain()",
+            "if(fs_epoch_should_commit())(void)fs_epoch_commit()",
+            "fs_epoch_request_end()",
+        ),
+        "checkpoint no longer consumes one edge inside one FS epoch request",
     )
     require(
-        proc,
-        "if(t==NULL&&fs_epoch_should_commit()&&fs_epoch_request_begin()==0)",
-        "idle writeback fallback is missing",
+        checkpoint,
+        "if(fs_epoch_request_begin()<0){if(pending)agent_background_request();return;}",
+        "failed checkpoint can lose a pending maintenance edge",
     )
+    if checkpoint.count("agent_background_maintain()") != 1:
+        raise ContractError("checkpoint contains an unbounded maintenance loop")
 
-    mark_dirty = function_body(store, "agent_metadata_store_mark_dirty")
-    if mark_dirty.count("agent_background_request();") != 1:
-        raise ValueError("ordinary metadata dirties still publish an immediate edge")
-    require(
-        mark_dirty,
-        "if(state==0){agent_meta_reconcile_required=1;intr_restore(enabled);"
-        "agent_background_request();return0;}",
-        "metadata scope exhaustion lost its reconciliation edge",
+    live = function(metadata, "agent_metadata_background_maintain")
+    ordered(
+        live,
+        (
+            "vfs_scope_reap_pending(agent_file_state_now())",
+            "agent_metadata_txn_try_external()",
+            "agent_live_query_tombstone_drain(8)",
+            "agent_live_query_content_drain(8)",
+            "agent_metadata_txn_unlock()",
+        ),
+        "Live-Query maintenance lost its bounded nonblocking drain",
     )
     require(
-        mark_dirty,
-        "if(state->dirty_generation!=state->durable_generation){"
-        "state->coalesced_count++;if(state->due_tick==0)state->due_tick="
-        "now+AGENT_META_WRITEBACK_COALESCE_TICKS;}elsestate->due_tick="
-        "now+AGENT_META_WRITEBACK_COALESCE_TICKS;",
-        "metadata coalescing lost its per-generation deadline",
+        live,
+        "if(tombstones==AGENT_STATUS_RETRY||content==AGENT_STATUS_RETRY)agent_background_request()",
+        "unfinished Live-Query work is not republished",
     )
-    require(
-        mark_dirty,
-        "state->request_count++;target=state->dirty_generation;"
-        "intr_restore(enabled);returntarget;",
-        "coalesced metadata dirties no longer wait for their deadline",
-    )
+    for retired in ("agent_metadata_store", "agent_metadata_scan", "agent_durable_section"):
+        reject(live, retired, "retired metadata persistence returned to the hot path")
 
-    expedite = function_body(store, "agent_metadata_store_expedite")
-    require(
-        expedite,
-        "state->due_tick=now;",
-        "urgent metadata writeback no longer advances its deadline",
-    )
-    if "agent_background_request();" in expedite:
-        raise ValueError("metadata expedite bypasses timer-driven dispatch")
-    capture = function_body(store, "agent_file_writeback_capture_state")
-    require(
-        capture,
-        "generation=state->dirty_generation;state->due_tick=0;",
-        "metadata capture no longer consumes the current deadline",
-    )
-    writeback_ready = function_body(store, "agent_file_writeback_ready")
-    writeback_due = function_body(store, "agent_file_writeback_due")
-    if "next_write_tick" in store:
-        raise ValueError("global metadata deadline can starve an unrelated scope")
-    for fragment in ("now>=state->due_tick",):
-        require(
-            writeback_due,
-            fragment,
-            "metadata writeback ready check lost a not-before deadline",
+    dispatch = function(syscall, "syscall")
+    if dispatch.count("agent_background_checkpoint()") != 3:
+        raise ContractError(
+            "syscall return must have one joined-cut and two exclusive observer branches"
         )
-    for fragment in (
-        "agent_file_writeback_pending()",
-        "now>=agent_meta_persist.retry_tick",
-        "agent_file_writeback_due(now)",
-    ):
-        require(
-            writeback_ready,
-            fragment,
-            "metadata writeback does not distinguish pending from ready(now)",
-        )
-
-    store_background = function_body(
-        store, "agent_metadata_store_background_maintain"
-    )
-    if store_background != (
-        "if(!force&&!metadata_background_store_first)return0;"
-        "returnagent_file_writeback_maintain();"
-    ):
-        raise ValueError("metadata background completion still self-requeues")
-    scan_served = function_body(
-        store, "agent_metadata_store_background_scan_served"
-    )
-    if scan_served != "metadata_background_store_first=1;":
-        raise ValueError("metadata scan service does not hand priority to writeback")
-
-    background_step = function_body(
-        store, "agent_meta_persist_background_step_locked"
+    require(
+        dispatch,
+        "if(agent_background_work_pending()||id==SYS_sched_yield)agent_background_checkpoint();",
+        "joined workflow operations lost their in-cut task-work checkpoint",
     )
     require(
-        background_step,
-        "elseif(step>=0){agent_meta_persist.retry_tick=0;}",
-        "metadata step no longer hands deadline policy to its caller",
-    )
-    writeback_maintain = function_body(store, "agent_file_writeback_maintain")
-    for fragment in (
-        "if(submitter!=0)return0;",
-        "if(agent_meta_persist.phase!=AGENT_META_PERSIST_IDLE&&"
-        "now<agent_meta_persist.retry_tick)return0;",
-        "if(last_background_drain_tick==(uint)now){intr_restore(enabled);return-1;}",
-        "last_background_drain_tick=(uint)now;",
-        "agent_meta_persist_drain_owner(owner,"
-        "AGENT_META_BACKGROUND_DRAIN_BUDGET)",
-    ):
-        require(
-            writeback_maintain,
-            fragment,
-            "metadata background drain lost its per-tick bounded admission",
-        )
-    owner_drain = function_body(store, "agent_meta_persist_drain_owner")
-    for fragment in (
-        "#defineAGENT_META_DRAIN_EXTERNAL_FLAG(1U<<31)",
-        "#defineAGENT_META_DRAIN_PROGRESS_FLAG(1U<<30)",
-        "#defineAGENT_META_DRAIN_BUDGET_MASK\\"
-        "(~(AGENT_META_DRAIN_EXTERNAL_FLAG|AGENT_META_DRAIN_PROGRESS_FLAG))",
-    ):
-        require(store, fragment, "metadata drain mode bits overlap or escape the mask")
-    require(
-        store,
-        "AGENT_META_DRAIN_EXTERNAL_FLAG|(8U*AGENT_META_SUBMIT_DRAIN_BUDGET)",
-        "metadata background budget lost its nonblocking transaction mode",
-    )
-    for fragment in (
-        "(encoded_budget&AGENT_META_DRAIN_EXTERNAL_FLAG)?"
-        "agent_metadata_txn_try_external():"
-        "agent_metadata_txn_lock(1)",
-        "agent_meta_store_recovery_required&&owner!=FS_OWNER_SYSTEM",
-        "if(encoded_budget&AGENT_META_DRAIN_EXTERNAL_FLAG)"
-        "metadata_background_store_first=0;"
-        "encoded_budget|=AGENT_META_DRAIN_PROGRESS_FLAG;",
-        "return(encoded_budget&(AGENT_META_DRAIN_EXTERNAL_FLAG|"
-        "AGENT_META_DRAIN_PROGRESS_FLAG))==(AGENT_META_DRAIN_EXTERNAL_FLAG|"
-        "AGENT_META_DRAIN_PROGRESS_FLAG)?1:result;",
-    ):
-        require(
-            owner_drain,
-            fragment,
-            "metadata background drain can sleep or bypass recovery ownership",
-        )
-
-    store_tick = function_body(store, "agent_metadata_store_tick")
-    require(
-        metadata_internal,
-        "voidagent_metadata_store_tick(uint64);",
-        "metadata timer scheduler lost its internal declaration",
+        dispatch,
+        "workflow_lifecycle_operation_enter(lifecycle)==0",
+        "observer maintenance bypasses the workflow cut gate",
     )
     require(
-        store_tick,
-        "if(last_durable_retry_tick!=now){last_durable_retry_tick=now;"
-        "retry_durable=1;}",
-        "durable retry is not limited to one attempt per tick",
-    )
-    require(
-        store_tick,
-        "if(retry_durable)(void)agent_durable_section_retry_pending();",
-        "timer tick no longer drives durable retry",
-    )
-    ready_at = store_tick.find("if(agent_file_writeback_ready(now)){")
-    wake_at = store_tick.find("wait_queue_wake_all(&waiters);", ready_at)
-    request_at = store_tick.find("agent_background_request();", wake_at)
-    if not 0 <= ready_at < wake_at < request_at:
-        raise ValueError(
-            "timer tick no longer wakes and publishes due metadata writeback"
-        )
-    if store.count("agent_durable_section_retry_pending();") != 1:
-        raise ValueError("durable retry has more than one runtime trigger")
-    if store.count("agent_background_request();") != 3:
-        raise ValueError("metadata store regained a non-timer continuation edge")
-
-    scan_plan = function_body(scan, "agent_metadata_scan_plan")
-    if scan_plan.count("scan.last_step_tick!=now") != 1:
-        raise ValueError("metadata scan can plan more than one step per tick")
-    for name in ("agent_file_request_scan", "agent_metadata_scan_slot_freed"):
-        request = function_body(scan, name)
-        require(
-            request,
-            "if(agent_metadata_scan_plan(now)!=AGENT_METADATA_SCAN_IDLE)"
-            "agent_background_request();",
-            "metadata scan request ignores its not-before deadline",
-        )
-    scan_request = function_body(scan, "agent_file_request_scan")
-    require(
-        scan_request,
-        "!scan_ctl.pending||scan_ctl.pending<0",
-        "explicit scan request cannot upgrade a deferred resume",
+        dispatch,
+        "!(id==SYS_agent_run&&trapframe->a2==0&&trapframe->a3==AGENT_RUN_F_FENCE)",
+        "a completed workflow fence can run unsealed maintenance",
     )
 
-    metadata_background = function_body(objects, "agent_metadata_background_maintain")
-    metadata_tick = function_body(objects, "agent_metadata_tick")
-    if "agent_metadata_scan_work_pending()" in metadata_background + metadata_tick:
-        raise ValueError("scan pending state still hot-requeues unrelated syscalls")
-    require(
-        metadata_background,
-        "if(agent_metadata_store_background_maintain(0)>0)gotoreconcile;"
-        "plan=agent_metadata_scan_plan(now);",
-        "metadata scan/writeback priority is not service-driven",
+    usertrap = function(trap, "usertrap")
+    ordered(
+        usertrap,
+        (
+            "kernel_work_begin_background()",
+            "agent_background_checkpoint()",
+            "kernel_work_end_background()",
+        ),
+        "timer maintenance is not charged as bounded background work",
     )
-    if metadata_background.count("agent_metadata_store_background_maintain(") != 2:
-        raise ValueError("metadata writeback must have normal and fallback edges")
-    for fragment in (
-        "if(!bio_background_begin(FS_OWNER_SYSTEM))gotostore;",
-        "agent_metadata_store_background_scan_served();",
-        "store:(void)agent_metadata_store_background_maintain(1);",
-    ):
-        require(
-            metadata_background,
-            fragment,
-            "metadata scan/writeback service turn can starve a shared I/O client",
-        )
-    if "agent_background_request();" in metadata_background:
-        raise ValueError("metadata scan completion still self-requeues")
-    require(
-        metadata_tick,
-        "agent_metadata_store_tick(now);",
-        "timer tick no longer schedules due metadata writeback",
-    )
-    if metadata_tick.count("agent_metadata_store_tick(now);") != 1:
-        raise ValueError("metadata store tick runs more than once per timer tick")
-    require(
-        metadata_tick,
-        "if(agent_metadata_scan_plan(now)!=AGENT_METADATA_SCAN_IDLE)"
-        "agent_background_request();",
-        "timer tick no longer schedules ready metadata scan work",
-    )
+    if usertrap.count("agent_background_checkpoint()") != 1:
+        raise ContractError("timer interrupt can run more than one checkpoint")
 
-    fs_reclaim = function_body(fs, "fs_deferred_reclaim_maintain_owner")
-    require(
-        fs_reclaim,
-        "if(paced){if(fs_deferred_reclaim_next_tick!=0&&"
-        "now<fs_deferred_reclaim_next_tick)return0;"
-        "fs_deferred_reclaim_next_tick=now+1;}",
-        "deferred inode reclaim can run repeatedly in one timer tick",
-    )
-    if "agent_background_request();" in fs_reclaim:
-        raise ValueError("deferred inode reclaim still hot-requeues itself")
-    fs_tick = function_body(fs, "fs_deferred_reclaim_tick")
-    require(
-        fs_tick,
-        "fs_deferred_reclaim_count!=0&&"
-        "(fs_deferred_reclaim_next_tick==0||"
-        "now>=fs_deferred_reclaim_next_tick)",
-        "timer tick no longer publishes ready inode reclaim work",
-    )
-
-    vfs_reap = function_body(vfs, "vfs_scope_reap_pending")
-    require(
-        vfs_reap,
-        "registry->reap_next_tick=now+1;",
-        "workflow teardown is not limited to one phase per timer tick",
-    )
-    if "agent_background_request();" in vfs_reap:
-        raise ValueError("workflow teardown still hot-requeues itself")
-    vfs_tick = function_body(vfs, "vfs_scope_reap_tick")
-    require(
-        vfs_tick,
-        "__atomic_load_n(&registry->retiring_count,__ATOMIC_ACQUIRE)!=0&&"
-        "(next==0||now>=next)",
-        "timer tick no longer publishes ready workflow teardown work",
-    )
-    core_tick = function_body(core, "agent_core_tick")
-    for call in (
-        "fs_deferred_reclaim_tick(now);",
-        "vfs_scope_reap_tick(now);",
-        "agent_metadata_tick(now);",
-        "agent_observe_capacity_tick();",
-    ):
-        require(core_tick, call, "Agent timer lost a deferred-work scheduler")
+    reap = function(vfs, "vfs_scope_reap_pending")
+    reject(reap, "while(", "workflow retirement may busy-loop in one checkpoint")
+    require(reap, "vfs_scope_retiring_next_locked()", "retirement scans the registry")
+    require(reap, "if(request_next)agent_background_request()",
+            "unfinished workflow cleanup loses its continuation edge")
 
 
 def main() -> int:
@@ -361,7 +182,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         check(args.root.resolve())
-    except (OSError, ValueError) as error:
+    except (ContractError, OSError) as error:
         print(f"background dispatch fast-path check failed: {error}", file=sys.stderr)
         return 1
     print("background dispatch fast-path check passed")

@@ -92,6 +92,8 @@ struct resource_reservation {
 	int active;
 };
 
+struct workflow_credit_snapshot;
+
 #define RESOURCE_RESERVE_ALLOW_CLOSING (1U << 0)
 
 void resource_controller_init(void);
@@ -107,6 +109,8 @@ struct resource_account_handle resource_account_none(void);
 int resource_account_handle_valid(struct resource_account_handle);
 int resource_account_handle_equal(struct resource_account_handle,
 				  struct resource_account_handle);
+int resource_account_promise_admissible(
+	uint, const struct resource_account_limits *);
 int resource_account_create(enum resource_account_kind, uint64,
 			    uint, const struct resource_account_limits *,
 			    struct resource_account_handle *);
@@ -131,6 +135,12 @@ int resource_reserve_many_flags(struct resource_account_handle,
 				struct resource_reservation *);
 int resource_reservation_commit(struct resource_reservation *);
 void resource_reservation_cancel(struct resource_reservation *);
+int resource_acquire_many(struct resource_account_handle,
+			  enum resource_charge_class,
+			  const struct resource_request *, uint);
+int resource_acquire_many_flags(struct resource_account_handle,
+				enum resource_charge_class,
+				const struct resource_request *, uint, uint);
 int resource_release_many(struct resource_account_handle,
 			  enum resource_charge_class,
 			  const struct resource_request *, uint);
@@ -158,5 +168,9 @@ uint64 resource_account_class_usage(struct resource_account_handle,
 int resource_account_kind_snapshot(struct resource_account_handle,
 				   enum resource_kind,
 				   struct resource_account_kind_snapshot *);
+int resource_account_trim(struct resource_account_handle);
+int resource_credit_snapshot_pair_trim(
+	struct resource_account_handle, struct resource_account_handle,
+	struct workflow_credit_snapshot *);
 
 #endif

@@ -17,876 +17,169 @@ fail() {
 	exit 1
 }
 
-modules="
+active_modules="
 agent
 agent_background
-agent_core
 agent_context
 agent_context_path
-agent_durable_section
+agent_core
+agent_evidence_ring
 agent_file_state
 agent_identity
 agent_identity_lease
 agent_ipc
 agent_lifecycle
+agent_live_query_compat
+agent_live_query_events
 agent_metadata
 agent_metadata_actions
 agent_metadata_catalog
 agent_metadata_directory
-agent_metadata_journal
 agent_metadata_objects
- agent_metadata_probe
 agent_metadata_query
+agent_observe
+agent_observe_audit_query
+agent_observe_ledger
+agent_observe_timeline
+agent_resource
+agent_sha256
+agent_tool_protocol
+agent_workflow_fence
+resource_controller
+workflow_credit_domain
+workflow_lifecycle
+"
+
+retired_modules="
+agent_durable_section
+agent_metadata_journal
+agent_metadata_probe
 agent_metadata_recovery
+agent_metadata_recovery_test
 agent_metadata_scan
 agent_metadata_store
 agent_metadata_store_format
 agent_metadata_store_io
-agent_observe
-agent_observe_audit_query
+agent_metadata_test
 agent_observe_capacity
-agent_observe_ledger
 agent_observe_recovery
 agent_observe_store
-agent_observe_timeline
-agent_resource
-agent_tool_protocol
-resource_controller
-workflow_lifecycle
 "
 
-for module in ${modules}; do
-	path="${ROOT_DIR}/os/${module}.c"
-	[ -f "${path}" ] ||
-		fail "missing subsystem implementation: os/${module}.c"
+test_only_modules="agent_observe_test"
 
-	# 私有模块可引用内核 proc 池，但不得发布可由其他模块修改的 AgentOS 数据。
+contains_word() {
+	printf '%s\n' "$1" | grep -q -F -x "$2"
+}
+
+for module in ${active_modules}; do
+	path="${ROOT_DIR}/os/${module}.c"
+	[ -f "${path}" ] || fail "missing active owner: os/${module}.c"
 	if grep -n -E '^[[:space:]]*extern[[:space:]]+' "${path}" |
 		grep -v -E 'extern struct proc pool\[NPROC\];' >"${TMP_FILE}"; then
-		fail "os/${module}.c exports or imports writable data"
+		fail "os/${module}.c imports or exports writable owner state"
 	fi
 	: >"${TMP_FILE}"
 done
 
-# 所有权拆分固定为 20 个已审查的尺寸优化编译单元；构建规则须局部生效。
-makefile="${ROOT_DIR}/Makefile"
-size_optimized_modules="$(sed -n \
-	's/^AGENT_SIZE_OPTIMIZED_MODULES[[:space:]]*:=[[:space:]]*//p' \
-	"${makefile}")"
-[ "${size_optimized_modules}" = \
-	"agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_journal agent_metadata_objects agent_metadata_probe agent_metadata_query agent_metadata_recovery agent_metadata_scan agent_metadata_store agent_metadata_store_format agent_metadata_store_io agent_observe_capacity agent_observe_ledger agent_observe_recovery agent_observe_store" ] ||
-	fail "Agent size-optimization allowlist drifted"
-grep -q -F '$(AGENT_SIZE_OPTIMIZED_OBJS): private CFLAGS += -Os' \
-	"${makefile}" || fail "Agent size optimization is not target-local"
-if [ "$(grep -c -E -- '(^|[[:space:]])-Os([[:space:]]|$)' \
-	"${makefile}")" -ne 1 ]; then
-	fail "size optimization escaped the reviewed Agent owners"
-fi
-
-# 调度器上下文维护必须执行有界 core 协调器，否则休眠的前台提交者会卡在
-# primary-to-mirror 阶段之后。
-facade_source="${ROOT_DIR}/os/agent.c"
-core_source="${ROOT_DIR}/os/agent_core.c"
-background_maintain="$(sed -n \
-	'/^agent_background_maintain(void)/,/^}/p' "${core_source}")"
-[ -n "${background_maintain}" ] ||
-	fail "missing Agent background maintenance coordinator"
-printf '%s\n' "${background_maintain}" | \
-	grep -q -F 'agent_metadata_background_maintain();' ||
-	fail "background maintenance lost its metadata coordinator"
-if grep -n -E '^agent_background_(maintain|checkpoint)\(void\)' \
-	"${facade_source}" >"${TMP_FILE}"; then
-	fail "background coordinator regressed into a facade trampoline"
-fi
-: >"${TMP_FILE}"
-
-# 生产者只向中性 latch 发布边，不得回调 facade/core 并接入控制面所有权图。
-background_source="${ROOT_DIR}/os/agent_background.c"
-grep -q -F 'static int agent_background_pending;' "${background_source}" ||
-	fail "neutral Agent background latch is missing"
-grep -q -F '__atomic_store_n(&agent_background_pending, 1, __ATOMIC_RELEASE);' \
-	"${background_source}" ||
-	fail "Agent background latch cannot publish work"
-grep -q -F '__atomic_exchange_n(&agent_background_pending, 0,' \
-	"${background_source}" ||
-	fail "Agent background latch cannot consume work"
-grep -q -F '__ATOMIC_ACQ_REL);' "${background_source}" ||
-	fail "Agent background latch lost acquire/release ordering"
-if grep -n -E 'agent_background_pending[[:space:]]*=' \
-	"${background_source}" >"${TMP_FILE}"; then
-	fail "Agent background latch regressed to a non-atomic update"
-fi
-: >"${TMP_FILE}"
-if grep -n -E 'agent_core_|agent_metadata_|agent_observe_|agent_ipc_' \
-	"${background_source}" >"${TMP_FILE}"; then
-	fail "neutral Agent background latch acquired an owner dependency"
-fi
-: >"${TMP_FILE}"
-if grep -n -F 'agent_background_pending' "${ROOT_DIR}"/os/*.c | \
-	grep -v -F '/agent_background.c:' >"${TMP_FILE}"; then
-	fail "Agent background latch ownership escaped its neutral module"
-fi
-: >"${TMP_FILE}"
-background_take_calls="$(grep -R -n -E \
-	'agent_background_take[[:space:]]*\([[:space:]]*\)' \
-	"${ROOT_DIR}/os" --include='*.c' || true)"
-[ "$(printf '%s\n' "${background_take_calls}" | \
-	grep -c -F '/agent_core.c:' || true)" -eq 1 ] ||
-	fail "Agent background latch must have one core consumer"
-if printf '%s\n' "${background_take_calls}" | \
-	grep -v -F '/agent_core.c:' >"${TMP_FILE}"; then
-	fail "Agent background latch consumer escaped the core coordinator"
-fi
-: >"${TMP_FILE}"
+for module in ${retired_modules}; do
+	[ -f "${ROOT_DIR}/os/${module}.c" ] ||
+		fail "missing reference-only retired source: os/${module}.c"
+done
 
 for path in "${ROOT_DIR}"/os/agent*.c; do
 	module="$(basename "${path}" .c)"
-	case "${module}" in
-	agent | agent_background | agent_core | agent_context | agent_context_path | agent_durable_section | agent_file_state | agent_identity | agent_identity_lease | agent_ipc | \
-		agent_lifecycle | agent_metadata | agent_metadata_actions | agent_metadata_objects | \
-	agent_metadata_catalog | agent_metadata_directory | agent_metadata_journal | agent_metadata_probe | agent_metadata_query | agent_metadata_recovery | agent_metadata_recovery_test | agent_metadata_scan | \
-	agent_metadata_store | agent_metadata_store_format | agent_metadata_store_io | agent_metadata_test | agent_observe | agent_observe_audit_query | agent_observe_capacity | \
-	agent_observe_ledger | agent_observe_recovery | agent_observe_store | agent_observe_test | agent_observe_timeline | \
-	agent_resource | agent_tool_protocol)
-		;;
-	*)
-		fail "unregistered AgentOS implementation: os/${module}.c"
-		;;
-	esac
-done
-
-for retired_path in os/agent_metadata_prefetch.c os/agent_metadata_prefetch.h; do
-	[ ! -e "${ROOT_DIR}/${retired_path}" ] ||
-		fail "retired metadata hint owner returned: ${retired_path}"
-done
-if grep -R -n -E 'agent_(metadata_)?prefetch|AGENT_FILE_PREFETCH|SYS_agent_file_prefetch' \
-	"${ROOT_DIR}/os" "${ROOT_DIR}/user/include" "${ROOT_DIR}/user/lib" \
-	--include='*.c' --include='*.h' --include='*.in' >"${TMP_FILE}"; then
-	fail "retired metadata hint mechanism returned"
-fi
-: >"${TMP_FILE}"
-
-# 生命周期身份回收向 core 协调器返回不可变端点键；IPC 独占路由表，并在
-# 协调器仍持有中断边界时调用。
-lifecycle_source="${ROOT_DIR}/os/agent_lifecycle.c"
-if grep -n -E '\bagent_ipc_[A-Za-z0-9_]*[[:space:]]*\(' \
-	"${lifecycle_source}" >"${TMP_FILE}"; then
-	fail "lifecycle owner acquired a reverse IPC dependency"
-fi
-: >"${TMP_FILE}"
-controller_departure="$(sed -n \
-	'/^agent_scope_controller_departing(struct proc \*p)/,/^}/p' \
-	"${ROOT_DIR}/os/agent_core.c")"
-[ -n "${controller_departure}" ] ||
-	fail "missing core controller-departure coordinator"
-departure_order="$(printf '%s\n' "${controller_departure}" | sed -n \
-	'/intr_save()/,/intr_restore(enabled)/p')"
-for operation in 'agent_lifecycle_controller_departing_locked(p)' \
-	'agent_ipc_remove_source(control_id)'; do
-	printf '%s\n' "${departure_order}" | grep -q -F "${operation}" ||
-		fail "controller departure lost ordered owner operation: ${operation}"
-done
-if grep -R -n -F 'agent_lifecycle_controller_departing_locked(p)' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -F '/agent_core.c:' >"${TMP_FILE}"; then
-	fail "locked lifecycle departure escaped the core coordinator"
-fi
-: >"${TMP_FILE}"
-
-# 观察段只能经 durable-section provider 请求持久化，禁止反转 metadata-store 所有权边。
-observe_store_source="${ROOT_DIR}/os/agent_observe_store.c"
-observe_recovery_source="${ROOT_DIR}/os/agent_observe_recovery.c"
-if grep -n -E '\bagent_metadata_store_[A-Za-z0-9_]*[[:space:]]*\(' \
-	"${observe_store_source}" >"${TMP_FILE}"; then
-	fail "observation store acquired a reverse metadata-store dependency"
-fi
-: >"${TMP_FILE}"
-grep -q -F 'agent_durable_section_persist_scope(' \
-	"${observe_store_source}" ||
-	fail "observation store lost durable persistence provider"
-if grep -n -E '\bsys_agent_observe_recovery[[:space:]]*\(' \
-	"${observe_store_source}" >"${TMP_FILE}"; then
-	fail "Recovery ABI endpoint regressed into the persistence store"
-fi
-: >"${TMP_FILE}"
-grep -q -E '^sys_agent_observe_recovery[[:space:]]*\(' \
-	"${observe_recovery_source}" ||
-	fail "Recovery module lost its syscall endpoint"
-for operation in 'agent_obsstore_snapshot_begin(' \
-	'agent_obsstore_snapshot_scope_capacity(' \
-	'agent_obsstore_snapshot_record_capacity(' \
-	'agent_obsstore_snapshot_scope(' 'agent_obsstore_snapshot_record(' \
-	'agent_obsstore_snapshot_confirm(' 'agent_obsstore_reap_query('; do
-	grep -q -F "${operation}" "${observe_recovery_source}" ||
-		fail "Recovery endpoint bypassed store view: ${operation}"
-done
-if grep -n -E '\bagent_durable_section_[A-Za-z0-9_]*[[:space:]]*\(' \
-	"${observe_recovery_source}" >"${TMP_FILE}"; then
-	fail "Recovery ABI endpoint acquired durable image authority"
-fi
-: >"${TMP_FILE}"
-grep -q -F 'agent_durable_section_set_store_provider(' \
-	"${ROOT_DIR}/os/agent_metadata_store.c" ||
-	fail "metadata store did not register the durable persistence provider"
-provider_owners="$(grep -R -l -F 'agent_durable_section_set_store_provider(' \
-	"${ROOT_DIR}/os" --include='*.c' | sort)"
-[ "${provider_owners}" = "${ROOT_DIR}/os/agent_durable_section.c
-${ROOT_DIR}/os/agent_metadata_store.c" ] ||
-	fail "durable persistence provider ownership escaped its two endpoints"
-for member in '.mark_dirty = agent_meta_durable_dirty' \
-	'.replicated = agent_meta_durable_replicated' \
-	'.persist_scope = agent_meta_durable_persist_scope'; do
-	grep -q -F "${member}" "${ROOT_DIR}/os/agent_metadata_store.c" ||
-		fail "durable persistence provider lost member: ${member}"
-done
-
-# 元数据崩溃证明仅在显式 profile 中编译；生产图不得含该对象，桥接限于 store 所有者。
-test_support="${ROOT_DIR}/os/agent_metadata_test.c"
-test_header="${ROOT_DIR}/os/metadata_crash_test.h"
-grep -q -F 'C_SRCS := $(filter-out $K/agent_metadata_test.c,$(C_SRCS))' \
-	"${ROOT_DIR}/Makefile" ||
-	fail "metadata test owner is not excluded from production objects"
-grep -q -F '#ifdef AGENT_METADATA_CRASH_PHASE' "${test_support}" ||
-	fail "metadata test owner lost its profile guard"
-for symbol in agent_metadata_test_init agent_metadata_test_bind \
-	agent_metadata_test_checkpoint agent_metadata_test_eio_start \
-	agent_metadata_test_eio_cancel agent_metadata_test_eio_pre_io \
-	agent_metadata_test_eio_commit sys_agent_metadata_test; do
-	grep -q -F "${symbol}" "${test_support}" ||
-		fail "metadata test owner lost narrow hook: ${symbol}"
-done
-if grep -R -l -F '#include "metadata_crash_test.h"' "${ROOT_DIR}/os"/*.c |
-	grep -v -E '/agent_metadata_(store|test)\.c$' >"${TMP_FILE}"; then
-	fail "production owner gained a metadata crash-test dependency"
-fi
-: >"${TMP_FILE}"
-grep -q -F '#else' "${test_header}" &&
-	grep -q -F 'static inline void' "${test_header}" ||
-	fail "metadata test header lacks production inline no-op hooks"
-
-recovery_test_support="${ROOT_DIR}/os/agent_metadata_recovery_test.c"
-recovery_test_header="${ROOT_DIR}/os/agent_metadata_recovery_test.h"
-grep -q -F 'C_SRCS := $(filter-out $K/agent_metadata_recovery_test.c,$(C_SRCS))' \
-	"${ROOT_DIR}/Makefile" ||
-	fail "metadata recovery test owner is not excluded from production objects"
-for symbol in agent_metadata_recovery_test_init \
-	agent_metadata_recovery_test_fault agent_metadata_recovery_test_retry \
-	agent_metadata_recovery_test_admission; do
-	grep -q -F "${symbol}" "${recovery_test_support}" ||
-		fail "metadata recovery test owner lost narrow hook: ${symbol}"
-done
-if grep -R -l -F '#include "agent_metadata_recovery_test.h"' \
-	"${ROOT_DIR}/os"/*.c |
-	grep -v -E '/agent_(core|metadata_(probe|store|recovery_test))\.c$' \
-	>"${TMP_FILE}"; then
-	fail "production owner gained a metadata recovery-test dependency"
-fi
-: >"${TMP_FILE}"
-grep -q -F '#else' "${recovery_test_header}" &&
-	grep -q -F 'static inline' "${recovery_test_header}" ||
-	fail "metadata recovery test header lacks production inline no-op hooks"
-
-observe_test_support="${ROOT_DIR}/os/agent_observe_test.c"
-observe_test_header="${ROOT_DIR}/os/agent_observe_test.h"
-grep -q -F 'C_SRCS := $(filter-out $K/agent_observe_test.c,$(C_SRCS))' \
-	"${ROOT_DIR}/Makefile" ||
-	fail "observe test owner is not excluded from production objects"
-grep -q -F '#ifdef AGENT_OBSERVE_TEST_PROFILE' "${observe_test_support}" ||
-	fail "observe test owner lost its profile guard"
-for symbol in agent_observe_test_operation agent_observe_test_execute; do
-	grep -q -F "${symbol}" "${observe_test_support}" ||
-		fail "observe test owner lost narrow hook: ${symbol}"
-done
-if grep -R -l -F '#include "agent_observe_test.h"' "${ROOT_DIR}/os"/*.c |
-	grep -v -E '/agent_observe_(recovery|test)\.c$' >"${TMP_FILE}"; then
-	fail "production owner gained an observe test dependency"
-fi
-: >"${TMP_FILE}"
-if grep -q -F '#else' "${observe_test_header}" ||
-	grep -q -F 'static inline' "${observe_test_header}"; then
-	fail "observe test header leaks profile stubs into production"
-fi
-grep -q -F '#ifdef AGENT_OBSERVE_TEST_PROFILE' \
-	"${ROOT_DIR}/os/agent_observe_recovery.c" ||
-	fail "observe recovery test callsites lack an explicit profile guard"
-
-wait_test_support="${ROOT_DIR}/os/wait_atomic_test.c"
-wait_test_header="${ROOT_DIR}/os/wait_atomic_test.h"
-grep -q -F 'C_SRCS := $(filter-out $K/wait_atomic_test.c,$(C_SRCS))' \
-	"${ROOT_DIR}/Makefile" ||
-	fail "atomic-wait test owner is not excluded from production objects"
-grep -q -F '#ifdef WAIT_ATOMIC_TEST_PROFILE' "${wait_test_support}" ||
-	fail "atomic-wait test owner lost its profile guard"
-for symbol in sys_wait_atomic_test wait_atomic_test_begin \
-	wait_atomic_test_complete wait_atomic_test_agent_wait \
-	agent_ipc_wait_test_publish; do
-	grep -q -F "${symbol}" "${wait_test_support}" ||
-		fail "atomic-wait test owner lost narrow hook: ${symbol}"
-done
-if grep -R -l -F '#include "wait_atomic_test.h"' "${ROOT_DIR}/os"/*.c |
-	grep -v -E '/(agent_ipc|proc|syscall|wait_atomic_test)\.c$' >"${TMP_FILE}"; then
-	fail "production owner gained an atomic-wait test dependency"
-fi
-: >"${TMP_FILE}"
-if grep -q -F '#else' "${wait_test_header}"; then
-	fail "atomic-wait test header must not publish production stubs"
-fi
-
-fs_allocator_test_support="${ROOT_DIR}/os/fs_allocator_test.c"
-fs_allocator_test_header="${ROOT_DIR}/os/fs_allocator_test.h"
-grep -q -F 'C_SRCS := $(filter-out $K/fs_allocator_test.c,$(C_SRCS))' \
-	"${ROOT_DIR}/Makefile" ||
-	fail "filesystem allocator test owner is not excluded from production objects"
-grep -q -F '#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE' \
-	"${fs_allocator_test_support}" ||
-	fail "filesystem allocator test owner lost its profile guard"
-for symbol in fs_allocator_test_bind_boot_init fs_allocator_test_authorized \
-	fs_allocator_test_arm fs_allocator_test_disarm fs_allocator_test_snapshot \
-	fs_allocator_test_before fs_allocator_test_after; do
-	grep -q -F "${symbol}" "${fs_allocator_test_support}" ||
-		fail "filesystem allocator test owner lost narrow hook: ${symbol}"
-done
-grep -q -F 'fs_allocator_test_storage_snapshot' "${ROOT_DIR}/os/fs.c" ||
-	fail "filesystem allocator profile lost its storage snapshot bridge"
-if grep -R -l -F '#include "fs_allocator_test.h"' "${ROOT_DIR}/os"/*.c |
-	grep -v -E '/(fs|fs_allocator_test|loader|syscall)\.c$' >"${TMP_FILE}"; then
-	fail "production owner gained a filesystem allocator test dependency"
-fi
-: >"${TMP_FILE}"
-if grep -q -F '#else' "${fs_allocator_test_header}"; then
-	fail "filesystem allocator test header must not publish production stubs"
-fi
-
-metadata_private_headers="
-agent_file_name_policy.h
-agent_file_state_internal.h
-agent_metadata_actions.h
-agent_metadata_catalog.h
- agent_metadata_directory.h
- agent_metadata_disk.h
-agent_metadata_internal.h
-agent_metadata_journal.h
-agent_metadata_probe.h
- agent_metadata_recovery.h
- agent_metadata_recovery_test.h
- agent_metadata_store_format.h
- agent_metadata_store_io.h
-agent_metadata_query.h
-agent_metadata_scan.h
-"
-metadata_disk_abi="${ROOT_DIR}/agent_metadata_disk_abi.h"
-[ -f "${metadata_disk_abi}" ] || fail "shared metadata disk ABI is missing"
-grep -q -F '#include "../agent_metadata_disk_abi.h"' \
-	"${ROOT_DIR}/os/agent_metadata_disk.h" ||
-	fail "kernel metadata header bypasses the shared disk ABI"
-grep -q -F '#include "../agent_metadata_disk_abi.h"' \
-	"${ROOT_DIR}/os/agent_durable_section.h" ||
-	fail "durable arena header bypasses the shared disk ABI"
-grep -q -F '#include "../agent_metadata_disk_abi.h"' \
-	"${ROOT_DIR}/nfs/fs.c" ||
-	fail "mkfs bypasses the shared metadata disk ABI"
-grep -q -F 'agent_meta_disk_init_genesis(&genesis)' \
-	"${ROOT_DIR}/nfs/fs.c" ||
-	fail "mkfs does not use the canonical metadata genesis builder"
-grep -q -F 'agent_durable_disk_init_empty(arena)' \
-	"${ROOT_DIR}/os/agent_durable_section.c" ||
-	fail "kernel durable initialization bypasses the shared disk builder"
-for token in '#define AGENT_META_STORE_MAGIC ' \
-	'struct agent_meta_store_header {' \
-	'struct agent_durable_arena {'; do
-	matches="$(grep -l -F "${token}" "${metadata_disk_abi}" \
-		"${ROOT_DIR}"/os/*.h "${ROOT_DIR}"/nfs/*.h 2>/dev/null || true)"
-	[ "${matches}" = "${metadata_disk_abi}" ] || {
-		printf '%s\n' "${matches}" >"${TMP_FILE}"
-		fail "metadata disk layout has multiple definition owners"
-	}
-done
-registered_agent_headers="
-agent.h
-agent_context.h
-agent_context_path.h
-agent_durable_section.h
-agent_identity_lease.h
-agent_internal.h
-agent_lifecycle.h
- agent_observe_internal.h
- agent_observe_capacity.h
- agent_observe_persist_context.h
-agent_observe_recovery.h
-agent_observe_recovery_store.h
-agent_observe_store.h
-agent_observe_test.h
-agent_tool_protocol.h
-${metadata_private_headers}
-"
-
-for path in "${ROOT_DIR}"/os/agent*.h; do
-	[ -e "${path}" ] || continue
-	header="$(basename "${path}")"
-	registered=false
-	for registered_header in ${registered_agent_headers}; do
-		if [ "${header}" = "${registered_header}" ]; then
-			registered=true
-			break
-		fi
-	done
-	[ "${registered}" = true ] || fail "unregistered Agent contract: os/${header}"
-done
-
-for header in ${registered_agent_headers}; do
-	path="${ROOT_DIR}/os/${header}"
-	[ -f "${path}" ] || fail "missing private contract: os/${header}"
-	if grep -n -E '^[[:space:]]*extern[[:space:]]+' \
-		"${path}" >"${TMP_FILE}"; then
-		fail "os/${header} must expose operations, not writable data"
+	if contains_word "${active_modules}" "${module}" ||
+	   contains_word "${retired_modules}" "${module}" ||
+	   contains_word "${test_only_modules}" "${module}"; then
+		continue
 	fi
-	: >"${TMP_FILE}"
+	fail "unregistered AgentOS implementation: os/${module}.c"
 done
 
-if grep -R -n -E '#include[[:space:]]+"agent_context_path\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/agent_context(_path)?\.c:' >"${TMP_FILE}"; then
-	fail "Context active-path contract escaped its owner"
-fi
-: >"${TMP_FILE}"
-
-if grep -R -n -E '#include[[:space:]]+"agent_observe_store\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/(agent_core|agent_observe|agent_observe_capacity|agent_observe_ledger|agent_observe_store|agent_observe_test)\.c:' >"${TMP_FILE}"; then
-	fail "observation checkpoint contract escaped its owner"
-fi
-: >"${TMP_FILE}"
-
-if grep -R -n -E '#include[[:space:]]+"agent_observe_capacity\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/(agent_core|agent_observe|agent_observe_capacity|agent_observe_store)\.c:' >"${TMP_FILE}"; then
-	fail "observation capacity contract escaped its endpoints"
-fi
-: >"${TMP_FILE}"
-
-if grep -R -n -E '#include[[:space:]]+"agent_observe_recovery_store\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/agent_observe_(recovery|store)\.c:' >"${TMP_FILE}"; then
-	fail "Recovery/store view contract escaped its two endpoints"
-fi
-: >"${TMP_FILE}"
-
-if grep -R -n -E '#include[[:space:]]+"agent_observe_recovery\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/(agent_core|agent_observe|agent_observe_recovery|agent_observe_timeline)\.c:' >"${TMP_FILE}"; then
-	fail "observation Recovery endpoint contract escaped its coordinator"
-fi
-: >"${TMP_FILE}"
-
-if grep -R -n -E '#include[[:space:]]+"agent_observe_persist_context\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/agent_observe_store\.c:' >"${TMP_FILE}"; then
-	fail "observation persistence context escaped its store owner"
-fi
-: >"${TMP_FILE}"
-
-if grep -R -n -E '#include[[:space:]]+"agent_metadata_disk\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/agent_metadata_store_format\.c:' >"${TMP_FILE}"; then
-	fail "metadata disk format contract escaped its store owner"
-fi
-: >"${TMP_FILE}"
-
-if grep -R -n -E '#include[[:space:]]+"agent_metadata_store_format\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/agent_metadata_(journal|probe|store(_format|_io)?)\.c:' >"${TMP_FILE}"; then
-	fail "metadata store format contract escaped its owners"
-fi
-: >"${TMP_FILE}"
-
-if grep -R -n -E '#include[[:space:]]+"agent_metadata_store_io\.h"' \
-	"${ROOT_DIR}/os" --include='*.c' | \
-	grep -v -E '/agent_metadata_(probe|store(_io)?)\.c:' >"${TMP_FILE}"; then
-	fail "metadata bank I/O contract escaped its owners"
-fi
-: >"${TMP_FILE}"
-
-# 共享 facade 可保留生命周期入口，所有者内部结构须留在受预算约束的私有头文件中。
-shared_contract="${ROOT_DIR}/os/agent_internal.h"
-if grep -n -E 'agent_(metadata_(actions|catalog|store|query|scan|directory)|file_(state|query|scan|directory)|query|scan|directory)_' \
-	"${shared_contract}" >"${TMP_FILE}"; then
-	fail "metadata owner APIs leaked into os/agent_internal.h"
-fi
-: >"${TMP_FILE}"
-if grep -n -E '#include[[:space:]]+"agent_(metadata_(actions|catalog|internal|probe|query|scan|directory|store_format|store_io)|file_(state_internal|name_policy)|query|scan|directory).*\.h"' \
-	"${shared_contract}" >"${TMP_FILE}"; then
-	fail "metadata private contract included by os/agent_internal.h"
-fi
-: >"${TMP_FILE}"
-
-# Core 可协调所有者操作，但不得越过字段重置其他所有者的 proc 局部状态；
-# 生命周期边界保持为操作接口，避免新增 sidecar 时再次跨模块改写。
-core_source="${ROOT_DIR}/os/agent_core.c"
-core_clear="$(sed -n '/^void agent_core_clear_metadata(/,/^}/p' \
-	"${core_source}")"
-core_make="$(sed -n '/^int agent_make_role(/,/^}/p' \
-	"${core_source}")"
-core_exec="$(sed -n '/^int agent_core_exec_public_commit(/,/^}/p' \
-	"${core_source}")"
-core_tick="$(sed -n '/^void agent_core_tick(/,/^}/p' \
-	"${core_source}")"
-owner_fields='->(agent_ctx_|context_path_|latest_response_offset|records_offset|agent_current_|agent_context_chain_hash|agent_mailbox|agent_watch_|agent_ipc_|agent_event_|agent_wait_|heartbeat_interval|agent_last_heartbeat_tick|loop_state|agent_sched_|agent_timeline_|agent_observe_|agent_provenance_edges)'
-for body_name in core_clear core_make core_exec core_tick; do
-	body="$(eval "printf '%s' \"\${${body_name}}\"")"
-	[ -n "${body}" ] || fail "missing Agent core owner boundary: ${body_name}"
-	if printf '%s\n' "${body}" | grep -n -E -- "${owner_fields}" >"${TMP_FILE}"; then
-		fail "Agent core bypassed a proc-state owner in ${body_name}"
-	fi
-	: >"${TMP_FILE}"
+makefile="${ROOT_DIR}/Makefile"
+grep -q -F 'C_SRCS := $(filter-out $(RETIRED_METADATA_C_SRCS),$(C_SRCS))' "${makefile}" || fail "metadata retirement is not applied to production C_SRCS"
+grep -q -F 'C_SRCS := $(filter-out $(RETIRED_OBSERVE_C_SRCS),$(C_SRCS))' "${makefile}" || fail "observe retirement is not applied to production C_SRCS"
+for module in ${retired_modules}; do
+	grep -q -F "\$K/${module}.c" "${makefile}" ||
+		fail "retired source is not declared by Makefile: os/${module}.c"
 done
-if printf '%s\n' "${core_exec}" | grep -n -E -- \
-	'agent_control_state[[:space:]]*=' >"${TMP_FILE}"; then
-	fail "Agent exec bypassed the identity control-state owner"
-fi
-: >"${TMP_FILE}"
-for operation in 'agent_scope_controller_departing(p)' \
-	'agent_identity_proc_reset(p, 1)' \
-	'agent_context_proc_reset(p)' 'agent_observe_proc_reset(p)' \
-	'agent_ipc_exec_public(p)'; do
-	printf '%s\n' "${core_exec}" | grep -q -F "${operation}" ||
-		fail "Agent exec lost owner operation: ${operation}"
-done
-if [ "$(printf '%s\n' "${core_exec}" | \
-	grep -c -F 'agent_ipc_exec_public(p)')" -ne 2 ]; then
-	fail "Agent exec must reset IPC state in both identity branches"
-fi
-if printf '%s\n' "${core_exec}" | \
-	grep -q -F 'agent_ipc_proc_teardown(p)'; then
-	fail "Agent exec incorrectly tore down live IPC state"
-fi
-for operation in 'agent_context_proc_reset(p)' \
-	'agent_observe_proc_reset(p)' 'agent_ipc_proc_teardown(p)'; do
-	printf '%s\n' "${core_clear}" | grep -q -F "${operation}" ||
-		fail "Agent core clear lost owner operation: ${operation}"
-done
-if [ "$(printf '%s\n' "${core_clear}" | \
-	grep -c -F 'agent_ipc_proc_teardown(p)')" -ne 1 ] || \
-	printf '%s\n' "${core_clear}" | \
-	grep -q -F 'agent_ipc_exec_public(p)'; then
-	fail "Agent core clear must tear down rather than reset IPC state"
-fi
-for operation in 'agent_context_proc_activate(p)' \
-	'agent_ipc_proc_activate(p)' 'agent_observe_proc_init('; do
-	printf '%s\n' "${core_make}" | grep -q -F "${operation}" ||
-		fail "Agent core activation lost owner operation: ${operation}"
-done
-printf '%s\n' "${core_tick}" | grep -q -F 'agent_observe_tick_proc(p, now)' ||
-	fail "Agent core tick bypassed the observe owner"
-
-# 降权 exec 后资源所有权仍保留；VFS scope 只控制访问，不可变生命周期键仍是记账主体。
-bio_source="${ROOT_DIR}/os/bio.c"
-bio_header="${ROOT_DIR}/os/bio.h"
-if [ "$(grep -c -x -F 'uint bio_process_owner(const struct proc *p)' \
-	"${bio_source}" || true)" -ne 1 ] || \
-	! grep -q -x -F 'uint bio_process_owner(const struct proc *);' \
-		"${bio_header}"; then
-	fail "I/O lifecycle owner API is not public or has drifted"
-fi
-if grep -n -E '(^|[^A-Za-z0-9_])io_owner_from_proc([^A-Za-z0-9_]|$)|^[[:space:]]*static[[:space:]]+uint[[:space:]]+bio_process_owner([^A-Za-z0-9_]|$)' \
-	"${bio_source}" "${bio_header}" >"${TMP_FILE}"; then
-	fail "I/O ownership restored a private credential-derived helper"
-fi
-: >"${TMP_FILE}"
-io_owner="$(sed -n \
-	'/^uint bio_process_owner(const struct proc \*p)$/,/^}$/p' \
-	"${bio_source}")"
-for operation in 'vfs_proc_lifecycle(p)' \
-	'workflow_lifecycle_key_valid(lifecycle)' \
-	'workflow_lifecycle_scope(lifecycle, &scope_id)' \
-	'return FS_OWNER_SCOPE(scope_id)'; do
-	printf '%s\n' "${io_owner}" | grep -q -F "${operation}" ||
-		fail "I/O owner lost lifecycle identity: ${operation}"
-done
-if printf '%s\n' "${io_owner}" | grep -n -F -- 'p->vfs_scope_id' >"${TMP_FILE}"; then
-	fail "I/O owner regressed to mutable VFS credentials"
-fi
-: >"${TMP_FILE}"
-
-# 目录提交向 objects 所有者返回增量；此处回调会形成间接栈边和指向 projection 的反向依赖。
-catalog_source="${ROOT_DIR}/os/agent_metadata_catalog.c"
-metadata_source="${ROOT_DIR}/os/agent_metadata.c"
-actions_source="${ROOT_DIR}/os/agent_metadata_actions.c"
-objects_source="${ROOT_DIR}/os/agent_metadata_objects.c"
-directory_source="${ROOT_DIR}/os/agent_metadata_directory.c"
-scan_source="${ROOT_DIR}/os/agent_metadata_scan.c"
-store_source="${ROOT_DIR}/os/agent_metadata_store.c"
-if grep -n -E 'projection_commit|agent_file_catalog_sync|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
-	"${catalog_source}" >"${TMP_FILE}"; then
-	fail "metadata catalog must not publish through callbacks"
-fi
-: >"${TMP_FILE}"
-if grep -n -E 'agent_metadata_store_(load|reload|storage_init|install_empty)\([^;]*0\)' \
-	"${ROOT_DIR}/os/agent_metadata_objects.c" >"${TMP_FILE}"; then
-	fail "metadata objects must consume every store commit delta"
-fi
-: >"${TMP_FILE}"
-
-if grep -n -E '\bscan_(ctl|control)\b|\bscan\.(offset|seen|next_tick|last_step_tick|started_tick|runs|entries|added|updated|removed)\b|root_dir\(' \
-	"${objects_source}" >"${TMP_FILE}"; then
-	fail "metadata objects retained scan-owned state or directory traversal"
-fi
-: >"${TMP_FILE}"
-if grep -n -E '\bagent_(action_history|dependencies|dependency_generation|status_batch_undo)\b' \
-	"${objects_source}" >"${TMP_FILE}"; then
-	fail "metadata objects retained action/dependency ownership"
-fi
-: >"${TMP_FILE}"
-for actions_owner_operation in 'agent_metadata_actions_reclaim_scope(scope_id)' \
-	'agent_metadata_actions_update_status_locked(' \
-	'agent_metadata_actions_dependency_update('; do
-	grep -q -F "${actions_owner_operation}" "${objects_source}" ||
-		fail "metadata objects lost actions owner delegation: ${actions_owner_operation}"
-done
-if grep -n -E '^static[[:space:]]+struct[[:space:]]+agent_(action_history_entry|dependency_entry|status_batch_undo)' \
-	"${objects_source}" >"${TMP_FILE}"; then
-	fail "metadata objects reacquired actions-owned writable tables"
-fi
-: >"${TMP_FILE}"
-for actions_state in 'agent_action_history[' 'agent_dependencies[' \
-	'agent_status_batch_undo['; do
-	grep -q -F "${actions_state}" "${actions_source}" ||
-		fail "metadata actions lost owned state: ${actions_state}"
-done
-if grep -n -E 'agent_file_maintain|agent_metadata_note_catalog_changes|agent_file_store_load|agent_metadata_query_|bio_background_|agent_metadata_txn_try_external|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
-	"${scan_source}" >"${TMP_FILE}"; then
-	fail "metadata scan acquired a reverse dependency or callback"
-fi
-: >"${TMP_FILE}"
-for scan_owner_operation in 'root_dir_status(&root_status)' \
-	'root_status != FS_LOOKUP_FOUND' 'readi(' 'inode_get(' \
-	'agent_metadata_scan_index_inode(ip, name, &bind_failed)' 'if (bind_failed)' \
-	'SCAN_NOTE(slot)' 'agent_metadata_store_mark_dirty' \
-	'steps < SCAN_STEP'; do
-	grep -q -F "${scan_owner_operation}" "${scan_source}" ||
-		fail "metadata scan lost owner operation: ${scan_owner_operation}"
-done
-
-if grep -n -E '^void[[:space:]]+agent_fs_(note_create|note_write|sync_write|note_truncate|note_delete)[[:space:]]*\(' \
-	"${objects_source}" >"${TMP_FILE}"; then
-	fail "metadata objects retained a directory hook"
-fi
-: >"${TMP_FILE}"
-if grep -n -E 'agent_metadata_query_|agent_file_store_load|bio_background_|agent_metadata_store_persist[[:space:]]*\(|agent_metadata_txn_lock[[:space:]]*\(|agent_dependency_generation|\bscan_(ctl|control)\b|\bscan\.(offset|seen|next_tick|last_step_tick|started_tick|runs|entries|added|updated|removed)\b|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
-	"${directory_source}" >"${TMP_FILE}"; then
-	fail "metadata directory acquired coordination state or blocking work"
-fi
-: >"${TMP_FILE}"
-if grep -n -E '^static[[:space:]]+(char|short|int|long|uint|uint64|struct[[:space:]]+[A-Za-z_][A-Za-z0-9_]*)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]]*\[[^]]*\])?[[:space:]]*(=[^;]*)?;' \
-	"${directory_source}" >"${TMP_FILE}"; then
-	fail "metadata directory acquired writable file-scope state"
-fi
-: >"${TMP_FILE}"
-for directory_operation in 'agent_metadata_txn_try_external()' \
-	'#define FS_META_UNBOUND(ip)' \
-	'!(ip)->agent_meta_flags' \
-	'agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)' \
-	'agent_metadata_store_mark_dirty(scope_id)'; do
-	grep -q -F "${directory_operation}" "${directory_source}" ||
-		fail "metadata directory lost owner operation: ${directory_operation}"
-done
-if grep -q -F 'agent_fs_note_create' "${directory_source}" \
-	"${ROOT_DIR}/os/agent_metadata_directory.h" "${ROOT_DIR}/os/file.c"; then
-	fail "普通文件创建仍保留 Agent 元数据钩子"
-fi
-: >"${TMP_FILE}"
-
-# 待处理目录 projection 是硬持久化屏障；共享完成边界和两次物理回写转换均须守卫，
-# 使普通、修复和后台路径不依赖包装层顺序。
-projection_idle="$(sed -n \
-	'/agent_metadata_txn_projection_require_idle(void)/,/^}/p' \
-	"${metadata_source}" | tr -d '[:space:]')"
-printf '%s\n' "${projection_idle}" | grep -q -F \
-	'if(!agent_metadata_txn_owned(0)||txn_projection_pending)panic(' ||
-	fail "metadata projection idle guard must fail closed"
-store_finish="$(sed -n '/^agent_metadata_store_finish(/,/^}/p' \
-	"${store_source}")"
-if ! printf '%s\n' "${store_finish}" | awk '
-	/agent_metadata_txn_projection_require_idle\(\);/ {
-		guard_count++; if (!guard) guard = NR
-	}
-	/reload_owned != agent_metadata_reload_is_current\(\)/ && !owner {
-		owner = NR
-	}
-	/agent_file_persist_system\(\)/ && !persist { persist = NR }
-	/agent_metadata_reload_release\(\)/ && !release { release = NR }
-	END {
-		exit !(guard_count == 1 && guard < owner && owner < persist &&
-		       persist < release)
-	}'
-then
-	fail "metadata store finish must reject pending projection before persistence"
-fi
-
-for persist_function in agent_meta_persist_start_locked \
-	agent_meta_persist_step_locked; do
-	persist_body="$(sed -n "/^static int ${persist_function}(/,/^}/p" \
-		"${store_source}")"
-	if ! printf '%s\n' "${persist_body}" | awk '
-		/agent_metadata_txn_projection_require_idle\(\);/ {
-			guard_count++; if (!guard) guard = NR
-		}
-		/if \(agent_meta_persist.phase/ && !phase { phase = NR }
-		END { exit !(guard_count == 1 && guard < phase) }'
-	then
-		fail "${persist_function} must guard projection before phase work"
+for module in ${active_modules}; do
+	if sed -n '/^RETIRED_METADATA_C_SRCS :=/,/^C_SRCS :=/p; /^RETIRED_OBSERVE_C_SRCS :=/,/^C_SRCS :=/p' "${makefile}" | grep -q -F "\$K/${module}.c"; then
+		fail "active owner was placed in a retired source set: os/${module}.c"
 	fi
 done
 
-# Scope 拆除是只前进的跨所有者协议：BEGIN 扫描元数据，FILES 执行可恢复命名空间工作，
-# METADATA 轮询代际；每次发布均由不可变生命周期键保护。
-vfs_source="${ROOT_DIR}/os/vfs_security.c"
-fs_source="${ROOT_DIR}/os/fs.c"
-reclaim_begin="$(sed -n '/^int agent_scope_reclaim_begin(/,/^}/p' \
-	"${objects_source}")"
-reclaim_done="$(sed -n '/^int agent_scope_reclaim_metadata_done(/,/^}/p' \
-	"${objects_source}")"
-reclaim_advance="$(sed -n '/^vfs_scope_reclaim_advance(/,/^}/p' \
-	"${vfs_source}")"
-reclaim_driver="$(sed -n '/^static void vfs_scope_reclaim_complete(/,/^}/p' \
-	"${vfs_source}")"
-scope_insert="$(sed -n '/^vfs_scope_registry_insert_locked(/,/^}/p' \
-	"${vfs_source}")"
-scope_release="$(sed -n '/^static int vfs_scope_release(/,/^}/p' \
-	"${vfs_source}")"
-target_retire="$(sed -n '/^agent_file_scope_state_retire(/,/^}/p' \
-	"${store_source}")"
-target_done="$(sed -n '/^agent_metadata_store_scope_target_done(/,/^}/p' \
-	"${store_source}")"
-fs_reclaim="$(sed -n '/^int fs_reclaim_scope_files(/,/^}/p' \
-	"${fs_source}")"
+size_optimized_modules="$(sed -n 's/^AGENT_SIZE_OPTIMIZED_MODULES[[:space:]]*:=[[:space:]]*//p' "${makefile}")"
+[ "${size_optimized_modules}" = "agent_context_path agent_file_state agent_ipc agent_metadata agent_metadata_actions agent_metadata_catalog agent_metadata_directory agent_metadata_objects agent_metadata_query agent_observe_ledger" ] ||
+	fail "Agent size-optimization allowlist drifted"
+grep -q -F '$(AGENT_SIZE_OPTIMIZED_OBJS): private CFLAGS += -Os' "${makefile}" || fail "Agent size optimization is not target-local"
+[ "$(grep -c -E -- '(^|[[:space:]])-Os([[:space:]]|$)' "${makefile}")" -eq 1 ] ||
+	fail "size optimization escaped the reviewed cold owners"
 
-[ -n "${reclaim_begin}" ] && [ -n "${reclaim_done}" ] &&
-	[ -n "${reclaim_advance}" ] &&
-	[ -n "${reclaim_driver}" ] && [ -n "${scope_insert}" ] &&
-	[ -n "${scope_release}" ] && [ -n "${target_retire}" ] &&
-	[ -n "${target_done}" ] && [ -n "${fs_reclaim}" ] ||
-	fail "scope reclaim phases are missing"
-if grep -q -F 'uint inodes[NINODE]' "${fs_source}"; then
-	fail "scope reclaim must not retain a full inode snapshot"
-fi
-for invariant in \
-	'cursor->inode_cursor = 1' \
-	'cursor->inode_cursor >= sb.ninodes' \
-	'inode_get(ROOTDEV, cursor->inode_cursor)' \
-	'if (!claims_owner && !claims_label)' \
-	'if (!claims_owner ||'; do
-	printf '%s\n' "${fs_reclaim}" | grep -q -F "${invariant}" ||
-		fail "scope reclaim lost bounded direct inode scan: ${invariant}"
+active_paths=""
+for module in ${active_modules}; do
+	active_paths="${active_paths} ${ROOT_DIR}/os/${module}.c"
 done
-mark_count="$(printf '%s\n' "${reclaim_begin}" |
-	grep -c -F 'agent_metadata_store_mark_dirty(scope_id)' || true)"
-[ "${mark_count}" -eq 1 ] ||
-	fail "scope reclaim BEGIN must capture exactly one dirty generation"
-printf '%s\n' "${reclaim_begin}" |
-	grep -q -F '*metadata_target = agent_metadata_store_mark_dirty(scope_id)' ||
-	fail "scope reclaim BEGIN did not retain its dirty generation"
-if printf '%s\n' "${reclaim_begin}" |
-	grep -E 'fs_reclaim_scope_files|scope_target_done|scope_retire|persist(_system)?\(|sleep\(|yield\(' \
-	>"${TMP_FILE}"; then
-	fail "scope reclaim BEGIN crossed a later teardown phase"
+if grep -n -E '#include[[:space:]]+"agent_(durable_section|metadata_(journal|probe|recovery|scan|store)|observe_(capacity|recovery|store))' ${active_paths} >"${TMP_FILE}"; then
+	fail "active owner includes a retired persistence header"
 fi
 : >"${TMP_FILE}"
-printf '%s\n' "${reclaim_done}" |
-	grep -q -F 'agent_metadata_store_scope_target_done(scope_id, metadata_target)' ||
-	fail "scope reclaim METADATA must poll its captured generation"
-if printf '%s\n' "${reclaim_done}" |
-	grep -E 'mark_dirty|persist\(|persist_system|sleep\(|yield\(' \
-	>"${TMP_FILE}"; then
-	fail "scope reclaim METADATA may only poll its captured generation"
+if grep -n -E '\b(agent_obsstore|agent_metadata_store_|agent_durable_section_|agent_observe_capacity_|agent_metadata_scan_)[A-Za-z0-9_]*[[:space:]]*\(' ${active_paths} >"${TMP_FILE}"; then
+	fail "active owner calls a retired persistence implementation"
 fi
 : >"${TMP_FILE}"
-target_lock_count="$(printf '%s\n' "${target_retire}" |
-	grep -c -F 'intr_save()' || true)"
-target_unlock_count="$(printf '%s\n' "${target_retire}" |
-	grep -c -F 'intr_restore(enabled)' || true)"
-[ "${target_lock_count}" -eq 1 ] && [ "${target_unlock_count}" -eq 1 ] ||
-	fail "metadata target retirement must use one atomic snapshot"
-for invariant in \
-	'agent_meta_store_failed_closed' \
-	'agent_durable_section_scope_pending(scope_id)' \
-	'agent_file_writeback_generation_reached(' \
-	'state->replicated_generation, target' \
-	'state->dirty_generation != state->durable_generation' \
-	'state->dirty_generation != state->replicated_generation' \
-	'agent_file_writeback_scope_busy(scope_id)' \
-	'retired = target == 0'; do
-	printf '%s\n' "${target_retire}" | grep -q -F "${invariant}" ||
-		fail "metadata target retirement lost invariant: ${invariant}"
-done
-printf '%s\n' "${target_done}" | awk '
-	/agent_metadata_txn_lock\(0\)/ { lock_count++; if (!lock) lock = NR }
-	/agent_file_scope_state_retire\(scope_id, target\)/ {
-		retire_count++; if (!retire) retire = NR
-	}
-	/agent_metadata_txn_unlock\(\)/ { unlock_count++; if (!unlock) unlock = NR }
-	END {
-		exit !(lock_count == 1 && retire_count == 1 && unlock_count == 1 &&
-		       lock < retire && retire < unlock)
-	}' || fail "metadata target completion must check and retire under one transaction"
-printf '%s\n' "${reclaim_done}" |
-	grep -q -F 'agent_metadata_store_scope_target_done(scope_id, metadata_target)' ||
-	fail "scope reclaim RETIRE must settle metadata ownership"
-printf '%s\n' "${reclaim_advance}" |
-	grep -q -F 'workflow_lifecycle_key_equal(ref->lifecycle, lifecycle)' ||
-	fail "scope reclaim publication is not lifecycle-key guarded"
-printf '%s\n' "${reclaim_advance}" |
-	grep -q -F 'ref->reclaim_phase == expected' ||
-	fail "scope reclaim publication is not expected-phase guarded"
-printf '%s\n' "${reclaim_advance}" |
-	grep -q -F 'vfs_scope_find_locked(scope_id)' ||
-	fail "scope reclaim publication bypasses the indexed scope authority"
-printf '%s\n' "${reclaim_advance}" |
-	grep -q -F 'ref != 0 && ref->retiring' ||
-	fail "scope reclaim publication is not retiring-record guarded"
-printf '%s\n' "${reclaim_advance}" |
-	grep -q -F 'workflow_lifecycle_retiring(lifecycle)' ||
-	fail "scope reclaim publication is not trusted-lifecycle guarded"
-files_count="$(printf '%s\n' "${reclaim_driver}" |
-	grep -c -F 'fs_reclaim_scope_files(scope_id)' || true)"
-[ "${files_count}" -eq 1 ] ||
-	fail "scope reclaim FILES must have one resumable cursor driver"
-phase_reset_count="$(grep -c -F \
-	'reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN' "${vfs_source}" || true)"
-[ "${phase_reset_count}" -ge 2 ] ||
-	fail "scope create and release must reset the reclaim phase"
-printf '%s\n' "${scope_insert}" | awk '
-	/memset\(ref, 0, sizeof\(\*ref\)\)/ { clear = NR }
-	/ref->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN/ { phase = NR }
-	END { exit !(clear && phase && clear < phase) }
-	' || fail "scope insertion must clear recycled reclaim state"
-for reset in 'matched->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN' \
-	'matched->reclaim_metadata_target = 0'; do
-	printf '%s\n' "${scope_release}" | grep -q -F "${reset}" ||
-		fail "scope release lost reclaim reset: ${reset}"
-done
-if grep -R -n -E 'agent_scope_reclaim[[:space:]]*\(' \
-	"${ROOT_DIR}/os" >"${TMP_FILE}"; then
-	fail "legacy all-in-one scope reclaim entry point returned"
+
+background_source="${ROOT_DIR}/os/agent_background.c"
+grep -q -F 'static int agent_background_pending;' "${background_source}" ||
+	fail "neutral background latch is missing"
+grep -q -F '__atomic_store_n(&agent_background_pending, 1, __ATOMIC_RELEASE);' "${background_source}" || fail "background publication lost release ordering"
+grep -q -F '__atomic_exchange_n(&agent_background_pending, 0,' "${background_source}" || fail "background consumption lost atomic exchange"
+if grep -n -E 'agent_core_|agent_metadata_|agent_observe_|agent_ipc_' "${background_source}" >"${TMP_FILE}"; then
+	fail "neutral background latch acquired an owner dependency"
 fi
 : >"${TMP_FILE}"
-if ! "${PYTHON_BIN:-python3}" \
-	"${ROOT_DIR}/scripts/check-teardown-protocol.py" \
-	--root "${ROOT_DIR}"; then
-	fail "workflow teardown protocol validation failed"
+
+credit_source="${ROOT_DIR}/os/resource_controller.c"
+domain_source="${ROOT_DIR}/os/workflow_credit_domain.c"
+for token in 'resource_credit_acquire_vector_locked' 'resource_credit_reclaim_pressure_locked' 'resource_account_trim_locked'; do
+	grep -q -F "${token}" "${credit_source}" ||
+		fail "Credit Domain lost exact accounting primitive: ${token}"
+done
+for token in 'workflow_credit_domain_fence' 'workflow_credit_domain_switch'; do
+	grep -q -F "${token}" "${domain_source}" ||
+		fail "Credit Domain lost workflow operation: ${token}"
+done
+grep -q -F 'workflow_credit_domain_switch(' "${ROOT_DIR}/os/proc.c" ||
+	fail "scheduler dispatch no longer flushes cross-domain credit"
+
+ring_source="${ROOT_DIR}/os/agent_evidence_ring.c"
+for token in 'agent_evidence_reserve' 'AGENT_EVIDENCE_SLOT_BUSY' 'agent_evidence_seal(' 'sealed_ticket_highwater' 'kalloc_account_page('; do
+	grep -q -F "${token}" "${ring_source}" ||
+		fail "Evidence Ring lost required mechanism: ${token}"
+done
+if grep -n -E 'agent_(obsstore|durable_section|observe_capacity)_' "${ring_source}" >"${TMP_FILE}"; then
+	fail "Evidence Ring regained a disk/capacity dependency"
+fi
+: >"${TMP_FILE}"
+
+fence_source="${ROOT_DIR}/os/agent_workflow_fence.c"
+for token in 'agent_metadata_quiescence_fence_snapshot_current(' 'fs_deferred_reclaim_drain_current(' 'fs_epoch_commit(' 'workflow_credit_domain_fence(' 'agent_evidence_seal('; do
+	grep -q -F "${token}" "${fence_source}" ||
+		fail "workflow fence lost ordered subsystem cut: ${token}"
+done
+
+syscall_source="${ROOT_DIR}/os/syscall.c"
+recovery_case="$(sed -n '/case SYS_agent_observe_recovery:/,/break;/p' "${syscall_source}")"
+printf '%s\n' "${recovery_case}" | grep -q -F 'AGENT_STATUS_BAD_PARAM' ||
+	fail "retired observe recovery syscall is not fail-closed"
+if printf '%s\n' "${recovery_case}" | grep -q -F 'sys_agent_observe_recovery('; then
+	fail "retired observe recovery implementation remains reachable"
 fi
 
-facade_lines="$(wc -l <"${ROOT_DIR}/os/agent.c")"
-if [ "${facade_lines}" -gt 200 ]; then
-	fail "os/agent.c is no longer a thin facade (${facade_lines} lines)"
-fi
+for checker in check-agent-live-query-fs.py check-workflow-fence.py; do
+	[ -f "${ROOT_DIR}/scripts/${checker}" ] ||
+		fail "missing new architecture checker: scripts/${checker}"
+done
 
-if grep -n -E '#include[[:space:]]+\"agent[A-Za-z0-9_]*\.c\"' \
-	"${ROOT_DIR}"/os/agent*.c >"${TMP_FILE}"; then
-	fail "AgentOS modules must remain independent translation units"
-fi
-
-module_count="$(printf '%s\n' ${modules} | wc -l)"
-echo "[agent-module-check] facade: ${facade_lines} lines"
-echo "[agent-module-check] registered implementation units: ${module_count}"
-echo "[agent-module-check] private writable data exports: absent"
-echo "[agent-module-check] source inventory complete"
+echo "Agent module boundary check passed"

@@ -28,6 +28,73 @@ ABI_OFFSET(struct agent_workflow_lifecycle_info, resource_account_slot,
 	   lifecycle_info);
 ABI_OFFSET(struct agent_workflow_lifecycle_info, resource_account_generation,
 	   lifecycle_info);
+ABI_VALUE(AGENT_RUN_F_FENCE, agent_run_f_fence);
+ABI_VALUE(AGENT_WORKFLOW_FENCE_VERSION, workflow_fence_version);
+ABI_VALUE(AGENT_WORKFLOW_FENCE_RECEIPT_F_PARTIAL_COVERAGE,
+	  workflow_fence_receipt_f_partial_coverage);
+ABI_VALUE(AGENT_WORKFLOW_FENCE_RECEIPT_F_CREDIT_EXACT,
+	  workflow_fence_receipt_f_credit_exact);
+ABI_VALUE(AGENT_WORKFLOW_FENCE_RECEIPT_F_EVIDENCE_SEALED,
+	  workflow_fence_receipt_f_evidence_sealed);
+ABI_VALUE(AGENT_WORKFLOW_FENCE_RECEIPT_F_METADATA_VOLATILE,
+	  workflow_fence_receipt_f_metadata_volatile);
+ABI_VALUE(AGENT_WORKFLOW_FENCE_CHALLENGE_SIZE,
+	  workflow_fence_challenge_size);
+ABI_VALUE(AGENT_WORKFLOW_FENCE_ROOT_SIZE, workflow_fence_root_size);
+ABI_VALUE(AGENT_WORKFLOW_FENCE_RESOURCE_KINDS,
+	  workflow_fence_resource_kinds);
+ABI_RECORD(struct agent_workflow_fence_request, workflow_fence_request,
+	   version, request_id);
+ABI_OFFSET(struct agent_workflow_fence_request, struct_size,
+	   workflow_fence_request);
+ABI_OFFSET(struct agent_workflow_fence_request, flags,
+	   workflow_fence_request);
+ABI_OFFSET(struct agent_workflow_fence_request, reserved,
+	   workflow_fence_request);
+ABI_OFFSET(struct agent_workflow_fence_request, challenge,
+	   workflow_fence_request);
+ABI_RECORD(struct agent_workflow_credit_account_key,
+	   workflow_credit_account_key, slot, generation);
+ABI_OFFSET(struct agent_workflow_credit_account_key, reserved,
+	   workflow_credit_account_key);
+ABI_RECORD(struct agent_workflow_fence_receipt, workflow_fence_receipt,
+	   version, evidence_root);
+ABI_OFFSET(struct agent_workflow_fence_receipt, struct_size,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, status,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, flags,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, key,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, request_id,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, fence_sequence,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, metadata_generation,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, credit_epoch,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, evidence_first_sequence,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, evidence_last_sequence,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, evidence_event_count,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, evidence_dropped_success,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, resource_used,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, credit_exec_account,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, credit_storage_account,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, credit_digest,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, challenge,
+	   workflow_fence_receipt);
+ABI_OFFSET(struct agent_workflow_fence_receipt, previous_root,
+	   workflow_fence_receipt);
 ABI_RECORD(struct agent_op, op, version, payload);
 ABI_RECORD(struct agent_result, result, version, result);
 ABI_RECORD(struct agent_request, request, version, payload);
@@ -97,10 +164,33 @@ ABI_RECORD(struct agent_context_record, context_record, sequence, result);
 ABI_RECORD(struct agent_context_detail, context_detail, sequence, result);
 ABI_RECORD(struct agent_event, event, type, payload);
 ABI_RECORD(struct agent_file_meta, file_meta, used, update_mask);
+ABI_VALUE(AGENT_FILE_META_F_PERSIST, file_meta_f_persist);
+ABI_VALUE(AGENT_FILE_META_F_AUTOSCAN, file_meta_f_autoscan);
+ABI_VALUE(AGENT_FILE_META_F_UNSUPPORTED_MASK, file_meta_f_unsupported_mask);
 ABI_RECORD(struct agent_file_hit, file_hit, fid, fs_generation);
 ABI_RECORD(struct agent_file_query, file_query, flags, summary_contains);
+ABI_VALUE(AGENT_EVENT_FILE_QUERY, event_file_query);
+ABI_VALUE(AGENT_FILE_LIVE_WATCH_VERSION, file_live_watch_version);
+ABI_VALUE(AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED,
+	  file_live_watch_f_resync_required);
+ABI_VALUE(AGENT_FILE_LIVE_WATCH_F_ACK_RESYNC,
+	  file_live_watch_f_ack_resync);
+ABI_RECORD(struct agent_file_live_watch, file_live_watch, version, query);
+ABI_OFFSET(struct agent_file_live_watch, flags, file_live_watch);
+ABI_OFFSET(struct agent_file_live_watch, watch_id, file_live_watch);
+ABI_OFFSET(struct agent_file_live_watch, initial_generation, file_live_watch);
+ABI_OFFSET(struct agent_file_live_watch, catalog_generation, file_live_watch);
+ABI_OFFSET(struct agent_file_live_watch, resync_generation, file_live_watch);
 ABI_RECORD(struct agent_file_query_result, file_query_result, total_hits, hits);
 ABI_RECORD(struct agent_file_edit_state, file_edit_state, active, path);
+ABI_VALUE(AGENT_OBSERVE_RECOVERY_COMPAT_TOMBSTONE,
+	  observe_recovery_compat_tombstone);
+ABI_VALUE(AGENT_OBSERVE_RECOVERY_VERSION_V1, observe_recovery_version_v1);
+ABI_VALUE(AGENT_OBSERVE_RECOVERY_VERSION, observe_recovery_version);
+ABI_VALUE(AGENT_OBSERVE_RECOVERY_LIST, observe_recovery_list);
+ABI_VALUE(AGENT_OBSERVE_RECOVERY_READ, observe_recovery_read);
+ABI_VALUE(AGENT_OBSERVE_RECOVERY_REAP, observe_recovery_reap);
+ABI_VALUE(AGENT_OBSERVE_RECOVERY_STATUS, observe_recovery_status);
 ABI_RECORD(struct agent_observe_recovery_scope, observe_recovery_scope,
 	   scope_id, ledger_hash);
 ABI_RECORD(struct agent_observe_recovery_request, observe_recovery_request,

@@ -241,8 +241,20 @@ def check(root: Path) -> None:
     if fork.count("proc_vm_snapshot_begin(p)") != 1 or \
             fork.count("proc_vm_snapshot_end(p)") != 2:
         raise ContractError("fork snapshot window has an unbalanced exit path")
-    if fork.count("return-1;") != 2:
-        raise ContractError("fork has a failure exit outside snapshot settlement")
+    if fork.count("return-1;") != 3:
+        raise ContractError("fork has an unreviewed failure exit")
+    require_order(
+        fork,
+        (
+            "workflow_lifecycle_operation_enter(parent_lifecycle)",
+            "return-1;",
+            "proc_vm_snapshot_begin(p)",
+            "workflow_lifecycle_operation_leave(parent_lifecycle)",
+            "return-1;",
+            "fd_spawn_snapshot_take(p,issuer,authority_boundary,&fds)",
+        ),
+        "fork lifecycle admission is not settled before the parent snapshot",
+    )
     policy = function(source, "syscall_policy_base")
     require(
         policy,

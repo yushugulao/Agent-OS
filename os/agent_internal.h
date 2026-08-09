@@ -92,6 +92,8 @@ int agent_ipc_watch_set(struct proc *, int, char *);
 int agent_ipc_deliver_pid(int, struct proc *, int, uint64, uint64, char *,
 			  int, int *);
 int agent_ipc_deliver_watchers(struct proc *, int, uint64, uint64, char *);
+int agent_ipc_deliver_live_event(struct proc *, struct proc *, int, uint64,
+				 uint64, char *, int);
 int agent_ipc_mailbox_take(struct proc *, int *, char *, int);
 int agent_ipc_heartbeat_configure(struct proc *, uint64, uint64 *);
 void agent_ipc_tick_proc(struct proc *, uint64);

@@ -89,6 +89,9 @@ if __package__:
     )
     from .functional_acceptance_compile_contract import (
         CONTRACT_VERSION as FUNCTIONAL_COMPILE_CONTRACT_VERSION,
+        INACTIVE_KERNEL_C_SOURCE_PATHS,
+        KERNEL_TRANSLATION_UNIT_PATHS,
+        RETIRED_KERNEL_C_SOURCE_PATHS,
         validate_functional_compile_sources,
     )
 else:
@@ -132,6 +135,9 @@ else:
     )
     from functional_acceptance_compile_contract import (
         CONTRACT_VERSION as FUNCTIONAL_COMPILE_CONTRACT_VERSION,
+        INACTIVE_KERNEL_C_SOURCE_PATHS,
+        KERNEL_TRANSLATION_UNIT_PATHS,
+        RETIRED_KERNEL_C_SOURCE_PATHS,
         validate_functional_compile_sources,
     )
 

@@ -3743,14 +3743,10 @@ static int bio_cache_assign(struct buf *b, uint owner, int stable,
 			    &request, 1, flags) < 0)
 			return 0;
 	} else {
-		struct resource_reservation reservation;
-
-		if (resource_reserve_many_flags(
+		if (resource_acquire_many_flags(
 			    target->principal, target_class,
-			    &request, 1, flags, &reservation) < 0)
+			    &request, 1, flags) < 0)
 			return 0;
-		if (resource_reservation_commit(&reservation) < 0)
-			panic("buffer-cache commit");
 	}
 	b->cache_owner = owner;
 	b->cache_principal = target->principal;

@@ -32,7 +32,7 @@ static void check(int ok, const char *msg)
 	}
 }
 
-/* 持久化队列繁忙是可恢复背压；调用者有界让出 CPU 后重试。 */
+/* 内存 catalog 事务争用是短暂背压；调用者有界让出 CPU 后重试。 */
 static int metadata_set_bounded(struct agent_file_meta *meta)
 {
 	int status = AGENT_STATUS_RETRY;
@@ -79,7 +79,7 @@ static void set_meta(const char *physical, const char *status, uint64 mask)
 		strcpy(fs_meta.status, status);
 	strcpy(fs_meta.summary, "fs metadata test file");
 	fs_meta.dependency_mask = agent_dependency_label_bit("ready");
-	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	fs_meta.flags = 0;
 	fs_meta.update_mask = mask;
 	check(metadata_set_bounded(&fs_meta) == 0, "meta set");
 }
@@ -162,9 +162,14 @@ static void check_dirent_name_boundary(void)
 	check(fd >= 0 && read(fd, body, 2) == 2 && strcmp(body, "AB") == 0,
 	      "same prefix reopens one legacy alias");
 	check(close(fd) == 0, "close long-name reopen");
-	query_physical(canonical);
-	check(agent_file_meta_init() == AGENT_STATUS_OK,
-	      "canonical metadata reload");
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 499;
+	strcpy(fs_meta.physical_name, canonical);
+	strcpy(fs_meta.logical_path, "/agentfs/name-boundary");
+	strcpy(fs_meta.status, "explicit");
+	fs_meta.flags = 0;
+	check(metadata_set_bounded(&fs_meta) == AGENT_STATUS_OK,
+	      "register canonical metadata explicitly");
 	query_physical(canonical);
 	check(unlink(same_alias) == 0, "remove canonical long-name alias");
 	memset(&fs_query, 0, sizeof(fs_query));
@@ -173,36 +178,33 @@ static void check_dirent_name_boundary(void)
 	memset(&fs_result, 0, sizeof(fs_result));
 	check(agent_file_query(&fs_query, &fs_result) == 0,
 	      "canonical metadata delete");
-	check(agent_file_meta_init() == AGENT_STATUS_OK,
-	      "metadata reload after canonical delete");
-	memset(&fs_result, 0, sizeof(fs_result));
-	check(agent_file_query(&fs_query, &fs_result) == 0,
-	      "canonical metadata delete remains durable");
-	printf("agentfs_ucore: dirent_name_bound=14 legacy_alias=1 metadata_canonical=1\n");
+	printf("agentfs_ucore: dirent_name_bound=14 legacy_alias=1 "
+	       "explicit_metadata_canonical=1\n");
 }
 
 static void check_preload_create_query(void)
 {
 	const char *name = PRELOAD_QUERY_FILE;
-	int found = 0;
 
-	for (int i = 0; i < 400; i++) {
-		memset(&fs_query, 0, sizeof(fs_query));
-		fs_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-		strcpy(fs_query.physical_name, name);
-		memset(&fs_result, 0, sizeof(fs_result));
-		if (agent_file_query(&fs_query, &fs_result) == 1) {
-			found = 1;
-			break;
-		}
-		sleep(10);
-	}
-	check(found && fs_result.returned == 1,
-	      "preload create becomes queryable");
+	memset(&fs_query, 0, sizeof(fs_query));
+	fs_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(fs_query.physical_name, name);
+	memset(&fs_result, 0, sizeof(fs_result));
+	check(agent_file_query(&fs_query, &fs_result) == 0,
+	      "ordinary preload is not auto-cataloged");
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 498;
+	strcpy(fs_meta.physical_name, name);
+	strcpy(fs_meta.logical_path, "/agentfs/preload");
+	strcpy(fs_meta.status, "explicit");
+	fs_meta.flags = 0;
+	check(metadata_set_bounded(&fs_meta) == AGENT_STATUS_OK,
+	      "explicitly register preload");
+	query_physical(name);
 	check(fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0,
-	      "preload create enters bounded background scan");
+	      "explicit preload binds inode identity");
 	check(unlink(name) == 0, "remove preload create probe");
-	printf("agentfs_ucore: preload_create_query=1\n");
+	printf("agentfs_ucore: explicit_create_query=1 ordinary_unindexed=1\n");
 }
 
 static void check_partial_update_binding(void)
@@ -212,13 +214,18 @@ static void check_partial_update_binding(void)
 	memset(&fs_meta, 0, sizeof(fs_meta));
 	fs_meta.fid = 500;
 	strcpy(fs_meta.physical_name, name);
+	strcpy(fs_meta.logical_path, "/agentfs/partial");
+	strcpy(fs_meta.status, "initial");
+	fs_meta.flags = 0;
+	check(metadata_set_bounded(&fs_meta) == 0,
+	      "explicit registration binds existing inode");
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 500;
 	strcpy(fs_meta.status, "partial");
-	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	fs_meta.flags = 0;
 	fs_meta.update_mask = AGENT_FILE_META_UPDATE_STATUS;
 	check(metadata_set_bounded(&fs_meta) == 0,
-	      "partial update binds existing inode");
-	check(agent_file_meta_init() == 0,
-	      "reload partial update binding");
+	      "partial update targets explicit member");
 	query_physical(name);
 	check(strcmp(fs_result.hits[0].status, "partial") == 0 &&
 	      fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0,
@@ -243,7 +250,7 @@ static void set_demo_meta(int fid, const char *physical, const char *stage,
 	strcpy(fs_meta.status, status);
 	strcpy(fs_meta.summary, summary);
 	fs_meta.dependency_mask = deps;
-	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	fs_meta.flags = 0;
 	check(metadata_set_bounded(&fs_meta) == 0, "demo meta set");
 }
 
@@ -278,10 +285,26 @@ static void check_stale_identity_guard(void)
 	const char *name = "fsstale";
 
 	make_file(name);
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 508;
+	strcpy(fs_meta.physical_name, name);
+	strcpy(fs_meta.logical_path, "/agentfs/stale");
+	strcpy(fs_meta.status, "first");
+	fs_meta.flags = 0;
+	check(metadata_set_bounded(&fs_meta) == AGENT_STATUS_OK,
+	      "register stale identity source explicitly");
 	query_physical(name);
 	stale_before = fs_result.hits[0];
 	check(unlink(name) == 0, "delete stale identity source");
 	make_file(name);
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 508;
+	strcpy(fs_meta.physical_name, name);
+	strcpy(fs_meta.logical_path, "/agentfs/stale");
+	strcpy(fs_meta.status, "replacement");
+	fs_meta.flags = 0;
+	check(metadata_set_bounded(&fs_meta) == AGENT_STATUS_OK,
+	      "register stale identity replacement explicitly");
 	query_physical(name);
 	stale_after = fs_result.hits[0];
 	check(stale_before.dev != stale_after.dev ||
@@ -305,7 +328,7 @@ static void check_stale_identity_guard(void)
 	printf("agentfs_ucore: stale_identity_guard=1\n");
 }
 
-static void check_same_name_recreate_persist(void)
+static void check_same_name_recreate_live(void)
 {
 	const char *name = "fsrebind";
 	struct agent_file_hit before;
@@ -316,8 +339,8 @@ static void check_same_name_recreate_persist(void)
 	strcpy(fs_meta.physical_name, name);
 	strcpy(fs_meta.logical_path, "/agentfs/rebind");
 	strcpy(fs_meta.status, "old");
-	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
-	check(metadata_set_bounded(&fs_meta) == 0, "persist rebind source");
+	fs_meta.flags = 0;
+	check(metadata_set_bounded(&fs_meta) == 0, "bind live rebind source");
 	query_physical(name);
 	before = fs_result.hits[0];
 	check(unlink(name) == 0, "unlink rebind source");
@@ -325,23 +348,22 @@ static void check_same_name_recreate_persist(void)
 	memset(&fs_meta, 0, sizeof(fs_meta));
 	fs_meta.fid = 509;
 	strcpy(fs_meta.physical_name, name);
+	strcpy(fs_meta.logical_path, "/agentfs/rebind");
 	strcpy(fs_meta.status, "rebuilt");
-	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
-	fs_meta.update_mask = AGENT_FILE_META_UPDATE_STATUS;
-	check(metadata_set_bounded(&fs_meta) == 0, "persist recreated pathname");
-	check(agent_file_meta_init() == 0, "reload recreated pathname");
+	fs_meta.flags = 0;
+	check(metadata_set_bounded(&fs_meta) == 0, "bind recreated pathname");
 	query_physical(name);
 	check((before.dev != fs_result.hits[0].dev ||
 	       before.inum != fs_result.hits[0].inum ||
 	       before.incarnation != fs_result.hits[0].incarnation) &&
 	      strcmp(fs_result.hits[0].status, "rebuilt") == 0,
-	      "recreated pathname has one durable fresh identity");
+	      "recreated pathname has one live fresh identity");
 	memset(&fs_meta, 0, sizeof(fs_meta));
 	fs_meta.fid = 509;
 	fs_meta.flags = AGENT_FILE_META_F_DELETE;
 	check(metadata_set_bounded(&fs_meta) == 0, "delete rebind metadata");
 	check(unlink(name) == 0, "delete rebind file");
-	printf("agentfs_ucore: same_name_recreate_persist=1\n");
+	printf("agentfs_ucore: same_name_recreate_live=1\n");
 }
 
 static void set_scoped_meta(const char *run_id, int fid,
@@ -361,7 +383,7 @@ static void set_scoped_meta(const char *run_id, int fid,
 	strcpy(fs_meta.status, "pending");
 	strcpy(fs_meta.summary, "scoped dependency fixture");
 	fs_meta.dependency_mask = deps;
-	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	fs_meta.flags = 0;
 	check(metadata_set_bounded(&fs_meta) == 0, "scoped meta set");
 }
 
@@ -504,11 +526,11 @@ static void check_index_scan_gap(void)
 	check(scan.index_bucket == -1, "scan bucket");
 	check((scan.plan_reason & AGENT_FILE_QUERY_REASON_FORCED_SCAN) != 0,
 	      "scan reason");
-	check(scan.scanned_records == AGENT_FILE_META_MAX,
-	      "forced scan accounts every catalog slot");
-	check(scan.candidate_records > 0 &&
-	      scan.candidate_records < scan.scanned_records,
-	      "scan excludes empty and invisible slots from candidates");
+	check(scan.scanned_records > 0 &&
+	      scan.scanned_records <= AGENT_FILE_META_MAX,
+	      "forced scan accounts visible live records");
+	check(scan.candidate_records == scan.scanned_records,
+	      "scan traverses only visible live records");
 	fs_query.flags = AGENT_FILE_QUERY_USE_INDEX;
 	check(agent_file_query(&fs_query, &index) >= 1, "bulk index query");
 	check(index.plan == AGENT_FILE_QUERY_PLAN_STATUS_INDEX,
@@ -961,7 +983,9 @@ static __attribute__((noinline)) void run_agent(void)
 	struct digest_counters digest_before;
 	struct digest_counters digest_after;
 
-	/* 在第一次显式 metadata 操作前创建两个探针。 */
+	check(agent_file_meta_init() == AGENT_STATUS_OK,
+	      "initialize live metadata catalog");
+	/* 在第一次显式 metadata 写入前创建两个普通文件探针。 */
 	make_file(PRELOAD_QUERY_FILE);
 	make_file(PRELOAD_PARTIAL_FILE);
 	check_partial_update_binding();
@@ -969,7 +993,7 @@ static __attribute__((noinline)) void run_agent(void)
 	check_dirent_name_boundary();
 	seed_demo_metadata();
 	check_selector_consistency();
-	check_same_name_recreate_persist();
+	check_same_name_recreate_live();
 	check_stale_identity_guard();
 	seed_scoped_dependency_metadata();
 	seed_user_dependency_metadata();
@@ -1053,12 +1077,11 @@ static __attribute__((noinline)) void run_agent(void)
 	printf("agentfs_ucore: unbind_rebind_digest=1 same_size=1 misses=%d\n",
 	       (int)(digest_after.misses - digest_before.misses));
 
-	check(agent_file_meta_init() == 0, "meta reload");
 	check(query_stage("issue4", "RUN-FS", "ingest", "ok", &fs_result) >= 1,
-	      "reload keeps custom query");
+	      "live catalog keeps custom query");
 	check(strcmp(fs_result.hits[0].physical_name, name) == 0,
-	      "reload keeps physical name");
-	printf("agentfs_ucore: .agentmeta_reload=1\n");
+	      "live catalog keeps physical name");
+	printf("agentfs_ucore: live_catalog_volatile=1\n");
 	check(query_stage("issue4", "RUN-FS", "ingest", "ok",
 			  &fs_result) >= 1 && fs_result.used_index,
 	      "repeated query executes isolated index");

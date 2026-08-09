@@ -25,7 +25,7 @@ from evidence_delivery_contract import (
 )
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 KIND = "agentos-contest-showcase"
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[0-9a-f]{16}$")
@@ -114,13 +114,9 @@ FENCE_PERFORMANCE_COUNTERS = (
     "virtio_read_batch_calls", "virtio_batched_read_requests",
     "overwrite_prereads_skipped",
 )
-FENCE_METADATA_FIELDS = (
-    "metadata_dirty", "metadata_durable", "metadata_requests",
-    "metadata_coalesced", "metadata_commits", "metadata_pending",
-)
 FENCE_COUNTER_PATTERN = " ".join(
     rf"{name}=({UINT})"
-    for name in FENCE_PERFORMANCE_COUNTERS + FENCE_METADATA_FIELDS
+    for name in FENCE_PERFORMANCE_COUNTERS
 )
 FENCE_PATTERN = re.compile(
     rf"^agentos:demo schema=2 nonce=({UINT}) kind=fence "
@@ -165,8 +161,6 @@ MECHANISM_COUNTERS = (
     "virtio_batched_write_requests", "virtio_indirect_write_batch_calls",
     "virtio_read_batch_calls", "virtio_batched_read_requests",
     "overwrite_prereads_skipped",
-    "metadata_dirty", "metadata_durable", "metadata_requests",
-    "metadata_coalesced", "metadata_commits",
 )
 MECHANISM_PAIR_PATTERN = " ".join(
     rf"before_{name}=({UINT}) after_{name}=({UINT})"
@@ -179,8 +173,7 @@ MECHANISM_PATTERN = re.compile(
     rf"before_tick=({UINT}) after_tick=({UINT}) "
     rf"observer_lifecycle_id=({UINT}) "
     rf"observer_lifecycle_generation=({UINT}) counter_scope=(global) "
-    rf"{MECHANISM_PAIR_PATTERN} "
-    rf"before_metadata_pending=({UINT}) after_metadata_pending=({UINT})$"
+    rf"{MECHANISM_PAIR_PATTERN}$"
 )
 
 LANE_EFFECT_SPECS = (
@@ -208,17 +201,12 @@ MECHANISM_EFFECT_SPECS = (
     ("virtio_read_batch_calls", "VirtIO 读批次", "batch"),
     ("virtio_batched_read_requests", "批量读请求", "request"),
     ("overwrite_prereads_skipped", "覆盖写跳过预读", "block"),
-    ("metadata_requests", "Metadata 请求", "request"),
-    ("metadata_coalesced", "Metadata 合并请求", "request"),
-    ("metadata_commits", "Metadata 提交", "commit"),
     ("buffers_per_epoch", "每 Epoch buffer", "buffer/commit"),
     ("directory_entries_per_probe", "每目录块检查项", "entry/block"),
     ("virtio_requests_per_notification", "每次通知请求", "request/notify"),
     ("virtio_write_requests_per_batch", "每写批次请求", "request/batch"),
     ("virtio_read_requests_per_batch", "每读批次请求", "request/batch"),
     ("virtio_batched_request_share_pct", "VirtIO 批量覆盖", "%"),
-    ("metadata_coalescing_rate_pct", "Metadata 合并率", "%"),
-    ("metadata_requests_per_commit", "每次 Metadata 提交请求", "request/commit"),
 )
 
 COUNTER_SCOPES = {
@@ -452,9 +440,7 @@ def _parse_fence(match: re.Match[str]) -> dict[str, Any]:
         ),
         "counter_scope": match.group(12),
     }
-    for offset, name in enumerate(
-        FENCE_PERFORMANCE_COUNTERS + FENCE_METADATA_FIELDS, 13
-    ):
+    for offset, name in enumerate(FENCE_PERFORMANCE_COUNTERS, 13):
         result[name] = _uint(match.group(offset), f"fence {name}")
     return result
 
@@ -530,14 +516,6 @@ def _parse_mechanism(match: re.Match[str]) -> dict[str, Any]:
             match.group(8), "mechanism observer lifecycle generation"
         ),
         "counter_scope": match.group(9),
-        "before_metadata_pending": _uint(
-            match.group(10 + len(MECHANISM_COUNTERS) * 2),
-            "mechanism before metadata pending",
-        ),
-        "after_metadata_pending": _uint(
-            match.group(11 + len(MECHANISM_COUNTERS) * 2),
-            "mechanism after metadata pending",
-        ),
         "raw_pair": {"before": before, "after": after},
     }
     result.update({name: after[name] - before[name] for name in MECHANISM_COUNTERS})
@@ -558,8 +536,6 @@ def _parse_mechanism(match: re.Match[str]) -> dict[str, Any]:
         > result["virtio_write_batch_calls"]
     ):
         raise ContestDemoError("VirtIO batch counters are inconsistent")
-    if result["metadata_coalesced"] > result["metadata_requests"]:
-        raise ContestDemoError("metadata coalescing exceeds requests")
     if result["directory_block_probes"] == 0 and result[
         "directory_entries_examined"
     ] != 0:
@@ -598,26 +574,10 @@ def _mechanism_derived(item: dict[str, Any]) -> dict[str, float | None]:
         "virtio_batched_request_share_pct": None
         if item["virtio_submitted_requests"] == 0
         else round(100.0 * batched / item["virtio_submitted_requests"], 3),
-        "metadata_coalescing_rate_pct": None
-        if item["metadata_requests"] == 0
-        else round(
-            100.0 * item["metadata_coalesced"] / item["metadata_requests"], 3
-        ),
-        "metadata_requests_per_commit": _ratio(
-            item["metadata_requests"], item["metadata_commits"]
-        ),
     }
 
 
 _STORAGE_COUNTERS = FENCE_PERFORMANCE_COUNTERS
-
-_METADATA_COUNTERS = (
-    "metadata_dirty",
-    "metadata_durable",
-    "metadata_requests",
-    "metadata_coalesced",
-    "metadata_commits",
-)
 
 
 def _verify_fence_stream(
@@ -640,11 +600,7 @@ def _verify_fence_stream(
             or row["counter_scope"] != "global"
         ):
             raise ContestDemoError(f"{mode} quiescence fence did not converge")
-        if (
-            row["observer_pid"] == 0
-            or row["metadata_pending"] != 0
-            or row["metadata_dirty"] != row["metadata_durable"]
-        ):
+        if row["observer_pid"] == 0:
             raise ContestDemoError(f"{mode} fence is not fully settled")
         lifecycle = (
             row["observer_lifecycle_id"],
@@ -666,7 +622,7 @@ def _verify_fence_stream(
                 != previous["observer_lifecycle_generation"]
                 or any(
                     row[name] < previous[name]
-                    for name in _STORAGE_COUNTERS + _METADATA_COUNTERS
+                    for name in _STORAGE_COUNTERS
                 )
             ):
                 raise ContestDemoError(f"{mode} fence counters are not monotonic")
@@ -695,18 +651,13 @@ def _check_mechanism_interval(
         or mechanism["after_tick"] != after["observer_tick"]
     ):
         raise ContestDemoError(f"{label} mechanism observer does not match its fences")
-    for name in _STORAGE_COUNTERS + _METADATA_COUNTERS:
+    for name in _STORAGE_COUNTERS:
         if (
             mechanism["raw_pair"]["before"][name] != before[name]
             or mechanism["raw_pair"]["after"][name] != after[name]
             or mechanism[name] != after[name] - before[name]
         ):
             raise ContestDemoError(f"{label} mechanism does not match its fences")
-    if (
-        mechanism["before_metadata_pending"] != before["metadata_pending"]
-        or mechanism["after_metadata_pending"] != after["metadata_pending"]
-    ):
-        raise ContestDemoError(f"{label} mechanism pending state differs from fences")
 
 
 def _check_core_mechanism(
@@ -731,19 +682,12 @@ def _check_core_mechanism(
         or mechanism["after_tick"] > settled["observer_tick"]
     ):
         raise ContestDemoError(f"{label} mechanism observer is outside core interval")
-    for name in _STORAGE_COUNTERS + _METADATA_COUNTERS:
+    for name in _STORAGE_COUNTERS:
         if (
             mechanism["raw_pair"]["before"][name] != core_start[name]
             or mechanism["raw_pair"]["after"][name] > settled[name]
         ):
             raise ContestDemoError(f"{label} mechanism is outside core interval")
-    if (
-        mechanism["before_metadata_pending"] != core_start["metadata_pending"]
-        or mechanism["after_metadata_pending"] != 0
-        or mechanism["raw_pair"]["after"]["metadata_dirty"]
-        != mechanism["raw_pair"]["after"]["metadata_durable"]
-    ):
-        raise ContestDemoError(f"{label} core result is not durably settled")
 
 
 def verify_showcase(
@@ -1283,7 +1227,6 @@ def campaign_aggregates(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "buffers_per_epoch", "directory_entries_per_probe",
         "virtio_requests_per_notification", "virtio_write_requests_per_batch",
         "virtio_read_requests_per_batch", "virtio_batched_request_share_pct",
-        "metadata_coalescing_rate_pct", "metadata_requests_per_commit",
     )
     mechanisms: dict[str, dict[str, dict[str, Any]]] = {}
     for mode, scopes in samples[0]["mechanisms"].items():
@@ -1642,8 +1585,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "数值为 Guest ABI v2 快照的多启动中位数；除 workload_syscalls "
             "绑定 observer_process 外，其余内核计数为 global；notify/request 覆盖读写请求。",
             "",
-            "| 模式 / 区间 | Workload syscall | 目录 block / entry | Epoch / buffer | 物理读 / 写 / flush | 跳过预读 | VirtIO notify / request | 读 batch / request | 写 batch / request / indirect | Metadata request / merged / commit | COW 共享 / 复制 / 提升 | Exec 命中 / 未命中 / 共享 / 驱逐 |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| 模式 / 区间 | Workload syscall | 目录 block / entry | Epoch / buffer | 物理读 / 写 / flush | 跳过预读 | VirtIO notify / request | 读 batch / request | 写 batch / request / indirect | COW 共享 / 复制 / 提升 | Exec 命中 / 未命中 / 共享 / 驱逐 |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         )
     )
     for mode, scope in (
@@ -1654,7 +1597,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         item = mechanisms[mode][scope]
         lines.append(
             "| {} / {} | {} | {} / {} | {} / {} | {} / {} / {} | {} | {} / {} | "
-            "{} / {} | {} / {} / {} | {} / {} / {} | {} / {} / {} | {} / {} / {} / {} |".format(
+            "{} / {} | {} / {} / {} | {} / {} / {} | {} / {} / {} / {} |".format(
                 mode, scope,
                 item["workload_syscalls"],
                 item["directory_block_probes"], item["directory_entries_examined"],
@@ -1665,8 +1608,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 item["virtio_read_batch_calls"], item["virtio_batched_read_requests"],
                 item["virtio_write_batch_calls"], item["virtio_batched_write_requests"],
                 item["virtio_indirect_write_batch_calls"],
-                item["metadata_requests"], item["metadata_coalesced"],
-                item["metadata_commits"], item["cow_shared_pages"],
+                item["cow_shared_pages"],
                 item["cow_copied_pages"], item["cow_fault_promotions"],
                 item["exec_cache_hits"], item["exec_cache_misses"],
                 item["exec_cache_shared_pages"], item["exec_cache_evictions"],
@@ -1677,8 +1619,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## 8 boot 原始配对",
             "",
-            "| Boot | 顺序 | Compat core (us) | Native core (us) | Native - Compat (us) | Compat / Native | 目录 probes C/N | VirtIO notify C/N | 批量读 request C/N | 物理读 C/N | 跳过预读 C/N | Metadata merged C/N |",
-            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Boot | 顺序 | Compat core (us) | Native core (us) | Native - Compat (us) | Compat / Native | 目录 probes C/N | VirtIO notify C/N | 批量读 request C/N | 物理读 C/N | 跳过预读 C/N |",
+            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         )
     )
     for sample in report["samples"]:
@@ -1688,7 +1630,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         native_mechanism = sample["mechanisms"]["native"]["end_to_end"]
         lines.append(
             "| {} | {} | {} | {} | {:+d} | {:.2f}x | {} / {} | {} / {} | "
-            "{} / {} | {} / {} | {} / {} | {} / {} |".format(
+            "{} / {} | {} / {} | {} / {} |".format(
                 sample["sample"]["id"],
                 sample["sample"]["order"].replace("_then_", " -> "),
                 compat["core_duration_us"], native["core_duration_us"],
@@ -1704,8 +1646,6 @@ def render_markdown(report: dict[str, Any]) -> str:
                 native_mechanism["physical_reads"],
                 compat_mechanism["overwrite_prereads_skipped"],
                 native_mechanism["overwrite_prereads_skipped"],
-                compat_mechanism["metadata_coalesced"],
-                native_mechanism["metadata_coalesced"],
             )
         )
     lines.extend(
@@ -1766,7 +1706,7 @@ def render_html(report: dict[str, Any]) -> str:
     mechanism_rows = "".join(
             "<tr><th>{}</th><td>{}</td><td>{} / {}</td><td>{} / {}</td>"
             "<td>{} / {} / {}</td><td>{}</td><td>{} / {}</td><td>{} / {}</td>"
-            "<td>{} / {} / {}</td><td>{} / {} / {} ({})</td>"
+            "<td>{} / {} / {}</td>"
             "<td>{} / {} / {}</td><td>{} / {} / {} / {}</td></tr>".format(
                 _h(f"{mode} / {scope}"),
                 _h(item["workload_syscalls"]),
@@ -1785,10 +1725,6 @@ def render_html(report: dict[str, Any]) -> str:
                 _h(item["virtio_write_batch_calls"]),
                 _h(item["virtio_batched_write_requests"]),
                 _h(item["virtio_indirect_write_batch_calls"]),
-                _h(item["metadata_requests"]),
-                _h(item["metadata_coalesced"]),
-                _h(item["metadata_commits"]),
-                _h(_fmt_value(item["metadata_coalescing_rate_pct"], "%")),
                 _h(item["cow_shared_pages"]),
                 _h(item["cow_copied_pages"]),
                 _h(item["cow_fault_promotions"]),
@@ -1810,8 +1746,7 @@ def render_html(report: dict[str, Any]) -> str:
     raw_rows = "".join(
         "<tr><th>{}</th><td>{}</td><td>{}</td><td>{}</td><td>{:+d} us</td>"
         "<td>{:.2f}x</td><td>{} / {}</td><td>{} / {}</td>"
-        "<td>{} / {}</td><td>{} / {}</td><td>{} / {}</td>"
-        "<td>{} / {}</td></tr>".format(
+        "<td>{} / {}</td><td>{} / {}</td><td>{} / {}</td></tr>".format(
             _h(sample["sample"]["id"]),
             _h(sample["sample"]["order"].replace("_then_", " → ")),
             _h(sample["comparison"]["lanes"]["compat"]["core_duration_us"]),
@@ -1830,8 +1765,6 @@ def render_html(report: dict[str, Any]) -> str:
             _h(sample["mechanisms"]["native"]["end_to_end"]["physical_reads"]),
             _h(sample["mechanisms"]["compat"]["end_to_end"]["overwrite_prereads_skipped"]),
             _h(sample["mechanisms"]["native"]["end_to_end"]["overwrite_prereads_skipped"]),
-            _h(sample["mechanisms"]["compat"]["end_to_end"]["metadata_coalesced"]),
-            _h(sample["mechanisms"]["native"]["end_to_end"]["metadata_coalesced"]),
         )
         for sample in report["samples"]
     )
@@ -1857,7 +1790,7 @@ def render_html(report: dict[str, Any]) -> str:
 <div class="metric"><span>物理读 / 写 / Flush p50</span><strong>{_h(compat_e2e['physical_reads'])}/{_h(compat_e2e['physical_writes'])}/{_h(compat_e2e['durable_flushes'])} → {_h(native_e2e['physical_reads'])}/{_h(native_e2e['physical_writes'])}/{_h(native_e2e['durable_flushes'])}</strong><small>覆盖写跳过预读 {_h(compat_e2e['overwrite_prereads_skipped'])} → {_h(native_e2e['overwrite_prereads_skipped'])}</small></div>
 <div class="metric"><span>VirtIO notify / request p50</span><strong>{_h(compat_e2e['virtio_notifications'])}/{_h(compat_e2e['virtio_submitted_requests'])} → {_h(native_e2e['virtio_notifications'])}/{_h(native_e2e['virtio_submitted_requests'])}</strong><small>混合读写 I/O</small></div>
 <div class="metric"><span>VirtIO 读批量 p50</span><strong>{_h(compat_e2e['virtio_read_batch_calls'])}/{_h(compat_e2e['virtio_batched_read_requests'])} → {_h(native_e2e['virtio_read_batch_calls'])}/{_h(native_e2e['virtio_batched_read_requests'])}</strong><small>batch / request</small></div>
-<div class="metric"><span>Metadata 合并率 p50</span><strong>{_h(_fmt_value(compat_e2e['metadata_coalescing_rate_pct'], '%'))} → {_h(_fmt_value(native_e2e['metadata_coalescing_rate_pct'], '%'))}</strong><small>{_h(compat_e2e['metadata_requests'])} → {_h(native_e2e['metadata_requests'])} requests</small></div>
+<div class="metric"><span>FS Epoch 提交 / 暂存 p50</span><strong>{_h(compat_e2e['epoch_commits'])}/{_h(compat_e2e['epoch_buffers_staged'])} → {_h(native_e2e['epoch_commits'])}/{_h(native_e2e['epoch_buffers_staged'])}</strong><small>commit / buffer</small></div>
 <div class="metric"><span>VirtIO 写批量 p50</span><strong>{_h(compat_e2e['virtio_write_batch_calls'])}/{_h(compat_e2e['virtio_batched_write_requests'])} → {_h(native_e2e['virtio_write_batch_calls'])}/{_h(native_e2e['virtio_batched_write_requests'])}</strong><small>间接描述符批次 {_h(compat_e2e['virtio_indirect_write_batch_calls'])} → {_h(native_e2e['virtio_indirect_write_batch_calls'])}</small></div>
 <div class="metric"><span>COW probe p50</span><strong>{_h(probe['cow_shared_pages'])} / {_h(probe['cow_copied_pages'])}</strong><small>共享 / 复制，提升 {_h(probe['cow_fault_promotions'])}</small></div>
 <div class="metric"><span>Exec RX probe p50</span><strong>{_h(probe['exec_cache_hits'])} / {_h(probe['exec_cache_misses'])}</strong><small>命中 / 未命中，共享 {_h(probe['exec_cache_shared_pages'])}</small></div>
@@ -1865,8 +1798,8 @@ def render_html(report: dict[str, Any]) -> str:
 <section class="section"><div class="section-head"><h2>同内核配对效果</h2><p>绝对值、差值、比率和 95% 配对 t 区间</p></div><div class="table"><table><thead><tr><th>指标</th><th>单位</th><th>计数口径</th><th>Compat p50</th><th>Native p50</th><th>Native - Compat 均值 [95% CI]</th><th>Compat / Native 均值 [95% CI]</th><th>方向</th></tr></thead><tbody>{lane_effect_rows}</tbody></table></div></section>
 <section class="section"><div class="section-head"><h2>核心区间机制效果</h2><p>Guest 快照原始计数差分，8 boot 配对统计</p></div><div class="table"><table><thead><tr><th>指标</th><th>单位</th><th>计数口径</th><th>Compat p50</th><th>Native p50</th><th>Native - Compat 均值 [95% CI]</th><th>Compat / Native 均值 [95% CI]</th><th>方向</th></tr></thead><tbody>{mechanism_core_effect_rows}</tbody></table></div></section>
 <section class="section"><div class="section-head"><h2>端到端机制效果</h2><p>seed、恢复、cleanup 和静稳栅栏</p></div><div class="table"><table><thead><tr><th>指标</th><th>单位</th><th>计数口径</th><th>Compat p50</th><th>Native p50</th><th>Native - Compat 均值 [95% CI]</th><th>Compat / Native 均值 [95% CI]</th><th>方向</th></tr></thead><tbody>{mechanism_e2e_effect_rows}</tbody></table></div></section>
-<section class="section"><div class="section-head"><h2>底层机制绝对计数</h2><p>workload_syscalls 为 observer_process，其余为 global；notify/request 覆盖混合读写</p></div><div class="table"><table><thead><tr><th>模式 / 区间</th><th>Workload syscall</th><th>目录 block / entry</th><th>Epoch / buffer</th><th>物理读 / 写 / flush</th><th>跳过预读</th><th>VirtIO notify / request</th><th>读 batch / request</th><th>写 batch / request / indirect</th><th>Metadata request / merged / commit</th><th>COW 共享 / 复制 / 提升</th><th>Exec 命中 / 未命中 / 共享 / 驱逐</th></tr></thead><tbody>{mechanism_rows}</tbody></table></div></section>
-<section class="section"><div class="section-head"><h2>8 boot 原始配对</h2><p>每行来自一次 Guest 启动内的 ABI v2 前后快照</p></div><div class="table"><table><thead><tr><th>Boot</th><th>顺序</th><th>Compat core us</th><th>Native core us</th><th>差值</th><th>比率</th><th>目录 probes C/N</th><th>VirtIO notify C/N</th><th>批量读 requests C/N</th><th>物理读 C/N</th><th>跳过预读 C/N</th><th>Metadata merged C/N</th></tr></thead><tbody>{raw_rows}</tbody></table></div></section>
+<section class="section"><div class="section-head"><h2>底层机制绝对计数</h2><p>workload_syscalls 为 observer_process，其余为 global；notify/request 覆盖混合读写</p></div><div class="table"><table><thead><tr><th>模式 / 区间</th><th>Workload syscall</th><th>目录 block / entry</th><th>Epoch / buffer</th><th>物理读 / 写 / flush</th><th>跳过预读</th><th>VirtIO notify / request</th><th>读 batch / request</th><th>写 batch / request / indirect</th><th>COW 共享 / 复制 / 提升</th><th>Exec 命中 / 未命中 / 共享 / 驱逐</th></tr></thead><tbody>{mechanism_rows}</tbody></table></div></section>
+<section class="section"><div class="section-head"><h2>8 boot 原始配对</h2><p>每行来自一次 Guest 启动内的 ABI v2 前后快照</p></div><div class="table"><table><thead><tr><th>Boot</th><th>顺序</th><th>Compat core us</th><th>Native core us</th><th>差值</th><th>比率</th><th>目录 probes C/N</th><th>VirtIO notify C/N</th><th>批量读 requests C/N</th><th>物理读 C/N</th><th>跳过预读 C/N</th></tr></thead><tbody>{raw_rows}</tbody></table></div></section>
 <section class="section"><div class="section-head"><h2>多 Agent 恢复时间线</h2><p>incident → sentinel → investigator → recovery</p></div><ol class="timeline">{timeline}</ol></section>
 <section class="section"><div class="section-head"><h2>内核运行观测</h2><p>同一实测 workflow 的三角色运行计数</p></div><div class="runtime"><div><span>Agent</span><b>{runtime['agents']}</b></div><div><span>Tool calls</span><b>{runtime['tool_calls']}</b></div><div><span>Dispatch</span><b>{runtime['dispatches']}</b></div><div><span>Wait sleep / wake</span><b>{runtime['wait_sleeps']} / {runtime['wait_wakeups']}</b></div><div><span>拒绝越权</span><b>{runtime['denied_actions']}</b></div><div><span>重复 / 副作用</span><b>{runtime['duplicate_actions']} / {runtime['recovery_side_effects']}</b></div></div></section>
 <section class="section outcome"><span>结果一致性 · 最终科研工件状态</span><strong>{_h(outcome['final_status'])}</strong><code>outcome hash {_h(outcome['outcome_hash'])}</code></section>

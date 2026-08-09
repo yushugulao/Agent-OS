@@ -1,6 +1,7 @@
 #ifndef __AGENT_OBSERVE_INTERNAL_H__
 #define __AGENT_OBSERVE_INTERNAL_H__
 
+#include "agent_evidence_ring.h"
 #include "agent_internal.h"
 
 #define AGENT_OBSERVE_AUDIT_SCOPE_LIMIT 128
@@ -10,6 +11,8 @@
 struct agent_observe_audit_view {
 	uint scope_id;
 	uint visible_records;
+	uint legacy_visible_records;
+	uint evidence_visible_records;
 	uint64 total_records;
 	uint64 admission_drops;
 	uint64 ledger_hash;
@@ -17,6 +20,7 @@ struct agent_observe_audit_view {
 	uint64 observe_epoch;
 	ushort sequence_slots[AGENT_OBSERVE_AUDIT_SCOPE_LIMIT];
 	ushort timeline_slots[AGENT_OBSERVE_AUDIT_SCOPE_LIMIT];
+	struct agent_evidence_view evidence;
 };
 
 /* 该状态驻留内核栈，仅在所属线程休眠时发布。 */
@@ -31,7 +35,7 @@ struct agent_timeline_wait_state {
 
 struct agent_observe_receipt_view {
 	uint64 receipt_id;
-	uint64 persist_target;
+	uint64 evidence_ticket;
 	uint state;
 };
 
@@ -42,6 +46,9 @@ int agent_observe_audit_view_open_locked(
 int agent_observe_audit_view_record_locked(
 	const struct agent_observe_audit_view *, uint, int,
 	struct agent_audit_record *, uint64 *);
+int agent_observe_audit_view_record_source_locked(
+	const struct agent_observe_audit_view *, uint, int,
+	struct agent_audit_record *, uint64 *, int *);
 int agent_observe_receipt_status(
 	uint, struct workflow_lifecycle_key, uint64, uint64, uint64,
 	uint64 *, uint *);
@@ -51,9 +58,10 @@ void agent_observe_recording_suppress_end(struct proc *);
 int agent_observe_recording_suppressed(struct proc *);
 uint64 agent_observe_scope_epoch_advance_locked(uint);
 
-void agent_observe_ledger_record_context(
+uint64 agent_observe_alloc_audit_sequence(void);
+int agent_observe_ledger_record_context(
 	struct proc *, struct agent_context_record *, uint64, int, uint64, int,
-	int);
+	int, uint64);
 void agent_observe_ledger_record_sched(
 	struct proc *, struct agent_sched_record *);
 void agent_observe_ledger_record_event(

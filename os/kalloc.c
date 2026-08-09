@@ -487,11 +487,6 @@ static int account_page_release(
 	account_page_owner_class[index] = 0;
 	account_page_refs[index] = 0;
 	account_page_count[owner_slot]--;
-	if (resource_release_many(owner, charge_class, &request, 1) < 0)
-		panic("physical page accounting");
-	proc_resource_account_reap(owner);
-	if (account_page_count[owner_slot] == 0)
-		account_page_generation[owner_slot] = 0;
 	if (charge_class == RESOURCE_CHARGE_RESERVED) {
 		physical_reserved_page_validate_allocated(pa);
 		kfree_reserved_page_validated(pa);
@@ -500,6 +495,12 @@ static int account_page_release(
 			panic("physical page pool");
 		kfree_system_page(pa);
 	}
+	/* The real page is dead before its live credit becomes reusable F. */
+	if (resource_release_many(owner, charge_class, &request, 1) < 0)
+		panic("physical page accounting");
+	proc_resource_account_reap(owner);
+	if (account_page_count[owner_slot] == 0)
+		account_page_generation[owner_slot] = 0;
 	intr_restore(enabled);
 	return 0;
 }

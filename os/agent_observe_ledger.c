@@ -1,7 +1,6 @@
 #include "agent_context.h"
 #include "agent_identity_lease.h"
 #include "agent_internal.h"
-#include "agent_observe_store.h"
 #include "defs.h"
 #include "kernel_work.h"
 #include "timer.h"
@@ -32,8 +31,6 @@ _Static_assert(AGENT_AUDIT_LOW_PRINCIPAL_LIMIT <=
 	       AGENT_AUDIT_LOW_PRINCIPAL_LIMIT ==
 		       AGENT_AUDIT_LOW_PRINCIPAL_MAX &&
 	       AGENT_AUDIT_LOW_PRINCIPAL_RESERVE > AGENT_AUDIT_KIND_SCHED &&
-	       AGENT_AUDIT_LOW_PRINCIPAL_LIMIT >
-		       AGENT_OBSERVE_CHECKPOINT_PER_SCOPE &&
 	       PROC_RESERVED_SLOTS % VFS_SCOPE_MAX_ACTIVE == 0 &&
 	       AGENT_AUDIT_LOW_SCOPE_LIMIT %
 		       AGENT_AUDIT_SCOPE_PRINCIPALS == 0 &&
@@ -45,12 +42,6 @@ _Static_assert(AGENT_AUDIT_LOW_PRINCIPAL_LIMIT <=
 		       AGENT_AUDIT_PRINCIPAL_SCAN_LIMIT &&
 	       AGENT_AUDIT_LOW_SCOPE_LIMIT < AGENT_AUDIT_SCOPE_LIMIT,
 	       "audit table must reserve privileged workflow evidence");
-_Static_assert(AGENT_AUDIT_CAUSAL_ID_RESERVE <=
-	       AGENT_IDENTITY_LEASE_LOW_WATER &&
-	       AGENT_AUDIT_CAUSAL_ID_RESERVE < AGENT_IDENTITY_LEASE_CHUNK,
-	       "audit lease must reserve one complete causal partition");
-_Static_assert(sizeof(struct agent_observe_checkpoint) <= 8U * 1024U,
-	       "observation checkpoint must remain a bounded durable section");
 _Static_assert(KERNEL_WORK_OPERATION_UNITS <= KERNEL_WORK_BUDGET_UNITS,
 	       "observation query work must fit one scheduling checkpoint");
 
@@ -59,6 +50,7 @@ struct agent_audit_scope_state {
 	uint visible_records;
 	uint64 lifecycle_generation;
 	uint64 total_records;
+	uint64 evidence_linked_records;
 	uint64 admission_drops;
 	uint64 ledger_hash;
 	uint64 kind_counts[AGENT_AUDIT_KIND_SLOT_COUNT];
@@ -71,18 +63,16 @@ enum agent_audit_receipt_state_kind {
 	AGENT_AUDIT_RECEIPT_NONE = 0,
 	AGENT_AUDIT_RECEIPT_PENDING,
 	AGENT_AUDIT_RECEIPT_FAILED,
-	AGENT_AUDIT_RECEIPT_RECOVERED,
 };
 
 enum agent_audit_identity_class {
-	AGENT_AUDIT_ID_TELEMETRY = AGENT_OBSERVE_IDENTITY_TELEMETRY,
-	AGENT_AUDIT_ID_CAUSAL = AGENT_OBSERVE_IDENTITY_CAUSAL,
-	AGENT_AUDIT_ID_AUTHORITY = AGENT_OBSERVE_IDENTITY_AUTHORITY,
+	AGENT_AUDIT_ID_TELEMETRY = 0,
+	AGENT_AUDIT_ID_CAUSAL = 1,
+	AGENT_AUDIT_ID_AUTHORITY = 2,
 };
 
 struct agent_audit_receipt_state {
 	uint64 receipt_id;
-	uint64 persist_target;
 	uint state;
 };
 
@@ -90,13 +80,12 @@ static uint64 next_span_id;
 static uint64 next_event_id;
 static uint64 agent_audit_next_sequence;
 static uint64 agent_audit_head;
-static uint64 agent_observe_checkpoint_generation;
 static struct agent_audit_record agent_audit_records[AGENT_AUDIT_MAX_RECORDS];
 static uint agent_audit_scopes[AGENT_AUDIT_MAX_RECORDS];
 static uint64 agent_audit_principals[AGENT_AUDIT_MAX_RECORDS];
 static uint64 agent_audit_span_owners[AGENT_AUDIT_MAX_RECORDS];
+static uint64 agent_audit_evidence_tickets[AGENT_AUDIT_MAX_RECORDS];
 static uchar agent_audit_low_class[AGENT_AUDIT_MAX_RECORDS];
-static uchar agent_audit_identity_classes[AGENT_AUDIT_MAX_RECORDS];
 static struct agent_audit_receipt_state agent_audit_receipts[AGENT_AUDIT_MAX_RECORDS];
 static struct agent_audit_scope_state agent_audit_scope_states[WORKFLOW_LIFECYCLE_CAP];
 static int agent_timeline_waiting_threads;
@@ -183,14 +172,13 @@ agent_observe_ledger_init(void)
 	next_event_id = 1;
 	agent_audit_next_sequence = 1;
 	agent_audit_head = 0;
-	agent_observe_checkpoint_generation = 1;
 	memset(agent_audit_records, 0, sizeof(agent_audit_records));
 	memset(agent_audit_scopes, 0, sizeof(agent_audit_scopes));
 	memset(agent_audit_principals, 0, sizeof(agent_audit_principals));
 	memset(agent_audit_span_owners, 0, sizeof(agent_audit_span_owners));
+	memset(agent_audit_evidence_tickets, 0,
+	       sizeof(agent_audit_evidence_tickets));
 	memset(agent_audit_low_class, 0, sizeof(agent_audit_low_class));
-	memset(agent_audit_identity_classes, 0,
-	       sizeof(agent_audit_identity_classes));
 	memset(agent_audit_receipts, 0, sizeof(agent_audit_receipts));
 	memset(agent_audit_scope_states, 0,
 	       sizeof(agent_audit_scope_states));
@@ -208,6 +196,13 @@ agent_observe_alloc_event_id(void)
 {
 	return agent_observe_alloc_id(
 		&next_event_id, AGENT_IDENTITY_ALLOCATOR_EVENT, 0);
+}
+
+uint64
+agent_observe_alloc_audit_sequence(void)
+{
+	return agent_observe_alloc_id(
+		&agent_audit_next_sequence, AGENT_IDENTITY_ALLOCATOR_AUDIT, 0);
 }
 
 #ifdef AGENT_OBSERVE_TEST_PROFILE
@@ -365,40 +360,228 @@ agent_observe_audit_scope_state_current(uint scope_id, int create)
 	return agent_observe_audit_scope_state_get(scope_id, lifecycle, create);
 }
 
+#define AGENT_OBSERVE_VIEW_EVIDENCE_REF 0x8000U
+#define AGENT_OBSERVE_VIEW_REF_INDEX    0x7fffU
+
+static int
+agent_observe_view_ref_record(const struct agent_observe_audit_view *view,
+			      ushort ref, struct agent_audit_record *record,
+			      uint64 *span_owner, int *from_evidence)
+{
+	uint index = ref & AGENT_OBSERVE_VIEW_REF_INDEX;
+
+	if ((ref & AGENT_OBSERVE_VIEW_EVIDENCE_REF) != 0) {
+		if (from_evidence != 0)
+			*from_evidence = 1;
+		return agent_evidence_view_record(
+			&view->evidence, index, record, span_owner);
+	}
+	if (from_evidence != 0)
+		*from_evidence = 0;
+	if (index >= AGENT_AUDIT_MAX_RECORDS ||
+	    agent_audit_scopes[index] != view->scope_id)
+		return 0;
+	if (record != 0)
+		*record = agent_audit_records[index];
+	if (span_owner != 0)
+		*span_owner = agent_audit_span_owners[index];
+	return 1;
+}
+
+static int
+agent_observe_view_ref_after(const struct agent_observe_audit_view *view,
+			     ushort left_ref, ushort right_ref,
+			     int timeline_order)
+{
+	struct agent_audit_record left;
+	struct agent_audit_record right;
+
+	if (!agent_observe_view_ref_record(
+		    view, left_ref, &left, 0, 0))
+		return 0;
+	if (!agent_observe_view_ref_record(
+		    view, right_ref, &right, 0, 0))
+		return 1;
+	if (timeline_order && left.tick != right.tick)
+		return left.tick > right.tick;
+	return left.sequence > right.sequence;
+}
+
+static void
+agent_observe_view_ref_insert(struct agent_observe_audit_view *view,
+			      ushort slots[AGENT_OBSERVE_AUDIT_SCOPE_LIMIT],
+			      uint *count, ushort ref, int timeline_order)
+{
+	uint pos;
+
+	if (*count == AGENT_OBSERVE_AUDIT_SCOPE_LIMIT) {
+		if (!agent_observe_view_ref_after(
+			    view, ref, slots[0], timeline_order))
+			return;
+		for (uint i = 1; i < *count; i++)
+			slots[i - 1U] = slots[i];
+		(*count)--;
+	}
+	pos = *count;
+	while (pos > 0 && agent_observe_view_ref_after(
+				  view, slots[pos - 1U], ref,
+				  timeline_order)) {
+		slots[pos] = slots[pos - 1U];
+		pos--;
+	}
+	slots[pos] = ref;
+	(*count)++;
+}
+
+static uint64
+agent_observe_evidence_hash_tag(const struct agent_evidence_view *view)
+{
+	uchar digest[AGENT_SHA256_DIGEST_SIZE];
+	uint64 tag = 0;
+
+	if (agent_evidence_view_digest(view, digest) < 0)
+		return 0;
+	for (uint i = 0; i < sizeof(tag); i++)
+		tag = (tag << 8) | digest[i];
+	memset(digest, 0, sizeof(digest));
+	return tag == 0 ? 1 : tag;
+}
+
+static int
+agent_observe_legacy_shadowed_by_evidence(
+	const struct agent_evidence_view *view, int slot)
+{
+	const struct agent_audit_record *legacy;
+	uint64 evidence_ticket;
+
+	if (view == 0 || slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS)
+		return 0;
+	legacy = &agent_audit_records[slot];
+	evidence_ticket = agent_audit_evidence_tickets[slot];
+	if (evidence_ticket == 0 || legacy->kind != AGENT_AUDIT_KIND_CONTEXT ||
+	    legacy->workflow_lifecycle_id != view->key.id ||
+	    legacy->workflow_lifecycle_generation != view->key.generation)
+		return 0;
+	for (uint i = 0; i < view->visible_records; i++)
+		if (view->entries[i].ticket == evidence_ticket)
+			return 1;
+	return 0;
+}
+
 int
 agent_observe_audit_view_open_locked(
 	uint scope_id, struct agent_observe_audit_view *view)
 {
 	struct agent_audit_scope_state *state;
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
+	uint sequence_count = 0;
+	uint timeline_count = 0;
+	uint64 linked_records = 0;
+	uint64 evidence_tag;
+	int evidence_committed;
 
 	if (view == 0)
 		return -1;
 	memset(view, 0, sizeof(*view));
+	view->scope_id = scope_id;
+	if (vfs_scope_lifecycle(scope_id, &lifecycle) == 0)
+		(void)agent_evidence_view_open(lifecycle, &view->evidence);
 	state = agent_observe_audit_scope_state_current(scope_id, 0);
-	if (state == 0)
-		return 0;
-	view->scope_id = state->scope_id;
-	view->visible_records = state->visible_records;
-	view->total_records = state->total_records;
-	view->admission_drops = state->admission_drops;
-	view->ledger_hash = state->ledger_hash;
-	view->observe_epoch = state->observe_epoch;
-	memmove(view->kind_counts, state->kind_counts,
-		sizeof(view->kind_counts));
-	memmove(view->sequence_slots, state->sequence_slots,
-		sizeof(view->sequence_slots));
-	memmove(view->timeline_slots, state->timeline_slots,
-		sizeof(view->timeline_slots));
-	return 1;
+	if (state != 0) {
+		view->total_records = state->total_records;
+		view->admission_drops = state->admission_drops;
+		view->ledger_hash = state->ledger_hash;
+		view->observe_epoch = state->observe_epoch;
+		if (view->evidence.total_records != 0)
+			linked_records = state->evidence_linked_records;
+		memmove(view->kind_counts, state->kind_counts,
+			sizeof(view->kind_counts));
+		for (uint i = 0; i < state->visible_records; i++) {
+			if (agent_observe_legacy_shadowed_by_evidence(
+				    &view->evidence, state->sequence_slots[i]))
+				continue;
+			agent_observe_view_ref_insert(
+				view, view->sequence_slots, &sequence_count,
+				state->sequence_slots[i], 0);
+			agent_observe_view_ref_insert(
+				view, view->timeline_slots, &timeline_count,
+				state->sequence_slots[i], 1);
+		}
+	}
+	/* Only successfully linked compatibility writes duplicate ring evidence. */
+	if (linked_records > view->evidence.total_records ||
+	    linked_records > view->total_records ||
+	    linked_records > view->kind_counts[AGENT_AUDIT_KIND_CONTEXT])
+		return -1;
+	view->total_records -= linked_records;
+	if (view->kind_counts[AGENT_AUDIT_KIND_CONTEXT] >=
+	    linked_records)
+		view->kind_counts[AGENT_AUDIT_KIND_CONTEXT] -=
+			linked_records;
+	else
+		view->kind_counts[AGENT_AUDIT_KIND_CONTEXT] = 0;
+	view->total_records += view->evidence.total_records;
+	view->admission_drops += view->evidence.gap_count;
+	if (view->evidence.observe_epoch > view->observe_epoch)
+		view->observe_epoch = view->evidence.observe_epoch;
+	evidence_committed = view->evidence.total_records != 0;
+	for (uint i = 0; !evidence_committed &&
+			 i < AGENT_SHA256_DIGEST_SIZE; i++)
+		if (view->evidence.sealed_root[i] != 0)
+			evidence_committed = 1;
+	if (evidence_committed) {
+		view->kind_counts[AGENT_AUDIT_KIND_CONTEXT] +=
+			view->evidence.total_records;
+		evidence_tag = agent_observe_evidence_hash_tag(&view->evidence);
+		if (evidence_tag == 0)
+			return -1;
+		view->ledger_hash = evidence_tag;
+	}
+	for (uint i = 0; i < view->evidence.visible_records; i++) {
+		ushort ref = (ushort)(AGENT_OBSERVE_VIEW_EVIDENCE_REF | i);
+
+		agent_observe_view_ref_insert(
+			view, view->sequence_slots, &sequence_count, ref, 0);
+		agent_observe_view_ref_insert(
+			view, view->timeline_slots, &timeline_count, ref, 1);
+	}
+	view->visible_records = sequence_count;
+	for (uint i = 0; i < sequence_count; i++) {
+		if ((view->sequence_slots[i] &
+		     AGENT_OBSERVE_VIEW_EVIDENCE_REF) != 0)
+			view->evidence_visible_records++;
+		else
+			view->legacy_visible_records++;
+	}
+	if (sequence_count != timeline_count)
+		return -1;
+	return state != 0 || view->evidence.total_records != 0;
 }
 
 uint
 agent_observe_audit_scope_visible_locked(uint scope_id)
 {
-	struct agent_audit_scope_state *state;
+	struct agent_observe_audit_view view;
 
-	state = agent_observe_audit_scope_state_current(scope_id, 0);
-	return state == 0 ? 0 : state->visible_records;
+	return agent_observe_audit_view_open_locked(scope_id, &view) < 0 ?
+	       0 : view.visible_records;
+}
+
+int
+agent_observe_audit_view_record_source_locked(
+	const struct agent_observe_audit_view *view, uint index,
+	int timeline_order, struct agent_audit_record *out,
+	uint64 *span_owner, int *from_evidence)
+{
+	ushort ref;
+
+	if (view == 0 || index >= view->visible_records ||
+	    view->visible_records > AGENT_AUDIT_SCOPE_LIMIT)
+		return 0;
+	ref = timeline_order ? view->timeline_slots[index] :
+			       view->sequence_slots[index];
+	return agent_observe_view_ref_record(
+		view, ref, out, span_owner, from_evidence);
 }
 
 int
@@ -407,21 +590,8 @@ agent_observe_audit_view_record_locked(
 	int timeline_order, struct agent_audit_record *out,
 	uint64 *span_owner)
 {
-	int slot;
-
-	if (view == 0 || index >= view->visible_records ||
-	    view->visible_records > AGENT_AUDIT_SCOPE_LIMIT)
-		return 0;
-	slot = timeline_order ? view->timeline_slots[index] :
-				view->sequence_slots[index];
-	if (slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS ||
-	    agent_audit_scopes[slot] != view->scope_id)
-		return 0;
-	if (out != 0)
-		*out = agent_audit_records[slot];
-	if (span_owner != 0)
-		*span_owner = agent_audit_span_owners[slot];
-	return 1;
+	return agent_observe_audit_view_record_source_locked(
+		view, index, timeline_order, out, span_owner, 0);
 }
 
 static int
@@ -469,7 +639,7 @@ agent_observe_receipt_snapshot(
 			break;
 		}
 		view->receipt_id = receipt->receipt_id;
-		view->persist_target = receipt->persist_target;
+		view->evidence_ticket = agent_audit_evidence_tickets[slot];
 		view->state = receipt->state;
 		status = AGENT_STATUS_OK;
 		break;
@@ -486,7 +656,7 @@ agent_observe_receipt_status(
 {
 	struct agent_observe_receipt_view before;
 	struct agent_observe_receipt_view after;
-	int persisted;
+	uint64 fence_sequence = 0;
 	int status;
 
 	if (receipt_id == 0 || durability == 0)
@@ -496,42 +666,32 @@ agent_observe_receipt_status(
 	status = agent_observe_receipt_snapshot(
 		scope_id, lifecycle, sequence, record_hash, supplied_receipt,
 		&before);
-	if (status != AGENT_STATUS_OK) {
-		if (supplied_receipt != 0 &&
-		    agent_obsstore_receipt_record_status(
-			    scope_id, lifecycle, sequence, record_hash,
-			    supplied_receipt, 0) > 0) {
-			*receipt_id = supplied_receipt;
-			*durability = AGENT_AUDIT_DURABILITY_DURABLE;
-			return AGENT_STATUS_OK;
-		}
+	if (status != AGENT_STATUS_OK)
 		return status;
-	}
 	*receipt_id = before.receipt_id;
 	if (before.state == AGENT_AUDIT_RECEIPT_FAILED) {
 		*durability = AGENT_AUDIT_DURABILITY_FAILED;
 		return AGENT_STATUS_OK;
 	}
-	if (before.state != AGENT_AUDIT_RECEIPT_PENDING &&
-	    before.state != AGENT_AUDIT_RECEIPT_RECOVERED) {
+	if (before.state != AGENT_AUDIT_RECEIPT_PENDING) {
 		*durability = AGENT_AUDIT_DURABILITY_FAILED;
 		return AGENT_STATUS_INDETERMINATE;
 	}
-	persisted = agent_obsstore_receipt_record_status(
-		scope_id, lifecycle, sequence, record_hash, before.receipt_id,
-		before.persist_target);
+	if (before.evidence_ticket != 0 &&
+	    agent_evidence_ticket_fence_sealed(
+		    lifecycle, before.evidence_ticket, &fence_sequence))
+		*durability = AGENT_AUDIT_DURABILITY_FENCE_SEALED;
+	else
+		*durability = AGENT_AUDIT_DURABILITY_PENDING;
 	status = agent_observe_receipt_snapshot(
 		scope_id, lifecycle, sequence, record_hash, before.receipt_id,
 		&after);
 	if (status != AGENT_STATUS_OK)
 		return status;
 	if (after.receipt_id != before.receipt_id ||
-	    after.persist_target != before.persist_target ||
+	    after.evidence_ticket != before.evidence_ticket ||
 	    after.state != before.state)
 		return AGENT_STATUS_STALE;
-	*durability = persisted > 0 ? AGENT_AUDIT_DURABILITY_DURABLE :
-		      persisted < 0 ? AGENT_AUDIT_DURABILITY_FAILED :
-			      AGENT_AUDIT_DURABILITY_PENDING;
 	return AGENT_STATUS_OK;
 }
 
@@ -569,14 +729,9 @@ agent_observe_recording_suppress_end(struct proc *p)
 int
 agent_observe_receipt_persist(uint scope_id)
 {
-	struct proc *p = curr_proc();
-	int status;
-
-	if (agent_observe_recording_suppress_begin(p) < 0)
-		return -1;
-	status = agent_obsstore_receipt_persist(scope_id);
-	agent_observe_recording_suppress_end(p);
-	return status;
+	/* Receipts become authoritative only through agent_workflow_fence(). */
+	return agent_observe_scope_valid(scope_id) ? AGENT_STATUS_OK :
+						     AGENT_STATUS_BAD_PARAM;
 }
 
 int
@@ -968,8 +1123,8 @@ static void agent_audit_slot_clear(int slot)
 	agent_audit_scopes[slot] = VFS_SCOPE_NONE;
 	agent_audit_principals[slot] = 0;
 	agent_audit_span_owners[slot] = 0;
+	agent_audit_evidence_tickets[slot] = 0;
 	agent_audit_low_class[slot] = 0;
-	agent_audit_identity_classes[slot] = AGENT_OBSERVE_IDENTITY_TELEMETRY;
 	memset(&agent_audit_receipts[slot], 0,
 	       sizeof(agent_audit_receipts[slot]));
 	memset(&agent_audit_records[slot], 0,
@@ -1257,478 +1412,6 @@ agent_observe_audit_slot_alloc(struct agent_audit_scope_state *state,
 	return -1;
 }
 
-uint64
-agent_observe_checkpoint_record_hash(const struct agent_audit_record *record)
-{
-	return record == 0 ? 0 :
-		agent_audit_record_hash((struct agent_audit_record *)record);
-}
-
-int
-agent_observe_checkpoint_entry_validate(
-	const struct agent_observe_checkpoint_scope *scope, uint index,
-	const struct agent_observe_checkpoint_entry *entry,
-	const struct agent_observe_checkpoint_entry *prior, int *gap)
-{
-	const struct agent_audit_record *record;
-	uint tail_start;
-	int direct;
-	int latest_tail;
-
-	if (scope == 0 || entry == 0 || gap == 0 ||
-	    scope->record_count == 0 ||
-	    scope->record_count > AGENT_OBSERVE_CHECKPOINT_PER_SCOPE ||
-	    index >= scope->record_count || (index == 0) != (prior == 0))
-		return -1;
-	record = &entry->record;
-	tail_start = scope->record_count > AGENT_OBSERVE_CHECKPOINT_LATEST_TAIL ?
-			     scope->record_count -
-				     AGENT_OBSERVE_CHECKPOINT_LATEST_TAIL :
-			     0;
-	latest_tail = index >= tail_start;
-	direct = index != 0 &&
-		 record->prev_hash == prior->record.record_hash;
-	if (entry->scope_id != scope->scope_id || entry->principal == 0 ||
-	    entry->receipt_id == 0 ||
-	    entry->identity_class > AGENT_OBSERVE_IDENTITY_MAX ||
-	    entry->reserved[0] != 0 || entry->reserved[1] != 0 ||
-	    (entry->link_flags & ~AGENT_OBSERVE_LINK_FLAGS_ALL) != 0 ||
-	    !!(entry->link_flags & AGENT_OBSERVE_LINK_LATEST_TAIL) !=
-		    latest_tail ||
-	    (index == 0 &&
-	     (entry->link_flags & AGENT_OBSERVE_LINK_PREV_RETAINED)) ||
-	    (index != 0 &&
-	     !!(entry->link_flags & AGENT_OBSERVE_LINK_PREV_RETAINED) !=
-		     direct) ||
-	    (index != 0 && record->prev_hash == 0) ||
-	    ((record->span_id == 0) != (entry->span_owner == 0)) ||
-	    (entry->identity_class == AGENT_OBSERVE_IDENTITY_CAUSAL &&
-	     (record->span_id == 0 || entry->span_owner == 0)) ||
-	    (entry->identity_class == AGENT_OBSERVE_IDENTITY_AUTHORITY &&
-	     (record->actor_control_id == 0 ||
-	      entry->principal != record->actor_control_id)) ||
-	    record->sequence == 0 ||
-	    (prior != 0 && record->sequence <= prior->record.sequence) ||
-	    record->workflow_lifecycle_id != scope->lifecycle_id ||
-	    record->workflow_lifecycle_generation !=
-		    scope->lifecycle_generation ||
-	    record->kind < 0 ||
-	    (uint)record->kind >= AGENT_AUDIT_KIND_SLOT_COUNT ||
-	    record->agent_id < 0 ||
-	    record->record_hash != agent_observe_checkpoint_record_hash(record))
-		return -1;
-	if ((index == 0 && record->prev_hash != 0) ||
-	    (index != 0 && !direct))
-		*gap = 1;
-	return 0;
-}
-
-static int
-agent_observe_checkpoint_slot_selected(const int *selected, uint count,
-				       int slot)
-{
-	for (uint i = 0; i < count; i++)
-		if (selected[i] == slot)
-			return 1;
-	return 0;
-}
-
-static uint
-agent_observe_checkpoint_selection_score(int slot, const int *selected,
-					 uint count)
-{
-	const struct agent_audit_record *record = &agent_audit_records[slot];
-	uint64 principal = agent_audit_principals[slot];
-	uint64 span_owner = agent_audit_span_owners[slot];
-	uint identity_class = agent_audit_identity_classes[slot];
-	int class_seen = 0;
-	int kind_seen = 0;
-	int principal_seen = 0;
-	int span_seen = 0;
-
-	for (uint i = 0; i < count; i++) {
-		int prior_slot = selected[i];
-		const struct agent_audit_record *prior =
-			&agent_audit_records[prior_slot];
-
-		if (agent_audit_identity_classes[prior_slot] == identity_class)
-			class_seen = 1;
-		if (prior->kind == record->kind)
-			kind_seen = 1;
-		if (agent_audit_principals[prior_slot] == principal)
-			principal_seen = 1;
-		if (prior->span_id == record->span_id &&
-		    agent_audit_span_owners[prior_slot] == span_owner)
-			span_seen = 1;
-	}
-	return (!class_seen << 7) | (!kind_seen << 6) |
-	       (!principal_seen << 5) | (!span_seen << 4) | identity_class;
-}
-
-static int
-agent_observe_checkpoint_select(struct agent_audit_scope_state *state,
-				int selected[AGENT_OBSERVE_CHECKPOINT_PER_SCOPE],
-				uint *selected_count)
-{
-	uint tail_count;
-	uint tail_start;
-	uint anchors = 0;
-	uint count = 0;
-
-	if (state == 0 || selected == 0 || selected_count == 0 ||
-	    state->visible_records == 0 ||
-	    state->visible_records > AGENT_AUDIT_SCOPE_LIMIT)
-		return -1;
-	tail_count = state->visible_records <
-			     AGENT_OBSERVE_CHECKPOINT_LATEST_TAIL ?
-			     state->visible_records :
-			     AGENT_OBSERVE_CHECKPOINT_LATEST_TAIL;
-	tail_start = state->visible_records - tail_count;
-	for (uint i = tail_start; i < state->visible_records; i++)
-		selected[count++] = state->sequence_slots[i];
-	while (anchors < AGENT_OBSERVE_CHECKPOINT_DIVERSITY_ANCHORS &&
-	       count < state->visible_records) {
-		uint best_score = 0;
-		uint64 best_sequence = 0;
-		int best_slot = -1;
-
-		for (uint i = 0; i < tail_start; i++) {
-			int slot = state->sequence_slots[i];
-			uint score;
-			uint64 sequence;
-
-			if (slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS ||
-			    agent_observe_checkpoint_slot_selected(selected, count,
-							 slot))
-				continue;
-			score = agent_observe_checkpoint_selection_score(
-				slot, selected, count);
-			sequence = agent_audit_records[slot].sequence;
-			if (best_slot < 0 || score > best_score ||
-			    (score == best_score && sequence > best_sequence)) {
-				best_slot = slot;
-				best_score = score;
-				best_sequence = sequence;
-			}
-		}
-		if (best_slot < 0)
-			break;
-		selected[count++] = best_slot;
-		anchors++;
-	}
-	if (count != (state->visible_records <
-			      AGENT_OBSERVE_CHECKPOINT_PER_SCOPE ?
-			      state->visible_records :
-			      AGENT_OBSERVE_CHECKPOINT_PER_SCOPE))
-		return -1;
-	for (uint i = 1; i < count; i++) {
-		int slot = selected[i];
-		uint j = i;
-
-		while (j > 0 && agent_audit_records[selected[j - 1]].sequence >
-					 agent_audit_records[slot].sequence) {
-			selected[j] = selected[j - 1];
-			j--;
-		}
-		selected[j] = slot;
-	}
-	*selected_count = count;
-	return 0;
-}
-
-uint64
-agent_observe_checkpoint_generation_get(void)
-{
-	return agent_observe_checkpoint_generation;
-}
-
-void
-agent_observe_checkpoint_generation_floor(uint64 generation)
-{
-	if (generation > agent_observe_checkpoint_generation)
-		agent_observe_checkpoint_generation = generation;
-}
-
-void
-agent_observe_checkpoint_raise_highwater(uint64 sequence, uint64 span,
-					 uint64 event, uint agent_id)
-{
-	if (sequence != 0 && agent_audit_next_sequence != 0 &&
-	    sequence > agent_audit_next_sequence)
-		agent_audit_next_sequence = sequence;
-	if (span != 0 && next_span_id != 0 && span > next_span_id)
-		next_span_id = span;
-	if (event != 0 && next_event_id != 0 && event > next_event_id)
-		next_event_id = event;
-	if (agent_id != 0)
-		agent_identity_id_floor(agent_id);
-}
-
-void
-agent_observe_checkpoint_exhaust_highwater(uint exhausted)
-{
-	if (exhausted & AGENT_OBSERVE_ALLOC_AUDIT_EXHAUSTED) {
-		agent_audit_next_sequence = 0;
-		agent_identity_lease_allocator_force_exhausted(
-			AGENT_IDENTITY_ALLOCATOR_AUDIT);
-	}
-	if (exhausted & AGENT_OBSERVE_ALLOC_SPAN_EXHAUSTED) {
-		next_span_id = 0;
-		agent_identity_lease_allocator_force_exhausted(
-			AGENT_IDENTITY_ALLOCATOR_SPAN);
-	}
-	if (exhausted & AGENT_OBSERVE_ALLOC_EVENT_EXHAUSTED) {
-		next_event_id = 0;
-		agent_identity_lease_allocator_force_exhausted(
-			AGENT_IDENTITY_ALLOCATOR_EVENT);
-	}
-	if (exhausted & AGENT_OBSERVE_ALLOC_CONTROL_EXHAUSTED) {
-		agent_identity_lease_allocator_force_exhausted(
-			AGENT_IDENTITY_ALLOCATOR_CONTROL);
-		agent_lifecycle_control_id_floor(0);
-	}
-	if (exhausted & AGENT_OBSERVE_ALLOC_AGENT_EXHAUSTED) {
-		agent_identity_lease_allocator_force_exhausted(
-			AGENT_IDENTITY_ALLOCATOR_AGENT);
-		agent_identity_id_floor(0);
-	}
-}
-
-int
-agent_observe_checkpoint_capture_scope(
-	uint scope_id, struct workflow_lifecycle_key lifecycle,
-	struct agent_observe_checkpoint_scope *saved)
-{
-	struct agent_audit_scope_state *state;
-	int selected[AGENT_OBSERVE_CHECKPOINT_PER_SCOPE];
-	uint selected_count = 0;
-	uint tail_start;
-
-	if (saved == 0 ||
-	    !agent_observe_audit_lifecycle_matches_scope(scope_id, lifecycle))
-		return -1;
-	memset(saved, 0, sizeof(*saved));
-	state = agent_observe_audit_scope_state_get(scope_id, lifecycle, 0);
-	if (state == 0)
-		return 0;
-	if (state->visible_records == 0) {
-		if (state->total_records == 0)
-			return 0;
-		if (state->ledger_hash != 0 ||
-		    state->admission_drops != state->total_records)
-			return -1;
-		saved->used = AGENT_OBSERVE_SCOPE_USED;
-		saved->scope_id = scope_id;
-		saved->lifecycle_id = lifecycle.id;
-		saved->lifecycle_generation = lifecycle.generation;
-		saved->total_records = state->total_records;
-		saved->admission_drops = state->admission_drops;
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-		agent_observe_test_drop_only_captured(
-			state->scope_id, state->total_records,
-			state->admission_drops);
-#endif
-		return 1;
-	}
-	if (state->total_records < state->visible_records ||
-	    state->admission_drops >
-		    state->total_records - state->visible_records ||
-	    agent_observe_checkpoint_select(state, selected,
-					    &selected_count) < 0)
-		return -1;
-	saved->used = AGENT_OBSERVE_SCOPE_USED;
-	saved->scope_id = scope_id;
-	saved->lifecycle_id = lifecycle.id;
-	saved->lifecycle_generation = lifecycle.generation;
-	saved->total_records = state->total_records;
-	saved->admission_drops = state->admission_drops;
-	saved->ledger_hash = state->ledger_hash;
-	tail_start = selected_count > AGENT_OBSERVE_CHECKPOINT_LATEST_TAIL ?
-			     selected_count -
-				     AGENT_OBSERVE_CHECKPOINT_LATEST_TAIL :
-			     0;
-	for (uint j = 0; j < selected_count; j++) {
-		int slot = selected[j];
-		struct agent_observe_checkpoint_entry *entry =
-			&saved->records[saved->record_count++];
-		struct agent_audit_record *record = &agent_audit_records[slot];
-		uint identity_class = agent_audit_identity_classes[slot];
-
-		if (record->workflow_lifecycle_id != lifecycle.id ||
-		    record->workflow_lifecycle_generation != lifecycle.generation ||
-		    identity_class > AGENT_OBSERVE_IDENTITY_MAX ||
-		    agent_audit_low_class[slot] !=
-			    (identity_class != AGENT_OBSERVE_IDENTITY_AUTHORITY))
-			return -1;
-		entry->record = *record;
-		entry->scope_id = scope_id;
-		entry->principal = agent_audit_principals[slot];
-		entry->span_owner = agent_audit_span_owners[slot];
-		entry->identity_class = identity_class;
-		if (j >= tail_start)
-			entry->link_flags |= AGENT_OBSERVE_LINK_LATEST_TAIL;
-		if (j != 0 && record->prev_hash ==
-			      saved->records[j - 1].record.record_hash)
-			entry->link_flags |= AGENT_OBSERVE_LINK_PREV_RETAINED;
-		entry->receipt_id = agent_audit_receipts[slot].receipt_id;
-		if (entry->receipt_id == 0)
-			return -1;
-	}
-	return 1;
-}
-
-int
-agent_observe_checkpoint_restore_scope(
-	const struct agent_observe_checkpoint_scope *saved)
-{
-	struct agent_audit_scope_state *state;
-	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
-	int restore_slots[AGENT_OBSERVE_CHECKPOINT_PER_SCOPE];
-	uint64 successful_records;
-	uint64 largest_sequence = 0;
-	uint64 old_head;
-	uint restored = 0;
-	int enabled;
-	int gap = 0;
-	int result = -1;
-
-	if (saved == 0 ||
-	    !(saved->used & AGENT_OBSERVE_SCOPE_USED))
-		return 0;
-	lifecycle.id = saved->lifecycle_id;
-	lifecycle.generation = saved->lifecycle_generation;
-	if (!agent_observe_audit_lifecycle_matches_scope(saved->scope_id,
-							 lifecycle))
-		return -1;
-	if (saved->total_records == 0 ||
-	    saved->record_count > AGENT_OBSERVE_CHECKPOINT_PER_SCOPE ||
-	    saved->admission_drops >
-		    saved->total_records - saved->record_count)
-		return -1;
-	successful_records = saved->total_records - saved->admission_drops;
-	if (saved->record_count == 0) {
-		if (successful_records != 0 ||
-		    saved->ledger_hash != 0)
-			return -1;
-	} else if (successful_records < saved->record_count ||
-		   saved->ledger_hash == 0) {
-		return -1;
-	}
-	if (saved->record_count != 0) {
-		for (uint i = 0; i < saved->record_count; i++)
-			if (agent_observe_checkpoint_entry_validate(
-				    saved, i, &saved->records[i],
-				    i == 0 ? 0 : &saved->records[i - 1],
-				    &gap) < 0)
-				return -1;
-		if (saved->records[saved->record_count - 1]
-				    .record.record_hash != saved->ledger_hash ||
-		    ((successful_records - saved->record_count == 0) ?
-			     (gap || saved->records[0].record.prev_hash != 0) :
-			     !gap))
-			return -1;
-	}
-
-	/* 整体校验后再进入原子发布窗口。 */
-	enabled = intr_save();
-	state = agent_observe_audit_scope_state_get(
-		saved->scope_id, lifecycle, 1);
-	if (state == 0)
-		goto out;
-	/* 在线重载不得覆盖更新的内存证据。 */
-	if (state->visible_records != 0 || state->total_records != 0 ||
-	    state->admission_drops != 0 || state->ledger_hash != 0) {
-		result = 0;
-		goto out;
-	}
-	if (saved->record_count == 0) {
-		state->total_records = saved->total_records;
-		state->admission_drops = saved->admission_drops;
-		state->ledger_hash = 0;
-		state->observe_epoch++;
-		result = 0;
-		goto out;
-	}
-	old_head = agent_audit_head;
-	for (uint i = 0; i < AGENT_AUDIT_MAX_RECORDS &&
-			 restored < saved->record_count; i++) {
-		int slot = (agent_audit_head + i) % AGENT_AUDIT_MAX_RECORDS;
-
-		if (agent_audit_scopes[slot] == VFS_SCOPE_NONE)
-			restore_slots[restored++] = slot;
-	}
-	if (restored != saved->record_count) {
-		restored = 0;
-		goto out;
-	}
-	restored = 0;
-	for (uint i = 0; i < saved->record_count; i++) {
-		const struct agent_observe_checkpoint_entry *entry =
-			&saved->records[i];
-		int slot = restore_slots[i];
-
-		if (slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS ||
-		    agent_audit_scopes[slot] != VFS_SCOPE_NONE)
-			goto rollback;
-		agent_audit_records[slot] = entry->record;
-		agent_audit_scopes[slot] = saved->scope_id;
-		agent_audit_principals[slot] = entry->principal;
-		agent_audit_span_owners[slot] = entry->span_owner;
-		agent_audit_low_class[slot] =
-			entry->identity_class != AGENT_OBSERVE_IDENTITY_AUTHORITY;
-		agent_audit_identity_classes[slot] = entry->identity_class;
-		agent_audit_receipts[slot].receipt_id = entry->receipt_id;
-		agent_audit_receipts[slot].persist_target = 0;
-		agent_audit_receipts[slot].state =
-			AGENT_AUDIT_RECEIPT_RECOVERED;
-		if (agent_observe_audit_index_insert(state, slot) < 0) {
-			agent_audit_slot_clear(slot);
-			goto rollback;
-		}
-		if (entry->record.kind >= 0 &&
-		    (uint)entry->record.kind < AGENT_AUDIT_KIND_SLOT_COUNT) {
-			state->kind_counts[entry->record.kind]++;
-		}
-		if (entry->record.sequence > largest_sequence) {
-			largest_sequence = entry->record.sequence;
-		}
-		agent_audit_head = (slot + 1) % AGENT_AUDIT_MAX_RECORDS;
-		restored++;
-	}
-	state->total_records = saved->total_records;
-	state->admission_drops = saved->admission_drops;
-	state->ledger_hash = saved->ledger_hash;
-	state->observe_epoch++;
-	if (largest_sequence != 0 &&
-	    (agent_audit_next_sequence == 0 || largest_sequence + 1 == 0)) {
-		agent_audit_next_sequence = 0;
-	} else if (largest_sequence >= agent_audit_next_sequence) {
-		agent_audit_next_sequence = largest_sequence + 1;
-	}
-	result = 0;
-	goto out;
-
-rollback:
-	/* 入口时 scope 为空，故这些是唯一已发布槽。 */
-	for (uint i = 0; i < restored; i++) {
-		int slot = restore_slots[i];
-		int kind = agent_audit_records[slot].kind;
-
-		if (kind >= 0 && (uint)kind < AGENT_AUDIT_KIND_SLOT_COUNT) {
-			if (state->kind_counts[kind] > 0)
-				state->kind_counts[kind]--;
-		}
-		agent_audit_slot_clear(slot);
-	}
-	memset(state->sequence_slots, 0, sizeof(state->sequence_slots));
-	memset(state->timeline_slots, 0, sizeof(state->timeline_slots));
-	state->visible_records = 0;
-	agent_audit_head = old_head;
-out:
-	intr_restore(enabled);
-	return result;
-}
-
 void
 agent_observe_timeline_from_audit(
 	struct agent_audit_record *record,
@@ -1785,21 +1468,17 @@ agent_audit_note_drop(struct agent_audit_scope_state *state)
 		return;
 	state->total_records++;
 	state->admission_drops++;
-	if (agent_observe_checkpoint_generation != ~0ULL)
-		agent_observe_checkpoint_generation++;
-	/* 准入丢弃没有逐条回执，但单调计数属于持久 scope 检查点，
-	 * 不能等到下一条记录才落盘。 */
-	agent_obsstore_mark_dirty(state->scope_id);
+	/* The next workflow fence binds the monotonic gap counter. */
 }
 
-static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
-			     int source_pid, int target_pid, int event_type,
-			     int tool_id, int status, uint64 cause_sequence,
-			     uint64 span_id, uint64 span_owner,
-			     uint64 audit_principal, int identity_class,
-			     int authority_effect,
-			     uint64 value0, uint64 value1, uint64 value2,
-			     uint64 flags, char *text)
+static int agent_audit_emit(int kind, uint64 tick, struct proc *actor,
+			    int source_pid, int target_pid, int event_type,
+			    int tool_id, int status, uint64 cause_sequence,
+			    uint64 span_id, uint64 span_owner,
+			    uint64 audit_principal, int identity_class,
+			    int authority_effect,
+			    uint64 value0, uint64 value1, uint64 value2,
+			    uint64 flags, char *text, uint64 evidence_ticket)
 {
 	struct agent_audit_record *record;
 	struct agent_audit_scope_state *scope_state;
@@ -1807,14 +1486,14 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	uint scope_id = agent_identity_proc_scope(actor);
 	uint64 principal;
 	uint64 sequence;
-	uint64 receipt_serial = 0;
-	uint64 receipt_target = 0;
 	uint64 identity_reserve;
 	struct workflow_lifecycle_key receipt_lifecycle =
 		vfs_proc_lifecycle(actor);
 	int low_class;
 	int slot;
 
+	if (evidence_ticket != 0 && kind != AGENT_AUDIT_KIND_CONTEXT)
+		return -1;
 	if (span_id == 0 || span_owner == 0) {
 		span_id = 0;
 		span_owner = 0;
@@ -1837,35 +1516,35 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	    (scope_state =
 		     agent_observe_audit_scope_state_get(
 			     scope_id, receipt_lifecycle, 1)) == 0)
-		return;
+		return -1;
 	if (scope_state->total_records == ~0ULL)
-		return;
+		return -1;
 #ifdef AGENT_OBSERVE_TEST_PROFILE
 	if (agent_observe_test_drop_audit(
 		    actor, scope_id, kind, tool_id, status, authority_effect)) {
 		agent_audit_note_drop(scope_state);
-		return;
+		return -1;
 	}
 #endif
 	if (agent_audit_next_sequence == 0) {
 		agent_audit_note_drop(scope_state);
-		return;
+		return -1;
 	}
 	slot = agent_observe_audit_slot_alloc(scope_state, principal, low_class,
 					      span_id, span_owner, kind);
 	if (slot < 0) {
 		agent_audit_note_drop(scope_state);
-		return;
+		return -1;
 	}
 	sequence = agent_observe_alloc_id(
 		&agent_audit_next_sequence, AGENT_IDENTITY_ALLOCATOR_AUDIT,
 		identity_reserve);
 	if (sequence == 0) {
 		agent_audit_note_drop(scope_state);
-		return;
+		return -1;
 	}
 	if (agent_audit_slot_unpublish(slot) < 0)
-		return;
+		return -1;
 	record = &agent_audit_records[slot];
 	record->sequence = sequence;
 	record->tick = tick;
@@ -1908,46 +1587,43 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	safestrcpy(record->text, text ? text : "", sizeof(record->text));
 	record->prev_hash = scope_state->ledger_hash;
 	record->record_hash = agent_audit_record_hash(record);
-	agent_audit_receipts[slot].state =
-		agent_obsstore_mark_dirty_receipt(
-			scope_id, receipt_lifecycle, &receipt_serial,
-			&receipt_target) == 0 ?
-			AGENT_AUDIT_RECEIPT_PENDING :
-			AGENT_AUDIT_RECEIPT_FAILED;
-	agent_audit_receipts[slot].persist_target = receipt_target;
+	agent_audit_receipts[slot].state = evidence_ticket != 0 ?
+		AGENT_AUDIT_RECEIPT_PENDING : AGENT_AUDIT_RECEIPT_FAILED;
 	agent_audit_receipts[slot].receipt_id = agent_audit_receipt_id(
-		record, scope_id, receipt_serial, receipt_target);
+		record, scope_id, evidence_ticket, 0);
 	agent_audit_scopes[slot] = scope_id;
 	agent_audit_principals[slot] = principal;
 	agent_audit_span_owners[slot] = span_owner;
+	agent_audit_evidence_tickets[slot] = evidence_ticket;
 	agent_audit_low_class[slot] = low_class;
-	agent_audit_identity_classes[slot] = identity_class;
 	if (agent_observe_audit_index_insert(scope_state, slot) < 0) {
 		agent_audit_slot_clear(slot);
-		return;
+		return -1;
 	}
+	if (evidence_ticket != 0)
+		scope_state->evidence_linked_records++;
 	scope_state->ledger_hash = record->record_hash;
 	scope_state->total_records++;
-	if (agent_observe_checkpoint_generation != ~0ULL)
-		agent_observe_checkpoint_generation++;
 	if (kind >= 0 && (uint)kind < AGENT_AUDIT_KIND_SLOT_COUNT) {
 		scope_state->kind_counts[kind]++;
 	}
 	agent_audit_head = (slot + 1) % AGENT_AUDIT_MAX_RECORDS;
 	agent_observe_timeline_record_audit(scope_id, record, span_owner);
+	return 0;
 }
 
-static void agent_audit_context(struct proc *p,
-				struct agent_context_record *record,
-				uint64 span_owner, int source_pid,
-				uint64 cause_control,
-				int authority_effect, int causal_audit)
+static int agent_audit_context(struct proc *p,
+			       struct agent_context_record *record,
+			       uint64 span_owner, int source_pid,
+			       uint64 cause_control,
+			       int authority_effect, int causal_audit,
+			       uint64 evidence_ticket)
 {
 	uint64 principal;
 	int identity_class;
 
 	if (p == 0 || record == 0 || record->sequence == 0)
-		return;
+		return -1;
 	source_pid = cause_control != 0 ? source_pid : p->pid;
 	principal = cause_control != 0 ? cause_control : p->agent_control_id;
 	if (source_pid <= 0)
@@ -1958,14 +1634,16 @@ static void agent_audit_context(struct proc *p,
 			 span_owner != 0 ?
 				 AGENT_AUDIT_ID_CAUSAL :
 				 AGENT_AUDIT_ID_TELEMETRY;
-	agent_audit_emit(AGENT_AUDIT_KIND_CONTEXT, record->tick, p, source_pid,
+	return agent_audit_emit(
+		AGENT_AUDIT_KIND_CONTEXT, record->tick, p, source_pid,
 			 p->pid, 0, record->tool_id, record->status,
 			 record->cause_sequence, record->span_id,
 			 span_owner, principal, identity_class,
 			 authority_effect,
 			 record->value0, record->value1, record->value2,
 			 record->flags,
-			 record->result[0] ? record->result : record->payload);
+			 record->result[0] ? record->result : record->payload,
+			 evidence_ticket);
 }
 
 static void agent_audit_event(int kind, struct proc *actor,
@@ -1984,7 +1662,7 @@ static void agent_audit_event(int kind, struct proc *actor,
 			 event->cause_sequence, event->span_id, span_owner,
 			 audit_principal, identity_class, 0,
 			 event->event_id, event->corr_id, event->target_pid,
-			 0, event->payload);
+			 0, event->payload, 0);
 }
 
 static void agent_audit_sched(struct proc *p, struct agent_sched_record *record)
@@ -1996,7 +1674,7 @@ static void agent_audit_sched(struct proc *p, struct agent_sched_record *record)
 			 0, p->agent_control_id, AGENT_AUDIT_ID_TELEMETRY, 0,
 			 record->dispatch_count, record->score,
 			 record->event_queue_count, record->reason_flags,
-			 "sched");
+			 "sched", 0);
 }
 
 int
@@ -2004,14 +1682,13 @@ agent_observe_scope_reclaim(uint scope_id)
 {
 	struct agent_audit_scope_state *state;
 	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
-	int changed = 0;
 
 	if (!agent_observe_scope_valid(scope_id) ||
 	    vfs_scope_lifecycle(scope_id, &lifecycle) < 0)
 		return -1;
+	if (agent_evidence_reclaim(lifecycle) < 0)
+		return -1;
 	state = agent_observe_audit_scope_state_get(scope_id, lifecycle, 0);
-	if (state != 0 && state->visible_records > 0)
-		changed = 1;
 	while (state != 0 && state->visible_records > 0) {
 		int slot = state->sequence_slots[state->visible_records - 1];
 		if (agent_audit_slot_unpublish(slot) < 0)
@@ -2020,29 +1697,27 @@ agent_observe_scope_reclaim(uint scope_id)
 	/* 有序索引为准；兜底清除内部索引失配后遗留的证据。 */
 	for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++)
 		if (agent_audit_scopes[i] == scope_id) {
-			changed = 1;
 			agent_audit_slot_clear(i);
 		}
 	if (state != 0) {
-		changed = 1;
 		memset(state, 0, sizeof(*state));
 	}
-	if (changed && agent_observe_checkpoint_generation != ~0ULL)
-		agent_observe_checkpoint_generation++;
-	return agent_obsstore_mark_reap(scope_id, lifecycle);
+	return 0;
 }
 
-void
+int
 agent_observe_ledger_record_context(struct proc *p,
 				    struct agent_context_record *record,
 				    uint64 span_owner, int source_pid,
 				    uint64 cause_control,
-				    int authority_effect, int causal_audit)
+				    int authority_effect, int causal_audit,
+				    uint64 evidence_ticket)
 {
 	if (p == 0 || record == 0)
-		return;
-	agent_audit_context(p, record, span_owner, source_pid,
-			    cause_control, authority_effect, causal_audit);
+		return -1;
+	return agent_audit_context(p, record, span_owner, source_pid,
+				   cause_control, authority_effect, causal_audit,
+				   evidence_ticket);
 }
 
 void
@@ -2050,7 +1725,6 @@ agent_observe_ledger_record_sched(struct proc *p,
 				  struct agent_sched_record *record)
 {
 	if (p == 0 || record == 0 ||
-	    agent_identity_lease_maintenance_pending() ||
 	    record->dispatch_count == 0 ||
 	    (record->dispatch_count & (record->dispatch_count - 1)) != 0)
 		return;
@@ -2081,5 +1755,5 @@ agent_observe_ledger_record_effect(struct proc *p, int tool_id, int status,
 			 p->agent_current_span_owner, p->agent_control_id,
 			 AGENT_AUDIT_ID_TELEMETRY,
 			 authority_effect, value0, value1, value2, flags,
-			 text);
+			 text, 0);
 }

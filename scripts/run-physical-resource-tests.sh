@@ -35,17 +35,21 @@ host_probe_setup "${TMPDIR_PHYSICAL}"
 policy_probe="scripts/probes/physical-page-policy.c"
 capacity_probe="scripts/probes/physical-page-capacity.c"
 "${TOOLPREFIX}gcc" -std=gnu11 -ffreestanding -fsyntax-only \
+	-march=rv64imac_zicsr_zifencei -mabi=lp64 \
 	"${capacity_probe}"
 if "${TOOLPREFIX}gcc" -std=gnu11 -ffreestanding -fsyntax-only \
+	-march=rv64imac_zicsr_zifencei -mabi=lp64 \
 	-DPHYSICAL_PAGE_SYSTEM_RESERVE=1024 "${capacity_probe}" \
 	>/dev/null 2>&1; then
 	echo "[physical-resource] underfunded production policy compiled" >&2
 	exit 1
 fi
 "${TOOLPREFIX}gcc" -std=gnu11 -ffreestanding -fsyntax-only \
+	-march=rv64imac_zicsr_zifencei -mabi=lp64 \
 	-DPHYSICAL_PAGE_SYSTEM_RESERVE=64 \
 	-DEXPECTED_PHYSICAL_DOMAIN_LIMIT=10 "${policy_probe}"
 if "${TOOLPREFIX}gcc" -std=gnu11 -ffreestanding -fsyntax-only \
+	-march=rv64imac_zicsr_zifencei -mabi=lp64 \
 	-DPHYSICAL_PAGE_SYSTEM_RESERVE=64 \
 	-DPHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT=11 \
 	-DEXPECTED_PHYSICAL_DOMAIN_LIMIT=11 "${policy_probe}" \
@@ -60,6 +64,7 @@ for rejected in \
 	"-DPHYSICAL_PAGE_DOMAIN_ORDINARY_LIMIT=40000U" \
 	"-DPHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT=4294967296ULL"; do
 	if "${TOOLPREFIX}gcc" -std=gnu11 -ffreestanding -fsyntax-only \
+		-march=rv64imac_zicsr_zifencei -mabi=lp64 \
 		${rejected} \
 		-DEXPECTED_PHYSICAL_DOMAIN_LIMIT=PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT \
 		"${policy_probe}" >/dev/null 2>&1; then

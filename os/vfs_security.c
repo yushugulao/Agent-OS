@@ -17,20 +17,6 @@ _Static_assert(EXEC_MANIFEST_VFS_CONTENT_READ == VFS_CAP_CONTENT_READ,
 _Static_assert(EXEC_MANIFEST_VFS_ARTIFACT_WRITE == VFS_CAP_ARTIFACT_WRITE,
 	       "artifact-write capability mismatch");
 
-enum vfs_scope_reclaim_phase {
-	VFS_SCOPE_RECLAIM_BEGIN = 0,
-	VFS_SCOPE_RECLAIM_FILES,
-	VFS_SCOPE_RECLAIM_METADATA,
-	VFS_SCOPE_RECLAIM_RETIRE,
-	VFS_SCOPE_RECLAIM_DONE,
-};
-
-_Static_assert(VFS_SCOPE_RECLAIM_BEGIN < VFS_SCOPE_RECLAIM_FILES &&
-	       VFS_SCOPE_RECLAIM_FILES < VFS_SCOPE_RECLAIM_METADATA &&
-	       VFS_SCOPE_RECLAIM_METADATA < VFS_SCOPE_RECLAIM_RETIRE &&
-	       VFS_SCOPE_RECLAIM_RETIRE < VFS_SCOPE_RECLAIM_DONE,
-	       "workflow reclaim phases must remain forward-only");
-
 struct vfs_scope_ref {
 	int used;
 	uint scope_id;
@@ -41,8 +27,7 @@ struct vfs_scope_ref {
 	uint retire_next;
 	int retiring;
 	int preserve_on_retire;
-	uint reclaim_phase;
-	uint64 reclaim_metadata_target;
+	int cleanup_started;
 	struct workflow_lifecycle_key lifecycle;
 	struct resource_account_handle storage_account;
 };
@@ -165,7 +150,6 @@ vfs_scope_registry_insert_locked(uint scope_id,
 	memset(ref, 0, sizeof(*ref));
 	ref->used = 1;
 	ref->scope_id = scope_id;
-	ref->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
 	ref->lifecycle = lifecycle;
 	ref->storage_account = storage;
 	bucket = vfs_scope_hash(scope_id);
@@ -310,8 +294,7 @@ static int vfs_scope_create(uint scope_id,
 	enabled = intr_save();
 	vfs_scope_registry_init_locked();
 	if (vfs_scope_find_locked(scope_id) == 0 && registry->free_count > 0 &&
-	    registry->active_count + registry->retiring_count <
-		    VFS_SCOPE_MAX_ACTIVE &&
+	    registry->active_count < VFS_SCOPE_MAX_ACTIVE &&
 	    registry->active_count + registry->retiring_count <
 		    VFS_SCOPE_LIFECYCLE_CAP &&
 	    fs_storage_scope_admissible() &&
@@ -344,13 +327,28 @@ int vfs_scope_fresh_admission_status(void)
 
 	vfs_scope_registry_init_locked();
 	ready = registry->free_count > 0 &&
-		registry->active_count + registry->retiring_count <
-			VFS_SCOPE_MAX_ACTIVE &&
+		registry->active_count < VFS_SCOPE_MAX_ACTIVE &&
 		registry->active_count + registry->retiring_count <
 			VFS_SCOPE_LIFECYCLE_CAP &&
 		fs_storage_scope_admissible();
 	reclaimable = !ready && registry->retiring_count != 0;
 	intr_restore(enabled);
+	/*
+	 * A caller that is already retrying admission is itself a safe bounded
+	 * continuation point.  Drive one reclaim slice here so replacement
+	 * workflows cannot depend on a timer tick or unrelated syscall traffic.
+	 */
+	if (reclaimable) {
+		vfs_scope_reap_pending(0);
+		enabled = intr_save();
+		ready = registry->free_count > 0 &&
+			registry->active_count < VFS_SCOPE_MAX_ACTIVE &&
+			registry->active_count + registry->retiring_count <
+				VFS_SCOPE_LIFECYCLE_CAP &&
+			fs_storage_scope_admissible();
+		reclaimable = !ready && registry->retiring_count != 0;
+		intr_restore(enabled);
+	}
 	return ready ? AGENT_STATUS_OK :
 	       reclaimable ? AGENT_STATUS_RETRY : AGENT_STATUS_NO_SPACE;
 }
@@ -377,7 +375,8 @@ static int vfs_scope_join(uint scope_id,
 }
 
 static int vfs_scope_release(uint scope_id,
-			     struct workflow_lifecycle_key lifecycle)
+			     struct workflow_lifecycle_key lifecycle,
+			     int departure)
 {
 	struct vfs_scope_ref *matched = 0;
 	struct resource_account_handle storage = resource_account_none();
@@ -393,10 +392,11 @@ static int vfs_scope_release(uint scope_id,
 	    !workflow_lifecycle_key_equal(matched->lifecycle, lifecycle))
 		matched = 0;
 	if (matched != 0) {
+		if (departure)
+			workflow_lifecycle_departure_leave(lifecycle);
 		last = workflow_lifecycle_leave(lifecycle);
 		if (last > 0) {
-			matched->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
-			matched->reclaim_metadata_target = 0;
+			matched->cleanup_started = 0;
 			storage = matched->storage_account;
 			vfs_scope_retiring_add_locked(matched);
 		}
@@ -417,44 +417,21 @@ static int vfs_scope_release(uint scope_id,
 }
 
 static int
-vfs_scope_reclaim_advance(uint scope_id,
-			  struct workflow_lifecycle_key lifecycle,
-			  uint expected, uint next, uint64 metadata_target)
+vfs_scope_reclaim_prepare(uint scope_id,
+			  struct workflow_lifecycle_key *lifecycle_out,
+			  int *preserve_files_out)
 {
-	int advanced = 0;
-	int enabled;
-
-	/* 慢阶段无锁执行，发布前以不可变生命周期键重新校验。 */
-	enabled = intr_save();
-	{
-		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
-
-		if (ref != 0 && ref->retiring &&
-		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle) &&
-		    ref->reclaim_phase == expected &&
-		    workflow_lifecycle_retiring(lifecycle)) {
-			ref->reclaim_metadata_target = metadata_target;
-			ref->reclaim_phase = next;
-			advanced = 1;
-		}
-	}
-	intr_restore(enabled);
-	return advanced;
-}
-
-static void vfs_scope_reclaim_complete(uint scope_id)
-{
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
 	int preserve_files = 0;
-	uint phase = VFS_SCOPE_RECLAIM_BEGIN;
-	uint64 metadata_target = 0;
+	int cleanup_started = 0;
 	int eligible = 0;
 	int enabled;
-	enum resource_account_state storage_state;
-	struct workflow_lifecycle_key lifecycle =
-		workflow_lifecycle_none();
 
-	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
-		return;
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC || lifecycle_out == 0 ||
+	    preserve_files_out == 0)
+		return -1;
+	*lifecycle_out = workflow_lifecycle_none();
+	*preserve_files_out = 0;
 	enabled = intr_save();
 	{
 		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
@@ -464,66 +441,93 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 			eligible = ref->retiring &&
 				   workflow_lifecycle_retiring(lifecycle);
 			preserve_files = ref->preserve_on_retire;
-			phase = ref->reclaim_phase;
-			metadata_target = ref->reclaim_metadata_target;
+			cleanup_started = ref->cleanup_started;
 		}
 	}
 	intr_restore(enabled);
 	if (!eligible)
-		return;
+		return -1;
+	if (!cleanup_started) {
+		uint64 ignored_target = 0;
 
-	if (phase == VFS_SCOPE_RECLAIM_BEGIN) {
-		uint64 target = 0;
-		uint next = preserve_files ? VFS_SCOPE_RECLAIM_METADATA :
-					     VFS_SCOPE_RECLAIM_FILES;
+		if (agent_scope_reclaim_begin(scope_id, lifecycle,
+					      &ignored_target) < 0)
+			return -1;
+		enabled = intr_save();
+		{
+			struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (agent_scope_reclaim_begin(scope_id, lifecycle, &target) < 0)
-			return;
-		(void)vfs_scope_reclaim_advance(scope_id, lifecycle, phase,
-					 next, target);
-		return;
-	}
-	if (phase == VFS_SCOPE_RECLAIM_FILES) {
-		int status = fs_reclaim_scope_files(scope_id);
-
-		if (status == FS_RECLAIM_PENDING)
-			return;
-		if (status < 0) {
-			/* 标签清理失败后执行完整一致性扫描。 */
-			agent_file_request_scan();
-			return;
+			if (ref == 0 || !ref->retiring ||
+			    !workflow_lifecycle_key_equal(ref->lifecycle,
+							  lifecycle) ||
+			    !workflow_lifecycle_retiring(lifecycle)) {
+				intr_restore(enabled);
+				return -1;
+			}
+			ref->cleanup_started = 1;
 		}
-		(void)vfs_scope_reclaim_advance(
-			scope_id, lifecycle, phase, VFS_SCOPE_RECLAIM_METADATA,
-			metadata_target);
-		return;
+		intr_restore(enabled);
 	}
-	if (phase == VFS_SCOPE_RECLAIM_METADATA) {
-		if (!agent_scope_reclaim_metadata_done(
-			    scope_id, lifecycle, metadata_target))
-			return;
-		(void)vfs_scope_reclaim_advance(
-			scope_id, lifecycle, phase, VFS_SCOPE_RECLAIM_RETIRE,
-			metadata_target);
-		return;
-	}
-	if (phase == VFS_SCOPE_RECLAIM_RETIRE) {
-		bio_scope_retire(scope_id);
-		(void)vfs_scope_reclaim_advance(scope_id, lifecycle, phase,
-					 VFS_SCOPE_RECLAIM_DONE,
-					 metadata_target);
-		return;
-	}
-	if (phase != VFS_SCOPE_RECLAIM_DONE)
-		panic("invalid workflow reclaim phase");
+	*lifecycle_out = lifecycle;
+	*preserve_files_out = preserve_files;
+	return 0;
+}
+
+static int
+vfs_scope_storage_persistently_empty(
+	uint scope_id, struct workflow_lifecycle_key lifecycle)
+{
+	struct resource_account_handle storage = resource_account_none();
+	struct resource_account_kind_snapshot blocks, inodes;
+	int enabled = intr_save();
+	struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
+
+	if (ref != 0 && ref->retiring &&
+	    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
+		storage = ref->storage_account;
+	intr_restore(enabled);
+	/* Every valid dynamic workflow label has the same charged storage owner;
+	 * even an empty file owns an inode, so zero exact charges prove no scan. */
+	if (resource_account_kind_snapshot(
+		    storage, RESOURCE_FS_BLOCK, &blocks) < 0 ||
+	    resource_account_kind_snapshot(
+		    storage, RESOURCE_FS_INODE, &inodes) < 0 ||
+	    blocks.account_kind != RESOURCE_ACCOUNT_STORAGE ||
+	    inodes.account_kind != RESOURCE_ACCOUNT_STORAGE ||
+	    blocks.external_id != FS_OWNER_SCOPE(scope_id) ||
+	    inodes.external_id != FS_OWNER_SCOPE(scope_id) ||
+	    (blocks.state != RESOURCE_ACCOUNT_CLOSING &&
+	     blocks.state != RESOURCE_ACCOUNT_DRAINING) ||
+	    inodes.state != blocks.state)
+		return 0;
+	return blocks.used[RESOURCE_CHARGE_ORDINARY] == 0 &&
+	       blocks.used[RESOURCE_CHARGE_RESERVED] == 0 &&
+	       blocks.pending[RESOURCE_CHARGE_ORDINARY] == 0 &&
+	       blocks.pending[RESOURCE_CHARGE_RESERVED] == 0 &&
+	       inodes.used[RESOURCE_CHARGE_ORDINARY] == 0 &&
+	       inodes.used[RESOURCE_CHARGE_RESERVED] == 0 &&
+	       inodes.pending[RESOURCE_CHARGE_ORDINARY] == 0 &&
+	       inodes.pending[RESOURCE_CHARGE_RESERVED] == 0;
+}
+
+static void
+vfs_scope_reclaim_finish(uint scope_id,
+			 struct workflow_lifecycle_key lifecycle,
+			 int preserve_files)
+{
+	enum resource_account_state storage_state;
+	int enabled;
+
+	/* There is no public retirement state machine: one idempotent finalizer
+	 * drains every remaining owner and only then releases the generation. */
+	bio_scope_retire(scope_id);
 
 	enabled = intr_save();
 	{
 		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
 
-		if (ref != 0 && ref->retiring &&
+		if (ref != 0 && ref->retiring && ref->cleanup_started &&
 		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle) &&
-		    ref->reclaim_phase == VFS_SCOPE_RECLAIM_DONE &&
 		    workflow_lifecycle_retiring(lifecycle)) {
 			storage_state = resource_account_state_get(ref->storage_account);
 			if (preserve_files &&
@@ -562,7 +566,7 @@ static int vfs_scope_preserve_on_retire(uint scope_id)
 void vfs_scope_reap_pending(uint64 now)
 {
 	uint scope_id = VFS_SCOPE_NONE;
-	uint reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
+	int request_next = 0;
 	int enabled = intr_save();
 	struct vfs_scope_registry *registry = &vfs_scope_registry;
 	struct vfs_scope_ref *ref;
@@ -573,23 +577,52 @@ void vfs_scope_reap_pending(uint64 now)
 		0 : vfs_scope_retiring_next_locked();
 	if (ref != 0) {
 		scope_id = ref->scope_id;
-		reclaim_phase = ref->reclaim_phase;
-		/* 同一时钟滴答只推进一个有界阶段，避免传统系统调用代偿回收。 */
-		registry->reap_next_tick = now + 1;
 	}
 	intr_restore(enabled);
 	if (scope_id == VFS_SCOPE_NONE)
 		return;
-	if (reclaim_phase >= VFS_SCOPE_RECLAIM_METADATA) {
-		vfs_scope_reclaim_complete(scope_id);
-	} else if (bio_background_begin(FS_OWNER_SCOPE(scope_id))) {
-		vfs_scope_reclaim_complete(scope_id);
-		bio_background_end();
+	{
+		struct workflow_lifecycle_key lifecycle;
+		int preserve_files;
+		int files_status = 0;
+
+		if (vfs_scope_reclaim_prepare(scope_id, &lifecycle,
+					      &preserve_files) == 0) {
+			if (!preserve_files) {
+				if (vfs_scope_storage_persistently_empty(
+					    scope_id, lifecycle))
+					files_status = 0;
+				else if (!bio_background_begin(
+						 FS_OWNER_SCOPE(scope_id)))
+					files_status = FS_RECLAIM_PENDING;
+				else {
+					files_status = fs_reclaim_scope_files(scope_id);
+					bio_background_end();
+				}
+			}
+			if (files_status >= 0 &&
+			    files_status != FS_RECLAIM_PENDING)
+				vfs_scope_reclaim_finish(scope_id, lifecycle,
+							 preserve_files);
+		}
 	}
 	enabled = intr_save();
-	if (registry->retiring_count == 0)
+	if (registry->retiring_count == 0) {
 		registry->reap_next_tick = 0;
+	} else {
+		ref = vfs_scope_find_locked(scope_id);
+		/*
+		 * Retirement is an explicit correctness obligation, not a timer
+		 * heuristic.  Re-publish one continuation even when this bounded
+		 * stage made no progress; a later syscall checkpoint may release the
+		 * dependency while the architectural tick is unchanged.
+		 */
+		registry->reap_next_tick = 0;
+		request_next = 1;
+	}
 	intr_restore(enabled);
+	if (request_next)
+		agent_background_request();
 }
 
 void
@@ -736,8 +769,8 @@ int vfs_scope_close_trusted(uint scope_id,
 	return result;
 }
 
-// 返回本次分配后必须为已接纳及未来工作流槽保留的存储量。退出中的作用域
-// 仍占接纳槽，其已用量抵扣本槽保留量，不能再按空槽重复计算。
+// 返回本次分配后必须为活跃、退出中及未来活跃工作流保留的存储量。
+// closing 域不再占 active admission slot，但其未释放对象仍保留自己的额度。
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 {
 	struct vfs_scope_registry *registry = &vfs_scope_registry;
@@ -749,7 +782,7 @@ uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 		return 0;
 	enabled = intr_save();
 	vfs_scope_registry_init_locked();
-	allocated = registry->active_count + registry->retiring_count;
+	allocated = registry->active_count;
 	for (uint i = 0; i < VFS_SCOPE_LIFECYCLE_CAP; i++) {
 		struct vfs_scope_ref *ref = &registry->refs[i];
 		uint used;
@@ -757,6 +790,11 @@ uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 		if (!ref->used ||
 		    (!ref->retiring &&
 		     !workflow_lifecycle_key_valid(ref->lifecycle)))
+			continue;
+		/* Closing domains cannot allocate new blocks or inodes.  Their live
+		 * objects are already absent from the free counters, so reserving an
+		 * additional empty-domain guarantee would double count them. */
+		if (ref->retiring)
 			continue;
 		if (ref->scope_id == exempt_scope)
 			continue;
@@ -928,7 +966,7 @@ void vfs_proc_lifecycle_release(struct proc *p)
 	p->workflow_lifecycle_charged = 0;
 	p->workflow_lifecycle_id = WORKFLOW_LIFECYCLE_ID_NONE;
 	p->workflow_lifecycle_generation = 0;
-	if (vfs_scope_release(scope_id, lifecycle) < 0)
+	if (vfs_scope_release(scope_id, lifecycle, 1) < 0)
 		panic("workflow lifecycle refcount");
 }
 
@@ -1004,7 +1042,7 @@ int vfs_proc_spawn_scope(const struct proc *parent, struct proc *child,
 		if (!joined ||
 		    vfs_proc_lifecycle_attach(child, scope_id, lifecycle) < 0) {
 			if (joined &&
-			    vfs_scope_release(scope_id, lifecycle) < 0)
+			    vfs_scope_release(scope_id, lifecycle, 0) < 0)
 				panic("workflow lifecycle drop rollback");
 			intr_restore(enabled);
 			return -1;
@@ -1033,7 +1071,7 @@ int vfs_proc_spawn_scope(const struct proc *parent, struct proc *child,
 		return -1;
 	}
 	if (vfs_proc_lifecycle_attach(child, scope_id, lifecycle) < 0) {
-		if (vfs_scope_release(scope_id, lifecycle) < 0)
+		if (vfs_scope_release(scope_id, lifecycle, 0) < 0)
 			panic("workflow lifecycle attach rollback");
 		return -1;
 	}
@@ -1435,7 +1473,7 @@ void vfs_proc_exec_abort(struct vfs_exec_transition *transition)
 	lifecycle = transition->target.lifecycle;
 	scope_id = transition->target.scope_id;
 	if (transition->lifecycle_reserved &&
-	    vfs_scope_release(scope_id, lifecycle) < 0)
+	    vfs_scope_release(scope_id, lifecycle, 0) < 0)
 		panic("exec lifecycle rollback");
 	memset(transition, 0, sizeof(*transition));
 }

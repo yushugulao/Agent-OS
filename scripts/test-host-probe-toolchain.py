@@ -180,8 +180,6 @@ class HostProbeToolchainTests(unittest.TestCase):
             "run-fs-allocator-fault-tests.sh",
             "run-fs-enospc-tests.sh",
             "run-fs-epoch-tests.sh",
-            "run-metadata-recovery-tests.sh",
-            "run-observe-recovery-tests.sh",
             "run-physical-resource-tests.sh",
             "run-proc-reap-tests.sh",
             "run-syscall-fairness-tests.sh",
@@ -191,7 +189,6 @@ class HostProbeToolchainTests(unittest.TestCase):
         }
         self.assertEqual(resource_runners, expected_runners)
         shell_harnesses = expected_runners | {
-            "test-durable-dirty-retry.sh",
             "test-identity-lease-deferred.sh",
             "test-observe-reap-state.sh",
         }

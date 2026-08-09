@@ -259,6 +259,16 @@ uint agent_metadata_scan_index_inode(struct inode *ip, char *path, int *failed) 
 	if (scope == VFS_SCOPE_SYSTEM ? mut || !exec_policy_inode_trusted(ip) :
 	    !vfs_scope_active(scope) || !mut)
 		return 0;
+	if (ip->agent_meta_slot > 0 && ip->agent_meta_flags == 0 &&
+	    ip->agent_meta_version == AGENT_INODE_META_VERSION) {
+		slot = ip->agent_meta_slot - 1;
+		if (agent_metadata_catalog_borrow(0, slot, &view) > 0 &&
+		    view.scope_id == scope &&
+		    (view.meta->flags & AGENT_FILE_META_F_AUTOSCAN) == 0 &&
+		    scan_matches(view.meta, ip))
+			SCAN_NOTE(slot);
+		return 0;
+	}
 	slot = ip->agent_meta_slot - 1;
 	if (agent_file_state_index_deferred(ip) &&
 	    scan_scope_full(scope, 0)) {
@@ -297,6 +307,11 @@ uint agent_metadata_scan_index_inode(struct inode *ip, char *path, int *failed) 
 	}
 	if (slot >= 0 &&
 	    (view.state & AGENT_CATALOG_STATE_QUARANTINE)) {
+		SCAN_NOTE(slot);
+		return 0;
+	}
+	if (slot >= 0 &&
+	    (view.meta->flags & AGENT_FILE_META_F_AUTOSCAN) == 0) {
 		SCAN_NOTE(slot);
 		return 0;
 	}

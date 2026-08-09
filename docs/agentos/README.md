@@ -1,45 +1,50 @@
-# 文档索引
+# AgentOS 文档索引
 
-本目录是项目文档阅读入口。README 负责基本信息、项目简介、完成情况和快速运行；设计文档负责架构图、模块职责和关键决策；API/ABI 文档负责说明用户态与内核的接口分工；验证文档负责用测试场景、输出标记和性能观测说明项目是否可复现。
+本目录记录当前代码，而不是历史方案。若文档与实现发生冲突，以公开 UAPI 头文件、生产构建的源码清单和版本化 checker 为准。
 
-如果是第一次阅读，建议先从仓库根目录 README 理解科研 Agent 平台、普通 uCore 对照目标和 AgentOS-uCore 增强目标之间的关系，再进入本目录查看内核机制细节。
+## 推荐顺序
 
-## 推荐阅读顺序
-
-| 顺序 | 文档 | 用途 |
+| 顺序 | 文档 | 内容 |
 | ---: | --- | --- |
-| 1 | [../../README.md](../../README.md) | 项目概览、构建运行、当前完成状态 |
-| 2 | [design.md](design.md) | 主设计文档：架构、模块、运行视图、关键决策、当前范围和取舍 |
-| 3 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
-| 4 | [api.md](api.md) | 系统调用、Agent ABI、self-only workflow lifecycle 观测、工具协议和错误语义 |
-| 5 | [security-hardening.md](security-hardening.md) | 安全威胁、可信执行、文件安全域、统一 teardown、生命周期和资源韧性设计 |
-| 6 | [verification.md](verification.md) | 验证计划、版本化 Agent 套件、持久化/故障/teardown 专项与证据边界 |
-| 7 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
+| 1 | [../../README.md](../../README.md) | 项目定位、快速构建和关键边界 |
+| 2 | [design.md](design.md) | Credit Domain、Evidence Ring、Live Query 与 lifecycle 总设计 |
+| 3 | [api.md](api.md) | 当前 ABI、workflow fence、typed watch 和兼容项 |
+| 4 | [security-hardening.md](security-hardening.md) | 威胁模型、fail-closed cut 与资源安全 |
+| 5 | [requirements-traceability.md](requirements-traceability.md) | 赛题任务到源码、静态检查和 Guest 验证的映射 |
+| 6 | [verification.md](verification.md) | 开发验证顺序和证据边界 |
 
-## 详细附录
+## 任务附录
 
 | 文档 | 定位 |
 | --- | --- |
-| [security-hardening.md](security-hardening.md) | 全部安全修复的威胁模型、机制总表、双目标分工、可信程序注册和安全专项测试入口 |
-| [task1-agent-process.md](task1-agent-process.md) | 任务一 Agent 进程与地址空间设计细节 |
-| [task2-agent-call.md](task2-agent-call.md) | 任务二结构化工具调用设计细节 |
-| [task3-context-path.md](task3-context-path.md) | 任务三 Context Path、运行轨迹、cause/span 因果字段、用户自管 cache、统一 timeline 导出、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
-| [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、真实 inode 关联、私有 `.agentmeta` 元数据文件、根目录自动扫描、索引、查询计划、内容摘要和依赖查询设计细节 |
-| [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/unwatch、FIFO 事件队列、wait/timeout 睡眠、事件因果继承、heartbeat、Agent 感知调度、受权调度配置、调度原因记录、运行轨迹、当前 span 短记录、全局审计短记录、过滤查询、统一 timeline、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
-| [assets/agentos_arch.svg](assets/agentos_arch.svg) | 用户态/内核态总架构图 |
-| [assets/agentos_telemetry_pipeline.svg](assets/agentos_telemetry_pipeline.svg) | 内核记录到平台页面的数据路径图 |
-| [../../LICENSE](../../LICENSE) | 源代码 GPL-3.0 |
-| [../../DOCUMENTATION_LICENSE.md](../../DOCUMENTATION_LICENSE.md) | 文档与结果材料 CC BY-SA 4.0 |
-| [../../NOTICE](../../NOTICE) | 第三方来源和许可声明 |
+| [task1-agent-process.md](task1-agent-process.md) | Agent 身份、地址空间、workflow lifecycle 与资源域 |
+| [task2-agent-call.md](task2-agent-call.md) | 结构化工具协议 |
+| [task3-context-path.md](task3-context-path.md) | Context Path 与因果字段 |
+| [task4-file-query.md](task4-file-query.md) | 显式 volatile metadata、选择性索引和 typed live query |
+| [task5-agent-loop.md](task5-agent-loop.md) | 事件循环、IPC、Evidence Ring 和兼容观测视图 |
 
-## 文档维护约定
+## 当前架构速记
 
-- 主设计事实以 [design.md](design.md) 为准，分任务文档只展开实现细节。
-- 用户态/内核态接口分工和结构体布局以 [api.md](api.md) 为准。
-- 通用安全修复与 AgentOS 专属安全机制的分工以 [security-hardening.md](security-hardening.md) 为准。
-- 赛题完成度判断以 [requirements-traceability.md](requirements-traceability.md) 和 [verification.md](verification.md) 共同为准。
-- 新增功能需要同步更新对应设计说明、API/ABI、验证记录和示例脚本。
-- 发布测试结果只从 `evidence/releases/INDEX.md` 指向的冻结 bundle 读取。
-- 模块列表、自测集合和增长阈值以 `ci/kernel-budgets.json` 及对应 checker 的版本化注册集合为准；文档不复制会随拆分变化的固定计数。
-- Agent case 的唯一清单是 [`ci/kernel-budgets.json`](../../ci/kernel-budgets.json) 中的 `agent_test_suite.expected_cases`；正式实验顺序和声明映射以 [`ci/evaluation-suite.json`](../../ci/evaluation-suite.json) 为准。文档不复制数量或成员列表。
-- Agent 套件与 physical/metadata recovery/observation recovery/VirtIO/workflow teardown 等独立专项分别记账，不把机制 runner 混入 Agent case 清单。
+1. **资源**：U/P/F credit 以 `U+P+F` 参加硬准入；热路径在本账户内移动 credit，fence/context switch/压力路径才 trim。
+2. **证据**：普通成功 Context 只进入一次 canonical Evidence Ring；关键拒绝和授权效果另有兼容 ledger 投影；workflow fence 生成 challenge-bound SHA-256 根。
+3. **文件查询**：只有显式 `agent_file_meta_set()` 进入内存 catalog/index；typed watch 产生 `ENTER/UPDATE/LEAVE`，丢失增量时要求 generation resync。
+4. **生命周期**：`member_refcount + closing` 是核心状态；operation、departure、fence 三类 gate 保证 cut；最后成员离开后回收。
+5. **不提供**：普通目录 autoscan、metadata crash catalog、逐操作磁盘证据、observe recovery catalog、多阶段 workflow retirement。
+
+## 兼容性提示
+
+- audit/timeline/provenance/ledger API 保留，并从 Context、Evidence Ring、调度记录及少量兼容 ledger 记录构造读取视图。
+- `AGENT_FILE_META_F_PERSIST`、`AGENT_FILE_META_F_AUTOSCAN` 名称仍在头文件中，但当前 metadata set 拒绝它们。
+- observe recovery syscall 编号和请求结构仍保留，调用固定返回 `AGENT_STATUS_BAD_PARAM`。
+- 源码中可能留有未进入生产对象清单的历史实现文件。文档只描述 Makefile 实际构建的路径。
+
+## 来源说明
+
+Credit Domain、Evidence Ring 和 Live Query 分别受到 Linux CPU accounting/percpu/rstat、Linux BPF ring buffer 和 Haiku BFS 属性/live query 的概念启发。实现为本项目 clean-room 代码，没有复制或 vendoring 上游源码、数据、二进制或磁盘格式，详见 [../../NOTICE](../../NOTICE)。
+
+## 维护规则
+
+- 发布数值只从 [正式证据索引](../../evidence/releases/INDEX.md) 指向的冻结 bundle 读取。
+- UAPI 布局以 `ci/agent-uapi-layout.json` 和 `scripts/check-agent-uapi-layout.py` 为准。
+- 模块、体积和测试预算以 `ci/kernel-budgets.json` 及 checker 为准。
+- 修改 fence、credit、ring 或 live query 时，必须同步更新设计、API、追踪表与验证说明。

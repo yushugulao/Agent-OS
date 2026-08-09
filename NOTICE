@@ -1,22 +1,43 @@
 # Notice
 
-This project is based on LearningOS/uCore-Tutorial-Code-2025S and LearningOS/uCore-Tutorial-Test-2025S. These upstream projects are GPL-3.0 projects.
-
-The root `.clang-format` originates from the Linux kernel formatting
-configuration and retains its embedded `GPL-2.0` SPDX identifier. It is
-distributed as formatting data and is not relicensed as GPL-3.0.
-
-Source code license: GPL-3.0.
-
-Documentation and presentation material license: CC BY-SA 4.0.
-
-Reference URLs:
+AgentOS-uCore is a derivative of the GPL-3.0 LearningOS teaching projects:
 
 - LearningOS/uCore-Tutorial-Code-2025S: https://github.com/LearningOS/uCore-Tutorial-Code-2025S
 - LearningOS/uCore-Tutorial-Test-2025S: https://github.com/LearningOS/uCore-Tutorial-Test-2025S
+
+Source code in this repository is distributed under GPL-3.0. Documentation and
+presentation material are distributed under CC BY-SA 4.0, except where a file
+states a different license.
+
+The root `.clang-format` originates from the Linux kernel formatting
+configuration and retains its embedded `GPL-2.0` SPDX identifier. It is
+distributed as formatting data and is not relicensed as GPL-3.0:
+
 - Linux kernel `.clang-format`: https://github.com/torvalds/linux/blob/master/.clang-format
-- Linux cgroup v2 design reference: https://docs.kernel.org/admin-guide/cgroup-v2.html
-- Linux blk-mq design reference: https://docs.kernel.org/block/blk-mq.html
-- Linux wait queue design reference: https://github.com/torvalds/linux/blob/master/kernel/sched/wait.c
-- AIOS paper (evaluation-method reference only): https://openreview.net/attachment?id=L4HHkCDz2x&name=pdf
-- AIOS repository (project reference only; no source or data redistributed): https://github.com/agiresearch/AIOS
+
+The following upstream designs were studied as concept-level references for
+original AgentOS-uCore implementations:
+
+- Linux CPU accounting and batched per-CPU/rstat accounting ideas:
+  https://docs.kernel.org/6.11/admin-guide/cgroup-v1/cpuacct.html
+  https://github.com/torvalds/linux/blob/master/lib/percpu_counter.c
+  https://github.com/torvalds/linux/blob/master/kernel/cgroup/rstat.c
+- Linux BPF ring buffer ordering, reserve/commit/discard, and notification
+  ideas: https://docs.kernel.org/6.6/bpf/ringbuf.html
+- Haiku BFS attributes, selective indexing, and live-query ideas:
+  https://www.haiku-os.org/legacy-docs/practical-file-system-design.pdf
+- Linux cgroup v2, blk-mq, and wait-queue documentation:
+  https://docs.kernel.org/admin-guide/cgroup-v2.html
+  https://docs.kernel.org/block/blk-mq.html
+  https://github.com/torvalds/linux/blob/master/kernel/sched/wait.c
+- AIOS paper and repository, used only as public project/evaluation references:
+  https://openreview.net/attachment?id=L4HHkCDz2x&name=pdf
+  https://github.com/agiresearch/AIOS
+
+These references are not vendored dependencies. The Workflow Credit Domain,
+Fence-Sealed Evidence Ring, and Agent Live-Query FS were implemented in this
+repository as clean-room, project-specific code after studying public design
+principles. No Linux, Haiku, or AIOS source code, test data, binaries, generated
+artifacts, or on-disk formats are copied or redistributed by those mechanisms.
+Names such as cgroup, percpu_counter, rstat, BPF ring buffer, BFS, and live query
+identify conceptual lineage, not source compatibility or code reuse.

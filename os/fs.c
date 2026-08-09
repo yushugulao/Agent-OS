@@ -1439,6 +1439,20 @@ static int fs_storage_rebuild(int dev, int enforce_policy)
 	return 0;
 }
 
+static void fs_storage_scope_account_limits(
+	struct resource_account_limits *limits)
+{
+	memset(limits, 0, sizeof(*limits));
+	limits->class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_FS_BLOCK] =
+		fs_storage.workflow_block_domain_limit;
+	limits->class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_FS_INODE] =
+		fs_storage.workflow_inode_domain_limit;
+	limits->class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_BUFFER_CACHE] =
+		IO_CACHE_WORKFLOW_CAP;
+	limits->class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_PHYSICAL_PAGE] =
+		FS_TRANSIENT_PAGE_WORKFLOW_CAP;
+}
+
 int fs_storage_scope_account_create(
 	uint scope_id, struct resource_account_handle *out)
 {
@@ -1456,15 +1470,7 @@ int fs_storage_scope_account_create(
 		return -1;
 	}
 	owner = FS_OWNER_SCOPE(scope_id);
-	memset(&limits, 0, sizeof(limits));
-	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_FS_BLOCK] =
-		fs_storage.workflow_block_domain_limit;
-	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_FS_INODE] =
-		fs_storage.workflow_inode_domain_limit;
-	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_BUFFER_CACHE] =
-		IO_CACHE_WORKFLOW_CAP;
-	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_PHYSICAL_PAGE] =
-		FS_TRANSIENT_PAGE_WORKFLOW_CAP;
+	fs_storage_scope_account_limits(&limits);
 	if (resource_account_create(
 		    RESOURCE_ACCOUNT_STORAGE, owner,
 		    RESOURCE_CHARGE_GRANT(RESOURCE_CHARGE_RESERVED),
@@ -1519,6 +1525,7 @@ void fs_storage_scope_account_close(
 
 int fs_storage_scope_admissible(void)
 {
+	struct resource_account_limits limits;
 	uint required_blocks;
 	uint required_inodes;
 	int admissible = 0;
@@ -1534,6 +1541,11 @@ int fs_storage_scope_admissible(void)
 					    fs_storage.workflow_inode_guarantee);
 	admissible = fs_storage.free_blocks >= required_blocks &&
 		     fs_storage.free_inodes >= required_inodes;
+	if (admissible) {
+		fs_storage_scope_account_limits(&limits);
+		admissible = resource_account_promise_admissible(
+			RESOURCE_CHARGE_GRANT(RESOURCE_CHARGE_RESERVED), &limits);
+	}
 out:
 	intr_restore(enabled);
 	return admissible;
@@ -1585,7 +1597,6 @@ static int fs_storage_reserve_many(const struct fs_storage_charge *charge,
 		.kind = inode ? RESOURCE_FS_INODE : RESOURCE_FS_BLOCK,
 		.amount = amount,
 	};
-	struct resource_reservation reservation;
 	enum resource_charge_class charge_class;
 
 	if (!fs_storage.ready || charge == 0 || amount == 0 ||
@@ -1629,13 +1640,10 @@ static int fs_storage_reserve_many(const struct fs_storage_charge *charge,
 	}
 	charge_class = charge->level == FS_CHARGE_PUBLIC ?
 		RESOURCE_CHARGE_ORDINARY : RESOURCE_CHARGE_RESERVED;
-	if (resource_reserve_many(account, charge_class, &request, 1,
-				  &reservation) < 0) {
+	if (resource_acquire_many(account, charge_class, &request, 1) < 0) {
 		intr_restore(enabled);
 		return -1;
 	}
-	if (resource_reservation_commit(&reservation) < 0)
-		panic("filesystem resource commit");
 	if (charge->level == FS_CHARGE_SYSTEM) {
 		uint shared = *free_count > reserve + *system_remaining ?
 			*free_count - reserve - *system_remaining : 0;
@@ -4006,14 +4014,18 @@ struct inode *ialloc(uint dev, short type,
 				goto out;
 			dip = (struct dinode *)bp->data + inum % IPB;
 			if (dip->type == 0) { // a free inode
+				/* Never recycle a generation-exhausted inode: wrapping to
+				 * one would make stale metadata/edit handles valid again. */
+				if (dip->vfs_incarnation == (uint)~0U) {
+					brelse(bp);
+					continue;
+				}
 				ip = iget(dev, inum);
 				if (ip == 0) {
 					brelse(bp);
 					goto out;
 				}
 				incarnation = dip->vfs_incarnation + 1;
-				if (incarnation == 0)
-					incarnation = 1;
 				memset(dip, 0, sizeof(*dip));
 				dip->type = type;
 				dip->vfs_magic = VFS_LABEL_MAGIC;

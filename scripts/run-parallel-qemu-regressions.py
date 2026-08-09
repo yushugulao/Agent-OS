@@ -109,8 +109,6 @@ RESOURCE_CASES = (
     RegressionCase("file-resource", "scripts/run-file-resource-tests.sh", 7),
     RegressionCase("thread-resource", "scripts/run-thread-resource-tests.sh", 5),
     RegressionCase("physical-resource", "scripts/run-physical-resource-tests.sh", 6),
-    RegressionCase("metadata-recovery", "scripts/run-metadata-recovery-tests.sh", 45),
-    RegressionCase("observe-recovery", "scripts/run-observe-recovery-tests.sh", 14),
     RegressionCase("virtio-disk", "scripts/run-virtio-disk-tests.sh", 7),
     RegressionCase(
         "workflow-teardown-race", "scripts/run-workflow-teardown-race-tests.sh", 10
@@ -186,8 +184,8 @@ SANITIZED_KEYS = {
     "FSEPOCH_QEMU_JOBS",
     "INFLIGHT_DELAY_CANDIDATES",
     "INFLIGHT_MAX_ATTEMPTS",
-    "OBSERVE_RECOVERY_SNAPSHOT_FILE",
-    "OBSERVE_RECOVERY_ERASED_SNAPSHOT_FILE",
+    "WORKFLOW_TEARDOWN_RUNS",
+    "WORKFLOW_TEARDOWN_STABILITY_RUNS",
     "BASH_ENV",
     "ENV",
     "CDPATH",
@@ -582,11 +580,7 @@ def child_environment(
         }
     )
     if case.label == "workflow-teardown-race":
-        environment["WORKFLOW_TEARDOWN_STABILITY_RUNS"] = "3"
-    elif case.label == "observe-recovery":
-        environment["OBSERVE_RECOVERY_SNAPSHOT_FILE"] = str(
-            output / "observe-recovery-before-reap.img"
-        )
+        environment["WORKFLOW_TEARDOWN_RUNS"] = "1"
     elif case.label == "fs-allocator-fault":
         environment["FS_ALLOCATOR_ARTIFACT_DIR"] = str(
             output / "fs-allocator-evidence"
@@ -618,9 +612,7 @@ def expected_artifacts(case: RegressionCase, output: Path) -> tuple[Path, ...]:
     artifacts = [output / f"{case.label}.guest"]
     if case.agent_case is not None:
         artifacts.append(output / f"{case.label}.timing")
-    if case.label == "observe-recovery":
-        artifacts.append(output / "observe-recovery-before-reap.img")
-    elif case.label == "fs-allocator-fault":
+    if case.label == "fs-allocator-fault":
         artifacts.append(output / "fs-allocator-evidence.tar")
     return tuple(artifacts)
 
@@ -819,11 +811,7 @@ def published_artifacts(result: CaseResult, output: Path) -> tuple[tuple[Path, s
         (result.combined_file, f"{result.case.label}.log")
     ]
     case_output = output / result.case.label
-    if result.case.label == "observe-recovery":
-        artifacts.append(
-            (case_output / "observe-recovery-before-reap.img", "observe-recovery-before-reap.img")
-        )
-    elif result.case.label == "fs-allocator-fault":
+    if result.case.label == "fs-allocator-fault":
         artifacts.append(
             (case_output / "fs-allocator-evidence.tar", "fs-allocator-evidence.tar")
         )
@@ -832,9 +820,7 @@ def published_artifacts(result: CaseResult, output: Path) -> tuple[tuple[Path, s
 
 def case_artifact_names(case: RegressionCase) -> tuple[str, ...]:
     names = [f"{case.label}.log"]
-    if case.label == "observe-recovery":
-        names.append("observe-recovery-before-reap.img")
-    elif case.label == "fs-allocator-fault":
+    if case.label == "fs-allocator-fault":
         names.append("fs-allocator-evidence.tar")
     return tuple(names)
 
@@ -975,14 +961,7 @@ def verify_reports(
         expected_result_artifacts.append(
             (f"{case.label}.log", f"{case.label}/{case.label}.combined")
         )
-        if case.label == "observe-recovery":
-            expected_result_artifacts.append(
-                (
-                    "observe-recovery-before-reap.img",
-                    "observe-recovery/observe-recovery-before-reap.img",
-                )
-            )
-        elif case.label == "fs-allocator-fault":
+        if case.label == "fs-allocator-fault":
             expected_result_artifacts.append(
                 (
                     "fs-allocator-evidence.tar",

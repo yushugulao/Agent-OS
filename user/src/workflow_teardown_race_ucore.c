@@ -650,19 +650,19 @@ static void delegate_member_fds(int start_fd, int event_fd, int lifetime_fd)
 	      "delegate member endpoints");
 }
 
-static TEST_PHASE_NOINLINE void seed_persistent_metadata(void)
+static TEST_PHASE_NOINLINE void seed_volatile_metadata(void)
 {
 	struct agent_file_meta meta;
 	int fd;
 
-	check(agent_file_meta_init() == 0, "initialize metadata store");
+	check(agent_file_meta_init() == 0, "initialize live metadata catalog");
 	fd = open("racedirty", O_CREATE | O_WRONLY | O_TRUNC);
-	check(fd >= 0, "create persistent metadata object");
-	check(write(fd, "D", 1) == 1, "write persistent metadata object");
-	check(close(fd) == 0, "close persistent metadata object");
+	check(fd >= 0, "create volatile metadata object");
+	check(write(fd, "D", 1) == 1, "write volatile metadata object");
+	check(close(fd) == 0, "close volatile metadata object");
 	memset(&meta, 0, sizeof(meta));
 	meta.fid = 91001;
-	meta.flags = AGENT_FILE_META_F_PERSIST;
+	meta.flags = 0;
 	strcpy(meta.physical_name, "racedirty");
 	strcpy(meta.logical_path, "teardown/racedirty");
 	strcpy(meta.project, "teardown-race");
@@ -671,9 +671,9 @@ static TEST_PHASE_NOINLINE void seed_persistent_metadata(void)
 	strcpy(meta.stage, "armed");
 	strcpy(meta.kind, "artifact");
 	strcpy(meta.status, "pending");
-	strcpy(meta.summary, "persistent teardown record");
+	strcpy(meta.summary, "volatile teardown record");
 	check(agent_file_meta_set(&meta) == AGENT_STATUS_OK,
-	      "persist teardown metadata");
+	      "register volatile teardown metadata");
 }
 
 static TEST_PHASE_NOINLINE void io_writer(int start_fd, int event_fd)
@@ -1042,7 +1042,7 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 	check(lifecycle_key_equal(report->lifecycle.key, selected_key),
 	      "selected primary lifecycle remains immutable");
 	flags |= PRIMARY_LIFECYCLE_ABI | PRIMARY_FRESH_RESOURCES;
-	seed_persistent_metadata();
+	seed_volatile_metadata();
 	report->flags = flags;
 	report->phase = PRIMARY_REPORT_FRESH_RESOURCES;
 	write_exact(report_fd, report, sizeof(*report),

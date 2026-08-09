@@ -101,6 +101,21 @@ REQUIRED_KERNEL_SOURCE_GLOBS = frozenset(
     )
 )
 GENERATED_KERNEL_SOURCE_EXCLUDES = frozenset(("os/initproc.S",))
+RETIRED_AGENT_PRODUCTION_SOURCES = frozenset(
+    (
+        "os/agent_durable_section.c",
+        "os/agent_metadata_journal.c",
+        "os/agent_metadata_probe.c",
+        "os/agent_metadata_recovery.c",
+        "os/agent_metadata_scan.c",
+        "os/agent_metadata_store.c",
+        "os/agent_metadata_store_format.c",
+        "os/agent_metadata_store_io.c",
+        "os/agent_observe_capacity.c",
+        "os/agent_observe_recovery.c",
+        "os/agent_observe_store.c",
+    )
+)
 REQUIRED_TEST_ONLY_SUPPORTS = (
     {
         "name": "metadata_crash_profile",
@@ -213,19 +228,20 @@ CONTROLLED_AGENT_SYMBOL_PREFIXES = (
     "sys_tool_",
     "resource_",
     "workflow_lifecycle_",
+    "workflow_credit_domain_",
 )
 CONTROLLED_AGENT_EXACT_SYMBOLS = frozenset(("agentinit",))
 REQUIRED_AGENT_MAX_SCC_SIZE = 3
 REQUIRED_AGENT_ALLOWED_SCCS = frozenset(
     (
         frozenset(("context", "observe", "observe_timeline")),
-        frozenset(("observe_ledger", "observe_store")),
+        frozenset(("ipc", "live_query_events")),
     )
 )
 REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS = frozenset(
     (
         frozenset(("context", "observe", "observe_timeline")),
-        frozenset(("observe_ledger", "observe_store")),
+        frozenset(("ipc", "live_query_events")),
         frozenset(("core", "facade", "proc")),
     )
 )
@@ -238,14 +254,9 @@ REQUIRED_AGENT_AGGREGATES = {
             "metadata_objects",
             "metadata_catalog",
             "metadata_directory",
-            "metadata_journal",
             "metadata_query",
-            "metadata_probe",
-            "metadata_recovery",
-            "metadata_scan",
-            "metadata_store",
-            "metadata_store_format",
-            "metadata_store_io",
+            "live_query_compat",
+            "live_query_events",
             "ipc",
         )
     )
@@ -253,35 +264,27 @@ REQUIRED_AGENT_AGGREGATES = {
 REQUIRED_AGENT_AGGREGATE_HEADERS = {
     "metadata_control_plane": frozenset(
         (
-            "agent_metadata_disk_abi.h",
             "os/agent_file_name_policy.h",
             "os/agent_file_state_internal.h",
+            "os/agent_live_query_events.h",
             "os/agent_metadata_actions.h",
             "os/agent_metadata_internal.h",
-            "os/agent_metadata_journal.h",
             "os/agent_metadata_catalog.h",
             "os/agent_metadata_directory.h",
-            "os/agent_metadata_disk.h",
-            "os/agent_metadata_probe.h",
-            "os/agent_metadata_recovery.h",
-            "os/agent_metadata_recovery_test.h",
-            "os/agent_metadata_store_format.h",
-            "os/agent_metadata_store_io.h",
             "os/agent_metadata_query.h",
-            "os/agent_metadata_scan.h",
-            "os/agent_observe_persist_context.h",
         )
     )
 }
 REQUIRED_AGENT_AGGREGATE_HEADER_GLOBS = {
     "metadata_control_plane": (
-        "agent_metadata_disk_abi.h",
-        "os/agent_metadata*.h",
-        "os/agent_file*.h",
-        "os/agent_query*.h",
-        "os/agent_scan*.h",
-        "os/agent_directory*.h",
-        "os/agent_observe_persist_context.h",
+        "os/agent_file_name_policy.h",
+        "os/agent_file_state_internal.h",
+        "os/agent_live_query_events.h",
+        "os/agent_metadata_actions.h",
+        "os/agent_metadata_catalog.h",
+        "os/agent_metadata_directory.h",
+        "os/agent_metadata_internal.h",
+        "os/agent_metadata_query.h",
     )
 }
 REQUIRED_AGENT_AGGREGATE_SHARED_HEADERS = frozenset(
@@ -289,7 +292,6 @@ REQUIRED_AGENT_AGGREGATE_SHARED_HEADERS = frozenset(
         "os/agent.h",
         "os/agent_internal.h",
         "os/agent_context.h",
-        "os/agent_durable_section.h",
         "os/agent_lifecycle.h",
     )
 )
@@ -301,24 +303,11 @@ REQUIRED_AGENT_MODULE_CFLAGS = {
     "metadata_actions": ("-Os",),
     "metadata_catalog": ("-Os",),
     "metadata_directory": ("-Os",),
-    "metadata_journal": ("-Os",),
     "metadata_objects": ("-Os",),
-    "metadata_probe": ("-Os",),
     "metadata_query": ("-Os",),
-    "metadata_recovery": ("-Os",),
-    "metadata_scan": ("-Os",),
-    "metadata_store": ("-Os",),
-    "metadata_store_format": ("-Os",),
-    "metadata_store_io": ("-Os",),
-    "observe_capacity": ("-Os",),
     "observe_ledger": ("-Os",),
-    "observe_recovery": ("-Os",),
-    "observe_store": ("-Os",),
 }
 REQUIRED_AGENT_DISCARDED_SECTIONS = (".eh_frame",)
-REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS = frozenset(
-    ("agent_metadata_store_loaded", "agent_metadata_store_mark_dirty")
-)
 REQUIRED_AGENT_SOURCE_BUDGET_POLICY = (
     "严格锁定当前模块边界；总体 text/BSS 由内核总预算同步约束"
 )
@@ -1161,7 +1150,7 @@ def validate_config(config):
         require_positive_number(stack, name, integer=True)
     require_string_list(stack, "stack_boundaries")
     require_string_list(stack, "allowed_indirect_callers")
-    require_string_list(stack, "indirect_call_edges")
+    require_string_array(stack, "indirect_call_edges")
     require_string_list(stack, "recursion_bounds")
     if stack["max_required_bytes"] > stack["stack_size_bytes"]:
         raise BudgetError("kernel stack growth limit exceeds the configured stack")
@@ -1252,6 +1241,7 @@ def validate_config(config):
         namespace_roots = {
             "resource_controller": ("resource_",),
             "workflow_lifecycle": ("workflow_lifecycle_",),
+            "workflow_credit_domain": ("workflow_credit_domain_",),
         }.get(name, ("agent_", "sys_"))
         if any(
             not prefix.endswith("_")
@@ -1325,35 +1315,30 @@ def validate_config(config):
         "core",
         "context",
         "context_path",
-        "durable_section",
+        "evidence_ring",
         "file_state",
         "identity",
         "identity_lease",
         "ipc",
         "lifecycle",
+        "live_query_compat",
+        "live_query_events",
         "metadata",
         "metadata_actions",
         "metadata_catalog",
         "metadata_directory",
-        "metadata_journal",
         "metadata_objects",
         "metadata_query",
-        "metadata_probe",
-        "metadata_recovery",
-        "metadata_scan",
-        "metadata_store",
-        "metadata_store_format",
-        "metadata_store_io",
         "observe",
         "observe_audit_query",
-        "observe_capacity",
         "observe_ledger",
-        "observe_recovery",
-        "observe_store",
         "observe_timeline",
         "resource_observer",
         "resource_controller",
+        "sha256",
         "tool_protocol",
+        "workflow_credit_domain",
+        "workflow_fence",
         "workflow_lifecycle",
     }
     if names != required_modules:
@@ -1379,35 +1364,30 @@ def validate_config(config):
         "core": "os/agent_core.c",
         "context": "os/agent_context.c",
         "context_path": "os/agent_context_path.c",
-        "durable_section": "os/agent_durable_section.c",
+        "evidence_ring": "os/agent_evidence_ring.c",
         "file_state": "os/agent_file_state.c",
         "identity": "os/agent_identity.c",
         "identity_lease": "os/agent_identity_lease.c",
         "ipc": "os/agent_ipc.c",
         "lifecycle": "os/agent_lifecycle.c",
+        "live_query_compat": "os/agent_live_query_compat.c",
+        "live_query_events": "os/agent_live_query_events.c",
         "metadata": "os/agent_metadata.c",
         "metadata_actions": "os/agent_metadata_actions.c",
         "metadata_catalog": "os/agent_metadata_catalog.c",
         "metadata_directory": "os/agent_metadata_directory.c",
-        "metadata_journal": "os/agent_metadata_journal.c",
         "metadata_objects": "os/agent_metadata_objects.c",
         "metadata_query": "os/agent_metadata_query.c",
-        "metadata_probe": "os/agent_metadata_probe.c",
-        "metadata_recovery": "os/agent_metadata_recovery.c",
-        "metadata_scan": "os/agent_metadata_scan.c",
-        "metadata_store": "os/agent_metadata_store.c",
-        "metadata_store_format": "os/agent_metadata_store_format.c",
-        "metadata_store_io": "os/agent_metadata_store_io.c",
         "observe": "os/agent_observe.c",
         "observe_audit_query": "os/agent_observe_audit_query.c",
-        "observe_capacity": "os/agent_observe_capacity.c",
         "observe_ledger": "os/agent_observe_ledger.c",
-        "observe_recovery": "os/agent_observe_recovery.c",
-        "observe_store": "os/agent_observe_store.c",
         "observe_timeline": "os/agent_observe_timeline.c",
         "resource_observer": "os/agent_resource.c",
         "resource_controller": "os/resource_controller.c",
+        "sha256": "os/agent_sha256.c",
         "tool_protocol": "os/agent_tool_protocol.c",
+        "workflow_credit_domain": "os/workflow_credit_domain.c",
+        "workflow_fence": "os/agent_workflow_fence.c",
         "workflow_lifecycle": "os/workflow_lifecycle.c",
     }
     for entry in entries:
@@ -1451,16 +1431,18 @@ def validate_config(config):
                 "test-only source was registered as a production module"
             )
 
-    production_excludes = GENERATED_KERNEL_SOURCE_EXCLUDES | {
-        support["source_path"] for support in test_only
-    }
+    production_excludes = (
+        GENERATED_KERNEL_SOURCE_EXCLUDES
+        | RETIRED_AGENT_PRODUCTION_SOURCES
+        | {support["source_path"] for support in test_only}
+    )
     if (
         len(exclude_paths) != len(production_excludes)
         or set(exclude_paths) != production_excludes
     ):
         raise BudgetError(
-            "kernel_source.exclude_paths must contain only generated source "
-            "and the exact test-only owner inventory"
+            "kernel_source.exclude_paths must contain the exact generated, "
+            "retired, and test-only translation-unit inventory"
         )
 
     directory = next(entry for entry in entries if entry["name"] == "metadata_directory")
@@ -2818,7 +2800,17 @@ def production_translation_units(root, config):
             "test-only translation-unit source is missing: "
             + ", ".join(missing)
         )
-    production = sorted(all_units - test_units)
+    retired_units = {
+        Path(source_path).stem
+        for source_path in RETIRED_AGENT_PRODUCTION_SOURCES
+    }
+    missing_retired = sorted(retired_units - all_units)
+    if missing_retired:
+        raise BudgetError(
+            "retired translation-unit source is missing: "
+            + ", ".join(missing_retired)
+        )
+    production = sorted(all_units - test_units - retired_units)
     if not production:
         raise BudgetError("production translation-unit inventory is empty")
     return production
@@ -3090,361 +3082,6 @@ def check_kernel(args, config):
         attest_local_kernel_budget_tools(profile, tools)
 
 
-def source_function_body(source, signature):
-    start = source.find(signature)
-    end = source.find("\n}\n", start)
-    if start < 0 or end < 0:
-        raise BudgetError(f"required source function is missing: {signature}")
-    return source[start : end + 2]
-
-
-def require_source_order(body, tokens, context):
-    cursor = -1
-    for token in tokens:
-        cursor = body.find(token, cursor + 1)
-        if cursor < 0:
-            raise BudgetError(f"{context} lost ordered operation: {token}")
-
-
-def require_source_tokens(body, tokens, context):
-    missing = [token for token in tokens if token not in body]
-    if missing:
-        raise BudgetError(f"{context} lost operations: {missing!r}")
-
-
-def validate_metadata_scan_boundary_text(objects, scan):
-    state = (
-        r"\bscan_(?:ctl|control)\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
-        r"started_tick|runs|entries|added|updated|removed|failures|deferred|"
-        r"retry|sweep_uncertain|failed_scopes|failed_scope_count)\b|"
-        r"\broot_dir\s*\("
-    )
-    reverse = (
-        r"agent_file_maintain|agent_metadata_note_catalog_changes|"
-        r"agent_file_store_load|agent_metadata_query_|"
-        r"bio_background_|agent_metadata_txn_try_external|"
-        r"agent_metadata_objects\.h|\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\("
-    )
-    if re.search(state, objects):
-        raise BudgetError("metadata objects retained scan-owned state or traversal")
-    if re.search(reverse, scan):
-        raise BudgetError("metadata scan acquired a reverse dependency or callback")
-    for name, value in (
-        ("SCAN_INTERVAL", 20),
-        ("SCAN_STEP", 16),
-        ("SCAN_REST_MULTIPLIER", 4),
-    ):
-        pattern = rf"(?m)^#define {name} {value}$"
-        if len(re.findall(pattern, scan)) != 1:
-            raise BudgetError(f"metadata scan fairness constant changed: {name}")
-
-    sync = source_function_body(
-        objects, "agent_file_catalog_sync(const struct agent_catalog_delta *delta)"
-    )
-    if sync.count("agent_metadata_txn_projection_ack()") != 1:
-        raise BudgetError("metadata catalog sync must ACK its projection once")
-    require_source_order(
-        sync,
-        (
-            "agent_metadata_query_invalidate_locked(",
-            "agent_metadata_scan_catalog_sync(delta)",
-            "agent_metadata_txn_projection_ack()",
-        ),
-        "metadata catalog projection",
-    )
-    scan_sync = source_function_body(
-        scan,
-        "agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta)",
-    )
-    require_source_tokens(
-        scan_sync,
-        ("i < AGENT_META_STALE_BYTES",
-         "scan.seen[i] |= delta->applied_slots[i]"),
-        "scan delta sync",
-    )
-    if "agent_metadata_txn_projection_ack" in scan_sync:
-        raise BudgetError("metadata scan must not ACK the catalog projection")
-
-    background = source_function_body(
-        objects, "agent_metadata_background_maintain(void)"
-    )
-    if background.count("agent_metadata_scan_plan(now)") != 2:
-        raise BudgetError("metadata background must revalidate its scan plan")
-    if background.count("agent_metadata_store_background_maintain(") != 2:
-        raise BudgetError("metadata background must have two work-conserving edges")
-    require_source_tokens(
-        background,
-        (
-            "agent_metadata_store_background_maintain(0)",
-            "agent_metadata_store_background_scan_served()",
-            "agent_metadata_store_background_maintain(1)",
-        ),
-        "metadata background service turn",
-    )
-    require_source_order(
-        background,
-        (
-            "agent_metadata_store_background_maintain(0)",
-            "agent_metadata_scan_plan(now)",
-            "bio_background_begin(FS_OWNER_SYSTEM)",
-            "agent_metadata_txn_try_external()",
-            "agent_metadata_scan_plan(now)",
-            "agent_file_store_load()",
-            "agent_metadata_scan_step(now, plan, load_ok)",
-            "agent_metadata_store_background_scan_served()",
-            "agent_metadata_note_catalog_changes(changes)",
-            "agent_metadata_txn_unlock()",
-            "bio_background_end()",
-            "agent_metadata_store_background_maintain(1)",
-            "agent_metadata_store_take_reconcile_request()",
-        ),
-        "metadata background coordinator",
-    )
-    step = source_function_body(scan, "agent_metadata_scan_step(uint64 now")
-    require_source_tokens(
-        step,
-        (
-            "root_dir_status(&root_status)",
-            "root_status != FS_LOOKUP_FOUND",
-            "readi(",
-            "inode_get(",
-            "agent_metadata_scan_index_inode(ip, name, &bind_failed)",
-            "if (bind_failed) {\n"
-            "\t\t\tscan.failures++;\n"
-            "\t\t\tscan.retry = 1;",
-            "scan_pause(1, 1)",
-            "scan.offset = off;\n\t\t\tscan_pause(1, 1)",
-            "scan_scope_failed(view.scope_id, 0)",
-            "steps < SCAN_STEP",
-        ),
-        "metadata scan step",
-    )
-    bind = source_function_body(
-        scan, "agent_metadata_scan_index_inode(struct inode *ip"
-    )
-    if "if (failed)" in bind:
-        raise BudgetError("metadata scan bind failure output became optional")
-    require_source_order(
-        bind,
-        (
-            "SCAN_NOTE(slot)",
-            "agent_metadata_catalog_edit_begin_scan(",
-            "agent_metadata_catalog_edit_commit(&edit, changes)",
-            "agent_metadata_store_mark_dirty(ip->vfs_scope_id)",
-            "agent_file_state_set_index(ip, slot + 1, persist, 0)",
-            "return changes",
-        ),
-        "metadata scan bind fail-stop protocol",
-    )
-    require_source_tokens(
-        bind,
-        ("SCAN_NOTE(slot);\n\tif (agent_metadata_catalog_edit_begin_scan",),
-        "metadata scan mutation visibility",
-    )
-    for operation in (
-        "agent_metadata_catalog_edit_begin_scan(",
-        "agent_metadata_catalog_edit_commit(&edit, changes)",
-        "agent_file_state_set_index(ip, slot + 1, persist, 0)",
-    ):
-        start = bind.find(operation)
-        if start < 0 or "goto retry" not in bind[start : start + 500]:
-            raise BudgetError(
-                f"metadata scan bind failure is not propagated: {operation}"
-            )
-    require_source_tokens(
-        bind,
-        ("agent_file_state_set_index(ip, slot + 1, persist, 0) < 0)\n"
-         "\t\t\tgoto retry;",),
-        "metadata scan inode sidecar failure",
-    )
-    require_source_order(
-        step,
-        (
-            "agent_metadata_scan_index_inode(ip, name, &bind_failed)",
-            "if (bind_failed)",
-            "scan.retry = 1",
-            "scan_scope_failed(ip->vfs_scope_id, 1)",
-            "if (!scan_ctl.active)",
-            "if (scan.offset >= root->size)",
-            "scan_scope_failed(view.scope_id, 0)",
-            "scan_pause(scan.retry, 0)",
-        ),
-        "metadata scan isolated retry protocol",
-    )
-    if ("scan_failed" in step or "seen[AGENT_FILE_META_MAX]" in scan or
-            "uchar seen[AGENT_META_STALE_BYTES]" not in scan):
-        raise BudgetError("metadata scan restored global abort or oversized seen state")
-    plan = source_function_body(scan, "agent_metadata_scan_plan(uint64 now)")
-    require_source_tokens(
-        plan,
-        ("scan.last_step_tick != now", "now >= scan.next_tick"),
-        "metadata scan tick budget",
-    )
-    request = source_function_body(scan, "agent_file_request_scan(void)")
-    require_source_tokens(
-        request,
-        ("!scan_ctl.pending", "scan_rest_deadline(0, now)"),
-        "metadata scan request coalescing",
-    )
-    if "agent_file_request_scan(void)" in objects:
-        raise BudgetError("metadata objects retained a scan request wrapper")
-    if scan.count("agent_file_request_scan(void)") != 1:
-        raise BudgetError("metadata scan must own one scan request entry point")
-
-
-def validate_metadata_scan_boundary_sources(root):
-    try:
-        objects = (root / "os" / "agent_metadata_objects.c").read_text(encoding="utf-8")
-        scan = (root / "os" / "agent_metadata_scan.c").read_text(encoding="utf-8")
-    except OSError as error:
-        raise BudgetError(f"cannot read metadata scan boundary source: {error}") from error
-    validate_metadata_scan_boundary_text(objects, scan)
-
-
-def validate_metadata_directory_boundary_text(objects, directory):
-    hooks = (
-        "agent_fs_note_write",
-        "agent_fs_note_truncate",
-        "agent_fs_note_delete",
-    )
-    for hook in hooks:
-        definition = rf"(?m)^void\s+{hook}\s*\("
-        if re.search(definition, objects):
-            raise BudgetError(f"metadata objects retained directory hook: {hook}")
-        if len(re.findall(definition, directory)) != 1:
-            raise BudgetError(f"metadata directory must own one hook: {hook}")
-    if 'agent_metadata_directory.h' in objects:
-        raise BudgetError("metadata objects acquired a directory dependency")
-    if re.search(
-        r"agent_metadata_query_|agent_file_store_load|bio_background_|"
-        r"agent_metadata_store_persist\s*\(|agent_metadata_txn_lock\s*\(|"
-        r"\bscan_(?:ctl|control)\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
-        r"started_tick|runs|entries|added|updated|removed)\b",
-        directory,
-    ):
-        raise BudgetError("metadata directory acquired forbidden coordination work")
-    if "agent_dependency_generation" in directory:
-        raise BudgetError("metadata directory bypassed the catalog-change operation")
-    if re.search(r"\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\(", directory):
-        raise BudgetError("metadata directory introduced an indirect callback")
-    writable_state = re.compile(
-        r"(?m)^static\s+(?:char|short|int|long|uint|uint64|"
-        r"struct\s+[A-Za-z_]\w*)\s+[A-Za-z_]\w*(?:\[[^\n]*\])?\s*(?:=[^\n]*)?;"
-    )
-    if writable_state.search(directory):
-        raise BudgetError("metadata directory acquired writable file-scope state")
-    require_source_tokens(
-        objects,
-        (
-            "agent_metadata_inode_trackable(struct inode *ip)",
-            "agent_metadata_note_catalog_changes(uint changes)",
-        ),
-        "metadata directory leaf operations",
-    )
-
-    if "agent_fs_note_create" in directory:
-        raise BudgetError("普通文件创建仍保留 Agent 元数据钩子")
-    update = source_function_body(directory, "static void agent_fs_publish_content(")
-    require_source_order(
-        update,
-        (
-            "agent_file_state_content_publish(ip, &receipt)",
-            "agent_metadata_store_mark_dirty(ip->vfs_scope_id)",
-            "agent_file_request_scan()",
-        ),
-        "metadata directory content overlay",
-    )
-    require_source_tokens(
-        update,
-        ("!agent_file_state_content_publish(ip, &receipt)",
-         "AGENT_FILE_META_F_PERSIST",
-         "AGENT_FILE_META_F_AUTOSCAN", "agent_file_request_scan()"),
-        "metadata directory content fallback",
-    )
-    require_source_tokens(
-        directory,
-        ("#define FS_META_UNBOUND(ip)", "!(ip)->agent_meta_slot",
-         "!(ip)->agent_meta_flags", "!(ip)->agent_meta_version"),
-        "普通文件全零未绑定状态",
-    )
-    for hook in ("agent_fs_note_write(struct inode *ip)",
-                 "agent_fs_note_truncate(struct inode *ip)"):
-        require_source_order(
-            source_function_body(directory, hook),
-            ("FS_META_UNBOUND(ip)", "agent_fs_publish_content(ip)"),
-            "普通文件内容返回边界",
-        )
-    if update.count("reconcile = 1") != 1:
-        raise BudgetError("仅持久化回执失败可以请求内容协调扫描")
-    if "agent_metadata_txn_" in update or re.search(
-        r"agent_metadata_catalog_(?!journal_note_content\b)", update
-    ):
-        raise BudgetError("ordinary content publication entered the catalog gate")
-    remove = source_function_body(directory, "static void agent_fs_remove_inode(")
-    delete = source_function_body(directory, "agent_fs_note_delete(struct inode *ip")
-    require_source_tokens(delete, ("agent_fs_remove_inode(ip)",),
-                          "metadata directory delete delegation")
-    require_source_order(
-        remove,
-        (
-            "FS_META_UNBOUND(ip)",
-            "agent_file_version_reclaim(ip)",
-            "ip->agent_meta_slot <= 0",
-            "agent_file_state_content_bump(ip)",
-            "agent_metadata_txn_try_external()",
-            "agent_metadata_catalog_borrow(0, slot, &view)",
-            "view.scope_id != scope_id",
-            "view.meta->dev != ip->dev",
-            "view.meta->inum != ip->inum",
-            "view.meta->incarnation != ip->vfs_incarnation",
-            "agent_metadata_catalog_clear_slot(slot)",
-            "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)",
-            "agent_metadata_store_mark_dirty(scope_id)",
-            "agent_metadata_txn_unlock()",
-        ),
-        "metadata directory delete hook",
-    )
-    if re.search(r"ip->agent_meta_(?:slot|flags|version)\s*=|iupdate\s*\(", remove):
-        raise BudgetError(
-            "metadata directory delete must unbind through the catalog API"
-        )
-    if delete.count("agent_metadata_txn_unlock()") != 0:
-        raise BudgetError("metadata directory delete bypassed the shared event state machine")
-
-
-def validate_metadata_directory_store_symbols(undefined):
-    actual = frozenset(
-        symbol for symbol in undefined
-        if symbol.startswith("agent_metadata_store_")
-    )
-    if actual != REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS:
-        raise BudgetError(
-            "metadata directory store API boundary mismatch: "
-            f"expected={sorted(REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS)!r}, "
-            f"actual={sorted(actual)!r}"
-        )
-
-
-def validate_metadata_directory_callgraph(callgraph):
-    if 'targetname: "__indirect_call"' in callgraph:
-        raise BudgetError("metadata directory introduced an indirect call")
-
-
-def validate_metadata_directory_boundary_sources(root):
-    try:
-        objects = (root / "os" / "agent_metadata_objects.c").read_text(
-            encoding="utf-8"
-        )
-        directory = (root / "os" / "agent_metadata_directory.c").read_text(
-            encoding="utf-8"
-        )
-    except OSError as error:
-        raise BudgetError(
-            f"cannot read metadata directory boundary source: {error}"
-        ) from error
-    validate_metadata_directory_boundary_text(objects, directory)
-
-
 def check_agent_modules(args, config):
     modules = config["agent_modules"]
     if not all(
@@ -3477,18 +3114,6 @@ def check_agent_modules(args, config):
     )
     nm = str(tools["nm"])
     size = str(tools["size"])
-    validate_metadata_scan_boundary_sources(root)
-    validate_metadata_directory_boundary_sources(root)
-    directory_callgraph = (
-        root / args.callgraph_dir / "agent_metadata_directory.ci"
-    ).resolve()
-    try:
-        directory_callgraph_text = directory_callgraph.read_text(encoding="utf-8")
-    except OSError as error:
-        raise BudgetError(
-            f"cannot read metadata directory callgraph: {error}"
-        ) from error
-    validate_metadata_directory_callgraph(directory_callgraph_text)
     entries = modules["modules"]
     defined_by_module = {}
     symbol_owner = {}
@@ -3610,8 +3235,6 @@ def check_agent_modules(args, config):
             f"Agent module {entry['name']} dependency inspection",
         )
         undefined = parse_nm_undefined_symbols(output)
-        if entry["name"] == "metadata_directory":
-            validate_metadata_directory_store_symbols(undefined)
         undefined_by_module[entry["name"]] = undefined
         dependencies = set()
         for symbol in undefined:

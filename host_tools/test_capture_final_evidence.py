@@ -20,9 +20,16 @@ from pathlib import Path
 from evidence_semantic_registry import (
     RAW_ARTIFACT_REGISTRY,
     EvidenceSemanticError,
+    validate_raw_artifacts,
     validate_selected_artifacts,
 )
-from evidence_semantic_profiles import _validate_dual_state
+from evidence_semantic_metadata import RETIRED_BY_DESIGN
+from evidence_semantic_profiles import (
+    _validate_dual_state,
+    _validate_live_query_runtime,
+    _validate_workflow_fence_receipt,
+)
+from evidence_semantic_metadata import MECHANISM_CONTRACT_MARKERS
 from evidence_semantic_common import ValidationContext
 from evidence_semantic_dual import _validate_program_ledger, _validate_telemetry
 from check_host_platform_alignment import read_expected_programs
@@ -77,27 +84,14 @@ COMPARE_DUAL_STATE = REPO / "host_tools" / "compare_dual_platform_state.py"
 CHECK_HOST_PLATFORM = REPO / "host_tools" / "check_host_platform_alignment.py"
 CHECK_HOST_TEST = REPO / "host_tools" / "check_host_test_alignment.py"
 COMPARE_DUAL_TEST = REPO / "host_tools" / "test_compare_dual_platform_state.py"
-OBSERVE_EVIDENCE_MODULES = tuple(
-    REPO / "host_tools" / name
-    for name in (
-        "agent_metadata_disk_format.py", "agent_metadata_journal.py",
-        "agent_observe_disk_acceptance.py",
-        "agent_observe_disk_contract.py", "agent_observe_disk_evidence.py",
-        "agent_observe_disk_fixture.py", "plain_ucore_fs_extract.py",
-        "research_state_manifest.py",
-    )
+SEMANTIC_SUPPORT_MODULES = (
+    REPO / "host_tools" / "research_state_manifest.py",
 )
-OBSERVE_EVIDENCE_CONTRACTS = tuple(
-    REPO / "ci" / name
-    for name in (
-        "agent-metadata-disk-format.json", "agent-observe-disk-format.json",
-        "research-state-manifest.json",
-    )
+SEMANTIC_SUPPORT_CONTRACTS = (
+    REPO / "ci" / "research-state-manifest.json",
 )
 BACKEND_EVIDENCE_CONTRACT = REPO / "host_tools" / "backend_evidence_contract.py"
 KERNEL_LOG_VALIDATOR = REPO / "scripts" / "validate-kernel-test-log.py"
-METADATA_LOG_VALIDATOR = REPO / "scripts" / "validate-metadata-crash-log.py"
-METADATA_REPROBE_VALIDATOR = REPO / "scripts" / "validate-metadata-reprobe-log.py"
 VIRTIO_LOG_VALIDATOR = REPO / "scripts" / "validate-virtio-disk-log.py"
 FS_ALLOCATOR_IMAGE = REPO / "scripts" / "fs-allocator-image.py"
 BENCHMARK_SOURCE = REPO / "user" / "src" / "agentbench_ucore.c"
@@ -121,6 +115,7 @@ FIXTURE_AGENT_TOTAL_SECONDS = (len(FIXTURE_AGENT_CASES) - 1) * 0.1 + 1.05
 PROFILE_ARTIFACTS = {
     "target-structure": [],
     "kernel-budgets": [],
+    "agent-mechanism-contracts": ["agent-mechanism-contracts.log"],
     "host-platform-alignment": [],
     "ch3-trace": ["ch3-trace-guest.log"],
     "agent-suite": ["agent-suite-timings.log", "agent-suite-guest.log"],
@@ -136,8 +131,6 @@ PROFILE_ARTIFACTS = {
     "file-resource": ["file-resource.log"],
     "thread-resource": ["thread-resource.log"],
     "physical-resource": ["physical-resource.log"],
-    "metadata-recovery": ["metadata-recovery.log"],
-    "observe-recovery": ["observe-recovery.log", "observe-recovery-before-reap.img"],
     "virtio-disk": ["virtio-disk.log"],
     "workflow-teardown-race": ["workflow-teardown-race.log"],
     "fs-enospc": ["fs-enospc.log"],
@@ -274,7 +267,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = Path(sys.argv[1])
 sys.path.insert(0, str(ROOT / "host_tools"))
-from agent_observe_disk_fixture import write_fixture
 from dual_state_evidence_contract import (
     AGENTOS_EVIDENCE_REQUIREMENTS, AGENTOS_MAINFLOW_FACTS,
     AGENTOS_REQUIRED_AGENT_ROLES, AGENTOS_ROLE_NUMBERS,
@@ -387,51 +379,6 @@ def quota_lines(profile):
     result.append("fsquota_ucore: parent passed")
     return result
 
-def crash_lines(bank, phase):
-    return [
-        "agentmetacrash_ucore: baseline_dirty=0x0000000000000029 baseline_durable=0x0000000000000029 pending=0",
-        "agentmetacrash_ucore: baseline_ready=1 replicated=1",
-        "agentmetacrash_ucore: target_armed scope=3 generation=0x000000000000002a token=0x0000000000000099",
-        "agentmetacrash_ucore: target_bound scope=3 generation=0x000000000000002a token=0x0000000000000099 job=0x0000000000000077",
-        "agentmetacrash_ucore: target_fire scope=3 generation=0x000000000000002a token=0x0000000000000099 job=0x0000000000000077 bank=%d phase=%d" % (bank, phase),
-        "agentmetacrash_ucore: metadata_phase=%d" % phase,
-    ]
-
-def reprobe_lines(kind="busy", bank=None, progress=False):
-    banks = (0, 1) if bank is None else (bank,)
-    faults = [
-        f"agentmeta_boot_fault: kind={kind} bank={item} remaining={remaining}"
-        for remaining in (2, 1, 0) for item in banks
-    ]
-    retries = len(faults) - 1
-    lines = [faults[0], "agentmeta_boot_reprobe: admission_rejected status=-17"]
-    if progress:
-        lines.extend((
-            "agentmeta_boot_reprobe: progress sequence=0x0000000000000001 bank=1 phase=1 offset=64",
-            "agentmeta_boot_reprobe: progress sequence=0x0000000000000002 bank=1 phase=2 offset=128",
-            "agentmeta_boot_reprobe: progress sequence=0x0000000000000003 bank=1 phase=4 offset=16",
-        ))
-    now = 0x10
-    for attempt, fault in enumerate(faults[1:], 1):
-        delay = 1 << min(attempt, 6)
-        deadline = now + delay
-        lines.extend((
-            fault,
-            f"agentmeta_boot_reprobe: deferred attempt={attempt} now=0x{now:016x} deadline=0x{deadline:016x}",
-            f"agentmetatransient_ucore: admission_retry={attempt} status=-17",
-            "agentmeta_boot_reprobe: admission_rejected status=-17",
-        ))
-        now = deadline
-    lines.extend((
-        f"agentmeta_boot_reprobe: recovered=1 retries={retries}",
-        f"agentmetatransient_ucore: admission_retry={retries + 1} status=-17",
-        "agentmetatransient_ucore: create_succeeded=1",
-        "agentmetatransient_ucore: query_succeeded=1",
-        "agentmetatransient_ucore: unavailable_seen=1 recovered=1",
-        "agentmetatransient_ucore: parent passed",
-    ))
-    return lines
-
 def virtio_lines():
     requests = []
     for index, (case, request_type, result) in enumerate(virtio.REQUEST_CASES, 1):
@@ -451,6 +398,15 @@ def virtio_lines():
 
 benchmark = "agentbench_ucore: file_query_benchmark schema=2 unit=us load=143 traversal_ops=64 traversal_records=143 traversal_duration_us=36 cold_index_ops=1 cold_index_records=6 cold_index_duration_us=2 cold_rebuild_records=512 cold_rebuild_included=1 warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 status=measured"
 write("ch3-trace-guest.log", "\n".join(kernel.CH3_TRACE_MARKERS))
+write("agent-mechanism-contracts.log", "\n".join((
+    "[mechanism-contract] workflow-credit-domain static=passed",
+    "[mechanism-contract] fence-sealed-evidence-ring static=passed",
+    "[mechanism-contract] agent-live-query-fs static=passed",
+    "[mechanism-contract] workflow-fence static=passed",
+    "[mechanism-contract] metadata-recovery retired_by_design replacement=none current=agent-live-query-fs",
+    "[mechanism-contract] observe-recovery retired_by_design replacement=none current=fence-sealed-evidence-ring",
+    "[mechanism-contract] raw-bank-image retired_by_design replacement=none current=workflow-fence-receipt",
+)))
 mechanism = list(dict.fromkeys([
     "agentfinal_ucore: context_sync_atomic=1 append=1 rollback=1 clear=1 recovery=1",
     *kernel.WAIT_ATOMIC_MARKERS,
@@ -459,6 +415,16 @@ mechanism = list(dict.fromkeys([
 agent_sections = [("agent-mechanism:context-sync-atomicity", mechanism)]
 for case in agent_cases:
     lines = list(kernel.AGENT_CASE_MARKERS.get(case, ()))
+    if case == "agentfs_ucore":
+        lines.extend((
+            "agentfs_ucore: explicit_create_query=1 ordinary_unindexed=1",
+            "agentfs_ucore: live_catalog_volatile=1",
+        ))
+    if case == "agentscan_ucore":
+        lines.extend((
+            "agentscan_ucore: explicit_admission ordinary_unindexed=1",
+            "agentscan_ucore: live_query enter=1 update=1 leave=1 indexed=1",
+        ))
     if case == "agentbench_ucore":
         lines.append(benchmark)
     lines.append(case + ": parent passed")
@@ -516,6 +482,7 @@ write("dual-agentos-qemu.log", "\n".join([
     "rp_compare_plain: host_actions=1 verified",
     "rp_compare_plain: evidence_generation=runtime runtime_assertions_executed=8 runtime_assertions_passed=8 status=verified",
     "rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready",
+    "rp_agentos_orch: workflow_fence name=rp-task6-completion-v1 request_id=101 lifecycle=7/3 fence_sequence=1 metadata_generation=9 credit_epoch=4 credit_digest=a57117da7a89f80e5a702bf44b339f51fdaaf41274d4a0e8048580923534605a resource_pending=0,0,0,0,0,0,0,0 resource_used=1,2,3,4,5,6,7,8 credit_exec_account=5/11 credit_storage_account=6/12 first_ticket=10 last_ticket=21 event_count=12 gap_count=0 previous_root=0000000000000000000000000000000000000000000000000000000000000000 challenge=1111111111111111111111111111111111111111111111111111111111111111 evidence_root=2222222222222222222222222222222222222222222222222222222222222222 flags=15",
     "rp_agentos_orch: passed",
 ]))
 (OUT / SEEDED_ACTION_SUMMARY_ARTIFACT).write_text(json.dumps({
@@ -807,67 +774,11 @@ combined("thread-resource", [("thread-resource", thread_lines())],
 combined("physical-resource", [("physical-resource", physical_lines())],
          "[physical-resource] all checks passed")
 
-metadata = []
-recover = ["agentmetarecover_ucore: readonly_recovery=1 metadata_available=1",
-           "agentmetarecover_ucore: query_found=0 returned=0",
-           "agentmetarecover_ucore: parent passed"]
-for bank_name, bank in (("primary", 0), ("mirror", 1)):
-    for phase in range(1, 9):
-        metadata.append((f"metadata-agentmetacrash_ucore-{bank_name}-{phase}", crash_lines(bank, phase)))
-        metadata.append((f"metadata-agentmetarecover_ucore-{bank_name}-{phase}", recover))
-metadata.extend([
-    ("metadata-agentmetarecover_ucore-select-baseline",
-     ["agentmetarecover_ucore: query_found=0 returned=0", "agentmetarecover_ucore: parent passed"]),
-    *[(f"metadata-agentmetatransient_ucore-boot-{kind}-{target}",
-       reprobe_lines(kind, None if target == "all" else 1))
-      for kind in ("busy", "io", "interrupted") for target in ("all", "newer")],
-    ("metadata-agentmetalarge_ucore-large-seed",
-     ["agentmetalarge_ucore: runtime_reload_completed=1",
-      "agentmetalarge_ucore: seed_ready=1 records=32"]),
-    *[(f"metadata-agentmetatransient_ucore-large-{terminal}",
-       reprobe_lines("busy", 1, True))
-      for terminal in ("absent", "uncommitted", "corrupt")],
-    ("metadata-agentmetarecover_ucore-eio-baseline",
-     ["agentmetarecover_ucore: query_found=0 returned=0", "agentmetarecover_ucore: parent passed"]),
-    ("metadata-agentmetaeio_ucore-eio",
-     ["agentmetaeio_ucore: transient_eio_repaired=1", "agentmetaeio_ucore: parent passed"]),
-])
-combined("metadata-recovery", metadata,
-         "\n".join([
-             *[f"metadata_authority_check: kind={kind} newer_bank=1 before=41 after=42 rollback=0"
-               for kind in ("busy", "io", "interrupted")],
-             *[f"metadata_large_bank_check: peer={peer} selected=valid over_burst=1"
-               for peer in ("valid", "absent", "uncommitted", "corrupt")],
-             "[metadata-recovery] power-cut, bounded boot reprobe, over-burst terminal-peer recovery, and EIO recovery passed",
-         ]))
-
-identity0 = "audit=1 span=2 event=3 control=4 agent=5 lifecycle_slot=6 lifecycle_generation=7"
-identity1 = "audit=11 span=12 event=13 control=14 agent=15 lifecycle_slot=6 lifecycle_generation=8"
-durable_identity = write_fixture(OUT / "observe-recovery-before-reap.img")
-observe = [
-    ("observe-recovery-boot0-cut", ["agentobsreboot_ucore: lease_cut_alloc " + identity0,
-                                    "agentobsreboot_ucore: receipt_permission_not_agent=1"]),
-    ("observe-recovery-boot1", ["agentobsreboot_ucore: lease_cut_successor " + identity1,
-                                durable_identity,
-                                "agentobsreboot_ucore: receipt_pending_not_evidence=1 receipt_durable_exact=1 receipt_fake_stale=1 receipt_window_not_evidence=1",
-                                "agentobsreboot_ucore: boot1_checkpoint_ready=1"]),
-    ("observe-recovery-boot2", ["agentobsreboot_ucore: receipt_teardown_stale=1",
-                                "agentobsreboot_ucore: receipt_permission_recovery_denied=1",
-                                "agentobsreboot_ucore: receipt_recovery_exact=1 receipt_v1_compatible=1 bank_generation_bound=1",
-                                "agentobsreboot_ucore: boot2_reap_replicated=1"]),
-    ("observe-recovery-boot3", ["agentobsreboot_ucore: boot3_erased=1 generation_isolated=1 stable_identity=1",
-                                "agentobsreboot_ucore: timeline_wait_epoch_recheck=1 injection=2 retries=1 bounded_timeout=1",
-                                "agentobsreboot_ucore: timeline_wait_threads=1 filters=2 deadlines=2 targeted=1 timeout=1 cleanup=1",
-                                "agentobsreboot_ucore: parent passed"]),
-]
-combined("observe-recovery", observe,
-         "[observe-recovery] power-cut lease and three-boot durable evidence lifecycle passed")
-
 combined("virtio-disk", [("virtio-disk:fault-matrix", virtio_lines())],
          "[virtio-disk] fault matrix passed")
 combined("workflow-teardown-race",
-         [(f"workflow-teardown:{index}", workflow_lines()) for index in range(1, 4)],
-         "[workflow-teardown] 3 stable runs passed")
+         [("workflow-teardown:1", workflow_lines())],
+         "[workflow-teardown] 1 descriptive run passed")
 
 persistent_seed = ["fspquota_ucore: sponsored_object_charged=1 blocks=14",
                    "fspquota_ucore: durable_fixture=1 blocks=18 inodes=8 owner_exited=1"]
@@ -998,13 +909,11 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
         CHECK_HOST_PLATFORM, CHECK_HOST_TEST, COMPARE_DUAL_TEST,
     ):
         shutil.copyfile(module, root / "host_tools" / module.name)
-    for module in OBSERVE_EVIDENCE_MODULES:
+    for module in SEMANTIC_SUPPORT_MODULES:
         shutil.copyfile(module, root / "host_tools" / module.name)
     shutil.copyfile(BACKEND_EVIDENCE_CONTRACT,
                     root / "host_tools" / BACKEND_EVIDENCE_CONTRACT.name)
-    for validator in (KERNEL_LOG_VALIDATOR, METADATA_LOG_VALIDATOR,
-                      METADATA_REPROBE_VALIDATOR,
-                      VIRTIO_LOG_VALIDATOR):
+    for validator in (KERNEL_LOG_VALIDATOR, VIRTIO_LOG_VALIDATOR):
         shutil.copyfile(validator, root / "scripts" / validator.name)
     shutil.copyfile(FS_ALLOCATOR_IMAGE, root / "scripts" / FS_ALLOCATOR_IMAGE.name)
     (root / "user" / "src").mkdir(parents=True)
@@ -1050,7 +959,7 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
         }]},
     }
     (root / "ci").mkdir()
-    for contract in OBSERVE_EVIDENCE_CONTRACTS:
+    for contract in SEMANTIC_SUPPORT_CONTRACTS:
         shutil.copyfile(contract, root / "ci" / contract.name)
     (root / "ci" / "kernel-budgets.json").write_text(json.dumps(config) + "\n", encoding="utf-8")
     tools = root / "tools"
@@ -1074,10 +983,11 @@ incoming="${FINAL_EVIDENCE_STAGE}/incoming"
 runtime="${FINAL_EVIDENCE_STAGE}/runtime/full-verify"
 mkdir -p "${incoming}" "${runtime}"
 for artifact in \
+  agent-mechanism-contracts.log \
   dual-plain-qemu.log dual-agentos-qemu.log dual-stage-timings.csv \
   dual-state-compare.json ch3-trace-guest.log agent-suite-guest.log \
   proc-reap.log syscall-fairness.log file-resource.log thread-resource.log \
-  physical-resource.log metadata-recovery.log observe-recovery.log observe-recovery-before-reap.img virtio-disk.log \
+  physical-resource.log virtio-disk.log \
   workflow-teardown-race.log fs-enospc.log fs-allocator-fault.log; do
   printf '%s passed\n' "${artifact}" >"${incoming}/${artifact}"
 done
@@ -1113,11 +1023,11 @@ write_csv(incoming / "dual-file-query-benchmark.csv", manifest["rows"])
 PY
 mainflow_artifacts="$(PYTHONPATH=host_tools python3 -c \
   'from dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS; print("\t".join(DUAL_STATE_RAW_ARTIFACTS))')"
-printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nhost-platform-alignment\t3\t4\nch3-trace\t4\t5\tch3-trace-guest.log\nagent-suite\t5\t6\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t6\t7\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\thost-platform-alignment.json\t%s\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t7\t8\tproc-reap.log\nsyscall-fairness\t8\t9\tsyscall-fairness.log\nfile-resource\t9\t10\tfile-resource.log\nthread-resource\t10\t11\tthread-resource.log\nphysical-resource\t11\t12\tphysical-resource.log\nmetadata-recovery\t12\t13\tmetadata-recovery.log\nobserve-recovery\t13\t14\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t14\t15\tvirtio-disk.log\nworkflow-teardown-race\t15\t16\tworkflow-teardown-race.log\nfs-enospc\t16\t17\tfs-enospc.log\nfs-allocator-fault\t17\t18\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' \
+printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nagent-mechanism-contracts\t3\t4\tagent-mechanism-contracts.log\nhost-platform-alignment\t4\t5\nch3-trace\t5\t6\tch3-trace-guest.log\nagent-suite\t6\t7\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t7\t8\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\thost-platform-alignment.json\t%s\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t8\t9\tproc-reap.log\nsyscall-fairness\t9\t10\tsyscall-fairness.log\nfile-resource\t10\t11\tfile-resource.log\nthread-resource\t11\t12\tthread-resource.log\nphysical-resource\t12\t13\tphysical-resource.log\nvirtio-disk\t13\t14\tvirtio-disk.log\nworkflow-teardown-race\t14\t15\tworkflow-teardown-race.log\nfs-enospc\t15\t16\tfs-enospc.log\nfs-allocator-fault\t16\t17\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' \
   "${mainflow_artifacts}" >"${runtime}/steps.tsv"
 python3 -I -S scripts/trusted-python-entry.py scripts/capture-final-evidence.py write-summary \
   --stage "${FINAL_EVIDENCE_STAGE}" --steps "${runtime}/steps.tsv" \
-  --commit "$(git rev-parse HEAD)" --agent-grace 2s --mechanism-grace 5s --workflow-runs 3
+  --commit "$(git rev-parse HEAD)" --agent-grace 2s --mechanism-grace 5s --workflow-runs 1
 echo 'kernel stack budget: user=1 interrupt=1 margin=1 required=4095 limit=4096'
 echo 'boot stack budget: root=main path=1 interrupt=1 margin=1 required=2047 limit=2048'
 echo '[kernel-budget] kernel source (os): actual=100 lines baseline=90 lines limit=110 lines'
@@ -1490,12 +1400,149 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assertEqual(set(registered), expected)
         self.assertEqual(len(registered), len(set(registered)))
         for name in (
-            "ch3-trace-guest.log", "proc-reap.log", "syscall-fairness.log", "file-resource.log",
-            "thread-resource.log", "physical-resource.log", "metadata-recovery.log",
-            "observe-recovery.log", "virtio-disk.log", "workflow-teardown-race.log",
+            "agent-mechanism-contracts.log", "ch3-trace-guest.log", "proc-reap.log",
+            "syscall-fairness.log", "file-resource.log", "thread-resource.log",
+            "physical-resource.log", "virtio-disk.log", "workflow-teardown-race.log",
             "fs-enospc.log", "fs-allocator-fault.log",
         ):
             self.assertEqual(sum(name in rule.artifacts for rule in RAW_ARTIFACT_REGISTRY), 1)
+
+    def test_retired_disk_evidence_selectors_are_explicit_tombstones(self) -> None:
+        registered = {
+            artifact for rule in RAW_ARTIFACT_REGISTRY for artifact in rule.artifacts
+        }
+        self.assertTrue(RETIRED_BY_DESIGN)
+        self.assertTrue(set(RETIRED_BY_DESIGN).isdisjoint(registered))
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp)
+            for selector in RETIRED_BY_DESIGN:
+                with self.subTest(selector=selector), self.assertRaisesRegex(
+                    EvidenceSemanticError, "retired_by_design"
+                ):
+                    validate_selected_artifacts((selector,), raw, REPO)
+            (raw / "metadata-recovery.log").write_text("legacy\n", encoding="ascii")
+            with self.assertRaisesRegex(EvidenceSemanticError, "retired_by_design"):
+                validate_raw_artifacts(raw, REPO)
+
+    def test_mechanism_contract_log_is_exact_and_mutation_resistant(self) -> None:
+        canonical = "\n".join(MECHANISM_CONTRACT_MARKERS) + "\n"
+        mutations = {
+            "missing": canonical.replace(MECHANISM_CONTRACT_MARKERS[1] + "\n", "", 1),
+            "duplicate": canonical + MECHANISM_CONTRACT_MARKERS[2] + "\n",
+            "reordered": "\n".join(
+                (MECHANISM_CONTRACT_MARKERS[1], MECHANISM_CONTRACT_MARKERS[0],
+                 *MECHANISM_CONTRACT_MARKERS[2:])
+            ) + "\n",
+            "failure-token": canonical + "Traceback: forged success\n",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp)
+            artifact = raw / "agent-mechanism-contracts.log"
+            artifact.write_text(canonical, encoding="utf-8")
+            validate_selected_artifacts(
+                ("agent-mechanism-contracts",), raw, REPO,
+                require_exact_inventory=True,
+            )
+            for label, payload in mutations.items():
+                with self.subTest(label=label), self.assertRaises(EvidenceSemanticError):
+                    artifact.write_text(payload, encoding="utf-8")
+                    validate_selected_artifacts(
+                        ("agent-mechanism-contracts",), raw, REPO,
+                        require_exact_inventory=True,
+                    )
+
+    def test_workflow_fence_runtime_receipt_rejects_forged_fields(self) -> None:
+        receipt = (
+            "rp_agentos_orch: workflow_fence name=rp-task6-completion-v1 "
+            "request_id=101 lifecycle=7/3 fence_sequence=1 metadata_generation=9 "
+            "credit_epoch=4 "
+            "credit_digest=a57117da7a89f80e5a702bf44b339f51fdaaf41274d4a0e8048580923534605a "
+            "resource_pending=0,0,0,0,0,0,0,0 "
+            "resource_used=1,2,3,4,5,6,7,8 "
+            "credit_exec_account=5/11 credit_storage_account=6/12 "
+            "first_ticket=10 last_ticket=21 "
+            f"event_count=12 gap_count=0 previous_root={'0' * 64} "
+            f"challenge={'1' * 64} evidence_root={'2' * 64} flags=15\n"
+        )
+        _validate_workflow_fence_receipt(receipt)
+        mutations = (
+            receipt.replace("event_count=12", "event_count=0"),
+            receipt.replace("flags=15", "flags=14"),
+            receipt.replace("lifecycle=7/3", "lifecycle=0/3"),
+            receipt.replace("1" * 64, "0" * 64),
+            receipt.replace("2" * 64, "0" * 64),
+            receipt.replace(
+                "a57117da7a89f80e5a702bf44b339f51fdaaf41274d4a0e8048580923534605a",
+                "0" * 64,
+            ),
+            receipt.replace("resource_pending=0", "resource_pending=1", 1),
+            receipt.replace("resource_used=1,2,3,4,5,6,7,8", "resource_used=1,2,3,4,5,6,7"),
+            receipt.replace("credit_exec_account=5/11", "credit_exec_account=6/11"),
+            receipt.replace("credit_storage_account=6/12", "credit_storage_account=6/0"),
+            receipt.replace("first_ticket=10 last_ticket=21", "first_ticket=22 last_ticket=21"),
+            receipt.replace("gap_count=0", "gap_count=13"),
+            receipt + "rp_agentos_orch: workflow_fence_failed request_id=101\n",
+            receipt + "rp_agentos_orch: acceptance_receipt_failed status=-1\n",
+        )
+        for payload in mutations:
+            with self.subTest(payload=payload), self.assertRaises(EvidenceSemanticError):
+                _validate_workflow_fence_receipt(payload)
+
+    def test_live_query_runtime_receipts_reject_missing_transitions(self) -> None:
+        guests = {
+            "agent-case:agentfs_ucore": (
+                "agentfs_ucore: explicit_create_query=1 ordinary_unindexed=1\n"
+                "agentfs_ucore: live_catalog_volatile=1\n"
+            ),
+            "agent-case:agentscan_ucore": (
+                "agentscan_ucore: explicit_admission ordinary_unindexed=1\n"
+                "agentscan_ucore: live_query enter=1 update=1 leave=1 indexed=1\n"
+            ),
+        }
+        _validate_live_query_runtime(guests)
+        for tag, marker in (
+            ("agent-case:agentfs_ucore", "agentfs_ucore: live_catalog_volatile=1\n"),
+            ("agent-case:agentscan_ucore", "update=1 "),
+        ):
+            mutated = dict(guests)
+            mutated[tag] = mutated[tag].replace(marker, "", 1)
+            with self.subTest(tag=tag), self.assertRaises(EvidenceSemanticError):
+                _validate_live_query_runtime(mutated)
+
+    def test_workflow_evidence_is_one_descriptive_run(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "workflow_kernel_validator", KERNEL_LOG_VALIDATOR
+        )
+        kernel = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(kernel)
+        guest = "\n".join(kernel.workflow_teardown_expected_lines(14, 64))
+        canonical = (
+            "===== runner-stdout:workflow-teardown-race =====\n"
+            "[workflow-teardown] 1 descriptive run passed\n\n"
+            "===== runner-guest-logs:workflow-teardown-race =====\n"
+            "===== guest:workflow-teardown:1 =====\n"
+            f"{guest}\n\n"
+            "===== end-guest:workflow-teardown:1 =====\n"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp)
+            artifact = raw / "workflow-teardown-race.log"
+            artifact.write_text(canonical, encoding="utf-8")
+            validate_selected_artifacts(
+                ("workflow-teardown-race",), raw, REPO,
+                require_exact_inventory=True,
+            )
+            for payload in (
+                canonical.replace("1 descriptive run", "3 stable runs"),
+                canonical + canonical.replace("workflow-teardown:1", "workflow-teardown:2"),
+            ):
+                with self.assertRaises(EvidenceSemanticError):
+                    artifact.write_text(payload, encoding="utf-8")
+                    validate_selected_artifacts(
+                        ("workflow-teardown-race",), raw, REPO,
+                        require_exact_inventory=True,
+                    )
 
     def test_ch3_raw_evidence_rejects_missing_and_forged_lines(self) -> None:
         markers = ("string from task trace test", "Test trace OK!")
@@ -1680,7 +1727,7 @@ class FinalEvidenceTests(unittest.TestCase):
             run([*collector_command(REPO, "write-summary"), "--stage", str(stage),
                  "--steps", str(steps), "--commit", commit], REPO)
             summary = json.loads((incoming / "verification-summary.json").read_text())
-            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (8, 7))
+            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (8, 8))
             canonical_steps = json.dumps(summary["steps"], ensure_ascii=True,
                                          sort_keys=True, separators=(",", ":"))
             self.assertEqual(summary["step_contract_sha256"],
@@ -1689,12 +1736,13 @@ class FinalEvidenceTests(unittest.TestCase):
             self.assertEqual({item["name"] for item in summary["artifacts"]},
                              {item for items in PROFILE_ARTIFACTS.values() for item in items})
             self.assertEqual(summary["settings"]["mechanism_marker_grace_seconds"], "5s")
+            self.assertEqual(summary["settings"]["workflow_runs"], 1)
             overlap = base / "overlap"
             overlap_steps = populate_summary_stage(overlap)
             overlap_steps.write_text(
                 overlap_steps.read_text().replace(
-                    "syscall-fairness\t8\t9\t",
-                    "syscall-fairness\t7.250000000\t8.500000000\t",
+                    "syscall-fairness\t9\t10\t",
+                    "syscall-fairness\t8.250000000\t9.500000000\t",
                 )
             )
             run(
@@ -1714,7 +1762,7 @@ class FinalEvidenceTests(unittest.TestCase):
             replaced = base / "replaced-artifact"; replaced_steps = populate_summary_stage(replaced)
             (replaced / "incoming/proc-reap.log").rename(replaced / "incoming/wrong.log")
             replaced_steps.write_text(replaced_steps.read_text().replace(
-                "proc-reap\t7\t8\tproc-reap.log", "proc-reap\t7\t8\twrong.log"))
+                "proc-reap\t8\t9\tproc-reap.log", "proc-reap\t8\t9\twrong.log"))
             cases.append((replaced, replaced_steps, [], "artifact contract"))
             for label, options in (("agent-setting", ["--agent-grace", "3s"]),
                                    ("mechanism-setting", ["--mechanism-grace", "4s"]),

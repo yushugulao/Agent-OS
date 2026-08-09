@@ -23,6 +23,12 @@ static struct agent_ledger_summary orch_ledger;
 static struct agent_file_query orch_file_query;
 static struct agent_file_query_result orch_file_query_result;
 static struct agent_file_hit orch_metadata_hit;
+static struct agent_workflow_fence_request orch_fence_request;
+static struct agent_workflow_fence_receipt orch_fence_receipt;
+static char orch_fence_credit_hex[AGENT_WORKFLOW_FENCE_ROOT_SIZE * 2 + 1];
+static char orch_fence_challenge_hex[AGENT_WORKFLOW_FENCE_CHALLENGE_SIZE * 2 + 1];
+static char orch_fence_previous_hex[AGENT_WORKFLOW_FENCE_ROOT_SIZE * 2 + 1];
+static char orch_fence_root_hex[AGENT_WORKFLOW_FENCE_ROOT_SIZE * 2 + 1];
 static char orch_acceptance_body[4096];
 static char orch_stability_body[32768];
 static char orch_check_token[160];
@@ -219,6 +225,148 @@ static int workflow_sha256_valid(const char *value)
 		      (value[i] >= 'a' && value[i] <= 'f')))
 			return 0;
 	}
+	return 1;
+}
+
+static int workflow_hex_value(char value)
+{
+	if (value >= '0' && value <= '9')
+		return value - '0';
+	if (value >= 'a' && value <= 'f')
+		return value - 'a' + 10;
+	return -1;
+}
+
+static void workflow_hex_encode(const unsigned char *bytes, uint count,
+				char *out)
+{
+	static const char digits[] = "0123456789abcdef";
+
+	for (uint i = 0; i < count; i++) {
+		out[i * 2] = digits[bytes[i] >> 4];
+		out[i * 2 + 1] = digits[bytes[i] & 15];
+	}
+	out[count * 2] = 0;
+}
+
+static int seal_challenge_workflow(
+	const struct rp_challenge_workflow *workflow)
+{
+	static const char domain[] = "rp-task6-completion-v1";
+	struct agent_workflow_lifecycle_info lifecycle;
+	const uint required_flags =
+		AGENT_WORKFLOW_FENCE_RECEIPT_F_PARTIAL_COVERAGE |
+		AGENT_WORKFLOW_FENCE_RECEIPT_F_CREDIT_EXACT |
+		AGENT_WORKFLOW_FENCE_RECEIPT_F_EVIDENCE_SEALED |
+		AGENT_WORKFLOW_FENCE_RECEIPT_F_METADATA_VOLATILE;
+	int challenge_match = 1;
+	int digest_nonzero = 0;
+	int root_nonzero = 0;
+
+	if (workflow == 0 || !workflow_sha256_valid(workflow->derived_sha256))
+		return 0;
+	memset(&lifecycle, 0, sizeof(lifecycle));
+	if (agent_workflow_lifecycle_info(&lifecycle, 0) != AGENT_STATUS_OK ||
+	    lifecycle.version != AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION ||
+	    lifecycle.struct_size != sizeof(lifecycle) ||
+	    lifecycle.charged != 1 || lifecycle.resource_account_valid != 1 ||
+	    lifecycle.key.reserved != 0 ||
+	    lifecycle.resource_account_generation == 0)
+		return 0;
+	memset(&orch_fence_request, 0, sizeof(orch_fence_request));
+	memset(&orch_fence_receipt, 0, sizeof(orch_fence_receipt));
+	orch_fence_request.version = AGENT_WORKFLOW_FENCE_VERSION;
+	orch_fence_request.struct_size = sizeof(orch_fence_request);
+	orch_fence_request.flags = 0;
+	orch_fence_request.request_id = workflow->request_id + 0x100;
+	for (uint i = 0; i < AGENT_WORKFLOW_FENCE_CHALLENGE_SIZE; i++) {
+		int high = workflow_hex_value(workflow->derived_sha256[i * 2]);
+		int low = workflow_hex_value(workflow->derived_sha256[i * 2 + 1]);
+
+		if (high < 0 || low < 0)
+			return 0;
+		orch_fence_request.challenge[i] =
+			(unsigned char)((high << 4) | low) ^
+			(unsigned char)domain[i % (sizeof(domain) - 1)];
+	}
+	if (agent_workflow_fence(&orch_fence_request,
+				 &orch_fence_receipt) != AGENT_STATUS_OK ||
+	    orch_fence_receipt.version != AGENT_WORKFLOW_FENCE_VERSION ||
+	    orch_fence_receipt.struct_size != sizeof(orch_fence_receipt) ||
+	    orch_fence_receipt.status != AGENT_STATUS_OK ||
+	    orch_fence_receipt.flags != required_flags ||
+	    orch_fence_receipt.request_id != orch_fence_request.request_id ||
+	    orch_fence_receipt.key.reserved != 0 ||
+	    orch_fence_receipt.key.id !=
+		    orch_header.workflow_lifecycle_id ||
+	    orch_fence_receipt.key.generation !=
+		    orch_header.workflow_lifecycle_generation ||
+	    orch_fence_receipt.key.id != lifecycle.key.id ||
+	    orch_fence_receipt.key.generation != lifecycle.key.generation ||
+	    orch_fence_receipt.fence_sequence == 0 ||
+	    orch_fence_receipt.metadata_generation == 0 ||
+	    orch_fence_receipt.credit_epoch == 0 ||
+	    orch_fence_receipt.evidence_first_sequence == 0 ||
+	    orch_fence_receipt.evidence_last_sequence <
+		    orch_fence_receipt.evidence_first_sequence ||
+	    orch_fence_receipt.evidence_event_count == 0 ||
+	    orch_fence_receipt.evidence_dropped_success >
+		    orch_fence_receipt.evidence_event_count ||
+	    orch_fence_receipt.credit_exec_account.reserved != 0 ||
+	    orch_fence_receipt.credit_exec_account.slot !=
+		    lifecycle.resource_account_slot ||
+	    orch_fence_receipt.credit_exec_account.generation !=
+		    lifecycle.resource_account_generation ||
+	    orch_fence_receipt.credit_storage_account.reserved != 0 ||
+	    orch_fence_receipt.credit_storage_account.generation == 0)
+		return 0;
+	for (uint i = 0; i < AGENT_WORKFLOW_FENCE_CHALLENGE_SIZE; i++)
+		challenge_match &= orch_fence_receipt.challenge[i] ==
+				   orch_fence_request.challenge[i];
+	for (uint i = 0; i < AGENT_WORKFLOW_FENCE_ROOT_SIZE; i++) {
+		digest_nonzero |= orch_fence_receipt.credit_digest[i];
+		root_nonzero |= orch_fence_receipt.evidence_root[i];
+	}
+	if (!challenge_match || !digest_nonzero || !root_nonzero)
+		return 0;
+	workflow_hex_encode(orch_fence_receipt.credit_digest,
+			    AGENT_WORKFLOW_FENCE_ROOT_SIZE,
+			    orch_fence_credit_hex);
+	workflow_hex_encode(orch_fence_receipt.challenge,
+			    AGENT_WORKFLOW_FENCE_CHALLENGE_SIZE,
+			    orch_fence_challenge_hex);
+	workflow_hex_encode(orch_fence_receipt.previous_root,
+			    AGENT_WORKFLOW_FENCE_ROOT_SIZE,
+			    orch_fence_previous_hex);
+	workflow_hex_encode(orch_fence_receipt.evidence_root,
+			    AGENT_WORKFLOW_FENCE_ROOT_SIZE,
+			    orch_fence_root_hex);
+	printf("rp_agentos_orch: workflow_fence name=rp-task6-completion-v1 request_id=%llu lifecycle=%u/%llu fence_sequence=%llu metadata_generation=%llu credit_epoch=%llu credit_digest=%s resource_pending=0,0,0,0,0,0,0,0 resource_used=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu credit_exec_account=%u/%llu credit_storage_account=%u/%llu first_ticket=%llu last_ticket=%llu event_count=%llu gap_count=%llu previous_root=%s challenge=%s evidence_root=%s flags=%u\n",
+	       orch_fence_receipt.request_id, orch_fence_receipt.key.id,
+	       orch_fence_receipt.key.generation,
+	       orch_fence_receipt.fence_sequence,
+	       orch_fence_receipt.metadata_generation,
+	       orch_fence_receipt.credit_epoch,
+	       orch_fence_credit_hex,
+	       orch_fence_receipt.resource_used[0],
+	       orch_fence_receipt.resource_used[1],
+	       orch_fence_receipt.resource_used[2],
+	       orch_fence_receipt.resource_used[3],
+	       orch_fence_receipt.resource_used[4],
+	       orch_fence_receipt.resource_used[5],
+	       orch_fence_receipt.resource_used[6],
+	       orch_fence_receipt.resource_used[7],
+	       orch_fence_receipt.credit_exec_account.slot,
+	       orch_fence_receipt.credit_exec_account.generation,
+	       orch_fence_receipt.credit_storage_account.slot,
+	       orch_fence_receipt.credit_storage_account.generation,
+	       orch_fence_receipt.evidence_first_sequence,
+	       orch_fence_receipt.evidence_last_sequence,
+	       orch_fence_receipt.evidence_event_count,
+	       orch_fence_receipt.evidence_dropped_success,
+	       orch_fence_previous_hex, orch_fence_challenge_hex,
+	       orch_fence_root_hex,
+	       orch_fence_receipt.flags);
 	return 1;
 }
 
@@ -518,11 +666,11 @@ static int seed_meta(int fid, const char *physical, const char *project,
 	rp_copy_text(meta.status, sizeof(meta.status), state);
 	rp_copy_text(meta.summary, sizeof(meta.summary), summary);
 	meta.dependency_mask = deps;
-	meta.flags = AGENT_FILE_META_F_PERSIST;
+	meta.flags = 0;
 	return agent_file_meta_set(&meta);
 }
 
-static int seed_legacy_research_metadata(void)
+static int seed_reference_research_metadata(void)
 {
 	if (seed_meta(1, "r42align", "lab-gene-x", "nightly-regression",
 		      "RUN-042", "align", "artifact", "ok",
@@ -925,8 +1073,8 @@ static int run_research_orchestrator(int timing_read_fd, int timing_write_fd,
 		printf("rp_agentos_orch: file_meta_init_failed\n");
 		return 1;
 	}
-	if (seed_legacy_research_metadata() < 0) {
-		printf("rp_agentos_orch: seed_legacy_metadata_failed\n");
+	if (seed_reference_research_metadata() < 0) {
+		printf("rp_agentos_orch: seed_reference_metadata_failed\n");
 		return 1;
 	}
 	phase_mask |= RP_WORKFLOW_PHASE_METADATA;
@@ -1050,6 +1198,11 @@ static int run_research_orchestrator(int timing_read_fd, int timing_write_fd,
 		    echo_context, followup_context, timeline_count, edge_count,
 		    echo_edge)) {
 		printf("rp_agentos_orch: acceptance_receipt_failed\n");
+		return 1;
+	}
+	if (!seal_challenge_workflow(&orch_workflow)) {
+		printf("rp_agentos_orch: workflow_fence_failed "
+		       "name=rp-task6-completion-v1\n");
 		return 1;
 	}
 	return 0;

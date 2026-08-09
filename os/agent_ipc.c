@@ -1,5 +1,6 @@
 #include "agent_context.h"
 #include "agent_internal.h"
+#include "agent_live_query_events.h"
 #include "defs.h"
 #include "timer.h"
 #include "trap.h"
@@ -10,6 +11,7 @@
 extern struct proc pool[NPROC];
 
 static int agent_ipc_handoff_event_locked(struct proc *p);
+static struct agent_file_live_watch agent_ipc_live_watch_scratch;
 
 static struct thread *
 agent_ipc_event_baton_owner_locked(struct proc *p)
@@ -135,13 +137,23 @@ agent_ipc_find_live_proc_locked(int pid, int agent_endpoint)
 static int
 agent_ipc_same_scope(struct proc *left, struct proc *right)
 {
+	struct workflow_lifecycle_key left_key;
+	struct workflow_lifecycle_key right_key;
 	uint scope;
 
 	if (left == 0 || right == 0)
 		return 0;
 	scope = agent_identity_proc_scope(left);
-	return scope != VFS_SCOPE_NONE &&
-	       scope == agent_identity_proc_scope(right);
+	if (scope == VFS_SCOPE_NONE || scope != agent_identity_proc_scope(right) ||
+	    !left->workflow_lifecycle_charged ||
+	    !right->workflow_lifecycle_charged)
+		return 0;
+	left_key.id = left->workflow_lifecycle_id;
+	left_key.generation = left->workflow_lifecycle_generation;
+	right_key.id = right->workflow_lifecycle_id;
+	right_key.generation = right->workflow_lifecycle_generation;
+	return workflow_lifecycle_key_valid(left_key) &&
+	       workflow_lifecycle_key_equal(left_key, right_key);
 }
 
 static int
@@ -566,11 +578,13 @@ enum agent_event_origin {
 enum agent_event_delivery {
 	AGENT_EVENT_REQUIRE_WATCH = 1,
 	AGENT_EVENT_INTRINSIC_COALESCED,
+	AGENT_EVENT_LIVE_QUERY_TARGETED,
 };
 
 #define AGENT_EVENT_SET(type) AGENT_EVENT_MASK(type)
 #define AGENT_EVENT_ATTRIBUTED_SET \
 	(AGENT_EVENT_SET(AGENT_EVENT_FILE_STATUS) | \
+	 AGENT_EVENT_SET(AGENT_EVENT_FILE_QUERY) | \
 	 AGENT_EVENT_SET(AGENT_EVENT_JOB_DONE) | \
 	 AGENT_EVENT_SET(AGENT_EVENT_POLICY_DENIED) | \
 	 AGENT_EVENT_SET(AGENT_EVENT_CONTEXT_LIMIT) | \
@@ -664,10 +678,14 @@ static int agent_ipc_queue_event_locked(struct proc *target, struct proc *source
 		span_owner = 0;
 	}
 	if (delivery != AGENT_EVENT_REQUIRE_WATCH &&
-	    delivery != AGENT_EVENT_INTRINSIC_COALESCED)
+	    delivery != AGENT_EVENT_INTRINSIC_COALESCED &&
+	    delivery != AGENT_EVENT_LIVE_QUERY_TARGETED)
 		return 0;
 	if (delivery == AGENT_EVENT_INTRINSIC_COALESCED &&
 	    origin != AGENT_EVENT_ORIGIN_KERNEL)
+		return 0;
+	if (delivery == AGENT_EVENT_LIVE_QUERY_TARGETED &&
+	    type != AGENT_EVENT_FILE_STATUS && type != AGENT_EVENT_FILE_QUERY)
 		return 0;
 	if (delivery == AGENT_EVENT_REQUIRE_WATCH &&
 	    !agent_ipc_filter_matches(target, type, payload))
@@ -747,6 +765,30 @@ static int agent_ipc_queue_event(struct proc *target, struct proc *source,
 
 	intr_restore(enabled);
 	return delivered;
+}
+
+int
+agent_ipc_deliver_live_event(struct proc *target, struct proc *source,
+			     int type, uint64 fid, uint64 generation,
+			     char *payload, int coalesced)
+{
+	int enabled;
+	int origin;
+	int result;
+
+	if (target == 0 || payload == 0 ||
+	    (type != AGENT_EVENT_FILE_STATUS &&
+	     type != AGENT_EVENT_FILE_QUERY))
+		return 0;
+	origin = source == 0 ? AGENT_EVENT_ORIGIN_KERNEL :
+			      AGENT_EVENT_ORIGIN_ATTRIBUTED;
+	enabled = intr_save();
+	result = agent_ipc_queue_event_locked(
+		target, source, origin, type, fid, generation, payload,
+		coalesced ? AGENT_EVENT_INTRINSIC_COALESCED :
+			    AGENT_EVENT_LIVE_QUERY_TARGETED);
+	intr_restore(enabled);
+	return result;
 }
 
 static int
@@ -872,6 +914,7 @@ agent_ipc_proc_reset(struct proc *p)
 
 	if (p == 0)
 		return;
+	agent_live_query_proc_reset(p);
 	inactive = !p->is_agent && p->agent_control_id == 0;
 	/* 仅在激活 Agent 角色时初始化事件面。 */
 	if (!inactive) {
@@ -1046,6 +1089,62 @@ agent_ipc_tick_proc(struct proc *p, uint64 now)
 int agent_ipc_wait_test_publish(struct proc *p) { return agent_ipc_queue_intrinsic_timer_locked(p, 0, "wait=atomic-injected"); }
 #endif
 
+static int
+agent_ipc_live_watch_update(uint64 watchaddr, int remove)
+{
+	struct proc *p = curr_proc();
+	uint64 watch_id = 0;
+	int status;
+
+	if (p == 0 || !p->is_agent || watchaddr == 0)
+		return -1;
+	if (!agent_identity_has_cap(p, AGENT_CAP_WATCH))
+		return AGENT_STATUS_DENIED;
+	if (!remove && user_range_check(
+			       p->pagetable, watchaddr,
+			       sizeof(agent_ipc_live_watch_scratch), PTE_W) < 0)
+		return -1;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	if (!agent_metadata_txn_lock(1)) {
+		status = AGENT_STATUS_RETRY;
+		goto out_lane;
+	}
+	memset(&agent_ipc_live_watch_scratch, 0,
+	       sizeof(agent_ipc_live_watch_scratch));
+	if (copyin(p->pagetable, (char *)&agent_ipc_live_watch_scratch,
+		   watchaddr, sizeof(agent_ipc_live_watch_scratch)) < 0) {
+		status = -1;
+		goto out_txn;
+	}
+	status = remove ? agent_live_query_watch_remove_typed(
+				  p, &agent_ipc_live_watch_scratch) :
+			  agent_live_query_watch_install_typed(
+				  p, &agent_ipc_live_watch_scratch);
+	watch_id = agent_ipc_live_watch_scratch.watch_id;
+	if (!remove && status == AGENT_STATUS_OK &&
+	    copyout(p->pagetable, watchaddr,
+		    (char *)&agent_ipc_live_watch_scratch,
+		    sizeof(agent_ipc_live_watch_scratch)) < 0) {
+		(void)agent_live_query_watch_remove_typed(
+			p, &agent_ipc_live_watch_scratch);
+		status = -1;
+	}
+out_txn:
+	memset(&agent_ipc_live_watch_scratch, 0,
+	       sizeof(agent_ipc_live_watch_scratch));
+	agent_metadata_txn_unlock();
+	if (status == AGENT_STATUS_OK)
+		agent_context_append_system(
+			p, AGENT_TOOL_AGENT_WATCH, watch_id,
+			AGENT_EVENT_FILE_QUERY, "live_query",
+			remove ? "unwatch" : "watch", AGENT_STATUS_OK,
+			watch_id, 0, 0);
+out_lane:
+	agent_lifecycle_context_lane_leave(p);
+	return status;
+}
+
 static int agent_ipc_watch_update(int event_type, uint64 filteraddr, int remove)
 {
 	struct proc *p = curr_proc();
@@ -1054,10 +1153,18 @@ static int agent_ipc_watch_update(int event_type, uint64 filteraddr, int remove)
 	if (!p->is_agent) return -1;
 	if (!agent_identity_has_cap(p, AGENT_CAP_WATCH)) return AGENT_STATUS_DENIED;
 	if (event_type < AGENT_EVENT_NONE || event_type > AGENT_EVENT_MAX) return AGENT_STATUS_BAD_PARAM;
+	if (event_type == AGENT_EVENT_FILE_QUERY)
+		return agent_ipc_live_watch_update(filteraddr, remove);
 	if (filteraddr != 0 && copyinstr(p->pagetable, filter, filteraddr, sizeof(filter)) < 0) return -1;
 	if (agent_lifecycle_context_lane_enter(p) < 0) return -1;
 	if (!remove && agent_ipc_watch_set(p, event_type, filter) < 0) { result = AGENT_STATUS_NO_SPACE; goto out; }
-	if (remove) result = agent_ipc_watch_clear(p, event_type, filter); else agent_identity_thread_loop_set(curr_thread(), AGENT_LOOP_IDLE);
+	if (remove) {
+		result = agent_ipc_watch_clear(p, event_type, filter);
+		agent_live_query_watch_removed(p);
+	} else {
+		agent_identity_thread_loop_set(curr_thread(), AGENT_LOOP_IDLE);
+		agent_live_query_watch_installed(p);
+	}
 	agent_context_append_system(p, AGENT_TOOL_AGENT_WATCH, 0, event_type, filter,
 				    remove ? "unwatch" : "watch", AGENT_STATUS_OK,
 				    remove ? result : event_type, 0, 0);

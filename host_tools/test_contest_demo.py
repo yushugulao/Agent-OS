@@ -38,15 +38,7 @@ def _add(before: dict[str, int], **changes: int) -> dict[str, int]:
 
 
 def _counter_base(value: int) -> dict[str, int]:
-    counters = {name: value + offset for offset, name in enumerate(COUNTERS)}
-    counters.update(
-        metadata_dirty=value,
-        metadata_durable=value,
-        metadata_requests=value + 2,
-        metadata_coalesced=value + 1,
-        metadata_commits=value,
-    )
-    return counters
+    return {name: value + offset for offset, name in enumerate(COUNTERS)}
 
 
 def _mechanism_line(
@@ -69,7 +61,6 @@ def _mechanism_line(
         f"scope={scope} observer_pid={observer_pid} before_tick={before_tick} "
         f"after_tick={after_tick} observer_lifecycle_id={lifecycle_id} "
         f"observer_lifecycle_generation={generation} counter_scope=global {pairs}"
-        " before_metadata_pending=0 after_metadata_pending=0"
     )
 
 
@@ -91,11 +82,7 @@ def _fence_line(
         f"stable_rounds=2 observer_pid={observer_pid} "
         f"observer_tick={observer_tick} observer_lifecycle_id={lifecycle_id} "
         f"observer_lifecycle_generation={generation} counter_scope=global "
-        f"{storage} metadata_dirty={values['metadata_dirty']} "
-        f"metadata_durable={values['metadata_durable']} "
-        f"metadata_requests={values['metadata_requests']} "
-        f"metadata_coalesced={values['metadata_coalesced']} "
-        f"metadata_commits={values['metadata_commits']} metadata_pending=0"
+        f"{storage}"
     )
 
 
@@ -139,9 +126,6 @@ def _lane_records(mode: str, position: int, sample_id: int) -> list[str]:
             virtio_indirect_write_batch_calls=1,
             virtio_read_batch_calls=1,
             virtio_batched_read_requests=2,
-            metadata_requests=4,
-            metadata_coalesced=1,
-            metadata_commits=2,
             overwrite_prereads_skipped=0,
         )
         core_duration, records, bytes_read = 400, 25, 2048
@@ -165,9 +149,6 @@ def _lane_records(mode: str, position: int, sample_id: int) -> list[str]:
             virtio_indirect_write_batch_calls=1,
             virtio_read_batch_calls=1,
             virtio_batched_read_requests=4,
-            metadata_requests=4,
-            metadata_coalesced=3,
-            metadata_commits=1,
             overwrite_prereads_skipped=4,
         )
         core_duration, records, bytes_read = 80, 2, 0
@@ -351,7 +332,7 @@ def test_showcase_parser_and_product_outputs() -> None:
         root = Path(temporary)
         report = build_fixture(report_fixture(root))
         comparison = report["comparison"]
-        assert report["schema_version"] == 6
+        assert report["schema_version"] == 7
         assert report["run"]["qemu_boots"] == 8
         assert report["build_manifest"]["source_commit"] == COMMIT
         assert report["build_manifest"]["kernel_artifact"] == "showcase-kernel"
@@ -388,7 +369,6 @@ def test_showcase_parser_and_product_outputs() -> None:
         assert native_core["virtio_indirect_write_batch_calls"] == 1
         assert native_core["physical_reads"] == 2
         assert native_core["overwrite_prereads_skipped"] == 4
-        assert native_core["metadata_coalescing_rate_pct"] == 75
         assert native_core["raw_cycle_ordering"] == {
             "ordered_samples": 8,
             "minimum_gap": 10,
@@ -424,11 +404,12 @@ def test_showcase_parser_and_product_outputs() -> None:
         assert "400 us" in page and "80 us" in page and "5.00x" in page
         assert "6 / 3" in page and "2 / 1" in page
         assert "Native - Compat 均值 [95% CI]" in page
-        assert "Metadata 合并率 p50" in page
+        assert "FS Epoch 提交 / 暂存 p50" in page
         assert "VirtIO 读批量 p50" in page
         assert "VirtIO 写批量 p50" in page and "间接描述符批次" in page
         assert "observer_process" in page
         assert "8 boot 原始配对" in page
+        assert "Metadata" not in page
         assert "-320 us [-320 us，-320 us]" in page
         assert "多 Agent 恢复时间线" in page and "结果一致性" in page
         assert "passed" not in page and "部分就绪" not in page and "通过" not in page
@@ -439,6 +420,7 @@ def test_showcase_parser_and_product_outputs() -> None:
         assert "写 batch / request / indirect" in markdown
         assert "observer_process" in markdown
         assert "8 boot 原始配对" in markdown
+        assert "Metadata" not in markdown
         assert "-320 us [-320 us，-320 us]" in markdown
         assert "passed" not in markdown and "通过" not in markdown
         embedded = re.search(
@@ -480,27 +462,6 @@ def _stop_first_mechanism_clock(text: str) -> str:
         text,
         count=1,
     )
-
-
-def _metadata_coalescing_overflow(text: str) -> str:
-    pattern = (
-        r"(kind=mechanism mode=compat scope=core[^\n]*before_metadata_requests=)"
-        r"([0-9]+)( after_metadata_requests=)([0-9]+)"
-        r"( before_metadata_coalesced=)([0-9]+)"
-        r"( after_metadata_coalesced=)([0-9]+)"
-    )
-
-    def replace(match: re.Match[str]) -> str:
-        request_delta = int(match.group(4)) - int(match.group(2))
-        invalid_after = int(match.group(6)) + request_delta + 1
-        return "".join(
-            (
-                match.group(1), match.group(2), match.group(3), match.group(4),
-                match.group(5), match.group(6), match.group(7), str(invalid_after),
-            )
-        )
-
-    return re.sub(pattern, replace, text, count=1)
 
 
 def test_schema2_records_fail_closed() -> None:
@@ -546,8 +507,11 @@ def test_schema2_records_fail_closed() -> None:
             "wait_sleeps=2 wait_wakeups=3",
             1,
         ),
-        "pending metadata": lambda text: text.replace(
-            "metadata_pending=0", "metadata_pending=1", 1
+        "nonmonotonic fence counter": lambda text: re.sub(
+            r"(kind=fence mode=compat seq=4[^\n]* physical_reads=)([0-9]+)",
+            r"\g<1>0",
+            text,
+            count=1,
         ),
         "observer lifecycle drift": lambda text: text.replace(
             "observer_lifecycle_generation=3 counter_scope=global",
@@ -568,7 +532,6 @@ def test_schema2_records_fail_closed() -> None:
         "read batch call without requests": lambda text: _zero_first_counter_delta(
             text, "virtio_batched_read_requests"
         ),
-        "metadata coalescing exceeds requests": _metadata_coalescing_overflow,
         "zero exec reuse": lambda text: re.sub(
             r"(kind=mechanism mode=runtime_probe scope=end_to_end[^\n]*before_exec_cache_hits=)([0-9]+) after_exec_cache_hits=([0-9]+)",
             lambda match: f"{match.group(1)}{match.group(2)} after_exec_cache_hits={match.group(2)}",

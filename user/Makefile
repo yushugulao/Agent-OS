@@ -8,7 +8,7 @@ ifeq ($(FUNCTIONAL_REVIEW_BUILD),1)
 override FUNCTIONAL_REVIEW_FORBIDDEN_USER_VARS := \
 	ARCH CC OBJCOPY OBJDUMP COMMON_CFLAGS CFLAGS CPPFLAGS LDFLAGS LIB_C LIB_OBJS CRT_OBJ \
 	app_dir build_dir elf_dir obj_dir bin_dir generated_dir out_dir asm_dir arch_dir \
-	SRCS APPS SELECTED_APPS
+	SRCS APPS SELECTED_APPS RETIRED_GUEST_APPS RETIRED_GUEST_SRCS
 override FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS := $(strip $(foreach variable,$(FUNCTIONAL_REVIEW_FORBIDDEN_USER_VARS),$(if $(filter command line environment override,$(origin $(variable))),$(variable))))
 ifneq ($(FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS),)
 $(error FUNCTIONAL_REVIEW_BUILD rejects external user variables: $(FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS))
@@ -54,8 +54,12 @@ LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000 -Wl,--gc-sections
 LIB_C := $(wildcard lib/*.c)
 LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
+RETIRED_GUEST_APPS := agentmetacrash_ucore agentmetarecover_ucore \
+	agentmetaeio_ucore agentmetalarge_ucore agentmetatransient_ucore \
+	agentobsreboot_ucore
+RETIRED_GUEST_SRCS := $(addprefix user/$(app_dir)/,$(addsuffix .c,$(RETIRED_GUEST_APPS)))
 SRCS := $(wildcard $(app_dir)/*.c)
-APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
+APPS := $(filter-out $(RETIRED_GUEST_APPS),$(patsubst $(app_dir)/%.c,%,$(SRCS)))
 APPS += compatbench
 GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
 EVALUATION_HEADER := $(generated_dir)/agenteval_seed.h
@@ -97,8 +101,6 @@ FILE_RESOURCE_TESTS := fileresource_ucore
 THREAD_RESOURCE_TESTS := threadresource_ucore
 PHYSICAL_RESOURCE_TESTS := physicalresource_ucore
 WORKFLOW_TEARDOWN_TESTS := workflow_teardown_race_ucore
-METADATA_RECOVERY_TESTS := agentmetacrash_ucore agentmetarecover_ucore agentmetaeio_ucore agentmetalarge_ucore agentmetatransient_ucore
-OBSERVE_RECOVERY_TESTS := agentobsreboot_ucore
 VIRTIO_DISK_TESTS := virtiodisk_ucore
 EVALUATION_TESTS := agenteval_ucore
 COMPATIBILITY_TESTS := compatbench
@@ -136,6 +138,10 @@ CH7_TESTS := $(CH7_BASE_TESTS)
 CH8_TESTS := $(CH8_BASE_TESTS) $(AGENT_TESTS)
 endif
 
+ifneq ($(filter $(CHAPTER),metadata_recovery observe_recovery),)
+$(error CHAPTER=$(CHAPTER) is retired; use the live-query and workflow-fence Agent tests)
+endif
+
 ifeq ($(CHAPTER), 2)
 CH_TESTS := $(CH2_TESTS)
 else ifeq ($(CHAPTER), 3)
@@ -170,10 +176,6 @@ else ifeq ($(CHAPTER), physical_resource)
 CH_TESTS := $(PHYSICAL_RESOURCE_TESTS)
 else ifeq ($(CHAPTER), workflow_teardown)
 CH_TESTS := $(WORKFLOW_TEARDOWN_TESTS)
-else ifeq ($(CHAPTER), metadata_recovery)
-CH_TESTS := $(METADATA_RECOVERY_TESTS)
-else ifeq ($(CHAPTER), observe_recovery)
-CH_TESTS := $(OBSERVE_RECOVERY_TESTS)
 else ifeq ($(CHAPTER), virtio_disk)
 CH_TESTS := $(VIRTIO_DISK_TESTS)
 else ifeq ($(CHAPTER), platform)
@@ -192,7 +194,7 @@ STACK_USAGE_DATA_ONLY_LIBRARY_SRCS := user/lib/research_platform_state.c
 STACK_USAGE_FUNCTION_LIBRARY_SRCS := $(filter-out $(STACK_USAGE_DATA_ONLY_LIBRARY_SRCS),$(STACK_USAGE_ALL_LIBRARY_SRCS))
 STACK_USAGE_SUPPORT_SRCS := $(addprefix user/src/,$(addsuffix .c,$(WORKER_BATCH_PROGRAMS)))
 STACK_USAGE_APPLICATION_SRCS := \
-	$(filter-out $(STACK_USAGE_SUPPORT_SRCS),$(addprefix user/,$(sort $(SRCS)))) \
+	$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),$(addprefix user/,$(sort $(SRCS)))) \
 	$(COMPAT_BENCH_REPO_SOURCE)
 STACK_USAGE_SRCS := $(STACK_USAGE_FUNCTION_LIBRARY_SRCS) $(STACK_USAGE_SUPPORT_SRCS) $(STACK_USAGE_APPLICATION_SRCS)
 STACK_USAGE_OBJS = $(patsubst %.c,$(STACK_USAGE_DIR)/%.o,$(STACK_USAGE_SRCS))
@@ -298,8 +300,6 @@ $(STACK_USAGE_DIR)/user/src/agentfinal_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
 	-DAGENT_CONTEXT_SYNC_TEST_PROFILE -DWAIT_ATOMIC_TEST_PROFILE
 $(STACK_USAGE_DIR)/user/lib/syscall.o: STACK_USAGE_PROFILE_CFLAGS := \
 	-DWAIT_ATOMIC_TEST_PROFILE
-$(STACK_USAGE_DIR)/user/src/agentobsreboot_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
-	-DAGENT_OBSERVE_TEST_PROFILE
 $(STACK_USAGE_DIR)/user/src/agenteval_ucore.o: $(EVALUATION_HEADER)
 
 $(CRT_OBJ): $(arch_dir)/crt.S

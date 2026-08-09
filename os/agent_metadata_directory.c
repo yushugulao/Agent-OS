@@ -1,77 +1,74 @@
 #include "agent_file_state_internal.h"
 #include "agent_internal.h"
+#include "agent_live_query_events.h"
 #include "agent_metadata_directory.h"
 #include "agent_metadata_internal.h"
-#include "agent_metadata_scan.h"
 #include "defs.h"
+#include "vfs_security.h"
 
 #define FS_META_UNBOUND(ip) ((ip) && !(ip)->agent_meta_slot && !(ip)->agent_meta_flags && !(ip)->agent_meta_version)
 
 static void agent_fs_publish_content(struct inode *ip) {
 	struct agent_file_content_receipt receipt;
-	int reconcile = 0;
 
 	if (!agent_metadata_inode_trackable(ip))
 		return;
 	if (ip->agent_meta_slot <= 0 ||
 	    ip->agent_meta_version != AGENT_INODE_META_VERSION ||
-	    !agent_file_state_content_publish(ip, &receipt)) {
-		agent_file_request_scan();
+	    !agent_file_state_content_publish(ip, &receipt))
 		return;
-	}
-	if (ip->agent_meta_flags & AGENT_FILE_META_F_PERSIST) {
-		if (agent_metadata_catalog_journal_note_content(&receipt) < 0)
-			reconcile = 1;
-		agent_metadata_store_mark_dirty(ip->vfs_scope_id);
-	}
-	if (reconcile ||
-	    (ip->agent_meta_flags & AGENT_FILE_META_F_AUTOSCAN))
-		agent_file_request_scan();
+	(void)agent_live_query_content_enqueue(
+		&receipt, agent_file_state_scope_generation(receipt.scope_id));
+	agent_background_request();
 }
 
 static void agent_fs_remove_inode(struct inode *ip) {
-	struct agent_catalog_view view;
-	int slot, persist;
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
+	struct agent_file_meta previous;
+	uint64 generation = 0;
 	uint scope_id;
+	uint dev, inum, incarnation;
+	int removed;
 
-	if (!agent_metadata_inode_trackable(ip))
-		return;
-	scope_id = ip->vfs_scope_id;
 	if (FS_META_UNBOUND(ip)) {
 		agent_file_version_reclaim(ip);
 		return;
 	}
+	if (!agent_metadata_inode_trackable(ip))
+		return;
+	scope_id = ip->vfs_scope_id;
 	if (ip->agent_meta_slot <= 0 ||
 	    ip->agent_meta_version != AGENT_INODE_META_VERSION) {
 		agent_file_version_reclaim(ip);
-		agent_file_request_scan();
 		return;
 	}
+	dev = ip->dev;
+	inum = ip->inum;
+	incarnation = ip->vfs_incarnation;
+	if (vfs_scope_lifecycle(scope_id, &lifecycle) < 0 ||
+	    !workflow_lifecycle_key_valid(lifecycle))
+		return;
 	agent_file_state_content_bump(ip);
 	if (!agent_metadata_txn_try_external()) {
-		agent_file_request_scan();
+		(void)agent_live_query_tombstone_enqueue(
+			lifecycle, scope_id, dev, inum, incarnation);
+		agent_background_request();
 		return;
 	}
-	if (!agent_metadata_inode_trackable(ip) ||
-	    !agent_metadata_store_loaded())
-		goto rescan;
-	slot = ip->agent_meta_slot - 1;
-	if (agent_metadata_catalog_borrow(0, slot, &view) <= 0 ||
-	    view.scope_id != scope_id || view.meta->dev != ip->dev ||
-	    view.meta->inum != ip->inum ||
-	    view.meta->incarnation != ip->vfs_incarnation)
-		goto rescan;
-	persist = view.meta->flags & AGENT_FILE_META_F_PERSIST;
-	if (agent_metadata_catalog_clear_slot(slot) < 0)
-		goto rescan;
-	agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);
-	agent_metadata_scan_slot_freed(scope_id);
-	if (persist)
-		agent_metadata_store_mark_dirty(scope_id);
-	goto out;
-rescan:
-	agent_file_request_scan();
-out:
+	removed = agent_metadata_catalog_remove_identity_exact(
+		lifecycle, scope_id, dev, inum, incarnation,
+		&previous, &generation);
+	if (removed > 0) {
+		agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);
+		(void)agent_live_query_publish_transition(
+			curr_proc(), lifecycle, scope_id, &previous, 0, generation);
+	} else if (removed < 0) {
+		(void)agent_live_query_tombstone_enqueue(
+			lifecycle, scope_id, dev, inum, incarnation);
+		agent_background_request();
+	}
+	(void)agent_live_query_content_drain(4);
+	(void)agent_live_query_tombstone_drain(4);
 	agent_metadata_txn_unlock();
 }
 

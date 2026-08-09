@@ -1,6 +1,8 @@
 #include "workflow_lifecycle.h"
 #include "agent_identity_lease.h"
+#include "defs.h"
 #include "fs.h"
+#include "log.h"
 #include "riscv.h"
 
 struct workflow_lifecycle_record {
@@ -9,8 +11,12 @@ struct workflow_lifecycle_record {
 	uint64 generation;
 	uint64 controller_control_id;
 	uint64 next_context_branch;
+	uint64 fence_sequence;
 	uint members;
-	enum workflow_lifecycle_state state;
+	uint active_operations;
+	uint departing_operations;
+	int fence_gate;
+	int closing;
 };
 
 static struct workflow_lifecycle_record
@@ -110,8 +116,12 @@ int workflow_lifecycle_create(uint scope_id,
 		record->generation = generation;
 		record->controller_control_id = 0;
 		record->next_context_branch = 0;
+		record->fence_sequence = 0;
 		record->members = 1;
-		record->state = WORKFLOW_LIFECYCLE_ACTIVE;
+		record->active_operations = 0;
+		record->departing_operations = 0;
+		record->fence_gate = 0;
+		record->closing = 0;
 		*key = workflow_lifecycle_record_key(i, record);
 		allocated_slot = i;
 		next_generation = generation == ~0ULL ? 0 : generation + 1;
@@ -134,7 +144,7 @@ int workflow_lifecycle_join(struct workflow_lifecycle_key key)
 
 	enabled = intr_save();
 	record = workflow_lifecycle_find_locked(key);
-	if (record != 0 && record->state == WORKFLOW_LIFECYCLE_ACTIVE &&
+	if (record != 0 && !record->closing && !record->fence_gate &&
 	    record->members != (uint)-1) {
 		record->members++;
 		result = 0;
@@ -155,7 +165,8 @@ int workflow_lifecycle_leave(struct workflow_lifecycle_key key)
 		record->members--;
 		result = 0;
 		if (record->members == 0) {
-			record->state = WORKFLOW_LIFECYCLE_RETIRING;
+			/* The last member makes the domain finalizer-eligible. */
+			record->closing = 1;
 			result = 1;
 		}
 	}
@@ -175,12 +186,31 @@ int workflow_lifecycle_bind_controller(struct workflow_lifecycle_key key,
 	enabled = intr_save();
 	record = workflow_lifecycle_find_locked(key);
 	if (record != 0 && record->scope_id == scope_id &&
-	    record->state == WORKFLOW_LIFECYCLE_ACTIVE &&
+	    !record->closing && record->members > 0 &&
 	    (record->controller_control_id == 0 ||
 	     record->controller_control_id == control_id)) {
 		record->controller_control_id = control_id;
 		result = 0;
 	}
+	intr_restore(enabled);
+	return result;
+}
+
+int
+workflow_lifecycle_controller_matches(struct workflow_lifecycle_key key,
+				      uint scope_id, uint64 control_id)
+{
+	int enabled;
+	int result;
+	struct workflow_lifecycle_record *record;
+
+	if (control_id == 0)
+		return 0;
+	enabled = intr_save();
+	record = workflow_lifecycle_find_locked(key);
+	result = record != 0 && record->scope_id == scope_id &&
+		 record->controller_control_id == control_id &&
+		 record->members > 0;
 	intr_restore(enabled);
 	return result;
 }
@@ -211,15 +241,16 @@ workflow_lifecycle_close(uint scope_id,
 		      control_id == 0 ||
 		      record->controller_control_id != control_id)) ||
 		    record->controller_control_id == 0 ||
-		    record->members == 0 ||
-		    record->state == WORKFLOW_LIFECYCLE_RETIRING)
+		    record->members == 0)
 			break;
-		if (record->state == WORKFLOW_LIFECYCLE_ACTIVE)
-			record->state = WORKFLOW_LIFECYCLE_CLOSING;
-		if (record->state == WORKFLOW_LIFECYCLE_CLOSING) {
-			*closed = key;
-			result = 0;
+		/* A fence owns the workflow cut until it commits or aborts. */
+		if (record->fence_gate) {
+			result = 1;
+			break;
 		}
+		record->closing = 1;
+		*closed = key;
+		result = 0;
 		break;
 	}
 	intr_restore(enabled);
@@ -242,30 +273,26 @@ int workflow_lifecycle_close_trusted(uint scope_id,
 					1, closed);
 }
 
-static int
-workflow_lifecycle_has_state(struct workflow_lifecycle_key key,
-			     enum workflow_lifecycle_state state)
+int workflow_lifecycle_active(struct workflow_lifecycle_key key)
 {
-	int enabled;
-	int result = 0;
-	struct workflow_lifecycle_record *record;
+	int enabled = intr_save();
+	struct workflow_lifecycle_record *record =
+		workflow_lifecycle_find_locked(key);
+	int result = record != 0 && !record->closing && record->members > 0;
 
-	enabled = intr_save();
-	record = workflow_lifecycle_find_locked(key);
-	if (record != 0 && record->state == state && record->members > 0)
-		result = 1;
 	intr_restore(enabled);
 	return result;
 }
 
-int workflow_lifecycle_active(struct workflow_lifecycle_key key)
-{
-	return workflow_lifecycle_has_state(key, WORKFLOW_LIFECYCLE_ACTIVE);
-}
-
 int workflow_lifecycle_closing(struct workflow_lifecycle_key key)
 {
-	return workflow_lifecycle_has_state(key, WORKFLOW_LIFECYCLE_CLOSING);
+	int enabled = intr_save();
+	struct workflow_lifecycle_record *record =
+		workflow_lifecycle_find_locked(key);
+	int result = record != 0 && record->closing && record->members > 0;
+
+	intr_restore(enabled);
+	return result;
 }
 
 int workflow_lifecycle_retiring(struct workflow_lifecycle_key key)
@@ -276,9 +303,7 @@ int workflow_lifecycle_retiring(struct workflow_lifecycle_key key)
 
 	enabled = intr_save();
 	record = workflow_lifecycle_find_locked(key);
-	if (record != 0 &&
-	    record->state == WORKFLOW_LIFECYCLE_RETIRING &&
-	    record->members == 0)
+	if (record != 0 && record->closing && record->members == 0)
 		result = 1;
 	intr_restore(enabled);
 	return result;
@@ -388,10 +413,127 @@ int workflow_lifecycle_alloc_context_branch(struct workflow_lifecycle_key key,
 		return -1;
 	enabled = intr_save();
 	record = workflow_lifecycle_find_locked(key);
-	if (record != 0 && record->state != WORKFLOW_LIFECYCLE_RETIRING &&
+	if (record != 0 && record->members > 0 &&
 	    record->next_context_branch != ~0ULL) {
 		*branch_generation = ++record->next_context_branch;
 		result = *branch_generation != 0 ? 0 : -1;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+int
+workflow_lifecycle_operation_enter(struct workflow_lifecycle_key key)
+{
+	int enabled;
+	int result = -1;
+	struct workflow_lifecycle_record *record;
+
+	enabled = intr_save();
+	record = workflow_lifecycle_find_locked(key);
+	if (record != 0 && !record->closing && record->members > 0 &&
+	    !record->fence_gate && record->active_operations != (uint)-1) {
+		record->active_operations++;
+		result = 0;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+void
+workflow_lifecycle_operation_leave(struct workflow_lifecycle_key key)
+{
+	int enabled;
+	struct workflow_lifecycle_record *record;
+
+	enabled = intr_save();
+	record = workflow_lifecycle_find_locked(key);
+	if (record == 0 || record->active_operations == 0)
+		panic("workflow operation leave");
+	record->active_operations--;
+	intr_restore(enabled);
+}
+
+int
+workflow_lifecycle_departure_enter(struct workflow_lifecycle_key key)
+{
+	int enabled;
+	int result = -1;
+	struct workflow_lifecycle_record *record;
+
+	enabled = intr_save();
+	record = workflow_lifecycle_find_locked(key);
+	/* Departure remains legal after close, but never crosses an active fence. */
+	if (record != 0 && record->members > 0 && !record->fence_gate &&
+	    record->departing_operations != (uint)-1) {
+		record->departing_operations++;
+		result = 0;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+void
+workflow_lifecycle_departure_leave(struct workflow_lifecycle_key key)
+{
+	int enabled;
+	struct workflow_lifecycle_record *record;
+
+	enabled = intr_save();
+	record = workflow_lifecycle_find_locked(key);
+	if (record == 0 || record->departing_operations == 0)
+		panic("workflow departure leave");
+	record->departing_operations--;
+	intr_restore(enabled);
+}
+
+int
+workflow_lifecycle_fence_begin(struct workflow_lifecycle_key key,
+			       uint64 *fence_sequence)
+{
+	int enabled;
+	int result = -1;
+	struct workflow_lifecycle_record *record;
+
+	if (fence_sequence == 0)
+		return -1;
+	enabled = intr_save();
+	record = workflow_lifecycle_find_locked(key);
+	if (record != 0 && !record->closing && record->members > 0 &&
+	    !record->fence_gate && record->fence_sequence != ~0ULL) {
+		record->fence_gate = 1;
+		/* Never sleep with the gate held.  The caller retries at a safe point. */
+		if (record->active_operations == 0 &&
+		    record->departing_operations == 0) {
+			*fence_sequence = record->fence_sequence + 1;
+			result = *fence_sequence != 0 ? 0 : -1;
+		}
+		if (result < 0)
+			record->fence_gate = 0;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+int
+workflow_lifecycle_fence_end(struct workflow_lifecycle_key key,
+			     uint64 fence_sequence, int committed)
+{
+	int enabled;
+	int result = -1;
+	struct workflow_lifecycle_record *record;
+
+	enabled = intr_save();
+	record = workflow_lifecycle_find_locked(key);
+	if (record != 0 && record->fence_gate &&
+	    record->active_operations == 0 &&
+	    record->departing_operations == 0 &&
+	    fence_sequence == record->fence_sequence + 1 &&
+	    fence_sequence != 0) {
+		if (committed)
+			record->fence_sequence = fence_sequence;
+		record->fence_gate = 0;
+		result = 0;
 	}
 	intr_restore(enabled);
 	return result;
@@ -405,15 +547,20 @@ int workflow_lifecycle_reclaim(struct workflow_lifecycle_key key)
 
 	enabled = intr_save();
 	record = workflow_lifecycle_find_locked(key);
-	if (record != 0 &&
-	    record->state == WORKFLOW_LIFECYCLE_RETIRING &&
-	    record->members == 0) {
+	if (record != 0 && record->closing && record->members == 0 &&
+	    record->active_operations == 0 &&
+	    record->departing_operations == 0 &&
+	    !record->fence_gate) {
 		record->used = 0;
 		record->scope_id = 0;
 		record->controller_control_id = 0;
 		record->next_context_branch = 0;
+		record->fence_sequence = 0;
 		record->members = 0;
-		record->state = WORKFLOW_LIFECYCLE_FREE;
+		record->active_operations = 0;
+		record->departing_operations = 0;
+		record->fence_gate = 0;
+		record->closing = 0;
 		result = 0;
 	}
 	intr_restore(enabled);

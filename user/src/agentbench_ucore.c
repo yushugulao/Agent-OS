@@ -82,7 +82,7 @@ static void set_demo_meta(int fid, const char *physical, const char *stage,
 	strcpy(meta.status, status);
 	strcpy(meta.summary, summary);
 	meta.dependency_mask = deps;
-	meta.flags = AGENT_FILE_META_F_PERSIST;
+	meta.flags = 0;
 	check(agent_file_meta_set(&meta) == 0, "demo meta set");
 }
 

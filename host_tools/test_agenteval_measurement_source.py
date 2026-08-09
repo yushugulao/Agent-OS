@@ -235,6 +235,11 @@ def main() -> int:
         ("getppid", "return syscall(SYS_getppid);"),
         ("pipe", "return syscall(SYS_pipe2, p);"),
         (
+            "agent_workflow_fence",
+            "return syscall(SYS_agent_run, request, receipt, 0,\n"
+            "\t\t       AGENT_RUN_F_FENCE);",
+        ),
+        (
             "agent_unwatch",
             "return syscall(SYS_agent_unwatch, event_type, filter);",
         ),
@@ -267,6 +272,36 @@ def main() -> int:
     )
     _reject_compile(dependency_include)
     _reject_compile(dependency_include, refresh_fingerprint=True)
+
+    retired_source_reinclude = dict(dependency_texts)
+    retired_source_reinclude["Makefile"] = _replace_once(
+        retired_source_reinclude["Makefile"],
+        "C_SRCS := $(filter-out $(RETIRED_METADATA_C_SRCS),$(C_SRCS))",
+        "C_SRCS := $(C_SRCS)",
+    )
+    _reject_compile(retired_source_reinclude)
+    _reject_compile(retired_source_reinclude, refresh_fingerprint=True)
+
+    retired_guest_reinclude = dict(dependency_texts)
+    retired_guest_reinclude["user/Makefile"] = _replace_once(
+        retired_guest_reinclude["user/Makefile"],
+        "APPS := $(filter-out $(RETIRED_GUEST_APPS),"
+        "$(patsubst $(app_dir)/%.c,%,$(SRCS)))",
+        "APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))",
+    )
+    _reject_compile(retired_guest_reinclude)
+    _reject_compile(retired_guest_reinclude, refresh_fingerprint=True)
+
+    retired_guest_stack_reinclude = dict(dependency_texts)
+    retired_guest_stack_reinclude["user/Makefile"] = _replace_once(
+        retired_guest_stack_reinclude["user/Makefile"],
+        "$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),"
+        "$(addprefix user/,$(sort $(SRCS))))",
+        "$(filter-out $(STACK_USAGE_SUPPORT_SRCS),"
+        "$(addprefix user/,$(sort $(SRCS))))",
+    )
+    _reject_compile(retired_guest_stack_reinclude)
+    _reject_compile(retired_guest_stack_reinclude, refresh_fingerprint=True)
 
     for make_path, injection in (
         ("Makefile", "CFLAGS += -include forged.h"),
@@ -308,6 +343,53 @@ def main() -> int:
     )
     _reject_compile(runner_env_escape)
     _reject_compile(runner_env_escape, refresh_fingerprint=True)
+
+    for old, new in (
+        (
+            "agentfinal-context-sync-atomicity-v1|1|1|"
+            "agentfinal_ucore|agent|build|",
+            "agentfinal-context-sync-atomicity-v1|1|1|"
+            "$(INIT_PROC)|$(CHAPTER)|build|",
+        ),
+        (
+            "ifeq ($(FUNCTIONAL_REVIEW_PAIRED_PROFILE_ORIGINS),"
+            "command line|command line|command line|command line|"
+            "command line|command line)",
+            "ifneq ($(FUNCTIONAL_REVIEW_PAIRED_PROFILE_ORIGINS),)",
+        ),
+        (
+            "$(filter-out FUNCTIONAL_REVIEW_PROFILE_CONTEXT "
+            "AGENT_CONTEXT_SYNC_TEST_PROFILE WAIT_ATOMIC_TEST_PROFILE,",
+            "$(filter-out FUNCTIONAL_REVIEW_PROFILE_CONTEXT "
+            "AGENT_CONTEXT_SYNC_TEST_PROFILE WAIT_ATOMIC_TEST_PROFILE "
+            "AGENT_OBSERVE_TEST_PROFILE,",
+        ),
+    ):
+        paired_profile_escape = dict(dependency_texts)
+        paired_profile_escape["Makefile"] = _replace_once(
+            paired_profile_escape["Makefile"], old, new
+        )
+        _reject_compile(paired_profile_escape)
+        _reject_compile(paired_profile_escape, refresh_fingerprint=True)
+
+    runner_profile_escape = dict(dependency_texts)
+    runner_profile_escape["scripts/run-agent-tests.sh"] = _replace_once(
+        runner_profile_escape["scripts/run-agent-tests.sh"],
+        "FUNCTIONAL_REVIEW_PROFILE_CONTEXT="
+        "agentfinal-context-sync-atomicity-v1",
+        "FUNCTIONAL_REVIEW_PROFILE_CONTEXT=agentfinal-generic-v1",
+    )
+    _reject_compile(runner_profile_escape)
+    _reject_compile(runner_profile_escape, refresh_fingerprint=True)
+
+    duplicate_profile_allow = dict(dependency_texts)
+    duplicate_profile_allow["Makefile"] += (
+        "\noverride FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS := "
+        "$(filter-out AGENT_OBSERVE_TEST_PROFILE,"
+        "$(FUNCTIONAL_REVIEW_FORBIDDEN_BUILD_VARS))\n"
+    )
+    _reject_compile(duplicate_profile_allow)
+    _reject_compile(duplicate_profile_allow, refresh_fingerprint=True)
 
     python_shadow = dict(dependency_texts)
     python_shadow["scripts/run-agent-tests.sh"] = _replace_once(
@@ -354,6 +436,19 @@ def main() -> int:
     )
     assert actual_include_closure == compile_contract.EXPECTED_INCLUDE_CLOSURE
     kernel_include_closure = compile_contract.resolve_kernel_include_closure(ROOT)
+    new_kernel_sources = {
+        "os/agent_evidence_ring.c",
+        "os/agent_live_query_compat.c",
+        "os/agent_live_query_events.c",
+        "os/agent_sha256.c",
+        "os/agent_workflow_fence.c",
+        "os/workflow_credit_domain.c",
+    }
+    assert new_kernel_sources <= set(compile_contract.KERNEL_TRANSLATION_UNIT_PATHS)
+    assert not (
+        compile_contract.INACTIVE_KERNEL_C_SOURCE_PATHS
+        & set(compile_contract.KERNEL_TRANSLATION_UNIT_PATHS)
+    )
     assert compile_contract.REQUIRED_KERNEL_RESULT_PATHS <= set(
         kernel_include_closure
     )
@@ -366,6 +461,14 @@ def main() -> int:
         fixture = Path(temporary)
         _copy_compile_fixture(fixture)
         compile_contract.validate_functional_compile_sources(fixture)
+
+        # 磁盘上的退役参考文件不是 Makefile 正式配置的生产翻译单元。
+        retired_reference = fixture / "os" / "agent_metadata_store.c"
+        retired_reference.write_text(
+            "void retired_reference_only(void) {}\n", encoding="ascii"
+        )
+        compile_contract.validate_functional_compile_sources(fixture)
+        retired_reference.unlink()
 
         functional_source = fixture / "user" / "src" / "agenteval_ucore.c"
         original_functional_source = functional_source.read_text(encoding="utf-8")
@@ -644,15 +747,15 @@ def main() -> int:
 
     commit = "a" * 40
     receipt = build_measurement_source_receipt(ROOT, source_commit=commit)
-    assert CONTRACT_VERSION == "agenteval-measurement-source-v11"
-    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v6"
+    assert CONTRACT_VERSION == "agenteval-measurement-source-v12"
+    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v7"
     assert FORMAL_BOOT_COUNT == 1
     assert receipt["formal_boot_count"] == FORMAL_BOOT_COUNT
     assert receipt["contract_versions"]["functional"] == (
         "agentos-functional-acceptance-source-v4"
     )
     assert receipt["contract_versions"]["functional_compile"] == (
-        "agentos-functional-compile-closure-v3"
+        "agentos-functional-compile-closure-v5"
     )
     assert receipt["stop_rule"] == "fixed_1_boots_per_source_commit"
     validate_measurement_source_receipt_shape(receipt, expected_commit=commit)
@@ -683,6 +786,57 @@ def main() -> int:
         "scripts/test-check-user-stack-contract.py",
         "scripts/check-traditional-io-fastpath.py",
     }
+    workflow_domain_paths = {
+        "agent_workflow_fence_abi.h",
+        "os/agent_evidence_ring.c",
+        "os/agent_evidence_ring.h",
+        "os/agent_live_query_compat.c",
+        "os/agent_live_query_events.c",
+        "os/agent_live_query_events.h",
+        "os/agent_sha256.c",
+        "os/agent_sha256.h",
+        "os/agent_workflow_fence.c",
+        "os/agent_workflow_fence.h",
+        "os/workflow_credit_domain.c",
+        "os/workflow_credit_domain.h",
+        "scripts/check-agent-live-query-fs.py",
+        "scripts/check-agent-module-boundaries.sh",
+        "scripts/check-agent-uapi-layout.py",
+        "scripts/check-workflow-fence.py",
+        "scripts/test-agent-evidence-ring.py",
+        "scripts/test-agent-live-query-fs.py",
+        "scripts/test-workflow-credit-domain.py",
+        "scripts/test-workflow-fence.py",
+        "scripts/test-workflow-syscall-cut.py",
+        "scripts/probes/agent-evidence-ring.c",
+        "scripts/probes/agent-uapi-layout.c",
+        "host_tools/evidence_semantic_metadata.py",
+        "ci/agent-uapi-layout.json",
+    }
+    retired_production_paths = {
+        "os/agent_durable_section.c",
+        "os/agent_metadata_journal.c",
+        "os/agent_metadata_probe.c",
+        "os/agent_metadata_recovery.c",
+        "os/agent_metadata_scan.c",
+        "os/agent_metadata_store.c",
+        "os/agent_metadata_store_format.c",
+        "os/agent_metadata_store_io.c",
+        "os/agent_observe_capacity.c",
+        "os/agent_observe_recovery.c",
+        "os/agent_observe_store.c",
+    }
+    retired_policy_paths = {
+        "host_tools/agent_metadata_disk_format.py",
+        "host_tools/agent_metadata_journal.py",
+        "host_tools/agent_observe_disk_acceptance.py",
+        "host_tools/agent_observe_disk_contract.py",
+        "host_tools/agent_observe_disk_evidence.py",
+        "scripts/validate-metadata-crash-log.py",
+        "scripts/validate-metadata-reprobe-log.py",
+        "ci/agent-metadata-disk-format.json",
+        "ci/agent-observe-disk-format.json",
+    }
     assert {
         "user/src/agenteval_ucore.c",
         "user/src/labdemo_ucore.c",
@@ -700,7 +854,19 @@ def main() -> int:
     assert teardown_paths <= inventory_paths
     assert batch_paths <= inventory_paths
     assert acceptance_contract_paths <= inventory_paths
-    for path in teardown_paths | batch_paths | acceptance_contract_paths:
+    assert workflow_domain_paths <= inventory_paths
+    assert not (retired_production_paths & inventory_paths)
+    assert not (retired_policy_paths & inventory_paths)
+    assert not (
+        compile_contract.INACTIVE_KERNEL_C_SOURCE_PATHS & inventory_paths
+    )
+    assert not (
+        compile_contract.RETIRED_GUEST_SOURCE_PATHS & inventory_paths
+    )
+    for path in (
+        teardown_paths | batch_paths | acceptance_contract_paths
+        | workflow_domain_paths
+    ):
         forged = json.loads(json.dumps(receipt))
         next(record for record in forged["sources"] if record["path"] == path)[
             "sha256"

@@ -303,6 +303,6 @@ agent_metadata_query_execute_snapshot(
 	r->index_rebuild_records = 0;
 	r->query_ticks = agent_file_state_now() - start;
 	r->plan_reason = plan.reason;
-	r->fs_generation = agent_file_state_scope_generation(scope);
+	r->fs_generation = snapshot.fs_generation;
 	return r->returned;
 }

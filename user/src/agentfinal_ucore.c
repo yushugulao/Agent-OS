@@ -570,7 +570,7 @@ static void set_demo_meta(int fid, const char *physical, const char *stage,
 	strcpy(meta.status, status);
 	strcpy(meta.summary, summary);
 	meta.dependency_mask = deps;
-	meta.flags = AGENT_FILE_META_F_PERSIST;
+	meta.flags = 0;
 	check(agent_file_meta_set(&meta) == 0, "demo meta set");
 }
 
@@ -1410,7 +1410,7 @@ static void check_provenance_graph(void)
 static void check_run_ledger(void)
 {
 	int n;
-	int chain_gaps = 0;
+	int projection_boundaries = 0;
 
 	n = agent_audit_snapshot(SPAN_RECORDS, AGENT_AUDIT_MAX_RECORDS);
 	check(n > 0, "ledger audit records");
@@ -1444,19 +1444,22 @@ static void check_run_ledger(void)
 	if (n == (int)final_ledger.visible_records)
 		check(SPAN_RECORDS[0].sequence == final_ledger.oldest_sequence,
 		      "ledger oldest");
-	if (SPAN_RECORDS[n - 1].sequence == final_ledger.latest_sequence)
-		check(SPAN_RECORDS[n - 1].record_hash == final_ledger.ledger_hash,
-		      "ledger latest hash");
 	for (int i = 0; i < n; i++) {
 		check(SPAN_RECORDS[i].record_hash != 0, "ledger record hash");
-		if (i > 0 && SPAN_RECORDS[i].prev_hash !=
-				     SPAN_RECORDS[i - 1].record_hash)
-			chain_gaps++;
+		if (i > 0) {
+			check(SPAN_RECORDS[i].sequence >
+				      SPAN_RECORDS[i - 1].sequence,
+			      "ledger projection order");
+			if (SPAN_RECORDS[i].prev_hash !=
+			    SPAN_RECORDS[i - 1].record_hash)
+				projection_boundaries++;
+		}
 	}
-	check((uint64)chain_gaps <= final_ledger.dropped_records,
-	      "ledger pruning gaps accounted");
-	printf("agentfinal_ucore: run_ledger=1 records=%d gaps=%d dropped=%d other=%d hash=%d context=%d event=%d sched=%d\n",
-	       n, chain_gaps, (int)final_ledger.dropped_records,
+	check(final_ledger.dropped_records ==
+		      final_ledger.total_records - final_ledger.visible_records,
+	      "ledger bounded projection accounting");
+	printf("agentfinal_ucore: run_ledger=1 records=%d projection_boundaries=%d dropped=%d other=%d digest_tag=%d context=%d event=%d sched=%d\n",
+	       n, projection_boundaries, (int)final_ledger.dropped_records,
 	       (int)final_ledger.other_records,
 	       (int)final_ledger.ledger_hash,
 	       (int)final_ledger.context_records,

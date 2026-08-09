@@ -4,158 +4,100 @@
 
 # AgentOS-uCore
 
-AgentOS-uCore 是面向 AI Agent 工作流的 RISC-V uCore 内核扩展，也是计算机操作系统能力竞赛系统功能实现赛道作品。项目把身份授权、上下文、结构化工具调用、可信 IPC、工作流生命周期、资源控制和观测能力放入内核；科研 Agent 平台保留在用户态，作为综合负载和现场演示。
+AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是计算机操作系统能力竞赛系统功能实现赛道作品。项目把 Agent 身份、Context Path、结构化工具、可信 IPC、资源域、实时文件查询和可验证 workflow fence 放入内核；科研 Agent 平台仍在用户态，作为综合负载而不是内核内置业务。
 
 ## 评审入口
 
-- [竞赛评审入口](docs/contest/README.md)：赛题映射、演示顺序与提交材料。
-- [要求追踪表](docs/agentos/requirements-traceability.md)：任务要求、实现位置和动态验收入口。
-- [正式证据索引](evidence/releases/INDEX.md)：绑定提交、环境、原始日志和 Dashboard 的发布结果。
-- [评价方法](docs/evaluation.md)：实验设计、统计口径和证据边界。
-- [系统设计](docs/agentos/design.md) 与 [ABI 参考](docs/agentos/api.md)：内核机制和用户接口。
+- [竞赛评审入口](docs/contest/README.md)：赛题映射、演示顺序和材料边界。
+- [系统设计](docs/agentos/design.md)：当前内核架构与关键不变量。
+- [ABI 参考](docs/agentos/api.md)：用户接口、兼容项和错误语义。
+- [要求追踪](docs/agentos/requirements-traceability.md)：任务到源码与验证入口的映射。
+- [验证说明](docs/verification.md)：构建、静态检查、QEMU 与正式证据边界。
+- [正式证据索引](evidence/releases/INDEX.md)：只从已冻结 bundle 读取发布结果。
 
-仓库中的 `results/` 是本机生成物，不作为正式数据源。展示数值必须来自正式证据包，Dashboard 只呈现实测时延、吞吐、公平性、隔离性、体积和资源预算，不使用“通过数量”代替性能。
+`results/` 和普通开发日志不是发布证据。缺少实测数据时保持 unavailable，不以公式、固定常量或历史样本填充。
 
-## 系统概览
+## 当前核心设计
 
-根目录是 AgentOS-uCore；`baseline_ucore/` 是共享通用安全修复、但不包含 AgentOS 子系统的对照目标。两者运行同一科研工作流合同，用于观察完整系统路径。单个内核机制的性能结论由同内核消融实验给出，不从双目标总耗时直接归因。
-
-| 内核机制 | 作用 |
+| 机制 | 当前实现 |
 | --- | --- |
-| 身份与授权 | 可信 Agent 角色、capability、workflow scope 和可执行映像绑定。 |
-| Context Path | 内核可信历史、用户只读 mirror、快照、查询与 rollback。 |
-| 结构化工具调用 | 名称和编号协议、类型校验、批处理与稳定错误码。 |
-| 生命周期与 IPC | 不可变 lifecycle id/generation、端点授权、撤销和统一 teardown。 |
-| 资源与块 I/O | 通用账户管理进程、线程、文件、存储和物理内存；BIO 专属惰性 bucket 管理 I/O 公平、债务与系统保留。 |
-| 持久化与观测 | 文件 metadata、audit、timeline、provenance、恢复和有界查询。 |
+| Agent Workflow Credit Domain | 每个资源账户维护 `used/pending/free`（U/P/F）credit。补充额度时批量预充，普通 commit/cancel/release 只在本地三态间移动；额度不足、资源压力、context switch、账户推进或 workflow fence 才 trim/汇总。全局硬容量和账户硬限额始终按 `U+P+F` 验证。 |
+| Fence-Sealed Evidence Ring | 每个 workflow 按需计费 4 页，普通区 48 槽、关键区 16 槽。普通成功 Context 只写一次 canonical ring 记录；拒绝或有授权效果的关键记录同时保留兼容 ledger 投影。fence 把有序事件、gap、challenge、metadata generation 和 credit digest 密封为 SHA-256 根。 |
+| Agent Live-Query FS | 只有显式 `agent_file_meta_set()` 的记录进入内存 catalog 和 `status/stage/kind` 选择性索引。typed watch 根据谓词变化产生 `ENTER/UPDATE/LEAVE`，队列不足或增量丢失时产生带 generation 的 `RESYNC_REQUIRED`。不扫描普通目录，不写 metadata catalog 磁盘快照，也不提供 crash catalog recovery。 |
+| 收敛 lifecycle | workflow 以不可变 `id + generation` 标识，核心状态是 `member_refcount + closing`。operation、departure 和 fence gate 阻止新旧操作穿越 cut；最后成员离开后才允许回收资源域。不存在对外宣称的多阶段 retirement workflow。 |
 
-内核按职责拆为身份授权、Context、IPC、metadata、观测、生命周期、资源控制和块 I/O 模块。普通文件路径和传统 uCore syscall 保留兼容；可信文件引用热路径使用缓存授权和批量结算，避免每次小操作重复支付完整安全检查成本。
+## 语义边界
 
-## 赛题任务
+- Workflow fence 返回 320 字节 receipt，绑定 request id、challenge、fence sequence、精确 credit 使用量、metadata generation、事件范围、gap 数和前后根。`PARTIAL_COVERAGE` 是显式标志：当前根覆盖 Evidence Ring 的规范事件，不声称覆盖整个文件系统或所有调度事实。
+- `CREDIT_EXACT` 表示 fence gate 内已 trim exec/storage 账户，`pending == 0`，receipt 的 `resource_used[]` 是该 cut 的精确 U 值。它不表示资源数据本身持久化。
+- `EVIDENCE_SEALED` 表示 challenge-bound 内存证据根已经发布；不是磁盘 durable receipt，也不证明掉电恢复。
+- `METADATA_VOLATILE` 明确表示 metadata generation 属于当前启动周期的内存 catalog。
+- audit、timeline、provenance 和 ledger API 仍作为兼容读取视图存在。普通成功 Context 的 canonical 存储来自 Evidence Ring；关键记录或 ring 写入失败时才走受保护的兼容 ledger 路径。因此不能把兼容视图描述为完全删除。
+- `AGENT_FILE_META_F_PERSIST` 与 `AGENT_FILE_META_F_AUTOSCAN` 只为源码/ABI 兼容保留，当前显式 metadata 写入若携带这些标志会返回 `AGENT_STATUS_BAD_PARAM`。
+- observe recovery syscall 号仍被保留以避免编号复用，但内核固定返回 `AGENT_STATUS_BAD_PARAM`；不存在可枚举、读取或 reap 的 observation crash-recovery catalog。
 
-| 任务 | 主要实现 | 动态验收 |
-| --- | --- | --- |
-| Agent 进程与地址空间 | 可信身份、角色、能力、Context 映射和 fork/exec/exit 生命周期 | `agentfinal_ucore`、`agentsecurity_ucore`、`agentscope_ucore` |
-| 结构化工具调用 | name/id 协议、批量运行、参数类型和权限校验 | `agentfinal_ucore`、`agentbench_ucore` |
-| Context Path | push/query/snapshot/rollback、shadow 与 mirror | `agentfinal_ucore`、`agentscan_ucore` |
-| 文件属性与摘要查询 | inode 绑定 metadata、索引、摘要、查询计划和编辑租约 | `agentfs_ucore`、`agentscan_ucore`、`agentconflict_ucore` |
-| Agent Loop | 事件队列、watch/wait、heartbeat、可信消息路由和公平调度 | `agentloop_ucore`、`agentsched_ucore`、`threadresource_ucore` |
-| 综合应用 | 检索、分析、复核、恢复、写作和审计组成的科研 Agent 工作流 | `make dual-platform-run`、正式评价套件 |
+## 赛题任务映射
 
-专项程序和顺序以 [`ci/kernel-budgets.json`](ci/kernel-budgets.json) 为准；实验负载、样本和统计方法以 [`ci/evaluation-suite.json`](ci/evaluation-suite.json) 为准。README 不复制容易漂移的清单。
+| 任务 | 主要实现 |
+| --- | --- |
+| Agent 进程与地址空间 | 可信映像、角色/capability、Context 映射、不可变 workflow generation、closing/member/gate 生命周期。 |
+| 结构化工具调用 | name/id 目录、typed KV、参数验证、能力校验和 `agent_run()` 批处理。 |
+| Context Path | 内核可信记录、只读 mirror、查询、快照、分支与因果字段。 |
+| 文件属性查询 | 显式 volatile metadata、选择性内存索引、inode incarnation、内容摘要、typed live query。 |
+| Agent Loop | 有界事件队列、watch/wait、heartbeat、可信 IPC 路由和 Agent 感知调度。 |
+| 综合应用 | plain uCore 与 AgentOS-uCore 运行同一科研工作流合同；完整结果只由正式双目标测量发布。 |
 
-## 快速运行
+`baseline_ucore/` 是共享通用修复但不包含 AgentOS 子系统的对照目标，不是未经修改的上游镜像。双目标总耗时用于端到端比较；单项内核机制归因需要同内核消融或专项计数。
 
-Windows 首次使用：
+## 快速构建
+
+Windows 首次检查：
 
 ```powershell
 .\scripts\check-windows-prereqs.ps1
 ```
 
-进入 Linux、WSL 或项目配置的 MSYS2 工具链环境后：
+在配置好的 Linux、WSL 或项目工具链环境中：
 
 ```bash
 make doctor
-make contest-demo TOOLPREFIX=riscv64-linux-gnu-
-make contest-demo-check
+make build TOOLPREFIX=riscv-none-elf-
+make agent-module-check TOOLPREFIX=riscv-none-elf-
+make kernel-budget-check TOOLPREFIX=riscv-none-elf-
 ```
 
-现场演示从干净提交构建真实 RISC-V 镜像，在 QEMU 中交替运行兼容路径与 AgentOS 原生路径，再生成包含原始计数、时延和结果摘要的离线页面。
-
-常用开发入口：
+核心机制的 Host 模型/变异测试：
 
 ```bash
-# AgentOS 专项 Guest 测试
-make agentos-test TOOLPREFIX=riscv64-linux-gnu-
-
-# 对照与 AgentOS 综合科研工作流
-make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
-
-# Host 合同、内核预算和全部本地验收
-make local-check
-AGENT_TEST_DURATION_PROFILE=none \
-  make full-verify TOOLPREFIX=riscv64-linux-gnu-
+python -B scripts/test-workflow-credit-domain.py
+python -B scripts/test-workflow-fence.py
+python -B scripts/test-workflow-syscall-cut.py
+python -B scripts/test-agent-evidence-ring.py
+python -B scripts/test-agent-live-query-fs.py
 ```
 
-正式评价把采集、验证和展示分开，避免页面或旧结果反向成为证据：
+需要 Guest 行为时再运行：
 
 ```bash
-make evaluation-doctor
-make evaluation-smoke
-make evaluation-run TOOLPREFIX=riscv64-linux-gnu-
-make evaluation-verify
-make evaluation-kernel-cost TOOLPREFIX=riscv64-linux-gnu-
-make evaluation-dashboard
-make evaluation-package
+make agentos-test TOOLPREFIX=riscv-none-elf-
+make dual-platform-run TOOLPREFIX=riscv-none-elf-
 ```
 
-`agentos-test` 默认使用不套用串行时长阈值的并行开发 profile；`full-verify` 未显式指定时仍使用 `local-e3`。只有与版本化校准记录完全匹配的机器才能使用本地时长门。`evaluation-run` 需要干净提交，具体参数见 [评价方法](docs/evaluation.md)。
-
-## 并行策略
-
-构建、Host 测试和互相隔离的 QEMU case 默认通过 `scripts/resource-jobs.py` 按 CPU affinity、cgroup 限额和可用内存选择并行度。可显式覆盖：
-
-```bash
-export AGENTOS_BUILD_JOBS=12
-export AGENTOS_TEST_JOBS=8
-export AGENTOS_QEMU_JOBS=4
-```
-
-普通 `make agentos-test` 也使用这些隔离 lane，并合并各 case 的 Guest 日志和计时清单；串行时长阈值只用于校准和正式采集。当前 uCore 内核是单 Hart，因此 Guest 保持 `-smp 1`；多核用于并行运行独立虚拟机，而不是伪装成尚未实现的 SMP 内核。
-
-正式证据 campaign 串行冻结源码并独占执行双目标 AB/BA 与掉电序列；彼此独立的资源回归仍在隔离 lane 中并行，最终按固定步骤合同绑定原始材料。
-
-## 结果阅读
-
-评审时优先查看正式证据包中的：
-
-| 文件 | 内容 |
-| --- | --- |
-| `dashboard/index.html` | 实测时延、吞吐、并发扩展、公平性和隔离性图表 |
-| `dashboard/metrics.csv` | 可复算的派生指标 |
-| `dashboard/evaluation-summary.json` | 机器可读汇总 |
-| `manifest.json`、`checksums.sha256` | 提交、环境和原始材料绑定 |
-| manifest 登记的日志与 evidence | Guest/Host 原始记录 |
-
-缺失的数据保持 unavailable，不使用公式生成样本、硬编码成功证据或旧运行结果填充页面。
+正式采集必须遵守 [验证说明](docs/verification.md) 的干净提交、命令计数和证据绑定规则，不能用额外 QEMU 试跑替换或污染指定配对测量。
 
 ## 仓库结构
 
 ```text
 os/                AgentOS-uCore 内核
-user/              AgentOS 用户库、专项程序和科研平台
-baseline_ucore/    不含 AgentOS 子系统的共享安全基底对照
-host_tools/        证据校验、统计和 Dashboard 生成
-scripts/           构建、QEMU、回归与环境工具
-ci/                版本化预算、实验和测试清单
-docs/              设计、ABI、评价和竞赛材料
-evidence/releases/ 已发布的可复验证据索引
-results/           本机生成结果，不提交
+user/              用户库、专项程序和科研平台负载
+baseline_ucore/    不含 AgentOS 服务的共享安全基底对照
+scripts/           构建、静态合同、QEMU 与回归工具
+host_tools/        双目标测量、证据校验和 Dashboard 生成
+ci/                UAPI、预算、测试与评价清单
+docs/              设计、ABI、验证和竞赛材料
+evidence/releases/ 已发布的冻结证据索引
 ```
 
-长期调试后可先预览再清理 Git 忽略的构建产物：
+## 来源与许可
 
-```bash
-make clean-workspace-dry-run
-make clean-workspace
-```
-
-## 文档
-
-| 内容 | 文档 |
-| --- | --- |
-| 竞赛说明与演示顺序 | [docs/contest/README.md](docs/contest/README.md) |
-| 双目标职责 | [docs/dual-targets.md](docs/dual-targets.md) |
-| 架构与机制 | [docs/agentos/design.md](docs/agentos/design.md) |
-| 系统调用和 ABI | [docs/agentos/api.md](docs/agentos/api.md) |
-| 安全与资源控制 | [docs/agentos/security-hardening.md](docs/agentos/security-hardening.md) |
-| 要求追踪 | [docs/agentos/requirements-traceability.md](docs/agentos/requirements-traceability.md) |
-| 评价方法 | [docs/evaluation.md](docs/evaluation.md) |
-| 验证与证据边界 | [docs/verification.md](docs/verification.md) |
-| Windows 环境 | [docs/windows-quickstart.md](docs/windows-quickstart.md) |
-
-## 许可与交付
-
-项目基于 uCore 扩展。源代码遵循 [GPL-3.0](LICENSE)，文档遵循 [CC-BY-SA-4.0](DOCUMENTATION_LICENSE.md)，第三方来源见 [NOTICE](NOTICE)。AIOS Evaluation 和 Linux 仅用于公开论文、文档和机制层面的干净室参考，未复制许可不明确的测试代码或数据。
-
-远程 GitLab 只托管源码和已提交证据，不依赖 Runner。所有验收入口均可在本地复现，阶段提交同时推送到 `contest/final-2026` 与 `main`。
+项目基于 LearningOS/uCore 教学内核扩展。源码采用 [GPL-3.0](LICENSE)，文档采用 [CC-BY-SA-4.0](DOCUMENTATION_LICENSE.md)。Linux CPU accounting/percpu/rstat、Linux BPF ring buffer 和 Haiku BFS live query 仅作为公开设计思想来源；本仓库采用 clean-room 的项目特定实现，没有 vendoring 它们的源码、测试数据、二进制或磁盘格式。完整披露见 [NOTICE](NOTICE) 与[第三方及原创增量说明](docs/contest/third-party-and-originality.md)。

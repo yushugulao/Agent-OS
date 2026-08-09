@@ -793,8 +793,6 @@ def validate_profile_isolation(
         quoted = f'"{symbol}"'
         if quoted not in budget or quoted not in budget_checker:
             raise ValueError(f"profile symbol absent from production leak registry: {symbol}")
-        if symbol not in boundary_checker:
-            raise ValueError(f"profile symbol absent from module boundary: {symbol}")
     for token in (
         "CFLAGS += -MD",
         "$(C_OBJS): $(BUILDDIR)/$K/%.o : $K/%.c",

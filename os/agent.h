@@ -8,6 +8,7 @@
 #include "../agent_performance_abi.h"
 #include "../agent_resource_abi.h"
 #include "../agent_tool_abi.h"
+#include "../agent_workflow_fence_abi.h"
 
 #define AGENT_TYPE_NONE  0
 #define AGENT_TYPE_AGENT 1
@@ -158,8 +159,15 @@
 #define AGENT_AUDIT_FILTER_STATUS         (1ULL << 9)
 
 #define AGENT_FILE_META_F_DELETE  1
+/*
+ * Compatibility tombstones.  Their numeric values remain frozen, but
+ * agent_file_meta_set() rejects both bits: live-query metadata is volatile
+ * and enters the index only through an explicit metadata update.
+ */
 #define AGENT_FILE_META_F_PERSIST 2
 #define AGENT_FILE_META_F_AUTOSCAN 4
+#define AGENT_FILE_META_F_UNSUPPORTED_MASK \
+	(AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN)
 
 #define AGENT_FILE_META_UPDATE_PHYSICAL   (1ULL << 0)
 #define AGENT_FILE_META_UPDATE_LOGICAL    (1ULL << 1)
@@ -234,7 +242,12 @@
 #define AGENT_EVENT_LLM_DONE      7
 #define AGENT_EVENT_DASHBOARD_EXPORT 8
 #define AGENT_EVENT_CANCELLED     9
-#define AGENT_EVENT_MAX           AGENT_EVENT_CANCELLED
+#define AGENT_EVENT_FILE_QUERY   10
+#define AGENT_EVENT_MAX           AGENT_EVENT_FILE_QUERY
+
+#define AGENT_FILE_LIVE_WATCH_VERSION 1U
+#define AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED (1U << 0)
+#define AGENT_FILE_LIVE_WATCH_F_ACK_RESYNC      (1U << 1)
 
 #define AGENT_EVENT_MASK(type) (1ULL << (type))
 #define AGENT_IPC_EVENT_MESSAGE  AGENT_EVENT_MASK(AGENT_EVENT_MESSAGE)
@@ -677,6 +690,16 @@ struct agent_file_query {
 	char summary_contains[AGENT_FILE_SUMMARY_SIZE];
 };
 
+struct agent_file_live_watch {
+	uint version;
+	uint flags;
+	uint64 watch_id;
+	uint64 initial_generation;
+	uint64 catalog_generation;
+	uint64 resync_generation;
+	struct agent_file_query query;
+};
+
 struct agent_file_query_result {
 	int total_hits;
 	int returned;
@@ -742,11 +765,10 @@ void agent_background_maintain(void);
 void agent_background_checkpoint(void);
 int agent_metadata_durability_fence_current(void);
 int agent_metadata_quiescence_fence_current(void);
+int agent_metadata_quiescence_fence_snapshot_current(uint64 *);
 void agent_file_request_scan(void);
 int agent_scope_reclaim_begin(
 	uint scope_id, struct workflow_lifecycle_key, uint64 *metadata_target);
-int agent_scope_reclaim_metadata_done(
-	uint scope_id, struct workflow_lifecycle_key, uint64 metadata_target);
 void agent_file_version_reclaim(struct inode *ip);
 int agent_edit_write_lease_allowed(struct inode *, uint64 *, uint64 *);
 int agent_edit_write_lease_snapshot(struct inode *, uint64 *, uint64 *);
@@ -778,7 +800,6 @@ int sys_agent_trace_snapshot(uint64 recordsaddr, int max);
 int sys_agent_audit_snapshot(uint64 recordsaddr, int max);
 int sys_agent_audit_query(uint64 filteraddr, uint64 recordsaddr, int max);
 int sys_agent_audit_receipt(uint64 requestaddr);
-int sys_agent_observe_recovery(uint64 requestaddr, uint64 recordsaddr);
 int sys_agent_span_trace_snapshot(uint64 recordsaddr, int max);
 int sys_agent_timeline_snapshot(uint64 recordsaddr, int max);
 int sys_agent_timeline_query(uint64 filteraddr, uint64 recordsaddr, int max);

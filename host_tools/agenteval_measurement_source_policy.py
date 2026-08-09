@@ -12,7 +12,7 @@ else:
 
 SOURCE_RELATIVE = "user/src/agenteval_ucore.c"
 EVALUATION_SUITE_SOURCE_PATH = "ci/evaluation-suite.json"
-POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v6"
+POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v7"
 
 # 这里必须使用允许列表，而非递归源码树快照。每个条目都会参与正式测量的
 # 选择、执行、解释、渲染或打包，因此必须纳入签名回执。
@@ -53,11 +53,6 @@ CONTROL_PLANE_POLICY = (
     ("dual-platform-runner", "scripts/run-dual-platforms.sh"),
     ("measurement-set-publisher", "host_tools/extract_measured_experiments.py"),
     ("tool-attestation", "host_tools/evidence_toolchain_attestation.py"),
-    ("semantic-replay", "host_tools/agent_metadata_disk_format.py"),
-    ("semantic-replay", "host_tools/agent_metadata_journal.py"),
-    ("semantic-replay", "host_tools/agent_observe_disk_acceptance.py"),
-    ("semantic-replay", "host_tools/agent_observe_disk_contract.py"),
-    ("semantic-replay", "host_tools/agent_observe_disk_evidence.py"),
     ("semantic-replay", "host_tools/backend_evidence_contract.py"),
     ("semantic-replay", "host_tools/check_host_platform_alignment.py"),
     ("semantic-replay", "host_tools/check_host_test_alignment.py"),
@@ -74,11 +69,7 @@ CONTROL_PLANE_POLICY = (
     ("semantic-replay", "scripts/fs-allocator-evidence.py"),
     ("semantic-replay", "scripts/fs-allocator-image.py"),
     ("semantic-replay", "scripts/validate-kernel-test-log.py"),
-    ("semantic-replay", "scripts/validate-metadata-crash-log.py"),
-    ("semantic-replay", "scripts/validate-metadata-reprobe-log.py"),
     ("semantic-replay", "scripts/validate-virtio-disk-log.py"),
-    ("semantic-replay-data", "ci/agent-metadata-disk-format.json"),
-    ("semantic-replay-data", "ci/agent-observe-disk-format.json"),
     ("semantic-replay-data", "user/src/agentbench_ucore.c"),
     ("renderer", "host_tools/render_evaluation_dashboard.py"),
     ("renderer-asset", "host_tools/assets/evaluation-dashboard.css"),
@@ -93,6 +84,21 @@ CONTROL_PLANE_POLICY = (
     ("kernel-budget-policy", "scripts/agent_test_calibration.py"),
     ("kernel-budget-checker", "scripts/check-kernel-budgets.py"),
     ("kernel-budget-probe", "scripts/probes/struct-proc-size.c"),
+    (
+        "agent-module-boundary-checker",
+        "scripts/check-agent-module-boundaries.sh",
+    ),
+    ("agent-live-query-checker", "scripts/check-agent-live-query-fs.py"),
+    ("agent-workflow-fence-checker", "scripts/check-workflow-fence.py"),
+    ("agent-credit-domain-selftest", "scripts/test-workflow-credit-domain.py"),
+    ("agent-evidence-ring-selftest", "scripts/test-agent-evidence-ring.py"),
+    ("agent-live-query-selftest", "scripts/test-agent-live-query-fs.py"),
+    ("agent-workflow-fence-selftest", "scripts/test-workflow-fence.py"),
+    ("agent-syscall-cut-selftest", "scripts/test-workflow-syscall-cut.py"),
+    ("agent-evidence-ring-probe", "scripts/probes/agent-evidence-ring.c"),
+    ("agent-uapi-layout-checker", "scripts/check-agent-uapi-layout.py"),
+    ("agent-uapi-layout-contract", "ci/agent-uapi-layout.json"),
+    ("agent-uapi-layout-probe", "scripts/probes/agent-uapi-layout.c"),
     ("user-stack-checker", "scripts/check-user-stack-usage.py"),
     ("user-stack-contract", "user_stack_policy.h"),
     ("user-stack-source-contract", "scripts/check-user-stack-contract.py"),
