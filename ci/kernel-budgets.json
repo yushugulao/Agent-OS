@@ -100,8 +100,8 @@
       "os/agent_observe_recovery.c",
       "os/agent_observe_store.c"
     ],
-    "baseline_lines": 58207,
-    "max_lines": 58207
+    "baseline_lines": 58282,
+    "max_lines": 58282
   },
   "kernel_image": {
     "baseline_stripped_elf_bytes": 414832,
@@ -227,8 +227,8 @@
         "name": "core",
         "source_path": "os/agent_core.c",
         "object_path": "build/os/agent_core.o",
-        "baseline_lines": 1407,
-        "max_lines": 1407,
+        "baseline_lines": 1447,
+        "max_lines": 1447,
         "max_bss_bytes": 0,
         "allowed_global_prefixes": [
           "agent_core_",
@@ -238,6 +238,7 @@
         "allowed_global_symbols": [
           "agent_background_checkpoint",
           "agent_background_maintain",
+          "agent_bootstrap_scope_controller_bind",
           "agent_scope_controller_departing",
           "sys_agent_call",
           "sys_agent_create",

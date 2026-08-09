@@ -26,8 +26,8 @@ static int auditor_audit_count;
 static int auditor_edge_count;
 static int auditor_edge_total;
 static int auditor_context_count;
-static int auditor_hash_count;
-static int auditor_chain_gaps;
+static int auditor_identity_count;
+static int auditor_projection_boundaries;
 
 static uint64 auditor_hash_mix(uint64 hash, uint64 value)
 {
@@ -46,41 +46,6 @@ static uint64 auditor_hash_fixed(uint64 hash, char *text, int n)
 		hash *= RP_EVIDENCE_FNV_PRIME;
 	}
 	return hash;
-}
-
-static uint64 auditor_audit_hash(struct agent_audit_record *record)
-{
-	uint64 hash = RP_EVIDENCE_FNV_OFFSET;
-
-	hash = auditor_hash_mix(hash, record->prev_hash);
-	hash = auditor_hash_mix(hash, record->sequence);
-	hash = auditor_hash_mix(hash, record->tick);
-	hash = auditor_hash_mix(hash, record->cause_sequence);
-	hash = auditor_hash_mix(hash, record->span_id);
-	hash = auditor_hash_mix(hash, record->workflow_lifecycle_generation);
-	hash = auditor_hash_mix(hash, record->branch_generation);
-	hash = auditor_hash_mix(hash, record->cause_branch_generation);
-	hash = auditor_hash_mix(hash, record->actor_control_id);
-	hash = auditor_hash_mix(hash, record->cause_control_id);
-	hash = auditor_hash_mix(hash, record->cause_record_hash);
-	hash = auditor_hash_mix(hash, record->value0);
-	hash = auditor_hash_mix(hash, record->value1);
-	hash = auditor_hash_mix(hash, record->value2);
-	hash = auditor_hash_mix(hash, record->flags);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->kind);
-	hash = auditor_hash_mix(hash, record->workflow_lifecycle_id);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->pid);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->tid);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->source_pid);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->target_pid);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->agent_id);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->role);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->loop_state);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->tool_id);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->event_type);
-	hash = auditor_hash_mix(hash, (uint64)(uint)record->status);
-	hash = auditor_hash_fixed(hash, record->text, sizeof(record->text));
-	return hash ? hash : 1;
 }
 
 static uint64 auditor_context_hash(struct agent_context_record *record)
@@ -112,9 +77,12 @@ static uint64 auditor_context_hash(struct agent_context_record *record)
 static int run_kernel_audit(void)
 {
 	struct agent_info info;
+	struct agent_audit_record *first_audit = 0;
+	struct agent_audit_record *second_audit = 0;
 	struct agent_context_record *first = 0;
 	struct agent_context_record *second = 0;
-	int exact_audit_records = 0;
+	int exact_audit_marker_1 = 0;
+	int exact_audit_marker_2 = 0;
 	int exact_edge = 0;
 	int self_pid = getpid();
 
@@ -155,43 +123,48 @@ static int run_kernel_audit(void)
 	    kernel_ledger.visible_records < (uint64)auditor_audit_count ||
 	    kernel_ledger.total_records < kernel_ledger.visible_records ||
 	    kernel_ledger.total_records < (uint64)auditor_context_count ||
-	    kernel_ledger.ledger_hash == 0) {
+	    kernel_ledger.dropped_records !=
+		    kernel_ledger.total_records -
+			    kernel_ledger.visible_records ||
+	    kernel_ledger.latest_sequence < kernel_ledger.oldest_sequence ||
+	    kernel_ledger.ledger_hash == 0 || kernel_ledger.context_records < 2) {
 		printf("rp_auditor: kernel_audit_snapshot_failed audit=%d edge=%d context=%d\n",
 		       auditor_audit_count, auditor_edge_count,
 		       auditor_context_count);
 		return -1;
 	}
-	auditor_hash_count = 0;
-	auditor_chain_gaps = 0;
+	auditor_identity_count = 0;
+	auditor_projection_boundaries = 0;
 	for (int i = 0; i < auditor_audit_count; i++) {
 		struct agent_audit_record *record = &kernel_audit_records[i];
 
 		if (record->sequence == 0 || record->record_hash == 0 ||
-		    auditor_audit_hash(record) != record->record_hash ||
 		    (i > 0 && record->sequence <=
 				      kernel_audit_records[i - 1].sequence)) {
-			printf("rp_auditor: audit_hash_failed at=%d\n", i);
+			printf("rp_auditor: audit_identity_failed at=%d\n", i);
 			return -1;
 		}
-		auditor_hash_count++;
+		auditor_identity_count++;
 		if (i > 0 && record->prev_hash !=
 				      kernel_audit_records[i - 1].record_hash)
-			auditor_chain_gaps++;
+			auditor_projection_boundaries++;
 		if (record->kind == AGENT_AUDIT_KIND_CONTEXT &&
 		    record->pid == self_pid && record->tool_id == AGENT_TOOL_ECHO &&
-		    record->status == AGENT_STATUS_OK &&
-		    (strcmp(record->text, AUDITOR_ECHO_MARKER_1) == 0 ||
-		     strcmp(record->text, AUDITOR_ECHO_MARKER_2) == 0))
-			exact_audit_records++;
+		    record->status == AGENT_STATUS_OK) {
+			if (strcmp(record->text, AUDITOR_ECHO_MARKER_1) == 0) {
+				exact_audit_marker_1++;
+				first_audit = record;
+			}
+			if (strcmp(record->text, AUDITOR_ECHO_MARKER_2) == 0) {
+				exact_audit_marker_2++;
+				second_audit = record;
+			}
+		}
 	}
-	if ((uint64)auditor_chain_gaps > kernel_ledger.dropped_records ||
-	    exact_audit_records != 2 ||
-	    (kernel_audit_records[auditor_audit_count - 1].sequence ==
-		     kernel_ledger.latest_sequence &&
-	     kernel_audit_records[auditor_audit_count - 1].record_hash !=
-		     kernel_ledger.ledger_hash)) {
-		printf("rp_auditor: ledger_chain_failed exact=%d gaps=%d dropped=%d\n",
-		       exact_audit_records, auditor_chain_gaps,
+	if (exact_audit_marker_1 != 1 || exact_audit_marker_2 != 1) {
+		printf("rp_auditor: ledger_projection_failed exact=%d/%d boundaries=%d dropped=%d\n",
+		       exact_audit_marker_1, exact_audit_marker_2,
+		       auditor_projection_boundaries,
 		       (int)kernel_ledger.dropped_records);
 		return -1;
 	}
@@ -208,11 +181,20 @@ static int run_kernel_audit(void)
 		if (record->sequence == auditor_results[1].sequence)
 			second = record;
 	}
-	if (first == 0 || second == 0 ||
+	if (first_audit == 0 || second_audit == 0 ||
+	    first == 0 || second == 0 ||
 	    first->request_id != auditor_ops[0].request_id ||
 	    second->request_id != auditor_ops[1].request_id ||
 	    first->tool_id != AGENT_TOOL_ECHO ||
 	    second->tool_id != AGENT_TOOL_ECHO ||
+	    first_audit->prev_hash != first->prev_hash ||
+	    second_audit->prev_hash != second->prev_hash ||
+	    first_audit->record_hash != first->record_hash ||
+	    second_audit->record_hash != second->record_hash ||
+	    strcmp(first->payload, AUDITOR_ECHO_MARKER_1) != 0 ||
+	    strcmp(first->result, AUDITOR_ECHO_MARKER_1) != 0 ||
+	    strcmp(second->payload, AUDITOR_ECHO_MARKER_2) != 0 ||
+	    strcmp(second->result, AUDITOR_ECHO_MARKER_2) != 0 ||
 	    second->cause_sequence != first->sequence) {
 		printf("rp_auditor: context_cause_failed\n");
 		return -1;
@@ -229,6 +211,8 @@ static int run_kernel_audit(void)
 		    edge->source_pid == self_pid && edge->target_pid == self_pid &&
 		    edge->source_sequence == auditor_results[0].sequence &&
 		    edge->target_sequence == auditor_results[1].sequence &&
+		    edge->source_record_hash == first->record_hash &&
+		    edge->target_record_hash == second->record_hash &&
 		    edge->tool_id == AGENT_TOOL_ECHO &&
 		    edge->status == AGENT_STATUS_OK)
 			exact_edge++;
@@ -254,9 +238,11 @@ static int run_kernel_audit(void)
 	rp_evidence_append_u64(body, sizeof(auditor_evidence_body),
 			       "audit_records=", auditor_audit_count);
 	rp_evidence_append_u64(body, sizeof(auditor_evidence_body),
-			       "audit_hashes_verified=", auditor_hash_count);
+			       "audit_record_identities_verified=",
+			       auditor_identity_count);
 	rp_evidence_append_u64(body, sizeof(auditor_evidence_body),
-			       "audit_chain_gaps=", auditor_chain_gaps);
+			       "audit_projection_boundaries=",
+			       auditor_projection_boundaries);
 	rp_evidence_append_u64(body, sizeof(auditor_evidence_body),
 			       "context_records=", auditor_context_count);
 	rp_evidence_append_u64(body, sizeof(auditor_evidence_body),
@@ -276,6 +262,8 @@ static int run_kernel_audit(void)
 			       "ledger_total_records=", kernel_ledger.total_records);
 	rp_evidence_append_u64(body, sizeof(auditor_evidence_body),
 			       "ledger_hash=", kernel_ledger.ledger_hash);
+	rp_evidence_append_value(body, sizeof(auditor_evidence_body),
+				 "ledger_hash_kind=", "evidence_view_digest_tag");
 	rp_evidence_append_value(body, sizeof(auditor_evidence_body),
 				 "record_hash=", "verified");
 	rp_evidence_append_value(body, sizeof(auditor_evidence_body),
@@ -385,10 +373,10 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_status("auditor=passed")) return 1;
-	printf("rp_auditor: evidence_source=%s generation=runtime audit_records=%d provenance_edges=%d hashes_verified=%d state_checks=%d status=passed\n",
+	printf("rp_auditor: evidence_source=%s generation=runtime audit_records=%d provenance_edges=%d record_identities_verified=%d state_checks=%d status=passed\n",
 	       kernel_audit ? "kernel_snapshots" : "userland_state_files",
 	       kernel_audit ? auditor_audit_count : 0,
 	       kernel_audit ? auditor_edge_total : 0,
-	       kernel_audit ? auditor_hash_count : 0, state_checks);
+	       kernel_audit ? auditor_identity_count : 0, state_checks);
 	return 0;
 }

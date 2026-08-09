@@ -249,6 +249,22 @@ static void workflow_hex_encode(const unsigned char *bytes, uint count,
 	out[count * 2] = 0;
 }
 
+static int workflow_fence_status_failed(const char *source, const char *check,
+					int actual, int expected)
+{
+	printf("rp_agentos_orch: workflow_fence_validation_failed name=rp-task6-completion-v1 source=%s check=%s actual=%d expected=%d\n",
+	       source, check, actual, expected);
+	return 0;
+}
+
+static int workflow_fence_receipt_failed(const char *check, uint64 actual,
+					 uint64 expected)
+{
+	printf("rp_agentos_orch: workflow_fence_validation_failed name=rp-task6-completion-v1 source=receipt check=%s actual=%llu expected=%llu\n",
+	       check, actual, expected);
+	return 0;
+}
+
 static int seal_challenge_workflow(
 	const struct rp_challenge_workflow *workflow)
 {
@@ -259,7 +275,9 @@ static int seal_challenge_workflow(
 		AGENT_WORKFLOW_FENCE_RECEIPT_F_CREDIT_EXACT |
 		AGENT_WORKFLOW_FENCE_RECEIPT_F_EVIDENCE_SEALED |
 		AGENT_WORKFLOW_FENCE_RECEIPT_F_METADATA_VOLATILE;
+	int fence_status;
 	int challenge_match = 1;
+	uint challenge_mismatch = 0;
 	int digest_nonzero = 0;
 	int root_nonzero = 0;
 
@@ -289,46 +307,134 @@ static int seal_challenge_workflow(
 			(unsigned char)((high << 4) | low) ^
 			(unsigned char)domain[i % (sizeof(domain) - 1)];
 	}
-	if (agent_workflow_fence(&orch_fence_request,
-				 &orch_fence_receipt) != AGENT_STATUS_OK ||
-	    orch_fence_receipt.version != AGENT_WORKFLOW_FENCE_VERSION ||
-	    orch_fence_receipt.struct_size != sizeof(orch_fence_receipt) ||
-	    orch_fence_receipt.status != AGENT_STATUS_OK ||
-	    orch_fence_receipt.flags != required_flags ||
-	    orch_fence_receipt.request_id != orch_fence_request.request_id ||
-	    orch_fence_receipt.key.reserved != 0 ||
-	    orch_fence_receipt.key.id !=
-		    orch_header.workflow_lifecycle_id ||
-	    orch_fence_receipt.key.generation !=
-		    orch_header.workflow_lifecycle_generation ||
-	    orch_fence_receipt.key.id != lifecycle.key.id ||
-	    orch_fence_receipt.key.generation != lifecycle.key.generation ||
-	    orch_fence_receipt.fence_sequence == 0 ||
-	    orch_fence_receipt.metadata_generation == 0 ||
-	    orch_fence_receipt.credit_epoch == 0 ||
-	    orch_fence_receipt.evidence_first_sequence == 0 ||
-	    orch_fence_receipt.evidence_last_sequence <
-		    orch_fence_receipt.evidence_first_sequence ||
-	    orch_fence_receipt.evidence_event_count == 0 ||
-	    orch_fence_receipt.evidence_dropped_success >
-		    orch_fence_receipt.evidence_event_count ||
-	    orch_fence_receipt.credit_exec_account.reserved != 0 ||
-	    orch_fence_receipt.credit_exec_account.slot !=
-		    lifecycle.resource_account_slot ||
-	    orch_fence_receipt.credit_exec_account.generation !=
-		    lifecycle.resource_account_generation ||
-	    orch_fence_receipt.credit_storage_account.reserved != 0 ||
-	    orch_fence_receipt.credit_storage_account.generation == 0)
-		return 0;
-	for (uint i = 0; i < AGENT_WORKFLOW_FENCE_CHALLENGE_SIZE; i++)
-		challenge_match &= orch_fence_receipt.challenge[i] ==
-				   orch_fence_request.challenge[i];
+	fence_status = agent_workflow_fence(&orch_fence_request,
+					    &orch_fence_receipt);
+	if (fence_status != AGENT_STATUS_OK)
+		return workflow_fence_status_failed(
+			"syscall", "return", fence_status, AGENT_STATUS_OK);
+	if (orch_fence_receipt.version != AGENT_WORKFLOW_FENCE_VERSION)
+		return workflow_fence_receipt_failed(
+			"version", orch_fence_receipt.version,
+			AGENT_WORKFLOW_FENCE_VERSION);
+	if (orch_fence_receipt.struct_size != sizeof(orch_fence_receipt))
+		return workflow_fence_receipt_failed(
+			"struct_size", orch_fence_receipt.struct_size,
+			sizeof(orch_fence_receipt));
+	if (orch_fence_receipt.status != AGENT_STATUS_OK)
+		return workflow_fence_status_failed(
+			"receipt", "status", orch_fence_receipt.status,
+			AGENT_STATUS_OK);
+	if (orch_fence_receipt.flags != required_flags)
+		return workflow_fence_receipt_failed(
+			"flags", orch_fence_receipt.flags, required_flags);
+	if (orch_fence_receipt.request_id != orch_fence_request.request_id)
+		return workflow_fence_receipt_failed(
+			"request_id", orch_fence_receipt.request_id,
+			orch_fence_request.request_id);
+	if (orch_fence_receipt.key.reserved != 0)
+		return workflow_fence_receipt_failed(
+			"key_reserved", orch_fence_receipt.key.reserved, 0);
+	if (orch_fence_receipt.key.id !=
+	    orch_header.workflow_lifecycle_id)
+		return workflow_fence_receipt_failed(
+			"key_id_orchestrator", orch_fence_receipt.key.id,
+			orch_header.workflow_lifecycle_id);
+	if (orch_fence_receipt.key.generation !=
+	    orch_header.workflow_lifecycle_generation)
+		return workflow_fence_receipt_failed(
+			"key_generation_orchestrator",
+			orch_fence_receipt.key.generation,
+			orch_header.workflow_lifecycle_generation);
+	if (orch_fence_receipt.key.id != lifecycle.key.id)
+		return workflow_fence_receipt_failed(
+			"key_id_lifecycle_info", orch_fence_receipt.key.id,
+			lifecycle.key.id);
+	if (orch_fence_receipt.key.generation != lifecycle.key.generation)
+		return workflow_fence_receipt_failed(
+			"key_generation_lifecycle_info",
+			orch_fence_receipt.key.generation,
+			lifecycle.key.generation);
+	if (orch_fence_receipt.fence_sequence == 0)
+		return workflow_fence_receipt_failed(
+			"fence_sequence_nonzero",
+			orch_fence_receipt.fence_sequence, 1);
+	if (orch_fence_receipt.metadata_generation == 0)
+		return workflow_fence_receipt_failed(
+			"metadata_generation_nonzero",
+			orch_fence_receipt.metadata_generation, 1);
+	if (orch_fence_receipt.credit_epoch == 0)
+		return workflow_fence_receipt_failed(
+			"credit_epoch_nonzero", orch_fence_receipt.credit_epoch,
+			1);
+	if (orch_fence_receipt.evidence_first_sequence == 0)
+		return workflow_fence_receipt_failed(
+			"evidence_first_sequence_nonzero",
+			orch_fence_receipt.evidence_first_sequence, 1);
+	if (orch_fence_receipt.evidence_last_sequence <
+	    orch_fence_receipt.evidence_first_sequence)
+		return workflow_fence_receipt_failed(
+			"evidence_last_sequence_at_least_first",
+			orch_fence_receipt.evidence_last_sequence,
+			orch_fence_receipt.evidence_first_sequence);
+	if (orch_fence_receipt.evidence_event_count == 0)
+		return workflow_fence_receipt_failed(
+			"evidence_event_count_nonzero",
+			orch_fence_receipt.evidence_event_count, 1);
+	if (orch_fence_receipt.evidence_dropped_success >
+	    orch_fence_receipt.evidence_event_count)
+		return workflow_fence_receipt_failed(
+			"evidence_dropped_success_at_most_event_count",
+			orch_fence_receipt.evidence_dropped_success,
+			orch_fence_receipt.evidence_event_count);
+	if (orch_fence_receipt.credit_exec_account.reserved != 0)
+		return workflow_fence_receipt_failed(
+			"credit_exec_account_reserved",
+			orch_fence_receipt.credit_exec_account.reserved, 0);
+	if (orch_fence_receipt.credit_exec_account.slot !=
+	    lifecycle.resource_account_slot)
+		return workflow_fence_receipt_failed(
+			"credit_exec_account_slot",
+			orch_fence_receipt.credit_exec_account.slot,
+			lifecycle.resource_account_slot);
+	if (orch_fence_receipt.credit_exec_account.generation !=
+	    lifecycle.resource_account_generation)
+		return workflow_fence_receipt_failed(
+			"credit_exec_account_generation",
+			orch_fence_receipt.credit_exec_account.generation,
+			lifecycle.resource_account_generation);
+	if (orch_fence_receipt.credit_storage_account.reserved != 0)
+		return workflow_fence_receipt_failed(
+			"credit_storage_account_reserved",
+			orch_fence_receipt.credit_storage_account.reserved, 0);
+	if (orch_fence_receipt.credit_storage_account.generation == 0)
+		return workflow_fence_receipt_failed(
+			"credit_storage_account_generation_nonzero",
+			orch_fence_receipt.credit_storage_account.generation, 1);
+	for (uint i = 0; i < AGENT_WORKFLOW_FENCE_CHALLENGE_SIZE; i++) {
+		if (orch_fence_receipt.challenge[i] !=
+		    orch_fence_request.challenge[i]) {
+			challenge_match = 0;
+			challenge_mismatch = i;
+			break;
+		}
+	}
 	for (uint i = 0; i < AGENT_WORKFLOW_FENCE_ROOT_SIZE; i++) {
 		digest_nonzero |= orch_fence_receipt.credit_digest[i];
 		root_nonzero |= orch_fence_receipt.evidence_root[i];
 	}
-	if (!challenge_match || !digest_nonzero || !root_nonzero)
+	if (!challenge_match) {
+		printf("rp_agentos_orch: workflow_fence_validation_failed name=rp-task6-completion-v1 source=receipt check=challenge index=%u actual=%u expected=%u\n",
+		       challenge_mismatch,
+		       (uint)orch_fence_receipt.challenge[challenge_mismatch],
+		       (uint)orch_fence_request.challenge[challenge_mismatch]);
 		return 0;
+	}
+	if (!digest_nonzero)
+		return workflow_fence_receipt_failed(
+			"credit_digest_nonzero", digest_nonzero, 1);
+	if (!root_nonzero)
+		return workflow_fence_receipt_failed(
+			"evidence_root_nonzero", root_nonzero, 1);
 	workflow_hex_encode(orch_fence_receipt.credit_digest,
 			    AGENT_WORKFLOW_FENCE_ROOT_SIZE,
 			    orch_fence_credit_hex);

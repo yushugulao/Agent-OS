@@ -3259,6 +3259,14 @@ static int fork_common(int make_agent, int agent_role,
 		freeproc(np);
 		goto fail;
 	}
+	if (make_agent && admission == PROC_ADMIT_AGENT &&
+	    scope_mode == VFS_SPAWN_SCOPE_INHERIT &&
+	    agent_bootstrap_scope_controller_bind(
+		    p, np, agent_role, np->agent_control_id) < 0) {
+		intr_restore(publish_enabled);
+		freeproc(np);
+		goto fail;
+	}
 	*(nt->trapframe) = *(t->trapframe);
 	nt->trapframe->a0 = 0;
 	nt->state = RUNNABLE;

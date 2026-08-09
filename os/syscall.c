@@ -530,8 +530,11 @@ uint64 sys_exec(uint64 path, uint64 uargv)
 uint64 sys_wait(int pid, uint64 va)
 {
 	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle = vfs_proc_lifecycle(p);
 	int code;
 	int child;
+	int lifecycle_entered = 0;
+	int result;
 
 	if (va &&
 	    user_range_check(p->pagetable, va, sizeof(code), PTE_W) < 0)
@@ -539,9 +542,25 @@ uint64 sys_wait(int pid, uint64 va)
 	child = wait(pid, &code);
 	if (child < 0 || va == 0)
 		return child;
-	if (copyout(p->pagetable, va, (char *)&code, sizeof(code)) < 0)
-		return -1;
-	return child;
+	/*
+	 * Waiting itself may sleep while the workflow controller seals a cut.
+	 * Child teardown is covered by departure_operations; only the completion
+	 * copyout can fault in a charged COW page, so reacquire the cut around that
+	 * short delivery step instead of holding it across the sleep.
+	 */
+	if (workflow_lifecycle_key_valid(lifecycle)) {
+		while (workflow_lifecycle_operation_enter(lifecycle) < 0) {
+			if (workflow_lifecycle_closing(lifecycle))
+				return -1;
+			yield();
+		}
+		lifecycle_entered = 1;
+	}
+	result = copyout(p->pagetable, va, (char *)&code, sizeof(code)) < 0 ?
+			 -1 : child;
+	if (lifecycle_entered)
+		workflow_lifecycle_operation_leave(lifecycle);
+	return result;
 }
 
 uint64 sys_pipe(uint64 fdarray)
@@ -1455,7 +1474,6 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_mailwrite:
 	case SYS_trace:
 	case SYS_execve:
-	case SYS_wait4:
 	case SYS_pipe2:
 	case SYS_thread_create:
 	case SYS_waittid:
@@ -1494,6 +1512,12 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_file_edit_state:
 	case SYS_agent_route_config:
 		return 1;
+	/*
+	 * wait4 sleeps without the outer token.  Child teardown is covered by the
+	 * departure protocol and sys_wait reacquires the token for result copyout.
+	 */
+	case SYS_wait4:
+		return 0;
 	/* fork/create and Agent execution paths retain their inner cut. */
 	case SYS_clone:
 	case SYS_agent_create:

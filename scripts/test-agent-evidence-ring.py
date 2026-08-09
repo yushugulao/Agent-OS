@@ -19,6 +19,7 @@ HEADER = (ROOT / "os" / "agent_evidence_ring.h").read_text(encoding="utf-8")
 RING = (ROOT / "os" / "agent_evidence_ring.c").read_text(encoding="utf-8")
 OBSERVE = (ROOT / "os" / "agent_observe.c").read_text(encoding="utf-8")
 LEDGER = (ROOT / "os" / "agent_observe_ledger.c").read_text(encoding="utf-8")
+AUDITOR = (ROOT / "user" / "src" / "rp_auditor.c").read_text(encoding="utf-8")
 
 
 def function_body(source: str, name: str) -> str:
@@ -193,6 +194,36 @@ class EvidenceRingContract(unittest.TestCase):
         self.assertIn("agent_evidence_hash_event(&event, leaf)", digest)
         self.assertIn("agent_evidence_view_digest(view, digest)", tag)
         self.assertNotIn("latest.record_hash", tag)
+
+    def test_rp_auditor_checks_projection_identity_not_legacy_chain(self) -> None:
+        audit = re.sub(r"\s+", " ", function_body(AUDITOR, "run_kernel_audit"))
+        self.assertNotIn("auditor_audit_hash(record)", audit)
+        self.assertNotRegex(
+            audit,
+            r"kernel_audit_records\[auditor_audit_count - 1\]\.record_hash "
+            r"!= kernel_ledger\.ledger_hash",
+        )
+        self.assertIn(
+            "first_audit->record_hash != first->record_hash", audit
+        )
+        self.assertIn(
+            "second_audit->record_hash != second->record_hash", audit
+        )
+        self.assertIn(
+            "first_audit->prev_hash != first->prev_hash", audit
+        )
+        self.assertIn(
+            "second_audit->prev_hash != second->prev_hash", audit
+        )
+        self.assertIn(
+            "auditor_context_hash(record) != record->record_hash", audit
+        )
+        self.assertIn(
+            "edge->source_record_hash == first->record_hash", audit
+        )
+        self.assertIn(
+            "edge->target_record_hash == second->record_hash", audit
+        )
 
     def test_reclaim_seals_unfenced_evidence_before_release(self) -> None:
         reclaim = function_body(RING, "agent_evidence_reclaim")

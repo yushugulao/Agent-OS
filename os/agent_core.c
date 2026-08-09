@@ -188,6 +188,9 @@ int agent_core_exec_public_commit(struct proc *p)
 	}
 	/* workflow 根节点不能放弃不可转移的关闭权限。 */
 	if (p->vfs_scope_controller ||
+	    workflow_lifecycle_controller_matches(
+		    vfs_proc_lifecycle(p), p->vfs_scope_id,
+		    p->agent_control_id) ||
 	    !agent_lifecycle_context_lane_quiescent(p))
 		return -1;
 	agent_scope_controller_departing(p);
@@ -475,6 +478,43 @@ static int agent_workflow_admission_status(struct proc *p, int role)
 	if (status != AGENT_STATUS_OK)
 		return status;
 	return AGENT_STATUS_OK;
+}
+
+int agent_bootstrap_scope_controller_bind(
+	const struct proc *parent, const struct proc *child, int role,
+	uint64 control_id)
+{
+	struct workflow_lifecycle_key parent_lifecycle;
+	struct workflow_lifecycle_key child_lifecycle;
+	uint lifecycle_scope;
+
+	if (parent == 0 || parent->is_agent || !parent->resource_domain_admin ||
+	    !exec_policy_process_bootstrap(parent) ||
+	    role != AGENT_ROLE_ORCHESTRATOR)
+		return 0;
+	if (child == 0 || !child->is_agent || child->agent_role != role ||
+	    child->agent_control_id != control_id ||
+	    child->agent_controller_id != 0 || child->vfs_scope_controller ||
+	    control_id == 0 ||
+	    !parent->workflow_lifecycle_charged ||
+	    !child->workflow_lifecycle_charged ||
+	    parent->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    parent->vfs_scope_id >= FS_OWNER_SCOPE_FLAG ||
+	    parent->vfs_scope_id != child->vfs_scope_id ||
+	    parent->vfs_scope_id != parent->storage_principal_id ||
+	    child->vfs_scope_id != child->storage_principal_id)
+		return -1;
+	parent_lifecycle = vfs_proc_lifecycle(parent);
+	child_lifecycle = vfs_proc_lifecycle(child);
+	if (!workflow_lifecycle_key_valid(parent_lifecycle) ||
+	    !workflow_lifecycle_key_valid(child_lifecycle) ||
+	    !workflow_lifecycle_key_equal(parent_lifecycle, child_lifecycle) ||
+	    workflow_lifecycle_scope(child_lifecycle, &lifecycle_scope) < 0 ||
+	    lifecycle_scope != child->vfs_scope_id)
+		return -1;
+	/* The lifecycle binder atomically accepts only an unbound controller. */
+	return vfs_scope_bind_controller(child->vfs_scope_id, child_lifecycle,
+					 control_id) < 0 ? -1 : 1;
 }
 
 int agent_make_role(struct proc *p, int role)

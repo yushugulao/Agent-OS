@@ -20,6 +20,7 @@ FILES = (
     "os/agent.h",
     "user/include/agent.h",
     "os/agent_core.c",
+    "os/proc.c",
     "os/agent_workflow_fence.c",
     "os/workflow_lifecycle.c",
     "os/workflow_credit_domain.c",
@@ -248,6 +249,157 @@ class WorkflowFenceMutationTests(unittest.TestCase):
             "record->controller_control_id != control_id &&",
         )
         self.assert_rejected("full-key/scope/identity bound")
+
+    def test_rejects_agent_parent_adopting_bootstrap_controller(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "parent == 0 || parent->is_agent || !parent->resource_domain_admin",
+            "parent == 0 || !parent->is_agent || !parent->resource_domain_admin",
+        )
+        self.assert_rejected("adoption is not authority restricted")
+
+    def test_rejects_non_admin_bootstrap_controller_adoption(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "parent->is_agent || !parent->resource_domain_admin ||",
+            "parent->is_agent || parent->resource_domain_admin ||",
+        )
+        self.assert_rejected("adoption is not authority restricted")
+
+    def test_rejects_non_orchestrator_bootstrap_controller_adoption(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "role != AGENT_ROLE_ORCHESTRATOR)",
+            "role != AGENT_ROLE_SENTINEL)",
+        )
+        self.assert_rejected("adoption is not authority restricted")
+
+    def test_rejects_cross_scope_bootstrap_controller_adoption(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "parent->vfs_scope_id != child->vfs_scope_id ||",
+            "parent->vfs_scope_id == child->vfs_scope_id ||",
+        )
+        self.assert_rejected("adoption is not inherited-scope fail closed")
+
+    def test_rejects_controlled_child_bootstrap_controller_adoption(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "child->agent_controller_id != 0 || child->vfs_scope_controller",
+            "child->agent_controller_id == 0 || child->vfs_scope_controller",
+        )
+        self.assert_rejected("adoption is not inherited-scope fail closed")
+
+    def test_rejects_partial_lifecycle_bootstrap_controller_adoption(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "!workflow_lifecycle_key_equal(parent_lifecycle, child_lifecycle)",
+            "parent_lifecycle.id != child_lifecycle.id",
+        )
+        self.assert_rejected("adoption is not full-lifecycle bound")
+
+    def test_rejects_bootstrap_adoption_rewriting_scope_ownership(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "return vfs_scope_bind_controller(child->vfs_scope_id, child_lifecycle,",
+            "child->vfs_scope_controller = 1;\n"
+            "\treturn vfs_scope_bind_controller(child->vfs_scope_id, child_lifecycle,",
+        )
+        self.assert_rejected("adoption changes scope ownership")
+
+    def test_rejects_bootstrap_adoption_of_bound_controller(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "record->controller_control_id == 0 ||",
+            "record->controller_control_id != 0 ||",
+        )
+        self.assert_rejected("controller binding is not atomic and one-time")
+
+    def test_rejects_bootstrap_adoption_failure_open(self) -> None:
+        self.mutate(
+            "os/proc.c",
+            "p, np, agent_role, np->agent_control_id) < 0",
+            "p, np, agent_role, np->agent_control_id) > 0",
+        )
+        self.assert_rejected("publication is not exact and fail closed")
+
+    def test_rejects_unexported_bootstrap_controller_binder(self) -> None:
+        self.mutate(
+            "os/agent.h",
+            "int agent_bootstrap_scope_controller_bind(",
+            "int agent_bootstrap_scope_controller_bind_missing(",
+        )
+        self.assert_rejected("binder is not exported to publication")
+
+    def test_rejects_bootstrap_controller_bind_in_agent_make_role(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "if (agent_context_init(p) < 0)\n\t\tgoto fail;",
+            "if (agent_context_init(p) < 0)\n"
+            "\t\tgoto fail;\n"
+            "\tif (agent_bootstrap_scope_controller_bind(\n"
+            "\t\t    controller, p, role, p->agent_control_id) < 0)\n"
+            "\t\tgoto fail;",
+        )
+        self.assert_rejected("bound before final process publication")
+
+    def test_rejects_wrong_bootstrap_adoption_admission(self) -> None:
+        self.mutate(
+            "os/proc.c",
+            "make_agent && admission == PROC_ADMIT_AGENT &&",
+            "make_agent && admission != PROC_ADMIT_AGENT &&",
+        )
+        self.assert_rejected("publication is not exact and fail closed")
+
+    def test_rejects_bootstrap_bind_before_child_publication(self) -> None:
+        child_bind = (
+            "\tif (proc_child_bind(p, np) < 0) {\n"
+            "\t\tintr_restore(publish_enabled);\n"
+            "\t\tfreeproc(np);\n"
+            "\t\tgoto fail;\n"
+            "\t}\n"
+        )
+        adoption = (
+            "\tif (make_agent && admission == PROC_ADMIT_AGENT &&\n"
+            "\t    scope_mode == VFS_SPAWN_SCOPE_INHERIT &&\n"
+            "\t    agent_bootstrap_scope_controller_bind(\n"
+            "\t\t    p, np, agent_role, np->agent_control_id) < 0) {\n"
+            "\t\tintr_restore(publish_enabled);\n"
+            "\t\tfreeproc(np);\n"
+            "\t\tgoto fail;\n"
+            "\t}\n"
+        )
+        self.mutate("os/proc.c", child_bind + adoption, adoption + child_bind)
+        self.assert_rejected("last fallible pre-runnable publication")
+
+    def test_rejects_runnable_before_bootstrap_controller_bind(self) -> None:
+        self.mutate(
+            "os/proc.c",
+            "\tif (make_agent && admission == PROC_ADMIT_AGENT &&",
+            "\tnt->state = RUNNABLE;\n"
+            "\tif (make_agent && admission == PROC_ADMIT_AGENT &&",
+        )
+        self.assert_rejected("last fallible pre-runnable publication")
+
+    def test_rejects_failure_after_bootstrap_controller_bind(self) -> None:
+        self.mutate(
+            "os/proc.c",
+            "\t*(nt->trapframe) = *(t->trapframe);",
+            "\tif (!proc_teardown_live(np))\n"
+            "\t\tgoto fail;\n"
+            "\t*(nt->trapframe) = *(t->trapframe);",
+        )
+        self.assert_rejected("followed by a recoverable failure")
+
+    def test_rejects_adopted_controller_public_exec(self) -> None:
+        self.mutate(
+            "os/agent_core.c",
+            "workflow_lifecycle_controller_matches(\n"
+            "\t\t    vfs_proc_lifecycle(p), p->vfs_scope_id,",
+            "!workflow_lifecycle_controller_matches(\n"
+            "\t\t    vfs_proc_lifecycle(p), p->vfs_scope_id,",
+        )
+        self.assert_rejected("can shed its identity through public exec")
 
     def test_rejects_metadata_work_before_lifecycle_gate(self) -> None:
         self.mutate(

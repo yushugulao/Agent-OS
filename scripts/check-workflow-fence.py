@@ -23,6 +23,7 @@ SOURCE_PATHS = {
     "kernel_agent_h": "os/agent.h",
     "user_agent_h": "user/include/agent.h",
     "core": "os/agent_core.c",
+    "proc": "os/proc.c",
     "fence": "os/agent_workflow_fence.c",
     "lifecycle": "os/workflow_lifecycle.c",
     "credit": "os/workflow_credit_domain.c",
@@ -385,6 +386,162 @@ def validate_dispatch(core: str) -> None:
         raise ContractError(
             "workflow fence receipt is acknowledged before successful copyout"
         )
+
+
+def validate_bootstrap_controller_adoption(
+    kernel_agent_h: str, core: str, proc: str, lifecycle: str
+) -> None:
+    adoption = compact(
+        function_body(core, "agent_bootstrap_scope_controller_bind")
+    )
+    require(
+        adoption,
+        "if(parent==0||parent->is_agent||!parent->resource_domain_admin||"
+        "!exec_policy_process_bootstrap(parent)||"
+        "role!=AGENT_ROLE_ORCHESTRATOR)return0;",
+        "bootstrap workflow controller adoption is not authority restricted",
+    )
+    require(
+        adoption,
+        "if(child==0||!child->is_agent||child->agent_role!=role||"
+        "child->agent_control_id!=control_id||"
+        "child->agent_controller_id!=0||child->vfs_scope_controller||"
+        "control_id==0||"
+        "!parent->workflow_lifecycle_charged||"
+        "!child->workflow_lifecycle_charged||"
+        "parent->vfs_scope_id<VFS_SCOPE_FIRST_DYNAMIC||"
+        "parent->vfs_scope_id>=FS_OWNER_SCOPE_FLAG||"
+        "parent->vfs_scope_id!=child->vfs_scope_id||"
+        "parent->vfs_scope_id!=parent->storage_principal_id||"
+        "child->vfs_scope_id!=child->storage_principal_id)return-1;",
+        "bootstrap workflow controller adoption is not inherited-scope fail closed",
+    )
+    require(
+        adoption,
+        "if(!workflow_lifecycle_key_valid(parent_lifecycle)||"
+        "!workflow_lifecycle_key_valid(child_lifecycle)||"
+        "!workflow_lifecycle_key_equal(parent_lifecycle,child_lifecycle)||"
+        "workflow_lifecycle_scope(child_lifecycle,&lifecycle_scope)<0||"
+        "lifecycle_scope!=child->vfs_scope_id)return-1;",
+        "bootstrap workflow controller adoption is not full-lifecycle bound",
+    )
+    require(
+        adoption,
+        "returnvfs_scope_bind_controller(child->vfs_scope_id,child_lifecycle,"
+        "control_id)<0?-1:1;",
+        "bootstrap workflow controller adoption does not use the atomic binder",
+    )
+    reject(
+        adoption,
+        "child->vfs_scope_controller=",
+        "bootstrap controller adoption changes scope ownership",
+    )
+
+    require(
+        compact(kernel_agent_h),
+        "intagent_bootstrap_scope_controller_bind("
+        "conststructproc*parent,conststructproc*child,introle,"
+        "uint64control_id);",
+        "bootstrap workflow controller binder is not exported to publication",
+    )
+
+    make_role = compact(function_body(core, "agent_make_role"))
+    require(
+        make_role,
+        "if(p->vfs_scope_controller&&vfs_scope_bind_controller("
+        "p->vfs_scope_id,vfs_proc_lifecycle(p),p->agent_control_id)<0)"
+        "gotofail;",
+        "fresh workflow controller binding changed",
+    )
+    reject(
+        make_role,
+        "agent_bootstrap_scope_controller_bind(",
+        "bootstrap controller is bound before final process publication",
+    )
+    reject(
+        make_role,
+        "p->vfs_scope_controller=",
+        "agent role admission rewrites scope ownership",
+    )
+
+    fork = compact(function_body(proc, "fork_common"))
+    adoption_call = (
+        "if(make_agent&&admission==PROC_ADMIT_AGENT&&"
+        "scope_mode==VFS_SPAWN_SCOPE_INHERIT&&"
+        "agent_bootstrap_scope_controller_bind("
+        "p,np,agent_role,np->agent_control_id)<0){"
+        "intr_restore(publish_enabled);freeproc(np);gotofail;}"
+    )
+    require_once(
+        fork,
+        adoption_call,
+        "bootstrap controller publication is not exact and fail closed",
+    )
+    require_order(
+        fork,
+        (
+            "publish_enabled=intr_save();",
+            "agent_lifecycle_spawn_publish_locked(p,np)<0",
+            "if(proc_child_bind(p,np)<0)",
+            adoption_call,
+            "*(nt->trapframe)=*(t->trapframe);",
+            "nt->state=RUNNABLE;",
+            "add_task(nt);",
+        ),
+        "bootstrap controller bind is not the last fallible pre-runnable publication",
+    )
+    after_adoption = fork[fork.index(adoption_call) + len(adoption_call) :]
+    require_order(
+        after_adoption,
+        (
+            "*(nt->trapframe)=*(t->trapframe);",
+            "nt->state=RUNNABLE;",
+            "add_task(nt);",
+            "proc_vm_snapshot_end(p);",
+            "intr_restore(publish_enabled);",
+            "returnnp->pid;",
+        ),
+        "bootstrap controller bind is not followed by infallible publication",
+    )
+    return_position = require(
+        after_adoption,
+        "returnnp->pid;",
+        "bootstrap controller bind does not complete process publication",
+    )
+    for forbidden in ("gotofail;", "return-1;", "freeproc(np);"):
+        reject(
+            after_adoption[:return_position],
+            forbidden,
+            "bootstrap controller bind is followed by a recoverable failure",
+        )
+
+    exec_public = compact(
+        function_body(core, "agent_core_exec_public_commit")
+    )
+    require(
+        exec_public,
+        "if(p->vfs_scope_controller||workflow_lifecycle_controller_matches("
+        "vfs_proc_lifecycle(p),p->vfs_scope_id,p->agent_control_id)||"
+        "!agent_lifecycle_context_lane_quiescent(p))return-1;",
+        "adopted workflow controller can shed its identity through public exec",
+    )
+
+    bind = compact(
+        function_body(lifecycle, "workflow_lifecycle_bind_controller")
+    )
+    require_order(
+        bind,
+        (
+            "if(control_id==0)return-1;",
+            "enabled=intr_save();",
+            "record=workflow_lifecycle_find_locked(key);",
+            "record->controller_control_id==0||"
+            "record->controller_control_id==control_id",
+            "record->controller_control_id=control_id;",
+            "intr_restore(enabled);",
+        ),
+        "workflow lifecycle controller binding is not atomic and one-time",
+    )
 
 
 def validate_request_and_cache(fence: str) -> None:
@@ -1074,6 +1231,10 @@ def load_sources(root: Path) -> dict[str, str]:
 def validate_sources(sources: dict[str, str]) -> None:
     validate_abi(sources)
     validate_dispatch(sources["core"])
+    validate_bootstrap_controller_adoption(
+        sources["kernel_agent_h"], sources["core"], sources["proc"],
+        sources["lifecycle"]
+    )
     validate_request_and_cache(sources["fence"])
     validate_fence_execution(sources["fence"])
     validate_lifecycle(sources["lifecycle"])

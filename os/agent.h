@@ -755,6 +755,9 @@ int agent_authority_check(struct proc *p, int role);
 int agent_alias_exec_context(struct proc *p, pagetable_t pagetable);
 void agent_unmap_exec_context(struct proc *p, pagetable_t pagetable);
 int agent_make_role(struct proc *p, int role);
+int agent_bootstrap_scope_controller_bind(
+	const struct proc *parent, const struct proc *child, int role,
+	uint64 control_id);
 int agent_create_proc(void);
 int agent_create_role_proc(int role);
 int agent_workflow_create_proc(int role);

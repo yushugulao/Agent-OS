@@ -28,6 +28,8 @@ SELF_GATED = {
 
 LIFECYCLE_CONTROL = {"exit", "agent_workflow_close"}
 
+COMPLETION_SELF_GATED = {"wait4"}
+
 REQUIRED_OUTER = {
     "write",
     "read",
@@ -43,7 +45,6 @@ REQUIRED_OUTER = {
     "mailwrite",
     "trace",
     "execve",
-    "wait4",
     "pipe2",
     "thread_create",
     "waittid",
@@ -161,6 +162,11 @@ def validate(syscall_source: str, registry_source: str) -> None:
             "lifecycle control entered outer cut: "
             f"{sorted(LIFECYCLE_CONTROL - exempt)}"
         )
+    if not COMPLETION_SELF_GATED <= exempt:
+        raise ContractError(
+            "self-gated completion wait entered outer cut: "
+            f"{sorted(COMPLETION_SELF_GATED - exempt)}"
+        )
     if "default:" not in exempt_text or not re.search(
         r"default\s*:\s*return\s+0\s*;", exempt_text
     ):
@@ -193,6 +199,18 @@ def validate(syscall_source: str, registry_source: str) -> None:
     if fence_guard not in compact_dispatch:
         raise ContractError("a completed workflow fence can run post-seal background work")
 
+    wait = function_body(syscall_source, "sys_wait")
+    wait_call = wait.find("child = wait(pid, &code);")
+    gate = wait.find("workflow_lifecycle_operation_enter(lifecycle)")
+    copyout = wait.find("copyout(p->pagetable, va, (char *)&code, sizeof(code))")
+    leave = wait.find("workflow_lifecycle_operation_leave(lifecycle);")
+    if min(wait_call, gate, copyout, leave) < 0 or not (
+        wait_call < gate < copyout < leave
+    ):
+        raise ContractError("wait4 completion copyout is not self-gated after sleep")
+    if "workflow_lifecycle_closing(lifecycle)" not in wait:
+        raise ContractError("wait4 completion gate does not fail closed on lifecycle close")
+
 
 class WorkflowSyscallCutTests(unittest.TestCase):
     @classmethod
@@ -218,6 +236,28 @@ class WorkflowSyscallCutTests(unittest.TestCase):
         old = "\tcase SYS_agent_worker_create:\n\t\treturn 0;"
         new = "\tcase SYS_agent_worker_create:\n\t\treturn 1;"
         self.assert_mutation_rejected(old, new, "one return")
+
+    def test_rejects_completion_wait_outer_gate(self) -> None:
+        observers = "\tcase SYS_wait4:\n\t\treturn 0;"
+        outer_tail = "\tcase SYS_agent_route_config:\n\t\treturn 1;"
+        self.assertIn(observers, self.syscall, "completion wait anchor drifted")
+        self.assertIn(outer_tail, self.syscall, "outer cut anchor drifted")
+        mutated = self.syscall.replace(observers, "", 1).replace(
+            outer_tail,
+            "\tcase SYS_agent_route_config:\n"
+            "\tcase SYS_wait4:\n"
+            "\t\treturn 1;",
+            1,
+        )
+        with self.assertRaisesRegex(ContractError, "ordinary workflow-cut set drifted"):
+            validate(mutated, self.registry)
+
+    def test_rejects_wait4_copyout_without_inner_gate(self) -> None:
+        self.assert_mutation_rejected(
+            "\t\tworkflow_lifecycle_operation_leave(lifecycle);\n\treturn result;",
+            "\treturn result;",
+            "completion copyout is not self-gated",
+        )
 
     def test_rejects_gate_after_transaction(self) -> None:
         old = "if (workflow_lifecycle_operation_enter(lifecycle) < 0) {"
