@@ -623,7 +623,9 @@ class CalibrationTests(unittest.TestCase):
             "version_first_line": f"{name} version 1",
         }
 
-    def make_fixture(self, root):
+    def make_fixture(self, root, expected_cases=None):
+        if expected_cases is None:
+            expected_cases = ["case_one"]
         scripts = root / "scripts"
         scripts.mkdir()
         runner = scripts / "agent_test_runner.py"
@@ -659,8 +661,8 @@ class CalibrationTests(unittest.TestCase):
                 {"round": 2, "round_nonce": "2" * 64},
                 {"round": 3, "round_nonce": "3" * 64},
             ],
-            "expected_cases": ["case_one"],
-            "attestation_case_count": 2,
+            "expected_cases": expected_cases,
+            "attestation_case_count": len(expected_cases) + 1,
             "executables": tools,
             "created_utc": "2026-07-31T00:00:00Z",
         }
@@ -685,7 +687,7 @@ class CalibrationTests(unittest.TestCase):
                     "agentfinal_ucore: parent passed\n"
                 ).encode()
             else:
-                raw = f"{init_proc}: parent passed\n".encode()
+                raw = f"{calibration.expected_case_marker(init_proc)}\n".encode()
             guest_parts.extend(
                 (
                     f"===== guest:{tag} =====\n".encode(),
@@ -738,7 +740,7 @@ class CalibrationTests(unittest.TestCase):
                 "--init-proc",
                 init_proc,
                 "--marker",
-                f"{init_proc}: parent passed",
+                calibration.expected_case_marker(init_proc),
                 "--marker-mode",
                 "exact-line",
                 "--expected-bad-addr-marker-mode",
@@ -818,7 +820,7 @@ class CalibrationTests(unittest.TestCase):
                 ],
                 "request": {
                     "init_proc": init_proc,
-                    "marker": f"{init_proc}: parent passed",
+                    "marker": calibration.expected_case_marker(init_proc),
                     "marker_mode": "exact-line",
                     "expected_bad_addr_markers": expected_fault_markers,
                     "expected_fault_marker_mode": "exact-line",
@@ -1180,6 +1182,44 @@ class CalibrationTests(unittest.TestCase):
                     attestations,
                     guest,
                     timing,
+                    production=False,
+                )
+
+    def test_ch8_special_marker_is_exactly_bound(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plan, attestations, guest = self.make_fixture(
+                root, ["ch8_cow_ucore"]
+            )
+            _, _, records, _ = calibration.validate_round_attestations(
+                root,
+                plan,
+                1,
+                attestations,
+                guest,
+                production=False,
+            )
+            self.assertEqual(records[1]["init_proc"], "ch8_cow_ucore")
+
+            target = attestations / "01-ch8_cow_ucore.json"
+
+            def replace_with_default_marker(value):
+                argv = value["invocation_argv"]
+                argv[argv.index("--marker") + 1] = (
+                    "ch8_cow_ucore: parent passed"
+                )
+                value["request"]["marker"] = "ch8_cow_ucore: parent passed"
+
+            self.mutate_attestation(target, replace_with_default_marker)
+            with self.assertRaisesRegex(
+                calibration.CalibrationError, "invocation --marker mismatch"
+            ):
+                calibration.validate_round_attestations(
+                    root,
+                    plan,
+                    1,
+                    attestations,
+                    guest,
                     production=False,
                 )
 

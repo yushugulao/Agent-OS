@@ -1012,6 +1012,12 @@ def expected_attestation_cases(expected_cases):
     )
 
 
+def expected_case_marker(init_proc):
+    if init_proc == "ch8_cow_ucore":
+        return "ch8_cow_ucore: passed"
+    return f"{init_proc}: parent passed"
+
+
 def option_value(argv, option, label):
     positions = [index for index, value in enumerate(argv) if value == option]
     if len(positions) != 1 or positions[0] + 1 >= len(argv):
@@ -1264,9 +1270,10 @@ def validate_attestation(
         or any(not isinstance(item, str) or not item for item in qemu_argv)
     ):
         raise CalibrationError(f"attestation {case_key} argv is invalid")
+    expected_marker = expected_case_marker(init_proc)
     expected_options = {
         "--init-proc": init_proc,
-        "--marker": f"{init_proc}: parent passed",
+        "--marker": expected_marker,
         "--run-id": identity["session_nonce"],
         "--execution-id": identity["execution_nonce"],
         "--evidence-scope": EVIDENCE_SCOPE,
@@ -1378,7 +1385,7 @@ def validate_attestation(
     )
     if (
         request["init_proc"] != init_proc
-        or request["marker"] != f"{init_proc}: parent passed"
+        or request["marker"] != expected_marker
         or request["marker_mode"] != marker_mode
         or marker_mode != "exact-line"
         or request["expected_bad_addr_markers"] != expected_fault_markers
