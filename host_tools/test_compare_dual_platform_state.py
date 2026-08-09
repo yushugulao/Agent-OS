@@ -10,6 +10,10 @@ from pathlib import Path
 
 import compare_dual_platform_state as compare
 import reference_catalog_contract as reference_catalog
+from dual_state_evidence_contract import (
+    agentos_program_launch_contract,
+    evidence_check_count,
+)
 
 
 RUNNER_SOURCE_FILES = ("rp_runner_context_src", "rp_runner_fsmeta_src")
@@ -39,6 +43,21 @@ BACKEND_COSTS = {
     "agentos-audit": ("append_only_logs", "kernel_ledger_provenance"),
     "agentos-edit": ("userland_lock_file", "kernel_edit_lease"),
 }
+
+
+def backend_query_receipt_line(
+    target: str, overrides: dict[str, object] | None = None
+) -> str:
+    values: dict[str, object] = {
+        **compare.BACKEND_QUERY_EXPECTED_COMMON,
+        "records_examined": 49152 if target == "plain" else 4096,
+        "backend": compare.BACKEND_QUERY_EXPECTED_BACKENDS[target],
+    }
+    if overrides:
+        values.update(overrides)
+    return ";".join(
+        f"{field}={values[field]}" for field in compare.BACKEND_QUERY_RECEIPT_FIELDS
+    )
 
 
 def write_backend_catalog(root: Path, target: str) -> None:
@@ -264,16 +283,12 @@ def write_timing(root: Path, target: str) -> None:
             )
             continue
         is_agent = target == "agentos" and program in compare.AGENTOS_REQUIRED_AGENT_PROGRAMS
-        record_launcher = (
-            "agent_create_role"
-            if is_agent
-            else "agent_worker_create"
-        )
+        record_launcher, identity_source = agentos_program_launch_contract(program)
         record_role = (
             compare.AGENTOS_REQUIRED_AGENT_ROLES[program] if is_agent else "plain"
         )
         identity = (
-            ";identity_source=child_after_exec"
+            f";identity_source={identity_source}"
             f";is_agent={1 if is_agent else 0}"
             f";agent_role={compare.AGENTOS_ROLE_NUMBERS[record_role] if is_agent else 0}"
             ";filesystem_domain=3;filesystem_capabilities=66"
@@ -379,7 +394,9 @@ def main() -> int:
         write_state_file(
             plain,
             "rp_backend",
-            "runner_report=file_scan\nruntime_cases=0\nstatus=ready\n",
+            "runner_report=file_scan\n"
+            + backend_query_receipt_line("plain")
+            + "\nruntime_cases=0\nstatus=ready\n",
         )
         write_state_file(plain, "rp_runner_context_src", "path=plain-context\n")
         write_state_file(plain, "rp_runner_fsmeta_src", "path=plain-fsmeta\n")
@@ -403,7 +420,9 @@ def main() -> int:
         write_state_file(
             agentos,
             "rp_backend",
-            "runner_report=file_scan;status=ready;kernel=observed\nstatus=ready\n",
+            "runner_report=file_scan;status=ready;kernel=observed\n"
+            + backend_query_receipt_line("agentos")
+            + "\nstatus=ready\n",
         )
         write_state_file(agentos, "rp_runner_context_src", "path=agentos-context\n")
         write_state_file(agentos, "rp_runner_fsmeta_src", "path=agentos-fsmeta\n")
@@ -472,7 +491,7 @@ def main() -> int:
         } & set(summary), summary
         assert summary["embedded_action_records"] == 1, summary
         assert summary["run_result_match"] == 1, summary
-        assert summary["agentos_evidence_checks"] == 32, summary
+        assert summary["agentos_evidence_checks"] == evidence_check_count(), summary
         assert len(summary["scenario_evidence"]) == len(compare.SCENARIO_EVIDENCE_SPECS), summary
         assert all(row["status"] == "ready" for row in summary["scenario_evidence"]), summary
         assert any(row["scenario"] == "Context Path" and row["matched"] >= 3 for row in summary["scenario_evidence"]), summary
@@ -485,6 +504,30 @@ def main() -> int:
         assert summary["agentos_timing_records"] == 70, summary
         assert summary["agentos_agent_launches"] == len(compare.AGENTOS_REQUIRED_AGENT_PROGRAMS), summary
         assert summary["agentos_worker_launches"] == 70 - len(compare.AGENTOS_REQUIRED_AGENT_PROGRAMS), summary
+        assert summary["backend_query_receipts"] == {
+            "plain": {
+                "query_workload": "research_metadata_lookup",
+                "consistency": "fresh_snapshot",
+                "dataset_records": 12,
+                "query_operations": 4096,
+                "query_matches": 4096,
+                "result_digest": "13819499490441518226",
+                "records_examined": 49152,
+                "backend": "plain_file_scan",
+                "status": "verified",
+            },
+            "agentos": {
+                "query_workload": "research_metadata_lookup",
+                "consistency": "fresh_snapshot",
+                "dataset_records": 12,
+                "query_operations": 4096,
+                "query_matches": 4096,
+                "result_digest": "13819499490441518226",
+                "records_examined": 4096,
+                "backend": "agent_metadata_index",
+                "status": "verified",
+            },
+        }, summary
 
         write_host_run_result(
             agentos_run_result,
@@ -545,6 +588,102 @@ def main() -> int:
                 seeded_summary,
                 expected,
             )
+
+        plain_query_receipt = backend_query_receipt_line("plain")
+        agentos_query_receipt = backend_query_receipt_line("agentos")
+
+        append_state_file(plain, "rp_backend", plain_query_receipt + "\n")
+        expect_current("exactly one backend query receipt")
+        restore_state(plain, plain_baseline)
+
+        plain_backend_state = (plain / "rp_backend").read_text(encoding="utf-8")
+        reordered = plain_query_receipt.replace(
+            "query_workload=research_metadata_lookup;consistency=fresh_snapshot",
+            "consistency=fresh_snapshot;query_workload=research_metadata_lookup",
+            1,
+        )
+        (plain / "rp_backend").write_text(
+            plain_backend_state.replace(plain_query_receipt, reordered, 1),
+            encoding="utf-8",
+        )
+        expect_current("field order differs")
+        restore_state(plain, plain_baseline)
+
+        for label, original, replacement, expected in (
+            (
+                "non-canonical decimal",
+                "dataset_records=12",
+                "dataset_records=012",
+                "non-canonical dataset_records",
+            ),
+            (
+                "uint64 overflow",
+                "result_digest=13819499490441518226",
+                "result_digest=18446744073709551616",
+                "exceeds uint64",
+            ),
+            (
+                "full scan accounting",
+                "records_examined=49152",
+                "records_examined=49151",
+                "does not account for the full scan",
+            ),
+        ):
+            current = (plain / "rp_backend").read_text(encoding="utf-8")
+            assert original in current, label
+            (plain / "rp_backend").write_text(
+                current.replace(original, replacement, 1), encoding="utf-8"
+            )
+            expect_current(expected)
+            restore_state(plain, plain_baseline)
+
+        for label, original, replacement, expected in (
+            (
+                "digest mismatch",
+                "result_digest=13819499490441518226",
+                "result_digest=13819499490441518225",
+                "common fields differ",
+            ),
+            (
+                "wrong backend",
+                "backend=agent_metadata_index",
+                "backend=plain_file_scan",
+                "names the wrong backend",
+            ),
+            (
+                "no index reduction",
+                "records_examined=4096",
+                "records_examined=49152",
+                "does not prove an index reduction",
+            ),
+            (
+                "fewer examined than matches",
+                "records_examined=4096",
+                "records_examined=4095",
+                "does not prove an index reduction",
+            ),
+        ):
+            current = (agentos / "rp_backend").read_text(encoding="utf-8")
+            assert original in current, label
+            (agentos / "rp_backend").write_text(
+                current.replace(original, replacement, 1), encoding="utf-8"
+            )
+            expect_current(expected)
+            restore_state(agentos, agentos_baseline)
+
+        for state_dir in (plain, agentos):
+            current = (state_dir / "rp_backend").read_text(encoding="utf-8")
+            (state_dir / "rp_backend").write_text(
+                current.replace(
+                    "query_workload=research_metadata_lookup",
+                    "query_workload=research_metadata_lookup_v2",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+        expect_current("workload differs from the release contract")
+        restore_state(plain, plain_baseline)
+        restore_state(agentos, agentos_baseline)
 
         plain_backend = plain / "rp_backend_exec"
         tagged_backend = plain_backend.read_text(encoding="utf-8")
@@ -801,10 +940,13 @@ def main() -> int:
         support_program = next(
             program
             for program in timing_programs()
-            if program not in compare.AGENTOS_REQUIRED_AGENT_PROGRAMS
+            if agentos_program_launch_contract(program)[0] == "agent_worker_batch"
+        )
+        support_launcher, support_identity_source = agentos_program_launch_contract(
+            support_program
         )
         bad = bad.replace(
-            f"program={support_program};role=plain;launcher=agent_worker_create",
+            f"program={support_program};role=plain;launcher={support_launcher}",
             f"program={support_program};role=sentinel;launcher=agent_create_role",
             1,
         )
@@ -813,9 +955,14 @@ def main() -> int:
 
         write_timing(agentos, "agentos")
         bad = (agentos / "rp_orch_timing").read_text(encoding="utf-8")
+        direct_program = next(
+            program
+            for program in timing_programs()
+            if agentos_program_launch_contract(program)[0] == "agent_worker_create"
+        )
         bad = bad.replace(
-            "role=plain;launcher=agent_worker_create",
-            "role=sentinel;launcher=agent_worker_create",
+            f"program={direct_program};role=plain;launcher=agent_worker_create",
+            f"program={direct_program};role=sentinel;launcher=agent_worker_create",
             1,
         )
         write_state_file(agentos, "rp_orch_timing", bad)
@@ -825,7 +972,19 @@ def main() -> int:
         bad = (agentos / "rp_orch_timing").read_text(encoding="utf-8")
         bad = bad.replace("is_agent=0;agent_role=0", "is_agent=1;agent_role=1", 1)
         write_state_file(agentos, "rp_orch_timing", bad)
-        expect_current("mismatched attested identity")
+        expect_current("mismatched self-checked identity")
+
+        write_timing(agentos, "agentos")
+        bad = (agentos / "rp_orch_timing").read_text(encoding="utf-8")
+        bad = bad.replace(
+            f"program={support_program};role=plain;launcher={support_launcher};"
+            f"identity_source={support_identity_source}",
+            f"program={support_program};role=plain;launcher={support_launcher};"
+            "identity_source=child_after_exec",
+            1,
+        )
+        write_state_file(agentos, "rp_orch_timing", bad)
+        expect_current("invalid trusted CRT identity evidence")
 
     with tempfile.TemporaryDirectory() as tmp:
         state = Path(tmp)

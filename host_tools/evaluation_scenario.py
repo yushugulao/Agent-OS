@@ -117,6 +117,16 @@ ROLE_MANIFEST_ENTRY_RE = re.compile(
     r'^\s*APPLY\("(rp_[a-z0-9_]+)",\s*'
     r'"(orchestrator|recovery|artifact|investigator|sentinel)"\)\s*(?:\\)?\s*$'
 )
+WORKER_BATCH_ENTRY_RE = re.compile(
+    r"^\s*APPLY\((0|[1-9][0-9]*),\s*(rp_[a-z0-9_]+)\)\s*(?:\\)?\s*$"
+)
+WORKER_BATCH_GROUP_RE = re.compile(
+    r"^\s*APPLY\((0|[1-9][0-9]*),\s*(rp_wbatch[0-9]+),\s*"
+    r"(0|[1-9][0-9]*)\)\s*(?:\\)?\s*$"
+)
+WORKER_DIRECT_ENTRY_RE = re.compile(
+    r"^\s*APPLY\((rp_[a-z0-9_]+)\)\s*(?:\\)?\s*$"
+)
 ROLE_NUMBERS = {
     "sentinel": 1,
     "investigator": 2,
@@ -124,6 +134,7 @@ ROLE_NUMBERS = {
     "orchestrator": 4,
     "artifact": 5,
 }
+AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES = 66
 PROGRAM_MANIFEST_PATHS = (
     "user/include/rp_program_manifest.h",
     "baseline_ucore/user/include/rp_program_manifest.h",
@@ -361,6 +372,14 @@ class ProgramTiming:
 
 
 @dataclass(frozen=True)
+class AgentOSProgramLaunch:
+    launcher: str
+    identity_source: str
+    batch_group: int | None = None
+    batch_index: int | None = None
+
+
+@dataclass(frozen=True)
 class TargetMeasurement:
     target: str
     program_timings: tuple[ProgramTiming, ...]
@@ -533,19 +552,198 @@ def _parse_program_manifest(path: Path) -> tuple[tuple[str, ...], dict[str, str]
     return tuple(programs), roles
 
 
+def _parse_manifest_macro(
+    lines: list[str],
+    macro: str,
+    pattern: re.Pattern[str],
+    path: Path,
+) -> list[tuple[str, ...]]:
+    start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith(f"#define {macro}(APPLY)")
+        ),
+        None,
+    )
+    if start is None:
+        raise ScenarioEvidenceError(f"program manifest has no {macro}: {path}")
+    entries: list[tuple[str, ...]] = []
+    for line in lines[start + 1 :]:
+        match = pattern.fullmatch(line)
+        if match is None:
+            break
+        entries.append(match.groups())
+        if not line.rstrip().endswith("\\"):
+            break
+    if not entries:
+        raise ScenarioEvidenceError(f"program manifest has an empty {macro}: {path}")
+    return entries
+
+
+def _parse_manifest_count(lines: list[str], name: str, path: Path) -> int:
+    pattern = re.compile(rf"^#define {re.escape(name)} (0|[1-9][0-9]*)$")
+    matches = [pattern.fullmatch(line) for line in lines]
+    values = [int(match.group(1)) for match in matches if match is not None]
+    if len(values) != 1:
+        raise ScenarioEvidenceError(
+            f"program manifest must define {name} exactly once: {path}"
+        )
+    return values[0]
+
+
+def _parse_agentos_launch_contract(
+    path: Path,
+    programs: tuple[str, ...],
+    roles: dict[str, str],
+) -> dict[str, AgentOSProgramLaunch]:
+    data = _read_regular_file(path, "AgentOS launch manifest")
+    try:
+        lines = data.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError as error:
+        raise ScenarioEvidenceError(
+            f"AgentOS launch manifest is not UTF-8: {path}"
+        ) from error
+
+    group_rows = _parse_manifest_macro(
+        lines, "RP_WORKER_BATCH_GROUPS", WORKER_BATCH_GROUP_RE, path
+    )
+    groups: list[tuple[int, str, tuple[str, ...]]] = []
+    flattened: list[str] = []
+    for expected_group, raw_row in enumerate(group_rows):
+        group_text, runner, count_text = raw_row
+        group = int(group_text)
+        count = int(count_text)
+        if group != expected_group or runner != f"rp_wbatch{group}" or count == 0:
+            raise ScenarioEvidenceError(
+                f"AgentOS worker batch group {expected_group} is not canonical: {path}"
+            )
+        entries = _parse_manifest_macro(
+            lines,
+            f"RP_WORKER_BATCH_{group}_PROGRAMS",
+            WORKER_BATCH_ENTRY_RE,
+            path,
+        )
+        indices = tuple(int(index) for index, _program in entries)
+        batch_programs = tuple(program for _index, program in entries)
+        if indices != tuple(range(count)) or len(entries) != count:
+            raise ScenarioEvidenceError(
+                f"AgentOS worker batch {group} indices or count differ: {path}"
+            )
+        if len(batch_programs) != len(set(batch_programs)):
+            raise ScenarioEvidenceError(
+                f"AgentOS worker batch {group} contains duplicate programs: {path}"
+            )
+        groups.append((group, runner, batch_programs))
+        flattened.extend(batch_programs)
+
+    direct_rows = _parse_manifest_macro(
+        lines, "RP_WORKER_DIRECT_PROGRAMS", WORKER_DIRECT_ENTRY_RE, path
+    )
+    direct_programs = tuple(row[0] for row in direct_rows)
+    batch_programs = tuple(flattened)
+    group_count = _parse_manifest_count(lines, "RP_WORKER_BATCH_GROUP_COUNT", path)
+    batch_count = _parse_manifest_count(lines, "RP_WORKER_BATCH_PROGRAM_COUNT", path)
+    direct_count = _parse_manifest_count(lines, "RP_WORKER_DIRECT_PROGRAM_COUNT", path)
+    if (
+        len(programs) != TASK6_EXPECTED_PROGRAM_COUNT
+        or len(roles) != 10
+        or group_count != 3
+        or group_count != len(groups)
+        or batch_count != 58
+        or batch_count != len(batch_programs)
+        or direct_count != 2
+        or direct_count != len(direct_programs)
+    ):
+        raise ScenarioEvidenceError(
+            "AgentOS launch manifest must bind 10 roles, 58 batched workers, "
+            "and 2 direct workers in 3 groups"
+        )
+    role_set = set(roles)
+    batch_set = set(batch_programs)
+    direct_set = set(direct_programs)
+    program_set = set(programs)
+    if (
+        len(batch_set) != len(batch_programs)
+        or len(direct_set) != len(direct_programs)
+        or role_set & batch_set
+        or role_set & direct_set
+        or batch_set & direct_set
+        or role_set | batch_set | direct_set != program_set
+    ):
+        raise ScenarioEvidenceError(
+            "AgentOS role, batched-worker, and direct-worker inventories "
+            "are not a disjoint complete partition"
+        )
+    if tuple(program for program in programs if program in batch_set) != batch_programs:
+        raise ScenarioEvidenceError(
+            "AgentOS worker batch order differs from the platform program order"
+        )
+    if tuple(program for program in programs if program in direct_set) != direct_programs:
+        raise ScenarioEvidenceError(
+            "AgentOS direct-worker order differs from the platform program order"
+        )
+
+    launches = {
+        program: AgentOSProgramLaunch(
+            "agent_create_role", "trusted_crt_self_check"
+        )
+        for program in roles
+    }
+    for group, _runner, group_programs in groups:
+        for index, program in enumerate(group_programs):
+            launches[program] = AgentOSProgramLaunch(
+                "agent_worker_batch",
+                "trusted_crt_batch_dispatch",
+                group,
+                index,
+            )
+    for program in direct_programs:
+        launches[program] = AgentOSProgramLaunch(
+            "agent_worker_create", "trusted_crt_self_check"
+        )
+    return launches
+
+
+def _read_expected_manifest_contract(
+    source_tree: Path | None = None,
+) -> tuple[
+    tuple[str, ...],
+    dict[str, str],
+    dict[str, AgentOSProgramLaunch],
+]:
+    root = source_tree or Path(__file__).resolve().parents[1]
+    agentos_path = root / "user" / "include" / "rp_program_manifest.h"
+    agentos = _parse_program_manifest(agentos_path)
+    plain = _parse_program_manifest(
+        root / "baseline_ucore" / "user" / "include" / "rp_program_manifest.h"
+    )
+    if (
+        plain[0] != agentos[0]
+        or tuple(plain[1].items()) != tuple(agentos[1].items())
+    ):
+        raise ScenarioEvidenceError("plain and AgentOS program manifests differ")
+    programs, roles = agentos
+    launches = _parse_agentos_launch_contract(agentos_path, programs, roles)
+    return programs, roles, launches
+
+
 def read_expected_programs(
     source_tree: Path | None = None,
 ) -> tuple[tuple[str, ...], dict[str, str]]:
     """读取并交叉校验适配器使用的两个目标清单。"""
 
-    root = source_tree or Path(__file__).resolve().parents[1]
-    agentos = _parse_program_manifest(root / "user" / "include" / "rp_program_manifest.h")
-    plain = _parse_program_manifest(
-        root / "baseline_ucore" / "user" / "include" / "rp_program_manifest.h"
-    )
-    if plain != agentos:
-        raise ScenarioEvidenceError("plain and AgentOS program manifests differ")
-    return agentos
+    programs, roles, _launches = _read_expected_manifest_contract(source_tree)
+    return programs, roles
+
+
+def read_expected_program_launches(
+    source_tree: Path | None = None,
+) -> dict[str, AgentOSProgramLaunch]:
+    """Return the exact per-program launcher and CRT evidence contract."""
+
+    _programs, _roles, launches = _read_expected_manifest_contract(source_tree)
+    return launches
 
 
 @lru_cache(maxsize=8)
@@ -1040,6 +1238,7 @@ def _parse_timing_ledger(
     target: str,
     expected_programs: tuple[str, ...],
     expected_roles: dict[str, str],
+    expected_launches: dict[str, AgentOSProgramLaunch],
 ) -> tuple[tuple[ProgramTiming, ...], bytes]:
     ledger_path = state_dir / "rp_orch_timing"
     data, lines = _read_ascii_lines(ledger_path, f"{target} rp_orch_timing")
@@ -1057,6 +1256,7 @@ def _parse_timing_ledger(
 
     timings: list[ProgramTiming] = []
     seen: set[str] = set()
+    agentos_filesystem_domain: int | None = None
     expected_keys = PLAIN_LEDGER_KEYS if target == "plain" else AGENTOS_LEDGER_KEYS
     if len(lines) != len(expected_programs) + 2:
         raise ScenarioEvidenceError(f"{target} ledger program count differs from the manifest")
@@ -1095,16 +1295,20 @@ def _parse_timing_ledger(
                 "filesystem_capabilities",
             ):
                 _canonical_uint(record[key], f"agentos {program} {key}")
-            if record["identity_source"] != "child_after_exec":
-                raise ScenarioEvidenceError(f"agentos ledger lacks runtime identity for {program}")
+            launch = expected_launches.get(program)
+            if launch is None:
+                raise ScenarioEvidenceError(
+                    f"agentos launch manifest has no contract for {program}"
+                )
             expected_role = expected_roles.get(program, "plain")
-            expected_program_launcher = (
-                "agent_create_role" if program in expected_roles else "agent_worker_create"
-            )
             expected_is_agent = "1" if program in expected_roles else "0"
             expected_role_number = str(ROLE_NUMBERS.get(expected_role, 0))
-            if record["launcher"] != expected_program_launcher:
+            if record["launcher"] != launch.launcher:
                 raise ScenarioEvidenceError(f"agentos ledger has an invalid launcher for {program}")
+            if record["identity_source"] != launch.identity_source:
+                raise ScenarioEvidenceError(
+                    f"agentos ledger has an invalid trusted CRT identity source for {program}"
+                )
             if record["role"] != expected_role:
                 raise ScenarioEvidenceError(f"agentos ledger has an invalid role for {program}")
             if (
@@ -1112,10 +1316,22 @@ def _parse_timing_ledger(
                 or record["agent_role"] != expected_role_number
             ):
                 raise ScenarioEvidenceError(f"agentos ledger has invalid identity for {program}")
-            if _canonical_uint(record["filesystem_domain"], "filesystem_domain") == 0:
+            domain = _canonical_uint(record["filesystem_domain"], "filesystem_domain")
+            if domain == 0:
                 raise ScenarioEvidenceError(f"agentos ledger has no filesystem domain for {program}")
-            if _canonical_uint(record["filesystem_capabilities"], "filesystem_capabilities") == 0:
-                raise ScenarioEvidenceError(f"agentos ledger has no filesystem capabilities for {program}")
+            if agentos_filesystem_domain is None:
+                agentos_filesystem_domain = domain
+            elif domain != agentos_filesystem_domain:
+                raise ScenarioEvidenceError(
+                    f"agentos ledger has a mismatched filesystem domain for {program}"
+                )
+            capabilities = _canonical_uint(
+                record["filesystem_capabilities"], "filesystem_capabilities"
+            )
+            if capabilities != AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES:
+                raise ScenarioEvidenceError(
+                    f"agentos ledger has invalid filesystem capabilities for {program}"
+                )
         timings.append(ProgramTiming(program, elapsed_ms))
     return tuple(timings), data
 
@@ -2909,13 +3125,14 @@ def _collect_target(
     expected_commit: str,
     expected_programs: tuple[str, ...],
     expected_roles: dict[str, str],
+    expected_launches: dict[str, AgentOSProgramLaunch],
     program_source_receipt: dict[str, object],
 ) -> tuple[TargetMeasurement, dict[str, object]]:
     _require_directory(target_dir, f"{target} run directory")
     state_dir = _require_directory(target_dir / "state-extracted", f"{target} state directory")
     inventory, contents = _state_inventory(state_dir)
     program_timings, ledger_data = _parse_timing_ledger(
-        state_dir, target, expected_programs, expected_roles
+        state_dir, target, expected_programs, expected_roles, expected_launches
     )
     summary, summary_data = _read_run_summary(
         target_dir / "ucore-run-summary.json", target, expected_commit
@@ -3075,6 +3292,7 @@ def _collect_boot(
     supplied_target_order: object | None,
     expected_programs: tuple[str, ...],
     expected_roles: dict[str, str],
+    expected_launches: dict[str, AgentOSProgramLaunch],
     program_source_receipt: dict[str, object],
 ) -> dict[str, object]:
     _require_directory(boot_dir, "boot directory")
@@ -3083,11 +3301,11 @@ def _collect_boot(
         raise ScenarioEvidenceError(f"invalid boot directory name: {boot_id!r}")
     plain, plain_summary = _collect_target(
         boot_dir / "plain", "plain", source_commit, expected_programs,
-        expected_roles, program_source_receipt,
+        expected_roles, expected_launches, program_source_receipt,
     )
     agentos, agentos_summary = _collect_target(
         boot_dir / "agentos", "agentos", source_commit, expected_programs,
-        expected_roles, program_source_receipt,
+        expected_roles, expected_launches, program_source_receipt,
     )
     target_order = _resolve_boot_order(
         supplied_target_order,
@@ -4026,6 +4244,7 @@ def collect_scenario(
         manifest_programs, expected_roles = read_committed_expected_programs(
             source_root, source_commit
         )
+        expected_launches = read_expected_program_launches(source_root)
         program_source_receipt = _program_source_comparability_receipt(
             source_root, source_commit, manifest_programs
         )
@@ -4043,6 +4262,7 @@ def collect_scenario(
                 supplied,
                 manifest_programs,
                 expected_roles,
+                expected_launches,
                 program_source_receipt,
             )
             programs = sample["binding"]["program_order"]

@@ -249,7 +249,6 @@
 #define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
 #define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
-
 #define AGENT_DEP_SLOT(n) (1ULL << ((n) & 63))
 
 static inline uint64
@@ -715,6 +714,7 @@ int agent_performance_snapshot(struct agent_performance_snapshot *snapshot);
 int agent_scope_delegate_fd(int fd);
 int agent_worker_create(const char *image, uint64 capabilities);
 int agent_info(struct agent_info *info);
+int agent_launch_info(struct agent_info *info);
 int agent_sched_snapshot(struct agent_sched_record *records, int max);
 int agent_sched_config(struct agent_sched_config *config);
 int agent_trace_snapshot(struct agent_trace_record *records, int max);

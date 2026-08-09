@@ -1572,6 +1572,11 @@ static void proc_orphan_children(struct proc *parent)
 	uint detached = 0;
 
 	proc_child_counts_validate(parent);
+	if (parent->live_child_count == 0) {
+		proc_child_state_reset(parent);
+		intr_restore(enabled);
+		return;
+	}
 	for (struct proc *child = pool; child < &pool[NPROC]; child++) {
 		if (child == parent || child->parent != parent)
 			continue;
@@ -1584,7 +1589,6 @@ static void proc_orphan_children(struct proc *parent)
 	intr_restore(enabled);
 }
 
-// initialize the proc table at boot time.
 void proc_init()
 {
 	struct proc *p;
@@ -1646,7 +1650,6 @@ void proc_init()
 	idle.kstack = (uint64)boot_stack_top;
 	idle.kstack_state = KSTACK_LIVE;
 	current_thread = &idle;
-	// for procid() and threadid()
 	idle.process = pool;
 	idle.tid = -1;
 	idle.identity_generation = 0;
@@ -1670,7 +1673,7 @@ void proc_init()
 	kernel_work_reset(&idle);
 }
 
-int allocpid()
+static int allocpid()
 {
 	static uint64 next_pid = 1;
 	int enabled = intr_save();
@@ -1683,7 +1686,6 @@ int allocpid()
 	return pid;
 }
 
-// get task by unique task id
 struct thread *id_to_task(int index)
 {
 	if (index < 0 || index >= NPROC * NTHREAD) {
@@ -1695,7 +1697,6 @@ struct thread *id_to_task(int index)
 	return t;
 }
 
-// ncode unique task id for each thread
 int task_to_id(struct thread *t)
 {
 	int pool_id = t->process - pool;
@@ -2085,7 +2086,6 @@ static struct proc *allocproc_admit(struct proc *parent,
 		intr_restore(enabled);
 		return 0;
 	}
-	// init proc
 	p->pid = pid;
 	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
 	wait_queue_init(&p->thread_exit_waiters, WAIT_REASON_THREAD_EXIT);
@@ -2272,11 +2272,9 @@ found:
 	memset(t->fd_delegate_ticket, 0, sizeof(t->fd_delegate_ticket));
 	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_ACTIVATE);
 	intr_restore(enabled);
-	// kernel stack
 	if (kernel_stack_acquire(t) < 0)
 		goto fail_slot;
 	kernel_stack_reset_slot(p, tid);
-	// user stack
 	if (alloc_user_res != 0) {
 		if (uvmmap(p->pagetable, t->ustack, USTACK_SIZE / PAGE_SIZE,
 			   PTE_U | PTE_R | PTE_W) < 0)
@@ -2286,7 +2284,6 @@ found:
 			MAX(p->max_page,
 			    PGROUNDUP(t->ustack + USTACK_SIZE - 1) / PAGE_SIZE);
 	}
-	// trap frame
 	if (thread_trapframe_acquire(t) < 0)
 		goto fail_slot;
 	kernel_work_reset(t);
@@ -2295,12 +2292,10 @@ found:
 		goto fail_slot;
 	t->trapframe->sp = t->ustack + USTACK_SIZE;
 	t->trapframe->epc = entry;
-	//task context
 	memset(&thread_trap_cold(t)->context, 0,
 	       sizeof(thread_trap_cold(t)->context));
 	thread_trap_cold(t)->context.ra = (uint64)usertrapret;
 	thread_trap_cold(t)->context.sp = t->kstack + KSTACK_SIZE;
-	// we do not add thread to scheduler immediately
 	debugf("allocthread p: %d, o: %d, t: %d, e: %p, sp: %p, spp: %p",
 	       p->pid, (p - pool), t->tid, entry, t->ustack,
 	       walkaddr(p->pagetable, t->ustack));
@@ -2387,11 +2382,6 @@ static void scheduler_finish_dying_thread(struct thread *t)
 	proc_recycle(p);
 }
 
-// Scheduler never returns.  It loops, doing:
-//  - choose a process to run.
-//  - swtch to start running that process.
-//  - eventually that process transfers control
-//    via swtch back to the scheduler.
 void scheduler()
 {
 	struct thread *t;
@@ -2439,7 +2429,6 @@ void scheduler()
 			for (;;)
 				;
 		}
-		// throw out freed threads
 		if (t->state != RUNNABLE) {
 			warnf("not RUNNABLE", t->process->pid, t->tid);
 			continue;
@@ -2457,13 +2446,6 @@ void scheduler()
 	}
 }
 
-// Switch to scheduler.  Must hold only p->lock
-// and have changed proc->state. Saves and restores
-// intena because intena is a property of this
-// kernel thread, not this CPU. It should
-// be proc->intena and proc->noff, but that would
-// break in the few places where a lock is held but
-// there's no process.
 void sched()
 {
 	struct thread *t = curr_thread();
@@ -2473,7 +2455,6 @@ void sched()
 	swtch(&thread_trap_cold(t)->context, &scheduler_context);
 }
 
-// Give up the CPU for one scheduling round.
 void yield()
 {
 	agent_sched_on_yield(current_thread);
@@ -2797,7 +2778,7 @@ static void thread_user_vm_release(struct thread *t)
 			 USTACK_SIZE / PAGE_SIZE, 1);
 }
 
-void freethread(struct thread *t)
+static void freethread(struct thread *t)
 {
 	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_RELEASE);
 	agent_observe_thread_reset(t);
@@ -3074,6 +3055,11 @@ static void fd_spawn_snapshot_take(struct proc *p, struct thread *issuer,
 		}
 		if (f == 0 || fd_is_reserved(f))
 			continue;
+		if (f->inherit_class == FD_INHERIT_DENY ||
+		    (f->inherit_class == FD_INHERIT_STDIO && f->type != FD_STDIO) ||
+		    (f->inherit_class == FD_INHERIT_DELEGATE && consume_tickets &&
+		     !snapshot->delegated[i]))
+			continue;
 		snapshot->files[i] = filedup(f);
 		if (snapshot->files[i] == 0)
 			panic("fd spawn snapshot");
@@ -3240,9 +3226,7 @@ static int fork_common(int make_agent, int agent_role,
 		freeproc(np);
 		goto fail;
 	}
-	// copy saved user registers.
 	*(nt->trapframe) = *(t->trapframe);
-	// Cause fork to return 0 in the child.
 	nt->trapframe->a0 = 0;
 	nt->state = RUNNABLE;
 	add_task(nt);

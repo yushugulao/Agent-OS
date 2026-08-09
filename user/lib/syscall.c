@@ -389,6 +389,11 @@ int agent_info(struct agent_info *info)
 	return syscall(SYS_agent_info, info);
 }
 
+int agent_launch_info(struct agent_info *info)
+{
+	return syscall(SYS_agent_launch_info, info);
+}
+
 int agent_sched_snapshot(struct agent_sched_record *records, int max)
 {
 	return syscall(SYS_agent_sched_snapshot, records, max);

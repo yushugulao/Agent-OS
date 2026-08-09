@@ -189,6 +189,17 @@ def main() -> int:
     _reject_compile(wrapper_forge)
     _reject_compile(wrapper_forge, refresh_fingerprint=True)
 
+    launch_wrapper_forge = dict(dependency_texts)
+    launch_wrapper_forge["user/lib/syscall.c"] = launch_wrapper_forge[
+        "user/lib/syscall.c"
+    ].replace(
+        "return syscall(SYS_agent_launch_info, info);",
+        "return 0;",
+        1,
+    )
+    _reject_compile(launch_wrapper_forge)
+    _reject_compile(launch_wrapper_forge, refresh_fingerprint=True)
+
     arch_forge = dict(dependency_texts)
     arch_forge["user/lib/arch/riscv/syscall_arch.h"] = arch_forge[
         "user/lib/arch/riscv/syscall_arch.h"
@@ -634,7 +645,7 @@ def main() -> int:
     commit = "a" * 40
     receipt = build_measurement_source_receipt(ROOT, source_commit=commit)
     assert CONTRACT_VERSION == "agenteval-measurement-source-v11"
-    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v5"
+    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v6"
     assert FORMAL_BOOT_COUNT == 1
     assert receipt["formal_boot_count"] == FORMAL_BOOT_COUNT
     assert receipt["contract_versions"]["functional"] == (
@@ -657,6 +668,21 @@ def main() -> int:
         "scripts/check-teardown-protocol.py",
         "scripts/test-check-teardown-protocol.py",
     }
+    batch_paths = {
+        "user/include/rp_worker_batch.h",
+        "user/src/rp_wbatch0.c",
+        "user/src/rp_wbatch1.c",
+        "user/src/rp_wbatch2.c",
+        "user/lib/research_platform_state.c",
+        "baseline_ucore/user/lib/research_platform_state.c",
+        "scripts/check-rp-worker-batches.py",
+        "scripts/test-rp-worker-batches.py",
+    }
+    acceptance_contract_paths = {
+        "scripts/check-user-stack-contract.py",
+        "scripts/test-check-user-stack-contract.py",
+        "scripts/check-traditional-io-fastpath.py",
+    }
     assert {
         "user/src/agenteval_ucore.c",
         "user/src/labdemo_ucore.c",
@@ -672,7 +698,9 @@ def main() -> int:
         "host_tools/render_evaluation_dashboard.py",
     } <= inventory_paths
     assert teardown_paths <= inventory_paths
-    for path in teardown_paths:
+    assert batch_paths <= inventory_paths
+    assert acceptance_contract_paths <= inventory_paths
+    for path in teardown_paths | batch_paths | acceptance_contract_paths:
         forged = json.loads(json.dumps(receipt))
         next(record for record in forged["sources"] if record["path"] == path)[
             "sha256"

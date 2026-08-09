@@ -1063,6 +1063,20 @@ int main(void)
 	ok = ok && require_file_token("rp_backend", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
 	ok = ok && require_file_token("rp_backend", "compare_profile=compare-profile:RUN-042:migration");
 	ok = ok && require_file_token("rp_backend", "runner=agentos-kernel-assisted");
+	ok = ok && require_file_token(
+		"rp_backend",
+		"query_workload=research_metadata_lookup;consistency=fresh_snapshot;dataset_records=12;query_operations=4096;query_matches=4096");
+	ok = ok && require_file_token(
+		"rp_backend", "backend=agent_metadata_index;status=verified");
+	int backend_query_records = rp_get_int_value(
+		"rp_backend", "records_examined=");
+	ok = ok && backend_query_records >= 4096 &&
+	     backend_query_records < 49152;
+	char backend_cleanup_probe[2];
+	ok = ok && rp_read_file("m000", backend_cleanup_probe,
+				    sizeof(backend_cleanup_probe)) < 0;
+	ok = ok && rp_read_file("m011", backend_cleanup_probe,
+				    sizeof(backend_cleanup_probe)) < 0;
 	int backend_runtime_cases = rp_get_int_value(
 		"rp_backend_exec", "runtime_cases_executed=");
 	int backend_verified_cases = rp_get_int_value(

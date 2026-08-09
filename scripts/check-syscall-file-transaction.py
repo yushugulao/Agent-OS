@@ -212,6 +212,18 @@ def check(root: Path) -> None:
     ):
         raise ContractError("audit receipt persistence lacks the filesystem epoch")
     fork = function(proc, "fork_common")
+    snapshot = function(proc, "fd_spawn_snapshot_take")
+    require_order(
+        snapshot,
+        (
+            "issuer->fd_delegate_ticket[i]=0",
+            "f==0||fd_is_reserved(f)",
+            "f->inherit_class==FD_INHERIT_DENY",
+            "!snapshot->delegated[i]",
+            "snapshot->files[i]=filedup(f)",
+        ),
+        "派生快照仍会固定明确禁止或未委派的描述符",
+    )
     require_order(
         fork,
         (

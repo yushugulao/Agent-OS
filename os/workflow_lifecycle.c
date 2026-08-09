@@ -185,27 +185,6 @@ int workflow_lifecycle_bind_controller(struct workflow_lifecycle_key key,
 	return result;
 }
 
-int workflow_lifecycle_controller(struct workflow_lifecycle_key key,
-				  uint scope_id, uint64 *control_id)
-{
-	struct workflow_lifecycle_record *record;
-	int enabled;
-	int result = -1;
-
-	if (control_id == 0 || scope_id < VFS_SCOPE_FIRST_DYNAMIC)
-		return -1;
-	*control_id = 0;
-	enabled = intr_save();
-	record = workflow_lifecycle_find_locked(key);
-	if (record != 0 && record->scope_id == scope_id &&
-	    record->state == WORKFLOW_LIFECYCLE_ACTIVE) {
-		*control_id = record->controller_control_id;
-		result = 0;
-	}
-	intr_restore(enabled);
-	return result;
-}
-
 static int
 workflow_lifecycle_close(uint scope_id,
 			 struct workflow_lifecycle_key expected,

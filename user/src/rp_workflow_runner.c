@@ -638,41 +638,43 @@ int main(void)
 			if (!rp_append_file("rp_artifact_manifest", line)) return 1;
 		}
 	}
-	if (!rp_append_file("rp_runner", "custom_runs=3")) return 1;
-	if (!rp_append_file("rp_runner", "dynamic_input_runs=4")) return 1;
-	if (!rp_append_file("rp_runner", "dynamic_run=usable-run:RUN-904;source=api;status=queued;next=validate")) return 1;
-	if (!rp_append_file("rp_runner", "dynamic_replay_plan=RUN-900->RUN-904;shared_template=usable-template:workspace-900")) return 1;
-	if (!rp_append_file("rp_runner", "human_review_id=usable-review:RUN-900:1")) return 1;
-	if (!rp_append_file("rp_runner", "human_review_decision=needs_revision")) return 1;
-	if (!rp_append_file("rp_runner", "revision_task_id=usable-revision-task:RUN-900:1")) return 1;
-	if (!rp_append_file("rp_runner", "revision_requested_changes=2")) return 1;
-	if (!rp_append_file("rp_runner", "revision_change=methods_retry_scope;status=applied")) return 1;
-	if (!rp_append_file("rp_runner", "revision_change=chart_caption;status=applied")) return 1;
-	if (!rp_append_file("rp_runner", "revision_status=completed")) return 1;
-	if (!rp_append_file("rp_runner", "revision_run=usable-run:RUN-900-rev1")) return 1;
-	if (!rp_append_file("rp_runner", "revision_delta=rp_revision")) return 1;
-	if (!rp_append_file("rp_runner", "custom_source=rp_input")) return 1;
-	if (!rp_append_file("rp_runner", "custom_dataset_rows=3")) return 1;
-	if (!rp_append_file("rp_runner", "custom_agent_decisions=15")) return 1;
-	if (!rp_append_file("rp_runner", "library_source_count=1")) return 1;
-	if (!rp_append_file("rp_runner", "library_source=usable-source:library2026:1")) return 1;
-	if (!rp_append_file("rp_runner", "bibliography_entries=3")) return 1;
-	if (!rp_append_file("rp_runner", "citation_plan_entries=3")) return 1;
-	if (!rp_append_file("rp_runner", "custom_analysis=mean_control:12,mean_treatment:20,stronger:treatment")) return 1;
-	if (!rp_append_file("rp_runner", "custom_analysis_2=mean_control:8,mean_treatment:13,stronger:treatment")) return 1;
-	if (!rp_append_file("rp_runner", "custom_analysis_3=mean_control:30,mean_treatment:28,stronger:control")) return 1;
-	if (!rp_append_file("rp_runner", "custom_status=ok")) return 1;
+	if (!rp_append_file("rp_runner",
+			    "custom_runs=3\n"
+			    "dynamic_input_runs=4\n"
+			    "dynamic_run=usable-run:RUN-904;source=api;status=queued;next=validate\n"
+			    "dynamic_replay_plan=RUN-900->RUN-904;shared_template=usable-template:workspace-900\n"
+			    "human_review_id=usable-review:RUN-900:1\n"
+			    "human_review_decision=needs_revision\n"
+			    "revision_task_id=usable-revision-task:RUN-900:1\n"
+			    "revision_requested_changes=2\n"
+			    "revision_change=methods_retry_scope;status=applied\n"
+			    "revision_change=chart_caption;status=applied\n"
+			    "revision_status=completed\n"
+			    "revision_run=usable-run:RUN-900-rev1\n"
+			    "revision_delta=rp_revision\n"
+			    "custom_source=rp_input\n"
+			    "custom_dataset_rows=3\n"
+			    "custom_agent_decisions=15\n"
+			    "library_source_count=1\n"
+			    "library_source=usable-source:library2026:1\n"
+			    "bibliography_entries=3\n"
+			    "citation_plan_entries=3\n"
+			    "custom_analysis=mean_control:12,mean_treatment:20,stronger:treatment\n"
+			    "custom_analysis_2=mean_control:8,mean_treatment:13,stronger:treatment\n"
+			    "custom_analysis_3=mean_control:30,mean_treatment:28,stronger:control\n"
+			    "custom_status=ok")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		char seed_run[48];
 		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "run_id=", seed_run, sizeof(seed_run))) {
 			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
 		}
 		if (!rp_append_host_action_line("rp_runner", "host_action_run=usable-run:", seed_run)) return 1;
-		if (!rp_append_file("rp_runner", "host_action_kind=research_run")) return 1;
-		if (!rp_append_file("rp_runner", "host_action_stages=5")) return 1;
-		if (!rp_append_file("rp_runner", "host_action_artifacts=6")) return 1;
-		if (!rp_append_file("rp_runner", "host_action_report=host action research task completed from seeded inbox")) return 1;
-		if (!rp_append_file("rp_runner", "host_action_status=completed")) return 1;
+		if (!rp_append_file("rp_runner",
+				    "host_action_kind=research_run\n"
+				    "host_action_stages=5\n"
+				    "host_action_artifacts=6\n"
+				    "host_action_report=host action research task completed from seeded inbox\n"
+				    "host_action_status=completed")) return 1;
 	}
 	if (rp_host_seed_has("kind=research_rerun")) {
 		char rerun_id[48];
@@ -691,10 +693,11 @@ int main(void)
 		rp_append_text(line, sizeof(line), parent_run);
 		rp_append_text(line, sizeof(line), ";status=completed");
 		if (!rp_append_file("rp_runner", line)) return 1;
-		if (!rp_append_file("rp_runner", "host_action_kind=research_rerun")) return 1;
-		if (!rp_append_file("rp_runner", "host_action_stages=5")) return 1;
-		if (!rp_append_file("rp_runner", "host_action_artifacts=6")) return 1;
-		if (!rp_append_file("rp_runner", "host_action_status=completed")) return 1;
+		if (!rp_append_file("rp_runner",
+				    "host_action_kind=research_rerun\n"
+				    "host_action_stages=5\n"
+				    "host_action_artifacts=6\n"
+				    "host_action_status=completed")) return 1;
 	}
 	if (rp_host_seed_has("kind=agentcompare")) {
 		char profile[48];
@@ -718,24 +721,28 @@ int main(void)
 		rp_append_text(line, sizeof(line), "-rev2;status=completed");
 		if (!rp_append_file("rp_runner", line)) return 1;
 	}
-	if (!rp_append_file("rp_runner", "real_artifact_items=5")) return 1;
-	if (!rp_append_file("rp_runner", "derived_alignment=rp_artifact:rp_align_table")) return 1;
-	if (!rp_append_file("rp_runner", "derived_metrics=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv")) return 1;
-	if (!rp_append_file("rp_ack", "ack=workflow_runner;msg=runner;status=ready")) return 1;
-	if (!rp_append_file("rp_ack", "ack=custom_research;msg=runner;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.read_dag")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.read_input")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_stage_state")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_cache_index")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_retry_plan")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_manifest")) return 1;
-	if (!rp_append_status("workflow_runner=ready")) return 1;
-	if (!rp_append_status("stage_state=ready")) return 1;
-	if (!rp_append_status("cache_index=ready")) return 1;
-	if (!rp_append_status("retry_plan=ready")) return 1;
-	if (!rp_append_status("artifact_manifest=ready")) return 1;
-	if (!rp_append_status("custom_research=ready")) return 1;
-	if (!rp_append_status("revision_task=ready")) return 1;
+	if (!rp_append_file("rp_runner",
+			    "real_artifact_items=5\n"
+			    "derived_alignment=rp_artifact:rp_align_table\n"
+			    "derived_metrics=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv")) return 1;
+	if (!rp_append_file("rp_ack",
+			    "ack=workflow_runner;msg=runner;status=ready\n"
+			    "ack=custom_research;msg=runner;status=ready")) return 1;
+	if (!rp_append_file("rp_tool",
+			    "tool=workflow_runner.read_dag\n"
+			    "tool=workflow_runner.read_input\n"
+			    "tool=workflow_runner.write_stage_state\n"
+			    "tool=workflow_runner.write_cache_index\n"
+			    "tool=workflow_runner.write_retry_plan\n"
+			    "tool=workflow_runner.write_manifest")) return 1;
+	if (!rp_append_file("rp_status",
+			    "workflow_runner=ready\n"
+			    "stage_state=ready\n"
+			    "cache_index=ready\n"
+			    "retry_plan=ready\n"
+			    "artifact_manifest=ready\n"
+			    "custom_research=ready\n"
+			    "revision_task=ready")) return 1;
 	printf("rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 custom_runs=3 status=ready\n");
 	return 0;
 }

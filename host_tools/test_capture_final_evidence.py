@@ -24,11 +24,18 @@ from evidence_semantic_registry import (
 )
 from evidence_semantic_profiles import _validate_dual_state
 from evidence_semantic_common import ValidationContext
-from evidence_semantic_dual import _validate_telemetry
+from evidence_semantic_dual import _validate_program_ledger, _validate_telemetry
+from check_host_platform_alignment import read_expected_programs
 import dual_state_archive
+import test_compare_dual_platform_state as state_fixture
 from dual_state_archive import _canonical_zip
 from dual_state_evidence_contract import (
+    AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES,
     AGENTOS_REQUIRED_AGENT_ROLES,
+    AGENTOS_ROLE_NUMBERS,
+    AGENTOS_WORKER_BATCH_GROUPS,
+    AGENTOS_WORKER_BATCH_PROGRAMS,
+    AGENTOS_WORKER_DIRECT_PROGRAMS,
     AGENT_TO_PLAIN_CASE,
     BACKEND_REPORT_CASES,
     DUAL_STATE_RAW_ARTIFACTS,
@@ -42,6 +49,7 @@ from dual_state_evidence_contract import (
     evidence_check_count,
     expected_scenario_rows,
     fnv1a64,
+    agentos_program_launch_contract,
 )
 from reference_catalog_contract import expected_reference_identities
 from research_state_manifest import load_manifest, target_state_names
@@ -270,12 +278,13 @@ from agent_observe_disk_fixture import write_fixture
 from dual_state_evidence_contract import (
     AGENTOS_EVIDENCE_REQUIREMENTS, AGENTOS_MAINFLOW_FACTS,
     AGENTOS_REQUIRED_AGENT_ROLES, AGENTOS_ROLE_NUMBERS,
+    AGENTOS_WORKER_BATCH_PROGRAMS, AGENTOS_WORKER_DIRECT_PROGRAMS,
     AGENT_TO_PLAIN_CASE,
     BACKEND_REPORT_ARTIFACTS, BACKEND_REPORT_CASES, MAIN_FLOW_SOURCE_ARTIFACTS, MAIN_FLOW_SOURCE_SPECS,
     MAIN_FLOW_TELEMETRY_ARTIFACT, PLATFORM_PROGRAMS, PROGRAM_LEDGER_ARTIFACTS,
     RUN_RESULT_ARTIFACTS, SEEDED_ACTION_SUMMARY_ARTIFACT,
     STATE_ARCHIVE_ARTIFACTS, evidence_check_count,
-    expected_scenario_rows, fnv1a64,
+    agentos_program_launch_contract, expected_scenario_rows, fnv1a64,
 )
 from reference_catalog_contract import expected_reference_identities
 import compare_dual_platform_state as compare_state_module
@@ -471,10 +480,11 @@ agent_ledger = ["orchestrator=rp_orch", "launcher=mixed_attested"]
 for index, program in enumerate(programs, 1):
     role = AGENTOS_REQUIRED_AGENT_ROLES.get(program)
     is_agent = role is not None
+    launcher, identity_source = agentos_program_launch_contract(program)
     agent_ledger.append(
         f"program={program};role={role if is_agent else 'plain'};"
-        f"launcher={'agent_create_role' if is_agent else 'agent_worker_create'};"
-        f"identity_source=child_after_exec;is_agent={int(is_agent)};"
+        f"launcher={launcher};identity_source={identity_source};"
+        f"is_agent={int(is_agent)};"
         f"agent_role={AGENTOS_ROLE_NUMBERS[role] if is_agent else 0};"
         f"filesystem_domain=3;filesystem_capabilities=66;ok=1;code=0;elapsed_ms={index}"
     )
@@ -569,6 +579,23 @@ write(BACKEND_REPORT_ARTIFACTS["agentos"], "\n".join(
     "plain_fork_launches": len(programs), "agentos_timing_records": len(programs),
     "agentos_agent_launches": len(AGENTOS_REQUIRED_AGENT_ROLES),
     "agentos_worker_launches": len(programs) - len(AGENTOS_REQUIRED_AGENT_ROLES),
+    "backend_query_receipts": {
+        target: {
+            field: (
+                int(value)
+                if field in {
+                    "dataset_records", "query_operations", "query_matches",
+                    "records_examined",
+                }
+                else value
+            )
+            for field, value in (
+                item.split("=", 1)
+                for item in state_fixture.backend_query_receipt_line(target).split(";")
+            )
+        }
+        for target in ("plain", "agentos")
+    },
     "status": "ready",
 }) + "\n", encoding="utf-8")
 
@@ -633,11 +660,14 @@ for target, state_dir in (("plain", plain_state), ("agentos", agentos_state)):
     for name in sorted(archive_inventories[target]):
         state_fixture.write_state_file(state_dir, name, f"fixture={target}\n")
 state_fixture.write_state_file(
-    plain_state, "rp_backend", "runner_report=file_scan\nruntime_cases=0\nstatus=ready\n"
+    plain_state, "rp_backend",
+    "runner_report=file_scan\n" + state_fixture.backend_query_receipt_line("plain")
+    + "\nruntime_cases=0\nstatus=ready\n"
 )
 state_fixture.write_state_file(
     agentos_state, "rp_backend",
-    "runner_report=file_scan;status=ready;kernel=observed\nstatus=ready\n",
+    "runner_report=file_scan;status=ready;kernel=observed\n"
+    + state_fixture.backend_query_receipt_line("agentos") + "\nstatus=ready\n",
 )
 state_fixture.write_backend_catalog(plain_state, "plain")
 state_fixture.write_backend_catalog(agentos_state, "agentos")
@@ -1270,6 +1300,86 @@ class FinalEvidenceTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 observed = tuple(pattern.findall((REPO / relative).read_text(encoding="utf-8")))
                 self.assertEqual(observed, PLATFORM_PROGRAMS)
+        programs, roles, errors = read_expected_programs(REPO)
+        self.assertEqual(errors, [])
+        self.assertEqual(programs, PLATFORM_PROGRAMS)
+        self.assertEqual(roles, AGENTOS_REQUIRED_AGENT_ROLES)
+        batch = set(AGENTOS_WORKER_BATCH_PROGRAMS)
+        direct = set(AGENTOS_WORKER_DIRECT_PROGRAMS)
+        role = set(roles)
+        self.assertEqual(
+            (len(role), len(batch), len(direct), len(AGENTOS_WORKER_BATCH_GROUPS)),
+            (10, 58, 2, 3),
+        )
+        self.assertFalse(role & batch or role & direct or batch & direct)
+        self.assertEqual(role | batch | direct, set(programs))
+
+    def test_semantic_program_ledger_rejects_launch_classification_mutations(self) -> None:
+        lines = ["orchestrator=rp_orch", "launcher=mixed_attested"]
+        for index, program in enumerate(PLATFORM_PROGRAMS, 1):
+            role = AGENTOS_REQUIRED_AGENT_ROLES.get(program)
+            launcher, identity_source = agentos_program_launch_contract(program)
+            lines.append(
+                f"program={program};role={role or 'plain'};launcher={launcher};"
+                f"identity_source={identity_source};is_agent={int(role is not None)};"
+                f"agent_role={AGENTOS_ROLE_NUMBERS.get(role or '', 0)};"
+                f"filesystem_domain=3;"
+                f"filesystem_capabilities={AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES};"
+                f"ok=1;code=0;elapsed_ms={index}"
+            )
+
+        def mutate(program: str, old: str, new: str) -> bytes:
+            candidate = list(lines)
+            row = next(
+                offset
+                for offset, line in enumerate(candidate)
+                if line.startswith(f"program={program};")
+            )
+            self.assertIn(old, candidate[row])
+            candidate[row] = candidate[row].replace(old, new, 1)
+            return ("\n".join(candidate) + "\n").encode("ascii")
+
+        mutations = {
+            "batch as legacy direct": mutate(
+                "rp_catalog", "launcher=agent_worker_batch", "launcher=agent_worker_create"
+            ),
+            "direct as batch": mutate(
+                "rp_compare_plain", "launcher=agent_worker_create", "launcher=agent_worker_batch"
+            ),
+            "role as batch": mutate(
+                "rp_query", "launcher=agent_create_role", "launcher=agent_worker_batch"
+            ),
+            "batch source swap": mutate(
+                "rp_catalog",
+                "identity_source=trusted_crt_batch_dispatch",
+                "identity_source=trusted_crt_self_check",
+            ),
+            "role source swap": mutate(
+                "rp_query",
+                "identity_source=trusted_crt_self_check",
+                "identity_source=trusted_crt_batch_dispatch",
+            ),
+            "domain mismatch": mutate(
+                "rp_state_catalog", "filesystem_domain=3", "filesystem_domain=4"
+            ),
+            "capability mismatch": mutate(
+                "rp_catalog", "filesystem_capabilities=66", "filesystem_capabilities=2"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            raw_dir = Path(temp)
+            artifact = raw_dir / PROGRAM_LEDGER_ARTIFACTS["agentos"]
+            context = ValidationContext(raw_dir=raw_dir, repo_root=REPO)
+            artifact.write_bytes(("\n".join(lines) + "\n").encode("ascii"))
+            receipt, programs = _validate_program_ledger(context, "agentos")
+            self.assertEqual(programs, PLATFORM_PROGRAMS)
+            self.assertEqual(receipt["programs_observed"], len(PLATFORM_PROGRAMS))
+            for label, payload in mutations.items():
+                with self.subTest(label=label), self.assertRaises(
+                    EvidenceSemanticError
+                ):
+                    artifact.write_bytes(payload)
+                    _validate_program_ledger(context, "agentos")
 
     def test_dual_state_aggregates_are_bound_to_exact_rows(self) -> None:
         cost_rows = []
@@ -1310,6 +1420,23 @@ class FinalEvidenceTests(unittest.TestCase):
             "agentos_timing_records": len(PLATFORM_PROGRAMS),
             "agentos_agent_launches": len(AGENTOS_REQUIRED_AGENT_ROLES),
             "agentos_worker_launches": len(PLATFORM_PROGRAMS) - len(AGENTOS_REQUIRED_AGENT_ROLES),
+            "backend_query_receipts": {
+                target: {
+                    field: (
+                        int(value)
+                        if field in {
+                            "dataset_records", "query_operations", "query_matches",
+                            "records_examined",
+                        }
+                        else value
+                    )
+                    for field, value in (
+                        item.split("=", 1)
+                        for item in state_fixture.backend_query_receipt_line(target).split(";")
+                    )
+                }
+                for target in ("plain", "agentos")
+            },
             "status": "ready",
         }
         with tempfile.TemporaryDirectory() as temp:
@@ -1330,6 +1457,23 @@ class FinalEvidenceTests(unittest.TestCase):
                 "host origin": lambda item: item.update(
                     agentos_mainflow_verification_origin="guest_claim"
                 ),
+                "backend receipt digest": lambda item: item["backend_query_receipts"][
+                    "agentos"
+                ].update(result_digest="13819499490441518225"),
+                "backend receipt digest type": lambda item: (
+                    item["backend_query_receipts"]["plain"].update(
+                        result_digest=13819499490441518226
+                    ),
+                    item["backend_query_receipts"]["agentos"].update(
+                        result_digest=13819499490441518226
+                    ),
+                ),
+                "backend receipt scan": lambda item: item["backend_query_receipts"][
+                    "plain"
+                ].update(records_examined=49151),
+                "backend receipt schema": lambda item: item[
+                    "backend_query_receipts"
+                ]["agentos"].pop("backend"),
             }
             for label, mutate in mutations.items():
                 with self.subTest(label=label):

@@ -102,6 +102,10 @@ CONTROLLED_SHELL_VARIABLES = (
     "TZ",
 )
 SOURCE_COMMIT_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+# Native MSYS2 Git can take well over five seconds to enumerate a large dirty
+# worktree on a Windows volume. This remains a fail-closed per-command bound,
+# but leaves enough room to capture the exact tracked diff before a Guest run.
+SOURCE_IDENTITY_GIT_TIMEOUT_SECONDS = 300
 GUEST_FAILURE_RULES = (
     (
         "kernel_panic",
@@ -252,7 +256,7 @@ def capture_source_identity(repo_dir: Path) -> dict[str, object]:
         "text": True,
         "encoding": "utf-8",
         "errors": "strict",
-        "timeout": 5,
+        "timeout": SOURCE_IDENTITY_GIT_TIMEOUT_SECONDS,
         "check": False,
         "env": controlled_git_environment(),
     }

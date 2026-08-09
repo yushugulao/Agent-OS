@@ -339,10 +339,9 @@ static int read_workflow_output(const char *path)
 	return total;
 }
 
-static int output_record_value(const char *path, const char *anchor,
-			       const char *key, char *out, int cap)
+static int output_record_value_loaded(int text_len, const char *anchor,
+				      const char *key, char *out, int cap)
 {
-	int text_len = read_workflow_output(path);
 	int anchor_len = strlen(anchor);
 	int key_len = strlen(key);
 	int line_start = 0;
@@ -398,42 +397,50 @@ static int load_challenge_workflow_outputs(
 	char runner_rerun[48];
 	char runner_parent[24];
 	char expected_runner_rerun[48];
+	int text_len;
 
 	memset(workflow, 0, sizeof(*workflow));
 	memset(parent_run, 0, sizeof(parent_run));
-	if (!output_record_value("rp_input", "host_action_rerun_id=",
-				 "host_action_rerun_id=", workflow->rerun_id,
-				 sizeof(workflow->rerun_id)) ||
-	    !output_record_value("rp_input", "host_action_rerun_parent=",
-				 "host_action_rerun_parent=", parent_run,
-				 sizeof(parent_run)) ||
-	    !output_record_value("rp_stage_dag", "host_workflow_id=",
-				 "host_workflow_id=", workflow->workflow_id,
-				 sizeof(workflow->workflow_id)) ||
-	    !output_record_value("rp_stage_state", "host_workflow_run_id=",
-				 "host_workflow_run_id=", workflow->run_id,
-				 sizeof(workflow->run_id)) ||
-	    !output_record_value("rp_artifact", "host_artifact_input=",
-				 "sha256=", workflow->input_sha256,
-				 sizeof(workflow->input_sha256)) ||
-	    !output_record_value("rp_artifact", "host_artifact_derive=",
-				 "sha256=", workflow->derived_sha256,
-				 sizeof(workflow->derived_sha256)) ||
-	    !output_record_value("rp_runner", "host_action_workflow=",
-				 "host_action_workflow=", runner_workflow,
-				 sizeof(runner_workflow)) ||
-	    !output_record_value("rp_runner", "host_action_workflow=",
-				 "run_id=", runner_run, sizeof(runner_run)) ||
-	    !output_record_value("rp_runner", "host_action_rerun=",
-				 "host_action_rerun=", runner_rerun,
-				 sizeof(runner_rerun)) ||
-	    !output_record_value("rp_runner", "host_action_rerun=",
-				 "parent=", runner_parent,
-				 sizeof(runner_parent)) ||
-	    !complete_challenge_workflow(workflow, parent_run)) {
-		printf("rp_agentos_orch: challenge_workflow_output_missing\n");
-		return 0;
-	}
+	text_len = read_workflow_output("rp_input");
+	if (!output_record_value_loaded(text_len, "host_action_rerun_id=",
+					"host_action_rerun_id=", workflow->rerun_id,
+					sizeof(workflow->rerun_id)) ||
+	    !output_record_value_loaded(text_len, "host_action_rerun_parent=",
+					"host_action_rerun_parent=", parent_run,
+					sizeof(parent_run)))
+		goto missing;
+	text_len = read_workflow_output("rp_stage_dag");
+	if (!output_record_value_loaded(text_len, "host_workflow_id=",
+					"host_workflow_id=", workflow->workflow_id,
+					sizeof(workflow->workflow_id)))
+		goto missing;
+	text_len = read_workflow_output("rp_stage_state");
+	if (!output_record_value_loaded(text_len, "host_workflow_run_id=",
+					"host_workflow_run_id=", workflow->run_id,
+					sizeof(workflow->run_id)))
+		goto missing;
+	text_len = read_workflow_output("rp_artifact");
+	if (!output_record_value_loaded(text_len, "host_artifact_input=",
+					"sha256=", workflow->input_sha256,
+					sizeof(workflow->input_sha256)) ||
+	    !output_record_value_loaded(text_len, "host_artifact_derive=",
+					"sha256=", workflow->derived_sha256,
+					sizeof(workflow->derived_sha256)))
+		goto missing;
+	text_len = read_workflow_output("rp_runner");
+	if (!output_record_value_loaded(text_len, "host_action_workflow=",
+					"host_action_workflow=", runner_workflow,
+					sizeof(runner_workflow)) ||
+	    !output_record_value_loaded(text_len, "host_action_workflow=",
+					"run_id=", runner_run, sizeof(runner_run)) ||
+	    !output_record_value_loaded(text_len, "host_action_rerun=",
+					"host_action_rerun=", runner_rerun,
+					sizeof(runner_rerun)) ||
+	    !output_record_value_loaded(text_len, "host_action_rerun=",
+					"parent=", runner_parent,
+					sizeof(runner_parent)) ||
+	    !complete_challenge_workflow(workflow, parent_run))
+		goto missing;
 	rp_copy_text(expected_runner_rerun, sizeof(expected_runner_rerun),
 		     "usable-run:");
 	rp_append_text(expected_runner_rerun, sizeof(expected_runner_rerun),
@@ -451,6 +458,10 @@ static int load_challenge_workflow_outputs(
 		return 0;
 	}
 	return 1;
+
+missing:
+	printf("rp_agentos_orch: challenge_workflow_output_missing\n");
+	return 0;
 }
 
 static void make_echo(struct agent_op *op, uint64 request_id,
@@ -657,11 +668,10 @@ static int verify_kernel_dependency_path(
 		return -1;
 	}
 
-	if (!rp_append_file("rp_tool", "tool=agentos.dependency_update"))
-		return -1;
-	if (!rp_append_file("rp_tool", "tool=agentos.dependency_query"))
-		return -1;
-	if (!rp_append_file("rp_tool", "tool=agentos.file_query"))
+	if (!rp_append_file("rp_tool",
+			    "tool=agentos.dependency_update\n"
+			    "tool=agentos.dependency_query\n"
+			    "tool=agentos.file_query"))
 		return -1;
 	return 0;
 }
@@ -1028,8 +1038,9 @@ static int run_research_orchestrator(int timing_read_fd, int timing_write_fd,
 	}
 	if (verify_kernel_dependency_path(&orch_workflow) < 0)
 		return 1;
-	if (!rp_append_file("rp_tool", "tool=agentos.agent_run.echo")) return 1;
-	if (!rp_append_file("rp_tool", "tool=agentos.context_snapshot")) return 1;
+	if (!rp_append_file("rp_tool",
+			    "tool=agentos.agent_run.echo\n"
+			    "tool=agentos.context_snapshot")) return 1;
 
 	printf("rp_agentos_orch: agent role=%d context=%p size=%p latest=%d\n",
 	       orch_info.agent_role, (void *)orch_info.context_base,
@@ -1887,10 +1898,14 @@ int main(void)
 		printf("rp_agentos_orch: completion_handoff_failed\n");
 		return 1;
 	}
-	if (!rp_file_contains("rp_agentos_kernel", "status=ready") ||
-	    !rp_file_contains("rp_agentcmp",
-			      "evidence_role=runtime_verified") ||
-	    !rp_file_contains("rp_agentcmp", "status=verified") ||
+	if (!rp_file_contains("rp_agentos_kernel", "status=ready")) {
+		printf("rp_agentos_orch: state_check_failed\n");
+		return 1;
+	}
+	int agentcmp_len = read_workflow_output("rp_agentcmp");
+	if (agentcmp_len < 0 ||
+	    !text_contains(rp_state_buf, "evidence_role=runtime_verified") ||
+	    !text_contains(rp_state_buf, "status=verified") ||
 	    !rp_file_contains("rp_agentos_acceptance",
 			      "schema=agentos_task6_acceptance_v3")) {
 		printf("rp_agentos_orch: state_check_failed\n");

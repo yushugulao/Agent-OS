@@ -16,8 +16,17 @@ from check_host_platform_alignment import (
     runtime_candidates,
     validate_mainflow_runtime_evidence,
 )
+from dual_state_evidence_contract import (
+    AGENTOS_EVIDENCE_REQUIREMENTS,
+    AGENTOS_REQUIRED_AGENT_ROLES,
+    AGENTOS_ROLE_NUMBERS,
+    AGENTOS_WORKER_BATCH_GROUPS,
+    AGENTOS_WORKER_DIRECT_PROGRAMS,
+    PLATFORM_PROGRAMS,
+    agentos_program_launch_contract,
+)
 
-FIXTURE_PROGRAMS = ("rp_catalog", "rp_backend", "rp_consistency")
+FIXTURE_PROGRAMS = PLATFORM_PROGRAMS
 
 
 class HostPlatformAlignmentTests(unittest.TestCase):
@@ -30,17 +39,53 @@ class HostPlatformAlignmentTests(unittest.TestCase):
 
         (root / "baseline_ucore" / "user" / "src").mkdir(parents=True)
         (root / "user" / "src").mkdir(parents=True)
-        manifest = (
-            "#ifndef __RP_PROGRAM_MANIFEST_H__\n"
-            "#define __RP_PROGRAM_MANIFEST_H__\n"
-            "#define RP_PLATFORM_PROGRAMS(APPLY) \\\n"
-            + "\n".join(
-                f'    APPLY("{program}")' + (" \\" if index + 1 < len(FIXTURE_PROGRAMS) else "")
-                for index, program in enumerate(FIXTURE_PROGRAMS)
+        def macro(name: str, rows: tuple[str, ...]) -> str:
+            return (
+                f"#define {name}(APPLY) \\\n"
+                + "\n".join(
+                    f"    {row}" + (" \\" if index + 1 < len(rows) else "")
+                    for index, row in enumerate(rows)
+                )
+                + "\n"
             )
-            + "\n#define RP_AGENTOS_ROLE_PROGRAMS(APPLY) \\\n"
-            + '    APPLY("rp_backend", "orchestrator")\n'
-            + "#endif\n"
+
+        manifest = "#ifndef __RP_PROGRAM_MANIFEST_H__\n#define __RP_PROGRAM_MANIFEST_H__\n"
+        manifest += macro(
+            "RP_PLATFORM_PROGRAMS",
+            tuple(f'APPLY("{program}")' for program in FIXTURE_PROGRAMS),
+        )
+        manifest += macro(
+            "RP_AGENTOS_ROLE_PROGRAMS",
+            tuple(
+                f'APPLY("{program}", "{role}")'
+                for program, role in AGENTOS_REQUIRED_AGENT_ROLES.items()
+            ),
+        )
+        for group, _runner, programs in AGENTOS_WORKER_BATCH_GROUPS:
+            manifest += macro(
+                f"RP_WORKER_BATCH_{group}_PROGRAMS",
+                tuple(
+                    f"APPLY({index}, {program})"
+                    for index, program in enumerate(programs)
+                ),
+            )
+        manifest += macro(
+            "RP_WORKER_BATCH_GROUPS",
+            tuple(
+                f"APPLY({group}, {runner}, {len(programs)})"
+                for group, runner, programs in AGENTOS_WORKER_BATCH_GROUPS
+            ),
+        )
+        manifest += macro(
+            "RP_WORKER_DIRECT_PROGRAMS",
+            tuple(f"APPLY({program})" for program in AGENTOS_WORKER_DIRECT_PROGRAMS),
+        )
+        manifest += (
+            f"#define RP_WORKER_BATCH_GROUP_COUNT {len(AGENTOS_WORKER_BATCH_GROUPS)}\n"
+            f"#define RP_WORKER_BATCH_PROGRAM_COUNT "
+            f"{sum(len(programs) for _group, _runner, programs in AGENTOS_WORKER_BATCH_GROUPS)}\n"
+            f"#define RP_WORKER_DIRECT_PROGRAM_COUNT {len(AGENTOS_WORKER_DIRECT_PROGRAMS)}\n"
+            "#endif\n"
         )
         for include_dir in (
             root / "baseline_ucore" / "user" / "include",
@@ -71,6 +116,9 @@ class HostPlatformAlignmentTests(unittest.TestCase):
                     ("status", spec.source_status),
                 )
             )
+        for token in AGENTOS_EVIDENCE_REQUIREMENTS["rp_agentos_roles"]:
+            key, value = token.split("=", 1)
+            source_fields.setdefault("rp_agentos_roles", []).append((key, value))
         for source, fields in source_fields.items():
             unique_fields = list(dict.fromkeys(fields))
             (state_dir / source).write_bytes(
@@ -177,11 +225,11 @@ class HostPlatformAlignmentTests(unittest.TestCase):
         )
         agentos_ledger = "orchestrator=rp_orch\nlauncher=mixed_attested\n" + "".join(
             (
-                f"program={program};role={'orchestrator' if program == 'rp_backend' else 'plain'};"
-                f"launcher={'agent_create_role' if program == 'rp_backend' else 'agent_worker_create'};"
-                "identity_source=child_after_exec;"
-                f"is_agent={'1' if program == 'rp_backend' else '0'};"
-                f"agent_role={'4' if program == 'rp_backend' else '0'};"
+                f"program={program};role={AGENTOS_REQUIRED_AGENT_ROLES.get(program, 'plain')};"
+                f"launcher={agentos_program_launch_contract(program)[0]};"
+                f"identity_source={agentos_program_launch_contract(program)[1]};"
+                f"is_agent={'1' if program in AGENTOS_REQUIRED_AGENT_ROLES else '0'};"
+                f"agent_role={AGENTOS_ROLE_NUMBERS.get(AGENTOS_REQUIRED_AGENT_ROLES.get(program, ''), 0)};"
                 "filesystem_domain=3;filesystem_capabilities=66;"
                 f"ok=1;code=0;elapsed_ms={index + 1}\n"
             )
@@ -398,6 +446,34 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             self.assertFalse(summary["verified"])
             self.assertTrue(any("source records are not canonical" in error for error in errors))
 
+    def test_mainflow_host_rejects_worker_batch_receipt_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            host = Path(tmp) / "host"
+            root.mkdir()
+            self._write_minimal_tree(root, host)
+            _plain_state, agentos_state = self._write_state_dirs(root)
+            source = agentos_state / "rp_agentos_roles"
+            original = source.read_bytes()
+            mutations = {
+                b"support_spawn=agent_worker_create": b"support_spawn=fork",
+                b"worker_batch_groups=3": b"worker_batch_groups=4",
+                b"worker_batch_programs=58": b"worker_batch_programs=57",
+                b"worker_direct_programs=2": b"worker_direct_programs=3",
+            }
+            for old, new in mutations.items():
+                with self.subTest(field=old.decode("ascii")):
+                    self.assertIn(old, original)
+                    source.write_bytes(original.replace(old, new, 1))
+                    summary, errors = validate_mainflow_runtime_evidence(
+                        agentos_state
+                    )
+                    self.assertFalse(summary["verified"])
+                    self.assertTrue(
+                        any("exact-field assertion failed" in error for error in errors)
+                    )
+            source.write_bytes(original)
+
     def test_mainflow_host_accepts_guest_multiline_source_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
@@ -607,7 +683,7 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             plain_state, agentos_state = self._write_state_dirs(root)
             evidence = (agentos_state / "rp_agentcmp").read_text(encoding="utf-8")
             (agentos_state / "rp_agentcmp").write_bytes(
-                evidence.replace("programs_observed=3", "programs_observed=70").encode()
+                evidence.replace("programs_observed=70", "programs_observed=69").encode()
             )
 
             summary = run_check(
@@ -633,35 +709,105 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             ledger = agentos_state / "rp_orch_timing"
             original = ledger.read_text(encoding="utf-8")
 
-            ledger.write_bytes(
-                original.replace(
-                    "launcher=agent_worker_create", "launcher=fork", 1
-                ).encode()
-            )
-            _measured, errors = read_program_ledger(
-                agentos_state, programs, roles, "agentos"
+            def mutate_row(program: str, old: str, new: str) -> list[str]:
+                lines = original.splitlines()
+                index = next(
+                    offset
+                    for offset, line in enumerate(lines)
+                    if line.startswith(f"program={program};")
+                )
+                self.assertIn(old, lines[index])
+                lines[index] = lines[index].replace(old, new, 1)
+                ledger.write_bytes(("\n".join(lines) + "\n").encode())
+                _measured, found = read_program_ledger(
+                    agentos_state, programs, roles, "agentos"
+                )
+                return found
+
+            errors = mutate_row(
+                "rp_catalog", "launcher=agent_worker_batch", "launcher=fork"
             )
             self.assertTrue(any("invalid AgentOS launcher" in error for error in errors))
 
-            ledger.write_bytes(
-                original.replace(
-                    "is_agent=0;agent_role=0", "is_agent=1;agent_role=1", 1
-                ).encode()
+            errors = mutate_row(
+                "rp_catalog",
+                "is_agent=0;agent_role=0",
+                "is_agent=1;agent_role=1",
             )
-            _measured, errors = read_program_ledger(
-                agentos_state, programs, roles, "agentos"
-            )
-            self.assertTrue(any("mismatched attested identity" in error for error in errors))
+            self.assertTrue(any("mismatched self-checked identity" in error for error in errors))
 
-            ledger.write_bytes(
-                original.replace(
-                    "filesystem_domain=3", "filesystem_domain=18446744073709551616", 1
-                ).encode()
+            errors = mutate_row(
+                "rp_catalog",
+                "identity_source=trusted_crt_batch_dispatch",
+                "identity_source=trusted_crt_self_check",
             )
-            _measured, errors = read_program_ledger(
-                agentos_state, programs, roles, "agentos"
+            self.assertTrue(
+                any("invalid trusted CRT identity evidence" in error for error in errors)
             )
-            self.assertTrue(any("invalid attested domain" in error for error in errors))
+
+            errors = mutate_row(
+                "rp_query",
+                "identity_source=trusted_crt_self_check",
+                "identity_source=trusted_crt_batch_dispatch",
+            )
+            self.assertTrue(
+                any("invalid trusted CRT identity evidence" in error for error in errors)
+            )
+
+            errors = mutate_row(
+                "rp_compare_plain",
+                "launcher=agent_worker_create",
+                "launcher=agent_worker_batch",
+            )
+            self.assertTrue(any("invalid AgentOS launcher" in error for error in errors))
+
+            errors = mutate_row(
+                "rp_query", "launcher=agent_create_role", "launcher=agent_worker_batch"
+            )
+            self.assertTrue(any("invalid AgentOS launcher" in error for error in errors))
+
+            errors = mutate_row(
+                "rp_catalog",
+                "filesystem_domain=3",
+                "filesystem_domain=18446744073709551616",
+            )
+            self.assertTrue(any("invalid self-checked domain" in error for error in errors))
+
+            errors = mutate_row(
+                "rp_state_catalog", "filesystem_domain=3", "filesystem_domain=4"
+            )
+            self.assertTrue(any("mismatched self-checked domain" in error for error in errors))
+
+            errors = mutate_row(
+                "rp_catalog", "filesystem_capabilities=66", "filesystem_capabilities=2"
+            )
+            self.assertTrue(any("invalid self-checked capabilities" in error for error in errors))
+
+    def test_program_manifest_rejects_batch_partition_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            host = Path(tmp) / "host"
+            root.mkdir()
+            self._write_minimal_tree(root, host)
+            path = root / "user" / "include" / "rp_program_manifest.h"
+            original = path.read_text(encoding="utf-8")
+            mutations = {
+                "wrong group": original.replace(
+                    "APPLY(1, rp_metrics)", "APPLY(2, rp_metrics)", 1
+                ),
+                "direct as batch": original.replace(
+                    "APPLY(0, rp_catalog)", "APPLY(0, rp_compare_plain)", 1
+                ),
+                "role in batch": original.replace(
+                    "APPLY(0, rp_catalog)", "APPLY(0, rp_query)", 1
+                ),
+            }
+            for label, mutation in mutations.items():
+                with self.subTest(label=label):
+                    path.write_text(mutation, encoding="utf-8", newline="\n")
+                    _programs, _roles, errors = read_expected_programs(root)
+                    self.assertTrue(errors)
+            path.write_text(original, encoding="utf-8", newline="\n")
 
     def test_program_ledger_accepts_only_bound_seeded_plain_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -774,7 +920,7 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             )
 
             plain_log.write_bytes(
-                plain_log.read_bytes().replace(b"programs_observed=3", b"programs_observed=4")
+                plain_log.read_bytes().replace(b"programs_observed=70", b"programs_observed=69")
             )
             mismatched = run_check(
                 root,
@@ -797,7 +943,7 @@ class HostPlatformAlignmentTests(unittest.TestCase):
                 b";status=reference_observed", b";extra=1;status=reference_observed", 1
             ),
             "unicode_number": lambda data: data.replace(
-                b"programs_observed=3", "programs_observed=\u0663".encode(), 1
+                b"programs_observed=70", "programs_observed=\u0667\u0660".encode(), 1
             ),
         }
         for name, mutate in mutations.items():
@@ -833,7 +979,10 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             ledger_path.write_bytes(ledger.encode())
             data = ledger_path.read_bytes()
             digest = manifest_checker.FNV_OFFSET
-            for program in ("rp_catalog", "rp_attacker", "rp_consistency"):
+            for program in (
+                "rp_attacker" if item == "rp_backend" else item
+                for item in FIXTURE_PROGRAMS
+            ):
                 digest = manifest_checker.fnv1a64(program.encode() + b"\0", digest)
             records = (agentos_state / "rp_agentcmp").read_text(encoding="utf-8").splitlines()
             records[0] = (

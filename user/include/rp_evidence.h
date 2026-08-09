@@ -2,6 +2,7 @@
 #define __RP_EVIDENCE_H__
 
 #include <research_platform_state.h>
+#include "rp_program_manifest.h"
 
 #define RP_EVIDENCE_FNV_OFFSET 1469598103934665603ULL
 #define RP_EVIDENCE_FNV_PRIME  1099511628211ULL
@@ -274,6 +275,35 @@ rp_evidence_valid_role(const char *role, int role_len)
 	return 0;
 }
 
+static RP_UNUSED int rp_evidence_worker_batch_program(const char *program)
+{
+#define RP_EVIDENCE_BATCH_MATCH(index, candidate) \
+	if (strcmp(program, #candidate) == 0) return 1;
+	RP_WORKER_BATCH_0_PROGRAMS(RP_EVIDENCE_BATCH_MATCH)
+	RP_WORKER_BATCH_1_PROGRAMS(RP_EVIDENCE_BATCH_MATCH)
+	RP_WORKER_BATCH_2_PROGRAMS(RP_EVIDENCE_BATCH_MATCH)
+#undef RP_EVIDENCE_BATCH_MATCH
+	return 0;
+}
+
+static RP_UNUSED int rp_evidence_worker_direct_program(const char *program)
+{
+#define RP_EVIDENCE_DIRECT_MATCH(candidate) \
+	if (strcmp(program, #candidate) == 0) return 1;
+	RP_WORKER_DIRECT_PROGRAMS(RP_EVIDENCE_DIRECT_MATCH)
+#undef RP_EVIDENCE_DIRECT_MATCH
+	return 0;
+}
+
+static RP_UNUSED const char *rp_evidence_declared_role(const char *program)
+{
+#define RP_EVIDENCE_ROLE_MATCH(candidate, role) \
+	if (strcmp(program, candidate) == 0) return role;
+	RP_AGENTOS_ROLE_PROGRAMS(RP_EVIDENCE_ROLE_MATCH)
+#undef RP_EVIDENCE_ROLE_MATCH
+	return 0;
+}
+
 static RP_UNUSED int
 rp_evidence_role_number(const char *role, int role_len)
 {
@@ -349,17 +379,34 @@ rp_evidence_parse_program_record(const char *line, int len,
 		return 0;
 	if (expect_role) {
 		int plain = rp_evidence_field_equal(role, role_len, "plain");
+		const char *expected_launcher;
+		const char *expected_identity_source;
+		const char *declared_role =
+			rp_evidence_declared_role(expected_program);
 
-		if ((plain && !rp_evidence_field_equal(launcher, launcher_len,
-							 "agent_worker_create")) ||
-		    (!plain && !rp_evidence_field_equal(launcher, launcher_len,
-							  "agent_create_role")))
+		if (plain && rp_evidence_worker_batch_program(expected_program)) {
+			expected_launcher = "agent_worker_batch";
+			expected_identity_source = "trusted_crt_batch_dispatch";
+		} else if (plain &&
+			   rp_evidence_worker_direct_program(expected_program)) {
+			expected_launcher = "agent_worker_create";
+			expected_identity_source = "trusted_crt_self_check";
+		} else if (!plain && declared_role != 0 &&
+			   rp_evidence_field_equal(role, role_len,
+						   declared_role)) {
+			expected_launcher = "agent_create_role";
+			expected_identity_source = "trusted_crt_self_check";
+		} else {
+			return 0;
+		}
+		if (!rp_evidence_field_equal(launcher, launcher_len,
+					     expected_launcher))
 			return 0;
 		if (!rp_evidence_consume_field(line, len, &pos,
 					       "identity_source", &value,
 					       &value_len) ||
 		    !rp_evidence_field_equal(value, value_len,
-					     "child_after_exec") ||
+					     expected_identity_source) ||
 		    !rp_evidence_consume_field(line, len, &pos, "is_agent",
 					       &value, &value_len) ||
 		    !rp_evidence_parse_uint(value, value_len, &is_agent) ||

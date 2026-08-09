@@ -18,7 +18,7 @@ AgentOS-uCore 的验证分五层：
 
 `agentos-test` 和 `thread-resource-test` 只关注根目录 AgentOS-uCore 目标；`fs-enospc-test`、`proc-reap-test`、`file-resource-test` 和 `syscall-fairness-test` 同时覆盖根目录增强目标与 `baseline_ucore/` 普通目标。双目标验证详情见 [../verification.md](../verification.md)。
 
-双目标的 AgentOS launcher 由共享 `RP_AGENTOS_ROLE_PROGRAMS` 清单区分真实 `agent_create_role()` 角色进程和 `agent_worker_create()` 非 Agent worker，不再从父进程的预期分支反推子进程身份。每个子进程在 `exec` 后由通用启动钩调用 `agent_info()`，通过显式委派的 pipe 回传 `is_agent`、role、filesystem domain 和 capability mask；Guest ledger 与 Host 检查器都会拒绝 launcher/回传身份不一致，Host mutation test 另会改写两类字段确认 fail closed。发布 bundle 必须保存本次双目标 Guest 记录，并动态产生 `identity_source=child_after_exec`、`agentos_agent_launches` 和 `agentos_worker_launches`；静态编译、Host 自测或旧轮次不能代替这些记录。
+双目标的 AgentOS launcher 由共享 `RP_AGENTOS_ROLE_PROGRAMS` 清单区分真实 `agent_create_role()` 角色进程和 `agent_worker_create()` 非 Agent worker，不再从父进程的预期分支反推子进程身份。父进程把 launcher 策略推导出的 `is_agent`、role、filesystem domain 和 capability mask 作为启动约束传给 `exec`；可信 CRT 在 `main()` 前只调用一次紧凑的 `agent_launch_info()`，校验 PID 有效且身份字段精确匹配，失败直接以非零状态退出。父进程仅在精确 `waitpid()` 返回且子进程成功退出后记录这组已经自检的预期身份，启动热路径不再为每个程序创建、委派或读写身份 pipe。Guest ledger 与 Host 检查器都会拒绝 launcher/自检身份不一致，Host mutation test 另会改写两类字段确认 fail closed。发布 bundle 必须保存本次双目标 Guest 记录，并动态产生 `identity_source=trusted_crt_self_check`、`agentos_agent_launches` 和 `agentos_worker_launches`；静态编译、Host 自测或旧轮次不能代替这些记录。
 
 ## 验证环境
 

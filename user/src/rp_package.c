@@ -12,10 +12,49 @@ static struct agent_ledger_summary package_ledger;
 static struct agent_provenance_edge package_edges[4];
 static struct agent_file_query package_kernel_query;
 static struct agent_file_query_result package_kernel_query_result;
+static struct rp_state_buffer package_state;
+static char package_tool_lines[640];
+
+static int package_file_contains(const char *path, const char *token)
+{
+	if (rp_state_buffer_contains(&package_state, path, token))
+		return 1;
+	printf("rp_package: required_token_missing path=%s token=%s\n",
+	       path, token);
+	return 0;
+}
+
+#define rp_file_contains package_file_contains
+
+static int package_append_file(const char *path, const char *line)
+{
+	if (strcmp(path, "rp_package") == 0) {
+		if (!package_state.append_active &&
+		    !rp_state_buffer_begin_append(&package_state, path))
+			return 0;
+		return rp_state_buffer_append(&package_state, line);
+	}
+	package_state.loaded = 0;
+	return rp_append_file(path, line);
+}
+
+#define rp_append_file package_append_file
+
+static int package_append_host_action_line(
+	const char *path, const char *prefix, const char *value)
+{
+	char line[160];
+
+	rp_copy_text(line, sizeof(line), prefix);
+	rp_append_text(line, sizeof(line), value);
+	return package_append_file(path, line);
+}
+
+#define rp_append_host_action_line package_append_host_action_line
 
 static int run_kernel_package_stage(void)
 {
-	if (agent_info(&package_agent_info) < 0 || !package_agent_info.is_agent)
+	if (agent_launch_info(&package_agent_info) < 0 || !package_agent_info.is_agent)
 		return 0;
 	if ((package_agent_info.capability_mask & AGENT_CAP_AUDIT_WRITE) == 0 ||
 	    (package_agent_info.capability_mask & AGENT_CAP_META_READ) == 0) {
@@ -89,8 +128,6 @@ int main(void)
 	ok = ok && rp_file_contains("rp_evidence", "status=ready");
 	ok = ok && rp_file_contains("rp_claimrec", "claim=8");
 	ok = ok && rp_file_contains("rp_provpath", "critical_paths=3");
-	ok = ok && rp_file_contains("rp_knowledge", "synthesis=ready");
-	ok = ok && rp_file_contains("rp_wfio", "compatibility_checks=6");
 	ok = ok && rp_file_contains("rp_datadic", "schema_fields=17");
 	ok = ok && rp_file_contains("rp_dataprof", "profiles=4");
 	ok = ok && rp_file_contains("rp_compute", "replay=ready");
@@ -132,14 +169,16 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
+	ok = ok && rp_file_contains("rp_knowledge", "synthesis=ready");
+	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
+	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && rp_file_contains("rp_wfio", "compatibility_checks=6");
+	ok = ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
+	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
 	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
 	ok = ok && rp_file_contains("rp_runner", "workspace_inspection=usable-workspace-inspection:RUN-900:1");
 	ok = ok && rp_file_contains("rp_runner", "workbench_export=usable-workbench-export:RUN-900:1");
-	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
-	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
-	ok = ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
-	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
 	ok = ok && rp_file_contains("rp_runner", "revision_task_id=usable-revision-task:RUN-900:1");
@@ -428,27 +467,6 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
-	if (!rp_append_file("rp_ack", "ack=package;msg=11;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.build_artifacts")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.version_data")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.build_repro")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_llm_eval")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_llm_relay_protocol")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_evidence_path")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_data_records")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_execobs")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_run_config")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_invocation")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_completion")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_runner_artifacts")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_workflow_runner")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_data_pipeline")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_agent_collab")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_human_review")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_revision_task")) return 1;
-	if (kernel_package &&
-	    !rp_append_file("rp_tool", "tool=agentos.package_provenance"))
-		return 1;
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||
 	    rp_host_seed_has("kind=delivery")) {
@@ -681,15 +699,40 @@ int main(void)
 			if (!rp_append_host_action_line("rp_package", "host_action_workbench_timeline_format=", value)) return 1;
 		}
 	}
-	if (!rp_append_status("package=ready")) return 1;
-	if (!rp_append_status("datarel=ready")) return 1;
-	if (!rp_append_status("dataver=ready")) return 1;
-	if (!rp_append_status("repro=ready")) return 1;
-	if (!rp_append_status("delivery_manifest=ready")) return 1;
-	if (!rp_append_status("export_bundle=ready")) return 1;
-	if (!rp_append_status("review_page=ready")) return 1;
-	if (!rp_append_status("human_review=ready")) return 1;
-	if (!rp_append_status("revision_task_package=ready")) return 1;
+	if (package_state.append_active &&
+	    !rp_state_buffer_commit(&package_state)) return 1;
+	if (!rp_append_file("rp_ack", "ack=package;msg=11;status=ready")) return 1;
+	rp_copy_text(package_tool_lines, sizeof(package_tool_lines),
+		     "tool=package.build_artifacts\n"
+			    "tool=package.version_data\n"
+			    "tool=package.build_repro\n"
+			    "tool=package.attach_llm_eval\n"
+			    "tool=package.attach_llm_relay_protocol\n"
+			    "tool=package.attach_evidence_path\n"
+			    "tool=package.attach_data_records\n"
+			    "tool=package.attach_execobs\n"
+			    "tool=package.attach_run_config\n"
+			    "tool=package.attach_invocation\n"
+			    "tool=package.attach_completion\n"
+			    "tool=package.attach_runner_artifacts\n"
+			    "tool=package.attach_workflow_runner\n"
+			    "tool=package.attach_data_pipeline\n"
+			    "tool=package.attach_agent_collab\n"
+			    "tool=package.attach_human_review\n"
+			    "tool=package.attach_revision_task");
+	if (kernel_package)
+		rp_append_text(package_tool_lines, sizeof(package_tool_lines),
+			       "\ntool=agentos.package_provenance");
+	if (!rp_append_file("rp_tool", package_tool_lines)) return 1;
+	if (!rp_append_status("package=ready\n"
+			      "datarel=ready\n"
+			      "dataver=ready\n"
+			      "repro=ready\n"
+			      "delivery_manifest=ready\n"
+			      "export_bundle=ready\n"
+			      "review_page=ready\n"
+			      "human_review=ready\n"
+			      "revision_task_package=ready")) return 1;
 	printf("rp_package: artifacts=52 checks=75 fair=passed repro=ready status=ready\n");
 	return 0;
 }

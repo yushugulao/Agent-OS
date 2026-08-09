@@ -507,11 +507,10 @@ def check(root: Path) -> None:
         "entry->edit_version=agent_file_edit_version_generation",
         "驻留项重建会让编辑版本倒退",
     )
-    require(
+    reject(
         source,
-        "entry->edit_authority_generation="
-        "agent_file_edit_authority_generation",
-        "驻留项重建会造成授权代际 ABA",
+        "uint64 edit_authority_generation;",
+        "全局撤销 epoch 仍按 inode 重复占用版本 bank",
     )
     require(
         source,
@@ -548,7 +547,7 @@ def check(root: Path) -> None:
     release = function(source, "agent_edit_release_locked")
     require(
         release,
-        "if(publish_dirty&&e->dirty)"
+        "if(version&&publish_dirty&&e->dirty)"
         "(void)file_version_edit_next_locked(version);",
         "脏租约释放没有按该文件 base_version + 1 发布",
     )

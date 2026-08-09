@@ -89,6 +89,7 @@ def main() -> int:
                     "-fno-builtin",
                     "-fstack-protector-strong",
                     "-DRP_STATE_BUFFER_SIZE=64",
+                    "-DRP_STATE_SCRATCH_EXTERN=1",
                     *sanitizer_flags,
                     "-I",
                     str(PROBE.parent / "rp-evidence-host"),

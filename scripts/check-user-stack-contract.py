@@ -22,6 +22,9 @@ DEFINE_RE = re.compile(
     r"^\s*#define\s+([A-Z0-9_]+)\s+([0-9]+)(?:U|UL|ULL|L|LL)?\s*$",
     re.MULTILINE,
 )
+FUNCTION_DEFINITION_RE = re.compile(
+    r"\b[A-Za-z_]\w*\s*\([^;{}]*\)\s*\{", re.DOTALL
+)
 
 
 def compact(text):
@@ -143,6 +146,7 @@ def check(root):
     syscall_source = read(root, "os/syscall.c")
     user_source = read(root, "user/src/usersafety_ucore.c")
     user_make = compact(read(root, "user/Makefile"))
+    data_only_source = read(root, "user/lib/research_platform_state.c")
     runner = read(root, "scripts/run-agent-tests.sh")
     validator = read(root, "scripts/validate-kernel-test-log.py")
     root_make = read(root, "Makefile")
@@ -249,16 +253,66 @@ def check(root):
     )
     require_contains(
         user_make,
-        "STACK_USAGE_LIBRARY_SRCS:=$(addprefixuser/,$(sort$(LIB_C)))",
+        "STACK_USAGE_ALL_LIBRARY_SRCS:=$(addprefixuser/,$(sort$(LIB_C)))",
         "complete stack library inventory",
     )
     require_contains(
         user_make,
-        "$(addprefixuser/,$(sort$(SRCS)))\\$(COMPAT_BENCH_REPO_SOURCE)"
+        "STACK_USAGE_DATA_ONLY_LIBRARY_SRCS:=user/lib/research_platform_state.c",
+        "data-only stack library inventory",
+    )
+    require_contains(
+        user_make,
+        "STACK_USAGE_FUNCTION_LIBRARY_SRCS:="
+        "$(filter-out$(STACK_USAGE_DATA_ONLY_LIBRARY_SRCS),"
+        "$(STACK_USAGE_ALL_LIBRARY_SRCS))",
+        "function/data-only stack inventory partition",
+    )
+    require_contains(
+        user_make,
+        "STACK_USAGE_SUPPORT_SRCS:="
+        "$(addprefixuser/src/,$(addsuffix.c,$(WORKER_BATCH_PROGRAMS)))",
+        "complete worker support stack inventory",
+    )
+    require_contains(
+        user_make,
+        "$(filter-out$(STACK_USAGE_SUPPORT_SRCS),"
+        "$(addprefixuser/,$(sort$(SRCS))))\\$(COMPAT_BENCH_REPO_SOURCE)"
         "STACK_USAGE_SRCS:="
-        "$(STACK_USAGE_LIBRARY_SRCS)$(STACK_USAGE_APPLICATION_SRCS)",
+        "$(STACK_USAGE_FUNCTION_LIBRARY_SRCS)$(STACK_USAGE_SUPPORT_SRCS)"
+        "$(STACK_USAGE_APPLICATION_SRCS)",
         "complete stack application inventory",
     )
+    require_contains(
+        user_make,
+        "$(foreachsrc,$(STACK_USAGE_SUPPORT_SRCS),--library-unit=$(src))",
+        "worker support stack library wiring",
+    )
+    require_contains(
+        user_make,
+        "STACK_USAGE_DATA_ONLY_OBJS="
+        "$(patsubst%.c,$(STACK_USAGE_DIR)/data-only/%.o,"
+        "$(STACK_USAGE_DATA_ONLY_LIBRARY_SRCS))",
+        "data-only object inventory",
+    )
+    require_contains(
+        user_make,
+        "grep-Eq'[[:space:]]F[[:space:]]'",
+        "data-only object function-symbol rejection",
+    )
+    require_contains(
+        user_make,
+        "stack-usage-build:$(STACK_USAGE_OBJS)$(STACK_USAGE_DATA_ONLY_OBJS)",
+        "data-only object validation wiring",
+    )
+    uncommented_data = re.sub(
+        r"/\*.*?\*/|//[^\r\n]*", "", data_only_source, flags=re.DOTALL
+    )
+    if FUNCTION_DEFINITION_RE.search(uncommented_data):
+        raise ValueError("data-only stack library contains a function definition")
+    for symbol in ("rp_state_buf", "rp_host_seed_buf", "rp_host_seed_loaded"):
+        if re.search(rf"\b{symbol}\b", uncommented_data) is None:
+            raise ValueError(f"data-only stack storage definition missing: {symbol}")
     require_contains(
         user_make,
         "$(STACK_USAGE_DIR)/evaluation_guest/compatbench.o:",

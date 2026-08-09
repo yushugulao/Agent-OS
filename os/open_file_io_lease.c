@@ -1,6 +1,6 @@
 #include "open_file_io_lease.h"
-
 #include "agent.h"
+#include "agent_file_state_internal.h"
 #include "defs.h"
 #include "exec_policy.h"
 #include "file.h"
@@ -8,11 +8,9 @@
 #include "resource_controller.h"
 #include "syscall_ids.h"
 #include "workflow_lifecycle.h"
-
 #define OPEN_FILE_IO_READ  (1U << 0)
 #define OPEN_FILE_IO_WRITE (1U << 1)
 #define OPEN_FILE_IO_CACHE_CAP 64U
-
 /*
  * 缓存只加速鉴权，不承载权限。获取成功后，内核将上下文复制到系统调用
  * 令牌，避免系统调用休眠期间的缓存碰撞改变其授权对象。
@@ -39,14 +37,11 @@ struct open_file_io_grant {
 	uint allowed;
 	uchar valid;
 };
-
 struct open_file_io_state {
 	struct open_file_io_grant grants[OPEN_FILE_IO_CACHE_CAP];
 	struct open_file_io_lease_stats stats;
 };
-
 static struct open_file_io_state open_file_io_state;
-
 _Static_assert((OPEN_FILE_IO_CACHE_CAP & (OPEN_FILE_IO_CACHE_CAP - 1)) == 0,
 	       "open-file grant cache must be a power of two");
 
@@ -58,7 +53,6 @@ static uint open_file_io_operation_mask(enum vfs_operation operation)
 		return OPEN_FILE_IO_WRITE;
 	return 0;
 }
-
 static int open_file_io_cred_equal(const struct vfs_cred *left,
 				   const struct vfs_cred *right)
 {
@@ -67,7 +61,6 @@ static int open_file_io_cred_equal(const struct vfs_cred *left,
 	       left->capabilities == right->capabilities &&
 	       left->kernel == right->kernel;
 }
-
 static int
 open_file_io_lifecycle_live(struct workflow_lifecycle_key lifecycle)
 {
@@ -76,7 +69,6 @@ open_file_io_lifecycle_live(struct workflow_lifecycle_key lifecycle)
 		       lifecycle.generation == 0;
 	return workflow_lifecycle_active(lifecycle);
 }
-
 static int open_file_io_inode_matches(
 	uint incarnation, uint checksum, uint policy_generation,
 	uint exec_size, uint exec_flags, uint exec_generation,
@@ -96,7 +88,6 @@ static int open_file_io_inode_matches(
 	       exec_rw_offset == inode->exec_rw_offset &&
 	       exec_profile == inode->vfs_exec_profile;
 }
-
 static int open_file_io_file_matches(const struct file *file,
 				     const struct inode *inode,
 				     enum vfs_operation operation)
@@ -127,20 +118,27 @@ static int open_file_io_subject_matches(
 }
 
 static int open_file_io_edit_matches(
-	struct inode *inode, const struct vfs_cred *cred,
+	struct proc *proc, struct inode *inode, const struct vfs_cred *cred,
 	enum vfs_operation operation, uint64 authority_generation,
 	uint64 deadline_tick)
 {
 	uint64 current_generation = 0;
-	uint64 current_deadline = 0;
 
 	if (operation != VFS_OP_WRITE ||
 	    cred->scope_id < VFS_SCOPE_FIRST_DYNAMIC)
 		return authority_generation == 0 && deadline_tick == 0;
+	/* 非零 TTL 只能由已完整验证的 agent 编辑租约产生。 */
+	if (deadline_tick != 0 &&
+	    proc->agent_control_state != AGENT_CONTROL_OPEN)
+		return 0;
+	if (deadline_tick != 0 && agent_file_state_now() >= deadline_tick) {
+		/* 冷过期路径清理租约并推进撤销 epoch。 */
+		(void)agent_edit_write_lease_snapshot(inode, 0, 0);
+		return 0;
+	}
 	return agent_edit_write_lease_snapshot(
-		       inode, &current_generation, &current_deadline) &&
-	       authority_generation == current_generation &&
-	       deadline_tick == current_deadline;
+		       inode, &current_generation, 0) &&
+	       authority_generation == current_generation;
 }
 
 static int open_file_io_grant_matches(
@@ -153,7 +151,7 @@ static int open_file_io_grant_matches(
 	       grant->subject == proc && (grant->allowed & mask) != 0 &&
 	       open_file_io_file_matches(file, grant->inode, operation) &&
 	       open_file_io_subject_matches(proc, grant->account,
-					    grant->lifecycle, &grant->cred) &&
+				    grant->lifecycle, &grant->cred) &&
 	       open_file_io_inode_matches(grant->inode_incarnation,
 		grant->inode_checksum, grant->inode_policy_generation,
 		grant->inode_exec_size, grant->inode_exec_flags,
@@ -161,7 +159,7 @@ static int open_file_io_grant_matches(
 		grant->inode_exec_layout_version, grant->inode_exec_rw_offset,
 		grant->inode_exec_profile, grant->inode) &&
 	       open_file_io_edit_matches(
-		       grant->inode, &grant->cred, operation,
+		       proc, grant->inode, &grant->cred, operation,
 		       grant->edit_authority_generation,
 		       grant->edit_deadline_tick);
 }
@@ -249,7 +247,8 @@ static void open_file_io_token_issue(
 	token->cred = authorized_cred;
 	token->edit_authority_generation = grant->edit_authority_generation;
 	token->edit_deadline_tick = grant->edit_deadline_tick;
-	token->thread_generation = thread->identity_generation;
+	token->redispatch_generation =
+		thread_trap_cold_const(thread)->kernel_work_redispatches;
 	token->syscall_generation =
 		thread_trap_cold_const(thread)->kernel_work_generation;
 	token->inode_incarnation = grant->inode_incarnation;
@@ -382,24 +381,35 @@ int open_file_io_token_validate(const struct open_file_io_token *token,
 		return 0;
 	enabled = intr_save();
 	valid = token->subject == proc && token->inode == inode &&
-		thread->identity_generation == token->thread_generation &&
 		thread_trap_cold(thread)->kernel_work_generation ==
-			token->syscall_generation &&
-		open_file_io_file_matches(token->file, inode, operation) &&
-		open_file_io_subject_matches(proc, token->account,
-					     token->lifecycle, token->cred) &&
-		open_file_io_inode_matches(token->inode_incarnation,
+			token->syscall_generation;
+	/* 令牌只存在于当前 syscall 栈；未重新调度时单 hart 上无权限发布者运行。 */
+	if (valid && thread_trap_cold(thread)->kernel_work_redispatches ==
+			     token->redispatch_generation) {
+		if (token->edit_deadline_tick != 0 &&
+		    agent_file_state_now() >= token->edit_deadline_tick) {
+			(void)agent_edit_write_lease_snapshot(inode, 0, 0);
+			valid = 0;
+		}
+	} else if (valid) {
+		valid = open_file_io_file_matches(
+				token->file, inode, operation) &&
+			open_file_io_subject_matches(
+				proc, token->account, token->lifecycle,
+				token->cred) &&
+			open_file_io_inode_matches(token->inode_incarnation,
 			token->inode_checksum, token->inode_policy_generation,
 			token->inode_exec_size, token->inode_exec_flags,
 			token->inode_exec_generation,
 			token->inode_exec_role_mask,
 			token->inode_exec_layout_version,
 			token->inode_exec_rw_offset,
-			token->inode_exec_profile, inode) &&
-		open_file_io_edit_matches(
-			inode, token->cred, operation,
-			token->edit_authority_generation,
-			token->edit_deadline_tick);
+				token->inode_exec_profile, inode) &&
+			open_file_io_edit_matches(
+				proc, inode, token->cred, operation,
+				token->edit_authority_generation,
+				token->edit_deadline_tick);
+	}
 	intr_restore(enabled);
 	return valid;
 }

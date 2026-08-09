@@ -89,6 +89,7 @@ def reject(text: str, fragment: str, message: str) -> None:
 def check(root: Path) -> None:
     source = compact(root / "os/agent_metadata_directory.c")
     header = compact(root / "os/agent_metadata_directory.h")
+    file_source = compact(root / "os/file.c")
     state = compact(root / "os/agent_file_state.c")
     state_header = compact(root / "os/agent_file_state_internal.h")
     catalog = compact(root / "os/agent_metadata_catalog.c")
@@ -108,7 +109,7 @@ def check(root: Path) -> None:
         body = function(source, name)
         require(
             body,
-            "{agent_fs_publish_content(ip);}",
+            "{if(FS_META_UNBOUND(ip))return;agent_fs_publish_content(ip);}",
             f"{name} bypasses the shared content fast path",
         )
         for forbidden in FORBIDDEN_CONTENT_CALLS:
@@ -230,6 +231,8 @@ def check(root: Path) -> None:
         "agent_file_request_scan();",
         "autoscan content does not enqueue background reconciliation",
     )
+    if publish.count("reconcile=1;") != 1:
+        raise ValueError("仅持久化回执失败可以请求内容协调扫描")
     require(
         catalog,
         "meta->flags&(AGENT_FILE_META_F_PERSIST|AGENT_FILE_META_F_AUTOSCAN)",
@@ -263,6 +266,12 @@ def check(root: Path) -> None:
         raise ValueError(
             "content fast-path anomalies do not defer to the background scanner"
         )
+    require(
+        source,
+        "#defineFS_META_UNBOUND(ip)((ip)&&!(ip)->agent_meta_slot&&"
+        "!(ip)->agent_meta_flags&&!(ip)->agent_meta_version)",
+        "普通文件快路不是精确的全零未绑定状态",
+    )
 
     for forbidden in ("agent_metadata_txn_", "agent_catalog_require_txn()"):
         reject(
@@ -344,13 +353,9 @@ def check(root: Path) -> None:
         "易失目录扫描没有释放已吸收的大小覆盖",
     )
 
-    create = function(source, "agent_fs_note_create")
     remove = function(source, "agent_fs_remove_inode")
-    require(
-        create,
-        "agent_metadata_txn_try_external()",
-        "create lost its catalog transaction boundary",
-    )
+    reject(source + header + file_source, "agent_fs_note_create",
+           "普通文件创建仍保留 Agent 元数据钩子")
     require(
         remove,
         "agent_metadata_txn_try_external()",
@@ -361,9 +366,19 @@ def check(root: Path) -> None:
         "agent_metadata_catalog_clear_slot(slot)",
         "delete no longer removes its catalog identity",
     )
+    _, ordinary_remove = guarded_block(remove, ("FS_META_UNBOUND(ip)",))
+    require(
+        ordinary_remove,
+        "agent_file_version_reclaim(ip);return;",
+        "普通未绑定文件删除没有回收易失版本状态",
+    )
+    reject(
+        ordinary_remove,
+        "agent_file_request_scan(",
+        "普通未绑定文件删除仍请求全目录扫描",
+    )
 
     for declaration in (
-        "voidagent_fs_note_create(structinode*,char*);",
         "voidagent_fs_note_write(structinode*);",
         "voidagent_fs_note_truncate(structinode*);",
         "voidagent_fs_note_delete(structinode*);",

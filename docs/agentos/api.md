@@ -6,12 +6,13 @@
 
 ### 系统调用：Agent-OS
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 560；其中 543、544、558 至 560 是受限观测接口，547、548 是可扩展工具协议的 V2 入口，549、551、554 至 556 仅供对应测试 profile 使用：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 561；其中 543、544、558 至 560 是受限观测接口，547、548 是可扩展工具协议的 V2 入口，549、551、554 至 556 仅供对应测试 profile 使用：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
 | `agent_create` | 500 | `int agent_create(void)` | 创建 Agent 子进程 |
-| `agent_info` | 501 | `int agent_info(struct agent_info *)` | 查询当前进程 Agent 元信息 |
+| `agent_info` | 501 | `int agent_info(struct agent_info *)` | 查询当前进程的完整诊断元信息 |
+| `agent_launch_info` | 561 | `int agent_launch_info(struct agent_info *)` | 只读取启动身份；成功时返回 PID，使用独立入口以兼容旧二进制 |
 | `agent_run` | 502 | `int agent_run(struct agent_op *, struct agent_result *, int, uint64)` | 高性能批量工具调用入口 |
 | `agent_call` | 503 | `int agent_call(struct agent_request *, struct agent_response *)` | V1 兼容名称协议入口，使用工具名称和参数键值列表 |
 | `agent_tool_list` | 504 | `int agent_tool_list(struct agent_tool_desc *, int)` | 查询工具列表 |
@@ -131,7 +132,7 @@ workflow 的 before 和最后一个 terminal after 执行一次全序列增长�
 
 `mailread` / `mailwrite` 的 syscall 编号和用户态原型保持不变，但实现只丢弃参数并返回 `-1`。内核不再维护第二套裸 PID 邮箱、端点代际或邮箱物理页账目，避免与 Agent IPC 的身份、生命周期、路由和队列机制重复。旧调用方需要迁移到 `agent_route_config()`、`agent_watch()`、`agent_wait()` 与消息工具。
 
-`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回已登记 syscall ID 的累计进入次数，未登记编号返回 0，超出 ABI 范围返回 -1；查询 `SYS_trace` 时本次 `trace` 调用也计入。计数使用紧凑内部槽并在 `INT_MAX` 饱和，不会按稀疏 ABI 编号放大每个进程的常驻空间。AgentOS-uCore 的镜像构建器从配套 ELF 提取只读可执行段与可写段的页对齐分界点，loader 校验该布局后把代码页映射为 RX，把数据、bss、用户栈和 Agent Context 映射为 RW+NX；用户页不会同时拥有写和执行权限。
+`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回已登记 syscall ID 的累计进入次数，未登记编号返回 0，超出 ABI 范围返回 -1；查询 `SYS_trace` 时本次 `trace` 调用也计入。紧凑启动查询 561 与完整身份查询 501 共用一个计数槽，查询任一编号都会返回两类身份查询的合计。其余计数按 ID 独立，在 `INT_MAX` 饱和，并避免按稀疏 ABI 编号放大每个进程的常驻空间。AgentOS-uCore 的镜像构建器从配套 ELF 提取只读可执行段与可写段的页对齐分界点，loader 校验该布局后把代码页映射为 RX，把数据、bss、用户栈和 Agent Context 映射为 RW+NX；用户页不会同时拥有写和执行权限。
 
 ### 块 I/O 策略观测
 
@@ -242,6 +243,8 @@ Context ABI v9 在 header 中公开不可变 workflow lifecycle key、当前 `br
 ## 信息结构：Agent
 
 `struct agent_info` 用于 `agent_info()`，关键字段如下：
+
+`agent_launch_info()` 是启动后的紧凑身份查询。它只填充 `is_agent`、`agent_id`、角色、Agent capability、filesystem domain 与 filesystem capability，不读取 metadata、observe 或调度诊断快照；成功返回当前 PID，失败返回负状态。科研平台的可信 CRT 在 `main()` 前调用它一次，要求返回 PID 为正，并把 `is_agent`、角色、filesystem domain 与 filesystem capability 精确匹配父进程写入 `exec` 参数的启动约束；不再额外调用 `getpid()`。失败直接非零退出，父进程只有在精确 `waitpid()` 成功且退出码为零后，才把这组已由 CRT 自检的预期身份写入 ledger。
 
 | 字段 | 说明 |
 | --- | --- |

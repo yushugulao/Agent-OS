@@ -674,13 +674,8 @@ def validate_sources(sources: dict[str, str]) -> None:
          "target->vfs_policy != policy", "target->vfs_scope_id != scope_id"),
         "canonical aliases preserve inode policy and scope checks",
     )
-    note_create = function_body(directory, "void agent_fs_note_create(")
-    require_order(
-        note_create,
-        ("fs_dirent_canonicalize(path, key)",
-         "agent_metadata_scan_index_inode(ip, key, &failed)"),
-        "create metadata uses the published canonical dirent key",
-    )
+    if "agent_fs_note_create" in directory:
+        raise ContractError("普通文件创建仍保留元数据目录钩子")
     fs_name_test = function_body(
         fs_program, "static void check_dirent_name_boundary(")
     for token in (
@@ -743,33 +738,11 @@ def validate_sources(sources: dict[str, str]) -> None:
                 f"sidecar update escaped into {name}"
             )
 
-    note_create = function_body(directory, "void agent_fs_note_create(")
-    for token in (
-        "agent_metadata_txn_try_external()",
-        "agent_metadata_store_loaded()",
-        "agent_file_state_content_bump(ip)",
-        "agent_metadata_scan_index_inode(ip, key, &failed)",
-        "agent_metadata_note_catalog_changes(changes)",
-        "agent_file_state_index_deferred(ip)",
-        "agent_file_request_scan()",
-    ):
-        require(note_create, token, "shared VFS create indexing")
-    index_pos = note_create.find("agent_metadata_scan_index_inode(ip, key, &failed)")
-    changes_pos = note_create.find("agent_metadata_note_catalog_changes(changes)")
-    deferred_pos = note_create.find("agent_file_state_index_deferred(ip)")
-    schedule_scan = note_create.find("agent_file_request_scan()", index_pos)
-    if not (0 <= index_pos < changes_pos < deferred_pos < schedule_scan):
-        raise ContractError(
-            "catalog saturation can roll back VFS create or strand deferred state"
-        )
     fileopen = function_body(file_source, "int fileopen(")
-    require(fileopen, "if (created)\n\t\tagent_fs_note_create(ip, path)",
-            "post-create metadata hook")
     fs_create_pos = fileopen.find("ip = fs_create(")
-    note_create_pos = fileopen.find("agent_fs_note_create(ip, path)")
-    success_pos = fileopen.find("return fd", note_create_pos)
-    if not (0 <= fs_create_pos < note_create_pos < success_pos):
-        raise ContractError("catalog hook can still roll back successful VFS creation")
+    success_pos = fileopen.find("return fd", fs_create_pos)
+    if not (0 <= fs_create_pos < success_pos) or "agent_fs_note_create" in fileopen:
+        raise ContractError("普通文件创建仍进入 Agent 元数据目录")
 
     publish_content = function_body(directory, "agent_fs_publish_content(")
     receipt_note = "agent_metadata_catalog_journal_note_content(&receipt)"
@@ -785,8 +758,29 @@ def validate_sources(sources: dict[str, str]) -> None:
         "agent_file_request_scan()",
     ):
         require(publish_content, token, "content overlay fast path")
+    for token in ("#define FS_META_UNBOUND(ip)", "!(ip)->agent_meta_slot",
+                  "!(ip)->agent_meta_flags", "!(ip)->agent_meta_version"):
+        require(directory, token, "普通文件全零未绑定状态")
+    for signature in ("void agent_fs_note_write(",
+                      "void agent_fs_note_truncate("):
+        require_order(
+            function_body(directory, signature),
+            ("FS_META_UNBOUND(ip)", "agent_fs_publish_content(ip)"),
+            "普通文件内容返回边界",
+        )
+    if publish_content.count("reconcile = 1") != 1:
+        raise ContractError("非持久内容不应触发全目录协调扫描")
 
     remove_inode = function_body(directory, "agent_fs_remove_inode(")
+    ordinary_pos = remove_inode.find("FS_META_UNBOUND(ip)")
+    ordinary_reclaim = remove_inode.find(
+        "agent_file_version_reclaim(ip)", ordinary_pos)
+    ordinary_return = remove_inode.find("return;", ordinary_reclaim)
+    ordinary_scan = remove_inode.find(
+        "agent_file_request_scan()", ordinary_reclaim, ordinary_return)
+    if not (0 <= ordinary_pos < ordinary_reclaim < ordinary_return) or \
+            ordinary_scan >= 0:
+        raise ContractError("普通未绑定文件删除仍触发全目录扫描")
     # 稀疏版本表把 deferred 归入所有未发布的 slot；删除路径必须先按
     # 完整 inode 身份回收版本项，再请求重扫，不能进入 catalog 事务。
     deferred_pos = remove_inode.find("ip->agent_meta_slot <= 0")
@@ -805,6 +799,8 @@ def validate_sources(sources: dict[str, str]) -> None:
     if "agent_metadata_scan_slot_freed" in remove_inode[
             txn_pos:busy_return_pos]:
         raise ContractError("metadata-gate busy delete claims unreleased capacity")
+    require(remove_inode, "rescan:\n\tagent_file_request_scan();",
+            "陈旧绑定删除必须失效关闭并请求协调扫描")
     clear_pos = remove_inode.find("agent_metadata_catalog_clear_slot(slot)")
     retry_pos = remove_inode.find(
         "agent_metadata_scan_slot_freed(scope_id)", clear_pos)
@@ -878,32 +874,44 @@ def validate_sources(sources: dict[str, str]) -> None:
     require(scan, "file_scan_deferred = scan.deferred", "deferred ABI")
     require(scan, "file_scan_failures = scan.failures", "failure ABI")
 
-    quota_wait = function_body(scope_program, "wait_quota_catalog_rebuild(")
+    quota_bind = function_body(scope_program, "bind_quota_autoscan(")
     for token in (
-        "scope_catalog_path_count(name)",
-        "info.file_scan_deferred > deferred_before",
-        "!info.file_scan_pending",
-        "!info.metadata_writeback_pending",
-        "info.metadata_writeback_dirty ==\n\t\t\tinfo.metadata_writeback_durable",
-        "stable >= 3",
+        "meta.flags = AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN",
+        "status = agent_file_meta_set(&meta)",
+        "status != AGENT_STATUS_RETRY",
+        "sched_yield() < 0",
+        "return status",
     ):
-        require(quota_wait, token, "Guest deferred catalog rebuild")
+        require(quota_bind, token, "Guest explicit autoscan binding")
+    quota_create = function_body(scope_program, "create_quota_files(")
+    require_order(
+        quota_create,
+        ("close(fd)", "bind_quota_autoscan(name)", "created++"),
+        "Guest explicit autoscan quota creation",
+    )
+    require(
+        quota_create,
+        "i < WORKFLOW_AUTOSCAN_SCOPE_LIMIT ?\n"
+        "\t\t\t\t       AGENT_STATUS_OK : AGENT_STATUS_NO_SPACE",
+        "Guest autoscan quota boundary",
+    )
     quota_fill = function_body(scope_program, "fill_scope_storage_quota(")
     quota_order = (
         "check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 0)",
         "state->explicit_created = create_explicit_metadata(",
         "unlink(released_name)",
         "state->first_removed = 1",
-        "wait_quota_catalog_rebuild(",
+        "quota_file_name(released_name, 'a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT)",
+        "bind_quota_autoscan(released_name) == AGENT_STATUS_OK",
         "agent_file_meta_init() == 0",
-        "catalog_deferred_rebuilt=1",
+        "catalog_explicit_rebound=1",
     )
     position = -1
     for token in quota_order:
         next_position = quota_fill.find(token, position + 1)
         if next_position < 0:
             raise ContractError(
-                f"Guest deferred catalog rebuild is incomplete: {token}"
+                f"Guest explicit catalog rebound is incomplete: {token}"
             )
         position = next_position
     quota_cleanup = function_body(scope_program, "cleanup_scope_storage_quota(")

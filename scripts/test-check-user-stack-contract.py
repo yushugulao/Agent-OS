@@ -18,6 +18,7 @@ FILES = (
     "os/proc.c",
     "os/syscall.c",
     "user/Makefile",
+    "user/lib/research_platform_state.c",
     "user/include/user_stack_policy.h",
     "user/src/usersafety_ucore.c",
     "scripts/run-agent-tests.sh",
@@ -155,10 +156,18 @@ class UserStackContractTests(unittest.TestCase):
     def test_mutation_compatibility_benchmark_omission_is_rejected(self):
         self.mutate(
             "user/Makefile",
-            "$(addprefix user/,$(sort $(SRCS))) \\\n\t$(COMPAT_BENCH_REPO_SOURCE)",
-            "$(addprefix user/,$(sort $(SRCS)))",
+            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS),$(addprefix user/,$(sort $(SRCS)))) \\\n\t$(COMPAT_BENCH_REPO_SOURCE)",
+            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS),$(addprefix user/,$(sort $(SRCS))))",
         )
         self.assert_rejected("complete stack application inventory")
+
+    def test_mutation_worker_support_inventory_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "STACK_USAGE_SUPPORT_SRCS := $(addprefix user/src/,$(addsuffix .c,$(WORKER_BATCH_PROGRAMS)))",
+            "STACK_USAGE_SUPPORT_SRCS :=",
+        )
+        self.assert_rejected("complete worker support stack inventory")
 
     def test_mutation_compatibility_benchmark_source_drift_is_rejected(self):
         self.mutate(
@@ -175,6 +184,38 @@ class UserStackContractTests(unittest.TestCase):
             "$(addprefix user/,$(firstword $(sort $(LIB_C))))",
         )
         self.assert_rejected("complete stack library inventory")
+
+    def test_mutation_data_only_partition_removal_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "STACK_USAGE_DATA_ONLY_LIBRARY_SRCS := user/lib/research_platform_state.c",
+            "STACK_USAGE_DATA_ONLY_LIBRARY_SRCS :=",
+        )
+        self.assert_rejected("data-only stack library inventory")
+
+    def test_mutation_data_only_filter_bypass_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "$(filter-out $(STACK_USAGE_DATA_ONLY_LIBRARY_SRCS),$(STACK_USAGE_ALL_LIBRARY_SRCS))",
+            "$(STACK_USAGE_ALL_LIBRARY_SRCS)",
+        )
+        self.assert_rejected("function/data-only stack inventory partition")
+
+    def test_mutation_data_only_function_is_rejected(self):
+        self.mutate(
+            "user/lib/research_platform_state.c",
+            "int rp_host_seed_loaded;",
+            "int rp_host_seed_loaded;\nint forbidden_function(void) { return 0; }",
+        )
+        self.assert_rejected("contains a function definition")
+
+    def test_mutation_data_only_object_gate_is_rejected(self):
+        self.mutate(
+            "user/Makefile",
+            "grep -Eq '[[:space:]]F[[:space:]]'",
+            "grep -Eq '[[:space:]]O[[:space:]]'",
+        )
+        self.assert_rejected("object function-symbol rejection")
 
     def test_mutation_stack_application_inventory_shrink_is_rejected(self):
         self.mutate(

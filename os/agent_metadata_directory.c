@@ -5,40 +5,7 @@
 #include "agent_metadata_scan.h"
 #include "defs.h"
 
-static int fs_create_indexable(struct inode *ip) {
-	return agent_metadata_inode_trackable(ip) &&
-	       agent_scope_valid(ip->vfs_scope_id) && ip->agent_meta_slot <= 0;
-}
-
-void agent_fs_note_create(struct inode *ip, char *path) {
-	uint changes;
-	char key[DIRSIZ + 1];
-	int failed = 0;
-	if (!ip || fs_dirent_canonicalize(path, key) < 0 ||
-	    agent_file_is_meta_store_name(key))
-		return;
-	if (!fs_create_indexable(ip))
-		return;
-	if (!agent_metadata_txn_try_external()) {
-		agent_file_request_scan();
-		return;
-	}
-	if (!fs_create_indexable(ip) || !agent_metadata_store_loaded())
-		goto rescan;
-	agent_file_state_content_bump(ip);
-	changes = agent_metadata_scan_index_inode(ip, key, &failed);
-	if (changes)
-		agent_metadata_note_catalog_changes(changes);
-	if (failed || agent_file_state_index_deferred(ip)) {
-		agent_file_version_reclaim(ip);
-		goto rescan;
-	}
-	goto out;
-rescan:
-	agent_file_request_scan();
-out:
-	agent_metadata_txn_unlock();
-}
+#define FS_META_UNBOUND(ip) ((ip) && !(ip)->agent_meta_slot && !(ip)->agent_meta_flags && !(ip)->agent_meta_version)
 
 static void agent_fs_publish_content(struct inode *ip) {
 	struct agent_file_content_receipt receipt;
@@ -56,8 +23,7 @@ static void agent_fs_publish_content(struct inode *ip) {
 		if (agent_metadata_catalog_journal_note_content(&receipt) < 0)
 			reconcile = 1;
 		agent_metadata_store_mark_dirty(ip->vfs_scope_id);
-	} else
-		reconcile = 1;
+	}
 	if (reconcile ||
 	    (ip->agent_meta_flags & AGENT_FILE_META_F_AUTOSCAN))
 		agent_file_request_scan();
@@ -71,6 +37,10 @@ static void agent_fs_remove_inode(struct inode *ip) {
 	if (!agent_metadata_inode_trackable(ip))
 		return;
 	scope_id = ip->vfs_scope_id;
+	if (FS_META_UNBOUND(ip)) {
+		agent_file_version_reclaim(ip);
+		return;
+	}
 	if (ip->agent_meta_slot <= 0 ||
 	    ip->agent_meta_version != AGENT_INODE_META_VERSION) {
 		agent_file_version_reclaim(ip);
@@ -106,10 +76,12 @@ out:
 }
 
 void agent_fs_note_write(struct inode *ip) {
+	if (FS_META_UNBOUND(ip)) return;
 	agent_fs_publish_content(ip);
 }
 
 void agent_fs_note_truncate(struct inode *ip) {
+	if (FS_META_UNBOUND(ip)) return;
 	agent_fs_publish_content(ip);
 }
 

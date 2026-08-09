@@ -12,7 +12,7 @@ else:
 
 SOURCE_RELATIVE = "user/src/agenteval_ucore.c"
 EVALUATION_SUITE_SOURCE_PATH = "ci/evaluation-suite.json"
-POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v5"
+POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v6"
 
 # 这里必须使用允许列表，而非递归源码树快照。每个条目都会参与正式测量的
 # 选择、执行、解释、渲染或打包，因此必须纳入签名回执。
@@ -95,6 +95,17 @@ CONTROL_PLANE_POLICY = (
     ("kernel-budget-probe", "scripts/probes/struct-proc-size.c"),
     ("user-stack-checker", "scripts/check-user-stack-usage.py"),
     ("user-stack-contract", "user_stack_policy.h"),
+    ("user-stack-source-contract", "scripts/check-user-stack-contract.py"),
+    (
+        "user-stack-source-contract-selftest",
+        "scripts/test-check-user-stack-contract.py",
+    ),
+    (
+        "traditional-io-fastpath-checker",
+        "scripts/check-traditional-io-fastpath.py",
+    ),
+    ("worker-batch-checker", "scripts/check-rp-worker-batches.py"),
+    ("worker-batch-checker-selftest", "scripts/test-rp-worker-batches.py"),
     ("source-contract", "host_tools/agenteval_measurement_source_contract.py"),
     ("source-contract", "host_tools/agenteval_measurement_source_policy.py"),
     ("source-contract", "host_tools/agenteval_measurement_source_receipt.py"),
@@ -126,14 +137,14 @@ CONTROL_PLANE_POLICY = (
     ("agentos-build-map", "Makefile"),
     ("agentos-init-selector", "scripts/initproc.py"),
     ("agentos-image-build-map", "nfs/Makefile"),
-    ("agentos-user-build-map", "user/Makefile"),
     ("baseline-build-map", "baseline_ucore/Makefile"),
     ("baseline-init-selector", "baseline_ucore/scripts/initproc.py"),
     ("baseline-image-build-map", "baseline_ucore/nfs/Makefile"),
     ("baseline-user-build-map", "baseline_ucore/user/Makefile"),
     ("agentos-state-helper", "user/include/research_platform_state.h"),
-    ("agentos-program-manifest", "user/include/rp_program_manifest.h"),
+    ("agentos-state-storage", "user/lib/research_platform_state.c"),
     ("baseline-state-helper", "baseline_ucore/user/include/research_platform_state.h"),
+    ("baseline-state-storage", "baseline_ucore/user/lib/research_platform_state.c"),
     ("baseline-program-manifest", "baseline_ucore/user/include/rp_program_manifest.h"),
 )
 
@@ -218,10 +229,7 @@ SEMANTIC_REPLAY_SOURCE_POLICY = tuple(
     ("semantic-replay-guest-source", f"{prefix}/{name}")
     for prefix in ("baseline_ucore/user/src", "user/src")
     for name in SEMANTIC_REPLAY_COMMON_SOURCES
-    if f"{prefix}/{name}" not in {
-        "baseline_ucore/user/src/rp_seed_orch.c",
-        "user/src/rp_orch.c",
-    }
+    if f"{prefix}/{name}" not in set(SOURCE_PATHS)
 )
 
 GUEST_POLICY_ROLES = (
@@ -229,6 +237,16 @@ GUEST_POLICY_ROLES = (
     "baseline-orchestrator",
     "agentos-seeded-orchestrator",
     "agentos-orchestrator",
+    "agentos-package-commit-publisher",
+    "agentos-program-manifest",
+    "agentos-worker-batch-protocol",
+    "agentos-worker-batch-runner-0",
+    "agentos-worker-batch-runner-1",
+    "agentos-worker-batch-runner-2",
+    "agentos-worker-batch-build-map",
+    "agentos-trusted-crt-launch-self-check",
+    "agentos-launch-expectation-contract",
+    "agentos-launch-evidence-contract",
     "agentos-resource-probe",
     "agentos-resource-contract",
     "agentos-exec-role-policy",
@@ -236,6 +254,7 @@ GUEST_POLICY_ROLES = (
     "kernel-lifecycle-identity-observer",
     "kernel-performance-abi",
     "kernel-resource-abi",
+    "kernel-compact-launch-identity",
     "kernel-resource-observer",
     "kernel-performance-counter-producer",
     "kernel-performance-counter-interface",

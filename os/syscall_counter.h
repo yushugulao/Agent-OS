@@ -138,6 +138,10 @@ enum syscall_class {
 	X(agent_worker_create, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_route_config, FAST, ALWAYS)
 
+/* 独立 ABI 入口复用完整身份查询的计数槽，不扩张 struct proc。 */
+#define SYSCALL_ALIASES(X) \
+	X(agent_launch_info, agent_info)
+
 enum syscall_counter_slot {
 #define SYSCALL_COUNTER_ENUM(name, class, enabled) SYSCALL_COUNTER_SLOT_##name,
 	SYSCALL_REGISTERED(SYSCALL_COUNTER_ENUM)

@@ -16,11 +16,16 @@
 #endif
 #endif
 #define RP_HOST_SEED_ARG_MARK "__rp_seed_v1__"
+#define RP_HOST_SEED_BUFFER_SIZE 32768
 
-static RP_UNUSED char rp_state_buf[RP_STATE_BUFFER_SIZE];
+extern char rp_state_buf[RP_STATE_BUFFER_SIZE];
+_Static_assert(sizeof(rp_state_buf) == RP_STATE_BUFFER_SIZE,
+	       "research platform state scratch size mismatch");
 #ifdef RP_ENABLE_HOST_ACTION_SEED
-static RP_UNUSED char rp_host_seed_buf[32768];
-static RP_UNUSED int rp_host_seed_loaded;
+extern char rp_host_seed_buf[RP_HOST_SEED_BUFFER_SIZE];
+extern int rp_host_seed_loaded;
+_Static_assert(sizeof(rp_host_seed_buf) == RP_HOST_SEED_BUFFER_SIZE,
+	       "research platform host seed scratch size mismatch");
 #endif
 extern int __argc;
 extern char **__argv;

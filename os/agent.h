@@ -275,7 +275,6 @@
 #define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
 #define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
-
 #define AGENT_DEP_SLOT(n) (1ULL << ((n) & 63))
 
 struct agent_info {
@@ -772,7 +771,7 @@ int sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 int sys_agent_resource_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_performance_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_scope_delegate_fd(int fd);
-int sys_agent_info(uint64 addr);
+int sys_agent_info(uint64 addr, int launch_identity);
 int sys_agent_sched_snapshot(uint64 recordsaddr, int max);
 int sys_agent_sched_config(uint64 configaddr);
 int sys_agent_trace_snapshot(uint64 recordsaddr, int max);

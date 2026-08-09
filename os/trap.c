@@ -16,21 +16,13 @@ extern char userret[], kernelvec[];
 
 void kerneltrap();
 
-// set up to take exceptions and traps while in the kernel.
-void set_usertrap()
-{
-	w_stvec(((uint64)TRAMPOLINE + (uservec - trampoline)) & ~0x3); // DIRECT
-}
-
 void set_kerneltrap()
 {
 	w_stvec((uint64)kernelvec & ~0x3); // DIRECT
 }
 
-// set up to take exceptions and traps while in the kernel.
 void trap_init()
 {
-	// intr_on();
 	set_kerneltrap();
 	w_sie(r_sie() | SIE_SEIE | SIE_STIE | SIE_SSIE);
 }
@@ -53,9 +45,10 @@ void devintr(uint64 cause)
 		virtio_disk_tick();
 		bio_policy_tick();
 		agent_tick();
-		// if form user, allow yield
+		// 用户态仅在存在可运行竞争者时让出处理器。
 		if ((r_sstatus() & SSTATUS_SPP) == 0) {
-			yield();
+			if (scheduler_has_runnable_peer())
+				yield();
 		} else {
 			kernel_work_request_resched();
 		}
@@ -63,7 +56,6 @@ void devintr(uint64 cause)
 	case SupervisorExternal:
 		irq = plic_claim();
 		if (irq == UART0_IRQ) {
-			// do nothing
 		} else if (irq == VIRTIO0_IRQ) {
 			virtio_disk_intr();
 		} else if (irq) {
@@ -78,10 +70,6 @@ void devintr(uint64 cause)
 	}
 }
 
-//
-// handle an interrupt, exception, or system call from user space.
-// called from trampoline.S
-//
 void usertrap()
 {
 	set_kerneltrap();
@@ -133,15 +121,12 @@ void usertrap()
 	usertrapret();
 }
 
-//
-// return to user space
-//
 void usertrapret()
 {
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
 	kernel_stack_check(curr_thread());
-	set_usertrap();
+	w_stvec(((uint64)TRAMPOLINE + (uservec - trampoline)) & ~0x3);
 	struct trapframe *trapframe = curr_thread()->trapframe;
 	trapframe->kernel_satp = r_satp(); // kernel page table
 	trapframe->kernel_sp =
@@ -150,16 +135,12 @@ void usertrapret()
 	trapframe->kernel_hartid = r_tp(); // unuesd
 
 	w_sepc(trapframe->epc);
-	// set up the registers that trampoline.S's sret will use
-	// to get to user space.
 
-	// set S Previous Privilege mode to User.
 	uint64 x = r_sstatus();
 	x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
 	x |= SSTATUS_SPIE; // enable interrupts in user mode
 	w_sstatus(x);
 
-	// tell trampoline.S the user page table to switch to.
 	uint64 satp = MAKE_SATP(curr_proc()->pagetable);
 	uint64 fn = TRAMPOLINE + (userret - trampoline);
 	uint64 trapframe_va = get_thread_trapframe_va(curr_thread()->tid);
@@ -189,8 +170,6 @@ void kerneltrap()
 		 */
 		panic("invalid supervisor trap");
 	}
-	// the yield() may have caused some traps to occur,
-	// so restore trap registers for use by kernelvec.S's sepc instruction.
 	w_sepc(sepc);
 	w_sstatus(sstatus);
 }

@@ -322,17 +322,6 @@ agent_identity_controller_successor_locked(
 	return root;
 }
 
-int
-agent_identity_controller_active_locked(
-	uint64 control_id, struct workflow_lifecycle_key lifecycle, uint scope_id)
-{
-	if (intr_get())
-		panic("controller lookup unlocked");
-	return control_id != 0 &&
-	       agent_identity_controller_find_locked(control_id, lifecycle,
-						     scope_id) != 0;
-}
-
 /*
  * workflow 内发布的进程均绑定最近控制器，包括待激活 worker 与 PUBLIC
  * 后代。子进程写入父表和调度器时保持同一关中断边界，避免退出漏掉
@@ -371,8 +360,12 @@ agent_identity_spawn_publish_locked(struct proc *parent, struct proc *child)
 	/* 可信启动生命周期归系统所有，不含 Agent 控制边。 */
 	if (controller_id == 0)
 		return child->agent_controller_id == 0 ? 0 : -1;
-	if (agent_identity_controller_find_locked(controller_id,
-						 child_lifecycle, scope_id) == 0 ||
+	if (((!parent->is_agent ||
+	     parent->agent_control_state != AGENT_CONTROL_OPEN ||
+	     !agent_identity_lifecycle_matches(parent, child_lifecycle,
+					       scope_id)) &&
+	    agent_identity_controller_find_locked(controller_id,
+						 child_lifecycle, scope_id) == 0) ||
 	    (child->agent_controller_id != 0 &&
 	     child->agent_controller_id != controller_id))
 		return -1;

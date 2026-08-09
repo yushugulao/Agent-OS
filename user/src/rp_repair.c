@@ -25,7 +25,7 @@ static int run_kernel_recovery(void)
 {
 	struct agent_info info;
 
-	if (agent_info(&info) < 0 || !info.is_agent)
+	if (agent_launch_info(&info) < 0 || !info.is_agent)
 		return 0;
 	if (info.agent_role != AGENT_ROLE_RECOVERY) {
 		printf("rp_repair: unexpected_agent_role role=%d\n",

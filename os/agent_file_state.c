@@ -70,7 +70,6 @@ struct file_version {
 	uint storage_owner;
 	uint vfs_policy;
 	uint64 edit_version;
-	uint64 edit_authority_generation;
 	uint64 content_version;
 	uint64 published_size;
 	uint64 published_size_sequence;
@@ -135,13 +134,17 @@ agent_file_state_now(void)
 {
 	return get_cycle() / (CPU_FREQ / TICKS_PER_SEC);
 }
-
 static uint64
 agent_file_counter_next(uint64 *counter)
 {
 	return ++*counter ? *counter : (*counter = 1);
 }
-
+static void agent_edit_authority_next_locked(void)
+{
+	if (agent_file_edit_authority_generation == ~0ULL)
+		shutdown(), __builtin_unreachable();
+	agent_file_edit_authority_generation++;
+}
 static uint64
 file_version_edit_next_locked(struct file_version *entry)
 {
@@ -151,7 +154,6 @@ file_version_edit_next_locked(struct file_version *entry)
 		agent_file_edit_version_generation = next;
 	return next;
 }
-
 void
 agent_file_state_project_hit(struct agent_file_hit *hit,
 			     const struct agent_file_meta *meta, uint scope_id)
@@ -176,7 +178,6 @@ agent_file_state_project_hit(struct agent_file_hit *hit,
 	hit->size = snapshot.size;
 	hit->fs_generation = snapshot.fs_generation;
 }
-
 void
 agent_file_state_init(void)
 {
@@ -196,15 +197,13 @@ agent_file_state_init(void)
 	agent_file_edit_guard = 0;
 	agent_file_edit_next_lease = 1;
 }
-
 static int
 agent_file_state_reserved_path(char *path)
 {
 	return path != 0 &&
-	       (strncmp(path, AGENT_META_STORE_NAME_0, DIRSIZ) == 0 ||
-		strncmp(path, AGENT_META_STORE_NAME_1, DIRSIZ) == 0);
+		(strncmp(path, AGENT_META_STORE_NAME_0, DIRSIZ) == 0 ||
+		 strncmp(path, AGENT_META_STORE_NAME_1, DIRSIZ) == 0);
 }
-
 static struct agent_file_cache_scope_state *
 file_version_scope_state_locked(uint scope_id,
 				struct workflow_lifecycle_key lifecycle,
@@ -251,7 +250,6 @@ file_version_scope_state_locked(uint scope_id,
 		agent_file_system_generation : agent_file_generation;
 	return state;
 }
-
 static struct agent_file_cache_scope_state *
 agent_file_cache_scope_locked(uint scope_id, int create)
 {
@@ -266,7 +264,6 @@ agent_file_cache_scope_locked(uint scope_id, int create)
 		return 0;
 	return file_version_scope_state_locked(scope_id, lifecycle, create);
 }
-
 uint64
 agent_file_state_scope_generation(uint scope_id)
 {
@@ -286,7 +283,6 @@ agent_file_state_scope_generation(uint scope_id)
 	agent_edit_unlock(enabled);
 	return generation;
 }
-
 static uint64
 agent_file_state_generation_next_capture_locked(
 	uint scope_id, struct workflow_lifecycle_key *lifecycle)
@@ -308,7 +304,6 @@ agent_file_state_generation_next_capture_locked(
 	}
 	return generation;
 }
-
 uint64
 agent_file_state_generation_next(uint scope_id)
 {
@@ -319,7 +314,6 @@ agent_file_state_generation_next(uint scope_id)
 	agent_edit_unlock(enabled);
 	return generation;
 }
-
 static int
 agent_edit_lock(void)
 {
@@ -330,7 +324,6 @@ agent_edit_lock(void)
 	__sync_synchronize();
 	return enabled;
 }
-
 static void
 agent_edit_unlock(int enabled)
 {
@@ -338,7 +331,6 @@ agent_edit_unlock(int enabled)
 	__sync_lock_release(&agent_file_edit_guard);
 	intr_restore(enabled);
 }
-
 static int
 file_version_current_lifecycle(uint scope_id,
 			       struct workflow_lifecycle_key *lifecycle)
@@ -353,7 +345,6 @@ file_version_current_lifecycle(uint scope_id,
 		return -1;
 	return 0;
 }
-
 static int
 file_version_identity_valid(uint64 dev, uint64 inum, uint64 incarnation,
 			     uint scope_id,
@@ -368,7 +359,6 @@ file_version_identity_valid(uint64 dev, uint64 inum, uint64 incarnation,
 	       scope_id < FS_OWNER_SCOPE_FLAG &&
 	       workflow_lifecycle_key_valid(lifecycle);
 }
-
 static void
 file_version_bank_bounds(const struct agent_file_cache_scope_state *state,
 			 uint *start, uint *capacity)
@@ -384,7 +374,6 @@ file_version_bank_bounds(const struct agent_file_cache_scope_state *state,
 		AGENT_FILE_VERSION_SYSTEM_RESIDENT :
 		AGENT_FILE_VERSION_SCOPE_RESIDENT;
 }
-
 static int
 file_version_compare(const struct file_version *entry, uint64 dev,
 		     uint64 inum, uint64 incarnation)
@@ -397,7 +386,6 @@ file_version_compare(const struct file_version *entry, uint64 dev,
 		return entry->incarnation < incarnation ? -1 : 1;
 	return 0;
 }
-
 /* 每个已接纳 scope 独占一个有序 bank；热查找只需二分本 bank。 */
 static struct file_version *
 file_version_search_locked(struct agent_file_cache_scope_state *state,
@@ -514,9 +502,11 @@ file_version_clear_locked(int slot)
 			    entry->identity_lifecycle) &&
 		    agent_file_edits[i].dev == entry->dev &&
 		    agent_file_edits[i].inum == entry->inum &&
-		    agent_file_edits[i].incarnation == entry->incarnation)
+		    agent_file_edits[i].incarnation == entry->incarnation) {
+			agent_edit_authority_next_locked();
 			memset(&agent_file_edits[i], 0,
 			       sizeof(agent_file_edits[i]));
+		}
 	file_version_digest_clear_locked(entry);
 	scope_state->version_count--;
 	if (position < scope_state->version_count)
@@ -600,8 +590,6 @@ file_version_allocate_locked(uint64 dev, uint64 inum, uint64 incarnation,
 	entry->published_meta_slot = AGENT_FILE_META_MAX;
 	/* 驻留项重建时继承全局单调版本，避免回收造成版本倒退。 */
 	entry->edit_version = agent_file_edit_version_generation;
-	entry->edit_authority_generation =
-		agent_file_edit_authority_generation;
 	/* 新绑定从唯一内容代际起步，阻止解绑前的异步摘要回填。 */
 	entry->content_version =
 		agent_file_counter_next(&agent_file_content_generation);
@@ -982,12 +970,9 @@ agent_edit_release_locked(struct agent_file_edit_entry *e, int publish_dirty)
 		return;
 	version = file_version_identity_locked(
 		e->dev, e->inum, e->incarnation, e->scope_id, e->lifecycle);
-	if (version) {
-		if (publish_dirty && e->dirty)
-			(void)file_version_edit_next_locked(version);
-		version->edit_authority_generation = agent_file_counter_next(
-			&agent_file_edit_authority_generation);
-	}
+	if (version && publish_dirty && e->dirty)
+		(void)file_version_edit_next_locked(version);
+	agent_edit_authority_next_locked();
 	memset(e, 0, sizeof(*e));
 }
 
@@ -1073,7 +1058,6 @@ agent_edit_modify_allowed(struct inode *ip, char *action,
 	struct proc *p = curr_proc();
 	struct agent_file_edit_entry *edit;
 	struct agent_file_edit_state state;
-	struct file_version *version;
 	uint64 now;
 	int allowed = 1;
 	int enabled;
@@ -1087,11 +1071,17 @@ agent_edit_modify_allowed(struct inode *ip, char *action,
 	if (ip->vfs_policy != VFS_POLICY_WORKFLOW)
 		return 1;
 	enabled = agent_edit_lock();
+	/* 已授权句柄只捕获全局 epoch；TTL 由调用者单独失效。 */
+	if (action == 0 && authority_generation != 0 &&
+	    valid_until_tick == 0) {
+		*authority_generation = agent_file_edit_authority_generation;
+		agent_edit_unlock(enabled);
+		return 1;
+	}
 	now = agent_file_state_now();
 	agent_edit_cleanup_expired_locked(now);
-	version = file_version_inode_locked(ip, 0);
-	if (authority_generation && version)
-		*authority_generation = version->edit_authority_generation;
+	if (authority_generation)
+		*authority_generation = agent_file_edit_authority_generation;
 	edit = agent_edit_find_locked(ip->vfs_scope_id, 0, ip);
 	if (edit && !agent_edit_owner(edit, p)) {
 		if (action) {
@@ -1180,9 +1170,11 @@ agent_file_state_scope_reclaim(uint scope_id)
 
 	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
 		if (agent_file_edits[i].active &&
-		    agent_file_edits[i].scope_id == scope_id)
+		    agent_file_edits[i].scope_id == scope_id) {
+			agent_edit_authority_next_locked();
 			memset(&agent_file_edits[i], 0,
 			       sizeof(agent_file_edits[i]));
+		}
 	for (int i = 0; i < AGENT_FILE_DIGEST_CACHE_MAX; i++)
 		if (agent_file_digest_cache[i].valid &&
 		    agent_file_digest_cache[i].scope_id == scope_id)
@@ -1516,8 +1508,7 @@ sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 	call.entry->base_version = version;
 	call.entry->deadline_tick = now + ttl;
 	safestrcpy(call.entry->path, path, sizeof(call.entry->path));
-	version_entry->edit_authority_generation = agent_file_counter_next(
-		&agent_file_edit_authority_generation);
+	agent_edit_authority_next_locked();
 	edit_state_locked(&call.state, call.entry, call.inode, path, 0);
 	return edit_reply(&call, AGENT_STATUS_OK, "edit_begin", stateaddr);
 }
@@ -1550,8 +1541,7 @@ sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 	}
 	if (call.entry->dirty)
 		(void)file_version_edit_next_locked(version);
-	version->edit_authority_generation = agent_file_counter_next(
-		&agent_file_edit_authority_generation);
+	agent_edit_authority_next_locked();
 	edit_state_locked(&call.state, call.entry, 0, call.entry->path, 1);
 	memset(call.entry, 0, sizeof(*call.entry));
 	return edit_reply(&call, AGENT_STATUS_OK, "edit_commit", stateaddr);

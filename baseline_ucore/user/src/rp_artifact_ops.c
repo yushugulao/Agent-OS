@@ -541,10 +541,11 @@ int main(void)
 		}
 		if (!rp_append_host_action_line("rp_input", "host_action_run_id=", seed_run)) return 1;
 		if (!rp_append_host_action_line("rp_input", "host_action_research_run=usable-run:", seed_run)) return 1;
-		if (!rp_append_file("rp_input", "host_action_source=rp_host_action_seed")) return 1;
-		if (!rp_append_file("rp_input", "host_action_state=accepted")) return 1;
-		if (!rp_append_file("rp_input", "host_action_dataset_rows=4")) return 1;
-		if (!rp_append_file("rp_input", "host_action_validation=passed")) return 1;
+		if (!rp_append_file("rp_input",
+				    "host_action_source=rp_host_action_seed\n"
+				    "host_action_state=accepted\n"
+				    "host_action_dataset_rows=4\n"
+				    "host_action_validation=passed")) return 1;
 		char value[96];
 		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "title=", value, sizeof(value))) {
 			rp_copy_text(value, sizeof(value), "Browser started study");
@@ -593,9 +594,10 @@ int main(void)
 		if (!rp_append_host_action_line("rp_input", "host_action_rerun_id=", rerun_id)) return 1;
 		if (!rp_append_host_action_line("rp_input", "host_action_research_rerun=usable-run:", rerun_id)) return 1;
 		if (!rp_append_host_action_line("rp_input", "host_action_rerun_parent=", parent_run)) return 1;
-		if (!rp_append_file("rp_input", "host_action_source=rp_host_action_seed")) return 1;
-		if (!rp_append_file("rp_input", "host_action_state=accepted")) return 1;
-		if (!rp_append_file("rp_input", "host_action_validation=passed")) return 1;
+		if (!rp_append_file("rp_input",
+				    "host_action_source=rp_host_action_seed\n"
+				    "host_action_state=accepted\n"
+				    "host_action_validation=passed")) return 1;
 		if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "provider=", value, sizeof(value))) {
 			rp_copy_text(value, sizeof(value), "template");
 		}
@@ -908,22 +910,25 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
-	if (!rp_append_file("rp_ack", "ack=artifact_ops;msg=artifact;status=ready")) return 1;
-	if (!rp_append_file("rp_ack", "ack=research_request;msg=input;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_input")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.read_input")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_dag")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_log")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_artifact")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_report")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_chart")) return 1;
-	if (!rp_append_status("input=ready")) return 1;
-	if (!rp_append_status("request_form=ready")) return 1;
-	if (!rp_append_status("upload_files=ready")) return 1;
-	if (!rp_append_status("runner=ready")) return 1;
-	if (!rp_append_status("stage_dag=ready")) return 1;
-	if (!rp_append_status("artifact_ops=ready")) return 1;
-	if (!rp_append_status("research_request=ready")) return 1;
+	if (!rp_append_file("rp_ack",
+			    "ack=artifact_ops;msg=artifact;status=ready\n"
+			    "ack=research_request;msg=input;status=ready")) return 1;
+	if (!rp_append_file("rp_tool",
+			    "tool=artifact_ops.write_input\n"
+			    "tool=artifact_ops.read_input\n"
+			    "tool=artifact_ops.write_dag\n"
+			    "tool=artifact_ops.write_log\n"
+			    "tool=artifact_ops.write_artifact\n"
+			    "tool=artifact_ops.write_report\n"
+			    "tool=artifact_ops.write_chart")) return 1;
+	if (!rp_append_file("rp_status",
+			    "input=ready\n"
+			    "request_form=ready\n"
+			    "upload_files=ready\n"
+			    "runner=ready\n"
+			    "stage_dag=ready\n"
+			    "artifact_ops=ready\n"
+			    "research_request=ready")) return 1;
 	printf("rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 custom_requests=3 status=ready\n");
 	return 0;
 }

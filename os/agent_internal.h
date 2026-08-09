@@ -71,8 +71,6 @@ int agent_identity_has_any_cap(struct proc *, uint64);
 int agent_identity_authorize_object(struct proc *, uint64, uint, int);
 int agent_identity_controls_target(struct proc *, struct proc *);
 int agent_identity_controls_or_self(struct proc *, struct proc *);
-int agent_identity_controller_active_locked(
-	uint64, struct workflow_lifecycle_key, uint);
 int agent_identity_spawn_publish_locked(struct proc *, struct proc *);
 int agent_identity_controller_depart(struct proc *, int,
 				     struct agent_controller_departure *);

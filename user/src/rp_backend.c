@@ -9,6 +9,30 @@
 #include <rp_evidence.h>
 
 #define BACKEND_EDIT_FILE "r42edrep"
+#define BACKEND_QUERY_RECORDS 12
+#define BACKEND_QUERY_OPERATIONS 4096
+#define BACKEND_QUERY_META_RETRIES (8 * BACKEND_QUERY_RECORDS)
+#define BACKEND_QUERY_MAGIC 0x5250515545525931ULL
+#define BACKEND_QUERY_FNV_OFFSET 1469598103934665603ULL
+#define BACKEND_QUERY_FNV_PRIME 1099511628211ULL
+
+struct backend_query_record {
+	uint64 magic;
+	uint64 dependency_mask;
+	uint64 record_hash;
+	int fid;
+	char physical_name[8];
+	char logical_path[8];
+	char project[16];
+	char workflow[20];
+	char run_id[12];
+	char stage[12];
+	char kind[12];
+	char status[8];
+	char summary[40];
+};
+_Static_assert(sizeof(struct backend_query_record) == 168,
+	       "backend query record ABI");
 
 static struct agent_context_header backend_header;
 static struct agent_context_record backend_records[8];
@@ -24,6 +48,19 @@ static int backend_runtime_kernel_checks;
 static unsigned long long backend_runtime_source_digest =
 	RP_EVIDENCE_FNV_OFFSET;
 static char backend_line[512];
+static struct backend_query_record backend_scaled_record;
+static uint64 backend_query_digest;
+static uint64 backend_query_records_examined;
+static uint64 backend_query_devs[BACKEND_QUERY_RECORDS];
+static uint64 backend_query_inums[BACKEND_QUERY_RECORDS];
+static uint64 backend_query_incarnations[BACKEND_QUERY_RECORDS];
+static int backend_query_matches;
+static int backend_query_seen;
+static char backend_query_line[256];
+static const char *const backend_query_stages[BACKEND_QUERY_RECORDS] = {
+	"summarize", "package", "join", "evaluate", "transform", "prepare",
+	"ingest", "export", "aggregate", "derive", "normalize", "collect",
+};
 
 struct backend_runtime_spec {
 	const char *case_name;
@@ -58,6 +95,267 @@ static const struct backend_runtime_spec backend_runtime_specs[] = {
 	{"kernel-audit", "rp_agentos_audit", "audit_source", "kernel_ledger"},
 	{"kernel-edit", "rp_agentos_conflict", "holder_write", "checked"},
 };
+
+static uint64 backend_hash_bytes(uint64 hash, const void *data, int length)
+{
+	const unsigned char *bytes = data;
+
+	for (int i = 0; i < length; i++) {
+		hash ^= bytes[i];
+		hash *= BACKEND_QUERY_FNV_PRIME;
+	}
+	return hash;
+}
+
+static void backend_make_code(char *out, char prefix, int number)
+{
+	out[0] = prefix;
+	out[1] = '0' + (number / 100) % 10;
+	out[2] = '0' + (number / 10) % 10;
+	out[3] = '0' + number % 10;
+	out[4] = 0;
+}
+
+static uint64 backend_record_hash(const struct backend_query_record *record)
+{
+	uint64 hash = BACKEND_QUERY_FNV_OFFSET;
+
+	hash = backend_hash_bytes(hash, &record->magic, sizeof(record->magic));
+	hash = backend_hash_bytes(hash, &record->dependency_mask,
+				  sizeof(record->dependency_mask));
+	hash = backend_hash_bytes(hash, &record->fid, sizeof(record->fid));
+	hash = backend_hash_bytes(hash, record->physical_name,
+				  sizeof(record->physical_name));
+	hash = backend_hash_bytes(hash, record->logical_path,
+				  sizeof(record->logical_path));
+	hash = backend_hash_bytes(hash, record->project,
+				  sizeof(record->project));
+	hash = backend_hash_bytes(hash, record->workflow,
+				  sizeof(record->workflow));
+	hash = backend_hash_bytes(hash, record->run_id,
+				  sizeof(record->run_id));
+	hash = backend_hash_bytes(hash, record->stage,
+				  sizeof(record->stage));
+	hash = backend_hash_bytes(hash, record->kind, sizeof(record->kind));
+	hash = backend_hash_bytes(hash, record->status, sizeof(record->status));
+	hash = backend_hash_bytes(hash, record->summary,
+				  sizeof(record->summary));
+	return hash;
+}
+
+static void backend_build_record(struct backend_query_record *record, int index)
+{
+	memset(record, 0, sizeof(*record));
+	record->magic = BACKEND_QUERY_MAGIC;
+	record->fid = 3000 + index;
+	backend_make_code(record->physical_name, 'm', index);
+	strcpy(record->logical_path, record->physical_name);
+	strcpy(record->project, "lab-gene-x");
+	strcpy(record->workflow, "research-query");
+	strcpy(record->run_id, "RUN-042");
+	strcpy(record->stage, backend_query_stages[index]);
+	strcpy(record->kind, "artifact");
+	strcpy(record->status, "ready");
+	strcpy(record->summary, "scaled research metadata");
+	record->record_hash = backend_record_hash(record);
+}
+
+static int backend_record_valid(const struct backend_query_record *record,
+				int index)
+{
+	char name[8];
+	char status[8];
+
+	backend_make_code(name, 'm', index);
+	strcpy(status, "ready");
+	return record->magic == BACKEND_QUERY_MAGIC &&
+	       record->fid == 3000 + index &&
+	       strcmp(record->physical_name, name) == 0 &&
+	       strcmp(record->logical_path, name) == 0 &&
+	       strcmp(record->project, "lab-gene-x") == 0 &&
+	       strcmp(record->workflow, "research-query") == 0 &&
+	       strcmp(record->run_id, "RUN-042") == 0 &&
+	       strcmp(record->stage, backend_query_stages[index]) == 0 &&
+	       strcmp(record->kind, "artifact") == 0 &&
+	       strcmp(record->status, status) == 0 &&
+	       strcmp(record->summary, "scaled research metadata") == 0 &&
+	       record->dependency_mask == 0 &&
+	       record->record_hash == backend_record_hash(record);
+}
+
+static int backend_write_record(const struct backend_query_record *record)
+{
+	int fd = open(record->physical_name, O_CREATE | O_WRONLY | O_TRUNC);
+	int done = 0;
+
+	if (fd < 0)
+		return 0;
+	while (done < (int)sizeof(*record)) {
+		int n = write(fd, (const char *)record + done,
+			      sizeof(*record) - done);
+
+		if (n <= 0)
+			break;
+		done += n;
+	}
+	return close(fd) == 0 && done == (int)sizeof(*record);
+}
+
+static int backend_metadata_set_bounded(struct agent_file_meta *meta)
+{
+	int status = AGENT_STATUS_RETRY;
+
+	for (int attempt = 0; attempt < BACKEND_QUERY_META_RETRIES; attempt++) {
+		status = agent_file_meta_set(meta);
+		if (status != AGENT_STATUS_RETRY)
+			return status;
+		if (sched_yield() < 0)
+			break;
+	}
+	return status;
+}
+
+static int backend_seed_query_record(int index)
+{
+	struct agent_file_meta meta;
+
+	backend_build_record(&backend_scaled_record, index);
+	memset(&meta, 0, sizeof(meta));
+	meta.fid = backend_scaled_record.fid;
+	strcpy(meta.physical_name, backend_scaled_record.physical_name);
+	strcpy(meta.logical_path, backend_scaled_record.logical_path);
+	strcpy(meta.project, backend_scaled_record.project);
+	strcpy(meta.workflow, backend_scaled_record.workflow);
+	strcpy(meta.run_id, backend_scaled_record.run_id);
+	strcpy(meta.stage, backend_scaled_record.stage);
+	strcpy(meta.kind, backend_scaled_record.kind);
+	strcpy(meta.status, backend_scaled_record.status);
+	strcpy(meta.summary, backend_scaled_record.summary);
+	meta.dependency_mask = backend_scaled_record.dependency_mask;
+	if (backend_metadata_set_bounded(&meta) != AGENT_STATUS_OK)
+		return 0;
+	return backend_write_record(&backend_scaled_record);
+}
+
+static int backend_hit_matches(const struct agent_file_hit *hit, int index)
+{
+	backend_build_record(&backend_scaled_record, index);
+	return backend_record_valid(&backend_scaled_record, index) &&
+	       hit->fid == backend_scaled_record.fid &&
+	       strcmp(hit->physical_name,
+		      backend_scaled_record.physical_name) == 0 &&
+	       strcmp(hit->logical_path, backend_scaled_record.logical_path) == 0 &&
+	       strcmp(hit->stage, backend_scaled_record.stage) == 0 &&
+	       strcmp(hit->kind, backend_scaled_record.kind) == 0 &&
+	       strcmp(hit->status, backend_scaled_record.status) == 0 &&
+	       strcmp(hit->summary, backend_scaled_record.summary) == 0 &&
+	       hit->dependency_mask == backend_scaled_record.dependency_mask &&
+	       hit->dev != 0 && hit->inum != 0 && hit->incarnation != 0 &&
+	       hit->size == sizeof(backend_scaled_record);
+}
+
+static int run_backend_query_workload(void)
+{
+	backend_query_digest = BACKEND_QUERY_FNV_OFFSET;
+	backend_query_records_examined = 0;
+	backend_query_matches = 0;
+	backend_query_seen = 0;
+	memset(backend_query_devs, 0, sizeof(backend_query_devs));
+	memset(backend_query_inums, 0, sizeof(backend_query_inums));
+	memset(backend_query_incarnations, 0,
+	       sizeof(backend_query_incarnations));
+	for (int i = 0; i < BACKEND_QUERY_RECORDS; i++)
+		if (!backend_seed_query_record(i))
+			return 0;
+	for (int operation = 0; operation < BACKEND_QUERY_OPERATIONS;
+	     operation++) {
+		int target = (operation * 5 + 3) % BACKEND_QUERY_RECORDS;
+		struct agent_file_hit *hit;
+
+		memset(&backend_query, 0, sizeof(backend_query));
+		backend_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+		backend_query.max_hits = 1;
+		strcpy(backend_query.project, "lab-gene-x");
+		strcpy(backend_query.workflow, "research-query");
+		strcpy(backend_query.run_id, "RUN-042");
+		strcpy(backend_query.stage, backend_query_stages[target]);
+		if (agent_file_query(&backend_query, &backend_query_result) != 1 ||
+		    backend_query_result.total_hits != 1 ||
+		    backend_query_result.returned != 1 ||
+		    backend_query_result.truncated ||
+		    backend_query_result.used_index != 1 ||
+		    backend_query_result.plan != AGENT_FILE_QUERY_PLAN_STAGE_INDEX ||
+		    (backend_query_result.plan_reason &
+		     AGENT_FILE_QUERY_REASON_STAGE_INDEX) == 0 ||
+		    backend_query_result.index_rebuild_records != 0)
+			return 0;
+		hit = &backend_query_result.hits[0];
+		if (!backend_hit_matches(hit, target))
+			return 0;
+		backend_query_devs[target] = hit->dev;
+		backend_query_inums[target] = hit->inum;
+		backend_query_incarnations[target] = hit->incarnation;
+		backend_query_seen |= 1 << target;
+		backend_query_matches++;
+		backend_query_records_examined +=
+			backend_query_result.scanned_records;
+		backend_build_record(&backend_scaled_record, target);
+		backend_query_digest = backend_hash_bytes(
+			backend_query_digest, &backend_scaled_record.record_hash,
+			sizeof(backend_scaled_record.record_hash));
+	}
+	return backend_query_matches == BACKEND_QUERY_OPERATIONS &&
+	       backend_query_seen == (1 << BACKEND_QUERY_RECORDS) - 1;
+}
+
+static int cleanup_backend_query_workload(void)
+{
+	for (int i = 0; i < BACKEND_QUERY_RECORDS; i++) {
+		struct agent_file_meta meta;
+
+		backend_build_record(&backend_scaled_record, i);
+		memset(&meta, 0, sizeof(meta));
+		meta.fid = backend_scaled_record.fid;
+		strcpy(meta.physical_name, backend_scaled_record.physical_name);
+		strcpy(meta.logical_path, backend_scaled_record.logical_path);
+		meta.dev = backend_query_devs[i];
+		meta.inum = backend_query_inums[i];
+		meta.incarnation = backend_query_incarnations[i];
+		meta.flags = AGENT_FILE_META_F_DELETE;
+		if (backend_metadata_set_bounded(&meta) != AGENT_STATUS_OK ||
+		    unlink(backend_scaled_record.physical_name) < 0)
+			return 0;
+	}
+	return 1;
+}
+
+static int append_backend_query_receipt(void)
+{
+	backend_query_line[0] = 0;
+	rp_append_text(backend_query_line, sizeof(backend_query_line),
+		       "query_workload=research_metadata_lookup;consistency=fresh_snapshot;dataset_records=");
+	rp_append_uint_text(backend_query_line, sizeof(backend_query_line),
+			    BACKEND_QUERY_RECORDS);
+	rp_append_text(backend_query_line, sizeof(backend_query_line),
+		       ";query_operations=");
+	rp_append_uint_text(backend_query_line, sizeof(backend_query_line),
+			    BACKEND_QUERY_OPERATIONS);
+	rp_append_text(backend_query_line, sizeof(backend_query_line),
+		       ";query_matches=");
+	rp_append_uint_text(backend_query_line, sizeof(backend_query_line),
+			    backend_query_matches);
+	rp_append_text(backend_query_line, sizeof(backend_query_line),
+		       ";result_digest=");
+	rp_append_uint_text(backend_query_line, sizeof(backend_query_line),
+			    backend_query_digest);
+	rp_append_text(backend_query_line, sizeof(backend_query_line),
+		       ";records_examined=");
+	rp_append_uint_text(backend_query_line, sizeof(backend_query_line),
+			    backend_query_records_examined);
+	rp_append_text(backend_query_line, sizeof(backend_query_line),
+		       ";backend=agent_metadata_index;status=verified");
+	return rp_append_file("rp_backend", backend_query_line);
+}
 
 static void fold_backend_runtime_source(const struct backend_runtime_spec *spec,
 					const struct rp_evidence_file_measurement *measured)
@@ -215,7 +513,7 @@ static int run_kernel_backend_check(void)
 {
 	struct agent_info info;
 
-	if (agent_info(&info) < 0 || !info.is_agent)
+	if (agent_launch_info(&info) < 0 || !info.is_agent)
 		return 0;
 	memset(&backend_op, 0, sizeof(backend_op));
 	backend_op.version = AGENT_CALL_VERSION;
@@ -284,6 +582,10 @@ int main(void)
 		printf("rp_backend: runtime_kernel_evidence_required\n");
 		return 1;
 	}
+	if (!run_backend_query_workload() || !cleanup_backend_query_workload()) {
+		printf("rp_backend: scaled_metadata_query_failed\n");
+		return 1;
+	}
 	ok = ok && rp_file_contains("rp_package", "status=ready");
 	ok = ok && rp_file_contains("rp_runconf", "candidate=agentos-ucore");
 	ok = ok && rp_file_contains("rp_invocation", "status=recovered");
@@ -339,6 +641,7 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!append_backend_query_receipt()) return 1;
 	if (!rp_write_file("rp_backend_exec",
 			   "evidence_role=demo_reference;catalog_generation=demo_expected;runtime_claim_protocol=source-bound-v1;runtime_claim_scope=file;status=reference_ready\n"
 			   "evidence_role=demo_reference;catalog_generation=demo_expected;workflow_portability=rp_wfio;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;portability_rehearsal_cases=4;status=reference_ready\n"

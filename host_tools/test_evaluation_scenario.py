@@ -32,6 +32,7 @@ def _ledger(
     boot_number: int,
     agentos_advantage_ms: int = 5,
 ) -> tuple[str, int]:
+    launches = scenario.read_expected_program_launches()
     if target == "plain":
         lines = ["orchestrator=rp_seed_orch", "launcher=fork_seeded"]
     else:
@@ -52,10 +53,10 @@ def _ledger(
         role = roles.get(program, "plain")
         is_agent = 1 if program in roles else 0
         role_number = scenario.ROLE_NUMBERS.get(role, 0)
-        launcher = "agent_create_role" if is_agent else "agent_worker_create"
+        launch = launches[program]
         lines.append(
-            f"program={program};role={role};launcher={launcher};"
-            f"identity_source=child_after_exec;is_agent={is_agent};"
+            f"program={program};role={role};launcher={launch.launcher};"
+            f"identity_source={launch.identity_source};is_agent={is_agent};"
             f"agent_role={role_number};filesystem_domain=3;"
             f"filesystem_capabilities=66;ok=1;code=0;elapsed_ms={elapsed}"
         )
@@ -786,15 +787,35 @@ class EvaluationScenarioTests(unittest.TestCase):
         )
         self.assertEqual(kernel_state_writes, ['rp_write_file("rp_agentos_kernel"'])
         agentos_main = agentos[agentos.index("int main(void)") :]
+        start_at = agentos_main.index("int64 workflow_start = get_mtime();")
+        spawn_at = agentos_main.index(
+            "int pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);"
+        )
+        child_at = agentos_main.index("return run_research_orchestrator(")
         wait_at = agentos_main.index("waitpid(pid, &code)")
         completion_at = agentos_main.index("read_workflow_completion(")
         validation_at = agentos_main.index('rp_file_contains("rp_agentos_kernel"')
+        agentcmp_at = agentos_main.index(
+            'read_workflow_output("rp_agentcmp")'
+        )
+        role_validation_at = agentos_main.index(
+            'text_contains(rp_state_buf, "evidence_role=runtime_verified")'
+        )
+        acceptance_validation_at = agentos_main.index(
+            'rp_file_contains("rp_agentos_acceptance"'
+        )
         end_at = agentos_main.index("uint64 workflow_end = get_mtime();")
         timing_at = agentos_main.index("record_workflow_timing(&completion")
         stability_at = agentos_main.index("run_resource_stability_acceptance()")
+        self.assertLess(start_at, spawn_at)
+        self.assertLess(spawn_at, child_at)
+        self.assertLess(child_at, wait_at)
         self.assertLess(wait_at, completion_at)
         self.assertLess(completion_at, validation_at)
-        self.assertLess(validation_at, end_at)
+        self.assertLess(validation_at, agentcmp_at)
+        self.assertLess(agentcmp_at, role_validation_at)
+        self.assertLess(role_validation_at, acceptance_validation_at)
+        self.assertLess(acceptance_validation_at, end_at)
         self.assertLess(end_at, timing_at)
         self.assertLess(timing_at, stability_at)
 
@@ -825,22 +846,118 @@ class EvaluationScenarioTests(unittest.TestCase):
         self.assertLess(context_at, observation_at)
         self.assertLess(observation_at, metadata_query_at)
         self.assertLess(metadata_query_at, receipt_at)
+        self.assertLess(receipt_at, agentos_runner.rindex("return 0;"))
 
         output_parser = agentos[
             agentos.index("static int output_record_value") :
             agentos.index("static void make_echo")
         ]
         self.assertIn("record_count == 1 && field_count == 1", output_parser)
-        for path, anchor in (
-            ("rp_input", "host_action_rerun_id="),
-            ("rp_stage_dag", "host_workflow_id="),
-            ("rp_stage_state", "host_workflow_run_id="),
-            ("rp_artifact", "host_artifact_input="),
-            ("rp_artifact", "host_artifact_derive="),
-            ("rp_runner", "host_action_workflow="),
-            ("rp_runner", "host_action_rerun="),
+        output_loader = output_parser[
+            output_parser.index("static int load_challenge_workflow_outputs") :
+        ]
+        expected_reads = (
+            (
+                "rp_input",
+                (
+                    ("host_action_rerun_id=", "host_action_rerun_id="),
+                    ("host_action_rerun_parent=", "host_action_rerun_parent="),
+                ),
+            ),
+            ("rp_stage_dag", (("host_workflow_id=", "host_workflow_id="),)),
+            (
+                "rp_stage_state",
+                (("host_workflow_run_id=", "host_workflow_run_id="),),
+            ),
+            (
+                "rp_artifact",
+                (
+                    ("host_artifact_input=", "sha256="),
+                    ("host_artifact_derive=", "sha256="),
+                ),
+            ),
+            (
+                "rp_runner",
+                (
+                    ("host_action_workflow=", "host_action_workflow="),
+                    ("host_action_workflow=", "run_id="),
+                    ("host_action_rerun=", "host_action_rerun="),
+                    ("host_action_rerun=", "parent="),
+                ),
+            ),
+        )
+        parse_call = re.compile(
+            r'output_record_value_loaded\(\s*text_len\s*,\s*"([^"]+)"\s*,'
+            r'\s*"([^"]+)"'
+        )
+
+        def assert_loaded_output_contract(source: str) -> None:
+            paths = re.findall(
+                r'read_workflow_output\(\s*"([^"]+)"\s*\)', source
+            )
+            self.assertEqual(source.count("read_workflow_output("), len(expected_reads))
+            self.assertEqual(paths, [path for path, _fields in expected_reads])
+            for index, (path, fields) in enumerate(expected_reads):
+                marker = f'text_len = read_workflow_output("{path}");'
+                self.assertEqual(source.count(marker), 1)
+                block_start = source.index(marker)
+                if index + 1 < len(expected_reads):
+                    next_path = expected_reads[index + 1][0]
+                    block_end = source.index(
+                        f'text_len = read_workflow_output("{next_path}");',
+                        block_start + len(marker),
+                    )
+                else:
+                    block_end = source.index(
+                        "rp_copy_text(expected_runner_rerun", block_start
+                    )
+                self.assertEqual(
+                    parse_call.findall(source[block_start:block_end]), list(fields)
+                )
+
+        assert_loaded_output_contract(output_loader)
+        output_comparisons = (
+            "strcmp(runner_workflow, workflow->workflow_id)",
+            "strcmp(runner_run, workflow->run_id)",
+            "strcmp(runner_rerun, expected_runner_rerun)",
+            "strcmp(runner_parent, workflow->run_id)",
+            "strcmp(workflow->run_id, expected->run_id)",
+            "strcmp(workflow->rerun_id, expected->rerun_id)",
+            "strcmp(workflow->workflow_id, expected->workflow_id)",
+            "strcmp(workflow->input_sha256, expected->input_sha256)",
+            "strcmp(workflow->derived_sha256, expected->derived_sha256)",
+        )
+        for comparison in output_comparisons:
+            self.assertEqual(output_loader.count(comparison), 1)
+        parent_check_at = output_loader.index(
+            "complete_challenge_workflow(workflow, parent_run)"
+        )
+        comparison_positions = [
+            output_loader.index(comparison) for comparison in output_comparisons
+        ]
+        success_at = output_loader.index("return 1;", min(comparison_positions))
+        self.assertLess(parent_check_at, min(comparison_positions))
+        self.assertLess(max(comparison_positions), success_at)
+
+        duplicate_read = output_loader.replace(
+            'text_len = read_workflow_output("rp_artifact");',
+            'text_len = read_workflow_output("rp_artifact");\n'
+            '\ttext_len = read_workflow_output("rp_artifact");',
+            1,
+        )
+        wrong_key = output_loader.replace(
+            '"sha256=", workflow->input_sha256',
+            '"digest=", workflow->input_sha256',
+            1,
+        )
+        self.assertNotEqual(duplicate_read, output_loader)
+        self.assertNotEqual(wrong_key, output_loader)
+        for label, mutation in (
+            ("duplicate authoritative read", duplicate_read),
+            ("wrong field key", wrong_key),
         ):
-            self.assertIn(f'"{path}", "{anchor}"', output_parser)
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                assert_loaded_output_contract(mutation)
 
     def test_task6_protocol_keeps_legacy_artifact_actions_independent(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -1734,6 +1851,106 @@ class EvaluationScenarioTests(unittest.TestCase):
         report = self.collect([boot])
         self.assertEqual(report["status"], "failed")
         self.assertIn("ledger expected", report["errors"][0])
+
+    def test_agentos_launch_classification_and_identity_swaps_are_rejected(self) -> None:
+        mutations = {
+            "batched worker as direct": (
+                "rp_catalog",
+                lambda line: line.replace(
+                    "launcher=agent_worker_batch", "launcher=agent_worker_create", 1
+                ),
+                "invalid launcher",
+            ),
+            "direct worker as batched": (
+                "rp_compare_plain",
+                lambda line: line.replace(
+                    "launcher=agent_worker_create", "launcher=agent_worker_batch", 1
+                ).replace(
+                    "identity_source=trusted_crt_self_check",
+                    "identity_source=trusted_crt_batch_dispatch",
+                    1,
+                ),
+                "invalid launcher",
+            ),
+            "role worker as batched": (
+                "rp_query",
+                lambda line: line.replace(
+                    "launcher=agent_create_role", "launcher=agent_worker_batch", 1
+                ).replace(
+                    "identity_source=trusted_crt_self_check",
+                    "identity_source=trusted_crt_batch_dispatch",
+                    1,
+                ),
+                "invalid launcher",
+            ),
+            "batched identity as direct identity": (
+                "rp_catalog",
+                lambda line: line.replace(
+                    "identity_source=trusted_crt_batch_dispatch",
+                    "identity_source=trusted_crt_self_check",
+                    1,
+                ),
+                "identity source",
+            ),
+            "role identity as batched identity": (
+                "rp_query",
+                lambda line: line.replace(
+                    "identity_source=trusted_crt_self_check",
+                    "identity_source=trusted_crt_batch_dispatch",
+                    1,
+                ),
+                "identity source",
+            ),
+        }
+        launches = scenario.read_expected_program_launches()
+        original, _elapsed = _ledger(
+            "agentos", self.fixture.programs, self.fixture.roles, 1
+        )
+        for label, (program, mutate, error) in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                state_dir = Path(temp)
+                path = state_dir / "rp_orch_timing"
+                lines = original.splitlines()
+                index = next(
+                    offset
+                    for offset, line in enumerate(lines)
+                    if line.startswith(f"program={program};")
+                )
+                lines[index] = mutate(lines[index])
+                path.write_text(
+                    "\n".join(lines) + "\n", encoding="ascii", newline="\n"
+                )
+                with self.assertRaisesRegex(scenario.ScenarioEvidenceError, error):
+                    scenario._parse_timing_ledger(
+                        state_dir,
+                        "agentos",
+                        self.fixture.programs,
+                        self.fixture.roles,
+                        launches,
+                    )
+
+    def test_agentos_manifest_batch_partition_mutations_are_rejected(self) -> None:
+        source = ROOT / "user" / "include" / "rp_program_manifest.h"
+        original = source.read_text(encoding="utf-8")
+        mutations = {
+            "wrong group index": original.replace(
+                "APPLY(1, rp_metrics)", "APPLY(2, rp_metrics)", 1
+            ),
+            "direct program in batch": original.replace(
+                "APPLY(0, rp_catalog)", "APPLY(0, rp_compare_plain)", 1
+            ),
+            "role program in batch": original.replace(
+                "APPLY(0, rp_catalog)", "APPLY(0, rp_query)", 1
+            ),
+        }
+        for label, text in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "rp_program_manifest.h"
+                path.write_text(text, encoding="utf-8", newline="\n")
+                with self.assertRaises(scenario.ScenarioEvidenceError):
+                    scenario._parse_agentos_launch_contract(
+                        path, self.fixture.programs, self.fixture.roles
+                    )
 
     def test_first_boot_cannot_replace_the_manifest_program_set(self) -> None:
         boot = self.fixture.boot(1, "AB")

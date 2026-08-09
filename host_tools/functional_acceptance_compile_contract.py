@@ -58,6 +58,7 @@ EXPECTED_FUNCTIONAL_CPP_DEFINES = frozenset({
     "LOG_LEVEL_INFO",
     "LOG_LEVEL_TRACE",
     "LOG_LEVEL_WARN",
+    "main",
     "PHYSICAL_PAGE_ADDRESSABLE_LIMIT",
     "PHYSICAL_PAGE_DOMAIN_ORDINARY_LIMIT",
     "PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT",
@@ -126,6 +127,7 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "user/include/rp_launch_attestation.h",
     "user/include/rp_program_manifest.h",
     "user/include/rp_resource_stability.h",
+    "user/include/rp_worker_batch.h",
     "user/include/stddef.h",
     "user/include/stdio.h",
     "user/include/stdlib.h",
@@ -139,6 +141,7 @@ USER_ARTIFACT_DEPENDENCY_PATHS = (
     "user/lib/arch/riscv/syscall_ids.h.in",
     "user/lib/arch/riscv/user.ld",
     "user/lib/main.c",
+    "user/lib/research_platform_state.c",
     "user/lib/stdio.c",
     "user/lib/stdlib.c",
     "user/lib/string.c",
@@ -314,12 +317,13 @@ COMPILE_DEPENDENCY_PATHS = (
 # 上述完整审查闭包的逐字节指纹。固定各翻译阶段输入，避免续行、预处理、
 # 汇编或链接语法在规范化时被隐藏。
 COMPILE_CLOSURE_FINGERPRINT = (
-    "2df574a63b741fc010b1367e09b25567cdc767f23642486cd1412d0e2e46329a"
+    "32de473a0f56d145a55eda2d418aeec4048048f6f727694eb8a409d772106ebf"
 )
 
 USER_TRANSLATION_UNITS = (
     "user/src/agenteval_ucore.c",
     "user/lib/main.c",
+    "user/lib/research_platform_state.c",
     "user/lib/stdio.c",
     "user/lib/stdlib.c",
     "user/lib/string.c",
@@ -330,10 +334,12 @@ USER_INCLUDE_SEARCH_PATHS = (
     "user/include", "user/lib", "user/lib/arch/riscv",
 )
 GENERATED_CHALLENGE_HEADER = "@generated/agenteval_seed.h"
+GENERATED_HOST_ACTION_HEADER = "@generated/rp_host_action_seed.h"
 TOOLCHAIN_PROVIDED_HEADERS = frozenset({"stdarg.h"})
 TOOLCHAIN_INCLUDE_PREFIX = "@attested-toolchain/"
 EXPECTED_INCLUDE_CLOSURE = (
     "@generated/agenteval_seed.h",
+    "@generated/rp_host_action_seed.h",
     "agent_lifecycle_abi.h",
     "agent_metadata_test_abi.h",
     "agent_observe_abi.h",
@@ -345,6 +351,7 @@ EXPECTED_INCLUDE_CLOSURE = (
     "user/include/agent_metadata_test_abi.h",
     "user/include/fcntl.h",
     "user/include/io_policy.h",
+    "user/include/research_platform_state.h",
     "user/include/rp_launch_attestation.h",
     "user/include/stddef.h",
     "user/include/stdio.h",
@@ -355,6 +362,7 @@ EXPECTED_INCLUDE_CLOSURE = (
     "user/lib/arch/riscv/crt.S",
     "user/lib/arch/riscv/syscall_arch.h",
     "user/lib/main.c",
+    "user/lib/research_platform_state.c",
     "user/lib/stdio.c",
     "user/lib/stdlib.c",
     "user/lib/string.c",
@@ -387,6 +395,7 @@ EXPECTED_USER_INCLUDE_ROOT_FILES = (
     "user/include/rp_launch_attestation.h",
     "user/include/rp_program_manifest.h",
     "user/include/rp_resource_stability.h",
+    "user/include/rp_worker_batch.h",
     "user/include/stddef.h",
     "user/include/stdio.h",
     "user/include/stdlib.h",
@@ -400,6 +409,7 @@ EXPECTED_USER_INCLUDE_ROOT_FILES = (
     "user/lib/arch/riscv/syscall_ids.h.in",
     "user/lib/arch/riscv/user.ld",
     "user/lib/main.c",
+    "user/lib/research_platform_state.c",
     "user/lib/stdio.c",
     "user/lib/stdlib.c",
     "user/lib/string.c",
@@ -431,6 +441,7 @@ SIMPLE_SYSCALL_WRAPPERS = {
     "pipe": ("SYS_pipe2", "p"),
     "agent_scope_delegate_fd": ("SYS_agent_scope_delegate_fd", "fd"),
     "agent_info": ("SYS_agent_info", "info"),
+    "agent_launch_info": ("SYS_agent_launch_info", "info"),
     "agent_run": ("SYS_agent_run", "ops", "results", "count", "flags"),
     "sys_tool_call": ("SYS_tool_call", "req", "resp"),
     "context_push": ("SYS_context_push", "record"),
@@ -520,8 +531,12 @@ def resolve_functional_include_closure(repo: Path) -> tuple[str, ...]:
                 None,
             )
             if selected is None:
-                if name == "agenteval_seed.h":
-                    resolved.add(GENERATED_CHALLENGE_HEADER)
+                if name in {"agenteval_seed.h", "rp_host_action_seed.h"}:
+                    resolved.add(
+                        GENERATED_CHALLENGE_HEADER
+                        if name == "agenteval_seed.h"
+                        else GENERATED_HOST_ACTION_HEADER
+                    )
                     continue
                 raise ValueError(f"unresolved functional compile include: {name}")
             try:
@@ -885,6 +900,19 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             f"missing={sorted(EXPECTED_FUNCTIONAL_CPP_DEFINES - cpp_defines)} "
             f"extra={sorted(cpp_defines - EXPECTED_FUNCTIONAL_CPP_DEFINES)}"
         )
+    for fragment, label in (
+        (
+            "$(CC_CMD) $(CFLAGS) -Dmain=$*_worker_entry -c $< -o $@",
+            "worker entry compilation",
+        ),
+        (
+            "-Dmain=$(notdir $*)_worker_entry",
+            "worker stack-profile entry",
+        ),
+    ):
+        _require_fragment_once(user_make, fragment, label)
+    if user_make.count("-Dmain=") != 2:
+        raise ValueError("worker-only main remapping escaped its two reviewed rules")
     _require_single_assignment(user_make, "app_dir", "app_dir := src", "app source")
     _require_single_assignment(
         user_make, "LIB_C", "LIB_C := $(wildcard lib/*.c)", "user libraries"
@@ -948,7 +976,7 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             "user link rule",
         ),
         (
-            "binary: $(addprefix $(elf_dir)/,$(SELECTED_APPS))",
+            "binary: worker-batch-check $(addprefix $(elf_dir)/,$(SELECTED_APPS))",
             "binary target",
         ),
         (

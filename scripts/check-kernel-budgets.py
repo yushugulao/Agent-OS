@@ -3303,7 +3303,6 @@ def validate_metadata_scan_boundary_sources(root):
 
 def validate_metadata_directory_boundary_text(objects, directory):
     hooks = (
-        "agent_fs_note_create",
         "agent_fs_note_write",
         "agent_fs_note_truncate",
         "agent_fs_note_delete",
@@ -3343,34 +3342,8 @@ def validate_metadata_directory_boundary_text(objects, directory):
         "metadata directory leaf operations",
     )
 
-    indexable = source_function_body(directory, "static int fs_create_indexable(")
-    require_source_tokens(
-        indexable,
-        ("agent_metadata_inode_trackable(ip)",
-         "agent_scope_valid(ip->vfs_scope_id)",
-         "ip->agent_meta_slot <= 0"),
-        "metadata directory create predicate",
-    )
-    create = source_function_body(directory, "agent_fs_note_create(struct inode *ip")
-    require_source_order(
-        create,
-        (
-            "fs_dirent_canonicalize(path, key)",
-            "agent_metadata_txn_try_external()",
-            "agent_metadata_store_loaded()",
-            "agent_metadata_scan_index_inode(ip, key, &failed)",
-            "agent_metadata_note_catalog_changes(changes)",
-            "agent_metadata_txn_unlock()",
-        ),
-        "metadata directory create hook",
-    )
-    require_source_tokens(
-        create,
-        ("fs_create_indexable(ip)", "agent_file_request_scan()"),
-        "metadata directory create revalidation",
-    )
-    if create.count("agent_metadata_txn_unlock()") != 1:
-        raise BudgetError("metadata directory create must unlock exactly once")
+    if "agent_fs_note_create" in directory:
+        raise BudgetError("普通文件创建仍保留 Agent 元数据钩子")
     update = source_function_body(directory, "static void agent_fs_publish_content(")
     require_source_order(
         update,
@@ -3388,6 +3361,21 @@ def validate_metadata_directory_boundary_text(objects, directory):
          "AGENT_FILE_META_F_AUTOSCAN", "agent_file_request_scan()"),
         "metadata directory content fallback",
     )
+    require_source_tokens(
+        directory,
+        ("#define FS_META_UNBOUND(ip)", "!(ip)->agent_meta_slot",
+         "!(ip)->agent_meta_flags", "!(ip)->agent_meta_version"),
+        "普通文件全零未绑定状态",
+    )
+    for hook in ("agent_fs_note_write(struct inode *ip)",
+                 "agent_fs_note_truncate(struct inode *ip)"):
+        require_source_order(
+            source_function_body(directory, hook),
+            ("FS_META_UNBOUND(ip)", "agent_fs_publish_content(ip)"),
+            "普通文件内容返回边界",
+        )
+    if update.count("reconcile = 1") != 1:
+        raise BudgetError("仅持久化回执失败可以请求内容协调扫描")
     if "agent_metadata_txn_" in update or re.search(
         r"agent_metadata_catalog_(?!journal_note_content\b)", update
     ):
@@ -3399,6 +3387,9 @@ def validate_metadata_directory_boundary_text(objects, directory):
     require_source_order(
         remove,
         (
+            "FS_META_UNBOUND(ip)",
+            "agent_file_version_reclaim(ip)",
+            "ip->agent_meta_slot <= 0",
             "agent_file_state_content_bump(ip)",
             "agent_metadata_txn_try_external()",
             "agent_metadata_catalog_borrow(0, slot, &view)",

@@ -379,7 +379,6 @@
           "agent_identity_authority_check",
           "agent_identity_authority_on_exec",
           "agent_identity_authorize_object",
-          "agent_identity_controller_active_locked",
           "agent_identity_controller_close_commit",
           "agent_identity_controller_depart",
           "agent_identity_controls_or_self",
@@ -660,15 +659,14 @@
         "name": "metadata_directory",
         "source_path": "os/agent_metadata_directory.c",
         "object_path": "build/os/agent_metadata_directory.o",
-        "baseline_lines": 113,
-        "max_lines": 119,
+        "baseline_lines": 90,
+        "max_lines": 95,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
         ],
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
-          "agent_fs_note_create",
           "agent_fs_note_delete",
           "agent_fs_note_truncate",
           "agent_fs_note_write"
@@ -1124,8 +1122,8 @@
         "name": "workflow_lifecycle",
         "source_path": "os/workflow_lifecycle.c",
         "object_path": "build/os/workflow_lifecycle.o",
-        "baseline_lines": 451,
-        "max_lines": 474,
+        "baseline_lines": 421,
+        "max_lines": 443,
         "max_bss_bytes": 384,
         "allowed_global_prefixes": [
           "workflow_lifecycle_"

@@ -737,7 +737,29 @@ static void quota_file_name(char *name, char group, int index)
 	name[4] = '0' + index % 10;
 }
 
-static __attribute__((noinline)) int create_quota_files(char group, int max)
+static __attribute__((noinline)) int bind_quota_autoscan(const char *name)
+{
+	struct agent_file_meta meta;
+	int status = AGENT_STATUS_RETRY;
+
+	memset(&meta, 0, sizeof(meta));
+	strcpy(meta.physical_name, name);
+	strcpy(meta.logical_path, name);
+	strcpy(meta.kind, "file");
+	strcpy(meta.status, "autoscan");
+	meta.flags = AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN;
+	for (int i = 0; i < META_WRITEBACK_WAIT_ROUNDS; i++) {
+		status = agent_file_meta_set(&meta);
+		if (status != AGENT_STATUS_RETRY)
+			break;
+		if (sched_yield() < 0)
+			break;
+	}
+	return status;
+}
+
+static __attribute__((noinline)) int
+create_quota_files(char group, int max, int autoscan)
 {
 	char name[] = "qs000";
 	int created = 0;
@@ -750,6 +772,11 @@ static __attribute__((noinline)) int create_quota_files(char group, int max)
 		if (fd < 0)
 			break;
 		check(close(fd) == 0, "close quota object");
+		if (autoscan)
+			check(bind_quota_autoscan(name) ==
+				      (i < WORKFLOW_AUTOSCAN_SCOPE_LIMIT ?
+				       AGENT_STATUS_OK : AGENT_STATUS_NO_SPACE),
+			      "bind explicit autoscan quota object");
 		created++;
 	}
 	return created;
@@ -845,48 +872,6 @@ check_quota_catalog_path_count(char group, int index, int expected)
 	check_scope_catalog_path_count(name, expected);
 }
 
-static __attribute__((noinline)) void
-wait_quota_catalog_rebuild(char group, int index, uint64 deferred_before)
-{
-	struct agent_info info;
-	char name[] = "qs000";
-	int count = -1;
-	int indexed = 0;
-	int stable = 0;
-
-	quota_file_name(name, group, index);
-	for (int i = 0; i < META_WRITEBACK_WAIT_ROUNDS; i++) {
-		if (!indexed)
-			count = scope_catalog_path_count(name);
-
-		memset(&info, 0, sizeof(info));
-		check(agent_info(&info) == 0, "read deferred catalog state");
-		if (!indexed && count == 1 && scope_query_result.total_hits == 1 &&
-		    scope_query_result.returned == 1 &&
-		    info.file_scan_deferred > deferred_before)
-			indexed = 1;
-		if (indexed && !info.file_scan_pending &&
-		    !info.metadata_writeback_pending &&
-		    info.metadata_writeback_dirty ==
-			info.metadata_writeback_durable)
-			stable++;
-		else
-			stable = 0;
-		if (stable >= 3)
-			return;
-		sleep(10);
-	}
-	printf("agentscope_ucore: rebuild timeout indexed=%d count=%d total=%d returned=%d "
-	       "deferred=%d/%d scan_pending=%d writeback=%d dirty=%d durable=%d\n",
-	       indexed, count, (int)scope_query_result.total_hits,
-	       (int)scope_query_result.returned, (int)deferred_before,
-	       (int)info.file_scan_deferred, (int)info.file_scan_pending,
-	       (int)info.metadata_writeback_pending,
-	       (int)info.metadata_writeback_dirty,
-	       (int)info.metadata_writeback_durable);
-	check(0, "deferred catalog object was not rebuilt durably");
-}
-
 static __attribute__((noinline)) int
 run_scope_quota_writer(char group, int max)
 {
@@ -903,7 +888,7 @@ run_scope_quota_writer(char group, int max)
 	if (pid == 0) {
 		check(close(count_pipe[0]) < 0,
 		      "quota writer cannot inherit result reader");
-		created = create_quota_files(group, max);
+		created = create_quota_files(group, max, 1);
 		write_exact(count_pipe[1], &created, sizeof(created),
 			    "publish quota writer count");
 		check(close(count_pipe[1]) == 0,
@@ -964,14 +949,11 @@ static __attribute__((noinline)) void
 fill_scope_storage_quota(struct quota_fill_state *state,
 			 uint64 *workflow_created, uint64 *public_created)
 {
-	struct agent_info before;
 	char released_name[] = "qs000";
 	int pid;
 	int public_count;
 
 	check(state != 0 && !state->active, "workflow quota fill state");
-	memset(&before, 0, sizeof(before));
-	check(agent_info(&before) == 0, "read catalog deferral baseline");
 
 	state->created = run_scope_quota_writer(
 		'a', WORKFLOW_STORAGE_PROBE_COUNT);
@@ -986,29 +968,30 @@ fill_scope_storage_quota(struct quota_fill_state *state,
 	check(state->explicit_created == WORKFLOW_EXPLICIT_RESERVE,
 	      "explicit metadata reserve remains available");
 	check_scope_catalog_no_space('a', WORKFLOW_EXPLICIT_RESERVE);
-	check(create_quota_files('c', 1) == 1,
+	check(create_quota_files('c', 1, 0) == 1,
 	      "full catalog does not reject a protected VFS object");
 	check_quota_catalog_path_count('c', 0, 0);
 	remove_quota_files('c', 1);
 	quota_file_name(released_name, 'a', 0);
 	check(unlink(released_name) == 0, "release autoscan catalog slot");
 	state->first_removed = 1;
-	wait_quota_catalog_rebuild(
-		'a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, before.file_scan_deferred);
+	quota_file_name(released_name, 'a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT);
+	check(bind_quota_autoscan(released_name) == AGENT_STATUS_OK,
+	      "bind autoscan object after catalog release");
 	check_quota_catalog_path_count('a', 0, 0);
 	check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 1);
 	check(agent_file_meta_init() == 0,
-	      "reload rebuilt autoscan catalog checkpoint");
+	      "reload rebound autoscan catalog checkpoint");
 	check_quota_catalog_path_count('a', 0, 0);
 	check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 1);
-	printf("agentscope_ucore: catalog_deferred_rebuilt=1 released=1 "
+	printf("agentscope_ucore: catalog_explicit_rebound=1 released=1 "
 	       "durable=1 reload=1\n");
 
 	pid = fork();
 	check(pid >= 0, "create public quota writer");
 	if (pid == 0) {
 		int created = create_quota_files(
-			'b', PUBLIC_STORAGE_PROBE_COUNT);
+			'b', PUBLIC_STORAGE_PROBE_COUNT, 0);
 
 	/* 降权后的 PUBLIC 子进程拥有这些名称，父进程不拥有。 */
 		remove_quota_files('b', created);
@@ -1040,13 +1023,13 @@ static __attribute__((noinline)) int probe_peer_storage_partition(void)
 	      WORKFLOW_EXPLICIT_RESERVE,
 	      "peer explicit metadata reserve is independent");
 	check_scope_catalog_no_space('e', WORKFLOW_EXPLICIT_RESERVE);
-	check(create_quota_files('f', 1) == 1,
+	check(create_quota_files('f', 1, 0) == 1,
 	      "peer full catalog does not reject VFS storage");
 	check_quota_catalog_path_count('f', 0, 0);
 	remove_quota_files('f', 1);
 	remove_quota_files('e', created);
 	remove_explicit_metadata('e', WORKFLOW_EXPLICIT_RESERVE);
-	check(create_quota_files('g', 1) == 1,
+	check(create_quota_files('g', 1, 0) == 1,
 	      "peer storage partition is reusable after cleanup");
 	remove_quota_files('g', 1);
 	return created;
@@ -1058,7 +1041,7 @@ cleanup_scope_storage_quota(struct quota_fill_state *state)
 	check(state != 0 && state->active, "workflow quota cleanup state");
 	remove_quota_files_from('a', state->first_removed, state->created);
 	remove_explicit_metadata('a', state->explicit_created);
-	check(create_quota_files('d', 1) == 1,
+	check(create_quota_files('d', 1, 0) == 1,
 	      "workflow quota is reusable after cleanup");
 	remove_quota_files('d', 1);
 	memset(state, 0, sizeof(*state));

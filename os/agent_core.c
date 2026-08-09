@@ -591,7 +591,7 @@ fail:
 	return -1;
 }
 
-static void agent_info_fill(struct proc *p, struct agent_info *info)
+static __attribute__((noinline)) void agent_info_fill(struct proc *p, struct agent_info *info)
 {
 	memset(info, 0, sizeof(*info));
 	info->is_agent = p->is_agent;
@@ -1141,13 +1141,27 @@ int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps)
 	}
 }
 
-int sys_agent_info(uint64 addr)
+int sys_agent_info(uint64 addr, int launch_identity)
 {
 	struct proc *p = curr_proc();
 	struct agent_info info;
+	int result;
 
-	agent_info_fill(p, &info);
-	return copyout(p->pagetable, addr, (char *)&info, sizeof(info));
+	if (launch_identity) {
+		memset(&info, 0, sizeof(info));
+		info.is_agent = p->is_agent;
+		info.agent_id = p->agent_id;
+		info.agent_role = p->agent_role;
+		info.capability_mask = agent_identity_proc_scope(p) != VFS_SCOPE_NONE ?
+			p->agent_capability_mask : 0;
+		info.filesystem_domain = p->vfs_scope_id;
+		info.filesystem_capability_mask =
+			vfs_scope_active(p->vfs_scope_id) ? p->vfs_effective_caps : 0;
+	} else {
+		agent_info_fill(p, &info);
+	}
+	result = copyout(p->pagetable, addr, (char *)&info, sizeof(info));
+	return result < 0 || !launch_identity ? result : p->pid;
 }
 
 int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)

@@ -23,7 +23,7 @@ static void make_realtask_op(struct agent_op *op, int tool_id,
 
 static int run_kernel_realtask_stage(void)
 {
-	if (agent_info(&realtask_agent_info) < 0 || !realtask_agent_info.is_agent)
+	if (agent_launch_info(&realtask_agent_info) < 0 || !realtask_agent_info.is_agent)
 		return 0;
 	if ((realtask_agent_info.capability_mask & AGENT_CAP_META_READ) == 0 ||
 	    (realtask_agent_info.capability_mask & AGENT_CAP_AUDIT_WRITE) == 0) {

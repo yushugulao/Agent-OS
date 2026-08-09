@@ -141,20 +141,22 @@ int main(void)
 		}
 	}
 	if (!rp_append_file("rp_ack", "ack=data_pipeline;msg=data;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.scan_files")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.snapshot")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.preview")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.quality")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.transform")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.collection")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.export")) return 1;
-	if (!rp_append_status("data_pipeline=ready")) return 1;
-	if (!rp_append_status("ingest_files=ready")) return 1;
-	if (!rp_append_status("dataset_snapshot=ready")) return 1;
-	if (!rp_append_status("data_preview=ready")) return 1;
-	if (!rp_append_status("data_quality=ready")) return 1;
-	if (!rp_append_status("data_transform=ready")) return 1;
-	if (!rp_append_status("dataset_collection=ready")) return 1;
+	if (!rp_append_file("rp_tool",
+			    "tool=data_pipeline.scan_files\n"
+			    "tool=data_pipeline.snapshot\n"
+			    "tool=data_pipeline.preview\n"
+			    "tool=data_pipeline.quality\n"
+			    "tool=data_pipeline.transform\n"
+			    "tool=data_pipeline.collection\n"
+			    "tool=data_pipeline.export")) return 1;
+	if (!rp_append_file("rp_status",
+			    "data_pipeline=ready\n"
+			    "ingest_files=ready\n"
+			    "dataset_snapshot=ready\n"
+			    "data_preview=ready\n"
+			    "data_quality=ready\n"
+			    "data_transform=ready\n"
+			    "dataset_collection=ready")) return 1;
 	printf("rp_data_pipeline: files=2 snapshots=2 previews=2 quality=passed transforms=2 status=ready\n");
 	return 0;
 }

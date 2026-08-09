@@ -79,6 +79,8 @@ USER_STACK_INDIRECT_CALL_EDGES := \
 	user/src/fspquota_ucore.c:run_child=user/src/fspquota_ucore.c:verify_cleanup_reuse
 USER_STACK_CHECKER := ../scripts/check-user-stack-usage.py
 USER_STACK_CONTRACT_CHECKER := ../scripts/check-user-stack-contract.py
+WORKER_BATCH_CHECKER := ../scripts/check-rp-worker-batches.py
+WORKER_BATCH_SELFTEST := ../scripts/test-rp-worker-batches.py
 STACK_USAGE_DIR ?= $(build_dir)/stack-usage
 
 CH2_BASE_TESTS := ch2b_
@@ -103,6 +105,18 @@ COMPATIBILITY_TESTS := compatbench
 AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentbench_ucore ch8_cow_ucore labdemo_ucore labdemo_execprobe_ucore agentsecurity_ucore agenttoolabi_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
 PLATFORM_TESTS := rp_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
+WORKER_BATCH_APPS := rp_wbatch0 rp_wbatch1 rp_wbatch2
+WORKER_BATCH_0_PROGRAMS := rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_calculation rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_startup_doctor rp_notebook_export
+WORKER_BATCH_1_PROGRAMS := rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp
+WORKER_BATCH_2_PROGRAMS := rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject
+WORKER_BATCH_DIRECT_PROGRAMS := rp_compare_plain rp_test_suite
+WORKER_BATCH_PROGRAMS := $(WORKER_BATCH_0_PROGRAMS) $(WORKER_BATCH_1_PROGRAMS) $(WORKER_BATCH_2_PROGRAMS)
+WORKER_BATCH_0_OBJS := $(addprefix $(obj_dir)/worker_batch/,$(addsuffix .o,$(WORKER_BATCH_0_PROGRAMS)))
+WORKER_BATCH_1_OBJS := $(addprefix $(obj_dir)/worker_batch/,$(addsuffix .o,$(WORKER_BATCH_1_PROGRAMS)))
+WORKER_BATCH_2_OBJS := $(addprefix $(obj_dir)/worker_batch/,$(addsuffix .o,$(WORKER_BATCH_2_PROGRAMS)))
+WORKER_BATCH_ENTRY_OBJS := $(addprefix $(obj_dir)/worker_batch/,$(addsuffix .o,$(WORKER_BATCH_PROGRAMS)))
+# MAXFILE (274432) minus a fixed 16 KiB future-integration reserve.
+WORKER_BATCH_FLAT_MAX := 258048
 
 CH2_TESTS := $(CH2_BASE_TESTS)
 CH3_TESTS := $(CH3_BASE_TESTS) ch3_
@@ -167,20 +181,26 @@ CH_TESTS := $(PLATFORM_TESTS)
 else ifeq ($(CHAPTER), platform_seeded)
 CH_TESTS := $(PLATFORM_SEEDED_TESTS)
 else ifeq ($(CHAPTER), platform_agentos)
-CH_TESTS := rp_agentos_orch rp_resource_probe $(PLATFORM_TESTS)
+CH_TESTS := rp_agentos_orch rp_resource_probe $(PLATFORM_TESTS) $(WORKER_BATCH_APPS)
 else
 CH_TESTS := usershell $(AGENT_TESTS)
 endif
 
 SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))
-STACK_USAGE_LIBRARY_SRCS := $(addprefix user/,$(sort $(LIB_C)))
+STACK_USAGE_ALL_LIBRARY_SRCS := $(addprefix user/,$(sort $(LIB_C)))
+STACK_USAGE_DATA_ONLY_LIBRARY_SRCS := user/lib/research_platform_state.c
+STACK_USAGE_FUNCTION_LIBRARY_SRCS := $(filter-out $(STACK_USAGE_DATA_ONLY_LIBRARY_SRCS),$(STACK_USAGE_ALL_LIBRARY_SRCS))
+STACK_USAGE_SUPPORT_SRCS := $(addprefix user/src/,$(addsuffix .c,$(WORKER_BATCH_PROGRAMS)))
 STACK_USAGE_APPLICATION_SRCS := \
-	$(addprefix user/,$(sort $(SRCS))) \
+	$(filter-out $(STACK_USAGE_SUPPORT_SRCS),$(addprefix user/,$(sort $(SRCS)))) \
 	$(COMPAT_BENCH_REPO_SOURCE)
-STACK_USAGE_SRCS := $(STACK_USAGE_LIBRARY_SRCS) $(STACK_USAGE_APPLICATION_SRCS)
+STACK_USAGE_SRCS := $(STACK_USAGE_FUNCTION_LIBRARY_SRCS) $(STACK_USAGE_SUPPORT_SRCS) $(STACK_USAGE_APPLICATION_SRCS)
 STACK_USAGE_OBJS = $(patsubst %.c,$(STACK_USAGE_DIR)/%.o,$(STACK_USAGE_SRCS))
+STACK_USAGE_DATA_ONLY_OBJS = $(patsubst %.c,$(STACK_USAGE_DIR)/data-only/%.o,$(STACK_USAGE_DATA_ONLY_LIBRARY_SRCS))
+WORKER_BATCH_STACK_USAGE_OBJS = $(addprefix $(STACK_USAGE_DIR)/user/src/,$(addsuffix .o,$(WORKER_BATCH_PROGRAMS)))
 STACK_USAGE_UNIT_ARGS = \
-	$(foreach src,$(STACK_USAGE_LIBRARY_SRCS),--library-unit=$(src)) \
+	$(foreach src,$(STACK_USAGE_FUNCTION_LIBRARY_SRCS),--library-unit=$(src)) \
+	$(foreach src,$(STACK_USAGE_SUPPORT_SRCS),--library-unit=$(src)) \
 	$(foreach src,$(STACK_USAGE_APPLICATION_SRCS),--application-unit=$(src))
 STACK_USAGE_POLICY_ARGS = \
 	$(foreach edge,$(USER_STACK_INDIRECT_CALL_EDGES),--indirect-call-edge=$(edge))
@@ -188,7 +208,7 @@ STACK_USAGE_CFLAGS := $(COMMON_CFLAGS) \
 	-Iuser/include -Iuser/lib -Iuser/$(arch_dir) -I$(abspath $(generated_dir))
 STACK_USAGE_CFLAGS += $(USER_EXTRA_CFLAGS)
 
-.PHONY: binary target clean stack-usage-build user-stack-check .FORCE
+.PHONY: binary target clean stack-usage-build user-stack-check worker-batch-check worker-batch-selftest .FORCE
 
 $(GENERATED_HEADERS):
 	@mkdir -p $(@D)
@@ -236,11 +256,30 @@ $(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -c $< -o $@
 
+$(obj_dir)/worker_batch/%.o: $(app_dir)/%.c $(GENERATED_HEADERS)
+	@mkdir -p $(@D)
+	$(CC_CMD) $(CFLAGS) -Dmain=$*_worker_entry -c $< -o $@
+
 $(STACK_USAGE_DIR)/user/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
 		-fstack-usage -fcallgraph-info=su -c user/$< \
 		-o $(call shell_quote,$(abspath $@))
+
+$(STACK_USAGE_DIR)/data-only/user/%.o: %.c $(GENERATED_HEADERS)
+	@mkdir -p $(@D)
+	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) -c user/$< \
+		-o $(call shell_quote,$(abspath $@))
+	@if $(OBJDUMP_CMD) -t $(call shell_quote,$(abspath $@)) | \
+		grep -Eq '[[:space:]]F[[:space:]]'; then \
+		echo 'data-only stack unit defines a function: user/$<' >&2; \
+		exit 1; \
+	fi
+
+# Profile the support entries under their real combined-image symbol names so
+# the direct dispatcher switch edges close in the stack call graph.
+$(WORKER_BATCH_STACK_USAGE_OBJS): STACK_USAGE_PROFILE_CFLAGS = \
+	-Dmain=$(notdir $*)_worker_entry
 
 $(STACK_USAGE_DIR)/evaluation_guest/compatbench.o: \
 		$(COMPAT_BENCH_SOURCE) $(GENERATED_HEADERS) $(COMPAT_BENCH_HEADER)
@@ -273,6 +312,24 @@ $(elf_dir)/%: $(app_dir)/%.c $(LIB_OBJS) $(CRT_OBJ) $(GENERATED_HEADERS) $(arch_
 	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/$*.asm
 	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/$*
 
+define RP_WORKER_BATCH_LINK_RULE
+$(elf_dir)/rp_wbatch$(1): $(app_dir)/rp_wbatch$(1).c $$(LIB_OBJS) $$(CRT_OBJ) \
+		$$(GENERATED_HEADERS) include/rp_program_manifest.h \
+		include/rp_worker_batch.h $$(WORKER_BATCH_$(1)_OBJS) $$(arch_dir)/user.ld
+	@mkdir -p $$(elf_dir) $$(bin_dir) $$(asm_dir)
+	$$(CC_CMD) $$(CFLAGS) $$(LDFLAGS) $$(CRT_OBJ) $$(LIB_OBJS) \
+		$$(WORKER_BATCH_$(1)_OBJS) $$(app_dir)/rp_wbatch$(1).c -o $$@
+	$$(OBJDUMP_CMD) -d -S $$@ > $$(asm_dir)/rp_wbatch$(1).asm
+	$$(OBJCOPY_CMD) -O binary $$@ $$(bin_dir)/rp_wbatch$(1)
+	@size=`wc -c < $$(bin_dir)/rp_wbatch$(1)`; \
+		if test "$$$$size" -gt $$(WORKER_BATCH_FLAT_MAX); then \
+			echo "rp_wbatch$(1) exceeds reserved MAXFILE limit: $$$$size > $$(WORKER_BATCH_FLAT_MAX)" >&2; \
+			exit 1; \
+		fi
+endef
+
+$(foreach group,0 1 2,$(eval $(call RP_WORKER_BATCH_LINK_RULE,$(group))))
+
 $(elf_dir)/agenteval_ucore: $(EVALUATION_HEADER)
 
 $(elf_dir)/compatbench: $(COMPAT_BENCH_SOURCE) $(LIB_OBJS) $(CRT_OBJ) \
@@ -285,11 +342,19 @@ $(elf_dir)/compatbench: $(COMPAT_BENCH_SOURCE) $(LIB_OBJS) $(CRT_OBJ) \
 
 $(LIB_OBJS) $(CRT_OBJ) $(addprefix $(elf_dir)/,$(SELECTED_APPS)): \
 	$(USER_BUILD_CONFIG) $(USER_STACK_CONTRACT) $(USER_STACK_CONTRACT_WRAPPER)
+$(WORKER_BATCH_ENTRY_OBJS): \
+	$(USER_BUILD_CONFIG) $(USER_STACK_CONTRACT) $(USER_STACK_CONTRACT_WRAPPER)
 $(STACK_USAGE_OBJS): $(USER_STACK_CONTRACT) $(USER_STACK_CONTRACT_WRAPPER)
 
-binary: $(addprefix $(elf_dir)/,$(SELECTED_APPS))
+worker-batch-check:
+	@$(PYTHON_CMD) $(WORKER_BATCH_CHECKER) --root ..
 
-stack-usage-build: $(STACK_USAGE_OBJS)
+worker-batch-selftest:
+	@$(PYTHON_CMD) $(WORKER_BATCH_SELFTEST)
+
+binary: worker-batch-check $(addprefix $(elf_dir)/,$(SELECTED_APPS))
+
+stack-usage-build: $(STACK_USAGE_OBJS) $(STACK_USAGE_DATA_ONLY_OBJS)
 
 user-stack-check:
 	@set -eu; \

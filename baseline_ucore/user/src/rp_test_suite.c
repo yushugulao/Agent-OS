@@ -1005,6 +1005,17 @@ int main(void)
 	ok = ok && require_file_token("rp_backend", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
 	ok = ok && require_file_token("rp_backend", "compare_profile=compare-profile:RUN-042:migration");
 	ok = ok && require_file_token("rp_backend", "runner=active-user-space");
+	ok = ok && require_file_token(
+		"rp_backend",
+		"query_workload=research_metadata_lookup;consistency=fresh_snapshot;dataset_records=12;query_operations=4096;query_matches=4096");
+	ok = ok && require_file_token(
+		"rp_backend",
+		"records_examined=49152;backend=plain_file_scan;status=verified");
+	char backend_cleanup_probe[2];
+	ok = ok && rp_read_file("m000", backend_cleanup_probe,
+				    sizeof(backend_cleanup_probe)) < 0;
+	ok = ok && rp_read_file("m011", backend_cleanup_probe,
+				    sizeof(backend_cleanup_probe)) < 0;
 	ok = ok && require_file_token("rp_backend_exec", "workflow_portability=rp_wfio");
 	ok = ok && require_file_token("rp_backend_exec", "scenario=backend-scenario:RUN-042:agentcompare");
 	ok = ok && require_file_token("rp_backend_exec", "reference_case=plain-ucore;source=rp_wfio;expected_status=available");

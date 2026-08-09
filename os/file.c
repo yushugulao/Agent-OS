@@ -789,8 +789,6 @@ int fileopen(char *path, uint64 omode)
 		open_file_io_lease_seed_authorized(f, VFS_OP_READ, &cred);
 	if (!created && f->writable)
 		open_file_io_lease_seed_authorized(f, VFS_OP_WRITE, &cred);
-	if (created)
-		agent_fs_note_create(ip, path);
 	if (fdinstall(fd, f) < 0)
 		goto fail;
 	return fd;

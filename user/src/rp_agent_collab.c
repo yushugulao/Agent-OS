@@ -64,7 +64,7 @@ static int run_kernel_collaboration(void)
 	int code = -1;
 	char gate = 'g';
 
-	if (agent_info(&info) < 0 || !info.is_agent)
+	if (agent_launch_info(&info) < 0 || !info.is_agent)
 		return 0;
 	if (info.agent_role != AGENT_ROLE_ORCHESTRATOR ||
 	    (info.capability_mask & AGENT_CAP_ORCHESTRATE) == 0) {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from dual_state_evidence_contract import (
+    AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES,
     AGENTOS_REQUIRED_AGENT_ROLES,
     AGENTOS_ROLE_NUMBERS,
     AGENTOS_EVIDENCE_REQUIREMENTS,
@@ -15,6 +16,7 @@ from dual_state_evidence_contract import (
     MAIN_FLOW_TELEMETRY_ARTIFACT,
     PLATFORM_PROGRAMS,
     PROGRAM_LEDGER_ARTIFACTS,
+    agentos_program_launch_contract,
     fnv1a64,
 )
 from evidence_semantic_common import (
@@ -28,6 +30,7 @@ from check_host_platform_alignment import (
     CAPABILITY_GROUPS,
     collect_source_names,
     parse_canonical_mainflow_telemetry,
+    read_expected_programs,
     runtime_candidates,
 )
 
@@ -245,6 +248,15 @@ def _validate_groups(
 def _validate_program_ledger(
     ctx: ValidationContext, target: str
 ) -> tuple[dict[str, int], tuple[str, ...]]:
+    trusted_programs, trusted_roles, manifest_errors = read_expected_programs(
+        ctx.repo_root
+    )
+    if (
+        manifest_errors
+        or trusted_programs != PLATFORM_PROGRAMS
+        or trusted_roles != AGENTOS_REQUIRED_AGENT_ROLES
+    ):
+        raise EvidenceSemanticError("trusted AgentOS launch manifest differs")
     raw = _regular_bytes(
         ctx.raw_dir / PROGRAM_LEDGER_ARTIFACTS[target], f"{target} program ledger"
     )
@@ -264,6 +276,7 @@ def _validate_program_ledger(
     }
     programs: list[str] = []
     agent_launches = 0
+    agentos_filesystem_domain: str | None = None
     for row in rows[2:]:
         program = row.get("program")
         if (
@@ -283,18 +296,33 @@ def _validate_program_ledger(
             continue
         role = AGENTOS_REQUIRED_AGENT_ROLES.get(program)
         is_agent = role is not None
+        try:
+            launcher, identity_source = agentos_program_launch_contract(program)
+        except ValueError as error:
+            raise EvidenceSemanticError(
+                "AgentOS program is outside the launch contract"
+            ) from error
         expected = {
-            "launcher": "agent_create_role" if is_agent else "agent_worker_create",
+            "launcher": launcher,
             "role": role if is_agent else "plain",
-            "identity_source": "child_after_exec",
+            "identity_source": identity_source,
             "is_agent": "1" if is_agent else "0",
             "agent_role": str(AGENTOS_ROLE_NUMBERS[role]) if is_agent else "0",
         }
-        if any(row.get(key) != value for key, value in expected.items()) or any(
-            re.fullmatch(r"[1-9][0-9]*", row.get(key, "")) is None
-            for key in ("filesystem_domain", "filesystem_capabilities")
+        domain = row.get("filesystem_domain", "")
+        capabilities = row.get("filesystem_capabilities", "")
+        if (
+            any(row.get(key) != value for key, value in expected.items())
+            or re.fullmatch(r"[1-9][0-9]*", domain) is None
+            or capabilities != str(AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES)
+            or (
+                agentos_filesystem_domain is not None
+                and domain != agentos_filesystem_domain
+            )
         ):
             raise EvidenceSemanticError("AgentOS program identity differs")
+        if agentos_filesystem_domain is None:
+            agentos_filesystem_domain = domain
         agent_launches += int(is_agent)
     if tuple(programs) != PLATFORM_PROGRAMS:
         raise EvidenceSemanticError(f"{target} program identities differ from the trusted manifest")

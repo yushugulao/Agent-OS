@@ -682,13 +682,18 @@ if grep -n -E '^static[[:space:]]+(char|short|int|long|uint|uint64|struct[[:spac
 fi
 : >"${TMP_FILE}"
 for directory_operation in 'agent_metadata_txn_try_external()' \
-	'fs_dirent_canonicalize(path, key)' \
-	'agent_metadata_scan_index_inode(ip, key, &failed)' \
-	'agent_metadata_note_catalog_changes(changes)' \
+	'#define FS_META_UNBOUND(ip)' \
+	'!(ip)->agent_meta_flags' \
+	'agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)' \
 	'agent_metadata_store_mark_dirty(scope_id)'; do
 	grep -q -F "${directory_operation}" "${directory_source}" ||
 		fail "metadata directory lost owner operation: ${directory_operation}"
 done
+if grep -q -F 'agent_fs_note_create' "${directory_source}" \
+	"${ROOT_DIR}/os/agent_metadata_directory.h" "${ROOT_DIR}/os/file.c"; then
+	fail "普通文件创建仍保留 Agent 元数据钩子"
+fi
+: >"${TMP_FILE}"
 
 # 待处理目录 projection 是硬持久化屏障；共享完成边界和两次物理回写转换均须守卫，
 # 使普通、修复和后台路径不依赖包装层顺序。

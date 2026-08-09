@@ -150,6 +150,10 @@ static const uchar syscall_counter_slot_by_id[SYSCALL_COUNT_MAX] = {
 	[SYS_##name] = SYSCALL_ENABLED_##enabled ? \
 			 (uchar)(SYSCALL_COUNTER_SLOT_##name + 1) : 0,
 	SYSCALL_REGISTERED(SYSCALL_COUNTER_MAP)
+#define SYSCALL_ALIAS_MAP(alias, target) \
+	[SYS_##alias] = (uchar)(SYSCALL_COUNTER_SLOT_##target + 1),
+	SYSCALL_ALIASES(SYSCALL_ALIAS_MAP)
+#undef SYSCALL_ALIAS_MAP
 #undef SYSCALL_COUNTER_MAP
 };
 
@@ -166,6 +170,9 @@ static const uchar syscall_class_by_slot[SYSCALL_COUNTER_SLOTS] = {
 		       "registered syscall id exceeds lookup table");
 SYSCALL_REGISTERED(SYSCALL_ID_ASSERT)
 #undef SYSCALL_ID_ASSERT
+#define SYSCALL_ALIAS_ID_ASSERT(alias, target) _Static_assert(SYS_##alias < SYSCALL_COUNT_MAX, "syscall alias id exceeds lookup table");
+SYSCALL_ALIASES(SYSCALL_ALIAS_ID_ASSERT)
+#undef SYSCALL_ALIAS_ID_ASSERT
 
 _Static_assert(SYSCALL_COUNTER_SLOTS < 255,
 	       "syscall counter slot must fit in one byte");
@@ -1073,6 +1080,8 @@ static __attribute__((noinline)) int syscall_dispatch(
 		       trapframe->a0, trapframe->a1, trapframe->a2,
 		       trapframe->a3, trapframe->a4, trapframe->a5);
 	}
+	if (id == SYS_agent_launch_info)
+		return sys_agent_info(trapframe->a0, 1);
 	switch (id) {
 	case SYS_write:
 		ret = sys_write(transaction->file, (int)trapframe->a0,
@@ -1217,7 +1226,7 @@ static __attribute__((noinline)) int syscall_dispatch(
 						     trapframe->a1);
 		break;
 	case SYS_agent_info:
-		ret = sys_agent_info(trapframe->a0);
+		ret = sys_agent_info(trapframe->a0, 0);
 		break;
 	case SYS_agent_sched_snapshot:
 		ret = sys_agent_sched_snapshot(trapframe->a0, trapframe->a1);

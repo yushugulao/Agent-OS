@@ -15,7 +15,17 @@ from check_host_test_alignment import (
     parse_record,
     read_runtime_manifest,
 )
-from dual_state_evidence_contract import MAIN_FLOW_SOURCE_SPECS
+from dual_state_evidence_contract import (
+    AGENTOS_EVIDENCE_REQUIREMENTS,
+    AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES,
+    AGENTOS_REQUIRED_AGENT_ROLES,
+    AGENTOS_WORKER_BATCH_GROUPS,
+    AGENTOS_WORKER_BATCH_PROGRAMS,
+    AGENTOS_WORKER_DIRECT_PROGRAMS,
+    MAIN_FLOW_SOURCE_SPECS,
+    PLATFORM_PROGRAMS,
+    agentos_program_launch_contract,
+)
 
 @dataclass(frozen=True)
 class CapabilityGroup:
@@ -435,6 +445,16 @@ ROLE_MANIFEST_ENTRY = re.compile(
     r'^\s*APPLY\("(rp_[a-z0-9_]+)",\s*'
     r'"(orchestrator|recovery|artifact|investigator|sentinel)"\)\s*(?:\\)?\s*$'
 )
+WORKER_BATCH_ENTRY = re.compile(
+    r"^\s*APPLY\((0|[1-9][0-9]*),\s*(rp_[a-z0-9_]+)\)\s*(?:\\)?\s*$"
+)
+WORKER_BATCH_GROUP_ENTRY = re.compile(
+    r"^\s*APPLY\((0|[1-9][0-9]*),\s*(rp_wbatch[0-9]+),\s*"
+    r"(0|[1-9][0-9]*)\)\s*(?:\\)?\s*$"
+)
+WORKER_DIRECT_ENTRY = re.compile(
+    r"^\s*APPLY\((rp_[a-z0-9_]+)\)\s*(?:\\)?\s*$"
+)
 AGENT_ROLE_NUMBERS = {
     "sentinel": 1,
     "investigator": 2,
@@ -619,6 +639,134 @@ def _parse_program_manifest(
     return tuple(programs), roles, []
 
 
+def _manifest_macro_entries(
+    lines: list[str],
+    macro: str,
+    pattern: re.Pattern[str],
+    path: Path,
+) -> tuple[list[tuple[str, ...]], list[str]]:
+    start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith(f"#define {macro}(APPLY)")
+        ),
+        None,
+    )
+    if start is None:
+        return [], [f"{macro} is missing from {path}"]
+    entries: list[tuple[str, ...]] = []
+    for line in lines[start + 1 :]:
+        match = pattern.fullmatch(line)
+        if match is None:
+            break
+        entries.append(match.groups())
+        if not line.rstrip().endswith("\\"):
+            break
+    if not entries:
+        return [], [f"{macro} is empty in {path}"]
+    return entries, []
+
+
+def _manifest_count(
+    lines: list[str], name: str, path: Path
+) -> tuple[int | None, list[str]]:
+    pattern = re.compile(rf"^#define {re.escape(name)} (0|[1-9][0-9]*)$")
+    matches = [pattern.fullmatch(line) for line in lines]
+    values = [int(match.group(1)) for match in matches if match is not None]
+    if len(values) != 1:
+        return None, [f"{name} must be defined exactly once in {path}"]
+    return values[0], []
+
+
+def _validate_agentos_worker_manifest(
+    path: Path,
+    programs: tuple[str, ...],
+    roles: dict[str, str],
+) -> list[str]:
+    if not path.is_file():
+        return [f"program manifest is missing: {path}"]
+    try:
+        lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        return [f"program manifest is not valid UTF-8: {path}"]
+    errors: list[str] = []
+    group_rows, group_errors = _manifest_macro_entries(
+        lines, "RP_WORKER_BATCH_GROUPS", WORKER_BATCH_GROUP_ENTRY, path
+    )
+    errors.extend(group_errors)
+    observed_groups: list[tuple[int, str, tuple[str, ...]]] = []
+    for expected_group, raw_row in enumerate(group_rows):
+        group_text, runner, count_text = raw_row
+        group = int(group_text)
+        count = int(count_text)
+        if group != expected_group:
+            errors.append(
+                f"RP_WORKER_BATCH_GROUPS has a non-canonical group index in {path}"
+            )
+            continue
+        rows, row_errors = _manifest_macro_entries(
+            lines,
+            f"RP_WORKER_BATCH_{group}_PROGRAMS",
+            WORKER_BATCH_ENTRY,
+            path,
+        )
+        errors.extend(row_errors)
+        indices = tuple(int(index) for index, _program in rows)
+        names = tuple(program for _index, program in rows)
+        if indices != tuple(range(count)) or len(rows) != count:
+            errors.append(
+                f"RP_WORKER_BATCH_{group}_PROGRAMS indices or count differ in {path}"
+            )
+        observed_groups.append((group, runner, names))
+    direct_rows, direct_errors = _manifest_macro_entries(
+        lines, "RP_WORKER_DIRECT_PROGRAMS", WORKER_DIRECT_ENTRY, path
+    )
+    errors.extend(direct_errors)
+    direct_programs = tuple(row[0] for row in direct_rows)
+    declared_counts: dict[str, int | None] = {}
+    for name in (
+        "RP_WORKER_BATCH_GROUP_COUNT",
+        "RP_WORKER_BATCH_PROGRAM_COUNT",
+        "RP_WORKER_DIRECT_PROGRAM_COUNT",
+    ):
+        declared_counts[name], count_errors = _manifest_count(lines, name, path)
+        errors.extend(count_errors)
+    if tuple(programs) != PLATFORM_PROGRAMS:
+        errors.append(f"RP_PLATFORM_PROGRAMS differs from the canonical 70-program order in {path}")
+    if tuple(roles.items()) != tuple(AGENTOS_REQUIRED_AGENT_ROLES.items()):
+        errors.append(f"RP_AGENTOS_ROLE_PROGRAMS differs from the canonical 10-role set in {path}")
+    if tuple(observed_groups) != AGENTOS_WORKER_BATCH_GROUPS:
+        errors.append(f"AgentOS worker batch groups or order differ in {path}")
+    if direct_programs != AGENTOS_WORKER_DIRECT_PROGRAMS:
+        errors.append(f"AgentOS direct-worker set or order differs in {path}")
+    expected_counts = {
+        "RP_WORKER_BATCH_GROUP_COUNT": len(AGENTOS_WORKER_BATCH_GROUPS),
+        "RP_WORKER_BATCH_PROGRAM_COUNT": len(AGENTOS_WORKER_BATCH_PROGRAMS),
+        "RP_WORKER_DIRECT_PROGRAM_COUNT": len(AGENTOS_WORKER_DIRECT_PROGRAMS),
+    }
+    for name, expected in expected_counts.items():
+        if declared_counts[name] != expected:
+            errors.append(f"{name} differs from {expected} in {path}")
+    role_set = set(roles)
+    batch_set = set(AGENTOS_WORKER_BATCH_PROGRAMS)
+    direct_set = set(direct_programs)
+    if (
+        role_set & batch_set
+        or role_set & direct_set
+        or batch_set & direct_set
+        or role_set | batch_set | direct_set != set(programs)
+        or len(role_set) != 10
+        or len(batch_set) != 58
+        or len(direct_set) != 2
+    ):
+        errors.append(
+            "AgentOS roles, batched workers, and direct workers do not form "
+            "the required disjoint 10+58+2 partition"
+        )
+    return errors
+
+
 def read_expected_programs(
     root: Path,
 ) -> tuple[tuple[str, ...], dict[str, str], list[str]]:
@@ -629,8 +777,18 @@ def read_expected_programs(
     errors = agentos_errors + plain_errors
     if agentos and plain and agentos != plain:
         errors.append("plain and AgentOS ordered program manifests differ")
-    if agentos_roles and plain_roles and agentos_roles != plain_roles:
+    if (
+        agentos_roles
+        and plain_roles
+        and tuple(agentos_roles.items()) != tuple(plain_roles.items())
+    ):
         errors.append("plain and AgentOS Agent-role launch manifests differ")
+    if agentos and agentos_roles:
+        errors.extend(
+            _validate_agentos_worker_manifest(
+                agentos_path, agentos, agentos_roles
+            )
+        )
     return agentos, agentos_roles, errors
 
 
@@ -691,6 +849,7 @@ def read_program_ledger(
             errors.append("rp_orch_timing has an invalid launcher header")
 
     program_digest = FNV_OFFSET
+    agentos_filesystem_domain: str | None = None
     for number, line in enumerate(lines[2:], 3):
         record = parse_record(line)
         if record is None:
@@ -736,33 +895,44 @@ def read_program_ledger(
             role = record.get("role")
             launcher_name = record.get("launcher")
             expected_role = expected_agent_roles.get(program, "plain")
-            expected_launcher = (
-                "agent_create_role"
-                if program in expected_agent_roles
-                else "agent_worker_create"
-            )
+            try:
+                expected_launcher, expected_identity_source = (
+                    agentos_program_launch_contract(program)
+                )
+            except ValueError:
+                expected_launcher, expected_identity_source = "", ""
+                errors.append(
+                    f"rp_orch_timing program {program} is outside the AgentOS launch contract"
+                )
             if role != expected_role:
                 errors.append(f"rp_orch_timing program {program} has invalid AgentOS role")
             if launcher_name != expected_launcher:
                 errors.append(f"rp_orch_timing program {program} has invalid AgentOS launcher")
             expected_is_agent = "1" if program in expected_agent_roles else "0"
             expected_role_number = str(AGENT_ROLE_NUMBERS.get(expected_role, 0))
-            if record.get("identity_source") != "child_after_exec":
-                errors.append(f"rp_orch_timing program {program} lacks post-exec identity evidence")
+            if record.get("identity_source") != expected_identity_source:
+                errors.append(
+                    f"rp_orch_timing program {program} has invalid trusted CRT identity evidence"
+                )
             if record.get("is_agent") != expected_is_agent or record.get("agent_role") != expected_role_number:
-                errors.append(f"rp_orch_timing program {program} has mismatched attested identity")
+                errors.append(f"rp_orch_timing program {program} has mismatched self-checked identity")
             domain = record.get("filesystem_domain", "")
             capabilities = record.get("filesystem_capabilities", "")
             if (
-                re.fullmatch(r"[0-9]+", domain) is None
-                or not 0 < int(domain) <= U64_MASK
+                re.fullmatch(r"[1-9][0-9]*", domain) is None
+                or int(domain) > U64_MASK
             ):
-                errors.append(f"rp_orch_timing program {program} has invalid attested domain")
+                errors.append(f"rp_orch_timing program {program} has invalid self-checked domain")
+            elif agentos_filesystem_domain is None:
+                agentos_filesystem_domain = domain
+            elif domain != agentos_filesystem_domain:
+                errors.append(
+                    f"rp_orch_timing program {program} has mismatched self-checked domain"
+                )
             if (
-                re.fullmatch(r"[0-9]+", capabilities) is None
-                or not 0 < int(capabilities) <= U64_MASK
+                capabilities != str(AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES)
             ):
-                errors.append(f"rp_orch_timing program {program} has invalid attested capabilities")
+                errors.append(f"rp_orch_timing program {program} has invalid self-checked capabilities")
         program_digest = fnv1a64(
             expected_program.encode("utf-8") + b"\0", program_digest
         )
@@ -1035,6 +1205,14 @@ def validate_mainflow_runtime_evidence(
             claim_verified = source_has_unique_exact_field(
                 source_data, spec.claim_key, spec.claim_value
             )
+            if spec.source == "rp_agentos_roles":
+                claim_verified = claim_verified and all(
+                    source_has_unique_exact_field(
+                        source_data, key, expected
+                    )
+                    for token in AGENTOS_EVIDENCE_REQUIREMENTS[spec.source]
+                    for key, expected in (token.split("=", 1),)
+                )
             status_verified = source_has_unique_exact_field(
                 source_data, "status", spec.source_status
             )

@@ -49,6 +49,30 @@ def reject(text: str, fragment: str, message: str) -> None:
         raise ValueError(message)
 
 
+def macro_entries(text: str, name: str, arity: int) -> list[tuple[str, ...]]:
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines)
+              if re.match(rf"^\s*#define\s+{re.escape(name)}\(X\)", line)]
+    if len(starts) != 1:
+        raise ValueError(f"{name} must have one active definition")
+    index = starts[0]
+    body = lines[index].split(")", 1)[1]
+    while body.rstrip().endswith("\\"):
+        index += 1
+        if index >= len(lines):
+            raise ValueError(f"unterminated {name}")
+        body += "\n" + lines[index]
+    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", body, flags=re.S)
+    pattern = r"\bX\(\s*" + r"\s*,\s*".join(
+        [r"([A-Za-z_][A-Za-z0-9_]*)"] * arity
+    ) + r"\s*\)"
+    entries = re.findall(pattern, body)
+    residue = re.sub(pattern, "", body).replace("\\", "").strip()
+    if residue:
+        raise ValueError(f"{name} contains non-entry tokens: {residue}")
+    return entries
+
+
 def check(root: Path) -> None:
     counter_header_raw = (root / "os/syscall_counter.h").read_text(encoding="utf-8")
     header = compact(root / "os/kernel_work.h")
@@ -150,10 +174,13 @@ def check(root: Path) -> None:
         "present=scheduler_active_domains.count!=0;",
         "runnable-peer query does not use the scheduler's active-domain index",
     )
+    timer = function(trap, "devintr")
     require(
-        trap,
-        "kernel_work_request_resched();",
-        "timer trap does not publish the kernel reschedule edge",
+        timer,
+        "if((r_sstatus()&SSTATUS_SPP)==0){"
+        "if(scheduler_has_runnable_peer())yield();}else{"
+        "kernel_work_request_resched();}",
+        "无竞争用户态时钟仍会切换到调度器",
     )
     require(
         fs_source,
@@ -377,6 +404,16 @@ def check(root: Path) -> None:
     registered = {name for name, _class, _enabled in registry_entries}
     if len(registry_entries) != len(registered):
         raise ValueError("syscall registry contains duplicate names")
+    alias_pairs = macro_entries(counter_header_raw, "SYSCALL_ALIASES", 2)
+    aliases = dict(alias_pairs)
+    if len(alias_pairs) != len(aliases):
+        raise ValueError("syscall alias registry contains duplicate names")
+    if set(aliases) & registered or any(
+        target not in registered for target in aliases.values()
+    ):
+        raise ValueError("syscall alias registry is not a disjoint closed mapping")
+    if aliases != {"agent_launch_info": "agent_info"}:
+        raise ValueError(f"syscall counter aliases drifted: {aliases}")
     allowed_classes = {
         "FAST", "DESCRIPTOR", "BLOCK_IO", "FS_EPOCH", "BLOCK_IO_FS_EPOCH"
     }
@@ -423,9 +460,14 @@ def check(root: Path) -> None:
     if actual_gates != expected_gates:
         raise ValueError(f"syscall feature gates drifted: {actual_gates}")
     dispatched = set(re.findall(r"caseSYS_([a-zA-Z0-9_]+):", dispatch))
-    if registered != dispatched:
-        missing = sorted(dispatched - registered)
-        stale = sorted(registered - dispatched)
+    for alias in aliases:
+        require(dispatch, f"if(id==SYS_{alias})return",
+                f"syscall alias {alias} lacks direct dispatch")
+        dispatched.add(alias)
+    registered_dispatch = registered | set(aliases)
+    if registered_dispatch != dispatched:
+        missing = sorted(dispatched - registered_dispatch)
+        stale = sorted(registered_dispatch - dispatched)
         raise ValueError(
             f"compact syscall counters drifted: missing={missing}, stale={stale}"
         )
@@ -437,7 +479,22 @@ def check(root: Path) -> None:
             flags=re.M,
         )
     }
-    registered_ids = [syscall_ids[name] for name in registered]
+    launch_ids = []
+    for path, prefix in (
+        (root / "os/syscall_ids.h", "SYS_"),
+        (root / "user/lib/syscall_ids.h", "SYS_"),
+        (root / "user/lib/arch/riscv/syscall_ids.h.in", "__NR_"),
+    ):
+        values = re.findall(
+            rf"^#define\s+{prefix}agent_launch_info\s+([0-9]+)\s*$",
+            path.read_text(encoding="utf-8"), flags=re.M,
+        )
+        if len(values) != 1:
+            raise ValueError(f"{path} lacks one launch-info syscall ID")
+        launch_ids.append(int(values[0]))
+    if launch_ids != [561, 561, 561]:
+        raise ValueError(f"launch-info syscall IDs drifted: {launch_ids}")
+    registered_ids = [syscall_ids[name] for name in registered_dispatch]
     if len(registered_ids) != len(set(registered_ids)):
         raise ValueError("registered syscalls contain duplicate numeric IDs")
     require(
@@ -449,6 +506,10 @@ def check(root: Path) -> None:
         "#defineSYSCALL_COUNTER_MAP(name,class,enabled)",
         "[SYS_##name]=SYSCALL_ENABLED_##enabled?",
         "SYSCALL_REGISTERED(SYSCALL_COUNTER_MAP)",
+        "#defineSYSCALL_ALIAS_MAP(alias,target)",
+        "[SYS_##alias]=(uchar)(SYSCALL_COUNTER_SLOT_##target+1),",
+        "SYSCALL_ALIASES(SYSCALL_ALIAS_MAP)",
+        "SYSCALL_ALIASES(SYSCALL_ALIAS_ID_ASSERT)",
         "#defineSYSCALL_CLASS_MAP(name,class,enabled)",
         "[SYSCALL_COUNTER_SLOT_##name]=SYSCALL_CLASS_##class,",
         "SYSCALL_REGISTERED(SYSCALL_CLASS_MAP)",

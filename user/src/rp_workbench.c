@@ -20,7 +20,7 @@ static struct agent_file_query_result workbench_kernel_query_result;
 
 static int run_kernel_workbench_stage(void)
 {
-	if (agent_info(&workbench_agent_info) < 0 || !workbench_agent_info.is_agent)
+	if (agent_launch_info(&workbench_agent_info) < 0 || !workbench_agent_info.is_agent)
 		return 0;
 	if ((workbench_agent_info.capability_mask &
 	     (AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |

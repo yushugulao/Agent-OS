@@ -20,6 +20,10 @@ static int rp_probe_open(const char *path, int flags)
 #include RP_STATE_HEADER
 #undef open
 
+#ifdef RP_STATE_SCRATCH_EXTERN
+char rp_state_buf[RP_STATE_BUFFER_SIZE];
+#endif
+
 static int write_fixture(const char *path, const char *data, size_t size)
 {
 	int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0600);

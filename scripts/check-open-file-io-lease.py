@@ -56,6 +56,8 @@ def check(root: Path) -> None:
     fs_source = compact((root / "os/fs.c").read_text(encoding="utf-8"))
     edit_text = (root / "os/agent_file_state.c").read_text(encoding="utf-8")
     edit_source = compact(edit_text)
+    version_struct = edit_source[edit_source.index("structfile_version{"):]
+    version_struct = version_struct[:version_struct.index("};")]
 
     for field in (
         "structfile*file;", "structinode*inode;", "structproc*subject;",
@@ -63,7 +65,7 @@ def check(root: Path) -> None:
         "structworkflow_lifecycle_keylifecycle;",
         "conststructvfs_cred*cred;",
         "uint64edit_authority_generation;", "uint64edit_deadline_tick;",
-        "uint64thread_generation;", "uint64syscall_generation;",
+        "uint64redispatch_generation;", "uint64syscall_generation;",
         "uintinode_incarnation;", "uintinode_checksum;",
         "uintinode_policy_generation;", "uintinode_exec_size;",
         "uintinode_exec_flags;", "uintinode_exec_generation;",
@@ -95,6 +97,14 @@ def check(root: Path) -> None:
     edit_match = function(source_text, "open_file_io_edit_matches")
     edit_modify = function(edit_text, "agent_edit_modify_allowed")
     edit_snapshot = function(edit_text, "agent_edit_write_lease_snapshot")
+    edit_next = function(edit_text, "agent_edit_authority_next_locked")
+    edit_release = function(edit_text, "agent_edit_release_locked")
+    edit_cleanup = function(edit_text, "agent_edit_cleanup_expired_locked")
+    edit_scope_reclaim = function(edit_text, "agent_file_state_scope_reclaim")
+    edit_version_clear = function(edit_text, "file_version_clear_locked")
+    edit_begin = function(edit_text, "sys_agent_file_edit_begin")
+    edit_commit = function(edit_text, "sys_agent_file_edit_commit")
+    edit_abort = function(edit_text, "sys_agent_file_edit_abort")
     issue = function(source_text, "open_file_io_token_issue")
     cache_slot = function(source_text, "open_file_io_cache_slot")
 
@@ -110,7 +120,6 @@ def check(root: Path) -> None:
         "if(valid_until_tick)*valid_until_tick=0;",
         "enabled=agent_edit_lock();",
         "agent_edit_cleanup_expired_locked(now);",
-        "version=file_version_inode_locked(ip,0);",
         "edit=agent_edit_find_locked(ip->vfs_scope_id,0,ip);",
         "edit&&!agent_edit_owner(edit,p)",
         "*valid_until_tick=edit->deadline_tick;",
@@ -120,6 +129,20 @@ def check(root: Path) -> None:
             fragment in edit_modify,
             "write lease snapshot common authorization path is incomplete",
         )
+    require(
+        "*authority_generation=agent_file_edit_authority_generation" in
+        edit_modify,
+        "full edit authorization does not capture the global revocation epoch",
+    )
+    snapshot_fast = (
+        "if(action==0&&authority_generation!=0&&valid_until_tick==0){"
+        "*authority_generation=agent_file_edit_authority_generation;"
+        "agent_edit_unlock(enabled);return1;}"
+    )
+    require(snapshot_fast in edit_modify and
+            edit_modify.index(snapshot_fast) <
+            edit_modify.index("agent_edit_cleanup_expired_locked(now)"),
+            "cached edit epoch snapshot still scans the edit/version tables")
     require(
         "if(action){edit->conflict_count++;" in edit_modify
         and "if(!allowed&&action)agent_edit_audit(" in edit_modify,
@@ -144,7 +167,7 @@ def check(root: Path) -> None:
         "token->file=grant->file", "token->inode=grant->inode",
         "token->subject=grant->subject", "token->account=grant->account",
         "token->lifecycle=grant->lifecycle", "token->cred=authorized_cred",
-        "token->thread_generation=thread->identity_generation",
+        "token->redispatch_generation=thread->kernel_work_redispatches",
         "token->syscall_generation=thread->kernel_work_generation",
         "token->inode_incarnation=grant->inode_incarnation",
         "token->inode_checksum=grant->inode_checksum",
@@ -161,9 +184,12 @@ def check(root: Path) -> None:
             "in-flight syscall authority still depends on cache residency")
     for fragment in (
         "token->subject==proc", "token->inode==inode",
-        "thread->identity_generation==token->thread_generation",
         "thread->kernel_work_generation==token->syscall_generation",
         "open_file_io_file_matches(token->file,inode,operation)",
+        "thread->kernel_work_redispatches==token->redispatch_generation",
+        "token->edit_deadline_tick!=0",
+        "agent_file_state_now()>=token->edit_deadline_tick",
+        "agent_edit_write_lease_snapshot(inode,0,0)",
         "open_file_io_subject_matches(proc,token->account,token->lifecycle,"
         "token->cred)",
         "open_file_io_inode_matches(token->inode_incarnation,"
@@ -172,12 +198,17 @@ def check(root: Path) -> None:
         "token->inode_exec_generation,token->inode_exec_role_mask,"
         "token->inode_exec_layout_version,token->inode_exec_rw_offset,"
         "token->inode_exec_profile,inode)",
-        "open_file_io_edit_matches(inode,token->cred,operation,"
+        "open_file_io_edit_matches(proc,inode,token->cred,operation,"
         "token->edit_authority_generation,token->edit_deadline_tick)",
     ):
         require(fragment in validate,
                 "blocking-boundary revocation validation is incomplete")
 
+    require(
+        validate.index("thread->kernel_work_redispatches==") <
+        validate.index("open_file_io_subject_matches("),
+        "same-dispatch token validation does not precede full revalidation",
+    )
     for fragment in (
         "proc->teardown_state!=PROC_TEARDOWN_LIVE",
         "resource_account_handle_equal(account,proc->resource_account)",
@@ -186,7 +217,8 @@ def check(root: Path) -> None:
         "open_file_io_lifecycle_live(current_lifecycle)",
         "open_file_io_cred_equal(cred,&current_cred)",
     ):
-        require(fragment in subject_match, "subject generation checks are incomplete")
+        require(fragment in subject_match,
+                "subject generation checks are incomplete")
     require("file->ref>=1" in file_match and "file->ip==inode" in file_match and
             "file->readable" in file_match and "file->writable" in file_match,
             "pinned file authority checks are incomplete")
@@ -196,11 +228,15 @@ def check(root: Path) -> None:
             "exec_generation==inode->exec_generation" in inode_match and
             "exec_profile==inode->vfs_exec_profile" in inode_match,
             "inode security identity is incomplete")
-    require("agent_edit_write_lease_snapshot(" in edit_match and
+    require("agent_edit_write_lease_snapshot(inode,&current_generation,0)" in
+            edit_match and
             "authority_generation==current_generation" in edit_match and
-            "deadline_tick==current_deadline" in edit_match and
+            "proc->agent_control_state!=AGENT_CONTROL_OPEN" in edit_match and
             "authority_generation==0&&deadline_tick==0" in edit_match,
             "edit revocation generation is not checked precisely")
+    require("agent_file_state_now()>=deadline_tick" in edit_match and
+            "agent_edit_write_lease_snapshot(inode,0,0)" in edit_match,
+            "cached edit expiry does not fail closed and publish revocation")
     require("open_file_io_file_matches(" in grant_match and
             "open_file_io_subject_matches(" in grant_match and
             "open_file_io_inode_matches(" in grant_match and
@@ -225,17 +261,27 @@ def check(root: Path) -> None:
     require("open_file_io_token_validate(lease,ip,VFS_OP_READ)" in fs_source and
             "open_file_io_token_validate(lease,ip,VFS_OP_WRITE)" in fs_source,
             "filesystem does not verify the kernel token")
-    require("uint64edit_authority_generation;" in edit_source and
-            "staticuint64agent_file_edit_authority_generation;" in edit_source and
-            "entry->edit_authority_generation="
-            "agent_file_edit_authority_generation;" in edit_source and
-             edit_source.count(
-                 "edit_authority_generation=agent_file_counter_next("
-                 "&agent_file_edit_authority_generation)") >= 3 and
-             "*authority_generation=version->edit_authority_generation" in
-             edit_modify and
-             "agent_file_edit_authority_generation" not in source,
-             "edit authority lacks an inode-scoped revocation generation")
+    require("staticuint64agent_file_edit_authority_generation;" in edit_source and
+            "uint64edit_authority_generation;" not in version_struct,
+            "edit authority epoch still consumes per-inode BSS")
+    require("agent_file_edit_authority_generation==~0ULL" in edit_next and
+            "shutdown(),__builtin_unreachable()" in edit_next and
+            "agent_file_edit_authority_generation++" in edit_next,
+            "edit authority epoch can wrap and reuse a live generation")
+    for body, label in (
+        (edit_release, "release/abort/delete/expiry"),
+        (edit_scope_reclaim, "scope reclaim"),
+        (edit_version_clear, "inode incarnation reclaim"),
+        (edit_begin, "lease begin"),
+        (edit_commit, "lease commit"),
+    ):
+        require("agent_edit_authority_next_locked()" in body,
+                f"{label} does not bump the edit authority epoch")
+    require("agent_edit_release_locked(" in edit_cleanup and
+            "agent_edit_release_locked(" in edit_abort,
+            "expiry or abort bypasses the common revocation bump")
+    require("agent_file_edit_authority_generation" not in source,
+            "lease module reaches through the edit epoch owner")
 
 
 def main() -> int:

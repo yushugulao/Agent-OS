@@ -118,7 +118,7 @@ static int run_kernel_audit(void)
 	int exact_edge = 0;
 	int self_pid = getpid();
 
-	if (agent_info(&info) < 0 || !info.is_agent)
+	if (agent_launch_info(&info) < 0 || !info.is_agent)
 		return 0;
 	if ((info.capability_mask & AGENT_CAP_AUDIT_WRITE) == 0) {
 		printf("rp_auditor: audit_capability_missing\n");

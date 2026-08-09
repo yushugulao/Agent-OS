@@ -19,7 +19,7 @@ struct open_file_io_token {
 	const struct vfs_cred *cred;
 	uint64 edit_authority_generation;
 	uint64 edit_deadline_tick;
-	uint64 thread_generation;
+	uint64 redispatch_generation;
 	uint64 syscall_generation;
 	uint inode_incarnation;
 	uint inode_checksum;

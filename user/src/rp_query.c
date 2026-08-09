@@ -14,7 +14,7 @@ static int run_kernel_query(void)
 	struct agent_info info;
 	struct agent_file_query *q = &kernel_query_arg;
 
-	if (agent_info(&info) < 0 || !info.is_agent)
+	if (agent_launch_info(&info) < 0 || !info.is_agent)
 		return 0;
 	if ((info.capability_mask &
 	     (AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |

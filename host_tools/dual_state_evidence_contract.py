@@ -162,8 +162,15 @@ AGENTOS_EVIDENCE_REQUIREMENTS = {
     ),
     "rp_agentos_roles": (
         "stage_launch=agent_create_role",
-        "support_launch=agent_worker_create",
+        "support_launch=agent_worker_batch",
+        "support_spawn=agent_worker_create",
         "support_role=delegated_non_agent_worker",
+        "worker_batch_groups=3",
+        "worker_batch_programs=58",
+        "worker_direct_launch=agent_worker_create",
+        "worker_direct_programs=2",
+        "worker_batch_identity=trusted_crt_batch_dispatch",
+        "worker_direct_identity=trusted_crt_self_check",
         "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_service_surface,rp_backend",
     ),
     "rp_agentos_query": ("metadata_source=kernel_file_index",),
@@ -209,6 +216,63 @@ AGENTOS_REQUIRED_AGENT_ROLES = {
     "rp_service_surface": "artifact",
     "rp_backend": "orchestrator",
 }
+
+AGENTOS_WORKER_BATCH_GROUPS = (
+    (
+        0,
+        "rp_wbatch0",
+        (
+            "rp_catalog", "rp_state_catalog", "rp_object_store",
+            "rp_object_query", "rp_lineage", "rp_site_export", "rp_planner",
+            "rp_portability", "rp_retriever", "rp_analyst", "rp_reviewer",
+            "rp_lab", "rp_governance", "rp_writer", "rp_evidence",
+            "rp_llm_bridge", "rp_llm_relay", "rp_privacy", "rp_runconf",
+            "rp_invoke", "rp_complete", "rp_artifact_ops", "rp_data_pipeline",
+            "rp_workflow_runner", "rp_calculation", "rp_analysisres",
+            "rp_campaign", "rp_delta", "rp_release", "rp_dossier",
+            "rp_startup_doctor", "rp_notebook_export",
+        ),
+    ),
+    (
+        1,
+        "rp_wbatch1",
+        (
+            "rp_consistency", "rp_metrics", "rp_ui_export", "rp_web_export",
+            "rp_revdash", "rp_modelreg", "rp_sysreview", "rp_expsched",
+            "rp_traincomp",
+        ),
+    ),
+    (
+        2,
+        "rp_wbatch2",
+        (
+            "rp_publication", "rp_runbooks", "rp_projectrel", "rp_studyproto",
+            "rp_stdesign", "rp_opsboard", "rp_reviewboard", "rp_controlplane",
+            "rp_integrityplane", "rp_coherenceplane", "rp_mature",
+            "rp_prov_view", "rp_prov_query", "rp_reldossier",
+            "rp_decsupport", "rp_usable", "rp_usableproject",
+        ),
+    ),
+)
+AGENTOS_WORKER_BATCH_PROGRAMS = tuple(
+    program
+    for _group, _runner, programs in AGENTOS_WORKER_BATCH_GROUPS
+    for program in programs
+)
+AGENTOS_WORKER_DIRECT_PROGRAMS = ("rp_compare_plain", "rp_test_suite")
+AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES = 66
+
+
+def agentos_program_launch_contract(program: str) -> tuple[str, str]:
+    if program in AGENTOS_REQUIRED_AGENT_ROLES:
+        return "agent_create_role", "trusted_crt_self_check"
+    if program in AGENTOS_WORKER_BATCH_PROGRAMS:
+        return "agent_worker_batch", "trusted_crt_batch_dispatch"
+    if program in AGENTOS_WORKER_DIRECT_PROGRAMS:
+        return "agent_worker_create", "trusted_crt_self_check"
+    raise ValueError(f"program is outside the AgentOS launch contract: {program}")
+
+
 AGENTOS_ROLE_NUMBERS = {
     "sentinel": 1,
     "investigator": 2,
@@ -252,6 +316,41 @@ AGENT_TO_PLAIN_CASE = {
     "agentos-edit": "",
 }
 
+BACKEND_QUERY_RECEIPT_FIELDS = (
+    "query_workload",
+    "consistency",
+    "dataset_records",
+    "query_operations",
+    "query_matches",
+    "result_digest",
+    "records_examined",
+    "backend",
+    "status",
+)
+BACKEND_QUERY_COMMON_FIELDS = (
+    "query_workload",
+    "consistency",
+    "dataset_records",
+    "query_operations",
+    "query_matches",
+    "result_digest",
+    "status",
+)
+BACKEND_QUERY_EXPECTED_COMMON = {
+    "query_workload": "research_metadata_lookup",
+    "consistency": "fresh_snapshot",
+    "dataset_records": 12,
+    "query_operations": 4096,
+    "query_matches": 4096,
+    "result_digest": "13819499490441518226",
+    "status": "verified",
+}
+BACKEND_QUERY_EXPECTED_BACKENDS = {
+    "plain": "plain_file_scan",
+    "agentos": "agent_metadata_index",
+}
+U64_MAX = (1 << 64) - 1
+
 DUAL_STATE_FIELDS = {
     "plain_files", "agentos_files", "common_files", "agentos_extra_files",
     "checked_compatibility_records", "plain_reference_products",
@@ -264,7 +363,8 @@ DUAL_STATE_FIELDS = {
     "host_derived_mainflow_stages", "agentos_mainflow_facts",
     "agentos_mainflow_verification_origin", "plain_timing_records",
     "plain_agent_launches", "plain_fork_launches", "agentos_timing_records",
-    "agentos_agent_launches", "agentos_worker_launches", "status",
+    "agentos_agent_launches", "agentos_worker_launches",
+    "backend_query_receipts", "status",
 }
 
 SAFE_VALUE = re.compile(r"[A-Za-z0-9:_-]{1,128}\Z")
@@ -276,6 +376,60 @@ class DualStateContractError(ValueError):
 
 def _nonnegative_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _canonical_u64_text(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"0|[1-9][0-9]*", value) is not None
+        and len(value) <= 20
+        and int(value) <= U64_MAX
+    )
+
+
+def _validate_backend_query_receipts(value: dict[str, object]) -> None:
+    receipts = value.get("backend_query_receipts")
+    if not isinstance(receipts, dict) or set(receipts) != {"plain", "agentos"}:
+        raise DualStateContractError("backend query receipt target inventory differs")
+
+    rows: dict[str, dict[str, object]] = {}
+    for target in ("plain", "agentos"):
+        row = receipts.get(target)
+        if not isinstance(row, dict) or set(row) != set(BACKEND_QUERY_RECEIPT_FIELDS):
+            raise DualStateContractError(f"{target} backend query receipt schema differs")
+        if (
+            not all(
+                _nonnegative_int(row.get(field)) and row[field] <= U64_MAX
+                for field in (
+                    "dataset_records",
+                    "query_operations",
+                    "query_matches",
+                    "records_examined",
+                )
+            )
+            or not _canonical_u64_text(row.get("result_digest"))
+            or row.get("backend") != BACKEND_QUERY_EXPECTED_BACKENDS[target]
+        ):
+            raise DualStateContractError(f"{target} backend query receipt values differ")
+        rows[target] = row
+
+    plain = rows["plain"]
+    agentos = rows["agentos"]
+    if any(plain[field] != agentos[field] for field in BACKEND_QUERY_COMMON_FIELDS):
+        raise DualStateContractError("backend query receipt common fields differ")
+    if any(
+        plain[field] != expected
+        for field, expected in BACKEND_QUERY_EXPECTED_COMMON.items()
+    ):
+        raise DualStateContractError("backend query receipt workload differs")
+
+    plain_examined = int(plain["records_examined"])
+    agentos_examined = int(agentos["records_examined"])
+    expected_plain = int(plain["dataset_records"]) * int(plain["query_operations"])
+    if plain_examined != expected_plain:
+        raise DualStateContractError("plain backend query scan cost is inconsistent")
+    if not int(agentos["query_matches"]) <= agentos_examined < plain_examined:
+        raise DualStateContractError("AgentOS backend query index cost is inconsistent")
 
 
 def _validate_cost_replacements(value: dict[str, object]) -> None:
@@ -333,6 +487,7 @@ def validate_dual_state(
         "status", "cost_replacements", "scenario_evidence", "runner_tick_status",
         "runner_tick_reason", "plain_reference_identities",
         "agentos_reference_identities", "agentos_mainflow_verification_origin",
+        "backend_query_receipts",
     }
     if any(not _nonnegative_int(value.get(name)) for name in integers):
         raise DualStateContractError("dual state comparison counters are invalid")
@@ -351,6 +506,7 @@ def validate_dual_state(
     ):
         raise DualStateContractError("dual state comparison claims are incomplete")
     _validate_cost_replacements(value)
+    _validate_backend_query_receipts(value)
     for target in ("plain", "agentos"):
         identities = list(reference_identities[target])
         products = sum(identity.startswith("file:") for identity in identities)
@@ -414,8 +570,12 @@ def expected_scenario_rows() -> list[dict[str, object]]:
 __all__ = [
     "AGENTOS_EVIDENCE_REQUIREMENTS", "AGENTOS_MAINFLOW_FACTS",
     "AGENTOS_MAINFLOW_STAGES", "AGENTOS_REQUIRED_AGENT_ROLES",
-    "AGENTOS_ROLE_NUMBERS",
+    "AGENTOS_ROLE_NUMBERS", "AGENTOS_PROGRAM_FILESYSTEM_CAPABILITIES",
+    "AGENTOS_WORKER_BATCH_GROUPS", "AGENTOS_WORKER_BATCH_PROGRAMS",
+    "AGENTOS_WORKER_DIRECT_PROGRAMS", "agentos_program_launch_contract",
     "AGENT_TO_PLAIN_CASE", "BACKEND_REPORT_ARTIFACTS", "BACKEND_REPORT_CASES",
+    "BACKEND_QUERY_COMMON_FIELDS", "BACKEND_QUERY_EXPECTED_BACKENDS",
+    "BACKEND_QUERY_EXPECTED_COMMON", "BACKEND_QUERY_RECEIPT_FIELDS",
     "DUAL_STATE_FIELDS",
     "DUAL_STATE_RAW_ARTIFACTS", "MAIN_FLOW_RAW_ARTIFACTS",
     "HOST_RUN_RESULT_STATE_NAME",

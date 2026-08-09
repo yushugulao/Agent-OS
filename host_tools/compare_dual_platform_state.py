@@ -27,6 +27,10 @@ from dual_state_evidence_contract import (
     AGENTOS_MAINFLOW_STAGES,
     AGENTOS_REQUIRED_AGENT_ROLES,
     BACKEND_REPORT_CASES,
+    BACKEND_QUERY_COMMON_FIELDS,
+    BACKEND_QUERY_EXPECTED_BACKENDS,
+    BACKEND_QUERY_EXPECTED_COMMON,
+    BACKEND_QUERY_RECEIPT_FIELDS,
     HOST_RUN_RESULT_STATE_NAME,
     MAIN_FLOW_SOURCE_SPECS,
     RUN_RESULT_IDENTITIES,
@@ -89,6 +93,7 @@ AGENTOS_ROLE_NUMBERS = {
 }
 RUNNER_TICK_STATUS_UNAVAILABLE = "unavailable"
 RUNNER_TICK_REASON_PLAIN_ZERO = "plain_runtime_cases_zero"
+U64_MAX = (1 << 64) - 1
 MAINFLOW_RUNTIME_SPECS = {
     spec.stage: (
         spec.source,
@@ -723,6 +728,99 @@ def collect_runner_tick_evidence(plain_dir: Path) -> dict[str, str]:
     }
 
 
+def _canonical_u64(value: str, target: str, field: str) -> int:
+    if re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+        raise ValueError(f"{target} backend query receipt has a non-canonical {field}")
+    if len(value) > 20:
+        raise ValueError(f"{target} backend query receipt {field} exceeds uint64")
+    parsed = int(value)
+    if parsed > U64_MAX:
+        raise ValueError(f"{target} backend query receipt {field} exceeds uint64")
+    return parsed
+
+
+def collect_backend_query_receipt(
+    state_dir: Path, target: str
+) -> dict[str, object]:
+    if target not in BACKEND_QUERY_EXPECTED_BACKENDS:
+        raise ValueError(f"unknown backend query receipt target: {target}")
+    text = require_file_text(state_dir, "rp_backend")
+    candidates = [
+        (line_no, raw)
+        for line_no, raw in enumerate(text.splitlines(), 1)
+        if "query_workload=" in raw
+    ]
+    if len(candidates) != 1:
+        raise ValueError(
+            f"{target} rp_backend must contain exactly one backend query receipt"
+        )
+    line_no, raw = candidates[0]
+    parts = raw.split(";")
+    if any(part.count("=") != 1 for part in parts):
+        raise ValueError(
+            f"{target} backend query receipt is malformed at rp_backend:{line_no}"
+        )
+    pairs = [part.split("=", 1) for part in parts]
+    if tuple(key for key, _value in pairs) != BACKEND_QUERY_RECEIPT_FIELDS:
+        raise ValueError(
+            f"{target} backend query receipt field order differs at rp_backend:{line_no}"
+        )
+    if any(not value or value.strip() != value for _key, value in pairs):
+        raise ValueError(
+            f"{target} backend query receipt has a non-canonical value at "
+            f"rp_backend:{line_no}"
+        )
+
+    raw_values = dict(pairs)
+    numeric_fields = {
+        "dataset_records",
+        "query_operations",
+        "query_matches",
+        "records_examined",
+    }
+    receipt: dict[str, object] = {}
+    for field in BACKEND_QUERY_RECEIPT_FIELDS:
+        value = raw_values[field]
+        if field in numeric_fields:
+            receipt[field] = _canonical_u64(value, target, field)
+        elif field == "result_digest":
+            _canonical_u64(value, target, field)
+            receipt[field] = value
+        else:
+            receipt[field] = value
+    return receipt
+
+
+def compare_backend_query_receipts(
+    plain_dir: Path, agentos_dir: Path
+) -> dict[str, dict[str, object]]:
+    receipts = {
+        "plain": collect_backend_query_receipt(plain_dir, "plain"),
+        "agentos": collect_backend_query_receipt(agentos_dir, "agentos"),
+    }
+    plain = receipts["plain"]
+    agentos = receipts["agentos"]
+    for target, row in receipts.items():
+        if row["backend"] != BACKEND_QUERY_EXPECTED_BACKENDS[target]:
+            raise ValueError(f"{target} backend query receipt names the wrong backend")
+    if any(plain[field] != agentos[field] for field in BACKEND_QUERY_COMMON_FIELDS):
+        raise ValueError("plain and AgentOS backend query receipt common fields differ")
+    if any(
+        plain[field] != expected
+        for field, expected in BACKEND_QUERY_EXPECTED_COMMON.items()
+    ):
+        raise ValueError("backend query receipt workload differs from the release contract")
+
+    plain_examined = int(plain["records_examined"])
+    agentos_examined = int(agentos["records_examined"])
+    expected_plain = int(plain["dataset_records"]) * int(plain["query_operations"])
+    if plain_examined != expected_plain:
+        raise ValueError("plain backend query receipt does not account for the full scan")
+    if not int(agentos["query_matches"]) <= agentos_examined < plain_examined:
+        raise ValueError("AgentOS backend query receipt does not prove an index reduction")
+    return receipts
+
+
 def verify_backend_costs(plain_dir: Path, agentos_dir: Path) -> int:
     plain_costs = collect_plain_costs(plain_dir, "plain")
     agentos_costs = collect_plain_costs(agentos_dir, "agentos")
@@ -1045,6 +1143,7 @@ def compare_state(
     preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
     cost_replacements = collect_cost_replacements(plain_dir, agentos_dir)
     runner_tick_evidence = collect_runner_tick_evidence(plain_dir)
+    backend_query_receipts = compare_backend_query_receipts(plain_dir, agentos_dir)
     embedded_action_records = verify_run_result(
         plain_run_result,
         agentos_run_result,
@@ -1094,6 +1193,7 @@ def compare_state(
         "cost_replacement_count": len(cost_replacements),
         "runner_tick_status": runner_tick_evidence["status"],
         "runner_tick_reason": runner_tick_evidence["reason"],
+        "backend_query_receipts": backend_query_receipts,
         "embedded_action_records": embedded_action_records,
         "run_result_match": 1,
         "agentos_evidence_checks": agentos_evidence_checks,

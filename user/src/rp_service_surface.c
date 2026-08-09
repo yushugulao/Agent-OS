@@ -6,14 +6,43 @@
 #define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
+#define RP_SURFACE_BATCH_SIZE 4096
+
 static char seed_value[96];
+static char surface_batch[RP_SURFACE_BATCH_SIZE];
+
+static void reset_surface_batch(void)
+{
+	surface_batch[0] = 0;
+}
+
+static int append_surface_batch(const char *path, const char *line)
+{
+	return rp_state_append_line(surface_batch, sizeof(surface_batch), path, line);
+}
+
+static int commit_surface_batch(const char *path)
+{
+	if (surface_batch[0] == 0)
+		return 0;
+	return rp_append_file(path, surface_batch);
+}
+
+static int append_runop(const char *line)
+{
+	return append_surface_batch("rp_runop", line);
+}
 
 static int append_seed_value(const char *kind, const char *key, const char *prefix, const char *fallback)
 {
+	char line[160];
+
 	if (!rp_host_seed_copy_value_for_kind(kind, key, seed_value, sizeof(seed_value))) {
 		rp_copy_text(seed_value, sizeof(seed_value), fallback);
 	}
-	return rp_append_host_action_line("rp_runop", prefix, seed_value);
+	rp_copy_text(line, sizeof(line), prefix);
+	rp_append_text(line, sizeof(line), seed_value);
+	return append_runop(line);
 }
 
 static int write_bio_services(void)
@@ -293,60 +322,60 @@ static int write_runtime_services(void)
 
 static int write_startup_health_surface(void)
 {
-	if (!rp_append_file("rp_runop",
-			    "startup_health=quickstart:ready;startup_checks=8;offline_runs_ready=1;cloud_llm_ready=0;project_launch=sample_ready;status=ready")) {
+	if (!append_runop(
+		    "startup_health=quickstart:ready;startup_checks=8;offline_runs_ready=1;cloud_llm_ready=0;project_launch=sample_ready;status=ready")) {
 		return 0;
 	}
-	if (!rp_append_file("rp_runop",
-			    "configuration_health=settings:ready;stores_secret_values=0;deepseek_provider=registered;deepseek_model=deepseek-v4-pro;openai_compatible=registered;status=ready")) {
+	if (!append_runop(
+		    "configuration_health=settings:ready;stores_secret_values=0;deepseek_provider=registered;deepseek_model=deepseek-v4-pro;openai_compatible=registered;status=ready")) {
 		return 0;
 	}
-	return rp_append_file("rp_runop",
-			      "platform_doctor=ready;checks=10;workspace=pass;template=pass;cloud_llm=optional;provider_health=offline:1,cloud:0,ready_cloud:0;downloads=markdown,json");
+	return append_runop(
+		"platform_doctor=ready;checks=10;workspace=pass;template=pass;cloud_llm=optional;provider_health=offline:1,cloud:0,ready_cloud:0;downloads=markdown,json");
 }
 
 static int write_research_product_surface(void)
 {
-	if (!rp_append_file("rp_runop",
-			    "project_scaffold=templates:3,files:8,launch:sample,download:ready,status=ready")) {
+	if (!append_runop(
+		    "project_scaffold=templates:3,files:8,launch:sample,download:ready,status=ready")) {
 		return 0;
 	}
-	if (!rp_append_file("rp_runop",
-			    "dataset_product=previews:2,visualizations:2,cards:2,answers:2,runs:2,comparisons:1,portfolio:ready,status=ready")) {
+	if (!append_runop(
+		    "dataset_product=previews:2,visualizations:2,cards:2,answers:2,runs:2,comparisons:1,portfolio:ready,status=ready")) {
 		return 0;
 	}
-	if (!rp_append_file("rp_runop",
-			    "source_portfolio=sources:67,citations:4,tags:2,portfolio:ready,status=ready")) {
+	if (!append_runop(
+		    "source_portfolio=sources:67,citations:4,tags:2,portfolio:ready,status=ready")) {
 		return 0;
 	}
-	if (!rp_append_file("rp_runop",
-			    "research_portfolio_scale=sources:67,datasets:5,literature_searches:7,reviews:11,evidence_reviews:7,evidence_extractions:25,screening_decisions:25,exports:80,doctor_reports:12,project_handoff_audits:34,project_run_comparisons:17,project_reproducibility_audits:17,project_snapshot_comparisons:17,status=ready")) {
+	if (!append_runop(
+		    "research_portfolio_scale=sources:67,datasets:5,literature_searches:7,reviews:11,evidence_reviews:7,evidence_extractions:25,screening_decisions:25,exports:80,doctor_reports:12,project_handoff_audits:34,project_run_comparisons:17,project_reproducibility_audits:17,project_snapshot_comparisons:17,status=ready")) {
 		return 0;
 	}
-	if (!rp_append_file("rp_runop",
-			    "study_protocol_reproduction=packages:1,review:approved,action_plan:ready,action_execution:ready,comparison:ready,status=ready")) {
+	if (!append_runop(
+		    "study_protocol_reproduction=packages:1,review:approved,action_plan:ready,action_execution:ready,comparison:ready,status=ready")) {
 		return 0;
 	}
-	if (!rp_append_file("rp_runop",
-			    "project_bundle_cache=latest:ready,reload:pass,refresh:ready,downloads:cached_or_refresh,status=ready")) {
+	if (!append_runop(
+		    "project_bundle_cache=latest:ready,reload:pass,refresh:ready,downloads:cached_or_refresh,status=ready")) {
 		return 0;
 	}
-	if (!rp_append_file("rp_runop",
-			    "runtime_assurance=secret_refs:3,model_registry:2,deployments:1,llm_proxy_audits:2,collab_threads:2,obs_alerts:5,health:1,status=ready")) {
+	if (!append_runop(
+		    "runtime_assurance=secret_refs:3,model_registry:2,deployments:1,llm_proxy_audits:2,collab_threads:2,obs_alerts:5,health:1,status=ready")) {
 		return 0;
 	}
-	if (!rp_append_file("rp_runop",
-			    "research_ops=semantic_entities:8,semantic_relations:6,prompt_templates:2,prompt_versions:2,prompt_evaluations:1,runbook_steps:7,worker_ops:6,execution_controls:8,status=ready")) {
+	if (!append_runop(
+		    "research_ops=semantic_entities:8,semantic_relations:6,prompt_templates:2,prompt_versions:2,prompt_evaluations:1,runbook_steps:7,worker_ops:6,execution_controls:8,status=ready")) {
 		return 0;
 	}
-	return rp_append_file("rp_runop",
-			      "regulated_research=annotation_schemas:1,annotation_tasks:3,assay_plates:1,plate_wells:6,cohort_records:2,data_access_requests:1,dataset_cards:1,model_cards:1,research_object_crates:1,research_object_entities:29,sample_custody_events:18,statistical_designs:1,workflow_templates:8,status=ready");
+	return append_runop(
+		"regulated_research=annotation_schemas:1,annotation_tasks:3,assay_plates:1,plate_wells:6,cohort_records:2,data_access_requests:1,dataset_cards:1,model_cards:1,research_object_crates:1,research_object_entities:29,sample_custody_events:18,statistical_designs:1,workflow_templates:8,status=ready");
 }
 
 static int write_advanced_surface(void)
 {
-	if (!rp_append_file("rp_runop",
-			    "advanced_surface=objects:5;research_search:saved_queries:2,recent:5,exports:2,note_captures:1,action_captures:1;project_space:lab-gene-x,workbenches:1,runs:4,evidence_rows:18,action_items:4,release_gate:release;study_protocol:protocols:2,launches:2,protocol_runs:1,criteria:6,compliance:passed;dataset_answer:datasets:2,answers:2,run_comparisons:1,numeric_fields:3,evidence_files:4;package_intake:packages:1,files:5,sha256:checked,decision:accepted;status=ready")) {
+	if (!append_runop(
+		    "advanced_surface=objects:5;research_search:saved_queries:2,recent:5,exports:2,note_captures:1,action_captures:1;project_space:lab-gene-x,workbenches:1,runs:4,evidence_rows:18,action_items:4,release_gate:release;study_protocol:protocols:2,launches:2,protocol_runs:1,criteria:6,compliance:passed;dataset_answer:datasets:2,answers:2,run_comparisons:1,numeric_fields:3,evidence_files:4;package_intake:packages:1,files:5,sha256:checked,decision:accepted;status=ready")) {
 		return 0;
 	}
 	if (rp_host_seed_has("kind=research_search_save") ||
@@ -385,7 +414,7 @@ static int write_agentos_surface_binding_child(void)
 	struct agent_context_record records[4];
 	int snapshot;
 
-	if (agent_info(&info) < 0 || !info.is_agent ||
+	if (agent_launch_info(&info) < 0 || !info.is_agent ||
 	    info.agent_role != AGENT_ROLE_ARTIFACT ||
 	    (info.capability_mask &
 	     (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)) !=
@@ -407,12 +436,12 @@ static int write_agentos_surface_binding_child(void)
 	if (snapshot < 2 || header.latest_sequence < results[1].sequence) {
 		return 1;
 	}
-	if (!rp_append_file("rp_runop",
-			    "agentos_advanced_surface=kernel_bound;agent_role=artifact;batch_ops=2;context_snapshot=present;context_authority=shadow;status=ready")) {
+	if (!append_runop(
+		    "agentos_advanced_surface=kernel_bound;agent_role=artifact;batch_ops=2;context_snapshot=present;context_authority=shadow;status=ready")) {
 		return 1;
 	}
-	if (!rp_append_file("rp_runop",
-			    "agentos_advanced_surface_detail=tool:echo,tool:read_context;direct_context=mirror;snapshot_records=2;status=ready")) {
+	if (!append_runop(
+		    "agentos_advanced_surface_detail=tool:echo,tool:read_context;direct_context=mirror;snapshot_records=2;status=ready")) {
 		return 1;
 	}
 	return 0;
@@ -422,7 +451,7 @@ static int write_agentos_surface_binding(void)
 {
 	struct agent_info info;
 
-	if (agent_info(&info) < 0 || !info.is_agent)
+	if (agent_launch_info(&info) < 0 || !info.is_agent)
 		return 1;
 	return write_agentos_surface_binding_child() == 0;
 }
@@ -447,6 +476,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_datarel", "fair=passed");
 	if (!ok) return 1;
 
+	reset_surface_batch();
 	if (!write_bio_services()) return 1;
 	if (!write_lab_resources()) return 1;
 	if (!write_publication_services()) return 1;
@@ -456,42 +486,48 @@ int main(void)
 	if (!write_research_product_surface()) return 1;
 	if (!write_advanced_surface()) return 1;
 	if (!write_agentos_surface_binding()) return 1;
+	if (!commit_surface_batch("rp_runop")) return 1;
 
-	if (!rp_append_file("rp_ack", "ack=bio_services;msg=bio;status=ready")) return 1;
-	if (!rp_append_file("rp_ack", "ack=lab_resources;msg=res;status=ready")) return 1;
-	if (!rp_append_file("rp_ack", "ack=publication_services;msg=pub;status=ready")) return 1;
-	if (!rp_append_file("rp_ack", "ack=knowledge_services;msg=know;status=ready")) return 1;
-	if (!rp_append_file("rp_ack", "ack=runtime_services;msg=run;status=ready")) return 1;
-	if (!rp_append_status("bio_services=ready")) return 1;
-	if (!rp_append_status("sample_registry=ready")) return 1;
-	if (!rp_append_status("ethics_review=ready")) return 1;
-	if (!rp_append_status("access_requests=ready")) return 1;
-	if (!rp_append_status("cohort_view=ready")) return 1;
-	if (!rp_append_status("lab_resources=ready")) return 1;
-	if (!rp_append_status("lab_governance_ops=ready")) return 1;
-	if (!rp_append_status("instrument_registry=ready")) return 1;
-	if (!rp_append_status("inventory=ready")) return 1;
-	if (!rp_append_status("procurement=ready")) return 1;
-	if (!rp_append_status("resource_schedule=ready")) return 1;
-	if (!rp_append_status("publication_services=ready")) return 1;
-	if (!rp_append_status("result_review=ready")) return 1;
-	if (!rp_append_status("publication_plan=ready")) return 1;
-	if (!rp_append_status("peer_review_response=ready")) return 1;
-	if (!rp_append_status("fair_package=ready")) return 1;
-	if (!rp_append_status("knowledge_services=ready")) return 1;
-	if (!rp_append_status("lit_review=ready")) return 1;
-	if (!rp_append_status("citation_graph=ready")) return 1;
-	if (!rp_append_status("semantic_index=ready")) return 1;
-	if (!rp_append_status("knowledge_answers=ready")) return 1;
-	if (!rp_append_status("runtime_services=ready")) return 1;
-	if (!rp_append_status("runtime_env=ready")) return 1;
-	if (!rp_append_status("notebook_exec=ready")) return 1;
-	if (!rp_append_status("eln_record=ready")) return 1;
-	if (!rp_append_status("worker_pool=ready")) return 1;
-	if (!rp_append_status("startup_health=ready")) return 1;
-	if (!rp_append_status("platform_doctor=ready")) return 1;
-	if (!rp_append_status("research_products=ready")) return 1;
-	if (!rp_append_status("advanced_surface=ready")) return 1;
+	reset_surface_batch();
+	if (!append_surface_batch("rp_ack", "ack=bio_services;msg=bio;status=ready")) return 1;
+	if (!append_surface_batch("rp_ack", "ack=lab_resources;msg=res;status=ready")) return 1;
+	if (!append_surface_batch("rp_ack", "ack=publication_services;msg=pub;status=ready")) return 1;
+	if (!append_surface_batch("rp_ack", "ack=knowledge_services;msg=know;status=ready")) return 1;
+	if (!append_surface_batch("rp_ack", "ack=runtime_services;msg=run;status=ready")) return 1;
+	if (!commit_surface_batch("rp_ack")) return 1;
+
+	reset_surface_batch();
+	if (!append_surface_batch("rp_status", "bio_services=ready")) return 1;
+	if (!append_surface_batch("rp_status", "sample_registry=ready")) return 1;
+	if (!append_surface_batch("rp_status", "ethics_review=ready")) return 1;
+	if (!append_surface_batch("rp_status", "access_requests=ready")) return 1;
+	if (!append_surface_batch("rp_status", "cohort_view=ready")) return 1;
+	if (!append_surface_batch("rp_status", "lab_resources=ready")) return 1;
+	if (!append_surface_batch("rp_status", "lab_governance_ops=ready")) return 1;
+	if (!append_surface_batch("rp_status", "instrument_registry=ready")) return 1;
+	if (!append_surface_batch("rp_status", "inventory=ready")) return 1;
+	if (!append_surface_batch("rp_status", "procurement=ready")) return 1;
+	if (!append_surface_batch("rp_status", "resource_schedule=ready")) return 1;
+	if (!append_surface_batch("rp_status", "publication_services=ready")) return 1;
+	if (!append_surface_batch("rp_status", "result_review=ready")) return 1;
+	if (!append_surface_batch("rp_status", "publication_plan=ready")) return 1;
+	if (!append_surface_batch("rp_status", "peer_review_response=ready")) return 1;
+	if (!append_surface_batch("rp_status", "fair_package=ready")) return 1;
+	if (!append_surface_batch("rp_status", "knowledge_services=ready")) return 1;
+	if (!append_surface_batch("rp_status", "lit_review=ready")) return 1;
+	if (!append_surface_batch("rp_status", "citation_graph=ready")) return 1;
+	if (!append_surface_batch("rp_status", "semantic_index=ready")) return 1;
+	if (!append_surface_batch("rp_status", "knowledge_answers=ready")) return 1;
+	if (!append_surface_batch("rp_status", "runtime_services=ready")) return 1;
+	if (!append_surface_batch("rp_status", "runtime_env=ready")) return 1;
+	if (!append_surface_batch("rp_status", "notebook_exec=ready")) return 1;
+	if (!append_surface_batch("rp_status", "eln_record=ready")) return 1;
+	if (!append_surface_batch("rp_status", "worker_pool=ready")) return 1;
+	if (!append_surface_batch("rp_status", "startup_health=ready")) return 1;
+	if (!append_surface_batch("rp_status", "platform_doctor=ready")) return 1;
+	if (!append_surface_batch("rp_status", "research_products=ready")) return 1;
+	if (!append_surface_batch("rp_status", "advanced_surface=ready")) return 1;
+	if (!commit_surface_batch("rp_status")) return 1;
 	printf("rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready\n");
 	return 0;
 }

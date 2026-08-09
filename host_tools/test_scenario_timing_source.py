@@ -140,12 +140,87 @@ def _validate_bounded_acceptance_io() -> None:
         raise AssertionError("rp_test_suite must remain the final platform verifier")
 
     orchestrator = (ROOT / "user/src/rp_orch.c").read_text(encoding="utf-8")
+    user_main = (ROOT / "user/lib/main.c").read_text(encoding="utf-8")
+    user_syscall = (ROOT / "user/lib/syscall.c").read_text(encoding="utf-8")
+    kernel_core = (ROOT / "os/agent_core.c").read_text(encoding="utf-8")
+    kernel_syscall = (ROOT / "os/syscall.c").read_text(encoding="utf-8")
+    self_check_start, self_check_end = _function_span(
+        user_main, "rp_launch_identity_self_check"
+    )
+    self_check = user_main[self_check_start:self_check_end]
+    identity_fields = (
+        "info.is_agent == expected.is_agent",
+        "info.agent_role == expected.agent_role",
+        "info.filesystem_domain == expected.filesystem_domain",
+        "info.filesystem_capability_mask ==\n\t\t       expected.filesystem_capability_mask",
+    )
+    if (
+        self_check.count("pid = agent_launch_info(&info);") != 1
+        or "pid > 0" not in self_check
+        or any(field not in self_check for field in identity_fields)
+        or re.search(r"\bagent_info\s*\(", self_check)
+        or any(call in self_check for call in ("getpid(", "pipe(", "read(", "write("))
+    ):
+        raise AssertionError("可信 CRT 未用一次紧凑查询精确自检启动身份")
+    start_main_start, start_main_end = _function_span(user_main, "__start_main")
+    start_main = user_main[start_main_start:start_main_end]
+    identity_guard = (
+        "if (!rp_launch_identity_self_check(argc, argv))\n"
+        "\t\texit(RP_LAUNCH_SELF_CHECK_EXIT);"
+    )
+    if identity_guard not in start_main or not (
+        start_main.index(identity_guard) < start_main.index("main(argc, argv)")
+    ):
+        raise AssertionError("可信 CRT 启动身份失败未在 main 前关闭")
+    if (
+        "syscall(SYS_agent_launch_info, info)"
+        not in user_syscall
+        or "if (launch_identity)" not in kernel_core
+        or "case SYS_agent_info:\n\t\tret = sys_agent_info(trapframe->a0, 0);"
+        not in kernel_syscall
+        or "if (id == SYS_agent_launch_info)\n\t\treturn sys_agent_info(trapframe->a0, 1);"
+        not in kernel_syscall
+        or "agent_metadata_fill_info" in kernel_core[
+            kernel_core.index("int sys_agent_info("):
+        ]
+    ):
+        raise AssertionError("紧凑启动身份路径绕回了完整 metadata 快照")
+    timing_start, timing_end = _function_span(orchestrator, "record_timing")
+    timing = orchestrator[timing_start:timing_end]
+    context_start, context_end = _function_span(orchestrator, "orchestrator_context")
+    if "pid = agent_launch_info(info);" not in orchestrator[context_start:context_end]:
+        raise AssertionError("编排器启动判定仍会读取整份 Agent 诊断信息")
+    main_start, main_end = _function_span(orchestrator, "main")
+    orch_main = orchestrator[main_start:main_end]
+    buffered_append = (
+        "rp_state_append_line(rp_state_buf, RP_STATE_BUFFER_SIZE,\n"
+        '\t\t\t     "rp_orch_timing", line);'
+    )
+    if buffered_append not in timing or 'rp_append_file("rp_orch_timing"' in timing:
+        raise AssertionError("编排器计时记录未在内存中批量汇总")
+    timing_write = 'rp_write_file("rp_orch_timing", rp_state_buf)'
+    if orch_main.count(timing_write) != 1 or not (
+        orch_main.index("for (int i = 0; i < total; i++)")
+        < orch_main.index(timing_write)
+        < orch_main.index("append_program_inventory_evidence(in_orchestrator)")
+    ):
+        raise AssertionError("编排器计时账本未在执行后一次写出")
     child_start, child_end = _function_span(orchestrator, "run_child")
     child = orchestrator[child_start:child_end]
-    if "if (!in_orchestrator)\n\t\t\tclose(attest_pipe[0]);" not in child:
-        raise AssertionError("delegated child closes a descriptor it did not inherit")
-    if child.find("read_launch_attestation") > child.find("waitpid"):
-        raise AssertionError("child attestation is not consumed before waitpid")
+    for legacy in (
+        "pipe(", "agent_scope_delegate_fd(", "read_launch_attestation(",
+        "launch_attestation_valid(", "attest_pipe", "read(", "write(",
+    ):
+        if legacy in child:
+            raise AssertionError(f"启动身份热路径仍包含逐子进程 I/O: {legacy}")
+    if not (
+        child.index("launch_expectation_for(")
+        < child.index("format_launch_expectation(")
+        < child.index("exec(image, argv)")
+        < child.index("waitpid(pid, &code)")
+        < child.index("record_timing(program, launcher, pid,")
+    ):
+        raise AssertionError("父进程未在成功等待后记录可信 CRT 已自检的预期身份")
 
     agentos_orchestrator = (
         ROOT / "user/src/rp_agentos_orch.c"
@@ -285,6 +360,183 @@ def main() -> int:
     _reject(_case(
         sources, agentos, "write_workflow_handoff",
         "record.start_ms = start_ms;", "record.start_ms = 0;",
+    ))
+
+    delegated = "user/src/rp_orch.c"
+    crt = "user/lib/main.c"
+    launch_header = "user/include/rp_launch_attestation.h"
+    launch_evidence = "user/include/rp_evidence.h"
+    launch_kernel = "os/agent_core.c"
+    _reject(_case(
+        sources, crt, "__start_main",
+        "if (!rp_launch_identity_self_check(argc, argv))",
+        "if (0 && !rp_launch_identity_self_check(argc, argv))",
+    ))
+    _reject(_case(
+        sources, crt, "rp_launch_identity_self_check",
+        "pid = agent_launch_info(&info);",
+        "pid = getpid();",
+    ))
+    _reject(_case(
+        sources, crt, "rp_launch_identity_self_check",
+        "info.is_agent == expected.is_agent",
+        "info.is_agent == info.is_agent",
+    ))
+    _reject(_case(
+        sources, crt, "rp_launch_identity_self_check",
+        "info.filesystem_capability_mask ==\n\t\t       expected.filesystem_capability_mask",
+        "info.filesystem_capability_mask != 0",
+    ))
+    _reject(_case(
+        sources, delegated, "run_child",
+        "expectation_ready ? identity_arg : 0,",
+        "0,",
+    ))
+    _reject(_case(
+        sources, delegated, "run_child",
+        "int got = waitpid(pid, &code);",
+        "int got = pid;",
+    ))
+    _reject(_case(
+        sources, delegated, "run_child",
+        "record_timing(program, launcher, pid,",
+        "record_timing(program, launcher, 0,",
+    ))
+    _reject(_case(
+        sources, delegated, "role_filesystem_capabilities",
+        "return RP_WORKFLOW_WORKER;",
+        "return AGENT_CAP_CONTENT_READ;",
+    ))
+    _reject(_case(
+        sources, delegated, "launch_expectation_for",
+        "expected->filesystem_capability_mask = expected_capabilities;",
+        "expected->filesystem_capability_mask = launch->worker_capabilities;",
+    ))
+    _reject(_case(
+        sources, delegated, "run_child",
+        "if (agent_child) {",
+        "int identity_pipe[2];\n\tpipe(identity_pipe);\n\tif (agent_child) {",
+    ))
+    _reject(_text_case(
+        sources, launch_header,
+        '#define RP_LAUNCH_IDENTITY_SOURCE "trusted_crt_self_check"',
+        '#define RP_LAUNCH_IDENTITY_SOURCE "child_after_exec"',
+    ))
+    _reject(_case(
+        sources, launch_header, "rp_launch_expectation_valid",
+        "expected->filesystem_domain == 0 ||",
+        "0 ||",
+    ))
+    _reject(_case(
+        sources, launch_header, "rp_launch_expectation_valid",
+        "return expected->agent_role == 0;",
+        "return 1;",
+    ))
+    _reject(_text_case(
+        sources, launch_evidence,
+        '"trusted_crt_batch_dispatch"',
+        '"child_after_exec"',
+    ))
+
+    batch_manifest = "user/include/rp_program_manifest.h"
+    batch_protocol = "user/include/rp_worker_batch.h"
+    batch_runner = "user/src/rp_wbatch0.c"
+    batch_make = "user/Makefile"
+    package = "user/src/rp_package.c"
+    _reject(_text_case(
+        sources, batch_manifest,
+        "APPLY(1, rp_state_catalog)", "APPLY(1, rp_catalog)",
+    ))
+    _reject(_text_case(
+        sources, batch_manifest,
+        "APPLY(1, rp_wbatch1, 9)", "APPLY(1, rp_wbatch1, 10)",
+    ))
+    _reject(_case(
+        sources, batch_protocol, "rp_worker_batch_frame_guard_valid",
+        "return frame->magic == RP_WORKER_BATCH_MAGIC &&",
+        "return 1 || frame->magic == RP_WORKER_BATCH_MAGIC &&",
+    ))
+    _reject(_case(
+        sources, batch_protocol, "rp_worker_batch_next",
+        "runtime->expected < runtime->count",
+        "runtime->expected <= runtime->count",
+    ))
+    _reject(_case(
+        sources, batch_runner, "rp_worker_run",
+        "switch (index)", "switch (0)",
+    ))
+    _reject(_text_case(
+        sources, batch_make,
+        "binary: worker-batch-check $(addprefix $(elf_dir)/,$(SELECTED_APPS))",
+        "binary: $(addprefix $(elf_dir)/,$(SELECTED_APPS))",
+    ))
+    _reject(_case(
+        sources, delegated, "main",
+        "int passed = in_orchestrator && binding ?",
+        "int passed = 0 && in_orchestrator && binding ?",
+    ))
+    _reject(_case(
+        sources, delegated, "main",
+        '"support_launch=agent_worker_batch\\n"',
+        '"support_launch=agent_worker_create\\n"',
+    ))
+    _reject(_case(
+        sources, delegated, "worker_batch_reap",
+        "close(WORKER_BATCH_SESSION.command_fd);",
+        "close(WORKER_BATCH_SESSION.result_fd);",
+    ))
+    _reject(_case(
+        sources, delegated, "run_worker_batch",
+        "RP_LAUNCH_BATCH_IDENTITY_SOURCE, 1, 0, elapsed);",
+        "RP_LAUNCH_IDENTITY_SOURCE, 1, 0, elapsed);",
+    ))
+    _reject(_case(
+        sources, delegated, "record_timing",
+        'if (strcmp(launcher, "fork") == 0)',
+        'if (strcmp(launcher, "fork") != 0)',
+    ))
+    _reject(_case(
+        sources, delegated, "append_program_inventory_evidence",
+        "expected_programs,\n\t\t\t\t\t\tlauncher, in_orchestrator,",
+        "expected_programs,\n\t\t\t\t\t\tlauncher, 1,",
+    ))
+    _reject(_case(
+        sources, delegated, "main",
+        '"orchestrator=rp_orch\\nlauncher=fork\\n"',
+        '"orchestrator=rp_orch\\nlauncher=mixed_attested\\n"',
+    ))
+    package_publish = (
+        "if (package_state.append_active &&\n"
+        "\t    !rp_state_buffer_commit(&package_state)) return 1;\n"
+        "\tif (!rp_append_file(\"rp_ack\", \"ack=package;msg=11;status=ready\")) return 1;"
+    )
+    package_forged = (
+        "if (!rp_append_file(\"rp_ack\", \"ack=package;msg=11;status=ready\")) return 1;\n"
+        "\tif (package_state.append_active &&\n"
+        "\t    !rp_state_buffer_commit(&package_state)) return 1;"
+    )
+    _reject(_case(
+        sources, package, "main", package_publish, package_forged,
+    ))
+    _reject(_case(
+        sources, launch_kernel, "sys_agent_info",
+        "return result < 0 || !launch_identity ? result : p->pid;",
+        "return result < 0 || !launch_identity ? result : 1;",
+    ))
+    _reject(_case(
+        sources, launch_kernel, "sys_agent_info",
+        "struct proc *p = curr_proc();",
+        "struct proc *p = initproc;",
+    ))
+    _reject(_case(
+        sources, launch_kernel, "sys_agent_info",
+        "p->vfs_effective_caps : 0;",
+        "p->agent_capability_mask : 0;",
+    ))
+    _reject(_case(
+        sources, launch_kernel, "sys_agent_info",
+        "if (launch_identity) {",
+        "if (launch_identity) {\n\t\tagent_info_fill(p, &info);",
     ))
     _reject(_case(
         sources, agentos, "run_stability_workflow",
@@ -1275,8 +1527,10 @@ def main() -> int:
     ))
     _reject(_case(
         sources, delegated, "main",
-        "ok += run_child(&PROGRAMS[i], in_orchestrator);",
-        "ok += forged_run_child(&PROGRAMS[i], in_orchestrator);",
+        ":\n\t\t\trun_child(&PROGRAMS[i], in_orchestrator,\n"
+        "\t\t\t\t  &orchestrator_identity);",
+        ":\n\t\t\tforged_run_child(&PROGRAMS[i], in_orchestrator,\n"
+        "\t\t\t\t  &orchestrator_identity);",
     ))
     _reject(_case(
         sources, delegated, "main", "(uint64)steady_clock))",

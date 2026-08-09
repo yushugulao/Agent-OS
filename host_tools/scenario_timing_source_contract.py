@@ -33,6 +33,7 @@ _isolate_direct_entry_imports()
 import argparse
 import hashlib
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -58,11 +59,21 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_VERSION = "scenario-timing-source-v10"
+CONTRACT_VERSION = "scenario-timing-source-v12"
 SOURCE_PATHS = (
     "baseline_ucore/user/src/rp_seed_orch.c",
     "user/src/rp_agentos_orch.c",
     "user/src/rp_orch.c",
+    "user/src/rp_package.c",
+    "user/include/rp_program_manifest.h",
+    "user/include/rp_worker_batch.h",
+    "user/src/rp_wbatch0.c",
+    "user/src/rp_wbatch1.c",
+    "user/src/rp_wbatch2.c",
+    "user/Makefile",
+    "user/lib/main.c",
+    "user/include/rp_launch_attestation.h",
+    "user/include/rp_evidence.h",
     "user/src/rp_resource_probe.c",
     "user/include/rp_resource_stability.h",
     "user/include/exec_policy_manifest.h",
@@ -70,6 +81,7 @@ SOURCE_PATHS = (
     "os/agent_lifecycle.c",
     "agent_performance_abi.h",
     "agent_resource_abi.h",
+    "os/agent_core.c",
     "os/agent_resource.c",
     "os/performance_stats.c",
     "os/performance_stats.h",
@@ -92,6 +104,73 @@ SOURCE_PATHS = (
     "user/src/labdemo_ucore.c",
 )
 
+EXPECTED_PLATFORM_PROGRAMS = (
+    "rp_catalog", "rp_state_catalog", "rp_object_store", "rp_object_query",
+    "rp_lineage", "rp_site_export", "rp_planner", "rp_portability",
+    "rp_retriever", "rp_analyst", "rp_reviewer", "rp_lab",
+    "rp_governance", "rp_writer", "rp_repair", "rp_auditor", "rp_query",
+    "rp_evidence", "rp_llm_bridge", "rp_llm_relay", "rp_privacy",
+    "rp_runconf", "rp_execobs", "rp_invoke", "rp_complete",
+    "rp_artifact_ops", "rp_data_pipeline", "rp_workflow_runner",
+    "rp_workbench", "rp_agent_collab", "rp_package", "rp_calculation",
+    "rp_realtask", "rp_analysisres", "rp_campaign", "rp_delta",
+    "rp_release", "rp_dossier", "rp_service_surface", "rp_startup_doctor",
+    "rp_notebook_export", "rp_backend", "rp_consistency", "rp_metrics",
+    "rp_ui_export", "rp_web_export", "rp_revdash", "rp_modelreg",
+    "rp_sysreview", "rp_expsched", "rp_traincomp", "rp_publication",
+    "rp_runbooks", "rp_projectrel", "rp_studyproto", "rp_stdesign",
+    "rp_opsboard", "rp_reviewboard", "rp_controlplane",
+    "rp_integrityplane", "rp_coherenceplane", "rp_mature", "rp_prov_view",
+    "rp_prov_query", "rp_reldossier", "rp_decsupport", "rp_usable",
+    "rp_usableproject", "rp_compare_plain", "rp_test_suite",
+)
+
+EXPECTED_ROLE_PROGRAMS = (
+    ("rp_query", "artifact"),
+    ("rp_repair", "recovery"),
+    ("rp_execobs", "artifact"),
+    ("rp_agent_collab", "orchestrator"),
+    ("rp_auditor", "orchestrator"),
+    ("rp_workbench", "artifact"),
+    ("rp_package", "orchestrator"),
+    ("rp_realtask", "orchestrator"),
+    ("rp_service_surface", "artifact"),
+    ("rp_backend", "orchestrator"),
+)
+
+EXPECTED_BATCH_PROGRAMS = (
+    (
+        "rp_catalog", "rp_state_catalog", "rp_object_store",
+        "rp_object_query", "rp_lineage", "rp_site_export", "rp_planner",
+        "rp_portability", "rp_retriever", "rp_analyst", "rp_reviewer",
+        "rp_lab", "rp_governance", "rp_writer", "rp_evidence",
+        "rp_llm_bridge", "rp_llm_relay", "rp_privacy", "rp_runconf",
+        "rp_invoke", "rp_complete", "rp_artifact_ops", "rp_data_pipeline",
+        "rp_workflow_runner", "rp_calculation", "rp_analysisres",
+        "rp_campaign", "rp_delta", "rp_release", "rp_dossier",
+        "rp_startup_doctor", "rp_notebook_export",
+    ),
+    (
+        "rp_consistency", "rp_metrics", "rp_ui_export", "rp_web_export",
+        "rp_revdash", "rp_modelreg", "rp_sysreview", "rp_expsched",
+        "rp_traincomp",
+    ),
+    (
+        "rp_publication", "rp_runbooks", "rp_projectrel", "rp_studyproto",
+        "rp_stdesign", "rp_opsboard", "rp_reviewboard", "rp_controlplane",
+        "rp_integrityplane", "rp_coherenceplane", "rp_mature",
+        "rp_prov_view", "rp_prov_query", "rp_reldossier", "rp_decsupport",
+        "rp_usable", "rp_usableproject",
+    ),
+)
+
+EXPECTED_BATCH_GROUPS = (
+    ("0", "rp_wbatch0", "32"),
+    ("1", "rp_wbatch1", "9"),
+    ("2", "rp_wbatch2", "17"),
+)
+EXPECTED_DIRECT_PROGRAMS = ("rp_compare_plain", "rp_test_suite")
+
 
 def _tokens(text: str) -> list[str]:
     return _lex(text.replace("\\\n", " "))
@@ -113,6 +192,45 @@ def _only_references(
     observed = sum(token == name for token in body)
     if observed != expected:
         raise ValueError(f"{label} has {observed} references, expected {expected}")
+
+
+def _macro_apply_entries(
+    text: str, name: str, arity: int
+) -> tuple[tuple[str, ...], ...]:
+    """Read one canonical APPLY-list macro from preprocessor tokens."""
+
+    tokens = _tokens(text)
+    marker = ("#", "define", name, "(", "APPLY", ")")
+    cursor = _require_once(tokens, marker, f"{name} definition") + len(marker)
+    entries: list[tuple[str, ...]] = []
+    while cursor < len(tokens) and tokens[cursor] == "APPLY":
+        if cursor + 1 >= len(tokens) or tokens[cursor + 1] != "(":
+            raise ValueError(f"{name} has a malformed APPLY entry")
+        cursor += 2
+        fields: list[str] = []
+        while cursor < len(tokens) and tokens[cursor] != ")":
+            token = tokens[cursor]
+            if token == ",":
+                cursor += 1
+                continue
+            if token.startswith('"') and token.endswith('"'):
+                token = token[1:-1]
+            fields.append(token)
+            cursor += 1
+        if cursor >= len(tokens) or len(fields) != arity:
+            raise ValueError(f"{name} has a wrong-arity APPLY entry")
+        entries.append(tuple(fields))
+        cursor += 1
+    if not entries or cursor >= len(tokens) or tokens[cursor] != "#":
+        raise ValueError(f"{name} does not end at the next directive")
+    return tuple(entries)
+
+
+def _require_token_fingerprint(
+    body: list[str], expected: str, label: str
+) -> None:
+    if _token_fingerprint(body) != expected:
+        raise ValueError(f"{label} reviewed token body differs")
 
 
 def _validate_snapshot_dispatch(
@@ -337,28 +455,497 @@ def _validate_agentos_timing(text: str) -> None:
     _only_references(orchestrator, "ready_ms", 3, "AgentOS delegated ready clock")
 
 
+def _validate_worker_batch_manifest(text: str) -> None:
+    platform = tuple(
+        entry[0]
+        for entry in _macro_apply_entries(text, "RP_PLATFORM_PROGRAMS", 1)
+    )
+    roles = _macro_apply_entries(text, "RP_AGENTOS_ROLE_PROGRAMS", 2)
+    groups = _macro_apply_entries(text, "RP_WORKER_BATCH_GROUPS", 3)
+    direct = tuple(
+        entry[0]
+        for entry in _macro_apply_entries(text, "RP_WORKER_DIRECT_PROGRAMS", 1)
+    )
+    if platform != EXPECTED_PLATFORM_PROGRAMS or len(set(platform)) != 70:
+        raise ValueError("platform program manifest is not the reviewed 70-program order")
+    if roles != EXPECTED_ROLE_PROGRAMS or len({name for name, _ in roles}) != 10:
+        raise ValueError("AgentOS role manifest is not the reviewed 10-program set")
+    if groups != EXPECTED_BATCH_GROUPS:
+        raise ValueError("persistent worker runner descriptors differ")
+    if direct != EXPECTED_DIRECT_PROGRAMS:
+        raise ValueError("direct worker tail differs")
+
+    indexed_groups = tuple(
+        _macro_apply_entries(text, f"RP_WORKER_BATCH_{group}_PROGRAMS", 2)
+        for group, _runner, _count in groups
+    )
+    expected_indexed = tuple(
+        tuple((str(index), program) for index, program in enumerate(programs))
+        for programs in EXPECTED_BATCH_PROGRAMS
+    )
+    if indexed_groups != expected_indexed:
+        raise ValueError("persistent worker membership, order, or index differs")
+    flattened = tuple(
+        program for group in indexed_groups for _index, program in group
+    )
+    role_names = {program for program, _role in roles}
+    expected_flattened = tuple(
+        program for program in platform
+        if program not in role_names and program not in set(direct)
+    )
+    if (
+        flattened != expected_flattened
+        or len(flattened) != 58
+        or len(set(flattened)) != 58
+        or set(flattened) & role_names
+        or set(flattened) & set(direct)
+        or role_names & set(direct)
+        or set(flattened) | role_names | set(direct) != set(platform)
+    ):
+        raise ValueError("10 role + 58 batch + 2 direct sets do not close exactly")
+
+    tokens = _tokens(text)
+    for name, value in (
+        ("RP_WORKER_BATCH_GROUP_COUNT", "3"),
+        ("RP_WORKER_BATCH_PROGRAM_COUNT", "58"),
+        ("RP_WORKER_DIRECT_PROGRAM_COUNT", "2"),
+    ):
+        _require_once(
+            tokens, ("#", "define", name, value), f"canonical {name}"
+        )
+
+
+def _validate_worker_batch_protocol(text: str) -> None:
+    tokens = _tokens(text)
+    for name, value in (
+        ("RP_WORKER_BATCH_MAGIC", "0x52505742U"),
+        ("RP_WORKER_BATCH_VERSION", "1U"),
+        ("RP_WORKER_BATCH_READY_INDEX", "0xffffffffU"),
+        ("RP_WORKER_BATCH_MAX_FD", "15"),
+        ("RP_WORKER_BATCH_ARG_READ_FD", "2"),
+        ("RP_WORKER_BATCH_ARG_WRITE_FD", "3"),
+        ("RP_WORKER_BATCH_ARG_NONCE", "4"),
+        ("RP_WORKER_BATCH_ARGC", "5"),
+    ):
+        _require_once(tokens, ("#", "define", name, value), f"worker wire {name}")
+    _require_once(
+        tokens,
+        ("#", "define", "RP_WORKER_BATCH_NEXT_STOP", "(", "-", "1", ")"),
+        "worker wire stop sentinel",
+    )
+    _require_once(
+        tokens,
+        (
+            "enum", "rp_worker_batch_kind", "{",
+            "RP_WORKER_BATCH_READY", "=", "1", ",",
+            "RP_WORKER_BATCH_RUN", "=", "2", ",",
+            "RP_WORKER_BATCH_RESULT", "=", "3", ",",
+            "RP_WORKER_BATCH_STOP", "=", "4", ",",
+            "RP_WORKER_BATCH_STOPPED", "=", "5", ",", "}", ";",
+        ),
+        "worker wire kind namespace",
+    )
+    _require_once(
+        tokens,
+        (
+            "struct", "rp_worker_batch_frame", "{", "uint32", "magic", ";",
+            "uint16", "version", ";", "uint8", "kind", ";", "uint8",
+            "group", ";", "uint32", "index", ";", "int32", "status", ";",
+            "uint64", "nonce", ";", "uint64", "guard", ";", "}", ";",
+        ),
+        "padding-free worker frame layout",
+    )
+    for assertion in (
+        (
+            "_Static_assert", "(", "sizeof", "(", "struct",
+            "rp_worker_batch_frame", ")", "==", "32",
+        ),
+        (
+            "_Static_assert", "(", "__builtin_offsetof", "(", "struct",
+            "rp_worker_batch_frame", ",", "guard", ")", "==", "24",
+        ),
+    ):
+        _require_once(tokens, assertion, "worker frame compile-time layout")
+
+    # These compact bodies are the wire trust boundary. Token fingerprints retain
+    # exact I/O, overflow, guard, sequencing, cleanup, and fail-closed behavior.
+    fingerprints = {
+        "rp_worker_batch_guard": "69a57b19c768cf9ec7615176935a6f9e42b6fcc860a732e421489b71f05ca126",
+        "rp_worker_batch_frame_init": "718c3e897ef92635d0c4bee8bcd8dc8c219148e16477b3dbe765993f70c7deda",
+        "rp_worker_batch_read_exact": "f159e0e57ccaba5eb42e806c1f9ccc88fba543b2ad7c04c2cf49e623a082a749",
+        "rp_worker_batch_write_exact": "80ed09bbd003ea6cef11eb9df1b7ea97147dfd9a1e49339ea768e7677f13cc7f",
+        "rp_worker_batch_parse_fd": "30846e4ed0ba8a671a0b53faaf30d299ec6be135c85bdd7671f617ad21194458",
+        "rp_worker_batch_parse_nonce": "242a2f87a8b8c3e1d490e3a2621f0450dc811b80c95d3dd540bcff7414822825",
+        "rp_worker_batch_frame_guard_valid": "b29d13f715ef20c6e5377cb43c2a6d8c871c9e0ce7805b439529509e42d9b379",
+        "rp_worker_batch_command_valid": "835aa1ec64f36fbaff9f3a736f68615de199f0d13ad1978dba9f1245ba973fb5",
+        "rp_worker_batch_finish": "4c4fa2dded4a63b140c9e2a27a7c987a2c7c897b4c2a3dd4a9aba3d733d419df",
+        "rp_worker_batch_start": "0892f8e1af43b670b26664b32bef6355a22b095d70743ee56805f7cb4d2d69c3",
+        "rp_worker_batch_next": "ad7e05ad64409a8da5cf57e2d86008d92f4ef92029644f38a39b3760d93341a8",
+        "rp_worker_batch_report": "3e9183a4beb3b42576386b7da357850de99f8535601f7fd2ccad52c66f911d9b",
+    }
+    for name, fingerprint in fingerprints.items():
+        _require_token_fingerprint(
+            _function_tokens(tokens, name), fingerprint,
+            f"fail-closed worker protocol {name}",
+        )
+    if (
+        "rp_host_seed_buf" in tokens
+        or "(*run)" in text
+        or re.search(r"\bagent_[A-Za-z0-9_]*\s*\(", text)
+    ):
+        raise ValueError("worker dispatcher protocol bypasses its non-Agent boundary")
+
+
+def _validate_worker_batch_runners(texts: tuple[str, str, str]) -> None:
+    fingerprints = (
+        (
+            "ada5c1ceb6cd898613d710f6cb8bb0d1baf96fc5fcce0edcdd1604c338180ea9",
+            "4cacabd34fab2d0205c1595645684316eb9af10be50003309b7bdbef791aaeaa",
+        ),
+        (
+            "ae0373ca0be9925ea1b66cc57da8511a5d323fba1955125950e1ef3be94935e1",
+            "840e6eea497a5179e6f8e8d3e3ae3517eca9e178ff156630338cb39edb417040",
+        ),
+        (
+            "2183663ce7046b001f5a51be826104647ffc096a68ba4237d56608061e89639e",
+            "49a9f6d021464e21e56ecd041ac599198df63c1ae85d0b318d481545409ed3bb",
+        ),
+    )
+    for group, text in enumerate(texts):
+        tokens = _tokens(text)
+        _require_once(
+            tokens,
+            (
+                "#", "define", "RP_WORKER_BATCH_DISPATCHER", "1", "#",
+                "include", "<", "rp_worker_batch", ".", "h", ">",
+            ),
+            f"worker runner {group} dispatcher include boundary",
+        )
+        _require_token_fingerprint(
+            _function_tokens(tokens, "rp_worker_run"), fingerprints[group][0],
+            f"worker runner {group} direct switch",
+        )
+        _require_token_fingerprint(
+            _function_tokens(tokens, "main"), fingerprints[group][1],
+            f"worker runner {group} sequential main loop",
+        )
+
+
+def _make_words(text: str, name: str) -> tuple[str, ...]:
+    match = re.search(rf"^{re.escape(name)}\s*:=\s*(.*)$", text, re.MULTILINE)
+    if match is None:
+        raise ValueError(f"worker build variable is missing: {name}")
+    return tuple(match.group(1).split())
+
+
+def _validate_worker_batch_build(text: str) -> None:
+    for group, programs in enumerate(EXPECTED_BATCH_PROGRAMS):
+        if _make_words(text, f"WORKER_BATCH_{group}_PROGRAMS") != programs:
+            raise ValueError(f"worker build group {group} differs from manifest")
+    if _make_words(text, "WORKER_BATCH_APPS") != tuple(
+        runner for _group, runner, _count in EXPECTED_BATCH_GROUPS
+    ):
+        raise ValueError("worker build runner inventory differs")
+    if _make_words(text, "WORKER_BATCH_DIRECT_PROGRAMS") != EXPECTED_DIRECT_PROGRAMS:
+        raise ValueError("worker build direct inventory differs")
+    for fragment, label in (
+        ("WORKER_BATCH_FLAT_MAX := 258048", "16 KiB flat-image reserve"),
+        (
+            "$(CC_CMD) $(CFLAGS) -Dmain=$*_worker_entry -c $< -o $@",
+            "unique worker entry compilation",
+        ),
+        (
+            "$(foreach group,0 1 2,$(eval $(call RP_WORKER_BATCH_LINK_RULE,$(group))))",
+            "three-runner link instantiation",
+        ),
+        (
+            "CH_TESTS := rp_agentos_orch rp_resource_probe $(PLATFORM_TESTS) $(WORKER_BATCH_APPS)",
+            "AgentOS image runner closure",
+        ),
+        (
+            "worker-batch-check:\n\t@$(PYTHON_CMD) $(WORKER_BATCH_CHECKER) --root ..",
+            "build-time static contract",
+        ),
+        (
+            "worker-batch-selftest:\n\t@$(PYTHON_CMD) $(WORKER_BATCH_SELFTEST)",
+            "worker mutation self-test target",
+        ),
+        (
+            "binary: worker-batch-check $(addprefix $(elf_dir)/,$(SELECTED_APPS))",
+            "mandatory worker build gate",
+        ),
+        (
+            'if test "$$$$size" -gt $$(WORKER_BATCH_FLAT_MAX); then',
+            "per-runner size gate",
+        ),
+    ):
+        if text.count(fragment) != 1:
+            raise ValueError(f"worker build {label} differs")
+    if "rp_wbatch3" in text or "rp_wbatch4" in text:
+        raise ValueError("one-shot tail runners re-entered the AgentOS image")
+
+
+def _validate_orchestrator_worker_batches(tokens: list[str]) -> None:
+    fingerprints = {
+        "launch_manifest_valid": "f35a38d96534dbe934083480b6d9be65083860e77997ea24bbe2650ba60f58d9",
+        "worker_batch_session_reset": "a5af28498391bec72e8a66809c52459feeedcea6cda8cfbb831809f263e09903",
+        "worker_batch_reap": "d5636877513c3b15eb835279eb68dec09d55b05effb05b9bdde5330b83f676f4",
+        "worker_batch_frame_is": "2c80fc42c67015470852d5fc4bfe116ca35ac4869686d48804b13cda05fbb076",
+        "worker_batch_start": "4e45d2eea714c34af8940a79a5e486fdd7da1bf84ad84b7c421f3bb2b01a4059",
+        "run_worker_batch": "c90d1240659f6c549f2253b888966fd1967f8b98f71f37ad40f7b69658555f11",
+    }
+    for name, fingerprint in fingerprints.items():
+        _require_token_fingerprint(
+            _function_tokens(tokens, name), fingerprint,
+            f"reviewed orchestrator batch path {name}",
+        )
+
+    manifest = _function_tokens(tokens, "launch_manifest_valid")
+    for sequence, label in (
+        (
+            (
+                "binding", "->", "index", "!=", "group_entries", "[",
+                "binding", "->", "group", "]", "||", "binding", "->",
+                "index", ">=", "group", "->", "count",
+            ),
+            "contiguous group index",
+        ),
+        (
+            (
+                "int", "categories", "=", "(", "role", "!=", "0", ")",
+                "+", "(", "worker_batch_binding_for_program", "(",
+                "PROGRAMS", "[", "i", "]", ".", "program", ")", "!=", "0",
+                ")", "+", "worker_direct_program", "(", "PROGRAMS", "[",
+                "i", "]", ".", "program", ")", ";",
+            ),
+            "disjoint launch category",
+        ),
+        (
+            (
+                "return", "trusted", "==", "10", "&&", "trusted", "==",
+                "declared", ";",
+            ),
+            "exact role count",
+        ),
+    ):
+        _require_once(manifest, sequence, f"launch manifest {label}")
+    if _locations(manifest, ("return", "1", ";")):
+        raise ValueError("launch manifest has an unconditional success bypass")
+
+    reap = _function_tokens(tokens, "worker_batch_reap")
+    _ordered(
+        reap,
+        (
+            (
+                "close", "(", "WORKER_BATCH_SESSION", ".", "command_fd", ")",
+                ";",
+            ),
+            (
+                "close", "(", "WORKER_BATCH_SESSION", ".", "result_fd", ")",
+                ";",
+            ),
+            ("got", "=", "waitpid", "(", "pid", ",", "&", "code", ")", ";"),
+            ("worker_batch_session_reset", "(", ")", ";"),
+            ("return", "pid", ">", "0", "&&", "got", "==", "pid", ";"),
+        ),
+        "batch failure close-command close-result exact-wait reset",
+    )
+    if reap.count("close") != 2 or reap.count("waitpid") != 1:
+        raise ValueError("batch reap does not have one exact cleanup path")
+
+    launch = _function_tokens(tokens, "worker_batch_start")
+    _ordered(
+        launch,
+        (
+            ("pipe", "(", "command_pipe", ")", "!=", "0"),
+            ("pipe", "(", "result_pipe", ")", "!=", "0"),
+            (
+                "exec_manifest_worker_image", "(", "group", "->", "runner", ",",
+                "WORKER_BATCH_SESSION", ".", "image", ")", ";",
+            ),
+            (
+                "agent_scope_delegate_fd", "(", "command_pipe", "[", "0", "]",
+                ")", "!=", "AGENT_STATUS_OK",
+            ),
+            (
+                "agent_scope_delegate_fd", "(", "result_pipe", "[", "1", "]",
+                ")", "!=", "AGENT_STATUS_OK",
+            ),
+            (
+                "pid", "=", "agent_worker_create", "(",
+                "WORKER_BATCH_SESSION", ".", "image", ",", "launch", "->",
+                "worker_capabilities", ")", ";",
+            ),
+            (
+                "rp_worker_batch_read_exact", "(", "WORKER_BATCH_SESSION", ".",
+                "result_fd", ",", "&", "ready", ",", "sizeof", "(", "ready",
+                ")", ")",
+            ),
+            (
+                "&", "ready", ",", "RP_WORKER_BATCH_READY", ",", "group", "->",
+                "group", ",", "RP_WORKER_BATCH_READY_INDEX", ",",
+                "WORKER_BATCH_SESSION", ".", "nonce", ",", "1", ")",
+            ),
+            ("WORKER_BATCH_SESSION", ".", "active", "=", "1", ";"),
+        ),
+        "batch start delegation and READY proof",
+    )
+    if (
+        launch.count("pipe") != 2
+        or launch.count("agent_scope_delegate_fd") != 2
+        or launch.count("agent_worker_create") != 1
+        or launch.count("exec") != 1
+        or launch.count("waitpid") != 0
+    ):
+        raise ValueError("batch runner is not one delegated spawn per group")
+
+    run = _function_tokens(tokens, "run_worker_batch")
+    _ordered(
+        run,
+        (
+            ("int64", "start", "=", "get_mtime", "(", ")", ";"),
+            ("worker_batch_start", "(", "launch", ",", "binding", ",", "orchestrator_identity", ")"),
+            (
+                "rp_worker_batch_frame_init", "(", "&", "frame", ",",
+                "RP_WORKER_BATCH_RUN",
+            ),
+            (
+                "&", "frame", ",", "RP_WORKER_BATCH_RESULT", ",", "binding",
+                "->", "group", ",", "binding", "->", "index", ",",
+                "WORKER_BATCH_SESSION", ".", "nonce", ",", "0", ")",
+            ),
+            ("code", "=", "frame", ".", "status", ";"),
+            ("WORKER_BATCH_SESSION", ".", "next_index", "++", ";"),
+            (
+                "rp_worker_batch_frame_init", "(", "&", "frame", ",",
+                "RP_WORKER_BATCH_STOP",
+            ),
+            (
+                "&", "frame", ",", "RP_WORKER_BATCH_STOPPED", ",", "binding",
+                "->", "group", ",", "WORKER_BATCH_SESSION", ".", "next_index",
+                ",", "WORKER_BATCH_SESSION", ".", "nonce", ",", "1", ")",
+            ),
+            (
+                "if", "(", "!", "worker_batch_reap", "(", "&",
+                "child_code", ")", "||", "child_code", "!=", "0", ")",
+            ),
+            (
+                "record_timing", "(", "launch", "->", "program", ",",
+                '"agent_worker_batch"', ",", "pid", ",", "&", "expected", ",",
+                "RP_LAUNCH_BATCH_IDENTITY_SOURCE", ",", "1", ",", "0", ",",
+                "elapsed", ")", ";",
+            ),
+        ),
+        "batch RUN RESULT STOP STOPPED and success ledger",
+    )
+    if run.count("agent_worker_create") or run.count("exec") or run.count("waitpid"):
+        raise ValueError("per-program batch dispatch re-enters process launch")
+
+    main = _function_tokens(tokens, "main")
+    receipt_literals = (
+        '"launcher=agentos-orchestrator\\n"',
+        '"stage_launch=agent_create_role\\n"',
+        '"support_launch=agent_worker_batch\\n"',
+        '"support_spawn=agent_worker_create\\n"',
+        '"support_role=delegated_non_agent_worker\\n"',
+        '"worker_batch_groups=3\\n"',
+        '"worker_batch_programs=58\\n"',
+        '"worker_direct_launch=agent_worker_create\\n"',
+        '"worker_direct_programs=2\\n"',
+        '"worker_batch_identity=trusted_crt_batch_dispatch\\n"',
+        '"worker_direct_identity=trusted_crt_self_check\\n"',
+        '"role_policy=program_specific\\n"',
+        '"launch_policy=kernel_bound_roles_and_delegated_workers\\n"',
+        '"agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_service_surface,rp_backend\\n"',
+        '"execution_ledger=rp_orch_timing\\n"',
+        '"status=ready\\n"',
+    )
+    _ordered(main, tuple((literal,) for literal in receipt_literals), "batch role receipt")
+    for literal in receipt_literals:
+        _require_once(main, (literal,), "exact batch role receipt field")
+
+
 def _validate_delegated_workflow(text: str) -> None:
     tokens = _tokens(text)
+    _validate_orchestrator_worker_batches(tokens)
+    for sequence, label in (
+        (
+            (
+                "_Static_assert", "(", "EXEC_MANIFEST_VFS_CONTENT_READ", "==",
+                "AGENT_CAP_CONTENT_READ",
+            ),
+            "content-read capability namespace",
+        ),
+        (
+            (
+                "_Static_assert", "(", "EXEC_MANIFEST_VFS_ARTIFACT_WRITE", "==",
+                "AGENT_CAP_ARTIFACT_WRITE",
+            ),
+            "artifact-write capability namespace",
+        ),
+    ):
+        _require_once(tokens, sequence, f"delegated {label}")
     main = _function_tokens(tokens, "main")
     start = ("int64", "steady_clock", "=", "get_mtime", "(", ")", ";")
     loop = (
         "for", "(", "int", "i", "=", "0", ";", "i", "<", "total", ";",
         "i", "++", ")", "{",
     )
-    production = (
-        "ok", "+", "=", "run_child", "(", "&", "PROGRAMS", "[", "i", "]", ",",
-        "in_orchestrator", ")", ";",
+    manifest_gate = (
+        "if", "(", "!", "launch_manifest_valid", "(", ")", ")", "{",
+        "printf", "(", '"rp_orch: launch_manifest_invalid\\n"', ")", ";",
+        "return", "1", ";", "}",
     )
-    inventory = ("append_program_inventory_evidence", "(", ")")
+    batch_reset = ("worker_batch_session_reset", "(", ")", ";")
+    production = (
+        "int", "passed", "=", "in_orchestrator", "&&", "binding", "?",
+        "run_worker_batch", "(", "&", "PROGRAMS", "[", "i", "]", ",",
+        "binding", ",", "&", "orchestrator_identity", ")", ":", "run_child",
+        "(", "&", "PROGRAMS", "[", "i", "]", ",", "in_orchestrator", ",",
+        "&", "orchestrator_identity", ")", ";",
+    )
+    failure_break = (
+        "if", "(", "!", "passed", ")", "{", "if", "(",
+        "WORKER_BATCH_SESSION", ".", "active", "||", "WORKER_BATCH_SESSION",
+        ".", "pid", ">", "0", ")", "worker_batch_reap", "(", "0", ")",
+        ";", "break", ";", "}",
+    )
+    final_reap = (
+        "if", "(", "WORKER_BATCH_SESSION", ".", "active", "||",
+        "WORKER_BATCH_SESSION", ".", "pid", ">", "0", ")", "{",
+        "printf", "(", '"rp_orch: batch_session_left_active\\n"', ")", ";",
+        "worker_batch_reap", "(", "0", ")", ";", "ok", "=", "0", ";", "}",
+    )
+    ledger_write = (
+        "rp_write_file", "(", '"rp_orch_timing"', ",", "rp_state_buf", ")",
+    )
+    inventory = (
+        "append_program_inventory_evidence", "(", "in_orchestrator", ")",
+    )
     completion = (
         "write_workflow_completion", "(", "completion_fd", ",", "&",
         "timing_handoff", ",", "(", "uint64", ")", "steady_clock", ")",
     )
     _ordered(
-        main, (start, loop, production, inventory, completion),
+        main,
+        (
+            start, manifest_gate, batch_reset, loop, production,
+            failure_break, final_reap, ledger_write, inventory, completion,
+        ),
         "delegated workflow steady window",
     )
     _require_top_level(main, start, "delegated workflow start clock")
+    _require_top_level(main, manifest_gate, "closed launch manifest gate")
+    _require_top_level(main, batch_reset, "initial batch session reset")
+    _require_top_level(main, loop, "ordered 70-program execution loop")
+    if (
+        main.count("run_worker_batch") != 1
+        or main.count("run_child") != 1
+        or main.count("worker_batch_session_reset") != 1
+        or main.count("worker_batch_reap") != 2
+        or main.count("break") != 1
+    ):
+        raise ValueError("delegated loop can bypass persistent-worker cleanup")
     _only_references(main, "steady_clock", 7, "delegated steady clock")
     _only_references(main, "timing_handoff", 7, "delegated timing handoff")
 
@@ -383,6 +970,562 @@ def _validate_delegated_workflow(text: str) -> None:
     _only_references(
         completion_writer, "steady_start_ms", 2,
         "delegated completion steady clock",
+    )
+
+    context = _function_tokens(tokens, "orchestrator_context")
+    _ordered(
+        context,
+        (
+            ("pid", "=", "agent_launch_info", "(", "info", ")", ";"),
+            ("if", "(", "pid", "<=", "0", ")", "return", "-", "1", ";"),
+            ("if", "(", "!", "info", "->", "is_agent", ")", "return", "0", ";"),
+            (
+                "return", "info", "->", "agent_role", "==",
+                "AGENT_ROLE_ORCHESTRATOR", "&&", "info", "->",
+                "filesystem_domain", "!=", "0", "&&", "info", "->",
+                "filesystem_capability_mask", "!=", "0", "?", "1", ":",
+                "-", "1", ";",
+            ),
+        ),
+        "delegated orchestrator launch identity",
+    )
+    if (
+        context.count("agent_launch_info") != 1
+        or _locations(context, ("agent_info", "("))
+        or "getpid" in context
+    ):
+        raise ValueError("delegated orchestrator identity bypasses compact launch info")
+
+    role_capabilities = _function_tokens(tokens, "role_filesystem_capabilities")
+    for sequence, label in (
+        (
+            (
+                "case", "AGENT_ROLE_INVESTIGATOR", ":", "return",
+                "AGENT_CAP_CONTENT_READ", ";",
+            ),
+            "investigator",
+        ),
+        (
+            (
+                "case", "AGENT_ROLE_RECOVERY", ":", "case",
+                "AGENT_ROLE_ORCHESTRATOR", ":", "case", "AGENT_ROLE_ARTIFACT",
+                ":", "return", "RP_WORKFLOW_WORKER", ";",
+            ),
+            "workflow writer roles",
+        ),
+        (
+            (
+                "case", "AGENT_ROLE_SENTINEL", ":", "default", ":", "return",
+                "0", ";",
+            ),
+            "sentinel",
+        ),
+    ):
+        _require_once(role_capabilities, sequence, f"role VFS capability {label}")
+
+    profile_capabilities = _function_tokens(
+        tokens, "exec_profile_filesystem_capabilities"
+    )
+    for profile, capabilities in (
+        ("EXEC_MANIFEST_VFS_PROFILE_WORKFLOW", "EXEC_MANIFEST_VFS_WORKFLOW_CAPS"),
+        ("EXEC_MANIFEST_VFS_PROFILE_CONTENT_READ", "EXEC_MANIFEST_VFS_CONTENT_READ"),
+        (
+            "EXEC_MANIFEST_VFS_PROFILE_ARTIFACT_WRITE",
+            "EXEC_MANIFEST_VFS_ARTIFACT_WRITE",
+        ),
+    ):
+        _require_once(
+            profile_capabilities,
+            ("if", "(", "profile", "==", profile, ")", "return", capabilities, ";"),
+            f"exec profile VFS capability {profile}",
+        )
+
+    expectation = _function_tokens(tokens, "launch_expectation_for")
+    for sequence, label in (
+        (
+            (
+                "orchestrator", "==", "0", "||", "!", "orchestrator", "->",
+                "is_agent", "||", "orchestrator", "->", "agent_role", "!=",
+                "AGENT_ROLE_ORCHESTRATOR",
+            ),
+            "trusted orchestrator",
+        ),
+        (
+            (
+                "orchestrator", "->", "filesystem_capability_mask", "&",
+                "launch", "->", "worker_capabilities", ")", "!=", "launch",
+                "->", "worker_capabilities",
+            ),
+            "delegated capability ceiling",
+        ),
+        (
+            (
+                "expected", "->", "is_agent", "=", "policy", "!=", "0", ";",
+                "expected", "->", "agent_role", "=", "policy", "?", "policy",
+                "->", "role", ":", "0", ";",
+            ),
+            "expected role identity",
+        ),
+        (
+            (
+                "if", "(", "policy", "!=", "0", ")", "{",
+                "expected_capabilities", "=", "role_filesystem_capabilities", "(",
+                "policy", "->", "role", ")", "&",
+                "exec_profile_filesystem_capabilities", "(", "policy", "->",
+                "vfs_profile", ")", "&", "orchestrator", "->",
+                "filesystem_capability_mask", ";", "}", "else", "{",
+                "expected_capabilities", "=", "launch", "->",
+                "worker_capabilities", ";", "}",
+            ),
+            "role/profile VFS identity",
+        ),
+        (
+            (
+                "expected", "->", "filesystem_domain", "=", "orchestrator",
+                "->", "filesystem_domain", ";", "expected", "->",
+                "filesystem_capability_mask", "=", "expected_capabilities", ";",
+            ),
+            "expected VFS identity",
+        ),
+    ):
+        _require_once(expectation, sequence, f"launch expectation {label}")
+
+    formatter = _function_tokens(tokens, "format_launch_expectation")
+    _ordered(
+        formatter,
+        (
+            (
+                "rp_copy_text", "(", "argument", ",", "RP_LAUNCH_EXPECT_ARG_SIZE",
+                ",", "RP_LAUNCH_EXPECT_PREFIX", ")", ";",
+            ),
+            (
+                "rp_append_uint_text", "(", "argument", ",",
+                "RP_LAUNCH_EXPECT_ARG_SIZE", ",", "expected", "->", "is_agent",
+                ")", ";",
+            ),
+            (
+                "rp_append_uint_text", "(", "argument", ",",
+                "RP_LAUNCH_EXPECT_ARG_SIZE", ",", "expected", "->", "agent_role",
+                ")", ";",
+            ),
+            (
+                "rp_append_uint_text", "(", "argument", ",",
+                "RP_LAUNCH_EXPECT_ARG_SIZE", ",", "expected", "->",
+                "filesystem_domain", ")", ";",
+            ),
+            (
+                "rp_append_uint_text", "(", "argument", ",",
+                "RP_LAUNCH_EXPECT_ARG_SIZE", ",", "expected", "->",
+                "filesystem_capability_mask", ")", ";",
+            ),
+        ),
+        "canonical launch expectation serialization",
+    )
+
+    child = _function_tokens(tokens, "run_child")
+    for forbidden in (
+        "pipe", "agent_scope_delegate_fd", "read_launch_attestation",
+        "launch_attestation_valid", "attest_pipe", "read", "write", "close",
+    ):
+        if forbidden in child:
+            raise ValueError(f"delegated child identity still uses {forbidden}")
+    success_record = (
+        "record_timing", "(", "program", ",", "launcher", ",", "pid",
+        ",", "expectation_ready", "?", "&", "expected", ":", "0",
+        ",", "RP_LAUNCH_IDENTITY_SOURCE", ",", "1", ",", "code", ",",
+        "elapsed", ")", ";",
+    )
+    _ordered(
+        child,
+        (
+            (
+                "expectation_ready", "=", "launch_expectation_for", "(",
+                "launch", ",", "policy", ",", "launcher", ",",
+                "orchestrator_identity", ",", "&", "expected", ")", ";",
+            ),
+            (
+                "!", "expectation_ready", "||", "!",
+                "format_launch_expectation", "(", "identity_arg", ",", "&",
+                "expected", ")",
+            ),
+            (
+                "expectation_ready", "?", "identity_arg", ":", "0", ",", "0",
+                ",", "}", ";", "if", "(", "exec", "(", "image", ",", "argv",
+                ")", "<", "0", ")",
+            ),
+            ("got", "=", "waitpid", "(", "pid", ",", "&", "code", ")", ";"),
+            ("if", "(", "got", "!=", "pid", ")"),
+            ("if", "(", "code", "!=", "0", ")"),
+            success_record,
+        ),
+        "exec child trusted CRT identity proof",
+    )
+    _require_top_level(
+        child, success_record, "successful trusted CRT identity record"
+    )
+    if child.count("waitpid") != 1 or child.count("exec") != 1:
+        raise ValueError("delegated child identity is not bound to one exec/wait pair")
+
+    timing = _function_tokens(tokens, "record_timing")
+    _require_once(
+        timing,
+        (
+            "identity_ready", "=", "pid", ">", "0", "&&",
+            "rp_launch_expectation_valid", "(", "expected", ")", ";",
+        ),
+        "successful child identity readiness",
+    )
+    _require_once(
+        timing,
+        (
+            "identity_ready", "&&", "identity_source", "?", "identity_source",
+            ":", '"unavailable"',
+        ),
+        "caller-bound launch identity source",
+    )
+    if timing.count("identity_source") != 2:
+        raise ValueError("timing ledger identity source can be substituted")
+
+    _ordered(
+        timing,
+        (
+            (
+                "if", "(", "strcmp", "(", "launcher", ",", '"fork"', ")",
+                "==", "0", ")", "{", "rp_append_text", "(", "line", ",",
+                "sizeof", "(", "line", ")", ",", '";launcher=fork"', ")",
+                ";", "goto", "append_outcome", ";", "}",
+            ),
+            ("rp_append_text", "(", "line", ",", "sizeof", "(", "line", ")", ",", '";role="', ")", ";"),
+            ("append_outcome", ":", "rp_append_text", "(", "line", ",", "sizeof", "(", "line", ")", ",", '";ok="', ")", ";"),
+            ("rp_state_append_line", "(", "rp_state_buf", ",", "RP_STATE_BUFFER_SIZE", ",", '"rp_orch_timing"', ",", "line", ")", ";"),
+        ),
+        "plain five-field versus Agent attested timing schema",
+    )
+
+    inventory_writer = _function_tokens(tokens, "append_program_inventory_evidence")
+    _ordered(
+        inventory_writer,
+        (
+            (
+                "const", "char", "*", "launcher", "=", "in_orchestrator", "?",
+                '"mixed_attested"', ":", '"fork"', ";",
+            ),
+            (
+                "PROGRAM_NAMES", ",", "expected_programs", ",", "launcher", ",",
+                "in_orchestrator", ",", "&", "inventory", ")",
+            ),
+        ),
+        "mode-bound program ledger profile",
+    )
+    header = (
+        "rp_copy_text", "(", "rp_state_buf", ",", "RP_STATE_BUFFER_SIZE", ",",
+        "in_orchestrator", "?",
+        '"orchestrator=rp_orch\\nlauncher=mixed_attested\\n"', ":",
+        '"orchestrator=rp_orch\\nlauncher=fork\\n"', ")", ";",
+    )
+    _require_once(main, header, "mode-bound program ledger header")
+
+
+def _validate_worker_batch_evidence(evidence: str) -> None:
+    tokens = _tokens(evidence)
+    batch = _function_tokens(tokens, "rp_evidence_worker_batch_program")
+    _ordered(
+        batch,
+        (
+            ("RP_WORKER_BATCH_0_PROGRAMS", "(", "RP_EVIDENCE_BATCH_MATCH", ")"),
+            ("RP_WORKER_BATCH_1_PROGRAMS", "(", "RP_EVIDENCE_BATCH_MATCH", ")"),
+            ("RP_WORKER_BATCH_2_PROGRAMS", "(", "RP_EVIDENCE_BATCH_MATCH", ")"),
+            ("return", "0", ";"),
+        ),
+        "evidence batch membership",
+    )
+    direct = _function_tokens(tokens, "rp_evidence_worker_direct_program")
+    _require_once(
+        direct,
+        ("RP_WORKER_DIRECT_PROGRAMS", "(", "RP_EVIDENCE_DIRECT_MATCH", ")"),
+        "evidence direct membership",
+    )
+    declared = _function_tokens(tokens, "rp_evidence_declared_role")
+    _require_once(
+        declared,
+        ("RP_AGENTOS_ROLE_PROGRAMS", "(", "RP_EVIDENCE_ROLE_MATCH", ")"),
+        "evidence role membership",
+    )
+
+    parser = _function_tokens(tokens, "rp_evidence_parse_program_record")
+    _ordered(
+        parser,
+        (
+            (
+                "if", "(", "plain", "&&", "rp_evidence_worker_batch_program",
+                "(", "expected_program", ")", ")", "{", "expected_launcher",
+                "=", '"agent_worker_batch"', ";", "expected_identity_source",
+                "=", '"trusted_crt_batch_dispatch"', ";", "}",
+            ),
+            (
+                "else", "if", "(", "plain", "&&",
+                "rp_evidence_worker_direct_program", "(", "expected_program", ")",
+                ")", "{", "expected_launcher", "=", '"agent_worker_create"',
+                ";", "expected_identity_source", "=",
+                '"trusted_crt_self_check"', ";", "}",
+            ),
+            (
+                "else", "if", "(", "!", "plain", "&&", "declared_role",
+                "!=", "0", "&&", "rp_evidence_field_equal", "(", "role", ",",
+                "role_len", ",", "declared_role", ")", ")", "{",
+                "expected_launcher", "=", '"agent_create_role"', ";",
+                "expected_identity_source", "=", '"trusted_crt_self_check"',
+                ";", "}", "else", "{", "return", "0", ";", "}",
+            ),
+            (
+                "rp_evidence_consume_field", "(", "line", ",", "len", ",",
+                "&", "pos", ",", '"identity_source"', ",", "&", "value", ",",
+                "&", "value_len", ")",
+            ),
+            (
+                "rp_evidence_field_equal", "(", "value", ",", "value_len", ",",
+                "expected_identity_source", ")",
+            ),
+        ),
+        "launcher and identity evidence classification",
+    )
+
+
+def _validate_package_publish_order(text: str) -> None:
+    main = _function_tokens(_tokens(text), "main")
+    commit = (
+        "if", "(", "package_state", ".", "append_active", "&&", "!",
+        "rp_state_buffer_commit", "(", "&", "package_state", ")", ")",
+        "return", "1", ";",
+    )
+    ack = (
+        "rp_append_file", "(", '"rp_ack"', ",",
+        '"ack=package;msg=11;status=ready"', ")",
+    )
+    tool = (
+        "rp_append_file", "(", '"rp_tool"', ",", "package_tool_lines", ")",
+    )
+    status = ("rp_append_status", "(", '"package=ready\\n"')
+    _ordered(
+        main, (commit, ack, tool, status),
+        "package authoritative commit before ready publications",
+    )
+    _require_top_level(main, commit, "package authoritative transaction commit")
+    for sequence, label in (
+        (commit, "package commit"), (ack, "package ack"),
+        (tool, "package tool ledger"), (status, "package ready status"),
+    ):
+        _require_once(main, sequence, label)
+
+
+def _validate_launch_self_check(main_text: str, header: str, evidence: str) -> None:
+    for declaration in (
+        '#define RP_LAUNCH_EXPECT_PREFIX "--rp-launch-expect="',
+        '#define RP_LAUNCH_IDENTITY_SOURCE "trusted_crt_self_check"',
+        '#define RP_LAUNCH_BATCH_IDENTITY_SOURCE "trusted_crt_batch_dispatch"',
+        "#define RP_LAUNCH_SELF_CHECK_EXIT 125",
+        "struct rp_launch_expectation",
+        "int is_agent;",
+        "int agent_role;",
+        "uint64 filesystem_domain;",
+        "uint64 filesystem_capability_mask;",
+    ):
+        if declaration not in header:
+            raise ValueError(f"trusted CRT launch contract differs: {declaration}")
+    if "child_after_exec" in header or "child_after_exec" in evidence:
+        raise ValueError("legacy pipe identity source remains in the Guest contract")
+    if '"trusted_crt_self_check"' not in evidence:
+        raise ValueError("Guest evidence parser lacks trusted CRT identity source")
+    _validate_worker_batch_evidence(evidence)
+
+    validity = _function_tokens(_tokens(header), "rp_launch_expectation_valid")
+    _ordered(
+        validity,
+        (
+            (
+                "expected", "==", "0", "||", "expected", "->",
+                "filesystem_domain", "==", "0", "||", "expected", "->",
+                "filesystem_capability_mask", "==", "0", "||", "(",
+                "expected", "->", "is_agent", "!=", "0", "&&", "expected",
+                "->", "is_agent", "!=", "1", ")",
+            ),
+            (
+                "if", "(", "expected", "->", "is_agent", ")", "return",
+                "expected", "->", "agent_role", ">=", "AGENT_ROLE_SENTINEL",
+                "&&", "expected", "->", "agent_role", "<=",
+                "AGENT_ROLE_ARTIFACT", ";",
+            ),
+            (
+                "return", "expected", "->", "agent_role", "==", "0", ";",
+            ),
+        ),
+        "launch expectation fail-closed validity",
+    )
+
+    tokens = _tokens(main_text)
+    parser = _function_tokens(tokens, "rp_parse_launch_uint")
+    for sequence, label in (
+        (
+            (
+                "*", "digits", "==", "'0'", "&&", "digits", "[", "1", "]",
+                ">=", "'0'", "&&", "digits", "[", "1", "]", "<=", "'9'",
+            ),
+            "leading zero rejection",
+        ),
+        (
+            (
+                "parsed", ">", "(", "~", "0ULL", "-", "digit", ")", "/",
+                "10",
+            ),
+            "uint64 overflow rejection",
+        ),
+        (
+            (
+                "delimiter", "!=", "0", "&&", "*", "digits", "!=",
+                "delimiter",
+            ),
+            "field delimiter rejection",
+        ),
+    ):
+        _require_once(parser, sequence, f"launch expectation {label}")
+
+    expectation = _function_tokens(tokens, "rp_parse_launch_expectation")
+    _ordered(
+        expectation,
+        (
+            (
+                "argc", "<", "2", "||", "argv", "==", "0", "||", "argv",
+                "[", "1", "]", "==", "0",
+            ),
+            (
+                "cursor", "=", "argv", "[", "1", "]", "+", "prefix_len", ";",
+            ),
+            (
+                "rp_parse_launch_uint", "(", "&", "cursor", ",", "','", ",",
+                "&", "is_agent", ")",
+            ),
+            (
+                "rp_parse_launch_uint", "(", "&", "cursor", ",", "','", ",",
+                "&", "role", ")",
+            ),
+            (
+                "rp_parse_launch_uint", "(", "&", "cursor", ",", "','", ",",
+                "&", "expected", "->", "filesystem_domain", ")",
+            ),
+            (
+                "rp_parse_launch_uint", "(", "&", "cursor", ",", "0", ",",
+                "&", "expected", "->", "filesystem_capability_mask", ")",
+            ),
+            (
+                "return", "rp_launch_expectation_valid", "(", "expected", ")",
+                "?", "1", ":", "-", "1", ";",
+            ),
+        ),
+        "strict launch expectation parser",
+    )
+
+    self_check = _function_tokens(tokens, "rp_launch_identity_self_check")
+    _ordered(
+        self_check,
+        (
+            (
+                "parsed", "=", "rp_parse_launch_expectation", "(", "argc", ",",
+                "argv", ",", "&", "expected", ")", ";",
+            ),
+            ("if", "(", "parsed", "<", "0", ")", "return", "0", ";"),
+            ("pid", "=", "agent_launch_info", "(", "&", "info", ")", ";"),
+            (
+                "return", "pid", ">", "0", "&&", "info", ".", "is_agent",
+                "==", "expected", ".", "is_agent", "&&", "info", ".",
+                "agent_role", "==", "expected", ".", "agent_role", "&&", "info",
+                ".", "filesystem_domain", "==", "expected", ".",
+                "filesystem_domain", "&&", "info", ".",
+                "filesystem_capability_mask", "==", "expected", ".",
+                "filesystem_capability_mask", ";",
+            ),
+        ),
+        "trusted CRT launch identity self-check",
+    )
+    if (
+        self_check.count("agent_launch_info") != 1
+        or _locations(self_check, ("agent_info", "("))
+        or any(
+            token in self_check
+            for token in ("getpid", "pipe", "read", "write", "close")
+        )
+    ):
+        raise ValueError("trusted CRT launch self-check performs extra identity I/O")
+
+    start = _function_tokens(tokens, "__start_main")
+    guard = (
+        "if", "(", "!", "rp_launch_identity_self_check", "(", "argc", ",",
+        "argv", ")", ")", "exit", "(", "RP_LAUNCH_SELF_CHECK_EXIT", ")", ";",
+    )
+    invoke = ("exit", "(", "main", "(", "argc", ",", "argv", ")", ")", ";")
+    _ordered(start, (guard, invoke), "trusted CRT pre-main launch identity guard")
+    _require_top_level(start, guard, "trusted CRT launch identity guard")
+
+
+def _validate_launch_info_kernel(core: str) -> None:
+    body = _function_tokens(_tokens(core), "sys_agent_info")
+    _require_once(
+        body,
+        ("struct", "proc", "*", "p", "=", "curr_proc", "(", ")", ";"),
+        "compact launch identity current process",
+    )
+    compact_start = _require_once(
+        body,
+        ("if", "(", "launch_identity", ")", "{"),
+        "compact launch identity branch",
+    )
+    compact_end = _require_once(
+        body,
+        ("}", "else", "{"),
+        "compact/full identity branch boundary",
+    )
+    if compact_start >= compact_end:
+        raise ValueError("compact launch identity branch is not before full diagnostics")
+    compact = body[compact_start:compact_end]
+    _ordered(
+        compact,
+        (
+            ("memset", "(", "&", "info", ",", "0", ",", "sizeof", "(", "info", ")", ")", ";"),
+            ("info", ".", "is_agent", "=", "p", "->", "is_agent", ";"),
+            ("info", ".", "agent_id", "=", "p", "->", "agent_id", ";"),
+            ("info", ".", "agent_role", "=", "p", "->", "agent_role", ";"),
+            (
+                "info", ".", "capability_mask", "=",
+                "agent_identity_proc_scope", "(", "p", ")", "!=",
+                "VFS_SCOPE_NONE", "?", "p", "->", "agent_capability_mask", ":",
+                "0", ";",
+            ),
+            (
+                "info", ".", "filesystem_domain", "=", "p", "->",
+                "vfs_scope_id", ";",
+            ),
+            (
+                "info", ".", "filesystem_capability_mask", "=",
+                "vfs_scope_active", "(", "p", "->", "vfs_scope_id", ")", "?",
+                "p", "->", "vfs_effective_caps", ":", "0", ";",
+            ),
+        ),
+        "compact current-process launch identity fill",
+    )
+    if any(
+        forbidden in compact
+        for forbidden in (
+            "agent_info_fill", "agent_metadata_fill_info", "agent_ticks",
+            "agent_observe_scope_epoch",
+        )
+    ):
+        raise ValueError("compact launch identity branch reads full diagnostics")
+    _require_once(
+        body,
+        (
+            "return", "result", "<", "0", "||", "!", "launch_identity", "?",
+            "result", ":", "p", "->", "pid", ";",
+        ),
+        "compact launch identity current PID return",
     )
 
 
@@ -2178,7 +3321,26 @@ def validate_source_texts(sources: dict[str, str]) -> None:
         )
     _validate_plain_timing(sources["baseline_ucore/user/src/rp_seed_orch.c"])
     _validate_agentos_timing(sources["user/src/rp_agentos_orch.c"])
+    _validate_worker_batch_manifest(
+        sources["user/include/rp_program_manifest.h"]
+    )
+    _validate_worker_batch_protocol(sources["user/include/rp_worker_batch.h"])
+    _validate_worker_batch_runners(
+        (
+            sources["user/src/rp_wbatch0.c"],
+            sources["user/src/rp_wbatch1.c"],
+            sources["user/src/rp_wbatch2.c"],
+        )
+    )
+    _validate_worker_batch_build(sources["user/Makefile"])
     _validate_delegated_workflow(sources["user/src/rp_orch.c"])
+    _validate_package_publish_order(sources["user/src/rp_package.c"])
+    _validate_launch_self_check(
+        sources["user/lib/main.c"],
+        sources["user/include/rp_launch_attestation.h"],
+        sources["user/include/rp_evidence.h"],
+    )
+    _validate_launch_info_kernel(sources["os/agent_core.c"])
     _validate_resource_stability(
         sources["user/src/rp_agentos_orch.c"],
         sources["user/src/rp_resource_probe.c"],
