@@ -196,6 +196,30 @@ int workflow_lifecycle_bind_controller(struct workflow_lifecycle_key key,
 	return result;
 }
 
+int workflow_lifecycle_unbind_controller(struct workflow_lifecycle_key key,
+					 uint scope_id, uint64 control_id)
+{
+	int enabled;
+	int result = -1;
+	struct workflow_lifecycle_record *record;
+
+	if (control_id == 0)
+		return -1;
+	enabled = intr_save();
+	record = workflow_lifecycle_find_locked(key);
+	if (record != 0 && record->scope_id == scope_id &&
+	    record->members > 0) {
+		result = 0;
+		if (!record->closing &&
+		    record->controller_control_id == control_id) {
+			record->controller_control_id = 0;
+			result = 1;
+		}
+	}
+	intr_restore(enabled);
+	return result;
+}
+
 int
 workflow_lifecycle_controller_matches(struct workflow_lifecycle_key key,
 				      uint scope_id, uint64 control_id)
@@ -239,8 +263,8 @@ workflow_lifecycle_close(uint scope_id,
 		if ((!trusted &&
 		     (!workflow_lifecycle_key_equal(key, expected) ||
 		      control_id == 0 ||
+		      record->controller_control_id == 0 ||
 		      record->controller_control_id != control_id)) ||
-		    record->controller_control_id == 0 ||
 		    record->members == 0)
 			break;
 		/* A fence owns the workflow cut until it commits or aborts. */

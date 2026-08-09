@@ -24,8 +24,10 @@ SOURCE_PATHS = {
     "user_agent_h": "user/include/agent.h",
     "core": "os/agent_core.c",
     "proc": "os/proc.c",
+    "agent_lifecycle": "os/agent_lifecycle.c",
     "fence": "os/agent_workflow_fence.c",
     "lifecycle": "os/workflow_lifecycle.c",
+    "vfs_security": "os/vfs_security.c",
     "credit": "os/workflow_credit_domain.c",
     "evidence": "os/agent_evidence_ring.c",
     "metadata_objects": "os/agent_metadata_objects.c",
@@ -544,6 +546,116 @@ def validate_bootstrap_controller_adoption(
     )
 
 
+def validate_bootstrap_controller_replacement(
+    lifecycle: str, vfs_security: str, agent_lifecycle: str
+) -> None:
+    lookup = compact(
+        function_body(lifecycle, "workflow_lifecycle_find_locked")
+    )
+    require_order(
+        lookup,
+        (
+            "if(!workflow_lifecycle_key_valid(key)||"
+            "key.id>WORKFLOW_LIFECYCLE_CAP)return0;",
+            "slot=key.id-1;",
+            "record=&workflow_lifecycles[slot];",
+            "if(!record->used||record->generation!=key.generation)return0;",
+            "returnrecord;",
+        ),
+        "workflow lifecycle lookup is not full id/generation bound",
+    )
+
+    unbind = compact(
+        function_body(lifecycle, "workflow_lifecycle_unbind_controller")
+    )
+    exact_clear = (
+        "if(!record->closing&&record->controller_control_id==control_id){"
+        "record->controller_control_id=0;result=1;}"
+    )
+    require_once(
+        unbind,
+        exact_clear,
+        "workflow lifecycle controller unbind clears without an exact open match",
+    )
+    require_order(
+        unbind,
+        (
+            "if(control_id==0)return-1;",
+            "enabled=intr_save();",
+            "record=workflow_lifecycle_find_locked(key);",
+            "if(record!=0&&record->scope_id==scope_id&&record->members>0){",
+            "result=0;",
+            exact_clear,
+            "intr_restore(enabled);",
+            "returnresult;",
+        ),
+        "workflow lifecycle controller unbind is not full-key/scope/identity bound",
+    )
+    require_once(
+        unbind,
+        "record->controller_control_id=0;",
+        "workflow lifecycle controller unbind has a second clear path",
+    )
+
+    scope_unbind = compact(
+        function_body(vfs_security, "vfs_scope_unbind_controller")
+    )
+    require_order(
+        scope_unbind,
+        (
+            "if(scope_id<VFS_SCOPE_FIRST_DYNAMIC||control_id==0)return-1;",
+            "enabled=intr_save();",
+            "ref=vfs_scope_find_locked(scope_id);",
+            "if(ref!=0&&!ref->retiring&&"
+            "workflow_lifecycle_key_equal(ref->lifecycle,lifecycle))",
+            "result=workflow_lifecycle_unbind_controller("
+            "lifecycle,scope_id,control_id);",
+            "intr_restore(enabled);",
+            "returnresult;",
+        ),
+        "VFS controller unbind is not exact lifecycle/scope/identity bound",
+    )
+    require_once(
+        scope_unbind,
+        "workflow_lifecycle_unbind_controller(lifecycle,scope_id,control_id);",
+        "VFS controller unbind does not delegate exactly once",
+    )
+
+    departure = compact(
+        function_body(
+            agent_lifecycle, "agent_lifecycle_controller_departing_locked"
+        )
+    )
+    branch_token = "if(!departure.scope_controller){"
+    branch_at = require(
+        departure,
+        branch_token,
+        "borrowed controller unbind is not confined to non-scope controllers",
+    )
+    branch_open = branch_at + len(branch_token) - 1
+    branch_close = matching(departure, branch_open, "{", "}")
+    borrowed = departure[branch_open + 1 : branch_close]
+    require_once(
+        departure,
+        "vfs_scope_unbind_controller(",
+        "borrowed controller unbind is not confined to one departure path",
+    )
+    require_once(
+        borrowed,
+        "vfs_scope_unbind_controller(",
+        "borrowed controller unbind escaped the non-scope-controller path",
+    )
+    require_once(
+        borrowed,
+        "proc_request_controller_exit("
+        "departure.lifecycle,departure.control_id,AGENT_STATUS_CANCELLED);"
+        "if(finish&&vfs_scope_unbind_controller("
+        "departure.scope_id,departure.lifecycle,departure.control_id)<0)"
+        "panic();returndeparture.control_id;",
+        "borrowed controller unbind is not finish-only after child retirement",
+    )
+
+
 def validate_request_and_cache(fence: str) -> None:
     receipt_init = compact(
         function_body(fence, "agent_workflow_fence_receipt_init")
@@ -936,15 +1048,52 @@ def validate_lifecycle(lifecycle: str) -> None:
     )
 
     close = compact(function_body(lifecycle, "workflow_lifecycle_close"))
+    close_authority = (
+        "if((!trusted&&(!workflow_lifecycle_key_equal(key,expected)||"
+        "control_id==0||record->controller_control_id==0||"
+        "record->controller_control_id!=control_id))||"
+        "record->members==0)break;"
+    )
+    require_once(
+        close,
+        close_authority,
+        "workflow close authority no longer separates trusted and exact-owner paths",
+    )
+    if close.count("record->controller_control_id") != 2:
+        raise ContractError(
+            "trusted workflow close gained a global controller requirement"
+        )
     require_order(
         close,
         (
+            close_authority,
             "if(record->fence_gate){result=1;break;}",
             "record->closing=1;",
             "*closed=key;",
         ),
         "workflow close can race an active fence",
     )
+
+    close_owned = compact(
+        function_body(lifecycle, "workflow_lifecycle_close_owned")
+    )
+    if close_owned != (
+        "returnworkflow_lifecycle_close("
+        "scope_id,expected,control_id,0,closed);"
+    ):
+        raise ContractError(
+            "owned workflow close is not exact-key/controller authorized"
+        )
+    close_trusted = compact(
+        function_body(lifecycle, "workflow_lifecycle_close_trusted")
+    )
+    if close_trusted != (
+        "returnworkflow_lifecycle_close("
+        "scope_id,workflow_lifecycle_none(),0,1,closed);"
+    ):
+        raise ContractError(
+            "trusted workflow close is not explicitly controllerless"
+        )
 
     begin = compact(function_body(lifecycle, "workflow_lifecycle_fence_begin"))
     require_order(
@@ -1234,6 +1383,10 @@ def validate_sources(sources: dict[str, str]) -> None:
     validate_bootstrap_controller_adoption(
         sources["kernel_agent_h"], sources["core"], sources["proc"],
         sources["lifecycle"]
+    )
+    validate_bootstrap_controller_replacement(
+        sources["lifecycle"], sources["vfs_security"],
+        sources["agent_lifecycle"]
     )
     validate_request_and_cache(sources["fence"])
     validate_fence_execution(sources["fence"])

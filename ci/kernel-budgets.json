@@ -100,8 +100,8 @@
       "os/agent_observe_recovery.c",
       "os/agent_observe_store.c"
     ],
-    "baseline_lines": 58282,
-    "max_lines": 58282
+    "baseline_lines": 58344,
+    "max_lines": 58344
   },
   "kernel_image": {
     "baseline_stripped_elf_bytes": 414832,
@@ -110,14 +110,14 @@
     "max_raw_binary_bytes": 409696
   },
   "kernel_runtime": {
-    "baseline_text_bytes": 408731,
-    "max_text_bytes": 408731,
+    "baseline_text_bytes": 408787,
+    "max_text_bytes": 408787,
     "baseline_data_bytes": 96,
     "max_data_bytes": 96,
     "baseline_bss_bytes": 2589816,
     "max_bss_bytes": 2589816,
-    "baseline_total_bytes": 2998643,
-    "max_total_bytes": 2998643
+    "baseline_total_bytes": 2998699,
+    "max_total_bytes": 2998699
   },
   "struct_proc": {
     "symbol": "kernel_budget_struct_proc",
@@ -518,8 +518,8 @@
         "name": "lifecycle",
         "source_path": "os/agent_lifecycle.c",
         "object_path": "build/os/agent_lifecycle.o",
-        "baseline_lines": 334,
-        "max_lines": 334,
+        "baseline_lines": 345,
+        "max_lines": 345,
         "max_bss_bytes": 8,
         "allowed_global_prefixes": [
           "agent_lifecycle_"
@@ -984,8 +984,8 @@
         "name": "workflow_lifecycle",
         "source_path": "os/workflow_lifecycle.c",
         "object_path": "build/os/workflow_lifecycle.o",
-        "baseline_lines": 568,
-        "max_lines": 568,
+        "baseline_lines": 592,
+        "max_lines": 592,
         "max_bss_bytes": 576,
         "allowed_global_prefixes": [
           "workflow_lifecycle_"

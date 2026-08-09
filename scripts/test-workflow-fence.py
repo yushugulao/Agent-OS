@@ -21,8 +21,10 @@ FILES = (
     "user/include/agent.h",
     "os/agent_core.c",
     "os/proc.c",
+    "os/agent_lifecycle.c",
     "os/agent_workflow_fence.c",
     "os/workflow_lifecycle.c",
+    "os/vfs_security.c",
     "os/workflow_credit_domain.c",
     "os/agent_evidence_ring.c",
     "os/agent_metadata_objects.c",
@@ -57,6 +59,18 @@ class WorkflowFenceMutationTests(unittest.TestCase):
         source = path.read_text(encoding="utf-8")
         self.assertIn(old, source, f"mutation anchor drifted in {relative}")
         path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    def move_after(self, relative: str, before: str, after: str) -> None:
+        path = self.root / relative
+        source = path.read_text(encoding="utf-8")
+        self.assertEqual(source.count(before), 1, f"before anchor drifted in {relative}")
+        self.assertEqual(source.count(after), 1, f"after anchor drifted in {relative}")
+        self.assertLess(source.index(before), source.index(after))
+        source = source.replace(before, "", 1)
+        insert_at = source.index(after) + len(after)
+        path.write_text(
+            source[:insert_at] + before + source[insert_at:], encoding="utf-8"
+        )
 
     def assert_rejected(self, message: str) -> None:
         result = self.run_checker()
@@ -401,6 +415,98 @@ class WorkflowFenceMutationTests(unittest.TestCase):
         )
         self.assert_rejected("can shed its identity through public exec")
 
+    def test_rejects_cross_scope_controller_unbind(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "if (record != 0 && record->scope_id == scope_id &&\n"
+            "\t    record->members > 0) {",
+            "if (record != 0 && record->scope_id != scope_id &&\n"
+            "\t    record->members > 0) {",
+        )
+        self.assert_rejected("unbind is not full-key/scope/identity bound")
+
+    def test_rejects_generation_blind_controller_unbind_lookup(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "if (!record->used || record->generation != key.generation)",
+            "if (!record->used)",
+        )
+        self.assert_rejected("lookup is not full id/generation bound")
+
+    def test_rejects_wrong_identity_controller_unbind(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "if (!record->closing &&\n"
+            "\t\t    record->controller_control_id == control_id) {",
+            "if (!record->closing &&\n"
+            "\t\t    record->controller_control_id != control_id) {",
+        )
+        self.assert_rejected("clears without an exact open match")
+
+    def test_rejects_closing_controller_unbind(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "if (!record->closing &&\n"
+            "\t\t    record->controller_control_id == control_id) {",
+            "if (record->closing &&\n"
+            "\t\t    record->controller_control_id == control_id) {",
+        )
+        self.assert_rejected("clears without an exact open match")
+
+    def test_rejects_controller_unbind_without_full_lifecycle(self) -> None:
+        self.mutate(
+            "os/vfs_security.c",
+            "if (ref != 0 && !ref->retiring &&\n"
+            "\t\t    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))\n"
+            "\t\t\tresult = workflow_lifecycle_unbind_controller(",
+            "if (ref != 0 && !ref->retiring &&\n"
+            "\t\t    ref->lifecycle.id == lifecycle.id)\n"
+            "\t\t\tresult = workflow_lifecycle_unbind_controller(",
+        )
+        self.assert_rejected("not exact lifecycle/scope/identity bound")
+
+    def test_rejects_controller_unbind_without_clearing_identity(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "record->controller_control_id = 0;\n\t\t\tresult = 1;",
+            "record->controller_control_id = control_id;\n\t\t\tresult = 1;",
+        )
+        self.assert_rejected("clears without an exact open match")
+
+    def test_rejects_controller_unbind_before_finish(self) -> None:
+        self.mutate(
+            "os/agent_lifecycle.c",
+            "if (finish &&\n"
+            "\t\t    vfs_scope_unbind_controller(departure.scope_id,",
+            "if (!finish &&\n"
+            "\t\t    vfs_scope_unbind_controller(departure.scope_id,",
+        )
+        self.assert_rejected("not finish-only after child retirement")
+
+    def test_rejects_scope_controller_unbind(self) -> None:
+        self.mutate(
+            "os/agent_lifecycle.c",
+            "if (!departure.scope_controller) {",
+            "if (departure.scope_controller) {",
+        )
+        self.assert_rejected("not confined to non-scope controllers")
+
+    def test_rejects_controller_unbind_before_child_retirement(self) -> None:
+        retire = (
+            "\t\tproc_request_controller_exit(departure.lifecycle,\n"
+            "\t\t\t\t     departure.control_id,\n"
+            "\t\t\t\t     AGENT_STATUS_CANCELLED);\n"
+        )
+        unbind = (
+            "\t\tif (finish &&\n"
+            "\t\t    vfs_scope_unbind_controller(departure.scope_id,\n"
+            "\t\t\t\t\tdeparture.lifecycle,\n"
+            "\t\t\t\t\tdeparture.control_id) < 0)\n"
+            "\t\t\tpanic(\"borrowed controller unbind\");\n"
+        )
+        self.move_after("os/agent_lifecycle.c", retire, unbind)
+        self.assert_rejected("not finish-only after child retirement")
+
     def test_rejects_metadata_work_before_lifecycle_gate(self) -> None:
         self.mutate(
             "os/agent_workflow_fence.c",
@@ -453,6 +559,48 @@ class WorkflowFenceMutationTests(unittest.TestCase):
             "\t\t}",
         )
         self.assert_rejected("close can race an active fence")
+
+    def test_rejects_global_controller_requirement_on_trusted_close(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "if ((!trusted &&\n"
+            "\t\t     (!workflow_lifecycle_key_equal(key, expected) ||\n"
+            "\t\t      control_id == 0 ||\n"
+            "\t\t      record->controller_control_id == 0 ||\n"
+            "\t\t      record->controller_control_id != control_id)) ||\n"
+            "\t\t    record->members == 0)",
+            "if ((!trusted &&\n"
+            "\t\t     (!workflow_lifecycle_key_equal(key, expected) ||\n"
+            "\t\t      control_id == 0 ||\n"
+            "\t\t      record->controller_control_id != control_id)) ||\n"
+            "\t\t    record->controller_control_id == 0 ||\n"
+            "\t\t    record->members == 0)",
+        )
+        self.assert_rejected(
+            "close authority no longer separates trusted and exact-owner paths"
+        )
+
+    def test_rejects_trusted_close_of_empty_lifecycle(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "record->controller_control_id != control_id)) ||\n"
+            "\t\t    record->members == 0)",
+            "record->controller_control_id != control_id ||\n"
+            "\t\t      record->members == 0))",
+        )
+        self.assert_rejected(
+            "close authority no longer separates trusted and exact-owner paths"
+        )
+
+    def test_rejects_non_controllerless_trusted_close_wrapper(self) -> None:
+        self.mutate(
+            "os/workflow_lifecycle.c",
+            "return workflow_lifecycle_close(scope_id, workflow_lifecycle_none(), 0,\n"
+            "\t\t\t\t\t1, closed);",
+            "return workflow_lifecycle_close(scope_id, workflow_lifecycle_none(), 1,\n"
+            "\t\t\t\t\t1, closed);",
+        )
+        self.assert_rejected("trusted workflow close is not explicitly controllerless")
 
     def test_rejects_fence_after_workflow_close(self) -> None:
         self.mutate(

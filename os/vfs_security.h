@@ -93,6 +93,9 @@ int vfs_scope_fresh_admission_status(void);
 int vfs_scope_bind_controller(uint scope_id,
 			      struct workflow_lifecycle_key lifecycle,
 			      uint64 control_id);
+int vfs_scope_unbind_controller(uint scope_id,
+				struct workflow_lifecycle_key lifecycle,
+				uint64 control_id);
 int vfs_scope_close_owned(uint scope_id,
 			  struct workflow_lifecycle_key lifecycle,
 			  uint64 control_id,

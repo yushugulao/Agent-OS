@@ -43,6 +43,8 @@ int workflow_lifecycle_join(struct workflow_lifecycle_key key);
 int workflow_lifecycle_leave(struct workflow_lifecycle_key key);
 int workflow_lifecycle_bind_controller(struct workflow_lifecycle_key key,
 				       uint scope_id, uint64 control_id);
+int workflow_lifecycle_unbind_controller(struct workflow_lifecycle_key key,
+					 uint scope_id, uint64 control_id);
 int workflow_lifecycle_controller_matches(struct workflow_lifecycle_key key,
 					  uint scope_id, uint64 control_id);
 int workflow_lifecycle_close_owned(uint scope_id,

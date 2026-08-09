@@ -718,6 +718,28 @@ int vfs_scope_bind_controller(uint scope_id,
 	return result;
 }
 
+int vfs_scope_unbind_controller(uint scope_id,
+				struct workflow_lifecycle_key lifecycle,
+				uint64 control_id)
+{
+	int result = -1;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC || control_id == 0)
+		return -1;
+	enabled = intr_save();
+	{
+		struct vfs_scope_ref *ref = vfs_scope_find_locked(scope_id);
+
+		if (ref != 0 && !ref->retiring &&
+		    workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
+			result = workflow_lifecycle_unbind_controller(
+				lifecycle, scope_id, control_id);
+	}
+	intr_restore(enabled);
+	return result;
+}
+
 int vfs_scope_close_owned(uint scope_id,
 			  struct workflow_lifecycle_key lifecycle,
 			  uint64 control_id,

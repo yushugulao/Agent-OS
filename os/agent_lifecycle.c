@@ -302,6 +302,17 @@ agent_lifecycle_controller_departing_locked(struct proc *p)
 		proc_request_controller_exit(departure.lifecycle,
 				     departure.control_id,
 				     AGENT_STATUS_CANCELLED);
+		/*
+		 * A controller adopted by the preserved bootstrap scope owns the
+		 * lifecycle fence identity, but not scope retirement.  Release that
+		 * exact full-key binding only after its control tree is marked for exit
+		 * so a later trusted bootstrap child can become the replacement controller.
+		 */
+		if (finish &&
+		    vfs_scope_unbind_controller(departure.scope_id,
+					departure.lifecycle,
+					departure.control_id) < 0)
+			panic("borrowed controller unbind");
 		return departure.control_id;
 	}
 	/* 一次性所有权绑定只负责触发关闭，后代销毁仍以不可变生命周期 key 为准。 */
