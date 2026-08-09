@@ -1,0 +1,19 @@
+{
+  "all_exit_status_zero": true,
+  "attestation_count": 57,
+  "baseline_seconds": 132.0377184,
+  "evidence_scope": "local_e3_unsigned",
+  "max_seconds": 138.64,
+  "max_to_median_ratio": 1.0500029967194586,
+  "remote_ci_attestation": false,
+  "sample_count": 3,
+  "schema": 1,
+  "serialized": true,
+  "source": {
+    "commit": "baffe069e6c6d1e77b81f8b52d7787014a559814",
+    "fingerprint_inputs": 416,
+    "fingerprint_sha256": "dd1cbbbeb7737c01e5063a7b04829bf01e37780ba2a8e116b3623e26731e635e",
+    "tree": "a6811d8a14642ee853f884c7b4430575e7d981f5"
+  },
+  "status": "reviewed_local_e3"
+}

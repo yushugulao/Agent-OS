@@ -1370,7 +1370,38 @@
       "usersafety_ucore",
       "blocking_semantics_ucore"
     ],
-    "calibration_status": "provisional_requires_full_suite",
+    "calibration_status": "calibrated_full_suite",
+    "calibration_source_commit": "baffe069e6c6d1e77b81f8b52d7787014a559814",
+    "calibration_source_tree": "a6811d8a14642ee853f884c7b4430575e7d981f5",
+    "calibration_manifest_file": "evidence/calibrations/baffe069e6c6/manifest.json",
+    "calibration_manifest_sha256": "63648a7409cddd0a45436c78a07d75368b9d3497d69d8b38b11ad68b8d5ce412",
+    "source_fingerprint_sha256": "dd1cbbbeb7737c01e5063a7b04829bf01e37780ba2a8e116b3623e26731e635e",
+    "baseline_seconds": 132.0377184,
+    "max_seconds": 138.64,
+    "calibration_samples": [
+      {
+        "attestation_digest_sha256": "d249dc6cf5df295808703e1875b822104e699760799f564b325eb6bb590e8bff",
+        "sample_id": "agent18-baffe069e6c6-01",
+        "timing_file": "evidence/calibrations/baffe069e6c6/01.timing",
+        "timing_file_sha256": "bc1de47c7a1bbd15a2b5502834c2a7b77c6f75455e86390f46d9f861274d840b",
+        "total_seconds": 134.8183876
+      },
+      {
+        "attestation_digest_sha256": "0da6befb518235f7f58dcdf0ad257b559f4cfe13700f21b074eba2bca1e5e4fb",
+        "sample_id": "agent18-baffe069e6c6-02",
+        "timing_file": "evidence/calibrations/baffe069e6c6/02.timing",
+        "timing_file_sha256": "41762958d85a272b23b5bcdfa4e6511aa44073f94885e2094d03ac3be16061fc",
+        "total_seconds": 132.0377184
+      },
+      {
+        "attestation_digest_sha256": "34effd061c15282f4a4f6f9a04054e98ea6525069208befb99db5cc5bf8dc6ed",
+        "sample_id": "agent18-baffe069e6c6-03",
+        "timing_file": "evidence/calibrations/baffe069e6c6/03.timing",
+        "timing_file_sha256": "ea503de4edb94986ed410c6932c2dbc1438a01109ce89322150c204c39c63e5b",
+        "total_seconds": 116.8671935
+      }
+    ],
+    "calibration_profile_id": "local-e3-msys2-xpack-qemu11-v1",
     "local_calibration_profile": {
       "schema_version": 1,
       "profile_id": "local-e3-msys2-xpack-qemu11-v1",
