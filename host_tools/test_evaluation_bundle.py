@@ -2012,7 +2012,8 @@ def main() -> int:
                     source_tree=source_snapshot,
                     trusted_contract_root=ROOT,
                 ),
-                "source-C program manifests",
+                "scenario source-C semantic replay failed: platform program "
+                "manifest is not the reviewed 70-program order",
             )
         finally:
             write_strict(scenario_plan_path, scenario_plan)
@@ -2022,6 +2023,45 @@ def main() -> int:
             compile_contract_path.write_bytes(original_compile_contract)
             for path, original in zip(manifests, original_manifests):
                 path.write_bytes(original)
+
+        scenario_report_path = formal_run / "scenario/report.json"
+        original_scenario_report = scenario_report_path.read_bytes()
+        try:
+            forged_report = json.loads(original_scenario_report)
+            forged_binding = forged_report["samples"][0]["binding"]
+            forged_binding["program_order"][0] = mutant_program
+            forged_binding.pop("sha256")
+            forged_binding["sha256"] = scenario_evidence._binding_sha256(
+                forged_binding, "scenario-sample-v1"
+            )
+            forged_report.pop("report_sha256")
+            forged_report["report_sha256"] = scenario_evidence._binding_sha256(
+                forged_report, "scenario-report-v2"
+            )
+            scenario_evidence._write_report(scenario_report_path, forged_report)
+
+            forged_scenario_plan = copy.deepcopy(scenario_plan)
+            forged_scenario_plan["report"]["sha256"] = digest(scenario_report_path)
+            write_strict(scenario_plan_path, forged_scenario_plan)
+            scenario_preflight_path.write_text(
+                format_preflight_receipt(forged_scenario_plan),
+                encoding="ascii",
+                newline="\n",
+            )
+            expect_rejected(
+                lambda: bundle._verify_scenario_campaign(
+                    formal_run,
+                    micro_campaign,
+                    profile="formal",
+                    source_tree=source_snapshot,
+                    trusted_contract_root=ROOT,
+                ),
+                "scenario sample 0 differs from source-C program manifests",
+            )
+        finally:
+            scenario_report_path.write_bytes(original_scenario_report)
+            write_strict(scenario_plan_path, scenario_plan)
+            scenario_preflight_path.write_bytes(original_scenario_preflight)
 
         formal = root / "formal-bundle"
         formal_manifest = bundle.create_bundle(
