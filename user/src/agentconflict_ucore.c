@@ -169,11 +169,11 @@ static void run_parent(void)
 	      "plain begin denied");
 	printf("agentconflict_ucore: plain_process_denied=1\n");
 
-	pid_a = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	pid_a = agent_create_role(AGENT_ROLE_ARTIFACT);
 	check(pid_a >= 0, "create holder");
 	if (pid_a == 0)
 		agent_a_holder();
-	pid_b = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	pid_b = agent_create_role(AGENT_ROLE_ARTIFACT);
 	check(pid_b >= 0, "create conflicter");
 	if (pid_b == 0)
 		agent_b_conflicter();
@@ -182,7 +182,7 @@ static void run_parent(void)
 	check(waitpid(pid_a, &status) == pid_a, "wait holder");
 	check(status == 0, "holder status");
 
-	pid_c = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	pid_c = agent_create_role(AGENT_ROLE_ARTIFACT);
 	check(pid_c >= 0, "create version checker");
 	if (pid_c == 0)
 		agent_c_version_check();
