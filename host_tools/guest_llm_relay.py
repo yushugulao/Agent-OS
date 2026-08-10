@@ -93,6 +93,7 @@ DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 MAX_MESSAGES = 64
 MAX_TOOLS = 32
 MAX_TOOL_ARGUMENTS = 3
+MAX_NEXUS_TOOL_ARGUMENTS = 5
 MAX_CORRELATION_ID = (1 << 63) - 1
 MAX_SEQUENCE = (1 << 63) - 1
 
@@ -319,13 +320,24 @@ def _require_u64(value: object, label: str, *, positive: bool = False) -> int:
     return value
 
 
-def _validate_tool_arguments(value: object, label: str) -> dict[str, object]:
+def _validate_tool_arguments(
+    value: object,
+    label: str,
+    *,
+    max_arguments: int = MAX_TOOL_ARGUMENTS,
+) -> dict[str, object]:
+    if (
+        not isinstance(max_arguments, int)
+        or isinstance(max_arguments, bool)
+        or not 0 <= max_arguments <= MAX_NEXUS_TOOL_ARGUMENTS
+    ):
+        raise ValueError("tool argument limit is outside the Host protocol ceiling")
     if not isinstance(value, dict):
         raise ProviderError("BAD_TOOL_ARGUMENTS", f"{label} must be an object")
-    if len(value) > MAX_TOOL_ARGUMENTS:
+    if len(value) > max_arguments:
         raise ProviderError(
             "BAD_TOOL_ARGUMENTS",
-            f"{label} exceeds the {MAX_TOOL_ARGUMENTS}-argument Guest limit",
+            f"{label} exceeds the {max_arguments}-argument Guest limit",
         )
     result: dict[str, object] = {}
     for key, item in value.items():
@@ -345,7 +357,10 @@ def _validate_tool_arguments(value: object, label: str) -> dict[str, object]:
 
 
 def validate_guest_request(
-    value: dict[str, object], *, max_output_tokens: int
+    value: dict[str, object],
+    *,
+    max_output_tokens: int,
+    max_tool_arguments: int = MAX_TOOL_ARGUMENTS,
 ) -> dict[str, object]:
     allowed = frozenset(
         (
@@ -370,7 +385,9 @@ def validate_guest_request(
     if not isinstance(messages, list) or not 1 <= len(messages) <= MAX_MESSAGES:
         raise WireProtocolError("BAD_REQUEST", "messages must be a non-empty bounded array")
     for index, message in enumerate(messages):
-        _validate_message(message, index)
+        _validate_message(
+            message, index, max_tool_arguments=max_tool_arguments
+        )
     tools = value.get("tools", [])
     if not isinstance(tools, list) or len(tools) > MAX_TOOLS:
         raise WireProtocolError("BAD_REQUEST", "tools must be a bounded array")
@@ -409,7 +426,9 @@ def validate_guest_request(
     return normalized
 
 
-def _validate_message(value: object, index: int) -> None:
+def _validate_message(
+    value: object, index: int, *, max_tool_arguments: int
+) -> None:
     if not isinstance(value, dict):
         raise WireProtocolError("BAD_REQUEST", f"messages[{index}] must be an object")
     role = value.get("role")
@@ -440,7 +459,11 @@ def _validate_message(value: object, index: int) -> None:
         tool = _require_string(tool_use.get("tool"), "tool_use.tool", max_length=64)
         if TOOL_NAME_RE.fullmatch(tool) is None:
             raise WireProtocolError("BAD_REQUEST", "tool_use.tool is invalid")
-        _validate_tool_arguments(tool_use.get("arguments"), "tool_use.arguments")
+        _validate_tool_arguments(
+            tool_use.get("arguments"),
+            "tool_use.arguments",
+            max_arguments=max_tool_arguments,
+        )
         return
     if role == "tool":
         if set(value).difference(("role", "tool_corr_id", "content", "is_error")):
@@ -487,7 +510,12 @@ class ModelReply:
     arguments: Mapping[str, object] | None = None
     provider_call_id: str = ""
 
-    def wire_payload(self, corr_id: int) -> dict[str, object]:
+    def wire_payload(
+        self,
+        corr_id: int,
+        *,
+        max_tool_arguments: int = MAX_TOOL_ARGUMENTS,
+    ) -> dict[str, object]:
         if self.type == "final":
             return {
                 "corr_id": corr_id,
@@ -504,7 +532,9 @@ class ModelReply:
                 "type": "tool_use",
                 "tool": self.tool,
                 "arguments": _validate_tool_arguments(
-                    self.arguments, "model tool arguments"
+                    self.arguments,
+                    "model tool arguments",
+                    max_arguments=max_tool_arguments,
                 ),
             }
         raise ProviderError("BAD_PROVIDER_RESPONSE", "provider returned an unknown response type")
@@ -707,18 +737,48 @@ class JsonHttpsClient:
         return result[:256]
 
 
+@dataclass(frozen=True)
+class _ProviderCallBinding:
+    provider_call_id: str
+    tool: str
+    canonical_arguments: str
+
+
 class _ProtocolProvider:
     def __init__(self, client: JsonHttpsClient, *, api_key: str, model: str = "") -> None:
         validate_api_key(api_key)
         self.client = client
         self._api_key = api_key
         self.model = model
-        self._provider_call_ids: dict[int, str] = {}
+        self._provider_call_ids: dict[int, _ProviderCallBinding] = {}
+        self._provider_call_lock = threading.Lock()
+        self._defer_call_commits = False
 
     def reset_session(self) -> None:
         """Forget provider-private call handles after an explicit Guest reset."""
 
-        self._provider_call_ids.clear()
+        with self._provider_call_lock:
+            self._provider_call_ids.clear()
+
+    def defer_call_commits(self) -> None:
+        """Commit provider-private IDs only after the wire response is delivered."""
+
+        with self._provider_call_lock:
+            self._defer_call_commits = True
+
+    def commit_model_reply(self, corr_id: object, reply: ModelReply) -> None:
+        if reply.type != "tool_use":
+            return
+        if reply.arguments is None:
+            raise ProviderError(
+                "BAD_PROVIDER_RESPONSE", "provider tool call arguments are missing"
+            )
+        self._remember_call(
+            corr_id,
+            reply.provider_call_id,
+            reply.tool,
+            reply.arguments,
+        )
 
     def _model(self, request: Mapping[str, object]) -> str:
         requested = request.get("model", "")
@@ -731,25 +791,71 @@ class _ProtocolProvider:
             raise ProviderError("MODEL_REQUIRED", "no model was configured or requested")
         return chosen
 
-    def _provider_call_id(self, corr_id: object) -> str:
+    def _provider_call_id(
+        self,
+        corr_id: object,
+        *,
+        tool: object | None = None,
+        arguments: object | None = None,
+    ) -> str:
         if not isinstance(corr_id, int) or isinstance(corr_id, bool):
             raise ProviderError("BAD_REQUEST", "tool correlation id is invalid")
-        try:
-            return self._provider_call_ids[corr_id]
-        except KeyError:
+        with self._provider_call_lock:
+            binding = self._provider_call_ids.get(corr_id)
+        if binding is None:
             raise ProviderError(
                 "UNKNOWN_TOOL_CALL", "tool result references an unknown model call"
-            ) from None
+            )
+        if tool is not None or arguments is not None:
+            if not isinstance(tool, str) or not isinstance(arguments, dict):
+                raise ProviderError(
+                    "TOOL_CALL_MISMATCH", "tool history binding is malformed"
+                )
+            canonical = canonical_json_bytes(arguments).decode("utf-8")
+            if tool != binding.tool or not hmac.compare_digest(
+                canonical, binding.canonical_arguments
+            ):
+                raise ProviderError(
+                    "TOOL_CALL_MISMATCH",
+                    "tool history does not match the delivered model call",
+                )
+        return binding.provider_call_id
 
-    def _remember_call(self, corr_id: object, provider_call_id: str) -> None:
+    def _remember_call(
+        self,
+        corr_id: object,
+        provider_call_id: str,
+        tool: str,
+        arguments: Mapping[str, object],
+    ) -> None:
         if not isinstance(corr_id, int) or isinstance(corr_id, bool):
             raise ProviderError("BAD_REQUEST", "corr_id is invalid")
-        if corr_id in self._provider_call_ids:
-            raise ProviderError("DUPLICATE_CORRELATION", "corr_id was already completed")
-        self._provider_call_ids[corr_id] = provider_call_id
-        while len(self._provider_call_ids) > MAX_MESSAGES:
-            oldest = next(iter(self._provider_call_ids))
-            del self._provider_call_ids[oldest]
+        if (
+            not isinstance(provider_call_id, str)
+            or not provider_call_id
+            or not isinstance(tool, str)
+            or TOOL_NAME_RE.fullmatch(tool) is None
+        ):
+            raise ProviderError(
+                "BAD_PROVIDER_RESPONSE", "provider tool call identity is malformed"
+            )
+        canonical = canonical_json_bytes(arguments).decode("utf-8")
+        binding = _ProviderCallBinding(provider_call_id, tool, canonical)
+        with self._provider_call_lock:
+            if corr_id in self._provider_call_ids:
+                raise ProviderError(
+                    "DUPLICATE_CORRELATION", "corr_id was already completed"
+                )
+            self._provider_call_ids[corr_id] = binding
+            while len(self._provider_call_ids) > MAX_MESSAGES:
+                oldest = next(iter(self._provider_call_ids))
+                del self._provider_call_ids[oldest]
+
+    def _commit_immediately(self, corr_id: object, reply: ModelReply) -> None:
+        with self._provider_call_lock:
+            deferred = self._defer_call_commits
+        if not deferred:
+            self.commit_model_reply(corr_id, reply)
 
 
 class OpenAICompatibleProvider(_ProtocolProvider):
@@ -804,7 +910,7 @@ class OpenAICompatibleProvider(_ProtocolProvider):
         )
         reply = self._parse_response(response)
         if reply.type == "tool_use":
-            self._remember_call(request["corr_id"], reply.provider_call_id)
+            self._commit_immediately(request["corr_id"], reply)
         return reply
 
     def _messages(self, request: Mapping[str, object]) -> list[dict[str, object]]:
@@ -822,7 +928,11 @@ class OpenAICompatibleProvider(_ProtocolProvider):
                 }
                 tool_use = message.get("tool_use")
                 if tool_use is not None:
-                    provider_id = self._provider_call_id(tool_use["corr_id"])
+                    provider_id = self._provider_call_id(
+                        tool_use["corr_id"],
+                        tool=tool_use["tool"],
+                        arguments=tool_use["arguments"],
+                    )
                     item["tool_calls"] = [
                         {
                             "id": provider_id,
@@ -961,7 +1071,11 @@ def _parse_provider_arguments(raw: bytes) -> dict[str, object]:
         )
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError, RecursionError):
         raise ProviderError("BAD_TOOL_ARGUMENTS", "model returned invalid tool arguments") from None
-    return _validate_tool_arguments(value, "model tool arguments")
+    return _validate_tool_arguments(
+        value,
+        "model tool arguments",
+        max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
+    )
 
 
 class AnthropicMessagesProvider(_ProtocolProvider):
@@ -1021,7 +1135,7 @@ class AnthropicMessagesProvider(_ProtocolProvider):
         )
         reply = self._parse_response(response)
         if reply.type == "tool_use":
-            self._remember_call(request["corr_id"], reply.provider_call_id)
+            self._commit_immediately(request["corr_id"], reply)
         return reply
 
     def _messages(self, request: Mapping[str, object]) -> list[dict[str, object]]:
@@ -1043,7 +1157,11 @@ class AnthropicMessagesProvider(_ProtocolProvider):
                     content.append(
                         {
                             "type": "tool_use",
-                            "id": self._provider_call_id(tool_use["corr_id"]),
+                            "id": self._provider_call_id(
+                                tool_use["corr_id"],
+                                tool=tool_use["tool"],
+                                arguments=tool_use["arguments"],
+                            ),
                             "name": tool_use["tool"],
                             "input": tool_use["arguments"],
                         }
@@ -1113,7 +1231,11 @@ class AnthropicMessagesProvider(_ProtocolProvider):
                 raise ProviderError("BAD_PROVIDER_RESPONSE", "Anthropic tool id is missing")
             if not isinstance(name, str) or TOOL_NAME_RE.fullmatch(name) is None:
                 raise ProviderError("BAD_PROVIDER_RESPONSE", "Anthropic tool name is invalid")
-            arguments = _validate_tool_arguments(call.get("input"), "model tool arguments")
+            arguments = _validate_tool_arguments(
+                call.get("input"),
+                "model tool arguments",
+                max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
+            )
             return ModelReply(
                 "tool_use", tool=name, arguments=arguments, provider_call_id=provider_id
             )
@@ -1225,7 +1347,11 @@ def _reply_from_canonical(value: Mapping[str, object]) -> ModelReply:
         return ModelReply(
             "tool_use",
             tool=tool,
-            arguments=_validate_tool_arguments(value.get("arguments"), "replay arguments"),
+            arguments=_validate_tool_arguments(
+                value.get("arguments"),
+                "replay arguments",
+                max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
+            ),
         )
     raise ProviderError("BAD_REPLAY", "replay response is malformed")
 
@@ -1253,6 +1379,9 @@ class RelaySession:
         self.goal = validate_goal(goal)
         self.approved_tools = validate_approved_tools(approved_tools)
         self.provider = provider
+        defer_call_commits = getattr(provider, "defer_call_commits", None)
+        if callable(defer_call_commits):
+            defer_call_commits()
         self.session = session or secrets.token_hex(16)
         if WIRE_SESSION_RE.fullmatch(self.session) is None:
             raise ValueError("session must be 32 lowercase hexadecimal characters")
@@ -1327,6 +1456,11 @@ class RelaySession:
             self._rounds += 1
             reply = self._complete_provider(request, deadline_monotonic)
             response = self._send_json("RESPONSE", reply.wire_payload(corr_id))
+            commit_model_reply = getattr(
+                self.provider, "commit_model_reply", None
+            )
+            if callable(commit_model_reply):
+                commit_model_reply(corr_id, reply)
             if reply.type == "final":
                 self._final_sent = True
             return response

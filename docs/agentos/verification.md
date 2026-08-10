@@ -169,6 +169,23 @@ make agentos-console-deepseek TOOLPREFIX=riscv-none-elf-
 
 交互路径使用 V2 exploratory RPC 支持 result-dependent 选择；ENFORCE V3 仍是 frozen contract 的高保证执行模式。MCP/A2A 仍是 in-memory object prototype，控制台通过串口 model wire 运行，不能把此验收写成 MCP 互操作。完整操作见[交互控制台说明](interactive-console.md)。
 
+### 5.2 Nexus 多 Agent 产品合同
+
+Nexus 复用 console 控制面但使用独立 `guest_profile=nexus`，不会改变普通 console 的 fixture、Guest 或验收。验证同样分层：
+
+```bash
+make agentos-nexus-check
+make agentos-nexus-replay TOOLPREFIX=riscv-none-elf-
+make agentos-nexus-deepseek TOOLPREFIX=riscv-none-elf-
+```
+
+- `agentos-nexus-check` 锁定 Host profile/TASK_EVENT 投影、Guest typed TASK 状态机、V2 role 过滤、artifact 全量 SHA-256/lifecycle 校验、审批拒绝和 observer source 边界；它不启动 QEMU。
+- `agentos-nexus-replay` 在一个真实 QEMU boot 中并发 attach controller 与 observer。fixture 的每个响应都必须绑定实际 `MODEL_REQUEST` SHA-256，controller 还必须逐项出现同 envelope、内容完全一致的 `model_response`；strict validator 进一步锁定 ready-before-data、每 turn 稳定且不复用的 active request ID、single-inflight 的 `request_i < response_i < 同 correlation effects < request_(i+1)`，且 final response 必须早于对应 `turn_complete`。delegated TASK batch 固定到创建它的 response 并先于 tool result，tool status/result/handle/task id 还必须与 terminal/artifact 一致。validator 不依赖固定响应条数，而是验收三个用户 turn、四个独立业务 identity、System/Research/Analyst 工件依赖、Research 与报告 handle 的成功 readback、报告事件对两份来源完整 digest、实际 System process/context/file 数值与本 boot `sched_budget` 的绑定，以及最终答案中的稳定 System/budget 投影、历史 measurement canonical 数值与两份来源 handle；完整 System 工件和 observer 仍保留动态 dispatch、used 与 vruntime。tool/TASK correlation 和 canonical arguments、一次失败后的不同 task replan、`tool_id=1004` 的精确发布审批、拒绝零副作用、跨类型原始时序及 close 后零输出也必须通过。brokered `artifact_published` 只能作为 successful worker terminal 后的 completed-state 工件事实。
+- observer 的 `kernel_audit` 只接受 Guest 转发、Host schema 允许的 fresh MESSAGE enqueue/consume 内核记录，以全局 audit sequence、correlation 和真实 control identity 交叉核对 TASK_EVENT；`kernel_snapshot` 是 worker self `agent_info` 的 Context、wait 和 scheduler 前后差，并必须携带与 audit identity 一致的 positive `actor_control_id` 与真实 nonzero `capability_mask`。controller 与 observer 的 TASK 安全 metadata 子序列必须保序 1:1 一致，observer `session_closed` 后不得再有 telemetry。audit sequence 不等于 Context sequence，Host 自产事件也不得使用 kernel source，observer snapshot 也不能反向充当 Analyst 的业务输入。validator 还要求 `/status.result.capability_mask`、`/context.result.provenance`、payload-byte `resource_used` 和 scheduler budget/used 均有真实非零证据；Research/Analyst artifact 则按所需 provenance bit subset/superset 验证，而不只检查非零。MESSAGE audit 的内核 `flags=0`，投影必须诚实保持 `provenance=0`，不能由 Guest 合成。
+- `agentos-nexus-deepseek` 是人工 live 入口。只有该次 provider 往返和 Guest 闭环实际完成，才能报告 live；它不是默认 CI 或可复现实验。
+
+四个业务 Agent 在 workflow/session boot 中创建并长驻；动态的是 Coordinator 是否委派、向谁委派和如何根据结果重规划，不是每个目标重建四个角色。artifact SHA-256 和发布审批仍是 Guest 用户态机制，不是内核签名或 V3 grant。`nexus_meas` 是来源固定的历史 published snapshot，`nexus_state` 才是本次 boot observation。完整产品与测量边界见 [AgentOS Nexus](nexus.md)。
+
 ## 6. 双目标与性能
 
 plain uCore 与 AgentOS-uCore 运行同一 deterministic 用户态科研工作流合同。`labdemo_ucore` 使用固定 policy，不依赖 LLM；这样 paired run 才能比较等量工作。端到端 paired run 用于整体比较；Credit Domain、Evidence Ring 或 Live Query 的单项性能结论还需要同内核消融、工作量计数或专项 benchmark，不能从双目标总差异直接归因。可选 `agentlive` 只验证模型 loop，不替换这一性能基线。

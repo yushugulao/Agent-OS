@@ -634,6 +634,9 @@ static uint64 agent_cap_for_action(char *action)
 		return AGENT_CAP_LLM_RELAY;
 	if (strncmp(action, "llm_request", AGENT_OP_PAYLOAD_SIZE) == 0)
 		return AGENT_CAP_MESSAGE_SEND;
+	if (strncmp(action, "query_process", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "get_system_status", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_PROCESS_READ;
 	if (strncmp(action, "query", AGENT_OP_PAYLOAD_SIZE) == 0 ||
 	    strncmp(action, "query_file", AGENT_OP_PAYLOAD_SIZE) == 0 ||
 	    strncmp(action, "read_meta", AGENT_OP_PAYLOAD_SIZE) == 0)

@@ -454,6 +454,22 @@ static TEST_NOINLINE void run_sentinel(int audit_gate_fd)
 		AGENT_STATUS_DENIED, "sentinel spoof cap");
 	check(security_sentinel_result.value1 == AGENT_ROLE_SENTINEL,
 	      "real sentinel role");
+	make_op(&security_sentinel_op, AGENT_TOOL_CAPABILITY_CHECK, 8109,
+		AGENT_ROLE_RECOVERY, "query_process");
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_OK, "sentinel process query capability");
+	check(security_sentinel_result.value0 == 1 &&
+	      security_sentinel_result.value1 == AGENT_ROLE_SENTINEL &&
+	      (security_sentinel_result.value2 & AGENT_CAP_PROCESS_READ) != 0,
+	      "sentinel process query binds real role and capability");
+	make_op(&security_sentinel_op, AGENT_TOOL_CAPABILITY_CHECK, 8110,
+		AGENT_ROLE_RECOVERY, "get_system_status");
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_OK, "sentinel system status capability");
+	check(security_sentinel_result.value0 == 1 &&
+	      security_sentinel_result.value1 == AGENT_ROLE_SENTINEL &&
+	      (security_sentinel_result.value2 & AGENT_CAP_PROCESS_READ) != 0,
+	      "sentinel system status binds real role and capability");
 	make_op(&security_sentinel_op, AGENT_TOOL_ACTION_COMMIT, 8105,
 		AGENT_ROLE_RECOVERY,
 		"label=align;run_id=RUN-999;namespace=lab-gene-x");

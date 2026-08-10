@@ -1175,6 +1175,89 @@ class LocalEndpointAndRenderingTests(unittest.TestCase):
         self.assertTrue(peer.closed.is_set())
         self.assertEqual(removed, [peer])
 
+        inbound = daemon._FairInboundQueue()
+        inbound_removed = []
+        inbound_peer = daemon._Peer(  # type: ignore[arg-type]
+            FakeSocket(),
+            role="observer",
+            inbound=inbound,
+            on_close=inbound_removed.append,
+        )
+        for index in range(daemon.MAX_PEER_INBOUND_QUEUE):
+            self.assertTrue(inbound_peer._queue_inbound({"type": "ping", "n": index}))
+        self.assertFalse(inbound_peer._queue_inbound({"type": "ping"}))
+        self.assertEqual(inbound.qsize(), daemon.MAX_PEER_INBOUND_QUEUE)
+        self.assertEqual(inbound_removed, [inbound_peer])
+
+        class BlockingSocket(FakeSocket):
+            def __init__(self) -> None:
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def sendall(self, _value):
+                self.started.set()
+                self.release.wait(1)
+
+        blocking_socket = BlockingSocket()
+        writing_peer = daemon._Peer(  # type: ignore[arg-type]
+            blocking_socket,
+            role="observer",
+            inbound=queue.Queue(),
+            on_close=lambda _peer: None,
+        )
+        writing_peer.writer.start()
+        self.assertTrue(writing_peer.send({"type": "telemetry", "event": "final"}))
+        self.assertTrue(blocking_socket.started.wait(1))
+        self.assertTrue(writing_peer.outbound.empty())
+        self.assertFalse(writing_peer.output_idle())
+
+        endpoints = daemon.LocalEndpoints.__new__(daemon.LocalEndpoints)
+        endpoints._lock = threading.Lock()
+        endpoints._controller = None
+        endpoints._observers = {writing_peer}
+        settled = threading.Event()
+        settle_thread = threading.Thread(
+            target=lambda: (endpoints.settle(timeout=0.5), settled.set())
+        )
+        settle_thread.start()
+        time.sleep(0.02)
+        self.assertFalse(settled.is_set())
+        blocking_socket.release.set()
+        self.assertTrue(settled.wait(1))
+        self.assertTrue(writing_peer.output_idle())
+        writing_peer.close()
+        writing_peer.writer.join(1)
+
+        class FairPeer:
+            def __init__(self, role) -> None:
+                self.role = role
+                self.closed = threading.Event()
+                self.sent = []
+
+            def send(self, value):
+                self.sent.append(value)
+                return True
+
+        observer = FairPeer("observer")
+        controller = FairPeer("controller")
+        fair = daemon._FairInboundQueue()
+        for _ in range(daemon.MAX_LOCAL_DRAIN + 2):
+            fair.put((observer, {"type": "ping"}))  # type: ignore[arg-type]
+        fair.put((controller, {"type": "ping"}))  # type: ignore[arg-type]
+
+        class FairEndpoints:
+            inbound = fair
+
+            @staticmethod
+            def is_current(_peer):
+                return True
+
+        service = daemon.InteractiveRelayDaemon.__new__(daemon.InteractiveRelayDaemon)
+        service.endpoints = FairEndpoints()
+        service._drain_local()
+        self.assertEqual(controller.sent, [{"type": "pong"}])
+        self.assertEqual(fair.qsize(), 3)
+
     def test_cli_commands_map_to_typed_messages(self) -> None:
         class FakeConnection:
             def __init__(self) -> None:
@@ -1232,17 +1315,30 @@ class LocalEndpointAndRenderingTests(unittest.TestCase):
                 "pid": 4,
                 "state": "WAITING_LLM",
                 "event": "llm_request",
-                "tool": "query_file",
+                "tool_id": 1002,
                 "corr_id": 12,
                 "status": "ok",
                 "context_seq": 37,
+                "source_pid": 4,
+                "target_pid": 9,
+                "sched_budget_used": 14,
+                "sched_vruntime": 21,
                 "provenance": "UNTRUSTED_TOOL_OUTPUT",
             },
             output,
             json_events=False,
         )
         value = output.getvalue()
-        for expected in ("1841", "WAITING_LLM", "query_file", "37", "UNTRUSTED"):
+        for expected in (
+            "1841",
+            "WAITING_LLM",
+            "1002",
+            "4->9",
+            "14",
+            "21",
+            "37",
+            "UNTRUSTED",
+        ):
             self.assertIn(expected, value)
 
 

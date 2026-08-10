@@ -12,6 +12,7 @@ AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是
 - [系统设计](docs/agentos/design.md)：当前内核架构与关键不变量。
 - [合同与 Agent Loop 边界](docs/agentos/task6-execution-contract.md)：ENFORCE V3、Guest model loop、Task Channel core 与 MCP/A2A object prototype。
 - [交互控制台](docs/agentos/interactive-console.md)：长驻 Guest session、双窗口 CLI/observer、动态审批与 replay/live 边界。
+- [AgentOS Nexus](docs/agentos/nexus.md)：四业务 Agent 长驻会话、动态委派、工件流转与严格 replay 边界。
 - [ABI 参考](docs/agentos/api.md)：用户接口、兼容项和错误语义。
 - [要求追踪](docs/agentos/requirements-traceability.md)：任务到源码与验证入口的映射。
 - [验证说明](docs/verification.md)：构建、功能、安全与性能测试入口。
@@ -131,6 +132,16 @@ make agentos-observe
 ```
 
 `agentos-console` 在一次 QEMU 启动内保留 Guest Agent Loop 和有界会话历史；Host CLI 只呈现事件并收集输入，daemon 只负责串口、本地路由、TLS 和 provider 翻译。模型选择的真实工具由 Guest 通过内核执行，第二窗口用 high-signal live snapshots 按 `turn_id`/`corr_id` 对齐，不是全量实时 trace。它默认显式使用 DeepSeek，`make agentos-console-deepseek` 是等价的清晰别名；无网络的固定脚本验收使用 `make agentos-console-replay`，不会静默从 live 切换成 replay。完整的双窗口步骤、slash 命令、25 秒审批、Ctrl-C 和验证边界见[交互控制台说明](docs/agentos/interactive-console.md)。
+
+需要展示同一 workflow 中四个独立业务 Agent 和动态委派时，使用增量 Nexus 入口：
+
+```bash
+make agentos-nexus
+# 同一 WSL 用户的第二个窗口：
+make agentos-nexus-observe
+```
+
+Nexus 在 boot 中创建并保留 Coordinator、System、Research、Analyst；Coordinator 根据模型建议和已验证 worker 结果决定是否及向谁委派。`make agentos-nexus-check` 只运行本地合同，`make agentos-nexus-replay` 才是固定 fixture 的真实 QEMU 验收，`make agentos-nexus-deepseek` 是不进入默认 CI 的 live 入口。TASK-over-MESSAGE、Guest SHA-256 工件、25 秒发布审批、kernel audit/snapshot observer 和历史 measurement capsule 的解释见 [AgentOS Nexus](docs/agentos/nexus.md)。
 
 与主演示分开的 Guest model loop 有独立 QEMU 入口：
 

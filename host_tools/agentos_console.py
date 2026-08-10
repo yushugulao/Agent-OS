@@ -27,7 +27,11 @@ def _split_run_arguments(values: Sequence[str]) -> tuple[list[str], list[str], P
     client: list[str] = []
     runtime_dir: Path | None = None
     index = 0
-    client_value_options = {"--script", "--event-timeout"}
+    client_value_options = {
+        "--script",
+        "--event-timeout",
+        "--expect-guest-profile",
+    }
     client_flags = {"--json-events", "--no-close-on-eof"}
     while index < len(values):
         value = values[index]
@@ -38,6 +42,10 @@ def _split_run_arguments(values: Sequence[str]) -> tuple[list[str], list[str], P
             client.append(value)
             index += 1
             continue
+        if any(value.startswith(f"{option}=") for option in client_value_options):
+            client.append(value)
+            index += 1
+            continue
         if value in client_value_options:
             if index + 1 >= len(values):
                 raise ValueError(f"{value} requires a value")
@@ -45,6 +53,13 @@ def _split_run_arguments(values: Sequence[str]) -> tuple[list[str], list[str], P
             index += 2
             continue
         daemon.append(value)
+        if value.startswith("--runtime-dir="):
+            runtime_value = value.split("=", 1)[1]
+            if not runtime_value:
+                raise ValueError("--runtime-dir requires a value")
+            runtime_dir = Path(runtime_value)
+            index += 1
+            continue
         if value == "--runtime-dir":
             if index + 1 >= len(values):
                 raise ValueError("--runtime-dir requires a value")
@@ -100,6 +115,20 @@ def _terminate_child_group(
 
 def run_combined(values: Sequence[str]) -> int:
     daemon_args, client_args, runtime_dir = _split_run_arguments(values)
+    guest_profile = "agentlive"
+    for index, value in enumerate(daemon_args):
+        if value == "--guest-profile" and index + 1 < len(daemon_args):
+            guest_profile = daemon_args[index + 1]
+        elif value.startswith("--guest-profile="):
+            guest_profile = value.split("=", 1)[1]
+    if (
+        guest_profile == "nexus"
+        and "--expect-guest-profile" not in client_args
+        and not any(
+            value.startswith("--expect-guest-profile=") for value in client_args
+        )
+    ):
+        client_args.extend(("--expect-guest-profile", "nexus"))
     state_file = _state_path(runtime_dir)
     command = [
         sys.executable,

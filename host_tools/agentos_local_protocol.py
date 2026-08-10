@@ -23,6 +23,7 @@ LOCAL_PROTOCOL = 1
 MAX_LOCAL_LINE_BYTES = 16 * 1024
 MAX_LOCAL_DEPTH = 32
 STATE_FILE_NAME = "latest.json"
+GUEST_PROFILES = frozenset(("agentlive", "nexus"))
 
 
 class LocalProtocolError(RuntimeError):
@@ -278,7 +279,10 @@ def publish_state(
     pid: int,
     provider: str,
     model: str,
+    guest_profile: str = "agentlive",
 ) -> None:
+    if not isinstance(guest_profile, str) or guest_profile not in GUEST_PROFILES:
+        raise ValueError("Guest profile is unsupported")
     state = {
         "protocol": LOCAL_PROTOCOL,
         "session_id": session_id,
@@ -286,6 +290,7 @@ def publish_state(
         "pid": pid,
         "provider": provider,
         "model": model,
+        "guest_profile": guest_profile,
         "control_socket": str(paths.control_socket),
         "telemetry_socket": str(paths.telemetry_socket),
     }
@@ -331,6 +336,11 @@ def load_state(path: Path | None = None) -> dict[str, object]:
             raise LocalProtocolError("AgentOS state file is malformed")
     if state["protocol"] != LOCAL_PROTOCOL:
         raise LocalProtocolError("AgentOS local protocol version is unsupported")
+    guest_profile = state.get("guest_profile")
+    if guest_profile is not None and (
+        not isinstance(guest_profile, str) or guest_profile not in GUEST_PROFILES
+    ):
+        raise LocalProtocolError("AgentOS state file has an unsupported Guest profile")
     return state
 
 

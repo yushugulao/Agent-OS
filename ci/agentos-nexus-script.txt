@@ -1,0 +1,12 @@
+# One QEMU boot: three Nexus turns, four business roles, replan, deny, close.
+/tools
+/status
+For RUN-042, discover System tools, delegate a System boot-state snapshot, and summarize only its returned process, scheduler, Context, and runtime facts.
+/context
+Delegate Research on nexus_meas. First use an invalid source handle, observe the structured failure, then replan with the valid local source and verify its historical published measurements and provenance.
+/context
+Delegate Analyst with the verified System and Research handles, read back its sourced report, then request publish_report. On denial, do not retry or claim publication; summarize the unpublished report.
+/deny
+/context
+/status
+/quit

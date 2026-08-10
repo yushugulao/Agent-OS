@@ -14,10 +14,11 @@
 | 4 | [security-hardening.md](security-hardening.md) | 威胁模型、fail-closed cut 与资源安全 |
 | 5 | [requirements-traceability.md](requirements-traceability.md) | 赛题任务到源码、静态检查和 Guest 验证的映射 |
 | 6 | [interactive-console.md](interactive-console.md) | 长驻 Guest Agent Loop、双窗口交互、动态审批和 observer 边界 |
-| 7 | [verification.md](verification.md) | 开发验证顺序和结果边界 |
-| 8 | [scenario-script.md](scenario-script.md) | 现场主演示、输出和专项观察点 |
-| 9 | [../verification.md](../verification.md) | 从环境检查到 QEMU、双目标和结果解释的运行说明 |
-| 10 | [../windows-quickstart.md](../windows-quickstart.md) | Windows/WSL 环境、工具链与 QEMU 快速开始 |
+| 7 | [nexus.md](nexus.md) | 四业务 Agent 长驻会话、动态委派、工件和 replay/live 边界 |
+| 8 | [verification.md](verification.md) | 开发验证顺序和结果边界 |
+| 9 | [scenario-script.md](scenario-script.md) | 现场主演示、输出和专项观察点 |
+| 10 | [../verification.md](../verification.md) | 从环境检查到 QEMU、双目标和结果解释的运行说明 |
+| 11 | [../windows-quickstart.md](../windows-quickstart.md) | Windows/WSL 环境、工具链与 QEMU 快速开始 |
 
 ## 任务附录
 
@@ -62,6 +63,8 @@ Credit Domain、Evidence Ring 和 Live Query 分别受到 Linux CPU accounting/p
 `make agent-live-demo` 构建 `user/src/agentlive_ucore.c` 并默认以 `ci/agent-live-replay.jsonl` 运行 6 轮同串口 replay；成功以顶层 `agentlive_ucore: parent passed` 收口。`make agent-live-demo-check` 只运行 `scripts/test-agent-live-loop.py` 与 Host relay 单测，不等于 QEMU 或 live provider 已运行。Linux/WSL 默认自动探测工具链，Windows xPack 可追加 `TOOLPREFIX=riscv-none-elf-`。真实 provider 的 Host 变量与边界见[根 README](../../README.md)和[验证说明](verification.md)。
 
 面向现场自由输入的产品入口是默认使用 DeepSeek 的 `make agentos-console`；它在获得 final 后保留 Guest/QEMU session，并可由第二窗口用 `make agentos-observe` 查看 high-signal live snapshots。`make agentos-console-deepseek` 是等价的清晰别名，`make agentos-console-replay` 则是一次 boot、并发 observer 的多回合固定脚本验收。三者的会话、25 秒动态审批、本地 socket、observer 扰动和结果解释见[交互控制台](interactive-console.md)。
+
+`AgentOS Nexus` 在该控制面的独立 Guest profile 上增加 Coordinator、System、Research、Analyst 四个长驻业务 Agent，以及 TASK-over-MESSAGE、Guest SHA-256 工件和动态委派。`agentos-nexus-check` 仅是本地合同；固定 fixture 的 QEMU 路径和 live DeepSeek 路径分别由 `agentos-nexus-replay`、`agentos-nexus-deepseek` 显式选择。完整边界见 [Nexus 产品合同](nexus.md)。
 
 ## 维护规则
 

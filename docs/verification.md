@@ -148,6 +148,16 @@ make agentos-console-deepseek TOOLPREFIX=riscv-none-elf-
 
 第一条只运行 Host 单测与 Guest 静态合同；第二条在一次真实 QEMU boot 中同时连接 controller 和 observer，以结构化 NDJSON 验收七个 digest-bound 模型请求、三回合工具路径、`waiting_llm`、fresh Context timeline 和正常关闭；第三条是人工 live provider 入口，不进入默认 CI。observer 只提供有测量扰动的 high-signal live snapshots，不是全量实时 trace 或独立安全边界。完整的双窗口步骤、25 秒动态审批、`/context` 字段和 Guest/Host 责任边界见[交互控制台说明](agentos/interactive-console.md)。
 
+四业务 Agent 的 Nexus 产品合同使用独立目标，不改变上述 console 或 `contest-demo`：
+
+```bash
+make agentos-nexus-check
+make agentos-nexus-replay TOOLPREFIX=riscv-none-elf-
+make agentos-nexus-deepseek TOOLPREFIX=riscv-none-elf-
+```
+
+`agentos-nexus-check` 不启动 QEMU。`agentos-nexus-replay` 只有在真实单 boot 脚本完成且 strict validator 通过后，才证明该固定 fixture 下的三回合闭环：四个独立业务 identity、TASK-over-MESSAGE 委派、successful terminal 后的 brokered artifact、Research/Analyst handle readback、报告事件中的两份来源完整 digest、实际 System process/context/file 数值与本 boot `sched_budget`，以及 final 中对应的稳定 System/budget 投影、历史 measurement canonical 数值和两份来源 handle；完整 System 工件与 kernel snapshot 仍保留会随调度变化的 dispatch、used 和 vruntime 事实。验收还包括失败后新任务重规划、精确发布审批拒绝零副作用，以及 Guest-origin `kernel_audit`/`kernel_snapshot` 中的等待唤醒、identity-bound control/capability、Context、payload-byte resource 和 scheduler account 对应。Research/Analyst artifact 按所需 provenance bit subset/superset 验证；内核 MESSAGE audit 没有 provenance，严格投影保留零值而不合成标签。fixture 每个模型响应必须绑定实际请求 SHA-256，controller 的 request/response、tool/TASK correlation、canonical arguments 和跨类型原始时序还要逐项匹配；ready 必须先于会话数据，active request ID 在 turn 内稳定且跨 turn 不复用，delegated TASK batch 先于并绑定对应 tool result，single-inflight 轮次必须满足 `request_i < response_i < 同 correlation effects < request_(i+1)`，final response 先于 `turn_complete`，close 后不得追加输出。空摘要或通配响应直接失败。`agentos-nexus-deepseek` 是人工 live 入口，不是 CI 或性能基准。历史 `nexus_meas` capsule 也不是本次 boot benchmark；完整解释见 [AgentOS Nexus](agentos/nexus.md)。
+
 ## 7. 性能测试
 
 专项性能测试直接运行产品负载，不依赖预置结果或 Host receipt：
