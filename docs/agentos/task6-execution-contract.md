@@ -217,7 +217,7 @@ make agent-live-demo
 
 `agent-live-demo-check` 运行 Guest/Host 静态集成与协议单测，不代替动态行为；`agent-live-demo` 默认使用 `ci/agent-live-replay.jsonl`，让 6 轮响应经过实际 QEMU 串口，并要求 discovery、工具/拒绝结果、`passed` 和唯一顶层 `agentlive_ucore: parent passed` marker。Windows xPack 环境可追加 `TOOLPREFIX=riscv-none-elf-`。真实 provider 仍需显式选择；key 只能由 Host 从受限单行文件或环境变量读取，未运行时不声称云模型结果。
 
-DeepSeek live 入口为 `AGENT_LIVE_PROVIDER=deepseek make agent-live-demo`。在当前目录布局中，Make 自动选择仓库外的 `../计算机操作系统能力竞赛/deepseek_api.txt`，否则回退 `DEEPSEEK_API_KEY`；也可显式设置 `AGENT_LIVE_API_KEY_FILE`、`AGENT_LIVE_MODEL` 或 `AGENT_LIVE_ENDPOINT`。key 文件内容不成为命令行参数，不进入 Guest 或 relay 日志。官方 endpoint、模型与 tool-call 格式见 [DeepSeek API 文档](https://api-docs.deepseek.com/quick_start/pricing)与[工具调用指南](https://api-docs.deepseek.com/guides/tool_calls)。
+DeepSeek live 入口为 `AGENT_LIVE_PROVIDER=deepseek make agent-live-demo`。Make 自动探测仓库外的 `../deepseek_api.txt` 与 `../计算机操作系统能力竞赛/deepseek_api.txt`，否则回退 `DEEPSEEK_API_KEY`；也可显式设置 `AGENT_LIVE_API_KEY_FILE`、`AGENT_LIVE_MODEL` 或 `AGENT_LIVE_ENDPOINT`。key 文件内容不成为命令行参数，不进入 Guest 或 relay 日志。官方 endpoint、模型与 tool-call 格式见 [DeepSeek API 文档](https://api-docs.deepseek.com/quick_start/pricing)与[工具调用指南](https://api-docs.deepseek.com/guides/tool_calls)。
 
 当前 `agenttask_ucore` 固定比较现有 `agent_run()` batch、contract-bound scalar V3 和 SQ/CQ 三条语义对照路径，每条执行 16 次空 `ECHO` 并产生 output artifact `NONE`。三者的线格式并不相同：batch 使用清零的 `agent_op`；scalar V3 为工具 schema 显式携带三个必需 typed params，即 `payload=""` string、`arg0=0` uint64、`arg1=0` uint64；SQ/CQ 使用 null input handle。Guest 验证相同的 OK/tool/Context-proof/evidence-proof/zero-result fingerprint；legacy batch 的 evidence-proof 来自 Context record hash，两个 contract-bound 路径使用 Evidence ticket，不能据此声称三者的 Evidence 表示相同。
 

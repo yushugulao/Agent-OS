@@ -80,7 +80,7 @@ make agent-live-demo
 AGENT_LIVE_PROVIDER=deepseek make agent-live-demo
 ```
 
-它默认使用官方 `deepseek-v4-flash`、`https://api.deepseek.com/chat/completions` 与 non-thinking tool mode，并优先读取仓库外的 `../计算机操作系统能力竞赛/deepseek_api.txt`；文件不存在时使用 Host 的 `DEEPSEEK_API_KEY`。可用 `AGENT_LIVE_API_KEY_FILE`、`AGENT_LIVE_MODEL` 和 `AGENT_LIVE_ENDPOINT` 覆写。non-thinking 是当前正确边界，因为 Guest 保存结构化工具历史，但不保存供应商 `reasoning_content`。只有 live 命令实际完成后才把结果称为 DeepSeek 实测；默认 replay 仍只证明相同 wire 与 Guest 状态机。
+它默认使用官方 `deepseek-v4-flash`、`https://api.deepseek.com/chat/completions` 与 non-thinking tool mode，并依次探测仓库外的 `../deepseek_api.txt` 和 `../计算机操作系统能力竞赛/deepseek_api.txt`；都不存在时使用 Host 的 `DEEPSEEK_API_KEY`。可用 `AGENT_LIVE_API_KEY_FILE`、`AGENT_LIVE_MODEL` 和 `AGENT_LIVE_ENDPOINT` 覆写。non-thinking 是当前正确边界，因为 Guest 保存结构化工具历史，但不保存供应商 `reasoning_content`。只有 live 命令实际完成后才把结果称为 DeepSeek 实测；默认 replay 仍只证明相同 wire 与 Guest 状态机。
 
 ## 建议演示顺序
 

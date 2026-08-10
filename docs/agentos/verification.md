@@ -143,7 +143,7 @@ AGENT_LIVE_PROVIDER=deepseek make agent-live-demo
 
 该入口默认选择官方 `https://api.deepseek.com/chat/completions` 与 `deepseek-v4-flash`。默认目标要求模型按 `query_file("agentlive.note") -> echo(size, inode) -> final` 形成真实数据依赖；Host 还要求 `query_file=1 echo=1 send_message=0`、零拒绝、`transcript_turns=2 retained=2 dropped=0` 和 relay 零错误 marker，避免模型跳过任务也被误判为成功。显式覆盖 `AGENT_LIVE_GOAL` 时不套用这组场景专属 marker，只保留通用完成门。
 
-Make 优先使用仓库外的 `../计算机操作系统能力竞赛/deepseek_api.txt`，找不到才让 relay 读取 `DEEPSEEK_API_KEY`；其他位置可显式设置 `AGENT_LIVE_API_KEY_FILE=/path/to/key.txt`。若改用环境变量，应令 `AGENT_LIVE_API_KEY_FILE=`，并可用 `AGENT_LIVE_API_KEY_ENV=ENV_NAME` 覆写默认名称。DeepSeek 请求关闭 thinking：当前 Guest whole-turn history 保存的是结构化 `tool_use`/`tool_result`，没有保存并回送供应商 `reasoning_content`，因此不能冒充符合 thinking-mode 的多轮协议。默认 replay 完全不访问网络；只有上述 live 命令实际完成并出现最终 Guest markers 后，才可报告为 DeepSeek 实测。
+Make 依次探测仓库外的 `../deepseek_api.txt` 与 `../计算机操作系统能力竞赛/deepseek_api.txt`，兼容竞赛目录内的普通 checkout 和同盘 release checkout；都找不到才让 relay 读取 `DEEPSEEK_API_KEY`。其他位置可显式设置 `AGENT_LIVE_API_KEY_FILE=/path/to/key.txt`。若改用环境变量，应令 `AGENT_LIVE_API_KEY_FILE=`，并可用 `AGENT_LIVE_API_KEY_ENV=ENV_NAME` 覆写默认名称。DeepSeek 请求关闭 thinking：当前 Guest whole-turn history 保存的是结构化 `tool_use`/`tool_result`，没有保存并回送供应商 `reasoning_content`，因此不能冒充符合 thinking-mode 的多轮协议。默认 replay 完全不访问网络；只有上述 live 命令实际完成并出现最终 Guest markers 后，才可报告为 DeepSeek 实测。
 
 ## 6. 双目标与性能
 
