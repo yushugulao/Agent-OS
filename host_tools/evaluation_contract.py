@@ -2360,16 +2360,16 @@ def _validate_complete_boot(
                         )
                 else:
                     baseline = by_role["baseline"]
-                    if baseline["work_units"] != FILE_META_CAPACITY * expected_operations:
+                    if baseline["work_units"] != baseline["records_examined"]:
                         raise EvaluationError(
-                            f"metadata ablation baseline is not a full-table scan in {source_ref}"
+                            f"metadata ablation baseline did not scan every visible record in {source_ref}"
                         )
-                    if baseline["records_examined"] % expected_operations != 0:
+                    if baseline["work_units"] % expected_operations != 0:
                         raise EvaluationError(
                             f"metadata ablation ambient census is not integral in {source_ref}"
                         )
                     visible_records = (
-                        baseline["records_examined"] // expected_operations
+                        baseline["work_units"] // expected_operations
                     )
                     ambient_records = visible_records - combination[1]
                     if ambient_records < 0:

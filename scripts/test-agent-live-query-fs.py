@@ -42,7 +42,9 @@ class AgentLiveQueryMutationTests(unittest.TestCase):
             CONTRACT.validate_sources(mutated)
 
     def test_autoscan_cannot_enter_resident_index(self) -> None:
-        self.rejected("catalog", "state==0&&(meta->flags&AGENT_FILE_META_F_AUTOSCAN)==0", "state==0")
+        self.rejected(
+            "catalog", "(meta->flags&AGENT_FILE_META_F_AUTOSCAN)==0", "1"
+        )
 
     def test_query_must_intersect_live_bitmap(self) -> None:
         self.rejected("catalog", "agent_catalog_live_query_bits[word]&visible", "visible")
@@ -129,7 +131,11 @@ class AgentLiveQueryMutationTests(unittest.TestCase):
         )
 
     def test_watch_install_returns_generation_handshake(self) -> None:
-        self.rejected("events", "agent_metadata_catalog_fence_generation", "agent_metadata_catalog_generation_snapshot")
+        self.rejected(
+            "events",
+            "agent_metadata_catalog_fence_generation",
+            "agent_metadata_catalog_generation",
+        )
 
     def test_typed_delta_has_enter(self) -> None:
         self.rejected_in_function(
@@ -173,9 +179,6 @@ class AgentLiveQueryMutationTests(unittest.TestCase):
 
     def test_proc_reuse_clears_subscriptions(self) -> None:
         self.rejected("ipc", "agent_live_query_proc_reset(p)", "")
-
-    def test_retired_store_is_not_built(self) -> None:
-        self.rejected("makefile", "$K/agent_metadata_store.c", "")
 
     def test_content_size_projection_is_generation_bound(self) -> None:
         self.rejected("file_state", "hit->fs_generation=snapshot.fs_generation", "hit->fs_generation=0")

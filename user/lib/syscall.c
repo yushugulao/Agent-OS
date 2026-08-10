@@ -1,6 +1,5 @@
 #include "syscall.h"
 #include <agent.h>
-#include <agent_metadata_test_abi.h>
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 #include <wait_atomic_test_abi.h>
 #endif
@@ -541,12 +540,6 @@ int tool_list(struct agent_tool_desc_v2 *out, int max)
 	return sys_tool_list(out, max);
 }
 
-int agent_observe_recovery(struct agent_observe_recovery_request *request,
-			   void *records)
-{
-	return syscall(SYS_agent_observe_recovery, request, records);
-}
-
 int context_push(struct agent_context_record *record)
 {
 	return syscall(SYS_context_push, record);
@@ -849,12 +842,6 @@ int agent_heartbeat_set(uint64 interval_ticks)
 int agent_heartbeat_stop(void)
 {
 	return sys_agent_heartbeat_stop();
-}
-
-int agent_metadata_test_arm_next(struct agent_metadata_test_arm *arm)
-{
-	return syscall(SYS_agent_metadata_test, AGENT_METADATA_TEST_ARM_NEXT,
-		       arm, sizeof(*arm));
 }
 
 #ifdef WAIT_ATOMIC_TEST_PROFILE

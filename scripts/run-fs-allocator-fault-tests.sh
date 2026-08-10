@@ -186,7 +186,7 @@ verify_case() {
 	"${PYTHON_BIN}" -I -S -B scripts/fs-allocator-image.py verify-case-raw \
 		"${before}" "${fault}" "${reboot}" \
 		--operation "${operation}" --phase "${phase}" --action "${action}" \
-		--require-metadata-cow --output "${output}"
+		--output "${output}"
 }
 
 build_profile_kernel

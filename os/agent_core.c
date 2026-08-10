@@ -984,6 +984,23 @@ agent_execution_provenance_reason(uint execution_reason)
 }
 
 static void
+agent_execution_publish_policy_denial(
+	struct proc *p, const struct agent_op *op,
+	const struct agent_result *res,
+	const struct agent_execution_claim *claim)
+{
+	if (p == 0 || op == 0 || res == 0 || claim == 0 ||
+	    res->status != AGENT_STATUS_DENIED || res->sequence == 0 ||
+	    claim->decision_reason !=
+		    AGENT_EXECUTION_REASON_CAPABILITY_MISSING ||
+	    op->tool_id != AGENT_TOOL_RERUN_STAGE)
+		return;
+	(void)agent_ipc_deliver_watchers(
+		p, AGENT_EVENT_POLICY_DENIED, op->request_id, res->sequence,
+		"action=action_commit;compat=rerun_stage");
+}
+
+static void
 agent_execution_provenance_request(
 	const struct agent_execution_claim *claim, const struct agent_op *op,
 	int bound, struct agent_provenance_request *request)
@@ -1183,6 +1200,8 @@ agent_execute_one(struct proc *p, struct agent_op *op,
 		    res->status == AGENT_STATUS_STALE) {
 			result = agent_execution_security_denial(
 				p, &claim, op, bound, res, outcome);
+			agent_execution_publish_policy_denial(
+				p, op, res, &claim);
 			goto out;
 		}
 		p->agent_call_count++;
@@ -1270,6 +1289,7 @@ agent_execute_one(struct proc *p, struct agent_op *op,
 			agent_execution_contract_complete(&claim, res, outcome);
 		else
 			agent_execution_contract_abort(&claim);
+		agent_execution_publish_policy_denial(p, op, res, &claim);
 		goto out;
 	}
 

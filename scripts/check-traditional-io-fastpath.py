@@ -481,8 +481,8 @@ def check(root: Path) -> None:
         "FAST", "DESCRIPTOR", "BLOCK_IO", "FS_EPOCH", "BLOCK_IO_FS_EPOCH"
     }
     allowed_features = {
-        "ALWAYS", "VIRTIO_TEST", "PHYSICAL_PAGE_TEST", "METADATA_TEST",
-        "WAIT_ATOMIC_TEST", "FS_ALLOCATOR_TEST",
+        "ALWAYS", "VIRTIO_TEST", "PHYSICAL_PAGE_TEST", "WAIT_ATOMIC_TEST",
+        "FS_ALLOCATOR_TEST",
     }
     for name, class_name, enabled in registry_entries:
         if class_name not in allowed_classes or enabled not in allowed_features:
@@ -511,7 +511,6 @@ def check(root: Path) -> None:
     expected_gates = {
         "virtio_disk_test": "VIRTIO_TEST",
         "physical_page_test": "PHYSICAL_PAGE_TEST",
-        "agent_metadata_test": "METADATA_TEST",
         "wait_atomic_test": "WAIT_ATOMIC_TEST",
         "fs_allocator_fault_test": "FS_ALLOCATOR_TEST",
     }

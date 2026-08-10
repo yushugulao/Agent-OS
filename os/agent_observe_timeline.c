@@ -611,22 +611,6 @@ int sys_agent_timeline_query(uint64 filteraddr, uint64 recordsaddr, int max)
 	return agent_timeline_export(p, &filter, recordsaddr, max, 0);
 }
 #define AGENT_TIMELINE_WAIT_RETRY 1
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-static void agent_timeline_test_point(uint operation, uint scope_id,
-				      uint64 scan_epoch, uint64 current_epoch)
-{
-	struct agent_observe_recovery_request request = {0};
-	uint64 bank_generation = 0;
-	uint returned = 0;
-	int status = AGENT_STATUS_OK;
-	request.operation = operation;
-	request.evidence.id = scope_id;
-	request.after_sequence = scan_epoch;
-	request.bank_generation = current_epoch;
-	(void)agent_observe_test_execute(&request, 0, &bank_generation,
-					 &returned, &status);
-}
-#endif
 static void agent_timeline_wait_finish(
 	struct proc *p, struct thread *t, struct agent_timeline_wait_state *state)
 {
@@ -652,10 +636,6 @@ static int agent_timeline_wait_enqueue_atomic(
 			goto timeline_timeout;
 		if (expired)
 			*deadline_rescan_used = 1;
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-		agent_timeline_test_point(AGENT_OBSERVE_TEST_TIMELINE_RECHECK,
-					  scope_id, scan_epoch, current_epoch);
-#endif
 		intr_restore(enabled);
 		return AGENT_TIMELINE_WAIT_RETRY;
 	}
@@ -723,10 +703,6 @@ static int agent_timeline_wait_for_match(struct proc *p,
 			return matched;
 		}
 		now = agent_observe_ticks();
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-		agent_timeline_test_point(AGENT_OBSERVE_TEST_TIMELINE_WINDOW,
-					  scope_id, scan_epoch, 0);
-#endif
 		wait_status = agent_timeline_wait_enqueue_atomic(
 			p, t, &state, filter, scope_id, scan_epoch, start, now,
 			timeout_ticks, &deadline_rescan_used);

@@ -1,5 +1,4 @@
 #include "agent_internal.h"
-#include "bio.h"
 #include "defs.h"
 #include "kernel_work.h"
 
@@ -11,15 +10,12 @@ static uint64 txn_next_ticket;
 static uint64 txn_serving_ticket;
 static uint txn_work_records;
 static int txn_reserved_turn;
-static int txn_projection_pending;
 static struct wait_queue txn_waiters;
 static char scheduler_token;
-static void *reload_owner;
 
 #define TXN_NOWAIT 0
 #define TXN_WAIT 1
-#define TXN_RELOCK 2
-#define TXN_EXTERNAL 3
+#define TXN_EXTERNAL 2
 
 void
 agent_metadata_init(void)
@@ -30,8 +26,6 @@ agent_metadata_init(void)
 	txn_serving_ticket = 1;
 	txn_work_records = 0;
 	txn_reserved_turn = 0;
-	txn_projection_pending = 0;
-	reload_owner = 0;
 	wait_queue_init(&txn_waiters, WAIT_REASON_AGENT_META);
 }
 
@@ -54,11 +48,9 @@ agent_metadata_txn_acquire(int mode)
 	uint64 ticket = 0;
 	int queued = 0;
 
-	if (mode == TXN_RELOCK && scheduler_context)
-		panic("scheduler metadata relock");
 	int enabled = intr_save();
 	if (mode == TXN_EXTERNAL) {
-		if (txn_owner != 0 || reload_owner != 0 ||
+		if (txn_owner != 0 ||
 		    (!scheduler_context &&
 		     txn_next_ticket != txn_serving_ticket))
 			goto unavailable;
@@ -92,12 +84,7 @@ agent_metadata_txn_acquire(int mode)
 			p->agent_meta_txn_wait_count++;
 		if (wait_queue_sleep_irq_uninterruptible(&txn_waiters) !=
 		    WAIT_QUEUE_OK)
-			panic("%s", mode == TXN_RELOCK ? "metadata relock failed" :
-			      "metadata transaction wait failed");
-		if (mode == TXN_RELOCK) {
-			intr_restore(enabled);
-			enabled = intr_save();
-		}
+			panic("metadata transaction wait failed");
 	}
 take:
 	txn_owner = token;
@@ -136,8 +123,7 @@ agent_metadata_txn_unlock(void)
 {
 	int enabled = intr_save();
 
-	if (!agent_metadata_txn_owned(0) ||
-	    (txn_depth == 1 && txn_projection_pending))
+	if (!agent_metadata_txn_owned(0))
 		panic("Agent metadata transaction invariant");
 	txn_depth--;
 	if (txn_depth == 0) {
@@ -150,25 +136,6 @@ agent_metadata_txn_unlock(void)
 			wait_queue_wake_one(&txn_waiters);
 	}
 	intr_restore(enabled);
-}
-
-void agent_metadata_txn_projection_transition(int pending) {
-	pending = !!pending;
-	if (!agent_metadata_txn_owned(0) ||
-	    pending == txn_projection_pending)
-		panic("Agent metadata transaction invariant");
-	txn_projection_pending = pending;
-}
-
-void agent_metadata_txn_projection_require_idle(void) {
-	if (!agent_metadata_txn_owned(0) || txn_projection_pending)
-		panic("Agent metadata transaction invariant");
-}
-
-void
-agent_metadata_txn_relock_uninterruptible(void)
-{
-	(void)agent_metadata_txn_acquire(TXN_RELOCK);
 }
 
 void
@@ -192,35 +159,6 @@ agent_metadata_txn_work_charge(uint records)
 	}
 }
 
-static struct bio_checkpoint_result
-agent_metadata_txn_checkpoint_mode(int cleanup)
-{
-	if (!agent_metadata_txn_owned(0) || txn_projection_pending)
-		panic("metadata checkpoint invariant");
-	if (agent_metadata_txn_token() == &scheduler_token)
-		return bio_request_checkpoint();
-	int depth = txn_depth;
-	for (int i = 0; i < depth; i++)
-		agent_metadata_txn_unlock();
-	struct bio_checkpoint_result checkpoint =
-		cleanup ? bio_request_checkpoint_cleanup() :
-			  bio_request_checkpoint();
-	for (int i = 0; i < depth; i++)
-		agent_metadata_txn_relock_uninterruptible();
-	return checkpoint;
-}
-
-struct bio_checkpoint_result agent_metadata_txn_checkpoint_unlocked(void)
-{
-	return agent_metadata_txn_checkpoint_mode(0);
-}
-
-struct bio_checkpoint_result
-agent_metadata_txn_checkpoint_cleanup_unlocked(void)
-{
-	return agent_metadata_txn_checkpoint_mode(1);
-}
-
 int
 agent_metadata_txn_owned(int exact_depth)
 {
@@ -233,12 +171,6 @@ agent_metadata_txn_require_owned(int exact_depth, const char *reason)
 {
 	if (!agent_metadata_txn_owned(exact_depth))
 		panic("%s", reason);
-}
-
-int
-agent_metadata_txn_depth(void)
-{
-	return agent_metadata_txn_owned(0) ? txn_depth : 0;
 }
 
 void
@@ -261,33 +193,4 @@ agent_metadata_proc_runtime_snapshot(
 			snapshot->metadata_txn_waiters++;
 	}
 	intr_restore(enabled);
-}
-
-int
-agent_metadata_reload_available(void)
-{
-	return reload_owner == 0 || agent_metadata_reload_is_current();
-}
-
-int
-agent_metadata_reload_is_current(void)
-{
-	return reload_owner == agent_metadata_txn_token();
-}
-
-int
-agent_metadata_reload_claim(void)
-{
-	if (!agent_metadata_reload_available())
-		return 0;
-	reload_owner = agent_metadata_txn_token();
-	return 1;
-}
-
-void
-agent_metadata_reload_release(void)
-{
-	if (!agent_metadata_reload_is_current())
-		panic("metadata reload owner");
-	reload_owner = 0;
 }

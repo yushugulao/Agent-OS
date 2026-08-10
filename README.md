@@ -4,7 +4,7 @@
 
 # AgentOS-uCore
 
-AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是计算机操作系统能力竞赛系统功能实现赛道作品。项目把 Agent 身份、Context Path、声明式执行合同、结构化/异步工具调用、provenance 数据流边界、workflow 资源与调度、实时文件查询和可验证 fence 放入内核；语义规划、LLM、MCP/A2A 远程协议和科研 Agent 平台仍在用户态。
+AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是计算机操作系统能力竞赛系统功能实现赛道作品。项目把 Agent 身份、Context Path、声明式执行合同、结构化工具调用、Task SQ/CQ、provenance 数据流边界、workflow 资源与调度、实时文件查询和可验证 fence 放入内核；当前 Task provider 同步完成，语义规划、LLM、MCP/A2A 远程协议和科研 Agent 平台仍在用户态。
 
 ## 评审入口
 
@@ -14,8 +14,14 @@ AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是
 - [ABI 参考](docs/agentos/api.md)：用户接口、兼容项和错误语义。
 - [要求追踪](docs/agentos/requirements-traceability.md)：任务到源码与验证入口的映射。
 - [验证说明](docs/verification.md)：构建、功能、安全与性能测试入口。
+- [Windows 快速开始](docs/windows-quickstart.md)：依赖、WSL/MSYS2 与 QEMU 运行方法。
+- [现场演示脚本](docs/agentos/scenario-script.md)：主演示、专项程序和观察点。
+- [实测性能结果](docs/contest/performance-results.md)：真实 QEMU 的 scan/index 配对数据与复测命令。
+- [双目标说明](docs/dual-targets.md)：plain uCore 与 AgentOS-uCore 的边界和比较方法。
+- [AI 工具使用披露](docs/contest/ai-usage-disclosure.md)：开发辅助工具与运行时边界。
+- [视频与幻灯片入口](%E9%A1%B9%E7%9B%AE%E4%BB%8B%E7%BB%8D%E8%A7%86%E9%A2%91%E5%92%8Cppt%E7%BD%91%E7%9B%98%E9%93%BE%E6%8E%A5.txt)：外部展示材料链接。
 
-项目以实际构建、QEMU Guest 行为和可重复的性能负载判断产品状态。测试输出用于定位问题和复核结果，不再叠加与产品行为无关的发布门。
+项目以实际构建、QEMU Guest 行为和可重复的性能负载判断产品状态。测试输出用于定位问题和复核结果，不以材料封装替代产品行为。
 
 ## 当前核心设计
 
@@ -23,7 +29,7 @@ AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是
 | --- | --- |
 | Agent Workflow Credit Domain | 每个资源账户维护 `used/pending/free`（U/P/F）credit。补充额度时批量预充，普通 commit/cancel/release 只在本地三态间移动；额度不足、资源压力、context switch、账户推进或 workflow fence 才 trim/汇总。全局硬容量和账户硬限额始终按 `U+P+F` 验证。 |
 | Fence-Sealed Evidence Ring | 每个 workflow 按需计费 4 页，普通区 48 槽、关键区 16 槽。普通成功 Context 只写一次 canonical ring 记录；拒绝或有授权效果的关键记录同时保留兼容 ledger 投影。fence 把有序事件、gap、challenge、metadata generation 和 credit digest 密封为 SHA-256 根。 |
-| Agent Live-Query FS | 只有显式 `agent_file_meta_set()` 的记录进入内存 catalog 和 `status/stage/kind` 选择性索引。typed watch 根据谓词变化产生 `ENTER/UPDATE/LEAVE`，队列不足或增量丢失时产生带 generation 的 `RESYNC_REQUIRED`。不扫描普通目录，不写 metadata catalog 磁盘快照，也不提供 crash catalog recovery。 |
+| Agent Live-Query FS | 只有显式 `agent_file_meta_set()` 的记录进入当前启动周期的内存 catalog 和 `status/stage/kind` 选择性索引。typed watch 根据谓词变化产生 `ENTER/UPDATE/LEAVE`，队列不足或增量丢失时产生带 generation 的 `RESYNC_REQUIRED`。普通目录不会自动进入 catalog。 |
 | 收敛 lifecycle | workflow 以不可变 `id + generation` 标识，核心状态是 `member_refcount + closing`。operation、departure 和 fence gate 阻止新旧操作穿越 cut；最后成员离开后才允许回收资源域。不存在对外宣称的多阶段 retirement workflow。 |
 | Declarative Execution Contract | 每个 lifecycle generation 最多冻结一份 24-node DAG。节点声明 tool/schema、合法前驱、capability/provenance/effect、artifact、deadline、retry/cancel 和 exec/storage envelope；V3 工具调用必须引用合同节点与精确 predecessor Context。内核只验证结构，不理解自然语言。 |
 | Tool Phase Credit Lease | 工具开始前从 workflow 已计入 U 的 exec/storage credit 原子锁定 envelope；分配 claim 带 nonce，失败 refund，未用量在完成/失败/取消/超时结算为 F。lease 不增加 `U+P+F` 硬额度。 |
@@ -35,12 +41,10 @@ AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是
 ## 语义边界
 
 - Workflow fence 返回 320 字节 receipt，绑定 request id、challenge、fence sequence、精确 credit 使用量、metadata generation、事件范围、gap 数和前后根。`PARTIAL_COVERAGE` 是显式标志：当前根覆盖 Evidence Ring 的规范事件，不声称覆盖整个文件系统或所有调度事实。
-- `CREDIT_EXACT` 表示 fence gate 内已 trim exec/storage 账户，`pending == 0`，receipt 的 `resource_used[]` 是该 cut 的精确 U 值。它不表示资源数据本身持久化。
-- `EVIDENCE_SEALED` 表示 challenge-bound 内存证据根已经发布；不是磁盘 durable receipt，也不证明掉电恢复。
+- `CREDIT_EXACT` 表示 fence gate 内已 trim exec/storage 账户，`pending == 0`，receipt 的 `resource_used[]` 是该 cut 的精确 U 值；它只描述该次 cut。
+- `EVIDENCE_SEALED` 表示 challenge-bound 的当前启动周期内存证据根已经发布；它不是外部签名或全系统证明。
 - `METADATA_VOLATILE` 明确表示 metadata generation 属于当前启动周期的内存 catalog。
 - audit、timeline、provenance 和 ledger API 仍作为兼容读取视图存在。普通成功 Context 的 canonical 存储来自 Evidence Ring；关键记录或 ring 写入失败时才走受保护的兼容 ledger 路径。因此不能把兼容视图描述为完全删除。
-- `AGENT_FILE_META_F_PERSIST` 与 `AGENT_FILE_META_F_AUTOSCAN` 只为源码/ABI 兼容保留，当前显式 metadata 写入若携带这些标志会返回 `AGENT_STATUS_BAD_PARAM`。
-- observe recovery syscall 号仍被保留以避免编号复用，但内核固定返回 `AGENT_STATUS_BAD_PARAM`；不存在可枚举、读取或 reap 的 observation crash-recovery catalog。
 - scalar V2 tool call 与 `agent_run()` batch 保留。V3 保留 V2 ABI 前缀并追加 frozen contract binding；lifecycle info V3 也保留 64 字节 V2 前缀。
 - provenance 标签只表达固定来源并保守传播，不表示内核理解文本或判断 prompt injection。安全主张是计划外副作用不能越过结构化合同/capability/dataflow gate。
 - Task Channel 的 exactly-once 只表示每个 accepted target 有一个 terminal CQE，不表示任意远程工具具备分布式 exactly-once；timer 只标记/唤醒，hard deadline 到第一个可调度 safe point 才结算，不提供 wall-clock completion bound。
@@ -61,6 +65,8 @@ AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是
 
 `baseline_ucore/` 是共享通用修复但不包含 AgentOS 子系统的对照目标，不是未经修改的上游镜像。双目标总耗时用于端到端比较；单项内核机制归因需要同内核消融或专项计数。
 
+题面硬门槛和代表 Guest 如下：任务一验证 Agent/普通进程共存与 Context 映射；任务二验证至少 3 个结构化工具；任务三验证至少 5 轮连续调用及有界淘汰；任务四覆盖至少 2 类文件查询扩展并做 scan/index 对比；任务五覆盖 heartbeat 与事件驱动等待；任务六在 QEMU 综合场景中整合至少 3 个已实现模块。逐项源码、命令和判定边界见[要求追踪](docs/agentos/requirements-traceability.md)。
+
 ## 快速构建
 
 Windows 首次检查：
@@ -69,14 +75,16 @@ Windows 首次检查：
 .\scripts\check-windows-prereqs.ps1
 ```
 
-在配置好的 Linux、WSL 或项目工具链环境中：
+在配置好的 Linux、WSL 或项目工具链环境中，先让 Makefile 自动选择交叉编译器：
 
 ```bash
 make doctor
-make build TOOLPREFIX=riscv-none-elf-
-make agent-module-check TOOLPREFIX=riscv-none-elf-
-make kernel-stack-check TOOLPREFIX=riscv-none-elf-
+make build
+make agent-module-check
+make kernel-stack-check
 ```
+
+自动选择会优先使用 `riscv64-unknown-elf-`，否则使用 Ubuntu/WSL 软件包提供的 `riscv64-linux-gnu-`。Windows xPack 等裸机工具链通常使用 `riscv-none-elf-`；若它不在自动选择范围内，请给上述命令追加 `TOOLPREFIX=riscv-none-elf-`。安装方式和 Windows 路径示例见 [Windows 快速开始](docs/windows-quickstart.md)。
 
 核心机制的 Host 模型/变异测试：
 
@@ -96,19 +104,27 @@ python -B host_tools/test_mcp_a2a_gateway.py
 需要 Guest 行为时再运行：
 
 ```bash
-make agentos-test TOOLPREFIX=riscv-none-elf-
-make dual-platform-run TOOLPREFIX=riscv-none-elf-
+make agentos-test
+make dual-platform-run
 ```
+
+现场综合演示：
+
+```bash
+make contest-demo
+```
+
+该命令默认运行 4 个等量 AB/BA QEMU 样本并写入 `results/contest-demo/`；主要结果为 `report.md`、`summary.json`、`measurements.csv` 和逐样本串口日志。这些文件只描述本次运行。当前源码的一次真实测量摘要见[实测性能结果](docs/contest/performance-results.md)，演示内容与专项程序见[现场演示脚本](docs/agentos/scenario-script.md)。
 
 也可以直接运行最相关的产品场景，缩短修改后的反馈时间：
 
 ```bash
-AGENT_TEST_CASE=agentsecurity_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentsecurity_ucore make agentos-test
+AGENT_TEST_CASE=agenttask_ucore make agentos-test
+AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test
 ```
 
-这里的 `Evidence Ring` 是内核产品的运行期安全审计能力；它与已经移除的 Host 发布证据包没有关系。详细测试选择见 [验证说明](docs/verification.md)。
+这里的 `Evidence Ring` 是当前启动周期内的内核安全审计能力。详细测试选择和结果解释见 [验证说明](docs/verification.md)。
 
 ## 仓库结构
 

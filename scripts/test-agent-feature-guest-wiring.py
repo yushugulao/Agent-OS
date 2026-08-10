@@ -130,6 +130,20 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
                 )
                 self.assertIn(f"\t{guest})", self.runner)
 
+    def test_targeted_runner_can_publish_the_real_guest_log(self) -> None:
+        self.assertIn(
+            'if [[ -n "${AGENT_TEST_GUEST_LOG_FILE:-}" ]]',
+            self.runner,
+        )
+        self.assertIn(
+            'log_file="${AGENT_TEST_GUEST_LOG_FILE}"',
+            self.runner,
+        )
+        self.assertIn(
+            "AGENT_TEST_GUEST_LOG_FILE requires AGENT_TEST_CASE",
+            self.runner,
+        )
+
     def test_exact_markers_match_guest_runner_and_validator(self) -> None:
         for guest, markers in MARKERS.items():
             source = read(ROOT / "user" / "src" / f"{guest}.c")

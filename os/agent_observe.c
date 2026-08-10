@@ -36,9 +36,8 @@ agent_observe_record_context_ticket(struct proc *p,
 		    &evidence_ticket) == 0) {
 		/* The canonical ring owns storage; this call only wakes readers. */
 		agent_observe_timeline_record_context(p, record);
-		/* Migration rare path: deny/authority evidence is immediately
-		 * sealed by one legacy projection. Successful ordinary events never
-		 * pay its durable receipt or hash-chain cost. */
+		/* Critical evidence also enters the bounded compatibility ledger;
+		 * ordinary success needs no duplicate ledger record. */
 		if (authority_effect || record->status != AGENT_STATUS_OK)
 			agent_observe_ledger_record_context(
 				p, record, span_owner, source_pid, cause_control,
@@ -47,7 +46,7 @@ agent_observe_record_context_ticket(struct proc *p,
 		*ticket_out = evidence_ticket;
 		return evidence_ticket != 0 ? 0 : -1;
 	}
-	/* Fail closed to the legacy protected ledger during migration. */
+	/* Preserve critical evidence in the protected compatibility ledger. */
 	agent_observe_timeline_record_context(p, record);
 	agent_observe_ledger_record_context(
 		p, record, span_owner, source_pid, cause_control,

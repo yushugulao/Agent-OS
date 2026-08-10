@@ -26,115 +26,6 @@ FS_QUOTA_WORKFLOW_BLOCK_RESERVE="${FS_QUOTA_WORKFLOW_BLOCK_RESERVE:-64}"
 FS_QUOTA_SYSTEM_BLOCK_RESERVE="${FS_QUOTA_SYSTEM_BLOCK_RESERVE:-64}"
 FS_QUOTA_WORKFLOW_INODE_RESERVE="${FS_QUOTA_WORKFLOW_INODE_RESERVE:-4}"
 FS_QUOTA_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE:-4}"
-# 两个定容 bank 各占用 217 个数据块和一张间接表。仅扩展 AgentOS 镜像，
-# 使 genesis 前的数据区与原始压力 fixture 保持相同大小。
-AGENT_META_GENESIS_BLOCKS=436
-AGENT_META_GENESIS_INODES=2
-
-read -r calculated_genesis_blocks calculated_genesis_inodes < <(
-"${PYTHON_BIN}" - <<'PY'
-from host_tools.agent_metadata_disk_format import load_contract
-from host_tools import plain_ucore_fs_extract as fs
-
-layout = load_contract()
-capacity = (
-    layout.header_bytes
-    + layout.durable_arena_bytes
-    + layout.max_count * layout.record_bytes
-)
-data_blocks = (capacity + fs.BSIZE - 1) // fs.BSIZE
-mapping_blocks = 1 if data_blocks > fs.NDIRECT else 0
-print(
-    len(layout.bank_names) * (data_blocks + mapping_blocks),
-    len(layout.bank_names),
-)
-PY
-)
-if [[ "${calculated_genesis_blocks}" -ne ${AGENT_META_GENESIS_BLOCKS} ||
-      "${calculated_genesis_inodes}" -ne ${AGENT_META_GENESIS_INODES} ]]; then
-	echo "[fs-enospc] metadata genesis block contract drift: " \
-		"expected ${AGENT_META_GENESIS_BLOCKS}/${AGENT_META_GENESIS_INODES}, " \
-		"actual ${calculated_genesis_blocks}/${calculated_genesis_inodes}" >&2
-	exit 1
-fi
-
-agent_image_blocks() {
-	local original="$1" original_inodes="$2"
-	local expanded_inodes=$(( original_inodes + AGENT_META_GENESIS_INODES ))
-	local original_maps original_inode_blocks expanded_inode_blocks
-	local original_root_data expanded_root_data root_growth target_growth
-	local candidate candidate_maps next
-
-	original_maps=$(( (original + 8191) / 8192 + (original + 255) / 256 ))
-	original_inode_blocks=$(( (original_inodes + 7) / 8 ))
-	expanded_inode_blocks=$(( (expanded_inodes + 7) / 8 ))
-	original_root_data=$(( (original_inodes * 16 + 1023) / 1024 ))
-	expanded_root_data=$(( (expanded_inodes * 16 + 1023) / 1024 ))
-	root_growth=$(( expanded_root_data - original_root_data +
-		(expanded_root_data > 12 ? 1 : 0) -
-		(original_root_data > 12 ? 1 : 0) ))
-	target_growth=$(( AGENT_META_GENESIS_BLOCKS + root_growth ))
-	candidate=$(( original + target_growth +
-		expanded_inode_blocks - original_inode_blocks ))
-	while :; do
-		candidate_maps=$(( (candidate + 8191) / 8192 +
-			(candidate + 255) / 256 ))
-		next=$(( original + target_growth + candidate_maps - original_maps +
-			expanded_inode_blocks - original_inode_blocks ))
-		[[ ${next} -eq ${candidate} ]] && break
-		candidate=${next}
-	done
-	printf '%s\n' "${candidate}"
-}
-
-assert_genesis_geometry() {
-	local original="$1" original_inodes="$2" expanded="$3" expanded_inodes="$4"
-	local original_maps expanded_maps original_inode_blocks expanded_inode_blocks
-	local original_root_data expanded_root_data root_growth usable_delta
-
-	original_maps=$(( (original + 8191) / 8192 + (original + 255) / 256 ))
-	expanded_maps=$(( (expanded + 8191) / 8192 + (expanded + 255) / 256 ))
-	original_inode_blocks=$(( (original_inodes + 7) / 8 ))
-	expanded_inode_blocks=$(( (expanded_inodes + 7) / 8 ))
-	original_root_data=$(( (original_inodes * 16 + 1023) / 1024 ))
-	expanded_root_data=$(( (expanded_inodes * 16 + 1023) / 1024 ))
-	root_growth=$(( expanded_root_data - original_root_data +
-		(expanded_root_data > 12 ? 1 : 0) -
-		(original_root_data > 12 ? 1 : 0) ))
-	usable_delta=$(( expanded - expanded_maps - expanded_inode_blocks -
-		root_growth - original + original_maps + original_inode_blocks ))
-	if [[ ${usable_delta} -ne ${AGENT_META_GENESIS_BLOCKS} ]]; then
-		echo "[fs-enospc] metadata genesis geometry drift: " \
-			"${original}->${expanded} adds ${usable_delta} usable blocks" >&2
-		exit 1
-	fi
-	if [[ $((expanded_inodes - original_inodes)) -ne ${AGENT_META_GENESIS_INODES} ]]; then
-		echo "[fs-enospc] metadata genesis inode compensation drift" >&2
-		exit 1
-	fi
-}
-
-FS_AGENT_INODES=$(( FS_INODES + AGENT_META_GENESIS_INODES ))
-FS_QUOTA_DOMAIN_AGENT_INODES=$(( FS_QUOTA_DOMAIN_INODES + AGENT_META_GENESIS_INODES ))
-FS_QUOTA_RESERVE_AGENT_INODES=$(( FS_QUOTA_RESERVE_INODES + AGENT_META_GENESIS_INODES ))
-FS_PERSIST_AGENT_INODES=$(( FS_PERSIST_INODES + AGENT_META_GENESIS_INODES ))
-FS_AGENT_BLOCKS="$(agent_image_blocks "${FS_BLOCKS}" "${FS_INODES}")"
-FS_QUOTA_DOMAIN_AGENT_BLOCKS="$(agent_image_blocks \
-	"${FS_QUOTA_DOMAIN_BLOCKS}" "${FS_QUOTA_DOMAIN_INODES}")"
-FS_QUOTA_RESERVE_AGENT_BLOCKS="$(agent_image_blocks \
-	"${FS_QUOTA_RESERVE_BLOCKS}" "${FS_QUOTA_RESERVE_INODES}")"
-FS_PERSIST_AGENT_BLOCKS="$(agent_image_blocks \
-	"${FS_PERSIST_BLOCKS}" "${FS_PERSIST_INODES}")"
-assert_genesis_geometry "${FS_BLOCKS}" "${FS_INODES}" \
-	"${FS_AGENT_BLOCKS}" "${FS_AGENT_INODES}"
-assert_genesis_geometry "${FS_QUOTA_DOMAIN_BLOCKS}" \
-	"${FS_QUOTA_DOMAIN_INODES}" "${FS_QUOTA_DOMAIN_AGENT_BLOCKS}" \
-	"${FS_QUOTA_DOMAIN_AGENT_INODES}"
-assert_genesis_geometry "${FS_QUOTA_RESERVE_BLOCKS}" \
-	"${FS_QUOTA_RESERVE_INODES}" "${FS_QUOTA_RESERVE_AGENT_BLOCKS}" \
-	"${FS_QUOTA_RESERVE_AGENT_INODES}"
-assert_genesis_geometry "${FS_PERSIST_BLOCKS}" "${FS_PERSIST_INODES}" \
-	"${FS_PERSIST_AGENT_BLOCKS}" "${FS_PERSIST_AGENT_INODES}"
 TMPDIR_FS="$(mktemp -d)"
 SPONSOR_HOST="${TMPDIR_FS}/fixture/bin/pqsponsor"
 trap 'rm -rf "${TMPDIR_FS}"' EXIT
@@ -190,10 +81,6 @@ build_image() {
 		-DFS_STORAGE_TINY_TEST_PROFILE=1 "${mkfs_sources[@]}"
 	host_probe_run "${TMPDIR_FS}/${tag}-mkfs" "${TMPDIR_FS}/${tag}.img" \
 		"${image_files[@]}"
-	if [[ -z "${tree}" ]]; then
-		"${PYTHON_BIN}" host_tools/agent_metadata_disk_format.py \
-			--image "${TMPDIR_FS}/${tag}.img" --stage genesis >/dev/null
-	fi
 }
 
 snapshot_image_usage() {
@@ -272,11 +159,11 @@ check_mkfs_capacity_contract() {
 	local log="${TMPDIR_FS}/mkfs-capacity.log"
 
 	host_probe_compile "${TMPDIR_FS}/unfunded-mkfs" \
-		-DNINODE="${FS_AGENT_INODES}" -DFSSIZE="${FS_AGENT_BLOCKS}" \
-		-DFS_WORKFLOW_BLOCK_RESERVE="${FS_AGENT_BLOCKS}" \
-		-DFS_SYSTEM_BLOCK_RESERVE="${FS_AGENT_BLOCKS}" \
-		-DFS_WORKFLOW_INODE_RESERVE="${FS_AGENT_INODES}" \
-		-DFS_SYSTEM_INODE_RESERVE="${FS_AGENT_INODES}" \
+		-DNINODE="${FS_INODES}" -DFSSIZE="${FS_BLOCKS}" \
+		-DFS_WORKFLOW_BLOCK_RESERVE="${FS_BLOCKS}" \
+		-DFS_SYSTEM_BLOCK_RESERVE="${FS_BLOCKS}" \
+		-DFS_WORKFLOW_INODE_RESERVE="${FS_INODES}" \
+		-DFS_SYSTEM_INODE_RESERVE="${FS_INODES}" \
 		-DFS_WORKFLOW_BLOCK_MIN_PER_SCOPE=1 \
 		-DFS_WORKFLOW_INODE_MIN_PER_SCOPE=1 \
 		-DFS_SYSTEM_BLOCK_MIN_RESERVE=1 \
@@ -294,28 +181,6 @@ check_mkfs_capacity_contract() {
 		exit 1
 	fi
 	echo "[fs-enospc] mkfs capacity contract passed"
-
-	host_probe_compile "${TMPDIR_FS}/undersized-genesis-mkfs" \
-		-DNINODE="${FS_INODES}" -DFSSIZE="${AGENT_META_GENESIS_BLOCKS}" \
-		-DFS_WORKFLOW_BLOCK_RESERVE=1 -DFS_SYSTEM_BLOCK_RESERVE=1 \
-		-DFS_WORKFLOW_INODE_RESERVE=1 -DFS_SYSTEM_INODE_RESERVE=1 \
-		-DFS_WORKFLOW_BLOCK_MIN_PER_SCOPE=1 \
-		-DFS_WORKFLOW_INODE_MIN_PER_SCOPE=1 \
-		-DFS_SYSTEM_BLOCK_MIN_RESERVE=1 \
-		-DFS_SYSTEM_INODE_MIN_RESERVE=1 \
-		-DFS_STORAGE_TINY_TEST_PROFILE=1 \
-		nfs/fs.c nfs/host_image_snapshot.c
-	if host_probe_run "${TMPDIR_FS}/undersized-genesis-mkfs" \
-		"${TMPDIR_FS}/undersized-genesis.img" >"${log}" 2>&1; then
-		echo "[fs-enospc] mkfs accepted undersized metadata genesis" >&2
-		exit 1
-	fi
-	if ! grep -q "image cannot fit canonical metadata genesis" "${log}"; then
-		echo "[fs-enospc] mkfs genesis rejection lacked diagnostic" >&2
-		cat "${log}" >&2
-		exit 1
-	fi
-	echo "[fs-enospc] mkfs genesis capacity contract passed"
 }
 
 check_baseline_root_geometry() {
@@ -420,7 +285,7 @@ check_mkfs_capacity_contract
 check_baseline_root_geometry
 mkdir -p "$(dirname "${SPONSOR_HOST}")"
 dd if=/dev/zero of="${SPONSOR_HOST}" bs=1024 count=13 status=none
-build_image "" agent "${FS_AGENT_BLOCKS}" "${FS_AGENT_INODES}" fsenospc_ucore agent \
+build_image "" agent "${FS_BLOCKS}" "${FS_INODES}" fsenospc_ucore agent \
 	1 1 1 1
 make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
 	INIT_PROC=fsenospc_ucore FS_ICACHE_SIZE="${FS_CACHE_INODES}" \
@@ -433,8 +298,8 @@ make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
 	FS_STORAGE_TINY_TEST_PROFILE=1
 cp build/kernel "${TMPDIR_FS}/agent-kernel"
 
-build_image "" quota-domain "${FS_QUOTA_DOMAIN_AGENT_BLOCKS}" \
-	"${FS_QUOTA_DOMAIN_AGENT_INODES}" fsquota_ucore agent \
+build_image "" quota-domain "${FS_QUOTA_DOMAIN_BLOCKS}" \
+	"${FS_QUOTA_DOMAIN_INODES}" fsquota_ucore agent \
 	"${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
 	"${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
 	"${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \
@@ -452,8 +317,8 @@ make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
 	FS_STORAGE_TINY_TEST_PROFILE=1
 cp build/kernel "${TMPDIR_FS}/quota-domain-kernel"
 
-build_image "" quota-reserve "${FS_QUOTA_RESERVE_AGENT_BLOCKS}" \
-	"${FS_QUOTA_RESERVE_AGENT_INODES}" fsquota_ucore agent \
+build_image "" quota-reserve "${FS_QUOTA_RESERVE_BLOCKS}" \
+	"${FS_QUOTA_RESERVE_INODES}" fsquota_ucore agent \
 	"${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
 	"${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
 	"${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \
@@ -471,8 +336,8 @@ make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
 	FS_STORAGE_TINY_TEST_PROFILE=1
 cp build/kernel "${TMPDIR_FS}/quota-reserve-kernel"
 
-build_image "" principal-agent "${FS_PERSIST_AGENT_BLOCKS}" \
-	"${FS_PERSIST_AGENT_INODES}" fspquota_ucore agent \
+build_image "" principal-agent "${FS_PERSIST_BLOCKS}" \
+	"${FS_PERSIST_INODES}" fspquota_ucore agent \
 	"${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
 	"${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
 	"${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \

@@ -1,6 +1,6 @@
 # AgentOS 内核验证
 
-本文给出当前架构的验证顺序和断言边界。功能与性能结果来自实际 Host/QEMU 测试，不依赖额外的材料封装门禁。
+本文给出当前架构的验证顺序和断言边界。功能与性能结果来自实际 Host/QEMU 测试。
 
 ## 1. 验证层次
 
@@ -27,8 +27,7 @@ bash scripts/check-agent-module-boundaries.sh
 - `agent_run(count=0, FENCE)` 的唯一 syscall cut；
 - lifecycle fence gate 在 metadata、credit、evidence seal 外层；
 - live query 只接受显式 volatile metadata，typed watch 不回退字符串路径；
-- observe recovery dispatcher 固定 `BAD_PARAM`；
-- retired metadata/observe disk 模块不进入生产对象清单。
+- kernel/user UAPI 布局一致，生产模块依赖没有越界。
 
 ## 3. 核心模型和 mutation tests
 
@@ -62,20 +61,19 @@ python -B scripts/test-workflow-syscall-cut.py
 - deny/authority 进入 critical 并保留兼容投影；
 - gap、rollover、previous root、challenge、credit digest 进入 seal；
 - retained internal retirement 不能冒充 workflow fence；
-- `DURABLE` 兼容名实际映射 `FENCE_SEALED`。
+- receipt 只在显式 fence 后发布 `FENCE_SEALED`。
 
 ### 3.3 Live Query
 
 断言包括：
 
-- 显式 set 拒绝 `PERSIST/AUTOSCAN`；
+- metadata 只通过普通 set 或显式 delete 进入当前启动周期 catalog；
 - typed query 安装、生命周期绑定和 proc reuse 清理；
 - before/after 导出 `ENTER/UPDATE/LEAVE`；
-- tombstone/content pending 带完整 incarnation；
+- unlink/content pending 带完整 incarnation；
 - 队列失败生成单调 resync generation；
 - ACK 不清除更新缺口；
-- fence drain 拒绝未确认 resync；
-- retired store/scan/recovery 不在生产构建路径。
+- fence drain 拒绝未确认 resync。
 
 ### 3.4 Workflow fence
 
@@ -95,7 +93,7 @@ make agent-module-check TOOLPREFIX=riscv-none-elf-
 make kernel-stack-check TOOLPREFIX=riscv-none-elf-
 ```
 
-`agent-module-check` 验证生产对象清单和模块依赖，避免仅因历史 `.c` 文件仍在树中就把停产能力算作当前实现。`kernel-stack-check` 检查真实编译调用图上的线程栈和启动栈安全边界。源码行数、镜像大小基线和工具可执行文件身份不作为产品验收门。
+`agent-module-check` 验证生产对象清单和模块依赖。`kernel-stack-check` 检查真实编译调用图上的线程栈和启动栈安全边界。源码行数、镜像大小基线和工具可执行文件身份不作为产品功能结论。
 
 ## 5. QEMU Guest 验证
 
@@ -113,10 +111,7 @@ Guest 专项应覆盖：
 - 显式 metadata、index/scan 一致性、inode incarnation；
 - typed live watch、event wait、route、timeout/cancel；
 - resource hard quota、reservation rollback 和 teardown；
-- workflow fence 的 receipt、retry 和拒绝路径；
-- observe recovery/PERSIST/AUTOSCAN legacy 调用被拒绝。
-
-测试程序若仍请求旧 flag 或旧 recovery 成功语义，必须先更新测试合同，不能为让旧用例通过而恢复停产机制。
+- workflow fence 的 receipt、retry 和拒绝路径。
 
 ## 6. 双目标与性能
 
@@ -132,18 +127,17 @@ plain uCore 与 AgentOS-uCore 运行同一用户态科研工作流合同。端�
 
 直接命令见 [../verification.md](../verification.md)。调试时可以自由重跑；对外引用数字时清楚说明选用的是哪次实际运行即可。
 
-## 7. 负面能力检查
+## 7. 能力边界检查
 
-验证不仅检查存在的能力，也检查以下声明必须为假：
+验证还要确认文档中的边界与实际行为一致：
 
-| 禁止声明 | 可执行检查 |
+| 边界 | 可执行检查 |
 | --- | --- |
-| metadata 自动扫描普通目录 | 显式 set 合同、生产对象无 scan 调用 |
-| metadata catalog crash recovery | 无 store/recovery 生产对象，receipt 带 `METADATA_VOLATILE` |
-| 每个成功操作写 durable audit | ordinary success 只写 ring；disk observe 模块退役 |
-| fence seal 等于磁盘 durable | UAPI/ABI 把 durability 状态命名为 `FENCE_SEALED` |
-| observe recovery 可用 | syscall dispatcher 固定 `BAD_PARAM` |
-| 多阶段 workflow retirement | lifecycle 状态以 members/closing/gates 为准 |
+| metadata 仅显式登记 | 普通文件 create 不增加 catalog；set/delete 绑定 scope 与 incarnation |
+| catalog 属于当前启动周期 | receipt 设置 `METADATA_VOLATILE`，新启动由用户态重新登记 |
+| Evidence 为有界内存事件 | ordinary success 只写一次 canonical ring event；critical 分区独立 |
+| fence root 覆盖范围有限 | receipt 同时设置 `PARTIAL_COVERAGE` 与 `FENCE_SEALED` |
+| lifecycle 状态机精简 | members/closing/operation/departure/fence gates 决定 cut 与回收 |
 
 ## 8. 结果解释
 

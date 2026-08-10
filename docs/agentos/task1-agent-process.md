@@ -81,7 +81,7 @@ fence gate 不在持有自旋/IRQ 临界区时睡眠。成功 cut 后才发布�
 
 - 内核仍为单 Hart；Host 并行运行多个 QEMU lane 不代表 Guest SMP。
 - active workflow 与 lifecycle slot 数量有界；容量不足时 fail closed。
-- generation 租约用于防止旧身份复用，但不等于 crash-persistent workflow 恢复。
+- generation 绑定当前启动周期，用于阻止 slot、PID 或 workflow id 复用命中旧身份。
 - closing workflow 不接受新普通操作；用户态应在 close 前完成所需的显式 fence。
 
 ## 9. 验证入口

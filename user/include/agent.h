@@ -363,10 +363,6 @@ struct agent_info {
 	uint64 legacy_mailbox_queue_count;
 	uint64 file_scan_deferred;
 	uint64 file_scan_failures;
-	uint64 metadata_journal_txns;
-	uint64 metadata_journal_blocks;
-	uint64 metadata_compactions;
-	uint64 metadata_full_cow_blocks;
 };
 
 struct agent_sched_record {
@@ -763,9 +759,6 @@ int agent_audit_snapshot(struct agent_audit_record *records, int max);
 int agent_audit_query(struct agent_audit_filter *filter,
 		      struct agent_audit_record *records, int max);
 int agent_audit_receipt(struct agent_audit_receipt_request *request);
-/* Compatibility tombstone: retained for source ABI; always unsupported. */
-int agent_observe_recovery(struct agent_observe_recovery_request *request,
-			   void *records);
 int agent_span_trace_snapshot(struct agent_audit_record *records, int max);
 int agent_timeline_snapshot(struct agent_timeline_record *records, int max);
 int agent_timeline_query(struct agent_timeline_filter *filter,

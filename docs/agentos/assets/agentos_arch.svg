@@ -21,16 +21,16 @@
   <text x="1085" y="390" class="label">内核态</text>
   <rect x="50" y="105" width="185" height="120" fill="#ffe08a" class="box"/>
   <text x="78" y="150" class="label">科研 Agent</text>
-  <text x="98" y="180" class="label">页面</text>
-  <text x="82" y="208" class="tiny">报告 / 证据</text>
+  <text x="98" y="180" class="label">工作流</text>
+  <text x="82" y="208" class="tiny">状态 / 结果</text>
   <rect x="300" y="82" width="650" height="160" fill="#b8d8a4" class="box"/>
   <text x="326" y="126" class="label">用户态 Agent 程序</text>
   <text x="326" y="160" class="small">编排 / 哨兵 / 分析 / 复核 / 中继</text>
-  <text x="326" y="194" class="tiny">综合示例、最终验收、性能观测、科研平台编排</text>
+  <text x="326" y="194" class="tiny">综合示例、QEMU 验证、性能观测、科研平台编排</text>
   <rect x="985" y="105" width="220" height="120" fill="#b7d1e8" class="box"/>
   <text x="1025" y="148" class="label">宿主机工具</text>
-  <text x="1016" y="178" class="small">页面读取 / 大模型中继</text>
-  <text x="1002" y="207" class="tiny">网页和云端大模型不进内核</text>
+  <text x="1016" y="178" class="small">镜像提取 / 状态比较</text>
+  <text x="1002" y="207" class="tiny">只核验和汇总 Guest 状态</text>
   <rect x="85" y="440" width="190" height="105" fill="#ffe08a" class="box"/>
   <text x="112" y="486" class="label">uCore 虚拟文件系统</text>
   <text x="112" y="516" class="tiny">打开 / 写入 / 删除</text>

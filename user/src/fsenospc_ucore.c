@@ -86,8 +86,9 @@ static void test_inode_exhaustion(void)
 
 	make_inode_name(name, 0);
 	check(unlink(name) == 0, "release one inode");
+	check(sync() == 0, "drain released inode");
 	fd = open(name, O_CREATE | O_WRONLY);
-	check(fd >= 0 && close(fd) == 0, "reuse released inode");
+	check(fd >= 0 && close(fd) == 0, "reuse reclaimed inode");
 	make_inode_name(name, created);
 	check(open(name, O_CREATE | O_WRONLY) == -1,
 	      "reused inode restores full state");
@@ -96,6 +97,7 @@ static void test_inode_exhaustion(void)
 		make_inode_name(name, i);
 		check(unlink(name) == 0, "cleanup inode filler");
 	}
+	check(sync() == 0, "drain inode filler cleanup");
 	printf("fsenospc_ucore: inode exhaustion survived\n");
 }
 
@@ -134,6 +136,7 @@ static void test_inode_cache_exhaustion(void)
 		name[1] = 'c';
 		check(unlink(name) == 0, "cleanup inode cache filler");
 	}
+	check(sync() == 0, "drain inode cache cleanup");
 	printf("fsenospc_ucore: inode cache exhaustion survived\n");
 }
 
@@ -184,6 +187,7 @@ static void test_block_exhaustion(void)
 
 	fd = open(reserve, O_WRONLY | O_TRUNC);
 	check(fd >= 0 && close(fd) == 0, "release one reserved block");
+	check(sync() == 0, "drain reserved block");
 	fd = open(partial, O_WRONLY);
 	check(fd >= 0, "open partial write file");
 	n = write(fd, write_buf, sizeof(write_buf));
@@ -196,8 +200,10 @@ static void test_block_exhaustion(void)
 
 	fd = open(fill, O_WRONLY | O_TRUNC);
 	check(fd >= 0 && close(fd) == 0, "release filled blocks");
+	check(sync() == 0, "drain filled blocks");
 	fd = open(partial, O_WRONLY | O_TRUNC);
 	check(fd >= 0, "truncate partial file");
+	check(sync() == 0, "drain partial blocks");
 	write_fully(fd, write_buf, sizeof(write_buf),
 		    "write succeeds after block reclamation");
 	check(close(fd) == 0, "close recovered file");
@@ -217,6 +223,7 @@ static void test_unlink_lifetime(void)
 	check(write(fd, &byte, 1) == 1, "old descriptor remains usable");
 	check(open(path, O_RDONLY) == -1, "unlinked name is absent");
 	check(close(fd) == 0, "close unlinked descriptor");
+	check(sync() == 0, "drain closed unlinked file");
 	fd = open(path, O_CREATE | O_WRONLY);
 	check(fd >= 0 && close(fd) == 0, "recreate after last close");
 	check(unlink(path) == 0, "cleanup recreated file");
@@ -243,6 +250,7 @@ int main(void)
 	check(unlink("fs.reserve") == 0, "cleanup reserve");
 	check(unlink("fs.partial") == 0, "cleanup partial");
 	check(unlink("fs.fill") == 0, "cleanup fill");
+	check(sync() == 0, "drain final file cleanup");
 	printf("fsenospc_ucore: parent passed\n");
 	return 0;
 }

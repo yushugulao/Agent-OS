@@ -1,19 +1,22 @@
 # 现场演示脚本
 
-现场演示从可用产品入口开始，不逐个运行内部合同测试。环境准备和 Windows 命令见
-[竞赛交付说明](../contest/README.md)。
+现场演示从可用产品入口开始，不逐个运行内部合同测试。首次准备环境时先看
+[Windows 快速开始](../windows-quickstart.md)和[竞赛交付说明](../contest/README.md)。
 
 ## 启动
 
 ```bash
-make contest-demo
+make contest-demo TOOLPREFIX=riscv-none-elf-
 ```
 
-该命令运行评委可观察的本地演示。演示展示实际行为和测量值，不以“测试通过”
-作为性能结论。需要复核完整内核行为时运行：
+该命令默认运行 4 个等量 AB/BA QEMU 样本，验证 traversal 与 indexed 路径得到
+相同科研结果，并把逐样本串口日志、`summary.json`、`measurements.csv` 和
+`report.md` 写入 `results/contest-demo/`。这些输出属于本次运行，文档不预填
+尚未实测的数值。需要复核完整内核行为时运行：
 
 ```bash
-make agentos-test
+make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agenteval_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
 ```
 
 完整 case 集由 QEMU runner 维护，本文不复制易漂移的数量。需要聚焦演示中的某条
@@ -24,7 +27,7 @@ make agentos-test
 串口场景可单独运行：
 
 ```bash
-make run INIT_PROC=labdemo_ucore CHAPTER=agent LOG=error
+make run INIT_PROC=labdemo_ucore CHAPTER=agent LOG=error TOOLPREFIX=riscv-none-elf-
 ```
 
 场景是一条 prepare、align、analyze、report、archive 科研流水线。可信
@@ -44,15 +47,14 @@ workflow 内的最小消息路由：
 
 ### 观察点
 
-| 页面或串口数据 | 说明 |
+| 入口 | 本次运行应观察的字段 |
 | --- | --- |
-| syscall 数、scalar/batch 耗时 | 批量工具调用减少传统陷入成本 |
-| scan/index 检查记录数 | 文件属性索引减少无关记录扫描 |
-| p50/p90/p99 wait 与 goodput | 并发 Agent 的等待和完成能力 |
-| Jain fairness、域级进展 | 高负载下普通进程和其他 workflow 不被饿死 |
-| Context branch 与 rollback | 回滚创建新分支，不改写 provenance 历史 |
-| MESSAGE、ACTION、ARTIFACT | IPC、授权动作和工件更新由同一 scope 串联 |
-| resource/BSS/stack 指标 | 性能收益没有通过隐藏常驻内存或栈增长获得 |
+| `make contest-demo` | 每个 AB/BA boot 的 traversal/indexed core 时间、检查记录数、读取字节数、相同结果 hash；汇总值见 `summary.json` 与 `measurements.csv` |
+| `agentbench_ucore` | scalar/batch、mirror/query、scan/index 的样本数、tick 和工作量计数 |
+| `agentloop_ucore` | heartbeat、事件入队、真实 sleep/wakeup、取消和无事件路径 |
+| `agentsched_ucore` / `agent_eevdf_ucore` | Jain fairness、wakeup 分布、deadline miss、普通任务与 workflow 进展 |
+| `agentfinal_ucore` | Context sequence、branch、rollback、FIFO 窗口，以及可信只读区与用户 cache 的不同权限 |
+| `kernel-stack-check` | 真实调用图上的内核栈上界；它不是运行时内存或性能测量 |
 
 串口出现 `labdemo_ucore: passed` 与 `labdemo_ucore: parent passed` 表示该次场景
 完成；性能结论仍应读取该次实际运行的工作量、tick 和 Host 时间，并说明样本与单位。
@@ -64,7 +66,7 @@ workflow 内的最小消息路由：
 | 程序 | 适合展示的机制 |
 | --- | --- |
 | `agentfinal_ucore` | Agent 身份、批量调用、Context、rollback、timeline |
-| `agentfs_ucore` | inode 绑定、文件属性、索引与持久化 |
+| `agentfs_ucore` | inode 绑定、显式文件属性、内容摘要与当前启动周期索引 |
 | `agentloop_ucore` | 事件队列、等待/唤醒、heartbeat 与取消 |
 | `agentsched_ucore` | 角色调度、域级公平与普通任务进展 |
 | `agentbench_ucore` | scalar/batch、mirror/query、scan/index 对照 |
@@ -73,9 +75,9 @@ workflow 内的最小消息路由：
 示例：
 
 ```bash
-make run INIT_PROC=agentbench_ucore CHAPTER=agent LOG=error
+make run INIT_PROC=agentbench_ucore CHAPTER=agent LOG=error TOOLPREFIX=riscv-none-elf-
 ```
 
-安全、掉电恢复、VirtIO 故障和 teardown 竞争属于产品回归，不占用主演示叙事。
+安全拒绝、文件系统/VirtIO 故障和 teardown 竞争属于产品回归，不占用主演示叙事。
 对应入口和测试边界见 [验证说明](verification.md) 与
 [要求追踪表](requirements-traceability.md)。

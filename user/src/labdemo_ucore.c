@@ -45,6 +45,10 @@ static struct agent_timeline_filter demo_timeline_filter;
 #define DEMO_ALIGN_LOG_BODY "align memory_limit evidence"
 #define DEMO_BENCH_RUN "RUN-042-SHOWCASE"
 #define DEMO_BENCH_TARGET 17
+
+_Static_assert(LABDEMO_CORPUS_SIZE > DEMO_BENCH_TARGET &&
+	       LABDEMO_CORPUS_SIZE <= 100,
+	       "labdemo corpus must fit the two-digit fixture namespace");
 #define DEMO_BENCH_FID_BASE 100
 #define DEMO_BENCH_OK_BODY \
 	"project=lab-gene-x;workflow=nightly-regression;run=RUN-042;stage=other;status=ok"

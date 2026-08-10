@@ -115,30 +115,17 @@ seal 绑定：
 
 | API | 当前数据来源 | 限制 |
 | --- | --- | --- |
-| audit query/snapshot | Evidence Ring + critical/fallback/event/sched legacy ledger | 有界内存视图，不是磁盘日志 |
+| audit query/snapshot | Evidence Ring + critical/fallback/event/sched legacy ledger | 当前启动周期的有界内存视图 |
 | timeline query/wait/read | Context/ring、sched、legacy audit 的有序投影 | 过滤/游标只对当前可见窗口成立 |
 | provenance snapshot | Context cause/span/branch/control + legacy audit edge | 不把 ring Context 再复制成第二条 edge |
 | ledger snapshot | 当前 scope 的聚合计数、窗口与 evidence digest tag | `ledger_hash` 不是 fence SHA-256 根 |
-| audit receipt | 关键兼容投影对应 ring ticket | 肯定状态为 `FENCE_SEALED`，不是 disk durable |
+| audit receipt | 关键兼容投影对应 ring ticket | 肯定状态为当前启动周期的 `FENCE_SEALED` |
 
-`AGENT_AUDIT_DURABILITY_DURABLE` 是源码兼容别名。当前语义等同 `FENCE_SEALED`。
-
-## 10. 已停产 recovery
-
-observe recovery 请求结构和 syscall 编号仍保留，防止旧编号被新功能复用。但 dispatcher 固定返回 `AGENT_STATUS_BAD_PARAM`：
-
-- 不存在 observation disk bank；
-- 不提供 scope list/read/reap/status；
-- 不从重启镜像恢复 audit/timeline/provenance；
-- workflow fence receipt 不能跨 crash 重新枚举。
-
-因此“fence-sealed”只能陈述当前运行期的可验证根，不得写成 durable/crash-recoverable。
-
-## 11. 设计来源
+## 10. 设计来源
 
 Evidence Ring 受 Linux BPF ring buffer 的共享有序 ring、reserve/commit/discard 和通知策略启发。AgentOS 增加 workflow generation、ordinary/critical 分区、Agent 因果字段、gap 承诺和 challenge-bound fence。代码为 clean-room 实现，没有复制 BPF 源码、测试数据或二进制布局。
 
-## 12. 验证入口
+## 11. 验证入口
 
 ```bash
 python -B scripts/test-agent-evidence-ring.py

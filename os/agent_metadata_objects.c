@@ -39,18 +39,6 @@ agent_metadata_objects_init(void)
 	agent_metadata_catalog_init();
 }
 
-void
-agent_metadata_storage_init(void)
-{
-	/* The live catalog is initialized in memory before storage discovery. */
-}
-
-int
-agent_metadata_durable_status(void)
-{
-	return AGENT_STATUS_OK;
-}
-
 int
 agent_metadata_admission_status(void)
 {
@@ -427,10 +415,6 @@ agent_file_digest_read(struct proc *p, char *selector,
 					 "digest_not_found" :
 				 rc == AGENT_STATUS_BAD_PARAM ?
 					 "bad_selector" : "metadata_unavailable");
-		return;
-	}
-	if (agent_file_is_meta_store_name(physical)) {
-		agent_result_status(res, AGENT_STATUS_DENIED, "denied");
 		return;
 	}
 	ip = namei_scope_status(physical, VFS_POLICY_WORKFLOW,
@@ -812,14 +796,8 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 		break;
 	case AGENT_TOOL_RERUN_STAGE:
 	case AGENT_TOOL_ACTION_COMMIT:
-		if (!agent_tool_require_cap(p, res, AGENT_CAP_ACTION_WRITE)) {
-			if (op->tool_id == AGENT_TOOL_RERUN_STAGE)
-				agent_ipc_deliver_watchers(
-					p, AGENT_EVENT_POLICY_DENIED,
-					op->request_id, p->agent_call_count + 1,
-					"action=action_commit;compat=rerun_stage");
+		if (!agent_tool_require_cap(p, res, AGENT_CAP_ACTION_WRITE))
 			break;
-		}
 		agent_object_state_update(p, op, res, "action_committed",
 					  "action_commit", "action completed",
 					  1,
@@ -989,11 +967,6 @@ static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
 		goto out_txn;
 	}
 	fence_active = 1;
-	if (selector.states != 0) {
-		result = (selector.states & AGENT_CATALOG_STATE_PENDING) ?
-			 AGENT_STATUS_RETRY : AGENT_STATUS_CONFLICT;
-		goto out_txn;
-	}
 	mask = meta.update_mask;
 	if (selector.slot == AGENT_CATALOG_CONFLICT) {
 		result = AGENT_STATUS_CONFLICT;
@@ -1290,15 +1263,5 @@ agent_metadata_fill_info(uint scope_id, struct agent_info *info)
 	info->file_scan_pending = 0;
 	info->file_scan_deferred = 0;
 	info->file_scan_failures = 0;
-	info->metadata_journal_txns = 0;
-	info->metadata_journal_blocks = 0;
-	info->metadata_compactions = 0;
-	info->metadata_full_cow_blocks = 0;
 	agent_file_state_fill_info(info);
-}
-
-void
-agent_metadata_tick(uint64 now)
-{
-	(void)now;
 }

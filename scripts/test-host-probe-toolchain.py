@@ -136,7 +136,6 @@ class HostProbeToolchainTests(unittest.TestCase):
     def test_mandatory_production_harnesses_share_sanitizer_policy(self) -> None:
         for name in (
             "test-exec-image-policy.py",
-            "test-agent-metadata-disk-format.py",
             "test-mkfs-host-snapshot.py",
             "test-printf-format-contract.py",
             "test-rp-evidence-file-field.py",
@@ -162,10 +161,7 @@ class HostProbeToolchainTests(unittest.TestCase):
             "run-virtio-disk-tests.sh",
             "run-workflow-teardown-race-tests.sh",
         }
-        shell_harnesses = expected_runners | {
-            "test-identity-lease-deferred.sh",
-            "test-observe-reap-state.sh",
-        }
+        shell_harnesses = expected_runners
         direct_compiler = re.compile(
             r'(?m)^[ \t]*(?:"?\$\{(?:HOST_CC|HOSTCC|CC(?::-cc)?)[^}]*\}"?'
             r'|"?\$(?:HOST_CC|HOSTCC|CC)"?|cc|gcc)[ \t]'

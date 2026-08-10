@@ -60,9 +60,6 @@ int workflow_lifecycle_scope(struct workflow_lifecycle_key key,
 			     uint *scope_id);
 int workflow_lifecycle_generation_floor(struct workflow_lifecycle_key key);
 int workflow_lifecycle_generation_lease_floor(uint, uint64);
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-int workflow_lifecycle_test_consume_generation(uint *, uint64 *);
-#endif
 int workflow_lifecycle_alloc_context_branch(struct workflow_lifecycle_key key,
 					    uint64 *branch_generation);
 /*

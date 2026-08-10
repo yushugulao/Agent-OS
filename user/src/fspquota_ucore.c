@@ -225,6 +225,7 @@ static void release_and_reuse(void)
 	fd = open(ONE_FILE, O_WRONLY | O_TRUNC);
 	check(fd >= 0, "truncate one charged block");
 	check(close(fd) == 0, "close truncated block file");
+	check(sync() == 0, "drain released block charge");
 
 	fd = open(GROW_FILE, O_WRONLY);
 	check(fd >= 0, "open released block consumer");
@@ -234,6 +235,7 @@ static void release_and_reuse(void)
 
 	make_filler_name(name, 0);
 	check(unlink(name) == 0, "release one charged inode");
+	check(sync() == 0, "drain released inode charge");
 	create_empty(EXTRA_FILE);
 	verify_reused_state();
 	expect_block_denied(GROW_FILE, 1);
@@ -252,6 +254,7 @@ static void cleanup_initial_state(void)
 		make_filler_name(name, i);
 		check(unlink(name) == 0, "remove initial inode filler");
 	}
+	check(sync() == 0, "drain initial quota cleanup");
 }
 
 static void leave_crash_orphan(void)
@@ -281,13 +284,16 @@ static void cleanup_reused_state(void)
 		check(unlink(name) == 0, "remove reused inode filler");
 	}
 	check(unlink(EXTRA_FILE) == 0, "remove reused extra inode");
+	check(sync() == 0, "drain reused quota cleanup");
 }
 
 static void seed_or_verify(void)
 {
-	if (path_exists(CRASH_PHASE_FILE))
+	if (path_exists(CRASH_PHASE_FILE)) {
 		check(unlink(CRASH_PHASE_FILE) == 0,
 		      "finish crash orphan phase");
+		check(sync() == 0, "drain crash phase cleanup");
+	}
 	if (!path_exists(ONE_FILE)) {
 		fill_initial_state();
 		expect_block_denied(GROW_FILE, 0);

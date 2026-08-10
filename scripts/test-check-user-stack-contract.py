@@ -153,38 +153,6 @@ class UserStackContractTests(unittest.TestCase):
         )
         self.assert_rejected("mutation test wiring")
 
-    def test_mutation_compatibility_benchmark_omission_is_rejected(self):
-        self.mutate(
-            "user/Makefile",
-            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),$(addprefix user/,$(sort $(SRCS)))) \\\n\t$(COMPAT_BENCH_REPO_SOURCE)",
-            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),$(addprefix user/,$(sort $(SRCS))))",
-        )
-        self.assert_rejected("complete stack application inventory")
-
-    def test_mutation_retired_guest_build_exclusion_is_rejected(self):
-        self.mutate(
-            "user/Makefile",
-            "APPS := $(filter-out $(RETIRED_GUEST_APPS),$(patsubst $(app_dir)/%.c,%,$(SRCS)))",
-            "APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))",
-        )
-        self.assert_rejected("retired recovery Guest build exclusion")
-
-    def test_mutation_retired_guest_stack_exclusion_is_rejected(self):
-        self.mutate(
-            "user/Makefile",
-            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),$(addprefix user/,$(sort $(SRCS))))",
-            "$(filter-out $(STACK_USAGE_SUPPORT_SRCS),$(addprefix user/,$(sort $(SRCS))))",
-        )
-        self.assert_rejected("complete stack application inventory")
-
-    def test_mutation_retired_guest_chapter_gate_is_rejected(self):
-        self.mutate(
-            "user/Makefile",
-            "$(filter $(CHAPTER),metadata_recovery observe_recovery)",
-            "$(filter $(CHAPTER),legacy_recovery)",
-        )
-        self.assert_rejected("retired recovery chapter fail-closed gate")
-
     def test_mutation_worker_support_inventory_is_rejected(self):
         self.mutate(
             "user/Makefile",
@@ -192,14 +160,6 @@ class UserStackContractTests(unittest.TestCase):
             "STACK_USAGE_SUPPORT_SRCS :=",
         )
         self.assert_rejected("complete worker support stack inventory")
-
-    def test_mutation_compatibility_benchmark_source_drift_is_rejected(self):
-        self.mutate(
-            "user/Makefile",
-            "COMPAT_BENCH_REPO_SOURCE := evaluation_guest/compatbench.c",
-            "COMPAT_BENCH_REPO_SOURCE := user/src/agentbench_ucore.c",
-        )
-        self.assert_rejected("canonical compatibility benchmark source")
 
     def test_mutation_stack_library_inventory_shrink_is_rejected(self):
         self.mutate(
@@ -248,30 +208,6 @@ class UserStackContractTests(unittest.TestCase):
             "$(addprefix user/,$(firstword $(sort $(SRCS))))",
         )
         self.assert_rejected("complete stack application inventory")
-
-    def test_mutation_compatibility_benchmark_stack_rule_is_rejected(self):
-        self.mutate(
-            "user/Makefile",
-            "$(STACK_USAGE_DIR)/evaluation_guest/compatbench.o:",
-            "$(STACK_USAGE_DIR)/evaluation_guest/compatbench-omitted.o:",
-        )
-        self.assert_rejected("shared compatibility benchmark stack build")
-
-    def test_mutation_compatibility_benchmark_compile_source_is_rejected(self):
-        self.mutate(
-            "user/Makefile",
-            "-c $(COMPAT_BENCH_REPO_SOURCE) \\",
-            "-c user/src/agentbench_ucore.c \\",
-        )
-        self.assert_rejected("canonical compatibility benchmark stack compilation")
-
-    def test_mutation_compatibility_benchmark_link_source_is_rejected(self):
-        self.mutate(
-            "user/Makefile",
-            "$(COMPAT_BENCH_SOURCE) -o $@",
-            "../user/src/agentbench_ucore.c -o $@",
-        )
-        self.assert_rejected("canonical compatibility benchmark link")
 
     def test_mutation_generated_header_stack_path_is_rejected(self):
         self.mutate(

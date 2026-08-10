@@ -27,11 +27,6 @@ enum syscall_class {
 #else
 #define SYSCALL_ENABLED_PHYSICAL_PAGE_TEST 0
 #endif
-#ifdef AGENT_METADATA_CRASH_PHASE
-#define SYSCALL_ENABLED_METADATA_TEST 1
-#else
-#define SYSCALL_ENABLED_METADATA_TEST 0
-#endif
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 #define SYSCALL_ENABLED_WAIT_ATOMIC_TEST 1
 #else
@@ -112,10 +107,8 @@ enum syscall_class {
 	X(agent_tool_list, FAST, ALWAYS) \
 	X(tool_call, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(tool_list, FAST, ALWAYS) \
-	X(agent_observe_recovery, FS_EPOCH, ALWAYS) \
 	X(virtio_disk_test, BLOCK_IO, VIRTIO_TEST) \
 	X(physical_page_test, FS_EPOCH, PHYSICAL_PAGE_TEST) \
-	X(agent_metadata_test, FS_EPOCH, METADATA_TEST) \
 	X(wait_atomic_test, FS_EPOCH, WAIT_ATOMIC_TEST) \
 	X(fs_allocator_fault_test, BLOCK_IO_FS_EPOCH, FS_ALLOCATOR_TEST) \
 	X(context_push, FAST, ALWAYS) \

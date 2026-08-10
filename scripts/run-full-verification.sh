@@ -6,11 +6,12 @@ TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-240s}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+BASH_BIN="${BASH_BIN:-bash}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"
 HOST_CC="${HOST_CC:-${HOSTCC:-${CC:-cc}}}"
-runner_shell=(/bin/bash --noprofile --norc -p)
+runner_shell=("${BASH_BIN}" --noprofile --norc -p)
 
 adaptive_jobs() {
 	"${PYTHON_BIN}" -I -S -B "${ROOT_DIR}/scripts/resource-jobs.py" --kind "$1"
@@ -84,6 +85,17 @@ echo "[full-verify] AgentOS kernel tests"
 		"${runner_shell[@]}" scripts/run-agent-tests.sh
 )
 
+echo "[full-verify] integrated Task 1-5 evaluation Guest"
+(
+	cd "${ROOT_DIR}"
+	env AGENT_TEST_CASE=agenteval_ucore \
+		TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
+		PYTHON_BIN="${PYTHON_BIN}" CASE_TIMEOUT="${CASE_TIMEOUT}" \
+		IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
+		MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS}" \
+		"${runner_shell[@]}" scripts/run-agent-tests.sh
+)
+
 resource_regression_targets=(
 	proc-reap-test
 	syscall-fairness-test
@@ -118,4 +130,4 @@ echo "[full-verify] filesystem ordered epoch power-cut tests"
 		"${runner_shell[@]}" scripts/run-fs-epoch-tests.sh
 )
 
-echo "[full-verify] all product checks passed"
+echo "[full-verify] configured build, QEMU, and resource checks passed"

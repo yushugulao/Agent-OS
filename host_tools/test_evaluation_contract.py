@@ -75,8 +75,8 @@ def marker(
         work_units = load * operations if role == "baseline" else operations
         records_examined = work_units if role == "baseline" else operations
     elif experiment["id"] == "file_query_table_ablation":
-        work_units = 512 * operations if role == "baseline" else operations
-        records_examined = operations * (load + 2) if role == "baseline" else operations
+        work_units = operations * (load + 2) if role == "baseline" else operations
+        records_examined = work_units if role == "baseline" else operations
     else:
         work_units = operations
         records_examined = 0

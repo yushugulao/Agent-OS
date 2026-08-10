@@ -36,11 +36,7 @@ LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
 SRCS := $(wildcard $(app_dir)/*.c)
 APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
-APPS += compatbench
 GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
-COMPAT_BENCH_HEADER := $(generated_dir)/compatbench_seed.h
-COMPAT_BENCH_SOURCE := ../../evaluation_guest/compatbench.c
-COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 
 CH2_BASE_TESTS := ch2b_
 CH3_BASE_TESTS := ch3b_ $(CH2_BASE_TESTS)
@@ -53,7 +49,6 @@ SAFETY_TESTS := usersafety_ucore syscallfair_ucore
 FS_ENOSPC_TESTS := fsenospc_ucore fspquota_ucore
 PROC_REAP_TESTS := procreap_ucore
 FILE_RESOURCE_TESTS := fileresource_ucore
-COMPATIBILITY_TESTS := compatbench
 PLATFORM_PLAIN_TESTS := usershell rp_plain
 PLATFORM_TESTS := rp_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
@@ -115,8 +110,6 @@ else ifeq ($(CHAPTER), proc_reap)
 CH_TESTS := $(PROC_REAP_TESTS)
 else ifeq ($(CHAPTER), file_resource)
 CH_TESTS := $(FILE_RESOURCE_TESTS)
-else ifeq ($(CHAPTER), compat_eval)
-CH_TESTS := $(COMPATIBILITY_TESTS)
 else ifeq ($(CHAPTER), platform)
 CH_TESTS := $(PLATFORM_TESTS)
 else ifeq ($(CHAPTER), platform_seeded)
@@ -137,22 +130,6 @@ $(GENERATED_HEADERS):
 	@mkdir -p $(@D)
 	@printf '%s\n' '#ifndef __RP_HOST_ACTION_SEED_H__' '#define __RP_HOST_ACTION_SEED_H__' '#define RP_HOST_ACTION_SEED ""' '#define RP_HOST_ACTION_BOOTSTRAP_SEED ""' '#endif' > $@
 
-$(COMPAT_BENCH_HEADER): .FORCE
-	@mkdir -p $(@D)
-	@case '$(COMPAT_BENCH_CHALLENGE_HEX)' in \
-		????????????????) ;; \
-		*) echo 'COMPAT_BENCH_CHALLENGE_HEX must contain 16 lowercase hex digits' >&2; exit 2 ;; \
-	esac
-	@case '$(COMPAT_BENCH_CHALLENGE_HEX)' in \
-		*[!0-9a-f]*) echo 'COMPAT_BENCH_CHALLENGE_HEX must contain 16 lowercase hex digits' >&2; exit 2 ;; \
-	esac
-	@printf '%s\n' \
-		'#ifndef __COMPATBENCH_SEED_H__' \
-		'#define __COMPATBENCH_SEED_H__' \
-		'#define COMPATBENCH_CHALLENGE 0x$(COMPAT_BENCH_CHALLENGE_HEX)ULL' \
-		'#endif' > $@.tmp
-	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
-
 $(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -c $< -o $@
@@ -166,14 +143,6 @@ $(elf_dir)/%: $(app_dir)/%.c $(LIB_OBJS) $(CRT_OBJ)
 	$(CC_CMD) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) $< -o $@
 	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/$*.asm
 	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/$*
-
-$(elf_dir)/compatbench: $(COMPAT_BENCH_SOURCE) $(LIB_OBJS) $(CRT_OBJ) \
-		$(GENERATED_HEADERS) $(COMPAT_BENCH_HEADER) $(arch_dir)/user.ld
-	@mkdir -p $(elf_dir) $(bin_dir) $(asm_dir)
-	$(CC_CMD) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) \
-		$(COMPAT_BENCH_SOURCE) -o $@
-	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/compatbench.asm
-	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/compatbench
 
 binary: $(addprefix $(elf_dir)/,$(SELECTED_APPS))
 

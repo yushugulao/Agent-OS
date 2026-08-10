@@ -124,18 +124,6 @@ static inline void exec_manifest_worker_image(const char *source,
 	X("agenttoolabi_ucore", "agenttoolabi_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
-	X("agentmetacrash_ucore", "agentmetacrash_ucore", \
-	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
-	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
-	X("agentmetarecover_ucore", "agentmetarecover_ucore", \
-	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
-	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
-	X("agentmetaeio_ucore", "agentmetaeio_ucore", \
-	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
-	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
-	X("agentobsreboot_ucore", "agentobsreboot_ucore", \
-	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
-	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("agentscope_ucore", "agentscope_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \

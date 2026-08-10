@@ -44,7 +44,7 @@ struct agent_tool_security_definition {
 	X(AGENT_TOOL_QUERY_FILE, AGENT_TOOL_F_CALLABLE, "query_file", "query file inode metadata or Agent file metadata") \
 	X(AGENT_TOOL_SEND_MESSAGE, AGENT_TOOL_F_CALLABLE, "send_message", "send a short Agent message") \
 	X(AGENT_TOOL_READ_MESSAGE, AGENT_TOOL_F_CALLABLE, "read_message", "read current Agent mailbox") \
-	X(AGENT_TOOL_FILE_META_INIT, AGENT_TOOL_F_CALLABLE, "file_meta_init", "reload file object metadata and rebuild indexes") \
+	X(AGENT_TOOL_FILE_META_INIT, AGENT_TOOL_F_CALLABLE, "file_meta_init", "initialize the current boot's volatile file metadata view") \
 	X(AGENT_TOOL_READ_FILE_SUMMARY, AGENT_TOOL_F_CALLABLE, "read_file_summary", "read one indexed file summary") \
 	X(AGENT_TOOL_DEPENDENCY_QUERY, AGENT_TOOL_F_CALLABLE, "dependency_query", "return registered dependent object labels") \
 	X(AGENT_TOOL_CAPABILITY_CHECK, AGENT_TOOL_F_CALLABLE, "capability_check", "check role capability") \

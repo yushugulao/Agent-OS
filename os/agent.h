@@ -373,10 +373,6 @@ struct agent_info {
 	uint64 legacy_mailbox_queue_count;
 	uint64 file_scan_deferred;
 	uint64 file_scan_failures;
-	uint64 metadata_journal_txns;
-	uint64 metadata_journal_blocks;
-	uint64 metadata_compactions;
-	uint64 metadata_full_cow_blocks;
 };
 
 struct agent_sched_record {
@@ -777,7 +773,6 @@ void agent_background_checkpoint(void);
 int agent_metadata_durability_fence_current(void);
 int agent_metadata_quiescence_fence_current(void);
 int agent_metadata_quiescence_fence_snapshot_current(uint64 *);
-void agent_file_request_scan(void);
 int agent_scope_reclaim_begin(
 	uint scope_id, struct workflow_lifecycle_key, uint64 *metadata_target);
 void agent_file_version_reclaim(struct inode *ip);
@@ -788,7 +783,6 @@ int agent_edit_unlink_allowed(struct inode *ip);
 void agent_edit_note_write(struct inode *ip);
 void agent_edit_note_truncate(struct inode *ip);
 void agent_edit_note_delete(struct inode *ip);
-int agent_file_is_meta_store_name(char *path);
 void agent_sched_on_enqueue(struct thread *t);
 void agent_sched_on_dispatch(struct thread *t);
 void agent_sched_on_yield(struct thread *t);
@@ -841,9 +835,6 @@ int sys_agent_wait_cancel(int pid, uint64 reasonaddr);
 int sys_agent_heartbeat(uint64 interval_ticks);
 int sys_agent_heartbeat_set(uint64 interval_ticks);
 int sys_agent_heartbeat_stop(void);
-#ifdef AGENT_METADATA_CRASH_PHASE
-int sys_agent_metadata_test(uint command, uint64 armaddr, uint64 user_size);
-#endif
 int sys_agent_wake(int pid, uint64 eventaddr);
 int sys_agent_file_meta_init(void);
 int sys_agent_file_meta_set(uint64 metaaddr);

@@ -1,5 +1,4 @@
 #include "agent.h"
-#include "agent_file_name_policy.h"
 #include "agent_file_state_internal.h"
 #include "agent_internal.h"
 #include "defs.h"
@@ -196,13 +195,6 @@ agent_file_state_init(void)
 	agent_file_edit_authority_generation = 0;
 	agent_file_edit_guard = 0;
 	agent_file_edit_next_lease = 1;
-}
-static int
-agent_file_state_reserved_path(char *path)
-{
-	return path != 0 &&
-		(strncmp(path, AGENT_META_STORE_NAME_0, DIRSIZ) == 0 ||
-		 strncmp(path, AGENT_META_STORE_NAME_1, DIRSIZ) == 0);
 }
 static struct agent_file_cache_scope_state *
 file_version_scope_state_locked(uint scope_id,
@@ -1340,7 +1332,7 @@ edit_lookup_path(struct proc *p, uint64 pathaddr, char *path,
 	if (copyinstr(p->pagetable, path, pathaddr, MAXPATH) < 0)
 		return -1;
 	path[MAXPATH - 1] = 0;
-	if (path[0] == 0 || agent_file_state_reserved_path(path))
+	if (path[0] == 0)
 		return AGENT_STATUS_BAD_PARAM;
 	ip = namei_scope_status(path, VFS_POLICY_WORKFLOW,
 			       agent_identity_proc_scope(p), &lookup_status);

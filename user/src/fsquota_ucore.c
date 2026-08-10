@@ -30,6 +30,7 @@ static struct agent_info public_attacker_info;
 static struct agent_info version_info_before;
 static struct agent_info version_info_after;
 static struct agent_file_edit_state version_state;
+static struct agent_file_meta version_meta;
 static struct agent_op version_op;
 static struct agent_result version_result;
 
@@ -246,6 +247,7 @@ static void run_public_attacker(int ready_fd, int control_fd)
 		fd = open(BLOCK_ONE_FILE, O_WRONLY | O_TRUNC);
 		check(fd >= 0 && close(fd) == 0,
 		      "release one charged block");
+		check(sync() == 0, "drain released block charge");
 		fd = open(BLOCK_GROW_FILE, O_WRONLY);
 		check(fd >= 0, "open block reuse fixture");
 		check(write(fd, block_buf, BLOCK_SIZE) == BLOCK_SIZE,
@@ -254,12 +256,14 @@ static void run_public_attacker(int ready_fd, int control_fd)
 
 		make_inode_name(name, 0);
 		check(unlink(name) == 0, "release one charged inode");
+		check(sync() == 0, "drain released inode charge");
 		check(create_empty(EXTRA_FILE) == 0,
 		      "reuse released inode charge");
 		cleanup_after_reuse(report.inodes - 3);
 	} else {
 		cleanup_without_reuse(report.inodes - 3);
 	}
+	check(sync() == 0, "drain public pressure cleanup");
 	token = 'D';
 	check(write(ready_fd, &token, 1) == 1, "publish pressure cleanup");
 	check(close(ready_fd) == 0, "close attacker report writer");
@@ -287,6 +291,19 @@ static void verify_workflow_versions(void)
 	      "workflow edit version advances");
 	printf("fsquota_ucore: workflow_version_reserve=1\n");
 
+	memset(&version_meta, 0, sizeof(version_meta));
+	strcpy(version_meta.physical_name, WORKFLOW_FILE);
+	strcpy(version_meta.logical_path, WORKFLOW_FILE);
+	strcpy(version_meta.project, "quota");
+	strcpy(version_meta.workflow, "file-service");
+	strcpy(version_meta.run_id, "RUN-QUOTA");
+	strcpy(version_meta.stage, "verified");
+	strcpy(version_meta.kind, "artifact");
+	strcpy(version_meta.status, "ready");
+	strcpy(version_meta.summary, "workflow file service fixture");
+	check(agent_file_meta_set(&version_meta) == 0,
+	      "register volatile workflow metadata");
+
 	check(agent_info(&version_info_before) == 0,
 	      "read digest counters before");
 	for (int i = 0; i < 2; i++) {
@@ -309,33 +326,19 @@ static void verify_workflow_versions(void)
 	printf("fsquota_ucore: content_version_reserve=1\n");
 }
 
-static void verify_workflow_metadata(void)
+static void verify_workflow_file_services(void)
 {
-	static struct agent_file_query query;
-	static struct agent_file_query_result result;
 	int agent;
 	int status = -1;
 
 	agent = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
-	check(agent >= 0, "create metadata orchestrator");
+	check(agent >= 0, "create file-service orchestrator");
 	if (agent == 0) {
-		check(agent_file_meta_init() == 0, "reload persistent metadata");
 		verify_workflow_versions();
-		memset(&query, 0, sizeof(query));
-		memset(&result, 0, sizeof(result));
-		query.flags = AGENT_FILE_QUERY_USE_INDEX;
-		query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-		strcpy(query.physical_name, WORKFLOW_FILE);
-		check(agent_file_query(&query, &result) == 1,
-		      "query reloaded workflow metadata");
-		check(result.total_hits == 1 && result.returned == 1,
-		      "single workflow metadata record");
-		check(result.hits[0].size == sizeof(block_buf),
-		      "persisted workflow size");
 		exit(0);
 	}
 	check(waitpid(agent, &status) == agent && status == 0,
-	      "reap metadata orchestrator");
+	      "reap file-service orchestrator");
 }
 
 static void verify_workflow_storage(void)
@@ -405,8 +408,8 @@ int main(void)
 
 	verify_workflow_storage();
 	printf("fsquota_ucore: workflow_reserve=1\n");
-	verify_workflow_metadata();
-	printf("fsquota_ucore: kernel_metadata_reserve=1\n");
+	verify_workflow_file_services();
+	printf("fsquota_ucore: kernel_file_services_reserve=1\n");
 
 	token = domain_boundary ? 'R' : 'C';
 	check(write(control_pipe[1], &token, 1) == 1,
@@ -421,6 +424,7 @@ int main(void)
 	if (domain_boundary)
 		printf("fsquota_ucore: quota_reuse=1\n");
 	check(unlink(WORKFLOW_FILE) == 0, "remove workflow reserve file");
+	check(sync() == 0, "drain workflow file cleanup");
 	printf("fsquota_ucore: parent passed\n");
 	return 0;
 }

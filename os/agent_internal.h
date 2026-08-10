@@ -4,7 +4,6 @@
 #include "agent.h"
 #include "agent_context.h"
 #include "agent_lifecycle.h"
-#include "bio.h"
 #include "proc.h"
 
 /*
@@ -104,34 +103,16 @@ void *agent_metadata_txn_token(void);
 int agent_metadata_txn_lock(int);
 int agent_metadata_txn_try_external(void);
 void agent_metadata_txn_unlock(void);
-void agent_metadata_txn_relock_uninterruptible(void);
-void agent_metadata_txn_projection_transition(int);
-#define agent_metadata_txn_projection_begin() \
-	agent_metadata_txn_projection_transition(1)
-#define agent_metadata_txn_projection_ack() \
-	agent_metadata_txn_projection_transition(0)
-void agent_metadata_txn_projection_require_idle(void);
 void agent_metadata_txn_work_charge(uint);
-struct bio_checkpoint_result agent_metadata_txn_checkpoint_unlocked(void);
-struct bio_checkpoint_result
-agent_metadata_txn_checkpoint_cleanup_unlocked(void);
 int agent_metadata_txn_owned(int);
 void agent_metadata_txn_require_owned(int, const char *);
-int agent_metadata_txn_depth(void);
 void agent_metadata_proc_runtime_snapshot(
 	struct proc *, struct agent_metadata_runtime_snapshot *);
-int agent_metadata_reload_available(void);
-int agent_metadata_reload_is_current(void);
-int agent_metadata_reload_claim(void);
-void agent_metadata_reload_release(void);
 
-/* 权威文件对象目录及其持久元数据镜像。 */
+/* 权威的内存文件对象目录。 */
 void agent_metadata_objects_init(void);
-void agent_metadata_storage_init(void);
-int agent_metadata_durable_status(void);
 int agent_metadata_admission_status(void);
 void agent_metadata_background_maintain(void);
-void agent_metadata_tick(uint64);
 void agent_metadata_fill_info(uint, struct agent_info *);
 int agent_metadata_tool_enter(int);
 void agent_metadata_tool_exit(int);

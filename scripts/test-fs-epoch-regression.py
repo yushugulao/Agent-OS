@@ -219,44 +219,6 @@ class FsEpochImageTests(unittest.TestCase):
         with self.assertRaisesRegex(image.VerificationError, "non-target payload"):
             image.verify("dirty", self.before, fault, retry, final)
 
-    def test_kernel_private_payload_may_advance_between_boots(self):
-        fault = snapshot(batch=image.BATCH_OLD, stage=b"R", created=False)
-        retry = copy.deepcopy(self.complete)
-        final = copy.deepcopy(self.complete)
-        for candidate, value in (
-            (self.before, b"private-before"),
-            (fault, b"private-fault"),
-            (retry, b"private-retry"),
-            (final, b"private-final"),
-        ):
-            candidate["root_names"][".agentmeta"] = candidate[
-                "root_names"
-            ].pop("sentinel")
-            candidate["inodes"]["13"]["vfs_policy"] = (
-                image.VFS_POLICY_KERNEL_PRIVATE
-            )
-            candidate["payload_sha256"]["13"] = image.digest(value)
-            block = value + bytes(image.BLOCK_SIZE - len(value))
-            candidate["block_sha256"]["122"] = image.digest(block)
-            candidate["nonzero_data_block_sha256"]["122"] = image.digest(block)
-            seal(candidate)
-        result = image.verify("dirty", self.before, fault, retry, final)
-        self.assertEqual(result["case"], "dirty")
-
-    def test_unrecognized_kernel_private_payload_is_preserved(self):
-        fault = snapshot(batch=image.BATCH_OLD, stage=b"R", created=False)
-        retry = copy.deepcopy(self.complete)
-        final = copy.deepcopy(self.complete)
-        for candidate in (self.before, fault, retry, final):
-            candidate["inodes"]["13"]["vfs_policy"] = (
-                image.VFS_POLICY_KERNEL_PRIVATE
-            )
-            seal(candidate)
-        retry["payload_sha256"]["13"] = image.digest(b"private-replaced")
-        seal(retry)
-        with self.assertRaisesRegex(image.VerificationError, "non-target payload"):
-            image.verify("dirty", self.before, fault, retry, final)
-
     def test_campaign_rejects_geometry_and_envelope_mutation(self):
         fault = snapshot(batch=image.BATCH_OLD, stage=b"R", created=False)
         bad_geometry = copy.deepcopy(self.complete)

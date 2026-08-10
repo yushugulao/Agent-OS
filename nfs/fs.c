@@ -16,12 +16,8 @@
 #include "fs.h"
 #include "host_image_snapshot.h"
 #include "host_windows_compat.h"
-#include "../agent_metadata_disk_abi.h"
 #include "../user/include/exec_policy_manifest.h"
 #include "../exec_image_policy.h"
-#ifdef AGENT_OBSERVE_PHASE_CONTROL_PROFILE
-#include "../agent_observe_test_phase_abi.h"
-#endif
 
 #ifndef static_assert
 #define static_assert(a, b)                                                    \
@@ -35,10 +31,6 @@
 #define NINODES NINODE
 #define USER_IMAGE_BASE 0x1000ULL
 #define USER_PAGE_SIZE  4096ULL
-#define AGENT_META_STORE_DATA_BLOCKS \
-	((AGENT_META_STORE_MAX_BYTES + BSIZE - 1U) / BSIZE)
-#define AGENT_META_STORE_ALLOC_BLOCKS (AGENT_META_STORE_DATA_BLOCKS + 1U)
-
 // Disk layout:
 // [ boot | super | inode blocks | bitmap | owner map | data blocks ]
 
@@ -53,7 +45,6 @@ struct superblock sb;
 char zeroes[BSIZE];
 uint freeinode = 1;
 uint freeblock;
-static uint metadata_bank_inums[AGENT_META_STORE_BANKS];
 
 struct exec_policy_entry {
 	const char *source;
@@ -94,13 +85,6 @@ void rsect(uint sec, void *buf);
 uint ialloc(ushort type);
 void iappend(uint inum, void *p, int n);
 void require_free_block(const char *context);
-void reserve_metadata_bank_names(void);
-void require_metadata_genesis_capacity(uint rootino);
-void install_metadata_banks(uint rootino);
-void validate_metadata_banks(void);
-#ifdef AGENT_OBSERVE_PHASE_CONTROL_PROFILE
-void install_observe_phase_slot(uint rootino);
-#endif
 void install_file(uint rootino, const char *host_path, const char *image,
 		  uint flags, uint role_mask, uint vfs_profile,
 		  const struct host_image *host_image);
@@ -191,155 +175,6 @@ static void validate_storage_guarantees(void)
 	       workflow_inodes, system_inodes);
 }
 
-static void
-metadata_image_error(const char *reason)
-{
-	fprintf(stderr, "mkfs: metadata genesis validation failed: %s\n", reason);
-	exit(1);
-}
-
-static uint
-inode_allocation_blocks(uint bytes)
-{
-	uint data_blocks = (bytes + BSIZE - 1U) / BSIZE;
-
-	return data_blocks + (data_blocks > NDIRECT ? 1U : 0U);
-}
-
-void
-require_metadata_genesis_capacity(uint rootino)
-{
-	struct dinode root;
-	uint root_bytes;
-	uint root_growth;
-	uint required_blocks;
-	uint free_blocks = FSSIZE - freeblock;
-	uint free_inodes = NINODES - freeinode;
-
-	rinode(rootino, &root);
-	root_bytes = xint(root.size);
-	root_growth = inode_allocation_blocks(
-		root_bytes + AGENT_META_STORE_BANKS * sizeof(struct dirent)) -
-		inode_allocation_blocks(root_bytes);
-	required_blocks = AGENT_META_STORE_BANKS *
-				  AGENT_META_STORE_ALLOC_BLOCKS + root_growth;
-	if (free_blocks < required_blocks ||
-	    free_inodes < AGENT_META_STORE_BANKS) {
-		fprintf(stderr,
-			"mkfs: image cannot fit canonical metadata genesis: "
-			"free_blocks=%u required_blocks=%u "
-			"free_inodes=%u required_inodes=%u\n",
-			free_blocks, required_blocks, free_inodes,
-			AGENT_META_STORE_BANKS);
-		exit(1);
-	}
-}
-
-static void
-metadata_block_contract(uint blockno, uint *seen, uint *seen_count)
-{
-	union {
-		uchar bytes[BSIZE];
-		uint words[QPB];
-	} map;
-
-	if (blockno < (uint)nmeta || blockno >= freeblock ||
-	    *seen_count >= AGENT_META_STORE_BANKS * AGENT_META_STORE_ALLOC_BLOCKS)
-		metadata_image_error("bank block is outside the allocated data arena");
-	for (uint i = 0; i < *seen_count; i++)
-		if (seen[i] == blockno)
-			metadata_image_error("bank block mappings alias");
-	seen[(*seen_count)++] = blockno;
-	rsect(xint(sb.bmapstart) + blockno / BPB, map.bytes);
-	if ((map.bytes[(blockno % BPB) / 8] &
-	     (1U << (blockno % 8))) == 0)
-		metadata_image_error("bank block is not allocated in bitmap");
-	rsect(xint(sb.qmapstart) + blockno / QPB, map.bytes);
-	if (xint(map.words[blockno % QPB]) != FS_OWNER_SYSTEM)
-		metadata_image_error("bank block is not SYSTEM-owned");
-}
-
-void
-validate_metadata_banks(void)
-{
-	struct agent_meta_store_genesis genesis;
-	struct dinode banks[AGENT_META_STORE_BANKS];
-	uint data_blocks[AGENT_META_STORE_BANKS][AGENT_META_STORE_DATA_BLOCKS];
-	uint seen[AGENT_META_STORE_BANKS * AGENT_META_STORE_ALLOC_BLOCKS];
-	uint seen_count = 0;
-	char left[BSIZE], right[BSIZE], expected[BSIZE];
-
-	agent_meta_disk_init_genesis(&genesis);
-	for (uint bank = 0; bank < AGENT_META_STORE_BANKS; bank++) {
-		uint indirect[NINDIRECT];
-		uint inum = metadata_bank_inums[bank];
-		uint expected_checksum;
-
-		if (inum == 0 || (bank != 0 && inum == metadata_bank_inums[0]))
-			metadata_image_error("bank inode identities are not distinct");
-		rinode(inum, &banks[bank]);
-		expected_checksum = vfs_label_checksum(
-			inum, VFS_LABEL_MAGIC, VFS_LABEL_VERSION,
-			VFS_LABEL_F_KERNEL_PRIVATE, VFS_SCOPE_NONE,
-			VFS_POLICY_KERNEL_PRIVATE, VFS_EXEC_PROFILE_NONE,
-			VFS_POLICY_GENERATION, 1, FS_OWNER_SYSTEM,
-			FS_OWNER_VERSION);
-		if (xshort(banks[bank].type) != T_FILE ||
-		    xint(banks[bank].size) != AGENT_META_STORE_MAX_BYTES ||
-		    xint(banks[bank].vfs_flags) != VFS_LABEL_F_KERNEL_PRIVATE ||
-		    xint(banks[bank].vfs_scope_id) != VFS_SCOPE_NONE ||
-		    xint(banks[bank].vfs_policy) != VFS_POLICY_KERNEL_PRIVATE ||
-		    xint(banks[bank].fs_owner_domain) != FS_OWNER_SYSTEM ||
-		    xint(banks[bank].fs_owner_version) != FS_OWNER_VERSION ||
-		    xint(banks[bank].vfs_checksum) != expected_checksum)
-			metadata_image_error("bank inode policy or capacity mismatch");
-		if (xint(banks[bank].addrs[NDIRECT]) == 0)
-			metadata_image_error("bank indirect table is absent");
-		metadata_block_contract(xint(banks[bank].addrs[NDIRECT]),
-					seen, &seen_count);
-		rsect(xint(banks[bank].addrs[NDIRECT]), indirect);
-		for (uint fbn = 0; fbn < AGENT_META_STORE_DATA_BLOCKS; fbn++) {
-			uint blockno = fbn < NDIRECT ?
-				xint(banks[bank].addrs[fbn]) :
-				xint(indirect[fbn - NDIRECT]);
-
-			if (blockno == 0)
-				metadata_image_error("bank preallocation contains a hole");
-			data_blocks[bank][fbn] = blockno;
-			metadata_block_contract(blockno, seen, &seen_count);
-		}
-		for (uint i = AGENT_META_STORE_DATA_BLOCKS - NDIRECT;
-		     i < NINDIRECT; i++)
-			if (indirect[i] != 0)
-				metadata_image_error("bank has blocks beyond fixed capacity");
-	}
-	if (seen_count != AGENT_META_STORE_BANKS * AGENT_META_STORE_ALLOC_BLOCKS)
-		metadata_image_error("bank allocation count mismatch");
-	for (uint fbn = 0; fbn < AGENT_META_STORE_DATA_BLOCKS; fbn++) {
-		size_t offset = (size_t)fbn * BSIZE;
-		size_t copied = 0;
-
-		bzero(expected, sizeof(expected));
-		if (offset < sizeof(genesis)) {
-			copied = sizeof(genesis) - offset;
-			if (copied > sizeof(expected))
-				copied = sizeof(expected);
-			memmove(expected, (char *)&genesis + offset, copied);
-		}
-		rsect(data_blocks[0][fbn], left);
-		rsect(data_blocks[1][fbn], right);
-		if (memcmp(left, right, BSIZE) != 0 ||
-		    memcmp(left, expected, BSIZE) != 0)
-			metadata_image_error("bank bytes are not canonical and identical");
-	}
-	if (!fs_policy_contract_initially_funded(
-		FSSIZE - freeblock, NINODES - freeinode,
-		xint(sb.workflow_block_guarantee),
-		xint(sb.workflow_inode_guarantee),
-		xint(sb.system_block_reserve), xint(sb.system_inode_reserve)))
-		metadata_image_error("bank allocation consumed promised reserves");
-}
-
 int main(int argc, char *argv[])
 {
 	int i;
@@ -349,11 +184,6 @@ int main(int argc, char *argv[])
 	static_assert(sizeof(int) == 4, "Integers must be 4 bytes!");
 	static_assert(sizeof(struct dinode) == 128,
 		      "dinode format must stay fixed");
-	static_assert(AGENT_META_STORE_MAX_BYTES <= (size_t)MAXFILE * BSIZE,
-		      "metadata bank exceeds inode capacity");
-	static_assert(AGENT_META_STORE_DATA_BLOCKS > NDIRECT &&
-		      AGENT_META_STORE_DATA_BLOCKS <= MAXFILE,
-		      "metadata bank preallocation geometry is invalid");
 	static_assert(FS_WORKFLOW_SCOPE_SLOTS > 0 &&
 		      FS_WORKFLOW_MAX_FREE_NUMERATOR > 0 &&
 		      FS_WORKFLOW_MAX_FREE_NUMERATOR <
@@ -422,8 +252,6 @@ int main(int argc, char *argv[])
 	rootino = ialloc(T_DIR);
 	label_inode(rootino, VFS_LABEL_F_ROOT, VFS_SCOPE_NONE,
 		    VFS_POLICY_ROOT, VFS_EXEC_PROFILE_NONE);
-	reserve_metadata_bank_names();
-
 	for (i = 2; i < argc; i++) {
 		char *shortname = basename(argv[i]);
 		const struct exec_policy_entry *primary = 0;
@@ -471,12 +299,6 @@ int main(int argc, char *argv[])
 		}
 		free(host_image.data);
 	}
-#ifdef AGENT_OBSERVE_PHASE_CONTROL_PROFILE
-	install_observe_phase_slot(rootino);
-#endif
-	require_metadata_genesis_capacity(rootino);
-	install_metadata_banks(rootino);
-
 	// Root directory blocks are fixed SYSTEM metadata. Preallocate one slot for
 	// every non-root inode so runtime namespace churn can only reuse directory
 	// entries and can never turn a workflow allocation into SYSTEM block growth.
@@ -502,7 +324,6 @@ int main(int argc, char *argv[])
 	memset(buf, 0, sizeof(buf));
 	memmove(buf, &sb, sizeof(sb));
 	wsect(1, buf);
-	validate_metadata_banks();
 	if (fsync(fsfd) < 0) {
 		perror("fsync metadata image");
 		exit(1);
@@ -750,72 +571,6 @@ static void reserve_image_name(const char *name)
 	strncpy(installed_names[installed_name_count], name, DIRSIZ);
 	installed_name_count++;
 }
-
-void
-reserve_metadata_bank_names(void)
-{
-	reserve_image_name(AGENT_META_STORE_NAME_0);
-	reserve_image_name(AGENT_META_STORE_NAME_1);
-}
-
-static void
-install_metadata_bank(uint rootino, uint bank, const char *name,
-		      struct agent_meta_store_genesis *genesis)
-{
-	struct dirent de;
-	uint inum = ialloc(T_FILE);
-	size_t offset = 0;
-
-	bzero(&de, sizeof(de));
-	de.inum = xshort(inum);
-	strncpy(de.name, name, DIRSIZ);
-	iappend(rootino, &de, sizeof(de));
-	iappend(inum, genesis, sizeof(*genesis));
-	offset = sizeof(*genesis);
-	while (offset < AGENT_META_STORE_MAX_BYTES) {
-		size_t remaining = AGENT_META_STORE_MAX_BYTES - offset;
-		int chunk = (int)(remaining < BSIZE ? remaining : BSIZE);
-
-		iappend(inum, zeroes, chunk);
-		offset += (size_t)chunk;
-	}
-	label_inode(inum, VFS_LABEL_F_KERNEL_PRIVATE, VFS_SCOPE_NONE,
-		    VFS_POLICY_KERNEL_PRIVATE, VFS_EXEC_PROFILE_NONE);
-	metadata_bank_inums[bank] = inum;
-}
-
-void
-install_metadata_banks(uint rootino)
-{
-	static struct agent_meta_store_genesis genesis;
-
-	agent_meta_disk_init_genesis(&genesis);
-	install_metadata_bank(rootino, 0, AGENT_META_STORE_NAME_0, &genesis);
-	install_metadata_bank(rootino, 1, AGENT_META_STORE_NAME_1, &genesis);
-}
-
-#ifdef AGENT_OBSERVE_PHASE_CONTROL_PROFILE
-void
-install_observe_phase_slot(uint rootino)
-{
-	static const char phase_name[] = "obsphase";
-	static const struct agent_observe_test_phase_state empty_phase;
-	struct dirent de;
-	uint inum;
-
-	static_assert(sizeof(empty_phase) == AGENT_OBSERVE_TEST_PHASE_STATE_BYTES,
-		      "observation phase slot ABI drifted");
-	reserve_image_name(phase_name);
-	inum = ialloc(T_FILE);
-	bzero(&de, sizeof(de));
-	de.inum = xshort(inum);
-	strncpy(de.name, phase_name, DIRSIZ);
-	iappend(rootino, &de, sizeof(de));
-	iappend(inum, (void *)&empty_phase, sizeof(empty_phase));
-	label_inode(inum, VFS_LABEL_F_PROTECTED, VFS_SCOPE_SYSTEM,
-		    VFS_POLICY_WORKFLOW, VFS_EXEC_PROFILE_NONE);
-}
-#endif
 
 void install_file(uint rootino, const char *host_path, const char *image,
 		  uint flags, uint role_mask, uint vfs_profile,

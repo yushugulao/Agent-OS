@@ -77,7 +77,6 @@ def check(root: Path) -> None:
             "background observation is not an acquire-load")
     require(take, "__atomic_exchange_n(&agent_background_pending,0,__ATOMIC_ACQ_REL)",
             "background edge is not consumed atomically")
-    reject(background, "agent_metadata_store", "retired durable store owns background dispatch")
     reject(background, "agent_identity_lease", "retired lease persistence owns background dispatch")
 
     maintain = function(core, "agent_background_maintain")
@@ -132,9 +131,6 @@ def check(root: Path) -> None:
         "if(tombstones==AGENT_STATUS_RETRY||content==AGENT_STATUS_RETRY)agent_background_request()",
         "unfinished Live-Query work is not republished",
     )
-    for retired in ("agent_metadata_store", "agent_metadata_scan", "agent_durable_section"):
-        reject(live, retired, "retired metadata persistence returned to the hot path")
-
     dispatch = function(syscall, "syscall")
     if dispatch.count("agent_background_checkpoint()") != 3:
         raise ContractError(

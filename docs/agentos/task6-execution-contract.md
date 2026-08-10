@@ -181,7 +181,7 @@ ABI 已冻结 16 字节 `{slot, type, flags, generation}` handle，私有表容�
 - opaque remote task id 绑定 lifecycle generation、contract generation、channel generation 和 kernel request id；
 - tenant、issuer、subject 与 protocol version fail closed；远程 JSON schema digest 和内核权威 manifest digest 分开保存。
 
-JSON 对象验证与 canonicalization 在这个用户态 gateway 中完成；HTTP binding、OAuth、JWS/Agent Card 签名、网络重连和远端持久化由其外层完成。当前实现使用 deterministic in-memory transport，验证并保存 lifecycle/contract/channel/request 绑定；尚无把这些 dataclass 接到内核 SQ/CQ 的二进制 adapter，也不等于内核自带 MCP/A2A server。
+JSON 对象验证与 canonicalization 在这个用户态 gateway 中完成；HTTP binding、OAuth、JWS/Agent Card 签名、网络重连和远端存储由其外层完成。当前实现使用 deterministic in-memory transport，验证并保存 lifecycle/contract/channel/request 绑定；尚无把这些 dataclass 接到内核 SQ/CQ 的二进制 adapter，也不等于内核自带 MCP/A2A server。
 
 ## 6. 兼容性
 
@@ -217,7 +217,7 @@ JSON 对象验证与 canonicalization 在这个用户态 gateway 中完成；HTT
 - typed handle ABI 不等于完整 Wasm/WASI runtime，当前也不提供 payload import/result backend；
 - core 有 `PENDING`/callback/reclaim 状态机，但当前 provider 同步执行，尚无 provider registration/completion syscall；
 - 用户态 gateway 不把 JSON、HTTP、OAuth、JWS 或远程协议解析带入内核，当前也没有接到真实内核 SQ/CQ 的 binary adapter；
-- Evidence Ring 和合同状态仍是启动周期内存状态，不提供掉电恢复或磁盘 durable task。
+- Evidence Ring 和合同状态都是当前启动周期的内存状态；fence receipt 只陈述本次运行中的可见 cut。
 
 ## 9. 参考来源与原创边界
 

@@ -248,8 +248,7 @@ def check_import_modes() -> None:
         (
             ROOT,
             "from host_tools import plain_ucore_fs_extract; "
-            "from host_tools.agent_metadata_disk_format import load_contract; "
-            "load_contract()",
+            "assert plain_ucore_fs_extract.BSIZE == 1024",
         ),
         (
             ROOT / "host_tools",

@@ -205,33 +205,6 @@ agent_observe_alloc_audit_sequence(void)
 		&agent_audit_next_sequence, AGENT_IDENTITY_ALLOCATOR_AUDIT, 0);
 }
 
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-int
-agent_observe_test_allocate_identity_ids(struct agent_observe_test_identity_ids *ids)
-{
-	uint64 lifecycle_generation = 0;
-	uint lifecycle_slot = 0;
-
-	if (ids == 0)
-		return -1;
-	memset(ids, 0, sizeof(*ids));
-	ids->audit_sequence = agent_observe_alloc_id(&agent_audit_next_sequence,
-		AGENT_IDENTITY_ALLOCATOR_AUDIT, 0);
-	ids->span_id = agent_observe_alloc_span_id();
-	ids->event_id = agent_observe_alloc_event_id();
-	ids->control_id = agent_lifecycle_alloc_control_id();
-	ids->agent_id = agent_identity_alloc_id();
-	if (workflow_lifecycle_test_consume_generation(
-		    &lifecycle_slot, &lifecycle_generation) < 0 ||
-	    ids->audit_sequence == 0 || ids->span_id == 0 ||
-	    ids->event_id == 0 || ids->control_id == 0 || ids->agent_id == 0)
-		return -1;
-	ids->lifecycle_slot = lifecycle_slot;
-	ids->lifecycle_generation = lifecycle_generation;
-	return 0;
-}
-#endif
-
 int
 agent_observe_query_reserve(uint64 records)
 {
@@ -724,14 +697,6 @@ agent_observe_recording_suppress_end(struct proc *p)
 		panic("observation suppression underflow");
 	t->agent_observe_suppress_depth--;
 	intr_restore(enabled);
-}
-
-int
-agent_observe_receipt_persist(uint scope_id)
-{
-	/* Receipts become authoritative only through agent_workflow_fence(). */
-	return agent_observe_scope_valid(scope_id) ? AGENT_STATUS_OK :
-						     AGENT_STATUS_BAD_PARAM;
 }
 
 int
@@ -1519,13 +1484,6 @@ static int agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 		return -1;
 	if (scope_state->total_records == ~0ULL)
 		return -1;
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-	if (agent_observe_test_drop_audit(
-		    actor, scope_id, kind, tool_id, status, authority_effect)) {
-		agent_audit_note_drop(scope_state);
-		return -1;
-	}
-#endif
 	if (agent_audit_next_sequence == 0) {
 		agent_audit_note_drop(scope_state);
 		return -1;

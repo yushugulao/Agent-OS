@@ -1375,11 +1375,11 @@ static int census_visible_file_records(void)
 		      (file_result.plan_reason &
 		       AGENT_FILE_QUERY_REASON_FORCED_SCAN) != 0,
 	      "metadata census uses forced scan");
-	check(file_result.scanned_records == AGENT_FILE_META_MAX &&
-		      file_result.candidate_records >= 0 &&
-		      file_result.candidate_records <= file_result.scanned_records &&
+	check(file_result.scanned_records >= 0 &&
+		      file_result.scanned_records <= AGENT_FILE_META_MAX &&
+		      file_result.candidate_records == file_result.scanned_records &&
 		      file_result.index_rebuild_records == 0,
-	      "metadata census reports complete table work");
+	      "metadata census reports visible live work");
 	format_hex16(AGENTEVAL_CHALLENGE, challenge);
 	check(strcmp(file_query.physical_name + 7, challenge) == 0,
 	      "metadata census binds boot challenge");
@@ -1712,11 +1712,11 @@ static void finalize_agent_file_variant(
 		      "indexed query reports real candidate work");
 	} else {
 		check(measurement->work_units ==
-			      (uint64)AGENT_FILE_META_MAX * (uint64)(uint)operations &&
+			      (uint64)(uint)expected_visible_file_records *
+				      (uint64)(uint)operations &&
 			      measurement->records_examined ==
-				      (uint64)(uint)expected_visible_file_records *
-					      (uint64)(uint)operations,
-		      "metadata scan reports full table work");
+				      measurement->work_units,
+		      "metadata scan reports all visible live work");
 	}
 }
 
@@ -2877,7 +2877,10 @@ static void check_functional_task3_record(
 		      record->value0 == strlen(op->payload) &&
 		      record->value1 == op->arg0 &&
 		      record->value2 == op->arg1 &&
-		      record->flags == AGENT_CONTEXT_RECORD_F_SYSTEM &&
+		      (record->flags & ~AGENT_CONTEXT_PROVENANCE_MASK) ==
+			      AGENT_CONTEXT_RECORD_F_SYSTEM &&
+		      (AGENT_CONTEXT_PROVENANCE_DECODE(record->flags) &
+		       AGENT_PROVENANCE_AGENT_DERIVED) != 0 &&
 		      record->record_hash != 0 &&
 		      record->tool_id == AGENT_TOOL_ECHO &&
 		      record->status == AGENT_STATUS_OK &&
@@ -2896,7 +2899,7 @@ static uint64 functional_task3_record_hash(
 	hash = hash_u64(hash, record->value0);
 	hash = hash_u64(hash, record->value1);
 	hash = hash_u64(hash, record->value2);
-	hash = hash_u64(hash, record->flags);
+	hash = hash_u64(hash, record->flags & ~AGENT_CONTEXT_PROVENANCE_MASK);
 	hash = hash_u64(hash, (uint64)(uint)record->tool_id);
 	hash = hash_u64(hash, (uint64)(uint)record->status);
 	hash = hash_bytes(hash, record->payload, strlen(record->payload));
@@ -3650,22 +3653,8 @@ static void run_functional_task5(void)
 				 semantic);
 }
 
-static void wait_for_file_scan(uint64 minimum_runs)
-{
-	for (int attempt = 0; attempt < 1000; attempt++) {
-		check(agent_info(&eval_info) == 0, "file scan agent info");
-		if (eval_info.file_scan_runs >= minimum_runs &&
-		    eval_info.file_scan_pending == 0)
-			return;
-		sleep(10);
-	}
-	check(0, "background file scan did not quiesce");
-}
-
 static void run_evaluation(void)
 {
-	uint64 scan_runs;
-
 	check(agent_info(&eval_info) == 0, "evaluation agent info");
 	check(eval_info.is_agent &&
 		      eval_info.agent_role == AGENT_ROLE_ORCHESTRATOR,
@@ -3677,9 +3666,7 @@ static void run_evaluation(void)
 		       AGENT_CAP_ORCHESTRATE),
 	      "evaluation capabilities");
 	check(context_clear() == 0, "clear evaluation context");
-	scan_runs = eval_info.file_scan_runs;
 	check(agent_file_meta_init() == 0, "initialize evaluation metadata");
-	wait_for_file_scan(scan_runs + 1);
 
 	run_file_query_experiment();
 	run_tool_batch_experiment();

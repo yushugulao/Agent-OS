@@ -4,14 +4,14 @@
 
 ## 1. 总表
 
-| 任务 | 赛题能力 | 当前实现 | 主要源码 | 验证入口 | 边界 |
+| 任务 | 题面硬门槛 | 当前实现 | 主要源码 | 代表 Guest / 命令 | 边界 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Agent 进程与专用地址空间 | 可信映像/role/capability、7 页 Context 区、workflow id+generation、member+closing+gates | `os/agent_core.c`、`os/proc.c`、`os/workflow_lifecycle.c`、`os/vfs_security.c` | Agent create/scope/security Guest tests；fence syscall-cut test | 单 Hart；workflow/slot 有界；无 crash workflow recovery |
-| 2 | 面向 Agent 的系统调用/工具 | name/id 工具目录、typed KV、24-node immutable execution contract、Phase Lease、V2/V3/batch、16-slot Task SQ/CQ | `os/agent_core.c`、`os/agent_execution_contract.c`、`os/agent_task_channel.c`、`os/resource_controller.c` | execution-contract/task-channel checker；tool/contract Guest tests；UAPI check | 内核不运行 LLM；合同最多 24 节点/48 attempts；Task Channel 按需 4 页，当前 provider 同步且无 payload backend |
-| 3 | Context Path | 内核可信 Context、只读 mirror、cause/span/branch、六标签 provenance、critical denial evidence | Context/observe/provenance/evidence 模块 | Context/rollback/security Guest tests；execution-contract/Evidence Ring model | user cache 不可信；标签保守传播且不判断文本安全；历史有界 |
-| 4 | 文件属性查询 | 显式 volatile metadata、status/stage/kind 索引、inode incarnation、typed live query/resync | metadata catalog/query/object、`os/agent_live_query_events.c` | live-query checker/model；file-query Guest benchmark | 不 autoscan；不持久化 catalog；重启需重新登记 |
-| 5 | Agent Loop | 有界 event queue、watch/wait、heartbeat、route、workflow EEVDF、可表达 `PENDING` 的 Task completion core、Fence-Sealed Evidence Ring | `os/agent_ipc.c`、`os/workflow_scheduler.c`、Task/observe/evidence 模块 | scheduler model；evidence/fence/live-query model；loop/sched/IPC Guest tests | EEVDF 总 cap4=bootstrap+最多 3 fresh；16 为四波逻辑样本；当前 Task provider 同步；异常回退 legacy scheduler |
-| 6 | 综合 Agent 应用 | plain/AgentOS 同科研合同；MCP 2026-07-28/A2A v1 的 deterministic 用户态映射 | `user/src/rp_*`、`baseline_ucore/`、`host_tools/mcp_a2a_gateway.py`、`host_tools/agent_task_transport.py` | seeded/dual paired run；gateway/in-memory transport tests | gateway 尚无内核 SQ/CQ binary adapter；JSON/HTTP/OAuth/JWS 在用户态；单项归因需消融；数字来自实际测量 |
+| 1 | Agent 创建、Context 区可用、普通/Agent 进程共存 | 可信映像/role/capability、6 页可信只读区 + 1 页用户 cache 读写区、workflow id+generation、member+closing+gates | `os/agent_core.c`、`os/proc.c`、`os/workflow_lifecycle.c`、`os/vfs_security.c` | `agentfinal_ucore`、`agenttrust_ucore`、`agentscope_ucore` | 单 Hart；workflow/slot 有界；lifecycle 属于当前启动周期 |
+| 2 | 至少 3 个结构化工具；工具发现与错误处理 | 25 项 name/id 工具目录、typed KV、24-node immutable execution contract、Phase Lease、V2/V3/batch、16-slot Task SQ/CQ | `os/agent_tool_protocol.c`、`os/agent_core.c`、`os/agent_execution_contract.c`、`os/agent_task_channel.c` | `agenttoolabi_ucore`、`agentfinal_ucore`、`agentcontract_ucore` | 内核不运行 LLM；合同最多 24 节点/48 attempts；Task Channel 当前 provider 同步且无 payload backend |
+| 3 | 至少 5 轮连续调用；直接读路径；超长自动淘汰 | 内核可信 Context、只读 mirror、用户 cache、cause/span/branch、rollback、有界 FIFO 历史 | `os/agent_context.c`、`os/agent_provenance.c`、`os/agent_evidence_ring.c` | `agentfinal_ucore` | 用户 cache 可读写但不可信；标签保守传播且不判断文本安全；历史有界 |
+| 4 | 至少 2 类扩展；结构化结果；查询优于遍历的对比 | 显式 boot-scoped metadata、status/stage/kind 索引、summary/digest、inode incarnation、typed live query/resync | `os/agent_metadata_catalog.c`、`os/agent_metadata_query.c`、`os/agent_metadata_objects.c`、`os/agent_live_query_events.c` | `agentfs_ucore`、`agentbench_ucore` | 只覆盖显式登记对象；每次启动由用户态重新登记 |
+| 5 | 至少 2 类机制；heartbeat/事件驱动、无事件休眠、多 Agent 稳定 | 有界 event queue、watch/wait、heartbeat、route、workflow EEVDF、Fence-Sealed Evidence Ring | `os/agent_ipc.c`、`os/workflow_scheduler.c`、`os/agent_task_channel.c`、`os/agent_evidence_ring.c` | `agentloop_ucore`、`agentsched_ucore`、`agent_eevdf_ucore` | EEVDF 总 cap4=bootstrap+最多 3 fresh；16 为四波逻辑样本；当前 Task provider 同步；异常回退 legacy scheduler |
+| 6 | 整合至少 3 个模块；QEMU 综合程序；至少 1 组性能对比 | 身份 + Context + metadata/index + event/IPC + 授权动作的科研恢复场景；plain/AgentOS 同科研合同；用户态 MCP/A2A 映射 | `user/src/labdemo_ucore.c`、`user/src/rp_*`、`baseline_ucore/`、`host_tools/contest_demo.py` | `make contest-demo`、`make dual-platform-run` | gateway 尚无内核 SQ/CQ binary adapter；单项因果归因需同内核对照；数字来自实际运行 |
 
 ## 2. 任务一细化
 
@@ -19,12 +19,19 @@
 | --- | --- |
 | 区分普通进程与 Agent | `is_agent` 只由受控 create/exec 发布，普通 exec 不取得身份 |
 | Agent 角色和权限 | role 映射 capability；父权限、映像 profile 和 scope 继续衰减 |
-| 专用 Context | 固定 ABI 地址，6 页可信区 + 1 页 user cache |
+| 专用 Context | 固定 ABI 地址，6 页由内核发布且用户只读，另 1 页 user cache 可由用户态直接读写 |
 | fork/exec/exit | operation/departure gate 包围身份和资源转移；失败撤销 |
 | workflow 生命周期 | immutable `id+generation`、members、closing、controller、fence gate |
 | 资源隔离 | exec/storage account；U/P/F hard admission；fence exact U |
 
 不再把“多阶段 retirement”作为加分能力。当前更小的状态机以最后 member 和 gate quiescence 决定回收。
+
+题面要求的“Agent 可直接读写 Context 区”由第 7 页 user cache 满足；前 6 页保存身份、记录和 evidence 输入，故意设为用户只读，避免用户态伪造可信历史。代表命令：
+
+```bash
+AGENT_TEST_CASE=agentfinal_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agenttrust_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
 
 ## 3. 任务二细化
 
@@ -44,6 +51,13 @@
 | 类型化资源 | slot/type/owned-borrowed/generation handle 与 8 槽私有表；`RESOURCE_IMPORT` 固定 `DENIED`，当前无 payload import/result resource backend |
 | 兼容 | scalar V2 与 `agent_run()` batch 保留；Task Channel 按需建立 |
 
+工具目录当前含 `query_process`、`get_system_status`、`read_context`、`query_file`、`send_message` 等，超过题面“至少 3 个”的门槛。`agenttoolabi_ucore` 同时覆盖不存在的工具、id/name 冲突、缺少参数、错类型和缓冲区边界：
+
+```bash
+AGENT_TEST_CASE=agenttoolabi_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
+
 ## 4. 任务三细化
 
 | 要求 | 实现/断言 |
@@ -58,6 +72,12 @@
 | effect gate | lifecycle + frozen edge/schema + capability + manifest labels/effects 同时通过才允许外部副作用 |
 | critical denial | 计划外/不可信来源调用在副作用前 `DENIED`，记录 source/tool/reason/lifecycle/ticket |
 
+`agentfinal_ucore` 在一次 batch 中提交 64 个结构化调用，并继续验证 snapshot、rollback、分支和窗口淘汰，覆盖题面“5 轮以上”要求。可信 mirror 可直接读取；user cache 可直接读写，但不参与授权判断：
+
+```bash
+AGENT_TEST_CASE=agentfinal_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
+
 ## 5. 任务四细化
 
 | 要求 | 当前实现与断言 |
@@ -68,7 +88,12 @@
 | 有界丢失处理 | generation `RESYNC_REQUIRED` + snapshot/query + ACK |
 | 安全隔离 | scope/lifecycle/control id/incarnation 全部重验 |
 
-明确不实现：普通目录 autoscan、persistent metadata flag、catalog journal/bank/recovery。`PERSIST/AUTOSCAN` 保留为 legacy 常量并返回 `BAD_PARAM`。
+任务四至少覆盖题面四个方向中的文件属性、内容摘要、选择性索引和结构化查询/缓存边界。`agentbench_ucore` 输出同一数据集的 scan/index 候选数、检查记录数和 query tick；这些字段必须由本次 Guest 运行读取，不在文档中预填：
+
+```bash
+AGENT_TEST_CASE=agentfs_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentbench_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
 
 ## 6. 任务五细化
 
@@ -87,9 +112,31 @@
 | 观测 | ordinary Context 单次 canonical ring；critical 兼容 ledger 投影 |
 | 可验证 cut | challenge-bound evidence root + exact credit digest + volatile metadata generation |
 
-audit/timeline/provenance/ledger 兼容 API 仍支持；observe crash recovery 不支持，syscall 固定 `BAD_PARAM`。
+题面至少要求两类机制；当前 heartbeat、typed/legacy watch、event wait、IPC route、lifecycle 与 workflow 调度均有 Guest 路径。无事件休眠由 `agentloop_ucore` 的 wait/wakeup 路径验证，多 Agent 进展由 scheduler 场景验证：
 
-## 7. 创新增量与外部思想
+```bash
+AGENT_TEST_CASE=agentloop_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentsched_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
+
+## 7. 任务六细化
+
+| 题面要求 | 当前场景与验证 |
+| --- | --- |
+| 至少整合 3 个模块 | `labdemo_ucore` 串联可信身份、Context、metadata/index、event wait、IPC route、capability 拒绝和审计视图 |
+| 可运行综合程序 | `make contest-demo` 自动构建并运行 QEMU Guest |
+| 至少 1 组对比 | 同一 Guest 内 Compat/Native 等量 AB/BA 对比；`make dual-platform-run` 另做 plain/AgentOS 端到端比较 |
+| 结果可复核 | `results/contest-demo/` 保存逐样本串口日志、`summary.json`、`measurements.csv` 与 `report.md` |
+
+```bash
+make contest-demo TOOLPREFIX=riscv-none-elf-
+make dual-platform-run TOOLPREFIX=riscv-none-elf-
+```
+
+未运行命令时不声称具体数值。产生对外结果时必须同时记录工具链、QEMU、Host、样本数、失败样本、单位和原始日志。
+
+## 8. 创新增量与外部思想
 
 | 项目机制 | 公开概念来源 | 本项目特定增量 |
 | --- | --- | --- |
@@ -104,12 +151,12 @@ audit/timeline/provenance/ledger 兼容 API 仍支持；observe crash recovery �
 
 以上为 clean-room、概念级参考。没有复制/vendoring Linux、Haiku、相关论文原型或协议 SDK 的源码、数据、二进制或磁盘格式；Task Channel 不实现完整 io_uring/Wasm ABI，gateway 也不把远程协议栈放入内核，详见 [task6-execution-contract.md](task6-execution-contract.md) 与 [../../NOTICE](../../NOTICE)。
 
-## 8. 验证矩阵
+## 9. 验证矩阵
 
 | 合同 | Host/static | cross build | QEMU/paired |
 | --- | --- | --- | --- |
 | UAPI layout | `check-agent-uapi-layout.py` | kernel/user 同头编译 | syscall 行为 |
-| Credit U/P/F | `test-workflow-credit-domain.py` | budget/module check | quota/teardown Guest |
+| Credit U/P/F | `test-workflow-credit-domain.py` | module/stack check | quota/teardown Guest |
 | Evidence Ring | `test-agent-evidence-ring.py` | kernel link/stack | Context/audit/fence Guest |
 | Live Query | checker + `test-agent-live-query-fs.py` | metadata/IPC modules | query/watch/event Guest |
 | Workflow fence | checker + mutation + syscall-cut | ABI/link | controller/retry/receipt Guest |
@@ -119,11 +166,11 @@ audit/timeline/provenance/ledger 兼容 API 仍支持；observe crash recovery �
 | MCP/A2A gateway | transport + gateway unit tests | 用户态 syntax/import | protocol fixture/in-memory Task lifecycle replay；不覆盖内核 SQ/CQ adapter |
 | 综合任务 | Host contract selftests | 双目标 build | seeded/dual paired run |
 
-## 9. 测试与主张边界
+## 10. 测试与主张边界
 
 - checker 通过不等于动态 Guest 功能已运行；
 - Guest `passed` 行必须同时满足 runner 的退出状态、panic 和超时检查；
-- fence receipt 不等于磁盘持久证据；
+- fence receipt 只覆盖当前启动周期内存证据；
 - paired end-to-end 差异不自动证明某个内核机制贡献；
 - 16-workflow 数据是四波复用同一 bootstrap 加 12 个 fresh lifecycle 的 16 个逻辑样本，不等于 16 个并发或独立 EEVDF lifecycle，也不得写成每波 4 个 fresh；
 - one terminal CQE 不等于远程工具副作用的分布式 exactly-once；

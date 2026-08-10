@@ -247,12 +247,6 @@ def check(root):
     )
     require_contains(
         user_make,
-        "COMPAT_BENCH_REPO_SOURCE:=evaluation_guest/compatbench.c"
-        "COMPAT_BENCH_SOURCE:=../$(COMPAT_BENCH_REPO_SOURCE)",
-        "canonical compatibility benchmark source",
-    )
-    require_contains(
-        user_make,
         "STACK_USAGE_ALL_LIBRARY_SRCS:=$(addprefixuser/,$(sort$(LIB_C)))",
         "complete stack library inventory",
     )
@@ -276,43 +270,13 @@ def check(root):
     )
     require_contains(
         user_make,
-        "RETIRED_GUEST_APPS:=agentmetacrash_ucoreagentmetarecover_ucore\\"
-        "agentmetaeio_ucoreagentmetalarge_ucoreagentmetatransient_ucore\\"
-        "agentobsreboot_ucore",
-        "retired recovery Guest inventory",
-    )
-    require_contains(
-        user_make,
-        "RETIRED_GUEST_SRCS:=$(addprefixuser/$(app_dir)/,"
-        "$(addsuffix.c,$(RETIRED_GUEST_APPS)))"
-        "SRCS:=$(wildcard$(app_dir)/*.c)"
-        "APPS:=$(filter-out$(RETIRED_GUEST_APPS),"
-        "$(patsubst$(app_dir)/%.c,%,$(SRCS)))",
-        "retired recovery Guest build exclusion",
-    )
-    require_contains(
-        user_make,
-        "ifneq($(filter$(CHAPTER),metadata_recoveryobserve_recovery),)"
-        "$(errorCHAPTER=$(CHAPTER)isretired;usethelive-queryandworkflow-fence"
-        "Agenttests)endif",
-        "retired recovery chapter fail-closed gate",
-    )
-    require_contains(
-        user_make,
-        "$(filter-out$(STACK_USAGE_SUPPORT_SRCS)$(RETIRED_GUEST_SRCS),"
-        "$(addprefixuser/,$(sort$(SRCS))))\\$(COMPAT_BENCH_REPO_SOURCE)"
+        "$(filter-out$(STACK_USAGE_SUPPORT_SRCS),"
+        "$(addprefixuser/,$(sort$(SRCS))))"
         "STACK_USAGE_SRCS:="
         "$(STACK_USAGE_FUNCTION_LIBRARY_SRCS)$(STACK_USAGE_SUPPORT_SRCS)"
         "$(STACK_USAGE_APPLICATION_SRCS)",
         "complete stack application inventory",
     )
-    for retired_fragment in (
-        "METADATA_RECOVERY_TESTS:=",
-        "OBSERVE_RECOVERY_TESTS:=",
-        "agentobsreboot_ucore.o:STACK_USAGE_PROFILE_CFLAGS:=",
-    ):
-        if retired_fragment in user_make:
-            raise ValueError("retired recovery Guest remains in formal build")
     require_contains(
         user_make,
         "$(foreachsrc,$(STACK_USAGE_SUPPORT_SRCS),--library-unit=$(src))",
@@ -345,16 +309,6 @@ def check(root):
             raise ValueError(f"data-only stack storage definition missing: {symbol}")
     require_contains(
         user_make,
-        "$(STACK_USAGE_DIR)/evaluation_guest/compatbench.o:",
-        "shared compatibility benchmark stack build",
-    )
-    require_contains(
-        user_make,
-        "-fstack-usage-fcallgraph-info=su-c$(COMPAT_BENCH_REPO_SOURCE)",
-        "canonical compatibility benchmark stack compilation",
-    )
-    require_contains(
-        user_make,
         "-I$(abspath$(generated_dir))",
         "absolute generated-header stack include",
     )
@@ -370,12 +324,6 @@ def check(root):
         "-Iuser/$(arch_dir)-I$(abspath$(generated_dir))"
         "STACK_USAGE_CFLAGS+=$(USER_EXTRA_CFLAGS)",
         "stack compiler flag parity",
-    )
-    require_contains(
-        user_make,
-        "$(CC_CMD)$(CFLAGS)$(LDFLAGS)$(CRT_OBJ)$(LIB_OBJS)"
-        "\\$(COMPAT_BENCH_SOURCE)-o$@",
-        "canonical compatibility benchmark link",
     )
     require_contains(
         user_make,

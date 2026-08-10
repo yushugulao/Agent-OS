@@ -23,7 +23,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 564)
+        self.assertEqual(len(self.golden), 545)
         self.assertEqual(
             self.golden["agent_uapi_layout_value_ledger_version"], 3
         )
@@ -34,14 +34,6 @@ class AgentUapiLayoutTests(unittest.TestCase):
         self.assertEqual(
             self.golden["agent_uapi_layout_offset_info_file_scan_failures"],
             585,
-        )
-        self.assertEqual(
-            self.golden["agent_uapi_layout_offset_info_metadata_journal_txns"],
-            593,
-        )
-        self.assertEqual(
-            self.golden["agent_uapi_layout_offset_info_metadata_full_cow_blocks"],
-            617,
         )
         self.assertEqual(
             self.golden[
@@ -134,12 +126,6 @@ class AgentUapiLayoutTests(unittest.TestCase):
             6,
         )
         self.assertEqual(
-            self.golden[
-                "agent_uapi_layout_value_observe_recovery_compat_tombstone"
-            ],
-            1,
-        )
-        self.assertEqual(
             self.golden["agent_uapi_layout_size_execution_contract_node"],
             168,
         )
@@ -216,18 +202,6 @@ class AgentUapiLayoutTests(unittest.TestCase):
             self.assertNotRegex(source, r"\b(?:SYS_|__NR_)\w+\s+52[67]\b")
             self.assertRegex(source, r"\b(?:SYS_|__NR_)agent_sched_config\s+525\b")
             self.assertRegex(source, r"\b(?:SYS_|__NR_)agent_span_trace_snapshot\s+528\b")
-            self.assertRegex(
-                source,
-                r"\b(?:SYS_|__NR_)agent_observe_recovery\s+550\b",
-            )
-
-        dispatch = (ROOT / "os" / "syscall.c").read_text(encoding="utf-8")
-        recovery_case = dispatch[
-            dispatch.index("case SYS_agent_observe_recovery:") :
-            dispatch.index("break;", dispatch.index("case SYS_agent_observe_recovery:"))
-        ]
-        self.assertIn("AGENT_STATUS_BAD_PARAM", recovery_case)
-        self.assertNotIn("sys_agent_observe_recovery(", recovery_case)
 
         for path in (
             ROOT / "os" / "syscall.c",
@@ -261,23 +235,19 @@ class AgentUapiLayoutTests(unittest.TestCase):
             root = Path(directory)
             (root / "os").mkdir()
             (root / "user" / "include").mkdir(parents=True)
-            for relative in (
-                "agent_observe_abi.h",
-                "os/agent.h",
-                "user/include/agent.h",
-            ):
+            for relative in ("os/agent.h", "user/include/agent.h"):
                 source = (ROOT / relative).read_text(encoding="utf-8")
                 (root / relative).write_text(source, encoding="utf-8")
-            path = root / "agent_observe_abi.h"
+            path = root / "user" / "include" / "agent.h"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
-                    "#define AGENT_OBSERVE_RECOVERY_COMPAT_TOMBSTONE 1U",
+                    "#define AGENT_FILE_META_F_UNSUPPORTED_MASK ",
                     "/* tombstone removed */",
                 ),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
-                agent_uapi_layout.LayoutError, "explicit ABI tombstone"
+                agent_uapi_layout.LayoutError, "not explicitly unsupported"
             ):
                 agent_uapi_layout.validate_compatibility_tombstones(root)
 

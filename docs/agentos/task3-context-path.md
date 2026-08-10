@@ -47,7 +47,7 @@ generation，并把目标作为新 active path 的锚点。旧分支继续作为
 - `agentfinal_ucore` 验证只读映射隔离、hash 链、提交顺序、回滚和 FIFO 淘汰。
 - `agentfinal_ucore` 的同步故障 profile 验证失败发布不覆盖旧记录且后续提交可继续。
 - `agentscope_ucore` 验证 scope 裁剪、有界查询和跨 workflow 隔离。
-- Evaluation v5 的多轮 workload 记录 rollback 正确率、吞吐、等待分位数和公平性。
+- `agentfinal_ucore` 一次 batch 提交 64 个结构化调用并验证查询、rollback 和 FIFO 窗口；`agentbench_ucore` 单独报告 Context syscall/mirror 的样本、tick 与工作量。
 
 实际 Host 与 QEMU 测试命令见 [verification.md](verification.md) 与
 [顶层验证说明](../verification.md)。

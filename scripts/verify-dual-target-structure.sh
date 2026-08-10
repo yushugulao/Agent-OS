@@ -34,7 +34,7 @@ for path in \
 	Makefile baseline_ucore/os baseline_ucore/user/Makefile \
 	baseline_ucore/user/src os/agent.c os/agent.h user/Makefile user/src \
 	user/src/rp_agentos_orch.c scripts/run-agent-tests.sh \
-	scripts/run-dual-platforms.sh scripts/check-target-readiness.sh
+	scripts/run-dual-platforms.sh
 do
 	require_path "${path}" "required dual-target surface is missing"
 done

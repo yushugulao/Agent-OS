@@ -6,7 +6,7 @@ acceptance system.
 
 The useful checks are deliberately narrow:
 
-- UAPI and retained disk-format sizes/offsets;
+- current kernel/user UAPI sizes and offsets;
 - the dual-target state-file allowlist; and
 - actual performance experiment loads and operation counts.
 
@@ -33,6 +33,18 @@ AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test
 ```
 
 A timeout remains a test failure, but it is an operational bound rather than a
-machine-specific performance claim. Expected-fault and persistence cases must
-still terminate with their documented marker and status; unexpected panic,
-output overflow or forced termination fails the test.
+machine-specific performance claim. Expected-fault, filesystem-capacity and
+device-fault cases must still terminate with their documented marker and
+status; unexpected panic, output overflow or forced termination fails the
+test.
+
+The contest demonstration is a real QEMU campaign, separate from these static
+inputs:
+
+```sh
+make contest-demo
+```
+
+It writes the current run's raw logs, `summary.json`, `measurements.csv` and
+`report.md` under `results/contest-demo/`; this directory contains run output,
+not CI configuration or predeclared performance values.

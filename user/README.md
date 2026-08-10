@@ -13,7 +13,8 @@ make CHAPTER=platform_agentos
 
 `CHAPTER` 常用取值：
 
-- `agent`：构建 AgentOS 功能、安全和稳健性专项测试，包括下方列出的 17 个程序。
+- `agent`：构建 AgentOS 功能、安全、性能和稳健性专项程序；实际清单以 `user/Makefile` 的 `AGENT_TESTS` 为准。
+- `agent_eval`：构建集中覆盖赛题任务一至五门槛的 `agenteval_ucore`。
 - `platform_agentos`：构建接入增强内核服务的科研 Agent 平台程序，例如 `rp_agentos_orch` 和完整 `rp_*` 平台程序集。
 - uCore 原有章节值仍可用于基础教学测试。
 
@@ -30,7 +31,7 @@ make CHAPTER=platform_agentos
 
 ## 本项目相关入口
 
-AgentOS 专项验证入口：
+AgentOS 代表性验证入口：
 
 ```text
 agentfinal_ucore
@@ -41,6 +42,9 @@ agentsched_ucore
 agentconflict_ucore
 agentllm_ucore
 agentbench_ucore
+agentcontract_ucore
+agent_eevdf_ucore
+agenttask_ucore
 labdemo_ucore
 agentsecurity_ucore
 agenttoolabi_ucore
@@ -52,10 +56,18 @@ usersafety_ucore
 blocking_semantics_ucore
 ```
 
+集中赛题验收程序单独位于 `agent_eval` 章节：
+
+```text
+agenteval_ucore
+```
+
 科研 Agent 平台增强入口：
 
 ```text
 rp_agentos_orch
 ```
 
-`rp_agentos_orch` 会创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的设定的模拟流程，并把关键内核证据写入 `rp_agentos_*` 状态文件。该流程包含数据准备、比对处理、结果分析、报告生成和归档交付。
+`rp_agentos_orch` 会创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的确定性流程，并把可比较的用户态状态投影写入 `rp_agentos_*` 文件。它们用于双目标结果比较，不替代 Guest 串口、内核 Evidence Ring 或 workflow fence receipt。该流程包含数据准备、比对处理、结果分析、报告生成和归档交付。
+
+完整构建、定向运行和结果解释见 [验证说明](../docs/verification.md) 与[要求追踪表](../docs/agentos/requirements-traceability.md)。

@@ -718,8 +718,6 @@ int fileopen(char *path, uint64 omode)
 	int created = 0;
 	int lookup_status = FS_LOOKUP_ERROR;
 
-	if (agent_file_is_meta_store_name(path))
-		return -1;
 	vfs_cred_from_proc(curr_proc(), &cred);
 	policy = vfs_default_create_policy(&cred);
 	if ((omode & O_CREATE) && policy == 0)
@@ -811,8 +809,6 @@ int fileunlink(char *path)
 	int lookup_status;
 	int root_status;
 
-	if (agent_file_is_meta_store_name(path))
-		return -1;
 	vfs_cred_from_proc(curr_proc(), &cred);
 	policy = vfs_cred_lookup_policy(&cred);
 

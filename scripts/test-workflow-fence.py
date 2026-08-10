@@ -657,8 +657,7 @@ class WorkflowFenceMutationTests(unittest.TestCase):
             "os/agent_workflow_fence.c",
             "if (agent_metadata_quiescence_fence_snapshot_current(\n"
             "\t\t    &metadata_generation) < 0 || metadata_generation == 0) {",
-            "if (agent_metadata_catalog_generation_snapshot(\n"
-            "\t\t    &metadata_generation) < 0 || metadata_generation == 0) {",
+            "if ((metadata_generation = agent_metadata_catalog_generation()) == 0) {",
         )
         self.assert_rejected("unavailable metadata cut")
 

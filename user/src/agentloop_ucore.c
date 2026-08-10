@@ -242,7 +242,9 @@ static void check_queue_reservations(void)
 	check(agent_wait(&event, 50) == AGENT_STATUS_OK,
 	      "receive reclaimed attributed event");
 	check(event.type == AGENT_EVENT_POLICY_DENIED &&
-		      event.source_pid == pids[3],
+		      event.source_pid == pids[3] && event.corr_id == 381 &&
+		      strcmp(event.payload,
+			     "action=action_commit;compat=rerun_stage") == 0,
 	      "reclaimed attributed event source");
 	check(agent_info(&info) == 0 && info.event_queue_count == 0,
 	      "private event counters reclaimed");

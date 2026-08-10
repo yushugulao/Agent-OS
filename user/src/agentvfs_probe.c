@@ -54,11 +54,6 @@ static void check_unprivileged_access(const char *public_file,
 	check(open(SECRET_FILE, O_WRONLY | O_TRUNC) == -1,
 	      "deny protected truncate");
 	check(unlink(SECRET_FILE) == -1, "deny protected unlink");
-	check(open(".agentmeta", O_RDONLY) == -1,
-	      "deny kernel metadata read");
-	check(open(".agentmeta1", O_RDONLY) == -1,
-	      "deny alternate kernel metadata read");
-
 	unlink(public_file);
 	fd = open(public_file, O_CREATE | O_WRONLY | O_TRUNC);
 	check(fd >= 0, "create public file");

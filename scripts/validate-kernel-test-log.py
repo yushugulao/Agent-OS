@@ -219,7 +219,7 @@ FS_QUOTA_MARKERS = (
     "fsquota_ucore: workflow_reserve=1",
     "fsquota_ucore: workflow_version_reserve=1",
     "fsquota_ucore: content_version_reserve=1",
-    "fsquota_ucore: kernel_metadata_reserve=1",
+    "fsquota_ucore: kernel_file_services_reserve=1",
     "fsquota_ucore: pressure_cleanup=1",
 )
 

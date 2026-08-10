@@ -14,7 +14,6 @@ OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 PYTHON_BIN ?= python3
 PY = $(PYTHON_BIN)
-COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 GDB = $(TOOLPREFIX)gdb
 # Preserve raw tool identities for configuration and recursive-make
 # propagation.  Quote complete executable words only when the shell sees them.
@@ -265,7 +264,6 @@ CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]' || ech
 
 user:
 	$(MAKE) -C user CHAPTER=$(CHAPTER) BASE=$(BASE) \
-		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
-		COMPAT_BENCH_CHALLENGE_HEX=$(call shell_quote,$(COMPAT_BENCH_CHALLENGE_HEX))
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX))
 
 test: user run

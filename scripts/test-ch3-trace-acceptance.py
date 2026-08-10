@@ -34,7 +34,6 @@ class Ch3TraceAcceptanceContract(unittest.TestCase):
         self.assertIn('make -j"${AGENTOS_BUILD_JOBS}"', source)
         self.assertIn('"${TMPDIR_CH3}/run.img"', source)
         self.assertEqual(source.count("scripts/agent_test_runner.py"), 1)
-        self.assertNotIn("run-parallel-qemu-regressions.py", source)
 
     def test_full_verification_runs_the_real_guest_and_validator(self) -> None:
         source = FULL_VERIFY.read_text(encoding="utf-8")
@@ -49,6 +48,15 @@ class Ch3TraceAcceptanceContract(unittest.TestCase):
         self.assertIn('scripts/validate-kernel-test-log.py', block)
         self.assertIn('--profile ch3-trace', block)
         self.assertNotIn("evidence_", block)
+
+    def test_full_verification_runs_the_integrated_agent_scenario(self) -> None:
+        source = FULL_VERIFY.read_text(encoding="utf-8")
+        gate = "[full-verify] integrated Task 1-5 evaluation Guest"
+        self.assertEqual(source.count(gate), 1)
+        block = source[source.index(gate) :]
+        self.assertIn("AGENT_TEST_CASE=agenteval_ucore", block)
+        self.assertIn("scripts/run-agent-tests.sh", block)
+        self.assertIn('BASH_BIN="${BASH_BIN:-bash}"', source)
 
     def test_make_entry_and_selftest_are_registered(self) -> None:
         source = MAKEFILE.read_text(encoding="utf-8")

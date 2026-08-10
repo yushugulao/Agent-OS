@@ -185,68 +185,6 @@ static void agent_query_result_reset(struct agent_file_query_result *r)
 }
 
 int
-agent_metadata_query_execute_locked(
-	uint scope, const struct agent_file_query *q,
-	struct agent_file_query_result *r, int allow_insert)
-{
-	struct agent_catalog_view view;
-	struct agent_query_plan plan;
-	int cursor = -1, bucket = -1;
-	int rebuild_records = 0;
-	uint64 start, generation;
-
-	agent_metadata_txn_projection_require_idle();
-	(void)allow_insert;
-	agent_query_plan_build(q, r, &plan);
-	start = agent_file_state_now();
-	generation = agent_metadata_catalog_generation();
-	if (plan.use_index) {
-		cursor = agent_metadata_catalog_index_seek(
-			generation, plan.index, (char *)plan.index_key, -1,
-			&bucket, &rebuild_records);
-		r->index_bucket = bucket;
-	}
-	if (plan.force_scan)
-		cursor = 0;
-	else if (!plan.use_index)
-		cursor = agent_metadata_catalog_live_seek(generation, -1);
-	for (int i = cursor;
-	     i >= 0 && i < AGENT_FILE_META_MAX;
-	     i = plan.use_index ? agent_metadata_catalog_index_seek(
-				     generation, plan.index, 0, i, 0, 0) :
-		 plan.force_scan ? i + 1 :
-			     agent_metadata_catalog_live_seek(generation, i)) {
-		agent_metadata_txn_work_charge(1);
-		r->scanned_records++;
-		if (agent_metadata_catalog_borrow(generation, i, &view) <= 0)
-			continue;
-		if (!agent_object_scope_visible(scope, view.scope_id)) {
-			view.meta = 0;
-			continue;
-		}
-		r->candidate_records++;
-		if (agent_metadata_query_matches(scope, view.scope_id, q,
-					       view.meta)) {
-			r->total_hits++;
-			if (r->returned < plan.limit) {
-				agent_file_state_project_hit(
-					&r->hits[r->returned++],
-					view.meta, view.scope_id);
-			} else {
-				r->truncated = 1;
-			}
-		}
-		view.meta = 0;
-	}
-	r->used_index = plan.use_index;
-	r->index_rebuild_records = rebuild_records;
-	r->query_ticks = agent_file_state_now() - start;
-	r->plan_reason = plan.reason;
-	r->fs_generation = agent_file_state_scope_generation(scope);
-	return r->returned;
-}
-
-int
 agent_metadata_query_execute_snapshot(
 	uint scope, const struct agent_file_query *q,
 	struct agent_file_query_result *r)

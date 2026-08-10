@@ -2,6 +2,8 @@
 
 本目录记录当前代码，而不是历史方案。若文档与实现发生冲突，以公开 UAPI 头文件、生产构建的源码清单和版本化 checker 为准。
 
+![AgentOS-uCore 总体架构](assets/agentos_arch.svg)
+
 ## 推荐顺序
 
 | 顺序 | 文档 | 内容 |
@@ -12,6 +14,9 @@
 | 4 | [security-hardening.md](security-hardening.md) | 威胁模型、fail-closed cut 与资源安全 |
 | 5 | [requirements-traceability.md](requirements-traceability.md) | 赛题任务到源码、静态检查和 Guest 验证的映射 |
 | 6 | [verification.md](verification.md) | 开发验证顺序和结果边界 |
+| 7 | [scenario-script.md](scenario-script.md) | 现场主演示、输出和专项观察点 |
+| 8 | [../verification.md](../verification.md) | 从环境检查到 QEMU、双目标和结果解释的运行说明 |
+| 9 | [../windows-quickstart.md](../windows-quickstart.md) | Windows/WSL 环境、工具链与 QEMU 快速开始 |
 
 ## 任务附录
 
@@ -34,16 +39,13 @@
 6. **资源阶段与调度**：Tool Phase Lease 从既有 U 中锁定短生命周期 envelope，未用量结算为 F；workflow EEVDF 按 lag/virtual deadline 选择总计最多 4 个公平实体，并在异常时回退旧调度器。固定拓扑是 1 个 `BOOT_SEALED` bootstrap participant 加最多 3 个 fresh workflow；4-way 使用 bootstrap+3 fresh。16 个逻辑样本分四波复用同一 bootstrap，并累计 12 个 fresh lifecycle 样本，不是 16-way 并发或每波 4 个 fresh；唤醒直方图只聚合 fresh-agent 样本。
 7. **数据流安全**：Context、文件/工具输出和 IPC 传播六个固定 provenance 标签；副作用前同时检查 contract edge、capability、完整 generation、manifest 和数据流规则，非法调用进入 critical Evidence Ring。
 8. **异步通道**：single-issuer Task Channel 使用 16 槽 SQ/CQ 和 2 个私有页，共 4 页；描述符先完整复制再验证，目标 request 只发布一个 terminal CQE。typed handle ABI/8-slot 私有表已实现，但当前仅 null payload，资源导入 fail closed。
-9. **不提供**：内核自然语言规划/prompt-injection 分类、完整 Wasm runtime、内核 JSON/HTTP/OAuth、16 个并发 EEVDF workflow、普通目录 autoscan、metadata/evidence crash recovery。
+9. **明确边界**：内核不做自然语言规划/prompt-injection 分类，不包含完整 Wasm runtime 或 JSON/HTTP/OAuth 栈；EEVDF 活跃实体总上限为 4，metadata 只覆盖当前启动周期内显式登记的对象。
 
 ## 兼容性提示
 
 - audit/timeline/provenance/ledger API 保留，并从 Context、Evidence Ring、调度记录及少量兼容 ledger 记录构造读取视图。
 - scalar V2 tool call 与 `agent_run()` batch 保留；V3 只追加冻结合同绑定。lifecycle info V3 保留 64 字节 V2 前缀。
 - Task Channel 是按需接口；hard deadline 到第一个可调度 safe point 才结算，不保证 wall-clock 终止。MCP `2026-07-28` 与 A2A v1 当前只有用户态协议形状/in-memory transport 映射，尚无到内核 SQ/CQ 的 binary adapter。
-- `AGENT_FILE_META_F_PERSIST`、`AGENT_FILE_META_F_AUTOSCAN` 名称仍在头文件中，但当前 metadata set 拒绝它们。
-- observe recovery syscall 编号和请求结构仍保留，调用固定返回 `AGENT_STATUS_BAD_PARAM`。
-- 源码中可能留有未进入生产对象清单的历史实现文件。文档只描述 Makefile 实际构建的路径。
 
 ## 来源说明
 
@@ -52,7 +54,7 @@ Credit Domain、Evidence Ring 和 Live Query 分别受到 Linux CPU accounting/p
 ## 维护规则
 
 - 功能与性能数值只引用实际 QEMU 或 Host 测量，并同时说明负载、样本和单位。
-- `Evidence Ring` 是内核运行期安全能力，不是 Host 发布证据包。
+- `Evidence Ring` 是当前启动周期内的内核安全能力，结果解释必须遵守 receipt 的覆盖范围。
 - UAPI 布局以 `ci/agent-uapi-layout.json` 和 `scripts/check-agent-uapi-layout.py` 为准。
 - 模块边界、栈安全与 Guest 行为分别由对应 checker、构建和 QEMU 测试验证。
 - 修改 contract、phase credit、scheduler、provenance、Task Channel、fence、ring 或 live query 时，必须同步更新设计、API、追踪表与验证说明。

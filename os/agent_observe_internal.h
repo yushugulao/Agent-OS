@@ -52,7 +52,6 @@ int agent_observe_audit_view_record_source_locked(
 int agent_observe_receipt_status(
 	uint, struct workflow_lifecycle_key, uint64, uint64, uint64,
 	uint64 *, uint *);
-int agent_observe_receipt_persist(uint);
 int agent_observe_recording_suppress_begin(struct proc *);
 void agent_observe_recording_suppress_end(struct proc *);
 int agent_observe_recording_suppressed(struct proc *);
@@ -88,17 +87,5 @@ void agent_observe_timeline_record_sched(
 	struct proc *, struct agent_sched_record *);
 void agent_observe_timeline_record_audit(
 	uint, struct agent_audit_record *, uint64);
-
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-#define AGENT_OBSERVE_TEST_TIMELINE_WINDOW 0x81000001U
-#define AGENT_OBSERVE_TEST_TIMELINE_RECHECK 0x81000002U
-int agent_observe_test_evict_checkpoint_window(struct proc *);
-int agent_observe_test_allocate_identity_ids(
-	struct agent_observe_test_identity_ids *);
-int agent_observe_test_drop_audit(struct proc *, uint, int, int, int, int);
-void agent_observe_test_drop_only_captured(uint, uint64, uint64);
-int agent_observe_test_execute(
-	struct agent_observe_recovery_request *, uint64, uint64 *, uint *, int *);
-#endif
 
 #endif

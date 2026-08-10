@@ -3,18 +3,16 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 
 import contest_demo
 
 
-RUN_ID = "0123456789abcdef"
-NONCE = int(RUN_ID, 16)
-COMMIT = "a" * 40
+NONCE = int("0123456789abcdef", 16)
 
 
 def write(path: Path, text: str) -> Path:
@@ -122,7 +120,11 @@ def _lane_records(mode: str, position: int, sample_id: int) -> list[str]:
             virtio_batched_read_requests=2,
             overwrite_prereads_skipped=0,
         )
-        core_duration, records, bytes_read = 400, 25, 2048
+        core_duration, records, bytes_read = (
+            400,
+            contest_demo.CORPUS_SIZE + 1,
+            2048,
+        )
         discovery_role = "orchestrator"
     else:
         core = _add(
@@ -251,7 +253,7 @@ def showcase_log(sample_id: int = 1, order: str = "compat_then_native") -> str:
     )
     lines.extend(
         [
-            f"agentos:demo schema=2 nonce={NONCE} kind=oracle project=lab-gene-x workflow=nightly-regression run=RUN-042 stage=align reason=memory_limit final_status=recovered execution_order={order} corpus=24 outcome_hash={outcome} compat_hash={outcome} native_hash={outcome}",
+            f"agentos:demo schema=2 nonce={NONCE} kind=oracle project=lab-gene-x workflow=nightly-regression run=RUN-042 stage=align reason=memory_limit final_status=recovered execution_order={order} corpus={contest_demo.CORPUS_SIZE} outcome_hash={outcome} compat_hash={outcome} native_hash={outcome}",
             f"agentos:demo schema=2 nonce={NONCE} kind=trace seq=1 tick_us=5000 role=orchestrator event=INCIDENT value0=0 value1=0",
             f"agentos:demo schema=2 nonce={NONCE} kind=trace seq=2 tick_us=5100 role=sentinel event=DISCOVERED value0=1 value1=1",
             f"agentos:demo schema=2 nonce={NONCE} kind=trace seq=3 tick_us=5200 role=investigator event=HANDOFF value0=4 value1=1",
@@ -264,14 +266,14 @@ def showcase_log(sample_id: int = 1, order: str = "compat_then_native") -> str:
             ),
             _fence_line(
                 "runtime_probe", 1, "PROBE_START", 6000, 10000,
-                probe_before, observer_pid=1, lifecycle_id=0, generation=0,
+                probe_before, observer_pid=1, lifecycle_id=1, generation=1,
             ),
             _fence_line(
                 "runtime_probe", 2, "PROBE_END", 6100, 10010,
-                probe_after, observer_pid=1, lifecycle_id=0, generation=0,
+                probe_after, observer_pid=1, lifecycle_id=1, generation=1,
             ),
             _mechanism_line(
-                "runtime_probe", "end_to_end", 1, 10000, 10010, 0, 0,
+                "runtime_probe", "end_to_end", 1, 10000, 10010, 1, 1,
                 probe_before, probe_after,
             ),
             "labdemo_ucore: startup_barrier ready=3 released=3 chain_receipts=3",
@@ -296,17 +298,7 @@ def report_fixture(root: Path):
         )
         for sample in range(1, 9)
     ]
-    artifacts = [
-        write(root / "showcase-kernel", "kernel\n"),
-    ]
-    for sample in range(1, 9):
-        artifacts.extend(
-            [
-                write(root / f"sample-{sample:02d}-fs.img", f"filesystem {sample}\n"),
-                write(root / f"sample-{sample:02d}-labdemo.elf", f"guest elf {sample}\n"),
-            ]
-        )
-    return root, logs, RUN_ID, COMMIT, 12.5, artifacts
+    return logs, 12.5
 
 
 def build_fixture(fixture):
@@ -318,102 +310,57 @@ def test_showcase_parser_and_product_outputs() -> None:
         root = Path(temporary)
         report = build_fixture(report_fixture(root))
         comparison = report["comparison"]
-        assert report["schema_version"] == 8
-        assert report["run"]["qemu_boots"] == 8
-        assert report["run"]["revision"] == COMMIT
-        assert "build_manifest" not in report
-        assert "artifacts" not in report
-        assert comparison["design"] == "same_kernel_same_guest_same_corpus"
-        assert comparison["lanes"]["compat"]["core_duration_us"] == 400
-        assert comparison["lanes"]["native"]["core_duration_us"] == 80
-        assert comparison["ratios"]["compat_over_native_core_duration"] == 5.0
-        assert comparison["ratios"]["compat_over_native_workload_syscalls"] == 1.714
+        assert report["schema_version"] == 1
+        assert report["campaign"]["qemu_boots"] == 8
+        assert comparison["workload"] == "same_kernel_same_guest_same_file_query"
+        assert comparison["paths"] == {
+            "traversal": "directory_traversal",
+            "indexed": "indexed_control_path",
+        }
+        assert comparison["medians"]["traversal"]["core_duration_us"] == 400
+        assert comparison["medians"]["indexed"]["core_duration_us"] == 80
+        assert comparison["medians"]["traversal"]["records_examined"] == 97
+        assert comparison["medians"]["indexed"]["records_examined"] == 2
+        assert comparison["ratios"]["traversal_over_indexed_core_duration"] == 5.0
+        assert comparison["ratios"]["traversal_over_indexed_records_examined"] == 48.5
         assert comparison["order_balance"] == {
-            "compat_then_native": 4,
-            "native_then_compat": 4,
+            "traversal_then_indexed": 4,
+            "indexed_then_traversal": 4,
         }
-        core_effect = comparison["paired_effects"]["core_duration_us"]
-        assert core_effect["native_minus_compat"] == {
-            "estimate": -320,
-            "low": -320,
-            "high": -320,
+        assert comparison["paired_regression"] == {
+            "sample_count": 8,
+            "indexed_faster_samples": 8,
+            "indexed_faster_majority": True,
+            "median_indexed_minus_traversal_core_us": -320,
+            "indexed_reduced_records_in_all_samples": True,
         }
-        assert core_effect["native_change_pct"] == {
-            "estimate": -80,
-            "low": -80,
-            "high": -80,
-        }
-        assert core_effect["direction"] == "lower"
-        native_core = report["mechanisms"]["native"]["core"]
-        assert native_core["directory_block_probes"] == 1
-        assert native_core["virtio_notifications"] == 2
-        assert native_core["virtio_submitted_requests"] == 8
-        assert native_core["virtio_read_batch_calls"] == 1
-        assert native_core["virtio_batched_read_requests"] == 4
-        assert native_core["virtio_write_batch_calls"] == 1
-        assert native_core["virtio_indirect_write_batch_calls"] == 1
-        assert native_core["physical_reads"] == 2
-        assert native_core["overwrite_prereads_skipped"] == 4
-        assert native_core["raw_cycle_ordering"] == {
-            "ordered_samples": 8,
-            "minimum_gap": 10,
-            "median_gap": 10,
-            "unit": "raw_cycle_order_token",
-        }
-        assert report["mechanism_effects"]["core"][
-            "directory_block_probes"
-        ]["native_minus_compat"]["estimate"] == -5
-        assert report["measurement_protocol"]["qemu_jobs"] == 1
-        assert report["measurement_protocol"]["counter_scopes"] == {
-            "default": "global",
-            "workload_syscalls": "observer_process",
-        }
-        assert report["mechanism_effects"]["core"]["workload_syscalls"][
-            "counter_scope"
-        ] == "observer_process"
-        assert report["measurement_protocol"]["host_concurrency"] == (
-            "one_isolated_qemu_at_a_time"
-        )
         assert report["outcome"]["equal"] is True
-        assert [row["offset_us"] for row in report["timeline"]] == [0, 100, 200, 300, 500]
 
         output = root / "output"
-        output.mkdir()
-        for obsolete in contest_demo.REMOVED_PUBLISHED_FILES:
-            (output / obsolete).write_text("stale\n", encoding="utf-8")
         contest_demo.publish(report, output)
         assert json.loads((output / "summary.json").read_text("utf-8")) == report
-        assert all(not (output / name).exists() for name in contest_demo.REMOVED_PUBLISHED_FILES)
-        page = (output / "index.html").read_text("utf-8")
-        assert "8 boot 中位数" in page
-        assert "400 us" in page and "80 us" in page and "5.00x" in page
-        assert "6 / 3" in page and "2 / 1" in page
-        assert "Native - Compat 均值 [95% CI]" in page
-        assert "FS Epoch 提交 / 暂存 p50" in page
-        assert "VirtIO 读批量 p50" in page
-        assert "VirtIO 写批量 p50" in page and "间接描述符批次" in page
-        assert "observer_process" in page
-        assert "8 boot 原始配对" in page
-        assert "Metadata" not in page
-        assert "-320 us [-320 us，-320 us]" in page
-        assert "多 Agent 恢复时间线" in page and "结果一致性" in page
-        assert "passed" not in page and "部分就绪" not in page and "通过" not in page
-        assert "http://" not in page and "https://" not in page
-        markdown = (output / "report.md").read_text("utf-8")
-        assert "Native - Compat 均值 [95% CI]" in markdown
-        assert "物理读 / 写 / flush" in markdown
-        assert "写 batch / request / indirect" in markdown
-        assert "observer_process" in markdown
-        assert "8 boot 原始配对" in markdown
-        assert "Metadata" not in markdown
-        assert "-320 us [-320 us，-320 us]" in markdown
-        assert "passed" not in markdown and "通过" not in markdown
-        embedded = re.search(
-            r'<script type="application/json" id="agentos-live-data">(.*?)</script>',
-            page,
+        assert sorted(path.name for path in output.iterdir()) == [
+            "measurements.csv",
+            "report.md",
+            "summary.json",
+        ]
+        rows = list(
+            csv.DictReader((output / "measurements.csv").read_text("utf-8").splitlines())
         )
-        assert embedded is not None
-        assert json.loads(embedded.group(1)) == report
+        assert len(rows) == 8
+        assert rows[0]["traversal_core_duration_us"] == "400"
+        assert rows[0]["indexed_core_duration_us"] == "80"
+        assert rows[0]["traversal_records_examined"] == "97"
+        assert rows[0]["indexed_records_examined"] == "2"
+        assert rows[0]["indexed_minus_traversal_core_us"] == "-320"
+        markdown = (output / "report.md").read_text("utf-8")
+        assert "directory traversal" in markdown
+        assert "indexed control path" in markdown
+        assert "400" in markdown and "80" in markdown
+        assert "`8/8` paired boots" in markdown
+        assert "-320 us" in markdown
+        assert "Raw paired measurements" in markdown
+        assert "original QEMU logs" in markdown
 
 
 def _increment_first(pattern: str, text: str) -> str:
@@ -464,8 +411,8 @@ def test_schema2_records_fail_closed() -> None:
             "core_duration_us=400", "core_duration_us=401", 1
         ),
         "workload syscall snapshot mismatch": lambda text: text.replace(
-            "workload_syscalls=12 records_examined=25",
-            "workload_syscalls=13 records_examined=25",
+            f"workload_syscalls=12 records_examined={contest_demo.CORPUS_SIZE + 1}",
+            f"workload_syscalls=13 records_examined={contest_demo.CORPUS_SIZE + 1}",
             1,
         ),
         "actor mismatch": lambda text: text.replace(
@@ -503,11 +450,22 @@ def test_schema2_records_fail_closed() -> None:
             "observer_lifecycle_generation=4 counter_scope=global",
             1,
         ),
-        "bootstrap claims workflow lifecycle": lambda text: re.sub(
-            r"(kind=fence mode=runtime_probe[^\n]*observer_lifecycle_id=)0",
-            r"\g<1>9",
+        "runtime probe lacks lifecycle": lambda text: re.sub(
+            r"(kind=fence mode=runtime_probe[^\n]*observer_lifecycle_id=)1",
+            r"\g<1>0",
             text,
             count=1,
+        ),
+        "runtime probe lifecycle drift": lambda text: re.sub(
+            r"(kind=fence mode=runtime_probe[^\n]*observer_lifecycle_generation=)1",
+            r"\g<1>2",
+            text,
+            count=1,
+        ),
+        "runtime probe uses orchestrator": lambda text: re.sub(
+            r"(kind=(?:fence|mechanism) mode=runtime_probe[^\n]*observer_pid=)1",
+            r"\g<1>2",
+            text,
         ),
         "raw counter mismatch": lambda text: _increment_first(
             r"(kind=mechanism mode=compat scope=end_to_end[^\n]*after_physical_writes=)([0-9]+)",
@@ -528,7 +486,7 @@ def test_schema2_records_fail_closed() -> None:
         with tempfile.TemporaryDirectory() as temporary:
             log = write(Path(temporary) / "showcase.log", mutate(showcase_log()))
             try:
-                contest_demo.verify_showcase(log, RUN_ID)
+                contest_demo.verify_showcase(log, NONCE)
             except contest_demo.ContestDemoError:
                 continue
             raise AssertionError(f"{label} was accepted")
@@ -537,12 +495,16 @@ def test_schema2_records_fail_closed() -> None:
 def test_mechanism_snapshot_deltas_are_exposed_as_numbers() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         log = write(Path(temporary) / "showcase.log", showcase_log())
-        report = contest_demo.verify_showcase(log, RUN_ID)
-    assert report["mechanisms"]["compat"]["core"]["buffers_per_epoch"] == 4.0
-    assert report["mechanisms"]["native"]["core"]["physical_writes"] == 4
+        report = contest_demo.verify_showcase(log, NONCE)
+    probe = report["mechanisms"]["runtime_probe"]["end_to_end"]
+    assert report["mechanisms"]["traversal"]["core"]["buffers_per_epoch"] == 4.0
+    assert report["mechanisms"]["indexed"]["core"]["physical_writes"] == 4
     assert report["mechanisms"]["workflow"]["end_to_end"]["cow_shared_pages"] == 18
     assert report["mechanisms"]["workflow"]["end_to_end"]["exec_cache_hits"] == 7
-    assert report["mechanisms"]["compat"]["core"]["raw_pair"]["before"]
+    assert report["mechanisms"]["traversal"]["core"]["raw_pair"]["before"]
+    assert probe["observer_lifecycle_id"] == 1
+    assert probe["observer_lifecycle_generation"] == 1
+    assert probe["observer_pid"] != report["lanes"]["traversal"]["actor_pid"]
 
 
 def test_legacy_workflow_receipts_fail_closed() -> None:
@@ -553,7 +515,7 @@ def test_legacy_workflow_receipts_fail_closed() -> None:
             ) + "\n"
             log = write(Path(temporary) / "showcase.log", content)
             try:
-                contest_demo.verify_showcase(log, RUN_ID)
+                contest_demo.verify_showcase(log, NONCE)
             except contest_demo.ContestDemoError:
                 continue
             raise AssertionError(f"missing {marker} was accepted")
@@ -573,44 +535,48 @@ def test_shared_guest_failure_classifier_is_stage_aware() -> None:
             raise AssertionError("real Guest panic was accepted")
 
 
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-C", str(root), *args],
-        check=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-def test_source_revision_allows_dirty_worktrees() -> None:
+def test_campaign_rejects_mixed_guest_nonces() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        _git(root, "init", "-q")
-        _git(root, "config", "user.name", "Contest Test")
-        _git(root, "config", "user.email", "contest@example.invalid")
-        tracked = write(root / "tracked.txt", "clean\n")
-        _git(root, "add", "tracked.txt")
-        _git(root, "commit", "-q", "-m", "fixture")
-        revision = contest_demo.current_source_revision(root)
-        assert contest_demo.COMMIT.fullmatch(revision)
-        tracked.write_text("dirty\n", encoding="utf-8")
-        assert contest_demo.current_source_revision(root) == revision
-
-
-def test_report_rejects_artifact_basename_collisions() -> None:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
-        fixture = list(report_fixture(root))
-        fixture[5] = fixture[5] + [
-            write(root / "other" / "showcase-kernel", "different kernel\n")
-        ]
+        logs, elapsed = report_fixture(root)
+        replacement = NONCE + 1
+        logs[1].write_text(
+            logs[1].read_text("utf-8").replace(
+                f"nonce={NONCE}", f"nonce={replacement}"
+            ),
+            encoding="utf-8",
+        )
         try:
-            contest_demo.build_report(*fixture)
-        except contest_demo.ContestDemoError as error:
-            assert "basenames" in str(error)
+            contest_demo.build_report(logs, elapsed)
+        except contest_demo.ContestDemoError:
+            pass
         else:
-            raise AssertionError("artifact basename collision was accepted")
+            raise AssertionError("mixed Guest nonces were accepted")
+
+
+def test_paired_performance_regression_is_rejected() -> None:
+    samples = []
+    for sample_id, order in (
+        (1, "compat_then_native"),
+        (2, "native_then_compat"),
+        (3, "compat_then_native"),
+        (4, "native_then_compat"),
+    ):
+        sample = contest_demo.verify_showcase(
+            Path("unused"),
+            NONCE,
+            sample_id,
+            order,
+            guest_bytes=showcase_log(sample_id, order).encode("utf-8"),
+        )
+        sample["lanes"]["indexed"]["core_duration_us"] = 500
+        samples.append(sample)
+    try:
+        contest_demo.campaign_aggregates(samples)
+    except contest_demo.ContestDemoError as error:
+        assert "majority" in str(error)
+    else:
+        raise AssertionError("indexed-path performance regression was accepted")
 
 
 def main() -> int:
@@ -619,8 +585,8 @@ def main() -> int:
     test_mechanism_snapshot_deltas_are_exposed_as_numbers()
     test_legacy_workflow_receipts_fail_closed()
     test_shared_guest_failure_classifier_is_stage_aware()
-    test_source_revision_allows_dirty_worktrees()
-    test_report_rejects_artifact_basename_collisions()
+    test_campaign_rejects_mixed_guest_nonces()
+    test_paired_performance_regression_is_rejected()
     print("test_contest_demo: passed")
     return 0
 

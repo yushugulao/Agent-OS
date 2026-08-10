@@ -8,7 +8,7 @@ ifeq ($(FUNCTIONAL_REVIEW_BUILD),1)
 override FUNCTIONAL_REVIEW_FORBIDDEN_USER_VARS := \
 	ARCH CC OBJCOPY OBJDUMP COMMON_CFLAGS CFLAGS CPPFLAGS LDFLAGS LIB_C LIB_OBJS CRT_OBJ \
 	app_dir build_dir elf_dir obj_dir bin_dir generated_dir out_dir asm_dir arch_dir \
-	SRCS APPS SELECTED_APPS RETIRED_GUEST_APPS RETIRED_GUEST_SRCS
+	SRCS APPS SELECTED_APPS
 override FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS := $(strip $(foreach variable,$(FUNCTIONAL_REVIEW_FORBIDDEN_USER_VARS),$(if $(filter command line environment override,$(origin $(variable))),$(variable))))
 ifneq ($(FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS),)
 $(error FUNCTIONAL_REVIEW_BUILD rejects external user variables: $(FUNCTIONAL_REVIEW_EXTERNAL_USER_VARS))
@@ -54,20 +54,11 @@ LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000 -Wl,--gc-sections
 LIB_C := $(wildcard lib/*.c)
 LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
-RETIRED_GUEST_APPS := agentmetacrash_ucore agentmetarecover_ucore \
-	agentmetaeio_ucore agentmetalarge_ucore agentmetatransient_ucore \
-	agentobsreboot_ucore
-RETIRED_GUEST_SRCS := $(addprefix user/$(app_dir)/,$(addsuffix .c,$(RETIRED_GUEST_APPS)))
 SRCS := $(wildcard $(app_dir)/*.c)
-APPS := $(filter-out $(RETIRED_GUEST_APPS),$(patsubst $(app_dir)/%.c,%,$(SRCS)))
-APPS += compatbench
+APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
 GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
 EVALUATION_HEADER := $(generated_dir)/agenteval_seed.h
-COMPAT_BENCH_HEADER := $(generated_dir)/compatbench_seed.h
-COMPAT_BENCH_REPO_SOURCE := evaluation_guest/compatbench.c
-COMPAT_BENCH_SOURCE := ../$(COMPAT_BENCH_REPO_SOURCE)
 AGENT_EVAL_CHALLENGE_HEX ?= 0000000000000001
-COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 USER_BUILD_CONFIG := $(build_dir)/.user-build-config
 USER_STACK_CONTRACT := ../user_stack_policy.h
 USER_STACK_CONTRACT_WRAPPER := include/user_stack_policy.h
@@ -103,7 +94,6 @@ PHYSICAL_RESOURCE_TESTS := physicalresource_ucore
 WORKFLOW_TEARDOWN_TESTS := workflow_teardown_race_ucore
 VIRTIO_DISK_TESTS := virtiodisk_ucore
 EVALUATION_TESTS := agenteval_ucore
-COMPATIBILITY_TESTS := compatbench
 AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentbench_ucore agentcontract_ucore agent_eevdf_ucore agenttask_ucore ch8_cow_ucore labdemo_ucore labdemo_execprobe_ucore agentsecurity_ucore agenttoolabi_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
 PLATFORM_TESTS := rp_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
@@ -138,10 +128,6 @@ CH7_TESTS := $(CH7_BASE_TESTS)
 CH8_TESTS := $(CH8_BASE_TESTS) $(AGENT_TESTS)
 endif
 
-ifneq ($(filter $(CHAPTER),metadata_recovery observe_recovery),)
-$(error CHAPTER=$(CHAPTER) is retired; use the live-query and workflow-fence Agent tests)
-endif
-
 ifeq ($(CHAPTER), 2)
 CH_TESTS := $(CH2_TESTS)
 else ifeq ($(CHAPTER), 3)
@@ -160,8 +146,6 @@ else ifeq ($(CHAPTER), agent)
 CH_TESTS := usershell $(AGENT_TESTS)
 else ifeq ($(CHAPTER), agent_eval)
 CH_TESTS := $(EVALUATION_TESTS)
-else ifeq ($(CHAPTER), compat_eval)
-CH_TESTS := $(COMPATIBILITY_TESTS)
 else ifeq ($(CHAPTER), safety)
 CH_TESTS := $(SAFETY_TESTS)
 else ifeq ($(CHAPTER), fs_enospc)
@@ -193,9 +177,7 @@ STACK_USAGE_ALL_LIBRARY_SRCS := $(addprefix user/,$(sort $(LIB_C)))
 STACK_USAGE_DATA_ONLY_LIBRARY_SRCS := user/lib/research_platform_state.c
 STACK_USAGE_FUNCTION_LIBRARY_SRCS := $(filter-out $(STACK_USAGE_DATA_ONLY_LIBRARY_SRCS),$(STACK_USAGE_ALL_LIBRARY_SRCS))
 STACK_USAGE_SUPPORT_SRCS := $(addprefix user/src/,$(addsuffix .c,$(WORKER_BATCH_PROGRAMS)))
-STACK_USAGE_APPLICATION_SRCS := \
-	$(filter-out $(STACK_USAGE_SUPPORT_SRCS) $(RETIRED_GUEST_SRCS),$(addprefix user/,$(sort $(SRCS)))) \
-	$(COMPAT_BENCH_REPO_SOURCE)
+STACK_USAGE_APPLICATION_SRCS := $(filter-out $(STACK_USAGE_SUPPORT_SRCS),$(addprefix user/,$(sort $(SRCS))))
 STACK_USAGE_SRCS := $(STACK_USAGE_FUNCTION_LIBRARY_SRCS) $(STACK_USAGE_SUPPORT_SRCS) $(STACK_USAGE_APPLICATION_SRCS)
 STACK_USAGE_OBJS = $(patsubst %.c,$(STACK_USAGE_DIR)/%.o,$(STACK_USAGE_SRCS))
 STACK_USAGE_DATA_ONLY_OBJS = $(patsubst %.c,$(STACK_USAGE_DIR)/data-only/%.o,$(STACK_USAGE_DATA_ONLY_LIBRARY_SRCS))
@@ -224,23 +206,6 @@ $(EVALUATION_HEADER): .FORCE
 		'#define AGENTEVAL_CHALLENGE 0x$(AGENT_EVAL_CHALLENGE_HEX)ULL' \
 		'#endif' > $@.tmp
 	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
-
-$(COMPAT_BENCH_HEADER): .FORCE
-	@mkdir -p $(@D)
-	@case '$(COMPAT_BENCH_CHALLENGE_HEX)' in \
-		????????????????) ;; \
-		*) echo 'COMPAT_BENCH_CHALLENGE_HEX must contain 16 lowercase hex digits' >&2; exit 2 ;; \
-	esac
-	@case '$(COMPAT_BENCH_CHALLENGE_HEX)' in \
-		*[!0-9a-f]*) echo 'COMPAT_BENCH_CHALLENGE_HEX must contain 16 lowercase hex digits' >&2; exit 2 ;; \
-	esac
-	@printf '%s\n' \
-		'#ifndef __COMPATBENCH_SEED_H__' \
-		'#define __COMPATBENCH_SEED_H__' \
-		'#define COMPATBENCH_CHALLENGE 0x$(COMPAT_BENCH_CHALLENGE_HEX)ULL' \
-		'#endif' > $@.tmp
-	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
-
 $(USER_BUILD_CONFIG): .FORCE
 	@mkdir -p $(@D)
 	@printf '%s\n' \
@@ -283,13 +248,6 @@ $(STACK_USAGE_DIR)/data-only/user/%.o: %.c $(GENERATED_HEADERS)
 $(WORKER_BATCH_STACK_USAGE_OBJS): STACK_USAGE_PROFILE_CFLAGS = \
 	-Dmain=$(notdir $*)_worker_entry
 
-$(STACK_USAGE_DIR)/evaluation_guest/compatbench.o: \
-		$(COMPAT_BENCH_SOURCE) $(GENERATED_HEADERS) $(COMPAT_BENCH_HEADER)
-	@mkdir -p $(@D)
-	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
-		-fstack-usage -fcallgraph-info=su -c $(COMPAT_BENCH_REPO_SOURCE) \
-		-o $(call shell_quote,$(abspath $@))
-
 $(STACK_USAGE_DIR)/user/src/workflow_teardown_race_ucore.o: \
 	STACK_USAGE_PROFILE_CFLAGS := \
 	-DWORKFLOW_TEARDOWN_DOMAIN_FILE_CAP=$(USER_STACK_WORKFLOW_DOMAIN_FILE_CAP) \
@@ -331,14 +289,6 @@ endef
 $(foreach group,0 1 2,$(eval $(call RP_WORKER_BATCH_LINK_RULE,$(group))))
 
 $(elf_dir)/agenteval_ucore: $(EVALUATION_HEADER)
-
-$(elf_dir)/compatbench: $(COMPAT_BENCH_SOURCE) $(LIB_OBJS) $(CRT_OBJ) \
-		$(GENERATED_HEADERS) $(COMPAT_BENCH_HEADER) $(arch_dir)/user.ld
-	@mkdir -p $(elf_dir) $(bin_dir) $(asm_dir)
-	$(CC_CMD) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) \
-		$(COMPAT_BENCH_SOURCE) -o $@
-	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/compatbench.asm
-	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/compatbench
 
 $(LIB_OBJS) $(CRT_OBJ) $(addprefix $(elf_dir)/,$(SELECTED_APPS)): \
 	$(USER_BUILD_CONFIG) $(USER_STACK_CONTRACT) $(USER_STACK_CONTRACT_WRAPPER)

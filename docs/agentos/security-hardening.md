@@ -1,6 +1,6 @@
 # AgentOS 安全加固
 
-本文记录当前生产构建的安全边界。核心原则是 generation-safe 身份、最小 capability、硬资源准入、有界队列、显式 resync 和 fail-closed workflow fence。本文不把内存 seal 描述为磁盘持久性。
+本文记录当前生产构建的安全边界。核心原则是 generation-safe 身份、最小 capability、硬资源准入、有界队列、显式 resync 和 fail-closed workflow fence。
 
 ## 1. 威胁模型
 
@@ -17,10 +17,9 @@
 - 通过伪造 contract node、schema digest、predecessor Context、Task handle 或 ring generation 越权；
 - 通过多建线程放大 workflow CPU 份额；
 - 通过共享 SQ 页 TOCTOU、伪造 CQ ack、重复 cancel/complete 或 stale handle 产生双终态；
-- 把兼容字段 `DURABLE/PERSIST/AUTOSCAN/recovery` 误解释为当前能力；
 - 将用户态/Host 自报成功冒充内核事实或实际 Guest 测量。
 
-不在当前证明范围：恶意内核、敌对 hypervisor/Host、物理内存篡改、供应链攻击、密码学密钥保护、物理断电后的 metadata/evidence/task 恢复、完整磁盘机密性、自然语言 prompt injection 的语义识别、任意远程副作用的分布式 exactly-once。
+不在当前证明范围：恶意内核、敌对 hypervisor/Host、物理内存篡改、供应链攻击、密码学密钥保护、完整磁盘机密性、自然语言 prompt injection 的语义识别、任意远程副作用的分布式 exactly-once。metadata catalog、Evidence Ring 和 Task 状态的身份与 generation 都以当前启动周期为界。
 
 ## 2. 身份与 capability
 
@@ -107,17 +106,17 @@ request id cache 防止 copyout 重试重复推进 root。同 id 不同 challeng
 
 ### 5.4 不提供的保证
 
-ring 与 retained seal 都在内存。`EVIDENCE_SEALED` 不等于 fsync、disk durable、crash recoverable 或远程认证。receipt 明确设置 `PARTIAL_COVERAGE`，不能用它证明未进入 ring 的全部内核/Host 行为。
+ring 与 retained seal 都是当前启动周期的内存状态。receipt 明确设置 `PARTIAL_COVERAGE`，不能用它证明未进入 ring 的全部内核/Host 行为，也不提供外部密钥认证。
 
 ## 6. Live Query 安全
 
 ### 6.1 显式准入
 
-只有 `META_WRITE` Agent 能登记 metadata。普通 VFS create 不自动提升为 workflow metadata，避免攻击者通过预创建文件获得高层属性。`PERSIST/AUTOSCAN` 当前被拒绝，阻止旧调用者意外依赖已停产语义。
+只有 `META_WRITE` Agent 能登记 metadata。普通 VFS create 不自动提升为 workflow metadata，避免攻击者通过预创建文件获得高层属性。写入只接受普通 set 或显式 `DELETE`。
 
 ### 6.2 scope 与 incarnation
 
-query/watch transition 先验证 requester scope 对 owner scope 可见。VFS tombstone/content pending 保存完整 lifecycle、scope、dev/inum/incarnation；处理时重验，旧对象或跨 scope receipt 不能更新新 catalog entry。
+query/watch transition 先验证 requester scope 对 owner scope 可见。VFS unlink/content pending 保存完整 lifecycle、scope、dev/inum/incarnation；处理时重验，旧对象或跨 scope receipt 不能更新新 catalog entry。
 
 ### 6.3 typed watch
 
@@ -127,7 +126,7 @@ subscription 绑定 target、control id、workflow key 和 typed predicate。typ
 
 队列或 pending 容量不足时标记单调 resync generation，并投递 `RESYNC_REQUIRED`。旧 ACK 只清除不晚于自己的缺口；domain 表耗尽升级为 global resync，而不是静默丢失。fence 若仍有 pending/resync 返回 `RETRY`，避免 receipt 绑定不完整 metadata generation。
 
-catalog 是 volatile 内存状态。没有恢复 bank 就没有“验证失败后回退旧 bank”的安全声明；重启后用户态必须重新登记。
+catalog 是当前启动周期的内存状态。每次启动由用户态重新登记，授权判断不接受上一周期的对象身份。
 
 ## 7. VFS、exec 与 IPC
 
@@ -164,11 +163,11 @@ core callback 协议允许 provider 返回 `PENDING`，但当前 bridge 只有�
 
 当前 gateway 是 transport-neutral 的纯用户态映射，测试使用 deterministic in-memory transport；它尚未通过 binary adapter 连接真实内核 SQ/CQ。gateway 把 binding 层已经认证的 remote task id 绑定到 issuer/tenant/subject 以及 lifecycle/contract/channel/request generation，未知 issuer、tenant mismatch、protocol version mismatch 和越权 task lookup 均 fail closed。远程 JSON schema digest 与内核 manifest digest 分离，外部 schema 不能替代内核 tool authority。HTTP、OAuth、JWS、Agent Card 签名和网络重放防护由外部 binding 层负责，当前模块本身不实现这些协议，也不会把未验证 envelope 直接提交给 Task Channel。
 
-## 8. 兼容观测接口
+## 8. 观测接口
 
-保留 audit/timeline/provenance/ledger 是为了现有用户态读取，不是第二套 durable store。聚合视图会去重被 Evidence Ring shadow 的 Context 投影。
+audit/timeline/provenance/ledger 为现有用户态提供当前启动周期的有界聚合视图，并去重被 Evidence Ring shadow 的 Context 投影。
 
-`agent_audit_receipt()` 的肯定状态是 `FENCE_SEALED`。`AGENT_AUDIT_DURABILITY_DURABLE` 只是同值别名。observe recovery syscall 为 tombstone，固定 `BAD_PARAM`。任何文档、页面或测试不得把这些兼容名称重新解释为磁盘恢复。
+`agent_audit_receipt()` 的肯定状态是 `FENCE_SEALED`，表示对应 ring ticket 已被显式 workflow fence 覆盖。
 
 ## 9. 失败处理
 
@@ -181,7 +180,6 @@ core callback 协议允许 provider 返回 `PENDING`，但当前 bridge 只有�
 | fs epoch cut 失败 | `IO_ERROR`，撤销 fence gate |
 | receipt copyout 失败 | 保留 retry-stable cache，不允许新请求覆盖 |
 | old lifecycle/watch/request id | `STALE`/拒绝 |
-| legacy PERSIST/AUTOSCAN/recovery | `BAD_PARAM` |
 | contract/node/schema/predecessor 不匹配 | 副作用前 `DENIED/STALE/CONFLICT`，关键拒绝进入 Evidence |
 | provenance/capability/effect 不满足 | 副作用前 `DENIED`；关键 Evidence 无空间则 fail closed |
 | phase envelope/claim 不满足 | 不回退普通准入；refund/settle 或拒绝，不部分发布资源向量 |

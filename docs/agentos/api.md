@@ -26,8 +26,6 @@
 | `IO_ERROR` | -18 | 文件系统 cut 失败 |
 | `INDETERMINATE` | -20 | 无法肯定证明成功或失败 |
 
-历史状态名 `DURABILITY` 仍在枚举中，不代表当前 Evidence Ring 提供磁盘持久性。
-
 ## 2. Agent 与 lifecycle
 
 ### 2.1 创建和关闭
@@ -131,7 +129,7 @@ wrapper 复用 `SYS_agent_run`：`count == 0` 且 flags 只有 `AGENT_RUN_F_FENC
 | `EVIDENCE_SEALED` | 事件段、gap、challenge、metadata/credit 信息已进入根 |
 | `METADATA_VOLATILE` | metadata generation 只在当前启动周期有效 |
 
-`EVIDENCE_SEALED` 不是 disk durable。重启后没有可恢复的 ring/catalog。
+`EVIDENCE_SEALED` 表示当前启动周期内的事件段和 challenge-bound root 已发布；覆盖范围仍以 `PARTIAL_COVERAGE` 为准。
 
 ### 3.3 重试规则
 
@@ -180,16 +178,7 @@ Context Path 仍是进程级可信历史。普通成功 Context 的 workflow 级
 int agent_audit_receipt(struct agent_audit_receipt_request *request);
 ```
 
-只有与 legacy 关键投影关联且 ticket 已被显式 workflow fence 覆盖时，肯定状态为 `(OK, FENCE_SEALED, receipt)`。宏 `AGENT_AUDIT_DURABILITY_DURABLE` 仅为源码兼容别名，值等同 `FENCE_SEALED`，绝不表示落盘。普通成功 event 没有必要产生一条 legacy receipt。
-
-### 4.2 已停产 observe recovery
-
-```c
-int agent_observe_recovery(
-    struct agent_observe_recovery_request *request, void *records);
-```
-
-请求结构和 syscall 编号只为 ABI tombstone 保留。当前内核不调用历史 recovery 实现，固定返回 `AGENT_STATUS_BAD_PARAM`。不得用该接口宣称 observation crash recovery、bank enumeration 或 reap。
+只有与 legacy 关键投影关联且 ticket 已被显式 workflow fence 覆盖时，肯定状态为 `(OK, FENCE_SEALED, receipt)`。这只描述当前启动周期的 fence 状态。普通成功 event 没有必要产生一条 legacy receipt。
 
 ## 5. 显式文件 metadata
 
@@ -208,11 +197,10 @@ int agent_file_query(struct agent_file_query *query,
 
 - 普通 set 使用 `flags == 0`；
 - 删除使用 `AGENT_FILE_META_F_DELETE`；
-- `AGENT_FILE_META_F_PERSIST` 和 `AGENT_FILE_META_F_AUTOSCAN` 为 legacy 常量，任何显式 set 携带它们都返回 `BAD_PARAM`；
 - set 把 metadata 绑定到真实 `dev + inum + incarnation`，更新字段由 `update_mask` 限制；
-- catalog/索引/generation 重启后不恢复，用户态需重新登记。
+- catalog、索引和 generation 属于当前启动周期，用户态在启动时显式登记。
 
-普通文件不会因 create/rename 自动加入 catalog。只有已经显式绑定的 metadata 会接收 VFS 内容大小、unlink tombstone 和 incarnation 变化投影。
+普通文件不会因 create/rename 自动加入 catalog。只有已经显式绑定的 metadata 会接收 VFS 内容大小、unlink 和 incarnation 变化投影。
 
 ### 5.2 查询
 
@@ -347,7 +335,7 @@ typed handle 固定 16 字节 `{slot, type, flags, generation}`，私有 capacit
 
 ### 8.4 MCP/A2A gateway
 
-用户态 `host_tools/mcp_a2a_gateway.py` 映射 MCP `2026-07-28` 的 tools/list/call、Tasks get/update/cancel，以及 A2A v1 的 Task、Context、Message/Part、Artifact、stream/cancel。`mcp_task_notifications()` 单独生成通知，外层仍需实现 subscriptions/listen binding。当前 gateway 使用 deterministic in-memory transport 保存 lifecycle/contract/channel/request 绑定，尚无到内核 SQ/CQ 的 binary adapter；它不把 JSON、HTTP、OAuth、JWS 或远程持久化放入内核，也不是内核 MCP/A2A server。
+用户态 `host_tools/mcp_a2a_gateway.py` 映射 MCP `2026-07-28` 的 tools/list/call、Tasks get/update/cancel，以及 A2A v1 的 Task、Context、Message/Part、Artifact、stream/cancel。`mcp_task_notifications()` 单独生成通知，外层仍需实现 subscriptions/listen binding。当前 gateway 使用 deterministic in-memory transport 保存 lifecycle/contract/channel/request 绑定，尚无到内核 SQ/CQ 的 binary adapter；JSON、HTTP、OAuth、JWS 和远程存储均由外层负责，它也不是内核 MCP/A2A server。
 
 ### 8.5 当前 Task Guest 测量字段
 
@@ -357,16 +345,11 @@ typed handle 固定 16 字节 `{slot, type, flags, generation}`，私有 capacit
 
 Context record `tick` 是内核在工具效果前采样的 service start，不是 completion 或 CPU service 量。`service_start_interval_tick_p50/p99` 是这些 pre-effect tick 间隔的 nearest-rank 分位数；`sequence_elapsed_ticks` 来自两个 `agent_info` 边界 tick，包含边界开销。序列后的 Context 查询只读取既有记录且不计入 elapsed，公共 CQE `completion_tick` 也不参与 service-start 分位数。当前不报告 raw cycles 或 wall clock；cancel latency 仅测量对 retained terminal 的一次幂等 cancel，不代表同步 provider 已支持 running/pending cancel。
 
-## 9. 安全兼容清单
+## 9. 当前接口清单
 
 | 名称 | 当前状态 |
 | --- | --- |
 | audit/timeline/provenance/ledger | 支持，作为内存兼容聚合视图 |
-| audit `DURABLE` 宏 | 兼容别名，实际为 `FENCE_SEALED` |
-| observe recovery request/syscall | tombstone，固定 `BAD_PARAM` |
-| metadata `PERSIST` | legacy flag，显式 set 拒绝 |
-| metadata `AUTOSCAN` | legacy flag，显式 set 拒绝 |
-| `.agentmeta` bank/journal/recovery | 不属于当前生产合同 |
 | typed live query | 支持，volatile，带 generation resync |
 | workflow fence | 支持，challenge-bound，320 字节 receipt |
 | scalar V2 / `agent_run()` batch | 保留；未启用 enforcement contract 时语义不变 |

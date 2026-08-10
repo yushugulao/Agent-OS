@@ -1345,11 +1345,6 @@ static __attribute__((noinline)) int syscall_dispatch(
 		ret = sys_tool_list(trapframe->a0, trapframe->a1,
 				    trapframe->a2, trapframe->a3);
 		break;
-	case SYS_agent_observe_recovery:
-		/* Kept as a reserved ABI number; fence-sealed evidence has no
-		 * crash-recovery catalog to enumerate or reap. */
-		ret = AGENT_STATUS_BAD_PARAM;
-		break;
 #ifdef VIRTIO_DISK_TEST_PROFILE
 	case SYS_virtio_disk_test:
 		ret = sys_virtio_disk_test(
@@ -1361,12 +1356,6 @@ static __attribute__((noinline)) int syscall_dispatch(
 	case SYS_physical_page_test:
 		ret = sys_physical_page_test(trapframe->a0, trapframe->a1,
 					     trapframe->a2);
-		break;
-#endif
-#ifdef AGENT_METADATA_CRASH_PHASE
-	case SYS_agent_metadata_test:
-		ret = sys_agent_metadata_test(trapframe->a0, trapframe->a1,
-					      trapframe->a2);
 		break;
 #endif
 #ifdef WAIT_ATOMIC_TEST_PROFILE
@@ -1546,10 +1535,8 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_execution_contract:
 	case SYS_agent_sched_config:
 	case SYS_agent_audit_receipt:
-	case SYS_agent_observe_recovery:
 	case SYS_virtio_disk_test:
 	case SYS_physical_page_test:
-	case SYS_agent_metadata_test:
 	case SYS_wait_atomic_test:
 	case SYS_fs_allocator_fault_test:
 	case SYS_context_push:

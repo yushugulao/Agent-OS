@@ -151,7 +151,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     proc = sources["os/proc.c"]
     agent_core = sources["os/agent_core.c"]
     client = sources["user/src/fsallocfault_ucore.c"]
-    image_tool = sources["scripts/fs-allocator-image.py"]
 
     for token in (
         "#define FS_QMAP_STATE_MASK 0xc0000000U",
@@ -628,7 +627,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         ("build_profile_kernel", "single profile build"),
         ("build_mutant_kernel", "delete-FLUSH negative kernel"),
         ("scripts/fs-allocator-image.py verify-case-raw", "raw-image verification"),
-        ("--require-metadata-cow", "metadata COW verification"),
         ('\"code\":\"FS_ALLOCATOR_IMAGE_INVALID\"', "mutant rejection check"),
         ('cp "${user_elf}" "${user_target}/elf/"', "paired ELF image"),
         (
@@ -706,17 +704,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         if token not in test_owner:
             failures.append(f"allocator crash receipt missing {token}")
-    for token in (
-        "AGENT_META_STORE_NAMES",
-        "_validate_agent_metadata_records",
-        "_validate_agent_durable_arena",
-        "validate_observation_payload",
-        "generation_images",
-        "identity_generations",
-        "required=require_metadata_cow",
-    ):
-        if token not in image_tool:
-            failures.append(f"metadata COW image validation invariant missing {token}")
     require_order(
         function_body(fs, "fs_create"),
         "fs_create busy rollback",
@@ -951,11 +938,6 @@ def main() -> int:
             "scripts/run-fs-allocator-fault-tests.sh",
             "scripts/fs-allocator-image.py verify-case-raw",
             "scripts/fs-allocator-image.py validate",
-        ),
-        "metadata-cow-check-disabled": (
-            "scripts/run-fs-allocator-fault-tests.sh",
-            "--require-metadata-cow --output",
-            "--output",
         ),
         "mutant-rejection-disabled": (
             "scripts/run-fs-allocator-fault-tests.sh",

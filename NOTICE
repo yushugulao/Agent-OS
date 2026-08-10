@@ -9,6 +9,13 @@ Source code in this repository is distributed under GPL-3.0. Documentation and
 presentation material are distributed under CC BY-SA 4.0, except where a file
 states a different license.
 
+The repository file `项目介绍视频和ppt网盘链接.txt` contains access links to a
+separately distributed project video and slide deck. The linked media files are
+not included in the Git tree and are not build or runtime dependencies. The
+repository license statement covers project-authored documentation and
+presentation content; independently licensed fonts, images, audio, video, or
+other embedded material retain their own notices and terms.
+
 The root `.clang-format` originates from the Linux kernel formatting
 configuration and retains its embedded `GPL-2.0` SPDX identifier. It is
 distributed as formatting data and is not relicensed as GPL-3.0:
@@ -68,9 +75,10 @@ Tool Phase Credit Lease, workflow-level EEVDF, declarative Execution Contract,
 Context Provenance enforcement, typed Agent Task Channel, MCP/A2A user-space
 gateway, Fence-Sealed Evidence Ring, and Agent Live-Query FS were implemented
 in this repository as clean-room, project-specific code after studying public
-design principles and protocol documents. No Linux, Haiku, AIOS, paper-prototype,
+design principles and protocol documents. Based on the current repository
+inventory, those mechanisms do not vendor Linux, Haiku, AIOS, paper-prototype,
 MCP/A2A SDK, or WebAssembly/WASI source code, test data, binaries, generated
-artifacts, or on-disk formats are copied or redistributed by those mechanisms.
+artifacts, or on-disk formats.
 Names such as cgroup, percpu_counter, rstat, BPF ring buffer, BFS, live query,
 EEVDF, SQ/CQ, WIT, WASI, MCP, and A2A identify conceptual or protocol lineage,
 not source or binary compatibility. AgentOS-uCore does not embed io_uring, a

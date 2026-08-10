@@ -1,6 +1,6 @@
 # AgentOS-uCore 设计
 
-本文描述当前生产构建中的 AgentOS-uCore。历史上的 metadata 双 bank、自动目录扫描、逐操作 durable observation 和多阶段 workflow retirement 已退出当前架构，不再作为设计能力宣称。
+本文描述当前生产构建中的 AgentOS-uCore，重点是机制/策略边界、当前启动周期状态和可执行验证入口。
 
 ## 1. 目标与边界
 
@@ -182,7 +182,7 @@ event enqueue/consume、稀疏 sched 采样等旧观测记录仍可留在兼容 
 - credit digest；
 - 当前 segment 的有序 event/gap digest。
 
-内部 retirement seal 只用于内核保留 tombstone，不等价于 challenge-bound workflow fence receipt。只有成功的显式 fence 才设置 `WORKFLOW_FENCE` retained 标志并推进外部 root 链。
+内部 rollover/retirement seal 只用于 Evidence Ring 维护，不等价于 challenge-bound workflow fence receipt。只有成功的显式 fence 才设置 `WORKFLOW_FENCE` retained 标志并推进外部 root 链。
 
 ### 5.4 明确限制
 
@@ -194,11 +194,11 @@ Evidence Ring 是内存结构。`FENCE_SEALED` 证明 receipt 所述 cut 已进�
 
 ### 6.1 只索引显式 metadata
 
-`agent_file_meta_set()` 把一条 metadata 绑定到真实 `dev + inum + incarnation`。写入必须来自具有 `META_WRITE` 的 Agent，并且 flags 只能是普通 set 或 `DELETE`；`PERSIST/AUTOSCAN` 当前返回 `BAD_PARAM`。
+`agent_file_meta_set()` 把一条 metadata 绑定到真实 `dev + inum + incarnation`。写入必须来自具有 `META_WRITE` 的 Agent，并且 flags 只能是普通 set 或 `DELETE`。
 
 catalog 在内存中有界保存记录，并维护 `status`、`stage`、`kind` 选择性索引。查询可强制 scan 或请求 index；即使走索引也实际遍历候选，不保存跨查询结果 cache。`fs_generation` 标识当前可见代际。
 
-普通文件 create/rename 不会自动成为 Agent metadata。VFS 只为已显式绑定的对象投射 unlink tombstone、内容大小变化和 incarnation 失效，以保持现有 metadata 的实时性。
+普通文件 create/rename 不会自动成为 Agent metadata。VFS 只为已显式绑定的对象投射 unlink、内容大小变化和 incarnation 失效，以保持现有 metadata 的实时性。
 
 ### 6.2 typed watch
 
@@ -214,11 +214,11 @@ catalog 在内存中有界保存记录，并维护 `status`、`stage`、`kind` �
 
 队列饱和、pending 表耗尽或无法可靠投递全部增量时，内核记录单调 `resync_generation`，随后发送 `RESYNC_REQUIRED`。用户重新执行 snapshot/query 后，以 `ACK_RESYNC` 和对应 generation 安装或删除 watch。旧 generation 的 ACK 不能清除更新的缺口。
 
-workflow fence 在 metadata transaction 内排空该 scope 的 tombstone、内容 pending 和待投递 resync；仍有未确认缺口则返回 `RETRY`，不会把不完整 generation 标成已切割。
+workflow fence 在 metadata transaction 内排空该 scope 的 unlink/content pending 和待投递 resync；仍有未确认缺口则返回 `RETRY`，不会把不完整 generation 标成已切割。
 
 ### 6.4 明确限制
 
-catalog、索引、watch 和 generation 都是本次启动周期的内存状态。没有 `.agentmeta` 双 bank、journal、启动恢复或 crash-recovery catalog。文件内容本身仍由普通 uCore 文件系统管理，但 Agent metadata 不随重启恢复。
+catalog、索引、watch 和 generation 都只保存在本次启动周期的内存中，不写入磁盘；重启后 catalog 从空状态开始。文件内容本身仍由普通 uCore 文件系统管理。
 
 该设计受 Haiku BFS 显式属性、选择性索引和 live query 概念启发；AgentOS 将变化事件送入 Agent Loop，并以 workflow generation 与 resync 契约限制可见性。未复制 BFS 源码或磁盘格式。
 
@@ -265,7 +265,7 @@ resource handle 固定为 `{slot,type,flags,generation}`，区分 owned/borrowed
 
 Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有内建同步 provider，且没有动态 provider registration UAPI。该 provider 只接受 null input 与 output artifact `NONE`，`RESOURCE_IMPORT` 固定 fail closed 为 `DENIED`；因此现有 8 槽表和 typed handle ABI 尚没有 payload import 或 result resource backend。
 
-当前仓库交付的 `mcp_a2a_gateway.py` 是 transport-neutral 的纯用户态映射，并以 `agent_task_transport.py` 的 deterministic in-memory adapter 验证 MCP `2026-07-28` tools/Tasks 与 A2A v1 Task、Context、Message Part、Artifact、stream/cancel 语义。它尚未通过 binary adapter 连接真实内核 SQ/CQ。JSON、HTTP、OAuth、JWS、签名与远程持久化仍在用户态；内核只处理固定二进制 ABI。
+当前仓库交付的 `mcp_a2a_gateway.py` 是 transport-neutral 的纯用户态映射，并以 `agent_task_transport.py` 的 deterministic in-memory adapter 验证 MCP `2026-07-28` tools/Tasks 与 A2A v1 Task、Context、Message Part、Artifact、stream/cancel 语义。它尚未通过 binary adapter 连接真实内核 SQ/CQ。JSON、HTTP、OAuth、JWS、签名与远程存储仍由用户态外层负责；内核只处理固定二进制 ABI。
 
 ## 9. 安全和性能取舍
 
@@ -274,7 +274,7 @@ Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有
 | U/P/F 批量 credit | 热路径更少全局写；保留硬准入 | 普通统计可包含账户持有的空闲 F，只有 trim/fence 才得到精确 U |
 | 一次 canonical evidence | 删除普通成功事件多重写入 | 环是有界内存；普通 gap 需要 fence 显式承诺 |
 | critical 独立容量 | 拒绝/授权证据不被成功 telemetry 挤占 | 仍保留少量 legacy 投影成本 |
-| volatile explicit metadata | 删除扫描、journal、checkpoint I/O | 重启后必须由用户态重新登记和查询 |
+| boot-scoped explicit metadata | 只为登记对象维护 catalog/index | 每次启动由用户态重新登记和查询 |
 | member + closing | 生命周期状态更小、cut 更清晰 | 不提供复杂恢复阶段或无限 workflow 槽 |
 | 24-node immutable contract | 内核可在效果前确定验证计划边界 | 用户态必须拆分更大 DAG；同 lifecycle 不能热替换合同 |
 | Phase Lease | 锁定工具峰值并在终态立即结算 | lease/claim 有界且 active phase 不能任意阻塞 |

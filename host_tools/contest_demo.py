@@ -1,35 +1,27 @@
 #!/usr/bin/env python3
-"""验证一个实时 AgentOS Guest，并渲染其测量展示。"""
+"""Verify AgentOS Guest logs and summarize practical AB/BA measurements."""
 
 from __future__ import annotations
 
 import argparse
-import html
+import csv
 import importlib.util
+import io
 import json
 import os
 import re
-import shutil
 import statistics
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from safe_host_paths import (
-    absolute_lexical_path,
-    require_regular_file,
-    require_safe_directory,
-)
 
-
-SCHEMA_VERSION = 8
-KIND = "agentos-contest-showcase"
-COMMIT = re.compile(r"^[0-9a-f]{40}$")
-RUN_ID = re.compile(r"^[0-9a-f]{16}$")
+SCHEMA_VERSION = 1
+KIND = "agentos-contest-demo-results"
 UINT = r"(?:0|[1-9][0-9]*)"
 UINT64_MAX = (1 << 64) - 1
-CORPUS_SIZE = 24
+CORPUS_SIZE = 96
+
 LEGACY_PATTERNS = {
     "startup": re.compile(
         r"^labdemo_ucore: startup_barrier ready=3 released=3 chain_receipts=3$"
@@ -64,24 +56,32 @@ METRIC_PATTERN = re.compile(
     rf"^agentos:demo schema=2 nonce=({UINT}) kind=metric "
     rf"mode=(compat|native) actor_pid=({UINT}) core_duration_us=({UINT}) "
     rf"end_to_end_duration_us=({UINT}) end_to_end_started_us=({UINT}) "
-    rf"end_to_end_finished_us=({UINT}) "
-    rf"workload_syscalls=({UINT}) "
+    rf"end_to_end_finished_us=({UINT}) workload_syscalls=({UINT}) "
     rf"records_examined=({UINT}) bytes_read=({UINT}) "
     rf"result_items=({UINT}) outcome_hash=({UINT})$"
 )
+
 FENCE_PERFORMANCE_COUNTERS = (
-    "epoch_commits", "epoch_buffers_staged", "physical_writes", "physical_reads",
-    "durable_flushes", "deduplicated_stages", "workload_syscalls",
-    "directory_block_probes", "directory_entries_examined",
-    "virtio_notifications", "virtio_submitted_requests",
-    "virtio_write_batch_calls", "virtio_batched_write_requests",
+    "epoch_commits",
+    "epoch_buffers_staged",
+    "physical_writes",
+    "physical_reads",
+    "durable_flushes",
+    "deduplicated_stages",
+    "workload_syscalls",
+    "directory_block_probes",
+    "directory_entries_examined",
+    "virtio_notifications",
+    "virtio_submitted_requests",
+    "virtio_write_batch_calls",
+    "virtio_batched_write_requests",
     "virtio_indirect_write_batch_calls",
-    "virtio_read_batch_calls", "virtio_batched_read_requests",
+    "virtio_read_batch_calls",
+    "virtio_batched_read_requests",
     "overwrite_prereads_skipped",
 )
 FENCE_COUNTER_PATTERN = " ".join(
-    rf"{name}=({UINT})"
-    for name in FENCE_PERFORMANCE_COUNTERS
+    rf"{name}=({UINT})" for name in FENCE_PERFORMANCE_COUNTERS
 )
 FENCE_PATTERN = re.compile(
     rf"^agentos:demo schema=2 nonce=({UINT}) kind=fence "
@@ -89,8 +89,7 @@ FENCE_PATTERN = re.compile(
     rf"point=(E2E_START|CORE_START|ACK_SETTLED|E2E_END|PROBE_START|PROBE_END) "
     rf"tick_us=({UINT}) attempts=({UINT}) stable_rounds=({UINT}) "
     rf"observer_pid=({UINT}) observer_tick=({UINT}) "
-    rf"observer_lifecycle_id=({UINT}) "
-    rf"observer_lifecycle_generation=({UINT}) "
+    rf"observer_lifecycle_id=({UINT}) observer_lifecycle_generation=({UINT}) "
     rf"counter_scope=(global) {FENCE_COUNTER_PATTERN}$"
 )
 TRACE_PATTERN = re.compile(
@@ -112,19 +111,34 @@ ORACLE_PATTERN = re.compile(
     rf"stage=([a-z0-9-]+) reason=([a-z0-9_-]+) "
     rf"final_status=([a-z0-9-]+) "
     rf"execution_order=(compat_then_native|native_then_compat) "
-    rf"corpus=({UINT}) "
-    rf"outcome_hash=({UINT}) compat_hash=({UINT}) native_hash=({UINT})$"
+    rf"corpus=({UINT}) outcome_hash=({UINT}) compat_hash=({UINT}) "
+    rf"native_hash=({UINT})$"
 )
+
 MECHANISM_COUNTERS = (
-    "epoch_commits", "epoch_buffers_staged", "physical_writes", "physical_reads",
-    "durable_flushes", "deduplicated_stages", "cow_shared_pages",
-    "cow_copied_pages", "cow_fault_promotions", "exec_cache_hits",
-    "exec_cache_misses", "exec_cache_shared_pages", "exec_cache_evictions",
-    "workload_syscalls", "directory_block_probes",
-    "directory_entries_examined", "virtio_notifications",
-    "virtio_submitted_requests", "virtio_write_batch_calls",
-    "virtio_batched_write_requests", "virtio_indirect_write_batch_calls",
-    "virtio_read_batch_calls", "virtio_batched_read_requests",
+    "epoch_commits",
+    "epoch_buffers_staged",
+    "physical_writes",
+    "physical_reads",
+    "durable_flushes",
+    "deduplicated_stages",
+    "cow_shared_pages",
+    "cow_copied_pages",
+    "cow_fault_promotions",
+    "exec_cache_hits",
+    "exec_cache_misses",
+    "exec_cache_shared_pages",
+    "exec_cache_evictions",
+    "workload_syscalls",
+    "directory_block_probes",
+    "directory_entries_examined",
+    "virtio_notifications",
+    "virtio_submitted_requests",
+    "virtio_write_batch_calls",
+    "virtio_batched_write_requests",
+    "virtio_indirect_write_batch_calls",
+    "virtio_read_batch_calls",
+    "virtio_batched_read_requests",
     "overwrite_prereads_skipped",
 )
 MECHANISM_PAIR_PATTERN = " ".join(
@@ -136,49 +150,31 @@ MECHANISM_PATTERN = re.compile(
     rf"mode=(compat|native|workflow|runtime_probe) "
     rf"scope=(core|end_to_end) observer_pid=({UINT}) "
     rf"before_tick=({UINT}) after_tick=({UINT}) "
-    rf"observer_lifecycle_id=({UINT}) "
-    rf"observer_lifecycle_generation=({UINT}) counter_scope=(global) "
-    rf"{MECHANISM_PAIR_PATTERN}$"
+    rf"observer_lifecycle_id=({UINT}) observer_lifecycle_generation=({UINT}) "
+    rf"counter_scope=(global) {MECHANISM_PAIR_PATTERN}$"
 )
 
-LANE_EFFECT_SPECS = (
-    ("core_duration_us", "恢复核心耗时", "us"),
-    ("end_to_end_duration_us", "端到端耗时", "us"),
-    ("workload_syscalls", "工作负载系统调用", "call"),
-    ("records_examined", "检查记录", "record"),
-    ("bytes_read", "读取字节", "byte"),
+_STORAGE_COUNTERS = FENCE_PERFORMANCE_COUNTERS
+PATH_METRIC_FIELDS = (
+    "core_duration_us",
+    "end_to_end_duration_us",
+    "workload_syscalls",
+    "records_examined",
+    "bytes_read",
+    "directory_block_probes",
+    "directory_entries_examined",
+    "physical_reads",
+    "physical_writes",
+    "durable_flushes",
+    "virtio_notifications",
+    "virtio_submitted_requests",
+    "virtio_batched_read_requests",
+    "overwrite_prereads_skipped",
 )
-MECHANISM_EFFECT_SPECS = (
-    ("workload_syscalls", "工作负载系统调用", "call"),
-    ("directory_block_probes", "目录块探测", "block"),
-    ("directory_entries_examined", "目录项检查", "entry"),
-    ("epoch_commits", "FS epoch 提交", "commit"),
-    ("epoch_buffers_staged", "FS epoch 暂存 buffer", "buffer"),
-    ("physical_writes", "块设备物理写", "request"),
-    ("physical_reads", "块设备物理读", "request"),
-    ("durable_flushes", "持久化 flush", "flush"),
-    ("deduplicated_stages", "Epoch 去重 stage", "stage"),
-    ("virtio_notifications", "VirtIO 通知", "notify"),
-    ("virtio_submitted_requests", "VirtIO 请求", "request"),
-    ("virtio_write_batch_calls", "VirtIO 写批次", "batch"),
-    ("virtio_batched_write_requests", "批量写请求", "request"),
-    ("virtio_indirect_write_batch_calls", "VirtIO 间接写批次", "batch"),
-    ("virtio_read_batch_calls", "VirtIO 读批次", "batch"),
-    ("virtio_batched_read_requests", "批量读请求", "request"),
-    ("overwrite_prereads_skipped", "覆盖写跳过预读", "block"),
-    ("buffers_per_epoch", "每 Epoch buffer", "buffer/commit"),
-    ("directory_entries_per_probe", "每目录块检查项", "entry/block"),
-    ("virtio_requests_per_notification", "每次通知请求", "request/notify"),
-    ("virtio_write_requests_per_batch", "每写批次请求", "request/batch"),
-    ("virtio_read_requests_per_batch", "每读批次请求", "request/batch"),
-    ("virtio_batched_request_share_pct", "VirtIO 批量覆盖", "%"),
-)
-
-COUNTER_SCOPES = {
-    "default": "global",
-    "workload_syscalls": "observer_process",
+ORDER_NAMES = {
+    "compat_then_native": "traversal_then_indexed",
+    "native_then_compat": "indexed_then_traversal",
 }
-REMOVED_PUBLISHED_FILES = ("dashboard-data.json", "timeline.json")
 
 
 def _load_guest_failure_classifier() -> Any:
@@ -197,42 +193,7 @@ _GUEST_FAILURE_CLASSIFIER = _load_guest_failure_classifier()
 
 
 class ContestDemoError(RuntimeError):
-    """实时 Guest 记录不完整、不一致或不可信。"""
-
-
-def _run_git(root: Path, *args: str) -> str:
-    root = require_safe_directory(absolute_lexical_path(root)).resolve(strict=True)
-    git_name = shutil.which("git")
-    if git_name is None:
-        raise ContestDemoError("git executable is unavailable")
-    git = require_regular_file(Path(git_name)).resolve(strict=True)
-    environment = dict(os.environ)
-    for name in tuple(environment):
-        if name.startswith("GIT_"):
-            environment.pop(name)
-    result = subprocess.run(
-        [str(git), "-C", str(root), *args],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
-        check=False,
-        env=environment,
-    )
-    if result.returncode != 0:
-        raise ContestDemoError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
-def current_source_revision(root: Path) -> str:
-    """返回用于显示的当前 revision，不限制未提交改动。"""
-
-    commit = _run_git(root, "rev-parse", "--verify", "HEAD^{commit}")
-    if not COMMIT.fullmatch(commit):
-        raise ContestDemoError("HEAD is not a full commit identity")
-    return commit
+    """A Guest result is incomplete or internally inconsistent."""
 
 
 def _regular_file(path: Path, label: str) -> Path:
@@ -274,8 +235,7 @@ def _guest_lines(payload: bytes, label: str) -> list[str]:
 
 
 def _read_guest(path: Path, label: str) -> list[str]:
-    path = _regular_file(path, label)
-    return _guest_lines(path.read_bytes(), label)
+    return _guest_lines(_regular_file(path, label).read_bytes(), label)
 
 
 def _uint(raw: str, label: str) -> int:
@@ -362,11 +322,9 @@ def _parse_fence(match: re.Match[str]) -> dict[str, Any]:
         "stable_rounds": _uint(match.group(7), "fence stable rounds"),
         "observer_pid": _uint(match.group(8), "fence observer pid"),
         "observer_tick": _uint(match.group(9), "fence observer tick"),
-        "observer_lifecycle_id": _uint(
-            match.group(10), "fence observer lifecycle id"
-        ),
+        "observer_lifecycle_id": _uint(match.group(10), "fence lifecycle id"),
         "observer_lifecycle_generation": _uint(
-            match.group(11), "fence observer lifecycle generation"
+            match.group(11), "fence lifecycle generation"
         ),
         "counter_scope": match.group(12),
     }
@@ -389,9 +347,17 @@ def _parse_trace(match: re.Match[str]) -> dict[str, Any]:
 
 def _parse_runtime(match: re.Match[str]) -> dict[str, Any]:
     names = (
-        "nonce", "agents", "duration_us", "tool_calls", "dispatches",
-        "wait_sleeps", "wait_wakeups", "records_examined", "denied_actions",
-        "duplicate_actions", "recovery_side_effects",
+        "nonce",
+        "agents",
+        "duration_us",
+        "tool_calls",
+        "dispatches",
+        "wait_sleeps",
+        "wait_wakeups",
+        "records_examined",
+        "denied_actions",
+        "duplicate_actions",
+        "recovery_side_effects",
     )
     return {
         name: _uint(match.group(index), f"runtime {name}")
@@ -414,64 +380,6 @@ def _parse_oracle(match: re.Match[str]) -> dict[str, Any]:
         "compat_hash": _uint(match.group(11), "oracle compat outcome"),
         "native_hash": _uint(match.group(12), "oracle native outcome"),
     }
-
-
-def _parse_mechanism(match: re.Match[str]) -> dict[str, Any]:
-    before: dict[str, int] = {}
-    after: dict[str, int] = {}
-    for offset, name in enumerate(MECHANISM_COUNTERS):
-        before[name] = _uint(
-            match.group(10 + offset * 2), f"mechanism before {name}"
-        )
-        after[name] = _uint(
-            match.group(11 + offset * 2), f"mechanism after {name}"
-        )
-        if after[name] < before[name]:
-            raise ContestDemoError(f"mechanism {name} is not monotonic")
-    before_tick = _uint(match.group(5), "mechanism before tick")
-    after_tick = _uint(match.group(6), "mechanism after tick")
-    if after_tick <= before_tick:
-        raise ContestDemoError("mechanism sample ticks are not increasing")
-    result = {
-        "nonce": _uint(match.group(1), "mechanism nonce"),
-        "mode": match.group(2),
-        "scope": match.group(3),
-        "observer_pid": _uint(match.group(4), "mechanism observer pid"),
-        "before_tick": before_tick,
-        "after_tick": after_tick,
-        "observer_lifecycle_id": _uint(
-            match.group(7), "mechanism observer lifecycle id"
-        ),
-        "observer_lifecycle_generation": _uint(
-            match.group(8), "mechanism observer lifecycle generation"
-        ),
-        "counter_scope": match.group(9),
-        "raw_pair": {"before": before, "after": after},
-    }
-    result.update({name: after[name] - before[name] for name in MECHANISM_COUNTERS})
-    result["raw_cycle_order_gap"] = after_tick - before_tick
-    if result["virtio_notifications"] > result["virtio_submitted_requests"]:
-        raise ContestDemoError("VirtIO notifications exceed submitted requests")
-    if (
-        result["virtio_write_batch_calls"] + result["virtio_read_batch_calls"]
-        > result["virtio_notifications"]
-        or result["virtio_batched_write_requests"]
-        < result["virtio_write_batch_calls"]
-        or result["virtio_batched_read_requests"]
-        < result["virtio_read_batch_calls"]
-        or result["virtio_batched_write_requests"]
-        + result["virtio_batched_read_requests"]
-        > result["virtio_submitted_requests"]
-        or result["virtio_indirect_write_batch_calls"]
-        > result["virtio_write_batch_calls"]
-    ):
-        raise ContestDemoError("VirtIO batch counters are inconsistent")
-    if result["directory_block_probes"] == 0 and result[
-        "directory_entries_examined"
-    ] != 0:
-        raise ContestDemoError("directory entries lack a block probe")
-    result.update(_mechanism_derived(result))
-    return result
 
 
 def _ratio(numerator: int | float, denominator: int | float) -> float | None:
@@ -507,15 +415,67 @@ def _mechanism_derived(item: dict[str, Any]) -> dict[str, float | None]:
     }
 
 
-_STORAGE_COUNTERS = FENCE_PERFORMANCE_COUNTERS
+def _parse_mechanism(match: re.Match[str]) -> dict[str, Any]:
+    before: dict[str, int] = {}
+    after: dict[str, int] = {}
+    for offset, name in enumerate(MECHANISM_COUNTERS):
+        before[name] = _uint(
+            match.group(10 + offset * 2), f"mechanism before {name}"
+        )
+        after[name] = _uint(
+            match.group(11 + offset * 2), f"mechanism after {name}"
+        )
+        if after[name] < before[name]:
+            raise ContestDemoError(f"mechanism {name} is not monotonic")
+    before_tick = _uint(match.group(5), "mechanism before tick")
+    after_tick = _uint(match.group(6), "mechanism after tick")
+    if after_tick <= before_tick:
+        raise ContestDemoError("mechanism sample ticks are not increasing")
+    result: dict[str, Any] = {
+        "nonce": _uint(match.group(1), "mechanism nonce"),
+        "mode": match.group(2),
+        "scope": match.group(3),
+        "observer_pid": _uint(match.group(4), "mechanism observer pid"),
+        "before_tick": before_tick,
+        "after_tick": after_tick,
+        "observer_lifecycle_id": _uint(match.group(7), "mechanism lifecycle id"),
+        "observer_lifecycle_generation": _uint(
+            match.group(8), "mechanism lifecycle generation"
+        ),
+        "counter_scope": match.group(9),
+        "raw_pair": {"before": before, "after": after},
+    }
+    result.update({name: after[name] - before[name] for name in MECHANISM_COUNTERS})
+    result["raw_cycle_order_gap"] = after_tick - before_tick
+    if result["virtio_notifications"] > result["virtio_submitted_requests"]:
+        raise ContestDemoError("VirtIO notifications exceed submitted requests")
+    if (
+        result["virtio_write_batch_calls"] + result["virtio_read_batch_calls"]
+        > result["virtio_notifications"]
+        or result["virtio_batched_write_requests"]
+        < result["virtio_write_batch_calls"]
+        or result["virtio_batched_read_requests"]
+        < result["virtio_read_batch_calls"]
+        or result["virtio_batched_write_requests"]
+        + result["virtio_batched_read_requests"]
+        > result["virtio_submitted_requests"]
+        or result["virtio_indirect_write_batch_calls"]
+        > result["virtio_write_batch_calls"]
+    ):
+        raise ContestDemoError("VirtIO batch counters are inconsistent")
+    if (
+        result["directory_block_probes"] == 0
+        and result["directory_entries_examined"] != 0
+    ):
+        raise ContestDemoError("directory entries lack a block probe")
+    result.update(_mechanism_derived(result))
+    return result
 
 
 def _verify_fence_stream(
     mode: str,
     rows: list[dict[str, Any]],
     points: tuple[str, ...],
-    *,
-    require_workflow_lifecycle: bool = True,
 ) -> None:
     if len(rows) != len(points):
         raise ContestDemoError(f"{mode} quiescence fences are incomplete")
@@ -536,26 +496,18 @@ def _verify_fence_stream(
             row["observer_lifecycle_id"],
             row["observer_lifecycle_generation"],
         )
-        if (
-            require_workflow_lifecycle
-            and (lifecycle[0] == 0 or lifecycle[1] == 0)
-        ) or (not require_workflow_lifecycle and lifecycle != (0, 0)):
+        if lifecycle[0] == 0 or lifecycle[1] == 0:
             raise ContestDemoError(f"{mode} fence observer kind is invalid")
-        if previous is not None:
-            if (
-                row["tick_us"] < previous["tick_us"]
-                or row["observer_tick"] <= previous["observer_tick"]
-                or row["observer_pid"] != previous["observer_pid"]
-                or row["observer_lifecycle_id"]
-                != previous["observer_lifecycle_id"]
-                or row["observer_lifecycle_generation"]
-                != previous["observer_lifecycle_generation"]
-                or any(
-                    row[name] < previous[name]
-                    for name in _STORAGE_COUNTERS
-                )
-            ):
-                raise ContestDemoError(f"{mode} fence counters are not monotonic")
+        if previous is not None and (
+            row["tick_us"] < previous["tick_us"]
+            or row["observer_tick"] <= previous["observer_tick"]
+            or row["observer_pid"] != previous["observer_pid"]
+            or row["observer_lifecycle_id"] != previous["observer_lifecycle_id"]
+            or row["observer_lifecycle_generation"]
+            != previous["observer_lifecycle_generation"]
+            or any(row[name] < previous[name] for name in _STORAGE_COUNTERS)
+        ):
+            raise ContestDemoError(f"{mode} fence counters are not monotonic")
         previous = row
 
 
@@ -569,10 +521,8 @@ def _check_mechanism_interval(
         mechanism["counter_scope"] != "global"
         or mechanism["observer_pid"] != before["observer_pid"]
         or mechanism["observer_pid"] != after["observer_pid"]
-        or mechanism["observer_lifecycle_id"]
-        != before["observer_lifecycle_id"]
-        or mechanism["observer_lifecycle_id"]
-        != after["observer_lifecycle_id"]
+        or mechanism["observer_lifecycle_id"] != before["observer_lifecycle_id"]
+        or mechanism["observer_lifecycle_id"] != after["observer_lifecycle_id"]
         or mechanism["observer_lifecycle_generation"]
         != before["observer_lifecycle_generation"]
         or mechanism["observer_lifecycle_generation"]
@@ -602,8 +552,7 @@ def _check_core_mechanism(
         or mechanism["observer_pid"] != settled["observer_pid"]
         or mechanism["observer_lifecycle_id"]
         != core_start["observer_lifecycle_id"]
-        or mechanism["observer_lifecycle_id"]
-        != settled["observer_lifecycle_id"]
+        or mechanism["observer_lifecycle_id"] != settled["observer_lifecycle_id"]
         or mechanism["observer_lifecycle_generation"]
         != core_start["observer_lifecycle_generation"]
         or mechanism["observer_lifecycle_generation"]
@@ -622,7 +571,7 @@ def _check_core_mechanism(
 
 def verify_showcase(
     path: Path,
-    run_id: str,
+    expected_nonce: int | None = None,
     expected_sample: int | None = None,
     expected_order: str | None = None,
     *,
@@ -633,19 +582,20 @@ def verify_showcase(
         if guest_bytes is None
         else _guest_lines(guest_bytes, "showcase Guest log snapshot")
     )
-    expected_nonce = int(run_id, 16)
     legacy = {
         key: _unique_match(lines, pattern, f"legacy {key}")
         for key, pattern in LEGACY_PATTERNS.items()
     }
-    legacy_positions = [legacy[key][0] for key in LEGACY_PATTERNS]
-    if legacy_positions != sorted(legacy_positions):
+    positions = [legacy[key][0] for key in LEGACY_PATTERNS]
+    if positions != sorted(positions):
         raise ContestDemoError("legacy workflow markers are out of order")
 
     events: dict[str, list[dict[str, Any]]] = {"compat": [], "native": []}
     metrics: dict[str, dict[str, Any]] = {}
     fences: dict[str, list[dict[str, Any]]] = {
-        "compat": [], "native": [], "runtime_probe": []
+        "compat": [],
+        "native": [],
+        "runtime_probe": [],
     }
     trace: list[dict[str, Any]] = []
     runtime: dict[str, Any] | None = None
@@ -702,6 +652,7 @@ def verify_showcase(
         raise ContestDemoError("showcase sample id differs from the campaign slot")
     if expected_order is not None and run_record["order"] != expected_order:
         raise ContestDemoError("showcase order differs from the campaign slot")
+
     nonce_values = {
         run_record["nonce"],
         *(item["nonce"] for rows in events.values() for item in rows),
@@ -712,8 +663,11 @@ def verify_showcase(
         runtime["nonce"],
         oracle["nonce"],
     }
-    if nonce_values != {expected_nonce}:
-        raise ContestDemoError("showcase records are not bound to this run nonce")
+    if len(nonce_values) != 1 or 0 in nonce_values:
+        raise ContestDemoError("showcase records do not share one nonzero Guest nonce")
+    guest_nonce = next(iter(nonce_values))
+    if expected_nonce is not None and guest_nonce != expected_nonce:
+        raise ContestDemoError("showcase Guest nonce differs from the campaign")
 
     expected_events = (
         (1, "orchestrator", "INCIDENT"),
@@ -736,7 +690,7 @@ def verify_showcase(
             raise ContestDemoError(f"{mode} event ticks are not monotonic")
         metric = metrics[mode]
         if metric["core_duration_us"] != ticks[-1] - ticks[0]:
-            raise ContestDemoError(f"{mode} core duration does not match event timestamps")
+            raise ContestDemoError(f"{mode} core duration does not match timestamps")
         if (
             metric["end_to_end_duration_us"]
             != metric["end_to_end_finished_us"] - metric["end_to_end_started_us"]
@@ -752,17 +706,21 @@ def verify_showcase(
             or metric["result_items"] != 1
         ):
             raise ContestDemoError(f"{mode} events do not bind their metric")
-
         lane_fences = fences[mode]
         _verify_fence_stream(
-            mode, lane_fences,
+            mode,
+            lane_fences,
             ("E2E_START", "CORE_START", "ACK_SETTLED", "E2E_END"),
         )
         if not (
-            lane_fences[0]["tick_us"] <= metric["end_to_end_started_us"]
-            <= lane_fences[1]["tick_us"] <= ticks[0]
-            <= ticks[-1] <= lane_fences[2]["tick_us"]
-            <= lane_fences[3]["tick_us"] <= metric["end_to_end_finished_us"]
+            lane_fences[0]["tick_us"]
+            <= metric["end_to_end_started_us"]
+            <= lane_fences[1]["tick_us"]
+            <= ticks[0]
+            <= ticks[-1]
+            <= lane_fences[2]["tick_us"]
+            <= lane_fences[3]["tick_us"]
+            <= metric["end_to_end_finished_us"]
         ):
             raise ContestDemoError(f"{mode} timing is not bracketed by its fences")
 
@@ -775,7 +733,7 @@ def verify_showcase(
         or compat["records_examined"] != CORPUS_SIZE + 1
         or compat["bytes_read"] == 0
     ):
-        raise ContestDemoError("compat lane did not execute the complete corpus")
+        raise ContestDemoError("compat lane did not traverse the complete corpus")
     if (
         native["workload_syscalls"] == 0
         or native["records_examined"] == 0
@@ -796,12 +754,15 @@ def verify_showcase(
         "corpus": CORPUS_SIZE,
     }
     if any(oracle[key] != value for key, value in expected_oracle.items()):
-        raise ContestDemoError("showcase oracle identity differs from the registered workload")
+        raise ContestDemoError("showcase workload differs from the expected query")
     if {
-        compat["outcome_hash"], native["outcome_hash"], oracle["outcome_hash"],
-        oracle["compat_hash"], oracle["native_hash"],
+        compat["outcome_hash"],
+        native["outcome_hash"],
+        oracle["outcome_hash"],
+        oracle["compat_hash"],
+        oracle["native_hash"],
     } != {expected_hash}:
-        raise ContestDemoError("compat/native outcomes do not match the Host oracle")
+        raise ContestDemoError("traversal and indexed query outcomes differ")
 
     expected_trace = (
         (1, "orchestrator", "INCIDENT"),
@@ -811,15 +772,15 @@ def verify_showcase(
         (5, "orchestrator", "RECOVERED"),
     )
     if len(trace) != len(expected_trace):
-        raise ContestDemoError("multi-Agent timeline is incomplete")
+        raise ContestDemoError("multi-Agent workflow trace is incomplete")
     for row, expected in zip(trace, expected_trace):
         if (row["sequence"], row["role"], row["event"]) != expected:
-            raise ContestDemoError("multi-Agent timeline is out of contract")
+            raise ContestDemoError("multi-Agent workflow trace is out of contract")
     trace_ticks = [row["tick_us"] for row in trace]
     if trace_ticks != sorted(trace_ticks):
-        raise ContestDemoError("multi-Agent timeline ticks are not monotonic")
+        raise ContestDemoError("multi-Agent workflow ticks are not monotonic")
     if runtime["duration_us"] != trace_ticks[-1] - trace_ticks[0]:
-        raise ContestDemoError("runtime duration does not match the timeline")
+        raise ContestDemoError("runtime duration does not match the workflow")
     if (
         runtime["agents"] != 3
         or runtime["tool_calls"] == 0
@@ -833,10 +794,7 @@ def verify_showcase(
         or trace[3]["value0"] != 1
         or trace[3]["value1"] != 1
     ):
-        raise ContestDemoError("multi-Agent runtime counters violate the workflow oracle")
-
-    if oracle["execution_order"] != run_record["order"]:
-        raise ContestDemoError("oracle execution order differs from the run record")
+        raise ContestDemoError("multi-Agent runtime counters violate the workflow")
 
     expected_mechanisms = {
         ("compat", "core"),
@@ -852,35 +810,38 @@ def verify_showcase(
         "runtime_probe",
         fences["runtime_probe"],
         ("PROBE_START", "PROBE_END"),
-        require_workflow_lifecycle=False,
     )
     for mode in ("compat", "native"):
         _check_core_mechanism(
-            mechanisms[(mode, "core")], fences[mode][1], fences[mode][2],
+            mechanisms[(mode, "core")],
+            fences[mode][1],
+            fences[mode][2],
             f"{mode} core",
         )
         if (
             metrics[mode]["workload_syscalls"]
             != mechanisms[(mode, "core")]["workload_syscalls"]
         ):
-            raise ContestDemoError(
-                f"{mode} workload syscall receipt differs from the kernel snapshot"
-            )
+            raise ContestDemoError(f"{mode} syscall metric differs from its snapshot")
         _check_mechanism_interval(
-            mechanisms[(mode, "end_to_end")], fences[mode][0], fences[mode][3],
+            mechanisms[(mode, "end_to_end")],
+            fences[mode][0],
+            fences[mode][3],
             f"{mode} end-to-end",
         )
     _check_mechanism_interval(
         mechanisms[("runtime_probe", "end_to_end")],
-        fences["runtime_probe"][0], fences["runtime_probe"][1],
+        fences["runtime_probe"][0],
+        fences["runtime_probe"][1],
         "runtime probe",
     )
-    lane_identity = (
+
+    lane_observer = (
         fences["compat"][0]["observer_pid"],
         fences["compat"][0]["observer_lifecycle_id"],
         fences["compat"][0]["observer_lifecycle_generation"],
     )
-    if lane_identity[0] != compat["actor_pid"]:
+    if lane_observer[0] != compat["actor_pid"]:
         raise ContestDemoError("performance observer is not the workload actor")
     for mode in ("compat", "native"):
         if any(
@@ -889,10 +850,10 @@ def verify_showcase(
                 row["observer_lifecycle_id"],
                 row["observer_lifecycle_generation"],
             )
-            != lane_identity
+            != lane_observer
             for row in fences[mode]
         ):
-            raise ContestDemoError("compat/native lanes changed performance observer")
+            raise ContestDemoError("query lanes changed their performance observer")
     workflow = mechanisms[("workflow", "end_to_end")]
     if (
         (
@@ -900,92 +861,74 @@ def verify_showcase(
             workflow["observer_lifecycle_id"],
             workflow["observer_lifecycle_generation"],
         )
-        != lane_identity
-        or workflow["before_tick"] <= max(
+        != lane_observer
+        or workflow["before_tick"]
+        <= max(
             fences["compat"][-1]["observer_tick"],
             fences["native"][-1]["observer_tick"],
         )
     ):
-        raise ContestDemoError("workflow mechanism changed the signed observer")
+        raise ContestDemoError("workflow snapshot changed the performance observer")
     probe = mechanisms[("runtime_probe", "end_to_end")]
     if (
         probe["observer_pid"] == compat["actor_pid"]
-        or probe["observer_lifecycle_id"] != 0
-        or probe["observer_lifecycle_generation"] != 0
+        or probe["observer_lifecycle_id"] == 0
+        or probe["observer_lifecycle_generation"] == 0
     ):
         raise ContestDemoError("runtime probe is not bound to the bootstrap observer")
     if any(
         probe[name] == 0
         for name in (
-            "cow_shared_pages", "cow_copied_pages", "cow_fault_promotions",
-            "exec_cache_hits", "exec_cache_misses", "exec_cache_shared_pages",
+            "cow_shared_pages",
+            "cow_copied_pages",
+            "cow_fault_promotions",
+            "exec_cache_hits",
+            "exec_cache_misses",
+            "exec_cache_shared_pages",
         )
     ):
         raise ContestDemoError("runtime probe did not exercise COW and exec reuse")
 
-    for row in trace:
-        row["offset_us"] = row["tick_us"] - trace_ticks[0]
-        row.pop("nonce")
-    for metric in metrics.values():
-        metric.pop("nonce")
-        metric.pop("mode")
-    runtime.pop("nonce")
-    oracle.pop("nonce")
-    run_record.pop("nonce")
+    clean_metrics = {
+        mode: {
+            key: value
+            for key, value in metric.items()
+            if key not in {"nonce", "mode"}
+        }
+        for mode, metric in metrics.items()
+    }
     nested_mechanisms: dict[str, dict[str, dict[str, Any]]] = {}
     for (mode, scope), mechanism in mechanisms.items():
-        mechanism.pop("nonce")
-        mechanism.pop("mode")
-        mechanism.pop("scope")
-        mechanism["buffers_per_epoch"] = _ratio(
-            mechanism["epoch_buffers_staged"], mechanism["epoch_commits"]
-        )
-        nested_mechanisms.setdefault(mode, {})[scope] = mechanism
-        mechanism["counter_scopes"] = dict(COUNTER_SCOPES)
-    for mode_rows in fences.values():
-        for row in mode_rows:
-            row.pop("nonce")
-            row.pop("mode")
-    result = {
-        "sample": run_record,
-        "comparison": {
-            "design": "same_kernel_same_guest_same_corpus",
-            "execution_actor_pid": compat["actor_pid"],
-            "timed_scope": "incident_to_verified_durable_outcome",
-            "corpus_records": CORPUS_SIZE,
-            "lanes": metrics,
-            "ratios": {
-                "compat_over_native_core_duration": _ratio(
-                    compat["core_duration_us"], native["core_duration_us"]
-                ),
-                "compat_over_native_end_to_end_duration": _ratio(
-                    compat["end_to_end_duration_us"],
-                    native["end_to_end_duration_us"],
-                ),
-                "compat_over_native_workload_syscalls": _ratio(
-                    compat["workload_syscalls"], native["workload_syscalls"]
-                ),
-                "compat_over_native_records_examined": _ratio(
-                    compat["records_examined"], native["records_examined"]
-                ),
-            },
+        clean = {
+            key: value
+            for key, value in mechanism.items()
+            if key not in {"nonce", "mode", "scope"}
+        }
+        nested_mechanisms.setdefault(mode, {})[scope] = clean
+    clean_runtime = {key: value for key, value in runtime.items() if key != "nonce"}
+    return {
+        "guest_nonce": guest_nonce,
+        "sample": {
+            "id": run_record["id"],
+            "order": ORDER_NAMES[run_record["order"]],
         },
-        "outcome": {**oracle, "equal": True},
-        "timeline": trace,
-        "runtime": runtime,
-        "observation": {
-            "audit_records": _uint(legacy["audit"][1].group(1), "audit records"),
-            "timeline_records": _uint(
-                legacy["timeline"][1].group(1), "timeline records"
-            ),
-            "provenance_edges": _uint(
-                legacy["provenance"][1].group(1), "provenance edges"
-            ),
+        "lanes": {
+            "traversal": clean_metrics["compat"],
+            "indexed": clean_metrics["native"],
         },
-        "fences": fences,
+        "mechanisms": {
+            "traversal": nested_mechanisms["compat"],
+            "indexed": nested_mechanisms["native"],
+            "workflow": nested_mechanisms["workflow"],
+            "runtime_probe": nested_mechanisms["runtime_probe"],
+        },
+        "workflow": clean_runtime,
+        "outcome": {
+            "final_status": oracle["final_status"],
+            "outcome_hash": oracle["outcome_hash"],
+            "equal": True,
+        },
     }
-    result["mechanisms"] = nested_mechanisms
-    return result
 
 
 def _median(values: list[int | float]) -> int | float:
@@ -995,775 +938,317 @@ def _median(values: list[int | float]) -> int | float:
     return round(float(value), 3)
 
 
-def _median_records(
-    rows: list[dict[str, Any]], names: tuple[str, ...]
-) -> dict[str, int | float]:
-    return {name: _median([row[name] for row in rows]) for name in names}
-
-
-def _median_optional_records(
-    rows: list[dict[str, Any]], names: tuple[str, ...]
-) -> dict[str, int | float | None]:
-    result: dict[str, int | float | None] = {}
-    for name in names:
-        values = [row[name] for row in rows if row.get(name) is not None]
-        result[name] = _median(values) if values else None
+def _path_measurement(sample: dict[str, Any], path_name: str) -> dict[str, Any]:
+    lane = sample["lanes"][path_name]
+    mechanism = sample["mechanisms"][path_name]["end_to_end"]
+    result = {
+        name: lane[name]
+        for name in (
+            "core_duration_us",
+            "end_to_end_duration_us",
+            "workload_syscalls",
+            "records_examined",
+            "bytes_read",
+        )
+    }
+    result.update(
+        {
+            name: mechanism[name]
+            for name in PATH_METRIC_FIELDS
+            if name not in result
+        }
+    )
     return result
 
 
-_T_CRITICAL_95 = {
-    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
-    6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
-    11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
-    16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
-    21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
-    26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
-}
-
-
-def _rounded(value: float) -> int | float:
-    if float(value).is_integer():
-        return int(value)
-    return round(value, 3)
-
-
-def _mean_ci95(values: list[float]) -> dict[str, int | float] | None:
-    if not values:
-        return None
-    estimate = statistics.fmean(values)
-    if len(values) == 1:
-        return {
-            "estimate": _rounded(estimate),
-            "low": _rounded(estimate),
-            "high": _rounded(estimate),
-        }
-    standard_error = statistics.stdev(values) / len(values) ** 0.5
-    critical = _T_CRITICAL_95.get(len(values) - 1, 1.96)
-    margin = critical * standard_error
-    return {
-        "estimate": _rounded(estimate),
-        "low": _rounded(estimate - margin),
-        "high": _rounded(estimate + margin),
-    }
-
-
-def _paired_effect(
-    rows: list[tuple[int | float, int | float]], label: str, unit: str
-) -> dict[str, Any]:
-    compat = [float(pair[0]) for pair in rows]
-    native = [float(pair[1]) for pair in rows]
-    deltas = [right - left for left, right in zip(compat, native)]
-    ratios = [left / right for left, right in zip(compat, native) if right != 0]
-    changes = [
-        100.0 * (right - left) / left
-        for left, right in zip(compat, native)
-        if left != 0
-    ]
-    delta_ci = _mean_ci95(deltas)
-    if delta_ci is None or delta_ci["low"] <= 0 <= delta_ci["high"]:
-        direction = "uncertain"
-    elif delta_ci["high"] < 0:
-        direction = "lower"
-    else:
-        direction = "higher"
-    return {
-        "label": label,
-        "unit": unit,
-        "sample_count": len(rows),
-        "compat_p50": _median([pair[0] for pair in rows]),
-        "native_p50": _median([pair[1] for pair in rows]),
-        "native_minus_compat": delta_ci,
-        "compat_over_native": _mean_ci95(ratios),
-        "native_change_pct": _mean_ci95(changes),
-        "direction": direction,
-    }
-
-
-def _paired_effects(
-    rows: list[tuple[dict[str, Any], dict[str, Any]]],
-    specs: tuple[tuple[str, str, str], ...],
-) -> dict[str, dict[str, Any]]:
-    effects: dict[str, dict[str, Any]] = {}
-    for name, label, unit in specs:
-        usable = [
-            (compat[name], native[name])
-            for compat, native in rows
-            if compat.get(name) is not None and native.get(name) is not None
-        ]
-        if usable:
-            effects[name] = _paired_effect(usable, label, unit)
-            if name == "workload_syscalls":
-                effects[name]["counter_scope"] = "observer_process"
-            elif name in {
-                "core_duration_us", "end_to_end_duration_us",
-                "records_examined", "bytes_read",
-            }:
-                effects[name]["counter_scope"] = "guest_workload"
-            else:
-                effects[name]["counter_scope"] = "global"
-    return effects
-
-
 def campaign_aggregates(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    if not samples:
-        raise ContestDemoError("showcase campaign has no replayed samples")
+    if len(samples) < 2 or len(samples) % 2 != 0:
+        raise ContestDemoError("campaign requires an even set of at least two samples")
     order_counts = {
         order: sum(sample["sample"]["order"] == order for sample in samples)
-        for order in ("compat_then_native", "native_then_compat")
+        for order in ("traversal_then_indexed", "indexed_then_traversal")
     }
     if len(set(order_counts.values())) != 1:
-        raise ContestDemoError("showcase campaign is not AB/BA balanced")
+        raise ContestDemoError("campaign is not AB/BA balanced")
 
-    expected_outcome = samples[0]["outcome"].copy()
-    expected_outcome.pop("execution_order")
-    for sample in samples[1:]:
-        outcome = sample["outcome"].copy()
-        outcome.pop("execution_order")
-        if outcome != expected_outcome:
-            raise ContestDemoError("campaign outcomes differ between boots")
+    outcome = samples[0]["outcome"]
+    if any(sample["outcome"] != outcome for sample in samples[1:]):
+        raise ContestDemoError("campaign outcomes differ between QEMU boots")
 
-    lane_names = (
-        "workload_syscalls", "records_examined", "bytes_read", "result_items",
-        "outcome_hash", "core_duration_us", "end_to_end_duration_us",
-    )
-    lanes: dict[str, dict[str, Any]] = {}
-    for mode in ("compat", "native"):
-        lane_rows = [sample["comparison"]["lanes"][mode] for sample in samples]
-        lane = _median_records(lane_rows, lane_names)
-        lane["actor_pids"] = sorted({row["actor_pid"] for row in lane_rows})
-        first_rows = [
-            row for row, sample in zip(lane_rows, samples)
-            if sample["sample"]["order"].startswith(mode)
-        ]
-        second_rows = [
-            row for row, sample in zip(lane_rows, samples)
-            if not sample["sample"]["order"].startswith(mode)
-        ]
-        lane["cold_core_duration_us"] = _median(
-            [row["core_duration_us"] for row in first_rows]
-        )
-        lane["hot_core_duration_us"] = _median(
-            [row["core_duration_us"] for row in second_rows]
-        )
-        lane["cold_end_to_end_duration_us"] = _median(
-            [row["end_to_end_duration_us"] for row in first_rows]
-        )
-        lane["hot_end_to_end_duration_us"] = _median(
-            [row["end_to_end_duration_us"] for row in second_rows]
-        )
-        lanes[mode] = lane
-
-    mechanism_names = MECHANISM_COUNTERS + (
-        "buffers_per_epoch", "directory_entries_per_probe",
-        "virtio_requests_per_notification", "virtio_write_requests_per_batch",
-        "virtio_read_requests_per_batch", "virtio_batched_request_share_pct",
-    )
-    mechanisms: dict[str, dict[str, dict[str, Any]]] = {}
-    for mode, scopes in samples[0]["mechanisms"].items():
-        mechanisms[mode] = {}
-        for scope in scopes:
-            rows = [sample["mechanisms"][mode][scope] for sample in samples]
-            item = _median_optional_records(rows, mechanism_names)
-            item["counter_scope"] = "global"
-            item["counter_scopes"] = dict(COUNTER_SCOPES)
-            item["raw_cycle_ordering"] = {
-                "ordered_samples": len(rows),
-                "minimum_gap": min(row["raw_cycle_order_gap"] for row in rows),
-                "median_gap": _median(
-                    [row["raw_cycle_order_gap"] for row in rows]
-                ),
-                "unit": "raw_cycle_order_token",
+    rows: list[dict[str, Any]] = []
+    for sample in samples:
+        traversal = _path_measurement(sample, "traversal")
+        indexed = _path_measurement(sample, "indexed")
+        rows.append(
+            {
+                "sample_id": sample["sample"]["id"],
+                "order": sample["sample"]["order"],
+                "traversal": traversal,
+                "indexed": indexed,
             }
-            item["virtio_notification_scope"] = "mixed_read_write"
-            mechanisms[mode][scope] = item
-
-    runtime_names = (
-        "agents", "duration_us", "tool_calls", "dispatches", "wait_sleeps",
-        "wait_wakeups", "records_examined", "denied_actions",
-        "duplicate_actions", "recovery_side_effects",
-    )
-    runtime = _median_records([sample["runtime"] for sample in samples], runtime_names)
-    observation = _median_records(
-        [sample["observation"] for sample in samples],
-        ("audit_records", "timeline_records", "provenance_edges"),
-    )
-    comparison = {
-        "design": "same_kernel_same_guest_same_corpus",
-        "timed_scope": {
-            "core": "incident_to_verified_durable_outcome",
-            "end_to_end": "quiescent_seed_core_cleanup_quiescent",
-        },
-        "corpus_records": CORPUS_SIZE,
-        "order_balance": order_counts,
-        "lanes": lanes,
-        "ratios": {
-            "compat_over_native_core_duration": _ratio(
-                lanes["compat"]["core_duration_us"],
-                lanes["native"]["core_duration_us"],
-            ),
-            "compat_over_native_end_to_end_duration": _ratio(
-                lanes["compat"]["end_to_end_duration_us"],
-                lanes["native"]["end_to_end_duration_us"],
-            ),
-            "compat_over_native_workload_syscalls": _ratio(
-                lanes["compat"]["workload_syscalls"],
-                lanes["native"]["workload_syscalls"],
-            ),
-            "compat_over_native_records_examined": _ratio(
-                lanes["compat"]["records_examined"],
-                lanes["native"]["records_examined"],
-            ),
-        },
-        "paired_effects": _paired_effects(
-            [
-                (
-                    sample["comparison"]["lanes"]["compat"],
-                    sample["comparison"]["lanes"]["native"],
-                )
-                for sample in samples
-            ],
-            LANE_EFFECT_SPECS,
-        ),
-    }
-    mechanism_effects = {
-        scope: _paired_effects(
-            [
-                (
-                    sample["mechanisms"]["compat"][scope],
-                    sample["mechanisms"]["native"][scope],
-                )
-                for sample in samples
-            ],
-            MECHANISM_EFFECT_SPECS,
         )
-        for scope in ("core", "end_to_end")
+    medians = {
+        path_name: {
+            field: _median([row[path_name][field] for row in rows])
+            for field in PATH_METRIC_FIELDS
+        }
+        for path_name in ("traversal", "indexed")
     }
+    core_deltas = [
+        row["indexed"]["core_duration_us"]
+        - row["traversal"]["core_duration_us"]
+        for row in rows
+    ]
+    indexed_wins = sum(delta < 0 for delta in core_deltas)
+    paired_median_delta = _median(core_deltas)
+    if indexed_wins <= len(rows) // 2 or paired_median_delta >= 0:
+        raise ContestDemoError(
+            "indexed query did not beat traversal in a majority of paired boots"
+        )
+    if any(
+        row["indexed"]["records_examined"]
+        >= row["traversal"]["records_examined"]
+        for row in rows
+    ):
+        raise ContestDemoError("indexed query did not reduce examined records")
     return {
-        "comparison": comparison,
-        "outcome": {**expected_outcome, "execution_orders": order_counts},
-        "timeline": samples[0]["timeline"],
-        "timeline_sample_id": samples[0]["sample"]["id"],
-        "runtime": runtime,
-        "observation": observation,
-        "mechanisms": mechanisms,
-        "mechanism_effects": mechanism_effects,
+        "comparison": {
+            "workload": "same_kernel_same_guest_same_file_query",
+            "paths": {
+                "traversal": "directory_traversal",
+                "indexed": "indexed_control_path",
+            },
+            "corpus_records": CORPUS_SIZE,
+            "order_balance": order_counts,
+            "medians": medians,
+            "ratios": {
+                "traversal_over_indexed_core_duration": _ratio(
+                    medians["traversal"]["core_duration_us"],
+                    medians["indexed"]["core_duration_us"],
+                ),
+                "traversal_over_indexed_end_to_end_duration": _ratio(
+                    medians["traversal"]["end_to_end_duration_us"],
+                    medians["indexed"]["end_to_end_duration_us"],
+                ),
+                "traversal_over_indexed_records_examined": _ratio(
+                    medians["traversal"]["records_examined"],
+                    medians["indexed"]["records_examined"],
+                ),
+            },
+            "paired_regression": {
+                "sample_count": len(rows),
+                "indexed_faster_samples": indexed_wins,
+                "indexed_faster_majority": True,
+                "median_indexed_minus_traversal_core_us": paired_median_delta,
+                "indexed_reduced_records_in_all_samples": True,
+            },
+        },
+        "samples": rows,
+        "workflow": {
+            name: _median([sample["workflow"][name] for sample in samples])
+            for name in (
+                "agents",
+                "tool_calls",
+                "dispatches",
+                "wait_sleeps",
+                "wait_wakeups",
+                "denied_actions",
+                "duplicate_actions",
+                "recovery_side_effects",
+            )
+        },
+        "outcome": outcome,
     }
 
 
-def build_report(
-    source_root: Path,
-    lab_logs: list[Path],
-    run_id: str,
-    commit: str,
-    elapsed_seconds: float,
-    artifacts: list[Path],
-) -> dict[str, Any]:
-    require_safe_directory(absolute_lexical_path(source_root)).resolve(strict=True)
-    if not RUN_ID.fullmatch(run_id) or int(run_id, 16) == 0:
-        raise ContestDemoError("run id must be 16 nonzero lowercase hex digits")
-    if not COMMIT.fullmatch(commit):
-        raise ContestDemoError("commit must be a full Git object id")
+def build_report(lab_logs: list[Path], elapsed_seconds: float) -> dict[str, Any]:
     if elapsed_seconds <= 0:
         raise ContestDemoError("elapsed time must be positive")
-    if len(lab_logs) < 8 or len(lab_logs) % 2 != 0:
-        raise ContestDemoError("showcase campaign requires an even set of at least 8 boots")
+    if len(lab_logs) < 2 or len(lab_logs) % 2 != 0:
+        raise ContestDemoError("campaign requires an even set of at least two QEMU logs")
 
     checked_logs = [
         _regular_file(path, f"showcase Guest log {index}")
         for index, path in enumerate(lab_logs, 1)
     ]
-    samples = []
+    samples: list[dict[str, Any]] = []
+    campaign_nonce: int | None = None
     for index, log in enumerate(checked_logs, 1):
-        expected_order = (
-            "compat_then_native" if index % 2 else "native_then_compat"
-        )
-        samples.append(
-            verify_showcase(log, run_id, index, expected_order)
-        )
-    aggregates = campaign_aggregates(samples)
-    artifact_paths = list(checked_logs)
-    artifact_paths.extend(_regular_file(path, "showcase artifact") for path in artifacts)
-    if len({path.resolve() for path in artifact_paths}) != len(artifact_paths):
-        raise ContestDemoError("showcase artifact list contains duplicates")
-    if len({path.name for path in artifact_paths}) != len(artifact_paths):
-        raise ContestDemoError("showcase artifact basenames must be unique")
-    expected_artifact_names = {"showcase-kernel"}
-    for index in range(1, len(samples) + 1):
-        sample_tag = f"{index:02d}"
-        expected_artifact_names.update(
-            {
-                f"sample-{sample_tag}-qemu.log",
-                f"sample-{sample_tag}-fs.img",
-                f"sample-{sample_tag}-labdemo.elf",
-            }
-        )
-    artifact_by_name = {path.name: path for path in artifact_paths}
-    if set(artifact_by_name) != expected_artifact_names:
-        missing = sorted(expected_artifact_names - set(artifact_by_name))
-        extra = sorted(set(artifact_by_name) - expected_artifact_names)
-        raise ContestDemoError(
-            f"showcase artifacts do not match the build manifest; "
-            f"missing={missing}, extra={extra}"
-        )
+        expected_order = "compat_then_native" if index % 2 else "native_then_compat"
+        sample = verify_showcase(log, campaign_nonce, index, expected_order)
+        if campaign_nonce is None:
+            campaign_nonce = sample["guest_nonce"]
+        sample.pop("guest_nonce")
+        samples.append(sample)
+
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
-        "run": {
-            "id": run_id,
-            "revision": commit,
+        "campaign": {
             "qemu_boots": len(samples),
             "wall_seconds": round(elapsed_seconds, 3),
-        },
-        **aggregates,
-        "measurement_protocol": {
-            "sample_count": len(samples),
-            "counter_scopes": dict(COUNTER_SCOPES),
-            "quiescence_fence": {
-                "stable_rounds": 2,
-                "max_attempts": 16,
-                "counter_scope": "field_scoped",
-                "counter_scopes": dict(COUNTER_SCOPES),
-                "converged_samples": len(samples),
-            },
             "ordering": "balanced_AB_BA",
-            "cold_hot_meaning": "first_or_second_lane_within_each_boot",
             "qemu_jobs": 1,
-            "host_concurrency": "one_isolated_qemu_at_a_time",
-            "observer_identity": {
-                "workflow": "pid_plus_nonzero_lifecycle_id_generation",
-                "system_probe": "signed_bootstrap_pid_plus_lifecycle_0_0",
-            },
         },
-        "samples": samples,
+        **campaign_aggregates(samples),
     }
 
 
-def _fmt_duration(value: int | float) -> str:
-    if value >= 1_000_000:
-        return f"{value / 1_000_000:.3f} s"
-    if value >= 1_000:
-        return f"{value / 1_000:.3f} ms"
-    return f"{value:g} us"
-
-
-def _fmt_ratio(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:.2f}x"
-
-
-def _fmt_decimal(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:.2f}"
-
-
-def _h(value: object) -> str:
-    return html.escape(str(value), quote=True)
-
-
-def _fmt_value(value: int | float | None, unit: str) -> str:
-    if value is None:
-        return "n/a"
-    if unit == "us":
-        return _fmt_duration(value)
-    if unit == "%":
-        return f"{value:g}%"
-    return f"{value:g} {unit}"
-
-
-def _fmt_signed(value: int | float, unit: str) -> str:
-    if unit == "us":
-        return f"{value:+g} us"
-    if unit == "%":
-        return f"{value:+g}%"
-    return f"{value:+g} {unit}"
-
-
-def _fmt_ci(
-    interval: dict[str, int | float] | None, unit: str, *, signed: bool = False
-) -> str:
-    if interval is None:
-        return "n/a"
-    formatter = _fmt_signed if signed else _fmt_value
-    return "{} [{}，{}]".format(
-        formatter(interval["estimate"], unit),
-        formatter(interval["low"], unit),
-        formatter(interval["high"], unit),
-    )
-
-
-def _fmt_ratio_ci(interval: dict[str, int | float] | None) -> str:
-    if interval is None:
-        return "n/a"
-    return "{:.2f}x [{:.2f}，{:.2f}]".format(
-        interval["estimate"], interval["low"], interval["high"]
-    )
-
-
-def _direction_label(direction: str) -> str:
-    return {
-        "lower": "Native 较低",
-        "higher": "Native 较高",
-        "uncertain": "区间跨 0",
-    }[direction]
-
-
-def _effect_rows(effects: dict[str, dict[str, Any]]) -> str:
-    rows = []
-    for effect in effects.values():
-        unit = effect["unit"]
-        rows.append(
-            "<tr><th>{}</th><td>{}</td><td>{}</td><td>{}</td><td>{}</td>"
-            "<td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                _h(effect["label"]),
-                _h(unit),
-                _h(effect["counter_scope"]),
-                _h(_fmt_value(effect["compat_p50"], unit)),
-                _h(_fmt_value(effect["native_p50"], unit)),
-                _h(_fmt_ci(effect["native_minus_compat"], unit, signed=True)),
-                _h(_fmt_ratio_ci(effect["compat_over_native"])),
-                _h(_direction_label(effect["direction"])),
-            )
+def render_csv(report: dict[str, Any]) -> str:
+    fields = ["sample_id", "order"]
+    for path_name in ("traversal", "indexed"):
+        fields.extend(f"{path_name}_{name}" for name in PATH_METRIC_FIELDS)
+    fields.extend(
+        (
+            "indexed_minus_traversal_core_us",
+            "traversal_over_indexed_core_ratio",
         )
-    return "".join(rows)
-
-
-def _effect_markdown_lines(effects: dict[str, dict[str, Any]]) -> list[str]:
-    lines = [
-        "| 指标 | 单位 | 计数口径 | Compat p50 | Native p50 | "
-        "Native - Compat 均值 [95% CI] | Compat / Native 均值 [95% CI] | 方向 |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
-    ]
-    for effect in effects.values():
-        unit = effect["unit"]
-        lines.append(
-            "| {} | {} | {} | {} | {} | {} | {} | {} |".format(
-                effect["label"],
-                unit,
-                effect["counter_scope"],
-                _fmt_value(effect["compat_p50"], unit),
-                _fmt_value(effect["native_p50"], unit),
-                _fmt_ci(effect["native_minus_compat"], unit, signed=True),
-                _fmt_ratio_ci(effect["compat_over_native"]),
-                _direction_label(effect["direction"]),
-            )
+    )
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
+    writer.writeheader()
+    for sample in report["samples"]:
+        row: dict[str, Any] = {
+            "sample_id": sample["sample_id"],
+            "order": sample["order"],
+        }
+        for path_name in ("traversal", "indexed"):
+            for name in PATH_METRIC_FIELDS:
+                row[f"{path_name}_{name}"] = sample[path_name][name]
+        row["indexed_minus_traversal_core_us"] = (
+            sample["indexed"]["core_duration_us"]
+            - sample["traversal"]["core_duration_us"]
         )
-    return lines
+        row["traversal_over_indexed_core_ratio"] = _ratio(
+            sample["traversal"]["core_duration_us"],
+            sample["indexed"]["core_duration_us"],
+        )
+        writer.writerow(row)
+    return output.getvalue()
 
 
 def render_markdown(report: dict[str, Any]) -> str:
     comparison = report["comparison"]
-    mechanisms = report["mechanisms"]
+    medians = comparison["medians"]
+    traversal = medians["traversal"]
+    indexed = medians["indexed"]
     lines = [
-        "# AgentOS 科研故障恢复实测",
+        "# AgentOS file-query measurements",
         "",
-        f"revision `{report['run']['revision']}`，{report['run']['qemu_boots']} 次真实 "
-        "QEMU 启动；同一内核、同一 Guest 程序与语料，每轮仅按预注册的 "
-        "sample/order 重建工作负载镜像，AB/BA 等量换序。",
+        f"{report['campaign']['qemu_boots']} real QEMU boots, balanced AB/BA order. "
+        "Each boot runs a directory traversal and the indexed control path against "
+        f"the same {comparison['corpus_records']}-record corpus.",
         "",
-        "Raw cycle 仅验证 Guest 快照先后顺序；耗时、差值、比率和区间均来自 "
-        "Guest 单调微秒时钟或内核计数器的启动内前后差分。",
+        "## Median comparison",
         "",
-        "## 同内核配对效果",
+        "| Path | Core (us) | End-to-end (us) | Records examined | Bytes read | "
+        "Directory probes | Directory entries |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| traversal | {} | {} | {} | {} | {} | {} |".format(
+            traversal["core_duration_us"],
+            traversal["end_to_end_duration_us"],
+            traversal["records_examined"],
+            traversal["bytes_read"],
+            traversal["directory_block_probes"],
+            traversal["directory_entries_examined"],
+        ),
+        "| indexed | {} | {} | {} | {} | {} | {} |".format(
+            indexed["core_duration_us"],
+            indexed["end_to_end_duration_us"],
+            indexed["records_examined"],
+            indexed["bytes_read"],
+            indexed["directory_block_probes"],
+            indexed["directory_entries_examined"],
+        ),
         "",
+        "Traversal/indexed core ratio: `{}`. Traversal/indexed records ratio: `{}`.".format(
+            comparison["ratios"]["traversal_over_indexed_core_duration"],
+            comparison["ratios"]["traversal_over_indexed_records_examined"],
+        ),
+        "Indexed was faster in `{}/{}` paired boots; the paired median "
+        "indexed-minus-traversal core delta was `{} us`.".format(
+            comparison["paired_regression"]["indexed_faster_samples"],
+            comparison["paired_regression"]["sample_count"],
+            comparison["paired_regression"][
+                "median_indexed_minus_traversal_core_us"
+            ],
+        ),
+        "",
+        "## Raw paired measurements",
+        "",
+        "| Boot | Order | Traversal core (us) | Indexed core (us) | "
+        "Traversal records | Indexed records | Traversal bytes | Indexed bytes |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
-    lines.extend(_effect_markdown_lines(comparison["paired_effects"]))
-    lines.extend(("", "## 核心区间机制效果", ""))
-    lines.extend(_effect_markdown_lines(report["mechanism_effects"]["core"]))
-    lines.extend(("", "## 端到端机制效果", ""))
-    lines.extend(_effect_markdown_lines(report["mechanism_effects"]["end_to_end"]))
-    lines.extend(
-        (
-            "",
-            "## 底层机制绝对计数",
-            "",
-            "数值为 Guest ABI v2 快照的多启动中位数；除 workload_syscalls "
-            "绑定 observer_process 外，其余内核计数为 global；notify/request 覆盖读写请求。",
-            "",
-            "| 模式 / 区间 | Workload syscall | 目录 block / entry | Epoch / buffer | 物理读 / 写 / flush | 跳过预读 | VirtIO notify / request | 读 batch / request | 写 batch / request / indirect | COW 共享 / 复制 / 提升 | Exec 命中 / 未命中 / 共享 / 驱逐 |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-        )
-    )
-    for mode, scope in (
-        ("compat", "core"), ("compat", "end_to_end"),
-        ("native", "core"), ("native", "end_to_end"),
-        ("workflow", "end_to_end"), ("runtime_probe", "end_to_end"),
-    ):
-        item = mechanisms[mode][scope]
-        lines.append(
-            "| {} / {} | {} | {} / {} | {} / {} | {} / {} / {} | {} | {} / {} | "
-            "{} / {} | {} / {} / {} | {} / {} / {} | {} / {} / {} / {} |".format(
-                mode, scope,
-                item["workload_syscalls"],
-                item["directory_block_probes"], item["directory_entries_examined"],
-                item["epoch_commits"], _fmt_decimal(item["buffers_per_epoch"]),
-                item["physical_reads"], item["physical_writes"],
-                item["durable_flushes"], item["overwrite_prereads_skipped"],
-                item["virtio_notifications"], item["virtio_submitted_requests"],
-                item["virtio_read_batch_calls"], item["virtio_batched_read_requests"],
-                item["virtio_write_batch_calls"], item["virtio_batched_write_requests"],
-                item["virtio_indirect_write_batch_calls"],
-                item["cow_shared_pages"],
-                item["cow_copied_pages"], item["cow_fault_promotions"],
-                item["exec_cache_hits"], item["exec_cache_misses"],
-                item["exec_cache_shared_pages"], item["exec_cache_evictions"],
-            )
-        )
-    lines.extend(
-        (
-            "",
-            "## 8 boot 原始配对",
-            "",
-            "| Boot | 顺序 | Compat core (us) | Native core (us) | Native - Compat (us) | Compat / Native | 目录 probes C/N | VirtIO notify C/N | 批量读 request C/N | 物理读 C/N | 跳过预读 C/N |",
-            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-        )
-    )
     for sample in report["samples"]:
-        compat = sample["comparison"]["lanes"]["compat"]
-        native = sample["comparison"]["lanes"]["native"]
-        compat_mechanism = sample["mechanisms"]["compat"]["end_to_end"]
-        native_mechanism = sample["mechanisms"]["native"]["end_to_end"]
         lines.append(
-            "| {} | {} | {} | {} | {:+d} | {:.2f}x | {} / {} | {} / {} | "
-            "{} / {} | {} / {} | {} / {} |".format(
-                sample["sample"]["id"],
-                sample["sample"]["order"].replace("_then_", " -> "),
-                compat["core_duration_us"], native["core_duration_us"],
-                native["core_duration_us"] - compat["core_duration_us"],
-                compat["core_duration_us"] / native["core_duration_us"],
-                compat_mechanism["directory_block_probes"],
-                native_mechanism["directory_block_probes"],
-                compat_mechanism["virtio_notifications"],
-                native_mechanism["virtio_notifications"],
-                compat_mechanism["virtio_batched_read_requests"],
-                native_mechanism["virtio_batched_read_requests"],
-                compat_mechanism["physical_reads"],
-                native_mechanism["physical_reads"],
-                compat_mechanism["overwrite_prereads_skipped"],
-                native_mechanism["overwrite_prereads_skipped"],
+            "| {} | {} | {} | {} | {} | {} | {} | {} |".format(
+                sample["sample_id"],
+                sample["order"],
+                sample["traversal"]["core_duration_us"],
+                sample["indexed"]["core_duration_us"],
+                sample["traversal"]["records_examined"],
+                sample["indexed"]["records_examined"],
+                sample["traversal"]["bytes_read"],
+                sample["indexed"]["bytes_read"],
             )
         )
     lines.extend(
         (
             "",
-            "## 多 Agent 时间线",
-        "",
-        "| +us | 角色 | 事件 |",
-        "| ---: | --- | --- |",
-        )
-    )
-    lines.extend(
-        f"| {item['offset_us']} | {item['role']} | {item['event']} |"
-        for item in report["timeline"]
-    )
-    lines.extend(
-        (
+            "Both paths produced the same verified outcome: "
+            f"`{report['outcome']['final_status']}` "
+            f"(hash `{report['outcome']['outcome_hash']}`).",
             "",
-            f"最终状态 `{report['outcome']['final_status']}`；Compat 与 Native 的 "
-            f"outcome hash 均为 `{report['outcome']['outcome_hash']}`。",
+            "The original QEMU logs remain beside this report; measurements.csv "
+            "contains the per-boot numeric rows.",
         )
     )
     return "\n".join(lines) + "\n"
-
-
-def render_html(report: dict[str, Any]) -> str:
-    comparison = report["comparison"]
-    compat = comparison["lanes"]["compat"]
-    native = comparison["lanes"]["native"]
-    ratios = comparison["ratios"]
-    runtime = report["runtime"]
-    outcome = report["outcome"]
-    mechanisms = report["mechanisms"]
-    compat_core = mechanisms["compat"]["core"]
-    native_core = mechanisms["native"]["core"]
-    compat_e2e = mechanisms["compat"]["end_to_end"]
-    native_e2e = mechanisms["native"]["end_to_end"]
-    probe = mechanisms["runtime_probe"]["end_to_end"]
-    timeline = "".join(
-        '<li><span class="time">+{offset}</span>'
-        '<span class="role {role}">{role}</span><strong>{event}</strong>'
-        '<span class="dot" aria-hidden="true"></span></li>'.format(
-            offset=_h(item["offset_us"]),
-            role=_h(item["role"]),
-            event=_h(item["event"].replace("_", " ").title()),
-        )
-        for item in report["timeline"]
-    )
-    lane_effect_rows = _effect_rows(comparison["paired_effects"])
-    mechanism_core_effect_rows = _effect_rows(
-        report["mechanism_effects"]["core"]
-    )
-    mechanism_e2e_effect_rows = _effect_rows(
-        report["mechanism_effects"]["end_to_end"]
-    )
-    core_latency_effect = comparison["paired_effects"]["core_duration_us"]
-    e2e_latency_effect = comparison["paired_effects"]["end_to_end_duration_us"]
-    mechanism_rows = "".join(
-            "<tr><th>{}</th><td>{}</td><td>{} / {}</td><td>{} / {}</td>"
-            "<td>{} / {} / {}</td><td>{}</td><td>{} / {}</td><td>{} / {}</td>"
-            "<td>{} / {} / {}</td>"
-            "<td>{} / {} / {}</td><td>{} / {} / {} / {}</td></tr>".format(
-                _h(f"{mode} / {scope}"),
-                _h(item["workload_syscalls"]),
-                _h(item["directory_block_probes"]),
-                _h(item["directory_entries_examined"]),
-                _h(item["epoch_commits"]),
-                _h(_fmt_decimal(item["buffers_per_epoch"])),
-                _h(item["physical_reads"]),
-                _h(item["physical_writes"]),
-                _h(item["durable_flushes"]),
-                _h(item["overwrite_prereads_skipped"]),
-                _h(item["virtio_notifications"]),
-                _h(item["virtio_submitted_requests"]),
-                _h(item["virtio_read_batch_calls"]),
-                _h(item["virtio_batched_read_requests"]),
-                _h(item["virtio_write_batch_calls"]),
-                _h(item["virtio_batched_write_requests"]),
-                _h(item["virtio_indirect_write_batch_calls"]),
-                _h(item["cow_shared_pages"]),
-                _h(item["cow_copied_pages"]),
-                _h(item["cow_fault_promotions"]),
-                _h(item["exec_cache_hits"]),
-                _h(item["exec_cache_misses"]),
-                _h(item["exec_cache_shared_pages"]),
-                _h(item["exec_cache_evictions"]),
-            )
-            for mode, scope, item in (
-                (mode, scope, mechanisms[mode][scope])
-                for mode, scope in (
-                    ("compat", "core"), ("compat", "end_to_end"),
-                    ("native", "core"), ("native", "end_to_end"),
-                    ("workflow", "end_to_end"),
-                    ("runtime_probe", "end_to_end"),
-                )
-            )
-        )
-    raw_rows = "".join(
-        "<tr><th>{}</th><td>{}</td><td>{}</td><td>{}</td><td>{:+d} us</td>"
-        "<td>{:.2f}x</td><td>{} / {}</td><td>{} / {}</td>"
-        "<td>{} / {}</td><td>{} / {}</td><td>{} / {}</td></tr>".format(
-            _h(sample["sample"]["id"]),
-            _h(sample["sample"]["order"].replace("_then_", " → ")),
-            _h(sample["comparison"]["lanes"]["compat"]["core_duration_us"]),
-            _h(sample["comparison"]["lanes"]["native"]["core_duration_us"]),
-            sample["comparison"]["lanes"]["native"]["core_duration_us"]
-            - sample["comparison"]["lanes"]["compat"]["core_duration_us"],
-            sample["comparison"]["lanes"]["compat"]["core_duration_us"]
-            / sample["comparison"]["lanes"]["native"]["core_duration_us"],
-            _h(sample["mechanisms"]["compat"]["end_to_end"]["directory_block_probes"]),
-            _h(sample["mechanisms"]["native"]["end_to_end"]["directory_block_probes"]),
-            _h(sample["mechanisms"]["compat"]["end_to_end"]["virtio_notifications"]),
-            _h(sample["mechanisms"]["native"]["end_to_end"]["virtio_notifications"]),
-            _h(sample["mechanisms"]["compat"]["end_to_end"]["virtio_batched_read_requests"]),
-            _h(sample["mechanisms"]["native"]["end_to_end"]["virtio_batched_read_requests"]),
-            _h(sample["mechanisms"]["compat"]["end_to_end"]["physical_reads"]),
-            _h(sample["mechanisms"]["native"]["end_to_end"]["physical_reads"]),
-            _h(sample["mechanisms"]["compat"]["end_to_end"]["overwrite_prereads_skipped"]),
-            _h(sample["mechanisms"]["native"]["end_to_end"]["overwrite_prereads_skipped"]),
-        )
-        for sample in report["samples"]
-    )
-    data_json = json.dumps(report, ensure_ascii=False, separators=(",", ":"))
-    embedded_json = (
-        data_json.replace("&", "\\u0026")
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-    )
-    return f"""<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AgentOS 科研故障恢复实测</title><style>
-:root{{--ink:#172126;--muted:#5f6d73;--line:#d9e0e2;--paper:#fff;--soft:#f4f7f6;--teal:#087d75;--blue:#174d68;--green:#16734a;font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;letter-spacing:0}}
-*{{box-sizing:border-box}}body{{margin:0;color:var(--ink);background:var(--paper);line-height:1.5}}header{{border-bottom:1px solid var(--line);background:#f8faf9}}.wrap{{width:min(calc(100% - 40px),1260px);margin:auto}}header .wrap{{display:flex;align-items:center;justify-content:space-between;min-height:68px;gap:24px}}.brand{{font-weight:800;color:var(--blue)}}.run{{font:13px ui-monospace,monospace;color:var(--muted);overflow-wrap:anywhere}}main{{padding:26px 0 54px}}h1{{font-size:40px;line-height:1.12;margin:4px 0 8px;letter-spacing:0;max-width:900px;overflow-wrap:anywhere}}.lead{{color:var(--muted);max-width:1040px;margin:0;overflow-wrap:anywhere}}.eyebrow{{font-size:12px;font-weight:800;color:var(--teal);margin:0}}.metrics{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-block:1px solid var(--line);margin:22px 0}}.metric{{padding:13px 15px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-width:0}}.metric:nth-child(4n){{border-right:0}}.metric:nth-last-child(-n+4){{border-bottom:0}}.metric span{{display:block;color:var(--muted);font-size:11px}}.metric strong{{display:block;font-size:21px;margin-top:2px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}}.metric small{{display:block;color:var(--teal);font-size:11px;overflow-wrap:anywhere}}.section{{margin-top:32px}}.section-head{{display:flex;justify-content:space-between;align-items:end;gap:30px;margin-bottom:10px}}h2{{margin:0;font-size:20px}}.section-head p{{margin:0;color:var(--muted);font-size:12px}}.table{{overflow:auto;border-block:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;min-width:960px}}th,td{{padding:11px 13px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}}th:first-child{{text-align:left}}thead th{{font-size:11px;color:var(--muted);background:var(--soft)}}tbody tr:last-child>*{{border:0}}.timeline{{list-style:none;padding:20px 0 0;margin:0;position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:8px}}.timeline:before{{content:"";position:absolute;top:31px;left:10%;right:10%;height:2px;background:var(--line)}}.timeline li{{position:relative;padding-top:30px;min-width:0;text-align:center}}.timeline .dot{{position:absolute;top:5px;left:50%;transform:translateX(-50%);width:13px;height:13px;border:3px solid var(--paper);border-radius:50%;background:var(--teal);box-shadow:0 0 0 1px var(--teal)}}.timeline span,.timeline strong{{display:block}}.timeline .time{{font:12px ui-monospace,monospace;color:var(--muted)}}.timeline .role{{font-size:12px;color:var(--teal);margin-top:5px}}.timeline strong{{font-size:14px;overflow-wrap:anywhere}}.runtime{{display:grid;grid-template-columns:repeat(6,1fr);border-block:1px solid var(--line)}}.runtime div{{padding:13px;border-right:1px solid var(--line);min-width:0}}.runtime div:last-child{{border:0}}.runtime span{{display:block;color:var(--muted);font-size:11px}}.runtime b{{font-size:19px;overflow-wrap:anywhere}}.outcome{{border-left:4px solid var(--green);background:#edf7f2;padding:15px 18px}}.outcome strong{{font-size:20px}}.outcome code{{display:block;margin-top:5px;overflow-wrap:anywhere}}footer{{border-top:1px solid var(--line);padding:18px 0;color:var(--muted);font-size:12px}}@media(max-width:900px){{h1{{font-size:32px}}.metrics{{grid-template-columns:1fr 1fr}}.metric,.metric:nth-child(4n){{border-right:0;border-bottom:1px solid var(--line)}}.metric:nth-child(odd){{border-right:1px solid var(--line)}}.metric:nth-last-child(-n+2){{border-bottom:0}}.runtime{{grid-template-columns:repeat(3,1fr)}}.timeline{{grid-template-columns:1fr}}.timeline:before{{display:none}}.timeline li{{padding:8px 0 8px 24px;border-bottom:1px solid var(--line);text-align:left}}.timeline .dot{{top:14px;left:0;transform:none}}header .wrap,.section-head{{align-items:flex-start;flex-direction:column;padding-block:13px}}}}
-</style></head><body><header><div class="wrap"><div><div class="brand">AgentOS-uCore</div><div>科研故障恢复实测</div></div><div class="run">run {_h(report['run']['id'])} · revision {_h(report['run']['revision'][:12])}</div></div></header>
-<main class="wrap"><p class="eyebrow">同内核 · {_h(report['run']['qemu_boots'])} boot 中位数 · AB/BA 等量换序</p><h1>AgentOS 科研故障恢复测量</h1><p class="lead">每次启动由同一 Orchestrator 在 {_h(comparison['corpus_records'])} 条相同工件上运行 Compat 与 Native。端到端包含 seed、恢复、cleanup 和静稳栅栏；core 仅覆盖故障发现到可持久验证结果。workload_syscalls 绑定 observer_process，其余内核计数为 global 区间差分；首/次路径分组只暴露顺序效应，不作缓存因果归因。</p>
-<section class="metrics" aria-label="实测数值">
-<div class="metric"><span>核心耗时 p50</span><strong>{_h(_fmt_duration(compat['core_duration_us']))} → {_h(_fmt_duration(native['core_duration_us']))}</strong><small>Compat → Native</small></div>
-<div class="metric"><span>核心耗时比</span><strong>{_h(_fmt_ratio(ratios['compat_over_native_core_duration']))}</strong><small>{_h(_fmt_ci(core_latency_effect['native_change_pct'], '%', signed=True))}</small></div>
-<div class="metric"><span>端到端耗时 p50</span><strong>{_h(_fmt_duration(compat['end_to_end_duration_us']))} → {_h(_fmt_duration(native['end_to_end_duration_us']))}</strong><small>Compat → Native</small></div>
-<div class="metric"><span>端到端耗时比</span><strong>{_h(_fmt_ratio(ratios['compat_over_native_end_to_end_duration']))}</strong><small>{_h(_fmt_ci(e2e_latency_effect['native_change_pct'], '%', signed=True))}</small></div>
-<div class="metric"><span>目录块探测 p50</span><strong>{_h(compat_e2e['directory_block_probes'])} → {_h(native_e2e['directory_block_probes'])}</strong><small>{_h(compat_e2e['directory_entries_examined'])} → {_h(native_e2e['directory_entries_examined'])} entries</small></div>
-<div class="metric"><span>物理读 / 写 / Flush p50</span><strong>{_h(compat_e2e['physical_reads'])}/{_h(compat_e2e['physical_writes'])}/{_h(compat_e2e['durable_flushes'])} → {_h(native_e2e['physical_reads'])}/{_h(native_e2e['physical_writes'])}/{_h(native_e2e['durable_flushes'])}</strong><small>覆盖写跳过预读 {_h(compat_e2e['overwrite_prereads_skipped'])} → {_h(native_e2e['overwrite_prereads_skipped'])}</small></div>
-<div class="metric"><span>VirtIO notify / request p50</span><strong>{_h(compat_e2e['virtio_notifications'])}/{_h(compat_e2e['virtio_submitted_requests'])} → {_h(native_e2e['virtio_notifications'])}/{_h(native_e2e['virtio_submitted_requests'])}</strong><small>混合读写 I/O</small></div>
-<div class="metric"><span>VirtIO 读批量 p50</span><strong>{_h(compat_e2e['virtio_read_batch_calls'])}/{_h(compat_e2e['virtio_batched_read_requests'])} → {_h(native_e2e['virtio_read_batch_calls'])}/{_h(native_e2e['virtio_batched_read_requests'])}</strong><small>batch / request</small></div>
-<div class="metric"><span>FS Epoch 提交 / 暂存 p50</span><strong>{_h(compat_e2e['epoch_commits'])}/{_h(compat_e2e['epoch_buffers_staged'])} → {_h(native_e2e['epoch_commits'])}/{_h(native_e2e['epoch_buffers_staged'])}</strong><small>commit / buffer</small></div>
-<div class="metric"><span>VirtIO 写批量 p50</span><strong>{_h(compat_e2e['virtio_write_batch_calls'])}/{_h(compat_e2e['virtio_batched_write_requests'])} → {_h(native_e2e['virtio_write_batch_calls'])}/{_h(native_e2e['virtio_batched_write_requests'])}</strong><small>间接描述符批次 {_h(compat_e2e['virtio_indirect_write_batch_calls'])} → {_h(native_e2e['virtio_indirect_write_batch_calls'])}</small></div>
-<div class="metric"><span>COW probe p50</span><strong>{_h(probe['cow_shared_pages'])} / {_h(probe['cow_copied_pages'])}</strong><small>共享 / 复制，提升 {_h(probe['cow_fault_promotions'])}</small></div>
-<div class="metric"><span>Exec RX probe p50</span><strong>{_h(probe['exec_cache_hits'])} / {_h(probe['exec_cache_misses'])}</strong><small>命中 / 未命中，共享 {_h(probe['exec_cache_shared_pages'])}</small></div>
-</section>
-<section class="section"><div class="section-head"><h2>同内核配对效果</h2><p>绝对值、差值、比率和 95% 配对 t 区间</p></div><div class="table"><table><thead><tr><th>指标</th><th>单位</th><th>计数口径</th><th>Compat p50</th><th>Native p50</th><th>Native - Compat 均值 [95% CI]</th><th>Compat / Native 均值 [95% CI]</th><th>方向</th></tr></thead><tbody>{lane_effect_rows}</tbody></table></div></section>
-<section class="section"><div class="section-head"><h2>核心区间机制效果</h2><p>Guest 快照原始计数差分，8 boot 配对统计</p></div><div class="table"><table><thead><tr><th>指标</th><th>单位</th><th>计数口径</th><th>Compat p50</th><th>Native p50</th><th>Native - Compat 均值 [95% CI]</th><th>Compat / Native 均值 [95% CI]</th><th>方向</th></tr></thead><tbody>{mechanism_core_effect_rows}</tbody></table></div></section>
-<section class="section"><div class="section-head"><h2>端到端机制效果</h2><p>seed、恢复、cleanup 和静稳栅栏</p></div><div class="table"><table><thead><tr><th>指标</th><th>单位</th><th>计数口径</th><th>Compat p50</th><th>Native p50</th><th>Native - Compat 均值 [95% CI]</th><th>Compat / Native 均值 [95% CI]</th><th>方向</th></tr></thead><tbody>{mechanism_e2e_effect_rows}</tbody></table></div></section>
-<section class="section"><div class="section-head"><h2>底层机制绝对计数</h2><p>workload_syscalls 为 observer_process，其余为 global；notify/request 覆盖混合读写</p></div><div class="table"><table><thead><tr><th>模式 / 区间</th><th>Workload syscall</th><th>目录 block / entry</th><th>Epoch / buffer</th><th>物理读 / 写 / flush</th><th>跳过预读</th><th>VirtIO notify / request</th><th>读 batch / request</th><th>写 batch / request / indirect</th><th>COW 共享 / 复制 / 提升</th><th>Exec 命中 / 未命中 / 共享 / 驱逐</th></tr></thead><tbody>{mechanism_rows}</tbody></table></div></section>
-<section class="section"><div class="section-head"><h2>8 boot 原始配对</h2><p>每行来自一次 Guest 启动内的 ABI v2 前后快照</p></div><div class="table"><table><thead><tr><th>Boot</th><th>顺序</th><th>Compat core us</th><th>Native core us</th><th>差值</th><th>比率</th><th>目录 probes C/N</th><th>VirtIO notify C/N</th><th>批量读 requests C/N</th><th>物理读 C/N</th><th>跳过预读 C/N</th></tr></thead><tbody>{raw_rows}</tbody></table></div></section>
-<section class="section"><div class="section-head"><h2>多 Agent 恢复时间线</h2><p>incident → sentinel → investigator → recovery</p></div><ol class="timeline">{timeline}</ol></section>
-<section class="section"><div class="section-head"><h2>内核运行观测</h2><p>同一实测 workflow 的三角色运行计数</p></div><div class="runtime"><div><span>Agent</span><b>{runtime['agents']}</b></div><div><span>Tool calls</span><b>{runtime['tool_calls']}</b></div><div><span>Dispatch</span><b>{runtime['dispatches']}</b></div><div><span>Wait sleep / wake</span><b>{runtime['wait_sleeps']} / {runtime['wait_wakeups']}</b></div><div><span>拒绝越权</span><b>{runtime['denied_actions']}</b></div><div><span>重复 / 副作用</span><b>{runtime['duplicate_actions']} / {runtime['recovery_side_effects']}</b></div></div></section>
-<section class="section outcome"><span>结果一致性 · 最终科研工件状态</span><strong>{_h(outcome['final_status'])}</strong><code>outcome hash {_h(outcome['outcome_hash'])}</code></section>
-<script type="application/json" id="agentos-live-data">{embedded_json}</script></main><footer><div class="wrap">{_h(report['run']['qemu_boots'])} 次真实 RISC-V QEMU 启动 · wall {_h(report['run']['wall_seconds'])} s · 原始日志与镜像摘要已嵌入数据</div></footer></body></html>"""
 
 
 def publish(report: dict[str, Any], output_dir: Path) -> None:
     if output_dir.is_symlink():
         raise ContestDemoError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
-    for name in REMOVED_PUBLISHED_FILES:
-        obsolete = output_dir / name
-        if obsolete.is_symlink() or obsolete.is_file():
-            obsolete.unlink()
-        elif obsolete.exists():
-            raise ContestDemoError(f"obsolete output is unsafe: {name}")
     serialized = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     _atomic_write(output_dir / "summary.json", serialized.encode("utf-8"))
+    _atomic_write(output_dir / "measurements.csv", render_csv(report).encode("utf-8"))
     _atomic_write(output_dir / "report.md", render_markdown(report).encode("utf-8"))
-    _atomic_write(output_dir / "index.html", render_html(report).encode("utf-8"))
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    identity = commands.add_parser("identity", help="print the current source revision")
-    identity.add_argument("--root", type=Path, required=True)
-    render = commands.add_parser("render", help="verify and render a balanced Guest campaign")
-    render.add_argument("--source-root", type=Path, required=True)
-    render.add_argument("--lab-log", action="append", type=Path, required=True)
-    render.add_argument("--run-id", required=True)
-    render.add_argument("--commit", required=True)
-    render.add_argument("--elapsed-seconds", type=float, required=True)
-    render.add_argument("--artifact", action="append", type=Path, default=[])
-    render.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--lab-log", action="append", type=Path, required=True)
+    parser.add_argument("--elapsed-seconds", type=float, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "identity":
-            print(current_source_revision(args.root))
-            return 0
-        report = build_report(
-            args.source_root,
-            args.lab_log,
-            args.run_id,
-            args.commit,
-            args.elapsed_seconds,
-            args.artifact,
-        )
+        report = build_report(args.lab_log, args.elapsed_seconds)
         publish(report, args.output_dir)
     except (ContestDemoError, OSError, UnicodeError, ValueError) as error:
         raise SystemExit(f"contest demo failed: {error}") from error
-    lanes = report["comparison"]["lanes"]
+    medians = report["comparison"]["medians"]
     ratios = report["comparison"]["ratios"]
     print(
-        "[contest-demo] compat_e2e={}us native_e2e={}us ratio={}".format(
-            lanes["compat"]["end_to_end_duration_us"],
-            lanes["native"]["end_to_end_duration_us"],
-            _fmt_ratio(ratios["compat_over_native_end_to_end_duration"]),
+        "[contest-demo] traversal_core={}us indexed_core={}us ratio={}".format(
+            medians["traversal"]["core_duration_us"],
+            medians["indexed"]["core_duration_us"],
+            ratios["traversal_over_indexed_core_duration"],
         )
     )
     print(
-        "[contest-demo] records compat={} native={} outcome_hash={}".format(
-            lanes["compat"]["records_examined"],
-            lanes["native"]["records_examined"],
+        "[contest-demo] records traversal={} indexed={} outcome_hash={}".format(
+            medians["traversal"]["records_examined"],
+            medians["indexed"]["records_examined"],
             report["outcome"]["outcome_hash"],
         )
     )
-    print(f"[contest-demo] dashboard: {(args.output_dir / 'index.html').resolve()}")
+    print(f"[contest-demo] results: {args.output_dir.resolve()}")
     return 0
 
 

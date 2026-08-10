@@ -16,17 +16,6 @@ import sys
 from pathlib import Path
 
 
-HOST_TOOLS = Path(__file__).resolve().parents[1] / "host_tools"
-if str(HOST_TOOLS) not in sys.path:
-    sys.path.append(str(HOST_TOOLS))
-
-from agent_observe_disk_contract import (  # noqa: E402
-    ObservationEvidenceError,
-    load_observation_contract,
-)
-from agent_observe_disk_evidence import validate_observation_payload  # noqa: E402
-
-
 BLOCK_SIZE = 1024
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 GENERATOR = {"name": "fs-allocator-image.py", "version": "2"}
@@ -68,40 +57,6 @@ VFS_POLICY_GENERATION = 2
 VFS_EXEC_PROFILE_NONE = 0
 FS_OWNER_VERSION = 3
 FS_OWNER_SYSTEM = 1
-AGENT_META_STORE_MAGIC = 0x41474D4554413036
-AGENT_META_STORE_VERSION = 8
-AGENT_META_STORE_NAMES = (".agentmeta", ".agentmeta1")
-AGENT_META_STORE_HEADER_BYTES = 40
-AGENT_META_STORE_DURABLE_BYTES = 8192
-AGENT_META_STORE_RECORD_BYTES = 416
-AGENT_META_STORE_MAX_RECORDS = 512
-AGENT_META_JOURNAL_OFFSET = 222208
-AGENT_META_JOURNAL_BYTES = 32 * BLOCK_SIZE
-AGENT_META_STORE_MAX_BYTES = AGENT_META_JOURNAL_OFFSET + AGENT_META_JOURNAL_BYTES
-AGENT_META_STORE_DATA_BLOCKS = (
-    AGENT_META_STORE_MAX_BYTES + BLOCK_SIZE - 1
-) // BLOCK_SIZE
-AGENT_META_HASH_INITIAL = 1469598103934665603
-AGENT_META_HASH_PRIME = 1099511628211
-AGENT_DURABLE_ARENA_MAGIC = 0x4147445552413031
-AGENT_DURABLE_ARENA_VERSION = 1
-AGENT_DURABLE_SECTION_OBSERVE = 1
-AGENT_DURABLE_SECTION_BYTES = 32
-AGENT_DURABLE_SECTION_MAX = 2
-AGENT_DURABLE_PAYLOAD_OFFSET = 96
-AGENT_DURABLE_PAYLOAD_BYTES = 8088
-AGENT_OBSERVE_CHECKPOINT_VERSION = 8
-AGENT_OBSERVE_CHECKPOINT_BYTES = 7592
-AGENT_FILE_SYSTEM_LIMIT = 64
-AGENT_FILE_SCOPE_LIMIT = 112
-AGENT_FILE_ORDINARY_LIMIT = 448
-AGENT_FILE_META_F_PERSIST = 2
-AGENT_FILE_META_F_AUTOSCAN = 4
-VFS_SCOPE_NONE = 0
-VFS_SCOPE_SYSTEM = 1
-VFS_SCOPE_FIRST_DYNAMIC = 3
-FS_OWNER_SCOPE_FLAG = 0x80000000
-WORKFLOW_LIFECYCLE_CAP = 8
 OWNER_STATE_NAMES = {
     OWNER_STATE_FREE_LIVE_LOW: "LIVE_LOW_OR_FREE",
     OWNER_STATE_ALLOCATING: "ALLOCATING",
@@ -1387,35 +1342,6 @@ def _require_allocator_map_manifest(
         raise ImageError("allocator bitmap/qmap changed outside the exact target")
 
 
-def _is_kernel_metadata_cow_inode(
-    name: str, inode: dict[str, object]
-) -> bool:
-    return (
-        name in AGENT_META_STORE_NAMES
-        and
-        int(inode["type"]) == 2
-        and int(inode["agent_meta_slot"]) == 0
-        and int(inode["agent_meta_flags"]) == 0
-        and int(inode["agent_meta_version"]) == 0
-        and int(inode["size"]) == AGENT_META_STORE_MAX_BYTES
-        and int(inode["exec_flags"]) == 0
-        and int(inode["exec_generation"]) == 0
-        and int(inode["exec_role_mask"]) == 0
-        and int(inode["exec_layout_version"]) == 0
-        and int(inode["exec_rw_offset"]) == 0
-        and int(inode["vfs_magic"]) == VFS_LABEL_MAGIC
-        and int(inode["vfs_version"]) == VFS_LABEL_VERSION
-        and int(inode["vfs_flags"]) == VFS_LABEL_F_KERNEL_PRIVATE
-        and int(inode["vfs_scope"]) == VFS_SCOPE_NONE
-        and int(inode["vfs_policy"]) == VFS_POLICY_KERNEL_PRIVATE
-        and int(inode["vfs_exec_profile"]) == VFS_EXEC_PROFILE_NONE
-        and int(inode["vfs_policy_generation"]) == VFS_POLICY_GENERATION
-        and int(inode["vfs_incarnation"]) != 0
-        and int(inode["owner"]) == FS_OWNER_SYSTEM
-        and int(inode["owner_version"]) == FS_OWNER_VERSION
-    )
-
-
 def _assert_unaffected_objects(
     before: dict[str, object],
     after: dict[str, object],
@@ -1457,13 +1383,6 @@ def _assert_unaffected_objects(
         key = str(inum)
         if before_inodes[key] != after_inodes.get(key):
             raise ImageError(f"unaffected inode {inum} changed")
-        inode = dict(before_inodes[key])
-        if _is_kernel_metadata_cow_inode(name, inode):
-            # 内核私有日志属于执行状态，而非分配器测试载荷。其身份与固定块映射
-            # 仍受保护，规范校验则检查每个结果镜像。
-            mutable_blocks.update(map(int, dict(before["inode_blocks"])[key]))
-            mutable_blocks.update(map(int, dict(after["inode_blocks"])[key]))
-            continue
         if before_payloads[key] != after_payloads.get(key):
             raise ImageError(f"unaffected payload {name!r} changed")
 
@@ -2030,448 +1949,6 @@ def _inode_logical_data_blocks(
     return blocks[:remaining]
 
 
-def _agent_disk_hash(raw: bytes) -> int:
-    value = AGENT_META_HASH_INITIAL
-    for byte in raw:
-        value ^= byte
-        value = (value * AGENT_META_HASH_PRIME) & 0xFFFFFFFFFFFFFFFF
-    return value
-
-
-def _agent_durable_hash(raw: bytes) -> int:
-    return _agent_disk_hash(raw) or 1
-
-
-def _inode_payload_from_raw(
-    snapshot: dict[str, object], raw: bytes, inum: int
-) -> bytes:
-    inode = dict(snapshot["inodes"])[str(inum)]
-    size = int(inode["size"])
-    payload = b"".join(
-        raw[block * BLOCK_SIZE : (block + 1) * BLOCK_SIZE]
-        for block in _inode_logical_data_blocks(snapshot, raw, inum)
-    )
-    if len(payload) < size:
-        raise ImageError(f"inode {inum} payload is shorter than its durable size")
-    return payload[:size]
-
-
-def _canonical_metadata_text_fields(
-    fields: dict[str, bytes], label: str, index: int
-) -> dict[str, bytes]:
-    """把定宽磁盘字符串解码为 C 代码可见的身份。"""
-
-    canonical: dict[str, bytes] = {}
-    for name, field in fields.items():
-        end = field.find(b"\0")
-        if end < 0 or field[-1] != 0:
-            raise ImageError(
-                f"{label}: invalid metadata record {index} string terminator"
-            )
-        canonical[name] = field[:end]
-    return canonical
-
-
-def _validate_agent_metadata_records(
-    raw: bytes, records_offset: int, count: int, label: str
-) -> None:
-    records: list[dict[str, object]] = []
-    text_fields = (
-        ("physical_name", 8, 32),
-        ("logical_path", 40, 80),
-        ("project", 120, 16),
-        ("workflow", 136, 24),
-        ("run_id", 160, 16),
-        ("stage", 176, 16),
-        ("kind", 192, 16),
-        ("status", 208, 16),
-        ("summary", 224, 96),
-    )
-    ordinary = 0
-    for index in range(count):
-        offset = records_offset + index * AGENT_META_STORE_RECORD_BYTES
-        record_raw = raw[offset : offset + AGENT_META_STORE_RECORD_BYTES]
-        used, fid = struct.unpack_from("<ii", record_raw)
-        fields = {
-            name: record_raw[field_offset : field_offset + field_bytes]
-            for name, field_offset, field_bytes in text_fields
-        }
-        canonical_fields = _canonical_metadata_text_fields(
-            fields, label, index
-        )
-        (
-            dependency_mask,
-            updated_tick,
-            flags,
-            dev,
-            inum,
-            incarnation,
-            size,
-            fs_generation,
-            update_mask,
-        ) = struct.unpack_from("<9Q", record_raw, 320)
-        scope_id, slot, lifecycle_id = struct.unpack_from("<III", record_raw, 392)
-        lifecycle_padding = record_raw[404:408]
-        lifecycle_generation = struct.unpack_from("<Q", record_raw, 408)[0]
-        identity_parts = (dev != 0, inum != 0, incarnation != 0)
-        if (
-            used != 1
-            or fid <= 0
-            or slot >= AGENT_META_STORE_MAX_RECORDS
-            or not (
-                scope_id == VFS_SCOPE_SYSTEM
-                or VFS_SCOPE_FIRST_DYNAMIC <= scope_id < FS_OWNER_SCOPE_FLAG
-            )
-            or not canonical_fields["physical_name"]
-            or len(canonical_fields["physical_name"]) > 14
-            or canonical_fields["physical_name"]
-            in {name.encode("ascii") for name in AGENT_META_STORE_NAMES}
-            or any(lifecycle_padding)
-            or (any(identity_parts) and not all(identity_parts))
-            or update_mask != 0
-            or not (flags & AGENT_FILE_META_F_PERSIST)
-            or flags & ~(AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN)
-        ):
-            raise ImageError(f"{label}: invalid metadata record {index}")
-        if scope_id == VFS_SCOPE_SYSTEM:
-            if lifecycle_id != 0 or lifecycle_generation != 0:
-                raise ImageError(
-                    f"{label}: SYSTEM metadata record {index} has a lifecycle"
-                )
-            limit = AGENT_FILE_SYSTEM_LIMIT
-        else:
-            ordinary += 1
-            if (
-                ordinary > AGENT_FILE_ORDINARY_LIMIT
-                or not 1 <= lifecycle_id <= WORKFLOW_LIFECYCLE_CAP
-                or lifecycle_generation == 0
-            ):
-                raise ImageError(
-                    f"{label}: invalid workflow metadata record {index}"
-                )
-            limit = AGENT_FILE_SCOPE_LIMIT
-
-        owned = 0
-        for prior in records:
-            if int(prior["slot"]) == slot:
-                raise ImageError(f"{label}: duplicate metadata slot {slot}")
-            if int(prior["scope_id"]) != scope_id:
-                continue
-            owned += 1
-            prior_fields = dict(prior["fields"])
-            if (
-                int(prior["fid"]) == fid
-                or prior_fields["physical_name"]
-                == canonical_fields["physical_name"]
-                or (
-                    canonical_fields["logical_path"]
-                    and prior_fields["logical_path"]
-                    == canonical_fields["logical_path"]
-                )
-                or (
-                    dev != 0
-                    and int(prior["dev"]) == dev
-                    and int(prior["inum"]) == inum
-                    and int(prior["incarnation"]) == incarnation
-                )
-            ):
-                raise ImageError(
-                    f"{label}: duplicate metadata identity in scope {scope_id}"
-                )
-        if owned >= limit:
-            raise ImageError(f"{label}: metadata scope {scope_id} exceeds its limit")
-        records.append(
-            {
-                "fid": fid,
-                "slot": slot,
-                "scope_id": scope_id,
-                "fields": canonical_fields,
-                "dev": dev,
-                "inum": inum,
-                "incarnation": incarnation,
-                # 即使没有独立规则，也要绑定已解包的 ABI。
-                "dependency_mask": dependency_mask,
-                "updated_tick": updated_tick,
-                "size": size,
-                "fs_generation": fs_generation,
-            }
-        )
-
-
-def _validate_agent_durable_arena(arena: bytes, label: str) -> dict[str, object]:
-    if len(arena) != AGENT_META_STORE_DURABLE_BYTES:
-        raise ImageError(f"{label}: durable metadata arena size changed")
-    magic, version, arena_bytes, section_count, used_bytes, generation = (
-        struct.unpack_from("<QIIIIQ", arena)
-    )
-    expected_hash = struct.unpack_from("<Q", arena, len(arena) - 8)[0]
-    if (
-        magic != AGENT_DURABLE_ARENA_MAGIC
-        or version != AGENT_DURABLE_ARENA_VERSION
-        or arena_bytes != AGENT_META_STORE_DURABLE_BYTES
-        or section_count > AGENT_DURABLE_SECTION_MAX
-        or used_bytes > AGENT_DURABLE_PAYLOAD_BYTES
-        or generation == 0
-        or expected_hash != _agent_durable_hash(arena[:-8])
-    ):
-        raise ImageError(f"{label}: invalid durable metadata arena")
-
-    end = 0
-    sections: list[dict[str, object]] = []
-    seen_kinds: set[int] = set()
-    for index in range(section_count):
-        desc_offset = 32 + index * AGENT_DURABLE_SECTION_BYTES
-        kind, section_version, offset, section_bytes, section_generation, payload_hash = (
-            struct.unpack_from("<IIIIQQ", arena, desc_offset)
-        )
-        if (
-            kind != AGENT_DURABLE_SECTION_OBSERVE
-            or kind in seen_kinds
-            or section_version != AGENT_OBSERVE_CHECKPOINT_VERSION
-            or section_bytes != AGENT_OBSERVE_CHECKPOINT_BYTES
-            or offset != end
-            or offset > used_bytes
-            or section_bytes > used_bytes - offset
-        ):
-            raise ImageError(f"{label}: invalid durable section descriptor {index}")
-        payload_start = AGENT_DURABLE_PAYLOAD_OFFSET + offset
-        payload = arena[payload_start : payload_start + section_bytes]
-        if payload_hash != _agent_durable_hash(payload):
-            raise ImageError(f"{label}: durable section payload hash mismatch")
-        try:
-            observation = validate_observation_payload(
-                payload, load_observation_contract()
-            )
-        except ObservationEvidenceError as error:
-            raise ImageError(
-                f"{label}: invalid observation durable section: {error}"
-            ) from error
-        if section_generation != int(observation["generation"]):
-            raise ImageError(
-                f"{label}: durable section generation does not bind its payload"
-            )
-        sections.append(
-            {
-                "kind": kind,
-                "version": section_version,
-                "offset": offset,
-                "bytes": section_bytes,
-                "generation": section_generation,
-                "payload_hash": f"{payload_hash:016x}",
-            }
-        )
-        seen_kinds.add(kind)
-        end += section_bytes
-    if end != used_bytes:
-        raise ImageError(f"{label}: durable metadata sections are not contiguous")
-    return {
-        "generation": generation,
-        "image_hash": f"{expected_hash:016x}",
-        "sections": sections,
-    }
-
-
-def _parse_agent_metadata_bank(raw: bytes, label: str) -> dict[str, object]:
-    if len(raw) != AGENT_META_STORE_MAX_BYTES:
-        raise ImageError(f"{label}: metadata bank capacity changed")
-    header = struct.unpack_from("<5Q", raw)
-    if all(value == 0 for value in header):
-        return {"label": label, "state": "uncommitted"}
-    magic, version, count, generation, expected_hash = header
-    if magic != AGENT_META_STORE_MAGIC or version != AGENT_META_STORE_VERSION:
-        raise ImageError(f"{label}: invalid metadata bank magic/version")
-    if count > AGENT_META_STORE_MAX_RECORDS or generation == 0:
-        raise ImageError(f"{label}: invalid metadata bank count/generation")
-    store_bytes = (
-        AGENT_META_STORE_HEADER_BYTES
-        + AGENT_META_STORE_DURABLE_BYTES
-        + count * AGENT_META_STORE_RECORD_BYTES
-    )
-    payload = raw[AGENT_META_STORE_HEADER_BYTES : store_bytes]
-    actual_hash = _agent_disk_hash(raw[:32] + payload)
-    if actual_hash != expected_hash:
-        raise ImageError(f"{label}: metadata bank payload hash mismatch")
-
-    arena = payload[:AGENT_META_STORE_DURABLE_BYTES]
-    arena_summary = _validate_agent_durable_arena(arena, label)
-    records_offset = AGENT_META_STORE_HEADER_BYTES + AGENT_META_STORE_DURABLE_BYTES
-    _validate_agent_metadata_records(raw, records_offset, count, label)
-    store_image = raw[:store_bytes]
-    return {
-        "label": label,
-        "state": "valid",
-        "generation": generation,
-        "count": count,
-        "payload_hash": f"{expected_hash:016x}",
-        "store_sha256": hashlib.sha256(store_image).hexdigest(),
-        "bank_sha256": hashlib.sha256(raw).hexdigest(),
-        "store_bytes": store_bytes,
-        "durable_arena": arena_summary,
-    }
-
-
-def _metadata_bank_stage(
-    snapshot: dict[str, object], raw: bytes, stage: str, required: bool
-) -> dict[str, object]:
-    names = {str(k): int(v) for k, v in dict(snapshot["root_names"]).items()}
-    present = [name for name in AGENT_META_STORE_NAMES if name in names]
-    if not present:
-        if required:
-            raise ImageError(f"{stage}: canonical metadata COW banks are missing")
-        return {"stage": stage, "banks": [], "max_generation": None}
-    if tuple(present) != AGENT_META_STORE_NAMES:
-        raise ImageError(f"{stage}: canonical metadata COW bank set is incomplete")
-
-    banks: list[dict[str, object]] = []
-    bank_inums: set[int] = set()
-    bank_blocks: set[int] = set()
-    for name in AGENT_META_STORE_NAMES:
-        inum = names[name]
-        if inum in bank_inums:
-            raise ImageError(f"{stage}: metadata COW bank inode is aliased")
-        inode = dict(snapshot["inodes"])[str(inum)]
-        if not _is_kernel_metadata_cow_inode(name, inode):
-            raise ImageError(f"{stage}:{name}: non-canonical metadata bank inode")
-        incarnation = int(inode["vfs_incarnation"])
-        expected_checksum = vfs_label_checksum(
-            inum,
-            (
-                VFS_LABEL_MAGIC,
-                VFS_LABEL_VERSION,
-                VFS_LABEL_F_KERNEL_PRIVATE,
-                VFS_SCOPE_NONE,
-                VFS_POLICY_KERNEL_PRIVATE,
-                VFS_EXEC_PROFILE_NONE,
-                VFS_POLICY_GENERATION,
-                incarnation,
-                FS_OWNER_SYSTEM,
-                FS_OWNER_VERSION,
-            )
-        )
-        if int(inode["vfs_checksum"]) != expected_checksum:
-            raise ImageError(f"{stage}:{name}: metadata bank label checksum differs")
-        storage = list(map(int, dict(snapshot["inode_blocks"])[str(inum)]))
-        if (
-            len(storage) != AGENT_META_STORE_DATA_BLOCKS + 1
-            or len(set(storage)) != len(storage)
-            or int(list(inode["addrs"])[DIRECT_BLOCKS]) == 0
-            or bank_blocks.intersection(storage)
-        ):
-            raise ImageError(f"{stage}:{name}: metadata bank block map is invalid")
-        qmap = dict(snapshot["qmap_entries"])
-        for block in storage:
-            entry = dict(qmap.get(str(block), {}))
-            if entry.get("state") != "LIVE_LOW" or int(entry.get("payload", 0)) != FS_OWNER_SYSTEM:
-                raise ImageError(
-                    f"{stage}:{name}: metadata bank block is not SYSTEM-owned"
-                )
-        bank = _parse_agent_metadata_bank(
-            _inode_payload_from_raw(snapshot, raw, inum),
-            f"{stage}:{name}:{inum}",
-        )
-        bank.update(
-            {
-                "name": name,
-                "inum": inum,
-                "inode_sha256": str(inode["raw_sha256"]),
-                "storage_blocks": storage,
-            }
-        )
-        banks.append(bank)
-        bank_inums.add(inum)
-        bank_blocks.update(storage)
-
-    max_generation = _validate_metadata_bank_set(banks, stage)
-    return {"stage": stage, "banks": banks, "max_generation": max_generation}
-
-
-def _validate_metadata_bank_set(
-    banks: list[dict[str, object]], stage: str
-) -> int:
-    valid = [bank for bank in banks if bank["state"] == "valid"]
-    if not valid:
-        raise ImageError(f"{stage}: no valid metadata COW bank")
-    for index, left in enumerate(valid):
-        for right in valid[index + 1 :]:
-            if left["generation"] == right["generation"] and (
-                left["payload_hash"] != right["payload_hash"]
-                or left["store_sha256"] != right["store_sha256"]
-            ):
-                raise ImageError(
-                    f"{stage}: same-generation metadata COW fork"
-                )
-    generations = sorted({int(bank["generation"]) for bank in valid})
-    if generations[-1] - generations[0] > 1:
-        raise ImageError(f"{stage}: non-adjacent metadata COW generations")
-    return generations[-1]
-
-
-def _validate_metadata_bank_transitions(
-    before: dict[str, object],
-    fault: dict[str, object],
-    reboot: dict[str, object],
-    before_raw: bytes,
-    fault_raw: bytes,
-    reboot_raw: bytes,
-    required: bool = False,
-) -> list[dict[str, object]]:
-    stages = [
-        _metadata_bank_stage(before, before_raw, "before", required),
-        _metadata_bank_stage(fault, fault_raw, "fault", required),
-        _metadata_bank_stage(reboot, reboot_raw, "reboot", required),
-    ]
-    _validate_metadata_stage_sequence(stages)
-    return stages
-
-
-def _validate_metadata_stage_sequence(
-    stages: list[dict[str, object]],
-) -> None:
-    if all(stage["max_generation"] is None for stage in stages):
-        return
-    if any(stage["max_generation"] is None for stage in stages):
-        raise ImageError("metadata COW bank set appeared or disappeared")
-    generations = [int(stage["max_generation"]) for stage in stages]
-    if generations != sorted(generations):
-        raise ImageError("metadata COW generation rolled back across allocator case")
-
-    identities: dict[str, tuple[int, str, tuple[int, ...]]] = {}
-    generation_images: dict[int, tuple[str, str]] = {}
-    identity_generations: dict[tuple[str, int], str] = {}
-    last_generation: dict[str, int] = {}
-    for stage in stages:
-        for bank in list(stage["banks"]):
-            name = str(bank["name"])
-            identity = (
-                int(bank["inum"]),
-                str(bank["inode_sha256"]),
-                tuple(map(int, bank["storage_blocks"])),
-            )
-            if name in identities and identities[name] != identity:
-                raise ImageError(f"metadata COW identity changed for {name}")
-            identities[name] = identity
-            if bank["state"] != "valid":
-                continue
-            generation = int(bank["generation"])
-            store_identity = (str(bank["payload_hash"]), str(bank["store_sha256"]))
-            prior_image = generation_images.get(generation)
-            if prior_image is not None and prior_image != store_identity:
-                raise ImageError(
-                    f"metadata COW generation {generation} was rewritten"
-                )
-            generation_images[generation] = store_identity
-            identity_key = (name, generation)
-            prior_bank = identity_generations.get(identity_key)
-            if prior_bank is not None and prior_bank != str(bank["bank_sha256"]):
-                raise ImageError(
-                    f"metadata COW bank {name} rewrote generation {generation}"
-                )
-            identity_generations[identity_key] = str(bank["bank_sha256"])
-            if name in last_generation and generation < last_generation[name]:
-                raise ImageError(f"metadata COW bank {name} rolled back")
-            last_generation[name] = generation
-
-
 def _raw_case_allowlist(
     before: dict[str, object],
     fault: dict[str, object],
@@ -2497,27 +1974,6 @@ def _raw_case_allowlist(
             "bytes": BLOCK_SIZE,
         }
     )
-
-    # 重启会合法推进固定布局的内核日志。其 inode 身份与块映射保持不可变，
-    # 但其数据区应声明为执行状态，而不能伪装成分配器测试载荷。
-    before_names = {str(k): int(v) for k, v in dict(before["root_names"]).items()}
-    for name in AGENT_META_STORE_NAMES:
-        if name not in before_names:
-            continue
-        inum = before_names[name]
-        inode = dict(before["inodes"])[str(inum)]
-        if not _is_kernel_metadata_cow_inode(name, inode):
-            raise ImageError(f"non-canonical metadata bank inode for {name}")
-        for logical, block in enumerate(
-            _inode_logical_data_blocks(before, before_raw, inum)
-        ):
-            ranges.append(
-                {
-                    "label": f"kernel-private-data:{inum}:{logical}:{name}",
-                    "offset": block * BLOCK_SIZE,
-                    "bytes": BLOCK_SIZE,
-                }
-            )
 
     if operation != "ialloc":
         entries = fault["root_dirents"] if operation == "alloc" else before["root_dirents"]
@@ -2629,7 +2085,6 @@ def verify_case_raw(
     operation: str,
     phase: str,
     action: str,
-    require_metadata_cow: bool = False,
 ) -> dict[str, object]:
     """从原始镜像校验用例，并绑定每个获准的字节变化。"""
     before = read_snapshot(Path(before_path))
@@ -2641,15 +2096,6 @@ def verify_case_raw(
     before_raw = _read_bound_raw(Path(before_path), before)
     fault_raw = _read_bound_raw(Path(fault_path), fault)
     reboot_raw = _read_bound_raw(Path(reboot_path), reboot)
-    metadata_stages = _validate_metadata_bank_transitions(
-        before,
-        fault,
-        reboot,
-        before_raw,
-        fault_raw,
-        reboot_raw,
-        required=require_metadata_cow,
-    )
     ranges, bits = _raw_case_allowlist(
         before, fault, reboot, before_raw, verified
     )
@@ -2679,7 +2125,6 @@ def verify_case_raw(
         "allowed_ranges": ranges,
         "allowed_bits": bits,
         "masked_sha256": before_masked,
-        "metadata_cow_stages": metadata_stages,
     }
     return verified
 
@@ -2737,11 +2182,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         verify_parser.add_argument("--action", required=True, choices=ACTIONS)
         verify_parser.add_argument("--output", type=Path)
-        verify_parser.add_argument(
-            "--require-metadata-cow",
-            action="store_true",
-            help="require the two canonical Agent metadata COW banks",
-        )
     args = parser.parse_args(argv)
     try:
         if args.command == "snapshot":
@@ -2778,7 +2218,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.operation,
                 args.phase,
                 args.action,
-                require_metadata_cow=args.require_metadata_cow,
             )
         _write_json(value, args.output)
         if args.command == "diff" and args.expect is not None:

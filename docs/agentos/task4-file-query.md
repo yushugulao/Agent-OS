@@ -1,6 +1,6 @@
 # 任务四：Agent Live-Query FS
 
-当前任务四实现是显式、volatile、事件驱动的文件属性查询。它不再扫描普通目录，也不维护 metadata 双 bank、journal 或 crash-recovery catalog。
+当前任务四实现是显式登记、当前启动周期内有效、事件驱动的文件属性查询。普通目录只有在用户态登记后才进入 Agent catalog。
 
 ## 1. 对象模型
 
@@ -15,7 +15,7 @@ dev + inum + incarnation + size
 fs_generation
 ```
 
-完整物理身份是 `dev + inum + incarnation`。inode 号被复用后，旧 metadata、内容 receipt、edit lease 或 pending tombstone 都不能命中新对象。
+完整物理身份是 `dev + inum + incarnation`。inode 号被复用后，旧 metadata、内容 receipt、edit lease 或 pending unlink 都不能命中新对象。
 
 ## 2. 显式登记
 
@@ -24,8 +24,7 @@ fs_generation
 - 普通 set：`flags == 0`；
 - 删除 metadata：`flags == AGENT_FILE_META_F_DELETE`；
 - 更新字段由 `update_mask` 指定；
-- 物理文件必须在调用者可见 scope 内，并绑定当前 incarnation；
-- `PERSIST` 与 `AUTOSCAN` 为历史 ABI 名称，当前调用携带任一标志都返回 `AGENT_STATUS_BAD_PARAM`。
+- 物理文件必须在调用者可见 scope 内，并绑定当前 incarnation。
 
 普通文件 syscall 的 create/rename 不会自动加入 Agent catalog。用户态决定哪些文件值得作为 Agent 属性对象，并在 workflow 启动时重新登记。
 
@@ -45,10 +44,10 @@ catalog 有界驻留内存，按 SYSTEM/动态 scope 约束可见性。选择性
 
 VFS 不负责发现新 metadata，只维护已显式绑定对象的实时性：
 
-- unlink/deferred reclaim 产生带完整 lifecycle/scope/dev/inum/incarnation 的 tombstone；
+- unlink/deferred reclaim 产生带完整 lifecycle/scope/dev/inum/incarnation 的 pending 更新；
 - write/truncate 的 content receipt 更新 size/generation；
 - incarnation 或 scope 不一致时拒绝更新，避免旧 pending 污染新对象；
-- 后台每轮用有界 budget 排空 tombstone/content pending；
+- 后台每轮用有界 budget 排空 unlink/content pending；
 - workflow fence 在 metadata transaction 内排空本 scope 全部 pending。
 
 这条路径没有目录轮询，没有把每个普通 inode 强制物化为 Agent metadata。
@@ -132,24 +131,19 @@ live-query 事件沿 Agent IPC 路径进入 Context，继承内核分配的 even
 workflow fence 对任务四只承诺：
 
 - metadata transaction 已取得 quiescent generation；
-- 本 scope tombstone、content pending 已被尝试完全排空；
+- 本 scope unlink、content pending 已被尝试完全排空；
 - 已标记的 resync 已投递/确认到可切割状态，否则返回 `RETRY`；
 - receipt 设置 `METADATA_VOLATILE`。
 
 它不承诺 metadata 重启恢复，也不把普通文件内容纳入 evidence root。
 
-## 11. 明确停产项
+## 11. 当前限制
 
-| 历史机制 | 当前状态 |
+| 限制 | 当前行为 |
 | --- | --- |
-| `.agentmeta` / `.agentmeta1` 双 bank | 不在生产构建合同中 |
-| metadata journal/checkpoint/mirror | 不在生产写路径中 |
-| root directory autoscan | 不执行 |
-| crash-recovery catalog | 不提供 |
-| `PERSIST` / `AUTOSCAN` set | `BAD_PARAM` |
-| 普通文件自动加入 metadata | 不发生 |
-
-仓库中若保留历史源码或 ABI 名称，仅用于迁移参考/编号兼容，不能作为当前能力证据。
+| catalog 生命周期 | 本次启动周期；用户态在每次启动时登记 |
+| 目录发现 | 普通文件不会自动加入 catalog |
+| metadata 写入 flags | 普通 set 或显式 `DELETE` |
 
 ## 12. 设计来源
 

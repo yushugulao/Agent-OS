@@ -551,10 +551,6 @@ ABI_OFFSET(struct agent_info, filesystem_capability_mask, info);
 ABI_OFFSET(struct agent_info, legacy_mailbox_allocated, info);
 ABI_OFFSET(struct agent_info, legacy_mailbox_pages, info);
 ABI_OFFSET(struct agent_info, file_scan_deferred, info);
-ABI_OFFSET(struct agent_info, metadata_journal_txns, info);
-ABI_OFFSET(struct agent_info, metadata_journal_blocks, info);
-ABI_OFFSET(struct agent_info, metadata_compactions, info);
-ABI_OFFSET(struct agent_info, metadata_full_cow_blocks, info);
 ABI_RECORD(struct agent_sched_record, sched_record, tick, priority);
 ABI_RECORD(struct agent_sched_config, sched_config, update_mask, budget);
 ABI_RECORD(struct agent_trace_record, trace_record, tick, text);
@@ -607,23 +603,6 @@ ABI_OFFSET(struct agent_file_live_watch, catalog_generation, file_live_watch);
 ABI_OFFSET(struct agent_file_live_watch, resync_generation, file_live_watch);
 ABI_RECORD(struct agent_file_query_result, file_query_result, total_hits, hits);
 ABI_RECORD(struct agent_file_edit_state, file_edit_state, active, path);
-ABI_VALUE(AGENT_OBSERVE_RECOVERY_COMPAT_TOMBSTONE,
-	  observe_recovery_compat_tombstone);
-ABI_VALUE(AGENT_OBSERVE_RECOVERY_VERSION_V1, observe_recovery_version_v1);
-ABI_VALUE(AGENT_OBSERVE_RECOVERY_VERSION, observe_recovery_version);
-ABI_VALUE(AGENT_OBSERVE_RECOVERY_LIST, observe_recovery_list);
-ABI_VALUE(AGENT_OBSERVE_RECOVERY_READ, observe_recovery_read);
-ABI_VALUE(AGENT_OBSERVE_RECOVERY_REAP, observe_recovery_reap);
-ABI_VALUE(AGENT_OBSERVE_RECOVERY_STATUS, observe_recovery_status);
-ABI_RECORD(struct agent_observe_recovery_scope, observe_recovery_scope,
-	   scope_id, ledger_hash);
-ABI_RECORD(struct agent_observe_recovery_request, observe_recovery_request,
-	   version, reserved);
-ABI_OFFSET(struct agent_observe_recovery_request, evidence,
-	   observe_recovery_request);
-ABI_OFFSET(struct agent_observe_recovery_request, bank_generation,
-	   observe_recovery_request);
-
 ABI_RECORD(struct agent_performance_snapshot, performance_snapshot, version,
 	   overwrite_prereads_skipped);
 ABI_OFFSET(struct agent_performance_snapshot, struct_size,

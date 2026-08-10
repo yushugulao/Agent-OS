@@ -391,41 +391,6 @@ workflow_lifecycle_generation_lease_floor(uint slot, uint64 lease_end)
 	return 0;
 }
 
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-int
-workflow_lifecycle_test_consume_generation(uint *slot_out,
-					   uint64 *generation_out)
-{
-	uint allocated = WORKFLOW_LIFECYCLE_CAP;
-	uint64 generation = 0;
-	int enabled;
-
-	if (slot_out == 0 || generation_out == 0)
-		return -1;
-	enabled = intr_save();
-	for (uint slot = 0; slot < WORKFLOW_LIFECYCLE_CAP; slot++) {
-		if (workflow_lifecycles[slot].used ||
-		    workflow_lifecycle_generations[slot] == ~0ULL)
-			continue;
-		generation = workflow_lifecycle_generations[slot] + 1;
-		if (generation == 0 ||
-		    !agent_identity_lease_lifecycle_contains(slot, generation))
-			continue;
-		workflow_lifecycle_generations[slot] = generation;
-		allocated = slot;
-		break;
-	}
-	intr_restore(enabled);
-	if (allocated == WORKFLOW_LIFECYCLE_CAP)
-		return -1;
-	agent_identity_lease_lifecycle_note_next(
-		allocated, generation == ~0ULL ? 0 : generation + 1);
-	*slot_out = allocated;
-	*generation_out = generation;
-	return 0;
-}
-#endif
-
 int workflow_lifecycle_alloc_context_branch(struct workflow_lifecycle_key key,
 					    uint64 *branch_generation)
 {

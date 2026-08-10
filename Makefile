@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -17,7 +17,7 @@ WORKSPACE_GENERATED_PATHS = \
 	baseline_ucore/user/asm baseline_ucore/user/asm-* \
 	nfs/*.img nfs/fs nfs/*.exe os/initproc.S \
 	baseline_ucore/nfs/*.img baseline_ucore/nfs/fs baseline_ucore/nfs/*.exe \
-	baseline_ucore/os/initproc.S results/latest .pytest_cache \
+	baseline_ucore/os/initproc.S results/contest-demo .pytest_cache \
 	host_tools/__pycache__ scripts/__pycache__
 
 TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then echo riscv64-unknown-elf-; else echo riscv64-linux-gnu-; fi)
@@ -32,7 +32,6 @@ PYTHON_BIN ?= python3
 BASH_BIN ?= bash
 override PY = $(PYTHON_BIN)
 HOST_CC ?= $(if $(strip $(HOSTCC)),$(HOSTCC),cc)
-COMPAT_BENCH_CHALLENGE_HEX ?= 0000000000000001
 override AGENTOS_JOB_VALUES := \
 	1 2 3 4 5 6 7 8 9 10 11 12 \
 	13 14 15 16 17 18 19 20 21 22 23 24
@@ -86,35 +85,6 @@ CP = cp
 BUILDDIR = build
 C_SRCS = $(wildcard $K/*.c)
 INACTIVE_PROFILE_C_SRCS :=
-# The live-query metadata catalog is deliberately memory-only.  Keep the
-# superseded disk catalog pipeline available as reference source, but never
-# compile it into a production kernel.
-RETIRED_METADATA_C_SRCS := \
-	$K/agent_metadata_journal.c \
-	$K/agent_metadata_probe.c \
-	$K/agent_metadata_recovery.c \
-	$K/agent_metadata_recovery_test.c \
-	$K/agent_metadata_scan.c \
-	$K/agent_metadata_store.c \
-	$K/agent_metadata_store_format.c \
-	$K/agent_metadata_store_io.c \
-	$K/agent_metadata_test.c
-C_SRCS := $(filter-out $(RETIRED_METADATA_C_SRCS),$(C_SRCS))
-INACTIVE_PROFILE_C_SRCS += $(RETIRED_METADATA_C_SRCS)
-# Fence-sealed evidence is memory resident.  The former shared disk arena,
-# recovery reader, and checkpoint-capacity reservation are not production
-# dependencies of Agent admission or evidence queries.
-RETIRED_OBSERVE_C_SRCS := \
-	$K/agent_durable_section.c \
-	$K/agent_observe_capacity.c \
-	$K/agent_observe_recovery.c \
-	$K/agent_observe_store.c
-C_SRCS := $(filter-out $(RETIRED_OBSERVE_C_SRCS),$(C_SRCS))
-INACTIVE_PROFILE_C_SRCS += $(RETIRED_OBSERVE_C_SRCS)
-ifeq ($(AGENT_OBSERVE_TEST_PROFILE),)
-C_SRCS := $(filter-out $K/agent_observe_test.c,$(C_SRCS))
-INACTIVE_PROFILE_C_SRCS += $K/agent_observe_test.c
-endif
 ifeq ($(WAIT_ATOMIC_TEST_PROFILE),)
 C_SRCS := $(filter-out $K/wait_atomic_test.c,$(C_SRCS))
 INACTIVE_PROFILE_C_SRCS += $K/wait_atomic_test.c
@@ -261,12 +231,6 @@ else ifneq ($(AGENT_CONTEXT_SYNC_TEST_PROFILE),)
 $(error AGENT_CONTEXT_SYNC_TEST_PROFILE must be exactly 1 when enabled)
 endif
 
-ifeq ($(AGENT_OBSERVE_TEST_PROFILE),1)
-CFLAGS += -DAGENT_OBSERVE_TEST_PROFILE
-else ifneq ($(AGENT_OBSERVE_TEST_PROFILE),)
-$(error AGENT_OBSERVE_TEST_PROFILE must be exactly 1 when enabled)
-endif
-
 ifeq ($(WAIT_ATOMIC_TEST_PROFILE),1)
 CFLAGS += -DWAIT_ATOMIC_TEST_PROFILE
 else ifneq ($(WAIT_ATOMIC_TEST_PROFILE),)
@@ -391,21 +355,10 @@ $(KSTACK_BUILD_CONFIG): .FORCE
 		'AGENT_SIZE_OPTIMIZED_MODULES=$(AGENT_SIZE_OPTIMIZED_MODULES)' \
 		'PHYSICAL_PAGE_TEST_HOOKS=$(PHYSICAL_PAGE_TEST_HOOKS)' \
 		'AGENT_CONTEXT_SYNC_TEST_PROFILE=$(AGENT_CONTEXT_SYNC_TEST_PROFILE)' \
-		'AGENT_OBSERVE_TEST_PROFILE=$(AGENT_OBSERVE_TEST_PROFILE)' \
 		'WAIT_ATOMIC_TEST_PROFILE=$(WAIT_ATOMIC_TEST_PROFILE)' \
 		'FS_ALLOCATOR_FAULT_TEST_PROFILE=$(FS_ALLOCATOR_FAULT_TEST_PROFILE)' \
 		'FS_ALLOCATOR_DELETE_BARRIER_MUTANT=$(FS_ALLOCATOR_DELETE_BARRIER_MUTANT)' \
 		'DURABILITY_POWERCUT_TEST_PROFILE=$(DURABILITY_POWERCUT_TEST_PROFILE)' \
-		'AGENT_METADATA_CRASH_PHASE=$(AGENT_METADATA_CRASH_PHASE)' \
-		'AGENT_METADATA_CRASH_BANK=$(AGENT_METADATA_CRASH_BANK)' \
-		'AGENT_METADATA_EIO_PHASE=$(AGENT_METADATA_EIO_PHASE)' \
-		'AGENT_METADATA_EIO_BANK=$(AGENT_METADATA_EIO_BANK)' \
-		'AGENT_METADATA_EIO_SKIP_SCOPE_COMMITS=$(AGENT_METADATA_EIO_SKIP_SCOPE_COMMITS)' \
-		'AGENT_METADATA_SELECT_FAULT_BANK=$(AGENT_METADATA_SELECT_FAULT_BANK)' \
-		'AGENT_METADATA_SELECT_FAULT_COUNT=$(AGENT_METADATA_SELECT_FAULT_COUNT)' \
-		'AGENT_METADATA_BOOT_READ_FAULT=$(AGENT_METADATA_BOOT_READ_FAULT)' \
-		'AGENT_METADATA_BOOT_READ_FAULT_COUNT=$(AGENT_METADATA_BOOT_READ_FAULT_COUNT)' \
-		'AGENT_METADATA_BOOT_READ_FAULT_BANK=$(AGENT_METADATA_BOOT_READ_FAULT_BANK)' \
 		'KSTACK_SIZE_BYTES=$(KSTACK_SIZE_BYTES)' \
 		'KSTACK_BOOT_SIZE_BYTES=$(KSTACK_BOOT_SIZE_BYTES)' \
 		'KSTACK_BOOT_ROOT=$(KSTACK_BOOT_ROOT)' \
@@ -471,7 +424,7 @@ kernel-stack-check: build/kernel
 
 override AGENT_CHECK_BUILDDIR := build/agent-check
 
-agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_execution_contract_abi.h agent_lifecycle_abi.h agent_provenance_abi.h agent_task_channel_abi.h agent_tool_abi.h agent_workflow_fence_abi.h agent_metadata_disk_abi.h agent_performance_abi.h agent_resource_abi.h
+agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_execution_contract_abi.h agent_lifecycle_abi.h agent_provenance_abi.h agent_task_channel_abi.h agent_tool_abi.h agent_workflow_fence_abi.h agent_performance_abi.h agent_resource_abi.h
 	@$(PYTHON_CMD) scripts/check-agent-uapi-layout.py \
 		--root . --build-dir $(AGENT_CHECK_BUILDDIR) \
 		--cc $(CC_CMD) --nm $(NM_CMD)
@@ -550,14 +503,9 @@ override PRODUCT_STATIC_TESTS := \
 	scripts/test-validate-virtio-disk-log.py \
 	scripts/check-sequential-read-batch.py \
 	scripts/test-virtio-disk-wiring.py \
-	scripts/test-parallel-qemu-regressions.py \
 	scripts/test-parallel-test-runner.py \
 	scripts/test-resource-jobs.py \
 	scripts/test-bio-rate-controller.py
-
-agent-observe-disk-format-check: scripts/check-agent-observe-disk-format.py scripts/probes/agent-observe-disk-layout.c ci/agent-observe-disk-format.json
-	@$(PYTHON_CMD) scripts/check-agent-observe-disk-format.py \
-		--cc $(CC_CMD) --objcopy $(OBJCOPY_CMD)
 
 printf-format-static-check: scripts/check-printf-format-contract.py os/printf.c user/lib/stdio.c
 	@$(PYTHON_CMD) scripts/check-printf-format-contract.py --root .
@@ -579,7 +527,12 @@ override HOST_PRODUCT_TESTS := \
 	host_tools/test_plain_ucore_action_runner.py \
 	host_tools/test_research_state_manifest.py \
 	host_tools/test_plain_ucore_fs_extract.py \
-	host_tools/test_contest_demo.py
+	host_tools/test_contest_demo.py \
+	host_tools/test_backend_evidence_contract.py \
+	host_tools/test_check_host_platform_alignment.py \
+	host_tools/test_compare_dual_platform_state.py \
+	host_tools/test_reference_catalog_contract.py \
+	host_tools/test_safe_host_paths.py
 
 host-contract-selftest: $(HOST_PRODUCT_TESTS) scripts/run-parallel-tests.py
 	@$(PYTHON_CMD) -I -S -B scripts/run-parallel-tests.py \
@@ -671,16 +624,13 @@ CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]' || ech
 user:
 	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C user -f Makefile CHAPTER=$(CHAPTER) BASE=$(BASE) \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
-		COMPAT_BENCH_CHALLENGE_HEX=$(call shell_quote,$(COMPAT_BENCH_CHALLENGE_HEX)) \
 		USER_EXTRA_CFLAGS='$(USER_EXTRA_CFLAGS)'
 
 user-stack-check:
 	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) -rR -C user -f Makefile user-stack-check TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN))
 
-test:
-	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) user CHAPTER=$(CHAPTER) BASE=$(BASE)
-	$(MAKE) $(AGENTOS_SUBMAKE_JOBS) run CHAPTER=$(CHAPTER) BASE=$(BASE)
+test: agentos-test
 
 doctor:
 	bash scripts/check-dependencies.sh
@@ -719,8 +669,8 @@ agentos-test:
 		BASH_BIN=$(call shell_quote,$(BASH_BIN)) \
 		$(call shell_quote,$(BASH_BIN)) scripts/run-agent-tests.sh
 
-# 两次隔离 Guest 启动：先执行绑定挑战的任务 1-5 与路径/索引对照，
-# 再执行短任务 6；不读取云端 API 或历史结果。
+# 四次隔离 Guest 启动，以 AB/BA 顺序比较同一综合工作流的遍历与索引路径；
+# 不读取云端 API 或历史结果。
 contest-demo:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		QEMU=$(call shell_quote,$(QEMU)) \

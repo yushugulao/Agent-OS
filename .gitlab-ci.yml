@@ -1,9 +1,0 @@
-workflow:
-  rules:
-    - when: never
-
-local-validation-reference:
-  rules:
-    - when: never
-  script:
-    - echo "Remote execution is disabled. Run make full-verify locally."

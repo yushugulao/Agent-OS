@@ -1,6 +1,6 @@
 # 构建与产品验证
 
-本文说明如何验证 plain uCore 对照目标与 AgentOS-uCore 增强目标。验证只保留能发现产品问题的四类工作：构建、功能、安全和性能测试，不再叠加与产品行为无关的发布门。
+本文说明如何验证 plain uCore 对照目标与 AgentOS-uCore 增强目标。验证只保留能发现产品问题的四类工作：构建、功能、安全和性能测试。
 
 ## 1. 验证原则
 
@@ -18,6 +18,8 @@ Windows：
 ```powershell
 .\scripts\check-windows-prereqs.ps1
 ```
+
+完整的 WSL/MSYS2、工具链前缀和 QEMU 说明见 [Windows 快速开始](windows-quickstart.md)。
 
 Linux、WSL 或项目工具链环境：
 
@@ -63,6 +65,12 @@ python -B host_tools/test_mcp_a2a_gateway.py
 make agentos-test TOOLPREFIX=riscv-none-elf-
 ```
 
+赛题任务一至五的集中验收 Guest 需显式运行；它使用独立的 `agent_eval` 构建章节：
+
+```bash
+AGENT_TEST_CASE=agenteval_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
+
 迭代时可以只运行与改动最相关的程序：
 
 ```bash
@@ -74,6 +82,19 @@ AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
 ```
 
 功能套件覆盖 Agent 身份与 lifecycle、tool call、Context push/query/rollback、显式 metadata 与 live query、IPC/wait、workflow fence、执行合同、Task SQ/CQ、资源回收和 teardown。每个程序必须自然退出，并由 runner 检查预期 marker、panic、超时和退出状态；单纯打印 `passed` 不能绕过这些检查。
+
+题面硬门槛与代表入口如下。Context 的前 6 页是内核维护、用户只读的可信区；第 7 页是用户态可直接读写但不参与授权判断的 cache，二者共同满足直接访问需求，同时避免可信历史被伪造。
+
+| 任务 | 必须复核的门槛 | 代表 Guest / 命令 |
+| --- | --- | --- |
+| 1 | Agent 创建与 Context 区；普通进程和 Agent 共存 | `agenteval_ucore`、`agentfinal_ucore`、`agenttrust_ucore` |
+| 2 | 至少 3 个结构化工具；发现、调用、返回与错误处理 | `agenttoolabi_ucore`、`agentcontract_ucore` |
+| 3 | 至少 5 轮连续调用；直接读取；超长自动淘汰且不 OOM | `agentfinal_ucore` |
+| 4 | 至少 2 类文件查询扩展；结构化结果；索引与遍历对比 | `agentfs_ucore`、`agentbench_ucore` |
+| 5 | 至少 2 类 Agent Loop 机制；heartbeat、事件休眠、多 Agent 稳定 | `agentloop_ucore`、`agentsched_ucore`、`agent_eevdf_ucore` |
+| 6 | 综合至少 3 个已实现模块；QEMU 程序；至少 1 组性能对比 | `make contest-demo TOOLPREFIX=riscv-none-elf-` |
+
+逐项实现、源码和能力边界见[要求追踪表](agentos/requirements-traceability.md)。
 
 ## 5. 安全测试
 
@@ -94,7 +115,8 @@ AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
 - 计划外工具调用在副作用前被执行合同与 provenance gate 拒绝；
 - 关键拒绝写入内核 Evidence Ring，critical 区不足时受保护操作不继续；
 - 共享 SQ 页按 copy-before-validate 处理，stale handle 和重复 completion 不产生双终态；
-- `PERSIST/AUTOSCAN` 兼容标志和 observe recovery tombstone 返回 `BAD_PARAM`；
+- metadata 只接受显式登记并绑定当前 workflow/lifecycle/incarnation，普通目录不会自动进入 catalog；
+- fence receipt 只覆盖当前启动周期的内存 Evidence Ring，并明确标出覆盖范围；
 - 用户指针、VFS 对象与资源配额的失败路径不留下半提交状态。
 
 文件系统、资源与并发故障还可以运行：
@@ -106,9 +128,19 @@ make workflow-teardown-race-test TOOLPREFIX=riscv-none-elf-
 make virtio-disk-test TOOLPREFIX=riscv-none-elf-
 ```
 
-## 6. 性能测试
+## 6. 综合演示与结果
 
-性能测试直接运行产品负载，不要求先生成测量 receipt 或打包结果：
+任务六的主演示入口为：
+
+```bash
+make contest-demo TOOLPREFIX=riscv-none-elf-
+```
+
+脚本默认运行 4 个等量 AB/BA QEMU 样本，验证 traversal 与 indexed 路径得到相同结果，并把逐样本日志、`summary.json`、`measurements.csv` 和 `report.md` 写入 `results/contest-demo/`。文档不预填尚未实跑的数值；对外引用时应一并保留本次环境、样本数、单位、失败样本和原始日志。主演示的讲解顺序见[现场演示脚本](agentos/scenario-script.md)。
+
+## 7. 性能测试
+
+专项性能测试直接运行产品负载，不依赖预置结果或 Host receipt：
 
 ```bash
 AGENT_TEST_CASE=agentbench_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
@@ -127,7 +159,7 @@ AGENT_TEST_CASE=agentsched_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
 
 固定 ABI 字节数是结构记账，不是实测内存流量；Guest tick 不是 Host wall clock；完整系统差异也不能自动归因给某一个内核机制。
 
-## 7. plain 与 AgentOS 双目标
+## 8. plain 与 AgentOS 双目标
 
 ```bash
 make plain-platform-build TOOLPREFIX=riscv-none-elf-
@@ -139,19 +171,17 @@ make dual-platform-run TOOLPREFIX=riscv-none-elf-
 
 复核一次双目标运行时，至少查看两侧退出状态、Guest 日志、状态字段一致性、缺失文件和比较摘要。调试重跑是正常开发行为，不需要维护发布次数账本；引用性能数字时只需清楚标明本次实际运行的环境与负载。
 
-## 8. Workflow fence 边界
+## 9. Workflow fence 边界
 
 fence 通过 `agent_workflow_fence()`，即 `agent_run(count=0, AGENT_RUN_F_FENCE)` 发起。相关 Guest/Host 测试检查 request、controller 权限、lifecycle key、320 字节 receipt、exact credit cut、event/gap 范围、root 链以及 retry 稳定性。
 
-receipt 只描述当前运行期 cut，不表示：
+receipt 只描述当前启动周期内该次 cut，不表示：
 
-- Evidence 已持久化到磁盘；
-- metadata catalog 可在重启后恢复；
 - 普通文件内容已进入 root；
 - 所有 scheduler 或 Host 行为都被覆盖；
 - receipt 已由外部密钥签名。
 
-## 9. 清理
+## 10. 清理
 
 ```bash
 make clean-workspace-dry-run

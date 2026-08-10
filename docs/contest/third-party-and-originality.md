@@ -16,6 +16,8 @@
 
 QEMU、RISC-V GCC/binutils、GNU Make、Bash、Python、WSL/Linux 等由运行环境安装，不作为本项目源码 vendoring。环境中出现这些程序不表示本仓库重新分发它们。
 
+`项目介绍视频和ppt网盘链接.txt` 只保存另行分发的项目视频和幻灯片访问链接，媒体文件本身不在 Git 树中，也不是构建或离线 QEMU 演示的运行依赖。项目自制内容适用仓库声明的文档/展示材料许可；链接材料内若使用独立字体、图片或音视频片段，仍需在最终提交前保留其各自来源与许可。
+
 ## 3. 概念级设计参考
 
 ### 3.1 Linux CPU accounting、percpu_counter 与 rstat
@@ -58,7 +60,7 @@ Haiku BFS 对显式文件属性、选择性属性索引和 live query 的描述�
 - before/after 谓词产生 typed `ENTER/UPDATE/LEAVE`；
 - 事件进入 Agent Context/queue，并受 capability、scope、lifecycle generation 限制；
 - 有界增量丢失使用 generation `RESYNC_REQUIRED` 和 ACK；
-- 不实现 BFS 磁盘属性格式、目录格式、journal 或 crash recovery。
+- catalog/index 是 uCore 内的当前启动周期数据结构，不采用 BFS 的磁盘属性或目录格式。
 
 没有复制 Haiku/BFS 源码、数据、测试、磁盘结构或二进制。
 
@@ -80,28 +82,25 @@ Linux cgroup v2、blk-mq、wait queue 用于理解通用资源、I/O 和等待�
 8. 文件 scope/incarnation、worker 委派、可信 IPC、watch/wait/heartbeat 和 Agent 感知调度。
 9. plain/AgentOS 同负载、Host 状态提取、动态比较和可直接运行的 QEMU 回归。
 
-## 5. 明确不作为当前原创能力宣称
+## 5. 当前原创主张边界
 
-- metadata 双 bank、journal、自动目录扫描和 crash-recovery catalog；
-- 每个成功操作的 durable audit/timeline/provenance 多重写入；
-- observation disk recovery；
-- 多阶段 workflow retirement；
-- BPF、BFS、Linux cgroup/rstat 的源码兼容或移植；
-- AIOS 代码、数据或评价结果的再分发。
-
-历史源码/ABI 名称可能仍为迁移参考或编号兼容存在，但生产对象清单和 dispatcher 决定当前能力。
+- 不主张 Linux、Haiku、io_uring、WIT/WASI、EEVDF、MCP 或 A2A 的公开概念由本队首次提出；
+- 不主张与 BPF、BFS、Linux cgroup/rstat、io_uring 或 Wasm 的源码、ABI 或二进制兼容；
+- 不重新分发 AIOS 代码、数据或评价结果；
+- MCP/A2A 仅为 deterministic 用户态对象映射，不等于完整网络协议栈或内核服务；
+- 竞赛综合程序使用本仓库内置的确定性科研负载，不以外部模型服务作为离线验收前提。
 
 ## 6. clean-room 声明
 
-上述 Linux/Haiku/AIOS 资料只用于理解公开设计原则。项目成员针对 uCore 和赛题合同重新定义数据结构、状态机、UAPI、错误语义、测试与实现。除已明确披露的 uCore 衍生基础和 `.clang-format` 外，三项新机制没有 vendoring 第三方源码、测试数据、生成数据、二进制、固件、磁盘镜像或文件系统格式。
+上述 Linux/Haiku/AIOS 资料只用于理解公开设计原则。项目成员针对 uCore 和赛题合同重新定义数据结构、状态机、UAPI、错误语义、测试与实现。按当前仓库清单，除已明确披露的 uCore 衍生基础和 `.clang-format` 外，项目特定机制没有 vendoring 第三方源码、测试数据、生成数据、二进制、固件、磁盘镜像或文件系统格式。
 
 名称“percpu/rstat-inspired”“BPF-ring-inspired”“BFS-live-query-inspired”只陈述概念谱系，不暗示上游认可、兼容性或代码复用。
 
 ## 7. 核验方式
 
-- 用 Git 历史和 active production object 清单区分上游基础、当前实现与 retired reference source。
+- 用 Git 历史和 production object 清单区分上游基础与当前实现。
 - 对每项机制按“问题、公开思想、AgentOS 特定数据结构、实际测试、限制”答辩。
-- 运行 UAPI/module checker 和实际构建，确认接口一致且停产模块没有重新进入生产链接。
+- 运行 UAPI/module checker 和实际构建，确认公开接口与生产链接一致。
 - 对提交包中的图片、字体、数据集、代码片段和生成式 AI 输出逐项确认来源与许可。
 - 无法确认来源的材料在发布前移除，不自行推断为公有领域。
 

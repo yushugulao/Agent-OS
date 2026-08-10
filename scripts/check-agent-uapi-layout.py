@@ -207,27 +207,15 @@ def compare_golden(actual, golden):
 
 def validate_compatibility_tombstones(root):
     paths = (
-        root / "agent_observe_abi.h",
         root / "os" / "agent.h",
         root / "user" / "include" / "agent.h",
     )
     try:
-        observe, kernel, user = (
+        kernel, user = (
             path.read_text(encoding="utf-8") for path in paths
         )
     except OSError as error:
         raise LayoutError(f"cannot read Agent compatibility ABI: {error}") from error
-
-    if not re.search(
-        r"^#define\s+AGENT_OBSERVE_RECOVERY_COMPAT_TOMBSTONE\s+1U$",
-        observe,
-        re.MULTILINE,
-    ) or not re.search(
-        r"Compatibility tombstone:.*recovery endpoint is unsupported",
-        observe,
-        re.DOTALL,
-    ):
-        raise LayoutError("observation recovery lacks an explicit ABI tombstone")
 
     for label, source in (("kernel", kernel), ("user", user)):
         for name, value in (
@@ -248,14 +236,6 @@ def validate_compatibility_tombstones(root):
             raise LayoutError(
                 f"{label} metadata compatibility flags are not explicitly unsupported"
             )
-
-    if not re.search(
-        r"Compatibility tombstone: retained for source ABI; always unsupported\.\s*\*/"
-        r"\s*int\s+agent_observe_recovery\s*\(",
-        user,
-        re.DOTALL,
-    ):
-        raise LayoutError("user recovery declaration is not marked unsupported")
 
 
 def define_value(source, name):

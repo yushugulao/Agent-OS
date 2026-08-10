@@ -39,4 +39,4 @@ plain target 的科研 Agent 平台程序位于 `user/src/`，常见入口包括
 - `rp_seed_orch`
 - `rp_compare_plain`
 
-这些程序通过普通文件写出 `rp_*` 状态记录，由本地结果阅读器渲染为网页和 API JSON。
+这些程序通过普通文件写出 `rp_*` 状态记录。`make dual-platform-run` 使用 `host_tools/plain_ucore_fs_extract.py` 按清单提取文件，再由 `host_tools/compare_dual_platform_state.py` 核对 plain 与 AgentOS 的规范状态；Host 汇总不替代两侧 Guest 日志。

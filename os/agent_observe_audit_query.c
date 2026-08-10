@@ -48,12 +48,7 @@ sys_agent_audit_receipt(uint64 requestaddr)
 	if (request.size != sizeof(request))
 		return AGENT_STATUS_BAD_SIZE;
 	if (request.operation != AGENT_AUDIT_RECEIPT_STATUS &&
-	    request.operation != AGENT_AUDIT_RECEIPT_WAIT
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-	    && request.operation !=
-		    AGENT_AUDIT_RECEIPT_TEST_EVICT_BEFORE_PERSIST
-#endif
-	    )
+	    request.operation != AGENT_AUDIT_RECEIPT_WAIT)
 		return AGENT_STATUS_BAD_PARAM;
 	if (request.flags != AGENT_AUDIT_RECEIPT_F_NONE ||
 	    request.lifecycle.reserved != 0 || request.sequence == 0 ||
@@ -64,13 +59,7 @@ sys_agent_audit_receipt(uint64 requestaddr)
 	    (request.operation == AGENT_AUDIT_RECEIPT_STATUS &&
 	     request.timeout_ticks != 0) ||
 	    (request.operation == AGENT_AUDIT_RECEIPT_WAIT &&
-	     request.receipt_id == 0)
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-	    || (request.operation ==
-			AGENT_AUDIT_RECEIPT_TEST_EVICT_BEFORE_PERSIST &&
-		(request.timeout_ticks != 0 || request.receipt_id == 0))
-#endif
-	    )
+	     request.receipt_id == 0))
 		return AGENT_STATUS_BAD_PARAM;
 	if (!p->is_agent)
 		return AGENT_STATUS_NOT_AGENT;
@@ -88,26 +77,6 @@ sys_agent_audit_receipt(uint64 requestaddr)
 		return AGENT_STATUS_INDETERMINATE;
 	scope_id = agent_identity_proc_scope(p);
 	supplied_receipt = request.receipt_id;
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-	if (request.operation ==
-	    AGENT_AUDIT_RECEIPT_TEST_EVICT_BEFORE_PERSIST) {
-		if (agent_observe_query_reserve(
-			    2U * AGENT_OBSERVE_AUDIT_SCOPE_LIMIT) < 0)
-			status = AGENT_STATUS_CANCELLED;
-		else
-			status = agent_observe_receipt_status(
-				scope_id, requested, request.sequence,
-				request.record_hash, supplied_receipt,
-				&receipt_id, &durability);
-		if (status != AGENT_STATUS_OK ||
-		    durability != AGENT_AUDIT_DURABILITY_PENDING ||
-		    agent_observe_test_evict_checkpoint_window(p) < 0) {
-			if (status == AGENT_STATUS_OK)
-				status = AGENT_STATUS_INDETERMINATE;
-			goto complete;
-		}
-	}
-#endif
 	if (request.operation == AGENT_AUDIT_RECEIPT_WAIT &&
 	    request.timeout_ticks > 0) {
 		uint64 now = agent_audit_receipt_ticks();
@@ -143,15 +112,11 @@ sys_agent_audit_receipt(uint64 requestaddr)
 			status = AGENT_STATUS_RETRY;
 			break;
 		}
-		(void)agent_observe_receipt_persist(scope_id);
 		if (kernel_work_checkpoint(KERNEL_WORK_OPERATION_UNITS) < 0) {
 			status = AGENT_STATUS_CANCELLED;
 			break;
 		}
 	}
-#ifdef AGENT_OBSERVE_TEST_PROFILE
-complete:
-#endif
 	request.status = status;
 	copy_status = copyout(p->pagetable, requestaddr, (char *)&request,
 			      sizeof(request));

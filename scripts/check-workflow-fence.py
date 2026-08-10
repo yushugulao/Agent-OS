@@ -1179,16 +1179,11 @@ def validate_metadata_cut(
         ),
         "workflow fence metadata cut is not one volatile lifecycle transaction",
     )
-    for obsolete in (
+    reject(
+        current,
         "agent_metadata_catalog_generation_snapshot(",
-        "agent_metadata_store_quiescence_fence_snapshot(",
-        "agent_metadata_store_quiescence_fence(",
-    ):
-        reject(
-            current,
-            obsolete,
-            "workflow fence metadata cut falls back to retired durable state",
-        )
+        "workflow fence metadata cut bypasses the volatile transaction",
+    )
     if (
         current.count("agent_metadata_txn_lock(1)") != 1
         or current.count("agent_metadata_txn_unlock()") != 1

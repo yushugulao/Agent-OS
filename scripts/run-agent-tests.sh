@@ -293,6 +293,16 @@ run_case() {
 	local build_profile_args=()
 	local case_timing_file="${AGENT_TEST_TIMING_FILE}"
 
+	# A caller running one targeted Guest may retain its raw serial log for a
+	# real comparison.  A shared destination is ambiguous for the full suite.
+	if [[ -n "${AGENT_TEST_GUEST_LOG_FILE:-}" ]]; then
+		if [[ -z "${AGENT_TEST_CASE:-}" ]]; then
+			echo "[agent-tests] AGENT_TEST_GUEST_LOG_FILE requires AGENT_TEST_CASE" >&2
+			return 2
+		fi
+		log_file="${AGENT_TEST_GUEST_LOG_FILE}"
+	fi
+
 	if [[ -n "${expected_bad_addr_marker}" ]]; then
 		expected_fault_args+=(
 			--expected-bad-addr-after "${expected_bad_addr_marker}"

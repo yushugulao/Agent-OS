@@ -286,7 +286,6 @@ class EvidenceRingContract(unittest.TestCase):
         self.assertLess(success_return, fallback_legacy)
         self.assertEqual(record.count("agent_observe_ledger_record_context"), 2)
         self.assertIn("&evidence_ticket", record)
-        self.assertNotIn("agent_obsstore", RING)
         note = function_body(RING, "agent_evidence_note_ticket_locked")
         view = function_body(LEDGER, "agent_observe_audit_view_open_locked")
         shadow = function_body(
@@ -494,10 +493,7 @@ class EvidenceRingContract(unittest.TestCase):
         self.assertIn(
             "AGENT_AUDIT_DURABILITY_FENCE_SEALED", receipt_status
         )
-        self.assertNotIn("agent_obsstore", receipt_status)
         self.assertIn("agent_evidence_reclaim(lifecycle)", scope_reclaim)
-        self.assertNotIn("agent_obsstore", scope_reclaim)
-        self.assertNotIn("agent_observe_capacity", scope_reclaim)
 
     def test_sha256_known_vectors(self) -> None:
         if ctypes.sizeof(ctypes.c_ulong) != 8:

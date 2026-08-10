@@ -9,7 +9,6 @@
 struct agent_identity_lease_state {
 	uint64 ends[AGENT_IDENTITY_ALLOCATOR_COUNT];
 	uint64 lifecycle_ends[WORKFLOW_LIFECYCLE_CAP];
-	int admission_ready;
 };
 
 static struct agent_identity_lease_state agent_identity_leases;
@@ -28,31 +27,6 @@ agent_identity_lease_init(void)
 		agent_identity_leases.ends[i] = agent_identity_boot_end(i);
 	for (uint i = 0; i < WORKFLOW_LIFECYCLE_CAP; i++)
 		agent_identity_leases.lifecycle_ends[i] = ~0ULL;
-	agent_identity_leases.admission_ready = 1;
-}
-
-void
-agent_identity_lease_set_persist(agent_identity_lease_persist_fn persist)
-{
-	/* Compatibility hook: boot-epoch identity state has no disk provider. */
-	(void)persist;
-}
-
-int
-agent_identity_lease_storage_ready(void)
-{
-	return 0;
-}
-
-void
-agent_identity_lease_maintain(void)
-{
-}
-
-int
-agent_identity_lease_maintenance_pending(void)
-{
-	return 0;
 }
 
 int
@@ -146,41 +120,4 @@ agent_identity_lease_lifecycle_note_next(uint slot, uint64 next)
 	if (next >= agent_identity_leases.lifecycle_ends[slot])
 		agent_identity_leases.lifecycle_ends[slot] = 0;
 	intr_restore(enabled);
-}
-
-void
-agent_identity_lease_snapshot(struct agent_identity_lease_snapshot *snapshot)
-{
-	int enabled;
-
-	if (snapshot == 0)
-		return;
-	enabled = intr_save();
-	memmove(snapshot->ends, agent_identity_leases.ends,
-		sizeof(snapshot->ends));
-	memmove(snapshot->lifecycle_ends,
-		agent_identity_leases.lifecycle_ends,
-		sizeof(snapshot->lifecycle_ends));
-	intr_restore(enabled);
-}
-
-void
-agent_identity_lease_recover_allocator(uint kind, uint64 end)
-{
-	/* Retired disk images cannot influence a boot-epoch allocator. */
-	(void)kind;
-	(void)end;
-}
-
-void
-agent_identity_lease_recover_lifecycle(uint slot, uint64 end)
-{
-	(void)slot;
-	(void)end;
-}
-
-int
-agent_identity_lease_admission_ready(void)
-{
-	return agent_identity_leases.admission_ready;
 }

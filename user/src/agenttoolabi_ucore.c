@@ -375,7 +375,7 @@ static void check_v2_rejections(void)
 	request.size--;
 	expect_status(AGENT_STATUS_BAD_SIZE, "bad request size");
 	request_init(AGENT_TOOL_PID_INFO, "pid_info", 0);
-	request.version++;
+	request.version = 0;
 	expect_status(AGENT_STATUS_BAD_VERSION, "bad request version");
 	printf("agenttoolabi_ucore: strict_negative_matrix=1\n");
 }

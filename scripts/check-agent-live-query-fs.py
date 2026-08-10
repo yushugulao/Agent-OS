@@ -26,7 +26,6 @@ SOURCE_PATHS = {
     "user_h": "user/include/agent.h",
     "user_syscall": "user/lib/syscall.c",
     "file_state": "os/agent_file_state.c",
-    "makefile": "Makefile",
 }
 
 
@@ -90,32 +89,13 @@ def validate_sources(sources: dict[str, str]) -> None:
     user_h = sources["user_h"]
     user_syscall = sources["user_syscall"]
     file_state = sources["file_state"]
-    makefile = sources["makefile"]
-
-    # Production must not compile the retired disk catalog or scanner.
-    for retired in (
-        "$K/agent_metadata_journal.c",
-        "$K/agent_metadata_probe.c",
-        "$K/agent_metadata_recovery.c",
-        "$K/agent_metadata_scan.c",
-        "$K/agent_metadata_store.c",
-        "$K/agent_metadata_store_format.c",
-        "$K/agent_metadata_store_io.c",
-    ):
-        require(makefile, retired, f"retired metadata module remains unclassified: {retired}")
-    require(
-        makefile,
-        "C_SRCS:=$(filter-out$(RETIRED_METADATA_C_SRCS),$(C_SRCS))",
-        "retired metadata modules can enter the production kernel",
-    )
-
     # Only explicitly registered, flags==0 records enter the resident index.
     require(catalog, "agent_catalog_live_query_bits", "missing resident live-query bitmap")
     derived_add = function(catalog, "agent_catalog_derived_add")
     derived_remove = function(catalog, "agent_catalog_derived_remove")
     require(
         derived_add,
-        "state==0&&(meta->flags&AGENT_FILE_META_F_AUTOSCAN)==0",
+        "(meta->flags&AGENT_FILE_META_F_AUTOSCAN)==0",
         "autoscan rows can enter the live-query index",
     )
     require(
@@ -128,19 +108,13 @@ def validate_sources(sources: dict[str, str]) -> None:
         "agent_catalog_bitmap_clear(agent_catalog_live_query_bits,slot)",
         "removed rows leave stale index membership",
     )
-    for name in (
-        "agent_metadata_catalog_read_begin",
-        "agent_metadata_catalog_index_seek",
-        "agent_metadata_catalog_live_seek",
-    ):
-        require(function(catalog, name), "agent_catalog_live_query_bits", f"{name} bypasses explicit membership")
-
     # Snapshot and selector identity include the full workflow generation and inode incarnation.
     read_begin = function(catalog, "agent_metadata_catalog_read_begin")
     read_copy = function(catalog, "agent_metadata_catalog_read_copy")
     read_end = function(catalog, "agent_metadata_catalog_read_end")
     resolve = function(catalog, "agent_metadata_catalog_resolve")
     key_matches = function(catalog, "agent_catalog_key_matches")
+    require(read_begin, "agent_catalog_live_query_bits", "snapshot query bypasses explicit membership")
     require(read_begin, "agent_catalog_mutation_owner!=0", "query can start during a mutation")
     require(read_copy, "workflow_lifecycle_key_equal(lifecycle,snapshot->lifecycle)", "record copy crosses workflow generations")
     require(read_end, "workflow_lifecycle_key_equal(lifecycle,snapshot->lifecycle)", "snapshot completion crosses workflow generations")
@@ -163,8 +137,6 @@ def validate_sources(sources: dict[str, str]) -> None:
     require(meta_set, "agent_metadata_catalog_edit_commit_volatile", "set bypasses volatile commit")
     require(meta_set, "agent_metadata_catalog_bind_volatile", "set bypasses volatile bind")
     require(meta_set, "agent_metadata_catalog_clear_slot_volatile", "delete bypasses volatile clear")
-    for forbidden in ("agent_file_store_load", "agent_metadata_store", "agent_metadata_scan"):
-        reject(meta_set, forbidden, f"volatile set reaches retired path: {forbidden}")
     admission = function(objects, "agent_metadata_admission_status")
     require(admission, "returnAGENT_STATUS_OK", "Agent admission still depends on catalog recovery")
 
@@ -180,7 +152,6 @@ def validate_sources(sources: dict[str, str]) -> None:
         ),
         "workflow metadata fence is not one resident-index transaction",
     )
-    reject(current_fence, "agent_metadata_store", "workflow fence still claims durable metadata")
     catalog_fence = function(catalog, "agent_metadata_catalog_fence_generation")
     require(catalog_fence, "agent_catalog_require_txn()", "catalog fence is not transaction-owned")
     require(catalog_fence, "workflow_lifecycle_key_equal", "catalog fence ignores lifecycle generation")
@@ -196,7 +167,6 @@ def validate_sources(sources: dict[str, str]) -> None:
     for name in ("agent_fs_note_write", "agent_fs_note_truncate"):
         require(function(directory, name), "if(FS_META_UNBOUND(ip))return", f"ordinary {name} enters metadata")
     require(publish, "agent_live_query_content_enqueue", "bound writes do not queue an UPDATE")
-    reject(publish, "agent_metadata_store", "bound write reaches retired store")
     require(remove, "if(FS_META_UNBOUND(ip))", "ordinary unlink enters metadata")
     require(remove, "agent_metadata_txn_try_external()", "unlink can block on metadata coordination")
     reject(remove, "agent_metadata_txn_lock", "unlink takes the blocking metadata gate")
