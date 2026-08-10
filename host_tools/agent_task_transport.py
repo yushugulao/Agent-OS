@@ -233,7 +233,12 @@ class TaskChannelSubmission:
 
 @dataclass(frozen=True)
 class TaskChannelOutcome:
-    """A deterministic handler result used by the in-memory adapter."""
+    """A deterministic handler result used by the in-memory adapter.
+
+    ``continuation`` is an in-process simulation hook.  It is deliberately not
+    part of the transport protocol and receives the copied request plus all
+    accepted responses once the current input request is fully answered.
+    """
 
     status: TaskStatus = TaskStatus.WORKING
     status_message: str | None = None
@@ -241,6 +246,13 @@ class TaskChannelOutcome:
     error: Mapping[str, object] | None = None
     input_requests: Mapping[str, object] | None = None
     provenance: tuple[str, ...] = ()
+    continuation: (
+        Callable[
+            [TaskChannelRequest, Mapping[str, object]],
+            TaskChannelOutcome | object,
+        ]
+        | None
+    ) = None
 
 
 @runtime_checkable
@@ -281,6 +293,9 @@ class TaskChannelTransport(Protocol):
 
 
 TaskHandler = Callable[[TaskChannelRequest], TaskChannelOutcome | object]
+TaskContinuation = Callable[
+    [TaskChannelRequest, Mapping[str, object]], TaskChannelOutcome | object
+]
 
 
 @dataclass
@@ -295,6 +310,8 @@ class _RequestState:
     error: Mapping[str, object] | None = None
     input_requests: Mapping[str, object] | None = None
     provenance: tuple[str, ...] = ()
+    continuation: TaskContinuation | None = None
+    accepted_input_responses: dict[str, object] = field(default_factory=dict)
 
 
 class InMemoryTaskChannelTransport:
@@ -304,7 +321,10 @@ class InMemoryTaskChannelTransport:
     kernel's copy-before-validation TOCTOU boundary.  ``publish`` and
     ``publish_artifact`` are deterministic driver hooks for unit tests and
     user-space protocol simulations; they are not part of the transport
-    Protocol implemented by a real SQ/CQ backend.
+    Protocol implemented by a real SQ/CQ backend.  Handlers and continuations
+    run in the calling thread but never under the state lock, so another thread
+    can snapshot or cancel a slow invocation.  The adapter owns no background
+    executor and makes no claim to be a kernel SQ/CQ adapter.
     """
 
     def __init__(
@@ -312,12 +332,14 @@ class InMemoryTaskChannelTransport:
         issuer: TaskChannelIssuer,
         *,
         handlers: Mapping[int, TaskHandler] | None = None,
+        continuation_handlers: Mapping[int, TaskContinuation] | None = None,
         first_request_id: int = 1,
     ) -> None:
         if type(first_request_id) is not int or first_request_id <= 0:
             raise ValueError("first_request_id must be positive")
         self._issuer = issuer
         self._handlers = dict(handlers or {})
+        self._continuation_handlers = dict(continuation_handlers or {})
         self._next_request_id = first_request_id
         self._next_event_sequence = 1
         self._next_context_sequence = 1
@@ -328,6 +350,7 @@ class InMemoryTaskChannelTransport:
         self._lock = threading.RLock()
         self.submitted_requests = 0
         self.handler_invocations = 0
+        self.continuation_invocations = 0
         self.cancel_transitions = 0
 
     @staticmethod
@@ -480,12 +503,143 @@ class InMemoryTaskChannelTransport:
             provenance=state.provenance,
         )
 
+    @staticmethod
+    def _callback_failure(
+        phase: str, exception: Exception
+    ) -> tuple[str, Mapping[str, object]]:
+        exception_type = type(exception).__name__
+        try:
+            message = str(exception)
+        except Exception:
+            message = exception_type
+        message = (message or exception_type)[:256]
+        code = f"{phase.upper()}_EXCEPTION"
+        return (
+            f"{phase} failed",
+            {
+                "code": code,
+                "exceptionType": exception_type,
+                "message": message,
+            },
+        )
+
+    def _record_callback_failure(
+        self,
+        binding: TaskBinding,
+        phase: str,
+        exception: Exception,
+    ) -> TaskChannelSnapshot:
+        status_message, error = self._callback_failure(phase, exception)
+        with self._lock:
+            state = self._state(binding)
+            if state.status not in TERMINAL_TASK_STATUSES:
+                self._append_status(
+                    state,
+                    TaskStatus.FAILED,
+                    status_message=status_message,
+                    error=error,
+                    provenance=state.provenance,
+                )
+                state.continuation = None
+                state.accepted_input_responses.clear()
+            return self._snapshot(state)
+
+    @staticmethod
+    def _normalize_outcome(
+        value: TaskChannelOutcome | object,
+        provenance: tuple[str, ...],
+    ) -> TaskChannelOutcome:
+        if isinstance(value, TaskChannelOutcome):
+            return value
+        return TaskChannelOutcome(
+            status=TaskStatus.COMPLETED,
+            result=value,
+            provenance=provenance,
+        )
+
+    def _apply_callback_outcome(
+        self,
+        binding: TaskBinding,
+        outcome: TaskChannelOutcome,
+        *,
+        fallback_continuation: TaskContinuation | None,
+    ) -> TaskChannelSnapshot:
+        with self._lock:
+            state = self._state(binding)
+            if state.status in TERMINAL_TASK_STATUSES:
+                return self._snapshot(state)
+            if outcome.status is TaskStatus.WORKING:
+                return self._snapshot(state)
+            try:
+                self._append_status(
+                    state,
+                    outcome.status,
+                    status_message=outcome.status_message,
+                    result=outcome.result,
+                    error=outcome.error,
+                    input_requests=outcome.input_requests,
+                    provenance=outcome.provenance or state.provenance,
+                )
+            except Exception as exception:
+                status_message, error = self._callback_failure(
+                    "handler_result", exception
+                )
+                self._append_status(
+                    state,
+                    TaskStatus.FAILED,
+                    status_message=status_message,
+                    error=error,
+                    provenance=state.provenance,
+                )
+                state.continuation = None
+                state.accepted_input_responses.clear()
+                return self._snapshot(state)
+
+            if outcome.status is TaskStatus.INPUT_REQUIRED:
+                state.continuation = (
+                    outcome.continuation
+                    or fallback_continuation
+                    or self._continuation_handlers.get(state.request.tool_id)
+                )
+                state.accepted_input_responses.clear()
+            else:
+                state.continuation = None
+                state.accepted_input_responses.clear()
+            return self._snapshot(state)
+
+    def _invoke_callback(
+        self,
+        binding: TaskBinding,
+        request: TaskChannelRequest,
+        callback: Callable[..., TaskChannelOutcome | object],
+        *,
+        phase: str,
+        input_responses: Mapping[str, object] | None = None,
+        fallback_continuation: TaskContinuation | None = None,
+    ) -> TaskChannelSnapshot:
+        try:
+            if input_responses is None:
+                value = callback(copy.deepcopy(request))
+            else:
+                value = callback(
+                    copy.deepcopy(request), copy.deepcopy(dict(input_responses))
+                )
+            outcome = self._normalize_outcome(value, request.provenance)
+        except Exception as exception:
+            return self._record_callback_failure(binding, phase, exception)
+        return self._apply_callback_outcome(
+            binding,
+            outcome,
+            fallback_continuation=fallback_continuation,
+        )
+
     def submit(
         self, issuer: TaskChannelIssuer, request: TaskChannelRequest
     ) -> TaskChannelSubmission:
         self._require_issuer(issuer)
         request_copy = copy.deepcopy(request)
         fingerprint = self._request_fingerprint(request_copy)
+        handler: TaskHandler | None
         with self._lock:
             old = self._submission_keys.get(request_copy.submission_key)
             if old is not None:
@@ -520,24 +674,22 @@ class InMemoryTaskChannelTransport:
             handler = self._handlers.get(request_copy.tool_id)
             if handler is not None:
                 self.handler_invocations += 1
-                outcome = handler(copy.deepcopy(request_copy))
-                if not isinstance(outcome, TaskChannelOutcome):
-                    outcome = TaskChannelOutcome(
-                        status=TaskStatus.COMPLETED,
-                        result=outcome,
-                        provenance=request_copy.provenance,
-                    )
-                if outcome.status is not TaskStatus.WORKING:
-                    self._append_status(
-                        state,
-                        outcome.status,
-                        status_message=outcome.status_message,
-                        result=outcome.result,
-                        error=outcome.error,
-                        input_requests=outcome.input_requests,
-                        provenance=outcome.provenance or request_copy.provenance,
-                    )
-            return TaskChannelSubmission(binding, self._snapshot(state), False)
+            else:
+                return TaskChannelSubmission(binding, self._snapshot(state), False)
+
+        self._invoke_callback(
+            binding,
+            request_copy,
+            handler,
+            phase="handler",
+            fallback_continuation=self._continuation_handlers.get(
+                request_copy.tool_id
+            ),
+        )
+        with self._lock:
+            return TaskChannelSubmission(
+                binding, self._snapshot(self._state(binding)), False
+            )
 
     def snapshot(
         self, issuer: TaskChannelIssuer, binding: TaskBinding
@@ -555,21 +707,59 @@ class InMemoryTaskChannelTransport:
         self._require_issuer(issuer)
         if not isinstance(input_responses, Mapping):
             raise ValueError("input_responses must be a mapping")
+        responses_copy = copy.deepcopy(dict(input_responses))
+        continuation: TaskContinuation | None = None
+        request_copy: TaskChannelRequest | None = None
+        accepted_responses: Mapping[str, object] | None = None
         with self._lock:
             state = self._state(binding)
             if state.status is not TaskStatus.INPUT_REQUIRED:
                 raise InvalidTaskTransitionError("Task is not waiting for input")
-            outstanding = set((state.input_requests or {}).keys())
-            accepted = outstanding.intersection(input_responses.keys())
+            outstanding = dict(state.input_requests or {})
+            accepted = [key for key in outstanding if key in responses_copy]
             if not accepted:
                 return self._snapshot(state)
+            for key in accepted:
+                state.accepted_input_responses[key] = copy.deepcopy(
+                    responses_copy[key]
+                )
+                del outstanding[key]
+            if outstanding:
+                self._append_status(
+                    state,
+                    TaskStatus.INPUT_REQUIRED,
+                    status_message="partial input accepted",
+                    input_requests=outstanding,
+                    provenance=state.provenance,
+                )
+                return self._snapshot(state)
+
+            continuation = state.continuation
+            request_copy = copy.deepcopy(state.request)
+            accepted_responses = copy.deepcopy(state.accepted_input_responses)
+            state.continuation = None
+            state.accepted_input_responses.clear()
             self._append_status(
                 state,
                 TaskStatus.WORKING,
                 status_message="input accepted",
                 provenance=state.provenance,
             )
-            return self._snapshot(state)
+            if continuation is not None:
+                self.continuation_invocations += 1
+            else:
+                return self._snapshot(state)
+
+        assert request_copy is not None
+        assert accepted_responses is not None
+        return self._invoke_callback(
+            binding,
+            request_copy,
+            continuation,
+            phase="continuation",
+            input_responses=accepted_responses,
+            fallback_continuation=continuation,
+        )
 
     def cancel(
         self, issuer: TaskChannelIssuer, binding: TaskBinding
@@ -585,6 +775,8 @@ class InMemoryTaskChannelTransport:
                 status_message="cancelled",
                 provenance=state.provenance,
             )
+            state.continuation = None
+            state.accepted_input_responses.clear()
             self.cancel_transitions += 1
             return self._snapshot(state)
 
@@ -616,6 +808,7 @@ class InMemoryTaskChannelTransport:
         error: Mapping[str, object] | None = None,
         input_requests: Mapping[str, object] | None = None,
         provenance: tuple[str, ...] = (),
+        continuation: TaskContinuation | None = None,
     ) -> TaskChannelSnapshot:
         with self._lock:
             state = self._state(binding)
@@ -628,6 +821,15 @@ class InMemoryTaskChannelTransport:
                 input_requests=input_requests,
                 provenance=provenance or state.provenance,
             )
+            if status is TaskStatus.INPUT_REQUIRED:
+                state.continuation = (
+                    continuation
+                    or self._continuation_handlers.get(state.request.tool_id)
+                )
+                state.accepted_input_responses.clear()
+            else:
+                state.continuation = None
+                state.accepted_input_responses.clear()
             return self._snapshot(state)
 
     def accepted_request(self, binding: TaskBinding) -> TaskChannelRequest:
@@ -686,6 +888,7 @@ __all__ = [
     "TaskChannelSnapshot",
     "TaskChannelSubmission",
     "TaskChannelTransport",
+    "TaskContinuation",
     "TaskEventKind",
     "TaskResourceHandle",
     "TaskStatus",

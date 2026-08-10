@@ -1,10 +1,10 @@
-# 任务五：Agent Loop、IPC 与 fence evidence
+# 任务五：Agent Loop substrate、IPC 与 fence evidence
 
-任务五把有界事件队列、watch/wait、heartbeat、可信 IPC、Agent 感知调度和 Context evidence 连接为一条内核驱动循环。当前证据热路径以 Fence-Sealed Evidence Ring 为 canonical 存储，同时保留 audit/timeline/provenance/ledger 兼容读取视图。
+任务五提供有界事件队列、watch/wait、heartbeat、可信 IPC、Agent 感知调度和 Context evidence 组成的事件驱动 substrate。内核负责等待、唤醒、路由与边界验证，不负责模型推理或决定下一次工具调用；确定性 policy workflow 与 model-led tool loop 都由 Guest 用户态建立在这组原语之上。当前证据热路径以 Fence-Sealed Evidence Ring 为 canonical 存储，同时保留 audit/timeline/provenance/ledger 兼容读取视图。
 
-## 1. Agent Loop
+## 1. Agent Loop substrate
 
-典型循环为：
+一个用户态循环可以按以下形状使用 substrate：
 
 ```text
 install typed/legacy watch
@@ -18,10 +18,13 @@ agent_wait(timeout)
         +--> POLICY_DENIED: inspect Context/audit compatibility view
         |
         v
-structured tool call -> Context record -> Evidence Ring
+Guest policy/model chooses structured call
+        |
+        v
+kernel validates/executes -> Context record -> Evidence Ring
 ```
 
-事件不是用户态共享内存里的无鉴别消息。内核分配 event id/tick，绑定 source/target、scope、cause/span，并在消费时再次验证线程/process generation。
+事件不是用户态共享内存里的无鉴别消息。内核分配 event id/tick，绑定 source/target、scope、cause/span，并在消费时再次验证线程/process generation。图中的“chooses”始终发生在 Guest 用户态，不能据此把内核称作自主 Agent loop。
 
 ## 2. 有界事件队列
 
@@ -59,6 +62,10 @@ timeline 的 wait/read API 使用独立 waiter 状态，发布路径只唤醒真
 - 队列预算允许。
 
 `agent_wake()` 不能伪造 `FILE_QUERY`、`POLICY_DENIED`、`TIMER`、`LLM_DONE` 等内核/专用工具事件。cross-scope 即使 PID 可见也会拒绝。
+
+`LLM_REQUEST/LLM_RESPONSE` 是内核内的相关性受控 RPC，而不是模型 API 或 MCP。内核记录 requester/relay 的完整 lifecycle、control id、PID、非零 correlation 和 deadline；correlation 对同 requester 完整身份严格递增，只有请求实际投递并发布 pending 后才推进，失败投递不推进。响应只有来自原 relay、命中同一 pending tuple 时才可产生 `LLM_DONE`，成功交付原子消费该 tuple。pending 的 kernel-tick TTL 为 120 秒。容量为 `NPROC` 的有界 terminal history 只在记录仍保留时使已消费 replay 返回 `STALE`、过期 response 返回 `TIMEOUT`；覆盖后旧 response 按 unmatched 返回 `DENIED`。registry/每 requester 容量与 event queue 都有界并使用不同错误文本；公开 exec、exit 和 teardown 清理状态。该约束不提供远程网络 exactly-once。
+
+`send_message`、`llm_request`、`llm_response` 的 Agent-Loop accepted mask 允许 control、file、untrusted-tool-output 与 cross-Agent 标签进入消息路径，但不会洗掉原污点；capability、route、schema 和 side-effect gate 保持不变，其他副作用工具不获得这一放宽。MESSAGE/LLM event cause 取该次调用已递增的当前 call count。
 
 ## 5. heartbeat 与调度
 
@@ -132,7 +139,9 @@ python -B scripts/test-agent-evidence-ring.py
 python -B scripts/test-workflow-fence.py
 python -B scripts/test-workflow-syscall-cut.py
 python -B scripts/test-agent-live-query-fs.py
+make agent-live-demo-check
+make agent-live-demo
 make agent-module-check TOOLPREFIX=riscv-none-elf-
 ```
 
-Guest event、route、wait、timeline 和调度行为由 AgentOS 专项程序直接验证；调度数字由对应性能场景的实际输出读取。
+`agent-live-demo-check` 只检查 Guest/Host 静态合同；`agent-live-demo` 默认让 6 轮 replay 经过实际 QEMU 串口，并要求顶层 `agentlive_ucore: parent passed`。Linux/WSL 默认自动探测工具链，Windows xPack 可给该命令追加 `TOOLPREFIX=riscv-none-elf-`。Guest event、route、wait、timeline 和调度行为由 AgentOS 专项程序直接验证；调度数字由对应性能场景的实际输出读取。

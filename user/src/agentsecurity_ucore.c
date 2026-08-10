@@ -1015,7 +1015,7 @@ static TEST_NOINLINE void check_ipc_route_authorization(void)
 	printf("agentsecurity_ucore: ipc_route_authorization=1\n");
 }
 
-static TEST_NOINLINE void run_consent_route_target(int ready_fd)
+static TEST_NOINLINE void run_consent_route_target(int ready_fd, int release_fd)
 {
 	struct agent_event event;
 	char phase = 'C';
@@ -1029,46 +1029,52 @@ static TEST_NOINLINE void run_consent_route_target(int ready_fd)
 	      "target accepts llm response source");
 	check(write(ready_fd, &phase, 1) == 1,
 	      "report target route consent");
+	check(read(release_fd, &phase, 1) == 1 && phase == 'X',
+	      "wait unsolicited response probe");
 	memset(&event, 0, sizeof(event));
-	check(agent_wait(&event, 200) == AGENT_STATUS_OK,
-	      "receive consent response");
-	check(event.type == AGENT_EVENT_LLM_DONE,
-	      "consent response type");
-	check(event.source_pid == getppid(), "consent response source");
-	check(event.corr_id == 8552, "consent response correlation");
-	check(strcmp(event.payload, "consent-response") == 0,
-	      "consent response payload");
+	check(agent_wait(&event, 0) == AGENT_STATUS_TIMEOUT,
+	      "route consent does not authorize unsolicited response");
 	exit(0);
 }
 
 static TEST_NOINLINE void check_target_route_consent(void)
 {
 	int ready[2];
+	int release[2];
 	int target_pid;
 	int status = 0;
 	char phase = 0;
 
 	check(pipe(ready) == 0, "create consent route ready pipe");
+	check(pipe(release) == 0, "create consent route release pipe");
 	check(agent_scope_delegate_fd(ready[1]) == AGENT_STATUS_OK,
 	      "delegate consent route ready pipe");
+	check(agent_scope_delegate_fd(release[0]) == AGENT_STATUS_OK,
+	      "delegate consent route release pipe");
 	target_pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(target_pid >= 0, "create consent route target");
 	if (target_pid == 0)
-		run_consent_route_target(ready[1]);
+		run_consent_route_target(ready[1], release[0]);
 	check(read(ready[0], &phase, 1) == 1 && phase == 'C',
 	      "wait target route consent");
 	check_route_wake(target_pid, 8551, "consent-message-denied",
 			 AGENT_STATUS_DENIED,
 			 "llm-only route rejects message");
 	check_route_tool(AGENT_TOOL_LLM_RESPONSE, target_pid, 8552,
-			 "consent-response", AGENT_STATUS_OK,
-			 "target-consented llm response");
+			 "consent-response", AGENT_STATUS_DENIED,
+			 "route consent rejects unsolicited llm response");
+	phase = 'X';
+	check(write(release[1], &phase, 1) == 1,
+	      "release consent route target");
 	check(waitpid(target_pid, &status) == target_pid,
 	      "wait consent route target");
 	check(status == 0, "consent route target status");
 	close(ready[0]);
 	close(ready[1]);
-	printf("agentsecurity_ucore: target_route_consent=1\n");
+	close(release[0]);
+	close(release[1]);
+	printf("agentsecurity_ucore: target_route_consent=1 "
+	       "unsolicited_response_denied=1\n");
 }
 
 static TEST_NOINLINE void run_route_lifetime_source(int gate_fd, uint64 corr_id)

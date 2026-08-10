@@ -1182,12 +1182,20 @@ static void check_generic_action_and_llm(void)
 
 	check(agent_watch(AGENT_EVENT_LLM_DONE, "template") == 0,
 	      "watch llm done");
-	make_generic_op(&op, AGENT_TOOL_LLM_REQUEST, 7203, 0,
+	check(agent_watch(AGENT_EVENT_MESSAGE, "template prompt") == 0,
+	      "watch llm request");
+	make_generic_op(&op, AGENT_TOOL_LLM_REQUEST, 7203, getpid(),
 			"template prompt summary");
 	check(agent_run(&op, &res, 1, 0) == 1, "llm request run");
 	check(res.status == AGENT_STATUS_OK, "llm request status");
 	check(strcmp(res.result, "llm_request") == 0, "llm request text");
-	make_generic_op(&op, AGENT_TOOL_LLM_RESPONSE, 7204, getpid(),
+	check(res.value2 == 1, "llm request delivered");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 20) == AGENT_STATUS_OK,
+	      "consume llm request");
+	check(event.type == AGENT_EVENT_MESSAGE && event.corr_id == 7203,
+	      "llm request event");
+	make_generic_op(&op, AGENT_TOOL_LLM_RESPONSE, 7203, getpid(),
 			"template response summary");
 	check(agent_run(&op, &res, 1, 0) == 1, "llm response run");
 	check(res.status == AGENT_STATUS_OK, "llm response status");

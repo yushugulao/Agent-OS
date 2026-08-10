@@ -246,6 +246,7 @@ static void check_v2_success(void)
 static void check_key_capacity_and_llm_response(void)
 {
 	struct agent_request legacy;
+	struct agent_event event;
 	struct {
 		uint64 before;
 		struct agent_response value;
@@ -256,9 +257,29 @@ static void check_key_capacity_and_llm_response(void)
 	memset(&legacy_response, 0, sizeof(legacy_response));
 	legacy_response.before = USER_BUFFER_SENTINEL;
 	legacy_response.after = USER_BUFFER_SENTINEL;
+	check(agent_watch(AGENT_EVENT_MESSAGE, "request") == 0,
+	      "watch llm requests");
+	legacy.version = AGENT_CALL_VERSION_V1;
+	legacy.tool_id = AGENT_TOOL_LLM_REQUEST;
+	legacy.request_id = 9191;
+	legacy.arg0 = getpid();
+	legacy.arg0_type = AGENT_PARAM_UINT64;
+	legacy.payload_type = AGENT_PARAM_STRING;
+	strcpy(legacy.arg0_key, "target_pid");
+	strcpy(legacy.payload_key, "prompt_summary");
+	strcpy(legacy.payload, "v1-request");
+	check(agent_call(&legacy, &legacy_response.value) == 0 &&
+	      legacy_response.value.status == AGENT_STATUS_OK &&
+	      legacy_response.value.value2 == 1,
+	      "legacy llm request key");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 20) == AGENT_STATUS_OK &&
+	      event.type == AGENT_EVENT_MESSAGE && event.corr_id == 9191,
+	      "consume legacy llm request");
+	memset(&legacy, 0, sizeof(legacy));
 	legacy.version = AGENT_CALL_VERSION_V1;
 	legacy.tool_id = AGENT_TOOL_LLM_RESPONSE;
-	legacy.request_id = 9251;
+	legacy.request_id = 9191;
 	legacy.arg0 = getpid();
 	legacy.arg0_type = AGENT_PARAM_UINT64;
 	legacy.payload_type = AGENT_PARAM_STRING;
@@ -272,13 +293,30 @@ static void check_key_capacity_and_llm_response(void)
 	check(legacy_response.before == USER_BUFFER_SENTINEL &&
 	      legacy_response.after == USER_BUFFER_SENTINEL,
 	      "v1 response buffer sentinel");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 20) == AGENT_STATUS_OK &&
+	      event.type == AGENT_EVENT_LLM_DONE && event.corr_id == 9191,
+	      "consume legacy llm response");
 
+	param_uint(0, "target_pid", getpid());
+	param_string(1, "prompt_summary", "v2-request");
+	request_init(AGENT_TOOL_LLM_REQUEST, "llm_request", 2);
+	expect_status(AGENT_STATUS_OK, "v2 llm request key");
+	check(response_buffer.value.value2 == 1, "v2 llm request delivered");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 20) == AGENT_STATUS_OK &&
+	      event.type == AGENT_EVENT_MESSAGE && event.corr_id == 9202,
+	      "consume v2 llm request");
 	param_uint(0, "target_pid", getpid());
 	param_string(1, "reply_summary", "v2-reply");
 	request_init(AGENT_TOOL_LLM_RESPONSE, "llm_response", 2);
 	expect_status(AGENT_STATUS_OK, "v2 llm response key");
 	check(strcmp(response_buffer.value.result, "llm_response") == 0,
 	      "v2 llm response result");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 20) == AGENT_STATUS_OK &&
+	      event.type == AGENT_EVENT_LLM_DONE && event.corr_id == 9202,
+	      "consume v2 llm response");
 	check(agent_unwatch(AGENT_EVENT_LLM_DONE, "") == 1,
 	      "unwatch self llm responses");
 

@@ -1,0 +1,6 @@
+{"response":{"type":"tool_use","tool":"unknown_tool","arguments":{"foo":"bar"}}}
+{"response":{"type":"tool_use","tool":"echo","arguments":{"payload":"bad","arg0":"bad","arg1":9}}}
+{"response":{"type":"tool_use","tool":"query_file","arguments":{"path":"agentlive_ucore"}}}
+{"response":{"type":"tool_use","tool":"echo","arguments":{"payload":"context-reviewed","arg0":7,"arg1":9}}}
+{"response":{"type":"tool_use","tool":"send_message","arguments":{"target_pid":"$RELAY_PID","message":"inspection-complete"}}}
+{"response":{"type":"final","content":"AgentOS completed the requested inspection with kernel-governed tools and preserved each result in Context."}}

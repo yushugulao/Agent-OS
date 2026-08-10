@@ -24,6 +24,409 @@ extern struct proc pool[NPROC];
 static long agent_sched_score_at(struct thread *t, uint64 now,
 				 struct agent_sched_record *record);
 
+#define AGENT_LLM_PENDING_MAX NPROC
+#define AGENT_LLM_PENDING_PER_REQUESTER AGENT_EVENT_QUEUE_CAP
+#define AGENT_LLM_PENDING_TTL_TICKS (120ULL * TICKS_PER_SEC)
+#define AGENT_LLM_TERMINAL_HISTORY_MAX NPROC
+
+struct agent_llm_pending {
+	struct workflow_lifecycle_key lifecycle;
+	uint64 requester_control_id;
+	uint64 relay_control_id;
+	uint64 corr_id;
+	uint64 deadline_tick;
+	int requester_pid;
+	int relay_pid;
+	int active;
+};
+
+struct agent_llm_requester_state {
+	struct workflow_lifecycle_key lifecycle;
+	uint64 requester_control_id;
+	uint64 last_corr_id;
+	int requester_pid;
+	int active;
+};
+
+struct agent_llm_terminal_record {
+	struct workflow_lifecycle_key lifecycle;
+	uint64 requester_control_id;
+	uint64 relay_control_id;
+	uint64 corr_id;
+	int requester_pid;
+	int relay_pid;
+	int status;
+	int active;
+};
+
+static struct agent_llm_pending agent_llm_pending[AGENT_LLM_PENDING_MAX];
+static struct agent_llm_requester_state
+	agent_llm_requesters[AGENT_LLM_PENDING_MAX];
+static struct agent_llm_terminal_record
+	agent_llm_terminal_history[AGENT_LLM_TERMINAL_HISTORY_MAX];
+static uint agent_llm_terminal_next;
+
+static struct proc *
+agent_llm_find_live_proc_locked(int pid)
+{
+	if (intr_get())
+		panic("LLM pending lookup unlocked");
+	for (struct proc *candidate = pool; candidate < &pool[NPROC]; candidate++)
+		if (proc_teardown_live(candidate) && candidate->is_agent &&
+		    candidate->pid == pid)
+			return candidate;
+	return 0;
+}
+
+static int
+agent_llm_pending_requester_equal(
+	const struct agent_llm_pending *pending, struct proc *requester,
+	struct workflow_lifecycle_key lifecycle)
+{
+	return pending->active && pending->requester_pid == requester->pid &&
+	       pending->requester_control_id == requester->agent_control_id &&
+	       workflow_lifecycle_key_equal(pending->lifecycle, lifecycle);
+}
+
+static int
+agent_llm_requester_state_equal(
+	const struct agent_llm_requester_state *state, struct proc *requester,
+	struct workflow_lifecycle_key lifecycle)
+{
+	return state->active && state->requester_pid == requester->pid &&
+	       state->requester_control_id == requester->agent_control_id &&
+	       workflow_lifecycle_key_equal(state->lifecycle, lifecycle);
+}
+
+static void
+agent_llm_terminal_remember_locked(
+	const struct agent_llm_pending *pending, int status)
+{
+	struct agent_llm_terminal_record *terminal;
+
+	if (intr_get())
+		panic("LLM terminal history unlocked");
+	if (pending == 0 || !pending->active ||
+	    (status != AGENT_STATUS_OK && status != AGENT_STATUS_TIMEOUT))
+		panic("LLM terminal history invalid");
+	terminal = &agent_llm_terminal_history[agent_llm_terminal_next];
+	agent_llm_terminal_next++;
+	if (agent_llm_terminal_next >= AGENT_LLM_TERMINAL_HISTORY_MAX)
+		agent_llm_terminal_next = 0;
+	memset(terminal, 0, sizeof(*terminal));
+	terminal->lifecycle = pending->lifecycle;
+	terminal->requester_control_id = pending->requester_control_id;
+	terminal->relay_control_id = pending->relay_control_id;
+	terminal->corr_id = pending->corr_id;
+	terminal->requester_pid = pending->requester_pid;
+	terminal->relay_pid = pending->relay_pid;
+	terminal->status = status;
+	terminal->active = 1;
+}
+
+static int
+agent_llm_terminal_status_locked(
+	struct proc *requester, struct proc *relay,
+	struct workflow_lifecycle_key lifecycle, uint64 corr_id)
+{
+	if (intr_get())
+		panic("LLM terminal lookup unlocked");
+	for (int i = 0; i < AGENT_LLM_TERMINAL_HISTORY_MAX; i++) {
+		struct agent_llm_terminal_record *terminal =
+			&agent_llm_terminal_history[i];
+
+		if (!terminal->active || terminal->corr_id != corr_id ||
+		    terminal->requester_pid != requester->pid ||
+		    terminal->requester_control_id != requester->agent_control_id ||
+		    terminal->relay_pid != relay->pid ||
+		    terminal->relay_control_id != relay->agent_control_id ||
+		    !workflow_lifecycle_key_equal(terminal->lifecycle, lifecycle))
+			continue;
+		return terminal->status == AGENT_STATUS_TIMEOUT ?
+			       AGENT_STATUS_TIMEOUT : AGENT_STATUS_STALE;
+	}
+	return AGENT_STATUS_DENIED;
+}
+
+static void
+agent_llm_pending_reap_locked(uint64 now)
+{
+	if (intr_get())
+		panic("LLM pending reap unlocked");
+	for (int i = 0; i < AGENT_LLM_PENDING_MAX; i++) {
+		struct agent_llm_pending *pending = &agent_llm_pending[i];
+
+		if (!pending->active || pending->deadline_tick == 0 ||
+		    now < pending->deadline_tick)
+			continue;
+		agent_llm_terminal_remember_locked(pending, AGENT_STATUS_TIMEOUT);
+		memset(pending, 0, sizeof(*pending));
+	}
+}
+
+static uint64
+agent_llm_pending_deadline(uint64 now)
+{
+	return now > ~0ULL - AGENT_LLM_PENDING_TTL_TICKS ?
+		       ~0ULL : now + AGENT_LLM_PENDING_TTL_TICKS;
+}
+
+static void
+agent_llm_pending_proc_clear(struct proc *p)
+{
+	struct workflow_lifecycle_key lifecycle;
+	int enabled;
+
+	if (p == 0)
+		return;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (!workflow_lifecycle_key_valid(lifecycle) || p->pid <= 0 ||
+	    p->agent_control_id == 0)
+		return;
+	enabled = intr_save();
+	for (int i = 0; i < AGENT_LLM_PENDING_MAX; i++) {
+		struct agent_llm_pending *pending = &agent_llm_pending[i];
+
+		if (!pending->active ||
+		    !workflow_lifecycle_key_equal(pending->lifecycle, lifecycle))
+			continue;
+		if ((pending->requester_pid == p->pid &&
+		     pending->requester_control_id == p->agent_control_id) ||
+		    (pending->relay_pid == p->pid &&
+		     pending->relay_control_id == p->agent_control_id))
+			memset(pending, 0, sizeof(*pending));
+	}
+	for (int i = 0; i < AGENT_LLM_PENDING_MAX; i++) {
+		struct agent_llm_requester_state *state =
+			&agent_llm_requesters[i];
+
+		if (state->active && state->requester_pid == p->pid &&
+		    state->requester_control_id == p->agent_control_id &&
+		    workflow_lifecycle_key_equal(state->lifecycle, lifecycle))
+			memset(state, 0, sizeof(*state));
+	}
+	for (int i = 0; i < AGENT_LLM_TERMINAL_HISTORY_MAX; i++) {
+		struct agent_llm_terminal_record *terminal =
+			&agent_llm_terminal_history[i];
+
+		if (!terminal->active ||
+		    !workflow_lifecycle_key_equal(terminal->lifecycle, lifecycle))
+			continue;
+		if ((terminal->requester_pid == p->pid &&
+		     terminal->requester_control_id == p->agent_control_id) ||
+		    (terminal->relay_pid == p->pid &&
+		     terminal->relay_control_id == p->agent_control_id))
+			memset(terminal, 0, sizeof(*terminal));
+	}
+	intr_restore(enabled);
+}
+
+static int
+agent_llm_pending_request(
+	struct proc *requester, int relay_pid, uint64 corr_id,
+	uint64 now, uint64 cause_sequence, char *payload, int *delivered,
+	int *pending_limit)
+{
+	struct workflow_lifecycle_key lifecycle;
+	struct agent_llm_pending *pending;
+	struct agent_llm_requester_state *requester_state = 0;
+	struct proc *relay;
+	int requester_count = 0;
+	int requester_free = -1;
+	int free_slot = -1;
+	int ipc_delivered = 0;
+	int enabled;
+	int status;
+
+	if (delivered != 0)
+		*delivered = 0;
+	if (pending_limit != 0)
+		*pending_limit = 0;
+	if (requester == 0 || relay_pid <= 0 || corr_id == 0 ||
+	    payload == 0 || delivered == 0 || pending_limit == 0)
+		return AGENT_STATUS_BAD_PARAM;
+	lifecycle = vfs_proc_lifecycle(requester);
+	if (!workflow_lifecycle_key_valid(lifecycle))
+		return AGENT_STATUS_STALE;
+
+	enabled = intr_save();
+	if (!proc_teardown_live(requester) || !requester->is_agent ||
+	    requester->agent_control_id == 0 ||
+	    !workflow_lifecycle_key_equal(vfs_proc_lifecycle(requester),
+					  lifecycle)) {
+		status = AGENT_STATUS_STALE;
+		goto out;
+	}
+	agent_llm_pending_reap_locked(now);
+	relay = agent_llm_find_live_proc_locked(relay_pid);
+	if (relay == 0) {
+		status = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	for (int i = 0; i < AGENT_LLM_PENDING_MAX; i++) {
+		struct agent_llm_requester_state *candidate =
+			&agent_llm_requesters[i];
+
+		if (!candidate->active) {
+			if (requester_free < 0)
+				requester_free = i;
+			continue;
+		}
+		if (agent_llm_requester_state_equal(
+			    candidate, requester, lifecycle))
+			requester_state = candidate;
+	}
+	for (int i = 0; i < AGENT_LLM_PENDING_MAX; i++) {
+		pending = &agent_llm_pending[i];
+		if (!pending->active) {
+			if (free_slot < 0)
+				free_slot = i;
+			continue;
+		}
+		if (!agent_llm_pending_requester_equal(
+			    pending, requester, lifecycle))
+			continue;
+		requester_count++;
+		/* Correlation IDs are unique for one requester lifecycle. */
+		if (pending->corr_id == corr_id) {
+			status = AGENT_STATUS_DUPLICATE;
+			goto out;
+		}
+	}
+	if (requester_state != 0 && corr_id <= requester_state->last_corr_id) {
+		status = AGENT_STATUS_CONFLICT;
+		goto out;
+	}
+	if (requester_state == 0 && requester_free < 0) {
+		*pending_limit = 1;
+		status = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	if (free_slot < 0 ||
+	    requester_count >= AGENT_LLM_PENDING_PER_REQUESTER) {
+		*pending_limit = 1;
+		status = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	status = agent_ipc_deliver_pid(
+		relay_pid, requester, AGENT_EVENT_MESSAGE, corr_id,
+		cause_sequence, payload, 0, &ipc_delivered);
+	if (status != AGENT_STATUS_OK)
+		goto out;
+	if (ipc_delivered != 1) {
+		status = AGENT_STATUS_INDETERMINATE;
+		goto out;
+	}
+	pending = &agent_llm_pending[free_slot];
+	memset(pending, 0, sizeof(*pending));
+	pending->lifecycle = lifecycle;
+	pending->requester_control_id = requester->agent_control_id;
+	pending->relay_control_id = relay->agent_control_id;
+	pending->corr_id = corr_id;
+	pending->deadline_tick = agent_llm_pending_deadline(now);
+	pending->requester_pid = requester->pid;
+	pending->relay_pid = relay->pid;
+	pending->active = 1;
+	if (requester_state == 0) {
+		requester_state = &agent_llm_requesters[requester_free];
+		memset(requester_state, 0, sizeof(*requester_state));
+		requester_state->lifecycle = lifecycle;
+		requester_state->requester_control_id =
+			requester->agent_control_id;
+		requester_state->requester_pid = requester->pid;
+		requester_state->active = 1;
+	}
+	requester_state->last_corr_id = corr_id;
+	*delivered = 1;
+out:
+	intr_restore(enabled);
+	return status;
+}
+
+static int
+agent_llm_pending_response(
+	struct proc *relay, int requester_pid, uint64 corr_id,
+	uint64 now, uint64 cause_sequence, char *payload, int *delivered)
+{
+	struct workflow_lifecycle_key lifecycle;
+	struct agent_llm_pending *pending = 0;
+	struct proc *requester;
+	int ipc_delivered = 0;
+	int enabled;
+	int status;
+
+	if (delivered != 0)
+		*delivered = 0;
+	if (relay == 0 || requester_pid <= 0 || corr_id == 0 ||
+	    payload == 0 || delivered == 0)
+		return AGENT_STATUS_BAD_PARAM;
+	lifecycle = vfs_proc_lifecycle(relay);
+	if (!workflow_lifecycle_key_valid(lifecycle))
+		return AGENT_STATUS_STALE;
+
+	enabled = intr_save();
+	if (!proc_teardown_live(relay) || !relay->is_agent ||
+	    relay->agent_control_id == 0 ||
+	    !workflow_lifecycle_key_equal(vfs_proc_lifecycle(relay), lifecycle)) {
+		status = AGENT_STATUS_STALE;
+		goto out;
+	}
+	agent_llm_pending_reap_locked(now);
+	requester = agent_llm_find_live_proc_locked(requester_pid);
+	if (requester == 0 ||
+	    !workflow_lifecycle_key_equal(vfs_proc_lifecycle(requester),
+					  lifecycle)) {
+		status = AGENT_STATUS_DENIED;
+		goto out;
+	}
+	for (int i = 0; i < AGENT_LLM_PENDING_MAX; i++) {
+		struct agent_llm_pending *candidate = &agent_llm_pending[i];
+
+		if (!candidate->active ||
+		    candidate->requester_pid != requester_pid ||
+		    candidate->corr_id != corr_id ||
+		    !workflow_lifecycle_key_equal(candidate->lifecycle, lifecycle))
+			continue;
+		if (pending != 0)
+			panic("duplicate LLM pending correlation");
+		pending = candidate;
+	}
+	if (pending == 0) {
+		status = agent_llm_terminal_status_locked(
+			requester, relay, lifecycle, corr_id);
+		goto out;
+	}
+	if (pending->relay_pid != relay->pid ||
+	    pending->relay_control_id != relay->agent_control_id ||
+	    !workflow_lifecycle_key_equal(pending->lifecycle, lifecycle)) {
+		status = AGENT_STATUS_DENIED;
+		goto out;
+	}
+	if (requester->agent_control_id != pending->requester_control_id ||
+	    !workflow_lifecycle_key_equal(vfs_proc_lifecycle(requester),
+					  pending->lifecycle)) {
+		memset(pending, 0, sizeof(*pending));
+		status = AGENT_STATUS_DENIED;
+		goto out;
+	}
+	status = agent_ipc_deliver_pid(
+		requester_pid, relay, AGENT_EVENT_LLM_DONE, corr_id,
+		cause_sequence, payload, 0, &ipc_delivered);
+	if (status != AGENT_STATUS_OK)
+		goto out;
+	if (ipc_delivered != 1) {
+		status = AGENT_STATUS_INDETERMINATE;
+		goto out;
+	}
+	/* Successful delivery consumes the one response capability atomically. */
+	agent_llm_terminal_remember_locked(pending, AGENT_STATUS_OK);
+	memset(pending, 0, sizeof(*pending));
+	*delivered = 1;
+out:
+	intr_restore(enabled);
+	return status;
+}
+
 struct agent_proc_snapshot {
 	int used;
 	int agents;
@@ -32,6 +435,11 @@ struct agent_proc_snapshot {
 
 void agent_core_init(void)
 {
+	memset(agent_llm_pending, 0, sizeof(agent_llm_pending));
+	memset(agent_llm_requesters, 0, sizeof(agent_llm_requesters));
+	memset(agent_llm_terminal_history, 0,
+	       sizeof(agent_llm_terminal_history));
+	agent_llm_terminal_next = 0;
 	agent_tool_protocol_init();
 	agent_execution_contract_init();
 	agent_identity_init();
@@ -162,6 +570,7 @@ void agent_core_proc_teardown(struct proc *p)
 	if (p == 0 || p->teardown_state < PROC_TEARDOWN_QUIESCING ||
 	    p->teardown_state > PROC_TEARDOWN_SETTLING)
 		panic("Agent teardown phase");
+	agent_llm_pending_proc_clear(p);
 	if (p->is_agent || p->agent_control_id != 0)
 		agent_scope_controller_departing(p);
 	if (p->teardown_state == PROC_TEARDOWN_QUIESCING)
@@ -197,6 +606,7 @@ int agent_core_exec_public_commit(struct proc *p)
 		    p->agent_control_id) ||
 	    !agent_lifecycle_context_lane_quiescent(p))
 		return -1;
+	agent_llm_pending_proc_clear(p);
 	agent_scope_controller_departing(p);
 	if (!proc_teardown_live(p))
 		panic("non-root Agent exec closed its lifecycle");
@@ -702,6 +1112,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 	int delivered;
 	int delivery_status;
 	int metadata_locked;
+	int pending_limit;
 
 	if (op->version != AGENT_CALL_VERSION) {
 		res->status = AGENT_STATUS_BAD_REQUEST;
@@ -788,7 +1199,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		}
 		delivery_status = agent_ipc_deliver_pid(
 			(int)op->arg0, p, AGENT_EVENT_MESSAGE, op->request_id,
-			p->agent_call_count + 1, op->payload, 1, &delivered);
+			p->agent_call_count, op->payload, 1, &delivered);
 		if (delivery_status != AGENT_STATUS_OK) {
 			res->status = delivery_status;
 			if (delivery_status == AGENT_STATUS_DENIED)
@@ -833,27 +1244,32 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		if (op->arg0 > 0x7fffffffULL || agent_text_empty(op->payload)) {
+		if (op->arg0 == 0 || op->arg0 > 0x7fffffffULL ||
+		    op->request_id == 0 || agent_text_empty(op->payload)) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "prompt_required");
 			break;
 		}
-		delivered = 0;
-		if (op->arg0 != 0) {
-			delivery_status = agent_ipc_deliver_pid(
-				(int)op->arg0, p, AGENT_EVENT_MESSAGE,
-				op->request_id, p->agent_call_count + 1,
-				op->payload, 0, &delivered);
-			if (delivery_status != AGENT_STATUS_OK) {
-				res->status = delivery_status;
-				agent_result_text(res,
-					delivery_status == AGENT_STATUS_DENIED ?
-						"route_denied" :
-						delivery_status == AGENT_STATUS_NO_SPACE ?
-							"event_queue_full" :
-							"target_missing");
-				break;
-			}
+		delivery_status = agent_llm_pending_request(
+			p, (int)op->arg0, op->request_id,
+			agent_ticks(), p->agent_call_count, op->payload,
+			&delivered, &pending_limit);
+		if (delivery_status != AGENT_STATUS_OK) {
+			res->status = delivery_status;
+			agent_result_text(res,
+				delivery_status == AGENT_STATUS_DUPLICATE ?
+					"request_pending" :
+				delivery_status == AGENT_STATUS_CONFLICT ?
+					"corr_not_monotonic" :
+				delivery_status == AGENT_STATUS_DENIED ?
+					"route_denied" :
+				delivery_status == AGENT_STATUS_NO_SPACE ?
+					(pending_limit ? "llm_pending_limit" :
+							 "event_queue_full") :
+				delivery_status == AGENT_STATUS_INDETERMINATE ?
+					"delivery_indeterminate" :
+					"target_missing");
+			break;
 		}
 		res->value0 = op->request_id;
 		res->value1 = op->arg0;
@@ -867,21 +1283,29 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			break;
 		}
 		if (op->arg0 == 0 || op->arg0 > 0x7fffffffULL ||
+		    op->request_id == 0 ||
 		    agent_text_empty(op->payload)) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "response_required");
 			break;
 		}
-		delivery_status = agent_ipc_deliver_pid(
-			(int)op->arg0, p, AGENT_EVENT_LLM_DONE, op->request_id,
-			p->agent_call_count + 1, op->payload, 0, &delivered);
+		delivery_status = agent_llm_pending_response(
+			p, (int)op->arg0, op->request_id,
+			agent_ticks(), p->agent_call_count, op->payload,
+			&delivered);
 		if (delivery_status != AGENT_STATUS_OK) {
 			res->status = delivery_status;
 			agent_result_text(res,
 				delivery_status == AGENT_STATUS_DENIED ?
-					"route_denied" :
+					"response_unmatched" :
+				delivery_status == AGENT_STATUS_TIMEOUT ?
+					"response_expired" :
+				delivery_status == AGENT_STATUS_STALE ?
+					"response_consumed" :
 					delivery_status == AGENT_STATUS_NO_SPACE ?
-						"event_queue_full" : "target_missing");
+						"event_queue_full" :
+				delivery_status == AGENT_STATUS_INDETERMINATE ?
+					"delivery_indeterminate" : "target_missing");
 			break;
 		}
 		res->value0 = op->request_id;
@@ -2519,7 +2943,11 @@ sys_tool_call(uint64 reqaddr, uint64 respaddr)
 void agent_core_tick(void)
 {
 	uint64 now = agent_ticks();
+	int enabled;
 
+	enabled = intr_save();
+	agent_llm_pending_reap_locked(now);
+	intr_restore(enabled);
 	fs_deferred_reclaim_tick(now);
 	vfs_scope_reap_tick(now);
 	for (struct proc *p = pool; p < &pool[NPROC]; p++) {

@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -449,6 +449,7 @@ override PRODUCT_STATIC_TESTS := \
 	scripts/test-check-teardown-protocol.py \
 	scripts/test-check-agent-uapi-layout.py \
 	scripts/test-agent-execution-contract.py \
+	scripts/test-agent-live-loop.py \
 	scripts/test-agent-task-channel.py \
 	scripts/test-agent-direct-denial-evidence.py \
 	scripts/test-context-evidence-atomicity.py \
@@ -522,6 +523,7 @@ override HOST_PRODUCT_TESTS := \
 	host_tools/test_check_host_surface_alignment.py \
 	host_tools/test_check_host_test_alignment.py \
 	host_tools/test_agent_task_transport.py \
+	host_tools/test_guest_llm_relay.py \
 	host_tools/test_mcp_a2a_gateway.py \
 	host_tools/test_evaluation_contract.py \
 	host_tools/test_plain_ucore_action_runner.py \
@@ -569,6 +571,28 @@ BOOTLOADER	:= default
 
 QEMU ?= qemu-system-riscv64
 QEMU_CMD = $(call shell_quote,$(QEMU))
+AGENT_LIVE_PROVIDER ?= replay
+AGENT_LIVE_REPLAY_FILE ?= ci/agent-live-replay.jsonl
+AGENT_LIVE_GOAL ?= Inspect AgentOS, exercise the available tools, and summarize the observed result.
+AGENT_LIVE_MODEL ?=
+AGENT_LIVE_ENDPOINT ?=
+AGENT_LIVE_API_KEY_ENV ?=
+AGENT_LIVE_APPROVED_TOOLS ?= $(if $(filter replay,$(AGENT_LIVE_PROVIDER)),send_message,)
+AGENT_LIVE_REPLAY_DEP = $(if $(filter replay,$(AGENT_LIVE_PROVIDER)),$(AGENT_LIVE_REPLAY_FILE))
+AGENT_LIVE_REPLAY_ARGS = $(if $(filter replay,$(AGENT_LIVE_PROVIDER)),--replay-file $(call shell_quote,$(AGENT_LIVE_REPLAY_FILE)))
+AGENT_LIVE_MODEL_ARGS = $(if $(strip $(AGENT_LIVE_MODEL)),--model $(call shell_quote,$(AGENT_LIVE_MODEL)))
+AGENT_LIVE_ENDPOINT_ARGS = $(if $(strip $(AGENT_LIVE_ENDPOINT)),--endpoint $(call shell_quote,$(AGENT_LIVE_ENDPOINT)))
+AGENT_LIVE_KEY_ARGS = $(if $(strip $(AGENT_LIVE_API_KEY_ENV)),--api-key-env $(call shell_quote,$(AGENT_LIVE_API_KEY_ENV)))
+AGENT_LIVE_APPROVAL_ARGS = $(foreach tool,$(AGENT_LIVE_APPROVED_TOOLS),--approve-tool $(call shell_quote,$(tool)))
+AGENT_LIVE_VERIFY_ARGS = \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: discovery=1 rich_overlay=3) \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: passed) \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: parent passed)
+AGENT_LIVE_REPLAY_VERIFY_ARGS = $(if $(filter replay,$(AGENT_LIVE_PROVIDER)),\
+	--require-guest-marker $(call shell_quote,agentlive_ucore: query_file=1 echo=1 send_message=1 approved=1) \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: reject_unknown=1 reject_bad_args=1 reject_replay=0) \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: transcript_turns=5 retained=5 dropped=0) \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: relay_rounds_done=1 unknown=1 bad_args=1 replay=0 send_sink=1))
 QEMUOPTS = \
 	-nographic \
 	-machine virt \
@@ -668,6 +692,46 @@ agentos-test:
 		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) \
 		BASH_BIN=$(call shell_quote,$(BASH_BIN)) \
 		$(call shell_quote,$(BASH_BIN)) scripts/run-agent-tests.sh
+
+# The Guest owns the conversation, tool selection, Context, and kernel calls.
+# The Host relay only carries framed bytes and provider HTTPS; replay uses the
+# identical serial path without a network connection or API key.
+agent-live-demo: host_tools/guest_llm_relay.py user/src/agentlive_ucore.c $(AGENT_LIVE_REPLAY_DEP)
+	@case $(call shell_quote,$(AGENT_LIVE_PROVIDER)) in \
+		replay) ;; \
+		openai|anthropic) \
+			test -n $(call shell_quote,$(AGENT_LIVE_MODEL)) || \
+				{ echo "AGENT_LIVE_MODEL is required for a live provider" >&2; exit 2; } ;; \
+		*) echo "invalid AGENT_LIVE_PROVIDER" >&2; exit 2 ;; \
+	esac
+	@rm -f $(F)/fs.img $(F)/fs-copy.img
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(U) -f Makefile clean
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(U) -f Makefile \
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+		CHAPTER=agent CH_TESTS=agentlive_ucore
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(F) -f Makefile
+	@set -e; tmp="$(F)/fs-copy.img.$$$$.tmp"; \
+		trap 'rm -f "$$tmp"' 0 1 2 3 15; \
+		$(CP) "$(F)/fs.img" "$$tmp"; \
+		mv -f "$$tmp" "$(F)/fs-copy.img"; \
+		trap - 0 1 2 3 15
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory build \
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+		LOG=warn INIT_PROC=agentlive_ucore CHAPTER=agent
+	@$(PYTHON_CMD) -I -S -B host_tools/guest_llm_relay.py \
+		--provider $(call shell_quote,$(AGENT_LIVE_PROVIDER)) \
+		--qemu $(call shell_quote,$(QEMU)) \
+		--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
+		--image $(call shell_quote,$(F)/fs-copy.img) \
+		--goal $(call shell_quote,$(AGENT_LIVE_GOAL)) \
+		$(AGENT_LIVE_REPLAY_ARGS) $(AGENT_LIVE_MODEL_ARGS) \
+		$(AGENT_LIVE_ENDPOINT_ARGS) $(AGENT_LIVE_KEY_ARGS) \
+		$(AGENT_LIVE_APPROVAL_ARGS) $(AGENT_LIVE_VERIFY_ARGS) \
+		$(AGENT_LIVE_REPLAY_VERIFY_ARGS)
+
+agent-live-demo-check: host_tools/test_guest_llm_relay.py scripts/test-agent-live-loop.py
+	@$(PYTHON_CMD) -B host_tools/test_guest_llm_relay.py
+	@$(PYTHON_CMD) -B scripts/test-agent-live-loop.py
 
 # 四次隔离 Guest 启动，以 AB/BA 顺序比较同一综合工作流的遍历与索引路径；
 # 不读取云端 API 或历史结果。

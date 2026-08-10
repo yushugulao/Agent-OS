@@ -11,18 +11,25 @@ AgentOS-uCore 为用户态 Agent workflow 提供八类内核原语：
 3. 有界事件、可信 IPC 和 Agent 感知调度；
 4. 显式文件属性、选择性内存索引与实时查询通知；
 5. 按 workflow 批量资源记账与 challenge-bound fence evidence；
-6. 冻结的 24-node execution contract 与工具阶段资源 lease；
-7. workflow 级 EEVDF 和 Context provenance 数据流强制；
-8. single-issuer 异步 Task SQ/CQ 与 typed resource handle。
+6. ENFORCE V3 可选的 24-node immutable execution contract 与工具阶段资源 lease；
+7. workflow 级 EEVDF、Context provenance 标签与 ENFORCE effect gate；
+8. single-issuer Task SQ/CQ core 与 typed resource handle；当前 provider 同步且只接受 null/NONE。
 
-内核不运行 LLM，不理解科研项目业务或自然语言计划，不判断 prompt injection，不提供全文搜索，也不把用户态成功声明当成内核事实。语义规划、JSON/HTTP/OAuth/JWS、MCP/A2A 远程协议、网页、实验编排和报告都在用户态或 Host 完成。
+内核不运行 LLM，不理解科研项目业务或自然语言计划，不判断 prompt injection，不提供全文搜索，也不把用户态成功声明当成内核事实。模型驱动决策和 tool-result 回灌属于 Guest 用户态；HTTPS/TLS/API key 与 provider JSON 翻译属于 Host relay；MCP/A2A 只存在独立的标准对象映射 prototype。这三条路径不能混称为一个“内核 Agent”或“协议 server”。
 
 ## 2. 总体结构
 
 ```mermaid
 flowchart TB
-  U["用户态 Agent / 科研工作流"]
-  G["MCP-A2A gateway model\ntransport-neutral / in-memory\n尚未连接内核 SQ/CQ"]
+  U["Guest deterministic policy workflows\nincluding labdemo"]
+  AL["Guest main agentlive Agent\ntool execution + tool_result"]
+  GR["Guest relay Agent\nhistory + catalog + decision validation"]
+  LR["Kernel LLM pending/correlation substrate\nrequester / relay / corr_id"]
+  SW["Bounded serial wire\nsession / seq / hash"]
+  HR["Host HTTPS relay\nTLS + API key + provider translation"]
+  MP["MCP/A2A object-mapping prototype\ndeterministic in-memory transport"]
+  IM["Prototype-only Task state machine\nno kernel adapter"]
+  MODEL["Optional remote model API"]
   ABI["Agent UAPI: contract, tool V3, Task SQ/CQ"]
   EC["Immutable Execution Contract\n24-node DAG"]
   PV["Context Provenance\ncapability + dataflow"]
@@ -37,7 +44,14 @@ flowchart TB
   LQ["Live-Query FS\n显式 volatile metadata"]
   IPC["事件队列 / IPC / wait"]
   VFS["uCore VFS / inode incarnation"]
+  MODEL <--> HR
+  HR <--> SW
+  SW <--> GR
+  GR <--> LR
+  LR <--> AL
+  AL --> ABI
   U --> ABI
+  MP --> IM
   ABI --> TC
   ABI --> EC
   TC --> EC
@@ -58,6 +72,16 @@ flowchart TB
 ```
 
 所有跨模块引用都带不可变 lifecycle `id + generation`。slot 可复用，generation 不可复用，因此旧事件、watch、资源账户和 inode sidecar 不能命中新 workflow。
+
+Agent Context 的固定用户映射共 7 页。前 6 页由内核发布身份、Context 记录与可信 mirror，Guest PTE 只读；第 7 页是 Guest 可直接读写的 user cache。cache 用于高频策略数据，却不作为 capability、scope、cause 或任何授权事实，因而题面“直接读写 Context 区”不会变成伪造可信历史的入口。
+
+### 2.1 三条接口边界
+
+| 层次 | 谁做决策与执行 | 当前边界 |
+| --- | --- | --- |
+| 内核 RPC/工具 ABI | Guest 提交结构化请求，内核校验并执行本地机制 | V1/V2/V3、compact batch、Context、event/IPC；内核不调用模型 |
+| model-led tool loop | `agentlive` 的 Guest relay Agent 保存 system prompt/history/tool catalog/round 并校验模型建议，Guest main Agent 执行获准工具并回灌实际 result | Host 只转发模型协议；`labdemo_ucore` 不走该路径，而是 deterministic policy workflow |
+| MCP/A2A prototype | Host 用户态对象映射和 in-memory state machine | 无 HTTP server、streaming、跨实现互操作验证或内核 SQ/CQ adapter |
 
 ## 3. Workflow lifecycle
 
@@ -87,7 +111,7 @@ flowchart TB
 
 ### 3.3 不可变 execution contract
 
-用户态 orchestrator 可为当前 lifecycle generation 冻结一份版本 1 execution contract。合同最多 24 个节点，`node_id` 等于拓扑数组下标，predecessor bit 只能指向更小下标；节点还冻结 tool/schema digest、capability、provenance/side-effect manifest、exec/storage envelope、deadline、artifact 类型和 retry/cancel policy。
+用户态 orchestrator 可为当前 lifecycle generation 冻结一份版本 1 execution contract。合同最多 24 个节点，`node_id` 等于拓扑数组下标，predecessor bit 只能指向更小下标；节点还冻结 tool/schema digest、capability、provenance/side-effect manifest、exec/storage envelope、deadline、artifact 类型和 retry/cancel policy。只有 ENFORCE 下的 V3 调用获得这套 immutable DAG 保证；V1/V2 在未启用 ENFORCE 时是逐次校验的 legacy/exploratory RPC，不得写成已受 frozen edge 保护。
 
 调用 V3 保留 V2 前缀并引用 contract generation、node/attempt、source node 和精确 predecessor Context sequence。内核只验证这些确定结构，不解释用户目标。enforcement contract 激活后，合同外的工具调用和受保护 direct syscall 在副作用前被拒绝；完成缓存为每个 accepted `node_id + attempt_id` 保留稳定槽，每份合同合计最多 48 槽，使同一 attempt 的合法重试返回原终态而不重复效果。合同只在对应 lifecycle retire/reclaim 时销毁，旧 generation 不可复用。
 
@@ -220,7 +244,7 @@ workflow fence 在 metadata transaction 内排空该 scope 的 unlink/content pe
 
 catalog、索引、watch 和 generation 都只保存在本次启动周期的内存中，不写入磁盘；重启后 catalog 从空状态开始。文件内容本身仍由普通 uCore 文件系统管理。
 
-该设计受 Haiku BFS 显式属性、选择性索引和 live query 概念启发；AgentOS 将变化事件送入 Agent Loop，并以 workflow generation 与 resync 契约限制可见性。未复制 BFS 源码或磁盘格式。
+该设计受 Haiku BFS 显式属性、选择性索引和 live query 概念启发；AgentOS 将变化事件送入用户态 Agent Loop substrate/事件队列，并以 workflow generation 与 resync 契约限制可见性。未复制 BFS 源码或磁盘格式。
 
 ## 7. Workflow fence
 
@@ -253,9 +277,25 @@ provenance 从 Context cause/span/branch/control 字段和兼容 audit 记录投
 
 Context record flags 以 hash-bound 投影携带六种固定标签：`KERNEL_FACT`、`TRUSTED_USER_CONTROL`、`AGENT_DERIVED`、`UNTRUSTED_FILE_DATA`、`UNTRUSTED_TOOL_OUTPUT` 和 `CROSS_AGENT_DATA`。file query/content、tool output、IPC queue/mailbox 和 Task resource 保守 OR 传播这些标签；rollback/clear 恢复所选 Context 节点的状态。
 
-tool manifest 声明 accepted labels、output-added labels、required capability 与完整 file/metadata/IPC/process/permission/artifact/watch side-effect mask。具有外部效果的调用必须同时通过 lifecycle generation、execution contract edge、schema、capability、provenance 和 effect mask；不可信数据不能添加冻结合同中不存在的高权限节点。非法调用在副作用前返回 `DENIED`，并把来源 Context、目标 tool、reason、lifecycle key 写入 critical Evidence Ring。内核不对文本运行 prompt-injection 分类或 LLM 审核。
+tool manifest 声明 accepted labels、output-added labels、required capability 与完整 file/metadata/IPC/process/permission/artifact/watch side-effect mask。启用 ENFORCE 的 V3 外部效果必须同时通过 lifecycle generation、execution contract edge、schema、capability、provenance 和 effect mask；不可信数据不能添加冻结合同中不存在的高权限节点。非法调用在副作用前返回 `DENIED`，并把来源 Context、目标 tool、reason、lifecycle key 写入 critical Evidence Ring。V1/V2 legacy admission 仍检查 capability/scope/tool schema，但没有 frozen-edge/provenance envelope。内核不对文本运行 prompt-injection 分类或 LLM 审核。
 
-### 8.2 异步 Task Channel
+`send_message`、`llm_request`、`llm_response` 是唯一使用 Agent-Loop accepted mask 的工具：control 标签集合再加 file、untrusted-tool-output 与 cross-Agent 标签。该 mask 只允许带来源的观测继续通过消息 loop；IPC/LLM 输出仍保守传播原污点，capability/route/schema/effect 检查不变，其他副作用工具也不因此放宽。MESSAGE/LLM event 的 cause sequence 使用该次调用已递增的当前 call count。
+
+### 8.2 Guest-owned model tool loop
+
+`agentlive` 把模型工具循环放在两个同 workflow 的 Guest Agent 中。relay Agent 从内核 V2 tool list 取得带用途、参数、限制、结果和 side-effect 的描述，构造 system prompt，并在 Guest 内保存有界多轮 history、轮次与 correlation id。history 只按完整的 `tool_use`/`tool_result` 对写入 4 KiB request frame；空间不足时整轮丢弃最旧前缀，不截断单条结果。main Agent 不接触串口，只执行获准的业务工具。模型每轮只能返回一个 canonical `tool_use` 或 `final`；Guest 侧对工具名和 typed 参数重新做 allowlist/shape 校验，main Agent 调用 V2 RPC，在 Context 中取得结果，再由 relay Agent 把真实 `tool_result` 放回后续 messages。模型只提议，Guest 与内核才决定请求是否有效并实际执行。
+
+Host `guest_llm_relay.py` 独占 QEMU 串口和 provider HTTPS。API key、TLS、endpoint policy 与 OpenAI-compatible/Anthropic Messages 翻译只在 Host；它不读取 Guest 业务文件、不保存语义 history、不选择或执行工具，也不制造 `tool_result`。Host 只暂存 provider opaque call id 与 Guest correlation id 的协议映射，并把实际 provider 响应规整为一个 `tool_use` 或 `final`；多 tool、超界内容和未知结构 fail closed。
+
+串口使用有界 `@AGENTOS/1` frame，绑定 session、方向内单调 sequence、decoded length、SHA-256 与 base64url JSON。live API 是可选模式；offline replay 仍经过相同 QEMU 串口、frame/session/sequence/hash、round 与 payload 上限，而不是向 Guest 内存直接注入状态。replay 证明 wire/loop 可复现，不等于真实云模型结果。
+
+内核 `LLM_REQUEST/LLM_RESPONSE` 另以完整 lifecycle、requester PID/control、relay PID/control、correlation 和 deadline 组成 pending tuple。correlation 必须非零，并对同 requester 完整身份严格递增；只有 MESSAGE 实际投递且 pending 发布成功后才推进，失败投递不消耗编号。pending 使用 120 秒 kernel-tick TTL，并在 request、response 和 tick 路径回收。容量为 `NPROC` 的有界 terminal history 在记录仍保留时使已消费响应重放返回 `STALE`、过期响应返回 `TIMEOUT`；记录被覆盖后，旧响应按 unmatched 返回 `DENIED`。全局 registry 和每 requester pending 都有界，`llm_pending_limit` 与底层 `event_queue_full` 明确区分。公开 exec/teardown 清理 pending、last correlation 和 terminal history。该机制不是 HTTPS 或 MCP 实现。
+
+当前 adaptive loop 选择 V2，是因为模型可能根据每轮结果改变下一个工具。V3 ENFORCE 适合预冻结 node/tool/predecessor 的高保证路径；现有 provenance 规则也不会把跨 relay 的任意 adaptive 序列自动升级为合同内调用。因此文档不把 V3 称为 live loop backend，也不把 V2 的灵活性称作相同安全等级。
+
+这一分工与 [Anthropic client tool-use loop](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works)及 [Claude Code agentic loop](https://code.claude.com/docs/en/how-claude-code-works)的“模型请求、执行环境运行工具、结果回灌”形状一致，但本项目没有嵌入 Claude Code 或 Anthropic SDK。
+
+### 8.3 Task Channel core
 
 每个 Agent 进程可按需建立一个 single-issuer channel。两个用户映射页分别为 16 槽 SQ（read/write）和 16 槽 CQ（read-only），另有 request/resource 两个内核私有页，总计 4 个被资源域计费的 state/physical page。SQE/CQE 固定 128 字节；内核先一次性复制完整 SQE，再验证 ring/slot generation、单调 request id、contract/node/attempt、tool/schema、deadline、link/cancel 和输入 handle，避免共享页 TOCTOU。
 
@@ -263,9 +303,13 @@ tool manifest 声明 accepted labels、output-added labels、required capability
 
 resource handle 固定为 `{slot,type,flags,generation}`，区分 owned/borrowed；8 槽私有表绑定 content digest、producer Context/node、provenance 与 owner request。设计参考 WIT resource ownership 和 WASI 0.3 future/stream 的类型化异步接口，但不嵌入 Wasm runtime 或 Canonical ABI。
 
-Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有内建同步 provider，且没有动态 provider registration UAPI。该 provider 只接受 null input 与 output artifact `NONE`，`RESOURCE_IMPORT` 固定 fail closed 为 `DENIED`；因此现有 8 槽表和 typed handle ABI 尚没有 payload import 或 result resource backend。
+Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有内建同步 provider，且没有动态 provider registration UAPI。该 provider 只接受 null input 与 output artifact `NONE`，`RESOURCE_IMPORT` 固定 fail closed 为 `DENIED`；因此现有 8 槽表和 typed handle ABI 尚没有 payload import 或 result resource backend，也不承载 `agentlive` 的模型消息或业务工具结果。
 
-当前仓库交付的 `mcp_a2a_gateway.py` 是 transport-neutral 的纯用户态映射，并以 `agent_task_transport.py` 的 deterministic in-memory adapter 验证 MCP `2026-07-28` tools/Tasks 与 A2A v1 Task、Context、Message Part、Artifact、stream/cancel 语义。它尚未通过 binary adapter 连接真实内核 SQ/CQ。JSON、HTTP、OAuth、JWS、签名与远程存储仍由用户态外层负责；内核只处理固定二进制 ABI。
+### 8.4 MCP/A2A object-mapping prototype
+
+`mcp_a2a_gateway.py` 是 [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) 与 A2A v1 标准对象形状的纯用户态映射 prototype。它以 `agent_task_transport.py` 的 deterministic `InMemoryTaskChannelTransport` 演练本仓库采用的工具发现/调用、实验性 Task 状态，以及 A2A message send/get/cancel 对象形状和 generation binding。
+
+该 prototype 没有 HTTP binding、OAuth/JWS、Agent Card/discovery、streaming transport、真实内核 SQ/CQ binary adapter 或跨实现互操作测试。它不是 MCP/A2A server，也不是 live-model HTTPS relay；代码中出现 Task、Artifact 或 notification 对象不等于完整网络 lifecycle/stream 已交付。
 
 ## 9. 安全和性能取舍
 
@@ -281,8 +325,10 @@ Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有
 | workflow EEVDF | 防线程放大并导出公平/延迟指标 | 总 cap4 为 bootstrap+最多 3 fresh；异常回退旧调度器；Guest 直方图只含 fresh-agent 样本 |
 | 六标签 provenance | 不运行语义分类也能限制计划外副作用 | 标签保守传播，不能证明内容本身可信 |
 | 16-slot Task SQ/CQ | Guest 用三条不同线格式各执行 16 次空 `ECHO`，验证相同语义 fingerprint、调用点 syscall/ABI 复制记账与 Context service-start tick 间隔 | scalar V3 需三个 typed params；4 页按需成本；当前同步 null provider；不提供 raw cycles、running cancel、payload backend 或分布式 exactly-once |
+| Guest-owned model loop | 模型可根据实际 tool result 逐轮选择 V2 typed RPC；Host 不持有业务执行权 | 只支持单个 tool request；live 依赖外部 API，replay 不是模型实测；V2 不获得 V3 frozen-DAG 包络 |
+| MCP/A2A object prototype | 检查本仓库采用的标准对象形状与 Task 状态映射 | 仅 in-memory transport；无 server、streaming、内核 adapter 或互操作声明 |
 
-当前 Task 消融的调用点 `syscalls` 为 batch/scalar V3/SQ-CQ 的 1/16/2。描述符 ABI 与已知复制记账分别为 `3584 = 16 * (104 + 120)`、`12288 = 16 * (200 + 280 + 3 * 96)`、`4096 = 16 * (128 + 128)` 字节；scalar 的三个 96 字节项是 `payload`/`arg0`/`arg1` typed params，另报 128 字节 dispatch header；SQ/CQ 另报 336/544 字节 control ABI/copy。这里没有内核路径 counter 或总内存流量测量。p50/p99 来自工具效果前写入 Context record 的 service-start tick 间隔，sequence elapsed 是两个 `agent_info` 边界 tick；公共 CQE `completion_tick` 保持执行后完成语义。cancel 数字只测量 retained-terminal 幂等 cancel，CQ-full/sticky-resync 只作功能恢复验证；动态数字由 `agenttask_ucore` 的实际运行输出读取。
+当前 Task 消融的 Guest 入口调用次数为 batch/scalar V3/SQ-CQ 的 1/16/2：batch 用一次 `agent_run` 同步顺序执行 16 个 compact op，scalar 发起 16 次 syscall，SQ/CQ 发起两次 enter。描述符 ABI 与已知复制记账分别为 `3584 = 16 * (104 + 120)`、`12288 = 16 * (200 + 280 + 3 * 96)`、`4096 = 16 * (128 + 128)` 字节；scalar 的三个 96 字节项是 `payload`/`arg0`/`arg1` typed params，另报 128 字节 dispatch header；SQ/CQ 另报 336/544 字节 control ABI/copy。这里没有内核路径 syscall counter 或总内存流量测量。p50/p99 来自工具效果前写入 Context record 的 service-start tick 间隔，sequence elapsed 是两个 `agent_info` 边界 tick；公共 CQE `completion_tick` 保持执行后完成语义。cancel 数字只测量 retained-terminal 幂等 cancel，CQ-full/sticky-resync 只作功能恢复验证；动态数字由 `agenttask_ucore` 的实际运行输出读取。
 
 ## 10. 实现与验证入口
 
@@ -292,14 +338,17 @@ Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有
 | Execution Contract/Phase | `os/agent_execution_contract.c`、`os/agent_core.c`、`os/resource_controller.c` | `scripts/test-agent-execution-contract.py` |
 | Workflow EEVDF | `os/workflow_scheduler.c`、`os/proc.c` | `host_tools/test_workflow_scheduler_model.py` |
 | Context Provenance | `os/agent_provenance.c`、tool protocol、Context/IPC | execution-contract checker 与 Guest security scenario |
+| Kernel LLM correlation RPC | `os/agent_core.c`、`os/agent_ipc.c` | lifecycle/requester/relay/correlation negative paths |
+| Guest-owned model loop | `user/src/agentlive_ucore.c`、`ci/agent-live-replay.jsonl` | `scripts/test-agent-live-loop.py`；`make agent-live-demo` 走 QEMU 同串口 replay |
 | Task Channel | `os/agent_task_channel.c`、`agent_task_channel_abi.h` | `scripts/test-agent-task-channel.py` |
-| MCP/A2A gateway | `host_tools/mcp_a2a_gateway.py`、`host_tools/agent_task_transport.py` | transport-neutral/in-memory unit tests；尚无内核 binary adapter |
+| Host model relay | `host_tools/guest_llm_relay.py` | `host_tools/test_guest_llm_relay.py`；只覆盖 Host/wire/provider adapter |
+| MCP/A2A object prototype | `host_tools/mcp_a2a_gateway.py`、`host_tools/agent_task_transport.py` | deterministic in-memory object/state tests；无 server/stream/interop 或内核 adapter |
 | Evidence Ring | `os/agent_evidence_ring.c`、`os/agent_sha256.c` | `scripts/test-agent-evidence-ring.py` |
 | Workflow fence | `os/agent_workflow_fence.c`、`os/workflow_lifecycle.c` | `scripts/test-workflow-fence.py`、`scripts/test-workflow-syscall-cut.py` |
 | Live Query | `os/agent_live_query_events.c`、metadata catalog/query/object 模块 | `scripts/test-agent-live-query-fs.py` |
 | ABI/边界 | 公共头文件、Makefile 生产对象清单 | `make agent-uapi-check`、`make agent-module-check`、`make kernel-stack-check` |
 
-静态或模型测试不等于 QEMU 行为已被验证。动态结果和性能数字应来自对应 Guest 程序的实际运行；入口见 [验证说明](verification.md)。
+静态或模型测试不等于 QEMU 行为已被验证。`make agent-live-demo-check` 只覆盖 Guest/Host 集成合同；`make agent-live-demo` 默认运行 6 轮同串口 replay，并要求最终看到顶层 `agentlive_ucore: parent passed`。Linux/WSL 默认自动探测工具链，Windows xPack 可追加 `TOOLPREFIX=riscv-none-elf-`。动态结果和性能数字应来自对应 Guest 程序的实际运行；入口见 [验证说明](verification.md)。
 
 ## 11. 参考与原创边界
 
@@ -307,10 +356,11 @@ Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有
 - Linux BPF ring buffer：有序 MPSC、reserve/commit/discard 和通知思想。
 - Haiku BFS：显式属性、选择性索引和 live query 思想。
 - [Linux EEVDF](https://docs.kernel.org/scheduler/sched-eevdf.html)：lag eligibility、virtual deadline 和 sleep decay。
-- [io_uring](https://kernel.dk/io_uring.pdf)：用户提交/内核完成的 SQ/CQ 分工。
+- [io_uring(7)](https://man7.org/linux/man-pages/man7/io_uring.7.html)：用户提交/内核完成的 SQ/CQ 分工。
 - [WIT/WASI 0.3](https://component-model.bytecodealliance.org/design/wit.html)：resource ownership、future 与 stream 的接口词汇。
 - [AgentCgroup](https://arxiv.org/abs/2602.09345) 与 [Murakkab](https://arxiv.org/abs/2508.18298)：tool-call 资源峰值、声明式 workflow 与 SLO/执行配置分离。
 - [CaMeL](https://arxiv.org/abs/2503.18813) 与 [IPIGuard](https://arxiv.org/abs/2508.15310)：可信控制/不可信数据分离和预先规划 Tool Dependency Graph。
-- [MCP 2026-07-28](https://blog.modelcontextprotocol.io/posts/2026-07-28/)、[MCP Tasks](https://tasks.extensions.modelcontextprotocol.io/specification/draft/tasks) 与 [A2A v1](https://a2a-protocol.org/latest/whats-new-v1/)：用户态协议映射对象。
+- [Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works) 与 [Claude Code agentic loop](https://code.claude.com/docs/en/how-claude-code-works)：模型请求 client tool、执行环境回送结果的用户态循环分工。
+- [MCP 2026-07-28 specification](https://modelcontextprotocol.io/specification/2026-07-28)、[MCP Tasks](https://tasks.extensions.modelcontextprotocol.io/specification/draft/tasks) 与 [A2A v1](https://a2a-protocol.org/latest/specification/)：用户态对象形状映射参考。
 
-上述均为公开设计思想参考。AgentOS 的 workflow generation、24-node 合同、Phase Lease、workflow EEVDF、provenance enforcement、typed Task Channel、U/P/F 硬准入、challenge fence、critical ring、Agent Context 事件和 volatile metadata ABI 为本仓库的项目特定实现；没有 vendoring 上游源码、测试数据、二进制或磁盘格式。Task Channel 不实现完整 io_uring/Wasm ABI，gateway 也不是内核 MCP/A2A server，当前更没有连接 SQ/CQ 的 binary adapter。链接及许可见 [../../NOTICE](../../NOTICE)。
+上述均为公开设计思想参考。AgentOS 的 workflow generation、24-node 合同、Phase Lease、workflow EEVDF、provenance enforcement、typed Task Channel、U/P/F 硬准入、challenge fence、critical ring、Agent Context 事件和 volatile metadata ABI 为本仓库的项目特定实现；没有 vendoring 上游源码、测试数据、二进制或磁盘格式。Task Channel 不实现完整 io_uring/Wasm ABI，MCP/A2A prototype 也不是网络 server 或内核 adapter；Guest live loop 与 Host relay 是项目自己的有界集成，不表示获得上游认可或二进制兼容。链接及许可见 [../../NOTICE](../../NOTICE)。

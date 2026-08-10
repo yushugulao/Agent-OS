@@ -13,7 +13,7 @@
 - 通过批量 credit 超卖全局或账户硬额度；
 - fence 与仍在运行/释放的 workflow 操作交叉；
 - 把不完整 live-query 增量当作完整状态；
-- 从不可信文件、工具结果或跨 Agent 消息诱导计划外的发消息、改文件、起进程或提权；
+- 在 ENFORCE V3 合同路径中，从不可信文件、工具结果或跨 Agent 消息诱导计划外的发消息、改文件、起进程或提权；
 - 通过伪造 contract node、schema digest、predecessor Context、Task handle 或 ring generation 越权；
 - 通过多建线程放大 workflow CPU 份额；
 - 通过共享 SQ 页 TOCTOU、伪造 CQ ack、重复 cancel/complete 或 stale handle 产生双终态；
@@ -23,7 +23,7 @@
 
 ## 2. 身份与 capability
 
-Agent 身份只能由受控创建/exec 安装。可信映像注册给出 role/capability 上限，请求还受父身份、scope 和 VFS profile 衰减。`control_id` 由内核分配；用户不能写入 Context cause/span/control 字段制造授权关系。
+Agent 身份只能由受控创建/exec 安装。可信映像注册给出 role/capability 上限，请求还受父身份、scope 和 VFS profile 衰减。`control_id` 由内核分配；用户不能写入 Context cause/span/control 字段制造授权关系。固定 7 页 Agent Context 中，前 6 页可信 mirror 对用户只读，只有第 7 页 user cache 可读写；cache 内容从不参与 capability、scope、cause 或授权判断。
 
 所有长寿命引用至少绑定：
 
@@ -37,6 +37,7 @@ Agent 身份只能由受控创建/exec 安装。可信映像注册给出 role/ca
 | execution contract/node | lifecycle key + contract generation + node/attempt + schema/input digest |
 | Task Channel | process/main-thread identity generation + lifecycle + channel/ring/slot generation |
 | typed resource | channel generation + slot/type/owned-borrowed + resource generation + owner request |
+| LLM RPC pending | full lifecycle + requester/relay control id/PID + strictly increasing nonzero correlation id + deadline tick |
 | evidence | workflow key + ticket/fence sequence |
 
 旧 generation 无法通过数值复用获得新 generation 的权限。
@@ -53,17 +54,19 @@ fence begin 不能在持 gate 时睡眠；发现非 quiescent 立即撤销并返
 
 ### 3.1 冻结执行合同与 effect fence
 
-每个 lifecycle generation 最多冻结一份 24 节点 execution contract。节点按拓扑顺序声明 tool/schema、predecessor、artifact、deadline、retry/cancel、capability、provenance/effect 和 exec/storage envelope。V3 调用必须引用完整 contract generation、node/attempt、32 字节输入 digest、source node 和该 predecessor 已提交的精确 Context sequence。
+每个 lifecycle generation 最多冻结一份 24 节点 execution contract。节点按拓扑顺序声明 tool/schema、predecessor、artifact、deadline、retry/cancel、capability、provenance/effect 和 exec/storage envelope。只有启用 `AGENT_EXECUTION_CONTRACT_F_ENFORCE` 的 V3 调用必须引用完整 contract generation、node/attempt、32 字节输入 digest、source node 和该 predecessor 已提交的精确 Context sequence。V1/V2 继续走 legacy/exploratory admission，不受冻结 DAG、attempt、deadline 或 predecessor 约束。
 
-副作用前的 gate 顺序是 lifecycle、contract/dependency/deadline、capability/provenance/effect、Evidence reservation、Phase Lease、effect fence。取消只有在 effect fence 前能成为 `CANCELLED` winner；效果开始后 cancel too late，原调用仍负责唯一终态。每个 accepted node/attempt 都有一个 retry-stable completion 槽，每份合同合计最多 48 槽；相同 attempt 的合法重试只读原终态，不重新执行。enforcement contract 下，合同外工具或受保护 direct syscall 不会绕过同一边界。
+ENFORCE V3 的副作用前 gate 顺序是 lifecycle、contract/dependency/deadline、capability/provenance/effect、Evidence reservation、Phase Lease、effect fence。取消只有在 effect fence 前能成为 `CANCELLED` winner；效果开始后 cancel too late，原调用仍负责唯一终态。每个 accepted node/attempt 都有一个 retry-stable completion 槽，每份合同合计最多 48 槽；相同 attempt 的合法重试只读原终态，不重新执行。enforcement contract 下，合同外工具或受保护 direct syscall 不会绕过同一边界；这项保证不外推到 V1/V2。
 
 ### 3.2 Context Provenance
 
 六个固定标签为 `KERNEL_FACT`、`TRUSTED_USER_CONTROL`、`AGENT_DERIVED`、`UNTRUSTED_FILE_DATA`、`UNTRUSTED_TOOL_OUTPUT` 和 `CROSS_AGENT_DATA`。标签保守 OR 传播；file/query、tool output、IPC/mailbox，以及 Task core 中任何 live resource，都必须携带来源，不能通过一次 Agent 变换洗掉 untrusted 位。当前 Task bridge 不能 import/create resource，因此该规则不是 payload backend 的交付声明。
 
-tool manifest 声明 accepted/output labels、required capability 和完整 side-effect mask。任何外部效果必须同时通过完整 generation、冻结依赖边、capability 和数据流规则。不可信内容不能引入合同外高权限节点。拒绝在副作用前返回 `DENIED`，并把 source sequence、tool、reason、lifecycle 和 ticket 写入 critical Evidence Ring；关键 evidence 无法预留时调用 fail closed。
+只有 `send_message`、`llm_request`、`llm_response` 使用显式 Agent-Loop accepted mask：control 集合（`KERNEL_FACT | TRUSTED_USER_CONTROL | AGENT_DERIVED`）再加 file、untrusted-tool-output 和 cross-Agent 标签。这个例外允许转发带污点的观测，不会清洗来源：IPC/LLM Context 继续保守传播原标签，capability、同 lifecycle route、schema 与 side-effect gate 也不放宽；其他副作用工具仍使用各自更窄的 manifest。MESSAGE/LLM 事件的 cause sequence 取该次结构化调用已经递增后的当前 call count，不借用上一轮编号。
 
-这是一项结构安全机制，不是 prompt-injection 文本分类。内核不判断某段文本是否恶意，也不调用 LLM guard；安全论证是“模型可以被影响，但结构化请求不能越过冻结边界”。
+tool manifest 声明 accepted/output labels、required capability 和完整 side-effect mask。ENFORCE V3 中的外部效果必须同时通过完整 generation、冻结依赖边、capability 和数据流规则；不可信内容不能引入合同外高权限节点。拒绝在副作用前返回 `DENIED`，并把 source sequence、tool、reason、lifecycle 和 ticket 写入 critical Evidence Ring；关键 evidence 无法预留时调用 fail closed。V1/V2 仍检查 capability、scope、schema 和工具参数，但没有 frozen-edge/provenance envelope。
+
+这是一项结构安全机制，不是 prompt-injection 文本分类。内核不判断某段文本是否恶意，也不调用 LLM guard；可证明的陈述是“即使模型被影响，ENFORCE V3 请求仍不能越过已冻结边界”，而不是对所有 legacy/exploratory 调用作同样保证。
 
 ## 4. 资源硬额度
 
@@ -134,8 +137,8 @@ catalog 是当前启动周期的内存状态。每次启动由用户态重新登
 - 文件 metadata 不能反向改变 inode 创建时的安全域。
 - worker 委派绑定目标映像 incarnation 和 capability 上限；执行其他映像清除委派。
 - 普通 fork 不扩大 capability，跨 scope fd 撤销，每次 I/O 重新检查当前凭据。
-- MESSAGE/LLM 跨 Agent 投递必须命中同 lifecycle 定向 route。
-- `agent_wake()` 不能伪造 file-query、timer、policy-denied 或 LLM completion。
+- MESSAGE 跨 Agent 投递必须命中同 lifecycle 定向 route。`LLM_REQUEST/LLM_RESPONSE` 还绑定 requester/relay control id/PID、严格递增 correlation 与 deadline；只有请求实际投递并发布 pending 后才推进 last correlation，匹配的成功响应只消费一次。120 秒 tick TTL 回收 pending；容量为 `NPROC` 的有界 terminal history 只在记录保留期区分过期与已消费响应，覆盖后旧响应按 unmatched 返回 `DENIED`。teardown/公开 exec 清理全部关联状态。
+- `agent_wake()` 不能伪造 file-query、timer、policy-denied 或 LLM completion。该 pending registry 只提供内核相关性 RPC，不提供模型 API、HTTPS、MCP 或远程 exactly-once。
 
 ### 7.1 Workflow EEVDF
 
@@ -159,9 +162,21 @@ Task Channel 的 exactly-once 只约束终态 CQE 发布，不证明远程工具
 
 core callback 协议允许 provider 返回 `PENDING`，但当前 bridge 只有内建同步 provider，且没有动态 provider registration UAPI。该 provider 只接受 null input 与 output artifact `NONE`；`RESOURCE_IMPORT` 固定返回 `DENIED`，所以当前没有 payload import 或 result resource backend，CQE result handle 保持 null。
 
-### 7.3 MCP/A2A gateway
+Task Channel 不承载 live model prompt/response；Guest/Host model wire 走独立的有界串口帧。
 
-当前 gateway 是 transport-neutral 的纯用户态映射，测试使用 deterministic in-memory transport；它尚未通过 binary adapter 连接真实内核 SQ/CQ。gateway 把 binding 层已经认证的 remote task id 绑定到 issuer/tenant/subject 以及 lifecycle/contract/channel/request generation，未知 issuer、tenant mismatch、protocol version mismatch 和越权 task lookup 均 fail closed。远程 JSON schema digest 与内核 manifest digest 分离，外部 schema 不能替代内核 tool authority。HTTP、OAuth、JWS、Agent Card 签名和网络重放防护由外部 binding 层负责，当前模块本身不实现这些协议，也不会把未验证 envelope 直接提交给 Task Channel。
+### 7.3 Guest/Host live model 边界
+
+Guest `agentlive` 拥有 system prompt、有界多轮 history、tool catalog、round/correlation、工具选择校验、typed V2 执行和实际 `tool_result` 回灌。history 只保留能够完整装入协商 request frame 的最近 whole-turn suffix，不截断单条工具结果。Host relay 只独占 QEMU 串口、TLS/API key 与 provider JSON 转换；它不读取 Guest 业务文件，不选择或执行工具，不维护 Guest 语义历史，也不伪造工具结果。Host 只可为 provider 协议关联暂存 opaque tool-call id 与 correlation id。
+
+串口帧绑定 session，每个方向的 sequence 严格递增，并校验 kind、decoded length、SHA-256 和有界 base64url payload；JSON correlation id 也严格递增。单轮响应只允许一个 `tool_use` 或 `final`，多个 tool call fail closed。这里的 hash 检查用于帧完整性与防误重放，不是敌对 Host 下的密码学认证。
+
+live HTTPS 是可选能力，API key 仅来自 Host 环境。offline JSONL replay 必须走同一个 QEMU 串口、frame/session/sequence/hash/round/token 边界，而不是直接注入 Guest 状态；它可验证 wire 与 loop 状态机，但不是实际云模型结果。当前不宣称 token streaming、并行多工具、自动重试/重定向、任意长上下文或远程 exactly-once。
+
+### 7.4 MCP/A2A object-mapping prototype
+
+`host_tools/mcp_a2a_gateway.py` 是 HTTP-neutral、标准对象形状的纯用户态映射 prototype，测试后端只有 deterministic `InMemoryTaskChannelTransport`。它映射 MCP `tools/list`/`tools/call`/experimental task 方法与 A2A message send/get/cancel 的对象和 Task 状态，并检查调用者提供的 issuer/tenant/subject/version 绑定；远程 schema 也不能替代内核 tool manifest。
+
+该模块没有 HTTP binding、MCP server、A2A Agent Card/discovery、OAuth/JWS、streaming、网络重放防护、真实内核 ABI adapter 或经外部实现验证的互操作。它与上一节的 HTTPS model relay 是两条独立路径，不能以 prototype 单元测试证明 live provider、远程 Agent 或 Task Channel payload 集成。
 
 ## 8. 观测接口
 
@@ -180,8 +195,8 @@ audit/timeline/provenance/ledger 为现有用户态提供当前启动周期的�
 | fs epoch cut 失败 | `IO_ERROR`，撤销 fence gate |
 | receipt copyout 失败 | 保留 retry-stable cache，不允许新请求覆盖 |
 | old lifecycle/watch/request id | `STALE`/拒绝 |
-| contract/node/schema/predecessor 不匹配 | 副作用前 `DENIED/STALE/CONFLICT`，关键拒绝进入 Evidence |
-| provenance/capability/effect 不满足 | 副作用前 `DENIED`；关键 Evidence 无空间则 fail closed |
+| ENFORCE V3 contract/node/schema/predecessor 不匹配 | 副作用前 `DENIED/STALE/CONFLICT`，关键拒绝进入 Evidence |
+| ENFORCE V3 provenance/capability/effect 不满足 | 副作用前 `DENIED`；关键 Evidence 无空间则 fail closed |
 | phase envelope/claim 不满足 | 不回退普通准入；refund/settle 或拒绝，不部分发布资源向量 |
 | EEVDF 身份/状态异常 | 不提交计划，回退 legacy scheduler 并计数 |
 | Task CQ full | 保留唯一终态，设置 backpressure，稍后发布 |
@@ -189,6 +204,10 @@ audit/timeline/provenance/ledger 为现有用户态提供当前启动周期的�
 | cancel 与 completion 竞争 | effect fence/terminal winner 只允许一个 CQE；too-late 不覆盖原执行 |
 | Task `RESOURCE_IMPORT` | 当前 bridge 固定 `DENIED`，不创建 handle 或 payload/result backend 状态 |
 | hard deadline 到期 | timer 只标记；首个 schedulable safe point 终止，无 wall-clock 上界 |
+| LLM request corr 不递增或仍 pending 重复 | `CONFLICT/DUPLICATE`；失败投递不推进 last correlation |
+| LLM response requester/relay/lifecycle/correlation 不匹配 | 未请求/错误 relay 为 `DENIED`；有界 terminal history 保留期间，已消费 replay 为 `STALE`、120 秒 tick TTL 后为 `TIMEOUT`；记录被覆盖后按 unmatched 返回 `DENIED`；不消费另一请求 |
+| LLM pending registry / event queue 满 | 都返回 `NO_SPACE`，但结果文本分别为 `llm_pending_limit` / `event_queue_full` |
+| live wire session/sequence/hash/length/JSON 不合法 | Guest/Host fail closed；不执行模型建议的工具 |
 
 ## 10. 验证入口
 
@@ -203,12 +222,17 @@ python -B scripts/test-agent-task-channel.py
 python -B host_tools/test_workflow_scheduler_model.py
 python -B host_tools/test_agent_task_transport.py
 python -B host_tools/test_mcp_a2a_gateway.py
+python -B host_tools/test_guest_llm_relay.py
+make agent-live-demo-check
+make agent-live-demo
 make agent-module-check TOOLPREFIX=riscv-none-elf-
 make kernel-stack-check TOOLPREFIX=riscv-none-elf-
 ```
+
+前一条只验证静态集成/Host 协议，后一条默认运行 6 轮同串口 replay QEMU 闭环并要求顶层 `agentlive_ucore: parent passed`；replay 不是 live provider 实测。Windows xPack 环境可为 QEMU 命令追加 `TOOLPREFIX=riscv-none-elf-`。
 
 静态/模型检查验证安全合同形状。QEMU 行为和性能结论仍需对应 Guest/Host 场景的实际运行。
 
 ## 11. 来源与 clean-room 边界
 
-Linux CPU accounting/percpu/rstat、Linux BPF ring buffer、Haiku BFS live query 分别提供批量计数、有序事件环和属性实时查询的概念参考。新增合同主线还参考 [Linux EEVDF](https://docs.kernel.org/scheduler/sched-eevdf.html)、[io_uring SQ/CQ](https://kernel.dk/io_uring.pdf)、[WIT/WASI 0.3](https://component-model.bytecodealliance.org/design/wit.html)、[AgentCgroup](https://arxiv.org/abs/2602.09345)、[Murakkab](https://arxiv.org/abs/2508.18298)、[CaMeL](https://arxiv.org/abs/2503.18813)、[IPIGuard](https://arxiv.org/abs/2508.15310) 和 MCP/A2A 官方协议。项目没有复制或 vendoring 这些上游/原型/SDK 的源码、数据、二进制、测试或磁盘格式；没有把 io_uring/Wasm 或远程协议栈整体搬入内核。完整链接与披露见 [task6-execution-contract.md](task6-execution-contract.md) 与 [../../NOTICE](../../NOTICE)。
+Linux CPU accounting/percpu/rstat、Linux BPF ring buffer、Haiku BFS live query 分别提供批量计数、有序事件环和属性实时查询的概念参考。新增合同主线还参考 [Linux EEVDF](https://docs.kernel.org/scheduler/sched-eevdf.html)、[io_uring(7)](https://man7.org/linux/man-pages/man7/io_uring.7.html)、[WIT/WASI 0.3](https://component-model.bytecodealliance.org/design/wit.html)、[AgentCgroup](https://arxiv.org/abs/2602.09345)、[Murakkab](https://arxiv.org/abs/2508.18298)、[CaMeL](https://arxiv.org/abs/2503.18813)、[IPIGuard](https://arxiv.org/abs/2508.15310)、[Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works)、[Claude Code agentic loop](https://code.claude.com/docs/en/how-claude-code-works)、[MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) 与 [A2A v1](https://a2a-protocol.org/latest/specification/) 的公开思想或对象规范。项目没有复制或 vendoring 这些上游/原型/SDK 的源码、数据、二进制、测试或磁盘格式；没有把 io_uring/Wasm 或远程协议栈整体搬入内核。完整链接与披露见 [task6-execution-contract.md](task6-execution-contract.md) 与 [../../NOTICE](../../NOTICE)。

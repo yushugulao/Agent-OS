@@ -22,6 +22,7 @@ FILES = (
     "os/agent_ipc.c",
     "os/agent_observe.c",
     "os/agent_provenance.c",
+    "os/agent_tool_protocol.c",
     "os/resource_controller.h",
     "os/resource_controller.c",
     "os/proc.c",
@@ -79,6 +80,330 @@ def require_order(source: str, needles: tuple[str, ...], message: str) -> None:
         cursor = found
 
 
+def validate_llm_correlation(core: str) -> None:
+    request = function_body(core, "agent_llm_pending_request")
+    response = function_body(core, "agent_llm_pending_response")
+    clear = function_body(core, "agent_llm_pending_proc_clear")
+    reap = function_body(core, "agent_llm_pending_reap_locked")
+    deadline = function_body(core, "agent_llm_pending_deadline")
+    terminal = function_body(core, "agent_llm_terminal_remember_locked")
+    terminal_status = function_body(core, "agent_llm_terminal_status_locked")
+    execute = function_body(core, "agent_execute_op")
+    init = function_body(core, "agent_core_init")
+    tick = function_body(core, "agent_core_tick")
+    teardown = function_body(core, "agent_core_proc_teardown")
+    exec_public = function_body(core, "agent_core_exec_public_commit")
+    execute_one = function_body(core, "agent_execute_one")
+
+    require(
+        core,
+        "static struct agent_llm_pending agent_llm_pending[AGENT_LLM_PENDING_MAX];",
+        "LLM correlations need a bounded kernel-owned pending table",
+    )
+    require(
+        core,
+        "#define AGENT_LLM_PENDING_TTL_TICKS (120ULL * TICKS_PER_SEC)",
+        "LLM pending expiry must use an explicit kernel-tick TTL",
+    )
+    require(
+        core,
+        "agent_llm_requesters[AGENT_LLM_PENDING_MAX];",
+        "LLM correlations need bounded per-requester monotonic state",
+    )
+    require(
+        core,
+        "agent_llm_terminal_history[AGENT_LLM_TERMINAL_HISTORY_MAX];",
+        "expired and consumed responses need bounded replay history",
+    )
+    for field in (
+        "struct workflow_lifecycle_key lifecycle;",
+        "uint64 requester_control_id;",
+        "uint64 relay_control_id;",
+        "uint64 corr_id;",
+        "uint64 deadline_tick;",
+        "int requester_pid;",
+        "int relay_pid;",
+        "int active;",
+    ):
+        require(core, field, f"LLM pending records lost {field}")
+    require(
+        init,
+        "memset(agent_llm_pending, 0, sizeof(agent_llm_pending));",
+        "LLM pending state must start empty",
+    )
+    require(
+        init,
+        "memset(agent_llm_requesters, 0, sizeof(agent_llm_requesters));",
+        "LLM monotonic state must start empty",
+    )
+    require(
+        init,
+        "memset(agent_llm_terminal_history, 0,",
+        "LLM replay history must start empty",
+    )
+
+    require(
+        request,
+        "relay_pid <= 0 || corr_id == 0",
+        "LLM requests must reject null relay or correlation identities",
+    )
+    require(
+        request,
+        "pending->corr_id == corr_id",
+        "a requester lifecycle must not publish duplicate correlations",
+    )
+    require(
+        request,
+        "status = AGENT_STATUS_DUPLICATE;",
+        "duplicate LLM requests need a stable terminal status",
+    )
+    require(
+        request,
+        "corr_id <= requester_state->last_corr_id",
+        "published correlation IDs must remain strictly monotonic",
+    )
+    require(
+        request,
+        "status = AGENT_STATUS_CONFLICT;",
+        "non-monotonic correlation IDs need a distinct status",
+    )
+    require_order(
+        request,
+        (
+            "agent_llm_pending_reap_locked(now);",
+            "free_slot < 0 ||",
+            "status = agent_ipc_deliver_pid(",
+            "if (ipc_delivered != 1)",
+            "pending->lifecycle = lifecycle;",
+            "pending->requester_control_id = requester->agent_control_id;",
+            "pending->relay_control_id = relay->agent_control_id;",
+            "pending->corr_id = corr_id;",
+            "pending->deadline_tick = agent_llm_pending_deadline(now);",
+            "pending->requester_pid = requester->pid;",
+            "pending->relay_pid = relay->pid;",
+            "pending->active = 1;",
+            "requester_state->last_corr_id = corr_id;",
+        ),
+        "pending publication and monotonic advance must follow successful delivery",
+    )
+    require_order(
+        request,
+        (
+            "*pending_limit = 1;",
+            "status = AGENT_STATUS_NO_SPACE;",
+        ),
+        "pending-table exhaustion must be distinguishable from IPC queue exhaustion",
+    )
+
+    for check in (
+        "candidate->requester_pid != requester_pid",
+        "candidate->corr_id != corr_id",
+        "pending->relay_pid != relay->pid",
+        "pending->relay_control_id != relay->agent_control_id",
+        "workflow_lifecycle_key_equal(pending->lifecycle, lifecycle)",
+        "requester->agent_control_id != pending->requester_control_id",
+    ):
+        require(response, check, f"LLM response matching lost {check}")
+    require(
+        response,
+        "status = AGENT_STATUS_DENIED;",
+        "unsolicited, wrong-relay, wrong-correlation, and replay responses must deny",
+    )
+    require_order(
+        response,
+        (
+            "agent_llm_pending_reap_locked(now);",
+            "status = agent_ipc_deliver_pid(",
+            "if (ipc_delivered != 1)",
+            "agent_llm_terminal_remember_locked(pending, AGENT_STATUS_OK);",
+            "memset(pending, 0, sizeof(*pending));",
+            "*delivered = 1;",
+        ),
+        "LLM response authority must be consumed only after successful delivery",
+    )
+
+    require_order(
+        reap,
+        (
+            "now < pending->deadline_tick",
+            "agent_llm_terminal_remember_locked(pending, AGENT_STATUS_TIMEOUT);",
+            "memset(pending, 0, sizeof(*pending));",
+        ),
+        "expired LLM requests must become timeout tombstones before freeing capacity",
+    )
+    require(
+        deadline,
+        "~0ULL - AGENT_LLM_PENDING_TTL_TICKS",
+        "LLM deadline arithmetic must saturate instead of wrapping",
+    )
+    require(
+        terminal,
+        "status != AGENT_STATUS_OK && status != AGENT_STATUS_TIMEOUT",
+        "terminal history must distinguish consumed responses from expiry",
+    )
+    require(
+        terminal_status,
+        "terminal->status == AGENT_STATUS_TIMEOUT",
+        "expired LLM responses must remain distinguishable from consumed replays",
+    )
+    require(
+        tick,
+        "agent_llm_pending_reap_locked(now);",
+        "the timer maintenance path must reclaim silent-relay requests",
+    )
+
+    require(
+        clear,
+        "pending->requester_pid == p->pid",
+        "requester teardown must clear its LLM correlations",
+    )
+    require(
+        clear,
+        "pending->relay_pid == p->pid",
+        "relay teardown must clear its LLM correlations",
+    )
+    require(
+        clear,
+        "state->requester_pid == p->pid",
+        "requester teardown must clear monotonic correlation state",
+    )
+    require(
+        clear,
+        "terminal->relay_pid == p->pid",
+        "endpoint teardown must clear replay history",
+    )
+    require(
+        teardown,
+        "agent_llm_pending_proc_clear(p);",
+        "process teardown must revoke outstanding LLM response authority",
+    )
+    require(
+        exec_public,
+        "agent_llm_pending_proc_clear(p);",
+        "Agent-to-public exec must revoke outstanding LLM response authority",
+    )
+    require(
+        execute,
+        "delivery_status = agent_llm_pending_request(",
+        "LLM_REQUEST must use correlated delivery",
+    )
+    require(
+        execute,
+        "delivery_status = agent_llm_pending_response(",
+        "LLM_RESPONSE must use correlated delivery",
+    )
+    require_order(
+        execute_one,
+        (
+            "p->agent_call_count++;",
+            "res->sequence = p->agent_call_count;",
+            "agent_execute_op(p, op, res);",
+        ),
+        "tool execution must assign the current Context sequence before dispatch",
+    )
+    if execute.count("agent_ticks(), p->agent_call_count, op->payload,") != 2:
+        raise ContractError(
+            "LLM request/response events must cite the executing tool sequence"
+        )
+    require(
+        execute,
+        "p->agent_call_count, op->payload, 1, &delivered);",
+        "SEND_MESSAGE events must cite the executing tool sequence",
+    )
+    for text in (
+        '"corr_not_monotonic"',
+        '"llm_pending_limit"',
+        '"event_queue_full"',
+        '"response_expired"',
+        '"response_consumed"',
+    ):
+        require(execute, text, f"LLM result diagnostics lost {text}")
+
+
+def validate_agent_loop_provenance(protocol: str, provenance: str) -> None:
+    loop_mask_start = protocol.find("#define PROV_ACCEPT_AGENT_LOOP")
+    loop_mask_end = protocol.find("#define AGENT_TOOL_REGISTRY", loop_mask_start)
+    if loop_mask_start < 0 or loop_mask_end < 0:
+        raise ContractError("missing the explicit Agent Loop provenance mask")
+    loop_mask = protocol[loop_mask_start:loop_mask_end]
+    for label in (
+        "PROV_ACCEPT_CONTROL",
+        "AGENT_PROVENANCE_UNTRUSTED_FILE_DATA",
+        "AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT",
+        "AGENT_PROVENANCE_CROSS_AGENT_DATA",
+    ):
+        require(loop_mask, label, f"Agent Loop mask lost {label}")
+    forbid(
+        loop_mask,
+        "AGENT_PROVENANCE_ALL",
+        "Agent Loop tools must enumerate accepted taints instead of using a blanket mask",
+    )
+
+    tool_start = protocol.find("#define AGENT_TOOL_REGISTRY(X)")
+    tool_end = protocol.find("#define ASSERT_TOOL_STRINGS", tool_start)
+    security_start = protocol.find("#define AGENT_TOOL_SECURITY_REGISTRY(X)")
+    security_end = protocol.find("#define SECURITY_ENTRY", security_start)
+    if min(tool_start, tool_end, security_start, security_end) < 0:
+        raise ContractError("tool/security registry boundaries are missing")
+    tool_registry = protocol[tool_start:tool_end]
+    security_registry = protocol[security_start:security_end]
+    tool_ids = re.findall(
+        r"^\s*X\((AGENT_TOOL_[A-Z0-9_]+),", tool_registry, re.M
+    )
+    security_rows = re.findall(
+        r"^\s*X\(([^,\n]+),\s*([^,\n]+),\s*([^,\n]+),\s*([^\)\n]+)\)",
+        security_registry,
+        re.M,
+    )
+    if len(tool_ids) != len(security_rows) or not tool_ids:
+        raise ContractError("tool and security registries must remain index-aligned")
+    security = dict(zip(tool_ids, security_rows, strict=True))
+    expected_loop_tools = {
+        "AGENT_TOOL_SEND_MESSAGE": (
+            "AGENT_CAP_MESSAGE_SEND",
+            "PROV_ACCEPT_AGENT_LOOP",
+            "PROV_DERIVED",
+            "AGENT_SIDE_EFFECT_IPC",
+        ),
+        "AGENT_TOOL_LLM_REQUEST": (
+            "AGENT_CAP_MESSAGE_SEND",
+            "PROV_ACCEPT_AGENT_LOOP",
+            "PROV_DERIVED",
+            "AGENT_SIDE_EFFECT_IPC",
+        ),
+        "AGENT_TOOL_LLM_RESPONSE": (
+            "AGENT_CAP_LLM_RELAY",
+            "PROV_ACCEPT_AGENT_LOOP",
+            "PROV_TOOL",
+            "AGENT_SIDE_EFFECT_IPC",
+        ),
+    }
+    for tool_id, expected in expected_loop_tools.items():
+        if security.get(tool_id) != expected:
+            raise ContractError(
+                f"{tool_id} must accept loop taint without weakening its capability, output, or side-effect policy"
+            )
+    for tool_id, (_, accepted, _, effect) in security.items():
+        if tool_id in expected_loop_tools or effect == "0":
+            continue
+        if accepted not in {"PROV_ACCEPT_CONTROL", "PROV_ACCEPT_ARTIFACT"}:
+            raise ContractError(
+                f"unrelated side-effect tool {tool_id} received a broader provenance policy"
+            )
+
+    ipc_labels = function_body(provenance, "agent_provenance_ipc_output_labels")
+    require(
+        ipc_labels,
+        "agent_provenance_current_labels(source)",
+        "Agent IPC must propagate the sender's accumulated taint",
+    )
+    require(
+        ipc_labels,
+        "AGENT_PROVENANCE_CROSS_AGENT_DATA",
+        "Agent IPC must label data crossing an Agent boundary",
+    )
+
+
 def validate_execution_contract(sources: dict[str, str]) -> None:
     abi = sources["agent_execution_contract_abi.h"]
     header = sources["os/agent_execution_contract.h"]
@@ -90,10 +415,14 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
     ipc = sources["os/agent_ipc.c"]
     observe = sources["os/agent_observe.c"]
     provenance = sources["os/agent_provenance.c"]
+    protocol = sources["os/agent_tool_protocol.c"]
     phase_header = sources["os/resource_controller.h"]
     phase = sources["os/resource_controller.c"]
     proc = sources["os/proc.c"]
     syscall = sources["os/syscall.c"]
+
+    validate_llm_correlation(core)
+    validate_agent_loop_provenance(protocol, provenance)
 
     direct_controller = function_body(
         evidence_ring, "agent_evidence_direct_controller_valid"
@@ -1212,6 +1541,218 @@ class DagNode:
     sequence: int = 0
 
 
+@dataclass(frozen=True)
+class LLMPendingRecord:
+    lifecycle: tuple[int, int]
+    requester_pid: int
+    requester_control: int
+    relay_pid: int
+    relay_control: int
+    corr_id: int
+
+
+PROV_KERNEL_FACT = 1 << 0
+PROV_TRUSTED_CONTROL = 1 << 1
+PROV_AGENT_DERIVED = 1 << 2
+PROV_UNTRUSTED_FILE = 1 << 3
+PROV_UNTRUSTED_TOOL = 1 << 4
+PROV_CROSS_AGENT = 1 << 5
+PROV_ACCEPT_CONTROL = PROV_KERNEL_FACT | PROV_TRUSTED_CONTROL | PROV_AGENT_DERIVED
+PROV_ACCEPT_AGENT_LOOP = (
+    PROV_ACCEPT_CONTROL
+    | PROV_UNTRUSTED_FILE
+    | PROV_UNTRUSTED_TOOL
+    | PROV_CROSS_AGENT
+)
+
+
+@dataclass(frozen=True)
+class AgentLoopEventModel:
+    provenance_labels: int
+    cause_sequence: int
+
+
+class AgentLoopProvenanceModel:
+    POLICIES = {
+        "llm_request": (PROV_ACCEPT_AGENT_LOOP, PROV_AGENT_DERIVED),
+        "llm_response": (PROV_ACCEPT_AGENT_LOOP, PROV_UNTRUSTED_TOOL),
+        "send_message": (PROV_ACCEPT_AGENT_LOOP, PROV_AGENT_DERIVED),
+        "action_commit": (PROV_ACCEPT_CONTROL, PROV_AGENT_DERIVED),
+    }
+
+    def __init__(self) -> None:
+        self.labels = PROV_AGENT_DERIVED
+        self.call_count = 0
+
+    def _authorize(self, tool: str) -> int:
+        accepted, output_add = self.POLICIES[tool]
+        if self.labels & ~accepted:
+            raise PermissionError(f"{tool} rejects current provenance")
+        self.call_count += 1
+        return output_add
+
+    def call(self, tool: str) -> int:
+        output_add = self._authorize(tool)
+        self.labels |= output_add | PROV_AGENT_DERIVED
+        return self.call_count
+
+    def deliver(self, tool: str, target: AgentLoopProvenanceModel) -> AgentLoopEventModel:
+        output_add = self._authorize(tool)
+        event = AgentLoopEventModel(
+            self.labels | PROV_AGENT_DERIVED | PROV_CROSS_AGENT,
+            self.call_count,
+        )
+        target.consume(event)
+        # The kernel commits the tool's output label after its IPC helper returns.
+        self.labels |= output_add | PROV_AGENT_DERIVED
+        return event
+
+    def consume(self, event: AgentLoopEventModel) -> None:
+        self.labels |= (
+            event.provenance_labels | PROV_AGENT_DERIVED | PROV_CROSS_AGENT
+        )
+
+
+class LLMCorrelationModel:
+    def __init__(self, *, ttl: int = 120, limit: int = 16) -> None:
+        self.ttl = ttl
+        self.limit = limit
+        self.pending: list[LLMPendingRecord] = []
+        self.deadlines: dict[LLMPendingRecord, int] = {}
+        self.last_corr: dict[tuple[tuple[int, int], int, int], int] = {}
+        self.terminals: dict[
+            tuple[tuple[int, int], int, int, int, int, int], str
+        ] = {}
+
+    @staticmethod
+    def requester_key(
+        record: LLMPendingRecord,
+    ) -> tuple[tuple[int, int], int, int]:
+        return record.lifecycle, record.requester_pid, record.requester_control
+
+    @staticmethod
+    def terminal_key(
+        record: LLMPendingRecord,
+    ) -> tuple[tuple[int, int], int, int, int, int, int]:
+        return (
+            record.lifecycle,
+            record.requester_pid,
+            record.requester_control,
+            record.relay_pid,
+            record.relay_control,
+            record.corr_id,
+        )
+
+    def reap(self, now: int) -> None:
+        for record in list(self.pending):
+            if now < self.deadlines[record]:
+                continue
+            self.pending.remove(record)
+            del self.deadlines[record]
+            self.terminals[self.terminal_key(record)] = "timeout"
+
+    def request(
+        self, record: LLMPendingRecord, *, delivered: bool, now: int = 0
+    ) -> None:
+        if record.requester_pid <= 0 or record.relay_pid <= 0 or record.corr_id == 0:
+            raise ValueError("invalid LLM request identity")
+        self.reap(now)
+        if any(
+            item.lifecycle == record.lifecycle
+            and item.requester_pid == record.requester_pid
+            and item.requester_control == record.requester_control
+            and item.corr_id == record.corr_id
+            for item in self.pending
+        ):
+            raise FileExistsError("duplicate correlation")
+        requester = self.requester_key(record)
+        if record.corr_id <= self.last_corr.get(requester, 0):
+            raise FileExistsError("correlation is not strictly monotonic")
+        if sum(self.requester_key(item) == requester for item in self.pending) >= self.limit:
+            raise BlockingIOError("LLM pending limit")
+        if delivered:
+            self.pending.append(record)
+            self.deadlines[record] = now + self.ttl
+            self.last_corr[requester] = record.corr_id
+
+    def respond(
+        self,
+        *,
+        lifecycle: tuple[int, int],
+        requester_pid: int,
+        requester_control: int,
+        relay_pid: int,
+        relay_control: int,
+        corr_id: int,
+        delivered: bool,
+        now: int = 0,
+    ) -> None:
+        self.reap(now)
+        matches = [
+            item
+            for item in self.pending
+            if item.lifecycle == lifecycle
+            and item.requester_pid == requester_pid
+            and item.requester_control == requester_control
+            and item.relay_pid == relay_pid
+            and item.relay_control == relay_control
+            and item.corr_id == corr_id
+        ]
+        if len(matches) != 1:
+            terminal = self.terminals.get(
+                (
+                    lifecycle,
+                    requester_pid,
+                    requester_control,
+                    relay_pid,
+                    relay_control,
+                    corr_id,
+                )
+            )
+            if terminal == "timeout":
+                raise TimeoutError("LLM request expired")
+            if terminal == "consumed":
+                raise RuntimeError("LLM response already consumed")
+            raise PermissionError("unmatched LLM response")
+        if delivered:
+            record = matches[0]
+            self.pending.remove(record)
+            del self.deadlines[record]
+            self.terminals[self.terminal_key(record)] = "consumed"
+
+    def teardown(
+        self, *, lifecycle: tuple[int, int], pid: int, control_id: int
+    ) -> None:
+        self.pending = [
+            item
+            for item in self.pending
+            if item.lifecycle != lifecycle
+            or (
+                (item.requester_pid != pid or item.requester_control != control_id)
+                and (item.relay_pid != pid or item.relay_control != control_id)
+            )
+        ]
+        self.deadlines = {
+            record: deadline
+            for record, deadline in self.deadlines.items()
+            if record in self.pending
+        }
+        self.last_corr = {
+            key: corr
+            for key, corr in self.last_corr.items()
+            if key != (lifecycle, pid, control_id)
+        }
+        self.terminals = {
+            key: status
+            for key, status in self.terminals.items()
+            if key[0] != lifecycle
+            or (
+                (key[1] != pid or key[2] != control_id)
+                and (key[3] != pid or key[4] != control_id)
+            )
+        }
+
+
 @dataclass
 class ExecutionModel:
     nodes: list[DagNode] = field(default_factory=list)
@@ -1418,6 +1959,310 @@ class ExecutionContractTests(unittest.TestCase):
 
     def test_current_implementation_satisfies_contract(self) -> None:
         validate_execution_contract(SOURCES)
+
+    def test_llm_pending_publication_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "pending->active = 1;",
+            "pending->active = 0;",
+        )
+
+    def test_llm_wrong_relay_match_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "pending->relay_control_id != relay->agent_control_id",
+            "pending->relay_control_id == relay->agent_control_id",
+        )
+
+    def test_llm_response_consume_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "\tagent_llm_terminal_remember_locked(pending, AGENT_STATUS_OK);\n"
+            "\tmemset(pending, 0, sizeof(*pending));",
+            "\tagent_llm_terminal_remember_locked(pending, AGENT_STATUS_OK);\n"
+            "\t/* Mutation: leave replay authority live after delivery. */",
+        )
+
+    def test_llm_monotonic_comparison_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "requester_state != 0 && corr_id <= requester_state->last_corr_id",
+            "requester_state != 0 && corr_id < requester_state->last_corr_id",
+        )
+
+    def test_llm_monotonic_publication_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "\trequester_state->last_corr_id = corr_id;",
+            "\t/* Mutation: successful delivery does not advance last_corr_id. */",
+        )
+
+    def test_llm_expiry_comparison_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "now < pending->deadline_tick",
+            "now <= pending->deadline_tick",
+        )
+
+    def test_llm_expiry_tombstone_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "agent_llm_terminal_remember_locked(pending, AGENT_STATUS_TIMEOUT);",
+            "agent_llm_terminal_remember_locked(pending, AGENT_STATUS_OK);",
+        )
+
+    def test_llm_tick_reap_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "\tenabled = intr_save();\n"
+            "\tagent_llm_pending_reap_locked(now);\n"
+            "\tintr_restore(enabled);\n"
+            "\tfs_deferred_reclaim_tick(now);",
+            "\tenabled = intr_save();\n"
+            "\t/* Mutation: silent relays retain pending slots forever. */\n"
+            "\tintr_restore(enabled);\n"
+            "\tfs_deferred_reclaim_tick(now);",
+        )
+
+    def test_llm_pending_limit_diagnostic_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            '"llm_pending_limit"',
+            '"event_queue_full"',
+        )
+
+    def test_llm_teardown_cleanup_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "\tagent_llm_pending_proc_clear(p);",
+            "\t/* Mutation: pending LLM state survives teardown. */",
+        )
+
+    def test_llm_event_cause_future_sequence_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "agent_ticks(), p->agent_call_count, op->payload,",
+            "agent_ticks(), p->agent_call_count + 1, op->payload,",
+        )
+
+    def test_send_message_cause_future_sequence_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "p->agent_call_count, op->payload, 1, &delivered);",
+            "p->agent_call_count + 1, op->payload, 1, &delivered);",
+        )
+
+    def test_agent_loop_cross_agent_mask_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_tool_protocol.c",
+            "\t AGENT_PROVENANCE_CROSS_AGENT_DATA)",
+            "\t AGENT_PROVENANCE_AGENT_DERIVED)",
+        )
+
+    def test_agent_loop_tool_output_mask_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_tool_protocol.c",
+            "\t AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT |",
+            "\t AGENT_PROVENANCE_AGENT_DERIVED |",
+        )
+
+    def test_agent_loop_message_policy_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_tool_protocol.c",
+            "X(AGENT_CAP_MESSAGE_SEND, PROV_ACCEPT_AGENT_LOOP, PROV_DERIVED, AGENT_SIDE_EFFECT_IPC)",
+            "X(AGENT_CAP_MESSAGE_SEND, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_IPC)",
+        )
+
+    def test_agent_loop_llm_response_policy_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_tool_protocol.c",
+            "X(AGENT_CAP_LLM_RELAY, PROV_ACCEPT_AGENT_LOOP, PROV_TOOL, AGENT_SIDE_EFFECT_IPC)",
+            "X(AGENT_CAP_LLM_RELAY, PROV_ACCEPT_CONTROL, PROV_TOOL, AGENT_SIDE_EFFECT_IPC)",
+        )
+
+    def test_agent_loop_does_not_broaden_other_effect_tools(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_tool_protocol.c",
+            "X(AGENT_CAP_DEPENDENCY_UPDATE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA)",
+            "X(AGENT_CAP_DEPENDENCY_UPDATE, PROV_ACCEPT_AGENT_LOOP, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA)",
+        )
+
+    def test_agent_loop_provenance_and_cause_model(self) -> None:
+        main = AgentLoopProvenanceModel()
+        relay = AgentLoopProvenanceModel()
+
+        request1 = main.deliver("llm_request", relay)
+        self.assertEqual(request1.cause_sequence, 1)
+        self.assertTrue(relay.labels & PROV_CROSS_AGENT)
+
+        response1 = relay.deliver("llm_response", main)
+        self.assertEqual(response1.cause_sequence, 1)
+        self.assertTrue(main.labels & PROV_CROSS_AGENT)
+        self.assertTrue(relay.labels & PROV_UNTRUSTED_TOOL)
+
+        request2 = main.deliver("llm_request", relay)
+        self.assertEqual(request2.cause_sequence, 2)
+        response2 = relay.deliver("llm_response", main)
+        self.assertEqual(response2.cause_sequence, 2)
+        self.assertEqual(
+            main.labels & (PROV_CROSS_AGENT | PROV_UNTRUSTED_TOOL),
+            PROV_CROSS_AGENT | PROV_UNTRUSTED_TOOL,
+        )
+
+        request3 = main.deliver("llm_request", relay)
+        self.assertEqual(request3.cause_sequence, 3)
+        forwarded = main.deliver("send_message", relay)
+        self.assertEqual(forwarded.cause_sequence, 4)
+        self.assertEqual(
+            forwarded.provenance_labels
+            & (PROV_CROSS_AGENT | PROV_UNTRUSTED_TOOL),
+            PROV_CROSS_AGENT | PROV_UNTRUSTED_TOOL,
+        )
+        with self.assertRaises(PermissionError):
+            main.call("action_commit")
+
+    def test_llm_correlation_model_denies_unsolicited_wrong_and_replayed(self) -> None:
+        model = LLMCorrelationModel()
+        pending = LLMPendingRecord((4, 17), 21, 101, 22, 102, 7001)
+
+        model.request(pending, delivered=False)
+        self.assertEqual(model.pending, [])
+        with self.assertRaises(PermissionError):
+            model.respond(
+                lifecycle=(4, 17),
+                requester_pid=21,
+                requester_control=101,
+                relay_pid=22,
+                relay_control=102,
+                corr_id=7001,
+                delivered=True,
+            )
+
+        model.request(pending, delivered=True)
+        with self.assertRaises(FileExistsError):
+            model.request(
+                LLMPendingRecord((4, 17), 21, 101, 23, 103, 7001),
+                delivered=True,
+            )
+        for relay_pid, relay_control, corr_id in (
+            (23, 103, 7001),
+            (22, 102, 7002),
+        ):
+            with self.assertRaises(PermissionError):
+                model.respond(
+                    lifecycle=(4, 17),
+                    requester_pid=21,
+                    requester_control=101,
+                    relay_pid=relay_pid,
+                    relay_control=relay_control,
+                    corr_id=corr_id,
+                    delivered=True,
+                )
+        self.assertEqual(model.pending, [pending])
+
+        model.respond(
+            lifecycle=(4, 17),
+            requester_pid=21,
+            requester_control=101,
+            relay_pid=22,
+            relay_control=102,
+            corr_id=7001,
+            delivered=False,
+        )
+        self.assertEqual(model.pending, [pending])
+        model.respond(
+            lifecycle=(4, 17),
+            requester_pid=21,
+            requester_control=101,
+            relay_pid=22,
+            relay_control=102,
+            corr_id=7001,
+            delivered=True,
+        )
+        self.assertEqual(model.pending, [])
+        with self.assertRaises(RuntimeError):
+            model.respond(
+                lifecycle=(4, 17),
+                requester_pid=21,
+                requester_control=101,
+                relay_pid=22,
+                relay_control=102,
+                corr_id=7001,
+                delivered=True,
+            )
+        with self.assertRaises(FileExistsError):
+            model.request(pending, delivered=True)
+
+        next_pending = LLMPendingRecord((4, 17), 21, 101, 22, 102, 7002)
+        model.request(next_pending, delivered=True)
+        with self.assertRaises(RuntimeError):
+            model.respond(
+                lifecycle=(4, 17),
+                requester_pid=21,
+                requester_control=101,
+                relay_pid=22,
+                relay_control=102,
+                corr_id=7001,
+                delivered=True,
+            )
+        self.assertEqual(model.pending, [next_pending])
+
+    def test_llm_correlation_model_reaps_and_rejects_expired_reuse(self) -> None:
+        model = LLMCorrelationModel(ttl=5, limit=1)
+        expired = LLMPendingRecord((5, 23), 31, 111, 32, 112, 8001)
+
+        model.request(expired, delivered=False, now=10)
+        model.request(expired, delivered=True, now=11)
+        with self.assertRaises(BlockingIOError):
+            model.request(
+                LLMPendingRecord((5, 23), 31, 111, 32, 112, 8002),
+                delivered=True,
+                now=15,
+            )
+
+        model.reap(16)
+        self.assertEqual(model.pending, [])
+        with self.assertRaises(TimeoutError):
+            model.respond(
+                lifecycle=(5, 23),
+                requester_pid=31,
+                requester_control=111,
+                relay_pid=32,
+                relay_control=112,
+                corr_id=8001,
+                delivered=True,
+                now=16,
+            )
+        with self.assertRaises(FileExistsError):
+            model.request(expired, delivered=True, now=16)
+
+        next_pending = LLMPendingRecord((5, 23), 31, 111, 32, 112, 8002)
+        model.request(next_pending, delivered=True, now=16)
+        with self.assertRaises(TimeoutError):
+            model.respond(
+                lifecycle=(5, 23),
+                requester_pid=31,
+                requester_control=111,
+                relay_pid=32,
+                relay_control=112,
+                corr_id=8001,
+                delivered=True,
+                now=17,
+            )
+        self.assertEqual(model.pending, [next_pending])
+
+    def test_llm_correlation_model_clears_requester_and_relay_teardown(self) -> None:
+        first = LLMPendingRecord((6, 31), 41, 201, 42, 202, 8001)
+        second = LLMPendingRecord((6, 31), 43, 203, 42, 202, 8002)
+        model = LLMCorrelationModel()
+        model.request(first, delivered=True)
+        model.request(second, delivered=True)
+        model.teardown(lifecycle=(6, 31), pid=41, control_id=201)
+        self.assertEqual(model.pending, [second])
+        model.request(first, delivered=True)
+        self.assertEqual(model.pending, [second, first])
+        model.teardown(lifecycle=(6, 31), pid=42, control_id=202)
+        self.assertEqual(model.pending, [])
 
     def test_digest_width_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(

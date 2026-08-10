@@ -13,12 +13,15 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 import secrets
 import threading
 from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Protocol
+from urllib.parse import unquote
 
 if __package__:
     from .agent_task_transport import (
@@ -52,10 +55,17 @@ MCP_PROTOCOL_VERSION = "2026-07-28"
 A2A_PROTOCOL_VERSION = "1.0"
 MCP_TASKS_EXTENSION = "io.modelcontextprotocol/tasks"
 AGENTOS_TASK_METADATA = "io.agentos/task-channel"
+MCP_SERVER_INFO_METADATA = "io.modelcontextprotocol/serverInfo"
 
 _TOOL_NAME_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 _ID_RE = re.compile(r"[A-Za-z0-9._~-]{1,512}\Z")
 _JSONRPC_ID_LIMIT = (1 << 53) - 1
+_JSON_TREE_MAX_DEPTH = 64
+_JSON_TREE_MAX_NODES = 32_768
+_SCHEMA_MAX_EVALUATIONS = 65_536
+_SCHEMA_MAX_PATTERN_LENGTH = 512
+_SCHEMA_MAX_PATTERN_INPUT = 16_384
+_MCP_DISCOVERY_TTL_MS = 30_000
 
 
 class ProtocolGatewayError(RuntimeError):
@@ -151,23 +161,38 @@ class A2ARequestEnvelope:
 
 
 def _validate_json_tree(value: object, *, path: str = "$") -> None:
-    if value is None or type(value) in (str, bool, int):
-        return
-    if type(value) is float:
-        if value != value or value in (float("inf"), float("-inf")):
-            raise ValueError(f"{path} contains a non-finite number")
-        return
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            _validate_json_tree(item, path=f"{path}[{index}]")
-        return
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if type(key) is not str:
-                raise ValueError(f"{path} contains a non-string object key")
-            _validate_json_tree(item, path=f"{path}.{key}")
-        return
-    raise ValueError(f"{path} contains a non-JSON value")
+    """Validate JSON data without permitting unbounded host recursion or work."""
+
+    pending: list[tuple[object, str, int]] = [(value, path, 0)]
+    nodes = 0
+    while pending:
+        item, item_path, depth = pending.pop()
+        nodes += 1
+        if nodes > _JSON_TREE_MAX_NODES:
+            raise ValueError("JSON value exceeds the node limit")
+        if depth > _JSON_TREE_MAX_DEPTH:
+            raise ValueError(f"{item_path} exceeds the JSON nesting limit")
+        if item is None or type(item) in (str, bool, int):
+            continue
+        if type(item) is float:
+            if not math.isfinite(item):
+                raise ValueError(f"{item_path} contains a non-finite number")
+            continue
+        if isinstance(item, list):
+            pending.extend(
+                (child, f"{item_path}[{index}]", depth + 1)
+                for index, child in reversed(tuple(enumerate(item)))
+            )
+            continue
+        if isinstance(item, Mapping):
+            children: list[tuple[object, str, int]] = []
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise ValueError(f"{item_path} contains a non-string object key")
+                children.append((child, f"{item_path}.{key}", depth + 1))
+            pending.extend(reversed(children))
+            continue
+        raise ValueError(f"{item_path} contains a non-JSON value")
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -231,9 +256,13 @@ class ToolManifest:
             raise ValueError("poll_interval_ms must be positive")
         if re.fullmatch(r"[0-9a-f]{64}", self.kernel_manifest_digest) is None:
             raise ValueError("kernel_manifest_digest must be an authoritative lowercase SHA-256")
+        if self.input_schema.get("type") != "object":
+            raise ValueError("MCP tool input_schema root must declare type 'object'")
         canonical_schema_digest(self.input_schema)
+        _validate_schema_definition(self.input_schema)
         if self.output_schema is not None:
             canonical_schema_digest(self.output_schema)
+            _validate_schema_definition(self.output_schema)
 
     @property
     def remote_schema_digest(self) -> str:
@@ -315,28 +344,260 @@ def _iso8601(clock: Callable[[], datetime]) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _default_schema_validator(schema: Mapping[str, object], value: object) -> None:
-    """Validate the closed object subset used by tool manifests in this repo."""
+class _SchemaMismatch(ValueError):
+    pass
 
-    expected_type = schema.get("type")
-    if expected_type not in (None, "object"):
-        raise InvalidProtocolRequestError("tool input schema root must be an object")
-    if not isinstance(value, Mapping):
-        raise InvalidProtocolRequestError("tool arguments must be an object")
-    required = schema.get("required", [])
-    if not isinstance(required, list) or any(type(item) is not str for item in required):
-        raise InvalidProtocolRequestError("tool schema has an invalid required list")
-    missing = [item for item in required if item not in value]
-    if missing:
-        raise InvalidProtocolRequestError(f"tool arguments are missing {missing[0]!r}")
-    properties = schema.get("properties", {})
-    if not isinstance(properties, Mapping):
-        raise InvalidProtocolRequestError("tool schema properties must be an object")
-    if schema.get("additionalProperties") is False:
-        unknown = sorted(set(value) - set(properties))
-        if unknown:
-            raise InvalidProtocolRequestError(f"tool arguments contain unknown field {unknown[0]!r}")
-    type_checks = {
+
+def _json_semantic_key(value: object) -> object:
+    """Return a hashable key with JSON Schema's numeric equality semantics."""
+
+    if value is None:
+        return ("null",)
+    if type(value) is bool:
+        return ("boolean", value)
+    if type(value) is int:
+        return ("number", Decimal(value).normalize())
+    if type(value) is float:
+        return ("number", Decimal(str(value)).normalize())
+    if type(value) is str:
+        return ("string", value)
+    if isinstance(value, list):
+        return ("array", tuple(_json_semantic_key(item) for item in value))
+    if isinstance(value, Mapping):
+        return (
+            "object",
+            tuple(sorted((key, _json_semantic_key(item)) for key, item in value.items())),
+        )
+    raise ValueError("schema comparison encountered a non-JSON value")
+
+
+def _resolve_local_schema_ref(root: Mapping[str, object], reference: object) -> object:
+    if type(reference) is not str or not reference.startswith("#"):
+        raise ValueError("tool schema $ref must be a local JSON Pointer")
+    if reference == "#":
+        return root
+    if not reference.startswith("#/"):
+        raise ValueError("tool schema supports only local JSON Pointer $ref values")
+    target: object = root
+    for encoded in unquote(reference[2:]).split("/"):
+        if re.search(r"~(?![01])", encoded):
+            raise ValueError("tool schema $ref has an invalid JSON Pointer escape")
+        token = encoded.replace("~1", "/").replace("~0", "~")
+        if isinstance(target, Mapping):
+            if token not in target:
+                raise ValueError("tool schema $ref does not resolve")
+            target = target[token]
+        elif isinstance(target, list) and token.isdigit() and int(token) < len(target):
+            target = target[int(token)]
+        else:
+            raise ValueError("tool schema $ref does not resolve")
+    if type(target) is not bool and not isinstance(target, Mapping):
+        raise ValueError("tool schema $ref target is not a schema")
+    return target
+
+
+def _schema_bound(schema: Mapping[str, object], keyword: str) -> int | None:
+    if keyword not in schema:
+        return None
+    value = schema[keyword]
+    if type(value) is not int or value < 0:
+        raise ValueError(f"tool schema {keyword} must be a non-negative integer")
+    return value
+
+
+def _schema_number(schema: Mapping[str, object], keyword: str) -> Decimal | None:
+    if keyword not in schema:
+        return None
+    value = schema[keyword]
+    if type(value) not in (int, float) or (type(value) is float and not math.isfinite(value)):
+        raise ValueError(f"tool schema {keyword} must be a finite number")
+    try:
+        return Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError(f"tool schema {keyword} must be a finite number") from exc
+
+
+_SUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {
+        "$schema",
+        "$ref",
+        "$defs",
+        "$comment",
+        "title",
+        "description",
+        "default",
+        "examples",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "type",
+        "enum",
+        "const",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "properties",
+        "required",
+        "additionalProperties",
+        "minProperties",
+        "maxProperties",
+        "items",
+        "prefixItems",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+    }
+)
+_SCHEMA_TYPES = frozenset(
+    {"object", "array", "string", "integer", "number", "boolean", "null"}
+)
+_JSON_SCHEMA_2020_12_URIS = frozenset(
+    {
+        "https://json-schema.org/draft/2020-12/schema",
+        "https://json-schema.org/draft/2020-12/schema#",
+    }
+)
+
+
+def _validate_schema_definition(root: Mapping[str, object]) -> None:
+    """Fail closed unless every schema keyword is implemented by this module."""
+
+    _validate_json_tree(root)
+    visited: set[int] = set()
+    evaluations = 0
+
+    def walk(schema: object, *, path: str, depth: int) -> None:
+        nonlocal evaluations
+        evaluations += 1
+        if evaluations > _SCHEMA_MAX_EVALUATIONS:
+            raise ValueError("tool schema definition limit exceeded")
+        if depth > _JSON_TREE_MAX_DEPTH:
+            raise ValueError("tool schema definition nesting limit exceeded")
+        if type(schema) is bool:
+            return
+        if not isinstance(schema, Mapping):
+            raise ValueError(f"{path} is not a JSON Schema")
+        identity = id(schema)
+        if identity in visited:
+            return
+        visited.add(identity)
+
+        unsupported = sorted(set(schema) - _SUPPORTED_SCHEMA_KEYWORDS)
+        if unsupported:
+            raise ValueError(
+                f"tool schema uses unsupported keyword {unsupported[0]!r} at {path}"
+            )
+        dialect = schema.get("$schema")
+        if "$schema" in schema and dialect not in _JSON_SCHEMA_2020_12_URIS:
+            raise ValueError("tool schema must use the JSON Schema 2020-12 dialect")
+        if "$ref" in schema:
+            target = _resolve_local_schema_ref(root, schema["$ref"])
+            walk(target, path=f"{path}.$ref", depth=depth + 1)
+
+        declared = schema.get("type")
+        if declared is not None:
+            if type(declared) is str:
+                declared_types = [declared]
+            elif (
+                isinstance(declared, list)
+                and declared
+                and all(type(item) is str for item in declared)
+                and len(set(declared)) == len(declared)
+            ):
+                declared_types = declared
+            else:
+                raise ValueError(
+                    "tool schema type must be a string or unique non-empty string array"
+                )
+            unknown_types = sorted(set(declared_types) - _SCHEMA_TYPES)
+            if unknown_types:
+                raise ValueError(f"tool schema uses unsupported type {unknown_types[0]!r}")
+
+        enum = schema.get("enum")
+        if "enum" in schema:
+            if not isinstance(enum, list) or not enum:
+                raise ValueError("tool schema enum must be a non-empty array")
+            enum_keys = [_json_semantic_key(candidate) for candidate in enum]
+            if len(enum_keys) != len(set(enum_keys)):
+                raise ValueError("tool schema enum values must be unique")
+
+        required = schema.get("required")
+        if "required" in schema and (
+            not isinstance(required, list)
+            or any(type(item) is not str for item in required)
+            or len(set(required)) != len(required)
+        ):
+            raise ValueError("tool schema required must be a unique string array")
+
+        for keyword in ("properties", "$defs"):
+            if keyword not in schema:
+                continue
+            children = schema[keyword]
+            if not isinstance(children, Mapping):
+                raise ValueError(f"tool schema {keyword} must be an object")
+            for name, child in children.items():
+                walk(child, path=f"{path}.{keyword}.{name}", depth=depth + 1)
+
+        for keyword in ("allOf", "anyOf", "oneOf", "prefixItems"):
+            if keyword not in schema:
+                continue
+            children = schema[keyword]
+            if not isinstance(children, list) or (
+                keyword != "prefixItems" and not children
+            ):
+                qualification = "an array" if keyword == "prefixItems" else "a non-empty array"
+                raise ValueError(f"tool schema {keyword} must be {qualification}")
+            for index, child in enumerate(children):
+                walk(child, path=f"{path}.{keyword}[{index}]", depth=depth + 1)
+
+        for keyword in ("not", "additionalProperties", "items"):
+            if keyword in schema:
+                walk(schema[keyword], path=f"{path}.{keyword}", depth=depth + 1)
+
+        for keyword in (
+            "minProperties",
+            "maxProperties",
+            "minItems",
+            "maxItems",
+            "minLength",
+            "maxLength",
+        ):
+            _schema_bound(schema, keyword)
+        for keyword in (
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "multipleOf",
+        ):
+            number = _schema_number(schema, keyword)
+            if keyword == "multipleOf" and number is not None and number <= 0:
+                raise ValueError("tool schema multipleOf must be greater than zero")
+        if "uniqueItems" in schema and type(schema["uniqueItems"]) is not bool:
+            raise ValueError("tool schema uniqueItems must be a boolean")
+        if "pattern" in schema:
+            pattern = schema["pattern"]
+            if type(pattern) is not str or len(pattern) > _SCHEMA_MAX_PATTERN_LENGTH:
+                raise ValueError("tool schema pattern is invalid or too long")
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError("tool schema pattern is not a valid regular expression") from exc
+
+    walk(root, path="$", depth=0)
+
+
+def _matches_schema_type(value: object, declared: str) -> bool:
+    checks = {
         "object": lambda item: isinstance(item, Mapping),
         "array": lambda item: isinstance(item, list),
         "string": lambda item: type(item) is str,
@@ -345,23 +606,278 @@ def _default_schema_validator(schema: Mapping[str, object], value: object) -> No
         "boolean": lambda item: type(item) is bool,
         "null": lambda item: item is None,
     }
-    for key, item in value.items():
-        rule = properties.get(key)
-        if not isinstance(rule, Mapping):
-            continue
-        declared = rule.get("type")
-        if type(declared) is str:
-            check = type_checks.get(declared)
-            if check is None:
-                raise InvalidProtocolRequestError(f"tool schema uses unsupported type {declared!r}")
-            if not check(item):
-                raise InvalidProtocolRequestError(f"tool argument {key!r} has the wrong type")
-        if "const" in rule and item != rule["const"]:
-            raise InvalidProtocolRequestError(f"tool argument {key!r} violates const")
-        enum = rule.get("enum")
-        if enum is not None and (not isinstance(enum, list) or item not in enum):
-            raise InvalidProtocolRequestError(f"tool argument {key!r} is outside enum")
-    _validate_json_tree(value)
+    check = checks.get(declared)
+    if check is None:
+        raise ValueError(f"tool schema uses unsupported type {declared!r}")
+    return check(value)
+
+
+def _validate_schema_instance(
+    root: Mapping[str, object],
+    schema: object,
+    value: object,
+    *,
+    path: str,
+    depth: int,
+    budget: list[int],
+    active: set[tuple[int, int]],
+) -> None:
+    budget[0] += 1
+    if budget[0] > _SCHEMA_MAX_EVALUATIONS:
+        raise ValueError("tool schema evaluation limit exceeded")
+    if depth > _JSON_TREE_MAX_DEPTH:
+        raise ValueError("tool schema recursion limit exceeded")
+    if type(schema) is bool:
+        if not schema:
+            raise _SchemaMismatch(f"{path} is rejected by the schema")
+        return
+    if not isinstance(schema, Mapping):
+        raise ValueError("tool schema contains a non-schema value")
+
+    active_key = (id(schema), id(value))
+    if active_key in active:
+        raise ValueError("tool schema contains a non-progressing recursive $ref")
+    active.add(active_key)
+    try:
+        if "$ref" in schema:
+            _validate_schema_instance(
+                root,
+                _resolve_local_schema_ref(root, schema["$ref"]),
+                value,
+                path=path,
+                depth=depth + 1,
+                budget=budget,
+                active=active,
+            )
+
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            branches = schema.get(keyword)
+            if branches is None:
+                continue
+            if not isinstance(branches, list) or not branches:
+                raise ValueError(f"tool schema {keyword} must be a non-empty array")
+            matches = 0
+            for branch in branches:
+                try:
+                    _validate_schema_instance(
+                        root,
+                        branch,
+                        value,
+                        path=path,
+                        depth=depth + 1,
+                        budget=budget,
+                        active=active,
+                    )
+                except _SchemaMismatch:
+                    continue
+                matches += 1
+            if keyword == "allOf" and matches != len(branches):
+                raise _SchemaMismatch(f"{path} does not satisfy allOf")
+            if keyword == "anyOf" and matches == 0:
+                raise _SchemaMismatch(f"{path} does not satisfy anyOf")
+            if keyword == "oneOf" and matches != 1:
+                raise _SchemaMismatch(f"{path} does not satisfy exactly one oneOf branch")
+
+        if "not" in schema:
+            try:
+                _validate_schema_instance(
+                    root,
+                    schema["not"],
+                    value,
+                    path=path,
+                    depth=depth + 1,
+                    budget=budget,
+                    active=active,
+                )
+            except _SchemaMismatch:
+                pass
+            else:
+                raise _SchemaMismatch(f"{path} satisfies a forbidden schema")
+
+        declared = schema.get("type")
+        if declared is not None:
+            if type(declared) is str:
+                declared_types = [declared]
+            elif (
+                isinstance(declared, list)
+                and declared
+                and all(type(item) is str for item in declared)
+                and len(set(declared)) == len(declared)
+            ):
+                declared_types = declared
+            else:
+                raise ValueError("tool schema type must be a string or unique non-empty string array")
+            supported_types = {"object", "array", "string", "integer", "number", "boolean", "null"}
+            if any(item not in supported_types for item in declared_types):
+                unsupported = next(item for item in declared_types if item not in supported_types)
+                raise ValueError(f"tool schema uses unsupported type {unsupported!r}")
+            if not any(_matches_schema_type(value, item) for item in declared_types):
+                raise _SchemaMismatch(f"{path} has the wrong type")
+
+        if "const" in schema and _json_semantic_key(value) != _json_semantic_key(schema["const"]):
+            raise _SchemaMismatch(f"{path} violates const")
+        if "enum" in schema:
+            enum = schema["enum"]
+            if not isinstance(enum, list) or not enum:
+                raise ValueError("tool schema enum must be a non-empty array")
+            value_key = _json_semantic_key(value)
+            if all(value_key != _json_semantic_key(candidate) for candidate in enum):
+                raise _SchemaMismatch(f"{path} is outside enum")
+
+        if isinstance(value, Mapping):
+            required = schema.get("required", [])
+            if (
+                not isinstance(required, list)
+                or any(type(item) is not str for item in required)
+                or len(set(required)) != len(required)
+            ):
+                raise ValueError("tool schema required must be a unique string array")
+            for name in required:
+                if name not in value:
+                    raise _SchemaMismatch(f"{path} is missing required property {name!r}")
+            properties = schema.get("properties", {})
+            if not isinstance(properties, Mapping):
+                raise ValueError("tool schema properties must be an object")
+            for name, item in value.items():
+                if name in properties:
+                    _validate_schema_instance(
+                        root,
+                        properties[name],
+                        item,
+                        path=f"{path}.{name}",
+                        depth=depth + 1,
+                        budget=budget,
+                        active=active,
+                    )
+            additional = schema.get("additionalProperties", True)
+            if type(additional) is not bool and not isinstance(additional, Mapping):
+                raise ValueError("tool schema additionalProperties must be a schema")
+            for name in sorted(set(value) - set(properties)):
+                if additional is False:
+                    raise _SchemaMismatch(f"{path} contains unknown property {name!r}")
+                if additional is not True:
+                    _validate_schema_instance(
+                        root,
+                        additional,
+                        value[name],
+                        path=f"{path}.{name}",
+                        depth=depth + 1,
+                        budget=budget,
+                        active=active,
+                    )
+            minimum = _schema_bound(schema, "minProperties")
+            maximum = _schema_bound(schema, "maxProperties")
+            if minimum is not None and len(value) < minimum:
+                raise _SchemaMismatch(f"{path} has too few properties")
+            if maximum is not None and len(value) > maximum:
+                raise _SchemaMismatch(f"{path} has too many properties")
+
+        if isinstance(value, list):
+            minimum = _schema_bound(schema, "minItems")
+            maximum = _schema_bound(schema, "maxItems")
+            if minimum is not None and len(value) < minimum:
+                raise _SchemaMismatch(f"{path} has too few items")
+            if maximum is not None and len(value) > maximum:
+                raise _SchemaMismatch(f"{path} has too many items")
+            unique_items = schema.get("uniqueItems", False)
+            if type(unique_items) is not bool:
+                raise ValueError("tool schema uniqueItems must be a boolean")
+            if unique_items:
+                keys = [_json_semantic_key(item) for item in value]
+                if len(keys) != len(set(keys)):
+                    raise _SchemaMismatch(f"{path} contains duplicate items")
+            prefix_items = schema.get("prefixItems", [])
+            if not isinstance(prefix_items, list):
+                raise ValueError("tool schema prefixItems must be an array")
+            for index, item_schema in enumerate(prefix_items[: len(value)]):
+                _validate_schema_instance(
+                    root,
+                    item_schema,
+                    value[index],
+                    path=f"{path}[{index}]",
+                    depth=depth + 1,
+                    budget=budget,
+                    active=active,
+                )
+            items = schema.get("items", True)
+            if type(items) is not bool and not isinstance(items, Mapping):
+                raise ValueError("tool schema items must be a schema")
+            for index in range(len(prefix_items), len(value)):
+                _validate_schema_instance(
+                    root,
+                    items,
+                    value[index],
+                    path=f"{path}[{index}]",
+                    depth=depth + 1,
+                    budget=budget,
+                    active=active,
+                )
+
+        if type(value) is str:
+            minimum = _schema_bound(schema, "minLength")
+            maximum = _schema_bound(schema, "maxLength")
+            if minimum is not None and len(value) < minimum:
+                raise _SchemaMismatch(f"{path} is shorter than minLength")
+            if maximum is not None and len(value) > maximum:
+                raise _SchemaMismatch(f"{path} is longer than maxLength")
+            pattern = schema.get("pattern")
+            if pattern is not None:
+                if type(pattern) is not str or len(pattern) > _SCHEMA_MAX_PATTERN_LENGTH:
+                    raise ValueError("tool schema pattern is invalid or too long")
+                if len(value) > _SCHEMA_MAX_PATTERN_INPUT:
+                    raise _SchemaMismatch(f"{path} is too long for bounded pattern evaluation")
+                try:
+                    matches = re.search(pattern, value) is not None
+                except re.error as exc:
+                    raise ValueError("tool schema pattern is not a valid regular expression") from exc
+                if not matches:
+                    raise _SchemaMismatch(f"{path} does not match pattern")
+
+        if type(value) in (int, float):
+            number = Decimal(str(value))
+            minimum = _schema_number(schema, "minimum")
+            maximum = _schema_number(schema, "maximum")
+            exclusive_minimum = _schema_number(schema, "exclusiveMinimum")
+            exclusive_maximum = _schema_number(schema, "exclusiveMaximum")
+            multiple = _schema_number(schema, "multipleOf")
+            if minimum is not None and number < minimum:
+                raise _SchemaMismatch(f"{path} is below minimum")
+            if maximum is not None and number > maximum:
+                raise _SchemaMismatch(f"{path} is above maximum")
+            if exclusive_minimum is not None and number <= exclusive_minimum:
+                raise _SchemaMismatch(f"{path} is not above exclusiveMinimum")
+            if exclusive_maximum is not None and number >= exclusive_maximum:
+                raise _SchemaMismatch(f"{path} is not below exclusiveMaximum")
+            if multiple is not None:
+                if multiple <= 0:
+                    raise ValueError("tool schema multipleOf must be greater than zero")
+                if number % multiple != 0:
+                    raise _SchemaMismatch(f"{path} is not a multipleOf value")
+    finally:
+        active.remove(active_key)
+
+
+def _default_schema_validator(schema: Mapping[str, object], value: object) -> None:
+    """Validate JSON data against a bounded JSON Schema 2020-12 subset."""
+
+    if not isinstance(schema, Mapping):
+        raise InvalidProtocolRequestError("tool schema root must be an object")
+    try:
+        _validate_schema_definition(schema)
+        _validate_json_tree(value)
+        _validate_schema_instance(
+            schema,
+            schema,
+            value,
+            path="$",
+            depth=0,
+            budget=[0],
+            active=set(),
+        )
+    except _SchemaMismatch as exc:
+        raise InvalidProtocolRequestError(f"tool value does not match schema: {exc}") from exc
+    except (ArithmeticError, TypeError, ValueError) as exc:
+        raise InvalidProtocolRequestError(f"tool schema is invalid: {exc}") from exc
 
 
 class McpA2AGateway:
@@ -381,6 +897,7 @@ class McpA2AGateway:
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] = _default_clock,
         a2a_tenant: str | None = None,
+        server_info: Mapping[str, object] | None = None,
     ) -> None:
         if not callable(identity_validator):
             raise ValueError("identity_validator is required and must be callable")
@@ -400,6 +917,20 @@ class McpA2AGateway:
         self._id_factory = id_factory or (lambda: secrets.token_urlsafe(32))
         self._clock = clock
         self._a2a_tenant = a2a_tenant
+        server_info_value = (
+            {"name": "agentos-mcp-a2a-gateway", "version": "1.0"}
+            if server_info is None
+            else server_info
+        )
+        if (
+            not isinstance(server_info_value, Mapping)
+            or type(server_info_value.get("name")) is not str
+            or not server_info_value.get("name")
+            or type(server_info_value.get("version")) is not str
+            or not server_info_value.get("version")
+        ):
+            raise ValueError("server_info must contain non-empty string name and version fields")
+        self._server_info = json.loads(canonical_json_bytes(server_info_value).decode("ascii"))
         self._id_lock = threading.RLock()
         self._context_ids: set[str] = set()
 
@@ -575,6 +1106,173 @@ class McpA2AGateway:
             }
         }
 
+    @staticmethod
+    def _mcp_tool_error(
+        reason: str,
+        message: str,
+        *,
+        metadata: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        value: dict[str, object] = {
+            "resultType": "complete",
+            "content": [{"type": "text", "text": message}],
+            "structuredContent": {
+                "error": {
+                    "reason": reason,
+                    "message": message,
+                }
+            },
+            "isError": True,
+        }
+        if metadata is not None:
+            value["_meta"] = copy.deepcopy(dict(metadata))
+        return value
+
+    def _validate_tool_value(self, schema: Mapping[str, object], value: object) -> None:
+        try:
+            self._schema_validator(schema, value)
+        except ProtocolGatewayError:
+            raise
+        except Exception as exc:
+            raise InvalidProtocolRequestError("tool value does not match its schema") from exc
+
+    def _mcp_sync_result(
+        self,
+        tool: ToolManifest,
+        snapshot: TaskChannelSnapshot,
+    ) -> dict[str, object]:
+        local_metadata = self._task_metadata(snapshot, snapshot.binding)
+        try:
+            raw = copy.deepcopy(snapshot.result)
+        except Exception:
+            return self._mcp_tool_error(
+                "INVALID_TOOL_OUTPUT",
+                "tool returned an output that cannot be copied",
+                metadata=local_metadata,
+            )
+        if not isinstance(raw, Mapping):
+            structured = raw
+            has_structured = True
+            has_content = False
+            content: object = None
+            value: dict[str, object] = {"structuredContent": structured}
+            supplied_metadata: object = {}
+            is_error = False
+        else:
+            value = dict(raw)
+            supplied_metadata = value.pop("_meta", {})
+            is_error = value.get("isError", False)
+            has_content = "content" in value
+            content = value.get("content")
+            has_structured = "structuredContent" in value
+            structured = value.get("structuredContent")
+
+        if not isinstance(supplied_metadata, Mapping):
+            return self._mcp_tool_error(
+                "INVALID_TOOL_OUTPUT",
+                "tool returned invalid _meta",
+                metadata=local_metadata,
+            )
+        if type(is_error) is not bool:
+            return self._mcp_tool_error(
+                "INVALID_TOOL_OUTPUT",
+                "tool returned invalid isError",
+                metadata=local_metadata,
+            )
+        if is_error and not has_structured:
+            structured = {
+                "error": {
+                    "reason": "TOOL_EXECUTION_FAILED",
+                    "message": "tool execution failed",
+                }
+            }
+            has_structured = True
+        if has_structured:
+            try:
+                _validate_json_tree(structured)
+            except ValueError:
+                return self._mcp_tool_error(
+                    "INVALID_TOOL_OUTPUT",
+                    "tool returned non-JSON structuredContent",
+                    metadata=local_metadata,
+                )
+        if has_content and content is None:
+            return self._mcp_tool_error(
+                "INVALID_TOOL_OUTPUT",
+                "tool returned invalid content",
+                metadata=local_metadata,
+            )
+        if not has_content:
+            content = []
+            if has_structured:
+                try:
+                    rendered = json.dumps(structured, ensure_ascii=True, sort_keys=True)
+                except (TypeError, ValueError):
+                    return self._mcp_tool_error(
+                        "INVALID_TOOL_OUTPUT",
+                        "tool returned non-JSON structuredContent",
+                        metadata=local_metadata,
+                    )
+                content = [{"type": "text", "text": rendered}]
+        if (
+            not isinstance(content, list)
+            or any(
+                not isinstance(item, Mapping) or type(item.get("type")) is not str
+                for item in content
+            )
+        ):
+            return self._mcp_tool_error(
+                "INVALID_TOOL_OUTPUT",
+                "tool returned invalid content",
+                metadata=local_metadata,
+            )
+        try:
+            _validate_json_tree(content)
+        except ValueError:
+            return self._mcp_tool_error(
+                "INVALID_TOOL_OUTPUT",
+                "tool returned non-JSON content",
+                metadata=local_metadata,
+            )
+
+        if tool.output_schema is not None and not is_error:
+            if not has_structured:
+                return self._mcp_tool_error(
+                    "INVALID_TOOL_OUTPUT",
+                    "tool did not return required structuredContent",
+                    metadata=local_metadata,
+                )
+            try:
+                self._validate_tool_value(tool.output_schema, structured)
+            except ProtocolGatewayError:
+                return self._mcp_tool_error(
+                    "INVALID_TOOL_OUTPUT",
+                    "tool structuredContent does not match outputSchema",
+                    metadata=local_metadata,
+                )
+
+        metadata = copy.deepcopy(dict(supplied_metadata))
+        metadata.pop(AGENTOS_TASK_METADATA, None)
+        metadata.pop(MCP_SERVER_INFO_METADATA, None)
+        metadata.update(local_metadata)
+        value["resultType"] = "complete"
+        value["content"] = copy.deepcopy(content)
+        if has_structured:
+            value["structuredContent"] = copy.deepcopy(structured)
+        else:
+            value.pop("structuredContent", None)
+        value["isError"] = is_error
+        value["_meta"] = metadata
+        try:
+            _validate_json_tree(value)
+        except ValueError:
+            return self._mcp_tool_error(
+                "INVALID_TOOL_OUTPUT",
+                "tool returned a non-JSON result",
+                metadata=local_metadata,
+            )
+        return value
+
     def _mcp_task(
         self,
         task: StoredTask,
@@ -623,12 +1321,15 @@ class McpA2AGateway:
                 "MCP", str(meta.get("io.modelcontextprotocol/protocolVersion"))
             )
         client = meta.get("io.modelcontextprotocol/clientInfo")
-        if (
+        if client is not None and (
             not isinstance(client, Mapping)
             or type(client.get("name")) is not str
             or type(client.get("version")) is not str
         ):
             raise InvalidProtocolRequestError("MCP request has invalid clientInfo")
+        client_capabilities = meta.get("io.modelcontextprotocol/clientCapabilities")
+        if client_capabilities is not None and not isinstance(client_capabilities, Mapping):
+            raise InvalidProtocolRequestError("MCP request has invalid clientCapabilities")
         return meta
 
     def _validate_mcp_envelope(self, envelope: McpRequestEnvelope) -> tuple[object, str, Mapping[str, object]]:
@@ -673,9 +1374,20 @@ class McpA2AGateway:
             )
         return request_id, method, params
 
-    @staticmethod
-    def _jsonrpc_result(request_id: object, result: object) -> dict[str, object]:
-        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+    def _jsonrpc_result(self, request_id: object, result: object) -> dict[str, object]:
+        rendered = copy.deepcopy(result)
+        if isinstance(rendered, Mapping):
+            rendered = dict(rendered)
+            supplied_metadata = rendered.get("_meta", {})
+            metadata = (
+                copy.deepcopy(dict(supplied_metadata))
+                if isinstance(supplied_metadata, Mapping)
+                else {}
+            )
+            # Server identity is binding-owned and cannot be forged by a tool result.
+            metadata[MCP_SERVER_INFO_METADATA] = copy.deepcopy(self._server_info)
+            rendered["_meta"] = metadata
+        return {"jsonrpc": "2.0", "id": request_id, "result": rendered}
 
     @staticmethod
     def _jsonrpc_error(request_id: object, error: ProtocolGatewayError) -> dict[str, object]:
@@ -699,8 +1411,13 @@ class McpA2AGateway:
             if method == "server/discover":
                 result = {
                     "resultType": "complete",
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {"extensions": {MCP_TASKS_EXTENSION: {}}},
+                    "supportedVersions": [MCP_PROTOCOL_VERSION],
+                    "capabilities": {
+                        "tools": {},
+                        "extensions": {MCP_TASKS_EXTENSION: {}},
+                    },
+                    "ttlMs": _MCP_DISCOVERY_TTL_MS,
+                    "cacheScope": "private",
                 }
             elif method == "tools/list":
                 result = self.mcp_tools_list(principal, already_authorized=True)
@@ -762,13 +1479,18 @@ class McpA2AGateway:
             raise InvalidProtocolRequestError("tools/call params must be an object")
         tool = self._tool(params.get("name"))
         arguments = params.get("arguments", {})
-        self._schema_validator(tool.input_schema, arguments)
+        if not isinstance(arguments, Mapping):
+            raise InvalidProtocolRequestError("tool arguments must be an object")
         if tool.task_mode == "task" and not self._task_capability(params):
             raise InvalidProtocolRequestError(
                 "client did not declare the Tasks extension for this request",
-                code=-32003,
+                code=-32021,
                 reason="MISSING_REQUIRED_CLIENT_CAPABILITY",
             )
+        try:
+            self._validate_tool_value(tool.input_schema, arguments)
+        except ProtocolGatewayError as exc:
+            return self._mcp_tool_error(exc.reason, exc.public_message)
 
         opaque = self._new_id("task_" if tool.task_mode == "task" else "call_", task=tool.task_mode == "task")
         submission = self._submit(
@@ -780,21 +1502,22 @@ class McpA2AGateway:
         if tool.task_mode == "sync":
             snapshot = submission.snapshot
             if snapshot.status is TaskStatus.COMPLETED:
-                if isinstance(snapshot.result, Mapping):
-                    value = copy.deepcopy(dict(snapshot.result))
-                    value.setdefault("resultType", "complete")
-                    value.setdefault("_meta", self._task_metadata(snapshot, snapshot.binding))
-                    return value
-                return {
-                    "resultType": "complete",
-                    "structuredContent": copy.deepcopy(snapshot.result),
-                    "_meta": self._task_metadata(snapshot, snapshot.binding),
-                }
+                return self._mcp_sync_result(tool, snapshot)
             if snapshot.status is TaskStatus.FAILED:
-                raise ProtocolGatewayError(
-                    -32000,
+                error = snapshot.error or {}
+                message = error.get("message", "tool execution failed")
+                if type(message) is not str or not message:
+                    message = "tool execution failed"
+                return self._mcp_tool_error(
                     "TOOL_EXECUTION_FAILED",
-                    str((snapshot.error or {}).get("message", "tool execution failed")),
+                    message,
+                    metadata=self._task_metadata(snapshot, snapshot.binding),
+                )
+            if snapshot.status is TaskStatus.CANCELLED:
+                return self._mcp_tool_error(
+                    "TOOL_EXECUTION_CANCELLED",
+                    "tool execution was cancelled",
+                    metadata=self._task_metadata(snapshot, snapshot.binding),
                 )
             raise ProtocolGatewayError(
                 -32000,
@@ -1152,6 +1875,7 @@ __all__ = [
     "InMemoryTaskStore",
     "InvalidProtocolRequestError",
     "MCP_PROTOCOL_VERSION",
+    "MCP_SERVER_INFO_METADATA",
     "MCP_TASKS_EXTENSION",
     "McpA2AGateway",
     "McpRequestEnvelope",

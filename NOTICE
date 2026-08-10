@@ -9,12 +9,9 @@ Source code in this repository is distributed under GPL-3.0. Documentation and
 presentation material are distributed under CC BY-SA 4.0, except where a file
 states a different license.
 
-The repository file `项目介绍视频和ppt网盘链接.txt` contains access links to a
-separately distributed project video and slide deck. The linked media files are
-not included in the Git tree and are not build or runtime dependencies. The
-repository license statement covers project-authored documentation and
-presentation content; independently licensed fonts, images, audio, video, or
-other embedded material retain their own notices and terms.
+External video or slide files are not included in the Git tree and are not build
+or runtime dependencies. Independently licensed fonts, images, audio, video, or
+other material retain their own notices and terms.
 
 The root `.clang-format` originates from the Linux kernel formatting
 configuration and retains its embedded `GPL-2.0` SPDX identifier. It is

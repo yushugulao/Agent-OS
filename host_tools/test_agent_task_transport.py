@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import threading
 import unittest
 
 import agent_task_transport as transport
@@ -106,6 +107,158 @@ class AgentTaskTransportTests(unittest.TestCase):
         self.assertEqual(completed.status, transport.TaskStatus.COMPLETED)
         with self.assertRaisesRegex(transport.InvalidTaskTransitionError, "terminal"):
             adapter.publish(submitted.binding, transport.TaskStatus.WORKING)
+
+    def test_partial_input_is_retained_and_full_input_runs_continuation(self) -> None:
+        observed: list[tuple[object, dict[str, object]]] = []
+
+        def handler(
+            request: transport.TaskChannelRequest,
+        ) -> transport.TaskChannelOutcome:
+            return transport.TaskChannelOutcome(
+                status=transport.TaskStatus.INPUT_REQUIRED,
+                status_message="need both inputs",
+                input_requests={
+                    "approval": {"method": "elicitation"},
+                    "ticket": {"type": "string"},
+                },
+            )
+
+        def continuation(
+            request: transport.TaskChannelRequest,
+            responses: dict[str, object],
+        ) -> transport.TaskChannelOutcome:
+            observed.append((request.payload, responses))
+            return transport.TaskChannelOutcome(
+                status=transport.TaskStatus.COMPLETED,
+                result={"accepted": sorted(responses)},
+            )
+
+        adapter = transport.InMemoryTaskChannelTransport(
+            self.issuer,
+            handlers={3: handler},
+            continuation_handlers={3: continuation},
+        )
+        submitted = adapter.submit(self.issuer, self.request())
+        self.assertEqual(submitted.snapshot.status, transport.TaskStatus.INPUT_REQUIRED)
+
+        partial_value = {"approved": True}
+        partial = adapter.update(
+            self.issuer, submitted.binding, {"approval": partial_value}
+        )
+        partial_value["approved"] = False
+        self.assertEqual(partial.status, transport.TaskStatus.INPUT_REQUIRED)
+        self.assertEqual(partial.input_requests, {"ticket": {"type": "string"}})
+        self.assertEqual(observed, [])
+
+        completed = adapter.update(
+            self.issuer,
+            submitted.binding,
+            {"ticket": "T-7", "not-requested": "ignored"},
+        )
+        self.assertEqual(completed.status, transport.TaskStatus.COMPLETED)
+        self.assertEqual(completed.result, {"accepted": ["approval", "ticket"]})
+        self.assertEqual(
+            observed,
+            [
+                (
+                    {"query": "alpha"},
+                    {"approval": {"approved": True}, "ticket": "T-7"},
+                )
+            ],
+        )
+        self.assertEqual(adapter.continuation_invocations, 1)
+        self.assertEqual(
+            [event.status for event in adapter.events(self.issuer, submitted.binding)],
+            [
+                transport.TaskStatus.WORKING,
+                transport.TaskStatus.INPUT_REQUIRED,
+                transport.TaskStatus.INPUT_REQUIRED,
+                transport.TaskStatus.WORKING,
+                transport.TaskStatus.COMPLETED,
+            ],
+        )
+
+    def test_slow_handler_does_not_block_snapshot_or_cancel(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def handler(request: transport.TaskChannelRequest) -> object:
+            entered.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("test did not release handler")
+            return {"late": request.payload}
+
+        adapter = transport.InMemoryTaskChannelTransport(
+            self.issuer, handlers={3: handler}
+        )
+        binding = transport.TaskBinding(7, 11, 17, 13, 1)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            submitted_future = executor.submit(
+                adapter.submit, self.issuer, self.request()
+            )
+            self.assertTrue(entered.wait(timeout=2))
+            self.assertEqual(
+                adapter.snapshot(self.issuer, binding).status,
+                transport.TaskStatus.WORKING,
+            )
+            cancelled = adapter.cancel(self.issuer, binding)
+            self.assertEqual(cancelled.status, transport.TaskStatus.CANCELLED)
+            release.set()
+            submitted = submitted_future.result(timeout=2)
+
+        self.assertEqual(submitted.snapshot.status, transport.TaskStatus.CANCELLED)
+        terminal = [
+            event
+            for event in adapter.events(self.issuer, binding)
+            if event.status in transport.TERMINAL_TASK_STATUSES
+        ]
+        self.assertEqual([event.status for event in terminal], [transport.TaskStatus.CANCELLED])
+
+    def test_handler_and_continuation_exceptions_fail_terminally(self) -> None:
+        def failing_handler(
+            request: transport.TaskChannelRequest,
+        ) -> transport.TaskChannelOutcome:
+            raise RuntimeError(f"cannot handle {request.tool_id}")
+
+        handler_adapter = transport.InMemoryTaskChannelTransport(
+            self.issuer, handlers={3: failing_handler}
+        )
+        failed = handler_adapter.submit(self.issuer, self.request()).snapshot
+        self.assertEqual(failed.status, transport.TaskStatus.FAILED)
+        self.assertEqual(failed.error["code"], "HANDLER_EXCEPTION")  # type: ignore[index]
+        self.assertEqual(failed.error["exceptionType"], "RuntimeError")  # type: ignore[index]
+
+        def needs_input(
+            request: transport.TaskChannelRequest,
+        ) -> transport.TaskChannelOutcome:
+            return transport.TaskChannelOutcome(
+                status=transport.TaskStatus.INPUT_REQUIRED,
+                input_requests={"answer": {"type": "string"}},
+            )
+
+        def failing_continuation(
+            request: transport.TaskChannelRequest,
+            responses: dict[str, object],
+        ) -> object:
+            raise ValueError(f"bad answer: {responses['answer']}")
+
+        continuation_adapter = transport.InMemoryTaskChannelTransport(
+            self.issuer,
+            handlers={3: needs_input},
+            continuation_handlers={3: failing_continuation},
+            first_request_id=9,
+        )
+        waiting = continuation_adapter.submit(
+            self.issuer, self.request(submission_key="continuation-failure")
+        )
+        continuation_failed = continuation_adapter.update(
+            self.issuer, waiting.binding, {"answer": "no"}
+        )
+        self.assertEqual(continuation_failed.status, transport.TaskStatus.FAILED)
+        self.assertEqual(
+            continuation_failed.error["code"],  # type: ignore[index]
+            "CONTINUATION_EXCEPTION",
+        )
 
     def test_concurrent_cancel_has_exactly_one_terminal_transition(self) -> None:
         adapter = transport.InMemoryTaskChannelTransport(self.issuer)

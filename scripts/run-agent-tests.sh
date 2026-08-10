@@ -7,6 +7,10 @@ cd "${SCRIPT_DIR}/.."
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 MAKE_TOOL="${MAKE_TOOL:-make}"
 LOG="${LOG:-error}"
+if [[ "${AGENT_TEST_CASE:-}" == "agentlive_ucore" ]]; then
+	echo "[agent-tests] agentlive_ucore requires the bidirectional model relay; use 'make agent-live-demo'" >&2
+	exit 2
+fi
 if [[ "${AGENT_TEST_CASE:-}" == "agenteval_ucore" ]]; then
 	CHAPTER="${CHAPTER:-agent_eval}"
 	if [[ "${CHAPTER}" != "agent_eval" ]]; then
@@ -222,7 +226,7 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agentsecurity_ucore: ipc_route_authorization=1"
 		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: target_route_consent=1"
+			"agentsecurity_ucore: target_route_consent=1 unsolicited_response_denied=1"
 		require_exact_case_marker "${log_file}" \
 			"agentsecurity_ucore: route_slot_reclaimed=1"
 		;;

@@ -34,12 +34,28 @@ class McpA2AGatewayTests(unittest.TestCase):
             "required": ["query"],
             "additionalProperties": False,
         }
+        self.output_schema = {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {"echo": {"type": "string"}},
+                    "required": ["echo"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                },
+            ]
+        }
         self.tools = (
             gateway.ToolManifest(
                 name="echo",
                 tool_id=1,
                 contract_node_id=0,
                 input_schema=self.schema,
+                output_schema=self.output_schema,
                 kernel_manifest_digest="1" * 64,
                 task_mode="sync",
                 deadline_ns=1_000_000,
@@ -161,6 +177,310 @@ class McpA2AGatewayTests(unittest.TestCase):
         self.assertEqual(echo["_meta"]["io.agentos/kernelManifestSha256"], "1" * 64)
         self.assertNotEqual(expected, "1" * 64)
 
+    def test_server_discovery_advertises_versions_tools_identity_and_cache_hints(self) -> None:
+        response = self.service.handle_mcp(
+            self.mcp_envelope("server/discover", {}), self.alice
+        )
+        result = response["result"]
+        self.assertEqual(result["supportedVersions"], [gateway.MCP_PROTOCOL_VERSION])
+        self.assertNotIn("protocolVersion", result)
+        self.assertEqual(result["capabilities"]["tools"], {})
+        self.assertIn(
+            gateway.MCP_TASKS_EXTENSION,
+            result["capabilities"]["extensions"],
+        )
+        self.assertEqual(result["ttlMs"], 30_000)
+        self.assertEqual(result["cacheScope"], "private")
+        self.assertEqual(
+            result["_meta"][gateway.MCP_SERVER_INFO_METADATA],
+            {"name": "agentos-mcp-a2a-gateway", "version": "1.0"},
+        )
+
+    def test_bounded_recursive_json_schema_subset(self) -> None:
+        schema = {
+            "$defs": {
+                "code": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 4,
+                    "pattern": "^[A-Z]+$",
+                }
+            },
+            "type": "object",
+            "properties": {
+                "mode": {"enum": ["fast", "safe"]},
+                "fixed": {"const": 3},
+                "records": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"$ref": "#/$defs/code"},
+                            "score": {
+                                "type": "number",
+                                "minimum": 0,
+                                "exclusiveMaximum": 10,
+                                "multipleOf": 0.5,
+                            },
+                        },
+                        "required": ["code", "score"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["mode", "fixed", "records"],
+            "allOf": [{"properties": {"fixed": {"type": "integer"}}}],
+            "anyOf": [
+                {"properties": {"mode": {"const": "fast"}}},
+                {"properties": {"mode": {"const": "safe"}}},
+            ],
+            "oneOf": [{"required": ["fixed"]}, {"required": ["alternate"]}],
+            "not": {"required": ["forbidden"]},
+            "additionalProperties": False,
+        }
+        valid = {
+            "mode": "fast",
+            "fixed": 3,
+            "records": [{"code": "AB", "score": 2.5}],
+        }
+        gateway._default_schema_validator(schema, valid)
+
+        invalid_pattern = copy.deepcopy(valid)
+        invalid_pattern["records"][0]["code"] = "lower"
+        with self.assertRaises(gateway.InvalidProtocolRequestError):
+            gateway._default_schema_validator(schema, invalid_pattern)
+        invalid_bound = copy.deepcopy(valid)
+        invalid_bound["records"][0]["score"] = 10
+        with self.assertRaises(gateway.InvalidProtocolRequestError):
+            gateway._default_schema_validator(schema, invalid_bound)
+        duplicates = copy.deepcopy(valid)
+        duplicates["records"].append(copy.deepcopy(duplicates["records"][0]))
+        with self.assertRaises(gateway.InvalidProtocolRequestError):
+            gateway._default_schema_validator(schema, duplicates)
+
+        recursive_schema = {
+            "$defs": {
+                "node": {
+                    "type": "object",
+                    "properties": {"next": {"$ref": "#/$defs/node"}},
+                    "additionalProperties": False,
+                }
+            },
+            "$ref": "#/$defs/node",
+        }
+        gateway._default_schema_validator(
+            recursive_schema, {"next": {"next": {}}}
+        )
+        rejected_combinators = (
+            ({"allOf": [{"required": ["a"]}, {"required": ["b"]}]}, {"a": 1}),
+            ({"anyOf": [{"required": ["a"]}, {"required": ["b"]}]}, {}),
+            ({"oneOf": [{"required": ["a"]}, {"required": ["b"]}]}, {"a": 1, "b": 2}),
+            ({"not": {"required": ["a"]}}, {"a": 1}),
+        )
+        for branch_schema, branch_value in rejected_combinators:
+            with self.assertRaises(gateway.InvalidProtocolRequestError):
+                gateway._default_schema_validator(branch_schema, branch_value)
+
+        deep: dict[str, object] = {}
+        cursor = deep
+        for _ in range(70):
+            child: dict[str, object] = {}
+            cursor["child"] = child
+            cursor = child
+        with self.assertRaises(gateway.InvalidProtocolRequestError):
+            gateway._default_schema_validator({"type": "object"}, deep)
+
+    def test_tool_manifest_rejects_unimplemented_schema_keywords_before_listing(self) -> None:
+        unsupported_schemas = {
+            "if": {
+                "type": "object",
+                "if": {"required": ["kind"]},
+            },
+            "then": {
+                "type": "object",
+                "then": {"required": ["value"]},
+            },
+            "dependentRequired": {
+                "type": "object",
+                "dependentRequired": {"card": ["billingAddress"]},
+            },
+            "unevaluatedProperties": {
+                "type": "object",
+                "unevaluatedProperties": False,
+            },
+        }
+        for keyword, schema in unsupported_schemas.items():
+            with self.subTest(keyword=keyword), self.assertRaisesRegex(
+                ValueError, keyword
+            ):
+                gateway.ToolManifest(
+                    name="unsupported",
+                    tool_id=3,
+                    contract_node_id=3,
+                    input_schema=schema,
+                    kernel_manifest_digest="3" * 64,
+                )
+
+        external_ref = {
+            "type": "object",
+            "properties": {
+                "value": {"$ref": "https://example.invalid/schema.json"}
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "local JSON Pointer"):
+            gateway.ToolManifest(
+                name="external_ref",
+                tool_id=3,
+                contract_node_id=3,
+                input_schema=external_ref,
+                kernel_manifest_digest="3" * 64,
+            )
+
+    def test_sync_input_failure_is_a_call_tool_result_without_submission(self) -> None:
+        response = self.service.handle_mcp(
+            self.mcp_envelope(
+                "tools/call",
+                {"name": "echo", "arguments": {"query": 7}},
+                name="echo",
+            ),
+            self.alice,
+        )
+        self.assertNotIn("error", response)
+        self.assertTrue(response["result"]["isError"])
+        self.assertIsInstance(response["result"]["content"], list)
+        self.assertIn("error", response["result"]["structuredContent"])
+
+        malformed = self.service.handle_mcp(
+            self.mcp_envelope(
+                "tools/call",
+                {"name": "echo", "arguments": []},
+                name="echo",
+            ),
+            self.alice,
+        )
+        self.assertEqual(malformed["error"]["code"], -32602)
+        self.assertEqual(self.adapter.submitted_requests, 0)
+
+    def test_task_mode_input_failure_is_model_visible_without_submission(self) -> None:
+        response = self.service.handle_mcp(
+            self.mcp_envelope(
+                "tools/call",
+                {
+                    "name": "research",
+                    "arguments": {"query": 7},
+                    "_meta": self.mcp_meta(tasks=True),
+                },
+                name="research",
+            ),
+            self.alice,
+        )
+        self.assertNotIn("error", response)
+        self.assertEqual(response["result"]["resultType"], "complete")
+        self.assertTrue(response["result"]["isError"])
+        self.assertIsInstance(response["result"]["content"], list)
+        self.assertIn("error", response["result"]["structuredContent"])
+        self.assertEqual(self.adapter.submitted_requests, 0)
+        self.assertEqual(self.store.list_owner(self.alice.owner_key), ())
+
+    def test_sync_failures_and_reserved_mapping_fields_are_normalized(self) -> None:
+        self.adapter._handlers[1] = lambda request: {
+            "resultType": "task",
+            "content": [{"type": "text", "text": "ok"}],
+            "structuredContent": {"echo": request.payload["query"]},
+            "_meta": {
+                gateway.AGENTOS_TASK_METADATA: {"requestId": 999},
+                gateway.MCP_SERVER_INFO_METADATA: {"name": "forged", "version": "0"},
+                "example/custom": True,
+            },
+        }
+        normalized = self.service.handle_mcp(
+            self.mcp_envelope(
+                "tools/call",
+                {"name": "echo", "arguments": {"query": "hello"}},
+                name="echo",
+            ),
+            self.alice,
+        )["result"]
+        self.assertEqual(normalized["resultType"], "complete")
+        self.assertEqual(normalized["_meta"][gateway.AGENTOS_TASK_METADATA]["requestId"], 1)
+        self.assertEqual(
+            normalized["_meta"][gateway.MCP_SERVER_INFO_METADATA]["name"],
+            "agentos-mcp-a2a-gateway",
+        )
+        self.assertTrue(normalized["_meta"]["example/custom"])
+
+        self.adapter._handlers[1] = lambda request: {
+            "content": [{"type": "text", "text": "array output"}],
+            "structuredContent": [request.payload["query"]],
+        }
+        unrestricted_output = self.service.handle_mcp(
+            self.mcp_envelope(
+                "tools/call",
+                {"name": "echo", "arguments": {"query": "hello"}},
+                name="echo",
+            ),
+            self.alice,
+        )["result"]
+        self.assertFalse(unrestricted_output["isError"])
+        self.assertEqual(unrestricted_output["structuredContent"], ["hello"])
+
+        self.adapter._handlers[1] = lambda request: {
+            "content": [{"type": "text", "text": "bad"}],
+            "structuredContent": {"echo": 7},
+        }
+        invalid_output = self.service.handle_mcp(
+            self.mcp_envelope(
+                "tools/call",
+                {"name": "echo", "arguments": {"query": "hello"}},
+                name="echo",
+            ),
+            self.alice,
+        )["result"]
+        self.assertTrue(invalid_output["isError"])
+        self.assertEqual(
+            invalid_output["structuredContent"]["error"]["reason"],
+            "INVALID_TOOL_OUTPUT",
+        )
+
+        self.adapter._handlers[1] = lambda request: {
+            "content": [{"type": "text", "text": "missing structured output"}],
+        }
+        missing_output = self.service.handle_mcp(
+            self.mcp_envelope(
+                "tools/call",
+                {"name": "echo", "arguments": {"query": "hello"}},
+                name="echo",
+            ),
+            self.alice,
+        )["result"]
+        self.assertTrue(missing_output["isError"])
+        self.assertEqual(
+            missing_output["structuredContent"]["error"]["reason"],
+            "INVALID_TOOL_OUTPUT",
+        )
+
+        self.adapter._handlers[1] = lambda request: transport.TaskChannelOutcome(
+            status=transport.TaskStatus.FAILED,
+            error={"message": "business rule rejected the call"},
+        )
+        failed = self.service.handle_mcp(
+            self.mcp_envelope(
+                "tools/call",
+                {"name": "echo", "arguments": {"query": "hello"}},
+                name="echo",
+            ),
+            self.alice,
+        )
+        self.assertNotIn("error", failed)
+        self.assertTrue(failed["result"]["isError"])
+        self.assertEqual(
+            failed["result"]["structuredContent"]["error"]["reason"],
+            "TOOL_EXECUTION_FAILED",
+        )
+
     def test_tools_call_uses_frozen_authority_fields_and_sync_result(self) -> None:
         params = {
             "name": "echo",
@@ -193,7 +513,7 @@ class McpA2AGatewayTests(unittest.TestCase):
         missing = self.service.handle_mcp(
             self.mcp_envelope("tools/call", async_params, name="research"), self.alice
         )
-        self.assertEqual(missing["error"]["code"], -32003)
+        self.assertEqual(missing["error"]["code"], -32021)
 
         bad_version = self.service.handle_mcp(
             self.mcp_envelope(

@@ -7,7 +7,7 @@
 | 层次 | 回答的问题 | 不能证明 |
 | --- | --- | --- |
 | focused checker | 关键调用顺序、生产对象边界、UAPI 布局是否漂移 | 真实 Guest 调度/设备行为 |
-| Host 模型与 mutation test | U/P/F、ring、resync、fence 的不变量是否能拒绝变异 | RISC-V 二进制已运行 |
+| Host 模型、mutation 与协议单测 | U/P/F、ring、resync、fence、relay frame、MCP/A2A 对象映射是否拒绝变异 | RISC-V 二进制或远程互操作已运行 |
 | cross build/link | 当前生产对象是否能编译链接，调用图栈是否安全 | syscall 运行语义 |
 | QEMU Guest 专项 | fork/exec/IPC/VFS/event/fence 等动态行为 | 超出该场景的普遍结论 |
 | paired/performance run | 双目标完整负载、工作量和实际测量 | 单个机制的因果贡献 |
@@ -15,7 +15,7 @@
 ## 2. 快速静态验证
 
 ```bash
-python -B scripts/check-agent-uapi-layout.py
+make agent-uapi-check TOOLPREFIX=riscv-none-elf-
 python -B scripts/check-agent-live-query-fs.py
 python -B scripts/check-workflow-fence.py
 bash scripts/check-agent-module-boundaries.sh
@@ -37,6 +37,7 @@ python -B scripts/test-agent-evidence-ring.py
 python -B scripts/test-agent-live-query-fs.py
 python -B scripts/test-workflow-fence.py
 python -B scripts/test-workflow-syscall-cut.py
+python -B host_tools/test_guest_llm_relay.py
 ```
 
 ### 3.1 Credit Domain
@@ -107,15 +108,36 @@ Guest 专项应覆盖：
 
 - Agent create/role/capability 与可信 exec；
 - fork/exec/exit、member/closing 和 scope reuse；
-- tool call/batch、Context push/query/rollback；
+- V2 exploratory typed call、最多 64 项的顺序 compact batch、ENFORCE V3 contract-bound call，以及 Context push/query/rollback；
 - 显式 metadata、index/scan 一致性、inode incarnation；
-- typed live watch、event wait、route、timeout/cancel；
+- typed live watch、event wait、route、LLM request/response correlation、timeout/cancel；
 - resource hard quota、reservation rollback 和 teardown；
 - workflow fence 的 receipt、retry 和拒绝路径。
 
+任务二的三条调用线必须分别解释：V2 只接受 `uint64`/string typed 参数并压平到 `arg0/arg1/64-byte payload`；`agent_run()` 在一次 syscall 内顺序同步执行 compact `agent_op`，不是 typed-KV/non-blocking batch；只有启用 `AGENT_EXECUTION_CONTRACT_F_ENFORCE` 的 V3 才验证 frozen node/schema/predecessor/attempt/deadline/provenance envelope。Guest 报告的 `1/16/2 syscalls` 是入口调用点计数，不是内核路径 counter。
+
+模型 loop 验证分三层，不能互相替代：
+
+- kernel RPC：同 requester correlation 严格递增且只有成功投递才推进；pending 使用 120 秒 tick TTL；错误 lifecycle/relay/未请求 response 为 `DENIED`；容量为 `NPROC` 的有界 terminal history 在记录保留期把已消费 replay 标为 `STALE`、过期 response 标为 `TIMEOUT`，覆盖后旧 response 按 unmatched 返回 `DENIED`；成功 response 只消费一次；registry limit 与 event queue full 可区分；teardown 清理状态；
+- Guest loop：Guest 自己保存 history/catalog/round、只接受 allowlist 中单个 `tool_use` 或 `final`、执行 typed V2，并把实际 Context/tool result 回灌；
+- Host relay：API key/TLS 只在 Host，relay 不读 Guest 业务文件、不选或执行工具、不伪造 result；live 与 offline replay 都必须经过相同 QEMU 串口 frame/session/sequence/hash/round 边界。
+
+offline replay 可验证协议和 loop 可复现性，但不能报告为 live 云模型实测。当前不把并行多工具、token streaming、自动重试/重定向、任意长上下文或 remote exactly-once 列入通过条件。
+
+完整入口已经落到 Guest、Host 与 Make：
+
+```bash
+make agent-live-demo-check
+make agent-live-demo
+```
+
+第一条只运行 `scripts/test-agent-live-loop.py` 与 Host relay 单测。第二条构建 `user/src/agentlive_ucore.c`，默认显式选择 replay provider，使用 `ci/agent-live-replay.jsonl` 让 6 轮响应经过 QEMU 串口。所有 provider 都必须采到 `discovery=1 rich_overlay=3`、`passed` 与唯一顶层 `parent passed`；默认 replay 还精确要求 `query_file=1 echo=1 send_message=1 approved=1`、`reject_unknown=1 reject_bad_args=1 reject_replay=0`、`transcript_turns=5 retained=5 dropped=0` 和 relay 的 `unknown=1 bad_args=1 replay=0 send_sink=1`。Guest 另输出 Context roundtrip/wait/heartbeat/rounds；其内部断言通过后才打印 `passed`。Windows xPack 环境可追加 `TOOLPREFIX=riscv-none-elf-`。
+
+Host relay 的参数合同由 `python -B host_tools/guest_llm_relay.py --help` 给出：`--provider openai|anthropic|replay` 必须显式选择，`--goal` 与 `--goal-file` 二选一，`--approve-tool NAME` 可重复。replay 还要求 `--replay-file`；真实 provider 才读取 Host 环境中的 API key。Make 的默认 replay 不访问网络；真实 provider 需设置 `AGENT_LIVE_PROVIDER` 与 `AGENT_LIVE_MODEL`，但只有实际运行后才能报告为 live 结果。
+
 ## 6. 双目标与性能
 
-plain uCore 与 AgentOS-uCore 运行同一用户态科研工作流合同。端到端 paired run 用于整体比较；Credit Domain、Evidence Ring 或 Live Query 的单项性能结论还需要同内核消融、工作量计数或专项 benchmark，不能从双目标总差异直接归因。
+plain uCore 与 AgentOS-uCore 运行同一 deterministic 用户态科研工作流合同。`labdemo_ucore` 使用固定 policy，不依赖 LLM；这样 paired run 才能比较等量工作。端到端 paired run 用于整体比较；Credit Domain、Evidence Ring 或 Live Query 的单项性能结论还需要同内核消融、工作量计数或专项 benchmark，不能从双目标总差异直接归因。可选 `agentlive` 只验证模型 loop，不替换这一性能基线。
 
 引用测量结果时应：
 
@@ -138,7 +160,13 @@ plain uCore 与 AgentOS-uCore 运行同一用户态科研工作流合同。端�
 | Evidence 为有界内存事件 | ordinary success 只写一次 canonical ring event；critical 分区独立 |
 | fence root 覆盖范围有限 | receipt 同时设置 `PARTIAL_COVERAGE` 与 `FENCE_SEALED` |
 | lifecycle 状态机精简 | members/closing/operation/departure/fence gates 决定 cut 与回收 |
+| V2 与 V3 保证不同 | V2 可探索下一工具但不绑定 DAG；ENFORCE V3 拒绝未冻结 node/edge/schema/provenance |
+| Task Channel 无业务 backend | provider 同步，只接受 null input/output `NONE`；`RESOURCE_IMPORT` fail closed，模型 wire 不走 SQ/CQ |
+| Kernel RPC 不是模型循环 | 只验证 lifecycle/requester/relay/correlation 和一次消费；Guest 拥有 history/decision/execution |
+| Host relay 权限最小化 | key/TLS/provider JSON 只在 Host；业务文件、工具选择/执行和 result 只在 Guest |
+| replay 与 live 同 wire | 两者都经过 session/sequence/hash/round 边界；replay 结果明确标为 offline |
+| MCP/A2A 仅对象 prototype | 单测只覆盖 deterministic in-memory 对象/Task 状态；不声称 server、streaming、互操作或内核 adapter |
 
 ## 8. 结果解释
 
-本地 checker 通过只说明对应静态合同成立，构建通过只说明当前目标可编译链接。功能结论要由实际 Guest 场景确认，性能结论要由实际负载和测量确认。内核 `Evidence Ring` 及 fence receipt 验证的是产品运行期安全语义，不是仓库发布工件。
+本地 checker 通过只说明对应静态合同成立，构建通过只说明当前目标可编译链接。MCP/A2A in-memory 单测不证明网络互操作，relay 单测不证明 live provider 已调用，offline replay 也不等于云模型。功能结论要由实际 Guest 场景确认，性能结论要由实际负载和测量确认。内核 `Evidence Ring` 及 fence receipt 验证的是产品运行期安全语义，不是仓库发布工件。

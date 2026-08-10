@@ -40,7 +40,7 @@ static struct agent_timeline_filter demo_timeline_filter;
 #define DEMO_PLAN "PLAN-RUN-042-RECOVER-1"
 #define DEMO_ALIGN_CORR "RUN-042-align-rerun-1"
 #define DEMO_REPORT_CORR "RUN-042-report-write-1"
-#define DEMO_LLM_REQUEST "LLM-RUN-042-RCA-1"
+#define DEMO_POLICY_DECISION "POLICY-RUN-042-RCA-1"
 #define DEMO_ALIGN_LOG "labalignerr"
 #define DEMO_ALIGN_LOG_BODY "align memory_limit evidence"
 #define DEMO_BENCH_RUN "RUN-042-SHOWCASE"
@@ -1138,11 +1138,11 @@ static void run_investigator(void)
 	       metadata_stage, res.result);
 	printf("agentos:event type=METADATA_USED tick=%d role=investigator stage=%s summary=%s seq=%d\n",
 	       event_tick(), metadata_stage, res.result, stage_summary_seq);
-	printf("agentos:event type=LLM_CALL tick=%d mode=template task=explain_root_cause llm_request_id=%s project=%s run_id=%s refs=%d,%d,%d,%d status=OK\n",
-	       event_tick(), DEMO_LLM_REQUEST, DEMO_PROJECT, DEMO_RUN,
+	printf("agentos:event type=POLICY_CALL tick=%d mode=deterministic task=explain_root_cause decision_id=%s project=%s run_id=%s refs=%d,%d,%d,%d status=OK\n",
+	       event_tick(), DEMO_POLICY_DECISION, DEMO_PROJECT, DEMO_RUN,
 	       summary_seq, digest_seq, dependency_seq, stage_summary_seq);
-	printf("agentos:event type=LLM_RESULT tick=%d mode=template llm_request_id=%s llm_status=OK llm_explanation=memory_limit referenced_sequences=%d,%d,%d,%d confidence=medium\n",
-	       event_tick(), DEMO_LLM_REQUEST, summary_seq, digest_seq,
+	printf("agentos:event type=POLICY_RESULT tick=%d mode=deterministic decision_id=%s decision_status=OK rule_outcome=memory_limit referenced_sequences=%d,%d,%d,%d confidence=medium\n",
+	       event_tick(), DEMO_POLICY_DECISION, summary_seq, digest_seq,
 	       dependency_seq, stage_summary_seq);
 	printf("agentos:event type=PLAN_CREATED tick=%d role=investigator plan=%s project=%s run_id=%s actions=align,analyze,report skip=prepare metadata_stage=%s refs=%d,%d,%d,%d\n",
 	       event_tick(), DEMO_PLAN, DEMO_PROJECT, DEMO_RUN,
@@ -1199,7 +1199,7 @@ static void run_recovery(void)
 	make_op(&op, AGENT_TOOL_ARTIFACT_UPDATE, 4202, AGENT_ROLE_RECOVERY,
 		"label=report;run_id=" DEMO_RUN ";namespace=" DEMO_PROJECT);
 	run_one(&op, &res, AGENT_STATUS_OK, "update artifact");
-	printf("agentos:event type=ARTIFACT tick=%d role=recovery namespace=%s run_id=%s file=RUN-042-recovery.md status=OK corr_id=%s plan=%s seq=%d llm_enhanced=0\n",
+	printf("agentos:event type=ARTIFACT tick=%d role=recovery namespace=%s run_id=%s file=RUN-042-recovery.md status=OK corr_id=%s plan=%s seq=%d model_assisted=0\n",
 	       event_tick(), DEMO_PROJECT, DEMO_RUN, DEMO_REPORT_CORR,
 	       DEMO_PLAN, (int)res.sequence);
 	memset(&query, 0, sizeof(query));
