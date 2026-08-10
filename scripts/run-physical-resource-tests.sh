@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
@@ -113,7 +112,6 @@ cp "${TMPDIR_PHYSICAL}/physical.img" "${TMPDIR_PHYSICAL}/run.img"
 
 log_file="${TMPDIR_PHYSICAL}/physical-resource.log"
 runner_status=0
-append_status=0
 if "${PYTHON_BIN}" scripts/agent_test_runner.py \
 	--init-proc physical-resource \
 	--marker "physicalresource_ucore: parent passed" \
@@ -128,17 +126,11 @@ if "${PYTHON_BIN}" scripts/agent_test_runner.py \
 else
 	runner_status=$?
 fi
-if [[ -s "${log_file}" ]]; then
-	if evidence_append_guest_log "physical-resource" "${log_file}"; then
-		append_status=0
-	else
-		append_status=$?
-	fi
-else
-	append_status=65
-fi
 [[ ${runner_status} -eq 0 ]] || exit "${runner_status}"
-[[ ${append_status} -eq 0 ]] || exit "${append_status}"
+if [[ ! -s "${log_file}" ]]; then
+	echo "[physical-resource] Guest log is empty" >&2
+	exit 65
+fi
 "${PYTHON_BIN}" scripts/validate-kernel-test-log.py \
 	--log-file "${log_file}" --tag physical-resource \
 	--profile physical-resource

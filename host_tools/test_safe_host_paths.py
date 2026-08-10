@@ -10,8 +10,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import evaluation_bundle
-import evidence_delivery_contract
 import safe_host_paths
 from windows_reparse_fixture import (
     create_directory_junction,
@@ -122,12 +120,6 @@ class SafeHostPathTests(unittest.TestCase):
                     safe_host_paths.atomic_write_bytes(hidden / "new", b"new")
                 with self.assertRaises(ValueError):
                     safe_host_paths.walk_regular_files_no_links(root)
-                with self.assertRaises(evaluation_bundle.BundleError):
-                    evaluation_bundle._regular_files(root)
-                with self.assertRaises(
-                    evidence_delivery_contract.DeliveryContractError
-                ):
-                    evidence_delivery_contract._worktree_files(root)
             self.assertFalse((hidden / "new").exists())
 
     def test_atomic_write_and_bounded_walk_accept_ordinary_files(self) -> None:
@@ -163,12 +155,6 @@ class SafeHostPathTests(unittest.TestCase):
                 self.assertTrue(safe_host_paths.path_is_link(link))
                 with self.assertRaises(ValueError):
                     safe_host_paths.reject_link_components(link / "payload")
-                with self.assertRaises(evaluation_bundle.BundleError):
-                    evaluation_bundle._regular_files(link)
-                with self.assertRaises(
-                    evidence_delivery_contract.DeliveryContractError
-                ):
-                    evidence_delivery_contract._worktree_files(link)
             finally:
                 remove_directory_junction(link)
             self.assertEqual((target / "payload").read_bytes(), b"payload")

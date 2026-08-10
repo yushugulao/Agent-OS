@@ -15,7 +15,7 @@ AgentOS-uCore 为用户态 Agent workflow 提供八类内核原语：
 7. workflow 级 EEVDF 和 Context provenance 数据流强制；
 8. single-issuer 异步 Task SQ/CQ 与 typed resource handle。
 
-内核不运行 LLM，不理解科研项目业务或自然语言计划，不判断 prompt injection，不提供全文搜索，也不把用户态成功声明当成发布证据。语义规划、JSON/HTTP/OAuth/JWS、MCP/A2A 远程协议、网页、实验编排、报告和证据包封装都在用户态或 Host 完成。
+内核不运行 LLM，不理解科研项目业务或自然语言计划，不判断 prompt injection，不提供全文搜索，也不把用户态成功声明当成内核事实。语义规划、JSON/HTTP/OAuth/JWS、MCP/A2A 远程协议、网页、实验编排和报告都在用户态或 Host 完成。
 
 ## 2. 总体结构
 
@@ -282,7 +282,7 @@ Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有
 | 六标签 provenance | 不运行语义分类也能限制计划外副作用 | 标签保守传播，不能证明内容本身可信 |
 | 16-slot Task SQ/CQ | Guest 用三条不同线格式各执行 16 次空 `ECHO`，验证相同语义 fingerprint、调用点 syscall/ABI 复制记账与 Context service-start tick 间隔 | scalar V3 需三个 typed params；4 页按需成本；当前同步 null provider；不提供 raw cycles、running cancel、payload backend 或分布式 exactly-once |
 
-当前 Task 消融的调用点 `syscalls` 为 batch/scalar V3/SQ-CQ 的 1/16/2。描述符 ABI 与已知复制记账分别为 `3584 = 16 * (104 + 120)`、`12288 = 16 * (200 + 280 + 3 * 96)`、`4096 = 16 * (128 + 128)` 字节；scalar 的三个 96 字节项是 `payload`/`arg0`/`arg1` typed params，另报 128 字节 dispatch header；SQ/CQ 另报 336/544 字节 control ABI/copy。这里没有内核路径 counter 或总内存流量测量。p50/p99 来自工具效果前写入 Context record 的 service-start tick 间隔，sequence elapsed 是两个 `agent_info` 边界 tick；公共 CQE `completion_tick` 保持执行后完成语义。cancel 数字只测量 retained-terminal 幂等 cancel，CQ-full/sticky-resync 只作功能恢复验证；动态数字仍只从正式 bundle 读取。
+当前 Task 消融的调用点 `syscalls` 为 batch/scalar V3/SQ-CQ 的 1/16/2。描述符 ABI 与已知复制记账分别为 `3584 = 16 * (104 + 120)`、`12288 = 16 * (200 + 280 + 3 * 96)`、`4096 = 16 * (128 + 128)` 字节；scalar 的三个 96 字节项是 `payload`/`arg0`/`arg1` typed params，另报 128 字节 dispatch header；SQ/CQ 另报 336/544 字节 control ABI/copy。这里没有内核路径 counter 或总内存流量测量。p50/p99 来自工具效果前写入 Context record 的 service-start tick 间隔，sequence elapsed 是两个 `agent_info` 边界 tick；公共 CQE `completion_tick` 保持执行后完成语义。cancel 数字只测量 retained-terminal 幂等 cancel，CQ-full/sticky-resync 只作功能恢复验证；动态数字由 `agenttask_ucore` 的实际运行输出读取。
 
 ## 10. 实现与验证入口
 
@@ -297,9 +297,9 @@ Task core 的 callback 协议可表达 `PENDING`，但当前内核 bridge 只有
 | Evidence Ring | `os/agent_evidence_ring.c`、`os/agent_sha256.c` | `scripts/test-agent-evidence-ring.py` |
 | Workflow fence | `os/agent_workflow_fence.c`、`os/workflow_lifecycle.c` | `scripts/test-workflow-fence.py`、`scripts/test-workflow-syscall-cut.py` |
 | Live Query | `os/agent_live_query_events.c`、metadata catalog/query/object 模块 | `scripts/test-agent-live-query-fs.py` |
-| ABI/边界 | 公共头文件、Makefile 生产对象清单 | `make agent-module-check`、`make kernel-budget-check` |
+| ABI/边界 | 公共头文件、Makefile 生产对象清单 | `make agent-uapi-check`、`make agent-module-check`、`make kernel-stack-check` |
 
-通过静态或模型测试不等于 QEMU 行为已经发布。动态结果和性能数字只从 [正式证据索引](../../evidence/releases/INDEX.md) 指向的 bundle 读取。
+静态或模型测试不等于 QEMU 行为已被验证。动态结果和性能数字应来自对应 Guest 程序的实际运行；入口见 [验证说明](verification.md)。
 
 ## 11. 参考与原创边界
 

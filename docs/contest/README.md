@@ -11,7 +11,7 @@ AgentOS-uCore 面向 AI Agent workflow 提供内核身份、Context、结构化�
 | 任务三 | Context Path | 内核可信记录、cause/span/branch、查询/快照/rollback |
 | 任务四 | 文件属性查询 | explicit volatile metadata、选择性索引、typed `ENTER/UPDATE/LEAVE`、resync |
 | 任务五 | Agent Loop | event/watch/wait/heartbeat、可信 route、Evidence Ring、workflow fence |
-| 任务六 | 综合应用 | plain/AgentOS 同科研工作流、状态一致性和绑定原始材料的 paired measurement |
+| 任务六 | 综合应用 | plain/AgentOS 同科研工作流、状态一致性和实际 paired run |
 
 完整映射见[要求追踪表](../agentos/requirements-traceability.md)。
 
@@ -40,10 +40,9 @@ AgentOS-uCore 面向 AI Agent workflow 提供内核身份、Context、结构化�
 2. [系统设计](../agentos/design.md)：三项机制与 workflow fence。
 3. [ABI](../agentos/api.md)：320 字节 receipt、typed watch 和兼容 tombstone。
 4. [安全加固](../agentos/security-hardening.md)：hard admission、generation、resync、fail closed。
-5. [验证说明](../verification.md)：静态、构建、QEMU、paired 和 release 边界。
-6. [正式证据索引](../../evidence/releases/INDEX.md)：只从冻结 bundle 阅读实测结果。
+5. [验证说明](../verification.md)：构建、QEMU、功能、安全与性能测试。
 
-索引为空或对应 artifact 缺失时，应显示 unavailable。开发日志、示例 marker、静态测试通过数和 Dashboard 本身都不能替代 raw evidence。
+评审应优先查看实际 QEMU 行为、拒绝路径、工作量计数和双目标比较。静态 checker 用于快速发现合同错误，不应代替 Guest 运行或真实性能测量。内核 `Evidence Ring` 是产品安全功能，不是参赛材料打包机制。
 
 ## 建议演示顺序
 
@@ -55,4 +54,4 @@ AgentOS-uCore 面向 AI Agent workflow 提供内核身份、Context、结构化�
 | 9-12 分钟 | Evidence Ring 与 workflow fence | challenge receipt、exact U、gap/root、retry |
 | 12-15 分钟 | plain/AgentOS 同工作流对比 | 两侧原始日志、状态 compare、paired summary |
 
-答辩时每项机制按“赛题问题、参考思想、AgentOS 特定实现、动态证据、限制”陈述，避免用功能通过数替代性能，也避免把端到端差异直接归因到单一模块。
+答辩时每项机制按“赛题问题、参考思想、AgentOS 特定实现、实际测试、限制”陈述，避免用功能通过数替代性能，也避免把端到端差异直接归因到单一模块。

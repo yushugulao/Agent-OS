@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
@@ -402,7 +401,6 @@ run_case() {
 	else
 		runner_status=$?
 	fi
-	evidence_append_guest_log "fs-enospc:${tag}" "${log_file}"
 	if [[ ${runner_status} -ne 0 ]]; then
 		return "${runner_status}"
 	fi

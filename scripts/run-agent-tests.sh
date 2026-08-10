@@ -2,12 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 MAKE_TOOL="${MAKE_TOOL:-make}"
-GIT_BIN="${GIT_BIN:-git}"
 LOG="${LOG:-error}"
 if [[ "${AGENT_TEST_CASE:-}" == "agenteval_ucore" ]]; then
 	CHAPTER="${CHAPTER:-agent_eval}"
@@ -30,18 +28,12 @@ fi
 CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-BASH_BIN="${BASH_BIN:-bash}"
-HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"
 AGENTOS_BUILD_JOBS="${AGENTOS_BUILD_JOBS:-$("${PYTHON_BIN}" -I -S -B scripts/resource-jobs.py --kind build)}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 REQUIRE_FULL_SUITE="${REQUIRE_FULL_SUITE:-0}"
-AGENT_TEST_CALIBRATE="${AGENT_TEST_CALIBRATE:-0}"
-AGENT_TEST_DURATION_PROFILE="${AGENT_TEST_DURATION_PROFILE:-local-e3}"
-# 保留已解析的 Host 探针编译器，再清除审查构建明确拒绝的所有环境 GNU make 输入。
-# 下方提供的命令行值仍然显式且可审计。
-readonly HOST_CC
-readonly -a FUNCTIONAL_REVIEW_SANITIZED_ENV=(
+# 避免宿主环境中的 make 变量污染实际测试构建；脚本需要的参数均显式传入。
+readonly -a SANITIZED_MAKE_ENV=(
 	MAKEFILES MAKEFLAGS MFLAGS MAKEOVERRIDES GNUMAKEFLAGS
 	HOSTCC CC AS LD OBJCOPY OBJDUMP NM SIZE CFLAGS CPPFLAGS LDFLAGS ASFLAGS
 	K U F BUILDDIR C_SRCS AS_SRCS C_OBJS AS_OBJS OBJS HEADER_DEP
@@ -50,8 +42,8 @@ readonly -a FUNCTIONAL_REVIEW_SANITIZED_ENV=(
 	SRCS APPS SELECTED_APPS USER_BIN_DIR USER_ELF_DIR
 	STORAGE_POLICY_CPPFLAGS FS_FUSE USER_BINS USER_ELFS EXEC_POLICY
 )
-for functional_review_env in "${FUNCTIONAL_REVIEW_SANITIZED_ENV[@]}"; do
-	unset "${functional_review_env}"
+for make_env in "${SANITIZED_MAKE_ENV[@]}"; do
+	unset "${make_env}"
 done
 if [[ ! "${AGENTOS_BUILD_JOBS}" =~ ^([1-9]|1[0-9]|2[0-4])$ ]]; then
 	echo "[agent-tests] AGENTOS_BUILD_JOBS must be between 1 and 24" >&2
@@ -64,7 +56,6 @@ CONTEXT_SYNC_TIMING_FILE="${TMPDIR:-/tmp}/agentos-context-sync-timings.$$"
 CONTEXT_SYNC_USER_CFLAGS="-DAGENT_CONTEXT_SYNC_TEST_PROFILE -DWAIT_ATOMIC_TEST_PROFILE"
 CONTEXT_RO_STORE_FAULT_MARKER="agentfinal_ucore: context_ro_store_fault_armed=1"
 CONTEXT_PUBLIC_FAULT_MARKER="agentfinal_ucore: context_public_unmapped_fault_armed=1"
-calibration_case_ordinal=0
 timing_file_owned=0
 if [[ -z "${AGENT_TEST_TIMING_FILE:-}" ]]; then
 	AGENT_TEST_TIMING_FILE="${TMPDIR:-/tmp}/agentos-agent-timings.$$"
@@ -87,142 +78,7 @@ if [[ "${REQUIRE_FULL_SUITE}" == "1" && -n "${AGENT_TEST_CASE:-}" ]]; then
 	echo "[agent-tests] AGENT_TEST_CASE is forbidden for a required full suite" >&2
 	exit 1
 fi
-if [[ "${AGENT_TEST_CALIBRATE}" != "0" && "${AGENT_TEST_CALIBRATE}" != "1" ]]; then
-	echo "[agent-tests] AGENT_TEST_CALIBRATE must be 0 or 1" >&2
-	exit 1
-fi
-if [[ "${AGENT_TEST_DURATION_PROFILE}" != "local-e3" &&
-      "${AGENT_TEST_DURATION_PROFILE}" != "none" ]]; then
-	echo "[agent-tests] AGENT_TEST_DURATION_PROFILE must be local-e3 or none" >&2
-	exit 1
-fi
-if [[ "${AGENT_TEST_CALIBRATE}" == "1" &&
-      "${AGENT_TEST_DURATION_PROFILE}" != "local-e3" ]]; then
-	echo "[agent-tests] calibration requires the local-e3 duration profile" >&2
-	exit 1
-fi
-if [[ "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" &&
-      -z "${AGENT_TEST_CASE:-}" ]]; then
-	"${PYTHON_BIN}" -I -S -B host_tools/evaluation_platform.py doctor \
-		--repo . --toolprefix "${TOOLPREFIX}" --qemu "${QEMU}" \
-		--python-bin "${PYTHON_BIN}" --shell-bin "${BASH_BIN}" \
-		--host-cc "${HOST_CC}" --duration-profile local-e3 >/dev/null
-	echo "[agent-tests] duration-profile profile=local-e3 identity=matched"
-fi
-if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-	if [[ "${REQUIRE_FULL_SUITE}" != "1" ]]; then
-		echo "[agent-tests] calibration requires REQUIRE_FULL_SUITE=1" >&2
-		exit 1
-	fi
-	if [[ "${timing_file_owned}" == "1" ]]; then
-		echo "[agent-tests] calibration requires a persistent AGENT_TEST_TIMING_FILE" >&2
-		exit 1
-	fi
-	for required in \
-		AGENT_TEST_CALIBRATION_PLAN \
-		AGENT_TEST_CALIBRATION_ROUND \
-		AGENT_TEST_CAMPAIGN_NONCE \
-		AGENT_TEST_ROUND_NONCE \
-		AGENT_TEST_SOURCE_COMMIT \
-		AGENT_TEST_SOURCE_TREE \
-		AGENT_TEST_ATTESTATION_DIR \
-		AGENT_TEST_GUEST_LOG_FILE; do
-		if [[ -z "${!required:-}" ]]; then
-			echo "[agent-tests] calibration requires ${required}" >&2
-			exit 1
-		fi
-	done
-	if [[ ! "${AGENT_TEST_CALIBRATION_ROUND}" =~ ^0[123]$ ||
-	      ! "${AGENT_TEST_CAMPAIGN_NONCE}" =~ ^[0-9a-f]{64}$ ||
-	      ! "${AGENT_TEST_ROUND_NONCE}" =~ ^[0-9a-f]{64}$ ||
-	      ! "${AGENT_TEST_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ||
-	      ! "${AGENT_TEST_SOURCE_TREE}" =~ ^[0-9a-f]{40}$ ]]; then
-		echo "[agent-tests] calibration identity is malformed" >&2
-		exit 1
-	fi
-	for absolute in \
-		"${AGENT_TEST_CALIBRATION_PLAN}" \
-		"${AGENT_TEST_ATTESTATION_DIR}" \
-		"${AGENT_TEST_GUEST_LOG_FILE}" \
-		"${AGENT_TEST_TIMING_FILE}"; do
-		if [[ "${absolute}" != /* ]]; then
-			echo "[agent-tests] calibration paths must be absolute" >&2
-			exit 1
-		fi
-	done
-	if [[ ! -f "${AGENT_TEST_CALIBRATION_PLAN}" ||
-	      -L "${AGENT_TEST_CALIBRATION_PLAN}" ||
-	      ! -d "${AGENT_TEST_ATTESTATION_DIR}" ||
-	      -L "${AGENT_TEST_ATTESTATION_DIR}" ||
-	      -n "$(find "${AGENT_TEST_ATTESTATION_DIR}" -mindepth 1 -print -quit)" ||
-	      -e "${AGENT_TEST_TIMING_FILE}" ||
-	      -e "${AGENT_TEST_GUEST_LOG_FILE}" ]]; then
-		echo "[agent-tests] calibration outputs must start new and empty" >&2
-		exit 1
-	fi
-	AGENT_TEST_CALIBRATION_PLAN_SHA256="$("${PYTHON_BIN}" -I -S -B - "${AGENT_TEST_CALIBRATION_PLAN}" <<'PY'
-import hashlib
-import sys
-from pathlib import Path
-print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
-PY
-)"
-	: >"${AGENT_TEST_GUEST_LOG_FILE}"
-	declare -A calibration_nonce_seen=()
-	calibration_nonce_seen["${AGENT_TEST_CAMPAIGN_NONCE}"]=1
-	calibration_nonce_seen["${AGENT_TEST_ROUND_NONCE}"]=1
-	new_calibration_nonce() {
-		local output_name="$1"
-		local nonce
-		while :; do
-			nonce="$("${PYTHON_BIN}" -I -S -B -c 'import secrets; print(secrets.token_hex(32))')"
-			if [[ -z "${calibration_nonce_seen[${nonce}]:-}" ]]; then
-				calibration_nonce_seen["${nonce}"]=1
-				printf -v "${output_name}" '%s' "${nonce}"
-				return 0
-			fi
-		done
-	}
-	if [[ -n "$("${GIT_BIN}" status --porcelain=v1 --untracked-files=all)" ||
-	      "$("${GIT_BIN}" rev-parse --verify HEAD)" != "${AGENT_TEST_SOURCE_COMMIT}" ||
-	      "$("${GIT_BIN}" rev-parse HEAD^{tree})" != "${AGENT_TEST_SOURCE_TREE}" ||
-	      -n "$("${GIT_BIN}" symbolic-ref -q HEAD || true)" ]]; then
-		echo "[agent-tests] calibration requires the declared clean detached checkout" >&2
-		exit 1
-	fi
-fi
-if [[ "${AGENT_TEST_CALIBRATE}" == "0" ]]; then
-	: >"${AGENT_TEST_TIMING_FILE}"
-fi
-"${PYTHON_BIN}" -I -S -B scripts/test-sync-owner-wiring.py
-"${PYTHON_BIN}" -I -S -B scripts/test-wait-atomic-wiring.py
-"${PYTHON_BIN}" -I -S -B scripts/check-wait-queue-contract.py
-if [[ -z "${AGENT_TEST_CASE:-}" && "${AGENT_TEST_CALIBRATE}" == "0" &&
-      "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ]]; then
-	"${PYTHON_BIN}" -I -S -B scripts/check-kernel-budgets.py \
-		--check agent-test-policy \
-		--config ci/kernel-budgets.json
-fi
-
-check_suite_budget() {
-	local calibration_args=()
-	if [[ "${AGENT_TEST_DURATION_PROFILE}" == "none" ]]; then
-		"${PYTHON_BIN}" -I -S -B scripts/check-kernel-budgets.py \
-			--check agent-test-timing-inventory \
-			--config ci/kernel-budgets.json \
-			--agent-test-timing-file "${AGENT_TEST_TIMING_FILE}"
-		echo "[agent-tests] duration-profile profile=none gate=skipped reason=different-runner"
-		return
-	fi
-	if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-		calibration_args+=(--agent-test-calibration)
-	fi
-	"${PYTHON_BIN}" -I -S -B scripts/check-kernel-budgets.py \
-		--check agent-tests \
-		--config ci/kernel-budgets.json \
-		--agent-test-timing-file "${AGENT_TEST_TIMING_FILE}" \
-		"${calibration_args[@]}"
-}
+: >"${AGENT_TEST_TIMING_FILE}"
 
 require_exact_case_marker() {
 	local log_file="$1"
@@ -246,8 +102,8 @@ check_case_contract() {
 			"ch8_cow_ucore: passed"
 		;;
 	agenteval_ucore)
-		"${PYTHON_BIN}" -I -S -B scripts/trusted-python-entry.py \
-			host_tools/evaluation_contract.py validate-guest \
+		"${PYTHON_BIN}" -I -S -B host_tools/evaluation_contract.py \
+			validate-guest \
 			--suite ci/evaluation-suite.json \
 			--log "${log_file}" \
 			--challenge "${AGENT_EVAL_CHALLENGE_HEX}"
@@ -424,7 +280,6 @@ build_user_image() {
 	# 防止 profile 参数丢失。
 	"${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile nfs/fs.img \
 		TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}" \
-		FUNCTIONAL_REVIEW_BUILD=1 \
 		USER_EXTRA_CFLAGS="${user_extra_cflags}"
 }
 
@@ -437,13 +292,6 @@ run_case() {
 	local expected_fault_args=()
 	local build_profile_args=()
 	local case_timing_file="${AGENT_TEST_TIMING_FILE}"
-	local evidence_key="agent-case:${init_proc}"
-	local runner_status
-	local attestation_args=()
-	local timing_args=()
-	local attestation_key=""
-	local case_session_nonce=""
-	local case_execution_nonce=""
 
 	if [[ -n "${expected_bad_addr_marker}" ]]; then
 		expected_fault_args+=(
@@ -458,41 +306,10 @@ run_case() {
 	fi
 	if [[ "${context_sync_profile}" == "1" ]]; then
 		build_profile_args+=(
-			FUNCTIONAL_REVIEW_PROFILE_CONTEXT=agentfinal-context-sync-atomicity-v1
 			AGENT_CONTEXT_SYNC_TEST_PROFILE=1
 			WAIT_ATOMIC_TEST_PROFILE=1
 		)
 		case_timing_file="${CONTEXT_SYNC_TIMING_FILE}"
-		evidence_key="agent-mechanism:context-sync-atomicity"
-	fi
-	if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-		if [[ "${context_sync_profile}" == "1" ]]; then
-			attestation_key="00-context-sync-atomicity"
-		else
-			calibration_case_ordinal=$((calibration_case_ordinal + 1))
-			printf -v attestation_key '%02d-%s' \
-				"${calibration_case_ordinal}" "${init_proc}"
-		fi
-		new_calibration_nonce case_session_nonce
-		new_calibration_nonce case_execution_nonce
-		attestation_args=(
-			--attestation-file \
-			"${AGENT_TEST_ATTESTATION_DIR}/${attestation_key}.json"
-			--run-id "${case_session_nonce}"
-			--execution-id "${case_execution_nonce}"
-			--evidence-scope local_e3_unsigned
-			--source-commit "${AGENT_TEST_SOURCE_COMMIT}"
-			--source-tree "${AGENT_TEST_SOURCE_TREE}"
-			--campaign-nonce "${AGENT_TEST_CAMPAIGN_NONCE}"
-			--calibration-plan-sha256 \
-			"${AGENT_TEST_CALIBRATION_PLAN_SHA256}"
-			--round-nonce "${AGENT_TEST_ROUND_NONCE}"
-			--session-nonce "${case_session_nonce}"
-			--execution-nonce "${case_execution_nonce}"
-			--toolchain-cc "${TOOLPREFIX}gcc"
-		)
-	else
-		timing_args=(--timing-file "${case_timing_file}")
 	fi
 
 	echo "[agent-tests] running ${init_proc}"
@@ -502,10 +319,9 @@ run_case() {
 		LOG="${LOG}" \
 		INIT_PROC="${init_proc}" \
 		CHAPTER="${CHAPTER}" \
-		FUNCTIONAL_REVIEW_BUILD=1 \
 		"${build_profile_args[@]}"
 	cp nfs/fs.img nfs/fs-copy.img
-	if "${PYTHON_BIN}" -I -S -B scripts/agent_test_runner.py \
+	"${PYTHON_BIN}" -I -S -B scripts/agent_test_runner.py \
 		--init-proc "${init_proc}" \
 		--marker "${marker}" \
 		--marker-mode exact-line \
@@ -515,24 +331,8 @@ run_case() {
 		--idle-notice-seconds "${IDLE_NOTICE_SECONDS}" \
 		--marker-grace-seconds "${MARKER_GRACE_SECONDS}" \
 		--qemu "${QEMU}" \
-		"${timing_args[@]}" \
-		"${attestation_args[@]}" \
-		"${expected_fault_args[@]}"; then
-		runner_status=0
-	else
-		runner_status=$?
-	fi
-	evidence_append_guest_log \
-		"${evidence_key}" "${log_file}" \
-		"${AGENT_TEST_GUEST_LOG_FILE:-}"
-	if [[ ${runner_status} -ne 0 ]]; then
-		return "${runner_status}"
-	fi
-	if [[ "${AGENT_TEST_CALIBRATE}" == "1" &&
-	      ! -s "${AGENT_TEST_ATTESTATION_DIR}/${attestation_key}.json" ]]; then
-		echo "[agent-tests] missing case attestation: ${attestation_key}" >&2
-		return 1
-	fi
+		--timing-file "${case_timing_file}" \
+		"${expected_fault_args[@]}"
 	if [[ "${context_sync_profile}" == "1" ]]; then
 		"${PYTHON_BIN}" -I -S -B scripts/validate-kernel-test-log.py \
 			--log-file "${log_file}" \
@@ -553,12 +353,7 @@ run_case() {
 }
 
 "${MAKE_TOOL}" -rR -C user -f Makefile clean
-"${MAKE_TOOL}" -rR -f Makefile clean FUNCTIONAL_REVIEW_BUILD=1
-if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-	"${PYTHON_BIN}" -I -S -B scripts/agent_test_calibration.py check-source \
-		--root . \
-		--source-commit "${AGENT_TEST_SOURCE_COMMIT}"
-fi
+"${MAKE_TOOL}" -rR -f Makefile clean
 
 if [[ -z "${AGENT_TEST_CASE:-}" ||
 	  "${AGENT_TEST_CASE}" == "agentfinal_ucore" ]]; then
@@ -566,13 +361,13 @@ if [[ -z "${AGENT_TEST_CASE:-}" ||
 	build_user_image "${CONTEXT_SYNC_USER_CFLAGS}"
 	run_case agentfinal_ucore "agentfinal_ucore: parent passed" "" 1
 	"${MAKE_TOOL}" -rR -C user -f Makefile clean
-	"${MAKE_TOOL}" -rR -f Makefile clean FUNCTIONAL_REVIEW_BUILD=1
+	"${MAKE_TOOL}" -rR -f Makefile clean
 fi
 
 build_user_image
 "${MAKE_TOOL}" "${MAKE_JOB_ARGS[@]}" -rR -f Makefile build \
 	TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore \
-	FUNCTIONAL_REVIEW_BUILD=1
+	CHAPTER="${CHAPTER}"
 
 if [[ -n "${AGENT_TEST_CASE:-}" ]]; then
 	expected_bad_addr_marker=""
@@ -584,7 +379,7 @@ if [[ -n "${AGENT_TEST_CASE:-}" ]]; then
 	fi
 	run_case "${AGENT_TEST_CASE}" "${case_marker}" \
 		"${expected_bad_addr_marker}"
-	echo "[agent-tests] full-suite duration budget skipped for targeted run"
+	echo "[agent-tests] targeted case passed"
 	exit 0
 fi
 
@@ -611,18 +406,4 @@ run_case iobudget_ucore "iobudget_ucore: parent passed" \
 run_case usersafety_ucore "usersafety_ucore: parent passed"
 run_case blocking_semantics_ucore "blocking_semantics_ucore: parent passed"
 
-if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-	if [[ "${calibration_case_ordinal}" != "21" ]]; then
-		echo "[agent-tests] calibration did not execute exactly 21 cases" >&2
-		exit 1
-	fi
-	"${PYTHON_BIN}" -I -S -B scripts/agent_test_calibration.py derive-round \
-		--root . \
-		--plan "${AGENT_TEST_CALIBRATION_PLAN}" \
-		--round "$((10#${AGENT_TEST_CALIBRATION_ROUND}))" \
-		--attestation-dir "${AGENT_TEST_ATTESTATION_DIR}" \
-		--guest-log "${AGENT_TEST_GUEST_LOG_FILE}" \
-		--timing-file "${AGENT_TEST_TIMING_FILE}"
-fi
-check_suite_budget
 echo "[agent-tests] all Agent-OS uCore checks passed"

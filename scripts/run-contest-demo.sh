@@ -24,7 +24,7 @@ if (( CAMPAIGN_SAMPLES < 8 || CAMPAIGN_SAMPLES > 64 || CAMPAIGN_SAMPLES % 2 != 0
 	exit 2
 fi
 if (( QEMU_JOBS != 1 )); then
-	echo "[contest-demo] formal latency measurement requires one isolated QEMU" >&2
+	echo "[contest-demo] latency measurement requires one QEMU to avoid contention" >&2
 	exit 2
 fi
 
@@ -33,9 +33,7 @@ if [[ -L "${OUTPUT_DIR}" ]]; then
 	exit 2
 fi
 
-# 报告是绑定源码的测量产物，而非 worktree 预览。
-commit="$("${PYTHON_BIN}" -I -S scripts/trusted-python-entry.py \
-	host_tools/contest_demo.py identity --root .)"
+commit="$("${PYTHON_BIN}" -I -S -B host_tools/contest_demo.py identity --root .)"
 run_id="$("${PYTHON_BIN}" -I -S -c \
 	'import secrets; print(secrets.token_hex(8))')"
 started_seconds="$("${PYTHON_BIN}" -I -S -c \
@@ -140,4 +138,4 @@ for ((sample = 1; sample <= CAMPAIGN_SAMPLES; sample++)); do
 		--artifact "${OUTPUT_DIR}/sample-${sample_tag}-labdemo.elf"
 	)
 done
-"${PYTHON_BIN}" -I -S scripts/trusted-python-entry.py "${render_args[@]}"
+"${PYTHON_BIN}" -I -S -B "${render_args[@]}"

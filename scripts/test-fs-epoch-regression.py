@@ -348,13 +348,9 @@ class FsEpochWiringTests(unittest.TestCase):
     def test_dynamic_runner_is_in_acceptance_and_cleans_background_jobs(self):
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         full = (ROOT / "scripts/run-full-verification.sh").read_text(encoding="utf-8")
-        parallel = (ROOT / "scripts/run-parallel-qemu-regressions.py").read_text(
-            encoding="utf-8"
-        )
         runner = (ROOT / "scripts/run-fs-epoch-tests.sh").read_text(encoding="utf-8")
         self.assertIn("fs-epoch-test:", makefile)
         self.assertIn("run-fs-epoch-tests.sh", full)
-        self.assertIn('RegressionCase("fs-epoch"', parallel)
         self.assertIn("terminate_pending", runner)
         self.assertIn("trap cleanup EXIT", runner)
 

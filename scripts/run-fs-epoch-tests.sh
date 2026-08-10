@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
@@ -361,11 +360,6 @@ done
 for case_name in "${cases[@]}"; do
 	cat "${TMPDIR_FSEPOCH}/${case_name}.run.log"
 	cat "${TMPDIR_FSEPOCH}/${case_name}-verified.json"
-	for stage in prepare fault retry final; do
-		evidence_append_guest_log \
-			"fs-epoch:${case_name}:${stage}" \
-			"${TMPDIR_FSEPOCH}/${case_name}-${stage}.log"
-	done
 	if [[ "${case_name}" == inflight ]]; then
 		cat "${TMPDIR_FSEPOCH}/${case_name}-calibration.tsv"
 	fi

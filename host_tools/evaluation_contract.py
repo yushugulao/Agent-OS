@@ -1,97 +1,82 @@
-#!/usr/bin/env python3
-"""绑定来源的严格 AgentOS Guest 运行评测合同。
-
-统计单位是一次 Guest 启动（一个原始日志），不是单个 Guest 输出的内部 AB/BA
-配对。先将内部配对归约为单次启动中位数，再跨独立启动计算精确配对检验。
-"""
+"""Validate the functional and performance markers from one AgentOS Guest run."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
+
 import json
+
 import math
-import random
+
 import re
-import statistics
-from fractions import Fraction
+
 from functools import lru_cache
-from pathlib import Path, PurePosixPath
+
+from pathlib import Path
+
 from typing import Any
 
-try:
-    from .safe_host_paths import (
-        absolute_lexical_path,
-        atomic_write_bytes,
-        reject_link_components,
-        require_regular_file,
-        require_safe_directory,
-    )
-except ImportError:
-    from safe_host_paths import (
-        absolute_lexical_path,
-        atomic_write_bytes,
-        reject_link_components,
-        require_regular_file,
-        require_safe_directory,
-    )
-
-try:
-    from .agenteval_measurement_source_contract import (
-        FORMAL_BOOT_COUNT,
-        STOP_RULE as MEASUREMENT_STOP_RULE,
-        validate_measurement_source_receipt_shape,
-    )
-except ImportError:
-    from agenteval_measurement_source_contract import (
-        FORMAL_BOOT_COUNT,
-        STOP_RULE as MEASUREMENT_STOP_RULE,
-        validate_measurement_source_receipt_shape,
-    )
-
-
 SCHEMA_VERSION = 1
-EVALUATION_SCHEMA_VERSION = 5
-EVALUATION_SUITE_ID = "agentos-evaluation-v5"
+
+EVALUATION_SCHEMA_VERSION = 1
+
+EVALUATION_SUITE_ID = "agentos-guest-evaluation-v1"
+
 MARKER_PREFIX = "agenteval_ucore: sample "
+
 DIAGNOSTIC_PREFIX = "agenteval_ucore: diagnostic "
+
 LAUNCHER_PREFIX = "agenteval_ucore: launcher "
+
 FUNCTIONAL_PREFIX = "agenteval_ucore: functional "
+
 CATALOG_PREFIX = "agenteval_ucore: catalog "
+
 REVISIT_PREFIX = "agenteval_ucore: revisit "
+
 REVISIT_SUMMARY_PREFIX = "agenteval_ucore: revisit_summary "
+
 CONCURRENCY_SAMPLE_PREFIX = "agenteval_ucore: concurrency_sample "
+
 CONCURRENCY_PREFIX = "agenteval_ucore: concurrency "
+
 MARKER_FIELDS = (
     "schema", "experiment", "load", "pair", "variant", "order", "cache",
     "operations", "dataset_size", "work_units", "records_examined",
     "result_items", "duration_us", "index_rebuild_records",
     "result_cache_hits", "workload_fingerprint", "result_fingerprint", "status",
 )
+
 DIAGNOSTIC_FIELDS = (
     "schema", "experiment", "load", "cache", "operations", "dataset_size",
     "work_units", "result_items", "duration_us", "index_rebuild_records",
     "result_cache_hits", "workload_fingerprint", "result_fingerprint", "status",
 )
+
 LAUNCHER_FIELDS = (
     "schema", "challenge", "values", "semantic", "receipt", "status",
 )
+
 FUNCTIONAL_FIELDS = (
     "schema", "task", "challenge", "values", "semantic", "receipt", "status",
 )
+
 CATALOG_FIELDS = (
     "schema", "challenge", "index", "total", "abi", "tool_id", "flags",
     "param_count", "name", "params", "status",
 )
+
 REVISIT_FIELDS = (
     "schema", "visit", "identity", "request_id", "agent_id",
     "lifecycle_id", "lifecycle_generation", "correct", "contamination",
     "return_visit", "fallback", "result_fingerprint", "status",
 )
+
 REVISIT_SUMMARY_FIELDS = (
     "schema", "visits", "correct", "contamination", "return_visit",
     "fallback", "result_fingerprint", "status",
 )
+
 CONCURRENCY_SAMPLE_FIELDS = {
     2: (
         "schema", "concurrency", "round", "slot", "identity", "request_id",
@@ -100,6 +85,7 @@ CONCURRENCY_SAMPLE_FIELDS = {
         "fallback", "isolation_ok", "result_fingerprint", "status",
     ),
 }
+
 CONCURRENCY_FIELDS = {
     2: (
         "schema", "concurrency", "rounds", "requests", "completed", "start_us",
@@ -112,6 +98,7 @@ CONCURRENCY_FIELDS = {
         "status",
     ),
 }
+
 CONCURRENCY_PUBLIC_FIELDS = {
     2: (
         "concurrency", "rounds", "requests", "completed", "duration_us",
@@ -123,46 +110,23 @@ CONCURRENCY_PUBLIC_FIELDS = {
         "contamination", "fallback", "workload_digest", "result_fingerprint",
     ),
 }
+
 QOS_REGISTRATION_FIELDS = (
     "qos_schema_version", "latency_metrics", "turnaround_definition",
     "goodput_unit", "fairness_scale", "fairness_basis", "isolation_definition",
     "digest",
 )
+
 FUNCTIONAL_TASKS = tuple(f"task{number}" for number in range(1, 6))
-SAMPLE_ROW_FIELDS = {
-    "schema_version", "kind", "status", "suite_id", "run_id",
-    "environment_sha256", "experiment", "load", "inner_pair", "variant",
-    "role", "target_id", "cache", "order", "operations", "work_units",
-    "dataset_size", "records_examined", "result_items", "duration_us",
-    "index_rebuild_records", "result_cache_hits", "per_operation_us", "unit",
-    "value", "workload_fingerprint", "result_fingerprint",
-    "boot_id", "commit", "source_log", "source_line", "source_log_bytes",
-    "source_log_sha256", "source_marker_sha256", "run_plan_sha256",
-    "campaign_sha256", "kernel_sha256", "image_input_sha256",
-    "image_final_sha256", "runner_log_sha256",
-    "command_argv", "command_sha256",
-    "suite_sha256",
-}
-DIAGNOSTIC_ROW_FIELDS = {
-    "schema_version", "kind", "status", "suite_id", "run_id",
-    "environment_sha256", "experiment", "load", "metric", "unit", "value",
-    "cache", "operations", "dataset_size", "work_units", "result_items",
-    "duration_us", "index_rebuild_records", "result_cache_hits",
-    "workload_fingerprint", "result_fingerprint", "boot_id", "commit",
-    "source_log", "source_line",
-    "source_log_bytes", "source_log_sha256", "source_marker_sha256",
-    "run_plan_sha256", "campaign_sha256", "suite_sha256", "kernel_sha256",
-    "image_input_sha256", "image_final_sha256", "runner_log_sha256",
-    "command_argv", "command_sha256",
-}
+
 HEX16 = re.compile(r"^[0-9a-f]{16}$")
-SHA256 = re.compile(r"^[0-9a-f]{64}$")
-COMMIT = re.compile(r"^[0-9a-f]{40}$")
+
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
 TOKEN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
-BOOTSTRAP_REPETITIONS = 2000
+
 FILE_META_CAPACITY = 512
-# Task1 schema v1 固定 Context v9 布局；布局升级必须同步升级评测合同。
+
 TASK1_CONTEXT_CONTRACT = {
     "base": 0x3FFFFE7000,
     "size": 7 * 4096,
@@ -172,12 +136,16 @@ TASK1_CONTEXT_CONTRACT = {
     "user_cache_offset": 6 * 4096,
     "user_cache_size": 4096,
 }
+
 FILE_QUERY_PATH_INDEX = "file_query_path_index"
+
 FILE_QUERY_TABLE_ABLATION = "file_query_table_ablation"
+
 FILE_QUERY_EXPERIMENTS = frozenset({
     FILE_QUERY_PATH_INDEX,
     FILE_QUERY_TABLE_ABLATION,
 })
+
 REGISTERED_FILE_EXPERIMENTS = {
     FILE_QUERY_PATH_INDEX: {
         "loads": [8, 24, 48, 96],
@@ -192,6 +160,7 @@ REGISTERED_FILE_EXPERIMENTS = {
         "treatment": {"id": "index", "cache": "ready-index"},
     },
 }
+
 REGISTERED_EXECUTION_SCHEDULE = (
     (FILE_QUERY_PATH_INDEX, 8),
     (FILE_QUERY_PATH_INDEX, 24),
@@ -207,102 +176,13 @@ REGISTERED_EXECUTION_SCHEDULE = (
     ("context_access", 64),
     ("context_access", 96),
 )
-TASK5_DELAY_TICKS = 8
-TASK5_MAX_WAIT_LOOPS = 3
-INTERPRETATION_BOUNDARIES = {
-    "microbenchmark_design": "same-kernel-paired-comparison",
-    "microbenchmark_causal_scope": (
-        "task-facing-path-vs-index-and-isolated-ablation-under-preregistered-workloads"
-    ),
-    "scenario_design": "full-stack",
-    "scenario_attribution": "non-single-mechanism",
-    "host_page_cache": "uncontrolled",
-}
 
+TASK5_DELAY_TICKS = 8
+
+TASK5_MAX_WAIT_LOOPS = 3
 
 class EvaluationError(RuntimeError):
     pass
-
-
-COMPETITION_TASKS = tuple(f"task{number}" for number in range(1, 7))
-
-
-def derive_acceptance_gates(
-    scenarios: list[dict[str, Any]],
-    claims: list[dict[str, Any]],
-    competition_claims: dict[str, Any],
-) -> dict[str, Any]:
-    functional: dict[str, bool] = {}
-    functional_status: dict[str, str] = {}
-    for task in COMPETITION_TASKS:
-        statuses = [
-            item.get("functional_status")
-            for item in scenarios
-            if isinstance(item, dict) and item.get("task") == task
-        ]
-        passed = bool(statuses) and all(status == "pass" for status in statuses)
-        functional[task] = passed
-        functional_status[task] = "pass" if passed else "not_ready"
-
-    task4_contract = competition_claims.get("task4")
-    if not isinstance(task4_contract, dict):
-        raise EvaluationError("Task 4 competition claim registration is missing")
-    task4_benchmark_id = task4_contract.get("benchmark_id")
-    required_status = task4_contract.get("required_status")
-    if not isinstance(task4_benchmark_id, str) or required_status != "supported":
-        raise EvaluationError("Task 4 competition claim registration is invalid")
-    task4_claims = [
-        item
-        for item in claims
-        if isinstance(item, dict) and item.get("benchmark_id") == task4_benchmark_id
-    ]
-    task4_claim_status = (
-        task4_claims[0].get("status")
-        if len(task4_claims) == 1
-        and task4_claims[0].get("status")
-        in {"supported", "not_supported", "unavailable"}
-        else "unavailable"
-    )
-    scientific_publishable = (
-        all(functional.values())
-        and len(task4_claims) == 1
-        and task4_claim_status in {"supported", "not_supported"}
-    )
-    regressed_tasks = {
-        item.get("task")
-        for item in scenarios
-        if isinstance(item, dict) and item.get("performance_status") == "regressed"
-    }
-    competition_tasks = dict(functional_status)
-    competition_tasks["task4"] = (
-        "pass"
-        if (
-            functional["task4"]
-            and task4_claim_status == required_status
-            and "task4" not in regressed_tasks
-        )
-        else "not_ready"
-    )
-    return {
-        "scientific_evidence": {
-            "status": "publishable" if scientific_publishable else "incomplete",
-            "task1_6_functional_status": (
-                "pass" if all(functional.values()) else "not_ready"
-            ),
-            "task4_claim_status": task4_claim_status,
-        },
-        "competition_ready": all(
-            status == "pass" for status in competition_tasks.values()
-        ),
-        "tasks": competition_tasks,
-        "task4_gate": {
-            "benchmark_id": task4_benchmark_id,
-            "functional_status": functional_status["task4"],
-            "claim_status": task4_claim_status,
-            "required_status": required_status,
-        },
-    }
-
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
@@ -312,10 +192,8 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result[key] = value
     return result
 
-
 def _reject_nonfinite(value: str) -> Any:
     raise EvaluationError(f"non-finite JSON number {value!r}")
-
 
 def strict_json_loads(raw: str | bytes) -> Any:
     if isinstance(raw, bytes):
@@ -329,21 +207,17 @@ def strict_json_loads(raw: str | bytes) -> Any:
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise EvaluationError(f"invalid strict JSON: {error}") from error
 
-
 def _read_json(path: Path) -> Any:
     try:
-        safe_path = require_regular_file(path)
+        safe_path = _safe_regular_file(path, "JSON file")
         return strict_json_loads(safe_path.read_bytes())
     except (OSError, ValueError) as error:
         raise EvaluationError(f"cannot read {path}: {error}") from error
 
-
 def _safe_regular_file(path: Path, label: str) -> Path:
-    try:
-        return require_regular_file(path)
-    except (OSError, ValueError) as error:
-        raise EvaluationError(f"{label} is missing or link-backed") from error
-
+    if not path.is_file():
+        raise EvaluationError(f"{label} is missing")
+    return path
 
 def _exact(value: object, fields: set[str], where: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != fields:
@@ -354,70 +228,20 @@ def _exact(value: object, fields: set[str], where: str) -> dict[str, Any]:
         )
     return value
 
-
 def _text(value: object, where: str, pattern: re.Pattern[str] = IDENTIFIER) -> str:
     if not isinstance(value, str) or not pattern.fullmatch(value):
         raise EvaluationError(f"{where} is invalid")
     return value
-
 
 def _label(value: object, where: str) -> str:
     if not isinstance(value, str) or not value or len(value) > 256:
         raise EvaluationError(f"{where} is invalid")
     return value
 
-
 def _int(value: object, where: str, minimum: int = 0) -> int:
     if type(value) is not int or value < minimum or value > (1 << 53) - 1:
         raise EvaluationError(f"{where} is invalid")
     return value
-
-
-def _safe_ref(value: object, where: str) -> str:
-    if not isinstance(value, str) or not value or "\\" in value:
-        raise EvaluationError(f"{where} is unsafe")
-    path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or "." in path.parts:
-        raise EvaluationError(f"{where} is unsafe")
-    return path.as_posix()
-
-
-def _source_path(root: Path, reference: str) -> Path:
-    try:
-        safe_root = require_safe_directory(root)
-        candidate = reject_link_components(
-            safe_root.joinpath(*PurePosixPath(reference).parts)
-        )
-        candidate.relative_to(safe_root)
-    except (OSError, ValueError) as error:
-        raise EvaluationError(f"source path is unsafe: {reference}") from error
-    return candidate
-
-
-def _evidence_path(root: Path, path: Path, where: str) -> str:
-    try:
-        safe_root = require_safe_directory(root)
-        candidate = reject_link_components(absolute_lexical_path(path))
-        relative = candidate.resolve(strict=False).relative_to(
-            safe_root.resolve(strict=True)
-        )
-    except (OSError, ValueError) as error:
-        raise EvaluationError(f"{where} is outside or link-backed") from error
-    reference = _safe_ref(PurePosixPath(*relative.parts).as_posix(), where)
-    return reference
-
-
-def sha256_bytes(raw: bytes) -> str:
-    return hashlib.sha256(raw).hexdigest()
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
 
 def load_suite(path: Path) -> dict[str, Any]:
     raw_suite = _read_json(path)
@@ -432,12 +256,11 @@ def load_suite(path: Path) -> dict[str, Any]:
         raw_suite,
         {
             "schema_version", "kind", "suite_id", "pairing", "experiments",
-            "execution_schedule", "claim_family", "competition_claims",
-            "supplementary_scenarios",
+            "execution_schedule", "supplementary_scenarios",
         },
         "suite",
     )
-    if suite["kind"] != "agentos-evaluation-suite":
+    if suite["kind"] != "agentos-guest-evaluation-suite":
         raise EvaluationError("suite header is invalid")
     supplementary = suite["supplementary_scenarios"]
     if not isinstance(supplementary, list) or len(supplementary) != 1:
@@ -480,18 +303,12 @@ def load_suite(path: Path) -> dict[str, Any]:
     _label(revisit["label"], "supplementary revisit scenario label")
     pairing = _exact(
         suite["pairing"],
-        {
-            "independent_unit", "minimum_boots", "minimum_inner_pairs",
-            "orders", "maximum_order_imbalance",
-        },
+        {"minimum_inner_pairs", "orders"},
         "pairing",
     )
     if (
-        pairing["independent_unit"] != "guest_boot"
-        or _int(pairing["minimum_boots"], "minimum_boots", 1) != FORMAL_BOOT_COUNT
-        or _int(pairing["minimum_inner_pairs"], "minimum_inner_pairs", 7) < 7
+        _int(pairing["minimum_inner_pairs"], "minimum_inner_pairs", 7) != 7
         or pairing["orders"] != ["AB", "BA"]
-        or _int(pairing["maximum_order_imbalance"], "order imbalance") > 1
     ):
         raise EvaluationError("pairing contract is invalid")
     if not isinstance(suite["experiments"], list) or not suite["experiments"]:
@@ -501,8 +318,8 @@ def load_suite(path: Path) -> dict[str, Any]:
         experiment = _exact(
             item,
             {
-                "id", "label", "task", "loads", "unit", "direction",
-                "operation_counts", "selector", "claim_gate", "baseline", "treatment",
+                "id", "task", "loads", "unit", "operation_counts",
+                "selector", "baseline", "treatment",
             },
             "experiment",
         )
@@ -510,7 +327,6 @@ def load_suite(path: Path) -> dict[str, Any]:
         if experiment_id in seen:
             raise EvaluationError("duplicate experiment id")
         seen.add(experiment_id)
-        _label(experiment["label"], "experiment label")
         _label(experiment["task"], "experiment task")
         if (
             not isinstance(experiment["loads"], list)
@@ -528,35 +344,14 @@ def load_suite(path: Path) -> dict[str, Any]:
             )
         ):
             raise EvaluationError(f"{experiment_id} operation counts are invalid")
-        if experiment["unit"] not in {"us", "us/query"} or experiment["direction"] not in {"lower_is_better", "higher_is_better"}:
+        if experiment["unit"] not in {"us", "us/query"}:
             raise EvaluationError(f"{experiment_id} metric is invalid")
         if type(experiment["selector"]) is not int or not 0 <= experiment["selector"] <= (1 << 64) - 1:
             raise EvaluationError(f"{experiment_id} selector is invalid")
-        gate = _exact(
-            experiment["claim_gate"],
-            {
-                "minimum_absolute_improvement_us",
-                "minimum_baseline_duration_us",
-                "minimum_relative_improvement_percent",
-            },
-            f"{experiment_id} claim gate",
-        )
-        _int(gate["minimum_absolute_improvement_us"], "minimum absolute improvement", 1)
-        _int(gate["minimum_baseline_duration_us"], "minimum baseline duration", 1)
-        relative_gate = gate["minimum_relative_improvement_percent"]
-        if (
-            isinstance(relative_gate, bool)
-            or not isinstance(relative_gate, (int, float))
-            or not math.isfinite(float(relative_gate))
-            or relative_gate <= 0
-            or relative_gate > 100
-        ):
-            raise EvaluationError(f"{experiment_id} relative improvement gate is invalid")
         variants = []
         for role in ("baseline", "treatment"):
-            variant = _exact(experiment[role], {"id", "label", "cache"}, role)
+            variant = _exact(experiment[role], {"id", "cache"}, role)
             variants.append(_text(variant["id"], f"{role} variant", TOKEN))
-            _label(variant["label"], f"{role} label")
             _text(variant["cache"], f"{role} cache", TOKEN)
         if variants[0] == variants[1]:
             raise EvaluationError(f"{experiment_id} variants are identical")
@@ -590,7 +385,6 @@ def load_suite(path: Path) -> dict[str, Any]:
             or experiment["operation_counts"] != registered["operation_counts"]
             or experiment["task"] != "task4"
             or experiment["unit"] != "us/query"
-            or experiment["direction"] != "lower_is_better"
             or experiment["selector"] != 17
             or any(
                 experiment[role]["id"] != registered[role]["id"]
@@ -633,733 +427,7 @@ def load_suite(path: Path) -> dict[str, Any]:
         raise EvaluationError(
             "execution schedule differs from the registered Guest dispatcher"
         )
-    claim_family = _exact(
-        suite["claim_family"],
-        {"id", "method", "familywise_alpha", "hypotheses", "load_gate"},
-        "claim family",
-    )
-    _text(claim_family["id"], "claim family id")
-    if (
-        claim_family["method"] != "bonferroni"
-        or type(claim_family["familywise_alpha"]) not in {int, float}
-        or claim_family["familywise_alpha"] != 0.05
-        or claim_family["load_gate"] != "intersection"
-        or claim_family["hypotheses"] != [
-            experiment["id"] for experiment in suite["experiments"]
-        ]
-        or len(claim_family["hypotheses"]) != 4
-    ):
-        raise EvaluationError("headline claim family is invalid")
-    competition_claims = _exact(
-        suite["competition_claims"], {"task4"}, "competition claims"
-    )
-    task4_claim = _exact(
-        competition_claims["task4"],
-        {"benchmark_id", "required_status"},
-        "Task 4 competition claim",
-    )
-    benchmark_id = _text(
-        task4_claim["benchmark_id"], "Task 4 competition benchmark", TOKEN
-    )
-    if (
-        task4_claim["required_status"] != "supported"
-        or benchmark_id != FILE_QUERY_PATH_INDEX
-        or benchmark_id not in claim_family["hypotheses"]
-        or benchmark_id not in experiments
-        or experiments[benchmark_id]["task"] != "task4"
-    ):
-        raise EvaluationError("Task 4 competition claim is invalid")
     return suite
-
-
-def load_run_plan(path: Path) -> tuple[dict[str, Any], str]:
-    raw = path.read_bytes()
-    plan = _exact(
-        strict_json_loads(raw),
-        {
-            "schema_version", "kind", "run_id", "environment_sha256",
-            "campaign_sha256", "suite_sha256", "logs",
-            "measurement_source_receipt", "stop_rule",
-        },
-        "run plan",
-    )
-    if (
-        plan["schema_version"] != 2
-        or plan["kind"] != "agentos-evaluation-run-plan"
-        or plan["stop_rule"] != MEASUREMENT_STOP_RULE
-    ):
-        raise EvaluationError("run plan header is invalid")
-    _text(plan["run_id"], "run id")
-    _text(plan["environment_sha256"], "environment sha256", SHA256)
-    _text(plan["campaign_sha256"], "campaign sha256", SHA256)
-    _text(plan["suite_sha256"], "suite sha256", SHA256)
-    if not isinstance(plan["logs"], list) or not plan["logs"]:
-        raise EvaluationError("run plan logs are invalid")
-    paths: set[str] = set()
-    boots: set[str] = set()
-    hashes: set[str] = set()
-    challenges: set[str] = set()
-    commits: set[str] = set()
-    supported_inputs: set[str] = set()
-    supported_kernels: set[str] = set()
-    normalized_commands: set[tuple[str, ...]] = set()
-    for value in plan["logs"]:
-        item = _exact(
-            value,
-            {
-                "path", "sha256", "boot_id", "commit", "challenge", "status", "detail",
-                "kernel_sha256", "image_input_sha256", "image_final_sha256",
-                "runner_log_sha256",
-                "command_argv", "command_sha256",
-            },
-            "run plan log",
-        )
-        ref = _safe_ref(item["path"], "run plan log path")
-        boot = _text(item["boot_id"], "boot id")
-        digest = _text(item["sha256"], "log sha256", SHA256)
-        for field in (
-            "kernel_sha256", "image_input_sha256", "image_final_sha256",
-            "runner_log_sha256", "command_sha256",
-        ):
-            _text(item[field], field.replace("_", " "), SHA256)
-        command = item["command_argv"]
-        if (
-            not isinstance(command, list) or not command
-            or any(not isinstance(value, str) or not value or len(value) > 4096 for value in command)
-        ):
-            raise EvaluationError("command argv is invalid")
-        command_raw = json.dumps(
-            command, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-        if item["command_sha256"] != sha256_bytes(command_raw):
-            raise EvaluationError("command sha256 differs from command argv")
-        commits.add(_text(item["commit"], "commit", COMMIT))
-        challenge = _text(item["challenge"], "challenge", HEX16)
-        if int(challenge, 16) == 0:
-            raise EvaluationError("challenge must be nonzero")
-        if item["status"] not in {"supported", "unavailable", "failed"}:
-            raise EvaluationError("run plan status is invalid")
-        if item["status"] == "supported":
-            if item["detail"] is not None:
-                raise EvaluationError("supported log detail must be null")
-            supported_inputs.add(item["image_input_sha256"])
-            supported_kernels.add(item["kernel_sha256"])
-        elif not isinstance(item["detail"], str) or not item["detail"] or len(item["detail"]) > 512:
-            raise EvaluationError("unavailable/failed log needs a detail")
-        challenge_argument = f"AGENT_EVAL_CHALLENGE_HEX={challenge}"
-        guest_log_suffix = f"/raw/{ref}"
-        normalized: list[str] = []
-        challenge_count = 0
-        guest_log_count = 0
-        for argument in command:
-            if argument.startswith("AGENT_EVAL_CHALLENGE_HEX="):
-                challenge_count += 1
-                if argument != challenge_argument:
-                    raise EvaluationError("command challenge differs from run plan")
-                normalized.append("AGENT_EVAL_CHALLENGE_HEX=<challenge>")
-            elif argument.startswith("AGENT_TEST_GUEST_LOG_FILE="):
-                guest_log_count += 1
-                guest_path = argument.removeprefix("AGENT_TEST_GUEST_LOG_FILE=").replace("\\", "/")
-                if not guest_path.endswith(guest_log_suffix):
-                    raise EvaluationError("command Guest log path differs from run plan")
-                normalized.append("AGENT_TEST_GUEST_LOG_FILE=<guest-log>")
-            else:
-                normalized.append(argument)
-        if challenge_count != 1 or guest_log_count != 1:
-            raise EvaluationError("command must bind exactly one challenge and Guest log")
-        normalized_commands.add(tuple(normalized))
-        if ref in paths or boot in boots or digest in hashes or challenge in challenges:
-            raise EvaluationError("logs, boot ids, challenges, and log hashes must be unique")
-        paths.add(ref)
-        boots.add(boot)
-        hashes.add(digest)
-        challenges.add(challenge)
-    if len(commits) != 1:
-        raise EvaluationError("all Guest boots must use one source commit")
-    try:
-        validate_measurement_source_receipt_shape(
-            plan["measurement_source_receipt"],
-            expected_commit=next(iter(commits)),
-        )
-    except ValueError as error:
-        raise EvaluationError(
-            f"run plan measurement source receipt is invalid: {error}"
-        ) from error
-    if len(plan["logs"]) != plan["measurement_source_receipt"]["formal_boot_count"]:
-        raise EvaluationError("run plan does not use the fixed formal boot count")
-    if len(normalized_commands) != 1:
-        raise EvaluationError("Guest boot commands differ beyond planned challenge/log paths")
-    if len(supported_kernels) > 1:
-        raise EvaluationError("supported Guest boots do not share one kernel image")
-    supported_count = sum(item["status"] == "supported" for item in plan["logs"])
-    if len(supported_inputs) != supported_count:
-        raise EvaluationError("each supported boot needs a challenge-specialized pristine image")
-    return plan, sha256_bytes(raw)
-
-
-def _binding_sha256(value: object, domain: str) -> str:
-    raw = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return sha256_bytes(domain.encode("ascii") + b"\0" + raw)
-
-
-def load_scenario_report(
-    path: Path,
-    plan: dict[str, Any],
-    *,
-    contract_root: Path,
-    source_tree: Path | None = None,
-) -> dict[str, Any]:
-    path = _safe_regular_file(path, "scenario report")
-    raw = path.read_bytes()
-    report = strict_json_loads(raw)
-    if not isinstance(report, dict):
-        raise EvaluationError("scenario report is not an object")
-    status = report.get("status")
-    expected = {
-        "schema_version", "scenario_id", "source_commit", "run_id", "status",
-        "samples", "summary", "report_sha256",
-    }
-    if status == "failed":
-        expected.add("errors")
-    _exact(report, expected, "scenario report")
-    if (
-        report["schema_version"] != 2
-        or report["scenario_id"] != "research-platform-seeded"
-        or status not in {"supported", "regressed", "inconclusive", "failed"}
-        or report["run_id"] != plan["run_id"]
-    ):
-        raise EvaluationError("scenario report header differs from the run plan")
-    commits = {item["commit"] for item in plan["logs"]}
-    if len(commits) != 1 or report["source_commit"] not in commits:
-        raise EvaluationError("scenario report commit differs from the run plan")
-    supplied = report["report_sha256"]
-    _text(supplied, "scenario report sha256", SHA256)
-    unsigned = dict(report)
-    del unsigned["report_sha256"]
-    if supplied != _binding_sha256(unsigned, "scenario-report-v2"):
-        raise EvaluationError("scenario report binding hash differs")
-    if not isinstance(report["samples"], list) or not isinstance(report["summary"], dict):
-        raise EvaluationError("scenario report samples/summary are invalid")
-    samples = report["samples"]
-    functional_status = "fail"
-    performance_status = "failed"
-    performance: dict[str, Any] | None = None
-    if status == "failed":
-        if samples or not isinstance(report.get("errors"), list) or not report["errors"]:
-            raise EvaluationError("failed scenario must contain errors and no samples")
-    else:
-        try:
-            from evaluation_scenario import (
-                MIN_SUPPORTED_BOOTS,
-                PROGRAM_SOURCE_RECEIPT_SCHEMA,
-                REQUIRED_AGENTOS_MODULES,
-                RESOURCE_STABILITY_CHILD_ROUNDS,
-                RESOURCE_STABILITY_GROWTH_BOUNDS,
-                RESOURCE_STABILITY_INTERPRETATION,
-                RESOURCE_STABILITY_LOAD_WORKFLOWS,
-                RESOURCE_STABILITY_MEASUREMENT_SCOPE,
-                RESOURCE_STABILITY_RESOURCE_KINDS,
-                RESOURCE_STABILITY_TERMINAL_WORKFLOWS,
-                TASK6_EXPECTED_PROGRAM_COUNT,
-                ScenarioEvidenceError,
-                _classify_claim as classify_scenario_claim,
-                _program_source_comparability_receipt_from_snapshot,
-                _summarize as summarize_scenario,
-                read_snapshot_expected_programs,
-            )
-
-            snapshot_root = source_tree or contract_root
-            committed_programs, _ = read_snapshot_expected_programs(
-                snapshot_root,
-                report["source_commit"],
-                plan["measurement_source_receipt"],
-            )
-            committed_source_receipt = (
-                _program_source_comparability_receipt_from_snapshot(
-                    snapshot_root,
-                    report["source_commit"],
-                    committed_programs,
-                    plan["measurement_source_receipt"],
-                )
-            )
-        except (ImportError, KeyError, OSError, TypeError, ValueError) as error:
-            raise EvaluationError(
-                f"scenario committed program inventory is invalid: {error}"
-            ) from error
-
-        boot_ids: set[str] = set()
-        boot_orders: set[int] = set()
-        challenges: set[str] = set()
-        outcome_fingerprints: set[str] = set()
-        expected_program_order = list(committed_programs)
-        for index, raw_sample in enumerate(samples):
-            sample = _exact(
-                raw_sample,
-                {"sample_id", "binding", "outcome", "outcome_fingerprint", "targets"},
-                f"scenario sample {index}",
-            )
-            binding = _exact(
-                sample["binding"],
-                {
-                    "source_commit", "run_id", "boot_id", "boot_order",
-                    "target_order", "challenge", "program_order",
-                    "outcome_fingerprint", "source_receipts", "sha256",
-                },
-                f"scenario sample {index} binding",
-            )
-            boot_id = _text(binding["boot_id"], "scenario boot id")
-            boot_order = _int(binding["boot_order"], "scenario boot order", 1)
-            if boot_order != index + 1:
-                raise EvaluationError("scenario samples are not in sealed boot order")
-            challenge = binding["challenge"]
-            if not isinstance(challenge, str) or not re.fullmatch(r"ch-[0-9]{12}", challenge):
-                raise EvaluationError("scenario challenge is invalid")
-            outcome_fingerprint = _text(
-                sample["outcome_fingerprint"], "scenario outcome fingerprint", SHA256
-            )
-            if (
-                boot_id in boot_ids
-                or boot_order in boot_orders
-                or challenge in challenges
-                or outcome_fingerprint in outcome_fingerprints
-            ):
-                raise EvaluationError(
-                    "scenario boots/challenges/outcomes are not independent"
-                )
-            boot_ids.add(boot_id)
-            boot_orders.add(boot_order)
-            challenges.add(challenge)
-            outcome_fingerprints.add(outcome_fingerprint)
-            program_order = binding["program_order"]
-            if (
-                not isinstance(program_order, list)
-                or not program_order
-                or any(
-                    not isinstance(program, str) or not TOKEN.fullmatch(program)
-                    for program in program_order
-                )
-                or len(set(program_order)) != len(program_order)
-            ):
-                raise EvaluationError("scenario program order is invalid")
-            if program_order != expected_program_order:
-                raise EvaluationError(
-                    "scenario program order differs from the committed manifests"
-                )
-            if (
-                binding["source_commit"] != report["source_commit"]
-                or binding["run_id"] != report["run_id"]
-                or sample["sample_id"] != f"{report['run_id']}:{boot_id}"
-                or binding["target_order"] not in {"AB", "BA"}
-                or outcome_fingerprint != binding["outcome_fingerprint"]
-            ):
-                raise EvaluationError("scenario sample binding differs from report")
-            outcome = sample["outcome"]
-            if (
-                not isinstance(outcome, dict)
-                or not outcome
-                or outcome_fingerprint
-                != _binding_sha256(outcome, "research-platform-outcome-v2")
-            ):
-                raise EvaluationError(
-                    "scenario normalized output differs from its fingerprint"
-                )
-            receipts = binding["source_receipts"]
-            if not isinstance(receipts, dict) or set(receipts) != {"plain", "agentos"}:
-                raise EvaluationError("scenario source receipts are invalid")
-            for digest in receipts.values():
-                _text(digest, "scenario source receipt", SHA256)
-            targets = _exact(
-                sample["targets"], {"plain", "agentos"},
-                f"scenario sample {index} targets",
-            )
-            for target_name in ("plain", "agentos"):
-                target = _exact(
-                    targets[target_name],
-                    {"makespan_ms", "programs", "raw_source_receipt"},
-                    f"scenario sample {index} target {target_name}",
-                )
-                makespan = _int(
-                    target["makespan_ms"],
-                    f"scenario sample {index} {target_name} makespan",
-                    1,
-                )
-                programs = target["programs"]
-                if not isinstance(programs, list) or len(programs) != len(program_order):
-                    raise EvaluationError("scenario target program evidence is incomplete")
-                elapsed_total = 0
-                for position, raw_program in enumerate(programs):
-                    program = _exact(
-                        raw_program,
-                        {"program", "elapsed_ms"},
-                        f"scenario sample {index} {target_name} program",
-                    )
-                    if program["program"] != program_order[position]:
-                        raise EvaluationError("scenario target program order differs")
-                    elapsed_total += _int(
-                        program["elapsed_ms"],
-                        f"scenario sample {index} {target_name} elapsed time",
-                    )
-                if makespan < elapsed_total:
-                    raise EvaluationError("scenario makespan is below its program work")
-                raw_receipt = target["raw_source_receipt"]
-                if not isinstance(raw_receipt, dict):
-                    raise EvaluationError("scenario raw source receipt is invalid")
-                receipt_sha = _text(
-                    raw_receipt.get("sha256"),
-                    "scenario raw source receipt sha256",
-                    SHA256,
-                )
-                if receipt_sha != receipts[target_name]:
-                    raise EvaluationError(
-                        "scenario target evidence differs from its bound source receipt"
-                    )
-                if (
-                    raw_receipt.get("program_source_comparability")
-                    != committed_source_receipt
-                ):
-                    raise EvaluationError(
-                        "scenario program source receipt differs from committed blobs"
-                    )
-            binding_hash = binding["sha256"]
-            _text(binding_hash, "scenario sample binding sha256", SHA256)
-            unsigned_binding = dict(binding)
-            del unsigned_binding["sha256"]
-            if binding_hash != _binding_sha256(unsigned_binding, "scenario-sample-v1"):
-                raise EvaluationError("scenario sample binding hash differs")
-        try:
-            rebuilt_summary = summarize_scenario(samples)
-        except (ImportError, KeyError, TypeError, ValueError) as error:
-            raise EvaluationError(f"scenario samples cannot be summarized: {error}") from error
-        if rebuilt_summary != report["summary"]:
-            raise EvaluationError("scenario summary differs from bound samples")
-        source_comparability = _exact(
-            rebuilt_summary.get("source_comparability"),
-            {
-                "schema",
-                "source_commit",
-                "expected_programs",
-                "same_source_programs",
-                "platform_specific_programs",
-                "receipt_sha256",
-            },
-            "scenario source comparability summary",
-        )
-        expected_count = TASK6_EXPECTED_PROGRAM_COUNT
-        recorded_count = _int(
-            source_comparability["expected_programs"],
-            "scenario source comparability program count",
-            1,
-        )
-        same_source_count = _int(
-            source_comparability["same_source_programs"],
-            "scenario same-source program count",
-        )
-        platform_specific_count = _int(
-            source_comparability["platform_specific_programs"],
-            "scenario platform-specific program count",
-        )
-        _text(
-            source_comparability["receipt_sha256"],
-            "scenario source comparability receipt sha256",
-            SHA256,
-        )
-        if (
-            source_comparability["schema"] != PROGRAM_SOURCE_RECEIPT_SCHEMA
-            or source_comparability["source_commit"] != report["source_commit"]
-            or len(expected_program_order) != expected_count
-            or recorded_count != expected_count
-            or same_source_count + platform_specific_count != expected_count
-        ):
-            raise EvaluationError(
-                "scenario source comparability summary differs from the workload"
-            )
-        try:
-            performance_status = classify_scenario_claim(rebuilt_summary)
-        except ScenarioEvidenceError as error:
-            raise EvaluationError(
-                f"scenario performance conclusion is invalid: {error}"
-            ) from error
-        if status != performance_status:
-            raise EvaluationError("scenario status differs from paired performance gate")
-        independent = rebuilt_summary.get("independent_boots")
-        order_counts = rebuilt_summary.get("target_order_counts")
-        targets = rebuilt_summary.get("targets")
-        functional_acceptance = rebuilt_summary.get("functional_acceptance")
-        resource_stability = rebuilt_summary.get("resource_stability")
-        acceptance_receipts = (
-            functional_acceptance.get("boot_receipts")
-            if isinstance(functional_acceptance, dict)
-            else None
-        )
-        stability_receipts = (
-            resource_stability.get("boot_receipts")
-            if isinstance(resource_stability, dict)
-            else None
-        )
-        global_observation = (
-            resource_stability.get("global_observation")
-            if isinstance(resource_stability, dict)
-            else None
-        )
-        observed_free_pages = (
-            global_observation.get("free_pages")
-            if isinstance(global_observation, dict)
-            else None
-        )
-        observed_resources = (
-            global_observation.get("resources")
-            if isinstance(global_observation, dict)
-            else None
-        )
-        global_observation_complete = (
-            isinstance(global_observation, dict)
-            and set(global_observation)
-            == {
-                "coverage",
-                "measured_mask_semantics",
-                "snapshot_consistency",
-                "account_counters",
-                "rate_budgets",
-                "growth_bound_semantics",
-                "decrease_semantics",
-                "free_pages",
-                "resources",
-            }
-            and global_observation["coverage"]
-            == "configured_global_kind_counters"
-            and global_observation["measured_mask_semantics"]
-            == "configured_global_resource_kind_counters_only"
-            and global_observation["snapshot_consistency"]
-            == "single_core_irq_coherent"
-            and global_observation["account_counters"] == "not_measured"
-            and global_observation["rate_budgets"] == "not_measured"
-            and global_observation["growth_bound_semantics"]
-            == "per_class_positive_delta_sum"
-            and global_observation["decrease_semantics"]
-            == "reclamation_allowed"
-            and observed_free_pages
-            == {
-                "status": "measured",
-                "exact_pair_recovery": True,
-                "exact_terminal_recovery": True,
-            }
-            and isinstance(observed_resources, list)
-            and len(observed_resources) == len(RESOURCE_STABILITY_RESOURCE_KINDS)
-            and all(
-                isinstance(resource, dict)
-                and set(resource)
-                == {
-                    "kind",
-                    "status",
-                    "coverage",
-                    "per_workflow_growth_bound",
-                    "terminal_growth_bound",
-                    "max_observed_per_workflow_growth",
-                    "terminal_observed_growth",
-                    "plateau_or_reclamation",
-                    "exact_terminal_recovery",
-                }
-                and resource["kind"] == kind
-                and resource["status"] == "measured"
-                and resource["coverage"] == "configured_global_counter"
-                and resource["per_workflow_growth_bound"]
-                == RESOURCE_STABILITY_GROWTH_BOUNDS[kind]
-                and resource["terminal_growth_bound"]
-                == RESOURCE_STABILITY_GROWTH_BOUNDS[kind]
-                and type(resource["max_observed_per_workflow_growth"]) is int
-                and 0
-                <= resource["max_observed_per_workflow_growth"]
-                <= resource["per_workflow_growth_bound"]
-                and type(resource["terminal_observed_growth"]) is int
-                and 0
-                <= resource["terminal_observed_growth"]
-                <= resource["terminal_growth_bound"]
-                and resource["plateau_or_reclamation"]
-                is (
-                    True
-                    if RESOURCE_STABILITY_GROWTH_BOUNDS[kind] != 0
-                    else None
-                )
-                and type(resource["exact_terminal_recovery"]) is bool
-                and (
-                    not resource["exact_terminal_recovery"]
-                    or resource["terminal_observed_growth"] == 0
-                )
-                for resource, kind in zip(
-                    observed_resources, RESOURCE_STABILITY_RESOURCE_KINDS
-                )
-            )
-        )
-        expected_acceptance_bindings = [
-            (
-                sample["sample_id"],
-                sample["binding"]["challenge"],
-                sample["binding"]["source_receipts"]["agentos"],
-            )
-            for sample in samples
-        ]
-        functionally_complete = (
-            type(independent) is int
-            and independent >= MIN_SUPPORTED_BOOTS
-            and independent == len(samples)
-            and boot_orders == set(range(1, independent + 1))
-            and rebuilt_summary.get("minimum_supported_boots") == MIN_SUPPORTED_BOOTS
-            and rebuilt_summary.get("unique_challenges") == independent
-            and rebuilt_summary.get("paired_success_rate") == 1.0
-            and rebuilt_summary.get("target_order_balanced") is True
-            and isinstance(order_counts, dict)
-            and set(order_counts) == {"AB", "BA"}
-            and sum(order_counts.values()) == independent
-            and abs(order_counts["AB"] - order_counts["BA"]) <= 1
-            and isinstance(targets, dict)
-            and set(targets) == {"plain", "agentos"}
-            and all(
-                targets[target].get("successful_boots") == independent
-                and targets[target].get("success_rate") == 1.0
-                for target in ("plain", "agentos")
-            )
-            and isinstance(functional_acceptance, dict)
-            and functional_acceptance.get("status") == "passed"
-            and functional_acceptance.get("required_target") == "agentos"
-            and functional_acceptance.get("required_modules")
-            == list(REQUIRED_AGENTOS_MODULES)
-            and functional_acceptance.get("verified_boots") == independent
-            and isinstance(acceptance_receipts, list)
-            and len(acceptance_receipts) == independent
-            and all(
-                isinstance(receipt, dict)
-                and set(receipt) == {
-                    "sample_id", "challenge", "module_receipt_sha256",
-                    "binding_sha256", "raw_source_receipt_sha256",
-                }
-                and (
-                    receipt["sample_id"], receipt["challenge"],
-                    receipt["raw_source_receipt_sha256"],
-                ) == expected
-                and all(
-                    isinstance(receipt[field], str)
-                    and SHA256.fullmatch(receipt[field])
-                    for field in (
-                        "module_receipt_sha256", "binding_sha256",
-                        "raw_source_receipt_sha256",
-                    )
-                )
-                for receipt, expected in zip(
-                    acceptance_receipts, expected_acceptance_bindings
-                )
-            )
-            and isinstance(resource_stability, dict)
-            and resource_stability.get("status") == "passed"
-            and resource_stability.get("required_target") == "agentos"
-            and resource_stability.get("measurement_scope")
-            == RESOURCE_STABILITY_MEASUREMENT_SCOPE
-            and resource_stability.get("verified_boots") == independent
-            and resource_stability.get("load_workflows_per_boot")
-            == RESOURCE_STABILITY_LOAD_WORKFLOWS
-            and resource_stability.get("terminal_workflows_per_boot")
-            == RESOURCE_STABILITY_TERMINAL_WORKFLOWS
-            and resource_stability.get("child_rounds_per_load_workflow")
-            == RESOURCE_STABILITY_CHILD_ROUNDS
-            and resource_stability.get("interpretation")
-            == RESOURCE_STABILITY_INTERPRETATION
-            and global_observation_complete
-            and isinstance(stability_receipts, list)
-            and len(stability_receipts) == independent
-            and all(
-                isinstance(receipt, dict)
-                and set(receipt) == {
-                    "sample_id", "challenge", "resource_receipt_sha256",
-                    "binding_sha256", "raw_source_receipt_sha256",
-                }
-                and (
-                    receipt["sample_id"], receipt["challenge"],
-                    receipt["raw_source_receipt_sha256"],
-                ) == expected
-                and all(
-                    isinstance(receipt[field], str)
-                    and SHA256.fullmatch(receipt[field])
-                    for field in (
-                        "resource_receipt_sha256", "binding_sha256",
-                        "raw_source_receipt_sha256",
-                    )
-                )
-                for receipt, expected in zip(
-                    stability_receipts, expected_acceptance_bindings
-                )
-            )
-        )
-        if not functionally_complete:
-            raise EvaluationError("scenario functional acceptance is incomplete")
-        functional_status = "pass"
-        performance = rebuilt_summary["paired_improvement"]
-    independent = report["summary"].get("independent_boots")
-    if type(independent) is not int or independent < 0:
-        raise EvaluationError("scenario independent boot count is invalid")
-    return {
-        "report": report,
-        "path": path.name,
-        "sha256": sha256_bytes(raw),
-        "bytes": len(raw),
-        "functional_status": functional_status,
-        "performance_status": performance_status,
-        "performance": performance,
-    }
-
-
-def bind_scenario_plan(
-    path: Path,
-    scenario_record: dict[str, Any],
-    micro_plan: dict[str, Any],
-    *,
-    contract_root: Path,
-) -> dict[str, Any]:
-    try:
-        trusted_contract_root = require_safe_directory(contract_root)
-    except (OSError, TypeError, ValueError) as error:
-        raise EvaluationError("scenario contract root is unavailable or unsafe") from error
-    path = _safe_regular_file(path, "scenario plan")
-    raw = path.read_bytes()
-    value = strict_json_loads(raw)
-    try:
-        from evaluation_campaign import CampaignError, validate_scenario_campaign
-    except ImportError as error:
-        raise EvaluationError(f"scenario plan validator is unavailable: {error}") from error
-    try:
-        validate_scenario_campaign(value, contract_root=trusted_contract_root)
-    except (CampaignError, KeyError, TypeError, ValueError) as error:
-        raise EvaluationError(f"scenario plan is invalid: {error}") from error
-    report = scenario_record["report"]
-    if (
-        value["phase"] != "collected"
-        or value["report"]["status"] != "recorded"
-        or value["report"]["sha256"] != scenario_record["sha256"]
-        or value["run"]["id"] != micro_plan["run_id"]
-        or value["run"]["commit"] != report["source_commit"]
-        or value["run"]["environment_sha256"] != micro_plan["environment_sha256"]
-    ):
-        raise EvaluationError("scenario plan/report differs from the micro run binding")
-    planned = {item["boot_id"]: item for item in value["boots"]}
-    if len(planned) != len(report["samples"]):
-        raise EvaluationError("scenario report boot count differs from scenario plan")
-    for sample in report["samples"]:
-        binding = sample["binding"]
-        boot = planned.get(binding["boot_id"])
-        expected_order = "AB" if boot and boot["target_order"] == "plain-agentos" else "BA"
-        if (
-            boot is None
-            or boot["status"] != "passed"
-            or boot["challenge"] != binding["challenge"]
-            or binding["target_order"] != expected_order
-        ):
-            raise EvaluationError("scenario sample differs from its sealed boot plan")
-    scenario_record["plan_path"] = path.name
-    scenario_record["plan_sha256"] = sha256_bytes(raw)
-    return scenario_record
-
 
 def _parse_marker(line: str, line_number: int) -> dict[str, Any]:
     if not line.startswith(MARKER_PREFIX):
@@ -1397,7 +465,6 @@ def _parse_marker(line: str, line_number: int) -> dict[str, Any]:
     for key in ("workload_fingerprint", "result_fingerprint"):
         _text(fields[key], f"marker {key}", HEX16)
     return fields
-
 
 def _parse_diagnostic(line: str, line_number: int) -> dict[str, Any]:
     fields: dict[str, Any] = {}
@@ -1453,20 +520,16 @@ def _parse_diagnostic(line: str, line_number: int) -> dict[str, Any]:
     fields["line"] = line_number
     return fields
 
-
 def _experiment_map(suite: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {item["id"]: item for item in suite["experiments"]}
-
 
 def _fnv_bytes(value: int, raw: bytes) -> int:
     for byte in raw:
         value = ((value ^ byte) * 1099511628211) & ((1 << 64) - 1)
     return value
 
-
 def _fnv_u64(value: int, item: int) -> int:
     return _fnv_bytes(value, (item & ((1 << 64) - 1)).to_bytes(8, "little"))
-
 
 def _parse_receipt_fields(
     line: str,
@@ -1491,7 +554,6 @@ def _parse_receipt_fields(
         )
     return fields
 
-
 def _parse_receipt_values(value: str, line_number: int) -> list[int]:
     tokens = value.split(",")
     if not tokens or any(not re.fullmatch(r"-?(?:0|[1-9][0-9]*)", token) for token in tokens):
@@ -1503,7 +565,6 @@ def _parse_receipt_values(value: str, line_number: int) -> list[int]:
     ):
         raise EvaluationError(f"functional receipt value is out of range at line {line_number}")
     return values
-
 
 def _functional_receipt_hash(
     task: str,
@@ -1518,7 +579,6 @@ def _functional_receipt_hash(
         value = _fnv_u64(value, item)
     value = _fnv_u64(value, int(semantic, 16))
     return f"{value:016x}"
-
 
 def _format_functional_receipt(
     task: str,
@@ -1541,21 +601,17 @@ def _format_functional_receipt(
         f"values={value_text} semantic={semantic} receipt={receipt} status=passed"
     )
 
-
 def _operations_for(experiment: dict[str, Any], load: int) -> int:
     try:
         return experiment["operation_counts"][experiment["loads"].index(load)]
     except (ValueError, IndexError) as error:
         raise EvaluationError(f"load {load} has no operation count") from error
 
-
-@lru_cache(maxsize=4096)
 def _semantic_token(domain: str, load: int, pair: int, item: int, challenge: str) -> int:
     value = _fnv_bytes(1469598103934665603, domain.encode("ascii"))
     for part in (int(challenge, 16), load, pair, item):
         value = _fnv_u64(value, part)
     return value | (1 << 63)
-
 
 def _parse_supplementary_fields(
     line: str,
@@ -1582,7 +638,6 @@ def _parse_supplementary_fields(
         )
     return fields
 
-
 def _supplementary_uint(
     fields: dict[str, Any], key: str, line_number: int, *, minimum: int = 0
 ) -> int:
@@ -1604,14 +659,12 @@ def _supplementary_uint(
     fields[key] = number
     return number
 
-
 def _nearest_rank_int(values: list[int], percentile: int) -> int:
     if not values or percentile <= 0 or percentile > 100:
         raise EvaluationError("supplementary percentile input is invalid")
     ordered = sorted(values)
     rank = math.ceil(percentile * len(ordered) / 100)
     return ordered[rank - 1]
-
 
 def _parse_revisit_evaluation(
     lines: list[str], challenge: str, config: dict[str, Any]
@@ -1717,7 +770,6 @@ def _parse_revisit_evaluation(
                 f"revisit result fingerprint differs at line {line_number}"
             )
         fields["line"] = line_number
-        fields["marker_sha256"] = sha256_bytes(line.encode("utf-8"))
         visits.append(fields)
 
     if set(identity_receipts) != set(identities):
@@ -1764,7 +816,6 @@ def _parse_revisit_evaluation(
     if summary_fingerprint != expected_summary_fingerprint:
         raise EvaluationError("revisit summary fingerprint differs")
     summary["line"] = summary_line_number
-    summary["marker_sha256"] = sha256_bytes(summary_line.encode("utf-8"))
 
     expected_sample_count = config["rounds_per_level"] * sum(
         config["concurrency_levels"]
@@ -1878,7 +929,6 @@ def _parse_revisit_evaluation(
                 f"revisit concurrency sample fingerprint differs at line {line_number}"
             )
         fields["line"] = line_number
-        fields["marker_sha256"] = sha256_bytes(line.encode("utf-8"))
         samples_by_level[level].append(fields)
 
     summaries: list[dict[str, Any]] = []
@@ -2011,7 +1061,6 @@ def _parse_revisit_evaluation(
                 f"revisit concurrency summary fingerprint differs at line {line_number}"
             )
         fields["line"] = line_number
-        fields["marker_sha256"] = sha256_bytes(line.encode("utf-8"))
         fields["samples"] = samples
         summaries.append(fields)
 
@@ -2029,24 +1078,6 @@ def _parse_revisit_evaluation(
     ]
     if physical != sorted(physical) or len(physical) != len(set(physical)):
         raise EvaluationError("revisit marker physical order differs")
-    marker_pairs = [
-        *((item["line"], item["marker_sha256"]) for item in visits),
-        (summary["line"], summary["marker_sha256"]),
-        *(
-            pair
-            for level in config["concurrency_levels"]
-            for pair in (
-                *((item["line"], item["marker_sha256"])
-                  for item in samples_by_level[level]),
-                (
-                    next(item["line"] for item in summaries
-                         if item["concurrency"] == level),
-                    next(item["marker_sha256"] for item in summaries
-                         if item["concurrency"] == level),
-                ),
-            )
-        ),
-    ]
     return {
         "id": config["id"],
         "task": config["task"],
@@ -2056,12 +1087,9 @@ def _parse_revisit_evaluation(
         "visits": visits,
         "summary": summary,
         "concurrency": summaries,
-        "line_numbers": [line for line, _ in marker_pairs],
-        "marker_sha256s": [digest for _, digest in marker_pairs],
+        "line_numbers": physical,
     }
 
-
-@lru_cache(maxsize=4096)
 def _file_target_step(load: int, challenge: str) -> int:
     if load <= 0:
         raise EvaluationError("file-query load must be positive")
@@ -2076,7 +1104,6 @@ def _file_target_step(load: int, challenge: str) -> int:
             step = 1
     return step
 
-
 def _file_target_meta(load: int, pair: int, challenge: str) -> int:
     if load <= 0 or pair < 0:
         raise EvaluationError("file-query pair must be non-negative")
@@ -2087,7 +1114,6 @@ def _file_target_meta(load: int, pair: int, challenge: str) -> int:
         return start
     return (start + (pair - 1) * _file_target_step(load, challenge)) % load
 
-
 def _file_target_sequence(load: int, pairs: int, challenge: str) -> list[int]:
     if pairs <= 0 or pairs > load:
         raise EvaluationError("file-query target sequence cannot be unique")
@@ -2095,7 +1121,6 @@ def _file_target_sequence(load: int, pairs: int, challenge: str) -> list[int]:
     if len(set(targets)) != pairs:
         raise EvaluationError("file-query target sequence repeats a target")
     return targets
-
 
 def _file_operation_targets(
     load: int, pair: int, operations: int, challenge: str
@@ -2109,8 +1134,6 @@ def _file_operation_targets(
         raise EvaluationError("file-query operation target sequence repeats a target")
     return targets
 
-
-@lru_cache(maxsize=4096)
 def _file_manifest_selector(
     load: int, pair: int, operations: int, challenge: str
 ) -> int:
@@ -2123,8 +1146,6 @@ def _file_manifest_selector(
         value = _fnv_u64(value, target)
     return value
 
-
-@lru_cache(maxsize=4096)
 def _expected_workload_cached(
     experiment_id: str,
     selector_value: int,
@@ -2144,7 +1165,6 @@ def _expected_workload_cached(
     for item in (load, pair, operations, selector):
         value = _fnv_u64(value, item)
     return f"{value:016x}"
-
 
 def _expected_workload(
     experiment: dict[str, Any],
@@ -2169,8 +1189,6 @@ def _expected_workload(
         operations,
     )
 
-
-@lru_cache(maxsize=4096)
 def _expected_result_cached(
     experiment_id: str,
     load: int,
@@ -2224,7 +1242,6 @@ def _expected_result_cached(
         raise EvaluationError(f"no result oracle for experiment {experiment_id}")
     return f"{value:016x}"
 
-
 def _expected_result(
     experiment: dict[str, Any],
     load: int,
@@ -2242,7 +1259,6 @@ def _expected_result(
         experiment["id"], load, pair, challenge, operations
     )
 
-
 def _functional_semantic(
     domain: str,
     challenge: str,
@@ -2254,10 +1270,8 @@ def _functional_semantic(
         value = _fnv_u64(value, item)
     return f"{value:016x}"
 
-
 def _as_u64(value: int) -> int:
     return value & ((1 << 64) - 1)
-
 
 def _task2_schema_fingerprint() -> int:
     value = _fnv_bytes(1469598103934665603, b"task2-tool-schema-v1")
@@ -2274,13 +1288,11 @@ def _task2_schema_fingerprint() -> int:
         value = _fnv_bytes(value, params.encode("ascii"))
     return value
 
-
 TASK2_REQUIRED_TOOLS = (
     (1, 3, 1, "echo", "payload:string,arg0:uint64,arg1:uint64"),
     (4, 1, 1, "query_process", "type?:uint64"),
     (13, 2, 1, "capability_check", "role:uint64,action:string"),
 )
-
 
 def _parse_catalog_schema(params: str, count: int, line_number: int) -> None:
     if params == "none":
@@ -2299,7 +1311,6 @@ def _parse_catalog_schema(params: str, count: int, line_number: int) -> None:
         if key in seen:
             raise EvaluationError(f"duplicate catalog parameter at line {line_number}")
         seen.add(key)
-
 
 def _parse_tool_catalog(
     lines: list[str], challenge: str,
@@ -2341,7 +1352,6 @@ def _parse_tool_catalog(
             raise EvaluationError(f"catalog descriptor envelope is invalid at line {line_number}")
         _parse_catalog_schema(params, fields["param_count"], line_number)
         fields["line"] = line_number
-        fields["marker_sha256"] = sha256_bytes(line.encode("utf-8"))
         descriptors.append(fields)
     total = descriptors[0]["total"]
     if total < len(TASK2_REQUIRED_TOOLS) or total > 4096 or total != len(descriptors):
@@ -2384,9 +1394,7 @@ def _parse_tool_catalog(
         "catalog_hash": catalog_hash,
         "core_hash": _task2_schema_fingerprint(),
         "line_numbers": [item["line"] for item in descriptors],
-        "marker_sha256s": [item["marker_sha256"] for item in descriptors],
     }
-
 
 def _task3_tool_semantic(challenge: str) -> int:
     rounds = 6
@@ -2416,11 +1424,9 @@ def _task3_tool_semantic(challenge: str) -> int:
         value = _fnv_bytes(value, b"ctx-tool")
     return value
 
-
 def _task3_semantic(challenge: str, values: list[int]) -> str:
     """把完整任务 3 回执绑定到新的 Host challenge。"""
     return _functional_semantic("task3-semantic-v2", challenge, values)
-
 
 def _task4_fixture(challenge: str) -> dict[str, Any]:
     """返回由 challenge 派生的任务 4 属性和文件内容。"""
@@ -2445,7 +1451,6 @@ def _task4_fixture(challenge: str) -> dict[str, Any]:
             _fnv_bytes(1469598103934665603, b"ready") % 60
         ),
     }
-
 
 def _task4_query_semantic(
     domain: str,
@@ -2485,7 +1490,6 @@ def _task4_query_semantic(
             value = _fnv_u64(value, hit[field])
     return value
 
-
 def _parse_one_functional_receipt(
     line: str,
     line_number: int,
@@ -2517,9 +1521,7 @@ def _parse_one_functional_receipt(
         "semantic": semantic,
         "receipt": receipt,
         "line": line_number,
-        "marker_sha256": sha256_bytes(line.encode("utf-8")),
     }
-
 
 def _validate_functional_task1(
     launcher: dict[str, Any],
@@ -2570,7 +1572,6 @@ def _validate_functional_task1(
         != _functional_semantic("task1-semantic-v1", challenge, values)
     ):
         raise EvaluationError("Task1 Agent PCB/context receipt is inconsistent")
-
 
 def _validate_functional_task2(
     receipt: dict[str, Any],
@@ -2636,7 +1637,6 @@ def _validate_functional_task2(
     ):
         raise EvaluationError("Task2 structured-tool receipt is inconsistent")
 
-
 def _validate_functional_task3(
     receipt: dict[str, Any],
     challenge: str,
@@ -2679,7 +1679,6 @@ def _validate_functional_task3(
         or receipt["semantic"] != _task3_semantic(challenge, values)
     ):
         raise EvaluationError("Task3 Context Path receipt is inconsistent")
-
 
 def _validate_functional_task4(
     receipt: dict[str, Any],
@@ -2859,7 +1858,6 @@ def _validate_functional_task4(
             "Task4 attribute/content lifecycle receipt is inconsistent"
         )
 
-
 def _validate_functional_task5(
     receipt: dict[str, Any],
     challenge: str,
@@ -2917,7 +1915,6 @@ def _validate_functional_task5(
         raise EvaluationError(
             "Task5 blocking wait and scheduler-accounting receipt is inconsistent"
         )
-
 
 def validate_functional_log(
     lines: list[str],
@@ -2994,44 +1991,28 @@ def validate_functional_log(
     _validate_functional_task3(receipts["task3"], challenge)
     _validate_functional_task4(receipts["task4"], challenge)
     _validate_functional_task5(receipts["task5"], challenge, receipts["task1"])
-    ordered_lines = [
-        (launcher["line"], launcher["marker_sha256"]),
-        (receipts["task1"]["line"], receipts["task1"]["marker_sha256"]),
-        *zip(catalog["line_numbers"], catalog["marker_sha256s"]),
-        *(
-            (receipts[task]["line"], receipts[task]["marker_sha256"])
-            for task in FUNCTIONAL_TASKS[1:]
-        ),
-        *zip(revisit["line_numbers"], revisit["marker_sha256s"]),
-    ]
-    ordered_lines.sort()
+    ordered_lines = sorted({
+        launcher["line"],
+        *(receipts[task]["line"] for task in FUNCTIONAL_TASKS),
+        *catalog["line_numbers"],
+        *revisit["line_numbers"],
+    })
     return {
         "launcher": launcher,
         "tasks": receipts,
         "catalog": catalog,
         "supplementary": revisit,
-        "line_numbers": [line for line, _ in ordered_lines],
-        "marker_sha256s": [digest for _, digest in ordered_lines],
+        "line_numbers": ordered_lines,
     }
-
 
 def extract_log(
     path: Path,
-    source_ref: str,
-    log_plan: dict[str, Any],
     suite: dict[str, Any],
-    run_id: str,
-    environment_sha256: str,
-    run_plan_sha256: str,
-    campaign_sha256: str,
-    suite_sha256: str,
+    challenge: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    source_ref = path.name
     path = _safe_regular_file(path, f"source log {source_ref}")
     raw = path.read_bytes()
-    if sha256_bytes(raw) != log_plan["sha256"]:
-        raise EvaluationError(f"source log differs from run plan: {source_ref}")
-    if log_plan["status"] != "supported":
-        return [], {}
     try:
         lines = raw.decode("utf-8").splitlines()
     except UnicodeDecodeError as error:
@@ -3043,7 +2024,7 @@ def extract_log(
         (line_number, line) for line_number, line in enumerate(lines, 1)
         if line.startswith("agenteval_ucore: challenge=")
     ]
-    expected_challenge_line = f"agenteval_ucore: challenge={log_plan['challenge']}"
+    expected_challenge_line = f"agenteval_ucore: challenge={challenge}"
     if len(challenge_lines) != 1 or challenge_lines[0][1] != expected_challenge_line:
         raise EvaluationError(f"source log challenge differs from run plan: {source_ref}")
     pass_lines = [
@@ -3068,7 +2049,7 @@ def extract_log(
             experiment,
             diagnostic["load"],
             0,
-            log_plan["challenge"],
+            challenge,
             operations_override=1,
         )
         if diagnostic["workload_fingerprint"] != expected_workload:
@@ -3079,7 +2060,7 @@ def extract_log(
             experiment,
             diagnostic["load"],
             0,
-            log_plan["challenge"],
+            challenge,
             operations_override=1,
         )
         if diagnostic["result_fingerprint"] != expected_result:
@@ -3110,11 +2091,11 @@ def extract_log(
         if role is None:
             raise EvaluationError(f"unconfigured variant at line {line_number}")
         if marker["workload_fingerprint"] != _expected_workload(
-            experiment, marker["load"], marker["pair"], log_plan["challenge"]
+            experiment, marker["load"], marker["pair"], challenge
         ):
             raise EvaluationError(f"workload fingerprint is not challenge-bound at line {line_number}")
         if marker["result_fingerprint"] != _expected_result(
-            experiment, marker["load"], marker["pair"], log_plan["challenge"]
+            experiment, marker["load"], marker["pair"], challenge
         ):
             raise EvaluationError(
                 f"result fingerprint differs from Host semantic oracle at line {line_number}"
@@ -3129,53 +2110,22 @@ def extract_log(
             raise EvaluationError(f"duplicate sample at line {line_number}")
         seen.add(key)
         rows.append({
-            "schema_version": 1,
             "kind": "agentos-evaluation-metric-row",
-            "status": "supported",
-            "suite_id": suite["suite_id"],
-            "run_id": run_id,
-            "environment_sha256": environment_sha256,
             "experiment": marker["experiment"],
             "load": marker["load"],
             "inner_pair": marker["pair"],
-            "variant": marker["variant"],
             "role": role,
-            "target_id": f"{marker['experiment']}:{marker['variant']}",
-            "cache": marker["cache"],
             "order": marker["order"],
             "operations": marker["operations"],
             "dataset_size": marker["dataset_size"],
             "work_units": marker["work_units"],
             "records_examined": marker["records_examined"],
             "result_items": marker["result_items"],
-            "duration_us": marker["duration_us"],
             "index_rebuild_records": marker["index_rebuild_records"],
             "result_cache_hits": marker["result_cache_hits"],
-            "per_operation_us": marker["duration_us"] / marker["operations"],
-            "unit": experiment["unit"],
-            "value": (
-                marker["duration_us"] / marker["operations"]
-                if experiment["unit"] == "us/query"
-                else marker["duration_us"]
-            ),
             "workload_fingerprint": marker["workload_fingerprint"],
             "result_fingerprint": marker["result_fingerprint"],
-            "boot_id": log_plan["boot_id"],
-            "commit": log_plan["commit"],
-            "source_log": source_ref,
             "source_line": line_number,
-            "source_log_bytes": len(raw),
-            "source_log_sha256": log_plan["sha256"],
-            "source_marker_sha256": sha256_bytes(line.encode("utf-8")),
-            "run_plan_sha256": run_plan_sha256,
-            "campaign_sha256": campaign_sha256,
-            "kernel_sha256": log_plan["kernel_sha256"],
-            "image_input_sha256": log_plan["image_input_sha256"],
-            "image_final_sha256": log_plan["image_final_sha256"],
-            "runner_log_sha256": log_plan["runner_log_sha256"],
-            "command_argv": log_plan["command_argv"],
-            "command_sha256": log_plan["command_sha256"],
-            "suite_sha256": suite_sha256,
         })
         # 下方还会按物理标记顺序复核位置。
         rows[-1]["_position"] = position
@@ -3200,7 +2150,7 @@ def extract_log(
                 ("diagnostic", experiment["id"], load, 0, "readiness")
             )
         for pair in range(1, suite["pairing"]["minimum_inner_pairs"] + 1):
-            order = "AB" if (pair & 1) == (int(log_plan["challenge"], 16) & 1) else "BA"
+            order = "AB" if (pair & 1) == (int(challenge, 16) & 1) else "BA"
             roles = (
                 ("baseline", "treatment")
                 if order == "AB"
@@ -3214,7 +2164,7 @@ def extract_log(
         raise EvaluationError(
             f"evaluation marker physical order differs from preregistration in {source_ref}"
         )
-    _validate_complete_boot(rows, suite, source_ref, log_plan["challenge"])
+    _validate_complete_boot(rows, suite, source_ref, challenge)
     first_measurement = min(
         [row["source_line"] for row in rows] + [item["line"] for item in diagnostics.values()]
     )
@@ -3245,7 +2195,7 @@ def extract_log(
     for row in rows:
         del row["_position"]
     functional = validate_functional_log(
-        lines, log_plan["challenge"], rows, suite
+        lines, challenge, rows, suite
     )
     supplementary_lines = set(functional["supplementary"]["line_numbers"])
     headline_business_lines = {
@@ -3269,48 +2219,10 @@ def extract_log(
             f"business marker order differs from Guest lifecycle in {source_ref}"
         )
     for (experiment_id, load), diagnostic in sorted(diagnostics.items()):
-        line = lines[diagnostic["line"] - 1]
         rows.append({
-            "schema_version": 1,
             "kind": "agentos-evaluation-diagnostic-row",
-            "status": "supported",
-            "suite_id": suite["suite_id"],
-            "run_id": run_id,
-            "environment_sha256": environment_sha256,
-            "experiment": experiment_id,
-            "load": load,
-            "metric": "index_readiness_duration",
-            "unit": "us",
-            "value": diagnostic["duration_us"],
-            "cache": diagnostic["cache"],
-            "operations": diagnostic["operations"],
-            "dataset_size": diagnostic["dataset_size"],
-            "work_units": diagnostic["work_units"],
-            "result_items": diagnostic["result_items"],
-            "duration_us": diagnostic["duration_us"],
-            "index_rebuild_records": diagnostic["index_rebuild_records"],
-            "result_cache_hits": diagnostic["result_cache_hits"],
-            "workload_fingerprint": diagnostic["workload_fingerprint"],
-            "result_fingerprint": diagnostic["result_fingerprint"],
-            "boot_id": log_plan["boot_id"],
-            "commit": log_plan["commit"],
-            "source_log": source_ref,
-            "source_line": diagnostic["line"],
-            "source_log_bytes": len(raw),
-            "source_log_sha256": log_plan["sha256"],
-            "source_marker_sha256": sha256_bytes(line.encode("utf-8")),
-            "run_plan_sha256": run_plan_sha256,
-            "campaign_sha256": campaign_sha256,
-            "suite_sha256": suite_sha256,
-            "kernel_sha256": log_plan["kernel_sha256"],
-            "image_input_sha256": log_plan["image_input_sha256"],
-            "image_final_sha256": log_plan["image_final_sha256"],
-            "runner_log_sha256": log_plan["runner_log_sha256"],
-            "command_argv": log_plan["command_argv"],
-            "command_sha256": log_plan["command_sha256"],
         })
     return rows, functional
-
 
 def validate_guest_log(
     path: Path,
@@ -3322,34 +2234,7 @@ def validate_guest_log(
         raise EvaluationError("targeted Guest challenge is invalid")
     if int(challenge, 16) == 0:
         raise EvaluationError("targeted Guest challenge must be nonzero")
-    path = _safe_regular_file(path, "targeted Guest log")
-    raw = path.read_bytes()
-    digest = sha256_bytes(raw)
-    placeholder = "0" * 64
-    log_plan = {
-        "sha256": digest,
-        "status": "supported",
-        "challenge": challenge,
-        "boot_id": "targeted-boot",
-        "commit": "0" * 40,
-        "kernel_sha256": placeholder,
-        "image_input_sha256": placeholder,
-        "image_final_sha256": placeholder,
-        "runner_log_sha256": placeholder,
-        "command_argv": ["targeted-guest-validation"],
-        "command_sha256": placeholder,
-    }
-    rows, functional = extract_log(
-        path,
-        path.name,
-        log_plan,
-        suite,
-        "targeted-guest-validation",
-        placeholder,
-        placeholder,
-        placeholder,
-        placeholder,
-    )
+    rows, functional = extract_log(path, suite, challenge)
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": "agentos-evaluation-guest-validation",
@@ -3387,7 +2272,6 @@ def validate_guest_log(
         },
         "status": "supported",
     }
-
 
 def _validate_complete_boot(
     rows: list[dict[str, Any]],
@@ -3519,1052 +2403,13 @@ def _validate_complete_boot(
             if int(samples[0]["workload_fingerprint"], 16) == 0 or int(samples[0]["result_fingerprint"], 16) == 0:
                 raise EvaluationError(f"zero fingerprint in {source_ref}")
         counts = [orders.count("AB"), orders.count("BA")]
-        if min(counts) == 0 or abs(counts[0] - counts[1]) > suite["pairing"]["maximum_order_imbalance"]:
+        if min(counts) == 0 or abs(counts[0] - counts[1]) > 1:
             raise EvaluationError(f"same-order bias in {source_ref}: {combination}")
-
-
-def _median(values: list[float]) -> float:
-    return float(statistics.median(values))
-
-
-def _p95(values: list[float]) -> float:
-    ordered = sorted(values)
-    return float(ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)])
-
-
-def _bootstrap_interval(values: list[float], seed_text: str) -> tuple[float, float]:
-    rng = random.Random(int(sha256_bytes(seed_text.encode("utf-8"))[:16], 16))
-    estimates = []
-    for _ in range(BOOTSTRAP_REPETITIONS):
-        estimates.append(_median([values[rng.randrange(len(values))] for _ in values]))
-    estimates.sort()
-    lower = estimates[math.floor(0.025 * (len(estimates) - 1))]
-    upper = estimates[math.ceil(0.975 * (len(estimates) - 1))]
-    return float(lower), float(upper)
-
-
-def _exact_one_sided_tail(wins: int, n: int) -> Fraction:
-    numerator = sum(math.comb(n, count) for count in range(wins, n + 1)) if n else 1
-    denominator = 1 << n if n else 1
-    return Fraction(numerator, denominator)
-
-
-def _sign_test(improvements: list[float]) -> dict[str, Any]:
-    wins = sum(value > 0 for value in improvements)
-    losses = sum(value < 0 for value in improvements)
-    ties = len(improvements) - wins - losses
-    n = wins + losses
-    fraction = _exact_one_sided_tail(wins, n)
-    return {
-        "alternative": "treatment_better",
-        "wins": wins,
-        "losses": losses,
-        "ties": ties,
-        "n": n,
-        "p_value": float(fraction),
-        "numerator": fraction.numerator,
-        "denominator": fraction.denominator,
-    }
-
-
-def _joint_mcid_sign_test(
-    improvements: list[float],
-    relative_improvements: list[float | None],
-    claim_gate: dict[str, Any],
-) -> dict[str, Any]:
-    if len(improvements) != len(relative_improvements):
-        raise EvaluationError("joint MCID samples are not paired by boot")
-    absolute_mcid = float(claim_gate["minimum_absolute_improvement_us"])
-    relative_mcid = float(claim_gate["minimum_relative_improvement_percent"])
-    wins = sum(
-        absolute > absolute_mcid
-        and relative is not None
-        and relative > relative_mcid
-        for absolute, relative in zip(improvements, relative_improvements)
-    )
-    n = len(improvements)
-    non_wins = n - wins
-    fraction = _exact_one_sided_tail(wins, n)
-    return {
-        "alternative": "joint_absolute_and_relative_mcid_exceeded",
-        "absolute_mcid_us": absolute_mcid,
-        "relative_mcid_percent": relative_mcid,
-        "success_rule": "both_strictly_greater_per_boot",
-        "non_win_policy": "ties_missing_or_not_exceeding_either_mcid",
-        "wins": wins,
-        "non_wins": non_wins,
-        "n": n,
-        "p_value": float(fraction),
-        "numerator": fraction.numerator,
-        "denominator": fraction.denominator,
-    }
-
-
-def _headline_significance_threshold(suite: dict[str, Any]) -> float:
-    family = suite["claim_family"]
-    return float(family["familywise_alpha"]) / len(family["hypotheses"])
-
-
-def _load_supports_headline_claim(
-    result: dict[str, Any],
-    claim_gate: dict[str, Any],
-    baseline_durations: list[float],
-    maximum_p_value: float,
-) -> bool:
-    mcid_test = result.get("mcid_sign_test")
-    if (
-        result.get("status") != "measured"
-        or not isinstance(mcid_test, dict)
-        or type(result.get("n")) is not int
-        or result["n"] <= 0
-        or type(mcid_test.get("wins")) is not int
-        or type(mcid_test.get("non_wins")) is not int
-        or mcid_test["wins"] < 0
-        or mcid_test["non_wins"] < 0
-        or not baseline_durations
-    ):
-        return False
-    exact_tail = _exact_one_sided_tail(mcid_test["wins"], result["n"])
-    return bool(
-        mcid_test.get("alternative")
-        == "joint_absolute_and_relative_mcid_exceeded"
-        and mcid_test.get("success_rule") == "both_strictly_greater_per_boot"
-        and mcid_test.get("non_win_policy")
-        == "ties_missing_or_not_exceeding_either_mcid"
-        and mcid_test.get("n") == result["n"]
-        and mcid_test.get("wins", 0) + mcid_test.get("non_wins", 0) == result["n"]
-        and mcid_test.get("numerator") == exact_tail.numerator
-        and mcid_test.get("denominator") == exact_tail.denominator
-        and math.isclose(
-            float(mcid_test.get("p_value", -1)),
-            float(exact_tail),
-            rel_tol=0,
-            abs_tol=1e-15,
-        )
-        and math.isclose(
-            float(mcid_test.get("absolute_mcid_us", -1)),
-            float(claim_gate["minimum_absolute_improvement_us"]),
-            rel_tol=0,
-            abs_tol=1e-15,
-        )
-        and math.isclose(
-            float(mcid_test.get("relative_mcid_percent", -1)),
-            float(claim_gate["minimum_relative_improvement_percent"]),
-            rel_tol=0,
-            abs_tol=1e-15,
-        )
-        and min(baseline_durations)
-        >= claim_gate["minimum_baseline_duration_us"]
-        and float(exact_tail) <= maximum_p_value
-    )
-
-
-def _row_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
-    return (row["source_log"], row["source_line"], row["kind"])
-
-
-def evaluate(
-    suite: dict[str, Any],
-    plan: dict[str, Any],
-    plan_sha256: str,
-    rows: list[dict[str, Any]],
-    scenario_record: dict[str, Any] | None = None,
-    functional_boots: dict[str, dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    functional_boots = functional_boots or {}
-    all_rows = rows
-    sample_rows: list[dict[str, Any]] = []
-    diagnostic_rows: list[dict[str, Any]] = []
-    for row in all_rows:
-        if row.get("kind") == "agentos-evaluation-metric-row":
-            _exact(row, SAMPLE_ROW_FIELDS, "metric row")
-            sample_rows.append(row)
-        elif row.get("kind") == "agentos-evaluation-diagnostic-row":
-            _exact(row, DIAGNOSTIC_ROW_FIELDS, "diagnostic row")
-            diagnostic_rows.append(row)
-        else:
-            raise EvaluationError("unknown long-form evaluation row kind")
-        if type(row["value"]) not in {int, float} or not math.isfinite(row["value"]):
-            raise EvaluationError("metric value is not finite")
-        if row["run_plan_sha256"] != plan_sha256:
-            raise EvaluationError("metric row is rebound to another run plan")
-        if (
-            row["suite_id"] != suite["suite_id"]
-            or row["suite_sha256"] != plan["suite_sha256"]
-            or row["campaign_sha256"] != plan["campaign_sha256"]
-            or row["run_id"] != plan["run_id"]
-            or row["environment_sha256"] != plan["environment_sha256"]
-            or row["status"] != "supported"
-        ):
-            raise EvaluationError("metric row binding differs from suite/run/campaign")
-    rows = sample_rows
-    supported_logs = [item for item in plan["logs"] if item["status"] == "supported"]
-    supported_refs = {item["path"] for item in supported_logs}
-    if set(functional_boots) != supported_refs:
-        raise EvaluationError(
-            "functional boot receipts do not cover every supported Guest log exactly"
-        )
-    for source_ref, boot_receipt in functional_boots.items():
-        if not isinstance(boot_receipt, dict):
-            raise EvaluationError(
-                f"functional boot receipt is incomplete for {source_ref}"
-            )
-        tasks = boot_receipt.get("tasks")
-        catalog = boot_receipt.get("catalog")
-        task2 = tasks.get("task2") if isinstance(tasks, dict) else None
-        task2_values = task2.get("values", []) if isinstance(task2, dict) else []
-        catalog_total = task2_values[2] if len(task2_values) == 33 else -1
-        supplementary = boot_receipt.get("supplementary")
-        supplementary_markers = (
-            len(supplementary.get("line_numbers", []))
-            if isinstance(supplementary, dict) else 0
-        )
-        expected_markers = 6 + catalog_total + supplementary_markers
-        if (
-            not isinstance(tasks, dict)
-            or set(tasks) != set(FUNCTIONAL_TASKS)
-            or catalog_total < len(TASK2_REQUIRED_TOOLS)
-            or not isinstance(catalog, dict)
-            or catalog.get("total") != catalog_total
-            or not isinstance(supplementary, dict)
-            or supplementary.get("id")
-            != suite["supplementary_scenarios"][0]["id"]
-            or supplementary.get("performance_gate") is not None
-            or supplementary_markers == 0
-            or len(boot_receipt.get("line_numbers", [])) != expected_markers
-            or len(boot_receipt.get("marker_sha256s", [])) != expected_markers
-        ):
-            raise EvaluationError(
-                f"functional boot receipt is incomplete for {source_ref}"
-            )
-    bad_status = "failed" if any(item["status"] == "failed" for item in plan["logs"]) else (
-        "unavailable" if any(item["status"] == "unavailable" for item in plan["logs"]) else None
-    )
-    if bad_status is None and len(supported_logs) < suite["pairing"]["minimum_boots"]:
-        raise EvaluationError("fewer than the required independent supported Guest boots")
-    by_boot: dict[tuple[str, int, str, str], list[float]] = {}
-    by_boot_receipts: dict[
-        tuple[str, int, str, str], dict[str, list[int]]
-    ] = {}
-    by_inner_pair: dict[tuple[str, int, str, int], dict[str, float]] = {}
-    evidence_ids: dict[str, str] = {}
-    for index, log in enumerate(plan["logs"], 1):
-        evidence_ids[log["path"]] = f"raw-boot-{index:03d}"
-    for row in rows:
-        if any(
-            isinstance(row[field], bool)
-            or not isinstance(row[field], int)
-            or row[field] != 0
-            for field in ("index_rebuild_records", "result_cache_hits")
-        ):
-            raise EvaluationError(
-                "timed sample includes index rebuild or result cache hit"
-            )
-        key = (row["experiment"], row["load"], row["role"], row["boot_id"])
-        by_boot.setdefault(key, []).append(float(row["value"]))
-        receipt = by_boot_receipts.setdefault(
-            key,
-            {
-                "operations": [],
-                "dataset_size": [],
-                "work_units": [],
-                "records_examined": [],
-                "result_items": [],
-                "index_rebuild_records": [],
-                "result_cache_hits": [],
-            },
-        )
-        for field in receipt:
-            receipt[field].append(row[field])
-        pair_key = (row["experiment"], row["load"], row["boot_id"], row["inner_pair"])
-        pair = by_inner_pair.setdefault(pair_key, {})
-        if row["role"] in pair:
-            raise EvaluationError(f"duplicate role in inner pair {pair_key}")
-        pair[row["role"]] = float(row["value"])
-    result_bindings: dict[tuple[str, int, int], dict[str, str]] = {}
-    for row in rows:
-        if row["role"] != "baseline":
-            continue
-        key = (row["experiment"], row["load"], row["inner_pair"])
-        observed = result_bindings.setdefault(key, {})
-        fingerprint = row["result_fingerprint"]
-        if fingerprint in observed.values():
-            raise EvaluationError(
-                f"result fingerprint was reused across challenged boots: {key}"
-            )
-        observed[row["boot_id"]] = fingerprint
-
-    targets: list[dict[str, Any]] = []
-    commits = sorted({item["commit"] for item in plan["logs"]})
-    commit = commits[0] if len(commits) == 1 else "mixed"
-    for experiment in suite["experiments"]:
-        for role in ("baseline", "treatment"):
-            variant = experiment[role]
-            targets.append({
-                "id": f"{experiment['id']}:{variant['id']}",
-                "label": variant["label"],
-                "role": role,
-                "commit": commit,
-            })
-
-    benchmarks: list[dict[str, Any]] = []
-    claims: list[dict[str, Any]] = []
-    headline_alpha = _headline_significance_threshold(suite)
-    for experiment in suite["experiments"]:
-        estimates: list[dict[str, Any]] = []
-        samples: list[dict[str, Any]] = []
-        paired: list[dict[str, Any]] = []
-        baseline_durations: dict[int, list[float]] = {}
-        benchmark_status = bad_status or "measured"
-        for load in experiment["loads"]:
-            values: dict[str, list[tuple[str, float]]] = {"baseline": [], "treatment": []}
-            for log in supported_logs:
-                for role in values:
-                    key = (experiment["id"], load, role, log["boot_id"])
-                    if key not in by_boot:
-                        raise EvaluationError(f"missing boot sample for {key}")
-                    values[role].append((log["boot_id"], _median(by_boot[key])))
-            baseline_durations[load] = [value for _, value in values["baseline"]]
-            if benchmark_status != "measured":
-                paired.append({
-                    "load": load, "status": benchmark_status, "n": 0,
-                    "median": None, "p95": None, "ci_low": None, "ci_high": None,
-                    "relative_median_percent": None, "relative_ci_low": None,
-                    "relative_ci_high": None,
-                    "sign_test": None, "mcid_sign_test": None, "samples": [],
-                })
-                continue
-            baseline_target = f"{experiment['id']}:{experiment['baseline']['id']}"
-            treatment_target = f"{experiment['id']}:{experiment['treatment']['id']}"
-            for role, target in (("baseline", baseline_target), ("treatment", treatment_target)):
-                boot_values = [value for _, value in values[role]]
-                lower, upper = _bootstrap_interval(
-                    boot_values, f"{plan_sha256}:{experiment['id']}:{load}:{role}"
-                )
-                estimates.append({
-                    "target_id": target, "load": load, "value": _median(boot_values),
-                    "lower": lower, "upper": upper, "p95": _p95(boot_values),
-                    "n": len(boot_values),
-                })
-                log_by_boot = {item["boot_id"]: item for item in supported_logs}
-                for boot_id, value in values[role]:
-                    source = log_by_boot[boot_id]["path"]
-                    receipt = by_boot_receipts[
-                        (experiment["id"], load, role, boot_id)
-                    ]
-                    for field in (
-                        "operations", "dataset_size", "result_items",
-                        "index_rebuild_records", "result_cache_hits",
-                    ):
-                        if len(set(receipt[field])) != 1:
-                            raise EvaluationError(
-                                f"{field} changes across inner pairs for "
-                                f"{experiment['id']} load {load} {role} {boot_id}"
-                            )
-                    samples.append({
-                        "target_id": target, "load": load, "value": value,
-                        "trial": boot_id, "order": "boot-median", "boot_id": boot_id,
-                        "evidence_id": evidence_ids[source],
-                        "operations": receipt["operations"][0],
-                        "dataset_size": receipt["dataset_size"][0],
-                        "work_units": int(_median(receipt["work_units"])),
-                        "records_examined": int(
-                            _median(receipt["records_examined"])
-                        ),
-                        "result_items": receipt["result_items"][0],
-                        "index_rebuild_records": receipt[
-                            "index_rebuild_records"
-                        ][0],
-                        "result_cache_hits": receipt["result_cache_hits"][0],
-                    })
-            improvements: list[float] = []
-            relative_boot_values: list[float] = []
-            paired_samples: list[dict[str, Any]] = []
-            relative_available = True
-            for log in sorted(supported_logs, key=lambda item: item["boot_id"]):
-                boot_id = log["boot_id"]
-                pair_keys = sorted(
-                    key for key in by_inner_pair
-                    if key[:3] == (experiment["id"], load, boot_id)
-                )
-                if len(pair_keys) < suite["pairing"]["minimum_inner_pairs"]:
-                    raise EvaluationError(f"missing paired inner samples for boot {boot_id}")
-                pair_improvements: list[float] = []
-                pair_relative: list[float] = []
-                inner_pairs: list[dict[str, Any]] = []
-                for pair_key in pair_keys:
-                    pair = by_inner_pair[pair_key]
-                    if set(pair) != {"baseline", "treatment"}:
-                        raise EvaluationError(f"inner pair is incomplete: {pair_key}")
-                    if experiment["direction"] == "lower_is_better":
-                        improvement = pair["baseline"] - pair["treatment"]
-                    else:
-                        improvement = pair["treatment"] - pair["baseline"]
-                    pair_improvements.append(improvement)
-                    if pair["baseline"] == 0:
-                        relative_available = False
-                        pair_relative_percent = None
-                    else:
-                        pair_relative_percent = improvement / abs(pair["baseline"]) * 100.0
-                        pair_relative.append(pair_relative_percent)
-                    inner_pairs.append({
-                        "pair": pair_key[3],
-                        "baseline_value": pair["baseline"],
-                        "treatment_value": pair["treatment"],
-                        "value": improvement,
-                        "relative_percent": pair_relative_percent,
-                    })
-                boot_improvement = _median(pair_improvements)
-                improvements.append(boot_improvement)
-                boot_relative = None
-                if len(pair_relative) == len(pair_improvements):
-                    boot_relative = _median(pair_relative)
-                    relative_boot_values.append(boot_relative)
-                paired_samples.append({
-                    "trial": boot_id,
-                    "baseline_value": _median(
-                        [item["baseline_value"] for item in inner_pairs]
-                    ),
-                    "treatment_value": _median(
-                        [item["treatment_value"] for item in inner_pairs]
-                    ),
-                    "value": boot_improvement,
-                    "relative_percent": boot_relative,
-                    "inner_pairs": inner_pairs,
-                })
-            improvement_low, improvement_high = _bootstrap_interval(
-                improvements, f"{plan_sha256}:{experiment['id']}:{load}:paired"
-            )
-            relative = None
-            relative_low = None
-            relative_high = None
-            if relative_available and len(relative_boot_values) == len(improvements):
-                relative = _median(relative_boot_values)
-                relative_low, relative_high = _bootstrap_interval(
-                    relative_boot_values, f"{plan_sha256}:{experiment['id']}:{load}:paired-relative"
-                )
-            else:
-                for sample in paired_samples:
-                    sample["relative_percent"] = None
-            mcid_sign_test = _joint_mcid_sign_test(
-                improvements,
-                [sample["relative_percent"] for sample in paired_samples],
-                experiment["claim_gate"],
-            )
-            paired.append({
-                "load": load, "status": "measured", "n": len(improvements),
-                "median": _median(improvements), "p95": _p95(improvements),
-                "ci_low": improvement_low, "ci_high": improvement_high,
-                "relative_median_percent": relative,
-                "relative_ci_low": relative_low,
-                "relative_ci_high": relative_high,
-                "sign_test": _sign_test(improvements),
-                "mcid_sign_test": mcid_sign_test,
-                "samples": paired_samples,
-            })
-        evidence = sorted(evidence_ids.values())
-        benchmark_id = experiment["id"]
-        diagnostic_summary: list[dict[str, Any]] = []
-        if benchmark_id in FILE_QUERY_EXPERIMENTS:
-            for load in experiment["loads"]:
-                load_rows = sorted(
-                    (
-                        row for row in diagnostic_rows
-                        if row["experiment"] == benchmark_id and row["load"] == load
-                    ),
-                    key=lambda row: row["boot_id"],
-                )
-                if benchmark_status == "measured":
-                    if (
-                        len(load_rows) != len(supported_logs)
-                        or {row["boot_id"] for row in load_rows}
-                        != {log["boot_id"] for log in supported_logs}
-                    ):
-                        raise EvaluationError(f"missing file-query diagnostic for load {load}")
-
-                    def diagnostic_stat(field: str) -> dict[str, Any]:
-                        values_for_field = [float(row[field]) for row in load_rows]
-                        return {
-                            "median": _median(values_for_field),
-                            "p95": _p95(values_for_field),
-                            "n": len(values_for_field),
-                        }
-
-                    diagnostic_summary.append({
-                        "load": load,
-                        "status": "measured",
-                        "unit": "us",
-                        "cache_states": sorted({row["cache"] for row in load_rows}),
-                        "duration_us": diagnostic_stat("duration_us"),
-                        "work_units": diagnostic_stat("work_units"),
-                        "index_rebuild_records": diagnostic_stat("index_rebuild_records"),
-                        "result_cache_hits": diagnostic_stat("result_cache_hits"),
-                        "samples": [
-                            {
-                                "boot_id": row["boot_id"],
-                                "cache": row["cache"],
-                                "operations": row["operations"],
-                                "dataset_size": row["dataset_size"],
-                                "result_items": row["result_items"],
-                                "duration_us": row["duration_us"],
-                                "work_units": row["work_units"],
-                                "index_rebuild_records": row["index_rebuild_records"],
-                                "result_cache_hits": row["result_cache_hits"],
-                                "workload_fingerprint": row["workload_fingerprint"],
-                                "result_fingerprint": row["result_fingerprint"],
-                                "evidence_id": evidence_ids[row["source_log"]],
-                                "source_log": row["source_log"],
-                                "source_line": row["source_line"],
-                                "source_log_sha256": row["source_log_sha256"],
-                                "source_marker_sha256": row["source_marker_sha256"],
-                            }
-                            for row in load_rows
-                        ],
-                    })
-                else:
-                    diagnostic_summary.append({
-                        "load": load, "status": benchmark_status, "unit": "us",
-                        "cache_states": [], "duration_us": None, "work_units": None,
-                        "index_rebuild_records": None, "result_cache_hits": None,
-                        "samples": [],
-                    })
-        benchmark = {
-            "id": benchmark_id,
-            "label": experiment["label"],
-            "task": experiment["task"],
-            "status": benchmark_status,
-            "baseline": f"{benchmark_id}:{experiment['baseline']['id']}",
-            "treatment": f"{benchmark_id}:{experiment['treatment']['id']}",
-            "unit": experiment["unit"],
-            "direction": experiment["direction"],
-            "claim_gate": experiment["claim_gate"],
-            "loads": experiment["loads"],
-            "estimates": estimates,
-            "samples": samples,
-            "paired": paired,
-            "diagnostics": diagnostic_summary,
-            "evidence_ids": evidence,
-        }
-        benchmarks.append(benchmark)
-
-        def treatment_receipt_supports_headline(load: int) -> bool:
-            if benchmark_id not in FILE_QUERY_EXPERIMENTS:
-                return True
-            treatment_target = f"{benchmark_id}:{experiment['treatment']['id']}"
-            treatment_samples = [
-                sample for sample in samples
-                if sample["target_id"] == treatment_target and sample["load"] == load
-            ]
-            return bool(treatment_samples) and len(treatment_samples) == len(
-                supported_logs
-            ) and all(
-                sample["index_rebuild_records"] == 0
-                and sample["result_cache_hits"] == 0
-                for sample in treatment_samples
-            )
-
-        significant = [
-            item for item in paired
-            if treatment_receipt_supports_headline(item["load"])
-            and _load_supports_headline_claim(
-                item,
-                experiment["claim_gate"],
-                baseline_durations[item["load"]],
-                headline_alpha,
-            )
-        ]
-        claim_status = (
-            "unavailable" if benchmark_status != "measured"
-            else "supported" if len(significant) == len(experiment["loads"])
-            else "not_supported"
-        )
-        if claim_status == "supported":
-            ranges = ", ".join(
-                f"load {item['load']}: {item['relative_ci_low']:.2f}%..{item['relative_ci_high']:.2f}%"
-                for item in paired
-            )
-            tests = ", ".join(
-                f"load {item['load']}: {item['mcid_sign_test']['wins']}/"
-                f"{item['mcid_sign_test']['n']} joint-MCID wins, "
-                f"p={item['mcid_sign_test']['p_value']:.7f}"
-                for item in paired
-            )
-            gate = experiment["claim_gate"]
-            effect = (
-                f"Descriptive paired-median bootstrap 95% intervals: {ranges}; "
-                f"headline inference uses the exact one-sided joint-MCID sign test "
-                f"({tests}). Every load clears the {gate['minimum_absolute_improvement_us']} us / "
-                f"{gate['minimum_relative_improvement_percent']}% per-boot MCIDs, "
-                f"the {gate['minimum_baseline_duration_us']} us timing window, and "
-                f"p <= {headline_alpha:.7f} after Bonferroni correction across "
-                f"{len(suite['claim_family']['hypotheses'])} headline claims; "
-                "bootstrap intervals are not claim gates."
-            )
-        elif claim_status == "not_supported":
-            effect = (
-                "At least one preregistered load does not clear the minimum timing window "
-                "and Bonferroni-adjusted exact joint-MCID sign-test gate; descriptive "
-                "bootstrap intervals do not determine the claim."
-            )
-        else:
-            effect = "The planned independent-boot evidence is unavailable or failed; no value was imputed."
-        title = (
-            f"{experiment['treatment']['label']} improves {experiment['label']}"
-            if claim_status == "supported"
-            else f"{experiment['label']} advantage did not clear the preregistered gate"
-            if claim_status == "not_supported"
-            else f"{experiment['label']} has no usable evidence in this run"
-        )
-        claims.append({
-            "id": f"{benchmark_id}-advantage",
-            "title": title,
-            "status": claim_status,
-            "effect": effect,
-            "benchmark_id": benchmark_id,
-            "evidence_ids": evidence,
-        })
-
-    evidence: list[dict[str, Any]] = []
-    rows_by_source: dict[str, list[dict[str, Any]]] = {}
-    for row in all_rows:
-        rows_by_source.setdefault(row["source_log"], []).append(row)
-    for item in plan["logs"]:
-        source_rows = rows_by_source.get(item["path"], [])
-        receipt_markers = [
-            (row["source_line"], row["source_marker_sha256"])
-            for row in source_rows
-        ]
-        functional = functional_boots.get(item["path"])
-        if functional is not None:
-            receipt_markers.extend(zip(
-                functional["line_numbers"], functional["marker_sha256s"]
-            ))
-        receipt_markers.sort()
-        evidence.append({
-            "id": evidence_ids[item["path"]],
-            "kind": "guest-raw-log",
-            "label": item["boot_id"],
-            "path": _safe_ref(f"raw/{item['path']}", "Guest evidence path"),
-            "sha256": item["sha256"],
-            "status": {
-                "supported": "verified",
-                "unavailable": "unavailable",
-                "failed": "invalid",
-            }[item["status"]],
-            "source": f"{item['path']} ({item['boot_id']})",
-            "receipt": {
-                "bytes": source_rows[0]["source_log_bytes"] if source_rows else None,
-                "line_numbers": [line for line, _ in receipt_markers],
-                "marker_sha256s": [digest for _, digest in receipt_markers],
-                "boot_id": item["boot_id"],
-                "commit": item["commit"],
-                "challenge": item["challenge"],
-                "kernel_sha256": item["kernel_sha256"],
-                "image_input_sha256": item["image_input_sha256"],
-                "image_final_sha256": item["image_final_sha256"],
-                "runner_log_sha256": item["runner_log_sha256"],
-                "command_argv": item["command_argv"],
-                "command_sha256": item["command_sha256"],
-                "capture_status": item["status"],
-                "detail": item["detail"],
-            },
-        })
-    run_status = "failed" if bad_status == "failed" else "unavailable" if bad_status else "measured"
-    evidence.insert(0, {
-        "id": "run-plan",
-        "kind": "evaluation-run-plan",
-        "label": "Strict evaluation run plan",
-        "path": "run-plan.json",
-        "sha256": plan_sha256,
-        "status": "verified",
-        "source": "strict run-plan JSON",
-        "receipt": {
-            "run_id": plan["run_id"],
-            "environment_sha256": plan["environment_sha256"],
-            "campaign_sha256": plan["campaign_sha256"],
-        },
-    })
-    if scenario_record is not None:
-        report = scenario_record["report"]
-        evidence.append({
-            "id": "research-scenario-report",
-            "kind": "research-platform-scenario",
-            "label": "Research-platform independent-boot scenario",
-            "path": scenario_record["path"],
-            "sha256": scenario_record["sha256"],
-            "status": {
-                "supported": "verified",
-                "regressed": "verified",
-                "inconclusive": "verified",
-                "failed": "invalid",
-            }[report["status"]],
-            "source": f"{scenario_record['path']} ({report['summary']['independent_boots']} independent boots)",
-            "receipt": {
-                "bytes": scenario_record["bytes"],
-                "report_sha256": report["report_sha256"],
-                "run_id": report["run_id"],
-                "commit": report["source_commit"],
-                "scenario_plan_sha256": scenario_record["plan_sha256"],
-            },
-        })
-        evidence.append({
-            "id": "research-scenario-plan",
-            "kind": "research-platform-scenario-plan",
-            "label": "Sealed research-platform scenario plan",
-            "path": scenario_record["plan_path"],
-            "sha256": scenario_record["plan_sha256"],
-            "status": "verified",
-            "source": "collected scenario plan",
-            "receipt": {
-                "run_id": report["run_id"],
-                "commit": report["source_commit"],
-                "report_sha256": scenario_record["sha256"],
-            },
-        })
-    scenarios = []
-    benchmarks_by_task: dict[str, list[dict[str, Any]]] = {}
-    for item in benchmarks:
-        benchmarks_by_task.setdefault(item["task"], []).append(item)
-    functional_complete = (
-        bad_status is None
-        and len(supported_logs) == len(plan["logs"])
-        and len(supported_logs) >= suite["pairing"]["minimum_boots"]
-        and set(functional_boots) == supported_refs
-    )
-    functional_evidence = [
-        evidence_ids[item["path"]] for item in supported_logs
-    ]
-    registration = suite["supplementary_scenarios"][0]
-    boot_results = []
-    for log in supported_logs:
-        measured = functional_boots[log["path"]]["supplementary"]
-        boot_results.append({
-            "boot_id": log["boot_id"],
-            "evidence_id": evidence_ids[log["path"]],
-            "qos_schema_version": measured["qos_schema_version"],
-            "correct": measured["summary"]["correct"],
-            "contamination": measured["summary"]["contamination"],
-            "return_visit": measured["summary"]["return_visit"],
-            "fallback": measured["summary"]["fallback"],
-            "result_fingerprint": measured["summary"]["result_fingerprint"],
-            "concurrency": [
-                {
-                    key: item[key]
-                    for key in CONCURRENCY_PUBLIC_FIELDS[
-                        measured["qos_schema_version"]
-                    ]
-                }
-                for item in measured["concurrency"]
-            ],
-        })
-    supplementary_evaluations = [{
-        "id": registration["id"],
-        "label": registration["label"],
-        "task": registration["task"],
-        "status": "measured" if boot_results else "unavailable",
-        "performance_gate": None,
-        "visit_sequence": registration["visit_sequence"],
-        "concurrency_levels": registration["concurrency_levels"],
-        "rounds_per_level": registration["rounds_per_level"],
-        "latency_unit": registration["latency_unit"],
-        "throughput_unit": registration["throughput_unit"],
-        "percentile_method": registration["percentile_method"],
-        **{key: registration[key] for key in QOS_REGISTRATION_FIELDS},
-        "interpretation": (
-            "Descriptive clean-room revisit/isolation measurement; no "
-            "performance pass threshold is registered."
-        ),
-        "boots": boot_results,
-    }]
-    task_labels = {
-        "task1": "Agent process and mapped Context acceptance",
-        "task2": "Versioned structured-tool acceptance",
-        "task3": "Context Path lifecycle acceptance",
-        "task4": "Attribute, summary, digest and deletion acceptance",
-        "task5": (
-            "Heartbeat, blocking wait and scheduler-accounting measurement"
-        ),
-    }
-    for number in range(1, 7):
-        task = f"task{number}"
-        if task == "task6" and scenario_record is not None:
-            report = scenario_record["report"]
-            if (
-                scenario_record["performance_status"] != report["status"]
-                or scenario_record["performance"]
-                != report["summary"].get("paired_improvement")
-            ):
-                raise EvaluationError(
-                    "scenario conclusion differs from the verified raw report"
-                )
-            scenarios.append({
-                "id": report["scenario_id"],
-                "label": "Seeded research-platform workflow",
-                "task": task,
-                "functional_status": scenario_record["functional_status"],
-                "performance_status": scenario_record["performance_status"],
-                "performance": scenario_record["performance"],
-                "evidence_ids": ["research-scenario-plan", "research-scenario-report"],
-            })
-            continue
-        if task == "task6":
-            scenarios.append({
-                "id": "task6-coverage",
-                "label": "Task 6 dynamic research scenario",
-                "task": task,
-                "functional_status": "unavailable",
-                "performance_status": "unavailable",
-                "performance": None,
-                "evidence_ids": ["run-plan"],
-            })
-            continue
-        task_benchmarks = benchmarks_by_task.get(task, [])
-        fallback_evidence = sorted({
-            evidence_id
-            for benchmark in task_benchmarks
-            for evidence_id in benchmark["evidence_ids"]
-        }) or ["run-plan"]
-        # 功能状态只来自严格校验的逐启动回执；微基准不得冒充功能或研究场景性能证据。
-        scenarios.append({
-            "id": f"{task}-functional",
-            "label": task_labels[task],
-            "task": task,
-            "functional_status": "pass" if functional_complete else "unavailable",
-            "performance_status": "unavailable",
-            "performance": None,
-            "evidence_ids": (
-                functional_evidence
-                if functional_complete
-                else fallback_evidence
-            ),
-        })
-    acceptance = derive_acceptance_gates(
-        scenarios,
-        claims,
-        suite["competition_claims"],
-    )
-    return {
-        "schema_version": suite["schema_version"],
-        "kind": "agentos-evaluation-summary",
-        "run": {
-            "id": plan["run_id"],
-            "suite_id": suite["suite_id"],
-            "status": run_status,
-            "commit": commit,
-            "label": "AgentOS independent-boot mechanism evaluation",
-            "evidence_grade": "E2-local-raw",
-            "cache_policy": "preregistered per variant and checked in every marker",
-            "conclusion": (
-                "Each headline claim requires every preregistered load to pass, "
-                "with an exact per-boot joint absolute/relative MCID sign-test "
-                f"p <= {headline_alpha:.7f} and its baseline timing floor; "
-                "Bonferroni controls FWER 0.05 across the "
-                f"{len(suite['claim_family']['hypotheses'])} headline claims. "
-                "Bootstrap intervals are descriptive only."
-            ),
-            "environment_sha256": plan["environment_sha256"],
-            "run_plan_sha256": plan_sha256,
-            "campaign_sha256": plan["campaign_sha256"],
-            "suite_sha256": plan["suite_sha256"],
-        },
-        "targets": targets,
-        "benchmarks": benchmarks,
-        "scenarios": scenarios,
-        "methodology": {
-            "supplementary_evaluations": supplementary_evaluations,
-            "competition_claims": suite["competition_claims"],
-            "design": "paired AB/BA within each independent Guest boot",
-            "independent_unit": "guest_boot",
-            "within_boot_aggregation": "median",
-            "cache_policy": "explicit marker field checked against suite",
-            "repetitions": {"minimum_boots": suite["pairing"]["minimum_boots"], "minimum_inner_pairs": suite["pairing"]["minimum_inner_pairs"]},
-            "order_policy": "both AB and BA; imbalance at most one",
-            "interval_method": f"descriptive deterministic percentile bootstrap ({BOOTSTRAP_REPETITIONS} resamples)",
-            "inference_method": (
-                "exact one-sided binomial sign test of per-boot joint MCID exceedance; "
-                "a win strictly exceeds both absolute and relative MCIDs"
-            ),
-            "descriptive_interval": {
-                "method": "percentile bootstrap of the boot-level median",
-                "resamples": BOOTSTRAP_REPETITIONS,
-                "role": "descriptive only; never used to support a headline claim",
-            },
-            "p95_method": "nearest-rank",
-            "sign_test": (
-                "secondary exact one-sided directional diagnostic; ties excluded; "
-                "not a headline gate"
-            ),
-            "fwer_mcid": {
-                "familywise_alpha": suite["claim_family"]["familywise_alpha"],
-                "headline_count": len(suite["claim_family"]["hypotheses"]),
-                "per_headline_alpha": headline_alpha,
-                "correction": "Bonferroni across headline claims",
-                "per_boot_success": "absolute > MCID and relative > MCID",
-                "non_win_policy": "ties, missing relative values, and either non-exceedance",
-                "load_gate": "intersection; every preregistered load must pass",
-            },
-            "multiple_testing": {
-                "family_id": suite["claim_family"]["id"],
-                "method": "Bonferroni",
-                "familywise_alpha": suite["claim_family"]["familywise_alpha"],
-                "hypothesis_count": len(suite["claim_family"]["hypotheses"]),
-                "per_claim_alpha": headline_alpha,
-                "headline_claims": suite["claim_family"]["hypotheses"],
-                "load_gate": "intersection (every preregistered load must pass)",
-            },
-            "interpretation_boundaries": dict(INTERPRETATION_BOUNDARIES),
-            "missing_data": "explicit unavailable/failed; no zero fill or imputation",
-        },
-        "evidence": evidence,
-        "claims": claims,
-        "acceptance": acceptance,
-    }
-
-
-def build(
-    suite_path: Path,
-    plan_path: Path,
-    source_root: Path,
-    scenario_path: Path | None = None,
-    scenario_plan_path: Path | None = None,
-    *,
-    contract_root: Path | None = None,
-    scenario_source_tree: Path | None = None,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    suite = load_suite(suite_path)
-    plan, plan_hash = load_run_plan(plan_path)
-    if sha256_file(suite_path) != plan["suite_sha256"]:
-        raise EvaluationError("evaluation suite differs from the preregistered run plan")
-    rows: list[dict[str, Any]] = []
-    functional_boots: dict[str, dict[str, Any]] = {}
-    for item in plan["logs"]:
-        extracted_rows, functional = extract_log(
-            _source_path(source_root, item["path"]), item["path"], item, suite,
-            plan["run_id"], plan["environment_sha256"], plan_hash,
-            plan["campaign_sha256"], plan["suite_sha256"],
-        )
-        rows.extend(extracted_rows)
-        if functional:
-            functional_boots[item["path"]] = functional
-    rows.sort(key=_row_sort_key)
-    if (scenario_path is None) != (scenario_plan_path is None):
-        raise EvaluationError("scenario report and scenario plan must be supplied together")
-    scenario = None
-    if scenario_path is not None and scenario_plan_path is not None:
-        if contract_root is None:
-            raise EvaluationError(
-                "scenario evidence requires an explicit trusted contract root"
-            )
-        scenario = bind_scenario_plan(
-            scenario_plan_path,
-            load_scenario_report(
-                scenario_path,
-                plan,
-                contract_root=contract_root,
-                source_tree=scenario_source_tree,
-            ),
-            plan,
-            contract_root=contract_root,
-        )
-        scenario["path"] = _evidence_path(
-            plan_path.parent, scenario_path, "scenario report evidence path"
-        )
-        scenario["plan_path"] = _evidence_path(
-            plan_path.parent, scenario_plan_path, "scenario plan evidence path"
-        )
-    return evaluate(
-        suite, plan, plan_hash, rows, scenario,
-        functional_boots=functional_boots,
-    ), rows
-
-
-def write_json(path: Path, value: object) -> None:
-    _atomic_write(path, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    value = "".join(
-        json.dumps(row, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
-        for row in rows
-    )
-    _atomic_write(path, value)
-
-
-def _atomic_write(path: Path, value: str) -> None:
-    try:
-        atomic_write_bytes(path, value.encode("utf-8"))
-    except (OSError, ValueError) as error:
-        raise EvaluationError(f"cannot safely publish {path}: {error}") from error
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    try:
-        safe_path = require_regular_file(path)
-        lines = safe_path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError, ValueError) as error:
-        raise EvaluationError(f"cannot read metrics JSONL: {error}") from error
-    if not lines:
-        return []
-    if any(not line for line in lines):
-        raise EvaluationError("metrics JSONL has blank lines")
-    rows = []
-    for line_number, line in enumerate(lines, 1):
-        value = strict_json_loads(line)
-        if isinstance(value, dict) and value.get("kind") == "agentos-evaluation-metric-row":
-            fields = SAMPLE_ROW_FIELDS
-        elif isinstance(value, dict) and value.get("kind") == "agentos-evaluation-diagnostic-row":
-            fields = DIAGNOSTIC_ROW_FIELDS
-        else:
-            raise EvaluationError(f"metrics JSONL line {line_number} has an unknown kind")
-        rows.append(_exact(value, fields, f"metrics JSONL line {line_number}"))
-    return rows
-
-
-def verify(
-    suite_path: Path,
-    plan_path: Path,
-    source_root: Path,
-    summary_path: Path,
-    rows_path: Path,
-    scenario_path: Path | None = None,
-    scenario_plan_path: Path | None = None,
-    *,
-    contract_root: Path | None = None,
-    scenario_source_tree: Path | None = None,
-) -> dict[str, Any]:
-    expected_summary, expected_rows = build(
-        suite_path,
-        plan_path,
-        source_root,
-        scenario_path,
-        scenario_plan_path,
-        contract_root=contract_root,
-        scenario_source_tree=scenario_source_tree,
-    )
-    actual_summary = _read_json(summary_path)
-    actual_rows = read_jsonl(rows_path)
-    if actual_rows != expected_rows:
-        raise EvaluationError("metrics JSONL differs from raw Guest logs and run plan")
-    if actual_summary != expected_summary:
-        raise EvaluationError("summary differs from raw Guest logs and run plan")
-    return expected_summary
-
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("build", "verify"):
-        sub = subparsers.add_parser(command)
-        sub.add_argument("--suite", type=Path, required=True)
-        sub.add_argument("--run-plan", type=Path, required=True)
-        sub.add_argument("--source-root", type=Path, required=True)
-        sub.add_argument("--summary", type=Path, required=True)
-        sub.add_argument("--rows", type=Path, required=True)
-        sub.add_argument("--scenario-report", type=Path)
-        sub.add_argument("--scenario-plan", type=Path)
-        sub.add_argument("--contract-root", type=Path)
-        sub.add_argument("--scenario-source-tree", type=Path)
-    targeted = subparsers.add_parser("validate-guest")
+    subparser = parser.add_subparsers(dest="command", required=True)
+    targeted = subparser.add_parser("validate-guest")
     targeted.add_argument("--suite", type=Path, required=True)
     targeted.add_argument("--log", type=Path, required=True)
     targeted.add_argument("--challenge", required=True)
@@ -4574,35 +2419,12 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        scenario_kwargs: dict[str, object] = {
-            "contract_root": args.contract_root
-        } if args.command != "validate-guest" else {}
-        if (
-            args.command != "validate-guest"
-            and args.scenario_source_tree is not None
-        ):
-            scenario_kwargs["scenario_source_tree"] = args.scenario_source_tree
-        if args.command == "validate-guest":
-            receipt = validate_guest_log(
-                args.log, load_suite(args.suite), args.challenge
-            )
-            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-        elif args.command == "build":
-            summary, rows = build(
-                args.suite, args.run_plan, args.source_root,
-                args.scenario_report, args.scenario_plan,
-                **scenario_kwargs,
-            )
-            write_json(args.summary, summary)
-            write_jsonl(args.rows, rows)
-        else:
-            verify(
-                args.suite, args.run_plan, args.source_root, args.summary,
-                args.rows, args.scenario_report, args.scenario_plan,
-                **scenario_kwargs,
-            )
+        result = validate_guest_log(
+            args.log, load_suite(args.suite), args.challenge
+        )
     except EvaluationError as error:
-        raise SystemExit(f"evaluation contract failed: {error}") from error
+        raise SystemExit(f"Guest evaluation failed: {error}") from error
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0
 
 

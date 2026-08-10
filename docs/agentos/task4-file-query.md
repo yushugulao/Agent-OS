@@ -164,4 +164,4 @@ python -B scripts/test-workflow-fence.py
 make agent-module-check TOOLPREFIX=riscv-none-elf-
 ```
 
-性能结论必须来自真实 Guest 测量和冻结证据，不能由索引结构或静态 checker 推导。
+性能结论必须来自 `agentbench_ucore` 等真实 Guest 测量，不能由索引结构或静态 checker 推导。

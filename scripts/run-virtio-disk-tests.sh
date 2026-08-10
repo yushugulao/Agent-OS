@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
@@ -35,7 +34,6 @@ cp "${TMPDIR_VIRTIO}/master.img" "${TMPDIR_VIRTIO}/run.img"
 
 log_file="${TMPDIR_VIRTIO}/guest.log"
 runner_status=0
-append_status=0
 if "${PYTHON_BIN}" scripts/agent_test_runner.py \
     --init-proc virtiodisk_ucore \
     --marker "virtiodisk_ucore: parent passed" \
@@ -51,20 +49,12 @@ if "${PYTHON_BIN}" scripts/agent_test_runner.py \
 else
     runner_status=$?
 fi
-if [[ -s "${log_file}" ]]; then
-    if evidence_append_guest_log "virtio-disk:fault-matrix" "${log_file}"; then
-        append_status=0
-    else
-        append_status=$?
-    fi
-else
-    append_status=65
-fi
 if [[ ${runner_status} -ne 0 ]]; then
     exit "${runner_status}"
 fi
-if [[ ${append_status} -ne 0 ]]; then
-    exit "${append_status}"
+if [[ ! -s "${log_file}" ]]; then
+    echo "[virtio-disk] Guest log is empty" >&2
+    exit 65
 fi
 "${PYTHON_BIN}" scripts/validate-virtio-disk-log.py --log-file "${log_file}"
 echo "[virtio-disk] fault matrix passed"

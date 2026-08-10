@@ -674,10 +674,9 @@ for token in (
         encoding="utf-8"
     ):
         raise SystemExit(f"missing test control boundary: {token}")
-if "source \"${SCRIPT_DIR}/evidence-wiring.sh\"" not in runner or \
-        "evidence_append_guest_log" not in runner or \
-        "scripts/test-validate-virtio-disk-log.py" not in runner:
-    raise SystemExit("runner is not wired into final evidence")
+if "scripts/test-validate-virtio-disk-log.py" not in runner or \
+        "scripts/validate-virtio-disk-log.py" not in runner:
+    raise SystemExit("runner does not execute the real log validators")
 
 boot_listing = main.find("load_init_app();")
 runtime_start = main.find("virtio_disk_runtime_start();")

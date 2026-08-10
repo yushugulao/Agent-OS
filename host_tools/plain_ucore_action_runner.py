@@ -23,11 +23,6 @@ from pathlib import Path, PureWindowsPath
 from typing import Iterable
 
 if __package__:
-    from .evidence_delivery_contract import (
-        DeliveryContractError,
-        controlled_git_environment,
-        tracked_worktree_identity,
-    )
     from .plain_ucore_fs_extract import extract_state_files
     from .research_state_manifest import (
         GUEST_STATE_RECEIPT_SCHEMA,
@@ -46,11 +41,6 @@ if __package__:
         require_private_directory,
     )
 else:
-    from evidence_delivery_contract import (
-        DeliveryContractError,
-        controlled_git_environment,
-        tracked_worktree_identity,
-    )
     from plain_ucore_fs_extract import extract_state_files
     from research_state_manifest import (
         GUEST_STATE_RECEIPT_SCHEMA,
@@ -101,11 +91,6 @@ CONTROLLED_SHELL_VARIABLES = (
     "TOOLPREFIX",
     "TZ",
 )
-SOURCE_COMMIT_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
-# Native MSYS2 Git can take well over five seconds to enumerate a large dirty
-# worktree on a Windows volume. This remains a fail-closed per-command bound,
-# but leaves enough room to capture the exact tracked diff before a Guest run.
-SOURCE_IDENTITY_GIT_TIMEOUT_SECONDS = 300
 GUEST_FAILURE_RULES = (
     (
         "kernel_panic",
@@ -226,240 +211,23 @@ def archive_runtime_artifacts(repo_dir: Path, run_dir: Path) -> dict[str, object
         finally:
             if temporary.exists():
                 temporary.unlink()
-        digest = hashlib.sha256()
         size = 0
         with destination.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 size += len(chunk)
-                digest.update(chunk)
         if size <= 0:
             raise ValueError(f"runtime artifact is empty: {source}")
         archived[name] = {
             "path": f"artifacts/{name}",
             "bytes": size,
-            "sha256": digest.hexdigest(),
         }
     return archived
 
 
-def capture_source_identity(repo_dir: Path) -> dict[str, object]:
-    """捕获 HEAD、已跟踪文件洁净状态及精确状态摘要。"""
-
-    repo_dir = require_safe_directory(_absolute_lexical_path(repo_dir)).resolve(strict=True)
-    git_name = shutil.which("git")
-    if git_name is None:
-        raise ValueError("source identity probe requires Git")
-    git = require_regular_file(Path(git_name)).resolve(strict=True)
-    common_kwargs: dict[str, object] = {
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "text": True,
-        "encoding": "utf-8",
-        "errors": "strict",
-        "timeout": SOURCE_IDENTITY_GIT_TIMEOUT_SECONDS,
-        "check": False,
-        "env": controlled_git_environment(),
-    }
-    try:
-        top_level = subprocess.run(
-            [str(git), "-c", "core.fsmonitor=false", "-c",
-             "core.untrackedCache=false", "-C", str(repo_dir), "rev-parse",
-             "--show-toplevel"],
-            **common_kwargs,
-        )
-        if top_level.returncode != 0:
-            diagnostic = (top_level.stderr or "").strip()
-            raise ValueError(
-                f"source repository root is unavailable: {diagnostic}"
-            )
-        source_root = _normalize_git_toplevel(repo_dir, top_level.stdout)
-        head = subprocess.run(
-            [str(git), "-c", "core.fsmonitor=false", "-c",
-             "core.untrackedCache=false", "-C", str(source_root), "rev-parse",
-             "--verify", "HEAD^{commit}"],
-            **common_kwargs,
-        )
-        status = subprocess.run(
-            [
-                str(git),
-                "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
-                "-C",
-                str(source_root),
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=no",
-                "--ignore-submodules=none",
-            ],
-            **common_kwargs,
-        )
-        tracked_diff = subprocess.run(
-            [
-                str(git),
-                "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
-                "-C",
-                str(source_root),
-                "diff",
-                "--binary",
-                "--no-ext-diff",
-                "--no-textconv",
-                "HEAD",
-                "--",
-            ],
-            **common_kwargs,
-        )
-    except (OSError, subprocess.SubprocessError, UnicodeError) as error:
-        raise ValueError(f"source identity probe failed: {error}") from error
-    commit = head.stdout.strip()
-    if head.returncode != 0 or SOURCE_COMMIT_RE.fullmatch(commit) is None:
-        diagnostic = (head.stderr or "").strip()
-        raise ValueError(f"source HEAD is unavailable: {diagnostic or 'invalid commit'}")
-    if status.returncode != 0:
-        diagnostic = (status.stderr or "").strip()
-        raise ValueError(f"tracked source status is unavailable: {diagnostic}")
-    if tracked_diff.returncode != 0:
-        diagnostic = (tracked_diff.stderr or "").strip()
-        raise ValueError(f"tracked source diff is unavailable: {diagnostic}")
-    try:
-        tracked_clean, exact_tracked_digest = tracked_worktree_identity(
-            str(git), source_root
-        )
-    except DeliveryContractError as error:
-        raise ValueError(f"tracked source identity is unsafe: {error}") from error
-    tracked_fingerprint = hashlib.sha256(
-        (
-            status.stdout
-            + "\0"
-            + tracked_diff.stdout
-            + "\0"
-            + exact_tracked_digest
-        ).encode("utf-8")
-    ).hexdigest()
-    return {
-        "source_commit": commit,
-        "source_tree_clean": status.stdout == "" and tracked_clean,
-        "source_tracked_sha256": tracked_fingerprint,
-    }
-
-
-def _normalize_git_toplevel(repo_dir: Path, reported: str) -> Path:
-    """在当前 Host 命名空间返回 Git 无链接工作树根目录。"""
-
-    lines = reported.splitlines()
-    if len(lines) != 1 or not lines[0] or "\0" in lines[0]:
-        raise ValueError("Git repository root is malformed")
-    value = lines[0]
-    candidate = Path(value)
-    if not candidate.is_absolute() and PureWindowsPath(value).is_absolute():
-        converted = subprocess.run(
-            ["cygpath", "-a", "-u", value],
-            cwd=repo_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="strict",
-            timeout=5,
-            check=False,
-            env=controlled_git_environment(),
-        )
-        converted_lines = converted.stdout.splitlines()
-        if (
-            converted.returncode != 0
-            or len(converted_lines) != 1
-            or not converted_lines[0]
-        ):
-            raise ValueError("Git repository root cannot be converted")
-        candidate = Path(converted_lines[0])
-    if not candidate.is_absolute():
-        raise ValueError("Git repository root is not absolute")
-    source_root = require_safe_directory(
-        _absolute_lexical_path(candidate)
-    ).resolve(strict=True)
-    try:
-        repo_dir.relative_to(source_root)
-    except ValueError as error:
-        raise ValueError("source directory is outside its Git worktree") from error
-    return source_root
-
-
-def verify_source_identity(
-    repo_dir: Path, expected: dict[str, object]
-) -> dict[str, object]:
-    """持有仓库锁重新探测，并拒绝运行中源码变更。"""
-
-    current = capture_source_identity(repo_dir)
-    if current != expected:
-        raise ValueError("source identity changed while the runtime artifacts were built")
-    return current
-
-
-def _normalize_git_common_dir(repo_dir: Path, reported: str) -> Path:
-    """将 Git common-dir 结果转换到当前 Host 命名空间。"""
-
-    if not reported or "\0" in reported or "\r" in reported or "\n" in reported:
-        raise ValueError("Git common directory is malformed")
-    candidate = Path(reported)
-    if candidate.is_absolute():
-        return candidate
-    if PureWindowsPath(reported).is_absolute():
-    # Windows Git 创建的工作树保存绝对 Windows gitdir。原生 MSYS2 Git 会保留
-    # 该拼写，即使 Python 在 POSIX 命名空间运行。必须将其作为数据经 cygpath
-    # 转换，绝不能把盘符路径拼接到工作树下。
-        converted = subprocess.run(
-            ["cygpath", "-u", reported],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="strict",
-            timeout=5,
-            check=False,
-        )
-        lines = converted.stdout.splitlines()
-        if converted.returncode != 0 or len(lines) != 1 or not lines[0]:
-            raise ValueError("Windows Git common directory cannot be converted")
-        candidate = Path(lines[0])
-        if not candidate.is_absolute():
-            raise ValueError("converted Git common directory is not absolute")
-        return candidate
-    return repo_dir / candidate
-
-
 def _run_lock_path(repo_dir: Path) -> Path:
     repo_dir = require_safe_directory(_absolute_lexical_path(repo_dir)).resolve(strict=True)
-    lock_dir: Path | None = None
-    try:
-        git_name = shutil.which("git")
-        if git_name is None:
-            raise ValueError("repository lock requires Git")
-        git = require_regular_file(Path(git_name)).resolve(strict=True)
-        result = subprocess.run(
-            [str(git), "-C", str(repo_dir), "rev-parse", "--git-common-dir"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="strict",
-            timeout=5,
-            check=False,
-            env=controlled_git_environment(),
-        )
-        lines = result.stdout.splitlines()
-        if result.returncode == 0 and len(lines) == 1 and lines[0]:
-            candidate = _normalize_git_common_dir(repo_dir, lines[0])
-            candidate = require_safe_directory(candidate).resolve(strict=True)
-            lock_dir = candidate
-    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
-        pass
-    if lock_dir is None:
-        marker = repo_dir / ".git"
-        try:
-            lock_dir = require_safe_directory(marker).resolve(strict=True)
-        except (OSError, ValueError):
-            lock_dir = None
-    if lock_dir is None:
-        identity = hashlib.sha256(str(repo_dir).encode("utf-8")).hexdigest()[:16]
-        lock_dir = Path(tempfile.gettempdir()) / "agentos-repo-locks" / identity
+    identity = hashlib.sha256(os.fsencode(str(repo_dir))).hexdigest()[:16]
+    lock_dir = Path(tempfile.gettempdir()) / "agentos-repo-locks" / identity
     return lock_dir / f".{repo_dir.name}-run.lock"
 
 
@@ -2281,32 +2049,6 @@ def _run_seeded_ucore_locked(
         create_private_directory(next_state)
     host_input_dir = run_dir / "host-input"
     host_input_dir = create_private_directory(host_input_dir)
-    try:
-        source_identity = capture_source_identity(repo_dir)
-    except ValueError as error:
-        write_text(build_log_path, f"[runner] source identity rejected: {error}\n")
-        summary = {
-            "commands": [],
-            "returncode": 1,
-            "build_returncode": None,
-            "guest_returncode": None,
-            "guest_raw_returncode": None,
-            "embedded_action_records": 0,
-            "extracted_state_files": 0,
-            "target_identity": target_identity,
-            "chapter": chapter,
-            "init_proc": init_proc,
-            "passed": False,
-            "build_log": str(build_log_path),
-            "log": str(log_path),
-            "failure_phase": "source",
-            "failure_reason": "source_identity_unavailable",
-            "error": str(error),
-            "status": "failed",
-        }
-        write_run_result_state(next_state, summary, "")
-        write_json(run_dir / "ucore-run-summary.json", summary)
-        return summary
     repo_bash = bash_path(repo_dir)
     build_jobs = adaptive_build_jobs(repo_dir)
     build_jobs_argument = make_var_arg("AGENTOS_BUILD_JOBS", str(build_jobs))
@@ -2453,15 +2195,6 @@ def _run_seeded_ucore_locked(
             failure_phase = "archive"
             failure_reason = "artifact_archive_failed"
             runtime_artifacts = {"error": str(error)}
-    if passed:
-        try:
-            verify_source_identity(repo_dir, source_identity)
-        except ValueError as error:
-            passed = False
-            failure_phase = "source"
-            failure_reason = "source_identity_changed"
-            runtime_artifacts = {**runtime_artifacts, "source_error": str(error)}
-    successful_source_identity = source_identity if passed else {}
     summary = {
         "commands": [
             clean_command,
@@ -2504,7 +2237,6 @@ def _run_seeded_ucore_locked(
         "build_log": str(build_log_path),
         "log": str(log_path),
         "status": "ready" if passed else "failed",
-        **successful_source_identity,
     }
     write_run_result_state(next_state, summary, text)
     write_json(run_dir / "ucore-run-summary.json", summary)

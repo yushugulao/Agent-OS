@@ -4,12 +4,9 @@
 import argparse
 import codecs
 import ctypes
-import hashlib
 import importlib.util
-import json
 import math
 import os
-import re
 import secrets
 import select
 import shutil
@@ -65,33 +62,6 @@ CONTROL_SIGNALS = tuple(
 _DUMPABILITY_CONDITION = threading.Condition()
 _DUMPABILITY_SESSION = None
 _DUMPABILITY_POISONED = False
-EXECUTION_ATTESTATION_FORMAT = "agentos-qemu-execution-attestation-v2"
-LOCAL_EVIDENCE_SCOPE = "local_e3_unsigned"
-RUN_ID_RE = re.compile(r"[0-9a-f]{64}\Z")
-EXECUTION_ID_RE = re.compile(r"[A-Za-z0-9._:+-]{1,128}\Z")
-GIT_OBJECT_RE = re.compile(r"[0-9a-f]{40}\Z")
-
-
-def _regular_file_identity(path, label):
-    lexical = os.lstat(path)
-    if not os.path.isfile(path) or os.path.islink(path):
-        raise ValueError(f"{label} must be a regular non-symlink file")
-    digest = hashlib.sha256()
-    size = 0
-    with open(path, "rb") as handle:
-        while True:
-            chunk = handle.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-            size += len(chunk)
-    if size != lexical.st_size:
-        raise ValueError(f"{label} changed while it was hashed")
-    return {
-        "path": os.path.abspath(path),
-        "bytes": size,
-        "sha256": digest.hexdigest(),
-    }
 
 
 def _resolve_executable_once(path, label):
@@ -101,72 +71,9 @@ def _resolve_executable_once(path, label):
     resolved = os.path.realpath(candidate)
     if not os.path.isabs(resolved):
         raise ValueError(f"{label} executable did not resolve absolutely")
-    _regular_file_identity(resolved, label)
+    if not os.path.isfile(resolved) or not os.access(resolved, os.X_OK):
+        raise ValueError(f"{label} executable is not a runnable file")
     return resolved
-
-
-def _file_stamp(path, label):
-    info = os.stat(path, follow_symlinks=False)
-    if not os.path.isfile(path) or os.path.islink(path):
-        raise ValueError(f"{label} must be a regular non-symlink file")
-    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
-
-
-def _executable_identity_from_resolved(
-    requested, resolved, label, version_args=("--version",)
-):
-    identity = _regular_file_identity(resolved, label)
-    try:
-        result = subprocess.run(
-            [resolved, *version_args],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise ValueError(f"cannot inspect {label} version: {error}") from error
-    output = result.stdout.strip() or result.stderr.strip()
-    first_line = output.splitlines()[0] if output else ""
-    if result.returncode != 0 or not first_line:
-        raise ValueError(f"cannot inspect {label} version")
-    return {
-        "requested_path": requested,
-        "executable": identity,
-        "version_argv": [resolved, *version_args],
-        "version_first_line": first_line,
-    }
-
-
-def _executable_identity(path, label, version_args=("--version",)):
-    resolved = _resolve_executable_once(path, label)
-    return _executable_identity_from_resolved(
-        path, resolved, label, version_args
-    )
-
-
-def _write_execution_attestation(path, value):
-    destination = os.path.abspath(path)
-    parent = os.path.dirname(destination)
-    if not parent or not os.path.isdir(parent) or os.path.islink(parent):
-        raise ValueError("attestation parent must be a real directory")
-    payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
-    descriptor = os.open(destination, flags, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb", closefd=False) as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-    finally:
-        os.close(descriptor)
-
-
-def _attested_invocation_argv(executable_identities):
-    python_path = os.path.realpath(sys.executable)
-    if executable_identities is not None:
-        python_path = executable_identities["python"]["executable"]["path"]
-    return [python_path, *sys.argv]
 
 
 @dataclass
@@ -218,12 +125,10 @@ class MonitorResult:
     lines: tuple[str, ...]
     process_tree_gone: bool = False
     process_tree_contained: bool = False
-    completion_signal_attested: bool = False
+    completion_signal_confirmed: bool = False
     supervisor_returncode: int | None = None
     control_endpoint_restored: bool = True
     supervisor_control_healthy: bool = True
-    started_monotonic_ns: int = 0
-    finished_monotonic_ns: int = 0
 
     @property
     def succeeded(self):
@@ -271,7 +176,7 @@ class MonitorResult:
             and self.expected_faults_satisfied
             and self.process_tree_gone
             and self.process_tree_contained
-            and self.completion_signal_attested
+            and self.completion_signal_confirmed
         )
 
     @property
@@ -1008,8 +913,8 @@ class _SupervisedProcess:
         self.control_buffer = bytearray(control_buffer)
         self.nonce = nonce
         self.leader_returncode = None
-        self.cleanup_attested = False
-        self.signal_attested = False
+        self.cleanup_confirmed = False
+        self.signal_confirmed = False
         self.control_healthy = True
         self.pending_completion_line = None
 
@@ -1031,11 +936,11 @@ class _SupervisedProcess:
 
     @property
     def process_tree_contained(self):
-        return self.cleanup_attested and self.control_healthy
+        return self.cleanup_confirmed and self.control_healthy
 
     @property
     def process_tree_gone(self):
-        return self.cleanup_attested
+        return self.cleanup_confirmed
 
     def close_control(self):
         for attribute in ("control_fd", "request_fd"):
@@ -1208,20 +1113,20 @@ class _SupervisedProcess:
             if fields[5] != "CLEAN":
                 self.control_healthy = False
                 return
-            identity_attested = (
+            identity_confirmed = (
                 pid == self.pid
                 and start_time == self.leader_start_time
             )
-            if identity_attested:
+            if identity_confirmed:
                 self.leader_returncode = leader_returncode
             else:
                 self.control_healthy = False
-            self.cleanup_attested = (
-                identity_attested
+            self.cleanup_confirmed = (
+                identity_confirmed
                 and self.supervisor_returncode == 0
             )
-            self.signal_attested = (
-                self.cleanup_attested
+            self.signal_confirmed = (
+                self.cleanup_confirmed
                 and delivered_signal == signal.SIGKILL
                 and delivered_to_leader
             )
@@ -1505,9 +1410,9 @@ def _stop_and_drain(
     else:
         process_tree_gone = not _process_tree_alive(proc)
     process_tree_contained = getattr(proc, "process_tree_contained", False)
-    completion_signal_attested = getattr(
+    completion_signal_confirmed = getattr(
         proc,
-        "signal_attested",
+        "signal_confirmed",
         False,
     )
     return (
@@ -1516,7 +1421,7 @@ def _stop_and_drain(
         first_signal_confirmed_for_leader,
         process_tree_gone,
         process_tree_contained,
-        completion_signal_attested,
+        completion_signal_confirmed,
         natural_completion_observed_at,
     )
 
@@ -2124,7 +2029,7 @@ def _monitor_command_impl(
             completion_leader_signaled,
             process_tree_gone,
             process_tree_contained,
-            completion_signal_attested,
+            completion_signal_confirmed,
             natural_completion_observed_at,
         ) = _stop_and_drain(
             proc,
@@ -2222,7 +2127,7 @@ def _monitor_command_impl(
             lines=tuple(scanner.lines),
             process_tree_gone=process_tree_gone,
             process_tree_contained=process_tree_contained,
-            completion_signal_attested=completion_signal_attested,
+            completion_signal_confirmed=completion_signal_confirmed,
             supervisor_returncode=getattr(
                 proc,
                 "supervisor_returncode",
@@ -2234,8 +2139,6 @@ def _monitor_command_impl(
                 "control_healthy",
                 True,
             ),
-            started_monotonic_ns=started_monotonic_ns,
-            finished_monotonic_ns=finished_monotonic_ns,
         )
 
 
@@ -2313,18 +2216,6 @@ def parse_args():
         default=MARKER_EXACT_LINE,
     )
     parser.add_argument("--timing-file")
-    parser.add_argument("--attestation-file")
-    parser.add_argument("--run-id")
-    parser.add_argument("--execution-id")
-    parser.add_argument("--evidence-scope")
-    parser.add_argument("--source-commit")
-    parser.add_argument("--source-tree")
-    parser.add_argument("--campaign-nonce")
-    parser.add_argument("--calibration-plan-sha256")
-    parser.add_argument("--round-nonce")
-    parser.add_argument("--session-nonce")
-    parser.add_argument("--execution-nonce")
-    parser.add_argument("--toolchain-cc")
     repeatable = {"--expected-bad-addr-after"}
     for action in parser._actions:
         for option in action.option_strings:
@@ -2335,77 +2226,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def validate_calibration_attestation_args(args):
-    attestation_values = (
-        args.attestation_file,
-        args.run_id,
-        args.execution_id,
-    )
-    calibration_values = (
-        args.evidence_scope,
-        args.source_commit,
-        args.source_tree,
-        args.campaign_nonce,
-        args.calibration_plan_sha256,
-        args.round_nonce,
-        args.session_nonce,
-        args.execution_nonce,
-        args.toolchain_cc,
-    )
-    if not any(value is not None for value in (*attestation_values, *calibration_values)):
-        return False
-    if not all(value is not None for value in attestation_values):
-        raise ValueError("execution attestation options must be supplied together")
-    if not RUN_ID_RE.fullmatch(args.run_id) or not EXECUTION_ID_RE.fullmatch(
-        args.execution_id
-    ):
-        raise ValueError("invalid execution attestation identity")
-    if not any(value is not None for value in calibration_values):
-        return False
-    if not all(value is not None for value in calibration_values):
-        raise ValueError("calibration attestation options must be supplied together")
-    if (
-        args.evidence_scope != LOCAL_EVIDENCE_SCOPE
-        or not GIT_OBJECT_RE.fullmatch(args.source_commit)
-        or not GIT_OBJECT_RE.fullmatch(args.source_tree)
-        or not RUN_ID_RE.fullmatch(args.campaign_nonce)
-        or not RUN_ID_RE.fullmatch(args.calibration_plan_sha256)
-        or not RUN_ID_RE.fullmatch(args.round_nonce)
-        or not RUN_ID_RE.fullmatch(args.session_nonce)
-        or not RUN_ID_RE.fullmatch(args.execution_nonce)
-        or args.run_id != args.session_nonce
-        or args.execution_id != args.execution_nonce
-        or len(
-            {
-                args.campaign_nonce,
-                args.round_nonce,
-                args.session_nonce,
-                args.execution_nonce,
-            }
-        )
-        != 4
-    ):
-        raise ValueError("invalid calibration attestation identity")
-    return True
-
-
 def main():
     args = parse_args()
-    try:
-        calibration_attestation = validate_calibration_attestation_args(args)
-    except ValueError as error:
-        print(f"[agent-tests] {error}", file=sys.stderr)
-        return 2
-    if calibration_attestation and (
-        args.timing_file is not None
-        or args.completion_mode != COMPLETION_NATURAL
-    ):
-        print(
-            "[agent-tests] calibration attestation forbids timing-file and "
-            "non-natural completion",
-            file=sys.stderr,
-        )
-        return 2
     try:
         case_timeout = parse_duration(args.case_timeout, "CASE_TIMEOUT")
         idle_notice = parse_duration(
@@ -2443,38 +2265,6 @@ def main():
         print(f"[agent-tests] QEMU executable rejected: {error}", file=sys.stderr)
         return 2
     qemu_command = build_qemu_command(qemu_resolved, args.kernel, args.image)
-    attestation_inputs = None
-    runner_identity = None
-    executable_identities = None
-    executable_stamps = None
-    if args.attestation_file is not None:
-        try:
-            attestation_inputs = {
-                "kernel": _regular_file_identity(args.kernel, "kernel input"),
-                "image": _regular_file_identity(args.image, "image input"),
-            }
-            runner_identity = _regular_file_identity(__file__, "runner source")
-            if calibration_attestation:
-                executable_identities = {
-                    "qemu": _executable_identity_from_resolved(
-                        args.qemu, qemu_resolved, "QEMU"
-                    ),
-                    "toolchain_cc": _executable_identity(
-                        args.toolchain_cc, "toolchain compiler"
-                    ),
-                    "python": _executable_identity(
-                        sys.executable, "Python", ("--version",)
-                    ),
-                }
-                executable_stamps = {
-                    name: _file_stamp(value["executable"]["path"], name)
-                    for name, value in executable_identities.items()
-                }
-        except (OSError, ValueError) as error:
-            print(f"[agent-tests] attestation input rejected: {error}", file=sys.stderr)
-            return 2
-
-    started_wall_time_ns = time.time_ns()
     result = monitor_command(
         qemu_command,
         init_proc=args.init_proc,
@@ -2489,7 +2279,6 @@ def main():
         expected_fault_marker_mode=args.expected_bad_addr_marker_mode,
         log_file=args.log_file,
     )
-    finished_wall_time_ns = time.time_ns()
     if args.completion_mode == COMPLETION_CHECKPOINT:
         succeeded = result.checkpoint_succeeded
     elif args.completion_mode == COMPLETION_POWERCUT:
@@ -2516,122 +2305,6 @@ def main():
     if args.timing_file is not None:
         with open(args.timing_file, "a", encoding="utf-8") as timing:
             timing.write(f"{args.init_proc} {result.elapsed:.9f}\n")
-    if args.attestation_file is not None:
-        try:
-            kernel_after = _regular_file_identity(args.kernel, "kernel output")
-            if kernel_after != attestation_inputs["kernel"]:
-                raise ValueError("kernel changed during QEMU execution")
-            runner_after = _regular_file_identity(__file__, "runner source")
-            if runner_after != runner_identity:
-                raise ValueError("runner source changed during QEMU execution")
-            if executable_identities is not None:
-                qemu_after = _regular_file_identity(
-                    executable_identities["qemu"]["executable"]["path"],
-                    "QEMU output",
-                )
-                toolchain_after = _regular_file_identity(
-                    executable_identities["toolchain_cc"]["executable"]["path"],
-                    "toolchain compiler output",
-                )
-                python_after = _regular_file_identity(
-                    executable_identities["python"]["executable"]["path"],
-                    "Python output",
-                )
-                if (
-                    qemu_after != executable_identities["qemu"]["executable"]
-                    or toolchain_after
-                    != executable_identities["toolchain_cc"]["executable"]
-                    or python_after
-                    != executable_identities["python"]["executable"]
-                    or any(
-                        _file_stamp(
-                            identity["executable"]["path"], name
-                        )
-                        != executable_stamps[name]
-                        for name, identity in executable_identities.items()
-                    )
-                ):
-                    raise ValueError("execution tool changed during QEMU execution")
-            attestation = {
-                "schema_version": 2,
-                "format": EXECUTION_ATTESTATION_FORMAT,
-                "run_id": args.run_id,
-                "execution_id": args.execution_id,
-                "runner": runner_identity,
-                "invocation_argv": _attested_invocation_argv(
-                    executable_identities
-                ),
-                "qemu_argv": qemu_command,
-                "request": {
-                    "init_proc": args.init_proc,
-                    "marker": args.marker,
-                    "marker_mode": args.marker_mode,
-                    "expected_bad_addr_markers": args.expected_bad_addr_after,
-                    "expected_fault_marker_mode": args.expected_bad_addr_marker_mode,
-                    "completion_mode": args.completion_mode,
-                    "case_timeout_seconds": case_timeout,
-                    "idle_notice_seconds": idle_notice,
-                    "marker_grace_seconds": marker_grace,
-                },
-                "inputs": attestation_inputs,
-                "outputs": {
-                    "image": _regular_file_identity(args.image, "image output"),
-                    "kernel": _regular_file_identity(
-                        args.kernel, "kernel output"
-                    ),
-                    "log": _regular_file_identity(args.log_file, "Guest log output"),
-                },
-                "time": {
-                    "clock": "time.monotonic_ns",
-                    "started_monotonic_ns": result.started_monotonic_ns,
-                    "finished_monotonic_ns": result.finished_monotonic_ns,
-                    "elapsed_ns": (
-                        result.finished_monotonic_ns
-                        - result.started_monotonic_ns
-                    ),
-                    "started_wall_time_ns": started_wall_time_ns,
-                    "finished_wall_time_ns": finished_wall_time_ns,
-                },
-                "result": {
-                    "succeeded": True,
-                    "reason": result.reason,
-                    "returncode": result.returncode,
-                    "supervisor_returncode": result.supervisor_returncode,
-                    "signals_sent": [int(item) for item in result.signals_sent],
-                    "output_eof": result.output_eof,
-                    "expected_faults_satisfied": result.expected_faults_satisfied,
-                    "process_tree_gone": result.process_tree_gone,
-                    "process_tree_contained": result.process_tree_contained,
-                    "completion_signal_attested": result.completion_signal_attested,
-                    "control_endpoint_restored": result.control_endpoint_restored,
-                    "supervisor_control_healthy": result.supervisor_control_healthy,
-                    "elapsed_seconds": round(result.elapsed, 9),
-                },
-            }
-            if executable_identities is not None:
-                attestation.update(
-                    {
-                        "evidence_scope": args.evidence_scope,
-                        "source": {
-                            "commit": args.source_commit,
-                            "tree": args.source_tree,
-                            "calibration_plan_sha256": (
-                                args.calibration_plan_sha256
-                            ),
-                        },
-                        "identity": {
-                            "campaign_nonce": args.campaign_nonce,
-                            "round_nonce": args.round_nonce,
-                            "session_nonce": args.session_nonce,
-                            "execution_nonce": args.execution_nonce,
-                        },
-                        "executables": executable_identities,
-                    }
-                )
-            _write_execution_attestation(args.attestation_file, attestation)
-        except (OSError, ValueError) as error:
-            print(f"[agent-tests] attestation publication failed: {error}", file=sys.stderr)
-            return 1
     print(f"[agent-tests] {args.init_proc}: elapsed={result.elapsed:.1f}s")
     return 0
 

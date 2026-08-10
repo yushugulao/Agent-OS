@@ -7,16 +7,13 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DUAL_LOG_DIR_REQUESTED="${DUAL_LOG_DIR:-}"
 DUAL_LOG_DIR=""
-DUAL_RUN_GENERATION=""
 BACKEND_CONTRACT="${ROOT_DIR}/host_tools/backend_evidence_contract.py"
 export TOOLPREFIX QEMU PYTHON_BIN
 
 current_stage=""
 current_stage_start=0
 measurement_guest_log=""
-measurement_manifest=""
 measurement_csv=""
-measurement_receipt=""
 
 cleanup_dual_run() {
 	local code="$?"
@@ -25,9 +22,8 @@ cleanup_dual_run() {
 	if [ "${code}" -ne 0 ] && [ -n "${current_stage:-}" ]; then
 		stage_finish failed
 	fi
-	if [ "${code}" -ne 0 ]; then
-		rm -f -- "${measurement_receipt:-}" "${measurement_manifest:-}" \
-			"${measurement_csv:-}" "${measurement_guest_log:-}" 2>/dev/null || true
+	if [ "${code}" -ne 0 ] && [ -n "${DUAL_LOG_DIR:-}" ]; then
+		echo "[dual-platform] failed run artifacts kept at: ${DUAL_LOG_DIR}" >&2
 	fi
 	exit "${code}"
 }
@@ -37,41 +33,24 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ -n "${MEASURED_AGENT_GUEST_LOG:-}" ] || \
-   [ -n "${MEASURED_AGENT_COMMAND_JSON:-}" ] || \
-   [ -n "${MEASURED_AGENT_RUN_RECEIPT:-}" ]; then
-	echo "[dual-platform] external measured Agent log injection is forbidden" >&2
+case "${DUAL_LOG_DIR_REQUESTED}" in
+*$'\r'*|*$'\n'*|*$'\t'*)
+	echo "[dual-platform] DUAL_LOG_DIR contains a control character" >&2
 	exit 1
+	;;
+esac
+if [ -n "${DUAL_LOG_DIR_REQUESTED}" ]; then
+	DUAL_LOG_DIR="${DUAL_LOG_DIR_REQUESTED}"
+	if [ -e "${DUAL_LOG_DIR}" ] || [ -L "${DUAL_LOG_DIR}" ]; then
+		echo "[dual-platform] DUAL_LOG_DIR already exists: ${DUAL_LOG_DIR}" >&2
+		exit 1
+	fi
+	mkdir -m 700 -- "${DUAL_LOG_DIR}"
+else
+	DUAL_LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agentos-dual-platform.XXXXXX")"
 fi
-
-claim="$("${PYTHON_BIN}" -I -S -B -c '
-import secrets
-import sys
-import tempfile
-from pathlib import Path
-
-sys.path.insert(0, str(Path(sys.argv[1]) / "host_tools"))
-from safe_host_paths import create_private_directory
-
-requested = sys.argv[2]
-if any(character in requested for character in "\r\n\t"):
-    raise SystemExit("DUAL_LOG_DIR contains a control character")
-generation = "g-" + secrets.token_hex(12)
-if requested:
-    output = create_private_directory(Path(requested))
-else:
-    output = create_private_directory(
-        Path(tempfile.gettempdir()) / ("agentos-dual-platform-" + generation)
-    )
-print(output, generation, sep="\t")
-' "${ROOT_DIR}" "${DUAL_LOG_DIR_REQUESTED}")"
-IFS=$'\t' read -r DUAL_LOG_DIR DUAL_RUN_GENERATION extra <<<"${claim}"
-if [ -z "${DUAL_LOG_DIR}" ] || [ -z "${DUAL_RUN_GENERATION}" ] || \
-   [ -n "${extra:-}" ]; then
-	echo "[dual-platform] cannot claim a private run directory" >&2
-	exit 1
-fi
-export DUAL_LOG_DIR DUAL_RUN_GENERATION
+DUAL_LOG_DIR="$(cd "${DUAL_LOG_DIR}" && pwd)"
+export DUAL_LOG_DIR
 umask 077
 stage_timings="${DUAL_LOG_DIR}/stage-timings.csv"
 printf "stage,start_epoch,end_epoch,duration_seconds,status\n" > "${stage_timings}"
@@ -328,14 +307,11 @@ stage_finish ready
 
 stage_begin "measured-file-query"
 measurement_guest_log="${DUAL_LOG_DIR}/dual-targeted-agentbench-guest.log"
-measurement_manifest="${DUAL_LOG_DIR}/measured-experiments.json"
 measurement_csv="${DUAL_LOG_DIR}/file-query-benchmark.csv"
-measurement_receipt="${DUAL_LOG_DIR}/measurement-set.json"
 : >"${measurement_guest_log}"
-measurement_command_json="$("${PYTHON_BIN}" -c 'import json,sys; print(json.dumps(["env", "AGENT_TEST_CASE=agentbench_ucore", "AGENT_TEST_CALIBRATE=0", "AGENT_TEST_GUEST_LOG_FILE=" + sys.argv[1], "TOOLPREFIX=" + sys.argv[2], "QEMU=" + sys.argv[3], "PYTHON_BIN=" + sys.argv[4], "bash", "scripts/run-agent-tests.sh"], separators=(",", ":")))' "${measurement_guest_log}" "${TOOLPREFIX}" "${QEMU}" "${PYTHON_BIN}")"
 (
 	cd "${ROOT_DIR}"
-	env AGENT_TEST_CASE=agentbench_ucore AGENT_TEST_CALIBRATE=0 \
+	env AGENT_TEST_CASE=agentbench_ucore \
 		AGENT_TEST_GUEST_LOG_FILE="${measurement_guest_log}" \
 		TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
 		PYTHON_BIN="${PYTHON_BIN}" \
@@ -345,27 +321,101 @@ if [ ! -s "${measurement_guest_log}" ] || [ -L "${measurement_guest_log}" ]; the
 	echo "[dual-platform] measured Agent Guest log is missing or unsafe" >&2
 	exit 1
 fi
-measurement_commit="$(git -C "${ROOT_DIR}" rev-parse --verify HEAD)"
-measurement_run_id="dual-${measurement_commit%${measurement_commit#????????????}}-${DUAL_RUN_GENERATION}"
-"${PYTHON_BIN}" "${ROOT_DIR}/host_tools/extract_measured_experiments.py" \
-	--guest-log "${measurement_guest_log}" \
-	--source-ref "dual-targeted-agentbench-guest.log" \
-	--commit "${measurement_commit}" \
-	--run-id "${measurement_run_id}" \
-	--generation "${DUAL_RUN_GENERATION}" \
-	--command-json "${measurement_command_json}" \
-	--manifest-out "${measurement_manifest}" \
-	--csv-out "${measurement_csv}" \
-	--receipt-out "${measurement_receipt}"
-if [ ! -s "${measurement_receipt}" ] || [ -L "${measurement_receipt}" ]; then
-	echo "[dual-platform] complete measurement receipt is missing or unsafe" >&2
-	exit 1
-fi
+"${PYTHON_BIN}" - "${measurement_guest_log}" "${measurement_csv}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+prefix = "agentbench_ucore: file_query_benchmark "
+pass_marker = "agentbench_ucore: parent passed"
+expected = {
+    "schema", "unit", "load",
+    "traversal_ops", "traversal_records", "traversal_duration_us",
+    "cold_index_ops", "cold_index_records", "cold_index_duration_us",
+    "cold_rebuild_records", "cold_rebuild_included",
+    "warm_index_ops", "warm_index_records", "warm_index_duration_us",
+    "status",
+}
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+pending = None
+rows = []
+for line_number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
+    if line.startswith(prefix):
+        if pending is not None:
+            raise SystemExit("benchmark marker was not followed by a pass marker")
+        fields = {}
+        for token in line[len(prefix):].split():
+            if token.count("=") != 1:
+                raise SystemExit(f"invalid benchmark token at line {line_number}")
+            key, value = token.split("=", 1)
+            if not key or not value or key in fields:
+                raise SystemExit(f"duplicate or empty benchmark token at line {line_number}")
+            fields[key] = value
+        if set(fields) != expected:
+            raise SystemExit(f"benchmark schema mismatch at line {line_number}")
+        if fields["schema"] != "2" or fields["unit"] != "us" or fields["status"] != "measured":
+            raise SystemExit(f"invalid benchmark marker at line {line_number}")
+        pending = (line_number, fields)
+    elif line == pass_marker and pending is not None:
+        line_number, fields = pending
+        trial = len(rows) // 3 + 1
+        try:
+            load = int(fields["load"])
+            rebuild_records = int(fields["cold_rebuild_records"])
+            values = {
+                path: {
+                    "operations": int(fields[f"{path}_ops"]),
+                    "records": int(fields[f"{path}_records"]),
+                    "duration_us": int(fields[f"{path}_duration_us"]),
+                }
+                for path in ("traversal", "cold_index", "warm_index")
+            }
+        except ValueError as error:
+            raise SystemExit(f"non-integer benchmark value at line {line_number}") from error
+        if (
+            load <= 0
+            or rebuild_records < 0
+            or fields["cold_rebuild_included"] != "1"
+            or any(value["operations"] <= 0 or value["records"] <= 0 or value["duration_us"] < 0
+                   for value in values.values())
+            or load > values["traversal"]["records"]
+            or values["cold_index"]["records"] > values["traversal"]["records"]
+            or values["warm_index"]["records"] != values["cold_index"]["records"]
+        ):
+            raise SystemExit(f"inconsistent benchmark values at line {line_number}")
+        for path, value in values.items():
+            rows.append({
+                "trial": trial,
+                "path": path,
+                "load": load,
+                **value,
+                "rebuild_records": rebuild_records if path == "cold_index" else 0,
+                "source_line": line_number,
+            })
+        pending = None
+
+if pending is not None:
+    raise SystemExit("benchmark marker was not followed by a pass marker")
+if not rows:
+    raise SystemExit("Guest log has no completed file-query benchmark")
+
+fieldnames = (
+    "trial", "path", "load", "operations", "records", "duration_us",
+    "rebuild_records", "source_line",
+)
+with destination.open("w", encoding="utf-8", newline="") as stream:
+    writer = csv.DictWriter(stream, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+print(f"[dual-platform] file-query benchmark rows: {len(rows)}")
+PY
 stage_finish ready
 
 echo "[dual-platform] plain and AgentOS platforms both passed"
 echo "[dual-platform] research platform programs: ${expected_programs}"
 echo "[dual-platform] ${plain_backend_summary}"
 echo "[dual-platform] ${agentos_backend_summary}"
-echo "[dual-platform] run generation: ${DUAL_RUN_GENERATION}"
+echo "[dual-platform] benchmark CSV: ${measurement_csv}"
 echo "[dual-platform] raw artifacts: ${DUAL_LOG_DIR}"

@@ -203,7 +203,7 @@ JSON 对象验证与 canonicalization 在这个用户态 gateway 中完成；HTT
 
 安全演示应把恶意指令放入文件数据或跨 Agent 消息，使模型尝试计划外发消息、改文件或提权；验收条件是非法动作在副作用前 `DENIED` 且 critical Evidence 可查询，而合同内正常链仍完成。这个演示证明的是“模型输出不能越过结构边界”，不是“模型没有受到攻击”。
 
-调度评价使用 1、4、16 三档：1 是单实体 fast path，4 是 bootstrap+3 fresh 的满容量 cohort，16 是四波复用同一 bootstrap 并累计 12 个 fresh lifecycle 的逻辑样本。线程放大场景是 1 个 fresh 4-thread workflow 对 2 个 fresh single-thread workflow 加 bootstrap peer；唤醒直方图只含 fresh-agent 样本。资源评价同时记录 phase 前/峰值/结算后 U/P/F、拒绝稳定性和普通进程开销。静态/model checker 通过不替代 QEMU Guest 与正式冻结 evidence bundle。
+调度评价使用 1、4、16 三档：1 是单实体 fast path，4 是 bootstrap+3 fresh 的满容量 cohort，16 是四波复用同一 bootstrap 并累计 12 个 fresh lifecycle 的逻辑样本。线程放大场景是 1 个 fresh 4-thread workflow 对 2 个 fresh single-thread workflow 加 bootstrap peer；唤醒直方图只含 fresh-agent 样本。资源评价同时记录 phase 前/峰值/结算后 U/P/F、拒绝稳定性和普通进程开销。静态/model checker 通过不替代 `agent_eevdf_ucore` 等 QEMU Guest 的实际运行。
 
 ## 8. 明确不宣称
 

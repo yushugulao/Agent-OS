@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
@@ -140,7 +139,7 @@ build_kernel() {
 run_guest() {
 	local tag="$1" marker="$2" mode="$3" kernel="$4" image="$5"
 	local grace="${MARKER_GRACE_SECONDS}"
-	local runner_status=0 append_status=0
+	local runner_status=0
 
 	if [[ "${mode}" == powercut ]]; then
 		grace=0s
@@ -159,18 +158,11 @@ run_guest() {
 	else
 		runner_status=$?
 	fi
-	if [[ -s "${TMPDIR_META}/${tag}.log" ]]; then
-		if evidence_append_guest_log "metadata-${tag}" \
-			"${TMPDIR_META}/${tag}.log"; then
-			append_status=0
-		else
-			append_status=$?
-		fi
-	else
-		append_status=65
-	fi
 	[[ ${runner_status} -eq 0 ]] || return "${runner_status}"
-	[[ ${append_status} -eq 0 ]] || return "${append_status}"
+	if [[ ! -s "${TMPDIR_META}/${tag}.log" ]]; then
+		echo "[metadata-recovery] ${tag} Guest log is empty" >&2
+		return 65
+	fi
 }
 
 make_image() {

@@ -12,7 +12,6 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 
@@ -45,23 +44,6 @@ class AgentTestRunnerTests(unittest.TestCase):
             completed.stderr.decode("utf-8", errors="replace"),
         )
 
-    def test_attested_invocation_uses_captured_canonical_python(self):
-        identities = {
-            "python": {
-                "executable": {"path": "/canonical/tools/python3"}
-            }
-        }
-        with mock.patch.object(sys, "argv", ["runner.py", "--marker", "ok"]):
-            self.assertEqual(
-                agent_test_runner._attested_invocation_argv(identities),
-                [
-                    "/canonical/tools/python3",
-                    "runner.py",
-                    "--marker",
-                    "ok",
-                ],
-            )
-
     def test_powercut_supervisor_preserves_isolated_python(self):
         command = agent_test_runner._powercut_supervisor_command(
             7, 9, "a" * 64, ["qemu-system-riscv64", "-nographic"]
@@ -88,74 +70,6 @@ class AgentTestRunnerTests(unittest.TestCase):
                 "-nographic",
             ],
         )
-
-    def calibration_args(self, **changes):
-        values = {
-            "attestation_file": "/tmp/case.json",
-            "run_id": "2" * 64,
-            "execution_id": "3" * 64,
-            "evidence_scope": agent_test_runner.LOCAL_EVIDENCE_SCOPE,
-            "source_commit": "a" * 40,
-            "source_tree": "b" * 40,
-            "campaign_nonce": "0" * 64,
-            "calibration_plan_sha256": "c" * 64,
-            "round_nonce": "1" * 64,
-            "session_nonce": "2" * 64,
-            "execution_nonce": "3" * 64,
-            "toolchain_cc": "riscv64-linux-gnu-gcc",
-        }
-        values.update(changes)
-        return SimpleNamespace(**values)
-
-    def test_calibration_attestation_arguments_fail_closed(self):
-        absent = self.calibration_args(
-            **{
-                name: None
-                for name in vars(self.calibration_args())
-            }
-        )
-        self.assertFalse(
-            agent_test_runner.validate_calibration_attestation_args(absent)
-        )
-        with self.assertRaisesRegex(ValueError, "supplied together"):
-            agent_test_runner.validate_calibration_attestation_args(
-                self.calibration_args(source_tree=None)
-            )
-        self.assertTrue(
-            agent_test_runner.validate_calibration_attestation_args(
-                self.calibration_args()
-            )
-        )
-        generic = self.calibration_args(
-            **{
-                name: None
-                for name in (
-                    "evidence_scope",
-                    "source_commit",
-                    "source_tree",
-                    "campaign_nonce",
-                    "calibration_plan_sha256",
-                    "round_nonce",
-                    "session_nonce",
-                    "execution_nonce",
-                    "toolchain_cc",
-                )
-            }
-        )
-        self.assertFalse(
-            agent_test_runner.validate_calibration_attestation_args(generic)
-        )
-        for changes in (
-            {"evidence_scope": "ci_e4_signed"},
-            {"session_nonce": "0" * 64, "run_id": "0" * 64},
-            {"execution_id": "4" * 64},
-        ):
-            with self.subTest(changes=changes), self.assertRaisesRegex(
-                ValueError, "invalid calibration attestation identity"
-            ):
-                agent_test_runner.validate_calibration_attestation_args(
-                    self.calibration_args(**changes)
-                )
 
     @unittest.skipUnless(os.name == "posix", "POSIX executable paths required")
     def test_qemu_path_is_resolved_once_before_path_or_symlink_switch(self):
@@ -187,27 +101,14 @@ class AgentTestRunnerTests(unittest.TestCase):
 
             alias = root / "qemu-link"
             alias.symlink_to(first_dir / "fixture-qemu")
-            real_symlink = alias.is_symlink()
-            alias_stamp = (
-                None
-                if real_symlink
-                else agent_test_runner._file_stamp(
-                    alias, "fixture QEMU alias"
+            if alias.is_symlink():
+                resolved_alias = agent_test_runner._resolve_executable_once(
+                    str(alias), "fixture QEMU alias"
                 )
-            )
-            resolved_alias = agent_test_runner._resolve_executable_once(
-                str(alias), "fixture QEMU alias"
-            )
-            alias.unlink()
-            alias.symlink_to(second_dir / "fixture-qemu")
-            if real_symlink:
+                alias.unlink()
+                alias.symlink_to(second_dir / "fixture-qemu")
                 self.assertEqual(
                     Path(resolved_alias), (first_dir / "fixture-qemu").resolve()
-                )
-            else:
-                self.assertNotEqual(
-                    agent_test_runner._file_stamp(alias, "fixture QEMU alias"),
-                    alias_stamp,
                 )
 
     def assert_process_gone(self, pid, timeout=5.0):
@@ -528,7 +429,7 @@ class AgentTestRunnerTests(unittest.TestCase):
             self.assertTrue(result.completion_leader_signaled)
             self.assertTrue(result.process_tree_gone)
             self.assertTrue(result.process_tree_contained)
-            self.assertTrue(result.completion_signal_attested)
+            self.assertTrue(result.completion_signal_confirmed)
             self.assertTrue(result.powercut_succeeded)
             self.assertFalse(result.checkpoint_succeeded)
             self.assertFalse(result.succeeded)
@@ -753,7 +654,7 @@ class AgentTestRunnerTests(unittest.TestCase):
         sys.platform.startswith("linux"),
         "Linux powercut supervisor required",
     )
-    def test_powercut_supervisor_does_not_attest_sigterm_as_powercut(self):
+    def test_powercut_supervisor_does_not_confirm_sigterm_as_powercut(self):
         scanner = agent_test_runner.OutputScanner(
             "case",
             self.marker,
@@ -798,8 +699,8 @@ class AgentTestRunnerTests(unittest.TestCase):
             proc.wait(timeout=5)
             self.assertEqual(proc.supervisor_returncode, 0)
             self.assertEqual(proc.returncode, -signal.SIGTERM)
-            self.assertTrue(proc.cleanup_attested)
-            self.assertFalse(proc.signal_attested)
+            self.assertTrue(proc.cleanup_confirmed)
+            self.assertFalse(proc.signal_confirmed)
         finally:
             if not lifecycle.released:
                 lifecycle.abort()
@@ -868,7 +769,7 @@ class AgentTestRunnerTests(unittest.TestCase):
         sys.platform.startswith("linux"),
         "Linux zombie-state identity check required",
     )
-    def test_powercut_repeated_self_sigkill_never_gets_attested(self):
+    def test_powercut_repeated_self_sigkill_never_gets_confirmed(self):
         class SlowStream:
             def write(self, _text):
                 time.sleep(0.03)
@@ -887,7 +788,7 @@ class AgentTestRunnerTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, -signal.SIGKILL)
                 self.assertEqual(result.supervisor_returncode, 0)
-                self.assertFalse(result.completion_signal_attested)
+                self.assertFalse(result.completion_signal_confirmed)
                 self.assertFalse(result.powercut_succeeded)
 
     @unittest.skipUnless(
@@ -1049,7 +950,7 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertIn("case: grandparent writable fds []", result.lines)
         self.assertEqual(result.supervisor_returncode, 0)
         self.assertEqual(result.returncode, -signal.SIGKILL)
-        self.assertTrue(result.completion_signal_attested)
+        self.assertTrue(result.completion_signal_confirmed)
         self.assertTrue(result.powercut_succeeded)
 
     @unittest.skipUnless(
@@ -1147,7 +1048,7 @@ class AgentTestRunnerTests(unittest.TestCase):
         sys.platform.startswith("linux"),
         "Linux supervisor containment required",
     )
-    def test_powercut_rejects_killed_supervisor_attestation(self):
+    def test_powercut_rejects_killed_supervisor_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:
             pid_file = Path(directory) / "escaped.pid"
             child = (
@@ -1184,7 +1085,7 @@ class AgentTestRunnerTests(unittest.TestCase):
                     -signal.SIGKILL,
                 )
                 self.assertTrue(result.completion_leader_signaled)
-                self.assertFalse(result.completion_signal_attested)
+                self.assertFalse(result.completion_signal_confirmed)
                 self.assertFalse(result.process_tree_contained)
                 self.assertFalse(result.process_tree_gone)
                 self.assertFalse(result.powercut_succeeded)

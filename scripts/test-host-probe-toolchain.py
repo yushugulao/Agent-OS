@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import ast
 import os
 import re
 import subprocess
@@ -150,31 +149,7 @@ class HostProbeToolchainTests(unittest.TestCase):
                 self.assertIn("*sanitizer_flags", text)
                 self.assertIn("probe_mode(sanitizer_flags)", text)
 
-    def test_formal_shell_harness_inventory_uses_shared_policy(self) -> None:
-        parallel_runner = ast.parse(
-            (SCRIPT_DIR / "run-parallel-qemu-regressions.py").read_text(
-                encoding="utf-8"
-            )
-        )
-        resource_cases = next(
-            node.value
-            for node in parallel_runner.body
-            if isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "RESOURCE_CASES"
-                for target in node.targets
-            )
-        )
-        resource_runners = {
-            Path(node.args[1].value).name
-            for node in ast.walk(resource_cases)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "RegressionCase"
-            and len(node.args) >= 2
-            and isinstance(node.args[1], ast.Constant)
-            and isinstance(node.args[1].value, str)
-        }
+    def test_product_shell_harnesses_use_shared_policy(self) -> None:
         expected_runners = {
             "run-file-resource-tests.sh",
             "run-fs-allocator-fault-tests.sh",
@@ -187,7 +162,6 @@ class HostProbeToolchainTests(unittest.TestCase):
             "run-virtio-disk-tests.sh",
             "run-workflow-teardown-race-tests.sh",
         }
-        self.assertEqual(resource_runners, expected_runners)
         shell_harnesses = expected_runners | {
             "test-identity-lease-deferred.sh",
             "test-observe-reap-state.sh",
@@ -218,7 +192,7 @@ class HostProbeToolchainTests(unittest.TestCase):
                         direct_compiler.search(path.read_text(encoding="utf-8"))
                     )
 
-    def test_formal_entrypoints_forbid_local_unsanitized_opt_in(self) -> None:
+    def test_full_verification_forbids_unsanitized_host_probes(self) -> None:
         full_verify = (SCRIPT_DIR / "run-full-verification.sh").read_text(
             encoding="utf-8"
         )

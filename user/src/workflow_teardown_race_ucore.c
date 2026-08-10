@@ -476,6 +476,43 @@ static void snapshot_current_lifecycle(
 	      "validate immutable workflow lifecycle key");
 }
 
+static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix_errors(void)
+{
+	struct agent_workflow_lifecycle_info bad_parameter;
+	struct agent_workflow_lifecycle_info bad_parameter_before;
+	struct agent_workflow_lifecycle_info current_before;
+	struct agent_workflow_lifecycle_info stale_result;
+	struct agent_workflow_lifecycle_info current_after;
+	struct agent_workflow_lifecycle_key over_capacity_key;
+
+	memset(&bad_parameter, 0x6d, sizeof(bad_parameter));
+	bad_parameter_before = bad_parameter;
+	check(syscall(SYS_agent_workflow_lifecycle_info, &bad_parameter,
+		      sizeof(bad_parameter), 1U << 7, 0, 0) ==
+		      AGENT_STATUS_BAD_PARAM &&
+	      bytes_equal(&bad_parameter, &bad_parameter_before,
+		  sizeof(bad_parameter)),
+	      "unknown lifecycle flags fail without writing");
+	check(syscall(SYS_agent_workflow_lifecycle_info, &bad_parameter,
+		      sizeof(bad_parameter),
+		      AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT,
+		      0, 0) == AGENT_STATUS_BAD_PARAM &&
+	      bytes_equal(&bad_parameter, &bad_parameter_before,
+		  sizeof(bad_parameter)),
+	      "invalid lifecycle match key fails without writing");
+	snapshot_current_lifecycle(&current_before);
+	over_capacity_key.id = ~0U;
+	over_capacity_key.reserved = 0;
+	over_capacity_key.generation = 1;
+	memset(&stale_result, 0, sizeof(stale_result));
+	check(agent_workflow_lifecycle_info(&stale_result,
+				    &over_capacity_key) == AGENT_STATUS_STALE,
+	      "well-formed out-of-range lifecycle key is stale");
+	snapshot_current_lifecycle(&current_after);
+	check(lifecycle_key_equal(current_before.key, current_after.key),
+	      "stale capacity probe preserves current lifecycle key");
+}
+
 static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix(void)
 {
 	struct lifecycle_prefix_probe {
@@ -505,13 +542,6 @@ static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix(void)
 		struct agent_workflow_lifecycle_info info;
 		uint guard;
 	} oversized;
-	struct agent_workflow_lifecycle_info bad_parameter;
-	struct agent_workflow_lifecycle_info bad_parameter_before;
-	struct agent_workflow_lifecycle_info current_before;
-	struct agent_workflow_lifecycle_info stale_result;
-	struct agent_workflow_lifecycle_info current_after;
-	struct agent_workflow_lifecycle_key over_capacity_key;
-
 	memset(&prefix, 0, sizeof(prefix));
 	prefix.guard = 0x5a5aa5a5U;
 	check(syscall(SYS_agent_workflow_lifecycle_info, &prefix,
@@ -548,32 +578,6 @@ static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix(void)
 		      "undersized lifecycle call leaves prefix untouched");
 	check(short_probe.guard == 0x3cc3c33cU,
 	      "undersized lifecycle call leaves guard untouched");
-	memset(&bad_parameter, 0x6d, sizeof(bad_parameter));
-	bad_parameter_before = bad_parameter;
-	check(syscall(SYS_agent_workflow_lifecycle_info, &bad_parameter,
-		      sizeof(bad_parameter), 1U << 7, 0, 0) ==
-		      AGENT_STATUS_BAD_PARAM &&
-	      bytes_equal(&bad_parameter, &bad_parameter_before,
-		  sizeof(bad_parameter)),
-	      "unknown lifecycle flags fail without writing");
-	check(syscall(SYS_agent_workflow_lifecycle_info, &bad_parameter,
-		      sizeof(bad_parameter),
-		      AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT,
-		      0, 0) == AGENT_STATUS_BAD_PARAM &&
-	      bytes_equal(&bad_parameter, &bad_parameter_before,
-		  sizeof(bad_parameter)),
-	      "invalid lifecycle match key fails without writing");
-	snapshot_current_lifecycle(&current_before);
-	over_capacity_key.id = ~0U;
-	over_capacity_key.reserved = 0;
-	over_capacity_key.generation = 1;
-	memset(&stale_result, 0, sizeof(stale_result));
-	check(agent_workflow_lifecycle_info(&stale_result,
-				    &over_capacity_key) == AGENT_STATUS_STALE,
-	      "well-formed out-of-range lifecycle key is stale");
-	snapshot_current_lifecycle(&current_after);
-	check(lifecycle_key_equal(current_before.key, current_after.key),
-	      "stale capacity probe preserves current lifecycle key");
 }
 
 static void check_factory_lifecycle_view(
@@ -631,6 +635,7 @@ static TEST_PHASE_NOINLINE void check_fresh_workflow_resources(
 	int fd;
 
 	check_lifecycle_sized_prefix();
+	check_lifecycle_sized_prefix_errors();
 	snapshot_current_lifecycle(lifecycle);
 	scope_id = current_scope();
 	memset(&io, 0, sizeof(io));

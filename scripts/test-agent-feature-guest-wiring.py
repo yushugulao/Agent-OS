@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze release routing for the contract, EEVDF, and Task Channel Guests."""
+"""Check functional routing for the contract, EEVDF, and Task Channel Guests."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ USER_MAKEFILE = ROOT / "user" / "Makefile"
 EXEC_MANIFEST = ROOT / "user" / "include" / "exec_policy_manifest.h"
 RUNNER = ROOT / "scripts" / "run-agent-tests.sh"
 VALIDATOR = ROOT / "scripts" / "validate-kernel-test-log.py"
-EVIDENCE_FIXTURE = ROOT / "host_tools" / "test_capture_final_evidence.py"
 AGENTTASK_SOURCE = ROOT / "user" / "src" / "agenttask_ucore.c"
 EEVDF_SOURCE = ROOT / "user" / "src" / "agent_eevdf_ucore.c"
 
@@ -80,7 +79,6 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
         cls.manifest = read(EXEC_MANIFEST)
         cls.runner = read(RUNNER)
         cls.validator = read(VALIDATOR)
-        cls.fixture = read(EVIDENCE_FIXTURE)
         cls.agenttask_source = read(AGENTTASK_SOURCE)
         cls.eevdf_source = read(EEVDF_SOURCE)
 
@@ -121,7 +119,7 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
                 manifest_entry = normalized[start : end if end >= 0 else None]
                 self.assertNotIn("EXEC_MANIFEST_ROLE_ALL", manifest_entry)
 
-    def test_runner_routes_each_case_and_freezes_calibration_count(self) -> None:
+    def test_runner_routes_each_case(self) -> None:
         for guest in GUESTS:
             with self.subTest(guest=guest):
                 self.assertEqual(
@@ -131,13 +129,6 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
                     1,
                 )
                 self.assertIn(f"\t{guest})", self.runner)
-        self.assertIn(
-            'if [[ "${calibration_case_ordinal}" != "21" ]]; then',
-            self.runner,
-        )
-        self.assertIn(
-            "calibration did not execute exactly 21 cases", self.runner
-        )
 
     def test_exact_markers_match_guest_runner_and_validator(self) -> None:
         for guest, markers in MARKERS.items():
@@ -514,34 +505,6 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
                 self.assertNotEqual(mutated, source)
                 with self.assertRaises(AssertionError):
                     assert_phase_pipe_contract(mutated)
-
-    def test_evidence_fixture_tracks_all_three_cases(self) -> None:
-        generated_cases = re.search(
-            r"agent_cases = \((.*?)\)\nAGENTTASK_METRIC_FIXTURE_LINES =",
-            self.fixture,
-            re.S,
-        )
-        self.assertIsNotNone(generated_cases)
-        for guest in GUESTS:
-            with self.subTest(guest=guest):
-                self.assertEqual(generated_cases.group(1).count(f'"{guest}"'), 1)
-        self.assertIn("AGENTTASK_METRIC_FIXTURE_LINES = (", self.fixture)
-        self.assertIn(
-            "lines.extend(AGENTTASK_METRIC_FIXTURE_LINES)", self.fixture
-        )
-        self.assertIn("EEVDF_METRIC_FIXTURE_LINES =", self.fixture)
-        self.assertIn(
-            "lines.extend(EEVDF_METRIC_FIXTURE_LINES)", self.fixture
-        )
-        for token in (
-            "service_start_interval_tick_p50=",
-            "service_start_interval_tick_p99=",
-            "service_start_span_ticks=",
-            "sequence_elapsed_ticks=",
-            "cancel_latency scope=retained_terminal",
-        ):
-            with self.subTest(token=token):
-                self.assertIn(token, self.fixture)
 
     def test_runner_delegates_dynamic_metrics_to_semantic_validator(self) -> None:
         self.assertEqual(self.runner.count("--profile agent-case"), 1)

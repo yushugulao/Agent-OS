@@ -15,15 +15,16 @@ check_cmd() {
 }
 
 echo "[deps] checking Linux/WSL tools"
-check_cmd bash
+check_cmd "${BASH_BIN:-bash}"
 check_cmd git
-check_cmd make
-check_cmd python3
-check_cmd qemu-system-riscv64
-check_cmd riscv64-linux-gnu-gcc
-check_cmd riscv64-linux-gnu-ld
-check_cmd riscv64-linux-gnu-objcopy
-check_cmd riscv64-linux-gnu-objdump
+check_cmd "${MAKE_TOOL:-make}"
+check_cmd "${PYTHON_BIN:-python3}"
+check_cmd "${HOST_CC:-${HOSTCC:-cc}}"
+check_cmd "${QEMU:-qemu-system-riscv64}"
+check_cmd "${TOOLPREFIX:-riscv64-linux-gnu-}gcc"
+check_cmd "${TOOLPREFIX:-riscv64-linux-gnu-}ld"
+check_cmd "${TOOLPREFIX:-riscv64-linux-gnu-}objcopy"
+check_cmd "${TOOLPREFIX:-riscv64-linux-gnu-}objdump"
 if [ "${missing}" -ne 0 ]; then
 	cat <<'EOF'
 [deps] install on Ubuntu/WSL:

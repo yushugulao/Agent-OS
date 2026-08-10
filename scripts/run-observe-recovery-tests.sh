@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
@@ -81,7 +80,7 @@ run_boot() {
 	local tag="$1" marker="$2" completion="$3"
 	local marker_mode="${4:-exact-line}"
 	local log="${TMPDIR_OBSERVE}/${tag}.log"
-	local runner_status=0 append_status=0
+	local runner_status=0
 
 	if "${PYTHON_BIN}" scripts/agent_test_runner.py \
 		--init-proc "agentobsreboot_ucore-${tag}" \
@@ -95,17 +94,11 @@ run_boot() {
 	else
 		runner_status=$?
 	fi
-	if [[ -s "${log}" ]]; then
-		if evidence_append_guest_log "observe-recovery-${tag}" "${log}"; then
-			append_status=0
-		else
-			append_status=$?
-		fi
-	else
-		append_status=65
-	fi
 	[[ ${runner_status} -eq 0 ]] || return "${runner_status}"
-	[[ ${append_status} -eq 0 ]] || return "${append_status}"
+	if [[ ! -s "${log}" ]]; then
+		echo "[observe-recovery] ${tag} Guest log is empty" >&2
+		return 65
+	fi
 }
 
 snapshot_image_exclusive() {
@@ -137,9 +130,7 @@ grep -Fxq "agentobsreboot_ucore: audit_drop_only_first_success=1" \
 	--cut-log "${TMPDIR_OBSERVE}/boot0-cut.log"
 "${PYTHON_BIN}" host_tools/agent_observe_disk_evidence.py \
 	--image "${image}" --guest-log "${TMPDIR_OBSERVE}/boot1.log"
-if evidence_enabled; then
-	evidence_publish_file "${image}" "observe-recovery-before-reap.img"
-elif [[ -n "${OBSERVE_RECOVERY_SNAPSHOT_FILE:-}" ]]; then
+if [[ -n "${OBSERVE_RECOVERY_SNAPSHOT_FILE:-}" ]]; then
 	snapshot_image_exclusive "${OBSERVE_RECOVERY_SNAPSHOT_FILE}"
 fi
 run_boot boot2 \

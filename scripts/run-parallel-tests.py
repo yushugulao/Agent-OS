@@ -23,13 +23,7 @@ CHILD_ENV_DROP = frozenset(
     {
         "BASH_ENV",
         "ENV",
-        "EVIDENCE_GUEST_LOG_FILE",
-        "EVIDENCE_INCOMING_DIR",
-        "EVIDENCE_STEPS_FILE",
-        "EVIDENCE_WORK_DIR",
-        "FINAL_EVIDENCE_STAGE",
         "FS_ALLOCATOR_ARTIFACT_DIR",
-        "FS_ALLOCATOR_EVIDENCE_ARCHIVE",
         "GNUMAKEFLAGS",
         "AGENTOS_BUILD_JOBS",
         "AGENTOS_OUTER_JOBS",
@@ -254,44 +248,6 @@ def run_one(
     return TestResult(returncode, elapsed_ms, detail)
 
 
-def source_receipt(root: Path) -> dict[str, object]:
-    receipt: dict[str, object] = {}
-    try:
-        commit = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD^{commit}"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        tree = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD^{tree}"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        dirty = bool(
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(root),
-                    "status",
-                    "--porcelain=v1",
-                    "--untracked-files=all",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            ).stdout
-        )
-        receipt.update({"commit": commit, "tree": tree, "dirty": dirty})
-    except (OSError, subprocess.CalledProcessError):
-        receipt["git"] = "unavailable"
-    return receipt
-
-
 def retain_failures(
     root: Path,
     args: argparse.Namespace,
@@ -301,16 +257,9 @@ def retain_failures(
     effective_jobs: int,
     exclusive: frozenset[Path],
 ) -> Path:
-    stage = os.environ.get("EVIDENCE_WORK_DIR") or os.environ.get(
-        "FINAL_EVIDENCE_STAGE"
-    )
     failure_root = args.failure_root
     if failure_root is None:
-        failure_root = (
-            Path(stage) / "host-test-failures"
-            if stage
-            else root / "build" / "host-test-failures"
-        )
+        failure_root = root / "build" / "host-test-failures"
     failure_root = failure_root.resolve()
     run_dir = failure_root / f"{time.time_ns()}-{os.getpid()}"
     run_dir.mkdir(parents=True)
@@ -349,7 +298,6 @@ def retain_failures(
     replay.extend(failed_tests)
     manifest = {
         "schema": 1,
-        "source": source_receipt(root),
         "cwd": str(root),
         "requested_jobs": args.jobs,
         "effective_jobs": effective_jobs,
@@ -392,7 +340,6 @@ def main() -> int:
         print(f"parallel-tests: {exc}", file=sys.stderr)
         return 2
 
-    evidence_mode = bool(os.environ.get("FINAL_EVIDENCE_STAGE"))
     job_limit = min(args.jobs, len(tests))
     if build_budget is not None:
         job_limit = min(job_limit, build_budget)
@@ -404,7 +351,7 @@ def main() -> int:
     effective_jobs = max(min(job_limit, len(batch)) for batch in batches)
     print(
         f"[parallel-tests] start total={len(tests)} jobs={effective_jobs} "
-        f"exclusive={len(exclusive)} evidence={int(evidence_mode)}",
+        f"exclusive={len(exclusive)}",
         flush=True,
     )
     results: list[TestResult | None] = [None] * len(tests)

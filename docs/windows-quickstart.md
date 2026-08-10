@@ -1,19 +1,17 @@
 # Windows 克隆后的运行说明
 
-本文说明一台新的 Windows 电脑 clone 仓库后，怎样检查依赖、构建目标并打开结果页面。
+本文说明在新的 Windows 电脑上检查依赖、构建 AgentOS-uCore 并运行实际 QEMU 测试。推荐使用 WSL2 Ubuntu；常规开发环境即可完成全部产品验证。
 
-## 需要安装的系统组件
+## 1. 安装依赖
 
 推荐环境：
 
-- Windows 10/11。
-- WSL2 Ubuntu。
-- Git。
-- Ubuntu 内的 `bash`、`make`、`python3`。
-- Ubuntu 内的 RISC-V 交叉工具链：`riscv64-linux-gnu-gcc`、`riscv64-linux-gnu-ld`、`riscv64-linux-gnu-objcopy`、`riscv64-linux-gnu-objdump`。
-- Ubuntu 内的 QEMU：`qemu-system-riscv64`。
+- Windows 10/11 与 WSL2 Ubuntu；
+- Git、Bash、GNU Make 和 Python 3；
+- RISC-V GCC/binutils；
+- `qemu-system-riscv64`。
 
-Ubuntu 中可以用以下命令安装主要依赖：
+Ubuntu 中可安装：
 
 ```bash
 sudo apt update
@@ -21,9 +19,9 @@ sudo apt install -y git build-essential make python3 qemu-system-misc \
   gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
 ```
 
-仓库不放置 QEMU 和交叉编译器。这些内容体积大、和本机环境绑定，放进仓库会增加克隆成本，也不利于复现实验环境复现。仓库内置可运行源码、测试脚本、依赖检查脚本和离线评价工具。
+仓库不分发 QEMU 和交叉编译器。使用发行版工具链时，命令中的前缀通常是 `riscv64-linux-gnu-`；使用 xPack 等裸机工具链时可传入 `riscv-none-elf-`。
 
-## Windows 侧检查
+## 2. Windows 侧预检
 
 在仓库根目录打开 PowerShell：
 
@@ -31,136 +29,76 @@ sudo apt install -y git build-essential make python3 qemu-system-misc \
 .\scripts\check-windows-prereqs.ps1
 ```
 
-这个脚本会检查：
+脚本检查 `wsl.exe`、可用发行版以及 WSL 中的 Bash、Git、Make、Python、QEMU 和 RISC-V 工具链。缺少依赖时会打印安装建议。
 
-- Windows 是否能调用 `wsl.exe`。
-- 是否存在可用 WSL 发行版。
-- WSL 内是否能找到 `bash`、`git`、`make`、`python3`、QEMU 和 RISC-V 工具链。
+## 3. WSL 构建
 
-如果缺少依赖，脚本会打印 Ubuntu 中需要执行的安装命令。
-
-## WSL 内检查
-
-进入 WSL 后，切到实际 clone 的仓库根目录，不要照抄某台开发机的绝对路径，例如：
+进入 WSL 后切到 clone 的实际目录，例如：
 
 ```bash
 cd /mnt/<盘符>/<你的目录>/<仓库名>
 make doctor
+make build TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`make doctor` 只做依赖检查，不构建内核，不启动 QEMU。它适合在运行前或换机器后先跑一遍。
+`make doctor` 只检查依赖。`make build` 编译并链接当前 AgentOS 内核，最适合确认工具链和源码状态。
 
-竞赛评价另有更严格的执行域检查。在 Windows PowerShell 或 Git Bash 启动评价前运行：
+再运行有直接产品价值的快速检查：
 
 ```bash
-make evaluation-doctor EVALUATION_WSL_DISTRO=Ubuntu AGENT_TEST_DURATION_PROFILE=none
+make agent-uapi-check TOOLPREFIX=riscv64-linux-gnu-
+make agent-module-check TOOLPREFIX=riscv64-linux-gnu-
+make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-它只检查指定发行版，不使用另一个默认 WSL 发行版代替；同时验证 `wslpath` 对当前仓库
-的真实映射、Python 3.10+、交叉工具链（含 `size`）、QEMU `virt` 和构建/摘要工具。
-通过后，正式评价的所有阶段都会整体进入该 WSL，禁止 Windows 原生 micro 与 WSL
-科研场景混跑。若发行版中的工具名不同，可设置 `EVALUATION_WSL_TOOLPREFIX` 和
-`EVALUATION_WSL_QEMU`。`wsl --version` 在旧 Windows 上不可用不会单独导致失败；指定
-发行版本身无法执行或工具不完整仍会 fail closed。
+这些检查关注 ABI、生产模块边界与真实调用图栈安全，不采集工具哈希，也不要求绑定某个 Git 提交。
 
-## WSL 服务不可用时的 MSYS2 正式域
+## 4. QEMU 功能与安全测试
 
-若 WSL 服务本身持续返回 `Wsl/Service/E_ACCESSDENIED`，可以改用完整安装的 MSYS2，
-但不能直接换成 Git Bash、Cygwin、MINGW shell 或 Windows Python。MSYS2 shell 内需要
-提供自身的 `/usr/bin/python3`、Bash、Git、Make、env、timeout、readlink、sha256sum、
-uname、cygpath 和 Host objdump，并在同一 POSIX namespace 中暴露完整 RISC-V GCC/
-binutils、GNU size 与 QEMU。工具链前缀建议使用规范 POSIX 绝对值，例如：
+完整 AgentOS Guest 回归：
 
 ```bash
-export MSYSTEM=MSYS
+make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+修改单一功能时，先跑定向场景会更快：
+
+```bash
+AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agentsecurity_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agenttrust_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+测试 runner 会检查 QEMU 退出状态、预期 marker、panic、输出上限与超时。无需安装时长 profile；超时只是实际测试失败，不形成平台认证结论。
+
+## 5. 性能与双目标
+
+产品性能场景可以直接运行：
+
+```bash
+AGENT_TEST_CASE=agentbench_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agentsched_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
+```
+
+性能数字应与本次运行的工具链、QEMU 版本、Host CPU、样本数和负载一起记录。原始串口输出和比较摘要已经足够定位产品回归和复核测量。
+
+## 6. MSYS2 备选
+
+WSL 不可用时可以在完整 MSYS2 环境中运行，但必须提供 `/usr/bin/python3`、Bash、Git、Make、QEMU 和同一套 RISC-V GCC/binutils。示例：
+
+```bash
 export TOOLPREFIX=/opt/xpack-riscv/bin/riscv-none-elf-
 export QEMU=/opt/qemu/qemu-system-riscv64.exe
 export PYTHON_BIN=/usr/bin/python3
 export BASH_BIN=/usr/bin/bash
-export TMPDIR=/tmp
-export AGENT_TEST_DURATION_PROFILE=local-e3
-make evaluation-doctor
+make doctor
+make build
+make agentos-test
 ```
 
-本地 `kernel-budget-check` 使用版本化构建参数、预算和工具身份。MSYS2 profile 校验
-gcc、cc1、as、ld、objcopy、objdump、nm、size 八个可执行文件的版本和逐文件 SHA-256，
-并要求它与本地三轮时长校准使用同一 profile 及全部共有组件版本。不能通过改名、wrapper
-或混搭工具进入该 profile。预算检查先进入显式的仓库根目录，再把仓库内文件以相对路径
-交给原生工具，因此从仓库外调用或工作区含中文时都不会泄漏不兼容的绝对路径。
+不要在同一次命令中混用 Windows Python、Git Bash 工具和 MSYS2 路径。若仓库位于中文路径，优先使用 WSL 的 `/mnt/...` 映射或确认 MSYS2 使用 UTF-8 locale。
 
-预检会把结果明确标为 `domain=native-msys2`，绑定 Windows build、uname、
-`msys-2.0.dll` 和所有工具哈希，并验证控制面程序确实使用该 runtime。仓库、工具和临时
-目录必须通过 cygpath 双向映射；中文路径会在受控域中固定使用 `C.UTF-8`。正式
-`run`、`verify`、`kernel-cost`、`dashboard`、`package` 随后全部由已绑定的绝对
-`env -i` 和 Bash 重新启动，不能把 MSYS2 micro 与 WSL 科研场景混用。campaign 清单的
-`run.execution_domain` 为 `native-msys2`，科研场景为
-`native-msys2-clean-shell`。任何 runtime/tool 哈希变化、伪造 re-entry marker 或继承
-`BASH_ENV`、`PYTHONPATH`、`MAKEFLAGS`、`GIT_*` 等变量都会 fail closed。
-
-同一 platform proof v2 还会从 MSYS2 的 `/proc/cpuinfo` 和 `/proc/meminfo` 记录稳定的
-CPU model、logical CPU count 与总内存，并在每个 Guest boot 前复验；动态 MHz 不作为
-身份。硬件字段包含在 campaign 哈希内，scenario plan schema v5 也绑定同一 proof 并在每轮
-pair 前后复验。公开证据不记录计算机名，uname 证明只保留
-Windows build、kernel release/version 与 machine。
-
-`local-e3` 只用于与校准记录逐项一致的本地 MSYS2 E3。若配置仍为
-`provisional_requires_full_suite`，必须在最终冻结提交上
-重新完成三轮校准并安装受审证据后才可启用 `local-e3`。受管输入或 profile 漂移时，doctor/full-verify 会在
-QEMU 前 fail closed。不得复用历史提交的基线，也不能把 `none` 冒充本地 E3 时长证明。
-
-## 正式竞赛评价流程
-
-普通 Linux/WSL 本地环境在同一受控 POSIX 执行域中依次运行：
-
-```bash
-export AGENT_TEST_DURATION_PROFILE=none
-make evaluation-doctor
-make evaluation-smoke
-make evaluation-run
-make evaluation-verify
-make evaluation-kernel-cost
-make evaluation-full-verify
-make evaluation-dashboard
-make evaluation-package
-```
-
-`none` 仍强制 `ci/kernel-budgets.json` 登记的完整 Agent case、语义、Guest 日志和 timing inventory，只把本地 wall-time
-baseline/limit/ratio 记为不适用。受信且已完成当前校准的 MSYS2 E3 改用
-`export AGENT_TEST_DURATION_PROFILE=local-e3` 后执行同一组命令；不得让 Makefile 默认值替代
-这两个显式选择。
-
-formal run id 固定为 `formal-<源码提交 C 的完整 40 位提交号>`。challenge 和 AB/BA 顺序
-由 C 确定性派生，所以不同 clone 的计划一致；失败目录会保留且同一输出根拒绝覆盖。
-本地机制不声称能证明操作者或其他 clone 从未丢弃尝试。GitLab 只托管源码和已提交证据。首个 QEMU
-前生成的 run plan schema v2、scenario plan schema v5 和
-`measurement-source-receipt.json` 绑定计划、六份 Guest 测量源码及评价控制面策略清单；
-package 中的全部策略快照还要与 C 的 Git blob 一致。
-
-`evaluation-package` 接受有完整有效数据的 `file_query_path_index` 结论为 `supported` 或
-`not_supported`，但拒绝 `unavailable`、`failed` 和缺失数据；`file_query_table_ablation`
-只作 metadata 固定表消融，不能替代这项竞赛主对照。生成包不等于已有性能优势：
-只有真实 campaign、合同复验和 C→E 提交完成后，仓库才有可引用证据；后续 D 只能修改
-`README.md`、`docs/**` 与 `evidence/README.md`，不得改包或 INDEX。当前仓库尚未随本文
-预先声明任何未产生的正式结果。
-
-## 现场演示
-
-现场快速演示使用同一套 Guest 测量合同，并生成可直接打开的静态 Dashboard：
-
-```bash
-make contest-demo TOOLPREFIX=<你的 RISC-V 工具链前缀>
-make contest-demo-check
-```
-
-正式数据仍由 `evaluation-run`、`evaluation-verify`、`evaluation-dashboard` 和
-`evaluation-package` 生成与封装；本地预览不能替代 release bundle。
-
-## 快速检查命令
-
-如果只想确认源码、脚本、状态查看工具和图表生成契约没有明显问题，可以运行：
-
-```bash
-make target-readiness
-```
-
-构建、专项测试和双目标验证的完整命令见 [verification.md](verification.md) 与 [agentos/verification.md](agentos/verification.md)。
+更完整的测试选择见 [验证说明](verification.md) 与 [AgentOS 内核验证](agentos/verification.md)。

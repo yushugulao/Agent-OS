@@ -25,13 +25,13 @@ plain 目标以普通 `fork`、`exec`、`wait` 和文件 I/O 组织角色程序�
 
 ## Host 与 Guest 分工
 
-uCore Guest 负责执行程序并生成 `rp_*` 状态；Host 工具只负责提交 seed、提取镜像、核验收据和汇总报告：
+uCore Guest 负责执行程序并生成 `rp_*` 状态；Host 工具只负责提交 seed、提取镜像、核验状态和汇总报告：
 
 | 边界 | 责任 |
 | --- | --- |
 | Guest | 运行科研流程，写入业务状态和 AgentOS 观测投影，不自行授予 Host 级通过结论 |
 | `host_tools/plain_ucore_fs_extract.py` | 从文件系统镜像提取受清单约束的普通文件，拒绝路径逃逸、链接和多 scope 混合 |
-| Host validator | 核对目标字段、完整文件字节数、hash、行数、程序顺序和 Guest 日志 |
+| Host validator | 核对目标字段、完整文件字节数、内容摘要、行数、程序顺序和 Guest 日志 |
 
 状态文件采用短文件名和 `key=value` 文本。Guest/Host 文件边界以 [`ci/research-state-manifest.json`](../ci/research-state-manifest.json) 及其 checker 为准，文档不复制完整文件清单。
 
@@ -39,11 +39,11 @@ uCore Guest 负责执行程序并生成 `rp_*` 状态；Host 工具只负责提�
 
 - 两个目标使用相同的 challenge、程序顺序和 outcome oracle。
 - plain 已生成的共同状态不能在 AgentOS 目标中缺失；AgentOS 可以增加内核证据。
-- 每个启动都绑定程序源码关系、Guest 日志和状态清单收据，不能从父进程预期反推子进程真实身份。
+- 每个启动都检查 Guest 日志和状态清单，不能从父进程预期反推子进程真实身份。
 - 状态汇总工具只能呈现已提取数据，不能把静态字符串或报告状态升级为动态证据。
 - 全栈双目标结果只说明端到端路径差异；单机制因果结论来自同内核消融实验。
 
-双目标功能验证使用 `make dual-platform-run`。正式评价的实验、负载和声明映射以 [`ci/evaluation-suite.json`](../ci/evaluation-suite.json) 的 `suite_id`、`schema_version` 和 `execution_schedule` 为唯一清单；Agent 回归 case、时长 profile 与内核预算以 [`ci/kernel-budgets.json`](../ci/kernel-budgets.json) 为准。文档不复制这些集合或固定数量。
+双目标功能验证直接使用 `make dual-platform-run`。Agent 回归使用 `make agentos-test`；需要定位单个机制时通过 `AGENT_TEST_CASE` 选择对应 Guest 程序。测试 runner 和 Guest 源码共同定义实际负载，无需经过另一套发布管线。
 
 ## 设计取舍
 
@@ -52,4 +52,4 @@ uCore Guest 负责执行程序并生成 `rp_*` 状态；Host 工具只负责提�
 - 两侧共享状态协议和静态报告格式，便于对照同一业务结果；AgentOS 专属证据单独呈现。
 - Guest `rp_llm_relay` 使用确定性模板；云端模型接入不属于竞赛交付。
 
-构建、运行和证据边界见 [验证说明](verification.md)，AgentOS 内核细节见 [架构设计](agentos/design.md)，安全基底分工见 [安全加固](agentos/security-hardening.md)。
+构建、运行和测量边界见 [验证说明](verification.md)，AgentOS 内核细节见 [架构设计](agentos/design.md)，安全基底分工见 [安全加固](agentos/security-hardening.md)。

@@ -1,16 +1,16 @@
 # AgentOS 内核验证
 
-本文给出当前架构的验证顺序和断言边界。它不内嵌某次运行的通过数或性能数字；发布结果只从冻结 evidence bundle 读取。
+本文给出当前架构的验证顺序和断言边界。功能与性能结果来自实际 Host/QEMU 测试，不依赖额外的材料封装门禁。
 
 ## 1. 验证层次
 
 | 层次 | 回答的问题 | 不能证明 |
 | --- | --- | --- |
-| source contract/checker | 关键调用顺序、生产对象边界、UAPI 布局是否漂移 | 真实 Guest 调度/设备行为 |
+| focused checker | 关键调用顺序、生产对象边界、UAPI 布局是否漂移 | 真实 Guest 调度/设备行为 |
 | Host 模型与 mutation test | U/P/F、ring、resync、fence 的不变量是否能拒绝变异 | RISC-V 二进制已运行 |
-| cross build/link | 当前生产对象是否能编译链接，体积/栈预算是否满足 | syscall 运行语义 |
-| QEMU Guest 专项 | fork/exec/IPC/VFS/event/fence 等动态行为 | Host 证据包真实性 |
-| paired/full verification | 双目标完整负载、原始日志和环境绑定 | 超出 receipt/实验范围的普遍结论 |
+| cross build/link | 当前生产对象是否能编译链接，调用图栈是否安全 | syscall 运行语义 |
+| QEMU Guest 专项 | fork/exec/IPC/VFS/event/fence 等动态行为 | 超出该场景的普遍结论 |
+| paired/performance run | 双目标完整负载、工作量和实际测量 | 单个机制的因果贡献 |
 
 ## 2. 快速静态验证
 
@@ -87,16 +87,15 @@ python -B scripts/test-workflow-syscall-cut.py
 - receipt flags 明确 partial/exact/sealed/volatile；
 - request id/challenge 幂等、conflict、stale 和 copyout retry cache。
 
-## 4. 构建、模块和预算
+## 4. 构建、模块和栈安全
 
 ```bash
 make build TOOLPREFIX=riscv-none-elf-
 make agent-module-check TOOLPREFIX=riscv-none-elf-
-make kernel-budget-check TOOLPREFIX=riscv-none-elf-
 make kernel-stack-check TOOLPREFIX=riscv-none-elf-
 ```
 
-`agent-module-check` 验证生产对象清单和模块依赖，避免仅因历史 `.c` 文件仍在树中就把停产能力算作当前实现。`kernel-budget-check` 只可按 active source/object 口径重基线，不应通过把 retired 参考源码重新加入生产统计或简单放宽上限来通过。
+`agent-module-check` 验证生产对象清单和模块依赖，避免仅因历史 `.c` 文件仍在树中就把停产能力算作当前实现。`kernel-stack-check` 检查真实编译调用图上的线程栈和启动栈安全边界。源码行数、镜像大小基线和工具可执行文件身份不作为产品验收门。
 
 ## 5. QEMU Guest 验证
 
@@ -123,16 +122,15 @@ Guest 专项应覆盖：
 
 plain uCore 与 AgentOS-uCore 运行同一用户态科研工作流合同。端到端 paired run 用于整体比较；Credit Domain、Evidence Ring 或 Live Query 的单项性能结论还需要同内核消融、工作量计数或专项 benchmark，不能从双目标总差异直接归因。
 
-正式测量必须：
+引用测量结果时应：
 
-- 使用干净、已绑定提交；
-- 固定 target order/seed/工具链和 Host 环境；
-- 保留 Plain 与 AgentOS 原始 Guest/Host 日志；
-- 按要求只执行指定次数的 QEMU，额外试跑不得混入正式 pair；
-- 在 Host 侧重算状态、hash、样本和阈值；
-- 失败或缺失时保持 unavailable。
+- 说明 target、seed、工具链、QEMU 和 Host 环境；
+- 保留本次 Plain 与 AgentOS 的 Guest 输出和比较摘要；
+- 报告样本数、单位、失败样本和聚合方法；
+- 在 Host 侧复核状态一致性和测量计算；
+- 缺失数据时不推导或补造数字。
 
-具体流程见 [../verification.md](../verification.md) 和 `host_tools/` 的版本化合同。
+直接命令见 [../verification.md](../verification.md)。调试时可以自由重跑；对外引用数字时清楚说明选用的是哪次实际运行即可。
 
 ## 7. 负面能力检查
 
@@ -147,6 +145,6 @@ plain uCore 与 AgentOS-uCore 运行同一用户态科研工作流合同。端�
 | observe recovery 可用 | syscall dispatcher 固定 `BAD_PARAM` |
 | 多阶段 workflow retirement | lifecycle 状态以 members/closing/gates 为准 |
 
-## 8. 发布判定
+## 8. 结果解释
 
-本地测试通过只说明当前工作树满足相应合同。发布判定还需要 release manifest、提交身份、原始工件、校验和与 semantic replay。文档示例行、Dashboard 或 Guest 自报 `passed` 不能独立构成发布证据。
+本地 checker 通过只说明对应静态合同成立，构建通过只说明当前目标可编译链接。功能结论要由实际 Guest 场景确认，性能结论要由实际负载和测量确认。内核 `Evidence Ring` 及 fence receipt 验证的是产品运行期安全语义，不是仓库发布工件。

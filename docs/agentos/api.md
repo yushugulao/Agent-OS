@@ -393,4 +393,4 @@ python -B host_tools/test_mcp_a2a_gateway.py
 make agent-module-check TOOLPREFIX=riscv-none-elf-
 ```
 
-这些检查验证接口形状和实现合同，不自动形成发布性能证据。动态结果只从正式 bundle 读取。
+这些检查验证接口形状和实现合同，不替代实际 QEMU 行为。功能与性能结果由对应 Guest 场景直接测量。

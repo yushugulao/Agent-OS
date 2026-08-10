@@ -148,4 +148,4 @@ python -B scripts/test-agent-live-query-fs.py
 make agent-module-check TOOLPREFIX=riscv-none-elf-
 ```
 
-Guest event、route、wait、timeline 和调度行为由 AgentOS 专项程序验证；具体发布结果以冻结证据 bundle 为准。
+Guest event、route、wait、timeline 和调度行为由 AgentOS 专项程序直接验证；调度数字由对应性能场景的实际输出读取。

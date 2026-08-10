@@ -1,6 +1,6 @@
 # 赛题要求追踪
 
-本表把赛题任务映射到当前生产实现、主要验证和诚实边界。源码位置是评审导航，不替代冻结提交与动态证据。
+本表把赛题任务映射到当前生产实现、主要验证和诚实边界。源码位置是评审导航，实际功能与性能仍由 Host/QEMU 测试确认。
 
 ## 1. 总表
 
@@ -11,7 +11,7 @@
 | 3 | Context Path | 内核可信 Context、只读 mirror、cause/span/branch、六标签 provenance、critical denial evidence | Context/observe/provenance/evidence 模块 | Context/rollback/security Guest tests；execution-contract/Evidence Ring model | user cache 不可信；标签保守传播且不判断文本安全；历史有界 |
 | 4 | 文件属性查询 | 显式 volatile metadata、status/stage/kind 索引、inode incarnation、typed live query/resync | metadata catalog/query/object、`os/agent_live_query_events.c` | live-query checker/model；file-query Guest benchmark | 不 autoscan；不持久化 catalog；重启需重新登记 |
 | 5 | Agent Loop | 有界 event queue、watch/wait、heartbeat、route、workflow EEVDF、可表达 `PENDING` 的 Task completion core、Fence-Sealed Evidence Ring | `os/agent_ipc.c`、`os/workflow_scheduler.c`、Task/observe/evidence 模块 | scheduler model；evidence/fence/live-query model；loop/sched/IPC Guest tests | EEVDF 总 cap4=bootstrap+最多 3 fresh；16 为四波逻辑样本；当前 Task provider 同步；异常回退 legacy scheduler |
-| 6 | 综合 Agent 应用 | plain/AgentOS 同科研合同；MCP 2026-07-28/A2A v1 的 deterministic 用户态映射 | `user/src/rp_*`、`baseline_ucore/`、`host_tools/mcp_a2a_gateway.py`、`host_tools/agent_task_transport.py` | seeded/dual paired；gateway/in-memory transport tests；formal verification | gateway 尚无内核 SQ/CQ binary adapter；JSON/HTTP/OAuth/JWS 在用户态；单项归因需消融；数字只来自 bundle |
+| 6 | 综合 Agent 应用 | plain/AgentOS 同科研合同；MCP 2026-07-28/A2A v1 的 deterministic 用户态映射 | `user/src/rp_*`、`baseline_ucore/`、`host_tools/mcp_a2a_gateway.py`、`host_tools/agent_task_transport.py` | seeded/dual paired run；gateway/in-memory transport tests | gateway 尚无内核 SQ/CQ binary adapter；JSON/HTTP/OAuth/JWS 在用户态；单项归因需消融；数字来自实际测量 |
 
 ## 2. 任务一细化
 
@@ -60,7 +60,7 @@
 
 ## 5. 任务四细化
 
-| 要求 | 当前证据 |
+| 要求 | 当前实现与断言 |
 | --- | --- |
 | 文件属性 | 显式 `agent_file_meta_set()`，绑定真实 incarnation |
 | 属性查询 | scan/index 计划、候选/扫描工作量、最多 8 hits |
@@ -72,7 +72,7 @@
 
 ## 6. 任务五细化
 
-| 要求 | 当前证据 |
+| 要求 | 当前实现与断言 |
 | --- | --- |
 | watch/wait | legacy watch + typed live watch，thread-generation wait |
 | event queue | 总容量、kernel reserve、IPC/source limit，有界失败 |
@@ -119,11 +119,10 @@ audit/timeline/provenance/ledger 兼容 API 仍支持；observe crash recovery �
 | MCP/A2A gateway | transport + gateway unit tests | 用户态 syntax/import | protocol fixture/in-memory Task lifecycle replay；不覆盖内核 SQ/CQ adapter |
 | 综合任务 | Host contract selftests | 双目标 build | seeded/dual paired run |
 
-## 9. 发布证据边界
+## 9. 测试与主张边界
 
-- checker 通过不等于动态功能发布；
-- Guest `passed` 行不等于 Host 可复验 receipt；
-- Dashboard 不等于原始证据；
+- checker 通过不等于动态 Guest 功能已运行；
+- Guest `passed` 行必须同时满足 runner 的退出状态、panic 和超时检查；
 - fence receipt 不等于磁盘持久证据；
 - paired end-to-end 差异不自动证明某个内核机制贡献；
 - 16-workflow 数据是四波复用同一 bootstrap 加 12 个 fresh lifecycle 的 16 个逻辑样本，不等于 16 个并发或独立 EEVDF lifecycle，也不得写成每波 4 个 fresh；
@@ -136,4 +135,4 @@ audit/timeline/provenance/ledger 兼容 API 仍支持；observe crash recovery �
 - cancel latency 只覆盖 retained-terminal 幂等 cancel，不代表当前同步 provider 支持真正 running/pending cancel；CQ-full/sticky-resync 只作功能恢复验证；
 - provenance denial 证明结构边界生效，不证明模型没有受到 prompt injection；
 - gateway/transport unit test 只覆盖 deterministic 用户态 in-memory 映射，不等于已有内核 binary adapter、JSON/HTTP/OAuth/JWS 或完整远程互操作；
-- 只有 `evidence/releases/INDEX.md` 指向、manifest/checksum/semantic replay 都成立的 bundle 才是正式发布结果。
+- 功能主张应对应实际 Guest 场景，性能主张应对应明确负载、样本、单位和原始测量，不以材料封装提升测试结论等级。

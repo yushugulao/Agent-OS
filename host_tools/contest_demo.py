@@ -4,67 +4,32 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import html
 import importlib.util
 import json
 import os
 import re
+import shutil
 import statistics
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from committed_source_identity import committed_source_path_sample
-from evidence_delivery_contract import (
-    DeliveryContractError,
-    SAFE_GIT_CONFIG_ARGUMENTS,
-    controlled_git_environment,
-    tracked_worktree_identity,
+from safe_host_paths import (
+    absolute_lexical_path,
+    require_regular_file,
+    require_safe_directory,
 )
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 KIND = "agentos-contest-showcase"
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[0-9a-f]{16}$")
 UINT = r"(?:0|[1-9][0-9]*)"
 UINT64_MAX = (1 << 64) - 1
 CORPUS_SIZE = 24
-DEMO_SOURCE_PATHS = (
-    "agent_performance_abi.h",
-    "user/src/labdemo_ucore.c",
-    "user/src/labdemo_execprobe_ucore.c",
-    "user/include/labdemo_workload.h",
-    "user/include/agent.h",
-    "user/include/exec_policy_manifest.h",
-    "user/lib/syscall.c",
-    "user/lib/syscall_ids.h",
-    "agent_tool_abi.h",
-    "agent_observe_abi.h",
-    "os/agent_resource.c",
-    "os/agent_identity.c",
-    "os/performance_stats.c",
-    "os/performance_stats.h",
-    "os/bio.c",
-    "os/bio.h",
-    "os/fs.c",
-    "os/fs.h",
-    "os/fs_epoch.c",
-    "os/fs_epoch.h",
-    "os/virtio_disk.c",
-    "os/virtio.h",
-    "os/agent_metadata_store.c",
-    "os/vm.c",
-    "os/vm.h",
-    "os/loader.c",
-    "os/loader.h",
-    "os/syscall.c",
-    "os/syscall_ids.h",
-    "scripts/run-contest-demo.sh",
-    "host_tools/contest_demo.py",
-)
 LEGACY_PATTERNS = {
     "startup": re.compile(
         r"^labdemo_ucore: startup_barrier ready=3 released=3 chain_receipts=3$"
@@ -236,8 +201,17 @@ class ContestDemoError(RuntimeError):
 
 
 def _run_git(root: Path, *args: str) -> str:
+    root = require_safe_directory(absolute_lexical_path(root)).resolve(strict=True)
+    git_name = shutil.which("git")
+    if git_name is None:
+        raise ContestDemoError("git executable is unavailable")
+    git = require_regular_file(Path(git_name)).resolve(strict=True)
+    environment = dict(os.environ)
+    for name in tuple(environment):
+        if name.startswith("GIT_"):
+            environment.pop(name)
     result = subprocess.run(
-        ["git", *SAFE_GIT_CONFIG_ARGUMENTS, "-C", str(root), *args],
+        [str(git), "-C", str(root), *args],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -245,64 +219,20 @@ def _run_git(root: Path, *args: str) -> str:
         encoding="utf-8",
         errors="strict",
         check=False,
-        env=controlled_git_environment(),
+        env=environment,
     )
     if result.returncode != 0:
         raise ContestDemoError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
-def clean_source_identity(root: Path) -> str:
-    root = root.resolve()
-    top = Path(_run_git(root, "rev-parse", "--show-toplevel")).resolve()
-    if top != root:
-        raise ContestDemoError("source root is not the Git worktree root")
-    commit = _run_git(root, "rev-parse", "--verify", "HEAD")
+def current_source_revision(root: Path) -> str:
+    """返回用于显示的当前 revision，不限制未提交改动。"""
+
+    commit = _run_git(root, "rev-parse", "--verify", "HEAD^{commit}")
     if not COMMIT.fullmatch(commit):
         raise ContestDemoError("HEAD is not a full commit identity")
-    try:
-        tracked_clean, _tracked_digest = tracked_worktree_identity("git", root)
-    except DeliveryContractError as error:
-        raise ContestDemoError(f"tracked source identity is unsafe: {error}") from error
-    if not tracked_clean:
-        raise ContestDemoError("tracked source bytes differ from HEAD; worktree is dirty")
-    if _run_git(root, "status", "--porcelain=v1", "--untracked-files=all"):
-        raise ContestDemoError("source worktree is dirty; commit before running contest-demo")
-    if _run_git(root, "rev-parse", "--verify", "HEAD") != commit:
-        raise ContestDemoError("source commit changed during identity verification")
     return commit
-
-
-def _measurement_source_sample(
-    root: Path, commit: str, *, snapshot_root: Path | None = None
-) -> tuple[tuple[str, int, str, str], ...]:
-    try:
-        return committed_source_path_sample(
-            "git", root, commit, DEMO_SOURCE_PATHS, snapshot_root=snapshot_root
-        )
-    except DeliveryContractError as error:
-        raise ContestDemoError(
-            f"showcase source is not bound to commit: {error}"
-        ) from error
-
-
-def _source_receipt(sample: tuple[tuple[str, int, str, str], ...]) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "kind": "agentos-showcase-source-receipt",
-        "sources": [
-            {"path": path, "bytes": size, "sha256": sha256, "git_oid": oid}
-            for path, size, sha256, oid in sample
-        ],
-    }
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _regular_file(path: Path, label: str) -> Path:
@@ -1328,6 +1258,7 @@ def build_report(
     elapsed_seconds: float,
     artifacts: list[Path],
 ) -> dict[str, Any]:
+    require_safe_directory(absolute_lexical_path(source_root)).resolve(strict=True)
     if not RUN_ID.fullmatch(run_id) or int(run_id, 16) == 0:
         raise ContestDemoError("run id must be 16 nonzero lowercase hex digits")
     if not COMMIT.fullmatch(commit):
@@ -1336,17 +1267,6 @@ def build_report(
         raise ContestDemoError("elapsed time must be positive")
     if len(lab_logs) < 8 or len(lab_logs) % 2 != 0:
         raise ContestDemoError("showcase campaign requires an even set of at least 8 boots")
-    if clean_source_identity(source_root) != commit:
-        raise ContestDemoError("source identity changed during the demo")
-    with tempfile.TemporaryDirectory(prefix="agentos-showcase-source-") as temporary:
-        sample_before = _measurement_source_sample(
-            source_root, commit, snapshot_root=Path(temporary)
-        )
-    sample_after = _measurement_source_sample(source_root, commit)
-    if sample_before != sample_after:
-        raise ContestDemoError("showcase source changed while validating the Guest log")
-    if clean_source_identity(source_root) != commit:
-        raise ContestDemoError("source identity changed during showcase validation")
 
     checked_logs = [
         _regular_file(path, f"showcase Guest log {index}")
@@ -1385,37 +1305,12 @@ def build_report(
             f"showcase artifacts do not match the build manifest; "
             f"missing={missing}, extra={extra}"
         )
-    artifact_receipts = {
-        name: {
-            "bytes": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for name, path in sorted(artifact_by_name.items())
-    }
-    build_manifest = {
-        "schema_version": 1,
-        "kind": "agentos-showcase-build-manifest",
-        "run_id": run_id,
-        "source_commit": commit,
-        "kernel_artifact": "showcase-kernel",
-        "samples": [
-            {
-                "sample_id": index,
-                "order": sample["sample"]["order"],
-                "kernel_artifact": "showcase-kernel",
-                "guest_elf_artifact": f"sample-{index:02d}-labdemo.elf",
-                "fs_image_artifact": f"sample-{index:02d}-fs.img",
-                "guest_log_artifact": f"sample-{index:02d}-qemu.log",
-            }
-            for index, sample in enumerate(samples, 1)
-        ],
-    }
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
         "run": {
             "id": run_id,
-            "commit": commit,
+            "revision": commit,
             "qemu_boots": len(samples),
             "wall_seconds": round(elapsed_seconds, 3),
         },
@@ -1440,9 +1335,6 @@ def build_report(
             },
         },
         "samples": samples,
-        "source_receipt": _source_receipt(sample_after),
-        "build_manifest": build_manifest,
-        "artifacts": artifact_receipts,
     }
 
 
@@ -1562,7 +1454,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# AgentOS 科研故障恢复实测",
         "",
-        f"提交 `{report['run']['commit']}`，{report['run']['qemu_boots']} 次真实 "
+        f"revision `{report['run']['revision']}`，{report['run']['qemu_boots']} 次真实 "
         "QEMU 启动；同一内核、同一 Guest 程序与语料，每轮仅按预注册的 "
         "sample/order 重建工作负载镜像，AB/BA 等量换序。",
         "",
@@ -1779,7 +1671,7 @@ def render_html(report: dict[str, Any]) -> str:
 <title>AgentOS 科研故障恢复实测</title><style>
 :root{{--ink:#172126;--muted:#5f6d73;--line:#d9e0e2;--paper:#fff;--soft:#f4f7f6;--teal:#087d75;--blue:#174d68;--green:#16734a;font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;letter-spacing:0}}
 *{{box-sizing:border-box}}body{{margin:0;color:var(--ink);background:var(--paper);line-height:1.5}}header{{border-bottom:1px solid var(--line);background:#f8faf9}}.wrap{{width:min(calc(100% - 40px),1260px);margin:auto}}header .wrap{{display:flex;align-items:center;justify-content:space-between;min-height:68px;gap:24px}}.brand{{font-weight:800;color:var(--blue)}}.run{{font:13px ui-monospace,monospace;color:var(--muted);overflow-wrap:anywhere}}main{{padding:26px 0 54px}}h1{{font-size:40px;line-height:1.12;margin:4px 0 8px;letter-spacing:0;max-width:900px;overflow-wrap:anywhere}}.lead{{color:var(--muted);max-width:1040px;margin:0;overflow-wrap:anywhere}}.eyebrow{{font-size:12px;font-weight:800;color:var(--teal);margin:0}}.metrics{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-block:1px solid var(--line);margin:22px 0}}.metric{{padding:13px 15px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-width:0}}.metric:nth-child(4n){{border-right:0}}.metric:nth-last-child(-n+4){{border-bottom:0}}.metric span{{display:block;color:var(--muted);font-size:11px}}.metric strong{{display:block;font-size:21px;margin-top:2px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}}.metric small{{display:block;color:var(--teal);font-size:11px;overflow-wrap:anywhere}}.section{{margin-top:32px}}.section-head{{display:flex;justify-content:space-between;align-items:end;gap:30px;margin-bottom:10px}}h2{{margin:0;font-size:20px}}.section-head p{{margin:0;color:var(--muted);font-size:12px}}.table{{overflow:auto;border-block:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;min-width:960px}}th,td{{padding:11px 13px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}}th:first-child{{text-align:left}}thead th{{font-size:11px;color:var(--muted);background:var(--soft)}}tbody tr:last-child>*{{border:0}}.timeline{{list-style:none;padding:20px 0 0;margin:0;position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:8px}}.timeline:before{{content:"";position:absolute;top:31px;left:10%;right:10%;height:2px;background:var(--line)}}.timeline li{{position:relative;padding-top:30px;min-width:0;text-align:center}}.timeline .dot{{position:absolute;top:5px;left:50%;transform:translateX(-50%);width:13px;height:13px;border:3px solid var(--paper);border-radius:50%;background:var(--teal);box-shadow:0 0 0 1px var(--teal)}}.timeline span,.timeline strong{{display:block}}.timeline .time{{font:12px ui-monospace,monospace;color:var(--muted)}}.timeline .role{{font-size:12px;color:var(--teal);margin-top:5px}}.timeline strong{{font-size:14px;overflow-wrap:anywhere}}.runtime{{display:grid;grid-template-columns:repeat(6,1fr);border-block:1px solid var(--line)}}.runtime div{{padding:13px;border-right:1px solid var(--line);min-width:0}}.runtime div:last-child{{border:0}}.runtime span{{display:block;color:var(--muted);font-size:11px}}.runtime b{{font-size:19px;overflow-wrap:anywhere}}.outcome{{border-left:4px solid var(--green);background:#edf7f2;padding:15px 18px}}.outcome strong{{font-size:20px}}.outcome code{{display:block;margin-top:5px;overflow-wrap:anywhere}}footer{{border-top:1px solid var(--line);padding:18px 0;color:var(--muted);font-size:12px}}@media(max-width:900px){{h1{{font-size:32px}}.metrics{{grid-template-columns:1fr 1fr}}.metric,.metric:nth-child(4n){{border-right:0;border-bottom:1px solid var(--line)}}.metric:nth-child(odd){{border-right:1px solid var(--line)}}.metric:nth-last-child(-n+2){{border-bottom:0}}.runtime{{grid-template-columns:repeat(3,1fr)}}.timeline{{grid-template-columns:1fr}}.timeline:before{{display:none}}.timeline li{{padding:8px 0 8px 24px;border-bottom:1px solid var(--line);text-align:left}}.timeline .dot{{top:14px;left:0;transform:none}}header .wrap,.section-head{{align-items:flex-start;flex-direction:column;padding-block:13px}}}}
-</style></head><body><header><div class="wrap"><div><div class="brand">AgentOS-uCore</div><div>科研故障恢复实测</div></div><div class="run">run {_h(report['run']['id'])} · commit {_h(report['run']['commit'][:12])}</div></div></header>
+</style></head><body><header><div class="wrap"><div><div class="brand">AgentOS-uCore</div><div>科研故障恢复实测</div></div><div class="run">run {_h(report['run']['id'])} · revision {_h(report['run']['revision'][:12])}</div></div></header>
 <main class="wrap"><p class="eyebrow">同内核 · {_h(report['run']['qemu_boots'])} boot 中位数 · AB/BA 等量换序</p><h1>AgentOS 科研故障恢复测量</h1><p class="lead">每次启动由同一 Orchestrator 在 {_h(comparison['corpus_records'])} 条相同工件上运行 Compat 与 Native。端到端包含 seed、恢复、cleanup 和静稳栅栏；core 仅覆盖故障发现到可持久验证结果。workload_syscalls 绑定 observer_process，其余内核计数为 global 区间差分；首/次路径分组只暴露顺序效应，不作缓存因果归因。</p>
 <section class="metrics" aria-label="实测数值">
 <div class="metric"><span>核心耗时 p50</span><strong>{_h(_fmt_duration(compat['core_duration_us']))} → {_h(_fmt_duration(native['core_duration_us']))}</strong><small>Compat → Native</small></div>
@@ -1825,7 +1717,7 @@ def publish(report: dict[str, Any], output_dir: Path) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    identity = commands.add_parser("identity", help="print a clean source identity")
+    identity = commands.add_parser("identity", help="print the current source revision")
     identity.add_argument("--root", type=Path, required=True)
     render = commands.add_parser("render", help="verify and render a balanced Guest campaign")
     render.add_argument("--source-root", type=Path, required=True)
@@ -1842,7 +1734,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "identity":
-            print(clean_source_identity(args.root))
+            print(current_source_revision(args.root))
             return 0
         report = build_report(
             args.source_root,

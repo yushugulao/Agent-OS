@@ -49,5 +49,5 @@ generation，并把目标作为新 active path 的锚点。旧分支继续作为
 - `agentscope_ucore` 验证 scope 裁剪、有界查询和跨 workflow 隔离。
 - Evaluation v5 的多轮 workload 记录 rollback 正确率、吞吐、等待分位数和公平性。
 
-正式命令和原始证据格式见 [verification.md](verification.md) 与
-[评价方法](../evaluation.md)。
+实际 Host 与 QEMU 测试命令见 [verification.md](verification.md) 与
+[顶层验证说明](../verification.md)。

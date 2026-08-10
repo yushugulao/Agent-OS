@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""源码绑定、单 Guest 竞赛演示的专项回归测试。"""
+"""单 Guest 竞赛演示的专项回归测试。"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest import mock
 
 import contest_demo
 
@@ -17,10 +15,6 @@ import contest_demo
 RUN_ID = "0123456789abcdef"
 NONCE = int(RUN_ID, 16)
 COMMIT = "a" * 40
-SOURCE_BYTES = b"bound source\n"
-SOURCE_SAMPLE = (
-    ("source.c", len(SOURCE_BYTES), hashlib.sha256(SOURCE_BYTES).hexdigest(), "b" * 40),
-)
 
 
 def write(path: Path, text: str) -> Path:
@@ -316,15 +310,7 @@ def report_fixture(root: Path):
 
 
 def build_fixture(fixture):
-    with mock.patch.object(
-        contest_demo, "clean_source_identity", return_value=COMMIT
-    ), mock.patch.object(
-        contest_demo, "_measurement_source_sample", return_value=SOURCE_SAMPLE
-    ) as sampler:
-        report = contest_demo.build_report(*fixture)
-    assert sampler.call_count == 2
-    assert sampler.call_args_list[0].kwargs["snapshot_root"] != fixture[0]
-    return report
+    return contest_demo.build_report(*fixture)
 
 
 def test_showcase_parser_and_product_outputs() -> None:
@@ -332,12 +318,11 @@ def test_showcase_parser_and_product_outputs() -> None:
         root = Path(temporary)
         report = build_fixture(report_fixture(root))
         comparison = report["comparison"]
-        assert report["schema_version"] == 7
+        assert report["schema_version"] == 8
         assert report["run"]["qemu_boots"] == 8
-        assert report["build_manifest"]["source_commit"] == COMMIT
-        assert report["build_manifest"]["kernel_artifact"] == "showcase-kernel"
-        assert len(report["build_manifest"]["samples"]) == 8
-        assert len(report["artifacts"]) == 25
+        assert report["run"]["revision"] == COMMIT
+        assert "build_manifest" not in report
+        assert "artifacts" not in report
         assert comparison["design"] == "same_kernel_same_guest_same_corpus"
         assert comparison["lanes"]["compat"]["core_duration_us"] == 400
         assert comparison["lanes"]["native"]["core_duration_us"] == 80
@@ -598,7 +583,7 @@ def _git(root: Path, *args: str) -> None:
     )
 
 
-def test_source_identity_rejects_dirty_worktrees() -> None:
+def test_source_revision_allows_dirty_worktrees() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         _git(root, "init", "-q")
@@ -607,33 +592,10 @@ def test_source_identity_rejects_dirty_worktrees() -> None:
         tracked = write(root / "tracked.txt", "clean\n")
         _git(root, "add", "tracked.txt")
         _git(root, "commit", "-q", "-m", "fixture")
-        assert contest_demo.COMMIT.fullmatch(contest_demo.clean_source_identity(root))
+        revision = contest_demo.current_source_revision(root)
+        assert contest_demo.COMMIT.fullmatch(revision)
         tracked.write_text("dirty\n", encoding="utf-8")
-        try:
-            contest_demo.clean_source_identity(root)
-        except contest_demo.ContestDemoError as error:
-            assert "dirty" in str(error)
-        else:
-            raise AssertionError("modified source was accepted")
-
-
-def test_report_rejects_source_drift() -> None:
-    changed = (("source.c", 1, "c" * 64, "d" * 40),)
-    with tempfile.TemporaryDirectory() as temporary:
-        fixture = report_fixture(Path(temporary))
-        with mock.patch.object(
-            contest_demo, "clean_source_identity", return_value=COMMIT
-        ), mock.patch.object(
-            contest_demo,
-            "_measurement_source_sample",
-            side_effect=(SOURCE_SAMPLE, changed),
-        ):
-            try:
-                contest_demo.build_report(*fixture)
-            except contest_demo.ContestDemoError as error:
-                assert "changed" in str(error)
-            else:
-                raise AssertionError("source drift was accepted")
+        assert contest_demo.current_source_revision(root) == revision
 
 
 def test_report_rejects_artifact_basename_collisions() -> None:
@@ -643,17 +605,12 @@ def test_report_rejects_artifact_basename_collisions() -> None:
         fixture[5] = fixture[5] + [
             write(root / "other" / "showcase-kernel", "different kernel\n")
         ]
-        with mock.patch.object(
-            contest_demo, "clean_source_identity", return_value=COMMIT
-        ), mock.patch.object(
-            contest_demo, "_measurement_source_sample", return_value=SOURCE_SAMPLE
-        ):
-            try:
-                contest_demo.build_report(*fixture)
-            except contest_demo.ContestDemoError as error:
-                assert "basenames" in str(error)
-            else:
-                raise AssertionError("artifact basename collision was accepted")
+        try:
+            contest_demo.build_report(*fixture)
+        except contest_demo.ContestDemoError as error:
+            assert "basenames" in str(error)
+        else:
+            raise AssertionError("artifact basename collision was accepted")
 
 
 def main() -> int:
@@ -662,8 +619,7 @@ def main() -> int:
     test_mechanism_snapshot_deltas_are_exposed_as_numbers()
     test_legacy_workflow_receipts_fail_closed()
     test_shared_guest_failure_classifier_is_stage_aware()
-    test_source_identity_rejects_dirty_worktrees()
-    test_report_rejects_source_drift()
+    test_source_revision_allows_dirty_worktrees()
     test_report_rejects_artifact_basename_collisions()
     print("test_contest_demo: passed")
     return 0

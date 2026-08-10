@@ -93,4 +93,4 @@ python -B scripts/test-workflow-syscall-cut.py
 make agent-module-check TOOLPREFIX=riscv-none-elf-
 ```
 
-动态 fork/exec/exit、scope 与资源行为由 AgentOS Guest 专项验证；是否形成发布证据以冻结 bundle 为准。
+动态 fork/exec/exit、scope 与资源行为由 AgentOS Guest 专项直接验证；运行入口见 [verification.md](verification.md)。

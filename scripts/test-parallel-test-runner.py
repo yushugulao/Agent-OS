@@ -87,18 +87,6 @@ class ParallelTestRunnerTests(unittest.TestCase):
                             result.stdout.index("second.py status=ok"))
             self.assertIn("total=2 failed=0 jobs=2", result.stdout)
 
-    def test_evaluation_smoke_reuses_the_parallel_host_runner(self) -> None:
-        source = RUNNER.with_name("run-evaluation-suite.sh").read_text(
-            encoding="utf-8"
-        )
-        smoke = source.split("run_smoke() {", 1)[1].split(
-            "\nrun_scenario_campaign()", 1
-        )[0]
-        self.assertIn('PARALLEL_TEST_RUNNER="scripts/run-parallel-tests.py"', source)
-        self.assertIn("evaluation_jobs host AGENTOS_TEST_JOBS 24", smoke)
-        self.assertIn('"${PARALLEL_TEST_RUNNER}"', smoke)
-        self.assertNotIn('"${PYTHON_BIN}" "${test}"', smoke)
-
     def test_reports_every_failure_and_returns_nonzero(self) -> None:
         with fixture_directory() as temp_name:
             root = Path(temp_name)
@@ -132,8 +120,7 @@ class ParallelTestRunnerTests(unittest.TestCase):
                 "environment.py",
                 "import os\n"
                 "from pathlib import Path\n"
-                "blocked = ('BASH_ENV', 'ENV', 'FINAL_EVIDENCE_STAGE', "
-                "'GNUMAKEFLAGS', 'MAKEFILES', "
+                "blocked = ('BASH_ENV', 'ENV', 'GNUMAKEFLAGS', 'MAKEFILES', "
                 "'MAKEFLAGS', 'MAKEOVERRIDES', 'MFLAGS', 'PYTHONHOME', "
                 "'PYTHONINSPECT', 'PYTHONPATH', 'PYTHONSTARTUP')\n"
                 "assert not any(name in os.environ for name in blocked)\n"
@@ -160,7 +147,6 @@ class ParallelTestRunnerTests(unittest.TestCase):
             environment.update(
                 {
                     "BASH_ENV": "poison",
-                    "FINAL_EVIDENCE_STAGE": "poison-stage",
                     "MAKEFLAGS": "-j99 --eval=poison",
                     "MAKEFILES": "poison.mk",
                     "PYTHONPATH": "poison",
@@ -221,39 +207,6 @@ class ParallelTestRunnerTests(unittest.TestCase):
             payload = json.loads(manifests[0].read_text(encoding="utf-8"))
             self.assertEqual(payload["tests"][0]["returncode"], 124)
             self.assertEqual(payload["replay_argv"][-1], "slow.py")
-
-    def test_formal_evidence_keeps_shared_tests_parallel(self) -> None:
-        with fixture_directory() as temp_name:
-            root = Path(temp_name)
-            for name in ("one.py", "two.py"):
-                self.make_test(
-                    root,
-                    name,
-                    "from pathlib import Path\n"
-                    "import time\n"
-                    f"Path('{name}.ready').touch()\n"
-                    "deadline = time.monotonic() + 3\n"
-                    "while len(list(Path('.').glob('*.ready'))) != 2:\n"
-                    "    if time.monotonic() >= deadline:\n"
-                    "        raise SystemExit(9)\n"
-                    "    time.sleep(0.01)\n",
-                )
-            environment = os.environ.copy()
-            for name in (
-                "AGENTOS_BUILD_JOBS",
-                "AGENTOS_OUTER_JOBS",
-                "AGENTOS_PARALLEL_DEPTH",
-                "AGENTOS_TEST_JOBS",
-            ):
-                environment.pop(name, None)
-            environment["FINAL_EVIDENCE_STAGE"] = str(root / "stage")
-            result = self.invoke(
-                root, 2, "one.py", "two.py", env=environment
-            )
-            self.assertEqual(result.returncode, 0, result.stdout)
-            self.assertIn("start total=2 jobs=2", result.stdout)
-            self.assertIn("exclusive=0 evidence=1", result.stdout)
-            self.assertIn("total=2 failed=0 jobs=2", result.stdout)
 
     def test_exclusive_test_is_an_inventory_ordered_barrier(self) -> None:
         with fixture_directory() as temp_name:

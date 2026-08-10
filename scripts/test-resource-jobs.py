@@ -181,6 +181,25 @@ class ResourceJobsTests(unittest.TestCase):
         full_verify = makefile.split("\nfull-verify:\n", 1)[1].split("\n\n", 1)[0]
         self.assertIn("AGENTOS_QEMU_JOBS=$(call shell_quote", full_verify)
 
+    def test_full_verification_runs_real_resource_tests_directly(self) -> None:
+        full_verify = SCRIPT.with_name("run-full-verification.sh").read_text(
+            encoding="utf-8"
+        )
+        for target in (
+            "proc-reap-test",
+            "syscall-fairness-test",
+            "file-resource-test",
+            "thread-resource-test",
+            "physical-resource-test",
+            "virtio-disk-test",
+            "workflow-teardown-race-test",
+            "fs-enospc-test",
+            "fs-allocator-fault-test",
+        ):
+            with self.subTest(target=target):
+                self.assertEqual(full_verify.count(target), 1)
+        self.assertIn("scripts/run-fs-epoch-tests.sh", full_verify)
+
 
 if __name__ == "__main__":
     unittest.main()

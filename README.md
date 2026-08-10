@@ -13,10 +13,9 @@ AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是
 - [合同与 Task Channel](docs/agentos/task6-execution-contract.md)：24-node contract、Phase Lease、workflow EEVDF、Provenance 与 MCP/A2A 映射。
 - [ABI 参考](docs/agentos/api.md)：用户接口、兼容项和错误语义。
 - [要求追踪](docs/agentos/requirements-traceability.md)：任务到源码与验证入口的映射。
-- [验证说明](docs/verification.md)：构建、静态检查、QEMU 与正式证据边界。
-- [正式证据索引](evidence/releases/INDEX.md)：只从已冻结 bundle 读取发布结果。
+- [验证说明](docs/verification.md)：构建、功能、安全与性能测试入口。
 
-`results/` 和普通开发日志不是发布证据。缺少实测数据时保持 unavailable，不以公式、固定常量或历史样本填充。
+项目以实际构建、QEMU Guest 行为和可重复的性能负载判断产品状态。测试输出用于定位问题和复核结果，不再叠加与产品行为无关的发布门。
 
 ## 当前核心设计
 
@@ -58,7 +57,7 @@ AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是
 | Context Path | 内核可信记录、只读 mirror、查询/快照/分支/因果字段、六标签 provenance 与 critical denial evidence。 |
 | 文件属性查询 | 显式 volatile metadata、选择性内存索引、inode incarnation、内容摘要、typed live query。 |
 | Agent Loop | 有界事件队列、watch/wait、heartbeat、可信 IPC、workflow EEVDF 和 exactly-one terminal Task completion。 |
-| 综合应用 | plain/AgentOS 同科研合同，用户态 MCP 2026-07-28/A2A v1 gateway；完整结果只由正式双目标测量发布。 |
+| 综合应用 | plain/AgentOS 同科研合同，用户态 MCP 2026-07-28/A2A v1 gateway；功能与性能由实际双目标运行验证。 |
 
 `baseline_ucore/` 是共享通用修复但不包含 AgentOS 子系统的对照目标，不是未经修改的上游镜像。双目标总耗时用于端到端比较；单项内核机制归因需要同内核消融或专项计数。
 
@@ -76,7 +75,7 @@ Windows 首次检查：
 make doctor
 make build TOOLPREFIX=riscv-none-elf-
 make agent-module-check TOOLPREFIX=riscv-none-elf-
-make kernel-budget-check TOOLPREFIX=riscv-none-elf-
+make kernel-stack-check TOOLPREFIX=riscv-none-elf-
 ```
 
 核心机制的 Host 模型/变异测试：
@@ -101,7 +100,15 @@ make agentos-test TOOLPREFIX=riscv-none-elf-
 make dual-platform-run TOOLPREFIX=riscv-none-elf-
 ```
 
-正式采集必须遵守 [验证说明](docs/verification.md) 的干净提交、命令计数和证据绑定规则，不能用额外 QEMU 试跑替换或污染指定配对测量。
+也可以直接运行最相关的产品场景，缩短修改后的反馈时间：
+
+```bash
+AGENT_TEST_CASE=agentsecurity_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
+
+这里的 `Evidence Ring` 是内核产品的运行期安全审计能力；它与已经移除的 Host 发布证据包没有关系。详细测试选择见 [验证说明](docs/verification.md)。
 
 ## 仓库结构
 
@@ -110,10 +117,9 @@ os/                AgentOS-uCore 内核
 user/              用户库、专项程序和科研平台负载
 baseline_ucore/    不含 AgentOS 服务的共享安全基底对照
 scripts/           构建、静态合同、QEMU 与回归工具
-host_tools/        双目标测量、证据校验和 Dashboard 生成
-ci/                UAPI、预算、测试与评价清单
+host_tools/        产品模型、双目标状态比较与性能结果解析
+ci/                UAPI、安全边界与测试配置
 docs/              设计、ABI、验证和竞赛材料
-evidence/releases/ 已发布的冻结证据索引
 ```
 
 ## 来源与许可

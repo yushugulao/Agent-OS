@@ -1,12 +1,15 @@
-# 构建、验证与证据边界
+# 构建与产品验证
 
-本文说明如何验证 plain uCore 对照目标与 AgentOS-uCore 增强目标。命令和清单会继续演进，最终以 Makefile、`ci/*.json` 和对应 checker 为准。发布状态只由 [正式证据索引](../evidence/releases/INDEX.md) 指向的冻结 bundle 决定。
+本文说明如何验证 plain uCore 对照目标与 AgentOS-uCore 增强目标。验证只保留能发现产品问题的四类工作：构建、功能、安全和性能测试，不再叠加与产品行为无关的发布门。
 
-## 1. 三条边界
+## 1. 验证原则
 
-1. **开发验证不等于发布证据**：工作树上的 build/test 只说明当前源码状态。
-2. **内核 fence 不等于 Host 发布 receipt**：workflow fence 证明当前运行期的 partial evidence/credit/metadata cut；正式 bundle 还需提交、环境、原始日志和 checksum。
-3. **paired 总耗时不等于单机制归因**：双目标回答端到端差异，Credit Domain/Evidence Ring/Live Query 的贡献需同内核消融或专项工作量证明。
+1. 静态检查用于尽早发现 ABI、模块边界和栈安全问题，不替代实际运行。
+2. QEMU Guest 测试验证真实 RISC-V 内核路径，是功能与安全回归的主要依据。
+3. 性能结论必须来自实际负载的计数或测量，不从代码行数、公式或固定常量推导。
+4. plain/AgentOS 双目标只回答完整系统路径的差异；单个机制的贡献要用同内核消融或专项 benchmark 验证。
+
+内核中的 `Fence-Sealed Evidence Ring` 是产品安全机制。它记录当前启动周期内的有序事件，并由 workflow fence 生成 challenge-bound root。它不是 Host 发布材料，也不要求仓库生成 manifest 或文件校验包。
 
 ## 2. 环境检查
 
@@ -16,62 +19,115 @@ Windows：
 .\scripts\check-windows-prereqs.ps1
 ```
 
-Linux/WSL/项目工具链环境：
+Linux、WSL 或项目工具链环境：
 
 ```bash
 make doctor
 ```
 
-正式证据应记录编译器、binutils、QEMU、Python、Bash、Host/WSL 版本、命令行和环境 hash。文档中的工具链前缀是本仓库当前推荐值，实际发布必须与 manifest 一致。
+默认示例使用 `riscv-none-elf-`。本机使用其他前缀时通过 `TOOLPREFIX` 显式传入。
 
-## 3. 无 QEMU 的快速闭环
+## 3. 构建与快速检查
 
 ```bash
-python -B scripts/check-agent-uapi-layout.py
+make build TOOLPREFIX=riscv-none-elf-
+make agent-uapi-check TOOLPREFIX=riscv-none-elf-
+make agent-module-check TOOLPREFIX=riscv-none-elf-
+make kernel-stack-check TOOLPREFIX=riscv-none-elf-
+```
+
+这些命令分别发现编译/链接错误、内核与用户态 ABI 漂移、生产模块依赖错误以及真实调用图上的栈超限。它们不对源码行数、工具可执行文件哈希或发布工件做门禁。
+
+核心状态机的 Host 测试可以单独运行：
+
+```bash
 python -B scripts/test-workflow-credit-domain.py
 python -B scripts/test-agent-evidence-ring.py
 python -B scripts/test-agent-live-query-fs.py
 python -B scripts/test-workflow-fence.py
 python -B scripts/test-workflow-syscall-cut.py
-
-make agent-module-check TOOLPREFIX=riscv-none-elf-
-make kernel-budget-check TOOLPREFIX=riscv-none-elf-
-make build TOOLPREFIX=riscv-none-elf-
+python -B scripts/test-agent-execution-contract.py
+python -B scripts/test-agent-task-channel.py
+python -B host_tools/test_workflow_scheduler_model.py
+python -B host_tools/test_agent_task_transport.py
+python -B host_tools/test_mcp_a2a_gateway.py
 ```
 
-这些检查覆盖：
+这些模型和变异测试适合快速定位不变量问题；改动涉及 syscall、调度、VFS、并发或设备路径时，仍应继续运行 QEMU Guest。
 
-- active source/object 边界，retired disk metadata/observe 模块不进入生产链接；
-- UAPI 大小/offset、fence request/receipt；
-- U/P/F hard admission、批量 credit、trim 和 exact snapshot；
-- Evidence Ring ordinary/critical、ticket order、gap、seal；
-- explicit volatile metadata、typed live query 和 resync；
-- lifecycle member/closing/gates 与 fence syscall cut；
-- kernel source/text/BSS/stack 等预算。
+## 4. QEMU 功能测试
 
-若 checker 因架构切换失败，应更新 active inventory 和降低/重建合理 baseline，不应通过恢复停产模块或简单放宽硬预算规避。
-
-## 4. AgentOS Guest 测试
+完整 AgentOS Guest 回归：
 
 ```bash
 make agentos-test TOOLPREFIX=riscv-none-elf-
 ```
 
-Guest 套件的唯一 case 清单来自 `ci/kernel-budgets.json`。文档不复制易漂移的数量。测试主题包括 Agent 身份、tool、Context、scope/VFS、metadata/query、live event、IPC/wait、调度、资源、线程与 teardown。
+迭代时可以只运行与改动最相关的程序：
 
-架构切换后的强制负面用例：
+```bash
+AGENT_TEST_CASE=agentfinal_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentfs_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentloop_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
 
-- `AGENT_FILE_META_F_PERSIST` 返回 `BAD_PARAM`；
-- `AGENT_FILE_META_F_AUTOSCAN` 返回 `BAD_PARAM`；
-- observe recovery syscall 返回 `BAD_PARAM`；
-- 普通文件 create 不会无显式 set 出现在 metadata query；
-- typed watch 在缺口时要求 resync，旧 ACK 不清除新 generation；
-- fence 非 controller/跨 lifecycle/有 active operation 时拒绝或 retry；
-- receipt 明确 `METADATA_VOLATILE` 与 `PARTIAL_COVERAGE`。
+功能套件覆盖 Agent 身份与 lifecycle、tool call、Context push/query/rollback、显式 metadata 与 live query、IPC/wait、workflow fence、执行合同、Task SQ/CQ、资源回收和 teardown。每个程序必须自然退出，并由 runner 检查预期 marker、panic、超时和退出状态；单纯打印 `passed` 不能绕过这些检查。
 
-旧测试若期待 metadata 双 bank、目录 autoscan 或 observation crash recovery 成功，测试合同需要迁移，不能据此恢复旧机制。
+## 5. 安全测试
 
-## 5. plain 与 AgentOS 双目标
+下面的 Guest 程序直接验证权限边界和拒绝路径：
+
+```bash
+AGENT_TEST_CASE=agentsecurity_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agenttrust_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentscope_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=usersafety_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
+
+重点检查：
+
+- 非可信映像不能取得 Agent 身份或提升 capability；
+- lifecycle、scope、generation 和 owner 不匹配时 fail closed；
+- 计划外工具调用在副作用前被执行合同与 provenance gate 拒绝；
+- 关键拒绝写入内核 Evidence Ring，critical 区不足时受保护操作不继续；
+- 共享 SQ 页按 copy-before-validate 处理，stale handle 和重复 completion 不产生双终态；
+- `PERSIST/AUTOSCAN` 兼容标志和 observe recovery tombstone 返回 `BAD_PARAM`；
+- 用户指针、VFS 对象与资源配额的失败路径不留下半提交状态。
+
+文件系统、资源与并发故障还可以运行：
+
+```bash
+make fs-enospc-test TOOLPREFIX=riscv-none-elf-
+make fs-allocator-fault-test TOOLPREFIX=riscv-none-elf-
+make workflow-teardown-race-test TOOLPREFIX=riscv-none-elf-
+make virtio-disk-test TOOLPREFIX=riscv-none-elf-
+```
+
+## 6. 性能测试
+
+性能测试直接运行产品负载，不要求先生成测量 receipt 或打包结果：
+
+```bash
+AGENT_TEST_CASE=agentbench_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentsched_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
+
+读取结果时应同时记录工作量、样本数、单位和失败样本：
+
+- scalar/batch/Task SQ-CQ 的调用点、ABI 复制记账与 Context service-start tick；
+- scan/index 的候选量、扫描量和 query ticks；
+- EEVDF 的 Jain fairness、wakeup p50/p99、deadline miss 和普通进程进展；
+- Credit Domain 的 reserve/trim/fence 次数与资源峰值；
+- 完整科研负载的完成状态和端到端耗时。
+
+固定 ABI 字节数是结构记账，不是实测内存流量；Guest tick 不是 Host wall clock；完整系统差异也不能自动归因给某一个内核机制。
+
+## 7. plain 与 AgentOS 双目标
 
 ```bash
 make plain-platform-build TOOLPREFIX=riscv-none-elf-
@@ -79,118 +135,27 @@ make agentos-platform-build TOOLPREFIX=riscv-none-elf-
 make dual-platform-run TOOLPREFIX=riscv-none-elf-
 ```
 
-`baseline_ucore/` 是共享安全修复但没有 AgentOS 子系统的对照，不是未修改上游。两侧运行同一用户态科研 action/state 合同，Host 从各自镜像和日志提取状态，再比较规范字段。
+`baseline_ucore/` 是共享安全修复但不包含 AgentOS 子系统的对照目标，不是未经修改的上游镜像。两侧运行同一用户态科研 action/state 合同，Host 从各自文件系统镜像和 Guest 日志提取规范状态并比较。
 
-双目标验证应同时保留：
+复核一次双目标运行时，至少查看两侧退出状态、Guest 日志、状态字段一致性、缺失文件和比较摘要。调试重跑是正常开发行为，不需要维护发布次数账本；引用性能数字时只需清楚标明本次实际运行的环境与负载。
 
-- 两侧 kernel/user build 身份；
-- 两侧 QEMU command、退出状态和 Guest log；
-- Host run receipt；
-- 提取后的 state inventory、逐文件长度/hash；
-- compare summary 和原始输入；
-- target order/seed/timeout。
+## 8. Workflow fence 边界
 
-同一正式 pair 的命令计数必须预先固定。为调试增加的 QEMU 启动必须与正式 artifact 目录隔离，不能把更有利的一次挑选为正式样本。
+fence 通过 `agent_workflow_fence()`，即 `agent_run(count=0, AGENT_RUN_F_FENCE)` 发起。相关 Guest/Host 测试检查 request、controller 权限、lifecycle key、320 字节 receipt、exact credit cut、event/gap 范围、root 链以及 retry 稳定性。
 
-## 6. Workflow fence 验收
+receipt 只描述当前运行期 cut，不表示：
 
-fence 通过 `agent_workflow_fence()`，即 `agent_run(count=0, AGENT_RUN_F_FENCE)` 发起。Host/Guest 验证至少重算或检查：
+- Evidence 已持久化到磁盘；
+- metadata catalog 可在重启后恢复；
+- 普通文件内容已进入 root；
+- 所有 scheduler 或 Host 行为都被覆盖；
+- receipt 已由外部密钥签名。
 
-- request version/size/id/challenge；
-- lifecycle key、controller 权限和 fence sequence；
-- receipt 固定 320 字节；
-- flags 同时包含 partial coverage、credit exact、evidence sealed、metadata volatile；
-- `resource_used[8]` 是 trim 后 U，P 为 0；
-- credit digest 绑定 key、epoch、account key 和 U；
-- previous root/root 链、ticket range、event/gap count；
-- 相同 request id/challenge 的 retry receipt 字节一致；
-- conflicting/stale id 和 failed fence 不推进 root。
-
-receipt 不可用于以下主张：
-
-- evidence 已落盘；
-- metadata catalog 可重启恢复；
-- 普通文件内容已进入 Merkle/SHA root；
-- 所有 scheduler/Host 行为均被覆盖；
-- receipt 本身已由外部密钥签名。
-
-## 7. 正式评价流程
-
-正式入口仍按仓库版本化工具执行：
-
-```bash
-export AGENT_TEST_DURATION_PROFILE=local-e3
-make evaluation-doctor
-make evaluation-smoke
-make evaluation-run TOOLPREFIX=riscv-none-elf-
-make evaluation-verify
-make evaluation-kernel-cost TOOLPREFIX=riscv-none-elf-
-make evaluation-full-verify TOOLPREFIX=riscv-none-elf-
-make evaluation-dashboard
-make evaluation-package
-```
-
-`evaluation-package` 之后只把新 bundle 和 `evidence/releases/INDEX.md` 提交为证据
-提交 E。最后在包含 E 的干净 checkout 中显式指定包路径复核：
-
-```bash
-make evaluation-package-verify \
-  EVALUATION_BUNDLE_DIR=evidence/releases/<bundle>
-```
-
-具体依赖和选项以 `make` 输出及 [评价方法](evaluation.md) 为准。原则保持不变：
-
-1. 先冻结源码提交 C，并验证 clean tree；
-2. 在受控环境执行指定 build/QEMU/Host 命令；
-3. 原子发布 run summary、raw inventory 和 measurement receipt；
-4. 从原始日志生成派生 CSV/JSON，保存来源 hash/行号/命令/commit/run id；
-5. 生成 Dashboard，但 Dashboard 不反向成为数据源；
-6. evidence 提交 E 只加入已验证 bundle/索引，并保持可审计 C 到 E 关系。
-
-若现有正式采集器仍把已停产 metadata/observe disk recovery 当必需 artifact，应先迁移采集合同，再运行正式 campaign。不能生成伪 recovery 日志填补旧 schema。
-
-## 8. 证据等级
-
-| 等级 | 所需材料 | 可声称 |
-| --- | --- | --- |
-| Source | 源码、checker、mutation/model test | 设计/合同存在并可静态审计 |
-| Build | 固定工具链成功编译链接、预算通过 | 当前 active production image 可构建 |
-| Guest | 原始 QEMU log、退出状态、唯一 marker 和 Host parser | 指定 Guest 场景运行 |
-| Paired | 两目标同合同、固定 order/seed、两侧 receipt/state | 指定端到端样本可比较 |
-| Release | clean C、完整 raw、manifest、checksum、semantic replay、C到E历史 | 冻结 bundle 内声明可复验 |
-
-低等级不能自动升级为高等级。特别是静态 `55/55`、Guest `passed` 或 workflow `EVIDENCE_SEALED` 都不是 Release 等级。
-
-## 9. 性能阅读
-
-发布性能表必须给出单位、样本数、聚合方法、失败样本、warm/cold 定义和来源 raw。建议分别观察：
-
-- resource hot path 操作与 trim/fence 次数；
-- ordinary Context 写入和 critical compatibility projection；
-- scan/index 候选量、query ticks、live event/resync；
-- fence latency、event/gap count 与 exact credit cut；
-- paired end-to-end completion time/state parity。
-
-“超过 plain 50%”只能对预先定义、方向明确、同负载的指标逐项判断。功能通过数、代码行和缺失样本不能换算为性能提升。
-
-## 10. 清理与复现
+## 9. 清理
 
 ```bash
 make clean-workspace-dry-run
 make clean-workspace
 ```
 
-清理前先确认正式 raw 已进入隔离 artifact 目录。不要在正式 pair 中间运行会改写镜像、清空状态或增加 QEMU 次数的命令。
-
-## 11. 当前架构负面声明
-
-| 名称 | 当前事实 |
-| --- | --- |
-| metadata persistence/autoscan | 不支持，legacy flags 被拒绝 |
-| metadata crash catalog | 不存在，catalog/index/watch 全部 volatile |
-| observation recovery | syscall tombstone，固定 `BAD_PARAM` |
-| durable audit receipt | 只有 fence-sealed 运行期语义；`DURABLE` 为兼容别名 |
-| multi-stage retirement | 不作为当前 lifecycle；使用 members/closing/gates |
-| full evidence coverage | 不提供；receipt 明确 partial coverage |
-
-正式说明、演示口径和 Dashboard 文案都必须遵守这些边界。
+`clean-workspace-dry-run` 先显示将清理的构建和运行输出。测试日志可以按排障需要保留或删除。

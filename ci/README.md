@@ -1,65 +1,38 @@
-# Kernel budgets
+# Test Configuration
 
-`kernel-budgets.json` is the only source of truth for growth limits. It records
-reviewed baselines and maxima; this document intentionally does not duplicate
-values that change with the candidate.
+`ci/` contains machine-readable layouts and workload definitions used by
+product tests. These files are ordinary test inputs, not an independent
+acceptance system.
 
-The budget gate covers:
+The useful checks are deliberately narrow:
 
-- production kernel source lines and test-only profile owners;
-- stripped ELF, raw image, text, data and BSS size;
-- `struct proc`, thread-stack capacity and boot-stack capacity;
-- lazy Agent-state pages, ordinary/reserved pools and resource domains;
-- module ownership, exported namespaces, dependency edges and SCC size;
-- GCC call-graph stack usage, including registered indirect calls; and
-- the complete Agent QEMU suite when a calibrated duration profile is used.
+- UAPI and retained disk-format sizes/offsets;
+- the dual-target state-file allowlist; and
+- actual performance experiment loads and operation counts.
 
-Measurements use the pinned local toolchain profile. Generated files, build
-outputs and documentation are excluded from source size. Test-only kernel
-owners are measured separately and cannot hide production growth. A value
-below its maximum passes without moving the baseline; changing a limit requires
-normal code review.
-
-## Verification
-
-Run the fast structural gate while developing:
+Run the inexpensive checks while developing:
 
 ```sh
-make kernel-budget-check
+make agent-uapi-check
+make agent-module-check
+make kernel-stack-check
 ```
 
-Run the complete local acceptance campaign before publishing evidence:
+Run real Guest behavior when a change can affect kernel semantics:
 
 ```sh
-make full-verify
+make agentos-test
 ```
 
-The checker output and the selected evidence bundle are authoritative for the
-candidate's current values. `make local-check` and `make full-verify` choose
-bounded build, Host-test and QEMU concurrency from available CPU and memory.
-Nested Make and QEMU lanes share the outer budget instead of opening independent
-worker pools.
+For a focused iteration, select the relevant Guest program directly:
 
-## Duration calibration
+```sh
+AGENT_TEST_CASE=agentcontract_ucore make agentos-test
+AGENT_TEST_CASE=agentsecurity_ucore make agentos-test
+AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test
+```
 
-Wall-clock limits are platform-specific. A calibrated profile is accepted only
-from repeated complete runs of one clean commit under the pinned compiler,
-QEMU, Python, Bash, Make and Git identities. The collector binds the commit
-tree, executable hashes, case inventory, Guest logs and monotonic timings into
-content-addressed attestations. Source or tool changes invalidate the profile.
-
-Use `AGENT_TEST_DURATION_PROFILE=none` outside the calibrated platform. This
-keeps all functional cases and semantic checks but makes no wall-clock claim.
-Targeted development cases likewise never satisfy the full-suite duration gate.
-
-## Delivery
-
-GitLab is used for source and committed evidence; the project assumes no remote
-Runner. Release acceptance is based on the local clean evidence bundle, offline
-semantic verification and the append-only release index. The compatibility
-field `remote_ci.status` therefore remains `not-attached`.
-
-Special persistence, power-cut and expected-fault profiles are explicit in the
-runner contract. Ordinary cases must terminate naturally with status zero;
-timeouts, output overflow, unarmed faults, late panic and forced termination
-fail closed.
+A timeout remains a test failure, but it is an operational bound rather than a
+machine-specific performance claim. Expected-fault and persistence cases must
+still terminate with their documented marker and status; unexpected panic,
+output overflow or forced termination fails the test.

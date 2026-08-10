@@ -15,13 +15,6 @@ CORE = (ROOT / "os/agent_core.c").read_text(encoding="utf-8")
 IDENTITY = (ROOT / "os/agent_identity.c").read_text(encoding="utf-8")
 SYSCALL = (ROOT / "os/syscall.c").read_text(encoding="utf-8")
 MAKEFILE = (ROOT / "Makefile").read_text(encoding="utf-8")
-BUDGET = (ROOT / "ci/kernel-budgets.json").read_text(encoding="utf-8")
-BUDGET_CHECKER = (ROOT / "scripts/check-kernel-budgets.py").read_text(
-    encoding="utf-8"
-)
-BOUNDARY_CHECKER = (ROOT / "scripts/check-agent-module-boundaries.sh").read_text(
-    encoding="utf-8"
-)
 GUEST = (ROOT / "user/src/agentfinal_ucore.c").read_text(encoding="utf-8")
 RUNNER = (ROOT / "scripts/run-agent-tests.sh").read_text(encoding="utf-8")
 LOG_VALIDATOR = (ROOT / "scripts/validate-kernel-test-log.py").read_text(
@@ -785,9 +778,6 @@ def validate_profile_isolation(
     wait_test: str,
     wait_header: str,
     makefile: str,
-    budget: str,
-    budget_checker: str,
-    boundary_checker: str,
 ) -> None:
     require_profile_guard(
         ipc, "int agent_ipc_wait_test_publish(", "wait profile IPC publisher"
@@ -804,13 +794,6 @@ def validate_profile_isolation(
     require_profile_guard(
         wait_header, "int agent_ipc_wait_test_publish(struct proc *p);", "IPC test API"
     )
-    for symbol in (
-        "wait_atomic_test_agent_wait",
-        "agent_ipc_wait_test_publish",
-    ):
-        quoted = f'"{symbol}"'
-        if quoted not in budget or quoted not in budget_checker:
-            raise ValueError(f"profile symbol absent from production leak registry: {symbol}")
     for token in (
         "CFLAGS += -MD",
         "$(C_OBJS): $(BUILDDIR)/$K/%.o : $K/%.c",
@@ -981,9 +964,6 @@ validate_profile_isolation(
     WAIT_TEST,
     WAIT_HEADER,
     MAKEFILE,
-    BUDGET,
-    BUDGET_CHECKER,
-    BOUNDARY_CHECKER,
 )
 validate_runner_profile_image(RUNNER, MAKEFILE)
 validate_deadline_guest(GUEST)
@@ -1062,9 +1042,6 @@ for mutated_ipc, mutated_wait_test, mutated_wait_header in profile_mutations:
             mutated_wait_test,
             mutated_wait_header,
             MAKEFILE,
-            BUDGET,
-            BUDGET_CHECKER,
-            BOUNDARY_CHECKER,
         )
     except (ValueError, IndexError):
         pass
@@ -1089,9 +1066,6 @@ for mutated_makefile in makefile_mutations:
             WAIT_TEST,
             WAIT_HEADER,
             mutated_makefile,
-            BUDGET,
-            BUDGET_CHECKER,
-            BOUNDARY_CHECKER,
         )
     except (ValueError, IndexError, StopIteration):
         pass

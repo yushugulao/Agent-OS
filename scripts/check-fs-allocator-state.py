@@ -152,10 +152,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     agent_core = sources["os/agent_core.c"]
     client = sources["user/src/fsallocfault_ucore.c"]
     image_tool = sources["scripts/fs-allocator-image.py"]
-    evidence = sources["scripts/fs-allocator-evidence.py"]
-    host_probe = sources["scripts/host-probe-toolchain.sh"]
-    trusted_entry = sources["scripts/trusted-python-entry.py"]
-    agent_runner = sources["scripts/agent_test_runner.py"]
 
     for token in (
         "#define FS_QMAP_STATE_MASK 0xc0000000U",
@@ -629,142 +625,31 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     if "parent passed" in client:
         failures.append("allocator client retains a hard-coded pass marker")
     for token, label in (
-        ("source \"${SCRIPT_DIR}/evidence-wiring.sh\"", "evidence wiring"),
-        ("evidence_append_guest_log", "Guest evidence append"),
         ("build_profile_kernel", "single profile build"),
-        (
-            "fsalloc_trusted_python scripts/fs-allocator-evidence.py record-case",
-            "semantic raw-image evidence verification",
-        ),
-        ("record-stage", "runtime durability receipt capture"),
-        ("record-mutation", "dynamic barrier-deletion mutation"),
-        ("verify-archive", "self-contained evidence archive verification"),
+        ("build_mutant_kernel", "delete-FLUSH negative kernel"),
+        ("scripts/fs-allocator-image.py verify-case-raw", "raw-image verification"),
+        ("--require-metadata-cow", "metadata COW verification"),
+        ('\"code\":\"FS_ALLOCATOR_IMAGE_INVALID\"', "mutant rejection check"),
         ('cp "${user_elf}" "${user_target}/elf/"', "paired ELF image"),
         (
             'run_case "${tag}" "${marker}" powercut fault',
             "SIGKILL power-cut completion",
         ),
         ("grace=0s", "zero-grace power cut"),
-        ("scripts/fs-allocator-evidence.py clean-exec", "controlled child environment"),
-        ('PRIVATE_HOME="${TMPDIR_FSALLOC}/home"', "private formal HOME"),
-        ("--internal-hermetic-shell", "clean formal shell bootstrap"),
-        ("/usr/bin/env -i", "empty formal shell environment"),
-        ("unset ASAN_OPTIONS UBSAN_OPTIONS", "untrusted sanitizer option removal"),
-        ('"${MAKE_BIN}" build', "attested absolute Make invocation"),
-        ('CC="${CROSS_GCC}"', "attested cross compiler invocation"),
-        ('LD="${CROSS_LD}"', "attested cross linker invocation"),
-        ("materialize-source", "captured source materialization"),
-        ('cd "${SOURCE_SNAPSHOT}"', "private source-root build"),
-        ("source_boundary before-profile-build", "kernel build preflight"),
-        ("source_boundary before-seal", "seal source preflight"),
-        ("source_boundary after-archive-verify", "final source recheck"),
     ):
         if token not in runner:
             failures.append(f"allocator runner missing {label}")
     if "Draft dynamic" in runner or "make -B build" in runner:
         failures.append("allocator runner retains draft or per-case kernel build")
-    runner_order = (
-        "capture-run",
-        'TRUSTED_PYTHON_ENTRY="${EVIDENCE_ROOT}/sources/scripts/trusted-python-entry.py"',
-        "materialize-source",
-        'cd "${SOURCE_SNAPSHOT}"',
-        "source_boundary post-materialize",
-        "source_boundary before-profile-build",
-        "source_boundary before-seal",
-        "seal-run",
-        "source_boundary after-seal",
-        "source_boundary before-pack",
-        "pack",
-        "source_boundary after-archive-verify",
-    )
-    cursor = 0
-    for token in runner_order:
-        found = runner.find(token, cursor)
-        if found < 0:
-            failures.append(f"allocator runner missing or misordered {token}")
-            break
-        cursor = found + len(token)
-    if re.search(
-        r'^[ \t]*"\$\{PYTHON_BIN\}"(?!\s+-I\s+-S\s+-B)',
-        runner,
-        re.MULTILINE,
-    ):
-        failures.append("allocator runner contains a non-isolated Python invocation")
     if not re.search(
         r'runner_argv=\(\s*"\$\{PYTHON_BIN\}"\s+-I\s+-S\s+-B\s+'
-        r'"\$\{TRUSTED_PYTHON_ENTRY\}"\s+scripts/agent_test_runner\.py',
+        r'scripts/agent_test_runner\.py',
         runner,
         re.DOTALL,
     ):
-        failures.append("allocator QEMU runner is not bound to trusted isolated Python")
+        failures.append("allocator QEMU runner does not directly invoke agent_test_runner.py")
     if runner.count('"${MAKE_BIN}" build') != 2:
-        failures.append("allocator kernel builds are not both bound to attested Make")
-
-    for token, label in (
-        ("CONTROLLED_ENV_PASSTHROUGH", "formal environment allowlist"),
-        ("def controlled_environment", "formal environment constructor"),
-        ("def clean_exec", "controlled child launcher"),
-        ('"PATH": "/usr/bin:/bin"', "fixed formal executable search path"),
-        ("def _git_head_source_payloads", "Git HEAD blob verifier"),
-        ('"ls-files", "-v", "-z"', "Git index flag verifier"),
-        ('"cat-file", "blob"', "Git committed blob reader"),
-        ("def attested_tool_path", "attested tool resolver"),
-        ("def _normalize_case_build_argv", "canonical user build argv"),
-        ("differs from the canonical profile build", "canonical kernel build argv"),
-        (
-            '"ASAN_OPTIONS": "detect_leaks=0:halt_on_error=1"',
-            "fixed ASAN fail-closed policy",
-        ),
-        ('"UBSAN_OPTIONS": "halt_on_error=1"', "fixed UBSAN fail-closed policy"),
-        ("def materialize_source", "source materializer"),
-        ("def verify_source_boundary", "source boundary verifier"),
-        ('"tree": tree', "Git tree attestation"),
-        ("records_after != source_records", "capture double sampling"),
-    ):
-        if token not in evidence:
-            failures.append(f"allocator evidence missing {label}")
-    capture_start = evidence.find("def capture_run(")
-    capture_end = evidence.find("\ndef ", capture_start + 1)
-    capture_body = evidence[capture_start:capture_end]
-    if capture_body.count("_require_sources_match_commit") != 2:
-        failures.append("capture-run does not double-sample committed source blobs")
-    boundary_start = evidence.find("def verify_source_boundary(")
-    boundary_end = evidence.find("\ndef ", boundary_start + 1)
-    boundary_body = evidence[boundary_start:boundary_end]
-    boundary_cursor = 0
-    for pattern in (
-        r"_load_run\s*\(",
-        r"_git_source_state\s*\(",
-        r"commit\s*!=\s*run\[",
-        r"tree\s*!=\s*run\[",
-        r"or\s+status",
-        r"_verify_source_tree_against_run\s*\(\s*live_source_root",
-        r"_verify_source_tree_against_run\s*\(\s*snapshot_root",
-    ):
-        match = re.search(pattern, boundary_body[boundary_cursor:], re.DOTALL)
-        if match is None:
-            failures.append(f"verify_source_boundary: missing or misordered {pattern}")
-            break
-        boundary_cursor += match.end()
-    if "fsalloc_trusted_python scripts/host_probe_toolchain.py" not in host_probe:
-        failures.append("host probe setup bypasses trusted Python")
-    if host_probe.count("fsalloc_clean_exec") < 2:
-        failures.append("host probe compile/run bypasses controlled environment")
-    for entrypoint in (
-        '"scripts/agent_test_runner.py"',
-        '"scripts/check-fs-allocator-state.py"',
-        '"scripts/host_probe_toolchain.py"',
-        '"scripts/test-fs-allocator-image.py"',
-    ):
-        if entrypoint not in trusted_entry:
-            failures.append(f"trusted Python allowlist missing {entrypoint}")
-    if not re.search(
-        r"def\s+_powercut_supervisor_command\s*\(.*?return\s*\[\s*sys\.executable,\s*"
-        r'"-I",\s*"-S",\s*"-B",',
-        agent_runner,
-        re.DOTALL,
-    ):
-        failures.append("powercut supervisor loses isolated Python flags")
+        failures.append("allocator profile and mutant kernels are not both built")
 
     require_order(
         function_body(virtio, "disk_durability_barrier"),
@@ -831,9 +716,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         "required=require_metadata_cow",
     ):
         if token not in image_tool:
-            failures.append(f"metadata COW evidence invariant missing {token}")
-    if evidence.count('"--require-metadata-cow"') < 3:
-        failures.append("formal allocator evidence does not require metadata COW banks")
+            failures.append(f"metadata COW image validation invariant missing {token}")
     require_order(
         function_body(fs, "fs_create"),
         "fs_create busy rollback",
@@ -919,10 +802,6 @@ def main() -> int:
         "os/agent_core.c",
         "user/src/fsallocfault_ucore.c",
         "scripts/fs-allocator-image.py",
-        "scripts/fs-allocator-evidence.py",
-        "scripts/host-probe-toolchain.sh",
-        "scripts/trusted-python-entry.py",
-        "scripts/agent_test_runner.py",
     )
     sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in paths}
     failures = check_sources(sources)
@@ -1070,48 +949,18 @@ def main() -> int:
         ),
         "missing-verifier": (
             "scripts/run-fs-allocator-fault-tests.sh",
-            "fsalloc_trusted_python scripts/fs-allocator-evidence.py record-case",
-            "fsalloc_trusted_python scripts/fs-allocator-evidence.py record-stage",
+            "scripts/fs-allocator-image.py verify-case-raw",
+            "scripts/fs-allocator-image.py validate",
         ),
-        "nonisolated-formal-python": (
+        "metadata-cow-check-disabled": (
             "scripts/run-fs-allocator-fault-tests.sh",
-            '"${PYTHON_BIN}" -I -S -B "${TRUSTED_PYTHON_ENTRY}"',
-            '"${PYTHON_BIN}" "${TRUSTED_PYTHON_ENTRY}"',
+            "--require-metadata-cow --output",
+            "--output",
         ),
-        "lost-clean-environment": (
+        "mutant-rejection-disabled": (
             "scripts/run-fs-allocator-fault-tests.sh",
-            "scripts/fs-allocator-evidence.py clean-exec --",
-            "scripts/fs-allocator-evidence.py verify --",
-        ),
-        "live-tree-build": (
-            "scripts/run-fs-allocator-fault-tests.sh",
-            'cd "${SOURCE_SNAPSHOT}"',
-            'cd "${LIVE_SOURCE_ROOT}"',
-        ),
-        "missing-final-source-recheck": (
-            "scripts/run-fs-allocator-fault-tests.sh",
-            "source_boundary after-archive-verify",
-            ": # final source recheck deleted",
-        ),
-        "nonisolated-powercut-supervisor": (
-            "scripts/agent_test_runner.py",
-            'sys.executable,\n        "-I",\n        "-S",\n        "-B",',
-            "sys.executable,",
-        ),
-        "missing-hermetic-shell": (
-            "scripts/run-fs-allocator-fault-tests.sh",
-            "/usr/bin/env -i",
-            "/usr/bin/env",
-        ),
-        "unbound-make-tool": (
-            "scripts/run-fs-allocator-fault-tests.sh",
-            '"${MAKE_BIN}" build',
-            "make build",
-        ),
-        "missing-head-blob-sample": (
-            "scripts/fs-allocator-evidence.py",
-            "_require_sources_match_commit(source_root, git, commit, source_payloads)",
-            "_require_guest_source_inventory(source_root, \"captured\")",
+            '\"code\":\"FS_ALLOCATOR_IMAGE_INVALID\"',
+            '\"code\":\"IGNORED\"',
         ),
     }
     for name, (path, old, new) in mutations.items():

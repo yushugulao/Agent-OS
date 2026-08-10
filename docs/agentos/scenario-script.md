@@ -9,15 +9,15 @@
 make contest-demo
 ```
 
-该命令生成评委可浏览的本地演示和数据页面。页面展示实际观测值、原始证据入口
-和测量环境，不以“测试通过”作为性能结论。需要复核完整内核验收时运行：
+该命令运行评委可观察的本地演示。演示展示实际行为和测量值，不以“测试通过”
+作为性能结论。需要复核完整内核行为时运行：
 
 ```bash
-make full-verify
+make agentos-test
 ```
 
-完整 case 集、顺序和时长策略由 `ci/kernel-budgets.json` 管理，本文不复制清单。
-正式结论只引用 [release evidence](../../evidence/releases/INDEX.md)。
+完整 case 集由 QEMU runner 维护，本文不复制易漂移的数量。需要聚焦演示中的某条
+路径时可设置 `AGENT_TEST_CASE` 直接运行对应 Guest 程序。
 
 ## 综合科研流程
 
@@ -55,7 +55,7 @@ workflow 内的最小消息路由：
 | resource/BSS/stack 指标 | 性能收益没有通过隐藏常驻内存或栈增长获得 |
 
 串口出现 `labdemo_ucore: passed` 与 `labdemo_ucore: parent passed` 表示该次场景
-完成；性能结论仍应从带环境指纹的评价 CSV 和 Dashboard 读取。
+完成；性能结论仍应读取该次实际运行的工作量、tick 和 Host 时间，并说明样本与单位。
 
 ## 定向讲解
 
@@ -76,6 +76,6 @@ workflow 内的最小消息路由：
 make run INIT_PROC=agentbench_ucore CHAPTER=agent LOG=error
 ```
 
-安全、掉电恢复、VirtIO 故障和 teardown 竞争属于验收证据，不占用主演示叙事。
-对应入口和证据边界见 [验证说明](verification.md) 与
+安全、掉电恢复、VirtIO 故障和 teardown 竞争属于产品回归，不占用主演示叙事。
+对应入口和测试边界见 [验证说明](verification.md) 与
 [要求追踪表](requirements-traceability.md)。

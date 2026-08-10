@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -272,49 +271,13 @@ def main() -> int:
         assert list(repo.iterdir()) == [], "run coordination must not dirty the repository"
 
         worktree = root / "worktree"
-        common_git = root / "common.git"
         worktree.mkdir()
-        common_git.mkdir()
-        (worktree / ".git").write_text("gitdir: ../common.git/worktrees/w1\n", encoding="utf-8")
-        git_result = subprocess.CompletedProcess(
-            ["git", "rev-parse", "--git-common-dir"],
-            0,
-            stdout="../common.git\n",
-            stderr="",
-        )
-        with mock.patch.object(runner.subprocess, "run", return_value=git_result):
-            lock_path = runner._run_lock_path(worktree)
-            assert lock_path.parent == common_git.resolve()
-
-    # MSYS2 会把 Windows Git 写入的绝对 gitdir 视作相对 POSIX 路径，必须通过
-    # cygpath 转换，不能直接拼接到工作树下。
-        windows_git_dir = "E:/shared/repository/.git"
-        if not Path(windows_git_dir).is_absolute():
-            windows_git_result = subprocess.CompletedProcess(
-                ["git", "rev-parse", "--git-common-dir"],
-                0,
-                stdout=windows_git_dir + "\n",
-                stderr="",
-            )
-            converted_git_result = subprocess.CompletedProcess(
-                ["cygpath", "-u", windows_git_dir],
-                0,
-                stdout=str(common_git.resolve()) + "\n",
-                stderr="",
-            )
-            with mock.patch.object(
-                runner.subprocess,
-                "run",
-                side_effect=(windows_git_result, converted_git_result),
-            ) as run:
-                lock_path = runner._run_lock_path(worktree)
-            assert lock_path.parent == common_git.resolve()
-            assert run.call_args_list[1].args[0] == [
-                "cygpath", "-u", windows_git_dir,
-            ]
+        lock_path = runner._run_lock_path(worktree)
+        assert lock_path.parent.parent.name == "agentos-repo-locks"
+        assert runner._run_lock_path(worktree) == lock_path
         with runner.exclusive_repo_run_lock(worktree):
             pass
-        assert sorted(path.name for path in worktree.iterdir()) == [".git"]
+        assert list(worktree.iterdir()) == []
 
         timeout_log = root / "timed-command.log"
         timeout_code = runner.run_command(
@@ -487,186 +450,6 @@ def main() -> int:
         assert cleanup_failure_code == runner.WSL_CLEANUP_UNVERIFIED_EXIT_CODE
         assert "wsl cleanup verified=0" in read(root / "cleanup-unverified.log")
 
-        commit = "1" * 40
-        clean_head = subprocess.CompletedProcess(
-            [], 0, stdout=commit + "\n", stderr=""
-        )
-        clean_status = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        clean_diff = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        clean_top = subprocess.CompletedProcess(
-            [], 0, stdout=str(repo.resolve()) + "\n", stderr=""
-        )
-        exact_digest = "e" * 64
-        with (
-            mock.patch.object(
-                runner.subprocess,
-                "run",
-                side_effect=[clean_top, clean_head, clean_status, clean_diff],
-            ) as source_run,
-            mock.patch.object(
-                runner,
-                "tracked_worktree_identity",
-                return_value=(True, exact_digest),
-            ) as exact_identity,
-        ):
-            source_identity = runner.capture_source_identity(repo)
-        assert source_identity == {
-            "source_commit": commit,
-            "source_tree_clean": True,
-            "source_tracked_sha256": hashlib.sha256(
-                ("\0\0" + exact_digest).encode("ascii")
-            ).hexdigest(),
-        }
-        assert "--untracked-files=no" in source_run.call_args_list[2].args[0]
-        for git_call in source_run.call_args_list[1:]:
-            arguments = git_call.args[0]
-            assert arguments[arguments.index("-C") + 1] == str(repo.resolve())
-        assert exact_identity.call_args.args[1] == repo.resolve()
-
-        for invalid_root in ("relative/root\n", "one\ntwo\n"):
-            try:
-                runner._normalize_git_toplevel(repo.resolve(), invalid_root)
-            except ValueError:
-                pass
-            else:
-                raise AssertionError(f"invalid Git root accepted: {invalid_root!r}")
-        unrelated_root = root / "unrelated-root"
-        unrelated_root.mkdir()
-        try:
-            runner._normalize_git_toplevel(
-                repo.resolve(), str(unrelated_root.resolve()) + "\n"
-            )
-        except ValueError as error:
-            assert "outside" in str(error)
-        else:
-            raise AssertionError("Git root outside the requested worktree was accepted")
-
-        windows_top = "E:/shared/repository"
-        if not Path(windows_top).is_absolute():
-            converted_top = subprocess.CompletedProcess(
-                ["cygpath"], 0, stdout=str(repo.resolve()) + "\n", stderr=""
-            )
-            with mock.patch.object(
-                runner.subprocess, "run", return_value=converted_top
-            ) as convert_top:
-                normalized_top = runner._normalize_git_toplevel(
-                    repo.resolve(), windows_top + "\n"
-                )
-            assert normalized_top == repo.resolve()
-            assert convert_top.call_args.args[0] == [
-                "cygpath", "-a", "-u", windows_top,
-            ]
-        dirty_status = subprocess.CompletedProcess(
-            [], 0, stdout=" M os/proc.c\n", stderr=""
-        )
-        dirty_diff = subprocess.CompletedProcess(
-            [], 0, stdout="diff --git a/os/proc.c b/os/proc.c\n", stderr=""
-        )
-        with (
-            mock.patch.object(
-                runner.subprocess,
-                "run",
-                side_effect=[clean_top, clean_head, dirty_status, dirty_diff],
-            ),
-            mock.patch.object(
-                runner,
-                "tracked_worktree_identity",
-                return_value=(False, "d" * 64),
-            ),
-        ):
-            dirty_identity = runner.capture_source_identity(repo)
-        assert dirty_identity["source_commit"] == commit
-        assert dirty_identity["source_tree_clean"] is False
-        assert dirty_identity["source_tracked_sha256"] != source_identity[
-            "source_tracked_sha256"
-        ]
-        changed_head = subprocess.CompletedProcess(
-            [], 0, stdout="2" * 40 + "\n", stderr=""
-        )
-        with (
-            mock.patch.object(
-                runner.subprocess,
-                "run",
-                side_effect=[clean_top, changed_head, clean_status, clean_diff],
-            ),
-            mock.patch.object(
-                runner,
-                "tracked_worktree_identity",
-                return_value=(True, exact_digest),
-            ),
-        ):
-            try:
-                runner.verify_source_identity(repo, source_identity)
-            except ValueError as error:
-                assert "changed" in str(error)
-            else:
-                raise AssertionError("mid-run HEAD change was accepted")
-
-        for hidden_flag in ("--assume-unchanged", "--skip-worktree"):
-            hidden_repo = root / hidden_flag.removeprefix("--")
-            hidden_repo.mkdir()
-
-            def hidden_git(*arguments: str) -> None:
-                subprocess.run(
-                    ["git", *arguments],
-                    cwd=hidden_repo,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-
-            hidden_git("init", "-q")
-            hidden_git("config", "user.email", "runner@example.invalid")
-            hidden_git("config", "user.name", "Runner Test")
-            tracked = hidden_repo / "source.c"
-            tracked.write_text("int value = 1;\n", encoding="ascii")
-            hidden_git("add", "source.c")
-            hidden_git("commit", "-q", "-m", "source")
-            hidden_git("update-index", hidden_flag, "source.c")
-            tracked.write_text("int value = 2;\n", encoding="ascii")
-            try:
-                runner.capture_source_identity(hidden_repo)
-            except ValueError as error:
-                assert "hidden or nonstandard" in str(error), error
-            else:
-                raise AssertionError(f"hidden tracked change accepted: {hidden_flag}")
-
-        nested_repo = root / "nested-source-repo"
-        nested_repo.mkdir()
-
-        def nested_git(*arguments: str) -> None:
-            subprocess.run(
-                ["git", *arguments],
-                cwd=nested_repo,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-
-        nested_git("init", "-q")
-        nested_git("config", "user.email", "runner@example.invalid")
-        nested_git("config", "user.name", "Runner Test")
-        source_subdir = nested_repo / "baseline_ucore"
-        source_subdir.mkdir()
-        (source_subdir / "kernel.c").write_text(
-            "int kernel = 1;\n", encoding="ascii"
-        )
-        outside_source = nested_repo / "shared-contract.txt"
-        outside_source.write_text("contract=v1\n", encoding="ascii")
-        nested_git("add", "-A")
-        nested_git("commit", "-q", "-m", "nested source")
-        root_identity = runner.capture_source_identity(nested_repo)
-        subdir_identity = runner.capture_source_identity(source_subdir)
-        assert root_identity == subdir_identity
-        assert subdir_identity["source_tree_clean"] is True
-        outside_source.write_text("contract=tampered\n", encoding="ascii")
-        dirty_subdir_identity = runner.capture_source_identity(source_subdir)
-        assert dirty_subdir_identity["source_tree_clean"] is False
-        assert dirty_subdir_identity["source_tracked_sha256"] != subdir_identity[
-            "source_tracked_sha256"
-        ]
-        outside_source.write_text("contract=v1\n", encoding="ascii")
-
         artifact_repo = root / "artifact-repo"
         (artifact_repo / "build").mkdir(parents=True)
         (artifact_repo / "nfs").mkdir()
@@ -680,20 +463,15 @@ def main() -> int:
         artifact_run.mkdir()
         artifacts = runner.archive_runtime_artifacts(artifact_repo, artifact_run)
         assert set(artifacts) == {"kernel", "image_input", "image_final"}
-        for name, receipt in artifacts.items():
-            archived = artifact_run / receipt["path"]
-            assert archived.stat().st_size == receipt["bytes"]
-            assert hashlib.sha256(archived.read_bytes()).hexdigest() == receipt["sha256"]
+        for artifact in artifacts.values():
+            archived = artifact_run / artifact["path"]
+            assert archived.stat().st_size == artifact["bytes"]
+            assert "sha256" not in artifact
 
         bound_repo = root / "bound-repo"
         (bound_repo / "nfs").mkdir(parents=True)
         (bound_repo / "nfs" / "fs-copy.img").write_bytes(b"image")
         bound_run = root / "bound-run"
-        bound_identity = {
-            "source_commit": commit,
-            "source_tree_clean": False,
-            "source_tracked_sha256": hashlib.sha256(b"dirty tracked state").hexdigest(),
-        }
 
         def fake_observed(
             command: list[str], log_path: Path, timeout_seconds: int, **kwargs: object
@@ -735,12 +513,6 @@ def main() -> int:
             return {"status": "ready", "extracted_state_files": 1}
 
         with (
-            mock.patch.object(
-                runner, "capture_source_identity", return_value=bound_identity
-            ) as source_capture,
-            mock.patch.object(
-                runner, "verify_source_identity", return_value=bound_identity
-            ) as source_verify,
             mock.patch.object(runner, "adaptive_build_jobs", return_value=4),
             mock.patch.object(
                 runner, "run_command", side_effect=[0, 0]
@@ -754,31 +526,24 @@ def main() -> int:
             mock.patch.object(
                 runner,
                 "archive_runtime_artifacts",
-                return_value={"kernel": {"sha256": "3" * 64}},
+                return_value={"kernel": {"path": "artifacts/kernel", "bytes": 6}},
             ),
         ):
             bound_summary = runner.run_seeded_ucore(
                 bound_repo, bound_run, 5, "Ubuntu"
             )
         assert bound_summary["passed"] is True
-        assert bound_summary["source_commit"] == commit
-        assert bound_summary["source_tree_clean"] is False
-        assert bound_summary["source_tracked_sha256"] == bound_identity[
-            "source_tracked_sha256"
-        ]
+        assert not any(key.startswith("source_") for key in bound_summary)
         assert bound_summary["build_jobs"] == 4
         build_script = build_commands.call_args_list[1].args[0][-1]
         assert "-j4 user" in build_script
         assert "AGENTOS_BUILD_JOBS=" in build_script
         guest_script = observed_command.call_args.args[0][-1]
         assert "run-prebuilt" in guest_script and " -j4 " not in guest_script
-        source_capture.assert_called_once_with(bound_repo.resolve())
-        source_verify.assert_called_once_with(bound_repo.resolve(), bound_identity)
         persisted_bound_summary = json.loads(
             read(bound_run / "ucore-run-summary.json")
         )
-        assert persisted_bound_summary["source_commit"] == commit
-        assert persisted_bound_summary["source_tree_clean"] is False
+        assert not any(key.startswith("source_") for key in persisted_bound_summary)
 
         security_state = root / "security-state"
         security_state.mkdir()
@@ -796,24 +561,6 @@ def main() -> int:
         assert read(occupied_marker) == "keep\n"
 
         if symlinks_available(root):
-            source_alias = root / "source-alias"
-            source_alias.symlink_to(source_subdir, target_is_directory=True)
-            try:
-                runner.capture_source_identity(source_alias)
-            except ValueError as error:
-                assert "symbolic link" in str(error)
-            else:
-                raise AssertionError("link-backed source directory was accepted")
-            try:
-                runner._normalize_git_toplevel(
-                    source_subdir.resolve(), str(source_alias) + "\n"
-                )
-            except ValueError as error:
-                assert "symbolic link" in str(error)
-            else:
-                raise AssertionError("link-backed Git top-level was accepted")
-            unlink_test_link(source_alias)
-
             planted_target = root / "planted-run-target"
             planted_target.mkdir()
             planted_run = root / "planted-run"

@@ -11,7 +11,7 @@
 | 3 | [api.md](api.md) | 当前 ABI、contract-bound call、Task Channel、workflow fence 和兼容项 |
 | 4 | [security-hardening.md](security-hardening.md) | 威胁模型、fail-closed cut 与资源安全 |
 | 5 | [requirements-traceability.md](requirements-traceability.md) | 赛题任务到源码、静态检查和 Guest 验证的映射 |
-| 6 | [verification.md](verification.md) | 开发验证顺序和证据边界 |
+| 6 | [verification.md](verification.md) | 开发验证顺序和结果边界 |
 
 ## 任务附录
 
@@ -51,7 +51,8 @@ Credit Domain、Evidence Ring 和 Live Query 分别受到 Linux CPU accounting/p
 
 ## 维护规则
 
-- 发布数值只从 [正式证据索引](../../evidence/releases/INDEX.md) 指向的冻结 bundle 读取。
+- 功能与性能数值只引用实际 QEMU 或 Host 测量，并同时说明负载、样本和单位。
+- `Evidence Ring` 是内核运行期安全能力，不是 Host 发布证据包。
 - UAPI 布局以 `ci/agent-uapi-layout.json` 和 `scripts/check-agent-uapi-layout.py` 为准。
-- 模块、体积和测试预算以 `ci/kernel-budgets.json` 及 checker 为准。
+- 模块边界、栈安全与 Guest 行为分别由对应 checker、构建和 QEMU 测试验证。
 - 修改 contract、phase credit、scheduler、provenance、Task Channel、fence、ring 或 live query 时，必须同步更新设计、API、追踪表与验证说明。

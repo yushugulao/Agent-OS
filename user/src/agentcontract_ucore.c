@@ -355,7 +355,7 @@ static int v3_call(struct agent_request_v3 *request,
 	return rc;
 }
 
-static void legacy_echo(void)
+static __attribute__((noinline)) void legacy_echo(void)
 {
 	struct agent_request_v2 request;
 	struct agent_response_v2 response;
@@ -414,7 +414,8 @@ static void build_nodes(uint64 now)
 	node_init(12, AGENT_TOOL_SEND_MESSAGE, 0, 0);
 }
 
-static void invalid_contracts(struct agent_workflow_lifecycle_key lifecycle,
+static __attribute__((noinline)) void invalid_contracts(
+		struct agent_workflow_lifecycle_key lifecycle,
 			      uint64 now)
 {
 	struct agent_execution_contract_control control;
@@ -469,7 +470,7 @@ static void invalid_contracts(struct agent_workflow_lifecycle_key lifecycle,
 	      "contract rejects stale full lifecycle key");
 }
 
-static struct agent_execution_contract_key create_contract(
+static __attribute__((noinline)) struct agent_execution_contract_key create_contract(
 	struct agent_workflow_lifecycle_key lifecycle, uint64 now)
 {
 	struct agent_execution_contract_control control;
@@ -539,6 +540,11 @@ static struct agent_execution_contract_key create_contract(
 		      "query returns all node schemas");
 	return result.key;
 }
+
+static struct agent_resource_snapshot global_before;
+static struct agent_resource_snapshot global_after;
+static struct agent_workflow_lifecycle_info run_lifecycle_info;
+static struct agent_info run_info;
 
 static int resource_kind_equal(const struct agent_resource_snapshot *a,
 			       const struct agent_resource_snapshot *b,
@@ -891,7 +897,7 @@ static void run_runtime_capability_caller(void)
 	exit(0);
 }
 
-static int create_runtime_capability_caller(void)
+static __attribute__((noinline)) int create_runtime_capability_caller(void)
 {
 	struct agent_event event;
 	uint attempt;
@@ -929,7 +935,7 @@ static int create_runtime_capability_caller(void)
 	return pid;
 }
 
-static void bind_runtime_capability_caller(
+static __attribute__((noinline)) void bind_runtime_capability_caller(
 	struct agent_execution_contract_key key, int pid)
 {
 	struct agent_request_v3 request;
@@ -976,7 +982,7 @@ static void bind_runtime_capability_caller(
 	      "deliver runtime capability binding half B");
 }
 
-static void check_runtime_capability(int pid)
+static __attribute__((noinline)) void check_runtime_capability(int pid)
 {
 	int status = 0;
 
@@ -984,7 +990,7 @@ static void check_runtime_capability(int pid)
 	      "wait low-capability contract caller");
 }
 
-static void check_enforced_legacy_bypass(void)
+static __attribute__((noinline)) void check_enforced_legacy_bypass(void)
 {
 	struct agent_request_v2 request;
 	struct agent_response_v2 response;
@@ -1001,27 +1007,26 @@ static void check_enforced_legacy_bypass(void)
 	      "ENFORCE rejects legacy direct side-effect bypass");
 }
 
-static void run_agent_test(void)
+static __attribute__((noinline)) void run_agent_test(void)
 {
-	struct agent_workflow_lifecycle_info lifecycle_info;
-	struct agent_info info;
 	struct agent_execution_contract_key key;
 	int capability_pid;
 
-	memset(&lifecycle_info, 0, sizeof(lifecycle_info));
-	check(agent_workflow_lifecycle_info(&lifecycle_info, 0) == AGENT_STATUS_OK &&
-	      lifecycle_info.charged && lifecycle_info.key.id != 0 &&
-	      lifecycle_info.key.generation != 0,
+	memset(&run_lifecycle_info, 0, sizeof(run_lifecycle_info));
+	check(agent_workflow_lifecycle_info(&run_lifecycle_info, 0) ==
+		      AGENT_STATUS_OK &&
+	      run_lifecycle_info.charged && run_lifecycle_info.key.id != 0 &&
+	      run_lifecycle_info.key.generation != 0,
 	      "query complete workflow lifecycle key");
-	check(agent_info(&info) == 0, "query agent tick");
+	check(agent_info(&run_info) == 0, "query agent tick");
 	legacy_echo();
 	check(agent_file_meta_init() == AGENT_STATUS_OK,
 	      "legacy direct side effect remains compatible before enforce");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "planned-message") == 0,
 	      "install planned IPC target before contract enforce");
-	invalid_contracts(lifecycle_info.key, info.current_tick);
+	invalid_contracts(run_lifecycle_info.key, run_info.current_tick);
 	capability_pid = create_runtime_capability_caller();
-	key = create_contract(lifecycle_info.key, info.current_tick);
+	key = create_contract(run_lifecycle_info.key, run_info.current_tick);
 	bind_runtime_capability_caller(key, capability_pid);
 	exercise_contract(key);
 	check_runtime_capability(capability_pid);
@@ -1034,7 +1039,6 @@ static void run_agent_test(void)
 
 int main(void)
 {
-	struct agent_resource_snapshot global_before, global_after;
 	uint snapshot_attempts;
 	int baseline_equal = 0;
 	int pid;

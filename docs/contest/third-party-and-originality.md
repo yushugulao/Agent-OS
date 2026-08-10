@@ -1,6 +1,6 @@
 # 第三方来源与原创增量说明
 
-本文帮助评委区分上游教学内核、公开设计思想、外部运行工具和本项目的 clean-room 增量。它是工程披露，不替代许可证正文，也不构成法律意见。最终范围以冻结 Git tree、`NOTICE` 和 release manifest 为准。
+本文帮助评委区分上游教学内核、公开设计思想、外部运行工具和本项目的 clean-room 增量。它是工程披露，不替代许可证正文，也不构成法律意见。当前源码范围以 Git tree、`NOTICE` 和许可证文件为准。
 
 ## 1. 直接衍生与分发内容
 
@@ -14,7 +14,7 @@
 
 ## 2. 运行环境，不随仓库 vendoring
 
-QEMU、RISC-V GCC/binutils、GNU Make、Bash、Python、WSL/Linux 等由复现环境安装，不作为本项目源码 vendoring。正式证据记录实际路径、版本、命令和 hash。环境中出现这些程序不表示本仓库重新分发它们。
+QEMU、RISC-V GCC/binutils、GNU Make、Bash、Python、WSL/Linux 等由运行环境安装，不作为本项目源码 vendoring。环境中出现这些程序不表示本仓库重新分发它们。
 
 ## 3. 概念级设计参考
 
@@ -78,7 +78,7 @@ Linux cgroup v2、blk-mq、wait queue 用于理解通用资源、I/O 和等待�
 6. Fence-Sealed Evidence Ring 的 ordinary/critical 分区、canonical Context event、compat projection、gap 和 challenge root。
 7. Agent Live-Query FS 的显式 volatile metadata、选择性索引、typed transition、Context event 与 resync。
 8. 文件 scope/incarnation、worker 委派、可信 IPC、watch/wait/heartbeat 和 Agent 感知调度。
-9. plain/AgentOS 同负载、Host 状态提取、预算门、原始材料绑定和离线 Dashboard。
+9. plain/AgentOS 同负载、Host 状态提取、动态比较和可直接运行的 QEMU 回归。
 
 ## 5. 明确不作为当前原创能力宣称
 
@@ -100,13 +100,13 @@ Linux cgroup v2、blk-mq、wait queue 用于理解通用资源、I/O 和等待�
 ## 7. 核验方式
 
 - 用 Git 历史和 active production object 清单区分上游基础、当前实现与 retired reference source。
-- 对每项机制按“问题、公开思想、AgentOS 特定数据结构、动态证据、限制”答辩。
-- 运行 UAPI/module/budget checker，确认停产模块没有重新进入生产链接。
+- 对每项机制按“问题、公开思想、AgentOS 特定数据结构、实际测试、限制”答辩。
+- 运行 UAPI/module checker 和实际构建，确认接口一致且停产模块没有重新进入生产链接。
 - 对提交包中的图片、字体、数据集、代码片段和生成式 AI 输出逐项确认来源与许可。
 - 无法确认来源的材料在发布前移除，不自行推断为公有领域。
 
 ## 8. 版本边界
 
-Git 历史中的 `9e8338a61ee73da12462dc8d8433e9e2f7dbbc4b` 是本仓库导入起点，不冒充上游原始 commit。最终源码提交、证据提交和 tag 由 [正式证据索引](../../evidence/releases/INDEX.md) 与 release manifest 记录，本文不复制易漂移的发布身份。
+Git 历史中的 `9e8338a61ee73da12462dc8d8433e9e2f7dbbc4b` 是本仓库导入起点，不冒充上游原始 commit。当前提交历史直接记录项目演进；本页不维护另一套发布身份。
 
 除 `NOTICE` 披露的 uCore 衍生基础、`.clang-format` 和运行环境外，当前仓库不声明其他直接 vendored 第三方代码。后续引入任何新素材必须同步更新 `NOTICE`、本页和相应许可证信息。

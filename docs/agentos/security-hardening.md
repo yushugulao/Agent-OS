@@ -18,7 +18,7 @@
 - 通过多建线程放大 workflow CPU 份额；
 - 通过共享 SQ 页 TOCTOU、伪造 CQ ack、重复 cancel/complete 或 stale handle 产生双终态；
 - 把兼容字段 `DURABLE/PERSIST/AUTOSCAN/recovery` 误解释为当前能力；
-- 将用户态/Host 自报成功冒充内核或正式证据。
+- 将用户态/Host 自报成功冒充内核事实或实际 Guest 测量。
 
 不在当前证明范围：恶意内核、敌对 hypervisor/Host、物理内存篡改、供应链攻击、密码学密钥保护、物理断电后的 metadata/evidence/task 恢复、完整磁盘机密性、自然语言 prompt injection 的语义识别、任意远程副作用的分布式 exactly-once。
 
@@ -206,10 +206,10 @@ python -B host_tools/test_workflow_scheduler_model.py
 python -B host_tools/test_agent_task_transport.py
 python -B host_tools/test_mcp_a2a_gateway.py
 make agent-module-check TOOLPREFIX=riscv-none-elf-
-make kernel-budget-check TOOLPREFIX=riscv-none-elf-
+make kernel-stack-check TOOLPREFIX=riscv-none-elf-
 ```
 
-静态/模型检查验证安全合同形状。QEMU 行为和正式性能结论仍需独立 Guest/Host 证据。
+静态/模型检查验证安全合同形状。QEMU 行为和性能结论仍需对应 Guest/Host 场景的实际运行。
 
 ## 11. 来源与 clean-room 边界
 
