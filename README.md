@@ -130,7 +130,17 @@ make agent-live-demo-check
 
 `agent-live-demo` 默认显式选择 Host `replay` provider，读取 `ci/agent-live-replay.jsonl`，让 6 轮响应经过与 live 相同的 QEMU 串口 wire，不需要网络或 API key。成功日志包含 `agentlive_ucore: discovery=1 rich_overlay=3`、工具/拒绝/Context roundtrip 计数、`transcript_turns=5 retained=5 dropped=0`、`agentlive_ucore: passed` 和顶层 `agentlive_ucore: parent passed`；`agent-live-demo-check` 只运行 Guest/Host 静态集成与协议单测，不能替代 QEMU 闭环。
 
-真实 provider 必须显式选择，例如 `AGENT_LIVE_PROVIDER=anthropic AGENT_LIVE_MODEL=MODEL_ID make agent-live-demo`，其中 `MODEL_ID` 替换为实际 provider model。默认 API key 环境变量分别是 Host 的 `ANTHROPIC_API_KEY` 与 `OPENAI_API_KEY`；如需使用其他 Host 环境变量，以 `AGENT_LIVE_API_KEY_ENV=ENV_NAME` 显式指定。需用户批准的工具由 `AGENT_LIVE_APPROVED_TOOLS` 生成可重复的 `--approve-tool` 参数；当前 `query_file`、`echo` 始终在 catalog 中，只有 `send_message` 受这一批准 gate。底层稳定参数合同可通过 `python -B host_tools/guest_llm_relay.py --help` 查看，其中 `--provider openai|anthropic|replay`、`--goal`/`--goal-file` 和可重复的 `--approve-tool NAME` 都是 Host 控制面。Linux/WSL 默认让 Make 自动探测工具链；Windows xPack 环境可给 `agent-live-demo` 追加 `TOOLPREFIX=riscv-none-elf-`。没有运行真实 provider 时，不把 replay 输出写成云模型结果。竞赛主演示不调用这个入口。
+真实 provider 必须显式选择。当前工作区可直接运行：
+
+```bash
+AGENT_LIVE_PROVIDER=deepseek make agent-live-demo
+```
+
+DeepSeek 入口默认使用官方 OpenAI-compatible Chat Completions endpoint、`deepseek-v4-flash` 和 non-thinking tool mode；旧的 `deepseek-chat` 已由官方退役。默认目标要求模型先查询 Guest 进程创建的 `agentlive.note`，再把真实返回的文件大小与 inode 编成下一轮 `echo` 参数，最后才生成自然语言回答；入口会精确验收两个工具、零拒绝和两轮完整 transcript，而不是只看进程退出码。命令行覆盖 `AGENT_LIVE_GOAL` 时会关闭这组默认场景专属 marker，但仍保留通用 Guest 完成门。
+
+Make 会优先读取仓库外的 `../计算机操作系统能力竞赛/deepseek_api.txt`，只把内容交给 Host relay，不写入 Guest、命令行或日志；文件不存在时回退 Host 的 `DEEPSEEK_API_KEY`。可用 `AGENT_LIVE_API_KEY_FILE=/path/to/key.txt` 指定其他单行 key 文件，或清空该变量后通过 `AGENT_LIVE_API_KEY_ENV=ENV_NAME` 选择环境变量，两者同时设置会 fail closed。即便是演示专用 key 也保持仓库外；[DeepSeek Open Platform Terms](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) 明确要求不得共享或公开披露 API key。模型与 endpoint 可用 `AGENT_LIVE_MODEL`、`AGENT_LIVE_ENDPOINT` 覆写。DeepSeek 采用 non-thinking 模式，是因为当前有界 Guest transcript 只保存可复验的 `tool_use`/`tool_result`，不传递供应商私有的 `reasoning_content`。
+
+OpenAI 与 Anthropic 的默认 key 环境变量仍分别是 `OPENAI_API_KEY` 与 `ANTHROPIC_API_KEY`。需用户批准的工具由 `AGENT_LIVE_APPROVED_TOOLS` 生成可重复的 `--approve-tool` 参数；当前 `query_file`、`echo` 始终在 catalog 中，只有 `send_message` 受这一批准 gate。底层参数合同可通过 `python -B host_tools/guest_llm_relay.py --help` 查看，其中 `--provider openai|anthropic|deepseek|replay`、`--goal`/`--goal-file`、`--api-key-file` 和可重复的 `--approve-tool NAME` 都是 Host 控制面。Linux/WSL 默认让 Make 自动探测工具链；Windows xPack 环境可给 `agent-live-demo` 追加 `TOOLPREFIX=riscv-none-elf-`。没有运行真实 provider 时，不把 replay 输出写成云模型结果。竞赛主演示不调用这个入口。DeepSeek 的 endpoint、现行模型与工具调用语义以[官方 API 文档](https://api-docs.deepseek.com/quick_start/pricing)和[工具调用说明](https://api-docs.deepseek.com/guides/tool_calls)为准。
 
 也可以直接运行最相关的产品场景，缩短修改后的反馈时间：
 

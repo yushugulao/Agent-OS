@@ -573,16 +573,20 @@ QEMU ?= qemu-system-riscv64
 QEMU_CMD = $(call shell_quote,$(QEMU))
 AGENT_LIVE_PROVIDER ?= replay
 AGENT_LIVE_REPLAY_FILE ?= ci/agent-live-replay.jsonl
-AGENT_LIVE_GOAL ?= Inspect AgentOS, exercise the available tools, and summarize the observed result.
-AGENT_LIVE_MODEL ?=
-AGENT_LIVE_ENDPOINT ?=
+AGENT_LIVE_DEEPSEEK_GOAL := Query Guest workspace file agentlive.note with query_file. If it succeeds use echo to record its size as arg0 and inode as arg1. Then summarize the verified result in under 240 ASCII characters. Call at most one tool per turn.
+AGENT_LIVE_REPLAY_GOAL := Inspect AgentOS and exercise the available tools. Then summarize the observed result.
+AGENT_LIVE_GOAL ?= $(if $(filter deepseek,$(AGENT_LIVE_PROVIDER)),$(AGENT_LIVE_DEEPSEEK_GOAL),$(AGENT_LIVE_REPLAY_GOAL))
+AGENT_LIVE_MODEL ?= $(if $(filter deepseek,$(AGENT_LIVE_PROVIDER)),deepseek-v4-flash,)
+AGENT_LIVE_ENDPOINT ?= $(if $(filter deepseek,$(AGENT_LIVE_PROVIDER)),https://api.deepseek.com/chat/completions,)
 AGENT_LIVE_API_KEY_ENV ?=
+AGENT_LIVE_DEEPSEEK_KEY_FILE ?= ../计算机操作系统能力竞赛/deepseek_api.txt
+AGENT_LIVE_API_KEY_FILE ?= $(if $(and $(filter deepseek,$(AGENT_LIVE_PROVIDER)),$(wildcard $(AGENT_LIVE_DEEPSEEK_KEY_FILE))),$(AGENT_LIVE_DEEPSEEK_KEY_FILE),)
 AGENT_LIVE_APPROVED_TOOLS ?= $(if $(filter replay,$(AGENT_LIVE_PROVIDER)),send_message,)
 AGENT_LIVE_REPLAY_DEP = $(if $(filter replay,$(AGENT_LIVE_PROVIDER)),$(AGENT_LIVE_REPLAY_FILE))
 AGENT_LIVE_REPLAY_ARGS = $(if $(filter replay,$(AGENT_LIVE_PROVIDER)),--replay-file $(call shell_quote,$(AGENT_LIVE_REPLAY_FILE)))
 AGENT_LIVE_MODEL_ARGS = $(if $(strip $(AGENT_LIVE_MODEL)),--model $(call shell_quote,$(AGENT_LIVE_MODEL)))
 AGENT_LIVE_ENDPOINT_ARGS = $(if $(strip $(AGENT_LIVE_ENDPOINT)),--endpoint $(call shell_quote,$(AGENT_LIVE_ENDPOINT)))
-AGENT_LIVE_KEY_ARGS = $(if $(strip $(AGENT_LIVE_API_KEY_ENV)),--api-key-env $(call shell_quote,$(AGENT_LIVE_API_KEY_ENV)))
+AGENT_LIVE_KEY_ARGS = $(if $(strip $(AGENT_LIVE_API_KEY_FILE)),--api-key-file $(call shell_quote,$(AGENT_LIVE_API_KEY_FILE)),$(if $(strip $(AGENT_LIVE_API_KEY_ENV)),--api-key-env $(call shell_quote,$(AGENT_LIVE_API_KEY_ENV))))
 AGENT_LIVE_APPROVAL_ARGS = $(foreach tool,$(AGENT_LIVE_APPROVED_TOOLS),--approve-tool $(call shell_quote,$(tool)))
 AGENT_LIVE_VERIFY_ARGS = \
 	--require-guest-marker $(call shell_quote,agentlive_ucore: discovery=1 rich_overlay=3) \
@@ -593,6 +597,11 @@ AGENT_LIVE_REPLAY_VERIFY_ARGS = $(if $(filter replay,$(AGENT_LIVE_PROVIDER)),\
 	--require-guest-marker $(call shell_quote,agentlive_ucore: reject_unknown=1 reject_bad_args=1 reject_replay=0) \
 	--require-guest-marker $(call shell_quote,agentlive_ucore: transcript_turns=5 retained=5 dropped=0) \
 	--require-guest-marker $(call shell_quote,agentlive_ucore: relay_rounds_done=1 unknown=1 bad_args=1 replay=0 send_sink=1))
+AGENT_LIVE_DEEPSEEK_VERIFY_ARGS = $(if $(and $(filter deepseek,$(AGENT_LIVE_PROVIDER)),$(filter file,$(origin AGENT_LIVE_GOAL))),\
+	--require-guest-marker $(call shell_quote,agentlive_ucore: query_file=1 echo=1 send_message=0 approved=0) \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: reject_unknown=0 reject_bad_args=0 reject_replay=0) \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: transcript_turns=2 retained=2 dropped=0) \
+	--require-guest-marker $(call shell_quote,agentlive_ucore: relay_rounds_done=1 unknown=0 bad_args=0 replay=0 send_sink=0))
 QEMUOPTS = \
 	-nographic \
 	-machine virt \
@@ -697,9 +706,14 @@ agentos-test:
 # The Host relay only carries framed bytes and provider HTTPS; replay uses the
 # identical serial path without a network connection or API key.
 agent-live-demo: host_tools/guest_llm_relay.py user/src/agentlive_ucore.c $(AGENT_LIVE_REPLAY_DEP)
+	@if test -n $(call shell_quote,$(AGENT_LIVE_API_KEY_FILE)) && \
+		test -n $(call shell_quote,$(AGENT_LIVE_API_KEY_ENV)); then \
+		echo "AGENT_LIVE_API_KEY_FILE and AGENT_LIVE_API_KEY_ENV are mutually exclusive" >&2; \
+		exit 2; \
+	fi
 	@case $(call shell_quote,$(AGENT_LIVE_PROVIDER)) in \
 		replay) ;; \
-		openai|anthropic) \
+		openai|anthropic|deepseek) \
 			test -n $(call shell_quote,$(AGENT_LIVE_MODEL)) || \
 				{ echo "AGENT_LIVE_MODEL is required for a live provider" >&2; exit 2; } ;; \
 		*) echo "invalid AGENT_LIVE_PROVIDER" >&2; exit 2 ;; \
@@ -727,7 +741,7 @@ agent-live-demo: host_tools/guest_llm_relay.py user/src/agentlive_ucore.c $(AGEN
 		$(AGENT_LIVE_REPLAY_ARGS) $(AGENT_LIVE_MODEL_ARGS) \
 		$(AGENT_LIVE_ENDPOINT_ARGS) $(AGENT_LIVE_KEY_ARGS) \
 		$(AGENT_LIVE_APPROVAL_ARGS) $(AGENT_LIVE_VERIFY_ARGS) \
-		$(AGENT_LIVE_REPLAY_VERIFY_ARGS)
+		$(AGENT_LIVE_REPLAY_VERIFY_ARGS) $(AGENT_LIVE_DEEPSEEK_VERIFY_ARGS)
 
 agent-live-demo-check: host_tools/test_guest_llm_relay.py scripts/test-agent-live-loop.py
 	@$(PYTHON_CMD) -B host_tools/test_guest_llm_relay.py

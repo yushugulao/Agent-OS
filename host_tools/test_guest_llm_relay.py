@@ -608,6 +608,22 @@ class GoalInputTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid"):
             relay.validate_approved_tools(("bad tool",))
 
+    def test_api_key_file_and_environment_options_are_mutually_exclusive(self) -> None:
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                relay.parse_args(
+                    (
+                        "--provider",
+                        "deepseek",
+                        "--goal",
+                        "demo",
+                        "--api-key-env",
+                        "DEEPSEEK_API_KEY",
+                        "--api-key-file",
+                        "deepseek_api.txt",
+                    )
+                )
+
 
 class ProviderTranslationTests(unittest.TestCase):
     def test_openai_tool_use_then_tool_result_translation(self) -> None:
@@ -807,6 +823,107 @@ class ProviderTranslationTests(unittest.TestCase):
         body = json.loads(opener.requests[0][0].data)
         self.assertEqual(body["max_completion_tokens"], 128)
         self.assertNotIn("max_tokens", body)
+
+    def test_deepseek_non_thinking_tool_round_uses_documented_profile(self) -> None:
+        opener = FakeOpener(
+            (
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "reasoning_content": None,
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_deepseek_1",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "read_status",
+                                                "arguments": '{"slot":7}',
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "slot 7 is ready",
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        secret = "sk-deepseek-test"
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key=secret,
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        first_request = request(
+            1,
+            [{"role": "user", "content": "read"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        # The real Guest leaves model selection to the Host policy.
+        del first_request["model"]
+        first = relay.validate_guest_request(
+            first_request,
+            max_output_tokens=256,
+        )
+        self.assertEqual(provider.complete(first).type, "tool_use")
+        body1 = json.loads(opener.requests[0][0].data)
+        self.assertEqual(body1["model"], relay.DEEPSEEK_DEFAULT_MODEL)
+        self.assertEqual(body1["max_tokens"], 128)
+        self.assertEqual(body1["thinking"], {"type": "disabled"})
+        self.assertNotIn("parallel_tool_calls", body1)
+        self.assertEqual(
+            opener.requests[0][0].get_header("Authorization"), f"Bearer {secret}"
+        )
+
+        second_request = request(
+            2,
+            [
+                {"role": "user", "content": "read"},
+                {
+                    "role": "assistant",
+                    "tool_use": {
+                        "corr_id": 1,
+                        "tool": "read_status",
+                        "arguments": {"slot": 7},
+                    },
+                },
+                {"role": "tool", "tool_corr_id": 1, "content": "ready"},
+            ],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        del second_request["model"]
+        second = relay.validate_guest_request(
+            second_request,
+            max_output_tokens=256,
+        )
+        self.assertEqual(provider.complete(second).content, "slot 7 is ready")
+        body2 = json.loads(opener.requests[1][0].data)
+        self.assertEqual(body2["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_content", body2["messages"][1])
+        self.assertEqual(
+            body2["messages"][1]["tool_calls"][0]["id"], "call_deepseek_1"
+        )
+        self.assertEqual(body2["messages"][2]["tool_call_id"], "call_deepseek_1")
 
     def test_multiple_tool_calls_fail_instead_of_host_selecting_one(self) -> None:
         response = {
@@ -1049,6 +1166,58 @@ class HttpsSecurityTests(unittest.TestCase):
             client.post({}, {"Authorization": f"Bearer {secret}"})
         self.assertNotIn(secret, str(raised.exception))
         self.assertIn("[REDACTED]", str(raised.exception))
+
+    def test_api_key_file_is_trimmed_bounded_and_never_echoed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "credential with spaces.txt"
+            path.write_bytes(b"  sk-file-only  \r\n")
+            self.assertEqual(relay._load_api_key_file(path), "sk-file-only")
+
+            path.write_bytes(b"sk-first\nsk-second\n")
+            with self.assertRaises(ValueError) as raised:
+                relay._load_api_key_file(path)
+            self.assertNotIn("sk-first", str(raised.exception))
+            self.assertNotIn(str(path), str(raised.exception))
+
+            path.write_bytes(b"x" * (relay.MAX_API_KEY_BYTES + 3))
+            with self.assertRaisesRegex(ValueError, "oversized"):
+                relay._load_api_key_file(path)
+            path.write_bytes(b"\xff")
+            with self.assertRaisesRegex(ValueError, "valid UTF-8"):
+                relay._load_api_key_file(path)
+
+    def test_deepseek_build_defaults_and_key_sources(self) -> None:
+        args = relay.parse_args(("--provider", "deepseek", "--goal", "demo"))
+        with mock.patch.dict(
+            os.environ, {"DEEPSEEK_API_KEY": "sk-env-deepseek"}, clear=True
+        ):
+            provider = relay._build_provider(args)
+        self.assertIsInstance(provider, relay.DeepSeekProvider)
+        self.assertEqual(provider.client.endpoint, relay.DEEPSEEK_DEFAULT_ENDPOINT)
+        self.assertEqual(provider.model, relay.DEEPSEEK_DEFAULT_MODEL)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "key.txt"
+            path.write_text("sk-file-deepseek\n", encoding="utf-8")
+            file_args = relay.parse_args(
+                (
+                    "--provider",
+                    "deepseek",
+                    "--goal",
+                    "demo",
+                    "--api-key-file",
+                    str(path),
+                    "--model",
+                    "deepseek-v4-pro",
+                )
+            )
+            with mock.patch.dict(
+                os.environ, {"DEEPSEEK_API_KEY": "sk-must-not-win"}, clear=True
+            ):
+                file_provider = relay._build_provider(file_args)
+            self.assertIsInstance(file_provider, relay.DeepSeekProvider)
+            self.assertEqual(file_provider.model, "deepseek-v4-pro")
+            self.assertEqual(file_provider._api_key, "sk-file-deepseek")
 
 
 class QemuSerialTests(unittest.TestCase):

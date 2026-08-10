@@ -183,7 +183,7 @@ ABI 已冻结 16 字节 `{slot, type, flags, generation}` handle，私有表容�
 
 Guest main 与 relay Agent 之间的 `LLM_REQUEST/LLM_RESPONSE` 进入内核 pending registry。pending 绑定完整 lifecycle、requester/relay control id/PID、correlation 和 deadline；correlation 对同 requester 严格递增，只有 request 实际投递且 pending 发布后才推进。只有原 relay 的匹配响应能消费一次。120 秒 kernel-tick TTL 在 request/response/tick 路径回收。容量为 `NPROC` 的有界 terminal history 只在记录仍保留时区分已消费 `STALE` 与已过期 `TIMEOUT`；覆盖后旧 response 按 unmatched 返回 `DENIED`。公开 exec/teardown 清理 pending、last correlation 和 history。这是 correlation RPC，不是模型 API、HTTPS、MCP 或 remote exactly-once。
 
-Host relay 把 provider-neutral JSON 转成 OpenAI-compatible Chat Completions 或 Anthropic Messages HTTPS，并把实际模型输出规整为单个 `tool_use` 或 `final`。API key/TLS 只在 Host；Host 不读 Guest 业务文件、不选或执行工具，也不伪造 result。它只可临时维护 provider opaque tool-call id 到 correlation id 的协议关联；多个并行 tool call fail closed。
+Host relay 把 provider-neutral JSON 转成 OpenAI、DeepSeek 的 OpenAI-compatible Chat Completions 或 Anthropic Messages HTTPS，并把实际模型输出规整为单个 `tool_use` 或 `final`。API key/TLS 只在 Host；Host 不读 Guest 业务文件、不选或执行工具，也不伪造 result。它只可临时维护 provider opaque tool-call id 到 correlation id 的协议关联；多个并行 tool call fail closed。DeepSeek 默认使用官方 `deepseek-v4-flash` 与 non-thinking tool mode。后者是必要的协议边界：当前 Guest transcript 保存可复验的 `tool_use`/`tool_result`，不保存或回送 DeepSeek thinking mode 要求跨工具轮次携带的 `reasoning_content`。
 
 串口 wire 使用 session、双向严格递增 sequence、kind、decoded length、SHA-256 与有界 base64url JSON；offline replay 也必须经过相同的 QEMU 串口、frame/session/sequence/hash/round/token 边界，不能直接注入 Guest 状态。replay 验证协议与 loop，但不是 live 云模型实测。当前不宣称流式 token、自动 retry/redirect、任意长上下文或敌对 Host 下的密码学认证。
 
@@ -215,7 +215,9 @@ make agent-live-demo-check
 make agent-live-demo
 ```
 
-`agent-live-demo-check` 运行 Guest/Host 静态集成与协议单测，不代替动态行为；`agent-live-demo` 默认使用 `ci/agent-live-replay.jsonl`，让 6 轮响应经过实际 QEMU 串口，并要求 discovery、工具/拒绝结果、`passed` 和唯一顶层 `agentlive_ucore: parent passed` marker。Windows xPack 环境可追加 `TOOLPREFIX=riscv-none-elf-`。真实 provider 仍需显式选择并只能从 Host 环境读取 key；未运行时不声称云模型结果。
+`agent-live-demo-check` 运行 Guest/Host 静态集成与协议单测，不代替动态行为；`agent-live-demo` 默认使用 `ci/agent-live-replay.jsonl`，让 6 轮响应经过实际 QEMU 串口，并要求 discovery、工具/拒绝结果、`passed` 和唯一顶层 `agentlive_ucore: parent passed` marker。Windows xPack 环境可追加 `TOOLPREFIX=riscv-none-elf-`。真实 provider 仍需显式选择；key 只能由 Host 从受限单行文件或环境变量读取，未运行时不声称云模型结果。
+
+DeepSeek live 入口为 `AGENT_LIVE_PROVIDER=deepseek make agent-live-demo`。在当前目录布局中，Make 自动选择仓库外的 `../计算机操作系统能力竞赛/deepseek_api.txt`，否则回退 `DEEPSEEK_API_KEY`；也可显式设置 `AGENT_LIVE_API_KEY_FILE`、`AGENT_LIVE_MODEL` 或 `AGENT_LIVE_ENDPOINT`。key 文件内容不成为命令行参数，不进入 Guest 或 relay 日志。官方 endpoint、模型与 tool-call 格式见 [DeepSeek API 文档](https://api-docs.deepseek.com/quick_start/pricing)与[工具调用指南](https://api-docs.deepseek.com/guides/tool_calls)。
 
 当前 `agenttask_ucore` 固定比较现有 `agent_run()` batch、contract-bound scalar V3 和 SQ/CQ 三条语义对照路径，每条执行 16 次空 `ECHO` 并产生 output artifact `NONE`。三者的线格式并不相同：batch 使用清零的 `agent_op`；scalar V3 为工具 schema 显式携带三个必需 typed params，即 `payload=""` string、`arg0=0` uint64、`arg1=0` uint64；SQ/CQ 使用 null input handle。Guest 验证相同的 OK/tool/Context-proof/evidence-proof/zero-result fingerprint；legacy batch 的 evidence-proof 来自 Context record hash，两个 contract-bound 路径使用 Evidence ticket，不能据此声称三者的 Evidence 表示相同。
 

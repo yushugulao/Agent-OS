@@ -62,6 +62,9 @@ DEFAULT_SESSION_TIMEOUT_SECONDS = 600.0
 DEFAULT_BOOT_TIMEOUT_SECONDS = 120.0
 DEFAULT_IDLE_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
+MAX_API_KEY_BYTES = 4096
+DEEPSEEK_DEFAULT_ENDPOINT = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 MAX_MESSAGES = 64
 MAX_TOOLS = 32
 MAX_CORRELATION_ID = (1 << 63) - 1
@@ -683,6 +686,11 @@ class _ProtocolProvider:
 
 
 class OpenAICompatibleProvider(_ProtocolProvider):
+    def _provider_options(self, *, has_tools: bool) -> dict[str, object]:
+        if has_tools:
+            return {"parallel_tool_calls": False}
+        return {}
+
     def complete(
         self,
         request: Mapping[str, object],
@@ -716,7 +724,7 @@ class OpenAICompatibleProvider(_ProtocolProvider):
                 }
                 for tool in tools  # type: ignore[union-attr]
             ]
-            body["parallel_tool_calls"] = False
+        body.update(self._provider_options(has_tools=bool(tools)))
         if "tool_choice" in request:
             body["tool_choice"] = self._tool_choice(request["tool_choice"])
         for key in ("temperature", "stop"):
@@ -842,6 +850,21 @@ class OpenAICompatibleProvider(_ProtocolProvider):
                 _openai_content_text(message.get("content", ""))
             ),
         )
+
+
+class DeepSeekProvider(OpenAICompatibleProvider):
+    """DeepSeek's documented OpenAI-compatible Chat Completions profile."""
+
+    def _provider_options(self, *, has_tools: bool) -> dict[str, object]:
+        del has_tools
+        # DeepSeek V4 defaults to thinking mode.  Thinking tool turns require
+        # reasoning_content to be replayed verbatim, but that provider-private
+        # chain of thought is intentionally absent from the Guest-owned wire.
+        # Select documented non-thinking mode rather than making the Host keep
+        # hidden semantic history.  DeepSeek does not document OpenAI's
+        # parallel_tool_calls option; multiple calls still fail closed while
+        # parsing the response below.
+        return {"thinking": {"type": "disabled"}}
 
 
 def _openai_content_text(value: object) -> str:
@@ -1693,8 +1716,32 @@ def _load_api_key(environment_name: str) -> str:
     return validate_api_key(value)
 
 
+def _load_api_key_file(path: Path) -> str:
+    try:
+        info = path.stat()
+        if not path.is_file() or info.st_size > MAX_API_KEY_BYTES + 2:
+            raise ValueError("API key file is unavailable or oversized")
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_API_KEY_BYTES + 3)
+    except OSError as error:
+        raise ValueError("API key file is unavailable") from error
+    if len(raw) > MAX_API_KEY_BYTES + 2:
+        raise ValueError("API key file is oversized")
+    try:
+        value = raw.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise ValueError("API key file is not valid UTF-8") from error
+    return validate_api_key(value)
+
+
 def validate_api_key(value: str) -> str:
-    if not isinstance(value, str) or not value or len(value) > 4096:
+    if not isinstance(value, str) or not value:
+        raise ValueError("provider API key is malformed")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("provider API key is malformed") from None
+    if len(encoded) > MAX_API_KEY_BYTES:
         raise ValueError("provider API key is malformed")
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
         raise ValueError("provider API key is malformed")
@@ -1791,17 +1838,25 @@ def _build_provider(args: argparse.Namespace) -> ModelProvider:
         if args.replay_file is None:
             raise ValueError("--replay-file is required for replay provider")
         return ReplayProvider.from_jsonl(args.replay_file)
-    key_environment = args.api_key_env or (
-        "OPENAI_API_KEY" if args.provider == "openai" else "ANTHROPIC_API_KEY"
-    )
-    api_key = _load_api_key(key_environment)
+    default_key_environments = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+    }
+    if args.api_key_file is not None:
+        api_key = _load_api_key_file(args.api_key_file)
+    else:
+        api_key = _load_api_key(
+            args.api_key_env or default_key_environments[args.provider]
+        )
     endpoint = args.endpoint
     if not endpoint:
-        endpoint = (
-            "https://api.openai.com/v1/chat/completions"
-            if args.provider == "openai"
-            else "https://api.anthropic.com/v1/messages"
-        )
+        default_endpoints = {
+            "openai": "https://api.openai.com/v1/chat/completions",
+            "anthropic": "https://api.anthropic.com/v1/messages",
+            "deepseek": DEEPSEEK_DEFAULT_ENDPOINT,
+        }
+        endpoint = default_endpoints[args.provider]
     client = JsonHttpsClient(
         endpoint,
         timeout_seconds=args.http_timeout,
@@ -1810,6 +1865,12 @@ def _build_provider(args: argparse.Namespace) -> ModelProvider:
     )
     if args.provider == "openai":
         return OpenAICompatibleProvider(client, api_key=api_key, model=args.model)
+    if args.provider == "deepseek":
+        return DeepSeekProvider(
+            client,
+            api_key=api_key,
+            model=args.model or DEEPSEEK_DEFAULT_MODEL,
+        )
     return AnthropicMessagesProvider(
         client,
         api_key=api_key,
@@ -1822,16 +1883,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run an AgentOS QEMU Guest with a bounded host-side LLM relay."
     )
-    parser.add_argument("--provider", choices=("openai", "anthropic", "replay"), required=True)
+    parser.add_argument(
+        "--provider",
+        choices=("openai", "anthropic", "deepseek", "replay"),
+        required=True,
+    )
     parser.add_argument("--qemu", default="qemu-system-riscv64")
     parser.add_argument("--kernel", default="build/kernel")
     parser.add_argument("--image", default="nfs/fs-copy.img")
     parser.add_argument("--endpoint", default="")
     parser.add_argument("--model", default="")
-    parser.add_argument(
+    api_key = parser.add_mutually_exclusive_group()
+    api_key.add_argument(
         "--api-key-env",
         default="",
         help="API key environment variable (provider-specific default when omitted).",
+    )
+    api_key.add_argument(
+        "--api-key-file",
+        type=Path,
+        help="UTF-8 file containing one API key; the key is never put on the command line.",
     )
     parser.add_argument("--anthropic-version", default="2023-06-01")
     parser.add_argument("--replay-file", type=Path)

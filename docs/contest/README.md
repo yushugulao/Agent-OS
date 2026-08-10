@@ -61,18 +61,26 @@ make contest-demo
 
 ## 可选模型循环
 
-`agentlive` 是与主演示分开的 Guest-owned tool loop，沿用 [Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works) 和 [Claude Code agentic loop](https://code.claude.com/docs/en/how-claude-code-works) 的公开交互模式：模型输出结构化 `tool_use`，Guest 校验并执行工具，再把真实结果回灌下一轮。Host relay 只做有界串口 frame 与 OpenAI-compatible/Anthropic HTTPS 翻译；API key/TLS 不进入 Guest，Host 不读业务文件、不选或执行工具。
+`agentlive` 是与主演示分开的 Guest-owned tool loop，沿用 [Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works) 和 [Claude Code agentic loop](https://code.claude.com/docs/en/how-claude-code-works) 的公开交互模式：模型输出结构化 `tool_use`，Guest 校验并执行工具，再把真实结果回灌下一轮。Host relay 只做有界串口 frame 与 OpenAI-compatible（OpenAI/DeepSeek）或 Anthropic HTTPS 翻译；API key/TLS 不进入 Guest，Host 不读业务文件、不选或执行工具。
 
 live API 可选；offline replay 仍通过相同 QEMU 串口、session/sequence/hash/round 边界，因此可复核 wire 与 Guest 状态机，但 replay 不是云模型实测。adaptive loop 使用 V2 exploratory typed RPC；ENFORCE V3 只适用于预先冻结的固定 node/tool/edge 高保证路径。MCP/A2A prototype 参考 [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) 与 [A2A v1](https://a2a-protocol.org/latest/specification/) 对象规范，但不参与这条 live relay。
 
-Host relay 的稳定 CLI 要求显式 `--provider openai|anthropic|replay`、`--goal` 或 `--goal-file`，并以可重复的 `--approve-tool NAME` 给出用户批准的 Guest 工具；`replay` 另需 `--replay-file`。精确选项以 `python -B host_tools/guest_llm_relay.py --help` 为准。真实 provider 及 API key 不属于默认竞赛演示。
+Host relay 的稳定 CLI 要求显式 `--provider openai|anthropic|deepseek|replay`、`--goal` 或 `--goal-file`，并以可重复的 `--approve-tool NAME` 给出用户批准的 Guest 工具；`replay` 另需 `--replay-file`。真实 provider 的 key 可由互斥的 `--api-key-file` 或 `--api-key-env` 提供，内容不进入 Guest、命令行或日志。精确选项以 `python -B host_tools/guest_llm_relay.py --help` 为准。真实 provider 及 API key 不属于默认竞赛主演示。
 
 ```bash
 make agent-live-demo-check
 make agent-live-demo
 ```
 
-第二条默认读取 `ci/agent-live-replay.jsonl`，在 QEMU 中走 6 轮同串口 replay；Make 要求 discovery、`passed`、唯一顶层 `parent passed` 以及 replay 的精确工具/拒绝/relay markers，Guest 另输出 Context roundtrip。完整 marker 值见[验证说明](../agentos/verification.md)。第一条只做静态/Host 检查。Windows xPack 环境可追加 `TOOLPREFIX=riscv-none-elf-`。live 模式把 `AGENT_LIVE_PROVIDER` 设为 `openai` 或 `anthropic`，并把 `AGENT_LIVE_MODEL=MODEL_ID` 替换成真实 model id；key 只从 Host 环境读取，未实际运行时不展示或声称云模型结果。
+第二条默认读取 `ci/agent-live-replay.jsonl`，在 QEMU 中走 6 轮同串口 replay；Make 要求 discovery、`passed`、唯一顶层 `parent passed` 以及 replay 的精确工具/拒绝/relay markers，Guest 另输出 Context roundtrip。完整 marker 值见[验证说明](../agentos/verification.md)。第一条只做静态/Host 检查。Windows xPack 环境可追加 `TOOLPREFIX=riscv-none-elf-`。
+
+当前工作区的 DeepSeek 实际模型入口是：
+
+```bash
+AGENT_LIVE_PROVIDER=deepseek make agent-live-demo
+```
+
+它默认使用官方 `deepseek-v4-flash`、`https://api.deepseek.com/chat/completions` 与 non-thinking tool mode，并优先读取仓库外的 `../计算机操作系统能力竞赛/deepseek_api.txt`；文件不存在时使用 Host 的 `DEEPSEEK_API_KEY`。可用 `AGENT_LIVE_API_KEY_FILE`、`AGENT_LIVE_MODEL` 和 `AGENT_LIVE_ENDPOINT` 覆写。non-thinking 是当前正确边界，因为 Guest 保存结构化工具历史，但不保存供应商 `reasoning_content`。只有 live 命令实际完成后才把结果称为 DeepSeek 实测；默认 replay 仍只证明相同 wire 与 Guest 状态机。
 
 ## 建议演示顺序
 
