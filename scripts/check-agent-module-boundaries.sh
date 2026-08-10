@@ -24,6 +24,7 @@ agent_context
 agent_context_path
 agent_core
 agent_evidence_ring
+agent_execution_contract
 agent_file_state
 agent_identity
 agent_identity_lease
@@ -41,13 +42,17 @@ agent_observe
 agent_observe_audit_query
 agent_observe_ledger
 agent_observe_timeline
+agent_provenance
 agent_resource
 agent_sha256
+agent_task_bridge
+agent_task_channel
 agent_tool_protocol
 agent_workflow_fence
 resource_controller
 workflow_credit_domain
 workflow_lifecycle
+workflow_scheduler
 "
 
 retired_modules="

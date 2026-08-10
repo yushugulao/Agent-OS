@@ -142,8 +142,24 @@ def check(root: Path) -> None:
         )
     require(
         dispatch,
-        "if(agent_background_work_pending()||id==SYS_sched_yield)agent_background_checkpoint();",
-        "joined workflow operations lost their in-cut task-work checkpoint",
+        "if((!operation_denied||direct_guard.active||file_pin_guard.active)&&"
+        "(agent_background_work_pending()||id==SYS_sched_yield))"
+        "agent_background_checkpoint();",
+        "joined workflow operations or pinned file transactions lost their "
+        "in-cut task-work checkpoint",
+    )
+    ordered(
+        dispatch,
+        (
+            "if((!operation_denied||direct_guard.active||file_pin_guard.active)&&"
+            "(agent_background_work_pending()||id==SYS_sched_yield))"
+            "agent_background_checkpoint();",
+            "agent_execution_contract_file_pin_leave(&file_pin_guard)",
+            "agent_execution_contract_direct_leave(&direct_guard)",
+            "if(operation_entered)workflow_lifecycle_operation_leave(lifecycle)",
+        ),
+        "file transaction and lifecycle guards no longer cover the joined "
+        "background checkpoint",
     )
     require(
         dispatch,

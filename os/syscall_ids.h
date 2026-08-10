@@ -368,3 +368,7 @@
 #define SYS_agent_resource_snapshot 559
 #define SYS_agent_performance_snapshot 560
 #define SYS_agent_launch_info 561
+#define SYS_agent_execution_contract 562
+#define SYS_agent_task_channel_setup 563
+#define SYS_agent_task_channel_enter 564
+#define SYS_agent_task_channel_resource 565

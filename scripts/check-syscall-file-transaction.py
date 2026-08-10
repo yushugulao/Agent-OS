@@ -112,6 +112,14 @@ def check(root: Path) -> None:
         raise ContractError("transaction prepare does not perform exactly one fd pin")
     reject(prepare, "caseSYS_close", "close guesses a file identity before detach")
 
+    direct = function(source, "syscall_direct_agent_side_effects")
+    require(
+        direct,
+        "caseSYS_close:returnAGENT_SIDE_EFFECT_FILE|"
+        "AGENT_SIDE_EFFECT_METADATA|AGENT_SIDE_EFFECT_IPC;",
+        "close direct admission does not cover every detachable file effect",
+    )
+
     for name, direction, access in (
         ("sys_read", "readable", "PTE_W"),
         ("sys_write", "writable", "PTE_R"),
@@ -175,7 +183,8 @@ def check(root: Path) -> None:
             "if(class==SYSCALL_CLASS_INVALID)",
             "policy=syscall_policy_base(class)",
             "if(syscall_needs_transaction(class))",
-            "ret=syscall_slow_path(trapframe,id,policy)",
+            "ret=syscall_slow_path(trapframe,id,policy,&direct_guard,"
+            "&operation_denied)",
             "ret=syscall_dispatch(id,trapframe,0)",
         ),
         "syscall entry does not split fast and slow paths from one policy",

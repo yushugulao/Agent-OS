@@ -1,6 +1,7 @@
 #include "agent_context.h"
 #include "agent_internal.h"
 #include "agent_live_query_events.h"
+#include "agent_provenance.h"
 #include "defs.h"
 #include "timer.h"
 #include "trap.h"
@@ -432,6 +433,7 @@ struct agent_ipc_wait_reservation {
 	uint64 span_owner;
 	uint64 source_control;
 	uint64 audit_principal;
+	uint64 provenance_labels;
 };
 
 static int
@@ -461,6 +463,9 @@ agent_ipc_wait_reserve_locked(struct proc *p, struct thread *t,
 		reservation->source_control = p->agent_wait_cancel_source_control;
 		reservation->audit_principal =
 			p->agent_wait_cancel_audit_principal;
+		reservation->provenance_labels =
+			AGENT_PROVENANCE_AGENT_DERIVED |
+			AGENT_PROVENANCE_CROSS_AGENT_DATA;
 		event->type = AGENT_EVENT_CANCELLED;
 		event->source_pid = p->agent_wait_cancel_source_pid;
 		event->target_pid = p->pid;
@@ -488,6 +493,8 @@ agent_ipc_wait_reserve_locked(struct proc *p, struct thread *t,
 	reservation->span_owner = cold->event_span_owner[slot];
 	reservation->source_control = cold->event_source_control[slot];
 	reservation->audit_principal = cold->event_audit_principal[slot];
+	reservation->provenance_labels = AGENT_CONTEXT_PROVENANCE_DECODE(
+		cold->event_accounting[slot]);
 	cold->event_accounting[slot] |= AGENT_EVENT_ACCOUNT_RESERVED;
 	reservation->slot = slot;
 	reservation->cookie = event->event_id;
@@ -702,6 +709,9 @@ static int agent_ipc_queue_event_locked(struct proc *target, struct proc *source
 	accounting = agent_ipc_origin_policy[origin].accounting;
 	if (delivery == AGENT_EVENT_INTRINSIC_COALESCED)
 		accounting = AGENT_EVENT_ACCOUNT_COALESCED;
+	accounting |= AGENT_CONTEXT_PROVENANCE_ENCODE(
+		agent_provenance_ipc_output_labels(
+			source, origin == AGENT_EVENT_ORIGIN_KERNEL));
 	if (target->agent_event_count_queued >= AGENT_EVENT_QUEUE_CAP ||
 	    ((accounting & AGENT_EVENT_ACCOUNT_EXTERNAL) != 0 &&
 	    (target->agent_external_event_count_queued >=
@@ -857,6 +867,8 @@ int agent_ipc_deliver_pid(int pid, struct proc *source, int type,
 		target->agent_mailbox_from = source->pid;
 		safestrcpy(target->agent_mailbox, payload,
 			   sizeof(target->agent_mailbox));
+		agent_provenance_mailbox_publish(
+			target, agent_provenance_ipc_output_labels(source, 0));
 	}
 	if (delivered)
 		*delivered = 1;
@@ -1032,6 +1044,7 @@ agent_ipc_mailbox_take(struct proc *p, int *source_pid, char *message, int n)
 			*source_pid = p->agent_mailbox_from;
 		safestrcpy(message, p->agent_mailbox, n);
 		p->agent_mailbox_valid = 0;
+		(void)agent_provenance_mailbox_take(p);
 	}
 	intr_restore(enabled);
 	return available;
@@ -1276,9 +1289,23 @@ recheck_locked:
 			AGENT_LOOP_RUNNING : AGENT_LOOP_IDLE);
 	intr_restore(enabled);
 	if (status == AGENT_STATUS_OK || status == AGENT_STATUS_CANCELLED) {
-		/* 仅在 copyout 与串行归因都成功后提交保留项。 */
+		/*
+		 * Provenance is monotonic and must become visible before payload
+		 * bytes do.  A sibling thread may observe the shared destination as
+		 * soon as copyout starts, so merging after copyout would briefly let
+		 * cross-Agent data retain the caller's previous (cleaner) labels.
+		 * A failed copyout deliberately keeps the conservative over-taint;
+		 * the event reservation itself is still rolled back for retry.
+		 */
 		if (agent_lifecycle_context_lane_enter(p) < 0) {
 			agent_ipc_wait_finish(p, &reservation, 0);
+			status = -1;
+			goto out;
+		}
+		if (agent_provenance_merge_current(
+			    p, reservation.provenance_labels) != AGENT_STATUS_OK) {
+			agent_ipc_wait_finish(p, &reservation, 0);
+			agent_lifecycle_context_lane_leave(p);
 			status = -1;
 			goto out;
 		}

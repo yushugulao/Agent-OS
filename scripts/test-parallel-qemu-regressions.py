@@ -76,6 +76,15 @@ class ParallelQemuRegressionTests(unittest.TestCase):
         self.assertEqual(args.jobs, 3)
         self.assertEqual(args.build_jobs, 7)
         self.assertNotIn("labbench_ucore", RUNNER.AGENT_CASE_NAMES)
+        bench = RUNNER.AGENT_CASE_NAMES.index("agentbench_ucore")
+        self.assertEqual(
+            RUNNER.AGENT_CASE_NAMES[bench + 1 : bench + 4],
+            (
+                "agentcontract_ucore",
+                "agent_eevdf_ucore",
+                "agenttask_ucore",
+            ),
+        )
 
     def test_child_environment_drops_nested_make_and_parent_evidence(self) -> None:
         case = RUNNER.CASE_BY_LABEL["workflow-teardown-race"]

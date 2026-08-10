@@ -134,6 +134,7 @@ requested/effective jobs、lane inventory 和每步耗时，因此并行缩短�
 先检查环境和快速合同：
 
 ```bash
+export AGENT_TEST_DURATION_PROFILE=local-e3
 make evaluation-doctor
 make evaluation-smoke
 ```
@@ -144,6 +145,7 @@ make evaluation-smoke
 make evaluation-run
 make evaluation-verify
 make evaluation-kernel-cost
+make evaluation-full-verify
 ```
 
 生成页面和交付包：
@@ -151,11 +153,19 @@ make evaluation-kernel-cost
 ```bash
 make evaluation-dashboard
 make evaluation-package
-make evaluation-package-verify
 ```
 
-`make evaluation-full-verify` 将最终 evaluation 与整套内核验收绑定。远端默认没有
-Runner；这些命令在本地固定工具链环境执行，发布的 bundle 可离线复验。
+`evaluation-package` 会新增 `evidence/releases/<bundle>` 并更新索引。随后只提交这两项
+作为证据提交 E；在包含 E 的干净 checkout 中执行：
+
+```bash
+make evaluation-package-verify \
+  EVALUATION_BUNDLE_DIR=evidence/releases/<bundle>
+```
+
+`make evaluation-full-verify` 将最终 evaluation 与整套内核验收绑定，是正式打包的
+前置证据，不会由 `evaluation-package` 自动补跑。远端默认没有 Runner；这些命令在
+本地固定工具链环境执行，发布的 bundle 可离线复验。
 
 正式采集在一次性私有 staging 目录重新运行 Guest workload，不读取普通调试 run 的
 临时结果。双目标测量以随机 generation 区分；Guest log、manifest 和 CSV 全部通过

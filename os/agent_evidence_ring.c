@@ -1,7 +1,10 @@
 #include "agent_evidence_ring.h"
+#include "../agent_provenance_abi.h"
 #include "agent_internal.h"
+#include "agent_observe_internal.h"
 #include "defs.h"
 #include "kalloc.h"
+#include "timer.h"
 #include "trap.h"
 #include "vfs_security.h"
 
@@ -14,6 +17,11 @@ enum agent_evidence_slot_state {
 
 #define AGENT_EVIDENCE_F_CRITICAL (1U << 0)
 #define AGENT_EVIDENCE_F_CAUSAL   (1U << 1)
+#define AGENT_EVIDENCE_F_SECURITY_DENIAL (1U << 2)
+#define AGENT_EVIDENCE_F_DIRECT_DENIAL   (1U << 3)
+
+#define AGENT_EVIDENCE_DIRECT_SYSCALL_NAMESPACE 0x40000000U
+#define AGENT_EVIDENCE_DIRECT_SYSCALL_ID_MASK   0x3fffffffU
 
 struct agent_evidence_event {
 	uint64 ticket;
@@ -84,6 +92,7 @@ struct agent_evidence_domain {
 	int sealing;
 	int allocating;
 	int pages_charged;
+	int direct_denials_prepared;
 	struct workflow_lifecycle_key key;
 	struct resource_account_handle page_account;
 	enum resource_charge_class page_charge_class;
@@ -191,10 +200,20 @@ agent_evidence_hash_event(const struct agent_evidence_event *event,
 			  uchar out[AGENT_SHA256_DIGEST_SIZE])
 {
 	static const char domain[] = "AgentOS evidence event v1";
+	static const char direct_domain[] =
+		"AgentOS direct syscall denial evidence v1";
 	struct agent_sha256_ctx hash;
+	const char *selected_domain;
+	uint selected_domain_size;
 
+	selected_domain =
+		(event->evidence_flags & AGENT_EVIDENCE_F_DIRECT_DENIAL) != 0 ?
+			direct_domain : domain;
+	selected_domain_size =
+		(event->evidence_flags & AGENT_EVIDENCE_F_DIRECT_DENIAL) != 0 ?
+			sizeof(direct_domain) - 1U : sizeof(domain) - 1U;
 	agent_sha256_init(&hash);
-	agent_sha256_update(&hash, domain, sizeof(domain) - 1U);
+	agent_sha256_update(&hash, selected_domain, selected_domain_size);
 	agent_evidence_hash_u64(&hash, event->ticket);
 	agent_evidence_hash_u64(&hash, event->audit_sequence);
 	agent_evidence_hash_u64(&hash, event->context_sequence);
@@ -284,6 +303,30 @@ agent_evidence_pages_ready(const struct agent_evidence_domain *state)
 		if (state->slot_pages[page] == 0)
 			return 0;
 	return 1;
+}
+
+int
+agent_evidence_context_preallocated(
+	struct proc *p, struct workflow_lifecycle_key key)
+{
+	struct agent_evidence_domain *state;
+	enum resource_charge_class charge_class;
+	int ready;
+	int enabled;
+
+	if (p == 0 || !p->is_agent ||
+	    !workflow_lifecycle_key_equal(vfs_proc_lifecycle(p), key))
+		return 0;
+	charge_class = p->resource_slot_reserved ?
+		RESOURCE_CHARGE_RESERVED : RESOURCE_CHARGE_ORDINARY;
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(key, 0);
+	ready = agent_evidence_pages_ready(state) &&
+		resource_account_handle_equal(state->page_account,
+					      p->resource_account) &&
+		state->page_charge_class == charge_class;
+	intr_restore(enabled);
+	return ready;
 }
 
 static void
@@ -463,6 +506,7 @@ agent_evidence_domain_locked(struct workflow_lifecycle_key key, int create)
 	state->sealing = 0;
 	state->allocating = 0;
 	state->pages_charged = 0;
+	state->direct_denials_prepared = 0;
 	state->key = key;
 	state->page_account = resource_account_none();
 	state->page_charge_class = RESOURCE_CHARGE_CLASS_COUNT;
@@ -649,6 +693,7 @@ agent_evidence_domain_release_locked(
 	state->sealing = 0;
 	state->allocating = 0;
 	state->pages_charged = 0;
+	state->direct_denials_prepared = 0;
 	state->key = workflow_lifecycle_none();
 	state->page_account = resource_account_none();
 	state->page_charge_class = RESOURCE_CHARGE_CLASS_COUNT;
@@ -948,6 +993,30 @@ agent_evidence_reserve_locked(struct agent_evidence_domain *state,
 	return AGENT_EVIDENCE_RESERVE_ROLLOVER;
 }
 
+static struct agent_evidence_slot *
+agent_evidence_free_slot_locked(struct agent_evidence_domain *state,
+				int critical, uint *index_out)
+{
+	uint capacity = critical ? AGENT_EVIDENCE_CRITICAL_CAP :
+				   AGENT_EVIDENCE_ORDINARY_CAP;
+	uint cursor = critical ? state->critical_cursor :
+				 state->ordinary_cursor;
+
+	for (uint step = 0; step < capacity; step++) {
+		uint index = (cursor + step) % capacity;
+		struct agent_evidence_slot *slot =
+			agent_evidence_slot_at(state, critical, index);
+
+		if (slot != 0 &&
+		    (slot->state == AGENT_EVIDENCE_SLOT_FREE ||
+		     slot->state == AGENT_EVIDENCE_SLOT_DISCARDED)) {
+			*index_out = index;
+			return slot;
+		}
+	}
+	return 0;
+}
+
 static void
 agent_evidence_note_ticket_locked(struct agent_evidence_domain *state,
 				  uint64 ticket, int gap, int critical)
@@ -1029,6 +1098,323 @@ agent_evidence_init(void)
 	memset(agent_evidence_retained, 0, sizeof(agent_evidence_retained));
 }
 
+static int
+agent_evidence_lifecycle_participant_valid(
+	struct proc *p, struct workflow_lifecycle_key key,
+	struct thread **thread_out)
+{
+	struct thread *thread = curr_thread();
+	uint scope_id;
+
+	if (thread_out != 0)
+		*thread_out = 0;
+	if (p == 0 || p->pid <= 0 || thread == 0 || thread->process != p ||
+	    !proc_teardown_live(p) || thread->state != RUNNING ||
+	    thread->tid < 0 || thread->tid >= NTHREAD ||
+	    thread->identity_generation == 0 ||
+	    !thread->resource_slot_charged ||
+	    !p->workflow_lifecycle_charged ||
+	    !workflow_lifecycle_key_equal(vfs_proc_lifecycle(p), key) ||
+	    !workflow_lifecycle_active(key) ||
+	    workflow_lifecycle_scope(key, &scope_id) < 0 ||
+	    !vfs_scope_active(scope_id) ||
+	    !vfs_proc_scope_publishable(p) ||
+	    (p->vfs_scope_id != VFS_SCOPE_NONE &&
+	     p->vfs_scope_id != scope_id) ||
+	    (p->vfs_scope_id == VFS_SCOPE_NONE &&
+	     (p->vfs_scope_controller || p->vfs_effective_caps != 0 ||
+	      p->vfs_inheritable_caps != 0)) ||
+	    p->resource_domain_id < 0 || p->resource_account.generation == 0 ||
+	    !resource_account_active(p->resource_account) ||
+	    !resource_account_handle_equal(
+		    thread->resource_account, p->resource_account) ||
+	    thread->resource_slot_reserved != p->resource_slot_reserved)
+		return 0;
+	if (thread_out != 0)
+		*thread_out = thread;
+	return 1;
+}
+
+static int
+agent_evidence_direct_controller_valid(
+	struct proc *controller, struct workflow_lifecycle_key key)
+{
+	struct thread *thread;
+	uint scope_id;
+
+	return agent_evidence_lifecycle_participant_valid(
+		       controller, key, &thread) &&
+	       controller->is_agent &&
+	       workflow_lifecycle_scope(key, &scope_id) == 0 &&
+	       controller->vfs_scope_id == scope_id &&
+	       agent_identity_has_cap(controller, AGENT_CAP_ORCHESTRATE) &&
+	       controller->agent_control_id != 0 &&
+	       workflow_lifecycle_controller_matches(
+		       key, scope_id, controller->agent_control_id);
+}
+
+int
+agent_evidence_prepare_direct_denials(
+	struct proc *controller, struct workflow_lifecycle_key key)
+{
+	struct agent_evidence_domain *state;
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+	int enabled;
+
+	if (!agent_evidence_direct_controller_valid(controller, key))
+		return -1;
+	account = controller->resource_account;
+	charge_class = controller->resource_slot_reserved ?
+		RESOURCE_CHARGE_RESERVED : RESOURCE_CHARGE_ORDINARY;
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(key, 1);
+	intr_restore(enabled);
+	if (state == 0 || agent_evidence_pages_ensure(key, controller) < 0 ||
+	    !agent_evidence_direct_controller_valid(controller, key))
+		return -1;
+
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(key, 0);
+	if (state == 0 || state->sealing || state->allocating ||
+	    !agent_evidence_pages_ready(state) ||
+	    !agent_evidence_direct_controller_valid(controller, key) ||
+	    !resource_account_handle_equal(state->page_account, account) ||
+	    state->page_charge_class != charge_class ||
+	    !resource_account_active(account) ||
+	    !workflow_lifecycle_active(key)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	state->direct_denials_prepared = 1;
+	intr_restore(enabled);
+	return 0;
+}
+
+static int
+agent_evidence_direct_actor_valid_locked(
+	struct proc *actor, struct thread *thread,
+	struct workflow_lifecycle_key key,
+	const struct agent_evidence_domain *state,
+	uint64 thread_generation,
+	struct resource_account_handle account)
+{
+	struct thread *current;
+
+	return agent_evidence_lifecycle_participant_valid(
+		       actor, key, &current) &&
+	       !actor->is_agent && thread != 0 && current == thread &&
+	       thread->identity_generation == thread_generation &&
+	       thread_generation != 0 && state != 0 &&
+	       state->direct_denials_prepared &&
+	       workflow_lifecycle_key_equal(state->key, key) &&
+	       agent_evidence_pages_ready(state) &&
+	       account.generation != 0 &&
+	       resource_account_handle_equal(actor->resource_account, account) &&
+	       resource_account_handle_equal(thread->resource_account, account) &&
+	       resource_account_handle_equal(state->page_account, account) &&
+	       resource_account_active(account) &&
+	       state->page_charge_class ==
+		       (actor->resource_slot_reserved ?
+			       RESOURCE_CHARGE_RESERVED :
+			       RESOURCE_CHARGE_ORDINARY) &&
+	       thread->resource_slot_reserved == actor->resource_slot_reserved;
+}
+
+static uint64
+agent_evidence_direct_record_hash(
+	const struct workflow_lifecycle_key key,
+	const struct resource_account_handle account,
+	const struct agent_evidence_event *event)
+{
+	static const char domain[] =
+		"AgentOS direct syscall denial record v1";
+	struct agent_sha256_ctx hash;
+	uchar digest[AGENT_SHA256_DIGEST_SIZE];
+	uint64 record_hash = 0;
+
+	agent_sha256_init(&hash);
+	agent_sha256_update(&hash, domain, sizeof(domain) - 1U);
+	agent_evidence_hash_u32(&hash, key.id);
+	agent_evidence_hash_u64(&hash, key.generation);
+	agent_evidence_hash_u32(&hash, account.slot);
+	agent_evidence_hash_u64(&hash, account.generation);
+	agent_evidence_hash_u64(&hash, event->ticket);
+	agent_evidence_hash_u64(&hash, event->audit_sequence);
+	agent_evidence_hash_u64(&hash, event->context_sequence);
+	agent_evidence_hash_u64(&hash, event->request_id);
+	agent_evidence_hash_u64(&hash, event->value0);
+	agent_evidence_hash_u64(&hash, event->value1);
+	agent_evidence_hash_u64(&hash, event->value2);
+	agent_evidence_hash_u32(&hash, (uint32)event->pid);
+	agent_evidence_hash_u32(&hash, (uint32)event->tid);
+	agent_evidence_hash_u32(&hash, (uint32)event->tool_id);
+	agent_evidence_hash_u32(&hash, (uint32)event->status);
+	agent_evidence_hash_u32(
+		&hash, AGENT_PROVENANCE_DENY_MISSING_CONTRACT);
+	agent_sha256_final(&hash, digest);
+	for (uint i = 0; i < sizeof(record_hash); i++)
+		record_hash = (record_hash << 8) | digest[i];
+	memset(digest, 0, sizeof(digest));
+	return record_hash != 0 ? record_hash : 1;
+}
+
+int
+agent_evidence_append_direct_syscall_denial(
+	struct proc *actor, struct workflow_lifecycle_key key, int syscall_id,
+	uint64 side_effect_mask, uint64 *ticket_out)
+{
+	struct agent_evidence_domain *state;
+	struct agent_evidence_reservation reservation;
+	struct resource_account_handle account;
+	struct agent_evidence_event *event;
+	struct thread *thread;
+	uint64 thread_generation;
+	uint64 audit_sequence;
+	int reserve_status;
+	int commit_status;
+	int enabled;
+
+	if (ticket_out == 0)
+		return -1;
+	*ticket_out = 0;
+	if (actor == 0 || actor->is_agent || syscall_id < 0 ||
+	    (uint)syscall_id > AGENT_EVIDENCE_DIRECT_SYSCALL_ID_MASK ||
+	    side_effect_mask == 0 ||
+	    (side_effect_mask & ~AGENT_SIDE_EFFECT_ALL) != 0 ||
+	    !agent_evidence_lifecycle_participant_valid(actor, key, &thread))
+		return -1;
+	account = actor->resource_account;
+	thread_generation = thread->identity_generation;
+
+	/* This path may consume only the controller-funded critical reserve. */
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(key, 0);
+	reserve_status =
+		agent_evidence_direct_actor_valid_locked(
+			actor, thread, key, state, thread_generation, account) ?
+			agent_evidence_reserve_locked(
+				state, 1, &reservation) :
+			AGENT_EVIDENCE_RESERVE_RETRY;
+	intr_restore(enabled);
+	/* Full, sealing, unprepared, and generation-mismatched rings fail closed. */
+	if (reserve_status != AGENT_EVIDENCE_RESERVE_OK)
+		return -1;
+
+	audit_sequence = agent_observe_alloc_audit_sequence();
+	if (audit_sequence == 0) {
+		enabled = intr_save();
+		state = agent_evidence_domain_locked(key, 0);
+		agent_evidence_discard_locked(state, &reservation);
+		intr_restore(enabled);
+		return -1;
+	}
+	event = &reservation.slot->event;
+	memset(event, 0, sizeof(*event));
+	event->ticket = reservation.ticket;
+	event->audit_sequence = audit_sequence;
+	event->context_sequence = 0;
+	event->request_id =
+		(audit_sequence << 1) ^ reservation.ticket ^
+		((uint64)(uint)actor->pid << 32) ^
+		(uint64)(uint)syscall_id;
+	if (event->request_id == 0)
+		event->request_id = 1;
+	event->tick = get_cycle() / (CPU_FREQ / TICKS_PER_SEC);
+	event->arg0 = side_effect_mask;
+	event->value0 = side_effect_mask;
+	event->value1 = thread_generation;
+	event->value2 = AGENT_PROVENANCE_DENY_MISSING_CONTRACT;
+	event->flags = AGENT_CONTEXT_RECORD_F_SECURITY_DENIAL;
+	event->evidence_flags = AGENT_EVIDENCE_F_CRITICAL |
+		AGENT_EVIDENCE_F_SECURITY_DENIAL |
+		AGENT_EVIDENCE_F_DIRECT_DENIAL;
+	event->pid = actor->pid;
+	event->tid = thread->tid;
+	event->source_pid = actor->pid;
+	event->target_pid = actor->pid;
+	event->tool_id = (int)(AGENT_EVIDENCE_DIRECT_SYSCALL_NAMESPACE |
+			       (uint)syscall_id);
+	event->status = AGENT_STATUS_DENIED;
+	safestrcpy(event->payload, "direct_syscall", sizeof(event->payload));
+	safestrcpy(event->result, "deny_missing_contract",
+		   sizeof(event->result));
+	/* Hash after all projected fields are populated. */
+	event->record_hash = agent_evidence_direct_record_hash(
+		key, account, event);
+
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(key, 0);
+	commit_status = agent_evidence_direct_actor_valid_locked(
+		actor, thread, key, state, thread_generation, account) ?
+		agent_evidence_commit_locked(state, &reservation) : -1;
+	if (commit_status < 0 && state != 0)
+		agent_evidence_discard_locked(state, &reservation);
+	intr_restore(enabled);
+	if (commit_status < 0)
+		return -1;
+	*ticket_out = reservation.ticket;
+	return reservation.ticket != 0 ? 0 : -1;
+}
+
+static int
+agent_evidence_context_event_init(
+	struct proc *p, const struct agent_context_record *record,
+	uint64 audit_sequence, uint64 span_owner, int source_pid,
+	uint64 cause_control, uint64 cause_branch, int authority_effect,
+	int causal_audit, struct agent_evidence_event *event, int *critical_out)
+{
+	struct thread *thread = curr_thread();
+	int critical;
+
+	if (p == 0 || record == 0 || event == 0 || critical_out == 0 ||
+	    !p->is_agent || record->sequence == 0 || audit_sequence == 0)
+		return -1;
+	critical = authority_effect || record->status != AGENT_STATUS_OK;
+	memset(event, 0, sizeof(*event));
+	event->audit_sequence = audit_sequence;
+	event->context_sequence = record->sequence;
+	event->request_id = record->request_id;
+	event->tick = record->tick;
+	event->cause_sequence = record->cause_sequence;
+	event->span_id = record->span_id;
+	event->branch_generation = record->branch_generation;
+	event->path_parent_sequence = record->path_parent_sequence;
+	event->arg0 = record->arg0;
+	event->cause_branch_generation = cause_branch;
+	event->actor_control_id = p->agent_control_id;
+	event->cause_control_id = cause_control;
+	event->cause_record_hash = cause_control == p->agent_control_id ?
+					 record->prev_hash : 0;
+	event->prev_hash = record->prev_hash;
+	event->record_hash = record->record_hash;
+	event->value0 = record->value0;
+	event->value1 = record->value1;
+	event->value2 = record->value2;
+	event->flags = record->flags;
+	event->span_owner = span_owner;
+	event->evidence_flags =
+		(critical ? AGENT_EVIDENCE_F_CRITICAL : 0) |
+		(causal_audit ? AGENT_EVIDENCE_F_CAUSAL : 0) |
+		((record->flags &
+		  AGENT_CONTEXT_RECORD_F_SECURITY_DENIAL) != 0 ?
+			 AGENT_EVIDENCE_F_SECURITY_DENIAL : 0);
+	event->pid = p->pid;
+	event->tid = thread != 0 && thread->process == p ? thread->tid : 0;
+	event->source_pid = source_pid > 0 ? source_pid : p->pid;
+	event->target_pid = p->pid;
+	event->agent_id = p->agent_id;
+	event->role = p->agent_role;
+	event->loop_state = thread != 0 && thread->process == p ?
+				    thread->agent_loop_state : p->loop_state;
+	event->tool_id = record->tool_id;
+	event->status = record->status;
+	memmove(event->payload, record->payload, sizeof(event->payload));
+	memmove(event->result, record->result, sizeof(event->result));
+	*critical_out = critical;
+	return 0;
+}
+
 int
 agent_evidence_append_context(struct proc *p,
 			      const struct agent_context_record *record,
@@ -1042,7 +1428,6 @@ agent_evidence_append_context(struct proc *p,
 	struct agent_evidence_domain *state;
 	struct agent_evidence_reservation reservation;
 	struct workflow_lifecycle_key key;
-	struct thread *thread = curr_thread();
 	int critical;
 	int enabled;
 	int reserve_status;
@@ -1050,8 +1435,10 @@ agent_evidence_append_context(struct proc *p,
 
 	if (ticket_out != 0)
 		*ticket_out = 0;
-	if (p == 0 || record == 0 || !p->is_agent || record->sequence == 0 ||
-	    audit_sequence == 0)
+	if (agent_evidence_context_event_init(
+		    p, record, audit_sequence, span_owner, source_pid,
+		    cause_control, cause_branch, authority_effect, causal_audit,
+		    &event, &critical) < 0)
 		return -1;
 	key.id = p->workflow_lifecycle_id;
 	key.generation = p->workflow_lifecycle_generation;
@@ -1059,44 +1446,6 @@ agent_evidence_append_context(struct proc *p,
 	if (!workflow_lifecycle_key_valid(key) ||
 	    key.id > WORKFLOW_LIFECYCLE_CAP)
 		return -1;
-	critical = authority_effect || record->status != AGENT_STATUS_OK;
-	memset(&event, 0, sizeof(event));
-	event.audit_sequence = audit_sequence;
-	event.context_sequence = record->sequence;
-	event.request_id = record->request_id;
-	event.tick = record->tick;
-	event.cause_sequence = record->cause_sequence;
-	event.span_id = record->span_id;
-	event.branch_generation = record->branch_generation;
-	event.path_parent_sequence = record->path_parent_sequence;
-	event.arg0 = record->arg0;
-	event.cause_branch_generation = cause_branch;
-	event.actor_control_id = p->agent_control_id;
-	event.cause_control_id = cause_control;
-	event.cause_record_hash = cause_control == p->agent_control_id ?
-					 record->prev_hash : 0;
-	event.prev_hash = record->prev_hash;
-	event.record_hash = record->record_hash;
-	event.value0 = record->value0;
-	event.value1 = record->value1;
-	event.value2 = record->value2;
-	event.flags = record->flags;
-	event.span_owner = span_owner;
-	event.evidence_flags = (critical ? AGENT_EVIDENCE_F_CRITICAL : 0) |
-			       (causal_audit ? AGENT_EVIDENCE_F_CAUSAL : 0);
-	event.pid = p->pid;
-	event.tid = thread != 0 && thread->process == p ? thread->tid : 0;
-	event.source_pid = source_pid > 0 ? source_pid : p->pid;
-	event.target_pid = p->pid;
-	event.agent_id = p->agent_id;
-	event.role = p->agent_role;
-	event.loop_state = thread != 0 && thread->process == p ?
-				   thread->agent_loop_state : p->loop_state;
-	event.tool_id = record->tool_id;
-	event.status = record->status;
-	memmove(event.payload, record->payload, sizeof(event.payload));
-	memmove(event.result, record->result, sizeof(event.result));
-
 	enabled = intr_save();
 	state = agent_evidence_domain_locked(key, 1);
 	intr_restore(enabled);
@@ -1133,6 +1482,341 @@ agent_evidence_append_context(struct proc *p,
 		return commit_status;
 	}
 	return -1;
+}
+
+int
+agent_evidence_context_reserve(
+	struct proc *p, struct agent_evidence_context_reservation *out)
+{
+	struct agent_evidence_domain *state;
+	struct agent_evidence_slot *ordinary, *critical;
+	struct workflow_lifecycle_key key;
+	uint ordinary_index = 0, critical_index = 0;
+	int reserve_status;
+	int enabled;
+
+	if (out == 0)
+		return -1;
+	memset(out, 0, sizeof(*out));
+	if (p == 0 || !p->is_agent)
+		return -1;
+	key.id = p->workflow_lifecycle_id;
+	key.generation = p->workflow_lifecycle_generation;
+	if (!workflow_lifecycle_key_valid(key) ||
+	    key.id > WORKFLOW_LIFECYCLE_CAP)
+		return -1;
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(key, 1);
+	intr_restore(enabled);
+	if (state == 0 || agent_evidence_pages_ensure(key, p) < 0)
+		return -1;
+
+	for (uint attempt = 0; attempt < 2U; attempt++) {
+		enabled = intr_save();
+		state = agent_evidence_domain_locked(key, 0);
+		reserve_status = AGENT_EVIDENCE_RESERVE_RETRY;
+		ordinary = 0;
+		critical = 0;
+		if (state != 0 && !state->sealing && !state->allocating &&
+		    agent_evidence_pages_ready(state) &&
+		    state->next_ticket != 0 && state->inflight <= (uint)-3) {
+			ordinary = agent_evidence_free_slot_locked(
+				state, 0, &ordinary_index);
+			critical = agent_evidence_free_slot_locked(
+				state, 1, &critical_index);
+			reserve_status = ordinary != 0 && critical != 0 ?
+				AGENT_EVIDENCE_RESERVE_OK :
+				AGENT_EVIDENCE_RESERVE_ROLLOVER;
+		}
+		if (reserve_status == AGENT_EVIDENCE_RESERVE_OK) {
+			out->key = key;
+			out->ordinary_slot = ordinary;
+			out->critical_slot = critical;
+			out->ticket = state->next_ticket++;
+			out->active = 1;
+			state->ordinary_cursor =
+				(ordinary_index + 1U) % AGENT_EVIDENCE_ORDINARY_CAP;
+			state->critical_cursor =
+				(critical_index + 1U) % AGENT_EVIDENCE_CRITICAL_CAP;
+			ordinary->reserved_ticket = out->ticket;
+			critical->reserved_ticket = out->ticket;
+			__atomic_store_n(&ordinary->state,
+					 AGENT_EVIDENCE_SLOT_BUSY,
+					 __ATOMIC_RELEASE);
+			__atomic_store_n(&critical->state,
+					 AGENT_EVIDENCE_SLOT_BUSY,
+					 __ATOMIC_RELEASE);
+			state->inflight += 2U;
+		}
+		intr_restore(enabled);
+		if (reserve_status == AGENT_EVIDENCE_RESERVE_OK)
+			return 0;
+		if (reserve_status != AGENT_EVIDENCE_RESERVE_ROLLOVER ||
+		    agent_evidence_rollover(key) < 0)
+			return -1;
+	}
+	return -1;
+}
+
+static int
+agent_evidence_context_release_locked(
+	struct agent_evidence_domain *state,
+	struct agent_evidence_context_reservation *reservation, int gap)
+{
+	struct agent_evidence_slot *ordinary = reservation->ordinary_slot;
+	struct agent_evidence_slot *critical = reservation->critical_slot;
+
+	if (state == 0 || ordinary == 0 || critical == 0 ||
+	    !workflow_lifecycle_key_equal(state->key, reservation->key) ||
+	    ordinary->state != AGENT_EVIDENCE_SLOT_BUSY ||
+	    critical->state != AGENT_EVIDENCE_SLOT_BUSY ||
+	    ordinary->reserved_ticket != reservation->ticket ||
+	    critical->reserved_ticket != reservation->ticket ||
+	    state->inflight < 2U)
+		return -1;
+	ordinary->reserved_ticket = 0;
+	critical->reserved_ticket = 0;
+	__atomic_store_n(&ordinary->state,
+		gap ? AGENT_EVIDENCE_SLOT_DISCARDED : AGENT_EVIDENCE_SLOT_FREE,
+		__ATOMIC_RELEASE);
+	__atomic_store_n(&critical->state,
+		gap ? AGENT_EVIDENCE_SLOT_DISCARDED : AGENT_EVIDENCE_SLOT_FREE,
+		__ATOMIC_RELEASE);
+	state->inflight -= 2U;
+	if (gap)
+		agent_evidence_note_ticket_locked(
+			state, reservation->ticket, 1, 0);
+	return 0;
+}
+
+void
+agent_evidence_context_abort(
+	struct agent_evidence_context_reservation *reservation)
+{
+	struct agent_evidence_domain *state;
+	int enabled;
+
+	if (reservation == 0 || !reservation->active)
+		return;
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(reservation->key, 0);
+	if (agent_evidence_context_release_locked(state, reservation, 1) < 0)
+		panic("evidence context reservation abort");
+	intr_restore(enabled);
+	memset(reservation, 0, sizeof(*reservation));
+}
+
+int
+agent_evidence_context_commit(
+	struct proc *p, const struct agent_context_record *record,
+	uint64 audit_sequence, uint64 span_owner, int source_pid,
+	uint64 cause_control, uint64 cause_branch, int authority_effect,
+	int causal_audit,
+	struct agent_evidence_context_reservation *reservation,
+	uint64 *ticket_out)
+{
+	struct agent_evidence_event event;
+	struct agent_evidence_reservation selected;
+	struct agent_evidence_domain *state;
+	struct agent_evidence_slot *unused;
+	struct workflow_lifecycle_key key;
+	int critical;
+	int enabled;
+	int result = -1;
+
+	if (ticket_out == 0)
+		return -1;
+	*ticket_out = 0;
+	if (p == 0 || record == 0 || reservation == 0 ||
+	    !reservation->active || reservation->ticket == 0 ||
+	    agent_evidence_context_event_init(
+		    p, record, audit_sequence, span_owner, source_pid,
+		    cause_control, cause_branch, authority_effect, causal_audit,
+		    &event, &critical) < 0)
+		return -1;
+	key.id = p->workflow_lifecycle_id;
+	key.generation = p->workflow_lifecycle_generation;
+	if (!workflow_lifecycle_key_equal(key, reservation->key))
+		return -1;
+	memset(&selected, 0, sizeof(selected));
+	selected.key = reservation->key;
+	selected.slot = critical ? reservation->critical_slot :
+				   reservation->ordinary_slot;
+	selected.ticket = reservation->ticket;
+	selected.critical = critical;
+	unused = critical ? reservation->ordinary_slot :
+			    reservation->critical_slot;
+	event.ticket = selected.ticket;
+	memmove(&selected.slot->event, &event, sizeof(event));
+
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(selected.key, 0);
+	if (state == 0 || state->sealing || unused == 0 ||
+	    unused->state != AGENT_EVIDENCE_SLOT_BUSY ||
+	    unused->reserved_ticket != selected.ticket ||
+	    selected.slot->state != AGENT_EVIDENCE_SLOT_BUSY ||
+	    selected.slot->reserved_ticket != selected.ticket ||
+	    state->inflight < 2U)
+		panic("evidence context reservation commit");
+	unused->reserved_ticket = 0;
+	__atomic_store_n(&unused->state, AGENT_EVIDENCE_SLOT_FREE,
+			 __ATOMIC_RELEASE);
+	state->inflight--;
+	result = agent_evidence_commit_locked(state, &selected);
+	if (result < 0)
+		panic("evidence context commit");
+	intr_restore(enabled);
+	if (result == 0)
+		*ticket_out = selected.ticket;
+	memset(reservation, 0, sizeof(*reservation));
+	return result;
+}
+
+int
+agent_evidence_security_reserve(
+	struct proc *p, struct agent_evidence_security_reservation *out)
+{
+	struct agent_evidence_domain *state;
+	struct agent_evidence_reservation reservation;
+	struct workflow_lifecycle_key key;
+	int reserve_status;
+	int enabled;
+
+	if (out == 0)
+		return -1;
+	memset(out, 0, sizeof(*out));
+	if (p == 0 || !p->is_agent)
+		return -1;
+	key.id = p->workflow_lifecycle_id;
+	key.generation = p->workflow_lifecycle_generation;
+	if (!workflow_lifecycle_key_valid(key) ||
+	    key.id > WORKFLOW_LIFECYCLE_CAP)
+		return -1;
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(key, 1);
+	intr_restore(enabled);
+	if (state == 0 || agent_evidence_pages_ensure(key, p) < 0)
+		return -1;
+	for (uint attempt = 0; attempt < 2U; attempt++) {
+		enabled = intr_save();
+		state = agent_evidence_domain_locked(key, 0);
+		reserve_status = state == 0 ? AGENT_EVIDENCE_RESERVE_RETRY :
+			agent_evidence_reserve_locked(
+				state, 1, &reservation);
+		intr_restore(enabled);
+		if (reserve_status == AGENT_EVIDENCE_RESERVE_ROLLOVER) {
+			if (agent_evidence_rollover(key) < 0)
+				return -1;
+			continue;
+		}
+		if (reserve_status != AGENT_EVIDENCE_RESERVE_OK)
+			return -1;
+		out->key = reservation.key;
+		out->slot = reservation.slot;
+		out->ticket = reservation.ticket;
+		out->active = 1;
+		return 0;
+	}
+	return -1;
+}
+
+void
+agent_evidence_security_abort(
+	struct agent_evidence_security_reservation *reservation)
+{
+	struct agent_evidence_reservation internal;
+	struct agent_evidence_domain *state;
+	int enabled;
+
+	if (reservation == 0 || !reservation->active)
+		return;
+	memset(&internal, 0, sizeof(internal));
+	internal.key = reservation->key;
+	internal.slot = reservation->slot;
+	internal.ticket = reservation->ticket;
+	internal.critical = 1;
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(reservation->key, 0);
+	if (state != 0)
+		agent_evidence_discard_locked(state, &internal);
+	intr_restore(enabled);
+	memset(reservation, 0, sizeof(*reservation));
+}
+
+int
+agent_evidence_security_commit(
+	struct proc *p, const struct agent_context_record *record,
+	uint64 audit_sequence, uint64 span_owner, int source_pid,
+	uint64 cause_control, uint64 cause_branch,
+	struct agent_evidence_security_reservation *reservation,
+	uint64 *ticket_out)
+{
+	struct agent_evidence_event event;
+	struct agent_evidence_reservation internal;
+	struct agent_evidence_domain *state;
+	struct workflow_lifecycle_key key;
+	int critical;
+	int commit_status;
+	int enabled;
+
+	if (ticket_out == 0)
+		return -1;
+	*ticket_out = 0;
+	if (p == 0 || record == 0 || reservation == 0 ||
+	    !reservation->active || reservation->slot == 0 ||
+	    reservation->ticket == 0 || record->status == AGENT_STATUS_OK ||
+	    (record->flags & AGENT_CONTEXT_RECORD_F_SECURITY_DENIAL) == 0 ||
+	    agent_evidence_context_event_init(
+		    p, record, audit_sequence, span_owner, source_pid,
+		    cause_control, cause_branch, 1, 1, &event, &critical) < 0 ||
+	    !critical)
+		return -1;
+	key.id = p->workflow_lifecycle_id;
+	key.generation = p->workflow_lifecycle_generation;
+	if (!workflow_lifecycle_key_equal(key, reservation->key))
+		return -1;
+	memset(&internal, 0, sizeof(internal));
+	internal.key = reservation->key;
+	internal.slot = reservation->slot;
+	internal.ticket = reservation->ticket;
+	internal.critical = 1;
+	event.ticket = internal.ticket;
+	memmove(&internal.slot->event, &event, sizeof(event));
+	enabled = intr_save();
+	state = agent_evidence_domain_locked(internal.key, 0);
+	commit_status = agent_evidence_commit_locked(state, &internal);
+	if (commit_status < 0 && state != 0)
+		agent_evidence_discard_locked(state, &internal);
+	intr_restore(enabled);
+	if (commit_status == 0)
+		*ticket_out = internal.ticket;
+	memset(reservation, 0, sizeof(*reservation));
+	return commit_status;
+}
+
+int
+agent_evidence_append_security_denial(
+	struct proc *p, const struct agent_context_record *record,
+	uint64 audit_sequence, uint64 span_owner, int source_pid,
+	uint64 cause_control, uint64 cause_branch, uint64 *ticket_out)
+{
+	struct agent_evidence_security_reservation reservation;
+
+	if (ticket_out == 0)
+		return -1;
+	*ticket_out = 0;
+	if (record == 0 || record->status == AGENT_STATUS_OK ||
+	    (record->flags & AGENT_CONTEXT_RECORD_F_SECURITY_DENIAL) == 0)
+		return -1;
+	if (agent_evidence_security_reserve(p, &reservation) < 0)
+		return -1;
+	if (agent_evidence_security_commit(
+		    p, record, audit_sequence, span_owner, source_pid,
+		    cause_control, cause_branch, &reservation, ticket_out) < 0) {
+		agent_evidence_security_abort(&reservation);
+		return -1;
+	}
+	return *ticket_out != 0 ? 0 : -1;
 }
 
 int

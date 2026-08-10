@@ -23,7 +23,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 248)
+        self.assertEqual(len(self.golden), 564)
         self.assertEqual(
             self.golden["agent_uapi_layout_value_ledger_version"], 3
         )
@@ -139,6 +139,70 @@ class AgentUapiLayoutTests(unittest.TestCase):
             ],
             1,
         )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_execution_contract_node"],
+            168,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_execution_contract_node_schema_digest"
+            ],
+            57,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_request_v3"], 200
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_offset_request_v3_contract"], 73
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_request_v3_source_control_id"
+            ],
+            185,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_offset_request_v3_source_pid"],
+            193,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_request_v3_source_reserved"
+            ],
+            197,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_response_v3"], 280
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_provenance_manifest"], 32
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_task_sqe"], 128
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_offset_task_sqe_schema_digest"],
+            97,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_task_cqe"], 128
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_task_channel_enter_result_last_accepted_request_id"
+            ],
+            97,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_task_channel_setup_syscall"],
+            563,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_value_workflow_lifecycle_info_v2_size"
+            ],
+            64,
+        )
 
     def test_retired_syscall_numbers_remain_unassigned(self):
         id_paths = (
@@ -241,10 +305,91 @@ class AgentUapiLayoutTests(unittest.TestCase):
         self.assertIn("sizeof(struct agent_workflow_fence_request) == 56", source)
         self.assertIn("sizeof(struct agent_workflow_fence_receipt) == 320", source)
 
+    def feature_fixture(self):
+        temporary = tempfile.TemporaryDirectory()
+        root = Path(temporary.name)
+        (root / "os").mkdir()
+        (root / "user" / "include").mkdir(parents=True)
+        for relative in (
+            "agent_execution_contract_abi.h",
+            "agent_lifecycle_abi.h",
+            "agent_provenance_abi.h",
+            "agent_resource_abi.h",
+            "agent_task_channel_abi.h",
+            "agent_tool_abi.h",
+            "os/agent.h",
+            "user/include/agent.h",
+        ):
+            path = root / relative
+            path.write_text(
+                (ROOT / relative).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        return temporary, root
+
+    def test_new_feature_constants_and_lifecycle_prefix_are_frozen(self):
+        agent_uapi_layout.validate_feature_abi_constants(ROOT)
+        self.assertEqual(
+            set(agent_uapi_layout.SHARED_HEADER_PROBES),
+            {
+                "workflow-fence",
+                "execution-contract",
+                "provenance",
+                "task-channel",
+            },
+        )
+        temporary, root = self.feature_fixture()
+        with temporary:
+            path = root / "agent_task_channel_abi.h"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "#define AGENT_TASK_CHANNEL_CAPACITY      16U",
+                    "#define AGENT_TASK_CHANNEL_CAPACITY      32U",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "frozen value 16"
+            ):
+                agent_uapi_layout.validate_feature_abi_constants(root)
+
+    def test_syscall_reservations_reject_partial_task_wiring(self):
+        agent_uapi_layout.validate_agent_syscall_numbers(ROOT)
+        temporary = tempfile.TemporaryDirectory()
+        with temporary:
+            root = Path(temporary.name)
+            paths = (
+                "os/syscall_ids.h",
+                "user/lib/syscall_ids.h",
+                "user/lib/arch/riscv/syscall_ids.h.in",
+                "os/agent.h",
+                "user/include/agent.h",
+            )
+            for relative in paths:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+            path = root / "user/lib/syscall_ids.h"
+            source = path.read_text(encoding="utf-8")
+            definition = "#define SYS_agent_task_channel_enter 564\n"
+            self.assertIn(definition, source)
+            path.write_text(
+                source.replace(definition, "", 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "atomically mirror"
+            ):
+                agent_uapi_layout.validate_agent_syscall_numbers(root)
+
     def schema_fixture(self, key_literal):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
         (root / "os").mkdir()
+        (root / "user" / "include").mkdir(parents=True)
         abi = (ROOT / "agent_tool_abi.h").read_text(encoding="utf-8")
         protocol = (ROOT / "os" / "agent_tool_protocol.c").read_text(
             encoding="utf-8"
@@ -254,6 +399,15 @@ class AgentUapiLayoutTests(unittest.TestCase):
         (root / "os" / "agent_tool_protocol.c").write_text(
             protocol, encoding="utf-8"
         )
+        for relative in (
+            "agent_provenance_abi.h",
+            "os/agent.h",
+            "user/include/agent.h",
+        ):
+            (root / relative).write_text(
+                (ROOT / relative).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
         return temporary, root
 
     def test_tool_schema_registry_is_complete_and_encodable(self):
@@ -316,6 +470,57 @@ class AgentUapiLayoutTests(unittest.TestCase):
             path.write_text(source, encoding="utf-8")
             with self.assertRaisesRegex(
                 agent_uapi_layout.LayoutError, "offsets do not cover"
+            ):
+                agent_uapi_layout.validate_tool_protocol_schema(root)
+
+    def test_tool_security_registry_requires_one_row_per_tool(self):
+        temporary, root = self.schema_fixture(
+            'X(REPLY_SUMMARY, "reply_summary")'
+        )
+        with temporary:
+            path = root / "os" / "agent_tool_protocol.c"
+            source = path.read_text(encoding="utf-8").replace(
+                "\tX(0, AGENT_PROVENANCE_ALL, PROV_DERIVED, 0) \\\n",
+                "",
+                1,
+            )
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "not one-to-one"
+            ):
+                agent_uapi_layout.validate_tool_protocol_schema(root)
+
+    def test_tool_security_registry_rejects_unowned_numeric_masks(self):
+        temporary, root = self.schema_fixture(
+            'X(REPLY_SUMMARY, "reply_summary")'
+        )
+        with temporary:
+            path = root / "os" / "agent_tool_protocol.c"
+            source = path.read_text(encoding="utf-8").replace(
+                "X(0, AGENT_PROVENANCE_ALL, PROV_DERIVED, 0)",
+                "X(1ULL, AGENT_PROVENANCE_ALL, PROV_DERIVED, 0)",
+                1,
+            )
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "unowned numeric mask"
+            ):
+                agent_uapi_layout.validate_tool_protocol_schema(root)
+
+    def test_tool_manifest_requires_common_id_binding(self):
+        temporary, root = self.schema_fixture(
+            'X(REPLY_SUMMARY, "reply_summary")'
+        )
+        with temporary:
+            path = root / "os" / "agent_tool_protocol.c"
+            source = path.read_text(encoding="utf-8").replace(
+                "&agent_tool_security[tool_id - 1]",
+                "&agent_tool_security[tool_id]",
+                1,
+            )
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "common tool id"
             ):
                 agent_uapi_layout.validate_tool_protocol_schema(root)
 

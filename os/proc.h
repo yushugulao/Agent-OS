@@ -7,6 +7,7 @@
 #include "types.h"
 #include "sync.h"
 #include "agent.h"
+#include "agent_task_channel.h"
 #include "resource_controller.h"
 #include "syscall_counter.h"
 #include "workflow_lifecycle.h"
@@ -24,20 +25,25 @@
 #define PROC_RESERVED_DOMAIN_CAP PHYSICAL_PAGE_RESERVED_DOMAIN_CAP
 #define PROC_RESOURCE_DOMAIN_RESERVED_LIMIT \
 	(PROC_RESERVED_SLOTS / PROC_RESERVED_DOMAIN_CAP)
+/* Capacity only: Context and Task Channel allocations remain separate charges. */
+#define AGENT_STATE_PAGE_PROCESS_LIMIT \
+	(AGENT_STATE_PAGE_COUNT + AGENT_TASK_CHANNEL_STATE_PAGES)
 #define AGENT_STATE_PAGE_POOL_SIZE \
-	((uint64)NPROC * AGENT_STATE_PAGE_COUNT + \
+	((uint64)NPROC * AGENT_STATE_PAGE_PROCESS_LIMIT + \
 	 (uint64)WORKFLOW_LIFECYCLE_MAX_ACTIVE * \
 		 WORKFLOW_EVIDENCE_PAGE_COUNT)
 #define AGENT_STATE_PAGE_ORDINARY_LIMIT \
-	((uint64)PROC_ORDINARY_SLOTS * AGENT_STATE_PAGE_COUNT)
+	((uint64)PROC_ORDINARY_SLOTS * AGENT_STATE_PAGE_PROCESS_LIMIT)
 #define AGENT_STATE_PAGE_RESERVED_LIMIT \
-	((uint64)PROC_RESERVED_SLOTS * AGENT_STATE_PAGE_COUNT + \
+	((uint64)PROC_RESERVED_SLOTS * AGENT_STATE_PAGE_PROCESS_LIMIT + \
 	 (uint64)WORKFLOW_LIFECYCLE_MAX_ACTIVE * \
 		 WORKFLOW_EVIDENCE_PAGE_COUNT)
 #define AGENT_STATE_PAGE_DOMAIN_ORDINARY_LIMIT \
-	((uint64)PROC_RESOURCE_DOMAIN_LIMIT * AGENT_STATE_PAGE_COUNT)
+	((uint64)PROC_RESOURCE_DOMAIN_LIMIT * \
+	 AGENT_STATE_PAGE_PROCESS_LIMIT)
 #define AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT \
-	((uint64)PROC_RESOURCE_DOMAIN_RESERVED_LIMIT * AGENT_STATE_PAGE_COUNT + \
+	((uint64)PROC_RESOURCE_DOMAIN_RESERVED_LIMIT * \
+		 AGENT_STATE_PAGE_PROCESS_LIMIT + \
 	 WORKFLOW_EVIDENCE_PAGE_COUNT)
 
 #if PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT_DERIVED
@@ -112,12 +118,16 @@ struct thread_trap_cold {
 	uint io_request_transfers;
 	uint bio_buffer_holds;
 	uint bio_fs_atomic_depth;
+	/* Controller-owned phase token; tentative claims may not cross sched(). */
+	uint resource_phase_lease_slot;
+	uint resource_phase_claim_depth;
+	uint64 resource_phase_lease_generation;
 	struct context context;
 	/* 系统调用慢路径独占使用，避免把大事务回执压在内核栈上。 */
 	uint64 syscall_transaction[16];
 };
 
-_Static_assert(sizeof(struct thread_trap_cold) == 344,
+_Static_assert(sizeof(struct thread_trap_cold) == 360,
 	       "thread trap cold state layout changed");
 #define THREAD_TRAP_COLD_OFFSET \
 	((sizeof(struct trapframe) + 15) & ~(uint64)15)

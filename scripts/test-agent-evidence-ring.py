@@ -20,6 +20,154 @@ RING = (ROOT / "os" / "agent_evidence_ring.c").read_text(encoding="utf-8")
 OBSERVE = (ROOT / "os" / "agent_observe.c").read_text(encoding="utf-8")
 LEDGER = (ROOT / "os" / "agent_observe_ledger.c").read_text(encoding="utf-8")
 AUDITOR = (ROOT / "user" / "src" / "rp_auditor.c").read_text(encoding="utf-8")
+PROBE_PATH = ROOT / "scripts" / "probes" / "agent-evidence-ring.c"
+KERNEL_AGENT = (ROOT / "os" / "agent.h").read_text(encoding="utf-8")
+
+
+def replace_once(source: str, old: str, new: str) -> str:
+    if source.count(old) != 1:
+        raise AssertionError(f"probe compatibility anchor drift: {old!r}")
+    return source.replace(old, new, 1)
+
+
+def lifecycle_probe_source() -> str:
+    source = PROBE_PATH.read_text(encoding="utf-8")
+    timeline_filter = re.search(
+        r"struct agent_timeline_filter\s*\{.*?\n\};", KERNEL_AGENT, re.S
+    )
+    if timeline_filter is None:
+        raise AssertionError("missing production agent_timeline_filter")
+    source = replace_once(
+        source,
+        "\tuint vfs_scope_id;\n};",
+        """\tuint vfs_scope_id;
+\tint workflow_lifecycle_charged;
+\tint vfs_scope_controller;
+\tuint64 vfs_effective_caps;
+\tuint64 vfs_inheritable_caps;
+\tint resource_domain_id;
+\tint teardown_live;
+};""",
+    )
+    source = replace_once(
+        source,
+        "\tint agent_loop_state;\n};",
+        """\tint agent_loop_state;
+\tint state;
+\tuint64 identity_generation;
+\tint resource_slot_charged;
+\tstruct resource_account_handle resource_account;
+\tint resource_slot_reserved;
+};""",
+    )
+    compatibility = r"""
+#define NTHREAD 16
+#define RUNNING 4
+#define VFS_SCOPE_NONE 0U
+#define AGENT_CAP_ORCHESTRATE (1ULL << 9)
+#define AGENT_STATUS_DENIED -8
+
+struct agent_sched_record;
+struct agent_event;
+
+__AGENT_TIMELINE_FILTER__
+
+static int
+proc_teardown_live(const struct proc *p)
+{
+	return p != 0 && p->teardown_live;
+}
+
+static struct workflow_lifecycle_key
+vfs_proc_lifecycle(const struct proc *p)
+{
+	struct workflow_lifecycle_key key = {0};
+
+	if (p != 0) {
+		key.id = p->workflow_lifecycle_id;
+		key.generation = p->workflow_lifecycle_generation;
+	}
+	return key;
+}
+
+static int
+vfs_scope_active(uint scope_id)
+{
+	return !current_retiring && scope_id != VFS_SCOPE_NONE &&
+	       scope_id == current_scope;
+}
+
+static int
+vfs_proc_scope_publishable(const struct proc *p)
+{
+	return p != 0 && p->vfs_scope_id != VFS_SCOPE_NONE &&
+	       vfs_scope_active(p->vfs_scope_id) &&
+	       workflow_lifecycle_key_equal(vfs_proc_lifecycle(p), current_key);
+}
+
+static int
+agent_identity_has_cap(struct proc *p, uint64 capability)
+{
+	return p != 0 && capability != 0 &&
+	       (p->vfs_effective_caps & capability) == capability;
+}
+
+static uint64 probe_audit_sequence;
+static uint64 probe_cycle;
+
+uint64
+agent_observe_alloc_audit_sequence(void)
+{
+	return ++probe_audit_sequence;
+}
+
+uint64
+get_cycle(void)
+{
+	return ++probe_cycle;
+}
+
+int
+workflow_lifecycle_controller_matches(struct workflow_lifecycle_key key,
+				      uint scope_id, uint64 control_id)
+{
+	return current_thread.process != 0 &&
+	       workflow_lifecycle_key_equal(key, current_key) &&
+	       scope_id == current_scope && control_id != 0 &&
+	       control_id == current_thread.process->agent_control_id;
+}
+"""
+    compatibility = compatibility.replace(
+        "__AGENT_TIMELINE_FILTER__", timeline_filter.group(0)
+    )
+    source = replace_once(
+        source,
+        '#include "../../os/agent_evidence_ring.c"',
+        compatibility + '\n#include "../../os/agent_evidence_ring.c"',
+    )
+    source = replace_once(
+        source,
+        "\tp->resource_slot_reserved = 1;\n\tp->vfs_scope_id = scope;",
+        """\tp->resource_slot_reserved = 1;
+\tp->workflow_lifecycle_charged = 1;
+\tp->vfs_scope_controller = 1;
+\tp->vfs_effective_caps = AGENT_CAP_ORCHESTRATE;
+\tp->vfs_inheritable_caps = AGENT_CAP_ORCHESTRATE;
+\tp->resource_domain_id = (int)id;
+\tp->teardown_live = 1;
+\tp->vfs_scope_id = scope;""",
+    )
+    source = replace_once(
+        source,
+        "\tcurrent_thread.agent_loop_state = 2;",
+        """\tcurrent_thread.agent_loop_state = 2;
+\tcurrent_thread.state = RUNNING;
+\tcurrent_thread.identity_generation = generation;
+\tcurrent_thread.resource_slot_charged = 1;
+\tcurrent_thread.resource_account = p->resource_account;
+\tcurrent_thread.resource_slot_reserved = p->resource_slot_reserved;""",
+    )
+    return source
 
 
 def function_body(source: str, name: str) -> str:
@@ -121,10 +269,12 @@ class EvidenceRingContract(unittest.TestCase):
         self.assertIn("memset(state->sealed_root, 0", seal)
 
     def test_only_critical_context_uses_immediate_legacy_seal(self) -> None:
-        record = function_body(OBSERVE, "agent_observe_record_context")
+        record = function_body(OBSERVE, "agent_observe_record_context_ticket")
         append = record.index("agent_evidence_append_context")
         first_legacy = record.index("agent_observe_ledger_record_context", append)
-        success_return = record.index("return;", first_legacy)
+        success_return = record.index(
+            "return evidence_ticket != 0 ? 0 : -1", first_legacy
+        )
         fallback_legacy = record.index(
             "agent_observe_ledger_record_context", success_return
         )
@@ -177,10 +327,14 @@ class EvidenceRingContract(unittest.TestCase):
 
     def test_audit_projection_uses_global_sequence_not_ring_ticket(self) -> None:
         append = function_body(RING, "agent_evidence_append_context")
+        commit = function_body(RING, "agent_evidence_context_commit")
+        event_init = function_body(RING, "agent_evidence_context_event_init")
         projection = function_body(RING, "agent_evidence_event_to_audit")
-        record = function_body(OBSERVE, "agent_observe_record_context")
+        record = function_body(OBSERVE, "agent_observe_record_context_ticket")
         event_hash = function_body(RING, "agent_evidence_hash_event")
-        self.assertIn("event.audit_sequence = audit_sequence", append)
+        self.assertIn("event->audit_sequence = audit_sequence", event_init)
+        self.assertIn("agent_evidence_context_event_init", append)
+        self.assertIn("agent_evidence_context_event_init", commit)
         self.assertIn("record->sequence = event->audit_sequence", projection)
         self.assertNotIn("record->sequence = event->ticket", projection)
         self.assertIn("agent_observe_alloc_audit_sequence()", record)
@@ -388,7 +542,9 @@ class EvidenceRingContract(unittest.TestCase):
         if not compiler:
             self.skipTest("no host C compiler")
         with tempfile.TemporaryDirectory(prefix="agent-evidence-ring-") as tmp:
+            probe = Path(tmp) / "agent-evidence-ring.c"
             executable = Path(tmp) / "agent-evidence-ring"
+            probe.write_text(lifecycle_probe_source(), encoding="utf-8")
             subprocess.run(
                 [
                     compiler,
@@ -396,7 +552,8 @@ class EvidenceRingContract(unittest.TestCase):
                     "-Wall",
                     "-Wextra",
                     "-Werror",
-                    str(ROOT / "scripts" / "probes" / "agent-evidence-ring.c"),
+                    f"-I{PROBE_PATH.parent}",
+                    str(probe),
                     str(ROOT / "os" / "agent_sha256.c"),
                     "-o",
                     str(executable),

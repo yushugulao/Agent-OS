@@ -25,15 +25,15 @@ unsigned char kernel_budget_agent_context_sidecar_domain_reserved
 	[PROC_RESOURCE_DOMAIN_RESERVED_LIMIT *
 	 AGENT_CONTEXT_SIDECAR_PAGE_COUNT * PAGE_SIZE];
 unsigned char kernel_budget_agent_state_total_per_process
-	[AGENT_STATE_PAGE_COUNT * PAGE_SIZE];
+	[AGENT_STATE_PAGE_PROCESS_LIMIT * PAGE_SIZE];
 unsigned char kernel_budget_agent_state_total_pool
-	[NPROC * AGENT_STATE_PAGE_COUNT * PAGE_SIZE];
+	[NPROC * AGENT_STATE_PAGE_PROCESS_LIMIT * PAGE_SIZE];
 unsigned char kernel_budget_agent_state_total_ordinary_pool
-	[PROC_ORDINARY_SLOTS * AGENT_STATE_PAGE_COUNT * PAGE_SIZE];
+	[PROC_ORDINARY_SLOTS * AGENT_STATE_PAGE_PROCESS_LIMIT * PAGE_SIZE];
 unsigned char kernel_budget_agent_state_total_reserved_pool
-	[PROC_RESERVED_SLOTS * AGENT_STATE_PAGE_COUNT * PAGE_SIZE];
+	[PROC_RESERVED_SLOTS * AGENT_STATE_PAGE_PROCESS_LIMIT * PAGE_SIZE];
 unsigned char kernel_budget_agent_state_total_domain_ordinary
-	[PROC_RESOURCE_DOMAIN_LIMIT * AGENT_STATE_PAGE_COUNT * PAGE_SIZE];
+	[PROC_RESOURCE_DOMAIN_LIMIT * AGENT_STATE_PAGE_PROCESS_LIMIT * PAGE_SIZE];
 unsigned char kernel_budget_agent_state_total_domain_reserved
-	[PROC_RESOURCE_DOMAIN_RESERVED_LIMIT * AGENT_STATE_PAGE_COUNT *
+	[PROC_RESOURCE_DOMAIN_RESERVED_LIMIT * AGENT_STATE_PAGE_PROCESS_LIMIT *
 	 PAGE_SIZE];

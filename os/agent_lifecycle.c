@@ -3,6 +3,7 @@
 #include "agent_identity_lease.h"
 #include "defs.h"
 #include "vfs_security.h"
+#include "workflow_scheduler.h"
 
 static uint64 next_control_id;
 
@@ -52,8 +53,15 @@ agent_lifecycle_context_lane_handoff_locked(struct proc *p)
 		panic("Agent context lane handoff");
 }
 
-int
-agent_lifecycle_context_lane_enter(struct proc *p)
+static int
+agent_lifecycle_context_lane_task_live(struct proc *p)
+{
+	return p != 0 && p->state == P_USED &&
+	       p->teardown_state <= PROC_TEARDOWN_QUIESCING;
+}
+
+static int
+agent_lifecycle_context_lane_enter_mode(struct proc *p, int accepted_task)
 {
 	struct thread *t = curr_thread();
 	int enabled;
@@ -66,7 +74,9 @@ agent_lifecycle_context_lane_enter(struct proc *p)
 		enabled = intr_save();
 		if (p->agent_context_lane_owner_tid == t->tid) {
 			if (p->agent_context_lane_depth == 0) {
-				if (!proc_teardown_live(p)) {
+				if (!proc_teardown_live(p) &&
+				    (!accepted_task ||
+				     !agent_lifecycle_context_lane_task_live(p))) {
 					agent_lifecycle_context_lane_handoff_locked(p);
 					intr_restore(enabled);
 					return -1;
@@ -82,7 +92,9 @@ agent_lifecycle_context_lane_enter(struct proc *p)
 		}
 		if (agent_metadata_txn_owned(0))
 			panic("metadata acquired before Agent context lane");
-		if (!proc_teardown_live(p)) {
+		if (!proc_teardown_live(p) &&
+		    (!accepted_task ||
+		     !agent_lifecycle_context_lane_task_live(p))) {
 			intr_restore(enabled);
 			return -1;
 		}
@@ -94,8 +106,10 @@ agent_lifecycle_context_lane_enter(struct proc *p)
 			return 0;
 		}
 		/* 从检查所有权到发布入队始终关中断，避免释放方漏唤醒。 */
-		wait_status = wait_queue_sleep_irq(
-			&p->agent_context_lane_waiters);
+		wait_status = accepted_task ?
+			wait_queue_sleep_irq_uninterruptible(
+				&p->agent_context_lane_waiters) :
+			wait_queue_sleep_irq(&p->agent_context_lane_waiters);
 		/*
 		 * 直接移交会在目标恢复前预留 owner_tid。teardown 可能使已唤醒线程
 		 * 仍收到 INTERRUPTED，因此返回前必须接收或取消预留。外层关中断
@@ -104,7 +118,9 @@ agent_lifecycle_context_lane_enter(struct proc *p)
 		if (p->agent_context_lane_owner_tid == t->tid &&
 		    p->agent_context_lane_depth == 0) {
 			if (wait_status != WAIT_QUEUE_OK ||
-			    !proc_teardown_live(p)) {
+			    (!proc_teardown_live(p) &&
+			     (!accepted_task ||
+			      !agent_lifecycle_context_lane_task_live(p)))) {
 				agent_lifecycle_context_lane_handoff_locked(p);
 				intr_restore(enabled);
 				return -1;
@@ -117,6 +133,18 @@ agent_lifecycle_context_lane_enter(struct proc *p)
 		if (wait_status != WAIT_QUEUE_OK)
 			return -1;
 	}
+}
+
+int
+agent_lifecycle_context_lane_enter(struct proc *p)
+{
+	return agent_lifecycle_context_lane_enter_mode(p, 0);
+}
+
+int
+agent_lifecycle_context_lane_enter_accepted_task(struct proc *p)
+{
+	return agent_lifecycle_context_lane_enter_mode(p, 1);
 }
 
 void
@@ -167,13 +195,18 @@ sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 	struct proc *p = curr_proc();
 	struct agent_metadata_runtime_snapshot metadata;
 	struct agent_workflow_lifecycle_info info;
+	struct workflow_scheduler_snapshot scheduler_snapshot;
 	struct workflow_lifecycle_key current = workflow_lifecycle_none();
 	struct workflow_lifecycle_key expected = workflow_lifecycle_none();
+	struct resource_account_handle current_account =
+		resource_account_none();
 	uint64 copy_size;
 	uint scope_id;
+	int current_domain = -1;
 	int enabled;
 	int lifecycle_charged;
 	int match;
+	int project_v3;
 	int status = AGENT_STATUS_OK;
 
 	if (user_size < 2 * sizeof(unsigned int))
@@ -188,20 +221,31 @@ sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 	     (expected_id == 0 || expected_id > (uint64)(uint)-1 ||
 	      expected_generation == 0)))
 		return AGENT_STATUS_BAD_PARAM;
-	copy_size = MIN(user_size, sizeof(info));
+	/* A legacy binary identifies v2 by its exact-or-shorter 64-byte buffer. */
+	project_v3 = user_size > AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE;
+	copy_size = MIN(
+		user_size,
+		project_v3 ? sizeof(info) :
+			     (uint64)AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE);
 	if (p == 0 ||
 	    user_range_check(p->pagetable, addr, copy_size, PTE_W) < 0)
 		return -1;
 
 	memset(&info, 0, sizeof(info));
-	info.version = AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION;
-	info.struct_size = sizeof(info);
+	info.version = project_v3 ?
+			       AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION :
+			       AGENT_WORKFLOW_LIFECYCLE_INFO_V2_VERSION;
+	info.struct_size = project_v3 ?
+				   sizeof(info) :
+				   AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE;
 	enabled = intr_save();
 	lifecycle_charged = p->workflow_lifecycle_charged != 0;
 	if (lifecycle_charged) {
 		current.id = p->workflow_lifecycle_id;
 		current.generation = p->workflow_lifecycle_generation;
 	}
+	current_account = p->resource_account;
+	current_domain = p->resource_domain_id;
 	info.context_lane_depth = p->agent_context_lane_depth;
 	for (int tid = 0; tid < NTHREAD; tid++) {
 		struct thread *t = &p->threads[tid];
@@ -214,11 +258,11 @@ sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 	agent_metadata_proc_runtime_snapshot(p, &metadata);
 	info.metadata_txn_owned = metadata.metadata_txn_owned;
 	info.metadata_txn_waiters = metadata.metadata_txn_waiters;
-	if (resource_account_handle_valid(p->resource_account)) {
+	if (resource_account_handle_valid(current_account)) {
 		info.resource_account_valid = 1;
-		info.resource_account_slot = p->resource_account.slot;
+		info.resource_account_slot = current_account.slot;
 		info.resource_account_generation =
-			p->resource_account.generation;
+			current_account.generation;
 	}
 	intr_restore(enabled);
 	if (lifecycle_charged && workflow_lifecycle_key_valid(current) &&
@@ -228,6 +272,41 @@ sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 		info.key.generation = current.generation;
 	} else if (lifecycle_charged) {
 		status = AGENT_STATUS_NOT_FOUND;
+	}
+	if (project_v3 && info.charged &&
+	    workflow_scheduler_snapshot_get(
+		    current, current_account, current_domain,
+		    &scheduler_snapshot) == 0) {
+		info.scheduler_mode = scheduler_snapshot.mode;
+		info.scheduler_flags = scheduler_snapshot.flags;
+		info.scheduler_latency_class =
+			scheduler_snapshot.latency_class;
+		info.scheduler_weight = scheduler_snapshot.weight;
+		info.scheduler_runnable = scheduler_snapshot.runnable;
+		info.scheduler_request_ticks =
+			scheduler_snapshot.request_ticks;
+		info.scheduler_remaining_cycles =
+			scheduler_snapshot.remaining_cycles;
+		info.scheduler_lag_cycles = scheduler_snapshot.lag_cycles;
+		info.scheduler_vruntime = scheduler_snapshot.vruntime;
+		info.scheduler_virtual_deadline =
+			scheduler_snapshot.virtual_deadline;
+		info.scheduler_dispatches = scheduler_snapshot.dispatches;
+		info.scheduler_service_cycles =
+			scheduler_snapshot.service_cycles;
+		info.scheduler_sleep_decays = scheduler_snapshot.sleep_decays;
+		info.scheduler_eligibility_misses =
+			scheduler_snapshot.eligibility_misses;
+		info.scheduler_fallbacks = scheduler_snapshot.fallbacks;
+		info.scheduler_max_wakeup_ticks =
+			scheduler_snapshot.max_wakeup_ticks;
+		info.scheduler_deadline_misses =
+			scheduler_snapshot.deadline_misses;
+		info.scheduler_wakeup_samples =
+			scheduler_snapshot.wakeup_samples;
+		for (uint i = 0; i < AGENT_WORKFLOW_WAKE_BUCKET_COUNT; i++)
+			info.scheduler_wakeup_latency_buckets[i] =
+				scheduler_snapshot.wakeup_latency_buckets[i];
 	}
 	if (match) {
 		expected.id = (uint)expected_id;

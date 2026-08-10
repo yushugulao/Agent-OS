@@ -16,6 +16,120 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(validator)
 
 
+def eevdf_metric_fixture_lines():
+    lines = ["agent_eevdf_ucore: ordinary_baseline_ticks=12 progress=100"]
+    fresh_generation = 0
+    service_sequence = 0
+    cohorts = {
+        1: (1, 1, 0, 0, 0, 0, 1, 1, 0, 0),
+        16: (16, 16, 12, 12, 0, 0, 4, 4, 12, 15),
+        4: (4, 4, 0, 0, 0, 0, 1, 1, 3, 0),
+        44: (4, 4, 0, 0, 0, 0, 1, 1, 3, 0),
+    }
+    scenario_samples = {
+        1: ((0, "bootstrap", 1),),
+        16: tuple(
+            (index, "bootstrap" if index % 4 == 0 else "fresh", 1)
+            for index in range(16)
+        ),
+        4: ((0, "bootstrap", 1),)
+        + tuple((index, "fresh", 1) for index in range(1, 4)),
+        44: (
+            (0, "bootstrap", 1),
+            (1, "fresh", 4),
+            (2, "fresh", 1),
+            (3, "fresh", 1),
+        ),
+    }
+
+    for scenario in (1, 16, 4, 44):
+        services = {}
+        scaled_services = []
+        deadline_misses = 0
+        dispatches = 0
+        fallbacks = 0
+        fresh_samples = 0
+        for index, source, threads in scenario_samples[scenario]:
+            if source == "bootstrap":
+                lifecycle = "1:1"
+                wake_probes = 0
+            else:
+                fresh_generation += 1
+                lifecycle = f"2:{fresh_generation}"
+                wake_probes = 4
+                fresh_samples += 1
+            service_sequence += 1
+            service = service_sequence * 1024
+            services[index] = service
+            scaled_services.append(service_sequence)
+            dispatch = 1
+            fallback = 0
+            deadline_miss = 0
+            dispatches += dispatch
+            fallbacks += fallback
+            deadline_misses += deadline_miss
+            lines.append(
+                "agent_eevdf_ucore: sample "
+                f"scenario={scenario} index={index} source={source} "
+                f"threads={threads} wake_probes={wake_probes} mode=1 flags=0 "
+                "latency_class=0 weight=1024 request_ticks=1 "
+                f"lifecycle={lifecycle} work={100 + service_sequence} "
+                f"service={service} dispatch={dispatch} fallback={fallback} "
+                f"deadline_miss={deadline_miss} wake_samples={wake_probes} "
+                f"wake_max={1 if wake_probes else 0}"
+            )
+        (
+            requested,
+            admitted,
+            rejected,
+            no_space,
+            retry,
+            other,
+            waves,
+            bootstrap_samples,
+            expected_fresh,
+            initial_attempts,
+        ) = cohorts[scenario]
+        lines.append(
+            "agent_eevdf_ucore: cohort "
+            f"scenario={scenario} requested={requested} admitted={admitted} "
+            f"rejected={rejected} no_space={no_space} retry={retry} "
+            f"other={other} waves={waves} concurrency_cap=4 "
+            f"bootstrap_samples={bootstrap_samples} "
+            f"fresh_samples={expected_fresh} "
+            f"initial_fresh_attempts={initial_attempts} ordinary_progress=0"
+        )
+        lines.append(
+            "agent_eevdf_ucore: jain_inputs "
+            f"scenario={scenario} n={admitted} sum={sum(scaled_services)} "
+            f"sum_sq={sum(value * value for value in scaled_services)} "
+            "basis=service_cycles_div_1024"
+        )
+        bucket_zero = fresh_samples * 4
+        percentile = 0 if fresh_samples else 4
+        lines.append(
+            "agent_eevdf_ucore: wake "
+            f"scenario={scenario} scope=fresh_agents_only "
+            f"fresh_samples={fresh_samples} buckets={bucket_zero},0,0,0 "
+            f"p50_bucket={percentile} p99_bucket={percentile} "
+            f"deadline_miss={deadline_misses} dispatch={dispatches} "
+            f"fallback={fallbacks}"
+        )
+        if scenario == 44:
+            lines.append(
+                "agent_eevdf_ucore: amplification_inputs "
+                f"amplified_threads=4 amplified_service={services[1]} "
+                "peer_threads=1 fresh_peer_count=2 bootstrap_peer_count=1 "
+                f"peer_count=3 peer_service_sum="
+                f"{services[0] + services[2] + services[3]} "
+                "accounting=workflow"
+            )
+    return tuple(lines)
+
+
+EEVDF_METRIC_FIXTURE_LINES = eevdf_metric_fixture_lines()
+
+
 class KernelLogValidatorTests(unittest.TestCase):
     def test_cli_rejects_passed_only_proc_and_generic_logs(self):
         cases = (
@@ -122,6 +236,197 @@ class KernelLogValidatorTests(unittest.TestCase):
                 "agentfinal_ucore",
                 True,
             )
+
+    def test_ch8_agent_case_requires_its_real_completion_marker(self):
+        case = "ch8_cow_ucore"
+        completion = "ch8_cow_ucore: passed"
+        self.assertIn(
+            f"case={case}", validator.validate_agent_case(completion, case)
+        )
+        for mutated in (
+            "ch8_cow_ucore: parent passed",
+            completion + "\n" + completion,
+            completion + " forged",
+        ):
+            with self.subTest(mutated=mutated), self.assertRaisesRegex(
+                validator.ValidationError, "complete line"
+            ):
+                validator.validate_agent_case(mutated, case)
+
+    def test_contract_scheduler_and_task_cases_require_all_exact_markers(self):
+        for case in (
+            "agentcontract_ucore",
+            "agent_eevdf_ucore",
+            "agenttask_ucore",
+        ):
+            markers = validator.AGENT_CASE_MARKERS[case]
+            completion = f"{case}: parent passed"
+            dynamic = ()
+            if case == "agent_eevdf_ucore":
+                dynamic = EEVDF_METRIC_FIXTURE_LINES
+            elif case == "agenttask_ucore":
+                dynamic = (
+                    "agenttask_ucore: perf path=batch operations=16 syscalls=1 abi_descriptor_bytes=3584 copied_descriptor_bytes=3584 dispatch_header_bytes=0 control_abi_bytes=0 control_copied_bytes=0 service_start_interval_tick_p50=0 service_start_interval_tick_p99=1 service_start_span_ticks=1 sequence_elapsed_ticks=1 sched_dispatch_delta=0",
+                    "agenttask_ucore: perf path=scalar_v3 operations=16 syscalls=16 abi_descriptor_bytes=12288 copied_descriptor_bytes=12288 dispatch_header_bytes=128 control_abi_bytes=0 control_copied_bytes=0 service_start_interval_tick_p50=0 service_start_interval_tick_p99=2 service_start_span_ticks=2 sequence_elapsed_ticks=2 sched_dispatch_delta=1",
+                    "agenttask_ucore: perf path=sq_cq operations=16 syscalls=2 abi_descriptor_bytes=4096 copied_descriptor_bytes=4096 dispatch_header_bytes=0 control_abi_bytes=336 control_copied_bytes=544 service_start_interval_tick_p50=0 service_start_interval_tick_p99=1 service_start_span_ticks=1 sequence_elapsed_ticks=1 sched_dispatch_delta=0",
+                    "agenttask_ucore: cancel_latency scope=retained_terminal metric=service_tick ticks=0 enter_calls=1 pending_provider=unavailable observer_syscalls=2",
+                )
+            text = "\n".join((*markers, *dynamic, completion))
+            with self.subTest(case=case):
+                self.assertIn(
+                    f"case={case}", validator.validate_agent_case(text, case)
+                )
+                for marker in markers:
+                    with self.subTest(case=case, missing=marker):
+                        with self.assertRaisesRegex(
+                            validator.ValidationError, "complete line"
+                        ):
+                            validator.validate_agent_case(
+                                text.replace(marker + "\n", "", 1), case
+                            )
+
+    def test_eevdf_metrics_reject_dishonest_topology_and_aggregation(self):
+        case = "agent_eevdf_ucore"
+        text = "\n".join(
+            (
+                *validator.AGENT_CASE_MARKERS[case],
+                *EEVDF_METRIC_FIXTURE_LINES,
+                f"{case}: parent passed",
+            )
+        )
+
+        self.assertIn(f"case={case}", validator.validate_agent_case(text, case))
+        clamped_service = text.replace(
+            "work=101 service=1024", "work=101 service=1", 1
+        )
+        self.assertNotEqual(clamped_service, text)
+        self.assertIn(
+            f"case={case}",
+            validator.validate_agent_case(clamped_service, case),
+        )
+        jain_line = (
+            "agent_eevdf_ucore: jain_inputs scenario=16 n=16 "
+            "sum=152 sum_sq=1784 basis=service_cycles_div_1024"
+        )
+        cohort_line = (
+            "agent_eevdf_ucore: cohort scenario=16 requested=16 admitted=16 "
+            "rejected=12 no_space=12 retry=0 other=0 waves=4 "
+            "concurrency_cap=4 bootstrap_samples=4 fresh_samples=12 "
+            "initial_fresh_attempts=15 ordinary_progress=0"
+        )
+        mutations = (
+            text.replace(
+                "scenario=16 index=4 source=bootstrap threads=1 "
+                "wake_probes=0 mode=1 flags=0 latency_class=0 weight=1024 "
+                "request_ticks=1 lifecycle=1:1",
+                "scenario=16 index=4 source=bootstrap threads=1 "
+                "wake_probes=0 mode=1 flags=0 latency_class=0 weight=1024 "
+                "request_ticks=1 lifecycle=1:2",
+                1,
+            ),
+            text.replace("scope=fresh_agents_only", "scope=all_agents", 1),
+            text.replace(
+                "scenario=16 requested=16 admitted=16 rejected=12 "
+                "no_space=12",
+                "scenario=16 requested=16 admitted=16 rejected=11 "
+                "no_space=11",
+                1,
+            ),
+            text.replace(
+                "scenario=16 scope=fresh_agents_only fresh_samples=12",
+                "scenario=16 scope=fresh_agents_only fresh_samples=11",
+                1,
+            ),
+            text.replace(
+                "scenario=44 index=1 source=fresh threads=4",
+                "scenario=44 index=1 source=fresh threads=1",
+                1,
+            ),
+            text.replace(
+                "scenario=16 requested=16 admitted=16 rejected=12 "
+                "no_space=12 retry=0",
+                "scenario=16 requested=16 admitted=16 rejected=12 "
+                "no_space=12 retry=1",
+                1,
+            ),
+            text.replace(jain_line + "\n", "", 1),
+            text.replace(jain_line, jain_line + "\n" + jain_line, 1),
+            text.replace("scenario=16 n=16 sum=152", "scenario=16 n=15 sum=152", 1),
+            text.replace("scenario=16 n=16 sum=152", "scenario=16 n=16 sum=153", 1),
+            text.replace("sum=152 sum_sq=1784", "sum=152 sum_sq=1785", 1),
+            text.replace(
+                "basis=service_cycles_div_1024",
+                "basis=service_cycles",
+                1,
+            ),
+            text.replace(
+                cohort_line + "\n" + jain_line,
+                jain_line + "\n" + cohort_line,
+                1,
+            ),
+        )
+        for mutated in mutations:
+            with self.subTest(mutated=mutated):
+                self.assertNotEqual(mutated, text)
+                with self.assertRaises(validator.ValidationError):
+                    validator.validate_agent_case(mutated, case)
+
+    def test_task_metrics_reject_dishonest_or_inexact_accounting(self):
+        case = "agenttask_ucore"
+        markers = validator.AGENT_CASE_MARKERS[case]
+        metrics = (
+            "agenttask_ucore: perf path=batch operations=16 syscalls=1 abi_descriptor_bytes=3584 copied_descriptor_bytes=3584 dispatch_header_bytes=0 control_abi_bytes=0 control_copied_bytes=0 service_start_interval_tick_p50=0 service_start_interval_tick_p99=1 service_start_span_ticks=1 sequence_elapsed_ticks=1 sched_dispatch_delta=0",
+            "agenttask_ucore: perf path=scalar_v3 operations=16 syscalls=16 abi_descriptor_bytes=12288 copied_descriptor_bytes=12288 dispatch_header_bytes=128 control_abi_bytes=0 control_copied_bytes=0 service_start_interval_tick_p50=0 service_start_interval_tick_p99=2 service_start_span_ticks=2 sequence_elapsed_ticks=2 sched_dispatch_delta=1",
+            "agenttask_ucore: perf path=sq_cq operations=16 syscalls=2 abi_descriptor_bytes=4096 copied_descriptor_bytes=4096 dispatch_header_bytes=0 control_abi_bytes=336 control_copied_bytes=544 service_start_interval_tick_p50=0 service_start_interval_tick_p99=1 service_start_span_ticks=1 sequence_elapsed_ticks=1 sched_dispatch_delta=0",
+            "agenttask_ucore: cancel_latency scope=retained_terminal metric=service_tick ticks=0 enter_calls=1 pending_provider=unavailable observer_syscalls=2",
+        )
+        completion = f"{case}: parent passed"
+        text = "\n".join((*markers, *metrics, completion))
+
+        self.assertIn(f"case={case}", validator.validate_agent_case(text, case))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "agenttask.log"
+            path.write_text(text, encoding="utf-8")
+            command = [
+                sys.executable,
+                str(MODULE_PATH),
+                "--log-file",
+                str(path),
+                "--tag",
+                "agenttask",
+                "--profile",
+                "agent-case",
+                "--case",
+                case,
+            ]
+            result = subprocess.run(
+                command,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("profile validation passed: case=agenttask_ucore", result.stdout)
+        mutations = (
+            text.replace("operations=16 syscalls=1", "operations=15 syscalls=1", 1),
+            text.replace(
+                "abi_descriptor_bytes=12288 copied_descriptor_bytes=12288",
+                "abi_descriptor_bytes=7680 copied_descriptor_bytes=7680",
+                1,
+            ),
+            text.replace("dispatch_header_bytes=128", "dispatch_header_bytes=0", 1),
+            text.replace("control_copied_bytes=544", "control_copied_bytes=336", 1),
+            text.replace("service_start_interval_tick_p99=2 service_start_span_ticks=2", "service_start_interval_tick_p99=3 service_start_span_ticks=2", 1),
+            text.replace("service_start_span_ticks=2 sequence_elapsed_ticks=2", "service_start_span_ticks=2 sequence_elapsed_ticks=1", 1),
+            text.replace("scope=retained_terminal", "scope=running", 1),
+            text + "\n" + metrics[0].replace("syscalls=1", "syscalls=99", 1),
+            text + "\n" + metrics[3].replace("ticks=0", "ticks=forged", 1),
+        )
+        for mutated in mutations:
+            with self.subTest(mutated=mutated):
+                with self.assertRaises(validator.ValidationError):
+                    validator.validate_agent_case(mutated, case)
 
     def test_usersafety_argv_contract_requires_exact_unique_evidence(self):
         case = "usersafety_ucore"

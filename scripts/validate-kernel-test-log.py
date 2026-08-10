@@ -125,6 +125,34 @@ AGENT_CASE_MARKERS = {
         "agentloop_ucore: broadcast_slow_watcher_isolated=1",
         "agentloop_ucore: heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1",
     ),
+    "agentcontract_ucore": (
+        "agentcontract_ucore: dag24=1 lifecycle=1 schema=1 capability=1",
+        "agentcontract_ucore: dependency_sequence=1 provenance_file=1 provenance_cross_agent=1",
+        "agentcontract_ucore: planned_effect=1 unplanned_effect_denied=1 evidence=1",
+        "agentcontract_ucore: replay=1 retry=1 deadline=1 phase_atomic=1 phase_zero_leak=1",
+        "agentcontract_ucore: legacy_v2=1 enforce_bypass_denied=1",
+    ),
+    "agent_eevdf_ucore": (
+        "agent_eevdf_ucore: topology one_way=bootstrap four_way=bootstrap+3fresh amplification=bootstrap_peer+fresh4thread+2fresh_peers",
+        "agent_eevdf_ucore: wake_bucket_map=0:le1,1:le2,2:le8,3:gt8 p50_p99=histogram_approx probes=fresh_agents_only",
+        "agent_eevdf_ucore: thread_amplification scenario=44 amplified_threads=4 fresh_peers=2 bootstrap_peers=1 accounting=workflow",
+        "agent_eevdf_ucore: sixteen_arrivals=1 logical_samples=16 concurrency_cap=4 bootstrap_samples=4 fresh_samples=12 initial_fresh_attempts=15 initial_admitted=3 stable_no_space=12 waves=4 retry_policy=retry_only",
+    ),
+    "agenttask_ucore": (
+        "agenttask_ucore: perf_contract=steady_state_n16 quantiles=nearest_rank sample_semantics=pre_effect_context_service_start interval_origin=sequence_start_boundary service_metric=service_start_tick_intervals sequence_metric=agent_info_boundary_elapsed_ticks wall_clock=unavailable raw_cycles=not_claimed syscall_source=guest_call_sites",
+        "agenttask_ucore: perf_observers=agent_info:2 boundary_overhead=start_return+end_entry_included context_query:16 post_sequence_excluded=1 kernel_path_syscall_counter=unavailable",
+        "agenttask_ucore: perf_excluded batch=lifecycle_info:1 scalar_v3=lifecycle_info:1+contract:2 sq_cq=lifecycle_info:1+contract:2+channel_setup:1",
+        "agenttask_ucore: sq_cq_copy_scope=sqe_private_copy+cqe_publish ack_clear_bytes=2048 user_ring_descriptor_bytes=4096 setup_abi_control_bytes=160 setup_copied_control_bytes=256",
+        "agenttask_ucore: provider=synchronous_echo running_cancel_latency=unavailable terminal_pending_saturation=unavailable",
+        "agenttask_ucore: perf_fp path=batch value=31",
+        "agenttask_ucore: perf_fp path=scalar_v3 value=31",
+        "agenttask_ucore: perf_fp path=sq_cq value=31",
+        "agenttask_ucore: cq_full=1 backpressure=1 pending_preserved=1 recovery_enter_calls=2 resync_recovery=1",
+        "agenttask_ucore: setup=1 single_issuer=1 resource_import_denied=1",
+        "agenttask_ucore: submit=1 cq_ack=1 monotonic=1 resync=1",
+        "agenttask_ucore: target_cancel_exactly_once=1 hard_deadline=1",
+        "agenttask_ucore: batch_fp=31 scalar_v3_fp=31 task_fp=31",
+    ),
     "agenttoolabi_ucore": (
         "agenttoolabi_ucore: tool_list_contract=1",
         "agenttoolabi_ucore: optional_schema=1 heartbeat_zero_stop=1",
@@ -299,8 +327,427 @@ def validate_ch3_trace(text):
     return f"positions={positions}"
 
 
+def validate_agenttask_metrics(text):
+    lines = text.splitlines()
+    performance = re.compile(
+        r"agenttask_ucore: perf path=(batch|scalar_v3|sq_cq) "
+        r"operations=(\d+) syscalls=(\d+) "
+        r"abi_descriptor_bytes=(\d+) copied_descriptor_bytes=(\d+) "
+        r"dispatch_header_bytes=(\d+) control_abi_bytes=(\d+) "
+        r"control_copied_bytes=(\d+) "
+        r"service_start_interval_tick_p50=(\d+) "
+        r"service_start_interval_tick_p99=(\d+) "
+        r"service_start_span_ticks=(\d+) sequence_elapsed_ticks=(\d+) "
+        r"sched_dispatch_delta=(\d+)"
+    )
+    performance_lines = [
+        (index, line)
+        for index, line in enumerate(lines)
+        if line.startswith("agenttask_ucore: perf path=")
+    ]
+    matches = [
+        (index, match)
+        for index, line in enumerate(lines)
+        if (match := performance.fullmatch(line)) is not None
+    ]
+    if len(performance_lines) != 3 or len(matches) != 3:
+        raise ValidationError(
+            "Task performance paths must be exactly bound to the metric "
+            f"schema: candidates={len(performance_lines)} matches={len(matches)}"
+        )
+    expected = {
+        "batch": (16, 1, 3584, 3584, 0, 0, 0),
+        "scalar_v3": (16, 16, 12288, 12288, 128, 0, 0),
+        "sq_cq": (16, 2, 4096, 4096, 0, 336, 544),
+    }
+    seen = []
+    for _, match in matches:
+        path = match.group(1)
+        accounting = tuple(map(int, match.groups()[1:8]))
+        p50, p99, span, elapsed, dispatch = map(
+            int, match.groups()[8:13]
+        )
+        if path in seen or accounting != expected[path]:
+            raise ValidationError(
+                f"Task performance accounting mismatch: path={path} "
+                f"actual={accounting} expected={expected[path]}"
+            )
+        if p50 > p99 or p99 > span or span > elapsed:
+            raise ValidationError(
+                f"Task service-start metrics are inconsistent: path={path} "
+                f"p50={p50} p99={p99} span={span} elapsed={elapsed}"
+            )
+        if dispatch < 0:
+            raise ValidationError("Task scheduler dispatch delta is negative")
+        seen.append(path)
+    if seen != ["batch", "scalar_v3", "sq_cq"]:
+        raise ValidationError(f"Task performance paths are out of order: {seen}")
+
+    cancellation = re.compile(
+        r"agenttask_ucore: cancel_latency scope=retained_terminal "
+        r"metric=service_tick ticks=(\d+) enter_calls=1 "
+        r"pending_provider=unavailable observer_syscalls=2"
+    )
+    cancel_lines = [
+        line
+        for line in lines
+        if line.startswith("agenttask_ucore: cancel_latency")
+    ]
+    cancel_matches = [
+        match
+        for line in lines
+        if (match := cancellation.fullmatch(line)) is not None
+    ]
+    if len(cancel_lines) != 1 or len(cancel_matches) != 1:
+        raise ValidationError(
+            "Task retained-terminal cancellation metric must be unique and exact"
+        )
+
+
+def validate_agent_eevdf_metrics(text):
+    lines = text.splitlines()
+
+    def exact_matches(prefix, pattern, count, label):
+        candidates = [
+            (index, line)
+            for index, line in enumerate(lines)
+            if line.startswith(prefix)
+        ]
+        matches = [
+            (index, pattern.fullmatch(line)) for index, line in candidates
+        ]
+        if len(candidates) != count or any(match is None for _, match in matches):
+            raise ValidationError(
+                f"EEVDF {label} lines must be exact: "
+                f"candidates={len(candidates)} expected={count}"
+            )
+        return matches
+
+    sample_pattern = re.compile(
+        r"agent_eevdf_ucore: sample scenario=(1|4|16|44) "
+        r"index=(\d+) source=(bootstrap|fresh) threads=(\d+) "
+        r"wake_probes=(\d+) mode=(\d+) flags=(\d+) "
+        r"latency_class=(\d+) weight=(\d+) request_ticks=(\d+) "
+        r"lifecycle=(\d+):(\d+) work=(\d+) service=(\d+) "
+        r"dispatch=(\d+) fallback=(\d+) deadline_miss=(\d+) "
+        r"wake_samples=(\d+) wake_max=(\d+)"
+    )
+    cohort_pattern = re.compile(
+        r"agent_eevdf_ucore: cohort scenario=(1|4|16|44) "
+        r"requested=(\d+) admitted=(\d+) rejected=(\d+) "
+        r"no_space=(\d+) retry=(\d+) other=(\d+) waves=(\d+) "
+        r"concurrency_cap=(\d+) bootstrap_samples=(\d+) "
+        r"fresh_samples=(\d+) initial_fresh_attempts=(\d+) "
+        r"ordinary_progress=(\d+)"
+    )
+    jain_pattern = re.compile(
+        r"agent_eevdf_ucore: jain_inputs scenario=(1|4|16|44) "
+        r"n=(\d+) sum=(\d+) sum_sq=(\d+) "
+        r"basis=service_cycles_div_1024"
+    )
+    wake_pattern = re.compile(
+        r"agent_eevdf_ucore: wake scenario=(1|4|16|44) "
+        r"scope=(fresh_agents_only) fresh_samples=(\d+) "
+        r"buckets=(\d+),(\d+),(\d+),(\d+) "
+        r"p50_bucket=(\d+) p99_bucket=(\d+) deadline_miss=(\d+) "
+        r"dispatch=(\d+) fallback=(\d+)"
+    )
+    amplification_pattern = re.compile(
+        r"agent_eevdf_ucore: amplification_inputs amplified_threads=4 "
+        r"amplified_service=(\d+) peer_threads=1 fresh_peer_count=2 "
+        r"bootstrap_peer_count=1 peer_count=(\d+) "
+        r"peer_service_sum=(\d+) accounting=workflow"
+    )
+    baseline_pattern = re.compile(
+        r"agent_eevdf_ucore: ordinary_baseline_ticks=12 progress=(\d+)"
+    )
+
+    sample_matches = exact_matches(
+        "agent_eevdf_ucore: sample ", sample_pattern, 25, "sample"
+    )
+    cohort_matches = exact_matches(
+        "agent_eevdf_ucore: cohort ", cohort_pattern, 4, "cohort"
+    )
+    jain_matches = exact_matches(
+        "agent_eevdf_ucore: jain_inputs", jain_pattern, 4, "Jain input"
+    )
+    wake_matches = exact_matches(
+        "agent_eevdf_ucore: wake scenario=", wake_pattern, 4, "wake"
+    )
+    amplification_matches = exact_matches(
+        "agent_eevdf_ucore: amplification_inputs ",
+        amplification_pattern,
+        1,
+        "amplification",
+    )
+    baseline_matches = exact_matches(
+        "agent_eevdf_ucore: ordinary_baseline_ticks=",
+        baseline_pattern,
+        1,
+        "ordinary baseline",
+    )
+    if int(baseline_matches[0][1].group(1)) <= 0:
+        raise ValidationError("EEVDF ordinary baseline made no progress")
+    if baseline_matches[0][0] >= sample_matches[0][0]:
+        raise ValidationError("EEVDF ordinary baseline overlaps measured cohorts")
+
+    samples = []
+    for line_index, match in sample_matches:
+        groups = match.groups()
+        samples.append(
+            {
+                "line": line_index,
+                "scenario": int(groups[0]),
+                "index": int(groups[1]),
+                "source": groups[2],
+                "threads": int(groups[3]),
+                "wake_probes": int(groups[4]),
+                "mode": int(groups[5]),
+                "lifecycle": (int(groups[10]), int(groups[11])),
+                "work": int(groups[12]),
+                "service": int(groups[13]),
+                "dispatch": int(groups[14]),
+                "fallback": int(groups[15]),
+                "deadline_miss": int(groups[16]),
+                "wake_samples": int(groups[17]),
+            }
+        )
+
+    expected_scenarios = [1] + [16] * 16 + [4] * 4 + [44] * 4
+    actual_scenarios = [sample["scenario"] for sample in samples]
+    if actual_scenarios != expected_scenarios:
+        raise ValidationError(
+            f"EEVDF sample scenario order differs: {actual_scenarios}"
+        )
+
+    expected_indexes = {
+        1: {0},
+        4: set(range(4)),
+        16: set(range(16)),
+        44: set(range(4)),
+    }
+    expected_bootstrap_indexes = {
+        1: {0},
+        4: {0},
+        16: {0, 4, 8, 12},
+        44: {0},
+    }
+    samples_by_scenario = {}
+    for scenario in (1, 16, 4, 44):
+        scenario_samples = [
+            sample for sample in samples if sample["scenario"] == scenario
+        ]
+        samples_by_scenario[scenario] = scenario_samples
+        indexes = [sample["index"] for sample in scenario_samples]
+        if len(indexes) != len(set(indexes)) or set(indexes) != expected_indexes[scenario]:
+            raise ValidationError(
+                f"EEVDF scenario {scenario} indexes differ: {indexes}"
+            )
+        bootstrap_indexes = {
+            sample["index"]
+            for sample in scenario_samples
+            if sample["source"] == "bootstrap"
+        }
+        if bootstrap_indexes != expected_bootstrap_indexes[scenario]:
+            raise ValidationError(
+                f"EEVDF scenario {scenario} bootstrap reuse differs: "
+                f"{sorted(bootstrap_indexes)}"
+            )
+        for sample in scenario_samples:
+            is_bootstrap = sample["index"] in expected_bootstrap_indexes[scenario]
+            expected_source = "bootstrap" if is_bootstrap else "fresh"
+            expected_probes = 0 if is_bootstrap else 4
+            if (
+                sample["source"] != expected_source
+                or sample["wake_probes"] != expected_probes
+                or sample["wake_samples"] != expected_probes
+            ):
+                raise ValidationError(
+                    f"EEVDF scenario {scenario} wake/source scope differs: "
+                    f"index={sample['index']} source={sample['source']} "
+                    f"probes={sample['wake_probes']} "
+                    f"samples={sample['wake_samples']}"
+                )
+            expected_threads = 4 if scenario == 44 and sample["index"] == 1 else 1
+            if sample["threads"] != expected_threads:
+                raise ValidationError(
+                    f"EEVDF scenario {scenario} thread topology differs: "
+                    f"index={sample['index']} threads={sample['threads']}"
+                )
+            if sample["mode"] not in (1, 2):
+                raise ValidationError(
+                    f"EEVDF sample has invalid scheduler mode: {sample['mode']}"
+                )
+            if sample["lifecycle"][0] <= 0 or sample["lifecycle"][1] <= 0:
+                raise ValidationError("EEVDF sample has an invalid lifecycle key")
+            if sample["work"] <= 0 or sample["service"] <= 0:
+                raise ValidationError("EEVDF sample contains no measured work/service")
+
+    for offset in range(0, 16, 4):
+        wave = samples_by_scenario[16][offset : offset + 4]
+        if (
+            wave[0]["source"] != "bootstrap"
+            or wave[0]["index"] != offset
+            or {sample["index"] for sample in wave[1:]} != set(
+                range(offset + 1, offset + 4)
+            )
+            or any(sample["source"] != "fresh" for sample in wave[1:])
+        ):
+            raise ValidationError(
+                f"EEVDF sixteen-sample wave {offset // 4} topology differs"
+            )
+    for scenario in (4, 44):
+        scenario_samples = samples_by_scenario[scenario]
+        if scenario_samples[0]["source"] != "bootstrap" or any(
+            sample["source"] != "fresh" for sample in scenario_samples[1:]
+        ):
+            raise ValidationError(
+                f"EEVDF scenario {scenario} bootstrap/fresh order differs"
+            )
+
+    bootstrap_lifecycles = {
+        sample["lifecycle"]
+        for sample in samples
+        if sample["source"] == "bootstrap"
+    }
+    fresh_lifecycles = [
+        sample["lifecycle"] for sample in samples if sample["source"] == "fresh"
+    ]
+    if len(bootstrap_lifecycles) != 1:
+        raise ValidationError(
+            f"EEVDF bootstrap lifecycle was not reused: {bootstrap_lifecycles}"
+        )
+    if (
+        len(fresh_lifecycles) != len(set(fresh_lifecycles))
+        or bootstrap_lifecycles.intersection(fresh_lifecycles)
+    ):
+        raise ValidationError("EEVDF fresh lifecycle generations are not unique")
+
+    expected_cohorts = {
+        1: (1, 1, 0, 0, 0, 0, 1, 4, 1, 0, 0, 0),
+        16: (16, 16, 12, 12, 0, 0, 4, 4, 4, 12, 15, 0),
+        4: (4, 4, 0, 0, 0, 0, 1, 4, 1, 3, 0, 0),
+        44: (4, 4, 0, 0, 0, 0, 1, 4, 1, 3, 0, 0),
+    }
+    cohort_scenarios = [int(match.group(1)) for _, match in cohort_matches]
+    if cohort_scenarios != [1, 16, 4, 44]:
+        raise ValidationError(
+            f"EEVDF cohort order differs: {cohort_scenarios}"
+        )
+    for _, match in cohort_matches:
+        scenario = int(match.group(1))
+        values = tuple(map(int, match.groups()[1:]))
+        if values != expected_cohorts[scenario]:
+            raise ValidationError(
+                f"EEVDF scenario {scenario} cohort differs: "
+                f"actual={values} expected={expected_cohorts[scenario]}"
+            )
+
+    jain_scenarios = [int(match.group(1)) for _, match in jain_matches]
+    if jain_scenarios != [1, 16, 4, 44]:
+        raise ValidationError(
+            f"EEVDF Jain input order differs: {jain_scenarios}"
+        )
+    for _, match in jain_matches:
+        scenario = int(match.group(1))
+        scaled_services = [
+            max(sample["service"] >> 10, 1)
+            for sample in samples_by_scenario[scenario]
+        ]
+        expected = (
+            len(scaled_services),
+            sum(scaled_services),
+            sum(value * value for value in scaled_services),
+        )
+        actual = tuple(map(int, match.groups()[1:]))
+        if actual != expected:
+            raise ValidationError(
+                f"EEVDF scenario {scenario} Jain inputs differ: "
+                f"actual={actual} expected={expected}"
+            )
+
+    wake_scenarios = [int(match.group(1)) for _, match in wake_matches]
+    if wake_scenarios != [1, 16, 4, 44]:
+        raise ValidationError(f"EEVDF wake order differs: {wake_scenarios}")
+    expected_fresh = {1: 0, 16: 12, 4: 3, 44: 3}
+    for _, match in wake_matches:
+        scenario = int(match.group(1))
+        fresh_samples = int(match.group(3))
+        buckets = tuple(map(int, match.groups()[3:7]))
+        p50, p99, deadline_miss, dispatch, fallback = map(
+            int, match.groups()[7:12]
+        )
+        scenario_samples = samples_by_scenario[scenario]
+        if fresh_samples != expected_fresh[scenario]:
+            raise ValidationError(
+                f"EEVDF scenario {scenario} fresh wake count differs"
+            )
+        if sum(buckets) != fresh_samples * 4:
+            raise ValidationError(
+                f"EEVDF scenario {scenario} wake buckets include non-fresh samples"
+            )
+        if fresh_samples == 0:
+            if (p50, p99) != (4, 4):
+                raise ValidationError("EEVDF empty wake histogram sentinel differs")
+        elif not (0 <= p50 <= p99 <= 3):
+            raise ValidationError("EEVDF wake percentile buckets are inconsistent")
+        if deadline_miss != sum(
+            sample["deadline_miss"] for sample in scenario_samples
+            if sample["source"] == "fresh"
+        ):
+            raise ValidationError("EEVDF deadline-miss aggregation differs")
+        if dispatch != sum(sample["dispatch"] for sample in scenario_samples):
+            raise ValidationError("EEVDF dispatch aggregation differs")
+        if fallback != sum(sample["fallback"] for sample in scenario_samples):
+            raise ValidationError("EEVDF fallback aggregation differs")
+
+    amplification_line, amplification = amplification_matches[0]
+    amplified_service, peer_count, peer_service_sum = map(
+        int, amplification.groups()
+    )
+    amplification_samples = samples_by_scenario[44]
+    expected_amplified = next(
+        sample["service"]
+        for sample in amplification_samples
+        if sample["index"] == 1
+    )
+    expected_peer_sum = sum(
+        sample["service"]
+        for sample in amplification_samples
+        if sample["index"] != 1
+    )
+    if (
+        peer_count != 3
+        or amplified_service != expected_amplified
+        or peer_service_sum != expected_peer_sum
+    ):
+        raise ValidationError(
+            "EEVDF amplification workflow accounting differs: "
+            f"service={amplified_service} peers={peer_count}/{peer_service_sum}"
+        )
+    if amplification_line <= wake_matches[-1][0]:
+        raise ValidationError("EEVDF amplification summary is out of order")
+
+    for scenario, (cohort_line, _), (jain_line, _) in zip(
+        (1, 16, 4, 44), cohort_matches, jain_matches
+    ):
+        last_sample_line = samples_by_scenario[scenario][-1]["line"]
+        wake_line = next(
+            line for line, match in wake_matches
+            if int(match.group(1)) == scenario
+        )
+        if not last_sample_line < cohort_line < jain_line < wake_line:
+            raise ValidationError(
+                f"EEVDF scenario {scenario} summary order differs"
+            )
+
+
 def validate_agent_case(text, case, context_sync=False):
-    marker = f"{case}: parent passed"
+    marker = (
+        "ch8_cow_ucore: passed"
+        if case == "ch8_cow_ucore"
+        else f"{case}: parent passed"
+    )
     required = (*AGENT_CASE_MARKERS.get(case, ()), marker)
     lines = text.splitlines()
     for expected in required:
@@ -312,6 +759,10 @@ def validate_agent_case(text, case, context_sync=False):
             )
     if case == "iobudget_ucore" and "Unexpected mutex id" in text:
         raise ValidationError("iobudget child inherited a stale stdio mutex")
+    if case == "agenttask_ucore":
+        validate_agenttask_metrics(text)
+    if case == "agent_eevdf_ucore":
+        validate_agent_eevdf_metrics(text)
     if context_sync:
         if case != "agentfinal_ucore":
             raise ValidationError("context-sync profile is only valid for agentfinal_ucore")
@@ -632,9 +1083,11 @@ def parse_args():
             "orphan-crash",
             "persistent-seed",
             "persistent-verify",
+            "agent-case",
         ),
     )
     parser.add_argument("--marker", default="")
+    parser.add_argument("--case", default="")
     parser.add_argument("--workflow-domain-file-cap", type=int)
     parser.add_argument("--workflow-global-reserved-cap", type=int)
     return parser.parse_args()
@@ -673,6 +1126,10 @@ def main():
             summary = validate_ch3_trace(text)
         elif args.profile == "syscall-fairness":
             summary = validate_syscall(text)
+        elif args.profile == "agent-case":
+            if not args.case or args.case not in AGENT_CASE_MARKERS:
+                raise ValidationError("agent-case profile requires a known --case")
+            summary = validate_agent_case(text, args.case)
         else:
             if not args.marker:
                 raise ValidationError("filesystem profile requires --marker")

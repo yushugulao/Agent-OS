@@ -119,14 +119,23 @@ receipt 不可用于以下主张：
 正式入口仍按仓库版本化工具执行：
 
 ```bash
+export AGENT_TEST_DURATION_PROFILE=local-e3
 make evaluation-doctor
 make evaluation-smoke
 make evaluation-run TOOLPREFIX=riscv-none-elf-
 make evaluation-verify
 make evaluation-kernel-cost TOOLPREFIX=riscv-none-elf-
+make evaluation-full-verify TOOLPREFIX=riscv-none-elf-
 make evaluation-dashboard
 make evaluation-package
-make evaluation-package-verify
+```
+
+`evaluation-package` 之后只把新 bundle 和 `evidence/releases/INDEX.md` 提交为证据
+提交 E。最后在包含 E 的干净 checkout 中显式指定包路径复核：
+
+```bash
+make evaluation-package-verify \
+  EVALUATION_BUNDLE_DIR=evidence/releases/<bundle>
 ```
 
 具体依赖和选项以 `make` 输出及 [评价方法](evaluation.md) 为准。原则保持不变：

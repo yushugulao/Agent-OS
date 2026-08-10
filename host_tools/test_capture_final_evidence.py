@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """精简最终证据流水线的无 QEMU 回归测试。"""
 from __future__ import annotations
+import ast
 import csv
 import copy
 import hashlib
@@ -104,10 +105,135 @@ BENCHMARK_MARKER = (
     "warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 "
     "status=measured"
 )
+AGENTTASK_METRIC_FIXTURE_LINES = (
+    "agenttask_ucore: perf path=batch operations=16 syscalls=1 "
+    "abi_descriptor_bytes=3584 copied_descriptor_bytes=3584 "
+    "dispatch_header_bytes=0 control_abi_bytes=0 control_copied_bytes=0 "
+    "service_start_interval_tick_p50=0 service_start_interval_tick_p99=1 "
+    "service_start_span_ticks=1 sequence_elapsed_ticks=1 sched_dispatch_delta=0",
+    "agenttask_ucore: perf path=scalar_v3 operations=16 syscalls=16 "
+    "abi_descriptor_bytes=12288 copied_descriptor_bytes=12288 "
+    "dispatch_header_bytes=128 control_abi_bytes=0 control_copied_bytes=0 "
+    "service_start_interval_tick_p50=0 service_start_interval_tick_p99=2 "
+    "service_start_span_ticks=2 sequence_elapsed_ticks=2 sched_dispatch_delta=1",
+    "agenttask_ucore: perf path=sq_cq operations=16 syscalls=2 "
+    "abi_descriptor_bytes=4096 copied_descriptor_bytes=4096 "
+    "dispatch_header_bytes=0 control_abi_bytes=336 control_copied_bytes=544 "
+    "service_start_interval_tick_p50=0 service_start_interval_tick_p99=1 "
+    "service_start_span_ticks=1 sequence_elapsed_ticks=1 sched_dispatch_delta=0",
+    "agenttask_ucore: cancel_latency scope=retained_terminal "
+    "metric=service_tick ticks=0 enter_calls=1 pending_provider=unavailable "
+    "observer_syscalls=2",
+)
+
+
+def build_eevdf_metric_fixture_lines() -> tuple[str, ...]:
+    lines = ["agent_eevdf_ucore: ordinary_baseline_ticks=12 progress=100"]
+    fresh_generation = 0
+    service_sequence = 0
+    cohorts = {
+        1: (1, 1, 0, 0, 0, 0, 1, 1, 0, 0),
+        16: (16, 16, 12, 12, 0, 0, 4, 4, 12, 15),
+        4: (4, 4, 0, 0, 0, 0, 1, 1, 3, 0),
+        44: (4, 4, 0, 0, 0, 0, 1, 1, 3, 0),
+    }
+    scenario_samples = {
+        1: ((0, "bootstrap", 1),),
+        16: tuple(
+            (index, "bootstrap" if index % 4 == 0 else "fresh", 1)
+            for index in range(16)
+        ),
+        4: ((0, "bootstrap", 1),)
+        + tuple((index, "fresh", 1) for index in range(1, 4)),
+        44: (
+            (0, "bootstrap", 1),
+            (1, "fresh", 4),
+            (2, "fresh", 1),
+            (3, "fresh", 1),
+        ),
+    }
+
+    for scenario in (1, 16, 4, 44):
+        services = {}
+        scaled_services = []
+        fresh_samples = 0
+        for index, source, threads in scenario_samples[scenario]:
+            if source == "bootstrap":
+                lifecycle = "1:1"
+                wake_probes = 0
+            else:
+                fresh_generation += 1
+                lifecycle = f"2:{fresh_generation}"
+                wake_probes = 4
+                fresh_samples += 1
+            service_sequence += 1
+            service = service_sequence * 1024
+            services[index] = service
+            scaled_services.append(service_sequence)
+            lines.append(
+                "agent_eevdf_ucore: sample "
+                f"scenario={scenario} index={index} source={source} "
+                f"threads={threads} wake_probes={wake_probes} mode=1 flags=0 "
+                "latency_class=0 weight=1024 request_ticks=1 "
+                f"lifecycle={lifecycle} work={100 + service_sequence} "
+                f"service={service} dispatch=1 fallback=0 deadline_miss=0 "
+                f"wake_samples={wake_probes} wake_max={1 if wake_probes else 0}"
+            )
+        (
+            requested,
+            admitted,
+            rejected,
+            no_space,
+            retry,
+            other,
+            waves,
+            bootstrap_samples,
+            expected_fresh,
+            initial_attempts,
+        ) = cohorts[scenario]
+        lines.append(
+            "agent_eevdf_ucore: cohort "
+            f"scenario={scenario} requested={requested} admitted={admitted} "
+            f"rejected={rejected} no_space={no_space} retry={retry} "
+            f"other={other} waves={waves} concurrency_cap=4 "
+            f"bootstrap_samples={bootstrap_samples} "
+            f"fresh_samples={expected_fresh} "
+            f"initial_fresh_attempts={initial_attempts} ordinary_progress=0"
+        )
+        lines.append(
+            "agent_eevdf_ucore: jain_inputs "
+            f"scenario={scenario} n={admitted} sum={sum(scaled_services)} "
+            f"sum_sq={sum(value * value for value in scaled_services)} "
+            "basis=service_cycles_div_1024"
+        )
+        percentile = 0 if fresh_samples else 4
+        lines.append(
+            "agent_eevdf_ucore: wake "
+            f"scenario={scenario} scope=fresh_agents_only "
+            f"fresh_samples={fresh_samples} buckets={fresh_samples * 4},0,0,0 "
+            f"p50_bucket={percentile} p99_bucket={percentile} "
+            f"deadline_miss=0 dispatch={len(scenario_samples[scenario])} "
+            "fallback=0"
+        )
+        if scenario == 44:
+            lines.append(
+                "agent_eevdf_ucore: amplification_inputs "
+                f"amplified_threads=4 amplified_service={services[1]} "
+                "peer_threads=1 fresh_peer_count=2 bootstrap_peer_count=1 "
+                f"peer_count=3 peer_service_sum="
+                f"{services[0] + services[2] + services[3]} "
+                "accounting=workflow"
+            )
+    return tuple(lines)
+
+
+EEVDF_METRIC_FIXTURE_LINES = build_eevdf_metric_fixture_lines()
+
 FIXTURE_AGENT_CASES = (
     "agentfinal_ucore", "agentfs_ucore", "agentscan_ucore", "agentloop_ucore",
     "agentsched_ucore", "agentconflict_ucore", "agentllm_ucore", "agentbench_ucore",
-    "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
+    "agentcontract_ucore", "agent_eevdf_ucore", "agenttask_ucore",
+    "ch8_cow_ucore", "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
     "agentscope_ucore", "agenttrust_ucore", "agentvfs_ucore", "iobudget_ucore",
     "usersafety_ucore", "blocking_semantics_ucore",
 )
@@ -258,7 +384,7 @@ if __name__ == "__main__":
         raise SystemExit(1)
 ''', encoding="utf-8")
 def write_semantic_fixture_generator(path: Path) -> None:
-    executable(path, r'''#!/usr/bin/env python3
+    source = r'''#!/usr/bin/env python3
 import importlib.util
 import json
 import sys
@@ -299,10 +425,13 @@ virtio = load("validate-virtio-disk-log.py")
 agent_cases = (
     "agentfinal_ucore", "agentfs_ucore", "agentscan_ucore", "agentloop_ucore",
     "agentsched_ucore", "agentconflict_ucore", "agentllm_ucore", "agentbench_ucore",
-    "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
+    "agentcontract_ucore", "agent_eevdf_ucore", "agenttask_ucore",
+    "ch8_cow_ucore", "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
     "agentscope_ucore", "agenttrust_ucore", "agentvfs_ucore", "iobudget_ucore",
     "usersafety_ucore", "blocking_semantics_ucore",
 )
+AGENTTASK_METRIC_FIXTURE_LINES = __AGENTTASK_METRIC_FIXTURE_LINES__
+EEVDF_METRIC_FIXTURE_LINES = __EEVDF_METRIC_FIXTURE_LINES__
 
 def write(name, value):
     (OUT / name).write_text(value.rstrip("\n") + "\n", encoding="utf-8")
@@ -427,7 +556,17 @@ for case in agent_cases:
         ))
     if case == "agentbench_ucore":
         lines.append(benchmark)
-    lines.append(case + ": parent passed")
+    if case == "agenttask_ucore":
+        lines.extend(AGENTTASK_METRIC_FIXTURE_LINES)
+    if case == "agent_eevdf_ucore":
+        lines.extend(EEVDF_METRIC_FIXTURE_LINES)
+    lines.append(
+        "ch8_cow_ucore: passed"
+        if case == "ch8_cow_ucore"
+        else case + ": parent passed"
+    )
+    if case in ("agent_eevdf_ucore", "agenttask_ucore"):
+        kernel.validate_agent_case("\n".join(lines), case)
     agent_sections.append(("agent-case:" + case, lines))
 write("agent-suite-guest.log", "\n".join(section(tag, lines) for tag, lines in agent_sections))
 write("agent-suite-timings.log", "\n".join(
@@ -804,7 +943,17 @@ combined("fs-enospc", fs_sections,
 combined("fs-allocator-fault", [("fs-allocator:fixture:prepare",
                                  ["fsallocfault_ucore: case=alloc phase=intent action=busy prepared=1"])],
          "[fs-allocator-fault] dynamic matrix, negative mutant, and raw evidence passed")
-''')
+'''
+    executable(
+        path,
+        source.replace(
+            "__AGENTTASK_METRIC_FIXTURE_LINES__",
+            repr(AGENTTASK_METRIC_FIXTURE_LINES),
+        ).replace(
+            "__EEVDF_METRIC_FIXTURE_LINES__",
+            repr(EEVDF_METRIC_FIXTURE_LINES),
+        ),
+    )
 def collector_command(root: Path, *arguments: str) -> list[str]:
     launcher = root / "scripts" / "trusted-python-entry.py"
     if not launcher.is_file():
@@ -1081,6 +1230,123 @@ def collect_args(repo: Path, output: Path, tools: dict[str, Path]) -> list[str]:
             "--bash", str(resolve_bash_executable("bash", resolve_executable("git"))),
             "--command-timeout", "30"]
 class FinalEvidenceTests(unittest.TestCase):
+    def test_semantic_fixture_uses_exact_full_agent_case_sequence(self) -> None:
+        expected = (
+            "agentfinal_ucore", "agentfs_ucore", "agentscan_ucore",
+            "agentloop_ucore", "agentsched_ucore", "agentconflict_ucore",
+            "agentllm_ucore", "agentbench_ucore", "agentcontract_ucore",
+            "agent_eevdf_ucore", "agenttask_ucore", "ch8_cow_ucore",
+            "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
+            "agentscope_ucore", "agenttrust_ucore", "agentvfs_ucore",
+            "iobudget_ucore", "usersafety_ucore", "blocking_semantics_ucore",
+        )
+        self.assertEqual(FIXTURE_AGENT_CASES, expected)
+
+        with tempfile.TemporaryDirectory() as temp:
+            generator = Path(temp) / "tools" / "write-semantic-artifacts.py"
+            write_semantic_fixture_generator(generator)
+            source = generator.read_text(encoding="utf-8")
+
+        tree = ast.parse(source)
+        assignment = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "agent_cases"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(ast.literal_eval(assignment.value), expected)
+        self.assertIn(
+            '        "ch8_cow_ucore: passed"\n'
+            '        if case == "ch8_cow_ucore"\n'
+            '        else case + ": parent passed"',
+            source,
+        )
+
+    def test_semantic_fixture_agenttask_metrics_match_kernel_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            generator = Path(temp) / "tools" / "write-semantic-artifacts.py"
+            write_semantic_fixture_generator(generator)
+            source = generator.read_text(encoding="utf-8")
+
+        tree = ast.parse(source)
+        assignment = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "AGENTTASK_METRIC_FIXTURE_LINES"
+                for target in node.targets
+            )
+        )
+        generated_metrics = ast.literal_eval(assignment.value)
+        self.assertEqual(generated_metrics, AGENTTASK_METRIC_FIXTURE_LINES)
+        self.assertIn(
+            '    if case == "agenttask_ucore":\n'
+            "        lines.extend(AGENTTASK_METRIC_FIXTURE_LINES)\n",
+            source,
+        )
+        self.assertIn(
+            '        kernel.validate_agent_case("\\n".join(lines), case)\n',
+            source,
+        )
+
+        spec = importlib.util.spec_from_file_location(
+            "agenttask_fixture_kernel_validator", KERNEL_LOG_VALIDATOR
+        )
+        kernel = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(kernel)
+        case = "agenttask_ucore"
+        fixture_lines = [
+            *kernel.AGENT_CASE_MARKERS[case],
+            *generated_metrics,
+            f"{case}: parent passed",
+        ]
+        kernel.validate_agent_case("\n".join(fixture_lines), case)
+
+    def test_semantic_fixture_eevdf_metrics_match_kernel_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            generator = Path(temp) / "tools" / "write-semantic-artifacts.py"
+            write_semantic_fixture_generator(generator)
+            source = generator.read_text(encoding="utf-8")
+
+        tree = ast.parse(source)
+        assignment = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "EEVDF_METRIC_FIXTURE_LINES"
+                for target in node.targets
+            )
+        )
+        generated_metrics = ast.literal_eval(assignment.value)
+        self.assertEqual(generated_metrics, EEVDF_METRIC_FIXTURE_LINES)
+        self.assertIn(
+            '    if case == "agent_eevdf_ucore":\n'
+            "        lines.extend(EEVDF_METRIC_FIXTURE_LINES)\n",
+            source,
+        )
+
+        spec = importlib.util.spec_from_file_location(
+            "eevdf_fixture_kernel_validator", KERNEL_LOG_VALIDATOR
+        )
+        kernel = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(kernel)
+        case = "agent_eevdf_ucore"
+        fixture_lines = [
+            *kernel.AGENT_CASE_MARKERS[case],
+            *generated_metrics,
+            f"{case}: parent passed",
+        ]
+        kernel.validate_agent_case("\n".join(fixture_lines), case)
+
     def test_bash_resolution_selects_an_executable_gnu_bash(self) -> None:
         bash = resolve_bash_executable("bash", resolve_executable("git"))
         result = run(

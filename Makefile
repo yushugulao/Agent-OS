@@ -200,7 +200,14 @@ KERNELVEC_FRAME_SIZE_BYTES ?= 256
 # swtch 会切换栈；usertrapret 的间接跳转是无栈蹦床。
 KSTACK_STACK_BOUNDARIES ?= swtch
 KSTACK_INDIRECT_CALLERS ?= usertrapret
-KSTACK_INDIRECT_CALL_EDGES ?=
+KSTACK_INDIRECT_CALL_EDGES ?= \
+	agent_task_deadline_completion=agent_task_bridge_expire \
+	agent_task_release_invoke=agent_task_bridge_resource_release \
+	agent_task_channel_reclaim=agent_task_bridge_cancel \
+	agent_task_channel_consume_one=agent_task_bridge_cancel \
+	agent_task_channel_consume_one=agent_task_bridge_validate \
+	agent_task_channel_consume_one=agent_task_bridge_submit \
+	agent_task_channel_resource=agent_task_bridge_resource_import
 # Sv39 遍历最多访问三级页表。
 KSTACK_RECURSION_BOUNDS ?= freewalk=3 uvm_prune_empty_walk=3
 KSTACK_POLICY_ARGS = \
@@ -541,7 +548,7 @@ override KERNEL_BUDGET_MAKE_ARGS = \
 	KERNELVEC_FRAME_SIZE_BYTES=256 \
 	KSTACK_STACK_BOUNDARIES=swtch \
 	KSTACK_INDIRECT_CALLERS='usertrapret' \
-	KSTACK_INDIRECT_CALL_EDGES= \
+	KSTACK_INDIRECT_CALL_EDGES='agent_task_deadline_completion=agent_task_bridge_expire agent_task_release_invoke=agent_task_bridge_resource_release agent_task_channel_reclaim=agent_task_bridge_cancel agent_task_channel_consume_one=agent_task_bridge_cancel agent_task_channel_consume_one=agent_task_bridge_validate agent_task_channel_consume_one=agent_task_bridge_submit agent_task_channel_resource=agent_task_bridge_resource_import' \
 	KSTACK_RECURSION_BOUNDS='freewalk=3 uvm_prune_empty_walk=3' \
 	FS_ICACHE_SIZE= \
 	FILE_RESOURCE_POOL_SIZE= \
@@ -601,7 +608,7 @@ $(AGENT_CORE_BOUNDARY_PROBE): $(K)/agent_core.c $(wildcard $(K)/*.h) $(wildcard 
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -fno-inline -fkeep-static-functions -c $< -o $@
 
-agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_lifecycle_abi.h agent_tool_abi.h agent_workflow_fence_abi.h agent_metadata_disk_abi.h agent_performance_abi.h agent_resource_abi.h
+agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_execution_contract_abi.h agent_lifecycle_abi.h agent_provenance_abi.h agent_task_channel_abi.h agent_tool_abi.h agent_workflow_fence_abi.h agent_metadata_disk_abi.h agent_performance_abi.h agent_resource_abi.h
 	@$(KERNEL_BUDGET_PYTHON_CMD) scripts/check-agent-uapi-layout.py \
 		--root . --build-dir $(KERNEL_BUDGET_BUILDDIR)/ci \
 		--cc $(call shell_quote,$(KERNEL_BUDGET_TOOLPREFIX)gcc) \
@@ -660,6 +667,14 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-check-user-stack-contract.py \
 	scripts/test-check-teardown-protocol.py \
 	scripts/test-check-agent-uapi-layout.py \
+	scripts/test-agent-execution-contract.py \
+	scripts/test-agent-task-channel.py \
+	scripts/test-agent-direct-denial-evidence.py \
+	scripts/test-context-evidence-atomicity.py \
+	scripts/test-context-snapshot-reader-atomicity.py \
+	scripts/test-agent-direct-syscall-provenance.py \
+	scripts/test-agent-provenance-monotonicity.py \
+	host_tools/test_workflow_scheduler_model.py \
 	scripts/test-context-active-path-wiring.py \
 	scripts/test-exec-image-policy.py \
 	scripts/test-agent-live-query-fs.py \
@@ -687,6 +702,7 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-io-work-conserving-wiring.py \
 	scripts/check-syscall-file-transaction.py \
 	scripts/check-traditional-io-fastpath.py \
+	scripts/test-traditional-io-fastpath.py \
 	scripts/check-open-file-io-lease.py \
 	scripts/test-lazy-bio-admission.py \
 	scripts/check-inode-mapping-guard.py \
@@ -732,11 +748,15 @@ printf-format-check: printf-format-static-check scripts/test-printf-format-contr
 
 override HOST_CONTRACT_TESTS := \
 	scripts/test-mkfs-host-snapshot.py \
+	scripts/test-agent-feature-guest-wiring.py \
+	scripts/test-trap-callgraph-separation.py \
 	host_tools/test_check_host_platform_alignment.py \
 	host_tools/test_check_host_action_kind_alignment.py \
 	host_tools/test_check_seeded_action_state.py \
 	host_tools/test_check_host_surface_alignment.py \
 	host_tools/test_check_host_test_alignment.py \
+	host_tools/test_agent_task_transport.py \
+	host_tools/test_mcp_a2a_gateway.py \
 	host_tools/test_plain_ucore_action_runner.py \
 	host_tools/test_research_state_manifest.py \
 	host_tools/test_plain_ucore_fs_extract.py \

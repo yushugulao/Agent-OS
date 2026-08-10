@@ -12,7 +12,7 @@ else:
 
 SOURCE_RELATIVE = "user/src/agenteval_ucore.c"
 EVALUATION_SUITE_SOURCE_PATH = "ci/evaluation-suite.json"
-POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v7"
+POLICY_INVENTORY_SCHEMA = "agentos-evaluation-policy-inventory-v8"
 
 # 这里必须使用允许列表，而非递归源码树快照。每个条目都会参与正式测量的
 # 选择、执行、解释、渲染或打包，因此必须纳入签名回执。
@@ -36,6 +36,10 @@ CONTROL_PLANE_POLICY = (
     ("full-verification-metrics", "host_tools/full_verification_metrics.py"),
     ("full-verification-metrics", "host_tools/full_verification_metrics_render.py"),
     ("full-verification-collector", "scripts/capture-final-evidence.py"),
+    (
+        "full-verification-collector-selftest",
+        "host_tools/test_capture_final_evidence.py",
+    ),
     ("full-verification-runner", "scripts/run-full-verification.sh"),
     (
         "full-verification-workflow-guest",
@@ -95,6 +99,48 @@ CONTROL_PLANE_POLICY = (
     ("agent-live-query-selftest", "scripts/test-agent-live-query-fs.py"),
     ("agent-workflow-fence-selftest", "scripts/test-workflow-fence.py"),
     ("agent-syscall-cut-selftest", "scripts/test-workflow-syscall-cut.py"),
+    (
+        "agent-execution-contract-selftest",
+        "scripts/test-agent-execution-contract.py",
+    ),
+    ("agent-task-channel-selftest", "scripts/test-agent-task-channel.py"),
+    (
+        "agent-direct-denial-evidence-selftest",
+        "scripts/test-agent-direct-denial-evidence.py",
+    ),
+    (
+        "agent-direct-syscall-provenance-selftest",
+        "scripts/test-agent-direct-syscall-provenance.py",
+    ),
+    (
+        "agent-provenance-monotonicity-selftest",
+        "scripts/test-agent-provenance-monotonicity.py",
+    ),
+    (
+        "agent-feature-guest-wiring-selftest",
+        "scripts/test-agent-feature-guest-wiring.py",
+    ),
+    (
+        "agent-context-evidence-atomicity-selftest",
+        "scripts/test-context-evidence-atomicity.py",
+    ),
+    (
+        "agent-context-snapshot-atomicity-selftest",
+        "scripts/test-context-snapshot-reader-atomicity.py",
+    ),
+    (
+        "workflow-scheduler-model-selftest",
+        "host_tools/test_workflow_scheduler_model.py",
+    ),
+    ("agent-task-transport-gateway", "host_tools/agent_task_transport.py"),
+    (
+        "agent-task-transport-gateway-selftest",
+        "host_tools/test_agent_task_transport.py",
+    ),
+    ("mcp-a2a-gateway", "host_tools/mcp_a2a_gateway.py"),
+    ("mcp-a2a-gateway-selftest", "host_tools/test_mcp_a2a_gateway.py"),
+    ("agent-execution-contract-guest", "user/src/agentcontract_ucore.c"),
+    ("agent-task-channel-guest", "user/src/agenttask_ucore.c"),
     ("agent-evidence-ring-probe", "scripts/probes/agent-evidence-ring.c"),
     ("agent-uapi-layout-checker", "scripts/check-agent-uapi-layout.py"),
     ("agent-uapi-layout-contract", "ci/agent-uapi-layout.json"),
@@ -109,6 +155,14 @@ CONTROL_PLANE_POLICY = (
     (
         "traditional-io-fastpath-checker",
         "scripts/check-traditional-io-fastpath.py",
+    ),
+    (
+        "traditional-io-fastpath-checker-selftest",
+        "scripts/test-traditional-io-fastpath.py",
+    ),
+    (
+        "trap-callgraph-separation-selftest",
+        "scripts/test-trap-callgraph-separation.py",
     ),
     ("worker-batch-checker", "scripts/check-rp-worker-batches.py"),
     ("worker-batch-checker-selftest", "scripts/test-rp-worker-batches.py"),
@@ -132,6 +186,10 @@ CONTROL_PLANE_POLICY = (
     ("seed-oracle", "evaluation_guest/fixtures/task6-count-corpus.csv"),
     ("micro-runner", "scripts/run-agent-tests.sh"),
     ("micro-parallel-qemu-runner", "scripts/run-parallel-qemu-regressions.py"),
+    (
+        "micro-parallel-qemu-runner-selftest",
+        "scripts/test-parallel-qemu-regressions.py",
+    ),
     ("micro-evidence-wiring", "scripts/evidence-wiring.sh"),
     ("micro-qemu-runner", "scripts/agent_test_runner.py"),
     ("micro-guest-failure-classifier", "scripts/guest_failure_classifier.py"),
@@ -273,6 +331,8 @@ GUEST_POLICY_ROLES = (
     "kernel-exec-cache-counter-producer",
     "kernel-resource-controller-implementation",
     "kernel-resource-controller-interface",
+    "kernel-workflow-scheduler-implementation",
+    "kernel-workflow-scheduler-interface",
     "kernel-syscall-dispatch",
     "kernel-syscall-id",
     "agentos-riscv-syscall-id-template",
@@ -281,6 +341,7 @@ GUEST_POLICY_ROLES = (
     "agentos-clock-helper",
     "agentos-showcase-retry-contract",
     "agentos-showcase-performance-pair",
+    "agentos-eevdf-guest",
 )
 
 

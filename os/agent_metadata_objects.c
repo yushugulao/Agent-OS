@@ -6,6 +6,7 @@
 #include "agent_metadata_actions.h"
 #include "agent_metadata_internal.h"
 #include "agent_metadata_query.h"
+#include "agent_provenance.h"
 #include "defs.h"
 #include "exec_policy.h"
 #include "file.h"
@@ -273,6 +274,9 @@ out_txn:
 static void agent_file_query_reset(struct agent_file_query_result *result)
 {
 	memset(result, 0, sizeof(*result));
+	result->provenance_labels =
+		AGENT_PROVENANCE_UNTRUSTED_FILE_DATA |
+		AGENT_PROVENANCE_AGENT_DERIVED;
 }
 
 static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
@@ -317,7 +321,7 @@ static int agent_file_find(uint scope_id, char *selector)
 	return AGENT_STATUS_NOT_FOUND;
 }
 
-static int
+static int __attribute__((noinline))
 agent_file_summary_read(uint scope_id, char *selector,
 			struct agent_result *res)
 {
@@ -395,8 +399,9 @@ static void agent_file_digest_preview(char *preview, int *pos, char c)
 	preview[*pos] = 0;
 }
 
-static void agent_file_digest_read(struct proc *p, char *selector,
-				   struct agent_result *res)
+static void __attribute__((noinline))
+agent_file_digest_read(struct proc *p, char *selector,
+		       struct agent_result *res)
 {
 	char physical[AGENT_FILE_NAME_SIZE];
 	char preview[AGENT_FAST_RESULT_SIZE];
@@ -661,81 +666,101 @@ agent_tool_require_cap(struct proc *p, struct agent_result *res, uint64 cap)
 	return 0;
 }
 
+static void __attribute__((noinline))
+agent_metadata_query_file_tool(struct proc *p, struct agent_op *op,
+			       struct agent_result *res)
+{
+	struct agent_file_query query;
+	struct agent_file_query_result query_result;
+	struct inode *ip;
+	int found;
+	int lookup_status;
+
+	if (!agent_tool_require_cap(p, res, AGENT_CAP_META_READ))
+		return;
+	if (op->payload[0] == 0) {
+		agent_result_status(res, AGENT_STATUS_BAD_PARAM,
+				    "path_required");
+		return;
+	}
+	if (agent_metadata_catalog_field_contains(op->payload, "=") ||
+	    agent_metadata_catalog_field_contains(op->payload, ":")) {
+		if (agent_metadata_query_from_payload(&query, op->payload) < 0) {
+			agent_result_status(res, AGENT_STATUS_BAD_PARAM,
+					    "bad_selector");
+			return;
+		}
+		if (!agent_metadata_query_has_filter(&query)) {
+			agent_result_status(res, AGENT_STATUS_BAD_PARAM,
+					    "empty_selector");
+			return;
+		}
+		found = agent_file_query_internal(agent_identity_proc_scope(p),
+					       &query, &query_result);
+		if (found < 0) {
+			agent_result_status(res, found, "metadata_unavailable");
+			return;
+		}
+		res->value0 = query_result.total_hits;
+		res->value1 = query_result.scanned_records;
+		res->value2 = (uint64)query_result.used_index |
+			      ((uint64)query_result.truncated << 1);
+		if (query_result.returned > 0)
+			agent_result_text(res,
+					  query_result.hits[0].physical_name);
+		else
+			agent_result_text(res, "empty");
+		return;
+	}
+	ip = namei_scope_status(op->payload, VFS_POLICY_WORKFLOW,
+				agent_identity_proc_scope(p), &lookup_status);
+	if (ip == 0) {
+		found = agent_lookup_error_status(lookup_status);
+		agent_result_status(res, found,
+			found == AGENT_STATUS_NOT_FOUND ?
+				"file_not_found" : "metadata_unavailable");
+		return;
+	}
+	lookup_status = ivalid(ip);
+	if (lookup_status < 0) {
+		iput(ip);
+		agent_result_status(res, agent_lookup_error_status(lookup_status),
+				    "metadata_unavailable");
+		return;
+	}
+	res->value0 = ip->type;
+	res->value1 = ip->inum;
+	res->value2 = ip->size;
+	iput(ip);
+	agent_result_text(res, "query_file");
+}
+
+static void __attribute__((noinline))
+agent_metadata_dependency_query_tool(struct proc *p, struct agent_op *op,
+				     struct agent_result *res)
+{
+	struct agent_object_selector dependency;
+
+	if (!agent_tool_require_cap(p, res, AGENT_CAP_META_READ))
+		return;
+	if (agent_parse_selector(op->payload, &dependency) < 0) {
+		agent_result_status(res, AGENT_STATUS_BAD_PARAM, "bad_selector");
+		return;
+	}
+	if (agent_metadata_actions_dependency_query(
+		    agent_identity_proc_scope(p), dependency.label,
+		    dependency.project, dependency.run_id, res) < 0)
+		agent_result_status(res, AGENT_STATUS_NOT_FOUND,
+				    "dependency_not_found");
+}
+
 int
 agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 			    struct agent_result *res)
 {
-	struct inode *ip;
-	struct agent_file_query query;
-	struct agent_file_query_result query_result;
-	struct agent_object_selector dependency;
-	int found;
-	int lookup_status;
-
 	switch (op->tool_id) {
 	case AGENT_TOOL_QUERY_FILE:
-		if (!agent_tool_require_cap(p, res, AGENT_CAP_META_READ))
-			break;
-		if (op->payload[0] == 0) {
-			agent_result_status(res, AGENT_STATUS_BAD_PARAM,
-					    "path_required");
-			break;
-		}
-		if (agent_metadata_catalog_field_contains(op->payload, "=") ||
-		    agent_metadata_catalog_field_contains(op->payload, ":")) {
-			if (agent_metadata_query_from_payload(&query,
-						      op->payload) < 0) {
-				agent_result_status(res, AGENT_STATUS_BAD_PARAM,
-						    "bad_selector");
-				break;
-			}
-			if (!agent_metadata_query_has_filter(&query)) {
-				agent_result_status(res, AGENT_STATUS_BAD_PARAM,
-						    "empty_selector");
-				break;
-			}
-			found = agent_file_query_internal(agent_identity_proc_scope(p),
-						       &query, &query_result);
-			if (found < 0) {
-				agent_result_status(res, found,
-						    "metadata_unavailable");
-				break;
-			}
-			res->value0 = query_result.total_hits;
-			res->value1 = query_result.scanned_records;
-			res->value2 = (uint64)query_result.used_index |
-				      ((uint64)query_result.truncated << 1);
-			if (query_result.returned > 0)
-				agent_result_text(
-					res,
-					query_result.hits[0].physical_name);
-			else
-				agent_result_text(res, "empty");
-			break;
-		}
-		ip = namei_scope_status(op->payload, VFS_POLICY_WORKFLOW,
-				       agent_identity_proc_scope(p),
-				       &lookup_status);
-		if (ip == 0) {
-			found = agent_lookup_error_status(lookup_status);
-			agent_result_status(res, found,
-				found == AGENT_STATUS_NOT_FOUND ?
-					"file_not_found" : "metadata_unavailable");
-			break;
-		}
-		lookup_status = ivalid(ip);
-		if (lookup_status < 0) {
-			iput(ip);
-			agent_result_status(
-				res, agent_lookup_error_status(lookup_status),
-				"metadata_unavailable");
-			break;
-		}
-		res->value0 = ip->type;
-		res->value1 = ip->inum;
-		res->value2 = ip->size;
-		iput(ip);
-		agent_result_text(res, "query_file");
+		agent_metadata_query_file_tool(p, op, res);
 		break;
 	case AGENT_TOOL_FILE_META_INIT:
 		if (!agent_tool_require_cap(p, res, AGENT_CAP_META_WRITE))
@@ -745,38 +770,29 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 		res->value0 = agent_metadata_catalog_generation();
 		agent_result_text(res, "file_meta_init");
 		break;
-	case AGENT_TOOL_READ_FILE_SUMMARY:
+	case AGENT_TOOL_READ_FILE_SUMMARY: {
+		int found;
+
 		if (!agent_tool_require_cap(p, res, AGENT_CAP_CONTENT_READ))
 			break;
-		found = agent_file_summary_read(agent_identity_proc_scope(p),
-					     op->payload, res);
+		found = agent_file_summary_read(
+			agent_identity_proc_scope(p), op->payload, res);
 		if (found < 0) {
 			agent_result_status(
-				res, found, found == AGENT_STATUS_NOT_FOUND ?
-						    "summary_not_found" :
-						    "metadata_unavailable");
+				res, found,
+				found == AGENT_STATUS_NOT_FOUND ?
+					"summary_not_found" :
+					"metadata_unavailable");
 		}
 		break;
+	}
 	case AGENT_TOOL_READ_FILE_DIGEST:
 		if (!agent_tool_require_cap(p, res, AGENT_CAP_CONTENT_READ))
 			break;
 		agent_file_digest_read(p, op->payload, res);
 		break;
 	case AGENT_TOOL_DEPENDENCY_QUERY:
-		if (!agent_tool_require_cap(p, res, AGENT_CAP_META_READ))
-			break;
-		if (agent_parse_selector(op->payload, &dependency) < 0) {
-			agent_result_status(res, AGENT_STATUS_BAD_PARAM,
-					    "bad_selector");
-			break;
-		}
-		if (agent_metadata_actions_dependency_query(
-			    agent_identity_proc_scope(p), dependency.label,
-			    dependency.project, dependency.run_id, res) < 0) {
-			agent_result_status(res, AGENT_STATUS_NOT_FOUND,
-					    "dependency_not_found");
-			break;
-		}
+		agent_metadata_dependency_query_tool(p, op, res);
 		break;
 	case AGENT_TOOL_DEPENDENCY_UPDATE:
 		if (!agent_tool_require_cap(p, res,
@@ -1203,6 +1219,8 @@ static int agent_file_query_execute(struct proc *p, uint64 queryaddr,
 	}
 	if (returned < 0)
 		goto out_lane;
+	(void)agent_provenance_merge_current(
+		p, AGENT_PROVENANCE_UNTRUSTED_FILE_DATA);
 	(void)agent_context_append_system(
 		p, AGENT_TOOL_QUERY_FILE, 0, query.flags,
 		query.status[0] ? query.status : query.stage,

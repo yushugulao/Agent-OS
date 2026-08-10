@@ -356,3 +356,7 @@
 #define __NR_agent_resource_snapshot 559
 #define __NR_agent_performance_snapshot 560
 #define __NR_agent_launch_info 561
+#define __NR_agent_execution_contract 562
+#define __NR_agent_task_channel_setup 563
+#define __NR_agent_task_channel_enter 564
+#define __NR_agent_task_channel_resource 565

@@ -4,8 +4,11 @@
 #include "const.h"
 #include "riscv.h"
 #include "types.h"
+#include "../agent_execution_contract_abi.h"
+#include "../agent_task_channel_abi.h"
 #include "../agent_lifecycle_abi.h"
 #include "../agent_performance_abi.h"
+#include "../agent_provenance_abi.h"
 #include "../agent_resource_abi.h"
 #include "../agent_tool_abi.h"
 #include "../agent_workflow_fence_abi.h"
@@ -711,7 +714,10 @@ struct agent_file_query_result {
 	int candidate_records;
 	/* 重建无效索引时实际访问的槽位数。 */
 	int index_rebuild_records;
-	int reserved;
+	union {
+		int reserved;
+		unsigned int provenance_labels;
+	};
 	uint64 query_ticks;
 	uint64 plan_reason;
 	uint64 fs_generation;
@@ -743,7 +749,7 @@ struct thread;
 void agentinit(void);
 void agent_storage_init(void);
 void agent_proc_prepare(struct proc *p);
-void agent_proc_teardown(struct proc *p);
+int agent_proc_teardown(struct proc *p);
 void agent_thread_runtime_transition(struct thread *t, int transition);
 void agent_process_image_install_locked(struct proc *p);
 void agent_observe_thread_reset(struct thread *t);
@@ -762,6 +768,8 @@ int agent_create_proc(void);
 int agent_create_role_proc(int role);
 int agent_workflow_create_proc(int role);
 void agent_tick(void);
+int agent_task_deadline_due_current(void);
+int agent_task_deadline_checkpoint(void);
 void agent_background_request(void);
 int agent_background_work_pending(void);
 void agent_background_maintain(void);
@@ -793,6 +801,10 @@ int sys_agent_workflow_close(uint64 scope_id);
 int sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 				      uint64 flags, uint64 expected_id,
 				      uint64 expected_generation);
+int sys_agent_execution_contract(uint64 controladdr, uint64 resultaddr);
+int sys_agent_task_channel_setup(uint64 setupaddr, uint64 resultaddr);
+int sys_agent_task_channel_enter(uint64 enteraddr, uint64 resultaddr);
+int sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr);
 int sys_agent_resource_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_performance_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_scope_delegate_fd(int fd);

@@ -9,11 +9,13 @@
 #include "loader.h"
 #include "sbi.h"
 #include "trap.h"
+#include "timer.h"
 #include "user_stack_layout.h"
 #include "vm.h"
 #include "queue.h"
 #include "vfs_security.h"
 #include "workflow_credit_domain.h"
+#include "workflow_scheduler.h"
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 #include "wait_atomic_test.h"
 #endif
@@ -137,11 +139,21 @@ _Static_assert(AGENT_STATE_PAGE_ORDINARY_LIMIT +
 		       AGENT_STATE_PAGE_RESERVED_LIMIT ==
 		       AGENT_STATE_PAGE_POOL_SIZE,
 	       "Agent state page classes must partition the global pool");
-_Static_assert(AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT >=
+_Static_assert(AGENT_TASK_CHANNEL_STATE_PAGES == 4U,
+	       "Task Channel quota assumes four separately charged pages");
+_Static_assert(AGENT_STATE_PAGE_PROCESS_LIMIT ==
+		       AGENT_STATE_PAGE_COUNT +
+			       AGENT_TASK_CHANNEL_STATE_PAGES,
+	       "per-process Agent state must include the optional Task Channel");
+_Static_assert(AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT ==
 		       (uint64)PROC_RESOURCE_DOMAIN_RESERVED_LIMIT *
-			       AGENT_STATE_PAGE_COUNT +
+			       AGENT_STATE_PAGE_PROCESS_LIMIT +
 		       WORKFLOW_EVIDENCE_PAGE_COUNT,
 	       "reserved workflow domains must fund their evidence ring");
+_Static_assert(AGENT_TASK_CHANNEL_SQ_BASE +
+		       (uint64)AGENT_TASK_CHANNEL_MAPPED_PAGES * PAGE_SIZE ==
+		       AGENT_CONTEXT_BASE,
+	       "Task Channel and Context exec aliases must stay contiguous");
 _Static_assert(USER_HEAP_LIMIT <= 0x7fffffffULL,
 	       "program break must fit the signed syscall result ABI");
 _Static_assert(PROC_RESOURCE_DOMAIN_LIMIT > 0 &&
@@ -724,6 +736,32 @@ int proc_request_controller_exit(struct workflow_lifecycle_key lifecycle,
 	return requested;
 }
 
+static void proc_vm_snapshot_scheduler_adjust(
+	struct proc *p, int owner_tid, int direction)
+{
+	struct workflow_lifecycle_key lifecycle;
+	int queued_siblings = 0;
+
+	if (direction == 0 ||
+	    (!p->workflow_lifecycle_charged &&
+	     !workflow_scheduler_domain_tracked(p->resource_domain_id)))
+		return;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (!workflow_lifecycle_key_valid(lifecycle))
+		return;
+	for (int tid = 0; tid < NTHREAD; tid++) {
+		struct thread *candidate = &p->threads[tid];
+
+		if (tid != owner_tid && candidate->on_run_queue &&
+		    candidate->state == RUNNABLE)
+			queued_siblings++;
+	}
+	if (queued_siblings != 0)
+		workflow_scheduler_schedulable_adjust(
+			lifecycle, p->resource_account, p->resource_domain_id,
+			direction * queued_siblings);
+}
+
 // 虚拟内存快照可在已提交页面之间让出处理器。快照存续期间，调度器暂停
 // 兄弟线程以保持源页表稳定；无关进程仍可调度。
 int proc_vm_snapshot_begin(struct proc *p)
@@ -740,6 +778,7 @@ int proc_vm_snapshot_begin(struct proc *p)
 	    p->vm_snapshot_depth == 0) {
 		p->vm_snapshot_owner_tid = t->tid;
 		p->vm_snapshot_depth = 1;
+		proc_vm_snapshot_scheduler_adjust(p, t->tid, -1);
 		result = 0;
 	} else if (p->teardown_state == PROC_TEARDOWN_LIVE &&
 		   p->vm_snapshot_owner_tid == t->tid &&
@@ -760,8 +799,10 @@ void proc_vm_snapshot_end(struct proc *p)
 	    p->vm_snapshot_depth == 0 || p->vm_snapshot_owner_tid != t->tid)
 		panic("vm snapshot owner");
 	p->vm_snapshot_depth--;
-	if (p->vm_snapshot_depth == 0)
+	if (p->vm_snapshot_depth == 0) {
 		p->vm_snapshot_owner_tid = -1;
+		proc_vm_snapshot_scheduler_adjust(p, t->tid, 1);
+	}
 	intr_restore(enabled);
 }
 
@@ -954,6 +995,7 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 	if (scheduler_domain_task_count(domain) != 0 ||
 	    scheduler_domain_active[domain_id])
 		panic("resource domain run queue invariant");
+	workflow_scheduler_forget_domain(domain_id, domain->account);
 	scheduler_lane_init(&domain->scheduler_normal);
 	scheduler_lane_init(&domain->scheduler_agent);
 	domain->used = 0;
@@ -1596,6 +1638,7 @@ static void proc_orphan_children(struct proc *parent)
 void proc_init()
 {
 	struct proc *p;
+	workflow_scheduler_init();
 	scheduler_queues_init();
 	proc_resource_init();
 	filepool_init();
@@ -1740,8 +1783,22 @@ static void scheduler_deactivate_domain(int domain_id)
 static void scheduler_drop_queued_thread(struct proc_resource_domain *domain,
 					 struct thread *t)
 {
+	struct workflow_lifecycle_key lifecycle;
+	int domain_id;
+
 	if (domain == 0 || t == 0 || !t->on_run_queue)
 		scheduler_invariant_stop(5);
+	domain_id = domain - proc_resource_domains;
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
+	    t->process == 0)
+		scheduler_invariant_stop(5);
+	if (t->process->workflow_lifecycle_charged ||
+	    workflow_scheduler_domain_tracked(domain_id)) {
+		lifecycle = vfs_proc_lifecycle(t->process);
+		workflow_scheduler_on_dequeue(
+			lifecycle, domain->account, domain_id,
+			proc_vm_snapshot_schedulable(t));
+	}
 	t->on_run_queue = 0;
 	t->run_queue_agent = -1;
 }
@@ -1936,9 +1993,34 @@ static struct thread *fetch_domain_best(int domain_id)
 	return best_task;
 }
 
-struct thread *fetch_task()
+/* The run-queue hooks maintain this bounded cache outside the fetch path. */
+static int scheduler_workflow_candidate(
+	int domain_id, uint64 now_tick,
+	struct workflow_scheduler_candidate *candidate)
 {
-	int enabled = intr_save();
+	struct proc_resource_domain *domain;
+	int result;
+
+	if (candidate == 0 || domain_id < 0 ||
+	    domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+		return -1;
+	domain = &proc_resource_domains[domain_id];
+	if (!domain->used || !scheduler_domain_active[domain_id] ||
+	    scheduler_domain_task_count(domain) <= 0)
+		return -1;
+	result = workflow_scheduler_candidate_get(
+		domain_id, now_tick, candidate);
+	if (result != 1 || candidate->runnable_threads !=
+				  (uint)scheduler_domain_task_count(domain)) {
+		workflow_scheduler_domain_invalidate(domain_id);
+		return -1;
+	}
+	return result;
+}
+
+/* The pre-EEVDF outer round-robin path is the strict safety fallback. */
+static struct thread *fetch_task_legacy_locked(int *selected_domain)
+{
 	int remaining = scheduler_active_domains.count;
 
 	while (remaining-- > 0) {
@@ -1957,17 +2039,116 @@ struct thread *fetch_task()
 			    fetch_domain_best(domain_id) :
 			    fetch_domain_fifo(domain_id);
 		scheduler_activate_domain(domain_id);
-		if (t != 0) {
-			int tid = t->tid;
-			int pid = t->process->pid;
+		if (t == 0 && scheduler_domain_task_count(domain) == 0) {
+			uint64 now = get_cycle();
 
-			intr_restore(enabled);
-			tracef("fetch domain %d(pid=%d, tid=%d, addr=%p)",
-			       domain_id, pid, tid, (uint64)t);
+			workflow_scheduler_domain_idle(
+				domain_id,
+				now / (CPU_FREQ / TICKS_PER_SEC));
+		}
+		if (t != 0) {
+			if (selected_domain != 0)
+				*selected_domain = domain_id;
 			return t;
 		}
 	}
+	return 0;
+}
+
+struct thread *fetch_task()
+{
+	struct workflow_scheduler_candidate candidates[
+		WORKFLOW_SCHEDULER_ENTITY_CAP];
+	int workflow_domains[WORKFLOW_SCHEDULER_ENTITY_CAP];
+	struct thread *t = 0;
+	int enabled = intr_save();
+	int selected_domain = -1;
+	int workflow_count;
+	int head_seen = 0;
+	int head_domain;
+	uint prepared = 0;
+	uint64 now_cycle;
+	uint64 now_tick;
+
+	if (scheduler_active_domains.count <= 0)
+		goto out;
+	head_domain = scheduler_active_domains.data[
+		scheduler_active_domains.front];
+	if (head_domain < 0 || head_domain >= PROC_RESOURCE_DOMAIN_CAP ||
+	    !scheduler_domain_active[head_domain])
+		scheduler_invariant_stop(11);
+	/* Ordinary RR pays one bounded map check and never scans workflow lanes. */
+	if (!workflow_scheduler_domain_runnable(head_domain)) {
+		t = fetch_task_legacy_locked(&selected_domain);
+		goto out;
+	}
+	now_cycle = get_cycle();
+	now_tick = now_cycle / (CPU_FREQ / TICKS_PER_SEC);
+	if (scheduler_workflow_candidate(
+		    head_domain, now_tick, &candidates[0]) != 1)
+		goto fallback;
+	prepared = 1;
+	workflow_count = workflow_scheduler_runnable_domains(
+		workflow_domains, WORKFLOW_SCHEDULER_ENTITY_CAP);
+	if (workflow_count <= 0 ||
+	    workflow_count > WORKFLOW_SCHEDULER_ENTITY_CAP)
+		goto fallback;
+	/* The common single-workflow case reuses the head classification. */
+	if (workflow_count == 1) {
+		if (workflow_domains[0] != head_domain)
+			goto fallback;
+		/* Fairness is vacuous; preserve the legacy O(1) outer dispatch. */
+		t = fetch_task_legacy_locked(&selected_domain);
+		goto out;
+	}
+	for (int i = 0; i < workflow_count; i++) {
+		if (workflow_domains[i] < 0 ||
+		    workflow_domains[i] >= PROC_RESOURCE_DOMAIN_CAP ||
+		    !scheduler_domain_active[workflow_domains[i]] ||
+		    scheduler_workflow_candidate(
+			    workflow_domains[i], now_tick,
+			    &candidates[i]) != 1)
+			goto fallback;
+		if ((uint)(i + 1) > prepared)
+			prepared = i + 1;
+		if (workflow_domains[i] == head_domain)
+			head_seen = 1;
+	}
+	if (!head_seen)
+		goto fallback;
+	if (workflow_scheduler_select(
+		    candidates, workflow_count, now_cycle, now_tick,
+		    &selected_domain) < 0)
+		goto fallback;
+	if (selected_domain < 0 ||
+	    selected_domain >= PROC_RESOURCE_DOMAIN_CAP ||
+	    !scheduler_domain_active[selected_domain])
+		scheduler_invariant_stop(27);
+	/* A non-selected workflow head still yields its RR position to ordinary domains. */
+	if (selected_domain != head_domain) {
+		scheduler_deactivate_domain(head_domain);
+		scheduler_activate_domain(head_domain);
+	}
+	scheduler_deactivate_domain(selected_domain);
+	t = proc_resource_domains[selected_domain].scheduler_agent.count > 0 ?
+		    fetch_domain_best(selected_domain) :
+		    fetch_domain_fifo(selected_domain);
+	scheduler_activate_domain(selected_domain);
+	if (t == 0)
+		scheduler_invariant_stop(27);
+	goto out;
+
+fallback:
+	if (prepared > 0)
+		workflow_scheduler_note_fallback(candidates, prepared);
+	t = fetch_task_legacy_locked(&selected_domain);
+out:
 	intr_restore(enabled);
+	if (t != 0) {
+		tracef("fetch domain %d(pid=%d, tid=%d, addr=%p)",
+		       selected_domain, t->process->pid, t->tid, (uint64)t);
+		return t;
+	}
 	debugf("No task to fetch\n");
 	return 0;
 }
@@ -1977,6 +2158,7 @@ void add_task(struct thread *t)
 	int enabled = intr_save();
 	struct proc_resource_domain *domain;
 	struct scheduler_lane *lane;
+	uint64 now;
 	int domain_id;
 
 	if (t == 0 || t->process == 0 || t->process < pool ||
@@ -2010,6 +2192,12 @@ void add_task(struct thread *t)
 		scheduler_invariant_stop(15);
 	scheduler_lane_push(lane, task_id);
 	t->on_run_queue = 1;
+	if (t->process->workflow_lifecycle_charged ||
+	    workflow_scheduler_domain_tracked(domain_id)) {
+		now = get_cycle();
+		(void)workflow_scheduler_on_enqueue(
+			t, now / (CPU_FREQ / TICKS_PER_SEC));
+	}
 	scheduler_activate_domain(domain_id);
 	intr_restore(enabled);
 	tracef("add domain %d index %d(pid=%d, tid=%d, addr=%p)",
@@ -2054,9 +2242,18 @@ static void remove_task(struct thread *t)
 		scheduler_invariant_stop(18);
 	scheduler_lane_remove_after(lane, previous, task_id);
 	scheduler_drop_queued_thread(domain, t);
-	if (scheduler_domain_task_count(domain) == 0)
+	if (scheduler_domain_task_count(domain) == 0) {
 		scheduler_deactivate_domain(domain_id);
-	else
+		if (current_thread == &idle || current_thread == 0 ||
+		    current_thread->state != RUNNING ||
+		    current_thread->resource_domain_id != domain_id) {
+			uint64 now = get_cycle();
+
+			workflow_scheduler_domain_idle(
+				domain_id,
+				now / (CPU_FREQ / TICKS_PER_SEC));
+		}
+	} else
 		scheduler_activate_domain(domain_id);
 	intr_restore(enabled);
 }
@@ -2366,6 +2563,8 @@ static void scheduler_finish_dying_thread(struct thread *t)
 	    t->agent_observe_suppress_depth != 0 ||
 	    t->agent_timeline_wait_state != 0)
 		panic("dying thread Agent runtime");
+	if (resource_phase_thread_cleanup(t) < 0)
+		panic("dying thread phase lease");
 	kernel_stack_release_inactive(t);
 	if (t->trapframe == 0)
 		panic("dying thread trapframe");
@@ -2398,6 +2597,13 @@ void scheduler()
 	struct resource_account_handle previous_exec =
 		resource_account_none();
 	for (;;) {
+		struct workflow_lifecycle_key dispatch_key =
+			workflow_lifecycle_none();
+		struct resource_account_handle dispatch_account =
+			resource_account_none();
+		uint64 dispatch_start;
+		uint64 dispatch_end;
+		int dispatch_domain = -1;
 		/* 可运行内核线程可能反复 yield 而不回用户态；每轮调度先投递设备和时钟 IRQ，
 		 * 避免内核轮询循环饿死 I/O 等待者。 */
 		current_thread = &idle;
@@ -2455,13 +2661,47 @@ void scheduler()
 				t->resource_account);
 			previous_key = next_key;
 			previous_exec = t->resource_account;
+			dispatch_key = next_key;
+			dispatch_account = t->resource_account;
+			dispatch_domain = t->resource_domain_id;
 		}
 		agent_sched_on_dispatch(t);
 		kernel_stack_check(t);
 		t->state = RUNNING;
 		current_thread = t;
 		kernel_work_on_dispatch(t);
+		dispatch_start = get_cycle();
+		if (workflow_lifecycle_key_valid(dispatch_key))
+			workflow_scheduler_on_dispatch(
+				dispatch_key, dispatch_account, dispatch_domain,
+				dispatch_start / (CPU_FREQ / TICKS_PER_SEC));
 		swtch(&scheduler_context, &thread_trap_cold(t)->context);
+		dispatch_end = get_cycle();
+		if (workflow_lifecycle_key_valid(dispatch_key)) {
+			int dormant = 0;
+			int enabled;
+
+			workflow_scheduler_charge(
+				dispatch_key, dispatch_account, dispatch_domain,
+				dispatch_end - dispatch_start);
+			enabled = intr_save();
+			if (dispatch_domain >= 0 &&
+			    dispatch_domain < PROC_RESOURCE_DOMAIN_CAP &&
+			    proc_resource_domains[dispatch_domain].used &&
+			    resource_account_handle_equal(
+				    proc_resource_domains[dispatch_domain].account,
+				    dispatch_account) &&
+			    scheduler_domain_task_count(
+				    &proc_resource_domains[dispatch_domain]) == 0)
+				dormant = 1;
+			intr_restore(enabled);
+			if (dormant)
+				workflow_scheduler_on_sleep(
+					dispatch_key, dispatch_account,
+					dispatch_domain,
+					dispatch_end /
+						(CPU_FREQ / TICKS_PER_SEC));
+		}
 		kernel_stack_check(t);
 		current_thread = &idle;
 		scheduler_finish_dying_thread(t);
@@ -2473,6 +2713,8 @@ void sched()
 	struct thread *t = curr_thread();
 	if (t->state == RUNNING)
 		panic("sched running");
+	if (!resource_phase_thread_can_block(t))
+		panic("phase claim crossed sched");
 	kernel_stack_check(t);
 	swtch(&thread_trap_cold(t)->context, &scheduler_context);
 }
@@ -2641,6 +2883,7 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 	struct vfs_exec_transition transition;
 	struct file *revoked_files[FD_BUFFER_SIZE];
 	struct thread *main_thread;
+	int task_channel_preserved = 0;
 	int live_exec;
 	int enabled;
 
@@ -2653,16 +2896,31 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 	if (!proc_user_image_trapframe_valid(p, image) ||
 	    vfs_proc_exec_prepare(p, image, live_exec, &transition) < 0)
 		return -1;
-	/* 仅策略明确选择保留可信 Agent 的转换后，Context 才可进入替换页表；
-	 * 中止路径经 user_image_discard() 持有别名，PUBLIC 镜像不可见。 */
+	/* 仅策略明确选择保留可信 Agent 的转换后，共享 Agent 状态才可进入
+	 * 替换页表。Task alias 的事务令牌先于 Context 获取，所有可恢复失败
+	 * 都显式撤销它；user_image_discard() 最终摘除剩余的 Context alias。 */
 	if (transition.identity_policy ==
 	    VFS_EXEC_IDENTITY_PRESERVE_AGENT) {
-		if (agent_alias_exec_context(p, image->pagetable) < 0) {
+		if (agent_task_channel_alias_exec(p, image->pagetable) < 0) {
 			vfs_proc_exec_abort(&transition);
 			return -1;
 		}
-		image->shared_base = p->agent_ctx_base;
-		image->shared_pages = AGENT_CONTEXT_PAGES;
+		task_channel_preserved = agent_task_channel_active(p);
+		if (agent_alias_exec_context(p, image->pagetable) < 0) {
+			agent_task_channel_abort_exec_alias(
+				p, image->pagetable);
+			vfs_proc_exec_abort(&transition);
+			return -1;
+		}
+		if (task_channel_preserved) {
+			image->shared_base = AGENT_TASK_CHANNEL_SQ_BASE;
+			image->shared_pages =
+				AGENT_TASK_CHANNEL_MAPPED_PAGES +
+				AGENT_CONTEXT_PAGES;
+		} else {
+			image->shared_base = p->agent_ctx_base;
+			image->shared_pages = AGENT_CONTEXT_PAGES;
+		}
 	}
 	/* 镜像构造和凭据准备可 yield；凭据校验、权力撤销、Context 清理、FD 摘除及 VM 指针交换
 	 * 组成同一发布边界，清理请求后新身份的任一部分均不可见。 */
@@ -2672,6 +2930,9 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 	    sync_proc_exec_validate_locked(p, &p->threads[0]) < 0 ||
 	    vfs_proc_exec_validate_locked(p, &transition) < 0) {
 		intr_restore(enabled);
+		if (task_channel_preserved)
+			agent_task_channel_abort_exec_alias(
+				p, image->pagetable);
 		vfs_proc_exec_abort(&transition);
 		return -1;
 	}
@@ -2679,6 +2940,9 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 		/* 保留量发布仍可能失败，但不会改变身份。 */
 		if (vfs_proc_exec_commit(p, &transition) < 0) {
 			intr_restore(enabled);
+			if (task_channel_preserved)
+				agent_task_channel_abort_exec_alias(
+					p, image->pagetable);
 			vfs_proc_exec_abort(&transition);
 			return -1;
 		}
@@ -2686,6 +2950,9 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 		if (transition.identity_policy == VFS_EXEC_IDENTITY_PUBLIC &&
 		    agent_exec_public_identity_commit(p) < 0) {
 			intr_restore(enabled);
+			if (task_channel_preserved)
+				agent_task_channel_abort_exec_alias(
+					p, image->pagetable);
 			vfs_proc_exec_abort(&transition);
 			return -1;
 		}
@@ -2763,6 +3030,10 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 	main_thread->ustack = p->ustack_base;
 	main_thread->trapframe = proc_trapframe(p, 0);
 	memmove(main_thread->trapframe, staged, sizeof(*staged));
+	if (task_channel_preserved &&
+	    agent_task_channel_rebind_exec(p, main_thread) !=
+		    AGENT_TASK_CHANNEL_OK)
+		panic("Task Channel exec rebind");
 	if (!live_exec) {
 		memset(&thread_trap_cold(main_thread)->context, 0,
 		       sizeof(thread_trap_cold(main_thread)->context));
@@ -2772,6 +3043,8 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 	}
 
 	if (old_pagetable != 0) {
+		if (task_channel_preserved)
+			agent_task_channel_unmap_exec(p, old_pagetable);
 		agent_unmap_exec_context(p, old_pagetable);
 		uvmunmap(old_pagetable, TRAMPOLINE, 1, 0);
 		uvmfree_cleanup(old_pagetable, old_max_page);
@@ -2802,6 +3075,8 @@ static void thread_user_vm_release(struct thread *t)
 
 static void freethread(struct thread *t)
 {
+	if (resource_phase_thread_cleanup(t) < 0)
+		panic("thread phase lease cleanup");
 	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_RELEASE);
 	agent_observe_thread_reset(t);
 	mutex_release_thread_locks(t);
@@ -2811,6 +3086,8 @@ static void freethread(struct thread *t)
 
 static void proc_reset_thread_slot(struct thread *t)
 {
+	if (resource_phase_thread_cleanup(t) < 0)
+		panic("thread slot phase lease cleanup");
 	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_RELEASE);
 	agent_observe_thread_reset(t);
 	kernel_work_reset(t);
@@ -2893,6 +3170,8 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 		    t->state != EXITED)
 			return -1;
 	}
+	if (resource_phase_process_cleanup(p) < 0)
+		panic("process teardown phase lease");
 	proc_orphan_children(p);
 	for (int tid = 0; tid < NTHREAD; ++tid) {
 		struct thread *t = &p->threads[tid];
@@ -2929,7 +3208,8 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 		if (close_batch.count != 0)
 			proc_teardown_file_progress(&close_batch);
 	}
-	agent_proc_teardown(p);
+	if (agent_proc_teardown(p) < 0)
+		panic("process teardown Task Channel reclaim");
 	if (owner != 0)
 		thread_user_vm_release(owner);
 	if (p->pagetable)
@@ -2948,7 +3228,8 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 	p->exec_rw_offset = 0;
 	proc_teardown_advance(p, PROC_TEARDOWN_RECLAIMING,
 			      PROC_TEARDOWN_SETTLING);
-	agent_proc_teardown(p);
+	if (agent_proc_teardown(p) < 0)
+		panic("process teardown Task Channel settling");
 	/* 文件收据和 VM 清理完成后，先释放文件系统门，再结算终止请求及其生命周期。 */
 	if (!terminal_current && close_batch.count != 0)
 		proc_teardown_file_progress(&close_batch);
@@ -3039,7 +3320,8 @@ void freeproc(struct proc *p)
 			panic("process rollback epoch admission");
 		epoch_entered = 1;
 	}
-	agent_proc_teardown(p);
+	if (agent_proc_teardown(p) < 0)
+		panic("process rollback Task Channel reclaim");
 	proc_child_unbind(p);
 	if (proc_teardown_run(p, 0, 0) < 0)
 		panic("active process release");
@@ -3609,7 +3891,8 @@ void exit(int code)
 	}
 	if (claimed < 0)
 		panic("process teardown owner");
-	agent_proc_teardown(p);
+	while (agent_proc_teardown(p) < 0)
+		yield();
 	mutex_release_thread_locks(t);
 	for (;;) {
 		int wait_status;

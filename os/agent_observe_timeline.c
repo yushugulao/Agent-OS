@@ -1,5 +1,6 @@
 #include "agent_context.h"
 #include "agent_internal.h"
+#include "agent_lifecycle.h"
 #include "defs.h"
 #include "kernel_work.h"
 #include "timer.h"
@@ -136,6 +137,7 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 	int context_actor_loop_state;
 	int matched = 0;
 	int copied = 0;
+	int result;
 
 	if (!p->is_agent)
 		return -1;
@@ -143,6 +145,8 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 		return AGENT_STATUS_BAD_PARAM;
 	if (max > 0 && edgesaddr == 0)
 		return AGENT_STATUS_BAD_PARAM;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
 
 	audit_global = agent_identity_has_cap(p, AGENT_CAP_ORCHESTRATE);
 	audit_allowed = audit_global || agent_identity_has_cap(p, AGENT_CAP_AUDIT_WRITE);
@@ -157,8 +161,10 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 		scan_visible = context_visible + audit_visible;
 		if (scan_visible <= reserved)
 			break;
-		if (agent_observe_query_reserve_to(scan_visible, &reserved) < 0)
-			return -1;
+		if (agent_observe_query_reserve_to(scan_visible, &reserved) < 0) {
+			result = -1;
+			goto provenance_out;
+		}
 	}
 
 	span_id = p->agent_current_span_id;
@@ -169,8 +175,10 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 	for (int i = 0; i < (int)context_visible; i++) {
 		seq = p->context_path_oldest + i;
 		slot = (seq - 1) % p->context_path_capacity;
-		if (agent_context_read_record(p, slot, &context_record) < 0)
-			return AGENT_STATUS_NO_SPACE;
+		if (agent_context_read_record(p, slot, &context_record) < 0) {
+			result = AGENT_STATUS_NO_SPACE;
+			goto provenance_out;
+		}
 		if (context_record.sequence != seq)
 			continue;
 		if (agent_context_load_attribution(
@@ -179,8 +187,10 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 			    &context_cause_branch) < 0 ||
 		    agent_context_load_actor(p, slot, &context_actor_tid,
 					     &context_actor_role,
-					     &context_actor_loop_state) < 0)
-			return AGENT_STATUS_NO_SPACE;
+					     &context_actor_loop_state) < 0) {
+			result = AGENT_STATUS_NO_SPACE;
+			goto provenance_out;
+		}
 		if (context_cause_pid <= 0 || context_cause_control == 0)
 			continue;
 		agent_provenance_from_context(
@@ -189,8 +199,10 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 			context_actor_tid, context_actor_role,
 			context_actor_loop_state, &edge);
 		if (agent_provenance_emit(p, edgesaddr, max, &matched,
-					  &copied, &edge) < 0)
-			return -1;
+					  &copied, &edge) < 0) {
+			result = -1;
+			goto provenance_out;
+		}
 		if (max > 0 && copied >= max)
 			goto provenance_done;
 	}
@@ -216,16 +228,19 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 			continue;
 		agent_provenance_from_audit(&audit_record, &edge);
 		if (agent_provenance_emit(p, edgesaddr, max, &matched,
-					  &copied, &edge) < 0)
-			return -1;
+					  &copied, &edge) < 0) {
+			result = -1;
+			goto provenance_out;
+		}
 		if (max > 0 && copied >= max)
 			goto provenance_done;
 	}
 
 provenance_done:
-	if (max == 0)
-		return matched;
-	return copied;
+	result = max == 0 ? matched : copied;
+provenance_out:
+	agent_lifecycle_context_lane_leave(p);
+	return result;
 }
 
 static void agent_timeline_from_context(struct proc *p,
@@ -944,11 +959,14 @@ sys_agent_trace_snapshot(uint64 recordsaddr, int max)
 	int copied = 0;
 	int have_context;
 	int have_sched;
+	int result;
 
 	if (!p->is_agent)
 		return -1;
 	if (max < 0)
 		return AGENT_STATUS_BAD_PARAM;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
 	context_visible = p->context_path_count;
 	if (context_visible > p->context_path_capacity)
 		context_visible = p->context_path_capacity;
@@ -958,10 +976,14 @@ sys_agent_trace_snapshot(uint64 recordsaddr, int max)
 	total = context_visible + sched_visible;
 	if (total > AGENT_TRACE_MAX_RECORDS)
 		total = AGENT_TRACE_MAX_RECORDS;
-	if (max == 0)
-		return total;
-	if (recordsaddr == 0)
-		return AGENT_STATUS_BAD_PARAM;
+	if (max == 0) {
+		result = total;
+		goto trace_out;
+	}
+	if (recordsaddr == 0) {
+		result = AGENT_STATUS_BAD_PARAM;
+		goto trace_out;
+	}
 	limit = max < (int)total ? max : (int)total;
 	sched_start = p->agent_sched_trace_count > AGENT_SCHED_TRACE_CAP ?
 			      p->agent_sched_trace_head :
@@ -974,8 +996,10 @@ sys_agent_trace_snapshot(uint64 recordsaddr, int max)
 			seq = p->context_path_oldest + ci;
 			slot = (seq - 1) % p->context_path_capacity;
 			if (agent_context_read_record(p, slot,
-						      &context_record) < 0)
-				return AGENT_STATUS_NO_SPACE;
+						      &context_record) < 0) {
+				result = AGENT_STATUS_NO_SPACE;
+				goto trace_out;
+			}
 			if (context_record.sequence == seq)
 				have_context = 1;
 			else {
@@ -1004,11 +1028,16 @@ sys_agent_trace_snapshot(uint64 recordsaddr, int max)
 		if (copyout(p->pagetable,
 			    recordsaddr +
 				    copied * sizeof(struct agent_trace_record),
-			    (char *)&trace, sizeof(trace)) < 0)
-			return -1;
+			    (char *)&trace, sizeof(trace)) < 0) {
+			result = -1;
+			goto trace_out;
+		}
 		copied++;
 	}
-	return copied;
+	result = copied;
+trace_out:
+	agent_lifecycle_context_lane_leave(p);
+	return result;
 }
 
 int

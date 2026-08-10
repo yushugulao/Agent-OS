@@ -8,6 +8,32 @@ struct agent_tool_definition {
 	const char *description;
 };
 
+struct agent_tool_security_definition {
+	uint64 required_capabilities;
+	uint64 accepted_input_labels;
+	uint64 output_add_labels;
+	uint64 side_effect_mask;
+};
+
+#define PROV_DERIVED AGENT_PROVENANCE_AGENT_DERIVED
+#define PROV_FACT (AGENT_PROVENANCE_AGENT_DERIVED | \
+		   AGENT_PROVENANCE_KERNEL_FACT)
+#define PROV_FILE (AGENT_PROVENANCE_AGENT_DERIVED | \
+		   AGENT_PROVENANCE_UNTRUSTED_FILE_DATA)
+#define PROV_MESSAGE (AGENT_PROVENANCE_AGENT_DERIVED | \
+		      AGENT_PROVENANCE_CROSS_AGENT_DATA)
+#define PROV_TOOL (AGENT_PROVENANCE_AGENT_DERIVED | \
+		   AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT)
+#define PROV_ACCEPT_CONTROL \
+	(AGENT_PROVENANCE_KERNEL_FACT | \
+	 AGENT_PROVENANCE_TRUSTED_USER_CONTROL | \
+	 AGENT_PROVENANCE_AGENT_DERIVED)
+#define PROV_ACCEPT_ARTIFACT \
+	(PROV_ACCEPT_CONTROL | AGENT_PROVENANCE_UNTRUSTED_FILE_DATA | \
+	 AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT)
+#define PROV_ACCEPT_LLM_INPUT \
+	(PROV_ACCEPT_CONTROL | AGENT_PROVENANCE_UNTRUSTED_FILE_DATA)
+
 #define AGENT_TOOL_REGISTRY(X) \
 	X(AGENT_TOOL_ECHO, AGENT_TOOL_F_CALLABLE, "echo", "return payload and numeric parameters") \
 	X(AGENT_TOOL_PID_INFO, AGENT_TOOL_F_CALLABLE, "pid_info", "return pid, agent id, and agent flag") \
@@ -49,6 +75,49 @@ static const struct agent_tool_definition agent_tools[] = {
 	AGENT_TOOL_REGISTRY(TOOL_ENTRY)
 };
 #undef TOOL_ENTRY
+
+#define AGENT_TOOL_SECURITY_REGISTRY(X) \
+	X(0, AGENT_PROVENANCE_ALL, PROV_DERIVED, 0) \
+	X(0, AGENT_PROVENANCE_ALL, PROV_FACT, 0) \
+	X(0, AGENT_PROVENANCE_ALL, PROV_FACT, 0) \
+	X(AGENT_CAP_PROCESS_READ, AGENT_PROVENANCE_ALL, PROV_FACT, 0) \
+	X(AGENT_CAP_PROCESS_READ, AGENT_PROVENANCE_ALL, PROV_FACT, 0) \
+	X(0, AGENT_PROVENANCE_ALL, PROV_FACT, 0) \
+	X(AGENT_CAP_META_READ, AGENT_PROVENANCE_ALL, PROV_FILE, 0) \
+	X(AGENT_CAP_MESSAGE_SEND, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_IPC) \
+	X(0, AGENT_PROVENANCE_ALL, PROV_MESSAGE, 0) \
+	X(AGENT_CAP_META_WRITE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA) \
+	X(AGENT_CAP_CONTENT_READ, AGENT_PROVENANCE_ALL, PROV_FILE, 0) \
+	X(AGENT_CAP_META_READ, AGENT_PROVENANCE_ALL, PROV_FACT, 0) \
+	X(0, PROV_ACCEPT_CONTROL, PROV_FACT, 0) \
+	X(AGENT_CAP_ACTION_WRITE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA) \
+	X(AGENT_CAP_ARTIFACT_WRITE, PROV_ACCEPT_ARTIFACT, PROV_DERIVED, AGENT_SIDE_EFFECT_ARTIFACT) \
+	X(AGENT_CAP_WATCH, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_WATCH) \
+	X(0, AGENT_PROVENANCE_ALL, PROV_DERIVED, 0) \
+	X(0, PROV_ACCEPT_CONTROL, PROV_DERIVED, 0) \
+	X(0, AGENT_PROVENANCE_ALL, PROV_DERIVED, 0) \
+	X(AGENT_CAP_CONTENT_READ, AGENT_PROVENANCE_ALL, PROV_FILE, 0) \
+	X(AGENT_CAP_ACTION_WRITE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA) \
+	X(AGENT_CAP_ARTIFACT_WRITE, PROV_ACCEPT_ARTIFACT, PROV_DERIVED, AGENT_SIDE_EFFECT_ARTIFACT) \
+	X(AGENT_CAP_MESSAGE_SEND, PROV_ACCEPT_LLM_INPUT, PROV_DERIVED, AGENT_SIDE_EFFECT_IPC) \
+	X(AGENT_CAP_LLM_RELAY, PROV_ACCEPT_CONTROL, PROV_TOOL, AGENT_SIDE_EFFECT_IPC) \
+	X(AGENT_CAP_DEPENDENCY_UPDATE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA)
+
+#define SECURITY_ENTRY(caps, accepted, output, effects) \
+	{ caps, accepted, output, effects },
+static const struct agent_tool_security_definition agent_tool_security[] = {
+	AGENT_TOOL_SECURITY_REGISTRY(SECURITY_ENTRY)
+};
+#undef SECURITY_ENTRY
+#undef AGENT_TOOL_SECURITY_REGISTRY
+#undef PROV_TOOL
+#undef PROV_MESSAGE
+#undef PROV_FILE
+#undef PROV_FACT
+#undef PROV_DERIVED
+#undef PROV_ACCEPT_LLM_INPUT
+#undef PROV_ACCEPT_ARTIFACT
+#undef PROV_ACCEPT_CONTROL
 
 enum param_target { PARAM_ARG0, PARAM_ARG1, PARAM_PAYLOAD };
 enum param_key_index {
@@ -131,6 +200,8 @@ static const unsigned char rule_offsets[AGENT_TOOL_COUNT + 1] = {
 
 _Static_assert(sizeof(agent_tools) / sizeof(agent_tools[0]) ==
 	       AGENT_TOOL_COUNT, "tool descriptor count must match the ABI");
+_Static_assert(sizeof(agent_tool_security) / sizeof(agent_tool_security[0]) ==
+	       AGENT_TOOL_COUNT, "tool security count must match the ABI");
 _Static_assert(sizeof(param_key_offsets) / sizeof(param_key_offsets[0]) ==
 	       PARAM_KEY_COUNT,
 	       "parameter key table must match the registry");
@@ -227,6 +298,12 @@ static int agent_tool_protocol_schema_valid(void)
 				  AGENT_TOOL_DESC_SIZE, 0) < 0 ||
 		    (agent_tools[tool].flags != AGENT_TOOL_F_CALLABLE &&
 		     agent_tools[tool].flags != AGENT_TOOL_F_SYSCALL_ONLY) ||
+		    (agent_tool_security[tool].accepted_input_labels &
+		     ~AGENT_PROVENANCE_ALL) != 0 ||
+		    (agent_tool_security[tool].output_add_labels &
+		     ~AGENT_PROVENANCE_ALL) != 0 ||
+		    (agent_tool_security[tool].side_effect_mask &
+		     ~AGENT_SIDE_EFFECT_ALL) != 0 ||
 		    agent_tool_schema(tool + 1, schema, sizeof(schema)) < 0)
 			return 0;
 		for (uint other = 0; other < tool; other++)
@@ -275,6 +352,12 @@ static const struct agent_tool_definition *tool_by_id(int tool_id)
 	return &agent_tools[tool_id - 1];
 }
 
+static const struct agent_tool_security_definition *
+tool_security_by_id(int tool_id)
+{
+	return tool_by_id(tool_id) != 0 ? &agent_tool_security[tool_id - 1] : 0;
+}
+
 #define REJECT(status, message) do { \
 	safestrcpy(error, message, error_size); \
 	return status; \
@@ -285,6 +368,90 @@ uint64 agent_tool_protocol_flags(int tool_id)
 	const struct agent_tool_definition *tool = tool_by_id(tool_id);
 
 	return tool ? tool->flags : 0;
+}
+
+uint64
+agent_tool_protocol_required_capabilities(int tool_id)
+{
+	const struct agent_tool_definition *tool = tool_by_id(tool_id);
+	const struct agent_tool_security_definition *security =
+		tool_security_by_id(tool_id);
+
+	return tool && security ? security->required_capabilities : 0;
+}
+
+static void
+agent_tool_digest_u64(struct agent_sha256_ctx *ctx, uint64 value)
+{
+	uchar encoded[8];
+
+	for (uint i = 0; i < sizeof(value); i++) {
+		encoded[i] = (uchar)(value >> (i * 8));
+	}
+	agent_sha256_update(ctx, encoded, sizeof(encoded));
+}
+
+static void
+agent_tool_digest_text(struct agent_sha256_ctx *ctx, const char *text)
+{
+	uint length = strlen(text);
+
+	agent_tool_digest_u64(ctx, length);
+	agent_sha256_update(ctx, text, length);
+}
+
+int
+agent_tool_protocol_schema_digest(
+	int tool_id, uchar digest[AGENT_SHA256_DIGEST_SIZE])
+{
+	const struct agent_tool_definition *tool = tool_by_id(tool_id);
+	const struct agent_tool_security_definition *security =
+		tool_security_by_id(tool_id);
+	char schema[AGENT_TOOL_PARAMS_SIZE];
+	struct agent_sha256_ctx ctx;
+	static const char domain[] = "agentos.tool.manifest.v1";
+
+	if (tool == 0 || security == 0 || digest == 0 ||
+	    agent_tool_schema(tool_id, schema, sizeof(schema)) < 0)
+		return AGENT_STATUS_UNKNOWN_TOOL;
+	agent_sha256_init(&ctx);
+	agent_sha256_update(&ctx, domain, sizeof(domain));
+	agent_tool_digest_u64(&ctx, (uint64)tool->tool_id);
+	agent_tool_digest_u64(&ctx, tool->flags);
+	agent_tool_digest_u64(&ctx, security->required_capabilities);
+	agent_tool_digest_u64(&ctx, security->accepted_input_labels);
+	agent_tool_digest_u64(&ctx, security->output_add_labels);
+	agent_tool_digest_u64(&ctx, security->side_effect_mask);
+	agent_tool_digest_text(&ctx, tool->name);
+	agent_tool_digest_text(&ctx, schema);
+	agent_sha256_final(&ctx, digest);
+	return AGENT_STATUS_OK;
+}
+
+int
+agent_tool_protocol_manifest_query(int tool_id,
+				   struct agent_tool_manifest *manifest)
+{
+	const struct agent_tool_definition *tool = tool_by_id(tool_id);
+	const struct agent_tool_security_definition *security =
+		tool_security_by_id(tool_id);
+
+	if (tool == 0 || security == 0 || manifest == 0)
+		return AGENT_STATUS_UNKNOWN_TOOL;
+	memset(manifest, 0, sizeof(*manifest));
+	manifest->tool_id = tool->tool_id;
+	manifest->flags = tool->flags;
+	if (agent_tool_protocol_schema_digest(tool_id,
+					      manifest->schema_digest) !=
+	    AGENT_STATUS_OK)
+		return AGENT_STATUS_BAD_REQUEST;
+	manifest->provenance.accepted_input_labels =
+		security->accepted_input_labels;
+	manifest->provenance.output_add_labels = security->output_add_labels;
+	manifest->provenance.required_capabilities =
+		security->required_capabilities;
+	manifest->provenance.side_effect_mask = security->side_effect_mask;
+	return AGENT_STATUS_OK;
 }
 
 int agent_tool_protocol_resolve(int tool_id, char *name,

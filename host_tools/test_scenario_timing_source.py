@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import re
 
-from scenario_timing_source_contract import ROOT, SOURCE_PATHS, validate_source_texts
+from scenario_timing_source_contract import (
+    CONTRACT_VERSION,
+    ROOT,
+    SOURCE_PATHS,
+    validate_source_texts,
+)
 
 
 def _function_span(source: str, name: str) -> tuple[int, int]:
@@ -249,11 +254,22 @@ def _validate_bounded_acceptance_io() -> None:
 
 
 def main() -> int:
+    assert CONTRACT_VERSION == "scenario-timing-source-v15"
+    scheduler_timing_paths = {
+        "os/workflow_scheduler.c",
+        "os/workflow_scheduler.h",
+        "user/src/agent_eevdf_ucore.c",
+    }
+    assert scheduler_timing_paths <= set(SOURCE_PATHS)
     sources = {
         relative: (ROOT / relative).read_text(encoding="utf-8")
         for relative in SOURCE_PATHS
     }
     validate_source_texts(sources)
+    for relative in scheduler_timing_paths:
+        missing = dict(sources)
+        missing.pop(relative)
+        _reject(missing)
     _validate_bounded_acceptance_io()
 
     plain = "baseline_ucore/user/src/rp_seed_orch.c"
@@ -904,16 +920,26 @@ def main() -> int:
     lifecycle_abi = "agent_lifecycle_abi.h"
     changed = dict(sources)
     changed[lifecycle_abi] = changed[lifecycle_abi].replace(
+        "AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION 3U",
         "AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION 2U",
-        "AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION 1U",
         1,
     )
     _reject(changed)
     lifecycle_observer = "os/agent_lifecycle.c"
     _reject(_case(
         sources, lifecycle_observer, "sys_agent_workflow_lifecycle_info",
-        "info.resource_account_slot = p->resource_account.slot;",
+        "info.resource_account_slot = current_account.slot;",
         "info.resource_account_slot = 0;",
+    ))
+    _reject(_case(
+        sources, lifecycle_observer, "sys_agent_workflow_lifecycle_info",
+        "project_v3 = user_size > AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE;",
+        "project_v3 = 1;",
+    ))
+    _reject(_case(
+        sources, lifecycle_observer, "sys_agent_workflow_lifecycle_info",
+        "workflow_scheduler_snapshot_get(",
+        "forged_workflow_scheduler_snapshot_get(",
     ))
 
     observer = "os/agent_resource.c"

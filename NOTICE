@@ -30,14 +30,48 @@ original AgentOS-uCore implementations:
   https://docs.kernel.org/admin-guide/cgroup-v2.html
   https://docs.kernel.org/block/blk-mq.html
   https://github.com/torvalds/linux/blob/master/kernel/sched/wait.c
+- Linux EEVDF scheduling concepts, including lag eligibility, virtual
+  deadlines, and sleeping-lag decay:
+  https://docs.kernel.org/scheduler/sched-eevdf.html
+- io_uring's submission-queue/completion-queue communication model:
+  https://kernel.dk/io_uring.pdf
+- WebAssembly Component Model WIT resource ownership and WASI 0.3 async,
+  future, and stream interface concepts:
+  https://component-model.bytecodealliance.org/design/wit.html
+  https://component-model.bytecodealliance.org/design/async.html
+- AgentCgroup's published measurements of tool-call-level Agent resource
+  bursts (arXiv:2602.09345):
+  https://arxiv.org/abs/2602.09345
+- Murakkab's declarative workflow and execution-configuration/SLO separation
+  (arXiv:2508.18298):
+  https://arxiv.org/abs/2508.18298
+- CaMeL's trusted-control-flow/untrusted-data-flow security architecture
+  (arXiv:2503.18813):
+  https://arxiv.org/abs/2503.18813
+- IPIGuard's planned Tool Dependency Graph security model
+  (arXiv:2508.15310):
+  https://arxiv.org/abs/2508.15310
+- Model Context Protocol 2026-07-28 and its draft Tasks extension, used as
+  user-space gateway protocol references:
+  https://modelcontextprotocol.io/specification/2026-07-28
+  https://tasks.extensions.modelcontextprotocol.io/specification/draft/tasks
+- Agent2Agent Protocol v1 Task, Context, Artifact, streaming, and cancellation
+  objects, used as user-space gateway protocol references:
+  https://a2a-protocol.org/latest/whats-new-v1/
+  https://a2a-protocol.org/latest/specification/
 - AIOS paper and repository, used only as public project/evaluation references:
   https://openreview.net/attachment?id=L4HHkCDz2x&name=pdf
   https://github.com/agiresearch/AIOS
 
 These references are not vendored dependencies. The Workflow Credit Domain,
-Fence-Sealed Evidence Ring, and Agent Live-Query FS were implemented in this
-repository as clean-room, project-specific code after studying public design
-principles. No Linux, Haiku, or AIOS source code, test data, binaries, generated
+Tool Phase Credit Lease, workflow-level EEVDF, declarative Execution Contract,
+Context Provenance enforcement, typed Agent Task Channel, MCP/A2A user-space
+gateway, Fence-Sealed Evidence Ring, and Agent Live-Query FS were implemented
+in this repository as clean-room, project-specific code after studying public
+design principles and protocol documents. No Linux, Haiku, AIOS, paper-prototype,
+MCP/A2A SDK, or WebAssembly/WASI source code, test data, binaries, generated
 artifacts, or on-disk formats are copied or redistributed by those mechanisms.
-Names such as cgroup, percpu_counter, rstat, BPF ring buffer, BFS, and live query
-identify conceptual lineage, not source compatibility or code reuse.
+Names such as cgroup, percpu_counter, rstat, BPF ring buffer, BFS, live query,
+EEVDF, SQ/CQ, WIT, WASI, MCP, and A2A identify conceptual or protocol lineage,
+not source or binary compatibility. AgentOS-uCore does not embed io_uring, a
+WebAssembly runtime, or an in-kernel MCP/A2A networking stack.

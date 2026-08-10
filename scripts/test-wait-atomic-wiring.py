@@ -467,12 +467,25 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
 
     lane = wait.index("agent_lifecycle_context_lane_enter(p)", sleep)
     lane_abort = wait.index("agent_ipc_wait_finish(p, &reservation, 0)", lane)
-    copyout = wait.index("copyout(p->pagetable, eventaddr", lane_abort)
-    copyout_abort = wait.index(
+    provenance = wait.index("agent_provenance_merge_current(", lane_abort)
+    provenance_labels = wait.index(
+        "p, reservation.provenance_labels", provenance
+    )
+    provenance_abort = wait.index(
         "agent_ipc_wait_finish(p, &reservation, 0)", lane_abort + 1
     )
+    provenance_leave = wait.index(
+        "agent_lifecycle_context_lane_leave(p)", provenance_abort
+    )
+    copyout = wait.index("copyout(p->pagetable, eventaddr", provenance_leave)
+    copyout_abort = wait.index(
+        "agent_ipc_wait_finish(p, &reservation, 0)", provenance_abort + 1
+    )
+    copyout_leave = wait.index(
+        "agent_lifecycle_context_lane_leave(p)", copyout_abort
+    )
     span_guard = wait.index(
-        "event.span_id != 0 && reservation.span_owner != 0", copyout_abort
+        "event.span_id != 0 && reservation.span_owner != 0", copyout_leave
     )
     span_owner = wait.index(
         "p->agent_current_span_owner = reservation.span_owner", span_guard
@@ -494,8 +507,13 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
     if not (
         lane
         < lane_abort
+        < provenance
+        < provenance_labels
+        < provenance_abort
+        < provenance_leave
         < copyout
         < copyout_abort
+        < copyout_leave
         < span_guard
         < span_owner
         < source_control
@@ -507,7 +525,7 @@ def validate(ipc: str, proc: str, wait_test: str) -> None:
         < leave
     ):
         raise ValueError("wait reserve/copyout/context commit order changed")
-    if wait.count("agent_ipc_wait_finish(p, &reservation, 0)") != 2 or (
+    if wait.count("agent_ipc_wait_finish(p, &reservation, 0)") != 3 or (
         wait.count("agent_ipc_wait_finish(p, &reservation, 1)") != 1
     ):
         raise ValueError("wait reservation lacks exact abort/commit exits")

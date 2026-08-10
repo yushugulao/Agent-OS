@@ -74,7 +74,7 @@ class KernelBudgetTests(unittest.TestCase):
                                  "profile_id"),
              lambda _: "detached-local-profile", "must have one"),
             ("case inventory", ("agent_test_suite", "expected_cases"),
-             lambda value: value[:-1], "required 18-case"),
+             lambda value: value[:-1], "required 21-case"),
             ("bridge path", ("agent_modules", "integration_bridges", 0,
                              "object_path"),
              lambda _: "../bio.o", "build/os object path"),
@@ -98,6 +98,69 @@ class KernelBudgetTests(unittest.TestCase):
                     kernel_budgets.BudgetError, diagnostic
                 ):
                     kernel_budgets.validate_config(config)
+
+    def test_agent_execution_plane_policy_inventory_is_exact(self):
+        cases = kernel_budgets.REQUIRED_AGENT_TEST_CASES
+        bench_index = cases.index("agentbench_ucore")
+        self.assertEqual(
+            cases[bench_index + 1 : bench_index + 4],
+            (
+                "agentcontract_ucore",
+                "agent_eevdf_ucore",
+                "agenttask_ucore",
+            ),
+        )
+        self.assertEqual(len(cases), 21)
+        self.assertEqual(kernel_budgets.REQUIRED_AGENT_MAX_SCC_SIZE, 4)
+        module_sccs = frozenset(
+            (
+                frozenset(
+                    ("context", "observe", "observe_timeline", "provenance")
+                ),
+                frozenset(("evidence_ring", "observe_ledger")),
+                frozenset(("ipc", "live_query_events")),
+            )
+        )
+        self.assertEqual(
+            kernel_budgets.REQUIRED_AGENT_ALLOWED_SCCS,
+            module_sccs,
+        )
+        self.assertEqual(
+            kernel_budgets.REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS,
+            module_sccs
+            | {
+                frozenset(("core", "facade", "proc", "task_bridge")),
+            },
+        )
+        self.assertEqual(
+            kernel_budgets.REQUIRED_AGENT_AGGREGATES["agent_execution_plane"],
+            frozenset(
+                (
+                    "execution_contract",
+                    "provenance",
+                    "task_channel",
+                    "task_bridge",
+                )
+            ),
+        )
+        self.assertEqual(
+            kernel_budgets.REQUIRED_AGENT_AGGREGATE_HEADERS[
+                "agent_execution_plane"
+            ],
+            frozenset(
+                (
+                    "os/agent_context_path.h",
+                    "os/agent_evidence_ring.h",
+                    "os/agent_execution_contract.h",
+                    "os/agent_observe_internal.h",
+                    "os/agent_provenance.h",
+                    "os/agent_sha256.h",
+                    "os/agent_task_bridge.h",
+                    "os/agent_task_channel.h",
+                    "os/agent_tool_protocol.h",
+                )
+            ),
+        )
 
     def test_production_cli_dispatches_fail_closed(self):
         root = SCRIPT.parent.parent
@@ -172,6 +235,14 @@ class KernelBudgetTests(unittest.TestCase):
 
     def test_symbol_authority_filters_are_fail_closed(self):
         records = {"agent_ok": "T", "agent_secret": "B", "agent_table": "R"}
+        self.assertTrue(
+            kernel_budgets.is_controlled_agent_symbol(
+                "workflow_scheduler_select"
+            )
+        )
+        self.assertFalse(
+            kernel_budgets.is_controlled_agent_symbol("workflow_select")
+        )
         self.assertEqual(
             kernel_budgets.forbidden_symbols(records, ["agent_"], ["agent_ok"]),
             ["agent_secret", "agent_table"],
@@ -249,7 +320,7 @@ class KernelBudgetTests(unittest.TestCase):
                 with self.assertRaises(kernel_budgets.BudgetError):
                     kernel_budgets.read_agent_timing_file(path, ["one", "two"])
 
-    def test_tool_failure_preserves_non_utf8_diagnostic(self):
+    def test_toolchain_invocation_resolution_and_failure_diagnostics(self):
         completed = subprocess.CompletedProcess(
             args=["fixture"], returncode=1, stdout=b"", stderr=b"bad:\xff"
         )
@@ -258,6 +329,156 @@ class KernelBudgetTests(unittest.TestCase):
         with mock.patch.object(kernel_budgets.subprocess, "run", return_value=completed):
             with self.assertRaisesRegex(kernel_budgets.BudgetError, "bad:"):
                 kernel_budgets.run_tool(["fixture"], "fixture diagnostic")
+
+        root = SCRIPT.parent.parent
+        config = json.loads(
+            (root / "ci/kernel-budgets.json").read_text(encoding="utf-8")
+        )
+        prefix = config["canonical_toolchain"]["prefix"]
+        suffixes = {
+            "gcc": "gcc",
+            "ld": "ld",
+            "objcopy": "objcopy",
+            "objdump": "objdump",
+            "nm": "nm",
+            "size": "size",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            targets = temp / "targets"
+            invocations = temp / "bin"
+            targets.mkdir()
+            invocations.mkdir()
+            gcc_target = targets / f"{prefix}gcc-15"
+            ld_target = targets / f"{prefix}ld.bfd"
+            gcc_target.write_bytes(b"gcc fixture")
+            ld_target.write_bytes(b"ld fixture")
+            gcc_link = invocations / f"{prefix}gcc"
+            ld_link = invocations / f"{prefix}ld"
+            try:
+                gcc_link.symlink_to(gcc_target)
+                ld_link.symlink_to(ld_target)
+            except OSError as error:
+                self.skipTest(f"symbolic links unavailable: {error}")
+            if (
+                not gcc_link.is_symlink()
+                or not ld_link.is_symlink()
+                or gcc_link.resolve() != gcc_target.resolve()
+                or ld_link.resolve() != ld_target.resolve()
+            ):
+                self.skipTest("host does not provide real resolvable symlinks")
+
+            requested = {
+                name: invocations / f"{prefix}{suffix}"
+                for name, suffix in suffixes.items()
+            }
+            kind, profile = kernel_budgets.select_kernel_budget_toolchain(
+                config, requested
+            )
+            self.assertEqual(kind, "canonical")
+            self.assertEqual(profile, config["canonical_toolchain"])
+            self.assertEqual(
+                kernel_budgets.resolve_executable_once(
+                    gcc_link, "Ubuntu GCC fixture"
+                ),
+                gcc_target.resolve(),
+            )
+            self.assertEqual(
+                kernel_budgets.resolve_executable_once(
+                    ld_link, "Ubuntu ld fixture"
+                ),
+                ld_target.resolve(),
+            )
+
+            wrong_link = invocations / "malicious-gcc"
+            wrong_link.symlink_to(gcc_target)
+            malicious = dict(requested)
+            malicious["gcc"] = wrong_link
+            with mock.patch.object(
+                kernel_budgets,
+                "resolve_executable_once",
+                side_effect=AssertionError("wrong invocation was resolved"),
+            ) as resolver:
+                with self.assertRaisesRegex(
+                    kernel_budgets.BudgetError, "approved prefix"
+                ):
+                    kernel_budgets.validate_kernel_budget_toolchain(
+                        config,
+                        malicious["gcc"],
+                        malicious["ld"],
+                        malicious["objcopy"],
+                        malicious["objdump"],
+                        malicious["nm"],
+                        malicious["size"],
+                        temp / "build-config",
+                        temp / "initproc.S",
+                    )
+                resolver.assert_not_called()
+
+            loop_link = invocations / f"{prefix}size"
+            loop_target = invocations / "size-loop-target"
+            loop_link.symlink_to(loop_target)
+            loop_target.symlink_to(loop_link)
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "cannot resolve"
+            ):
+                kernel_budgets.resolve_executable_once(
+                    loop_link, "symlink loop fixture"
+                )
+
+    def test_canonical_cc1_uses_the_pinned_cpp_split_package(self):
+        from unittest import mock
+
+        root = SCRIPT.parent.parent
+        config = json.loads(
+            (root / "ci/kernel-budgets.json").read_text(encoding="utf-8")
+        )
+        profile = config["canonical_toolchain"]
+        self.assertEqual(profile["cc1_package"], "cpp-15-riscv64-linux-gnu")
+        self.assertEqual(
+            profile["cc1_package_version"], profile["gcc_package_version"]
+        )
+        tools = {
+            name: Path(f"/approved/{name}")
+            for name in (
+                "gcc", "cc1", "as", "ld", "objcopy", "objdump", "nm", "size"
+            )
+        }
+
+        def resolve_approved(_path, description):
+            return tools[description.removeprefix("canonical ")]
+
+        def exact_owner(_path, description):
+            name = description.removeprefix("canonical ")
+            if name == "gcc":
+                return {profile["gcc_package"]}
+            if name == "cc1":
+                return {profile["cc1_package"]}
+            return {profile["binutils_package"]}
+
+        with mock.patch.object(
+            kernel_budgets, "resolve_executable_once", side_effect=resolve_approved
+        ), mock.patch.object(
+            kernel_budgets, "dpkg_tool_owner", side_effect=exact_owner
+        ), mock.patch.object(kernel_budgets, "run_tool", return_value=""):
+            kernel_budgets.validate_canonical_kernel_budget_tools(profile, tools)
+
+        def wrong_cc1_owner(path, description):
+            if description == "canonical cc1":
+                return {profile["gcc_package"]}
+            return exact_owner(path, description)
+
+        with mock.patch.object(
+            kernel_budgets, "resolve_executable_once", side_effect=resolve_approved
+        ), mock.patch.object(
+            kernel_budgets, "dpkg_tool_owner", side_effect=wrong_cc1_owner
+        ), mock.patch.object(kernel_budgets, "run_tool", return_value=""):
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "canonical cc1 is owned"
+            ):
+                kernel_budgets.validate_canonical_kernel_budget_tools(
+                    profile, tools
+                )
 
 
 if __name__ == "__main__":

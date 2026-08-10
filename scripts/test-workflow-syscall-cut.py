@@ -24,6 +24,9 @@ SELF_GATED = {
     "agent_file_meta_set",
     "agent_file_query",
     "agent_worker_create",
+    "agent_task_channel_setup",
+    "agent_task_channel_enter",
+    "agent_task_channel_resource",
 }
 
 LIFECYCLE_CONTROL = {"exit", "agent_workflow_close"}
@@ -58,6 +61,7 @@ REQUIRED_OUTER = {
     "condvar_signal",
     "condvar_wait",
     "agent_scope_delegate_fd",
+    "agent_execution_contract",
     "agent_sched_config",
     "agent_audit_receipt",
     "agent_observe_recovery",
@@ -174,21 +178,71 @@ def validate(syscall_source: str, registry_source: str) -> None:
 
     dispatch = function_body(syscall_source, "syscall")
     gate = dispatch.find("workflow_lifecycle_operation_enter(lifecycle)")
-    transaction = dispatch.find("syscall_slow_path(trapframe, id, policy)")
-    if gate < 0 or transaction < 0 or gate > transaction:
+    transaction = dispatch.find("ret = syscall_slow_path(")
+    if min(gate, transaction) < 0 or gate >= transaction:
         raise ContractError("workflow cut no longer starts before transaction preparation")
-    if "operation_denied = 1;" not in dispatch:
-        raise ContractError("failed workflow-cut admission can still run background work")
-    operation_block = re.search(
-        r"if\s*\(operation_entered\)\s*\{(?P<body>.*?)\n\s*\}", dispatch, re.S
+    gate_complete = dispatch.find("operation_entered = 1;", gate)
+    gate_denied = dispatch.find("operation_denied = 1;", gate)
+    gate_abort = dispatch.find("goto operation_done;", gate_denied)
+    if min(gate_denied, gate_abort, gate_complete) < 0 or not (
+        gate < gate_denied < gate_abort < gate_complete
+    ):
+        raise ContractError("workflow admission can still run background after denial")
+    file_pin = dispatch.find("agent_execution_contract_file_pin_enter(", gate_complete)
+    if file_pin < 0 or not (
+        gate < gate_denied < gate_abort < gate_complete < file_pin < transaction
+    ):
+        raise ContractError("workflow cut no longer starts before transaction preparation")
+    operation_done = dispatch.find("operation_done:", transaction)
+    denied_guard = dispatch.find("!operation_denied || direct_guard.active ||", operation_done)
+    pin_guard = dispatch.find("file_pin_guard.active", denied_guard)
+    checkpoint = dispatch.find("agent_background_checkpoint();", pin_guard)
+    late_guard = dispatch.find("!background_done && !operation_denied", checkpoint)
+    late_checkpoint = dispatch.find("agent_background_checkpoint();", late_guard)
+    file_leave = dispatch.find(
+        "agent_execution_contract_file_pin_leave(&file_pin_guard);", late_checkpoint
     )
-    if operation_block is None:
-        raise ContractError("missing common workflow-cut completion block")
-    completion = operation_block["body"]
-    checkpoint = completion.find("agent_background_checkpoint();")
-    leave = completion.find("workflow_lifecycle_operation_leave(lifecycle);")
-    if checkpoint < 0 or leave < 0 or checkpoint > leave:
-        raise ContractError("background checkpoint escaped the active workflow cut")
+    direct_leave = dispatch.find(
+        "agent_execution_contract_direct_leave(&direct_guard);", file_leave
+    )
+    operation_leave_guard = dispatch.find("if (operation_entered)", direct_leave)
+    operation_leave = dispatch.find(
+        "workflow_lifecycle_operation_leave(lifecycle);", operation_leave_guard
+    )
+    background_leave_guard = dispatch.find(
+        "if (background_operation_entered)", operation_leave
+    )
+    background_leave = dispatch.find(
+        "workflow_lifecycle_operation_leave(lifecycle);", background_leave_guard
+    )
+    if min(
+        operation_done,
+        denied_guard,
+        pin_guard,
+        checkpoint,
+        late_guard,
+        late_checkpoint,
+        file_leave,
+        direct_leave,
+        operation_leave_guard,
+        operation_leave,
+        background_leave_guard,
+        background_leave,
+    ) < 0 or not (
+        operation_done
+        < denied_guard
+        < pin_guard
+        < checkpoint
+        < late_guard
+        < late_checkpoint
+        < file_leave
+        < direct_leave
+        < operation_leave_guard
+        < operation_leave
+        < background_leave_guard
+        < background_leave
+    ):
+        raise ContractError("background checkpoint escaped the active contract guards")
     if dispatch.count("workflow_lifecycle_operation_leave(lifecycle);") != 2:
         raise ContractError("workflow cut does not have exactly two balanced leave sites")
     compact_dispatch = re.sub(r"\s+", "", dispatch)
@@ -224,6 +278,17 @@ class WorkflowSyscallCutTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, message):
             validate(mutated, self.registry)
 
+    def mutate_cut(self, old: str, new: str) -> str:
+        return self.mutate_function(
+            "syscall_mutates_workflow_cut", old, new
+        )
+
+    def mutate_function(self, name: str, old: str, new: str) -> str:
+        body = function_body(self.syscall, name)
+        self.assertIn(old, body, f"{name} mutation anchor drifted: {old!r}")
+        mutated_body = body.replace(old, new, 1)
+        return self.syscall.replace(body, mutated_body, 1)
+
     def test_current_tree_passes(self) -> None:
         validate(self.syscall, self.registry)
 
@@ -233,9 +298,54 @@ class WorkflowSyscallCutTests(unittest.TestCase):
         self.assert_mutation_rejected(old, new, "registry is not closed")
 
     def test_rejects_self_gated_double_count(self) -> None:
-        old = "\tcase SYS_agent_worker_create:\n\t\treturn 0;"
-        new = "\tcase SYS_agent_worker_create:\n\t\treturn 1;"
-        self.assert_mutation_rejected(old, new, "one return")
+        old = "\tcase SYS_agent_worker_create:\n"
+        new = "\tcase SYS_agent_worker_create:\n\t\treturn 1;\n"
+        mutated = self.mutate_cut(old, new)
+        with self.assertRaisesRegex(ContractError, "one return"):
+            validate(mutated, self.registry)
+
+    def test_rejects_execution_contract_moved_inside_self_gate(self) -> None:
+        outer = "\tcase SYS_agent_execution_contract:\n"
+        self_gated_tail = (
+            "\t\treturn 0;\n"
+            "\t/* Exit/close drive their own lifecycle protocols; never nest the gate. */"
+        )
+        mutated = self.mutate_cut(outer, "")
+        body = function_body(mutated, "syscall_mutates_workflow_cut")
+        self.assertIn(self_gated_tail, body, "self-gated tail drifted")
+        mutated_body = body.replace(
+            self_gated_tail,
+            "\tcase SYS_agent_execution_contract:\n"
+            + self_gated_tail,
+            1,
+        )
+        mutated = mutated.replace(body, mutated_body, 1)
+        with self.assertRaisesRegex(ContractError, "ordinary workflow-cut set drifted"):
+            validate(mutated, self.registry)
+
+    def test_rejects_task_channel_moved_to_outer_gate(self) -> None:
+        outer_tail = "\tcase SYS_agent_route_config:\n\t\treturn 1;"
+        self.assertIn(outer_tail, self.syscall, "outer cut anchor drifted")
+        for syscall_name in (
+            "agent_task_channel_setup",
+            "agent_task_channel_enter",
+            "agent_task_channel_resource",
+        ):
+            with self.subTest(syscall=syscall_name):
+                self_gated = f"\tcase SYS_{syscall_name}:\n"
+                mutated = self.mutate_cut(self_gated, "")
+                body = function_body(mutated, "syscall_mutates_workflow_cut")
+                self.assertIn(outer_tail, body, "outer cut anchor drifted")
+                mutated_body = body.replace(
+                    outer_tail,
+                    f"\tcase SYS_{syscall_name}:\n" + outer_tail,
+                    1,
+                )
+                mutated = mutated.replace(body, mutated_body, 1)
+                with self.assertRaisesRegex(
+                    ContractError, "ordinary workflow-cut set drifted"
+                ):
+                    validate(mutated, self.registry)
 
     def test_rejects_completion_wait_outer_gate(self) -> None:
         observers = "\tcase SYS_wait4:\n\t\treturn 0;"
@@ -262,20 +372,24 @@ class WorkflowSyscallCutTests(unittest.TestCase):
     def test_rejects_gate_after_transaction(self) -> None:
         old = "if (workflow_lifecycle_operation_enter(lifecycle) < 0) {"
         new = "if (workflow_lifecycle_operation_enter_after(lifecycle) < 0) {"
-        self.assert_mutation_rejected(old, new, "starts before transaction")
+        mutated = self.mutate_function("syscall", old, new)
+        with self.assertRaisesRegex(ContractError, "starts before transaction"):
+            validate(mutated, self.registry)
 
     def test_rejects_background_after_leave(self) -> None:
         old = (
-            "\t\t\tif (agent_background_work_pending() || id == SYS_sched_yield)\n"
-            "\t\t\t\tagent_background_checkpoint();\n"
-            "\t\t\tbackground_done = 1;\n"
-            "\t\t\tworkflow_lifecycle_operation_leave(lifecycle);"
+            "\tagent_execution_contract_file_pin_leave(&file_pin_guard);\n"
+            "\tif (direct_guard.active)\n"
+            "\t\tagent_execution_contract_direct_leave(&direct_guard);\n"
+            "\tif (operation_entered)\n"
+            "\t\tworkflow_lifecycle_operation_leave(lifecycle);"
         )
         new = (
-            "\t\t\tbackground_done = 1;\n"
-            "\t\t\tworkflow_lifecycle_operation_leave(lifecycle);\n"
-            "\t\t\tif (agent_background_work_pending() || id == SYS_sched_yield)\n"
-            "\t\t\t\tagent_background_checkpoint();"
+            "\tif (operation_entered)\n"
+            "\t\tworkflow_lifecycle_operation_leave(lifecycle);\n"
+            "\tagent_execution_contract_file_pin_leave(&file_pin_guard);\n"
+            "\tif (direct_guard.active)\n"
+            "\t\tagent_execution_contract_direct_leave(&direct_guard);"
         )
         self.assert_mutation_rejected(old, new, "checkpoint escaped")
 

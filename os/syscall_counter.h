@@ -87,6 +87,10 @@ enum syscall_class {
 	X(agent_scope_delegate_fd, FAST, ALWAYS) \
 	X(agent_workflow_close, FS_EPOCH, ALWAYS) \
 	X(agent_workflow_lifecycle_info, FAST, ALWAYS) \
+	X(agent_execution_contract, FAST, ALWAYS) \
+	X(agent_task_channel_setup, FAST, ALWAYS) \
+	X(agent_task_channel_enter, BLOCK_IO_FS_EPOCH, ALWAYS) \
+	X(agent_task_channel_resource, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_resource_snapshot, FAST, ALWAYS) \
 	X(agent_performance_snapshot, FAST, ALWAYS) \
 	X(agent_info, FAST, ALWAYS) \

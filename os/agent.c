@@ -1,6 +1,8 @@
 #include "agent.h"
 #include "agent_internal.h"
+#include "agent_task_bridge.h"
 #include "defs.h"
+#include "timer.h"
 
 /*
  * AgentOS 内核稳定门面。子系统状态与策略由各实现模块维护；本文件保持
@@ -10,6 +12,7 @@ void
 agentinit(void)
 {
 	agent_core_init();
+	agent_task_bridge_init();
 }
 
 void
@@ -18,10 +21,24 @@ agent_proc_prepare(struct proc *p)
 	agent_core_proc_prepare(p);
 }
 
-void
+int
 agent_proc_teardown(struct proc *p)
 {
+	int status;
+
+	if (p == 0)
+		return -1;
+	if (p->teardown_state == PROC_TEARDOWN_QUIESCING) {
+		status = agent_task_bridge_reclaim(p);
+		if (status == AGENT_TASK_CHANNEL_RETRY)
+			return -1;
+		if (status != AGENT_TASK_CHANNEL_OK)
+			panic("Task Channel teardown");
+	} else if (agent_task_bridge_active(p)) {
+		panic("Task Channel teardown phase");
+	}
 	agent_core_proc_teardown(p);
+	return 0;
 }
 
 void agent_thread_runtime_transition(struct thread *t, int transition)
@@ -35,6 +52,8 @@ void agent_process_image_install_locked(struct proc *p)
 int
 agent_exec_public_identity_commit(struct proc *p)
 {
+	if (agent_task_bridge_active(p))
+		return -1;
 	return agent_core_exec_public_commit(p);
 }
 
@@ -48,6 +67,20 @@ void
 agent_tick(void)
 {
 	agent_core_tick();
+	if (agent_task_bridge_tick(get_cycle() / (CPU_FREQ / TICKS_PER_SEC)) != 0)
+		agent_background_request();
+}
+
+int
+agent_task_deadline_due_current(void)
+{
+	return agent_task_bridge_current_deadline_due();
+}
+
+int
+agent_task_deadline_checkpoint(void)
+{
+	return agent_task_bridge_current_deadline_safe_point();
 }
 
 void

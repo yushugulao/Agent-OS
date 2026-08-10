@@ -153,6 +153,45 @@ void agent_observe_recording_suppress_end(struct proc *);
 int agent_observe_recording_suppressed(struct proc *);
 void agent_observe_record_context(struct proc *,
 				  struct agent_context_record *, int, int);
+int agent_observe_record_context_ticket(struct proc *,
+					struct agent_context_record *, int, int,
+					uint64 *);
+struct agent_evidence_context_reservation;
+struct agent_evidence_security_reservation;
+struct agent_execution_cancel_request;
+struct agent_execution_direct_guard;
+struct agent_execution_outcome;
+struct agent_execution_binding;
+struct agent_execution_preflight_result;
+struct agent_op;
+struct agent_result;
+uint64 agent_observe_commit_context_reserved_ticket(
+	struct proc *, struct agent_context_record *, int, int,
+	struct agent_evidence_context_reservation *);
+uint64 agent_observe_commit_security_reserved_ticket(
+	struct proc *, struct agent_context_record *,
+	struct agent_evidence_security_reservation *);
+void agent_observe_publish_context_ticket(
+	struct proc *, struct agent_context_record *, int, int, uint64);
+int agent_execution_cancel_sync(
+	struct proc *, const struct agent_execution_cancel_request *,
+	struct agent_result *, struct agent_execution_outcome *);
+int agent_execution_task_preflight(
+	struct proc *, const struct agent_execution_binding *,
+	const struct agent_op *, uint64, uint, uint64,
+	struct agent_execution_preflight_result *);
+int agent_execution_task_submit_sync(
+	struct proc *, struct agent_op *,
+	const struct agent_execution_binding *, uint64, uint,
+	struct agent_result *, struct agent_execution_outcome *);
+int agent_execution_force_cancel_sync(
+	struct proc *, const struct agent_execution_cancel_request *,
+	struct agent_result *, struct agent_execution_outcome *);
+int agent_execution_timeout_sync(
+	struct proc *, const struct agent_execution_cancel_request *, uint64,
+	uint64, struct agent_result *, struct agent_execution_outcome *);
+int agent_execution_contract_gate_direct_syscall(
+	struct proc *, int, uint64, struct agent_execution_direct_guard *);
 void agent_observe_record_sched(struct thread *, struct agent_sched_record *);
 void agent_observe_record_event(int, struct proc *, struct agent_event *,
 				uint64, uint64);

@@ -13,7 +13,7 @@ else:
     from benchmark_source_contract import _function_tokens, _lex
 
 
-CONTRACT_VERSION = "agentos-functional-compile-closure-v5"
+CONTRACT_VERSION = "agentos-functional-compile-closure-v6"
 
 EXPECTED_FUNCTIONAL_CPP_DEFINES = frozenset({
     "AGENT_CONTEXT_SYNC_TEST_PROFILE",
@@ -77,11 +77,14 @@ EXPECTED_FUNCTIONAL_CPP_DEFINES = frozenset({
 # 日志中的 Host challenge 检查共同覆盖。
 USER_ARTIFACT_DEPENDENCY_PATHS = (
     "Makefile",
+    "agent_execution_contract_abi.h",
     "agent_lifecycle_abi.h",
     "agent_metadata_test_abi.h",
     "agent_observe_abi.h",
     "agent_performance_abi.h",
+    "agent_provenance_abi.h",
     "agent_resource_abi.h",
+    "agent_task_channel_abi.h",
     "agent_tool_abi.h",
     "agent_workflow_fence_abi.h",
     "io_policy.h",
@@ -162,6 +165,8 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/agent_context_path.c",
     "os/agent_context_path.h",
     "os/agent_core.c",
+    "os/agent_execution_contract.c",
+    "os/agent_execution_contract.h",
     "os/agent_evidence_ring.c",
     "os/agent_evidence_ring.h",
     "os/agent_file_name_policy.h",
@@ -193,11 +198,17 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/agent_observe_internal.h",
     "os/agent_observe_ledger.c",
     "os/agent_observe_timeline.c",
+    "os/agent_provenance.c",
+    "os/agent_provenance.h",
     "os/agent_resource.c",
     "os/agent_sha256.c",
     "os/agent_sha256.h",
     "os/agent_tool_protocol.c",
     "os/agent_tool_protocol.h",
+    "os/agent_task_bridge.c",
+    "os/agent_task_bridge.h",
+    "os/agent_task_channel.c",
+    "os/agent_task_channel.h",
     "os/agent_workflow_fence.c",
     "os/agent_workflow_fence.h",
     "os/agent.c",
@@ -277,6 +288,8 @@ KERNEL_RUNTIME_DEPENDENCY_PATHS = (
     "os/workflow_credit_domain.h",
     "os/workflow_lifecycle.c",
     "os/workflow_lifecycle.h",
+    "os/workflow_scheduler.c",
+    "os/workflow_scheduler.h",
 )
 
 # 这些 C 文件可以保留为历史参考或显式测试配置输入，但正式评测的默认
@@ -330,7 +343,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # 上述完整审查闭包的逐字节指纹。固定各翻译阶段输入，避免续行、预处理、
 # 汇编或链接语法在规范化时被隐藏。
 COMPILE_CLOSURE_FINGERPRINT = (
-    "225a753b2fb6f39111f8cd30b33200a33251668e671b220115d872a0b8a9a5ba"
+    "c153ad0735187ee1a8ea817b68d2445d18c7fa6e0ad57391632b7e2af669f879"
 )
 
 USER_TRANSLATION_UNITS = (
@@ -353,11 +366,14 @@ TOOLCHAIN_INCLUDE_PREFIX = "@attested-toolchain/"
 EXPECTED_INCLUDE_CLOSURE = (
     "@generated/agenteval_seed.h",
     "@generated/rp_host_action_seed.h",
+    "agent_execution_contract_abi.h",
     "agent_lifecycle_abi.h",
     "agent_metadata_test_abi.h",
     "agent_observe_abi.h",
     "agent_performance_abi.h",
+    "agent_provenance_abi.h",
     "agent_resource_abi.h",
+    "agent_task_channel_abi.h",
     "agent_tool_abi.h",
     "agent_workflow_fence_abi.h",
     "io_policy.h",
@@ -434,17 +450,22 @@ EXPECTED_USER_INCLUDE_ROOT_FILES = (
 REQUIRED_KERNEL_RESULT_PATHS = frozenset({
     "os/agent_context.c",
     "os/agent_core.c",
+    "os/agent_execution_contract.c",
     "os/agent_evidence_ring.c",
     "os/agent_ipc.c",
     "os/agent_live_query_compat.c",
     "os/agent_live_query_events.c",
     "os/agent_metadata_objects.c",
+    "os/agent_provenance.c",
     "os/agent_sha256.c",
+    "os/agent_task_bridge.c",
+    "os/agent_task_channel.c",
     "os/agent_workflow_fence.c",
     "os/console.c",
     "os/printf.c",
     "os/syscall.c",
     "os/workflow_credit_domain.c",
+    "os/workflow_scheduler.c",
 })
 
 SIMPLE_SYSCALL_WRAPPERS = {
@@ -467,6 +488,19 @@ SIMPLE_SYSCALL_WRAPPERS = {
         "SYS_agent_run", "request", "receipt", "0", "AGENT_RUN_F_FENCE",
     ),
     "sys_tool_call": ("SYS_tool_call", "req", "resp"),
+    "tool_call_v3": ("SYS_tool_call", "req", "resp"),
+    "agent_execution_contract": (
+        "SYS_agent_execution_contract", "control", "result",
+    ),
+    "agent_task_channel_setup": (
+        "SYS_agent_task_channel_setup", "request", "result",
+    ),
+    "agent_task_channel_enter": (
+        "SYS_agent_task_channel_enter", "request", "result",
+    ),
+    "agent_task_channel_resource": (
+        "SYS_agent_task_channel_resource", "request", "result",
+    ),
     "context_push": ("SYS_context_push", "record"),
     "context_query": ("SYS_context_query", "start_sequence", "out", "max"),
     "context_snapshot": ("SYS_context_snapshot", "header", "records", "max"),
@@ -1443,6 +1477,16 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             "QEMU result monitor",
         ),
         (
+            'if [[ "${init_proc}" == "agenttask_ucore" ]]; then\n'
+            '\t\t"${PYTHON_BIN}" -I -S -B scripts/validate-kernel-test-log.py \\\n'
+            '\t\t\t--log-file "${log_file}" \\\n'
+            '\t\t\t--tag "agenttask" \\\n'
+            '\t\t\t--profile agent-case \\\n'
+            '\t\t\t--case "${init_proc}"\n'
+            '\tfi',
+            "Task performance semantic validation",
+        ),
+        (
             'HOST_CC="${HOST_CC:-${HOSTCC:-cc}}"',
             "Host compiler capture before environment cleanup",
         ),
@@ -1485,7 +1529,7 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         raise ValueError("functional runner parallel build boundary differs")
     if runner.count("FUNCTIONAL_REVIEW_BUILD=1") != 5:
         raise ValueError("functional runner does not isolate generated dependencies")
-    if len(_isolated_python_invocation_lines(runner)) != 15:
+    if len(_isolated_python_invocation_lines(runner)) != 16:
         raise ValueError("functional runner Python invocation count differs")
 
     initproc = texts["scripts/initproc.py"].replace("\r\n", "\n")

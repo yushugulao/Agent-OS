@@ -59,7 +59,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_VERSION = "scenario-timing-source-v14"
+CONTRACT_VERSION = "scenario-timing-source-v15"
 SOURCE_PATHS = (
     "baseline_ucore/user/src/rp_seed_orch.c",
     "user/src/rp_agentos_orch.c",
@@ -94,6 +94,8 @@ SOURCE_PATHS = (
     "os/loader.c",
     "os/resource_controller.c",
     "os/resource_controller.h",
+    "os/workflow_scheduler.c",
+    "os/workflow_scheduler.h",
     "os/syscall.c",
     "os/syscall_ids.h",
     "user/lib/arch/riscv/syscall_ids.h.in",
@@ -102,6 +104,7 @@ SOURCE_PATHS = (
     "user/lib/syscall.c",
     "user/include/labdemo_workload.h",
     "user/src/labdemo_ucore.c",
+    "user/src/agent_eevdf_ucore.c",
 )
 
 EXPECTED_PLATFORM_PROGRAMS = (
@@ -3392,11 +3395,16 @@ def _validate_performance_pair_consumer(source: str, workload_header: str) -> No
 
 def _validate_lifecycle_identity(abi: str, implementation: str) -> None:
     for declaration in (
-        "AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION 2U",
+        "AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION 3U",
+        "AGENT_WORKFLOW_LIFECYCLE_INFO_V2_VERSION 2U",
+        "AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE 64U",
         "unsigned int resource_account_valid;",
         "unsigned int resource_account_slot;",
         "unsigned long long resource_account_generation;",
-        "sizeof(struct agent_workflow_lifecycle_info) == 64",
+        "unsigned int scheduler_mode;",
+        "signed long long scheduler_lag_cycles;",
+        "unsigned long long scheduler_wakeup_latency_buckets[",
+        "sizeof(struct agent_workflow_lifecycle_info) == 216",
     ):
         if declaration not in abi:
             raise ValueError(f"workflow lifecycle identity ABI differs: {declaration}")
@@ -3411,8 +3419,17 @@ def _validate_lifecycle_identity(abi: str, implementation: str) -> None:
             "__builtin_offsetof", "(", "struct", "agent_workflow_lifecycle_info", ",",
             "resource_account_generation", ")", "==", "56",
         ),
+        (
+            "__builtin_offsetof", "(", "struct", "agent_workflow_lifecycle_info", ",",
+            "scheduler_mode", ")", "==",
+            "AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE",
+        ),
+        (
+            "__builtin_offsetof", "(", "struct", "agent_workflow_lifecycle_info", ",",
+            "scheduler_wakeup_latency_buckets", ")", "==", "184",
+        ),
     ):
-        _require_once(abi_tokens, sequence, "workflow resource-account ABI layout")
+        _require_once(abi_tokens, sequence, "workflow lifecycle ABI layout")
 
     lifecycle = _function_tokens(
         _tokens(implementation), "sys_agent_workflow_lifecycle_info"
@@ -3420,17 +3437,77 @@ def _validate_lifecycle_identity(abi: str, implementation: str) -> None:
     _ordered(
         lifecycle,
         (
+            (
+                "project_v3", "=", "user_size", ">",
+                "AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE", ";",
+            ),
+            (
+                "copy_size", "=", "MIN", "(", "user_size", ",",
+                "project_v3", "?", "sizeof", "(", "info", ")", ":",
+                "(", "uint64", ")", "AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE",
+                ")", ";",
+            ),
+            (
+                "info", ".", "version", "=", "project_v3", "?",
+                "AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION", ":",
+                "AGENT_WORKFLOW_LIFECYCLE_INFO_V2_VERSION", ";",
+            ),
             ("enabled", "=", "intr_save", "(", ")", ";"),
-            ("resource_account_handle_valid", "(", "p", "->", "resource_account", ")"),
+            (
+                "current_account", "=", "p", "->", "resource_account", ";",
+            ),
+            ("resource_account_handle_valid", "(", "current_account", ")"),
             ("info", ".", "resource_account_valid", "=", "1", ";"),
-            ("info", ".", "resource_account_slot", "=", "p", "->", "resource_account", ".", "slot", ";"),
-            ("info", ".", "resource_account_generation", "=", "p", "->", "resource_account", ".", "generation", ";"),
+            (
+                "info", ".", "resource_account_slot", "=",
+                "current_account", ".", "slot", ";",
+            ),
+            (
+                "info", ".", "resource_account_generation", "=",
+                "current_account", ".", "generation", ";",
+            ),
             ("intr_restore", "(", "enabled", ")", ";"),
+            (
+                "if", "(", "project_v3", "&&", "info", ".", "charged", "&&",
+                "workflow_scheduler_snapshot_get", "(", "current", ",",
+                "current_account", ",", "current_domain", ",", "&",
+                "scheduler_snapshot", ")", "==", "0", ")",
+            ),
+            (
+                "copyout", "(", "p", "->", "pagetable", ",", "addr", ",",
+                "(", "char", "*", ")", "&", "info", ",", "copy_size", ")",
+            ),
         ),
-        "read-only current resource-account identity",
+        "versioned read-only lifecycle identity",
+    )
+    scheduler_fields = (
+        "mode", "flags", "latency_class", "weight", "runnable",
+        "request_ticks", "remaining_cycles", "lag_cycles", "vruntime",
+        "virtual_deadline", "dispatches", "service_cycles", "sleep_decays",
+        "eligibility_misses", "fallbacks", "max_wakeup_ticks",
+        "deadline_misses", "wakeup_samples",
+    )
+    for field in scheduler_fields:
+        _require_once(
+            lifecycle,
+            (
+                "info", ".", f"scheduler_{field}", "=",
+                "scheduler_snapshot", ".", field, ";",
+            ),
+            f"workflow scheduler snapshot field {field}",
+        )
+    _require_once(
+        lifecycle,
+        (
+            "info", ".", "scheduler_wakeup_latency_buckets", "[", "i", "]",
+            "=", "scheduler_snapshot", ".", "wakeup_latency_buckets", "[",
+            "i", "]", ";",
+        ),
+        "workflow scheduler wake histogram",
     )
     allowed_resource_tokens = {
         "resource_account", "resource_account_handle_valid",
+        "resource_account_handle", "resource_account_none",
         "resource_account_valid", "resource_account_slot",
         "resource_account_generation",
     }

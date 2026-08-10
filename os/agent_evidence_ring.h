@@ -77,10 +77,62 @@ struct agent_evidence_retained_seal {
 	uint64 credit_epoch;
 };
 
+/* Kernel-only two-phase ticket used by fail-before-effect security denial. */
+struct agent_evidence_security_reservation {
+	struct workflow_lifecycle_key key;
+	void *slot;
+	uint64 ticket;
+	int active;
+};
+
+/*
+ * A tool does not know whether its terminal record will be ordinary or
+ * critical until after execution.  Reserving one slot in each partition with
+ * one shared ticket keeps the critical reserve independent while making the
+ * eventual Context/Evidence commit infallible after a side effect.
+ */
+struct agent_evidence_context_reservation {
+	struct workflow_lifecycle_key key;
+	void *ordinary_slot;
+	void *critical_slot;
+	uint64 ticket;
+	int active;
+};
+
 void agent_evidence_init(void);
+/*
+ * A frozen execution contract may deny a direct syscall from a non-Agent
+ * participant that has no Context pages of its own.  The trusted controller
+ * must provision the lifecycle ring before publishing that contract.  The
+ * append path is deliberately allocation- and rollover-free.
+ */
+int agent_evidence_prepare_direct_denials(
+	struct proc *, struct workflow_lifecycle_key);
+int agent_evidence_context_preallocated(
+	struct proc *, struct workflow_lifecycle_key);
+int agent_evidence_append_direct_syscall_denial(
+	struct proc *, struct workflow_lifecycle_key, int, uint64, uint64 *);
 int agent_evidence_append_context(
 	struct proc *, const struct agent_context_record *, uint64, uint64, int,
 	uint64, uint64, int, int, uint64 *);
+int agent_evidence_context_reserve(
+	struct proc *, struct agent_evidence_context_reservation *);
+void agent_evidence_context_abort(
+	struct agent_evidence_context_reservation *);
+int agent_evidence_context_commit(
+	struct proc *, const struct agent_context_record *, uint64, uint64, int,
+	uint64, uint64, int, int,
+	struct agent_evidence_context_reservation *, uint64 *);
+int agent_evidence_append_security_denial(
+	struct proc *, const struct agent_context_record *, uint64, uint64, int,
+	uint64, uint64, uint64 *);
+int agent_evidence_security_reserve(
+	struct proc *, struct agent_evidence_security_reservation *);
+void agent_evidence_security_abort(
+	struct agent_evidence_security_reservation *);
+int agent_evidence_security_commit(
+	struct proc *, const struct agent_context_record *, uint64, uint64, int,
+	uint64, uint64, struct agent_evidence_security_reservation *, uint64 *);
 int agent_evidence_view_open(struct workflow_lifecycle_key,
 			     struct agent_evidence_view *);
 int agent_evidence_view_record(const struct agent_evidence_view *, uint,

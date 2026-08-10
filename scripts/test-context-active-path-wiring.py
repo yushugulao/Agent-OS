@@ -115,7 +115,7 @@ def validate(sources: dict[str, str]) -> None:
     for token in (
         "struct agent_context_path_index",
         "successors[AGENT_CONTEXT_MAX_RECORDS]",
-        "Agent context path index must fit sidecar slack",
+        "Agent context path index and provenance must fit sidecar slack",
         "summary->workflow_lifecycle_generation",
         "summary->branch_generation",
     ):
@@ -309,7 +309,10 @@ MUTATIONS = (
     ("context", "i < AGENT_CONTEXT_KERNEL_PAGES ? 0 : PTE_W"),
     ("context", "active_count--;"),
     ("context", "active_oldest = receipt->evicted_successor;"),
-    ("context", "Agent context path index must fit sidecar slack"),
+    (
+        "context",
+        "Agent context path index and provenance must fit sidecar slack",
+    ),
     ("path", "record.path_parent_sequence >= cursor"),
     ("path", "record.prev_hash == 0"),
     ("path", "record.record_hash != expected_hash"),

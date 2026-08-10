@@ -63,7 +63,7 @@ void user_image_rx_cache_stats_snapshot(
 _Static_assert(USTACK_SIZE == PAGE_SIZE,
 	       "the user stack contract must remain exactly one page");
 
-#define USER_IMAGE_LIMIT (AGENT_CONTEXT_BASE)
+#define USER_IMAGE_LIMIT (AGENT_TASK_CHANNEL_SQ_BASE)
 
 /* 保证堆边界结果可由现有有符号标量接口表示。 */
 #define USER_HEAP_LIMIT_RAW (USER_IMAGE_LIMIT - PAGE_SIZE)

@@ -210,6 +210,9 @@ REQUIRED_AGENT_TEST_CASES = (
     "agentconflict_ucore",
     "agentllm_ucore",
     "agentbench_ucore",
+    "agentcontract_ucore",
+    "agent_eevdf_ucore",
+    "agenttask_ucore",
     "ch8_cow_ucore",
     "labdemo_ucore",
     "agentsecurity_ucore",
@@ -229,23 +232,34 @@ CONTROLLED_AGENT_SYMBOL_PREFIXES = (
     "resource_",
     "workflow_lifecycle_",
     "workflow_credit_domain_",
+    "workflow_scheduler_",
 )
 CONTROLLED_AGENT_EXACT_SYMBOLS = frozenset(("agentinit",))
-REQUIRED_AGENT_MAX_SCC_SIZE = 3
+REQUIRED_AGENT_MAX_SCC_SIZE = 4
 REQUIRED_AGENT_ALLOWED_SCCS = frozenset(
     (
-        frozenset(("context", "observe", "observe_timeline")),
+        frozenset(("context", "observe", "observe_timeline", "provenance")),
+        frozenset(("evidence_ring", "observe_ledger")),
         frozenset(("ipc", "live_query_events")),
     )
 )
 REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS = frozenset(
     (
-        frozenset(("context", "observe", "observe_timeline")),
+        frozenset(("context", "observe", "observe_timeline", "provenance")),
+        frozenset(("evidence_ring", "observe_ledger")),
         frozenset(("ipc", "live_query_events")),
-        frozenset(("core", "facade", "proc")),
+        frozenset(("core", "facade", "proc", "task_bridge")),
     )
 )
 REQUIRED_AGENT_AGGREGATES = {
+    "agent_execution_plane": frozenset(
+        (
+            "execution_contract",
+            "provenance",
+            "task_channel",
+            "task_bridge",
+        )
+    ),
     "metadata_control_plane": frozenset(
         (
             "metadata",
@@ -262,6 +276,19 @@ REQUIRED_AGENT_AGGREGATES = {
     )
 }
 REQUIRED_AGENT_AGGREGATE_HEADERS = {
+    "agent_execution_plane": frozenset(
+        (
+            "os/agent_context_path.h",
+            "os/agent_evidence_ring.h",
+            "os/agent_execution_contract.h",
+            "os/agent_observe_internal.h",
+            "os/agent_provenance.h",
+            "os/agent_sha256.h",
+            "os/agent_task_bridge.h",
+            "os/agent_task_channel.h",
+            "os/agent_tool_protocol.h",
+        )
+    ),
     "metadata_control_plane": frozenset(
         (
             "os/agent_file_name_policy.h",
@@ -276,6 +303,17 @@ REQUIRED_AGENT_AGGREGATE_HEADERS = {
     )
 }
 REQUIRED_AGENT_AGGREGATE_HEADER_GLOBS = {
+    "agent_execution_plane": (
+        "os/agent_context_path.h",
+        "os/agent_evidence_ring.h",
+        "os/agent_execution_contract.h",
+        "os/agent_observe_internal.h",
+        "os/agent_provenance.h",
+        "os/agent_sha256.h",
+        "os/agent_task_bridge.h",
+        "os/agent_task_channel.h",
+        "os/agent_tool_protocol.h",
+    ),
     "metadata_control_plane": (
         "os/agent_file_name_policy.h",
         "os/agent_file_state_internal.h",
@@ -293,6 +331,9 @@ REQUIRED_AGENT_AGGREGATE_SHARED_HEADERS = frozenset(
         "os/agent_internal.h",
         "os/agent_context.h",
         "os/agent_lifecycle.h",
+        # Metadata reaches these through IPC/proc without owning their budget.
+        "os/agent_provenance.h",
+        "os/agent_task_channel.h",
     )
 )
 REQUIRED_AGENT_MODULE_CFLAGS = {
@@ -607,6 +648,8 @@ def validate_config(config):
         "gcc_version",
         "gcc_package",
         "gcc_package_version",
+        "cc1_package",
+        "cc1_package_version",
         "binutils_version",
         "binutils_package",
         "binutils_package_version",
@@ -1242,6 +1285,7 @@ def validate_config(config):
             "resource_controller": ("resource_",),
             "workflow_lifecycle": ("workflow_lifecycle_",),
             "workflow_credit_domain": ("workflow_credit_domain_",),
+            "workflow_scheduler": ("workflow_scheduler_",),
         }.get(name, ("agent_", "sys_"))
         if any(
             not prefix.endswith("_")
@@ -1316,6 +1360,7 @@ def validate_config(config):
         "context",
         "context_path",
         "evidence_ring",
+        "execution_contract",
         "file_state",
         "identity",
         "identity_lease",
@@ -1333,13 +1378,17 @@ def validate_config(config):
         "observe_audit_query",
         "observe_ledger",
         "observe_timeline",
+        "provenance",
         "resource_observer",
         "resource_controller",
         "sha256",
+        "task_bridge",
+        "task_channel",
         "tool_protocol",
         "workflow_credit_domain",
         "workflow_fence",
         "workflow_lifecycle",
+        "workflow_scheduler",
     }
     if names != required_modules:
         raise BudgetError(
@@ -1365,6 +1414,7 @@ def validate_config(config):
         "context": "os/agent_context.c",
         "context_path": "os/agent_context_path.c",
         "evidence_ring": "os/agent_evidence_ring.c",
+        "execution_contract": "os/agent_execution_contract.c",
         "file_state": "os/agent_file_state.c",
         "identity": "os/agent_identity.c",
         "identity_lease": "os/agent_identity_lease.c",
@@ -1382,13 +1432,17 @@ def validate_config(config):
         "observe_audit_query": "os/agent_observe_audit_query.c",
         "observe_ledger": "os/agent_observe_ledger.c",
         "observe_timeline": "os/agent_observe_timeline.c",
+        "provenance": "os/agent_provenance.c",
         "resource_observer": "os/agent_resource.c",
         "resource_controller": "os/resource_controller.c",
         "sha256": "os/agent_sha256.c",
+        "task_bridge": "os/agent_task_bridge.c",
+        "task_channel": "os/agent_task_channel.c",
         "tool_protocol": "os/agent_tool_protocol.c",
         "workflow_credit_domain": "os/workflow_credit_domain.c",
         "workflow_fence": "os/agent_workflow_fence.c",
         "workflow_lifecycle": "os/workflow_lifecycle.c",
+        "workflow_scheduler": "os/workflow_scheduler.c",
     }
     for entry in entries:
         expected_source = expected_sources[entry["name"]]
@@ -2490,7 +2544,9 @@ def validate_canonical_defines(cflags, config, expected_log):
 
 
 def normalized_tool_name(path):
-    name = Path(path).name
+    # Check the spelling the caller actually selected, not the final symlink
+    # target (Ubuntu's gcc/ld entry points resolve to gcc-15 and ld.bfd).
+    name = re.split(r"[\\/]", str(path))[-1]
     if name.lower().endswith(".exe"):
         name = name[:-4]
     return name
@@ -2516,7 +2572,7 @@ def resolve_executable_once(path, description):
         candidate = Path(resolved)
     try:
         candidate = candidate.resolve(strict=True)
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
         raise BudgetError(f"cannot resolve {description}: {error}") from error
     if not candidate.is_file():
         raise BudgetError(f"{description} is not a regular file: {candidate}")
@@ -2646,7 +2702,7 @@ def validate_canonical_kernel_budget_tools(profile, tools):
 
     ownership = {
         "gcc": profile["gcc_package"],
-        "cc1": profile["gcc_package"],
+        "cc1": profile["cc1_package"],
         "as": profile["binutils_package"],
         "ld": profile["binutils_package"],
         "objcopy": profile["binutils_package"],
@@ -2661,7 +2717,11 @@ def validate_canonical_kernel_budget_tools(profile, tools):
                 f"canonical {name} is owned by {sorted(owners)!r}, "
                 f"expected {package!r}"
             )
-    for package in (profile["gcc_package"], profile["binutils_package"]):
+    for package in (
+        profile["gcc_package"],
+        profile["cc1_package"],
+        profile["binutils_package"],
+    ):
         verification = run_tool(
             ["dpkg", "--verify", package], f"{package} package integrity"
         )
@@ -2683,11 +2743,15 @@ def validate_kernel_budget_toolchain(
         "nm": nm,
         "size": size,
     }
+    # Namespace selection is an invocation contract.  Resolve only after it
+    # passes, then use the strict final paths for identity, hashes and versions.
+    profile_kind, profile = select_kernel_budget_toolchain(
+        config, requested_tools
+    )
     tools = {
         name: resolve_executable_once(tool, f"kernel budget {name}")
         for name, tool in requested_tools.items()
     }
-    profile_kind, profile = select_kernel_budget_toolchain(config, tools)
     tools["cc1"] = resolve_gcc_subprogram(tools["gcc"], "cc1")
     tools["as"] = resolve_gcc_subprogram(tools["gcc"], "as")
     if profile_kind == "local":
@@ -2720,6 +2784,20 @@ def validate_kernel_budget_toolchain(
             raise BudgetError(
                 f"GCC package version {gcc_package_version!r}, "
                 f"expected {canonical['gcc_package_version']!r}"
+            )
+        cc1_package_version = run_tool(
+            [
+                "dpkg-query",
+                "-W",
+                "-f=${Version}",
+                canonical["cc1_package"],
+            ],
+            "CC1 package version check",
+        ).strip()
+        if cc1_package_version != canonical["cc1_package_version"]:
+            raise BudgetError(
+                f"CC1 package version {cc1_package_version!r}, "
+                f"expected {canonical['cc1_package_version']!r}"
             )
         binutils_package_version = run_tool(
             [

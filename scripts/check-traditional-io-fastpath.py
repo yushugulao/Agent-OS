@@ -49,6 +49,69 @@ def reject(text: str, fragment: str, message: str) -> None:
         raise ValueError(message)
 
 
+def braced_block(text: str, opening: int, message: str) -> tuple[str, int]:
+    if opening >= len(text) or text[opening] != "{":
+        raise ValueError(message)
+    depth = 0
+    for index in range(opening, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[opening + 1 : index], index
+    raise ValueError(message)
+
+
+def check_class_selected_dispatch(route: str) -> None:
+    """Keep security/provenance work inside the one class-selected fast arm."""
+    condition = "if(syscall_needs_transaction(class))"
+    slow_call = (
+        "ret=syscall_slow_path(trapframe,id,policy,&direct_guard,"
+        "&operation_denied);"
+    )
+    side_effects = (
+        "direct_side_effects=syscall_direct_agent_side_effects("
+        "id,trapframe,0);"
+    )
+    direct_gate = (
+        "ret=agent_execution_contract_gate_direct_syscall("
+        "curr_proc(),id,direct_side_effects,&direct_guard);"
+    )
+    gate_denial = (
+        "if(ret!=AGENT_STATUS_OK){operation_denied=1;"
+        "gotooperation_done;}"
+    )
+    ingress = "syscall_merge_ingress_provenance(id,0)"
+    dispatch = "ret=syscall_dispatch(id,trapframe,0);"
+    dispatch_call = "syscall_dispatch(id,trapframe,0)"
+    message = "registered syscall can bypass its class-selected dispatch path"
+
+    if route.count(condition) != 1:
+        raise ValueError(message)
+    condition_at = route.find(condition)
+    slow, slow_end = braced_block(
+        route, condition_at + len(condition), message
+    )
+    if slow != slow_call or dispatch_call in slow:
+        raise ValueError(message)
+    else_at = slow_end + 1
+    if not route.startswith("else{", else_at):
+        raise ValueError(message)
+    fast, _fast_end = braced_block(route, else_at + len("else"), message)
+
+    tokens = (side_effects, direct_gate, gate_denial, ingress, dispatch)
+    positions = [fast.find(token) for token in tokens]
+    if any(position < 0 for position in positions) or positions != sorted(
+        positions
+    ):
+        raise ValueError(message)
+    if any(fast.count(token) != 1 for token in tokens):
+        raise ValueError(message)
+    if route.count(dispatch_call) != 1 or not fast.endswith(dispatch):
+        raise ValueError(message)
+
+
 def macro_entries(text: str, name: str, arity: int) -> list[tuple[str, ...]]:
     lines = text.splitlines()
     starts = [index for index, line in enumerate(lines)
@@ -365,17 +428,12 @@ def check(root: Path) -> None:
             "unknown syscall can enter the registered dispatch path",
         ),
         (
-            "if(syscall_needs_transaction(class))ret=syscall_slow_path("
-            "trapframe,id,policy);elseret=syscall_dispatch(id,trapframe,0);",
-            "registered syscall can bypass its class-selected dispatch path",
+            "id=syscall_decode_id(trapframe->a7);",
+            "syscall entry truncates the raw syscall number",
         ),
     ):
         require(route, fragment, message)
-    require(
-        route,
-        "id=syscall_decode_id(trapframe->a7);",
-        "syscall entry truncates the raw syscall number",
-    )
+    check_class_selected_dispatch(route)
     reject(
         route,
         "structsyscall_transaction_context",

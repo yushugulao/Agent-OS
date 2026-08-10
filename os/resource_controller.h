@@ -2,6 +2,7 @@
 #define RESOURCE_CONTROLLER_H
 
 #include "types.h"
+#include "workflow_lifecycle.h"
 
 #define RESOURCE_ACCOUNT_CAP 272
 #define RESOURCE_LIMIT_UNBOUNDED (~0ULL)
@@ -89,6 +90,61 @@ struct resource_reservation {
 	enum resource_charge_class charge_class;
 	uint kind_mask;
 	uint64 amounts[RESOURCE_KIND_COUNT];
+	uint64 phase_lease_generation;
+	uint64 phase_claim_nonce;
+	int active;
+	int phase_claimed;
+};
+
+/*
+ * A tool phase owns an admitted subset of the workflow's existing U credit.
+ * Locked credit is still part of U, so it is visible to all hard-limit and
+ * fence accounting, but ordinary release/transfer paths cannot consume it.
+ */
+enum resource_phase_lease_state {
+	RESOURCE_PHASE_LEASE_EMPTY = 0,
+	RESOURCE_PHASE_LEASE_ADMITTED,
+	RESOURCE_PHASE_LEASE_ACTIVE,
+	RESOURCE_PHASE_LEASE_DEACTIVATED,
+	RESOURCE_PHASE_LEASE_SETTLED,
+};
+
+enum resource_phase_account_role {
+	RESOURCE_PHASE_EXEC = 0,
+	RESOURCE_PHASE_STORAGE,
+	RESOURCE_PHASE_ACCOUNT_COUNT,
+};
+
+#define RESOURCE_PHASE_MAX_CLAIMS 8U
+#define RESOURCE_PHASE_MAX_LEASES_PER_LIFECYCLE 24U
+#define RESOURCE_PHASE_LEASE_CAP \
+	(WORKFLOW_LIFECYCLE_CAP * \
+	 RESOURCE_PHASE_MAX_LEASES_PER_LIFECYCLE)
+#define RESOURCE_PHASE_REGISTRY_SLOT_NONE ((uint)-1)
+
+/* The controller owns the full lease record; callers hold only this token. */
+struct resource_phase_lease {
+	uint64 generation;
+	uint64 request_id;
+	uint node_id;
+	uint registry_slot;
+	enum resource_phase_lease_state state;
+};
+_Static_assert(sizeof(struct resource_phase_lease) == 32,
+	       "phase lease token must stay stack-small");
+
+/*
+ * Allocators claim locked U before publication.  A failed allocation refunds
+ * the claim to the lease; publication transfers the same U to the object,
+ * whose ordinary destructor later performs U -> F exactly once.
+ */
+struct resource_phase_claim {
+	struct resource_account_handle account;
+	uint64 lease_generation;
+	uint64 nonce;
+	enum resource_charge_class charge_class;
+	uint kind_mask;
+	uint64 amounts[RESOURCE_KIND_COUNT];
 	int active;
 };
 
@@ -144,6 +200,26 @@ int resource_acquire_many_flags(struct resource_account_handle,
 int resource_release_many(struct resource_account_handle,
 			  enum resource_charge_class,
 			  const struct resource_request *, uint);
+int resource_phase_lease_begin(
+	struct resource_phase_lease *, struct workflow_lifecycle_key,
+	struct resource_account_handle, struct resource_account_handle,
+	enum resource_charge_class,
+	const uint64 [RESOURCE_KIND_COUNT],
+	const uint64 [RESOURCE_KIND_COUNT], uint, uint64);
+int resource_phase_lease_activate(struct resource_phase_lease *, uint64);
+int resource_phase_lease_deactivate(struct resource_phase_lease *, uint64);
+int resource_phase_lease_settle(struct resource_phase_lease *, uint64);
+int resource_phase_lease_abort(struct resource_phase_lease *, uint64);
+struct thread;
+int resource_phase_thread_cleanup(struct thread *);
+int resource_phase_thread_can_block(struct thread *);
+struct proc;
+int resource_phase_process_cleanup(struct proc *);
+int resource_phase_claim_acquire(
+	struct resource_account_handle, enum resource_charge_class,
+	const struct resource_request *, uint, struct resource_phase_claim *);
+int resource_phase_claim_publish(struct resource_phase_claim *);
+int resource_phase_claim_refund(struct resource_phase_claim *);
 int resource_import_usage(struct resource_account_handle,
 			  enum resource_charge_class,
 			  const struct resource_request *, uint);

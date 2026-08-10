@@ -243,6 +243,22 @@ def main() -> int:
             "agent_unwatch",
             "return syscall(SYS_agent_unwatch, event_type, filter);",
         ),
+        (
+            "agent_execution_contract",
+            "return syscall(SYS_agent_execution_contract, control, result);",
+        ),
+        (
+            "agent_task_channel_setup",
+            "return syscall(SYS_agent_task_channel_setup, request, result);",
+        ),
+        (
+            "agent_task_channel_enter",
+            "return syscall(SYS_agent_task_channel_enter, request, result);",
+        ),
+        (
+            "agent_task_channel_resource",
+            "return syscall(SYS_agent_task_channel_resource, request, result);",
+        ),
     ):
         wrapper = dict(dependency_texts)
         wrapper["user/lib/syscall.c"] = _replace_once(
@@ -250,6 +266,16 @@ def main() -> int:
         )
         _reject_compile(wrapper)
         _reject_compile(wrapper, refresh_fingerprint=True)
+
+    tool_call_v3_forge = dict(dependency_texts)
+    tool_call_v3_forge["user/lib/syscall.c"] = _mutate(
+        tool_call_v3_forge["user/lib/syscall.c"],
+        "tool_call_v3",
+        "return syscall(SYS_tool_call, req, resp);",
+        "return 0;",
+    )
+    _reject_compile(tool_call_v3_forge)
+    _reject_compile(tool_call_v3_forge, refresh_fingerprint=True)
 
     build_redirect = dict(dependency_texts)
     build_redirect["Makefile"] = _replace_once(
@@ -400,6 +426,17 @@ def main() -> int:
     _reject_compile(python_shadow)
     _reject_compile(python_shadow, refresh_fingerprint=True)
 
+    task_validator_shadow = dict(dependency_texts)
+    task_validator_shadow["scripts/run-agent-tests.sh"] = _replace_once(
+        task_validator_shadow["scripts/run-agent-tests.sh"],
+        'if [[ "${init_proc}" == "agenttask_ucore" ]]; then\n'
+        '\t\t"${PYTHON_BIN}" -I -S -B scripts/validate-kernel-test-log.py',
+        'if [[ "${init_proc}" == "agenttask_ucore" ]]; then\n'
+        '\t\t"${PYTHON_BIN}" scripts/validate-kernel-test-log.py',
+    )
+    _reject_compile(task_validator_shadow)
+    _reject_compile(task_validator_shadow, refresh_fingerprint=True)
+
     duration_profile_shadow = dict(dependency_texts)
     duration_profile_shadow["scripts/run-agent-tests.sh"] = _replace_once(
         duration_profile_shadow["scripts/run-agent-tests.sh"],
@@ -437,12 +474,17 @@ def main() -> int:
     assert actual_include_closure == compile_contract.EXPECTED_INCLUDE_CLOSURE
     kernel_include_closure = compile_contract.resolve_kernel_include_closure(ROOT)
     new_kernel_sources = {
+        "os/agent_execution_contract.c",
         "os/agent_evidence_ring.c",
         "os/agent_live_query_compat.c",
         "os/agent_live_query_events.c",
+        "os/agent_provenance.c",
         "os/agent_sha256.c",
+        "os/agent_task_bridge.c",
+        "os/agent_task_channel.c",
         "os/agent_workflow_fence.c",
         "os/workflow_credit_domain.c",
+        "os/workflow_scheduler.c",
     }
     assert new_kernel_sources <= set(compile_contract.KERNEL_TRANSLATION_UNIT_PATHS)
     assert not (
@@ -748,14 +790,14 @@ def main() -> int:
     commit = "a" * 40
     receipt = build_measurement_source_receipt(ROOT, source_commit=commit)
     assert CONTRACT_VERSION == "agenteval-measurement-source-v12"
-    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v7"
+    assert POLICY_INVENTORY_SCHEMA == "agentos-evaluation-policy-inventory-v8"
     assert FORMAL_BOOT_COUNT == 1
     assert receipt["formal_boot_count"] == FORMAL_BOOT_COUNT
     assert receipt["contract_versions"]["functional"] == (
         "agentos-functional-acceptance-source-v4"
     )
     assert receipt["contract_versions"]["functional_compile"] == (
-        "agentos-functional-compile-closure-v5"
+        "agentos-functional-compile-closure-v6"
     )
     assert receipt["stop_rule"] == "fixed_1_boots_per_source_commit"
     validate_measurement_source_receipt_shape(receipt, expected_commit=commit)
@@ -785,6 +827,8 @@ def main() -> int:
         "scripts/check-user-stack-contract.py",
         "scripts/test-check-user-stack-contract.py",
         "scripts/check-traditional-io-fastpath.py",
+        "scripts/test-traditional-io-fastpath.py",
+        "scripts/test-trap-callgraph-separation.py",
     }
     workflow_domain_paths = {
         "agent_workflow_fence_abi.h",
@@ -812,6 +856,50 @@ def main() -> int:
         "scripts/probes/agent-uapi-layout.c",
         "host_tools/evidence_semantic_metadata.py",
         "ci/agent-uapi-layout.json",
+    }
+    agent_feature_paths = {
+        "agent_execution_contract_abi.h",
+        "agent_provenance_abi.h",
+        "agent_task_channel_abi.h",
+        "os/agent_core.c",
+        "os/agent_context.c",
+        "os/agent_execution_contract.c",
+        "os/agent_execution_contract.h",
+        "os/agent_ipc.c",
+        "os/agent_observe.c",
+        "os/agent_provenance.c",
+        "os/agent_provenance.h",
+        "os/proc.c",
+        "os/resource_controller.c",
+        "os/resource_controller.h",
+        "os/syscall.c",
+        "os/agent_task_bridge.c",
+        "os/agent_task_bridge.h",
+        "os/agent_task_channel.c",
+        "os/agent_task_channel.h",
+        "os/workflow_scheduler.c",
+        "os/workflow_scheduler.h",
+        "user/src/agentcontract_ucore.c",
+        "user/src/agenttask_ucore.c",
+        "user/src/agent_eevdf_ucore.c",
+        "host_tools/agent_task_transport.py",
+        "host_tools/test_agent_task_transport.py",
+        "host_tools/mcp_a2a_gateway.py",
+        "host_tools/test_mcp_a2a_gateway.py",
+        "host_tools/test_workflow_scheduler_model.py",
+        "host_tools/test_capture_final_evidence.py",
+        "scripts/test-agent-direct-denial-evidence.py",
+        "scripts/test-agent-direct-syscall-provenance.py",
+        "scripts/test-agent-provenance-monotonicity.py",
+        "scripts/test-agent-execution-contract.py",
+        "scripts/test-agent-feature-guest-wiring.py",
+        "scripts/test-agent-task-channel.py",
+        "scripts/test-context-evidence-atomicity.py",
+        "scripts/test-context-snapshot-reader-atomicity.py",
+        "scripts/validate-kernel-test-log.py",
+        "scripts/run-agent-tests.sh",
+        "scripts/run-parallel-qemu-regressions.py",
+        "scripts/test-parallel-qemu-regressions.py",
     }
     retired_production_paths = {
         "os/agent_durable_section.c",
@@ -855,6 +943,7 @@ def main() -> int:
     assert batch_paths <= inventory_paths
     assert acceptance_contract_paths <= inventory_paths
     assert workflow_domain_paths <= inventory_paths
+    assert agent_feature_paths <= inventory_paths
     assert not (retired_production_paths & inventory_paths)
     assert not (retired_policy_paths & inventory_paths)
     assert not (
@@ -865,7 +954,7 @@ def main() -> int:
     )
     for path in (
         teardown_paths | batch_paths | acceptance_contract_paths
-        | workflow_domain_paths
+        | workflow_domain_paths | agent_feature_paths
     ):
         forged = json.loads(json.dumps(receipt))
         next(record for record in forged["sources"] if record["path"] == path)[

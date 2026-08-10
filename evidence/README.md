@@ -16,6 +16,9 @@
 make full-verify
 make evaluation-full-verify
 make evaluation-package
+git add evidence/releases/<bundle> evidence/releases/INDEX.md
+git commit -m "发布正式评价证据 <bundle>"
+# 在包含该证据提交的干净 checkout 中：
 make evaluation-package-verify EVALUATION_BUNDLE_DIR=evidence/releases/<bundle>
 ```
 

@@ -2,8 +2,11 @@
 #define USER_AGENT_H
 
 #include <stddef.h>
+#include "../../agent_execution_contract_abi.h"
+#include "../../agent_task_channel_abi.h"
 #include "../../agent_lifecycle_abi.h"
 #include "../../agent_performance_abi.h"
+#include "../../agent_provenance_abi.h"
 #include "../../agent_resource_abi.h"
 #include "../../agent_tool_abi.h"
 #include "../../agent_workflow_fence_abi.h"
@@ -701,7 +704,10 @@ struct agent_file_query_result {
 	int candidate_records;
 	/* 重建无效索引时实际访问的槽位数。 */
 	int index_rebuild_records;
-	int reserved;
+	union {
+		int reserved;
+		unsigned int provenance_labels;
+	};
 	uint64 query_ticks;
 	uint64 plan_reason;
 	uint64 fs_generation;
@@ -732,6 +738,18 @@ int agent_workflow_close(uint64 scope_id);
 int agent_workflow_lifecycle_info(
 	struct agent_workflow_lifecycle_info *info,
 	const struct agent_workflow_lifecycle_key *expected);
+int agent_execution_contract(
+	const struct agent_execution_contract_control *control,
+	struct agent_execution_contract_result *result);
+int agent_task_channel_setup(
+	const struct agent_task_channel_setup *request,
+	struct agent_task_channel_setup_result *result);
+int agent_task_channel_enter(
+	const struct agent_task_channel_enter *request,
+	struct agent_task_channel_enter_result *result);
+int agent_task_channel_resource(
+	const struct agent_task_channel_resource *request,
+	struct agent_task_channel_resource_result *result);
 int agent_resource_snapshot(struct agent_resource_snapshot *snapshot);
 int agent_performance_snapshot(struct agent_performance_snapshot *snapshot);
 int agent_scope_delegate_fd(int fd);
@@ -764,6 +782,7 @@ int agent_workflow_fence(const struct agent_workflow_fence_request *request,
 int agent_call(struct agent_request *req, struct agent_response *resp);
 int agent_tool_list(struct agent_tool_desc *out, int max);
 int sys_tool_call(struct agent_request_v2 *req, struct agent_response_v2 *resp);
+int tool_call_v3(struct agent_request_v3 *req, struct agent_response_v3 *resp);
 int sys_tool_list(struct agent_tool_desc_v2 *out, int max);
 int tool_call(struct agent_request_v2 *req, struct agent_response_v2 *resp);
 int tool_list(struct agent_tool_desc_v2 *out, int max);

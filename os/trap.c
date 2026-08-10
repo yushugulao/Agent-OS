@@ -27,15 +27,15 @@ void trap_init()
 	w_sie(r_sie() | SIE_SEIE | SIE_STIE | SIE_SSIE);
 }
 
-void unknown_trap()
+static void
+unknown_user_trap(void)
 {
 	errorf("unknown trap: %p, stval = %p", r_scause(), r_stval());
-	if ((r_sstatus() & SSTATUS_SPP) != 0)
-		panic("unknown supervisor trap");
 	exit(-1);
 }
 
-void devintr(uint64 cause)
+static int
+devintr(uint64 cause)
 {
 	int irq;
 	switch (cause) {
@@ -52,7 +52,7 @@ void devintr(uint64 cause)
 		} else {
 			kernel_work_request_resched();
 		}
-		break;
+		return 1;
 	case SupervisorExternal:
 		irq = plic_claim();
 		if (irq == UART0_IRQ) {
@@ -63,10 +63,9 @@ void devintr(uint64 cause)
 		}
 		if (irq)
 			plic_complete(irq);
-		break;
+		return 1;
 	default:
-		unknown_trap();
-		break;
+		return 0;
 	}
 }
 
@@ -80,7 +79,8 @@ void usertrap()
 
 	uint64 cause = r_scause();
 	if (cause & (1ULL << 63)) {
-		devintr(cause & 0xff);
+		if (!devintr(cause & 0xff))
+			unknown_user_trap();
 		/*
 		 * 时钟驱动的维护输入输出必须借用真实的已调度线程。每次用户态时钟
 		 * 中断最多执行一个检查点，使计算密集进程也能推进后台任务，同时
@@ -114,7 +114,7 @@ void usertrap()
 			exit(-3);
 			break;
 		default:
-			unknown_trap();
+			unknown_user_trap();
 			break;
 		}
 	}
@@ -125,6 +125,12 @@ void usertrapret()
 {
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
+	if (agent_task_deadline_due_current()) {
+		kernel_work_begin_background();
+		if (agent_task_deadline_checkpoint() < 0)
+			agent_background_request();
+		kernel_work_end_background();
+	}
 	kernel_stack_check(curr_thread());
 	w_stvec(((uint64)TRAMPOLINE + (uservec - trampoline)) & ~0x3);
 	struct trapframe *trapframe = curr_thread()->trapframe;
@@ -160,7 +166,11 @@ void kerneltrap()
 		panic("kerneltrap: not from supervisor mode");
 
 	if (scause & (1ULL << 63)) {
-		devintr(scause & 0xff);
+		if (!devintr(scause & 0xff)) {
+			errorf("unknown trap: %p, stval = %p", scause,
+			       r_stval());
+			panic("unknown supervisor trap");
+		}
 	} else {
 		errorf("invalid trap from kernel: %p, stval = %p sepc = %p\n",
 		       scause, r_stval(), sepc);

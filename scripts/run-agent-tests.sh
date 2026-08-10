@@ -258,6 +258,56 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agentloop_ucore: heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1"
 		;;
+	agentcontract_ucore)
+		require_exact_case_marker "${log_file}" \
+			"agentcontract_ucore: dag24=1 lifecycle=1 schema=1 capability=1"
+		require_exact_case_marker "${log_file}" \
+			"agentcontract_ucore: dependency_sequence=1 provenance_file=1 provenance_cross_agent=1"
+		require_exact_case_marker "${log_file}" \
+			"agentcontract_ucore: planned_effect=1 unplanned_effect_denied=1 evidence=1"
+		require_exact_case_marker "${log_file}" \
+			"agentcontract_ucore: replay=1 retry=1 deadline=1 phase_atomic=1 phase_zero_leak=1"
+		require_exact_case_marker "${log_file}" \
+			"agentcontract_ucore: legacy_v2=1 enforce_bypass_denied=1"
+		;;
+	agent_eevdf_ucore)
+		require_exact_case_marker "${log_file}" \
+			"agent_eevdf_ucore: topology one_way=bootstrap four_way=bootstrap+3fresh amplification=bootstrap_peer+fresh4thread+2fresh_peers"
+		require_exact_case_marker "${log_file}" \
+			"agent_eevdf_ucore: wake_bucket_map=0:le1,1:le2,2:le8,3:gt8 p50_p99=histogram_approx probes=fresh_agents_only"
+		require_exact_case_marker "${log_file}" \
+			"agent_eevdf_ucore: thread_amplification scenario=44 amplified_threads=4 fresh_peers=2 bootstrap_peers=1 accounting=workflow"
+		require_exact_case_marker "${log_file}" \
+			"agent_eevdf_ucore: sixteen_arrivals=1 logical_samples=16 concurrency_cap=4 bootstrap_samples=4 fresh_samples=12 initial_fresh_attempts=15 initial_admitted=3 stable_no_space=12 waves=4 retry_policy=retry_only"
+		;;
+	agenttask_ucore)
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: perf_contract=steady_state_n16 quantiles=nearest_rank sample_semantics=pre_effect_context_service_start interval_origin=sequence_start_boundary service_metric=service_start_tick_intervals sequence_metric=agent_info_boundary_elapsed_ticks wall_clock=unavailable raw_cycles=not_claimed syscall_source=guest_call_sites"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: perf_observers=agent_info:2 boundary_overhead=start_return+end_entry_included context_query:16 post_sequence_excluded=1 kernel_path_syscall_counter=unavailable"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: perf_excluded batch=lifecycle_info:1 scalar_v3=lifecycle_info:1+contract:2 sq_cq=lifecycle_info:1+contract:2+channel_setup:1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: sq_cq_copy_scope=sqe_private_copy+cqe_publish ack_clear_bytes=2048 user_ring_descriptor_bytes=4096 setup_abi_control_bytes=160 setup_copied_control_bytes=256"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: provider=synchronous_echo running_cancel_latency=unavailable terminal_pending_saturation=unavailable"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: perf_fp path=batch value=31"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: perf_fp path=scalar_v3 value=31"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: perf_fp path=sq_cq value=31"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: cq_full=1 backpressure=1 pending_preserved=1 recovery_enter_calls=2 resync_recovery=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: setup=1 single_issuer=1 resource_import_denied=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: submit=1 cq_ack=1 monotonic=1 resync=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: target_cancel_exactly_once=1 hard_deadline=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: batch_fp=31 scalar_v3_fp=31 task_fp=31"
+		;;
 	agentfinal_ucore)
 		require_exact_case_marker "${log_file}" \
 			"agentfinal_ucore: context_ro_mapping=1 low_agent_fault=-2 public_unmapped_fault=-2"
@@ -489,6 +539,14 @@ run_case() {
 			--tag "wait-atomic" \
 			--profile wait-atomic
 	fi
+	if [[ "${init_proc}" == "agent_eevdf_ucore" ||
+	      "${init_proc}" == "agenttask_ucore" ]]; then
+		"${PYTHON_BIN}" -I -S -B scripts/validate-kernel-test-log.py \
+			--log-file "${log_file}" \
+			--tag "${init_proc}" \
+			--profile agent-case \
+			--case "${init_proc}"
+	fi
 	check_case_contract "${init_proc}" "${log_file}" \
 		"${context_sync_profile}"
 	echo "[agent-tests] ${init_proc} passed"
@@ -538,6 +596,9 @@ run_case agentsched_ucore "agentsched_ucore: parent passed"
 run_case agentconflict_ucore "agentconflict_ucore: parent passed"
 run_case agentllm_ucore "agentllm_ucore: parent passed"
 run_case agentbench_ucore "agentbench_ucore: parent passed"
+run_case agentcontract_ucore "agentcontract_ucore: parent passed"
+run_case agent_eevdf_ucore "agent_eevdf_ucore: parent passed"
+run_case agenttask_ucore "agenttask_ucore: parent passed"
 run_case ch8_cow_ucore "ch8_cow_ucore: passed"
 run_case labdemo_ucore "labdemo_ucore: parent passed"
 run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
@@ -551,8 +612,8 @@ run_case usersafety_ucore "usersafety_ucore: parent passed"
 run_case blocking_semantics_ucore "blocking_semantics_ucore: parent passed"
 
 if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-	if [[ "${calibration_case_ordinal}" != "18" ]]; then
-		echo "[agent-tests] calibration did not execute exactly 18 cases" >&2
+	if [[ "${calibration_case_ordinal}" != "21" ]]; then
+		echo "[agent-tests] calibration did not execute exactly 21 cases" >&2
 		exit 1
 	fi
 	"${PYTHON_BIN}" -I -S -B scripts/agent_test_calibration.py derive-round \

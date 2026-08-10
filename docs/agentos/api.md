@@ -49,7 +49,7 @@ int agent_workflow_lifecycle_info(
     const struct agent_workflow_lifecycle_key *expected);
 ```
 
-ABI 版本为 2，结构体 64 字节。返回当前进程是否 charged、`id + generation`、Context lane/metadata transaction 状态以及 exec resource account handle。它只是观测数据，不是可转让凭据。传入 `expected` 时执行 generation-safe 比较。
+当前 ABI 版本为 3，结构体 216 字节。前 64 字节与 V2 完全一致，返回当前进程是否 charged、`id + generation`、Context lane/metadata transaction 状态以及 exec resource account handle；旧调用者仍可提交 `version=2, struct_size=64`。V3 追加 workflow EEVDF 的 mode/flags、latency class、weight、runnable、request/remaining、lag、vruntime/virtual deadline、dispatch/service、sleep decay、eligibility miss、fallback、deadline miss、最大唤醒延迟和四档唤醒直方图。字段描述当前被查询 workflow；评价中的直方图和 p50/p99 汇总只纳入 fresh-agent 样本，不把复用的 bootstrap participant 混入。它只是观测数据，不是可转让凭据。传入 `expected` 时执行 generation-safe 比较。
 
 ### 2.3 全局资源快照
 
@@ -58,6 +58,28 @@ int agent_resource_snapshot(struct agent_resource_snapshot *snapshot);
 ```
 
 版本 1，结构体 488 字节，覆盖 8 类全局 policy 的 capacity、used、pending 和 ordinary/reserved 分类。它是管理/验证视图，不直接导出某个 workflow 的 F credit；workflow cut 的精确 U 由 fence receipt 提供。
+
+### 2.4 Execution Contract
+
+```c
+int agent_execution_contract(
+    const struct agent_execution_contract_control *control,
+    struct agent_execution_contract_result *result);
+```
+
+版本 1 支持 `CREATE/QUERY/RETIRE`。每个 lifecycle generation 最多冻结一份合同，最多 24 个 `struct agent_execution_contract_node`。创建时：
+
+- `node_id` 必须等于数组下标，predecessor bit 只能引用更小下标；
+- tool id、32 字节 schema digest、capability、accepted/output provenance 和 side-effect mask 必须与内核 manifest 相容；
+- exec/storage envelope 必须非零且 charge class 必须与进程资源 class 一致；
+- deadline、input/output artifact、max attempts、retry/cancel policy 必须在固定枚举内；
+- `ENFORCE` 合同冻结后，合同外工具和受保护 direct syscall 在副作用前拒绝。
+
+result 返回 contract key/fingerprint、状态、node masks、denial/replay 计数。合同 generation、lifecycle generation 或 request id 过期返回 `STALE/CONFLICT`，不会自动替换现有合同。
+
+### 2.5 Workflow EEVDF 边界
+
+EEVDF 没有向用户暴露“直接选择下一个 workflow”的控制 syscall。event、heartbeat/wait deadline 和进程状态由内核归并为 latency/deadline 输入；公平份额按 workflow resource domain 而不是线程记账。当前同时跟踪的总上限为 4，固定包含 1 个 `BOOT_SEALED` bootstrap participant，因此最多还能容纳 3 个 fresh workflow；异常回退旧调度器。4-way 测量是 bootstrap+3 fresh，线程放大测量是 1 个 fresh 4-thread workflow 对 2 个 fresh single-thread workflow 加 bootstrap peer。所谓 16-workflow 场景实际是 16 个逻辑样本：四波复用同一 bootstrap，并创建合计 12 个 fresh lifecycle；它不是 16 个实体并发、每波 4 个 fresh，也不代表 16 个彼此独立的 lifecycle。
 
 ## 3. Workflow fence
 
@@ -271,10 +293,69 @@ int agent_run(struct agent_op *ops, struct agent_result *results,
               int count, uint64 flags);
 int tool_call(struct agent_request_v2 *req,
               struct agent_response_v2 *resp);
+int tool_call_v3(struct agent_request_v3 *req,
+                 struct agent_response_v3 *resp);
 int tool_list(struct agent_tool_desc_v2 *out, int max);
 ```
 
 普通批处理要求 count 和 flags 符合 `agent_run` 合同。工具目录、typed KV 版本、参数类型、必要字段和 capability 都由内核校验。workflow fence 是 count 0 的独立控制路径，不会被工具 dispatcher 当作空批次成功。
+
+### 8.1 Contract-bound V3
+
+V3 请求的前 72 字节与 V2 完全一致，完整结构为 200 字节；V3 响应的前 184 字节与 V2 一致，完整结构为 280 字节。新增字段绑定：
+
+| 字段 | 验证 |
+| --- | --- |
+| `contract` | lifecycle + immutable contract generation |
+| `node_id/attempt_id` | 合同节点、attempt 上限、retry/cancel policy |
+| `source_node_id` | 必须是 declared predecessor；root 使用 `NODE_NONE` |
+| `source_context_sequence` | 必须精确等于该 predecessor 已提交的 Context sequence；root 为 0 |
+| `schema_digest` | 完整 32 字节，与冻结 manifest 相同 |
+| `input_fingerprint` | domain-separated SHA-256，覆盖 tool/arg/flags/payload |
+| artifact type | 必须与合同节点输入/输出声明一致 |
+
+响应追加 evidence ticket、decision reason、completion flags 和 output provenance labels。已完成节点的同内容重试返回 `CACHED` 原终态，不重新执行副作用。deadline/dependency/cancel/phase/provenance 拒绝均在工具效果前形成 Context/Evidence 终态。
+
+### 8.2 Provenance manifest
+
+固定来源位为：
+
+```text
+KERNEL_FACT, TRUSTED_USER_CONTROL, AGENT_DERIVED,
+UNTRUSTED_FILE_DATA, UNTRUSTED_TOOL_OUTPUT, CROSS_AGENT_DATA
+```
+
+manifest 固定 accepted input、output-added labels、required capabilities 和 file/metadata/IPC/process/permission/artifact/watch side effects。Context flags hash-bind 标签，file query、tool output 和 IPC 保守传播。外部副作用必须同时通过完整 lifecycle、contract edge、capability、manifest 和 provenance 检查；非法调用返回 `DENIED` 并写 critical Evidence。该接口不接受自由字符串标签，也不执行 prompt 内容分类。
+
+### 8.3 异步 Task Channel
+
+公共 ABI 在 `agent_task_channel_abi.h`，版本 1 使用三个独立 syscall：
+
+| syscall | 号 | 功能 |
+| --- | ---: | --- |
+| `agent_task_channel_setup()` | 563 | 按需建立 single-issuer channel，返回 SQ/CQ 地址和 generation |
+| `agent_task_channel_enter()` | 564 | 提交 SQ tail、确认 CQ head、drain 或 sticky resync |
+| `agent_task_channel_resource()` | 565 | import/release/query typed resource handle |
+
+setup 必须只携带 `SINGLE_ISSUER`，并绑定当前 Agent main thread 和完整 lifecycle。成功返回两个 mapped page（SQ read/write、CQ read-only）和两个 private page，共 4 页；SQ/CQ 容量均为 16，SQE/CQE 均为 128 字节。
+
+SQE 必须使用严格递增 request id，并携带 ring/slot generation、contract/node/attempt/tool、deadline、link target、input handle 和 32 字节 schema digest。内核只读取共享 entry 一次，复制完整 128 字节后才验证。CQE 返回唯一 target terminal status、result handle、Context sequence、Evidence ticket、provenance 和 completion tick；公共 `completion_tick` 在执行结果确定后采样，不表示 pre-effect service start。
+
+`CANCEL` 是 target-only SQ command：它有自己的单调 request id，但只引用 target `link_request_id`，不产生第二个 CQE。accepted target 在成功/失败/取消/timeout 中只能发布一个 terminal CQE；这不等于对远程副作用提供分布式 exactly-once。timer IRQ 只设置 `DEADLINE_DUE` 并尽力唤醒 generation-matched issuer，TIMEOUT/Context/Evidence 到该进程第一个可调度 safe point 才结算；不可中断睡眠或 provider 停滞没有 wall-clock completion bound。CQ full 只造成 backpressure。协议水位异常设置 sticky `RESYNC`，issuer 必须显式 enter 恢复。
+
+typed handle 固定 16 字节 `{slot, type, flags, generation}`，私有 capacity 为 8。ABI 与 generation/producer/digest/provenance/owner 重验已实现，但当前发布切片不提供用户态资源导入或结果 payload backend：`RESOURCE_IMPORT` fail closed，provider 只接受 null input，CQE `result` 为 null；`BORROWED` 是保留 ABI。
+
+### 8.4 MCP/A2A gateway
+
+用户态 `host_tools/mcp_a2a_gateway.py` 映射 MCP `2026-07-28` 的 tools/list/call、Tasks get/update/cancel，以及 A2A v1 的 Task、Context、Message/Part、Artifact、stream/cancel。`mcp_task_notifications()` 单独生成通知，外层仍需实现 subscriptions/listen binding。当前 gateway 使用 deterministic in-memory transport 保存 lifecycle/contract/channel/request 绑定，尚无到内核 SQ/CQ 的 binary adapter；它不把 JSON、HTTP、OAuth、JWS 或远程持久化放入内核，也不是内核 MCP/A2A server。
+
+### 8.5 当前 Task Guest 测量字段
+
+`agenttask_ucore` 让 batch、scalar V3 和 SQ/CQ 各执行 16 次空 `ECHO` 并要求同一 OK/tool/Context-proof/evidence-proof/zero-result fingerprint，但不声称三者使用相同线格式。batch 使用清零 `agent_op`；scalar V3 必须显式携带 `payload=""` string、`arg0=0` uint64、`arg1=0` uint64 三个 typed params；SQ/CQ 使用 null input handle，三者的 output artifact 均为 `NONE`。legacy batch 以 Context record hash 满足 evidence-proof，contract-bound 路径使用 Evidence ticket。
+
+三者的 Guest 调用点 `syscalls` 分别为 1、16、2；边界 observer、事后 Context 查询和 setup 不计入这些数值。描述符 ABI/已知复制字节分别为 batch `3584 = 16 * (104 + 120)`、scalar V3 `12288 = 16 * (200 + 280 + 3 * 96)`、SQ/CQ `4096 = 16 * (128 + 128)`；scalar 另报 128 字节 dispatch header，SQ/CQ 另报 336 字节 control ABI 和 544 字节已知 control copy。它们由调用点与冻结 ABI 大小计算，不是内核路径 counter、实测总复制量或全部内存流量。
+
+Context record `tick` 是内核在工具效果前采样的 service start，不是 completion 或 CPU service 量。`service_start_interval_tick_p50/p99` 是这些 pre-effect tick 间隔的 nearest-rank 分位数；`sequence_elapsed_ticks` 来自两个 `agent_info` 边界 tick，包含边界开销。序列后的 Context 查询只读取既有记录且不计入 elapsed，公共 CQE `completion_tick` 也不参与 service-start 分位数。当前不报告 raw cycles 或 wall clock；cancel latency 仅测量对 retained terminal 的一次幂等 cancel，不代表同步 provider 已支持 running/pending cancel。
 
 ## 9. 安全兼容清单
 
@@ -288,6 +369,12 @@ int tool_list(struct agent_tool_desc_v2 *out, int max);
 | `.agentmeta` bank/journal/recovery | 不属于当前生产合同 |
 | typed live query | 支持，volatile，带 generation resync |
 | workflow fence | 支持，challenge-bound，320 字节 receipt |
+| scalar V2 / `agent_run()` batch | 保留；未启用 enforcement contract 时语义不变 |
+| V3 contract-bound call | 支持；保留 V2 prefix，绑定 24-node frozen contract |
+| lifecycle info V2 | 保留 64 字节 prefix；当前 V3 为 216 字节 |
+| Task Channel | 按需支持；16 槽、4 页、single issuer、sticky resync；当前 null payload，resource import fail closed |
+| MCP/A2A gateway | 用户态协议形状/in-memory 映射；尚无内核 binary adapter |
+| Wasm/WASI runtime | 不提供；typed handle 只参考 WIT ownership 语义 |
 
 ## 10. 验证
 
@@ -298,6 +385,11 @@ python -B scripts/test-workflow-fence.py
 python -B scripts/test-workflow-syscall-cut.py
 python -B scripts/test-agent-evidence-ring.py
 python -B scripts/test-agent-live-query-fs.py
+python -B scripts/test-agent-execution-contract.py
+python -B scripts/test-agent-task-channel.py
+python -B host_tools/test_workflow_scheduler_model.py
+python -B host_tools/test_agent_task_transport.py
+python -B host_tools/test_mcp_a2a_gateway.py
 make agent-module-check TOOLPREFIX=riscv-none-elf-
 ```
 

@@ -16,6 +16,7 @@ import struct
 import subprocess
 import tarfile
 import tempfile
+from contextlib import contextmanager
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
@@ -247,6 +248,40 @@ def expect_rejected(action, message: str) -> None:
         assert message in str(error), error
     else:
         raise AssertionError(f"accepted invalid evaluation bundle: {message}")
+
+
+@contextmanager
+def prevalidated_scenario_source(
+    expected_receipt: object,
+    expected_source_tree: Path,
+    expected_source_commit: str,
+):
+    original = bundle.verify_measurement_source_receipt
+    resolved_source_tree = expected_source_tree.resolve(strict=True)
+    calls = 0
+
+    def validate_preverified_source(
+        receipt: object,
+        source_tree: Path,
+        *,
+        expected_commit: str | None = None,
+    ) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        assert calls == 1
+        assert receipt == expected_receipt
+        assert source_tree.resolve(strict=True) == resolved_source_tree
+        assert expected_commit == expected_source_commit
+        return bundle.validate_measurement_source_receipt_shape(
+            receipt, expected_commit=expected_commit
+        )
+
+    bundle.verify_measurement_source_receipt = validate_preverified_source
+    try:
+        yield
+    finally:
+        bundle.verify_measurement_source_receipt = original
+        assert calls == 1
 
 
 def _write_test_archive(
@@ -1115,16 +1150,21 @@ def assert_image_replay_rejects_self_consistent_state_forgery(
         plan["report"]["sha256"] = digest(report_path)
         write_strict(plan_path, plan)
         assert digest(image_path) == original_image_sha256
-        expect_rejected(
-            lambda: bundle._verify_scenario_campaign(
-                run,
-                micro_campaign,
-                profile="formal",
-                source_tree=ROOT,
-                trusted_contract_root=ROOT,
-            ),
-            "final filesystem state bytes differ",
-        )
+        with prevalidated_scenario_source(
+            micro_campaign["measurement_source_receipt"],
+            ROOT,
+            micro_campaign["run"]["commit"],
+        ):
+            expect_rejected(
+                lambda: bundle._verify_scenario_campaign(
+                    run,
+                    micro_campaign,
+                    profile="formal",
+                    source_tree=ROOT,
+                    trusted_contract_root=ROOT,
+                ),
+                "final filesystem state bytes differ",
+            )
     finally:
         state_path.write_bytes(original_state)
         report_path.write_bytes(original_report)
@@ -1168,16 +1208,21 @@ def assert_image_budget_precedes_extraction(
     try:
         bundle.MAX_ARCHIVE_MEMBER_BYTES = image.stat().st_size - 1
         bundle.extract_state_files = forbidden_extractor
-        expect_rejected(
-            lambda: bundle._verify_scenario_campaign(
-                run,
-                micro_campaign,
-                profile="formal",
-                source_tree=ROOT,
-                trusted_contract_root=ROOT,
-            ),
-            "exceeds its budget",
-        )
+        with prevalidated_scenario_source(
+            micro_campaign["measurement_source_receipt"],
+            ROOT,
+            micro_campaign["run"]["commit"],
+        ):
+            expect_rejected(
+                lambda: bundle._verify_scenario_campaign(
+                    run,
+                    micro_campaign,
+                    profile="formal",
+                    source_tree=ROOT,
+                    trusted_contract_root=ROOT,
+                ),
+                "exceeds its budget",
+            )
     finally:
         bundle.MAX_ARCHIVE_MEMBER_BYTES = original_limit
         bundle.extract_state_files = original_extractor
@@ -1811,16 +1856,21 @@ def main() -> int:
         forged_scenario_preflight = json.loads(original_scenario_preflight)
         forged_scenario_preflight["binding_sha256"] = "0" * 64
         write_strict(scenario_preflight_path, forged_scenario_preflight)
-        expect_rejected(
-            lambda: bundle._verify_scenario_campaign(
-                formal_run,
-                micro_campaign,
-                profile="formal",
-                source_tree=ROOT,
-                trusted_contract_root=ROOT,
-            ),
-            "preflight receipt differs from its campaign",
-        )
+        with prevalidated_scenario_source(
+            micro_campaign["measurement_source_receipt"],
+            ROOT,
+            micro_campaign["run"]["commit"],
+        ):
+            expect_rejected(
+                lambda: bundle._verify_scenario_campaign(
+                    formal_run,
+                    micro_campaign,
+                    profile="formal",
+                    source_tree=ROOT,
+                    trusted_contract_root=ROOT,
+                ),
+                "preflight receipt differs from its campaign",
+            )
         scenario_preflight_path.write_bytes(original_scenario_preflight)
         forged_scenario = json.loads(json.dumps(scenario_plan))
         forged_scenario["measurement_source_receipt"]["sources"][0][
@@ -1832,16 +1882,21 @@ def main() -> int:
             encoding="ascii",
             newline="\n",
         )
-        expect_rejected(
-            lambda: bundle._verify_scenario_campaign(
-                formal_run,
-                micro_campaign,
-                profile="formal",
-                source_tree=ROOT,
-                trusted_contract_root=ROOT,
-            ),
-            "identity differs from the micro campaign",
-        )
+        with prevalidated_scenario_source(
+            micro_campaign["measurement_source_receipt"],
+            ROOT,
+            micro_campaign["run"]["commit"],
+        ):
+            expect_rejected(
+                lambda: bundle._verify_scenario_campaign(
+                    formal_run,
+                    micro_campaign,
+                    profile="formal",
+                    source_tree=ROOT,
+                    trusted_contract_root=ROOT,
+                ),
+                "identity differs from the micro campaign",
+            )
         forged_scenario = json.loads(json.dumps(scenario_plan))
         forged_scenario["platform"]["hardware"]["cpu_model"] += " alternate"
         forged_scenario["run"]["platform_sha256"] = _canonical_sha256(
@@ -1853,16 +1908,21 @@ def main() -> int:
             encoding="ascii",
             newline="\n",
         )
-        expect_rejected(
-            lambda: bundle._verify_scenario_campaign(
-                formal_run,
-                micro_campaign,
-                profile="formal",
-                source_tree=ROOT,
-                trusted_contract_root=ROOT,
-            ),
-            "identity differs from the micro campaign",
-        )
+        with prevalidated_scenario_source(
+            micro_campaign["measurement_source_receipt"],
+            ROOT,
+            micro_campaign["run"]["commit"],
+        ):
+            expect_rejected(
+                lambda: bundle._verify_scenario_campaign(
+                    formal_run,
+                    micro_campaign,
+                    profile="formal",
+                    source_tree=ROOT,
+                    trusted_contract_root=ROOT,
+                ),
+                "identity differs from the micro campaign",
+            )
         write_strict(scenario_plan_path, scenario_plan)
         scenario_preflight_path.write_bytes(original_scenario_preflight)
             # 对两种文件系统布局各测试一次真实提取器。随后用下方变异用例证明权威来源
@@ -2025,43 +2085,43 @@ def main() -> int:
                 path.write_bytes(original)
 
         scenario_report_path = formal_run / "scenario/report.json"
-        original_scenario_report = scenario_report_path.read_bytes()
-        try:
-            forged_report = json.loads(original_scenario_report)
-            forged_binding = forged_report["samples"][0]["binding"]
-            forged_binding["program_order"][0] = mutant_program
-            forged_binding.pop("sha256")
-            forged_binding["sha256"] = scenario_evidence._binding_sha256(
-                forged_binding, "scenario-sample-v1"
-            )
-            forged_report.pop("report_sha256")
-            forged_report["report_sha256"] = scenario_evidence._binding_sha256(
-                forged_report, "scenario-report-v2"
-            )
-            scenario_evidence._write_report(scenario_report_path, forged_report)
+        original_strict_json = bundle._strict_json
 
-            forged_scenario_plan = copy.deepcopy(scenario_plan)
-            forged_scenario_plan["report"]["sha256"] = digest(scenario_report_path)
-            write_strict(scenario_plan_path, forged_scenario_plan)
-            scenario_preflight_path.write_text(
-                format_preflight_receipt(forged_scenario_plan),
-                encoding="ascii",
-                newline="\n",
-            )
-            expect_rejected(
-                lambda: bundle._verify_scenario_campaign(
-                    formal_run,
-                    micro_campaign,
-                    profile="formal",
-                    source_tree=source_snapshot,
-                    trusted_contract_root=ROOT,
-                ),
-                "scenario sample 0 differs from source-C program manifests",
-            )
+        def inject_program_order_forgery(path: Path) -> dict[str, object]:
+            value = original_strict_json(path)
+            if path != scenario_report_path:
+                return value
+            forged_report = dict(value)
+            forged_samples = list(forged_report["samples"])
+            forged_sample = dict(forged_samples[0])
+            forged_binding = dict(forged_sample["binding"])
+            forged_program_order = list(forged_binding["program_order"])
+            forged_program_order[0] = mutant_program
+            forged_binding["program_order"] = forged_program_order
+            forged_sample["binding"] = forged_binding
+            forged_samples[0] = forged_sample
+            forged_report["samples"] = forged_samples
+            return forged_report
+
+        try:
+            bundle._strict_json = inject_program_order_forgery
+            with prevalidated_scenario_source(
+                original_receipt,
+                source_snapshot,
+                micro_campaign["run"]["commit"],
+            ):
+                expect_rejected(
+                    lambda: bundle._verify_scenario_campaign(
+                        formal_run,
+                        micro_campaign,
+                        profile="formal",
+                        source_tree=source_snapshot,
+                        trusted_contract_root=ROOT,
+                    ),
+                    "scenario sample 0 differs from source-C program manifests",
+                )
         finally:
-            scenario_report_path.write_bytes(original_scenario_report)
-            write_strict(scenario_plan_path, scenario_plan)
-            scenario_preflight_path.write_bytes(original_scenario_preflight)
+            bundle._strict_json = original_strict_json
 
         formal = root / "formal-bundle"
         formal_manifest = bundle.create_bundle(

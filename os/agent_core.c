@@ -1,7 +1,10 @@
 #include "agent.h"
 #include "agent_context.h"
+#include "agent_evidence_ring.h"
+#include "agent_execution_contract.h"
 #include "agent_identity_lease.h"
 #include "agent_internal.h"
+#include "agent_provenance.h"
 #include "fs_epoch.h"
 #include "agent_tool_protocol.h"
 #include "agent_workflow_fence.h"
@@ -30,6 +33,7 @@ struct agent_proc_snapshot {
 void agent_core_init(void)
 {
 	agent_tool_protocol_init();
+	agent_execution_contract_init();
 	agent_identity_init();
 	agent_lifecycle_init();
 	agent_metadata_init();
@@ -960,11 +964,195 @@ static int agent_tool_effect_committed(struct proc *p,
 	return capability != 0 && agent_identity_has_cap(p, capability);
 }
 
-static int agent_execute_one(struct proc *p, struct agent_op *op,
-			     struct agent_result *res, uint64 tick)
+static uint
+agent_execution_provenance_reason(uint execution_reason)
 {
+	switch (execution_reason) {
+	case AGENT_EXECUTION_REASON_STALE_LIFECYCLE:
+	case AGENT_EXECUTION_REASON_STALE_CONTRACT:
+		return AGENT_PROVENANCE_DENY_STALE_LIFECYCLE;
+	case AGENT_EXECUTION_REASON_CONTRACT_REQUIRED:
+		return AGENT_PROVENANCE_DENY_MISSING_CONTRACT;
+	case AGENT_EXECUTION_REASON_ILLEGAL_PREDECESSOR:
+	case AGENT_EXECUTION_REASON_SOURCE_SEQUENCE:
+		return AGENT_PROVENANCE_DENY_ILLEGAL_PREDECESSOR;
+	case AGENT_EXECUTION_REASON_CAPABILITY_MISSING:
+		return AGENT_PROVENANCE_DENY_CAPABILITY_MISSING;
+	default:
+		return AGENT_PROVENANCE_DENY_BAD_REQUEST;
+	}
+}
+
+static void
+agent_execution_provenance_request(
+	const struct agent_execution_claim *claim, const struct agent_op *op,
+	int bound, struct agent_provenance_request *request)
+{
+	memset(request, 0, sizeof(*request));
+	request->lifecycle = claim->lifecycle;
+	request->contract_generation = claim->contract_generation;
+	request->request_id = op->request_id;
+	/* Producer identity/labels were already qualified under the contract lock. */
+	request->source_context_sequence = bound ? 0 :
+		claim->source_context_sequence;
+	request->source_node_id = bound ? claim->source_node_id :
+		AGENT_EXECUTION_NODE_NONE;
+	request->target_node_id = bound ? claim->node_id :
+		AGENT_EXECUTION_NODE_NONE;
+	request->attempt_id = bound ? claim->attempt_id : 0;
+	memmove(request->input_fingerprint, claim->input_fingerprint,
+		sizeof(request->input_fingerprint));
+	request->declared_side_effect_mask = claim->manifest.side_effect_mask;
+	request->tool_id = op->tool_id;
+	if (bound) {
+		request->flags = AGENT_PROVENANCE_AUTH_F_BOUND_CONTRACT;
+		if (claim->edge_authorized)
+			request->flags |=
+				AGENT_PROVENANCE_AUTH_F_EDGE_AUTHORIZED;
+	}
+}
+
+static int
+agent_execution_security_denial(
+	struct proc *p, const struct agent_execution_claim *claim,
+	const struct agent_op *op, int bound, struct agent_result *res,
+	struct agent_execution_outcome *outcome)
+{
+	struct agent_provenance_request request;
+	struct agent_provenance_decision decision;
+	uint64 ticket = 0;
+	uint reason = agent_execution_provenance_reason(
+		claim->decision_reason);
+	int status;
+
+	memset(&decision, 0, sizeof(decision));
+	agent_execution_provenance_request(claim, op, bound, &request);
+	status = agent_provenance_prepare_denial(
+		&request, res->status == AGENT_STATUS_STALE ?
+			AGENT_STATUS_STALE : AGENT_STATUS_DENIED,
+		reason, agent_provenance_current_labels(p), &decision);
+	if (status == AGENT_STATUS_OK)
+		status = agent_provenance_append_security_denial(
+			p, &request, &decision, &ticket);
+	if (status != AGENT_STATUS_DENIED && status != AGENT_STATUS_STALE) {
+		res->status = status == AGENT_STATUS_NO_SPACE ?
+			AGENT_STATUS_NO_SPACE : AGENT_STATUS_RETRY;
+		agent_result_text(res, "security_evidence_unavailable");
+	} else {
+		res->status = status;
+	}
+	res->sequence = p->agent_call_count;
+	if (outcome != 0) {
+		outcome->decision_reason = claim->decision_reason;
+		outcome->evidence_ticket = ticket;
+		outcome->output_provenance_labels = decision.input_labels;
+	}
+	return 0;
+}
+
+int
+agent_execution_contract_gate_direct_syscall(
+	struct proc *p, int syscall_id, uint64 side_effect_mask,
+	struct agent_execution_direct_guard *guard)
+{
+	struct agent_provenance_request request;
+	struct agent_provenance_decision decision;
+	struct workflow_lifecycle_key lifecycle;
+	uint64 ticket = 0;
+	int status;
+
+	if (p == 0 || guard == 0 || syscall_id < 0 ||
+	    side_effect_mask == 0 ||
+	    (side_effect_mask & ~AGENT_SIDE_EFFECT_ALL) != 0)
+		return AGENT_STATUS_BAD_PARAM;
+	status = agent_execution_contract_direct_enter(p, guard);
+	if (status != AGENT_STATUS_DENIED)
+		return status;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (!p->is_agent) {
+		status = agent_evidence_append_direct_syscall_denial(
+			p, lifecycle, syscall_id, side_effect_mask, &ticket);
+		return status == 0 && ticket != 0 ? AGENT_STATUS_DENIED :
+			AGENT_STATUS_RETRY;
+	}
+	memset(&request, 0, sizeof(request));
+	request.lifecycle = lifecycle;
+	request.contract_generation =
+		agent_execution_contract_generation(lifecycle);
+	request.request_id = ((uint64)(uint)syscall_id << 48) |
+		((uint64)(uint)p->pid << 32) |
+		(uint)(p->agent_call_count + 1);
+	if (request.request_id == 0)
+		request.request_id = 1;
+	request.source_context_sequence = p->context_path_latest;
+	request.source_node_id = AGENT_EXECUTION_NODE_NONE;
+	request.target_node_id = AGENT_EXECUTION_NODE_NONE;
+	request.declared_side_effect_mask = side_effect_mask;
+	/* Direct syscalls occupy a disjoint positive tool-id namespace. */
+	request.tool_id = 0x40000000 | syscall_id;
+	status = agent_provenance_prepare_denial(
+		&request, AGENT_STATUS_DENIED,
+		AGENT_PROVENANCE_DENY_MISSING_CONTRACT,
+		agent_provenance_current_labels(p), &decision);
+	if (status == AGENT_STATUS_OK)
+		status = agent_provenance_append_security_denial(
+			p, &request, &decision, &ticket);
+	if (status != AGENT_STATUS_DENIED || ticket == 0)
+		return status == AGENT_STATUS_NO_SPACE ?
+			AGENT_STATUS_NO_SPACE : AGENT_STATUS_RETRY;
+	return AGENT_STATUS_DENIED;
+}
+
+static int
+agent_execution_append_terminal(
+	struct proc *p, struct agent_op *op, struct agent_result *res,
+	uint64 tick, int authority_effect, struct agent_execution_claim *claim,
+	struct agent_execution_outcome *outcome,
+	struct agent_evidence_context_reservation *reservation)
+{
+	uint64 evidence_ticket = 0;
 	int result;
 
+	if (claim->legacy)
+		return agent_context_append(
+			p, op, res, tick, authority_effect);
+	if (reservation == 0 || !reservation->active)
+		return -1;
+	result = agent_context_append_reserved_ticket(
+		p, op, res, tick, authority_effect, reservation,
+		&evidence_ticket);
+	if (result < 0 || evidence_ticket == 0)
+		return -1;
+	if (outcome != 0)
+		outcome->evidence_ticket = evidence_ticket;
+	agent_execution_contract_complete(claim, res, outcome);
+	return 0;
+}
+
+static int
+agent_execute_one(struct proc *p, struct agent_op *op,
+		      struct agent_result *res, uint64 tick,
+		      const struct agent_execution_binding *binding,
+		      uint64 request_deadline_tick, uint admission_policy_flags,
+		      struct agent_execution_outcome *outcome)
+{
+	struct agent_execution_claim claim;
+	struct agent_provenance_request provenance_request;
+	struct agent_provenance_decision provenance_decision;
+	struct agent_evidence_context_reservation evidence_reservation = { 0 };
+	struct resource_phase_lease phase_lease = { 0 };
+	struct resource_account_handle storage = resource_account_none();
+	enum agent_execution_admission admission;
+	enum agent_execution_effect_admission effect_admission;
+	int bound = binding != 0;
+	int phase_started = 0;
+	uint64 phase_generation = 0;
+	uint64 terminal_tick = tick;
+	int result = 0;
+	int status;
+
+	if (outcome != 0)
+		memset(outcome, 0, sizeof(*outcome));
 	op->payload[AGENT_OP_PAYLOAD_SIZE - 1] = 0;
 	agent_result_init(res, op);
 	if (agent_lifecycle_context_lane_enter(p) < 0) {
@@ -978,9 +1166,25 @@ static int agent_execute_one(struct proc *p, struct agent_op *op,
 		agent_lifecycle_context_lane_leave(p);
 		return -1;
 	}
-	if (agent_tool_protocol_flags(op->tool_id) & AGENT_TOOL_F_SYSCALL_ONLY) {
-		res->status = AGENT_STATUS_BAD_PARAM;
-		agent_result_text(res, "use_agent_wait_syscall");
+	admission = agent_execution_contract_admit(
+		p, binding, op, request_deadline_tick, admission_policy_flags,
+		tick, &claim, res, outcome);
+	if (bound && admission == AGENT_EXECUTION_ADMISSION_EXECUTE &&
+	    claim.input_provenance_labels != 0 &&
+	    agent_provenance_merge_current(
+		    p, claim.input_provenance_labels) != AGENT_STATUS_OK)
+		panic("contract input provenance merge");
+	if (outcome != 0 && admission != AGENT_EXECUTION_ADMISSION_CACHED) {
+		outcome->output_artifact_type = claim.output_artifact_type;
+		outcome->terminal_tick = terminal_tick;
+	}
+	if (admission == AGENT_EXECUTION_ADMISSION_DENIED) {
+		if (res->status == AGENT_STATUS_DENIED ||
+		    res->status == AGENT_STATUS_STALE) {
+			result = agent_execution_security_denial(
+				p, &claim, op, bound, res, outcome);
+			goto out;
+		}
 		p->agent_call_count++;
 		res->sequence = p->agent_call_count;
 		result = agent_context_append(p, op, res, tick, 0);
@@ -988,14 +1192,632 @@ static int agent_execute_one(struct proc *p, struct agent_op *op,
 			p->agent_call_count--;
 		goto out;
 	}
+	if (admission == AGENT_EXECUTION_ADMISSION_CACHED) {
+		if (outcome != 0)
+			outcome->completion_flags |= AGENT_RESPONSE_V3_F_CACHED;
+		goto out;
+	}
+	if (claim.deadline_expired || claim.dependency_failed) {
+		if (agent_evidence_context_reserve(
+			    p, &evidence_reservation) < 0) {
+			res->status = AGENT_STATUS_RETRY;
+			agent_result_text(res, "evidence_reservation_unavailable");
+			agent_execution_contract_abort(&claim);
+			goto out;
+		}
+		p->agent_call_count++;
+		res->sequence = p->agent_call_count;
+		res->status = claim.deadline_expired ?
+			AGENT_STATUS_TIMEOUT : AGENT_STATUS_CANCELLED;
+		agent_result_text(
+			res, claim.deadline_expired ?
+				"contract_deadline" : "dependency_failed");
+		if (outcome != 0) {
+			outcome->decision_reason = claim.decision_reason;
+			outcome->output_provenance_labels =
+				agent_provenance_current_labels(p);
+		}
+		result = agent_execution_append_terminal(
+			p, op, res, tick, 0, &claim, outcome,
+			&evidence_reservation);
+		if (result < 0) {
+			panic("reserved contract terminal evidence");
+		}
+		goto out;
+	}
+
+	agent_execution_provenance_request(
+		&claim, op, bound, &provenance_request);
+	status = agent_provenance_authorize_tool(
+		p, &provenance_request, &claim.manifest,
+		&provenance_decision);
+	if (status != AGENT_STATUS_OK) {
+		uint64 ticket = 0;
+
+		claim.decision_reason =
+			status == AGENT_STATUS_STALE ?
+				AGENT_EXECUTION_REASON_STALE_LIFECYCLE :
+				provenance_decision.reason ==
+					AGENT_PROVENANCE_DENY_ILLEGAL_PREDECESSOR ?
+					AGENT_EXECUTION_REASON_ILLEGAL_PREDECESSOR :
+				provenance_decision.reason ==
+					AGENT_PROVENANCE_DENY_CAPABILITY_MISSING ?
+					AGENT_EXECUTION_REASON_CAPABILITY_MISSING :
+					AGENT_EXECUTION_REASON_CONTRACT_INVALID;
+		res->status = status;
+		agent_result_text(res, "provenance_denied");
+		status = agent_provenance_append_security_denial(
+			p, &provenance_request, &provenance_decision, &ticket);
+		if (status != AGENT_STATUS_DENIED &&
+		    status != AGENT_STATUS_STALE) {
+			res->status = status == AGENT_STATUS_NO_SPACE ?
+				AGENT_STATUS_NO_SPACE : AGENT_STATUS_RETRY;
+			agent_result_text(res, "security_evidence_unavailable");
+		} else {
+			res->status = status;
+		}
+		res->sequence = p->agent_call_count;
+		if (outcome != 0) {
+			outcome->decision_reason = claim.decision_reason;
+			outcome->evidence_ticket = ticket;
+			outcome->output_provenance_labels =
+				provenance_decision.input_labels;
+		}
+		claim.retry_forbidden = 1;
+		if (ticket != 0 &&
+		    (res->status == AGENT_STATUS_DENIED ||
+		     res->status == AGENT_STATUS_STALE))
+			agent_execution_contract_complete(&claim, res, outcome);
+		else
+			agent_execution_contract_abort(&claim);
+		goto out;
+	}
+
+	if (agent_tool_protocol_flags(op->tool_id) &
+	    AGENT_TOOL_F_SYSCALL_ONLY) {
+		if (bound && agent_evidence_context_reserve(
+				     p, &evidence_reservation) < 0) {
+			res->status = AGENT_STATUS_RETRY;
+			agent_result_text(res, "evidence_reservation_unavailable");
+			agent_execution_contract_abort(&claim);
+			goto out;
+		}
+		res->status = AGENT_STATUS_BAD_PARAM;
+		agent_result_text(res, "use_agent_wait_syscall");
+		p->agent_call_count++;
+		res->sequence = p->agent_call_count;
+		result = agent_execution_append_terminal(
+			p, op, res, tick, 0, &claim, outcome,
+			bound ? &evidence_reservation : 0);
+		if (result < 0) {
+			if (bound)
+				panic("reserved syscall-only terminal evidence");
+			agent_execution_contract_abort(&claim);
+			if (p->context_path_latest != res->sequence)
+				p->agent_call_count--;
+		}
+		goto out;
+	}
+
+	if (bound && agent_evidence_context_reserve(
+			     p, &evidence_reservation) < 0) {
+		res->status = AGENT_STATUS_RETRY;
+		agent_result_text(res, "evidence_reservation_unavailable");
+		agent_execution_contract_abort(&claim);
+		goto out;
+	}
+	if (bound) {
+		if (fs_storage_owner_account(FS_OWNER_SCOPE(p->vfs_scope_id),
+					     &storage) < 0 ||
+		    resource_phase_lease_begin(
+			    &phase_lease, claim.lifecycle, p->resource_account,
+			    storage, (enum resource_charge_class)claim.charge_class,
+			    claim.exec_amounts, claim.storage_amounts,
+			    claim.node_id, op->request_id) < 0)
+			goto phase_denied;
+		phase_generation = phase_lease.generation;
+		if (phase_generation == 0 ||
+		    resource_phase_lease_activate(
+			    &phase_lease, phase_generation) < 0) {
+			if (phase_lease.state != RESOURCE_PHASE_LEASE_EMPTY &&
+			    resource_phase_lease_settle(
+				    &phase_lease, phase_generation) < 0)
+				panic("tool phase admission settle");
+			goto phase_denied;
+		}
+		phase_started = 1;
+		if (outcome != 0)
+			outcome->phase_lease_generation = phase_generation;
+	}
+	goto phase_admitted;
+
+phase_denied:
+		{
+			p->agent_call_count++;
+			res->sequence = p->agent_call_count;
+			claim.decision_reason =
+				AGENT_EXECUTION_REASON_PHASE_CREDIT;
+			res->status = AGENT_STATUS_NO_SPACE;
+			agent_result_text(res, "phase_credit_denied");
+			if (outcome != 0) {
+				outcome->decision_reason = claim.decision_reason;
+				outcome->output_provenance_labels =
+					agent_provenance_current_labels(p);
+			}
+			result = agent_execution_append_terminal(
+				p, op, res, tick, 0, &claim, outcome,
+				&evidence_reservation);
+			if (result < 0) {
+				panic("reserved phase-denial terminal evidence");
+			}
+			goto out;
+		}
+
+phase_admitted:
+	effect_admission = agent_execution_contract_effect_begin(&claim);
+	if (effect_admission == AGENT_EXECUTION_EFFECT_STALE) {
+		if (phase_started) {
+			if (resource_phase_lease_deactivate(
+				    &phase_lease, phase_generation) < 0)
+				panic("stale tool phase deactivate");
+			if (resource_phase_lease_settle(
+				    &phase_lease, phase_generation) < 0)
+				panic("stale tool phase settle");
+		}
+		if (!agent_execution_contract_claim_cached(
+			    &claim, res, outcome))
+			panic("tool effect claim stale");
+		if (outcome != 0)
+			outcome->completion_flags |= AGENT_RESPONSE_V3_F_CACHED;
+		goto out;
+	}
+	if (effect_admission == AGENT_EXECUTION_EFFECT_CANCELLED) {
+		if (phase_started) {
+			if (resource_phase_lease_deactivate(
+				    &phase_lease, phase_generation) < 0)
+				panic("cancelled tool phase deactivate");
+			if (resource_phase_lease_settle(
+				    &phase_lease, phase_generation) < 0)
+				panic("cancelled tool phase settle");
+		}
+		p->agent_call_count++;
+		res->sequence = p->agent_call_count;
+		res->status = AGENT_STATUS_CANCELLED;
+		agent_result_text(res, "cancelled_before_effect");
+		if (agent_provenance_commit_tool_output(
+			    p, &provenance_decision, res->status) !=
+		    AGENT_STATUS_OK)
+			panic("cancelled tool provenance commit");
+		if (outcome != 0) {
+			outcome->decision_reason = claim.decision_reason;
+			outcome->output_provenance_labels =
+				provenance_decision.output_labels;
+		}
+		result = agent_execution_append_terminal(
+			p, op, res, tick, 0, &claim, outcome,
+			bound ? &evidence_reservation : 0);
+		if (result < 0)
+			panic("reserved cancelled terminal evidence");
+		goto out;
+	}
 	p->agent_call_count++;
 	res->sequence = p->agent_call_count;
 	agent_execute_op(p, op, res);
-	result = agent_context_append(
-		p, op, res, tick, agent_tool_effect_committed(p, op, res));
-	if (result < 0)
-		p->agent_call_count--;
+	status = agent_tool_effect_committed(p, op, res);
+	if (phase_started) {
+		if (resource_phase_lease_deactivate(
+			    &phase_lease, phase_generation) < 0)
+			panic("tool phase deactivate");
+		if (resource_phase_lease_settle(
+			    &phase_lease, phase_generation) < 0)
+			panic("tool phase settle");
+	}
+	if (agent_provenance_commit_tool_output(
+		    p, &provenance_decision, res->status) != AGENT_STATUS_OK)
+		panic("tool provenance commit");
+	terminal_tick = agent_ticks();
+	if (outcome != 0)
+		outcome->terminal_tick = terminal_tick;
+	if (claim.deadline_tick != 0 &&
+	    terminal_tick >= claim.deadline_tick) {
+		res->status = AGENT_STATUS_TIMEOUT;
+		agent_result_text(res, "contract_deadline");
+		claim.decision_reason =
+			AGENT_EXECUTION_REASON_DEADLINE_EXPIRED;
+		claim.retry_forbidden = 1;
+	}
+	if (outcome != 0) {
+		outcome->decision_reason = claim.decision_reason;
+		outcome->output_provenance_labels =
+			provenance_decision.output_labels;
+	}
+	result = agent_execution_append_terminal(
+		p, op, res, tick, status, &claim, outcome,
+		bound ? &evidence_reservation : 0);
+	if (result < 0) {
+		if (bound)
+			panic("reserved tool terminal evidence");
+		if (p->context_path_latest != res->sequence)
+			p->agent_call_count--;
+	}
 out:
+	if (evidence_reservation.active)
+		agent_evidence_context_abort(&evidence_reservation);
+	agent_execution_contract_release(&claim);
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}
+
+int
+agent_execution_task_submit_sync(
+	struct proc *p, struct agent_op *op,
+	const struct agent_execution_binding *binding,
+	uint64 request_deadline_tick, uint admission_policy_flags,
+	struct agent_result *result, struct agent_execution_outcome *outcome)
+{
+	int status;
+
+	if (p == 0 || op == 0 || binding == 0 || result == 0 || outcome == 0)
+		return -1;
+	if ((binding->internal_flags &
+	     AGENT_EXECUTION_BINDING_INTERNAL_F_TASK_CHANNEL) == 0)
+		return -1;
+	if (!agent_evidence_context_preallocated(p, binding->lifecycle))
+		panic("accepted Task Evidence pages");
+	for (;;) {
+		if (agent_lifecycle_context_lane_enter_accepted_task(p) < 0)
+			panic("accepted Task context lane");
+		status = agent_execute_one(
+			p, op, result, agent_ticks(), binding,
+			request_deadline_tick, admission_policy_flags, outcome);
+		agent_lifecycle_context_lane_leave(p);
+		if ((result->status != AGENT_STATUS_RETRY &&
+		     result->status != AGENT_STATUS_NO_SPACE) ||
+		    outcome->evidence_ticket != 0)
+			break;
+		/*
+		 * Once the Channel accepts a request, exit requests cannot abandon it.
+		 * The Channel lifecycle token makes teardown wait; the Task-only lane
+		 * admission is released before yielding so Evidence publishers progress.
+		 */
+		if (!workflow_lifecycle_key_equal(
+			    vfs_proc_lifecycle(p), binding->lifecycle) ||
+		    !workflow_lifecycle_active(binding->lifecycle))
+			panic("accepted Task lost lifecycle");
+		yield();
+	}
+	if (outcome->evidence_ticket == 0)
+		panic("accepted Task without terminal evidence");
+	return status;
+}
+
+int
+agent_execution_cancel_sync(
+	struct proc *p, const struct agent_execution_cancel_request *request,
+	struct agent_result *res, struct agent_execution_outcome *outcome)
+{
+	struct agent_evidence_context_reservation reservation = { 0 };
+	struct agent_execution_claim claim;
+	struct agent_op op;
+	enum agent_execution_admission admission;
+	uint64 terminal_tick;
+	int append_status;
+	int result = AGENT_EXECUTION_CANCEL_SYNC_ERROR;
+
+	if (p == 0 || request == 0 || res == 0 || outcome == 0)
+		return AGENT_EXECUTION_CANCEL_SYNC_ERROR;
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION_V3;
+	op.tool_id = request->tool_id;
+	op.request_id = request->target_request_id;
+	op.arg0 = request->contract_generation;
+	op.arg1 = ((uint64)request->node_id << 32) | request->attempt_id;
+	safestrcpy(op.payload, "cancel", sizeof(op.payload));
+	agent_result_init(res, &op);
+	memset(outcome, 0, sizeof(*outcome));
+	if (agent_lifecycle_context_lane_enter(p) < 0) {
+		res->status = AGENT_STATUS_RETRY;
+		agent_result_text(res, "context_interrupted");
+		return AGENT_EXECUTION_CANCEL_SYNC_ERROR;
+	}
+	if (agent_context_append_prepare(p, p->agent_call_count + 1) < 0) {
+		res->status = AGENT_STATUS_RETRY;
+		agent_result_text(res, "context_sync_unavailable");
+		goto out;
+	}
+	terminal_tick = agent_ticks();
+	admission = agent_execution_contract_cancel(
+		p, request, terminal_tick, &claim, res, outcome);
+	if (admission == AGENT_EXECUTION_ADMISSION_CACHED) {
+		if (outcome->evidence_ticket == 0)
+			panic("cached cancel without evidence");
+		outcome->completion_flags |= AGENT_RESPONSE_V3_F_CACHED;
+		result = AGENT_EXECUTION_CANCEL_SYNC_COMPLETE;
+		goto out_release;
+	}
+	if (admission == AGENT_EXECUTION_ADMISSION_CANCEL_PENDING) {
+		result = AGENT_EXECUTION_CANCEL_SYNC_PENDING;
+		goto out_release;
+	}
+	if (admission == AGENT_EXECUTION_ADMISSION_DENIED &&
+	    (res->status == AGENT_STATUS_DENIED ||
+	     res->status == AGENT_STATUS_STALE)) {
+		(void)agent_execution_security_denial(
+			p, &claim, &op, 1, res, outcome);
+		result = outcome->evidence_ticket != 0 ?
+			AGENT_EXECUTION_CANCEL_SYNC_DENIED :
+			AGENT_EXECUTION_CANCEL_SYNC_ERROR;
+		goto out_release;
+	}
+	if (admission != AGENT_EXECUTION_ADMISSION_DENIED)
+		panic("unexpected cancel admission");
+	if (agent_evidence_context_reserve(p, &reservation) < 0) {
+		res->status = AGENT_STATUS_RETRY;
+		agent_result_text(res, "evidence_reservation_unavailable");
+		agent_execution_contract_abort(&claim);
+		result = AGENT_EXECUTION_CANCEL_SYNC_ERROR;
+		goto out_release;
+	}
+	p->agent_call_count++;
+	res->sequence = p->agent_call_count;
+	outcome->decision_reason = claim.decision_reason;
+	outcome->output_provenance_labels =
+		agent_provenance_current_labels(p);
+	append_status = agent_execution_append_terminal(
+		p, &op, res, terminal_tick, 0, &claim, outcome, &reservation);
+	if (append_status < 0)
+		panic("reserved cancel terminal evidence");
+	result = AGENT_EXECUTION_CANCEL_SYNC_DENIED;
+
+out_release:
+	if (reservation.active)
+		agent_evidence_context_abort(&reservation);
+	agent_execution_contract_release(&claim);
+out:
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}
+
+static __attribute__((noinline)) int
+agent_execution_preflight_denial(
+	struct proc *p, const struct agent_execution_binding *binding,
+	const struct agent_op *op, struct agent_execution_preflight_result *result)
+{
+	struct agent_provenance_request request;
+	struct agent_provenance_decision decision;
+	uint64 ticket = 0;
+	int status = result->status == AGENT_STATUS_STALE ?
+		AGENT_STATUS_STALE : AGENT_STATUS_DENIED;
+	uint reason = agent_execution_provenance_reason(
+		result->decision_reason);
+
+	memset(&request, 0, sizeof(request));
+	request.lifecycle = binding->lifecycle;
+	request.contract_generation = binding->contract_generation;
+	request.request_id = op->request_id;
+	request.source_node_id = binding->source_node_id;
+	request.target_node_id = binding->node_id;
+	request.attempt_id = binding->attempt_id;
+	memmove(request.input_fingerprint, binding->input_fingerprint,
+		sizeof(request.input_fingerprint));
+	request.tool_id = op->tool_id;
+	if (request.tool_id <= 0)
+		return AGENT_EXECUTION_PREFLIGHT_ERROR;
+	if (agent_provenance_prepare_denial(
+		    &request, status, reason,
+		    result->input_provenance_labels, &decision) !=
+	    AGENT_STATUS_OK)
+		return AGENT_EXECUTION_PREFLIGHT_ERROR;
+	status = agent_provenance_append_security_denial(
+		p, &request, &decision, &ticket);
+	if ((status != AGENT_STATUS_DENIED &&
+	     status != AGENT_STATUS_STALE) || ticket == 0) {
+		result->status = status == AGENT_STATUS_NO_SPACE ?
+			AGENT_STATUS_NO_SPACE : AGENT_STATUS_RETRY;
+		result->evidence_ticket = 0;
+		result->context_sequence = 0;
+		return AGENT_EXECUTION_PREFLIGHT_ERROR;
+	}
+	result->status = status;
+	result->input_provenance_labels = decision.input_labels;
+	result->output_provenance_labels = decision.output_labels;
+	result->context_sequence = p->agent_call_count;
+	result->evidence_ticket = ticket;
+	return AGENT_EXECUTION_PREFLIGHT_TERMINAL;
+}
+
+static __attribute__((noinline)) int
+agent_execution_preflight_terminal(
+	struct proc *p, const struct agent_op *op,
+	struct agent_execution_preflight_result *result, uint64 tick)
+{
+	struct agent_evidence_context_reservation reservation = { 0 };
+	struct agent_result terminal;
+	struct agent_op context_op;
+	uint64 ticket = 0;
+	int append_status;
+
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return AGENT_EXECUTION_PREFLIGHT_ERROR;
+	if (agent_context_append_prepare(p, p->agent_call_count + 1) < 0 ||
+	    agent_evidence_context_reserve(p, &reservation) < 0)
+		goto fail;
+	if (agent_provenance_merge_current(
+		    p, result->input_provenance_labels) != AGENT_STATUS_OK)
+		goto fail;
+	context_op = *op;
+	context_op.payload[AGENT_OP_PAYLOAD_SIZE - 1] = 0;
+	agent_result_init(&terminal, &context_op);
+	terminal.status = result->status;
+	agent_result_text(
+		&terminal, result->status == AGENT_STATUS_TIMEOUT ?
+			"contract_deadline" : "dependency_failed");
+	p->agent_call_count++;
+	terminal.sequence = p->agent_call_count;
+	append_status = agent_context_append_reserved_ticket(
+		p, &context_op, &terminal, tick, 0, &reservation, &ticket);
+	if (append_status < 0 || ticket == 0)
+		panic("preflight reserved terminal evidence");
+	result->context_sequence = terminal.sequence;
+	result->evidence_ticket = ticket;
+	result->output_provenance_labels =
+		agent_provenance_current_labels(p);
+	agent_lifecycle_context_lane_leave(p);
+	return AGENT_EXECUTION_PREFLIGHT_TERMINAL;
+
+fail:
+	if (reservation.active)
+		agent_evidence_context_abort(&reservation);
+	agent_lifecycle_context_lane_leave(p);
+	result->status = AGENT_STATUS_RETRY;
+	return AGENT_EXECUTION_PREFLIGHT_ERROR;
+}
+
+int
+agent_execution_task_preflight(
+	struct proc *p, const struct agent_execution_binding *binding,
+	const struct agent_op *op, uint64 request_deadline_tick, uint flags,
+	uint64 now, struct agent_execution_preflight_result *result)
+{
+	if (agent_execution_contract_preflight(
+		    p, binding, op, request_deadline_tick, flags, now, result) < 0)
+		return AGENT_EXECUTION_PREFLIGHT_ERROR;
+	if (result->status == AGENT_STATUS_OK)
+		return AGENT_EXECUTION_PREFLIGHT_ALLOW;
+	if (result->status == AGENT_STATUS_TIMEOUT ||
+	    result->status == AGENT_STATUS_CANCELLED)
+		return agent_execution_preflight_terminal(p, op, result, now);
+	if (result->status == AGENT_STATUS_RETRY ||
+	    result->status == AGENT_STATUS_NO_SPACE ||
+	    result->status == AGENT_STATUS_NOT_AGENT)
+		return AGENT_EXECUTION_PREFLIGHT_ERROR;
+	return agent_execution_preflight_denial(p, binding, op, result);
+}
+
+int
+agent_execution_force_cancel_sync(
+	struct proc *p, const struct agent_execution_cancel_request *request,
+	struct agent_result *res, struct agent_execution_outcome *outcome)
+{
+	struct agent_execution_claim claim;
+	struct agent_op op;
+	enum agent_execution_admission admission;
+	uint64 terminal_tick;
+
+	if (p == 0 || request == 0 || res == 0 || outcome == 0)
+		return AGENT_EXECUTION_FORCE_CANCEL_ERROR;
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION_V3;
+	op.tool_id = request->tool_id;
+	op.request_id = request->target_request_id;
+	op.arg0 = request->contract_generation;
+	op.arg1 = ((uint64)request->node_id << 32) | request->attempt_id;
+	safestrcpy(op.payload, "teardown_cancel", sizeof(op.payload));
+	agent_result_init(res, &op);
+	memset(outcome, 0, sizeof(*outcome));
+	terminal_tick = agent_ticks();
+	admission = agent_execution_contract_force_cancel(
+		p, request, terminal_tick, &claim, res, outcome);
+	if (admission == AGENT_EXECUTION_ADMISSION_CACHED) {
+		if (outcome->evidence_ticket == 0)
+			panic("force cancel cached without evidence");
+		outcome->completion_flags |= AGENT_RESPONSE_V3_F_CACHED;
+		return AGENT_EXECUTION_FORCE_CANCEL_CACHED;
+	}
+	if (admission == AGENT_EXECUTION_ADMISSION_CANCEL_PENDING)
+		return AGENT_EXECUTION_FORCE_CANCEL_PENDING;
+	if (admission != AGENT_EXECUTION_ADMISSION_DENIED)
+		return AGENT_EXECUTION_FORCE_CANCEL_ERROR;
+	if (res->status != AGENT_STATUS_STALE)
+		res->status = AGENT_STATUS_DENIED;
+	(void)agent_execution_security_denial(
+		p, &claim, &op, 1, res, outcome);
+	return outcome->evidence_ticket != 0 ?
+		AGENT_EXECUTION_FORCE_CANCEL_DENIED :
+		AGENT_EXECUTION_FORCE_CANCEL_ERROR;
+}
+
+int
+agent_execution_timeout_sync(
+	struct proc *p, const struct agent_execution_cancel_request *request,
+	uint64 request_deadline_tick, uint64 now, struct agent_result *res,
+	struct agent_execution_outcome *outcome)
+{
+	struct agent_evidence_context_reservation reservation = { 0 };
+	struct agent_execution_claim claim;
+	struct agent_op op;
+	enum agent_execution_admission admission;
+	int append_status;
+	int result = AGENT_EXECUTION_TIMEOUT_SYNC_ERROR;
+
+	if (p == 0 || request == 0 || res == 0 || outcome == 0 ||
+	    request_deadline_tick == 0 || now == 0)
+		return AGENT_EXECUTION_TIMEOUT_SYNC_ERROR;
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION_V3;
+	op.tool_id = request->tool_id;
+	op.request_id = request->target_request_id;
+	op.arg0 = request->contract_generation;
+	op.arg1 = ((uint64)request->node_id << 32) | request->attempt_id;
+	safestrcpy(op.payload, "deadline", sizeof(op.payload));
+	agent_result_init(res, &op);
+	memset(outcome, 0, sizeof(*outcome));
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return AGENT_EXECUTION_TIMEOUT_SYNC_ERROR;
+	if (agent_context_append_prepare(p, p->agent_call_count + 1) < 0 ||
+	    agent_evidence_context_reserve(p, &reservation) < 0)
+		goto out;
+	admission = agent_execution_contract_timeout(
+		p, request, request_deadline_tick, now, &claim, res, outcome);
+	if (admission == AGENT_EXECUTION_ADMISSION_CACHED) {
+		if (outcome->evidence_ticket == 0 ||
+		    res->status != AGENT_STATUS_TIMEOUT)
+			panic("cached timeout without evidence");
+		outcome->completion_flags |= AGENT_RESPONSE_V3_F_CACHED;
+		result = AGENT_EXECUTION_TIMEOUT_SYNC_CACHED;
+		goto out;
+	}
+	if (admission == AGENT_EXECUTION_ADMISSION_CANCEL_PENDING) {
+		result = AGENT_EXECUTION_TIMEOUT_SYNC_PENDING;
+		goto out;
+	}
+	if (admission == AGENT_EXECUTION_ADMISSION_EXECUTE) {
+		if (agent_provenance_merge_current(
+			    p, claim.input_provenance_labels) != AGENT_STATUS_OK)
+			panic("timeout provenance merge");
+		p->agent_call_count++;
+		res->sequence = p->agent_call_count;
+		res->status = AGENT_STATUS_TIMEOUT;
+		agent_result_text(res, "contract_deadline");
+		outcome->decision_reason =
+			AGENT_EXECUTION_REASON_DEADLINE_EXPIRED;
+		outcome->terminal_tick = now;
+		outcome->output_artifact_type = claim.output_artifact_type;
+		outcome->output_provenance_labels =
+			agent_provenance_current_labels(p);
+		append_status = agent_execution_append_terminal(
+			p, &op, res, now, 0, &claim, outcome, &reservation);
+		if (append_status < 0)
+			panic("reserved timeout terminal evidence");
+		result = AGENT_EXECUTION_TIMEOUT_SYNC_COMPLETE;
+		goto out;
+	}
+	if (admission != AGENT_EXECUTION_ADMISSION_DENIED)
+		goto out;
+	if (reservation.active)
+		agent_evidence_context_abort(&reservation);
+	agent_lifecycle_context_lane_leave(p);
+	if (res->status != AGENT_STATUS_STALE)
+		res->status = AGENT_STATUS_DENIED;
+	(void)agent_execution_security_denial(
+		p, &claim, &op, 1, res, outcome);
+	return outcome->evidence_ticket != 0 ?
+		AGENT_EXECUTION_TIMEOUT_SYNC_DENIED :
+		AGENT_EXECUTION_TIMEOUT_SYNC_ERROR;
+
+out:
+	if (reservation.active)
+		agent_evidence_context_abort(&reservation);
 	agent_lifecycle_context_lane_leave(p);
 	return result;
 }
@@ -1155,7 +1977,6 @@ int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)
 	struct workflow_lifecycle_key lifecycle;
 	struct agent_op op;
 	struct agent_result res;
-	uint64 tick;
 	int status = 0;
 
 	if (!p->is_agent)
@@ -1212,7 +2033,6 @@ int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)
 	if (workflow_lifecycle_key_valid(lifecycle) &&
 	    workflow_lifecycle_operation_enter(lifecycle) < 0)
 		return -1;
-	tick = agent_ticks();
 	agent_identity_thread_loop_set(t, AGENT_LOOP_RUNNING);
 	for (int i = 0; i < count; i++) {
 		struct bio_checkpoint_result checkpoint;
@@ -1223,7 +2043,7 @@ int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)
 			status = -1;
 			break;
 		}
-		if (agent_execute_one(p, &op, &res, tick) < 0 ||
+		if (agent_execute_one(p, &op, &res, agent_ticks(), 0, 0, 0, 0) < 0 ||
 		    copyout(p->pagetable,
 			    resultsaddr + i * sizeof(struct agent_result),
 			    (char *)&res, sizeof(res)) < 0) {
@@ -1323,7 +2143,7 @@ int sys_agent_call(uint64 reqaddr, uint64 respaddr)
 		return copyout(p->pagetable, respaddr, (char *)&resp,
 			       sizeof(resp));
 	}
-	if (agent_execute_one(p, &op, &res, agent_ticks()) < 0)
+	if (agent_execute_one(p, &op, &res, agent_ticks(), 0, 0, 0, 0) < 0)
 		res.status = AGENT_STATUS_NO_SPACE;
 	if (workflow_lifecycle_key_valid(lifecycle))
 		workflow_lifecycle_operation_leave(lifecycle);
@@ -1339,7 +2159,234 @@ int sys_agent_call(uint64 reqaddr, uint64 respaddr)
 	return copyout(p->pagetable, respaddr, (char *)&resp, sizeof(resp));
 }
 
-int sys_tool_call(uint64 reqaddr, uint64 respaddr)
+static __attribute__((noinline)) int
+agent_tool_call_v3_security_denial(
+	struct proc *p, const struct agent_execution_binding *binding,
+	struct agent_op *op, int requested_status, uint decision_reason,
+	struct agent_result *result, struct agent_execution_outcome *outcome)
+{
+	struct agent_execution_preflight_result denial;
+	int preflight_status;
+
+	memset(&denial, 0, sizeof(denial));
+	denial.status = requested_status == AGENT_STATUS_STALE ?
+		AGENT_STATUS_STALE : AGENT_STATUS_DENIED;
+	denial.decision_reason = decision_reason;
+	denial.input_provenance_labels = agent_provenance_current_labels(p);
+	agent_result_init(result, op);
+	preflight_status = agent_execution_preflight_denial(
+		p, binding, op, &denial);
+	result->status = denial.status;
+	result->sequence = denial.context_sequence;
+	agent_result_text(
+		result, preflight_status == AGENT_EXECUTION_PREFLIGHT_TERMINAL ?
+			"security_denied" : "security_evidence_unavailable");
+	memset(outcome, 0, sizeof(*outcome));
+	outcome->decision_reason = decision_reason;
+	outcome->output_provenance_labels =
+		denial.output_provenance_labels;
+	outcome->evidence_ticket = denial.evidence_ticket;
+	return result->status;
+}
+
+static __attribute__((noinline)) int
+sys_tool_call_v3(uint64 reqaddr, uint64 respaddr)
+{
+	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
+	struct agent_request_v3 req;
+	struct agent_request_v2 decode_request;
+	struct agent_response_v3 resp;
+	struct agent_execution_binding binding;
+	struct agent_execution_outcome outcome;
+	struct agent_tool_match tool;
+	struct agent_op op;
+	struct agent_result result;
+	char error[AGENT_RESULT_SIZE];
+	int operation_entered = 0;
+	int enforced = 0;
+	uint denial_reason = AGENT_EXECUTION_REASON_CONTRACT_INVALID;
+	int status = AGENT_STATUS_OK;
+
+	if (copyin(p->pagetable, (char *)&req, reqaddr, sizeof(req)) < 0 ||
+	    user_range_check(p->pagetable, respaddr, sizeof(resp), PTE_W) < 0)
+		return -1;
+	memset(&resp, 0, sizeof(resp));
+	resp.version = AGENT_CALL_VERSION_V3;
+	resp.size = sizeof(resp);
+	resp.request_id = req.request_id;
+	lifecycle = vfs_proc_lifecycle(p);
+	resp.contract.lifecycle.id = lifecycle.id;
+	resp.contract.lifecycle.reserved = 0;
+	resp.contract.lifecycle.generation = lifecycle.generation;
+	resp.contract.generation =
+		agent_execution_contract_generation(lifecycle);
+	resp.node_id = req.node_id;
+	resp.attempt_id = req.attempt_id;
+	memmove(resp.input_fingerprint, req.input_fingerprint,
+		sizeof(resp.input_fingerprint));
+	resp.source_context_sequence = req.source_context_sequence;
+	memset(&binding, 0, sizeof(binding));
+	binding.lifecycle.id = req.contract.lifecycle.id;
+	binding.lifecycle.generation = req.contract.lifecycle.generation;
+	binding.contract_generation = req.contract.generation;
+	binding.node_id = req.node_id;
+	binding.attempt_id = req.attempt_id;
+	memmove(binding.input_fingerprint, req.input_fingerprint,
+		sizeof(binding.input_fingerprint));
+	binding.source_context_sequence = req.source_context_sequence;
+	binding.source_control_id = req.source_control_id;
+	binding.source_pid = req.source_pid;
+	binding.source_reserved = req.source_reserved;
+	memmove(binding.schema_digest, req.schema_digest,
+		sizeof(binding.schema_digest));
+	binding.input_artifact_type = req.input_artifact_type;
+	binding.source_node_id = req.source_node_id;
+	binding.input_mode = AGENT_EXECUTION_INPUT_INLINE;
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION_V3;
+	op.tool_id = req.tool_id > 0 ? req.tool_id :
+		(0x20000000 | (int)((req.node_id + 1) & 0xffffU));
+	op.request_id = req.request_id;
+	op.arg0 = req.contract.generation;
+	op.arg1 = ((uint64)req.node_id << 32) | req.attempt_id;
+	safestrcpy(op.payload, "v3_rejected", sizeof(op.payload));
+	enforced = p->is_agent &&
+		agent_execution_contract_enforced(lifecycle);
+	memset(error, 0, sizeof(error));
+	if (req.version != AGENT_CALL_VERSION_V3) {
+		status = AGENT_STATUS_BAD_VERSION;
+		safestrcpy(error, "bad_request_version", sizeof(error));
+	} else if (req.size != sizeof(req)) {
+		status = AGENT_STATUS_BAD_SIZE;
+		safestrcpy(error, "bad_request_size", sizeof(error));
+	} else if (req.flags != 0 || req.source_reserved != 0) {
+		status = AGENT_STATUS_BAD_PARAM;
+		safestrcpy(error, "unsupported_fields", sizeof(error));
+	} else if (req.param_count > AGENT_TOOL_PARAM_MAX) {
+		status = AGENT_STATUS_BAD_SIZE;
+		safestrcpy(error, "too_many_params", sizeof(error));
+	} else if (req.contract.lifecycle.id == 0 ||
+		   req.contract.lifecycle.generation == 0 ||
+		   req.contract.generation == 0) {
+		status = AGENT_STATUS_BAD_PARAM;
+		safestrcpy(error, "bad_contract_binding", sizeof(error));
+	} else if (!p->is_agent) {
+		status = AGENT_STATUS_NOT_AGENT;
+		safestrcpy(error, "not_agent", sizeof(error));
+	} else if (req.contract.lifecycle.reserved != 0 ||
+		   req.contract.lifecycle.id != lifecycle.id ||
+		   req.contract.lifecycle.generation != lifecycle.generation) {
+		status = AGENT_STATUS_STALE;
+		denial_reason = AGENT_EXECUTION_REASON_STALE_LIFECYCLE;
+		safestrcpy(error, "stale_lifecycle", sizeof(error));
+	} else {
+		status = agent_tool_protocol_resolve(req.tool_id, req.tool_name,
+					     &tool, error, sizeof(error));
+		if (status != AGENT_STATUS_OK)
+			denial_reason = AGENT_EXECUTION_REASON_TOOL_MISMATCH;
+	}
+	if (status != AGENT_STATUS_OK)
+		goto rejected;
+	resp.tool_id = tool.tool_id;
+	safestrcpy(resp.tool_name, tool.name, sizeof(resp.tool_name));
+	if (tool.flags & AGENT_TOOL_F_SYSCALL_ONLY) {
+		status = AGENT_STATUS_DENIED;
+		denial_reason = AGENT_EXECUTION_REASON_TOOL_MISMATCH;
+		safestrcpy(error, "syscall_only", sizeof(error));
+		goto rejected;
+	}
+	if ((req.param_count == 0 && req.params != 0) ||
+	    (req.param_count != 0 && req.params == 0)) {
+		status = AGENT_STATUS_BAD_PARAM;
+		safestrcpy(error, "bad_param_pointer", sizeof(error));
+		goto rejected;
+	}
+	if (req.param_count != 0 &&
+	    user_range_check(p->pagetable, req.params,
+			     (uint64)req.param_count *
+				     sizeof(struct agent_param_v2), PTE_R) < 0) {
+		status = AGENT_STATUS_DENIED;
+		safestrcpy(error, "bad_param_range", sizeof(error));
+		goto rejected;
+	}
+	memset(&decode_request, 0, sizeof(decode_request));
+	decode_request.version = AGENT_CALL_VERSION_V2;
+	decode_request.size = sizeof(decode_request);
+	decode_request.tool_id = req.tool_id;
+	decode_request.param_count = req.param_count;
+	decode_request.request_id = req.request_id;
+	decode_request.params = req.params;
+	safestrcpy(decode_request.tool_name, req.tool_name,
+		   sizeof(decode_request.tool_name));
+	status = agent_tool_protocol_decode_v2(
+		p->pagetable, &decode_request, &tool, &op, error, sizeof(error));
+	if (status != AGENT_STATUS_OK) {
+		status = AGENT_STATUS_DENIED;
+		denial_reason = AGENT_EXECUTION_REASON_CONTRACT_INVALID;
+		goto rejected;
+	}
+	if (workflow_lifecycle_operation_enter(lifecycle) < 0) {
+		status = AGENT_STATUS_RETRY;
+		safestrcpy(error, "workflow_fenced", sizeof(error));
+		goto out;
+	}
+	operation_entered = 1;
+	if (agent_execute_one(p, &op, &result, agent_ticks(), &binding, 0, 0,
+			      &outcome) < 0)
+		result.status = AGENT_STATUS_NO_SPACE;
+	status = result.status;
+	resp.sequence = result.sequence;
+	resp.value0 = result.value0;
+	resp.value1 = result.value1;
+	resp.value2 = result.value2;
+	resp.output_artifact_type = outcome.output_artifact_type;
+	resp.decision_reason = outcome.decision_reason;
+	resp.completion_flags = outcome.completion_flags;
+	resp.output_provenance_labels = outcome.output_provenance_labels;
+	resp.evidence_ticket = outcome.evidence_ticket;
+	safestrcpy(resp.result, result.result, sizeof(resp.result));
+	goto out;
+
+rejected:
+	if (enforced && op.tool_id > 0) {
+		if (op.request_id == 0) {
+			/* Keep user correlation zero while giving Evidence a valid key. */
+			op.request_id = (1ULL << 63) |
+				((uint64)(uint)p->pid << 32) |
+				(uint)(p->agent_call_count + 1);
+		}
+		status = agent_tool_call_v3_security_denial(
+			p, &binding, &op, status, denial_reason,
+			&result, &outcome);
+		resp.sequence = result.sequence;
+		resp.output_artifact_type = outcome.output_artifact_type;
+		resp.decision_reason = outcome.decision_reason;
+		resp.output_provenance_labels =
+			outcome.output_provenance_labels;
+		resp.evidence_ticket = outcome.evidence_ticket;
+		safestrcpy(resp.result, result.result, sizeof(resp.result));
+		error[0] = 0;
+	}
+out:
+	if (operation_entered)
+		workflow_lifecycle_operation_leave(lifecycle);
+	if (enforced &&
+	    (status == AGENT_STATUS_DENIED || status == AGENT_STATUS_STALE) &&
+	    resp.evidence_ticket == 0) {
+		status = AGENT_STATUS_RETRY;
+		error[0] = 0;
+		safestrcpy(resp.result, "security_evidence_unavailable",
+			   sizeof(resp.result));
+	}
+	resp.status = status;
+	if (status != AGENT_STATUS_OK && error[0] != 0)
+		safestrcpy(resp.result, error, sizeof(resp.result));
+	return copyout(p->pagetable, respaddr, (char *)&resp, sizeof(resp));
+}
+
+static __attribute__((noinline)) int
+sys_tool_call_v2(uint64 reqaddr, uint64 respaddr)
 {
 	struct proc *p = curr_proc();
 	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
@@ -1414,7 +2461,7 @@ int sys_tool_call(uint64 reqaddr, uint64 respaddr)
 		}
 		operation_entered = 1;
 	}
-	if (agent_execute_one(p, &op, &result, agent_ticks()) < 0)
+	if (agent_execute_one(p, &op, &result, agent_ticks(), 0, 0, 0, 0) < 0)
 		result.status = AGENT_STATUS_NO_SPACE;
 	status = result.status;
 	resp.sequence = result.sequence;
@@ -1430,6 +2477,23 @@ out:
 	if (status != AGENT_STATUS_OK && error[0] != 0)
 		safestrcpy(resp.result, error, sizeof(resp.result));
 	return copyout(p->pagetable, respaddr, (char *)&resp, sizeof(resp));
+}
+
+int
+sys_tool_call(uint64 reqaddr, uint64 respaddr)
+{
+	struct {
+		uint version;
+		uint size;
+	} header;
+	struct proc *p = curr_proc();
+
+	if (copyin(p->pagetable, (char *)&header, reqaddr,
+		   sizeof(header)) < 0)
+		return -1;
+	return header.version == AGENT_CALL_VERSION_V3 ?
+		sys_tool_call_v3(reqaddr, respaddr) :
+		sys_tool_call_v2(reqaddr, respaddr);
 }
 
 void agent_core_tick(void)

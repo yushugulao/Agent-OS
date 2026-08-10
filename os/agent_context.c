@@ -1,6 +1,8 @@
 #include "agent_context.h"
 #include "agent_context_path.h"
+#include "agent_evidence_ring.h"
 #include "agent_internal.h"
+#include "agent_provenance.h"
 #include "defs.h"
 #include "kernel_work.h"
 #include "timer.h"
@@ -24,6 +26,10 @@ struct agent_context_private_slot {
 	 (AGENT_CONTEXT_SIDECAR_PAGE_COUNT - 1) * \
 		 AGENT_CONTEXT_SLOTS_PER_PAGE)
 #define AGENT_CONTEXT_PATH_INDEX_MAGIC 0x4354585041544831ULL
+#define AGENT_CONTEXT_PROVENANCE_STATE_OFFSET \
+	(AGENT_CONTEXT_LAST_PAGE_RECORDS * \
+		 sizeof(struct agent_context_private_slot) + \
+	 sizeof(struct agent_context_path_index))
 
 struct agent_context_path_summary {
 	uint64 workflow_lifecycle_id;
@@ -74,9 +80,12 @@ _Static_assert(AGENT_CONTEXT_LAST_PAGE_RECORDS > 0 &&
 	       "Agent context last-page record count");
 _Static_assert(AGENT_CONTEXT_LAST_PAGE_RECORDS *
 			       sizeof(struct agent_context_private_slot) +
-		       sizeof(struct agent_context_path_index) <=
+		       sizeof(struct agent_context_path_index) +
+		       AGENT_CONTEXT_PROVENANCE_STATE_SIZE <=
 		       PAGE_SIZE,
-	       "Agent context path index must fit sidecar slack");
+	       "Agent context path index and provenance must fit sidecar slack");
+_Static_assert((AGENT_CONTEXT_PROVENANCE_STATE_OFFSET & 7U) == 0,
+	       "Agent provenance sidecar alignment");
 _Static_assert(AGENT_STATE_PAGE_COUNT ==
 		       AGENT_CONTEXT_SIDECAR_PAGE_COUNT +
 			       AGENT_COLD_STATE_PAGE_COUNT +
@@ -94,6 +103,7 @@ agent_context_metadata_reset(struct proc *p)
 	p->agent_state_account = resource_account_none();
 	p->agent_state_charge_class = RESOURCE_CHARGE_CLASS_COUNT;
 	p->agent_state_charged_pages = 0;
+	agent_provenance_proc_reset(p);
 }
 
 void
@@ -130,6 +140,7 @@ agent_context_proc_reset(struct proc *p)
 	p->agent_current_cause_pid = 0;
 	p->agent_current_cause_control = 0;
 	p->agent_context_chain_hash = 0;
+	agent_provenance_proc_reset(p);
 }
 
 int
@@ -201,6 +212,20 @@ agent_context_path_index(struct proc *p)
 	return (struct agent_context_path_index *)(
 		last_page + AGENT_CONTEXT_LAST_PAGE_RECORDS *
 				    sizeof(struct agent_context_private_slot));
+}
+
+void *
+agent_context_provenance_sidecar(struct proc *p)
+{
+	char *last_page;
+
+	if (p == 0 ||
+	    p->agent_context_sidecar_kva[AGENT_CONTEXT_SIDECAR_PAGE_COUNT - 1] ==
+		    0)
+		return 0;
+	last_page = (char *)p->agent_context_sidecar_kva
+		[AGENT_CONTEXT_SIDECAR_PAGE_COUNT - 1];
+	return last_page + AGENT_CONTEXT_PROVENANCE_STATE_OFFSET;
 }
 
 static int
@@ -520,15 +545,20 @@ agent_context_free(struct proc *p)
 int
 agent_context_clear(struct proc *p)
 {
+	uint64 prior_provenance_labels;
 	int enabled = intr_save();
 
 	if (!agent_context_ready(p)) {
 		intr_restore(enabled);
 		return -1;
 	}
+	prior_provenance_labels = agent_provenance_current_labels(p);
 	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
 		memset((void *)p->agent_context_sidecar_kva[page], 0,
 		       PAGE_SIZE);
+	if (agent_provenance_merge_current(p, prior_provenance_labels) !=
+	    AGENT_STATUS_OK)
+		panic("Agent provenance clear restore");
 	intr_restore(enabled);
 	return 0;
 }
@@ -1123,7 +1153,11 @@ static int
 agent_context_append_flags(struct proc *p, struct agent_op *op,
 			   struct agent_result *latest, uint64 tick,
 			   uint64 flags, int authority_effect,
-			   int causal_audit)
+			   int causal_audit,
+			   struct agent_evidence_context_reservation *reservation,
+			   struct agent_evidence_security_reservation *
+				   security_reservation,
+			   uint64 *evidence_ticket_out)
 {
 	struct agent_context_append_receipt receipt;
 	struct agent_context_detail detail;
@@ -1139,6 +1173,13 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 	    p->agent_context_lane_depth == 0 ||
 	    latest->sequence != p->agent_call_count)
 		return -1;
+	if ((reservation != 0 && security_reservation != 0) ||
+	    ((reservation != 0 || security_reservation != 0) &&
+	     (evidence_ticket_out == 0 ||
+	      agent_observe_recording_suppressed(p))) ||
+	    (reservation != 0 && !reservation->active) ||
+	    (security_reservation != 0 && !security_reservation->active))
+		return -1;
 	slot = p->context_path_head % p->context_path_capacity;
 
 	memset(&record, 0, sizeof(record));
@@ -1153,7 +1194,8 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 	record.value1 = latest->value1;
 	record.value2 = latest->value2;
 	record.tick = tick;
-	record.flags = flags;
+	record.flags = agent_provenance_context_flags(
+		p, latest->request_id, latest->tool_id, flags);
 	if (strlen(op->payload) >= sizeof(record.payload) ||
 	    strlen(latest->result) >= sizeof(record.result))
 		record.flags |= AGENT_CONTEXT_RECORD_F_TRUNCATED;
@@ -1198,11 +1240,37 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 	p->agent_current_cause_pid = p->pid;
 	p->agent_current_cause_control = p->agent_control_id;
 	p->agent_current_span_id = record.span_id;
+	agent_provenance_context_committed(
+		p, record.request_id, record.tool_id, record.flags);
 	if (agent_context_write_latest(p, latest) < 0 ||
 	    agent_context_write_header_locked(p) < 0)
 		panic("Agent context direct publish");
+	/* Reserved terminal and denial records stay behind an odd sequence until
+	 * their canonical Evidence ticket is committed.  The release below is the
+	 * only point at which direct readers may accept the new Context snapshot. */
+	if (reservation != 0)
+		*evidence_ticket_out =
+			agent_observe_commit_context_reserved_ticket(
+				p, &record, authority_effect, causal_audit,
+				reservation);
+	else if (security_reservation != 0)
+		*evidence_ticket_out =
+			agent_observe_commit_security_reserved_ticket(
+				p, &record, security_reservation);
 	agent_context_publish_end(p);
-	agent_observe_record_context(p, &record, authority_effect, causal_audit);
+	if (reservation != 0 || security_reservation != 0) {
+		agent_observe_publish_context_ticket(
+			p, &record, authority_effect, causal_audit,
+			*evidence_ticket_out);
+	} else if (evidence_ticket_out != 0) {
+		if (agent_observe_record_context_ticket(
+			    p, &record, authority_effect, causal_audit,
+			    evidence_ticket_out) < 0)
+			return -1;
+	} else {
+		agent_observe_record_context(
+			p, &record, authority_effect, causal_audit);
+	}
 	return 0;
 }
 
@@ -1213,7 +1281,36 @@ agent_context_append(struct proc *p, struct agent_op *op,
 {
 	return agent_context_append_flags(
 		p, op, latest, tick, AGENT_CONTEXT_RECORD_F_SYSTEM,
-		authority_effect, 0);
+		authority_effect, 0, 0, 0, 0);
+}
+
+int
+agent_context_append_ticket(struct proc *p, struct agent_op *op,
+			    struct agent_result *latest, uint64 tick,
+			    int authority_effect, uint64 *evidence_ticket_out)
+{
+	if (evidence_ticket_out == 0)
+		return -1;
+	*evidence_ticket_out = 0;
+	return agent_context_append_flags(
+		p, op, latest, tick, AGENT_CONTEXT_RECORD_F_SYSTEM,
+		authority_effect, 0, 0, 0, evidence_ticket_out);
+}
+
+int
+agent_context_append_reserved_ticket(
+	struct proc *p, struct agent_op *op, struct agent_result *latest,
+	uint64 tick, int authority_effect,
+	struct agent_evidence_context_reservation *reservation,
+	uint64 *evidence_ticket_out)
+{
+	if (reservation == 0 || evidence_ticket_out == 0)
+		return -1;
+	*evidence_ticket_out = 0;
+	return agent_context_append_flags(
+		p, op, latest, tick, AGENT_CONTEXT_RECORD_F_SYSTEM,
+		authority_effect, 0, reservation, 0,
+		evidence_ticket_out);
 }
 
 static void
@@ -1260,7 +1357,7 @@ agent_context_append_system_class(struct proc *p, int tool_id,
 	p->agent_call_count = latest.sequence;
 	append_status = agent_context_append_flags(
 		p, &op, &latest, agent_context_ticks(),
-		AGENT_CONTEXT_RECORD_F_SYSTEM, 0, causal_audit);
+		AGENT_CONTEXT_RECORD_F_SYSTEM, 0, causal_audit, 0, 0, 0);
 	if (append_status < 0)
 		p->agent_call_count--;
 	agent_lifecycle_context_lane_leave(p);
@@ -1287,6 +1384,56 @@ agent_context_append_system_causal(
 	return agent_context_append_system_class(
 		p, tool_id, request_id, arg0, payload, result, status,
 		value0, value1, value2, 1);
+}
+
+int
+agent_context_append_security_denial_record(
+	struct proc *p, const struct agent_provenance_request *request,
+	const struct agent_provenance_decision *decision,
+	struct agent_evidence_security_reservation *reservation,
+	uint64 *evidence_ticket_out)
+{
+	struct agent_op op;
+	struct agent_result latest;
+	int append_status;
+
+	if (p == 0 || request == 0 || decision == 0 || reservation == 0 ||
+	    evidence_ticket_out == 0 || !reservation->active || !p->is_agent ||
+	    decision->status == AGENT_STATUS_OK)
+		return -1;
+	*evidence_ticket_out = 0;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = request->tool_id;
+	op.request_id = request->request_id;
+	op.arg0 = request->contract_generation;
+	safestrcpy(op.payload, "provenance", sizeof(op.payload));
+	memset(&latest, 0, sizeof(latest));
+	latest.version = AGENT_CALL_VERSION;
+	latest.status = decision->status;
+	latest.tool_id = request->tool_id;
+	latest.request_id = request->request_id;
+	latest.sequence = p->agent_call_count + 1;
+	latest.value0 = request->source_node_id;
+	latest.value1 = request->target_node_id;
+	latest.value2 = decision->reason;
+	agent_context_result_text(&latest, "security_denied");
+	if (agent_context_append_prepare(p, latest.sequence) < 0) {
+		agent_lifecycle_context_lane_leave(p);
+		return AGENT_STATUS_NO_SPACE;
+	}
+	p->agent_call_count = latest.sequence;
+	append_status = agent_context_append_flags(
+		p, &op, &latest, agent_context_ticks(),
+		AGENT_CONTEXT_RECORD_F_SYSTEM |
+			AGENT_CONTEXT_RECORD_F_SECURITY_DENIAL,
+		1, 1, 0, reservation, evidence_ticket_out);
+	if (append_status < 0)
+		p->agent_call_count--;
+	agent_lifecycle_context_lane_leave(p);
+	return append_status < 0 ? AGENT_STATUS_NO_SPACE : AGENT_STATUS_OK;
 }
 
 int
@@ -1333,7 +1480,8 @@ sys_context_push(uint64 recordaddr)
 	p->agent_call_count = latest.sequence;
 	if (agent_context_append_flags(p, &op, &latest,
 				       agent_context_ticks(),
-				       AGENT_CONTEXT_RECORD_F_MANUAL, 0, 0) < 0)
+				       AGENT_CONTEXT_RECORD_F_MANUAL, 0, 0,
+				       0, 0, 0) < 0)
 		result = AGENT_STATUS_NO_SPACE;
 	if (result != 0)
 		p->agent_call_count--;
@@ -1652,6 +1800,7 @@ sys_context_rollback(uint64 sequence)
 	p->agent_context_chain_hash = record.record_hash;
 	p->agent_current_span_id = record.span_id;
 	p->agent_current_span_owner = span_owner;
+	agent_provenance_context_restore(p, record.flags);
 	path_index->magic = AGENT_CONTEXT_PATH_INDEX_MAGIC;
 	if (!agent_context_path_index_matches(p, path_index))
 		panic("Agent context rollback summary");

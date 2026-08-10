@@ -1,6 +1,8 @@
 #include "console.h"
 #include "agent.h"
+#include "agent_execution_contract.h"
 #include "agent_internal.h"
+#include "agent_provenance.h"
 #include "bio.h"
 #include "defs.h"
 #include "fcntl.h"
@@ -343,8 +345,12 @@ uint64 sys_fstat(int fd, uint64 stataddr)
 		status.mode = f->ip->type == T_DIR ? 0x040000U : 0x100000U;
 		/* 文件系统没有 linkat，具名 inode 只有一个链接。 */
 		status.nlink = f->ip->removed ? 0U : 1U;
-		result = copyout(p->pagetable, stataddr, (char *)&status,
-				 sizeof(status));
+		if (!p->is_agent ||
+		    agent_provenance_merge_current(
+			    p, AGENT_PROVENANCE_UNTRUSTED_FILE_DATA) ==
+			    AGENT_STATUS_OK)
+			result = copyout(p->pagetable, stataddr, (char *)&status,
+					 sizeof(status));
 	}
 	fileclose(f);
 	return result;
@@ -530,7 +536,7 @@ uint64 sys_exec(uint64 path, uint64 uargv)
 uint64 sys_wait(int pid, uint64 va)
 {
 	struct proc *p = curr_proc();
-	struct workflow_lifecycle_key lifecycle = vfs_proc_lifecycle(p);
+	struct workflow_lifecycle_key lifecycle;
 	int code;
 	int child;
 	int lifecycle_entered = 0;
@@ -540,13 +546,14 @@ uint64 sys_wait(int pid, uint64 va)
 	    user_range_check(p->pagetable, va, sizeof(code), PTE_W) < 0)
 		return -1;
 	child = wait(pid, &code);
-	if (child < 0 || va == 0)
+	if (child < 0)
 		return child;
+	lifecycle = vfs_proc_lifecycle(p);
 	/*
 	 * Waiting itself may sleep while the workflow controller seals a cut.
-	 * Child teardown is covered by departure_operations; only the completion
-	 * copyout can fault in a charged COW page, so reacquire the cut around that
-	 * short delivery step instead of holding it across the sleep.
+	 * Child teardown is covered by departure_operations; reacquire the current
+	 * generation only for provenance and result delivery instead of holding it
+	 * across the sleep.
 	 */
 	if (workflow_lifecycle_key_valid(lifecycle)) {
 		while (workflow_lifecycle_operation_enter(lifecycle) < 0) {
@@ -556,8 +563,17 @@ uint64 sys_wait(int pid, uint64 va)
 		}
 		lifecycle_entered = 1;
 	}
-	result = copyout(p->pagetable, va, (char *)&code, sizeof(code)) < 0 ?
-			 -1 : child;
+	if (p->is_agent &&
+	    agent_provenance_merge_current(
+		    p, AGENT_PROVENANCE_CROSS_AGENT_DATA |
+			       AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT) !=
+		    AGENT_STATUS_OK)
+		result = -1;
+	else if (va == 0)
+		result = child;
+	else
+		result = copyout(p->pagetable, va, (char *)&code, sizeof(code)) < 0 ?
+				 -1 : child;
 	if (lifecycle_entered)
 		workflow_lifecycle_operation_leave(lifecycle);
 	return result;
@@ -1083,6 +1099,11 @@ static uint syscall_kernel_work_class(int id)
 	}
 }
 
+static uint64 syscall_direct_agent_side_effects(
+	int, const struct trapframe *, const struct syscall_transaction_context *);
+static int syscall_merge_ingress_provenance(
+	int, const struct syscall_transaction_context *);
+
 /*
  * 快慢路径共用调用分派，但不在此分配事务对象。noinline 让传统调用的
  * 栈帧不会被慢路径的关闭回执和 I/O 状态反向放大。
@@ -1235,6 +1256,22 @@ static __attribute__((noinline)) int syscall_dispatch(
 		ret = sys_agent_workflow_lifecycle_info(
 			trapframe->a0, trapframe->a1, trapframe->a2,
 			trapframe->a3, trapframe->a4);
+		break;
+	case SYS_agent_execution_contract:
+		ret = sys_agent_execution_contract(trapframe->a0,
+					       trapframe->a1);
+		break;
+	case SYS_agent_task_channel_setup:
+		ret = sys_agent_task_channel_setup(trapframe->a0,
+					   trapframe->a1);
+		break;
+	case SYS_agent_task_channel_enter:
+		ret = sys_agent_task_channel_enter(trapframe->a0,
+					   trapframe->a1);
+		break;
+	case SYS_agent_task_channel_resource:
+		ret = sys_agent_task_channel_resource(trapframe->a0,
+					      trapframe->a1);
 		break;
 	case SYS_agent_resource_snapshot:
 		ret = sys_agent_resource_snapshot(trapframe->a0,
@@ -1430,16 +1467,35 @@ static __attribute__((noinline)) int syscall_dispatch(
 
 /* 事务对象复用当前线程的陷阱页，传统无事务调用不支付初始化和栈成本。 */
 static __attribute__((noinline)) int syscall_slow_path(
-	struct trapframe *trapframe, int id, uint policy)
+	struct trapframe *trapframe, int id, uint policy,
+	struct agent_execution_direct_guard *direct_guard,
+	int *operation_denied)
 {
 	struct syscall_transaction_context *transaction =
 		(struct syscall_transaction_context *)
 			thread_trap_cold(curr_thread())->syscall_transaction;
+	uint64 direct_side_effects;
 	int ret = -1;
 
 	syscall_transaction_prepare(transaction, trapframe, id, policy);
+	direct_side_effects = syscall_direct_agent_side_effects(
+		id, trapframe, transaction);
+	if (direct_side_effects != 0) {
+		ret = agent_execution_contract_gate_direct_syscall(
+			curr_proc(), id, direct_side_effects, direct_guard);
+		if (ret != AGENT_STATUS_OK) {
+			*operation_denied = 1;
+			goto finish;
+		}
+	}
+	if (syscall_merge_ingress_provenance(id, transaction) < 0) {
+		*operation_denied = 1;
+		goto finish;
+	}
 	if (syscall_transaction_begin(transaction, trapframe) == 0)
 		ret = syscall_dispatch(id, trapframe, transaction);
+
+finish:
 	syscall_transaction_finish(transaction, &ret);
 	return ret;
 }
@@ -1487,6 +1543,7 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_condvar_signal:
 	case SYS_condvar_wait:
 	case SYS_agent_scope_delegate_fd:
+	case SYS_agent_execution_contract:
 	case SYS_agent_sched_config:
 	case SYS_agent_audit_receipt:
 	case SYS_agent_observe_recovery:
@@ -1530,6 +1587,9 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_file_meta_set:
 	case SYS_agent_file_query:
 	case SYS_agent_worker_create:
+	case SYS_agent_task_channel_setup:
+	case SYS_agent_task_channel_enter:
+	case SYS_agent_task_channel_resource:
 		return 0;
 	/* Exit/close drive their own lifecycle protocols; never nest the gate. */
 	case SYS_exit:
@@ -1570,6 +1630,137 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	}
 }
 
+static uint64
+syscall_file_side_effects(const struct file *file, int closing)
+{
+	if (file == 0)
+		return 0;
+	switch (file->type) {
+	case FD_STDIO:
+		return 0;
+	case FD_PIPE:
+		return AGENT_SIDE_EFFECT_IPC;
+	case FD_INODE:
+		return closing ?
+			AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA :
+			AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_ARTIFACT;
+	default:
+		return AGENT_SIDE_EFFECT_ALL;
+	}
+}
+
+static uint64
+syscall_direct_agent_side_effects(
+	int id, const struct trapframe *trapframe,
+	const struct syscall_transaction_context *transaction)
+{
+	switch (id) {
+	case SYS_write:
+		return syscall_file_side_effects(
+			transaction != 0 ? transaction->file : 0, 0);
+	case SYS_openat:
+		return trapframe != 0 &&
+		       (trapframe->a1 & (O_CREATE | O_TRUNC)) != 0 ?
+			AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA : 0;
+	case SYS_close:
+		/*
+		 * The descriptor identity is authoritative only after
+		 * fdclose_prepare() detaches it.  Gate the union of every effect a
+		 * detachable file can produce instead of racing that detach with a
+		 * speculative pin.
+		 */
+		return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA |
+		       AGENT_SIDE_EFFECT_IPC;
+	case SYS_unlinkat:
+	case SYS_sync:
+	case SYS_fsync:
+	case SYS_fdatasync:
+		return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA;
+	case SYS_mailwrite:
+	case SYS_agent_heartbeat:
+	case SYS_agent_heartbeat_set:
+	case SYS_agent_heartbeat_stop:
+	case SYS_agent_wake:
+		return AGENT_SIDE_EFFECT_IPC;
+	case SYS_pipe2:
+		return AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_IPC;
+	case SYS_clone:
+	case SYS_execve:
+	case SYS_thread_create:
+	case SYS_agent_create:
+	case SYS_agent_create_role:
+	case SYS_agent_workflow_create:
+	case SYS_agent_worker_create:
+		return AGENT_SIDE_EFFECT_PROCESS;
+	case SYS_agent_scope_delegate_fd:
+	case SYS_agent_sched_config:
+	case SYS_agent_route_config:
+		return AGENT_SIDE_EFFECT_PERMISSION;
+	case SYS_agent_workflow_close:
+		return AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_PERMISSION;
+	case SYS_context_push:
+	case SYS_context_rollback:
+	case SYS_context_clear:
+		return AGENT_SIDE_EFFECT_METADATA | AGENT_SIDE_EFFECT_PERMISSION;
+	case SYS_agent_watch:
+	case SYS_agent_unwatch:
+	case SYS_agent_wait_cancel:
+		return AGENT_SIDE_EFFECT_WATCH;
+	case SYS_agent_file_meta_init:
+	case SYS_agent_file_meta_set:
+	case SYS_agent_file_edit_begin:
+	case SYS_agent_file_edit_commit:
+	case SYS_agent_file_edit_abort:
+		return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA;
+	default:
+		return 0;
+	}
+}
+
+static int
+syscall_merge_ingress_provenance(
+	int id, const struct syscall_transaction_context *transaction)
+{
+	struct proc *p = curr_proc();
+	const struct file *file;
+	uint64 labels = 0;
+
+	if (p == 0 || !p->is_agent)
+		return 0;
+	file = transaction != 0 ? transaction->file : 0;
+	switch (id) {
+	case SYS_read:
+		if (file == 0)
+			return 0;
+		switch (file->type) {
+		case FD_STDIO:
+			labels = AGENT_PROVENANCE_TRUSTED_USER_CONTROL;
+			break;
+		case FD_PIPE:
+			labels = AGENT_PROVENANCE_CROSS_AGENT_DATA |
+				 AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT;
+			break;
+		case FD_INODE:
+			labels = AGENT_PROVENANCE_UNTRUSTED_FILE_DATA;
+			break;
+		default:
+			labels = AGENT_PROVENANCE_UNTRUSTED_MASK;
+			break;
+		}
+		break;
+	case SYS_mailread:
+		labels = AGENT_PROVENANCE_CROSS_AGENT_DATA |
+			 AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT;
+		break;
+	default:
+		break;
+	}
+	if (labels == 0)
+		return 0;
+	return agent_provenance_merge_current(p, labels) == AGENT_STATUS_OK ?
+		0 : -1;
+}
+
 /* 拒绝高位别名，避免超宽 a7 截断成已登记的低编号调用。 */
 static int syscall_decode_id(uint64 raw_id)
 {
@@ -1581,8 +1772,12 @@ static int syscall_decode_id(uint64 raw_id)
 void syscall()
 {
 	struct trapframe *trapframe = curr_thread()->trapframe;
+	struct agent_execution_direct_guard direct_guard = { 0 };
+	struct agent_execution_direct_guard file_pin_guard = { 0 };
 	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
+	uint64 direct_side_effects;
 	int id;
+	int background_operation_entered = 0;
 	int operation_denied = 0;
 	int operation_entered = 0;
 	int background_done = 0;
@@ -1609,17 +1804,45 @@ void syscall()
 			}
 			operation_entered = 1;
 		}
-		if (syscall_needs_transaction(class))
-			ret = syscall_slow_path(trapframe, id, policy);
-		else
+		if (id == SYS_read || id == SYS_write || id == SYS_fstat) {
+			ret = agent_execution_contract_file_pin_enter(
+				curr_proc(), &file_pin_guard);
+			if (ret != AGENT_STATUS_OK) {
+				operation_denied = 1;
+				goto operation_done;
+			}
+		}
+		if (syscall_needs_transaction(class)) {
+			ret = syscall_slow_path(
+				trapframe, id, policy, &direct_guard,
+				&operation_denied);
+		} else {
+			direct_side_effects = syscall_direct_agent_side_effects(
+				id, trapframe, 0);
+			if (direct_side_effects != 0) {
+				ret = agent_execution_contract_gate_direct_syscall(
+					curr_proc(), id, direct_side_effects,
+					&direct_guard);
+				if (ret != AGENT_STATUS_OK) {
+					operation_denied = 1;
+					goto operation_done;
+				}
+			}
+			if (syscall_merge_ingress_provenance(id, 0) < 0) {
+				ret = -1;
+				operation_denied = 1;
+				goto operation_done;
+			}
 			ret = syscall_dispatch(id, trapframe, 0);
+		}
 	operation_done:
 		if (operation_entered) {
 			/* Current-scope maintenance is part of the same fence cut. */
-			if (agent_background_work_pending() || id == SYS_sched_yield)
+			if ((!operation_denied || direct_guard.active ||
+			     file_pin_guard.active) &&
+			    (agent_background_work_pending() || id == SYS_sched_yield))
 				agent_background_checkpoint();
 			background_done = 1;
-			workflow_lifecycle_operation_leave(lifecycle);
 		}
 	}
 	/*
@@ -1635,10 +1858,17 @@ void syscall()
 			agent_background_checkpoint();
 		} else if (workflow_lifecycle_operation_enter(lifecycle) == 0) {
 			/* Observers/self-gated calls only pay this gate when work exists. */
+			background_operation_entered = 1;
 			agent_background_checkpoint();
-			workflow_lifecycle_operation_leave(lifecycle);
 		}
 	}
+	agent_execution_contract_file_pin_leave(&file_pin_guard);
+	if (direct_guard.active)
+		agent_execution_contract_direct_leave(&direct_guard);
+	if (operation_entered)
+		workflow_lifecycle_operation_leave(lifecycle);
+	if (background_operation_entered)
+		workflow_lifecycle_operation_leave(lifecycle);
 	kernel_work_end();
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);

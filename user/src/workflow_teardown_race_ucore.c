@@ -487,6 +487,20 @@ static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix(void)
 		unsigned char bytes[2 * sizeof(uint)];
 		uint guard;
 	} short_probe;
+	struct lifecycle_v2_probe {
+		uint version;
+		uint struct_size;
+		uint charged;
+		uint reserved;
+		struct agent_workflow_lifecycle_key key;
+		uint context_lane_depth;
+		uint context_lane_waiters;
+		uint metadata_txn_owned;
+		uint metadata_txn_waiters;
+		uint resource_account_valid;
+		uint resource_account_slot;
+		uint64 resource_account_generation;
+	} v2;
 	struct lifecycle_oversized_probe {
 		struct agent_workflow_lifecycle_info info;
 		uint guard;
@@ -503,11 +517,20 @@ static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix(void)
 	check(syscall(SYS_agent_workflow_lifecycle_info, &prefix,
 		      2 * sizeof(uint), 0, 0, 0) == AGENT_STATUS_OK,
 	      "accept workflow lifecycle sized prefix");
-	check(prefix.version == AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION &&
-	      prefix.struct_size ==
-		      sizeof(struct agent_workflow_lifecycle_info) &&
+	check(prefix.version == AGENT_WORKFLOW_LIFECYCLE_INFO_V2_VERSION &&
+	      prefix.struct_size == AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE &&
 	      prefix.guard == 0x5a5aa5a5U,
-	      "bound workflow lifecycle prefix copy");
+	      "negotiate legacy workflow lifecycle prefix");
+	check(sizeof(v2) == AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE,
+	      "freeze workflow lifecycle v2 test layout");
+	memset(&v2, 0, sizeof(v2));
+	check(syscall(SYS_agent_workflow_lifecycle_info, &v2,
+		      sizeof(v2), 0, 0, 0) == AGENT_STATUS_OK &&
+	      v2.version == AGENT_WORKFLOW_LIFECYCLE_INFO_V2_VERSION &&
+	      v2.struct_size == AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE &&
+	      v2.charged == 1 && v2.key.id != 0 &&
+	      v2.key.generation != 0 && v2.resource_account_valid == 1,
+	      "preserve complete workflow lifecycle v2 projection");
 	memset(&oversized, 0, sizeof(oversized));
 	oversized.guard = 0xa55a3cc3U;
 	check(syscall(SYS_agent_workflow_lifecycle_info, &oversized,

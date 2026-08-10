@@ -357,6 +357,34 @@ int agent_workflow_lifecycle_info(
 		       expected_generation);
 }
 
+int agent_execution_contract(
+	const struct agent_execution_contract_control *control,
+	struct agent_execution_contract_result *result)
+{
+	return syscall(SYS_agent_execution_contract, control, result);
+}
+
+int agent_task_channel_setup(
+	const struct agent_task_channel_setup *request,
+	struct agent_task_channel_setup_result *result)
+{
+	return syscall(SYS_agent_task_channel_setup, request, result);
+}
+
+int agent_task_channel_enter(
+	const struct agent_task_channel_enter *request,
+	struct agent_task_channel_enter_result *result)
+{
+	return syscall(SYS_agent_task_channel_enter, request, result);
+}
+
+int agent_task_channel_resource(
+	const struct agent_task_channel_resource *request,
+	struct agent_task_channel_resource_result *result)
+{
+	return syscall(SYS_agent_task_channel_resource, request, result);
+}
+
 int agent_resource_snapshot(struct agent_resource_snapshot *snapshot)
 {
 	return syscall(SYS_agent_resource_snapshot, snapshot,
@@ -488,6 +516,11 @@ int agent_tool_list(struct agent_tool_desc *out, int max)
 }
 
 int sys_tool_call(struct agent_request_v2 *req, struct agent_response_v2 *resp)
+{
+	return syscall(SYS_tool_call, req, resp);
+}
+
+int tool_call_v3(struct agent_request_v3 *req, struct agent_response_v3 *resp)
 {
 	return syscall(SYS_tool_call, req, resp);
 }
