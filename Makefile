@@ -7,6 +7,8 @@ K = os
 U = user
 F = nfs
 
+# Keep results/ out of git-clean pathspecs: because the ignored parent directory
+# collapses child pathspecs, naming results/contest-demo would delete all runs.
 WORKSPACE_GENERATED_PATHS = \
 	build build-* target target-* asm-* \
 	user/build user/build-* user/target user/target-* user/asm user/asm-* \
@@ -17,7 +19,7 @@ WORKSPACE_GENERATED_PATHS = \
 	baseline_ucore/user/asm baseline_ucore/user/asm-* \
 	nfs/*.img nfs/fs nfs/*.exe os/initproc.S \
 	baseline_ucore/nfs/*.img baseline_ucore/nfs/fs baseline_ucore/nfs/*.exe \
-	baseline_ucore/os/initproc.S results/contest-demo .pytest_cache \
+	baseline_ucore/os/initproc.S .pytest_cache \
 	host_tools/__pycache__ scripts/__pycache__
 
 TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then echo riscv64-unknown-elf-; else echo riscv64-linux-gnu-; fi)

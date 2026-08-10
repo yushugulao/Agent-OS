@@ -4,11 +4,13 @@
 product tests. These files are ordinary test inputs, not an independent
 acceptance system.
 
-The useful checks are deliberately narrow:
+The useful inputs are deliberately narrow:
 
 - current kernel/user UAPI sizes and offsets;
 - the dual-target state-file allowlist; and
-- actual performance experiment loads and operation counts.
+- actual performance experiment loads and operation counts;
+- deterministic Agent Live relay responses; and
+- scripted console and Nexus replay conversations.
 
 Run the inexpensive checks while developing:
 

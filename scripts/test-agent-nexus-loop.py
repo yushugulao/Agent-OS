@@ -79,6 +79,34 @@ def enum_values(source: str, prefix: str) -> dict[str, int]:
 
 
 class AgentNexusLoopTests(unittest.TestCase):
+    def test_guest_keeps_only_the_protocol_v2_runtime(self) -> None:
+        require(GUEST, '#define LIVE_PREFIX_V2 "@AGENTOS/2 "', "Nexus V2 prefix is missing")
+        require(
+            function_body(GUEST, "live_open_session"),
+            "live_parse_hello_v2(",
+            "Nexus HELLO no longer uses the V2 parser",
+        )
+        require(
+            function_body(GUEST, "live_relay_loop"),
+            "live_relay_loop_v2(",
+            "Nexus relay no longer enters the persistent V2 loop",
+        )
+        require(
+            function_body(GUEST, "live_workflow"),
+            "live_workflow_v2(",
+            "Nexus workflow no longer enters the persistent V2 loop",
+        )
+        for needle in (
+            '"@AGENTOS/1 "',
+            "live_parse_hello(",
+            "live_parse_decision(",
+            "live_build_request(",
+            "live_receive_decision(",
+            "live_execute_decision(",
+            "live_observer_worker(",
+        ):
+            forbid(GUEST, needle, "retired Nexus V1/dead runtime returned")
+
     def test_seed_provenance_and_exec_profile_are_versioned(self) -> None:
         for needle in (
             '#define AGENTNEXUS_SEED_VERSION 1U',
