@@ -33,6 +33,7 @@ def c_string(name: str, next_declaration: str) -> str:
 class AgentLiveLoopTests(unittest.TestCase):
     def test_wire_bounds_and_integrity_are_aligned(self) -> None:
         require('#define LIVE_PREFIX "@AGENTOS/1 "')
+        require('#define LIVE_PREFIX_V2 "@AGENTOS/2 "')
         require("#define LIVE_MAX_JSON 4096U")
         require("#define LIVE_MAX_FRAME 6144U")
         require("live_sha256(payload, decoded_length, actual_digest)")
@@ -47,6 +48,160 @@ class AgentLiveLoopTests(unittest.TestCase):
         line = f"@AGENTOS/1 {'0' * 32} 1 REQUEST {len(payload)} {digest} {encoded}\n"
         self.assertLessEqual(len(line.encode("ascii")), 6144)
         self.assertNotIn("=", encoded)
+
+    def test_v2_is_a_persistent_strict_session_not_a_second_boot(self) -> None:
+        for kind in (
+            "USER_MESSAGE",
+            "MODEL_REQUEST",
+            "MODEL_RESPONSE",
+            "MODEL_ERROR",
+            "APPROVAL_REQUEST",
+            "APPROVAL_DECISION",
+            "CONTROL_REQUEST",
+            "CONTROL_RESULT",
+            "CANCEL",
+            "SESSION_CLOSE",
+            "SESSION_CLOSED",
+            "TOOL_EVENT",
+            "TURN_COMPLETE",
+            "TELEMETRY",
+        ):
+            require(f'!strcmp(kind, "{kind}")')
+        require("uint64 tx_sequence = 1;")
+        require("uint64 rx_sequence = 2;")
+        require("#define LIVE_MAX_FINAL_TEXT 512U")
+        require("#define LIVE_WAIT_TICKS 9000")
+        require("#define LIVE_V2_WAIT_TICKS 11500")
+        require("LIVE_V2_WAIT_TICKS) == 0")
+        require("&heartbeats, LIVE_WAIT_TICKS) == 0")
+        require("uint64 next_corr_id = LIVE_CORR_BASE + 1;")
+        require("uint64 corr_id = next_corr_id++;")
+        require("input.turn_id == last_turn_id + 1")
+        require("input.request_id > last_request_id")
+        require("for (;;) {")
+        require("live_v2_finish_session(")
+        require('"interactive late cancel binding"')
+        require("input.turn_id == last_completed_turn_id")
+        require("input.request_id == last_completed_request_id")
+
+        relay = GUEST.index(
+            "static __attribute__((noinline)) void live_relay_loop_v2("
+        )
+        loop = GUEST.index("for (;;) {", relay)
+        user = GUEST.index('!strcmp(incoming_frame.kind, "USER_MESSAGE")', loop)
+        close = GUEST.index('!strcmp(incoming_frame.kind, "SESSION_CLOSE")', loop)
+        self.assertLess(close, user)
+        relay_end = GUEST.index("static int live_parse_u64_field", relay)
+        relay_body = GUEST[relay:relay_end]
+        self.assertNotIn("agent_workflow_create", relay_body)
+        wake = relay_body.index('"interactive typed V2 LLM_RESPONSE"')
+        answer = relay_body.index('"interactive final answer pipe"')
+        self.assertLess(
+            wake,
+            answer,
+            "wake main before a 512-byte final answer can fill the answer pipe",
+        )
+        self.assertGreater(
+            2 + 512,
+            512,
+            "the length prefix makes a maximum final answer larger than one pipe",
+        )
+
+    def test_dynamic_approval_is_exact_single_use_and_before_side_effect(self) -> None:
+        for needle in (
+            "LIVE_APPROVAL_TTL_TICKS 12000ULL",
+            "arguments_sha256",
+            "canonical_arguments",
+            "LIVE_APPROVAL_NONCE_HEX 32U",
+            "approval.turn_id != turn_id",
+            "approval.request_id != request_id",
+            "approval.corr_id != corr_id",
+            "strcmp(digest, approval.digest)",
+            "info.current_tick > approval.expires_tick",
+            "approval.consumed = 1",
+            "approval_status == -3",
+            'decision.decision, "deny"',
+            "close_after_turn = 1;",
+        ):
+            require(needle)
+
+        execute = GUEST.index('if (!strcmp(field, "live-TS"))')
+        consume = GUEST.index("live_consume_approval(", execute)
+        params = GUEST.index('live_param_u64(0, "target_pid"', execute)
+        call = GUEST.index("AGENT_TOOL_SEND_MESSAGE", params)
+        self.assertLess(consume, params)
+        self.assertLess(params, call)
+
+        denied = GUEST.index('strcmp(approved, "1")', execute)
+        denied_return = GUEST.index("return 0;", denied)
+        self.assertLess(denied, denied_return)
+        self.assertLess(denied_return, params)
+        send_end = GUEST.index('if (!strcmp(field, "live-F"))', execute)
+        send_branch = GUEST[execute:send_end]
+        self.assertGreaterEqual(
+            send_branch.count("tool_result->tool_id = AGENT_TOOL_SEND_MESSAGE;"),
+            4,
+            "approved, denied and invalid approvals retain send_message identity",
+        )
+
+    def test_controls_cancel_and_verified_cross_turn_history_are_guest_owned(self) -> None:
+        for command in ("tools", "context", "status", "reset"):
+            require(f'strcmp(input->command, "{command}")')
+        require("context_clear() != AGENT_STATUS_OK")
+        require("context_query(header.latest_sequence, &record, 1)")
+        require("memset(summaries, 0, sizeof(summaries));")
+        require('strcpy(compact, "live-C|user_interrupt")')
+        require('!strcmp(field, "live-C")')
+        require("AGENT_STATUS_CANCELLED")
+        compact_start = GUEST.index("static int live_make_compact(")
+        compact_end = GUEST.index("static void live_result_from_response", compact_start)
+        compact = GUEST[compact_start:compact_end]
+        self.assertIn('live_builder_text(&builder, "live-E|");', compact)
+        self.assertIn(
+            "decision->type == LIVE_DECISION_TOOL ? 'T' : 'N'", compact
+        )
+        require("Guest-verified facts=")
+        require("history[i].result.value0")
+        require("history[i].result.value1")
+        require("history[i].result.value2")
+        require("history[i].result.result")
+        require("LIVE_MAX_SESSION_SUMMARIES 2U")
+
+    def test_real_kernel_observer_uses_a_bounded_pipe_and_one_frame_writer(self) -> None:
+        for needle in (
+            "thread_create(live_observer_worker",
+            "AGENT_TIMELINE_FILTER_SOURCE_MASK |",
+            "AGENT_TIMELINE_FILTER_AFTER_CURSOR",
+            "AGENT_TIMELINE_FILTER_PID",
+            "filter.pid = getpid();",
+            "AGENT_TIMELINE_SOURCE_MASK_CONTEXT",
+            "agent_timeline_read(&filter, &record, 1, 25)",
+            "context_snapshot(&header, 0, 0)",
+            "agent_info(&info)",
+            "mutex_blocking_create()",
+            "mutex_lock(live_observer_mutex)",
+            "mutex_unlock(live_observer_mutex)",
+            "pipe(telemetry_pipe)",
+            '"bounded timeline observer pipe"',
+            '"bounded timeline telemetry publish"',
+            '"interactive cancel observer acknowledgement"',
+            "live_observer_copy(&observer_sample, &tool_result)",
+            "live_tool_name_from_id(sample->tool_id)",
+            '"kernel_timeline"',
+            '"kernel_snapshot"',
+            "guest_policy",
+            '"context_timeline"',
+            '"context_snapshot"',
+            "record_sequence",
+            "fresh",
+            "sample->context_sequence == fallback->context_sequence",
+            "sample->tool_id == fallback->tool_id",
+            "sample->status == fallback->status",
+        ):
+            require(needle)
+        workflow = GUEST.index("void live_workflow_v2(")
+        self.assertNotIn("live_emit_frame_v2(", GUEST[workflow:])
+        require("live_v2_emit_json(session, tx_sequence")
 
     def test_rich_overlay_is_provider_valid_and_bounded(self) -> None:
         raw = c_string("live_tools_json", "static struct agent_tool_desc_v2")

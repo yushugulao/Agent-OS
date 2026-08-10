@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check agentos-console-image agentos-console agentos-cli agentos-observe agentos-console-check agentos-console-replay agentos-console-deepseek contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -523,6 +523,7 @@ override HOST_PRODUCT_TESTS := \
 	host_tools/test_check_host_surface_alignment.py \
 	host_tools/test_check_host_test_alignment.py \
 	host_tools/test_agent_task_transport.py \
+	host_tools/test_agentos_console.py \
 	host_tools/test_guest_llm_relay.py \
 	host_tools/test_mcp_a2a_gateway.py \
 	host_tools/test_evaluation_contract.py \
@@ -603,6 +604,21 @@ AGENT_LIVE_DEEPSEEK_VERIFY_ARGS = $(if $(and $(filter deepseek,$(AGENT_LIVE_PROV
 	--require-guest-marker $(call shell_quote,agentlive_ucore: reject_unknown=0 reject_bad_args=0 reject_replay=0) \
 	--require-guest-marker $(call shell_quote,agentlive_ucore: transcript_turns=2 retained=2 dropped=0) \
 	--require-guest-marker $(call shell_quote,agentlive_ucore: relay_rounds_done=1 unknown=0 bad_args=0 replay=0 send_sink=0))
+AGENTOS_CONSOLE_PROVIDER ?= deepseek
+AGENTOS_CONSOLE_MODEL ?= $(if $(filter deepseek,$(AGENTOS_CONSOLE_PROVIDER)),deepseek-v4-flash,)
+AGENTOS_CONSOLE_ENDPOINT ?= $(if $(filter deepseek,$(AGENTOS_CONSOLE_PROVIDER)),https://api.deepseek.com/chat/completions,)
+AGENTOS_CONSOLE_API_KEY_ENV ?=
+AGENTOS_CONSOLE_API_KEY_FILE ?= $(if $(filter deepseek,$(AGENTOS_CONSOLE_PROVIDER)),$(AGENT_LIVE_DEEPSEEK_KEY_FILE),)
+AGENTOS_CONSOLE_REPLAY_FILE ?= ci/agentos-interactive-replay.jsonl
+AGENTOS_CONSOLE_REPLAY_DEP = $(if $(filter replay,$(AGENTOS_CONSOLE_PROVIDER)),$(AGENTOS_CONSOLE_REPLAY_FILE))
+AGENTOS_CONSOLE_REPLAY_ARGS = $(if $(filter replay,$(AGENTOS_CONSOLE_PROVIDER)),--replay-file $(call shell_quote,$(AGENTOS_CONSOLE_REPLAY_FILE)))
+AGENTOS_CONSOLE_MODEL_ARGS = $(if $(strip $(AGENTOS_CONSOLE_MODEL)),--model $(call shell_quote,$(AGENTOS_CONSOLE_MODEL)))
+AGENTOS_CONSOLE_ENDPOINT_ARGS = $(if $(strip $(AGENTOS_CONSOLE_ENDPOINT)),--endpoint $(call shell_quote,$(AGENTOS_CONSOLE_ENDPOINT)))
+AGENTOS_CONSOLE_KEY_ARGS = $(if $(strip $(AGENTOS_CONSOLE_API_KEY_FILE)),--api-key-file $(call shell_quote,$(AGENTOS_CONSOLE_API_KEY_FILE)),$(if $(strip $(AGENTOS_CONSOLE_API_KEY_ENV)),--api-key-env $(call shell_quote,$(AGENTOS_CONSOLE_API_KEY_ENV))))
+AGENTOS_CONSOLE_PROVIDER_ARGS = \
+	--provider $(call shell_quote,$(AGENTOS_CONSOLE_PROVIDER)) \
+	$(AGENTOS_CONSOLE_REPLAY_ARGS) $(AGENTOS_CONSOLE_MODEL_ARGS) \
+	$(AGENTOS_CONSOLE_ENDPOINT_ARGS) $(AGENTOS_CONSOLE_KEY_ARGS)
 QEMUOPTS = \
 	-nographic \
 	-machine virt \
@@ -702,6 +718,126 @@ agentos-test:
 		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) \
 		BASH_BIN=$(call shell_quote,$(BASH_BIN)) \
 		$(call shell_quote,$(BASH_BIN)) scripts/run-agent-tests.sh
+
+# Build the persistent console Guest once.  Runtime sockets and latest state
+# live below the owner-only Host runtime directory, never in this workspace.
+agentos-console-image: user/src/agentlive_ucore.c
+	@rm -f $(F)/fs.img $(F)/fs-copy.img
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(U) -f Makefile clean
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(U) -f Makefile \
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+		CHAPTER=agent CH_TESTS=agentlive_ucore
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(F) -f Makefile
+	@set -e; tmp="$(F)/fs-copy.img.$$$$.tmp"; \
+		trap 'rm -f "$$tmp"' 0 1 2 3 15; \
+		$(CP) "$(F)/fs.img" "$$tmp"; \
+		mv -f "$$tmp" "$(F)/fs-copy.img"; \
+		trap - 0 1 2 3 15
+	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory build \
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+		LOG=warn INIT_PROC=agentlive_ucore CHAPTER=agent
+
+agentos-console: agentos-console-image host_tools/agentos_console.py host_tools/agentos_relayd.py host_tools/agentos_cli.py host_tools/agentos_local_protocol.py $(AGENTOS_CONSOLE_REPLAY_DEP)
+	@if test -n $(call shell_quote,$(AGENTOS_CONSOLE_API_KEY_FILE)) && \
+		test -n $(call shell_quote,$(AGENTOS_CONSOLE_API_KEY_ENV)); then \
+		echo "AGENTOS_CONSOLE_API_KEY_FILE and AGENTOS_CONSOLE_API_KEY_ENV are mutually exclusive" >&2; \
+		exit 2; \
+	fi
+	@case $(call shell_quote,$(AGENTOS_CONSOLE_PROVIDER)) in \
+		replay) ;; \
+		openai|anthropic|deepseek) \
+			test -n $(call shell_quote,$(AGENTOS_CONSOLE_MODEL)) || \
+				{ echo "AGENTOS_CONSOLE_MODEL is required for a live provider" >&2; exit 2; } ;; \
+		*) echo "invalid AGENTOS_CONSOLE_PROVIDER" >&2; exit 2 ;; \
+	esac
+	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py run \
+		$(AGENTOS_CONSOLE_PROVIDER_ARGS) \
+		--qemu $(call shell_quote,$(QEMU)) \
+		--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
+		--image $(call shell_quote,$(F)/fs-copy.img)
+
+agentos-cli: host_tools/agentos_console.py host_tools/agentos_cli.py host_tools/agentos_local_protocol.py
+	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py cli --attach latest
+
+agentos-observe: host_tools/agentos_console.py host_tools/agentos_observe.py host_tools/agentos_local_protocol.py
+	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py observe --attach latest
+
+agentos-console-check: host_tools/test_agentos_console.py scripts/test-agent-live-loop.py
+	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_console.py
+	@$(PYTHON_CMD) -I -S -B scripts/test-agent-live-loop.py
+
+# Deterministic multi-turn acceptance: one QEMU boot, real Guest tools,
+# Context controls, one denied side effect, a safe alternative, and close.
+agentos-console-replay: agentos-console-image host_tools/agentos_console.py host_tools/agentos_relayd.py host_tools/agentos_cli.py host_tools/agentos_observe.py host_tools/agentos_local_protocol.py host_tools/validate_agentos_console_replay.py $(AGENTOS_CONSOLE_REPLAY_FILE) ci/agentos-interactive-script.txt
+	@set -eu; \
+		runtime=$$(mktemp -d /tmp/aoc.XXXXXX); \
+		controller="$$runtime/controller.ndjson"; \
+		controller_error="$$runtime/controller.stderr"; \
+		observer="$$runtime/observer.ndjson"; \
+		observer_error="$$runtime/observer.stderr"; \
+		daemon_log="$$runtime/daemon.log"; \
+		daemon_pid=; observer_pid=; \
+		cleanup() { \
+			status=$$?; \
+			trap - 0 1 2 3 15; \
+			if test -n "$$observer_pid" && kill -0 "$$observer_pid" 2>/dev/null; then kill "$$observer_pid" 2>/dev/null || true; fi; \
+			if test -n "$$daemon_pid" && kill -0 "$$daemon_pid" 2>/dev/null; then kill "$$daemon_pid" 2>/dev/null || true; fi; \
+			if test -n "$$observer_pid"; then wait "$$observer_pid" 2>/dev/null || true; fi; \
+			if test -n "$$daemon_pid"; then wait "$$daemon_pid" 2>/dev/null || true; fi; \
+			if test "$$status" -ne 0; then \
+				printf '%s\n' '--- AgentOS console daemon ---' >&2; test ! -f "$$daemon_log" || cat "$$daemon_log" >&2; \
+				printf '%s\n' '--- AgentOS controller ---' >&2; test ! -f "$$controller" || cat "$$controller" >&2; \
+				printf '%s\n' '--- AgentOS controller stderr ---' >&2; test ! -f "$$controller_error" || cat "$$controller_error" >&2; \
+				printf '%s\n' '--- AgentOS observer ---' >&2; test ! -f "$$observer" || cat "$$observer" >&2; \
+				printf '%s\n' '--- AgentOS observer stderr ---' >&2; test ! -f "$$observer_error" || cat "$$observer_error" >&2; \
+			fi; \
+			runtime_user="$$runtime/agentos-$$(id -u)"; \
+			rm -f "$$runtime_user"/control-*.sock "$$runtime_user"/telemetry-*.sock \
+				"$$runtime_user"/latest.json "$$runtime_user"/daemon.lock 2>/dev/null || true; \
+			rm -f "$$controller" "$$controller_error" "$$observer" "$$observer_error" "$$daemon_log"; \
+			rmdir "$$runtime_user" 2>/dev/null || true; \
+			rmdir "$$runtime" 2>/dev/null || true; \
+			exit "$$status"; \
+		}; \
+		trap cleanup 0; \
+		trap 'exit 130' 1 2 3 15; \
+		$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py daemon \
+			--provider replay \
+			--qemu $(call shell_quote,$(QEMU)) \
+			--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
+			--image $(call shell_quote,$(F)/fs-copy.img) \
+			--replay-file $(call shell_quote,$(AGENTOS_CONSOLE_REPLAY_FILE)) \
+			--runtime-dir "$$runtime" --quiet > "$$daemon_log" 2>&1 & \
+		daemon_pid=$$!; \
+		state="$$runtime/agentos-$$(id -u)/latest.json"; \
+		attempt=0; \
+		while test ! -s "$$state" && test "$$attempt" -lt 3000; do \
+			kill -0 "$$daemon_pid" 2>/dev/null || { printf '%s\n' 'AgentOS daemon exited before publishing state' >&2; exit 1; }; \
+			attempt=$$((attempt + 1)); sleep 0.05; \
+		done; \
+		test -s "$$state" || { printf '%s\n' 'AgentOS daemon state timeout' >&2; exit 1; }; \
+		$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py observe \
+			--attach latest --state-file "$$state" --json-events \
+			--until-event session_closed > "$$observer" 2> "$$observer_error" & \
+		observer_pid=$$!; \
+		attempt=0; \
+		while test ! -s "$$observer" && test "$$attempt" -lt 200; do \
+			kill -0 "$$observer_pid" 2>/dev/null || { printf '%s\n' 'AgentOS observer exited before attaching' >&2; exit 1; }; \
+			attempt=$$((attempt + 1)); sleep 0.05; \
+		done; \
+		test -s "$$observer" || { printf '%s\n' 'AgentOS observer attach timeout' >&2; exit 1; }; \
+		$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py cli \
+			--attach latest --state-file "$$state" \
+			--script ci/agentos-interactive-script.txt \
+			--json-events --event-timeout 120 > "$$controller" 2> "$$controller_error"; \
+		wait "$$observer_pid"; observer_pid=; \
+		wait "$$daemon_pid"; daemon_pid=; \
+		$(PYTHON_CMD) -I -S -B host_tools/validate_agentos_console_replay.py \
+			--controller "$$controller" --observer "$$observer" \
+			--fixture $(call shell_quote,$(AGENTOS_CONSOLE_REPLAY_FILE))
+
+agentos-console-deepseek:
+	+@$(MAKE) --no-print-directory agentos-console AGENTOS_CONSOLE_PROVIDER=deepseek
 
 # The Guest owns the conversation, tool selection, Context, and kernel calls.
 # The Host relay only carries framed bytes and provider HTTPS; replay uses the

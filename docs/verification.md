@@ -138,6 +138,16 @@ make contest-demo TOOLPREFIX=riscv-none-elf-
 
 脚本默认运行 4 个等量 AB/BA QEMU 样本，验证 traversal 与 indexed 路径得到相同结果，并把逐样本日志、`summary.json`、`measurements.csv` 和 `report.md` 写入 `results/contest-demo/`。文档不预填尚未实跑的数值；对外引用时应一并保留本次环境、样本数、单位、失败样本和原始日志。主演示的讲解顺序见[现场演示脚本](agentos/scenario-script.md)。
 
+长驻交互产品另有独立入口，不替代上述固定性能场景：
+
+```bash
+make agentos-console-check
+make agentos-console-replay TOOLPREFIX=riscv-none-elf-
+make agentos-console-deepseek TOOLPREFIX=riscv-none-elf-
+```
+
+第一条只运行 Host 单测与 Guest 静态合同；第二条在一次真实 QEMU boot 中同时连接 controller 和 observer，以结构化 NDJSON 验收七个 digest-bound 模型请求、三回合工具路径、`waiting_llm`、fresh Context timeline 和正常关闭；第三条是人工 live provider 入口，不进入默认 CI。observer 只提供有测量扰动的 high-signal live snapshots，不是全量实时 trace 或独立安全边界。完整的双窗口步骤、25 秒动态审批、`/context` 字段和 Guest/Host 责任边界见[交互控制台说明](agentos/interactive-console.md)。
+
 ## 7. 性能测试
 
 专项性能测试直接运行产品负载，不依赖预置结果或 Host receipt：

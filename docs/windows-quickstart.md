@@ -85,7 +85,42 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 性能数字应与本次运行的工具链、QEMU 版本、Host CPU、样本数和负载一起记录。原始串口输出和比较摘要已经足够定位产品回归和复核测量。
 
-## 6. MSYS2 备选
+## 6. Windows Terminal 双窗口交互演示
+
+交互控制台使用 WSL 内 owner-only Unix socket；两个窗口必须打开同一个 WSL distribution、使用同一 Linux 用户。先在 Windows Terminal 新建一个 WSL 窗格作为左侧控制台，并进入仓库，例如：
+
+```bash
+cd /mnt/e/agentos-release-20260810
+make agentos-console TOOLPREFIX=riscv64-linux-gnu-
+```
+
+该命令只构建一次 `agentlive_ucore` 镜像，随后启动长驻 QEMU/Host daemon 并显示 `agentos>`。看到提示符后，在 Windows Terminal 再拆分一个使用同一 WSL profile 的右侧窗格：
+
+```bash
+cd /mnt/e/agentos-release-20260810
+make agentos-observe
+```
+
+左侧直接输入自然语言。`/tools`、`/context`、`/status`、`/reset` 和 `/quit` 分别查询工具、查看 Context、查看状态、重置对话状态和正常关闭 session；`/context` 的真实 Guest 响应包含 count、最旧/最新 sequence、dropped、provenance 和最新 tool/status/result 摘要。副作用工具显示 `Approve? [y/N/a]`，也可使用 `/approve` 或 `/deny`；Host 最多等待 25 秒，超时或 controller 断开即 deny。执行中按 `Ctrl-C` 只取消当前 turn，不应关闭 QEMU。左侧终端断开但 daemon 仍存活时，在相同 WSL 用户下运行 `make agentos-cli` 重新连接；右侧随时可以重新运行 `make agentos-observe`。
+
+左侧 `agentos-cli` 只负责终端呈现以及收集用户、slash command、取消和审批输入。后台 daemon 独占 QEMU 串口，保管 API key，完成 TLS/provider 翻译并路由 owner-only 本地连接；Agent Loop、历史、工具选择和工具执行仍由 Guest 拥有。右侧不是全量实时内核 trace，而是 Guest observer 线程读取并转发的 high-signal live snapshots；它存在测量扰动，也不构成独立安全边界。
+
+无网络演示先验收固定 replay：
+
+```bash
+make agentos-console-check
+make agentos-console-replay TOOLPREFIX=riscv64-linux-gnu-
+```
+
+使用 DeepSeek 进行自由交互时显式运行：
+
+```bash
+make agentos-console-deepseek TOOLPREFIX=riscv64-linux-gnu-
+```
+
+Make 在 Host 侧探测仓库外的 `../deepseek_api.txt` 和 `../计算机操作系统能力竞赛/deepseek_api.txt`，不会把 key 内容放进 argv、Guest 或日志。其他路径用 `AGENTOS_CONSOLE_API_KEY_FILE=/absolute/path/to/key.txt` 指定。现场网络不可用时，不会静默切 provider；结束 live session 后显式运行 `make agentos-console-replay`。replay 经过同一 Guest/内核路径但只接受 fixture 预设脚本，不能称为自由问答或 DeepSeek 实测。详细的审批绑定、observer 边界和 slash 命令见 [AgentOS 交互控制台](agentos/interactive-console.md)。
+
+## 7. MSYS2 备选
 
 WSL 不可用时可以在完整 MSYS2 环境中运行，但必须提供 `/usr/bin/python3`、Bash、Git、Make、QEMU 和同一套 RISC-V GCC/binutils。示例：
 
@@ -99,6 +134,6 @@ make build
 make agentos-test
 ```
 
-不要在同一次命令中混用 Windows Python、Git Bash 工具和 MSYS2 路径。若仓库位于中文路径，优先使用 WSL 的 `/mnt/...` 映射或确认 MSYS2 使用 UTF-8 locale。
+不要在同一次命令中混用 Windows Python、Git Bash 工具和 MSYS2 路径。若仓库位于中文路径，优先使用 WSL 的 `/mnt/...` 映射或确认 MSYS2 使用 UTF-8 locale。长驻双窗口产品入口以 WSL 为推荐环境；MSYS2 仍适合现有构建和一次性测试。
 
 更完整的测试选择见 [验证说明](verification.md) 与 [AgentOS 内核验证](agentos/verification.md)。

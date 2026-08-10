@@ -35,6 +35,31 @@ from typing import BinaryIO, Callable, Mapping, Protocol, Sequence
 
 WIRE_PREFIX = b"@AGENTOS/1"
 WIRE_KINDS = frozenset(("HELLO", "REQUEST", "RESPONSE", "ERROR", "GOODBYE"))
+WIRE_V2_PREFIX = b"@AGENTOS/2"
+WIRE_V2_HOST_KINDS = frozenset(
+    (
+        "HELLO",
+        "USER_MESSAGE",
+        "MODEL_RESPONSE",
+        "MODEL_ERROR",
+        "APPROVAL_DECISION",
+        "CONTROL_REQUEST",
+        "CANCEL",
+        "SESSION_CLOSE",
+    )
+)
+WIRE_V2_GUEST_KINDS = frozenset(
+    (
+        "MODEL_REQUEST",
+        "APPROVAL_REQUEST",
+        "TOOL_EVENT",
+        "TURN_COMPLETE",
+        "CONTROL_RESULT",
+        "TELEMETRY",
+        "SESSION_CLOSED",
+    )
+)
+WIRE_V2_KINDS = WIRE_V2_HOST_KINDS | WIRE_V2_GUEST_KINDS
 WIRE_SESSION_RE = re.compile(r"[0-9a-f]{32}\Z")
 WIRE_DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
 WIRE_BASE64_RE = re.compile(rb"[A-Za-z0-9_-]*\Z")
@@ -67,6 +92,7 @@ DEEPSEEK_DEFAULT_ENDPOINT = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 MAX_MESSAGES = 64
 MAX_TOOLS = 32
+MAX_TOOL_ARGUMENTS = 3
 MAX_CORRELATION_ID = (1 << 63) - 1
 MAX_SEQUENCE = (1 << 63) - 1
 
@@ -140,12 +166,37 @@ class WireFrame:
 class FrameCodec:
     """Encode and integrity-check compact, newline-delimited serial frames."""
 
-    def __init__(self, max_payload_bytes: int = PROTOCOL_MAX_PAYLOAD_BYTES) -> None:
+    def __init__(
+        self,
+        max_payload_bytes: int = PROTOCOL_MAX_PAYLOAD_BYTES,
+        *,
+        wire_prefix: bytes = WIRE_PREFIX,
+        wire_kinds: Sequence[str] = tuple(WIRE_KINDS),
+    ) -> None:
         if not 1 <= max_payload_bytes <= PROTOCOL_MAX_PAYLOAD_BYTES:
             raise ValueError(
                 f"max_payload_bytes must be in 1..{PROTOCOL_MAX_PAYLOAD_BYTES}"
             )
+        if (
+            not isinstance(wire_prefix, bytes)
+            or not wire_prefix
+            or b" " in wire_prefix
+            or b"\n" in wire_prefix
+            or b"\r" in wire_prefix
+        ):
+            raise ValueError("wire prefix must be non-empty bounded bytes")
+        kinds = frozenset(wire_kinds)
+        if not kinds or not all(
+            isinstance(kind, str)
+            and kind
+            and kind.isascii()
+            and kind.replace("_", "A").isalnum()
+            for kind in kinds
+        ):
+            raise ValueError("wire kinds are malformed")
         self.max_payload_bytes = max_payload_bytes
+        self.wire_prefix = wire_prefix
+        self.wire_kinds = kinds
 
     def encode(self, frame: WireFrame) -> bytes:
         self._validate_header(frame.session, frame.seq, frame.kind)
@@ -155,7 +206,7 @@ class FrameCodec:
         payload = base64.urlsafe_b64encode(frame.payload).rstrip(b"=")
         line = b" ".join(
             (
-                WIRE_PREFIX,
+                self.wire_prefix,
                 frame.session.encode("ascii"),
                 str(frame.seq).encode("ascii"),
                 frame.kind.encode("ascii"),
@@ -179,7 +230,7 @@ class FrameCodec:
         if not line.endswith(b"\n") or line.endswith(b"\r\n"):
             raise WireProtocolError("BAD_FRAME", "serial frame must end with LF")
         fields = line[:-1].split(b" ")
-        if len(fields) != 7 or fields[0] != WIRE_PREFIX:
+        if len(fields) != 7 or fields[0] != self.wire_prefix:
             raise WireProtocolError("BAD_FRAME", "serial frame header is malformed")
         try:
             session = fields[1].decode("ascii")
@@ -218,13 +269,12 @@ class FrameCodec:
             raise WireProtocolError("BAD_HASH", "frame payload digest does not match")
         return WireFrame(session, seq, kind, payload)
 
-    @staticmethod
-    def _validate_header(session: str, seq: int, kind: str) -> None:
+    def _validate_header(self, session: str, seq: int, kind: str) -> None:
         if WIRE_SESSION_RE.fullmatch(session) is None:
             raise WireProtocolError("BAD_SESSION", "frame session is malformed")
         if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= MAX_SEQUENCE:
             raise WireProtocolError("BAD_SEQUENCE", "frame sequence is out of range")
-        if kind not in WIRE_KINDS:
+        if kind not in self.wire_kinds:
             raise WireProtocolError("BAD_KIND", "frame kind is unsupported")
 
 
@@ -272,6 +322,11 @@ def _require_u64(value: object, label: str, *, positive: bool = False) -> int:
 def _validate_tool_arguments(value: object, label: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ProviderError("BAD_TOOL_ARGUMENTS", f"{label} must be an object")
+    if len(value) > MAX_TOOL_ARGUMENTS:
+        raise ProviderError(
+            "BAD_TOOL_ARGUMENTS",
+            f"{label} exceeds the {MAX_TOOL_ARGUMENTS}-argument Guest limit",
+        )
     result: dict[str, object] = {}
     for key, item in value.items():
         if not isinstance(key, str) or not TOOL_NAME_RE.fullmatch(key):
@@ -442,11 +497,15 @@ class ModelReply:
         if self.type == "tool_use":
             if self.arguments is None:
                 raise ProviderError("BAD_PROVIDER_RESPONSE", "tool response has no arguments")
+            if not isinstance(self.tool, str) or TOOL_NAME_RE.fullmatch(self.tool) is None:
+                raise ProviderError("BAD_PROVIDER_RESPONSE", "model tool name is invalid")
             return {
                 "corr_id": corr_id,
                 "type": "tool_use",
                 "tool": self.tool,
-                "arguments": dict(self.arguments),
+                "arguments": _validate_tool_arguments(
+                    self.arguments, "model tool arguments"
+                ),
             }
         raise ProviderError("BAD_PROVIDER_RESPONSE", "provider returned an unknown response type")
 
@@ -656,6 +715,11 @@ class _ProtocolProvider:
         self.model = model
         self._provider_call_ids: dict[int, str] = {}
 
+    def reset_session(self) -> None:
+        """Forget provider-private call handles after an explicit Guest reset."""
+
+        self._provider_call_ids.clear()
+
     def _model(self, request: Mapping[str, object]) -> str:
         requested = request.get("model", "")
         if requested and not isinstance(requested, str):
@@ -683,6 +747,9 @@ class _ProtocolProvider:
         if corr_id in self._provider_call_ids:
             raise ProviderError("DUPLICATE_CORRELATION", "corr_id was already completed")
         self._provider_call_ids[corr_id] = provider_call_id
+        while len(self._provider_call_ids) > MAX_MESSAGES:
+            oldest = next(iter(self._provider_call_ids))
+            del self._provider_call_ids[oldest]
 
 
 class OpenAICompatibleProvider(_ProtocolProvider):
@@ -1077,7 +1144,13 @@ class ReplayProvider:
         self._lock = threading.Lock()
 
     @classmethod
-    def from_jsonl(cls, path: Path, *, max_bytes: int = 1024 * 1024) -> "ReplayProvider":
+    def from_jsonl(
+        cls,
+        path: Path,
+        *,
+        max_bytes: int = 1024 * 1024,
+        require_request_digests: bool = False,
+    ) -> "ReplayProvider":
         info = path.stat()
         if not path.is_file() or info.st_size > max_bytes:
             raise ValueError("replay file is unavailable or oversized")
@@ -1104,6 +1177,10 @@ class ReplayProvider:
                 not isinstance(digest, str) or WIRE_DIGEST_RE.fullmatch(digest) is None
             ):
                 raise ValueError(f"invalid replay digest on line {line_number}")
+            if require_request_digests and not digest:
+                raise ValueError(
+                    f"interactive replay requires request_sha256 on line {line_number}"
+                )
             records.append(ReplayRecord(value["response"], str(digest)))
         return cls(records)
 
@@ -1461,8 +1538,22 @@ class QemuSerialProcess:
 class SerialLineScanner:
     """Separate framed RPC from arbitrary boot/console log bytes."""
 
-    def __init__(self, *, max_line_bytes: int = PROTOCOL_MAX_WIRE_LINE_BYTES) -> None:
+    def __init__(
+        self,
+        *,
+        max_line_bytes: int = PROTOCOL_MAX_WIRE_LINE_BYTES,
+        wire_prefix: bytes = WIRE_PREFIX,
+    ) -> None:
+        if (
+            not isinstance(wire_prefix, bytes)
+            or not wire_prefix
+            or b" " in wire_prefix
+            or b"\n" in wire_prefix
+            or b"\r" in wire_prefix
+        ):
+            raise ValueError("wire prefix is malformed")
         self.max_line_bytes = max_line_bytes
+        self.wire_prefix = wire_prefix
         self._buffer = bytearray()
         self._discarding_log = False
 
@@ -1473,7 +1564,7 @@ class SerialLineScanner:
             newline = self._buffer.find(b"\n")
             if newline < 0:
                 if len(self._buffer) > self.max_line_bytes:
-                    if self._buffer.startswith(WIRE_PREFIX + b" "):
+                    if self._buffer.startswith(self.wire_prefix + b" "):
                         raise WireProtocolError(
                             "FRAME_TOO_LARGE", "serial frame exceeds wire limit"
                         )
@@ -1485,7 +1576,7 @@ class SerialLineScanner:
             if self._discarding_log:
                 self._discarding_log = False
                 continue
-            if line.startswith(WIRE_PREFIX + b" "):
+            if line.startswith(self.wire_prefix + b" "):
                 if len(line) > self.max_line_bytes:
                     raise WireProtocolError(
                         "FRAME_TOO_LARGE", "serial frame exceeds wire limit"

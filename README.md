@@ -11,6 +11,7 @@ AgentOS-uCore 是面向 AI Agent workflow 的 RISC-V uCore 内核扩展，也是
 - [竞赛评审入口](docs/contest/README.md)：赛题映射、演示顺序和材料边界。
 - [系统设计](docs/agentos/design.md)：当前内核架构与关键不变量。
 - [合同与 Agent Loop 边界](docs/agentos/task6-execution-contract.md)：ENFORCE V3、Guest model loop、Task Channel core 与 MCP/A2A object prototype。
+- [交互控制台](docs/agentos/interactive-console.md)：长驻 Guest session、双窗口 CLI/observer、动态审批与 replay/live 边界。
 - [ABI 参考](docs/agentos/api.md)：用户接口、兼容项和错误语义。
 - [要求追踪](docs/agentos/requirements-traceability.md)：任务到源码与验证入口的映射。
 - [验证说明](docs/verification.md)：构建、功能、安全与性能测试入口。
@@ -120,6 +121,16 @@ make contest-demo
 ```
 
 该命令默认运行 4 个等量 AB/BA QEMU 样本并写入 `results/contest-demo/`；主要结果为 `report.md`、`summary.json`、`measurements.csv` 和逐样本串口日志。这些文件只描述本次运行。`labdemo_ucore` 使用确定性用户态 policy，便于离线重复和性能比较，不把主演示冒充真实 LLM 决策。当前源码的一次真实测量摘要见[实测性能结果](docs/contest/performance-results.md)，演示内容与专项程序见[现场演示脚本](docs/agentos/scenario-script.md)。
+
+需要评委自由输入时，使用长驻交互入口：
+
+```bash
+make agentos-console
+# 在同一 WSL 用户的第二个窗口中：
+make agentos-observe
+```
+
+`agentos-console` 在一次 QEMU 启动内保留 Guest Agent Loop 和有界会话历史；Host CLI 只呈现事件并收集输入，daemon 只负责串口、本地路由、TLS 和 provider 翻译。模型选择的真实工具由 Guest 通过内核执行，第二窗口用 high-signal live snapshots 按 `turn_id`/`corr_id` 对齐，不是全量实时 trace。它默认显式使用 DeepSeek，`make agentos-console-deepseek` 是等价的清晰别名；无网络的固定脚本验收使用 `make agentos-console-replay`，不会静默从 live 切换成 replay。完整的双窗口步骤、slash 命令、25 秒审批、Ctrl-C 和验证边界见[交互控制台说明](docs/agentos/interactive-console.md)。
 
 与主演示分开的 Guest model loop 有独立 QEMU 入口：
 

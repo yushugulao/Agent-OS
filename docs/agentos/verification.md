@@ -145,6 +145,30 @@ AGENT_LIVE_PROVIDER=deepseek make agent-live-demo
 
 Make 依次探测仓库外的 `../deepseek_api.txt` 与 `../计算机操作系统能力竞赛/deepseek_api.txt`，兼容竞赛目录内的普通 checkout 和同盘 release checkout；都找不到才让 relay 读取 `DEEPSEEK_API_KEY`。其他位置可显式设置 `AGENT_LIVE_API_KEY_FILE=/path/to/key.txt`。若改用环境变量，应令 `AGENT_LIVE_API_KEY_FILE=`，并可用 `AGENT_LIVE_API_KEY_ENV=ENV_NAME` 覆写默认名称。DeepSeek 请求关闭 thinking：当前 Guest whole-turn history 保存的是结构化 `tool_use`/`tool_result`，没有保存并回送供应商 `reasoning_content`，因此不能冒充符合 thinking-mode 的多轮协议。默认 replay 完全不访问网络；只有上述 live 命令实际完成并出现最终 Guest markers 后，才可报告为 DeepSeek 实测。
 
+### 5.1 长驻交互控制台
+
+交互控制台把一次性 `HELLO -> model/tool rounds -> GOODBYE` 扩展为同一 Guest/QEMU 内的多个用户 turn。验证分为三层：
+
+```bash
+make agentos-console-check
+make agentos-console-replay TOOLPREFIX=riscv-none-elf-
+make agentos-console-deepseek TOOLPREFIX=riscv-none-elf-
+```
+
+- `agentos-console-check` 运行 Host frame/local socket/controller/observer 单测和 Guest 交互 loop 静态合同，不启动 QEMU，也不证明 provider 可用。
+- `agentos-console-replay` 在一次 QEMU boot 内并发 attach observer，脚本化提交三个用户 turn 和七个模型请求，并要求每轮请求与 fixture 中的规范化 SHA-256 精确匹配。结构化 validator 检查成功的 `query_file`/`echo`/单次 `send_message`、deny 未执行副作用，以及 observer 收到 `waiting_llm`、fresh `context_timeline/kernel_timeline`、三个 `turn_complete` 和 `session_closed`。它是 offline 可复现验收，不是云模型结果。
+- `agentos-console-deepseek` 是显式人工入口，不进入默认 CI。只有实际 API 往返、模型自主选择工具和 Guest 最终回答均发生后，才能报告为 DeepSeek live 演示。
+
+长驻路径还必须检查以下不变量：
+
+- Guest 拥有 transcript、tool catalog、下一步选择校验、V2 typed 执行和 result 回灌；Host CLI 只呈现事件并收集用户/控制/审批输入，daemon 只负责串口、TLS/provider 翻译和 owner-only 本地路由。
+- `session_id`、递增 `turn_id`、`request_id` 和 `corr_id` 能将 CLI、串口、Context 与 observer 事件对应；final 只完成当前 turn，不退出 Guest。
+- `send_message` 的批准或拒绝绑定当前 session/turn/request/correlation、工具名、规范化参数 digest、新鲜 nonce 与有效期。Host 人工审批等待上限为 25 秒，超时或 controller 断开即 deny。当前这是 Guest 用户态 gate，不是内核 capability 或 V3 approval token。
+- `Ctrl-C` 取消当前 turn 而不杀死 session；`/quit` 才正常关闭。`/tools`、`/context`、`/status` 和 `/reset` 的响应来自 Guest control path，不能由 Host 用缓存业务数据冒充；其中 `/context` 报告 count、最旧/最新 sequence、dropped、provenance 及最新记录的 tool/status/result 摘要。
+- observer 读取的是同一 Guest 进程线程调用 timeline、Context 和 agent-info 得到的 high-signal live snapshots，不是全量实时 trace。它不是独立安全边界，并会增加读取、调度和串口开销，因此不用于性能数字。
+
+交互路径使用 V2 exploratory RPC 支持 result-dependent 选择；ENFORCE V3 仍是 frozen contract 的高保证执行模式。MCP/A2A 仍是 in-memory object prototype，控制台通过串口 model wire 运行，不能把此验收写成 MCP 互操作。完整操作见[交互控制台说明](interactive-console.md)。
+
 ## 6. 双目标与性能
 
 plain uCore 与 AgentOS-uCore 运行同一 deterministic 用户态科研工作流合同。`labdemo_ucore` 使用固定 policy，不依赖 LLM；这样 paired run 才能比较等量工作。端到端 paired run 用于整体比较；Credit Domain、Evidence Ring 或 Live Query 的单项性能结论还需要同内核消融、工作量计数或专项 benchmark，不能从双目标总差异直接归因。可选 `agentlive` 只验证模型 loop，不替换这一性能基线。

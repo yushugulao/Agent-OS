@@ -1,0 +1,7 @@
+{"request_sha256":"98eb53ee3db4091c061b14f2cc7be9b709083d3248570028c4c187b707c0d362","response":{"type":"tool_use","tool":"query_file","arguments":{"path":"agentlive.note"}}}
+{"request_sha256":"b212d89c95107b5eeb52b6e1a63602b8d097d3f52e5074b2a807e00148d01741","response":{"type":"final","content":"The Guest queried agentlive.note through the AgentOS kernel and preserved the verified result in Context."}}
+{"request_sha256":"cd588b1cb45311969365a3f19c36056542e1119ca8ee6d432687e370628b2f16","response":{"type":"tool_use","tool":"send_message","arguments":{"target_pid":"$RELAY_PID","message":"inspection-denied"}}}
+{"request_sha256":"dca6352b8820f0227ace5331fa7c44c5d57bc7f3ca45c538d8557ce8221a9d55","response":{"type":"tool_use","tool":"echo","arguments":{"payload":"approval-denied","arg0":0,"arg1":0}}}
+{"request_sha256":"7cb3db9f0fcd12dce6b1a6a540a8498313b63ffab94e2273dac0d3c6efd644e7","response":{"type":"final","content":"The side-effecting message was denied, so I recorded the denial with the safe echo tool instead."}}
+{"request_sha256":"985124f4c7a89a7c4eb3b2999d7dd8207cd5a971a8b982b7bb09d376f96521f5","response":{"type":"tool_use","tool":"send_message","arguments":{"target_pid":"$RELAY_PID","message":"inspection-approved"}}}
+{"request_sha256":"df344baa3749cdd2e6d9a60ac3d4c7036c15d1b65a29d4e399322b6ce67532b4","response":{"type":"final","content":"The specifically approved message was delivered, while the exact tool result remained governed and recorded by AgentOS."}}

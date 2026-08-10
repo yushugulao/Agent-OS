@@ -1,0 +1,10 @@
+# One QEMU boot: controls, three user turns, deny, safe fallback, approve, close.
+/tools
+/status
+Query agentlive.note with query_file and report the verified file result.
+/context
+Try send_message to the relay with message inspection-denied; if denied, use echo to record the denial, then summarize.
+/deny
+Send inspection-approved to the relay after approval, then summarize the result.
+/approve
+/quit
