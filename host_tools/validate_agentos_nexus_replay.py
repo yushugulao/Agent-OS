@@ -157,15 +157,14 @@ KERNEL_SNAPSHOT_FIELDS = frozenset(
     )
 )
 MEASUREMENT_TOKENS = (
-    "source_results=docs/contest/performance-results.md",
+    "source_manifest=one_shot_metrics/data/20260811/manifest.json",
+    "source_table=one_shot_metrics/data/20260811/tables/contest_paired.csv",
     "records=96",
     "traversal_us=34712.5",
     "indexed_us=13293.5",
     "paired_ratio_median=3.118",
     "wins=16/16",
     "nexus_derived_checks=16/16",
-    "nexus_derived_checks_basis=wins",
-    "nexus_derived_measurement_scope=historical_not_this_boot",
 )
 SOURCE_REVISION_TOKEN = (
     "source_revision=2b14fb1f74b9bd093e6de939a16554620835699e"

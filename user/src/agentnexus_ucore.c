@@ -4252,7 +4252,7 @@ static int nexus_measurement_valid(const char *payload)
 	static const char *required[] = {
 		"schema=agentos.nexus.measurement.v2\n",
 		"source_revision=", "source_manifest=", "source_table=",
-		"source_results=", "records=", "traversal_us=", "indexed_us=",
+		"records=", "traversal_us=", "indexed_us=",
 		"paired_ratio_median=", "wins=",
 		"nexus_derived_checks=", "nexus_derived_checks_basis=",
 		"nexus_derived_claim=", "nexus_derived_measurement_scope=",
@@ -4348,10 +4348,9 @@ static int nexus_measurement_summary(const char *payload, char *output,
 				     uint capacity)
 {
 	static const char *keys[] = {
-		"source_revision", "source_results", "records", "traversal_us",
-		"indexed_us", "paired_ratio_median", "wins", "nexus_derived_checks",
-		"nexus_derived_checks_basis", "nexus_derived_claim",
-		"nexus_derived_measurement_scope",
+		"source_revision", "source_manifest", "source_table", "records",
+		"traversal_us", "indexed_us", "paired_ratio_median", "wins",
+		"nexus_derived_checks",
 	};
 	char value[97];
 	struct live_builder builder;
@@ -4374,10 +4373,9 @@ static int nexus_measurement_event_summary(const char *payload, char *output,
 					   uint capacity)
 {
 	static const char *keys[] = {
-		"source_results", "records", "traversal_us", "indexed_us",
-		"paired_ratio_median", "wins", "nexus_derived_checks",
-		"nexus_derived_checks_basis",
-		"nexus_derived_measurement_scope",
+		"source_manifest", "source_table", "records", "traversal_us",
+		"indexed_us", "paired_ratio_median", "wins",
+		"nexus_derived_checks",
 	};
 	char value[97];
 	struct live_builder builder;
@@ -4400,10 +4398,9 @@ static int nexus_measurement_compact_event_summary(
 	const char *payload, char *output, uint capacity)
 {
 	static const char *keys[] = {
-		"source_results", "records", "traversal_us", "indexed_us",
-		"paired_ratio_median", "wins", "nexus_derived_checks",
-		"nexus_derived_checks_basis",
-		"nexus_derived_measurement_scope",
+		"source_manifest", "source_table", "records", "traversal_us",
+		"indexed_us", "paired_ratio_median", "wins",
+		"nexus_derived_checks",
 	};
 	char value[97];
 	struct live_builder builder;
@@ -4853,11 +4850,11 @@ static void live_prepare_workspace(void)
 		   "materialize Nexus tracked source capsules");
 	live_check(nexus_register_seed(
 		AGENTNEXUS_SEED_CASE_NAME, "source", "case", "ready",
-		"tracked AgentOS scenario source capsule",
+		"versioned AgentOS workflow contract capsule",
 		agent_dependency_label_bit("measure")) == AGENT_STATUS_OK &&
 		   nexus_register_seed(
 		AGENTNEXUS_SEED_MEAS_NAME, "measure", "measurement",
-		"published", "published historical 16-boot paired measurement",
+		"published", "canonical paired measurement dataset",
 		agent_dependency_label_bit("source")) == AGENT_STATUS_OK &&
 		   nexus_register_seed(
 		AGENTNEXUS_SEED_STATE_NAME, "runtime", "state", "ready",

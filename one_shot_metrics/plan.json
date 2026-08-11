@@ -11,12 +11,10 @@
     "overwrite": false,
     "production_tree_must_be_clean": true,
     "clean_scope_exclusion": "one_shot_metrics/**",
-    "build_integration": "none",
-    "postprocess_recovery": "one guarded extraction/validation/plot recovery; never rebuild or reboot"
+    "build_integration": "none"
   },
   "collections": {
     "contest": {
-      "runner": "scripts/run-contest-demo.sh",
       "boots": 16,
       "sample_order": "alternating AB/BA",
       "case_timeout": "180s",

@@ -2,7 +2,7 @@
 #define AGENTNEXUS_SEED_H
 
 /* Tracked ASCII source capsules materialized by the Nexus Guest at boot. */
-#define AGENTNEXUS_SEED_VERSION 2U
+#define AGENTNEXUS_SEED_VERSION 3U
 
 #define AGENTNEXUS_SEED_PROJECT "lab-gene-x"
 #define AGENTNEXUS_SEED_WORKFLOW "nightly-regression"
@@ -13,12 +13,11 @@
 #define AGENTNEXUS_SEED_STATE_NAME "nexus_state"
 
 #define AGENTNEXUS_SEED_CASE_BODY \
-	"schema=agentos.nexus.case.v1\n" \
-	"source_revision=base-96613ea\n" \
-	"source_path=docs/agentos/scenario-script.md\n" \
-	"source_lines=33-46\n" \
-	"source_pipeline=prepare>align>analyze>report>archive\n" \
-	"source_roles=Orchestrator,Sentinel,Investigator,Recovery\n" \
+	"schema=agentos.nexus.case.v2\n" \
+	"source_contract=agentos.nexus.workflow.v1\n" \
+	"seed_revision=3\n" \
+	"source_pipeline=watch>query>delegate>plan>govern>publish>audit\n" \
+	"source_roles=coordinator,system,research,analyst\n" \
 	"nexus_derived_project=lab-gene-x\n" \
 	"nexus_derived_workflow=nightly-regression\n" \
 	"nexus_derived_run_id=RUN-042\n" \
@@ -32,8 +31,6 @@
 	"source_revision=2b14fb1f74b9bd093e6de939a16554620835699e\n" \
 	"source_manifest=one_shot_metrics/data/20260811/manifest.json\n" \
 	"source_table=one_shot_metrics/data/20260811/tables/contest_paired.csv\n" \
-	"source_results=docs/contest/performance-results.md\n" \
-	"source_results_lines=37-50\n" \
 	"benchmark=file_query_core_path_paired\n" \
 	"records=96\n" \
 	"traversal_us=34712.5\n" \

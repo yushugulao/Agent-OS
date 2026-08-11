@@ -1,18 +1,13 @@
-# Test Configuration
+# AgentOS 测试配置
 
-`ci/` contains machine-readable layouts and workload definitions used by
-product tests. These files are ordinary test inputs, not an independent
-acceptance system.
+`ci/` 保存 AgentOS 自动测试使用的结构化输入：
 
-The useful inputs are deliberately narrow:
+- kernel/user UAPI 的 size 与 offset 清单；
+- Plain/AgentOS 双目标状态文件白名单；
+- 性能负载与操作次数；
+- Console 和 Nexus 的确定性 replay 响应及会话脚本。
 
-- current kernel/user UAPI sizes and offsets;
-- the dual-target state-file allowlist; and
-- actual performance experiment loads and operation counts;
-- deterministic Agent Live relay responses; and
-- scripted console and Nexus replay conversations.
-
-Run the inexpensive checks while developing:
+快速检查 ABI 与模块接线：
 
 ```sh
 make agent-uapi-check
@@ -20,13 +15,13 @@ make agent-module-check
 make kernel-stack-check
 ```
 
-Run real Guest behavior when a change can affect kernel semantics:
+运行 RISC-V64 QEMU Guest 回归：
 
 ```sh
 make agentos-test
 ```
 
-For a focused iteration, select the relevant Guest program directly:
+定向运行一个产品模块：
 
 ```sh
 AGENT_TEST_CASE=agentcontract_ucore make agentos-test
@@ -34,19 +29,12 @@ AGENT_TEST_CASE=agentsecurity_ucore make agentos-test
 AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test
 ```
 
-A timeout remains a test failure, but it is an operational bound rather than a
-machine-specific performance claim. Expected-fault, filesystem-capacity and
-device-fault cases must still terminate with their documented marker and
-status; unexpected panic, output overflow or forced termination fails the
-test.
+Runner 检查退出状态、pass marker、panic、输出上限和 timeout。故障注入场景还会检查结构化错误状态与资源回收结果。
 
-The contest demonstration is a real QEMU campaign, separate from these static
-inputs:
+Live Query 配对性能活动使用：
 
 ```sh
 make contest-demo
 ```
 
-It writes the current run's raw logs, `summary.json`, `measurements.csv` and
-`report.md` under `results/contest-demo/`; this directory contains run output,
-not CI configuration or predeclared performance values.
+该入口在 `results/contest-demo/` 写入串口输出、`summary.json`、`measurements.csv` 和 `report.md`。完整测试层次见[测试文档](../docs/testing.md)。

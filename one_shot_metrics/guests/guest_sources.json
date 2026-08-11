@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "campaign_id": "agentos-advanced-figures-20260811",
+  "source_commit": "2b14fb1f74b9bd093e6de939a16554620835699e",
+  "files": [
+    {
+      "name": "agenttask",
+      "path": "agenttask_ucore.c",
+      "source": "user/src/agenttask_ucore.c",
+      "source_sha256": "336443b49a1ffc08825a700854fbbd38629c0f8e2087e160a51200e06a76ed69",
+      "sha256": "d0f1a009799339ac0969da7b4cb2d0bb2f8558d9a47f3aed3d57a52b3211b95e",
+      "parameters": {
+        "rounds_per_path": 8,
+        "paths": [
+          "batch",
+          "scalar_v3",
+          "sq_cq"
+        ],
+        "path_order": "rotated",
+        "sequence_clock": "microseconds",
+        "per_operation_intervals": true
+      }
+    },
+    {
+      "name": "agent_eevdf",
+      "path": "agent_eevdf_ucore.c",
+      "source": "user/src/agent_eevdf_ucore.c",
+      "source_sha256": "8b0f9a1f325565f60960c89be6cfba8fa5648abe40a0e32f0759be76c874c393",
+      "sha256": "5bb8b563794f49d95a152525f2ebee9a3e0b44731a6ad1e7d4fcf9a5f48cd5c5",
+      "parameters": {
+        "concurrency_sweep": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "logical_arrival_scenario": 16,
+        "amplified_scenario": 44,
+        "wakeup_probes_per_fresh_agent": 4,
+        "exact_scheduler_snapshots": true
+      }
+    },
+    {
+      "name": "agenteval_hit_01",
+      "path": "agenteval_hit_01_ucore.c",
+      "source": "user/src/agenteval_ucore.c",
+      "source_sha256": "5cd9c1f7441ac139b335b8203dd115fbda84865f770214caa4a2b2407ad1518a",
+      "sha256": "8ab56f54087c4cd82a107dcfd3bc8a71df263c1a24576aca30488fbc230798e7",
+      "parameters": {
+        "figure_hit_count": 1,
+        "pairs_per_load": 15
+      }
+    },
+    {
+      "name": "agenteval_hit_02",
+      "path": "agenteval_hit_02_ucore.c",
+      "source": "user/src/agenteval_ucore.c",
+      "source_sha256": "5cd9c1f7441ac139b335b8203dd115fbda84865f770214caa4a2b2407ad1518a",
+      "sha256": "435c011eb95644802e41acca584c0627311475cf90f8c16753560aaf9d4ffe16",
+      "parameters": {
+        "figure_hit_count": 2,
+        "pairs_per_load": 15
+      }
+    },
+    {
+      "name": "agenteval_hit_04",
+      "path": "agenteval_hit_04_ucore.c",
+      "source": "user/src/agenteval_ucore.c",
+      "source_sha256": "5cd9c1f7441ac139b335b8203dd115fbda84865f770214caa4a2b2407ad1518a",
+      "sha256": "e61f3069f328a817683da3c7fb0fed5c324abadc0eb39ca648f08dd307cd5d5b",
+      "parameters": {
+        "figure_hit_count": 4,
+        "pairs_per_load": 15
+      }
+    },
+    {
+      "name": "agenteval_hit_08",
+      "path": "agenteval_hit_08_ucore.c",
+      "source": "user/src/agenteval_ucore.c",
+      "source_sha256": "5cd9c1f7441ac139b335b8203dd115fbda84865f770214caa4a2b2407ad1518a",
+      "sha256": "fafee7ac7637a4e78f6b6281bbe13a9d85edcb09fc40d5fbc547b395edcda1a1",
+      "parameters": {
+        "figure_hit_count": 8,
+        "pairs_per_load": 15
+      }
+    }
+  ]
+}

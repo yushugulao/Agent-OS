@@ -109,24 +109,23 @@ class AgentNexusLoopTests(unittest.TestCase):
 
     def test_seed_provenance_and_exec_profile_are_versioned(self) -> None:
         for needle in (
-            '#define AGENTNEXUS_SEED_VERSION 2U',
+            '#define AGENTNEXUS_SEED_VERSION 3U',
             '#define AGENTNEXUS_SEED_CASE_NAME "nexus_case"',
             '#define AGENTNEXUS_SEED_MEAS_NAME "nexus_meas"',
             '#define AGENTNEXUS_SEED_STATE_NAME "nexus_state"',
+            '"schema=agentos.nexus.case.v2\\n"',
+            '"source_contract=agentos.nexus.workflow.v1\\n"',
+            '"seed_revision=3\\n"',
             '"schema=agentos.nexus.measurement.v2\\n"',
             '"source_revision=2b14fb1f74b9bd093e6de939a16554620835699e\\n"',
-            '"source_path=docs/agentos/scenario-script.md\\n"',
-            '"source_lines=33-46\\n"',
-            '"source_pipeline=prepare>align>analyze>report>archive\\n"',
-            '"source_roles=Orchestrator,Sentinel,Investigator,Recovery\\n"',
+            '"source_pipeline=watch>query>delegate>plan>govern>publish>audit\\n"',
+            '"source_roles=coordinator,system,research,analyst\\n"',
             '"nexus_derived_project=lab-gene-x\\n"',
             '"nexus_derived_workflow=nightly-regression\\n"',
             '"nexus_derived_run_id=RUN-042\\n"',
             '"nexus_derived_incident=align_memory_limit\\n"',
             '"source_manifest=one_shot_metrics/data/20260811/manifest.json\\n"',
             '"source_table=one_shot_metrics/data/20260811/tables/contest_paired.csv\\n"',
-            '"source_results=docs/contest/performance-results.md\\n"',
-            '"source_results_lines=37-50\\n"',
             '"benchmark=file_query_core_path_paired\\n"',
             '"records=96\\n"',
             '"traversal_us=34712.5\\n"',
@@ -147,10 +146,18 @@ class AgentNexusLoopTests(unittest.TestCase):
             "retired Nexus measurement schema returned",
         )
         forbid(SEED, '"ratio=', "ambiguous unpaired ratio field returned")
+        for needle in (
+            "docs/",
+            "source_path=",
+            "source_lines=",
+            "source_results=",
+            "source_results_lines=",
+        ):
+            forbid(SEED, needle, "Nexus seed regained document or line-number coupling")
         require(
             GUEST,
-            '"published historical 16-boot paired measurement"',
-            "Nexus measurement metadata lost its canonical campaign scope",
+            '"canonical paired measurement dataset"',
+            "Nexus measurement metadata lost its canonical dataset identity",
         )
         forbid(
             GUEST,
@@ -465,7 +472,8 @@ class AgentNexusLoopTests(unittest.TestCase):
     def test_measurement_projection_and_report_provenance_are_source_bound(self) -> None:
         measurement = function_body(GUEST, "nexus_measurement_valid")
         for key in (
-            "source_results=",
+            "source_manifest=",
+            "source_table=",
             "records=",
             "traversal_us=",
             "indexed_us=",
@@ -484,15 +492,14 @@ class AgentNexusLoopTests(unittest.TestCase):
         ):
             projection = function_body(GUEST, name)
             for key in (
-                "source_results",
+                "source_manifest",
+                "source_table",
                 "records",
                 "traversal_us",
                 "indexed_us",
                 "paired_ratio_median",
                 "wins",
                 "nexus_derived_checks",
-                "nexus_derived_checks_basis",
-                "nexus_derived_measurement_scope",
             ):
                 require(projection, f'"{key}"', "Research TASK summary lost bounded evidence")
             forbid(projection, '"source_revision"', "Research TASK summary exceeds its bounded purpose")

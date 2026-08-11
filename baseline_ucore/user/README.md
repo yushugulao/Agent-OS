@@ -1,6 +1,6 @@
-# 用户程序目录说明：uCore
+# Plain uCore 对照程序
 
-本目录保留 uCore 教学内核的用户态测试和本项目 plain target 的科研 Agent 平台程序。该目标与主目标共享 syscall、同步、文件系统和进程生命周期等通用安全加固，但不包含 AgentOS syscall、Context、capability 或事件服务；科研平台通过这里的普通用户程序运行。
+本目录包含 uCore 教学测试和 Plain uCore 对照 workflow。对照程序通过普通进程、文件与 IPC 完成同一业务流程，用于和 AgentOS-uCore 的内核服务路径比较。
 
 ## 基础用法
 
@@ -30,13 +30,13 @@ make CHAPTER=5 BASE=1
 - `target/elf`：生成的 `.elf` 文件，扩展实验可能使用。
 - `asm`：用户程序反汇编输出。
 
-## 本项目相关入口
+## 对照 workflow
 
-plain target 的科研 Agent 平台程序位于 `user/src/`，常见入口包括：
+Plain target 程序位于 `user/src/`：
 
 - `rp_plain`
 - `rp_orch`
 - `rp_seed_orch`
 - `rp_compare_plain`
 
-这些程序通过普通文件写出 `rp_*` 状态记录。`make dual-platform-run` 使用 `host_tools/plain_ucore_fs_extract.py` 按清单提取文件，再由 `host_tools/compare_dual_platform_state.py` 核对 plain 与 AgentOS 的规范状态；Host 汇总不替代两侧 Guest 日志。
+这些程序通过普通文件写出 `rp_*` 状态记录。`make dual-platform-run` 使用 `host_tools/plain_ucore_fs_extract.py` 按清单提取文件，再由 `host_tools/compare_dual_platform_state.py` 核对 Plain 与 AgentOS 的阶段、文件内容、摘要、程序顺序和退出状态。运行方法见[产品运行指南](../../docs/usage.md)。

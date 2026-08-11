@@ -1,1 +1,0 @@
-plot.py: rendered 10/10 figures in png, pdf to <campaign>/figures

@@ -127,10 +127,6 @@ def panel_label(ax: Any, label: str, *, x: float = -0.10, y: float = 1.06) -> No
         ax.text(x, y, label, transform=ax.transAxes, fontsize=12, weight="bold")
 
 
-def figure_note(fig: Any, text: str) -> None:
-    fig.text(0.01, 0.012, text, ha="left", va="bottom", fontsize=7.4, color="#59636D")
-
-
 def ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     ordered = np.sort(np.asarray(values, dtype=float))
     if not len(ordered):
@@ -239,7 +235,7 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
     frame["delta_ms"] = frame["indexed_minus_traversal_core_us"] / 1000.0
     frame = frame.sort_values("traversal_ms").reset_index(drop=True)
 
-    fig = plt.figure(figsize=(15.2, 5.25))
+    fig = plt.figure(figsize=(15.2, 4.9))
     grid = fig.add_gridspec(1, 3, width_ratios=[1.25, 0.86, 1.02], wspace=0.30)
     ax0 = fig.add_subplot(grid[0, 0])
     ax1 = fig.add_subplot(grid[0, 1])
@@ -259,7 +255,7 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
     ax0.set_yticks(y, [f"S{int(value):02d}" for value in frame["sample_id"]])
     ax0.set_xlabel("核心路径延迟（ms）")
     ax0.set_ylabel("配对启动样本")
-    ax0.set_title("逐启动配对哑铃图")
+    ax0.set_title("配对哑铃图")
     ax0.legend(frameon=False, ncols=2, loc="lower right")
     style_axis(ax0, grid_axis="x")
     panel_label(ax0, "a")
@@ -275,7 +271,7 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
         seed=6101,
     )
     ax1.set_ylabel("核心路径延迟（ms）")
-    ax1.set_title("配对雨云分布")
+    ax1.set_title("延迟雨云图")
     style_axis(ax1, grid_axis="y")
     panel_label(ax1, "b")
 
@@ -288,14 +284,14 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
     ax2.text(
         median,
         0.08,
-        f"中位差 {median:.2f} ms",
+        f"P50 {median:.2f} ms",
         rotation=90,
         va="bottom",
         ha="right" if median < 0 else "left",
         color=ORANGE,
         fontsize=8.2,
     )
-    ax2.set_xlabel("索引 - 遍历（ms；负值表示索引更快）")
+    ax2.set_xlabel("索引 - 遍历（ms）")
     ax2.set_ylabel("累计概率")
     ax2.set_ylim(0, 1.03)
     ax2.set_title("配对差值 ECDF")
@@ -305,12 +301,7 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
     faster = int((frame["delta_ms"] < 0).sum())
     speedup = float(frame["traversal_over_indexed_core_ratio"].median())
     order_counts = frame["order"].value_counts().to_dict()
-    figure_note(
-        fig,
-        f"数据：contest_paired.csv；n={len(frame)} 对 fresh boot；索引核心路径更快 {faster}/{len(frame)} 对；"
-        f"配对加速比中位数 {speedup:.3f}x。横线连接同一启动中的两个路径。",
-    )
-    fig.subplots_adjust(left=0.055, right=0.992, top=0.91, bottom=0.16)
+    fig.subplots_adjust(left=0.055, right=0.992, top=0.91, bottom=0.13)
     return fig, {
         "sources": ["contest_paired.csv"],
         "paired_boots": int(len(frame)),
@@ -345,7 +336,7 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
     counts = grouped.pivot(index="dataset_size", columns="operations", values="n").reindex(index=catalogs, columns=hits)
 
     cmap = LinearSegmentedColormap.from_list("agentos_speedup", ["#F7FAFC", "#A9CFCA", TEAL])
-    fig = plt.figure(figsize=(13.8, 5.55))
+    fig = plt.figure(figsize=(13.8, 5.3))
     grid = fig.add_gridspec(1, 2, width_ratios=[0.92, 1.25], wspace=0.06)
     ax0 = fig.add_subplot(grid[0, 0])
     ax1 = fig.add_subplot(grid[0, 1], projection="3d")
@@ -370,7 +361,7 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
     ax0.set_yticks(range(len(catalogs)), [str(value) for value in catalogs])
     ax0.set_xlabel("每轮命中次数")
     ax0.set_ylabel("目录规模（条目）")
-    ax0.set_title("实测配对加速比热力图")
+    ax0.set_title("目录规模 × 命中次数")
     for edge in np.arange(-0.5, len(hits), 1):
         ax0.axvline(edge, color="white", linewidth=1.2)
     for edge in np.arange(-0.5, len(catalogs), 1):
@@ -394,13 +385,13 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
         alpha=0.94,
         antialiased=True,
     )
-    ax1.scatter(x_grid, y_grid, values, color=INK, s=24, depthshade=False, label="实测单元中位数")
+    ax1.scatter(x_grid, y_grid, values, color=INK, s=24, depthshade=False, label="网格中位数")
     ax1.set_xticks(x_values, [str(value) for value in hits])
     ax1.set_yticks(y_values, [str(value) for value in catalogs])
     ax1.set_xlabel("命中次数", labelpad=8)
     ax1.set_ylabel("目录规模", labelpad=8)
     ax1.set_zlabel("遍历 / 索引（倍）", labelpad=8)
-    ax1.set_title("同一实测网格的三维性能曲面", pad=12)
+    ax1.set_title("性能曲面", pad=12)
     ax1.view_init(elev=25, azim=-57)
     ax1.legend(loc="upper left", frameon=False)
     ax1.xaxis.pane.set_facecolor((1, 1, 1, 0))
@@ -409,13 +400,7 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
     panel_label(ax1, "b", x=-0.02, y=1.02)
 
     best = grouped.loc[grouped["median"].idxmax()]
-    figure_note(
-        fig,
-        f"数据：agenteval_pairs.csv；完整 {len(catalogs)}x{len(hits)} 网格，每格 n={int(counts.min().min())} 对。"
-        "每个 hit count 由 1 次 fresh boot 产生，15 对是该 boot 内的重复配对，不作为 15 次独立启动。"
-        "曲面仅连接相邻实测中位数，不补缺失单元、不向网格外外推。",
-    )
-    fig.subplots_adjust(left=0.065, right=0.985, top=0.91, bottom=0.15)
+    fig.subplots_adjust(left=0.065, right=0.985, top=0.91, bottom=0.11)
     return fig, {
         "sources": ["agenteval_pairs.csv"],
         "measured_cells": int(len(grouped)),
@@ -453,7 +438,7 @@ def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
         .agg(median="median", q1=lambda values: values.quantile(0.25), q3=lambda values: values.quantile(0.75), n="size")
     )
 
-    fig, ax = plt.subplots(figsize=(8.7, 5.15))
+    fig, ax = plt.subplots(figsize=(8.7, 4.85))
     base = np.arange(len(catalogs), dtype=float)
     width = 0.23
     for offset, (category, color) in enumerate(zip(categories, colors)):
@@ -468,7 +453,7 @@ def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
             width=width,
             color=color,
             alpha=0.86,
-            label=f"{category}（每个规模 n={min(counts)}）",
+            label=f"{category}  n={min(counts)}",
         )
         ax.errorbar(x, medians, yerr=[medians - q1, q3 - medians], fmt="none", color=INK, capsize=2.5, linewidth=0.85)
         for bar, value in zip(bars, medians):
@@ -477,15 +462,10 @@ def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
     ax.set_xticks(base, [str(value) for value in catalogs])
     ax.set_xlabel("目录规模（条目）")
     ax.set_ylabel("单次查询延迟（us）")
-    ax.set_title("首次计时扫描、后续扫描与就绪索引")
+    ax.set_title("扫描状态延迟")
     ax.legend(frameon=False, ncols=3, loc="upper left")
     style_axis(ax, grid_axis="y")
-    figure_note(
-        fig,
-        "数据：agenteval_samples.csv；柱为中位数，误差线为 IQR。首次指显式 warmup 后的首个计时 scan 块；数值按每轮命中次数归一到单次查询。"
-        "每个 hit count 来自 1 次 fresh boot，共 4 次；图例 n=56/60 包含 boot 内重复测量。",
-    )
-    fig.subplots_adjust(left=0.10, right=0.985, top=0.89, bottom=0.17)
+    fig.subplots_adjust(left=0.10, right=0.985, top=0.89, bottom=0.13)
     return fig, {
         "sources": ["agenteval_samples.csv"],
         "catalog_sizes": catalogs,
@@ -509,7 +489,7 @@ def make_task_latency(tables: Path) -> tuple[Any, dict[str, Any]]:
     colors = [PATH_COLORS[path] for path in paths]
     groups = [frame.loc[frame["path"] == path, "duration_ms"].to_numpy() for path in paths]
 
-    fig, axes = plt.subplots(1, 2, figsize=(11.8, 5.05), gridspec_kw={"width_ratios": [0.88, 1.12]})
+    fig, axes = plt.subplots(1, 2, figsize=(11.8, 4.8), gridspec_kw={"width_ratios": [0.88, 1.12]})
     draw_half_raincloud(
         axes[0],
         groups,
@@ -518,8 +498,8 @@ def make_task_latency(tables: Path) -> tuple[Any, dict[str, Any]]:
         seed=6104,
         point_size=17,
     )
-    axes[0].set_ylabel("16 操作完整序列延迟（ms）")
-    axes[0].set_title("逐序列雨云分布")
+    axes[0].set_ylabel("16 操作序列延迟（ms）")
+    axes[0].set_title("延迟雨云图")
     style_axis(axes[0], grid_axis="y")
     panel_label(axes[0], "a")
     for position, values, color in zip(range(1, 4), groups, colors):
@@ -531,20 +511,16 @@ def make_task_latency(tables: Path) -> tuple[Any, dict[str, Any]]:
         p95 = float(np.quantile(values, 0.95))
         axes[1].scatter([p95], [0.95], color=color, s=26, edgecolor="white", linewidth=0.4, zorder=4)
     axes[1].set_xscale("log")
-    axes[1].set_xlabel("16 操作完整序列延迟（ms，对数轴）")
+    axes[1].set_xlabel("16 操作序列延迟（ms，对数轴）")
     axes[1].set_ylabel("累计概率")
     axes[1].set_ylim(0, 1.03)
-    axes[1].set_title("尾延迟 ECDF（圆点为 P95）")
+    axes[1].set_title("尾延迟 ECDF · P95")
     axes[1].legend(frameon=False, loc="lower right")
     style_axis(axes[1])
     panel_label(axes[1], "b")
 
     medians = {path: float(np.median(values)) for path, values in zip(paths, groups)}
-    figure_note(
-        fig,
-        "数据：task_sequences.csv；4 次 fresh boot x 8 轮，每条路径 n=32 个完整序列；每个序列固定 16 个操作。雨云点和 ECDF 均使用逐序列原始值。",
-    )
-    fig.subplots_adjust(left=0.075, right=0.985, top=0.89, bottom=0.17, wspace=0.25)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.89, bottom=0.14, wspace=0.25)
     return fig, {
         "sources": ["task_sequences.csv"],
         "samples_per_path": {path: int(len(values)) for path, values in zip(paths, groups)},
@@ -575,7 +551,7 @@ def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
         fairness_rows.append({"source_file": source, "scenario": int(scenario), "fairness": fairness})
     fairness = pd.DataFrame(fairness_rows)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12.4, 5.05), gridspec_kw={"width_ratios": [1.05, 0.95]})
+    fig, axes = plt.subplots(1, 2, figsize=(12.4, 4.8), gridspec_kw={"width_ratios": [1.05, 0.95]})
     scenario_colors = {2: TEAL, 3: BLUE, 4: ORANGE, 16: RED, 44: NAVY}
     scenario_labels = {2: "并发 2", 3: "并发 3", 4: "并发 4", 16: "16 到达 / 上限 4", 44: "4 路放大"}
     wake_summary: dict[str, dict[str, float | int]] = {}
@@ -600,7 +576,7 @@ def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
     axes[0].set_xlabel("wakeup latency（scheduler tick）")
     axes[0].set_ylabel("累计概率")
     axes[0].set_ylim(0, 1.03)
-    axes[0].set_title("EEVDF 精确 wakeup latency ECDF")
+    axes[0].set_title("EEVDF wakeup latency ECDF")
     axes[0].legend(frameon=False, loc="lower right")
     style_axis(axes[0])
     panel_label(axes[0], "a")
@@ -630,20 +606,15 @@ def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
     axes[1].axhline(1.0, color=INK, linestyle="--", linewidth=0.9)
     axes[1].set_xticks([1, 2, 3, 4])
     axes[1].set_xlabel("并发 EEVDF 工作流数")
-    axes[1].set_ylabel("Jain fairness（1 为理想值）")
-    axes[1].set_title("基于原始 service cycles 的公平性")
+    axes[1].set_ylabel("Jain fairness")
+    axes[1].set_title("Jain 公平性")
     axes[1].ticklabel_format(axis="y", style="plain", useOffset=False)
     axes[1].yaxis.set_major_formatter(mpl.ticker.FormatStrFormatter("%.6f"))
     axes[1].legend(frameon=False, loc="lower left")
     style_axis(axes[1])
     panel_label(axes[1], "b")
 
-    figure_note(
-        fig,
-        f"数据：eevdf_wakeups.csv（6 次 fresh boot，n={len(wake)} 个逐 probe 精确值，无右删失）与 eevdf_samples.csv（每个并发度 n={int(summary['n'].min())} 次 fresh boot）。"
-        "公平性纵轴放大了距 1.0 的实测差异。",
-    )
-    fig.subplots_adjust(left=0.075, right=0.985, top=0.89, bottom=0.17, wspace=0.25)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.89, bottom=0.14, wspace=0.25)
     return fig, {
         "sources": ["eevdf_wakeups.csv", "eevdf_samples.csv"],
         "exact_wakeup_probes": int(len(wake)),
@@ -745,13 +716,13 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
         "sequence_elapsed_ticks": "序列时间\n[tick/op]",
     }
     cmap = LinearSegmentedColormap.from_list("agentos_io", ["#F8FBFC", "#A9CFCA", "#4C84A6", NAVY])
-    fig, axes = plt.subplots(2, 1, figsize=(14.2, 6.8), gridspec_kw={"height_ratios": [0.9, 1.1]})
+    fig, axes = plt.subplots(2, 1, figsize=(14.2, 6.5), gridspec_kw={"height_ratios": [0.9, 1.1]})
     image = heatmap_panel(
         axes[0],
         contest_pivot,
         contest_counts,
         labels,
-        "内核 I/O / observer workload syscall（逐路径中位数）",
+        "内核 I/O（每次系统调用）",
         cmap,
     )
     heatmap_panel(
@@ -759,20 +730,15 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
         task_pivot,
         task_counts,
         labels,
-        "Task ABI 工作量 / 完成操作（逐路径中位数）",
+        "Task ABI（每次操作）",
         cmap,
     )
     panel_label(axes[0], "a", x=-0.055)
     panel_label(axes[1], "b", x=-0.055)
     colorbar_axis = fig.add_axes([0.935, 0.30, 0.014, 0.39])
     colorbar = fig.colorbar(image, cax=colorbar_axis)
-    colorbar.set_label("同一列内相对强度")
-    figure_note(
-        fig,
-        "数据：contest_io_normalized.csv 与 task_perf_normalized.csv。颜色逐列按最大绝对值归一化，只比较同一指标内的路径；格内为原始中位数和样本数。"
-        "上图 bytes_read 为 workflow lane/core 窗口，其余计数为 global/end-to-end 窗口。",
-    )
-    fig.subplots_adjust(left=0.095, right=0.89, top=0.92, bottom=0.19, hspace=0.67)
+    colorbar.set_label("列内相对值")
+    fig.subplots_adjust(left=0.095, right=0.89, top=0.92, bottom=0.14, hspace=0.62)
     return fig, {
         "sources": ["contest_io_normalized.csv", "task_perf_normalized.csv"],
         "contest_metrics": contest_metrics,
@@ -801,7 +767,7 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
     frame["core_delta"] = frame["indexed_core_duration_us"] - frame["traversal_core_duration_us"]
     frame["e2e_delta"] = frame["indexed_end_to_end_duration_us"] - frame["traversal_end_to_end_duration_us"]
 
-    fig = plt.figure(figsize=(11.8, 7.15))
+    fig = plt.figure(figsize=(11.8, 6.85))
     grid = fig.add_gridspec(2, 2, height_ratios=[1.0, 0.78], hspace=0.42, wspace=0.24)
     ax0 = fig.add_subplot(grid[0, 0])
     ax1 = fig.add_subplot(grid[0, 1])
@@ -821,7 +787,7 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
         ax.plot([1, 2], [np.median(left), np.median(right)], color=INK, marker="D", markersize=5, linewidth=1.6, label="配对中位数")
         ax.set_xticks([1, 2], [f"遍历\nn={len(left)}", f"索引\nn={len(right)}"])
         ax.set_ylabel(ylabel)
-        ax.set_title(f"{title}逐启动配对")
+        ax.set_title(f"{title}配对")
         style_axis(ax, grid_axis="y")
     ax0.legend(frameon=False, loc="upper right")
     panel_label(ax0, "a")
@@ -849,11 +815,11 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
         jitter = rng.normal(0, 0.045, len(values))
         ax2.scatter(values, position + jitter, color=color, s=22, alpha=0.68, edgecolor="white", linewidth=0.35)
         median = float(np.median(values))
-        ax2.text(median, position + 0.25, f"中位差 {median:.2f} ms", ha="center", color=color, fontsize=8.2)
+        ax2.text(median, position + 0.25, f"P50 {median:.2f} ms", ha="center", color=color, fontsize=8.2)
     ax2.axvline(0, color=INK, linestyle="--", linewidth=1.0)
     ax2.set_yticks(positions, ["核心路径", "端到端"])
-    ax2.set_xlabel("索引 - 遍历（ms；负值表示索引更快）")
-    ax2.set_title("同一批配对启动在两个计时边界上的差值")
+    ax2.set_xlabel("索引 - 遍历（ms）")
+    ax2.set_title("配对差值分布")
     style_axis(ax2, grid_axis="x")
     panel_label(ax2, "c", x=-0.045)
 
@@ -865,13 +831,7 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
     )
     core_wins = int((frame["core_delta"] < 0).sum())
     e2e_wins = int((frame["e2e_delta"] < 0).sum())
-    figure_note(
-        fig,
-        f"数据：contest_paired.csv，n={len(frame)} 对 fresh boot。核心：索引胜 {core_wins}/{len(frame)}，中位差 {core_median:.4f} ms，"
-        f"中位加速 {speedup_median:.4f}x；端到端：索引胜 {e2e_wins}/{len(frame)}，中位差 +{e2e_median:.3f} ms。"
-        f"按顺序分层的核心加速中位数：索引先跑 {order_speedups['indexed_then_traversal']:.4f}x，遍历先跑 {order_speedups['traversal_then_indexed']:.4f}x。",
-    )
-    fig.subplots_adjust(left=0.085, right=0.985, top=0.91, bottom=0.13)
+    fig.subplots_adjust(left=0.085, right=0.985, top=0.91, bottom=0.10)
     return fig, {
         "sources": ["contest_paired.csv"],
         "paired_boots": int(len(frame)),
@@ -955,7 +915,6 @@ def main() -> int:
         "campaign": campaign_root.name,
         "font": font,
         "formats": formats,
-        "template_references": ["paired-raincloud", "rf-tpe-surface", "urban-park-cooling-combo"],
         "inputs": before,
         "figures": {},
     }

@@ -892,7 +892,7 @@ class NexusReplayValidatorTests(unittest.TestCase):
                 controller, validator._fixture_digests(fixture), fixture
             )
 
-    def test_rejects_research_artifact_without_historical_scope(self) -> None:
+    def test_rejects_research_artifact_without_manifest_identity(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         artifact = next(
@@ -903,14 +903,14 @@ class NexusReplayValidatorTests(unittest.TestCase):
             and record.get("event") == "artifact_published"
         )
         artifact["summary"] = str(artifact["summary"]).replace(
-            ";nexus_derived_measurement_scope=historical_not_this_boot", ""
+            "source_manifest=one_shot_metrics/data/20260811/manifest.json;", ""
         )
-        with self.assertRaisesRegex(validator.ValidationError, "Research artifact omits"):
+        with self.assertRaisesRegex(validator.ValidationError, "source_manifest"):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
 
-    def test_rejects_prefixed_lookalike_measurement_field(self) -> None:
+    def test_rejects_prefixed_lookalike_dataset_table(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         artifact = next(
@@ -921,10 +921,10 @@ class NexusReplayValidatorTests(unittest.TestCase):
             and record.get("event") == "artifact_published"
         )
         artifact["summary"] = str(artifact["summary"]).replace(
-            "nexus_derived_checks_basis=wins",
-            "xexus_derived_checks_basis=wins",
+            "source_table=one_shot_metrics/data/20260811/tables/contest_paired.csv",
+            "xource_table=one_shot_metrics/data/20260811/tables/contest_paired.csv",
         )
-        with self.assertRaisesRegex(validator.ValidationError, "checks_basis"):
+        with self.assertRaisesRegex(validator.ValidationError, "source_table"):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )

@@ -1,1145 +1,15 @@
 {
-  "builds": [
-    {
-      "challenge_hex": "a11ce00000000001",
-      "guest": "agenteval_ucore",
-      "guest_binary_sha256": "cb8a66421412c0443c43106b71eb46b068364761d6b82fb3bc7bf6011141a004",
-      "guest_binary_size": 125553,
-      "image_sha256": "35954bf8ec7ca7a40a718d1474974db6c7ca36e9303e7a7c6cdd3a5a90cb682c",
-      "image_size": 16777216,
-      "kernel_sha256": "8c1016a5997847a0729dc9863370a922d417618903659cf1d2ae44767582d81e",
-      "kernel_size": 3928952,
-      "label": "agenteval-hit-01"
-    },
-    {
-      "challenge_hex": "a11ce00000000002",
-      "guest": "agenteval_ucore",
-      "guest_binary_sha256": "dbfad3e88af8429baa329b35a84b020c8af77ac978e33c8778a4d5c1df8bf5bf",
-      "guest_binary_size": 125553,
-      "image_sha256": "309c9a85aa08ed752f7ef15c8955443ac6b2b1f5bb5deeeec4c9d7bde5c77703",
-      "image_size": 16777216,
-      "kernel_sha256": "8c1016a5997847a0729dc9863370a922d417618903659cf1d2ae44767582d81e",
-      "kernel_size": 3928952,
-      "label": "agenteval-hit-02"
-    },
-    {
-      "challenge_hex": "a11ce00000000004",
-      "guest": "agenteval_ucore",
-      "guest_binary_sha256": "0a445d3397124b65ebb7dd202367601982ed8fc5b1afedd106cc818e959fb959",
-      "guest_binary_size": 125553,
-      "image_sha256": "f9a7a3be22eee9de174d351b30741fa3aa8d51b2ed474d5492ea2275829e5a7d",
-      "image_size": 16777216,
-      "kernel_sha256": "8c1016a5997847a0729dc9863370a922d417618903659cf1d2ae44767582d81e",
-      "kernel_size": 3928952,
-      "label": "agenteval-hit-04"
-    },
-    {
-      "challenge_hex": "a11ce00000000008",
-      "guest": "agenteval_ucore",
-      "guest_binary_sha256": "3a1761e9077b2f2e387818d4f3c366b461c27eff3598594a9b4da4b5ff115b1c",
-      "guest_binary_size": 125553,
-      "image_sha256": "378197ca5803627ace3700e08cc6e6964a692d8a47de0b3d8f3020fb70e98892",
-      "image_size": 16777216,
-      "kernel_sha256": "8c1016a5997847a0729dc9863370a922d417618903659cf1d2ae44767582d81e",
-      "kernel_size": 3928952,
-      "label": "agenteval-hit-08"
-    },
-    {
-      "challenge_hex": "a11ce00000000001",
-      "guest": "agenttask_ucore",
-      "guest_binary_sha256": "6c0aeb7c09c819ffe0563627c50b27165616fa02c9925cffe0e5f0f461d0d7a9",
-      "guest_binary_size": 47097,
-      "image_sha256": "9520caace0d513dbd7ad53ccd609229440087b201471cbf3a7f03d31c6bf12e8",
-      "image_size": 16777216,
-      "kernel_sha256": "39d97630be0e8c4be908fbd1b6a05b4a518bc46913c05613c67d6284dd5f409d",
-      "kernel_size": 3928952,
-      "label": "agenttask"
-    },
-    {
-      "challenge_hex": "a11ce00000000001",
-      "guest": "agent_eevdf_ucore",
-      "guest_binary_sha256": "bbb5a6159c04389281ec2d333131d60ef72583301b47446d760188b1e919b2c3",
-      "guest_binary_size": 16841,
-      "image_sha256": "1d97465d23fb22caede7d8d66c93da25f37b99002993e1764bb433648d186e26",
-      "image_size": 16777216,
-      "kernel_sha256": "d9448d67af5fed59acc344d7f1a0ad4123ce6e5d743f706e933f57972038086c",
-      "kernel_size": 3928952,
-      "label": "agent-eevdf"
-    }
-  ],
-  "campaign_id": "agentos-advanced-figures-20260811",
-  "canonical": true,
-  "commands": [
-    {
-      "argv": [
-        "/usr/bin/bash",
-        "<repo>/scripts/run-contest-demo.sh"
-      ],
-      "duration_seconds": 251.328896,
-      "finished_at_utc": "2026-08-11T00:32:08.577561Z",
-      "label": "contest-demo-16",
-      "log": "logs/contest-demo-16.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:27:57.248764Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<campaign>/provenance/orchestrator/prepare_guests.py",
-        "<scratch>/prepared-guests/hit-01",
-        "--hit-count",
-        "1",
-        "--repo-root",
-        "<repo>"
-      ],
-      "duration_seconds": 0.090553,
-      "finished_at_utc": "2026-08-11T00:32:08.738846Z",
-      "label": "prepare-hit-01",
-      "log": "logs/prepare-hit-01.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:08.648287Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<campaign>/provenance/orchestrator/prepare_guests.py",
-        "<scratch>/prepared-guests/hit-02",
-        "--hit-count",
-        "2",
-        "--repo-root",
-        "<repo>"
-      ],
-      "duration_seconds": 0.082063,
-      "finished_at_utc": "2026-08-11T00:32:08.907550Z",
-      "label": "prepare-hit-02",
-      "log": "logs/prepare-hit-02.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:08.825456Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<campaign>/provenance/orchestrator/prepare_guests.py",
-        "<scratch>/prepared-guests/hit-04",
-        "--hit-count",
-        "4",
-        "--repo-root",
-        "<repo>"
-      ],
-      "duration_seconds": 0.079653,
-      "finished_at_utc": "2026-08-11T00:32:09.076008Z",
-      "label": "prepare-hit-04",
-      "log": "logs/prepare-hit-04.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:08.996360Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<campaign>/provenance/orchestrator/prepare_guests.py",
-        "<scratch>/prepared-guests/hit-08",
-        "--hit-count",
-        "8",
-        "--repo-root",
-        "<repo>"
-      ],
-      "duration_seconds": 0.081247,
-      "finished_at_utc": "2026-08-11T00:32:09.331112Z",
-      "label": "prepare-hit-08",
-      "log": "logs/prepare-hit-08.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:09.249865Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-C",
-        "user",
-        "-f",
-        "Makefile",
-        "clean"
-      ],
-      "duration_seconds": 0.38619,
-      "finished_at_utc": "2026-08-11T00:32:09.803047Z",
-      "label": "clean-agenteval-hit-01-user",
-      "log": "logs/clean-agenteval-hit-01-user.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:09.416863Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "nfs/fs-copy.img",
-        "app_dir=<scratch>/prepared-guests/hit-01",
-        "CH_TESTS=agenteval_ucore",
-        "INIT_PROC=agenteval_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000001"
-      ],
-      "duration_seconds": 5.566261,
-      "finished_at_utc": "2026-08-11T00:32:15.380083Z",
-      "label": "build-agenteval-hit-01-image",
-      "log": "logs/build-agenteval-hit-01-image.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:09.813829Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "build",
-        "app_dir=<scratch>/prepared-guests/hit-01",
-        "CH_TESTS=agenteval_ucore",
-        "INIT_PROC=agenteval_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000001"
-      ],
-      "duration_seconds": 3.908956,
-      "finished_at_utc": "2026-08-11T00:32:19.298155Z",
-      "label": "build-agenteval-hit-01-kernel",
-      "log": "logs/build-agenteval-hit-01-kernel.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:15.389211Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agenteval_ucore",
-        "--marker",
-        "agenteval_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agenteval-hit-01-boot-01.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agenteval-hit-01/kernel",
-        "--image",
-        "<scratch>/boot-images/agenteval-hit-01-boot-01.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 14.079425,
-      "finished_at_utc": "2026-08-11T00:32:33.579251Z",
-      "label": "run-agenteval-hit-01-boot-01",
-      "log": "logs/run-agenteval-hit-01-boot-01.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:19.499936Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-C",
-        "user",
-        "-f",
-        "Makefile",
-        "clean"
-      ],
-      "duration_seconds": 0.352068,
-      "finished_at_utc": "2026-08-11T00:32:33.947168Z",
-      "label": "clean-agenteval-hit-02-user",
-      "log": "logs/clean-agenteval-hit-02-user.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:33.595089Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "nfs/fs-copy.img",
-        "app_dir=<scratch>/prepared-guests/hit-02",
-        "CH_TESTS=agenteval_ucore",
-        "INIT_PROC=agenteval_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000002"
-      ],
-      "duration_seconds": 5.730047,
-      "finished_at_utc": "2026-08-11T00:32:39.688760Z",
-      "label": "build-agenteval-hit-02-image",
-      "log": "logs/build-agenteval-hit-02-image.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:33.958721Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "build",
-        "app_dir=<scratch>/prepared-guests/hit-02",
-        "CH_TESTS=agenteval_ucore",
-        "INIT_PROC=agenteval_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000002"
-      ],
-      "duration_seconds": 3.901919,
-      "finished_at_utc": "2026-08-11T00:32:43.599606Z",
-      "label": "build-agenteval-hit-02-kernel",
-      "log": "logs/build-agenteval-hit-02-kernel.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:39.697697Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agenteval_ucore",
-        "--marker",
-        "agenteval_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agenteval-hit-02-boot-01.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agenteval-hit-02/kernel",
-        "--image",
-        "<scratch>/boot-images/agenteval-hit-02-boot-01.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 14.17472,
-      "finished_at_utc": "2026-08-11T00:32:57.944353Z",
-      "label": "run-agenteval-hit-02-boot-01",
-      "log": "logs/run-agenteval-hit-02-boot-01.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:43.769638Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-C",
-        "user",
-        "-f",
-        "Makefile",
-        "clean"
-      ],
-      "duration_seconds": 0.36277,
-      "finished_at_utc": "2026-08-11T00:32:58.321770Z",
-      "label": "clean-agenteval-hit-04-user",
-      "log": "logs/clean-agenteval-hit-04-user.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:57.959069Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "nfs/fs-copy.img",
-        "app_dir=<scratch>/prepared-guests/hit-04",
-        "CH_TESTS=agenteval_ucore",
-        "INIT_PROC=agenteval_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000004"
-      ],
-      "duration_seconds": 5.497452,
-      "finished_at_utc": "2026-08-11T00:33:03.834941Z",
-      "label": "build-agenteval-hit-04-image",
-      "log": "logs/build-agenteval-hit-04-image.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:32:58.337494Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "build",
-        "app_dir=<scratch>/prepared-guests/hit-04",
-        "CH_TESTS=agenteval_ucore",
-        "INIT_PROC=agenteval_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000004"
-      ],
-      "duration_seconds": 3.902309,
-      "finished_at_utc": "2026-08-11T00:33:07.747073Z",
-      "label": "build-agenteval-hit-04-kernel",
-      "log": "logs/build-agenteval-hit-04-kernel.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:03.844773Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agenteval_ucore",
-        "--marker",
-        "agenteval_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agenteval-hit-04-boot-01.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agenteval-hit-04/kernel",
-        "--image",
-        "<scratch>/boot-images/agenteval-hit-04-boot-01.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 14.344034,
-      "finished_at_utc": "2026-08-11T00:33:22.276792Z",
-      "label": "run-agenteval-hit-04-boot-01",
-      "log": "logs/run-agenteval-hit-04-boot-01.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:07.932854Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-C",
-        "user",
-        "-f",
-        "Makefile",
-        "clean"
-      ],
-      "duration_seconds": 0.362158,
-      "finished_at_utc": "2026-08-11T00:33:22.653982Z",
-      "label": "clean-agenteval-hit-08-user",
-      "log": "logs/clean-agenteval-hit-08-user.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:22.291833Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "nfs/fs-copy.img",
-        "app_dir=<scratch>/prepared-guests/hit-08",
-        "CH_TESTS=agenteval_ucore",
-        "INIT_PROC=agenteval_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000008"
-      ],
-      "duration_seconds": 5.574904,
-      "finished_at_utc": "2026-08-11T00:33:28.240044Z",
-      "label": "build-agenteval-hit-08-image",
-      "log": "logs/build-agenteval-hit-08-image.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:22.665148Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "build",
-        "app_dir=<scratch>/prepared-guests/hit-08",
-        "CH_TESTS=agenteval_ucore",
-        "INIT_PROC=agenteval_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000008"
-      ],
-      "duration_seconds": 3.92536,
-      "finished_at_utc": "2026-08-11T00:33:32.174509Z",
-      "label": "build-agenteval-hit-08-kernel",
-      "log": "logs/build-agenteval-hit-08-kernel.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:28.249159Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agenteval_ucore",
-        "--marker",
-        "agenteval_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agenteval-hit-08-boot-01.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agenteval-hit-08/kernel",
-        "--image",
-        "<scratch>/boot-images/agenteval-hit-08-boot-01.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 14.111399,
-      "finished_at_utc": "2026-08-11T00:33:46.456808Z",
-      "label": "run-agenteval-hit-08-boot-01",
-      "log": "logs/run-agenteval-hit-08-boot-01.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:32.345512Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-C",
-        "user",
-        "-f",
-        "Makefile",
-        "clean"
-      ],
-      "duration_seconds": 0.49997,
-      "finished_at_utc": "2026-08-11T00:33:46.972317Z",
-      "label": "clean-agenttask-user",
-      "log": "logs/clean-agenttask-user.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:46.472359Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "nfs/fs-copy.img",
-        "app_dir=<scratch>/prepared-guests/hit-01",
-        "CH_TESTS=agenttask_ucore",
-        "INIT_PROC=agenttask_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000001"
-      ],
-      "duration_seconds": 4.784702,
-      "finished_at_utc": "2026-08-11T00:33:51.768155Z",
-      "label": "build-agenttask-image",
-      "log": "logs/build-agenttask-image.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:46.983459Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "build",
-        "app_dir=<scratch>/prepared-guests/hit-01",
-        "CH_TESTS=agenttask_ucore",
-        "INIT_PROC=agenttask_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000001"
-      ],
-      "duration_seconds": 4.123084,
-      "finished_at_utc": "2026-08-11T00:33:55.902230Z",
-      "label": "build-agenttask-kernel",
-      "log": "logs/build-agenttask-kernel.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:51.779284Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agenttask_ucore",
-        "--marker",
-        "agenttask_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agenttask-boot-01.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agenttask/kernel",
-        "--image",
-        "<scratch>/boot-images/agenttask-boot-01.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 8.59378,
-      "finished_at_utc": "2026-08-11T00:34:04.699151Z",
-      "label": "run-agenttask-boot-01",
-      "log": "logs/run-agenttask-boot-01.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:33:56.105361Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agenttask_ucore",
-        "--marker",
-        "agenttask_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agenttask-boot-02.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agenttask/kernel",
-        "--image",
-        "<scratch>/boot-images/agenttask-boot-02.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 8.457128,
-      "finished_at_utc": "2026-08-11T00:34:13.175815Z",
-      "label": "run-agenttask-boot-02",
-      "log": "logs/run-agenttask-boot-02.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:34:04.718690Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agenttask_ucore",
-        "--marker",
-        "agenttask_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agenttask-boot-03.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agenttask/kernel",
-        "--image",
-        "<scratch>/boot-images/agenttask-boot-03.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 8.694028,
-      "finished_at_utc": "2026-08-11T00:34:21.889845Z",
-      "label": "run-agenttask-boot-03",
-      "log": "logs/run-agenttask-boot-03.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:34:13.195823Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agenttask_ucore",
-        "--marker",
-        "agenttask_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agenttask-boot-04.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agenttask/kernel",
-        "--image",
-        "<scratch>/boot-images/agenttask-boot-04.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 8.827553,
-      "finished_at_utc": "2026-08-11T00:34:30.736425Z",
-      "label": "run-agenttask-boot-04",
-      "log": "logs/run-agenttask-boot-04.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:34:21.908879Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-C",
-        "user",
-        "-f",
-        "Makefile",
-        "clean"
-      ],
-      "duration_seconds": 0.355149,
-      "finished_at_utc": "2026-08-11T00:34:31.105011Z",
-      "label": "clean-agent-eevdf-user",
-      "log": "logs/clean-agent-eevdf-user.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:34:30.749873Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "nfs/fs-copy.img",
-        "app_dir=<scratch>/prepared-guests/hit-01",
-        "CH_TESTS=agent_eevdf_ucore",
-        "INIT_PROC=agent_eevdf_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000001"
-      ],
-      "duration_seconds": 4.872093,
-      "finished_at_utc": "2026-08-11T00:34:35.987692Z",
-      "label": "build-agent-eevdf-image",
-      "log": "logs/build-agent-eevdf-image.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:34:31.115609Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/make",
-        "--no-print-directory",
-        "-rR",
-        "-f",
-        "Makefile",
-        "build",
-        "app_dir=<scratch>/prepared-guests/hit-01",
-        "CH_TESTS=agent_eevdf_ucore",
-        "INIT_PROC=agent_eevdf_ucore",
-        "CHAPTER=agent",
-        "LOG=error",
-        "TOOLPREFIX=riscv64-linux-gnu-",
-        "PYTHON_BIN=/usr/bin/python3",
-        "AGENT_EVAL_CHALLENGE_HEX=a11ce00000000001"
-      ],
-      "duration_seconds": 3.792359,
-      "finished_at_utc": "2026-08-11T00:34:39.790159Z",
-      "label": "build-agent-eevdf-kernel",
-      "log": "logs/build-agent-eevdf-kernel.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:34:35.997809Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agent_eevdf_ucore",
-        "--marker",
-        "agent_eevdf_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agent-eevdf-boot-01.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agent-eevdf/kernel",
-        "--image",
-        "<scratch>/boot-images/agent-eevdf-boot-01.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 11.046939,
-      "finished_at_utc": "2026-08-11T00:34:51.013710Z",
-      "label": "run-agent-eevdf-boot-01",
-      "log": "logs/run-agent-eevdf-boot-01.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:34:39.967017Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agent_eevdf_ucore",
-        "--marker",
-        "agent_eevdf_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agent-eevdf-boot-02.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agent-eevdf/kernel",
-        "--image",
-        "<scratch>/boot-images/agent-eevdf-boot-02.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 11.059792,
-      "finished_at_utc": "2026-08-11T00:35:02.102076Z",
-      "label": "run-agent-eevdf-boot-02",
-      "log": "logs/run-agent-eevdf-boot-02.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:34:51.042238Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agent_eevdf_ucore",
-        "--marker",
-        "agent_eevdf_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agent-eevdf-boot-03.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agent-eevdf/kernel",
-        "--image",
-        "<scratch>/boot-images/agent-eevdf-boot-03.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 10.861767,
-      "finished_at_utc": "2026-08-11T00:35:12.985219Z",
-      "label": "run-agent-eevdf-boot-03",
-      "log": "logs/run-agent-eevdf-boot-03.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:35:02.123458Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agent_eevdf_ucore",
-        "--marker",
-        "agent_eevdf_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agent-eevdf-boot-04.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agent-eevdf/kernel",
-        "--image",
-        "<scratch>/boot-images/agent-eevdf-boot-04.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 10.698759,
-      "finished_at_utc": "2026-08-11T00:35:23.706377Z",
-      "label": "run-agent-eevdf-boot-04",
-      "log": "logs/run-agent-eevdf-boot-04.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:35:13.007592Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agent_eevdf_ucore",
-        "--marker",
-        "agent_eevdf_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agent-eevdf-boot-05.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agent-eevdf/kernel",
-        "--image",
-        "<scratch>/boot-images/agent-eevdf-boot-05.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 10.51752,
-      "finished_at_utc": "2026-08-11T00:35:34.242577Z",
-      "label": "run-agent-eevdf-boot-05",
-      "log": "logs/run-agent-eevdf-boot-05.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:35:23.725064Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-I",
-        "-S",
-        "-B",
-        "<repo>/scripts/agent_test_runner.py",
-        "--init-proc",
-        "agent_eevdf_ucore",
-        "--marker",
-        "agent_eevdf_ucore: parent passed",
-        "--marker-mode",
-        "exact-line",
-        "--log-file",
-        "<campaign>/raw/serial/agent-eevdf-boot-06.txt",
-        "--case-timeout",
-        "300s",
-        "--idle-notice-seconds",
-        "15",
-        "--marker-grace-seconds",
-        "2s",
-        "--kernel",
-        "<scratch>/built-images/agent-eevdf/kernel",
-        "--image",
-        "<scratch>/boot-images/agent-eevdf-boot-06.img",
-        "--qemu",
-        "/usr/bin/qemu-system-riscv64"
-      ],
-      "duration_seconds": 10.620341,
-      "finished_at_utc": "2026-08-11T00:35:44.883744Z",
-      "label": "run-agent-eevdf-boot-06",
-      "log": "logs/run-agent-eevdf-boot-06.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T00:35:34.263408Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-B",
-        "<campaign>/provenance/orchestrator/extract.py",
-        "--serial",
-        "<campaign>/raw/serial",
-        "--contest-csv",
-        "<campaign>/raw/contest/measurements.csv",
-        "--output-dir",
-        "<campaign>/tables",
-        "--campaign-id",
-        "agentos-advanced-figures-20260811",
-        "--source-root",
-        "<campaign>"
-      ],
-      "duration_seconds": 0.330008,
-      "finished_at_utc": "2026-08-11T00:35:45.227771Z",
-      "label": "extract",
-      "log": "logs/extract.txt",
-      "returncode": 2,
-      "started_at_utc": "2026-08-11T00:35:44.897771Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-B",
-        "<campaign>/provenance/postprocess-recovery/extract.py",
-        "--serial",
-        "<campaign>/raw/serial",
-        "--contest-csv",
-        "<campaign>/raw/contest/measurements.csv",
-        "--output-dir",
-        "<campaign>/tables",
-        "--campaign-id",
-        "agentos-advanced-figures-20260811",
-        "--source-root",
-        "<campaign>"
-      ],
-      "duration_seconds": 0.903779,
-      "finished_at_utc": "2026-08-11T01:02:59.485938Z",
-      "label": "resume-extract",
-      "log": "logs/resume-extract.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T01:02:58.582160Z"
-    },
-    {
-      "argv": [
-        "/usr/bin/python3",
-        "-B",
-        "<campaign>/provenance/postprocess-recovery/validate.py",
-        "--tables",
-        "<campaign>/tables",
-        "--output",
-        "<campaign>/validation.json"
-      ],
-      "duration_seconds": 0.331961,
-      "finished_at_utc": "2026-08-11T01:02:59.828910Z",
-      "label": "resume-validate",
-      "log": "logs/resume-validate.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T01:02:59.496959Z"
-    },
-    {
-      "argv": [
-        "<plot-python>",
-        "-B",
-        "<repo>\\one_shot_metrics\\data\\20260811\\provenance\\postprocess-recovery\\plot.py",
-        "--tables",
-        "<repo>\\one_shot_metrics\\data\\20260811\\tables",
-        "--output-dir",
-        "<repo>\\one_shot_metrics\\data\\20260811\\figures",
-        "--format",
-        "png,pdf"
-      ],
-      "duration_seconds": 7.101607,
-      "finished_at_utc": "2026-08-11T01:03:06.971438Z",
-      "label": "resume-plot",
-      "log": "logs/resume-plot.txt",
-      "returncode": 0,
-      "started_at_utc": "2026-08-11T01:02:59.869831Z"
-    }
-  ],
-  "environment": {
-    "machine": "x86_64",
-    "platform": "Linux-6.6.114.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
-    "selected_environment": {
-      "LANG": "C.UTF-8",
-      "WSL_DISTRO_NAME": "Ubuntu",
-      "WSL_INTEROP": "/run/WSL/354_interop"
-    },
-    "tools": {
+  "schema_version": 2,
+  "kind": "agentos-performance-dataset",
+  "campaign": {
+    "id": "agentos-advanced-figures-20260811",
+    "status": "completed",
+    "source_commit": "2b14fb1f74b9bd093e6de939a16554620835699e",
+    "started_at_utc": "2026-08-11T00:27:57.072143Z",
+    "completed_at_utc": "2026-08-11T01:03:08.582360Z"
+  },
+  "tool_versions": {
+    "runtime": {
       "bash": "GNU bash, version 5.3.9(1)-release (x86_64-pc-linux-gnu)",
       "compiler": "riscv64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
       "git": "git version 2.53.0",
@@ -1148,880 +18,570 @@
       "python": "Python 3.14.4",
       "qemu": "QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3)"
     },
-    "uname": "Linux <redacted-host> 6.6.114.1-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Mon Dec 1 20:46:23 UTC 2025 x86_64 GNU/Linux"
-  },
-  "files": [
-    {
-      "bytes": 28813,
-      "path": "figures/catalog_hit_speedup_heatmap.pdf",
-      "sha256": "2f4de4bcb53b2d3c6f3e2fdbdb18ff4a5e3b7ab321b534fab008c056c3fb8940"
-    },
-    {
-      "bytes": 150546,
-      "path": "figures/catalog_hit_speedup_heatmap.png",
-      "sha256": "50522da4a603d27dfdf56259b1fb44141faef51e6f685f0198f596743422831f"
-    },
-    {
-      "bytes": 23296,
-      "path": "figures/cold_warm_indexed_grouped.pdf",
-      "sha256": "bd1935fdf18b669fef5fe641af784ff671e41b3dcb7ed10841b3c36861064160"
-    },
-    {
-      "bytes": 107323,
-      "path": "figures/cold_warm_indexed_grouped.png",
-      "sha256": "cba7849d79df1556aa0103d667e216645cc988be92a92e06839ff9a115a0f5fa"
-    },
-    {
-      "bytes": 26346,
-      "path": "figures/core_latency_violin.pdf",
-      "sha256": "3ea8e8272865511e1738ce920a7ef83b31853746e06df26a686a7513f440a052"
-    },
-    {
-      "bytes": 166838,
-      "path": "figures/core_latency_violin.png",
-      "sha256": "2fdb57737bfdef7984327f32d045cc9cc9c95a8a20a1d9f1e5bd8795680f92e9"
-    },
-    {
-      "bytes": 23642,
-      "path": "figures/eevdf_wakeup_ecdf.pdf",
-      "sha256": "009c7647a3f7b1fc7825580c5ec6fba49800fa8e57548982cac9b92025534006"
-    },
-    {
-      "bytes": 140567,
-      "path": "figures/eevdf_wakeup_ecdf.png",
-      "sha256": "db02e4554209a6cabedd63d8e480f161650d5b0ef761b490427aa97f4c6bb028"
-    },
-    {
-      "bytes": 26824,
-      "path": "figures/jain_fairness_concurrency.pdf",
-      "sha256": "037e173a69e3a393e81c90f13219f18d0b2dc053fb2d501fa74c97d4d6398661"
-    },
-    {
-      "bytes": 208392,
-      "path": "figures/jain_fairness_concurrency.png",
-      "sha256": "2c4226d4776b573776bf5e25d247fd75cb6fdae6ffc22c62198e79ba58004eee"
-    },
-    {
-      "bytes": 31437,
-      "path": "figures/kernel_io_normalized_heatmap.pdf",
-      "sha256": "00e9eec3f70018898f222661c4192302cf7b56b01a3f701d533c1074fa92950d"
-    },
-    {
-      "bytes": 367540,
-      "path": "figures/kernel_io_normalized_heatmap.png",
-      "sha256": "684f865a4babce8cbb0c4a963de0e487009e11f7260bb77e52db80fe83c76e36"
-    },
-    {
-      "bytes": 23215,
-      "path": "figures/paired_difference_ecdf.pdf",
-      "sha256": "735a2723079203e4259b2cafbc0843988f9daf8a381d29d5bc87554d3a0075e8"
-    },
-    {
-      "bytes": 112043,
-      "path": "figures/paired_difference_ecdf.png",
-      "sha256": "1382795f46746947da31a424783d1ef0b1c96bdb0efea4dbcb129c3e57efb838"
-    },
-    {
-      "bytes": 28818,
-      "path": "figures/performance_surface_3d.pdf",
-      "sha256": "b9185e57bf8951ae62fd1bf1106154a064d2fe55d157b24698e8fcffe62221e6"
-    },
-    {
-      "bytes": 489747,
-      "path": "figures/performance_surface_3d.png",
-      "sha256": "4c57640fca94ea7716f4506bb93e298f85ec83b880f45e46df0d5d2fe2377154"
-    },
-    {
-      "bytes": 4115,
-      "path": "figures/plot_manifest.json",
-      "sha256": "22e670a69345886e30af378bb110905450a98c6e26801203a5b14b2aec2f1fc2"
-    },
-    {
-      "bytes": 50955,
-      "path": "figures/task_latency_distribution.pdf",
-      "sha256": "6ca331eb098ffa80655997f39c52f50a7daa03763b673f22c7172603081b2c86"
-    },
-    {
-      "bytes": 291538,
-      "path": "figures/task_latency_distribution.png",
-      "sha256": "71b44732ef40550ca04d64437b44442a5d1b5cf7e6de3d95c6bbabfbb28dd286"
-    },
-    {
-      "bytes": 25992,
-      "path": "figures/traversal_indexed_dumbbell.pdf",
-      "sha256": "e9a09fc2ca932db108ae8bac2cf332d5bb21ca8f9d80d47fee30792cc91965b6"
-    },
-    {
-      "bytes": 180827,
-      "path": "figures/traversal_indexed_dumbbell.png",
-      "sha256": "037bbe16698bcad0ccbda2f0001465a4666bedf7f5aa910bc7cf2bf81af3a28e"
-    },
-    {
-      "bytes": 4193,
-      "path": "logs/build-agent-eevdf-image.txt",
-      "sha256": "469dedd99c9f43e45cbdce21f9e85db8d87acb64ffe4eef32c369a5fa0831fbc"
-    },
-    {
-      "bytes": 7520,
-      "path": "logs/build-agent-eevdf-kernel.txt",
-      "sha256": "84c25c1f174b7d92955cfb4d7ec7bd6fe68d70c9a57fed36eda38f4fb3cda80e"
-    },
-    {
-      "bytes": 4179,
-      "path": "logs/build-agenteval-hit-01-image.txt",
-      "sha256": "4f2170e0d6755e963e1624019c46b6f2ce616ae6db0ceed8ff9746d5af59680d"
-    },
-    {
-      "bytes": 7520,
-      "path": "logs/build-agenteval-hit-01-kernel.txt",
-      "sha256": "84c25c1f174b7d92955cfb4d7ec7bd6fe68d70c9a57fed36eda38f4fb3cda80e"
-    },
-    {
-      "bytes": 4179,
-      "path": "logs/build-agenteval-hit-02-image.txt",
-      "sha256": "96ba2da5215bc9dc481e90eed29719d3045b7d9ff10d0403d2f1b5a917f70fca"
-    },
-    {
-      "bytes": 7526,
-      "path": "logs/build-agenteval-hit-02-kernel.txt",
-      "sha256": "ff968e03216405034cf02dd5316af8d4c94f912ded78c6006ccd1f2e32a93a0d"
-    },
-    {
-      "bytes": 4179,
-      "path": "logs/build-agenteval-hit-04-image.txt",
-      "sha256": "f0022c89ac4606163fab4f378d73033a0a431845bd1e120def0ce99fa1ffa96b"
-    },
-    {
-      "bytes": 7526,
-      "path": "logs/build-agenteval-hit-04-kernel.txt",
-      "sha256": "ff968e03216405034cf02dd5316af8d4c94f912ded78c6006ccd1f2e32a93a0d"
-    },
-    {
-      "bytes": 4179,
-      "path": "logs/build-agenteval-hit-08-image.txt",
-      "sha256": "e254bb14995fd5b536bfaa6886b43b0ae47e8266c7b5a3637b2c3846b039e35d"
-    },
-    {
-      "bytes": 7526,
-      "path": "logs/build-agenteval-hit-08-kernel.txt",
-      "sha256": "ff968e03216405034cf02dd5316af8d4c94f912ded78c6006ccd1f2e32a93a0d"
-    },
-    {
-      "bytes": 4179,
-      "path": "logs/build-agenttask-image.txt",
-      "sha256": "c25ed563d0f8e185991b85dd8a3fe814d0d75175cdfe2e9d32cfc35aa5722aff"
-    },
-    {
-      "bytes": 7520,
-      "path": "logs/build-agenttask-kernel.txt",
-      "sha256": "84c25c1f174b7d92955cfb4d7ec7bd6fe68d70c9a57fed36eda38f4fb3cda80e"
-    },
-    {
-      "bytes": 24,
-      "path": "logs/clean-agent-eevdf-user.txt",
-      "sha256": "74301e347e3909c199c2e7e7fa2e0fded2d03a193cb90a877ae32bd39c1b9393"
-    },
-    {
-      "bytes": 24,
-      "path": "logs/clean-agenteval-hit-01-user.txt",
-      "sha256": "74301e347e3909c199c2e7e7fa2e0fded2d03a193cb90a877ae32bd39c1b9393"
-    },
-    {
-      "bytes": 24,
-      "path": "logs/clean-agenteval-hit-02-user.txt",
-      "sha256": "74301e347e3909c199c2e7e7fa2e0fded2d03a193cb90a877ae32bd39c1b9393"
-    },
-    {
-      "bytes": 24,
-      "path": "logs/clean-agenteval-hit-04-user.txt",
-      "sha256": "74301e347e3909c199c2e7e7fa2e0fded2d03a193cb90a877ae32bd39c1b9393"
-    },
-    {
-      "bytes": 24,
-      "path": "logs/clean-agenteval-hit-08-user.txt",
-      "sha256": "74301e347e3909c199c2e7e7fa2e0fded2d03a193cb90a877ae32bd39c1b9393"
-    },
-    {
-      "bytes": 24,
-      "path": "logs/clean-agenttask-user.txt",
-      "sha256": "74301e347e3909c199c2e7e7fa2e0fded2d03a193cb90a877ae32bd39c1b9393"
-    },
-    {
-      "bytes": 476105,
-      "path": "logs/contest-demo-16.txt",
-      "sha256": "f6947013748438e24e95f2802a249595207636cda1c209245b5a4201909e95bf"
-    },
-    {
-      "bytes": 63,
-      "path": "logs/extract.txt",
-      "sha256": "bd53a04658fc1bb9dc56e9c986ca35c31fb33c3efd8284e0373ea68e4b169c5a"
-    },
-    {
-      "bytes": 74,
-      "path": "logs/prepare-hit-01.txt",
-      "sha256": "951f2875a4a5e70893163e3470bd9625ceadc00d254a3380ebd2fc25cb32c237"
-    },
-    {
-      "bytes": 74,
-      "path": "logs/prepare-hit-02.txt",
-      "sha256": "de20d04008e1d6791c2a2a8d3af1ddc1880add142a80209e4d3a3d49d27c8753"
-    },
-    {
-      "bytes": 74,
-      "path": "logs/prepare-hit-04.txt",
-      "sha256": "664454001216a4bbe63f0246de02f9adb7c2130dd5acda49328607c0077400e6"
-    },
-    {
-      "bytes": 74,
-      "path": "logs/prepare-hit-08.txt",
-      "sha256": "3012114e1470e625c98740d535c05dd30b4ac8c982980f763d2e978547d2f83d"
-    },
-    {
-      "bytes": 179,
-      "path": "logs/resume-extract.txt",
-      "sha256": "7b724c402417578fee7cb202cc41700642a1c99666f03369b4d3f5c015bdf403"
-    },
-    {
-      "bytes": 67,
-      "path": "logs/resume-plot.txt",
-      "sha256": "c557f09f8cdd7af2b14b2759413a5eed481e5d6b68294c3ff4c959a2aa7fa461"
-    },
-    {
-      "bytes": 76,
-      "path": "logs/resume-validate.txt",
-      "sha256": "011e3e86b9509a2ba19a7585ad6399c980bae4f5324f78d7f27047e3d24c56cd"
-    },
-    {
-      "bytes": 30119,
-      "path": "logs/run-agent-eevdf-boot-01.txt",
-      "sha256": "bf6c5fb00c46a93f032cec34167459c7a8f7cfe090a7c25d103e1e87b38cbfcb"
-    },
-    {
-      "bytes": 30119,
-      "path": "logs/run-agent-eevdf-boot-02.txt",
-      "sha256": "2081eb7c626c65d10079bb4ebaf9a56930f41813a731067b4e4bba2956226044"
-    },
-    {
-      "bytes": 30119,
-      "path": "logs/run-agent-eevdf-boot-03.txt",
-      "sha256": "d0e97ade370669956ffa6abe98961ecddb90c1d76523066026fceba4876adb68"
-    },
-    {
-      "bytes": 30119,
-      "path": "logs/run-agent-eevdf-boot-04.txt",
-      "sha256": "0580a631c96b084b98c53b4f27ac29ef75519bb2677985684388b0c4428cbee7"
-    },
-    {
-      "bytes": 30117,
-      "path": "logs/run-agent-eevdf-boot-05.txt",
-      "sha256": "fd5e5c0e7e9ab8223ba2035107b98d15fbd39ac6bdf434ad158f34c07c5c13f8"
-    },
-    {
-      "bytes": 30119,
-      "path": "logs/run-agent-eevdf-boot-06.txt",
-      "sha256": "2235068e46ee72a7a463f27505f059249e0297c7dc79be606a6ceaf02463c475"
-    },
-    {
-      "bytes": 188538,
-      "path": "logs/run-agenteval-hit-01-boot-01.txt",
-      "sha256": "8950d6cd58268109fa5666cd283afa29dffbf2434adb86ca01d0ddae4dc0f8d2"
-    },
-    {
-      "bytes": 188633,
-      "path": "logs/run-agenteval-hit-02-boot-01.txt",
-      "sha256": "3766fe6cc61cca7c8d3bf8dbefed90c8bde52ac567ba9664fb3adc90e03d5fc2"
-    },
-    {
-      "bytes": 188656,
-      "path": "logs/run-agenteval-hit-04-boot-01.txt",
-      "sha256": "f0729b1a321404b3fbce0e8e93390a154703700b1f79a8bf82333f745e1e5c49"
-    },
-    {
-      "bytes": 188767,
-      "path": "logs/run-agenteval-hit-08-boot-01.txt",
-      "sha256": "db0a42f89d3737cef18d41cb9e02041448892db913edce1ce3da6f1b23387cb2"
-    },
-    {
-      "bytes": 71934,
-      "path": "logs/run-agenttask-boot-01.txt",
-      "sha256": "e8cfa6fe8ab28fade330325bde9627acb9db934187cf9ad7f67698254367375e"
-    },
-    {
-      "bytes": 71934,
-      "path": "logs/run-agenttask-boot-02.txt",
-      "sha256": "d04f401840b08a0048e46177a75312bbe2c2be7921a77fb762915db81d33b91d"
-    },
-    {
-      "bytes": 71934,
-      "path": "logs/run-agenttask-boot-03.txt",
-      "sha256": "0214602672b181b8e3d0521685ac4a5415a44d96597c4057580c77afec4859ff"
-    },
-    {
-      "bytes": 71934,
-      "path": "logs/run-agenttask-boot-04.txt",
-      "sha256": "502cbc7ef862fddc43c6ff6dab3b75913aca75af2709b5a628301fa16570312a"
-    },
-    {
-      "bytes": 30313,
-      "path": "provenance/orchestrator/extract.py",
-      "sha256": "d6e6629dc33d3cfb33f444a1849fbf3b88e3426227c2a734bd72bb75c0a214f7"
-    },
-    {
-      "bytes": 3566,
-      "path": "provenance/orchestrator/plan.json",
-      "sha256": "f8ea950658dbf61a2c2d804590deed2886e8ffc57345bdd64dc90292fce7aa12"
-    },
-    {
-      "bytes": 34414,
-      "path": "provenance/orchestrator/plot.py",
-      "sha256": "7e0f3d3b7b32588bf236f649fcb57c8636214c1cb367b3ecd5329b1c825741ea"
-    },
-    {
-      "bytes": 15469,
-      "path": "provenance/orchestrator/prepare_guests.py",
-      "sha256": "8274d2e93348e75cf8fbaa26dd2f397690445269183dc11dd9e2bf3cf8c641e9"
-    },
-    {
-      "bytes": 37268,
-      "path": "provenance/orchestrator/run_once.py",
-      "sha256": "0b312555cfcf166d9f061b2cd298112110fdd637403d047b38185104c8e8e1df"
-    },
-    {
-      "bytes": 22385,
-      "path": "provenance/orchestrator/validate.py",
-      "sha256": "51d2ae272ed5d6614342c1afa4b8c17debf089d1f203ab59e079cda99affb853"
-    },
-    {
-      "bytes": 34961,
-      "path": "provenance/postprocess-recovery/extract.py",
-      "sha256": "03d2395a959fc29733ab89be02e032bbf99fae8c2c8f273f72459a86a3512d9c"
-    },
-    {
-      "bytes": 3591,
-      "path": "provenance/postprocess-recovery/plan.json",
-      "sha256": "b674b9e4eee22639197d4a77ce38e222bb9bbb1795d300af07b07caeeb01e91f"
-    },
-    {
-      "bytes": 36745,
-      "path": "provenance/postprocess-recovery/plot.py",
-      "sha256": "b7879b3bcdd57793c8febc5eac3cd85c477ea4c6f8d94dcc4d322c02ac617c8c"
-    },
-    {
-      "bytes": 15469,
-      "path": "provenance/postprocess-recovery/prepare_guests.py",
-      "sha256": "8274d2e93348e75cf8fbaa26dd2f397690445269183dc11dd9e2bf3cf8c641e9"
-    },
-    {
-      "bytes": 1653,
-      "path": "provenance/postprocess-recovery/provenance.json",
-      "sha256": "87d7871ff90cb35c17a08430e178160b744961441ba79fd928bc82c200fd1d5b"
-    },
-    {
-      "bytes": 62706,
-      "path": "provenance/postprocess-recovery/run_once.py",
-      "sha256": "05748567ceb89181dc77272d6a9fbd12628d2750cd9158a9c81e92c3adb70617"
-    },
-    {
-      "bytes": 31800,
-      "path": "provenance/postprocess-recovery/validate.py",
-      "sha256": "100b1cd3026cc768eb031c6a42c6d14c60ebf9942e7075336e2bb0a698d8014d"
-    },
-    {
-      "bytes": 30106,
-      "path": "provenance/prepared-guests/hit-01/agent_eevdf_ucore.c",
-      "sha256": "5bb8b563794f49d95a152525f2ebee9a3e0b44731a6ad1e7d4fcf9a5f48cd5c5"
-    },
-    {
-      "bytes": 137332,
-      "path": "provenance/prepared-guests/hit-01/agenteval_ucore.c",
-      "sha256": "8ab56f54087c4cd82a107dcfd3bc8a71df263c1a24576aca30488fbc230798e7"
-    },
-    {
-      "bytes": 43442,
-      "path": "provenance/prepared-guests/hit-01/agenttask_ucore.c",
-      "sha256": "d0f1a009799339ac0969da7b4cb2d0bb2f8558d9a47f3aed3d57a52b3211b95e"
-    },
-    {
-      "bytes": 1160,
-      "path": "provenance/prepared-guests/hit-01/guest-manifest.json",
-      "sha256": "6e8700083d78799ed6838b60e8ca4e21516092485aaa086d1aba4515fd4645ab"
-    },
-    {
-      "bytes": 30106,
-      "path": "provenance/prepared-guests/hit-02/agent_eevdf_ucore.c",
-      "sha256": "5bb8b563794f49d95a152525f2ebee9a3e0b44731a6ad1e7d4fcf9a5f48cd5c5"
-    },
-    {
-      "bytes": 137332,
-      "path": "provenance/prepared-guests/hit-02/agenteval_ucore.c",
-      "sha256": "435c011eb95644802e41acca584c0627311475cf90f8c16753560aaf9d4ffe16"
-    },
-    {
-      "bytes": 43442,
-      "path": "provenance/prepared-guests/hit-02/agenttask_ucore.c",
-      "sha256": "d0f1a009799339ac0969da7b4cb2d0bb2f8558d9a47f3aed3d57a52b3211b95e"
-    },
-    {
-      "bytes": 1160,
-      "path": "provenance/prepared-guests/hit-02/guest-manifest.json",
-      "sha256": "b88399a5cddff341edc0367dd88286ab07826e452ae0303ab08a232199cd0d5f"
-    },
-    {
-      "bytes": 30106,
-      "path": "provenance/prepared-guests/hit-04/agent_eevdf_ucore.c",
-      "sha256": "5bb8b563794f49d95a152525f2ebee9a3e0b44731a6ad1e7d4fcf9a5f48cd5c5"
-    },
-    {
-      "bytes": 137332,
-      "path": "provenance/prepared-guests/hit-04/agenteval_ucore.c",
-      "sha256": "e61f3069f328a817683da3c7fb0fed5c324abadc0eb39ca648f08dd307cd5d5b"
-    },
-    {
-      "bytes": 43442,
-      "path": "provenance/prepared-guests/hit-04/agenttask_ucore.c",
-      "sha256": "d0f1a009799339ac0969da7b4cb2d0bb2f8558d9a47f3aed3d57a52b3211b95e"
-    },
-    {
-      "bytes": 1160,
-      "path": "provenance/prepared-guests/hit-04/guest-manifest.json",
-      "sha256": "fa75cb47e9e7f0fb0f11603fa53bd8c58086292f985033c221d55fc42a839f56"
-    },
-    {
-      "bytes": 30106,
-      "path": "provenance/prepared-guests/hit-08/agent_eevdf_ucore.c",
-      "sha256": "5bb8b563794f49d95a152525f2ebee9a3e0b44731a6ad1e7d4fcf9a5f48cd5c5"
-    },
-    {
-      "bytes": 137332,
-      "path": "provenance/prepared-guests/hit-08/agenteval_ucore.c",
-      "sha256": "fafee7ac7637a4e78f6b6281bbe13a9d85edcb09fc40d5fbc547b395edcda1a1"
-    },
-    {
-      "bytes": 43442,
-      "path": "provenance/prepared-guests/hit-08/agenttask_ucore.c",
-      "sha256": "d0f1a009799339ac0969da7b4cb2d0bb2f8558d9a47f3aed3d57a52b3211b95e"
-    },
-    {
-      "bytes": 1160,
-      "path": "provenance/prepared-guests/hit-08/guest-manifest.json",
-      "sha256": "9eb0dead5e0d3cd341904228b89d42c04572c7f28fa5a75af41be442d684dcbd"
-    },
-    {
-      "bytes": 3363,
-      "path": "raw/contest/measurements.csv",
-      "sha256": "4a51307899074b0f52fba6d3088eab29209d5054b988c6faecb678bdba6d1665"
-    },
-    {
-      "bytes": 2158,
-      "path": "raw/contest/report.md",
-      "sha256": "4b0e5ef9eea1305a2891b26311e341b80e3384ebdd035385d227464380617c4c"
-    },
-    {
-      "bytes": 29029,
-      "path": "raw/contest/sample-01-qemu.serial.txt",
-      "sha256": "6ff846ccc725eb8ed2c94bdc4d1f32afea5ef39d789a6216efc6171bc4d78047"
-    },
-    {
-      "bytes": 29027,
-      "path": "raw/contest/sample-02-qemu.serial.txt",
-      "sha256": "6233b9a1c01461575751e5c0e8c973f1a7f13e4da6c896bfa3fd9b900b5be72a"
-    },
-    {
-      "bytes": 29031,
-      "path": "raw/contest/sample-03-qemu.serial.txt",
-      "sha256": "0cc3858b40b10760d2f34885ebc798c50146b886cddb3a57adeb8172e60309ee"
-    },
-    {
-      "bytes": 29022,
-      "path": "raw/contest/sample-04-qemu.serial.txt",
-      "sha256": "2173150bf0cb2c7cb061b9b58948a39e63df28b1a6f8c0a85a6261aac07023e2"
-    },
-    {
-      "bytes": 29032,
-      "path": "raw/contest/sample-05-qemu.serial.txt",
-      "sha256": "e0754c81a2f1db193601f716151dc9c0e7265d378e9f1351f036b0bd2b948305"
-    },
-    {
-      "bytes": 29030,
-      "path": "raw/contest/sample-06-qemu.serial.txt",
-      "sha256": "c3987f8d802544a36292225e189a37d00457b4cb78628df57b0b3065e98ec3ce"
-    },
-    {
-      "bytes": 29028,
-      "path": "raw/contest/sample-07-qemu.serial.txt",
-      "sha256": "1088fc9859f2c1a7dc4f22be5f0c43a83f11ea91142071725f019aae60dc9003"
-    },
-    {
-      "bytes": 29022,
-      "path": "raw/contest/sample-08-qemu.serial.txt",
-      "sha256": "bfe0d11b14c601c056b94e1f07be408dfc86b20b2f9b2d6d05ff1a0e2f2936be"
-    },
-    {
-      "bytes": 29032,
-      "path": "raw/contest/sample-09-qemu.serial.txt",
-      "sha256": "51a9eb93b8ee1c2c378990b043f9978e8e7b38c28dc5feedb3632b13cf68302b"
-    },
-    {
-      "bytes": 29031,
-      "path": "raw/contest/sample-10-qemu.serial.txt",
-      "sha256": "13976988394835aa4c4affdf7dd3f9f61c7a99c50c559832bde976b6539452fe"
-    },
-    {
-      "bytes": 29036,
-      "path": "raw/contest/sample-11-qemu.serial.txt",
-      "sha256": "114e97b8eb2d9abbdcf7ea70fda57d7c4a0ec4900b8f6bf7b1565477210095fd"
-    },
-    {
-      "bytes": 29031,
-      "path": "raw/contest/sample-12-qemu.serial.txt",
-      "sha256": "e978eb342f46838b71365befecfff6dca20c59ab691d006ac4ff1228ccc77013"
-    },
-    {
-      "bytes": 29025,
-      "path": "raw/contest/sample-13-qemu.serial.txt",
-      "sha256": "8ec8c64932b74a332a3f5e6a8dbcb837a330b4ec1943757f2418e4b9c8ab476f"
-    },
-    {
-      "bytes": 29028,
-      "path": "raw/contest/sample-14-qemu.serial.txt",
-      "sha256": "70e2c0ea3c80a381d4d0fe4111789e928a81fe5e31edeff0925d158420e10b14"
-    },
-    {
-      "bytes": 29026,
-      "path": "raw/contest/sample-15-qemu.serial.txt",
-      "sha256": "dd24d05c013b451bcdfff38b7128375cab7486e8ea85bf78b8c243a72654402f"
-    },
-    {
-      "bytes": 29027,
-      "path": "raw/contest/sample-16-qemu.serial.txt",
-      "sha256": "7c5cad25486beb52062d26c4b3c5a5f6652fad68609a80b858ba2bd4615c0e59"
-    },
-    {
-      "bytes": 20879,
-      "path": "raw/contest/summary.json",
-      "sha256": "1aa5e31b0a16edfa1b170b99c93180b2d76a7b0c266762886d6071b507260ff5"
-    },
-    {
-      "bytes": 29799,
-      "path": "raw/serial/agent-eevdf-boot-01.txt",
-      "sha256": "352c5b3107f2071425e01eb4a647a975770576c2a40e62959e34c8649175f774"
-    },
-    {
-      "bytes": 29799,
-      "path": "raw/serial/agent-eevdf-boot-02.txt",
-      "sha256": "b18579a24fa321b99b427db2bb8537ed2d663f4bb12b9d5b020387eb41f802b3"
-    },
-    {
-      "bytes": 29799,
-      "path": "raw/serial/agent-eevdf-boot-03.txt",
-      "sha256": "3d92c335e59f1bd5549a291fe3625a837d28ccba4c4e2339020d71e1f4d25449"
-    },
-    {
-      "bytes": 29799,
-      "path": "raw/serial/agent-eevdf-boot-04.txt",
-      "sha256": "6291cde425dbf107b85e545f0427490ab7853bd460383c05ae49831dc641d2c2"
-    },
-    {
-      "bytes": 29797,
-      "path": "raw/serial/agent-eevdf-boot-05.txt",
-      "sha256": "02dc1f222bcc5d979d4ad55eeb77c5faf3223080b68de71dce029e6adc22de8b"
-    },
-    {
-      "bytes": 29799,
-      "path": "raw/serial/agent-eevdf-boot-06.txt",
-      "sha256": "66c8b620617ba355ce50a39f269b9f302f88d3d02b624801b343524e5b25795e"
-    },
-    {
-      "bytes": 187809,
-      "path": "raw/serial/agenteval-hit-01-boot-01.txt",
-      "sha256": "96e39a8a251ef906779a7453aed54b40215ea7bf0c7fac6b8e677cae0ccfb572"
-    },
-    {
-      "bytes": 187904,
-      "path": "raw/serial/agenteval-hit-02-boot-01.txt",
-      "sha256": "017482ca44af16d070c3c32dc49a1ce983afbc98a1ef98f2210298e468d02604"
-    },
-    {
-      "bytes": 187927,
-      "path": "raw/serial/agenteval-hit-04-boot-01.txt",
-      "sha256": "d2918a32153c26724d68b8d5455369bd405dfcac7926791fd3b41bf336378c4b"
-    },
-    {
-      "bytes": 188038,
-      "path": "raw/serial/agenteval-hit-08-boot-01.txt",
-      "sha256": "8281fb57314301c727e4fb420e9b6b99c2eecd565a90902234bbf25b317dcc5b"
-    },
-    {
-      "bytes": 71290,
-      "path": "raw/serial/agenttask-boot-01.txt",
-      "sha256": "8d51078131491d3531d5e3b52993a70476a44b0119e9f5a1d242b5cbb89d9403"
-    },
-    {
-      "bytes": 71290,
-      "path": "raw/serial/agenttask-boot-02.txt",
-      "sha256": "5d77cd98efd81c595ddaee2d03251023d3aead324da3669beee3135437b1d503"
-    },
-    {
-      "bytes": 71290,
-      "path": "raw/serial/agenttask-boot-03.txt",
-      "sha256": "87e08ced3f123809bd89582497c79496a607bbb0290b7ee6b60193ece5d9b7e1"
-    },
-    {
-      "bytes": 71290,
-      "path": "raw/serial/agenttask-boot-04.txt",
-      "sha256": "f2eb82fda9bc94fe98da85df3b0505122448654751eef717512b2d1ee7a906e1"
-    },
-    {
-      "bytes": 4337,
-      "path": "tables/agenteval_concurrency.csv",
-      "sha256": "16dff4400393832ce3c97931d126485291a45ac85ae9f656a4889b96d2b3b8bd"
-    },
-    {
-      "bytes": 113968,
-      "path": "tables/agenteval_concurrency_samples.csv",
-      "sha256": "95cd478d383d30128f563d7a34009740c85f5a8aeb42b57047ac37e81ddbd7e8"
-    },
-    {
-      "bytes": 6948,
-      "path": "tables/agenteval_diagnostics.csv",
-      "sha256": "404067239b727d357b41d99315e0ded03212ccb83fab3ee02a2735665e23adbe"
-    },
-    {
-      "bytes": 237871,
-      "path": "tables/agenteval_pairs.csv",
-      "sha256": "844cbcbed72cbd7a2a401f7686d87d0a620edb243b70e366112d5168df738921"
-    },
-    {
-      "bytes": 397659,
-      "path": "tables/agenteval_samples.csv",
-      "sha256": "d873477714231b96b9686bea735e25e8cbe39f71271e0814449e691cd21cb506"
-    },
-    {
-      "bytes": 133625,
-      "path": "tables/contest_io_normalized.csv",
-      "sha256": "6b9ef164985507f8187c648914a9411bd0f850f0a06afc8b2cc191fbc2a5472d"
-    },
-    {
-      "bytes": 5561,
-      "path": "tables/contest_paired.csv",
-      "sha256": "3fafa718df3f9d2cf84311163ef71d7176d30271aa1b77d0eff12e065595065e"
-    },
-    {
-      "bytes": 7674,
-      "path": "tables/contest_paths.csv",
-      "sha256": "7bd46d542edf765618786a86a61e50746f75bfc58f54b3b8a13b87ed70aacfbf"
-    },
-    {
-      "bytes": 1229,
-      "path": "tables/eevdf_amplification.csv",
-      "sha256": "8a52c222935c2cabb231127b35c779ebcc1b031476677123ed7584c523261790"
-    },
-    {
-      "bytes": 6224,
-      "path": "tables/eevdf_cohorts.csv",
-      "sha256": "0744fb8c61ad5008e0470c0eabb30ca692bc5ad5b8dae1277dfb63aae65e4d01"
-    },
-    {
-      "bytes": 6585,
-      "path": "tables/eevdf_jain.csv",
-      "sha256": "bc10aaa95b42a918afaddf4702b53a939945c15ba3218cf46d692db8ba7688c5"
-    },
-    {
-      "bytes": 38200,
-      "path": "tables/eevdf_samples.csv",
-      "sha256": "a1ca8887f561e61b492f0de275e2ec5e1d3e4ca0e628c0464b7ca654ec287691"
-    },
-    {
-      "bytes": 146316,
-      "path": "tables/eevdf_wake_histogram.csv",
-      "sha256": "6533b07ccb3d74df31f8eeac5017002101fb21a625b931751dbbdabfcd4bbf4f"
-    },
-    {
-      "bytes": 90380,
-      "path": "tables/eevdf_wakeups.csv",
-      "sha256": "6201bf071af0dc6d6a037cb2e9a54371ce119a75b093a1f70b80ac97fff4efe5"
-    },
-    {
-      "bytes": 7250,
-      "path": "tables/extraction_manifest.json",
-      "sha256": "9ed824766a01e6d985eadb4e030c6b32f365a8a916740294ce53b651d13303a5"
-    },
-    {
-      "bytes": 14408,
-      "path": "tables/task_fingerprints.csv",
-      "sha256": "2b19d895a2b5e347d5e08cd84700036ddea97f67eb87f3e699e87b09d2a92708"
-    },
-    {
-      "bytes": 254581,
-      "path": "tables/task_operations.csv",
-      "sha256": "b9276254d5e8dc7c55d32f55b291f460248618b2c6e227852bd27ecb6bd04c19"
-    },
-    {
-      "bytes": 17633,
-      "path": "tables/task_perf.csv",
-      "sha256": "1d8ca5a1cbd5ba4f932eb08755d969294c2873c184d50690b212ef7089e1f628"
-    },
-    {
-      "bytes": 204533,
-      "path": "tables/task_perf_normalized.csv",
-      "sha256": "663c9044ee7eeed86b2b6246950cbddf712d860ebc33138aa0e9ef6b0d1b24cc"
-    },
-    {
-      "bytes": 18774,
-      "path": "tables/task_sequences.csv",
-      "sha256": "9270aedd18cb8bd62d0b7075e63d8ca70eda6c20b7249ae8ba3a85c431d50189"
-    },
-    {
-      "bytes": 20460,
-      "path": "validation.json",
-      "sha256": "045f69b0101ce4d9908f3d1b1c06af5753a0b5cd80ba4580939a74c13a5e8dc2"
-    }
-  ],
-  "finished_at_utc": "2026-08-11T01:03:08.582360Z",
-  "kind": "agentos-advanced-figure-one-shot-campaign",
-  "plan_sha256": "f8ea950658dbf61a2c2d804590deed2886e8ffc57345bdd64dc90292fce7aa12",
-  "postprocess_recovery": {
-    "collection_plan_sha256": "f8ea950658dbf61a2c2d804590deed2886e8ffc57345bdd64dc90292fce7aa12",
-    "commands": [
-      "resume-extract",
-      "resume-validate",
-      "resume-plot"
-    ],
-    "environment": {
-      "git": "git version 2.53.0",
-      "machine": "x86_64",
-      "platform": "Linux-6.6.114.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
-      "plot_python": "Python 3.11.9",
-      "python": "Python 3.14.4",
-      "source_commit": "2b14fb1f74b9bd093e6de939a16554620835699e"
-    },
-    "finished_at_utc": "2026-08-11T01:03:08.582360Z",
-    "initial_error_sha256": "2596a9f4b364484ddf6abb12e0184f82eb59dcd0bf019f16ffcd91379aa69fbd",
-    "initial_failure": {
-      "command": "extract",
-      "returncode": 2
-    },
-    "kind": "postprocess-only-recovery",
-    "manifest_sha256_before": "4c1a0667d8c7f3562175e8a28043fa71c42b83556ada0d5a5affed99539befb4",
-    "no_rebuild_or_reboot": true,
-    "plot_manifest_sha256": "22e670a69345886e30af378bb110905450a98c6e26801203a5b14b2aec2f1fc2",
-    "raw_set_sha256": "846c4a9b12f5779ac8dd8e51c3650b4cddc6c04c6d80bae0fdf9a8ca19f36306",
-    "reason": "original extract rejected serial-spliced EEVDF markers",
-    "recovery_command": [
-      "python3",
-      "one_shot_metrics/run_once.py",
-      "--resume-postprocess",
-      "--acknowledge-one-shot",
-      "--plot-python",
-      "<plot-python>"
-    ],
-    "recovery_plan_sha256": "b674b9e4eee22639197d4a77ce38e222bb9bbb1795d300af07b07caeeb01e91f",
-    "recovery_provenance": [
-      {
-        "bytes": 3591,
-        "path": "provenance/postprocess-recovery/plan.json",
-        "sha256": "b674b9e4eee22639197d4a77ce38e222bb9bbb1795d300af07b07caeeb01e91f"
+    "sources": {
+      "plan.json": {
+        "path": "one_shot_metrics/plan.json",
+        "sha256": "0864ed0b9e0fca6db2181269e7739157d4dd46471d3fd9194f94282c73cac376"
       },
-      {
-        "bytes": 62706,
-        "path": "provenance/postprocess-recovery/run_once.py",
-        "sha256": "05748567ceb89181dc77272d6a9fbd12628d2750cd9158a9c81e92c3adb70617"
-      },
-      {
-        "bytes": 15469,
-        "path": "provenance/postprocess-recovery/prepare_guests.py",
-        "sha256": "8274d2e93348e75cf8fbaa26dd2f397690445269183dc11dd9e2bf3cf8c641e9"
-      },
-      {
-        "bytes": 34961,
-        "path": "provenance/postprocess-recovery/extract.py",
+      "extract.py": {
+        "path": "one_shot_metrics/extract.py",
         "sha256": "03d2395a959fc29733ab89be02e032bbf99fae8c2c8f273f72459a86a3512d9c"
       },
-      {
-        "bytes": 31800,
-        "path": "provenance/postprocess-recovery/validate.py",
+      "validate.py": {
+        "path": "one_shot_metrics/validate.py",
         "sha256": "100b1cd3026cc768eb031c6a42c6d14c60ebf9942e7075336e2bb0a698d8014d"
       },
-      {
-        "bytes": 36745,
-        "path": "provenance/postprocess-recovery/plot.py",
+      "plot.py": {
+        "path": "one_shot_metrics/plot.py",
         "sha256": "b7879b3bcdd57793c8febc5eac3cd85c477ea4c6f8d94dcc4d322c02ac617c8c"
       }
-    ],
-    "schema_version": 1,
-    "started_at_utc": "2026-08-11T01:02:56.084374Z",
-    "status": "completed",
-    "validation_sha256": "045f69b0101ce4d9908f3d1b1c06af5753a0b5cd80ba4580939a74c13a5e8dc2",
-    "verified_raw": {
-      "agenteval_boots": 4,
-      "collection_commands": 37,
-      "contest_boots": 16,
-      "eevdf_boots": 6,
-      "original_plan_sha256": "f8ea950658dbf61a2c2d804590deed2886e8ffc57345bdd64dc90292fce7aa12",
-      "raw_files": 33,
-      "task_boots": 4
     }
   },
-  "repository": {
-    "branch": "main",
-    "clean_scope_exclusions": [
-      "one_shot_metrics/**"
-    ],
-    "excluded_scope_status": [
-      "?? one_shot_metrics/README.md",
-      "?? one_shot_metrics/extract.py",
-      "?? one_shot_metrics/plan.json",
-      "?? one_shot_metrics/plot.py",
-      "?? one_shot_metrics/prepare_guests.py",
-      "?? one_shot_metrics/run_once.py",
-      "?? one_shot_metrics/validate.py"
-    ],
-    "postprocess_verified_unchanged_at_utc": "2026-08-11T01:03:08.587864Z",
-    "source_commit": "2b14fb1f74b9bd093e6de939a16554620835699e",
-    "source_tree_scope_clean": true
+  "workload_plan": {
+    "fresh_qemu_boots": 30,
+    "contest": {
+      "boots": 16,
+      "sample_order": "alternating AB/BA"
+    },
+    "catalog_query": {
+      "boots": 4,
+      "catalog_sizes": [
+        24,
+        64,
+        96
+      ],
+      "hit_counts": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "pairs_per_cell": 15
+    },
+    "task_channel": {
+      "boots": 4,
+      "rounds_per_path_per_boot": 8,
+      "paths": [
+        "batch",
+        "scalar_v3",
+        "sq_cq"
+      ],
+      "operations_per_sequence": 16
+    },
+    "eevdf": {
+      "boots": 6,
+      "concurrency": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "wakeup_probes": 504
+    }
   },
-  "run_id": "agentos-advanced-figures-20260811-20260811T002757Z-2b14fb1f74b9",
-  "schema_version": 1,
-  "started_at_utc": "2026-08-11T00:27:57.072143Z",
-  "status": "completed",
-  "publication_redaction": {
-    "schema_version": 1,
-    "applied_at_utc": "2026-08-11T02:59:27Z",
-    "reason": "Remove local host, absolute workspace, and temporary staging identifiers before public repository publication.",
-    "manifest_sha256_before": "f38d723600e7c22d81ced887eb1ad682842111d0039888e1d05c655b4009cc72",
-    "changed_fields": [
+  "guest_sources": {
+    "manifest": "one_shot_metrics/guests/guest_sources.json",
+    "manifest_sha256": "ebede378020f7e814f6156d2363aa6771e75e25dc0538e464a49f67e8c33cecf",
+    "variants": [
       {
-        "path": "environment.uname",
-        "original_value_sha256": "854fc2ab4ebcb5ef0afc111961fab9cfd1e667797b58d7e0e5e6590807909211",
-        "replacement": "host identifier redacted; kernel and platform retained"
+        "name": "agenttask",
+        "path": "one_shot_metrics/guests/agenttask_ucore.c",
+        "sha256": "d0f1a009799339ac0969da7b4cb2d0bb2f8558d9a47f3aed3d57a52b3211b95e"
       },
       {
-        "path": "logs/resume-plot.txt",
-        "original_sha256": "eb4437173bd98e918d7f2a8b75503349ffd6503372fe6560ac123f5bc4d49e26",
-        "replacement_sha256": "c557f09f8cdd7af2b14b2759413a5eed481e5d6b68294c3ff4c959a2aa7fa461",
-        "replacement": "absolute workspace path replaced by <campaign>/figures"
+        "name": "agent_eevdf",
+        "path": "one_shot_metrics/guests/agent_eevdf_ucore.c",
+        "sha256": "5bb8b563794f49d95a152525f2ebee9a3e0b44731a6ad1e7d4fcf9a5f48cd5c5"
       },
       {
-        "path": "logs/resume-extract.txt",
-        "original_sha256": "f504e8aaf1556ded3afdb6cc5d9b006fdaf127cec0e87f1d0e83a964b6905afa",
-        "replacement_sha256": "7b724c402417578fee7cb202cc41700642a1c99666f03369b4d3f5c015bdf403",
-        "replacement": "absolute workspace/staging path replaced by a stable placeholder"
+        "name": "agenteval_hit_01",
+        "path": "one_shot_metrics/guests/agenteval_hit_01_ucore.c",
+        "sha256": "8ab56f54087c4cd82a107dcfd3bc8a71df263c1a24576aca30488fbc230798e7"
       },
       {
-        "path": "logs/resume-validate.txt",
-        "original_sha256": "4a9758b5712b6d71d4ab99b64d7cd3d4f6f1a9cdebb30f57cf22b137f9afbf61",
-        "replacement_sha256": "011e3e86b9509a2ba19a7585ad6399c980bae4f5324f78d7f27047e3d24c56cd",
-        "replacement": "absolute workspace/staging path replaced by a stable placeholder"
+        "name": "agenteval_hit_02",
+        "path": "one_shot_metrics/guests/agenteval_hit_02_ucore.c",
+        "sha256": "435c011eb95644802e41acca584c0627311475cf90f8c16753560aaf9d4ffe16"
       },
       {
-        "path": "logs/contest-demo-16.txt",
-        "original_sha256": "b54ca04b9bba6e14a66507f8ec0286670382b868c5c177dda1ad82fe665ac83a",
-        "replacement_sha256": "f6947013748438e24e95f2802a249595207636cda1c209245b5a4201909e95bf",
-        "replacement": "absolute workspace/staging path replaced by a stable placeholder"
+        "name": "agenteval_hit_04",
+        "path": "one_shot_metrics/guests/agenteval_hit_04_ucore.c",
+        "sha256": "e61f3069f328a817683da3c7fb0fed5c324abadc0eb39ca648f08dd307cd5d5b"
+      },
+      {
+        "name": "agenteval_hit_08",
+        "path": "one_shot_metrics/guests/agenteval_hit_08_ucore.c",
+        "sha256": "fafee7ac7637a4e78f6b6281bbe13a9d85edcb09fc40d5fbc547b395edcda1a1"
       }
-    ],
-    "raw_files_changed": false,
-    "raw_set_sha256": "846c4a9b12f5779ac8dd8e51c3650b4cddc6c04c6d80bae0fdf9a8ca19f36306",
-    "intermediate_manifest_sha256_before_revision_2": "44a2eccc36119bbda2f6ddfa7920ce10b2b1429bf2747bc22655aa3bd40c224f"
+    ]
+  },
+  "build_artifacts": [
+    {
+      "label": "agenteval-hit-01",
+      "guest": "agenteval_ucore",
+      "challenge_hex": "a11ce00000000001",
+      "guest_binary_sha256": "cb8a66421412c0443c43106b71eb46b068364761d6b82fb3bc7bf6011141a004",
+      "kernel_sha256": "8c1016a5997847a0729dc9863370a922d417618903659cf1d2ae44767582d81e",
+      "image_sha256": "35954bf8ec7ca7a40a718d1474974db6c7ca36e9303e7a7c6cdd3a5a90cb682c"
+    },
+    {
+      "label": "agenteval-hit-02",
+      "guest": "agenteval_ucore",
+      "challenge_hex": "a11ce00000000002",
+      "guest_binary_sha256": "dbfad3e88af8429baa329b35a84b020c8af77ac978e33c8778a4d5c1df8bf5bf",
+      "kernel_sha256": "8c1016a5997847a0729dc9863370a922d417618903659cf1d2ae44767582d81e",
+      "image_sha256": "309c9a85aa08ed752f7ef15c8955443ac6b2b1f5bb5deeeec4c9d7bde5c77703"
+    },
+    {
+      "label": "agenteval-hit-04",
+      "guest": "agenteval_ucore",
+      "challenge_hex": "a11ce00000000004",
+      "guest_binary_sha256": "0a445d3397124b65ebb7dd202367601982ed8fc5b1afedd106cc818e959fb959",
+      "kernel_sha256": "8c1016a5997847a0729dc9863370a922d417618903659cf1d2ae44767582d81e",
+      "image_sha256": "f9a7a3be22eee9de174d351b30741fa3aa8d51b2ed474d5492ea2275829e5a7d"
+    },
+    {
+      "label": "agenteval-hit-08",
+      "guest": "agenteval_ucore",
+      "challenge_hex": "a11ce00000000008",
+      "guest_binary_sha256": "3a1761e9077b2f2e387818d4f3c366b461c27eff3598594a9b4da4b5ff115b1c",
+      "kernel_sha256": "8c1016a5997847a0729dc9863370a922d417618903659cf1d2ae44767582d81e",
+      "image_sha256": "378197ca5803627ace3700e08cc6e6964a692d8a47de0b3d8f3020fb70e98892"
+    },
+    {
+      "label": "agenttask",
+      "guest": "agenttask_ucore",
+      "challenge_hex": "a11ce00000000001",
+      "guest_binary_sha256": "6c0aeb7c09c819ffe0563627c50b27165616fa02c9925cffe0e5f0f461d0d7a9",
+      "kernel_sha256": "39d97630be0e8c4be908fbd1b6a05b4a518bc46913c05613c67d6284dd5f409d",
+      "image_sha256": "9520caace0d513dbd7ad53ccd609229440087b201471cbf3a7f03d31c6bf12e8"
+    },
+    {
+      "label": "agent-eevdf",
+      "guest": "agent_eevdf_ucore",
+      "challenge_hex": "a11ce00000000001",
+      "guest_binary_sha256": "bbb5a6159c04389281ec2d333131d60ef72583301b47446d760188b1e919b2c3",
+      "kernel_sha256": "d9448d67af5fed59acc344d7f1a0ad4123ce6e5d743f706e933f57972038086c",
+      "image_sha256": "1d97465d23fb22caede7d8d66c93da25f37b99002993e1764bb433648d186e26"
+    }
+  ],
+  "dataset": {
+    "raw": {
+      "files": 33,
+      "serial_boot_files": 30,
+      "raw_set_sha256": "846c4a9b12f5779ac8dd8e51c3650b4cddc6c04c6d80bae0fdf9a8ca19f36306"
+    },
+    "tables": {
+      "csv_files": 19,
+      "rows": 7498,
+      "extraction_manifest": "tables/extraction_manifest.json"
+    },
+    "figures": {
+      "sets": 10,
+      "media_files": 20,
+      "names": [
+        "traversal_indexed_dumbbell",
+        "core_latency_violin",
+        "paired_difference_ecdf",
+        "catalog_hit_speedup_heatmap",
+        "performance_surface_3d",
+        "cold_warm_indexed_grouped",
+        "task_latency_distribution",
+        "eevdf_wakeup_ecdf",
+        "jain_fairness_concurrency",
+        "kernel_io_normalized_heatmap"
+      ],
+      "plot_manifest": "figures/plot_manifest.json"
+    },
+    "validation": {
+      "path": "validation.json",
+      "sha256": "045f69b0101ce4d9908f3d1b1c06af5753a0b5cd80ba4580939a74c13a5e8dc2",
+      "valid": true,
+      "ready": true,
+      "error_count": 0,
+      "warning_count": 1
+    }
+  },
+  "inventory": {
+    "algorithm": "sha256-canonical-json-v1",
+    "files": 75,
+    "sha256": "3fa028fa6aaf96872c519726cdbc2c4d352357a3c17aa0151fe46f1121914822",
+    "entries": [
+      {
+        "path": "figures/catalog_hit_speedup_heatmap.pdf",
+        "bytes": 28813,
+        "sha256": "2f4de4bcb53b2d3c6f3e2fdbdb18ff4a5e3b7ab321b534fab008c056c3fb8940"
+      },
+      {
+        "path": "figures/catalog_hit_speedup_heatmap.png",
+        "bytes": 150546,
+        "sha256": "50522da4a603d27dfdf56259b1fb44141faef51e6f685f0198f596743422831f"
+      },
+      {
+        "path": "figures/cold_warm_indexed_grouped.pdf",
+        "bytes": 23296,
+        "sha256": "bd1935fdf18b669fef5fe641af784ff671e41b3dcb7ed10841b3c36861064160"
+      },
+      {
+        "path": "figures/cold_warm_indexed_grouped.png",
+        "bytes": 107323,
+        "sha256": "cba7849d79df1556aa0103d667e216645cc988be92a92e06839ff9a115a0f5fa"
+      },
+      {
+        "path": "figures/core_latency_violin.pdf",
+        "bytes": 26346,
+        "sha256": "3ea8e8272865511e1738ce920a7ef83b31853746e06df26a686a7513f440a052"
+      },
+      {
+        "path": "figures/core_latency_violin.png",
+        "bytes": 166838,
+        "sha256": "2fdb57737bfdef7984327f32d045cc9cc9c95a8a20a1d9f1e5bd8795680f92e9"
+      },
+      {
+        "path": "figures/eevdf_wakeup_ecdf.pdf",
+        "bytes": 23642,
+        "sha256": "009c7647a3f7b1fc7825580c5ec6fba49800fa8e57548982cac9b92025534006"
+      },
+      {
+        "path": "figures/eevdf_wakeup_ecdf.png",
+        "bytes": 140567,
+        "sha256": "db02e4554209a6cabedd63d8e480f161650d5b0ef761b490427aa97f4c6bb028"
+      },
+      {
+        "path": "figures/jain_fairness_concurrency.pdf",
+        "bytes": 26824,
+        "sha256": "037e173a69e3a393e81c90f13219f18d0b2dc053fb2d501fa74c97d4d6398661"
+      },
+      {
+        "path": "figures/jain_fairness_concurrency.png",
+        "bytes": 208392,
+        "sha256": "2c4226d4776b573776bf5e25d247fd75cb6fdae6ffc22c62198e79ba58004eee"
+      },
+      {
+        "path": "figures/kernel_io_normalized_heatmap.pdf",
+        "bytes": 31437,
+        "sha256": "00e9eec3f70018898f222661c4192302cf7b56b01a3f701d533c1074fa92950d"
+      },
+      {
+        "path": "figures/kernel_io_normalized_heatmap.png",
+        "bytes": 367540,
+        "sha256": "684f865a4babce8cbb0c4a963de0e487009e11f7260bb77e52db80fe83c76e36"
+      },
+      {
+        "path": "figures/paired_difference_ecdf.pdf",
+        "bytes": 23215,
+        "sha256": "735a2723079203e4259b2cafbc0843988f9daf8a381d29d5bc87554d3a0075e8"
+      },
+      {
+        "path": "figures/paired_difference_ecdf.png",
+        "bytes": 112043,
+        "sha256": "1382795f46746947da31a424783d1ef0b1c96bdb0efea4dbcb129c3e57efb838"
+      },
+      {
+        "path": "figures/performance_surface_3d.pdf",
+        "bytes": 28818,
+        "sha256": "b9185e57bf8951ae62fd1bf1106154a064d2fe55d157b24698e8fcffe62221e6"
+      },
+      {
+        "path": "figures/performance_surface_3d.png",
+        "bytes": 489747,
+        "sha256": "4c57640fca94ea7716f4506bb93e298f85ec83b880f45e46df0d5d2fe2377154"
+      },
+      {
+        "path": "figures/plot_manifest.json",
+        "bytes": 4115,
+        "sha256": "22e670a69345886e30af378bb110905450a98c6e26801203a5b14b2aec2f1fc2"
+      },
+      {
+        "path": "figures/task_latency_distribution.pdf",
+        "bytes": 50955,
+        "sha256": "6ca331eb098ffa80655997f39c52f50a7daa03763b673f22c7172603081b2c86"
+      },
+      {
+        "path": "figures/task_latency_distribution.png",
+        "bytes": 291538,
+        "sha256": "71b44732ef40550ca04d64437b44442a5d1b5cf7e6de3d95c6bbabfbb28dd286"
+      },
+      {
+        "path": "figures/traversal_indexed_dumbbell.pdf",
+        "bytes": 25992,
+        "sha256": "e9a09fc2ca932db108ae8bac2cf332d5bb21ca8f9d80d47fee30792cc91965b6"
+      },
+      {
+        "path": "figures/traversal_indexed_dumbbell.png",
+        "bytes": 180827,
+        "sha256": "037bbe16698bcad0ccbda2f0001465a4666bedf7f5aa910bc7cf2bf81af3a28e"
+      },
+      {
+        "path": "raw/contest/measurements.csv",
+        "bytes": 3363,
+        "sha256": "4a51307899074b0f52fba6d3088eab29209d5054b988c6faecb678bdba6d1665"
+      },
+      {
+        "path": "raw/contest/report.md",
+        "bytes": 2158,
+        "sha256": "4b0e5ef9eea1305a2891b26311e341b80e3384ebdd035385d227464380617c4c"
+      },
+      {
+        "path": "raw/contest/sample-01-qemu.serial.txt",
+        "bytes": 29029,
+        "sha256": "6ff846ccc725eb8ed2c94bdc4d1f32afea5ef39d789a6216efc6171bc4d78047"
+      },
+      {
+        "path": "raw/contest/sample-02-qemu.serial.txt",
+        "bytes": 29027,
+        "sha256": "6233b9a1c01461575751e5c0e8c973f1a7f13e4da6c896bfa3fd9b900b5be72a"
+      },
+      {
+        "path": "raw/contest/sample-03-qemu.serial.txt",
+        "bytes": 29031,
+        "sha256": "0cc3858b40b10760d2f34885ebc798c50146b886cddb3a57adeb8172e60309ee"
+      },
+      {
+        "path": "raw/contest/sample-04-qemu.serial.txt",
+        "bytes": 29022,
+        "sha256": "2173150bf0cb2c7cb061b9b58948a39e63df28b1a6f8c0a85a6261aac07023e2"
+      },
+      {
+        "path": "raw/contest/sample-05-qemu.serial.txt",
+        "bytes": 29032,
+        "sha256": "e0754c81a2f1db193601f716151dc9c0e7265d378e9f1351f036b0bd2b948305"
+      },
+      {
+        "path": "raw/contest/sample-06-qemu.serial.txt",
+        "bytes": 29030,
+        "sha256": "c3987f8d802544a36292225e189a37d00457b4cb78628df57b0b3065e98ec3ce"
+      },
+      {
+        "path": "raw/contest/sample-07-qemu.serial.txt",
+        "bytes": 29028,
+        "sha256": "1088fc9859f2c1a7dc4f22be5f0c43a83f11ea91142071725f019aae60dc9003"
+      },
+      {
+        "path": "raw/contest/sample-08-qemu.serial.txt",
+        "bytes": 29022,
+        "sha256": "bfe0d11b14c601c056b94e1f07be408dfc86b20b2f9b2d6d05ff1a0e2f2936be"
+      },
+      {
+        "path": "raw/contest/sample-09-qemu.serial.txt",
+        "bytes": 29032,
+        "sha256": "51a9eb93b8ee1c2c378990b043f9978e8e7b38c28dc5feedb3632b13cf68302b"
+      },
+      {
+        "path": "raw/contest/sample-10-qemu.serial.txt",
+        "bytes": 29031,
+        "sha256": "13976988394835aa4c4affdf7dd3f9f61c7a99c50c559832bde976b6539452fe"
+      },
+      {
+        "path": "raw/contest/sample-11-qemu.serial.txt",
+        "bytes": 29036,
+        "sha256": "114e97b8eb2d9abbdcf7ea70fda57d7c4a0ec4900b8f6bf7b1565477210095fd"
+      },
+      {
+        "path": "raw/contest/sample-12-qemu.serial.txt",
+        "bytes": 29031,
+        "sha256": "e978eb342f46838b71365befecfff6dca20c59ab691d006ac4ff1228ccc77013"
+      },
+      {
+        "path": "raw/contest/sample-13-qemu.serial.txt",
+        "bytes": 29025,
+        "sha256": "8ec8c64932b74a332a3f5e6a8dbcb837a330b4ec1943757f2418e4b9c8ab476f"
+      },
+      {
+        "path": "raw/contest/sample-14-qemu.serial.txt",
+        "bytes": 29028,
+        "sha256": "70e2c0ea3c80a381d4d0fe4111789e928a81fe5e31edeff0925d158420e10b14"
+      },
+      {
+        "path": "raw/contest/sample-15-qemu.serial.txt",
+        "bytes": 29026,
+        "sha256": "dd24d05c013b451bcdfff38b7128375cab7486e8ea85bf78b8c243a72654402f"
+      },
+      {
+        "path": "raw/contest/sample-16-qemu.serial.txt",
+        "bytes": 29027,
+        "sha256": "7c5cad25486beb52062d26c4b3c5a5f6652fad68609a80b858ba2bd4615c0e59"
+      },
+      {
+        "path": "raw/contest/summary.json",
+        "bytes": 20879,
+        "sha256": "1aa5e31b0a16edfa1b170b99c93180b2d76a7b0c266762886d6071b507260ff5"
+      },
+      {
+        "path": "raw/serial/agent-eevdf-boot-01.txt",
+        "bytes": 29799,
+        "sha256": "352c5b3107f2071425e01eb4a647a975770576c2a40e62959e34c8649175f774"
+      },
+      {
+        "path": "raw/serial/agent-eevdf-boot-02.txt",
+        "bytes": 29799,
+        "sha256": "b18579a24fa321b99b427db2bb8537ed2d663f4bb12b9d5b020387eb41f802b3"
+      },
+      {
+        "path": "raw/serial/agent-eevdf-boot-03.txt",
+        "bytes": 29799,
+        "sha256": "3d92c335e59f1bd5549a291fe3625a837d28ccba4c4e2339020d71e1f4d25449"
+      },
+      {
+        "path": "raw/serial/agent-eevdf-boot-04.txt",
+        "bytes": 29799,
+        "sha256": "6291cde425dbf107b85e545f0427490ab7853bd460383c05ae49831dc641d2c2"
+      },
+      {
+        "path": "raw/serial/agent-eevdf-boot-05.txt",
+        "bytes": 29797,
+        "sha256": "02dc1f222bcc5d979d4ad55eeb77c5faf3223080b68de71dce029e6adc22de8b"
+      },
+      {
+        "path": "raw/serial/agent-eevdf-boot-06.txt",
+        "bytes": 29799,
+        "sha256": "66c8b620617ba355ce50a39f269b9f302f88d3d02b624801b343524e5b25795e"
+      },
+      {
+        "path": "raw/serial/agenteval-hit-01-boot-01.txt",
+        "bytes": 187809,
+        "sha256": "96e39a8a251ef906779a7453aed54b40215ea7bf0c7fac6b8e677cae0ccfb572"
+      },
+      {
+        "path": "raw/serial/agenteval-hit-02-boot-01.txt",
+        "bytes": 187904,
+        "sha256": "017482ca44af16d070c3c32dc49a1ce983afbc98a1ef98f2210298e468d02604"
+      },
+      {
+        "path": "raw/serial/agenteval-hit-04-boot-01.txt",
+        "bytes": 187927,
+        "sha256": "d2918a32153c26724d68b8d5455369bd405dfcac7926791fd3b41bf336378c4b"
+      },
+      {
+        "path": "raw/serial/agenteval-hit-08-boot-01.txt",
+        "bytes": 188038,
+        "sha256": "8281fb57314301c727e4fb420e9b6b99c2eecd565a90902234bbf25b317dcc5b"
+      },
+      {
+        "path": "raw/serial/agenttask-boot-01.txt",
+        "bytes": 71290,
+        "sha256": "8d51078131491d3531d5e3b52993a70476a44b0119e9f5a1d242b5cbb89d9403"
+      },
+      {
+        "path": "raw/serial/agenttask-boot-02.txt",
+        "bytes": 71290,
+        "sha256": "5d77cd98efd81c595ddaee2d03251023d3aead324da3669beee3135437b1d503"
+      },
+      {
+        "path": "raw/serial/agenttask-boot-03.txt",
+        "bytes": 71290,
+        "sha256": "87e08ced3f123809bd89582497c79496a607bbb0290b7ee6b60193ece5d9b7e1"
+      },
+      {
+        "path": "raw/serial/agenttask-boot-04.txt",
+        "bytes": 71290,
+        "sha256": "f2eb82fda9bc94fe98da85df3b0505122448654751eef717512b2d1ee7a906e1"
+      },
+      {
+        "path": "tables/agenteval_concurrency.csv",
+        "bytes": 4337,
+        "sha256": "16dff4400393832ce3c97931d126485291a45ac85ae9f656a4889b96d2b3b8bd"
+      },
+      {
+        "path": "tables/agenteval_concurrency_samples.csv",
+        "bytes": 113968,
+        "sha256": "95cd478d383d30128f563d7a34009740c85f5a8aeb42b57047ac37e81ddbd7e8"
+      },
+      {
+        "path": "tables/agenteval_diagnostics.csv",
+        "bytes": 6948,
+        "sha256": "404067239b727d357b41d99315e0ded03212ccb83fab3ee02a2735665e23adbe"
+      },
+      {
+        "path": "tables/agenteval_pairs.csv",
+        "bytes": 237871,
+        "sha256": "844cbcbed72cbd7a2a401f7686d87d0a620edb243b70e366112d5168df738921"
+      },
+      {
+        "path": "tables/agenteval_samples.csv",
+        "bytes": 397659,
+        "sha256": "d873477714231b96b9686bea735e25e8cbe39f71271e0814449e691cd21cb506"
+      },
+      {
+        "path": "tables/contest_io_normalized.csv",
+        "bytes": 133625,
+        "sha256": "6b9ef164985507f8187c648914a9411bd0f850f0a06afc8b2cc191fbc2a5472d"
+      },
+      {
+        "path": "tables/contest_paired.csv",
+        "bytes": 5561,
+        "sha256": "3fafa718df3f9d2cf84311163ef71d7176d30271aa1b77d0eff12e065595065e"
+      },
+      {
+        "path": "tables/contest_paths.csv",
+        "bytes": 7674,
+        "sha256": "7bd46d542edf765618786a86a61e50746f75bfc58f54b3b8a13b87ed70aacfbf"
+      },
+      {
+        "path": "tables/eevdf_amplification.csv",
+        "bytes": 1229,
+        "sha256": "8a52c222935c2cabb231127b35c779ebcc1b031476677123ed7584c523261790"
+      },
+      {
+        "path": "tables/eevdf_cohorts.csv",
+        "bytes": 6224,
+        "sha256": "0744fb8c61ad5008e0470c0eabb30ca692bc5ad5b8dae1277dfb63aae65e4d01"
+      },
+      {
+        "path": "tables/eevdf_jain.csv",
+        "bytes": 6585,
+        "sha256": "bc10aaa95b42a918afaddf4702b53a939945c15ba3218cf46d692db8ba7688c5"
+      },
+      {
+        "path": "tables/eevdf_samples.csv",
+        "bytes": 38200,
+        "sha256": "a1ca8887f561e61b492f0de275e2ec5e1d3e4ca0e628c0464b7ca654ec287691"
+      },
+      {
+        "path": "tables/eevdf_wake_histogram.csv",
+        "bytes": 146316,
+        "sha256": "6533b07ccb3d74df31f8eeac5017002101fb21a625b931751dbbdabfcd4bbf4f"
+      },
+      {
+        "path": "tables/eevdf_wakeups.csv",
+        "bytes": 90380,
+        "sha256": "6201bf071af0dc6d6a037cb2e9a54371ce119a75b093a1f70b80ac97fff4efe5"
+      },
+      {
+        "path": "tables/extraction_manifest.json",
+        "bytes": 7250,
+        "sha256": "9ed824766a01e6d985eadb4e030c6b32f365a8a916740294ce53b651d13303a5"
+      },
+      {
+        "path": "tables/task_fingerprints.csv",
+        "bytes": 14408,
+        "sha256": "2b19d895a2b5e347d5e08cd84700036ddea97f67eb87f3e699e87b09d2a92708"
+      },
+      {
+        "path": "tables/task_operations.csv",
+        "bytes": 254581,
+        "sha256": "b9276254d5e8dc7c55d32f55b291f460248618b2c6e227852bd27ecb6bd04c19"
+      },
+      {
+        "path": "tables/task_perf.csv",
+        "bytes": 17633,
+        "sha256": "1d8ca5a1cbd5ba4f932eb08755d969294c2873c184d50690b212ef7089e1f628"
+      },
+      {
+        "path": "tables/task_perf_normalized.csv",
+        "bytes": 204533,
+        "sha256": "663c9044ee7eeed86b2b6246950cbddf712d860ebc33138aa0e9ef6b0d1b24cc"
+      },
+      {
+        "path": "tables/task_sequences.csv",
+        "bytes": 18774,
+        "sha256": "9270aedd18cb8bd62d0b7075e63d8ca70eda6c20b7249ae8ba3a85c431d50189"
+      },
+      {
+        "path": "validation.json",
+        "bytes": 20460,
+        "sha256": "045f69b0101ce4d9908f3d1b1c06af5753a0b5cd80ba4580939a74c13a5e8dc2"
+      }
+    ]
   }
 }
