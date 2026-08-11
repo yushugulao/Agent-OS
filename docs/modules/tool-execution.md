@@ -1,115 +1,210 @@
 # 结构化工具与执行合同
 
-AgentOS 把工具发现、参数校验、授权、执行和结果发布放入同一条内核调用链。Agent 可以按任务形态使用逐次 typed 调用、冻结执行合同、紧凑批处理或 Task SQ/CQ。
+Agent 的一次工具调用会跨过用户指针、工具目录、workflow 权限、文件对象和资源账户。若各条传输路径分别解释这些状态，同一个动作会因调用方式不同而得到不同结果。AgentOS 将 Scalar、Compact Batch 与 Task SQ/CQ 汇入同一套 owner 实现，并在工具产生副作用前完成合同、来源和资源检查。
 
-## 工具目录
+## 文档索引
 
-内核维护 25 项 name/id 唯一的工具目录。每个目录项声明参数 key、type、最大长度、必要性、required capability 和 side-effect mask。请求进入工具 owner 前，内核检查未知 key、重复参数、缺失参数、类型、字符串长度与终止符以及 `tool_id/tool_name` 一致性。
+- [工具目录与 Typed ABI](#工具目录与-typed-abi)
+- [一次调用的内核路径](#一次调用的内核路径)
+- [Execution Contract](#execution-contract)
+- [来源、资源与提交顺序](#来源资源与提交顺序)
+- [三种传输路径](#三种传输路径)
+- [Task SQ/CQ 协议](#task-sqcq-协议)
+- [测试与结果](#测试与结果)
+- [实现索引](#实现索引)
 
-| 接口 | 数据结构 | 使用方式 |
-| --- | --- | --- |
-| V1 `agent_call()` | 固定长度 request/response | 兼容已有 Guest 程序 |
-| V2 `tool_call()` | sized typed-KV | 根据上一轮结果动态选择工具 |
-| V3 `tool_call_v3()` | V2 前缀与合同字段 | 执行冻结 DAG 中的节点 |
-| `agent_run()` | 最多 64 项 op/result | 同步提交短小顺序操作 |
-| Task Channel | 16 槽 SQ/CQ | 通过共享队列提交和收割任务 |
+## 工具目录与 Typed ABI
 
-V1、V2 每次调用都会重新执行身份与授权检查。V2 单次 request 最多包含 8 个参数，参数类型包括 `uint64` 和有界 string。
-
-## 请求处理链
-
-```text
-复制 request 与 descriptor
-    -> 校验 version、size 和 flags
-    -> 检查 Agent 身份与 lifecycle
-    -> 解析 tool id/name 并校验参数 schema
-    -> 进入 lifecycle operation gate
-    -> 执行 contract admission 与 required capability 匹配
-    -> 完成 provenance 授权并申请 phase credit
-    -> 进入 effect gate，由工具 owner 继续检查 VFS scope
-    -> 提交 Context 与执行记录
-    -> 发布 typed status/result
-```
-
-检查完成后，执行器只使用内核私有 request 副本。所有路径共用工具 owner 与 Context commit lane，因而 scalar、batch 和 SQ/CQ 对同一操作产生一致的工具结果与记录顺序。
-
-## ENFORCE V3
-
-每个 lifecycle 可以冻结一份最多 24 个节点的有向无环合同。节点按拓扑顺序编号，predecessor 只能指向已有节点。
-
-| 维度 | 合同字段 |
-| --- | --- |
-| 工具 | tool id、32 字节 schema digest、required capability、side-effect mask |
-| 依赖 | predecessor mask、source node、source Context sequence |
-| 数据 | input/output artifact type、来源标签、32 字节 input fingerprint |
-| 资源 | exec/storage envelope、charge class |
-| 控制 | deadline、最大 attempt、retry mask、cancel policy |
-
-V3 请求绑定 contract key、node、attempt、deadline、source Context 和 input fingerprint。内核依次检查 lifecycle、节点、前驱、schema、capability、来源、资源与 deadline。工具开始前预留执行记录槽并建立 Tool Phase Credit Lease，完成后结算资源、提交 Context，再发布节点终态。
-
-合同节点状态包括 `BLOCKED`、`READY`、`RUNNING`、`SUCCEEDED`、`FAILED` 和 `CANCELLED`。完成缓存保存 accepted attempt 的终态，合法重试直接返回同一结果并设置 cached 标志。
+内核目录固定登记 25 项工具。每项同时描述 name/id、参数 schema、required capability、可接受的输入来源标签、输出标签和 side-effect mask。目录定义位于 [`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c)，ABI 常量位于 [`include/agent_tool_abi.h`](../../include/agent_tool_abi.h)。
 
 ```c
-int agent_execution_contract(
-    const struct agent_execution_contract_control *control,
-    struct agent_execution_contract_result *result);
+#define AGENT_TOOL_REGISTRY(X) \
+    X(AGENT_TOOL_ECHO, AGENT_TOOL_F_CALLABLE, "echo", ...) \
+    X(AGENT_TOOL_QUERY_FILE, AGENT_TOOL_F_CALLABLE, "query_file", ...) \
+    X(AGENT_TOOL_SEND_MESSAGE, AGENT_TOOL_F_CALLABLE, "send_message", ...) \
+    X(AGENT_TOOL_ACTION_COMMIT, AGENT_TOOL_F_CALLABLE, "action_commit", ...)
 
+static const struct param_rule rules[] = {
+    R(PAYLOAD, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1),
+    R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1),
+    R(MESSAGE, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1),
+};
+```
+
+这份注册表在启动时检查工具编号连续性、名称唯一性、参数 target 不重叠以及来源和副作用位是否合法。schema digest 以 `agentos.tool.manifest.v1` 为域，将 tool id、flags、capability、来源策略、side effect、名称和 schema 一起送入 SHA-256。合同节点因而可以绑定一份确定的工具语义。
+
+AgentOS 保留三代工具调用接口：
+
+| 接口 | Request | 主要用途 |
+| --- | --- | --- |
+| V1 `agent_call()` | 192 字节固定布局 | 兼容已有 Guest 程序 |
+| V2 `tool_call()` | 72 字节头部与 typed-KV 数组 | 运行时选择工具与参数 |
+| V3 `tool_call_v3()` | V2 前缀加合同绑定 | 执行冻结 DAG 节点 |
+
+V2 一次最多接收 8 个 `agent_param_v2`。内核逐项 copyin，并检查参数版本、96 字节布局、key 终止符、类型、value size、重复 key 和必要参数。`tool_id` 与 `tool_name` 同时填写时必须命中同一目录项。以下调用形态与 [`user/src/agenttoolabi_ucore.c`](../../user/src/agenttoolabi_ucore.c) 的测试夹具一致：
+
+```c
+struct agent_param_v2 params[2] = {0};
+struct agent_request_v2 req = {0};
+struct agent_response_v2 resp = {0};
+
+req.version = AGENT_CALL_VERSION_V2;
+req.size = sizeof(req);
+req.tool_id = AGENT_TOOL_ECHO;
+req.param_count = 2;
+req.request_id = 1001;
+req.params = (uint64)params;
+strcpy(req.tool_name, "echo");
+
+/* params[] 分别填写 key/type/value_size/value。 */
+tool_call(&req, &resp);
+```
+
+## 一次调用的内核路径
+
+用户库、系统调用分派和工具 owner 之间没有旁路。以 V3 为例，[`user/lib/syscall.c`](../../user/lib/syscall.c) 的封装只传递两块 ABI 缓冲区：
+
+```c
 int tool_call_v3(struct agent_request_v3 *req,
-                 struct agent_response_v3 *resp);
+                 struct agent_response_v3 *resp)
+{
+    return syscall(SYS_tool_call, req, resp);
+}
 ```
 
-## Tool Phase Credit Lease
+[`os/syscall.c`](../../os/syscall.c) 将 `SYS_tool_call` 交给 `sys_tool_call()`；该函数先 copyin 8 字节 `version + size` 头，再选择 V2 或 V3 解码器。通过校验的 request 被压缩为内核私有 `agent_op`，随后进入 `agent_execute_one()`。完整路径如下：
 
-Phase Lease 从 workflow 已计入资源中锁定本次工具需要的短期额度。claim 使用 nonce，失败路径 refund，成功路径按实际对象发布与析构结算。Lease 与执行合同使用相同的 workflow、node 和 attempt 身份，资源记账、工具终态和 Context 发布共享一个提交顺序。
+| 阶段 | 主要符号 | 处理内容 |
+| --- | --- | --- |
+| Guest 封装 | `tool_call()`、`tool_call_v3()` | 进入 `SYS_tool_call` |
+| Syscall dispatch | `syscall()`、`sys_tool_call()` | copyin 版本头，选择 V2/V3 |
+| 协议解码 | `agent_tool_protocol_resolve()`、`agent_tool_protocol_decode_v2()` | 解析 name/id，校验 typed schema，生成私有 `agent_op` |
+| 合同准入 | `agent_execution_contract_admit()` | 检查 lifecycle、node、attempt、前驱、deadline 和输入指纹 |
+| 来源与额度 | `agent_provenance_authorize_tool()`、`resource_phase_lease_begin()` | 核对来源标签并锁定 phase credit |
+| Effect gate | `agent_execution_contract_effect_begin()` | 决定进入副作用、取消或复用终态 |
+| Owner 执行 | `agent_execute_op()`、`agent_metadata_execute_tool()` | 执行进程、IPC、metadata 或文件 owner 逻辑 |
+| 终态提交 | `agent_provenance_commit_tool_output()`、`agent_execution_append_terminal()` | 结算额度，发布 Context、Evidence 与合同终态 |
 
-## Compact batch
+`agent_execute_op()` 只接收私有副本。metadata 工具先进入 `agent_metadata_tool_enter()`，由 [`os/agent_metadata_objects.c`](../../os/agent_metadata_objects.c) 处理；其余工具在 [`os/agent_core.c`](../../os/agent_core.c) 中按 tool id 分派。Scalar、Batch 与 Task bridge 最终都调用这条 owner 路径。
 
-`agent_run()` 在一次 syscall 中同步执行最多 64 项 `agent_op`：
+V2 在 typed-KV 解码完成后才进入 lifecycle operation gate。V3 先核对完整 request 布局和 lifecycle binding，再复用 V2 decoder 生成 `agent_op`，随后进入 operation gate 与 `agent_execute_one()`；合同准入、来源授权、phase lease 和 effect gate 都发生在 owner 执行之前。ENFORCE lifecycle 中，V3 的非法 tool/schema/binding 会形成结构化安全终态；安全终态槽位不足时返回 `NO_SPACE`，其它暂时无法预留终态记录的情况返回 `RETRY`。
+
+## Execution Contract
+
+一个 active lifecycle 最多冻结一份合同。合同按拓扑顺序保存 24 个节点，全部 accepted attempt 共用 48 个终态槽，每个节点最多 4 次 attempt。节点状态在 `BLOCKED -> READY -> RUNNING -> SUCCEEDED/FAILED/CANCELLED` 之间推进。
+
+| 约束 | `agent_execution_contract_node` 字段 |
+| --- | --- |
+| 工具语义 | `tool_id`、32 字节 `schema_digest`、`required_capabilities`、`side_effect_mask` |
+| 拓扑依赖 | `node_id`、`predecessor_mask` |
+| 输入来源 | `accepted_input_labels`、input/output artifact type |
+| 输出传播 | `output_add_labels` |
+| 控制策略 | `deadline_tick`、`max_attempts`、`retry_policy`、`cancel_policy` |
+| 资源包络 | `exec_envelope[]`、`storage_envelope[]`、`charge_class` |
+
+V3 request 继续绑定 contract key、node、attempt、source node、source Context sequence、producer identity、schema digest 和 canonical input fingerprint。根节点可以使用 inline input；跨 Agent 前驱和资源输入还要携带 kernel-issued producer identity。关键结构定义在 [`include/agent_execution_contract_abi.h`](../../include/agent_execution_contract_abi.h)。
 
 ```c
-int agent_run(struct agent_op *ops,
-              struct agent_result *results,
-              int count, uint64 flags);
+struct agent_execution_contract_control control = {0};
+
+control.version = AGENT_EXECUTION_CONTRACT_VERSION;
+control.size = sizeof(control);
+control.operation = AGENT_EXECUTION_CONTRACT_CREATE;
+control.flags = AGENT_EXECUTION_CONTRACT_F_ENFORCE;
+control.nodes = (uint64)nodes;
+control.node_count = node_count;
+control.node_size = sizeof(nodes[0]);
+agent_execution_contract(&control, &result);
 ```
 
-batch 内操作按数组顺序提交，每项返回独立状态。wait/wake 类睡眠操作使用独立通道，避免等待请求占住整组 batch。16-op ECHO 负载中，compact batch 的中位 sequence 延迟为 `561 us`，结果见[性能测试](../performance.md)。
+`ENFORCE` 生效后，合同内节点必须通过 V3 或带等价 binding 的 Task Channel 提交。受约束的直接副作用 syscall 也经过 `agent_execution_contract_gate_direct_syscall()`。完成缓存记录 accepted attempt 的终态；合法重放返回同一结果，并在 V3 response 中设置 `AGENT_RESPONSE_V3_F_CACHED`。
 
-## Task SQ/CQ
+## 来源、资源与提交顺序
 
-每个 Agent 可以建立 single-issuer Task Channel，共使用 4 页：
+工具目录给每项操作附带 provenance manifest。文件内容、工具输出与跨 Agent 消息分别引入 `UNTRUSTED_FILE_DATA`、`UNTRUSTED_TOOL_OUTPUT` 和 `CROSS_AGENT_DATA`；授权判断使用当前 Context 标签、合同声明和目录策略共同计算输入与输出标签。固定输入字节由 SHA-256 形成 fingerprint，来源标签不能代替 capability 或 VFS scope。
 
-| 页面 | 用户权限 | 内容 |
+合同节点在执行前从 workflow 资源账户建立 Tool Phase Credit Lease。额度从已计费账户中暂时锁定，owner 执行结束后统一 deactivate 和 settle；准入失败不会留下 reservation，已经发布的对象沿唯一析构路径归还 credit。
+
+`agent_execute_one()` 的提交次序直接体现在 [`os/agent_core.c`](../../os/agent_core.c) 中：
+
+```c
+admission = agent_execution_contract_admit(...);
+status = agent_provenance_authorize_tool(...);
+resource_phase_lease_begin(...);
+effect_admission = agent_execution_contract_effect_begin(&claim);
+
+agent_execute_op(p, op, res);
+resource_phase_lease_settle(&phase_lease, phase_generation);
+agent_provenance_commit_tool_output(p, &provenance_decision, res->status);
+agent_execution_append_terminal(p, op, res, tick, status, ...);
+```
+
+最后一步在 Context commit lane 中写入 sequence、工具状态和结果，同时为受约束调用生成 Evidence ticket 并推进合同节点终态。取消在 effect gate 前可产生 `CANCELLED`；owner 已开始副作用后，系统按照实际执行结果完成结算。
+
+Nexus artifact 字节由用户态运行库单独发布。[`user/include/agent_nexus.h`](../../user/include/agent_nexus.h) 将 `AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC` 定义为 `0`；[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c) 使用 workflow edit lease 串行化 publisher，先写入 zero-magic header 与 payload 并 `fsync`，再写最终 header 并再次 `fsync`。uCore 没有 rename/link 原子提交，崩溃时可能留下不可读的 publish-once tombstone；artifact read 会重新核对 magic、manifest digest、payload digest 和 lifecycle。该文件发布不与内核工具的 Context terminal 合并为一个原子事务。
+
+## 三种传输路径
+
+| 路径 | 提交方式 | 适合负载 | 终态位置 |
+| --- | --- | --- | --- |
+| Compact Batch | `agent_run()` 一次提交至多 64 个 `agent_op` | 已知的短顺序操作 | `agent_result[]` |
+| Scalar V3 | 每个节点一次 `tool_call_v3()` | 动态分支、逐节点决策 | `agent_response_v3` |
+| Task SQ/CQ | 16 槽共享 SQ/CQ，`enter()` 批量推进 | 高频提交、取消与 deadline | 只读 `agent_task_cqe` |
+
+三条路径使用相同的 ECHO 语义指纹和 Context owner。一次 sequence 包含 16 个操作的测试中，Batch、Scalar V3 和 SQ/CQ 的中位时延分别为 `561.0 us`、`2,051.0 us` 和 `1,620.5 us`。逐样本分布见[性能测试](../performance.md#6-agent-task-传输路径)。
+
+## Task SQ/CQ 协议
+
+Task Channel 在 `setup` 时建立 single-issuer 通道；该调用必须来自进程主线程，后续 `enter` 与 `resource` 绑定同一 issuer tid 和 identity generation。SQ 和 CQ 各映射一页，内核另持 request private 与 resource private 两页。SQ 对 issuer 可写，CQ 在用户页表中只读；内核消费 SQE 前复制完整 128 字节描述符，此后不再读取用户槽位。
+
+每条 SQE 携带以下复用保护：
+
+- `request_id`：通道生命周期内严格递增；
+- `ring_generation`：绑定当前通道协议代；
+- `slot_generation = 1 + floor(sq_position / 16)`：识别环槽复用；
+- `contract.lifecycle + contract.generation`：绑定 workflow 与合同；
+- typed handle generation：识别资源槽 ABA。
+
+Task Channel 的 `STALE` 与 sticky resync 处理不同：
+
+| 状态 | 触发示例 | 通道状态 | 调用方动作 |
+| --- | --- | --- | --- |
+| `AGENT_TASK_CHANNEL_STALE` | `enter.generation` 不是当前 generation | 不自动设置 `RING_F_RESYNC` | 读取返回的当前 generation 和水位，重建本次控制请求 |
+| `AGENT_TASK_CHANNEL_STALE` | issuer identity/lifecycle 已变化 | 不自动设置 `RING_F_RESYNC`；结果除 ABI version/size/status 外为零 | 重新建立有效 owner/lifecycle |
+| `AGENT_TASK_CHANNEL_STALE` | cancel 目标已被 CQ ack 或不存在 | 不自动设置 `RING_F_RESYNC`；cancel id 已消费，返回当前 channel generation 与水位 | 结束对已消失目标的控制 |
+| `AGENT_TASK_CHANNEL_RESYNC_REQUIRED` | request id 倒退、SQ/CQ 水位非法、SQE ring/slot generation 错误、重复 request 槽或非法 link | 设置 sticky `RING_F_RESYNC`，generation 前进，SQ 重置到零 | 丢弃未接受 SQE，采用返回的新 generation，以 `ENTER_F_RESYNC + sq_tail=0` 显式恢复 |
+
+[`user/src/agenttask_ucore.c`](../../user/src/agenttask_ucore.c) 用重复 request id 制造协议故障，并验证两次 enter 的恢复过程：第一次返回 `RESYNC_REQUIRED` 和新 generation，第二次以零 tail 清除 sticky flag。普通 `STALE` 不增加 `protocol_faults` 或 `resync_count`。
+
+每个 accepted target 最终只发布一个 CQE。cancel command 使用自己的递增 request id，在 `link_request_id` 中引用目标，不生成第二个 cancel CQE；取消策略同步拒绝时，该 cancel id 已被消费，`enter` 返回 `DENIED`，目标继续运行。CQ full 保留尚未发布的终态并施加 backpressure；hard deadline 在 timer 路径标记，到达可调度检查点后生成带 `AGENT_TASK_CQE_F_DEADLINE` 的 terminal CQE。
+
+Task resource ABI 定义 import/release/query 和 16 字节 generation handle。当前同步 bridge 在 [`os/agent_task_bridge.c`](../../os/agent_task_bridge.c) 中接受 typed null input，输出 artifact type 为 `NONE`；非空资源 import 的 `result.status` 为 `AGENT_TASK_CHANNEL_DENIED`。该行为由 Task vertical test 固定。
+
+## 测试与结果
+
+| 用例 | 覆盖内容 | 成功标记 |
 | --- | --- | --- |
-| SQ | read/write | 16 个 128 字节 SQE 与 ring header |
-| CQ | read-only | 16 个 128 字节 CQE 与 ring header |
-| request private | 内核私有 | 权威水位、request 状态、issuer 与 deadline |
-| resource private | 内核私有 | handle generation、owner、digest 与来源 |
-
-内核消费 SQE 前复制完整描述符。request id 严格递增；channel generation 不匹配时返回 `STALE`，SQE 的 ring/slot generation 不匹配或出现协议故障时进入 sticky resync，issuer 通过显式 `RESYNC` 重建可见 header。
-
-每个 accepted target 只发布一个 terminal CQE。cancel 使用独立 request id 引用目标；effect gate 前可以将目标转为 cancelled，effect 开始后按实际执行结果结算。hard deadline 在 timer 中标记，并在下一个 schedulable safe point 完成终态发布。
-
-typed resource handle 固定为 16 字节，每个 Agent 的私有表包含 8 个槽位。当前内核 bridge 同步处理 `null` input，完成结果的 artifact 类型为 `NONE`。
-
-## 实现位置
-
-| 职责 | 源码 |
-| --- | --- |
-| 工具目录与 schema | [`agent_tool_abi.h`](../../include/agent_tool_abi.h)、[`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c) |
-| syscall 与 owner dispatch | [`os/agent_core.c`](../../os/agent_core.c) |
-| 执行合同 | [`agent_execution_contract_abi.h`](../../include/agent_execution_contract_abi.h)、[`os/agent_execution_contract.c`](../../os/agent_execution_contract.c) |
-| 来源检查 | [`os/agent_provenance.c`](../../os/agent_provenance.c) |
-| Task Channel | [`agent_task_channel_abi.h`](../../include/agent_task_channel_abi.h)、[`os/agent_task_channel.c`](../../os/agent_task_channel.c) |
-| 用户态封装 | [`user/include/agent.h`](../../user/include/agent.h)、[`user/lib/syscall.c`](../../user/lib/syscall.c) |
-
-## 测试入口
-
-`agenttoolabi_ucore` 覆盖 V1/V2 工具目录和 typed-KV 负向矩阵；`agentcontract_ucore` 覆盖依赖、deadline、retry、cancel、来源与资源；`agenttask_ucore` 覆盖 SQ/CQ 所有权、resync、backpressure、terminal CQE 和 typed handle。
+| [`agenttoolabi_ucore.c`](../../user/src/agenttoolabi_ucore.c) | V1/V2 目录一致性、参数重排、未知/重复 key、类型和长度负向矩阵 | `strict_negative_matrix=1` |
+| [`agentcontract_ucore.c`](../../user/src/agentcontract_ucore.c) | 24 节点 DAG、schema、capability、前驱来源、deadline、retry、phase credit | `replay=1 retry=1 deadline=1 phase_zero_leak=1` |
+| [`agenttask_ucore.c`](../../user/src/agenttask_ucore.c) | SQ/CQ 权限、backpressure、sticky resync、retained-terminal 幂等 cancel、deadline | `submit=1 cq_ack=1 monotonic=1 resync=1` |
 
 ```bash
+make agent-uapi-check
 AGENT_TEST_CASE=agenttoolabi_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-公开结构、状态码和字段布局见 [API](../api.md)，副作用检查链见[安全机制](../security.md)。
+## 实现索引
+
+| 职责 | 源码 |
+| --- | --- |
+| UAPI 与用户态封装 | [`include/agent_tool_abi.h`](../../include/agent_tool_abi.h)、[`user/include/agent.h`](../../user/include/agent.h)、[`user/lib/syscall.c`](../../user/lib/syscall.c) |
+| Nexus artifact 发布 | [`user/include/agent_nexus.h`](../../user/include/agent_nexus.h)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c) |
+| 工具目录与 typed schema | [`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c) |
+| Owner dispatch 与 Context commit | [`os/agent_core.c`](../../os/agent_core.c)、[`os/agent_context.c`](../../os/agent_context.c) |
+| Execution Contract | [`include/agent_execution_contract_abi.h`](../../include/agent_execution_contract_abi.h)、[`os/agent_execution_contract.c`](../../os/agent_execution_contract.c) |
+| Provenance 与资源 | [`os/agent_provenance.c`](../../os/agent_provenance.c)、[`os/agent_resource.c`](../../os/agent_resource.c) |
+| Task Channel 与 bridge | [`include/agent_task_channel_abi.h`](../../include/agent_task_channel_abi.h)、[`os/agent_task_channel.c`](../../os/agent_task_channel.c)、[`os/agent_task_bridge.c`](../../os/agent_task_bridge.c) |
+
+公开结构和状态码见 [API](../api.md)，完整检查链见[安全机制](../security.md)。
