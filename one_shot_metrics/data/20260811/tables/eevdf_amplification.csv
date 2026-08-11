@@ -1,0 +1,7 @@
+campaign_id,source_file,source_sha256,source_ordinal,line_number,amplified_threads,amplified_service,peer_threads,fresh_peer_count,bootstrap_peer_count,peer_count,peer_service_sum,accounting
+agentos-advanced-figures-20260811,raw/serial/agent-eevdf-boot-01.txt,352c5b3107f2071425e01eb4a647a975770576c2a40e62959e34c8649175f774,1,202,4,298905,1,2,1,3,812546,workflow
+agentos-advanced-figures-20260811,raw/serial/agent-eevdf-boot-02.txt,b18579a24fa321b99b427db2bb8537ed2d663f4bb12b9d5b020387eb41f802b3,2,202,4,306016,1,2,1,3,832436,workflow
+agentos-advanced-figures-20260811,raw/serial/agent-eevdf-boot-03.txt,3d92c335e59f1bd5549a291fe3625a837d28ccba4c4e2339020d71e1f4d25449,3,202,4,295665,1,2,1,3,803607,workflow
+agentos-advanced-figures-20260811,raw/serial/agent-eevdf-boot-04.txt,6291cde425dbf107b85e545f0427490ab7853bd460383c05ae49831dc641d2c2,4,202,4,297218,1,2,1,3,805171,workflow
+agentos-advanced-figures-20260811,raw/serial/agent-eevdf-boot-05.txt,02dc1f222bcc5d979d4ad55eeb77c5faf3223080b68de71dce029e6adc22de8b,5,202,4,290562,1,2,1,3,784508,workflow
+agentos-advanced-figures-20260811,raw/serial/agent-eevdf-boot-06.txt,66c8b620617ba355ce50a39f269b9f302f88d3d02b624801b343524e5b25795e,6,202,4,294154,1,2,1,3,810452,workflow

@@ -1,0 +1,18 @@
+\chapter{总结}
+\label{chap:conclusion}
+
+我们在 uCore 上回答了一个具体的系统问题：当 Agent 从普通用户程序变成会长时间等待、动态调用工具、跨身份传递数据并消耗多类资源的执行体时，操作系统应该为它提供什么机制。
+
+我们的答案是分层治理：Host 负责 TLS/provider，Guest runtime 负责历史、规划和工具选择，内核负责身份、lifecycle、scope、capability、provenance、结构化参数、等待唤醒、资源账户、调度与审计。LLM SDK、JSON、HTTP 与 MCP wire 保留在 Guest/Host 层。
+
+六项赛题任务沿一条系统路径衔接。内核身份为 Context 和 capability 提供主体；typed V2/V3 将工具调用变成可拒绝的系统交互；Context、provenance、Evidence 和 fence 把运行结果连成有界证据；metadata/index/watch 让文件查询真正走内核数据路径；event 与 workflow EEVDF 使 Agent 等待时不忙轮询，也不能通过增加线程放大份额；最后，确定性 contest-demo 与交互式 Nexus 分别承担性能复现与产品演示。
+
+Nexus 是本项目的纵向收口。用户在左窗口连续提交目标，Coordinator 根据真实结果委派 System、Research 或 Analyst；三个 worker 拥有独立内核身份和 Context，并共享 workflow 资源域与调度实体；右窗口以可读的 task/correlation/Context 展示内核实际允许、拒绝、挂起和记录的事实。Host 只做传输与呈现，不冒充业务 Agent。固定 replay 使这条路径在无网时仍可复验，而 live provider 只在真实 API 闭环完成时才作相应披露。
+
+实验结果也保留了必要的负结论。16 个 paired boot 中，indexed core 在 16/16 配对中更快，中位加速 3.118$\times$；但端到端仅 3/16 更快，中位差为 $+13.452$ ms。这说明一个快的内核查询路径不会自动变成更快的整体产品。我们将 core 与 E2E 分开报告，将 inner pair 与 independent boot 分开解释，并保留 EEVDF 串口拼接 warning，因为可诚实质疑的证据比看起来完美的数字更有价值。
+
+当前产品仍有清晰限制：四业务角色、有界 session/artifact、本地资料、Guest 审批、boot-volatile store、Task Channel null provider 和 MCP/A2A in-memory prototype。我们没有用“将来可以扩展”把它们改写成已完成能力。这些边界反而为后续演进提供了可执行路线：先升级 artifact/Task/approval 的可验边界，再引入外部资源与互操作，始终不把业务策略推进内核。
+
+\begin{evidencebox}[最终结论]
+AgentOS-uCore 将 Agent 行为纳入可治理的系统工作负载：可识别、可授权、可挂起、可记账、可调度、可追踪，并且在拒绝时仍能返回结构化观察供策略重新规划。
+\end{evidencebox}

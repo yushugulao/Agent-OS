@@ -1,0 +1,110 @@
+\chapter{任务一：可信 Agent 身份、Context 与生命周期}
+\label{chap:task1}
+
+\section{约束}
+
+任务一要求操作系统能够创建 Agent，为它提供专用 Context 区，同时保持普通进程与
+Agent 进程共存。真正的难点不是在 PCB 增加一个布尔值，而是确保身份只能由可信路径
+发布、fork/exec/exit 不泄漏权限、旧 workflow 的 PID 或 slot 不能在复用后命中新对象，
+并让 Context “可直接读写”的要求不变成伪造授权历史的入口。
+
+我们把 workflow admission、初始身份、Context 和资源账户作为同一个创建事务处理。任何一步失败都
+撤销已经发布的字段和页面；成功后，后续工具、VFS、IPC、调度和审计都只读取内核中的
+同一身份事实。
+
+\section{设计：身份不是用户态标签}
+
+Agent 身份由 \code{is_agent}、\code{agent_id}、kernel role、control id、controller
+id、capability mask 和 workflow lifecycle 共同构成。role policy 在内核中固定映射
+能力与调度权重。例如 Sentinel 具有 metadata/process read、message、watch 和 audit
+能力，但没有 \code{CONTENT_READ} 或写能力；Investigator 可以读取内容；Artifact 可以发布
+工件；Orchestrator 才拥有完整编排能力。
+
+创建前，内核同时检查父进程的 role grant、受信映像 manifest 和 workflow admission。
+创建成功后，control id 标识当前控制关系，controller id 把 child 绑定到同 scope 的
+根。用户传入的 PID、role 字符串或 capability 数值不能替代这些字段。访问另一个对象
+时，内核比较当前主体的 scope、完整 lifecycle 与 control 关系，避免仅凭 PID 复用
+授权。
+
+\begin{table}[htbp]
+\centering
+\caption{Agent 身份字段及安全用途}
+\label{tab:identity-fields}
+\begin{tabularx}{\textwidth}{L{3.0cm}YY}
+\toprule
+\textbf{字段} & \textbf{用途} & \textbf{防止的问题} \\
+\midrule
+\code{agent_id} & 当前 boot 内的 Agent 标识 & 普通进程冒充 Agent \\
+\code{control_id} & 不可由 Guest 指定的控制身份 & PID 复用、越权 controller \\
+role/capability & 角色策略和具体动作权限 & “知道工具名”等于可以执行 \\
+workflow \code{id+generation} & 跨模块不可变 lifecycle key & 旧 slot/watch/handle 命中新 workflow \\
+VFS scope & 文件和 metadata 可见域 & 跨 workflow 文件读取或写入 \\
+exec/storage account & workflow 资源归属 & 子进程或线程逃逸资源统计 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{七页 Context 地址区}
+
+每个 Agent 在固定 ABI 地址映射七页 Context。前六页由内核分配和发布，Guest PTE 只读；
+它们保存身份 header、最新响应、Context records、路径索引与可信 mirror。第七页是用户
+cache，Guest 可以直接读写，用于保存高频策略数据。内核从不使用第七页决定 capability、
+scope、cause、span 或授权，因此同时满足“可直接读写”和“可信历史不可伪造”。
+
+Context 容量固定为 128 条。记录包含 sequence、request/tool/status、tick、cause、span、
+branch、control id、短 payload/result 和 hash。内核用 publish sequence 与只读映射
+避免 torn read；用户还可以通过 query/snapshot UAPI 取得同一结构化历史。
+
+\section{Workflow lifecycle 与三类 gate}
+
+workflow identity 是不可变 \code{id+generation}。每个 lifecycle 保存 controller、
+member count、closing、active/departing operation、fence gate、fence sequence 和 Context
+branch allocator。slot 可以复用，generation 不能复用；所有 watch、资源账户、VFS
+sidecar、Task handle 和 artifact 都必须携带 generation。
+
+我们用三类 gate 约束并发：operation gate 包围普通操作；departure gate 包围 exit 和
+teardown；fence gate 形成精确 cut。fence 不在持锁状态睡眠：若已有 operation 或
+departure 未清空，立即返回 \code{RETRY}。只有
+\code{closing && members==0 && active==0 && departing==0 && !fence_gate} 时才回收 scope、
+Context、watch、Evidence Ring 和账户。
+
+\begin{designbox}[更小的生命周期状态机]
+我们没有保留复杂、难验证的多阶段 retirement 产品语义。当前状态只公开 member、
+closing 和 gate；“retiring”只是内部满足回收条件的判断，不被包装成额外功能。
+\end{designbox}
+
+\section{资源账户随 workflow 一起创建}
+
+workflow admission 分配 exec/storage resource domain 与 account；后续通过
+\code{agent_create_role} 创建的 Agent 加入并共享该账户。process、thread、file object、
+filesystem block/inode、buffer、Agent state page 和 physical page 都按 workflow charge，
+ordinary 与 reserved class 分开。身份离开 workflow 时，资源不能因 fork 或线程增加而
+转为无主对象；controller close 和 context switch 也会触发空闲 credit trim。
+
+这个设计为后续 Tool Phase Lease 和 workflow EEVDF 提供统一主体。如果只在工具层
+记录“某 Agent 调用了什么”，进程创建和页分配仍可能绕过资源边界；把账户绑定到
+lifecycle 后，工具、VFS 和调度都能引用同一 key。
+
+\section{实现落点}
+
+\begin{itemize}
+  \item \code{os/agent_identity.c} 定义 role policy、身份发布、capability 与控制关系；
+  \item \code{os/agent_core.c} 实现 Agent/workflow 创建、\code{agent_info} 和工具入口；
+  \item \code{os/workflow_lifecycle.c} 实现 generation、member、close 和 gate；
+  \item \code{os/agent_context.c} 分配、映射和维护七页 Context；
+  \item \code{os/vfs_security.c} 把 process credential 与 workflow VFS scope 对齐；
+  \item \code{os/resource_controller.c} 与 \code{os/workflow_credit_domain.c} 绑定资源账户。
+\end{itemize}
+
+\section{验证}
+
+\code{agenttrust_ucore} 验证普通 exec 不能取得 Agent 身份、角色必须受 manifest 和父授权
+约束、权限只衰减不放大；\code{agentscope_ucore} 覆盖 scope 和生命周期 generation；
+\code{agentfinal_ucore} 覆盖 Context 固定映射、直接读取、用户 cache 写入、snapshot、
+rollback 和淘汰。Host mutation tests 进一步修改 manifest、UAPI 尺寸或生产对象清单，
+确认 checker 会失败，而不是只匹配成功日志。
+
+\begin{evidencebox}[任务一结论]
+我们完成了内核识别的 Agent 创建、独立 Context 和普通/Agent 共存。它是单 Hart、
+当前 boot、容量有界的实现；我们不声称跨重启保存 lifecycle 或 Context。
+\end{evidencebox}

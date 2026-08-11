@@ -22,7 +22,6 @@ struct agent_tool_manifest {
 
 void agent_tool_protocol_init(void);
 uint64 agent_tool_protocol_flags(int tool_id);
-uint64 agent_tool_protocol_required_capabilities(int tool_id);
 int agent_tool_protocol_schema_digest(
 	int tool_id, uchar digest[AGENT_SHA256_DIGEST_SIZE]);
 int agent_tool_protocol_manifest_query(int tool_id,

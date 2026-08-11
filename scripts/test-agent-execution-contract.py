@@ -1170,42 +1170,6 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
         ),
         "V3 DENIED/STALE must never escape without a critical ticket",
     )
-    preflight_terminal = function_body(
-        core, "agent_execution_preflight_terminal"
-    )
-    require_order(
-        preflight_terminal,
-        (
-            "agent_lifecycle_context_lane_enter(p)",
-            "agent_context_append_prepare(",
-            "agent_evidence_context_reserve(",
-            "agent_provenance_merge_current(",
-            "agent_context_append_reserved_ticket(",
-            "append_status < 0 || ticket == 0",
-            'panic("preflight reserved terminal evidence")',
-            "result->evidence_ticket = ticket",
-            "result->output_provenance_labels =",
-            "agent_provenance_current_labels(p)",
-            "AGENT_EXECUTION_PREFLIGHT_TERMINAL",
-        ),
-        "Task timeout/cancel preflight must publish Context and Evidence together",
-    )
-    task_preflight = function_body(core, "agent_execution_task_preflight")
-    require_order(
-        task_preflight,
-        (
-            "agent_execution_contract_preflight(",
-            "result->status == AGENT_STATUS_OK",
-            "AGENT_EXECUTION_PREFLIGHT_ALLOW",
-            "result->status == AGENT_STATUS_TIMEOUT",
-            "result->status == AGENT_STATUS_CANCELLED",
-            "agent_execution_preflight_terminal(",
-            "result->status == AGENT_STATUS_RETRY",
-            "AGENT_EXECUTION_PREFLIGHT_ERROR",
-            "agent_execution_preflight_denial(",
-        ),
-        "Task preflight must turn OUTPUT_NONE_ONLY denial into terminal Evidence",
-    )
     task_binding = function_body(task_bridge, "agent_task_bridge_binding")
     require_order(
         task_binding,
@@ -1242,11 +1206,16 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
         ),
         "Task validation must remain a pure preflight that queues allowed work",
     )
-    forbid(
-        task_validate,
-        "agent_execution_task_preflight(",
-        "Task validate must not publish terminal Context/Evidence",
-    )
+    for side_effect in (
+        "agent_execution_task_submit_sync(",
+        "agent_context_append",
+        "agent_evidence_",
+    ):
+        forbid(
+            task_validate,
+            side_effect,
+            "Task validate must remain side-effect free",
+        )
     task_submit_sync = function_body(core, "agent_execution_task_submit_sync")
     require_order(
         task_submit_sync,
@@ -2489,21 +2458,6 @@ class ExecutionContractTests(unittest.TestCase):
             "result->output_provenance_labels = 0;",
         )
 
-    def test_preflight_terminal_ticket_mutation_is_rejected(self) -> None:
-        self.assert_mutation_rejected(
-            "os/agent_core.c",
-            "if (append_status < 0 || ticket == 0)",
-            "if (append_status < 0)",
-        )
-
-    def test_preflight_terminal_provenance_mutation_is_rejected(self) -> None:
-        self.assert_mutation_rejected(
-            "os/agent_core.c",
-            "result->output_provenance_labels =\n"
-            "\t\tagent_provenance_current_labels(p);",
-            "result->output_provenance_labels = 0;",
-        )
-
     def test_kernel_outcome_terminal_tick_removal_is_rejected(self) -> None:
         self.assert_mutation_rejected(
             "os/agent_execution_contract.h",
@@ -2638,7 +2592,7 @@ class ExecutionContractTests(unittest.TestCase):
         self.assert_mutation_rejected(
             "os/agent_task_bridge.c",
             "status = agent_execution_contract_preflight(",
-            "status = agent_execution_task_preflight(",
+            "status = agent_execution_task_submit_sync(",
         )
 
     def test_retiring_task_preflight_cancel_mutation_is_rejected(self) -> None:
@@ -2648,13 +2602,6 @@ class ExecutionContractTests(unittest.TestCase):
             "\t\t\tAGENT_EXECUTION_REASON_CONTRACT_RETIRING);",
             "result, AGENT_STATUS_CANCELLED,\n"
             "\t\t\tAGENT_EXECUTION_REASON_CONTRACT_RETIRING);",
-        )
-
-    def test_task_terminal_evidence_route_mutation_is_rejected(self) -> None:
-        self.assert_mutation_rejected(
-            "os/agent_core.c",
-            "return agent_execution_preflight_terminal(p, op, result, now);",
-            "return AGENT_EXECUTION_PREFLIGHT_TERMINAL;",
         )
 
     def test_completion_eviction_mutation_is_rejected(self) -> None:

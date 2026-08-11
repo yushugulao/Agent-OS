@@ -1,0 +1,207 @@
+
+OpenSBI v1.8
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name               : riscv-virtio,qemu
+Platform Features           : medeleg
+Platform HART Count         : 1
+Platform HART Protection    : pmp
+Platform IPI Device         : aclint-mswi
+Platform Timer Device       : aclint-mtimer @ 10000000Hz
+Platform Console Device     : uart8250
+Platform HSM Device         : ---
+Platform PMU Device         : ---
+Platform Reboot Device      : syscon-reboot
+Platform Shutdown Device    : syscon-poweroff
+Platform Suspend Device     : ---
+Platform CPPC Device        : ---
+Firmware Base               : 0x80000000
+Firmware Size               : 321 KB
+Firmware RW Offset          : 0x40000
+Firmware RW Size            : 65 KB
+Firmware Heap Offset        : 0x47000
+Firmware Heap Size          : 37 KB (total), 0 KB (reserved), 12 KB (used), 23 KB (free)
+Firmware Scratch Size       : 4096 B (total), 1464 B (used), 2632 B (free)
+Runtime SBI Version         : 3.0
+Standard SBI Extensions     : ipi,pmu,srst,sse,hsm,rfnc,fwft,time,base,legacy,dbcn,dbtr
+Experimental SBI Extensions : none
+
+Domain0 Name                : root
+Domain0 Boot HART           : 0
+Domain0 HARTs               : 0*
+Domain0 Region00            : 0x0000000080040000-0x000000008005ffff M: (F,R,W) S/U: ()
+Domain0 Region01            : 0x0000000080000000-0x000000008003ffff M: (F,R,X) S/U: ()
+Domain0 Region02            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+Domain0 Region03            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+Domain0 Region04            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+Domain0 Next Address        : 0x0000000080200000
+Domain0 Next Arg1           : 0x0000000087e00000
+Domain0 Next Mode           : S-mode
+Domain0 SysReset            : yes
+Domain0 SysSuspend          : yes
+
+Boot HART ID                : 0
+Boot HART Domain            : root
+Boot HART Priv Version      : v1.12
+Boot HART Base ISA          : rv64imafdch
+Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+Boot HART PMP Count         : 16
+Boot HART PMP Granularity   : 2 bits
+Boot HART PMP Address Bits  : 54
+Boot HART MHPM Info         : 16 (0x0007fff8)
+Boot HART Debug Triggers    : 2 triggers
+Boot HART MIDELEG           : 0x0000000000001666
+Boot HART MEDELEG           : 0x0000000000f4b509
+hello world!
+agent_eevdf_ucore: workflow EEVDF measurement Guest
+agent_eevdf_ucore: topology one_way=bootstrap four_way=bootstrap+3fresh amplification=bootstrap_peer+fresh4thread+2fresh_peers
+agent_eevdf_ucore: wake_bucket_map=0:le1,1:le2,2:le8,3:gt8 p50_p99=histogram_approx probes=fresh_agents_only
+agent_eevdf_ucore: ordinary_baseline_ticks=12 progress=4480
+agent_eevdf_ucore: sample scenario=1 index=0 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=30464 service=1255991 dispatch=3810 fallback=0 deadline_miss=0 wake_samples=0 wake_max=1 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: cohort scenario=1 requested=1 admitted=1 rejected=0 no_space=0 retry=0 other=0 waves=1 concurrency_cap=4 bootstrap_samples=1 fresh_samples=0 initial_fresh_attempts=0 ordinary_progress=0
+agent_eevdf_ucore: jain_inputs scenario=1 n=1 sum=1226 sum_sq=1503076 basis=service_cycles_div_1024
+agent_eevdf_ucore: wake scenario=1 scope=fresh_agents_only fresh_samples=0 buckets=0,0,0,0 p50_bucket=4 p99_bucket=4 deadline_miss=0 dispatch=3810 fallback=0
+agent_eevdf_ucore: sample scenario=2 index=0 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=11456 service=580325 dispatch=1437 fallback=0 deadline_miss=0 wake_samples=0 wake_max=1 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=2 index=1 probe=0 wakeup_latency_ticks=0 dispatch_tick=655 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=2 index=1 probe=1 wakeup_latency_ticks=0 dispatch_tick=656 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=2 index=1 probe=2 wakeup_latency_ticks=0 dispatch_tick=657 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=2 index=1 probe=3 wakeup_latency_ticks=0 dispatch_tick=658 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=2 index=1 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=2:1 work=12376 service=585267 dispatch=1563 fallback=0 deadline_miss=4 wake_samples=4 wake_max=0 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: cohort scenario=2 requested=2 admitted=2 rejected=0 no_space=0 retry=0 other=0 waves=1 concurrency_cap=4 bootstrap_samples=1 fresh_samples=1 initial_fresh_attempts=0 ordinary_progress=0
+agent_eevdf_ucore: jain_inputs scenario=2 n=2 sum=1137 sum_sq=646397 basis=service_cycles_div_1024
+agent_eevdf_ucore: wake scenario=2 scope=fresh_agents_only fresh_samples=1 buckets=4,0,0,0 p50_bucket=0 p99_bucket=0 deadline_miss=4 dispatch=3000 fallback=0
+agent_eevdf_ucore: sample scenario=3 index=0 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=8448 service=363494 dispatch=1062 fallback=0 deadline_miss=0 wake_samples=0 wake_max=1 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=3 index=1 probe=0 wakeup_latency_ticks=0 dispatch_tick=679 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=3 index=2 probe=0 wakeup_latency_ticks=0 dispatch_tick=679 reason_flags=213 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=3 index=2 probe=1 wakeup_latency_ticks=0 dispatch_tick=680 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=3 index=1 probe=1 wakeup_latency_ticks=0 dispatch_tick=680 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=3 index=2 probe=2 wakeup_latency_ticks=0 dispatch_tick=681 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=3 index=1 probe=2 wakeup_latency_ticks=0 dispatch_tick=681 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=3 index=2 probe=3 wakeup_latency_ticks=0 dispatch_tick=682 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=3 index=1 probe=3 wakeup_latency_ticks=0 dispatch_tick=682 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=3 index=2 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=3:1 work=8968 service=367120 dispatch=1137 fallback=0 deadline_miss=4 wake_samples=4 wake_max=2 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=3 index=1 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=2:2 work=8824 service=366430 dispatch=1115 fallback=0 deadline_miss=4 wake_samples=4 wake_max=0 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: cohort scenario=3 requested=3 admitted=3 rejected=0 no_space=0 retry=0 other=0 waves=1 concurrency_cap=4 bootstrap_samples=1 fresh_samples=2 initial_fresh_attempts=0 ordinary_progress=0
+agent_eevdf_ucore: jain_inputs scenario=3 n=3 sum=1069 sum_sq=380929 basis=service_cycles_div_1024
+agent_eevdf_ucore: wake scenario=3 scope=fresh_agents_only fresh_samples=2 buckets=8,0,0,0 p50_bucket=0 p99_bucket=0 deadline_miss=8 dispatch=3314 fallback=0
+agent_eevdf_ucore: sample scenario=16 index=0 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=5568 service=275205 dispatch=700 fallback=0 deadline_miss=0 wake_samples=0 wake_max=1 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=1 probe=0 wakeup_latency_ticks=0 dispatch_tick=706 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=2 probe=0 wakeup_latency_ticks=0 dispatch_tick=706 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=3 probe=0 wakeup_latency_ticks=1 dispatch_tick=707 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=1 probe=1 wakeup_latency_ticks=0 dispatch_tick=707 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=2 probe=1 wakeup_latency_ticks=0 dispatch_tick=708 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=3 probe=1 wakeup_latency_ticks=0 dispatch_tick=708 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=1 probe=2 wakeup_latency_ticks=1 dispatch_tick=709 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=2 probe=2 wakeup_latency_ticks=0 dispatch_tick=709 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=3 probe=2 wakeup_latency_ticks=0 dispatch_tick=710 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=1 probe=3 wakeup_latency_ticks=1 dispatch_tick=711 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=2 probe=3 wakeup_latency_ticks=1 dispatch_tick=711 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=16 index=1 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=2:3 work=5912 service=277149 dispatch=758 fallback=0 deadline_miss=4 wake_samples=4 wake_max=1 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=2 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=3:2 work=6008 service=277359 dispatch=769 fallback=0 deadline_miss=4 wake_samples=4 wake_max=2 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=3 probe=3 wakeup_latency_ticks=1 dispatch_tick=713 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=16 index=3 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=4:1 work=6240 service=277599 dispatch=800 fallback=0 deadline_miss=4 wake_samples=4 wake_max=3 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=4 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=6144 service=275624 dispatch=770 fallback=0 deadline_miss=0 wake_samples=0 wake_max=1 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=7 probe=0 wakeup_latency_ticks=0 dispatch_tick=733 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=6 probe=0 wakeup_latency_ticks=0 dispatch_tick=733 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=5 probe=0 wakeup_latency_ticks=0 dispatch_tick=733 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=6 probe=1 wakeup_latency_ticks=0 dispatch_tick=734 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=7 probe=1 wakeup_latency_ticks=0 dispatch_tick=734 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=5 probe=1 wakeup_latency_ticks=0 dispatch_tick=734 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=6 probe=2 wakeup_latency_ticks=0 dispatch_tick=735 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=7 probe=2 wakeup_latency_ticks=0 dispatch_tick=735 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=5 probe=2 wakeup_latency_ticks=0 dispatch_tick=735 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=6 probe=3 wakeup_latency_ticks=0 dispatch_tick=736 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=7 probe=3 wakeup_latency_ticks=0 dispatch_tick=736 reason_flags=213 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=5 probe=3 wakeup_latency_ticks=1 dispatch_tick=737 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=16 index=6 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=3:3 work=5920 service=276435 dispatch=759 fallback=0 deadline_miss=4 wake_samples=4 wake_max=2 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=7 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=4:2 work=6560 service=275817 dispatch=838 fallback=0 deadline_miss=4 wake_samples=4 wake_max=3 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=5 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=2:4 work=6096 service=275922 dispatch=777 fallback=0 deadline_miss=4 wake_samples=4 wake_max=1 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=8 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=6848 service=268993 dispatch=859 fallback=0 deadline_miss=0 wake_samples=0 wake_max=1 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=10 probe=0 wakeup_latency_ticks=0 dispatch_tick=757 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=9 probe=0 wakeup_latency_ticks=0 dispatch_tick=757 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=11 probe=0 wakeup_latency_ticks=0 dispatch_tick=757 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=10 probe=1 wakeup_latency_ticks=0 dispatch_tick=758 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=9 probe=1 wakeup_latency_ticks=0 dispatch_tick=758 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=11 probe=1 wakeup_latency_ticks=0 dispatch_tick=758 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=10 probe=2 wakeup_latency_ticks=0 dispatch_tick=759 reason_flags=213 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=9 probe=2 wakeup_latency_ticks=0 dispatch_tick=759 reason_flags=213 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=11 probe=2 wakeup_latency_ticks=0 dispatch_tick=759 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=10 probe=3 wakeup_latency_ticks=0 dispatch_tick=760 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=9 probe=3 wakeup_latency_ticks=1 dispatch_tick=761 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=11 probe=3 wakeup_latency_ticks=1 dispatch_tick=761 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=16 index=10 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=3:4 work=7096 service=270033 dispatch=906 fallback=0 deadline_miss=4 wake_samples=4 wake_max=2 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=9 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=2:5 work=6656 service=270261 dispatch=850 fallback=0 deadline_miss=4 wake_samples=4 wake_max=1 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=11 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=4:3 work=7080 service=271150 dispatch=905 fallback=0 deadline_miss=4 wake_samples=4 wake_max=3 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=12 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=5824 service=268098 dispatch=733 fallback=0 deadline_miss=0 wake_samples=0 wake_max=2 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=14 probe=0 wakeup_latency_ticks=0 dispatch_tick=781 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=13 probe=0 wakeup_latency_ticks=0 dispatch_tick=781 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=15 probe=0 wakeup_latency_ticks=0 dispatch_tick=781 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=13 probe=1 wakeup_latency_ticks=0 dispatch_tick=782 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=14 probe=1 wakeup_latency_ticks=0 dispatch_tick=782 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=15 probe=1 wakeup_latency_ticks=0 dispatch_tick=782 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=13 probe=2 wakeup_latency_ticks=0 dispatch_tick=783 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=14 probe=2 wakeup_latency_ticks=0 dispatch_tick=783 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=15 probe=2 wakeup_latency_ticks=0 dispatch_tick=783 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=14 probe=3 wakeup_latency_ticks=0 dispatch_tick=784 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=13 probe=3 wakeup_latency_ticks=0 dispatch_tick=784 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=16 index=15 probe=3 wakeup_latency_ticks=1 dispatch_tick=785 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=16 index=14 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=3:5 work=6520 service=274126 dispatch=836 fallback=0 deadline_miss=4 wake_samples=4 wake_max=1 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=13 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=2:6 work=5512 service=274344 dispatch=708 fallback=0 deadline_miss=4 wake_samples=4 wake_max=0 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=16 index=15 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=4:4 work=7264 service=275385 dispatch=930 fallback=0 deadline_miss=4 wake_samples=4 wake_max=2 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: cohort scenario=16 requested=16 admitted=16 rejected=12 no_space=12 retry=0 other=0 waves=4 concurrency_cap=4 bootstrap_samples=4 fresh_samples=12 initial_fresh_attempts=15 ordinary_progress=0
+agent_eevdf_ucore: jain_inputs scenario=16 n=16 sum=4270 sum_sq=1139710 basis=service_cycles_div_1024
+agent_eevdf_ucore: wake scenario=16 scope=fresh_agents_only fresh_samples=12 buckets=48,0,0,0 p50_bucket=0 p99_bucket=0 deadline_miss=48 dispatch=12898 fallback=0
+agent_eevdf_ucore: sample scenario=4 index=0 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=5696 service=277491 dispatch=714 fallback=0 deadline_miss=0 wake_samples=0 wake_max=2 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=3 probe=0 wakeup_latency_ticks=0 dispatch_tick=806 reason_flags=213 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=1 probe=0 wakeup_latency_ticks=0 dispatch_tick=806 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=2 probe=0 wakeup_latency_ticks=0 dispatch_tick=806 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=1 probe=1 wakeup_latency_ticks=0 dispatch_tick=807 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=3 probe=1 wakeup_latency_ticks=0 dispatch_tick=807 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=2 probe=1 wakeup_latency_ticks=0 dispatch_tick=808 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=3 probe=2 wakeup_latency_ticks=0 dispatch_tick=808 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=1 probe=2 wakeup_latency_ticks=0 dispatch_tick=808 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=2 probe=2 wakeup_latency_ticks=0 dispatch_tick=809 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=3 probe=3 wakeup_latency_ticks=0 dispatch_tick=809 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=4 index=3 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=4:5 work=6064 service=278668 dispatch=774 fallback=0 deadline_miss=4 wake_samples=4 wake_max=3 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=1 probe=3 wakeup_latency_ticks=0 dispatch_tick=810 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=4 index=2 probe=3 wakeup_latency_ticks=1 dispatch_tick=811 reason_flags=405 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=4 index=1 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=2:7 work=6040 service=279083 dispatch=770 fallback=0 deadline_miss=4 wake_samples=4 wake_max=0 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=4 index=2 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=3:6 work=6552 service=278839 dispatch=834 fallback=0 deadline_miss=4 wake_samples=4 wake_max=2 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: cohort scenario=4 requested=4 admitted=4 rejected=0 no_space=0 retry=0 other=0 waves=1 concurrency_cap=4 bootstrap_samples=1 fresh_samples=3 initial_fresh_attempts=0 ordinary_progress=0
+agent_eevdf_ucore: jain_inputs scenario=4 n=4 sum=1086 sum_sq=294852 basis=service_cycles_div_1024
+agent_eevdf_ucore: wake scenario=4 scope=fresh_agents_only fresh_samples=3 buckets=12,0,0,0 p50_bucket=0 p99_bucket=0 deadline_miss=12 dispatch=3092 fallback=0
+agent_eevdf_ucore: sample scenario=44 index=0 source=bootstrap threads=1 wake_probes=0 mode=1 flags=7 latency_class=3 weight=1024 request_ticks=8 lifecycle=1:1 work=5760 service=268726 dispatch=723 fallback=0 deadline_miss=0 wake_samples=0 wake_max=2 wake_bucket_0=0 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=2 probe=0 wakeup_latency_ticks=0 dispatch_tick=832 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=3 probe=0 wakeup_latency_ticks=0 dispatch_tick=832 reason_flags=213 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=1 probe=0 wakeup_latency_ticks=0 dispatch_tick=832 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=3 probe=1 wakeup_latency_ticks=0 dispatch_tick=833 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=2 probe=1 wakeup_latency_ticks=0 dispatch_tick=833 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=1 probe=1 wakeup_latency_ticks=0 dispatch_tick=833 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=3 probe=2 wakeup_latency_ticks=0 dispatch_tick=834 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=2 probe=2 wakeup_latency_ticks=0 dispatch_tick=834 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=1 probe=2 wakeup_latency_ticks=0 dispatch_tick=834 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=3 probe=3 wakeup_latency_ticks=0 dispatch_tick=835 reason_flags=149 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=2 probe=3 wakeup_latency_ticks=0 dispatch_tick=835 reason_flags=213 histogram_bucket=0 status=measured
+agent_eevdf_ucore: one_shot_wakeup schema=1 scenario=44 index=1 probe=3 wakeup_latency_ticks=1 dispatch_tick=836 reason_flags=469 histogram_bucket=0 status=measured
+agent_eevdf_ucore: sample scenario=44 index=3 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=4:6 work=6136 service=271104 dispatch=785 fallback=0 deadline_miss=4 wake_samples=4 wake_max=3 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=44 index=2 source=fresh threads=1 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=3:7 work=6376 service=270622 dispatch=812 fallback=0 deadline_miss=4 wake_samples=4 wake_max=2 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: sample scenario=44 index=1 source=fresh threads=4 wake_probes=4 mode=1 flags=7 latency_class=2 weight=1024 request_ticks=4 lifecycle=2:8 work=5936 service=294154 dispatch=781 fallback=0 deadline_miss=4 wake_samples=4 wake_max=1 wake_bucket_0=4 wake_bucket_1=0 wake_bucket_2=0 wake_bucket_3=0
+agent_eevdf_ucore: cohort scenario=44 requested=4 admitted=4 rejected=0 no_space=0 retry=0 other=0 waves=1 concurrency_cap=4 bootstrap_samples=1 fresh_samples=3 initial_fresh_attempts=0 ordinary_progress=0
+agent_eevdf_ucore: jain_inputs scenario=44 n=4 sum=1077 sum_sq=290405 basis=service_cycles_div_1024
+agent_eevdf_ucore: wake scenario=44 scope=fresh_agents_only fresh_samples=3 buckets=12,0,0,0 p50_bucket=0 p99_bucket=0 deadline_miss=12 dispatch=3101 fallback=0
+agent_eevdf_ucore: amplification_inputs amplified_threads=4 amplified_service=294154 peer_threads=1 fresh_peer_count=2 bootstrap_peer_count=1 peer_count=3 peer_service_sum=810452 accounting=workflow
+agent_eevdf_ucore: thread_amplification scenario=44 amplified_threads=4 fresh_peers=2 bootstrap_peers=1 accounting=workflow
+agent_eevdf_ucore: sixteen_arrivals=1 logical_samples=16 concurrency_cap=4 bootstrap_samples=4 fresh_samples=12 initial_fresh_attempts=15 initial_admitted=3 stable_no_space=12 waves=4 retry_policy=retry_only
+agent_eevdf_ucore: parent passed
+[agent-tests] agent_eevdf_ucore: marker observed, checking teardown
+[agent-tests] agent_eevdf_ucore: elapsed=10.5s

@@ -123,9 +123,6 @@ int agent_evidence_context_commit(
 	struct proc *, const struct agent_context_record *, uint64, uint64, int,
 	uint64, uint64, int, int,
 	struct agent_evidence_context_reservation *, uint64 *);
-int agent_evidence_append_security_denial(
-	struct proc *, const struct agent_context_record *, uint64, uint64, int,
-	uint64, uint64, uint64 *);
 int agent_evidence_security_reserve(
 	struct proc *, struct agent_evidence_security_reservation *);
 void agent_evidence_security_abort(

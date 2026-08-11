@@ -77,18 +77,6 @@ agent_identity_lease_allocator_note_next(uint kind, uint64 next)
 	intr_restore(enabled);
 }
 
-void
-agent_identity_lease_allocator_force_exhausted(uint kind)
-{
-	int enabled;
-
-	if (kind >= AGENT_IDENTITY_ALLOCATOR_COUNT)
-		return;
-	enabled = intr_save();
-	agent_identity_leases.ends[kind] = 0;
-	intr_restore(enabled);
-}
-
 int
 agent_identity_lease_lifecycle_contains(uint slot, uint64 generation)
 {

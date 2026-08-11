@@ -1,0 +1,59 @@
+\begin{titlepage}
+  \thispagestyle{empty}
+  \centering
+  \vspace*{1.2cm}
+  {\sffamily\Large\color{AgentBlue} 全国大学生计算机系统能力大赛操作系统赛\\[0.5em]
+  决赛产品文档\par}
+
+  \vspace{2.2cm}
+  {\sffamily\bfseries\fontsize{34}{44}\selectfont\color{AgentInk}
+  AgentOS-uCore\par}
+  \vspace{0.45cm}
+  {\sffamily\bfseries\fontsize{22}{30}\selectfont\color{AgentBlue}
+  系统原生智能体运行与治理平台\par}
+
+  \vspace{1.1cm}
+  {\large 在 RISC-V uCore 中实现可信身份、上下文、工具、调度、证据与多智能体协作\par}
+
+  \vfill
+  \begin{tcolorbox}[
+    width=0.82\textwidth,colback=AgentPaper,colframe=AgentLine,
+    boxrule=0.6pt,arc=1mm,left=6mm,right=6mm,top=5mm,bottom=5mm]
+    \centering
+    \begin{tabular}{rl}
+      \textbf{作品名称：} & AgentOS-uCore / AgentOS Nexus \\
+      \textbf{团队：} & AgentOS-uCore 团队 \\
+      \textbf{目标平台：} & RISC-V 64 / uCore / QEMU \\
+      \textbf{文档性质：} & 决赛完整产品与工程验证说明
+    \end{tabular}
+  \end{tcolorbox}
+
+  \vspace{1.4cm}
+  {\small\color{AgentMuted}
+  本文只陈述当前仓库中已经实现、能够定位并具有验证入口的能力。\par}
+  \vspace{0.8cm}
+\end{titlepage}
+
+\clearpage
+\thispagestyle{empty}
+\vspace*{3cm}
+\begin{center}
+  {\Large\sffamily\bfseries\color{AgentInk} 阅读提示}
+\end{center}
+\vspace{1cm}
+
+本文把四种证据严格分开：静态合同说明接口和边界存在；cross build 说明内核与
+Guest 能以目标 ABI 编译链接；QEMU Guest 场景说明实际运行路径成立；配对性能数据
+说明给定负载、样本和口径下的观察结果。任何一种证据都不替代另外三种。
+
+文中“模型调用”只在真实 provider 或同路径 replay 实际完成时成立；
+“性能改善”只引用冻结 one-shot 数据或明确的竞赛基准，不从日志热闹程度、
+observer 刷新速度或静态代码形状反推。
+
+\vfill
+\begin{boundarybox}[诚实边界]
+内核负责可信身份、能力、scope、Context、调度、等待、资源和证据；Guest 负责规划、
+历史、委派和工具选择；Host 只负责终端、本地路由、TLS、API key 与供应商协议转换。
+JSON、HTTP、TLS、模型 SDK 与 MCP wire 均由 Guest/Host 层处理。
+\end{boundarybox}
+\clearpage

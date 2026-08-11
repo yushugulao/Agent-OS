@@ -368,31 +368,6 @@ agent_task_channel_issuer_valid_locked(
 		       state->private->header.issuer_generation;
 }
 
-static struct agent_task_request_slot *
-agent_task_channel_request_authorized_locked(
-	struct agent_task_channel_state *state, uint64 ring_generation,
-	uint64 request_id, uint64 slot_generation)
-{
-	if (ring_generation == 0 || request_id == 0 || slot_generation == 0 ||
-	    state == 0 || state->private == 0 ||
-	    state->state != AGENT_TASK_CHANNEL_OWNER_LIVE)
-		return 0;
-	for (uint i = 0; i < AGENT_TASK_CHANNEL_CAPACITY; i++) {
-		struct agent_task_request_slot *request =
-			&state->private->requests[i];
-
-		if (request->state == AGENT_TASK_REQUEST_RUNNING &&
-		    request->sqe.opcode == AGENT_TASK_CHANNEL_OP_SUBMIT &&
-		    request->sqe.ring_generation == ring_generation &&
-		    request->sqe.request_id == request_id &&
-		    request->sqe.slot_generation == slot_generation &&
-		    (request->flags &
-		     AGENT_TASK_REQUEST_F_LIFECYCLE_HELD) != 0)
-			return request;
-	}
-	return 0;
-}
-
 static void
 agent_task_ring_header_fill(struct agent_task_ring_header *ring, uint64 magic,
 			    uint entry_size,
@@ -2110,53 +2085,6 @@ agent_task_resource_result_fill(
 	result->generation = state != 0 && state->private != 0 ?
 				     state->private->header.generation : 0;
 	result->references = references;
-}
-
-int
-agent_task_channel_resource_publish(
-	struct proc *p, uint64 ring_generation, uint64 request_id,
-	uint64 slot_generation,
-	const struct agent_task_resource_import *imported,
-	struct agent_task_resource_handle *handle)
-{
-	struct agent_task_channel_state *state;
-	struct agent_task_request_slot *request;
-	int enabled;
-	int status;
-
-	if (p == 0 || ring_generation == 0 || request_id == 0 ||
-	    slot_generation == 0 || handle == 0 ||
-	    !agent_task_resource_import_valid(imported))
-		return AGENT_TASK_CHANNEL_BAD_REQUEST;
-	*handle = (struct agent_task_resource_handle){ 0 };
-	enabled = intr_save();
-	state = agent_task_channel_find_locked(p);
-	if (!agent_task_channel_owner_valid_locked(state, p) ||
-	    (request = agent_task_channel_request_authorized_locked(
-		state, ring_generation, request_id, slot_generation)) == 0) {
-		intr_restore(enabled);
-		return AGENT_TASK_CHANNEL_STALE;
-	}
-	if (!agent_task_handle_null(request->result)) {
-		intr_restore(enabled);
-		return AGENT_TASK_CHANNEL_NO_SPACE;
-	}
-	if (imported->resource_type != request->expected_output_type ||
-	    imported->provenance_labels != request->provenance_labels ||
-	    imported->producer_node_id != request->sqe.node_id ||
-	    imported->producer_control_id != p->agent_control_id ||
-	    imported->producer_pid != p->pid) {
-		intr_restore(enabled);
-		return AGENT_TASK_CHANNEL_DENIED;
-	}
-	status = agent_task_resource_allocate_locked(
-		state, imported, ring_generation, request_id, slot_generation,
-		handle);
-	if (status == AGENT_TASK_CHANNEL_OK)
-		request->result = *handle;
-	agent_task_channel_publish_locked(state);
-	intr_restore(enabled);
-	return status;
 }
 
 int

@@ -1,111 +1,67 @@
-# 第三方来源与原创增量说明
+# 第三方来源与原创增量
 
-本文帮助评委区分上游教学内核、公开设计思想、外部运行工具和本项目的 clean-room 增量。它是工程披露，不替代许可证正文，也不构成法律意见。当前源码范围以 Git tree、`NOTICE` 和许可证文件为准。
+AgentOS-uCore 以 LearningOS/uCore 教学内核为工程起点。我们保留其许可证与来源说明，并围绕 Agent workflow 重新设计内核对象、UAPI、状态机、测试和演示程序。
 
-## 1. 直接衍生与分发内容
+## 直接来源
 
-| 项目 | 作用 | 仓库关系 | 许可/依据 |
-| --- | --- | --- | --- |
-| LearningOS/uCore-Tutorial-Code-2025S | 教学内核、基础用户态和构建骨架 | 本仓库的直接衍生基础 | GPL-3.0；见根目录 `LICENSE`、`NOTICE` |
-| LearningOS/uCore-Tutorial-Test-2025S | 教学测试基础 | 本仓库的直接衍生基础 | GPL-3.0；见 `NOTICE` |
-| Linux `.clang-format` | 代码格式配置 | 根目录独立格式数据 | 保留文件内 `GPL-2.0` SPDX，不改写为 GPL-3.0 |
+| 来源 | 仓库中的作用 | 处理方式 |
+| --- | --- | --- |
+| LearningOS/uCore-Tutorial-Code-2025S | 教学内核、基础用户态和构建骨架 | 作为 GPL-3.0 衍生基础，来源记录在 [NOTICE](../../NOTICE) |
+| LearningOS/uCore-Tutorial-Test-2025S | 教学测试基础 | 作为 GPL-3.0 衍生基础，来源记录在 [NOTICE](../../NOTICE) |
+| Linux `.clang-format` | 根目录代码格式配置 | 保留文件内 GPL-2.0 SPDX，不改写许可证 |
 
-本项目源码采用 GPL-3.0，技术文档与展示材料采用 CC BY-SA 4.0，单文件另有声明时除外。
+仓库源码采用 [GPL-3.0](../../LICENSE)。技术文档与展示材料采用 [CC BY-SA 4.0](../../DOCUMENTATION_LICENSE.md)，单文件另有声明时遵循该文件声明。
 
-## 2. 运行环境，不随仓库 vendoring
+## 我们借鉴了什么
 
-QEMU、RISC-V GCC/binutils、GNU Make、Bash、Python、WSL/Linux 等由运行环境安装，不作为本项目源码 vendoring。环境中出现这些程序不表示本仓库重新分发它们。
+公开系统和论文帮助我们确认通用设计方向。下表同时列出 AgentOS 的项目特定落点。
 
-仓库不捆绑外部视频或幻灯片。项目自制文档与展示材料适用仓库声明的许可；另行分发的展示材料若使用独立字体、图片或音视频片段，仍须保留各自来源与许可。
+| 公开参考 | 借鉴的思想 | AgentOS-uCore 中的实现 |
+| --- | --- | --- |
+| Linux CPU accounting、`percpu_counter`、rstat、cgroup v2 | 本地累计、批量同步、资源域 | Workflow Credit Domain 的 `used/pending/free`、hard admission、pressure trim 与 fence exact digest |
+| Linux BPF ring buffer | 有序 reserve/commit/discard、通知 | Fence-Sealed Evidence Ring 的 ordinary/critical 分区、ticket gap、challenge root chain |
+| Haiku BFS attributes/index/live query | 显式属性、选择性索引、谓词变化通知 | boot-scoped metadata catalog、`status/stage/kind` 索引、typed transition 与 generation resync |
+| Linux EEVDF | lag eligibility、virtual deadline、睡眠实体服务 | 以 workflow resource domain 为实体的 EEVDF 与 raw service-cycle accounting |
+| io_uring SQ/CQ、WIT/WASI ownership | 双队列通信、owned/borrowed handle、异步对象词汇 | 16-slot SQ/CQ core、typed handle 和 terminal CQE 合同 |
+| Murakkab、CaMeL、IPIGuard | 声明式 workflow、可信控制流、工具依赖图 | ENFORCE V3 冻结 DAG、provenance/effect gate、Tool Phase Credit Lease |
+| MCP 2026-07-28、A2A v1 | Task、Context、Artifact 对象形状 | 用户态 deterministic object mapping prototype |
+| AgentCgroup、AIOS | Agent 资源突发与系统评价维度 | 工作负载参数、性能采集维度与答辩对照 |
 
-## 3. 概念级设计参考
+完整论文、规范和上游链接集中记录在 [NOTICE](../../NOTICE)。这些资料用于理解设计原则和协议对象，没有作为源码依赖导入。
 
-### 3.1 Linux CPU accounting、percpu_counter 与 rstat
+## 我们实现了什么
 
-公开资料说明了把频繁计数保留在本地/批量状态、允许普通统计暂时滞后、在需要时同步的性能取舍。AgentOS 由此获得“延迟聚合”的概念启发。
+相对教学内核，本项目的主要工程增量包括：
 
-本项目的 **Agent Workflow Credit Domain** 是独立实现：
+1. 可信 Agent 映像、role/capability、7 页 Context 地址区和进程生命周期集成。
+2. Context Path、cause/span/branch/control 归因、六类 provenance 与只读 mirror。
+3. 名称/id 工具目录、typed V2 RPC、ENFORCE V3 执行合同与顺序 compact batch。
+4. immutable workflow `id + generation`、members/closing 与 operation/departure/fence gates。
+5. Workflow Credit Domain、Tool Phase Credit Lease 和 workflow EEVDF。
+6. Fence-Sealed Evidence Ring、challenge-bound fence 与 320 字节 receipt。
+7. Agent Live-Query FS、typed watch、Context event 和 generation resync。
+8. Agent Task SQ/CQ、可信 IPC/LLM correlation、交互控制台和 Nexus workflow。
+9. Host checker、QEMU Guest 回归、双目标比较与 one-shot 逐样本性能管线。
 
-- 本地单位不是 Linux CPU/进程组统计，而是 workflow exec/storage resource account；
-- 每类资源显式维护 `used/pending/free`，hard admission 按 `U+P+F`；
-- reserve/commit/cancel/release 在三态间移动，普通路径不更新一套额外全局 used；
-- context switch、压力、close 和 fence 才 trim；
-- workflow fence 要求 pending 为 0，并把 exact U 与 account generation/epoch 绑定到 digest。
+这些机制的数据结构、状态转换、错误语义、UAPI 和测试均在本仓库内针对 uCore 与赛题要求实现。项目不声明 Linux、Haiku、EEVDF、io_uring、WIT/WASI、MCP 或 A2A 的通用概念由我们首次提出。
 
-参考链接见 `NOTICE`。没有复制 Linux `percpu_counter`/rstat 源码、测试或 ABI。
+## 代码与协议边界
 
-### 3.2 Linux BPF ring buffer
+- Linux、Haiku、论文原型、AIOS、MCP/A2A SDK 和 Wasm/WASI 源码没有作为项目特定机制 vendoring。
+- 仓库不包含这些项目的测试数据、二进制、固件、生成数据或磁盘格式。
+- `percpu/rstat-inspired`、`BPF-ring-inspired`、`BFS-live-query-inspired` 等名称只说明设计谱系。
+- Agent Task SQ/CQ 采用项目自己的 ABI；项目没有嵌入 io_uring。
+- typed handle 使用 WIT ownership 词汇；项目没有嵌入 Wasm runtime。
+- MCP/A2A 代码是用户态对象映射 prototype，不包含网络 server、streaming transport 或内核 adapter。
 
-Linux BPF ring buffer 的共享有序 ring、`reserve/commit/discard` 和通知策略提供概念启发。
+## 运行环境
 
-本项目的 **Fence-Sealed Evidence Ring** 是独立实现：
+QEMU、RISC-V GCC/binutils、GNU Make、Bash、Python、WSL/Linux 和绘图库由运行环境安装，不随仓库重新分发。仓库也不把外部模型服务、API key、视频或幻灯片作为构建依赖。
 
-- 每 workflow 4 个计费页，48 ordinary + 16 critical；
-- event 是 Agent Context/因果/授权字段，不是 BPF sample ABI；
-- ordinary success 只写一次 canonical event，critical 另有兼容 ledger 投影；
-- ticket gap、rollover、workflow generation、credit digest 与 metadata generation 进入 seal；
-- controller challenge 和 previous root 在 workflow fence 上形成 SHA-256 root 链；
-- receipt 明确 partial coverage 和 memory-only sealed 语义。
+## 如何核验
 
-没有复制 BPF ring buffer 源码、BPF 程序、测试、map ABI 或二进制布局。
-
-### 3.3 Haiku BFS 属性、索引与 live query
-
-Haiku BFS 对显式文件属性、选择性属性索引和 live query 的描述提供概念启发。
-
-本项目的 **Agent Live-Query FS** 是独立实现：
-
-- 只有显式 `agent_file_meta_set()` 的 workflow 文件进入 volatile catalog；
-- 索引只服务 status/stage/kind 等 Agent 字段；
-- before/after 谓词产生 typed `ENTER/UPDATE/LEAVE`；
-- 事件进入 Agent Context/queue，并受 capability、scope、lifecycle generation 限制；
-- 有界增量丢失使用 generation `RESYNC_REQUIRED` 和 ACK；
-- catalog/index 是 uCore 内的当前启动周期数据结构，不采用 BFS 的磁盘属性或目录格式。
-
-没有复制 Haiku/BFS 源码、数据、测试、磁盘结构或二进制。
-
-### 3.4 其他公开参考
-
-Linux cgroup v2、blk-mq、wait queue 用于理解通用资源、I/O 和等待队列设计。AIOS 论文/项目只作为公开项目和评价维度参考，不复制其代码、数据或结果。
-
-## 4. 本项目相对上游的主要增量
-
-以下描述工程增量，不主张每个通用算法由本队首次发明：
-
-1. 可信 Agent 映像、role/capability、Context 地址区与 fork/exec/exit 集成。
-2. 名称/id 工具目录、typed KV、批量调用和稳定错误协议。
-3. Context Path、cause/span/branch/control 归因、只读 mirror 和 rollback。
-4. immutable workflow id/generation、`member_refcount + closing` 与 operation/departure/fence gates。
-5. Workflow Credit Domain 的 U/P/F hard admission、批量预充、pressure trim 和 fence exact digest。
-6. Fence-Sealed Evidence Ring 的 ordinary/critical 分区、canonical Context event、compat projection、gap 和 challenge root。
-7. Agent Live-Query FS 的显式 volatile metadata、选择性索引、typed transition、Context event 与 resync。
-8. 文件 scope/incarnation、worker 委派、可信 IPC、watch/wait/heartbeat 和 Agent 感知调度。
-9. plain/AgentOS 同负载、Host 状态提取、动态比较和可直接运行的 QEMU 回归。
-
-## 5. 当前原创主张边界
-
-- 不主张 Linux、Haiku、io_uring、WIT/WASI、EEVDF、MCP 或 A2A 的公开概念由本队首次提出；
-- 不主张与 BPF、BFS、Linux cgroup/rstat、io_uring 或 Wasm 的源码、ABI 或二进制兼容；
-- 不重新分发 AIOS 代码、数据或评价结果；
-- MCP/A2A 仅为 deterministic 用户态对象映射，不等于完整网络协议栈或内核服务；
-- 竞赛综合程序使用本仓库内置的确定性科研负载，不以外部模型服务作为离线验收前提。
-
-## 6. clean-room 声明
-
-上述 Linux/Haiku/AIOS 资料只用于理解公开设计原则。项目成员针对 uCore 和赛题合同重新定义数据结构、状态机、UAPI、错误语义、测试与实现。按当前仓库清单，除已明确披露的 uCore 衍生基础和 `.clang-format` 外，项目特定机制没有 vendoring 第三方源码、测试数据、生成数据、二进制、固件、磁盘镜像或文件系统格式。
-
-名称“percpu/rstat-inspired”“BPF-ring-inspired”“BFS-live-query-inspired”只陈述概念谱系，不暗示上游认可、兼容性或代码复用。
-
-## 7. 核验方式
-
-- 用 Git 历史和 production object 清单区分上游基础与当前实现。
-- 对每项机制按“问题、公开思想、AgentOS 特定数据结构、实际测试、限制”答辩。
-- 运行 UAPI/module checker 和实际构建，确认公开接口与生产链接一致。
-- 对提交包中的图片、字体、数据集、代码片段和生成式 AI 输出逐项确认来源与许可。
-- 无法确认来源的材料在发布前移除，不自行推断为公有领域。
-
-## 8. 版本边界
-
-Git 历史中的 `9e8338a61ee73da12462dc8d8433e9e2f7dbbc4b` 是本仓库导入起点，不冒充上游原始 commit。当前提交历史直接记录项目演进；本页不维护另一套发布身份。
-
-除 `NOTICE` 披露的 uCore 衍生基础、`.clang-format` 和运行环境外，当前仓库不声明其他直接 vendored 第三方代码。后续引入任何新素材必须同步更新 `NOTICE`、本页和相应许可证信息。
+1. 查看 [NOTICE](../../NOTICE)、[LICENSE](../../LICENSE) 和各文件 SPDX。
+2. 通过 Git 历史区分教学内核基础与项目增量。
+3. 对照[要求追踪表](../agentos/requirements-traceability.md)定位生产源码、UAPI 和验证入口。
+4. 运行 [验证说明](../verification.md)中的构建、Host checker 和 QEMU Guest 测试。
+5. 发布新代码、图片、字体、数据或协议适配时，同步更新 NOTICE 与本页。

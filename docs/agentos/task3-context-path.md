@@ -1,53 +1,63 @@
 # 任务三：Context Path
 
-任务三维护 Agent 多轮调用的可信历史、当前 active path 与回滚分支。结构体和
-系统调用的完整定义见 [api.md](api.md)，观测架构见 [design.md](design.md)。
+## 场景与约束
 
-## 数据模型
+多轮 Agent 调用需要保留“谁在什么原因下调用了什么、得到了什么结果”。用户态又必须能够快速读取当前上下文。若把身份、因果字段和历史全部交给用户维护，进程可以伪造来源；若发布顺序不完整，并发 reader 会看到 torn record。
 
-Context 由三个不同职责的部分组成：
+## 方案
 
-- 前 6 页是内核直接更新、用户只读的单拷贝可信视图；
-- 第 7 页是用户自管 cache，不能作为授权或 provenance 输入；
-- 私有 sidecar 保存完整请求、响应及可信来源归属，按活跃 Agent 分配。
+Context 将可信历史、直接读视图和 Guest cache 分开：
 
-固定容量 archive 保存单调 sequence、分支父节点、cause/span 和完整性 hash。
-header 记录窗口边界、active head、丢弃计数和链尾。用户 cache 位于独立区域，
-snapshot 不覆盖它，也不把它当作可信历史。
+| 部分 | 内容 | 信任级别 |
+| --- | --- | --- |
+| 6 页内核区 | header、latest、record ring、active path | 内核发布，用户只读 |
+| 第 7 页 | Guest 自管 cache | 用户读写，不进入授权或 evidence |
+| 内核 sidecar | 完整 request/response、source identity 和 provenance | 内核私有 |
 
-## 提交与回滚
+每条 record 保存单调 sequence、request、tool/status、tick、cause/span、branch、parent、短 payload/result 和 hash 链。内核从当前调用、事件或 IPC 路由归因 cause 与 source，用户不能通过填写 PID 或 sequence 建立跨 workflow 因果边。
 
-同一 Agent 的 Context 修改进入 FIFO commit lane。append 先预检完整发布范围，
-再写 record、详情和 latest，最后发布 header；奇偶 publication sequence 以
-release/acquire 包围发布，直接读 helper 只接受前后相同的偶数。工具
-调用、手工记录、事件消费和 rollback 共享这条提交顺序。
+### 发布与读取
 
-rollback 不改写或截断旧记录。它验证目标仍在可信窗口内，然后创建新的 branch
-generation，并把目标作为新 active path 的锚点。旧分支继续作为不可变 provenance
-保留，直到容量淘汰；sequence 永不复用。clear 和失败回滚同样遵守先预检、后
-发布，失败不会改变 branch、hash 或窗口边界。
+同一 Agent 的工具结果、手工记录、事件消费和 rollback 共用 FIFO commit lane。writer 先完成范围预检，再写 record、detail 和 latest，最后发布 header。奇偶 publication sequence 包围整个过程；直接读 helper 只接受前后相同的偶数 sequence，竞争过强时退回 syscall。
 
-## 查询路径
+公开读取路径包括：
 
-- `context_direct_header_snapshot()` 和 `context_direct_active_query()` 提供带有界重试的
-  并发一致直接读；竞争过强时调用者退回 syscall。
-- `context_query()` 有界返回 active path，`context_snapshot()` 一次返回 header
-  与当前路径，`context_detail()` 读取仍保留的完整详情。
-- timeline 将 Context、审计和调度记录按统一游标归并；filter 只能缩小
-  当前 workflow/owner 可见集合。
-- wait-and-read 在同一 syscall 内完成条件等待和读取，避免 wait 与 query 之间的
-  竞态。
+- `context_direct_header_snapshot()` 和 `context_direct_active_query()`：固定映射直接读；
+- `context_query()`：返回有界 active path；
+- `context_snapshot()`：同时返回 header 与当前路径；
+- `context_detail()`：读取窗口内保留的完整详情；
+- timeline wait/read：在一个 syscall 内等待并读取，消除 wait/query 间隙。
 
-查询扫描受 kernel-work 预算约束，并使用按 sequence/tick 排序的有界索引；计数
-查询也不能无预算重扫全表。跨 Agent cause 通过私有 source identity 解释，不能
-仅凭公开 pid 或 sequence 混接到另一个 workflow。
+### 回滚与淘汰
+
+rollback 验证目标仍在可信窗口，然后建立新的 branch generation，并把目标设为 active anchor。旧记录保持原 sequence 和 hash，直到 FIFO 容量淘汰。clear 和失败回滚同样先预检；失败不会移动 active head 或改变链尾。
+
+## 关键实现
+
+| 职责 | 源码 |
+| --- | --- |
+| Context 存储、提交和查询 | [os/agent_context.c](../../os/agent_context.c)、[os/agent_context.h](../../os/agent_context.h) |
+| active path 与直接读 | [os/agent_context_path.c](../../os/agent_context_path.c) |
+| 因果与来源标签 | [os/agent_provenance.c](../../os/agent_provenance.c) |
+| Evidence canonical event | [os/agent_evidence_ring.c](../../os/agent_evidence_ring.c) |
+| timeline 投影 | [os/agent_observe_timeline.c](../../os/agent_observe_timeline.c) |
+| 用户 ABI | [user/include/agent.h](../../user/include/agent.h)、[agent_provenance_abi.h](../../agent_provenance_abi.h) |
 
 ## 验证
 
-- `agentfinal_ucore` 验证只读映射隔离、hash 链、提交顺序、回滚和 FIFO 淘汰。
-- `agentfinal_ucore` 的同步故障 profile 验证失败发布不覆盖旧记录且后续提交可继续。
-- `agentscope_ucore` 验证 scope 裁剪、有界查询和跨 workflow 隔离。
-- `agentfinal_ucore` 一次 batch 提交 64 个结构化调用并验证查询、rollback 和 FIFO 窗口；`agentbench_ucore` 单独报告 Context syscall/mirror 的样本、tick 与工作量。
+`agentfinal_ucore` 在一次 batch 中提交 64 个顺序调用，然后检查 latest、snapshot、active path、rollback、分支、hash 链和 FIFO 淘汰。同步故障 profile 还验证失败发布保留旧记录，后续提交可以继续。`agentscope_ucore` 覆盖跨 workflow 查询裁剪，`agentbench_ucore` 记录 mirror 与 syscall 查询的样本、tick 和工作量。
 
-实际 Host 与 QEMU 测试命令见 [verification.md](verification.md) 与
-[顶层验证说明](../verification.md)。
+```bash
+python -B scripts/test-context-active-path-wiring.py
+python -B scripts/test-context-evidence-atomicity.py
+python -B scripts/test-context-snapshot-reader-atomicity.py
+AGENT_TEST_CASE=agentfinal_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+```
+
+## 当前边界
+
+- Context 和 detail 窗口容量固定，旧记录按 FIFO 淘汰。
+- rollback 只改变 active path；已经发生的文件、IPC 和外部工具效果保持不变。
+- 第 7 页 cache 可直接读写，其内容不能扩大 capability、scope 或可信 provenance。
+- 直接读 helper 可能因持续写入返回重试，syscall 查询提供一致性回退路径。
+- Context、timeline 和 evidence 只覆盖当前启动周期内仍保留的窗口。

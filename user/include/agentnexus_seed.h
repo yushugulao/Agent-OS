@@ -2,7 +2,7 @@
 #define AGENTNEXUS_SEED_H
 
 /* Tracked ASCII source capsules materialized by the Nexus Guest at boot. */
-#define AGENTNEXUS_SEED_VERSION 1U
+#define AGENTNEXUS_SEED_VERSION 2U
 
 #define AGENTNEXUS_SEED_PROJECT "lab-gene-x"
 #define AGENTNEXUS_SEED_WORKFLOW "nightly-regression"
@@ -28,19 +28,19 @@
 	"nexus_derived_claim=tracked_scenario_capsule\n"
 
 #define AGENTNEXUS_SEED_MEAS_BODY \
-	"schema=agentos.nexus.measurement.v1\n" \
-	"source_revision=base-96613ea\n" \
-	"source_suite=ci/evaluation-suite.json\n" \
-	"source_suite_lines=3-21\n" \
+	"schema=agentos.nexus.measurement.v2\n" \
+	"source_revision=2b14fb1f74b9bd093e6de939a16554620835699e\n" \
+	"source_manifest=one_shot_metrics/data/20260811/manifest.json\n" \
+	"source_table=one_shot_metrics/data/20260811/tables/contest_paired.csv\n" \
 	"source_results=docs/contest/performance-results.md\n" \
-	"source_results_lines=16-25\n" \
-	"benchmark=file_query_table_ablation\n" \
+	"source_results_lines=37-50\n" \
+	"benchmark=file_query_core_path_paired\n" \
 	"records=96\n" \
-	"traversal_us=59595.5\n" \
-	"indexed_us=13866.5\n" \
-	"ratio=4.298\n" \
-	"wins=4/4\n" \
-	"nexus_derived_checks=4/4\n" \
+	"traversal_us=34712.5\n" \
+	"indexed_us=13293.5\n" \
+	"paired_ratio_median=3.118\n" \
+	"wins=16/16\n" \
+	"nexus_derived_checks=16/16\n" \
 	"nexus_derived_checks_basis=wins\n" \
 	"nexus_derived_claim=published_snapshot\n" \
 	"nexus_derived_measurement_scope=historical_not_this_boot\n"

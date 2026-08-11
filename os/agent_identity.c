@@ -125,17 +125,6 @@ agent_identity_alloc_id(void)
 	return 0;
 }
 
-void
-agent_identity_id_floor(uint floor)
-{
-	if (floor == 0 || floor > 0x7fffffffU) {
-		next_agent_id = 0;
-		return;
-	}
-	if (next_agent_id > 0 && floor > (uint)next_agent_id)
-		next_agent_id = floor;
-}
-
 const struct agent_role_policy *
 agent_identity_role_policy(int role)
 {

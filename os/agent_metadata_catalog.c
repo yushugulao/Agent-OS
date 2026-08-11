@@ -1069,7 +1069,7 @@ static int agent_catalog_unbind(int slot, struct agent_file_meta *meta,
 	if (ip->agent_meta_slot == slot + 1 &&
 	    ip->dev == meta->dev && ip->inum == meta->inum &&
 	    ip->vfs_incarnation == meta->incarnation)
-		result = agent_file_state_set_index(ip, 0, 0, 0);
+		result = agent_file_state_set_index(ip, 0, 0);
 	iput(ip);
 	if (result < 0)
 		return result;
@@ -1107,7 +1107,7 @@ static int agent_catalog_bind_status(
 			*lookup_status = FS_LOOKUP_ABSENT;
 		goto out;
 	}
-	if (agent_file_state_set_index(ip, slot + 1, 0, 0) < 0)
+	if (agent_file_state_set_index(ip, slot + 1, 0) < 0)
 		goto out;
 	meta->dev = ip->dev;
 	meta->inum = ip->inum;

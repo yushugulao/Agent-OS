@@ -76,7 +76,6 @@ struct file_version {
 	uint64 published_size_tick;
 	uint published_meta_slot;
 	struct workflow_lifecycle_key identity_lifecycle;
-	struct workflow_lifecycle_key published_lifecycle;
 };
 
 struct agent_file_edit_entry {
@@ -673,12 +672,10 @@ agent_file_state_content_publish(
 		lifecycle_valid = ip->vfs_scope_id == VFS_SCOPE_SYSTEM ||
 			workflow_lifecycle_key_valid(lifecycle);
 		entry->published_meta_slot = AGENT_FILE_META_MAX;
-		entry->published_lifecycle = workflow_lifecycle_none();
 		if (lifecycle_valid && ip->agent_meta_slot > 0 &&
 		    ip->agent_meta_slot <= AGENT_FILE_META_MAX &&
 		    ip->agent_meta_version == AGENT_INODE_META_VERSION) {
 			entry->published_meta_slot = ip->agent_meta_slot - 1;
-			entry->published_lifecycle = lifecycle;
 			if (receipt) {
 				receipt->sequence =
 					entry->published_size_sequence;
@@ -726,140 +723,6 @@ agent_file_state_overlay_published_size(struct agent_file_meta *meta,
 	agent_edit_unlock(enabled);
 }
 
-int
-agent_file_state_snapshot_begin(uint64 *size_sequence)
-{
-	int enabled = agent_edit_lock();
-
-	*size_sequence = agent_file_size_sequence;
-	return enabled;
-}
-
-void
-agent_file_state_snapshot_overlay_receipt(
-	struct agent_file_meta *meta, uint scope_id, uint slot,
-	struct workflow_lifecycle_key lifecycle,
-	struct agent_file_content_receipt *receipt)
-{
-	struct file_version *entry;
-
-	if (receipt)
-		memset(receipt, 0, sizeof(*receipt));
-	if (meta == 0)
-		return;
-	entry = file_version_identity_locked(
-		meta->dev, meta->inum, meta->incarnation,
-		scope_id, lifecycle);
-	if (entry == 0 || !entry->published_size_valid ||
-	    entry->scope_id != scope_id || entry->published_meta_slot != slot ||
-	    !workflow_lifecycle_key_equal(
-		    entry->published_lifecycle, lifecycle))
-		return;
-	agent_file_overlay_published_size_locked(meta, scope_id);
-	if (receipt == 0 || !entry->published_size_valid)
-		return;
-	receipt->sequence = entry->published_size_sequence;
-	receipt->dev = entry->dev;
-	receipt->inum = entry->inum;
-	receipt->incarnation = entry->incarnation;
-	receipt->scope_id = scope_id;
-	receipt->slot = slot;
-	receipt->lifecycle = lifecycle;
-}
-
-void
-agent_file_state_snapshot_end(int enabled)
-{
-	agent_edit_unlock(enabled);
-}
-
-static void
-file_version_size_absorb_locked(struct file_version *entry,
-				struct agent_file_meta *meta)
-{
-	meta->size = entry->published_size;
-	if (entry->published_size_generation > meta->fs_generation)
-		meta->fs_generation = entry->published_size_generation;
-	if (entry->published_size_tick > meta->updated_tick)
-		meta->updated_tick = entry->published_size_tick;
-	entry->published_size_valid = 0;
-}
-
-int
-agent_file_state_content_settle(
-	const struct agent_file_content_receipt *receipt,
-	struct agent_file_meta *meta)
-{
-	struct file_version *entry;
-	int settled = 0;
-	int enabled;
-
-	if (receipt == 0 || meta == 0 || receipt->sequence == 0)
-		return 0;
-	enabled = agent_edit_lock();
-	entry = file_version_identity_locked(
-		receipt->dev, receipt->inum, receipt->incarnation,
-		receipt->scope_id, receipt->lifecycle);
-	if (entry != 0 && entry->published_size_valid &&
-	    entry->scope_id == receipt->scope_id &&
-	    entry->published_meta_slot == receipt->slot &&
-	    workflow_lifecycle_key_equal(
-		    entry->published_lifecycle, receipt->lifecycle) &&
-	    entry->published_size_sequence == receipt->sequence &&
-	    meta->used && meta->dev == receipt->dev &&
-	    meta->inum == receipt->inum &&
-	    meta->incarnation == receipt->incarnation) {
-		file_version_size_absorb_locked(entry, meta);
-		settled = 1;
-	}
-	agent_edit_unlock(enabled);
-	return settled;
-}
-
-int
-agent_file_state_size_settle(
-	struct agent_file_meta *meta, uint scope_id, uint slot,
-	struct workflow_lifecycle_key lifecycle, uint64 sequence)
-{
-	struct file_version *entry;
-	int settled = 0;
-	int enabled;
-
-	if (meta == 0 || !meta->used || sequence == 0)
-		return 0;
-	enabled = agent_edit_lock();
-	entry = file_version_identity_locked(
-		meta->dev, meta->inum, meta->incarnation, scope_id, lifecycle);
-	if (entry != 0 && entry->published_size_valid &&
-	    entry->published_meta_slot == slot &&
-	    workflow_lifecycle_key_equal(
-		    entry->published_lifecycle, lifecycle) &&
-	    entry->published_size_sequence <= sequence) {
-		file_version_size_absorb_locked(entry, meta);
-		settled = 1;
-	}
-	agent_edit_unlock(enabled);
-	return settled;
-}
-
-void
-agent_file_state_content_absorb_volatile(struct inode *ip, uint slot)
-{
-	struct file_version *entry;
-	int enabled;
-
-	if (ip == 0 || slot >= AGENT_FILE_META_MAX)
-		return;
-	enabled = agent_edit_lock();
-	entry = file_version_inode_locked(ip, 0);
-	if (entry != 0 && entry->published_size_valid &&
-	    entry->published_meta_slot == slot &&
-	    entry->published_size == ip->size) {
-		entry->published_size_valid = 0;
-	}
-	agent_edit_unlock(enabled);
-}
-
 void
 agent_file_state_unbind_catalog_identity(uint64 dev, uint64 inum,
 					 uint64 incarnation, uint scope_id)
@@ -885,7 +748,6 @@ agent_file_state_unbind_catalog_identity(uint64 dev, uint64 inum,
 			agent_file_counter_next(&agent_file_content_generation);
 		entry->published_size_valid = 0;
 		entry->published_meta_slot = AGENT_FILE_META_MAX;
-		entry->published_lifecycle = workflow_lifecycle_none();
 		file_version_digest_clear_locked(entry);
 	}
 	agent_edit_unlock(enabled);
@@ -1188,24 +1050,13 @@ agent_file_state_scope_reclaim(uint scope_id)
 }
 
 int
-agent_file_state_index_deferred(struct inode *ip)
-{
-	return ip != 0 &&
-	       ip->agent_meta_slot == AGENT_INODE_META_DEFERRED_SLOT &&
-	       ip->agent_meta_flags == 0 &&
-	       ip->agent_meta_version == AGENT_INODE_META_VERSION;
-}
-
-int
-agent_file_state_set_index(struct inode *ip, short slot, short flags, int stale)
+agent_file_state_set_index(struct inode *ip, short slot, short flags)
 {
 	short old_slot, old_flags, old_version;
-	short version = slot ? AGENT_INODE_META_VERSION : 0;
+	short version = slot > 0 ? AGENT_INODE_META_VERSION : 0;
 
-	if (ip == 0 || slot < AGENT_INODE_META_DEFERRED_SLOT ||
-	    slot > AGENT_FILE_META_MAX || (slot <= 0 && flags) ||
-	    (slot == AGENT_INODE_META_DEFERRED_SLOT &&
-	    !stale && ip->agent_meta_slot > 0))
+	if (ip == 0 || slot < 0 || slot > AGENT_FILE_META_MAX ||
+	    (slot == 0 && flags))
 		return -1;
 	if (ip->agent_meta_slot == slot && ip->agent_meta_flags == flags &&
 	    ip->agent_meta_version == version)

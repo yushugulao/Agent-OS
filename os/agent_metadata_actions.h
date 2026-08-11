@@ -23,8 +23,6 @@ void agent_metadata_actions_generation_advance(void);
 void agent_metadata_actions_note_changes(uint);
 void agent_metadata_actions_reclaim_scope(uint);
 void agent_metadata_actions_clear_history(uint);
-void agent_metadata_actions_format_file_event(
-	const struct agent_file_meta *, char *, int);
 uint64 agent_metadata_actions_label_bit(const char *);
 int agent_metadata_actions_dependency_mask(
 	uint, char *, char *, char *, uint64 *);

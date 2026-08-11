@@ -1,0 +1,100 @@
+\chapter{任务四：Agent Live-Query FS 与文件查询}
+\label{chap:task4}
+
+\section{约束}
+
+Agent 经常围绕“当前哪些对象满足条件、哪些对象刚发生变化”工作。普通目录遍历可以
+回答一次性问题，却不能表达业务 metadata、选择性索引、谓词变化和增量丢失后的恢复。
+直接修改磁盘格式又会显著扩大教学内核改动，并把当前实验性语义固化为持久 ABI。
+
+我们选择 boot-scoped、显式登记的 Agent metadata。它覆盖文件属性、内容摘要/哈希、
+结构化查询和 typed live watch，仍由原 uCore VFS 管理文件内容。每次重启由 Guest
+重新登记，避免把内存索引冒充持久数据库。
+
+\section{显式 metadata 与真实 inode 绑定}
+
+具有 \code{META_WRITE} 的 Agent 调用 \code{agent_file_meta_set()}，把 project、workflow、run、
+stage、status、kind、摘要和 dependency 等字段绑定到真实
+\code{dev+inum+incarnation}。更新由 \code{update_mask} 限制；删除使用显式 DELETE
+语义。普通 create/rename 不自动进入 catalog，避免为所有 VFS 对象支付维护成本。
+
+incarnation 解决 inode number 复用问题。查询或 watch 命中记录时，内核重验对象仍是
+同一 incarnation 和 active workflow scope；unlink、内容大小变化或对象失效只更新
+已经登记的 sidecar。用户态传入旧 inode number 不能继承 metadata。
+
+\section{Scan、选择性索引与结构化结果}
+
+catalog 有界保留当前 boot 记录，并为 \code{status/stage/kind} 维护选择性索引。查询
+结构包含 predicate、scope、计划选择和最大 hit 数，返回结构化对象、候选数、实际检查
+记录数、结果数、generation 和 cache 状态。调用者可强制 traversal 或请求 index；
+即使使用索引，内核仍遍历实际候选，不把跨查询结果缓存伪装成索引命中。
+
+这个设计同时提供正确性和可测工作量。若只报告微秒，QEMU/Host 抖动可能掩盖路径差异；
+候选数和 records examined 能说明 index 是否真正减少检查。结果上限为 8，防止一个
+查询无限占用用户缓冲区。
+
+\section{Typed live watch}
+
+\code{agent_live_watch()} 安装完整 typed \code{agent_file_query}，而不是解析短字符串。
+每次 metadata before/after transition 计算三种变化：不匹配到匹配为 \code{ENTER}；
+前后都匹配且记录变化为 \code{UPDATE}；匹配到不匹配或对象删除为 \code{LEAVE}。
+
+事件通过 \code{AGENT_EVENT_FILE_QUERY} 进入目标 Agent 的 Context 和有界队列。订阅绑定
+workflow generation、scope 和目标 control id，PID 复用不能继承。用户态 Agent Loop
+可在没有变化时睡眠，在事件到达后增量处理，而不需要不断扫描目录。
+
+\section{增量丢失与 resync}
+
+事件队列和 pending 表都有固定容量。若内核无法可靠投递全部增量，它不丢一条事件后
+继续假装视图完整，而是推进单调 \code{resync_generation} 并合并发送
+\code{RESYNC_REQUIRED}。Agent 必须重新 snapshot/query，再以对应 generation
+\code{ACK_RESYNC}。旧 ACK 不能清除更新的缺口。
+
+workflow fence 会在 metadata transaction 中排空该 scope 的 unlink/content pending 和
+待投递 resync。若缺口仍未确认，fence 返回 \code{RETRY}，不把不完整 generation 写入
+receipt。这个设计把“增量可能丢”转为显式协议状态，而不是依赖日志猜测。
+
+\section{文件查询 one-shot 实验}
+
+规范活动覆盖 catalog size 24、64、96 与 exact hit count 1、2、4、8 的完整
+$3\times4$ 网格。每格有 15 个 AB/BA inner pair，共 180 个配对，没有插值。独立推断
+单位仍是 source boot：每个 hit-count 只有一个 boot，同 boot 的 15 个 pair 是重复测量，
+不能写成 15 台独立机器。
+
+\ReportFigure[0.93\textwidth]
+  {../figures/performance/02_catalog_speedup_landscape.pdf}
+  {../figures/performance/02_catalog_speedup_landscape.pdf}
+  {Catalog size 与 exact hit count 的实测 scan/index 加速比；每格 15 个 inner pair}
+  {fig:catalog-speedup}
+
+12 个实测格的 median speedup 为 1.164--2.808 倍。该结果说明在当前 boot、当前
+metadata corpus 和查询实现下，选择性索引持续减少 scan 路径成本；它不是跨硬件总体
+推断。三维 surface 与热力图使用同一网格，黑点才是实测位置，不能从曲面外推未测
+参数。
+
+\ReportFigure[0.93\textwidth]
+  {../figures/performance/03_scan_state_groups.pdf}
+  {../figures/performance/03_scan_state_groups.pdf}
+  {显式 warmup 后的 first/repeat scan 与 ready index 分组}
+  {fig:scan-groups}
+
+全部 28 条 diagnostic 都是 \code{cache=ready}。图中的 first 是显式 warmup 后保留的
+第一个 timed scan，不等于物理 cold cache；repeat 表示后续 scan，indexed 表示 ready
+index。我们保留这一命名，避免把无法控制的宿主页缓存状态包装成冷启动实验。
+
+\section{实现与验证}
+
+metadata catalog、query planner/object lifecycle 和 typed event 分别位于
+\code{os/agent_metadata_catalog.c}、\code{os/agent_metadata_query.c}、
+\code{os/agent_metadata_objects.c} 与 \code{os/agent_live_query_events.c}；VFS authorization
+和 incarnation 位于 \code{os/vfs_security.c}。
+
+\code{agentfs_ucore} 覆盖 set/update/delete、summary/digest、incarnation 和 scope；
+\code{agentbench_ucore} 以同数据集输出 scan/index 候选、records examined、result count
+与 query tick；live-query checker 和 Guest 场景覆盖 ENTER/UPDATE/LEAVE、queue gap、
+\code{RESYNC_REQUIRED}、旧 ACK 和 fence drain。
+
+\begin{evidencebox}[任务四结论]
+我们实现了当前 boot 显式对象的结构化 metadata、选择性索引、内容摘要/哈希和 typed
+live query。它不是通用全文索引、持久数据库或自动索引整个 VFS。
+\end{evidencebox}

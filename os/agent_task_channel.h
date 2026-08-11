@@ -138,10 +138,6 @@ int agent_task_channel_resource(
 	const struct agent_task_channel_resource *,
 	struct agent_task_channel_resource_result *,
 	const struct agent_task_channel_ops *);
-int agent_task_channel_resource_publish(
-	struct proc *, uint64, uint64, uint64,
-	const struct agent_task_resource_import *,
-	struct agent_task_resource_handle *);
 /*
  * IRQ-safe: marks newly due requests and interrupts the generation-matched
  * issuer's interruptible wait. A schedulable background/user-return safe point

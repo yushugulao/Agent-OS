@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "campaign_id": "agentos-advanced-figures-20260811",
+  "purpose": "Frozen, one-shot raw measurements for publication figures; not a CI or regression-test workload.",
+  "canonical_output": "one_shot_metrics/data/20260811",
+  "completion_marker": "COMPLETED",
+  "policy": {
+    "one_shot": true,
+    "requires_acknowledgement": true,
+    "forbid_ci": true,
+    "overwrite": false,
+    "production_tree_must_be_clean": true,
+    "clean_scope_exclusion": "one_shot_metrics/**",
+    "build_integration": "none"
+  },
+  "collections": {
+    "contest": {
+      "runner": "scripts/run-contest-demo.sh",
+      "boots": 16,
+      "sample_order": "alternating AB/BA",
+      "case_timeout": "180s",
+      "outputs": [
+        "raw/contest/sample-*-qemu.serial.txt",
+        "raw/contest/measurements.csv",
+        "raw/contest/summary.json",
+        "raw/contest/report.md"
+      ]
+    },
+    "agenteval": {
+      "guest": "agenteval_ucore",
+      "hit_counts": [1, 2, 4, 8],
+      "boots_per_hit_count": 1,
+      "pairs_per_boot": 15,
+      "case_timeout": "300s",
+      "challenge_by_hit_count": {
+        "1": "a11ce00000000001",
+        "2": "a11ce00000000002",
+        "4": "a11ce00000000004",
+        "8": "a11ce00000000008"
+      },
+      "serial_pattern": "raw/serial/agenteval-hit-{hit_count:02d}-boot-{boot:02d}.txt"
+    },
+    "task": {
+      "guest": "agenttask_ucore",
+      "boots": 4,
+      "rounds_per_path_per_boot": 8,
+      "paths": ["scalar", "batch", "sq_cq"],
+      "image_policy": "one pristine build image; a fresh byte-identical scratch copy per boot",
+      "case_timeout": "300s",
+      "serial_pattern": "raw/serial/agenttask-boot-{boot:02d}.txt"
+    },
+    "eevdf": {
+      "guest": "agent_eevdf_ucore",
+      "boots": 6,
+      "image_policy": "one pristine build image; a fresh byte-identical scratch copy per boot",
+      "case_timeout": "300s",
+      "serial_pattern": "raw/serial/agent-eevdf-boot-{boot:02d}.txt"
+    }
+  },
+  "pipeline": {
+    "extract": "one_shot_metrics/extract.py",
+    "validate": "one_shot_metrics/validate.py",
+    "plot": "one_shot_metrics/plot.py",
+    "tables_dir": "tables",
+    "figures_dir": "figures",
+    "validation_report": "validation.json",
+    "plot_formats": "png,pdf",
+    "plot_python_overridable": true
+  },
+  "chart_contracts": [
+    {
+      "figure": "traversal/indexed paired dumbbell",
+      "tables": ["contest_paired.csv", "contest_paths.csv"]
+    },
+    {
+      "figure": "core latency raincloud or violin",
+      "tables": ["contest_paths.csv"]
+    },
+    {
+      "figure": "paired latency-difference ECDF",
+      "tables": ["contest_paired.csv"]
+    },
+    {
+      "figure": "catalog size by hit-count speedup heatmap",
+      "tables": ["agenteval_pairs.csv"]
+    },
+    {
+      "figure": "catalog size by hit-count 3D performance surface",
+      "tables": ["agenteval_pairs.csv"]
+    },
+    {
+      "figure": "cold/warm/indexed grouped comparison",
+      "tables": ["agenteval_samples.csv", "agenteval_diagnostics.csv"]
+    },
+    {
+      "figure": "batch/scalar/SQ-CQ latency distributions",
+      "tables": ["task_sequences.csv", "task_operations.csv", "task_perf.csv"]
+    },
+    {
+      "figure": "EEVDF wakeup-latency ECDF",
+      "tables": ["eevdf_wakeups.csv", "eevdf_wake_histogram.csv"]
+    },
+    {
+      "figure": "Jain fairness by concurrency",
+      "tables": ["agenteval_concurrency.csv", "eevdf_jain.csv"]
+    },
+    {
+      "figure": "normalized kernel I/O by workload heatmap",
+      "tables": ["contest_io_normalized.csv", "task_perf.csv"]
+    }
+  ]
+}

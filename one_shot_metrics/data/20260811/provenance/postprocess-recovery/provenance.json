@@ -1,0 +1,48 @@
+{
+  "collection_plan_sha256": "f8ea950658dbf61a2c2d804590deed2886e8ffc57345bdd64dc90292fce7aa12",
+  "created_at_utc": "2026-08-11T01:02:56.084374Z",
+  "files": [
+    {
+      "bytes": 3591,
+      "path": "provenance/postprocess-recovery/plan.json",
+      "sha256": "b674b9e4eee22639197d4a77ce38e222bb9bbb1795d300af07b07caeeb01e91f"
+    },
+    {
+      "bytes": 62706,
+      "path": "provenance/postprocess-recovery/run_once.py",
+      "sha256": "05748567ceb89181dc77272d6a9fbd12628d2750cd9158a9c81e92c3adb70617"
+    },
+    {
+      "bytes": 15469,
+      "path": "provenance/postprocess-recovery/prepare_guests.py",
+      "sha256": "8274d2e93348e75cf8fbaa26dd2f397690445269183dc11dd9e2bf3cf8c641e9"
+    },
+    {
+      "bytes": 34961,
+      "path": "provenance/postprocess-recovery/extract.py",
+      "sha256": "03d2395a959fc29733ab89be02e032bbf99fae8c2c8f273f72459a86a3512d9c"
+    },
+    {
+      "bytes": 31800,
+      "path": "provenance/postprocess-recovery/validate.py",
+      "sha256": "100b1cd3026cc768eb031c6a42c6d14c60ebf9942e7075336e2bb0a698d8014d"
+    },
+    {
+      "bytes": 36745,
+      "path": "provenance/postprocess-recovery/plot.py",
+      "sha256": "b7879b3bcdd57793c8febc5eac3cd85c477ea4c6f8d94dcc4d322c02ac617c8c"
+    }
+  ],
+  "kind": "agentos-postprocess-recovery-provenance",
+  "manifest_sha256_before": "4c1a0667d8c7f3562175e8a28043fa71c42b83556ada0d5a5affed99539befb4",
+  "recovery_command": [
+    "python3",
+    "one_shot_metrics/run_once.py",
+    "--resume-postprocess",
+    "--acknowledge-one-shot",
+    "--plot-python",
+    "<plot-python>"
+  ],
+  "schema_version": 1,
+  "source_commit": "2b14fb1f74b9bd093e6de939a16554620835699e"
+}

@@ -1,0 +1,105 @@
+\chapter{跨模块安全与调度治理}
+\label{chap:security-scheduling}
+
+\section{安全不可约化为一张 allowlist}
+
+\subsection{约束}
+
+Agent 安全的失败往往不是“工具名称不在白名单”，而是身份可伪造、跨 workflow 对象被重用、不可信工具文本进入控制流、审批被重放，或者在资源预留后只回收一部分状态。因此我们不把某一个接口宣传为“安全开关”，而是建立彼此独立的 gate 链。
+
+\subsection{授权链}
+
+一次工具调用至少经过以下约束：
+
+\begin{enumerate}
+  \item 可信 exec/Agent identity 确定当前 PID、agent id、role 与 control identity；
+  \item lifecycle 必须活跃，且调用者不能跨过 generation-safe workflow scope；
+  \item typed schema 必须正确，参数数量、键、类型和长度在副作用之前校验；
+  \item role/capability 必须允许该 action，精确路由及 VFS scope 必须允许该对象；
+  \item provenance 不能越过节点允许的边界，现有不可信标签只能保留或增加；
+  \item 有副作用的具体调用还必须拥有未过期、参数绑定的审批；
+  \item 资源账户必须能完整预留，失败时不得留下部分提交。
+\end{enumerate}
+
+这些 gate 不相互替代。人工批准 \code{artifact_update} 不会绕过内核 \code{META_WRITE}；持有 capability 也不会把 \code{UNTRUSTED_FILE_DATA} 改成 \code{TRUSTED_USER_CONTROL}。
+
+图\ref{fig:plain-agentos-comparison}用相同工作流的 Plain/AgentOS-uCore 对照展示了这些 gate 为何必须是内核可强制的系统属性，而不是 prompt 中的约定。
+
+\section{Provenance 作为流转属性}
+
+\subsection{设计}
+
+AgentOS 将 provenance 放在 Context、IPC、工具请求、artifact 和 Evidence 之间传递。核心标签区分内核事实、可信用户控制、不可信工具输出、不可信文件数据、跨 Agent 数据和派生数据。判定原则不是“数据由另一个 Agent 生成，所以可信”，而是保留来源的不确定性并增加 \code{CROSS_AGENT_DATA}。
+
+V3 contract 把节点许可 provenance mask 冻结在合同中；V2 保留探索式循环，但每次调用仍受内核当前身份与标签检查。Nexus 的 Research/Analyst 在 Guest artifact 层进一步验证 superset，是产品层的 defense in depth，不把这一部分误写成新的内核安全模块。
+
+\subsection{威胁与对策}
+
+\begin{longtable}{L{3.0cm}L{4.0cm}L{6.3cm}}
+  \caption{当前系统中主要威胁与 fail-closed 对策}\label{tab:threats}\\
+  \toprule
+  威胁 & 攻击路径 & 强制与结果 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  威胁 & 攻击路径 & 强制与结果 \\
+  \midrule
+  \endhead
+  身份伪造 & 普通进程自报 Orchestrator 或 worker role & 可信 exec policy、PCB identity 与一次 control binding；PID 变化时继承的用户态 active identity 失效 \\
+  跨 scope 读写 & 持有旧 PID/handle 后访问新 lifecycle & lifecycle generation、scope gate、VFS owner 与 handle generation 共同拒绝 \\
+  Prompt injection & 工具或文件文本包含伪控制指令 & \code{UNTRUSTED_TOOL_OUTPUT}/\code{UNTRUSTED_FILE_DATA}保留；控制与数据分离 \\
+  审批重放 & 将旧的“允许此工具”用于新参数 & session、turn、request、correlation、tool、digest、nonce 和 tick 全绑定，过期即拒绝 \\
+  部分资源提交 & 一个 vector 中前项已扣账，后项失败 & 全量 preflight，再在单锁临界区移动 U/P/F；失败无部分副作用 \\
+  结果伪造 & Host 自行读文件或生成 \code{tool_result} & Guest 自主 V2 执行，model request SHA 绑定，artifact 完整 digest 重验 \\
+  观测伪造 & Host 将自产事件冒充 kernel audit & kernel source 需 Guest 转发真实 record sequence/identity；Host schema 拒绝越界字段 \\
+  关闭后延迟输出 & telemetry thread 在 session closed 后续写 & producer final drain/join、pipe EOF、Relay pump join，最后才发 close frame \\
+  \bottomrule
+\end{longtable}
+
+\section{U/P/F 资源账户}
+
+\subsection{约束}
+
+仅在调用结束后计账无法阻止超配；仅维护一个“已使用”数字又无法区分运行中占用、未来提交与可回收缓存。多资源一起预留时，任何一项失败都不能留下其余项的半完成账务。
+
+\subsection{设计}
+
+每个 lifecycle 的资源账户分为：
+
+\begin{equation}
+  H = U + P + F,
+\end{equation}
+
+其中 $U$ 是已提交使用量，$P$ 是已预留但尚未提交的量，$F$ 是可回收缓存。hard limit 检查 $H$ 而不是只检查 $U$。reserve 从可用配额进入 $P$，commit 把 $P$ 转到 $U$，cancel/release 不会造成重复返还。系统压力下只能 trim $F$，不能偷偷清理已承诺的 $P$。
+
+资源 vector 先验证所有维度，然后在锁中一次移动。workflow fence 要求 $P=0$，同时对 storage/exec cache 执行单锁 trim，导出 exact $U$。因此 receipt 中的资源根与截面对应，而不是事后估计。
+
+\section{Phase Lease 与安全包络}
+
+V3 frozen DAG 适合对预知过程给出高保证，但不适合规定一切探索式 Agent Loop。Phase Lease 在二者之间提供有界包络：租约绑定节点或阶段、工具范围、副作用 mask、provenance 上界、deadline 和资源预留。租约过期或阶段切换后，旧授权不得继续使用。
+
+我们因此将 V3 称为“高保证执行模式”，将 V2 称为“受内核逐次治理的适应执行模式”。前者不是一般 Agent Loop 的唯一实现，后者也不等于无约束执行。
+
+\section{Workflow EEVDF 与防线程放大}
+
+\subsection{约束}
+
+如果只在线程级调度，一个 Agent 可以通过创建更多 worker 获得更多 CPU 份额，这与“按 workflow 治理”矛盾。LLM、IPC 和 heartbeat 又会产生频繁睡眠/唤醒，没有对 lag 的处理容易出现唤醒突发。
+
+\subsection{设计与实现}
+
+AgentOS 把同一 workflow 的 runnable 线程折叠为一个调度实体，使用 lag eligibility 和 virtual deadline 选择；workflow 内再按已有进程策略选择成员。新建线程不会产生新的跨 workflow 份额。睡眠期间的历史 lag 按有界规则衰减，唤醒时将 ready age 写入调度 trace。
+
+第\ref{chap:task5}章的 6 个独立 boot 展示了 504 个 exact wake probe：425 个是 0 tick，79 个是 1 tick，无插值。并发 1/2/3/4 的 Jain 中位数分别为 1.000000、0.999985、0.999993 和 0.999985。这证明测量场景中的工作量分配，不证明任意硬件或任意数量 workflow 的统计性能。
+
+\section{Evidence Ring 与 Workflow Fence}
+
+Evidence Ring 使用固定页面和固定槽，ordinary 与 critical 分区，通过 reserve/fill/commit/discard 避免观察到半填充记录。critical deny/authority 不与普通成功共用一个淘汰窗口。当生命周期需要发布截面时，workflow fence 按 metadata/live-query drain、VFS cut、credit exact、Evidence seal 的顺序执行，并返回带 request/challenge 的 receipt。
+
+该 receipt 使用 flags 如实披露 partial coverage 和 metadata volatile，因此“已 seal”不等于整个世界已持久。保留的内部 retirement 也不能冒充显式 workflow fence。这一设计使评委能看到“系统在什么边界上给出证据”，而不是仅看到一串成功日志。
+
+\section{安全与可用性的取舍}
+
+严格 gate 会带来更多结构化失败，这是设计结果而不是需要掩盖的异常。我们将 BAD\_PARAM、DENIED、STALE、TIMEOUT、NO\_SPACE 和 IO\_ERROR 送回对应 Agent，使策略可以更改参数、改用只读路径或终止当前任务。不可恢复的身份或 lifecycle 冲突则 fail closed，不会为演示继续伪造成功。
+
+对高保证固定流程，我们选 V3 contract；对需要观察后改变计划的 Nexus，我们选逐次内核治理的 V2。这一取舍保留了产品的可用性，同时没有把“模型可动态决策”误写成“模型可以绕过系统”。

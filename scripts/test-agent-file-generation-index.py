@@ -187,10 +187,11 @@ class IdentityInvalidationTests(unittest.TestCase):
     def test_rejects_catalog_unbind_that_revokes_edit_lease(self) -> None:
         self.mutate_compact(
             "os/agent_file_state.c",
-            "entry->published_lifecycle=workflow_lifecycle_none();"
+            "entry->published_meta_slot=AGENT_FILE_META_MAX;"
             "file_version_digest_clear_locked(entry);",
-            "entry->published_lifecycle=workflow_lifecycle_none();"
-            "file_version_clear_locked(i);",
+            "entry->published_meta_slot=AGENT_FILE_META_MAX;"
+            "memset(agent_file_edits,0,sizeof(agent_file_edits));"
+            "file_version_digest_clear_locked(entry);",
         )
         with self.assertRaises(CHECKER.ContractError):
             CHECKER.check(self.root)

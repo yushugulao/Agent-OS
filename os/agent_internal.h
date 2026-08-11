@@ -54,7 +54,6 @@ int agent_background_take(void);
 /* 身份与授权策略。 */
 void agent_identity_init(void);
 int agent_identity_alloc_id(void);
-void agent_identity_id_floor(uint);
 const struct agent_role_policy *agent_identity_role_policy(int);
 int agent_identity_role_valid(int);
 int agent_identity_role_sched_weight(int);
@@ -157,10 +156,6 @@ void agent_observe_publish_context_ticket(
 int agent_execution_cancel_sync(
 	struct proc *, const struct agent_execution_cancel_request *,
 	struct agent_result *, struct agent_execution_outcome *);
-int agent_execution_task_preflight(
-	struct proc *, const struct agent_execution_binding *,
-	const struct agent_op *, uint64, uint, uint64,
-	struct agent_execution_preflight_result *);
 int agent_execution_task_submit_sync(
 	struct proc *, struct agent_op *,
 	const struct agent_execution_binding *, uint64, uint,

@@ -1,0 +1,75 @@
+\chapter{已知限制与适用范围}
+\label{chap:limitations}
+
+\section{产品能力边界}
+
+我们将 AgentOS-uCore 定位为“系统原生 Agent 机制与可交互垂直闭环”，而不是通用生产级多租户 Agent 云。本章列出当前的硬边界，便于评审者区分“已实现机制”、“有界产品场景”和“后续可拓展方向”。
+
+\subsection{Nexus 不是任意多 Agent 平台}
+
+Nexus 固定为 Coordinator、System、Research、Analyst 四个业务身份和一个 Relay。只有 Coordinator 调用模型；三个专职 worker 是拥有独立 PID、Agent/control identity、Context 和 role/capability 的确定性 policy Agent，并与 Coordinator 共享 workflow lifecycle、scope、资源域和调度实体。它们不是三个独立 LLM session。动态性体现在 Coordinator 依据目标与真实结果决定是否委派、委派给谁以及如何重规划，不体现为任意拓扑的自动扩缩容。
+
+System 仅执行固定无输入系统快照，不拥有 \code{CONTENT_READ}；Research 检索本地已登记资料，不使用 Web Search 或外部论文 API；Analyst 不执行任意 shell。这些限制是最小权限设计，不是缺少的“隐藏开关”。
+
+\section{N1 协议边界}
+
+N1 是 Guest 用户态 fixed 44-byte canonical envelope，内核不解析 TASK kind 或 objective。它通过已有 MESSAGE 管道获得身份、route、scope、provenance、队列和唤醒保护，但当前不提供分布式 exactly-once、持久任务恢复或跨 boot 重放。TASK deadline 存入 32-bit tick，未承诺穿越低 32 位回绕长期运行。
+
+每个 specialist task 将 worker reply 压缩在有界 MESSAGE 数之内，Coordinator 在 assignment 和每次 reply 后 drain audit。这是对当前内核 principal history 容量的明确适配，不是高吞吐分布式消息队列。持续 \code{NO_SPACE} 会有界 yield/retry，最终由 task deadline 使 Coordinator 超时收口；不保证拥塞下保留每一条中间 progress。
+
+\section{Artifact store 边界}
+
+\begin{itemize}
+  \item store 是 workflow-scoped、boot-volatile Guest VFS 存储，不是跨启动持久数据库。
+  \item SHA-256 用于完整 payload 一致性重验，不是内核签名、来源证书、per-object ACL 或 immutable seal。
+  \item 当前每 lifecycle 只有 32 个 generation-safe slot。三个 seed 占用前三个；System 每次委派消耗 1 个 result slot，Research/Analyst 每次消耗 capsule+result 两个 slot。
+  \item 失败、超时和取消不回收已分配 slot。三个 seed 之后，全 System 最多 29 次，全双 slot worker 最多 14 次并剩1 slot；混合场景按实际工件消耗。
+  \item \code{/reset} 不新建 lifecycle，也不回收 slot。容量用尽时返回 \code{NO_SPACE}，需正常结束并启动新 boot。
+  \item handle 只保留 lifecycle generation 的低 16 位，当前产品 boot 使用 generation 1，不声称无限期 daemon 安全性。
+\end{itemize}
+
+\section{会话与模型边界}
+
+单个用户 turn 最多 8 个 model round，会话保留最近 4 个完整 turn，较旧内容进入有界 summary。本版不实现任意长上下文、泛用 token 压缩策略或完整 provider reasoning-content 回放。工具参数必须完整接收并通过 schema 后才执行；文本 streaming 不是当前验收前提。
+
+Replay provider 使用请求 SHA-256 与固定 response 验证同一 Guest/内核路径。它不访问网络，不会被报告为云模型。DeepSeek 入口依赖当时网络、API key、供应商服务和模型行为；provider 失败不静默切 replay。本文只将已固定 fixture 的结果表述为 strict offline replay，不虚构一次 live provider 成功。
+
+\section{观测边界}
+
+Nexus observer 是同一 Guest/QEMU boot 中的只读 high-signal view，不是独立安全域、全量无损 trace 或性能采样器。它本身会调用 timeline/audit/agent-info，产生调度和串口扰动。因此第\ref{chap:validation}章的性能数字来自独立 one-shot 采集，不来自 observer 窗口。
+
+Observer 只投影业务相关 MESSAGE audit 和每个角色的 self snapshot；未展示不意味未发生。Audit sequence 是全局 ledger 序号，Context sequence 是某个 Agent 的 Context Path 序号，两者不可互换。当前 observer 已通过共享 cursor、同步 drain 和关闭 join 降低有界 ring 中的丢对风险，这不把它升格为永不丢失的内核 tracing API。
+
+\section{审批、取消与回滚}
+
+当前审批 token 是 Host/Guest 产品层协议，有效等待上限为 25 秒，超时或 controller 断开即 deny。它不是内核 V3 grant，也不取代 capability/scope/provenance。已批准的调用只在当前绑定参数与有效期内有效，不提供跨 session 持久授权。
+
+\code{Ctrl-C} 是协作式取消当前 turn。它能停止尚未执行的委派或调用，但不能对已经 commit 的文件/消息副作用自动实现事务回滚。因此高风险效果的核心保证是“执行前审批与内核 gate”，不是“执行后一定可撤销”。
+
+\section{V2、V3 与 Task Channel 不同保证}
+
+V2 以 typed request 支持观察后再选工具，但不冻结整张 DAG。启用 \code{AGENT_EXECUTION_CONTRACT_F_ENFORCE} 的 V3 才绑定 contract/node/schema/predecessor/attempt/deadline/provenance envelope。不能因为 V2 也经过 capability/provenance 检查，就宣称它具有 V3 frozen guarantee。
+
+Task Channel 当前证明 SQ/CQ、deadline、cancel 和 exactly-one completion。provider 同步且只接受 null input/output \code{NONE}，\code{RESOURCE_IMPORT} fail closed。它尚未承载 Nexus 业务 payload，不能作为真实文件查询或模型 wire 的异步 backend。
+
+\section{MCP/A2A 与外部资源}
+
+仓库内 MCP/A2A 仍是 deterministic in-memory 对象映射 prototype。它验证 tools/list、schema 和错误对象等映射逻辑，不是真实 MCP stdio/HTTP server、MCP Client、streaming transport、Task Channel adapter 或跨实现互操作证明。Nexus N1、Host model wire 与 MCP wire 是不同层。
+
+本轮黄金场景只使用本地资料。未来 Web Search、论文 API 或完整 MCP 必须作为 Host gateway 的显式受控工具进入 Guest，并将外部输出标记为不可信数据。Host 不得因为“接入方便”而选工具、读业务文件或伪造结果。
+
+\section{内核和文件系统边界}
+
+内核不包含 JSON、模型 SDK、HTTP、TLS 或 MCP wire；这是机制/策略分层，不是待补全的网络栈。当前基于教学 uCore 的单 Hart、进程上限和文件大小上限约束了 Nexus 镜像与长驻能力。我们通过压缩 history 和 image-size gate 适配现有 ABI，不为了演示修改文件系统上限。
+
+Context mirror 固定为 7 页，其中 6 页由内核只读投影，1 页是用户 cache；Context Path 有界且保留 dropped/oldest/latest 信息。metadata catalog 是当前 boot 的显式登记状态，workflow fence receipt 会标记 volatile。这些边界使系统可复验，也要求我们不把它描述成持久全局数据库。
+
+\section{性能证据的外推边界}
+
+one-shot 数据固定在 commit \code{2b14fb1f74b9bd093e6de939a16554620835699e} 及其记录的工具链、QEMU/Host 环境，适合工程复验，不代表其他硬件、其他负载或长期生产运行。Catalog grid 的每格 15 个 inner pair 来自同一 boot 内重复，不能当成 15 个独立 boot。EEVDF 实验最多覆盖 4 个物理并发 workflow entity，不是 Nexus 四个业务 Agent 的端到端延迟测试。
+
+Core path 的 16/16 获胜不会被扩大成端到端加速；E2E 实际仅 3/16 获胜且中位差为 $+13.452$ ms。同样，Task 的 sequence 延迟不能单独证明 SQ/CQ 设计的因果优势；它同时包含了当前 provider、队列和实现开销。
+
+\begin{boundarybox}[本项目的当前承诺]
+我们承诺的是：在当前 uCore 边界内，Agent 成为内核可识别、可调度、可授权、可记账和可审计的对象；Nexus 交付显式 live 入口与已验证的同路径 replay，并把 Guest 委派、内核工具和双窗口观测连成可交互纵向闭环。我们不承诺通用 Agent 云、完整 MCP 互操作、跨重启持久、任意 shell 或无界长会话。
+\end{boundarybox}

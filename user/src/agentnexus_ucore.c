@@ -4250,9 +4250,10 @@ static int nexus_system_task(int coordinator_pid, uint64 task_id,
 static int nexus_measurement_valid(const char *payload)
 {
 	static const char *required[] = {
-		"schema=agentos.nexus.measurement.v1\n",
-		"source_revision=", "source_results=", "records=",
-		"traversal_us=", "indexed_us=", "ratio=", "wins=",
+		"schema=agentos.nexus.measurement.v2\n",
+		"source_revision=", "source_manifest=", "source_table=",
+		"source_results=", "records=", "traversal_us=", "indexed_us=",
+		"paired_ratio_median=", "wins=",
 		"nexus_derived_checks=", "nexus_derived_checks_basis=",
 		"nexus_derived_claim=", "nexus_derived_measurement_scope=",
 	};
@@ -4348,7 +4349,7 @@ static int nexus_measurement_summary(const char *payload, char *output,
 {
 	static const char *keys[] = {
 		"source_revision", "source_results", "records", "traversal_us",
-		"indexed_us", "ratio", "wins", "nexus_derived_checks",
+		"indexed_us", "paired_ratio_median", "wins", "nexus_derived_checks",
 		"nexus_derived_checks_basis", "nexus_derived_claim",
 		"nexus_derived_measurement_scope",
 	};
@@ -4374,7 +4375,7 @@ static int nexus_measurement_event_summary(const char *payload, char *output,
 {
 	static const char *keys[] = {
 		"source_results", "records", "traversal_us", "indexed_us",
-		"ratio", "wins", "nexus_derived_checks",
+		"paired_ratio_median", "wins", "nexus_derived_checks",
 		"nexus_derived_checks_basis",
 		"nexus_derived_measurement_scope",
 	};
@@ -4400,7 +4401,7 @@ static int nexus_measurement_compact_event_summary(
 {
 	static const char *keys[] = {
 		"source_results", "records", "traversal_us", "indexed_us",
-		"ratio", "wins", "nexus_derived_checks",
+		"paired_ratio_median", "wins", "nexus_derived_checks",
 		"nexus_derived_checks_basis",
 		"nexus_derived_measurement_scope",
 	};
@@ -4432,7 +4433,7 @@ static int nexus_report_event_summary(const char *payload, char *output,
 	char evidence[513];
 	char system_evidence[257];
 	char sched_budget[33];
-	char ratio[33];
+	char paired_ratio_median[33];
 	struct live_builder builder;
 
 	if (nexus_extract_value(payload, "research_evidence", evidence,
@@ -4442,8 +4443,9 @@ static int nexus_report_event_summary(const char *payload, char *output,
 	    nexus_extract_compact_value(system_evidence,
 				"sched_budget", sched_budget,
 				sizeof(sched_budget)) < 0 ||
-	    nexus_extract_compact_value(evidence, "ratio", ratio,
-					sizeof(ratio)) < 0)
+	    nexus_extract_compact_value(evidence, "paired_ratio_median",
+					paired_ratio_median,
+					sizeof(paired_ratio_median)) < 0)
 		return -1;
 	live_builder_init(&builder, output, capacity);
 	for (uint i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -4458,8 +4460,8 @@ static int nexus_report_event_summary(const char *payload, char *output,
 	}
 	live_builder_text(&builder, ";sched_budget=");
 	live_builder_text(&builder, sched_budget);
-	live_builder_text(&builder, ";ratio=");
-	live_builder_text(&builder, ratio);
+	live_builder_text(&builder, ";paired_ratio_median=");
+	live_builder_text(&builder, paired_ratio_median);
 	return builder.ok && builder.length <= 256 ? 0 : -1;
 }
 
@@ -4569,7 +4571,7 @@ static int nexus_analyst_task(int coordinator_pid, uint64 task_id,
 	static char system_digest[AGENT_NEXUS_SHA256_HEX_SIZE + 1];
 	static char research_digest[AGENT_NEXUS_SHA256_HEX_SIZE + 1];
 	static char evidence[513];
-	static char ratio[33];
+	static char paired_ratio_median[33];
 	struct live_builder builder;
 	uint system_size = 0;
 	uint research_size = 0;
@@ -4592,8 +4594,9 @@ static int nexus_analyst_task(int coordinator_pid, uint64 task_id,
 	if (!nexus_measurement_valid((char *)research_payload) ||
 	    nexus_measurement_summary((char *)research_payload, evidence,
 				      sizeof(evidence)) < 0 ||
-	    nexus_extract_value((char *)research_payload, "ratio", ratio,
-				sizeof(ratio)) < 0)
+	    nexus_extract_value((char *)research_payload,
+				"paired_ratio_median", paired_ratio_median,
+				sizeof(paired_ratio_median)) < 0)
 		return AGENT_STATUS_BAD_PARAM;
 	if ((system_header.provenance_labels & ~AGENT_PROVENANCE_ALL) != 0 ||
 	    (research_header.provenance_labels & ~AGENT_PROVENANCE_ALL) != 0)
@@ -4618,8 +4621,9 @@ static int nexus_analyst_task(int coordinator_pid, uint64 task_id,
 	live_builder_text(&builder, system_digest);
 	live_builder_text(&builder, "\nresearch_digest=");
 	live_builder_text(&builder, research_digest);
-	live_builder_text(&builder, "\nfinding=indexed_query_ratio_");
-	live_builder_text(&builder, ratio);
+	live_builder_text(&builder,
+		"\nfinding=indexed_query_paired_ratio_median_");
+	live_builder_text(&builder, paired_ratio_median);
 	live_builder_text(&builder,
 		"\nrecommendation=profile_workflow_overhead_and_preserve_indexed_path\n"
 		"publication=request_requires_user_approval\n");
@@ -4853,7 +4857,7 @@ static void live_prepare_workspace(void)
 		agent_dependency_label_bit("measure")) == AGENT_STATUS_OK &&
 		   nexus_register_seed(
 		AGENTNEXUS_SEED_MEAS_NAME, "measure", "measurement",
-		"published", "published historical 4-boot ABBA measurement",
+		"published", "published historical 16-boot paired measurement",
 		agent_dependency_label_bit("source")) == AGENT_STATUS_OK &&
 		   nexus_register_seed(
 		AGENTNEXUS_SEED_STATE_NAME, "runtime", "state", "ready",
@@ -5536,14 +5540,15 @@ static int nexus_read_product_artifact(uint handle,
 					      result->model_projection,
 					      sizeof(result->model_projection)) < 0)
 			return AGENT_STATUS_BAD_PARAM;
-		if (nexus_extract_value((char *)nexus_artifact_buffer, "ratio",
-					first, sizeof(first)) < 0 ||
+		if (nexus_extract_value((char *)nexus_artifact_buffer,
+					"paired_ratio_median", first,
+					sizeof(first)) < 0 ||
 		    nexus_extract_value((char *)nexus_artifact_buffer, "wins",
 					second, sizeof(second)) < 0)
 			return AGENT_STATUS_BAD_PARAM;
 		live_builder_init(&projection, result->result,
 				  sizeof(result->result));
-		live_builder_text(&projection, "verified;ratio=");
+		live_builder_text(&projection, "verified;paired_ratio_median=");
 		live_builder_text(&projection, first);
 		live_builder_text(&projection, ";wins=");
 		live_builder_text(&projection, second);

@@ -1,0 +1,112 @@
+\chapter*{摘要与目标--证据矩阵}
+\addcontentsline{toc}{chapter}{摘要与目标--证据矩阵}
+
+\section*{摘要}
+
+传统操作系统能够创建进程、分配内存和调度线程，却不能直接表达智能体工作流中的
+角色身份、跨轮上下文、工具权限、数据来源、任务等待和资源归属。应用框架可以约定
+这些概念，但一旦用户态组件出错或越权，约定本身不能成为强制边界。我们据此在
+RISC-V uCore 上实现 AgentOS-uCore：让内核识别 Agent 与 workflow，把可信身份、
+Context Path、结构化工具调用、文件元数据查询、事件等待、资源记账、workflow
+调度与可验证证据连接成一条可运行路径。
+
+我们的核心选择是“机制进入内核，策略留在用户态”。内核不理解自然语言，也不替
+模型决定工具；它在每次工具、消息、文件访问和生命周期变化处检查 identity、
+capability、scope、schema 与 provenance。Guest 用户态可以采用确定性策略、真实
+模型或 replay，但必须沿相同系统调用和 Context 路径取得事实。Host 只承担 QEMU
+串口、TLS、API key 与 provider JSON 转换，不能读取 Guest 业务文件或伪造工具结果。
+
+在基础机制之上，我们交付两个互补产品面。\code{contest-demo} 使用确定性科研
+工作流和等量 AB/BA 负载，保证现场性能比较可重复；AgentOS Nexus 则提供长期运行的
+双窗口交互体验。评委在左侧终端连续提交自然语言目标，Coordinator 根据真实返回
+动态委派 System、Research 和 Analyst，右侧 observer 同步显示内核实际允许、拒绝、
+等待、唤醒和记录了什么。四个业务 Agent 都拥有独立 PID、Agent identity、Context、
+role/capability。四个角色共享 workflow lifecycle、scope、资源域和调度实体；跨 Agent 大数据写入带 SHA-256 和 provenance 的 Guest
+工件，任务消息只传 canonical 控制包与 generation-safe handle。
+
+我们建立了从模型、Guest、内核到 Host 的严格验证边界。固定 replay 走与 live
+provider 相同的 QEMU、串口、TASK/MESSAGE、typed V2、artifact 和 Context 路径，
+但只证明 fixture 绑定的闭环，不冒充云模型质量。性能部分引用冻结 one-shot campaign：
+30 次 fresh QEMU boot、33 个原始文件、19 张长表和 7,498 行逐样本记录。16 个独立
+workflow 配对中 indexed core path 全部更快，配对加速比中位数为 3.118 倍；
+文件查询完整网格包含 $3\times4\times15=180$ 个配对；任务传输包含 96 条
+16-op sequence；504 条 exact EEVDF wake probe 全部落在 0--1 tick。我们同时保留
+端到端差值、顺序效应、测量窗口和独立单位等限制，不把 core-path 观察扩大为所有
+场景的系统级加速。
+
+\begin{designbox}[作品定位]
+AgentOS-uCore 将内核强制机制、Guest 策略与 QEMU 复验连接成完整的 Agent workflow
+系统；AgentOS Nexus 是这些机制的交互式纵向集成产品。
+\end{designbox}
+
+\section*{主要贡献}
+
+\begin{enumerate}
+  \item 我们建立可信 Agent identity、role/capability、workflow \code{id+generation}
+        与 VFS scope，使普通进程和 Agent 在同一内核中共存而不混淆授权主体。
+  \item 我们实现 25 项内核工具目录、exploratory typed V2、ENFORCE V3 冻结执行
+        合同、顺序 compact batch 和有界 Task SQ/CQ core，明确区分各自保证。
+  \item 我们把七页 Context 地址区、因果路径、六类 provenance 标签、Evidence
+        Ring 和 challenge-bound fence 连接起来，使工具结果既能反馈给模型，又不能
+        被自动提升为可信控制指令。
+  \item 我们实现显式 boot-scoped 文件 metadata、选择性索引、typed live query、
+        generation resync，并用同一负载的 scan/index 路径测量工作量和延迟。
+  \item 我们按 workflow 而非线程聚合资源与调度实体，以 U/P/F Credit Domain、
+        Tool Phase Lease 和 EEVDF 管理峰值、服务量、睡眠与唤醒。
+  \item 我们交付确定性竞赛基准、长驻控制台和四业务 Agent Nexus，使身份、工具、
+        Context、文件、等待、审批、工件和观测在同一实际 QEMU boot 中闭环。
+\end{enumerate}
+
+\section*{目标--证据矩阵}
+
+\small
+\begin{longtable}{@{}L{0.8cm} L{2.4cm} L{4.2cm} L{3.5cm} L{2.0cm}@{}}
+\caption{赛题目标、生产实现与证据边界}\label{tab:goal-evidence}\\
+\toprule
+\textbf{任务} & \textbf{约束} & \textbf{我们的实现} & \textbf{主要验证} & \textbf{结论边界} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{任务} & \textbf{约束} & \textbf{我们的实现} & \textbf{主要验证} & \textbf{结论边界} \\
+\midrule
+\endhead
+一 & Agent 创建、Context 可用、普通进程共存 &
+可信映像与角色发布；七页 Context；workflow lifecycle；exec/storage 账户 &
+\code{agentfinal_ucore}、\code{agenttrust_ucore}、scope/lifecycle mutation &
+单 Hart；生命周期和槽位有界 \\
+\addlinespace
+二 & 至少三项结构化工具、发现与错误处理 &
+25 项目录；V2 typed KV；ENFORCE V3；64-op compact batch；16-slot Task core &
+UAPI/layout checker、\code{agenttoolabi_ucore}、\code{agentcontract_ucore}、\code{agenttask_ucore} &
+V2/batch 不具有冻结 DAG 保证 \\
+\addlinespace
+三 & 至少五轮调用、直接访问、超长淘汰 &
+128 条可信 Context Path；六页只读 mirror 加一页 user cache；因果、rollback、provenance &
+\code{agentfinal_ucore} 的 64 次顺序调用、snapshot/rollback/eviction &
+rollback 不逆转已经发生的外部效果 \\
+\addlinespace
+四 & 至少两类文件扩展与查询性能比较 &
+显式 metadata、summary/digest、status/stage/kind 索引、typed watch、resync &
+\code{agentfs_ucore}、\code{agentbench_ucore}、180 个 one-shot file-query 配对 &
+仅索引当前 boot 显式登记对象 \\
+\addlinespace
+五 & 至少两类 Loop 机制、多 Agent 稳定运行 &
+watch/wait、heartbeat、可信 route、LLM correlation、workflow EEVDF、证据环 &
+\code{agentloop_ucore}、\code{agent_eevdf_ucore}、504 条 exact wake probe &
+内核不规划、不调用模型 \\
+\addlinespace
+六 & 三模块以上综合、QEMU 程序、性能对比 &
+确定性 \code{labdemo_ucore}；plain/AgentOS 双目标；交互控制台；四角色 Nexus &
+\code{contest-demo}、双目标 runner、Nexus strict replay 与 live 显式入口 &
+Replay 不等于 live；Nexus 不替代性能基准 \\
+\bottomrule
+\end{longtable}
+\normalsize
+
+\begin{evidencebox}[核心实测快照]
+在源码提交 \code{2b14fb1f74b9bd093e6de939a16554620835699e} 上，冻结数据包含
+30 次 fresh QEMU boot、33 个 raw 文件、19 张长表和 7,498 行记录。本文后续所有
+性能图表都从该规范运行的 CSV 读取，不从聚合数字反推原始样本。
+\end{evidencebox}
+
+\cleardoublepage

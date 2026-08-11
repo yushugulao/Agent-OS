@@ -1,0 +1,2 @@
+extract.py: warning: raw/serial/agent-eevdf-boot-05.txt: 3 serial marker row(s) are explicitly marked incomplete
+extract.py: wrote 7498 rows across 19 tables to <campaign>/tables

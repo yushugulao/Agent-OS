@@ -372,16 +372,6 @@ uint64 agent_tool_protocol_flags(int tool_id)
 	return tool ? tool->flags : 0;
 }
 
-uint64
-agent_tool_protocol_required_capabilities(int tool_id)
-{
-	const struct agent_tool_definition *tool = tool_by_id(tool_id);
-	const struct agent_tool_security_definition *security =
-		tool_security_by_id(tool_id);
-
-	return tool && security ? security->required_capabilities : 0;
-}
-
 static void
 agent_tool_digest_u64(struct agent_sha256_ctx *ctx, uint64 value)
 {

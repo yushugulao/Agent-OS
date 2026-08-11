@@ -109,11 +109,12 @@ class AgentNexusLoopTests(unittest.TestCase):
 
     def test_seed_provenance_and_exec_profile_are_versioned(self) -> None:
         for needle in (
-            '#define AGENTNEXUS_SEED_VERSION 1U',
+            '#define AGENTNEXUS_SEED_VERSION 2U',
             '#define AGENTNEXUS_SEED_CASE_NAME "nexus_case"',
             '#define AGENTNEXUS_SEED_MEAS_NAME "nexus_meas"',
             '#define AGENTNEXUS_SEED_STATE_NAME "nexus_state"',
-            '"source_revision=base-96613ea\\n"',
+            '"schema=agentos.nexus.measurement.v2\\n"',
+            '"source_revision=2b14fb1f74b9bd093e6de939a16554620835699e\\n"',
             '"source_path=docs/agentos/scenario-script.md\\n"',
             '"source_lines=33-46\\n"',
             '"source_pipeline=prepare>align>analyze>report>archive\\n"',
@@ -122,15 +123,17 @@ class AgentNexusLoopTests(unittest.TestCase):
             '"nexus_derived_workflow=nightly-regression\\n"',
             '"nexus_derived_run_id=RUN-042\\n"',
             '"nexus_derived_incident=align_memory_limit\\n"',
-            '"source_suite=ci/evaluation-suite.json\\n"',
-            '"source_suite_lines=3-21\\n"',
-            '"source_results_lines=16-25\\n"',
+            '"source_manifest=one_shot_metrics/data/20260811/manifest.json\\n"',
+            '"source_table=one_shot_metrics/data/20260811/tables/contest_paired.csv\\n"',
+            '"source_results=docs/contest/performance-results.md\\n"',
+            '"source_results_lines=37-50\\n"',
+            '"benchmark=file_query_core_path_paired\\n"',
             '"records=96\\n"',
-            '"traversal_us=59595.5\\n"',
-            '"indexed_us=13866.5\\n"',
-            '"ratio=4.298\\n"',
-            '"wins=4/4\\n"',
-            '"nexus_derived_checks=4/4\\n"',
+            '"traversal_us=34712.5\\n"',
+            '"indexed_us=13293.5\\n"',
+            '"paired_ratio_median=3.118\\n"',
+            '"wins=16/16\\n"',
+            '"nexus_derived_checks=16/16\\n"',
             '"nexus_derived_checks_basis=wins\\n"',
             '"nexus_derived_claim=published_snapshot\\n"',
             '"nexus_derived_measurement_scope=historical_not_this_boot\\n"',
@@ -138,6 +141,22 @@ class AgentNexusLoopTests(unittest.TestCase):
             '"published_benchmark=false\\n"',
         ):
             require(SEED, needle, "tracked Nexus capsule contract changed")
+        forbid(
+            SEED,
+            '"schema=agentos.nexus.measurement.v1\\n"',
+            "retired Nexus measurement schema returned",
+        )
+        forbid(SEED, '"ratio=', "ambiguous unpaired ratio field returned")
+        require(
+            GUEST,
+            '"published historical 16-boot paired measurement"',
+            "Nexus measurement metadata lost its canonical campaign scope",
+        )
+        forbid(
+            GUEST,
+            "4-boot ABBA measurement",
+            "retired Nexus measurement metadata returned",
+        )
         self.assertGreaterEqual(SEED.count("sizeof(AGENTNEXUS_SEED_"), 6)
 
         row = re.search(
@@ -450,7 +469,7 @@ class AgentNexusLoopTests(unittest.TestCase):
             "records=",
             "traversal_us=",
             "indexed_us=",
-            "ratio=",
+            "paired_ratio_median=",
             "wins=",
             "nexus_derived_checks=",
             "nexus_derived_checks_basis=",
@@ -469,7 +488,7 @@ class AgentNexusLoopTests(unittest.TestCase):
                 "records",
                 "traversal_us",
                 "indexed_us",
-                "ratio",
+                "paired_ratio_median",
                 "wins",
                 "nexus_derived_checks",
                 "nexus_derived_checks_basis",
@@ -547,7 +566,7 @@ class AgentNexusLoopTests(unittest.TestCase):
             '"system_digest"',
             '"research_digest"',
             '"sched_budget"',
-            '"ratio"',
+            '"paired_ratio_median"',
         ):
             require(report_event, key, "report event drops real artifact evidence")
         report_model = function_body(GUEST, "nexus_report_model_summary")

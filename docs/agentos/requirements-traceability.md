@@ -1,193 +1,49 @@
 # 赛题要求追踪
 
-本表把赛题任务映射到当前生产实现、主要验证和诚实边界。源码位置是评审导航，实际功能与性能仍由 Host/QEMU 测试确认。
+本文把六项赛题目标映射到当前实现、源码和运行证据。`完成` 表示已有生产路径和对应 Guest 验证；静态 checker 只证明结构约束，不单独提升任务状态。
 
-## 1. 总表
+## 目标到证据矩阵
 
-| 任务 | 题面硬门槛 | 当前实现 | 主要源码 | 代表 Guest / 命令 | 边界 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Agent 创建、Context 区可用、普通/Agent 进程共存 | 可信映像/role/capability、6 页可信只读区 + 1 页用户 cache 读写区、workflow id+generation、member+closing+gates | `os/agent_core.c`、`os/proc.c`、`os/workflow_lifecycle.c`、`os/vfs_security.c` | `agentfinal_ucore`、`agenttrust_ucore`、`agentscope_ucore` | 单 Hart；workflow/slot 有界；lifecycle 属于当前启动周期 |
-| 2 | 至少 3 个结构化工具；工具发现与错误处理 | 25 项 name/id 目录；V2 exploratory typed RPC；ENFORCE V3 immutable contract；最多 64 项的顺序 compact batch；Task SQ/CQ core | `os/agent_tool_protocol.c`、`os/agent_core.c`、`os/agent_execution_contract.c`、`os/agent_task_channel.c` | `agenttoolabi_ucore`、`agentfinal_ucore`、`agentcontract_ucore` | V2 与 batch 不获得冻结 DAG 保证；合同最多 24 节点/48 attempts；Task provider 同步 null/NONE，无业务 payload backend |
-| 3 | 至少 5 轮连续调用；直接读路径；超长自动淘汰 | 内核可信 Context、只读 mirror、用户 cache、cause/span/branch、rollback、有界 FIFO 历史 | `os/agent_context.c`、`os/agent_provenance.c`、`os/agent_evidence_ring.c` | `agentfinal_ucore` | 用户 cache 可读写但不可信；标签保守传播且不判断文本安全；历史有界 |
-| 4 | 至少 2 类扩展；结构化结果；查询优于遍历的对比 | 显式 boot-scoped metadata、status/stage/kind 索引、summary/digest、inode incarnation、typed live query/resync | `os/agent_metadata_catalog.c`、`os/agent_metadata_query.c`、`os/agent_metadata_objects.c`、`os/agent_live_query_events.c` | `agentfs_ucore`、`agentbench_ucore` | 只覆盖显式登记对象；每次启动由用户态重新登记 |
-| 5 | 至少 2 类机制；heartbeat/事件驱动、无事件休眠、多 Agent 稳定 | 用户态 Agent Loop substrate：有界 event queue、watch/wait、heartbeat、可信 route/有界 LLM correlation、workflow EEVDF、Fence-Sealed Evidence Ring | `os/agent_ipc.c`、`os/agent_core.c`、`os/workflow_scheduler.c`、`os/agent_evidence_ring.c` | `agentloop_ucore`、`agentsched_ucore`、`agent_eevdf_ucore` | 内核不规划或运行模型；LLM pending 为严格递增 corr + 120 秒 tick TTL；EEVDF 总 cap4=bootstrap+最多 3 fresh；异常回退 legacy scheduler |
-| 6 | 整合至少 3 个模块；QEMU 综合程序；至少 1 组性能对比 | deterministic `labdemo_ucore` 串联身份、Context、metadata/index、event/IPC 与授权拒绝；plain/AgentOS 同科研合同；另有独立可选 Guest-owned live/replay model loop | `user/src/labdemo_ucore.c`、`user/src/rp_*`、`baseline_ucore/`、`host_tools/contest_demo.py`；可选 loop 为 `user/src/agentlive_ucore.c`、`host_tools/guest_llm_relay.py`、`ci/agent-live-replay.jsonl` | `make contest-demo`、`make dual-platform-run`；可选 `make agent-live-demo` | 主演示不依赖 LLM；live API 不是默认门槛；MCP/A2A prototype 不作为 Task6 网络互操作证明；数字来自实际运行 |
+| 任务与目标 | 状态 | 当前实现 | 主要源码 | 验证证据 | 量化结果 | 当前边界 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1. 创建 Agent；区分普通进程；提供 Context 区和资源隔离 | 完成 | 受控映像身份、role/capability/scope、workflow `id+generation`、7 页 Context、exec/storage U/P/F 账户、fork/exec/exit gate | [agent_identity.c](../../os/agent_identity.c)、[workflow_lifecycle.c](../../os/workflow_lifecycle.c)、[workflow_credit_domain.c](../../os/workflow_credit_domain.c)、[proc.c](../../os/proc.c) | `agenttrust_ucore`、`agentfinal_ucore`、`agentscope_ucore`；`test-workflow-credit-domain.py`、`test-workflow-syscall-cut.py` | Context 为 6 页可信只读区 + 1 页用户 cache；最多 4 个 active workflow | 单 Hart；身份、receipt 和 generation 属于当前启动周期 |
+| 2. 提供至少 3 个结构化工具、发现接口和错误处理 | 完成 | 25 项 name/id 工具目录；V1 兼容调用、V2 typed-KV、ENFORCE V3、64 项 compact batch、16 槽 Task SQ/CQ | [agent_tool_protocol.c](../../os/agent_tool_protocol.c)、[agent_core.c](../../os/agent_core.c)、[agent_execution_contract.c](../../os/agent_execution_contract.c)、[agent_task_channel.c](../../os/agent_task_channel.c) | `agenttoolabi_ucore`、`agentsecurity_ucore`、`agentcontract_ucore`、`agenttask_ucore` | 一次性活动每条路径保留 32 个 16-op sequence；batch/scalar V3/SQ-CQ 中位耗时为 `561/2051/1620.5 us` | batch 顺序同步；V1/V2 无冻结 DAG；Task provider 只处理 null/NONE |
+| 3. 保存至少 5 轮调用历史，支持直接读取和超长淘汰 | 完成 | 内核 Context archive、只读 mirror、user cache、cause/span/branch、hash 链、rollback 和有界 FIFO | [agent_context.c](../../os/agent_context.c)、[agent_context_path.c](../../os/agent_context_path.c)、[agent_provenance.c](../../os/agent_provenance.c) | `agentfinal_ucore`；`test-context-evidence-atomicity.py`、`test-context-snapshot-reader-atomicity.py` | `agentfinal_ucore` 一次提交 64 个顺序调用，再验证 snapshot、rollback 和淘汰 | rollback 只移动 active path；user cache 不参与授权；历史窗口有界 |
+| 4. 扩展文件属性/摘要/查询能力，并比较索引与遍历 | 完成 | 显式 metadata、`dev+inum+incarnation`、status/stage/kind 索引、scan/index planner、typed live watch、generation resync | [agent_metadata_catalog.c](../../os/agent_metadata_catalog.c)、[agent_metadata_query.c](../../os/agent_metadata_query.c)、[agent_metadata_objects.c](../../os/agent_metadata_objects.c)、[agent_live_query_events.c](../../os/agent_live_query_events.c) | `agentfs_ucore`、`agentbench_ucore`；`test-agent-live-query-fs.py` | `3 x 4` catalog/hit 网格每格 15 对；median speedup `1.164x-2.808x`；780 个 AgentEval pair fingerprint 等价 | 只查询显式登记对象；catalog boot-scoped；一次最多返回 8 hits |
+| 5. 提供至少两类 Agent Loop 机制，支持休眠、唤醒和多 Agent 稳定运行 | 完成 | 16 槽 event queue、watch/wait、heartbeat、可信 IPC、LLM correlation、workflow EEVDF、Evidence Ring 与 fence | [agent_ipc.c](../../os/agent_ipc.c)、[workflow_scheduler.c](../../os/workflow_scheduler.c)、[agent_evidence_ring.c](../../os/agent_evidence_ring.c)、[agent_workflow_fence.c](../../os/agent_workflow_fence.c) | `agentloop_ucore`、`agentsched_ucore`、`agent_eevdf_ucore`；`test-agent-evidence-ring.py`、`test-workflow-fence.py` | 504 条 exact wake probe：425 条 0 tick、79 条 1 tick；并发 1-4 的 Jain 中位数均高于 `0.99998` | 内核不做模型推理；EEVDF 总 cap 为 4；evidence 为当前启动周期的有界窗口 |
+| 6. 整合至少 3 个模块，提供 QEMU 综合程序和性能对比 | 完成 | `labdemo_ucore` 串联身份、Context、metadata/index、event/wait、IPC、capability denial 和 audit；另有 plain/AgentOS 对照、V3 合同和可选 model loop | [labdemo_ucore.c](../../user/src/labdemo_ucore.c)、[contest_demo.py](../../host_tools/contest_demo.py)、[rp_agentos_orch.c](../../user/src/rp_agentos_orch.c)、[agentlive_ucore.c](../../user/src/agentlive_ucore.c) | `make contest-demo`、`make dual-platform-run`、`make agent-live-demo` | 规范活动完成 30 个 fresh boot、33 个 raw 文件、7,498 行和 10 组图；16/16 core 配对 indexed 更快，median speedup `3.118x` | 主演示使用确定性 policy；core 改善不外推到端到端；replay 不计作 live provider 实测 |
 
-## 2. 任务一细化
+## 共同工程合同
 
-| 要求 | 实现/断言 |
-| --- | --- |
-| 区分普通进程与 Agent | `is_agent` 只由受控 create/exec 发布，普通 exec 不取得身份 |
-| Agent 角色和权限 | role 映射 capability；父权限、映像 profile 和 scope 继续衰减 |
-| 专用 Context | 固定 ABI 地址，6 页由内核发布且用户只读，另 1 页 user cache 可由用户态直接读写 |
-| fork/exec/exit | operation/departure gate 包围身份和资源转移；失败撤销 |
-| workflow 生命周期 | immutable `id+generation`、members、closing、controller、fence gate |
-| 资源隔离 | exec/storage account；U/P/F hard admission；fence exact U |
+| 合同 | 当前实现 | 代表检查 |
+| --- | --- | --- |
+| UAPI 稳定 | kernel/user 共享 ABI，布局快照受版本控制 | `make agent-uapi-check` |
+| 模块边界 | identity、Context、metadata、Evidence、fence 与 Task owner 分离 | `make agent-module-check` |
+| Scope 与 generation | 敏感对象和 IPC 重验 lifecycle、control id、scope 与 incarnation | `agentsecurity_ucore`、`agentscope_ucore` |
+| 副作用前授权 | ENFORCE V3 检查 frozen edge、schema、capability、provenance 与 effect mask | `agentcontract_ucore` |
+| 可核验证据 | Context canonical event 进入 Evidence Ring，fence 绑定 challenge、credit 和 metadata cut | `test-agent-evidence-ring.py`、`test-workflow-fence.py` |
+| 可复核运行 | Host runner 保存退出状态、panic/timeout 判定、逐样本原始输出和结构化表 | `contest-demo`、[one_shot_metrics](../../one_shot_metrics/README.md) |
 
-不再把“多阶段 retirement”作为加分能力。当前更小的状态机以最后 member 和 gate quiescence 决定回收。
-
-题面要求的“Agent 可直接读写 Context 区”由第 7 页 user cache 满足；前 6 页保存身份、记录和 evidence 输入，故意设为用户只读，避免用户态伪造可信历史。代表命令：
+## 代表命令
 
 ```bash
+make agent-module-check TOOLPREFIX=riscv-none-elf-
 AGENT_TEST_CASE=agentfinal_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-AGENT_TEST_CASE=agenttrust_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-```
-
-## 3. 任务二细化
-
-| 要求 | 实现/断言 |
-| --- | --- |
-| 结构化调用 | V1 兼容请求和 V2 exploratory typed KV；V2 仅 `uint64`/string，校验后压平到 `arg0/arg1/64-byte payload` |
-| 工具发现 | 内核 tool list，name/id 映射唯一 |
-| 批处理 | `agent_run()` 最多接受 64 个 compact `agent_op`，一次 syscall 内顺序同步执行；不是 typed-KV、parallel 或 non-blocking batch |
-| 权限 | 每个工具检查 role/capability/scope，不信任用户传入 actor 字段 |
-| fence | `agent_run(count=0, AGENT_RUN_F_FENCE)`，controller-only |
-| 执行合同 | 每 lifecycle generation 最多一份、每份最多 24-node frozen DAG；仅 ENFORCE V3 对 tool/schema/dependency/artifact/deadline/retry/cancel/envelope 作确定验证 |
-| 合同调用 | V3 保留 V2 prefix；ENFORCE 下绑定 contract/node/attempt、32-byte fingerprint、source Context 与 evidence ticket |
-| 完成缓存 | 每个 accepted node/attempt 使用一个稳定槽；每份合同合计最多 48 槽；同 attempt 合法重试返回原终态 |
-| 工具资源阶段 | exec/storage envelope 从现有 U 原子锁定；claim publish/refund 与 terminal settle 不超卖 U/P/F |
-| Task core | single-issuer、16-slot SQ/CQ、2 mapped + 2 private page、copy-before-validate、sticky resync；callback 协议可返回 `PENDING` |
-| 当前 provider | 内建 provider 同步完成，只接受 null input/output artifact `NONE`；没有动态 provider registration UAPI |
-| 类型化资源 | slot/type/owned-borrowed/generation handle 与 8 槽私有表；`RESOURCE_IMPORT` 固定 `DENIED`，当前无 payload import/result resource backend |
-| 兼容 | V1/V2 未启用 ENFORCE 时走 legacy/exploratory admission，不受 DAG/attempt/deadline/predecessor 约束；Task Channel 按需建立 |
-
-工具目录当前含 `query_process`、`get_system_status`、`read_context`、`query_file`、`send_message` 等，超过题面“至少 3 个”的门槛。`agenttoolabi_ucore` 同时覆盖不存在的工具、id/name 冲突、缺少参数、错类型和缓冲区边界：
-
-```bash
-AGENT_TEST_CASE=agenttoolabi_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-```
-
-## 4. 任务三细化
-
-| 要求 | 实现/断言 |
-| --- | --- |
-| 记录调用轨迹 | sequence、request、tool/status、payload/result、tick |
-| 因果关系 | cause/span/branch/control id 由内核归因；跨 Agent 继承受 route/scope 限制 |
-| 查询/快照 | syscall 和只读 mirror；publish sequence 防止 torn read |
-| rollback | 只改变 Context active path，不倒转已发生的外部文件/IPC 事实 |
-| workflow evidence | Context 规范事件进入 Evidence Ring，fence 才生成 challenge root |
-| provenance vocabulary | 固定六标签：kernel fact、trusted control、Agent-derived、untrusted file/tool、cross-Agent |
-| 数据流传播 | 文件查询/工具结果/IPC 保守 OR 标签；只有 send/LLM 三个消息工具接受 control+file+untrusted-tool+cross-Agent 的 Agent-Loop mask，且不清洗原污点或放宽 capability/route/schema/effect；Task core 对任何 live resource 保留同一规则，但当前 bridge 不能 import/create resource；rollback/clear 恢复对应 Context 状态 |
-| ENFORCE V3 effect gate | lifecycle + frozen edge/schema + capability + manifest labels/effects 同时通过才允许外部副作用 |
-| ENFORCE V3 critical denial | 计划外/不可信来源调用在副作用前 `DENIED`，记录 source/tool/reason/lifecycle/ticket；不把该保证外推到 V1/V2 |
-
-`agentfinal_ucore` 在一次 compact batch 中提交 64 个顺序调用，并继续验证 snapshot、rollback、分支和窗口淘汰，覆盖题面“5 轮以上”要求。可信 mirror 可直接读取；user cache 可直接读写，但不参与授权判断：
-
-```bash
-AGENT_TEST_CASE=agentfinal_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-```
-
-## 5. 任务四细化
-
-| 要求 | 当前实现与断言 |
-| --- | --- |
-| 文件属性 | 显式 `agent_file_meta_set()`，绑定真实 incarnation |
-| 属性查询 | scan/index 计划、候选/扫描工作量、最多 8 hits |
-| 实时变化 | typed query 的 `ENTER/UPDATE/LEAVE` 事件进入 Agent Queue |
-| 有界丢失处理 | generation `RESYNC_REQUIRED` + snapshot/query + ACK |
-| 安全隔离 | scope/lifecycle/control id/incarnation 全部重验 |
-
-任务四至少覆盖题面四个方向中的文件属性、内容摘要、选择性索引和结构化查询/缓存边界。`agentbench_ucore` 输出同一数据集的 scan/index 候选数、检查记录数和 query tick；这些字段必须由本次 Guest 运行读取，不在文档中预填：
-
-```bash
 AGENT_TEST_CASE=agentfs_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-AGENT_TEST_CASE=agentbench_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-```
-
-## 6. 任务五细化
-
-| 要求 | 当前实现与断言 |
-| --- | --- |
-| watch/wait | legacy watch + typed live watch，thread-generation wait |
-| event queue | 总容量、kernel reserve、IPC/source limit，有界失败 |
-| heartbeat | timer 事件，set/stop，不在内核运行 Agent 业务 |
-| Agent IPC | 同 active workflow 的定向 route 和 capability |
-| LLM correlation RPC | `LLM_REQUEST/LLM_RESPONSE` 绑定完整 requester/relay 身份；corr 严格递增且成功投递才推进；120 秒 tick TTL；容量 `NPROC` 的 history 在保留期区分 `STALE/TIMEOUT`，覆盖后为 unmatched `DENIED`；不含 HTTPS/模型语义 |
-| 感知调度 | workflow EEVDF 以 lag eligibility + latency/event virtual deadline 选择，按 workflow service cycles 记账 |
-| 线程放大防护 | 同 workflow 多线程聚合为一个公平实体；睡眠 lag decay；单实体 fast path；测量以 1 个 fresh 4-thread workflow 对 2 个 fresh single-thread workflow 加 bootstrap peer |
-| 调度回退/容量 | 总计最多 4 个 active workflow：1 个 `BOOT_SEALED` bootstrap participant 加最多 3 个 fresh workflow；异常回退旧 RR/Agent heuristic 并计数 |
-| 1/4/16 评价 | 1 为单实体 fast path；4 为 bootstrap+3 fresh 的满容量 fairness；16 为四波复用同一 bootstrap 加 12 个 fresh lifecycle 的逻辑样本，不是 16-way 或每波 4 fresh；唤醒直方图只含 fresh-agent 样本 |
-| Task completion | core 可保留 `PENDING`，target exactly-one terminal CQE，Context sequence + Evidence ticket 可关联；当前 provider 同步，cancel 不另发 CQE |
-| hard deadline | timer 只标记到期，在首个 schedulable safe point 终止；不承诺 wall-clock 上界 |
-| 观测 | ordinary Context 单次 canonical ring；critical 兼容 ledger 投影 |
-| 可验证 cut | challenge-bound evidence root + exact credit digest + volatile metadata generation |
-
-题面至少要求两类机制；当前 heartbeat、typed/legacy watch、event wait、IPC route、lifecycle 与 workflow 调度均有 Guest 路径。它们是用户态 policy/model loop 的 substrate，不表示内核自身理解目标或选择工具。无事件休眠由 `agentloop_ucore` 的 wait/wakeup 路径验证，多 Agent 进展由 scheduler 场景验证：
-
-```bash
 AGENT_TEST_CASE=agentloop_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-AGENT_TEST_CASE=agentsched_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-AGENT_TEST_CASE=agent_eevdf_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
-```
-
-## 7. 任务六细化
-
-| 题面要求 | 当前场景与验证 |
-| --- | --- |
-| 至少整合 3 个模块 | deterministic `labdemo_ucore` 串联可信身份、Context、metadata/index、event wait、IPC route、capability 拒绝和审计视图 |
-| 可运行综合程序 | `make contest-demo` 自动构建并运行 QEMU Guest |
-| 至少 1 组对比 | 同一 Guest 内 Compat/Native 等量 AB/BA 对比；`make dual-platform-run` 另做 plain/AgentOS 端到端比较 |
-| 结果可复核 | `results/contest-demo/` 保存逐样本串口日志、`summary.json`、`measurements.csv` 与 `report.md` |
-
-```bash
+AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
 make contest-demo TOOLPREFIX=riscv-none-elf-
 make dual-platform-run TOOLPREFIX=riscv-none-elf-
 ```
 
-未运行命令时不声称具体数值。产生对外结果时必须同时记录工具链、QEMU、Host、样本数、失败样本、单位和原始日志。
+完整运行顺序见 [verification.md](verification.md)。2026-08-11 数据活动的 [manifest](../../one_shot_metrics/data/20260811/manifest.json) 记录命令、环境和 raw SHA-256；[validation](../../one_shot_metrics/data/20260811/validation.json) 为 `valid=true`、`ready=true`，包含 0 个 error 和 1 个已披露 serial-fragment warning。
 
-`labdemo_ucore` 的科研恢复选择来自确定性 Guest policy，不调用 LLM，适合作为竞赛主演示和 paired measurement。可选 `agentlive` 路径另行展示模型主导 loop：Guest 保存 history/tool catalog/round，校验单个 `tool_use` 并以 typed V2 执行，再把真实 Context/result 回灌；Host relay 只处理串口、TLS/API key 与 provider JSON。offline replay 必须走相同 wire，不能称为云模型实测。MCP/A2A object prototype 是独立协议研究，不计入上述 Task6 集成证明。
+## 结果解释
 
-## 8. 创新增量与外部思想
-
-| 项目机制 | 公开概念来源 | 本项目特定增量 |
-| --- | --- | --- |
-| Workflow Credit Domain | Linux cpuacct/percpu_counter/rstat 的批量本地计数 | workflow exec/storage 双账户、U/P/F hard admission、context switch trim、fence exact U/digest |
-| Fence-Sealed Evidence Ring | Linux BPF ring buffer 的 ordered reserve/commit/discard | workflow generation、ordinary/critical 分区、Agent 因果事件、gap、challenge fence、compat projection |
-| Agent Live-Query FS | Haiku BFS 属性、选择性索引和 live query | explicit volatile Agent metadata、Context event、scope generation、typed predicate、resync ACK、fence drain |
-| Execution Contract/Phase Lease | AgentCgroup tool-call 峰值测量；Murakkab 声明式 workflow/SLO 分离 | ENFORCE V3 的 24-node immutable kernel contract、deterministic effect gate、existing-U phase lock、nonce claim、terminal settle |
-| Workflow EEVDF | Linux EEVDF lag/virtual deadline/sleep decay | workflow 而非线程的公平实体、Agent latency/deadline 输入、bootstrap+最多 3 fresh 的总 cap4、安全 fallback 和 V3 metrics |
-| Context Provenance | CaMeL control/data separation；IPIGuard planned TDG | 六个固定来源标签；ENFORCE V3 manifest/effect/full-generation gate 与 critical pre-effect denial evidence |
-| Typed Task Channel | io_uring SQ/CQ；WIT/WASI 0.3 ownership/future | 16-slot/4-page single issuer、copy-before-validate、sticky resync、one terminal CQE、8-slot generation handle core；当前同步 null/NONE provider，无业务 payload |
-| Guest-owned model loop | Anthropic tool use；Claude Code agentic loop | Guest-owned history/catalog/execution/result feedback；kernel correlation RPC；Host-only TLS/key/provider translation；same-wire offline replay |
-| MCP/A2A object prototype | MCP 2026-07-28；A2A v1 | tools/task/message 对象与 Task 状态机映射；当前仅 deterministic in-memory transport，无 server/stream/interop/kernel adapter |
-
-以上为 clean-room、概念级参考。没有复制/vendoring Linux、Haiku、相关论文原型或协议 SDK 的源码、数据、二进制或磁盘格式；Task Channel 不实现完整 io_uring/Wasm ABI，MCP/A2A object prototype 也不把远程协议栈放入内核，详见 [task6-execution-contract.md](task6-execution-contract.md) 与 [../../NOTICE](../../NOTICE)。
-
-## 9. 验证矩阵
-
-| 合同 | Host/static | cross build | QEMU/paired |
-| --- | --- | --- | --- |
-| UAPI layout | `check-agent-uapi-layout.py` | kernel/user 同头编译 | syscall 行为 |
-| Credit U/P/F | `test-workflow-credit-domain.py` | module/stack check | quota/teardown Guest |
-| Evidence Ring | `test-agent-evidence-ring.py` | kernel link/stack | Context/audit/fence Guest |
-| Live Query | checker + `test-agent-live-query-fs.py` | metadata/IPC modules | query/watch/event Guest |
-| Workflow fence | checker + mutation + syscall-cut | ABI/link | controller/retry/receipt Guest |
-| Execution Contract/Phase | `test-agent-execution-contract.py` | V3 ABI/link/stack | ENFORCE normal DAG、deadline/retry/cancel 与 deterministic untrusted-provenance denial Guest |
-| Workflow EEVDF | `test_workflow_scheduler_model.py` | scheduler module/link | 抽象 model 验证算法；Guest 1-way fast path、bootstrap+3 fresh 的 4-way、公平/延迟、4 波共 16 个逻辑样本；直方图仅 fresh-agent |
-| Task Channel | `test-agent-task-channel.py` | SQ/CQ ABI/map/reclaim | batch/scalar V3/SQ-CQ 以不同线格式各执行 16 次空 `ECHO` 并验证同一语义 fingerprint；scalar 固定三个 typed params；调用点 syscall 1/16/2 与 ABI/复制记账 3584/12288/4096、Context pre-effect service-start tick 间隔、`agent_info` 边界 elapsed、retained-terminal cancel；full/resync 功能恢复 |
-| Host model relay | `test_guest_llm_relay.py` | 用户态 syntax/import | frame/session/sequence/hash、provider translation、single-tool/final 与 fail-closed；不证明 Guest loop 或 live provider 已运行 |
-| Guest-owned model loop | `test-agent-live-loop.py` + Host relay tests | `agentlive_ucore` RV64 build/stack | `make agent-live-demo` 默认 6 轮同串口 replay；Guest 输出 Context roundtrip，Make 要求 discovery、replay 工具/拒绝/relay marker、`passed` 与唯一顶层 `parent passed`；replay 不证明 live provider |
-| MCP/A2A object prototype | transport + gateway unit tests | 用户态 syntax/import | protocol-object fixture/in-memory Task state replay；不覆盖 server、streaming、互操作或内核 adapter |
-| 综合任务 | Host contract selftests | 双目标 build | deterministic seeded/dual paired run；不依赖 LLM |
-
-## 10. 测试与主张边界
-
-- checker 通过不等于动态 Guest 功能已运行；
-- Guest `passed` 行必须同时满足 runner 的退出状态、panic 和超时检查；
-- fence receipt 只覆盖当前启动周期内存证据；
-- paired end-to-end 差异不自动证明某个内核机制贡献；
-- 16-workflow 数据是四波复用同一 bootstrap 加 12 个 fresh lifecycle 的 16 个逻辑样本，不等于 16 个并发或独立 EEVDF lifecycle，也不得写成每波 4 个 fresh；
-- one terminal CQE 不等于远程工具副作用的分布式 exactly-once；
-- Task core 能表达 `PENDING` 不等于当前 provider 异步；当前仅同步 null-input/output-`NONE` provider，且无动态 registration UAPI；
-- typed handle/8 槽表不等于 payload backend；当前 `RESOURCE_IMPORT` fail closed，也不发布 result resource；
-- hard deadline 在首个 schedulable safe point 终止，不提供 wall-clock 延迟上界；
-- V1/V2 legacy/exploratory RPC 仍受 capability/scope/schema 约束，但不获得 ENFORCE V3 的 frozen-DAG、attempt、deadline、predecessor 或 provenance envelope；
-- Task Guest 的三条路径各固定 16 次空 `ECHO`，但线格式不同：scalar V3 显式携带 `payload=""`、`arg0=0`、`arg1=0` 三个 typed params；调用点 syscall 为 1/16/2，描述符 ABI/已知复制记账为 3584/12288/4096 字节，另列 scalar dispatch header 与 SQ/CQ control 字节；这些都不是内核路径 counter、实测总复制量或全部内存流量；
-- p50/p99 来自工具效果前写入 Context record 的 service-start tick 间隔，sequence elapsed 是两个 `agent_info` 边界 tick；它们不表示 CPU service、raw cycles 或 wall clock，公共 CQE `completion_tick` 保持执行后完成语义；
-- cancel latency 只覆盖 retained-terminal 幂等 cancel，不代表当前同步 provider 支持真正 running/pending cancel；CQ-full/sticky-resync 只作功能恢复验证；
-- deterministic provenance fixture 只证明 ENFORCE V3 结构边界生效，不证明模型没有受到 prompt injection；
-- `labdemo_ucore` 是 deterministic policy workflow；live replay 虽走相同串口 wire，也不等于真实云模型结果；
-- object-prototype/transport unit test 只覆盖 deterministic 用户态 in-memory 对象映射，不等于已有 server、streaming、内核 binary adapter、JSON/HTTP/OAuth/JWS 或完整远程互操作；
-- 功能主张应对应实际 Guest 场景，性能主张应对应明确负载、样本、单位和原始测量，不以材料封装提升测试结论等级。
+- checker、编译、Guest 和 paired measurement 属于不同证据层级；表中功能状态至少有 Guest 路径支撑。
+- paired speedup 只解释相同 workload/result fingerprint 和相同计时窗口。
+- traversal/indexed 的 core median speedup 为 `3.118x`；端到端中位差值为 indexed 慢 `13.452 ms`。
+- Task 三条路径执行等价空 ECHO，但 wire、描述符和复制范围不同。
+- 16 档 EEVDF 数据由四波组成，每波为 bootstrap 加 3 个 fresh workflow。
+- Task 的一个 terminal CQE 只约束内核终态发布；hard deadline 在 schedulable safe point 结算。
+- MCP/A2A prototype、offline model replay 和 live provider 运行分别记录，互不代替。

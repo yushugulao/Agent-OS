@@ -1,223 +1,158 @@
-# AgentOS 内核验证
+# AgentOS 验证说明
 
-本文给出当前架构的验证顺序和断言边界。功能与性能结果来自实际 Host/QEMU 测试。
+AgentOS 按“源码合同、交叉构建、QEMU 行为、产品闭环、性能数据”五层验证。每一层只回答对应问题：静态 checker 不能替代 Guest 运行，offline replay 不能替代 live provider，单项 benchmark 也不能推出整个系统的端到端加速。
 
-## 1. 验证层次
+## 验证层次
 
-| 层次 | 回答的问题 | 不能证明 |
+| 层次 | 入口 | 主要证据 |
 | --- | --- | --- |
-| focused checker | 关键调用顺序、生产对象边界、UAPI 布局是否漂移 | 真实 Guest 调度/设备行为 |
-| Host 模型、mutation 与协议单测 | U/P/F、ring、resync、fence、relay frame、MCP/A2A 对象映射是否拒绝变异 | RISC-V 二进制或远程互操作已运行 |
-| cross build/link | 当前生产对象是否能编译链接，调用图栈是否安全 | syscall 运行语义 |
-| QEMU Guest 专项 | fork/exec/IPC/VFS/event/fence 等动态行为 | 超出该场景的普遍结论 |
-| paired/performance run | 双目标完整负载、工作量和实际测量 | 单个机制的因果贡献 |
+| 源码合同 | `agent-uapi-check`、`agent-module-check` | ABI size/offset、syscall、模块边界、静态不变量 |
+| 交叉构建 | `build`、`kernel-stack-check` | RISC-V 编译链接、真实调用图栈上界 |
+| QEMU Guest | `agentos-test` 与 `AGENT_TEST_CASE` | fork/exec、VFS、IPC、Context、错误码、teardown |
+| 产品闭环 | `contest-demo`、console/Nexus replay | 真实 Guest workflow、Host 采集、结构化 validator |
+| 性能活动 | `one_shot_metrics/data/20260811` | fresh boot、逐样本表、manifest、validation 和图表 |
 
-## 2. 快速静态验证
+## 依赖与构建
 
 ```bash
-make agent-uapi-check TOOLPREFIX=riscv-none-elf-
-python -B scripts/check-agent-live-query-fs.py
-python -B scripts/check-workflow-fence.py
-bash scripts/check-agent-module-boundaries.sh
+make doctor
+make build TOOLPREFIX=riscv64-linux-gnu-
+make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-预期关注：
+`make doctor` 只检查环境。`make build` 证明当前目标可以编译链接。`kernel-stack-check` 分析真实调用图上的内核栈上界，不是运行时内存或延迟测量。
 
-- fence request 56 字节、receipt 320 字节及字段 offset；
-- `agent_run(count=0, FENCE)` 的唯一 syscall cut；
-- lifecycle fence gate 在 metadata、credit、evidence seal 外层；
-- live query 只接受显式 volatile metadata，typed watch 不回退字符串路径；
-- kernel/user UAPI 布局一致，生产模块依赖没有越界。
+Windows/WSL 环境见 [Windows 快速开始](../windows-quickstart.md)。使用 xPack 等裸机工具链时，将前缀改为 `riscv-none-elf-`。
 
-## 3. 核心模型和 mutation tests
+## 源码合同
 
 ```bash
-python -B scripts/test-workflow-credit-domain.py
-python -B scripts/test-agent-evidence-ring.py
-python -B scripts/test-agent-live-query-fs.py
-python -B scripts/test-workflow-fence.py
-python -B scripts/test-workflow-syscall-cut.py
-python -B host_tools/test_guest_llm_relay.py
-```
-
-### 3.1 Credit Domain
-
-断言包括：
-
-- `held=U+P+F`，全局/账户 hard limit 在 refill 前验证；
-- reserve/commit/cancel/release 只在 U/P/F 间移动；
-- vector 失败无部分提交；
-- 压力只能 trim F；
-- context switch 离开账户执行 trim；
-- fence 单锁 trim exec/storage、要求 P 为 0，并导出 exact U。
-
-### 3.2 Evidence Ring
-
-断言包括：
-
-- 4 页、48 ordinary、16 critical 和 256 字节槽布局；
-- reserve/fill/commit/discard 与 ticket 匹配；
-- 早期 BUSY 隐藏后续发布；
-- ordinary success 不写第二份 legacy Context；
-- deny/authority 进入 critical 并保留兼容投影；
-- gap、rollover、previous root、challenge、credit digest 进入 seal；
-- retained internal retirement 不能冒充 workflow fence；
-- receipt 只在显式 fence 后发布 `FENCE_SEALED`。
-
-### 3.3 Live Query
-
-断言包括：
-
-- metadata 只通过普通 set 或显式 delete 进入当前启动周期 catalog；
-- typed query 安装、生命周期绑定和 proc reuse 清理；
-- before/after 导出 `ENTER/UPDATE/LEAVE`；
-- unlink/content pending 带完整 incarnation；
-- 队列失败生成单调 resync generation；
-- ACK 不清除更新缺口；
-- fence drain 拒绝未确认 resync。
-
-### 3.4 Workflow fence
-
-断言包括：
-
-- controller/capability/request 验证；
-- quiescence 顺序为 metadata/live-query、fs cut、credit exact、evidence seal；
-- 失败不推进 fence sequence/root；
-- receipt flags 明确 partial/exact/sealed/volatile；
-- request id/challenge 幂等、conflict、stale 和 copyout retry cache。
-
-## 4. 构建、模块和栈安全
-
-```bash
-make build TOOLPREFIX=riscv-none-elf-
-make agent-module-check TOOLPREFIX=riscv-none-elf-
-make kernel-stack-check TOOLPREFIX=riscv-none-elf-
-```
-
-`agent-module-check` 验证生产对象清单和模块依赖。`kernel-stack-check` 检查真实编译调用图上的线程栈和启动栈安全边界。源码行数、镜像大小基线和工具可执行文件身份不作为产品功能结论。
-
-## 5. QEMU Guest 验证
-
-开发阶段的统一入口：
-
-```bash
-make agentos-test TOOLPREFIX=riscv-none-elf-
-```
-
-Guest 专项应覆盖：
-
-- Agent create/role/capability 与可信 exec；
-- fork/exec/exit、member/closing 和 scope reuse；
-- V2 exploratory typed call、最多 64 项的顺序 compact batch、ENFORCE V3 contract-bound call，以及 Context push/query/rollback；
-- 显式 metadata、index/scan 一致性、inode incarnation；
-- typed live watch、event wait、route、LLM request/response correlation、timeout/cancel；
-- resource hard quota、reservation rollback 和 teardown；
-- workflow fence 的 receipt、retry 和拒绝路径。
-
-任务二的三条调用线必须分别解释：V2 只接受 `uint64`/string typed 参数并压平到 `arg0/arg1/64-byte payload`；`agent_run()` 在一次 syscall 内顺序同步执行 compact `agent_op`，不是 typed-KV/non-blocking batch；只有启用 `AGENT_EXECUTION_CONTRACT_F_ENFORCE` 的 V3 才验证 frozen node/schema/predecessor/attempt/deadline/provenance envelope。Guest 报告的 `1/16/2 syscalls` 是入口调用点计数，不是内核路径 counter。
-
-模型 loop 验证分三层，不能互相替代：
-
-- kernel RPC：同 requester correlation 严格递增且只有成功投递才推进；pending 使用 120 秒 tick TTL；错误 lifecycle/relay/未请求 response 为 `DENIED`；容量为 `NPROC` 的有界 terminal history 在记录保留期把已消费 replay 标为 `STALE`、过期 response 标为 `TIMEOUT`，覆盖后旧 response 按 unmatched 返回 `DENIED`；成功 response 只消费一次；registry limit 与 event queue full 可区分；teardown 清理状态；
-- Guest loop：Guest 自己保存 history/catalog/round、只接受 allowlist 中单个 `tool_use` 或 `final`、执行 typed V2，并把实际 Context/tool result 回灌；
-- Host relay：API key/TLS 只在 Host，relay 不读 Guest 业务文件、不选或执行工具、不伪造 result；live 与 offline replay 都必须经过相同 QEMU 串口 frame/session/sequence/hash/round 边界。
-
-offline replay 可验证协议和 loop 可复现性，但不能报告为 live 云模型实测。当前不把并行多工具、token streaming、自动重试/重定向、任意长上下文或 remote exactly-once 列入通过条件。
-
-完整入口已经落到 Guest、Host 与 Make：
-
-```bash
-make agent-live-demo-check
-make agent-live-demo
-```
-
-第一条只运行 `scripts/test-agent-live-loop.py` 与 Host relay 单测。第二条构建 `user/src/agentlive_ucore.c`，默认显式选择 replay provider，使用 `ci/agent-live-replay.jsonl` 让 6 轮响应经过 QEMU 串口。所有 provider 都必须采到 `discovery=1 rich_overlay=3`、`passed` 与唯一顶层 `parent passed`；默认 replay 还精确要求 `query_file=1 echo=1 send_message=1 approved=1`、`reject_unknown=1 reject_bad_args=1 reject_replay=0`、`transcript_turns=5 retained=5 dropped=0` 和 relay 的 `unknown=1 bad_args=1 replay=0 send_sink=1`。Guest 另输出 Context roundtrip/wait/heartbeat/rounds；其内部断言通过后才打印 `passed`。Windows xPack 环境可追加 `TOOLPREFIX=riscv-none-elf-`。
-
-Host relay 的参数合同由 `python -B host_tools/guest_llm_relay.py --help` 给出：`--provider openai|anthropic|deepseek|replay` 必须显式选择，`--goal` 与 `--goal-file` 二选一，`--approve-tool NAME` 可重复。replay 还要求 `--replay-file`；真实 provider 才读取 Host key。`--api-key-file` 只传路径，relay 在内部有界读取单行 UTF-8 key，且与 `--api-key-env` 互斥；两者都未给出时使用 provider 默认环境变量。
-
-当前工作区的 DeepSeek live 验证入口是：
-
-```bash
-AGENT_LIVE_PROVIDER=deepseek make agent-live-demo
-```
-
-该入口默认选择官方 `https://api.deepseek.com/chat/completions` 与 `deepseek-v4-flash`。默认目标要求模型按 `query_file("agentlive.note") -> echo(size, inode) -> final` 形成真实数据依赖；Host 还要求 `query_file=1 echo=1 send_message=0`、零拒绝、`transcript_turns=2 retained=2 dropped=0` 和 relay 零错误 marker，避免模型跳过任务也被误判为成功。显式覆盖 `AGENT_LIVE_GOAL` 时不套用这组场景专属 marker，只保留通用完成门。
-
-Make 依次探测仓库外的 `../deepseek_api.txt` 与 `../计算机操作系统能力竞赛/deepseek_api.txt`，兼容竞赛目录内的普通 checkout 和同盘 release checkout；都找不到才让 relay 读取 `DEEPSEEK_API_KEY`。其他位置可显式设置 `AGENT_LIVE_API_KEY_FILE=/path/to/key.txt`。若改用环境变量，应令 `AGENT_LIVE_API_KEY_FILE=`，并可用 `AGENT_LIVE_API_KEY_ENV=ENV_NAME` 覆写默认名称。DeepSeek 请求关闭 thinking：当前 Guest whole-turn history 保存的是结构化 `tool_use`/`tool_result`，没有保存并回送供应商 `reasoning_content`，因此不能冒充符合 thinking-mode 的多轮协议。默认 replay 完全不访问网络；只有上述 live 命令实际完成并出现最终 Guest markers 后，才可报告为 DeepSeek 实测。
-
-### 5.1 长驻交互控制台
-
-交互控制台把一次性 `HELLO -> model/tool rounds -> GOODBYE` 扩展为同一 Guest/QEMU 内的多个用户 turn。验证分为三层：
-
-```bash
+make agent-uapi-check
+make agent-module-check
+make contest-demo-check
 make agentos-console-check
-make agentos-console-replay TOOLPREFIX=riscv-none-elf-
-make agentos-console-deepseek TOOLPREFIX=riscv-none-elf-
+make agentos-nexus-check
 ```
 
-- `agentos-console-check` 运行 Host frame/local socket/controller/observer 单测和 Guest 交互 loop 静态合同，不启动 QEMU，也不证明 provider 可用。
-- `agentos-console-replay` 在一次 QEMU boot 内并发 attach observer，脚本化提交三个用户 turn 和七个模型请求，并要求每轮请求与 fixture 中的规范化 SHA-256 精确匹配。结构化 validator 检查成功的 `query_file`/`echo`/单次 `send_message`、deny 未执行副作用，以及 observer 收到 `waiting_llm`、fresh `context_timeline/kernel_timeline`、三个 `turn_complete` 和 `session_closed`。它是 offline 可复现验收，不是云模型结果。
-- `agentos-console-deepseek` 是显式人工入口，不进入默认 CI。只有实际 API 往返、模型自主选择工具和 Guest 最终回答均发生后，才能报告为 DeepSeek live 演示。
+这些目标验证：
 
-长驻路径还必须检查以下不变量：
+- 公开 ABI 的 version、size、offset、syscall 号和兼容前缀；
+- production module 没有测试替身或越层实现；
+- Live Query 只接受显式 metadata，typed watch 有 generation resync；
+- workflow fence 的 quiescence、credit exact 和 evidence seal 顺序；
+- contest、console 与 Nexus 的 Host 协议、参数和 validator；
+- Guest loop 源码中的有界 frame、round、approval 和状态机合同。
 
-- Guest 拥有 transcript、tool catalog、下一步选择校验、V2 typed 执行和 result 回灌；Host CLI 只呈现事件并收集用户/控制/审批输入，daemon 只负责串口、TLS/provider 翻译和 owner-only 本地路由。
-- `session_id`、递增 `turn_id`、`request_id` 和 `corr_id` 能将 CLI、串口、Context 与 observer 事件对应；final 只完成当前 turn，不退出 Guest。
-- `send_message` 的批准或拒绝绑定当前 session/turn/request/correlation、工具名、规范化参数 digest、新鲜 nonce 与有效期。Host 人工审批等待上限为 25 秒，超时或 controller 断开即 deny。当前这是 Guest 用户态 gate，不是内核 capability 或 V3 approval token。
-- `Ctrl-C` 取消当前 turn 而不杀死 session；`/quit` 才正常关闭。`/tools`、`/context`、`/status` 和 `/reset` 的响应来自 Guest control path，不能由 Host 用缓存业务数据冒充；其中 `/context` 报告 count、最旧/最新 sequence、dropped、provenance 及最新记录的 tool/status/result 摘要。
-- observer 读取的是同一 Guest 进程线程调用 timeline、Context 和 agent-info 得到的 high-signal live snapshots，不是全量实时 trace。它不是独立安全边界，并会增加读取、调度和串口开销，因此不用于性能数字。
+本层不启动 QEMU，也不说明 provider、VFS 或调度在真实 Guest 中已经运行。
 
-交互路径使用 V2 exploratory RPC 支持 result-dependent 选择；ENFORCE V3 仍是 frozen contract 的高保证执行模式。MCP/A2A 仍是 in-memory object prototype，控制台通过串口 model wire 运行，不能把此验收写成 MCP 互操作。完整操作见[交互控制台说明](interactive-console.md)。
+## QEMU Guest 回归
 
-### 5.2 Nexus 多 Agent 产品合同
-
-Nexus 复用 console 控制面但使用独立 `guest_profile=nexus`，不会改变普通 console 的 fixture、Guest 或验收。验证同样分层：
+完整回归入口为：
 
 ```bash
-make agentos-nexus-check
-make agentos-nexus-replay TOOLPREFIX=riscv-none-elf-
-make agentos-nexus-deepseek TOOLPREFIX=riscv-none-elf-
+make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-- `agentos-nexus-check` 锁定 Host profile/TASK_EVENT 投影、Guest typed TASK 状态机、V2 role 过滤、artifact 全量 SHA-256/lifecycle 校验、审批拒绝和 observer source 边界；它不启动 QEMU。
-- `agentos-nexus-replay` 在一个真实 QEMU boot 中并发 attach controller 与 observer。fixture 的每个响应都必须绑定实际 `MODEL_REQUEST` SHA-256，controller 还必须逐项出现同 envelope、内容完全一致的 `model_response`；strict validator 进一步锁定 ready-before-data、每 turn 稳定且不复用的 active request ID、single-inflight 的 `request_i < response_i < 同 correlation effects < request_(i+1)`，且 final response 必须早于对应 `turn_complete`。delegated TASK batch 固定到创建它的 response 并先于 tool result，tool status/result/handle/task id 还必须与 terminal/artifact 一致。validator 不依赖固定响应条数，而是验收三个用户 turn、四个独立业务 identity、System/Research/Analyst 工件依赖、Research 与报告 handle 的成功 readback、报告事件对两份来源完整 digest、实际 System process/context/file 数值与本 boot `sched_budget` 的绑定，以及最终答案中的稳定 System/budget 投影、历史 measurement canonical 数值与两份来源 handle；完整 System 工件和 observer 仍保留动态 dispatch、used 与 vruntime。tool/TASK correlation 和 canonical arguments、一次失败后的不同 task replan、`tool_id=1004` 的精确发布审批、拒绝零副作用、跨类型原始时序及 close 后零输出也必须通过。brokered `artifact_published` 只能作为 successful worker terminal 后的 completed-state 工件事实。
-- observer 的 `kernel_audit` 只接受 Guest 转发、Host schema 允许的 fresh MESSAGE enqueue/consume 内核记录，以全局 audit sequence、correlation 和真实 control identity 交叉核对 TASK_EVENT；`kernel_snapshot` 是 worker self `agent_info` 的 Context、wait 和 scheduler 前后差，并必须携带与 audit identity 一致的 positive `actor_control_id` 与真实 nonzero `capability_mask`。controller 与 observer 的 TASK 安全 metadata 子序列必须保序 1:1 一致，observer `session_closed` 后不得再有 telemetry。audit sequence 不等于 Context sequence，Host 自产事件也不得使用 kernel source，observer snapshot 也不能反向充当 Analyst 的业务输入。validator 还要求 `/status.result.capability_mask`、`/context.result.provenance`、payload-byte `resource_used` 和 scheduler budget/used 均有真实非零证据；Research/Analyst artifact 则按所需 provenance bit subset/superset 验证，而不只检查非零。MESSAGE audit 的内核 `flags=0`，投影必须诚实保持 `provenance=0`，不能由 Guest 合成。
-- `agentos-nexus-deepseek` 是人工 live 入口。只有该次 provider 往返和 Guest 闭环实际完成，才能报告 live；它不是默认 CI 或可复现实验。
+修改单一模块时优先运行定向场景：
 
-四个业务 Agent 在 workflow/session boot 中创建并长驻；动态的是 Coordinator 是否委派、向谁委派和如何根据结果重规划，不是每个目标重建四个角色。artifact SHA-256 和发布审批仍是 Guest 用户态机制，不是内核签名或 V3 grant。`nexus_meas` 是来源固定的历史 published snapshot，`nexus_state` 才是本次 boot observation。完整产品与测量边界见 [AgentOS Nexus](nexus.md)。
-
-## 6. 双目标与性能
-
-plain uCore 与 AgentOS-uCore 运行同一 deterministic 用户态科研工作流合同。`labdemo_ucore` 使用固定 policy，不依赖 LLM；这样 paired run 才能比较等量工作。端到端 paired run 用于整体比较；Credit Domain、Evidence Ring 或 Live Query 的单项性能结论还需要同内核消融、工作量计数或专项 benchmark，不能从双目标总差异直接归因。可选 `agentlive` 只验证模型 loop，不替换这一性能基线。
-
-引用测量结果时应：
-
-- 说明 target、seed、工具链、QEMU 和 Host 环境；
-- 保留本次 Plain 与 AgentOS 的 Guest 输出和比较摘要；
-- 报告样本数、单位、失败样本和聚合方法；
-- 在 Host 侧复核状态一致性和测量计算；
-- 缺失数据时不推导或补造数字。
-
-直接命令见 [../verification.md](../verification.md)。调试时可以自由重跑；对外引用数字时清楚说明选用的是哪次实际运行即可。
-
-## 7. 能力边界检查
-
-验证还要确认文档中的边界与实际行为一致：
-
-| 边界 | 可执行检查 |
+| 场景 | 验证重点 |
 | --- | --- |
-| metadata 仅显式登记 | 普通文件 create 不增加 catalog；set/delete 绑定 scope 与 incarnation |
-| catalog 属于当前启动周期 | receipt 设置 `METADATA_VOLATILE`，新启动由用户态重新登记 |
-| Evidence 为有界内存事件 | ordinary success 只写一次 canonical ring event；critical 分区独立 |
-| fence root 覆盖范围有限 | receipt 同时设置 `PARTIAL_COVERAGE` 与 `FENCE_SEALED` |
-| lifecycle 状态机精简 | members/closing/operation/departure/fence gates 决定 cut 与回收 |
-| V2 与 V3 保证不同 | V2 可探索下一工具但不绑定 DAG；ENFORCE V3 拒绝未冻结 node/edge/schema/provenance |
-| Task Channel 无业务 backend | provider 同步，只接受 null input/output `NONE`；`RESOURCE_IMPORT` fail closed，模型 wire 不走 SQ/CQ |
-| Kernel RPC 不是模型循环 | 只验证 lifecycle/requester/relay/correlation 和一次消费；Guest 拥有 history/decision/execution |
-| Host relay 权限最小化 | key/TLS/provider JSON 只在 Host；业务文件、工具选择/执行和 result 只在 Guest |
-| replay 与 live 同 wire | 两者都经过 session/sequence/hash/round 边界；replay 结果明确标为 offline |
-| MCP/A2A 仅对象 prototype | 单测只覆盖 deterministic in-memory 对象/Task 状态；不声称 server、streaming、互操作或内核 adapter |
+| `agenttrust_ucore` | 可信映像、身份继承、exec policy 和权限拒绝 |
+| `agentfinal_ucore` | Agent 创建、Context、branch/rollback、canonical evidence 与普通进程共存 |
+| `agenttoolabi_ucore` | 25 项目录、V1/V2 参数、状态码和错误形状 |
+| `agentcontract_ucore` | ENFORCE V3、前驱、attempt、deadline、重试和 Phase Lease |
+| `agentfs_ucore`、`agentbench_ucore` | inode 绑定、metadata、query plan、typed watch 与 scan/index 对照 |
+| `agentloop_ucore` | event wait、route、heartbeat、LLM correlation 和 cancel |
+| `agenttask_ucore` | SQ/CQ、terminal、cancel、deadline、backpressure 和 resync |
+| `agent_eevdf_ucore` | workflow 服务量、公平性和 wakeup probes |
+| `agentscope_ucore` | workflow 隔离、资源硬额度和回收 |
 
-## 8. 结果解释
+示例：
 
-本地 checker 通过只说明对应静态合同成立，构建通过只说明当前目标可编译链接。MCP/A2A in-memory 单测不证明网络互操作，relay 单测不证明 live provider 已调用，offline replay 也不等于云模型。功能结论要由实际 Guest 场景确认，性能结论要由实际负载和测量确认。内核 `Evidence Ring` 及 fence receipt 验证的是产品运行期安全语义，不是仓库发布工件。
+```bash
+AGENT_TEST_CASE=agentcontract_ucore \
+  make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+runner 检查 QEMU 退出状态、预期 pass marker、panic、输出上限和 timeout。超时表示该场景失败，不形成平台认证结论。
+
+## 主演示
+
+```bash
+make contest-demo TOOLPREFIX=riscv64-linux-gnu-
+```
+
+当前目标运行 4 个隔离 QEMU boot，按 AB/BA 顺序比较 traversal 与 indexed。每个配对要求相同输入 corpus、相同 recovered 结果、相同结果 hash，并保存：
+
+- 每条路径的 core 与 end-to-end 时间；
+- traversal/indexed 实际检查记录数；
+- I/O 和工作量计数；
+- 原始串口日志、`measurements.csv`、`summary.json` 与 `report.md`。
+
+主演示用于本机复现。文档中的正式统计来自更大的 2026-08-11 一次性活动，不用 4 boot 快照覆盖 30 boot canonical 数据。
+
+## Console 与 Nexus
+
+固定、无网络的 QEMU 验收为：
+
+```bash
+make agentos-console-replay TOOLPREFIX=riscv64-linux-gnu-
+make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
+```
+
+console replay 在同一 Guest session 中完成三个用户回合、真实工具调用、一次审批拒绝、一次批准、Context 读取和关闭。Nexus replay 创建四个业务 Agent，完成委派、失败重规划、两份来源工件、Analyst 汇总和发布拒绝。
+
+两者都使用 digest-bound fixture。validator 检查 model request/response 对应、single-inflight 顺序、task terminal、artifact digest、审批绑定和 close 后零输出。replay 经过真实 QEMU、串口和内核工具路径，但响应来自固定文件。
+
+`agentos-console-deepseek` 和 `agentos-nexus-deepseek` 是可选人工入口。只有当次实际 API 往返、Guest 工具执行和最终 session marker 全部出现，才可记录为 live 验证。仓库现有 canonical 结果不包含这一声明。
+
+## 一次性性能活动
+
+冻结数据位于 [`one_shot_metrics/data/20260811`](../../one_shot_metrics/data/20260811/)。活动在源码提交 `2b14fb1f74b9bd093e6de939a16554620835699e` 上完成，记录 WSL2、QEMU 10.2.1、RISC-V64 单 Hart 和交叉编译器版本。
+
+| 实验 | 独立 boot | 原始样本 |
+| --- | ---: | ---: |
+| traversal/indexed 综合配对 | 16 | 16 个 AB/BA 配对 |
+| AgentEval 参数网格 | 4 | 1,560 条 suite 样本、180 个 grid 配对 |
+| Agent Task | 4 | 96 条 16-op sequence、1,536 条 operation |
+| workflow EEVDF | 6 | 180 条 workflow、504 条 exact wake probe |
+
+合计 30 次 fresh QEMU boot、33 个 raw 文件、19 张 CSV 表和 7,498 行记录。[`validation.json`](../../one_shot_metrics/data/20260811/validation.json) 为 `valid=true`、`ready=true`，包含 0 error 和 1 项已说明的串口拼接 warning。
+
+核心结果为：
+
+- indexed workflow core interval 在 16/16 个配对中更短，paired speedup 中位数为 `3.118x`；该 interval 包含 query、recovery write、`fsync` 和 verify；
+- end-to-end 仅在 3/16 个配对中 indexed 更快，paired delta 中位数为 `+13,452 us`；
+- 12 个 `catalog × hit` 实测格的中位 speedup 为 `1.164x–2.808x`；
+- 16-op batch、scalar V3、SQ/CQ 中位延迟为 `561 us`、`2,051 us`、`1,620.5 us`；
+- 504 条 exact wake probe 全部为 0–1 tick；并发度 1–4 的 Jain fairness 中位数均不低于 `0.99998`。
+
+完整方法和图表见[实测性能结果](../contest/performance-results.md)。
+
+## 数据复核
+
+冻结目录已经写入 `COMPLETED`，不再启动 QEMU 重新采集。校验与重绘输出写到仓库外目录：
+
+```bash
+python one_shot_metrics/validate.py \
+  --tables one_shot_metrics/data/20260811/tables \
+  --output ../agentos-20260811-reproduced/validation.json
+
+python one_shot_metrics/plot.py \
+  --tables one_shot_metrics/data/20260811/tables \
+  --output-dir ../agentos-20260811-reproduced/figures \
+  --format png,pdf
+```
+
+`manifest.json` 保存环境、命令、Guest 镜像 hash 和输入清单；`validation.json` 校验 schema、配对、参数网格与图表输入。评审时优先保留原始表和日志，不从 PNG 反推数值。
+
+## 结论边界
+
+1. 全部正式数据来自一套 WSL2 + QEMU 单 Hart 环境，绝对时间不能外推到裸机或 SMP。
+2. 16 个综合配对来自独立 boot；AgentEval 单格 15 个 AB/BA 配对属于 boot 内重复；Task 的 32 条路径样本来自 4 boot × 8 轮。
+3. workflow core 与 end-to-end 是两个时间窗口。`3.118x` 只属于包含 query、recovery write、`fsync` 和 verify 的 workflow core path；纯查询块属于 AgentEval 专项。
+4. observer、timeline 和日志行数不是性能计时器。
+5. MCP/A2A 单测只验证 in-memory prototype；console/Nexus replay 不证明 live provider。
+6. 通过 checker、构建或单一 Guest 场景，只能报告其覆盖的合同。
+
+赛题任务到源码和测试的映射见[要求追踪表](requirements-traceability.md)，现场顺序见[演示脚本](scenario-script.md)。

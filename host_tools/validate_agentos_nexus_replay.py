@@ -159,15 +159,17 @@ KERNEL_SNAPSHOT_FIELDS = frozenset(
 MEASUREMENT_TOKENS = (
     "source_results=docs/contest/performance-results.md",
     "records=96",
-    "traversal_us=59595.5",
-    "indexed_us=13866.5",
-    "ratio=4.298",
-    "wins=4/4",
-    "nexus_derived_checks=4/4",
+    "traversal_us=34712.5",
+    "indexed_us=13293.5",
+    "paired_ratio_median=3.118",
+    "wins=16/16",
+    "nexus_derived_checks=16/16",
     "nexus_derived_checks_basis=wins",
     "nexus_derived_measurement_scope=historical_not_this_boot",
 )
-SOURCE_REVISION_TOKEN = "source_revision=base-96613ea"
+SOURCE_REVISION_TOKEN = (
+    "source_revision=2b14fb1f74b9bd093e6de939a16554620835699e"
+)
 OBSERVER_FORBIDDEN_FIELDS = frozenset(
     ("arguments", "canonical_arguments", "content", "objective", "raw", "result", "summary")
 )
@@ -1100,8 +1102,8 @@ def _validate_artifacts(
         "Analyst report does not preserve the verified Research digest",
     )
     _require(
-        "ratio=4.298" in analyst_tokens,
-        "Analyst report summary contains no verified measurement",
+        "paired_ratio_median=3.118" in analyst_tokens,
+        "Analyst report summary contains no verified paired measurement",
     )
     _require(
         stable_scheduler_fact in analyst_tokens,

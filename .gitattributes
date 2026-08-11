@@ -8,3 +8,6 @@
 *.in text eol=lf
 *.json text eol=lf
 Makefile text eol=lf
+
+# Matplotlib emits significant-looking line continuations with trailing spaces.
+docs/figures/performance/*.svg -whitespace

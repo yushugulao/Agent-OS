@@ -345,17 +345,6 @@ agent_lifecycle_alloc_control_id(void)
 	return 0;
 }
 
-void
-agent_lifecycle_control_id_floor(uint64 floor)
-{
-	if (floor == 0) {
-		next_control_id = 0;
-		return;
-	}
-	if (next_control_id != 0 && floor > next_control_id)
-		next_control_id = floor;
-}
-
 uint64
 agent_lifecycle_controller_departing_locked(struct proc *p)
 {

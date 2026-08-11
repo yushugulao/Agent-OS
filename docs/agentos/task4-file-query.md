@@ -1,10 +1,16 @@
 # 任务四：Agent Live-Query FS
 
-当前任务四实现是显式登记、当前启动周期内有效、事件驱动的文件属性查询。普通目录只有在用户态登记后才进入 Agent catalog。
+## 场景与约束
 
-## 1. 对象模型
+科研工作流经常按 project、stage、kind 或 status 查找文件。重复遍历目录会把查询成本放大，inode 复用又可能让旧属性命中新文件。普通文件也不应自动变成带 Agent 语义的对象。
 
-一条 `agent_file_meta` 把高层属性绑定到真实文件身份：
+任务四采用显式登记、选择性索引和事件驱动更新。用户决定哪些文件进入 catalog，内核负责物理身份、可见性和增量一致性。
+
+## 方案
+
+### 显式对象
+
+具备 `AGENT_CAP_META_WRITE` 的当前 workflow Agent 调用 `agent_file_meta_set()`，把高层属性绑定到真实文件身份：
 
 ```text
 physical/logical path
@@ -15,147 +21,57 @@ dev + inum + incarnation + size
 fs_generation
 ```
 
-完整物理身份是 `dev + inum + incarnation`。inode 号被复用后，旧 metadata、内容 receipt、edit lease 或 pending unlink 都不能命中新对象。
+`dev + inum + incarnation` 共同标识文件。inode 复用后，旧 metadata、content receipt、edit lease 和 pending unlink 都无法命中新对象。普通 create/rename 不会自动登记。
 
-## 2. 显式登记
+### Catalog 与查询
 
-只有具备 `AGENT_CAP_META_WRITE` 的当前 workflow Agent 能调用 `agent_file_meta_set()`。
+内存 catalog 为 `status`、`stage` 和 `kind` 建立选择性等值索引。`agent_file_query()` 同时支持路径、project/workflow/run、三类索引字段和有界 `summary_contains`。索引只缩小候选集，返回前仍对每条候选执行完整谓词和 scope 检查。
 
-- 普通 set：`flags == 0`；
-- 删除 metadata：`flags == AGENT_FILE_META_F_DELETE`；
-- 更新字段由 `update_mask` 指定；
-- 物理文件必须在调用者可见 scope 内，并绑定当前 incarnation。
+结果携带 hits、实际复制数、扫描/候选工作量、plan/reason、索引 bucket、截断状态、tick 和当前 generation。一次最多复制 8 条结果。没有合适索引时，planner 选择 scan。
 
-普通文件 syscall 的 create/rename 不会自动加入 Agent catalog。用户态决定哪些文件值得作为 Agent 属性对象，并在 workflow 启动时重新登记。
+### Live watch 与恢复
 
-## 3. volatile catalog 与索引
+`agent_live_watch()` 保存完整 typed query。已绑定文件发生 metadata 或 content 变化时，内核比较 before/after 并产生：
 
-catalog 有界驻留内存，按 SYSTEM/动态 scope 约束可见性。选择性索引只覆盖最常用的等值字段：
-
-- `status`；
-- `stage`；
-- `kind`。
-
-查询可以强制全表扫描，也可以请求索引计划。索引没有合适 key、无效或不能保证语义时退化为 scan。索引路径每次仍遍历候选链并重新应用完整谓词，不缓存上一条 query result。
-
-结果返回 total hits、实际复制数、扫描/候选数、plan/reason、索引 bucket、重建访问量、是否截断、ticks 和当前 `fs_generation`。最多复制 8 条 hit。
-
-## 4. VFS 增量投影
-
-VFS 不负责发现新 metadata，只维护已显式绑定对象的实时性：
-
-- unlink/deferred reclaim 产生带完整 lifecycle/scope/dev/inum/incarnation 的 pending 更新；
-- write/truncate 的 content receipt 更新 size/generation；
-- incarnation 或 scope 不一致时拒绝更新，避免旧 pending 污染新对象；
-- 后台每轮用有界 budget 排空 unlink/content pending；
-- workflow fence 在 metadata transaction 内排空本 scope 全部 pending。
-
-这条路径没有目录轮询，没有把每个普通 inode 强制物化为 Agent metadata。
-
-## 5. 查询谓词
-
-`struct agent_file_query` 支持固定字段等值和 `summary_contains`：
-
-| 字段 | 含义 |
-| --- | --- |
-| `physical_name` / `logical_path` | 真实名称与逻辑路径 |
-| `project` / `workflow` / `run_id` | workflow 高层归属 |
-| `stage` / `kind` / `status` | 选择性索引候选字段 |
-| `summary_contains` | 有界 substring 过滤，不能使用索引代替完整匹配 |
-| `max_hits` | 0 到 8 |
-
-空字符串表示该字段不限制。查询结果只反映调用时可见的显式 catalog，不声称覆盖文件系统中的全部普通文件。
-
-## 6. Typed live watch
-
-### 6.1 安装
-
-`agent_live_watch(struct agent_file_live_watch *)` 安装完整 query 谓词。成功后内核回填：
-
-- `watch_id`；
-- `initial_generation`；
-- `catalog_generation`；
-- 未确认缺口的 `resync_generation`；
-- 必要时 `RESYNC_REQUIRED` flag。
-
-typed watch 复用 watch slot 数量预算，但 token 与 query 保存在 generation-safe subscription 表中。filter 不会回退到 legacy 字符串 substring 解析。
-
-### 6.2 transition
-
-每次显式 metadata 或已绑定文件内容变化都比较 before/after：
-
-| before | after | change |
+| before | after | 事件 |
 | --- | --- | --- |
 | 不匹配 | 匹配 | `ENTER` |
-| 匹配 | 匹配且记录变化 | `UPDATE` |
-| 匹配 | 不匹配/删除 | `LEAVE` |
+| 匹配 | 仍匹配且记录变化 | `UPDATE` |
+| 匹配 | 不匹配或删除 | `LEAVE` |
 
-事件类型为 `AGENT_EVENT_FILE_QUERY`，payload 带 `change=...` 和 lifecycle `id:generation`。事件进入 Agent Queue/Context，从而直接驱动 Agent Loop；它不是 Host 轮询通知。
+事件绑定 target control id、scope 和 lifecycle generation，并进入 Agent Queue 与 Context。队列无法保存完整增量时，内核提高 `resync_generation` 并投递 `RESYNC_REQUIRED`。用户重新执行 query/snapshot 后，以同一 generation `ACK_RESYNC`；旧 ACK 不会清除更晚的缺口。
 
-### 6.3 可见性
+VFS 只维护已登记对象的实时性。write/truncate 更新 size 和 generation，unlink/deferred reclaim 进入有界 pending 队列。workflow fence 排空本 scope pending；缺口未恢复时返回 `RETRY`。
 
-订阅目标必须是活跃 Agent，并绑定 control id、scope 和 lifecycle generation。动态 scope 只能看到 SYSTEM 及同 workflow 可见对象；跨 scope transition 不投递。exec/exit/proc slot reuse 会清除 subscription。
+## 关键实现
 
-## 7. RESYNC_REQUIRED
-
-有界队列无法可靠承诺每条增量时，系统不伪装为完整：
-
-1. 为受影响 domain 记录单调 `resync_generation`；
-2. 合并同一目标的 pending resync；
-3. 尝试投递 `RESYNC_REQUIRED`；
-4. 用户重新执行完整 query/snapshot；
-5. 用户以 `ACK_RESYNC` 和该 generation 安装/删除 watch；
-6. ACK 只清除 `<= generation` 的缺口，新缺口不会被旧 ACK 擦除。
-
-domain 表耗尽时升级为 global resync generation，而不是静默丢失。workflow fence 若仍发现本 scope resync pending，则返回 `RETRY`，不发布不完整 metadata cut。
-
-## 8. 与 Agent Context 的关系
-
-live-query 事件沿 Agent IPC 路径进入 Context，继承内核分配的 event id、tick、source/target 和 workflow generation。Agent 在收到 `ENTER/UPDATE/LEAVE` 后仍应按需要调用 `agent_file_query()` 读取当前对象；事件只表示集合 transition，不携带完整 metadata 快照。
-
-对于 `RESYNC_REQUIRED`，事件本身不能作为“当前集合完整”的证明。只有重新 query 并 ACK 对应 generation 后，才能继续依赖增量通知。
-
-## 9. 内容摘要与编辑租约
-
-现有内容摘要和编辑租约仍绑定 `dev + inum + incarnation`：
-
-- digest 是有界文件内容读取/指纹工具，不是全文搜索索引；
-- edit begin/commit/abort/state 提供冲突检测和过期处理；
-- metadata update 不把预先创建的 public inode 自动升级为 workflow 文件；
-- file capability 与 VFS scope 检查仍在每次敏感操作执行。
-
-这些能力与 volatile metadata 配合，但不会把 metadata catalog 写盘。
-
-## 10. fence 语义
-
-workflow fence 对任务四只承诺：
-
-- metadata transaction 已取得 quiescent generation；
-- 本 scope unlink、content pending 已被尝试完全排空；
-- 已标记的 resync 已投递/确认到可切割状态，否则返回 `RETRY`；
-- receipt 设置 `METADATA_VOLATILE`。
-
-它不承诺 metadata 重启恢复，也不把普通文件内容纳入 evidence root。
-
-## 11. 当前限制
-
-| 限制 | 当前行为 |
+| 职责 | 源码 |
 | --- | --- |
-| catalog 生命周期 | 本次启动周期；用户态在每次启动时登记 |
-| 目录发现 | 普通文件不会自动加入 catalog |
-| metadata 写入 flags | 普通 set 或显式 `DELETE` |
+| Catalog 与显式 metadata | [os/agent_metadata_catalog.c](../../os/agent_metadata_catalog.c)、[os/agent_metadata.c](../../os/agent_metadata.c) |
+| Query planner 与谓词 | [os/agent_metadata_query.c](../../os/agent_metadata_query.c) |
+| 内容摘要、edit lease 与 incarnation | [os/agent_metadata_objects.c](../../os/agent_metadata_objects.c)、[os/agent_file_state.c](../../os/agent_file_state.c) |
+| Typed watch、transition 与 resync | [os/agent_live_query_events.c](../../os/agent_live_query_events.c) |
+| VFS 增量更新 | [os/file.c](../../os/file.c)、[os/agent_metadata_actions.c](../../os/agent_metadata_actions.c) |
+| 公开接口 | [user/include/agent.h](../../user/include/agent.h) |
 
-## 12. 设计来源
-
-Haiku BFS 的显式属性、选择性属性索引和 live query 提供了概念启发。AgentOS 的变化在于把 typed transition 直接送入 Agent Context，并以 workflow generation、scope 可见性、bounded queue 和 generation resync 形成内核合同。实现为 clean-room 代码，没有复制 BFS 源码、数据或磁盘格式。
-
-## 13. 验证
+## 验证与量化
 
 ```bash
 python -B scripts/check-agent-live-query-fs.py
 python -B scripts/test-agent-live-query-fs.py
-python -B scripts/test-workflow-fence.py
-make agent-module-check TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentfs_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
+AGENT_TEST_CASE=agentbench_ucore make agentos-test TOOLPREFIX=riscv-none-elf-
 ```
 
-性能结论必须来自 `agentbench_ucore` 等真实 Guest 测量，不能由索引结构或静态 checker 推导。
+`agentfs_ucore` 覆盖 set/delete、incarnation、scan/index、typed transition、scope 和 resync。`agentbench_ucore` 在同一数据集报告扫描记录、索引候选、query tick 和 fingerprint。
+
+2026-08-11 一次性活动测量了 catalog size `24/64/96` 与 hit count `1/2/4/8` 的完整 `3 x 4` 网格，每格 15 个 AB/BA 配对且没有插值。各单元 median speedup 为 `1.164x` 到 `2.808x`。分组数据保留 first retained scan 12 条、repeat scan 168 条和 ready index 180 条；first 组位于显式 warmup 后。原始配对和图表见 [高级性能图](advanced-performance-figures.md)。
+
+## 当前边界
+
+- Catalog、索引和 watch 属于当前启动周期，Guest 每次启动重新登记。
+- 目录遍历不会自动发现或登记普通文件。
+- 索引只覆盖 `status/stage/kind` 等值字段，其他谓词执行 scan 或候选后过滤。
+- `summary_contains` 是有界 substring；content digest 提供指纹，不提供全文检索。
+- live event 表示集合变化，用户仍通过 query 获取当前完整对象。
+- fence receipt 标记 `METADATA_VOLATILE`，不承诺重启恢复。

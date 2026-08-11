@@ -595,7 +595,7 @@ def check(root: Path) -> None:
     require_order(
         unbind,
         (
-            "agent_file_state_set_index(ip,0,0,0)",
+            "agent_file_state_set_index(ip,0,0)",
             "if(result<0)returnresult;",
             "agent_file_state_unbind_catalog_identity("
             "meta->dev,meta->inum,meta->incarnation,scope_id);",

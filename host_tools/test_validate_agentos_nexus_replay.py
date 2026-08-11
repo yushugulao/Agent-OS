@@ -24,7 +24,7 @@ ANALYST_HANDLE = (1 << 16) | 10
 
 def _final_answer() -> str:
     return (
-        "publication denied; report remains unpublished;"
+        "unpublished;"
         f"system_handle={SYSTEM_HANDLE};research_handle={RESEARCH_HANDLE};"
         "source=nexus_state;claim=this_boot_runtime_observation;"
         "process_count=4;context_count=3;file_bytes=200;"
@@ -233,7 +233,7 @@ def _transcripts() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         summary=(
             f"system_handle={SYSTEM_HANDLE};research_handle={RESEARCH_HANDLE};"
             f"system_digest={'a' * 64};research_digest={'b' * 64};"
-            "sched_budget=8;ratio=4.298"
+            "sched_budget=8;paired_ratio_median=3.118"
         ),
         resource=400,
         provenance=61,
@@ -922,7 +922,7 @@ class NexusReplayValidatorTests(unittest.TestCase):
         )
         artifact["summary"] = str(artifact["summary"]).replace(
             "nexus_derived_checks_basis=wins",
-            "fake_nexus_derived_checks_basis=wins",
+            "xexus_derived_checks_basis=wins",
         )
         with self.assertRaisesRegex(validator.ValidationError, "checks_basis"):
             validator._validate_controller(

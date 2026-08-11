@@ -1,0 +1,111 @@
+\chapter{总体架构与端到端运行流程}
+\label{chap:architecture}
+
+\section{四层结构}
+
+AgentOS-uCore 的总体结构分为交互、Host 基础设施、Guest 策略与数据、内核机制四层。
+四层直接对应权限和证据边界。自然语言只在交互、provider 与
+Guest 策略层出现；真正产生文件、IPC、资源和调度效果的调用必须穿过内核机制层。
+
+\ReportFigure[0.96\textwidth]
+  {../figures/architecture/agentos_overview.pdf}
+  {../figures/architecture/agentos_overview.pdf}
+  {AgentOS-uCore 总体架构：Host 传输、Guest 策略与内核治理分离}
+  {fig:agentos-overview}
+
+\begin{table}[htbp]
+\centering
+\caption{总体架构的运行实体}
+\label{tab:architecture-entities}
+\begin{tabularx}{\textwidth}{L{2.5cm}L{3.4cm}YY}
+\toprule
+\textbf{层} & \textbf{实体} & \textbf{输入/输出} & \textbf{可信职责} \\
+\midrule
+交互层 & Nexus CLI、Observer & 用户消息、控制、审批、只读 telemetry &
+只呈现和收集，不产生业务事实 \\
+Host 层 & Console daemon、DeepSeek/Replay adapter、QEMU serial &
+本地消息、完整性 frame、provider JSON & 持有 key/TLS；不访问 Guest 业务 VFS \\
+Guest 层 & Relay、Coordinator、System、Research、Analyst、Artifact Store &
+模型 wire、N1 TASK、typed V2、handle & 规划、策略、工件和状态机 \\
+Kernel 层 & identity、Context、tool、VFS、IPC、resource、scheduler、evidence &
+系统调用与可信状态 & 强制身份、权限、因果、资源和审计 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Host daemon 是串口和本地 socket 的唯一 owner。一个 controller 可以提交输入与审批，
+多个 observer 只能读取事件。Guest Relay 是同一 workflow 中的基础设施 Agent，负责
+把模型请求和响应转换成有界 frame，但不计入 Nexus 四个业务角色，也不选择工具。
+Coordinator 是业务根；System、Research、Analyst 长驻并拥有独立 PID、Agent id、
+control id、role/capability 与 Context，同时共享 workflow lifecycle、scope、资源域和
+调度实体。
+
+启动时，受信映像 manifest 约束可创建角色，内核为各业务进程分配 identity、control id、
+capability 与 Context，并为 workflow 建立共享资源账户；Guest 再安装 route/watch 并登记本 boot seed。业务面包含
+Coordinator、System、Research、Analyst 四个角色，Transport Relay 只承担基础设施传输。
+这些步骤全部完成后才发布 Nexus profile 和 ready marker，避免把普通会话误呈现为
+系统原生多 Agent 会话。具体身份发布和协议校验在第\ref{chap:nexus}章展开。
+
+\section{一次用户回合的闭环}
+
+图~\ref{fig:nexus-sequence}展示一次目标如何从自然语言进入内核工具，又如何把真实结果
+送回模型。关键不在箭头数量，而在每一轮 \code{tool_result} 都来自 Guest 经过内核
+执行、Context 记录和工件重验后的事实。
+
+\ReportFigure[0.98\textwidth]
+  {../figures/architecture/nexus_runtime_flow.pdf}
+  {../figures/architecture/nexus_runtime_flow.pdf}
+  {Nexus 单回合“目标--模型--委派--工具--观察--再决策”闭环}
+  {fig:nexus-sequence}
+
+\begin{enumerate}
+  \item Host 将新的用户消息作为 turn 输入交给 Coordinator。
+  \item Coordinator 结合有界历史和当前可见工具，生成模型请求后进入内核等待。
+  \item Relay 通过完整性帧把请求交给 live provider 或同路径 replay，返回事件唤醒 Coordinator。
+  \item Coordinator 验证模型动作；需要专门事实时，将 typed TASK 委派给 System、Research 或 Analyst。
+  \item Worker 使用自己的 identity、Context、capability 与 workflow 共享资源账户执行 role-filtered V2 工具，等待期间不忙轮询。
+  \item 短状态经 MESSAGE 返回，长结果进入 workflow-scoped artifact store；Coordinator 重验身份、状态迁移、handle 和 digest。
+  \item 稳定、决策相关的结果投影回灌模型。失败和审批拒绝同样作为结构化观察，使模型可重新规划。
+  \item 模型返回 final 时只完成当前 turn，会话、QEMU 与四个业务 Agent 继续长驻。
+\end{enumerate}
+
+\section{同一工作流的机制对照}
+
+\ReportFigure[0.96\textwidth]
+  {../figures/architecture/plain_agentos_comparison.pdf}
+  {../figures/architecture/plain_agentos_comparison.pdf}
+  {同一业务工作流在 Plain uCore 与 AgentOS-uCore 上的系统责任对照}
+  {fig:plain-agentos-comparison}
+
+图\ref{fig:plain-agentos-comparison}两侧保持相同的业务输入、阶段和结果合同。Plain uCore
+依靠普通进程、文件与 IPC 完成工作；AgentOS-uCore 在同一工作流下增加 typed ABI、可信
+身份与 Context、索引与 Live Watch、受治理 IPC、workflow EEVDF、Evidence Ring 和
+Workflow Fence。对照在相同业务负载下聚焦系统责任的增量。
+
+Nexus 进一步把交互划分为控制、artifact 数据和内核证据三类平面；三者的 N1、审批、
+provenance 与 observer 对齐规则集中在第\ref{chap:nexus}章说明。
+
+\section{源码落点}
+
+\begin{longtable}{L{4.2cm}L{7.0cm}L{3.0cm}}
+\caption{总体架构的关键生产源码}\label{tab:architecture-source}\\
+\toprule
+\textbf{组件} & \textbf{源码} & \textbf{职责} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{组件} & \textbf{源码} & \textbf{职责} \\
+\midrule
+\endhead
+Host session/daemon & \code{host_tools/agentos_relayd.py} & 本地路由、frame、provider、审批与 telemetry allowlist \\
+CLI/observer & \code{host_tools/agentos_cli.py}；\code{host_tools/agentos_observe.py} & 交互呈现和只读观测 \\
+Provider adapter & \code{host_tools/guest_llm_relay.py} & provider 协议翻译 \\
+Nexus Guest & \code{user/src/agentnexus_ucore.c} & Relay、Coordinator、specialists、model loop 与 observer \\
+N1/Artifact ABI & \code{user/include/agent_nexus_protocol.h} & TASK wire、角色、handle、manifest 与 capsule \\
+Nexus shared runtime & \code{user/lib/agent_nexus.c} & 发现、typed call、identity registry、artifact publish/read \\
+Identity/role & \code{os/agent_identity.c}；\code{os/agent_core.c} & role policy、control、Agent 创建与工具 dispatch \\
+IPC/wait & \code{os/agent_ipc.c} & route、watch、MESSAGE、heartbeat 与非忙等 \\
+Context/provenance & \code{os/agent_context.c}；\code{os/agent_provenance.c} & 因果记录与标签传播 \\
+Observer/scheduler & \code{os/agent_observe_*}；\code{os/workflow_scheduler.c} & audit/timeline 和 workflow EEVDF \\
+\bottomrule
+\end{longtable}

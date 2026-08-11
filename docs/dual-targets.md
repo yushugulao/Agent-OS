@@ -2,6 +2,10 @@
 
 项目同时保留共享安全基底的 plain uCore 对照目标和 AgentOS-uCore 增强目标。两侧运行等价的科研 Agent 用户态流程，共享输入、执行顺序和结果契约；AgentOS-uCore 额外使用内核 Agent 服务。双目标总耗时反映完整系统路径，不用于把差异归因给某个 syscall 或单一机制。
 
+![plain uCore 与 AgentOS-uCore 同工作流对照](figures/architecture/plain_agentos_comparison.png)
+
+[DrawIO 源文件](figures/architecture/plain_agentos_comparison.drawio)
+
 科研流程是仓库内置的示例负载，包含数据准备、比对处理、结果分析、报告生成和归档交付。项目名、阶段、失败与恢复策略都属于用户态策略；内核只提供通用身份、Context、metadata、事件、权限和观测原语。
 
 ## 目标边界
@@ -50,6 +54,6 @@ uCore Guest 负责执行程序并生成 `rp_*` 状态；Host 工具只负责提�
 - plain 目标展示仅靠用户态约定和普通 syscall 能完成的路径，也保留其扫描、状态可信度和恢复成本边界。
 - AgentOS 目标保持业务策略在用户态，把可复用的身份、权限、Context、metadata、事件和观测原语放入内核。
 - 两侧共享状态协议和静态报告格式，便于对照同一业务结果；AgentOS 专属证据单独呈现。
-- Guest `rp_llm_relay` 使用确定性模板；云端模型接入不属于竞赛交付。
+- Guest `rp_llm_relay` 与双目标性能对照使用确定性模板，live provider 不进入该基准；显式模型入口见 [交互控制台](agentos/interactive-console.md) 与 [AgentOS Nexus](agentos/nexus.md)。
 
 构建、运行和测量边界见 [验证说明](verification.md)，AgentOS 内核细节见 [架构设计](agentos/design.md)，安全基底分工见 [安全加固](agentos/security-hardening.md)。

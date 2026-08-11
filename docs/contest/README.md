@@ -1,95 +1,73 @@
 # 竞赛评审入口
 
-AgentOS-uCore 面向 AI Agent workflow 提供内核身份、Context、结构化工具、实时文件属性事件、可信 IPC、批量资源域和可验证 fence。科研业务与模型语义都在 Guest 用户态；plain/AgentOS 两目标运行同一 deterministic 工作流合同。可选 Host 只转发串口与 HTTPS/provider 协议，MCP/A2A 另有独立对象映射 prototype。
+AgentOS-uCore 为 Agent workflow 提供内核级身份、Context、工具合同、实时文件状态、资源调度和执行证据。我们用真实 QEMU Guest 展示六项赛题任务，并保留逐样本性能数据供复核。
 
-## 赛题映射与硬门槛
+## 先看四项证据
 
-| 任务 | 题面门槛 | 当前机制 | 代表 Guest / 入口 |
-| --- | --- | --- | --- |
-| 任务一 | Agent 创建、Context 区、普通/Agent 进程共存 | 可信 role/capability、6 页内核发布只读区 + 1 页用户 cache 读写区、immutable lifecycle id+generation、members/closing/gates | `agentfinal_ucore`、`agenttrust_ucore`、`agentscope_ucore` |
-| 任务二 | 至少 3 个结构化工具，含错误处理 | 25 项 name/id 目录；V2 exploratory typed RPC；ENFORCE V3 immutable contract；最多 64 项的顺序 compact batch；稳定错误码 | `agenttoolabi_ucore`、`agentfinal_ucore`、`agentcontract_ucore` |
-| 任务三 | 至少 5 轮连续调用、直接读取、超长淘汰 | 内核可信记录、只读 mirror、cause/span/branch、查询/快照/rollback、有界 FIFO 窗口 | `agentfinal_ucore` |
-| 任务四 | 至少 2 类扩展，结构化返回并提供查询对比 | explicit boot-scoped metadata、`status/stage/kind` 索引、summary/digest、typed `ENTER/UPDATE/LEAVE` 与 resync | `agentfs_ucore`、`agentbench_ucore` |
-| 任务五 | 至少 2 类机制；heartbeat、事件等待、休眠与多 Agent 稳定性 | 用户态 Agent Loop substrate：event/watch/wait/heartbeat、可信 route/LLM correlation、workflow EEVDF、Evidence Ring 与 workflow fence | `agentloop_ucore`、`agentsched_ucore`、`agent_eevdf_ucore` |
-| 任务六 | 整合至少 3 个模块、QEMU 综合程序、至少 1 组性能对比 | deterministic `labdemo_ucore` 串联身份 + Context + metadata/index + event/IPC + 授权拒绝；同内核 Compat/Native 与 plain/AgentOS 两类比较 | `labdemo_ucore`、`make contest-demo`、`make dual-platform-run` |
-
-完整映射见[要求追踪表](../agentos/requirements-traceability.md)。
-
-## 三项重点增量
-
-1. **Workflow Credit Domain**：借鉴 Linux CPU accounting/percpu/rstat 的批量思想，以 U/P/F credit 保持硬额度，并在 context switch、压力和 fence 精确 trim。
-2. **Fence-Sealed Evidence Ring**：借鉴 Linux BPF ring buffer 的有序 reserve/commit/discard，普通成功只写一次 canonical event，critical 独立分区，fence 绑定 challenge/credit/metadata/gap 根。
-3. **Agent Live-Query FS**：借鉴 Haiku BFS 显式属性、索引和 live query，只索引显式 volatile metadata，把 typed transition 直接投递到 Agent Context，并用 generation resync 处理有界丢失。
-
-三项都是 clean-room、项目特定实现，没有复制/vendoring 上游源码、测试、数据、二进制或磁盘格式。详见 [NOTICE](../../NOTICE) 与[第三方及原创增量说明](third-party-and-originality.md)。
-
-## 必须主动说明的限制
-
-- metadata 只覆盖用户态显式登记的对象，catalog/index/watch 都属于当前启动周期；
-- Evidence Ring 和 audit receipt 是 fence-sealed memory evidence；
-- audit/timeline/provenance/ledger 兼容视图仍保留，不能称为完全删除；
-- lifecycle 使用 members/closing/gates，不宣称多阶段 retirement；
-- fence receipt 明确 partial coverage 与 volatile metadata；
-- V1/V2 与 compact batch 不获得 ENFORCE V3 的 frozen-DAG/provenance 包络；
-- Task Channel 当前只有同步 null/NONE provider，没有业务 payload backend，也不承载模型 wire；
-- `labdemo_ucore` 是 deterministic policy workflow，不是 LLM 决策演示；
-- live model 的 history、tool catalog、选择/执行和 result 回灌属于 Guest；Host 只拥有串口、TLS/API key 与 provider JSON；
-- MCP/A2A 代码只是 deterministic in-memory 对象映射 prototype，不是 server、streaming、互操作或内核 adapter；
-- 当前 Guest 是单 Hart，Host 多 lane 不等于 SMP。
-
-## 评审材料顺序
-
-1. [根 README](../../README.md)：定位和快速入口。
-2. [系统设计](../agentos/design.md)：三项机制与 workflow fence。
-3. [ABI](../agentos/api.md)：320 字节 receipt、typed watch、结构化工具与错误语义。
-4. [安全加固](../agentos/security-hardening.md)：hard admission、generation、resync、fail closed。
-5. [验证说明](../verification.md)：构建、QEMU、功能、安全与性能测试。
-6. [现场演示脚本](../agentos/scenario-script.md)：主演示命令、输出与专项讲解。
-7. [实测性能结果](performance-results.md)：真实 QEMU 的 scan/index 配对数据与复测命令。
-8. [Windows 快速开始](../windows-quickstart.md)：新机器依赖和工具链前缀。
-9. [双目标说明](../dual-targets.md)：plain/AgentOS 比较边界。
-10. [AI 工具使用披露](ai-usage-disclosure.md)：开发辅助与运行时边界。
-评审应优先查看实际 QEMU 行为、拒绝路径、工作量计数和双目标比较。静态 checker 用于快速发现合同错误，不应代替 Guest 运行或真实性能测量。内核 `Evidence Ring` 是产品安全功能，不是参赛材料打包机制。
-
-## 一条命令启动主演示
-
-```bash
-make contest-demo
-```
-
-默认运行 4 个等量 AB/BA QEMU 样本，并在 `results/contest-demo/` 生成 `report.md`、`summary.json`、`measurements.csv` 和逐样本串口日志。Makefile 在常见 Linux/WSL 环境中自动选择工具链；Windows xPack 环境可显式追加 `TOOLPREFIX=riscv-none-elf-`。结果只代表本次机器、工具链和负载；当前源码的一次实测摘要见[实测性能结果](performance-results.md)。可通过 `CONTEST_DEMO_SAMPLES` 选择 4 到 16 之间的偶数样本数。主演示始终运行 deterministic Guest policy，不需要 API key，也不把结果包装成模型决策。单独复核 `labdemo_ucore`、专项 Guest 或双目标的方法见[现场演示脚本](../agentos/scenario-script.md)、[验证说明](../verification.md)和 [Windows 快速开始](../windows-quickstart.md)。
-
-## 可选模型循环
-
-`agentlive` 是与主演示分开的 Guest-owned tool loop，沿用 [Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works) 和 [Claude Code agentic loop](https://code.claude.com/docs/en/how-claude-code-works) 的公开交互模式：模型输出结构化 `tool_use`，Guest 校验并执行工具，再把真实结果回灌下一轮。Host relay 只做有界串口 frame 与 OpenAI-compatible（OpenAI/DeepSeek）或 Anthropic HTTPS 翻译；API key/TLS 不进入 Guest，Host 不读业务文件、不选或执行工具。
-
-live API 可选；offline replay 仍通过相同 QEMU 串口、session/sequence/hash/round 边界，因此可复核 wire 与 Guest 状态机，但 replay 不是云模型实测。adaptive loop 使用 V2 exploratory typed RPC；ENFORCE V3 只适用于预先冻结的固定 node/tool/edge 高保证路径。MCP/A2A prototype 参考 [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) 与 [A2A v1](https://a2a-protocol.org/latest/specification/) 对象规范，但不参与这条 live relay。
-
-Host relay 的稳定 CLI 要求显式 `--provider openai|anthropic|deepseek|replay`、`--goal` 或 `--goal-file`，并以可重复的 `--approve-tool NAME` 给出用户批准的 Guest 工具；`replay` 另需 `--replay-file`。真实 provider 的 key 可由互斥的 `--api-key-file` 或 `--api-key-env` 提供，内容不进入 Guest、命令行或日志。精确选项以 `python -B host_tools/guest_llm_relay.py --help` 为准。真实 provider 及 API key 不属于默认竞赛主演示。
-
-```bash
-make agent-live-demo-check
-make agent-live-demo
-```
-
-第二条默认读取 `ci/agent-live-replay.jsonl`，在 QEMU 中走 6 轮同串口 replay；Make 要求 discovery、`passed`、唯一顶层 `parent passed` 以及 replay 的精确工具/拒绝/relay markers，Guest 另输出 Context roundtrip。完整 marker 值见[验证说明](../agentos/verification.md)。第一条只做静态/Host 检查。Windows xPack 环境可追加 `TOOLPREFIX=riscv-none-elf-`。
-
-当前工作区的 DeepSeek 实际模型入口是：
-
-```bash
-AGENT_LIVE_PROVIDER=deepseek make agent-live-demo
-```
-
-它默认使用官方 `deepseek-v4-flash`、`https://api.deepseek.com/chat/completions` 与 non-thinking tool mode，并依次探测仓库外的 `../deepseek_api.txt` 和 `../计算机操作系统能力竞赛/deepseek_api.txt`；都不存在时使用 Host 的 `DEEPSEEK_API_KEY`。可用 `AGENT_LIVE_API_KEY_FILE`、`AGENT_LIVE_MODEL` 和 `AGENT_LIVE_ENDPOINT` 覆写。non-thinking 是当前正确边界，因为 Guest 保存结构化工具历史，但不保存供应商 `reasoning_content`。只有 live 命令实际完成后才把结果称为 DeepSeek 实测；默认 replay 仍只证明相同 wire 与 Guest 状态机。
-
-## 建议演示顺序
-
-| 时间 | 内容 | 关键证据 |
+| 内容 | 入口 | 评审重点 |
 | --- | --- | --- |
-| 0-3 分钟 | 可信 Agent、Context、tool batch | 身份/Context/tool Guest 输出 |
-| 3-6 分钟 | Live Query 显式登记与 typed transition | query plan、ENTER/UPDATE/LEAVE、resync |
-| 6-9 分钟 | Credit U/P/F 与 hard quota | resource snapshot、Host U/P/F model 与 Guest quota 拒绝 |
-| 9-12 分钟 | Evidence Ring 与 workflow fence | challenge receipt、exact U、gap/root、retry |
-| 12-15 分钟 | plain/AgentOS 同工作流对比 | 两侧原始日志、状态 compare、paired summary |
+| 完整产品文档 | [决赛文档 PDF](../final-report/AgentOS-uCore-final-report.pdf) | 架构、实现、实验和工程完整性 |
+| 综合运行 | `make contest-demo` | 每个隔离 Guest workflow 中的身份、Context、文件查询、事件、工具和拒绝路径 |
+| 实测数据 | [性能结果](performance-results.md) | 30 次 QEMU boot、7,498 行逐样本数据、统计口径和原始来源 |
+| 要求追踪 | [要求追踪表](../agentos/requirements-traceability.md) | 每项题面要求对应的源码、命令和通过条件 |
 
-答辩时每项机制按“赛题问题、参考思想、AgentOS 特定实现、实际测试、限制”陈述，避免用功能通过数替代性能，也避免把端到端差异直接归因到单一模块。
+## 六项任务如何落地
+
+| 任务 | 赛题问题 | 我们的实现 | 代表证据 |
+| --- | --- | --- | --- |
+| 一 | Agent 如何拥有可信身份和独立 Context | role/capability、7 页 Context 地址区、workflow `id + generation`、进程生命周期集成 | `agentfinal_ucore`、`agenttrust_ucore`、`agentscope_ucore` |
+| 二 | 工具如何结构化调用并在失败时收口 | 25 项工具目录、typed V2、ENFORCE V3、顺序 compact batch、稳定错误码 | `agenttoolabi_ucore`、`agentcontract_ucore` |
+| 三 | 多轮调用如何保留因果并控制窗口 | cause/span/branch、查询、快照、rollback、只读 mirror、有界 FIFO | `agentfinal_ucore` |
+| 四 | 文件属性如何查询并随状态变化更新 | 显式 metadata catalog、`status/stage/kind` 索引、typed watch、generation resync | `agentfs_ucore`、`agentbench_ucore` |
+| 五 | Agent Loop 如何等待、通信和公平获得服务 | event/watch/wait、heartbeat、可信 IPC/LLM correlation、workflow EEVDF | `agentloop_ucore`、`agentsched_ucore`、`agent_eevdf_ucore` |
+| 六 | 多项机制如何组成可运行产品 | `labdemo_ucore` 综合场景、交互控制台、Nexus 四业务 Agent、workflow fence | `make contest-demo`、`make dual-platform-run`、`make agentos-console-replay`、`make agentos-nexus-replay` |
+
+## 三个核心问题
+
+### 1. 内核如何认识 Agent
+
+我们把 Agent 身份、角色、能力和 workflow generation 纳入进程生命周期。内核发布的 Context 页由用户态只读映射，用户 cache 使用独立页面，授权判断只依赖可信区域。
+
+Context 记录携带 cause、span、branch 和 provenance。工具结果、文件事件与 IPC 因此能够进入同一条可追踪链路。
+
+### 2. 工具副作用和资源如何受控
+
+ENFORCE V3 在 workflow generation 内冻结 DAG。节点、schema、前驱、capability、provenance、effect、deadline 和 resource envelope 在副作用前完成检查。
+
+Workflow Credit Domain 以 `used/pending/free` 管理 exec/storage credit。Evidence Ring 记录有序事件，workflow fence 将 challenge、事件范围、gap、credit digest 和 metadata generation 密封到 receipt。
+
+### 3. Agent 如何看到变化并获得公平服务
+
+Agent Live-Query FS 只接收显式登记的 metadata，并为常用 Agent 字段建立选择性索引。谓词变化直接产生 `ENTER/UPDATE/LEAVE`；增量丢失时使用 generation resync 恢复一致视图。
+
+workflow EEVDF 以资源域作为公平实体，按实际 service cycles 记账。事件等待与 heartbeat 让 Agent 在无任务时休眠，在状态变化后及时恢复。
+
+## 15 分钟演示顺序
+
+| 时间 | 演示内容 | 观察点 |
+| --- | --- | --- |
+| 0–3 分钟 | 阅读 README 与总体架构图 | 内核、Guest 与 Host 的职责边界 |
+| 3–8 分钟 | 运行 `make contest-demo` | 可信身份、Context、Live Query、工具、拒绝路径与 evidence |
+| 8–12 分钟 | 展示配对图、Task 分布和 EEVDF 图 | 逐样本、配对、参数网格和统计单位 |
+| 12–15 分钟 | 展示 capability 拒绝和 core/end-to-end 对照 | 副作用前拒绝、结果等价与计时窗口边界 |
+
+完整命令、预期 marker 和讲解顺序见[现场演示脚本](../agentos/scenario-script.md)。
+
+## 性能证据链
+
+one-shot campaign 已完成并锁定，不进入默认测试。证据按以下顺序组织：
+
+1. [manifest](../../one_shot_metrics/data/20260811/manifest.json)：源码提交、环境、命令、文件哈希和 30 次 boot 组成。
+2. [raw](../../one_shot_metrics/data/20260811/raw/)：串口日志与 contest 原始测量。
+3. [tables](../../one_shot_metrics/data/20260811/tables/)：19 张逐样本和派生数据表。
+4. [validation](../../one_shot_metrics/data/20260811/validation.json)：schema、配对、参数网格和图表就绪检查。
+5. [高级图表](../agentos/advanced-performance-figures.md)：10 组 PNG/PDF 图及读图说明。
+
+## 继续阅读
+
+- [系统设计](../agentos/design.md)
+- [ABI 参考](../agentos/api.md)
+- [验证说明](../verification.md)
+- [Windows 快速开始](../windows-quickstart.md)
+- [第三方及原创增量说明](third-party-and-originality.md)
+- [AI 工具使用披露](ai-usage-disclosure.md)

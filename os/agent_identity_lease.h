@@ -18,7 +18,6 @@ int agent_identity_lease_allocator_contains(uint, uint64);
 int agent_identity_lease_allocator_admit(uint, uint64, uint64);
 int agent_identity_lease_allocator_renew(uint);
 void agent_identity_lease_allocator_note_next(uint, uint64);
-void agent_identity_lease_allocator_force_exhausted(uint);
 int agent_identity_lease_lifecycle_contains(uint, uint64);
 int agent_identity_lease_lifecycle_renew(void);
 void agent_identity_lease_lifecycle_note_next(uint, uint64);

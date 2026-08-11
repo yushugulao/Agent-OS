@@ -443,10 +443,6 @@ def check(root: Path) -> None:
         ),
         ("entry->published_size_valid=0", "待发布状态撤销"),
         ("entry->published_meta_slot=AGENT_FILE_META_MAX", "目录槽撤销"),
-        (
-            "entry->published_lifecycle=workflow_lifecycle_none()",
-            "发布 lifecycle 撤销",
-        ),
         ("file_version_digest_clear_locked(entry)", "摘要撤销"),
     ):
         require(unbind, fragment, f"目录解绑缺少{label}")

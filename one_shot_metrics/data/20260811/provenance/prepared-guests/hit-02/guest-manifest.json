@@ -1,0 +1,31 @@
+{
+  "figure_hit_count": 2,
+  "files": [
+    {
+      "output": "agenteval_ucore.c",
+      "source": "user/src/agenteval_ucore.c",
+      "source_bytes": 137321,
+      "source_sha256": "5cd9c1f7441ac139b335b8203dd115fbda84865f770214caa4a2b2407ad1518a",
+      "transformed_bytes": 137332,
+      "transformed_sha256": "435c011eb95644802e41acca584c0627311475cf90f8c16753560aaf9d4ffe16"
+    },
+    {
+      "output": "agenttask_ucore.c",
+      "source": "user/src/agenttask_ucore.c",
+      "source_bytes": 41677,
+      "source_sha256": "336443b49a1ffc08825a700854fbbd38629c0f8e2087e160a51200e06a76ed69",
+      "transformed_bytes": 43442,
+      "transformed_sha256": "d0f1a009799339ac0969da7b4cb2d0bb2f8558d9a47f3aed3d57a52b3211b95e"
+    },
+    {
+      "output": "agent_eevdf_ucore.c",
+      "source": "user/src/agent_eevdf_ucore.c",
+      "source_bytes": 28457,
+      "source_sha256": "8b0f9a1f325565f60960c89be6cfba8fa5648abe40a0e32f0759be76c874c393",
+      "transformed_bytes": 30106,
+      "transformed_sha256": "5bb8b563794f49d95a152525f2ebee9a3e0b44731a6ad1e7d4fcf9a5f48cd5c5"
+    }
+  ],
+  "generator": "one_shot_metrics/prepare_guests.py",
+  "guest_schema": 1
+}

@@ -1,238 +1,151 @@
 # AgentOS 安全加固
 
-本文记录当前生产构建的安全边界。核心原则是 generation-safe 身份、最小 capability、硬资源准入、有界队列、显式 resync 和 fail-closed workflow fence。
+AgentOS 的安全目标是让身份、授权、资源和证据在同一 workflow lifecycle 内闭合。我们假设 Guest 用户态 Agent、文件内容、工具输出和模型建议都可能出错；内核只接受能够由当前身份、generation、schema 和资源状态共同验证的请求。
 
-## 1. 威胁模型
+## 威胁模型
 
-假设普通用户程序、低权限 Agent、同 workflow 的非 controller worker 和错误 Host 输入可能恶意或失效。需要阻止：
-
-- 伪造 Agent role/capability/controller；
-- 通过 PID、inode number、slot reuse 命中旧对象；
-- 跨 scope 读取/修改文件或投递 IPC；
-- 用普通事件淹没关键拒绝/控制事件；
-- 通过批量 credit 超卖全局或账户硬额度；
-- fence 与仍在运行/释放的 workflow 操作交叉；
-- 把不完整 live-query 增量当作完整状态；
-- 在 ENFORCE V3 合同路径中，从不可信文件、工具结果或跨 Agent 消息诱导计划外的发消息、改文件、起进程或提权；
-- 通过伪造 contract node、schema digest、predecessor Context、Task handle 或 ring generation 越权；
-- 通过多建线程放大 workflow CPU 份额；
-- 通过共享 SQ 页 TOCTOU、伪造 CQ ack、重复 cancel/complete 或 stale handle 产生双终态；
-- 将用户态/Host 自报成功冒充内核事实或实际 Guest 测量。
-
-不在当前证明范围：恶意内核、敌对 hypervisor/Host、物理内存篡改、供应链攻击、密码学密钥保护、完整磁盘机密性、自然语言 prompt injection 的语义识别、任意远程副作用的分布式 exactly-once。metadata catalog、Evidence Ring 和 Task 状态的身份与 generation 都以当前启动周期为界。
-
-## 2. 身份与 capability
-
-Agent 身份只能由受控创建/exec 安装。可信映像注册给出 role/capability 上限，请求还受父身份、scope 和 VFS profile 衰减。`control_id` 由内核分配；用户不能写入 Context cause/span/control 字段制造授权关系。固定 7 页 Agent Context 中，前 6 页可信 mirror 对用户只读，只有第 7 页 user cache 可读写；cache 内容从不参与 capability、scope、cause 或授权判断。
-
-所有长寿命引用至少绑定：
-
-| 对象 | 不可省略的身份 |
+| 风险 | 处理方式 |
 | --- | --- |
-| workflow | lifecycle id + generation + scope |
-| controller | workflow key + control id |
-| process/watch/wait | process slot/pointer + process/control generation |
-| file | dev + inum + incarnation + scope/lifecycle |
-| resource account | slot + generation + kind/external id |
-| execution contract/node | lifecycle key + contract generation + node/attempt + schema/input digest |
-| Task Channel | process/main-thread identity generation + lifecycle + channel/ring/slot generation |
-| typed resource | channel generation + slot/type/owned-borrowed + resource generation + owner request |
-| LLM RPC pending | full lifecycle + requester/relay control id/PID + strictly increasing nonzero correlation id + deadline tick |
-| evidence | workflow key + ticket/fence sequence |
+| 普通进程冒充 Agent | 可信映像与受控创建；身份由内核建立 |
+| PID、slot 或 inode 复用 | lifecycle、object 和 handle generation 防止 ABA |
+| 越权工具副作用 | role/capability、scope、schema、provenance 与 effect gate 联合检查 |
+| 重复请求或过期响应 | 单调 request/correlation、terminal 状态与有界 replay 记录 |
+| 资源预留后泄漏 | Workflow Credit Domain 与 teardown 精确结算 |
+| live-query 丢事件 | typed watch generation 与显式 resync |
+| 成功事件挤掉关键拒绝 | Evidence Ring 的普通区与 critical 区分离 |
+| Host 或模型伪造业务结果 | Guest 执行工具并回灌真实 result；Host 只转发协议 |
 
-旧 generation 无法通过数值复用获得新 generation 的权限。
+系统不尝试在内核中判断自然语言真假、prompt injection 或模型质量。来自文件、工具、IPC 和模型的内容始终按不可信数据处理。
 
-## 3. lifecycle cut
+## 身份、权限与 scope
 
-workflow 只有 `members + closing` 核心生命周期，加三类 gate：
+Agent 创建时，内核把以下状态绑定到进程：
 
-- operation gate：普通操作进入前计数；closing/fence 后拒绝新进入；
-- departure gate：exit/teardown 与 fence 互斥；
-- fence gate：只由当前 controller 关闭，在已有 operation/departure 为零时取得 cut。
+- Agent id、control id、role 与 capability mask；
+- workflow id、scope id 和 lifecycle generation；
+- 可信映像与 exec policy；
+- 资源账户、Context 区和事件路由。
 
-fence begin 不能在持 gate 时睡眠；发现非 quiescent 立即撤销并返回 `RETRY`。reclaim 要求 closing、members/operations/departures 为零且 fence gate 关闭。这样不需要多个 retirement phase，也不会在不同子系统各自猜测 workflow 是否结束。
+普通 `fork` 不会获得新的可信 Agent 身份。worker 只能通过 `agent_worker_create()` 从当前 workflow 创建，能力不得超过授权集合。跨 Agent message 还要命中显式 route 和相同 active workflow。
 
-### 3.1 冻结执行合同与 effect fence
+所有对象都用 generation 验证当前 incarnation。旧 watch、合同、Task Channel、resource handle、LLM response 或 fence receipt 不能绑定到复用后的进程和 lifecycle。
 
-每个 lifecycle generation 最多冻结一份 24 节点 execution contract。节点按拓扑顺序声明 tool/schema、predecessor、artifact、deadline、retry/cancel、capability、provenance/effect 和 exec/storage envelope。只有启用 `AGENT_EXECUTION_CONTRACT_F_ENFORCE` 的 V3 调用必须引用完整 contract generation、node/attempt、32 字节输入 digest、source node 和该 predecessor 已提交的精确 Context sequence。V1/V2 继续走 legacy/exploratory admission，不受冻结 DAG、attempt、deadline 或 predecessor 约束。
+## 结构化输入
 
-ENFORCE V3 的副作用前 gate 顺序是 lifecycle、contract/dependency/deadline、capability/provenance/effect、Evidence reservation、Phase Lease、effect fence。取消只有在 effect fence 前能成为 `CANCELLED` winner；效果开始后 cancel too late，原调用仍负责唯一终态。每个 accepted node/attempt 都有一个 retry-stable completion 槽，每份合同合计最多 48 槽；相同 attempt 的合法重试只读原终态，不重新执行。enforcement contract 下，合同外工具或受保护 direct syscall 不会绕过同一边界；这项保证不外推到 V1/V2。
+V2 工具调用按目录 schema 检查 key、type、value size、字符串终止、重复参数和未知字段。`tool_id` 与 `tool_name` 必须一致。内核完成 copyin 后只使用私有副本，避免用户在检查后修改共享内存。
 
-### 3.2 Context Provenance
+ENFORCE V3 在此基础上增加：
 
-六个固定标签为 `KERNEL_FACT`、`TRUSTED_USER_CONTROL`、`AGENT_DERIVED`、`UNTRUSTED_FILE_DATA`、`UNTRUSTED_TOOL_OUTPUT` 和 `CROSS_AGENT_DATA`。标签保守 OR 传播；file/query、tool output、IPC/mailbox，以及 Task core 中任何 live resource，都必须携带来源，不能通过一次 Agent 变换洗掉 untrusted 位。当前 Task bridge 不能 import/create resource，因此该规则不是 payload backend 的交付声明。
+1. 当前 lifecycle 与 frozen contract；
+2. 节点、attempt 与 predecessor 状态；
+3. schema digest 和 canonical input fingerprint；
+4. source Context sequence 与 producer identity；
+5. deadline、retry/cancel policy；
+6. provenance envelope 和资源包络。
 
-只有 `send_message`、`llm_request`、`llm_response` 使用显式 Agent-Loop accepted mask：control 集合（`KERNEL_FACT | TRUSTED_USER_CONTROL | AGENT_DERIVED`）再加 file、untrusted-tool-output 和 cross-Agent 标签。这个例外允许转发带污点的观测，不会清洗来源：IPC/LLM Context 继续保守传播原标签，capability、同 lifecycle route、schema 与 side-effect gate 也不放宽；其他副作用工具仍使用各自更窄的 manifest。MESSAGE/LLM 事件的 cause sequence 取该次结构化调用已经递增后的当前 call count，不借用上一轮编号。
+任何一步失败都在 effect fence 前返回结构化原因。副作用开始后，cancel 只报告 too-late，不把已经发生的效果伪装成取消成功。
 
-tool manifest 声明 accepted/output labels、required capability 和完整 side-effect mask。ENFORCE V3 中的外部效果必须同时通过完整 generation、冻结依赖边、capability 和数据流规则；不可信内容不能引入合同外高权限节点。拒绝在副作用前返回 `DENIED`，并把 source sequence、tool、reason、lifecycle 和 ticket 写入 critical Evidence Ring；关键 evidence 无法预留时调用 fail closed。V1/V2 仍检查 capability、scope、schema 和工具参数，但没有 frozen-edge/provenance envelope。
+## Provenance
 
-这是一项结构安全机制，不是 prompt-injection 文本分类。内核不判断某段文本是否恶意，也不调用 LLM guard；可证明的陈述是“即使模型被影响，ENFORCE V3 请求仍不能越过已冻结边界”，而不是对所有 legacy/exploratory 调用作同样保证。
+AgentOS 使用六类固定标签：
 
-## 4. 资源硬额度
-
-Workflow Credit Domain 的安全不变量：
-
-```text
-held(account,class,kind) = U + P + F
-held <= account class limit
-sum held <= global/class capacity
-P belongs to a live reservation
-U belongs to a published live object
-F may be reclaimed or trimmed, never oversold
-```
-
-补充 F 前先完成完整向量验证；失败不修改任何 resource kind。压力回收只能 trim 空闲 F，不能偷取 U/P。reservation commit/cancel 严格把 P 移到 U/F。真实对象死亡后才 `U -> F`，避免先释放计数再释放对象的窗口。
-
-Tool Phase Lease 只锁定账户已经持有的 U，不扩展 `held`。普通 release/transfer 必须扣除 locked/claimed 后再判断可用 U；active phase 不能退回普通 F/P admission。对象发布前的 claim 同时绑定 lease generation、nonce、account/class 和完整资源向量：失败精确 refund 到 locked U，成功发布由对象析构负责一次 `U -> F`，未消费 envelope 在 settle 时 `U -> F`。线程 exit/process teardown 会扫描并清理所属 lease；存在 outstanding claim 时不得跨越不安全阻塞或静默回收。
-
-fence 单锁 trim exec/storage，并拒绝任何 P 非零快照。receipt 导出的 `resource_used[]` 是该 cut 的 U；credit digest 同时绑定 lifecycle、epoch 和账户 generation，不能把另一账户的数字拼入 receipt。
-
-批量设计受 Linux percpu/rstat 思想启发，但硬限额校验和 fence cut 是 Agent workflow 特定实现。
-
-## 5. Evidence Ring 安全
-
-### 5.1 并发发布
-
-slot 必须按 `FREE/DISCARDED -> BUSY -> COMMITTED` 转移。reservation 保存 key、slot 和 ticket；commit 时逐项重验。读者使用 acquire load，只读取 COMMITTED 且 ticket 匹配的完整 event，并隐藏较早 BUSY ticket 之后的记录。
-
-fill 在 IRQ-on 完成，避免大结构复制扩大 IRQ-off 临界区。discard 进入 gap counter；系统不把失败写入伪装为完整序列。
-
-### 5.2 关键证据隔离
-
-授权效果或非 OK status 固定进入 16 槽 critical 区，普通成功进入 48 槽 ordinary 区。两区不竞争同一槽，使大量成功 telemetry 不能直接覆盖 critical 记录。critical 同时产生兼容 ledger 投影；ring 失败则 fail closed 到 legacy protected ledger。
-
-### 5.3 seal
-
-SHA-256 输入采用 domain separation，并绑定 previous root、challenge、fence sequence、ordered event/gap、metadata generation 和 credit digest。内部 rollover/retirement root 与对外 workflow fence root 使用不同标志；内部 seal 不能冒充 challenge receipt。
-
-request id cache 防止 copyout 重试重复推进 root。同 id 不同 challenge 为 conflict，旧 id 为 stale，未完成 copyout 时新 id为 retry。
-
-### 5.4 不提供的保证
-
-ring 与 retained seal 都是当前启动周期的内存状态。receipt 明确设置 `PARTIAL_COVERAGE`，不能用它证明未进入 ring 的全部内核/Host 行为，也不提供外部密钥认证。
-
-## 6. Live Query 安全
-
-### 6.1 显式准入
-
-只有 `META_WRITE` Agent 能登记 metadata。普通 VFS create 不自动提升为 workflow metadata，避免攻击者通过预创建文件获得高层属性。写入只接受普通 set 或显式 `DELETE`。
-
-### 6.2 scope 与 incarnation
-
-query/watch transition 先验证 requester scope 对 owner scope 可见。VFS unlink/content pending 保存完整 lifecycle、scope、dev/inum/incarnation；处理时重验，旧对象或跨 scope receipt 不能更新新 catalog entry。
-
-### 6.3 typed watch
-
-subscription 绑定 target、control id、workflow key 和 typed predicate。typed `FILE_QUERY` 不回退到字符串 filter。proc reuse/exec/exit 清除 token，旧 watch id 不能控制新 Agent。
-
-### 6.4 resync
-
-队列或 pending 容量不足时标记单调 resync generation，并投递 `RESYNC_REQUIRED`。旧 ACK 只清除不晚于自己的缺口；domain 表耗尽升级为 global resync，而不是静默丢失。fence 若仍有 pending/resync 返回 `RETRY`，避免 receipt 绑定不完整 metadata generation。
-
-catalog 是当前启动周期的内存状态。每次启动由用户态重新登记，授权判断不接受上一周期的对象身份。
-
-## 7. VFS、exec 与 IPC
-
-- PUBLIC、SYSTEM 和动态 workflow scope 在 lookup/open/read/write/truncate/unlink 执行访问检查。
-- 文件 metadata 不能反向改变 inode 创建时的安全域。
-- worker 委派绑定目标映像 incarnation 和 capability 上限；执行其他映像清除委派。
-- 普通 fork 不扩大 capability，跨 scope fd 撤销，每次 I/O 重新检查当前凭据。
-- MESSAGE 跨 Agent 投递必须命中同 lifecycle 定向 route。`LLM_REQUEST/LLM_RESPONSE` 还绑定 requester/relay control id/PID、严格递增 correlation 与 deadline；只有请求实际投递并发布 pending 后才推进 last correlation，匹配的成功响应只消费一次。120 秒 tick TTL 回收 pending；容量为 `NPROC` 的有界 terminal history 只在记录保留期区分过期与已消费响应，覆盖后旧响应按 unmatched 返回 `DENIED`。teardown/公开 exec 清理全部关联状态。
-- `agent_wake()` 不能伪造 file-query、timer、policy-denied 或 LLM completion。该 pending registry 只提供内核相关性 RPC，不提供模型 API、HTTPS、MCP 或远程 exactly-once。
-
-### 7.1 Workflow EEVDF
-
-调度 key 同时绑定 lifecycle、resource account generation 和 domain id。CPU service 按 workflow 而不是线程累计，因此 fork/thread fan-out 不增加公平实体。只有 lag eligible 的 workflow 参加 virtual-deadline 比较；睡眠 lag 只向全局 virtual time 衰减，不能通过短睡眠重置欠账。
-
-调度选择采用 read-only plan 后原子 commit；验证失败不污染 `vruntime`/lag。实体表总计最多 4 个，其中 1 个槽由 `BOOT_SEALED` bootstrap participant 占用，fresh workflow 最多 3 个；单 workflow 走 fast path，普通进程和容量/身份异常回退既有 RR/Agent scheduler 并记录 fallback。4-way 安全/公平测量使用 bootstrap+3 fresh；线程放大测量使用 1 个 fresh 4-thread workflow、2 个 fresh single-thread workflow 和 bootstrap peer。16 档是四波复用同一 bootstrap 加 12 个 fresh lifecycle 的逻辑样本，不是 16 个并发或独立实体，也不是每波 4 个 fresh；唤醒直方图只聚合 fresh-agent 样本。
-
-### 7.2 Task Channel
-
-- setup 只接受当前 Agent main thread 作为 single issuer，并绑定 thread identity generation、process 和 lifecycle；
-- SQ 为用户 read/write，CQ 为 read-only；request/resource 权威状态保存在两个不映射的私有页；
-- 内核只从共享 entry 读取一次，完整复制 128 字节后再验证，后续不重读用户 SQE；
-- ring/slot/channel/resource generation、严格单调 request id 和完整 contract binding 防止 ABA/replay；
-- CQ ack 必须位于私有 `cq_head..cq_tail`，用户可见 header 不是授权来源；
-- CQ full 只产生 backpressure；协议错乱进入 sticky resync，不能通过伪造水位跳过 completion；
-- accepted target 只发布一个 terminal CQE，cancel command 不另发 CQE；late cancel 不覆盖已经开始效果的原 winner；
-- timer IRQ 只标记 hard deadline 到期，重型 expire 在首个 schedulable safe point 争取唯一终态，不在 IRQ 中释放 page 或调用 provider，也不承诺 wall-clock 终止上界；
-- reclaim 等待 callback/lifecycle pin，typed handle 用 slot/type/flags/generation 和 8 槽私有 owner/digest/provenance 表重验。
-
-Task Channel 的 exactly-once 只约束终态 CQE 发布，不证明远程工具副作用具备分布式 exactly-once。typed handle 也不等于完整 Wasm/WASI runtime。
-
-core callback 协议允许 provider 返回 `PENDING`，但当前 bridge 只有内建同步 provider，且没有动态 provider registration UAPI。该 provider 只接受 null input 与 output artifact `NONE`；`RESOURCE_IMPORT` 固定返回 `DENIED`，所以当前没有 payload import 或 result resource backend，CQE result handle 保持 null。
-
-Task Channel 不承载 live model prompt/response；Guest/Host model wire 走独立的有界串口帧。
-
-### 7.3 Guest/Host live model 边界
-
-Guest `agentlive` 拥有 system prompt、有界多轮 history、tool catalog、round/correlation、工具选择校验、typed V2 执行和实际 `tool_result` 回灌。history 只保留能够完整装入协商 request frame 的最近 whole-turn suffix，不截断单条工具结果。Host relay 只独占 QEMU 串口、TLS/API key 与 provider JSON 转换；它不读取 Guest 业务文件，不选择或执行工具，不维护 Guest 语义历史，也不伪造工具结果。Host 只可为 provider 协议关联暂存 opaque tool-call id 与 correlation id。
-
-串口帧绑定 session，每个方向的 sequence 严格递增，并校验 kind、decoded length、SHA-256 和有界 base64url payload；JSON correlation id 也严格递增。单轮响应只允许一个 `tool_use` 或 `final`，多个 tool call fail closed。这里的 hash 检查用于帧完整性与防误重放，不是敌对 Host 下的密码学认证。
-
-live HTTPS 是可选能力，API key 仅来自 Host 环境。offline JSONL replay 必须走同一个 QEMU 串口、frame/session/sequence/hash/round/token 边界，而不是直接注入 Guest 状态；它可验证 wire 与 loop 状态机，但不是实际云模型结果。当前不宣称 token streaming、并行多工具、自动重试/重定向、任意长上下文或远程 exactly-once。
-
-### 7.4 MCP/A2A object-mapping prototype
-
-`host_tools/mcp_a2a_gateway.py` 是 HTTP-neutral、标准对象形状的纯用户态映射 prototype，测试后端只有 deterministic `InMemoryTaskChannelTransport`。它映射 MCP `tools/list`/`tools/call`/experimental task 方法与 A2A message send/get/cancel 的对象和 Task 状态，并检查调用者提供的 issuer/tenant/subject/version 绑定；远程 schema 也不能替代内核 tool manifest。
-
-该模块没有 HTTP binding、MCP server、A2A Agent Card/discovery、OAuth/JWS、streaming、网络重放防护、真实内核 ABI adapter 或经外部实现验证的互操作。它与上一节的 HTTPS model relay 是两条独立路径，不能以 prototype 单元测试证明 live provider、远程 Agent 或 Task Channel payload 集成。
-
-## 8. 观测接口
-
-audit/timeline/provenance/ledger 为现有用户态提供当前启动周期的有界聚合视图，并去重被 Evidence Ring shadow 的 Context 投影。
-
-`agent_audit_receipt()` 的肯定状态是 `FENCE_SEALED`，表示对应 ring ticket 已被显式 workflow fence 覆盖。
-
-## 9. 失败处理
-
-| 失败 | 行为 |
+| 标签 | 含义 |
 | --- | --- |
-| resource vector 不可准入 | 修改前拒绝 |
-| Evidence Ring 暂不可用 | ordinary 记录进入 gap/fallback；关键记录保留受保护 ledger |
-| fence 存在 operation/departure | `RETRY`，不推进 root |
-| live-query pending/resync 未清空 | `RETRY`，不发布 metadata cut |
-| fs epoch cut 失败 | `IO_ERROR`，撤销 fence gate |
-| receipt copyout 失败 | 保留 retry-stable cache，不允许新请求覆盖 |
-| old lifecycle/watch/request id | `STALE`/拒绝 |
-| ENFORCE V3 contract/node/schema/predecessor 不匹配 | 副作用前 `DENIED/STALE/CONFLICT`，关键拒绝进入 Evidence |
-| ENFORCE V3 provenance/capability/effect 不满足 | 副作用前 `DENIED`；关键 Evidence 无空间则 fail closed |
-| phase envelope/claim 不满足 | 不回退普通准入；refund/settle 或拒绝，不部分发布资源向量 |
-| EEVDF 身份/状态异常 | 不提交计划，回退 legacy scheduler 并计数 |
-| Task CQ full | 保留唯一终态，设置 backpressure，稍后发布 |
-| Task ring/slot 水位错乱 | sticky `RESYNC_REQUIRED`，只从私有权威状态恢复 |
-| cancel 与 completion 竞争 | effect fence/terminal winner 只允许一个 CQE；too-late 不覆盖原执行 |
-| Task `RESOURCE_IMPORT` | 当前 bridge 固定 `DENIED`，不创建 handle 或 payload/result backend 状态 |
-| hard deadline 到期 | timer 只标记；首个 schedulable safe point 终止，无 wall-clock 上界 |
-| LLM request corr 不递增或仍 pending 重复 | `CONFLICT/DUPLICATE`；失败投递不推进 last correlation |
-| LLM response requester/relay/lifecycle/correlation 不匹配 | 未请求/错误 relay 为 `DENIED`；有界 terminal history 保留期间，已消费 replay 为 `STALE`、120 秒 tick TTL 后为 `TIMEOUT`；记录被覆盖后按 unmatched 返回 `DENIED`；不消费另一请求 |
-| LLM pending registry / event queue 满 | 都返回 `NO_SPACE`，但结果文本分别为 `llm_pending_limit` / `event_queue_full` |
-| live wire session/sequence/hash/length/JSON 不合法 | Guest/Host fail closed；不执行模型建议的工具 |
+| `KERNEL_FACT` | 内核直接观测的事实 |
+| `TRUSTED_USER_CONTROL` | 经过控制面绑定的用户决定 |
+| `AGENT_DERIVED` | Agent 计算或汇总结果 |
+| `UNTRUSTED_FILE_DATA` | 文件内容或 metadata 派生数据 |
+| `UNTRUSTED_TOOL_OUTPUT` | 工具或模型输出 |
+| `CROSS_AGENT_DATA` | 跨 Agent 传播的数据 |
 
-## 10. 验证入口
+标签采用保守 OR 传播。读取文件、工具结果、IPC 和 Nexus TASK/artifact 不会因为再次哈希或由另一个 Agent 处理而清除不可信位。需要可信控制的副作用必须满足工具策略对 accepted labels 的要求。
+
+provenance 是数据来源分类，不是内容真实性证明。payload SHA-256 证明字节一致，也不自动证明生产者可信或调用已获授权。
+
+## 资源硬额度
+
+Workflow Credit Domain 维护 `held = U + P + F`，并要求 held 不超过 account、class 和 global limit。F 是账户已持有的 free credit，P 是 reservation，U 已计入 live object；held 可以低于配置上限。创建失败退回 F，发布对象由析构归还，teardown 还会核对成员、活动操作和资源账户。
+
+Tool Phase Credit Lease 只锁定已经计入 U 的 credit。它不能扩大额度，也不能用预测值掩盖真实对象。phase claim 使用 nonce，失败、发布和析构分别走唯一结算路径。
+
+资源不足返回 `NO_SPACE` 或相应结构化状态，不通过丢弃证据、绕过 Context 或继续执行副作用来换取成功。
+
+## Context 与 Evidence
+
+Context 内核页对用户只读，发布使用单调 sequence 和一致性检查。用户 cache 与可信记录分页，不能覆盖 header、latest response 或历史窗口。
+
+普通成功 Context 只进入一次 canonical Evidence Ring。拒绝、失败、fence 和回退记录进入关键路径，防止普通流量耗尽安全容量。ring rollover 会公开 dropped/gap，而不会把不完整窗口描述成完整历史。
+
+workflow fence 只有在 metadata/live-query 已排空、credit 精确、evidence 已封存时才发布 receipt。receipt 绑定调用者 challenge、事件范围和 previous root；未达到同一 cut 时返回 `RETRY`。
+
+当前 Evidence Ring 是启动周期内的有界内存证据，不是跨重启不可篡改日志、远程证明或外部时间戳服务。
+
+## Live Query
+
+Live Query 只接收显式登记的 volatile metadata。catalog 绑定 `dev + inode + incarnation`，文件删除和 inode 复用不会继承旧记录。查询结果同时携带 `fs_generation`、plan 和检查工作量。
+
+typed watch 保存完整谓词并按 membership 变化产生事件。事件丢失、generation 变化或队列压力设置 `RESYNC_REQUIRED`；调用方必须重新查询完整状态再确认。系统不会把残缺增量静默当作当前全集。
+
+旧 persist/autoscan flag 仅保留 ABI 数值，当前设置接口拒绝它们。内核不自动扫描任意磁盘内容。
+
+## 事件与调度
+
+事件队列总容量为 16，并保留内核与来源类别配额，防止单一外部来源占满队列。`agent_wake()` 只能注入允许的外部事件，不能伪造 file-query、policy-denied 或其他内核来源记录。
+
+等待、取消和 heartbeat 都绑定当前 Agent incarnation。timer IRQ 只标记到期并唤醒匹配实体，重型回收与 Context/Evidence 提交在可调度 safe point 完成。该设计避免 IRQ 内释放页或调用 provider，但不提供不可中断睡眠的 wall-clock 完成上界。
+
+workflow EEVDF 的配置有固定上下限。普通进程仍可运行，Agent 的 role、deadline 或事件压力不能绕过 workflow 预算。
+
+## Task Channel
+
+Task Channel 使用 single issuer、严格递增 request id、ring/slot/channel generation 和内核私有水位。内核在校验前复制完整 128 字节 SQE，CQ 对用户只读。水位异常进入 sticky resync；CQ full 只产生 backpressure，不覆盖未消费终态。
+
+每个 accepted target 只发布一个 terminal CQE。cancel 有自己的 request id，但只引用目标，不产生第二个 CQE。effect fence 前可以取消，开始副作用后返回拒绝或 too-late。
+
+当前 bridge 只有同步 null/NONE provider。`RESOURCE_IMPORT` fail closed，尚无用户 payload 或结果 resource backend；因此 typed handle 校验不应被写成已经交付的业务对象传输。
+
+## Guest、Host 与模型
+
+Guest 保存 system prompt、有界 whole-turn history、工具目录、round/correlation，验证模型建议并执行真实 V2 工具。Host daemon 只处理 owner-only 本地连接、QEMU 串口、TLS、API key 和 provider JSON 转换。
+
+串口 frame 绑定 session、方向内单调 sequence、kind、decoded length 和 SHA-256。未知 kind、超长 frame、hash 不匹配、乱序或重复 frame 都 fail closed。审批绑定 session、turn、request、correlation、工具名、canonical 参数 digest、nonce 和有效期；超时或 controller 断开即拒绝。
+
+API key 只从 Host 文件或环境变量读取，不进入 Guest、TASK、Context、命令行内容或日志。网络失败不会静默切换到 replay。
+
+仓库保存的 console/Nexus 验收使用 digest-bound offline replay。replay 证明 wire、Guest 状态机和真实内核工具路径可以复验；它不证明 live provider 可用、模型质量或远程 exactly-once。
+
+## Nexus 边界
+
+Nexus `N1` TASK 是 Guest 用户态 envelope，通过内核 `MESSAGE` 发送。内核验证 route、workflow、capability、队列和 provenance，但不解析 TASK 业务状态。
+
+Nexus artifact store 在 Guest 用户态校验 lifecycle、handle generation、kind、权限、producer/materializer、payload SHA-256 和 manifest SHA-256。它仍是 boot-volatile 的 workflow-scoped VFS 存储，不是内核 per-object ACL、签名工件库或跨重启持久服务。
+
+Nexus approval 是 Guest gate，继续受内核 capability、scope 和 VFS 检查。MCP/A2A 模块只做 deterministic in-memory 对象映射，不提供 HTTP、OAuth/JWS、streaming 或外部互操作安全声明。
+
+## 失败处理
+
+| 条件 | 结果 |
+| --- | --- |
+| lifecycle 或 generation 过期 | `STALE` / `CONFLICT`，不迁移旧状态 |
+| capability、scope 或 provenance 不满足 | `DENIED`，不开始副作用 |
+| 参数、版本、结构尺寸错误 | `BAD_*`，不使用未验证字段 |
+| credit、队列或表容量耗尽 | `NO_SPACE` / backpressure，保持已有对象 |
+| watch 增量不完整 | `RESYNC_REQUIRED`，要求全量重查 |
+| fence 尚未达到一致 cut | `RETRY`，不发布完整 receipt |
+| 模型 frame 或审批绑定不匹配 | 拒绝该回合，不执行工具 |
+| live provider 失败 | 结束为失败；不会伪造结果或自动改用 replay |
+
+## 验证入口
 
 ```bash
-python -B scripts/test-workflow-credit-domain.py
-python -B scripts/test-agent-evidence-ring.py
-python -B scripts/test-agent-live-query-fs.py
-python -B scripts/test-workflow-fence.py
-python -B scripts/test-workflow-syscall-cut.py
-python -B scripts/test-agent-execution-contract.py
-python -B scripts/test-agent-task-channel.py
-python -B host_tools/test_workflow_scheduler_model.py
-python -B host_tools/test_agent_task_transport.py
-python -B host_tools/test_mcp_a2a_gateway.py
-python -B host_tools/test_guest_llm_relay.py
-make agent-live-demo-check
-make agent-live-demo
-make agent-module-check TOOLPREFIX=riscv-none-elf-
-make kernel-stack-check TOOLPREFIX=riscv-none-elf-
+make agent-uapi-check
+make agent-module-check
+AGENT_TEST_CASE=agentsecurity_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agenttrust_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+make agentos-console-check
+make agentos-nexus-check
 ```
 
-前一条只验证静态集成/Host 协议，后一条默认运行 6 轮同串口 replay QEMU 闭环并要求顶层 `agentlive_ucore: parent passed`；replay 不是 live provider 实测。Windows xPack 环境可为 QEMU 命令追加 `TOOLPREFIX=riscv-none-elf-`。
-
-静态/模型检查验证安全合同形状。QEMU 行为和性能结论仍需对应 Guest/Host 场景的实际运行。
-
-## 11. 来源与 clean-room 边界
-
-Linux CPU accounting/percpu/rstat、Linux BPF ring buffer、Haiku BFS live query 分别提供批量计数、有序事件环和属性实时查询的概念参考。新增合同主线还参考 [Linux EEVDF](https://docs.kernel.org/scheduler/sched-eevdf.html)、[io_uring(7)](https://man7.org/linux/man-pages/man7/io_uring.7.html)、[WIT/WASI 0.3](https://component-model.bytecodealliance.org/design/wit.html)、[AgentCgroup](https://arxiv.org/abs/2602.09345)、[Murakkab](https://arxiv.org/abs/2508.18298)、[CaMeL](https://arxiv.org/abs/2503.18813)、[IPIGuard](https://arxiv.org/abs/2508.15310)、[Anthropic tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works)、[Claude Code agentic loop](https://code.claude.com/docs/en/how-claude-code-works)、[MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) 与 [A2A v1](https://a2a-protocol.org/latest/specification/) 的公开思想或对象规范。项目没有复制或 vendoring 这些上游/原型/SDK 的源码、数据、二进制、测试或磁盘格式；没有把 io_uring/Wasm 或远程协议栈整体搬入内核。完整链接与披露见 [task6-execution-contract.md](task6-execution-contract.md) 与 [../../NOTICE](../../NOTICE)。
+静态 checker 只证明源码合同；需要 Guest 行为时运行对应 QEMU 场景或固定 replay。完整层次见[验证说明](verification.md)。

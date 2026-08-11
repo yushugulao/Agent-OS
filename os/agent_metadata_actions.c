@@ -73,29 +73,6 @@ agent_text_append(char *dst, int n, const char *src)
 		safestrcpy(dst + len, src, n - len);
 }
 
-static void
-agent_text_field_append(char *out, int n, const char *prefix,
-			const char *value)
-{
-	if (!value[0])
-		return;
-	agent_text_append(out, n, prefix);
-	agent_text_append(out, n, value);
-}
-
-void
-agent_metadata_actions_format_file_event(const struct agent_file_meta *meta,
-					 char *out, int n)
-{
-	memset(out, 0, n);
-	agent_text_field_append(out, n, "status=", meta->status);
-	agent_text_field_append(out, n, ";stage=", meta->stage);
-	agent_text_field_append(out, n, ";run_id=", meta->run_id);
-	agent_text_field_append(out, n, ";project=", meta->project);
-	if (!out[0])
-		safestrcpy(out, "status=changed", n);
-}
-
 uint64
 agent_metadata_actions_label_bit(const char *label)
 {

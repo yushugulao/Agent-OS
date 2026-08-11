@@ -352,45 +352,6 @@ int workflow_lifecycle_scope(struct workflow_lifecycle_key key,
 	return result;
 }
 
-int
-workflow_lifecycle_generation_floor(struct workflow_lifecycle_key key)
-{
-	uint slot;
-	int enabled;
-
-	if (!workflow_lifecycle_key_valid(key) ||
-	    key.id > WORKFLOW_LIFECYCLE_CAP)
-		return -1;
-	slot = key.id - 1;
-	enabled = intr_save();
-	/* 历史检查点可以早于当前槽位复用代次。 */
-	if (workflow_lifecycles[slot].used &&
-	    key.generation > workflow_lifecycles[slot].generation) {
-		intr_restore(enabled);
-		return -1;
-	}
-	if (key.generation > workflow_lifecycle_generations[slot])
-		workflow_lifecycle_generations[slot] = key.generation;
-	intr_restore(enabled);
-	return 0;
-}
-
-int
-workflow_lifecycle_generation_lease_floor(uint slot, uint64 lease_end)
-{
-	uint64 floor;
-	int enabled;
-
-	if (slot >= WORKFLOW_LIFECYCLE_CAP)
-		return -1;
-	floor = lease_end == 0 ? ~0ULL : lease_end - 1;
-	enabled = intr_save();
-	if (floor > workflow_lifecycle_generations[slot])
-		workflow_lifecycle_generations[slot] = floor;
-	intr_restore(enabled);
-	return 0;
-}
-
 int workflow_lifecycle_alloc_context_branch(struct workflow_lifecycle_key key,
 					    uint64 *branch_generation)
 {

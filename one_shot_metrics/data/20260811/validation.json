@@ -1,0 +1,786 @@
+{
+  "schema_version": 1,
+  "kind": "agentos-one-shot-chart-readiness",
+  "tables_dir": "tables",
+  "valid": true,
+  "ready": true,
+  "table_rows": {
+    "agenteval_concurrency": 12,
+    "agenteval_concurrency_samples": 448,
+    "agenteval_diagnostics": 28,
+    "agenteval_pairs": 780,
+    "agenteval_samples": 1560,
+    "contest_io_normalized": 320,
+    "contest_paired": 16,
+    "contest_paths": 32,
+    "eevdf_cohorts": 36,
+    "eevdf_jain": 36,
+    "eevdf_samples": 180,
+    "eevdf_wake_histogram": 852,
+    "eevdf_wakeups": 504,
+    "task_operations": 1536,
+    "task_perf": 96,
+    "task_perf_normalized": 864,
+    "task_sequences": 96
+  },
+  "checks": [
+    {
+      "name": "schema:contest_paired",
+      "status": "pass",
+      "detail": "required columns are present",
+      "observed": [
+        "campaign_id",
+        "csv_line",
+        "indexed_bytes_read",
+        "indexed_core_duration_us",
+        "indexed_directory_block_probes",
+        "indexed_directory_entries_examined",
+        "indexed_durable_flushes",
+        "indexed_end_to_end_duration_us",
+        "indexed_minus_traversal_core_us",
+        "indexed_overwrite_prereads_skipped",
+        "indexed_physical_reads",
+        "indexed_physical_writes",
+        "indexed_records_examined",
+        "indexed_virtio_batched_read_requests",
+        "indexed_virtio_notifications",
+        "indexed_virtio_submitted_requests",
+        "indexed_workload_syscalls",
+        "order",
+        "sample_id",
+        "source_file",
+        "source_ordinal",
+        "source_sha256",
+        "traversal_bytes_read",
+        "traversal_core_duration_us",
+        "traversal_directory_block_probes",
+        "traversal_directory_entries_examined",
+        "traversal_durable_flushes",
+        "traversal_end_to_end_duration_us",
+        "traversal_over_indexed_core_ratio",
+        "traversal_overwrite_prereads_skipped",
+        "traversal_physical_reads",
+        "traversal_physical_writes",
+        "traversal_records_examined",
+        "traversal_virtio_batched_read_requests",
+        "traversal_virtio_notifications",
+        "traversal_virtio_submitted_requests",
+        "traversal_workload_syscalls"
+      ],
+      "required": [
+        "indexed_core_duration_us",
+        "order",
+        "sample_id",
+        "traversal_core_duration_us"
+      ]
+    },
+    {
+      "name": "schema:contest_io_normalized",
+      "status": "pass",
+      "detail": "required columns are present",
+      "observed": [
+        "campaign_id",
+        "counter_owner",
+        "counter_representation",
+        "counter_scope",
+        "counter_window",
+        "denominator_metric",
+        "denominator_owner",
+        "denominator_scope",
+        "denominator_window",
+        "metric",
+        "metric_origin",
+        "normalization_cross_scope",
+        "normalization_cross_window",
+        "order",
+        "path",
+        "per_1000_workload_syscalls",
+        "per_record_examined",
+        "per_workload_syscall",
+        "raw_counter_evidence",
+        "raw_value",
+        "records_examined",
+        "sample_id",
+        "source_file",
+        "source_ordinal",
+        "source_sha256",
+        "workload_syscalls"
+      ],
+      "required": [
+        "counter_owner",
+        "counter_representation",
+        "counter_scope",
+        "counter_window",
+        "denominator_metric",
+        "denominator_owner",
+        "denominator_scope",
+        "denominator_window",
+        "metric",
+        "metric_origin",
+        "normalization_cross_scope",
+        "normalization_cross_window",
+        "path",
+        "per_workload_syscall",
+        "raw_counter_evidence",
+        "raw_value"
+      ]
+    },
+    {
+      "name": "schema:agenteval_samples",
+      "status": "pass",
+      "detail": "required columns are present",
+      "observed": [
+        "cache",
+        "campaign_id",
+        "dataset_size",
+        "duration_us",
+        "experiment",
+        "index_rebuild_records",
+        "line_number",
+        "load",
+        "operations",
+        "order",
+        "pair",
+        "records_examined",
+        "result_cache_hits",
+        "result_fingerprint",
+        "result_items",
+        "schema",
+        "source_file",
+        "source_ordinal",
+        "source_sha256",
+        "status",
+        "variant",
+        "work_units",
+        "workload_fingerprint"
+      ],
+      "required": [
+        "duration_us",
+        "experiment",
+        "load",
+        "operations",
+        "order",
+        "pair",
+        "result_fingerprint",
+        "schema",
+        "status",
+        "variant",
+        "workload_fingerprint"
+      ]
+    },
+    {
+      "name": "schema:agenteval_pairs",
+      "status": "pass",
+      "detail": "required columns are present",
+      "observed": [
+        "baseline_cache",
+        "baseline_duration_us",
+        "baseline_records_examined",
+        "baseline_result_items",
+        "baseline_us_per_operation",
+        "baseline_variant",
+        "baseline_work_units",
+        "campaign_id",
+        "dataset_size",
+        "experiment",
+        "load",
+        "operations",
+        "order",
+        "pair",
+        "result_fingerprint",
+        "result_fingerprint_equal",
+        "source_file",
+        "source_ordinal",
+        "source_sha256",
+        "speedup_baseline_over_treatment",
+        "treatment_cache",
+        "treatment_duration_us",
+        "treatment_minus_baseline_us",
+        "treatment_records_examined",
+        "treatment_result_items",
+        "treatment_us_per_operation",
+        "treatment_variant",
+        "treatment_work_units",
+        "workload_fingerprint",
+        "workload_fingerprint_equal"
+      ],
+      "required": [
+        "baseline_duration_us",
+        "experiment",
+        "load",
+        "operations",
+        "pair",
+        "result_fingerprint_equal",
+        "speedup_baseline_over_treatment",
+        "treatment_duration_us",
+        "workload_fingerprint_equal"
+      ]
+    },
+    {
+      "name": "schema:task_sequences",
+      "status": "pass",
+      "detail": "required columns are present",
+      "observed": [
+        "boot_round",
+        "campaign_id",
+        "duration_us",
+        "end_us",
+        "line_number",
+        "operations",
+        "order",
+        "path",
+        "sched_dispatch_delta",
+        "schema",
+        "sequence_elapsed_ticks",
+        "service_start_span_ticks",
+        "source_file",
+        "source_ordinal",
+        "source_sha256",
+        "start_us",
+        "status",
+        "syscalls"
+      ],
+      "required": [
+        "boot_round",
+        "duration_us",
+        "end_us",
+        "operations",
+        "path",
+        "schema",
+        "start_us",
+        "syscalls"
+      ]
+    },
+    {
+      "name": "schema:task_operations",
+      "status": "pass",
+      "detail": "required columns are present",
+      "observed": [
+        "boot_round",
+        "campaign_id",
+        "line_number",
+        "operation_index",
+        "order",
+        "path",
+        "schema",
+        "service_start_interval_tick",
+        "source_file",
+        "source_ordinal",
+        "source_sha256",
+        "status"
+      ],
+      "required": [
+        "boot_round",
+        "operation_index",
+        "path",
+        "schema",
+        "service_start_interval_tick"
+      ]
+    },
+    {
+      "name": "schema:eevdf_wakeups",
+      "status": "pass",
+      "detail": "required columns are present",
+      "observed": [
+        "campaign_id",
+        "censor_limit_ticks",
+        "dispatch_tick",
+        "histogram_bucket",
+        "index",
+        "line_number",
+        "probe",
+        "reason_flags",
+        "right_censored",
+        "scenario",
+        "schema",
+        "serial_fragmented_line",
+        "serial_segment_count",
+        "serial_segment_index",
+        "source_file",
+        "source_ordinal",
+        "source_sha256",
+        "status",
+        "wakeup_latency_ticks"
+      ],
+      "required": [
+        "histogram_bucket",
+        "index",
+        "probe",
+        "scenario",
+        "schema",
+        "wakeup_latency_ticks"
+      ]
+    },
+    {
+      "name": "schema:eevdf_jain",
+      "status": "pass",
+      "detail": "required columns are present",
+      "observed": [
+        "basis",
+        "campaign_id",
+        "line_number",
+        "n",
+        "scenario",
+        "source_file",
+        "source_ordinal",
+        "source_sha256",
+        "sum",
+        "sum_sq"
+      ],
+      "required": [
+        "n",
+        "scenario",
+        "sum",
+        "sum_sq"
+      ]
+    },
+    {
+      "name": "schema_version:agenteval_samples",
+      "status": "pass",
+      "detail": "marker schema must be exactly 2",
+      "observed": [
+        "2"
+      ],
+      "required": [
+        "2"
+      ]
+    },
+    {
+      "name": "schema_version:agenteval_diagnostics",
+      "status": "pass",
+      "detail": "marker schema must be exactly 2",
+      "observed": [
+        "2"
+      ],
+      "required": [
+        "2"
+      ]
+    },
+    {
+      "name": "schema_version:agenteval_concurrency_samples",
+      "status": "pass",
+      "detail": "marker schema must be exactly 2",
+      "observed": [
+        "2"
+      ],
+      "required": [
+        "2"
+      ]
+    },
+    {
+      "name": "schema_version:agenteval_concurrency",
+      "status": "pass",
+      "detail": "marker schema must be exactly 2",
+      "observed": [
+        "2"
+      ],
+      "required": [
+        "2"
+      ]
+    },
+    {
+      "name": "schema_version:task_sequences",
+      "status": "pass",
+      "detail": "marker schema must be exactly 1",
+      "observed": [
+        "1"
+      ],
+      "required": [
+        "1"
+      ]
+    },
+    {
+      "name": "schema_version:task_operations",
+      "status": "pass",
+      "detail": "marker schema must be exactly 1",
+      "observed": [
+        "1"
+      ],
+      "required": [
+        "1"
+      ]
+    },
+    {
+      "name": "schema_version:eevdf_wakeups",
+      "status": "pass",
+      "detail": "marker schema must be exactly 1",
+      "observed": [
+        "1"
+      ],
+      "required": [
+        "1"
+      ]
+    },
+    {
+      "name": "contest_unique_samples",
+      "status": "pass",
+      "detail": "contest sample IDs are unique within each source",
+      "observed": 16,
+      "required": 16
+    },
+    {
+      "name": "contest_positive_latency",
+      "status": "pass",
+      "detail": "both paired core latencies are positive"
+    },
+    {
+      "name": "contest_ab_ba_balance",
+      "status": "pass",
+      "detail": "AB/BA lane order differs by at most one sample",
+      "observed": {
+        "traversal_then_indexed": 8,
+        "indexed_then_traversal": 8
+      },
+      "required": "difference <= 1"
+    },
+    {
+      "name": "chart:traversal_indexed_dumbbell",
+      "status": "pass",
+      "detail": "paired traversal/indexed boot measurements",
+      "observed": {
+        "paired_boots": 16,
+        "required_boots": 16
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "chart:core_latency_violin",
+      "status": "pass",
+      "detail": "raw core latency distribution for both paths",
+      "observed": {
+        "samples_per_path": 16,
+        "required_boots": 16
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "chart:paired_difference_ecdf",
+      "status": "pass",
+      "detail": "within-boot indexed-minus-traversal differences",
+      "observed": {
+        "differences": 16,
+        "required_boots": 16
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "agenteval_pair_equivalence",
+      "status": "pass",
+      "detail": "every treatment has the same workload and result fingerprint as its baseline",
+      "observed": 780,
+      "required": 780
+    },
+    {
+      "name": "agenteval_positive_latency",
+      "status": "pass",
+      "detail": "all paired durations and speedups are positive"
+    },
+    {
+      "name": "agenteval_ab_ba_balance",
+      "status": "pass",
+      "detail": "each parameter cell uses balanced alternating AB/BA order",
+      "observed": 52,
+      "required": "all cells balanced"
+    },
+    {
+      "name": "chart:catalog_hit_speedup_heatmap",
+      "status": "pass",
+      "detail": "complete catalog-size by hit-count grid of paired speedups",
+      "observed": {
+        "catalog_sizes": [
+          24,
+          64,
+          96
+        ],
+        "hit_counts": [
+          1,
+          2,
+          4,
+          8
+        ],
+        "cells": 12,
+        "minimum_pairs_per_cell": 15,
+        "required_pairs_per_cell": 15
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "chart:performance_surface_3d",
+      "status": "pass",
+      "detail": "same measured grid rendered as a non-interpolated median speedup surface",
+      "observed": {
+        "catalog_sizes": [
+          24,
+          64,
+          96
+        ],
+        "hit_counts": [
+          1,
+          2,
+          4,
+          8
+        ],
+        "cells": 12,
+        "minimum_pairs_per_cell": 15,
+        "required_pairs_per_cell": 15
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "chart:cold_warm_indexed_grouped",
+      "status": "pass",
+      "detail": "first measured scan, repeated scan, and ready-index observations share at least three loads",
+      "observed": {
+        "first_scan_samples": 12,
+        "repeat_scan_samples": 168,
+        "ready_index_samples": 180,
+        "loads": 3
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "task_positive_latency",
+      "status": "pass",
+      "detail": "all one-shot sequence durations are positive"
+    },
+    {
+      "name": "task_raw_operation_completeness",
+      "status": "pass",
+      "detail": "each sequence retains exactly one raw interval row per operation",
+      "observed": "complete",
+      "required": "raw rows == operations"
+    },
+    {
+      "name": "chart:task_latency_distribution",
+      "status": "pass",
+      "detail": "batch/scalar_v3/SQ-CQ raw sequence and per-operation distributions",
+      "observed": {
+        "sequence_counts": {
+          "batch": 32,
+          "scalar_v3": 32,
+          "sq_cq": 32
+        },
+        "raw_operation_rows": 1536,
+        "required_boots": 4,
+        "required_rounds_per_path_per_boot": 8
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "chart:eevdf_wakeup_ecdf",
+      "status": "pass",
+      "detail": "exact per-probe ECDF preferred; four-bin step CDF is explicitly labeled when used",
+      "observed": {
+        "method": "exact_probe_ecdf",
+        "exact_probe_samples": 504,
+        "histogram_samples": 500,
+        "scenarios": 5
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "eevdf_serial_sample_integrity",
+      "status": "warn",
+      "detail": "3 sample summaries were serial-spliced; they remain marked in the raw table and are excluded from histogram derivation",
+      "observed": 3,
+      "required": 0
+    },
+    {
+      "name": "chart:jain_fairness_concurrency",
+      "status": "pass",
+      "detail": "Jain fairness recomputed from each workflow's unscaled service_cycles at concurrency 1-4",
+      "observed": {
+        "method": "raw_eevdf_service_cycles",
+        "eevdf_concurrency": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "eevdf_boots": 6
+      },
+      "required": "chart contract"
+    },
+    {
+      "name": "contest_io_metric_shape",
+      "status": "pass",
+      "detail": "each frozen contest I/O metric has one row per path and boot",
+      "observed": {
+        "bytes_read": 32,
+        "directory_block_probes": 32,
+        "directory_entries_examined": 32,
+        "durable_flushes": 32,
+        "overwrite_prereads_skipped": 32,
+        "physical_reads": 32,
+        "physical_writes": 32,
+        "virtio_batched_read_requests": 32,
+        "virtio_notifications": 32,
+        "virtio_submitted_requests": 32
+      },
+      "required": {
+        "virtio_submitted_requests": 32,
+        "virtio_batched_read_requests": 32,
+        "bytes_read": 32,
+        "directory_entries_examined": 32,
+        "virtio_notifications": 32,
+        "physical_writes": 32,
+        "durable_flushes": 32,
+        "overwrite_prereads_skipped": 32,
+        "directory_block_probes": 32,
+        "physical_reads": 32
+      }
+    },
+    {
+      "name": "contest_io_lane_scope",
+      "status": "pass",
+      "detail": "bytes_read is workflow-actor lane work reported over the core window"
+    },
+    {
+      "name": "contest_io_global_scope",
+      "status": "pass",
+      "detail": "block, directory, and virtio values are shared global end-to-end deltas"
+    },
+    {
+      "name": "contest_io_denominator_scope",
+      "status": "pass",
+      "detail": "normalization denominator is the workflow actor's core-window observer syscall counter"
+    },
+    {
+      "name": "contest_io_evidence_paths",
+      "status": "pass",
+      "detail": "raw counter evidence paths name retained contest serial logs"
+    },
+    {
+      "name": "chart:kernel_io_normalized_heatmap",
+      "status": "pass",
+      "detail": "mixed-scope lane work and global end-to-end deltas per observer syscall, plus Task-path work per operation",
+      "observed": {
+        "contest_rows": 320,
+        "task_rows": 864,
+        "contest_paths": [
+          "indexed",
+          "traversal"
+        ],
+        "task_paths": [
+          "batch",
+          "scalar_v3",
+          "sq_cq"
+        ]
+      },
+      "required": "chart contract"
+    }
+  ],
+  "chart_readiness": {
+    "traversal_indexed_dumbbell": {
+      "ready": true,
+      "detail": "paired traversal/indexed boot measurements",
+      "paired_boots": 16,
+      "required_boots": 16
+    },
+    "core_latency_violin": {
+      "ready": true,
+      "detail": "raw core latency distribution for both paths",
+      "samples_per_path": 16,
+      "required_boots": 16
+    },
+    "paired_difference_ecdf": {
+      "ready": true,
+      "detail": "within-boot indexed-minus-traversal differences",
+      "differences": 16,
+      "required_boots": 16
+    },
+    "catalog_hit_speedup_heatmap": {
+      "ready": true,
+      "detail": "complete catalog-size by hit-count grid of paired speedups",
+      "catalog_sizes": [
+        24,
+        64,
+        96
+      ],
+      "hit_counts": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "cells": 12,
+      "minimum_pairs_per_cell": 15,
+      "required_pairs_per_cell": 15
+    },
+    "performance_surface_3d": {
+      "ready": true,
+      "detail": "same measured grid rendered as a non-interpolated median speedup surface",
+      "catalog_sizes": [
+        24,
+        64,
+        96
+      ],
+      "hit_counts": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "cells": 12,
+      "minimum_pairs_per_cell": 15,
+      "required_pairs_per_cell": 15
+    },
+    "cold_warm_indexed_grouped": {
+      "ready": true,
+      "detail": "first measured scan, repeated scan, and ready-index observations share at least three loads",
+      "first_scan_samples": 12,
+      "repeat_scan_samples": 168,
+      "ready_index_samples": 180,
+      "loads": 3
+    },
+    "task_latency_distribution": {
+      "ready": true,
+      "detail": "batch/scalar_v3/SQ-CQ raw sequence and per-operation distributions",
+      "sequence_counts": {
+        "batch": 32,
+        "scalar_v3": 32,
+        "sq_cq": 32
+      },
+      "raw_operation_rows": 1536,
+      "required_boots": 4,
+      "required_rounds_per_path_per_boot": 8
+    },
+    "eevdf_wakeup_ecdf": {
+      "ready": true,
+      "detail": "exact per-probe ECDF preferred; four-bin step CDF is explicitly labeled when used",
+      "method": "exact_probe_ecdf",
+      "exact_probe_samples": 504,
+      "histogram_samples": 500,
+      "scenarios": 5
+    },
+    "jain_fairness_concurrency": {
+      "ready": true,
+      "detail": "Jain fairness recomputed from each workflow's unscaled service_cycles at concurrency 1-4",
+      "method": "raw_eevdf_service_cycles",
+      "eevdf_concurrency": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "eevdf_boots": 6
+    },
+    "kernel_io_normalized_heatmap": {
+      "ready": true,
+      "detail": "mixed-scope lane work and global end-to-end deltas per observer syscall, plus Task-path work per operation",
+      "contest_rows": 320,
+      "task_rows": 864,
+      "contest_paths": [
+        "indexed",
+        "traversal"
+      ],
+      "task_paths": [
+        "batch",
+        "scalar_v3",
+        "sq_cq"
+      ]
+    }
+  },
+  "error_count": 0,
+  "warning_count": 1
+}

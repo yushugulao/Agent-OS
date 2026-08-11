@@ -1285,19 +1285,6 @@ agent_context_append(struct proc *p, struct agent_op *op,
 }
 
 int
-agent_context_append_ticket(struct proc *p, struct agent_op *op,
-			    struct agent_result *latest, uint64 tick,
-			    int authority_effect, uint64 *evidence_ticket_out)
-{
-	if (evidence_ticket_out == 0)
-		return -1;
-	*evidence_ticket_out = 0;
-	return agent_context_append_flags(
-		p, op, latest, tick, AGENT_CONTEXT_RECORD_F_SYSTEM,
-		authority_effect, 0, 0, 0, evidence_ticket_out);
-}
-
-int
 agent_context_append_reserved_ticket(
 	struct proc *p, struct agent_op *op, struct agent_result *latest,
 	uint64 tick, int authority_effect,

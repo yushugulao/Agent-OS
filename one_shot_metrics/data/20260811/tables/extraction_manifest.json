@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "kind": "agentos-one-shot-chart-tables",
+  "campaign_id": "agentos-advanced-figures-20260811",
+  "source_path_policy": "relative_to_explicit_source_root",
+  "sources": [
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agent-eevdf-boot-01.txt",
+      "source_sha256": "352c5b3107f2071425e01eb4a647a975770576c2a40e62959e34c8649175f774",
+      "source_ordinal": 1,
+      "kind": "serial",
+      "bytes": 29799,
+      "marker_rows": 133,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agent-eevdf-boot-02.txt",
+      "source_sha256": "b18579a24fa321b99b427db2bb8537ed2d663f4bb12b9d5b020387eb41f802b3",
+      "source_ordinal": 2,
+      "kind": "serial",
+      "bytes": 29799,
+      "marker_rows": 133,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agent-eevdf-boot-03.txt",
+      "source_sha256": "3d92c335e59f1bd5549a291fe3625a837d28ccba4c4e2339020d71e1f4d25449",
+      "source_ordinal": 3,
+      "kind": "serial",
+      "bytes": 29799,
+      "marker_rows": 133,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agent-eevdf-boot-04.txt",
+      "source_sha256": "6291cde425dbf107b85e545f0427490ab7853bd460383c05ae49831dc641d2c2",
+      "source_ordinal": 4,
+      "kind": "serial",
+      "bytes": 29799,
+      "marker_rows": 133,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agent-eevdf-boot-05.txt",
+      "source_sha256": "02dc1f222bcc5d979d4ad55eeb77c5faf3223080b68de71dce029e6adc22de8b",
+      "source_ordinal": 5,
+      "kind": "serial",
+      "bytes": 29797,
+      "marker_rows": 133,
+      "fragmented_marker_rows": 6,
+      "incomplete_marker_rows": 3
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agent-eevdf-boot-06.txt",
+      "source_sha256": "66c8b620617ba355ce50a39f269b9f302f88d3d02b624801b343524e5b25795e",
+      "source_ordinal": 6,
+      "kind": "serial",
+      "bytes": 29799,
+      "marker_rows": 133,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agenteval-hit-01-boot-01.txt",
+      "source_sha256": "96e39a8a251ef906779a7453aed54b40215ea7bf0c7fac6b8e677cae0ccfb572",
+      "source_ordinal": 7,
+      "kind": "serial",
+      "bytes": 187809,
+      "marker_rows": 512,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agenteval-hit-02-boot-01.txt",
+      "source_sha256": "017482ca44af16d070c3c32dc49a1ce983afbc98a1ef98f2210298e468d02604",
+      "source_ordinal": 8,
+      "kind": "serial",
+      "bytes": 187904,
+      "marker_rows": 512,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agenteval-hit-04-boot-01.txt",
+      "source_sha256": "d2918a32153c26724d68b8d5455369bd405dfcac7926791fd3b41bf336378c4b",
+      "source_ordinal": 9,
+      "kind": "serial",
+      "bytes": 187927,
+      "marker_rows": 512,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agenteval-hit-08-boot-01.txt",
+      "source_sha256": "8281fb57314301c727e4fb420e9b6b99c2eecd565a90902234bbf25b317dcc5b",
+      "source_ordinal": 10,
+      "kind": "serial",
+      "bytes": 188038,
+      "marker_rows": 512,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agenttask-boot-01.txt",
+      "source_sha256": "8d51078131491d3531d5e3b52993a70476a44b0119e9f5a1d242b5cbb89d9403",
+      "source_ordinal": 11,
+      "kind": "serial",
+      "bytes": 71290,
+      "marker_rows": 456,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agenttask-boot-02.txt",
+      "source_sha256": "5d77cd98efd81c595ddaee2d03251023d3aead324da3669beee3135437b1d503",
+      "source_ordinal": 12,
+      "kind": "serial",
+      "bytes": 71290,
+      "marker_rows": 456,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agenttask-boot-03.txt",
+      "source_sha256": "87e08ced3f123809bd89582497c79496a607bbb0290b7ee6b60193ece5d9b7e1",
+      "source_ordinal": 13,
+      "kind": "serial",
+      "bytes": 71290,
+      "marker_rows": 456,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/serial/agenttask-boot-04.txt",
+      "source_sha256": "f2eb82fda9bc94fe98da85df3b0505122448654751eef717512b2d1ee7a906e1",
+      "source_ordinal": 14,
+      "kind": "serial",
+      "bytes": 71290,
+      "marker_rows": 456,
+      "fragmented_marker_rows": 0,
+      "incomplete_marker_rows": 0
+    },
+    {
+      "campaign_id": "agentos-advanced-figures-20260811",
+      "source_file": "raw/contest/measurements.csv",
+      "source_sha256": "4a51307899074b0f52fba6d3088eab29209d5054b988c6faecb678bdba6d1665",
+      "source_ordinal": 15,
+      "kind": "contest_measurements_csv",
+      "bytes": 3363,
+      "marker_rows": 16
+    }
+  ],
+  "tables": {
+    "contest_paired": 16,
+    "contest_paths": 32,
+    "contest_io_normalized": 320,
+    "agenteval_samples": 1560,
+    "agenteval_pairs": 780,
+    "agenteval_diagnostics": 28,
+    "agenteval_concurrency_samples": 448,
+    "agenteval_concurrency": 12,
+    "task_sequences": 96,
+    "task_operations": 1536,
+    "task_perf": 96,
+    "task_perf_normalized": 864,
+    "task_fingerprints": 96,
+    "eevdf_samples": 180,
+    "eevdf_cohorts": 36,
+    "eevdf_jain": 36,
+    "eevdf_wakeups": 504,
+    "eevdf_wake_histogram": 852,
+    "eevdf_amplification": 6
+  },
+  "warnings": [
+    "raw/serial/agent-eevdf-boot-05.txt: 3 serial marker row(s) are explicitly marked incomplete"
+  ],
+  "units": {
+    "duration_us": "microseconds",
+    "service_start_interval_tick": "uCore scheduler ticks",
+    "wakeup_latency_ticks": "uCore scheduler ticks",
+    "fairness_jain_ppm": "parts per million",
+    "normalized_io": "counter units per measured workload syscall"
+  },
+  "notes": [
+    "No aggregate replaces a raw sample; paired and normalized rows are derived views.",
+    "EEVDF ready_age values at the 200-tick reporting cap are marked right-censored.",
+    "EEVDF histogram bucket 3 is open-ended (>8 ticks) and has no invented upper bound."
+  ]
+}

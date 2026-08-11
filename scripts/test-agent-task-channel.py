@@ -395,11 +395,16 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         "AGENT_EXECUTION_REASON_CONTRACT_RETIRING",
         "RETIRING is an authoritative Task admission, not a validate retry",
     )
-    forbid(
-        bridge_validate,
-        "agent_execution_task_preflight(",
-        "Task validate must not publish pre-admission Context/Evidence",
-    )
+    for side_effect in (
+        "agent_execution_task_submit_sync(",
+        "agent_context_append",
+        "agent_evidence_",
+    ):
+        forbid(
+            bridge_validate,
+            side_effect,
+            "Task validate must not publish pre-admission side effects",
+        )
 
     request_digest = function_body(execution, "agent_execution_request_digest")
     require_order(
@@ -1359,17 +1364,6 @@ def validate_task_channel(sources: dict[str, str]) -> None:
             "slot->producer_pid = imported->producer_pid",
         ),
         "resource slots must symmetrically copy producer identity",
-    )
-    resource_publish = function_body(channel, "agent_task_channel_resource_publish")
-    require_order(
-        resource_publish,
-        (
-            "imported->producer_node_id != request->sqe.node_id",
-            "imported->producer_control_id != p->agent_control_id",
-            "imported->producer_pid != p->pid",
-            "return AGENT_TASK_CHANNEL_DENIED",
-        ),
-        "published results must be attributed to the current process identity",
     )
     input_acquire = function_body(channel, "agent_task_request_input_acquire_locked")
     require_order(
@@ -2483,7 +2477,7 @@ class TaskChannelTests(unittest.TestCase):
         self.assert_mutation_rejected(
             "os/agent_task_bridge.c",
             "status = agent_execution_contract_preflight(",
-            "status = agent_execution_task_preflight(",
+            "status = agent_execution_task_submit_sync(",
         )
         self.assert_mutation_rejected(
             "os/agent_task_bridge.c",
@@ -2552,13 +2546,6 @@ class TaskChannelTests(unittest.TestCase):
             "os/agent_task_channel.c",
             "imported->producer_control_id != 0",
             "imported->producer_control_id == 0",
-        )
-
-    def test_cross_process_result_publish_mutation_is_rejected(self) -> None:
-        self.assert_mutation_rejected(
-            "os/agent_task_channel.c",
-            "imported->producer_pid != p->pid",
-            "imported->producer_pid == p->pid",
         )
 
     def test_lifecycle_transfer_mutation_is_rejected(self) -> None:

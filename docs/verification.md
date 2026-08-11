@@ -136,7 +136,7 @@ make virtio-disk-test TOOLPREFIX=riscv-none-elf-
 make contest-demo TOOLPREFIX=riscv-none-elf-
 ```
 
-脚本默认运行 4 个等量 AB/BA QEMU 样本，验证 traversal 与 indexed 路径得到相同结果，并把逐样本日志、`summary.json`、`measurements.csv` 和 `report.md` 写入 `results/contest-demo/`。文档不预填尚未实跑的数值；对外引用时应一并保留本次环境、样本数、单位、失败样本和原始日志。主演示的讲解顺序见[现场演示脚本](agentos/scenario-script.md)。
+脚本默认运行 4 个等量 AB/BA QEMU 样本，验证 traversal 与 indexed 路径得到相同结果，并把逐样本日志、`summary.json`、`measurements.csv` 和 `report.md` 写入 `results/contest-demo/`。该输出用于现场复现；决赛固定统计来自 [2026-08-11 one-shot campaign](contest/performance-results.md)，不能用新的 4 boot 快照覆盖。引用新结果时一并保留环境、样本数、单位、失败样本和原始日志。主演示的讲解顺序见[现场演示脚本](agentos/scenario-script.md)。
 
 长驻交互产品另有独立入口，不替代上述固定性能场景：
 
@@ -156,7 +156,14 @@ make agentos-nexus-replay TOOLPREFIX=riscv-none-elf-
 make agentos-nexus-deepseek TOOLPREFIX=riscv-none-elf-
 ```
 
-`agentos-nexus-check` 不启动 QEMU。`agentos-nexus-replay` 只有在真实单 boot 脚本完成且 strict validator 通过后，才证明该固定 fixture 下的三回合闭环：四个独立业务 identity、TASK-over-MESSAGE 委派、successful terminal 后的 brokered artifact、Research/Analyst handle readback、报告事件中的两份来源完整 digest、实际 System process/context/file 数值与本 boot `sched_budget`，以及 final 中对应的稳定 System/budget 投影、历史 measurement canonical 数值和两份来源 handle；完整 System 工件与 kernel snapshot 仍保留会随调度变化的 dispatch、used 和 vruntime 事实。验收还包括失败后新任务重规划、精确发布审批拒绝零副作用，以及 Guest-origin `kernel_audit`/`kernel_snapshot` 中的等待唤醒、identity-bound control/capability、Context、payload-byte resource 和 scheduler account 对应。Research/Analyst artifact 按所需 provenance bit subset/superset 验证；内核 MESSAGE audit 没有 provenance，严格投影保留零值而不合成标签。fixture 每个模型响应必须绑定实际请求 SHA-256，controller 的 request/response、tool/TASK correlation、canonical arguments 和跨类型原始时序还要逐项匹配；ready 必须先于会话数据，active request ID 在 turn 内稳定且跨 turn 不复用，delegated TASK batch 先于并绑定对应 tool result，single-inflight 轮次必须满足 `request_i < response_i < 同 correlation effects < request_(i+1)`，final response 先于 `turn_complete`，close 后不得追加输出。空摘要或通配响应直接失败。`agentos-nexus-deepseek` 是人工 live 入口，不是 CI 或性能基准。历史 `nexus_meas` capsule 也不是本次 boot benchmark；完整解释见 [AgentOS Nexus](agentos/nexus.md)。
+`agentos-nexus-check` 不启动 QEMU。`agentos-nexus-replay` 启动真实 Guest，并在固定 fixture 下检查：
+
+- 四个业务 identity、TASK 生命周期、brokered artifact、双来源 readback 与失败后重规划；
+- 每个模型响应与实际请求 SHA-256、tool/TASK correlation 和 canonical arguments 的精确绑定；
+- controller/observer 对 identity、Context、provenance、audit、kernel snapshot 和调度事实的交叉投影；
+- 发布审批拒绝的零副作用，以及 `SESSION_CLOSED` 后不再输出 telemetry。
+
+空摘要、通配响应、时序漂移或来源缺失都会失败。`agentos-nexus-deepseek` 是人工 live 入口，不进入 CI 或性能基准；历史 `nexus_meas` capsule 也不是本次 boot benchmark。完整合同见 [AgentOS Nexus](agentos/nexus.md)。
 
 ## 7. 性能测试
 

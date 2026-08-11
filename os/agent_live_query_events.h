@@ -38,11 +38,8 @@ int agent_live_query_watch_install_typed(
 	struct proc *, struct agent_file_live_watch *);
 int agent_live_query_watch_remove_typed(
 	struct proc *, struct agent_file_live_watch *);
-void agent_live_query_resync_flush(struct proc *);
 void agent_live_query_proc_reset(struct proc *);
 
-int agent_live_query_resync_required(
-	struct workflow_lifecycle_key, uint, uint64 *);
 int agent_live_query_resync_ack(
 	struct workflow_lifecycle_key, uint, uint64);
 void agent_live_query_reclaim(struct workflow_lifecycle_key, uint);

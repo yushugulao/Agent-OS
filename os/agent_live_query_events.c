@@ -1359,12 +1359,6 @@ agent_live_query_watch_removed(struct proc *p)
 }
 
 void
-agent_live_query_resync_flush(struct proc *p)
-{
-	(void)agent_live_query_proc_resync_flush(p);
-}
-
-void
 agent_live_query_proc_reset(struct proc *p)
 {
 	int enabled;
@@ -1380,25 +1374,6 @@ agent_live_query_proc_reset(struct proc *p)
 	agent_live_query_proc_resync_clear(
 		&agent_live_query_proc_resync[p - pool]);
 	intr_restore(enabled);
-}
-
-int
-agent_live_query_resync_required(struct workflow_lifecycle_key key,
-				 uint scope_id, uint64 *generation)
-{
-	uint64 required;
-	int enabled;
-
-	if (generation != 0)
-		*generation = 0;
-	if (!agent_live_query_domain_valid(key, scope_id))
-		return 0;
-	enabled = intr_save();
-	required = agent_live_query_domain_generation_locked(key, scope_id);
-	intr_restore(enabled);
-	if (generation != 0)
-		*generation = required;
-	return required != 0;
 }
 
 int

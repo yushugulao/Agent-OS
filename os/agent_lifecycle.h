@@ -7,7 +7,6 @@ struct proc;
 
 void agent_lifecycle_init(void);
 uint64 agent_lifecycle_alloc_control_id(void);
-void agent_lifecycle_control_id_floor(uint64);
 uint64 agent_lifecycle_controller_departing_locked(struct proc *);
 int agent_lifecycle_spawn_publish_locked(struct proc *, struct proc *);
 void agent_lifecycle_context_lane_init(struct proc *);

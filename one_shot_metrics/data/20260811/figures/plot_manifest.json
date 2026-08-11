@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "kind": "agentos-one-shot-publication-figures",
+  "tables_dir": "tables",
+  "formats": [
+    "png",
+    "pdf"
+  ],
+  "generated": [
+    {
+      "name": "traversal_indexed_dumbbell",
+      "files": [
+        "traversal_indexed_dumbbell.png",
+        "traversal_indexed_dumbbell.pdf"
+      ],
+      "evidence": {
+        "paired_boots": 16,
+        "measurement": "core_duration_us"
+      }
+    },
+    {
+      "name": "core_latency_violin",
+      "files": [
+        "core_latency_violin.png",
+        "core_latency_violin.pdf"
+      ],
+      "evidence": {
+        "traversal_n": 16,
+        "indexed_n": 16
+      }
+    },
+    {
+      "name": "paired_difference_ecdf",
+      "files": [
+        "paired_difference_ecdf.png",
+        "paired_difference_ecdf.pdf"
+      ],
+      "evidence": {
+        "paired_differences": 16,
+        "median_delta_us": -23441.5
+      }
+    },
+    {
+      "name": "catalog_hit_speedup_heatmap",
+      "files": [
+        "catalog_hit_speedup_heatmap.png",
+        "catalog_hit_speedup_heatmap.pdf"
+      ],
+      "evidence": {
+        "cells": 12,
+        "loads": 3,
+        "operation_counts": 4
+      }
+    },
+    {
+      "name": "performance_surface_3d",
+      "files": [
+        "performance_surface_3d.png",
+        "performance_surface_3d.pdf"
+      ],
+      "evidence": {
+        "measured_cells": 12,
+        "interpolation": "none_between_missing_cells"
+      }
+    },
+    {
+      "name": "cold_warm_indexed_grouped",
+      "files": [
+        "cold_warm_indexed_grouped.png",
+        "cold_warm_indexed_grouped.pdf"
+      ],
+      "evidence": {
+        "rows": 360,
+        "loads": [
+          24,
+          64,
+          96
+        ],
+        "normalization": "duration_us_per_operation"
+      }
+    },
+    {
+      "name": "task_latency_distribution",
+      "files": [
+        "task_latency_distribution.png",
+        "task_latency_distribution.pdf"
+      ],
+      "evidence": {
+        "sequence_rows": 96,
+        "operation_rows": 1536,
+        "operations_per_sequence": [
+          16
+        ]
+      }
+    },
+    {
+      "name": "eevdf_wakeup_ecdf",
+      "files": [
+        "eevdf_wakeup_ecdf.png",
+        "eevdf_wakeup_ecdf.pdf"
+      ],
+      "evidence": {
+        "method": "exact_probe_ecdf",
+        "samples": 504
+      }
+    },
+    {
+      "name": "jain_fairness_concurrency",
+      "files": [
+        "jain_fairness_concurrency.png",
+        "jain_fairness_concurrency.pdf"
+      ],
+      "evidence": {
+        "concurrency_levels": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "rows": 24,
+        "basis": "raw_service_cycles"
+      }
+    },
+    {
+      "name": "kernel_io_normalized_heatmap",
+      "files": [
+        "kernel_io_normalized_heatmap.png",
+        "kernel_io_normalized_heatmap.pdf"
+      ],
+      "evidence": {
+        "contest_metrics": [
+          "bytes_read",
+          "directory_block_probes",
+          "directory_entries_examined",
+          "durable_flushes",
+          "physical_reads",
+          "physical_writes",
+          "virtio_notifications",
+          "virtio_submitted_requests"
+        ],
+        "task_metrics": [
+          "abi_descriptor_bytes",
+          "control_abi_bytes",
+          "control_copied_bytes",
+          "copied_descriptor_bytes",
+          "dispatch_header_bytes",
+          "syscalls"
+        ],
+        "contest_scope": "bytes_read=workflow_lane/core; remaining metrics=global_kernel/end_to_end",
+        "contest_denominator": "observer_process/core workload syscalls"
+      }
+    }
+  ],
+  "skipped": [],
+  "complete": true,
+  "truthfulness_notes": [
+    "Dots and ECDF steps use retained raw observations.",
+    "The 3D surface connects only a complete measured parameter grid.",
+    "EEVDF uses exact probe rows when available; histogram fallback is labeled approximate.",
+    "Heatmap colors are normalized within each metric; annotations retain the raw normalized values."
+  ]
+}

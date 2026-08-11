@@ -1795,31 +1795,6 @@ agent_evidence_security_commit(
 }
 
 int
-agent_evidence_append_security_denial(
-	struct proc *p, const struct agent_context_record *record,
-	uint64 audit_sequence, uint64 span_owner, int source_pid,
-	uint64 cause_control, uint64 cause_branch, uint64 *ticket_out)
-{
-	struct agent_evidence_security_reservation reservation;
-
-	if (ticket_out == 0)
-		return -1;
-	*ticket_out = 0;
-	if (record == 0 || record->status == AGENT_STATUS_OK ||
-	    (record->flags & AGENT_CONTEXT_RECORD_F_SECURITY_DENIAL) == 0)
-		return -1;
-	if (agent_evidence_security_reserve(p, &reservation) < 0)
-		return -1;
-	if (agent_evidence_security_commit(
-		    p, record, audit_sequence, span_owner, source_pid,
-		    cause_control, cause_branch, &reservation, ticket_out) < 0) {
-		agent_evidence_security_abort(&reservation);
-		return -1;
-	}
-	return *ticket_out != 0 ? 0 : -1;
-}
-
-int
 agent_evidence_view_open(struct workflow_lifecycle_key key,
 			 struct agent_evidence_view *view)
 {

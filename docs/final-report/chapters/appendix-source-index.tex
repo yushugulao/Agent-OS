@@ -1,0 +1,159 @@
+\chapter{关键源码与证据索引}
+\label{app:source-index}
+
+本附录提供“主张到实现”的高信号导航。行号会随合法演进变化，因此以文件和稳定符号为主，不把某一次快照行号当成 ABI。
+
+\section{内核身份、生命周期与 Context}
+
+\begin{longtable}{L{3.8cm}L{3.3cm}L{6.2cm}}
+  \caption{任务一与 Context 主路径}\label{tab:source-identity}\\
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endhead
+  \code{os/agent_identity.c} & trusted exec、role/capability 与 identity 安装 & 普通进程不能自报成 Agent；role 对 capability 映射不因 Nexus 放宽 \\
+  \code{os/workflow_lifecycle.c} & workflow create/member/closing/generation & 活跃成员、关闭门禁与 reuse 安全 \\
+  \code{os/agent_core.c} & syscall 核心调度、identity/scope 共享校验 & 公共 gate 位于业务工具之前 \\
+  \code{os/agent_context.c} & Context 槽与 mirror 更新 & 6 页可信只读 mirror 和 1 页用户 cache 分离 \\
+  \code{os/agent_context_path.c} & Path append/query/rollback/snapshot & sequence、oldest/latest、dropped 与 provenance 语义 \\
+  根目录 \code{agent_*_abi.h}、\code{os/agent.h} 与 \code{user/include/agent.h} & 用户/内核 ABI & size/offset/static assert 是否一致 \\
+  \bottomrule
+\end{longtable}
+
+\section{工具、合同与 Task Channel}
+
+\begin{longtable}{L{3.8cm}L{3.3cm}L{6.2cm}}
+  \caption{任务二主路径}\label{tab:source-tools}\\
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endhead
+  \code{os/agent_tool_protocol.c} & 25 工具目录、name/ID、typed KV 解析与 response & 未知工具、重复 key、类型/长度错误先拒绝 \\
+  \code{os/agent_execution_contract.c} & V3 frozen node、edge、schema、attempt、deadline 与 provenance & 只有 ENFORCE 模式声称 contract-bound guarantee \\
+  \code{os/agent_identity_lease.c} & Phase Lease 与有界授权 & tool、effect、provenance、deadline 和 resource 同时绑定 \\
+  \code{os/agent_task_channel.c} & SQ/CQ、deadline、cancel、exactly-one completion & 当前 provider 仅 null input/output NONE \\
+  \code{os/agent_task_bridge.c} & Task Channel 与现有执行路径的窄桥接 & \code{RESOURCE_IMPORT} 应 fail closed \\
+  \code{user/src/agenttoolabi_ucore.c} & V2/V3/ABI Guest 动态检查 & 真实 RV64 参数与错误码 \\
+  \code{user/src/agenttask_ucore.c} & compact batch/scalar V3/SQ-CQ 专项路径 & 16-op sequence 的工作量一致性 \\
+  \bottomrule
+\end{longtable}
+
+\section{Context、Provenance、Evidence 与 Fence}
+
+\begin{longtable}{L{3.8cm}L{3.3cm}L{6.2cm}}
+  \caption{任务三与截面证据主路径}\label{tab:source-evidence}\\
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endhead
+  \code{os/agent_provenance.c} & provenance 合法性、传播与 mask gate & 不可信标签不得在跨 Agent 流转中被洗白 \\
+  \code{os/agent_evidence_ring.c} & ordinary/critical 有界 ring、reserve/commit/seal & BUSY 槽隐藏，critical 不被 ordinary 挤占 \\
+  \code{os/agent_workflow_fence.c} & lifecycle cut 和 receipt & metadata/live query、VFS、credit、evidence 的固定顺序 \\
+  \code{scripts/test-agent-evidence-ring.py} & ring model/mutation & gap、rollover、previous root/challenge/credit digest \\
+  \code{scripts/check-workflow-fence.py} & 生产调用链静态 gate & 无隐式 fence 或旁路发布 \\
+  \code{scripts/test-workflow-fence.py} & fence 功能模型 & idempotent retry、conflict、stale、copyout retry cache \\
+  \bottomrule
+\end{longtable}
+
+\section{文件查询、索引与 Live Watch}
+
+\begin{longtable}{L{3.8cm}L{3.3cm}L{6.2cm}}
+  \caption{任务四主路径}\label{tab:source-query}\\
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endhead
+  \code{os/agent_metadata_catalog.c} & boot-volatile 显式 metadata catalog & 普通 create 不自动进 catalog \\
+  \code{os/agent_metadata_query.c} & scan/index 查询与工作量计数 & 同一 predicate 结果一致，不仅比较时间 \\
+  \code{os/agent_metadata_directory.c} & 目录/对象记录与 generation & inode incarnation 不与旧文件混淆 \\
+  \code{os/agent_live_query_events.c} & ENTER、UPDATE、LEAVE、pending 与 resync generation & queue 丢失后 ACK 不能清除未处理 gap \\
+  \code{user/src/agenteval_ucore.c} & catalog grid 实验 Guest & 24/64/96 $\times$ 1/2/4/8，每格 15 inner pair \\
+  \code{scripts/check-agent-live-query-fs.py} & VFS/live-query 静态边界 & 不回退到文本路径或持久 journal \\
+  \bottomrule
+\end{longtable}
+
+\section{等待、IPC、资源与 EEVDF}
+
+\begin{longtable}{L{3.8cm}L{3.3cm}L{6.2cm}}
+  \caption{任务五与跨模块调度主路径}\label{tab:source-sched}\\
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endhead
+  \code{os/agent_ipc.c} & MESSAGE route/watch/wait/wakeup 和有界 source queue & require-watch、scope、provenance、queue-full 错误 \\
+  \code{os/agent_background.c} & 后台维护 pending flag & 原子发布、查询和消费 \\
+  \code{os/resource_controller.c} & U/P/F 账户、vector reserve/commit/cancel/release & $H=U+P+F$，失败无部分提交 \\
+  \code{os/proc.c} 与 \code{os/workflow_scheduler.c} & workflow EEVDF 选择与成员折叠 & 线程数不放大 workflow 份额 \\
+  \code{user/src/agentloop_ucore.c} & 等待/唤醒/heartbeat Guest 验收 & 等待期间不忙轮询 \\
+  \code{user/src/agent_eevdf_ucore.c} & EEVDF 实验 Guest & exact ready-age、service cycles 与 Jain 计算所需数据 \\
+  \code{scripts/test-workflow-credit-domain.py} & U/P/F mutation model & hard limit 时机、trim F、fence exact U \\
+  \bottomrule
+\end{longtable}
+
+\section{综合工作流与 Nexus}
+
+\begin{longtable}{L{3.8cm}L{3.3cm}L{6.2cm}}
+  \caption{任务六和交互产品主路径}\label{tab:source-nexus}\\
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  文件 & 主要责任 & 检查要点 \\
+  \midrule
+  \endhead
+  \code{user/src/labdemo_ucore.c} & 确定性多 Agent 科研恢复工作流 & traversal/indexed 结果等价与 AB/BA 顺序平衡 \\
+  \code{baseline_ucore/user/src/rp_*.c} 与 \code{user/src/rp_*.c} & Plain uCore/AgentOS-uCore 双目标 Guest & 配合 \code{scripts/run-dual-platforms.sh} 与 \code{host_tools/compare_dual_platform_state.py} 验证业务合同和工作量对齐 \\
+  \code{user/src/agentlive_ucore.c} & 单 Agent 长驻 model/tool loop & Guest 保有 history/catalog/decision/result feedback \\
+  \code{user/src/agentnexus_ucore.c} & 四角色长驻会话、动态委派、observer 和审批 & System no-input、Research fail/replan、Analyst report、deny zero effect \\
+  \code{user/include/agent_nexus_protocol.h} & N1 envelope、artifact handle/manifest/capsule ABI & canonical 44-byte wire、state/flag/handle 布局 \\
+  \code{user/lib/agent_nexus.c} & 协议 codec、role-filtered tool、artifact 发布/验证 & identity registry、owned/brokered 规则和 full SHA-256 \\
+  \code{user/include/agentnexus_seed.h} & 版本化本地 case/measurement/state capsule & source/derived 字段与 historical/current 范围 \\
+  \code{host_tools/agentos_relayd.py} & 串口帧、provider、controller/observer 分流 & Host 不读 Guest 业务文件，schema 严格 \\
+  \code{host_tools/agentos_cli.py} & 交互输入、slash command、审批 & controller 单 owner，Ctrl-C 只取消 turn \\
+  \code{host_tools/agentos_observe.py} & 只读 telemetry 视图 & task、correlation、Context、audit 与 scheduler 高信号字段 \\
+  \code{host_tools/validate_agentos_nexus_replay.py} & strict replay oracle & request digest、因果顺序、artifact/provenance、audit pair 和 close 顺序 \\
+  \bottomrule
+\end{longtable}
+
+\section{性能数据和图表}
+
+\begin{longtable}{L{3.8cm}L{3.3cm}L{6.2cm}}
+  \caption{性能证据主路径}\label{tab:source-performance}\\
+  \toprule
+  文件/目录 & 主要责任 & 检查要点 \\
+  \midrule
+  \endfirsthead
+  \toprule
+  文件/目录 & 主要责任 & 检查要点 \\
+  \midrule
+  \endhead
+  \code{one_shot_metrics/CANONICAL_RUN} & 指向规范数据集 & 正文不从临时目录取数 \\
+  \code{one_shot_metrics/data/20260811/raw/} & 33 个原始串口文件 & 结果表可追溯到 raw 前缀与 SHA-256 \\
+  \code{one_shot_metrics/data/20260811/tables/} & 19 张长表 & boot/sample/pair/round/workflow 标识不丢失 \\
+  \code{one_shot_metrics/data/20260811/manifest.json} & 提交、Guest 变体、负载、工具版本和 inventory & 规范运行不被后来重绘覆盖 \\
+  \code{one_shot_metrics/data/20260811/validation.json} & 数据完整性与 warning & EEVDF boot 05 拼接记录保留 \\
+  \code{one_shot_metrics/plot.py} & 从长表重绘图件 & 不启动 QEMU，不从文档聚合值反推 \\
+  \code{one_shot_metrics/validate.py} & 离线完整性验证 & 输出到仓库外 scratch，不修改 canonical run \\
+  \bottomrule
+\end{longtable}

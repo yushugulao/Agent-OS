@@ -1,0 +1,151 @@
+
+OpenSBI v1.8
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name               : riscv-virtio,qemu
+Platform Features           : medeleg
+Platform HART Count         : 1
+Platform HART Protection    : pmp
+Platform IPI Device         : aclint-mswi
+Platform Timer Device       : aclint-mtimer @ 10000000Hz
+Platform Console Device     : uart8250
+Platform HSM Device         : ---
+Platform PMU Device         : ---
+Platform Reboot Device      : syscon-reboot
+Platform Shutdown Device    : syscon-poweroff
+Platform Suspend Device     : ---
+Platform CPPC Device        : ---
+Firmware Base               : 0x80000000
+Firmware Size               : 321 KB
+Firmware RW Offset          : 0x40000
+Firmware RW Size            : 65 KB
+Firmware Heap Offset        : 0x47000
+Firmware Heap Size          : 37 KB (total), 0 KB (reserved), 12 KB (used), 23 KB (free)
+Firmware Scratch Size       : 4096 B (total), 1464 B (used), 2632 B (free)
+Runtime SBI Version         : 3.0
+Standard SBI Extensions     : ipi,pmu,srst,sse,hsm,rfnc,fwft,time,base,legacy,dbcn,dbtr
+Experimental SBI Extensions : none
+
+Domain0 Name                : root
+Domain0 Boot HART           : 0
+Domain0 HARTs               : 0*
+Domain0 Region00            : 0x0000000080040000-0x000000008005ffff M: (F,R,W) S/U: ()
+Domain0 Region01            : 0x0000000080000000-0x000000008003ffff M: (F,R,X) S/U: ()
+Domain0 Region02            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+Domain0 Region03            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+Domain0 Region04            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+Domain0 Next Address        : 0x0000000080200000
+Domain0 Next Arg1           : 0x0000000087e00000
+Domain0 Next Mode           : S-mode
+Domain0 SysReset            : yes
+Domain0 SysSuspend          : yes
+
+Boot HART ID                : 0
+Boot HART Domain            : root
+Boot HART Priv Version      : v1.12
+Boot HART Base ISA          : rv64imafdch
+Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+Boot HART PMP Count         : 16
+Boot HART PMP Granularity   : 2 bits
+Boot HART PMP Address Bits  : 54
+Boot HART MHPM Info         : 16 (0x0007fff8)
+Boot HART Debug Triggers    : 2 triggers
+Boot HART MIDELEG           : 0x0000000000001666
+Boot HART MEDELEG           : 0x0000000000f4b509
+hello world!
+labdemo_ucore: Agent-OS laboratory recovery demo
+labdemo_ucore: created role=orchestrator pid=2 context=0x0000003ffffe7000
+agentos:event type=AGENT_CREATED tick=6459 role=orchestrator pid=2 context=0x0000003ffffe7000
+agentos:event type=RUN_OBJECT tick=6460 project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED policy=minimal_rerun
+agentos:demo schema=2 nonce=5359277742918294692 kind=run sample=14 order=native_then_compat
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=native seq=1 point=E2E_START tick_us=6464363 attempts=3 stable_rounds=2 observer_pid=2 observer_tick=80804204 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=0 epoch_buffers_staged=0 physical_writes=0 physical_reads=55115 durable_flushes=0 deduplicated_stages=0 workload_syscalls=4 directory_block_probes=33 directory_entries_examined=2049 virtio_notifications=55055 virtio_submitted_requests=55115 virtio_write_batch_calls=0 virtio_batched_write_requests=0 virtio_indirect_write_batch_calls=0 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=0
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=native seq=2 point=CORE_START tick_us=6902777 attempts=3 stable_rounds=2 observer_pid=2 observer_tick=86284514 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=6 epoch_buffers_staged=149 physical_writes=149 physical_reads=55158 durable_flushes=16 deduplicated_stages=715 workload_syscalls=391 directory_block_probes=3201 directory_entries_examined=198753 virtio_notifications=55141 virtio_submitted_requests=55323 virtio_write_batch_calls=22 virtio_batched_write_requests=144 virtio_indirect_write_batch_calls=22 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=96
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=native seq=3 point=ACK_SETTLED tick_us=6934021 attempts=3 stable_rounds=2 observer_pid=2 observer_tick=86675058 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=8 epoch_buffers_staged=155 physical_writes=155 physical_reads=55159 durable_flushes=19 deduplicated_stages=717 workload_syscalls=401 directory_block_probes=3203 directory_entries_examined=198755 virtio_notifications=55148 virtio_submitted_requests=55333 virtio_write_batch_calls=24 virtio_batched_write_requests=149 virtio_indirect_write_batch_calls=24 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=97
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=native seq=4 point=E2E_END tick_us=7206656 attempts=3 stable_rounds=2 observer_pid=2 observer_tick=90082992 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=24 epoch_buffers_staged=225 physical_writes=225 physical_reads=55174 durable_flushes=48 deduplicated_stages=1223 workload_syscalls=500 directory_block_probes=3299 directory_entries_examined=198851 virtio_notifications=55221 virtio_submitted_requests=55447 virtio_write_batch_calls=44 virtio_batched_write_requests=210 virtio_indirect_write_batch_calls=44 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=97
+agentos:demo schema=2 nonce=5359277742918294692 kind=event mode=native seq=1 tick_us=6904311 role=orchestrator event=INCIDENT value0=0 value1=0
+agentos:demo schema=2 nonce=5359277742918294692 kind=event mode=native seq=2 tick_us=6907885 role=sentinel event=DISCOVERED value0=2 value1=0
+agentos:demo schema=2 nonce=5359277742918294692 kind=event mode=native seq=3 tick_us=6932861 role=recovery event=RECOVERY_COMMITTED value0=10 value1=1
+agentos:demo schema=2 nonce=5359277742918294692 kind=event mode=native seq=4 tick_us=6933316 role=orchestrator event=RECOVERED value0=1 value1=0
+agentos:demo schema=2 nonce=5359277742918294692 kind=metric mode=native actor_pid=2 core_duration_us=29005 end_to_end_duration_us=741782 end_to_end_started_us=6466128 end_to_end_finished_us=7207910 workload_syscalls=10 records_examined=2 bytes_read=0 result_items=1 outcome_hash=1457873431608088591
+agentos:demo schema=2 nonce=5359277742918294692 kind=mechanism mode=native scope=core observer_pid=2 before_tick=86284514 after_tick=86667174 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global before_epoch_commits=6 after_epoch_commits=8 before_epoch_buffers_staged=149 after_epoch_buffers_staged=155 before_physical_writes=149 after_physical_writes=155 before_physical_reads=55158 after_physical_reads=55159 before_durable_flushes=16 after_durable_flushes=19 before_deduplicated_stages=715 after_deduplicated_stages=717 before_cow_shared_pages=13 after_cow_shared_pages=13 before_cow_copied_pages=6 after_cow_copied_pages=6 before_cow_fault_promotions=1 after_cow_fault_promotions=1 before_exec_cache_hits=0 after_exec_cache_hits=0 before_exec_cache_misses=9 after_exec_cache_misses=9 before_exec_cache_shared_pages=0 after_exec_cache_shared_pages=0 before_exec_cache_evictions=5 after_exec_cache_evictions=5 before_workload_syscalls=391 after_workload_syscalls=401 before_directory_block_probes=3201 after_directory_block_probes=3203 before_directory_entries_examined=198753 after_directory_entries_examined=198755 before_virtio_notifications=55141 after_virtio_notifications=55148 before_virtio_submitted_requests=55323 after_virtio_submitted_requests=55333 before_virtio_write_batch_calls=22 after_virtio_write_batch_calls=24 before_virtio_batched_write_requests=144 after_virtio_batched_write_requests=149 before_virtio_indirect_write_batch_calls=22 after_virtio_indirect_write_batch_calls=24 before_virtio_read_batch_calls=20 after_virtio_read_batch_calls=20 before_virtio_batched_read_requests=80 after_virtio_batched_read_requests=80 before_overwrite_prereads_skipped=96 after_overwrite_prereads_skipped=97
+agentos:demo schema=2 nonce=5359277742918294692 kind=mechanism mode=native scope=end_to_end observer_pid=2 before_tick=80804204 after_tick=90082992 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global before_epoch_commits=0 after_epoch_commits=24 before_epoch_buffers_staged=0 after_epoch_buffers_staged=225 before_physical_writes=0 after_physical_writes=225 before_physical_reads=55115 after_physical_reads=55174 before_durable_flushes=0 after_durable_flushes=48 before_deduplicated_stages=0 after_deduplicated_stages=1223 before_cow_shared_pages=13 after_cow_shared_pages=13 before_cow_copied_pages=6 after_cow_copied_pages=6 before_cow_fault_promotions=1 after_cow_fault_promotions=1 before_exec_cache_hits=0 after_exec_cache_hits=0 before_exec_cache_misses=9 after_exec_cache_misses=9 before_exec_cache_shared_pages=0 after_exec_cache_shared_pages=0 before_exec_cache_evictions=5 after_exec_cache_evictions=5 before_workload_syscalls=4 after_workload_syscalls=500 before_directory_block_probes=33 after_directory_block_probes=3299 before_directory_entries_examined=2049 after_directory_entries_examined=198851 before_virtio_notifications=55055 after_virtio_notifications=55221 before_virtio_submitted_requests=55115 after_virtio_submitted_requests=55447 before_virtio_write_batch_calls=0 after_virtio_write_batch_calls=44 before_virtio_batched_write_requests=0 after_virtio_batched_write_requests=210 before_virtio_indirect_write_batch_calls=0 after_virtio_indirect_write_batch_calls=44 before_virtio_read_batch_calls=20 after_virtio_read_batch_calls=20 before_virtio_batched_read_requests=80 after_virtio_batched_read_requests=80 before_overwrite_prereads_skipped=0 after_overwrite_prereads_skipped=97
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=compat seq=1 point=E2E_START tick_us=7224029 attempts=3 stable_rounds=2 observer_pid=2 observer_tick=90300156 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=24 epoch_buffers_staged=225 physical_writes=225 physical_reads=55174 durable_flushes=48 deduplicated_stages=1223 workload_syscalls=523 directory_block_probes=3299 directory_entries_examined=198851 virtio_notifications=55221 virtio_submitted_requests=55447 virtio_write_batch_calls=44 virtio_batched_write_requests=210 virtio_indirect_write_batch_calls=44 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=97
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=compat seq=2 point=CORE_START tick_us=7612121 attempts=3 stable_rounds=2 observer_pid=2 observer_tick=95151298 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=29 epoch_buffers_staged=362 physical_writes=362 physical_reads=55190 durable_flushes=63 deduplicated_stages=1854 workload_syscalls=814 directory_block_probes=6371 directory_entries_examined=395459 virtio_notifications=55277 virtio_submitted_requests=55615 virtio_write_batch_calls=65 virtio_batched_write_requests=343 virtio_indirect_write_batch_calls=65 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=178
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=compat seq=3 point=ACK_SETTLED tick_us=7652047 attempts=3 stable_rounds=2 observer_pid=2 observer_tick=95650382 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=31 epoch_buffers_staged=368 physical_writes=368 physical_reads=55288 durable_flushes=66 deduplicated_stages=1856 workload_syscalls=1112 directory_block_probes=6469 directory_entries_examined=395557 virtio_notifications=55381 virtio_submitted_requests=55722 virtio_write_batch_calls=67 virtio_batched_write_requests=348 virtio_indirect_write_batch_calls=67 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=179
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=compat seq=4 point=E2E_END tick_us=7937306 attempts=3 stable_rounds=2 observer_pid=2 observer_tick=99216128 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=47 epoch_buffers_staged=438 physical_writes=438 physical_reads=55312 durable_flushes=95 deduplicated_stages=2266 workload_syscalls=1211 directory_block_probes=6565 directory_entries_examined=395653 virtio_notifications=55463 virtio_submitted_requests=55845 virtio_write_batch_calls=87 virtio_batched_write_requests=409 virtio_indirect_write_batch_calls=87 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=179
+agentos:demo schema=2 nonce=5359277742918294692 kind=event mode=compat seq=1 tick_us=7613397 role=orchestrator event=INCIDENT value0=0 value1=0
+agentos:demo schema=2 nonce=5359277742918294692 kind=event mode=compat seq=2 tick_us=7648741 role=orchestrator event=DISCOVERED value0=97 value1=7811
+agentos:demo schema=2 nonce=5359277742918294692 kind=event mode=compat seq=3 tick_us=7650532 role=recovery event=RECOVERY_COMMITTED value0=298 value1=1
+agentos:demo schema=2 nonce=5359277742918294692 kind=event mode=compat seq=4 tick_us=7650742 role=orchestrator event=RECOVERED value0=1 value1=0
+agentos:demo schema=2 nonce=5359277742918294692 kind=metric mode=compat actor_pid=2 core_duration_us=37345 end_to_end_duration_us=713014 end_to_end_started_us=7225651 end_to_end_finished_us=7938665 workload_syscalls=298 records_examined=97 bytes_read=7811 result_items=1 outcome_hash=1457873431608088591
+agentos:demo schema=2 nonce=5359277742918294692 kind=mechanism mode=compat scope=core observer_pid=2 before_tick=95151298 after_tick=95634903 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global before_epoch_commits=29 after_epoch_commits=30 before_epoch_buffers_staged=362 after_epoch_buffers_staged=366 before_physical_writes=362 after_physical_writes=366 before_physical_reads=55190 after_physical_reads=55288 before_durable_flushes=63 after_durable_flushes=65 before_deduplicated_stages=1854 after_deduplicated_stages=1856 before_cow_shared_pages=13 after_cow_shared_pages=13 before_cow_copied_pages=6 after_cow_copied_pages=6 before_cow_fault_promotions=1 after_cow_fault_promotions=1 before_exec_cache_hits=0 after_exec_cache_hits=0 before_exec_cache_misses=9 after_exec_cache_misses=9 before_exec_cache_shared_pages=0 after_exec_cache_shared_pages=0 before_exec_cache_evictions=5 after_exec_cache_evictions=5 before_workload_syscalls=814 after_workload_syscalls=1112 before_directory_block_probes=6371 after_directory_block_probes=6469 before_directory_entries_examined=395459 after_directory_entries_examined=395557 before_virtio_notifications=55277 after_virtio_notifications=55379 before_virtio_submitted_requests=55615 after_virtio_submitted_requests=55719 before_virtio_write_batch_calls=65 after_virtio_write_batch_calls=66 before_virtio_batched_write_requests=343 after_virtio_batched_write_requests=346 before_virtio_indirect_write_batch_calls=65 after_virtio_indirect_write_batch_calls=66 before_virtio_read_batch_calls=20 after_virtio_read_batch_calls=20 before_virtio_batched_read_requests=80 after_virtio_batched_read_requests=80 before_overwrite_prereads_skipped=178 after_overwrite_prereads_skipped=179
+agentos:demo schema=2 nonce=5359277742918294692 kind=mechanism mode=compat scope=end_to_end observer_pid=2 before_tick=90300156 after_tick=99216128 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global before_epoch_commits=24 after_epoch_commits=47 before_epoch_buffers_staged=225 after_epoch_buffers_staged=438 before_physical_writes=225 after_physical_writes=438 before_physical_reads=55174 after_physical_reads=55312 before_durable_flushes=48 after_durable_flushes=95 before_deduplicated_stages=1223 after_deduplicated_stages=2266 before_cow_shared_pages=13 after_cow_shared_pages=13 before_cow_copied_pages=6 after_cow_copied_pages=6 before_cow_fault_promotions=1 after_cow_fault_promotions=1 before_exec_cache_hits=0 after_exec_cache_hits=0 before_exec_cache_misses=9 after_exec_cache_misses=9 before_exec_cache_shared_pages=0 after_exec_cache_shared_pages=0 before_exec_cache_evictions=5 after_exec_cache_evictions=5 before_workload_syscalls=523 after_workload_syscalls=1211 before_directory_block_probes=3299 after_directory_block_probes=6565 before_directory_entries_examined=198851 after_directory_entries_examined=395653 before_virtio_notifications=55221 after_virtio_notifications=55463 before_virtio_submitted_requests=55447 after_virtio_submitted_requests=55845 before_virtio_write_batch_calls=44 after_virtio_write_batch_calls=87 before_virtio_batched_write_requests=210 after_virtio_batched_write_requests=409 before_virtio_indirect_write_batch_calls=44 after_virtio_indirect_write_batch_calls=87 before_virtio_read_batch_calls=20 after_virtio_read_batch_calls=20 before_virtio_batched_read_requests=80 after_virtio_batched_read_requests=80 before_overwrite_prereads_skipped=97 after_overwrite_prereads_skipped=179
+agentos:demo schema=2 nonce=5359277742918294692 kind=oracle project=lab-gene-x workflow=nightly-regression run=RUN-042 stage=align reason=memory_limit final_status=recovered execution_order=native_then_compat corpus=96 outcome_hash=1457873431608088591 compat_hash=1457873431608088591 native_hash=1457873431608088591
+labdemo_ucore: created role=recovery pid=3 context=0x0000003ffffe7000
+agentos:event type=AGENT_CREATED tick=7961 role=recovery pid=3 context=0x0000003ffffe7000
+labdemo_ucore: created role=investigator pid=4 context=0x0000003ffffe7000
+agentos:event type=AGENT_CREATED tick=7963 role=investigator pid=4 context=0x0000003ffffe7000
+labdemo_ucore: created role=sentinel pid=5 context=0x0000003ffffe7000
+agentos:event type=AGENT_CREATED tick=7965 role=sentinel pid=5 context=0x0000003ffffe7000
+agentos:event type=WATCH_REGISTERED tick=7969 role=sentinel event=FILE_QUERY predicate=project=lab-gene-x;run_id=RUN-042;status=failed watch_id=1 initial_generation=199
+agentos:event type=AGENT_STATE tick=7970 role=sentinel state=WAITING
+agentos:event type=INCIDENT_CREATED tick=7973 id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
+agentos:demo schema=2 nonce=5359277742918294692 kind=trace seq=1 tick_us=7970846 role=orchestrator event=INCIDENT value0=0 value1=0
+labdemo_ucore: sentinel event payload=change=ENTER;lc=00000001:0000000000000001
+agentos:event type=AGENT_STATE tick=7975 role=sentinel state=RUNNING event_id=1 corr_id=5
+agentos:event type=TOOL_CALL tick=7984 role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1 seq=6
+labdemo_ucore: sentinel metadata_query stage=align hits=1 scanned=1 used_index=1 source_seq=6
+agentos:event type=METADATA_QUERY tick=7985 role=sentinel project=lab-gene-x run_id=RUN-042 stage=align status=failed hits=1 scanned=1 used_index=1 source_seq=6
+agentos:event type=AUDIT tick=7986 role=sentinel action=action_commit result=DENIED reason=capability corr_id=RUN-042-align-rerun-1 seq=7
+agentos:event type=MESSAGE tick=7987 from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I query_stage=align query_seq=6 seq=8
+labdemo_ucore: investigator metadata_query stage=align hits=2 used_index=1 plan=2 candidates=2
+agentos:event type=METADATA_QUERY tick=7994 role=investigator project=lab-gene-x run_id=RUN-042 stage=align status=failed hits=2 used_index=1 plan=2
+labdemo_ucore: investigator span_trace records=22 context=1 event=1
+labdemo_ucore: investigator reason=align output is ready before injected failure
+agentos:event type=TOOL_CALL tick=8005 role=investigator tool=read_file_summary stage=align status=OK seq=4
+labdemo_ucore: investigator digest bytes=27 preview=align memory_limit evidence seq=5
+agentos:event type=TOOL_CALL tick=8007 role=investigator tool=read_file_digest stage=align status=OK bytes=27 seq=5
+labdemo_ucore: investigator digest_observation timeline=1 provenance=15 verified=1
+labdemo_ucore: affected labels=align+analyze+report+archive
+agentos:event type=TOOL_CALL tick=8013 role=investigator tool=dependency_query label=align impact=align+analyze+report+archive seq=6
+labdemo_ucore: investigator indexed_summary stage=align result=align output is ready before injected failure
+agentos:event type=METADATA_USED tick=8014 role=investigator stage=align summary=align output is ready before injected failure seq=7
+agentos:event type=POLICY_CALL tick=8015 mode=deterministic task=explain_root_cause decision_id=POLICY-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=4,5,6,7 status=OK
+agentos:event type=POLICY_RESULT tick=8015 mode=deterministic decision_id=POLICY-RUN-042-RCA-1 decision_status=OK rule_outcome=memory_limit referenced_sequences=4,5,6,7 confidence=medium
+agentos:event type=PLAN_CREATED tick=8016 role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,analyze,report skip=prepare metadata_stage=align refs=4,5,6,7
+agentos:event type=CONTEXT_SNAPSHOT tick=8017 role=investigator records=7 latest=7
+agentos:event type=MESSAGE tick=8017 from=investigator to=recovery status=OK corr_id=MSG-RUN-042-I-R plan=PLAN-RUN-042-RECOVER-1 seq=8
+agentos:event type=AUDIT tick=8023 role=recovery action=action_commit result=ALLOW plan=PLAN-RUN-042-RECOVER-1 seq=3
+agentos:event type=AUDIT tick=8024 role=recovery action=commit_prepare result=DENIED reason=unaffected plan=PLAN-RUN-042-RECOVER-1
+agentos:event type=ACTION tick=8026 role=recovery label=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=4 duplicate=0
+agentos:event type=AUDIT tick=8027 role=recovery action=commit_align result=DUPLICATE corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=5
+agentos:event type=ARTIFACT tick=8028 role=recovery namespace=lab-gene-x run_id=RUN-042 file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1 seq=6 model_assisted=0
+labdemo_ucore: final report_query hits=1 used_index=1 scanned=5
+agentos:event type=FINAL tick=8029 project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
+agentos:demo schema=2 nonce=5359277742918294692 kind=trace seq=2 tick_us=7986668 role=sentinel event=DISCOVERED value0=1 value1=1
+agentos:demo schema=2 nonce=5359277742918294692 kind=trace seq=3 tick_us=8017462 role=investigator event=HANDOFF value0=8 value1=1
+agentos:demo schema=2 nonce=5359277742918294692 kind=trace seq=4 tick_us=8029520 role=recovery event=RECOVERY_COMMITTED value0=1 value1=1
+labdemo_ucore: startup_barrier ready=3 released=3 chain_receipts=3
+labdemo_ucore: global_audit=1 records=56 agents=3 context=1 event=1 sched=1 message=1
+labdemo_ucore: audit_query=1 kind=33 span=35 event=2 message=2 start=1
+labdemo_ucore: unified_timeline records=41 context=1 event=1 sched=1 message=1
+labdemo_ucore: timeline_query message=2 cursor=20
+labdemo_ucore: provenance_graph edges=14 message=1 context=1
+agentos:demo schema=2 nonce=5359277742918294692 kind=trace seq=5 tick_us=8067288 role=orchestrator event=RECOVERED value0=1 value1=0
+agentos:demo schema=2 nonce=5359277742918294692 kind=runtime mode=native agents=3 duration_us=96442 tool_calls=23 dispatches=39 wait_sleeps=3 wait_wakeups=3 records_examined=6 denied_actions=1 duplicate_actions=1 recovery_side_effects=1
+agentos:demo schema=2 nonce=5359277742918294692 kind=mechanism mode=workflow scope=end_to_end observer_pid=2 before_tick=99499895 after_tick=100842655 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global before_epoch_commits=48 after_epoch_commits=49 before_epoch_buffers_staged=441 after_epoch_buffers_staged=446 before_physical_writes=441 after_physical_writes=446 before_physical_reads=55333 after_physical_reads=55335 before_durable_flushes=97 after_durable_flushes=100 before_deduplicated_stages=2279 after_deduplicated_stages=2283 before_cow_shared_pages=13 after_cow_shared_pages=52 before_cow_copied_pages=6 after_cow_copied_pages=25 before_cow_fault_promotions=1 after_cow_fault_promotions=9 before_exec_cache_hits=0 after_exec_cache_hits=0 before_exec_cache_misses=9 after_exec_cache_misses=9 before_exec_cache_shared_pages=0 after_exec_cache_shared_pages=0 before_exec_cache_evictions=5 after_exec_cache_evictions=5 before_workload_syscalls=1240 after_workload_syscalls=1275 before_directory_block_probes=6821 after_directory_block_probes=6856 before_directory_entries_examined=412037 after_directory_entries_examined=414088 before_virtio_notifications=55488 after_virtio_notifications=55496 before_virtio_submitted_requests=55871 after_virtio_submitted_requests=55881 before_virtio_write_batch_calls=88 after_virtio_write_batch_calls=89 before_virtio_batched_write_requests=411 after_virtio_batched_write_requests=414 before_virtio_indirect_write_batch_calls=88 after_virtio_indirect_write_batch_calls=89 before_virtio_read_batch_calls=20 after_virtio_read_batch_calls=20 before_virtio_batched_read_requests=80 after_virtio_batched_read_requests=80 before_overwrite_prereads_skipped=179 after_overwrite_prereads_skipped=180
+labdemo_ucore: passed
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=runtime_probe seq=1 point=PROBE_START tick_us=8079000 attempts=3 stable_rounds=2 observer_pid=1 observer_tick=100987217 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=49 epoch_buffers_staged=446 physical_writes=446 physical_reads=55335 durable_flushes=100 deduplicated_stages=2283 workload_syscalls=1 directory_block_probes=6856 directory_entries_examined=414088 virtio_notifications=55496 virtio_submitted_requests=55881 virtio_write_batch_calls=89 virtio_batched_write_requests=414 virtio_indirect_write_batch_calls=89 virtio_read_batch_calls=20 virtio_batched_read_requests=80 overwrite_prereads_skipped=180
+agentos:demo schema=2 nonce=5359277742918294692 kind=fence mode=runtime_probe seq=2 point=PROBE_END tick_us=8089829 attempts=3 stable_rounds=2 observer_pid=1 observer_tick=101122576 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global epoch_commits=49 epoch_buffers_staged=446 physical_writes=446 physical_reads=55340 durable_flushes=100 deduplicated_stages=2283 workload_syscalls=4 directory_block_probes=6958 directory_entries_examined=420238 virtio_notifications=55498 virtio_submitted_requests=55886 virtio_write_batch_calls=89 virtio_batched_write_requests=414 virtio_indirect_write_batch_calls=89 virtio_read_batch_calls=21 virtio_batched_read_requests=84 overwrite_prereads_skipped=180
+agentos:demo schema=2 nonce=5359277742918294692 kind=mechanism mode=runtime_probe scope=end_to_end observer_pid=1 before_tick=100987217 after_tick=101122576 observer_lifecycle_id=1 observer_lifecycle_generation=1 counter_scope=global before_epoch_commits=49 after_epoch_commits=49 before_epoch_buffers_staged=446 after_epoch_buffers_staged=446 before_physical_writes=446 after_physical_writes=446 before_physical_reads=55335 after_physical_reads=55340 before_durable_flushes=100 after_durable_flushes=100 before_deduplicated_stages=2283 after_deduplicated_stages=2283 before_cow_shared_pages=52 after_cow_shared_pages=91 before_cow_copied_pages=25 after_cow_copied_pages=34 before_cow_fault_promotions=11 after_cow_fault_promotions=14 before_exec_cache_hits=0 after_exec_cache_hits=2 before_exec_cache_misses=9 after_exec_cache_misses=10 before_exec_cache_shared_pages=0 after_exec_cache_shared_pages=2 before_exec_cache_evictions=5 after_exec_cache_evictions=5 before_workload_syscalls=1 after_workload_syscalls=4 before_directory_block_probes=6856 after_directory_block_probes=6958 before_directory_entries_examined=414088 after_directory_entries_examined=420238 before_virtio_notifications=55496 after_virtio_notifications=55498 before_virtio_submitted_requests=55881 after_virtio_submitted_requests=55886 before_virtio_write_batch_calls=89 after_virtio_write_batch_calls=89 before_virtio_batched_write_requests=414 after_virtio_batched_write_requests=414 before_virtio_indirect_write_batch_calls=89 after_virtio_indirect_write_batch_calls=89 before_virtio_read_batch_calls=20 after_virtio_read_batch_calls=21 before_virtio_batched_read_requests=80 after_virtio_batched_read_requests=84 before_overwrite_prereads_skipped=180 after_overwrite_prereads_skipped=180
+labdemo_ucore: parent passed

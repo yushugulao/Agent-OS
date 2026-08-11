@@ -1,0 +1,123 @@
+\chapter{AgentOS Nexus：系统原生智能体协作中枢}
+\label{chap:nexus}
+
+\section{从单次循环到长驻工作台}
+
+\subsection{约束}
+
+单次演示可以证明模型会产生工具调用，却无法回答更重要的产品问题：多个具有独立身份的 Agent 如何持续协作，工具结果如何改变后续决策，操作系统如何对每一次等待、拒绝和资源消耗负责。如果 Host 代替 Guest 读文件、选工具或拼结结果，那么双窗口只是日志皮肤，不是系统原生协作。
+
+\subsection{设计}
+
+\nexus{} 在一个 workflow/session boot 中长驻五个 Guest Agent：Coordinator、System、Research、Analyst 四个业务身份，以及一个只承载串口帧的 Relay。Coordinator 调用模型；三个专职 Agent 依据各自窄化策略执行真实 V2 工具。这种组合既保留“结果驱动下一步”，又避免把每个窄任务都伪装成独立 LLM 对话。
+
+总体运行流程见图\ref{fig:nexus-sequence}：四个业务身份长驻，每次用户 turn 只动态创建子任务和 artifact。
+
+\subsection{实现}
+
+Host daemon 独占串口、TLS/API key 和 provider JSON 转换；左窗口 CLI 提交自然语言、展示工具请求并收集审批；右窗口 observer 只读取同一 Guest boot 的高信号投影。Relay 是唯一串口 frame writer，将 model、controller 与 telemetry 帧分流，不得选择业务工具。业务文件和 artifact 始终留在 Guest VFS 中。
+
+\begin{table}[htbp]
+  \centering
+  \caption{Nexus 四个业务角色的真实系统身份}
+  \label{tab:nexus-roles}
+  \begin{tabularx}{\textwidth}{L{2.3cm}L{2.8cm}Y Y}
+    \toprule
+    产品角色 & 内核角色 & 职责 & 最小权限边界 \\
+    \midrule
+    Coordinator & Orchestrator & 维护会话、调用模型、委派并验证返回 & 可编排，但所有效果仍经过审批与内核 gate \\
+    System & Sentinel & 获取本 boot 进程、Context、文件大小和调度事实 & 无 \code{CONTENT_READ}；只执行固定无输入快照 \\
+    Research & Investigator & 验证本地资料与历史测量 capsule & 读取指定 artifact，不执行网络搜索 \\
+    Analyst & Artifact & 消费 System/Research 结果并生成报告 & 只能发布自有 report；外部效果需审批 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{验证}
+
+固定 replay 在一次真实 QEMU boot 中执行三个用户 turn，同时 attach controller 与 observer。严格 validator 检查四个业务 identity、逐请求 SHA-256、TASK 状态迁移、artifact 依赖、一次失败后重规划、一次审批拒绝及其零副作用，并要求 session 正常关闭后不再输出 telemetry。这证明的是 offline replay 的同路径闭环，不是云模型结果。
+
+\section{N1 通用子任务协议}
+
+\subsection{约束}
+
+固定 pipe、阶段名或分号拼接文本无法支持动态委派，也无法将过期 handle、错误目标和跨 lifecycle 消息拒之门外。但是内核 \code{MESSAGE} 已经提供可控 route、scope、provenance、队列与唤醒，再在内核中理解研究任务又会越过机制与策略边界。
+
+\subsection{设计与实现}
+
+N1 是 Guest 用户态的版本化 fixed-size envelope：44-byte canonical little-endian wire，以 \code{N1:} 加无填充 base64url 通过 typed V2 \code{send_message} 传输。每条任务绑定 lifecycle id/generation、task id、parent task id、source/target、deadline、状态和有界值。状态机覆盖 \code{TASK_ASSIGN}、\code{TASK_ACCEPT}、\code{TASK_PROGRESS}、\code{TASK_RESULT}、\code{TASK_FAILED} 与 \code{TASK_CANCEL}。
+
+内核只强制外层 MESSAGE 的可证属性；Guest runtime 负责 N1 canonical decode、transition validation、单项在途和 deadline。Host \code{TASK_EVENT} 是观测投影，不是 N1 wire；Task Channel SQ/CQ、MCP Task 对象和 V3 contract envelope 也不能与它互换。
+
+短消息只携带控制和 generation-safe handle。模型产生的 objective、长工具结果和报告进入 artifact store。Research/Analyst 委派通过 TASK capsule 间接引用输入；System 的策略是固定 \code{SYSTEM_SNAPSHOT}，因此 ASSIGN 不含 input handle，也不为 Sentinel 增加 VFS 内容读权。
+
+\begin{designbox}[层次声明]
+N1 是 typed envelope over kernel MESSAGE。我们声称“内核治理了该通信”，因为发送者、接收者、route、scope、provenance、队列与唤醒由内核强制；我们不声称“内核理解 TASK 业务语义”。
+\end{designbox}
+
+\section{Artifact 数据平面}
+
+\subsection{约束}
+
+研究资料、测量数据和报告远大于内核短消息，而且数据流转不应把不可信内容升格为控制指令。仅有文件名也不够：重用 slot 或跨 lifecycle 读取都会产生混淆。
+
+\subsection{设计}
+
+Artifact manifest 绑定 lifecycle、handle generation、kind、task/parent、producer、owner、materializer、permission mask、payload size、source 和 provenance。Guest 以流式 SHA-256 覆盖完整 payload，读者重验 manifest 与 payload digest。System/Research 没有 artifact write，所以它们先返回可验证终态，再由 Coordinator 以“logical producer 与 materializer 分离”的 broker 语义写入结果。Analyst 只能发布自己的 report kind。
+
+Research 复制历史测量时保留 \code{UNTRUSTED_FILE_DATA}；Analyst 合并两份输入时取 provenance superset，同时保留 \code{UNTRUSTED_TOOL_OUTPUT} 和 \code{CROSS_AGENT_DATA}。哈希只证明 Guest 读回的字节与当时 manifest 一致，不是内核签名、授权凭据或不可篡改 seal。
+
+\subsection{黄金场景的真实数据依赖}
+
+黄金场景限定为“结合当前 AgentOS 系统事实与本地历史研究资料，形成带来源的性能分析”。strict replay 中，System 工件 handle 为 65540，Research 工件 handle 为 65544。当次 System 投影包含 \code{source=nexus_state}、\code{process_count=5}、\code{context_count=15}、\code{file_bytes=279} 与 \code{sched_budget=8}。这些数字是该 replay boot 的事实，不是通用性能基线。
+
+Research 读取的 schema v2 发布快照绑定 source commit：
+\begin{center}\small\code{2b14fb1f74b9bd093e6de939a16554620835699e}\end{center}
+其规范字段为 \code{records=96}、\code{traversal_us=34712.5}、\code{indexed_us=13293.5}、\code{paired_ratio_median=3.118} 和 \code{wins=16/16}，并显式标记 \code{historical_not_this_boot}。Analyst 必须同时引用两个 handle 及其完整 digest。删除或更改 seed 时，读回校验、任务结果和报告均会随之失败或改变。
+
+\section{动态工具呈现与模型回路}
+
+\subsection{工具目录不等于 prompt}
+
+内核的 25 项目录服务于 ABI 发现，不适合无差别地每轮发给模型。Nexus 首先调用 \code{tool_list}并检查名称/ID/schema，再依据 product role、kernel role、capability 和副作用策略筛选。\code{tool_search} 按类别分页返回 rich description：何时使用、何时不使用、参数与结果字段、常见错误和副作用。
+
+默认只读面包含 \code{pid_info}、\code{ctx_stat}、\code{query_process}、\code{get_system_status}、\code{read_context}、\code{query_file}、\code{read_file_summary}、\code{read_file_digest}、\code{dependency_query}、\code{capability_check} 和 \code{read_message}。\code{agent_wait}、\code{context_push}、\code{llm_request}、\code{llm_response} 属于 runtime 内部原语，不对模型暴露。Nexus 的 \code{delegate_task}、\code{read_artifact} 和 \code{publish_report} 是 Guest 产品动作，其 pseudo ID 不会冒充内核目录 ID。
+
+\subsection{真正的观察后再决策}
+
+Coordinator 将目标、有界历史、已筛选 schema 和上一个工具结果发给 provider。在 \code{WAITING_LLM} 期间，内核挂起 Agent；模型帧到达后唤醒。当模型返回委派，Coordinator 创建 task，等待 ACCEPT/PROGRESS/terminal，校验 source PID、role、lifecycle、deadline 和 transition，再把稳定、已验证的投影回灌给模型。一次 stale handle 的 Research 委派会返回结构化失败，Coordinator 可创建不同 task 重新规划，而不是退出 workflow。
+
+会话保留最近 4 个完整 turn，每个 turn 最多 8 个 model round；旧回合进入结构化 summary。为使 digest-bound replay 可复现，System 完整 artifact 保留动态 dispatch/budget-used/vruntime，模型历史只保留同一实际 artifact 中的稳定决策字段与 \code{sched_budget}。真实 payload size 保留在 controller tool event，而历史显式写作 \code{value1_omitted=volatile_payload_size}，不把 0 伪装成大小。
+
+\section{调用级审批、取消与安全降级}
+
+\subsection{参数绑定审批}
+
+\code{publish_report} 不接受“本会话曾经批准过这个工具”这类粗粒度证据。审批请求绑定 session、turn、request、correlation、positive tool ID、canonical arguments digest、一次性 nonce、issued tick 和 expiry tick。Guest 收到决定后逐字段比对，并在副作用之前再检查有效期。只有审批通过后，Coordinator 才用 typed V2 \code{artifact_update} 更新已登记的精确 selector。
+
+黄金 replay 特意拒绝发布：模型收到 \code{DENIED}，报告 artifact 仍可读，但内核 \code{artifact_update} 执行次数为 0，会话继续并返回安全降级的最终答案。
+
+\subsection{取消和关闭}
+
+\code{Ctrl-C} 取消当前 turn，不杀死 QEMU 或其他长驻 Agent；\code{/quit} 才执行 session close。取消是协作式的，已完成的工具副作用不会自动回滚。正常关闭时，Coordinator 停止 observer producer、最终 drain audit、join observer、关闭 telemetry writer 产生 EOF；Relay pump 读到 EOF 并 join 后才输出 \code{SESSION_CLOSED}。这保证关闭标记之后没有延迟 frame。
+
+\section{独立内核观测面}
+
+Observer 从 \code{agent_timeline_wait/read}、\code{agent_audit_query}、\code{agent_info} 与 Context snapshot 投影两类事实。\code{kernel_audit} 只转发真实 MESSAGE enqueue/consume 记录，保留全局 audit sequence、生命周期、PID/agent/control identity、source/target、correlation 和内核 status。MESSAGE audit 的 flags 本来为 0，投影也保持 \code{provenance=0}，不伪造非零标签。
+
+\code{kernel_snapshot} 是每个业务 Agent 的 self \code{agent_info}，包含独立 Context sequence、wait sleep/wakeup delta、scheduler dispatch/budget/used/vruntime、capability mask 和可验 control identity。Audit sequence 不会被冒充 Context sequence。Coordinator 在 assignment 后及每次消费 worker reply 后同步 drain 共享 audit cursor，observer thread 也通过独立 mutex 使用同一 drain，以避免有界 principal history 在高频 MESSAGE 间丢失成对记录。
+
+\begin{evidencebox}[产品解释]
+左窗口说明“Agent 想做什么”；右窗口说明“操作系统实际允许、拒绝、调度和记录了什么”。observer 是有扰动的高信号投影，不是完整无损 trace，也不用于产生第\ref{chap:validation}章的性能数字。
+\end{evidencebox}
+
+\section{交互控制面}
+
+第一版不追求复杂 TUI，而是使用稳定的终端产品语义。普通文本作为新用户 turn；\code{/tools}、\code{/agents}、\code{/tasks}、\code{/artifacts}、\code{/context}、\code{/status}、\code{/reset} 和 \code{/quit} 走 Guest control path。Host 不用缓存业务结果伪造这些命令。\code{/reset} 清理对话历史，但不新建 lifecycle，也不回收已发布 artifact slot。
+
+\begin{itemize}
+  \item \code{make agentos-nexus-check}：只运行静态/Host 合同。
+  \item \code{make agentos-nexus-replay}：运行固定 fixture 的真实 QEMU 闭环。
+  \item \code{make agentos-nexus-deepseek}：显式人工 live 入口，只以当次 API 往返与 Guest 日志作为成功证据。
+\end{itemize}
+同路径 replay 已可复验；provider 失败不静默切换另一模式。

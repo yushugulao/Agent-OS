@@ -37,8 +37,6 @@ void *agent_context_provenance_sidecar(struct proc *);
 int agent_context_append_prepare(struct proc *, uint64);
 int agent_context_append(struct proc *, struct agent_op *,
 			 struct agent_result *, uint64, int);
-int agent_context_append_ticket(struct proc *, struct agent_op *,
-				struct agent_result *, uint64, int, uint64 *);
 int agent_context_append_reserved_ticket(
 	struct proc *, struct agent_op *, struct agent_result *, uint64, int,
 	struct agent_evidence_context_reservation *, uint64 *);

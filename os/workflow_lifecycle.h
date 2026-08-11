@@ -58,8 +58,6 @@ int workflow_lifecycle_closing(struct workflow_lifecycle_key key);
 int workflow_lifecycle_retiring(struct workflow_lifecycle_key key);
 int workflow_lifecycle_scope(struct workflow_lifecycle_key key,
 			     uint *scope_id);
-int workflow_lifecycle_generation_floor(struct workflow_lifecycle_key key);
-int workflow_lifecycle_generation_lease_floor(uint, uint64);
 int workflow_lifecycle_alloc_context_branch(struct workflow_lifecycle_key key,
 					    uint64 *branch_generation);
 /*
