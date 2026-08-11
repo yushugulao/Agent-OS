@@ -9,14 +9,14 @@
         <mxCell id="title" value="AgentOS Nexus 多智能体协作流程" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=38;fontStyle=1;fontColor=#285E8E;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="300" y="18" width="1320" height="50" as="geometry"/>
         </mxCell>
-        <mxCell id="subtitle" value="协调任务、分派 N1 任务并调用 AgentOS 内核功能" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=22;fontColor=#587187;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="subtitle" value="协调任务、分派 N1 TASK 并调用 AgentOS 内核功能" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=22;fontColor=#587187;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="300" y="70" width="1320" height="34" as="geometry"/>
         </mxCell>
 
         <mxCell id="guest_boundary" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCFEFF;strokeColor=#86A9D4;strokeWidth=2.4;dashed=1;dashPattern=10 8;arcSize=18;" vertex="1" parent="1">
           <mxGeometry x="40" y="130" width="1280" height="855" as="geometry"/>
         </mxCell>
-        <mxCell id="guest_label" value="&lt;b&gt;客户机中的 AgentOS Nexus 多智能体应用&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=28;fontColor=#386A98;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="guest_label" value="&lt;b&gt;Guest 中的 AgentOS Nexus 多 Agent 应用&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=28;fontColor=#386A98;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="70" y="146" width="800" height="40" as="geometry"/>
         </mxCell>
 
@@ -34,21 +34,21 @@
           <mxGeometry x="118" y="299" width="36" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="coordinator" value="&lt;b&gt;协调智能体&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:21px&quot;&gt;拆分并分派任务&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE8F4;strokeColor=#B72B76;strokeWidth=2.4;align=left;verticalAlign=middle;spacingLeft=76;fontSize=27;fontColor=#8C1F5C;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="coordinator" value="&lt;b&gt;协调 Agent&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;Coordinator&lt;br&gt;拆分并分派任务&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE8F4;strokeColor=#B72B76;strokeWidth=2.4;align=left;verticalAlign=middle;spacingLeft=76;fontSize=27;fontColor=#8C1F5C;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="350" y="250" width="300" height="120" as="geometry"/>
         </mxCell>
         <mxCell id="coordinator_icon" value="" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#B72B76;strokeColor=#FFFFFF;strokeWidth=2;dashed=0;html=1;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.augmented_ai;" vertex="1" parent="1">
           <mxGeometry x="370" y="286" width="48" height="48" as="geometry"/>
         </mxCell>
 
-        <mxCell id="guest_relay" value="&lt;b&gt;客户机中继程序&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;仅转发 V2 帧&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F8FF;strokeColor=#4E89BE;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=57;fontSize=21;fontColor=#2E648F;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="guest_relay" value="&lt;b&gt;Guest Relay&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;客户机中继&lt;br&gt;仅转发 V2 帧&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F8FF;strokeColor=#4E89BE;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=57;fontSize=21;fontColor=#2E648F;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="1030" y="250" width="230" height="120" as="geometry"/>
         </mxCell>
         <mxCell id="guest_relay_icon" value="" style="html=1;strokeWidth=2.5;strokeColor=#4E89BE;fillColor=#FFFFFF;shadow=0;shape=mxgraph.ios7.icons.envelope_(message);" vertex="1" parent="1">
           <mxGeometry x="1047" y="294" width="39" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="n1_task" value="&lt;b&gt;N1 任务&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:18px&quot;&gt;生成任务并委派&lt;br&gt;任务 ID、父任务、截止时间&lt;br&gt;已分配 → 已接收 → 进行中&lt;br&gt;已完成或失败&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF8F3;strokeColor=#20A886;strokeWidth=2.4;align=left;verticalAlign=middle;spacingLeft=66;fontSize=24;fontColor=#087C63;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="n1_task" value="&lt;b&gt;N1 TASK&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:18px&quot;&gt;生成任务并委派&lt;br&gt;任务 ID、父任务、截止时间&lt;br&gt;已分配 → 已接收 → 进行中&lt;br&gt;已完成或失败&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF8F3;strokeColor=#20A886;strokeWidth=2.4;align=left;verticalAlign=middle;spacingLeft=66;fontSize=24;fontColor=#087C63;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="330" y="375" width="430" height="145" as="geometry"/>
         </mxCell>
         <mxCell id="n1_task_icon" value="" style="html=1;verticalLabelPosition=bottom;align=center;verticalAlign=top;strokeWidth=2.3;strokeColor=#20A886;shadow=0;dashed=0;shape=mxgraph.ios7.icons.envelope_(message);" vertex="1" parent="1">
@@ -69,25 +69,25 @@
         <mxCell id="workers_plane" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FBFFFC;strokeColor=#8CC8AD;strokeWidth=2;dashed=1;dashPattern=9 7;arcSize=16;" vertex="1" parent="1">
           <mxGeometry x="70" y="540" width="1220" height="430" as="geometry"/>
         </mxCell>
-        <mxCell id="workers_plane_label" value="&lt;b&gt;各智能体执行任务并汇总结果&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=24;fontColor=#247C58;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="workers_plane_label" value="&lt;b&gt;各 Agent 执行任务并汇总结果&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=24;fontColor=#247C58;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="92" y="553" width="370" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="system_worker" value="&lt;b&gt;系统智能体（System）&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;执行 N1 任务&lt;br&gt;采集系统快照&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F3FF;strokeColor=#3679B8;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=48;fontSize=20;fontColor=#195A93;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="system_worker" value="&lt;b&gt;System Agent&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;执行 N1 TASK&lt;br&gt;采集系统快照&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F3FF;strokeColor=#3679B8;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=48;fontSize=20;fontColor=#195A93;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="90" y="600" width="285" height="105" as="geometry"/>
         </mxCell>
         <mxCell id="system_icon" value="" style="sketch=0;pointerEvents=1;shadow=0;dashed=0;html=1;strokeColor=none;fillColor=#3679B8;shape=mxgraph.mscae.intune.device_os;" vertex="1" parent="1">
           <mxGeometry x="100" y="635" width="36" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="research_worker" value="&lt;b&gt;研究智能体（Research）&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;执行 N1 任务&lt;br&gt;完成本地校验&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7EBFF;strokeColor=#A463B7;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=48;fontSize=20;fontColor=#78428B;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="research_worker" value="&lt;b&gt;Research Agent&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;执行 N1 TASK&lt;br&gt;完成本地校验&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F7EBFF;strokeColor=#A463B7;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=48;fontSize=20;fontColor=#78428B;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="385" y="600" width="290" height="105" as="geometry"/>
         </mxCell>
         <mxCell id="research_icon" value="" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#A463B7;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.global_secondary_index;" vertex="1" parent="1">
           <mxGeometry x="395" y="635" width="36" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="analyst_worker" value="&lt;b&gt;分析智能体（Analyst）&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;执行 N1 任务&lt;br&gt;生成报告文件&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF0E1;strokeColor=#DD8D32;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=48;fontSize=20;fontColor=#A45E14;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="analyst_worker" value="&lt;b&gt;Analyst Agent&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;执行 N1 TASK&lt;br&gt;生成报告文件&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF0E1;strokeColor=#DD8D32;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=48;fontSize=20;fontColor=#A45E14;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="685" y="600" width="280" height="105" as="geometry"/>
         </mxCell>
         <mxCell id="analyst_icon" value="" style="shape=mxgraph.flowchart.merge_or_storage;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;strokeWidth=2;" vertex="1" parent="1">
@@ -101,7 +101,7 @@
           <mxGeometry x="1008" y="634" width="40" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="result_broker" value="&lt;b&gt;协调智能体汇总结果&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:18px&quot;&gt;TASK_PROGRESS：进展信息&lt;br&gt;生成两个中间结果&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE8F4;strokeColor=#B72B76;strokeWidth=2.2;align=center;verticalAlign=middle;fontSize=22;fontColor=#8C1F5C;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="result_broker" value="&lt;b&gt;Coordinator 汇总结果&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:18px&quot;&gt;TASK_PROGRESS：进展信息&lt;br&gt;生成两个中间结果&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE8F4;strokeColor=#B72B76;strokeWidth=2.2;align=center;verticalAlign=middle;fontSize=22;fontColor=#8C1F5C;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="330" y="720" width="300" height="78" as="geometry"/>
         </mxCell>
 
@@ -112,28 +112,28 @@
           <mxGeometry x="120" y="818" width="390" height="32" as="geometry"/>
         </mxCell>
 
-        <mxCell id="system_artifact" value="&lt;b&gt;系统信息结果&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;句柄和摘要&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F1FF;strokeColor=#5F8FBE;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=54;fontSize=22;fontColor=#315D89;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="system_artifact" value="&lt;b&gt;System 结果&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;handle 与摘要&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F1FF;strokeColor=#5F8FBE;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=54;fontSize=22;fontColor=#315D89;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="120" y="860" width="230" height="75" as="geometry"/>
         </mxCell>
         <mxCell id="system_artifact_icon" value="" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#DAE8FC;strokeColor=#6C8EBF;" vertex="1" parent="1">
           <mxGeometry x="137" y="883" width="34" height="30" as="geometry"/>
         </mxCell>
 
-        <mxCell id="research_artifact" value="&lt;b&gt;资料核对结果&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;句柄和摘要&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8F8;strokeColor=#9B78AE;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=54;fontSize=22;fontColor=#704682;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="research_artifact" value="&lt;b&gt;Research 结果&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;handle 与摘要&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8F8;strokeColor=#9B78AE;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=54;fontSize=22;fontColor=#704682;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="390" y="860" width="230" height="75" as="geometry"/>
         </mxCell>
         <mxCell id="research_artifact_icon" value="" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;strokeWidth=2;fillColor=#E1D5E7;strokeColor=#9673A6;" vertex="1" parent="1">
           <mxGeometry x="407" y="883" width="34" height="30" as="geometry"/>
         </mxCell>
 
-        <mxCell id="artifact_validation" value="&lt;b&gt;按工作流和角色核对&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;结果句柄和摘要&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF8F4;strokeColor=#59A985;strokeWidth=2.2;align=left;verticalAlign=middle;spacingLeft=60;fontSize=21;fontColor=#247356;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="artifact_validation" value="&lt;b&gt;核对 artifact handle&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;按工作流和角色&lt;br&gt;同时检查摘要&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF8F4;strokeColor=#59A985;strokeWidth=2.2;align=left;verticalAlign=middle;spacingLeft=60;fontSize=21;fontColor=#247356;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="665" y="850" width="270" height="95" as="geometry"/>
         </mxCell>
         <mxCell id="artifact_validation_icon" value="" style="shadow=0;dashed=0;html=1;strokeColor=none;fillColor=#59A985;outlineConnect=0;shape=mxgraph.veeam.database_server;" vertex="1" parent="1">
           <mxGeometry x="683" y="876" width="40" height="42" as="geometry"/>
         </mxCell>
 
-        <mxCell id="terminal_result" value="&lt;b&gt;工作流最终结果&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;已写入上下文记录&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F4E2;strokeColor=#76AB58;strokeWidth=2.2;align=left;verticalAlign=middle;spacingLeft=56;fontSize=22;fontColor=#4D812D;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="terminal_result" value="&lt;b&gt;工作流最终结果&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;已写入 Context 记录&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F4E2;strokeColor=#76AB58;strokeWidth=2.2;align=left;verticalAlign=middle;spacingLeft=56;fontSize=22;fontColor=#4D812D;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="990" y="855" width="270" height="90" as="geometry"/>
         </mxCell>
         <mxCell id="terminal_result_icon" value="" style="shape=ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#76AB58;strokeColor=#4D812D;strokeWidth=2;" vertex="1" parent="1">
@@ -143,32 +143,32 @@
         <mxCell id="host_boundary" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCFDFF;strokeColor=#B2A8D7;strokeWidth=2.4;dashed=1;dashPattern=10 8;arcSize=18;" vertex="1" parent="1">
           <mxGeometry x="1340" y="130" width="540" height="650" as="geometry"/>
         </mxCell>
-        <mxCell id="host_label" value="&lt;b&gt;宿主机中继和模型服务&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=27;fontColor=#615585;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="host_label" value="&lt;b&gt;Host Relay、Provider 与 Replay&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=27;fontColor=#615585;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="1370" y="150" width="470" height="40" as="geometry"/>
         </mxCell>
 
-        <mxCell id="host_relay" value="&lt;b&gt;宿主机中继&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;仅转发协议消息&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F1EEFF;strokeColor=#8170B0;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=58;fontSize=25;fontColor=#544579;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="host_relay" value="&lt;b&gt;Host Relay&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;宿主机只转发&lt;br&gt;协议消息&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F1EEFF;strokeColor=#8170B0;strokeWidth=2.3;align=left;verticalAlign=middle;spacingLeft=58;fontSize=25;fontColor=#544579;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="1380" y="250" width="220" height="120" as="geometry"/>
         </mxCell>
         <mxCell id="host_relay_icon" value="" style="sketch=0;pointerEvents=1;shadow=0;dashed=0;html=1;strokeColor=none;fillColor=#8170B0;shape=mxgraph.mscae.intune.device_os;" vertex="1" parent="1">
           <mxGeometry x="1397" y="292" width="40" height="40" as="geometry"/>
         </mxCell>
 
-        <mxCell id="provider" value="&lt;b&gt;模型服务&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;模型请求与回复&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF5FF;strokeColor=#5A96C8;strokeWidth=2.2;align=left;verticalAlign=middle;spacingLeft=58;fontSize=23;fontColor=#326B9A;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="provider" value="&lt;b&gt;Provider&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;模型请求与回复&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF5FF;strokeColor=#5A96C8;strokeWidth=2.2;align=left;verticalAlign=middle;spacingLeft=58;fontSize=23;fontColor=#326B9A;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="1630" y="240" width="215" height="125" as="geometry"/>
         </mxCell>
         <mxCell id="provider_icon" value="" style="shape=cloud;whiteSpace=wrap;html=1;fillColor=#5A96C8;strokeColor=#2F6C9E;strokeWidth=1.8;" vertex="1" parent="1">
           <mxGeometry x="1647" y="278" width="42" height="32" as="geometry"/>
         </mxCell>
 
-        <mxCell id="replay" value="&lt;b&gt;回放服务&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;固定回放模式&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#D28B46;strokeWidth=2.2;align=left;verticalAlign=middle;spacingLeft=58;fontSize=23;fontColor=#925A20;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="replay" value="&lt;b&gt;Replay&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;固定回放模式&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#D28B46;strokeWidth=2.2;align=left;verticalAlign=middle;spacingLeft=58;fontSize=23;fontColor=#925A20;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="1630" y="445" width="215" height="115" as="geometry"/>
         </mxCell>
         <mxCell id="replay_icon" value="" style="verticalLabelPosition=bottom;html=1;verticalAlign=top;align=center;strokeColor=none;fillColor=#D28B46;shape=mxgraph.azure.code_file;pointerEvents=1;" vertex="1" parent="1">
           <mxGeometry x="1648" y="483" width="38" height="35" as="geometry"/>
         </mxCell>
 
-        <mxCell id="host_note" value="&lt;b&gt;宿主机只负责转发协议消息。&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;任务规划和工具调用都由客户机完成。&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF9FF;strokeColor=#B2A8D7;strokeWidth=1.8;dashed=1;dashPattern=4 4;align=center;verticalAlign=middle;fontSize=22;fontColor=#655A83;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="host_note" value="&lt;b&gt;Host Relay 只负责转发协议消息。&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;任务规划和工具调用都由 Guest 完成。&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF9FF;strokeColor=#B2A8D7;strokeWidth=1.8;dashed=1;dashPattern=4 4;align=center;verticalAlign=middle;fontSize=22;fontColor=#655A83;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="1380" y="625" width="465" height="90" as="geometry"/>
         </mxCell>
 
@@ -186,14 +186,14 @@
           <mxGeometry x="88" y="1129" width="36" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="kernel_context" value="&lt;b&gt;记录上下文和来源&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;按智能体身份保存&lt;br&gt;写入最终状态&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF9F5;strokeColor=#49A885;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=60;fontSize=23;fontColor=#237457;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="kernel_context" value="&lt;b&gt;Context 与来源&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;按 Agent 身份保存&lt;br&gt;写入最终状态&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF9F5;strokeColor=#49A885;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=60;fontSize=23;fontColor=#237457;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="370" y="1085" width="280" height="125" as="geometry"/>
         </mxCell>
         <mxCell id="kernel_context_icon" value="" style="verticalLabelPosition=bottom;html=1;verticalAlign=top;align=center;strokeColor=none;fillColor=#49A885;shape=mxgraph.azure.code_file;pointerEvents=1;" vertex="1" parent="1">
           <mxGeometry x="388" y="1129" width="36" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="kernel_tools" value="&lt;b&gt;按角色提供 V2 工具&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;筛选可用工具&lt;br&gt;核对调用方的能力位&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5EDFF;strokeColor=#9D73B5;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=60;fontSize=23;fontColor=#6F4A86;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="kernel_tools" value="&lt;b&gt;Typed V2 工具&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;按角色筛选&lt;br&gt;核对调用方的能力位&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5EDFF;strokeColor=#9D73B5;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=60;fontSize=23;fontColor=#6F4A86;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="670" y="1085" width="280" height="125" as="geometry"/>
         </mxCell>
         <mxCell id="kernel_tools_icon" value="" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#9D73B5;strokeColor=#714A89;strokeWidth=1.5;" vertex="1" parent="1">
@@ -207,7 +207,7 @@
           <mxGeometry x="988" y="1131" width="38" height="34" as="geometry"/>
         </mxCell>
 
-        <mxCell id="kernel_live_query" value="&lt;b&gt;查询中间结果和状态&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;使用实时查询&lt;br&gt;返回句柄和摘要&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E8;strokeColor=#D4A14A;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=60;fontSize=23;fontColor=#8A6517;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="kernel_live_query" value="&lt;b&gt;Live Query&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:20px&quot;&gt;查询中间结果和状态&lt;br&gt;返回 handle 和摘要&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E8;strokeColor=#D4A14A;strokeWidth=2;align=left;verticalAlign=middle;spacingLeft=60;fontSize=23;fontColor=#8A6517;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="1270" y="1085" width="280" height="125" as="geometry"/>
         </mxCell>
         <mxCell id="kernel_live_query_icon" value="" style="shadow=0;dashed=0;html=1;strokeColor=none;fillColor=#D4A14A;outlineConnect=0;shape=mxgraph.veeam.database_server;" vertex="1" parent="1">
@@ -221,7 +221,7 @@
           <mxGeometry x="1588" y="1129" width="36" height="36" as="geometry"/>
         </mxCell>
 
-        <mxCell id="kernel_support" value="这些内核功能由所有 Nexus 智能体共用，任务仍由协调智能体统一安排。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#A8C4E2;strokeWidth=1.6;dashed=1;dashPattern=4 4;align=center;verticalAlign=middle;fontSize=20;fontColor=#52789D;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="kernel_support" value="这些内核功能由所有 Nexus Agent 共用，任务仍由 Coordinator 统一安排。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#A8C4E2;strokeWidth=1.6;dashed=1;dashPattern=4 4;align=center;verticalAlign=middle;fontSize=20;fontColor=#52789D;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="420" y="1235" width="1080" height="40" as="geometry"/>
         </mxCell>
 
@@ -318,7 +318,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="analyst_result_label" value="&lt;b&gt;TASK_RESULT&lt;/b&gt;：报告句柄" style="text;html=1;strokeColor=none;fillColor=#FFFFFF;align=center;verticalAlign=middle;fontSize=20;fontColor=#A45E14;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="analyst_result_label" value="&lt;b&gt;TASK_RESULT&lt;/b&gt;：report handle" style="text;html=1;strokeColor=none;fillColor=#FFFFFF;align=center;verticalAlign=middle;fontSize=20;fontColor=#A45E14;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="690" y="274" width="310" height="28" as="geometry"/>
         </mxCell>
         <mxCell id="e_coord_effect" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2.4;strokeColor=#B72B76;endArrow=blockThin;endFill=1;exitX=0.95;exitY=0;entryX=1;entryY=0.5;" edge="1" parent="1" source="coordinator" target="governed_effect">

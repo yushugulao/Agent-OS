@@ -4,10 +4,10 @@
   <root>
     <mxCell id="0"/>
     <mxCell id="1" parent="0"/>
-    <mxCell id="title" value="&lt;div style=&quot;font-size:28px;font-weight:700;color:#263746;&quot;&gt;普通 uCore 与 AgentOS-uCore 的智能体任务实现对比&lt;/div&gt;&lt;div style=&quot;font-size:18px;font-weight:400;color:#52606D;margin-top:4px;&quot;&gt;相同任务在两套系统中的职责分工与执行路径&lt;/div&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=28;fontStyle=0;fontColor=#263746;" vertex="1" parent="1">
+    <mxCell id="title" value="&lt;div style=&quot;font-size:28px;font-weight:700;color:#263746;&quot;&gt;普通 uCore 与 AgentOS-uCore 的智能体任务实现对比&lt;/div&gt;&lt;div style=&quot;font-size:18px;font-weight:400;color:#52606D;margin-top:4px;&quot;&gt;相同 Agent 任务在两套系统中由谁负责、走哪条执行路径&lt;/div&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontFamily=Microsoft YaHei;fontSize=28;fontStyle=0;fontColor=#263746;" vertex="1" parent="1">
       <mxGeometry x="60" y="2" width="1480" height="64" as="geometry"/>
     </mxCell>
-    <mxCell id="shared" value="相同输入和任务" style="swimlane;html=1;rounded=1;arcSize=12;startSize=34;horizontal=1;dashed=1;dashPattern=8 6;container=1;pointerEvents=0;collapsible=0;fillColor=#DDEBFA;swimlaneFillColor=#F5F9FD;strokeColor=#2F6FB3;strokeWidth=2.2;fontFamily=Microsoft YaHei;fontSize=20;fontStyle=1;fontColor=#2F6FB3;align=left;spacingLeft=18;" vertex="1" parent="1">
+    <mxCell id="shared" value="相同 Agent 任务与输入" style="swimlane;html=1;rounded=1;arcSize=12;startSize=34;horizontal=1;dashed=1;dashPattern=8 6;container=1;pointerEvents=0;collapsible=0;fillColor=#DDEBFA;swimlaneFillColor=#F5F9FD;strokeColor=#2F6FB3;strokeWidth=2.2;fontFamily=Microsoft YaHei;fontSize=20;fontStyle=1;fontColor=#2F6FB3;align=left;spacingLeft=18;" vertex="1" parent="1">
       <mxGeometry x="220" y="70" width="1160" height="150" as="geometry"/>
     </mxCell>
     <mxCell id="shared_input" value="相同任务要求" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2F6FB3;strokeWidth=2.2;fontFamily=Microsoft YaHei;fontSize=22;fontStyle=1;fontColor=#263746;align=center;verticalAlign=middle;" vertex="1" parent="shared">
@@ -22,16 +22,16 @@
     <mxCell id="plain_outer" value="普通 uCore" style="swimlane;html=1;rounded=1;arcSize=12;startSize=70;horizontal=1;dashed=1;dashPattern=10 6;container=1;pointerEvents=0;collapsible=0;fillColor=#F7E7C3;swimlaneFillColor=#FFFCF6;strokeColor=#C68B2C;strokeWidth=2.3;fontFamily=Microsoft YaHei;fontSize=24;fontStyle=1;fontColor=#6E5120;align=left;spacingLeft=24;verticalAlign=middle;" vertex="1" parent="1">
       <mxGeometry x="30" y="280" width="760" height="570" as="geometry"/>
     </mxCell>
-    <mxCell id="plain_entry" value="智能体状态与规则由应用维护" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#FFF4D9;strokeColor=#C68B2C;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#6E5120;align=center;verticalAlign=middle;" vertex="1" parent="plain_outer">
+    <mxCell id="plain_entry" value="Agent 状态与规则由应用维护" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#FFF4D9;strokeColor=#C68B2C;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#6E5120;align=center;verticalAlign=middle;" vertex="1" parent="plain_outer">
       <mxGeometry x="430" y="14" width="290" height="42" as="geometry"/>
     </mxCell>
-    <mxCell id="plain_app" value="应用需要自行处理" style="swimlane;html=1;rounded=1;arcSize=10;startSize=40;horizontal=1;dashed=1;dashPattern=6 5;container=1;collapsible=0;fillColor=#FBEFD5;swimlaneFillColor=#FFFFFF;strokeColor=#DDB05A;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=20;fontStyle=1;fontColor=#7A5B25;align=left;spacingLeft=16;" vertex="1" parent="plain_outer">
+    <mxCell id="plain_app" value="应用自行负责以下能力" style="swimlane;html=1;rounded=1;arcSize=10;startSize=40;horizontal=1;dashed=1;dashPattern=6 5;container=1;collapsible=0;fillColor=#FBEFD5;swimlaneFillColor=#FFFFFF;strokeColor=#DDB05A;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=20;fontStyle=1;fontColor=#7A5B25;align=left;spacingLeft=16;" vertex="1" parent="plain_outer">
       <mxGeometry x="30" y="90" width="700" height="185" as="geometry"/>
     </mxCell>
-    <mxCell id="plain_context" value="身份和上下文" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#FFF8E8;strokeColor=#C68B2C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#5F4A25;align=center;verticalAlign=middle;" vertex="1" parent="plain_app">
+    <mxCell id="plain_context" value="Agent 身份与 Context" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#FFF8E8;strokeColor=#C68B2C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#5F4A25;align=center;verticalAlign=middle;" vertex="1" parent="plain_app">
       <mxGeometry x="20" y="70" width="200" height="72" as="geometry"/>
     </mxCell>
-    <mxCell id="plain_tool" value="工具参数和执行规则" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#FFF8E8;strokeColor=#C68B2C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#5F4A25;align=center;verticalAlign=middle;" vertex="1" parent="plain_app">
+    <mxCell id="plain_tool" value="工具参数与执行规则" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#FFF8E8;strokeColor=#C68B2C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#5F4A25;align=center;verticalAlign=middle;" vertex="1" parent="plain_app">
       <mxGeometry x="250" y="70" width="200" height="72" as="geometry"/>
     </mxCell>
     <mxCell id="plain_poll" value="轮询状态并等待" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#FFF8E8;strokeColor=#C68B2C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#5F4A25;align=center;verticalAlign=middle;" vertex="1" parent="plain_app">
@@ -40,7 +40,7 @@
     <mxCell id="plain_kernel" value="普通 uCore 的通用内核能力" style="swimlane;html=1;rounded=1;arcSize=10;startSize=40;horizontal=1;dashed=1;dashPattern=6 5;container=1;collapsible=0;fillColor=#FBEFD5;swimlaneFillColor=#FFFFFF;strokeColor=#DDB05A;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=20;fontStyle=1;fontColor=#7A5B25;align=left;spacingLeft=16;" vertex="1" parent="plain_outer">
       <mxGeometry x="30" y="305" width="700" height="175" as="geometry"/>
     </mxCell>
-    <mxCell id="plain_io" value="系统调用、VFS 和 IPC" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C68B2C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#5F4A25;align=center;verticalAlign=middle;" vertex="1" parent="plain_kernel">
+    <mxCell id="plain_io" value="系统调用、VFS 与 IPC" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C68B2C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#5F4A25;align=center;verticalAlign=middle;" vertex="1" parent="plain_kernel">
       <mxGeometry x="85" y="70" width="240" height="68" as="geometry"/>
     </mxCell>
     <mxCell id="plain_sched" value="普通进程调度" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C68B2C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#5F4A25;align=center;verticalAlign=middle;" vertex="1" parent="plain_kernel">
@@ -49,28 +49,28 @@
     <mxCell id="agent_outer" value="AgentOS-uCore" style="swimlane;html=1;rounded=1;arcSize=12;startSize=70;horizontal=1;dashed=1;dashPattern=10 6;container=1;pointerEvents=0;collapsible=0;fillColor=#D7F0EA;swimlaneFillColor=#F8FCFB;strokeColor=#159A8C;strokeWidth=2.3;fontFamily=Microsoft YaHei;fontSize=24;fontStyle=1;fontColor=#116B61;align=left;spacingLeft=24;verticalAlign=middle;" vertex="1" parent="1">
       <mxGeometry x="810" y="280" width="760" height="570" as="geometry"/>
     </mxCell>
-    <mxCell id="agent_identity" value="内核管理身份、生命周期和上下文" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#E4F6F2;strokeColor=#159A8C;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#116B61;align=center;verticalAlign=middle;" vertex="1" parent="agent_outer">
+    <mxCell id="agent_identity" value="内核管理 Agent 身份、生命周期与 Context" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#E4F6F2;strokeColor=#159A8C;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#116B61;align=center;verticalAlign=middle;" vertex="1" parent="agent_outer">
       <mxGeometry x="330" y="14" width="390" height="42" as="geometry"/>
     </mxCell>
-    <mxCell id="agent_paths" value="内核分别处理工具调用、文件订阅和工作流调度" style="swimlane;html=1;rounded=1;arcSize=10;startSize=40;horizontal=1;dashed=1;dashPattern=6 5;container=1;collapsible=0;fillColor=#DFF4EF;swimlaneFillColor=#FFFFFF;strokeColor=#58B7AA;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=20;fontStyle=1;fontColor=#126F65;align=left;spacingLeft=16;" vertex="1" parent="agent_outer">
+    <mxCell id="agent_paths" value="内核分别实现 Typed Tool、Live Query 与 Workflow 调度" style="swimlane;html=1;rounded=1;arcSize=10;startSize=40;horizontal=1;dashed=1;dashPattern=6 5;container=1;collapsible=0;fillColor=#DFF4EF;swimlaneFillColor=#FFFFFF;strokeColor=#58B7AA;strokeWidth=1.8;fontFamily=Microsoft YaHei;fontSize=20;fontStyle=1;fontColor=#126F65;align=left;spacingLeft=16;" vertex="1" parent="agent_outer">
       <mxGeometry x="30" y="90" width="700" height="320" as="geometry"/>
     </mxCell>
-    <mxCell id="typed_head" value="结构化工具调用" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
+    <mxCell id="typed_head" value="Typed Tool 与 Schema" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
       <mxGeometry x="20" y="70" width="200" height="64" as="geometry"/>
     </mxCell>
     <mxCell id="typed_gate" value="检查参数、权限&#xa;和资源" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
       <mxGeometry x="20" y="205" width="200" height="72" as="geometry"/>
     </mxCell>
-    <mxCell id="live_head" value="文件变化订阅" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
+    <mxCell id="live_head" value="Live Query 与 Watch" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
       <mxGeometry x="250" y="70" width="200" height="64" as="geometry"/>
     </mxCell>
     <mxCell id="live_event" value="事件入队并唤醒&#xa;等待进程" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
       <mxGeometry x="250" y="205" width="200" height="72" as="geometry"/>
     </mxCell>
-    <mxCell id="sched_head" value="工作流预算" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
+    <mxCell id="sched_head" value="Workflow 预算" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=19;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
       <mxGeometry x="480" y="70" width="200" height="64" as="geometry"/>
     </mxCell>
-    <mxCell id="agent_eevdf" value="按工作流进行&#xa;EEVDF 调度" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
+    <mxCell id="agent_eevdf" value="按 Workflow 预算&#xa;执行 EEVDF 调度" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#EAF8F5;strokeColor=#159A8C;strokeWidth=2;fontFamily=Microsoft YaHei;fontSize=18;fontStyle=1;fontColor=#126F65;align=center;verticalAlign=middle;" vertex="1" parent="agent_paths">
       <mxGeometry x="480" y="205" width="200" height="72" as="geometry"/>
     </mxCell>
     <mxCell id="agent_exec" value="由 uCore 执行系统调用、文件访问和进程调度" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;fillColor=#D9F1EC;strokeColor=#159A8C;strokeWidth=2.2;fontFamily=Microsoft YaHei;fontSize=21;fontStyle=1;fontColor=#116B61;align=center;verticalAlign=middle;" vertex="1" parent="agent_outer">

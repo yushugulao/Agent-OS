@@ -111,8 +111,8 @@ uCore 已经提供了进程、虚拟内存、VFS、IPC、调度器、时钟中�
 ### 2.3 总体架构
 
 <p align="center">
-  <a href="docs/figures/architecture/agentos_overview.pdf">
-    <img src="docs/figures/architecture/agentos_overview.jpg" alt="AgentOS-uCore 总体架构" width="1000">
+  <a href="docs/figures/architecture/agentos_overview.png">
+    <img src="docs/figures/architecture/agentos_overview.png" alt="AgentOS-uCore 总体架构" width="1000">
   </a>
 </p>
 
