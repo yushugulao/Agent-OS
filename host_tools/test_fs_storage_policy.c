@@ -3,7 +3,7 @@
 
 #define FSSIZE 16384U
 #define NINODE 2048U
-#include "../fs_storage_policy.h"
+#include "../include/fs_storage_policy.h"
 
 int main(void)
 {

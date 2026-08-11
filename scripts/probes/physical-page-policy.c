@@ -1,5 +1,5 @@
 #include "../../os/types.h"
-#include "../../physical_page_policy.h"
+#include "../../include/physical_page_policy.h"
 
 #ifndef EXPECTED_PHYSICAL_DOMAIN_LIMIT
 #error "policy probe requires an expected derived domain limit"

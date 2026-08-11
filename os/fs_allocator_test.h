@@ -2,7 +2,7 @@
 #define FS_ALLOCATOR_TEST_H
 
 #include "types.h"
-#include "../fs_allocator_test_abi.h"
+#include "../include/fs_allocator_test_abi.h"
 
 struct proc;
 

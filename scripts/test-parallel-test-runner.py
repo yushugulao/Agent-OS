@@ -12,14 +12,17 @@ import unittest
 
 
 RUNNER = Path(__file__).with_name("run-parallel-tests.py")
-FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "build" / "test-fixtures"
+FIXTURE_PARENT = Path(__file__).resolve().parents[1] / "build"
 
 
 def fixture_directory() -> tempfile.TemporaryDirectory[str]:
     """把动态脚本置于正式 Python 始终信任的仓库根内。"""
 
-    FIXTURE_ROOT.mkdir(parents=True, exist_ok=True)
-    return tempfile.TemporaryDirectory(dir=FIXTURE_ROOT)
+    FIXTURE_PARENT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(
+        dir=FIXTURE_PARENT,
+        prefix="test-fixtures-",
+    )
 
 
 class ParallelTestRunnerTests(unittest.TestCase):

@@ -1,7 +1,7 @@
 #include "agent_task_channel.h"
 #include "defs.h"
 #include "timer.h"
-#include "../agent_provenance_abi.h"
+#include "../include/agent_provenance_abi.h"
 
 #define AGENT_TASK_CHANNEL_OWNER_FREE       0U
 #define AGENT_TASK_CHANNEL_OWNER_SETTING_UP 1U

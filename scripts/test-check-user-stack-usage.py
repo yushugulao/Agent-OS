@@ -19,7 +19,8 @@ class UserStackUsageCheckerTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.sources = self.root / "user"
         self.usage = self.root / "usage"
-        self.contract = self.root / "user_stack_policy.h"
+        self.contract = self.root / "include" / "user_stack_policy.h"
+        self.contract.parent.mkdir(parents=True, exist_ok=True)
         self.write_contract()
         for unit in (LIBRARY, APPLICATION):
             source = self.sources / unit

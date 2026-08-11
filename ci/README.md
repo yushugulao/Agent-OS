@@ -4,7 +4,7 @@
 
 - kernel/user UAPI 的 size 与 offset 清单；
 - Plain/AgentOS 双目标状态文件白名单；
-- 性能负载与操作次数；
+- 性能负载、操作次数与 [Task 6 计数语料](task6-count-corpus.csv)；
 - Console 和 Nexus 的确定性 replay 响应及会话脚本。
 
 快速检查 ABI 与模块接线：

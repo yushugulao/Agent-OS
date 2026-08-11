@@ -42,8 +42,8 @@ endif
 INIT_PROC ?= usershell
 
 $(BUILDDIR)/$(K)/initproc.o: $(K)/initproc.S .FORCE
-$(K)/initproc.S: scripts/initproc.py .FORCE
-	@$(PYTHON_CMD) scripts/initproc.py $(INIT_PROC)
+$(K)/initproc.S: ../scripts/initproc.py .FORCE
+	@$(PYTHON_CMD) ../scripts/initproc.py $(INIT_PROC)
 
 CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
 CFLAGS += -MD

@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts" / "check-workflow-fence.py"
 FILES = (
-    "agent_workflow_fence_abi.h",
+    "include/agent_workflow_fence_abi.h",
     "os/agent.h",
     "user/include/agent.h",
     "os/agent_core.c",
@@ -84,7 +84,7 @@ class WorkflowFenceMutationTests(unittest.TestCase):
 
     def test_rejects_legacy_256_byte_receipt(self) -> None:
         self.mutate(
-            "agent_workflow_fence_abi.h",
+            "include/agent_workflow_fence_abi.h",
             "sizeof(struct agent_workflow_fence_receipt) == 320",
             "sizeof(struct agent_workflow_fence_receipt) == 256",
         )

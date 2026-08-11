@@ -12,7 +12,7 @@ from pathlib import Path
 CHECKER = Path(__file__).with_name("check-user-stack-contract.py")
 REPO = Path(__file__).resolve().parent.parent
 FILES = (
-    "user_stack_policy.h",
+    "include/user_stack_policy.h",
     "os/user_stack_layout.h",
     "os/loader.h",
     "os/proc.c",
@@ -67,7 +67,7 @@ class UserStackContractTests(unittest.TestCase):
 
     def test_mutation_policy_constant_drift_is_rejected(self):
         self.mutate(
-            "user_stack_policy.h",
+            "include/user_stack_policy.h",
             "#define USER_STACK_ARGV_LAYOUT_BYTES 1024ULL",
             "#define USER_STACK_ARGV_LAYOUT_BYTES 1040ULL",
         )
@@ -84,7 +84,7 @@ class UserStackContractTests(unittest.TestCase):
     def test_mutation_user_policy_wrapper_bypass_is_rejected(self):
         self.mutate(
             "user/include/user_stack_policy.h",
-            '#include "../../user_stack_policy.h"',
+            '#include "../../include/user_stack_policy.h"',
             "#define USER_STACK_ARGV_LAYOUT_BYTES 4096",
         )
         self.assert_rejected("user policy wrapper include")

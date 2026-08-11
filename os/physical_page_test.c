@@ -8,7 +8,7 @@
 #include "resource_controller.h"
 #include "riscv.h"
 #include "vfs_security.h"
-#include "../physical_page_test_abi.h"
+#include "../include/physical_page_test_abi.h"
 #include "../user/include/exec_policy_manifest.h"
 
 #ifndef PHYSICAL_PAGE_TEST_INIT_NAME

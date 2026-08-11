@@ -4,14 +4,14 @@
 #include "const.h"
 #include "riscv.h"
 #include "types.h"
-#include "../agent_execution_contract_abi.h"
-#include "../agent_task_channel_abi.h"
-#include "../agent_lifecycle_abi.h"
-#include "../agent_performance_abi.h"
-#include "../agent_provenance_abi.h"
-#include "../agent_resource_abi.h"
-#include "../agent_tool_abi.h"
-#include "../agent_workflow_fence_abi.h"
+#include "../include/agent_execution_contract_abi.h"
+#include "../include/agent_task_channel_abi.h"
+#include "../include/agent_lifecycle_abi.h"
+#include "../include/agent_performance_abi.h"
+#include "../include/agent_provenance_abi.h"
+#include "../include/agent_resource_abi.h"
+#include "../include/agent_tool_abi.h"
+#include "../include/agent_workflow_fence_abi.h"
 
 #define AGENT_TYPE_NONE  0
 #define AGENT_TYPE_AGENT 1
@@ -454,7 +454,7 @@ struct agent_audit_record {
 	char text[AGENT_AUDIT_TEXT_SIZE];
 };
 
-#include "../agent_observe_abi.h"
+#include "../include/agent_observe_abi.h"
 
 struct agent_ledger_summary {
 	int version;

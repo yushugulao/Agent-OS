@@ -3,7 +3,7 @@
 #include "proc.h"
 #include "riscv.h"
 #include "timer.h"
-#include "../agent_lifecycle_abi.h"
+#include "../include/agent_lifecycle_abi.h"
 
 #define WORKFLOW_SCHEDULER_SLOT_NONE (-1)
 #define WORKFLOW_SCHEDULER_SLEEP_DECAY_TICKS 16ULL

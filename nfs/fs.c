@@ -17,7 +17,7 @@
 #include "host_image_snapshot.h"
 #include "host_windows_compat.h"
 #include "../user/include/exec_policy_manifest.h"
-#include "../exec_image_policy.h"
+#include "../include/exec_image_policy.h"
 
 #ifndef static_assert
 #define static_assert(a, b)                                                    \

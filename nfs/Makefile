@@ -39,8 +39,8 @@ STORAGE_POLICY_CPPFLAGS := \
 .PHONY: .FORCE clean $(FS_FUSE)
 
 $(FS_FUSE): fs.c host_image_snapshot.c host_image_snapshot.h \
-	host_windows_compat.h elf_compat.h fs.h types.h ../fs_storage_policy.h \
-	../exec_image_policy.h $(EXEC_POLICY)
+	host_windows_compat.h elf_compat.h fs.h types.h ../include/fs_storage_policy.h \
+	../include/exec_image_policy.h $(EXEC_POLICY)
 	@set -e; tmp="$@.$$$$.tmp"; \
 		trap 'rm -f "$$tmp"' 0 1 2 3 15; \
 		$(HOSTCC) $(STORAGE_POLICY_CPPFLAGS) fs.c host_image_snapshot.c -o "$$tmp"; \

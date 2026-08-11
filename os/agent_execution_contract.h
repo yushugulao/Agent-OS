@@ -1,7 +1,7 @@
 #ifndef AGENT_EXECUTION_CONTRACT_H
 #define AGENT_EXECUTION_CONTRACT_H
 
-#include "../agent_execution_contract_abi.h"
+#include "../include/agent_execution_contract_abi.h"
 #include "agent_tool_protocol.h"
 #include "resource_controller.h"
 #include "types.h"

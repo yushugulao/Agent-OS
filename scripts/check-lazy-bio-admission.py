@@ -58,7 +58,7 @@ def check(root: Path) -> None:
     proc = compact(root / "os/proc.h")
     syscall = compact(root / "os/syscall.c")
     fs = compact(root / "os/fs.c")
-    policy = compact(root / "io_policy.h")
+    policy = compact(root / "include/io_policy.h")
     guest = compact(root / "user/src/iobudget_ucore.c")
 
     for fragment in (

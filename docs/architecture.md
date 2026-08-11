@@ -75,7 +75,7 @@ Workflow Credit Domain 使用 free、reserved、charged 三态 credit 管理内�
 
 ## 公开接口
 
-内核通过 [`user/include/agent.h`](../user/include/agent.h) 向 Guest 暴露系统调用封装。执行合同、生命周期、来源、资源、Task Channel、工具和 workflow fence 使用根目录的 `agent_*_abi.h` 固定布局。版本化结构体携带 `version`，并按各自定义使用 `size` 或 `struct_size`；内核对用户指针和变长字段重新 copyin。
+内核通过 [`user/include/agent.h`](../user/include/agent.h) 向 Guest 暴露系统调用封装。执行合同、生命周期、来源、资源、Task Channel、工具和 workflow fence 使用 `include/` 中的 `agent_*_abi.h` 固定布局。版本化结构体携带 `version`，并按各自定义使用 `size` 或 `struct_size`；内核对用户指针和变长字段重新 copyin。
 
 接口和状态码见 [API](api.md)，身份与副作用检查见[安全机制](security.md)。四组核心模块的内部设计见：
 

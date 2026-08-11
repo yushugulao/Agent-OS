@@ -70,5 +70,6 @@ make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 | [测试](docs/testing.md) | 静态契约、Guest 回归、故障测试和复现入口 |
 | [性能](docs/performance.md) | 实验设计、统计结果、图表和逐样本数据 |
 | [决赛文档](决赛文档.pdf) | AgentOS-uCore 完整产品文档 |
+| [项目视频与 PPT](项目介绍视频和ppt网盘链接.txt) | 演示视频与答辩材料的网盘入口 |
 
-主要源码位于 `os/`，Guest ABI 与应用位于 `user/`，Host 串口和模型协议接入位于 `host_tools/`。项目基于 LearningOS/uCore 开发，源码采用 [GPL-3.0](LICENSE)，文档采用 [CC BY-SA 4.0](LICENSE-DOCS)。
+主要源码位于 `os/`，共享 ABI 与策略契约位于 `include/`，Guest 封装与应用位于 `user/`，Host 串口和模型协议接入位于 `host_tools/`。项目基于 LearningOS/uCore 开发，源码采用 [GPL-3.0](LICENSE)，文档采用 [CC BY-SA 4.0](LICENSE-DOCS)。

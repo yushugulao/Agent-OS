@@ -19,7 +19,7 @@ class ContractError(RuntimeError):
 
 
 SOURCE_PATHS = {
-    "abi": "agent_workflow_fence_abi.h",
+    "abi": "include/agent_workflow_fence_abi.h",
     "kernel_agent_h": "os/agent.h",
     "user_agent_h": "user/include/agent.h",
     "core": "os/agent_core.c",
@@ -278,12 +278,12 @@ def validate_abi(sources: dict[str, str]) -> None:
 
     require(
         re.sub(r"\s+", "", sources["kernel_agent_h"]),
-        "#include\"../agent_workflow_fence_abi.h\"",
+        "#include\"../include/agent_workflow_fence_abi.h\"",
         "kernel Agent UAPI does not include the shared workflow fence ABI",
     )
     require(
         re.sub(r"\s+", "", sources["user_agent_h"]),
-        "#include\"../../agent_workflow_fence_abi.h\"",
+        "#include\"../../include/agent_workflow_fence_abi.h\"",
         "user Agent UAPI does not include the shared workflow fence ABI",
     )
     require(

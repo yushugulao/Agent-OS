@@ -95,11 +95,11 @@ typed resource handle 固定为 16 字节，每个 Agent 的私有表包含 8 �
 
 | 职责 | 源码 |
 | --- | --- |
-| 工具目录与 schema | [`agent_tool_abi.h`](../../agent_tool_abi.h)、[`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c) |
+| 工具目录与 schema | [`agent_tool_abi.h`](../../include/agent_tool_abi.h)、[`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c) |
 | syscall 与 owner dispatch | [`os/agent_core.c`](../../os/agent_core.c) |
-| 执行合同 | [`agent_execution_contract_abi.h`](../../agent_execution_contract_abi.h)、[`os/agent_execution_contract.c`](../../os/agent_execution_contract.c) |
+| 执行合同 | [`agent_execution_contract_abi.h`](../../include/agent_execution_contract_abi.h)、[`os/agent_execution_contract.c`](../../os/agent_execution_contract.c) |
 | 来源检查 | [`os/agent_provenance.c`](../../os/agent_provenance.c) |
-| Task Channel | [`agent_task_channel_abi.h`](../../agent_task_channel_abi.h)、[`os/agent_task_channel.c`](../../os/agent_task_channel.c) |
+| Task Channel | [`agent_task_channel_abi.h`](../../include/agent_task_channel_abi.h)、[`os/agent_task_channel.c`](../../os/agent_task_channel.c) |
 | 用户态封装 | [`user/include/agent.h`](../../user/include/agent.h)、[`user/lib/syscall.c`](../../user/lib/syscall.c) |
 
 ## 测试入口

@@ -2,7 +2,7 @@
 #define WAIT_ATOMIC_TEST_H
 
 #include "proc.h"
-#include "../wait_atomic_test_abi.h"
+#include "../include/wait_atomic_test_abi.h"
 
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 int sys_wait_atomic_test(uint version, uint command, uint operation,

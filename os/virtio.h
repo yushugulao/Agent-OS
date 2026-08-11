@@ -3,7 +3,7 @@
 
 #include "bio.h"
 #ifdef VIRTIO_DISK_FAULT_INJECTION
-#include "../virtio_test_abi.h"
+#include "../include/virtio_test_abi.h"
 #endif
 
 //

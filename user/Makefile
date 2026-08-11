@@ -60,7 +60,7 @@ GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
 EVALUATION_HEADER := $(generated_dir)/agenteval_seed.h
 AGENT_EVAL_CHALLENGE_HEX ?= 0000000000000001
 USER_BUILD_CONFIG := $(build_dir)/.user-build-config
-USER_STACK_CONTRACT := ../user_stack_policy.h
+USER_STACK_CONTRACT := ../include/user_stack_policy.h
 USER_STACK_CONTRACT_WRAPPER := include/user_stack_policy.h
 # 按运行器最大准入容量编译拆除测试，以最大受支持配置测量数组栈帧。
 override USER_STACK_WORKFLOW_DOMAIN_FILE_CAP := 14

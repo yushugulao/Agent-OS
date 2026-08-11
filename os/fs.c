@@ -16,8 +16,8 @@
 #include "timer.h"
 #include "types.h"
 #include "virtio.h"
-#include "../fs_allocator_test_abi.h"
-#include "../physical_page_policy.h"
+#include "../include/fs_allocator_test_abi.h"
+#include "../include/physical_page_policy.h"
 #include "vfs_security.h"
 #ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
 #include "fs_allocator_test.h"

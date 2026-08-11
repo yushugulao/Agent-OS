@@ -5,7 +5,7 @@
 #include "file.h"
 #include "proc.h"
 #include "types.h"
-#include "../user_stack_policy.h"
+#include "../include/user_stack_policy.h"
 
 /*
  * 可执行索引节点仍加锁，且清单与虚拟文件系统配置均通过校验时推导此类别。

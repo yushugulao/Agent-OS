@@ -12,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
-    "agent_execution_contract_abi.h",
+    "include/agent_execution_contract_abi.h",
     "os/agent_execution_contract.h",
     "os/agent_execution_contract.c",
     "os/agent_core.c",
@@ -405,7 +405,7 @@ def validate_agent_loop_provenance(protocol: str, provenance: str) -> None:
 
 
 def validate_execution_contract(sources: dict[str, str]) -> None:
-    abi = sources["agent_execution_contract_abi.h"]
+    abi = sources["include/agent_execution_contract_abi.h"]
     header = sources["os/agent_execution_contract.h"]
     execution = sources["os/agent_execution_contract.c"]
     core = sources["os/agent_core.c"]
@@ -2235,7 +2235,7 @@ class ExecutionContractTests(unittest.TestCase):
 
     def test_digest_width_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(
-            "agent_execution_contract_abi.h",
+            "include/agent_execution_contract_abi.h",
             "#define AGENT_EXECUTION_DIGEST_SIZE           32U",
             "#define AGENT_EXECUTION_DIGEST_SIZE           16U",
         )

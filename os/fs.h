@@ -23,7 +23,7 @@
 #ifndef FSSIZE
 #define FSSIZE 16384 // size of file system in blocks
 #endif
-#include "../fs_storage_policy.h"
+#include "../include/fs_storage_policy.h"
 #define MAXPATH 128 // maximum file path name
 
 #define FS_LOOKUP_ERROR  (-1)

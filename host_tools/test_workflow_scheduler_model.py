@@ -185,7 +185,9 @@ class WorkflowSchedulerModelTest(unittest.TestCase):
         self.assertIn("<= 768", scheduler)
 
     def test_v2_negotiation_and_v3_metrics_projection(self):
-        abi = (ROOT / "agent_lifecycle_abi.h").read_text(encoding="utf-8")
+        abi = (ROOT / "include" / "agent_lifecycle_abi.h").read_text(
+            encoding="utf-8"
+        )
         implementation = (ROOT / "os" / "agent_lifecycle.c").read_text(
             encoding="utf-8"
         )

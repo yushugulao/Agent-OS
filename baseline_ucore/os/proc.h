@@ -16,7 +16,7 @@
 #define PROC_ORDINARY_SLOTS (NPROC - PROC_RESERVED_SLOTS)
 #define PROC_RESOURCE_DOMAIN_RESERVED_LIMIT PROC_RESERVED_SLOTS
 
-#include "../../file_resource_policy.h"
+#include "../../include/file_resource_policy.h"
 
 #define PROC_STORAGE_PRINCIPAL_NONE   0U
 #define PROC_STORAGE_PRINCIPAL_SYSTEM 1U

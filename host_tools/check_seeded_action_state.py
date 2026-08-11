@@ -31,8 +31,7 @@ TASK6_ARTIFACT_MAX_BYTES = 256
 TASK6_ARTIFACT_CORPUS_MAX_BYTES = 4096
 TASK6_ARTIFACT_FIXTURE = (
     Path(__file__).resolve().parents[1]
-    / "evaluation_guest"
-    / "fixtures"
+    / "ci"
     / "task6-count-corpus.csv"
 )
 TASK6_FNV_OFFSET = 1469598103934665603

@@ -1,7 +1,7 @@
 #ifndef AGENT_PROVENANCE_H
 #define AGENT_PROVENANCE_H
 
-#include "../agent_provenance_abi.h"
+#include "../include/agent_provenance_abi.h"
 #include "types.h"
 #include "workflow_lifecycle.h"
 

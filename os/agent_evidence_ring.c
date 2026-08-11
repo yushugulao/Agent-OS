@@ -1,5 +1,5 @@
 #include "agent_evidence_ring.h"
-#include "../agent_provenance_abi.h"
+#include "../include/agent_provenance_abi.h"
 #include "agent_internal.h"
 #include "agent_observe_internal.h"
 #include "defs.h"

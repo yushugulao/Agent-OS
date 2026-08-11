@@ -520,6 +520,8 @@ def compile_and_run_probe(directory: Path) -> tuple[list[tuple[int, int]], str]:
             "-Werror",
             "-I",
             str(ROOT),
+            "-I",
+            str(ROOT / "include"),
             str(source),
             "-o",
             str(output),

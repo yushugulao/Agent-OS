@@ -58,6 +58,7 @@ def compile_probe(root, build_dir, cc, view, include_dir):
     try:
         output_arg = output.relative_to(root).as_posix()
         include_arg = include_dir.relative_to(root).as_posix()
+        shared_include_arg = (root / "include").relative_to(root).as_posix()
     except ValueError as error:
         raise LayoutError(
             "Agent UAPI build paths must stay below the source root"
@@ -77,6 +78,7 @@ def compile_probe(root, build_dir, cc, view, include_dir):
         "-mcmodel=medany",
         "-mno-relax",
         f"-I{include_arg}",
+        f"-I{shared_include_arg}",
         "-I.",
         "-c",
         "scripts/probes/agent-uapi-layout.c",
@@ -121,6 +123,7 @@ def compile_shared_header_probes(root, build_dir, cc):
             "-mabi=lp64",
             "-mcmodel=medany",
             "-mno-relax",
+            "-Iinclude",
             "-I.",
             "-c",
             source_arg,
@@ -276,6 +279,7 @@ def require_shift_define(source, name, expected_bit, owner):
 
 
 def validate_feature_abi_constants(root):
+    include_dir = root / "include"
     expected = {
         "agent_execution_contract_abi.h": {
             "AGENT_EXECUTION_CONTRACT_VERSION": 1,
@@ -389,7 +393,7 @@ def validate_feature_abi_constants(root):
     }
     for relative, definitions in expected.items():
         try:
-            source = (root / relative).read_text(encoding="utf-8")
+            source = (include_dir / relative).read_text(encoding="utf-8")
         except OSError as error:
             raise LayoutError(f"cannot read {relative}: {error}") from error
         for name, value in definitions.items():
@@ -450,15 +454,19 @@ def validate_feature_abi_constants(root):
         },
     }
     for relative, definitions in shifted.items():
-        source = (root / relative).read_text(encoding="utf-8")
+        source = (include_dir / relative).read_text(encoding="utf-8")
         for name, bit in definitions.items():
             require_shift_define(source, name, bit, relative)
 
-    execution = (root / "agent_execution_contract_abi.h").read_text(
+    execution = (include_dir / "agent_execution_contract_abi.h").read_text(
         encoding="utf-8"
     )
-    task = (root / "agent_task_channel_abi.h").read_text(encoding="utf-8")
-    lifecycle = (root / "agent_lifecycle_abi.h").read_text(encoding="utf-8")
+    task = (include_dir / "agent_task_channel_abi.h").read_text(
+        encoding="utf-8"
+    )
+    lifecycle = (include_dir / "agent_lifecycle_abi.h").read_text(
+        encoding="utf-8"
+    )
     for owner, source, include in (
         ("execution contract", execution, '"agent_lifecycle_abi.h"'),
         ("Task Channel", task, '"agent_execution_contract_abi.h"'),
@@ -560,7 +568,7 @@ def validate_agent_syscall_numbers(root):
 
 
 def validate_tool_protocol_schema(root):
-    abi_path = root / "agent_tool_abi.h"
+    abi_path = root / "include" / "agent_tool_abi.h"
     protocol_path = root / "os" / "agent_tool_protocol.c"
     try:
         abi = abi_path.read_text(encoding="utf-8")
@@ -699,14 +707,18 @@ def validate_tool_protocol_schema(root):
     provenance_names |= set(
         re.findall(
             r"^#define\s+(AGENT_PROVENANCE_[A-Z0-9_]+)\b",
-            (root / "agent_provenance_abi.h").read_text(encoding="utf-8"),
+            (root / "include" / "agent_provenance_abi.h").read_text(
+                encoding="utf-8"
+            ),
             re.MULTILINE,
         )
     )
     effect_names = set(
         re.findall(
             r"^#define\s+(AGENT_SIDE_EFFECT_[A-Z0-9_]+)\b",
-            (root / "agent_provenance_abi.h").read_text(encoding="utf-8"),
+            (root / "include" / "agent_provenance_abi.h").read_text(
+                encoding="utf-8"
+            ),
             re.MULTILINE,
         )
     )

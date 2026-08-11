@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts/check-lazy-bio-admission.py"
 FILES = (
-    "io_policy.h",
+    "include/io_policy.h",
     "os/bio.h",
     "os/bio.c",
     "os/main.c",

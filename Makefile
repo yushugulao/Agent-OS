@@ -426,7 +426,7 @@ kernel-stack-check: build/kernel
 
 override AGENT_CHECK_BUILDDIR := build/agent-check
 
-agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h agent_execution_contract_abi.h agent_lifecycle_abi.h agent_provenance_abi.h agent_task_channel_abi.h agent_tool_abi.h agent_workflow_fence_abi.h agent_performance_abi.h agent_resource_abi.h
+agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h include/agent_execution_contract_abi.h include/agent_lifecycle_abi.h include/agent_provenance_abi.h include/agent_task_channel_abi.h include/agent_tool_abi.h include/agent_workflow_fence_abi.h include/agent_performance_abi.h include/agent_resource_abi.h
 	@$(PYTHON_CMD) scripts/check-agent-uapi-layout.py \
 		--root . --build-dir $(AGENT_CHECK_BUILDDIR) \
 		--cc $(CC_CMD) --nm $(NM_CMD)

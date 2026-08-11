@@ -3,7 +3,7 @@
 
 #include "riscv.h"
 #include "types.h"
-#include "../agent_task_channel_abi.h"
+#include "../include/agent_task_channel_abi.h"
 
 struct proc;
 struct thread;

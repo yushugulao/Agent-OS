@@ -268,7 +268,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
             agent_uapi_layout.compare_golden(actual, self.golden)
 
     def test_workflow_fence_header_owns_its_dependencies(self):
-        source = (ROOT / "agent_workflow_fence_abi.h").read_text(
+        source = (ROOT / "include" / "agent_workflow_fence_abi.h").read_text(
             encoding="utf-8"
         )
         self.assertIn('#include "agent_lifecycle_abi.h"', source)
@@ -279,14 +279,15 @@ class AgentUapiLayoutTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
         (root / "os").mkdir()
+        (root / "include").mkdir()
         (root / "user" / "include").mkdir(parents=True)
         for relative in (
-            "agent_execution_contract_abi.h",
-            "agent_lifecycle_abi.h",
-            "agent_provenance_abi.h",
-            "agent_resource_abi.h",
-            "agent_task_channel_abi.h",
-            "agent_tool_abi.h",
+            "include/agent_execution_contract_abi.h",
+            "include/agent_lifecycle_abi.h",
+            "include/agent_provenance_abi.h",
+            "include/agent_resource_abi.h",
+            "include/agent_task_channel_abi.h",
+            "include/agent_tool_abi.h",
             "os/agent.h",
             "user/include/agent.h",
         ):
@@ -310,7 +311,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
         temporary, root = self.feature_fixture()
         with temporary:
-            path = root / "agent_task_channel_abi.h"
+            path = root / "include" / "agent_task_channel_abi.h"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
                     "#define AGENT_TASK_CHANNEL_CAPACITY      16U",
@@ -359,18 +360,23 @@ class AgentUapiLayoutTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
         (root / "os").mkdir()
+        (root / "include").mkdir()
         (root / "user" / "include").mkdir(parents=True)
-        abi = (ROOT / "agent_tool_abi.h").read_text(encoding="utf-8")
+        abi = (ROOT / "include" / "agent_tool_abi.h").read_text(
+            encoding="utf-8"
+        )
         protocol = (ROOT / "os" / "agent_tool_protocol.c").read_text(
             encoding="utf-8"
         )
         abi = abi.replace('X(REPLY_SUMMARY, "reply_summary")', key_literal)
-        (root / "agent_tool_abi.h").write_text(abi, encoding="utf-8")
+        (root / "include" / "agent_tool_abi.h").write_text(
+            abi, encoding="utf-8"
+        )
         (root / "os" / "agent_tool_protocol.c").write_text(
             protocol, encoding="utf-8"
         )
         for relative in (
-            "agent_provenance_abi.h",
+            "include/agent_provenance_abi.h",
             "os/agent.h",
             "user/include/agent.h",
         ):
@@ -402,7 +408,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
             'X(REPLY_SUMMARY, "reply_summary")'
         )
         with temporary:
-            path = root / "agent_tool_abi.h"
+            path = root / "include" / "agent_tool_abi.h"
             source = path.read_text(encoding="utf-8").replace(
                 "AGENT_PARAM_KEY_REGISTRY(AGENT_PARAM_KEY_ASSERT)",
                 "/* capacity guard removed */",

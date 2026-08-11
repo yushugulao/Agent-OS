@@ -1,6 +1,6 @@
 # AgentOS 系统调用与 ABI
 
-AgentOS 通过 uCore 系统调用向 Guest 提供身份、workflow、工具、Context、文件查询、事件、调度、资源和 Task Channel。公开声明集中在 [`user/include/agent.h`](../user/include/agent.h)，版本化结构位于根目录的 `agent_*_abi.h`，用户态封装位于 [`user/lib/syscall.c`](../user/lib/syscall.c)。
+AgentOS 通过 uCore 系统调用向 Guest 提供身份、workflow、工具、Context、文件查询、事件、调度、资源和 Task Channel。公开声明集中在 [`user/include/agent.h`](../user/include/agent.h)，版本化结构位于 `include/agent_*_abi.h`，用户态封装位于 [`user/lib/syscall.c`](../user/lib/syscall.c)。
 
 ## ABI 约定
 
@@ -11,7 +11,7 @@ AgentOS 通过 uCore 系统调用向 Guest 提供身份、workflow、工具、Co
 - Task Channel command 的 request id 严格递增；workflow fence 允许同一 id 的精确重放，工具 request id 按接口承担相关性标识；
 - syscall 返回入口处理结果，response、CQE 和 fence receipt 继续提供结构化状态。
 
-工具状态定义在 [`agent_tool_abi.h`](../agent_tool_abi.h)，主要包括 `OK`、`BAD_REQUEST`、`NO_SPACE`、`TIMEOUT`、`DENIED`、`DUPLICATE`、`CANCELLED`、`CONFLICT`、`STALE` 和 `RETRY`。
+工具状态定义在 [`agent_tool_abi.h`](../include/agent_tool_abi.h)，主要包括 `OK`、`BAD_REQUEST`、`NO_SPACE`、`TIMEOUT`、`DENIED`、`DUPLICATE`、`CANCELLED`、`CONFLICT`、`STALE` 和 `RETRY`。
 
 ABI checker 使用 RISC-V64 probe、静态断言和冻结清单验证结构大小、字段 offset、枚举值与 syscall 号：
 
@@ -93,7 +93,7 @@ int agent_execution_contract(
 
 control 支持 `CREATE`、`QUERY` 和 `RETIRE`。每个 lifecycle 持有一份 immutable contract，最多 24 个节点与 48 个 accepted attempt 终态槽；单节点最多 4 次 attempt。节点按拓扑顺序提交，`predecessor_mask` 只能引用已有前驱。
 
-`AGENT_EXECUTION_CONTRACT_F_ENFORCE` 启用后，V3 调用和受约束的直接系统调用匹配当前合同。节点状态包括 `BLOCKED`、`READY`、`RUNNING`、`SUCCEEDED`、`FAILED` 与 `CANCELLED`。完整结构见 [`agent_execution_contract_abi.h`](../agent_execution_contract_abi.h)。
+`AGENT_EXECUTION_CONTRACT_F_ENFORCE` 启用后，V3 调用和受约束的直接系统调用匹配当前合同。节点状态包括 `BLOCKED`、`READY`、`RUNNING`、`SUCCEEDED`、`FAILED` 与 `CANCELLED`。完整结构见 [`agent_execution_contract_abi.h`](../include/agent_execution_contract_abi.h)。
 
 ## Batch 与 Workflow fence
 
@@ -107,7 +107,7 @@ int agent_workflow_fence(
     struct agent_workflow_fence_receipt *receipt);
 ```
 
-compact batch 一次提交最多 64 项，每项返回独立结果。fence request 为 56 字节，包含 32 字节 challenge 与 request id；receipt 固定为 320 字节，记录 lifecycle key、fence sequence、metadata generation、credit epoch、执行记录范围、八类资源用量和摘要。flags 标记 partial coverage、精确 credit、记录 seal 和 volatile metadata。布局见 [`agent_workflow_fence_abi.h`](../agent_workflow_fence_abi.h)。
+compact batch 一次提交最多 64 项，每项返回独立结果。fence request 为 56 字节，包含 32 字节 challenge 与 request id；receipt 固定为 320 字节，记录 lifecycle key、fence sequence、metadata generation、credit epoch、执行记录范围、八类资源用量和摘要。flags 标记 partial coverage、精确 credit、记录 seal 和 volatile metadata。布局见 [`agent_workflow_fence_abi.h`](../include/agent_workflow_fence_abi.h)。
 
 ## Context Path
 
@@ -191,7 +191,7 @@ int agent_task_channel_resource(
 
 channel 使用 single issuer，SQ/CQ 容量各 16，SQE、CQE 和 ring header 均为 128 字节。`setup` 建立映射，`enter` 提交并收割完成项，`resource` 处理 typed handle 的 import、release 和 query。
 
-SQE 支持 submit、cancel、link 和 hard deadline。CQE flags 描述 cancelled、deadline、denied 与 link failed。16 字节 resource handle 由 slot、type、flags 和 generation 组成。完整布局见 [`agent_task_channel_abi.h`](../agent_task_channel_abi.h)。
+SQE 支持 submit、cancel、link 和 hard deadline。CQE flags 描述 cancelled、deadline、denied 与 link failed。16 字节 resource handle 由 slot、type、flags 和 generation 组成。完整布局见 [`agent_task_channel_abi.h`](../include/agent_task_channel_abi.h)。
 
 ## 状态处理
 

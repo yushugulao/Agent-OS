@@ -11,7 +11,7 @@
 #include "resource_controller.h"
 #include "syscall_counter.h"
 #include "workflow_lifecycle.h"
-#include "../physical_page_policy.h"
+#include "../include/physical_page_policy.h"
 
 #define NPROC (128)
 #define NTHREAD (16)
@@ -53,8 +53,8 @@ _Static_assert(1ULL * PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT >=
 	       "reserved physical domains must fund VM and Agent state");
 #endif
 
-#include "../file_resource_policy.h"
-#include "../thread_resource_policy.h"
+#include "../include/file_resource_policy.h"
+#include "../include/thread_resource_policy.h"
 
 #define KSTACK_PAGES_PER_THREAD (KSTACK_SIZE / PAGE_SIZE)
 #define KSTACK_VIRTUAL_CAPACITY_BYTES \

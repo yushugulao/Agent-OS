@@ -16,7 +16,7 @@ PROC_H_RAW = (ROOT / "os/proc.h").read_text(encoding="utf-8")
 verify_thread_cold_contract(PROC_H_RAW, (BIO_RAW,))
 BIO = normalize_thread_cold_access(BIO_RAW, "os/bio.c")
 RESOURCE = (ROOT / "os/resource_controller.c").read_text(encoding="utf-8")
-POLICY = (ROOT / "io_policy.h").read_text(encoding="utf-8")
+POLICY = (ROOT / "include/io_policy.h").read_text(encoding="utf-8")
 IOBUDGET = (ROOT / "user/src/iobudget_ucore.c").read_text(encoding="utf-8")
 
 

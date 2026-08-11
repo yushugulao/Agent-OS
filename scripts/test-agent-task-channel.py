@@ -12,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
-    "agent_task_channel_abi.h",
+    "include/agent_task_channel_abi.h",
     "os/agent.c",
     "os/agent_core.c",
     "os/agent_execution_contract.c",
@@ -84,7 +84,7 @@ def require_order(source: str, needles: tuple[str, ...], message: str) -> None:
 
 
 def validate_task_channel(sources: dict[str, str]) -> None:
-    abi = sources["agent_task_channel_abi.h"]
+    abi = sources["include/agent_task_channel_abi.h"]
     facade = sources["os/agent.c"]
     core = sources["os/agent_core.c"]
     execution = sources["os/agent_execution_contract.c"]
@@ -2077,7 +2077,7 @@ class TaskChannelTests(unittest.TestCase):
 
     def test_sqe_width_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(
-            "agent_task_channel_abi.h",
+            "include/agent_task_channel_abi.h",
             "sizeof(struct agent_task_sqe) == 128",
             "sizeof(struct agent_task_sqe) == 64",
         )

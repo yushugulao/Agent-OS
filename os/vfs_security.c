@@ -10,7 +10,7 @@
 #include "proc.h"
 #include "workflow_lifecycle.h"
 #include "../user/include/exec_policy_manifest.h"
-#include "../exec_image_policy.h"
+#include "../include/exec_image_policy.h"
 
 _Static_assert(EXEC_MANIFEST_VFS_CONTENT_READ == VFS_CAP_CONTENT_READ,
 	       "content-read capability mismatch");

@@ -1,8 +1,8 @@
 #ifndef AGENT_TOOL_PROTOCOL_H
 #define AGENT_TOOL_PROTOCOL_H
 
-#include "../agent_provenance_abi.h"
-#include "../agent_tool_abi.h"
+#include "../include/agent_provenance_abi.h"
+#include "../include/agent_tool_abi.h"
 #include "agent_sha256.h"
 #include "riscv.h"
 #include "types.h"

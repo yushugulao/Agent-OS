@@ -138,7 +138,7 @@ def check_layout_model(values, user_source):
 
 
 def check(root):
-    policy = read(root, "user_stack_policy.h")
+    policy = read(root, "include/user_stack_policy.h")
     values = parse_contract(policy)
     helper_source = read(root, "os/user_stack_layout.h")
     loader = compact(read(root, "os/loader.h"))
@@ -153,12 +153,16 @@ def check(root):
     user_wrapper = compact(read(root, "user/include/user_stack_policy.h"))
     read(root, "scripts/test-check-user-stack-contract.py")
 
-    require_contains(loader, '#include"../user_stack_policy.h"', "loader policy include")
+    require_contains(
+        loader,
+        '#include"../include/user_stack_policy.h"',
+        "loader policy include",
+    )
     require_contains(loader, "#defineUSTACK_SIZE(USER_STACK_SIZE_BYTES)", "shared stack size")
     require_contains(loader, "_Static_assert(USTACK_SIZE==PAGE_SIZE", "one-page assertion")
     require_contains(
         user_wrapper,
-        '#include"../../user_stack_policy.h"',
+        '#include"../../include/user_stack_policy.h"',
         "user policy wrapper include",
     )
 
@@ -234,7 +238,11 @@ def check(root):
     if "USTACK_SIZE-storage_used" in syscall_body or "stack_left" in syscall_body:
         raise ValueError("copy_exec_args retains an independent whole-stack budget")
 
-    require_contains(user_make, "USER_STACK_CONTRACT:=../user_stack_policy.h", "Make policy source")
+    require_contains(
+        user_make,
+        "USER_STACK_CONTRACT:=../include/user_stack_policy.h",
+        "Make policy source",
+    )
     require_contains(
         user_make,
         "USER_STACK_CONTRACT_WRAPPER:=include/user_stack_policy.h",
