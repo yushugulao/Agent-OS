@@ -601,7 +601,7 @@ def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
         }
     axes[0].set_xlim(-0.05, 1.05)
     axes[0].set_xticks([0, 1])
-    axes[0].set_xlabel("唤醒等待时间（调度滴答）")
+    axes[0].set_xlabel("唤醒延迟（tick）")
     axes[0].set_ylabel("累计概率")
     axes[0].set_ylim(0, 1.03)
     axes[0].set_title("唤醒等待时间累积分布")
@@ -764,8 +764,8 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
         "dispatch_header_bytes": "派发头\n[字节/操作]",
         "control_abi_bytes": "控制 ABI\n[字节/操作]",
         "control_copied_bytes": "控制复制\n[字节/操作]",
-        "sched_dispatch_delta": "调度差值\n[滴答/操作]",
-        "sequence_elapsed_ticks": "序列耗时\n[滴答/操作]",
+        "sched_dispatch_delta": "调度差值\n[tick/操作]",
+        "sequence_elapsed_ticks": "序列耗时\n[tick/操作]",
     }
     cmap = LinearSegmentedColormap.from_list("agentos_io", ["#F8FBFC", "#A9CFCA", "#4C84A6", NAVY])
     fig, axes = plt.subplots(2, 1, figsize=(14.2, 6.5), gridspec_kw={"height_ratios": [0.9, 1.1]})

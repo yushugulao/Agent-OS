@@ -73,7 +73,7 @@ L 405.582895 62.784
      </g>
     </g>
     <g id="text_3">
-     <text style="font-size: 9.5px; font-family: 'Microsoft YaHei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="233.24544" y="325.293797" transform="rotate(-0 233.24544 325.293797)">唤醒等待时间（调度滴答）</text>
+     <text style="font-size: 9.5px; font-family: 'Microsoft YaHei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="233.24544" y="325.293797" transform="rotate(-0 233.24544 325.293797)">唤醒延迟（tick）</text>
     </g>
    </g>
    <g id="matplotlib.axis_2">

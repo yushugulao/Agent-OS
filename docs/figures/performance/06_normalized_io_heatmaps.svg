@@ -401,7 +401,7 @@ iVBORw0KGgoAAAANSUhEUgAABFsAAADDCAYAAABd2h41AAAFe0lEQVR4nO3asWlCARRAUX+WSSMIaZwg
      </g>
      <g id="text_35">
       <text style="font-size: 8.5px; font-family: 'Microsoft YaHei', 'DejaVu Sans', sans-serif" transform="translate(684.164641 432.023099) rotate(-25)">调度差值</text>
-      <text style="font-size: 8.5px; font-family: 'Microsoft YaHei', 'DejaVu Sans', sans-serif" transform="translate(680.065657 445.262506) rotate(-25)">[滴答/操作]</text>
+      <text style="font-size: 8.5px; font-family: 'Microsoft YaHei', 'DejaVu Sans', sans-serif" transform="translate(682.497111 444.1287) rotate(-25)">[tick/操作]</text>
      </g>
     </g>
     <g id="xtick_16">
@@ -412,7 +412,7 @@ iVBORw0KGgoAAAANSUhEUgAABFsAAADDCAYAAABd2h41AAAFe0lEQVR4nO3asWlCARRAUX+WSSMIaZwg
      </g>
      <g id="text_36">
       <text style="font-size: 8.5px; font-family: 'Microsoft YaHei', 'DejaVu Sans', sans-serif" transform="translate(784.487641 432.023099) rotate(-25)">序列耗时</text>
-      <text style="font-size: 8.5px; font-family: 'Microsoft YaHei', 'DejaVu Sans', sans-serif" transform="translate(780.388657 445.262506) rotate(-25)">[滴答/操作]</text>
+      <text style="font-size: 8.5px; font-family: 'Microsoft YaHei', 'DejaVu Sans', sans-serif" transform="translate(782.820111 444.1287) rotate(-25)">[tick/操作]</text>
      </g>
     </g>
    </g>

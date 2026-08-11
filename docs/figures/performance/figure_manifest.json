@@ -237,18 +237,18 @@
       "outputs": {
         "png": {
           "path": "05_eevdf_latency_fairness.png",
-          "bytes": 239431,
-          "sha256": "4164e2028581848c96e27154a2b95c0aafca69f909d88ca3a8ab6b00ae6c9f33"
+          "bytes": 236048,
+          "sha256": "d9fa43a1c280ef7ac2ef394758749041f3a314a153fab8a6bb46e6e9cfc2745e"
         },
         "pdf": {
           "path": "05_eevdf_latency_fairness.pdf",
-          "bytes": 46895,
-          "sha256": "c8b91ec571df0daa0045c79defb4997080fd544d91a11b8694a4de85250d8c5a"
+          "bytes": 44380,
+          "sha256": "1b71917220d34f0c59782e0c91efb5dc729b51d7340c526cf85992ad6dc9f4ca"
         },
         "svg": {
           "path": "05_eevdf_latency_fairness.svg",
-          "bytes": 31359,
-          "sha256": "9d1f92f52b62d871b301535fcb552c7db860ae1e9a1d67d2a4d31f1dcc69d6b6"
+          "bytes": 31345,
+          "sha256": "56a70c2d4d9e41561995e34737797cb144d4eede83530a264398ccdf2790c7fe"
         }
       }
     },
@@ -289,18 +289,18 @@
       "outputs": {
         "png": {
           "path": "06_normalized_io_heatmaps.png",
-          "bytes": 345897,
-          "sha256": "7e10936e649ac2e2a27bc6af1f05aa28b6de7d98ef7b4366ba2b960ea59892f8"
+          "bytes": 347939,
+          "sha256": "d89ce2f6cbe3e4a14989aed506805a7f3b3625078da5b7b9bf48386a1f7519db"
         },
         "pdf": {
           "path": "06_normalized_io_heatmaps.pdf",
-          "bytes": 60929,
-          "sha256": "5514e1b61b6cf58a99118642e2757a9a2fefcfade74b649a510278e30c771e26"
+          "bytes": 60016,
+          "sha256": "b290f52c6a0d41368dce70138448ae4cc1553a17341ed8523efb53851f43195b"
         },
         "svg": {
           "path": "06_normalized_io_heatmaps.svg",
-          "bytes": 43298,
-          "sha256": "1a2ac0d207b890f4bab2efa6329becabb5d8d93a62be25e547a01569704a07c4"
+          "bytes": 43290,
+          "sha256": "2ae365f4d4fd4adf97b4b8fbc2e4e1f0d197e1189ec49c77dd5cd78a0e527a3c"
         }
       }
     },
