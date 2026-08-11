@@ -74,6 +74,7 @@ def configure_matplotlib() -> str:
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
             "svg.fonttype": "none",
+            "svg.hashsalt": "agentos-doc-figures-20260811",
             "savefig.facecolor": "white",
             "savefig.edgecolor": "none",
         }
@@ -208,7 +209,20 @@ def export_figure(
         kwargs: dict[str, Any] = {"bbox_inches": "tight", "pad_inches": 0.08}
         if suffix == "png":
             kwargs["dpi"] = 300
+        elif suffix == "pdf":
+            kwargs["metadata"] = {
+                "Creator": "AgentOS-uCore",
+                "CreationDate": None,
+                "ModDate": None,
+            }
+        elif suffix == "svg":
+            kwargs["metadata"] = {"Creator": "AgentOS-uCore", "Date": None}
         fig.savefig(path, **kwargs)
+        if suffix == "svg":
+            # Keep published hashes stable across Windows and Linux checkouts.
+            text = path.read_text(encoding="utf-8")
+            with path.open("w", encoding="utf-8", newline="\n") as stream:
+                stream.write(text)
         exported[suffix] = {
             "path": path.name,
             "bytes": path.stat().st_size,
@@ -250,12 +264,12 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
             linewidth=1.0,
             zorder=1,
         )
-    ax0.scatter(frame["traversal_ms"], y, s=28, color=ORANGE, label="遍历", zorder=3)
-    ax0.scatter(frame["indexed_ms"], y, s=28, color=BLUE, label="索引", zorder=3)
+    ax0.scatter(frame["traversal_ms"], y, s=28, color=ORANGE, label="遍历查询", zorder=3)
+    ax0.scatter(frame["indexed_ms"], y, s=28, color=BLUE, label="索引查询", zorder=3)
     ax0.set_yticks(y, [f"S{int(value):02d}" for value in frame["sample_id"]])
-    ax0.set_xlabel("核心路径延迟（ms）")
-    ax0.set_ylabel("配对启动样本")
-    ax0.set_title("配对哑铃图")
+    ax0.set_xlabel("核心查询耗时（ms）")
+    ax0.set_ylabel("启动样本")
+    ax0.set_title("逐次配对")
     ax0.legend(frameon=False, ncols=2, loc="lower right")
     style_axis(ax0, grid_axis="x")
     panel_label(ax0, "a")
@@ -266,12 +280,12 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
     draw_half_raincloud(
         ax1,
         groups,
-        [f"遍历\nn={len(frame)}", f"索引\nn={len(frame)}"],
+        [f"遍历查询\nn={len(frame)}", f"索引查询\nn={len(frame)}"],
         [ORANGE, BLUE],
         seed=6101,
     )
-    ax1.set_ylabel("核心路径延迟（ms）")
-    ax1.set_title("延迟雨云图")
+    ax1.set_ylabel("核心查询耗时（ms）")
+    ax1.set_title("耗时分布")
     style_axis(ax1, grid_axis="y")
     panel_label(ax1, "b")
 
@@ -291,17 +305,18 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
         color=ORANGE,
         fontsize=8.2,
     )
-    ax2.set_xlabel("索引 - 遍历（ms）")
+    ax2.set_xlabel("索引查询减遍历查询（ms）")
     ax2.set_ylabel("累计概率")
     ax2.set_ylim(0, 1.03)
-    ax2.set_title("配对差值 ECDF")
+    ax2.set_title("配对差值累积分布")
     style_axis(ax2)
     panel_label(ax2, "c")
 
     faster = int((frame["delta_ms"] < 0).sum())
     speedup = float(frame["traversal_over_indexed_core_ratio"].median())
     order_counts = frame["order"].value_counts().to_dict()
-    fig.subplots_adjust(left=0.055, right=0.992, top=0.91, bottom=0.13)
+    fig.suptitle("遍历查询与索引查询的配对耗时", fontsize=13.5, weight="bold", y=0.985)
+    fig.subplots_adjust(left=0.055, right=0.992, top=0.83, bottom=0.13)
     return fig, {
         "sources": ["contest_paired.csv"],
         "paired_boots": int(len(frame)),
@@ -359,15 +374,15 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
             )
     ax0.set_xticks(range(len(hits)), [str(value) for value in hits])
     ax0.set_yticks(range(len(catalogs)), [str(value) for value in catalogs])
-    ax0.set_xlabel("每轮命中次数")
-    ax0.set_ylabel("目录规模（条目）")
-    ax0.set_title("目录规模 × 命中次数")
+    ax0.set_xlabel("命中次数")
+    ax0.set_ylabel("目录条目数")
+    ax0.set_title("查询加速比")
     for edge in np.arange(-0.5, len(hits), 1):
         ax0.axvline(edge, color="white", linewidth=1.2)
     for edge in np.arange(-0.5, len(catalogs), 1):
         ax0.axhline(edge, color="white", linewidth=1.2)
     colorbar = fig.colorbar(image, ax=ax0, fraction=0.047, pad=0.035)
-    colorbar.set_label("遍历 / 索引（倍）")
+    colorbar.set_label("遍历查询 / 索引查询（倍）")
     panel_label(ax0, "a", x=-0.14)
 
     x_values = np.asarray(hits, dtype=float)
@@ -385,13 +400,13 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
         alpha=0.94,
         antialiased=True,
     )
-    ax1.scatter(x_grid, y_grid, values, color=INK, s=24, depthshade=False, label="网格中位数")
+    ax1.scatter(x_grid, y_grid, values, color=INK, s=24, depthshade=False, label="实测中位数")
     ax1.set_xticks(x_values, [str(value) for value in hits])
     ax1.set_yticks(y_values, [str(value) for value in catalogs])
     ax1.set_xlabel("命中次数", labelpad=8)
-    ax1.set_ylabel("目录规模", labelpad=8)
-    ax1.set_zlabel("遍历 / 索引（倍）", labelpad=8)
-    ax1.set_title("性能曲面", pad=12)
+    ax1.set_ylabel("目录条目数", labelpad=8)
+    ax1.set_zlabel("查询加速比（倍）", labelpad=6)
+    ax1.set_title("参数曲面", pad=12)
     ax1.view_init(elev=25, azim=-57)
     ax1.legend(loc="upper left", frameon=False)
     ax1.xaxis.pane.set_facecolor((1, 1, 1, 0))
@@ -400,7 +415,8 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
     panel_label(ax1, "b", x=-0.02, y=1.02)
 
     best = grouped.loc[grouped["median"].idxmax()]
-    fig.subplots_adjust(left=0.065, right=0.985, top=0.91, bottom=0.11)
+    fig.suptitle("目录规模、命中数与查询加速比", fontsize=13.5, weight="bold", y=0.985)
+    fig.subplots_adjust(left=0.065, right=0.985, top=0.84, bottom=0.11)
     return fig, {
         "sources": ["agenteval_pairs.csv"],
         "measured_cells": int(len(grouped)),
@@ -431,6 +447,11 @@ def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
     frame.loc[frame["variant"] == "index", "category"] = "ready index"
     frame["us_per_query"] = frame["duration_us"] / frame["operations"]
     categories = ["首次计时 scan", "后续 scan", "ready index"]
+    category_labels = {
+        "首次计时 scan": "首轮遍历查询",
+        "后续 scan": "后续遍历查询",
+        "ready index": "索引查询",
+    }
     colors = [GRAY, ORANGE, BLUE]
     catalogs = sorted(int(value) for value in frame["load"].unique())
     grouped = (
@@ -453,16 +474,16 @@ def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
             width=width,
             color=color,
             alpha=0.86,
-            label=f"{category}  n={min(counts)}",
+            label=f"{category_labels[category]}（n={min(counts)}）",
         )
         ax.errorbar(x, medians, yerr=[medians - q1, q3 - medians], fmt="none", color=INK, capsize=2.5, linewidth=0.85)
         for bar, value in zip(bars, medians):
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{value:.0f}", ha="center", va="bottom", fontsize=7.8)
 
     ax.set_xticks(base, [str(value) for value in catalogs])
-    ax.set_xlabel("目录规模（条目）")
-    ax.set_ylabel("单次查询延迟（us）")
-    ax.set_title("扫描状态延迟")
+    ax.set_xlabel("目录条目数")
+    ax.set_ylabel("单次查询耗时（μs）")
+    ax.set_title("遍历查询与索引查询的耗时分组")
     ax.legend(frameon=False, ncols=3, loc="upper left")
     style_axis(ax, grid_axis="y")
     fig.subplots_adjust(left=0.10, right=0.985, top=0.89, bottom=0.13)
@@ -485,7 +506,7 @@ def make_task_latency(tables: Path) -> tuple[Any, dict[str, Any]]:
     frame["duration_us"] = pd.to_numeric(frame["duration_us"], errors="raise")
     frame["duration_ms"] = frame["duration_us"] / 1000.0
     paths = ["batch", "scalar_v3", "sq_cq"]
-    labels = ["Batch", "Scalar V3", "SQ-CQ"]
+    labels = ["批量提交", "逐项提交 V3", "SQ/CQ"]
     colors = [PATH_COLORS[path] for path in paths]
     groups = [frame.loc[frame["path"] == path, "duration_ms"].to_numpy() for path in paths]
 
@@ -498,8 +519,8 @@ def make_task_latency(tables: Path) -> tuple[Any, dict[str, Any]]:
         seed=6104,
         point_size=17,
     )
-    axes[0].set_ylabel("16 操作序列延迟（ms）")
-    axes[0].set_title("延迟雨云图")
+    axes[0].set_ylabel("16 次任务操作耗时（ms）")
+    axes[0].set_title("耗时分布")
     style_axis(axes[0], grid_axis="y")
     panel_label(axes[0], "a")
     for position, values, color in zip(range(1, 4), groups, colors):
@@ -511,16 +532,17 @@ def make_task_latency(tables: Path) -> tuple[Any, dict[str, Any]]:
         p95 = float(np.quantile(values, 0.95))
         axes[1].scatter([p95], [0.95], color=color, s=26, edgecolor="white", linewidth=0.4, zorder=4)
     axes[1].set_xscale("log")
-    axes[1].set_xlabel("16 操作序列延迟（ms，对数轴）")
+    axes[1].set_xlabel("16 次任务操作耗时（ms，对数坐标）")
     axes[1].set_ylabel("累计概率")
     axes[1].set_ylim(0, 1.03)
-    axes[1].set_title("尾延迟 ECDF · P95")
+    axes[1].set_title("尾部耗时累积分布（P95）")
     axes[1].legend(frameon=False, loc="lower right")
     style_axis(axes[1])
     panel_label(axes[1], "b")
 
     medians = {path: float(np.median(values)) for path, values in zip(paths, groups)}
-    fig.subplots_adjust(left=0.075, right=0.985, top=0.89, bottom=0.14, wspace=0.25)
+    fig.suptitle("三种任务提交方式的耗时分布", fontsize=13.5, weight="bold", y=0.985)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.82, bottom=0.14, wspace=0.25)
     return fig, {
         "sources": ["task_sequences.csv"],
         "samples_per_path": {path: int(len(values)) for path, values in zip(paths, groups)},
@@ -553,7 +575,13 @@ def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
 
     fig, axes = plt.subplots(1, 2, figsize=(12.4, 4.8), gridspec_kw={"width_ratios": [1.05, 0.95]})
     scenario_colors = {2: TEAL, 3: BLUE, 4: ORANGE, 16: RED, 44: NAVY}
-    scenario_labels = {2: "并发 2", 3: "并发 3", 4: "并发 4", 16: "16 到达 / 上限 4", 44: "4 路放大"}
+    scenario_labels = {
+        2: "并发 2",
+        3: "并发 3",
+        4: "并发 4",
+        16: "16 次到达（并发 4）",
+        44: "4 线程工作流",
+    }
     wake_summary: dict[str, dict[str, float | int]] = {}
     for scenario in [2, 3, 4, 16, 44]:
         values = wake.loc[wake["scenario"] == scenario, "wakeup_latency_ticks"].to_numpy(dtype=float)
@@ -573,10 +601,10 @@ def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
         }
     axes[0].set_xlim(-0.05, 1.05)
     axes[0].set_xticks([0, 1])
-    axes[0].set_xlabel("wakeup latency（scheduler tick）")
+    axes[0].set_xlabel("唤醒等待时间（调度滴答）")
     axes[0].set_ylabel("累计概率")
     axes[0].set_ylim(0, 1.03)
-    axes[0].set_title("EEVDF wakeup latency ECDF")
+    axes[0].set_title("唤醒等待时间累积分布")
     axes[0].legend(frameon=False, loc="lower right")
     style_axis(axes[0])
     panel_label(axes[0], "a")
@@ -599,22 +627,30 @@ def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
         )
     x = summary.index.to_numpy(dtype=float)
     axes[1].plot(x, summary["median"], color=ORANGE, marker="o", linewidth=2.1, label="中位数")
-    axes[1].fill_between(x, summary["q1"].to_numpy(), summary["q3"].to_numpy(), color=ORANGE, alpha=0.18, label="IQR")
+    axes[1].fill_between(
+        x,
+        summary["q1"].to_numpy(),
+        summary["q3"].to_numpy(),
+        color=ORANGE,
+        alpha=0.18,
+        label="四分位区间",
+    )
     lower = float(fairness["fairness"].min())
     pad = max((1.0 - lower) * 0.18, 0.000002)
     axes[1].set_ylim(lower - pad, 1.0 + pad * 0.15)
     axes[1].axhline(1.0, color=INK, linestyle="--", linewidth=0.9)
     axes[1].set_xticks([1, 2, 3, 4])
-    axes[1].set_xlabel("并发 EEVDF 工作流数")
-    axes[1].set_ylabel("Jain fairness")
-    axes[1].set_title("Jain 公平性")
+    axes[1].set_xlabel("并发工作流数")
+    axes[1].set_ylabel("Jain 公平指数")
+    axes[1].set_title("Jain 公平指数")
     axes[1].ticklabel_format(axis="y", style="plain", useOffset=False)
     axes[1].yaxis.set_major_formatter(mpl.ticker.FormatStrFormatter("%.6f"))
     axes[1].legend(frameon=False, loc="lower left")
     style_axis(axes[1])
     panel_label(axes[1], "b")
 
-    fig.subplots_adjust(left=0.075, right=0.985, top=0.89, bottom=0.14, wspace=0.25)
+    fig.suptitle("工作流 EEVDF 的唤醒等待时间与 Jain 公平指数", fontsize=13.5, weight="bold", y=0.985)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.82, bottom=0.14, wspace=0.25)
     return fig, {
         "sources": ["eevdf_wakeups.csv", "eevdf_samples.csv"],
         "exact_wakeup_probes": int(len(wake)),
@@ -641,7 +677,14 @@ def heatmap_panel(
             raw = float(pivot.iloc[row, column])
             count = int(counts.iloc[row, column])
             color = "white" if relative.iloc[row, column] > 0.64 else INK
-            value = "NA" if not math.isfinite(raw) else f"{raw:.2g}"
+            if not math.isfinite(raw):
+                value = "NA"
+            elif abs(raw) >= 10:
+                value = f"{raw:.0f}"
+            elif abs(raw) >= 1:
+                value = f"{raw:.2f}".rstrip("0").rstrip(".")
+            else:
+                value = f"{raw:.3f}".rstrip("0").rstrip(".")
             ax.text(column, row, f"{value}\nn={count}", ha="center", va="center", color=color, fontsize=7.2)
     ax.set_xticks(
         range(len(pivot.columns)),
@@ -652,7 +695,16 @@ def heatmap_panel(
     )
     ax.set_yticks(
         range(len(pivot.index)),
-        [str(value).replace("scalar_v3", "Scalar V3").replace("sq_cq", "SQ-CQ").replace("batch", "Batch").replace("traversal", "遍历").replace("indexed", "索引") for value in pivot.index],
+        [
+            {
+                "scalar_v3": "逐项提交 V3",
+                "sq_cq": "SQ/CQ",
+                "batch": "批量提交",
+                "traversal": "遍历查询",
+                "indexed": "索引查询",
+            }.get(str(value), str(value))
+            for value in pivot.index
+        ],
     )
     ax.set_title(title)
     for edge in np.arange(-0.5, pivot.shape[1], 1):
@@ -698,22 +750,22 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
     task_counts = task.pivot_table(index="path", columns="metric", values="per_operation", aggfunc="count").reindex_like(task_pivot)
 
     labels = {
-        "bytes_read": "读取字节\n[B/syscall]",
-        "directory_block_probes": "目录块探测\n[count/syscall]",
-        "directory_entries_examined": "目录项检查\n[count/syscall]",
-        "physical_reads": "物理读\n[count/syscall]",
-        "physical_writes": "物理写\n[count/syscall]",
-        "durable_flushes": "持久化 flush\n[count/syscall]",
-        "virtio_notifications": "virtio 通知\n[count/syscall]",
-        "virtio_submitted_requests": "virtio 请求\n[count/syscall]",
-        "syscalls": "系统调用\n[count/op]",
-        "abi_descriptor_bytes": "ABI 描述符\n[B/op]",
-        "copied_descriptor_bytes": "复制描述符\n[B/op]",
-        "dispatch_header_bytes": "dispatch 头\n[B/op]",
-        "control_abi_bytes": "控制 ABI\n[B/op]",
-        "control_copied_bytes": "控制复制\n[B/op]",
-        "sched_dispatch_delta": "调度差值\n[tick/op]",
-        "sequence_elapsed_ticks": "序列时间\n[tick/op]",
+        "bytes_read": "读取字节\n[字节/调用]",
+        "directory_block_probes": "目录块探测\n[次/调用]",
+        "directory_entries_examined": "目录项检查\n[次/调用]",
+        "physical_reads": "物理读取\n[次/调用]",
+        "physical_writes": "物理写入\n[次/调用]",
+        "durable_flushes": "持久化刷新\n[次/调用]",
+        "virtio_notifications": "virtio 通知\n[次/调用]",
+        "virtio_submitted_requests": "virtio 请求\n[次/调用]",
+        "syscalls": "系统调用\n[次/操作]",
+        "abi_descriptor_bytes": "ABI 描述符\n[字节/操作]",
+        "copied_descriptor_bytes": "复制描述符\n[字节/操作]",
+        "dispatch_header_bytes": "派发头\n[字节/操作]",
+        "control_abi_bytes": "控制 ABI\n[字节/操作]",
+        "control_copied_bytes": "控制复制\n[字节/操作]",
+        "sched_dispatch_delta": "调度差值\n[滴答/操作]",
+        "sequence_elapsed_ticks": "序列耗时\n[滴答/操作]",
     }
     cmap = LinearSegmentedColormap.from_list("agentos_io", ["#F8FBFC", "#A9CFCA", "#4C84A6", NAVY])
     fig, axes = plt.subplots(2, 1, figsize=(14.2, 6.5), gridspec_kw={"height_ratios": [0.9, 1.1]})
@@ -722,7 +774,7 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
         contest_pivot,
         contest_counts,
         labels,
-        "内核 I/O（每次系统调用）",
+        "内核 I/O",
         cmap,
     )
     heatmap_panel(
@@ -730,7 +782,7 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
         task_pivot,
         task_counts,
         labels,
-        "Task ABI（每次操作）",
+        "任务提交开销",
         cmap,
     )
     panel_label(axes[0], "a", x=-0.055)
@@ -738,7 +790,8 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
     colorbar_axis = fig.add_axes([0.935, 0.30, 0.014, 0.39])
     colorbar = fig.colorbar(image, cax=colorbar_axis)
     colorbar.set_label("列内相对值")
-    fig.subplots_adjust(left=0.095, right=0.89, top=0.92, bottom=0.14, hspace=0.62)
+    fig.suptitle("各执行路径的内核 I/O 与任务开销", fontsize=13.5, weight="bold", y=0.992)
+    fig.subplots_adjust(left=0.105, right=0.89, top=0.86, bottom=0.14, hspace=0.64)
     return fig, {
         "sources": ["contest_io_normalized.csv", "task_perf_normalized.csv"],
         "contest_metrics": contest_metrics,
@@ -774,8 +827,8 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
     ax2 = fig.add_subplot(grid[1, :])
 
     top_specs = [
-        (ax0, "traversal_core_duration_us", "indexed_core_duration_us", "核心路径", "延迟（ms）"),
-        (ax1, "traversal_end_to_end_duration_us", "indexed_end_to_end_duration_us", "端到端", "延迟（ms）"),
+        (ax0, "traversal_core_duration_us", "indexed_core_duration_us", "核心查询阶段", "耗时（ms）"),
+        (ax1, "traversal_end_to_end_duration_us", "indexed_end_to_end_duration_us", "完整流程", "耗时（ms）"),
     ]
     for ax, left_column, right_column, title, ylabel in top_specs:
         left = frame[left_column].to_numpy()
@@ -785,9 +838,9 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
         ax.scatter(np.ones(len(left)), left, color=ORANGE, s=26, edgecolor="white", linewidth=0.35, zorder=3)
         ax.scatter(np.full(len(right), 2), right, color=BLUE, s=26, edgecolor="white", linewidth=0.35, zorder=3)
         ax.plot([1, 2], [np.median(left), np.median(right)], color=INK, marker="D", markersize=5, linewidth=1.6, label="配对中位数")
-        ax.set_xticks([1, 2], [f"遍历\nn={len(left)}", f"索引\nn={len(right)}"])
+        ax.set_xticks([1, 2], [f"遍历查询\nn={len(left)}", f"索引查询\nn={len(right)}"])
         ax.set_ylabel(ylabel)
-        ax.set_title(f"{title}配对")
+        ax.set_title(title)
         style_axis(ax, grid_axis="y")
     ax0.legend(frameon=False, loc="upper right")
     panel_label(ax0, "a")
@@ -817,9 +870,9 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
         median = float(np.median(values))
         ax2.text(median, position + 0.25, f"P50 {median:.2f} ms", ha="center", color=color, fontsize=8.2)
     ax2.axvline(0, color=INK, linestyle="--", linewidth=1.0)
-    ax2.set_yticks(positions, ["核心路径", "端到端"])
-    ax2.set_xlabel("索引 - 遍历（ms）")
-    ax2.set_title("配对差值分布")
+    ax2.set_yticks(positions, ["核心查询阶段", "完整流程"])
+    ax2.set_xlabel("索引查询减遍历查询（ms）")
+    ax2.set_title("索引与遍历的耗时差")
     style_axis(ax2, grid_axis="x")
     panel_label(ax2, "c", x=-0.045)
 
@@ -831,7 +884,8 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
     )
     core_wins = int((frame["core_delta"] < 0).sum())
     e2e_wins = int((frame["e2e_delta"] < 0).sum())
-    fig.subplots_adjust(left=0.085, right=0.985, top=0.91, bottom=0.10)
+    fig.suptitle("核心查询阶段与完整流程耗时", fontsize=13.5, weight="bold", y=0.985)
+    fig.subplots_adjust(left=0.105, right=0.985, top=0.85, bottom=0.10)
     return fig, {
         "sources": ["contest_paired.csv"],
         "paired_boots": int(len(frame)),
@@ -930,10 +984,11 @@ def main() -> int:
     if before != after:
         raise RuntimeError("Frozen campaign input changed while rendering")
     manifest_path = output_dir / "figure_manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, default=json_default) + "\n",
-        encoding="utf-8",
-    )
+    with manifest_path.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(
+            json.dumps(manifest, ensure_ascii=False, indent=2, default=json_default)
+            + "\n"
+        )
     print(f"manifest: {manifest_path}")
     return 0
 

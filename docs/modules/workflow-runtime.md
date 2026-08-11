@@ -1,44 +1,44 @@
-# Workflow 运行时
+# 工作流运行时
 
-AgentOS 运行时把事件等待、可信 IPC、模型请求、资源账户、workflow EEVDF 和一致性切片组织在同一个 lifecycle 中。Agent 在没有任务时进入内核等待，由文件变化、协作消息、heartbeat、deadline 或模型完成事件唤醒；所有终态继续写入 Context 和 workflow evidence。
+AgentOS 把事件等待、可信 IPC、模型请求、资源账户、工作流 EEVDF 和阶段记录放在同一个生命周期中。智能体暂时没有任务时进入内核等待。文件变化、协作消息、心跳、截止时间或模型响应到达后，内核将其唤醒。工具与事件的最终状态继续写入上下文和工作流执行记录。
 
 ## 文档索引
 
-- [一、运行时主线](#一运行时主线)
-- [二、事件队列与原子等待](#二事件队列与原子等待)
+- [一、运行过程](#一运行过程)
+- [二、事件队列与无丢失唤醒](#二事件队列与无丢失唤醒)
 - [三、可信 IPC 与模型请求](#三可信-ipc-与模型请求)
-- [四、Workflow Credit Domain](#四workflow-credit-domain)
-- [五、Workflow EEVDF](#五workflow-eevdf)
-- [六、执行记录与 Workflow fence](#六执行记录与-workflow-fence)
-- [七、Nexus 多 Agent 运行时](#七nexus-多-agent-运行时)
-- [八、实现位置与测试结果](#八实现位置与测试结果)
+- [四、工作流资源账户](#四工作流资源账户)
+- [五、工作流 EEVDF](#五工作流-eevdf)
+- [六、执行记录与阶段快照](#六执行记录与阶段快照)
+- [七、Nexus 多智能体运行时](#七nexus-多智能体运行时)
+- [八、源码位置与测试](#八源码位置与测试)
 
-## 一、运行时主线
+## 一、运行过程
 
-多 Agent workflow 的运行并非连续占用 CPU。模型调用、文件生成和协作者处理都会形成等待间隙；事件到来后，系统还要确认接收者仍属于原 workflow，防止过期响应进入新一轮运行。与此同时，一个 workflow 可以包含多个线程，单纯按线程调度会让线程数更多的 workflow 获得额外 CPU 服务。
+多智能体工作流不会一直占用 CPU。模型调用、文件生成和协作者执行任务时，其他进程常常处于等待状态。事件到来后，内核需要确认接收者仍属于原来的工作流，不能把迟到响应交给槽位复用后的新进程。一个工作流还可能创建多个线程。若调度器只按线程轮转，线程越多的工作流就会获得更多 CPU 时间。
 
-基于这些约束，我们把运行时拆成五条相互衔接的内核路径：
+运行时为此提供五组内核功能：
 
-1. event queue 保存文件、消息、timer、policy denial 和模型完成；
-2. `agent_wait()` 以线程 generation 为等待 key，原子完成谓词复查和睡眠；
-3. IPC route 与 LLM pending table 绑定 lifecycle、control id 和 correlation；
-4. Credit Domain 约束内核对象准入，workflow EEVDF 按 workflow 分配 CPU；
-5. evidence ring 记录终态，fence 取得 metadata、credit 和执行记录的一致性切片。
+1. 事件队列保存文件变化、消息、定时器、策略拒绝和模型完成事件。
+2. `agent_wait()` 以线程代次作为等待键，在同一次关中断期间复查队列并进入睡眠。
+3. IPC 消息路由和模型请求表保存生命周期、`control_id` 与关联编号。
+4. 工作流资源账户限制内核对象的创建，工作流 EEVDF 在不同工作流之间分配 CPU 时间。
+5. 执行记录环保存最终状态，阶段快照汇总文件元数据、资源用量和执行记录。
 
-典型 Agent Loop 如下：
+一轮常见的智能体循环如下：
 
 ```text
-安装 typed watch / IPC route / execution contract
+安装文件订阅、IPC 消息路由和执行约定
   -> agent_wait(timeout)
-  -> 读取 FILE_QUERY / MESSAGE / TIMER / POLICY_DENIED / LLM_DONE
+  -> 处理 FILE_QUERY、MESSAGE、TIMER、POLICY_DENIED 或 LLM_DONE
   -> 提交结构化工具请求
-  -> 内核提交 result + Context + evidence ticket
-  -> 回到等待状态
+  -> 内核提交结果、上下文和执行记录
+  -> 再次等待
 ```
 
-## 二、事件队列与原子等待
+## 二、事件队列与无丢失唤醒
 
-### 2.1 Event 数据结构
+### 2.1 事件结构
 
 每条事件使用固定布局，定义在 [`os/agent.h`](../../os/agent.h)，公共声明同步到 [`user/include/agent.h`](../../user/include/agent.h)：
 
@@ -57,46 +57,46 @@ struct agent_event {
 };
 ```
 
-事件类型覆盖文件状态、跨 Agent 消息、timer、job/model 完成、policy denial、Context limit、cancel 和 typed file query。`cause_sequence` 与 `span_id` 把事件消费接回 Context；`corr_id` 用于消息和模型请求匹配。
+事件类型包括文件状态、跨智能体消息、定时器、任务或模型完成、策略拒绝、上下文容量告警、取消和带类型信息的文件查询。`cause_sequence` 与 `span_id` 把事件处理接回上下文，`corr_id` 用来匹配消息和模型请求。
 
-### 2.2 容量与来源隔离
+### 2.2 队列容量与来源隔离
 
-每个 Agent 的 event queue 固定为 16 槽。内核按来源维护独立计数：
+每个智能体的事件队列固定为 16 槽。内核按来源分别计数：
 
 | 限制 | 当前值 | 作用 |
 | --- | ---: | --- |
-| 总队列容量 | 16 | 所有事件的硬上限 |
-| kernel reserve | 4 | 保留给内核生成的 timer、cancel 等事件 |
-| external limit | 12 | 限制外部事件占用 |
-| class reserve | 4 | 防止 IPC 或 attributed event 占满全部 external 槽 |
-| 单 source limit | 4 | 限制同一发送者的积压 |
+| 队列总容量 | 16 | 限制全部事件数 |
+| 内核保留槽 | 4 | 留给定时器、取消等内核事件 |
+| 外部事件上限 | 12 | 防止外部事件占用内核保留槽 |
+| 类别保留槽 | 4 | 防止 IPC 或带来源信息的事件挤满全部外部槽 |
+| 单一来源上限 | 4 | 限制同一个发送者的积压 |
 
-heartbeat 等 intrinsic timer 采用 coalesced delivery；队列中已有同类事件时不重复入队。外部 IPC、来源归因事件和内核事件分别经过 [`agent_ipc_origin_policy`](../../os/agent_ipc.c) 校验。容量检查、event id 分配和尾指针发布都在同一个关中断区域完成。
+心跳等内核定时事件会合并投递：队列中已有同类事件时，不再重复加入。外部 IPC、带来源信息的事件和内核事件分别通过 [`agent_ipc_origin_policy`](../../os/agent_ipc.c) 检查。容量判断、事件编号分配和队尾发布都在同一次关中断期间完成。
 
-### 2.3 Lost wakeup 的处理
+### 2.3 等待与唤醒
 
-`agent_wait()` 的关键要求是关闭“检查队列为空后，事件在真正睡眠前到达”的窗口。实现位于 [`os/agent_ipc.c`](../../os/agent_ipc.c)，核心顺序为：
+`agent_wait()` 必须处理一个很短却很关键的时序：线程确认队列为空之后、真正睡眠之前，事件可能已经到达。实现位于 [`os/agent_ipc.c`](../../os/agent_ipc.c)，执行顺序如下：
 
 ```text
 关中断
-  -> 复查 cancel / queue head
-  -> 有事件：reserve 队首并恢复运行态
-  -> 无事件：发布 WAITING、deadline 和 wait key
+  -> 复查取消状态和队首
+  -> 有事件：预留队首并恢复运行
+  -> 无事件：登记 WAITING、截止时间和等待键
   -> wait_queue_sleep_key_irq(identity_generation)
-  -> 被唤醒后仍在同一锁合同内重新检查
+  -> 唤醒后在同一套锁规则下重新检查
 ```
 
-wait key 使用线程的 `identity_generation`。timer tick 只唤醒 generation、wait channel、wait reason 和 deadline 全部匹配的线程；`exec`、线程槽位复用和 teardown 不会把旧 wakeup 交给新线程。
+等待键使用线程的 `identity_generation`。时钟中断只唤醒身份代次、等待通道、等待原因和截止时间全部匹配的线程。`exec`、线程槽位复用和退出清理不会把旧唤醒交给新线程。
 
-队列采用 event baton 控制接收者。事件到达后 [`wait_queue_wake_one_thread()`](../../os/wait.c) 选择一个真实等待线程并授予 baton；该线程 reserve 队首，copyout 和 Context 提交成功后消费事件。copyout 失败会撤销 reservation 并传递 baton，事件仍可重试。测试中的 1、4、8、15 个 waiter 共完成 28 次 wakeup，记录 `herd=0`。
+队列通过事件接力标记确定接收者。事件到达后，[`wait_queue_wake_one_thread()`](../../os/wait.c) 只挑选一个真正等待的线程，并为其设置接力标记。该线程预留队首，成功复制到用户态并写入上下文后才消费事件。复制失败时，内核撤销预留并把接力标记交给其他等待者。1、4、8、15 个等待线程的测试共完成 28 次唤醒，均记录 `herd=0`。
 
 ## 三、可信 IPC 与模型请求
 
-### 3.1 IPC route
+### 3.1 IPC 消息路由
 
-跨 Agent `MESSAGE` 先检查 source 与 target 都是 live Agent，再比较 workflow scope/lifecycle。target 保存最多 16 条 route，每条 route 以 source `control_id` 为键并携带 event mask。普通发送者需要 `MESSAGE_SEND` capability；配置他人 route 需要 `ROUTE_MANAGE` 且 controller 必须控制 source 与 target。
+跨智能体 `MESSAGE` 先确认发送方和接收方都仍是有效智能体，再比较文件访问范围和完整生命周期。每个接收方最多保存 16 条消息路由。每条路由以发送方 `control_id` 为键，并记录允许的事件类型。普通发送者需要 `MESSAGE_SEND` 能力位。替他人配置路由需要 `ROUTE_MANAGE`，而且控制进程必须同时控制发送方与接收方。
 
-发送成功后，内核队列项保存 source PID、control id、cause sequence、span 和来源标签；公开 `agent_event` 只返回事件字段，control id 与来源归因保存在 kernel sidecar。消费事件时，内核在 payload copyout 前把 `CROSS_AGENT_DATA` 等标签合并到 target 当前 provenance，随后追加一条 causal Context record。
+发送成功后，内核队列项会保存发送方 PID、`control_id`、起因序号、调用跨度和来源标记。公开的 `agent_event` 只返回事件字段，控制编号和来源信息留在内核附加区。接收方处理事件时，内核会先把 `CROSS_AGENT_DATA` 等标记合并到当前来源状态，再追加一条带因果关系的上下文记录。
 
 常用接口如下：
 
@@ -108,57 +108,57 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 int agent_wait_cancel(int pid, const char *reason);
 ```
 
-### 3.2 LLM request/response
+### 3.2 模型请求与响应
 
-结构化工具 `LLM_REQUEST` 和 `LLM_RESPONSE` 复用事件通道，但增加 pending table。每个 pending 项保存 requester/relay 的 PID 与 control id、完整 lifecycle key、非零 correlation 和 deadline。请求路径要求同一 requester lifecycle 内的 correlation 严格递增；同一 correlation 仍处于 active pending 时返回 `DUPLICATE`，已经完成或超时的 correlation 再次使用以及倒退 id 返回 `CONFLICT`。
+结构化工具 `LLM_REQUEST` 和 `LLM_RESPONSE` 共用事件通道，但会额外登记到待完成请求表。每条记录保存请求进程和中继进程的 PID、`control_id`、完整生命周期键、非零关联编号和截止时间。同一请求进程在一个生命周期内提交的关联编号必须递增。仍在处理的编号重复出现时返回 `DUPLICATE`。已经完成或超时的编号再次出现，以及编号倒退时，返回 `CONFLICT`。
 
-成功响应必须同时匹配 requester、relay、lifecycle 与 correlation，并且只消费一次。kernel-tick TTL 为 120 秒；到期记录进入 terminal history，迟到响应得到 `TIMEOUT` 或 `STALE`。每个 requester 最多保留 16 个 pending 请求，全局表容量为 `NPROC`。实现见 [`os/agent_core.c`](../../os/agent_core.c)。
+响应只有在请求进程、中继进程、生命周期和关联编号全部匹配时才会生效，而且只能消费一次。内核时钟规定的有效期为 120 秒。到期记录会进入最终历史表，迟到响应返回 `TIMEOUT` 或 `STALE`。每个请求进程最多保留 16 条待完成记录，全局表容量为 `NPROC`。实现见 [`os/agent_core.c`](../../os/agent_core.c)。
 
-### 3.3 Heartbeat
+### 3.3 心跳
 
-`agent_heartbeat_set(interval)` 从当前 tick 重新计时，interval 为 0 时停止。timer 到期后在队列中产生 coalesced `TIMER` 事件；已经入队的事件不会因 stop 消失。`agent_heartbeat_stop()` 可以重复调用。heartbeat 与 cancel 的队列事件在成功消费时走 wait reservation 与 Context 提交路径；本地等待超时直接构造 `TIMEOUT` 返回，不占用队列 reservation，也不追加 Context record。
+`agent_heartbeat_set(interval)` 从当前时钟滴答重新计时，`interval` 为 0 时停止心跳。到期后，内核在队列中加入合并后的 `TIMER` 事件。停止心跳不会删除已经入队的事件。`agent_heartbeat_stop()` 可以重复调用。心跳和取消事件成功取出后，会按照事件预留和上下文提交的正常路径处理。本地等待超时则直接返回 `TIMEOUT`，不占用队列槽位，也不写上下文记录。
 
-## 四、Workflow Credit Domain
+## 四、工作流资源账户
 
-Agent workflow 会同时创建进程、线程、文件对象、inode、buffer 和物理页。仅在分配失败后清理无法提供确定的 workflow 准入，因此 resource controller 为每个 workflow 建立 execution/storage 两个账户，并用三态 credit 记录对象所有权：
+一个工作流会同时创建进程、线程、文件对象、inode、缓冲区和物理页。如果只在分配失败后再清理，内核无法提前判断整个工作流是否还能继续创建对象。资源控制器因此为每个工作流建立执行账户和存储账户，并把额度分为三种状态：
 
 ```text
-free --reserve--> pending --publish--> used
-  ^                    |
-  +---- failure -------+
+空闲 --预留--> 待发布 --发布--> 已使用
+  ^                 |
+  +----创建失败-----+
   ^
-  +------ release <---- used
+  +------释放 <----- 已使用
 
-held = free + pending + used
+持有额度 = 空闲 + 待发布 + 已使用
 ```
 
-`free` 是账户保留的空闲预充 credit，`pending` 属于尚未发布的分配，`used` 属于 live object。account limit、resource class limit 和 global capacity 都约束 `held`。创建失败时 pending 退回 free；对象发布后 pending 转为 used；销毁时 used 释放到 free，并可在压力下归还全局池。
+空闲额度已经留给该账户，但尚未使用。待发布额度属于正在创建、尚未对外可见的对象，已使用额度属于已经发布的对象。账户总限额、资源类别限额和全局容量共同约束持有额度。创建失败时，待发布额度退回空闲。对象发布后，待发布转为已使用。对象销毁后，额度回到空闲，并可在系统压力较大时归还全局池。
 
-资源快照覆盖 8 类对象：process、thread、file object、filesystem block、filesystem inode、buffer cache、Agent state page 和 physical page。共享 ABI 见 [`include/agent_resource_abi.h`](../../include/agent_resource_abi.h)，账户与 policy 实现在 [`os/resource_controller.c`](../../os/resource_controller.c)。
+资源快照统计 8 类对象：进程、线程、文件对象、文件系统块、文件系统 inode、缓冲区、智能体状态页和物理页。共用 ABI 见 [`include/agent_resource_abi.h`](../../include/agent_resource_abi.h)，账户与策略实现在 [`os/resource_controller.c`](../../os/resource_controller.c)。
 
-工具执行还使用 Resource Phase Credit Lease。V3 execution contract 给出阶段资源包络，内核先 `begin` 锁定额度，副作用前 `activate`，工具终态用 `settle` 结算真实使用；线程或进程异常退出时 `abort` 回收 lease。这个过程与 lifecycle operation gate 配合：workflow close 标记 closing 并请求成员退出，active phase 在成员完成操作时结算，finalizer 随后回收 lifecycle。
+每次工具执行都有一份独立的资源记录。V3 执行约定给出本次操作的资源上限，内核先调用 `begin` 锁定额度，操作生效前调用 `activate`，工具结束时调用 `settle` 结算实际用量。线程或进程异常退出时调用 `abort` 退回预留额度。关闭工作流时，生命周期先标记为正在关闭并要求成员退出。已经开始的操作完成结算后，异步收尾程序再回收生命周期。
 
-## 五、Workflow EEVDF
+## 五、工作流 EEVDF
 
 ### 5.1 调度目标
 
-uCore 原有调度器按可运行线程选择任务。一个 workflow 若创建更多线程，就可能在外层轮转中获得更多服务。AgentOS 为每个 workflow resource domain 建立一个 EEVDF entity，同一 workflow 的所有成员共享 `service_cycles`、`vruntime` 和 `virtual_deadline`；选中 workflow 后，再由 uCore 原有 per-Agent/FIFO 策略选择具体线程。
+uCore 原有调度器直接从可运行线程中选择任务。若一个工作流创建更多线程，它可能在外层轮转时获得更多 CPU 时间。AgentOS 为每个工作流建立一个 EEVDF 调度对象。同一工作流的所有成员共享 `service_cycles`、`vruntime` 和 `virtual_deadline`。选中工作流后，再由 uCore 原有的单智能体或 FIFO 策略选择具体线程。
 
-实体的核心字段定义在 [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)：
+主要字段定义在 [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)：
 
 | 字段 | 含义 |
 | --- | --- |
-| `lifecycle + account + domain_id` | 调度实体的完整身份 |
-| `vruntime` | 已结算的等权虚拟服务量 |
-| `remaining_cycles` | 当前 service request 剩余量 |
+| `lifecycle + account + domain_id` | 调度对象的完整身份 |
+| `vruntime` | 按等权规则结算的虚拟运行时间 |
+| `remaining_cycles` | 本次 CPU 时间申请的剩余周期数 |
 | `virtual_deadline` | `vruntime + remaining_cycles` |
-| `runnable_threads` | 当前 workflow 的可运行成员数 |
-| `latency_class` | urgent / interactive / normal / batch |
-| `sleep_start_tick` / `wake_tick` | 睡眠衰减与 wakeup latency 统计 |
+| `runnable_threads` | 当前可运行的工作流成员数 |
+| `latency_class` | `urgent`、`interactive`、`normal`、`batch` 四档延迟等级 |
+| `sleep_start_tick`、`wake_tick` | 睡眠修正和唤醒等待统计 |
 
-### 5.2 选择算法
+### 5.2 选择方法
 
-四类 latency class 对应 1、2、4、8 tick 的 service request，wall deadline 只能缩短 request。调度器以当前全局 `vtime` 判断 eligibility，再从 eligible entity 中选择 virtual deadline 最早者：
+四档延迟等级分别申请 1、2、4、8 个时钟滴答，实际截止时间只能缩短申请量。调度器用全局 `vtime` 判断工作流当前能否运行，再选择虚拟截止时间最早者：
 
 ```text
 request_cycles = request_ticks * cycles_per_tick
@@ -167,44 +167,44 @@ eligible = (vruntime <= vtime)
 selected = arg min(virtual_deadline) among eligible workflows
 ```
 
-所有 workflow 使用固定 weight 1024，实际运行的 cycle 数直接加到该 workflow 的 `vruntime`。睡眠每经过 16 tick 进行一次衰减，最多 8 次右移，使旧 vruntime 向当前 vtime 靠近；该过程恢复交互 workflow 的响应性，却不会增加已结算 service。
+所有工作流的权重固定为 1024，实际运行的周期数直接计入该工作流的 `vruntime`。工作流每睡眠 16 个时钟滴答执行一次修正，最多右移 8 次，让较旧的 `vruntime` 向当前 `vtime` 靠近。这样，刚被唤醒的交互工作流可以及时恢复运行，但已经结算的 CPU 时间不会增加。
 
-[`fetch_task()`](../../os/proc.c) 从 run-queue cache 收集每个 active workflow 的候选项。只有一个 workflow 时保留 legacy O(1) 外层 dispatch；多个 workflow 时调用 `workflow_scheduler_select()`。候选身份、runnable cache 或 entity map 异常时回到原有 outer round-robin，并增加 fallback 计数。workflow 进入 runnable 时记录 ready tick，dispatch 时计算等待，切回 scheduler 后以 cycle counter 结算 service。
+[`fetch_task()`](../../os/proc.c) 从运行队列缓存中收集各工作流的候选线程。只有一个工作流时，系统保留原来的 O(1) 外层选择。多个工作流同时运行时，调用 `workflow_scheduler_select()`。候选身份、可运行缓存或对象映射异常时，调度器退回原有外层轮转，并增加备用路径计数。工作流进入可运行状态时记录时钟滴答，真正获得 CPU 时计算等待时间，切回调度器后用周期计数器结算服务量。
 
 ### 5.3 实测结果
 
-一次性性能活动在 6 次独立 QEMU 启动中保存了 504 条 exact wake probe，其中 425 条为 0 tick、79 条为 1 tick。所有 workflow 从进入 runnable 到获得 dispatch 的等待均为 0 至 1 tick。依据同一 boot、同一并发场景下各 workflow 的原始 `service_cycles` 计算 Jain 指数，中位数如下：
+6 次独立 QEMU 启动共保存 504 条准确唤醒记录，其中 425 条为 0 个时钟滴答，79 条为 1 个时钟滴答。所有工作流从进入可运行状态到真正获得 CPU，等待均为 0 至 1 个时钟滴答。按同一次启动、同一并发场景中各工作流的 `service_cycles` 计算 Jain 公平性指数，中位数如下：
 
-| 并发 workflow | Boot 数 | Jain fairness 中位数 |
+| 并发工作流数 | 启动次数 | Jain 公平性指数中位数 |
 | ---: | ---: | ---: |
 | 1 | 6 | 1.000000 |
 | 2 | 6 | 0.999985 |
 | 3 | 6 | 0.999993 |
 | 4 | 6 | 0.999985 |
 
-逐 probe 数据位于 [`one_shot_metrics/data/20260811/tables/eevdf_wakeups.csv`](../../one_shot_metrics/data/20260811/tables/eevdf_wakeups.csv)，逐 workflow service 位于 [`eevdf_samples.csv`](../../one_shot_metrics/data/20260811/tables/eevdf_samples.csv)，ECDF 与公平性图见[性能结果](../performance.md#7-workflow-eevdf)。
+逐次唤醒数据位于 [`one_shot_metrics/data/20260811/tables/eevdf_wakeups.csv`](../../one_shot_metrics/data/20260811/tables/eevdf_wakeups.csv)，各工作流 CPU 周期数据位于 [`eevdf_samples.csv`](../../one_shot_metrics/data/20260811/tables/eevdf_samples.csv)，累计分布和公平性图见[性能测试](../performance.md#7-工作流-eevdf-调度)。
 
-## 六、执行记录与 Workflow fence
+## 六、执行记录与阶段快照
 
-### 6.1 Evidence ring
+### 6.1 执行记录环
 
-Context terminal、event、audit 和 timeline 记录最终投影到 workflow evidence ring。每个 lifecycle 按需使用 4 页，容量分为 48 个 ordinary 槽和 16 个 critical 槽。critical 分区保留给 security denial 等关键记录，不会被普通 success telemetry 占满。
+上下文的最终状态、事件、审计记录和时间线都会写入工作流执行记录环。每个生命周期按需分配 4 页，其中 48 槽保存普通记录，16 槽保存关键记录。安全策略拒绝等重要信息写入关键分区，不会被普通成功日志占满。
 
-producer 使用 `reserve -> fill -> commit/discard` 两阶段接口取得单调 ticket。工具执行在副作用前同时预留 ordinary 与 critical 槽，终态确定后提交其中一个；未提交 ticket 形成 gap，并进入 seal 摘要。核心结构和接口见 [`os/agent_evidence_ring.h`](../../os/agent_evidence_ring.h) 与 [`os/agent_evidence_ring.c`](../../os/agent_evidence_ring.c)。
+写入者使用 `reserve -> fill -> commit/discard` 两阶段接口取得递增票号。工具生效前会同时在普通分区和关键分区预留槽位，最终状态确定后只提交其中一个。没有提交的票号形成缺口，并记入封存摘要。结构与接口见 [`os/agent_evidence_ring.h`](../../os/agent_evidence_ring.h) 和 [`os/agent_evidence_ring.c`](../../os/agent_evidence_ring.c)。
 
-### 6.2 Fence 顺序
+### 6.2 生成阶段快照
 
-controller 调用 `agent_workflow_fence()` 时，内核执行以下步骤：
+控制进程调用 `agent_workflow_fence()` 时，内核依次执行：
 
-1. 校验 Orchestrator capability 与 controller control id；提供 request/receipt 时再校验版本和非零 request id，二者都为 null 时执行匿名 fire-and-forget fence；
-2. 对非零 request id 查询 retry cache；相同 request id 与 challenge 直接返回已提交 receipt；
-3. 取得 lifecycle fence gate，要求 active operation 和 departure 都为 0；
-4. 取得 metadata quiescence generation，排空 deferred filesystem reclaim 并提交 fs epoch；
-5. 对 execution/storage account 取得精确 credit snapshot；
-6. 用 challenge、metadata generation、credit epoch 和 credit digest 封存 evidence segment；
-7. 缓存 320 字节 receipt，提交 fence sequence 并释放 gate。
+1. 检查 `Orchestrator` 能力和控制进程的 `control_id`。若同时传入请求和回执，再检查版本和非零请求编号。两个指针都为空时，只生成快照，不返回回执。
+2. 对非零请求编号查询重试缓存。请求编号和 `challenge` 都相同便直接返回已提交回执。
+3. 暂停接纳新的普通操作和退出操作，并确认两项计数都为 0。
+4. 在文件元数据不再变动后取得其代次，排空延迟回收的文件系统对象，并提交文件系统时点。
+5. 读取执行账户和存储账户的准确资源快照。
+6. 用 `challenge`、文件元数据代次、资源时点和资源摘要封存执行记录段。
+7. 缓存 320 字节回执，递增阶段快照序号，并恢复接纳新操作。
 
-核心顺序可在 [`agent_workflow_fence_execute()`](../../os/agent_workflow_fence.c) 中看到：
+核心顺序位于 [`agent_workflow_fence_execute()`](../../os/agent_workflow_fence.c)：
 
 ```c
 agent_metadata_quiescence_fence_snapshot_current(&metadata_generation);
@@ -216,43 +216,45 @@ agent_evidence_seal(key, fence_sequence, challenge,
                     credit_digest, &evidence);
 ```
 
-receipt 包含 lifecycle key、request/fence sequence、metadata generation、credit epoch、8 类资源使用量、credit digest、challenge、previous root 和本次 evidence root。当前 v1 固定标记 `PARTIAL_COVERAGE`、`CREDIT_EXACT`、`EVIDENCE_SEALED` 和 `METADATA_VOLATILE`；receipt 是 SHA-256 一致性切片，结构中没有公钥签名字段。ABI 定义见 [`include/agent_workflow_fence_abi.h`](../../include/agent_workflow_fence_abi.h)。
+回执包含生命周期键、请求序号、阶段快照序号、文件元数据代次、资源时点、8 类资源用量、资源摘要、`challenge`、前一段根哈希和本段执行记录根哈希。当前 v1 固定带有 `PARTIAL_COVERAGE`、`CREDIT_EXACT`、`EVIDENCE_SEALED` 和 `METADATA_VOLATILE` 标记。回执使用 SHA-256 串联阶段记录，结构中没有公钥签名字段。ABI 定义见 [`include/agent_workflow_fence_abi.h`](../../include/agent_workflow_fence_abi.h)。
 
-对带 request id 的 fence，同一 id 携带不同 challenge 返回 `CONFLICT`，更旧 id 返回 `STALE`；新 receipt 在上一个 receipt copyout 成功前返回 `RETRY`。匿名 fire-and-forget fence 不进入该重放协议。fence 失败会撤销 gate，不推进 fence sequence。
+对于带请求编号的调用，同一编号配不同 `challenge` 返回 `CONFLICT`，更旧编号返回 `STALE`。上一次生成的回执尚未成功复制到用户态时，后续请求返回 `RETRY`。不要求回执的调用不进入这套重放检查。生成失败时，内核恢复接纳新操作，也不会递增阶段快照序号。
 
-## 七、Nexus 多 Agent 运行时
+## 七、Nexus 多智能体运行时
 
 <p align="center">
-  <img src="../figures/architecture/nexus_runtime_flow.jpg" alt="AgentOS Nexus 多 Agent 运行流程" width="960">
+  <img src="../figures/architecture/nexus_runtime_flow.jpg" alt="Nexus 多智能体协作流程" width="960">
 </p>
 
-[查看原生 DrawIO 源文件](../figures/architecture/nexus_runtime_flow.drawio)
+**图 1　Nexus 多智能体协作流程**
 
-`agentnexus_ucore` 展示了上述内核模块在一个完整产品流程中的组合。Coordinator、System、Research 和 Analyst 使用独立 PID、身份和 Context，但共享同一个 lifecycle、scope 和 workflow resource domain。
+原生图源见 [`nexus_runtime_flow.drawio`](../figures/architecture/nexus_runtime_flow.drawio)。
+
+`agentnexus_ucore` 在同一工作流中创建四个独立进程。它们各有自己的 PID、智能体身份和上下文，但共用生命周期、文件访问范围和工作流资源账户。
 
 | 角色 | 主要任务 | 协作对象 |
 | --- | --- | --- |
-| Coordinator | 动态规划、委派任务、读取 specialist artifact、控制发布 | System、Research、Analyst |
-| System | 读取进程、Context 和内核状态，形成系统快照 | Coordinator、Analyst |
-| Research | 查询 workflow 文件并核对本地材料 | Coordinator、Analyst |
-| Analyst | 读取 System/Research artifact，形成综合报告 | Coordinator |
+| 协调智能体 | 制订计划、分派任务、读取各角色结果、发起报告发布 | 系统观察、资料检索、分析 |
+| 系统观察智能体 | 读取进程、上下文和内核状态，形成系统状态结果 | 协调、分析 |
+| 资料检索智能体 | 查询工作流文件并核对本地材料，形成资料结果 | 协调、分析 |
+| 分析智能体 | 读取系统状态与资料结果，生成综合报告 | 协调 |
 
-Coordinator 通过内核 `MESSAGE` route 发送 typed task。System 与 Research worker 用 `PROGRESS` 返回阶段 metrics，Coordinator 收到后将结果 materialize 为 workflow-scoped artifact，再把 handle 交给后续角色；Analyst 的 terminal result 可以直接返回 artifact handle。读取权限由 artifact permission mask 控制；发布报告是单独的结构化副作用，需要匹配用户审批所绑定的规范化调用参数。外部模型仍由 Host relay 处理，Guest 只保存 turn、correlation、角色、工具目录和 artifact 状态。
+协调智能体通过内核 `MESSAGE` 发送带类型信息的任务。系统观察和资料检索智能体用 `PROGRESS` 消息返回阶段数据，协调智能体收到后把数据写成工作流内结果文件，再把文件句柄交给下一角色。分析智能体通过 `TASK_RESULT` 返回报告句柄。协调智能体随后发起需要审批的发布请求。内核确认发布参数与用户批准的内容一致后，才执行最终发布。结果文件的读取权限由权限掩码控制。外部模型仍由宿主机中继连接，客户机只保存轮次、关联编号、角色、工具目录和结果文件状态。
 
-Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共享产品协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 连接沿用 [`host_tools/agentos_relayd.py`](../../host_tools/agentos_relayd.py)。运行方法见[运行指南](../usage.md#4-nexus-多-agent-workflow)。
+客户机主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，宿主机连接沿用 [`host_tools/agentos_relayd.py`](../../host_tools/agentos_relayd.py)。运行方法见[运行指南](../usage.md#4-使用多智能体工作流)。
 
-## 八、实现位置与测试结果
+## 八、源码位置与测试
 
 | 模块 | 主要源码 |
 | --- | --- |
-| Event queue、watch/wait、route | [`os/agent_ipc.c`](../../os/agent_ipc.c)、[`os/wait.c`](../../os/wait.c) |
-| LLM pending 与 Agent loop | [`os/agent_core.c`](../../os/agent_core.c)、[`os/agent_background.c`](../../os/agent_background.c) |
-| Credit Domain 与 phase lease | [`os/workflow_credit_domain.c`](../../os/workflow_credit_domain.c)、[`os/resource_controller.c`](../../os/resource_controller.c) |
-| Workflow EEVDF | [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)、[`os/proc.c`](../../os/proc.c) |
-| Evidence 与 fence | [`os/agent_evidence_ring.c`](../../os/agent_evidence_ring.c)、[`os/agent_workflow_fence.c`](../../os/agent_workflow_fence.c) |
-| Timeline | [`os/agent_observe_timeline.c`](../../os/agent_observe_timeline.c) |
+| 事件队列、文件订阅、等待和消息路由 | [`os/agent_ipc.c`](../../os/agent_ipc.c)、[`os/wait.c`](../../os/wait.c) |
+| 模型待完成请求与智能体循环 | [`os/agent_core.c`](../../os/agent_core.c)、[`os/agent_background.c`](../../os/agent_background.c) |
+| 工作流资源账户与工具执行资源记录 | [`os/workflow_credit_domain.c`](../../os/workflow_credit_domain.c)、[`os/resource_controller.c`](../../os/resource_controller.c) |
+| 工作流 EEVDF | [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)、[`os/proc.c`](../../os/proc.c) |
+| 执行记录与阶段快照 | [`os/agent_evidence_ring.c`](../../os/agent_evidence_ring.c)、[`os/agent_workflow_fence.c`](../../os/agent_workflow_fence.c) |
+| 运行时间线 | [`os/agent_observe_timeline.c`](../../os/agent_observe_timeline.c) |
 
-运行时测试覆盖等待原子性、慢 watcher 隔离、heartbeat、route、Credit Domain、evidence ticket、fence retry、EEVDF 与 Nexus replay：
+运行时测试覆盖无丢失唤醒、慢订阅者隔离、心跳、消息路由、资源账户、执行记录票号、阶段快照重试、EEVDF 和 Nexus 回放：
 
 ```bash
 python3 -B scripts/test-wait-atomic-wiring.py
@@ -269,6 +271,6 @@ make agentos-nexus-check
 make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-Guest 日志验证器要求 `broadcast_slow_watcher_isolated=1`、heartbeat dynamic/coalesced/stop、28 次无 herd event handoff、EEVDF topology 与 wake bucket 等标记。冻结性能数据通过 [`one_shot_metrics/validate.py`](../../one_shot_metrics/validate.py) 校验，当前 chart-readiness 检查覆盖 504 条 exact wake probe 和 6 个公平性 boot。
+客户机日志校验器检查 `broadcast_slow_watcher_isolated=1`、心跳动态调整、合并与停止、28 次没有惊群的事件交接、EEVDF 拓扑和唤醒分组等标记。固定性能数据由 [`one_shot_metrics/validate.py`](../../one_shot_metrics/validate.py) 校验。绘图数据检查覆盖 504 次准确唤醒和 6 次公平性测试启动。
 
-Workflow 运行时建立在[身份、生命周期与 Context](identity-context.md)之上，并消费[工具执行](tool-execution.md)与 [Live Query](live-query.md)产生的终态和事件。四组模块合在一起，构成从受控创建、等待唤醒到一致性切片和回收的完整 AgentOS 产品路径。
+运行时使用[身份、生命周期与上下文](identity-context.md)提供的身份键，并处理[工具执行](tool-execution.md)和[文件实时查询](live-query.md)产生的最终状态与事件。

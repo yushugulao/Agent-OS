@@ -1,57 +1,59 @@
 # AgentOS 安全机制
 
-Agent workflow 会长期持有身份、文件对象、工具结果和异步请求。进程槽、inode、ring slot 和合同节点都会复用，用户缓冲区还可能在 syscall 期间变化。AgentOS 将安全状态绑定到 workflow lifecycle，并让 schema、capability、scope、Execution Contract、来源标签与资源额度在副作用发生前共同完成准入。
+智能体工作流会同时持有身份、文件、工具结果和异步任务。进程槽、索引节点（inode）、任务环槽和执行节点都可能被重复使用，用户缓冲区也可能在系统调用尚未结束时发生变化。AgentOS 为这些对象附上工作流生命周期和代次号；工具产生副作用之前，还要依次检查参数格式、能力、文件访问范围、执行约定、数据来源和资源额度。
 
 ## 文档索引
 
-- [受保护对象](#受保护对象)
-- [请求检查链](#请求检查链)
-- [身份、Lifecycle 与 Scope](#身份lifecycle-与-scope)
-- [Schema 与 Capability](#schema-与-capability)
-- [Execution Contract 与 Effect Gate](#execution-contract-与-effect-gate)
-- [Provenance 传播](#provenance-传播)
-- [资源准入与提交](#资源准入与提交)
-- [文件对象与 Live Query](#文件对象与-live-query)
-- [Task Channel 协议](#task-channel-协议)
-- [失败状态与验证](#失败状态与验证)
+- [受保护的对象](#受保护的对象)
+- [请求检查顺序](#请求检查顺序)
+- [身份、生命周期和文件访问范围](#身份生命周期和文件访问范围)
+- [参数格式与能力](#参数格式与能力)
+- [执行约定与副作用检查](#执行约定与副作用检查)
+- [数据来源标记](#数据来源标记)
+- [资源预留与结果写入](#资源预留与结果写入)
+- [文件对象与实时查询](#文件对象与实时查询)
+- [任务通道协议](#任务通道协议)
+- [失败状态与测试](#失败状态与测试)
 
-## 受保护对象
+<a id="受保护对象"></a>
+## 受保护的对象
 
-| 对象 | 内核身份 | 核心检查 |
+| 对象 | 内核用来识别对象的信息 | 主要检查 |
 | --- | --- | --- |
-| Agent | Agent id、control id、role、image identity | 受控创建、可信 executable、capability |
-| Workflow | lifecycle `{id, generation}`、scope id | active/closing 状态、operation 引用与回收 |
-| 工具请求 | tool id/name、schema digest、request id | 私有 copyin、typed schema、目录 manifest |
-| 合同节点 | contract generation、node、attempt | 前驱、输入 fingerprint、deadline、retry/cancel policy |
-| 文件对象 | `dev + inum + incarnation`、fs generation | VFS scope、metadata snapshot、edit version |
-| Live watch | target/control id、lifecycle、scope、watch id | typed predicate、增量 generation 与 resync |
-| Task Channel | owner、channel/ring/slot generation | single issuer、CQ 只读、权威水位与 terminal CQE |
-| Typed handle | slot、type、ownership、generation | owner lifecycle、引用和析构 |
-| 资源账户 | account、charge class、credit epoch | reservation、phase lease、publish/refund |
-| Workflow fence | challenge、request id、fence sequence | metadata、资源和执行记录的一致 cut |
+| 智能体 | 智能体编号、控制编号、角色、程序映像身份 | 受控创建、可信可执行文件、能力集合 |
+| 工作流 | 生命周期 `{id, generation}`、文件访问范围编号 | 是否仍在运行、操作引用和回收状态 |
+| 工具请求 | 工具编号和名称、参数格式摘要、请求号 | 私有复制、带类型信息的参数、工具目录清单 |
+| 执行节点 | 约定代次号、节点号、尝试次数 | 前驱、输入指纹、截止时间、重试和取消规则 |
+| 文件对象 | `dev`、`inum`、`incarnation`、文件更新序号 | 文件访问范围、元数据快照、编辑版本 |
+| 实时订阅 | 目标控制编号、生命周期、文件访问范围、订阅编号 | 查询条件、增量序号和重新同步状态 |
+| 任务通道 | 所有者、通道版本、环槽代次号 | 唯一提交者、只读完成队列、内核水位和完成结果 |
+| 带类型句柄 | 槽位、类型、所有权、代次号 | 所属生命周期、引用计数和析构 |
+| 资源账户 | 账户、计费类型、计费轮次 | 预留、阶段占用、发布和退还 |
+| 工作流阶段快照 | `challenge`、请求号、快照序号 | 元数据、资源和执行记录是否来自同一阶段 |
 
-这些 key 都包含代际信息。数值槽位相同但 generation 不同的对象不会互相授权。
+这些标识都含有代次信息。槽位编号相同而代次号不同，内核就会把它们当成两个对象，旧请求不能借此操作新对象。
 
-## 请求检查链
+<a id="请求检查链"></a>
+## 请求检查顺序
 
-工具调用的关键顺序位于 [`os/agent_core.c`](../os/agent_core.c) 的 `agent_execute_one()`。系统先取得 Context commit lane，再执行合同和来源准入，随后锁定 phase credit；只有 effect gate 返回 execute，owner 才能产生副作用。
+工具调用的主要检查位于 [`os/agent_core.c`](../os/agent_core.c) 的 `agent_execute_one()`。系统先取得上下文写入权，再检查执行约定和数据来源，随后预留阶段额度。只有副作用检查允许执行时，具体工具才会修改进程、文件或元数据。
 
 ```text
-copyin request / descriptor
-    -> version、size、flags、reserved 与字符串终止位置
-    -> Agent identity + workflow lifecycle
-    -> tool id/name + typed schema
-    -> lifecycle operation gate
-    -> contract node / predecessor / attempt / deadline
-    -> provenance manifest + required capability
-    -> Tool Phase Credit Lease
-    -> effect gate
-    -> tool owner + VFS scope/object recheck
-    -> provenance output + resource settle
-    -> Context / terminal state commit
+复制请求或描述符
+    -> 检查版本、大小、标志、保留字段和字符串结尾
+    -> 核对智能体身份与工作流生命周期
+    -> 解析工具编号、名称和带类型信息的参数
+    -> 检查生命周期是否允许新操作
+    -> 核对约定节点、前驱、尝试次数、截止时间
+    -> 核对数据来源和所需能力
+    -> 预留工具阶段额度
+    -> 检查取消状态和副作用
+    -> 执行工具，再次核对文件访问范围和对象身份
+    -> 写入输出来源并结算资源
+    -> 写入上下文和执行结果
 ```
 
-实际代码保持同样的先后关系：
+源码中的先后关系与上面一致：
 
 ```c
 admission = agent_execution_contract_admit(...);
@@ -65,146 +67,162 @@ agent_provenance_commit_tool_output(...);
 agent_execution_append_terminal(...);
 ```
 
-V2 参数数组、V3 binding 和 Task SQE 都在检查前复制到内核私有结构。Task Channel 每次复制完整 128 字节 SQE，并在 validation/submit 阶段只读取该副本。
+V2 参数数组、V3 绑定信息和任务 SQE 都会先复制到内核私有内存。任务通道每次复制完整的 128 字节 SQE，检查和提交阶段只读取这份副本。
 
-## 身份、Lifecycle 与 Scope
+<a id="身份lifecycle-与-scope"></a>
+## 身份、生命周期和文件访问范围
 
-`agent_workflow_create()` 建立 controller 和 lifecycle root；同一 workflow 中具备 `AGENT_CAP_ORCHESTRATE` 的 Agent 可调用 `agent_worker_create()`，内核核对 capability mask、workflow scope 与 executable identity。Agent PCB 同时保存 control id 和 lifecycle key，IPC、watch、Context 与资源账户都从这份身份派生。
+`agent_workflow_create()` 创建管理智能体和生命周期根。工作流内拥有 `AGENT_CAP_ORCHESTRATE` 的智能体可以调用 `agent_worker_create()`。申请的能力集合必须非零，只能取 `AGENT_CAP_CONTENT_READ` 和 `AGENT_CAP_ARTIFACT_WRITE` 的子集，同时不能超过调用方已有能力。内核还会核对工作流的文件访问范围和可执行文件身份。智能体的进程控制块保存控制编号和完整生命周期键，进程通信、实时订阅、上下文与资源账户都从这份身份取得归属信息。
 
-Lifecycle operation gate 处理关闭与并发调用：
+关闭工作流时，生命周期按以下步骤处理：
 
-1. active lifecycle 接受新的 operation 并增加引用；
-2. close 将 lifecycle 转入 closing，停止普通新操作；
-3. 已接受 Task、metadata delta、成员退出和资源析构继续完成；
-4. 引用归零后清理 scope、合同、watch、Task Channel 与资源账户，再推进 slot generation。
+1. 运行中的生命周期接受新操作，并为已接受的操作增加引用；
+2. `agent_workflow_close()` 将其改为关闭中，普通新操作从此不再进入；
+3. 已经接受的任务、元数据增量、成员退出和资源析构继续处理；
+4. 所有引用清零后，内核清理文件访问范围、执行约定、实时订阅、任务通道和资源账户，再增加槽位的代次号。
 
-旧对象在不同 owner 路径中返回 `STALE` 或 `NOT_FOUND`。返回值取决于调用语义，例如旧合同 key 为 stale，已经删除的 query target 可以是 not found；过期 edit lease 清理后返回 not found，incarnation 或 expected version 不匹配返回 stale。
+不同接口对旧对象的称呼略有差别。旧的约定键通常返回 `STALE`；已经删除的查询目标可能返回 `NOT_FOUND`；编辑租约过期并被清理后返回 `NOT_FOUND`，而 inode 的 `incarnation` 或 `expected_version` 不匹配时返回 `STALE`。
 
-`agent_scope_delegate_fd()` 对单个文件描述符执行委派。VFS 在 open/read/write、metadata 变更、unlink 和编辑租约路径继续检查动态 scope，使工具调用无法用已通过的上层检查绕开文件 owner。
+`agent_scope_delegate_fd()` 只委派一个文件描述符。文件打开、读写、元数据修改、删除和编辑租约仍会在 VFS 路径中检查文件访问范围，因此上层工具检查通过后也不能绕过文件权限。
 
-## Schema 与 Capability
+带有 `preserve_on_retire` 的持久输出是一项例外。生命周期槽位可以先回收，登记项、文件和存储计费继续保留；存储账户即使已经进入 `DRAINING` 或 `FREE`，这些数据也可继续存在，等后续处理完成后再释放。
 
-Role 表达 workflow 职责，capability 控制具体动作。当前位包括 metadata/content/process read、message send、watch、action/artifact/audit write、metadata write、orchestrate、LLM relay、wait cancel 和 route manage。部分兼容名称映射到相同 capability，例如 dependency update 使用 `META_WRITE`。
+<a id="schema-与-capability"></a>
+## 参数格式与能力
 
-工具目录的 manifest 将 schema 与安全属性放在同一注册表中：
+角色说明智能体在工作流中的分工，能力位则决定它能做什么。现有能力包括读取元数据和文件内容、读取进程信息、发送消息、建立订阅、写入动作和结果文件、写入审计与元数据、管理工作流、转发模型调用、取消等待以及管理消息路由。部分兼容名称会映射到同一能力，例如更新依赖关系使用 `META_WRITE`。
 
-| Manifest 字段 | 用途 |
+工具目录把参数格式和权限要求写在同一项中：
+
+| 目录字段 | 含义 |
 | --- | --- |
-| `required_capabilities` | 当前 Agent 必须具备的能力集合 |
-| `accepted_input_labels` | 本工具可接受的来源标签 |
-| `output_add_labels` | 工具结果增加的标签 |
-| `side_effect_mask` | file、metadata、IPC、process、permission、artifact 或 watch 副作用 |
+| `required_capabilities` | 调用智能体必须具备的能力集合 |
+| `accepted_input_labels` | 允许进入本工具的数据来源 |
+| `output_add_labels` | 工具结果增加的来源标记 |
+| `side_effect_mask` | 文件、元数据、进程通信、进程、权限、结果文件或订阅副作用 |
 
-[`os/agent_tool_protocol.c`](../os/agent_tool_protocol.c) 对 V2 参数执行以下检查：
+[`os/agent_tool_protocol.c`](../os/agent_tool_protocol.c) 逐项检查 V2 参数：
 
-- tool id 与 name 是否解析到同一目录项；
-- key 是否在该工具的稀疏规则行中；
-- key 是否重复、必要参数是否缺失；
-- type 与 value size 是否匹配；
-- 字符串是否在声明长度内精确 NUL 终止；
-- request flags 与保留字段是否合法。
+- 工具编号与名称是否指向同一目录项；
+- 键名是否出现在该工具的参数规则中；
+- 是否有重复键，必填参数是否齐全；
+- 类型和值的长度是否相符；
+- 字符串是否在声明范围内准确地以 NUL 结束；
+- 请求标志和保留字段是否有效。
 
-目录启动自检还验证 name 唯一、tool id 连续、参数 target 不重叠。Schema digest 将工具名称、参数、capability、来源策略和 side-effect mask 一起哈希，合同无法用相同 id 替换成不同语义。
+系统启动时还会检查工具名称是否重复、编号是否连续、参数写入位置是否重叠。`schema_digest` 把工具名称、参数、能力、数据来源和副作用一起写入摘要。工具含义发生变化时，即便编号未变，摘要也会随之改变。
 
-## Execution Contract 与 Effect Gate
+<a id="execution-contract-与-effect-gate"></a>
+## 执行约定与副作用检查
 
-`AGENT_EXECUTION_CONTRACT_F_ENFORCE` 冻结最多 24 个拓扑有序节点。每个节点声明 tool/schema、predecessor mask、artifact 类型、accepted labels、side effects、deadline、attempt/retry/cancel policy 和资源包络。
+设置 `AGENT_EXECUTION_CONTRACT_F_ENFORCE` 后，一份执行约定最多保存 24 个按依赖顺序排列的节点。每个节点注明工具和参数格式、前驱、结果类型、允许的数据来源、副作用、截止时间、尝试次数、重试与取消规则，以及资源上限。
 
-V3 准入逐项检查：
+V3 请求按顺序检查以下内容：
 
-1. contract key 是否属于当前 lifecycle；
-2. node 与 attempt 是否存在且未冲突；
-3. predecessor 是否已经取得允许的 terminal 状态；
-4. schema digest 与 canonical input fingerprint 是否匹配；
-5. source Context sequence、source node 和 producer identity 是否对应；
-6. capability、provenance、deadline 和 phase credit 是否满足节点声明。
+1. 约定键是否属于当前生命周期；
+2. 节点和尝试次数是否存在，是否与已有记录冲突；
+3. 前驱是否已经得到约定允许的执行结果；
+4. 参数格式摘要和规范化输入指纹是否一致；
+5. 来源上下文序号、来源节点和生产者身份是否对应；
+6. 能力、数据来源、截止时间和阶段额度是否符合节点声明。
 
-`agent_execution_contract_effect_begin()` 是取消与副作用的分界点。effect 开始前收到合法取消，节点提交 `CANCELLED`；effect 已经开始时，取消按 too-late reason 处理，owner 结果继续进入资源和 Context 结算。完成缓存保存 accepted attempt 的 terminal result，合法 replay 复用相同 sequence/result identity，并设置 cached flag。
+`agent_execution_contract_effect_begin()` 划分了“还能取消”和“已经开始产生副作用”两个阶段。取消请求若在这一步之前到达，节点可记录为 `CANCELLED`；工具已经开始修改系统状态时，取消会被标记为来得太晚，内核仍按实际结果结算。已经接受的尝试会保存执行结果，合法重放直接取用相同的执行序号和结果，并设置缓存标志。
 
-ENFORCE lifecycle 中的受约束直接 syscall 通过 [`agent_execution_contract_gate_direct_syscall()`](../os/agent_core.c) 进入相同控制面。缺少合同的副作用调用先追加结构化 denial：记录成功时返回 `DENIED`，安全记录槽位不足时返回 `NO_SPACE`，其它暂时无法追加记录的情况返回 `RETRY`。
+启用 `ENFORCE` 后，受约束的直接系统调用也会经过 `agent_execution_contract_gate_direct_syscall()`。缺少执行约定的副作用调用会先写下一条结构化拒绝记录。记录成功时返回 `DENIED`，安全记录槽位不足时返回 `NO_SPACE`，暂时无法写入时返回 `RETRY`。
 
-## Provenance 传播
+<a id="provenance-传播"></a>
+## 数据来源标记
 
-来源词汇定义在 [`include/agent_provenance_abi.h`](../include/agent_provenance_abi.h)：
+来源标记定义在 [`include/agent_provenance_abi.h`](../include/agent_provenance_abi.h)：
 
-| 标签 | 典型来源 |
+| 标记 | 常见来源 |
 | --- | --- |
-| `KERNEL_FACT` | 内核生成的进程、调度和对象事实 |
-| `TRUSTED_USER_CONTROL` | Guest 明确提供的控制输入 |
-| `AGENT_DERIVED` | AgentOS owner 派生的结果 |
-| `UNTRUSTED_FILE_DATA` | 文件内容与 metadata query |
-| `UNTRUSTED_TOOL_OUTPUT` | 外部工具或模型返回 |
-| `CROSS_AGENT_DATA` | 其他 Agent 的消息和前驱结果 |
+| `KERNEL_FACT` | 内核产生的进程、调度和对象信息 |
+| `TRUSTED_USER_CONTROL` | 用户程序明确给出的控制输入 |
+| `AGENT_DERIVED` | AgentOS 内核模块计算出的结果 |
+| `UNTRUSTED_FILE_DATA` | 文件内容和元数据查询结果 |
+| `UNTRUSTED_TOOL_OUTPUT` | 外部工具或模型返回值 |
+| `CROSS_AGENT_DATA` | 其他智能体的消息和前驱结果 |
 
-标签按 OR 传播到后续 Context。`agent_provenance_authorize_tool()` 将当前输入标签与 manifest 的 accepted set 比较，并核对合同声明没有隐藏目录中的真实 side effect。SHA-256 固定 payload 和 canonical input fingerprint；身份、scope 与 capability 继续独立参与授权。
+这些标记按位加入后续上下文。`agent_provenance_authorize_tool()` 比较当前输入与工具目录允许的来源，同时核对执行约定是否漏写了目录中登记的副作用。SHA-256 用于固定输入字节和规范化输入指纹；身份、文件访问范围和能力仍要单独检查。
 
-安全拒绝写入当前 Context 的 provenance flags，并带有稳定 reason，例如 stale lifecycle、missing contract、illegal predecessor、capability missing、provenance not accepted 或 effect mismatch。V3 response 和 Task CQE 返回对应 execution decision reason。
+拒绝原因会写入当前上下文的来源标志，并使用固定的原因码，例如生命周期过期、缺少执行约定、前驱不合法、能力不足、来源不被接受或副作用不符。V3 响应和任务 CQE 会带回相应的执行决定原因。
 
-## 资源准入与提交
+<a id="资源准入与提交"></a>
+## 资源预留与结果写入
 
-Workflow Credit Domain 维护 `held = F + P + U`：F 是账户 free credit，P 是 reservation，U 是已经计费的 live object。Account limit、resource class limit 和 global limit 同时约束 held。
+工作流资源账户记录 `held = F + P + U`。其中，F 是账户中的可用额度，P 是已经预留的额度，U 是正在计费的存活对象。账户上限、资源类别上限和系统总上限会同时检查这一数值。
 
 ```text
-reserve:  F -> P
-publish:  P -> U
-failure:  P -> F
-destroy:  U -> F
+预留：F -> P
+发布：P -> U
+失败：P -> F
+销毁：U -> F
 ```
 
-Execution Contract 的 exec/storage envelope 在 owner 执行前转为 Tool Phase Credit Lease。Lease 使用 workflow、node、request 和 generation 标识，begin/activate/deactivate/settle 形成唯一状态机。额度不足返回 `NO_SPACE`；失败路径归还 reservation，已发布对象由析构路径归还 U。
+执行约定中的执行额度和存储额度，会在工具运行前转成一份阶段额度。它以工作流、节点、请求号和代次号标识，并按开始、启用、停用、结算的顺序变化。额度不足返回 `NO_SPACE`。失败时预留额度退回；已经发布的对象则在销毁时退回额度。
 
-Context commit lane 将结果发布顺序固定为：owner 结果、phase settle、provenance output、Context/Evidence terminal、合同节点完成。受约束调用在执行前预留 terminal record，避免副作用完成后无法记录终态。Workflow close 入口标记 lifecycle 为 closing、请求成员退出并返回；closing/finalizer 阶段在成员、active operation、Task callback、资源对象和 Context 发布结算后完成回收。
+上下文写入顺序固定为：取得工具结果、结算阶段额度、写入输出来源、写入上下文与执行记录票号，最后更新约定节点。受约束调用会在执行前预留结果记录，避免工具已经修改系统状态却无处记录。`agent_workflow_close()` 只负责把生命周期改为关闭中并要求成员退出；成员、已有操作、任务回调、资源对象和上下文写入全部处理完后，后台清理程序才回收工作流。
 
-Nexus artifact 文件位于用户态发布路径，不与内核 Context terminal 组成原子事务。[`agent_nexus.c`](../user/lib/agent_nexus.c) 以 workflow edit lease 串行化发布，先持久化 zero-magic header 与 payload，再写最终 header；[`agent_nexus.h`](../user/include/agent_nexus.h) 明确将 `AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC` 设为 `0`。读取方通过 magic、manifest/payload digest 和 lifecycle 复核，只接受完整终态。
+Nexus 结果文件由用户态另行写入，不与内核上下文记录构成同一个原子事务。[`agent_nexus.c`](../user/lib/agent_nexus.c) 使用工作流编辑租约串行写入，先持久化魔数为零的文件头和数据，再写正式文件头。[`agent_nexus.h`](../user/include/agent_nexus.h) 将 `AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC` 明确定义为 `0`。读取方重新核对魔数、清单摘要、数据摘要和生命周期，只接收完整文件。
 
-## 文件对象与 Live Query
+<a id="文件对象与-live-query"></a>
+## 文件对象与实时查询
 
-Live Query catalog 接收 `agent_file_meta_set()` 显式登记的易失 metadata。记录绑定 workflow lifecycle、scope 和 `{dev, inum, incarnation}`。uCore 在 inode 复用时递增 incarnation；达到最大值的 inode 不再复用。Metadata selector、digest cache、edit lease 与 deferred unlink 都检查完整身份。
+实时查询目录只接收 `agent_file_meta_set()` 显式登记、仅在运行期保存的元数据。记录绑定工作流生命周期、文件访问范围和 `{dev, inum, incarnation}`。uCore 每次重新分配 inode 都会增加 `incarnation`；达到最大值后，该 inode 不再复用。元数据选择器、摘要缓存、编辑租约和待处理删除记录都要核对这三部分身份。
 
-Query snapshot 在开始和结束时核对 lifecycle 与 `fs_generation`，索引候选仍要重新执行完整 predicate 和 scope 检查。Typed watch 绑定 target control id、lifecycle、scope 和 watch id，集合变化发布 `ENTER/UPDATE/LEAVE`。
+查询开始和结束时会分别检查生命周期与 `fs_generation`。即使用索引找到候选项，内核仍会重新核对完整查询条件和文件访问范围。实时订阅绑定目标控制编号、生命周期、文件访问范围和订阅号，集合变化时发布 `ENTER`、`UPDATE` 或 `LEAVE`。
 
-事件队列压力或增量缺口推进 sticky `resync_generation`。Agent 在旧 watch 仍活动时安装 replacement，取得未截断 snapshot 后再 ACK 指定 generation 并移除旧 watch；晚于 ACK 的新缺口继续保持 pending。单次 query 超过 8 个 hit 时保持 resync，直到 query 被收紧或 ABI 提供分页基线。编辑 commit 还要求 lease id、inode incarnation 和 `expected_version` 一起匹配。
+事件队列已满或增量事件出现缺口时，内核记录持续待确认的 `resync_generation`。恢复时，旧订阅必须继续工作。智能体先用同一查询条件建立替代订阅，且不带确认标志；接着执行一次查询，只有 `truncated == 0` 才得到完整基线；随后在旧订阅上确认保存的缺口序号，并在同一内核临界区移除旧订阅。替代订阅在整个交接期间一直有效，之后由它继续接收事件，并按顺序补入基线。若又发现更大的缺口序号，就重复这组操作。
 
-## Task Channel 协议
+单次查询最多返回 8 项，当前 ABI 没有分页游标。结果被截断时，智能体应移除替代订阅且不确认缺口，保留旧订阅和待确认状态，再缩小查询范围。普通、连续的更新序号变化不会触发重新同步。只要工作流中仍有未确认的缺口，或重新同步提示尚未投递，工作流阶段快照就返回 `RETRY`。
 
-Task Channel 使用 single issuer 和内核权威水位。SQ 对 issuer 可写，CQ 在用户页表中只读。每条 accepted target 只发布一个 terminal CQE，cancel command 以独立 request id 引用目标。
+文件提交还要同时核对租约号、inode 的 `incarnation` 和 `expected_version`。
 
-通道 generation 过期与协议 sticky resync 分开处理：
+<a id="task-channel-协议"></a>
+## 任务通道协议
 
-| 状态 | 检查 | 后续状态 |
+任务通道只有一个提交者，队列水位以内核记录为准。提交队列由提交者写入，完成队列在用户页表中只读。每个已经接受的目标任务只产生一条 CQE；取消命令使用独立的请求号，通过 `link_request_id` 指向目标。
+
+过期请求和通道协议失步分别处理：
+
+| 状态 | 检查结果 | 后续处理 |
 | --- | --- | --- |
-| `AGENT_TASK_CHANNEL_STALE` | `enter.generation` 不是当前 generation | 不设置 `RING_F_RESYNC`；返回当前 generation 与水位，调用方重建控制请求 |
-| `AGENT_TASK_CHANNEL_STALE` | issuer identity、owner 或 lifecycle 已失效 | 不设置 `RING_F_RESYNC`；结果除 ABI version/size/status 外为零，调用方重新建立有效 owner/lifecycle |
-| `AGENT_TASK_CHANNEL_STALE` | cancel 目标已被 CQ ack 或不存在 | 不设置 `RING_F_RESYNC`；cancel id 已消费，并返回当前 channel generation 与水位 |
-| `AGENT_TASK_CHANNEL_RESYNC_REQUIRED` | request id 倒退、非法 SQ/CQ 水位、SQE ring/slot generation 错误、重复槽或非法 link | `protocol_faults` 增加，generation 前进，SQ 清零，sticky resync 等待显式确认 |
+| `AGENT_TASK_CHANNEL_STALE` | `enter.generation` 不是当前通道版本 | 不设置 `RING_F_RESYNC`；返回当前通道版本和水位，调用方重新构造控制请求 |
+| `AGENT_TASK_CHANNEL_STALE` | 提交者身份、所有者或工作流生命周期已经失效 | 不设置 `RING_F_RESYNC`；除 ABI 版本、大小和状态外，其余字段为零，调用方重新建立任务通道，并使用有效的提交者和工作流 |
+| `AGENT_TASK_CHANNEL_STALE` | 取消目标已经被 CQ 确认读取，或目标不存在 | 不设置 `RING_F_RESYNC`；取消请求号已经用掉，并返回当前通道版本和水位 |
+| `AGENT_TASK_CHANNEL_RESYNC_REQUIRED` | 请求号倒退、队列水位非法、SQE 通道版本或环槽代次号错误、请求槽重复、关联关系非法 | `protocol_faults` 增加，通道版本前进，SQ 清零，并保持重新同步标记，等待调用方明确确认 |
 
-恢复 sticky resync 时，issuer 丢弃尚未 accepted 的 SQE，采用 enter result 中的新 generation，并提交 `ENTER_F_RESYNC`、`sq_tail=0`。普通 stale target 不增加 `protocol_faults` 或 `resync_count`。
+恢复时，提交者丢弃尚未被接受的 SQE，采用 `enter` 结果中的新通道版本，再提交 `ENTER_F_RESYNC` 和 `sq_tail=0`。普通 `STALE` 不增加 `protocol_faults` 或 `resync_count`。
 
-Typed resource handle 包含 slot、type、ownership flags 与 generation。Core resource table 实现 import/release/query、引用和析构；当前同步 Task bridge 只接受 null input/output，非空 import 返回 `AGENT_TASK_CHANNEL_DENIED`。CQ full 保留 terminal pending 并施加 backpressure，消费 CQ 后继续发布。
+取消策略若当场拒绝取消命令，取消请求号仍会被记为已使用。此时 `enter` 返回 `DENIED`，不产生取消 CQE，原目标继续运行。完成队列已满时，内核保留尚未写出的结果；用户读取 CQ 后，再继续发布。
 
-## 失败状态与验证
+带类型资源句柄包含槽位、类型、所有权标志和代次号。资源表实现导入、释放、查询、引用和析构。当前同步任务转换层只接受空输入和空输出；导入非空资源时返回 `AGENT_TASK_CHANNEL_DENIED`。
+
+<a id="失败状态与验证"></a>
+## 失败状态与测试
 
 | 条件 | 状态 |
 | --- | --- |
-| lifecycle、contract、channel 或对象 generation 过期 | `STALE` / `CONFLICT` / `NOT_FOUND` |
-| capability、scope、来源或合同不匹配 | `DENIED` |
-| version、size、flags、reserved 或参数错误 | `BAD_VERSION` / `BAD_SIZE` / `BAD_PARAM` |
-| credit、对象表或队列容量耗尽 | `NO_SPACE` / backpressure |
-| Live Query 增量出现缺口 | `RESYNC_REQUIRED` event |
-| Task SQ/CQ 协议故障 | `AGENT_TASK_CHANNEL_RESYNC_REQUIRED` |
-| fence、metadata 或 terminal publisher 尚未推进 | `RETRY` |
-| deadline 到期 | `TIMEOUT` 或带 deadline flag 的 terminal CQE |
+| 生命周期、执行约定、任务通道或对象代次号过期 | `STALE`、`CONFLICT` 或 `NOT_FOUND` |
+| 能力、文件访问范围、数据来源或约定不符 | `DENIED` |
+| 版本、大小、标志、保留字段或参数错误 | `BAD_VERSION`、`BAD_SIZE` 或 `BAD_PARAM` |
+| 额度、对象表或队列容量不足 | `NO_SPACE`，或等待完成队列腾出位置 |
+| 实时查询增量出现缺口 | `RESYNC_REQUIRED` 事件 |
+| 任务通道协议失步 | `AGENT_TASK_CHANNEL_RESYNC_REQUIRED` |
+| 阶段快照、元数据或结果记录尚未写完 | `RETRY` |
+| 超过截止时间 | `TIMEOUT`，或带截止时间标志的 CQE |
 
-| 测试 | 覆盖内容 |
+| 测试 | 检查内容 |
 | --- | --- |
-| [`agenttrust_ucore.c`](../user/src/agenttrust_ucore.c) | executable identity、受控创建与 launch 状态 |
-| [`agentscope_ucore.c`](../user/src/agentscope_ucore.c) | VFS scope 与文件描述符委派 |
-| [`agenttoolabi_ucore.c`](../user/src/agenttoolabi_ucore.c) | schema 目录与 typed 负向矩阵 |
-| [`agentsecurity_ucore.c`](../user/src/agentsecurity_ucore.c) | role、capability、IPC 与副作用授权 |
-| [`agentcontract_ucore.c`](../user/src/agentcontract_ucore.c) | 合同、来源、deadline、retry 与 phase credit |
-| [`agentscan_ucore.c`](../user/src/agentscan_ucore.c) | 文件 identity 与 typed transition |
-| [`agentfinal_ucore.c`](../user/src/agentfinal_ucore.c) | Context commit lane、资源结算与 teardown |
-| [`agenttask_ucore.c`](../user/src/agenttask_ucore.c) | SQ/CQ 所有权、resync、cancel、deadline 与 terminal CQE |
+| [`agenttrust_ucore.c`](../user/src/agenttrust_ucore.c) | 可执行文件身份、受控创建和启动状态 |
+| [`agentscope_ucore.c`](../user/src/agentscope_ucore.c) | 文件访问范围和文件描述符委派 |
+| [`agenttoolabi_ucore.c`](../user/src/agenttoolabi_ucore.c) | 工具目录和带类型信息参数的错误输入 |
+| [`agentsecurity_ucore.c`](../user/src/agentsecurity_ucore.c) | 角色、能力、进程通信和副作用授权 |
+| [`agentcontract_ucore.c`](../user/src/agentcontract_ucore.c) | 执行约定、数据来源、截止时间、重试和阶段额度 |
+| [`agentscan_ucore.c`](../user/src/agentscan_ucore.c) | 文件身份和实时查询集合变化 |
+| [`agentfinal_ucore.c`](../user/src/agentfinal_ucore.c) | 上下文写入顺序、资源结算和工作流回收 |
+| [`agenttask_ucore.c`](../user/src/agenttask_ucore.c) | 提交队列与完成队列的所有权、重新同步、取消、截止时间和 CQE |
 
 ```bash
 make agent-uapi-check
@@ -214,4 +232,4 @@ AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv64-linux-g
 AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-系统调用字段见 [API](api.md)，模块间关系见[产品架构](architecture.md)。
+系统调用字段见 [API](api.md)，模块关系见[产品架构](architecture.md)。

@@ -1,49 +1,51 @@
-# Agent Live-Query FS
+# AgentOS 实时文件查询
 
-一个 workflow 会持续创建检索结果、检查点和报告。文件名只能回答“文件在哪里”，无法表达阶段、状态、依赖关系，也无法处理 inode 删除后复用。AgentOS 在 uCore 内核中为显式登记的文件维护结构化 catalog，将查询计划、对象代际、typed watch 和编辑租约组合成可进入 Agent Loop 的文件状态服务。
+一个工作流会不断产生检索结果、检查点和报告。只看文件名，无法得知文件处于哪个阶段、是否可用、依赖哪些数据，也无法分辨索引节点（inode）删除后又被新文件复用的情况。为此，AgentOS 在 uCore 内核中维护一份显式登记的文件目录，并把索引查询、文件身份、实时订阅和编辑租约放在一起管理。
 
 ## 文档索引
 
-- [显式文件目录](#显式文件目录)
-- [从登记到索引](#从登记到索引)
-- [查询规划器](#查询规划器)
-- [Typed watch](#typed-watch)
-- [Generation resync](#generation-resync)
-- [VFS 增量与 inode incarnation](#vfs-增量与-inode-incarnation)
+- [显式登记的文件目录](#显式登记的文件目录)
+- [登记与索引更新](#登记与索引更新)
+- [查询方法](#查询方法)
+- [实时订阅](#实时订阅)
+- [增量缺口与重新同步](#增量缺口与重新同步)
+- [VFS 更新与索引节点代次号](#vfs-更新与索引节点代次号)
 - [编辑租约](#编辑租约)
 - [性能结果](#性能结果)
 - [测试与实现索引](#测试与实现索引)
 
-## 显式文件目录
+<a id="显式文件目录"></a>
+## 显式登记的文件目录
 
-`agent_file_meta_set()` 将业务语义绑定到一个真实 inode。Catalog 每条记录同时保存两组字段：
+`agent_file_meta_set()` 把业务信息登记到真实 inode 上。每条记录同时保存业务字段和文件身份：
 
-| 业务语义 | 物理身份与版本 |
+| 业务字段 | 文件身份与版本 |
 | --- | --- |
 | `project`、`workflow`、`run_id` | `dev`、`inum`、`incarnation` |
 | `stage`、`kind`、`status`、`summary` | `size`、`fs_generation`、`updated_tick` |
-| `logical_path`、`dependency_mask` | workflow lifecycle 与 scope |
+| `logical_path`、`dependency_mask` | 工作流生命周期和文件访问范围 |
 
-Catalog 容量为 512，单次 query 最多返回 8 个 hit。普通 VFS 文件不会自动进入目录；只有 flags 为零的显式 metadata update 会发布 live-query membership。ABI 中保留的 `PERSIST` 与 `AUTOSCAN` 数值不会进入当前 catalog，owner 在登记时拒绝这两个 flags。未登记文件继续使用 uCore 原有 open/read/write/unlink 路径。
+目录最多保存 512 条记录，一次查询最多返回 8 项。普通文件不会自动进入这份目录，只有 `flags` 为零的显式元数据登记才会引起实时查询结果变化。ABI 虽然保留了 `PERSIST` 和 `AUTOSCAN` 的数值，当前实现会拒绝这两个标志。未登记文件仍按 uCore 原有的 `open`、`read`、`write` 和 `unlink` 路径处理。
 
-`update_mask` 允许只修改部分语义字段，`AGENT_FILE_META_F_DELETE` 删除登记项。登记和更新需要当前 Agent 持有 `AGENT_CAP_META_WRITE`，查询需要 `AGENT_CAP_META_READ`，两者都绑定 workflow scope 与 lifecycle generation。
+`update_mask` 可以只修改部分业务字段，`AGENT_FILE_META_F_DELETE` 用于删除登记项。登记和更新要求当前智能体具有 `AGENT_CAP_META_WRITE`，查询要求 `AGENT_CAP_META_READ`；两类操作还要核对工作流生命周期与文件访问范围。
 
-## 从登记到索引
+<a id="从登记到索引"></a>
+## 登记与索引更新
 
-一次 metadata 登记从 [`user/lib/syscall.c`](../../user/lib/syscall.c) 的 `agent_file_meta_set()` 进入 `SYS_agent_file_meta_set`，随后由 [`os/agent_metadata_objects.c`](../../os/agent_metadata_objects.c) 完成授权和私有 copyin。Catalog owner 在一个 mutation transaction 中解析 selector、绑定 inode、发布主记录与派生索引，再计算集合变化。
+用户态的 `agent_file_meta_set()` 通过 [`user/lib/syscall.c`](../../user/lib/syscall.c) 进入 `SYS_agent_file_meta_set`。随后，[`os/agent_metadata_objects.c`](../../os/agent_metadata_objects.c) 检查权限并复制用户参数。负责文件目录的内核模块在同一次元数据事务中解析选择条件、绑定 inode、写入主记录和索引，最后比较实时订阅的集合是否发生变化。
 
 ```text
 agent_file_meta_set()
     -> sys_agent_file_meta_set()
     -> agent_file_meta_set_execute()
     -> agent_metadata_catalog_bind_volatile()
-    -> dev + inum + incarnation 绑定
-    -> status / stage / kind bitmap 更新
-    -> fs_generation 推进
-    -> typed watch transition 发布
+    -> 绑定 dev、inum 和 incarnation
+    -> 更新 status、stage 和 kind 索引
+    -> 增加 fs_generation
+    -> 发布实时订阅的集合变化事件
 ```
 
-实际 Guest 用法可在 [`user/src/agentscan_ucore.c`](../../user/src/agentscan_ucore.c) 中定位：
+[`user/src/agentscan_ucore.c`](../../user/src/agentscan_ucore.c) 中的实际用法如下：
 
 ```c
 struct agent_file_meta meta = {0};
@@ -59,11 +61,12 @@ meta.update_mask = 0;          /* 首次登记填写完整记录。 */
 agent_file_meta_set(&meta);
 ```
 
-目录 mutation 与 query snapshot 使用同一 metadata transaction。查询开始时记录 lifecycle 和 `fs_generation`，复制命中项后再次核对；期间若目录或可见文件代际发生变化，owner 将本轮 snapshot 判为 stale 并在内核中重试，重试耗尽后向调用方返回 `RETRY`，避免拼接两个时刻的视图。
+目录修改和查询快照共用同一份元数据事务。查询开始时，内核记下生命周期和 `fs_generation`，复制命中项后再检查一次。若这段时间内目录或可见文件的更新序号发生变化，本轮结果作废并在内核中重试。重试次数用完后返回 `RETRY`，避免把两个时刻的数据拼成一份结果。
 
-## 查询规划器
+<a id="查询规划器"></a>
+## 查询方法
 
-`agent_file_query` 支持物理名、逻辑路径、project、workflow、run、status、stage、kind 的等值谓词，以及有界 `summary_contains`。Planner 在允许索引时按 `status -> stage -> kind` 的优先级选择第一个可用键；`AGENT_FILE_QUERY_SCAN` 强制 traversal。
+`agent_file_query` 可以按物理名称、逻辑路径、项目、工作流、运行编号、状态、阶段和类型进行等值查询，也支持长度受限的 `summary_contains`。允许使用索引时，内核依次尝试状态、阶段和类型索引，选取第一个可用项。设置 `AGENT_FILE_QUERY_SCAN` 则强制逐条扫描。
 
 ```c
 struct agent_file_query query = {0};
@@ -78,22 +81,23 @@ strcpy(query.status, "ready");
 int returned = agent_file_query(&query, &result);
 ```
 
-索引只缩小候选集。每个候选仍由 `agent_metadata_query_matches()` 复核完整谓词、scope 和 lifecycle，因此 traversal 与 indexed 返回相同的 `agent_file_hit` 语义。
+索引只负责缩小候选范围。每个候选项仍要经过 `agent_metadata_query_matches()`，重新核对全部查询条件、工作流生命周期和文件访问范围。因此，扫描与索引返回的 `agent_file_hit` 含义相同。
 
-| Result 字段 | 含义 |
+| 返回字段 | 含义 |
 | --- | --- |
-| `total_hits / returned / truncated` | 完整命中数、已复制数以及是否超过 `max_hits` |
-| `plan / used_index / index_bucket` | 实际计划、是否使用索引、命中的 bitmap bucket |
-| `scanned_records / candidate_records` | 访问槽数与 scope 可见候选数 |
-| `plan_reason` | forced scan、index off、status/stage/kind index 或 no index key |
-| `query_ticks / fs_generation` | 内核查询区间和本次一致视图代际 |
-| `hits[].dev/inum/incarnation` | 命中文件的完整物理身份 |
+| `total_hits`、`returned`、`truncated` | 完整命中数、实际复制数、结果是否被截断 |
+| `plan`、`used_index`、`index_bucket` | 实际查询方式、是否使用索引、采用的位图桶 |
+| `scanned_records`、`candidate_records` | 检查的槽位数、当前文件访问范围内的候选数 |
+| `plan_reason` | 强制扫描、禁用索引、使用状态索引、使用阶段索引、使用类型索引，或没有可用索引键 |
+| `query_ticks`、`fs_generation` | 查询耗时和本次一致视图的更新序号 |
+| `hits[].dev`、`hits[].inum`、`hits[].incarnation` | 命中文件的完整物理身份 |
 
-单次 query 最多复制 8 个 hit，`total_hits` 仍报告全部命中数；当前 ABI 没有分页 cursor。Planner 和谓词实现位于 [`os/agent_metadata_query.c`](../../os/agent_metadata_query.c)。其扫描循环每处理 128 个槽执行一次 kernel work checkpoint，使大 catalog 查询不会长期占用内核执行权。
+一次查询最多复制 8 项，但 `total_hits` 仍报告完整命中数。当前 ABI 没有分页游标。查询实现位于 [`os/agent_metadata_query.c`](../../os/agent_metadata_query.c)。逐条扫描时，每处理 128 个槽位，内核都会检查是否需要让出执行权，避免大目录查询长时间占用内核。
 
-## Typed watch
+<a id="typed-watch"></a>
+## 实时订阅
 
-轮询只能看到两次查询之间的最终状态。`agent_live_watch()` 将完整 typed query 编译到内核 predicate arena，并把订阅绑定到 target proc、control id、workflow lifecycle 和 scope。watch 安装返回 `watch_id`、`initial_generation` 与 `catalog_generation`，Agent 可以从这一 generation 开始接收增量。
+定时查询只能看到前后两个时刻的文件状态。`agent_live_watch()` 把完整查询条件转换后存入内核的条件区，并将订阅绑定到目标进程、控制编号、工作流生命周期和文件访问范围。安装成功后返回 `watch_id`、`initial_generation` 和 `catalog_generation`，智能体从这个更新序号开始接收增量事件。
 
 ```c
 struct agent_file_live_watch watch = {0};
@@ -106,25 +110,28 @@ strcpy(watch.query.status, "failed");
 agent_live_watch(&watch);
 ```
 
-每次 metadata、write、truncate 或 unlink 更新都会比较变更前后的集合：
+元数据修改、文件写入、截断或删除发生后，内核比较文件在修改前后是否属于查询结果：
 
-| 变更前 | 变更后 | `AGENT_EVENT_FILE_QUERY` payload |
+| 修改前 | 修改后 | `AGENT_EVENT_FILE_QUERY` 中的 `change` |
 | --- | --- | --- |
-| 未命中 | 命中 | `change=ENTER;...` |
-| 命中 | 仍命中且记录发生变化 | `change=UPDATE;...` |
-| 命中 | 未命中或对象删除 | `change=LEAVE;...` |
+| 不属于结果集 | 属于结果集 | `ENTER` |
+| 属于结果集 | 仍在结果集中，且记录发生变化 | `UPDATE` |
+| 属于结果集 | 不再属于结果集，或文件已经删除 | `LEAVE` |
 
-事件的 `corr_id` 是文件 fid，`cause_sequence` 携带可见 generation，payload 以紧凑十六进制字段给出 workflow lifecycle key。typed delivery 使用明确的 FILE_QUERY 模式，不经过 legacy substring filter。Agent 通过 `agent_wait()` 消费事件，结束时以原 `watch_id` 调用 `agent_live_unwatch()`。
+事件的 `corr_id` 是文件 `fid`，`cause_sequence` 记录可见的更新序号，事件数据中还以紧凑的十六进制字段给出工作流生命周期键。文件查询事件使用专门的 `FILE_QUERY` 类型，不再按旧接口的字符串包含关系过滤。智能体通过 `agent_wait()` 读取事件，结束订阅时把原 `watch_id` 交给 `agent_live_unwatch()`。
 
-## Generation resync
+<a id="generation-resync"></a>
+## 增量缺口与重新同步
 
-事件队列满、增量发布失败或 domain generation 出现缺口时，内核记录 sticky `resync_generation` 并投递 `RESYNC_REQUIRED`。正常连续 generation 变化仍发布 `ENTER/UPDATE/LEAVE`。恢复时旧 watch 保持活动，替代 watch 覆盖 snapshot 前后的变化：
+事件队列已满、增量事件发布失败，或更新序号出现缺口时，内核记录持续待确认的 `resync_generation`，并投递 `RESYNC_REQUIRED`。普通、连续的更新序号变化仍按 `ENTER`、`UPDATE` 或 `LEAVE` 发布，不会触发重新同步。
 
-1. 保存收到的 `resync_generation`；
-2. 使用原 typed query 安装 replacement watch，不携带 ACK；
-3. 执行 `agent_file_query()` 取得一致 snapshot；只有 `truncated == 0` 时该结果才是完整基线；
-4. 在旧 watch 上设置 `ACK_RESYNC` 与保存的 generation，再调用 `agent_live_unwatch()`；旧 watch 的移除与 ACK 位于同一内核临界区，replacement 已经活动；
-5. 合并 replacement watch 在 snapshot 之后到达的事件。若出现更大的 gap generation，则重复该过程。
+重新同步时，旧订阅不能提前移除。正确的交接顺序如下：
+
+1. 保存事件中的 `resync_generation`；
+2. 用原查询条件建立替代订阅，此时不要设置确认标志；
+3. 调用 `agent_file_query()` 取得一致快照，只有 `truncated == 0` 时，这份结果才是完整基线；
+4. 在旧订阅上设置 `ACK_RESYNC` 和保存的缺口序号，再调用 `agent_live_unwatch()`；确认缺口与移除旧订阅位于同一内核临界区，而替代订阅已经开始接收事件；
+5. 由替代订阅继续接收快照之后的事件，并按顺序补入基线。若出现更大的缺口序号，重新执行上述步骤。
 
 ```c
 struct agent_file_live_watch replacement = {0};
@@ -142,27 +149,31 @@ if (agent_live_watch(&replacement) == AGENT_STATUS_OK &&
 }
 ```
 
-结果被截断时，调用方移除 replacement 而不 ACK，继续保持旧 watch 与 sticky generation，并收紧 query；分页基线需要后续 ABI 扩展。ACK 只清除不晚于所携 generation 的缺口，新的更大 generation 仍保持 pending。workflow fence 会排空 tombstone、content delta 并尝试投递 resync marker；domain sticky generation 尚未 ACK 或 marker 仍待投递时返回 `AGENT_STATUS_RETRY`。close 成功后 lifecycle 进入 closing，最终回收阶段清理剩余 pending 状态。
+结果被截断时，应移除替代订阅，但不能确认缺口。旧订阅和待确认序号继续保留，调用方需要缩小查询范围。一次查询只有 8 个返回位置，当前又没有分页游标，因此被截断的结果不能作为完整基线。
 
-## VFS 增量与 inode incarnation
+一次确认只会清除不晚于所带序号的缺口，后来出现的更大缺口仍然等待处理。工作流阶段快照会先处理删除占位记录和文件内容增量，并尝试投递重新同步提示。只要该工作流仍有未确认的缺口，或者提示尚未成功投递，阶段快照就返回 `AGENT_STATUS_RETRY`。工作流关闭后，生命周期进入关闭中，后台清理程序随后处理剩余状态。
 
-已绑定 inode 的 write 与 truncate 将最新 size 和 content generation 投影回 catalog；unlink 先保存 `{lifecycle, scope, dev, inum, incarnation}` tombstone，再执行 exact remove。metadata transaction 忙时，tombstone 进入有界队列，后续 drain 仍以完整对象身份删除。
+<a id="vfs-增量与-inode-incarnation"></a>
+<a id="vfs-更新与-inode-代次号"></a>
+## VFS 更新与索引节点代次号
 
-`incarnation` 解决 inode number 复用问题。uCore 的 `ialloc()` 每次复用空闲 inode 时递增 `vfs_incarnation`；达到 `UINT_MAX` 的 inode 不再回收使用。Catalog selector、content receipt、digest cache、edit lease 和 pending unlink 都包含该字段，因此旧对象状态不会命中新文件。
+已登记 inode 被写入或截断后，最新文件大小和内容更新序号会同步到目录。删除文件时，内核先保存 `{lifecycle, scope, dev, inum, incarnation}` 删除记录，再精确移除对应登记项。元数据事务忙碌时，这条删除记录会进入有界队列；稍后处理时仍按完整文件身份查找。
+
+`incarnation` 用来区分 inode 编号的重复使用。uCore 的 `ialloc()` 每次重新分配空闲 inode 都会增加 `vfs_incarnation`；达到 `UINT_MAX` 后，该 inode 不再回收。目录选择器、内容回执、摘要缓存、编辑租约和待处理删除记录都保存这个字段，因此旧文件的状态不会落到新文件上。
 
 ```text
 旧文件 A = {dev=1, inum=42, incarnation=7}
 unlink(A)
 新文件 B = {dev=1, inum=42, incarnation=8}
 
-A 的 metadata / lease / tombstone  !=  B 的对象身份
+A 的元数据、租约和删除记录与 B 的文件身份不同
 ```
 
-核心实现可见 [`os/fs.c`](../../os/fs.c) 的 `ialloc()` 和 [`os/agent_metadata_catalog.c`](../../os/agent_metadata_catalog.c) 的 identity match。
+实现可见 [`os/fs.c`](../../os/fs.c) 中的 `ialloc()`，以及 [`os/agent_metadata_catalog.c`](../../os/agent_metadata_catalog.c) 中的文件身份比较。
 
 ## 编辑租约
 
-文件编辑通过 lease id、owner、scope、inode identity、base version 和 TTL 建立排他状态：
+编辑租约记录租约号、所有者、文件访问范围、inode 身份、基础版本和有效期，用来防止多个智能体同时提交同一文件：
 
 ```c
 int agent_file_edit_begin(const char *path, uint64 flags, int ttl_ticks,
@@ -172,23 +183,23 @@ int agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 int agent_file_edit_abort(uint64 lease_id);
 ```
 
-`begin` 返回当前 `base_version`；`commit` 和 `abort` 允许当前 owner，或同 scope/lifecycle 中具备 `AGENT_CAP_ORCHESTRATE` 的 Agent 操作 lease。过期租约会先被清理，后续 commit/abort 返回 `NOT_FOUND`；incarnation 或 expected version 不匹配返回 `STALE`。`ORCHESTRATOR_BREAK` 允许具备该能力的 Agent 强制释放冲突 lease；`BREAK_EXPIRED` 与未知 flag 在当前实现中不改变处理结果。
+`begin` 返回当前的 `base_version`。`commit` 和 `abort` 可以由租约所有者调用，也可以由同一工作流、同一文件访问范围内拥有 `AGENT_CAP_ORCHESTRATE` 的智能体调用。租约过期后会先被清理，再次提交或放弃时返回 `NOT_FOUND`；`incarnation` 或 `expected_version` 不符时返回 `STALE`。具有相应能力的智能体可以用 `ORCHESTRATOR_BREAK` 强制释放冲突租约。当前实现中，`BREAK_EXPIRED` 和未知标志不会改变处理结果。
 
 ## 性能结果
 
-同一 96-record corpus 的 16 组 traversal/indexed workflow-core 配对中，traversal 每次检查 97 条记录，indexed 检查 2 条。indexed 在 16 组中全部更快，core latency 中位数由 `34,712.5 us` 降至 `13,293.5 us`，配对加速比中位数为 `3.118x`。
+在同一份包含 96 条记录的数据上，我们进行了 16 组扫描查询与索引查询配对测试。扫描查询每次检查 97 条记录，索引查询只检查 2 条。16 组中索引查询全部更快，核心阶段中位耗时由 34,712.5 微秒降至 13,293.5 微秒，中位加速比为 3.118 倍。
 
-参数化负载覆盖 catalog size `24/64/96` 与 hit count `1/2/4/8`。12 个参数格的中位加速比为 `1.164x-2.808x`；ready index 的每查询中位时延在三个 catalog size 下约为 `98.3/100.5/108.3 us`。配对哑铃图、雨云图、ECDF、热力图和扫描状态分组结果见[性能测试](../performance.md#3-live-query-核心路径)。
+参数测试覆盖 24、64、96 三种目录规模，以及 1、2、4、8 四种命中数。12 组参数下，中位加速比为 1.164 至 2.808 倍；三个目录规模下，状态索引的单次查询中位耗时约为 98.3、100.5 和 108.3 微秒。详细图表见[性能测试](../performance.md#3-实时查询的核心阶段)。
 
 ## 测试与实现索引
 
-| 验证入口 | 覆盖内容 |
+| 验证入口 | 检查内容 |
 | --- | --- |
-| [`scripts/check-agent-live-query-fs.py`](../../scripts/check-agent-live-query-fs.py) | 显式 membership、snapshot lifecycle、完整 predicate、增量与 resync wiring |
-| [`scripts/test-agent-live-query-fs.py`](../../scripts/test-agent-live-query-fs.py) | source contract 的负向变体与回归检查 |
-| [`user/src/agentfs_ucore.c`](../../user/src/agentfs_ucore.c) | partial update、stale identity、重建同名文件、scan/index 等价性、truncate 与 delete |
-| [`user/src/agentscan_ucore.c`](../../user/src/agentscan_ucore.c) | 普通文件不入 catalog、typed `ENTER/UPDATE/LEAVE`、indexed result identity |
-| [`user/src/agentbench_ucore.c`](../../user/src/agentbench_ucore.c) | traversal/indexed 工作量、query ticks 与参数化 corpus |
+| [`scripts/check-agent-live-query-fs.py`](../../scripts/check-agent-live-query-fs.py) | 显式登记、快照生命周期、完整查询条件、增量事件和重新同步调用 |
+| [`scripts/test-agent-live-query-fs.py`](../../scripts/test-agent-live-query-fs.py) | 针对源码约束构造的错误输入与回归检查 |
+| [`user/src/agentfs_ucore.c`](../../user/src/agentfs_ucore.c) | 部分更新、过期文件身份、同名文件重建、扫描与索引等价、截断和删除 |
+| [`user/src/agentscan_ucore.c`](../../user/src/agentscan_ucore.c) | 普通文件不进入目录、`ENTER`、`UPDATE`、`LEAVE`、索引结果中的文件身份 |
+| [`user/src/agentbench_ucore.c`](../../user/src/agentbench_ucore.c) | 扫描与索引工作量、查询耗时和不同规模数据 |
 
 ```bash
 python3 -B scripts/check-agent-live-query-fs.py
@@ -200,11 +211,11 @@ AGENT_TEST_CASE=agentbench_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 
 | 模块 | 源码 |
 | --- | --- |
-| Catalog、bitmap 与 identity | [`os/agent_metadata_catalog.c`](../../os/agent_metadata_catalog.c)、[`os/agent_metadata_catalog.h`](../../os/agent_metadata_catalog.h) |
-| Planner 与 predicate | [`os/agent_metadata_query.c`](../../os/agent_metadata_query.c) |
-| Syscall owner 与对象操作 | [`os/agent_metadata_objects.c`](../../os/agent_metadata_objects.c)、[`os/agent_metadata.c`](../../os/agent_metadata.c) |
-| Typed watch 与 resync | [`os/agent_live_query_events.c`](../../os/agent_live_query_events.c)、[`os/agent_ipc.c`](../../os/agent_ipc.c) |
-| Size、digest、lease 与 generation | [`os/agent_file_state.c`](../../os/agent_file_state.c) |
-| VFS hook 与 inode allocation | [`os/file.c`](../../os/file.c)、[`os/fs.c`](../../os/fs.c) |
+| 文件目录、位图和文件身份 | [`os/agent_metadata_catalog.c`](../../os/agent_metadata_catalog.c)、[`os/agent_metadata_catalog.h`](../../os/agent_metadata_catalog.h) |
+| 查询与条件匹配 | [`os/agent_metadata_query.c`](../../os/agent_metadata_query.c) |
+| 系统调用和对象操作 | [`os/agent_metadata_objects.c`](../../os/agent_metadata_objects.c)、[`os/agent_metadata.c`](../../os/agent_metadata.c) |
+| 实时订阅与重新同步 | [`os/agent_live_query_events.c`](../../os/agent_live_query_events.c)、[`os/agent_ipc.c`](../../os/agent_ipc.c) |
+| 文件大小、摘要、租约和更新序号 | [`os/agent_file_state.c`](../../os/agent_file_state.c) |
+| VFS 调用点与 inode 分配 | [`os/file.c`](../../os/file.c)、[`os/fs.c`](../../os/fs.c) |
 
-公开查询字段和返回状态见 [API](../api.md)，事件等待与 workflow 收口见 [Workflow 运行时](workflow-runtime.md)。
+公开查询字段和返回状态见 [API](../api.md)，事件等待与工作流关闭过程见[工作流运行时](workflow-runtime.md)。

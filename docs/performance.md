@@ -1,157 +1,157 @@
 # AgentOS-uCore 性能测试
 
-性能实验围绕 Live Query、Agent Task 和 workflow EEVDF 三条内核路径展开。我们保存每次 QEMU 启动的串口原始输出和逐样本表，以配对统计观察同一 workload 的路径差异，以参数网格观察目录规模、命中数和并发度变化后的性能趋势。
+本轮测试集中检查实时查询、智能体任务和工作流 `EEVDF` 三条内核路径。每次 QEMU 独立启动的串口输出和每个样本的数据都完整保留。同一次启动中的两条路径使用相同的测试负载，可以直接配对比较；参数测试则改变目录规模、命中数和并发量，观察各项开销如何变化。
 
 ## 文档索引
 
-- [1. 实验环境与数据](#1-实验环境与数据)
-- [2. 采集设计与统计单位](#2-采集设计与统计单位)
-- [3. Live Query 核心路径](#3-live-query-核心路径)
-- [4. Catalog 参数网格](#4-catalog-参数网格)
-- [5. 首次扫描、重复扫描与索引](#5-首次扫描重复扫描与索引)
-- [6. Agent Task 传输路径](#6-agent-task-传输路径)
-- [7. Workflow EEVDF](#7-workflow-eevdf)
-- [8. 内核 I/O 与工作量](#8-内核-io-与工作量)
-- [9. 逐样本数据与重绘](#9-逐样本数据与重绘)
+- [1. 测试环境与数据](#1-测试环境与数据)
+- [2. 采集方法与统计单位](#2-采集方法与统计单位)
+- [3. 实时查询的核心阶段](#3-实时查询的核心阶段)
+- [4. 目录规模与命中数](#4-目录规模与命中数)
+- [5. 遍历查询与索引查询](#5-遍历查询与索引查询)
+- [6. 智能体任务传输](#6-智能体任务传输)
+- [7. 工作流 EEVDF 调度](#7-工作流-eevdf-调度)
+- [8. 内核 I/O 与单位工作量](#8-内核-io-与单位工作量)
+- [9. 查看数据并重新绘图](#9-查看数据并重新绘图)
 
-## 1. 实验环境与数据
+## 1. 测试环境与数据
 
 | 项目 | 配置 |
 | --- | --- |
-| Host | WSL2，x86_64 |
-| Guest | QEMU RISC-V64 `virt`，单 Hart |
+| 宿主机 | WSL2，x86_64 |
+| 客户机 | QEMU RISC-V64 `virt`，单核（1 个 Hart） |
 | 编译器 | `riscv64-linux-gnu-gcc 15.2.0` |
 | QEMU | `10.2.1` |
-| 采集时间 | 2026-08-11 00:27:57-01:03:08 UTC |
+| 采集时间 | 2026-08-11 00:27:57 至 01:03:08 UTC |
 | 源码提交 | `2b14fb1f74b9bd093e6de939a16554620835699e` |
-| 数据规模 | 30 次 fresh boot，33 个原始文件，19 张 CSV 表，7,498 行 |
+| 数据量 | QEMU 独立启动 30 次，33 个原始输出文件，19 个 CSV 文件，共 7,498 行 |
 
-[`manifest.json`](../one_shot_metrics/data/20260811/manifest.json) 保存源码提交、工具版本、Guest 源码摘要、构建产物摘要、采集计划和文件清单。[`validation.json`](../one_shot_metrics/data/20260811/validation.json) 核对 schema、配对关系、参数网格、逐操作行数和绘图输入，当前结果为 `valid=true`、`ready=true`。
+[`manifest.json`](../one_shot_metrics/data/20260811/manifest.json) 记录源码提交、工具版本、客户机源码摘要、构建产物摘要、采集安排和文件清单。[`validation.json`](../one_shot_metrics/data/20260811/validation.json) 检查字段格式、样本配对、参数组合、逐操作行数和绘图输入，结果为 `valid=true`、`ready=true`。
 
-## 2. 采集设计与统计单位
+## 2. 采集方法与统计单位
 
-fresh QEMU boot 是实验 block；同一 boot 内的路径共享 workload、文件系统初始状态和 Guest 构建。配对实验先比较同一 block 中的两条路径，再汇总配对差值或加速比。boot 内的重复轮次保留为嵌套样本，用于展示分布和中位数。
+每次 QEMU 独立启动算一个测试批次。同一批次内的两条路径共用测试负载、文件系统初始状态和客户机程序。我们先计算同批次的差值或加速比，再汇总各批次结果。一次启动内的多轮重复测试也逐条保留，用来展示分布和中位数。
 
-| 内核路径 | Block | 配对或重复单位 | 原始样本 |
+| 内核功能 | 独立启动次数 | 每个测试批次的安排 | 样本数 |
 | --- | ---: | --- | ---: |
-| Live Query workflow | 16 次 boot | 每个 boot 内 traversal/indexed 组成 1 对，AB/BA 各 8 对 | 16 个 core 对、16 个 E2E 对 |
-| Catalog 参数网格 | 4 次 boot | 每个 catalog size × hit count 单元 15 对，单元内 AB/BA 交替 | 180 对、360 条路径样本 |
-| Agent Task | 4 次 boot | 每条 sequence 含 16 个等价 ECHO；每 boot、每路径 8 轮 | 96 条 sequence、1,536 条 operation |
-| Workflow EEVDF | 6 次 boot | 并发度 1-4 的 workflow 组与 exact wake probe | 180 条 workflow、504 条 wake probe |
+| 实时查询工作流 | 16 | 每次启动各运行一次遍历查询和索引查询；`AB/BA` 各 8 次 | 核心阶段 16 对，完整流程 16 对 |
+| 查询参数组合 | 4 | 目录规模与命中数的每种组合运行 15 对，组内交替使用 `AB/BA` 顺序 | 180 对，共 360 条路径样本 |
+| 智能体任务 | 4 | 每轮发送 16 个等价的 `ECHO` 操作；每次启动、每条路径运行 8 轮 | 96 轮，共 1,536 次操作 |
+| 工作流 `EEVDF` | 6 | 运行 1 至 4 个并发工作流；另行测试 16 个工作流分批到达的负载，以及单个工作流使用 4 个线程的负载 | 180 个工作流，504 条唤醒采样 |
 
-Live Query 的 workflow core 和 end-to-end 使用两套计时窗口：
+实时查询分别记录核心阶段和完整流程。两个计时范围如下：
 
-| 计时窗口 | 起止范围 | 回答的问题 |
+| 计时范围 | 包含步骤 | 用途 |
 | --- | --- | --- |
-| workflow core | query、recovery write、`fsync`、结果复核 | 索引是否缩短 Agent 工作核心路径 |
-| end-to-end | 文件准备、metadata 登记、完整 workflow、清理 | 一次完整运行在当前启动方式下耗时多少 |
+| 核心阶段 | 查询、恢复写入、`fsync` 和结果复核 | 比较索引查询能否缩短工作流主要处理步骤的耗时 |
+| 完整流程 | 文件准备、元数据登记、工作流运行和清理 | 统计按当前启动方式完成一次任务的总用时 |
 
-这两个窗口分别统计并保持配对，正文结论也按窗口给出。
+两组时间都按同一次启动配对统计，后文分别给出结果。
 
-## 3. Live Query 核心路径
+## 3. 实时查询的核心阶段
 
-我们在同一份 96-record catalog 上运行 traversal 与 indexed。两条路径得到相同结果 hash；traversal 每次检查 97 条记录，indexed 检查 2 条。路径次序在 16 个 boot 中按 AB/BA 平衡。
+测试在同一份含 96 条记录的目录上分别运行遍历查询和索引查询。两种查询得到相同的结果摘要。遍历查询每次检查 97 条记录，索引查询检查 2 条。16 次独立启动采用均衡的 `AB/BA` 顺序。
 
-| 指标 | Traversal | Indexed | 同 boot 配对结果 |
+| 指标 | 遍历查询 | 索引查询 | 同批次比较 |
 | --- | ---: | ---: | ---: |
-| core duration 中位数 | 34,712.5 us | 13,293.5 us | `indexed - traversal` 中位数 -23,441.5 us |
-| core 加速比 | - | - | `traversal / indexed` 中位数 3.118x |
-| indexed 更快的 core 对 | - | - | 16/16 |
-| end-to-end 中位数 | 711,283.5 us | 723,928.0 us | 配对差值中位数 +13,452 us |
-| indexed 更快的 E2E 对 | - | - | 3/16 |
+| 核心阶段中位数 | 34,712.5 微秒 | 13,293.5 微秒 | “索引查询减遍历查询”的中位数为 -23,441.5 微秒 |
+| 核心阶段加速比 | - | - | “遍历查询耗时除以索引查询耗时”的中位数为 3.118 倍 |
+| 索引查询较快的批次 | - | - | 16 组（全部） |
+| 完整流程中位数 | 711,283.5 微秒 | 723,928.0 微秒 | 配对差值中位数为 +13,452 微秒 |
+| 索引查询较快的完整流程批次 | - | - | 3 组（共 16 组） |
 
-[![Live Query core 与 end-to-end](figures/performance/07_core_end_to_end_scope.png)](figures/performance/07_core_end_to_end_scope.pdf)
+[![实时查询的核心阶段与完整流程用时](figures/performance/07_core_end_to_end_scope.png)](figures/performance/07_core_end_to_end_scope.pdf)
 
-core 配对全部指向 indexed，说明 metadata 索引已经把查询、恢复写入和复核组成的核心路径缩短。当前 end-to-end 中，文件创建、metadata 登记、workflow 建立和清理占据了更多时间，indexed 的配对中位差为 `+13.452 ms`。因此，长驻 workflow 复用 catalog 与 lifecycle 时更容易把 core 收益转化为整体收益。
+16 个测试批次中，索引查询的核心阶段都更短，中位加速比为 3.118 倍。把文件准备、元数据登记和清理一并计入后，索引查询的完整流程反而多用 13.452 毫秒，只有 3 个批次更快。由此可见，本次运行的总时间主要耗在准备和收尾。如果工作流长期运行并反复使用同一目录，核心阶段节省的时间才更容易体现在完整流程中。
 
-[![Live Query 配对时延分布](figures/performance/01_paired_core_performance.png)](figures/performance/01_paired_core_performance.pdf)
+[![同次启动下两种查询方式的用时对比](figures/performance/01_paired_core_performance.png)](figures/performance/01_paired_core_performance.pdf)
 
-图中的哑铃连接同一次 boot 的 traversal 与 indexed；雨云图保留 16 组 core latency；ECDF 使用同 boot 的 `indexed - traversal` 差值。AB 与 BA 两组 core 加速比中位数分别为 `1.454x` 和 `5.481x`，次序效应较明显，因而主结果采用同 boot 配对差值，并在采集时保持 8/8 的顺序平衡。
+图中每条连线表示同一次启动中的一对结果，中间的分布图保留 16 组核心阶段用时，累计分布图使用“索引查询减遍历查询”的配对差值。`AB` 和 `BA` 两组的核心阶段加速比中位数分别为 1.454 倍和 5.481 倍，说明运行先后对结果有明显影响。因此，我们以同批次差值作为主要统计量，并在采集时让两种顺序各占 8 次。
 
-## 4. Catalog 参数网格
+## 4. 目录规模与命中数
 
-参数实验将 catalog size 设为 24、64、96，将 hit count 设为 1、2、4、8。每个单元运行 15 个 scan/index 对，先核对 workload fingerprint 与 result fingerprint，再计算 `scan / index` 加速比中位数。
+参数测试采用 24、64、96 三种目录规模，以及 1、2、4、8 四种命中数。每种组合运行 15 对遍历查询和索引查询。统计用时前，先核对测试负载指纹和结果指纹。
 
-| Catalog size | 1 hit | 2 hits | 4 hits | 8 hits |
+| 目录记录数 | 命中 1 条 | 命中 2 条 | 命中 4 条 | 命中 8 条 |
 | ---: | ---: | ---: | ---: | ---: |
-| 24 | 1.164x | 1.207x | 1.231x | 1.371x |
-| 64 | 2.032x | 1.995x | 2.534x | 2.361x |
-| 96 | 2.283x | 2.808x | 2.704x | 2.772x |
+| 24 | 1.164 倍 | 1.207 倍 | 1.231 倍 | 1.371 倍 |
+| 64 | 2.032 倍 | 1.995 倍 | 2.534 倍 | 2.361 倍 |
+| 96 | 2.283 倍 | 2.808 倍 | 2.704 倍 | 2.772 倍 |
 
-[![Catalog size 与 hit count 加速比](figures/performance/02_catalog_speedup_landscape.png)](figures/performance/02_catalog_speedup_landscape.pdf)
+[![目录规模和命中数对查询加速比的影响](figures/performance/02_catalog_speedup_landscape.png)](figures/performance/02_catalog_speedup_landscape.pdf)
 
-热力图给出 12 个实测单元，三维曲面使用同一组单元中位数。最小值出现在 `24 × 1`，为 `1.164x`；最大值出现在 `96 × 2`，为 `2.808x`。catalog 扩大后，scan 的候选处理量随目录增长，索引路径把候选集合保持在命中附近。当前数据支持在中大型 catalog 上优先建立索引，并把 hit count 作为选择性参数保留在查询计划中。
+图中的热力图和三维曲面都采用这 12 组实测中位数。加速比最小的是目录 24 条、命中 1 条，为 1.164 倍；最大的是目录 96 条、命中 2 条，为 2.808 倍。目录扩大后，遍历查询需要处理更多候选记录，而索引查询的工作量主要随命中数变化。记录较多时可优先使用索引，同时根据预期命中数选择查询方式。
 
-## 5. 首次扫描、重复扫描与索引
+## 5. 遍历查询与索引查询
 
-采集程序先执行显式 warmup，再记录每个参数组的 first retained scan、后续 scan 和 ready index。这里的“首次”指 warmup 后保留的第一条计时样本。每个 catalog 的 first retained scan 有 4 条，后续 scan 有 56 条，ready index 有 60 条。
+采集程序先进行一次预热，再记录每组参数中的第一个遍历查询、后续遍历查询和索引就绪后的查询。这里的“第一个”是指预热后保留下来的第一条计时样本。每种目录规模有 4 个首个遍历查询样本、56 个后续遍历查询样本和 60 个索引查询样本。
 
-| Catalog size | First retained scan | 后续 scan | Ready index |
+| 目录记录数 | 首个遍历查询（微秒） | 后续遍历查询（微秒） | 索引查询（微秒） |
 | ---: | ---: | ---: | ---: |
-| 24 | 133.1 us/query | 127.8 us/query | 98.3 us/query |
-| 64 | 187.5 us/query | 218.8 us/query | 100.5 us/query |
-| 96 | 388.5 us/query | 255.1 us/query | 108.3 us/query |
+| 24 | 133.1 | 127.8 | 98.3 |
+| 64 | 187.5 | 218.8 | 100.5 |
+| 96 | 388.5 | 255.1 | 108.3 |
 
-[![扫描状态分组](figures/performance/03_scan_state_groups.png)](figures/performance/03_scan_state_groups.pdf)
+[![不同目录规模下两种查询方式的用时](figures/performance/03_scan_state_groups.png)](figures/performance/03_scan_state_groups.pdf)
 
-ready index 的中位时延从 24 条目录的 `98.3 us/query` 增至 96 条目录的 `108.3 us/query`；同期 first retained scan 增至 `388.5 us/query`。索引路径对 catalog size 的变化更平缓，适合作为多轮 Agent 查询的常驻数据结构。
+目录从 24 条增至 96 条时，索引查询的中位用时从 `98.3 微秒` 增至 `108.3 微秒`，首个遍历查询则增至 `388.5 微秒`。索引查询受目录规模影响较小，适合智能体在多轮查询中反复使用。
 
-## 6. Agent Task 传输路径
+## 6. 智能体任务传输
 
-每条 sequence 发送 16 个语义等价的 ECHO 操作，三条路径的结果 fingerprint 均为 `31`。4 次 boot 各执行 8 轮，每条路径得到 32 个 sequence 样本。一次性测量 Guest 使用微秒计时保存 sequence 起止点，并为 1,536 个 operation 保存 service-start interval。
+每轮测试发送 16 个含义相同的 `ECHO` 操作，三种传输方式得到的结果指纹均为 `31`。4 次独立启动中，每种方式各运行 8 轮，因此各有 32 轮数据。客户机以微秒为单位记录每轮的起止时刻，并为全部 1,536 次操作保存开始执行的间隔。
 
-| 路径 | Sequence 样本 | 中位数 | IQR | 路径 syscall/sequence |
+| 传输方式 | 轮数 | 中位数 | 四分位距 | 每轮系统调用数 |
 | --- | ---: | ---: | ---: | ---: |
-| Batch | 32 | 561.0 us | 533.75-663.0 us | 1 |
-| Scalar V3 | 32 | 2,051.0 us | 1,833.0-2,226.0 us | 16 |
-| SQ/CQ | 32 | 1,620.5 us | 1,472.0-1,755.5 us | 2 |
+| 批量提交（Batch） | 32 | 561.0 微秒 | 533.75 至 663.0 微秒 | 1 |
+| 逐项提交（Scalar V3） | 32 | 2,051.0 微秒 | 1,833.0 至 2,226.0 微秒 | 16 |
+| 任务队列（`SQ/CQ`） | 32 | 1,620.5 微秒 | 1,472.0 至 1,755.5 微秒 | 2 |
 
-[![Batch、Scalar V3 与 SQ-CQ 延迟](figures/performance/04_task_latency_distributions.png)](figures/performance/04_task_latency_distributions.pdf)
+[![三种任务传输方式的用时分布](figures/performance/04_task_latency_distributions.png)](figures/performance/04_task_latency_distributions.pdf)
 
-左图用雨云图展示 16-operation sequence 的全部样本，右图用对数横轴 ECDF 比较尾部。Batch 把 16 个描述符合并为一次进入，在当前同步 ECHO 负载中取得最低中位时延；SQ/CQ 用两次 enter 完成提交和收割，低于逐操作进入的 Scalar V3。Task Channel 的 setup、lifecycle info 和 contract 创建在 sequence 窗口外单独计数，适合由长驻 channel 在多轮任务间摊销。
+左图给出各轮用时的完整分布，右图以对数横轴比较累计分布。批量方式在一次系统调用中提交 16 个描述符，中位用时最低；`SQ/CQ` 分两次进入内核，分别提交和收取结果；逐项 V3 调用每次只提交一个操作，用时最高。任务通道的建立、生命周期信息读取和执行约定创建没有计入每轮用时。如果多轮任务使用同一个通道，这些准备工作就不必每轮重复。
 
-## 7. Workflow EEVDF
+## 7. 工作流 EEVDF 调度
 
-6 次 boot 分别运行并发度 1、2、3、4 的 workflow 组，同时记录 16 次逻辑到达和 4 路线程放大场景。exact wake probe 跟踪 workflow 从进入 runnable 到实际 dispatch 的等待；公平性使用同一 boot、同一并发组内各 workflow 的原始 `service_cycles` 计算：
+6 次独立启动分别运行 1、2、3、4 个并发工作流。系统一次最多容纳 4 个工作流，因此 16 个工作流分成 4 批运行。线程数放大场景同样运行 4 个工作流，其中一个使用 4 个忙线程，其余三个各用 1 个线程。唤醒采样只记录每批新建的工作流，不包含承担引导作用的工作流；它测量新工作流从进入可运行状态到真正获得调度所等待的时钟滴答数。公平性使用同一次启动、同一并发组内各工作流的原始 `service_cycles` 计算：
 
 \[
 J(x_1,\ldots,x_n)=\frac{(\sum_i x_i)^2}{n\sum_i x_i^2}.
 \]
 
-| 并发 workflow | Boot 数 | Jain fairness 中位数 |
+| 并发工作流数 | 独立启动次数 | Jain 公平指数中位数 |
 | ---: | ---: | ---: |
 | 1 | 6 | 1.000000 |
 | 2 | 6 | 0.999985 |
 | 3 | 6 | 0.999993 |
 | 4 | 6 | 0.999985 |
 
-[![EEVDF 唤醒延迟与 Jain 公平性](figures/performance/05_eevdf_latency_fairness.png)](figures/performance/05_eevdf_latency_fairness.pdf)
+[![工作流唤醒等待与调度公平性](figures/performance/05_eevdf_latency_fairness.png)](figures/performance/05_eevdf_latency_fairness.pdf)
 
-504 条 exact wake probe 中，425 条为 0 tick，79 条为 1 tick，没有右删失样本。并发参数组的 Jain 中位数均不低于 `0.99998`，所有单 boot 结果中的最小值为 `0.999918`。这组结果表明，当前单 Hart 负载下，被唤醒的 workflow 从进入 runnable 到获得 dispatch 的延迟为 0-1 tick，workflow service 在并发度 1-4 时保持接近均分。
+504 条唤醒采样中，425 条等待 0 个时钟滴答，79 条等待 1 个时钟滴答，没有尚未完成的样本。各并发组的 Jain 公平指数中位数都不低于 `0.99998`，所有单次启动结果中的最小值为 `0.999918`。在本次单核测试中，工作流被唤醒后最多等待 1 个时钟滴答，1 至 4 个并发工作流获得的处理时间也基本均衡。
 
-## 8. 内核 I/O 与工作量
+## 8. 内核 I/O 与单位工作量
 
-I/O 图把不同路径的工作量换算到可比较的业务单位。Live Query 的 lane counter 使用 workflow-core 窗口，目录、块和 VirtIO counter 使用全局 end-to-end 增量；两类 counter 都保留 owner、scope、window 与原始串口证据路径。Agent Task 则按 completed operation 归一化 syscall、描述符字节、control 字节和调度计数。
+为便于比较，我们把各条路径的计数换算为每次查询或每次操作的工作量。实时查询的通道计数取自核心阶段，目录、块设备和 VirtIO 计数取自完整流程的前后差值。CSV 中仍保留所属模块、统计范围和计时区间三个原始字段（`owner`、`scope`、`window`），并可回查对应的串口输出。智能体任务则按已完成操作数折算系统调用、描述符字节、控制字节和调度次数。
 
-[![归一化内核 I/O 与工作量](figures/performance/06_normalized_io_heatmaps.png)](figures/performance/06_normalized_io_heatmaps.pdf)
+[![各内核路径的单位工作量](figures/performance/06_normalized_io_heatmaps.png)](figures/performance/06_normalized_io_heatmaps.pdf)
 
-热力图每一项在自身指标内比较路径，色值按该指标的最大绝对值归一化。Live Query core 中，traversal 每对检查 97 条记录并读取 7,811 bytes，indexed 检查 2 条记录且该 lane 的 `bytes_read` 为 0。Agent Task 的 syscall 强度分别为 Batch `0.0625`、Scalar V3 `1.0`、SQ/CQ `0.125` 次/operation，与 sequence 延迟的路径排序一致。工程上可以通过复用索引、批量提交和长驻 Task Channel 减少每项业务操作进入内核的固定成本。
+每项指标单独着色：绝对值最大的一项颜色最深，其余按比例变浅。实时查询的核心阶段中，遍历查询每对检查 97 条记录并读取 7,811 字节；索引查询检查 2 条记录，该计时段记录的 `bytes_read` 为 0。智能体任务每完成一次操作，批量提交、逐项 V3 提交和 `SQ/CQ` 的系统调用数分别为 `0.0625`、`1.0` 和 `0.125`，与三种提交方式的用时顺序一致。复用索引、批量提交并长期保留任务通道，可以减少每次业务操作重复进入内核的开销。
 
-## 9. 逐样本数据与重绘
+## 9. 查看数据并重新绘图
 
-| 数据 | 路径 | 用途 |
+| 数据 | 文件 | 用途 |
 | --- | --- | --- |
-| Live Query 配对 | [`contest_paired.csv`](../one_shot_metrics/data/20260811/tables/contest_paired.csv) | core/E2E 配对差值、加速比与 AB/BA |
-| Catalog 参数网格 | [`agenteval_pairs.csv`](../one_shot_metrics/data/20260811/tables/agenteval_pairs.csv) | 12 单元热力图与三维曲面 |
-| 扫描状态样本 | [`agenteval_samples.csv`](../one_shot_metrics/data/20260811/tables/agenteval_samples.csv) | first retained、repeat、ready index 分组 |
-| Task sequence | [`task_sequences.csv`](../one_shot_metrics/data/20260811/tables/task_sequences.csv) | 16-operation latency 分布 |
-| Task operation | [`task_operations.csv`](../one_shot_metrics/data/20260811/tables/task_operations.csv) | 逐 operation service-start interval |
-| EEVDF wake | [`eevdf_wakeups.csv`](../one_shot_metrics/data/20260811/tables/eevdf_wakeups.csv) | exact wakeup latency ECDF |
-| EEVDF service | [`eevdf_samples.csv`](../one_shot_metrics/data/20260811/tables/eevdf_samples.csv) | Jain fairness 重算 |
-| 归一化工作量 | [`contest_io_normalized.csv`](../one_shot_metrics/data/20260811/tables/contest_io_normalized.csv)、[`task_perf_normalized.csv`](../one_shot_metrics/data/20260811/tables/task_perf_normalized.csv) | kernel I/O 与 Task 路径热力图 |
-| QEMU 串口输出 | [`raw/`](../one_shot_metrics/data/20260811/raw/) | CSV 字段的原始 marker 与来源摘要 |
+| 实时查询配对数据 | [`contest_paired.csv`](../one_shot_metrics/data/20260811/tables/contest_paired.csv) | 核心阶段和完整流程的配对差值、加速比及 `AB/BA` 顺序 |
+| 查询参数组合 | [`agenteval_pairs.csv`](../one_shot_metrics/data/20260811/tables/agenteval_pairs.csv) | 12 种组合的热力图和三维曲面 |
+| 查询状态样本 | [`agenteval_samples.csv`](../one_shot_metrics/data/20260811/tables/agenteval_samples.csv) | 首个遍历查询、后续遍历查询和索引查询分组 |
+| 任务轮次 | [`task_sequences.csv`](../one_shot_metrics/data/20260811/tables/task_sequences.csv) | 每轮 16 次操作的用时分布 |
+| 单次任务操作 | [`task_operations.csv`](../one_shot_metrics/data/20260811/tables/task_operations.csv) | 每次操作开始执行的间隔 |
+| `EEVDF` 唤醒 | [`eevdf_wakeups.csv`](../one_shot_metrics/data/20260811/tables/eevdf_wakeups.csv) | 唤醒等待的累计分布 |
+| `EEVDF` 服务量 | [`eevdf_samples.csv`](../one_shot_metrics/data/20260811/tables/eevdf_samples.csv) | 重新计算 Jain 公平指数 |
+| 单位工作量 | [`contest_io_normalized.csv`](../one_shot_metrics/data/20260811/tables/contest_io_normalized.csv)、[`task_perf_normalized.csv`](../one_shot_metrics/data/20260811/tables/task_perf_normalized.csv) | 内核 I/O 和智能体任务热力图 |
+| QEMU 串口输出 | [`raw/`](../one_shot_metrics/data/20260811/raw/) | CSV 各字段对应的原始标志行和来源摘要 |
 
-重新校验冻结表：
+重新检查已有表格：
 
 ```bash
 python3 one_shot_metrics/validate.py \
@@ -159,11 +159,11 @@ python3 one_shot_metrics/validate.py \
   --output ../agentos-validation.json
 ```
 
-把文档图重绘到仓库外目录：
+把文档中的七张图重新绘制到仓库外目录：
 
 ```bash
 python3 docs/figures/performance/make_doc_figures.py \
   --output-dir ../agentos-figures
 ```
 
-绘图脚本从 CSV 表读取数据，生成 PNG、PDF 与 SVG，并在结束前再次核对每张输入表的 SHA-256。日常 Guest 回归与一次性性能活动的关系见[测试说明](testing.md)。
+绘图脚本会读取 CSV 文件，生成 PNG、PDF 和 SVG，并在结束前重新核对每张输入表的 SHA-256。日常客户机测试与本轮性能采集的关系见[测试说明](testing.md)。
