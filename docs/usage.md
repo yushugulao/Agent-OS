@@ -58,6 +58,15 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 
 `agentos-build` 先编译 Guest 中的 Agent 程序和文件系统镜像，再生成以 `agentfinal_ucore` 为入口的内核。后三条命令分别检查内核态和用户态共用的 `ABI`、AgentOS 模块之间的调用关系，以及实际内核调用链的栈空间。构建完成时会看到 `Build kernel done`，其余检查通过时退出码为 `0`。
 
+需要按赛题五项机制串联检查 Agent 创建与地址空间、结构化工具、Context 路径、文件查询和 Agent Loop 时，运行：
+
+```bash
+AGENT_TEST_CASE=agenteval_ucore \
+  make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+该程序在同一个 QEMU Guest 中运行五段真实负载，Host 还会核对本次启动的随机挑战值、负载指纹和结果指纹。各段可观察行为见[测试说明](testing.md#42-单独运行一个场景)。
+
 ## 2. 运行固定 replay
 
 固定 replay 使用仓库中预先保存的模型回复，每条回复都绑定请求的 `SHA-256` 摘要，因此可以重复得到相同结果。replay 仍会真正启动 QEMU，并执行 Guest 工具、Context commit、审批和会话关闭等步骤。我们先用它检查整条运行链，再接入在线 provider。
@@ -148,6 +157,8 @@ Nexus 支持 Console 的全部命令，并增加三个工作流查询命令：
 | `/artifacts` | 查看当前工作流产生的 artifact handle、来源和摘要 |
 
 四个 Agent 各自拥有 PID、`identity` 和 Context。它们通过内核 `MESSAGE` 和 Nexus `N1` 消息传递任务。generation-safe artifact handle 与 lifecycle generation 绑定，访问时可以排除跨 generation 的旧句柄；任务失败后可以重新分派，最后由 Coordinator 汇总结果。
+
+每份 artifact 的 header 与 payload 由 `agent_file_publish()` 一次提交。内核写完整内容后才接入正式文件名，所以读取方不会遇到只写了一半的结果；同名文件已经存在时也不会被覆盖。若调用返回 `DUPLICATE` 或 `INDETERMINATE`，Nexus 会回读正式路径，只有内容与本次提交逐字节相同且文件恰好在 payload 后结束，才按幂等发布继续处理。
 
 ## 5. 接入 DeepSeek
 

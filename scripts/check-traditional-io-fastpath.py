@@ -142,6 +142,7 @@ def check(root: Path) -> None:
     work = compact(root / "os/kernel_work.c")
     file_source = compact(root / "os/file.c")
     fs_source = compact(root / "os/fs.c")
+    metadata_source = compact(root / "os/agent_metadata_objects.c")
     pipe = compact(root / "os/pipe.c")
     syscall = compact(root / "os/syscall.c")
     trap = compact(root / "os/trap.c")
@@ -260,6 +261,14 @@ def check(root: Path) -> None:
         "#defineFS_OVERWRITE_EPOCH_CREDITS1U",
         "existing-block writes still reserve the full allocation epoch",
     )
+    durability_fence = function(
+        metadata_source, "agent_metadata_durability_fence_current"
+    )
+    require(
+        durability_fence,
+        "if(p==0)return-1;if(!p->is_agent)return0;",
+        "ordinary processes cannot use fsync without Agent metadata state",
+    )
     write_prepare = function(fs_source, "writei_prepare_locked")
     require(
         write_prepare,
@@ -372,11 +381,17 @@ def check(root: Path) -> None:
     )
     reject(fstat, "ivalid(", "fstat can issue block I/O from its fast class")
 
-    if syscall.count("syscall_fd_pin(") != 2:
-        raise ValueError("descriptor object is not pinned exactly once")
     if syscall.count("syscall_file_uses_disk(") != 2:
         raise ValueError("pinned file classification is not single-pass")
     prepare = function(syscall, "syscall_transaction_prepare")
+    if prepare.count(
+        "transaction->file=syscall_fd_pin(trapframe->a0);"
+    ) != 1:
+        raise ValueError("read/write descriptor is not pinned exactly once")
+    if prepare.count(
+        "transaction->file=syscall_fd_pin(control.source_handle);"
+    ) != 1:
+        raise ValueError("Task import descriptor is not pinned exactly once")
     require(
         prepare,
         "transaction->file=syscall_fd_pin(trapframe->a0);",
@@ -504,7 +519,8 @@ def check(root: Path) -> None:
     if any(classes.get(name) != "BLOCK_IO" for name in expected_read_io):
         raise ValueError("read-only Agent I/O acquired the filesystem mutation epoch")
     expected_edit_io = {
-        "agent_file_edit_begin", "agent_file_edit_state", "agent_worker_create",
+        "agent_file_edit_begin", "agent_file_edit_state", "agent_file_publish",
+        "agent_worker_create",
     }
     if any(classes.get(name) != "BLOCK_IO_FS_EPOCH" for name in expected_edit_io):
         raise ValueError("Agent object cleanup can release an inode without an FS epoch")

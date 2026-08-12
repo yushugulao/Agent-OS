@@ -1,6 +1,6 @@
-# Workflow Runtime
+# Agent Loop 内核运行机制
 
-AgentOS 把事件等待、可信 IPC、模型请求、Workflow Credit Domain、工作流 EEVDF 和阶段记录放在同一个生命周期中。Agent（智能体）暂时没有任务时进入内核等待；文件变化、协作消息、心跳、截止时间或模型响应到达后，内核将其唤醒。工具与事件的 terminal state（终态）继续写入 Context（运行上下文）和 Evidence Ring。
+Agent Loop 的决策过程留在 Guest，内核负责跨轮次仍需保持一致的运行机制。AgentOS 把事件等待、可信 IPC、模型请求、Workflow Credit Domain、工作流 EEVDF 和阶段记录放在同一个生命周期中。Agent（智能体）暂时没有任务时进入内核等待；文件变化、协作消息、心跳、截止时间或模型响应到达后，内核将其唤醒。工具与事件的 terminal state（终态）继续写入 Context（运行上下文）和 Evidence Ring。
 
 ## 文档索引
 
@@ -184,6 +184,8 @@ selected = arg min(virtual_deadline) among eligible workflows
 
 逐次唤醒数据位于 [`one_shot_metrics/data/20260811/tables/eevdf_wakeups.csv`](../../one_shot_metrics/data/20260811/tables/eevdf_wakeups.csv)，各工作流 CPU 周期数据位于 [`eevdf_samples.csv`](../../one_shot_metrics/data/20260811/tables/eevdf_samples.csv)，累计分布和公平性图见[性能测试](../performance.md#7-工作流-eevdf-调度)。
 
+测试中的 Agent 在等待事件时实际进入睡眠，504 次准确唤醒又都在 0–1 tick 内重新获得 CPU，说明等待接口能够避免无任务时忙轮询，同时保持及时唤醒。0 tick 只表示等待短于 10 ms 的计时粒度，并不代表调度没有成本。1 至 4 个并发工作流的 Jain 指数均接近 1，说明共享 `service_cycles` 的外层 EEVDF 基本做到了按工作流分配 CPU；一个工作流扩大到 4 个忙线程时仍取得 `26.895%` 份额，略高于四等分的 `25%`，因此线程放大已经受到抑制，但还不是绝对无偏。
+
 ## 六、Evidence Ring 与 Workflow Fence
 
 ### 6.1 Evidence Ring
@@ -241,6 +243,8 @@ agent_evidence_seal(key, fence_sequence, challenge,
 
 协调 Agent 通过内核 `MESSAGE` 发送类型化任务。系统观察 Agent 和资料检索 Agent 用 `PROGRESS` 消息返回阶段数据，协调 Agent 收到后把数据写成工作流 artifact，再把 artifact 句柄交给下一角色。分析 Agent 通过 `TASK_RESULT` 返回报告句柄。协调 Agent 随后发起需要审批的发布请求。内核确认发布参数与用户批准的内容一致后，才执行最终发布。artifact 的读取权限由权限掩码控制。外部模型仍由 Host（宿主机）中的 Provider 中继连接，Guest（客户机）只保存轮次、关联编号、角色、Tool Registry 和 artifact 状态。
 
+artifact 发布使用 `agent_file_publish()`：内核先在未命名 inode 中写完 header 与 payload，再把正式文件名接入目录。同名并发发布只允许一个胜出且不覆盖已有文件；返回 `DUPLICATE` 或 `INDETERMINATE` 时，Nexus 必须逐字节回读正式路径并确认 EOF，内容完全相同才把它视为同一次结果的幂等重放。
+
 Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 连接沿用 [`host_tools/agentos_relayd.py`](../../host_tools/agentos_relayd.py)。运行方法见[运行指南](../usage.md#4-使用多-agent-工作流)。
 
 ## 八、源码位置与测试
@@ -253,6 +257,7 @@ Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_
 | 工作流 EEVDF | [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)、[`os/proc.c`](../../os/proc.c) |
 | Evidence Ring 与 Workflow Fence | [`os/agent_evidence_ring.c`](../../os/agent_evidence_ring.c)、[`os/agent_workflow_fence.c`](../../os/agent_workflow_fence.c) |
 | 运行时间线 | [`os/agent_observe_timeline.c`](../../os/agent_observe_timeline.c) |
+| Nexus 任务与 artifact 发布 | [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c)、[`os/agent_file_state.c`](../../os/agent_file_state.c)、[`os/fs.c`](../../os/fs.c) |
 
 Runtime 测试覆盖无丢失唤醒、慢订阅者隔离、心跳、消息路由、Workflow Credit Domain、Evidence Ring 票号、Workflow Fence 重试、EEVDF 和 Nexus Replay：
 
@@ -273,4 +278,4 @@ make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 
 Guest 日志校验器检查 `broadcast_slow_watcher_isolated=1`、心跳动态调整、合并与停止、28 次没有惊群的事件交接、EEVDF 拓扑和唤醒分组等标记。固定性能数据由 [`one_shot_metrics/validate.py`](../../one_shot_metrics/validate.py) 校验。绘图数据检查覆盖 504 次准确唤醒和 6 次公平性测试启动。
 
-Runtime 使用[Agent identity、生命周期与 Context](identity-context.md)提供的身份键，并处理[工具执行](tool-execution.md)和 [Live Query](live-query.md) 产生的 terminal state 与事件。
+Agent Loop 使用[Agent 进程、地址空间与上下文路径](identity-context.md)提供的身份键，并处理[结构化交互与工具调用协议](tool-execution.md)和[文件系统查询扩展](live-query.md)产生的 terminal state 与事件。

@@ -1,16 +1,29 @@
 #include <agent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #define TEST_NAME "agenttask_ucore"
-#define TASK_NODE_COUNT 21U
+#define TASK_NODE_COUNT 23U
+#define TASK_RESOURCE_BORROW_NODE 21U
+#define TASK_RESOURCE_OWNED_NODE  22U
 #define CHARGE_RESERVED 1U
 #define PERF_OPERATION_COUNT 16U
 #define PERF_REQUEST_BASE 91000ULL
 #define ECHO_PARAM_COUNT 3U
 #define TOOL_V3_DISPATCH_HEADER_BYTES (2U * sizeof(unsigned int))
+#define TASK_RESOURCE_FIRST_PATH  "taskr1"
+#define TASK_RESOURCE_SECOND_PATH "taskr2"
+#define TASK_RESOURCE_NUL_PATH    "tasknul"
+#define TASK_RESOURCE_UTF8_PATH   "taskbad"
+#define TASK_RESOURCE_RACE_PATH   "taskrace"
+
+static const unsigned char task_resource_embedded_nul[] = { 'a', 0, 'b' };
+static const unsigned char task_resource_invalid_utf8[] = { 0xc0, 0x80 };
+static const char task_resource_first_payload[] = "task-resource-borrow";
+static const char task_resource_second_payload[] = "task-resource-owned";
 
 #define SEMANTIC_STATUS_OK       (1U << 0)
 #define SEMANTIC_TOOL_ECHO       (1U << 1)
@@ -39,6 +52,23 @@ struct task_channel_view {
 	uint64 generation;
 	uint64 sq_tail;
 	uint64 cq_head;
+};
+
+struct task_resource_inputs {
+	int first_fd;
+	int second_fd;
+	int embedded_nul_fd;
+	int invalid_utf8_fd;
+	int write_only_fd;
+	int pipe_read_fd;
+	int pipe_write_fd;
+	int race_fd;
+};
+
+struct task_resource_close_race {
+	volatile int start;
+	volatile int close_status;
+	int fd;
 };
 
 struct ablation_metrics {
@@ -307,7 +337,9 @@ static void task_node_init(uint node_id)
 	node->tool_id = AGENT_TOOL_ECHO;
 	node->accepted_input_labels = AGENT_PROVENANCE_ALL;
 	node->output_add_labels = AGENT_PROVENANCE_AGENT_DERIVED;
-	node->input_artifact_type = AGENT_ARTIFACT_NONE;
+	node->input_artifact_type =
+		node_id >= TASK_RESOURCE_BORROW_NODE ?
+			AGENT_ARTIFACT_UTF8 : AGENT_ARTIFACT_NONE;
 	node->output_artifact_type = AGENT_ARTIFACT_NONE;
 	node->max_attempts = 1;
 	node->cancel_policy = AGENT_EXECUTION_CANCEL_ALLOW;
@@ -339,7 +371,7 @@ static struct agent_execution_contract_key create_task_contract(
 	      result.state == AGENT_EXECUTION_CONTRACT_FROZEN &&
 	      result.key.generation != 0 &&
 	      result.node_count == TASK_NODE_COUNT,
-	      "create enforced null-resource Task contract");
+	      "create enforced mixed-resource Task contract");
 
 	memset(&control, 0, sizeof(control));
 	control.version = AGENT_EXECUTION_CONTRACT_VERSION;
@@ -360,9 +392,11 @@ static struct agent_execution_contract_key create_task_contract(
 		for (uint j = 0; j < sizeof(queried_nodes[i].schema_digest); j++)
 			aggregate |= queried_nodes[i].schema_digest[j];
 		check(queried_nodes[i].node_id == i && aggregate != 0 &&
-		      queried_nodes[i].input_artifact_type == AGENT_ARTIFACT_NONE &&
+		      queried_nodes[i].input_artifact_type ==
+			      (i >= TASK_RESOURCE_BORROW_NODE ?
+				       AGENT_ARTIFACT_UTF8 : AGENT_ARTIFACT_NONE) &&
 		      queried_nodes[i].output_artifact_type == AGENT_ARTIFACT_NONE,
-		      "query preserves typed null nodes and canonical schema");
+		      "query preserves typed Task nodes and canonical schema");
 	}
 	return result.key;
 }
@@ -638,26 +672,437 @@ static void setup_task_channel(
 	      "mapped SQ/CQ headers are frozen and active");
 }
 
-static void check_resource_import_denied(uint64 generation)
+static int resource_handle_equal(struct agent_task_resource_handle left,
+				 struct agent_task_resource_handle right)
+{
+	return left.slot == right.slot && left.type == right.type &&
+	       left.flags == right.flags && left.generation == right.generation;
+}
+
+static void task_resource_call(
+	const struct task_channel_view *view, uint operation,
+	struct agent_task_resource_handle handle, uint resource_type,
+	uint resource_flags, uint64 source_handle, uint64 length,
+	struct agent_task_channel_resource_result *result)
 {
 	struct agent_task_channel_resource resource;
-	struct agent_task_channel_resource_result result;
 
 	memset(&resource, 0, sizeof(resource));
-	memset(&result, 0, sizeof(result));
+	resource.version = AGENT_TASK_CHANNEL_VERSION;
+	resource.size = sizeof(resource);
+	resource.operation = operation;
+	resource.handle = handle;
+	resource.resource_type = resource_type;
+	resource.resource_flags = resource_flags;
+	resource.source_handle = source_handle;
+	resource.length = length;
+	resource.channel_generation = view->generation;
+	memset(result, 0, sizeof(*result));
+	check(agent_task_channel_resource(&resource, result) == 0,
+	      "Task resource syscall framing");
+}
+
+static void task_resource_bad_result_probe(
+	const struct task_channel_view *view, int fd, uint64 length)
+{
+	struct agent_task_channel_resource resource;
+
+	memset(&resource, 0, sizeof(resource));
 	resource.version = AGENT_TASK_CHANNEL_VERSION;
 	resource.size = sizeof(resource);
 	resource.operation = AGENT_TASK_RESOURCE_IMPORT;
-	resource.resource_type = AGENT_ARTIFACT_BYTES;
+	resource.resource_type = AGENT_ARTIFACT_UTF8;
 	resource.resource_flags = AGENT_TASK_HANDLE_F_OWNED;
-	resource.source_handle = 1;
-	resource.length = 1;
-	resource.channel_generation = generation;
-	check(agent_task_channel_resource(&resource, &result) == 0 &&
-	      result.status == AGENT_TASK_CHANNEL_DENIED &&
-	      result.state == AGENT_TASK_RESOURCE_STATE_NONE &&
-	      handle_is_null(result.handle),
-	      "RESOURCE_IMPORT fails closed without an external backend");
+	resource.source_handle = (uint64)(uint)fd;
+	resource.length = length;
+	resource.channel_generation = view->generation;
+	check(agent_task_channel_resource(
+		      &resource,
+		      (struct agent_task_channel_resource_result *)(unsigned long)1) ==
+		      -1,
+	      "invalid result pointer is rejected before import commit");
+}
+
+static void task_resource_create(const char *path, const void *content,
+				 uint length)
+{
+	int fd;
+
+	(void)unlink(path);
+	fd = open(path, O_CREATE | O_TRUNC | O_WRONLY);
+	check(fd >= 0, "create Task resource input file");
+	check(write(fd, content, length) == (ssize_t)length,
+	      "write exact Task resource input file");
+	check(close(fd) == 0, "close Task resource writer");
+}
+
+static void task_resource_close_worker(void *arg)
+{
+	struct task_resource_close_race *race = arg;
+
+	while (!race->start)
+		(void)sched_yield();
+	/* Give the importing thread one turn to acquire its transaction pin. */
+	(void)sched_yield();
+	race->close_status = close(race->fd);
+	exit(0);
+}
+
+static void prime_task_resource_context(void)
+{
+	static struct agent_op op;
+	static struct agent_result result;
+
+	memset(&op, 0, sizeof(op));
+	memset(&result, 0, sizeof(result));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = AGENT_TOOL_ECHO;
+	op.request_id = ++next_request_id;
+	check(agent_run(&op, &result, 1, 0) == 1 &&
+	      result.status == AGENT_STATUS_OK && result.sequence != 0,
+	      "prime Context for pre-contract resource race");
+}
+
+static void prepare_task_resource_inputs(struct task_resource_inputs *inputs)
+{
+	unsigned char first_byte = 0;
+	int pipe_fd[2];
+
+	memset(inputs, 0, sizeof(*inputs));
+	task_resource_create(
+		TASK_RESOURCE_FIRST_PATH, task_resource_first_payload,
+		sizeof(task_resource_first_payload) - 1U);
+	task_resource_create(
+		TASK_RESOURCE_SECOND_PATH, task_resource_second_payload,
+		sizeof(task_resource_second_payload) - 1U);
+	task_resource_create(
+		TASK_RESOURCE_NUL_PATH, task_resource_embedded_nul,
+		sizeof(task_resource_embedded_nul));
+	task_resource_create(
+		TASK_RESOURCE_UTF8_PATH, task_resource_invalid_utf8,
+		sizeof(task_resource_invalid_utf8));
+	task_resource_create(
+		TASK_RESOURCE_RACE_PATH, task_resource_first_payload,
+		sizeof(task_resource_first_payload) - 1U);
+
+	(void)close(0);
+	inputs->first_fd = open(TASK_RESOURCE_FIRST_PATH, O_RDONLY);
+	check(inputs->first_fd == 0,
+	      "ordinary Task input uses valid descriptor zero");
+	check(read(inputs->first_fd, &first_byte, 1) == 1 &&
+	      first_byte == (unsigned char)task_resource_first_payload[0],
+	      "advance the caller offset before the immutable snapshot");
+	inputs->second_fd = open(TASK_RESOURCE_SECOND_PATH, O_RDONLY);
+	inputs->embedded_nul_fd = open(TASK_RESOURCE_NUL_PATH, O_RDONLY);
+	inputs->invalid_utf8_fd = open(TASK_RESOURCE_UTF8_PATH, O_RDONLY);
+	inputs->write_only_fd = open(TASK_RESOURCE_FIRST_PATH, O_WRONLY);
+	inputs->race_fd = open(TASK_RESOURCE_RACE_PATH, O_RDONLY);
+	check(inputs->second_fd >= 0 && inputs->embedded_nul_fd >= 0 &&
+	      inputs->invalid_utf8_fd >= 0 && inputs->write_only_fd >= 0 &&
+	      inputs->race_fd >= 0,
+	      "pre-open ordinary Task resource descriptors");
+	check(unlink(TASK_RESOURCE_RACE_PATH) == 0,
+	      "unlink race input while its read descriptor remains live");
+	check(pipe(pipe_fd) == 0, "pre-open non-file import probe");
+	inputs->pipe_read_fd = pipe_fd[0];
+	inputs->pipe_write_fd = pipe_fd[1];
+	printf("agenttask_ucore: resource_inputs_prepared=1 scope_local=1\n");
+}
+
+static void exercise_task_resource_close_race(
+	const struct task_channel_view *view,
+	const struct task_resource_inputs *inputs)
+{
+	struct agent_task_channel_resource_result result;
+	struct task_resource_close_race race;
+	int tid;
+
+	memset(&race, 0, sizeof(race));
+	race.close_status = -1;
+	race.fd = inputs->race_fd;
+	tid = thread_create(task_resource_close_worker, &race);
+	check(tid > 0, "start sibling close for unlinked Task input");
+	race.start = 1;
+	task_resource_call(
+		view, AGENT_TASK_RESOURCE_IMPORT,
+		(struct agent_task_resource_handle){ 0 }, AGENT_ARTIFACT_UTF8,
+		AGENT_TASK_HANDLE_F_OWNED, (uint64)(uint)race.fd,
+		sizeof(task_resource_first_payload) - 1U, &result);
+	check(waittid(tid) == 0 && race.close_status == 0,
+	      "sibling closes the unlinked descriptor during import race");
+	check(result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_RESOURCE_STATE_LIVE,
+	      "transaction pin preserves the unlinked file snapshot");
+	task_resource_call(view, AGENT_TASK_RESOURCE_RELEASE, result.handle, 0, 0,
+			   0, 0, &result);
+	check(result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_RESOURCE_STATE_NONE,
+	      "release snapshot after sibling close race");
+	printf("agenttask_ucore: resource_unlinked_close_race=1 "
+	       "transaction_pin=1 launched_concurrently=1\n");
+}
+
+static void check_resource_echo(const struct agent_task_cqe *cqe,
+				const struct agent_task_sqe *sqe,
+				const char *expected)
+{
+	struct agent_context_detail detail;
+	uint length = strlen(expected);
+
+	check(cqe->version == AGENT_TASK_CHANNEL_ENTRY_VERSION &&
+	      cqe->size == sizeof(*cqe) && cqe->status == AGENT_STATUS_OK &&
+	      cqe->request_id == sqe->request_id &&
+	      cqe->node_id == sqe->node_id &&
+	      cqe->tool_id == AGENT_TOOL_ECHO && handle_is_null(cqe->result) &&
+	      (cqe->provenance_labels &
+	       AGENT_PROVENANCE_UNTRUSTED_FILE_DATA) != 0,
+	      "resource ECHO completes with file provenance");
+	memset(&detail, 0, sizeof(detail));
+	check(context_detail(cqe->context_sequence, &detail) == 0 &&
+	      detail.sequence == cqe->context_sequence &&
+	      detail.op.tool_id == AGENT_TOOL_ECHO &&
+	      detail.op.request_id == sqe->request_id &&
+	      detail.result.status == AGENT_STATUS_OK &&
+	      detail.result.request_id == sqe->request_id &&
+	      detail.result.value0 == length &&
+	      strcmp(detail.op.payload, expected) == 0 &&
+	      strcmp(detail.result.result, expected) == 0,
+	      "resource ECHO passes the immutable snapshot to the tool");
+}
+
+static void exercise_task_resources(
+	const struct agent_execution_contract_key *key,
+	const struct task_resource_inputs *inputs,
+	const struct task_channel_view *prepared_view)
+{
+	static struct agent_info context_before, context_after;
+	struct task_channel_view view = *prepared_view;
+	struct agent_task_channel_resource_result resource_result;
+	struct agent_task_channel_enter_result enter_result;
+	struct agent_task_resource_handle first;
+	struct agent_task_resource_handle second;
+	struct agent_task_resource_handle borrowed;
+	struct agent_task_sqe sqe;
+	struct agent_task_cqe cqe;
+	unsigned char second_byte = 0;
+	int fd;
+
+	sqe = make_submit_sqe(key, 0, ++next_request_id, view.generation,
+			     view.sq_tail, 0, 0);
+	write_sqe(view.sq, view.sq_tail++, &sqe);
+	enter_channel(0, 1, 1, view.generation, view.sq_tail, view.cq_head,
+		      &enter_result);
+	check(enter_result.status == AGENT_TASK_CHANNEL_OK &&
+	      enter_result.submitted == 1 &&
+	      enter_result.cq_tail == view.cq_head + 1,
+	      "prime an existing Context before importing a resource");
+	cqe = read_cqe(view.cq, view.cq_head);
+	check_normal_cqe(&cqe, &sqe);
+	view.cq_head++;
+	enter_channel(AGENT_TASK_CHANNEL_ENTER_F_DRAIN, 0, 0,
+		      view.generation, view.sq_tail, view.cq_head,
+		      &enter_result);
+	memset(&context_before, 0, sizeof(context_before));
+	check(enter_result.status == AGENT_TASK_CHANNEL_OK &&
+	      agent_info(&context_before) == 0 &&
+	      context_before.context_path_latest == cqe.context_sequence &&
+	      context_before.context_path_count != 0 &&
+	      (context_before.filesystem_capability_mask &
+	       (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)) ==
+		      (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE),
+	      "resource import binds an already-existing latest Context");
+
+	fd = inputs->embedded_nul_fd;
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd, sizeof(task_resource_embedded_nul),
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "embedded NUL import is rejected");
+
+	fd = inputs->invalid_utf8_fd;
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd, sizeof(task_resource_invalid_utf8),
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "invalid UTF-8 import is rejected");
+
+	fd = inputs->write_only_fd;
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd,
+			   sizeof(task_resource_first_payload) - 1U,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "write-only descriptor is rejected as an invalid import source");
+
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)inputs->pipe_read_fd, 1,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "non-file descriptor is rejected as an invalid import source");
+
+	fd = inputs->first_fd;
+	check(fd == 0, "valid Task input retains descriptor zero");
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_BYTES, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd,
+			   sizeof(task_resource_first_payload) - 1U,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "non-UTF8 import type is rejected");
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_BORROWED,
+			   (uint64)(uint)fd,
+			   sizeof(task_resource_first_payload) - 1U,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "IMPORT cannot create a borrowed handle");
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd, 0, &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "zero-length UTF-8 import is rejected");
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd, AGENT_TASK_RESOURCE_UTF8_MAX + 1U,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "oversized UTF-8 import is rejected");
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd,
+			   sizeof(task_resource_first_payload) - 2U,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_BAD_REQUEST,
+	      "prefix-only UTF-8 import is rejected by the EOF probe");
+	task_resource_bad_result_probe(
+		&view, fd, sizeof(task_resource_first_payload) - 1U);
+	enter_channel(AGENT_TASK_CHANNEL_ENTER_F_DRAIN, 0, 0,
+		      view.generation, view.sq_tail, view.cq_head,
+		      &enter_result);
+	check(enter_result.status == AGENT_TASK_CHANNEL_OK &&
+	      enter_result.resource_count == 0,
+	      "invalid result pointer commits no resource");
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd,
+			   sizeof(task_resource_first_payload) - 1U,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_OK &&
+	      resource_result.state == AGENT_TASK_RESOURCE_STATE_LIVE &&
+	      resource_result.source_handle == 0 &&
+	      resource_result.length == sizeof(task_resource_first_payload) - 1U &&
+	      resource_result.references == 0 &&
+	      resource_result.handle.slot != 0 &&
+	      resource_result.handle.type == AGENT_ARTIFACT_UTF8 &&
+	      resource_result.handle.flags == AGENT_TASK_HANDLE_F_OWNED,
+	      "fd-zero UTF-8 snapshot imports as an owned live resource");
+	first = resource_result.handle;
+	memset(&context_after, 0, sizeof(context_after));
+	check(agent_info(&context_after) == 0 &&
+	      context_after.context_path_count == context_before.context_path_count &&
+	      context_after.context_path_latest ==
+		      context_before.context_path_latest,
+	      "IMPORT rejections, result preflight, and success do not append Context");
+	check(read(fd, &second_byte, 1) == 1 &&
+	      second_byte == (unsigned char)task_resource_first_payload[1],
+	      "snapshot read at offset zero preserves the caller file offset");
+
+	task_resource_call(&view, AGENT_TASK_RESOURCE_QUERY, first, 0, 0, 0, 0,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_OK &&
+	      resource_result.state == AGENT_TASK_RESOURCE_STATE_LIVE &&
+	      resource_handle_equal(resource_result.handle, first) &&
+	      resource_result.references == 0,
+	      "QUERY observes the copied resource after caller I/O advances");
+
+	borrowed = first;
+	borrowed.flags = AGENT_TASK_HANDLE_F_BORROWED;
+	sqe = make_submit_sqe(key, TASK_RESOURCE_BORROW_NODE,
+			       ++next_request_id, view.generation, view.sq_tail, 0,
+			       0);
+	sqe.input = borrowed;
+	write_sqe(view.sq, view.sq_tail++, &sqe);
+	enter_channel(0, 1, 1, view.generation, view.sq_tail, view.cq_head,
+		      &enter_result);
+	check(enter_result.status == AGENT_TASK_CHANNEL_OK &&
+	      enter_result.submitted == 1 &&
+	      enter_result.cq_tail == view.cq_head + 1,
+	      "borrowed resource ECHO publishes one completion");
+	cqe = read_cqe(view.cq, view.cq_head);
+	check_resource_echo(&cqe, &sqe, task_resource_first_payload);
+	view.cq_head++;
+	enter_channel(AGENT_TASK_CHANNEL_ENTER_F_DRAIN, 0, 0,
+		      view.generation, view.sq_tail, view.cq_head,
+		      &enter_result);
+	task_resource_call(&view, AGENT_TASK_RESOURCE_QUERY, first, 0, 0, 0, 0,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_OK &&
+	      resource_result.state == AGENT_TASK_RESOURCE_STATE_LIVE &&
+	      resource_result.references == 0,
+	      "borrowed completion leaves the owned base resource live");
+
+	task_resource_call(&view, AGENT_TASK_RESOURCE_RELEASE, first, 0, 0, 0,
+			   0, &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_OK &&
+	      resource_result.state == AGENT_TASK_RESOURCE_STATE_NONE,
+	      "RELEASE consumes the live owned resource");
+	task_resource_call(&view, AGENT_TASK_RESOURCE_QUERY, first, 0, 0, 0, 0,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_STALE,
+	      "released generation is stale");
+
+	fd = inputs->second_fd;
+	task_resource_call(&view, AGENT_TASK_RESOURCE_IMPORT,
+			   (struct agent_task_resource_handle){ 0 },
+			   AGENT_ARTIFACT_UTF8, AGENT_TASK_HANDLE_F_OWNED,
+			   (uint64)(uint)fd,
+			   sizeof(task_resource_second_payload) - 1U,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_OK &&
+	      resource_result.handle.slot == first.slot &&
+	      resource_result.handle.generation > first.generation,
+	      "resource slot reuse advances generation");
+	second = resource_result.handle;
+
+	sqe = make_submit_sqe(key, TASK_RESOURCE_OWNED_NODE,
+			       ++next_request_id, view.generation, view.sq_tail, 0,
+			       0);
+	sqe.input = second;
+	write_sqe(view.sq, view.sq_tail++, &sqe);
+	enter_channel(0, 1, 1, view.generation, view.sq_tail, view.cq_head,
+		      &enter_result);
+	check(enter_result.status == AGENT_TASK_CHANNEL_OK &&
+	      enter_result.submitted == 1 &&
+	      enter_result.cq_tail == view.cq_head + 1,
+	      "owned resource ECHO publishes one completion");
+	cqe = read_cqe(view.cq, view.cq_head);
+	check_resource_echo(&cqe, &sqe, task_resource_second_payload);
+	task_resource_call(&view, AGENT_TASK_RESOURCE_QUERY, second, 0, 0, 0, 0,
+			   &resource_result);
+	check(resource_result.status == AGENT_TASK_CHANNEL_STALE,
+	      "owned completion automatically consumes the input resource");
+	view.cq_head++;
+	enter_channel(AGENT_TASK_CHANNEL_ENTER_F_DRAIN, 0, 0,
+		      view.generation, view.sq_tail, view.cq_head,
+		      &enter_result);
+	check(enter_result.status == AGENT_TASK_CHANNEL_OK &&
+	      enter_result.resource_count == 0 &&
+	      enter_result.in_flight == 0 && enter_result.terminal_pending == 0,
+	      "resource Task Channel finishes drained without retained objects");
 }
 
 static void run_task_ablation(
@@ -751,7 +1196,6 @@ static void exercise_task_channel(
 	uint64 request_id = 0;
 
 	setup_task_channel(key, &view);
-	check_resource_import_denied(view.generation);
 	for (uint i = 0; i < PERF_OPERATION_COUNT; i++) {
 		request_id = ++next_request_id;
 		task_perf_sqes[i] = make_submit_sqe(
@@ -1008,6 +1452,7 @@ static struct agent_workflow_lifecycle_key current_lifecycle(void)
 #define CHILD_SCALAR      2
 #define CHILD_TASK_PERF   3
 #define CHILD_TASK_STRESS 4
+#define CHILD_TASK_RESOURCE 5
 
 static int create_isolated_workflow(void)
 {
@@ -1024,6 +1469,9 @@ static int create_isolated_workflow(void)
 static void run_child(int mode)
 {
 	struct agent_execution_contract_key key;
+	struct task_resource_inputs resource_inputs;
+	struct task_channel_view resource_view;
+	struct agent_workflow_lifecycle_key lifecycle;
 	int pid;
 	int status = 0;
 
@@ -1042,6 +1490,18 @@ static void run_child(int mode)
 		} else if (mode == CHILD_TASK_STRESS) {
 			key = create_task_contract(current_lifecycle());
 			exercise_task_channel(&key);
+		} else if (mode == CHILD_TASK_RESOURCE) {
+			prepare_task_resource_inputs(&resource_inputs);
+			lifecycle = current_lifecycle();
+			prime_task_resource_context();
+			memset(&key, 0, sizeof(key));
+			key.lifecycle = lifecycle;
+			setup_task_channel(&key, &resource_view);
+			exercise_task_resource_close_race(
+				&resource_view, &resource_inputs);
+			key = create_task_contract(lifecycle);
+			exercise_task_resources(
+				&key, &resource_inputs, &resource_view);
 		} else {
 			check(0, "known isolated orchestrator mode");
 		}
@@ -1079,7 +1539,10 @@ int main(void)
 	run_child(CHILD_SCALAR);
 	run_child(CHILD_TASK_PERF);
 	run_child(CHILD_TASK_STRESS);
-	printf("agenttask_ucore: setup=1 single_issuer=1 resource_import_denied=1\n");
+	run_child(CHILD_TASK_RESOURCE);
+	printf("agenttask_ucore: setup=1 single_issuer=1 "
+	       "resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1 "
+	       "release_stale=1 generation_aba=1\n");
 	printf("agenttask_ucore: submit=1 cq_ack=1 monotonic=1 resync=1\n");
 	printf("agenttask_ucore: target_cancel_exactly_once=1 hard_deadline=1\n");
 	printf("agenttask_ucore: batch_fp=%u scalar_v3_fp=%u task_fp=%u\n",

@@ -96,7 +96,19 @@ def validate(source: str) -> None:
         if token not in lookup:
             raise ContractError(f"dirlookup snapshot contract missing: {token}")
 
-    link = compact(function_body(source, "dirlink"))
+    link_wrapper = compact(function_body(source, "dirlink"))
+    require(
+        link_wrapper,
+        "return dirlink_impl(dp, name, inum, cred, 0);",
+        "ordinary dirlink wrapper",
+    )
+    publish_wrapper = compact(function_body(source, "dirlink_publish"))
+    require(
+        publish_wrapper,
+        "return dirlink_impl(dp, name, inum, cred, 1);",
+        "publish dirlink wrapper",
+    )
+    link = compact(function_body(source, "dirlink_impl"))
     for token in (
         "fs_namespace_gate_lock()",
         "fs_dentry_index_create_conflict(",

@@ -26,7 +26,6 @@ SELF_GATED = {
     "agent_worker_create",
     "agent_task_channel_setup",
     "agent_task_channel_enter",
-    "agent_task_channel_resource",
 }
 
 LIFECYCLE_CONTROL = {"exit", "agent_workflow_close"}
@@ -64,6 +63,8 @@ REQUIRED_OUTER = {
     "agent_execution_contract",
     "agent_sched_config",
     "agent_audit_receipt",
+    "agent_file_publish",
+    "agent_task_channel_resource",
     "virtio_disk_test",
     "physical_page_test",
     "wait_atomic_test",
@@ -321,13 +322,12 @@ class WorkflowSyscallCutTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "ordinary workflow-cut set drifted"):
             validate(mutated, self.registry)
 
-    def test_rejects_task_channel_moved_to_outer_gate(self) -> None:
+    def test_rejects_self_gated_task_channel_moved_to_outer_gate(self) -> None:
         outer_tail = "\tcase SYS_agent_route_config:\n\t\treturn 1;"
         self.assertIn(outer_tail, self.syscall, "outer cut anchor drifted")
         for syscall_name in (
             "agent_task_channel_setup",
             "agent_task_channel_enter",
-            "agent_task_channel_resource",
         ):
             with self.subTest(syscall=syscall_name):
                 self_gated = f"\tcase SYS_{syscall_name}:\n"
@@ -344,6 +344,28 @@ class WorkflowSyscallCutTests(unittest.TestCase):
                     ContractError, "ordinary workflow-cut set drifted"
                 ):
                     validate(mutated, self.registry)
+
+    def test_rejects_task_resource_removed_from_outer_gate(self) -> None:
+        outer = "\tcase SYS_agent_task_channel_resource:\n"
+        self_gated_tail = (
+            "\tcase SYS_agent_task_channel_enter:\n\t\treturn 0;"
+        )
+        mutated = self.mutate_cut(outer, "")
+        body = function_body(mutated, "syscall_mutates_workflow_cut")
+        self.assertIn(self_gated_tail, body, "Task self-gated tail drifted")
+        mutated_body = body.replace(
+            self_gated_tail,
+            self_gated_tail.replace(
+                "\t\treturn 0;",
+                "\tcase SYS_agent_task_channel_resource:\n\t\treturn 0;",
+            ),
+            1,
+        )
+        mutated = mutated.replace(body, mutated_body, 1)
+        with self.assertRaisesRegex(
+            ContractError, "ordinary workflow-cut set drifted"
+        ):
+            validate(mutated, self.registry)
 
     def test_rejects_completion_wait_outer_gate(self) -> None:
         observers = "\tcase SYS_wait4:\n\t\treturn 0;"

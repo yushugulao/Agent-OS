@@ -34,6 +34,9 @@
 /* 名字空间可能已发布；调用方必须封闭失败。 */
 #define FS_LOOKUP_INDETERMINATE (-7)
 #define FS_CREATE_INDETERMINATE FS_LOOKUP_INDETERMINATE
+/* Definitive dirlink outcomes used by publish-once namespace attachment. */
+#define FS_DIRLINK_EXISTS  (-8)
+#define FS_DIRLINK_NO_SPACE (-9)
 
 #define ROOTINO 1 // root i-number
 #define BSIZE 1024 // block size
@@ -259,6 +262,8 @@ int fs_reclaim_scope_files(uint);
 struct inode *dirlookup(struct inode *, char *, uint *, uint, uint, int *);
 struct inode *fs_create(char *, short, int *, const struct vfs_cred *, uint,
 			int *);
+int fs_agent_file_publish_atomic(char *, const struct vfs_cred *,
+				 const void *, uint);
 struct inode *ialloc(uint, short, const struct fs_storage_charge *, int *);
 struct inode *inode_get(uint, uint);
 int ivalid(struct inode *) FS_MUST_CHECK;

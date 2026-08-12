@@ -1,4 +1,5 @@
 #include <agent.h>
+#include "agent_file_publish_abi.h"
 #include "agent_task_channel_abi.h"
 
 #define ABI_SIZE(type, name) \
@@ -267,6 +268,23 @@ ABI_OFFSET(struct agent_provenance_manifest, output_add_labels,
 ABI_OFFSET(struct agent_provenance_manifest, required_capabilities,
 	   provenance_manifest);
 
+ABI_VALUE(AGENT_FILE_PUBLISH_SYSCALL, file_publish_syscall);
+ABI_VALUE(AGENT_FILE_PUBLISH_VERSION, file_publish_version);
+ABI_VALUE(AGENT_FILE_PUBLISH_MAX_BYTES, file_publish_max_bytes);
+ABI_RECORD(struct agent_file_publish_request, file_publish_request,
+	   version, reserved_tail);
+ABI_OFFSET(struct agent_file_publish_request, size, file_publish_request);
+ABI_OFFSET(struct agent_file_publish_request, flags, file_publish_request);
+ABI_OFFSET(struct agent_file_publish_request, reserved,
+	   file_publish_request);
+ABI_OFFSET(struct agent_file_publish_request, path, file_publish_request);
+ABI_OFFSET(struct agent_file_publish_request, header, file_publish_request);
+ABI_OFFSET(struct agent_file_publish_request, payload, file_publish_request);
+ABI_OFFSET(struct agent_file_publish_request, header_size,
+	   file_publish_request);
+ABI_OFFSET(struct agent_file_publish_request, payload_size,
+	   file_publish_request);
+
 ABI_VALUE(AGENT_TASK_CHANNEL_SETUP_SYSCALL, task_channel_setup_syscall);
 ABI_VALUE(AGENT_TASK_CHANNEL_ENTER_SYSCALL, task_channel_enter_syscall);
 ABI_VALUE(AGENT_TASK_CHANNEL_RESOURCE_SYSCALL, task_channel_resource_syscall);
@@ -274,6 +292,7 @@ ABI_VALUE(AGENT_TASK_CHANNEL_VERSION, task_channel_version);
 ABI_VALUE(AGENT_TASK_CHANNEL_ENTRY_VERSION, task_channel_entry_version);
 ABI_VALUE(AGENT_TASK_CHANNEL_CAPACITY, task_channel_capacity);
 ABI_VALUE(AGENT_TASK_CHANNEL_SCHEMA_SIZE, task_channel_schema_size);
+ABI_VALUE(AGENT_TASK_RESOURCE_UTF8_MAX, task_resource_utf8_max);
 ABI_VALUE(AGENT_TASK_CHANNEL_RING_F_ALL, task_channel_ring_f_all);
 ABI_VALUE(AGENT_TASK_CHANNEL_SETUP_F_SINGLE_ISSUER,
 	  task_channel_setup_f_single_issuer);

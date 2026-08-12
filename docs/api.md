@@ -1,6 +1,6 @@
 # AgentOS 系统调用与 ABI
 
-AgentOS 在 uCore 上增加了一组面向 Agent（智能体）程序的系统调用，内容包括身份、工作流、Structured Tool、Context、Live Query、事件、调度、资源和 Task Channel。公开接口集中在 [`user/include/agent.h`](../user/include/agent.h)，内核与用户态共用的 ABI 结构位于 `include/agent_*_abi.h`，用户态封装位于 [`user/lib/syscall.c`](../user/lib/syscall.c)。
+AgentOS 在 uCore 上增加了一组面向 Agent（智能体）程序的系统调用。Agent 进程创建与地址空间、工具调用协议、上下文路径管理、Live Query、事件、调度、资源和 Task Channel 都通过版本化 ABI 进入内核。公开接口集中在 [`user/include/agent.h`](../user/include/agent.h)，内核与用户态共用的结构位于 `include/agent_*_abi.h`，用户态封装位于 [`user/lib/syscall.c`](../user/lib/syscall.c)。
 
 ## 文档索引
 
@@ -8,11 +8,11 @@ AgentOS 在 uCore 上增加了一组面向 Agent（智能体）程序的系统�
 - [ABI 约定](#abi-约定)
 - [系统调用索引](#系统调用索引)
 - [身份与工作流](#身份与工作流)
-- [工具调用与 Execution Contract](#工具调用与-execution-contract)
+- [Agent-OS 内核结构化交互接口](#agent-os-内核结构化交互接口)
 - [批量调用与 Workflow Fence](#批量调用与-workflow-fence)
-- [Context 记录](#context-记录)
-- [Live Query 与编辑租约](#live-query-与编辑租约)
-- [事件、调度与运行记录](#事件调度与运行记录)
+- [上下文路径管理](#上下文路径管理)
+- [面向 Agent 查询优化的文件系统接口](#面向-agent-查询优化的文件系统接口)
+- [Agent Loop、调度与运行记录](#agent-loop调度与运行记录)
 - [Task Channel](#task-channel)
 - [状态处理](#状态处理)
 
@@ -67,7 +67,7 @@ ABI 检查程序使用 RISC-V64 探针、`_Static_assert` 和冻结清单，核�
 make agent-uapi-check
 ```
 
-冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。
+冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。当前检查覆盖 560 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含系统调用 566 及 64 字节的结果文件发布请求。
 
 ## 系统调用索引
 
@@ -79,7 +79,7 @@ make agent-uapi-check
 | Workflow | 539、541、542、545、546 | `agent_worker_create()`、`agent_workflow_create()`、`agent_scope_delegate_fd()`、`agent_workflow_close()`、`agent_workflow_lifecycle_info()` |
 | 工具 | 502、503、504、547、548 | `agent_run()`、`agent_call()`、`agent_tool_list()`、`tool_call()`、`tool_call_v3()`、`tool_list()` |
 | Context | 505 至 509、519 | `context_push/query/snapshot/detail/rollback/clear()` |
-| 文件状态 | 514 至 516、535 至 538 | `agent_file_meta_*()`、`agent_file_query()`、`agent_file_edit_*()` |
+| 文件状态与结果发布 | 514 至 516、535 至 538、566 | `agent_file_meta_*()`、`agent_file_query()`、`agent_file_edit_*()`、`agent_file_publish()` |
 | 事件与进程通信 | 510 至 513、518、520、540、552、553 | `agent_watch()`、`agent_live_watch/unwatch()`、`agent_wait()`、`agent_wait_cancel()`、`agent_wake()`、`agent_route_config()`、心跳接口 |
 | 调度与运行记录 | 521 至 525、528 至 534、557、559、560 | 调度、跟踪、审计、时间线、来源、计费、资源和性能接口 |
 | Execution Contract | 562 | `agent_execution_contract()` |
@@ -112,7 +112,7 @@ int agent_workflow_lifecycle_info(
 `agent_workflow_close()` 会把生命周期改为关闭中。成员进程、已经开始的操作、Task Channel、执行资源账户和后台增量全部处理完后，生命周期槽位才会回收。若 artifact 的文件访问范围带有 `preserve_on_retire`，生命周期槽位可以先回收，相关登记项、文件和存储计费仍会保留；对应的存储账户即使已经进入 `DRAINING` 或 `FREE`，这些数据也可继续存在，直至后续处理完成。
 
 <a id="工具调用与执行约定"></a>
-## 工具调用与 Execution Contract
+## Agent-OS 内核结构化交互接口
 
 ### V1 与 V2
 
@@ -126,7 +126,7 @@ int tool_call(struct agent_request_v2 *req,
 int tool_list(struct agent_tool_desc_v2 *out, int max);
 ```
 
-V1 使用固定布局的请求。V2 用一组带类型信息的键值参数表示调用内容。一次 V2 请求最多包含 8 个 `agent_param_v2`，每项分别填写键名、类型和值的长度。Tool Registry 登记了 25 个名称和编号均不重复的工具，同时注明所需能力、允许的 provenance 和副作用类型。详见[Structured Tool 与 Execution Contract](modules/tool-execution.md#tool-registry-与-typed-schema)。
+这组接口实现工具调用协议：请求以工具名称/编号和 typed 键值参数表示，响应给出状态码、序号和结构化结果。V1 使用固定布局的请求。V2 用一组带类型信息的键值参数表示调用内容。一次 V2 请求最多包含 8 个 `agent_param_v2`，每项分别填写键名、类型和值的长度。Tool Registry 登记了 25 个名称和编号均不重复的工具，同时注明所需能力、允许的 provenance 和副作用类型。详见[Agent-OS 内核结构化交互接口与工具调用协议](modules/tool-execution.md#tool-registry-与-typed-schema)。
 
 ### V3 与 Execution Contract 管理
 
@@ -161,7 +161,7 @@ int agent_workflow_fence(
 Workflow Fence 请求占 56 字节，包含标志、32 字节 `challenge` 和请求号；Workflow Fence 回执固定为 320 字节，记录生命周期键、屏障序号、元数据 generation、计费轮次、Evidence Ring 范围、八类资源用量、`previous_root` 和摘要。请求尚在处理时返回 `RETRY`；使用同一 `request_id` 进行 Replay 时返回同一份回执。结构定义见 [`include/agent_workflow_fence_abi.h`](../include/agent_workflow_fence_abi.h)。
 
 <a id="context-path"></a>
-## Context 记录
+## 上下文路径管理
 
 ```c
 int context_push(struct agent_context_record *record);
@@ -175,12 +175,12 @@ int context_rollback(uint64 sequence);
 int context_clear(void);
 ```
 
-每个 Agent 映射 7 页 Context。前 6 页由内核只读映射，保存表头、最近一次响应和最多 128 条记录；第 7 页留给 Guest 程序缓存。记录中包含执行序号、请求号、原因和跨度、父分支、工具和状态、输入输出以及哈希链。`context_detail()` 只返回规范化后的 `agent_op` 和 `agent_result`，不会保存完整的 V2 参数、V3 绑定或任务 SQE。
+每个 Agent 映射 7 页 Context。前 6 页由内核只读映射，保存表头、最近一次响应和最多 128 条路径记录；第 7 页留给 Guest 程序缓存查询结果等派生数据。记录中包含执行序号、请求号、原因和跨度、父分支、工具和状态、输入输出以及哈希链。`context_detail()` 只返回规范化后的 `agent_op` 和 `agent_result`，不会保存完整的 V2 参数、V3 绑定或任务 SQE。
 
 直接读取映射时，辅助函数会在复制前后检查发布序号，避免拿到并发写入中的半份记录。`context_rollback()` 只移动当前分支的指针，不改写原有序号和记录哈希。目标已经离开保留窗口时返回 `NOT_FOUND`；路径摘要或 generation 不符时返回 `STALE`。
 
 <a id="live-query-与文件编辑"></a>
-## Live Query 与编辑租约
+## 面向 Agent 查询优化的文件系统接口
 
 ```c
 int agent_file_meta_init(void);
@@ -198,6 +198,9 @@ int agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 int agent_file_edit_abort(uint64 lease_id);
 int agent_file_edit_state(const char *path,
                           struct agent_file_edit_state *state);
+int agent_file_publish(const char *path, const void *header,
+                       unsigned int header_size, const void *payload,
+                       unsigned int payload_size);
 ```
 
 Metadata Catalog 只记录经过 `agent_file_meta_set()` 显式登记的元数据，最多保存 512 项。普通登记要求 `flags` 为零，`AGENT_FILE_META_F_DELETE` 用于删除登记；`PERSIST`、`AUTOSCAN` 和未知标志都会被拒绝。一次查询最多返回 8 项。设置 `USE_INDEX` 时，内核可以按状态、阶段或类型使用索引；设置 `SCAN` 时则逐项扫描。返回结构给出完整命中数、是否截断、实际查询方式、扫描量、候选量、查询耗时和 `fs_generation`。
@@ -208,8 +211,10 @@ Metadata Catalog 只记录经过 `agent_file_meta_set()` 显式登记的元数�
 
 编辑租约记录所有者、文件访问范围、inode 身份、租约号、基础版本和有效期。commit 时，`expected_version` 用来发现并发修改。
 
+`agent_file_publish()` 对应系统调用 566。64 字节请求结构带有 `version`、`size`、正式路径、header/payload 指针及两段长度，保留字段和 `flags` 必须为零，两段内容合计不能超过 4,096 字节。正式路径只能是 1–14 字节的直接 basename。调用者必须是具备 artifact 写能力、处于活动文件访问范围内的 Agent。内核先复制完整字节并写入未命名 inode，数据和 inode checkpoint 完成后再接入正式文件名，并用第二次 attach-only checkpoint 固定目录项；同名文件已存在时返回 `DUPLICATE`，不会覆盖。若目录接入结果无法确定，则返回 `INDETERMINATE`。Nexus 只在正式路径与本次 header、payload 逐字节一致且紧接 EOF 时，把这两种状态收敛为幂等成功；内容不同便保留失败结果。
+
 <a id="事件调度与观测"></a>
-## 事件、调度与运行记录
+## Agent Loop、调度与运行记录
 
 ```c
 int agent_wait(struct agent_event *event, int timeout_ticks);
@@ -247,7 +252,11 @@ int agent_task_channel_resource(
     struct agent_task_channel_resource_result *result);
 ```
 
-每条 Task Channel 只允许一个提交者。SQ 和 CQ 各有 16 个位置，队列表头、SQE 和 CQE 均为 128 字节。`setup` 只能由进程主线程调用，调用后建立共享映射。后续的 `enter` 和 `resource` 都绑定同一个提交者线程及其身份 generation。`enter` 提交新的 SQ 队尾、确认已经读取的 CQ 队头，并推动内核处理任务；`resource` 用于导入、释放和查询类型化句柄。当前同步 Task Bridge 支持空输入和空输出，导入非空资源时，`result.status` 为 `AGENT_TASK_CHANNEL_DENIED`。
+每条 Task Channel 只允许一个提交者。SQ 和 CQ 各有 16 个位置，队列表头、SQE 和 CQE 均为 128 字节。`setup` 只能由进程主线程调用，调用后建立共享映射。后续的 `enter` 和 `resource` 都绑定同一个提交者线程及其身份 generation。`enter` 提交新的 SQ 队尾、确认已经读取的 CQ 队头，并推动内核处理任务；`resource` 用于导入、释放和查询类型化句柄。
+
+`IMPORT` 接受当前进程打开的可读普通文件描述符，类型固定为 `AGENT_ARTIFACT_UTF8`，长度必须准确落在 1–63 字节，创建的句柄只能是 OWNED。调用前，当前 Agent 必须已有一条经过校验的最新 Context；导入只绑定它的 sequence，不新建记录。内核从 offset 0 读取并多探测一个字节确认 EOF，不改变共享文件 offset；内容经过 NUL 与 UTF-8 检查后，以不可变快照保存在 Task Channel 私有页中，同时记录 SHA-256、生产者 PID/`control_id` 和 `UNTRUSTED_FILE_DATA` provenance。导入成功后的最终 copyout 若失败，刚建立的资源会在用户态可见前回滚。
+
+SQE 可以把已有 OWNED 句柄改作 BORROWED 别名提交。当前 ECHO Task Bridge 会把快照复制到工具 payload：BORROWED 任务完成后资源仍处于 `LIVE`，调用方随后显式 `RELEASE`；OWNED 任务完成后输入自动消费。释放后的句柄以及槽位复用前的旧 generation 都返回 `STALE`。
 
 SQE 支持提交、取消、关联和强制截止时间。每个已经接受的目标任务只产生一条完成 CQE。取消命令使用自己的 `request_id`，并通过 `link_request_id` 指向目标。若取消策略当场拒绝该命令，取消命令的编号仍会被记为已使用；`enter` 返回 `DENIED`，不会产生取消 CQE，原目标继续执行。CQE 标志可以表示目标被取消、超过截止时间、被拒绝或关联失败。
 
@@ -260,7 +269,7 @@ SQE 支持提交、取消、关联和强制截止时间。每个已经接受的�
 | `AGENT_TASK_CHANNEL_STALE` | 取消目标已经被确认读取，或该目标不存在 | 取消命令的编号已经用掉，结果带回当前 generation 和水位；不再控制这个已经消失的目标 |
 | `AGENT_TASK_CHANNEL_RESYNC_REQUIRED` | SQE、水位、请求号、通道 generation、`slot_generation` 或关联关系违反协议 | 采用结果中的新 generation，丢弃尚未接受的 SQE，再以 `ENTER_F_RESYNC` 和 `sq_tail=0` 清除持续重新同步标记 |
 
-布局和状态常量见 [`include/agent_task_channel_abi.h`](../include/agent_task_channel_abi.h)，完整协议见[Structured Tool 与 Execution Contract](modules/tool-execution.md#task-sqcq-协议)。
+布局和状态常量见 [`include/agent_task_channel_abi.h`](../include/agent_task_channel_abi.h)，完整协议见[结构化交互与工具调用协议](modules/tool-execution.md#task-sqcq-协议)。
 
 ## 状态处理
 

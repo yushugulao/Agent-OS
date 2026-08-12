@@ -925,6 +925,23 @@ int agent_file_edit_state(const char *path,
 	return syscall(SYS_agent_file_edit_state, path, state);
 }
 
+int agent_file_publish(const char *path, const void *header,
+		       unsigned int header_size, const void *payload,
+		       unsigned int payload_size)
+{
+	struct agent_file_publish_request request = {
+		.version = AGENT_FILE_PUBLISH_VERSION,
+		.size = sizeof(request),
+		.path = (unsigned long long)path,
+		.header = (unsigned long long)header,
+		.payload = (unsigned long long)payload,
+		.header_size = header_size,
+		.payload_size = payload_size,
+	};
+
+	return syscall(SYS_agent_file_publish, &request);
+}
+
 int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 		       int operation)
 {

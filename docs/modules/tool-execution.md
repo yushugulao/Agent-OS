@@ -1,6 +1,6 @@
-# Structured Tool 与 Execution Contract
+# Agent-OS 内核结构化交互接口与工具调用协议
 
-一次工具调用要经过用户指针、Tool Registry、工作流能力位、文件对象和 Workflow Credit Domain。若批处理、单次调用和 Task Channel 各自解释这些信息，同一个操作可能得到不同结果。AgentOS 让三种调用方式共用同一套内核实现，并在工具实际修改系统状态前，依次检查 Execution Contract、provenance 和 Phase Lease。
+Agent 通过工具调用协议向内核提交工具编号、typed 参数和版本化请求，内核以状态码和结构化结果回应。一次调用还要经过用户指针、Tool Registry、工作流能力位、文件对象和 Workflow Credit Domain。若 Batch、单次调用和 Task Channel 各自解释这些信息，同一个操作可能得到不同结果。AgentOS 让这些调用方式共用同一套内核执行路径，并在工具实际修改系统状态前，依次检查 Execution Contract、provenance 和 Phase Lease。
 
 ## 文档索引
 
@@ -144,7 +144,7 @@ agent_execution_append_terminal(p, op, res, tick, status, ...);
 
 最后一步在 Context commit lane 记录序号、工具状态和结果。受 Execution Contract 约束的调用还会得到 Evidence Ring 票号，并更新对应节点。若取消请求在 Effect Gate 之前到达，节点可以进入 `CANCELLED`；工具已经开始修改系统状态后，则按实际 terminal state 结算。
 
-Nexus 的 artifact 由 Guest Runtime 单独发布。[`user/include/agent_nexus.h`](../../user/include/agent_nexus.h) 将 `AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC` 定义为 `0`。[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c) 先取得工作流编辑租约，再写入魔数为零的文件头和数据并执行 `fsync`，最后写入正式文件头并再次执行 `fsync`。uCore 没有可供这里使用的 `rename` 或 `link` 原子替换，因此崩溃可能留下不可读的占位文件。读取方会重新核对魔数、清单摘要、数据摘要和生命周期。这个 artifact 发布与内核工具的 Context 记录不构成同一个原子事务。
+Nexus 的 artifact 由 Guest Runtime 组织，再通过 `agent_file_publish()` 把 header 与 payload 一次交给内核。VFS 在未命名 inode 中写完全部字节并完成第一阶段 checkpoint，随后只做一次正式目录接入，再以 attach-only checkpoint 固定目录项。这样，正式路径要么不存在，要么能够读到完整内容；同名发布不会覆盖先到的文件。对于 `DUPLICATE` 和 `INDETERMINATE`，Nexus 回读正式路径，只有 header、payload 和 EOF 都与本次请求严格一致时才按幂等成功处理。Context、metadata 与 Workflow Fence 继续用 artifact handle、lifecycle generation 和 terminal record 对齐。
 
 ## 三种调用方式
 
@@ -182,7 +182,9 @@ Nexus 的 artifact 由 Guest Runtime 单独发布。[`user/include/agent_nexus.h
 
 每个已经接受的目标任务只产生一条 CQE。取消命令使用自己递增的 `request_id`，并以 `link_request_id` 指向目标，不会另行产生一条取消 CQE。若取消策略当场拒绝命令，取消命令的编号仍会记为已使用；`enter` 返回 `DENIED`，原目标继续运行。CQ 已满时，内核保留尚未写出的结果，等用户确认读取后继续发布。强制截止时间由定时器路径标记，任务到达可调度检查点后，内核生成带 `AGENT_TASK_CQE_F_DEADLINE` 的 CQE。
 
-任务资源 ABI 提供导入、释放和查询操作，并使用 16 字节的类型化句柄，其中包含槽位 generation。当前同步 Task Bridge 位于 [`os/agent_task_bridge.c`](../../os/agent_task_bridge.c)，它接受类型化空输入，输出结果类型为 `NONE`。导入非空资源时，`result.status` 为 `AGENT_TASK_CHANNEL_DENIED`。Task Channel 的完整路径测试固定了这一行为。
+任务资源 ABI 提供导入、释放和查询操作，并使用 16 字节的类型化句柄，其中包含槽位 generation。`IMPORT` 仅从当前 Agent 可读的普通文件描述符导入准确的 1–63 字节 OWNED UTF-8，并绑定该 Agent 已经存在且经过校验的最新 Context，不会借导入操作新建 Context。Task Bridge 从 offset 0 读取并额外探测 EOF，不改变文件的共享 offset；通过 NUL 与 UTF-8 检查后，内核保存不可变快照、SHA-256、producer、Context sequence 和 `UNTRUSTED_FILE_DATA` provenance，不保留文件对象指针。
+
+SQE 可以把同一句柄作为 BORROWED 输入。当前 ECHO Task Bridge 会把内核快照复制到工具 payload：BORROWED 任务完成后资源继续处于 `LIVE`，OWNED 任务完成后则自动消费。显式 `RELEASE` 或槽位再次使用后，旧 generation 查询返回 `STALE`；成功 IMPORT 的最终 copyout 失败时，通道会回滚尚未暴露的槽位。
 
 <a id="测试与结果"></a>
 ## 测试结果
@@ -191,21 +193,31 @@ Nexus 的 artifact 由 Guest Runtime 单独发布。[`user/include/agent_nexus.h
 | --- | --- | --- |
 | [`agenttoolabi_ucore.c`](../../user/src/agenttoolabi_ucore.c) | V1 与 V2 目录一致性、参数换序、未知键、重复键、类型和长度错误 | `strict_negative_matrix=1` |
 | [`agentcontract_ucore.c`](../../user/src/agentcontract_ucore.c) | 24 节点依赖图、schema、能力位、前驱 provenance、截止时间、重试和 Phase Lease | `replay=1 retry=1 deadline=1 phase_zero_leak=1` |
-| [`agenttask_ucore.c`](../../user/src/agenttask_ucore.c) | 队列页权限、SQ/CQ 满载、重新同步、已完成任务的幂等取消和截止时间 | `submit=1 cq_ack=1 monotonic=1 resync=1` |
+| [`agenttask_ucore.c`](../../user/src/agenttask_ucore.c) | 队列页权限、SQ/CQ 满载、重新同步、幂等取消、截止时间、UTF-8 快照、OWNED/BORROWED 生命周期和 fd transaction pin | `resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1 release_stale=1 generation_aba=1` |
+| [`agentpublish_ucore.c`](../../user/src/agentpublish_ucore.c) | 完整 header/payload/EOF、同名竞争、不覆盖、Nexus 幂等回读、非法请求零副作用和资源回收 | `same_scope_race=1 ok=1 duplicate=1 no_overwrite=1` |
 
 ```bash
 make agent-uapi-check
 AGENT_TEST_CASE=agenttoolabi_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+AGENT_TEST_CASE=agentpublish_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
+
+`agenttoolabi_ucore` 的正向调用覆盖 Registry 中的结构化请求，错误矩阵则逐项改变参数顺序、键名、类型与长度；内核只接受符合 schema 的输入，并返回可区分的失败状态。`agentcontract_ucore` 把同一工具放入带前驱、deadline、retry 和资源上限的执行图中，结果仍能按节点生成唯一 terminal record，资源在结束后回到零。两组结果说明工具调用协议不仅能被解析，还能把错误处理、执行约束和结果记录统一到同一条内核路径。
+
+`agenttask_ucore` 的资源检查标志全部通过。测试从当前文件访问范围准备输入，确认 ECHO 使用导入时的 UTF-8 快照而不是再次读取 fd；BORROWED 完成后仍可查询，OWNED 完成后自动消费，显式释放与槽位复用前的旧 generation 都返回 `STALE`。独立的 `resource_unlinked_close_race=1 transaction_pin=1 launched_concurrently=1` 标志还确认 sibling close 与导入并发启动并完成；descriptor transaction 检查负责核对确定的 pin、读取与结算顺序。这说明 Task resource 的内容、所有权和 generation 在完整 SQ/CQ 路径中保持一致。
+
+Agent Task 性能测试使用 16 个等价 `ECHO` 操作。Batch 中位耗时为 `561.0 微秒`，Scalar V3 为 `2,051.0 微秒`，`SQ/CQ` 为 `1,620.5 微秒`。这组短同步调用中，Batch 通过一次 syscall 合并提交，适合追求最低批量延迟；`SQ/CQ` 没有在该负载上胜过 Batch，它的作用是保留长期队列、backpressure、cancel 和唯一 terminal CQE，不能把两者按单个延迟指标简单替代。
+
+`agentpublish_ucore` 用两个同 scope 进程同时发布同名文件，结果恰好是一个 `OK`、一个 `DUPLICATE`，胜出文件保持完整且后续提交不能覆盖。32 字节 header 与 96 字节 payload 后紧接 EOF；错误的 pointer、path、size、version 和保留字段都没有留下正式文件名。Nexus 对相同字节能够通过正式路径回读收敛，内容不同则拒绝；删除测试文件后 inode 与 block 计数回到基线。这些结果说明结果文件的正式名字只指向完整内容，并发和失败请求也没有留下额外资源。
 
 ## 实现索引
 
 | 代码职责 | 源码 |
 | --- | --- |
 | UAPI 与用户态封装 | [`include/agent_tool_abi.h`](../../include/agent_tool_abi.h)、[`user/include/agent.h`](../../user/include/agent.h)、[`user/lib/syscall.c`](../../user/lib/syscall.c) |
-| Nexus artifact 发布 | [`user/include/agent_nexus.h`](../../user/include/agent_nexus.h)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c) |
+| Nexus artifact 发布 | [`include/agent_file_publish_abi.h`](../../include/agent_file_publish_abi.h)、[`os/agent_file_state.c`](../../os/agent_file_state.c)、[`os/fs.c`](../../os/fs.c)、[`user/include/agent_nexus.h`](../../user/include/agent_nexus.h)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c) |
 | Tool Registry 与 schema | [`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c) |
 | 工具分派与 Context commit | [`os/agent_core.c`](../../os/agent_core.c)、[`os/agent_context.c`](../../os/agent_context.c) |
 | Execution Contract | [`include/agent_execution_contract_abi.h`](../../include/agent_execution_contract_abi.h)、[`os/agent_execution_contract.c`](../../os/agent_execution_contract.c) |

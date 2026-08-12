@@ -8,7 +8,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
-import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +22,19 @@ LEDGER = (ROOT / "os" / "agent_observe_ledger.c").read_text(encoding="utf-8")
 AUDITOR = (ROOT / "user" / "src" / "rp_auditor.c").read_text(encoding="utf-8")
 PROBE_PATH = ROOT / "scripts" / "probes" / "agent-evidence-ring.c"
 KERNEL_AGENT = (ROOT / "os" / "agent.h").read_text(encoding="utf-8")
+
+
+def host_compiler() -> list[str]:
+    configured = (
+        os.environ.get("HOST_CC")
+        or os.environ.get("HOSTCC")
+        or os.environ.get("CC")
+        or "cc"
+    )
+    compiler = shlex.split(configured)
+    if not compiler:
+        raise RuntimeError("HOST_CC must name a host C compiler")
+    return compiler
 
 
 def replace_once(source: str, old: str, new: str) -> str:
@@ -498,14 +511,15 @@ class EvidenceRingContract(unittest.TestCase):
     def test_sha256_known_vectors(self) -> None:
         if ctypes.sizeof(ctypes.c_ulong) != 8:
             self.skipTest("kernel uint64 maps to unsigned long; host is not LP64")
-        compiler = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
-        if not compiler:
+        try:
+            compiler = host_compiler()
+        except RuntimeError:
             self.skipTest("no host C compiler")
         with tempfile.TemporaryDirectory(prefix="agent-evidence-sha-") as tmp:
             library = Path(tmp) / "libagent_sha256.so"
             subprocess.run(
                 [
-                    compiler,
+                    *compiler,
                     "-std=c11",
                     "-shared",
                     "-fPIC",
@@ -534,8 +548,9 @@ class EvidenceRingContract(unittest.TestCase):
     def test_ring_lifecycle_probe(self) -> None:
         if ctypes.sizeof(ctypes.c_ulong) != 8:
             self.skipTest("kernel uint64 maps to unsigned long; host is not LP64")
-        compiler = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
-        if not compiler:
+        try:
+            compiler = host_compiler()
+        except RuntimeError:
             self.skipTest("no host C compiler")
         with tempfile.TemporaryDirectory(prefix="agent-evidence-ring-") as tmp:
             probe = Path(tmp) / "agent-evidence-ring.c"
@@ -543,7 +558,7 @@ class EvidenceRingContract(unittest.TestCase):
             probe.write_text(lifecycle_probe_source(), encoding="utf-8")
             subprocess.run(
                 [
-                    compiler,
+                    *compiler,
                     "-std=c11",
                     "-Wall",
                     "-Wextra",

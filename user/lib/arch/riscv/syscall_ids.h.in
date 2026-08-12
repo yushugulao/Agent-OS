@@ -358,3 +358,4 @@
 #define __NR_agent_task_channel_setup 563
 #define __NR_agent_task_channel_enter 564
 #define __NR_agent_task_channel_resource 565
+#define __NR_agent_file_publish 566

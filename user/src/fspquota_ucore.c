@@ -266,6 +266,7 @@ static void leave_crash_orphan(void)
 	check(fd >= 0, "create crash orphan");
 	write_fully(fd, block_buf, sizeof(block_buf), "write crash orphan");
 	check(unlink(CRASH_ORPHAN_FILE) == 0, "unlink open crash orphan");
+	check(sync() == 0, "durably publish crash orphan");
 	printf("fspquota_ucore: crash_orphan_ready=1\n");
 	for (;;)
 		sched_yield();
@@ -353,6 +354,7 @@ int main(void)
 	status = run_child(seed_or_verify, "create quota phase worker",
 			   "wait quota phase worker");
 	if (status == PHASE_SEEDED) {
+		check(sync() == 0, "durably publish quota fixture");
 		printf("fspquota_ucore: sponsored_object_charged=1 blocks=%d\n",
 		       SPONSOR_CHARGED_BLOCKS);
 		printf("fspquota_ucore: durable_fixture=1 blocks=%d inodes=%d owner_exited=1\n",

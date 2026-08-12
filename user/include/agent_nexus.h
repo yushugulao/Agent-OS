@@ -6,7 +6,8 @@
 
 #define AGENT_NEXUS_SHA256_SIZE 32U
 #define AGENT_NEXUS_SHA256_HEX_SIZE 64U
-#define AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC 0U
+/* Complete result-file visibility only; Context, metadata and Fence are separate. */
+#define AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC 1U
 
 #define AGENT_NEXUS_TOOL_VIEW_READ_ONLY 1U
 #define AGENT_NEXUS_TOOL_VIEW_EFFECTS   2U

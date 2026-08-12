@@ -13,6 +13,9 @@
 #define AGENT_TASK_CHANNEL_CAPACITY      16U
 #define AGENT_TASK_CHANNEL_SCHEMA_SIZE   32U
 
+/* UTF-8 imports reserve one byte for a kernel-written trailing NUL. */
+#define AGENT_TASK_RESOURCE_UTF8_MAX      63U
+
 #define AGENT_TASK_CHANNEL_SQ_MAGIC 0x4147545343513031ULL
 #define AGENT_TASK_CHANNEL_CQ_MAGIC 0x4147544343513031ULL
 
@@ -235,7 +238,9 @@ struct agent_task_channel_resource {
 	struct agent_task_resource_handle handle;
 	unsigned int resource_type;
 	unsigned int resource_flags;
+	/* IMPORT interprets source_handle as a file descriptor. */
 	unsigned long long source_handle;
+	/* Exact file length; UTF-8 imports accept 1..63 bytes. */
 	unsigned long long length;
 	unsigned long long channel_generation;
 	unsigned long long reserved_tail;

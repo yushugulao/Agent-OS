@@ -4,6 +4,11 @@
 #include <string.h>
 #include <unistd.h>
 
+_Static_assert(sizeof(struct agent_nexus_artifact_header) +
+		       AGENT_NEXUS_ARTIFACT_MAX <=
+	       AGENT_FILE_PUBLISH_MAX_BYTES,
+	       "Nexus artifact must fit one atomic publish snapshot");
+
 struct nexus_sha256_context {
 	unsigned int state[8];
 	unsigned long long bit_count;
@@ -18,8 +23,6 @@ static struct agent_nexus_artifact_actor nexus_registered_identity;
 static struct agent_nexus_artifact_actor nexus_registry_coordinator;
 static int nexus_identity_registered;
 static int nexus_identity_registry_ready;
-
-#define NEXUS_ARTIFACT_STORE_LOCK "nx_store_lock"
 
 #define NX_ROLE(role) AGENT_NEXUS_TOOL_ROLE(AGENT_NEXUS_ROLE_##role)
 #define NX_COORD NX_ROLE(COORDINATOR)
@@ -1122,21 +1125,6 @@ int agent_nexus_artifact_path(unsigned int handle,
 	return 0;
 }
 
-static int nexus_write_all(int fd, const void *data, unsigned int length)
-{
-	const char *bytes = data;
-
-	while (length != 0) {
-		ssize_t written = write(fd, bytes, length);
-
-		if (written <= 0)
-			return -1;
-		bytes += written;
-		length -= (unsigned int)written;
-	}
-	return 0;
-}
-
 static int nexus_read_all(int fd, void *data, unsigned int length)
 {
 	char *bytes = data;
@@ -1520,14 +1508,16 @@ static int nexus_artifact_store(
 	unsigned int payload_size)
 {
 	struct agent_nexus_artifact_header digest_header;
-	struct agent_nexus_artifact_header pending_header;
-	struct agent_file_edit_state store_lock;
 	char path[AGENT_NEXUS_ARTIFACT_PATH_SIZE];
-	unsigned int invalid_magic = 0;
-	int lock_active = 0;
-	int created = 0;
-	int existing;
-	int fd = -1;
+	int publish_status;
+	struct agent_nexus_artifact_header existing_header;
+	unsigned char chunk[64];
+	const unsigned char *expected = payload;
+	unsigned int offset = 0;
+	char extra;
+	ssize_t tail;
+	int close_status;
+	int fd;
 
 	if (payload == 0 || payload_size == 0 ||
 	    payload_size > AGENT_NEXUS_ARTIFACT_MAX ||
@@ -1538,74 +1528,39 @@ static int nexus_artifact_store(
 	digest_header = *stored;
 	agent_nexus_sha256(&digest_header, sizeof(digest_header),
 			   stored->manifest_sha256);
+	publish_status = agent_file_publish(
+		path, stored, sizeof(*stored), payload, payload_size);
+	if (publish_status == AGENT_STATUS_OK)
+		return 0;
+	if (publish_status != AGENT_STATUS_DUPLICATE &&
+	    publish_status != AGENT_STATUS_INDETERMINATE)
+		return -1;
 
-	/*
-	 * uCore has no atomic link/rename commit.  A workflow-scoped edit lease
-	 * serializes every publisher.  The final header is written last, so a
-	 * crash leaves an invalid, publish-once tombstone rather than a readable
-	 * partial artifact.  AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC documents
-	 * this deliberately non-atomic MVP boundary.
-	 */
-	fd = open(NEXUS_ARTIFACT_STORE_LOCK, O_CREATE | O_WRONLY);
-	if (fd < 0)
-		return -1;
-	existing = close(fd);
-	fd = -1;
-	if (existing < 0)
-		return -1;
-	memset(&store_lock, 0, sizeof(store_lock));
-	if (agent_file_edit_begin(NEXUS_ARTIFACT_STORE_LOCK, 0,
-				  AGENT_FILE_EDIT_MAX_TTL, &store_lock) !=
-	    AGENT_STATUS_OK)
-		return -1;
-	lock_active = 1;
-	existing = open(path, O_RDONLY);
-	if (existing >= 0) {
-		(void)close(existing);
-		goto fail;
+	/* A duplicate or indeterminate attach converges only when the official
+	 * path contains the exact requested bytes. */
+	fd = open(path, O_RDONLY);
+
+	if (fd < 0 ||
+	    nexus_read_all(fd, &existing_header, sizeof(existing_header)) < 0 ||
+	    !nexus_bytes_equal(&existing_header, stored, sizeof(*stored)))
+		goto mismatch;
+	while (offset < payload_size) {
+		unsigned int take = payload_size - offset;
+
+		if (take > sizeof(chunk))
+			take = sizeof(chunk);
+		if (nexus_read_all(fd, chunk, take) < 0 ||
+		    !nexus_bytes_equal(chunk, expected + offset, take))
+			goto mismatch;
+		offset += take;
 	}
-	fd = open(path, O_CREATE | O_WRONLY | O_TRUNC);
-	if (fd < 0)
-		goto fail;
-	created = 1;
-	pending_header = *stored;
-	pending_header.magic = 0;
-	if (nexus_write_all(fd, &pending_header, sizeof(pending_header)) < 0 ||
-	    nexus_write_all(fd, payload, payload_size) < 0 || fsync(fd) < 0)
-		goto fail;
-	existing = close(fd);
-	fd = -1;
-	if (existing < 0)
-		goto fail;
-	fd = open(path, O_WRONLY);
-	if (fd < 0 || nexus_write_all(fd, stored, sizeof(*stored)) < 0 ||
-	    fsync(fd) < 0)
-		goto fail;
-	existing = close(fd);
-	fd = -1;
-	if (existing < 0)
-		goto fail;
-	if (agent_file_edit_commit(store_lock.lease_id,
-				   store_lock.base_version, &store_lock) !=
-	    AGENT_STATUS_OK)
-		goto fail;
-	lock_active = 0;
-	return 0;
+	tail = read(fd, &extra, 1);
+	close_status = close(fd);
+	return tail == 0 && close_status == 0 ? 0 : -1;
 
-fail:
+mismatch:
 	if (fd >= 0)
 		(void)close(fd);
-	if (created && lock_active) {
-		fd = open(path, O_WRONLY);
-		if (fd >= 0) {
-			(void)nexus_write_all(fd, &invalid_magic,
-					      sizeof(invalid_magic));
-			(void)fsync(fd);
-			(void)close(fd);
-		}
-	}
-	if (lock_active)
-		(void)agent_file_edit_abort(store_lock.lease_id);
 	return -1;
 }
 

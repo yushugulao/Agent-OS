@@ -412,25 +412,83 @@ class AgentNexusLoopTests(unittest.TestCase):
             require(manifest, needle, "artifact manifest validation weakened")
 
         store = function_body(LIB, "nexus_artifact_store")
+        require(
+            API,
+            "#define AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC 1U",
+            "Nexus does not advertise complete result-file visibility",
+        )
+        require(
+            API,
+            "Context, metadata and Fence are separate",
+            "Nexus overclaims cross-object transactionality",
+        )
         require_order(
             store,
             (
                 "agent_nexus_sha256(payload, payload_size, stored->payload_sha256)",
                 "memset(stored->manifest_sha256, 0",
                 "agent_nexus_sha256(&digest_header, sizeof(digest_header)",
-                "agent_file_edit_begin(",
-                "existing = open(path, O_RDONLY)",
-                "pending_header.magic = 0",
-                "nexus_write_all(fd, &pending_header, sizeof(pending_header))",
-                "nexus_write_all(fd, payload, payload_size)",
-                "fsync(fd)",
-                "fd = open(path, O_WRONLY)",
-                "nexus_write_all(fd, stored, sizeof(*stored))",
-                "fsync(fd)",
-                "agent_file_edit_commit(",
+                "publish_status = agent_file_publish(",
+                "publish_status == AGENT_STATUS_OK",
+                "fd = open(path, O_RDONLY)",
+                "nexus_read_all(fd, &existing_header, sizeof(existing_header))",
+                "nexus_bytes_equal(&existing_header, stored, sizeof(*stored))",
+                "nexus_read_all(fd, chunk, take)",
+                "nexus_bytes_equal(chunk, expected + offset, take)",
+                "tail = read(fd, &extra, 1)",
             ),
-            "artifact publication is not fully hashed, publish-once, and header-last",
+            "artifact publication is not one atomic syscall with exact idempotent readback",
         )
+        self.assertEqual(
+            store.count("agent_file_publish("),
+            1,
+            "artifact publication issues more than one publish syscall",
+        )
+        self.assertRegex(
+            store,
+            re.compile(
+                r"(?:publish_status\s*!=\s*AGENT_STATUS_DUPLICATE\s*&&\s*"
+                r"publish_status\s*!=\s*AGENT_STATUS_INDETERMINATE|"
+                r"publish_status\s*!=\s*AGENT_STATUS_INDETERMINATE\s*&&\s*"
+                r"publish_status\s*!=\s*AGENT_STATUS_DUPLICATE)"
+            ),
+            "definitive publish failures can be converted by path readback",
+        )
+        duplicate_guard = store.find(
+            "publish_status != AGENT_STATUS_DUPLICATE"
+        )
+        indeterminate_guard = store.find(
+            "publish_status != AGENT_STATUS_INDETERMINATE"
+        )
+        official_read = store.find("fd = open(path, O_RDONLY)")
+        self.assertTrue(
+            0 <= duplicate_guard < official_read
+            and 0 <= indeterminate_guard < official_read,
+            "official-path readback is not gated to ambiguous publish outcomes",
+        )
+        for needle in (
+            "NEXUS_ARTIFACT_STORE_LOCK",
+            "nx_store_lock",
+            "agent_file_edit_begin(",
+            "agent_file_edit_commit(",
+            "agent_file_edit_abort(",
+            "fsync(",
+            "pending_header",
+            "magic = 0",
+            "nexus_write_all(",
+            "O_CREATE",
+            "O_TRUNC",
+            "O_WRONLY",
+            "creat(",
+            "mkstemp(",
+            "tmpfile(",
+            "temp_path",
+            "temporary_path",
+            "rename(",
+            "renameat(",
+            "linkat(",
+        ):
+            forbid(store, needle, "artifact publication retains a staged-file protocol")
         forbid(store, "link(", "artifact publication depends on unsupported VFS link")
         forbid(store, "unlink(", "artifact publication depends on unsupported VFS unlink")
 

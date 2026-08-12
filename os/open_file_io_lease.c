@@ -218,14 +218,18 @@ static int open_file_io_syscall_context(enum vfs_operation operation,
 {
 	struct proc *proc = curr_proc();
 	struct thread *thread = curr_thread();
+	int target_syscall = thread != 0 ?
+		thread_trap_cold(thread)->kernel_work_target_syscall_id : -1;
 
 	if (open_file_io_operation_mask(operation) == 0 || proc == 0 ||
 	    thread == 0 || thread->process != proc ||
 	    thread->trapframe == 0 ||
 	    thread->identity_generation == 0 ||
 	    thread_trap_cold(thread)->kernel_work_depth == 0 ||
-	    thread_trap_cold(thread)->kernel_work_target_syscall_id !=
-		    (operation == VFS_OP_READ ? SYS_read : SYS_write))
+	    (operation == VFS_OP_READ ?
+		 (target_syscall != SYS_read &&
+		  target_syscall != SYS_agent_task_channel_resource) :
+		 target_syscall != SYS_write))
 		return 0;
 	*proc_out = proc;
 	*thread_out = thread;

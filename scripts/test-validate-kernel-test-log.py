@@ -459,6 +459,46 @@ class KernelLogValidatorTests(unittest.TestCase):
                 text + "\n[ERROR 5-0]Unexpected mutex id 0", case
             )
 
+    def test_agentscope_rejects_missing_or_zero_peer_fairness_evidence(self):
+        case = "agentscope_ucore"
+        fairness = (
+            "agentscope_ucore: observe_fairness_workset=32 "
+            "span_preemptions=1 timeline_preemptions=3 "
+            "provenance_preemptions=5 peer_turns_delta=6"
+        )
+        bounded = (
+            "agentscope_ucore: observe_query_bounded=1 "
+            "context=128 loops=1 preemptions=9"
+        )
+        completion = f"{case}: parent passed"
+        text = "\n".join(
+            (*validator.AGENT_CASE_MARKERS[case], fairness, bounded, completion)
+        )
+
+        self.assertIn(f"case={case}", validator.validate_agent_case(text, case))
+        mutations = (
+            text.replace(fairness + "\n", "", 1),
+            text.replace(fairness, fairness + "\n" + fairness, 1),
+            text.replace("observe_fairness_workset=32", "observe_fairness_workset=31"),
+            text.replace("observe_fairness_workset=32", "observe_fairness_workset=513"),
+            text.replace("span_preemptions=1", "span_preemptions=0"),
+            text.replace("timeline_preemptions=3", "timeline_preemptions=0"),
+            text.replace("provenance_preemptions=5", "provenance_preemptions=0"),
+            text.replace("peer_turns_delta=6", "peer_turns_delta=0"),
+            text.replace(bounded + "\n", "", 1),
+            text.replace(bounded, bounded + "\n" + bounded, 1),
+            text.replace("context=128", "context=127", 1),
+            text.replace("loops=1", "loops=0", 1),
+            text.replace("preemptions=9", "preemptions=10", 1),
+            text.replace(fairness, fairness + " forged", 1),
+            text.replace(fairness + "\n" + bounded, bounded + "\n" + fairness),
+        )
+        for mutated in mutations:
+            with self.subTest(mutated=mutated):
+                self.assertNotEqual(mutated, text)
+                with self.assertRaises(validator.ValidationError):
+                    validator.validate_agent_case(mutated, case)
+
     def test_thread_contract_checks_order_uniqueness_and_counts(self):
         lines = [
             (
@@ -664,17 +704,29 @@ class KernelLogValidatorTests(unittest.TestCase):
             "fsquota_ucore: public_version_churn=1 cycles=513",
         ).replace(
             "fsquota_ucore: public_domain_limited=1",
-            "fsquota_ucore: public_domain_limited=1 blocks=16 inodes=8",
+            "fsquota_ucore: public_domain_limited=1 blocks=15 inodes=8",
         )
         domain_text += "\nfsquota_ucore: parent passed"
         self.assertIn(
-            "domain blocks=16",
+            "domain blocks=15",
             validator.validate_fs(
                 domain_text,
                 "domain",
                 "fsquota_ucore: parent passed",
             ),
         )
+        for invalid in (
+            "blocks=16 inodes=8",
+            "blocks=15 inodes=7",
+        ):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                validator.ValidationError, "domain boundary mismatch"
+            ):
+                validator.validate_fs(
+                    domain_text.replace("blocks=15 inodes=8", invalid),
+                    "domain",
+                    "fsquota_ucore: parent passed",
+                )
 
         reserve_text = "\n".join(validator.FS_QUOTA_MARKERS)
         reserve_text = reserve_text.replace(

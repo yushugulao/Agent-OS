@@ -7,12 +7,15 @@
 
 struct proc;
 struct thread;
+struct file;
 
 #define AGENT_TASK_CHANNEL_MAPPED_PAGES  2U
 #define AGENT_TASK_CHANNEL_PRIVATE_PAGES 2U
 #define AGENT_TASK_CHANNEL_STATE_PAGES \
 	(AGENT_TASK_CHANNEL_MAPPED_PAGES + AGENT_TASK_CHANNEL_PRIVATE_PAGES)
 #define AGENT_TASK_CHANNEL_RESOURCE_CAPACITY 8U
+#define AGENT_TASK_RESOURCE_SNAPSHOT_SIZE \
+	(AGENT_TASK_RESOURCE_UTF8_MAX + 1U)
 
 /* Integration reserves these two pages by lowering USER_IMAGE_LIMIT. */
 #define AGENT_TASK_CHANNEL_SQ_BASE (AGENT_CONTEXT_BASE - 2U * PAGE_SIZE)
@@ -45,7 +48,7 @@ struct agent_task_completion {
 	uint64 terminal_tick;
 };
 
-/* Successful imports transfer a copied/pinned kernel object to the channel. */
+/* Successful imports transfer a copied kernel snapshot to the channel. */
 struct agent_task_resource_import {
 	uint resource_type;
 	uint resource_flags;
@@ -57,9 +60,10 @@ struct agent_task_resource_import {
 	uint64 provenance_labels;
 	uint64 producer_context_sequence;
 	uchar content_digest[AGENT_TASK_CHANNEL_SCHEMA_SIZE];
+	uchar snapshot[AGENT_TASK_RESOURCE_SNAPSHOT_SIZE];
 };
 
-/* source_handle is the opaque kernel object, never a raw user pointer. */
+/* source_handle is the import-time source id, never a raw kernel pointer. */
 struct agent_task_resource_view {
 	struct agent_task_resource_handle handle;
 	uint64 source_handle;
@@ -68,6 +72,7 @@ struct agent_task_resource_view {
 	uint64 producer_context_sequence;
 	uint64 producer_control_id;
 	uchar content_digest[AGENT_TASK_CHANNEL_SCHEMA_SIZE];
+	uchar snapshot[AGENT_TASK_RESOURCE_SNAPSHOT_SIZE];
 	uint producer_node_id;
 	int producer_pid;
 };
@@ -113,7 +118,7 @@ struct agent_task_channel_ops {
 	/* Expiry handles only work that submit left PENDING. */
 	int (*expire)(struct proc *, const struct agent_task_sqe *,
 		      struct agent_task_completion *);
-	int (*resource_import)(struct proc *,
+	int (*resource_import)(struct proc *, struct file *,
 			       const struct agent_task_channel_resource *,
 			       struct agent_task_resource_import *);
 	void (*resource_release)(struct proc *, uint, uint, uint64, uint64);
@@ -134,9 +139,13 @@ int agent_task_channel_complete(struct proc *, uint64, uint64, uint64,
 int agent_task_channel_expire(struct proc *, uint64,
 			      const struct agent_task_channel_ops *);
 int agent_task_channel_resource(
-	struct proc *, struct thread *,
+	struct proc *, struct thread *, struct file *,
 	const struct agent_task_channel_resource *,
 	struct agent_task_channel_resource_result *,
+	const struct agent_task_channel_ops *);
+/* Undo an IMPORT whose successful result could not be copied to user space. */
+int agent_task_channel_rollback_import(
+	struct proc *, uint64, struct agent_task_resource_handle,
 	const struct agent_task_channel_ops *);
 /*
  * IRQ-safe: marks newly due requests and interrupts the generation-matched

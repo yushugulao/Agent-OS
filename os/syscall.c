@@ -32,6 +32,9 @@
 
 extern struct proc pool[NPROC];
 
+_Static_assert(SYS_agent_file_publish == AGENT_FILE_PUBLISH_SYSCALL,
+	       "Agent file publish syscall ABI");
+
 #ifdef VIRTIO_DISK_TEST_PROFILE
 static int sys_virtio_disk_test(uint command, uint64 arg0, uint64 arg1,
 				uint64 arg2, uint64 arg3, uint64 arg4)
@@ -856,6 +859,7 @@ extern char trap_page[];
 /* 准入与执行共用同一个已固定的文件表身份。 */
 struct syscall_transaction_context {
 	int id;
+	int file_fd;
 	struct file *file;
 	struct file_close_receipt close_receipt;
 	int close_attempted;
@@ -916,6 +920,7 @@ static void syscall_transaction_prepare(
 	const struct trapframe *trapframe, int id, uint policy)
 {
 	transaction->id = id;
+	transaction->file_fd = -1;
 	transaction->file = 0;
 	transaction->policy = policy;
 	transaction->close_receipt.state = FILE_CLOSE_RECEIPT_EMPTY;
@@ -928,6 +933,7 @@ static void syscall_transaction_prepare(
 	switch (transaction->id) {
 	case SYS_read:
 	case SYS_write:
+		transaction->file_fd = (int)trapframe->a0;
 		transaction->file = syscall_fd_pin(trapframe->a0);
 		if (syscall_file_uses_disk(transaction->file)) {
 			transaction->policy |= SYSCALL_POLICY_BLOCK_IO;
@@ -935,6 +941,21 @@ static void syscall_transaction_prepare(
 				transaction->policy |= SYSCALL_POLICY_FS_EPOCH;
 		}
 		break;
+	case SYS_agent_task_channel_resource: {
+		struct agent_task_channel_resource control;
+
+		memset(&control, 0, sizeof(control));
+		if (copyin(curr_proc()->pagetable, (char *)&control,
+			   trapframe->a0, sizeof(control)) == 0 &&
+		    control.version == AGENT_TASK_CHANNEL_VERSION &&
+		    control.size == sizeof(control) &&
+		    control.operation == AGENT_TASK_RESOURCE_IMPORT &&
+		    control.source_handle < FD_BUFFER_SIZE) {
+			transaction->file_fd = (int)control.source_handle;
+			transaction->file = syscall_fd_pin(control.source_handle);
+		}
+		break;
+	}
 	case SYS_openat:
 		if ((trapframe->a1 & (O_CREATE | O_TRUNC)) != 0)
 			transaction->policy |= SYSCALL_POLICY_FS_EPOCH;
@@ -1270,8 +1291,10 @@ static __attribute__((noinline)) int syscall_dispatch(
 					   trapframe->a1);
 		break;
 	case SYS_agent_task_channel_resource:
-		ret = sys_agent_task_channel_resource(trapframe->a0,
-					      trapframe->a1);
+		ret = sys_agent_task_channel_resource(
+			trapframe->a0, trapframe->a1,
+			transaction != 0 ? transaction->file : 0,
+			transaction != 0 ? transaction->file_fd : -1);
 		break;
 	case SYS_agent_resource_snapshot:
 		ret = sys_agent_resource_snapshot(trapframe->a0,
@@ -1440,6 +1463,9 @@ static __attribute__((noinline)) int syscall_dispatch(
 	case SYS_agent_file_edit_state:
 		ret = sys_agent_file_edit_state(trapframe->a0, trapframe->a1);
 		break;
+	case SYS_agent_file_publish:
+		ret = sys_agent_file_publish(trapframe->a0);
+		break;
 	case SYS_agent_worker_create:
 		ret = sys_agent_worker_create(trapframe->a0, trapframe->a1);
 		break;
@@ -1554,6 +1580,8 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_file_edit_commit:
 	case SYS_agent_file_edit_abort:
 	case SYS_agent_file_edit_state:
+	case SYS_agent_file_publish:
+	case SYS_agent_task_channel_resource:
 	case SYS_agent_route_config:
 		return 1;
 	/*
@@ -1576,7 +1604,6 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_worker_create:
 	case SYS_agent_task_channel_setup:
 	case SYS_agent_task_channel_enter:
-	case SYS_agent_task_channel_resource:
 		return 0;
 	/* Exit/close drive their own lifecycle protocols; never nest the gate. */
 	case SYS_exit:
@@ -1699,6 +1726,9 @@ syscall_direct_agent_side_effects(
 	case SYS_agent_file_edit_commit:
 	case SYS_agent_file_edit_abort:
 		return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA;
+	case SYS_agent_file_publish:
+		return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA |
+		       AGENT_SIDE_EFFECT_ARTIFACT;
 	default:
 		return 0;
 	}
@@ -1791,7 +1821,8 @@ void syscall()
 			}
 			operation_entered = 1;
 		}
-		if (id == SYS_read || id == SYS_write || id == SYS_fstat) {
+		if (id == SYS_read || id == SYS_write || id == SYS_fstat ||
+		    id == SYS_agent_task_channel_resource) {
 			ret = agent_execution_contract_file_pin_enter(
 				curr_proc(), &file_pin_guard);
 			if (ret != AGENT_STATUS_OK) {

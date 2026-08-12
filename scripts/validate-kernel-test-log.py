@@ -148,10 +148,18 @@ AGENT_CASE_MARKERS = {
         "agenttask_ucore: perf_fp path=scalar_v3 value=31",
         "agenttask_ucore: perf_fp path=sq_cq value=31",
         "agenttask_ucore: cq_full=1 backpressure=1 pending_preserved=1 recovery_enter_calls=2 resync_recovery=1",
-        "agenttask_ucore: setup=1 single_issuer=1 resource_import_denied=1",
+        "agenttask_ucore: resource_unlinked_close_race=1 transaction_pin=1 launched_concurrently=1",
+        "agenttask_ucore: setup=1 single_issuer=1 resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1 release_stale=1 generation_aba=1",
         "agenttask_ucore: submit=1 cq_ack=1 monotonic=1 resync=1",
         "agenttask_ucore: target_cancel_exactly_once=1 hard_deadline=1",
         "agenttask_ucore: batch_fp=31 scalar_v3_fp=31 task_fp=31",
+    ),
+    "agentpublish_ucore": (
+        "agentpublish_ucore: invalid_requests=1 bad_pointer=1 bad_path=1 bad_size=1 bad_abi=1 zero_namespace_side_effect=1",
+        "agentpublish_ucore: publish_image=1 header=32 payload=96 eof=1",
+        "agentpublish_ucore: same_scope_race=1 ok=1 duplicate=1 no_overwrite=1",
+        "agentpublish_ucore: nexus_duplicate=1 exact_readback=1 mismatch_rejected=1",
+        "agentpublish_ucore: resources=1 invalid_no_leak=1 duplicate_no_leak=1 unlink_reclaimed=1",
     ),
     "agenttoolabi_ucore": (
         "agenttoolabi_ucore: tool_list_contract=1",
@@ -401,6 +409,78 @@ def validate_agenttask_metrics(text):
     if len(cancel_lines) != 1 or len(cancel_matches) != 1:
         raise ValidationError(
             "Task retained-terminal cancellation metric must be unique and exact"
+        )
+
+
+def validate_agentscope_metrics(text):
+    lines = text.splitlines()
+    prefix = "agentscope_ucore: observe_fairness_workset="
+    pattern = re.compile(
+        r"agentscope_ucore: observe_fairness_workset=(\d+) "
+        r"span_preemptions=(\d+) timeline_preemptions=(\d+) "
+        r"provenance_preemptions=(\d+) peer_turns_delta=(\d+)"
+    )
+    candidates = [
+        (index, line)
+        for index, line in enumerate(lines)
+        if line.startswith(prefix)
+    ]
+    matches = [
+        (index, pattern.fullmatch(line)) for index, line in candidates
+    ]
+    if len(candidates) != 1 or matches[0][1] is None:
+        raise ValidationError(
+            "Agent scope observation fairness metric must be unique and exact"
+        )
+    metric_index, match = matches[0]
+    workset, span, timeline, provenance, peer_turns_delta = map(
+        int, match.groups()
+    )
+    if not 32 <= workset <= 512 or min(
+        span, timeline, provenance, peer_turns_delta
+    ) <= 0:
+        raise ValidationError(
+            "Agent scope observation pressure lacked a full workset, "
+            "fairness checkpoints, or in-window peer progress: "
+            f"workset={workset} span={span} timeline={timeline} "
+            f"provenance={provenance} peer_turns_delta={peer_turns_delta}"
+        )
+    bounded_pattern = re.compile(
+        r"agentscope_ucore: observe_query_bounded=1 "
+        r"context=(\d+) loops=(\d+) preemptions=(\d+)"
+    )
+    bounded_candidates = [
+        (index, line)
+        for index, line in enumerate(lines)
+        if line.startswith("agentscope_ucore: observe_query_bounded=")
+    ]
+    bounded_matches = [
+        (index, bounded_pattern.fullmatch(line))
+        for index, line in bounded_candidates
+    ]
+    if len(bounded_candidates) != 1 or bounded_matches[0][1] is None:
+        raise ValidationError(
+            "Agent scope bounded observation summary must be unique and exact"
+        )
+    bounded_index, bounded = bounded_matches[0]
+    context, loops, preemptions = map(int, bounded.groups())
+    if context != 128 or loops <= 0 or preemptions != span + timeline + provenance:
+        raise ValidationError(
+            "Agent scope bounded observation summary does not match fairness "
+            f"evidence: context={context} loops={loops} "
+            f"preemptions={preemptions}/{span + timeline + provenance}"
+        )
+    completion = [
+        index
+        for index, line in enumerate(lines)
+        if line == "agentscope_ucore: parent passed"
+    ]
+    if (
+        len(completion) != 1
+        or not metric_index < bounded_index < completion[0]
+    ):
+        raise ValidationError(
+            "Agent scope observation fairness metric is out of order"
         )
 
 
@@ -761,6 +841,8 @@ def validate_agent_case(text, case, context_sync=False):
         raise ValidationError("iobudget child inherited a stale stdio mutex")
     if case == "agenttask_ucore":
         validate_agenttask_metrics(text)
+    if case == "agentscope_ucore":
+        validate_agentscope_metrics(text)
     if case == "agent_eevdf_ucore":
         validate_agent_eevdf_metrics(text)
     if context_sync:
@@ -1014,9 +1096,7 @@ def validate_fs(text, profile, marker):
         if pressure is None:
             raise ValidationError("missing quota pressure counts")
         blocks, inodes = map(int, pressure.groups())
-        if profile == "domain" and not (
-            2 <= blocks <= 16 and 4 <= inodes <= 8
-        ):
+        if profile == "domain" and (blocks, inodes) != (15, 8):
             raise ValidationError(
                 f"domain boundary mismatch: blocks={blocks} inodes={inodes}"
             )

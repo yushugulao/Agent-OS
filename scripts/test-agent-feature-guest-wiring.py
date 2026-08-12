@@ -15,6 +15,7 @@ RUNNER = ROOT / "scripts" / "run-agent-tests.sh"
 VALIDATOR = ROOT / "scripts" / "validate-kernel-test-log.py"
 AGENTTASK_SOURCE = ROOT / "user" / "src" / "agenttask_ucore.c"
 EEVDF_SOURCE = ROOT / "user" / "src" / "agent_eevdf_ucore.c"
+AGENTSCOPE_SOURCE = ROOT / "user" / "src" / "agentscope_ucore.c"
 
 GUESTS = (
     "agentcontract_ucore",
@@ -46,7 +47,8 @@ MARKERS = {
         "agenttask_ucore: perf_fp path=scalar_v3 value=31",
         "agenttask_ucore: perf_fp path=sq_cq value=31",
         "agenttask_ucore: cq_full=1 backpressure=1 pending_preserved=1 recovery_enter_calls=2 resync_recovery=1",
-        "agenttask_ucore: setup=1 single_issuer=1 resource_import_denied=1",
+        "agenttask_ucore: resource_unlinked_close_race=1 transaction_pin=1 launched_concurrently=1",
+        "agenttask_ucore: setup=1 single_issuer=1 resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1 release_stale=1 generation_aba=1",
         "agenttask_ucore: submit=1 cq_ack=1 monotonic=1 resync=1",
         "agenttask_ucore: target_cancel_exactly_once=1 hard_deadline=1",
         "agenttask_ucore: batch_fp=31 scalar_v3_fp=31 task_fp=31",
@@ -81,6 +83,7 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
         cls.validator = read(VALIDATOR)
         cls.agenttask_source = read(AGENTTASK_SOURCE)
         cls.eevdf_source = read(EEVDF_SOURCE)
+        cls.agentscope_source = read(AGENTSCOPE_SOURCE)
 
     def test_agent_chapter_contains_each_guest_once(self) -> None:
         agent_tests = make_assignment(self.makefile, "AGENT_TESTS")
@@ -108,7 +111,7 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
                 'X("agenttask_ucore", "agenttask_ucore", '
                 "EXEC_MANIFEST_F_BOOT_SEALED, "
                 "EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR), 0, "
-                "EXEC_MANIFEST_VFS_PROFILE_CONTENT_READ)"
+                "EXEC_MANIFEST_VFS_PROFILE_WORKFLOW)"
             ),
         }
         for guest, entry in expected.items():
@@ -202,7 +205,7 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
         )
         self.assertIn("sleep(1);", source)
         self.assertIn("pid = create_isolated_workflow();", source)
-        self.assertEqual(source.count("run_child(CHILD_"), 4)
+        self.assertEqual(source.count("run_child(CHILD_"), 5)
         self.assertIn("pre_effect_context_service_start", source)
         self.assertIn("interval_origin=sequence_start_boundary", source)
         self.assertIn("service_start_tick_intervals", source)
@@ -213,6 +216,67 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
         self.assertIn("quantiles=nearest_rank", source)
         self.assertIn("running_cancel_latency=unavailable", source)
         self.assertIn("terminal_pending_saturation=unavailable", source)
+
+    def test_agenttask_resource_import_is_a_full_vertical_flow(self) -> None:
+        source = self.agenttask_source
+        resource = source[
+            source.index("static void exercise_task_resources(") :
+            source.index("static void run_task_ablation(")
+        ]
+        ordered = (
+            '"prime an existing Context before importing a resource"',
+            "AGENT_TASK_RESOURCE_IMPORT",
+            "task_resource_bad_result_probe(",
+            "AGENT_TASK_RESOURCE_QUERY",
+            "borrowed = first;",
+            "check_resource_echo(&cqe, &sqe, task_resource_first_payload);",
+            "AGENT_TASK_RESOURCE_RELEASE",
+            '"released generation is stale"',
+            '"resource slot reuse advances generation"',
+            "check_resource_echo(&cqe, &sqe, task_resource_second_payload);",
+            '"owned completion automatically consumes the input resource"',
+        )
+        positions = [resource.index(item) for item in ordered]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("AGENT_TASK_RESOURCE_UTF8_MAX + 1U", resource)
+        self.assertIn("resource_result.source_handle == 0", resource)
+        self.assertIn("AGENT_PROVENANCE_UNTRUSTED_FILE_DATA", source)
+        self.assertIn("context_after.context_path_count ==", resource)
+        self.assertNotIn("O_CREATE", resource)
+        self.assertNotIn("O_TRUNC", resource)
+        self.assertNotIn("unlink(", resource)
+        run_child = source[
+            source.index("static void run_child(") : source.index("int main(void)")
+        ]
+        preparation = run_child.index("prepare_task_resource_inputs(")
+        prime = run_child.index("prime_task_resource_context()", preparation)
+        setup = run_child.index("setup_task_channel(", prime)
+        close_race = run_child.index(
+            "exercise_task_resource_close_race(", setup
+        )
+        freeze = run_child.index("key = create_task_contract(", preparation)
+        exercise = run_child.index("exercise_task_resources(", freeze)
+        self.assertEqual(
+            [preparation, prime, setup, close_race, freeze, exercise],
+            sorted([preparation, prime, setup, close_race, freeze, exercise]),
+        )
+        close_race_body = source[
+            source.index("static void exercise_task_resource_close_race(") :
+            source.index("static void check_resource_echo(")
+        ]
+        race_order = (
+            "thread_create(task_resource_close_worker, &race)",
+            "race.start = 1",
+            "AGENT_TASK_RESOURCE_IMPORT",
+            "waittid(tid)",
+            "AGENT_TASK_RESOURCE_RELEASE",
+        )
+        race_positions = [close_race_body.index(item) for item in race_order]
+        self.assertEqual(race_positions, sorted(race_positions))
+        self.assertIn("unlink(TASK_RESOURCE_RACE_PATH)", source)
+        self.assertIn("launched_concurrently=1", source)
+        self.assertIn("resource_inputs_prepared=1 scope_local=1", source)
+        self.assertNotIn("resource_import_denied", source)
 
     def test_eevdf_guest_reserves_bootstrap_slot_and_freezes_topology(self) -> None:
         source = self.eevdf_source
@@ -525,7 +589,9 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
         self.assertEqual(self.runner.count('--case "${init_proc}"'), 1)
         route = re.search(
             r'\tif \[\[ "\$\{init_proc\}" == "agent_eevdf_ucore" \|\|\n'
-            r'\t      "\$\{init_proc\}" == "agenttask_ucore" \]\]; then\n'
+            r'\t      "\$\{init_proc\}" == "agenttask_ucore" \|\|\n'
+            r'\t      "\$\{init_proc\}" == "agentpublish_ucore" \|\|\n'
+            r'\t      "\$\{init_proc\}" == "agentscope_ucore" \]\]; then\n'
             r'(?P<body>.*?)\n\tfi',
             self.runner,
             re.S,
@@ -540,6 +606,80 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
         self.assertIn("validate_agent_case(text, args.case)", self.validator)
         self.assertIn("def validate_agent_eevdf_metrics(text):", self.validator)
         self.assertIn("validate_agent_eevdf_metrics(text)", self.validator)
+
+    def test_agentscope_fairness_proves_pressure_window_and_clean_joins(self) -> None:
+        source = self.agentscope_source
+
+        def assert_contract(candidate: str) -> None:
+            pressure = candidate[
+                candidate.index("observe_query_pressure(int ready_fd") :
+                candidate.index("static int observe_cross_scope_queries")
+            ]
+            setup_pos = pressure.index("check_observe_ordered_indexes();")
+            before_pos = pressure.index(
+                "peer_turns_before = observe_query_peer_turns;", setup_pos
+            )
+            loop_pos = pressure.index(
+                "while (!observe_query_stop ||", before_pos
+            )
+            delta_pos = pressure.index(
+                "observe_result_scratch.peer_turns_delta =", loop_pos
+            )
+            stop_pos = pressure.index("observe_query_peer_stop = 1;", delta_pos)
+            self.assertEqual(
+                [setup_pos, before_pos, loop_pos, delta_pos, stop_pos],
+                sorted([setup_pos, before_pos, loop_pos, delta_pos, stop_pos]),
+            )
+            self.assertIn(
+                "observe_query_peer_turns - peer_turns_before", pressure
+            )
+            self.assertIn(
+                "observe_result_scratch.peer_turns_delta > 0", pressure
+            )
+            self.assertIn("check(waittid(peer_tid) == 0,", pressure)
+            self.assertIn("check(waittid(stop_tid) == 0,", pressure)
+            self.assertNotIn("check(waittid(peer_tid) >= 0,", pressure)
+            self.assertNotIn("check(waittid(stop_tid) >= 0,", pressure)
+
+            join = candidate[
+                candidate.index("} else if (command.operation == 'K')") :
+                candidate.index("} else if (command.operation == 'W')")
+            ]
+            result_check = join[
+                join.index("check(observe_result_scratch.iterations > 0") :
+                join.index('"observation query pressure result")')
+            ]
+            self.assertIn(
+                "observe_result_scratch.peer_turns_delta > 0", result_check
+            )
+            self.assertEqual(
+                join.count("agentscope_ucore: observe_fairness_workset=%d"), 1
+            )
+            self.assertNotIn(
+                "agentscope_ucore: observe_fairness_workset=%d", pressure
+            )
+
+        assert_contract(source)
+        mutations = (
+            source.replace(
+                "peer_turns_before = observe_query_peer_turns;",
+                "peer_turns_before = 0;",
+                1,
+            ),
+            source.replace(
+                "observe_query_peer_turns - peer_turns_before",
+                "peer_turns_before - peer_turns_before",
+                1,
+            ),
+            source.replace(".peer_turns_delta > 0", ".peer_turns_delta >= 0", 1),
+            source.replace("waittid(peer_tid) == 0", "waittid(peer_tid) >= 0", 1),
+            source.replace("waittid(stop_tid) == 0", "waittid(stop_tid) >= 0", 1),
+        )
+        for mutated in mutations:
+            with self.subTest(mutated=mutated):
+                self.assertNotEqual(mutated, source)
+                with self.assertRaises((AssertionError, ValueError)):
+                    assert_contract(mutated)
 
 
 if __name__ == "__main__":

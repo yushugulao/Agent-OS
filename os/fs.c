@@ -149,9 +149,11 @@ static struct fs_deferred_reclaim_entry
 	fs_deferred_reclaims[FS_DEFERRED_RECLAIM_CAP];
 static struct fs_deferred_reclaim_action
 	fs_deferred_reclaim_plan[FS_DEFERRED_RECLAIM_BATCH_UNITS];
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
 static struct inode_reclaim fs_deferred_reclaim_shadow;
 static uint fs_deferred_reclaim_unique[
 	FS_DEFERRED_RECLAIM_UNIQUE_BUFFERS];
+#endif
 static uint fs_deferred_reclaim_count;
 static uint fs_deferred_reclaim_cursor;
 static uint64 fs_deferred_reclaim_next_tick;
@@ -255,6 +257,7 @@ static int writei_charged(struct inode *, const struct vfs_cred *,
 			  uint, enum fs_epoch_phase);
 static int fs_qmap_write_forward(int dev, uint block, uint state);
 static int fs_bitmap_write_forward(int dev, uint block, int allocated);
+static int fs_durable_barrier_forward(void);
 static int bfree(int dev, uint block);
 static int fs_block_candidate_drain(uint owner);
 static int fs_block_candidate_is_reserved(uint block);
@@ -544,7 +547,7 @@ static int fs_allocator_fault_before(uint operation, uint phase, int forward)
 	if (result == VIRTIO_DISK_ERR_BUSY && !forward)
 		return result;
 	if (result == VIRTIO_DISK_ERR_BUSY)
-		return fs_forward_checkpoint();
+		return fs_durable_barrier_forward();
 	return fs_io_fail(FS_FAILURE_METADATA_WRITE_INDETERMINATE);
 }
 
@@ -576,6 +579,17 @@ static int fs_durable_barrier_forward(void)
 		if (result < 0)
 			return result;
 	}
+}
+
+/* Fault-profile writes bypass epochs so their publish ordering point must be
+ * a real flush; production commits the staged epoch and its cleanup debt. */
+static int fs_publish_checkpoint(void)
+{
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	return fs_durable_barrier_forward();
+#else
+	return fs_forward_checkpoint();
+#endif
 }
 
 // Read the super block.
@@ -2664,6 +2678,7 @@ static int fs_block_candidate_is_reserved(uint block)
 		(1U << (block % 8))) != 0;
 }
 
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
 static void fs_block_candidate_set(uint block)
 {
 	if (block < sb.datastart || block >= sb.size || block >= FSSIZE ||
@@ -2671,6 +2686,7 @@ static void fs_block_candidate_set(uint block)
 		panic("filesystem block candidate reserve");
 	fs_block_candidate_reserved[block / 8] |= 1U << (block % 8);
 }
+#endif
 
 static void fs_block_candidate_clear(uint block)
 {
@@ -2699,6 +2715,7 @@ static int fs_block_candidate_reclaim(uint block)
 	return -1;
 }
 
+#ifndef FS_ALLOCATOR_FAULT_TEST_PROFILE
 static int fs_block_candidate_transfer(uint owner)
 {
 	struct fs_block_magazine *target =
@@ -2896,6 +2913,7 @@ out:
 	fs_allocator_gate_unlock();
 	return 0;
 }
+#endif
 
 static uint balloc(uint dev, const struct fs_storage_charge *charge, int *error)
 {
@@ -6932,8 +6950,8 @@ fail:
 }
 
 // Write a new directory entry (name, inum) into the directory dp.
-int dirlink(struct inode *dp, char *name, uint inum,
-	    const struct vfs_cred *cred)
+static int dirlink_impl(struct inode *dp, char *name, uint inum,
+			const struct vfs_cred *cred, int publish_commit)
 {
 	uint off = 0;
 	int empty_off = -1;
@@ -6987,12 +7005,12 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	index_status = fs_dentry_index_create_conflict(
 		dp, key, target_policy, target_scope_id, &empty_off);
 	if (index_status == FS_DENTRY_LOCATE_HIT) {
-		result = -1;
+		result = FS_DIRLINK_EXISTS;
 		goto out_namespace;
 	}
 	if (index_status == FS_DENTRY_LOCATE_ABSENT) {
 		if (empty_off < 0) {
-			result = -1;
+			result = FS_DIRLINK_NO_SPACE;
 			goto out_namespace;
 		}
 		goto write_entry;
@@ -7039,7 +7057,7 @@ int dirlink(struct inode *dp, char *name, uint inum,
 				lookup_status = 1;
 			iput(ip);
 			if (lookup_status) {
-				result = -1;
+				result = FS_DIRLINK_EXISTS;
 				goto out_namespace;
 			}
 		}
@@ -7048,7 +7066,7 @@ int dirlink(struct inode *dp, char *name, uint inum,
 			goto out_namespace;
 	}
 	if (empty_off < 0) {
-		result = -1;
+		result = FS_DIRLINK_NO_SPACE;
 		goto out_namespace;
 	}
 write_entry:
@@ -7065,7 +7083,8 @@ write_entry:
 	}
 	fs_dentry_index_publish_link(dp, key, (uint)empty_off, inum,
 				     target_incarnation);
-	result = fs_durable_barrier_forward();
+	result = publish_commit ? fs_publish_checkpoint() :
+				 fs_durable_barrier_forward();
 	if (result < 0)
 		result = FS_LOOKUP_INDETERMINATE;
 	else
@@ -7073,6 +7092,18 @@ write_entry:
 out_namespace:
 	fs_namespace_gate_unlock();
 	return result;
+}
+
+int dirlink(struct inode *dp, char *name, uint inum,
+	    const struct vfs_cred *cred)
+{
+	return dirlink_impl(dp, name, inum, cred, 0);
+}
+
+static int dirlink_publish(struct inode *dp, char *name, uint inum,
+			   const struct vfs_cred *cred)
+{
+	return dirlink_impl(dp, name, inum, cred, 1);
 }
 
 int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
@@ -7613,6 +7644,182 @@ fail_allocated:
 		*status = result;
 	iput(dp);
 	return 0;
+}
+
+static int fs_agent_publish_name_valid(const char *path)
+{
+	uint length = 0;
+
+	if (path == 0 || path[0] == 0)
+		return 0;
+	while (length < DIRSIZ && path[length] != 0) {
+		if (path[length] == '/')
+			return 0;
+		length++;
+	}
+	if (length == 0 || path[length] != 0)
+		return 0;
+	return !(length == 1 && path[0] == '.') &&
+	       !(length == 2 && path[0] == '.' && path[1] == '.');
+}
+
+static int fs_agent_publish_io_status(int result)
+{
+	if (result == FS_LOOKUP_INDETERMINATE ||
+	    fs_io_health == FS_IO_INDETERMINATE)
+		return AGENT_STATUS_INDETERMINATE;
+	if (result == FS_LOOKUP_BUSY || result == VIRTIO_DISK_ERR_BUSY)
+		return AGENT_STATUS_RETRY;
+	return AGENT_STATUS_IO_ERROR;
+}
+
+static int fs_agent_publish_discard(struct inode *ip, int status)
+{
+	int reclaim_result;
+	int checkpoint_result;
+
+	if (ip == 0)
+		return status;
+	if (status == AGENT_STATUS_INDETERMINATE ||
+	    fs_io_health != FS_IO_HEALTHY) {
+		iput(ip);
+		return AGENT_STATUS_INDETERMINATE;
+	}
+	ip->removed = 1;
+	reclaim_result = fs_put_removed_checked(ip);
+	checkpoint_result = fs_publish_checkpoint();
+	if (reclaim_result < 0 || checkpoint_result < 0)
+		return AGENT_STATUS_INDETERMINATE;
+	return status;
+}
+
+/*
+ * The first checkpoint commits every data block and the final inode image
+ * while the inode is unnamed.  A second, attach-only checkpoint commits the
+ * one official dirent, so the namespace never names partial data.
+ */
+int fs_agent_file_publish_atomic(char *path, const struct vfs_cred *cred,
+				 const void *snapshot, uint total)
+{
+	struct fs_storage_charge charge;
+	struct inode *dp = 0;
+	struct inode *existing = 0;
+	struct inode *ip = 0;
+	uint intent_owner;
+	char key[DIRSIZ + 1];
+	int lookup_status = FS_LOOKUP_ERROR;
+	int root_status = FS_LOOKUP_ERROR;
+	int result;
+	int status;
+
+	if (!fs_agent_publish_name_valid(path) || cred == 0 || snapshot == 0 ||
+	    total == 0 || total > AGENT_FILE_PUBLISH_MAX_BYTES)
+		return AGENT_STATUS_BAD_PARAM;
+	if (fs_dirent_canonicalize(path, key) < 0)
+		return AGENT_STATUS_BAD_PARAM;
+	dp = root_dir_status(&root_status);
+	if (dp == 0 || root_status != FS_LOOKUP_FOUND) {
+		if (dp != 0)
+			iput(dp);
+		return fs_agent_publish_io_status(root_status);
+	}
+	if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE) ||
+	    !vfs_create_request_authorize(cred, VFS_POLICY_WORKFLOW, 0, 1, 0) ||
+	    cred->scope_id < VFS_SCOPE_FIRST_DYNAMIC) {
+		iput(dp);
+		return AGENT_STATUS_DENIED;
+	}
+	existing = dirlookup(dp, key, 0, VFS_POLICY_WORKFLOW,
+			     cred->scope_id, &lookup_status);
+	if (existing != 0) {
+		iput(existing);
+		iput(dp);
+		return AGENT_STATUS_DUPLICATE;
+	}
+	if (lookup_status != FS_LOOKUP_ABSENT) {
+		iput(dp);
+		return fs_agent_publish_io_status(lookup_status);
+	}
+	if (fs_storage_charge_from_vfs(cred, &charge) < 0) {
+		iput(dp);
+		return AGENT_STATUS_DENIED;
+	}
+	ip = ialloc(dp->dev, T_FILE, &charge, &lookup_status);
+	if (ip == 0) {
+		iput(dp);
+		if (lookup_status == FS_LOOKUP_BUSY)
+			return AGENT_STATUS_RETRY;
+		return fs_io_health == FS_IO_HEALTHY ? AGENT_STATUS_NO_SPACE :
+			fs_agent_publish_io_status(lookup_status);
+	}
+	result = ivalid(ip);
+	if (result < 0)
+		goto fail_inode;
+	if (ip->type != T_FILE ||
+	    fs_qmap_transition_owner(ip->fs_owner_domain,
+				      FS_QMAP_ALLOCATING_FLAG,
+				      &intent_owner) < 0 ||
+	    intent_owner != charge.owner) {
+		result = -1;
+		goto fail_inode;
+	}
+	ip->fs_owner_domain = charge.owner;
+	result = vfs_inode_init_label(ip, cred, VFS_POLICY_WORKFLOW);
+	if (result < 0)
+		goto fail_inode;
+	result = iupdate(ip);
+	if (result < 0)
+		goto fail_inode;
+	result = fs_preallocate_inode(ip, cred, total);
+	if (result < 0) {
+		if (result == FS_LOOKUP_BUSY ||
+		    result == VIRTIO_DISK_ERR_BUSY)
+			status = AGENT_STATUS_RETRY;
+		else
+			status = fs_io_health == FS_IO_HEALTHY ?
+				 AGENT_STATUS_NO_SPACE :
+				 fs_agent_publish_io_status(result);
+		goto fail_known;
+	}
+	result = writei(ip, cred, 0, (uint64)snapshot, 0, total);
+	if (result != (int)total) {
+		status = result > 0 && fs_io_health == FS_IO_HEALTHY ?
+			 AGENT_STATUS_RETRY : fs_agent_publish_io_status(result);
+		goto fail_known;
+	}
+	/* The inode image and every data block must be durable before its only
+	 * namespace attachment can be staged. */
+	result = fs_publish_checkpoint();
+	if (result < 0) {
+		status = AGENT_STATUS_INDETERMINATE;
+		goto fail_known;
+	}
+	result = dirlink_publish(dp, key, ip->inum, cred);
+	if (result == 0) {
+		iput(ip);
+		iput(dp);
+		return AGENT_STATUS_OK;
+	}
+	if (result == FS_LOOKUP_INDETERMINATE ||
+	    fs_io_health == FS_IO_INDETERMINATE) {
+		/* The official dirent may already exist; do not reclaim its inode. */
+		iput(ip);
+		iput(dp);
+		return AGENT_STATUS_INDETERMINATE;
+	}
+	if (result == FS_DIRLINK_EXISTS)
+		status = AGENT_STATUS_DUPLICATE;
+	else if (result == FS_DIRLINK_NO_SPACE)
+		status = AGENT_STATUS_NO_SPACE;
+	else
+		status = fs_agent_publish_io_status(result);
+	goto fail_known;
+
+fail_inode:
+	status = fs_agent_publish_io_status(result);
+fail_known:
+	iput(dp);
+	return fs_agent_publish_discard(ip, status);
 }
 
 struct inode *namei_scope_status(char *path, uint policy, uint scope_id,

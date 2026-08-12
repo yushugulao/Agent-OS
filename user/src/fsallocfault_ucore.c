@@ -224,20 +224,19 @@ static void verify_runtime_settlement(
 		(int)after->account_blocks - (int)before->account_blocks;
 	int account_inode_delta =
 		(int)after->account_inodes - (int)before->account_inodes;
-	int expected_result_ok;
+	int actual_result_ok = result == 0;
+	int expected_result_ok =
+		FSALLOC_FAULT_OP == FSALLOC_OP_FREE ||
+		FSALLOC_FAULT_OP == FSALLOC_OP_IFREE;
 	int expected_block = 0;
 	int expected_inode = 0;
 	int expected_account_block = 0;
 	int expected_account_inode = 0;
 
 	if (FSALLOC_FAULT_ACTION == FSALLOC_ACTION_BUSY) {
-		expected_result_ok =
-			FSALLOC_FAULT_OP == FSALLOC_OP_ALLOC &&
-			FSALLOC_FAULT_PHASE != FSALLOC_PHASE_INTENT ?
-				result == 0 :
-			FSALLOC_FAULT_OP == FSALLOC_OP_IALLOC ? result < 0 :
-			FSALLOC_FAULT_OP == FSALLOC_OP_ALLOC ? result < 0 :
-			result == 0;
+		if (FSALLOC_FAULT_OP == FSALLOC_OP_ALLOC &&
+		    FSALLOC_FAULT_PHASE != FSALLOC_PHASE_INTENT)
+			expected_result_ok = 1;
 		if (FSALLOC_FAULT_OP == FSALLOC_OP_ALLOC) {
 			expected_inode = -1;
 			expected_account_inode = 1;
@@ -255,10 +254,6 @@ static void verify_runtime_settlement(
 			expected_account_inode = -1;
 		}
 	} else {
-		expected_result_ok =
-			FSALLOC_FAULT_OP == FSALLOC_OP_ALLOC ||
-			FSALLOC_FAULT_OP == FSALLOC_OP_IALLOC ? result < 0 :
-			result == 0;
 		if (FSALLOC_FAULT_OP == FSALLOC_OP_ALLOC) {
 			expected_block = -1;
 			expected_inode = -1;
@@ -272,14 +267,17 @@ static void verify_runtime_settlement(
 			expected_account_inode = 1;
 		}
 	}
-	printf("fsallocfault_ucore: settlement result=%d block=%d inode=%d "
+	printf("fsallocfault_ucore: settlement result=%d actual_ok=%d "
+	       "block=%d inode=%d "
 	       "account_block=%d account_inode=%d expected_ok=%d "
 	       "expected_block=%d expected_inode=%d "
 	       "expected_account_block=%d expected_account_inode=%d\n",
-	       result, block_delta, inode_delta, account_block_delta,
-	       account_inode_delta, expected_result_ok, expected_block,
+	       result, actual_result_ok, block_delta, inode_delta,
+	       account_block_delta, account_inode_delta, expected_result_ok,
+	       expected_block,
 	       expected_inode, expected_account_block, expected_account_inode);
-	if (!expected_result_ok || block_delta != expected_block ||
+	if (actual_result_ok != expected_result_ok ||
+	    block_delta != expected_block ||
 	    inode_delta != expected_inode ||
 	    account_block_delta != expected_account_block ||
 	    account_inode_delta != expected_account_inode)

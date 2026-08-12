@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include "../../include/agent_execution_contract_abi.h"
+#include "../../include/agent_file_publish_abi.h"
 #include "../../include/agent_task_channel_abi.h"
 #include "../../include/agent_lifecycle_abi.h"
 #include "../../include/agent_performance_abi.h"
@@ -824,6 +825,9 @@ int agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 int agent_file_edit_abort(uint64 lease_id);
 int agent_file_edit_state(const char *path,
 			  struct agent_file_edit_state *state);
+int agent_file_publish(const char *path, const void *header,
+		       unsigned int header_size, const void *payload,
+		       unsigned int payload_size);
 int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 		       int operation);
 #endif

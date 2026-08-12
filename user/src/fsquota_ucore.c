@@ -213,6 +213,7 @@ static void run_public_attacker(int ready_fd, int control_fd)
 	int version_churn;
 
 	version_churn = churn_public_inode_versions();
+	check(sync() == 0, "drain public version churn cleanup");
 	check(pipe(producer_pipe) == 0, "create producer report pipe");
 	producer = fork();
 	check(producer >= 0, "create pressure producer");
@@ -404,7 +405,8 @@ int main(void)
 	printf("fsquota_ucore: public_domain_limited=1 blocks=%d inodes=%d\n",
 	       report.blocks, report.inodes);
 	printf("fsquota_ucore: post_exit_accounting=1\n");
-	domain_boundary = report.blocks <= 16 && report.inodes <= 8;
+	/* The domain profile reports 15/8; larger reserve profiles use cleanup C. */
+	domain_boundary = report.blocks == 15 && report.inodes == 8;
 
 	verify_workflow_storage();
 	printf("fsquota_ucore: workflow_reserve=1\n");

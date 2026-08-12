@@ -173,8 +173,13 @@ void agent_metadata_note_catalog_changes(uint changes)
 
 int agent_metadata_durability_fence_current(void)
 {
+	struct proc *p = curr_proc();
 	uint64 generation;
 
+	if (p == 0)
+		return -1;
+	if (!p->is_agent)
+		return 0;
 	return agent_metadata_quiescence_fence_snapshot_current(&generation);
 }
 

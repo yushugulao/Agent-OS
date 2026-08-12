@@ -1,10 +1,22 @@
 #include "agent_task_bridge.h"
+#include "agent_context.h"
+#include "agent_context_path.h"
 #include "agent_execution_contract.h"
 #include "agent_internal.h"
+#include "agent_lifecycle.h"
+#include "agent_provenance.h"
+#include "agent_sha256.h"
 #include "agent_task_channel.h"
 #include "defs.h"
+#include "file.h"
+#include "fs.h"
+#include "open_file_io_lease.h"
 #include "proc.h"
 #include "timer.h"
+#include "vfs_security.h"
+
+_Static_assert(AGENT_TASK_RESOURCE_SNAPSHOT_SIZE == AGENT_OP_PAYLOAD_SIZE,
+	       "Task resource snapshot must fit one tool payload");
 
 static uint64
 agent_task_bridge_now(void)
@@ -30,28 +42,123 @@ static int
 agent_task_bridge_null_input(const struct agent_task_sqe *sqe,
 			     const struct agent_task_resource_view *input)
 {
-	uchar digest = 0;
+	uchar aggregate = 0;
 
 	if (sqe == 0 || input == 0 ||
 	    !agent_task_bridge_handle_null(sqe->input) ||
 	    !agent_task_bridge_handle_null(input->handle))
 		return 0;
 	for (uint i = 0; i < sizeof(input->content_digest); i++)
-		digest |= input->content_digest[i];
-	return digest == 0 && input->source_handle == 0 && input->length == 0 &&
+		aggregate |= input->content_digest[i];
+	for (uint i = 0; i < sizeof(input->snapshot); i++)
+		aggregate |= input->snapshot[i];
+	return aggregate == 0 && input->source_handle == 0 && input->length == 0 &&
 	       input->provenance_labels == 0 &&
 	       input->producer_context_sequence == 0 &&
 	       input->producer_control_id == 0 &&
 	       input->producer_node_id == 0 && input->producer_pid == 0;
 }
 
-static void
-agent_task_bridge_op(const struct agent_task_sqe *sqe, struct agent_op *op)
+static int
+agent_task_bridge_utf8_valid(const uchar *text, uint length)
 {
+	uint i = 0;
+
+	while (i < length) {
+		uchar first = text[i++];
+
+		if (first <= 0x7fU)
+			continue;
+		if (first >= 0xc2U && first <= 0xdfU) {
+			if (i >= length || (text[i++] & 0xc0U) != 0x80U)
+				return 0;
+			continue;
+		}
+		if (first >= 0xe0U && first <= 0xefU) {
+			uchar second;
+
+			if (i + 1U >= length)
+				return 0;
+			second = text[i++];
+			if ((second & 0xc0U) != 0x80U ||
+			    (first == 0xe0U && second < 0xa0U) ||
+			    (first == 0xedU && second >= 0xa0U) ||
+			    (text[i++] & 0xc0U) != 0x80U)
+				return 0;
+			continue;
+		}
+		if (first >= 0xf0U && first <= 0xf4U) {
+			uchar second;
+
+			if (i + 2U >= length)
+				return 0;
+			second = text[i++];
+			if ((second & 0xc0U) != 0x80U ||
+			    (first == 0xf0U && second < 0x90U) ||
+			    (first == 0xf4U && second >= 0x90U) ||
+			    (text[i++] & 0xc0U) != 0x80U ||
+			    (text[i++] & 0xc0U) != 0x80U)
+				return 0;
+			continue;
+		}
+		return 0;
+	}
+	return 1;
+}
+
+static int
+agent_task_bridge_resource_input(
+	const struct agent_task_sqe *sqe,
+	const struct agent_task_resource_view *input)
+{
+	uchar digest = 0;
+	uint length;
+
+	if (sqe == 0 || input == 0 ||
+	    agent_task_bridge_handle_null(input->handle) ||
+	    sqe->tool_id != AGENT_TOOL_ECHO ||
+	    input->handle.type != AGENT_ARTIFACT_UTF8 ||
+	    (input->handle.flags != AGENT_TASK_HANDLE_F_OWNED &&
+	     input->handle.flags != AGENT_TASK_HANDLE_F_BORROWED) ||
+	    input->length == 0 ||
+	    input->length > AGENT_TASK_RESOURCE_UTF8_MAX ||
+	    input->provenance_labels == 0 ||
+	    (input->provenance_labels & ~AGENT_PROVENANCE_ALL) != 0 ||
+	    (input->provenance_labels &
+	     AGENT_PROVENANCE_UNTRUSTED_FILE_DATA) == 0 ||
+	    input->producer_context_sequence == 0 ||
+	    input->producer_control_id == 0 || input->producer_pid <= 0 ||
+	    input->producer_node_id != AGENT_EXECUTION_NODE_NONE)
+		return 0;
+	length = (uint)input->length;
+	if (input->snapshot[length] != 0)
+		return 0;
+	for (uint i = 0; i < length; i++)
+		if (input->snapshot[i] == 0)
+			return 0;
+	for (uint i = 0; i < sizeof(input->content_digest); i++)
+		digest |= input->content_digest[i];
+	return digest != 0 &&
+	       agent_task_bridge_utf8_valid(input->snapshot, length);
+}
+
+static int
+agent_task_bridge_op(const struct agent_task_sqe *sqe,
+		     const struct agent_task_resource_view *input,
+		     struct agent_op *op)
+{
+	if (sqe == 0 || input == 0 || op == 0)
+		return -1;
 	memset(op, 0, sizeof(*op));
 	op->version = AGENT_CALL_VERSION;
 	op->tool_id = sqe->tool_id;
 	op->request_id = sqe->request_id;
+	if (agent_task_bridge_handle_null(input->handle))
+		return agent_task_bridge_null_input(sqe, input) ? 0 : -1;
+	if (!agent_task_bridge_resource_input(sqe, input))
+		return -1;
+	memmove(op->payload, input->snapshot, (uint)input->length + 1U);
+	return 0;
 }
 
 static void
@@ -212,10 +319,9 @@ agent_task_bridge_validate(struct proc *p, const struct agent_task_sqe *sqe,
 	uint flags;
 	int status;
 
-	if (!agent_task_bridge_null_input(sqe, input) || validation == 0 ||
-	    completion == 0)
+	if (validation == 0 || completion == 0 ||
+	    agent_task_bridge_op(sqe, input, &op) < 0)
 		return AGENT_TASK_CHANNEL_RETRY;
-	agent_task_bridge_op(sqe, &op);
 	agent_task_bridge_binding(sqe, input, &op, &binding);
 	flags = agent_task_bridge_admission_policy(sqe);
 	status = agent_execution_contract_preflight(
@@ -248,13 +354,13 @@ agent_task_bridge_submit(struct proc *p, const struct agent_task_sqe *sqe,
 	struct agent_op op;
 	int status;
 
-	if (!agent_task_bridge_null_input(sqe, input) || validation == 0 ||
-	    completion == 0 ||
+	if (validation == 0 || completion == 0 ||
 	    validation->output_artifact_type != AGENT_ARTIFACT_NONE ||
 	    validation->reserved != 0 ||
 	    validation->output_provenance_labels != 0)
 		panic("Task bridge submit validation");
-	agent_task_bridge_op(sqe, &op);
+	if (agent_task_bridge_op(sqe, input, &op) < 0)
+		panic("Task bridge submit input");
 	agent_task_bridge_binding(sqe, input, &op, &binding);
 	memset(&result, 0, sizeof(result));
 	memset(&outcome, 0, sizeof(outcome));
@@ -355,14 +461,135 @@ agent_task_bridge_expire(struct proc *p, const struct agent_task_sqe *sqe,
 
 static int
 agent_task_bridge_resource_import(
-	struct proc *p, const struct agent_task_channel_resource *control,
+	struct proc *p, struct file *file,
+	const struct agent_task_channel_resource *control,
 	struct agent_task_resource_import *imported)
 {
-	(void)p;
-	(void)control;
-	if (imported != 0)
+	struct agent_context_record context;
+	struct open_file_io_token lease = OPEN_FILE_IO_TOKEN_INIT;
+	struct vfs_cred cred;
+	uint64 context_hash;
+	uint64 context_sequence;
+	uint64 provenance_labels;
+	uint length;
+	int got;
+	int context_lane_held = 0;
+	int lease_held = 0;
+	int status = AGENT_TASK_CHANNEL_BAD_REQUEST;
+
+	if (imported == 0)
+		return status;
+	memset(imported, 0, sizeof(*imported));
+	if (p == 0 || control == 0 || !p->is_agent || p->pid <= 0 ||
+	    p->agent_control_id == 0 ||
+	    control->resource_type != AGENT_ARTIFACT_UTF8 ||
+	    control->resource_flags != AGENT_TASK_HANDLE_F_OWNED ||
+	    control->source_handle >= FD_BUFFER_SIZE || control->length == 0 ||
+	    control->length > AGENT_TASK_RESOURCE_UTF8_MAX || file == 0)
+		return status;
+	length = (uint)control->length;
+	if (!file->readable || file->type != FD_INODE || file->ip == 0) {
+		status = AGENT_TASK_CHANNEL_BAD_REQUEST;
+		goto out;
+	}
+	got = ivalid(file->ip);
+	if (got < 0) {
+		status = got == FS_LOOKUP_BUSY ? AGENT_TASK_CHANNEL_RETRY :
+					       AGENT_TASK_CHANNEL_EVIDENCE;
+		goto out;
+	}
+	if (file->ip->type != T_FILE) {
+		status = AGENT_TASK_CHANNEL_BAD_REQUEST;
+		goto out;
+	}
+	vfs_cred_from_proc(p, &cred);
+	if (!vfs_inode_authorize(file->ip, &cred, VFS_OP_READ)) {
+		status = AGENT_TASK_CHANNEL_DENIED;
+		goto out;
+	}
+	if (agent_lifecycle_context_lane_enter(p) < 0) {
+		status = AGENT_TASK_CHANNEL_RETRY;
+		goto out;
+	}
+	context_lane_held = 1;
+	context_sequence = p->context_path_latest;
+	if (context_sequence == 0 || p->context_path_count == 0 ||
+	    p->context_path_capacity == 0 ||
+	    context_sequence < p->context_path_oldest ||
+	    agent_context_read_record(
+		    p, (context_sequence - 1U) % p->context_path_capacity,
+		    &context) < 0 ||
+	    context.sequence != context_sequence || context.record_hash == 0 ||
+	    context.record_hash != agent_context_record_hash(&context)) {
+		status = AGENT_TASK_CHANNEL_EVIDENCE;
+		goto out;
+	}
+	context_hash = context.record_hash;
+	provenance_labels = agent_provenance_current_labels(p);
+	if (open_file_io_lease_acquire(
+		    file, VFS_OP_READ, &lease, &cred) < 0) {
+		status = AGENT_TASK_CHANNEL_RETRY;
+		goto out;
+	}
+	lease_held = 1;
+	got = readi_lease(file->ip, &cred, &lease, 0,
+			  (uint64)imported->snapshot, 0, length + 1U);
+	if (got < 0) {
+		status = got == FS_LOOKUP_BUSY ? AGENT_TASK_CHANNEL_RETRY :
+					       AGENT_TASK_CHANNEL_EVIDENCE;
+		goto out;
+	}
+	if ((uint)got != length) {
+		status = AGENT_TASK_CHANNEL_BAD_REQUEST;
+		goto out;
+	}
+	if (p->context_path_latest != context_sequence ||
+	    p->context_path_count == 0 || p->context_path_capacity == 0 ||
+	    context_sequence < p->context_path_oldest ||
+	    agent_context_read_record(
+		    p, (context_sequence - 1U) % p->context_path_capacity,
+		    &context) < 0 ||
+	    context.sequence != context_sequence ||
+	    context.record_hash != context_hash ||
+	    context.record_hash != agent_context_record_hash(&context) ||
+	    agent_provenance_current_labels(p) != provenance_labels) {
+		status = AGENT_TASK_CHANNEL_RETRY;
+		goto out;
+	}
+	for (uint i = 0; i < length; i++) {
+		if (imported->snapshot[i] == 0) {
+			status = AGENT_TASK_CHANNEL_BAD_REQUEST;
+			goto out;
+		}
+	}
+	if (!agent_task_bridge_utf8_valid(imported->snapshot, length)) {
+		status = AGENT_TASK_CHANNEL_BAD_REQUEST;
+		goto out;
+	}
+	imported->snapshot[length] = 0;
+	status = AGENT_TASK_CHANNEL_OK;
+
+out:
+	if (lease_held)
+		open_file_io_token_end(&lease);
+	if (context_lane_held)
+		agent_lifecycle_context_lane_leave(p);
+	if (status != AGENT_TASK_CHANNEL_OK) {
 		memset(imported, 0, sizeof(*imported));
-	return AGENT_TASK_CHANNEL_DENIED;
+		return status;
+	}
+	imported->resource_type = AGENT_ARTIFACT_UTF8;
+	imported->resource_flags = AGENT_TASK_HANDLE_F_OWNED;
+	imported->producer_node_id = AGENT_EXECUTION_NODE_NONE;
+	imported->producer_pid = p->pid;
+	imported->producer_control_id = p->agent_control_id;
+	imported->source_handle = control->source_handle;
+	imported->length = length;
+	imported->provenance_labels =
+		provenance_labels | AGENT_PROVENANCE_UNTRUSTED_FILE_DATA;
+	imported->producer_context_sequence = context_sequence;
+	agent_sha256(imported->snapshot, length, imported->content_digest);
+	return AGENT_TASK_CHANNEL_OK;
 }
 
 static void
@@ -370,7 +597,10 @@ agent_task_bridge_resource_release(struct proc *p, uint type, uint flags,
 				   uint64 source_handle, uint64 length)
 {
 	(void)p;
-	if (type != 0 || flags != 0 || source_handle != 0 || length != 0)
+	(void)source_handle;
+	if (type != AGENT_ARTIFACT_UTF8 ||
+	    flags != AGENT_TASK_HANDLE_F_OWNED || length == 0 ||
+	    length > AGENT_TASK_RESOURCE_UTF8_MAX)
 		panic("Task bridge resource release");
 }
 
@@ -513,7 +743,8 @@ sys_agent_task_channel_enter(uint64 enteraddr, uint64 resultaddr)
 }
 
 int
-sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr)
+sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr,
+				struct file *source_file, int source_fd)
 {
 	struct agent_task_channel_resource control;
 	struct agent_task_channel_resource_result result;
@@ -526,10 +757,24 @@ sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr)
 	if (copyout(p->pagetable, resultaddr, (char *)&result,
 		    sizeof(result)) < 0)
 		return -1;
+	if (control.operation != AGENT_TASK_RESOURCE_IMPORT || source_fd < 0 ||
+	    control.source_handle != (uint64)(uint)source_fd)
+		source_file = 0;
 	(void)agent_task_channel_resource(
-		p, curr_thread(), &control, &result, &agent_task_bridge_ops);
+		p, curr_thread(), source_file, &control, &result,
+		&agent_task_bridge_ops);
 	if (copyout(p->pagetable, resultaddr, (char *)&result,
-		    sizeof(result)) < 0)
+		    sizeof(result)) < 0) {
+		if (control.operation == AGENT_TASK_RESOURCE_IMPORT &&
+		    result.status == AGENT_TASK_CHANNEL_OK) {
+			int rollback = agent_task_channel_rollback_import(
+				p, result.generation, result.handle,
+				&agent_task_bridge_ops);
+
+			if (rollback != AGENT_TASK_CHANNEL_OK)
+				panic("Task bridge lost import rollback");
+		}
 		return -1;
+	}
 	return 0;
 }

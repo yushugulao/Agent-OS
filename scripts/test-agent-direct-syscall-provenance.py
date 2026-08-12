@@ -85,6 +85,26 @@ def validate(syscall: str, ipc: str) -> None:
     if "transaction->file" in close_effects:
         raise ContractError("close classifier reused a speculative descriptor pin")
 
+    publish_match = re.search(
+        r"case SYS_agent_file_publish:(.*?)(?:case SYS_|default:)",
+        effects,
+        re.S,
+    )
+    if publish_match is None:
+        raise ContractError("atomic publish lacks a direct-effect classification")
+    publish_effects = set(
+        re.findall(r"AGENT_SIDE_EFFECT_[A-Z]+", publish_match.group(1))
+    )
+    expected_publish_effects = {
+        "AGENT_SIDE_EFFECT_FILE",
+        "AGENT_SIDE_EFFECT_METADATA",
+        "AGENT_SIDE_EFFECT_ARTIFACT",
+    }
+    if publish_effects != expected_publish_effects:
+        raise ContractError(
+            f"atomic publish effect union drifted: {sorted(publish_effects)}"
+        )
+
     file_effects = function_body(syscall, "syscall_file_side_effects")
     for token in (
         "case FD_STDIO:",
@@ -200,6 +220,13 @@ class DirectSyscallProvenanceTests(unittest.TestCase):
         self.assert_syscall_mutation_rejected(
             "return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA |\n"
             "\t\t       AGENT_SIDE_EFFECT_IPC;",
+            "return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA;",
+        )
+
+    def test_rejects_atomic_publish_effect_underclassification(self) -> None:
+        self.assert_syscall_mutation_rejected(
+            "return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA |\n"
+            "\t\t       AGENT_SIDE_EFFECT_ARTIFACT;",
             "return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA;",
         )
 

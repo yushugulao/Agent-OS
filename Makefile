@@ -426,7 +426,7 @@ kernel-stack-check: build/kernel
 
 override AGENT_CHECK_BUILDDIR := build/agent-check
 
-agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h include/agent_execution_contract_abi.h include/agent_lifecycle_abi.h include/agent_provenance_abi.h include/agent_task_channel_abi.h include/agent_tool_abi.h include/agent_workflow_fence_abi.h include/agent_performance_abi.h include/agent_resource_abi.h
+agent-uapi-check: scripts/check-agent-uapi-layout.py scripts/probes/agent-uapi-layout.c ci/agent-uapi-layout.json $(K)/agent.h user/include/agent.h include/agent_execution_contract_abi.h include/agent_file_publish_abi.h include/agent_lifecycle_abi.h include/agent_provenance_abi.h include/agent_task_channel_abi.h include/agent_tool_abi.h include/agent_workflow_fence_abi.h include/agent_performance_abi.h include/agent_resource_abi.h
 	@$(PYTHON_CMD) scripts/check-agent-uapi-layout.py \
 		--root . --build-dir $(AGENT_CHECK_BUILDDIR) \
 		--cc $(CC_CMD) --nm $(NM_CMD)
@@ -449,10 +449,13 @@ override PRODUCT_STATIC_TESTS := \
 	scripts/test-check-user-stack-usage.py \
 	scripts/test-check-user-stack-contract.py \
 	scripts/test-check-teardown-protocol.py \
+	scripts/test-agent-lifecycle-copy.py \
+	scripts/test-workflow-teardown-lifecycle-view.py \
 	scripts/test-check-agent-uapi-layout.py \
 	scripts/test-agent-execution-contract.py \
 	scripts/test-agent-live-loop.py \
 	scripts/test-agent-nexus-loop.py \
+	scripts/test-agent-file-publish-atomicity.py \
 	scripts/test-agent-task-channel.py \
 	scripts/test-agent-direct-denial-evidence.py \
 	scripts/test-context-evidence-atomicity.py \
@@ -520,6 +523,7 @@ printf-format-check: printf-format-static-check scripts/test-printf-format-contr
 override HOST_PRODUCT_TESTS := \
 	scripts/test-mkfs-host-snapshot.py \
 	scripts/test-agent-feature-guest-wiring.py \
+	scripts/test-agent-file-publish-guest.py \
 	scripts/test-trap-callgraph-separation.py \
 	host_tools/test_check_host_action_kind_alignment.py \
 	host_tools/test_check_seeded_action_state.py \

@@ -132,6 +132,7 @@ enum syscall_class {
 	X(agent_file_edit_commit, FAST, ALWAYS) \
 	X(agent_file_edit_abort, FAST, ALWAYS) \
 	X(agent_file_edit_state, BLOCK_IO_FS_EPOCH, ALWAYS) \
+	X(agent_file_publish, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_worker_create, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_route_config, FAST, ALWAYS)
 

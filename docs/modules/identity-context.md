@@ -1,6 +1,6 @@
-# Agent identity、生命周期与 Context
+# Agent 进程创建、地址空间与上下文路径
 
-一次工作流可能由多个受控进程共同完成。Agent identity 说明当前由谁执行，生命周期说明进程属于哪一次运行，Context 则记录每一步用了什么信息、产生了什么结果。这三类状态共同为工具、文件、事件、资源和调度器提供可靠的归属信息。
+一次工作流可能由多个受控进程共同完成。Agent identity 说明当前由谁执行，生命周期说明进程属于哪一次运行，Context 则记录每一步用了什么信息、产生了什么结果。我们把 Agent 进程创建与地址空间设计、上下文路径管理放在同一条进程生命周期中：需要保护的低频状态留在内核，Agent Loop 高频读取的路径和缓存映射到用户地址空间。
 
 ## 文档索引
 
@@ -15,9 +15,9 @@
 
 ## 一、模块目标
 
-PID 只能指出当前进程，无法说明进程是否从可信映像启动、担任什么角色、由谁控制、属于哪次工作流。进程槽位再次使用后，单靠 PID 也无法挡住旧句柄访问新进程。与此同时，多轮任务的 Context 既要便于用户态读取，也要保留因果关系、支持分支回滚，并在进程退出后及时回收。
+PID 只能指出当前进程，无法说明进程是否从可信映像启动、担任什么角色、由谁控制、属于哪次工作流。进程槽位再次使用后，单靠 PID 也无法挡住旧句柄访问新进程。与此同时，多轮任务的 Context 既要便于用户态读取，也要保留因果关系、支持分支回滚，在超过配额时有界淘汰，并在进程退出后及时回收。
 
-为此，我们在 uCore 的 `struct proc` 中保存 Agent identity 和生命周期键，在 VFS 中保存动态文件访问范围与映像绑定，并将 Context 映射到固定虚拟地址。生命周期记录分别统计普通操作与退出操作，生成 Workflow Fence 时暂停接纳新操作。主要实现位于 [`os/agent_identity.c`](../../os/agent_identity.c)、[`os/workflow_lifecycle.c`](../../os/workflow_lifecycle.c)、[`os/vfs_security.c`](../../os/vfs_security.c) 和 [`os/agent_context.c`](../../os/agent_context.c)。
+为此，我们在 uCore 的 `struct proc` 中保存 Agent identity、Loop 状态和生命周期键，在 VFS 中保存动态文件访问范围与映像绑定，并将 Context 映射到固定虚拟地址。前者用于授权、回收和内核调度，后者供 Guest 直接读取路径、最近响应和查询缓存。生命周期记录分别统计普通操作与退出操作，生成 Workflow Fence 时暂停接纳新操作。主要实现位于 [`os/agent_identity.c`](../../os/agent_identity.c)、[`os/workflow_lifecycle.c`](../../os/workflow_lifecycle.c)、[`os/vfs_security.c`](../../os/vfs_security.c) 和 [`os/agent_context.c`](../../os/agent_context.c)。
 
 ## 二、Agent identity
 
@@ -245,5 +245,7 @@ AGENT_TEST_CASE=agenttrust_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agentfinal_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agentscope_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
+
+`agentfinal_ucore` 连续提交并直接读取 6 轮 Context，系统调用快照与映射页内容保持一致；继续写入 133 条记录后，公开区稳定保留最近 128 条并按 FIFO 淘汰旧记录，没有出现 OOM。这个结果说明地址空间划分确实减少了读取 Context 时的 syscall 往返，同时固定容量和发布序号也能支撑持续运行的 Agent Loop。回滚测试还确认旧序号不会被新分支复用，但它只改变后续可见的上下文路径，不会把已经发生的文件或工具副作用倒退。
 
 这组 Agent identity 与 Context 信息还会供[工具执行](tool-execution.md)检查请求、Execution Contract、provenance 和资源，并供 [Live Query](live-query.md)判断文件属于哪一次工作流。

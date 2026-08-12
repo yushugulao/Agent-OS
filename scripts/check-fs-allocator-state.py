@@ -695,6 +695,23 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         if token not in client:
             failures.append(f"allocator flush receipt missing {token}")
+    settlement = function_body(client, "verify_runtime_settlement")
+    require_order(
+        settlement,
+        "allocator runtime result oracle",
+        (
+            r"actual_result_ok\s*=\s*result\s*==\s*0",
+            r"expected_result_ok\s*=\s*FSALLOC_FAULT_OP\s*==\s*"
+            r"FSALLOC_OP_FREE\s*\|\|\s*FSALLOC_FAULT_OP\s*==\s*"
+            r"FSALLOC_OP_IFREE",
+            r"FSALLOC_FAULT_ACTION\s*==\s*FSALLOC_ACTION_BUSY.*"
+            r"FSALLOC_FAULT_OP\s*==\s*FSALLOC_OP_ALLOC.*"
+            r"FSALLOC_FAULT_PHASE\s*!=\s*FSALLOC_PHASE_INTENT.*"
+            r"expected_result_ok\s*=\s*1",
+            r"actual_result_ok\s*!=\s*expected_result_ok",
+        ),
+        failures,
+    )
     for token in (
         "bio_physical_snapshot(&physical)",
         "durability.raw_writes - fs_allocator_fault.raw_writes_before !=",
@@ -918,6 +935,16 @@ def main() -> int:
             "user/src/fsallocfault_ucore.c",
             "verify_operation_io_receipt(&before, &after);",
             "verify_operation_io_receipt_disabled(&before, &after);",
+        ),
+        "runtime-result-oracle-collapsed": (
+            "user/src/fsallocfault_ucore.c",
+            "actual_result_ok != expected_result_ok",
+            "!expected_result_ok",
+        ),
+        "late-busy-result-oracle-deleted": (
+            "user/src/fsallocfault_ucore.c",
+            "expected_result_ok = 1;",
+            "expected_result_ok = 0;",
         ),
         "unstable-overlay-stats": (
             "os/virtio_disk.c",

@@ -23,6 +23,10 @@ SHARED_HEADER_PROBES = {
         "agent_provenance_abi.h",
         "sizeof(struct agent_provenance_manifest)",
     ),
+    "file-publish": (
+        "agent_file_publish_abi.h",
+        "sizeof(struct agent_file_publish_request)",
+    ),
     "task-channel": (
         "agent_task_channel_abi.h",
         "sizeof(struct agent_task_channel_enter_result)",
@@ -348,6 +352,11 @@ def validate_feature_abi_constants(root):
             "AGENT_PROVENANCE_DENY_EFFECT_MISMATCH": 8,
             "AGENT_PROVENANCE_DENY_EVIDENCE_UNAVAILABLE": 9,
         },
+        "agent_file_publish_abi.h": {
+            "AGENT_FILE_PUBLISH_SYSCALL": 566,
+            "AGENT_FILE_PUBLISH_VERSION": 1,
+            "AGENT_FILE_PUBLISH_MAX_BYTES": 4096,
+        },
         "agent_task_channel_abi.h": {
             "AGENT_TASK_CHANNEL_SETUP_SYSCALL": 563,
             "AGENT_TASK_CHANNEL_ENTER_SYSCALL": 564,
@@ -356,6 +365,7 @@ def validate_feature_abi_constants(root):
             "AGENT_TASK_CHANNEL_ENTRY_VERSION": 1,
             "AGENT_TASK_CHANNEL_CAPACITY": 16,
             "AGENT_TASK_CHANNEL_SCHEMA_SIZE": 32,
+            "AGENT_TASK_RESOURCE_UTF8_MAX": 63,
             "AGENT_TASK_CHANNEL_OP_SUBMIT": 1,
             "AGENT_TASK_CHANNEL_OP_CANCEL": 2,
             "AGENT_TASK_RESOURCE_IMPORT": 1,
@@ -486,6 +496,7 @@ def validate_feature_abi_constants(root):
         public = path.read_text(encoding="utf-8")
         for header in (
             "agent_execution_contract_abi.h",
+            "agent_file_publish_abi.h",
             "agent_provenance_abi.h",
         ):
             if header not in public:
@@ -509,6 +520,7 @@ def validate_agent_syscall_numbers(root):
         "agent_task_channel_setup": 563,
         "agent_task_channel_enter": 564,
         "agent_task_channel_resource": 565,
+        "agent_file_publish": 566,
     }
     paths = (
         root / "os" / "syscall_ids.h",
@@ -531,39 +543,26 @@ def validate_agent_syscall_numbers(root):
                         f"{path} assigns reserved Agent syscall {value} to {symbol}"
                     )
 
-    # 562 is already wired in the two generated public mirrors. The arch input
-    # and all Task Channel entries become mandatory atomically once any Task
-    # Channel mirror is added by the production integration change.
-    for path, definitions in parsed[:2]:
-        prefix = "SYS_"
-        if definitions.get(prefix + "agent_execution_contract") != 562:
-            raise LayoutError(f"{path} does not preserve Agent contract syscall 562")
-    task_wiring_started = any(
-        any(
-            symbol.endswith(name) or value in {563, 564, 565}
-            for symbol, value in definitions.items()
-            for name in expected
-            if name.startswith("agent_task_channel_")
-        )
-        for _path, definitions in parsed
-    )
-    if task_wiring_started:
-        for path, definitions in parsed:
-            prefix = "__NR_" if path.name.endswith(".in") else "SYS_"
-            for name, value in expected.items():
-                if definitions.get(prefix + name) != value:
-                    raise LayoutError(
-                        f"{path} must atomically mirror {prefix}{name}={value}"
-                    )
-        for path in (root / "os" / "agent.h", root / "user" / "include" / "agent.h"):
-            source = path.read_text(encoding="utf-8")
+    for path, definitions in parsed:
+        prefix = "__NR_" if path.name.endswith(".in") else "SYS_"
+        for name, value in expected.items():
+            if definitions.get(prefix + name) != value:
+                raise LayoutError(
+                    f"{path} must atomically mirror {prefix}{name}={value}"
+                )
+    for path in (root / "os" / "agent.h", root / "user" / "include" / "agent.h"):
+        source = path.read_text(encoding="utf-8")
+        for label, header in (
+            ("Task Channel", "agent_task_channel_abi.h"),
+            ("file publish", "agent_file_publish_abi.h"),
+        ):
             if not re.search(
-                r'^#include\s+"[^"]*agent_task_channel_abi\.h"\s*$',
+                rf'^#include\s+"[^"]*{re.escape(header)}"\s*$',
                 source,
                 re.MULTILINE,
             ):
                 raise LayoutError(
-                    f"{path} does not expose the wired Task Channel shared ABI"
+                    f"{path} does not expose the wired {label} shared ABI"
                 )
 
 

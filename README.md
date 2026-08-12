@@ -23,18 +23,20 @@
 
 内核用生命周期键 `{id, generation}` 区分每次运行。创建 Agent 时，系统会分配角色、能力位和文件访问范围。Context 记录每一步的起因、调用跨度、分支和 provenance（来源追溯）。Execution Contract 列出工具、前置任务、输入指纹、截止时间和资源上限。Live Query 借助 Metadata Catalog 与 Typed Watch，及时报告文件集合变化。Workflow Credit Domain 和 EEVDF 调度器分别管理跨进程资源与 CPU 时间。Agent Live 控制台和 Nexus 把这些功能组合成可在 QEMU RISC-V64 Guest（客户机）中直接运行的应用。
 
-我们共完成 30 次独立的 QEMU 启动，保存 33 份原始输出、19 个 CSV 数据表和 7,498 条样本。在 96 条文件记录上的 16 组配对测试中，索引查询的核心阶段每次都快于逐项扫描，中位加速比为 3.118 倍。504 次工作流唤醒从进入可运行状态到真正获得 CPU，等待时间均为 `0–1 tick`。
+以下性能结果来自冻结在源码提交 `2b14fb` 的可复现测量批次；当前版本后续功能改动另由功能回归验证，未重新计入这组性能数据。该批次共完成 30 次独立的 QEMU 启动，保存 33 份原始输出、19 个 CSV 数据表和 7,498 条结构化记录。在 96 条文件记录上的 16 组配对测试中，索引查询的核心阶段每次都快于逐项扫描，中位加速比为 3.118 倍；完整流程中索引路径仅在 3/16 组配对中更快，其耗时减去遍历路径的中位差值为 +13.452 毫秒。504 次工作流唤醒从进入可运行状态到真正获得 CPU，等待时间均为 `0–1 tick`。
 
-### 1.3 完成情况
+### 1.3 系统能力概览
 
-| **赛题任务** | **完成情况** | **对应成果** |
-| --- | :---: | --- |
-| Agent 进程创建与地址空间设计 | **已完成** | 受控创建工作流与 Agent，校验可信映像，分配角色、能力位与文件访问范围，映射 7 页 Context，并用 generation 隔离前后两次运行 |
-| Agent 与内核的结构化交互 | **已完成** | 25 项 Tool Registry、带类型信息的 V2、ENFORCE V3、最多 64 项的批处理、16 槽 Task Channel（SQ/CQ） |
-| Context 路径管理 | **已完成** | 记录序号、起因、调用跨度和分支，支持快照、详情查询、回滚、provenance 和活动路径检查 |
-| 面向 Agent 查询的文件系统扩展 | **已完成** | 容量为 512 条的 Metadata Catalog、`status/stage/kind` 索引、inode incarnation、Typed Watch、重新同步和编辑租约 |
-| Agent 循环的内核运行机制 | **已完成** | 事件队列、无丢失唤醒的等待接口、可信 IPC、心跳、Workflow Credit Domain 和工作流 EEVDF |
-| 综合演示与创新 | **已完成** | Agent Live 多轮工具调用、Nexus 四 Agent 协作、普通 uCore 与 AgentOS-uCore 对照测试，以及逐样本性能测试 |
+实现时，我们没有把身份、上下文和资源状态全部留给应用层，而是沿 uCore 的进程、地址空间、系统调用、VFS、等待队列和调度路径加入 Agent 所需的机制。下面列出各段工作流真正经过的内核路径；对应章节同时给出源码入口和可复现的 Guest 验收方法。
+
+| **工作流阶段** | **内核机制** | **运行时可观察行为** | **详细说明** |
+| --- | --- | --- | --- |
+| 创建 Agent 并准备运行环境 | Agent 进程创建与地址空间设计 | 可信映像通过校验后取得角色、能力位和文件访问范围；7 页 Context 随地址空间建立，前 6 页只读、第 7 页由 Guest 管理 | [Agent 进程与 Context](docs/modules/identity-context.md) |
+| 发起工具请求 | Agent-OS 内核结构化交互接口与工具调用协议 | Tool Registry 按 schema 解析请求；V2/V3、Batch 和 Task Channel 最终进入同一执行路径，并返回带状态码的结构化结果 | [结构化交互与工具调用协议](docs/modules/tool-execution.md) |
+| 延续多轮推理 | 上下文路径管理 | Context 保存请求、结果、起因、调用跨度和分支；支持直接读取、快照查询、回滚和 128 条 FIFO 淘汰 | [Context 设计](docs/modules/identity-context.md#五context-commit读取与回滚) |
+| 按属性和内容特征查找文件 | 面向 Agent 查询优化的文件系统扩展 | Metadata Catalog 组合匹配业务字段，索引缩小候选集合，查询结果进入用户管理的 Context 缓存，Typed Watch 报告结果集合变化 | [Live Query](docs/modules/live-query.md) |
+| 等待下一轮输入并协调多个 Agent | Agent Loop 内核运行机制 | Agent 无事件时在等待队列中休眠，由心跳、文件变化、IPC 或模型响应唤醒；工作流 EEVDF 按工作流结算 CPU 服务量 | [Workflow Runtime](docs/modules/workflow-runtime.md) |
+| 运行完整场景 | Agent Live 与 Nexus | 单 Agent 连续处理模型回复与工具请求；四个 Agent 在同一生命周期内分工、交接 artifact、失败后重新安排并生成报告 | [运行指南](docs/usage.md) |
 
 ### 1.4 主要创新
 
@@ -57,7 +59,7 @@
   - [一、基本信息](#一基本信息)
     - [1.1 项目信息](#11-项目信息)
     - [1.2 摘要](#12-摘要)
-    - [1.3 完成情况](#13-完成情况)
+    - [1.3 系统能力概览](#13-系统能力概览)
     - [1.4 主要创新](#14-主要创新)
     - [1.5 团队成员](#15-团队成员)
     - [1.6 文档索引](#16-文档索引)
@@ -67,10 +69,10 @@
     - [2.3 总体架构](#23-总体架构)
     - [2.4 核心模块](#24-核心模块)
   - [三、系统设计与实现](#三系统设计与实现)
-    - [3.1 Agent identity、生命周期与 Context](#31-agent-identity生命周期与-context)
-    - [3.2 Structured Tool 与 Execution Contract](#32-structured-tool-与-execution-contract)
-    - [3.3 Live Query 与文件事件](#33-live-query-与文件事件)
-    - [3.4 事件、资源与工作流调度](#34-事件资源与工作流调度)
+    - [3.1 Agent 进程创建与地址空间设计](#31-agent-进程创建与地址空间设计)
+    - [3.2 Agent-OS 内核结构化交互接口与工具调用协议](#32-agent-os-内核结构化交互接口与工具调用协议)
+    - [3.3 面向 Agent 查询优化的文件系统扩展](#33-面向-agent-查询优化的文件系统扩展)
+    - [3.4 Agent Loop 内核运行机制](#34-agent-loop-内核运行机制)
     - [3.5 Agent Live 与 Nexus](#35-agent-live-与-nexus)
   - [四、测试结果](#四测试结果)
     - [4.1 测试体系](#41-测试体系)
@@ -79,7 +81,7 @@
     - [4.4 Workflow EEVDF](#44-workflow-eevdf)
   - [五、总结与展望](#五总结与展望)
     - [5.1 工作总结](#51-工作总结)
-    - [5.2 现有不足](#52-现有不足)
+    - [5.2 当前技术限制](#52-当前技术限制)
     - [5.3 后续工作](#53-后续工作)
   - [六、运行与文档](#六运行与文档)
     - [6.1 构建与回归](#61-构建与回归)
@@ -102,11 +104,11 @@ uCore 已经提供了进程、虚拟内存、VFS、IPC、调度器、时钟中�
 
 我们结合赛题要求、Agent 程序的运行特点和 uCore 的现有机制，把实现工作分成五项：
 
-1. **建立可以回收的 Agent identity。** 内核需要保存角色、能力位、文件访问范围和控制关系。生命周期槽位再次使用后，旧句柄和迟到请求必须失效。
-2. **保存多轮任务的 Context。** 工具结果、文件 provenance 和跨 Agent 消息都要留下记录。并发 commit、分支回滚和定长记录区不能破坏读取结果。
-3. **在工具执行前完成检查。** 内核要先检查请求参数、权限、前置任务、截止时间、数据来源和资源额度，再允许工具修改系统状态。不同调用方式应得到相同的执行结果。
-4. **让 Agent 及时看到文件变化。** 查询条件既包含业务字段，也要跟随 inode 的创建、写入、截断、删除和复用。文件集合发生变化后，内核把变化转换为事件。
-5. **按工作流统计资源并分配 CPU。** 一个任务可能包含多个 Agent 进程。资源用量、等待时间和 CPU 服务量都应合并到所属工作流，避免多建线程就获得额外份额。
+1. **Agent 进程创建与地址空间设计。** PCB 保存角色、能力位、文件访问范围、生命周期和 Loop 状态等低频控制信息；高频读取的路径、响应和查询缓存放入用户地址空间中的 Context。生命周期槽位再次使用后，旧句柄和迟到请求必须失效。
+2. **Agent-OS 内核结构化交互接口与工具调用协议。** 内核把 Agent identity、Tool Registry 与 typed schema、权限、前置任务、截止时间、数据来源和资源额度放进同一条检查链，全部通过后才允许工具产生副作用。不同传输方式应得到一致的工具语义。
+3. **上下文路径管理。** 工具结果、文件 provenance 和跨 Agent 消息都要留下记录。并发 commit、分支回滚和定长记录区不能破坏已经发布的读取结果，路径超长时也不能无界占用内存。
+4. **面向 Agent 查询优化的文件系统扩展。** 查询条件既包含业务字段，也要跟随 inode 的创建、写入、截断、删除和复用。索引缩小候选集合后，内核仍需核对完整条件，并把结果集合变化转换为事件。
+5. **Agent Loop 内核运行机制。** Agent 无事可做时应真正休眠，心跳、文件变化、IPC 和模型响应到达后再被唤醒；多个 Agent 同时运行时，资源和 CPU 服务量应按所属工作流统一结算。
 
 ### 2.3 总体架构
 
@@ -116,7 +118,7 @@ uCore 已经提供了进程、虚拟内存、VFS、IPC、调度器、时钟中�
   </a>
 </p>
 
-AgentOS-uCore 自下而上分为四层。uCore 基础内核负责进程、内存、VFS、IPC、调度和设备 I/O。AgentOS 内核模块负责 Agent identity、Context、Structured Tool、Live Query、事件、资源和工作流调度。用户态 UAPI 与 Guest Runtime 将这些内核接口封装起来，供应用程序调用。Agent Live、Nexus 和科研工作流负责拆分目标、选择工具并安排各阶段协作。
+AgentOS-uCore 自下而上分为五层。uCore 基础内核负责进程、内存、VFS、IPC、调度和设备 I/O。AgentOS 内核模块负责 Agent identity、Context、Structured Tool、Live Query、事件、资源和工作流调度。用户态 UAPI 与 Guest Runtime 将这些内核接口封装起来，供应用程序调用。Host Relay 负责串口中继、TLS 与模型 Provider 适配。Agent Live、Nexus 和科研工作流负责拆分目标、选择工具并安排各阶段协作。
 
 这些状态都跟随 uCore 对象一起变化。进程创建并完成 `exec` 后，内核发布 Agent identity；建立地址空间时映射 Context；VFS 修改文件时同步更新元数据。进程进入运行队列、获得 CPU、睡眠或经历时钟中断时，调度器更新工作流状态。进程退出后，系统依次回收订阅、队列、执行侧 Workflow Credit Domain 和生命周期槽位；标记 `preserve_on_retire` 的文件访问范围及其存储计费可以继续保留。各模块的接入位置见[系统架构](docs/architecture.md)，原生图源见 [`agentos_overview.drawio`](docs/figures/architecture/agentos_overview.drawio)。
 
@@ -134,9 +136,9 @@ AgentOS-uCore 自下而上分为四层。uCore 基础内核负责进程、内存
 
 ## 三、系统设计与实现
 
-### 3.1 Agent identity、生命周期与 Context
+### 3.1 Agent 进程创建与地址空间设计
 
-可信引导进程创建工作流根进程，内核为这次运行分配新的 VFS 文件访问范围、Workflow Credit Domain 和生命周期 generation。同一工作流中，具有 `AGENT_CAP_ORCHESTRATE` 能力位的 Agent 可以创建工作进程。工作进程申请的能力位不能为空，只能从 `AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE` 中选择，而且不能超出调用者已有的能力。内核还会检查目标映像的 VFS 执行权限和可信策略。
+可信引导进程创建工作流根进程，内核为这次运行分配新的 VFS 文件访问范围、Workflow Credit Domain 和生命周期 generation。同一工作流中，具有 `AGENT_CAP_ORCHESTRATE` 能力位的 Agent 可以创建工作进程。工作进程申请的能力位不能为空，只能从 `AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE` 中选择，而且不能超出调用者已有的能力。内核还会检查目标映像的 VFS 执行权限和可信策略。普通进程继续沿 uCore 原有的创建路径运行，只有经过受控入口和可信映像校验的进程才会取得 Agent identity。
 
 ```text
 agent_workflow_create()
@@ -152,13 +154,13 @@ agent_worker_create(image, capabilities)
     -> fork_common(... PROC_ADMIT_WORKER, VFS_SPAWN_SCOPE_DROP)
 ```
 
-每个 Agent 映射 7 页 Context：前 6 页由内核写入并向用户态只读开放，最后 1 页留给 Guest 程序缓存派生数据。记录区固定保存 128 条记录，每条记录包含序号、起因、调用跨度、分支、工具、状态和 provenance label。读取快照时，程序比较发布序号，发现并发 commit 便重新读取。回滚只移动当前分支的可见头。工具、文件和 IPC 统一通过同一条 Context commit lane 写入结果。
+Agent 的低频控制状态放在 PCB 与生命周期记录中，高频读取的数据则放在单独的 Agent Context 区。每个 Agent 固定映射 7 页 Context：前 6 页由内核写入并向用户态只读开放，最后 1 页留给 Guest 程序缓存查询结果等派生数据。记录区固定保存 128 条记录，每条记录包含序号、起因、调用跨度、分支、工具、状态和 provenance label。读取快照时，程序比较发布序号，发现并发 commit 便重新读取。回滚只移动当前分支的可见头，不撤销已经发生的文件或工具副作用。工具、文件和 IPC 统一通过同一条 Context commit lane 写入结果。
 
 实现代码见 [`os/proc.c`](os/proc.c)、[`os/agent_identity.c`](os/agent_identity.c)、[`os/workflow_lifecycle.c`](os/workflow_lifecycle.c)、[`os/agent_context.c`](os/agent_context.c)、[`os/agent_context_path.c`](os/agent_context_path.c) 和 [`os/agent_provenance.c`](os/agent_provenance.c)。
 
-### 3.2 Structured Tool 与 Execution Contract
+### 3.2 Agent-OS 内核结构化交互接口与工具调用协议
 
-Tool Registry 为每项工具登记名称、编号、参数 schema、所需能力位和副作用掩码。V2 请求最多带 8 个带类型信息的参数。V3 在 V2 的基础上增加 Execution Contract generation、节点、尝试次数、schema digest、输入指纹、来源 Context 和 artifact 类型。每份 Execution Contract 最多包含 24 个节点，每个节点最多尝试 4 次。
+Agent-OS 内核结构化交互接口不把自然语言或整段 Shell 命令直接交给内核，而是按工具调用协议传递工具编号、typed 参数、状态码和结构化结果。Tool Registry 为每项工具登记名称、编号、参数 schema、所需能力位和副作用掩码。V2 请求最多带 8 个带类型信息的参数。V3 在 V2 的基础上增加 Execution Contract generation、节点、尝试次数、schema digest、输入指纹、来源 Context 和 artifact 类型。每份 Execution Contract 最多包含 24 个节点，每个节点最多尝试 4 次。
 
 ```text
 tool_call_v3()
@@ -173,13 +175,13 @@ tool_call_v3()
     -> commit Context、Evidence Ring 与响应
 ```
 
-批处理一次可同步提交 64 项操作。Task Channel 使用 16 槽 SQ/CQ，SQ 和 CQ 各占一页并映射给 Guest；请求状态和资源状态另占两页，只由内核访问。`request_id`、ring generation 和 slot generation 共同判断队列是否已经复用。每个已接受的目标只产生一个 terminal CQE，取消命令不会再产生第二个 CQE。测试覆盖了目标 terminal CQE 尚未确认读取时的幂等取消和强制截止时间。CQ 写满后，内核暂停 commit。协议错误会进入持续重新同步状态，直到新 generation 建立并显式重置。四种调用方式最后都进入同一工具执行函数，因此更换传输方式不会改变工具行为。
+批处理一次可同步提交 64 项操作。Task Channel 使用 16 槽 SQ/CQ，SQ 和 CQ 各占一页并映射给 Guest；请求状态和资源状态另占两页，只由内核访问。`request_id`、ring generation 和 slot generation 共同判断队列是否已经复用。每个已接受的目标只产生一个 terminal CQE，取消命令不会再产生第二个 CQE。CQ 写满后，内核暂停 commit；协议错误会进入持续重新同步状态，直到新 generation 建立并显式重置。Task resource 可以从当前进程可读的普通文件导入 1–63 字节 UTF-8，并绑定该 Agent 已有的最新有效 Context；内核保存不可变快照、SHA-256 和 provenance，ECHO 再从快照取得输入。OWNED 输入在任务完成后自动消费，BORROWED 别名则继续存活。四种调用方式最后都进入同一工具执行函数，因此更换传输方式不会改变工具行为。
 
 实现代码见 [`os/agent_core.c`](os/agent_core.c)、[`os/agent_tool_protocol.c`](os/agent_tool_protocol.c)、[`os/agent_execution_contract.c`](os/agent_execution_contract.c)、[`os/agent_task_channel.c`](os/agent_task_channel.c) 和 [`os/agent_task_bridge.c`](os/agent_task_bridge.c)。公开结构见 [`include/agent_tool_abi.h`](include/agent_tool_abi.h)、[`include/agent_execution_contract_abi.h`](include/agent_execution_contract_abi.h) 与 [`include/agent_task_channel_abi.h`](include/agent_task_channel_abi.h)。
 
-### 3.3 Live Query 与文件事件
+### 3.3 面向 Agent 查询优化的文件系统扩展
 
-Agent 调用 `agent_file_meta_set()` 登记文件所属 project、workflow、run、stage、kind、status 和 summary。内核同时保存 `dev + inum + incarnation`。inode 再次使用时，新的 incarnation 会隔开旧元数据、内容回执和编辑租约。Metadata Catalog 为 `status`、`stage` 和 `kind` 建立等值索引。索引只负责缩小范围，返回结果前仍会逐项核对完整查询条件、文件访问范围、生命周期和 catalog generation。
+这部分扩展让 Agent 可以描述“需要什么文件”，而不必事先掌握完整路径。Agent 调用 `agent_file_meta_set()` 登记文件所属 project、workflow、run、stage、kind、status 和 summary，内核同时保存 `dev + inum + incarnation`。inode 再次使用时，新的 incarnation 会隔开旧元数据、内容回执和编辑租约。Metadata Catalog 为 `status`、`stage` 和 `kind` 建立等值索引。索引只负责缩小范围，返回结果前仍会逐项核对完整查询条件、文件访问范围、生命周期和 catalog generation；结构化结果可写入 Context 的用户管理缓存，供后续轮次直接使用。
 
 ```text
 agent_file_query(query, result)
@@ -201,9 +203,9 @@ VFS metadata/write/truncate/unlink
 
 实现代码见 [`os/agent_metadata_catalog.c`](os/agent_metadata_catalog.c)、[`os/agent_metadata_query.c`](os/agent_metadata_query.c)、[`os/agent_metadata_objects.c`](os/agent_metadata_objects.c)、[`os/agent_live_query_events.c`](os/agent_live_query_events.c)、[`os/agent_metadata_actions.c`](os/agent_metadata_actions.c) 和 [`os/agent_ipc.c`](os/agent_ipc.c)。
 
-### 3.4 事件、资源与工作流调度
+### 3.4 Agent Loop 内核运行机制
 
-每个 Agent 有一个 16 槽事件队列，其中一部分槽位专门留给控制事件和不同来源的事件。跨 Agent `MESSAGE` 与 `LLM_DONE` 会检查消息路由、完整生命周期、发送方能力位、接收方 generation 和关联编号。心跳、截止时间、文件变化和策略拒绝都通过 `agent_wait()` 交给 Agent 循环。
+Agent Loop 的“思考、行动、观察、再思考”在 Guest 中组织，内核负责等待、唤醒、状态和调度。每个 Agent 有一个 16 槽事件队列，其中一部分槽位专门留给控制事件和不同来源的事件。跨 Agent `MESSAGE` 与 `LLM_DONE` 会检查消息路由、完整生命周期、发送方能力位、接收方 generation 和关联编号。心跳、截止时间、文件变化和策略拒绝都通过 `agent_wait()` 交给 Agent Loop；队列为空时线程进入等待队列，不以轮询消耗 CPU。
 
 Workflow Credit Domain 管理进程、线程、文件对象、文件系统块、inode、缓冲区、Agent 状态页和物理页。每份额度分为 `free`、`pending`、`used` 三种状态。创建对象时先 reserve，发布成功后 commit 为 `used`；失败时 `pending` 退回 `free`，对象销毁后也归还 `free`。工具运行时，Phase Lease 还会锁定本次执行所需的资源，结束后统一结算。
 
@@ -224,7 +226,7 @@ Workflow EEVDF 把同一工作流中的进程合成一个外层调度对象。�
 
 `agentlive_ucore` 运行一个常驻 Agent 循环。Guest 保存轮次、关联编号、Tool Registry、Context 和审批状态。Host 中继负责转发串口帧、建立 TLS 连接，并与模型 Provider 交换 JSON。固定 Replay 与真实 Provider 使用同一套串口协议，便于用固定输入检查多轮工具调用。
 
-`agentnexus_ucore` 在同一工作流中创建协调、系统观察、资料检索和分析四个 Agent。协调 Agent 建立任务并分派工作，各工作进程通过内核 `MESSAGE` 和工作流内的 artifact 传递信息。节点失败时重新规划，分析 Agent 负责汇总最终报告。核心应用代码位于 [`user/src/agentlive_ucore.c`](user/src/agentlive_ucore.c)、[`user/src/agentnexus_ucore.c`](user/src/agentnexus_ucore.c) 和 [`user/lib/agent_nexus.c`](user/lib/agent_nexus.c)，Host 接入代码位于 [`host_tools/agentos_console.py`](host_tools/agentos_console.py) 与 [`host_tools/agentos_relayd.py`](host_tools/agentos_relayd.py)。
+`agentnexus_ucore` 在同一工作流中创建协调、系统观察、资料检索和分析四个 Agent。协调 Agent 建立任务并分派工作，各工作进程通过内核 `MESSAGE` 和工作流内的 artifact 传递信息。节点失败时重新规划，分析 Agent 负责汇总最终报告。artifact 的 header 与 payload 通过 `agent_file_publish()` 一次交给内核；VFS 先在未命名 inode 中写完整内容，再把正式文件名接入目录。因此，正式路径要么不存在，要么能够读到完整文件；同名并发发布至多一个成功，已有内容不会被覆盖。核心应用代码位于 [`user/src/agentlive_ucore.c`](user/src/agentlive_ucore.c)、[`user/src/agentnexus_ucore.c`](user/src/agentnexus_ucore.c) 和 [`user/lib/agent_nexus.c`](user/lib/agent_nexus.c)，Host 接入代码位于 [`host_tools/agentos_console.py`](host_tools/agentos_console.py) 与 [`host_tools/agentos_relayd.py`](host_tools/agentos_relayd.py)。
 
 ## 四、测试结果
 
@@ -240,7 +242,21 @@ Workflow EEVDF 把同一工作流中的进程合成一个外层调度对象。�
 | 常驻应用 | 控制台与 Nexus Replay | 多轮工具、审批、任务分派、重新规划、artifact 和会话关闭 |
 | 系统对照 | `dual-platform-run` | 普通 uCore 与 AgentOS-uCore 的业务结果和端到端耗时 |
 
-性能测试在 WSL2 Host 上运行，Guest 为 QEMU RISC-V64 `virt` 单 Hart，使用 `riscv64-linux-gnu-gcc 15.2.0` 编译，QEMU 版本为 `10.2.1`。30 次独立启动覆盖 Live Query、Agent 任务和工作流 EEVDF。测试清单、校验结果、原始串口输出和逐样本 CSV 均保存在 [`one_shot_metrics/data/20260811`](one_shot_metrics/data/20260811/)。测试入口和故障检查项见[测试文档](docs/testing.md)。
+五项赛题能力另由 `agenteval_ucore` 在同一个 RISC-V64 Guest 程序中串联验收，Host 再核对负载指纹、结果指纹和固定输出字段：
+
+```bash
+AGENT_TEST_CASE=agenteval_ucore \
+  make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+Nexus 结果文件另由 `agentpublish_ucore` 检查完整内容、同名竞争、幂等回读和资源回收：
+
+```bash
+AGENT_TEST_CASE=agentpublish_ucore \
+  make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+本节复现的是冻结在源码提交 `2b14fb1f74b9bd093e6de939a16554620835699e` 的性能批次；当前版本后续功能改动由独立功能回归覆盖，以下数字仍按该批次原样报告。性能测试在 WSL2 Host 上运行，Guest 为 QEMU RISC-V64 `virt` 单 Hart，使用 `riscv64-linux-gnu-gcc 15.2.0` 编译，QEMU 版本为 `10.2.1`。30 次独立启动覆盖 Live Query、Agent Task 和工作流 EEVDF。测试清单、校验结果、原始串口输出和逐样本 CSV 均保存在 [`one_shot_metrics/data/20260811`](one_shot_metrics/data/20260811/)。测试入口和故障检查项见[测试文档](docs/testing.md)。
 
 ### 4.2 Live Query 性能
 
@@ -254,7 +270,7 @@ Workflow EEVDF 把同一工作流中的进程合成一个外层调度对象。�
 | 完整流程中位耗时 | 711,283.5 微秒 | 723,928.0 微秒 | 配对差值 +13,452 微秒 |
 | 索引查询在完整流程中更快的配对数 | - | - | 3 组（共 16 组） |
 
-我们又组合了 24、64、96 三种目录规模和 1、2、4、8 四种命中数量，每种组合保留 15 个内部配对。12 种组合的中位加速比为 1.164 至 2.808 倍。在三种目录规模下，索引已经建立时的单次查询中位耗时分别约为 98.3、100.5 和 108.3 微秒。配对分布和不同规模下的结果见[性能测试](docs/performance.md#3-实时查询的核心阶段)。
+我们又组合了 24、64、96 三种目录规模和 1、2、4、8 四种命中数量，每种组合保留 15 个内部配对。12 种组合的中位加速比为 1.164 至 2.808 倍。在三种目录规模下，索引已经建立时的单次查询中位耗时分别约为 98.3、100.5 和 108.3 微秒。这些结果表明，Metadata Catalog 的索引确实减少了核心查询路径需要核对的对象数，目录越大越能体现这一点；但完整流程中索引路径只有 3/16 次更快，说明核心窗口之外的聚合路径抵消了这部分收益。现有计时还不能把差值定位到某个具体环节，系统端到端路径需要增加分段计时后再作优化。配对分布和不同规模下的结果见[性能测试](docs/performance.md#3-实时查询的核心阶段)。
 
 ### 4.3 Agent 任务延迟
 
@@ -266,27 +282,27 @@ Workflow EEVDF 把同一工作流中的进程合成一个外层调度对象。�
 | scalar V3 | 32 | 2,051.0 微秒 | 1,833.0 至 2,226.0 微秒 |
 | SQ/CQ | 32 | 1,620.5 微秒 | 1,472.0 至 1,755.5 微秒 |
 
-在这组同步 `ECHO` 任务中，批处理把连续操作合并提交，中位耗时最低。SQ/CQ 通过共享队列返回 terminal CQE，单次 V3 则为每个操作单独执行完整的 Execution Contract 检查。各组延迟分布见[性能测试](docs/performance.md#6-agent-task-传输)。
+在这组短小、同构且同步的 `ECHO` 任务中，Batch 把 16 个操作合并为一次提交，中位耗时最低，说明减少 syscall 往返对这类负载最有效。`SQ/CQ` 的价值并不是压低短调用的最低延迟，而是用长期队列承载 backpressure、cancel 和唯一 terminal CQE；Scalar V3 则保留每次调用独立校验 Execution Contract 的语义。各组延迟分布见[性能测试](docs/performance.md#6-agent-task-传输)。
 
 ### 4.4 Workflow EEVDF
 
-6 次独立启动共记录 504 次准确唤醒，其中 425 次为 0 tick，79 次为 1 tick。并发工作流数量从 1 增加到 4 时，根据各工作流 `service_cycles` 计算出的 Jain 公平性指数中位数依次为 1.000000、0.999985、0.999993 和 0.999985。唤醒分布、公平性图、完整实验设计和逐样本数据入口见[性能测试](docs/performance.md#7-工作流-eevdf-调度)。
+6 次独立启动共记录 504 次准确唤醒，其中 425 次为 0 tick，79 次为 1 tick。并发工作流数量从 1 增加到 4 时，根据各工作流 `service_cycles` 计算出的 Jain 公平性指数中位数依次为 1.000000、0.999985、0.999993 和 0.999985。实际睡眠与 0–1 tick 的唤醒等待共同表明：Agent Loop 无任务时能够让出 CPU，事件到达后也能及时重新进入运行队列；这里的 0 tick 只表示等待短于 10 ms 计时粒度，并不等于没有调度开销。公平性结果则说明按工作流结算 CPU 时间基本抑制了靠增加线程扩大份额的做法。唤醒分布、公平性图、完整实验设计和逐样本数据入口见[性能测试](docs/performance.md#7-工作流-eevdf-调度)。
 
 ## 五、总结与展望
 
 ### 5.1 工作总结
 
-我们在 uCore 中完成了 Agent 从创建到退出所需的主要内核功能。Agent identity 与生命周期负责管理成员及其关联对象，Context 保存多轮任务的起因与 provenance。Structured Tool 与 Execution Contract 在操作生效前完成检查，Live Query 把状态变化送入事件循环。Workflow Credit Domain 和工作流 EEVDF 负责跨进程资源与 CPU 时间。Agent Live 与 Nexus 已经使用这些接口连续运行多轮任务。
+AgentOS-uCore 已经把 Agent 从创建、交互、记录 Context、查询文件到等待下一轮事件的过程接入 uCore。Agent identity 与生命周期负责管理成员及其关联对象，Context 保存多轮任务的起因与 provenance。Structured Tool 与 Execution Contract 在操作生效前完成检查，Live Query 把状态变化送入 Agent Loop。Workflow Credit Domain 和工作流 EEVDF 负责跨进程资源与 CPU 时间。Agent Live 与 Nexus 直接使用这些内核接口连续运行多轮任务。
 
 项目保留了稳定 ABI、细分的 Guest 测试、Host 状态机测试、故障注入、普通 uCore 与 AgentOS-uCore 对照测试，以及逐样本性能数据。每项主要功能都能从文档找到调用入口、实现文件和测试结果。
 
-### 5.2 现有不足
+### 5.2 当前技术限制
 
-Task Bridge 目前同步处理 `null` 输入，返回的 artifact 类型为 `NONE`，类型化资源还没有覆盖更多真实工具输入。RISC-V64 Guest 使用单 Hart，工作流 EEVDF 只测试了 1 至 4 个并发工作流。多 Hart 下的调度对象迁移和并行记账仍需补充测试。Metadata Catalog 最多保存 512 条记录，单次查询最多返回 8 项，更大目录还需要分页和复合索引。
+当前测试环境为 RISC-V64 QEMU 单 Hart，工作流 EEVDF 只覆盖 1 至 4 个并发工作流；多 Hart 下的调度对象迁移和并行记账还没有纳入本轮数据。Metadata Catalog 最多保存 512 条记录，单次 Live Query 最多返回 8 项且没有分页游标。Context、事件队列、Task Channel 和 Evidence Ring 都采用固定容量；现有性能数据来自短时负载，尚未覆盖长时间 Provider 延迟和大规模异步积压。调度与等待时间以 10 ms tick 为主要粒度，短于一个 tick 的差异需要借助周期计数器进一步区分。
 
 ### 5.3 后续工作
 
-下一阶段将为 Task Channel 加入异步 Task Bridge，并补充更多类型化资源。Live Query 需要增加分页、复合索引和多核并行处理。工作流调度还要继续调整延迟等级、截止时间和资源压力处理。Nexus 也会增加新的角色分工模板，并进行更长时间的真实 Provider 测试。新负载仍按现有方法保存逐样本数据。
+下一阶段将为 Live Query 增加分页与复合索引，并补充多 Hart 下的工作流调度和资源记账测试。Task Channel 将继续验证长 Provider 延迟、异步积压和队列饱和时的 backpressure。Nexus 也会增加新的角色分工模板，延长真实 Provider 会话时间。新负载仍按现有方法保存逐样本数据。
 
 ## 六、运行与文档
 
@@ -320,10 +336,10 @@ make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 | [运行指南](docs/usage.md) | 环境、构建、QEMU、控制台、Nexus 和双系统运行 |
 | [测试体系](docs/testing.md) | 静态契约、Guest 回归、故障测试、Replay 和复现入口 |
 | [性能测试](docs/performance.md) | 实验设计、统计结果、图表与逐样本数据 |
-| [Agent identity、生命周期与 Context](docs/modules/identity-context.md) | Agent identity、工作流生命周期、Context 路径和 provenance |
-| [Structured Tool 与 Execution Contract](docs/modules/tool-execution.md) | Tool Registry、V2/V3、batch、Task Channel 和 Phase Lease |
-| [Live Query](docs/modules/live-query.md) | Metadata Catalog、索引、Typed Watch、重新同步和编辑租约 |
-| [Workflow Runtime](docs/modules/workflow-runtime.md) | 事件、IPC、Workflow Credit Domain、EEVDF、Evidence Ring 和 Workflow Fence |
+| [Agent 进程、地址空间与上下文路径](docs/modules/identity-context.md) | Agent identity、工作流生命周期、Context 路径和 provenance |
+| [结构化交互与工具调用协议](docs/modules/tool-execution.md) | Tool Registry、V2/V3、Batch、Task Channel 和 Phase Lease |
+| [面向 Agent 查询优化的文件系统扩展](docs/modules/live-query.md) | Metadata Catalog、索引、Typed Watch、重新同步和编辑租约 |
+| [Agent Loop 内核运行机制](docs/modules/workflow-runtime.md) | 事件、IPC、Workflow Credit Domain、EEVDF、Evidence Ring 和 Workflow Fence |
 
 ### 6.3 视频与 PPT
 
@@ -353,7 +369,7 @@ AgentOS-uCore 基于 LearningOS 的 [uCore-Tutorial-Code-2025S](https://github.c
 ├── host_tools/              # 控制台、模型中继、观察器与 Host 校验器
 ├── include/                 # 内核和 Guest 共用的 ABI 与资源策略头文件
 ├── nfs/                     # uCore 文件系统镜像生成工具
-├── one_shot_metrics/        # 一次性性能负载、原始数据、表格与图表
+├── one_shot_metrics/        # 固定性能测量、原始数据、表格与图表
 ├── os/                      # uCore 基础内核与 AgentOS 功能模块
 ├── scripts/                 # 构建检查、Guest 运行器与故障测试脚本
 ├── user/                    # Guest Runtime、Agent 应用与产品测试

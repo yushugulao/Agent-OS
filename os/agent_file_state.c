@@ -25,6 +25,9 @@
 #define AGENT_FILE_CACHE_SYSTEM_SLOT 0U
 #define AGENT_FILE_CACHE_SCOPE_MAX (VFS_SCOPE_MAX_ACTIVE + 1U)
 
+_Static_assert(AGENT_FILE_PUBLISH_MAX_BYTES <= PGSIZE,
+	       "file publish snapshot must fit one charged page");
+
 _Static_assert(AGENT_FILE_VERSION_MAX > 0,
 	       "文件版本表必须保留驻留槽");
 _Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_EDIT_SCOPE_LIMIT <=
@@ -1429,6 +1432,71 @@ sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr)
 		agent_identity_proc_scope(call.proc), 0, call.inode);
 	edit_state_locked(&call.state, call.entry, call.inode, path, 0);
 	return edit_reply(&call, AGENT_STATUS_OK, 0, stateaddr);
+}
+
+int
+sys_agent_file_publish(uint64 requestaddr)
+{
+	struct agent_file_publish_request request;
+	struct proc *p = curr_proc();
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+	struct vfs_cred cred;
+	char *snapshot;
+	char path[DIRSIZ + 1];
+	uint total;
+	int result;
+
+	if (p == 0 || requestaddr == 0 ||
+	    copyin(p->pagetable, (char *)&request, requestaddr,
+		   sizeof(request)) < 0)
+		return AGENT_STATUS_BAD_PARAM;
+	if (request.version != AGENT_FILE_PUBLISH_VERSION)
+		return AGENT_STATUS_BAD_VERSION;
+	if (request.size != sizeof(request))
+		return AGENT_STATUS_BAD_SIZE;
+	if (request.flags != 0 || request.reserved != 0 ||
+	    request.reserved_tail[0] != 0 || request.reserved_tail[1] != 0 ||
+	    request.path == 0 || request.header == 0 || request.payload == 0 ||
+	    request.header_size == 0 || request.payload_size == 0)
+		return AGENT_STATUS_BAD_PARAM;
+	if (request.header_size > AGENT_FILE_PUBLISH_MAX_BYTES ||
+	    request.payload_size >
+		    AGENT_FILE_PUBLISH_MAX_BYTES - request.header_size)
+		return AGENT_STATUS_BAD_SIZE;
+	if (!p->is_agent)
+		return AGENT_STATUS_NOT_AGENT;
+	if (!agent_identity_has_cap(p, AGENT_CAP_ARTIFACT_WRITE) ||
+	    !vfs_proc_scope_publishable(p) || !vfs_proc_lifecycle_active(p))
+		return AGENT_STATUS_DENIED;
+	if (copyinstr(p->pagetable, path, request.path, sizeof(path)) < 0 ||
+	    path[0] == 0)
+		return AGENT_STATUS_BAD_PARAM;
+	account = p->resource_account;
+	charge_class = p->resource_slot_reserved ?
+			       RESOURCE_CHARGE_RESERVED :
+			       RESOURCE_CHARGE_ORDINARY;
+	snapshot = kalloc_account_page(account, charge_class);
+	if (snapshot == 0)
+		return AGENT_STATUS_NO_SPACE;
+	total = request.header_size + request.payload_size;
+	if (copyin(p->pagetable, snapshot, request.header,
+		   request.header_size) < 0 ||
+	    copyin(p->pagetable, snapshot + request.header_size,
+		   request.payload, request.payload_size) < 0) {
+		(void)kfree_account_page(snapshot, account, charge_class);
+		return AGENT_STATUS_BAD_PARAM;
+	}
+	vfs_cred_from_proc(p, &cred);
+	if (cred.scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    cred.storage_principal_id != cred.scope_id ||
+	    (cred.capabilities & VFS_CAP_ARTIFACT_WRITE) == 0) {
+		(void)kfree_account_page(snapshot, account, charge_class);
+		return AGENT_STATUS_DENIED;
+	}
+	result = fs_agent_file_publish_atomic(path, &cred, snapshot, total);
+	(void)kfree_account_page(snapshot, account, charge_class);
+	return result;
 }
 
 void

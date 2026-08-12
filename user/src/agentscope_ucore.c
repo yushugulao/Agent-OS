@@ -20,6 +20,7 @@
 #define META_SET_RETRY_ROUNDS 800
 #define OBSERVE_CROSS_QUERY_ROUNDS 32
 #define OBSERVE_CROSS_QUERY_MAX_MS 15000
+#define OBSERVE_TIMELINE_MIN_RECORDS 32
 #define WORKFLOW_CATALOG_SCOPE_LIMIT 112
 #define WORKFLOW_STORAGE_PROBE_COUNT (WORKFLOW_CATALOG_SCOPE_LIMIT + 1)
 #define PUBLIC_STORAGE_PROBE_COUNT 70
@@ -49,6 +50,7 @@ struct observe_pressure_result {
 	uint64 span_preemptions;
 	uint64 timeline_preemptions;
 	uint64 provenance_preemptions;
+	uint64 peer_turns_delta;
 	uint64 context_records;
 	uint64 span_records;
 	uint64 timeline_records;
@@ -82,6 +84,9 @@ static struct scope_reply observe_join_reply;
 static struct agent_file_hit scope_content_before;
 static volatile int metadata_writer_stop;
 static volatile int observe_query_stop;
+static volatile int observe_query_peer_ready;
+static volatile int observe_query_peer_stop;
+static volatile uint64 observe_query_peer_turns;
 static int observe_ready_pipe[2] = {-1, -1};
 static int observe_stop_pipe[2] = {-1, -1};
 static int observe_result_pipe[2] = {-1, -1};
@@ -270,19 +275,48 @@ static void observe_query_stop_listener(void *arg)
 	exit(0);
 }
 
+static void observe_query_runnable_peer(void *arg)
+{
+	(void)arg;
+	observe_query_peer_ready = 1;
+	__sync_synchronize();
+	while (!observe_query_peer_stop) {
+		observe_query_peer_turns++;
+		check(sched_yield() == 0,
+		      "yield observation fairness peer");
+	}
+	exit(0);
+}
+
+static void push_observe_context(uint64 request_id)
+{
+	memset(&observe_context_scratch, 0,
+	       sizeof(observe_context_scratch));
+	observe_context_scratch.tool_id = AGENT_TOOL_CONTEXT_PUSH;
+	observe_context_scratch.request_id = request_id;
+	observe_context_scratch.status = AGENT_STATUS_OK;
+	strcpy(observe_context_scratch.payload, "observe-pressure");
+	strcpy(observe_context_scratch.result, "recorded");
+	check(context_push(&observe_context_scratch) == AGENT_STATUS_OK,
+	      "fill observation context");
+}
+
 static void fill_observe_context(void)
 {
-	for (uint64 i = 0; i < AGENT_CONTEXT_MAX_RECORDS; i++) {
-		memset(&observe_context_scratch, 0,
-		       sizeof(observe_context_scratch));
-		observe_context_scratch.tool_id = AGENT_TOOL_CONTEXT_PUSH;
-		observe_context_scratch.request_id = 88000 + i;
-		observe_context_scratch.status = AGENT_STATUS_OK;
-		strcpy(observe_context_scratch.payload, "observe-pressure");
-		strcpy(observe_context_scratch.result, "recorded");
-		check(context_push(&observe_context_scratch) == AGENT_STATUS_OK,
-		      "fill observation context");
-	}
+	for (uint64 i = 0; i < AGENT_CONTEXT_MAX_RECORDS; i++)
+		push_observe_context(88000 + i);
+}
+
+static void ensure_observe_timeline_workset(void)
+{
+	int count = agent_timeline_query(&observe_filter_scratch, 0, 0);
+
+	check(count >= 0, "count timeline fairness workset");
+	for (int i = count; i < OBSERVE_TIMELINE_MIN_RECORDS; i++)
+		push_observe_context(89000 + i);
+	count = agent_timeline_query(&observe_filter_scratch, 0, 0);
+	check(count >= OBSERVE_TIMELINE_MIN_RECORDS,
+	      "timeline fairness workset reaches two batches");
 }
 
 static uint64 observe_query_preemptions(void)
@@ -323,7 +357,8 @@ static void check_observe_ordered_indexes(void)
 	observe_result_scratch.span_records = copied;
 
 	count = agent_timeline_query(&observe_filter_scratch, 0, 0);
-	check(count > 0 && count <= AGENT_AUDIT_MAX_RECORDS,
+	check(count >= OBSERVE_TIMELINE_MIN_RECORDS &&
+		      count <= AGENT_AUDIT_MAX_RECORDS,
 	      "count bounded evidence timeline");
 	(void)observe_query_preemptions();
 	memset(observe_timeline_scratch, 0,
@@ -331,7 +366,8 @@ static void check_observe_ordered_indexes(void)
 	copied = agent_timeline_query(&observe_filter_scratch,
 				      observe_timeline_scratch,
 				      AGENT_AUDIT_MAX_RECORDS);
-	check(copied > 0 && copied <= AGENT_AUDIT_MAX_RECORDS,
+	check(copied >= OBSERVE_TIMELINE_MIN_RECORDS &&
+		      copied <= AGENT_AUDIT_MAX_RECORDS,
 	      "copy bounded evidence timeline");
 	(void)observe_query_preemptions();
 	for (int i = 0; i < copied; i++) {
@@ -363,20 +399,37 @@ static __attribute__((noinline)) void
 observe_query_pressure(int ready_fd, int stop_fd, int result_fd)
 {
 	char ready = 1;
+	int peer_tid;
 	int stop_tid;
+	uint64 peer_turns_before;
 
 	memset(&observe_result_scratch, 0, sizeof(observe_result_scratch));
 	fill_observe_context();
 	observe_result_scratch.context_records = AGENT_CONTEXT_MAX_RECORDS;
+	memset(&observe_filter_scratch, 0, sizeof(observe_filter_scratch));
+	observe_filter_scratch.flags =
+		AGENT_TIMELINE_FILTER_SOURCE_MASK | AGENT_TIMELINE_FILTER_PID;
+	observe_filter_scratch.source_mask =
+		AGENT_TIMELINE_SOURCE_MASK_CONTEXT;
+	observe_filter_scratch.pid = getpid();
+	ensure_observe_timeline_workset();
+	observe_filter_scratch.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK;
+	observe_filter_scratch.pid = 0;
 	observe_query_stop = 0;
 	stop_tid = thread_create(observe_query_stop_listener,
 				 (void *)(long)stop_fd);
 	check(stop_tid > 0, "create observation query stop listener");
-	memset(&observe_filter_scratch, 0, sizeof(observe_filter_scratch));
-	observe_filter_scratch.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK;
-	observe_filter_scratch.source_mask =
-		AGENT_TIMELINE_SOURCE_MASK_CONTEXT;
+	observe_query_peer_ready = 0;
+	observe_query_peer_stop = 0;
+	observe_query_peer_turns = 0;
+	peer_tid = thread_create(observe_query_runnable_peer, 0);
+	check(peer_tid > 0, "create observation fairness peer");
+	while (!observe_query_peer_ready || observe_query_peer_turns == 0)
+		check(sched_yield() == 0,
+		      "wait for observation fairness peer");
 	check_observe_ordered_indexes();
+	__sync_synchronize();
+	peer_turns_before = observe_query_peer_turns;
 	while (!observe_query_stop || observe_result_scratch.iterations == 0) {
 		check(agent_span_trace_snapshot(0, 0) >= 0,
 		      "count span trace under pressure");
@@ -397,6 +450,13 @@ observe_query_pressure(int ready_fd, int stop_fd, int result_fd)
 			write_exact(ready_fd, &ready, sizeof(ready),
 				    "observation query pressure ready");
 	}
+	__sync_synchronize();
+	observe_result_scratch.peer_turns_delta =
+		observe_query_peer_turns - peer_turns_before;
+	observe_query_peer_stop = 1;
+	__sync_synchronize();
+	check(waittid(peer_tid) == 0,
+	      "join observation fairness peer");
 	observe_result_scratch.preemptions =
 		observe_result_scratch.span_preemptions +
 		observe_result_scratch.timeline_preemptions +
@@ -407,9 +467,11 @@ observe_query_pressure(int ready_fd, int stop_fd, int result_fd)
 	      "timeline query pressure reaches fairness checkpoints");
 	check(observe_result_scratch.provenance_preemptions > 0,
 	      "provenance query pressure reaches fairness checkpoints");
+	check(observe_result_scratch.peer_turns_delta > 0,
+	      "observation fairness peer progresses during pressure queries");
 	check(observe_result_scratch.preemptions > 0,
 	      "observation query pressure reaches fairness checkpoints");
-	check(waittid(stop_tid) >= 0,
+	check(waittid(stop_tid) == 0,
 	      "join observation query stop listener");
 	write_exact(result_fd, &observe_result_scratch,
 		    sizeof(observe_result_scratch),
@@ -1457,11 +1519,21 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 				      observe_result_scratch.span_preemptions > 0 &&
 				      observe_result_scratch.timeline_preemptions > 0 &&
 				      observe_result_scratch.provenance_preemptions > 0 &&
+				      observe_result_scratch.peer_turns_delta > 0 &&
 				      observe_result_scratch.context_records ==
 					      AGENT_CONTEXT_MAX_RECORDS &&
 				      observe_result_scratch.span_records > 0 &&
-				      observe_result_scratch.timeline_records > 0,
+				      observe_result_scratch.timeline_records >=
+				      OBSERVE_TIMELINE_MIN_RECORDS,
 			      "observation query pressure result");
+			printf("agentscope_ucore: observe_fairness_workset=%d "
+			       "span_preemptions=%d timeline_preemptions=%d "
+			       "provenance_preemptions=%d peer_turns_delta=%d\n",
+			       (int)observe_result_scratch.timeline_records,
+			       (int)observe_result_scratch.span_preemptions,
+			       (int)observe_result_scratch.timeline_preemptions,
+			       (int)observe_result_scratch.provenance_preemptions,
+			       (int)observe_result_scratch.peer_turns_delta);
 			observe_child_pid = -1;
 			value0 = observe_result_scratch.iterations;
 			value1 = observe_result_scratch.preemptions;

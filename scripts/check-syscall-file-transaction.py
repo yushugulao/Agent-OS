@@ -60,7 +60,7 @@ def check(root: Path) -> None:
 
     require(
         source,
-        "structsyscall_transaction_context{intid;structfile*file;"
+        "structsyscall_transaction_context{intid;intfile_fd;structfile*file;"
         "structfile_close_receiptclose_receipt;"
         "intclose_attempted;",
         "syscall transaction does not own a stable file reference",
@@ -108,8 +108,10 @@ def check(root: Path) -> None:
         ),
         "transaction does not pin before classifying the same file",
     )
-    if prepare.count("syscall_fd_pin(") != 1:
-        raise ContractError("transaction prepare does not perform exactly one fd pin")
+    if prepare.count("syscall_fd_pin(trapframe->a0)") != 1:
+        raise ContractError("read/write transaction does not perform exactly one fd pin")
+    if prepare.count("syscall_fd_pin(control.source_handle)") != 1:
+        raise ContractError("Task import transaction does not perform exactly one fd pin")
     reject(prepare, "caseSYS_close", "close guesses a file identity before detach")
 
     direct = function(source, "syscall_direct_agent_side_effects")
@@ -208,7 +210,8 @@ def check(root: Path) -> None:
         if not re.search(rf"\bX\({name},\s*DESCRIPTOR,\s*ALWAYS\)", registry):
             raise ContractError(f"{name} lacks descriptor transaction classification")
     for name in (
-        "agent_file_edit_begin", "agent_file_edit_state", "agent_worker_create"
+        "agent_file_edit_begin", "agent_file_edit_state", "agent_file_publish",
+        "agent_worker_create"
     ):
         if not re.search(
             rf"\bX\({name},\s*BLOCK_IO_FS_EPOCH,\s*ALWAYS\)", registry

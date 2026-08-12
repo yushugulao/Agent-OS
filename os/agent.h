@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "types.h"
 #include "../include/agent_execution_contract_abi.h"
+#include "../include/agent_file_publish_abi.h"
 #include "../include/agent_task_channel_abi.h"
 #include "../include/agent_lifecycle_abi.h"
 #include "../include/agent_performance_abi.h"
@@ -740,6 +741,7 @@ struct agent_file_edit_state {
 struct proc;
 struct workflow_lifecycle_key;
 struct inode;
+struct file;
 struct thread;
 
 void agentinit(void);
@@ -798,7 +800,8 @@ int sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 int sys_agent_execution_contract(uint64 controladdr, uint64 resultaddr);
 int sys_agent_task_channel_setup(uint64 setupaddr, uint64 resultaddr);
 int sys_agent_task_channel_enter(uint64 enteraddr, uint64 resultaddr);
-int sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr);
+int sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr,
+				    struct file *source_file, int source_fd);
 int sys_agent_resource_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_performance_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_scope_delegate_fd(int fd);
@@ -845,6 +848,7 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 			       uint64 stateaddr);
 int sys_agent_file_edit_abort(uint64 lease_id);
 int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr);
+int sys_agent_file_publish(uint64 requestaddr);
 int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps);
 int sys_agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 			   int operation);

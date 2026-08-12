@@ -160,13 +160,27 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: cq_full=1 backpressure=1 pending_preserved=1 recovery_enter_calls=2 resync_recovery=1"
 		require_exact_case_marker "${log_file}" \
-			"agenttask_ucore: setup=1 single_issuer=1 resource_import_denied=1"
+			"agenttask_ucore: resource_unlinked_close_race=1 transaction_pin=1 launched_concurrently=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: setup=1 single_issuer=1 resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1 release_stale=1 generation_aba=1"
 		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: submit=1 cq_ack=1 monotonic=1 resync=1"
 		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: target_cancel_exactly_once=1 hard_deadline=1"
 		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: batch_fp=31 scalar_v3_fp=31 task_fp=31"
+		;;
+	agentpublish_ucore)
+		require_exact_case_marker "${log_file}" \
+			"agentpublish_ucore: invalid_requests=1 bad_pointer=1 bad_path=1 bad_size=1 bad_abi=1 zero_namespace_side_effect=1"
+		require_exact_case_marker "${log_file}" \
+			"agentpublish_ucore: publish_image=1 header=32 payload=96 eof=1"
+		require_exact_case_marker "${log_file}" \
+			"agentpublish_ucore: same_scope_race=1 ok=1 duplicate=1 no_overwrite=1"
+		require_exact_case_marker "${log_file}" \
+			"agentpublish_ucore: nexus_duplicate=1 exact_readback=1 mismatch_rejected=1"
+		require_exact_case_marker "${log_file}" \
+			"agentpublish_ucore: resources=1 invalid_no_leak=1 duplicate_no_leak=1 unlink_reclaimed=1"
 		;;
 	agentfinal_ucore)
 		require_exact_case_marker "${log_file}" \
@@ -354,7 +368,9 @@ run_case() {
 			--profile wait-atomic
 	fi
 	if [[ "${init_proc}" == "agent_eevdf_ucore" ||
-	      "${init_proc}" == "agenttask_ucore" ]]; then
+	      "${init_proc}" == "agenttask_ucore" ||
+	      "${init_proc}" == "agentpublish_ucore" ||
+	      "${init_proc}" == "agentscope_ucore" ]]; then
 		"${PYTHON_BIN}" -I -S -B scripts/validate-kernel-test-log.py \
 			--log-file "${log_file}" \
 			--tag "${init_proc}" \
@@ -408,6 +424,7 @@ run_case agentbench_ucore "agentbench_ucore: parent passed"
 run_case agentcontract_ucore "agentcontract_ucore: parent passed"
 run_case agent_eevdf_ucore "agent_eevdf_ucore: parent passed"
 run_case agenttask_ucore "agenttask_ucore: parent passed"
+run_case agentpublish_ucore "agentpublish_ucore: parent passed"
 run_case ch8_cow_ucore "ch8_cow_ucore: passed"
 run_case labdemo_ucore "labdemo_ucore: parent passed"
 run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"

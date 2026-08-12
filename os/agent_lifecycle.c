@@ -223,10 +223,10 @@ sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 		return AGENT_STATUS_BAD_PARAM;
 	/* A legacy binary identifies v2 by its exact-or-shorter 64-byte buffer. */
 	project_v3 = user_size > AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE;
-	copy_size = MIN(
-		user_size,
-		project_v3 ? sizeof(info) :
-			     (uint64)AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE);
+	copy_size = project_v3 ? sizeof(info) :
+			     (uint64)AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE;
+	if (user_size < copy_size)
+		copy_size = user_size;
 	if (p == 0 ||
 	    user_range_check(p->pagetable, addr, copy_size, PTE_W) < 0)
 		return -1;

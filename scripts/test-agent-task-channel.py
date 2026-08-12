@@ -22,6 +22,7 @@ FILES = (
     "os/agent_internal.h",
     "os/agent_lifecycle.c",
     "os/agent_lifecycle.h",
+    "os/open_file_io_lease.c",
     "os/agent_task_bridge.h",
     "os/agent_task_bridge.c",
     "os/agent_task_channel.h",
@@ -94,6 +95,7 @@ def validate_task_channel(sources: dict[str, str]) -> None:
     internal = sources["os/agent_internal.h"]
     lifecycle_source = sources["os/agent_lifecycle.c"]
     lifecycle_header = sources["os/agent_lifecycle.h"]
+    open_file_lease = sources["os/open_file_io_lease.c"]
     bridge_header = sources["os/agent_task_bridge.h"]
     bridge = sources["os/agent_task_bridge.c"]
     header = sources["os/agent_task_channel.h"]
@@ -102,6 +104,23 @@ def validate_task_channel(sources: dict[str, str]) -> None:
     syscall = sources["os/syscall.c"]
     trap = sources["os/trap.c"]
     guest = sources["user/src/agenttask_ucore.c"]
+
+    require(
+        abi,
+        "#define AGENT_TASK_RESOURCE_UTF8_MAX      63U",
+        "Task UTF-8 imports must reserve one byte in the 64-byte payload",
+    )
+    require(
+        header,
+        "#define AGENT_TASK_RESOURCE_SNAPSHOT_SIZE \\\n\t(AGENT_TASK_RESOURCE_UTF8_MAX + 1U)",
+        "kernel snapshots must include the trailing NUL byte",
+    )
+    for layout in (
+        "sizeof(struct agent_task_resource_slot) == 192",
+        "sizeof(struct agent_task_resource_import) == 152",
+        "sizeof(struct agent_task_resource_view) == 160",
+    ):
+        require(channel, layout, f"Task snapshot private layout changed: {layout}")
 
     for token in (
         "#define PERF_OPERATION_COUNT 16U",
@@ -1340,9 +1359,32 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         (
             "imported->producer_control_id != 0",
             "imported->producer_pid > 0",
+            "imported->resource_type == AGENT_ARTIFACT_UTF8",
             "imported->resource_flags == AGENT_TASK_HANDLE_F_OWNED",
+            "imported->producer_context_sequence != 0",
+            "agent_task_snapshot_valid(imported)",
         ),
-        "imports need positive producer identity and owned kernel objects",
+        "imports need kernel provenance and one valid owned UTF-8 snapshot",
+    )
+    forbid(
+        resource_import,
+        "imported->source_handle != 0",
+        "fd zero is a valid Task resource source",
+    )
+    snapshot_valid = function_body(channel, "agent_task_snapshot_valid")
+    require_order(
+        snapshot_valid,
+        (
+            "imported->resource_type != AGENT_ARTIFACT_UTF8",
+            "imported->length == 0",
+            "imported->length > AGENT_TASK_RESOURCE_UTF8_MAX",
+            "imported->snapshot[length] != 0",
+            "imported->snapshot[i] == 0",
+            "agent_task_utf8_valid(imported->snapshot, length)",
+            "agent_sha256(imported->snapshot, length, digest)",
+            "memcmp(digest, imported->content_digest, sizeof(digest)) == 0",
+        ),
+        "core must revalidate the immutable UTF-8 snapshot and exact digest",
     )
     resource_view = function_body(channel, "agent_task_resource_view_locked")
     require_order(
@@ -1360,10 +1402,46 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         (
             "slot->producer_context_sequence =",
             "slot->producer_control_id = imported->producer_control_id",
+            "memmove(slot->content_digest, imported->content_digest",
+            "memmove(slot->snapshot, imported->snapshot",
             "slot->producer_node_id = imported->producer_node_id",
             "slot->producer_pid = imported->producer_pid",
         ),
-        "resource slots must symmetrically copy producer identity",
+        "resource slots must copy provenance and snapshot bytes by value",
+    )
+    require_order(
+        resource_view,
+        (
+            "memmove(view->content_digest, slot->content_digest",
+            "memmove(view->snapshot, slot->snapshot",
+            "view->producer_node_id = slot->producer_node_id",
+        ),
+        "resource views must copy the private snapshot instead of exposing it",
+    )
+    provider_status = function_body(
+        channel, "agent_task_resource_provider_status_valid"
+    )
+    for status in (
+        "AGENT_TASK_CHANNEL_BAD_REQUEST",
+        "AGENT_TASK_CHANNEL_DENIED",
+        "AGENT_TASK_CHANNEL_RETRY",
+        "AGENT_TASK_CHANNEL_NO_SPACE",
+        "AGENT_TASK_CHANNEL_EVIDENCE",
+        "AGENT_TASK_CHANNEL_STALE",
+    ):
+        require(provider_status, status, f"provider status lost: {status}")
+    resource_control = function_body(channel, "agent_task_channel_resource")
+    require_order(
+        resource_control,
+        (
+            "status = ops->resource_import(p, source_file, control, &imported)",
+            "if (status != AGENT_TASK_CHANNEL_OK)",
+            "agent_task_resource_provider_status_valid(status)",
+            "status : AGENT_TASK_CHANNEL_EVIDENCE",
+            "agent_task_resource_import_valid(&imported)",
+            "agent_task_resource_allocate_locked(",
+        ),
+        "provider statuses must pass through a closed allowlist before allocation",
     )
     input_acquire = function_body(channel, "agent_task_request_input_acquire_locked")
     require_order(
@@ -1507,10 +1585,83 @@ def validate_task_channel(sources: dict[str, str]) -> None:
             "copyin(p->pagetable, (char *)&control",
             "agent_task_bridge_resource_placeholder(&result)",
             "copyout(p->pagetable, resultaddr",
+            "control.source_handle != (uint64)(uint)source_fd",
+            "source_file = 0",
             "agent_task_channel_resource(",
             "copyout(p->pagetable, resultaddr",
+            "control.operation == AGENT_TASK_RESOURCE_IMPORT",
+            "result.status == AGENT_TASK_CHANNEL_OK",
+            "agent_task_channel_rollback_import(",
+            "rollback != AGENT_TASK_CHANNEL_OK",
+            'panic("Task bridge lost import rollback")',
         ),
-        "resource wrapper lost copied control or result probing",
+        "resource wrapper must roll back a successful import lost at final copyout",
+    )
+    transaction_prepare = function_body(syscall, "syscall_transaction_prepare")
+    require_order(
+        transaction_prepare,
+        (
+            "transaction->file_fd = -1",
+            "case SYS_agent_task_channel_resource:",
+            "struct agent_task_channel_resource control",
+            "copyin(curr_proc()->pagetable, (char *)&control",
+            "control.operation == AGENT_TASK_RESOURCE_IMPORT",
+            "control.source_handle < FD_BUFFER_SIZE",
+            "transaction->file_fd = (int)control.source_handle",
+            "transaction->file = syscall_fd_pin(control.source_handle)",
+        ),
+        "Task IMPORT must pin its exact fd in the outer syscall transaction",
+    )
+    transaction_finish = function_body(syscall, "syscall_transaction_finish")
+    require_order(
+        transaction_finish,
+        (
+            "fileclose_prepare(transaction->file, receipt)",
+            "fileclose_finish_drop_only(receipt)",
+            "fileclose_finish_epoch(receipt)",
+            "fs_epoch_request_end()",
+            "syscall_transaction_end_io(transaction)",
+            "fileclose_finish_settle(receipt)",
+        ),
+        "the outer transaction must settle a final import pin outside its epoch",
+    )
+    workflow_cut = function_body(syscall, "syscall_mutates_workflow_cut")
+    require(
+        workflow_cut.split("return 1;", 1)[0],
+        "case SYS_agent_task_channel_resource:",
+        "Task resource preparation through fd settlement needs one outer lifecycle cut",
+    )
+    syscall_entry = function_body(syscall, "syscall")
+    require_order(
+        syscall_entry,
+        (
+            "workflow_lifecycle_operation_enter(lifecycle)",
+            "operation_entered = 1",
+            "id == SYS_agent_task_channel_resource",
+            "agent_execution_contract_file_pin_enter(",
+            "ret = syscall_slow_path(",
+            "agent_execution_contract_file_pin_leave(&file_pin_guard)",
+            "workflow_lifecycle_operation_leave(lifecycle)",
+        ),
+        "Task import pin/read/settlement must stay inside lifecycle and contract cuts",
+    )
+    rollback = function_body(channel, "agent_task_channel_rollback_import")
+    require_order(
+        rollback,
+        (
+            "handle.flags != AGENT_TASK_HANDLE_F_OWNED",
+            "state->private->header.generation != channel_generation",
+            "agent_task_resource_find_locked(state->resource_private, handle)",
+            "slot->state != AGENT_TASK_RESOURCE_STATE_LIVE",
+            "slot->references != 0",
+            "slot->owner_request_id != 0",
+            "agent_task_callback_get_locked(state)",
+            "agent_task_release_capture_locked(state->private, slot, &release)",
+            "agent_task_release_invoke(p, ops, &release)",
+            "agent_task_callback_put_locked(state)",
+            "return AGENT_TASK_CHANNEL_OK",
+        ),
+        "copyout rollback must consume exactly the just-imported live generation",
     )
     syscall_dispatch = function_body(syscall, "syscall_dispatch")
     require_order(
@@ -1521,9 +1672,21 @@ def validate_task_channel(sources: dict[str, str]) -> None:
             "case SYS_agent_task_channel_enter:",
             "sys_agent_task_channel_enter(trapframe->a0",
             "case SYS_agent_task_channel_resource:",
-            "sys_agent_task_channel_resource(trapframe->a0",
+            "sys_agent_task_channel_resource(",
+            "transaction != 0 ? transaction->file : 0",
+            "transaction != 0 ? transaction->file_fd : -1",
         ),
         "Task syscalls 563-565 are not fully dispatched",
+    )
+    lease_context = function_body(open_file_lease, "open_file_io_syscall_context")
+    require_order(
+        lease_context,
+        (
+            "target_syscall != SYS_read",
+            "target_syscall != SYS_agent_task_channel_resource",
+            "target_syscall != SYS_write",
+        ),
+        "Task IMPORT reads must use the same redispatch-validating lease as read",
     )
 
     deadline_mark = function_body(channel, "agent_task_deadlines_mark_locked")
@@ -1682,16 +1845,201 @@ def validate_task_channel(sources: dict[str, str]) -> None:
     require_order(
         bridge_import,
         (
-            "if (imported != 0)",
             "memset(imported, 0, sizeof(*imported))",
-            "return AGENT_TASK_CHANNEL_DENIED",
+            "control->resource_type != AGENT_ARTIFACT_UTF8",
+            "control->resource_flags != AGENT_TASK_HANDLE_F_OWNED",
+            "control->source_handle >= FD_BUFFER_SIZE",
+            "control->length == 0",
+            "control->length > AGENT_TASK_RESOURCE_UTF8_MAX",
+            "file == 0",
+            "!file->readable",
+            "file->type != FD_INODE",
+            "file->ip == 0",
+            "got = ivalid(file->ip)",
+            "file->ip->type != T_FILE",
+            "vfs_cred_from_proc(p, &cred)",
+            "vfs_inode_authorize(file->ip, &cred, VFS_OP_READ)",
+            "agent_lifecycle_context_lane_enter(p) < 0",
+            "context_sequence = p->context_path_latest",
+            "agent_context_read_record(",
+            "context.record_hash != agent_context_record_hash(&context)",
+            "context_hash = context.record_hash",
+            "provenance_labels = agent_provenance_current_labels(p)",
+            "open_file_io_lease_acquire(",
+            "got = readi_lease(file->ip, &cred, &lease, 0,",
+            "length + 1U",
+            "got == FS_LOOKUP_BUSY ? AGENT_TASK_CHANNEL_RETRY",
+            "(uint)got != length",
+            "p->context_path_latest != context_sequence",
+            "context.record_hash != context_hash",
+            "context.record_hash != agent_context_record_hash(&context)",
+            "agent_provenance_current_labels(p) != provenance_labels",
+            "imported->snapshot[i] == 0",
+            "agent_task_bridge_utf8_valid(imported->snapshot, length)",
+            "imported->snapshot[length] = 0",
+            "open_file_io_token_end(&lease)",
+            "agent_lifecycle_context_lane_leave(p)",
+            "imported->producer_pid = p->pid",
+            "imported->producer_control_id = p->agent_control_id",
+            "imported->source_handle = control->source_handle",
+            "AGENT_PROVENANCE_UNTRUSTED_FILE_DATA",
+            "imported->producer_context_sequence = context_sequence",
+            "agent_sha256(imported->snapshot, length, imported->content_digest)",
+            "return AGENT_TASK_CHANNEL_OK",
         ),
-        "unsupported resource imports must fail closed with zero metadata",
+        "fd import must build a complete kernel-owned UTF-8 snapshot",
     )
     forbid(
         bridge_import,
-        "AGENT_TASK_CHANNEL_OK",
-        "the bridge must not fabricate support for an unowned resource type",
+        "fdget(",
+        "the outer syscall transaction, not the provider, must own the fd pin",
+    )
+    forbid(
+        bridge_import,
+        "fileclose(",
+        "the provider must not settle an import fd while the outer fs epoch is held",
+    )
+    forbid(
+        bridge_import,
+        "readi(file->ip",
+        "Task IMPORT must use a redispatch-validating ordinary-file read lease",
+    )
+    forbid(
+        bridge_import,
+        "agent_context_append_system(",
+        "IMPORT must bind existing Context without appending an orphan record",
+    )
+    forbid(
+        bridge_import,
+        "(uint64)file",
+        "a struct file pointer must never become a resource handle",
+    )
+    bridge_op = function_body(bridge, "agent_task_bridge_op")
+    require_order(
+        bridge_op,
+        (
+            "agent_task_bridge_handle_null(input->handle)",
+            "agent_task_bridge_resource_input(sqe, input)",
+            "memmove(op->payload, input->snapshot, (uint)input->length + 1U)",
+        ),
+        "ECHO must receive the immutable resource snapshot as its payload",
+    )
+    bridge_resource_input = function_body(
+        bridge, "agent_task_bridge_resource_input"
+    )
+    for token in (
+        "sqe->tool_id != AGENT_TOOL_ECHO",
+        "input->handle.type != AGENT_ARTIFACT_UTF8",
+        "input->handle.flags != AGENT_TASK_HANDLE_F_OWNED",
+        "input->handle.flags != AGENT_TASK_HANDLE_F_BORROWED",
+        "input->length > AGENT_TASK_RESOURCE_UTF8_MAX",
+        "AGENT_PROVENANCE_UNTRUSTED_FILE_DATA",
+        "input->producer_context_sequence == 0",
+        "input->producer_control_id == 0",
+        "input->producer_pid <= 0",
+        "input->snapshot[length] != 0",
+        "agent_task_bridge_utf8_valid(input->snapshot, length)",
+    ):
+        require(bridge_resource_input, token, f"resource ECHO validation lost: {token}")
+    bridge_release = function_body(bridge, "agent_task_bridge_resource_release")
+    forbid(
+        bridge_release,
+        "fileclose(",
+        "release must destroy only the snapshot, never the caller's original fd",
+    )
+
+    guest_resources = function_body(guest, "exercise_task_resources")
+    require_order(
+        guest_resources,
+        (
+            '"prime an existing Context before importing a resource"',
+            "AGENT_TASK_RESOURCE_UTF8_MAX + 1U",
+            '"prefix-only UTF-8 import is rejected by the EOF probe"',
+            "task_resource_bad_result_probe(",
+		    '"invalid result pointer commits no resource"',
+            '"fd-zero UTF-8 snapshot imports as an owned live resource"',
+            '"IMPORT rejections, result preflight, and success do not append Context"',
+            "borrowed = first",
+            "check_resource_echo(&cqe, &sqe, task_resource_first_payload)",
+            '"borrowed completion leaves the owned base resource live"',
+            "AGENT_TASK_RESOURCE_RELEASE",
+            '"released generation is stale"',
+            '"resource slot reuse advances generation"',
+            "check_resource_echo(&cqe, &sqe, task_resource_second_payload)",
+            '"owned completion automatically consumes the input resource"',
+            "enter_result.resource_count == 0",
+        ),
+        "Guest must cover import, rollback, borrow, release, ABA, and owned consume",
+    )
+    guest_prepare = function_body(guest, "prepare_task_resource_inputs")
+    guest_create = function_body(guest, "task_resource_create")
+    require(
+        guest_create,
+        "O_CREATE | O_TRUNC | O_WRONLY",
+        "Guest must create real scope-local files before contract freeze",
+    )
+    for token in (
+        "inputs->first_fd == 0",
+        "advance the caller offset before the immutable snapshot",
+        "inputs->write_only_fd = open(",
+        "inputs->race_fd = open(",
+        "unlink(TASK_RESOURCE_RACE_PATH)",
+        "pipe(pipe_fd)",
+    ):
+        require(
+            guest_prepare,
+            token,
+            f"Guest must prepare real scope-local fd inputs before freeze: {token}",
+        )
+    guest_close_race = function_body(
+        guest, "exercise_task_resource_close_race"
+    )
+    require_order(
+        guest_close_race,
+        (
+            "thread_create(task_resource_close_worker, &race)",
+            "race.start = 1",
+            "AGENT_TASK_RESOURCE_IMPORT",
+            "waittid(tid)",
+            "AGENT_TASK_RESOURCE_RELEASE",
+            "resource_unlinked_close_race=1",
+            "launched_concurrently=1",
+        ),
+        "Guest must launch the unlinked fd close/import race and release its snapshot",
+    )
+    guest_run_child = function_body(guest, "run_child")
+    require_order(
+        guest_run_child,
+        (
+            "prepare_task_resource_inputs(&resource_inputs)",
+            "prime_task_resource_context()",
+            "setup_task_channel(&key, &resource_view)",
+            "exercise_task_resource_close_race(",
+            "key = create_task_contract(lifecycle)",
+            "exercise_task_resources(",
+        ),
+        "Guest must finish the effectful close race before freezing enforcement",
+    )
+    for token in ("O_CREATE", "O_TRUNC", "unlink(", "pipe(", "close("):
+        forbid(
+            guest_resources,
+            token,
+            f"resource exercise must not issue direct effects after freeze: {token}",
+        )
+    require(
+        guest,
+        "resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1",
+        "Guest resource success marker missing",
+    )
+    require(
+        guest,
+        "resource_unlinked_close_race=1",
+        "Guest unlinked close/import race marker missing",
+    )
+    forbid(
+        guest,
+        "resource_import_denied",
+        "retired import-denied coverage must not survive the real provider",
     )
 
 
@@ -1791,6 +2139,73 @@ class ResourceTableModel:
         if handle.ownership != "OWNED" or slot.references or slot.owner_request:
             raise BlockingIOError("resource still pinned")
         self.slots[handle.slot - 1] = None
+
+    def rollback_import(self, handle: Handle) -> None:
+        slot = self.lookup(handle)
+        if handle.ownership != "OWNED" or slot.references or slot.owner_request:
+            raise RuntimeError("an unpublished import must still be exclusive")
+        self.slots[handle.slot - 1] = None
+
+
+@dataclass
+class ImportFileTransactionModel:
+    descriptor_refs: int = 1
+    pin_refs: int = 0
+    links: int = 1
+    fs_epoch_held: bool = False
+    settlement_pending: bool = False
+    settlement_outside_epoch: bool = False
+
+    def prepare_pin(self) -> None:
+        if self.descriptor_refs == 0:
+            raise ValueError("bad descriptor")
+        self.pin_refs += 1
+
+    def unlink(self) -> None:
+        self.links = 0
+
+    def sibling_close(self) -> None:
+        if self.descriptor_refs == 0:
+            raise RuntimeError("descriptor already closed")
+        self.descriptor_refs -= 1
+
+    def begin_epoch(self) -> None:
+        if self.pin_refs != 1:
+            raise RuntimeError("import entered without its transaction pin")
+        self.fs_epoch_held = True
+
+    def read_snapshot(self) -> str:
+        if not self.fs_epoch_held or self.pin_refs != 1:
+            raise RuntimeError("snapshot lost its pinned inode")
+        return "OK"
+
+    def finish(self) -> None:
+        if self.pin_refs != 1:
+            raise RuntimeError("unbalanced transaction pin")
+        self.pin_refs = 0
+        self.settlement_pending = self.links == 0 and self.descriptor_refs == 0
+        self.fs_epoch_held = False
+        if self.settlement_pending:
+            self.settlement_outside_epoch = True
+            self.settlement_pending = False
+
+
+@dataclass
+class ImportContextSnapshotModel:
+    sequence: int
+    record_hash: int
+    labels: int
+
+    def validate_after_read(
+        self, *, sequence: int, record_hash: int, labels: int
+    ) -> str:
+        if (
+            sequence != self.sequence
+            or record_hash != self.record_hash
+            or labels != self.labels
+        ):
+            return "RETRY"
+        return "OK"
 
 
 @dataclass
@@ -2563,13 +2978,18 @@ class TaskChannelTests(unittest.TestCase):
         )
 
     def test_task_syscall_dispatch_mutations_are_rejected(self) -> None:
-        for name in ("setup", "enter", "resource"):
+        for name in ("setup", "enter"):
             with self.subTest(syscall=name):
                 self.assert_mutation_rejected(
                     "os/syscall.c",
                     f"ret = sys_agent_task_channel_{name}(trapframe->a0,",
                     f"ret = sys_agent_task_channel_{name}_bypassed(trapframe->a0,",
                 )
+        self.assert_mutation_rejected(
+            "os/syscall.c",
+            "ret = sys_agent_task_channel_resource(\n",
+            "ret = sys_agent_task_channel_resource_bypassed(\n",
+        )
 
     def test_setup_wrapper_commit_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(
@@ -2632,16 +3052,218 @@ class TaskChannelTests(unittest.TestCase):
             "status == AGENT_EXECUTION_FORCE_CANCEL_CACHED",
         )
 
-    def test_resource_import_fail_closed_mutation_is_rejected(self) -> None:
-        self.assert_mutation_rejected(
-            "os/agent_task_bridge.c",
-            "if (imported != 0)\n"
-            "\t\tmemset(imported, 0, sizeof(*imported));\n"
-            "\treturn AGENT_TASK_CHANNEL_DENIED;",
-            "if (imported != 0)\n"
-            "\t\tmemset(imported, 0, sizeof(*imported));\n"
-            "\treturn AGENT_TASK_CHANNEL_OK;",
+    def test_resource_snapshot_validation_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "include/agent_task_channel_abi.h",
+                "#define AGENT_TASK_RESOURCE_UTF8_MAX      63U",
+                "#define AGENT_TASK_RESOURCE_UTF8_MAX      64U",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "got = readi_lease(file->ip, &cred, &lease, 0,\n"
+                "\t\t\t  (uint64)imported->snapshot, 0, length + 1U);",
+                "got = readi_lease(file->ip, &cred, &lease, 0,\n"
+                "\t\t\t  (uint64)imported->snapshot, 0, length);",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "if ((uint)got != length)",
+                "if ((uint)got < length)",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "if (imported->snapshot[i] == 0)",
+                "if (0)",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "agent_task_bridge_utf8_valid(imported->snapshot, length)",
+                "agent_task_bridge_utf8_bypassed(imported->snapshot, length)",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "imported->snapshot[length] = 0;",
+                "imported->snapshot[length] = 1;",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "agent_sha256(imported->snapshot, length, imported->content_digest)",
+                "agent_sha256(imported->snapshot, length + 1U, imported->content_digest)",
+            ),
         )
+        for path, old, new in mutations:
+            with self.subTest(mutation=old):
+                self.assert_mutation_rejected(path, old, new)
+
+    def test_resource_fd_snapshot_mutations_are_rejected(self) -> None:
+        mutations = (
+            ("!file->readable", "!file->writable"),
+            ("file->type != FD_INODE", "file->type != FD_PIPE"),
+            ("file->ip->type != T_FILE", "file->ip->type != T_DIR"),
+            (
+                "vfs_inode_authorize(file->ip, &cred, VFS_OP_READ)",
+                "vfs_inode_authorize_bypassed(file->ip, &cred, VFS_OP_READ)",
+            ),
+            (
+                "open_file_io_lease_acquire(\n"
+                "\t\t    file, VFS_OP_READ, &lease, &cred)",
+                "open_file_io_lease_acquire_bypassed(\n"
+                "\t\t    file, VFS_OP_READ, &lease, &cred)",
+            ),
+            (
+                "readi_lease(file->ip, &cred, &lease, 0,",
+                "readi(file->ip, &cred, 0,",
+            ),
+            (
+                "imported->source_handle = control->source_handle;",
+                "imported->source_handle = (uint64)file;",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(mutation=old):
+                self.assert_mutation_rejected(
+                    "os/agent_task_bridge.c", old, new
+                )
+
+    def test_resource_transaction_pin_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "control.operation == AGENT_TASK_RESOURCE_IMPORT &&",
+                "control.operation == AGENT_TASK_RESOURCE_QUERY &&",
+            ),
+            (
+                "transaction->file_fd = (int)control.source_handle;",
+                "transaction->file_fd = -1;",
+            ),
+            (
+                "transaction->file = syscall_fd_pin(control.source_handle);",
+                "transaction->file = 0;",
+            ),
+            (
+                "control.source_handle != (uint64)(uint)source_fd",
+                "control.source_handle == (uint64)(uint)source_fd",
+            ),
+            (
+                "fileclose_finish_settle(receipt) !=\n"
+                "\t\t       BIO_CLEANUP_RELEASED",
+                "fileclose_finish_settle_bypassed(receipt) !=\n"
+                "\t\t       BIO_CLEANUP_RELEASED",
+            ),
+            (
+                "\tcase SYS_agent_file_publish:\n"
+                "\tcase SYS_agent_task_channel_resource:\n"
+                "\tcase SYS_agent_route_config:",
+                "\tcase SYS_agent_file_publish:\n"
+                "\tcase SYS_agent_route_config:",
+            ),
+            (
+                "id == SYS_read || id == SYS_write || id == SYS_fstat ||\n"
+                "\t\t    id == SYS_agent_task_channel_resource",
+                "id == SYS_read || id == SYS_write || id == SYS_fstat",
+            ),
+        )
+        for old, new in mutations:
+            path = "os/agent_task_bridge.c" if "source_fd" in old else "os/syscall.c"
+            with self.subTest(mutation=old):
+                self.assert_mutation_rejected(path, old, new)
+
+    def test_resource_context_snapshot_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "agent_lifecycle_context_lane_enter(p) < 0",
+                "agent_lifecycle_context_lane_enter(p) == 0",
+            ),
+            (
+                "p->context_path_latest != context_sequence",
+                "p->context_path_latest == context_sequence",
+            ),
+            (
+                "context.record_hash != context_hash",
+                "context.record_hash == context_hash",
+            ),
+            (
+                "agent_provenance_current_labels(p) != provenance_labels",
+                "agent_provenance_current_labels(p) == provenance_labels",
+            ),
+            (
+                "agent_lifecycle_context_lane_leave(p);",
+                "/* leaked Context lane */",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(mutation=old):
+                self.assert_mutation_rejected(
+                    "os/agent_task_bridge.c", old, new
+                )
+
+    def test_resource_provenance_and_payload_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "context_sequence = p->context_path_latest;",
+                "context_sequence = 0;",
+            ),
+            (
+                "context.record_hash != agent_context_record_hash(&context)",
+                "context.record_hash == agent_context_record_hash(&context)",
+            ),
+            ("imported->producer_pid = p->pid;", "imported->producer_pid = 1;"),
+            (
+                "imported->producer_control_id = p->agent_control_id;",
+                "imported->producer_control_id = control->source_handle;",
+            ),
+            (
+                "memmove(op->payload, input->snapshot, (uint)input->length + 1U);",
+                "memset(op->payload, 0, sizeof(op->payload));",
+            ),
+            (
+                "AGENT_PROVENANCE_UNTRUSTED_FILE_DATA;",
+                "AGENT_PROVENANCE_AGENT_DERIVED;",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(mutation=old):
+                self.assert_mutation_rejected(
+                    "os/agent_task_bridge.c", old, new
+                )
+
+    def test_resource_provider_status_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "status == AGENT_TASK_CHANNEL_RETRY ||",
+                "status == AGENT_TASK_CHANNEL_OK ||",
+            ),
+            (
+                "status : AGENT_TASK_CHANNEL_EVIDENCE;",
+                "status : AGENT_TASK_CHANNEL_DENIED;",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(mutation=old):
+                self.assert_mutation_rejected(
+                    "os/agent_task_channel.c", old, new
+                )
+
+    def test_resource_final_copyout_rollback_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "control.operation == AGENT_TASK_RESOURCE_IMPORT &&",
+                "control.operation == AGENT_TASK_RESOURCE_QUERY &&",
+            ),
+            (
+                "agent_task_channel_rollback_import(\n",
+                "agent_task_channel_rollback_import_bypassed(\n",
+            ),
+            (
+                "if (rollback != AGENT_TASK_CHANNEL_OK)",
+                "if (rollback == AGENT_TASK_CHANNEL_OK)",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(mutation=old):
+                self.assert_mutation_rejected(
+                    "os/agent_task_bridge.c", old, new
+                )
 
     def test_guest_performance_sample_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(
@@ -3040,6 +3662,54 @@ class TaskChannelTests(unittest.TestCase):
             table.lookup(owned)
         with self.assertRaises(PermissionError):
             table.import_resource(3, "BORROWED")
+
+    def test_model_unlinked_close_race_keeps_import_pin_until_safe_settlement(
+        self,
+    ) -> None:
+        transaction = ImportFileTransactionModel()
+        transaction.prepare_pin()
+        transaction.unlink()
+        transaction.sibling_close()
+        self.assertEqual(transaction.descriptor_refs, 0)
+        self.assertEqual(transaction.pin_refs, 1)
+        transaction.begin_epoch()
+        self.assertEqual(transaction.read_snapshot(), "OK")
+        transaction.finish()
+        self.assertFalse(transaction.fs_epoch_held)
+        self.assertEqual(transaction.pin_refs, 0)
+        self.assertTrue(transaction.settlement_outside_epoch)
+
+    def test_model_context_snapshot_retries_on_churn(self) -> None:
+        snapshot = ImportContextSnapshotModel(41, 0xA5, 0x12)
+        self.assertEqual(
+            snapshot.validate_after_read(
+                sequence=41, record_hash=0xA5, labels=0x12
+            ),
+            "OK",
+        )
+        self.assertEqual(
+            snapshot.validate_after_read(
+                sequence=42, record_hash=0xA6, labels=0x12
+            ),
+            "RETRY",
+        )
+        self.assertEqual(
+            snapshot.validate_after_read(
+                sequence=41, record_hash=0xA5, labels=0x14
+            ),
+            "RETRY",
+        )
+
+    def test_model_failed_final_copyout_rolls_back_unpublished_import(self) -> None:
+        table = ResourceTableModel()
+        hidden = table.import_resource(3)
+        table.rollback_import(hidden)
+        with self.assertRaises(KeyError):
+            table.lookup(hidden)
+        visible = table.import_resource(3)
+        self.assertEqual(visible.slot, hidden.slot)
+        self.assertGreater(visible.generation, hidden.generation)
+        self.assertEqual(sum(slot is not None for slot in table.slots), 1)
 
 
 if __name__ == "__main__":

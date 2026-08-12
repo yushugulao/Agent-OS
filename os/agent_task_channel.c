@@ -1,4 +1,5 @@
 #include "agent_task_channel.h"
+#include "agent_sha256.h"
 #include "defs.h"
 #include "timer.h"
 #include "../include/agent_provenance_abi.h"
@@ -83,6 +84,7 @@ struct agent_task_resource_slot {
 	uint64 producer_context_sequence;
 	uint64 producer_control_id;
 	uchar content_digest[AGENT_TASK_CHANNEL_SCHEMA_SIZE];
+	uchar snapshot[AGENT_TASK_RESOURCE_SNAPSHOT_SIZE];
 	uint64 owner_ring_generation;
 	uint64 owner_slot_generation;
 	uint state;
@@ -154,11 +156,11 @@ _Static_assert(sizeof(struct agent_task_private_header) == 128,
 	       "Task Channel private header layout");
 _Static_assert(sizeof(struct agent_task_request_slot) == 224,
 	       "Task Channel private request layout");
-_Static_assert(sizeof(struct agent_task_resource_slot) == 128,
+_Static_assert(sizeof(struct agent_task_resource_slot) == 192,
 	       "Task Channel private resource layout");
-_Static_assert(sizeof(struct agent_task_resource_import) == 88,
+_Static_assert(sizeof(struct agent_task_resource_import) == 152,
 	       "Task Channel resource import hook layout");
-_Static_assert(sizeof(struct agent_task_resource_view) == 96,
+_Static_assert(sizeof(struct agent_task_resource_view) == 160,
 	       "Task Channel resource view hook layout");
 _Static_assert(sizeof(struct agent_task_private_page) == PAGE_SIZE,
 	       "Task Channel copied descriptors and terminal state must fit one page");
@@ -240,6 +242,75 @@ agent_task_schema_present(const uchar digest[AGENT_TASK_CHANNEL_SCHEMA_SIZE])
 	for (uint i = 0; i < AGENT_TASK_CHANNEL_SCHEMA_SIZE; i++)
 		value |= digest[i];
 	return value != 0;
+}
+
+static int
+agent_task_utf8_valid(const uchar *text, uint length)
+{
+	uint i = 0;
+
+	while (i < length) {
+		uchar first = text[i++];
+
+		if (first <= 0x7fU)
+			continue;
+		if (first >= 0xc2U && first <= 0xdfU) {
+			if (i >= length || (text[i++] & 0xc0U) != 0x80U)
+				return 0;
+			continue;
+		}
+		if (first >= 0xe0U && first <= 0xefU) {
+			uchar second;
+
+			if (i + 1U >= length)
+				return 0;
+			second = text[i++];
+			if ((second & 0xc0U) != 0x80U ||
+			    (first == 0xe0U && second < 0xa0U) ||
+			    (first == 0xedU && second >= 0xa0U) ||
+			    (text[i++] & 0xc0U) != 0x80U)
+				return 0;
+			continue;
+		}
+		if (first >= 0xf0U && first <= 0xf4U) {
+			uchar second;
+
+			if (i + 2U >= length)
+				return 0;
+			second = text[i++];
+			if ((second & 0xc0U) != 0x80U ||
+			    (first == 0xf0U && second < 0x90U) ||
+			    (first == 0xf4U && second >= 0x90U) ||
+			    (text[i++] & 0xc0U) != 0x80U ||
+			    (text[i++] & 0xc0U) != 0x80U)
+				return 0;
+			continue;
+		}
+		return 0;
+	}
+	return 1;
+}
+
+static int
+agent_task_snapshot_valid(const struct agent_task_resource_import *imported)
+{
+	uchar digest[AGENT_TASK_CHANNEL_SCHEMA_SIZE];
+	uint length;
+
+	if (imported->resource_type != AGENT_ARTIFACT_UTF8 ||
+	    imported->length == 0 ||
+	    imported->length > AGENT_TASK_RESOURCE_UTF8_MAX)
+		return 0;
+	length = (uint)imported->length;
+	if (imported->snapshot[length] != 0)
+		return 0;
+	for (uint i = 0; i < length; i++)
+		if (imported->snapshot[i] == 0)
+			return 0;
+	if (!agent_task_utf8_valid(imported->snapshot, length))
+		return 0;
+	agent_sha256(imported->snapshot, length, digest);
+	return memcmp(digest, imported->content_digest, sizeof(digest)) == 0;
 }
 
 static int
@@ -479,17 +550,16 @@ agent_task_resource_import_valid(
 {
 	return imported != 0 && imported->producer_control_id != 0 &&
 	       imported->producer_pid > 0 &&
-	       imported->resource_type > AGENT_ARTIFACT_NONE &&
-	       imported->resource_type < AGENT_ARTIFACT_TYPE_COUNT &&
+	       imported->resource_type == AGENT_ARTIFACT_UTF8 &&
 	       imported->resource_flags == AGENT_TASK_HANDLE_F_OWNED &&
-	       imported->source_handle != 0 &&
 	       imported->provenance_labels != 0 &&
 	       (imported->provenance_labels & ~AGENT_PROVENANCE_ALL) == 0 &&
 	       imported->producer_context_sequence != 0 &&
 	       (imported->producer_node_id <
 		AGENT_EXECUTION_CONTRACT_MAX_NODES ||
 		imported->producer_node_id == AGENT_EXECUTION_NODE_NONE) &&
-	       agent_task_schema_present(imported->content_digest);
+	       agent_task_schema_present(imported->content_digest) &&
+	       agent_task_snapshot_valid(imported);
 }
 
 static int
@@ -515,6 +585,8 @@ agent_task_resource_view_locked(
 	view->producer_control_id = slot->producer_control_id;
 	memmove(view->content_digest, slot->content_digest,
 		AGENT_TASK_CHANNEL_SCHEMA_SIZE);
+	memmove(view->snapshot, slot->snapshot,
+		AGENT_TASK_RESOURCE_SNAPSHOT_SIZE);
 	view->producer_node_id = slot->producer_node_id;
 	view->producer_pid = slot->producer_pid;
 	return 0;
@@ -555,6 +627,8 @@ agent_task_resource_allocate_locked(
 		slot->producer_control_id = imported->producer_control_id;
 		memmove(slot->content_digest, imported->content_digest,
 			AGENT_TASK_CHANNEL_SCHEMA_SIZE);
+		memmove(slot->snapshot, imported->snapshot,
+			AGENT_TASK_RESOURCE_SNAPSHOT_SIZE);
 		slot->owner_ring_generation = owner_ring_generation;
 		slot->owner_slot_generation = owner_slot_generation;
 		slot->state = AGENT_TASK_RESOURCE_STATE_LIVE;
@@ -2067,6 +2141,17 @@ agent_task_resource_type_flags_valid(uint type, uint flags)
 		flags == AGENT_TASK_HANDLE_F_BORROWED);
 }
 
+static int
+agent_task_resource_provider_status_valid(int status)
+{
+	return status == AGENT_TASK_CHANNEL_BAD_REQUEST ||
+	       status == AGENT_TASK_CHANNEL_DENIED ||
+	       status == AGENT_TASK_CHANNEL_RETRY ||
+	       status == AGENT_TASK_CHANNEL_NO_SPACE ||
+	       status == AGENT_TASK_CHANNEL_EVIDENCE ||
+	       status == AGENT_TASK_CHANNEL_STALE;
+}
+
 static void
 agent_task_resource_result_fill(
 	const struct agent_task_channel_state *state,
@@ -2089,7 +2174,7 @@ agent_task_resource_result_fill(
 
 int
 agent_task_channel_resource(
-	struct proc *p, struct thread *issuer,
+	struct proc *p, struct thread *issuer, struct file *source_file,
 	const struct agent_task_channel_resource *control,
 	struct agent_task_channel_resource_result *result,
 	const struct agent_task_channel_ops *ops)
@@ -2148,7 +2233,7 @@ agent_task_channel_resource(
 		}
 		agent_task_callback_get_locked(state);
 		intr_restore(enabled);
-		status = ops->resource_import(p, control, &imported);
+		status = ops->resource_import(p, source_file, control, &imported);
 		enabled = intr_save();
 		state = agent_task_channel_find_locked(p);
 		if (!agent_task_channel_owner_valid_locked(state, p) ||
@@ -2156,17 +2241,19 @@ agent_task_channel_resource(
 			intr_restore(enabled);
 			panic("Task Channel import ownership");
 		}
-		if (status < 0) {
+		if (status != AGENT_TASK_CHANNEL_OK) {
 			agent_task_resource_op_finish_locked(state);
 			intr_restore(enabled);
-			result->status = AGENT_TASK_CHANNEL_DENIED;
+			result->status =
+				agent_task_resource_provider_status_valid(status) ?
+					status : AGENT_TASK_CHANNEL_EVIDENCE;
 			agent_task_reclaim_deferred(p, ops);
 			return result->status;
 		}
 		if (!agent_task_resource_import_valid(&imported) ||
 		    imported.resource_type != control->resource_type ||
 		    imported.resource_flags != control->resource_flags) {
-			if (imported.source_handle != 0) {
+			if (imported.resource_type != 0 || imported.length != 0) {
 				release.valid = 1;
 				release.type = control->resource_type;
 				release.flags = AGENT_TASK_HANDLE_F_OWNED;
@@ -2298,6 +2385,55 @@ agent_task_channel_resource(
 	intr_restore(enabled);
 	agent_task_reclaim_deferred(p, ops);
 	return result->status;
+}
+
+int
+agent_task_channel_rollback_import(
+	struct proc *p, uint64 channel_generation,
+	struct agent_task_resource_handle handle,
+	const struct agent_task_channel_ops *ops)
+{
+	struct agent_task_channel_state *state;
+	struct agent_task_resource_slot *slot;
+	struct agent_task_release release;
+	int enabled;
+
+	memset(&release, 0, sizeof(release));
+	if (p == 0 || ops == 0 ||
+	    handle.flags != AGENT_TASK_HANDLE_F_OWNED)
+		return AGENT_TASK_CHANNEL_BAD_REQUEST;
+	enabled = intr_save();
+	state = agent_task_channel_find_locked(p);
+	if (!agent_task_channel_owner_valid_locked(state, p) ||
+	    state->ops != ops ||
+	    state->private->header.generation != channel_generation) {
+		intr_restore(enabled);
+		return AGENT_TASK_CHANNEL_STALE;
+	}
+	slot = agent_task_resource_find_locked(state->resource_private, handle);
+	if (slot == 0) {
+		intr_restore(enabled);
+		return AGENT_TASK_CHANNEL_STALE;
+	}
+	if (slot->state != AGENT_TASK_RESOURCE_STATE_LIVE ||
+	    slot->references != 0 || slot->owner_request_id != 0) {
+		intr_restore(enabled);
+		return AGENT_TASK_CHANNEL_RETRY;
+	}
+	agent_task_callback_get_locked(state);
+	agent_task_release_capture_locked(state->private, slot, &release);
+	agent_task_channel_publish_locked(state);
+	intr_restore(enabled);
+	agent_task_release_invoke(p, ops, &release);
+	enabled = intr_save();
+	state = agent_task_channel_find_locked(p);
+	if (!agent_task_channel_owner_valid_locked(state, p) ||
+	    state->ops != ops || state->private->header.callback_refs == 0)
+		panic("Task Channel import rollback");
+	agent_task_callback_put_locked(state);
+	intr_restore(enabled);
+	agent_task_reclaim_deferred(p, ops);
+	return AGENT_TASK_CHANNEL_OK;
 }
 
 int

@@ -370,3 +370,4 @@
 #define SYS_agent_task_channel_setup 563
 #define SYS_agent_task_channel_enter 564
 #define SYS_agent_task_channel_resource 565
+#define SYS_agent_file_publish 566

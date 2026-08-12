@@ -204,6 +204,41 @@ static int bytes_equal(const void *left, const void *right, size_t size)
 	return 1;
 }
 
+static int factory_lifecycle_view_equal(
+	const struct agent_workflow_lifecycle_info *left,
+	const struct agent_workflow_lifecycle_info *right)
+{
+	/* V3 appends live scheduler telemetry beyond the frozen lifecycle view. */
+	return bytes_equal(left, right,
+			   AGENT_WORKFLOW_LIFECYCLE_INFO_V2_SIZE);
+}
+
+static int lifecycle_v3_tail_well_formed(
+	const struct agent_workflow_lifecycle_info *info)
+{
+	uint flags = AGENT_WORKFLOW_SCHED_F_ACTIVE |
+		     AGENT_WORKFLOW_SCHED_F_RUNNABLE |
+		     AGENT_WORKFLOW_SCHED_F_ELIGIBLE |
+		     AGENT_WORKFLOW_SCHED_F_SLEEPING |
+		     AGENT_WORKFLOW_SCHED_F_FALLBACK;
+	uint64 wakeup_samples = 0;
+
+	for (uint i = 0; i < AGENT_WORKFLOW_WAKE_BUCKET_COUNT; i++)
+		wakeup_samples += info->scheduler_wakeup_latency_buckets[i];
+	return (info->scheduler_mode == AGENT_WORKFLOW_SCHED_MODE_EEVDF ||
+		info->scheduler_mode == AGENT_WORKFLOW_SCHED_MODE_FALLBACK) &&
+	       (info->scheduler_flags & AGENT_WORKFLOW_SCHED_F_ACTIVE) != 0 &&
+	       (info->scheduler_flags & ~flags) == 0 &&
+	       info->scheduler_latency_class <= AGENT_WORKFLOW_LATENCY_BATCH &&
+	       info->scheduler_weight == 1024U &&
+	       (info->scheduler_request_ticks == 1 ||
+		info->scheduler_request_ticks == 2 ||
+		info->scheduler_request_ticks == 4 ||
+		info->scheduler_request_ticks == 8) &&
+	       info->scheduler_virtual_deadline >= info->scheduler_vruntime &&
+	       info->scheduler_wakeup_samples == wakeup_samples;
+}
+
 static void decimal_format(char *out, size_t size, int value)
 {
 	char reversed[16];
@@ -481,7 +516,6 @@ static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix_errors(void)
 	struct agent_workflow_lifecycle_info bad_parameter;
 	struct agent_workflow_lifecycle_info bad_parameter_before;
 	struct agent_workflow_lifecycle_info current_before;
-	struct agent_workflow_lifecycle_info stale_result;
 	struct agent_workflow_lifecycle_info current_after;
 	struct agent_workflow_lifecycle_key over_capacity_key;
 
@@ -504,9 +538,10 @@ static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix_errors(void)
 	over_capacity_key.id = ~0U;
 	over_capacity_key.reserved = 0;
 	over_capacity_key.generation = 1;
-	memset(&stale_result, 0, sizeof(stale_result));
-	check(agent_workflow_lifecycle_info(&stale_result,
-				    &over_capacity_key) == AGENT_STATUS_STALE,
+	memset(&bad_parameter, 0xa5, sizeof(bad_parameter));
+	check(agent_workflow_lifecycle_info(&bad_parameter,
+				    &over_capacity_key) == AGENT_STATUS_STALE &&
+	      lifecycle_v3_tail_well_formed(&bad_parameter),
 	      "well-formed out-of-range lifecycle key is stale");
 	snapshot_current_lifecycle(&current_after);
 	check(lifecycle_key_equal(current_before.key, current_after.key),
@@ -561,11 +596,12 @@ static TEST_PHASE_NOINLINE void check_lifecycle_sized_prefix(void)
 	      v2.charged == 1 && v2.key.id != 0 &&
 	      v2.key.generation != 0 && v2.resource_account_valid == 1,
 	      "preserve complete workflow lifecycle v2 projection");
-	memset(&oversized, 0, sizeof(oversized));
+	memset(&oversized, 0xa5, sizeof(oversized));
 	oversized.guard = 0xa55a3cc3U;
 	check(syscall(SYS_agent_workflow_lifecycle_info, &oversized,
 		      ~0ULL, 0, 0, 0) == AGENT_STATUS_OK &&
 	      oversized.info.struct_size == sizeof(oversized.info) &&
+	      lifecycle_v3_tail_well_formed(&oversized.info) &&
 	      oversized.guard == 0xa55a3cc3U,
 	      "clamp oversized lifecycle copy before tail guard");
 	memset(&short_probe, 0xa5, sizeof(short_probe));
@@ -598,8 +634,8 @@ static void check_factory_lifecycle_view(
 		factory_lifecycle_baseline = info;
 		factory_lifecycle_baseline_set = 1;
 	} else {
-		check(bytes_equal(&info, &factory_lifecycle_baseline,
-				  sizeof(info)),
+		check(factory_lifecycle_view_equal(
+			      &info, &factory_lifecycle_baseline),
 		      "boot factory lifecycle key and idle view stay stable");
 	}
 	if (snapshot != 0)
@@ -618,12 +654,13 @@ static void check_factory_self_only_foreign_compare(
 	      "foreign workflow lifecycle differs from factory key");
 	memset(&compared, 0xa5, sizeof(compared));
 	check(agent_workflow_lifecycle_info(&compared, &foreign_key) ==
-		      AGENT_STATUS_STALE,
+		      AGENT_STATUS_STALE &&
+	      lifecycle_v3_tail_well_formed(&compared),
 	      "factory foreign lifecycle comparison is stale");
-	check(bytes_equal(&before, &compared, sizeof(before)),
+	check(factory_lifecycle_view_equal(&before, &compared),
 	      "foreign comparison returns only the factory self snapshot");
 	check_factory_lifecycle_view(&after);
-	check(bytes_equal(&before, &after, sizeof(before)),
+	check(factory_lifecycle_view_equal(&before, &after),
 	      "foreign comparison cannot alter the factory lifecycle view");
 }
 

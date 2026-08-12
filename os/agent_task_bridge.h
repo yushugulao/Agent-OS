@@ -4,6 +4,7 @@
 #include "types.h"
 
 struct proc;
+struct file;
 
 void agent_task_bridge_init(void);
 
@@ -25,6 +26,7 @@ int agent_task_bridge_active(const struct proc *p);
 
 int sys_agent_task_channel_setup(uint64 setupaddr, uint64 resultaddr);
 int sys_agent_task_channel_enter(uint64 enteraddr, uint64 resultaddr);
-int sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr);
+int sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr,
+				    struct file *source_file, int source_fd);
 
 #endif

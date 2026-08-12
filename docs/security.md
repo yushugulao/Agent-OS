@@ -1,6 +1,6 @@
 # AgentOS 安全机制
 
-Agent（智能体）工作流会同时持有身份、文件、工具结果和异步任务。进程槽、inode、Task Channel 环槽和执行节点都可能被复用，用户缓冲区也可能在系统调用尚未结束时发生变化。AgentOS 为这些对象附上工作流生命周期与 generation；工具产生副作用之前，还要依次检查 schema、能力位、文件访问范围、Execution Contract、provenance（来源追溯）和资源额度。
+Agent（智能体）工作流会同时持有身份、文件、工具结果和异步任务。Agent 进程创建与地址空间设计先确定“谁在运行、哪些页由谁写”，工具调用协议再确定“请求如何解析、什么操作可以生效”。进程槽、inode、Task Channel 环槽和执行节点都可能被复用，用户缓冲区也可能在系统调用尚未结束时发生变化。AgentOS 为这些对象附上工作流生命周期与 generation；请求进入内核后，先核对 Agent identity 与生命周期，再解析工具和 schema，随后检查能力位、文件访问范围、Execution Contract、provenance（来源追溯）和资源额度，全部通过后才允许工具产生副作用。
 
 ## 文档索引
 
@@ -163,7 +163,7 @@ Execution Contract 中的执行额度和存储额度，会在工具运行前转�
 
 Context commit 顺序固定为：取得工具结果、结算 Phase Lease、写入输出 provenance、写入 Context 与 Evidence Ring 票号，最后更新 Execution Contract 节点。受约束调用会在执行前 reserve terminal record，避免工具已经修改系统状态却无处记录。`agent_workflow_close()` 只负责把生命周期改为关闭中并要求成员退出；成员、已有操作、任务回调、资源对象和 Context commit 全部处理完后，后台清理程序才回收工作流。
 
-Nexus artifact 由 Guest 另行写入，不与内核 Context 记录构成同一个原子事务。[`agent_nexus.c`](../user/lib/agent_nexus.c) 使用工作流编辑租约串行写入，先持久化魔数为零的文件头和数据，再写正式文件头。[`agent_nexus.h`](../user/include/agent_nexus.h) 将 `AGENT_NEXUS_ARTIFACT_PUBLISH_IS_ATOMIC` 明确定义为 `0`。读取方重新核对魔数、清单摘要、数据摘要和生命周期，只接收完整 artifact。
+Nexus artifact 通过 `agent_file_publish()` 发布。内核先把 header 与 payload 复制到私有快照并写入未命名 inode，完整数据 checkpoint 结束后才接入正式文件名。正式路径不会出现半份内容；同名竞争至多一个调用成功，后来的调用返回 `DUPLICATE`，原文件保持不变。若目录接入结果为 `INDETERMINATE`，Guest 只在正式路径逐字节等于本次请求且紧接 EOF 时接受已有文件。Context、metadata 和 Workflow Fence 仍按 artifact handle、lifecycle generation 与 terminal record 关联，各自沿原有提交路径推进。
 
 ## 文件对象与 Live Query
 
@@ -194,7 +194,9 @@ Task Channel 只有一个提交者，队列水位以内核记录为准。SQ 由�
 
 取消策略若当场拒绝取消命令，取消请求号仍会被记为已使用。此时 `enter` 返回 `DENIED`，不产生取消 CQE，原目标继续运行。CQ 已满时，内核保留尚未写出的结果；用户读取 CQ 后，再继续发布。
 
-类型化资源句柄包含槽位、类型、所有权标志和 generation。资源表实现导入、释放、查询、引用和析构。当前同步 Task Bridge 只接受空输入和空输出；导入非空资源时返回 `AGENT_TASK_CHANNEL_DENIED`。
+类型化资源句柄包含槽位、类型、所有权标志和 generation。`IMPORT` 只接受当前 Agent 可读的普通文件、准确的 1–63 字节长度和 OWNED UTF-8，并要求当前 Agent 已经有一条经过校验的最新 Context；导入只绑定这条记录，不另建 Context。内核从 offset 0 取得内容，不改动共享文件 offset；EOF、NUL 和 UTF-8 检查通过后，只把不可变快照、SHA-256 与内核生成的 producer/Context/provenance 元数据放入资源表，不保留 `struct file *`。最终 copyout 失败会回滚尚未暴露的资源，因此调用方不会得到“接口失败但槽位已占用”的半成功状态。
+
+SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 任务结束后引用归还，资源保持 `LIVE`；OWNED 任务结束后资源自动消费。`RELEASE` 以及槽位再次使用都会使旧 generation 返回 `STALE`。当前 ECHO Task Bridge 从内核快照复制 payload，不再读取导入时的 fd，文件后来被改写也不会改变已经接受的任务输入。
 
 <a id="失败状态与验证"></a>
 ## 失败状态与测试

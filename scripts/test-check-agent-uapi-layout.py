@@ -23,7 +23,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 545)
+        self.assertEqual(len(self.golden), 560)
         self.assertEqual(
             self.golden["agent_uapi_layout_value_ledger_version"], 3
         )
@@ -184,10 +184,38 @@ class AgentUapiLayoutTests(unittest.TestCase):
             563,
         )
         self.assertEqual(
+            self.golden["agent_uapi_layout_value_task_resource_utf8_max"],
+            63,
+        )
+        self.assertEqual(
             self.golden[
                 "agent_uapi_layout_value_workflow_lifecycle_info_v2_size"
             ],
             64,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_file_publish_request"],
+            64,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_file_publish_request_payload_size"
+            ],
+            45,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_file_publish_request_reserved_tail"
+            ],
+            49,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_file_publish_syscall"],
+            566,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_file_publish_max_bytes"],
+            4096,
         )
 
     def test_retired_syscall_numbers_remain_unassigned(self):
@@ -283,6 +311,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         (root / "user" / "include").mkdir(parents=True)
         for relative in (
             "include/agent_execution_contract_abi.h",
+            "include/agent_file_publish_abi.h",
             "include/agent_lifecycle_abi.h",
             "include/agent_provenance_abi.h",
             "include/agent_resource_abi.h",
@@ -306,6 +335,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
                 "workflow-fence",
                 "execution-contract",
                 "provenance",
+                "file-publish",
                 "task-channel",
             },
         )
@@ -321,6 +351,20 @@ class AgentUapiLayoutTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 agent_uapi_layout.LayoutError, "frozen value 16"
+            ):
+                agent_uapi_layout.validate_feature_abi_constants(root)
+
+            path.write_text(
+                (ROOT / "include" / "agent_task_channel_abi.h")
+                .read_text(encoding="utf-8")
+                .replace(
+                    "#define AGENT_TASK_RESOURCE_UTF8_MAX      63U",
+                    "#define AGENT_TASK_RESOURCE_UTF8_MAX      64U",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "frozen value 63"
             ):
                 agent_uapi_layout.validate_feature_abi_constants(root)
 
@@ -349,6 +393,17 @@ class AgentUapiLayoutTests(unittest.TestCase):
             self.assertIn(definition, source)
             path.write_text(
                 source.replace(definition, "", 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "atomically mirror"
+            ):
+                agent_uapi_layout.validate_agent_syscall_numbers(root)
+
+            publish_definition = "#define SYS_agent_file_publish 566\n"
+            self.assertIn(publish_definition, source)
+            path.write_text(
+                source.replace(publish_definition, "", 1),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
