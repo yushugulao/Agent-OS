@@ -17,6 +17,31 @@ if str(_HERE) not in sys.path:
 import agentos_local_protocol as local  # noqa: E402
 
 
+_COMPACT_COLUMNS = (
+    ("tick", 7, True),
+    ("pid", 4, True),
+    ("ctrl", 4, True),
+    ("role", 8, False),
+    ("life", 6, True),
+    ("task", 4, True),
+    ("corr", 4, True),
+    ("state", 11, False),
+    ("event", 18, False),
+    ("tool", 14, False),
+    ("status", 6, False),
+    ("ctx", 4, True),
+    ("route", 8, True),
+    ("s/w", 5, True),
+    ("used", 4, True),
+    ("vrun", 5, True),
+    ("res", 4, True),
+    ("prov", 6, False),
+)
+_COMPACT_TABLE_WIDTH = sum(width for _, width, _ in _COMPACT_COLUMNS) + len(
+    _COMPACT_COLUMNS
+) - 1
+
+
 def _guest_profile(value: Mapping[str, object]) -> str:
     profile = value.get("guest_profile", "agentlive")
     if not isinstance(profile, str) or profile not in local.GUEST_PROFILES:
@@ -97,7 +122,53 @@ def _capabilities(event: Mapping[str, object]) -> str:
     return f"caps=0x{value:x}"
 
 
-def render_header(output: TextIO) -> None:
+def _compact_cell(value: object, width: int, *, right: bool) -> str:
+    text = str(value)
+    if len(text) > width:
+        text = text[:width]
+    return text.rjust(width) if right else text.ljust(width)
+
+
+def _compact_provenance(event: Mapping[str, object]) -> str:
+    value = event.get("provenance", event.get("labels"))
+    if isinstance(value, int) and not isinstance(value, bool):
+        markers = "".join(
+            marker
+            for bit, marker in (
+                (1 << 1, "U"),
+                (1 << 3, "F"),
+                (1 << 4, "T"),
+                (1 << 5, "X"),
+            )
+            if value & bit
+        )
+        return markers or ("-" if value == 0 else hex(value))
+    if isinstance(value, str):
+        names = {
+            "TRUSTED_USER_CONTROL": "U",
+            "UNTRUSTED_FILE_DATA": "F",
+            "UNTRUSTED_TOOL_OUTPUT": "T",
+            "CROSS_AGENT_DATA": "X",
+        }
+        parts = value.split("|")
+        if parts and all(part in names for part in parts):
+            return "".join(names[part] for part in parts)
+    return str(value) if value not in (None, "") else "-"
+
+
+def _compact_row(values: Sequence[object]) -> str:
+    return " ".join(
+        _compact_cell(value, width, right=right)
+        for value, (_, width, right) in zip(values, _COMPACT_COLUMNS, strict=True)
+    )
+
+
+def render_header(output: TextIO, *, compact: bool = False) -> None:
+    if compact:
+        print(_compact_row(tuple(name for name, _, _ in _COMPACT_COLUMNS)), file=output)
+        print("-" * _COMPACT_TABLE_WIDTH, file=output)
+        output.flush()
+        return
     print(
         f"{'tick':>8} {'pid':>5} {'agent':>5} {'control':>9} {'role':<11} "
         f"{'lifecycle':>13} {'task':>6} {'corr':>6} "
@@ -111,10 +182,52 @@ def render_header(output: TextIO) -> None:
     output.flush()
 
 
-def render_event(event: Mapping[str, object], output: TextIO, *, json_events: bool) -> None:
+def render_event(
+    event: Mapping[str, object],
+    output: TextIO,
+    *,
+    json_events: bool,
+    compact: bool = False,
+) -> None:
     if json_events:
         print(
             json.dumps(event, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
+            file=output,
+            flush=True,
+        )
+        return
+    if compact:
+        role = _field(event, "agent_role", "role")
+        if role == "coordinator":
+            role = "coord"
+        print(
+            _compact_row(
+                (
+                    _field(event, "tick"),
+                    _field(event, "pid", "agent_pid"),
+                    _field(
+                        event,
+                        "actor_control_id",
+                        "agent_control_id",
+                        "control_id",
+                    ),
+                    role,
+                    _lifecycle(event),
+                    _field(event, "task_id"),
+                    _field(event, "corr_id"),
+                    _state(event),
+                    _field(event, "event", "kind"),
+                    _field(event, "tool", "tool_id"),
+                    _status(event),
+                    _field(event, "context_seq"),
+                    _route(event),
+                    _waits(event),
+                    _field(event, "sched_budget_used"),
+                    _field(event, "sched_vruntime"),
+                    _field(event, "resource_used"),
+                    _compact_provenance(event),
+                )
+            ),
             file=output,
             flush=True,
         )
@@ -156,6 +269,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--until-event", default="", help="Exit after this exact event name.")
     parser.add_argument("--json-events", action="store_true")
     parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Use a 139-column live view for normal terminal windows.",
+    )
+    parser.add_argument(
         "--expect-guest-profile",
         choices=tuple(sorted(local.GUEST_PROFILES)),
         default="",
@@ -184,7 +302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if welcome.get("type") != "welcome" or welcome.get("role") != "observer":
             raise local.LocalProtocolError("observer handshake is malformed")
         if not args.json_events:
-            render_header(sys.stdout)
+            render_header(sys.stdout, compact=args.compact)
         attached = local.recv_one(stream)
         if (
             attached.get("type") != "telemetry"
@@ -199,7 +317,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise local.LocalProtocolError(
                 "observer Guest profile does not match active state"
             )
-        render_event(attached, sys.stdout, json_events=args.json_events)
+        render_event(
+            attached,
+            sys.stdout,
+            json_events=args.json_events,
+            compact=args.compact,
+        )
         seen = 1
         if args.count and seen >= args.count:
             return 0
@@ -209,7 +332,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             event = local.recv_one(stream)
             if event.get("type") != "telemetry":
                 continue
-            render_event(event, sys.stdout, json_events=args.json_events)
+            render_event(
+                event,
+                sys.stdout,
+                json_events=args.json_events,
+                compact=args.compact,
+            )
             seen += 1
             if args.count and seen >= args.count:
                 return 0

@@ -18,32 +18,30 @@ import validate_agentos_nexus_replay as validator  # noqa: E402
 
 MEASUREMENT_HANDLE = (1 << 16) | 2
 SYSTEM_HANDLE = (1 << 16) | 4
-RESEARCH_HANDLE = (1 << 16) | 8
-ANALYST_HANDLE = (1 << 16) | 10
+RESEARCH_HANDLE = (1 << 16) | 6
+ANALYST_HANDLE = (1 << 16) | 8
 
 
 def _final_answer() -> str:
     return (
-        "unpublished;"
-        f"system_handle={SYSTEM_HANDLE};research_handle={RESEARCH_HANDLE};"
-        "source=nexus_state;claim=this_boot_runtime_observation;"
-        "process_count=4;context_count=3;file_bytes=200;"
-        "sched_budget=8;"
-        f"{validator.SOURCE_REVISION_TOKEN};"
-        + ";".join(validator.MEASUREMENT_TOKENS)
+        "AgentOS Live Query;this_boot=live,b=8;historical_not_this_boot;"
+        "core=3.118x,16/16;E2E=+13.452ms,3/16;outer=+33.477ms;"
+        "action1=phase timing;action2=outer optimization;"
+        "validation=E2E<=baseline,core=16/16,equal hash/scope;"
+        "rollback=E2E p95>5% or hash/scope mismatch;publication=denied"
     )
 
 
 def _fixture() -> list[dict[str, object]]:
     responses: list[dict[str, object]] = [
         {"type": "tool_use", "tool": "tool_search", "arguments": {"role": "system", "query": "status"}},
-        {"type": "tool_use", "tool": "delegate_task", "arguments": {"role": "system", "task_type": "system_snapshot", "objective": "inspect"}},
+        {"type": "tool_use", "tool": "delegate_task", "arguments": {"role": "system", "task_type": "system_snapshot", "objective": "kernel snapshot this_boot"}},
         {"type": "final", "content": "system complete"},
-        {"type": "tool_use", "tool": "delegate_task", "arguments": {"role": "research", "task_type": "local_research", "objective": "bad", "input_handle": 999}},
-        {"type": "tool_use", "tool": "delegate_task", "arguments": {"role": "research", "task_type": "local_research", "objective": "verify", "input_handle": MEASUREMENT_HANDLE}},
+        {"type": "tool_use", "tool": "delegate_task", "arguments": {"role": "research", "task_type": "local_research", "objective": "verify paired evidence", "input_handle": 999}},
+        {"type": "tool_use", "tool": "delegate_task", "arguments": {"role": "research", "task_type": "local_research", "objective": "verify paired evidence", "input_handle": MEASUREMENT_HANDLE}},
         {"type": "tool_use", "tool": "read_artifact", "arguments": {"handle": RESEARCH_HANDLE}},
         {"type": "final", "content": "research replanned"},
-        {"type": "tool_use", "tool": "delegate_task", "arguments": {"role": "analyst", "task_type": "compose_report", "objective": "compose", "input_handle": SYSTEM_HANDLE, "secondary_handle": RESEARCH_HANDLE}},
+        {"type": "tool_use", "tool": "delegate_task", "arguments": {"role": "analyst", "task_type": "compose_report", "objective": "synth report", "input_handle": SYSTEM_HANDLE, "secondary_handle": RESEARCH_HANDLE}},
         {"type": "tool_use", "tool": "read_artifact", "arguments": {"handle": ANALYST_HANDLE}},
         {"type": "tool_use", "tool": "publish_report", "arguments": {"handle": ANALYST_HANDLE}},
         {"type": "final", "content": _final_answer()},
@@ -193,53 +191,52 @@ def _transcripts() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     emit(turn=1, corr=3, task=1, parent=0, event="completed", state="completed", **coordinator)
 
     for event, state in (("assigned", "assigned"), ("accepted", "accepted"), ("progress", "running")):
-        emit(turn=2, corr=4, task=3, parent=0, event=event, state=state, **coordinator)
-    for event, state in (("assigned", "assigned"), ("accepted", "accepted"), ("progress", "running")):
-        emit(turn=2, corr=4, task=4, parent=3, event=event, state=state, **research)
-    emit(turn=2, corr=4, task=4, parent=3, event="failed", state="failed", status=-5, **research)
+        emit(turn=2, corr=4, task=1, parent=0, event=event, state=state, **coordinator)
     for event, state in (("assigned", "assigned"), ("accepted", "accepted"), ("progress", "waiting"), ("progress", "running")):
-        emit(turn=2, corr=5, task=5, parent=3, event=event, state=state, **research)
-    emit(turn=2, corr=5, task=5, parent=3, event="completed", state="completed", **research)
+        emit(turn=2, corr=5, task=2, parent=1, event=event, state=state, **research)
+    emit(turn=2, corr=5, task=2, parent=1, event="completed", state="completed", **research)
     emit(
         turn=2,
         corr=5,
-        task=5,
-        parent=3,
+        task=2,
+        parent=1,
         event="artifact_published",
         state="completed",
         handle=RESEARCH_HANDLE,
-        digest="b" * 64,
-        summary=";".join(validator.MEASUREMENT_TOKENS),
+        digest=validator.RESEARCH_ARTIFACT_SHA256,
+        summary=validator.RESEARCH_EVENT_SUMMARY,
         resource=300,
         provenance=60,
         **research,
     )
-    emit(turn=2, corr=7, task=3, parent=0, event="completed", state="completed", **coordinator)
+    emit(turn=2, corr=7, task=1, parent=0, event="completed", state="completed", **coordinator)
 
     for event, state in (("assigned", "assigned"), ("accepted", "accepted"), ("progress", "running")):
-        emit(turn=3, corr=8, task=6, parent=0, event=event, state=state, **coordinator)
+        emit(turn=3, corr=8, task=1, parent=0, event=event, state=state, **coordinator)
     for event, state in (("assigned", "assigned"), ("accepted", "accepted"), ("progress", "waiting"), ("progress", "running")):
-        emit(turn=3, corr=8, task=7, parent=6, event=event, state=state, **analyst)
-    emit(turn=3, corr=8, task=7, parent=6, event="completed", state="completed", **analyst)
+        emit(turn=3, corr=8, task=2, parent=1, event=event, state=state, **analyst)
+    emit(turn=3, corr=8, task=2, parent=1, event="completed", state="completed", **analyst)
     emit(
         turn=3,
         corr=8,
-        task=7,
-        parent=6,
+        task=2,
+        parent=1,
         event="artifact_published",
         state="completed",
         handle=ANALYST_HANDLE,
-        digest="c" * 64,
-        summary=(
-            f"system_handle={SYSTEM_HANDLE};research_handle={RESEARCH_HANDLE};"
-            f"system_digest={'a' * 64};research_digest={'b' * 64};"
-            "sched_budget=8;paired_ratio_median=3.118"
+        digest=hashlib.sha256(
+            validator._analyst_report_payload(
+                SYSTEM_HANDLE, RESEARCH_HANDLE, 8, "synth report"
+            ).encode("utf-8")
+        ).hexdigest(),
+        summary=validator._analyst_event_summary(
+            SYSTEM_HANDLE, RESEARCH_HANDLE, 8
         ),
         resource=400,
         provenance=61,
         **analyst,
     )
-    emit(turn=3, corr=11, task=6, parent=0, event="completed", state="completed", **coordinator)
+    emit(turn=3, corr=11, task=1, parent=0, event="completed", state="completed", **coordinator)
     controller.extend(task_records)
 
     approval_arguments = {"handle": ANALYST_HANDLE}
@@ -249,10 +246,10 @@ def _transcripts() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         [
             {"type": "tool_event", "turn_id": 1, "request_id": 1, "corr_id": 1, "tool": "tool_search", "status": 0},
             {"type": "tool_event", "turn_id": 1, "request_id": 1, "corr_id": 2, "tool": "delegate_task", "status": 0, "result": "system_artifact_ready", "value0": SYSTEM_HANDLE, "value1": 2, "value2": 101},
-            {"type": "tool_event", "turn_id": 2, "request_id": 2, "corr_id": 4, "tool": "delegate_task", "status": -5, "result": "task_failed;role=research;replan_allowed=1", "value0": 0, "value1": 0},
-            {"type": "tool_event", "turn_id": 2, "request_id": 2, "corr_id": 5, "tool": "delegate_task", "status": 0, "result": "research_artifact_ready", "value0": RESEARCH_HANDLE, "value1": 5, "value2": 102},
+            {"type": "tool_event", "turn_id": 2, "request_id": 2, "corr_id": 4, "tool": "delegate_task", "status": -4, "result": "task_dispatch_failed;replan_allowed=1", "value0": 0, "value1": 0},
+            {"type": "tool_event", "turn_id": 2, "request_id": 2, "corr_id": 5, "tool": "delegate_task", "status": 0, "result": "research_artifact_ready", "value0": RESEARCH_HANDLE, "value1": 2, "value2": 102},
             {"type": "tool_event", "turn_id": 2, "request_id": 2, "corr_id": 6, "tool": "read_artifact", "status": 0, "value0": RESEARCH_HANDLE},
-            {"type": "tool_event", "turn_id": 3, "request_id": 3, "corr_id": 8, "tool": "delegate_task", "status": 0, "result": "analyst_report_ready", "value0": ANALYST_HANDLE, "value1": 7, "value2": 103},
+            {"type": "tool_event", "turn_id": 3, "request_id": 3, "corr_id": 8, "tool": "delegate_task", "status": 0, "result": "analyst_report_ready", "value0": ANALYST_HANDLE, "value1": 2, "value2": 103},
             {"type": "tool_event", "turn_id": 3, "request_id": 3, "corr_id": 9, "tool": "read_artifact", "status": 0, "value0": ANALYST_HANDLE},
             {
                 "type": "approval_request",
@@ -431,8 +428,11 @@ def _transcripts() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         )
         audit_sequence += 1
 
-    for task_id, worker in ((2, system), (4, research), (5, research), (7, analyst)):
-        event_id = task_id + 100
+    for task_id, worker, event_id in (
+        (2, system, 102),
+        (2, research, 305),
+        (2, analyst, 407),
+    ):
         for kind, loop_state in ((2, 3), (3, 2)):
             audit(
                 kind=kind,
@@ -513,6 +513,21 @@ class NexusReplayValidatorTests(unittest.TestCase):
     def test_accepts_semantic_golden_transcript(self) -> None:
         fixture = _fixture()
         controller, observer = _transcripts()
+        self.assertFalse(
+            any(
+                record.get("type") == "task_event"
+                and record.get("event") == "failed"
+                for record in controller
+            )
+        )
+        self.assertFalse(
+            any(
+                record.get("type") == "task_event"
+                and record.get("corr_id") == 4
+                and record.get("parent_task_id") != 0
+                for record in controller
+            )
+        )
         digests = validator._fixture_digests(fixture)
         session, identities, worker_tasks = validator._validate_controller(
             controller, digests, fixture
@@ -656,7 +671,7 @@ class NexusReplayValidatorTests(unittest.TestCase):
                 controller, validator._fixture_digests(fixture), fixture
             )
 
-    def test_rejects_delegate_task_with_changed_objective(self) -> None:
+    def test_rejects_delegate_task_without_canonical_objective(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         assigned = next(
@@ -667,8 +682,8 @@ class NexusReplayValidatorTests(unittest.TestCase):
             and record.get("parent_task_id") != 0
             and record.get("event") == "assigned"
         )
-        assigned["summary"] = "different objective"
-        with self.assertRaisesRegex(validator.ValidationError, "canonical objective"):
+        assigned["summary"] = ""
+        with self.assertRaisesRegex(validator.ValidationError, "changed its role-canonical objective"):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
@@ -680,13 +695,14 @@ class NexusReplayValidatorTests(unittest.TestCase):
             record
             for record in controller
             if record.get("type") == "task_event"
+            and record.get("turn_id") == 1
             and record.get("task_id") == 2
             and record.get("event") == "accepted"
         )
         accepted["request_id"] = 99
         with self.assertRaisesRegex(
             validator.ValidationError,
-            "changed its active turn/request envelope|changed its model response envelope",
+            "active turn/request envelope|model response envelope|TASK_ACCEPT",
         ):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
@@ -712,6 +728,59 @@ class NexusReplayValidatorTests(unittest.TestCase):
                     validator._validate_controller(
                         controller, validator._fixture_digests(fixture), fixture
                     )
+
+    def test_rejects_invalid_pre_dispatch_failure_contract(self) -> None:
+        fixture = _fixture()
+        for field, value, error in (
+            ("status", 0, "pre-dispatch failure has the wrong status"),
+            ("status", -5, "pre-dispatch failure has the wrong status"),
+            ("result", "task_failed;replan_allowed=1", "exact pre-dispatch failure result"),
+            ("result", "task_dispatch_failed;replan_allowed=0", "exact pre-dispatch failure result"),
+            ("value0", 1, "pre-dispatch failure reports a nonzero effect"),
+            ("value1", 2, "pre-dispatch failure reports a nonzero effect"),
+            ("value2", 102, "pre-dispatch failure reports a nonzero effect"),
+        ):
+            with self.subTest(field=field):
+                controller, _ = _transcripts()
+                event = next(
+                    record
+                    for record in controller
+                    if record.get("type") == "tool_event"
+                    and record.get("corr_id") == 4
+                )
+                event[field] = value
+                with self.assertRaisesRegex(validator.ValidationError, error):
+                    validator._validate_controller(
+                        controller, validator._fixture_digests(fixture), fixture
+                    )
+
+    def test_rejects_pre_dispatch_failure_with_child_task_events(self) -> None:
+        fixture = _fixture()
+        controller, _ = _transcripts()
+        injected = [
+            copy.deepcopy(record)
+            for record in controller
+            if record.get("type") == "task_event"
+            and record.get("corr_id") == 5
+        ]
+        for record in injected:
+            record["corr_id"] = 4
+            record["task_id"] = 3
+            record["deadline_tick"] = int(record["deadline_tick"]) + 100
+        tool_index = next(
+            index
+            for index, record in enumerate(controller)
+            if record.get("type") == "tool_event"
+            and record.get("corr_id") == 4
+        )
+        controller[tool_index:tool_index] = injected
+        with self.assertRaisesRegex(
+            validator.ValidationError,
+            "pre-dispatch failure emitted child TASK events",
+        ):
+            validator._validate_controller(
+                controller, validator._fixture_digests(fixture), fixture
+            )
 
     def test_rejects_approval_without_exact_canonical_handle_binding(self) -> None:
         fixture = _fixture()
@@ -814,6 +883,19 @@ class NexusReplayValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "first Research source"):
             validator._fixture_digests(fixture)
 
+    def test_rejects_fixture_without_one_generation_safe_research_replan(self) -> None:
+        fixture = _fixture()
+        response = fixture[4]["response"]
+        assert isinstance(response, dict)
+        arguments = response["arguments"]
+        assert isinstance(arguments, dict)
+        arguments["input_handle"] = 998
+        with self.assertRaisesRegex(
+            validator.ValidationError,
+            "distinct generation-safe local source handle",
+        ):
+            validator._fixture_digests(fixture)
+
     def test_rejects_publication_of_an_unread_handle(self) -> None:
         fixture = _fixture()
         response = fixture[9]["response"]
@@ -849,7 +931,9 @@ class NexusReplayValidatorTests(unittest.TestCase):
         controller, _ = _transcripts()
         final_response = fixture[-1]["response"]
         assert isinstance(final_response, dict)
-        final_response["content"] = "publication denied; report remains unpublished"
+        final_response["content"] = _final_answer().replace(
+            "historical_not_this_boot", "historical benchmark"
+        )
         final_event = next(
             record
             for record in controller
@@ -862,18 +946,82 @@ class NexusReplayValidatorTests(unittest.TestCase):
             if record.get("type") == "model_response" and record.get("corr_id") == 11
         )
         model_response["content"] = final_response["content"]
-        with self.assertRaisesRegex(validator.ValidationError, "final answer omits"):
+        with self.assertRaises(validator.ValidationError):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
 
-    def test_rejects_final_without_dynamic_system_evidence(self) -> None:
+    def test_accepts_exact_compact_final_answer(self) -> None:
+        answer = _final_answer()
+        self.assertEqual(len(answer.encode("utf-8")), 278)
+        validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_accepts_final_ascii_case_outer_whitespace_and_period(self) -> None:
+        answer = f" \r\n{_final_answer().upper()}.\t "
+        validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_rejects_final_wrapper_and_wrong_current_budget(self) -> None:
+        for answer in (
+            f"False: {_final_answer()}",
+            f"{_final_answer()}. All above is false",
+            _final_answer().replace("this_boot=live,b=8", "this_boot=live,b=9"),
+        ):
+            with self.subTest(answer=answer):
+                with self.assertRaisesRegex(
+                    validator.ValidationError, "canonical block"
+                ):
+                    validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_rejects_final_without_phase_timing(self) -> None:
+        answer = _final_answer().replace("phase timing", "stage timers")
+        with self.assertRaises(validator.ValidationError):
+            validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_rejects_final_without_required_numeric_token(self) -> None:
+        for token, replacement in (
+            ("3.118x", "3.1x"),
+            ("+13.452ms", "+13ms"),
+            ("3/16", "three of sixteen"),
+            ("+33.477ms", "+33ms"),
+        ):
+            with self.subTest(token=token):
+                answer = _final_answer().replace(token, replacement)
+                with self.assertRaises(validator.ValidationError):
+                    validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_rejects_final_without_repeated_completion_evidence(self) -> None:
+        answer = _final_answer().replace(
+            "core=3.118x,16/16", "core=3.118x,all runs"
+        )
+        self.assertEqual(answer.lower().count("16/16"), 1)
+        with self.assertRaises(validator.ValidationError):
+            validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_rejects_final_without_repeated_hash_scope_evidence(self) -> None:
+        answer = _final_answer().replace("equal hash/scope", "equal digest/scope")
+        self.assertEqual(answer.lower().count("hash/scope"), 1)
+        with self.assertRaises(validator.ValidationError):
+            validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_rejects_final_without_standalone_publication_word(self) -> None:
+        answer = _final_answer().replace("publication=denied", "unpublication=denied")
+        with self.assertRaises(validator.ValidationError):
+            validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_rejects_final_without_standalone_denied_word(self) -> None:
+        answer = _final_answer().replace("publication=denied", "publication=undenied")
+        self.assertIn("undenied", answer)
+        with self.assertRaises(validator.ValidationError):
+            validator._validate_final_answer(answer, "sched_budget=8")
+
+    def test_rejects_final_without_this_boot_scope(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         final_response = fixture[-1]["response"]
         assert isinstance(final_response, dict)
         final_response["content"] = str(final_response["content"]).replace(
-            "process_count=4;", ""
+            "this_boot=live,b=8;historical_not_this_boot",
+            "this_boot=unknown;historical benchmark",
         )
         final_event = next(
             record
@@ -887,12 +1035,12 @@ class NexusReplayValidatorTests(unittest.TestCase):
             if record.get("type") == "model_response" and record.get("corr_id") == 11
         )
         model_response["content"] = final_response["content"]
-        with self.assertRaisesRegex(validator.ValidationError, "dynamic System fact"):
+        with self.assertRaises(validator.ValidationError):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
 
-    def test_rejects_research_artifact_without_manifest_identity(self) -> None:
+    def test_rejects_research_artifact_without_v4_scope(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         artifact = next(
@@ -903,14 +1051,14 @@ class NexusReplayValidatorTests(unittest.TestCase):
             and record.get("event") == "artifact_published"
         )
         artifact["summary"] = str(artifact["summary"]).replace(
-            "source_manifest=one_shot_metrics/data/20260811/manifest.json;", ""
+            "scope=historical_not_this_boot;", ""
         )
-        with self.assertRaisesRegex(validator.ValidationError, "source_manifest"):
+        with self.assertRaisesRegex(validator.ValidationError, "v4 live_query projection"):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
 
-    def test_rejects_prefixed_lookalike_dataset_table(self) -> None:
+    def test_rejects_research_artifact_with_wrong_benchmark(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         artifact = next(
@@ -921,15 +1069,34 @@ class NexusReplayValidatorTests(unittest.TestCase):
             and record.get("event") == "artifact_published"
         )
         artifact["summary"] = str(artifact["summary"]).replace(
-            "source_table=one_shot_metrics/data/20260811/tables/contest_paired.csv",
-            "xource_table=one_shot_metrics/data/20260811/tables/contest_paired.csv",
+            "benchmark=live_query_paired", "benchmark=legacy_query"
         )
-        with self.assertRaisesRegex(validator.ValidationError, "source_table"):
+        with self.assertRaisesRegex(validator.ValidationError, "v4 live_query projection"):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
 
-    def test_rejects_analyst_report_without_full_source_digest(self) -> None:
+    def test_rejects_research_artifact_without_full_v4_payload_digest(self) -> None:
+        fixture = _fixture()
+        controller, _ = _transcripts()
+        artifact = next(
+            record
+            for record in controller
+            if record.get("type") == "task_event"
+            and record.get("role") == "research"
+            and record.get("event") == "artifact_published"
+        )
+        artifact["digest"] = "e" * 64
+        artifact["artifact_sha256"] = artifact["digest"]
+        with self.assertRaisesRegex(validator.ValidationError, "complete v4 live_query"):
+            validator._validate_controller(
+                controller, validator._fixture_digests(fixture), fixture
+            )
+
+    def test_source_table_and_source_modules_match_frozen_sha_and_symbols(self) -> None:
+        validator._validate_source_evidence_files()
+
+    def test_rejects_analyst_report_without_source_bound_payload(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         artifact = next(
@@ -939,13 +1106,39 @@ class NexusReplayValidatorTests(unittest.TestCase):
             and record.get("role") == "analyst"
             and record.get("event") == "artifact_published"
         )
-        artifact["summary"] = str(artifact["summary"]).replace(
-            f"research_digest={'b' * 64}", "research_digest=missing"
-        )
-        with self.assertRaisesRegex(validator.ValidationError, "Research digest"):
+        artifact["digest"] = "d" * 64
+        artifact["artifact_sha256"] = artifact["digest"]
+        with self.assertRaisesRegex(validator.ValidationError, "report SHA-256"):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
+
+    def test_rejects_analyst_report_without_action_validation_or_rollback(self) -> None:
+        fixture = _fixture()
+        for field in ("action_1", "action_2", "validation", "rollback"):
+            with self.subTest(field=field):
+                controller, _ = _transcripts()
+                artifact = next(
+                    record
+                    for record in controller
+                    if record.get("type") == "task_event"
+                    and record.get("role") == "analyst"
+                    and record.get("event") == "artifact_published"
+                )
+                report = validator._analyst_report_payload(
+                    SYSTEM_HANDLE, RESEARCH_HANDLE, 8, "compose"
+                )
+                report = report.replace(
+                    next(line for line in report.splitlines() if line.startswith(f"{field}="))
+                    + "\n",
+                    "",
+                )
+                artifact["digest"] = hashlib.sha256(report.encode("utf-8")).hexdigest()
+                artifact["artifact_sha256"] = artifact["digest"]
+                with self.assertRaisesRegex(validator.ValidationError, "report SHA-256"):
+                    validator._validate_controller(
+                        controller, validator._fixture_digests(fixture), fixture
+                    )
 
     def test_rejects_controller_without_research_handle_readback(self) -> None:
         fixture = _fixture()
@@ -1019,7 +1212,7 @@ class NexusReplayValidatorTests(unittest.TestCase):
         for role, terminal, status, error in cases:
             with self.subTest(terminal=terminal):
                 controller, _ = _transcripts()
-                source_event = "failed" if terminal == "cancelled" else terminal
+                source_event = "completed"
                 record = next(
                     item
                     for item in controller
@@ -1157,21 +1350,19 @@ class NexusReplayValidatorTests(unittest.TestCase):
             and record.get("event") == "artifact_published"
         )
         analyst["summary"] = str(analyst["summary"]).replace(
-            "sched_budget=8;", ""
+            ";sched_budget=8", ""
         )
-        with self.assertRaisesRegex(validator.ValidationError, "scheduler budget"):
+        with self.assertRaisesRegex(validator.ValidationError, "this-boot budget"):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
 
-    def test_rejects_final_without_scheduler_budget(self) -> None:
+    def test_final_need_not_repeat_scheduler_budget(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         final_response = fixture[-1]["response"]
         assert isinstance(final_response, dict)
-        final_response["content"] = str(final_response["content"]).replace(
-            "sched_budget=8;", ""
-        )
+        final_response["content"] = str(final_response["content"])
         final_event = next(
             record
             for record in controller
@@ -1184,10 +1375,9 @@ class NexusReplayValidatorTests(unittest.TestCase):
             if record.get("type") == "model_response" and record.get("corr_id") == 11
         )
         model_response["content"] = final_response["content"]
-        with self.assertRaisesRegex(validator.ValidationError, "scheduler fact"):
-            validator._validate_controller(
-                controller, validator._fixture_digests(fixture), fixture
-            )
+        validator._validate_controller(
+            controller, validator._fixture_digests(fixture), fixture
+        )
 
     def test_rejects_artifact_slot_reuse_or_regression(self) -> None:
         fixture = _fixture()
@@ -1302,6 +1492,60 @@ class NexusReplayValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "zero/unavailable"):
             validator._validate_observer(observer, session, identities, worker_tasks)
 
+    def test_rejects_missing_route_when_raw_task_id_repeats(self) -> None:
+        fixture = _fixture()
+        controller, observer = _transcripts()
+        session, identities, worker_tasks = validator._validate_controller(
+            controller, validator._fixture_digests(fixture), fixture
+        )
+        changed = 0
+        for record in observer:
+            if (
+                record.get("source") == "kernel_audit"
+                and record.get("value1") == 2
+                and record.get("source_pid") == 10
+                and record.get("target_pid") == 13
+            ):
+                record["source_pid"] = 10
+                record["target_pid"] = 11
+                record["value2"] = 11
+                record["role"] = "system"
+                record["pid"] = 11
+                record["agent_id"] = 101
+                record["actor_control_id"] = 1001
+                changed += 1
+        self.assertEqual(changed, 2)
+        observer.insert(
+            2,
+            {
+                **copy.deepcopy(
+                    next(
+                        record
+                        for record in observer
+                        if record.get("source") == "kernel_audit"
+                    )
+                ),
+                "record_sequence": 0,
+                "tick": 100,
+                "value0": 999,
+                "value1": 999,
+                "role": "analyst",
+                "pid": 13,
+                "agent_id": 103,
+                "actor_control_id": 1003,
+            },
+        )
+        for index, record in enumerate(
+            (item for item in observer if item.get("source") == "kernel_audit"), 1
+        ):
+            record["record_sequence"] = index
+            record["tick"] = 100 + index
+        with self.assertRaisesRegex(
+            validator.ValidationError,
+            "turn 3/request 3.*MESSAGE pair",
+        ):
+            validator._validate_observer(observer, session, identities, worker_tasks)
+
     def test_rejects_non_message_kernel_audit(self) -> None:
         fixture = _fixture()
         controller, observer = _transcripts()
@@ -1363,10 +1607,14 @@ class NexusReplayValidatorTests(unittest.TestCase):
             and record.get("task_state") == "waiting"
         )
         task_id = first_waiting["task_id"]
+        turn_id = first_waiting["turn_id"]
+        request_id = first_waiting["request_id"]
         waiting = [
             record
             for record in observer
             if record.get("event") in validator.TASK_EVENTS
+            and record.get("turn_id") == turn_id
+            and record.get("request_id") == request_id
             and record.get("task_id") == task_id
             and record.get("task_state") == "waiting"
         ]
@@ -1375,6 +1623,8 @@ class NexusReplayValidatorTests(unittest.TestCase):
             index
             for index, record in enumerate(observer)
             if record.get("event") in validator.TASK_EVENTS
+            and record.get("turn_id") == turn_id
+            and record.get("request_id") == request_id
             and record.get("task_id") == task_id
         )
         observer[last_task_position + 1 : last_task_position + 1] = waiting
@@ -1498,13 +1748,17 @@ class NexusReplayValidatorTests(unittest.TestCase):
                         controller, validator._fixture_digests(fixture), fixture
                     )
 
-    def test_rejects_child_that_begins_before_parent_assignment(self) -> None:
+    def test_rejects_child_with_parent_from_another_turn(self) -> None:
         fixture = _fixture()
         controller, _ = _transcripts()
         for record in controller:
-            if record.get("type") == "task_event" and record.get("task_id") == 2:
-                record["parent_task_id"] = 6
-        with self.assertRaisesRegex(validator.ValidationError, "before parent 6 assignment"):
+            if (
+                record.get("type") == "task_event"
+                and record.get("turn_id") == 1
+                and record.get("task_id") == 2
+            ):
+                record["parent_task_id"] = 3
+        with self.assertRaisesRegex(validator.ValidationError, "unknown parent"):
             validator._validate_controller(
                 controller, validator._fixture_digests(fixture), fixture
             )
@@ -1517,6 +1771,7 @@ class NexusReplayValidatorTests(unittest.TestCase):
             if record.get("type") == "task_event"
             and not (
                 record.get("task_id") == 2
+                and record.get("turn_id") == 1
                 and record.get("event") in ("accepted", "progress")
             )
         ]
@@ -1533,17 +1788,21 @@ class NexusReplayValidatorTests(unittest.TestCase):
         terminal_index = next(
             index
             for index, record in enumerate(task_events)
-            if record.get("task_id") == 3 and record.get("event") == "completed"
+            if record.get("turn_id") == 2
+            and record.get("task_id") == 1
+            and record.get("event") == "completed"
         )
         terminal = task_events.pop(terminal_index)
         terminal["corr_id"] = 4
         child_index = next(
             index
             for index, record in enumerate(task_events)
-            if record.get("task_id") == 4 and record.get("event") == "assigned"
+            if record.get("turn_id") == 2
+            and record.get("task_id") == 2
+            and record.get("event") == "assigned"
         )
         task_events.insert(child_index, terminal)
-        with self.assertRaisesRegex(validator.ValidationError, "outlived terminal parent 3"):
+        with self.assertRaisesRegex(validator.ValidationError, "outlived terminal parent"):
             validator._validate_task_dag(task_events)
 
     def test_rejects_missing_past_or_drifting_task_deadline(self) -> None:
@@ -1560,7 +1819,11 @@ class NexusReplayValidatorTests(unittest.TestCase):
                     for record in controller
                     if record.get("type") == "task_event"
                 ]
-                child = [record for record in task_events if record.get("task_id") == 2]
+                child = [
+                    record
+                    for record in task_events
+                    if record.get("turn_id") == 1 and record.get("task_id") == 2
+                ]
                 if mutation == "missing":
                     child[-1].pop("deadline_tick")
                 elif mutation == "past":

@@ -173,6 +173,18 @@ class LocalProtocolTests(unittest.TestCase):
 
 
 class InteractiveSessionTests(unittest.TestCase):
+    def test_provider_deadline_preserves_guest_wait_margin(self) -> None:
+        guest_wait_seconds = 115.0
+        self.assertEqual(daemon.INTERACTIVE_PROVIDER_TIMEOUT_SECONDS, 100.0)
+        self.assertLess(
+            daemon.INTERACTIVE_PROVIDER_TIMEOUT_SECONDS,
+            guest_wait_seconds,
+        )
+        self.assertEqual(
+            guest_wait_seconds - daemon.INTERACTIVE_PROVIDER_TIMEOUT_SECONDS,
+            15.0,
+        )
+
     def test_two_turns_share_one_hello_and_correlation_is_session_wide(self) -> None:
         provider = QueueProvider(
             [relay.ModelReply("final", content="one"), relay.ModelReply("final", content="two")]
@@ -1340,6 +1352,69 @@ class LocalEndpointAndRenderingTests(unittest.TestCase):
             "UNTRUSTED",
         ):
             self.assertIn(expected, value)
+
+    def test_observer_compact_layout_keeps_timeline_keys_within_139_columns(
+        self,
+    ) -> None:
+        event = {
+            "type": "telemetry",
+            "tick": 1841,
+            "agent_pid": 4,
+            "actor_control_id": 4660,
+            "agent_role": "research",
+            "workflow_lifecycle_id": 3,
+            "workflow_lifecycle_generation": 2,
+            "task_id": 7,
+            "corr_id": 12,
+            "task_state": "completed",
+            "event": "artifact_published",
+            "tool": "publish_report",
+            "status": 0,
+            "context_seq": 37,
+            "source_pid": 4,
+            "target_pid": 9,
+            "wait_sleep_delta": 5,
+            "wait_wakeup_delta": 4,
+            "sched_budget_used": 14,
+            "sched_vruntime": 21,
+            "resource_used": 44,
+            "provenance": (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5),
+        }
+        output = io.StringIO()
+        observe.render_header(output, compact=True)
+        observe.render_event(event, output, json_events=False, compact=True)
+
+        header, rule, rendered = output.getvalue().splitlines()
+        self.assertEqual(len(header), 139)
+        self.assertEqual(rule, "-" * 139)
+        self.assertEqual(len(rendered), 139)
+        for expected in (
+            "1841",
+            "4660",
+            "research",
+            "3:2",
+            "completed",
+            "artifact_published",
+            "publish_report",
+            "4->9",
+            "5/4",
+            "UFTX",
+        ):
+            self.assertIn(expected, rendered)
+        self.assertTrue(observe._parser().parse_args(["--compact"]).compact)
+
+    def test_observer_compact_does_not_change_json_event_output(self) -> None:
+        event = {
+            "type": "telemetry",
+            "event": "artifact_published",
+            "agent_role": "analyst",
+            "task_id": 7,
+        }
+        regular = io.StringIO()
+        compact = io.StringIO()
+        observe.render_event(event, regular, json_events=True)
+        observe.render_event(event, compact, json_events=True, compact=True)
+        self.assertEqual(compact.getvalue(), regular.getvalue())
 
 
 if __name__ == "__main__":

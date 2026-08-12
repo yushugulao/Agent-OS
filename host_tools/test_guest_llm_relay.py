@@ -85,6 +85,17 @@ TOOL = {
     },
 }
 
+OTHER_TOOL = {
+    "name": "publish_report",
+    "description": "Publish a report",
+    "input_schema": {
+        "type": "object",
+        "properties": {"handle": {"type": "integer", "minimum": 1}},
+        "required": ["handle"],
+        "additionalProperties": False,
+    },
+}
+
 
 class ScriptedStream:
     def __init__(self, chunks: list[bytes], *, first_delay: float = 0) -> None:
@@ -889,7 +900,7 @@ class ProviderTranslationTests(unittest.TestCase):
         self.assertEqual(body1["model"], relay.DEEPSEEK_DEFAULT_MODEL)
         self.assertEqual(body1["max_tokens"], 128)
         self.assertEqual(body1["thinking"], {"type": "disabled"})
-        self.assertNotIn("parallel_tool_calls", body1)
+        self.assertIs(body1["parallel_tool_calls"], False)
         self.assertEqual(
             opener.requests[0][0].get_header("Authorization"), f"Bearer {secret}"
         )
@@ -919,13 +930,815 @@ class ProviderTranslationTests(unittest.TestCase):
         self.assertEqual(provider.complete(second).content, "slot 7 is ready")
         body2 = json.loads(opener.requests[1][0].data)
         self.assertEqual(body2["thinking"], {"type": "disabled"})
+        self.assertIs(body2["parallel_tool_calls"], False)
         self.assertNotIn("reasoning_content", body2["messages"][1])
         self.assertEqual(
             body2["messages"][1]["tool_calls"][0]["id"], "call_deepseek_1"
         )
         self.assertEqual(body2["messages"][2]["tool_call_id"], "call_deepseek_1")
 
-    def test_multiple_tool_calls_fail_instead_of_host_selecting_one(self) -> None:
+    def test_deepseek_non_tool_round_omits_parallel_tool_option(self) -> None:
+        opener = FakeOpener(
+            (
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "done",
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value = request(1, [{"role": "user", "content": "answer"}])
+        del value["model"]
+
+        reply = provider.complete(
+            relay.validate_guest_request(value, max_output_tokens=256)
+        )
+
+        self.assertEqual((reply.type, reply.content), ("final", "done"))
+        body = json.loads(opener.requests[0][0].data)
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+        self.assertNotIn("parallel_tool_calls", body)
+
+    def test_deepseek_serializes_multiple_tool_calls_and_reuses_first_call_id(self) -> None:
+        multi_call_response = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_deepseek_first",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":7}',
+                                },
+                            },
+                            {
+                                "id": "call_deepseek_discarded",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":9}',
+                                },
+                            },
+                        ],
+                    },
+                }
+            ]
+        }
+        original = json.dumps(multi_call_response, sort_keys=True)
+        parsed = relay.DeepSeekProvider._parse_response(multi_call_response)
+        self.assertEqual(
+            (parsed.type, parsed.tool, parsed.arguments, parsed.provider_call_id),
+            ("tool_use", "read_status", {"slot": 7}, "call_deepseek_first"),
+        )
+        self.assertEqual(json.dumps(multi_call_response, sort_keys=True), original)
+
+        wrong_finish = json.loads(original)
+        wrong_finish["choices"][0]["finish_reason"] = "stop"
+        with self.assertRaises(relay.ProviderError) as raised:
+            relay.DeepSeekProvider._parse_response(wrong_finish)
+        self.assertEqual(raised.exception.code, "INCOMPLETE_MODEL_RESPONSE")
+
+        malformed_first = json.loads(original)
+        malformed_first["choices"][0]["message"]["tool_calls"][0]["function"][
+            "arguments"
+        ] = {"slot": 7}
+        with self.assertRaises(relay.ProviderError) as raised:
+            relay.DeepSeekProvider._parse_response(malformed_first)
+        self.assertEqual(raised.exception.code, "BAD_PROVIDER_RESPONSE")
+
+        opener = FakeOpener(
+            (
+                FakeResponse(multi_call_response),
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "ready"},
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        first = relay.validate_guest_request(
+            request(
+                1,
+                [{"role": "user", "content": "read"}],
+                model=relay.DEEPSEEK_DEFAULT_MODEL,
+                tools=[TOOL],
+            ),
+            max_output_tokens=256,
+        )
+        self.assertEqual(provider.complete(first).provider_call_id, "call_deepseek_first")
+        second = relay.validate_guest_request(
+            request(
+                2,
+                [
+                    {"role": "user", "content": "read"},
+                    {
+                        "role": "assistant",
+                        "tool_use": {
+                            "corr_id": 1,
+                            "tool": "read_status",
+                            "arguments": {"slot": 7},
+                        },
+                    },
+                    {"role": "tool", "tool_corr_id": 1, "content": "ready"},
+                ],
+                model=relay.DEEPSEEK_DEFAULT_MODEL,
+                tools=[TOOL],
+            ),
+            max_output_tokens=256,
+        )
+        self.assertEqual(provider.complete(second).content, "ready")
+        body = json.loads(opener.requests[1][0].data)
+        self.assertEqual(
+            body["messages"][1]["tool_calls"][0]["id"], "call_deepseek_first"
+        )
+        self.assertEqual(body["messages"][2]["tool_call_id"], "call_deepseek_first")
+        self.assertNotIn("call_deepseek_discarded", json.dumps(body))
+
+    def test_deepseek_forced_tool_selects_matching_call_and_binds_its_id(self) -> None:
+        multi_call_response = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_wrong_first",
+                                "type": "function",
+                                "function": {
+                                    "name": "publish_report",
+                                    "arguments": '{"slot":3}',
+                                },
+                            },
+                            {
+                                "id": "call_forced_invalid",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":"seven"}',
+                                },
+                            },
+                            {
+                                "id": "call_forced_match",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":7}',
+                                },
+                            },
+                        ],
+                    },
+                }
+            ]
+        }
+        original = json.dumps(multi_call_response, sort_keys=True)
+        parsed = relay.DeepSeekProvider._parse_response(
+            multi_call_response,
+            forced_tool="read_status",
+            forced_schema=TOOL["input_schema"],
+        )
+        self.assertEqual(
+            (parsed.tool, parsed.arguments, parsed.provider_call_id),
+            ("read_status", {"slot": 7}, "call_forced_match"),
+        )
+        self.assertEqual(json.dumps(multi_call_response, sort_keys=True), original)
+
+        opener = FakeOpener(
+            (
+                FakeResponse(multi_call_response),
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "ready"},
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        first_value = request(
+            1,
+            [{"role": "user", "content": "read"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[OTHER_TOOL, TOOL],
+        )
+        first_value["tool_choice"] = {"tool": "read_status"}
+        first = relay.validate_guest_request(first_value, max_output_tokens=256)
+        self.assertEqual(provider.complete(first).provider_call_id, "call_forced_match")
+        first_body = json.loads(opener.requests[0][0].data)
+        self.assertEqual(
+            first_body["tool_choice"],
+            {"type": "function", "function": {"name": "read_status"}},
+        )
+        self.assertEqual(
+            [item["function"]["name"] for item in first_body["tools"]],
+            ["read_status"],
+        )
+        self.assertEqual(
+            first_body["tools"][0]["function"]["parameters"], TOOL["input_schema"]
+        )
+
+        second = relay.validate_guest_request(
+            request(
+                2,
+                [
+                    {"role": "user", "content": "read"},
+                    {
+                        "role": "assistant",
+                        "tool_use": {
+                            "corr_id": 1,
+                            "tool": "read_status",
+                            "arguments": {"slot": 7},
+                        },
+                    },
+                    {"role": "tool", "tool_corr_id": 1, "content": "ready"},
+                ],
+                model=relay.DEEPSEEK_DEFAULT_MODEL,
+                tools=[TOOL],
+            ),
+            max_output_tokens=256,
+        )
+        self.assertEqual(provider.complete(second).content, "ready")
+        second_body = json.loads(opener.requests[1][0].data)
+        self.assertEqual(
+            second_body["messages"][1]["tool_calls"][0]["id"],
+            "call_forced_match",
+        )
+        self.assertEqual(
+            second_body["messages"][2]["tool_call_id"], "call_forced_match"
+        )
+        self.assertNotIn("call_wrong_first", json.dumps(second_body))
+        self.assertNotIn("call_forced_invalid", json.dumps(second_body))
+
+    def test_deepseek_exact_choice_accepts_sixteenth_attempt(self) -> None:
+        self.assertEqual(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS, 16)
+        invalid = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_invalid_attempt",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":"seven"}',
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        valid = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_valid_retry",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":7}',
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        opener = FakeOpener(
+            tuple(
+                FakeResponse(invalid)
+                for _ in range(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS - 1)
+            )
+            + (
+                FakeResponse(valid),
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "ready"},
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        first_value = request(
+            1,
+            [{"role": "user", "content": "read"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        first_value["tool_choice"] = {"tool": "read_status"}
+        first = relay.validate_guest_request(first_value, max_output_tokens=256)
+
+        ticks = iter(100.0 + index / 100 for index in range(100))
+        with mock.patch.object(relay.time, "monotonic", side_effect=lambda: next(ticks)):
+            reply = provider.complete(first, deadline_monotonic=130.0)
+
+        self.assertEqual(
+            (reply.tool, reply.arguments, reply.provider_call_id),
+            ("read_status", {"slot": 7}, "call_valid_retry"),
+        )
+        self.assertEqual(
+            len(opener.requests), relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS
+        )
+        exact_body = json.loads(opener.requests[0][0].data)
+        retry_body = json.loads(opener.requests[1][0].data)
+        self.assertNotEqual(opener.requests[0][0].data, opener.requests[1][0].data)
+        self.assertTrue(
+            all(
+                item[0].data == opener.requests[1][0].data
+                for item in opener.requests[1:]
+            )
+        )
+        self.assertEqual(
+            exact_body["tool_choice"],
+            {"type": "function", "function": {"name": "read_status"}},
+        )
+        self.assertEqual(retry_body["tool_choice"], "required")
+        self.assertEqual(retry_body["messages"][0]["role"], "system")
+        repair = retry_body["messages"][0]["content"]
+        self.assertIn("exactly one call to read_status", repair)
+        self.assertIn(
+            json.dumps(
+                TOOL["input_schema"], sort_keys=True, separators=(",", ":")
+            ),
+            repair,
+        )
+        self.assertEqual(
+            [item["function"]["name"] for item in exact_body["tools"]],
+            ["read_status"],
+        )
+        self.assertEqual(
+            exact_body["tools"][0]["function"]["parameters"], TOOL["input_schema"]
+        )
+        request_timeouts = [item[1] for item in opener.requests]
+        self.assertTrue(
+            all(
+                current > following
+                for current, following in zip(request_timeouts, request_timeouts[1:])
+            )
+        )
+
+        second = relay.validate_guest_request(
+            request(
+                2,
+                [
+                    {"role": "user", "content": "read"},
+                    {
+                        "role": "assistant",
+                        "tool_use": {
+                            "corr_id": 1,
+                            "tool": "read_status",
+                            "arguments": {"slot": 7},
+                        },
+                    },
+                    {"role": "tool", "tool_corr_id": 1, "content": "ready"},
+                ],
+                model=relay.DEEPSEEK_DEFAULT_MODEL,
+                tools=[OTHER_TOOL, TOOL],
+            ),
+            max_output_tokens=256,
+        )
+        self.assertEqual(provider.complete(second).content, "ready")
+        history_body = json.loads(
+            opener.requests[relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS][0].data
+        )
+        self.assertEqual(
+            [item["function"]["name"] for item in history_body["tools"]],
+            ["publish_report", "read_status"],
+        )
+        self.assertEqual(
+            history_body["messages"][1]["tool_calls"][0]["id"],
+            "call_valid_retry",
+        )
+        self.assertEqual(
+            history_body["messages"][2]["tool_call_id"], "call_valid_retry"
+        )
+        self.assertNotIn("call_invalid_attempt", json.dumps(history_body))
+
+    def test_deepseek_forced_tool_rejects_multiple_calls_without_match(self) -> None:
+        response = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_wrong_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "publish_report",
+                                    "arguments": "{}",
+                                },
+                            },
+                            {
+                                "id": "call_wrong_2",
+                                "type": "function",
+                                "function": {
+                                    "name": "delegate_task",
+                                    "arguments": "{}",
+                                },
+                            },
+                        ]
+                    },
+                }
+            ]
+        }
+        original = json.dumps(response, sort_keys=True)
+
+        with self.assertRaises(relay.ProviderError) as raised:
+            relay.DeepSeekProvider._parse_response(
+                response, forced_tool="read_status"
+            )
+
+        self.assertEqual(raised.exception.code, "TOOL_CHOICE_MISMATCH")
+        self.assertIn("read_status", raised.exception.public_message)
+        self.assertEqual(json.dumps(response, sort_keys=True), original)
+
+    def test_deepseek_forced_tool_rejects_single_wrong_call_after_parse(self) -> None:
+        wrong_response = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_wrong",
+                                "type": "function",
+                                "function": {
+                                    "name": "publish_report",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        opener = FakeOpener(
+            tuple(
+                FakeResponse(wrong_response)
+                for _ in range(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS)
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value = request(
+            1,
+            [{"role": "user", "content": "read"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        value["tool_choice"] = {"tool": "read_status"}
+
+        with self.assertRaises(relay.ProviderError) as raised:
+            provider.complete(
+                relay.validate_guest_request(value, max_output_tokens=256)
+            )
+
+        self.assertEqual(raised.exception.code, "TOOL_CHOICE_MISMATCH")
+        self.assertIn("read_status", raised.exception.public_message)
+        self.assertEqual(
+            len(opener.requests), relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS
+        )
+        with self.assertRaises(relay.ProviderError) as unbound:
+            provider._provider_call_id(1)
+        self.assertEqual(unbound.exception.code, "UNKNOWN_TOOL_CALL")
+
+    def test_deepseek_exact_choice_fails_after_sixteenth_schema_mismatch(self) -> None:
+        self.assertEqual(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS, 16)
+        invalid_response = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_invalid_arguments",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":"seven"}',
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        opener = FakeOpener(
+            tuple(
+                FakeResponse(invalid_response)
+                for _ in range(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS)
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value = request(
+            1,
+            [{"role": "user", "content": "read"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        value["tool_choice"] = {"tool": "read_status"}
+
+        with self.assertRaises(relay.ProviderError) as raised:
+            provider.complete(
+                relay.validate_guest_request(value, max_output_tokens=256)
+            )
+
+        self.assertEqual(raised.exception.code, "TOOL_ARGUMENT_SCHEMA_MISMATCH")
+        self.assertTrue(raised.exception.retryable)
+        self.assertIn("read_status", raised.exception.public_message)
+        self.assertEqual(
+            len(opener.requests), relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS
+        )
+        request_bodies = [item[0].data for item in opener.requests]
+        self.assertNotEqual(request_bodies[0], request_bodies[1])
+        self.assertTrue(all(body == request_bodies[1] for body in request_bodies[1:]))
+
+    def test_deepseek_publish_retry_explains_that_call_requests_approval(self) -> None:
+        invalid = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "await approval"},
+                }
+            ]
+        }
+        valid = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_publish_after_repair",
+                                "type": "function",
+                                "function": {
+                                    "name": "publish_report",
+                                    "arguments": '{"handle":7}',
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        opener = FakeOpener((FakeResponse(invalid), FakeResponse(valid)))
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value = request(
+            1,
+            [{"role": "user", "content": "publish the verified report"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[OTHER_TOOL],
+        )
+        value["tool_choice"] = {"tool": "publish_report"}
+
+        reply = provider.complete(
+            relay.validate_guest_request(value, max_output_tokens=256)
+        )
+
+        self.assertEqual(
+            (reply.tool, reply.arguments, reply.provider_call_id),
+            ("publish_report", {"handle": 7}, "call_publish_after_repair"),
+        )
+        retry_body = json.loads(opener.requests[1][0].data)
+        repair = retry_body["messages"][0]["content"]
+        self.assertIn("Calling publish_report itself requests approval", repair)
+        self.assertIn("do not wait for approval before making the call", repair)
+
+    def test_deepseek_exact_choice_retry_never_crosses_deadline(self) -> None:
+        invalid = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_invalid",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":"seven"}',
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        opener = FakeOpener((FakeResponse(invalid), FakeResponse(invalid)))
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value = request(
+            1,
+            [{"role": "user", "content": "read"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        value["tool_choice"] = {"tool": "read_status"}
+
+        with mock.patch.object(
+            relay.time, "monotonic", side_effect=(100.0, 100.0, 102.0)
+        ):
+            with self.assertRaises(relay.ProviderError) as raised:
+                provider.complete(
+                    relay.validate_guest_request(value, max_output_tokens=256),
+                    deadline_monotonic=101.0,
+                )
+
+        self.assertEqual(raised.exception.code, "SESSION_TIMEOUT")
+        self.assertEqual(len(opener.requests), 1)
+
+    def test_deepseek_non_exact_response_error_is_not_retried(self) -> None:
+        malformed = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_malformed",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": {"slot": 7},
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        opener = FakeOpener((FakeResponse(malformed), FakeResponse(malformed)))
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value = relay.validate_guest_request(
+            request(
+                1,
+                [{"role": "user", "content": "read"}],
+                model=relay.DEEPSEEK_DEFAULT_MODEL,
+                tools=[TOOL],
+            ),
+            max_output_tokens=256,
+        )
+
+        with self.assertRaises(relay.ProviderError) as raised:
+            provider.complete(value)
+
+        self.assertEqual(raised.exception.code, "BAD_PROVIDER_RESPONSE")
+        self.assertEqual(len(opener.requests), 1)
+
+    def test_deepseek_exact_choice_network_error_is_not_retried(self) -> None:
+        opener = FakeOpener(
+            (
+                urllib.error.URLError("offline"),
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "unused"},
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value = request(
+            1,
+            [{"role": "user", "content": "read"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        value["tool_choice"] = {"tool": "read_status"}
+
+        with self.assertRaises(relay.ProviderError) as raised:
+            provider.complete(
+                relay.validate_guest_request(value, max_output_tokens=256)
+            )
+
+        self.assertEqual(raised.exception.code, "PROVIDER_UNAVAILABLE")
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(len(opener.requests), 1)
+
+    def test_deepseek_schema_check_enforces_nexus_argument_constraints(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "role": {
+                    "type": "string",
+                    "enum": ["system", "research", "analyst"],
+                },
+                "task_type": {
+                    "type": "string",
+                    "enum": [
+                        "system_snapshot",
+                        "local_research",
+                        "compose_report",
+                    ],
+                },
+                "objective": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": r"^(?!.*[A-Z])[ -~]{1,64}$",
+                },
+                "input_handle": {"type": "integer", "minimum": 1},
+            },
+            "required": ["role", "task_type", "objective"],
+            "additionalProperties": False,
+        }
+        valid = {
+            "role": "analyst",
+            "task_type": "compose_report",
+            "objective": "compose evidence report",
+            "input_handle": 7,
+        }
+        self.assertTrue(relay._json_value_matches_schema(valid, schema))
+        for invalid in (
+            {**valid, "role": "Analyst"},
+            {**valid, "task_type": "analysis"},
+            {**valid, "objective": "Compose report"},
+            {**valid, "objective": "x" * 65},
+            {**valid, "input_handle": 0},
+            {**valid, "extra": "not advertised"},
+            {key: item for key, item in valid.items() if key != "objective"},
+        ):
+            with self.subTest(arguments=invalid):
+                self.assertFalse(relay._json_value_matches_schema(invalid, schema))
+
+    def test_generic_multiple_tool_calls_fail_instead_of_host_selecting_one(self) -> None:
         response = {
             "choices": [
                 {
@@ -1065,12 +1878,19 @@ class ProviderTranslationTests(unittest.TestCase):
 
 class HttpsSecurityTests(unittest.TestCase):
     def test_http_timeout_stays_below_guest_wait_budget(self) -> None:
+        guest_wait_seconds = 115.0
+        self.assertEqual(relay.MAX_HTTP_TIMEOUT_SECONDS, 100.0)
+        self.assertLess(relay.MAX_HTTP_TIMEOUT_SECONDS, guest_wait_seconds)
+        self.assertEqual(
+            guest_wait_seconds - relay.MAX_HTTP_TIMEOUT_SECONDS,
+            15.0,
+        )
         relay.JsonHttpsClient(
             "https://api.example/v1/messages",
             timeout_seconds=relay.MAX_HTTP_TIMEOUT_SECONDS,
             opener=FakeOpener(()),
         )
-        with self.assertRaisesRegex(ValueError, "80"):
+        with self.assertRaisesRegex(ValueError, "100"):
             relay.JsonHttpsClient(
                 "https://api.example/v1/messages",
                 timeout_seconds=relay.MAX_HTTP_TIMEOUT_SECONDS + 0.001,

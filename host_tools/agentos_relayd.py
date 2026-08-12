@@ -37,13 +37,16 @@ MAX_LOCAL_CLIENTS = 8
 MAX_CLIENT_QUEUE = 128
 MAX_PEER_INBOUND_QUEUE = 32
 MAX_LOCAL_DRAIN = 16
+MAX_MODEL_ERROR_MESSAGE_BYTES = 240
 SERIAL_WRITE_TIMEOUT_SECONDS = 5.0
 APPROVAL_TIMEOUT_SECONDS = 25.0
-INTERACTIVE_PROVIDER_TIMEOUT_SECONDS = 80.0
+NEXUS_APPROVAL_TIMEOUT_SECONDS = 90.0
+INTERACTIVE_PROVIDER_TIMEOUT_SECONDS = 100.0
 SHUTDOWN_GRACE_SECONDS = 5.0
 DEFAULT_BOOT_TIMEOUT_SECONDS = 120.0
 READY_LINE = relay.GUEST_RELAY_READY_LINE
 NEXUS_READY_LINE = b"agentnexus_ucore: relay_ready=1 nexus=1"
+NEXUS_MAX_ROUNDS = 16
 NEXUS_FEATURES = ("task_event_v1",)
 NEXUS_APPROVAL_TOOL_IDS = {"publish_report": 1004}
 NEXUS_GUEST_KINDS = relay.WIRE_V2_GUEST_KINDS | frozenset(("TASK_EVENT",))
@@ -279,6 +282,13 @@ def _text(value: object, label: str, *, maximum: int, empty: bool = False) -> st
     return value
 
 
+def _utf8_prefix(value: str, maximum: int) -> str:
+    raw = value.encode("utf-8")
+    if len(raw) <= maximum:
+        return value
+    return raw[:maximum].decode("utf-8", errors="ignore")
+
+
 @dataclass
 class ActiveTurn:
     turn_id: int
@@ -310,19 +320,30 @@ class InteractiveSession:
         telemetry_sink: Callable[[Mapping[str, object]], None],
         session_id: str | None = None,
         max_payload: int = relay.PROTOCOL_MAX_PAYLOAD_BYTES,
-        max_rounds: int = relay.DEFAULT_MAX_ROUNDS,
+        max_rounds: int | None = None,
         max_tokens: int = relay.DEFAULT_MAX_OUTPUT_TOKENS,
         guest_profile: str = "agentlive",
     ) -> None:
-        if not 1 <= max_rounds <= relay.DEFAULT_MAX_ROUNDS:
-            raise ValueError("max_rounds is outside Guest policy")
-        if not 1 <= max_tokens <= relay.MAX_OUTPUT_TOKENS:
-            raise ValueError("max_tokens is outside Host policy")
         if (
             not isinstance(guest_profile, str)
             or guest_profile not in local.GUEST_PROFILES
         ):
             raise ValueError("Guest profile is unsupported")
+        profile_max_rounds = (
+            NEXUS_MAX_ROUNDS
+            if guest_profile == "nexus"
+            else relay.DEFAULT_MAX_ROUNDS
+        )
+        if max_rounds is None:
+            max_rounds = profile_max_rounds
+        if (
+            not isinstance(max_rounds, int)
+            or isinstance(max_rounds, bool)
+            or not 1 <= max_rounds <= profile_max_rounds
+        ):
+            raise ValueError("max_rounds is outside Guest profile policy")
+        if not 1 <= max_tokens <= relay.MAX_OUTPUT_TOKENS:
+            raise ValueError("max_tokens is outside Host policy")
         self.provider = provider
         defer_call_commits = getattr(provider, "defer_call_commits", None)
         if callable(defer_call_commits):
@@ -332,6 +353,11 @@ class InteractiveSession:
         self.telemetry_sink = telemetry_sink
         self.session_id = session_id or secrets.token_hex(16)
         self.guest_profile = guest_profile
+        self.approval_timeout_seconds = (
+            NEXUS_APPROVAL_TIMEOUT_SECONDS
+            if guest_profile == "nexus"
+            else APPROVAL_TIMEOUT_SECONDS
+        )
         self.max_tool_arguments = (
             relay.MAX_NEXUS_TOOL_ARGUMENTS
             if guest_profile == "nexus"
@@ -735,7 +761,9 @@ class InteractiveSession:
                 **envelope,
                 "type": "error",
                 "code": error.code,
-                "message": error.public_message[:256],
+                "message": _utf8_prefix(
+                    error.public_message, MAX_MODEL_ERROR_MESSAGE_BYTES
+                ),
                 "retryable": error.retryable,
             },
         )
@@ -1025,11 +1053,11 @@ class InteractiveSession:
         approval_policy_key = self._session_approval_key(binding)
         if approval_policy_key in self.session_approvals:
             self.pending_approval = binding
-            self._approval_deadline = time.monotonic() + APPROVAL_TIMEOUT_SECONDS
+            self._approval_deadline = time.monotonic() + self.approval_timeout_seconds
             self._send_approval(binding, "session")
             return
         self.pending_approval = binding
-        self._approval_deadline = time.monotonic() + APPROVAL_TIMEOUT_SECONDS
+        self._approval_deadline = time.monotonic() + self.approval_timeout_seconds
         event = {"type": "approval_request", **binding}
         self._controller(event)
         self._telemetry(
@@ -1960,7 +1988,7 @@ class InteractiveRelayDaemon:
         provider_name: str,
         model_name: str,
         max_payload: int,
-        max_rounds: int,
+        max_rounds: int | None,
         max_tokens: int,
         boot_timeout: float,
         quiet: bool = False,
@@ -2261,7 +2289,7 @@ def _parser() -> argparse.ArgumentParser:
     keys.add_argument("--api-key-file", type=Path)
     parser.add_argument("--anthropic-version", default="2023-06-01")
     parser.add_argument("--replay-file", type=Path)
-    parser.add_argument("--max-rounds", type=int, default=relay.DEFAULT_MAX_ROUNDS)
+    parser.add_argument("--max-rounds", type=int, default=None)
     parser.add_argument("--max-output-tokens", type=int, default=relay.DEFAULT_MAX_OUTPUT_TOKENS)
     parser.add_argument("--max-payload-bytes", type=int, default=relay.PROTOCOL_MAX_PAYLOAD_BYTES)
     parser.add_argument("--http-timeout", type=float, default=relay.DEFAULT_HTTP_TIMEOUT_SECONDS)

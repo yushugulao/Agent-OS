@@ -82,7 +82,7 @@ DEFAULT_MAX_ROUNDS = 8
 DEFAULT_MAX_OUTPUT_TOKENS = 1024
 MAX_OUTPUT_TOKENS = 2048
 DEFAULT_HTTP_TIMEOUT_SECONDS = 45.0
-MAX_HTTP_TIMEOUT_SECONDS = 80.0
+MAX_HTTP_TIMEOUT_SECONDS = 100.0
 DEFAULT_SESSION_TIMEOUT_SECONDS = 600.0
 DEFAULT_BOOT_TIMEOUT_SECONDS = 120.0
 DEFAULT_IDLE_TIMEOUT_SECONDS = 120.0
@@ -884,7 +884,7 @@ class OpenAICompatibleProvider(_ProtocolProvider):
             "max_completion_tokens" if hostname == "api.openai.com" else "max_tokens"
         )
         body[token_field] = request["max_tokens"]
-        tools = request.get("tools", [])
+        tools = self._request_tools(request)
         if tools:
             body["tools"] = [
                 {
@@ -903,15 +903,67 @@ class OpenAICompatibleProvider(_ProtocolProvider):
         for key in ("temperature", "stop"):
             if key in request:
                 body[key] = request[key]
-        response = self.client.post(
-            body,
-            {"Authorization": f"Bearer {self._api_key}"},
-            deadline_monotonic=deadline_monotonic,
-        )
-        reply = self._parse_response(response)
+        attempt_limit = self._response_attempt_limit(request)
+        attempt = 0
+        while True:
+            attempt += 1
+            response = self.client.post(
+                body,
+                {"Authorization": f"Bearer {self._api_key}"},
+                deadline_monotonic=deadline_monotonic,
+            )
+            try:
+                reply = self._parse_response_for_request(response, request)
+            except ProviderError as error:
+                if attempt >= attempt_limit or not self._retry_response_error(
+                    request, error
+                ):
+                    raise
+                if (
+                    deadline_monotonic is not None
+                    and time.monotonic() >= deadline_monotonic
+                ):
+                    raise ProviderError(
+                        "SESSION_TIMEOUT",
+                        "session deadline expired before provider retry",
+                    ) from None
+                body = self._response_retry_body(request, body, error)
+                continue
+            break
         if reply.type == "tool_use":
             self._commit_immediately(request["corr_id"], reply)
         return reply
+
+    def _response_attempt_limit(self, request: Mapping[str, object]) -> int:
+        del request
+        return 1
+
+    def _request_tools(self, request: Mapping[str, object]) -> Sequence[object]:
+        tools = request.get("tools", [])
+        return tools if isinstance(tools, list) else ()
+
+    def _retry_response_error(
+        self, request: Mapping[str, object], error: ProviderError
+    ) -> bool:
+        del request, error
+        return False
+
+    def _response_retry_body(
+        self,
+        request: Mapping[str, object],
+        body: Mapping[str, object],
+        error: ProviderError,
+    ) -> Mapping[str, object]:
+        del request, error
+        return body
+
+    def _parse_response_for_request(
+        self,
+        response: Mapping[str, object],
+        request: Mapping[str, object],
+    ) -> ModelReply:
+        del request
+        return self._parse_response(response)
 
     def _messages(self, request: Mapping[str, object]) -> list[dict[str, object]]:
         translated: list[dict[str, object]] = []
@@ -1032,16 +1084,338 @@ class OpenAICompatibleProvider(_ProtocolProvider):
 class DeepSeekProvider(OpenAICompatibleProvider):
     """DeepSeek's documented OpenAI-compatible Chat Completions profile."""
 
+    EXACT_CHOICE_ATTEMPTS = 16
+
     def _provider_options(self, *, has_tools: bool) -> dict[str, object]:
-        del has_tools
         # DeepSeek V4 defaults to thinking mode.  Thinking tool turns require
         # reasoning_content to be replayed verbatim, but that provider-private
         # chain of thought is intentionally absent from the Guest-owned wire.
         # Select documented non-thinking mode rather than making the Host keep
-        # hidden semantic history.  DeepSeek does not document OpenAI's
-        # parallel_tool_calls option; multiple calls still fail closed while
-        # parsing the response below.
-        return {"thinking": {"type": "disabled"}}
+        # hidden semantic history.  Tool turns also opt out of parallel calls
+        # so the provider follows the Guest protocol's one-call-per-round
+        # contract.  Some DeepSeek models still return several calls, so the
+        # response adapter below serializes them at the protocol boundary.
+        options: dict[str, object] = {"thinking": {"type": "disabled"}}
+        if has_tools:
+            options["parallel_tool_calls"] = False
+        return options
+
+    @staticmethod
+    def _forced_tool_name(request: Mapping[str, object]) -> str | None:
+        choice = request.get("tool_choice")
+        forced_tool = choice.get("tool") if isinstance(choice, Mapping) else None
+        return forced_tool if isinstance(forced_tool, str) else None
+
+    def _response_attempt_limit(self, request: Mapping[str, object]) -> int:
+        return (
+            self.EXACT_CHOICE_ATTEMPTS
+            if self._forced_tool_name(request) is not None
+            else 1
+        )
+
+    def _request_tools(self, request: Mapping[str, object]) -> Sequence[object]:
+        tools = super()._request_tools(request)
+        forced_tool = self._forced_tool_name(request)
+        if forced_tool is None:
+            return tools
+        return tuple(
+            tool
+            for tool in tools
+            if isinstance(tool, Mapping) and tool.get("name") == forced_tool
+        )
+
+    def _retry_response_error(
+        self, request: Mapping[str, object], error: ProviderError
+    ) -> bool:
+        return (
+            self._forced_tool_name(request) is not None
+            and error.retryable
+            and error.code
+            in ("TOOL_CHOICE_MISMATCH", "TOOL_ARGUMENT_SCHEMA_MISMATCH")
+        )
+
+    def _response_retry_body(
+        self,
+        request: Mapping[str, object],
+        body: Mapping[str, object],
+        error: ProviderError,
+    ) -> Mapping[str, object]:
+        del error
+        forced_tool = self._forced_tool_name(request)
+        if forced_tool is None or body.get("tool_choice") == "required":
+            return body
+        matching_tools = [
+            tool
+            for tool in request.get("tools", [])
+            if isinstance(tool, Mapping) and tool.get("name") == forced_tool
+        ]
+        if len(matching_tools) != 1 or not isinstance(
+            matching_tools[0].get("input_schema"), Mapping
+        ):
+            raise ProviderError(
+                "BAD_REQUEST", "forced tool choice is not uniquely advertised"
+            )
+        schema = matching_tools[0]["input_schema"]
+        schema_text = json.dumps(
+            schema,
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        instruction = (
+            "Trusted relay repair: return exactly one call to "
+            f"{forced_tool} and no text. Its arguments must be one JSON object "
+            f"matching this schema exactly: {schema_text}."
+        )
+        if forced_tool == "publish_report":
+            instruction += (
+                " Calling publish_report itself requests approval; do not wait for "
+                "approval before making the call."
+            )
+
+        retry_body = dict(body)
+        retry_body["tool_choice"] = "required"
+        messages_value = body.get("messages", [])
+        messages = [
+            dict(message) if isinstance(message, Mapping) else message
+            for message in messages_value
+        ]
+        if (
+            messages
+            and isinstance(messages[0], dict)
+            and messages[0].get("role") == "system"
+            and isinstance(messages[0].get("content"), str)
+        ):
+            messages[0]["content"] = f"{messages[0]['content']}\n\n{instruction}"
+        else:
+            messages.insert(0, {"role": "system", "content": instruction})
+        retry_body["messages"] = messages
+        return retry_body
+
+    def _parse_response_for_request(
+        self,
+        response: Mapping[str, object],
+        request: Mapping[str, object],
+    ) -> ModelReply:
+        forced_tool = self._forced_tool_name(request)
+        forced_schema: Mapping[str, object] | None = None
+        if forced_tool is not None:
+            matching_tools = [
+                tool
+                for tool in request.get("tools", [])
+                if isinstance(tool, Mapping) and tool.get("name") == forced_tool
+            ]
+            if len(matching_tools) != 1 or not isinstance(
+                matching_tools[0].get("input_schema"), Mapping
+            ):
+                raise ProviderError(
+                    "BAD_REQUEST", "forced tool choice is not uniquely advertised"
+                )
+            forced_schema = matching_tools[0]["input_schema"]  # type: ignore[assignment]
+        reply = self._parse_response(
+            response,
+            forced_tool=forced_tool,
+            forced_schema=forced_schema,
+        )
+        if forced_tool is not None and (
+            reply.type != "tool_use" or reply.tool != forced_tool
+        ):
+            raise ProviderError(
+                "TOOL_CHOICE_MISMATCH",
+                f"DeepSeek did not return the forced tool {forced_tool!r}",
+                retryable=True,
+            )
+        return reply
+
+    @staticmethod
+    def _parse_response(
+        response: Mapping[str, object],
+        *,
+        forced_tool: str | None = None,
+        forced_schema: Mapping[str, object] | None = None,
+    ) -> ModelReply:
+        choices = response.get("choices")
+        if (
+            not isinstance(choices, list)
+            or not choices
+            or not isinstance(choices[0], dict)
+        ):
+            return OpenAICompatibleProvider._parse_response(response)
+        choice = choices[0]
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            return OpenAICompatibleProvider._parse_response(response)
+        tool_calls = message.get("tool_calls", [])
+        if not isinstance(tool_calls, list):
+            return OpenAICompatibleProvider._parse_response(response)
+
+        if forced_tool is not None and tool_calls:
+            saw_matching_call = False
+            saw_schema_mismatch = False
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if not isinstance(function, dict) or function.get("name") != forced_tool:
+                    continue
+                saw_matching_call = True
+                serial_response = DeepSeekProvider._single_tool_response(
+                    response, choices, choice, message, call
+                )
+                try:
+                    reply = OpenAICompatibleProvider._parse_response(serial_response)
+                except ProviderError:
+                    continue
+                if (
+                    reply.type == "tool_use"
+                    and reply.tool == forced_tool
+                    and reply.arguments is not None
+                    and (
+                        forced_schema is None
+                        or _json_value_matches_schema(reply.arguments, forced_schema)
+                    )
+                ):
+                    return reply
+                if reply.type == "tool_use" and reply.tool == forced_tool:
+                    saw_schema_mismatch = True
+            if saw_schema_mismatch:
+                raise ProviderError(
+                    "TOOL_ARGUMENT_SCHEMA_MISMATCH",
+                    f"DeepSeek returned no schema-valid call for forced tool {forced_tool!r}",
+                    retryable=True,
+                )
+            raise ProviderError(
+                "TOOL_CHOICE_MISMATCH",
+                (
+                    f"DeepSeek returned no well-formed call for forced tool {forced_tool!r}"
+                    if saw_matching_call
+                    else f"DeepSeek returned no call for forced tool {forced_tool!r}"
+                ),
+                retryable=True,
+            )
+
+        if len(tool_calls) <= 1:
+            return OpenAICompatibleProvider._parse_response(response)
+
+        # DeepSeek may ignore parallel_tool_calls=false.  Give the Guest only
+        # the first call and let the next model round decide what to do after
+        # seeing its result.  Copy every edited container so callers retain the
+        # exact provider response for diagnostics.
+        serial_response = DeepSeekProvider._single_tool_response(
+            response, choices, choice, message, tool_calls[0]
+        )
+        return OpenAICompatibleProvider._parse_response(serial_response)
+
+    @staticmethod
+    def _single_tool_response(
+        response: Mapping[str, object],
+        choices: list[object],
+        choice: Mapping[str, object],
+        message: Mapping[str, object],
+        tool_call: object,
+    ) -> dict[str, object]:
+        serial_message = dict(message)
+        serial_message["tool_calls"] = [tool_call]
+        serial_choice = dict(choice)
+        serial_choice["message"] = serial_message
+        serial_response = dict(response)
+        serial_response["choices"] = [serial_choice, *choices[1:]]
+        return serial_response
+
+
+def _json_value_matches_schema(
+    value: object, schema: Mapping[str, object]
+) -> bool:
+    """Validate the bounded JSON-Schema subset advertised by Guest tools."""
+
+    expected_type = schema.get("type")
+    if expected_type is not None:
+        type_matches = {
+            "object": isinstance(value, dict),
+            "string": isinstance(value, str),
+            "integer": isinstance(value, int) and not isinstance(value, bool),
+            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+            "boolean": isinstance(value, bool),
+            "null": value is None,
+        }
+        if not isinstance(expected_type, str) or not type_matches.get(
+            expected_type, False
+        ):
+            return False
+
+    enum = schema.get("enum")
+    if enum is not None:
+        if not isinstance(enum, list) or not any(
+            type(candidate) is type(value) and candidate == value for candidate in enum
+        ):
+            return False
+
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        additional = schema.get("additionalProperties", True)
+        if not isinstance(properties, Mapping) or not isinstance(required, list):
+            return False
+        if not isinstance(additional, (bool, Mapping)):
+            return False
+        if not all(isinstance(key, str) for key in required):
+            return False
+        if any(key not in value for key in required):
+            return False
+        for key, item in value.items():
+            property_schema = properties.get(key)
+            if property_schema is None:
+                if additional is False:
+                    return False
+                if isinstance(additional, Mapping) and not _json_value_matches_schema(
+                    item, additional
+                ):
+                    return False
+                continue
+            if not isinstance(property_schema, Mapping) or not _json_value_matches_schema(
+                item, property_schema
+            ):
+                return False
+
+    if isinstance(value, str):
+        for keyword, comparator in (
+            ("minLength", lambda actual, limit: actual >= limit),
+            ("maxLength", lambda actual, limit: actual <= limit),
+        ):
+            limit = schema.get(keyword)
+            if limit is not None and (
+                not isinstance(limit, int)
+                or isinstance(limit, bool)
+                or limit < 0
+                or not comparator(len(value), limit)
+            ):
+                return False
+        pattern = schema.get("pattern")
+        if pattern is not None:
+            if not isinstance(pattern, str):
+                return False
+            try:
+                if re.search(pattern, value) is None:
+                    return False
+            except re.error:
+                return False
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        for keyword, comparator in (
+            ("minimum", lambda actual, limit: actual >= limit),
+            ("maximum", lambda actual, limit: actual <= limit),
+            ("exclusiveMinimum", lambda actual, limit: actual > limit),
+            ("exclusiveMaximum", lambda actual, limit: actual < limit),
+        ):
+            limit = schema.get(keyword)
+            if limit is not None and (
+                not isinstance(limit, (int, float))
+                or isinstance(limit, bool)
+                or not comparator(value, limit)
+            ):
+                return False
+    return True
 
 
 def _openai_content_text(value: object) -> str:

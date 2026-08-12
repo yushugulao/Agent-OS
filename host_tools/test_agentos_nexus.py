@@ -56,7 +56,9 @@ class BlockingProvider:
 
 
 class SessionHarness:
-    def __init__(self, profile: str, provider=None) -> None:
+    def __init__(
+        self, profile: str, provider=None, *, max_rounds: int | None = None
+    ) -> None:
         self.lines: list[bytes] = []
         self.controller: list[dict[str, object]] = []
         self.telemetry: list[dict[str, object]] = []
@@ -66,6 +68,7 @@ class SessionHarness:
             controller_sink=lambda value: self.controller.append(dict(value)),
             telemetry_sink=lambda value: self.telemetry.append(dict(value)),
             session_id=SESSION,
+            max_rounds=max_rounds,
             guest_profile=profile,
         )
         kinds = (
@@ -176,7 +179,7 @@ class NexusProfileTests(unittest.TestCase):
             {
                 "protocol": 2,
                 "max_payload": relay.PROTOCOL_MAX_PAYLOAD_BYTES,
-                "max_rounds": relay.DEFAULT_MAX_ROUNDS,
+                "max_rounds": daemon.NEXUS_MAX_ROUNDS,
                 "max_tokens": relay.DEFAULT_MAX_OUTPUT_TOKENS,
                 "guest_profile": "nexus",
                 "features": ["task_event_v1"],
@@ -237,6 +240,108 @@ class NexusProfileTests(unittest.TestCase):
         legacy_overflow = model_boundary("agentlive", 4)
         self.assertEqual(legacy_overflow.kind, "MODEL_ERROR")
         self.assertEqual(legacy_overflow.json_object()["code"], "BAD_TOOL_ARGUMENTS")
+
+    def test_round_policy_is_resolved_from_guest_profile(self) -> None:
+        self.assertEqual(SessionHarness("agentlive").session.max_rounds, 8)
+        self.assertEqual(
+            SessionHarness("nexus").session.max_rounds,
+            daemon.NEXUS_MAX_ROUNDS,
+        )
+        self.assertEqual(
+            SessionHarness(
+                "nexus", max_rounds=daemon.NEXUS_MAX_ROUNDS
+            ).session.max_rounds,
+            daemon.NEXUS_MAX_ROUNDS,
+        )
+
+        with self.assertRaisesRegex(ValueError, "Guest profile policy"):
+            SessionHarness("agentlive", max_rounds=9)
+        with self.assertRaisesRegex(ValueError, "Guest profile policy"):
+            SessionHarness("nexus", max_rounds=daemon.NEXUS_MAX_ROUNDS + 1)
+
+        parsed = daemon._parser().parse_args(["--provider", "replay"])
+        self.assertIsNone(parsed.max_rounds)
+
+    def test_model_error_message_obeys_guest_utf8_byte_cap(self) -> None:
+        self.assertEqual(daemon.MAX_MODEL_ERROR_MESSAGE_BYTES, 240)
+
+        def emitted_message(message: str) -> str:
+            harness = SessionHarness("nexus")
+            harness.session._send_model_error(
+                {"turn_id": 1, "request_id": 1, "corr_id": 1},
+                relay.ProviderError("TEST_ERROR", message, retryable=True),
+            )
+            frame = harness.codec.decode(harness.lines[-1])
+            self.assertEqual(frame.kind, "MODEL_ERROR")
+            payload = frame.json_object()
+            self.assertTrue(payload["retryable"])
+            emitted = str(payload["message"])
+            self.assertLessEqual(
+                len(emitted.encode("utf-8")), daemon.MAX_MODEL_ERROR_MESSAGE_BYTES
+            )
+            return emitted
+
+        ascii_boundary = "x" * daemon.MAX_MODEL_ERROR_MESSAGE_BYTES
+        self.assertEqual(emitted_message(ascii_boundary), ascii_boundary)
+        self.assertEqual(
+            emitted_message(ascii_boundary + "x"),
+            ascii_boundary,
+        )
+
+        chinese_boundary = "中" * (daemon.MAX_MODEL_ERROR_MESSAGE_BYTES // 3)
+        self.assertEqual(emitted_message(chinese_boundary), chinese_boundary)
+        partial_codepoint = "中" * 79 + "ab" + "文"
+        truncated = emitted_message(partial_codepoint)
+        self.assertEqual(truncated, "中" * 79 + "ab")
+
+    def test_approval_timeout_is_resolved_from_guest_profile(self) -> None:
+        cases = (
+            ("agentlive", daemon.APPROVAL_TIMEOUT_SECONDS),
+            ("nexus", daemon.NEXUS_APPROVAL_TIMEOUT_SECONDS),
+        )
+        self.assertEqual(cases, (("agentlive", 25.0), ("nexus", 90.0)))
+
+        for profile, timeout in cases:
+            with self.subTest(profile=profile):
+                harness = SessionHarness(profile)
+                harness.session.start()
+                harness.session.submit_user("approve a tool")
+                harness.session._last_model_response_corr = 1
+                if profile == "nexus":
+                    request = approval_request(nonce="profile-timeout")
+                    harness.session._last_nexus_tool_use = (
+                        1,
+                        "publish_report",
+                        str(request["canonical_arguments"]),
+                    )
+                else:
+                    request = {
+                        "turn_id": 1,
+                        "request_id": 1,
+                        "corr_id": 1,
+                        "tool": "send_message",
+                        "arguments_sha256": "a" * 64,
+                        "nonce": "profile-timeout",
+                    }
+                with mock.patch.object(daemon.time, "monotonic", return_value=100.0):
+                    harness.session._approval_request(request)
+                self.assertEqual(harness.session._approval_deadline, 100.0 + timeout)
+                with mock.patch.object(
+                    daemon.time,
+                    "monotonic",
+                    return_value=harness.session._approval_deadline - 0.001,
+                ):
+                    self.assertFalse(
+                        harness.session.poll_approval(controller_available=True)
+                    )
+                with mock.patch.object(
+                    daemon.time,
+                    "monotonic",
+                    return_value=harness.session._approval_deadline,
+                ):
+                    self.assertTrue(
+                        harness.session.poll_approval(controller_available=True)
+                    )
 
     def test_task_event_is_strict_and_observer_projection_is_metadata_only(self) -> None:
         harness = SessionHarness("nexus")

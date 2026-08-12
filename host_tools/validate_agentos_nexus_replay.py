@@ -19,6 +19,7 @@ MAX_U32 = (1 << 32) - 1
 MIN_I32 = -(1 << 31)
 MAX_I32 = (1 << 31) - 1
 DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
+AGENT_STATUS_BAD_PARAM = -4
 AGENT_STATUS_CANCELLED = -10
 NEXUS_PUBLISH_REPORT_ID = 1004
 PROVENANCE_KERNEL_FACT = 1 << 0
@@ -104,6 +105,11 @@ OBSERVER_TOOL_EVENT_FIELDS = (
 NEXUS_PRODUCT_TOOLS = frozenset(
     ("tool_search", "delegate_task", "read_artifact", "publish_report")
 )
+CANONICAL_DELEGATE_OBJECTIVES = {
+    "system": "kernel snapshot this_boot",
+    "research": "verify paired evidence",
+    "analyst": "synth report",
+}
 KERNEL_AUDIT_FIELDS = frozenset(
     (
         "type",
@@ -156,19 +162,74 @@ KERNEL_SNAPSHOT_FIELDS = frozenset(
         "sched_vruntime",
     )
 )
-MEASUREMENT_TOKENS = (
-    "source_manifest=one_shot_metrics/data/20260811/manifest.json",
-    "source_table=one_shot_metrics/data/20260811/tables/contest_paired.csv",
-    "records=96",
-    "traversal_us=34712.5",
-    "indexed_us=13293.5",
-    "paired_ratio_median=3.118",
-    "wins=16/16",
-    "nexus_derived_checks=16/16",
+PERF_SOURCE_REVISION = "2b14fb1f74b9bd093e6de939a16554620835699e"
+SOURCE_TABLE = "one_shot_metrics/data/20260811/tables/contest_paired.csv"
+SOURCE_TABLE_SHA256 = "3fafa718df3f9d2cf84311163ef71d7176d30271aa1b77d0eff12e065595065e"
+CORE_SOURCE = "os/agent_metadata_query.c:agent_metadata_query_execute_snapshot"
+CORE_SHA256 = "1a95220a0ce3f900f7caaf7ae6f2d3dd58b0d1d6d5461f5253de67b15baab64b"
+OUTER_SOURCE = "user/src/labdemo_ucore.c:seed_native_workload"
+OUTER_SHA256 = "9e8ccb1d27750a41535324063cca9a93f0f624e569aebb6c4294f5a5b4ff8964"
+
+# This is the complete v4 Research payload, in the order materialized by the
+# Guest.  TASK_EVENT carries a bounded projection; its artifact digest binds
+# the projection to all of the evidence that could not fit on that wire event.
+RESEARCH_EVIDENCE_FIELDS = (
+    ("schema", "agentos.nexus.live_query_evidence.v1"),
+    ("perf_source_revision", PERF_SOURCE_REVISION),
+    ("source_table", SOURCE_TABLE),
+    ("benchmark", "live_query_paired"),
+    ("scope", "historical_not_this_boot"),
+    ("samples", "16"),
+    ("order_balance", "8/8"),
+    ("core_us", "34712.5/13293.5"),
+    ("core_paired_ratio_median", "3.118"),
+    ("core_indexed_wins", "16/16"),
+    ("e2e_us", "711283.5/723928"),
+    ("e2e_paired_delta_us", "13452"),
+    ("e2e_indexed_wins", "3/16"),
+    ("outer_us", "675901/706477"),
+    ("outer_definition", "e2e_minus_core"),
+    ("outer_paired_delta_us", "33477"),
+    ("outer_indexed_wins", "0/16"),
+    ("records_examined", "97/2"),
+    ("workload_syscalls", "298/10"),
+    ("core_source", CORE_SOURCE),
+    ("core_sha256", CORE_SHA256),
+    ("core_mechanism", "indexed_candidate_scan"),
+    ("core_constraint", "scope_visibility_and_snapshot_stability"),
+    ("outer_source", OUTER_SOURCE),
+    ("outer_sha256", OUTER_SHA256),
+    ("outer_mechanism", "corpus_seed_io"),
+    ("claim", "historical_snapshot"),
 )
-SOURCE_REVISION_TOKEN = (
-    "source_revision=2b14fb1f74b9bd093e6de939a16554620835699e"
+RESEARCH_EVIDENCE = dict(RESEARCH_EVIDENCE_FIELDS)
+RESEARCH_EVIDENCE_PAYLOAD = "".join(
+    f"{key}={value}\n" for key, value in RESEARCH_EVIDENCE_FIELDS
 )
+RESEARCH_ARTIFACT_SHA256 = hashlib.sha256(
+    RESEARCH_EVIDENCE_PAYLOAD.encode("utf-8")
+).hexdigest()
+RESEARCH_EVENT_KEYS = (
+    "benchmark",
+    "scope",
+    "core_us",
+    "core_indexed_wins",
+    "e2e_us",
+    "e2e_indexed_wins",
+    "outer_us",
+    "outer_indexed_wins",
+)
+RESEARCH_EVENT_SUMMARY = ";".join(
+    f"{key}={RESEARCH_EVIDENCE[key]}" for key in RESEARCH_EVENT_KEYS
+)
+
+ANALYST_FINDING = "core_wins_16/16;e2e_wins_3/16;outer_path_erases_gain"
+ANALYST_ACTIONS = (
+    "keep_index;add_phase_timing_outside_core_window",
+    "optimize_measured_outer_phase_after_timing",
+)
+ANALYST_VALIDATION = "e2e_median_delta_lte_0;core_wins_16/16;equal_hash_scope"
+ANALYST_ROLLBACK = "e2e_p95_gt_5pct_or_hash_scope_mismatch"
 OBSERVER_FORBIDDEN_FIELDS = frozenset(
     ("arguments", "canonical_arguments", "content", "objective", "raw", "result", "summary")
 )
@@ -178,7 +239,23 @@ class ValidationError(ValueError):
     """A Nexus replay artifact does not satisfy the acceptance contract."""
 
 
-class WorkerTaskMap(dict[int, tuple[str, int, int, int]]):
+TaskKey = tuple[int, int, int]
+
+
+def _task_key(record: Mapping[str, object]) -> TaskKey:
+    return (
+        int(record["turn_id"]),
+        int(record["request_id"]),
+        int(record["task_id"]),
+    )
+
+
+def _task_label(task_key: TaskKey) -> str:
+    turn_id, request_id, task_id = task_key
+    return f"task {task_id} in turn {turn_id}/request {request_id}"
+
+
+class WorkerTaskMap(dict[TaskKey, tuple[str, int, int, int]]):
     """Worker identities plus exact controller projections visible to observers."""
 
     def __init__(
@@ -241,6 +318,15 @@ def _positive_int(value: object) -> bool:
     return _is_int(value) and int(value) > 0
 
 
+def _generation_safe_handle(value: object) -> bool:
+    return (
+        _positive_int(value)
+        and int(value) <= MAX_U32
+        and ((int(value) >> 16) & 0xFFFF) > 0
+        and 0 < (int(value) & 0xFFFF) <= 32
+    )
+
+
 def _nonnegative_int(value: object) -> bool:
     return _is_int(value) and int(value) >= 0
 
@@ -288,6 +374,114 @@ def _field_tokens(value: object) -> set[str]:
 
 def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _research_analysis_summary() -> str:
+    evidence = RESEARCH_EVIDENCE
+    return (
+        f"scope={evidence['scope']};benchmark={evidence['benchmark']};"
+        f"perf_revision={evidence['perf_source_revision']};"
+        f"core={evidence['core_us']},ratio={evidence['core_paired_ratio_median']},"
+        f"wins={evidence['core_indexed_wins']};"
+        f"e2e={evidence['e2e_us']},delta={evidence['e2e_paired_delta_us']},"
+        f"wins={evidence['e2e_indexed_wins']};"
+        f"outer={evidence['outer_us']},delta={evidence['outer_paired_delta_us']},"
+        f"wins={evidence['outer_indexed_wins']};"
+        f"source={evidence['core_source']};source_sha={evidence['core_sha256']};"
+        f"mechanism={evidence['core_mechanism']};"
+        f"constraint={evidence['core_constraint']}"
+    )
+
+
+def _analyst_report_payload(
+    system_handle: int,
+    research_handle: int,
+    sched_budget: int,
+    requested_focus: str,
+) -> str:
+    return (
+        "schema=agentos.nexus.report.v2\n"
+        f"system_handle={system_handle}\n"
+        f"research_handle={research_handle}\n"
+        f"requested_focus={requested_focus}\n"
+        f"system_evidence=scope=this_boot;sched_budget={sched_budget}\n"
+        f"research_evidence={_research_analysis_summary()}\n"
+        f"core_ratio={RESEARCH_EVIDENCE['core_paired_ratio_median']}\n"
+        f"e2e_wins={RESEARCH_EVIDENCE['e2e_indexed_wins']}\n"
+        f"finding={ANALYST_FINDING}\n"
+        f"action_1={ANALYST_ACTIONS[0]}\n"
+        f"action_2={ANALYST_ACTIONS[1]}\n"
+        f"validation={ANALYST_VALIDATION}\n"
+        f"rollback={ANALYST_ROLLBACK}\n"
+    )
+
+
+def _analyst_event_summary(
+    system_handle: int, research_handle: int, sched_budget: int
+) -> str:
+    return (
+        f"system_handle={system_handle};research_handle={research_handle};"
+        f"core_ratio={RESEARCH_EVIDENCE['core_paired_ratio_median']};"
+        f"e2e_wins={RESEARCH_EVIDENCE['e2e_indexed_wins']};"
+        f"sched_budget={sched_budget}"
+    )
+
+
+def _validate_final_answer(final_answer: str, scheduler_fact: str) -> None:
+    _require(
+        len(final_answer.encode("utf-8")) <= 512,
+        "final answer exceeds the 512-byte Nexus completion contract",
+    )
+    match = re.fullmatch(r"sched_budget=([1-9][0-9]*)", scheduler_fact)
+    _require(match is not None, "System scheduler fact has no canonical budget")
+    canonical = (
+        f"AgentOS Live Query;this_boot=live,b={match.group(1)};"
+        "historical_not_this_boot;core=3.118x,16/16;"
+        "E2E=+13.452ms,3/16;outer=+33.477ms;"
+        "action1=phase timing;action2=outer optimization;"
+        "validation=E2E<=baseline,core=16/16,equal hash/scope;"
+        "rollback=E2E p95>5% or hash/scope mismatch;publication=denied"
+    )
+    candidate = final_answer.strip(" \t\n\r")
+    if candidate.endswith("."):
+        candidate = candidate[:-1]
+    _require(
+        candidate.casefold() == canonical.casefold(),
+        "final answer does not exactly match the current-budget, historical-evidence, denied-publication canonical block",
+    )
+
+
+def _validate_source_evidence_files() -> None:
+    root = Path(__file__).resolve().parent.parent
+    sources = (
+        (SOURCE_TABLE, SOURCE_TABLE_SHA256, None),
+        (*CORE_SOURCE.split(":", 1), CORE_SHA256),
+        (*OUTER_SOURCE.split(":", 1), OUTER_SHA256),
+    )
+    for entry in sources:
+        if len(entry) == 3 and entry[2] is None:
+            relative, expected_digest, symbol = entry
+        else:
+            relative, symbol, expected_digest = entry
+        path = root / str(relative)
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise ValidationError(f"cannot read frozen evidence source {relative}: {error}") from error
+        digest = hashlib.sha256(payload).hexdigest()
+        _require(
+            digest == expected_digest,
+            f"frozen evidence source {relative} has SHA-256 {digest}, expected {expected_digest}",
+        )
+        if symbol is not None:
+            try:
+                text = payload.decode("utf-8")
+            except UnicodeError as error:
+                raise ValidationError(f"source module {relative} is not UTF-8: {error}") from error
+            _require(
+                re.search(rf"\b{re.escape(str(symbol))}\s*\(", text) is not None,
+                f"source module {relative} does not define {symbol}",
+            )
 
 
 def _select(
@@ -371,12 +565,7 @@ def _fixture_digests(records: Sequence[dict[str, object]]) -> list[str]:
         return value
 
     def valid_handle(value: object) -> bool:
-        return (
-            _positive_int(value)
-            and int(value) <= 0xFFFFFFFF
-            and ((int(value) >> 16) & 0xFFFF) > 0
-            and 0 < (int(value) & 0xFFFF) <= 32
-        )
+        return _generation_safe_handle(value)
 
     system_searches = calls(1, "tool_search")
     system_delegates = calls(1, "delegate_task")
@@ -399,12 +588,12 @@ def _fixture_digests(records: Sequence[dict[str, object]]) -> list[str]:
         if arguments(call).get("role") == "research"
         and arguments(call).get("task_type") == "local_research"
     ]
-    _require(len(research_delegates) >= 2, "turn 2 lacks the failed Research attempt and replan")
+    _require(len(research_delegates) == 2, "turn 2 does not contain exactly one failed Research attempt and one replan")
     research_handles = [arguments(call).get("input_handle") for call in research_delegates]
     _require(not valid_handle(research_handles[0]), "turn 2 first Research source is not deliberately invalid")
     _require(
-        any(valid_handle(handle) for handle in research_handles[1:]),
-        "turn 2 never replans with a generation-safe local source handle",
+        valid_handle(research_handles[1]) and research_handles[1] != research_handles[0],
+        "turn 2 does not replan with a distinct generation-safe local source handle",
     )
     _require(calls(2, "read_artifact"), "turn 2 does not read back the Research artifact")
 
@@ -734,12 +923,14 @@ def _validate_task_dag(task_events: Sequence[dict[str, object]]) -> None:
         for record in task_events
     }
     _require(len(lifecycles) == 1, "TASK events changed workflow lifecycle")
-    grouped: dict[int, list[tuple[int, dict[str, object]]]] = defaultdict(list)
+    grouped: dict[TaskKey, list[tuple[int, dict[str, object]]]] = defaultdict(list)
     for index, record in enumerate(task_events):
-        grouped[int(record["task_id"])].append((index, record))
+        grouped[_task_key(record)].append((index, record))
 
-    parents: dict[int, int] = {}
-    for task_id, events in grouped.items():
+    parents: dict[TaskKey, TaskKey | None] = {}
+    for task_key, events in grouped.items():
+        task_id = task_key[2]
+        label = _task_label(task_key)
         identities = {
             (
                 record.get("role"),
@@ -750,16 +941,18 @@ def _validate_task_dag(task_events: Sequence[dict[str, object]]) -> None:
             )
             for _, record in events
         }
-        _require(len(identities) == 1, f"task {task_id} changed Agent identity")
+        _require(len(identities) == 1, f"{label} changed Agent identity")
         values = {int(record["parent_task_id"]) for _, record in events}
-        _require(len(values) == 1, f"task {task_id} changed parent_task_id")
+        _require(len(values) == 1, f"{label} changed parent_task_id")
         parent = values.pop()
-        _require(parent != task_id, f"task {task_id} is its own parent")
-        parents[task_id] = parent
+        _require(parent != task_id, f"{label} is its own parent")
+        parents[task_key] = (
+            None if parent == 0 else (task_key[0], task_key[1], parent)
+        )
         if parent != 0:
             _require(
                 all("deadline_tick" in record for _, record in events),
-                f"task {task_id} lacks its delegated-task deadline",
+                f"{label} lacks its delegated-task deadline",
             )
             deadlines = {
                 int(record["deadline_tick"])
@@ -767,13 +960,13 @@ def _validate_task_dag(task_events: Sequence[dict[str, object]]) -> None:
             }
             _require(
                 len(deadlines) == 1,
-                f"task {task_id} changed its delegated-task deadline",
+                f"{label} changed its delegated-task deadline",
             )
             deadline = next(iter(deadlines))
-            _require(deadline > 0, f"task {task_id} has an invalid deadline")
+            _require(deadline > 0, f"{label} has an invalid deadline")
             _require(
                 all(deadline > int(record["tick"]) for _, record in events),
-                f"task {task_id} deadline is not in the future",
+                f"{label} deadline is not in the future",
             )
         turn_requests = {
             (int(record["turn_id"]), int(record["request_id"]))
@@ -781,7 +974,7 @@ def _validate_task_dag(task_events: Sequence[dict[str, object]]) -> None:
         }
         _require(
             len(turn_requests) == 1,
-            f"task {task_id} changed its active turn/request envelope",
+            f"{label} changed its active turn/request envelope",
         )
         if parent != 0:
             envelopes = {
@@ -794,127 +987,131 @@ def _validate_task_dag(task_events: Sequence[dict[str, object]]) -> None:
             }
             _require(
                 len(envelopes) == 1,
-                f"delegated task {task_id} changed its model response envelope",
+                f"delegated {label} changed its model response envelope",
             )
         kinds = [str(record["event"]) for _, record in events]
         _require(
             kinds.count("assigned") == 1,
-            f"task {task_id} lacks exactly one TASK_ASSIGN",
+            f"{label} lacks exactly one TASK_ASSIGN",
         )
         assigned = kinds.index("assigned")
-        _require(assigned == 0, f"task {task_id} emitted an event before assignment")
+        _require(assigned == 0, f"{label} emitted an event before assignment")
         _require(
             kinds.count("accepted") == 1,
-            f"task {task_id} lacks exactly one TASK_ACCEPT",
+            f"{label} lacks exactly one TASK_ACCEPT",
         )
         accepted = kinds.index("accepted")
-        _require(assigned < accepted, f"task {task_id} accepted before assignment")
+        _require(assigned < accepted, f"{label} accepted before assignment")
         progress_positions = [
             index for index, kind in enumerate(kinds) if kind == "progress"
         ]
-        _require(progress_positions, f"task {task_id} lacks TASK_PROGRESS")
+        _require(progress_positions, f"{label} lacks TASK_PROGRESS")
         _require(
             accepted < progress_positions[0],
-            f"task {task_id} progressed before acceptance",
+            f"{label} progressed before acceptance",
         )
         terminals = [
             (index, kind)
             for index, kind in enumerate(kinds)
             if kind in ("completed", "failed", "cancelled")
         ]
-        _require(len(terminals) == 1, f"task {task_id} lacks exactly one terminal TASK_RESULT")
+        _require(len(terminals) == 1, f"{label} lacks exactly one terminal TASK_RESULT")
         terminal_index, terminal = terminals[0]
         terminal_status = events[terminal_index][1].get("status")
         if terminal == "completed":
-            _require(terminal_status == 0, f"task {task_id} completed with nonzero status")
+            _require(terminal_status == 0, f"{label} completed with nonzero status")
         elif terminal == "failed":
-            _require(terminal_status != 0, f"task {task_id} failed with success status")
+            _require(terminal_status != 0, f"{label} failed with success status")
         else:
             _require(
                 terminal_status == AGENT_STATUS_CANCELLED,
-                f"task {task_id} cancelled without AGENT_STATUS_CANCELLED",
+                f"{label} cancelled without AGENT_STATUS_CANCELLED",
             )
-        _require(assigned < terminal_index, f"task {task_id} terminated before assignment")
+        _require(assigned < terminal_index, f"{label} terminated before assignment")
         _require(
             all(position < terminal_index for position in progress_positions),
-            f"task {task_id} progressed after its terminal state",
+            f"{label} progressed after its terminal state",
         )
         transitions_after_terminal = [
             kind for kind in kinds[terminal_index + 1 :] if kind != "artifact_published"
         ]
         _require(
             not transitions_after_terminal,
-            f"task {task_id} emitted a state transition after its terminal state",
+            f"{label} emitted a state transition after its terminal state",
         )
         artifact_positions = [
             index for index, kind in enumerate(kinds) if kind == "artifact_published"
         ]
         _require(
             len(artifact_positions) <= 1,
-            f"task {task_id} published more than one artifact",
+            f"{label} published more than one artifact",
         )
         if artifact_positions:
             _require(
                 terminal == "completed",
-                f"task {task_id} published an artifact after an unsuccessful terminal state",
+                f"{label} published an artifact after an unsuccessful terminal state",
             )
             _require(
                 artifact_positions[0] > terminal_index,
-                f"task {task_id} claimed publication before the worker terminal result",
+                f"{label} claimed publication before the worker terminal result",
             )
             _require(
                 events[artifact_positions[0]][1].get("task_state") == "completed",
-                f"task {task_id} post-terminal artifact is not in completed state",
+                f"{label} post-terminal artifact is not in completed state",
             )
             _require(
                 events[artifact_positions[0]][1].get("status") == 0,
-                f"task {task_id} post-terminal artifact has nonzero status",
+                f"{label} post-terminal artifact has nonzero status",
             )
 
     assigned_positions = {
-        task_id: min(index for index, record in events if record.get("event") == "assigned")
-        for task_id, events in grouped.items()
+        task_key: min(index for index, record in events if record.get("event") == "assigned")
+        for task_key, events in grouped.items()
     }
-    for task_id, parent in parents.items():
-        _require(parent == 0 or parent in grouped, f"task {task_id} references an unknown parent")
-        if parent != 0 and parent in grouped:
-            child_first = min(index for index, _ in grouped[task_id])
+    for task_key, parent_key in parents.items():
+        label = _task_label(task_key)
+        _require(
+            parent_key is None or parent_key in grouped,
+            f"{label} references an unknown parent in its turn/request",
+        )
+        if parent_key is not None and parent_key in grouped:
+            child_first = min(index for index, _ in grouped[task_key])
             _require(
-                assigned_positions[parent] < child_first,
-                f"task {task_id} began before parent {parent} assignment",
+                assigned_positions[parent_key] < child_first,
+                f"{label} began before parent {_task_label(parent_key)} assignment",
             )
             parent_terminal = next(
                 index
-                for index, record in grouped[parent]
+                for index, record in grouped[parent_key]
                 if record.get("event") in ("completed", "failed", "cancelled")
             )
-            child_last = max(index for index, _ in grouped[task_id])
+            child_last = max(index for index, _ in grouped[task_key])
             _require(
                 child_last < parent_terminal,
-                f"task {task_id} outlived terminal parent {parent}",
+                f"{label} outlived terminal parent {_task_label(parent_key)}",
             )
             parent_assigned = next(
                 record
-                for _, record in grouped[parent]
+                for _, record in grouped[parent_key]
                 if record.get("event") == "assigned"
             )
             child_assigned = next(
                 record
-                for _, record in grouped[task_id]
+                for _, record in grouped[task_key]
                 if record.get("event") == "assigned"
             )
             _require(
                 (parent_assigned.get("turn_id"), parent_assigned.get("request_id"))
                 == (child_assigned.get("turn_id"), child_assigned.get("request_id")),
-                f"task {task_id} changed its parent turn/request envelope",
+                f"{label} changed its parent turn/request envelope",
             )
-        seen = {task_id}
-        cursor = parent
-        while cursor:
+        seen = {task_key}
+        cursor = parent_key
+        while cursor is not None:
             _require(cursor not in seen, "task parent graph contains a cycle")
             seen.add(cursor)
-            cursor = parents.get(cursor, 0)
-    _require(any(parent != 0 for parent in parents.values()), "Nexus transcript has no delegated task edge")
+            cursor = parents.get(cursor)
+    _require(any(parent is not None for parent in parents.values()), "Nexus transcript has no delegated task edge")
 
     def terminal(role: str, event: str, turn_id: int) -> list[tuple[int, int]]:
         return [
@@ -926,17 +1123,16 @@ def _validate_task_dag(task_events: Sequence[dict[str, object]]) -> None:
         ]
 
     system_done = terminal("system", "completed", 1)
-    research_failed = terminal("research", "failed", 2)
     research_done = terminal("research", "completed", 2)
     analyst_done = terminal("analyst", "completed", 3)
     _require(system_done, "turn 1 has no completed System delegation")
-    _require(research_failed, "turn 2 has no failed Research attempt")
     _require(research_done, "turn 2 has no successful Research replan")
     _require(analyst_done, "turn 3 has no completed Analyst delegation")
-    failed_index, failed_id = research_failed[0]
-    completed_index, completed_id = research_done[-1]
-    _require(failed_id != completed_id, "Research replan reused the failed task identity")
-    _require(failed_index < completed_index, "Research succeeded before its required failed attempt")
+    research_failed = terminal("research", "failed", 2)
+    _require(
+        not research_failed,
+        "turn 2 invalid Research source reached worker dispatch instead of failing pre-dispatch",
+    )
 
 
 def _task_artifacts(
@@ -1079,34 +1275,42 @@ def _validate_artifacts(
     research_summary = "\n".join(
         str(record.get("summary", "")) for record in research
     )
-    research_tokens = _field_tokens(research_summary)
-    for token in MEASUREMENT_TOKENS:
-        _require(token in research_tokens, f"Research artifact omits {token}")
+    _require(
+        research_summary == RESEARCH_EVENT_SUMMARY,
+        "Research artifact summary does not match the v4 live_query projection",
+    )
+    _require(
+        digests[1] == RESEARCH_ARTIFACT_SHA256,
+        "Research artifact SHA-256 does not bind the complete v4 live_query evidence",
+    )
     analyst_summary = "\n".join(str(record.get("summary", "")) for record in analyst)
-    analyst_tokens = _field_tokens(analyst_summary)
-    _require(
-        f"system_handle={handles[0]}" in analyst_tokens,
-        "Analyst report does not cite the System artifact handle",
+    expected_analyst_summary = _analyst_event_summary(
+        handles[0], handles[1], int(budget_match.group(1))
     )
     _require(
-        f"research_handle={handles[1]}" in analyst_tokens,
-        "Analyst report does not cite the Research artifact handle",
+        analyst_summary == expected_analyst_summary,
+        "Analyst report event summary does not match its verified handles, core/E2E result, and this-boot budget",
     )
+    assigned = [
+        record
+        for record in task_events
+        if record.get("role") == "analyst"
+        and record.get("turn_id") == 3
+        and record.get("event") == "assigned"
+    ]
+    _require(len(assigned) == 1, "Analyst report has no unique assigned objective")
+    objective = assigned[0].get("summary")
     _require(
-        f"system_digest={digests[0]}" in analyst_tokens,
-        "Analyst report does not preserve the verified System digest",
+        isinstance(objective, str) and bool(objective),
+        "Analyst report has no requested focus",
     )
-    _require(
-        f"research_digest={digests[1]}" in analyst_tokens,
-        "Analyst report does not preserve the verified Research digest",
+    expected_report = _analyst_report_payload(
+        handles[0], handles[1], int(budget_match.group(1)), objective
     )
+    expected_report_digest = hashlib.sha256(expected_report.encode("utf-8")).hexdigest()
     _require(
-        "paired_ratio_median=3.118" in analyst_tokens,
-        "Analyst report summary contains no verified paired measurement",
-    )
-    _require(
-        stable_scheduler_fact in analyst_tokens,
-        "Analyst report summary does not preserve the verified scheduler budget",
+        digests[2] == expected_report_digest,
+        "Analyst report SHA-256 does not bind report.v2 finding, actions, validation, rollback, sources, and this-boot budget",
     )
     return (
         handles[0],
@@ -1443,6 +1647,12 @@ def _validate_tool_response_chains(
             _require(not events_by_corr.get(corr), f"final corr {corr} produced a tool_event")
 
     task_events = _select(records, "type", "task_event")
+    pre_dispatch_failures: list[
+        tuple[int, dict[str, object], dict[str, object], dict[str, object]]
+    ] = []
+    successful_research_replans: list[
+        tuple[int, dict[str, object], dict[str, object], dict[str, object]]
+    ] = []
     for corr, response in response_by_corr.items():
         if response.get("response_type") != "tool_use":
             continue
@@ -1462,6 +1672,33 @@ def _validate_tool_response_chains(
             for item in task_events
             if item.get("corr_id") == corr and int(item.get("parent_task_id", 0)) != 0
         ]
+        if event.get("result") == "task_dispatch_failed;replan_allowed=1":
+            _require(
+                not children,
+                f"delegate_task corr {corr} pre-dispatch failure emitted child TASK events",
+            )
+            _require(
+                event.get("status") == AGENT_STATUS_BAD_PARAM,
+                f"delegate_task corr {corr} pre-dispatch failure has the wrong status",
+            )
+            _require(
+                all(event.get(key) == 0 for key in ("value0", "value1", "value2")),
+                f"delegate_task corr {corr} pre-dispatch failure reports a nonzero effect",
+            )
+            _require(
+                response.get("turn_id") == 2
+                and arguments.get("role") == "research"
+                and arguments.get("task_type") == "local_research"
+                and _positive_int(arguments.get("input_handle"))
+                and not _generation_safe_handle(arguments.get("input_handle")),
+                f"delegate_task corr {corr} pre-dispatch failure is not the invalid Research source attempt",
+            )
+            pre_dispatch_failures.append((corr, response, event, arguments))
+            continue
+        _require(
+            children,
+            f"delegate_task corr {corr} lacks child TASK events or the exact pre-dispatch failure result",
+        )
         assigned = [item for item in children if item.get("event") == "assigned"]
         _require(len(assigned) == 1, f"delegate_task corr {corr} lacks one child assignment")
         task_id = int(assigned[0]["task_id"])
@@ -1474,9 +1711,10 @@ def _validate_tool_response_chains(
             all(item.get("role") == expected_role for item in children),
             f"delegate_task corr {corr} changed its selected role",
         )
+        assigned_objective = assigned[0].get("summary")
         _require(
-            assigned[0].get("summary") == arguments.get("objective"),
-            f"delegate_task corr {corr} changed its canonical objective",
+            assigned_objective == CANONICAL_DELEGATE_OBJECTIVES.get(str(expected_role)),
+            f"delegate_task corr {corr} changed its role-canonical objective",
         )
         terminals = [
             item
@@ -1504,9 +1742,16 @@ def _validate_tool_response_chains(
                 "analyst": "analyst_report_ready",
             }.get(str(expected_role))
             _require(
-                event.get("result") == expected_result,
+                expected_result in _field_tokens(str(event.get("result", ""))),
                 f"delegate_task corr {corr} tool result contradicts its completed role",
             )
+            if (
+                expected_role == "research"
+                and response.get("turn_id") == 2
+                and arguments.get("task_type") == "local_research"
+                and _generation_safe_handle(arguments.get("input_handle"))
+            ):
+                successful_research_replans.append((corr, response, event, arguments))
         elif terminal.get("event") == "failed":
             _require(not artifacts, f"delegate_task corr {corr} failed but published an artifact")
             _require(
@@ -1519,6 +1764,24 @@ def _validate_tool_response_chains(
                 "task_failed" in tokens and "replan_allowed=1" in tokens,
                 f"delegate_task corr {corr} failure result is not replannable",
             )
+
+    _require(
+        len(pre_dispatch_failures) == 1,
+        "Nexus does not contain exactly one invalid Research pre-dispatch failure",
+    )
+    _require(
+        len(successful_research_replans) == 1,
+        "pre-dispatch failure was not followed by exactly one successful Research replan",
+    )
+    failed_corr, failed_response, failed_event, failed_arguments = pre_dispatch_failures[0]
+    replan_corr, replan_response, replan_event, replan_arguments = successful_research_replans[0]
+    _require(
+        replan_arguments.get("input_handle") != failed_arguments.get("input_handle")
+        and positions[id(failed_event)] < positions[id(replan_response)]
+        < positions[id(replan_event)]
+        and failed_corr < replan_corr,
+        "successful Research replan is not causally after the invalid pre-dispatch attempt",
+    )
 
 
 def _validate_controller_order(records: Sequence[dict[str, object]]) -> None:
@@ -1575,7 +1838,7 @@ def _validate_controller(
 ) -> tuple[
     str,
     set[tuple[str, int, int, int]],
-    dict[int, tuple[str, int, int, int]],
+    WorkerTaskMap,
 ]:
     error_types = ("error", "model_error", "daemon_error")
     errors = [record for record in records if record.get("type") in error_types]
@@ -1640,9 +1903,10 @@ def _validate_controller(
         fixture_finals == [record.get("answer") for record in completions],
         "controller final answers do not exactly match the digest-bound fixture",
     )
-    final_answer = str(completions[-1]["answer"]).lower()
+    final_answer = str(completions[-1]["answer"])
+    final_folded = final_answer.lower()
     _require(
-        any(token in final_answer for token in ("denied", "unpublished", "not published")),
+        any(token in final_folded for token in ("denied", "unpublished", "not published")),
         "final turn does not safely report the publication denial",
     )
     _validate_controls(records)
@@ -1652,7 +1916,7 @@ def _validate_controller(
     for index, record in enumerate(task_events, 1):
         _validate_task_shape(record, f"task_event {index}")
     kinds = {record.get("event") for record in task_events}
-    for required in ("assigned", "accepted", "progress", "failed", "completed", "artifact_published"):
+    for required in ("assigned", "accepted", "progress", "completed", "artifact_published"):
         _require(required in kinds, f"Nexus transcript lacks TASK_{required.upper()}")
     _validate_identities(task_events)
     _validate_task_dag(task_events)
@@ -1665,30 +1929,20 @@ def _validate_controller(
         system_handle,
         research_handle,
         analyst_handle,
-        system_digest,
-        research_digest,
         _,
-        system_facts,
+        _,
+        _,
+        _,
         scheduler_facts,
     ) = _validate_artifacts(task_events)
     _validate_fixture_artifact_flow(
         fixture, system_handle, research_handle, analyst_handle
     )
-    final_tokens = _field_tokens(final_answer)
-    _require(SOURCE_REVISION_TOKEN in final_tokens, "final answer omits source revision")
-    for token in MEASUREMENT_TOKENS:
-        _require(token in final_tokens, f"final answer omits {token}")
-    for token in system_facts:
-        _require(token in final_tokens, f"final answer omits dynamic System fact {token}")
     _require(
-        any(token in final_tokens for token in scheduler_facts),
-        "final answer omits a verified this-boot scheduler fact",
+        len(scheduler_facts) == 1,
+        "System artifact does not expose one canonical scheduler budget",
     )
-    for token in (
-        f"system_handle={system_handle}",
-        f"research_handle={research_handle}",
-    ):
-        _require(token in final_tokens, f"final answer omits verified source {token}")
+    _validate_final_answer(final_answer, scheduler_facts[0])
     _validate_approval_and_tools(
         records, research_handle, analyst_handle, response_by_corr
     )
@@ -1716,15 +1970,15 @@ def _validate_controller(
             or record.get("control_id_known") is not True
         ):
             continue
-        task_id = int(record["task_id"])
+        task_key = _task_key(record)
         identity = (
             str(record["role"]),
             int(record["agent_pid"]),
             int(record["agent_id"]),
             int(record["control_id"]),
         )
-        previous = worker_tasks.setdefault(task_id, identity)
-        _require(previous == identity, f"task {task_id} changed worker identity")
+        previous = worker_tasks.setdefault(task_key, identity)
+        _require(previous == identity, f"{_task_label(task_key)} changed worker identity")
     _require(worker_tasks, "controller exposed no delegated worker task identities")
     return str(session_id), identities, worker_tasks
 
@@ -1733,7 +1987,7 @@ def _validate_observer(
     records: Sequence[dict[str, object]],
     session_id: str,
     controller_identities: set[tuple[str, int, int, int]],
-    worker_tasks: Mapping[int, tuple[str, int, int, int]],
+    worker_tasks: Mapping[TaskKey, tuple[str, int, int, int]],
 ) -> None:
     _require(
         all(record.get("type") == "telemetry" for record in records),
@@ -1815,10 +2069,10 @@ def _validate_observer(
         "controller does not expose one unambiguous Coordinator identity",
     )
     coordinator_identity = coordinator_identities[0]
-    for task_id, expected_identity in worker_tasks.items():
+    for task_key, expected_identity in worker_tasks.items():
         _require(
             audit_identities.get(expected_identity[1]) == expected_identity,
-            f"task {task_id} worker identity is not backed by kernel audit",
+            f"{_task_label(task_key)} worker identity is not backed by kernel audit",
         )
 
     message_audits: dict[int, list[dict[str, object]]] = defaultdict(list)
@@ -1836,8 +2090,23 @@ def _validate_observer(
         message_audits[int(record["value1"])].append(record)
 
     saw_waiting_enqueue = False
-    for task_id, expected_identity in worker_tasks.items():
-        task_audits = message_audits.get(task_id, [])
+    for task_key, expected_identity in worker_tasks.items():
+        raw_task_id = task_key[2]
+        label = _task_label(task_key)
+        worker_pid = expected_identity[1]
+        coordinator_pid = coordinator_identity[1]
+        task_audits = [
+            record
+            for record in message_audits.get(raw_task_id, [])
+            if (
+                record.get("source_pid") == coordinator_pid
+                and record.get("target_pid") == worker_pid
+            )
+            or (
+                record.get("source_pid") == worker_pid
+                and record.get("target_pid") == coordinator_pid
+            )
+        ]
         by_event_id: dict[int, list[dict[str, object]]] = defaultdict(list)
         for record in task_audits:
             by_event_id[int(record["value0"])].append(record)
@@ -1847,37 +2116,36 @@ def _validate_observer(
             consumes = [record for record in event_records if record.get("audit_kind") == 3]
             _require(
                 len(enqueues) == 1 and len(consumes) == 1,
-                f"task {task_id} kernel event {event_id} lacks one enqueue/consume pair",
+                f"{label} kernel event {event_id} lacks one enqueue/consume pair",
             )
             enqueue, consume = enqueues[0], consumes[0]
             _require(
                 int(enqueue["record_sequence"]) < int(consume["record_sequence"]),
-                f"task {task_id} kernel event {event_id} was consumed before enqueue",
+                f"{label} kernel event {event_id} was consumed before enqueue",
             )
             _require(
                 enqueue.get("source_pid") == consume.get("source_pid")
                 and enqueue.get("target_pid") == consume.get("target_pid"),
-                f"task {task_id} kernel event {event_id} changed route",
+                f"{label} kernel event {event_id} changed route",
             )
             _require(
-                enqueue.get("value1") == task_id and consume.get("value1") == task_id,
-                f"task {task_id} lost its kernel correlation",
+                enqueue.get("value1") == raw_task_id
+                and consume.get("value1") == raw_task_id,
+                f"{label} lost its kernel correlation",
             )
             _require(
                 consume.get("loop_state") == 2,
-                f"task {task_id} kernel event {event_id} consume did not observe RUNNING",
+                f"{label} kernel event {event_id} consume did not observe RUNNING",
             )
             pairs.append((enqueue, consume))
 
-        worker_pid = expected_identity[1]
-        coordinator_pid = coordinator_identity[1]
         assignments = [
             pair
             for pair in pairs
             if pair[0].get("source_pid") == coordinator_pid
             and pair[0].get("target_pid") == worker_pid
         ]
-        _require(assignments, f"task {task_id} has no Coordinator-to-worker MESSAGE pair")
+        _require(assignments, f"{label} has no Coordinator-to-worker MESSAGE pair")
         for pair in assignments:
             for record in pair:
                 _require(
@@ -1888,7 +2156,7 @@ def _validate_observer(
                         record.get("actor_control_id"),
                     )
                     == expected_identity,
-                    f"task {task_id} assignment audit identity does not match TASK_EVENT",
+                    f"{label} assignment audit identity does not match TASK_EVENT",
                 )
         saw_waiting_enqueue = saw_waiting_enqueue or any(
             enqueue.get("loop_state") == 3 for enqueue, _ in assignments
@@ -1900,7 +2168,7 @@ def _validate_observer(
             if pair[0].get("source_pid") == worker_pid
             and pair[0].get("target_pid") == coordinator_pid
         ]
-        _require(responses, f"task {task_id} has no worker-to-Coordinator MESSAGE pair")
+        _require(responses, f"{label} has no worker-to-Coordinator MESSAGE pair")
         for pair in responses:
             for record in pair:
                 _require(
@@ -1911,7 +2179,7 @@ def _validate_observer(
                         record.get("actor_control_id"),
                     )
                     == coordinator_identity,
-                    f"task {task_id} response audit identity does not match Coordinator",
+                    f"{label} response audit identity does not match Coordinator",
                 )
     _require(saw_waiting_enqueue, "kernel audit saw no enqueue wake a WAITING worker")
 
@@ -2076,7 +2344,7 @@ def _validate_observer(
         "observer TASK metadata does not exactly match the controller projection",
     )
     observed_kinds = {record.get("event") for record in observed_tasks}
-    for required in ("assigned", "accepted", "progress", "failed", "completed", "artifact_published"):
+    for required in ("assigned", "accepted", "progress", "completed", "artifact_published"):
         _require(required in observed_kinds, f"observer missed task event {required}")
     waiting = [
         (index, record)
@@ -2087,7 +2355,16 @@ def _validate_observer(
     _require(
         all(
             any(
-                later.get("task_id") == waiting_record.get("task_id")
+                (
+                    later.get("turn_id"),
+                    later.get("request_id"),
+                    later.get("task_id"),
+                )
+                == (
+                    waiting_record.get("turn_id"),
+                    waiting_record.get("request_id"),
+                    waiting_record.get("task_id"),
+                )
                 and later.get("event")
                 in ("progress", "completed", "failed", "cancelled")
                 and later.get("task_state") != "waiting"
@@ -2146,6 +2423,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
+        _validate_source_evidence_files()
         fixture = _load_jsonl(args.fixture, "replay fixture")
         controller = _load_jsonl(args.controller, "controller transcript")
         observer = _load_jsonl(args.observer, "observer transcript")
